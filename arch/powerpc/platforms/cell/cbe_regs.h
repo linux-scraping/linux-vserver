@@ -113,10 +113,14 @@ struct cbe_pmd_regs {
 	u64	checkstop_fir;					/* 0x0c00 */
 	u64	recoverable_fir;				/* 0x0c08 */
 	u64	spec_att_mchk_fir;				/* 0x0c10 */
-	u64	fir_mode_reg;					/* 0x0c18 */
+	u32	fir_mode_reg;					/* 0x0c18 */
+	u8	pad_0x0c1c_0x0c20 [4];				/* 0x0c1c */
+#define CBE_PMD_FIR_MODE_M8		0x00800
 	u64	fir_enable_mask;				/* 0x0c20 */
 
-	u8	pad_0x0c28_0x1000 [0x1000 - 0x0c28];		/* 0x0c28 */
+	u8	pad_0x0c28_0x0ca8 [0x0ca8 - 0x0c28];		/* 0x0c28 */
+	u64	ras_esc_0;					/* 0x0ca8 */
+	u8	pad_0x0cb0_0x1000 [0x1000 - 0x0cb0];		/* 0x0cb0 */
 };
 
 extern struct cbe_pmd_regs __iomem *cbe_get_pmd_regs(struct device_node *np);
@@ -254,6 +258,11 @@ struct cbe_mic_tm_regs {
 
 extern struct cbe_mic_tm_regs __iomem *cbe_get_mic_tm_regs(struct device_node *np);
 extern struct cbe_mic_tm_regs __iomem *cbe_get_cpu_mic_tm_regs(int cpu);
+
+/* some utility functions to deal with SMT */
+extern u32 cbe_get_hw_thread_id(int cpu);
+extern u32 cbe_cpu_to_node(int cpu);
+extern u32 cbe_node_to_cpu(int node);
 
 /* Init this module early */
 extern void cbe_regs_init(void);

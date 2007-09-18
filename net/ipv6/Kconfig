@@ -4,8 +4,8 @@
 
 #   IPv6 as module will cause a CRASH if you try to unload it
 config IPV6
-	tristate "The IPv6 protocol"
-	default m
+	bool "The IPv6 protocol"
+	default n
 	---help---
 	  This is complemental support for the IP version 6.
 	  You will still be able to do traditional IPv4 networking as well.
@@ -57,6 +57,16 @@ config IPV6_ROUTE_INFO
 
 	  If unsure, say N.
 
+config IPV6_OPTIMISTIC_DAD
+	bool "IPv6: Enable RFC 4429 Optimistic DAD (EXPERIMENTAL)"
+	depends on IPV6 && EXPERIMENTAL
+	---help---
+	  This is experimental support for optimistic Duplicate
+	  Address Detection.  It allows for autoconfigured addresses
+	  to be used more quickly.
+
+	  If unsure, say N.
+
 config INET6_AH
 	tristate "IPv6: AH transformation"
 	depends on IPV6
@@ -99,7 +109,7 @@ config INET6_IPCOMP
 	  If unsure, say Y.
 
 config IPV6_MIP6
-	bool "IPv6: Mobility (EXPERIMENTAL)"
+	tristate "IPv6: Mobility (EXPERIMENTAL)"
 	depends on IPV6 && EXPERIMENTAL
 	select XFRM
 	---help---

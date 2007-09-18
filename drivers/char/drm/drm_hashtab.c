@@ -36,14 +36,23 @@
 #include "drm_hashtab.h"
 #include <linux/hash.h>
 
-int drm_ht_create(drm_open_hash_t *ht, unsigned int order)
+int drm_ht_create(struct drm_open_hash *ht, unsigned int order)
 {
 	unsigned int i;
 
 	ht->size = 1 << order;
 	ht->order = order;
 	ht->fill = 0;
-	ht->table = vmalloc(ht->size*sizeof(*ht->table));
+	ht->table = NULL;
+	ht->use_vmalloc = ((ht->size * sizeof(*ht->table)) > PAGE_SIZE);
+	if (!ht->use_vmalloc) {
+		ht->table = drm_calloc(ht->size, sizeof(*ht->table),
+				       DRM_MEM_HASHTAB);
+	}
+	if (!ht->table) {
+		ht->use_vmalloc = 1;
+		ht->table = vmalloc(ht->size*sizeof(*ht->table));
+	}
 	if (!ht->table) {
 		DRM_ERROR("Out of memory for hash table\n");
 		return -ENOMEM;
@@ -54,9 +63,9 @@ int drm_ht_create(drm_open_hash_t *ht, unsigned int order)
 	return 0;
 }
 
-void drm_ht_verbose_list(drm_open_hash_t *ht, unsigned long key)
+void drm_ht_verbose_list(struct drm_open_hash *ht, unsigned long key)
 {
-	drm_hash_item_t *entry;
+	struct drm_hash_item *entry;
 	struct hlist_head *h_list;
 	struct hlist_node *list;
 	unsigned int hashed_key;
@@ -66,15 +75,15 @@ void drm_ht_verbose_list(drm_open_hash_t *ht, unsigned long key)
 	DRM_DEBUG("Key is 0x%08lx, Hashed key is 0x%08x\n", key, hashed_key);
 	h_list = &ht->table[hashed_key];
 	hlist_for_each(list, h_list) {
-		entry = hlist_entry(list, drm_hash_item_t, head);
+		entry = hlist_entry(list, struct drm_hash_item, head);
 		DRM_DEBUG("count %d, key: 0x%08lx\n", count++, entry->key);
 	}
 }
 
-static struct hlist_node *drm_ht_find_key(drm_open_hash_t *ht, 
+static struct hlist_node *drm_ht_find_key(struct drm_open_hash *ht, 
 					  unsigned long key)
 {
-	drm_hash_item_t *entry;
+	struct drm_hash_item *entry;
 	struct hlist_head *h_list;
 	struct hlist_node *list;
 	unsigned int hashed_key;
@@ -82,7 +91,7 @@ static struct hlist_node *drm_ht_find_key(drm_open_hash_t *ht,
 	hashed_key = hash_long(key, ht->order);
 	h_list = &ht->table[hashed_key];
 	hlist_for_each(list, h_list) {
-		entry = hlist_entry(list, drm_hash_item_t, head);
+		entry = hlist_entry(list, struct drm_hash_item, head);
 		if (entry->key == key)
 			return list;
 		if (entry->key > key)
@@ -92,9 +101,9 @@ static struct hlist_node *drm_ht_find_key(drm_open_hash_t *ht,
 }
 
 
-int drm_ht_insert_item(drm_open_hash_t *ht, drm_hash_item_t *item)
+int drm_ht_insert_item(struct drm_open_hash *ht, struct drm_hash_item *item)
 {
-	drm_hash_item_t *entry;
+	struct drm_hash_item *entry;
 	struct hlist_head *h_list;
 	struct hlist_node *list, *parent;
 	unsigned int hashed_key;
@@ -104,7 +113,7 @@ int drm_ht_insert_item(drm_open_hash_t *ht, drm_hash_item_t *item)
 	h_list = &ht->table[hashed_key];
 	parent = NULL;
 	hlist_for_each(list, h_list) {
-		entry = hlist_entry(list, drm_hash_item_t, head);
+		entry = hlist_entry(list, struct drm_hash_item, head);
 		if (entry->key == key)
 			return -EINVAL;
 		if (entry->key > key)
@@ -123,7 +132,7 @@ int drm_ht_insert_item(drm_open_hash_t *ht, drm_hash_item_t *item)
  * Just insert an item and return any "bits" bit key that hasn't been 
  * used before.
  */
-int drm_ht_just_insert_please(drm_open_hash_t *ht, drm_hash_item_t *item,
+int drm_ht_just_insert_please(struct drm_open_hash *ht, struct drm_hash_item *item,
 			      unsigned long seed, int bits, int shift,
 			      unsigned long add)
 {
@@ -147,8 +156,8 @@ int drm_ht_just_insert_please(drm_open_hash_t *ht, drm_hash_item_t *item,
 	return 0;
 }
 
-int drm_ht_find_item(drm_open_hash_t *ht, unsigned long key,
-		     drm_hash_item_t **item)
+int drm_ht_find_item(struct drm_open_hash *ht, unsigned long key,
+		     struct drm_hash_item **item)
 {
 	struct hlist_node *list;
 
@@ -156,11 +165,11 @@ int drm_ht_find_item(drm_open_hash_t *ht, unsigned long key,
 	if (!list)
 		return -EINVAL;
 
-	*item = hlist_entry(list, drm_hash_item_t, head);
+	*item = hlist_entry(list, struct drm_hash_item, head);
 	return 0;
 }
 
-int drm_ht_remove_key(drm_open_hash_t *ht, unsigned long key)
+int drm_ht_remove_key(struct drm_open_hash *ht, unsigned long key)
 {
 	struct hlist_node *list;
 
@@ -173,17 +182,21 @@ int drm_ht_remove_key(drm_open_hash_t *ht, unsigned long key)
 	return -EINVAL;
 }
 
-int drm_ht_remove_item(drm_open_hash_t *ht, drm_hash_item_t *item)
+int drm_ht_remove_item(struct drm_open_hash *ht, struct drm_hash_item *item)
 {
 	hlist_del_init(&item->head);
 	ht->fill--;
 	return 0;
 }
 
-void drm_ht_remove(drm_open_hash_t *ht)
+void drm_ht_remove(struct drm_open_hash *ht)
 {
 	if (ht->table) {
-		vfree(ht->table);
+		if (ht->use_vmalloc)
+			vfree(ht->table);
+		else
+			drm_free(ht->table, ht->size * sizeof(*ht->table),
+				 DRM_MEM_HASHTAB);
 		ht->table = NULL;
 	}
 }

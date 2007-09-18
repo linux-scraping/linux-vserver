@@ -59,7 +59,7 @@ static void q40_irq_shutdown(unsigned int irq)
 
 static struct irq_controller q40_irq_controller = {
 	.name		= "q40",
-	.lock		= SPIN_LOCK_UNLOCKED,
+	.lock		= __SPIN_LOCK_UNLOCKED(q40_irq_controller.lock),
 	.startup	= q40_irq_startup,
 	.shutdown	= q40_irq_shutdown,
 	.enable		= q40_enable_irq,
@@ -79,7 +79,7 @@ static struct irq_controller q40_irq_controller = {
 
 static int disabled;
 
-void q40_init_IRQ(void)
+void __init q40_init_IRQ(void)
 {
 	m68k_setup_irq_controller(&q40_irq_controller, 1, Q40_IRQ_MAX);
 

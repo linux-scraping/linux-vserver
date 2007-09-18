@@ -28,7 +28,7 @@
 */
 
 static const char * const version =
-"eepro100.c:v1.09j-t 9/29/99 Donald Becker http://www.scyld.com/network/eepro100.html\n"
+"eepro100.c:v1.09j-t 9/29/99 Donald Becker\n"
 "eepro100.c: $Revision: 1.36 $ 2000/11/17 Modified by Andrey V. Savochkin <saw@saw.sw.com.sg> and others\n";
 
 /* A few user-configurable values that apply to all boards.
@@ -1793,7 +1793,6 @@ speedo_rx(struct net_device *dev)
 			   copying to a properly sized skbuff. */
 			if (pkt_len < rx_copybreak
 				&& (skb = dev_alloc_skb(pkt_len + 2)) != 0) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
 				/* 'skb_put()' points to the start of sk_buff data area. */
 				pci_dma_sync_single_for_cpu(sp->pdev, sp->rx_ring_dma[entry],
@@ -1802,11 +1801,12 @@ speedo_rx(struct net_device *dev)
 
 #if 1 || USE_IP_CSUM
 				/* Packet is in one chunk -- we can copy + cksum. */
-				eth_copy_and_sum(skb, sp->rx_skbuff[entry]->data, pkt_len, 0);
+				skb_copy_to_linear_data(skb, sp->rx_skbuff[entry]->data, pkt_len);
 				skb_put(skb, pkt_len);
 #else
-				memcpy(skb_put(skb, pkt_len), sp->rx_skbuff[entry]->data,
-					   pkt_len);
+				skb_copy_from_linear_data(sp->rx_skbuff[entry],
+							  skb_put(skb, pkt_len),
+							  pkt_len);
 #endif
 				pci_dma_sync_single_for_device(sp->pdev, sp->rx_ring_dma[entry],
 											   sizeof(struct RxFD) + pkt_len,
@@ -2292,10 +2292,15 @@ static int eepro100_resume(struct pci_dev *pdev)
 	struct net_device *dev = pci_get_drvdata (pdev);
 	struct speedo_private *sp = netdev_priv(dev);
 	void __iomem *ioaddr = sp->regs;
+	int rc;
 
 	pci_set_power_state(pdev, PCI_D0);
 	pci_restore_state(pdev);
-	pci_enable_device(pdev);
+
+	rc = pci_enable_device(pdev);
+	if (rc)
+		return rc;
+
 	pci_set_master(pdev);
 
 	if (!netif_running(dev))

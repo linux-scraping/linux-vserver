@@ -317,16 +317,18 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 	}
 
 	*p = new;
-#if defined(CONFIG_IRQ_PER_CPU)
-	if (new->flags & IRQF_PERCPU)
-		desc->status |= IRQ_PER_CPU;
-#endif
+
 	/* Exclude IRQ from balancing */
 	if (new->flags & IRQF_NOBALANCING)
 		desc->status |= IRQ_NO_BALANCING;
 
 	if (!shared) {
 		irq_chip_set_defaults(desc->chip);
+
+#if defined(CONFIG_IRQ_PER_CPU)
+		if (new->flags & IRQF_PERCPU)
+			desc->status |= IRQ_PER_CPU;
+#endif
 
 		/* Setup the type (level, edge polarity) if configured: */
 		if (new->flags & IRQF_TRIGGER_MASK) {
@@ -460,7 +462,9 @@ void free_irq(unsigned int irq, void *dev_id)
 		 * We do this after actually deregistering it, to make sure that
 		 * a 'real' IRQ doesn't run in parallel with our fake
 		 */
+		local_irq_save(flags);
 		handler(irq, dev_id);
+		local_irq_restore(flags);
 	}
 #endif
 }
@@ -543,14 +547,11 @@ int request_irq(unsigned int irq, irq_handler_t handler,
 		 * We do this before actually registering it, to make sure that
 		 * a 'real' IRQ doesn't run in parallel with our fake
 		 */
-		if (irqflags & IRQF_DISABLED) {
-			unsigned long flags;
+		unsigned long flags;
 
-			local_irq_save(flags);
-			handler(irq, dev_id);
-			local_irq_restore(flags);
-		} else
-			handler(irq, dev_id);
+		local_irq_save(flags);
+		handler(irq, dev_id);
+		local_irq_restore(flags);
 	}
 #endif
 

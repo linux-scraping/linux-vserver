@@ -19,7 +19,6 @@
 #include <linux/timex.h>
 #include <linux/slab.h>
 #include <linux/random.h>
-#include <linux/smp_lock.h>
 #include <linux/kernel.h>
 #include <linux/kernel_stat.h>
 #include <linux/delay.h>
@@ -208,11 +207,9 @@ static int intr_connect_level(int cpu, int bit)
 {
 	nasid_t nasid = COMPACT_TO_NASID_NODEID(cpu_to_node(cpu));
 	struct slice_data *si = cpu_data[cpu].data;
-	unsigned long flags;
 
 	set_bit(bit, si->irq_enable_mask);
 
-	local_irq_save(flags);
 	if (!cputoslice(cpu)) {
 		REMOTE_HUB_S(nasid, PI_INT_MASK0_A, si->irq_enable_mask[0]);
 		REMOTE_HUB_S(nasid, PI_INT_MASK1_A, si->irq_enable_mask[1]);
@@ -220,7 +217,6 @@ static int intr_connect_level(int cpu, int bit)
 		REMOTE_HUB_S(nasid, PI_INT_MASK0_B, si->irq_enable_mask[0]);
 		REMOTE_HUB_S(nasid, PI_INT_MASK1_B, si->irq_enable_mask[1]);
 	}
-	local_irq_restore(flags);
 
 	return 0;
 }
@@ -286,6 +282,8 @@ static unsigned int startup_bridge_irq(unsigned int irq)
 
         bridge->b_wid_tflush;
 
+	intr_connect_level(cpu, swlevel);
+
         return 0;       /* Never anything pending.  */
 }
 
@@ -293,7 +291,6 @@ static unsigned int startup_bridge_irq(unsigned int irq)
 static void shutdown_bridge_irq(unsigned int irq)
 {
 	struct bridge_controller *bc = IRQ_TO_BRIDGE(irq);
-	struct hub_data *hub = hub_data(cpu_to_node(bc->irq_cpu));
 	bridge_t *bridge = bc->base;
 	int pin, swlevel;
 	cpuid_t cpu;
@@ -307,8 +304,6 @@ static void shutdown_bridge_irq(unsigned int irq)
 	 */
 	swlevel = find_level(&cpu, irq);
 	intr_disconnect_level(cpu, swlevel);
-
-	__clear_bit(swlevel, hub->irq_alloc_mask);
 
 	bridge->b_int_enable &= ~(1 << pin);
 	bridge->b_wid_tflush;

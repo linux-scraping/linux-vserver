@@ -28,7 +28,6 @@
 #include <linux/interrupt.h>
 #include <linux/fb.h>
 #include <linux/init.h>
-#include <linux/pci.h>
 #include <linux/nvram.h>
 #include <asm/io.h>
 #include <asm/prom.h>
@@ -53,7 +52,7 @@ struct fb_info_platinum {
 	struct {
 		__u8 red, green, blue;
 	}				palette[256];
-	u32				pseudo_palette[17];
+	u32				pseudo_palette[16];
 	
 	volatile struct cmap_regs	__iomem *cmap_regs;
 	unsigned long			cmap_regs_phys;

@@ -55,12 +55,10 @@ ACPI_EXPORT_SYMBOL(acpi_gbl_FADT)
  * Static global variable initialization.
  *
  ******************************************************************************/
-
 /*
  * We want the debug switches statically initialized so they
  * are already set when the debugger is entered.
  */
-
 /* Debug switch - level and trace mask */
 u32 acpi_dbg_level = ACPI_DEBUG_DEFAULT;
 
@@ -128,6 +126,7 @@ const char *acpi_format_exception(acpi_status status)
 			    "Unknown exception code: 0x%8.8X", status));
 
 		exception = "UNKNOWN_STATUS_CODE";
+		dump_stack();
 	}
 
 	return (ACPI_CAST_PTR(const char, exception));
@@ -735,5 +734,5 @@ void acpi_ut_init_globals(void)
 }
 
 ACPI_EXPORT_SYMBOL(acpi_dbg_level)
-ACPI_EXPORT_SYMBOL(acpi_dbg_layer)
-ACPI_EXPORT_SYMBOL(acpi_gpe_count)
+    ACPI_EXPORT_SYMBOL(acpi_dbg_layer)
+    ACPI_EXPORT_SYMBOL(acpi_gpe_count)

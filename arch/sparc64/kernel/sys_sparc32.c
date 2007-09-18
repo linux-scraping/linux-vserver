@@ -1,8 +1,7 @@
-/* $Id: sys_sparc32.c,v 1.184 2002/02/09 19:49:31 davem Exp $
- * sys_sparc32.c: Conversion between 32bit and 64bit native syscalls.
+/* sys_sparc32.c: Conversion between 32bit and 64bit native syscalls.
  *
  * Copyright (C) 1997,1998 Jakub Jelinek (jj@sunsite.mff.cuni.cz)
- * Copyright (C) 1997 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1997, 2007 David S. Miller (davem@davemloft.net)
  *
  * These routines maintain argument size conversion between 32bit and 64bit
  * environment.
@@ -775,15 +774,25 @@ asmlinkage long sys32_settimeofday(struct compat_timeval __user *tv,
 asmlinkage long sys32_utimes(char __user *filename,
 			     struct compat_timeval __user *tvs)
 {
-	struct timeval ktvs[2];
+	struct timespec tv[2];
 
 	if (tvs) {
+		struct timeval ktvs[2];
 		if (get_tv32(&ktvs[0], tvs) ||
 		    get_tv32(&ktvs[1], 1+tvs))
 			return -EFAULT;
+
+		if (ktvs[0].tv_usec < 0 || ktvs[0].tv_usec >= 1000000 ||
+		    ktvs[1].tv_usec < 0 || ktvs[1].tv_usec >= 1000000)
+			return -EINVAL;
+
+		tv[0].tv_sec = ktvs[0].tv_sec;
+		tv[0].tv_nsec = 1000 * ktvs[0].tv_usec;
+		tv[1].tv_sec = ktvs[1].tv_sec;
+		tv[1].tv_nsec = 1000 * ktvs[1].tv_usec;
 	}
 
-	return do_utimes(AT_FDCWD, filename, (tvs ? &ktvs[0] : NULL));
+	return do_utimes(AT_FDCWD, filename, tvs ? tv : NULL, 0);
 }
 
 /* These are here just in case some old sparc32 binary calls it. */
@@ -1017,4 +1026,11 @@ long compat_sync_file_range(int fd, unsigned long off_high, unsigned long off_lo
 				   (off_high << 32) | off_low,
 				   (nb_high << 32) | nb_low,
 				   flags);
+}
+
+asmlinkage long compat_sys_fallocate(int fd, int mode, u32 offhi, u32 offlo,
+				     u32 lenhi, u32 lenlo)
+{
+	return sys_fallocate(fd, mode, ((loff_t)offhi << 32) | offlo,
+			     ((loff_t)lenhi << 32) | lenlo);
 }

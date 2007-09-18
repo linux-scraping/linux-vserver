@@ -151,7 +151,7 @@ static int ramdisk_commit_write(struct file *file, struct page *page,
 }
 
 /*
- * ->writepage to the the blockdev's mapping has to redirty the page so that the
+ * ->writepage to the blockdev's mapping has to redirty the page so that the
  * VM doesn't go and steal it.  We return AOP_WRITEPAGE_ACTIVATE so that the VM
  * won't try to (pointlessly) write the page again for a while.
  *
@@ -264,7 +264,7 @@ static int rd_blkdev_pagecache_IO(int rw, struct bio_vec *vec, sector_t sector,
  * 19-JAN-1998  Richard Gooch <rgooch@atnf.csiro.au>  Added devfs support
  *
  */
-static int rd_make_request(request_queue_t *q, struct bio *bio)
+static int rd_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
 	struct address_space * mapping = bdev->bd_inode->i_mapping;
@@ -403,7 +403,7 @@ static void __exit rd_cleanup(void)
 		struct block_device *bdev = rd_bdev[i];
 		rd_bdev[i] = NULL;
 		if (bdev) {
-			invalidate_bdev(bdev, 1);
+			invalidate_bdev(bdev);
 			blkdev_put(bdev);
 		}
 		del_gendisk(rd_disks[i]);

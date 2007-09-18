@@ -28,6 +28,7 @@ enum {
 	IUCV_LISTEN,
 	IUCV_SEVERED,
 	IUCV_DISCONN,
+	IUCV_CLOSING,
 	IUCV_CLOSED
 };
 
@@ -59,9 +60,11 @@ struct iucv_sock {
 	char			dst_user_id[8];
 	char			dst_name[8];
 	struct list_head	accept_q;
+	spinlock_t		accept_q_lock;
 	struct sock		*parent;
 	struct iucv_path	*path;
 	struct sk_buff_head	send_skb_q;
+	struct sk_buff_head	backlog_skb_q;
 	unsigned int		send_tag;
 };
 

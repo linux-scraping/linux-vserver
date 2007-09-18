@@ -5,8 +5,6 @@
 #include <linux/capability.h>
 
 
-#define VX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
-
 /* context flags */
 
 #define VXF_INFO_SCHED		0x00000002
@@ -29,7 +27,7 @@
 #define VXF_VIRT_TIME		0x00100000
 
 #define VXF_HIDE_MOUNT		0x01000000
-#define VXF_HIDE_NETIF		0x02000000
+/* was	VXF_HIDE_NETIF		0x02000000 */
 #define VXF_HIDE_VINFO		0x04000000
 
 #define VXF_STATE_SETUP		(1ULL << 32)
@@ -62,7 +60,7 @@
 #define VXC_SET_UTSNAME		0x00000001
 #define VXC_SET_RLIMIT		0x00000002
 
-#define VXC_RAW_ICMP		0x00000100
+/* was	VXC_RAW_ICMP		0x00000100 */
 #define VXC_SYSLOG		0x00001000
 
 #define VXC_SECURE_MOUNT	0x00010000
@@ -109,6 +107,7 @@ struct vx_info {
 
 	struct task_struct *vx_reaper;		/* guest reaper process */
 	pid_t vx_initpid;			/* PID of guest init */
+	int64_t vx_badness_bias;		/* OOM points bias */
 
 	struct _vx_limit limit;			/* vserver limits */
 	struct _vx_sched sched;			/* vserver scheduler */

@@ -11,6 +11,7 @@
 #include <asm/psr.h>
 #include <asm/ptrace.h>
 #include <asm/btfixup.h>
+#include <asm/smp.h>
 
 #ifndef __ASSEMBLY__
 
@@ -164,16 +165,6 @@ extern void fpsave(unsigned long *fpregs, unsigned long *fsr,
 	} while(0)
 
 /*
- * On SMP systems, when the scheduler does migration-cost autodetection,
- * it needs a way to flush as much of the CPU's caches as possible.
- *
- * TODO: fill this in!
- */
-static inline void sched_cacheflush(void)
-{
-}
-
-/*
  * Changing the IRQ level on the Sparc.
  */
 extern void local_irq_restore(unsigned long);
@@ -241,7 +232,6 @@ static inline unsigned long xchg_u32(__volatile__ unsigned long *m, unsigned lon
 }
 
 #define xchg(ptr,x) ((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
-#define tas(ptr) (xchg((ptr),1))
 
 extern void __xchg_called_with_bad_pointer(void);
 

@@ -31,10 +31,11 @@
 #include <linux/kprobes.h>
 #include <linux/ptrace.h>
 #include <linux/preempt.h>
+#include <linux/kdebug.h>
 #include <asm/cacheflush.h>
-#include <asm/kdebug.h>
 #include <asm/desc.h>
 #include <asm/uaccess.h>
+#include <asm/alternative.h>
 
 void jprobe_return_end(void);
 
@@ -169,16 +170,12 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 
 void __kprobes arch_arm_kprobe(struct kprobe *p)
 {
-	*p->addr = BREAKPOINT_INSTRUCTION;
-	flush_icache_range((unsigned long) p->addr,
-			   (unsigned long) p->addr + sizeof(kprobe_opcode_t));
+	text_poke(p->addr, ((unsigned char []){BREAKPOINT_INSTRUCTION}), 1);
 }
 
 void __kprobes arch_disarm_kprobe(struct kprobe *p)
 {
-	*p->addr = p->opcode;
-	flush_icache_range((unsigned long) p->addr,
-			   (unsigned long) p->addr + sizeof(kprobe_opcode_t));
+	text_poke(p->addr, &p->opcode, 1);
 }
 
 void __kprobes arch_remove_kprobe(struct kprobe *p)
@@ -226,24 +223,15 @@ static void __kprobes prepare_singlestep(struct kprobe *p, struct pt_regs *regs)
 }
 
 /* Called with kretprobe_lock held */
-void __kprobes arch_prepare_kretprobe(struct kretprobe *rp,
+void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
 				      struct pt_regs *regs)
 {
 	unsigned long *sara = (unsigned long *)&regs->esp;
 
-	struct kretprobe_instance *ri;
+	ri->ret_addr = (kprobe_opcode_t *) *sara;
 
-	if ((ri = get_free_rp_inst(rp)) != NULL) {
-		ri->rp = rp;
-		ri->task = current;
-		ri->ret_addr = (kprobe_opcode_t *) *sara;
-
-		/* Replace the return addr with trampoline addr */
-		*sara = (unsigned long) &kretprobe_trampoline;
-		add_rp_inst(ri);
-	} else {
-		rp->nmissed++;
-	}
+	/* Replace the return addr with trampoline addr */
+	*sara = (unsigned long) &kretprobe_trampoline;
 }
 
 /*
@@ -449,8 +437,7 @@ fastcall void *__kprobes trampoline_handler(struct pt_regs *regs)
 			break;
 	}
 
-	BUG_ON(!orig_ret_address || (orig_ret_address == trampoline_address));
-
+	kretprobe_assert(ri, orig_ret_address, trampoline_address);
 	spin_unlock_irqrestore(&kretprobe_lock, flags);
 
 	hlist_for_each_entry_safe(ri, node, tmp, &empty_rp, hlist) {
@@ -750,6 +737,11 @@ int __kprobes longjmp_break_handler(struct kprobe *p, struct pt_regs *regs)
 		preempt_enable_no_resched();
 		return 1;
 	}
+	return 0;
+}
+
+int __kprobes arch_trampoline_kprobe(struct kprobe *p)
+{
 	return 0;
 }
 

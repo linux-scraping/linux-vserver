@@ -220,16 +220,25 @@
 #define A_BCM1480_DUART(chan)               ((((chan)&2) == 0)? A_BCM1480_DUART0 : A_BCM1480_DUART1)
 
 #define BCM1480_DUART_CHANREG_SPACING       0x100
-#define A_BCM1480_DUART_CHANREG(chan,reg)   (A_BCM1480_DUART(chan) \
-                                     + BCM1480_DUART_CHANREG_SPACING*((chan)&1) \
-                                     + (reg))
-#define R_BCM1480_DUART_CHANREG(chan,reg)   (BCM1480_DUART_CHANREG_SPACING*((chan)&1) + (reg))
+#define A_BCM1480_DUART_CHANREG(chan, reg)				\
+	(A_BCM1480_DUART(chan) +					\
+	 BCM1480_DUART_CHANREG_SPACING * (((chan) & 1) + 1) + (reg))
+#define A_BCM1480_DUART_CTRLREG(chan, reg)				\
+	(A_BCM1480_DUART(chan) +					\
+	 BCM1480_DUART_CHANREG_SPACING * 3 + (reg))
 
-#define R_BCM1480_DUART_IMRREG(chan)	    (R_DUART_IMR_A + ((chan)&1)*DUART_IMRISR_SPACING)
-#define R_BCM1480_DUART_ISRREG(chan)	    (R_DUART_ISR_A + ((chan)&1)*DUART_IMRISR_SPACING)
+#define R_BCM1480_DUART_IMRREG(chan)					\
+	(R_DUART_IMR_A + ((chan) & 1) * DUART_IMRISR_SPACING)
+#define R_BCM1480_DUART_ISRREG(chan)					\
+	(R_DUART_ISR_A + ((chan) & 1) * DUART_IMRISR_SPACING)
 
-#define A_BCM1480_DUART_IMRREG(chan)	    (A_BCM1480_DUART(chan) + R_BCM1480_DUART_IMRREG(chan))
-#define A_BCM1480_DUART_ISRREG(chan)	    (A_BCM1480_DUART(chan) + R_BCM1480_DUART_ISRREG(chan))
+#define A_BCM1480_DUART_IMRREG(chan)					\
+	(A_BCM1480_DUART_CTRLREG((chan), R_BCM1480_DUART_IMRREG(chan)))
+#define A_BCM1480_DUART_ISRREG(chan)					\
+	(A_BCM1480_DUART_CTRLREG((chan), R_BCM1480_DUART_ISRREG(chan)))
+
+#define A_BCM1480_DUART_IN_PORT(chan)					\
+	(A_BCM1480_DUART_CTRLREG((chan), R_DUART_IN_PORT))
 
 /*
  * These constants are the absolute addresses.
@@ -404,6 +413,21 @@
 #define R_BCM1480_IMR_ALIAS_MAILBOX_0           0x0000		/* 0x0x0 */
 #define R_BCM1480_IMR_ALIAS_MAILBOX_0_SET       0x0008		/* 0x0x8 */
 
+/*
+ * these macros work together to build the address of a mailbox
+ * register, e.g., A_BCM1480_MAILBOX_REGISTER(0,R_BCM1480_IMR_MAILBOX_SET,2)
+ * for mbox_0_set_cpu2 returns 0x00100240C8
+ */
+#define R_BCM1480_IMR_MAILBOX_CPU         0x00
+#define R_BCM1480_IMR_MAILBOX_SET         0x08
+#define R_BCM1480_IMR_MAILBOX_CLR         0x10
+#define R_BCM1480_IMR_MAILBOX_NUM_SPACING 0x20
+#define A_BCM1480_MAILBOX_REGISTER(num,reg,cpu) \
+    (A_BCM1480_IMR_CPU0_BASE + \
+     (num * R_BCM1480_IMR_MAILBOX_NUM_SPACING) + \
+     (cpu * BCM1480_IMR_REGISTER_SPACING) + \
+     (R_BCM1480_IMR_MAILBOX_0_CPU + reg))
+
 /*  *********************************************************************
     * System Performance Counter Registers (Section 4.7)
     ********************************************************************* */
@@ -427,6 +451,10 @@
 #define A_BCM1480_SCD_PERF_CNT_5            0x00100204F8
 #define A_BCM1480_SCD_PERF_CNT_6            0x0010020500
 #define A_BCM1480_SCD_PERF_CNT_7            0x0010020508
+
+#define BCM1480_SCD_NUM_PERF_CNT 8
+#define BCM1480_SCD_PERF_CNT_SPACING 8
+#define A_BCM1480_SCD_PERF_CNT(n) (A_SCD_PERF_CNT_0+(n*BCM1480_SCD_PERF_CNT_SPACING))
 
 /*  *********************************************************************
     * System Bus Watcher Registers (Section 4.8)

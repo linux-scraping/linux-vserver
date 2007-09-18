@@ -5,6 +5,11 @@
  * This tricks binfmt_elf.c into loading 32bit binaries using lots 
  * of ugly preprocessor tricks. Talk about very very poor man's inheritance.
  */ 
+#define __ASM_X86_64_ELF_H 1
+
+#undef ELF_CLASS
+#define ELF_CLASS ELFCLASS32
+
 #include <linux/types.h>
 #include <linux/stddef.h>
 #include <linux/rwsem.h>
@@ -33,10 +38,12 @@
 
 int sysctl_vsyscall32 = 1;
 
+#undef ARCH_DLINFO
 #define ARCH_DLINFO do {  \
 	if (sysctl_vsyscall32) { \
-	NEW_AUX_ENT(AT_SYSINFO, (u32)(u64)VSYSCALL32_VSYSCALL); \
-	NEW_AUX_ENT(AT_SYSINFO_EHDR, VSYSCALL32_BASE);    \
+		current->mm->context.vdso = (void *)VSYSCALL32_BASE;	\
+		NEW_AUX_ENT(AT_SYSINFO, (u32)(u64)VSYSCALL32_VSYSCALL); \
+		NEW_AUX_ENT(AT_SYSINFO_EHDR, VSYSCALL32_BASE);    \
 	}	\
 } while(0)
 
@@ -49,9 +56,6 @@ struct elf_phdr;
 
 #undef ELF_ARCH
 #define ELF_ARCH EM_386
-
-#undef ELF_CLASS
-#define ELF_CLASS ELFCLASS32
 
 #define ELF_DATA	ELFDATA2LSB
 
@@ -136,7 +140,7 @@ struct elf_prpsinfo
 
 #define user user32
 
-#define __ASM_X86_64_ELF_H 1
+#undef elf_read_implies_exec
 #define elf_read_implies_exec(ex, executable_stack)     (executable_stack != EXSTACK_DISABLE_X)
 //#include <asm/ia32.h>
 #include <linux/elf.h>
@@ -230,9 +234,6 @@ do {							\
 #define load_elf_binary load_elf32_binary
 
 #define ELF_PLAT_INIT(r, load_addr)	elf32_init(r)
-#define setup_arg_pages(bprm, stack_top, exec_stack) \
-	ia32_setup_arg_pages(bprm, stack_top, exec_stack)
-int ia32_setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top, int executable_stack);
 
 #undef start_thread
 #define start_thread(regs,new_rip,new_rsp) do { \
@@ -283,62 +284,6 @@ static void elf32_init(struct pt_regs *regs)
     me->thread.ds = __USER_DS; 
 	me->thread.es = __USER_DS;
 }
-
-int ia32_setup_arg_pages(struct linux_binprm *bprm, unsigned long stack_top,
-			 int executable_stack)
-{
-	unsigned long stack_base;
-	struct vm_area_struct *mpnt;
-	struct mm_struct *mm = current->mm;
-	int i, ret;
-
-	stack_base = stack_top - MAX_ARG_PAGES * PAGE_SIZE;
-	mm->arg_start = bprm->p + stack_base;
-
-	bprm->p += stack_base;
-	if (bprm->loader)
-		bprm->loader += stack_base;
-	bprm->exec += stack_base;
-
-	mpnt = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
-	if (!mpnt) 
-		return -ENOMEM; 
-
-	down_write(&mm->mmap_sem);
-	{
-		mpnt->vm_mm = mm;
-		mpnt->vm_start = PAGE_MASK & (unsigned long) bprm->p;
-		mpnt->vm_end = stack_top;
-		if (executable_stack == EXSTACK_ENABLE_X)
-			mpnt->vm_flags = VM_STACK_FLAGS |  VM_EXEC;
-		else if (executable_stack == EXSTACK_DISABLE_X)
-			mpnt->vm_flags = VM_STACK_FLAGS & ~VM_EXEC;
-		else
-			mpnt->vm_flags = VM_STACK_FLAGS;
- 		mpnt->vm_page_prot = (mpnt->vm_flags & VM_EXEC) ? 
- 			PAGE_COPY_EXEC : PAGE_COPY;
-		if ((ret = insert_vm_struct(mm, mpnt))) {
-			up_write(&mm->mmap_sem);
-			kmem_cache_free(vm_area_cachep, mpnt);
-			return ret;
-		}
-		vx_vmpages_sub(mm, mm->total_vm - vma_pages(mpnt));
-		mm->stack_vm = mm->total_vm;
-	} 
-
-	for (i = 0 ; i < MAX_ARG_PAGES ; i++) {
-		struct page *page = bprm->page[i];
-		if (page) {
-			bprm->page[i] = NULL;
-			install_arg_page(mpnt, page, stack_base);
-		}
-		stack_base += PAGE_SIZE;
-	}
-	up_write(&mm->mmap_sem);
-	
-	return 0;
-}
-EXPORT_SYMBOL(ia32_setup_arg_pages);
 
 #ifdef CONFIG_SYSCTL
 /* Register vsyscall32 into the ABI table */

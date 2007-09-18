@@ -163,7 +163,6 @@ static match_table_t __initdata tokens = {
 	{Opt_tag, "tag"},
 	{Opt_notag, "notag"},
 	{Opt_tagid, "tagid=%u"},
-	{Opt_tag, "tagxid"},
 	{Opt_err, NULL}
 	
 };
@@ -446,7 +445,7 @@ static int __init root_nfs_getport(int program, int version, int proto)
 	printk(KERN_NOTICE "Looking up port of RPC %d/%d on %u.%u.%u.%u\n",
 		program, version, NIPQUAD(servaddr));
 	set_sockaddr(&sin, servaddr, 0);
-	return rpc_getport_external(&sin, program, version, proto);
+	return rpcb_getport_sync(&sin, program, version, proto);
 }
 
 
@@ -514,7 +513,8 @@ static int __init root_nfs_get_handle(void)
 					NFS_MNT3_VERSION : NFS_MNT_VERSION;
 
 	set_sockaddr(&sin, servaddr, htons(mount_port));
-	status = nfsroot_mount(&sin, nfs_path, &fh, version, protocol);
+	status = nfs_mount((struct sockaddr *) &sin, sizeof(sin), NULL,
+			   nfs_path, version, protocol, &fh);
 	if (status < 0)
 		printk(KERN_ERR "Root-NFS: Server returned error %d "
 				"while mounting %s\n", status, nfs_path);

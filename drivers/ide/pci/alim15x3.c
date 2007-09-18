@@ -1,5 +1,5 @@
 /*
- * linux/drivers/ide/pci/alim15x3.c		Version 0.21	2007/02/03
+ * linux/drivers/ide/pci/alim15x3.c		Version 0.25	Jun 9 2007
  *
  *  Copyright (C) 1998-2000 Michel Aubry, Maintainer
  *  Copyright (C) 1998-2000 Andrzej Krzysztofowicz, Maintainer
@@ -10,6 +10,7 @@
  *  Copyright (C) 2002 Alan Cox <alan@redhat.com>
  *  ALi (now ULi M5228) support by Clear Zhang <Clear.Zhang@ali.com.tw>
  *  Copyright (C) 2007 MontaVista Software, Inc. <source@mvista.com>
+ *  Copyright (C) 2007 Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
  *
  *  (U)DMA capable version of ali 1533/1543(C), 1535(D)
  *
@@ -36,6 +37,7 @@
 #include <linux/hdreg.h>
 #include <linux/ide.h>
 #include <linux/init.h>
+#include <linux/dmi.h>
 
 #include <asm/io.h>
 
@@ -50,7 +52,7 @@ static u8 m5229_revision;
 static u8 chip_is_1543c_e;
 static struct pci_dev *isa_dev;
 
-#if defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_PROC_FS)
+#if defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_IDE_PROC_FS)
 #include <linux/stat.h>
 #include <linux/proc_fs.h>
 
@@ -278,7 +280,7 @@ static int ali_get_info (char *buffer, char **addr, off_t offset, int count)
 
 	return p-buffer; /* => must be less than 4k! */
 }
-#endif  /* defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_PROC_FS) */
+#endif  /* defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_IDE_PROC_FS) */
 
 /**
  *	ali15x3_tune_pio	-	set up chipset for PIO mode
@@ -293,7 +295,6 @@ static int ali_get_info (char *buffer, char **addr, off_t offset, int count)
  
 static u8 ali15x3_tune_pio (ide_drive_t *drive, u8 pio)
 {
-	ide_pio_data_t d;
 	ide_hwif_t *hwif = HWIF(drive);
 	struct pci_dev *dev = hwif->pci_dev;
 	int s_time, a_time, c_time;
@@ -305,7 +306,7 @@ static u8 ali15x3_tune_pio (ide_drive_t *drive, u8 pio)
 	u8 cd_dma_fifo = 0;
 	int unit = drive->select.b.unit & 1;
 
-	pio = ide_get_best_pio_mode(drive, pio, 5, &d);
+	pio = ide_get_best_pio_mode(drive, pio, 5);
 	s_time = ide_pio_timings[pio].setup_time;
 	a_time = ide_pio_timings[pio].active_time;
 	if ((s_clc = (s_time * bus_speed + 999) / 1000) >= 8)
@@ -378,74 +379,31 @@ static void ali15x3_tune_drive (ide_drive_t *drive, u8 pio)
 }
 
 /**
- *	ali15x3_can_ultra	-	check for ultra DMA support
- *	@drive: drive to do the check
+ *	ali_udma_filter		-	compute UDMA mask
+ *	@drive: IDE device
  *
- *	Check the drive and controller revisions. Return 0 if UDMA is
- *	not available, or 1 if UDMA can be used. The actual rules for
- *	the ALi are
+ *	Return available UDMA modes.
+ *
+ *	The actual rules for the ALi are:
  *		No UDMA on revisions <= 0x20
  *		Disk only for revisions < 0xC2
  *		Not WDC drives for revisions < 0xC2
  *
  *	FIXME: WDC ifdef needs to die
  */
- 
-static u8 ali15x3_can_ultra (ide_drive_t *drive)
+
+static u8 ali_udma_filter(ide_drive_t *drive)
 {
+	if (m5229_revision > 0x20 && m5229_revision < 0xC2) {
+		if (drive->media != ide_disk)
+			return 0;
 #ifndef CONFIG_WDC_ALI15X3
-	struct hd_driveid *id	= drive->id;
-#endif /* CONFIG_WDC_ALI15X3 */
-
-	if (m5229_revision <= 0x20) {
-		return 0;
-	} else if ((m5229_revision < 0xC2) &&
-#ifndef CONFIG_WDC_ALI15X3
-		   ((chip_is_1543c_e && strstr(id->model, "WDC ")) ||
-		    (drive->media!=ide_disk))) {
-#else /* CONFIG_WDC_ALI15X3 */
-		   (drive->media!=ide_disk)) {
-#endif /* CONFIG_WDC_ALI15X3 */
-		return 0;
-	} else {
-		return 1;
-	}
-}
-
-/**
- *	ali15x3_ratemask	-	generate DMA mode list
- *	@drive: drive to compute against
- *
- *	Generate a list of the available DMA modes for the drive. 
- *	FIXME: this function contains lots of bogus masking we can dump
- *
- *	Return the highest available mode (UDMA33, UDMA66, UDMA100,..)
- */
- 
-static u8 ali15x3_ratemask (ide_drive_t *drive)
-{
-	u8 mode = 0, can_ultra	= ali15x3_can_ultra(drive);
-
-	if (m5229_revision > 0xC4 && can_ultra) {
-		mode = 4;
-	} else if (m5229_revision == 0xC4 && can_ultra) {
-		mode = 3;
-	} else if (m5229_revision >= 0xC2 && can_ultra) {
-		mode = 2;
-	} else if (can_ultra) {
-		return 1;
-	} else {
-		return 0;
+		if (chip_is_1543c_e && strstr(drive->id->model, "WDC "))
+			return 0;
+#endif
 	}
 
-	/*
-	 *	If the drive sees no suitable cable then UDMA 33
-	 *	is the highest permitted mode
-	 */
-	 
-	if (!eighty_ninty_three(drive))
-		mode = min(mode, (u8)1);
-	return mode;
+	return drive->hwif->ultra_mask;
 }
 
 /**
@@ -461,7 +419,7 @@ static int ali15x3_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 {
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
-	u8 speed		= ide_rate_filter(ali15x3_ratemask(drive), xferspeed);
+	u8 speed		= ide_rate_filter(drive, xferspeed);
 	u8 speed1		= speed;
 	u8 unit			= (drive->select.b.unit & 0x01);
 	u8 tmpbyte		= 0x00;
@@ -498,28 +456,6 @@ static int ali15x3_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 	return (ide_config_drive_speed(drive, speed));
 }
 
-
-/**
- *	config_chipset_for_dma	-	set up DMA mode
- *	@drive: drive to configure for
- *
- *	Place a drive into DMA mode and tune the chipset for
- *	the selected speed.
- *
- *	Returns true if DMA mode can be used
- */
- 
-static int config_chipset_for_dma (ide_drive_t *drive)
-{
-	u8 speed = ide_dma_speed(drive, ali15x3_ratemask(drive));
-
-	if (!(speed))
-		return 0;
-
-	(void) ali15x3_tune_chipset(drive, speed);
-	return ide_dma_enable(drive);
-}
-
 /**
  *	ali15x3_config_drive_for_dma	-	configure for DMA
  *	@drive: drive to configure
@@ -530,49 +466,14 @@ static int config_chipset_for_dma (ide_drive_t *drive)
 
 static int ali15x3_config_drive_for_dma(ide_drive_t *drive)
 {
-	ide_hwif_t *hwif	= HWIF(drive);
-	struct hd_driveid *id	= drive->id;
-
-	if ((m5229_revision<=0x20) && (drive->media!=ide_disk))
-		goto no_dma_set;
-
 	drive->init_speed = 0;
 
-	if ((id != NULL) && ((id->capability & 1) != 0) && drive->autodma) {
-		/* Consult the list of known "bad" drives */
-		if (__ide_dma_bad_drive(drive))
-			goto ata_pio;
-		if ((id->field_valid & 4) && (m5229_revision >= 0xC2)) {
-			if (id->dma_ultra & hwif->ultra_mask) {
-				/* Force if Capable UltraDMA */
-				int dma = config_chipset_for_dma(drive);
-				if ((id->field_valid & 2) && !dma)
-					goto try_dma_modes;
-			}
-		} else if (id->field_valid & 2) {
-try_dma_modes:
-			if ((id->dma_mword & hwif->mwdma_mask) ||
-			    (id->dma_1word & hwif->swdma_mask)) {
-				/* Force if Capable regular DMA modes */
-				if (!config_chipset_for_dma(drive))
-					goto no_dma_set;
-			}
-		} else if (__ide_dma_good_drive(drive) &&
-			   (id->eide_dma_time < 150)) {
-			/* Consult the list of known "good" drives */
-			if (!config_chipset_for_dma(drive))
-				goto no_dma_set;
-		} else {
-			goto ata_pio;
-		}
-	} else {
-ata_pio:
-		hwif->tuneproc(drive, 255);
-no_dma_set:
-		return -1;
-	}
+	if (ide_tune_dma(drive))
+		return 0;
 
-	return 0;
+	ali15x3_tune_drive(drive, 255);
+
+	return -1;
 }
 
 /**
@@ -606,17 +507,17 @@ static unsigned int __devinit init_chipset_ali15x3 (struct pci_dev *dev, const c
 	u8 tmpbyte;
 	struct pci_dev *north = pci_get_slot(dev->bus, PCI_DEVFN(0,0));
 
-	pci_read_config_byte(dev, PCI_REVISION_ID, &m5229_revision);
+	m5229_revision = dev->revision;
 
 	isa_dev = pci_get_device(PCI_VENDOR_ID_AL, PCI_DEVICE_ID_AL_M1533, NULL);
 
-#if defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_PROC_FS)
+#if defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_IDE_PROC_FS)
 	if (!ali_proc) {
 		ali_proc = 1;
 		bmide_dev = dev;
 		ide_pci_create_host_proc("ali", ali_get_info);
 	}
-#endif  /* defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_PROC_FS) */
+#endif  /* defined(DISPLAY_ALI_TIMINGS) && defined(CONFIG_IDE_PROC_FS) */
 
 	local_irq_save(flags);
 
@@ -683,6 +584,35 @@ out:
 	return 0;
 }
 
+/*
+ *	Cable special cases
+ */
+
+static struct dmi_system_id cable_dmi_table[] = {
+	{
+		.ident = "HP Pavilion N5430",
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
+			DMI_MATCH(DMI_BOARD_VERSION, "OmniBook N32N-736"),
+		},
+	},
+	{ }
+};
+
+static int ali_cable_override(struct pci_dev *pdev)
+{
+	/* Fujitsu P2000 */
+	if (pdev->subsystem_vendor == 0x10CF &&
+	    pdev->subsystem_device == 0x10AF)
+		return 1;
+
+	/* Systems by DMI */
+	if (dmi_check_system(cable_dmi_table))
+		return 1;
+
+	return 0;
+}
+
 /**
  *	ata66_ali15x3	-	check for UDMA 66 support
  *	@hwif: IDE interface
@@ -694,37 +624,31 @@ out:
  *	FIXME: frobs bits that are not defined on newer ALi devicea
  */
 
-static unsigned int __devinit ata66_ali15x3 (ide_hwif_t *hwif)
+static u8 __devinit ata66_ali15x3(ide_hwif_t *hwif)
 {
 	struct pci_dev *dev	= hwif->pci_dev;
-	unsigned int ata66	= 0;
-	u8 cable_80_pin[2]	= { 0, 0 };
-
 	unsigned long flags;
-	u8 tmpbyte;
+	u8 cbl = ATA_CBL_PATA40, tmpbyte;
 
 	local_irq_save(flags);
 
 	if (m5229_revision >= 0xC2) {
 		/*
-		 * Ultra66 cable detection (from Host View)
-		 * m5229, 0x4a, bit0: primary, bit1: secondary 80 pin
+		 * m5229 80-pin cable detection (from Host View)
+		 *
+		 * 0x4a bit0 is 0 => primary channel has 80-pin
+		 * 0x4a bit1 is 0 => secondary channel has 80-pin
+		 *
+		 * Certain laptops use short but suitable cables
+		 * and don't implement the detect logic.
 		 */
-		pci_read_config_byte(dev, 0x4a, &tmpbyte);
-		/*
-		 * 0x4a, bit0 is 0 => primary channel
-		 * has 80-pin (from host view)
-		 */
-		if (!(tmpbyte & 0x01)) cable_80_pin[0] = 1;
-		/*
-		 * 0x4a, bit1 is 0 => secondary channel
-		 * has 80-pin (from host view)
-		 */
-		if (!(tmpbyte & 0x02)) cable_80_pin[1] = 1;
-		/*
-		 * Allow ata66 if cable of current channel has 80 pins
-		 */
-		ata66 = (hwif->channel)?cable_80_pin[1]:cable_80_pin[0];
+		if (ali_cable_override(dev))
+			cbl = ATA_CBL_PATA40_SHORT;
+		else {
+			pci_read_config_byte(dev, 0x4a, &tmpbyte);
+			if ((tmpbyte & (1 << hwif->channel)) == 0)
+				cbl = ATA_CBL_PATA80;
+		}
 	} else {
 		/*
 		 * check m1533, 0x5e, bit 1~4 == 1001 => & 00011110 = 00010010
@@ -757,7 +681,7 @@ static unsigned int __devinit ata66_ali15x3 (ide_hwif_t *hwif)
 
 	local_irq_restore(flags);
 
-	return(ata66);
+	return cbl;
 }
 
 /**
@@ -772,6 +696,7 @@ static void __devinit init_hwif_common_ali15x3 (ide_hwif_t *hwif)
 	hwif->autodma = 0;
 	hwif->tuneproc = &ali15x3_tune_drive;
 	hwif->speedproc = &ali15x3_tune_chipset;
+	hwif->udma_filter = &ali_udma_filter;
 
 	/* don't use LBA48 DMA on ALi devices before rev 0xC5 */
 	hwif->no_lba48_dma = (m5229_revision <= 0xC4) ? 1 : 0;
@@ -782,10 +707,20 @@ static void __devinit init_hwif_common_ali15x3 (ide_hwif_t *hwif)
 		return;
 	}
 
-	hwif->atapi_dma = 1;
-
 	if (m5229_revision > 0x20)
-		hwif->ultra_mask = 0x7f;
+		hwif->atapi_dma = 1;
+
+	if (m5229_revision <= 0x20)
+		hwif->ultra_mask = 0x00; /* no udma */
+	else if (m5229_revision < 0xC2)
+		hwif->ultra_mask = 0x07; /* udma0-2 */
+	else if (m5229_revision == 0xC2 || m5229_revision == 0xC3)
+		hwif->ultra_mask = 0x1f; /* udma0-4 */
+	else if (m5229_revision == 0xC4)
+		hwif->ultra_mask = 0x3f; /* udma0-5 */
+	else
+		hwif->ultra_mask = 0x7f; /* udma0-6 */
+
 	hwif->mwdma_mask = 0x07;
 	hwif->swdma_mask = 0x07;
 
@@ -797,8 +732,9 @@ static void __devinit init_hwif_common_ali15x3 (ide_hwif_t *hwif)
 		hwif->dma_setup = &ali15x3_dma_setup;
 		if (!noautodma)
 			hwif->autodma = 1;
-		if (!(hwif->udma_four))
-			hwif->udma_four = ata66_ali15x3(hwif);
+
+		if (hwif->cbl != ATA_CBL_PATA40_SHORT)
+			hwif->cbl = ata66_ali15x3(hwif);
 	}
 	hwif->drives[0].autodma = hwif->autodma;
 	hwif->drives[1].autodma = hwif->autodma;
@@ -880,9 +816,9 @@ static ide_pci_device_t ali15x3_chipset __devinitdata = {
 	.init_chipset	= init_chipset_ali15x3,
 	.init_hwif	= init_hwif_ali15x3,
 	.init_dma	= init_dma_ali15x3,
-	.channels	= 2,
 	.autodma	= AUTODMA,
 	.bootable	= ON_BOARD,
+	.pio_mask	= ATA_PIO5,
 };
 
 /**

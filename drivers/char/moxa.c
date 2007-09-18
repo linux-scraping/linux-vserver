@@ -1405,7 +1405,6 @@ static int moxaCard;
 static struct mon_str moxaLog;
 static int moxaFuncTout = HZ / 2;
 
-static void moxadelay(int);
 static void moxafunc(void __iomem *, int, ushort);
 static void wait_finish(void __iomem *);
 static void low_water_check(void __iomem *);
@@ -1582,7 +1581,7 @@ copy:
 
 	if(copy_from_user(&dltmp, argp, sizeof(struct dl_str)))
 		return -EFAULT;
-	if(dltmp.cardno < 0 || dltmp.cardno >= MAX_BOARDS)
+	if(dltmp.cardno < 0 || dltmp.cardno >= MAX_BOARDS || dltmp.len < 0)
 		return -EINVAL;
 
 	switch(cmd)
@@ -2404,10 +2403,10 @@ void MoxaPortSendBreak(int port, int ms100)
 	ofsAddr = moxa_ports[port].tableAddr;
 	if (ms100) {
 		moxafunc(ofsAddr, FC_SendBreak, Magic_code);
-		moxadelay(ms100 * (HZ / 10));
+		msleep(ms100 * 10);
 	} else {
 		moxafunc(ofsAddr, FC_SendBreak, Magic_code);
-		moxadelay(HZ / 4);	/* 250 ms */
+		msleep(250);
 	}
 	moxafunc(ofsAddr, FC_StopBreak, Magic_code);
 }
@@ -2476,18 +2475,6 @@ static int moxa_set_serial_info(struct moxa_port *info,
 /*****************************************************************************
  *	Static local functions: 					     *
  *****************************************************************************/
-/*
- * moxadelay - delays a specified number ticks
- */
-static void moxadelay(int tick)
-{
-	unsigned long st, et;
-
-	st = jiffies;
-	et = st + tick;
-	while (time_before(jiffies, et));
-}
-
 static void moxafunc(void __iomem *ofsAddr, int cmd, ushort arg)
 {
 
@@ -2529,11 +2516,13 @@ static int moxaloadbios(int cardno, unsigned char __user *tmp, int len)
 	void __iomem *baseAddr;
 	int i;
 
+	if(len < 0 || len > sizeof(moxaBuff))
+		return -EINVAL;
 	if(copy_from_user(moxaBuff, tmp, len))
 		return -EFAULT;
 	baseAddr = moxa_boards[cardno].basemem;
 	writeb(HW_reset, baseAddr + Control_reg);	/* reset */
-	moxadelay(1);		/* delay 10 ms */
+	msleep(10);
 	for (i = 0; i < 4096; i++)
 		writeb(0, baseAddr + i);	/* clear fix page */
 	for (i = 0; i < len; i++)
@@ -2576,7 +2565,7 @@ static int moxaload320b(int cardno, unsigned char __user *tmp, int len)
 	void __iomem *baseAddr;
 	int i;
 
-	if(len > sizeof(moxaBuff))
+	if(len < 0 || len > sizeof(moxaBuff))
 		return -EINVAL;
 	if(copy_from_user(moxaBuff, tmp, len))
 		return -EFAULT;
@@ -2596,6 +2585,8 @@ static int moxaloadcode(int cardno, unsigned char __user *tmp, int len)
 	void __iomem *baseAddr, *ofsAddr;
 	int retval, port, i;
 
+	if(len < 0 || len > sizeof(moxaBuff))
+		return -EINVAL;
 	if(copy_from_user(moxaBuff, tmp, len))
 		return -EFAULT;
 	baseAddr = moxa_boards[cardno].basemem;
@@ -2709,7 +2700,7 @@ static int moxaloadc218(int cardno, void __iomem *baseAddr, int len)
 			for (i = 0; i < 100; i++) {
 				if (readw(baseAddr + C218_key) == keycode)
 					break;
-				moxadelay(1);	/* delay 10 ms */
+				msleep(10);
 			}
 			if (readw(baseAddr + C218_key) != keycode) {
 				return (-1);
@@ -2721,7 +2712,7 @@ static int moxaloadc218(int cardno, void __iomem *baseAddr, int len)
 		for (i = 0; i < 100; i++) {
 			if (readw(baseAddr + C218_key) == keycode)
 				break;
-			moxadelay(1);	/* delay 10 ms */
+			msleep(10);
 		}
 		retry++;
 	} while ((readb(baseAddr + C218chksum_ok) != 1) && (retry < 3));
@@ -2732,7 +2723,7 @@ static int moxaloadc218(int cardno, void __iomem *baseAddr, int len)
 	for (i = 0; i < 100; i++) {
 		if (readw(baseAddr + Magic_no) == Magic_code)
 			break;
-		moxadelay(1);	/* delay 10 ms */
+		msleep(10);
 	}
 	if (readw(baseAddr + Magic_no) != Magic_code) {
 		return (-1);
@@ -2742,7 +2733,7 @@ static int moxaloadc218(int cardno, void __iomem *baseAddr, int len)
 	for (i = 0; i < 100; i++) {
 		if (readw(baseAddr + Magic_no) == Magic_code)
 			break;
-		moxadelay(1);	/* delay 10 ms */
+		msleep(10);
 	}
 	if (readw(baseAddr + Magic_no) != Magic_code) {
 		return (-1);
@@ -2784,7 +2775,7 @@ static int moxaloadc320(int cardno, void __iomem *baseAddr, int len, int *numPor
 			for (i = 0; i < 10; i++) {
 				if (readw(baseAddr + C320_key) == C320_KeyCode)
 					break;
-				moxadelay(1);
+				msleep(10);
 			}
 			if (readw(baseAddr + C320_key) != C320_KeyCode)
 				return (-1);
@@ -2795,7 +2786,7 @@ static int moxaloadc320(int cardno, void __iomem *baseAddr, int len, int *numPor
 		for (i = 0; i < 10; i++) {
 			if (readw(baseAddr + C320_key) == C320_KeyCode)
 				break;
-			moxadelay(1);
+			msleep(10);
 		}
 		retry++;
 	} while ((readb(baseAddr + C320chksum_ok) != 1) && (retry < 3));
@@ -2805,7 +2796,7 @@ static int moxaloadc320(int cardno, void __iomem *baseAddr, int len, int *numPor
 	for (i = 0; i < 600; i++) {
 		if (readw(baseAddr + Magic_no) == Magic_code)
 			break;
-		moxadelay(1);
+		msleep(10);
 	}
 	if (readw(baseAddr + Magic_no) != Magic_code)
 		return (-100);
@@ -2824,7 +2815,7 @@ static int moxaloadc320(int cardno, void __iomem *baseAddr, int len, int *numPor
 	for (i = 0; i < 500; i++) {
 		if (readw(baseAddr + Magic_no) == Magic_code)
 			break;
-		moxadelay(1);
+		msleep(10);
 	}
 	if (readw(baseAddr + Magic_no) != Magic_code)
 		return (-102);
@@ -2838,7 +2829,7 @@ static int moxaloadc320(int cardno, void __iomem *baseAddr, int len, int *numPor
 	for (i = 0; i < 600; i++) {
 		if (readw(baseAddr + Magic_no) == Magic_code)
 			break;
-		moxadelay(1);
+		msleep(10);
 	}
 	if (readw(baseAddr + Magic_no) != Magic_code)
 		return (-102);

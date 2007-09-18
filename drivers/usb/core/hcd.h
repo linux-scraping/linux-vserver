@@ -68,6 +68,9 @@ struct usb_hcd {
 
 	struct timer_list	rh_timer;	/* drives root-hub polling */
 	struct urb		*status_urb;	/* the current status urb */
+#ifdef CONFIG_PM
+	struct work_struct	wakeup_work;	/* for remote wakeup */
+#endif
 
 	/*
 	 * hardware info/state
@@ -361,22 +364,12 @@ extern int usb_find_interface_driver (struct usb_device *dev,
 #ifdef CONFIG_PM
 extern void usb_hcd_resume_root_hub (struct usb_hcd *hcd);
 extern void usb_root_hub_lost_power (struct usb_device *rhdev);
-extern int hcd_bus_suspend (struct usb_bus *bus);
-extern int hcd_bus_resume (struct usb_bus *bus);
+extern int hcd_bus_suspend(struct usb_device *rhdev);
+extern int hcd_bus_resume(struct usb_device *rhdev);
 #else
 static inline void usb_hcd_resume_root_hub(struct usb_hcd *hcd)
 {
 	return;
-}
-
-static inline int hcd_bus_suspend(struct usb_bus *bus)
-{
-	return 0;
-}
-
-static inline int hcd_bus_resume (struct usb_bus *bus)
-{
-	return 0;
 }
 #endif /* CONFIG_PM */
 

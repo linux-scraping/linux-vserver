@@ -350,11 +350,24 @@ static void hci_cc_info_param(struct hci_dev *hdev, __u16 ocf, struct sk_buff *s
 		if (hdev->features[0] & LMP_5SLOT)
 			hdev->pkt_type |= (HCI_DM5 | HCI_DH5);
 
-		if (hdev->features[1] & LMP_HV2)
-			hdev->pkt_type |= (HCI_HV2);
+		if (hdev->features[1] & LMP_HV2) {
+			hdev->pkt_type  |= (HCI_HV2);
+			hdev->esco_type |= (ESCO_HV2);
+		}
 
-		if (hdev->features[1] & LMP_HV3)
-			hdev->pkt_type |= (HCI_HV3);
+		if (hdev->features[1] & LMP_HV3) {
+			hdev->pkt_type  |= (HCI_HV3);
+			hdev->esco_type |= (ESCO_HV3);
+		}
+
+		if (hdev->features[3] & LMP_ESCO)
+			hdev->esco_type |= (ESCO_EV3);
+
+		if (hdev->features[4] & LMP_EV4)
+			hdev->esco_type |= (ESCO_EV4);
+
+		if (hdev->features[4] & LMP_EV5)
+			hdev->esco_type |= (ESCO_EV5);
 
 		BT_DBG("%s: features 0x%x 0x%x 0x%x", hdev->name,
 				lf->features[0], lf->features[1], lf->features[2]);
@@ -783,7 +796,7 @@ static inline void hci_conn_complete_evt(struct hci_dev *hdev, struct sk_buff *s
 		if (conn->type == ACL_LINK && hdev->link_policy) {
 			struct hci_cp_write_link_policy cp;
 			cp.handle = ev->handle;
-			cp.policy = __cpu_to_le16(hdev->link_policy);
+			cp.policy = cpu_to_le16(hdev->link_policy);
 			hci_send_cmd(hdev, OGF_LINK_POLICY,
 				OCF_WRITE_LINK_POLICY, sizeof(cp), &cp);
 		}
@@ -793,8 +806,8 @@ static inline void hci_conn_complete_evt(struct hci_dev *hdev, struct sk_buff *s
 			struct hci_cp_change_conn_ptype cp;
 			cp.handle = ev->handle;
 			cp.pkt_type = (conn->type == ACL_LINK) ?
-				__cpu_to_le16(hdev->pkt_type & ACL_PTYPE_MASK):
-				__cpu_to_le16(hdev->pkt_type & SCO_PTYPE_MASK);
+				cpu_to_le16(hdev->pkt_type & ACL_PTYPE_MASK):
+				cpu_to_le16(hdev->pkt_type & SCO_PTYPE_MASK);
 
 			hci_send_cmd(hdev, OGF_LINK_CTL,
 				OCF_CHANGE_CONN_PTYPE, sizeof(cp), &cp);
@@ -881,12 +894,12 @@ static inline void hci_num_comp_pkts_evt(struct hci_dev *hdev, struct sk_buff *s
 		if (conn) {
 			conn->sent -= count;
 
-			if (conn->type == SCO_LINK) {
-				if ((hdev->sco_cnt += count) > hdev->sco_pkts)
-					hdev->sco_cnt = hdev->sco_pkts;
-			} else {
+			if (conn->type == ACL_LINK) {
 				if ((hdev->acl_cnt += count) > hdev->acl_pkts)
 					hdev->acl_cnt = hdev->acl_pkts;
+			} else {
+				if ((hdev->sco_cnt += count) > hdev->sco_pkts)
+					hdev->sco_cnt = hdev->sco_pkts;
 			}
 		}
 	}
@@ -970,7 +983,7 @@ static inline void hci_auth_complete_evt(struct hci_dev *hdev, struct sk_buff *s
 		if (test_bit(HCI_CONN_ENCRYPT_PEND, &conn->pend)) {
 			if (!ev->status) {
 				struct hci_cp_set_conn_encrypt cp;
-				cp.handle  = __cpu_to_le16(conn->handle);
+				cp.handle  = cpu_to_le16(conn->handle);
 				cp.encrypt = 1;
 				hci_send_cmd(conn->hdev, OGF_LINK_CTL,
 					OCF_SET_CONN_ENCRYPT, sizeof(cp), &cp);

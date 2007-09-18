@@ -113,9 +113,6 @@ initialization with a pointer to a structure describing the driver
 		(Please see Documentation/power/pci.txt for descriptions
 		of PCI Power Management and the related functions.)
 
-	enable_wake	Enable device to generate wake events from a low power
-			state.
-
 	shutdown	Hook into reboot_notifier_list (kernel/sys.c).
 			Intended to stop any idling DMA operations.
 			Useful for enabling wake-on-lan (NIC) or changing
@@ -123,10 +120,6 @@ initialization with a pointer to a structure describing the driver
 			e.g. drivers/net/e100.c.
 
 	err_handler	See Documentation/pci-error-recovery.txt
-
-	multithread_probe	Enable multi-threaded probe/scan. Driver must
-			provide its own locking/syncronization for init
-			operations if this is enabled.
 
 
 The ID table is an array of struct pci_device_id entries ending with an
@@ -163,9 +156,9 @@ echo "vendor device subvendor subdevice class class_mask driver_data" > \
 /sys/bus/pci/drivers/{driver}/new_id
 
 All fields are passed in as hexadecimal values (no leading 0x).
-Users need pass only as many fields as necessary:
-	o vendor, device, subvendor, and subdevice fields default
-	  to PCI_ANY_ID (FFFFFFFF),
+The vendor and device fields are mandatory, the others are optional. Users
+need pass only as many optional fields as necessary:
+	o subvendor and subdevice fields default to PCI_ANY_ID (FFFFFFFF)
 	o class and classmask fields default to 0
 	o driver_data defaults to 0UL.
 
@@ -303,7 +296,10 @@ If the PCI device can use the PCI Memory-Write-Invalidate transaction,
 call pci_set_mwi().  This enables the PCI_COMMAND bit for Mem-Wr-Inval
 and also ensures that the cache line size register is set correctly.
 Check the return value of pci_set_mwi() as not all architectures
-or chip-sets may support Memory-Write-Invalidate.
+or chip-sets may support Memory-Write-Invalidate.  Alternatively,
+if Mem-Wr-Inval would be nice to have but is not required, call
+pci_try_set_mwi() to have the system do its best effort at enabling
+Mem-Wr-Inval.
 
 
 3.2 Request MMIO/IOP resources
@@ -377,7 +373,7 @@ E.g. clearing pending interrupts.
 
 3.6 Register IRQ handler
 ~~~~~~~~~~~~~~~~~~~~~~~~
-While calling request_irq() is the the last step described here,
+While calling request_irq() is the last step described here,
 this is often just another intermediate step to initialize a device.
 This step can often be deferred until the device is opened for use.
 
@@ -549,8 +545,6 @@ pci_find_slot()			Find pci_dev corresponding to given bus and
 pci_set_power_state()		Set PCI Power Management state (0=D0 ... 3=D3)
 pci_find_capability()		Find specified capability in device's capability
 				list.
-pci_module_init()		Inline helper function for ensuring correct
-				pci_driver initialization and error handling.
 pci_resource_start()		Returns bus start address for a given PCI region
 pci_resource_end()		Returns bus end address for a given PCI region
 pci_resource_len()		Returns the byte length of a PCI region

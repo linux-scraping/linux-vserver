@@ -16,8 +16,8 @@
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/sem.h>
 #include <linux/msg.h>
 #include <linux/shm.h>
@@ -267,22 +267,22 @@ s390_fadvise64_64(struct fadvise64_64_args __user *args)
 	return sys_fadvise64_64(a.fd, a.offset, a.len, a.advice);
 }
 
+#ifndef CONFIG_64BIT
 /*
- * Do a system call from kernel instead of calling sys_execve so we
- * end up with proper pt_regs.
+ * This is a wrapper to call sys_fallocate(). For 31 bit s390 the last
+ * 64 bit argument "len" is split into the upper and lower 32 bits. The
+ * system call wrapper in the user space loads the value to %r6/%r7.
+ * The code in entry.S keeps the values in %r2 - %r6 where they are and
+ * stores %r7 to 96(%r15). But the standard C linkage requires that
+ * the whole 64 bit value for len is stored on the stack and doesn't
+ * use %r6 at all. So s390_fallocate has to convert the arguments from
+ *   %r2: fd, %r3: mode, %r4/%r5: offset, %r6/96(%r15)-99(%r15): len
+ * to
+ *   %r2: fd, %r3: mode, %r4/%r5: offset, 96(%r15)-103(%r15): len
  */
-int kernel_execve(const char *filename, char *const argv[], char *const envp[])
+asmlinkage long s390_fallocate(int fd, int mode, loff_t offset,
+			       u32 len_high, u32 len_low)
 {
-	register const char *__arg1 asm("2") = filename;
-	register char *const*__arg2 asm("3") = argv;
-	register char *const*__arg3 asm("4") = envp;
-	register long __svcres asm("2");
-	asm volatile(
-		"svc %b1"
-		: "=d" (__svcres)
-		: "i" (__NR_execve),
-		  "0" (__arg1),
-		  "d" (__arg2),
-		  "d" (__arg3) : "memory");
-	return __svcres;
+	return sys_fallocate(fd, mode, offset, ((u64)len_high << 32) | len_low);
 }
+#endif

@@ -265,12 +265,11 @@ u32 ethtool_op_get_link(struct net_device *dev);
 u32 ethtool_op_get_tx_csum(struct net_device *dev);
 int ethtool_op_set_tx_csum(struct net_device *dev, u32 data);
 int ethtool_op_set_tx_hw_csum(struct net_device *dev, u32 data);
+int ethtool_op_set_tx_ipv6_csum(struct net_device *dev, u32 data);
 u32 ethtool_op_get_sg(struct net_device *dev);
 int ethtool_op_set_sg(struct net_device *dev, u32 data);
 u32 ethtool_op_get_tso(struct net_device *dev);
 int ethtool_op_set_tso(struct net_device *dev, u32 data);
-int ethtool_op_get_perm_addr(struct net_device *dev, 
-			     struct ethtool_perm_addr *addr, u8 *data);
 u32 ethtool_op_get_ufo(struct net_device *dev);
 int ethtool_op_set_ufo(struct net_device *dev, u32 data);
 
@@ -308,7 +307,6 @@ int ethtool_op_set_ufo(struct net_device *dev, u32 data);
  * get_strings: Return a set of strings that describe the requested objects 
  * phys_id: Identify the device
  * get_stats: Return statistics about the device
- * get_perm_addr: Gets the permanent hardware address
  * 
  * Description:
  *
@@ -367,7 +365,6 @@ struct ethtool_ops {
 	int	(*phys_id)(struct net_device *, u32);
 	int	(*get_stats_count)(struct net_device *);
 	void	(*get_ethtool_stats)(struct net_device *, struct ethtool_stats *, u64 *);
-	int	(*get_perm_addr)(struct net_device *, struct ethtool_perm_addr *, u8 *);
 	int	(*begin)(struct net_device *);
 	void	(*complete)(struct net_device *);
 	u32     (*get_ufo)(struct net_device *);
@@ -434,6 +431,7 @@ struct ethtool_ops {
 #define SUPPORTED_10000baseT_Full	(1 << 12)
 #define SUPPORTED_Pause			(1 << 13)
 #define SUPPORTED_Asym_Pause		(1 << 14)
+#define SUPPORTED_2500baseX_Full	(1 << 15)
 
 /* Indicates what features are advertised by the interface. */
 #define ADVERTISED_10baseT_Half		(1 << 0)
@@ -451,6 +449,7 @@ struct ethtool_ops {
 #define ADVERTISED_10000baseT_Full	(1 << 12)
 #define ADVERTISED_Pause		(1 << 13)
 #define ADVERTISED_Asym_Pause		(1 << 14)
+#define ADVERTISED_2500baseX_Full	(1 << 15)
 
 /* The following are all involved in forcing a particular link
  * mode for the device for setting things.  When getting the

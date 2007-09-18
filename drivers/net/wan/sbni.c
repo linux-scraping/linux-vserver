@@ -595,8 +595,8 @@ recv_frame( struct net_device  *dev )
 
 	u32  crc = CRC32_INITIAL;
 
-	unsigned  framelen, frameno, ack;
-	unsigned  is_first, frame_ok;
+	unsigned  framelen = 0, frameno, ack;
+	unsigned  is_first, frame_ok = 0;
 
 	if( check_fhdr( ioaddr, &framelen, &frameno, &ack, &is_first, &crc ) ) {
 		frame_ok = framelen > 4
@@ -604,8 +604,7 @@ recv_frame( struct net_device  *dev )
 			:  skip_tail( ioaddr, framelen, crc );
 		if( frame_ok )
 			interpret_ack( dev, ack );
-	} else
-		frame_ok = 0;
+	}
 
 	outb( inb( ioaddr + CSR0 ) ^ CT_ZER, ioaddr + CSR0 );
 	if( frame_ok ) {
@@ -999,11 +998,6 @@ get_rx_buf( struct net_device  *dev )
 	if( !skb )
 		return  NULL;
 
-#ifdef CONFIG_SBNI_MULTILINE
-	skb->dev = ((struct net_local *) dev->priv)->master;
-#else
-	skb->dev = dev;
-#endif
 	skb_reserve( skb, 2 );		/* Align IP on longword boundaries */
 	return  skb;
 }

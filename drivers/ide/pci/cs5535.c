@@ -2,6 +2,7 @@
  * linux/drivers/ide/pci/cs5535.c
  *
  * Copyright (C) 2004-2005 Advanced Micro Devices, Inc.
+ * Copyright (C)      2007 Bartlomiej Zolnierkiewicz
  *
  * History:
  * 09/20/2005 - Jaya Kumar <jayakumar.ide@gmail.com>
@@ -83,14 +84,17 @@ static void cs5535_set_speed(ide_drive_t *drive, u8 speed)
 
 	/* Set the PIO timings */
 	if ((speed & XFER_MODE) == XFER_PIO) {
-		u8 pioa;
-		u8 piob;
-		u8 cmd;
+		ide_drive_t *pair = &drive->hwif->drives[drive->dn ^ 1];
+		u8 cmd, pioa;
 
-		pioa = speed - XFER_PIO_0;
-		piob = ide_get_best_pio_mode(&(drive->hwif->drives[!unit]),
-						255, 4, NULL);
-		cmd = pioa < piob ? pioa : piob;
+		cmd = pioa = speed - XFER_PIO_0;
+
+		if (pair->present) {
+			u8 piob = ide_get_best_pio_mode(pair, 255, 4);
+
+			if (piob < cmd)
+				cmd = piob;
+		}
 
 		/* Write the speed of the current drive */
 		reg = (cs5535_pio_cmd_timings[cmd] << 16) |
@@ -116,7 +120,7 @@ static void cs5535_set_speed(ide_drive_t *drive, u8 speed)
 
 		reg &= 0x80000000UL;  /* Preserve the PIO format bit */
 
-		if (speed >= XFER_UDMA_0 && speed <= XFER_UDMA_7)
+		if (speed >= XFER_UDMA_0 && speed <= XFER_UDMA_4)
 			reg |= cs5535_udma_timings[speed - XFER_UDMA_0];
 		else if (speed >= XFER_MW_DMA_0 && speed <= XFER_MW_DMA_2)
 			reg |= cs5535_mwdma_timings[speed - XFER_MW_DMA_0];
@@ -126,20 +130,6 @@ static void cs5535_set_speed(ide_drive_t *drive, u8 speed)
 		wrmsr(unit ? ATAC_CH0D1_DMA : ATAC_CH0D0_DMA, reg, 0);
 	}
 }
-
-static u8 cs5535_ratemask(ide_drive_t *drive)
-{
-	/* eighty93 will return 1 if it's 80core and capable of
-	exceeding udma2, 0 otherwise. we need ratemask to set
-	the max speed and if we can > udma2 then we return 2
-	which selects speed_max as udma4 which is the 5535's max
-	speed, and 1 selects udma2 which is the max for 40c */
-	if (!eighty_ninty_three(drive))
-		return 1;
-
-	return 2;
-}
-
 
 /****
  *	cs5535_set_drive         -     Configure the drive to the new speed
@@ -151,7 +141,7 @@ static u8 cs5535_ratemask(ide_drive_t *drive)
  */
 static int cs5535_set_drive(ide_drive_t *drive, u8 speed)
 {
-	speed = ide_rate_filter(cs5535_ratemask(drive), speed);
+	speed = ide_rate_filter(drive, speed);
 	ide_config_drive_speed(drive, speed);
 	cs5535_set_speed(drive, speed);
 
@@ -165,47 +155,22 @@ static int cs5535_set_drive(ide_drive_t *drive, u8 speed)
  *
  *	A callback from the upper layers for PIO-only tuning.
  */
-static void cs5535_tuneproc(ide_drive_t *drive, u8 xferspeed)
+static void cs5535_tuneproc(ide_drive_t *drive, u8 pio)
 {
-	u8 modes[] = {	XFER_PIO_0, XFER_PIO_1, XFER_PIO_2, XFER_PIO_3,
-			XFER_PIO_4 };
-
-	/* cs5535 max pio is pio 4, best_pio will check the blacklist.
-	i think we don't need to rate_filter the incoming xferspeed
-	since we know we're only going to choose pio */
-	xferspeed = ide_get_best_pio_mode(drive, xferspeed, 4, NULL);
-	ide_config_drive_speed(drive, modes[xferspeed]);
-	cs5535_set_speed(drive, xferspeed);
-}
-
-static int cs5535_config_drive_for_dma(ide_drive_t *drive)
-{
-	u8 speed;
-
-	speed = ide_dma_speed(drive, cs5535_ratemask(drive));
-
-	/* If no DMA speed was available then let dma_check hit pio */
-	if (!speed) {
-		return 0;
-	}
-
-	cs5535_set_drive(drive, speed);
-	return ide_dma_enable(drive);
+	pio = ide_get_best_pio_mode(drive, pio, 4);
+	ide_config_drive_speed(drive, XFER_PIO_0 + pio);
+	cs5535_set_speed(drive, XFER_PIO_0 + pio);
 }
 
 static int cs5535_dma_check(ide_drive_t *drive)
 {
-	u8 speed;
-
 	drive->init_speed = 0;
 
-	if (ide_use_dma(drive) && cs5535_config_drive_for_dma(drive))
+	if (ide_tune_dma(drive))
 		return 0;
 
-	if (ide_use_fast_pio(drive)) {
-		speed = ide_get_best_pio_mode(drive, 255, 4, NULL);
-		cs5535_set_drive(drive, speed);
-	}
+	if (ide_use_fast_pio(drive))
+		cs5535_tuneproc(drive, 255);
 
 	return -1;
 }
@@ -216,7 +181,8 @@ static u8 __devinit cs5535_cable_detect(struct pci_dev *dev)
 
 	/* if a 80 wire cable was detected */
 	pci_read_config_byte(dev, CS5535_CABLE_DETECT, &bit);
-	return (bit & 1);
+
+	return (bit & 1) ? ATA_CBL_PATA80 : ATA_CBL_PATA40;
 }
 
 /****
@@ -241,8 +207,7 @@ static void __devinit init_hwif_cs5535(ide_hwif_t *hwif)
 	hwif->ultra_mask = 0x1F;
 	hwif->mwdma_mask = 0x07;
 
-
-	hwif->udma_four = cs5535_cable_detect(hwif->pci_dev);
+	hwif->cbl = cs5535_cable_detect(hwif->pci_dev);
 
 	if (!noautodma)
 		hwif->autodma = 1;
@@ -257,9 +222,10 @@ static void __devinit init_hwif_cs5535(ide_hwif_t *hwif)
 static ide_pci_device_t cs5535_chipset __devinitdata = {
 	.name		= "CS5535",
 	.init_hwif	= init_hwif_cs5535,
-	.channels	= 1,
 	.autodma	= AUTODMA,
 	.bootable	= ON_BOARD,
+	.host_flags	= IDE_HFLAG_SINGLE,
+	.pio_mask	= ATA_PIO4,
 };
 
 static int __devinit cs5535_init_one(struct pci_dev *dev,

@@ -1,6 +1,6 @@
 /************************************************************************
  * regs.h: A Linux PCI-X Ethernet driver for Neterion 10GbE Server NIC
- * Copyright(c) 2002-2005 Neterion Inc.
+ * Copyright(c) 2002-2007 Neterion Inc.
 
  * This software may be used and distributed according to the terms of
  * the GNU General Public License (GPL), incorporated herein by reference.
@@ -747,10 +747,9 @@ struct XENA_dev_config {
 #define MC_ERR_REG_MIRI_CRI_ERR_1          BIT(23)
 #define MC_ERR_REG_SM_ERR                  BIT(31)
 #define MC_ERR_REG_ECC_ALL_SNG		   (BIT(2) | BIT(3) | BIT(4) | BIT(5) |\
-					    BIT(6) | BIT(7) | BIT(17) | BIT(19))
+					BIT(17) | BIT(19))
 #define MC_ERR_REG_ECC_ALL_DBL		   (BIT(10) | BIT(11) | BIT(12) |\
-					    BIT(13) | BIT(14) | BIT(15) |\
-					    BIT(18) | BIT(20))
+					BIT(13) | BIT(18) | BIT(20))
 	u64 mc_err_mask;
 	u64 mc_err_alarm;
 

@@ -1,6 +1,7 @@
 #ifndef _VX_MONITOR_H
 #define _VX_MONITOR_H
 
+#include <linux/types.h>
 
 enum {
 	VXM_UNUSED = 0,

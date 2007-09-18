@@ -466,6 +466,7 @@ qla24xx_read_flash_dword(scsi_qla_host_t *ha, uint32_t addr)
 			udelay(10);
 		else
 			rval = QLA_FUNCTION_TIMEOUT;
+		cond_resched();
 	}
 
 	/* TODO: What happens if we time out? */
@@ -508,6 +509,7 @@ qla24xx_write_flash_dword(scsi_qla_host_t *ha, uint32_t addr, uint32_t data)
 			udelay(10);
 		else
 			rval = QLA_FUNCTION_TIMEOUT;
+		cond_resched();
 	}
 	return rval;
 }
@@ -764,6 +766,29 @@ qla24xx_write_nvram_data(scsi_qla_host_t *ha, uint8_t *buf, uint32_t naddr,
 	return ret;
 }
 
+uint8_t *
+qla25xx_read_nvram_data(scsi_qla_host_t *ha, uint8_t *buf, uint32_t naddr,
+    uint32_t bytes)
+{
+	uint32_t i;
+	uint32_t *dwptr;
+
+	/* Dword reads to flash. */
+	dwptr = (uint32_t *)buf;
+	for (i = 0; i < bytes >> 2; i++, naddr++)
+		dwptr[i] = cpu_to_le32(qla24xx_read_flash_dword(ha,
+		    flash_data_to_access_addr(FA_VPD_NVRAM_ADDR | naddr)));
+
+	return buf;
+}
+
+int
+qla25xx_write_nvram_data(scsi_qla_host_t *ha, uint8_t *buf, uint32_t naddr,
+    uint32_t bytes)
+{
+	return qla24xx_write_flash_data(ha, (uint32_t *)buf,
+	    FA_VPD_NVRAM_ADDR | naddr, bytes >> 2);
+}
 
 static inline void
 qla2x00_flip_colors(scsi_qla_host_t *ha, uint16_t *pflags)
@@ -917,7 +942,7 @@ qla2x00_beacon_off(struct scsi_qla_host *ha)
 	else
 		ha->beacon_color_state = QLA_LED_GRN_ON;
 
-	ha->isp_ops.beacon_blink(ha);	/* This turns green LED off */
+	ha->isp_ops->beacon_blink(ha);	/* This turns green LED off */
 
 	ha->fw_options[1] &= ~FO1_SET_EMPHASIS_SWING;
 	ha->fw_options[1] &= ~FO1_DISABLE_GPIO6_7;
@@ -1029,7 +1054,7 @@ qla24xx_beacon_off(struct scsi_qla_host *ha)
 	ha->beacon_blink_led = 0;
 	ha->beacon_color_state = QLA_LED_ALL_ON;
 
-	ha->isp_ops.beacon_blink(ha);	/* Will flip to all off. */
+	ha->isp_ops->beacon_blink(ha);	/* Will flip to all off. */
 
 	/* Give control back to firmware. */
 	spin_lock_irqsave(&ha->hardware_lock, flags);
@@ -1255,6 +1280,7 @@ qla2x00_poll_flash(scsi_qla_host_t *ha, uint32_t addr, uint8_t poll_data,
 		}
 		udelay(10);
 		barrier();
+		cond_resched();
 	}
 	return status;
 }
@@ -1403,6 +1429,7 @@ qla2x00_read_flash_data(scsi_qla_host_t *ha, uint8_t *tmp_buf, uint32_t saddr,
 		if (saddr % 100)
 			udelay(10);
 		*tmp_buf = data;
+		cond_resched();
 	}
 }
 
@@ -1415,7 +1442,7 @@ qla2x00_suspend_hba(struct scsi_qla_host *ha)
 
 	/* Suspend HBA. */
 	scsi_block_requests(ha->host);
-	ha->isp_ops.disable_intrs(ha);
+	ha->isp_ops->disable_intrs(ha);
 	set_bit(MBX_UPDATE_FLASH_ACTIVE, &ha->mbx_cmd_flags);
 
 	/* Pause RISC. */
@@ -1449,7 +1476,6 @@ uint8_t *
 qla2x00_read_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
     uint32_t offset, uint32_t length)
 {
-	unsigned long flags;
 	uint32_t addr, midpoint;
 	uint8_t *data;
 	struct device_reg_2xxx __iomem *reg = &ha->iobase->isp;
@@ -1458,7 +1484,6 @@ qla2x00_read_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 	qla2x00_suspend_hba(ha);
 
 	/* Go with read. */
-	spin_lock_irqsave(&ha->hardware_lock, flags);
 	midpoint = ha->optrom_size / 2;
 
 	qla2x00_flash_enable(ha);
@@ -1473,7 +1498,6 @@ qla2x00_read_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 		*data = qla2x00_read_flash_byte(ha, addr);
 	}
 	qla2x00_flash_disable(ha);
-	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 
 	/* Resume HBA. */
 	qla2x00_resume_hba(ha);
@@ -1487,7 +1511,6 @@ qla2x00_write_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 {
 
 	int rval;
-	unsigned long flags;
 	uint8_t man_id, flash_id, sec_number, data;
 	uint16_t wd;
 	uint32_t addr, liter, sec_mask, rest_addr;
@@ -1500,7 +1523,6 @@ qla2x00_write_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 	sec_number = 0;
 
 	/* Reset ISP chip. */
-	spin_lock_irqsave(&ha->hardware_lock, flags);
 	WRT_REG_WORD(&reg->ctrl_status, CSR_ISP_SOFT_RESET);
 	pci_read_config_word(ha->pdev, PCI_COMMAND, &wd);
 
@@ -1689,10 +1711,10 @@ update_flash:
 				rval = QLA_FUNCTION_FAILED;
 				break;
 			}
+			cond_resched();
 		}
 	} while (0);
 	qla2x00_flash_disable(ha);
-	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 
 	/* Resume HBA. */
 	qla2x00_resume_hba(ha);
@@ -1706,7 +1728,7 @@ qla24xx_read_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 {
 	/* Suspend HBA. */
 	scsi_block_requests(ha->host);
-	ha->isp_ops.disable_intrs(ha);
+	ha->isp_ops->disable_intrs(ha);
 	set_bit(MBX_UPDATE_FLASH_ACTIVE, &ha->mbx_cmd_flags);
 
 	/* Go with read. */
@@ -1714,7 +1736,7 @@ qla24xx_read_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 
 	/* Resume HBA. */
 	clear_bit(MBX_UPDATE_FLASH_ACTIVE, &ha->mbx_cmd_flags);
-	ha->isp_ops.enable_intrs(ha);
+	ha->isp_ops->enable_intrs(ha);
 	scsi_unblock_requests(ha->host);
 
 	return buf;
@@ -1728,7 +1750,7 @@ qla24xx_write_optrom_data(struct scsi_qla_host *ha, uint8_t *buf,
 
 	/* Suspend HBA. */
 	scsi_block_requests(ha->host);
-	ha->isp_ops.disable_intrs(ha);
+	ha->isp_ops->disable_intrs(ha);
 	set_bit(MBX_UPDATE_FLASH_ACTIVE, &ha->mbx_cmd_flags);
 
 	/* Go with write. */

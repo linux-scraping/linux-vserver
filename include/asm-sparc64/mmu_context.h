@@ -9,6 +9,7 @@
 #include <linux/spinlock.h>
 #include <asm/system.h>
 #include <asm/spitfire.h>
+#include <asm-generic/mm_hooks.h>
 
 static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 {
@@ -74,6 +75,9 @@ static inline void switch_mm(struct mm_struct *old_mm, struct mm_struct *mm, str
 {
 	unsigned long ctx_valid, flags;
 	int cpu;
+
+	if (unlikely(mm == &init_mm))
+		return;
 
 	spin_lock_irqsave(&mm->context.lock, flags);
 	ctx_valid = CTX_VALID(mm->context);

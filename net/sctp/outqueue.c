@@ -338,7 +338,7 @@ int sctp_outq_tail(struct sctp_outq *q, struct sctp_chunk *chunk)
 				SCTP_INC_STATS(SCTP_MIB_OUTORDERCHUNKS);
 			q->empty = 0;
 			break;
-		};
+		}
 	} else {
 		list_add_tail(&chunk->list, &q->control_chunk_list);
 		SCTP_INC_STATS(SCTP_MIB_OUTCTRLCHUNKS);
@@ -421,6 +421,13 @@ void sctp_retransmit_mark(struct sctp_outq *q,
 		 */
 		if ((fast_retransmit && (chunk->fast_retransmit > 0)) ||
 		   (!fast_retransmit && !chunk->tsn_gap_acked)) {
+			/* If this chunk was sent less then 1 rto ago, do not
+			 * retransmit this chunk, but give the peer time
+			 * to acknowlege it.
+			 */
+			if ((jiffies - chunk->sent_at) < transport->rto)
+				continue;
+
 			/* RFC 2960 6.2.1 Processing a Received SACK
 			 *
 			 * C) Any time a DATA chunk is marked for
@@ -630,7 +637,7 @@ static int sctp_outq_flush_rtx(struct sctp_outq *q, struct sctp_packet *pkt,
 			/* Retrieve a new chunk to bundle. */
 			lchunk = sctp_list_dequeue(lqueue);
 			break;
-		};
+		}
 
 		/* If we are here due to a retransmit timeout or a fast
 		 * retransmit and if there are any chunks left in the retransmit
@@ -779,7 +786,7 @@ int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 		default:
 			/* We built a chunk with an illegal type! */
 			BUG();
-		};
+		}
 	}
 
 	/* Is it OK to send data chunks?  */
@@ -1397,7 +1404,7 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 				SCTP_DEBUG_PRINTK("ACKed: %08x", tsn);
 				dbg_prt_state = 0;
 				dbg_ack_tsn = tsn;
-			};
+			}
 
 			dbg_last_ack_tsn = tsn;
 #endif /* SCTP_DEBUG */
@@ -1452,7 +1459,7 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 				SCTP_DEBUG_PRINTK("KEPT: %08x",tsn);
 				dbg_prt_state = 1;
 				dbg_kept_tsn = tsn;
-			};
+			}
 
 			dbg_last_kept_tsn = tsn;
 #endif /* SCTP_DEBUG */
@@ -1476,7 +1483,7 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 		} else {
 			SCTP_DEBUG_PRINTK("\n");
 		}
-	};
+	}
 #endif /* SCTP_DEBUG */
 	if (transport) {
 		if (bytes_acked) {

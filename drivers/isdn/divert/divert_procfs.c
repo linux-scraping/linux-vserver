@@ -11,7 +11,6 @@
 
 #include <linux/module.h>
 #include <linux/poll.h>
-#include <linux/smp_lock.h>
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
 #else
@@ -70,6 +69,8 @@ put_info_buffer(char *cp)
 	spin_unlock_irqrestore( &divert_info_lock, flags );
 	wake_up_interruptible(&(rd_queue));
 }				/* put_info_buffer */
+
+#ifdef CONFIG_PROC_FS
 
 /**********************************/
 /* deflection device read routine */
@@ -254,8 +255,6 @@ isdn_divert_ioctl(struct inode *inode, struct file *file,
 	return copy_to_user((void __user *)arg, &dioctl, sizeof(dioctl)) ? -EFAULT : 0;
 }				/* isdn_divert_ioctl */
 
-
-#ifdef CONFIG_PROC_FS
 static const struct file_operations isdn_fops =
 {
 	.owner          = THIS_MODULE,

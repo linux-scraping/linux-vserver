@@ -15,12 +15,6 @@ enum {
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */
 
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-#define MIN_D_CONTEXT	49152	/* dynamic contexts start here */
-#else
-#define MIN_D_CONTEXT	65536
-#endif
-
 /* check conditions */
 
 #define VS_ADMIN	0x0001
@@ -34,11 +28,6 @@ enum {
 #define VS_CHILD	0x0080
 
 #define VS_ARG_MASK	0x00F0
-
-#define VS_DYNAMIC	0x0100
-#define VS_STATIC	0x0200
-
-#define VS_ATR_MASK	0x0F00
 
 #ifdef	CONFIG_VSERVER_PRIVACY
 #define VS_ADMIN_P	(0)
@@ -64,15 +53,6 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 {
 	if (mode & VS_ARG_MASK) {
 		if ((mode & VS_IDENT) && (id == cid))
-			return 1;
-	}
-	if (mode & VS_ATR_MASK) {
-		if ((mode & VS_DYNAMIC) &&
-			(id >= MIN_D_CONTEXT) &&
-			(id <= MAX_S_CONTEXT))
-			return 1;
-		if ((mode & VS_STATIC) &&
-			(id > 1) && (id < MIN_D_CONTEXT))
 			return 1;
 	}
 	if (mode & VS_IRQ_MASK) {
@@ -218,6 +198,8 @@ static inline int __vs_check(int cid, int id, unsigned int mode)
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))
 
+#define nx_capable(b, c) (capable(b) || \
+	(cap_raised(current->cap_effective, b) && nx_ncaps(c)))
 
 #define vx_current_initpid(n) \
 	(current->vx_info && \

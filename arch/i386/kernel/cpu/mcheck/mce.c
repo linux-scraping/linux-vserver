@@ -38,8 +38,7 @@ void mcheck_init(struct cpuinfo_x86 *c)
 
 	switch (c->x86_vendor) {
 		case X86_VENDOR_AMD:
-			if (c->x86==6 || c->x86==15)
-				amd_mcheck_init(c);
+			amd_mcheck_init(c);
 			break;
 
 		case X86_VENDOR_INTEL:
@@ -59,6 +58,20 @@ void mcheck_init(struct cpuinfo_x86 *c)
 		default:
 			break;
 	}
+}
+
+static unsigned long old_cr4 __initdata;
+
+void __init stop_mce(void)
+{
+	old_cr4 = read_cr4();
+	clear_in_cr4(X86_CR4_MCE);
+}
+
+void __init restart_mce(void)
+{
+	if (old_cr4 & X86_CR4_MCE)
+		set_in_cr4(X86_CR4_MCE);
 }
 
 static int __init mcheck_disable(char *str)

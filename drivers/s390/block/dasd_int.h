@@ -293,7 +293,7 @@ struct dasd_uid {
 struct dasd_device {
 	/* Block device stuff. */
 	struct gendisk *gdp;
-	request_queue_t *request_queue;
+	struct request_queue *request_queue;
 	spinlock_t request_queue_lock;
 	struct block_device *bdev;
         unsigned int devindex;
@@ -508,6 +508,8 @@ void dasd_generic_remove (struct ccw_device *cdev);
 int dasd_generic_set_online(struct ccw_device *, struct dasd_discipline *);
 int dasd_generic_set_offline (struct ccw_device *cdev);
 int dasd_generic_notify(struct ccw_device *, int);
+
+int dasd_generic_read_dev_chars(struct dasd_device *, char *, void **, int);
 
 /* externals in dasd_devmap.c */
 extern int dasd_max_devindex;

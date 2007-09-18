@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: write.c,v 1.97 2005/11/07 11:14:42 gleixner Exp $
  *
  */
 
@@ -46,6 +44,7 @@ int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint
 	ri->totlen = cpu_to_je32(PAD(sizeof(*ri)));
 	ri->hdr_crc = cpu_to_je32(crc32(0, ri, sizeof(struct jffs2_unknown_node)-4));
 	ri->mode = cpu_to_jemode(mode);
+	ri->flags = cpu_to_je16(0);
 
 	f->highest_version = 1;
 	ri->version = cpu_to_je32(f->highest_version);
@@ -175,6 +174,12 @@ struct jffs2_full_dnode *jffs2_write_dnode(struct jffs2_sb_info *c, struct jffs2
 		flash_ofs |= REF_NORMAL;
 	}
 	fn->raw = jffs2_add_physical_node_ref(c, flash_ofs, PAD(sizeof(*ri)+datalen), f->inocache);
+	if (IS_ERR(fn->raw)) {
+		void *hold_err = fn->raw;
+		/* Release the full_dnode which is now useless, and return */
+		jffs2_free_full_dnode(fn);
+		return ERR_PTR(PTR_ERR(hold_err));
+	}
 	fn->ofs = je32_to_cpu(ri->offset);
 	fn->size = je32_to_cpu(ri->dsize);
 	fn->frags = 0;
@@ -292,7 +297,14 @@ struct jffs2_full_dirent *jffs2_write_dirent(struct jffs2_sb_info *c, struct jff
 		return ERR_PTR(ret?ret:-EIO);
 	}
 	/* Mark the space used */
-	fd->raw = jffs2_add_physical_node_ref(c, flash_ofs | REF_PRISTINE, PAD(sizeof(*rd)+namelen), f->inocache);
+	fd->raw = jffs2_add_physical_node_ref(c, flash_ofs | dirent_node_state(rd),
+					      PAD(sizeof(*rd)+namelen), f->inocache);
+	if (IS_ERR(fd->raw)) {
+		void *hold_err = fd->raw;
+		/* Release the full_dirent which is now useless, and return */
+		jffs2_free_full_dirent(fd);
+		return ERR_PTR(PTR_ERR(hold_err));
+	}
 
 	if (retried) {
 		jffs2_dbg_acct_sanity_check(c,NULL);
@@ -507,8 +519,7 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 	uint32_t alloclen;
 	int ret;
 
-	if (1 /* alternative branch needs testing */ ||
-	    !jffs2_can_mark_obsolete(c)) {
+	if (!jffs2_can_mark_obsolete(c)) {
 		/* We can't mark stuff obsolete on the medium. We need to write a deletion dirent */
 
 		rd = jffs2_alloc_raw_dirent();
@@ -556,6 +567,9 @@ int jffs2_do_unlink(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f,
 		struct jffs2_full_dirent **prev = &dir_f->dents;
 		uint32_t nhash = full_name_hash(name, namelen);
 
+		/* We don't actually want to reserve any space, but we do
+		   want to be holding the alloc_sem when we write to flash */
+		down(&c->alloc_sem);
 		down(&dir_f->sem);
 
 		while ((*prev) && (*prev)->nhash <= nhash) {

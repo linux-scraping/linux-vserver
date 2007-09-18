@@ -25,6 +25,10 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/ads7846.h>
+#include <linux/fb.h>
+
+#include <video/atmel_lcdc.h>
 
 #include <asm/hardware.h>
 #include <asm/setup.h>
@@ -86,6 +90,40 @@ static struct at91_udc_data __initdata ek_udc_data = {
 
 
 /*
+ * ADS7846 Touchscreen
+ */
+#if defined(CONFIG_TOUCHSCREEN_ADS7846) || defined(CONFIG_TOUCHSCREEN_ADS7846_MODULE)
+static int ads7843_pendown_state(void)
+{
+	return !at91_get_gpio_value(AT91_PIN_PA15);	/* Touchscreen PENIRQ */
+}
+
+static struct ads7846_platform_data ads_info = {
+	.model			= 7843,
+	.x_min			= 150,
+	.x_max			= 3830,
+	.y_min			= 190,
+	.y_max			= 3830,
+	.vref_delay_usecs	= 100,
+	.x_plate_ohms		= 450,
+	.y_plate_ohms		= 250,
+	.pressure_max		= 15000,
+	.debounce_max		= 1,
+	.debounce_rep		= 0,
+	.debounce_tol		= (~0),
+	.get_pendown_state	= ads7843_pendown_state,
+};
+
+static void __init ek_add_device_ts(void)
+{
+	at91_set_B_periph(AT91_PIN_PA15, 1);	/* External IRQ1, with pullup */
+	at91_set_gpio_input(AT91_PIN_PA31, 1);	/* Touchscreen BUSY signal */
+}
+#else
+static void __init ek_add_device_ts(void) {}
+#endif
+
+/*
  * SPI devices.
  */
 static struct spi_board_info ek_spi_devices[] = {
@@ -95,6 +133,16 @@ static struct spi_board_info ek_spi_devices[] = {
 		.chip_select	= 0,
 		.max_speed_hz	= 15 * 1000 * 1000,
 		.bus_num	= 0,
+	},
+#endif
+#if defined(CONFIG_TOUCHSCREEN_ADS7846) || defined(CONFIG_TOUCHSCREEN_ADS7846_MODULE)
+	{
+		.modalias	= "ads7846",
+		.chip_select	= 3,
+		.max_speed_hz	= 125000 * 26,	/* (max sample rate @ 3V) * (cmd + data + overhead) */
+		.bus_num	= 0,
+		.platform_data	= &ads_info,
+		.irq		= AT91SAM9263_ID_IRQ1,
 	},
 #endif
 };
@@ -108,6 +156,14 @@ static struct at91_mmc_data __initdata ek_mmc_data = {
 	.det_pin	= AT91_PIN_PE18,
 	.wp_pin		= AT91_PIN_PE19,
 //	.vcc_pin	= ... not connected
+};
+
+
+/*
+ * MACB Ethernet device
+ */
+static struct at91_eth_data __initdata ek_macb_data = {
+	.is_rmii	= 1,
 };
 
 
@@ -127,7 +183,7 @@ static struct mtd_partition __initdata ek_nand_partition[] = {
 	},
 };
 
-static struct mtd_partition *nand_partitions(int size, int *num_partitions)
+static struct mtd_partition * __init nand_partitions(int size, int *num_partitions)
 {
 	*num_partitions = ARRAY_SIZE(ek_nand_partition);
 	return ek_nand_partition;
@@ -148,6 +204,73 @@ static struct at91_nand_data __initdata ek_nand_data = {
 };
 
 
+/*
+ * LCD Controller
+ */
+#if defined(CONFIG_FB_ATMEL) || defined(CONFIG_FB_ATMEL_MODULE)
+static struct fb_videomode at91_tft_vga_modes[] = {
+	{
+	        .name           = "TX09D50VM1CCA @ 60",
+		.refresh	= 60,
+		.xres		= 240,		.yres		= 320,
+		.pixclock	= KHZ2PICOS(4965),
+
+		.left_margin	= 1,		.right_margin	= 33,
+		.upper_margin	= 1,		.lower_margin	= 0,
+		.hsync_len	= 5,		.vsync_len	= 1,
+
+		.sync		= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
+		.vmode		= FB_VMODE_NONINTERLACED,
+	},
+};
+
+static struct fb_monspecs at91fb_default_monspecs = {
+	.manufacturer	= "HIT",
+	.monitor        = "TX09D70VM1CCA",
+
+	.modedb		= at91_tft_vga_modes,
+	.modedb_len	= ARRAY_SIZE(at91_tft_vga_modes),
+	.hfmin		= 15000,
+	.hfmax		= 64000,
+	.vfmin		= 50,
+	.vfmax		= 150,
+};
+
+#define AT91SAM9263_DEFAULT_LCDCON2 	(ATMEL_LCDC_MEMOR_LITTLE \
+					| ATMEL_LCDC_DISTYPE_TFT    \
+					| ATMEL_LCDC_CLKMOD_ALWAYSACTIVE)
+
+static void at91_lcdc_power_control(int on)
+{
+	if (on)
+		at91_set_gpio_value(AT91_PIN_PD12, 0);	/* power up */
+	else
+		at91_set_gpio_value(AT91_PIN_PD12, 1);	/* power down */
+}
+
+/* Driver datas */
+static struct atmel_lcdfb_info __initdata ek_lcdc_data = {
+	.default_bpp			= 16,
+	.default_dmacon			= ATMEL_LCDC_DMAEN,
+	.default_lcdcon2		= AT91SAM9263_DEFAULT_LCDCON2,
+	.default_monspecs		= &at91fb_default_monspecs,
+	.atmel_lcdfb_power_control	= at91_lcdc_power_control,
+	.guard_time			= 1,
+};
+
+#else
+static struct atmel_lcdfb_info __initdata ek_lcdc_data;
+#endif
+
+
+/*
+ * AC97
+ */
+static struct atmel_ac97_data ek_ac97_data = {
+	.reset_pin	= AT91_PIN_PA13,
+};
+
+
 static void __init ek_board_init(void)
 {
 	/* Serial */
@@ -157,11 +280,22 @@ static void __init ek_board_init(void)
 	/* USB Device */
 	at91_add_device_udc(&ek_udc_data);
 	/* SPI */
+	at91_set_gpio_output(AT91_PIN_PE20, 1);		/* select spi0 clock */
 	at91_add_device_spi(ek_spi_devices, ARRAY_SIZE(ek_spi_devices));
+	/* Touchscreen */
+	ek_add_device_ts();
 	/* MMC */
 	at91_add_device_mmc(1, &ek_mmc_data);
+	/* Ethernet */
+	at91_add_device_eth(&ek_macb_data);
 	/* NAND */
 	at91_add_device_nand(&ek_nand_data);
+	/* I2C */
+	at91_add_device_i2c();
+	/* LCD Controller */
+	at91_add_device_lcdc(&ek_lcdc_data);
+	/* AC97 */
+	at91_add_device_ac97(&ek_ac97_data);
 }
 
 MACHINE_START(AT91SAM9263EK, "Atmel AT91SAM9263-EK")

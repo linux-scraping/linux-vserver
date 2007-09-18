@@ -12,10 +12,10 @@
 #include <linux/init.h> 
 #include <linux/module.h>
 #include <linux/mm.h> 
+#include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <asm/uaccess.h>
 #include "mem_user.h"
-#include "user_util.h"
  
 /* These are set in mmapper_init, which is called at boot time */
 static unsigned long mmapper_size;

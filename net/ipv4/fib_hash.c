@@ -34,7 +34,6 @@
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/init.h>
-#include <linux/vs_context.h>
 
 #include <net/ip.h>
 #include <net/protocol.h>
@@ -457,6 +456,8 @@ static int fn_hash_insert(struct fib_table *tb, struct fib_config *cfg)
 			fib_release_info(fi_drop);
 			if (state & FA_S_ACCESSED)
 				rt_cache_flush(-1);
+			rtmsg_fib(RTM_NEWROUTE, key, fa, cfg->fc_dst_len, tb->tb_id,
+				  &cfg->fc_nlinfo, NLM_F_REPLACE);
 			return 0;
 		}
 
@@ -524,7 +525,7 @@ static int fn_hash_insert(struct fib_table *tb, struct fib_config *cfg)
 	rt_cache_flush(-1);
 
 	rtmsg_fib(RTM_NEWROUTE, key, new_fa, cfg->fc_dst_len, tb->tb_id,
-		  &cfg->fc_nlinfo);
+		  &cfg->fc_nlinfo, 0);
 	return 0;
 
 out_free_new_fa:
@@ -590,7 +591,7 @@ static int fn_hash_delete(struct fib_table *tb, struct fib_config *cfg)
 
 		fa = fa_to_delete;
 		rtmsg_fib(RTM_DELROUTE, key, fa, cfg->fc_dst_len,
-			  tb->tb_id, &cfg->fc_nlinfo);
+			  tb->tb_id, &cfg->fc_nlinfo, 0);
 
 		kill_fn = 0;
 		write_lock_bh(&fib_hash_lock);
@@ -770,13 +771,13 @@ struct fib_table * __init fib_hash_init(u32 id)
 		fn_hash_kmem = kmem_cache_create("ip_fib_hash",
 						 sizeof(struct fib_node),
 						 0, SLAB_HWCACHE_ALIGN,
-						 NULL, NULL);
+						 NULL);
 
 	if (fn_alias_kmem == NULL)
 		fn_alias_kmem = kmem_cache_create("ip_fib_alias",
 						  sizeof(struct fib_alias),
 						  0, SLAB_HWCACHE_ALIGN,
-						  NULL, NULL);
+						  NULL);
 
 	tb = kmalloc(sizeof(struct fib_table) + sizeof(struct fn_hash),
 		     GFP_KERNEL);
@@ -981,8 +982,6 @@ static unsigned fib_flag_trans(int type, __be32 mask, struct fib_info *fi)
 	return flags;
 }
 
-extern int dev_in_nx_info(struct net_device *, struct nx_info *);
-
 /*
  *	This outputs /proc/net/route.
  *
@@ -1013,8 +1012,7 @@ static int fib_seq_show(struct seq_file *seq, void *v)
 	prefix	= f->fn_key;
 	mask	= FZ_MASK(iter->zone);
 	flags	= fib_flag_trans(fa->fa_type, mask, fi);
-	if (fi && (!vx_flags(VXF_HIDE_NETIF, 0) ||
-		dev_in_nx_info(fi->fib_dev, current->nx_info)))
+	if (fi && nx_dev_visible(current->nx_info, fi->fib_dev))
 		snprintf(bf, sizeof(bf),
 			 "%s\t%08X\t%08X\t%04X\t%d\t%u\t%d\t%08X\t%d\t%u\t%u",
 			 fi->fib_dev ? fi->fib_dev->name : "*", prefix,
@@ -1031,7 +1029,7 @@ out:
 	return 0;
 }
 
-static struct seq_operations fib_seq_ops = {
+static const struct seq_operations fib_seq_ops = {
 	.start  = fib_seq_start,
 	.next   = fib_seq_next,
 	.stop   = fib_seq_stop,

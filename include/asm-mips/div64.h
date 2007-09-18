@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2000, 2004  Maciej W. Rozycki
- * Copyright (C) 2003 Ralf Baechle
+ * Copyright (C) 2003, 07 Ralf Baechle (ralf@linux-mips.org)
  *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file "COPYING" in the main directory of this archive
@@ -8,6 +8,8 @@
  */
 #ifndef _ASM_DIV64_H
 #define _ASM_DIV64_H
+
+#include <linux/types.h>
 
 #if (_MIPS_SZLONG == 32)
 
@@ -18,7 +20,7 @@
  */
 
 #define do_div64_32(res, high, low, base) ({ \
-	unsigned long __quot, __mod; \
+	unsigned long __quot32, __mod32; \
 	unsigned long __cf, __tmp, __tmp2, __i; \
 	\
 	__asm__(".set	push\n\t" \
@@ -46,12 +48,13 @@
 		"bnez	%4, 0b\n\t" \
 		" srl	%5, %1, 0x1f\n\t" \
 		".set	pop" \
-		: "=&r" (__mod), "=&r" (__tmp), "=&r" (__quot), "=&r" (__cf), \
+		: "=&r" (__mod32), "=&r" (__tmp), \
+		  "=&r" (__quot32), "=&r" (__cf), \
 		  "=&r" (__i), "=&r" (__tmp2) \
 		: "Jr" (base), "0" (high), "1" (low)); \
 	\
-	(res) = __quot; \
-	__mod; })
+	(res) = __quot32; \
+	__mod32; })
 
 #define do_div(n, base) ({ \
 	unsigned long long __quot; \
@@ -78,6 +81,8 @@
 	__quot = __quot << 32 | __low; \
 	(n) = __quot; \
 	__mod; })
+
+extern uint64_t div64_64(uint64_t dividend, uint64_t divisor);
 #endif /* (_MIPS_SZLONG == 32) */
 
 #if (_MIPS_SZLONG == 64)
@@ -100,6 +105,11 @@
 	\
 	(n) = __quot; \
 	__mod; })
+
+static inline uint64_t div64_64(uint64_t dividend, uint64_t divisor)
+{
+	return dividend / divisor;
+}
 
 #endif /* (_MIPS_SZLONG == 64) */
 

@@ -32,6 +32,11 @@
 #include <linux/unwind.h>
 #include <linux/uaccess.h>
 #include <linux/bug.h>
+#include <linux/kdebug.h>
+
+#if defined(CONFIG_EDAC)
+#include <linux/edac.h>
+#endif
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -39,7 +44,6 @@
 #include <asm/debugreg.h>
 #include <asm/desc.h>
 #include <asm/i387.h>
-#include <asm/kdebug.h>
 #include <asm/processor.h>
 #include <asm/unwind.h>
 #include <asm/smp.h>
@@ -70,22 +74,6 @@ asmlinkage void reserved(void);
 asmlinkage void alignment_check(void);
 asmlinkage void machine_check(void);
 asmlinkage void spurious_interrupt_bug(void);
-
-ATOMIC_NOTIFIER_HEAD(die_chain);
-EXPORT_SYMBOL(die_chain);
-
-int register_die_notifier(struct notifier_block *nb)
-{
-	vmalloc_sync_all();
-	return atomic_notifier_chain_register(&die_chain, nb);
-}
-EXPORT_SYMBOL(register_die_notifier); /* used modular by kdb */
-
-int unregister_die_notifier(struct notifier_block *nb)
-{
-	return atomic_notifier_chain_unregister(&die_chain, nb);
-}
-EXPORT_SYMBOL(unregister_die_notifier); /* used modular by kdb */
 
 static inline void conditional_sti(struct pt_regs *regs)
 {
@@ -346,6 +334,7 @@ static int print_trace_stack(void *data, char *name)
 
 static void print_trace_address(void *data, unsigned long addr)
 {
+	touch_nmi_watchdog();
 	printk_address(addr);
 }
 
@@ -426,8 +415,7 @@ void show_registers(struct pt_regs *regs)
 	const int cpu = smp_processor_id();
 	struct task_struct *cur = cpu_pda(cpu)->pcurrent;
 
-		rsp = regs->rsp;
-
+	rsp = regs->rsp;
 	printk("CPU %d ", cpu);
 	__show_regs(regs);
 	printk("Process %s (pid: %d[#%u], threadinfo %p, task %p)\n",
@@ -439,7 +427,6 @@ void show_registers(struct pt_regs *regs)
 	 * time of the fault..
 	 */
 	if (in_kernel) {
-
 		printk("Stack: ");
 		_show_stack(NULL, regs, (unsigned long*)rsp);
 
@@ -484,13 +471,14 @@ static unsigned int die_nest_count;
 
 unsigned __kprobes long oops_begin(void)
 {
-	int cpu = smp_processor_id();
+	int cpu;
 	unsigned long flags;
 
 	oops_enter();
 
 	/* racy, but better than risking deadlock. */
 	local_irq_save(flags);
+	cpu = smp_processor_id();
 	if (!spin_trylock(&die_lock)) { 
 		if (cpu == die_owner) 
 			/* nested oops. should stop eventually */;
@@ -536,6 +524,7 @@ void __kprobes __die(const char * str, struct pt_regs * regs, long err)
 	printk("\n");
 	notify_die(DIE_OOPS, str, regs, err, current->thread.trap_no, SIGSEGV);
 	show_registers(regs);
+	add_taint(TAINT_DIE);
 	/* Executive summary in case the oops scrolled away */
 	printk(KERN_ALERT "RIP ");
 	printk_address(regs->rip); 
@@ -549,7 +538,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	unsigned long flags = oops_begin();
 
 	if (!user_mode(regs))
-		report_bug(regs->rip);
+		report_bug(regs->rip, regs);
 
 	__die(str, regs, err);
 	oops_end(flags);
@@ -582,11 +571,22 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 {
 	struct task_struct *tsk = current;
 
-	tsk->thread.error_code = error_code;
-	tsk->thread.trap_no = trapnr;
-
 	if (user_mode(regs)) {
-		if (exception_trace && unhandled_signal(tsk, signr))
+		/*
+		 * We want error_code and trap_no set for userspace
+		 * faults and kernelspace faults which result in
+		 * die(), but not kernelspace faults which are fixed
+		 * up.  die() gives the process no chance to handle
+		 * the signal and notice the kernel fault information,
+		 * so that won't result in polluting the information
+		 * about previously queued, but not yet delivered,
+		 * faults.  See also do_general_protection below.
+		 */
+		tsk->thread.error_code = error_code;
+		tsk->thread.trap_no = trapnr;
+
+		if (show_unhandled_signals && unhandled_signal(tsk, signr) &&
+		    printk_ratelimit())
 			printk(KERN_INFO
 			       "%s[%d:#%u] trap %s rip:%lx rsp:%lx error:%lx\n",
 			       tsk->comm, tsk->pid, tsk->xid, str,
@@ -606,8 +606,11 @@ static void __kprobes do_trap(int trapnr, int signr, char *str,
 		fixup = search_exception_tables(regs->rip);
 		if (fixup)
 			regs->rip = fixup->fixup;
-		else	
+		else {
+			tsk->thread.error_code = error_code;
+			tsk->thread.trap_no = trapnr;
 			die(str, regs, error_code);
+		}
 		return;
 	}
 }
@@ -683,11 +686,12 @@ asmlinkage void __kprobes do_general_protection(struct pt_regs * regs,
 
 	conditional_sti(regs);
 
-	tsk->thread.error_code = error_code;
-	tsk->thread.trap_no = 13;
-
 	if (user_mode(regs)) {
-		if (exception_trace && unhandled_signal(tsk, SIGSEGV))
+		tsk->thread.error_code = error_code;
+		tsk->thread.trap_no = 13;
+
+		if (show_unhandled_signals && unhandled_signal(tsk, SIGSEGV) &&
+		    printk_ratelimit())
 			printk(KERN_INFO
 		       "%s[%d:#%u] general protection rip:%lx rsp:%lx error:%lx\n",
 			       tsk->comm, tsk->pid, tsk->xid,
@@ -705,6 +709,9 @@ asmlinkage void __kprobes do_general_protection(struct pt_regs * regs,
 			regs->rip = fixup->fixup;
 			return;
 		}
+
+		tsk->thread.error_code = error_code;
+		tsk->thread.trap_no = 13;
 		if (notify_die(DIE_GPF, "general protection fault", regs,
 					error_code, 13, SIGSEGV) == NOTIFY_STOP)
 			return;
@@ -718,6 +725,13 @@ mem_parity_error(unsigned char reason, struct pt_regs * regs)
 	printk(KERN_EMERG "Uhhuh. NMI received for unknown reason %02x.\n",
 		reason);
 	printk(KERN_EMERG "You have some hardware problem, likely on the PCI bus.\n");
+
+#if defined(CONFIG_EDAC)
+	if(edac_handler_set()) {
+		edac_atomic_assert_error();
+		return;
+	}
+#endif
 
 	if (panic_on_unrecovered_nmi)
 		panic("NMI: Not continuing");

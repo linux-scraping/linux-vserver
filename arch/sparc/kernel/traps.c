@@ -15,6 +15,7 @@
 #include <linux/signal.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
+#include <linux/kdebug.h>
 
 #include <asm/delay.h>
 #include <asm/system.h>
@@ -22,7 +23,6 @@
 #include <asm/oplib.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
-#include <asm/kdebug.h>
 #include <asm/unistd.h>
 #include <asm/traps.h>
 
@@ -102,6 +102,7 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 	printk("%s(%d[#%u]): %s [#%d]\n", current->comm,
 		current->pid, current->xid, str, ++die_counter);
 	show_regs(regs);
+	add_taint(TAINT_DIE);
 
 	__SAVE; __SAVE; __SAVE; __SAVE;
 	__SAVE; __SAVE; __SAVE; __SAVE;

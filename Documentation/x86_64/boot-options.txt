@@ -14,9 +14,11 @@ Machine check
    mce=nobootlog
 		Disable boot machine check logging.
    mce=tolerancelevel (number)
-		0: always panic, 1: panic if deadlock possible,
-		2: try to avoid panic, 3: never panic or exit (for testing)
-		default is 1
+		0: always panic on uncorrected errors, log corrected errors
+		1: panic or SIGBUS on uncorrected errors, log corrected errors
+		2: SIGBUS or log uncorrected errors, log corrected errors
+		3: never panic or SIGBUS, log all errors (for testing only)
+		Default is 1
 		Can be also set using sysfs which is preferable.
 
    nomce (for compatibility with i386): same as mce=off
@@ -134,12 +136,6 @@ Non Executable Mappings
 
 SMP
 
-  nosmp	Only use a single CPU
-
-  maxcpus=NUMBER only use upto NUMBER CPUs
-
-  cpumask=MASK   only use cpus with bits set in mask
-
   additional_cpus=NUM Allow NUM more CPUs for hotplug
 		 (defaults are specified by the BIOS, see Documentation/x86_64/cpu-hotplug-spec)
 
@@ -149,7 +145,19 @@ NUMA
 
   numa=noacpi   Don't parse the SRAT table for NUMA setup
 
-  numa=fake=X   Fake X nodes and ignore NUMA setup of the actual machine.
+  numa=fake=CMDLINE
+		If a number, fakes CMDLINE nodes and ignores NUMA setup of the
+		actual machine.  Otherwise, system memory is configured
+		depending on the sizes and coefficients listed.  For example:
+			numa=fake=2*512,1024,4*256,*128
+		gives two 512M nodes, a 1024M node, four 256M nodes, and the
+		rest split into 128M chunks.  If the last character of CMDLINE
+		is a *, the remaining memory is divided up equally among its
+		coefficient:
+			numa=fake=2*512,2*
+		gives two 512M nodes and the rest split into two nodes.
+		Otherwise, the remaining system RAM is allocated to an
+		additional node.
 
   numa=hotadd=percent
 		Only allow hotadd memory to preallocate page structures upto

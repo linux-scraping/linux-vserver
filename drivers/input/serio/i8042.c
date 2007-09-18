@@ -512,6 +512,7 @@ static irqreturn_t __devinit i8042_aux_test_irq(int irq, void *dev_id)
 {
 	unsigned long flags;
 	unsigned char str, data;
+	int ret = 0;
 
 	spin_lock_irqsave(&i8042_lock, flags);
 	str = i8042_read_status();
@@ -520,10 +521,11 @@ static irqreturn_t __devinit i8042_aux_test_irq(int irq, void *dev_id)
 		if (i8042_irq_being_tested &&
 		    data == 0xa5 && (str & I8042_STR_AUXDATA))
 			complete(&i8042_aux_irq_delivered);
+		ret = 1;
 	}
 	spin_unlock_irqrestore(&i8042_lock, flags);
 
-	return IRQ_HANDLED;
+	return IRQ_RETVAL(ret);
 }
 
 /*
@@ -789,6 +791,13 @@ static int i8042_controller_init(void)
 static void i8042_controller_reset(void)
 {
 	i8042_flush();
+
+/*
+ * Disable both KBD and AUX interfaces so they don't get in the way
+ */
+
+	i8042_ctr |= I8042_CTR_KBDDIS | I8042_CTR_AUXDIS;
+	i8042_ctr &= ~(I8042_CTR_KBDINT | I8042_CTR_AUXINT);
 
 /*
  * Disable MUX mode if present.

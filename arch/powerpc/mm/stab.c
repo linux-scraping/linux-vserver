@@ -55,7 +55,7 @@ static int make_ste(unsigned long stab, unsigned long esid, unsigned long vsid)
 		for (entry = 0; entry < 8; entry++, ste++) {
 			if (!(ste->esid_data & STE_ESID_V)) {
 				ste->vsid_data = vsid_data;
-				asm volatile("eieio":::"memory");
+				eieio();
 				ste->esid_data = esid_data;
 				return (global_entry | entry);
 			}
@@ -101,7 +101,7 @@ static int make_ste(unsigned long stab, unsigned long esid, unsigned long vsid)
 	asm volatile("sync" : : : "memory");    /* Order update */
 
 	castout_ste->vsid_data = vsid_data;
-	asm volatile("eieio" : : : "memory");   /* Order update */
+	eieio();				/* Order update */
 	castout_ste->esid_data = esid_data;
 
 	asm volatile("slbie  %0" : : "r" (old_esid << SID_SHIFT));
@@ -227,7 +227,7 @@ void switch_stab(struct task_struct *tsk, struct mm_struct *mm)
  * the first (bolted) segment, so that do_stab_bolted won't get a
  * recursive segment miss on the segment table itself.
  */
-void stabs_alloc(void)
+void __init stabs_alloc(void)
 {
 	int cpu;
 

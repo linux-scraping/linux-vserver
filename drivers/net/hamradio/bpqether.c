@@ -282,7 +282,7 @@ static int bpq_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	skb->protocol = ax25_type_trans(skb, dev);
-	skb->nh.raw = skb->data;
+	skb_reset_network_header(skb);
 	dev->hard_header(skb, dev, ETH_P_BPQ, bpq->dest_addr, NULL, 0);
 	bpq->stats.tx_packets++;
 	bpq->stats.tx_bytes+=skb->len;
@@ -413,12 +413,12 @@ static void *bpq_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	++*pos;
 
 	if (v == SEQ_START_TOKEN)
-		p = bpq_devices.next;
+		p = rcu_dereference(bpq_devices.next);
 	else
-		p = ((struct bpqdev *)v)->bpq_list.next;
+		p = rcu_dereference(((struct bpqdev *)v)->bpq_list.next);
 
 	return (p == &bpq_devices) ? NULL 
-		: rcu_dereference(list_entry(p, struct bpqdev, bpq_list));
+		: list_entry(p, struct bpqdev, bpq_list);
 }
 
 static void bpq_seq_stop(struct seq_file *seq, void *v)

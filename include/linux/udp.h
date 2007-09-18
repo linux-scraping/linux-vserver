@@ -26,6 +26,15 @@ struct udphdr {
 	__sum16	check;
 };
 
+#ifdef __KERNEL__
+#include <linux/skbuff.h>
+
+static inline struct udphdr *udp_hdr(const struct sk_buff *skb)
+{
+	return (struct udphdr *)skb_transport_header(skb);
+}
+#endif
+
 /* UDP socket options */
 #define UDP_CORK	1	/* Never send partially complete segments */
 #define UDP_ENCAP	100	/* Set the socket to accept encapsulated packets */
@@ -33,6 +42,7 @@ struct udphdr {
 /* UDP encapsulation types */
 #define UDP_ENCAP_ESPINUDP_NON_IKE	1 /* draft-ietf-ipsec-nat-t-ike-00/01 */
 #define UDP_ENCAP_ESPINUDP	2 /* draft-ietf-ipsec-udp-encaps-06 */
+#define UDP_ENCAP_L2TPINUDP	3 /* rfc2661 */
 
 #ifdef __KERNEL__
 #include <linux/types.h>
@@ -61,6 +71,11 @@ struct udp_sock {
 #define UDPLITE_SEND_CC  0x2  		/* set via udplite setsockopt         */
 #define UDPLITE_RECV_CC  0x4		/* set via udplite setsocktopt        */
 	__u8		 pcflag;        /* marks socket as UDP-Lite if > 0    */
+	__u8		 unused[3];
+	/*
+	 * For encapsulation sockets.
+	 */
+	int (*encap_rcv)(struct sock *sk, struct sk_buff *skb);
 };
 
 static inline struct udp_sock *udp_sk(const struct sock *sk)

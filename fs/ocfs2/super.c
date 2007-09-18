@@ -82,7 +82,8 @@ MODULE_AUTHOR("Oracle");
 MODULE_LICENSE("GPL");
 
 static int ocfs2_parse_options(struct super_block *sb, char *options,
-			       unsigned long *mount_opt, int is_remount);
+			       unsigned long *mount_opt, s16 *slot,
+			       int is_remount);
 static void ocfs2_put_super(struct super_block *sb);
 static int ocfs2_mount_volume(struct super_block *sb);
 static int ocfs2_remount(struct super_block *sb, int *flags, char *data);
@@ -114,8 +115,6 @@ static void ocfs2_write_super(struct super_block *sb);
 static struct inode *ocfs2_alloc_inode(struct super_block *sb);
 static void ocfs2_destroy_inode(struct inode *inode);
 
-static unsigned long long ocfs2_max_file_offset(unsigned int blockshift);
-
 static const struct super_operations ocfs2_sops = {
 	.statfs		= ocfs2_statfs,
 	.alloc_inode	= ocfs2_alloc_inode,
@@ -140,6 +139,7 @@ enum {
 	Opt_data_ordered,
 	Opt_data_writeback,
 	Opt_atime_quantum,
+	Opt_slot,
 	Opt_tag, Opt_notag, Opt_tagid,
 	Opt_err,
 };
@@ -155,8 +155,8 @@ static match_table_t tokens = {
 	{Opt_data_ordered, "data=ordered"},
 	{Opt_data_writeback, "data=writeback"},
 	{Opt_atime_quantum, "atime_quantum=%u"},
+	{Opt_slot, "preferred_slot=%u"},
 	{Opt_tag, "tag"},
-	{Opt_tag, "tagxid"},
 	{Opt_notag, "notag"},
 	{Opt_tagid, "tagid=%u"},
 	{Opt_err, NULL}
@@ -320,39 +320,51 @@ static void ocfs2_destroy_inode(struct inode *inode)
 	kmem_cache_free(ocfs2_inode_cachep, OCFS2_I(inode));
 }
 
-/* From xfs_super.c:xfs_max_file_offset
- * Copyright (c) 2000-2004 Silicon Graphics, Inc.
- */
-static unsigned long long ocfs2_max_file_offset(unsigned int blockshift)
+static unsigned long long ocfs2_max_file_offset(unsigned int bbits,
+						unsigned int cbits)
 {
-	unsigned int pagefactor = 1;
-	unsigned int bitshift = BITS_PER_LONG - 1;
+	unsigned int bytes = 1 << cbits;
+	unsigned int trim = bytes;
+	unsigned int bitshift = 32;
 
-	/* Figure out maximum filesize, on Linux this can depend on
-	 * the filesystem blocksize (on 32 bit platforms).
-	 * __block_prepare_write does this in an [unsigned] long...
-	 *      page->index << (PAGE_CACHE_SHIFT - bbits)
-	 * So, for page sized blocks (4K on 32 bit platforms),
-	 * this wraps at around 8Tb (hence MAX_LFS_FILESIZE which is
-	 *      (((u64)PAGE_CACHE_SIZE << (BITS_PER_LONG-1))-1)
-	 * but for smaller blocksizes it is less (bbits = log2 bsize).
-	 * Note1: get_block_t takes a long (implicit cast from above)
-	 * Note2: The Large Block Device (LBD and HAVE_SECTOR_T) patch
-	 * can optionally convert the [unsigned] long from above into
-	 * an [unsigned] long long.
+	/*
+	 * i_size and all block offsets in ocfs2 are always 64 bits
+	 * wide. i_clusters is 32 bits, in cluster-sized units. So on
+	 * 64 bit platforms, cluster size will be the limiting factor.
 	 */
 
 #if BITS_PER_LONG == 32
 # if defined(CONFIG_LBD)
 	BUILD_BUG_ON(sizeof(sector_t) != 8);
-	pagefactor = PAGE_CACHE_SIZE;
-	bitshift = BITS_PER_LONG;
+	/*
+	 * We might be limited by page cache size.
+	 */
+	if (bytes > PAGE_CACHE_SIZE) {
+		bytes = PAGE_CACHE_SIZE;
+		trim = 1;
+		/*
+		 * Shift by 31 here so that we don't get larger than
+		 * MAX_LFS_FILESIZE
+		 */
+		bitshift = 31;
+	}
 # else
-	pagefactor = PAGE_CACHE_SIZE >> (PAGE_CACHE_SHIFT - blockshift);
+	/*
+	 * We are limited by the size of sector_t. Use block size, as
+	 * that's what we expose to the VFS.
+	 */
+	bytes = 1 << bbits;
+	trim = 1;
+	bitshift = 31;
 # endif
 #endif
 
-	return (((unsigned long long)pagefactor) << bitshift) - 1;
+	/*
+	 * Trim by a whole cluster when we can actually approach the
+	 * on-disk limits. Otherwise we can overflow i_clusters when
+	 * an extent start is at the max offset.
+	 */
+	return (((unsigned long long)bytes) << bitshift) - trim;
 }
 
 static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
@@ -360,14 +372,14 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 	int incompat_features;
 	int ret = 0;
 	unsigned long parsed_options;
+	s16 slot;
 	struct ocfs2_super *osb = OCFS2_SB(sb);
 
-	if (!ocfs2_parse_options(sb, data, &parsed_options, 1)) {
+	if (!ocfs2_parse_options(sb, data, &parsed_options, &slot, 1)) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	printk("ocfs2_remount: %lx,%lx\n", osb->s_mount_opt, sb->s_flags);
 	if ((parsed_options & OCFS2_MOUNT_TAGGED) &&
 		!(sb->s_flags & MS_TAGGED)) {
 		ret = -EINVAL;
@@ -547,6 +559,7 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 	struct dentry *root;
 	int status, sector_size;
 	unsigned long parsed_opt;
+	s16 slot;
 	struct inode *inode = NULL;
 	struct ocfs2_super *osb = NULL;
 	struct buffer_head *bh = NULL;
@@ -554,7 +567,7 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 
 	mlog_entry("%p, %p, %i", sb, data, silent);
 
-	if (!ocfs2_parse_options(sb, data, &parsed_opt, 0)) {
+	if (!ocfs2_parse_options(sb, data, &parsed_opt, &slot, 0)) {
 		status = -EINVAL;
 		goto read_super_error;
 	}
@@ -584,6 +597,7 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 	brelse(bh);
 	bh = NULL;
 	osb->s_mount_opt = parsed_opt;
+	osb->preferred_slot = slot;
 
 	sb->s_magic = OCFS2_SUPER_MAGIC;
 
@@ -729,6 +743,7 @@ static struct file_system_type ocfs2_fs_type = {
 static int ocfs2_parse_options(struct super_block *sb,
 			       char *options,
 			       unsigned long *mount_opt,
+			       s16 *slot,
 			       int is_remount)
 {
 	int status;
@@ -738,6 +753,7 @@ static int ocfs2_parse_options(struct super_block *sb,
 		   options ? options : "(none)");
 
 	*mount_opt = 0;
+	*slot = OCFS2_INVALID_SLOT;
 
 	if (!options) {
 		status = 1;
@@ -798,6 +814,15 @@ static int ocfs2_parse_options(struct super_block *sb,
 			else
 				osb->s_atime_quantum = OCFS2_DEFAULT_ATIME_QUANTUM;
 			break;
+		case Opt_slot:
+			option = 0;
+			if (match_int(&args[0], &option)) {
+				status = 0;
+				goto bail;
+			}
+			if (option)
+				*slot = (s16)option;
+			break;
 #ifndef CONFIG_TAGGING_NONE
 		case Opt_tag:
 			*mount_opt |= OCFS2_MOUNT_TAGGED;
@@ -836,9 +861,6 @@ static int __init ocfs2_init(void)
 
 	ocfs2_print_version();
 
-	if (init_ocfs2_extent_maps())
-		return -ENOMEM;
-
 	status = init_ocfs2_uptodate_cache();
 	if (status < 0) {
 		mlog_errno(status);
@@ -867,7 +889,6 @@ leave:
 	if (status < 0) {
 		ocfs2_free_mem_caches();
 		exit_ocfs2_uptodate_cache();
-		exit_ocfs2_extent_maps();
 	}
 
 	mlog_exit(status);
@@ -892,8 +913,6 @@ static void __exit ocfs2_exit(void)
 	ocfs2_free_mem_caches();
 
 	unregister_filesystem(&ocfs2_fs_type);
-
-	exit_ocfs2_extent_maps();
 
 	exit_ocfs2_uptodate_cache();
 
@@ -973,31 +992,29 @@ static void ocfs2_inode_init_once(void *data,
 {
 	struct ocfs2_inode_info *oi = data;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR) {
-		oi->ip_flags = 0;
-		oi->ip_open_count = 0;
-		spin_lock_init(&oi->ip_lock);
-		ocfs2_extent_map_init(&oi->vfs_inode);
-		INIT_LIST_HEAD(&oi->ip_io_markers);
-		oi->ip_created_trans = 0;
-		oi->ip_last_trans = 0;
-		oi->ip_dir_start_lookup = 0;
+	oi->ip_flags = 0;
+	oi->ip_open_count = 0;
+	spin_lock_init(&oi->ip_lock);
+	ocfs2_extent_map_init(&oi->vfs_inode);
+	INIT_LIST_HEAD(&oi->ip_io_markers);
+	oi->ip_created_trans = 0;
+	oi->ip_last_trans = 0;
+	oi->ip_dir_start_lookup = 0;
 
-		init_rwsem(&oi->ip_alloc_sem);
-		mutex_init(&oi->ip_io_mutex);
+	init_rwsem(&oi->ip_alloc_sem);
+	mutex_init(&oi->ip_io_mutex);
 
-		oi->ip_blkno = 0ULL;
-		oi->ip_clusters = 0;
+	oi->ip_blkno = 0ULL;
+	oi->ip_clusters = 0;
 
-		ocfs2_lock_res_init_once(&oi->ip_rw_lockres);
-		ocfs2_lock_res_init_once(&oi->ip_meta_lockres);
-		ocfs2_lock_res_init_once(&oi->ip_data_lockres);
+	ocfs2_lock_res_init_once(&oi->ip_rw_lockres);
+	ocfs2_lock_res_init_once(&oi->ip_meta_lockres);
+	ocfs2_lock_res_init_once(&oi->ip_data_lockres);
+	ocfs2_lock_res_init_once(&oi->ip_open_lockres);
 
-		ocfs2_metadata_cache_init(&oi->vfs_inode);
+	ocfs2_metadata_cache_init(&oi->vfs_inode);
 
-		inode_init_once(&oi->vfs_inode);
-	}
+	inode_init_once(&oi->vfs_inode);
 }
 
 static int ocfs2_initialize_mem_caches(void)
@@ -1007,7 +1024,7 @@ static int ocfs2_initialize_mem_caches(void)
 				       0,
 				       (SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|
 						SLAB_MEM_SPREAD),
-				       ocfs2_inode_init_once, NULL);
+				       ocfs2_inode_init_once);
 	if (!ocfs2_inode_cachep)
 		return -ENOMEM;
 
@@ -1282,8 +1299,8 @@ static int ocfs2_initialize_super(struct super_block *sb,
 				  int sector_size)
 {
 	int status = 0;
-	int i;
-	struct ocfs2_dinode *di = NULL;
+	int i, cbits, bbits;
+	struct ocfs2_dinode *di = (struct ocfs2_dinode *)bh->b_data;
 	struct inode *inode = NULL;
 	struct buffer_head *bitmap_bh = NULL;
 	struct ocfs2_journal *journal;
@@ -1302,9 +1319,12 @@ static int ocfs2_initialize_super(struct super_block *sb,
 	sb->s_fs_info = osb;
 	sb->s_op = &ocfs2_sops;
 	sb->s_export_op = &ocfs2_export_ops;
+	sb->s_time_gran = 1;
 	sb->s_flags |= MS_NOATIME;
 	/* this is needed to support O_LARGEFILE */
-	sb->s_maxbytes = ocfs2_max_file_offset(sb->s_blocksize_bits);
+	cbits = le32_to_cpu(di->id2.i_super.s_clustersize_bits);
+	bbits = le32_to_cpu(di->id2.i_super.s_blocksize_bits);
+	sb->s_maxbytes = ocfs2_max_file_offset(bbits, cbits);
 
 	osb->sb = sb;
 	/* Save off for ocfs2_rw_direct */
@@ -1363,8 +1383,6 @@ static int ocfs2_initialize_super(struct super_block *sb,
 		status = -ENOMEM;
 		goto bail;
 	}
-
-	di = (struct ocfs2_dinode *)bh->b_data;
 
 	osb->max_slots = le16_to_cpu(di->id2.i_super.s_max_slots);
 	if (osb->max_slots > OCFS2_MAX_SLOTS || osb->max_slots == 0) {
@@ -1573,7 +1591,7 @@ static int ocfs2_verify_volume(struct ocfs2_dinode *di,
 		} else if (bh->b_blocknr != le64_to_cpu(di->i_blkno)) {
 			mlog(ML_ERROR, "bad block number on superblock: "
 			     "found %llu, should be %llu\n",
-			     (unsigned long long)di->i_blkno,
+			     (unsigned long long)le64_to_cpu(di->i_blkno),
 			     (unsigned long long)bh->b_blocknr);
 		} else if (le32_to_cpu(di->id2.i_super.s_clustersize_bits) < 12 ||
 			    le32_to_cpu(di->id2.i_super.s_clustersize_bits) > 20) {

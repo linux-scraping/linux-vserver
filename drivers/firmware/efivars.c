@@ -131,21 +131,21 @@ struct efivar_attribute {
 
 #define EFI_ATTR(_name, _mode, _show, _store) \
 struct subsys_attribute efi_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
 
 #define EFIVAR_ATTR(_name, _mode, _show, _store) \
 struct efivar_attribute efivar_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
 
 #define VAR_SUBSYS_ATTR(_name, _mode, _show, _store) \
 struct subsys_attribute var_subsys_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
@@ -409,7 +409,7 @@ static struct kobj_type ktype_efivar = {
 };
 
 static ssize_t
-dummy(struct subsystem *sub, char *buf)
+dummy(struct kset *kset, char *buf)
 {
 	return -ENODEV;
 }
@@ -422,7 +422,7 @@ efivar_unregister(struct efivar_entry *var)
 
 
 static ssize_t
-efivar_create(struct subsystem *sub, const char *buf, size_t count)
+efivar_create(struct kset *kset, const char *buf, size_t count)
 {
 	struct efi_variable *new_var = (struct efi_variable *)buf;
 	struct efivar_entry *search_efivar, *n;
@@ -480,7 +480,7 @@ efivar_create(struct subsystem *sub, const char *buf, size_t count)
 }
 
 static ssize_t
-efivar_delete(struct subsystem *sub, const char *buf, size_t count)
+efivar_delete(struct kset *kset, const char *buf, size_t count)
 {
 	struct efi_variable *del_var = (struct efi_variable *)buf;
 	struct efivar_entry *search_efivar, *n;
@@ -551,11 +551,11 @@ static struct subsys_attribute *var_subsys_attrs[] = {
  * the efivars driver
  */
 static ssize_t
-systab_read(struct subsystem *entry, char *buf)
+systab_read(struct kset *kset, char *buf)
 {
 	char *str = buf;
 
-	if (!entry || !buf)
+	if (!kset || !buf)
 		return -EINVAL;
 
 	if (efi.mps != EFI_INVALID_TABLE_ADDR)
@@ -687,7 +687,7 @@ efivars_init(void)
 		goto out_free;
 	}
 
-	kset_set_kset_s(&vars_subsys, efi_subsys);
+	kobj_set_kset_s(&vars_subsys, efi_subsys);
 
 	error = subsystem_register(&vars_subsys);
 

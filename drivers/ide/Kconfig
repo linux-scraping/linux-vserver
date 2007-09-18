@@ -4,12 +4,10 @@
 # Andre Hedrick <andre@linux-ide.org>
 #
 
-if BLOCK
-
-menu "ATA/ATAPI/MFM/RLL support"
-
-config IDE
+menuconfig IDE
 	tristate "ATA/ATAPI/MFM/RLL support"
+	depends on BLOCK
+	depends on HAS_IOMEM
 	---help---
 	  If you say Y here, your kernel will be able to manage low cost mass
 	  storage units such as ATA/(E)IDE and ATAPI units. The most common
@@ -291,13 +289,24 @@ config IDE_TASK_IOCTL
 
 	  If you are unsure, say N here.
 
+config IDE_PROC_FS
+	bool "legacy /proc/ide/ support"
+	depends on IDE && PROC_FS
+	default y
+	help
+	  This option enables support for the various files in
+	  /proc/ide.  In Linux 2.6 this has been superseded by
+	  files in sysfs but many legacy applications rely on this.
+
+	  If unsure say Y.
+
 comment "IDE chipset support/bugfixes"
 
 config IDE_GENERIC
 	tristate "generic/default IDE chipset support"
-	default y
+	default H8300
 	help
-	  If unsure, say Y.
+	  If unsure, say N.
 
 config BLK_DEV_CMD640
 	bool "CMD640 chipset bugfix/support"
@@ -336,6 +345,7 @@ config BLK_DEV_CMD640_ENHANCED
 config BLK_DEV_IDEPNP
 	bool "PNP EIDE support"
 	depends on PNP
+	select IDE_GENERIC
 	help
 	  If you have a PnP (Plug and Play) compatible EIDE card and
 	  would like the kernel to automatically detect and activate
@@ -359,6 +369,9 @@ config IDEPCI_SHARE_IRQ
 
 	  It is safe to say Y to this question, in most cases.
 	  If unsure, say N.
+
+config IDEPCI_PCIBUS_ORDER
+	def_bool PCI && BLK_DEV_IDE=y && BLK_DEV_IDEPCI
 
 config BLK_DEV_OFFBOARD
 	bool "Boot off-board chipsets first support"
@@ -821,7 +834,8 @@ config BLK_DEV_IDE_AU1XXX_SEQTS_PER_RQ
        depends on BLK_DEV_IDE_AU1XXX
 
 config IDE_ARM
-	def_bool ARM && (ARCH_A5K || ARCH_CLPS7500 || ARCH_RPC || ARCH_SHARK)
+	def_bool ARM && (ARCH_CLPS7500 || ARCH_RPC || ARCH_SHARK)
+	select IDE_GENERIC
 
 config BLK_DEV_IDE_ICSIDE
 	tristate "ICS IDE interface support"
@@ -855,6 +869,7 @@ config BLK_DEV_IDE_BAST
 config BLK_DEV_GAYLE
 	bool "Amiga Gayle IDE interface support"
 	depends on AMIGA
+	select IDE_GENERIC
 	help
 	  This is the IDE driver for the Amiga Gayle IDE interface. It supports
 	  both the `A1200 style' and `A4000 style' of the Gayle IDE interface,
@@ -886,6 +901,7 @@ config BLK_DEV_IDEDOUBLER
 config BLK_DEV_BUDDHA
 	bool "Buddha/Catweasel/X-Surf IDE interface support (EXPERIMENTAL)"
 	depends on ZORRO && EXPERIMENTAL
+	select IDE_GENERIC
 	help
 	  This is the IDE driver for the IDE interfaces on the Buddha, 
 	  Catweasel and X-Surf expansion boards.  It supports up to two interfaces 
@@ -898,6 +914,7 @@ config BLK_DEV_BUDDHA
 config BLK_DEV_FALCON_IDE
 	bool "Falcon IDE interface support"
 	depends on ATARI
+	select IDE_GENERIC
 	help
 	  This is the IDE driver for the builtin IDE interface on the Atari
 	  Falcon. Say Y if you have a Falcon and want to use IDE devices (hard
@@ -907,6 +924,7 @@ config BLK_DEV_FALCON_IDE
 config BLK_DEV_MAC_IDE
 	bool "Macintosh Quadra/Powerbook IDE interface support"
 	depends on MAC
+	select IDE_GENERIC
 	help
 	  This is the IDE driver for the builtin IDE interface on some m68k
 	  Macintosh models. It supports both the `Quadra style' (used in
@@ -920,6 +938,7 @@ config BLK_DEV_MAC_IDE
 config BLK_DEV_Q40IDE
 	bool "Q40/Q60 IDE interface support"
 	depends on Q40
+	select IDE_GENERIC
 	help
 	  Enable the on-board IDE controller in the Q40/Q60.  This should
 	  normally be on; disable it only if you are running a custom hard
@@ -928,6 +947,7 @@ config BLK_DEV_Q40IDE
 config BLK_DEV_MPC8xx_IDE
 	bool "MPC8xx IDE support"
 	depends on 8xx && IDE=y && BLK_DEV_IDE=y
+	select IDE_GENERIC
 	help
 	  This option provides support for IDE on Motorola MPC8xx Systems.
 	  Please see 'Type of MPC8xx IDE interface' for details.
@@ -1084,8 +1104,4 @@ config BLK_DEV_HD_ONLY
 config BLK_DEV_HD
 	def_bool BLK_DEV_HD_IDE || BLK_DEV_HD_ONLY
 
-endif
-
-endmenu
-
-endif
+endif # IDE

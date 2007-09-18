@@ -8,7 +8,6 @@
  *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
  *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
  *    Copyright (C) 1996 Paul Mackerras
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  *  Derived from "arch/i386/mm/init.c"
  *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
@@ -120,17 +119,20 @@ void pgtable_free_tlb(struct mmu_gather *tlb, pgtable_free_t pgf)
 }
 
 /*
- * Update the MMU hash table to correspond with a change to
- * a Linux PTE.  If wrprot is true, it is permissible to
- * change the existing HPTE to read-only rather than removing it
- * (if we remove it we should clear the _PTE_HPTEFLAGS bits).
+ * A linux PTE was changed and the corresponding hash table entry
+ * neesd to be flushed. This function will either perform the flush
+ * immediately or will batch it up if the current CPU has an active
+ * batch on it.
+ *
+ * Must be called from within some kind of spinlock/non-preempt region...
  */
-void hpte_update(struct mm_struct *mm, unsigned long addr,
-		 pte_t *ptep, unsigned long pte, int huge)
+void hpte_need_flush(struct mm_struct *mm, unsigned long addr,
+		     pte_t *ptep, unsigned long pte, int huge)
 {
 	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
-	unsigned long vsid;
+	unsigned long vsid, vaddr;
 	unsigned int psize;
+	real_pte_t rpte;
 	int i;
 
 	i = batch->index;
@@ -140,16 +142,42 @@ void hpte_update(struct mm_struct *mm, unsigned long addr,
 	 */
 	addr &= PAGE_MASK;
 
-	/* Get page size (maybe move back to caller) */
+	/* Get page size (maybe move back to caller).
+	 *
+	 * NOTE: when using special 64K mappings in 4K environment like
+	 * for SPEs, we obtain the page size from the slice, which thus
+	 * must still exist (and thus the VMA not reused) at the time
+	 * of this call
+	 */
 	if (huge) {
 #ifdef CONFIG_HUGETLB_PAGE
 		psize = mmu_huge_psize;
 #else
 		BUG();
-		psize = pte_pagesize_index(pte); /* shutup gcc */
+		psize = pte_pagesize_index(mm, addr, pte); /* shutup gcc */
 #endif
 	} else
-		psize = pte_pagesize_index(pte);
+		psize = pte_pagesize_index(mm, addr, pte);
+
+	/* Build full vaddr */
+	if (!is_kernel_addr(addr)) {
+		vsid = get_vsid(mm->context.id, addr);
+		WARN_ON(vsid == 0);
+	} else
+		vsid = get_kernel_vsid(addr);
+	vaddr = (vsid << 28 ) | (addr & 0x0fffffff);
+	rpte = __real_pte(__pte(pte), ptep);
+
+	/*
+	 * Check if we have an active batch on this CPU. If not, just
+	 * flush now and return. For now, we don global invalidates
+	 * in that case, might be worth testing the mm cpu mask though
+	 * and decide to use local invalidates instead...
+	 */
+	if (!batch->active) {
+		flush_hash_page(vaddr, rpte, psize, 0);
+		return;
+	}
 
 	/*
 	 * This can happen when we are in the middle of a TLB batch and
@@ -162,47 +190,42 @@ void hpte_update(struct mm_struct *mm, unsigned long addr,
 	 * batch
 	 */
 	if (i != 0 && (mm != batch->mm || batch->psize != psize)) {
-		flush_tlb_pending();
+		__flush_tlb_pending(batch);
 		i = 0;
 	}
 	if (i == 0) {
 		batch->mm = mm;
 		batch->psize = psize;
 	}
-	if (!is_kernel_addr(addr)) {
-		vsid = get_vsid(mm->context.id, addr);
-		WARN_ON(vsid == 0);
-	} else
-		vsid = get_kernel_vsid(addr);
-	batch->vaddr[i] = (vsid << 28 ) | (addr & 0x0fffffff);
-	batch->pte[i] = __real_pte(__pte(pte), ptep);
+	batch->pte[i] = rpte;
+	batch->vaddr[i] = vaddr;
 	batch->index = ++i;
 	if (i >= PPC64_TLB_BATCH_NR)
-		flush_tlb_pending();
+		__flush_tlb_pending(batch);
 }
 
+/*
+ * This function is called when terminating an mmu batch or when a batch
+ * is full. It will perform the flush of all the entries currently stored
+ * in a batch.
+ *
+ * Must be called from within some kind of spinlock/non-preempt region...
+ */
 void __flush_tlb_pending(struct ppc64_tlb_batch *batch)
 {
-	int i;
-	int cpu;
 	cpumask_t tmp;
-	int local = 0;
+	int i, local = 0;
 
-	BUG_ON(in_interrupt());
-
-	cpu = get_cpu();
 	i = batch->index;
-	tmp = cpumask_of_cpu(cpu);
+	tmp = cpumask_of_cpu(smp_processor_id());
 	if (cpus_equal(batch->mm->cpu_vm_mask, tmp))
 		local = 1;
-
 	if (i == 1)
 		flush_hash_page(batch->vaddr[0], batch->pte[0],
 				batch->psize, local);
 	else
 		flush_hash_range(i, local);
 	batch->index = 0;
-	put_cpu();
 }
 
 void pte_free_finish(void)
@@ -215,3 +238,59 @@ void pte_free_finish(void)
 	pte_free_submit(*batchp);
 	*batchp = NULL;
 }
+
+/**
+ * __flush_hash_table_range - Flush all HPTEs for a given address range
+ *                            from the hash table (and the TLB). But keeps
+ *                            the linux PTEs intact.
+ *
+ * @mm		: mm_struct of the target address space (generally init_mm)
+ * @start	: starting address
+ * @end         : ending address (not included in the flush)
+ *
+ * This function is mostly to be used by some IO hotplug code in order
+ * to remove all hash entries from a given address range used to map IO
+ * space on a removed PCI-PCI bidge without tearing down the full mapping
+ * since 64K pages may overlap with other bridges when using 64K pages
+ * with 4K HW pages on IO space.
+ *
+ * Because of that usage pattern, it's only available with CONFIG_HOTPLUG
+ * and is implemented for small size rather than speed.
+ */
+#ifdef CONFIG_HOTPLUG
+
+void __flush_hash_table_range(struct mm_struct *mm, unsigned long start,
+			      unsigned long end)
+{
+	unsigned long flags;
+
+	start = _ALIGN_DOWN(start, PAGE_SIZE);
+	end = _ALIGN_UP(end, PAGE_SIZE);
+
+	BUG_ON(!mm->pgd);
+
+	/* Note: Normally, we should only ever use a batch within a
+	 * PTE locked section. This violates the rule, but will work
+	 * since we don't actually modify the PTEs, we just flush the
+	 * hash while leaving the PTEs intact (including their reference
+	 * to being hashed). This is not the most performance oriented
+	 * way to do things but is fine for our needs here.
+	 */
+	local_irq_save(flags);
+	arch_enter_lazy_mmu_mode();
+	for (; start < end; start += PAGE_SIZE) {
+		pte_t *ptep = find_linux_pte(mm->pgd, start);
+		unsigned long pte;
+
+		if (ptep == NULL)
+			continue;
+		pte = pte_val(*ptep);
+		if (!(pte & _PAGE_HASHPTE))
+			continue;
+		hpte_need_flush(mm, start, ptep, pte, 0);
+	}
+	arch_leave_lazy_mmu_mode();
+	local_irq_restore(flags);
+}
+
+#endif /* CONFIG_HOTPLUG */

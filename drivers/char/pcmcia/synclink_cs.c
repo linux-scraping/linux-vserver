@@ -42,7 +42,6 @@
 #include <linux/timer.h>
 #include <linux/time.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/serial.h>
@@ -541,13 +540,12 @@ static int mgslpc_probe(struct pcmcia_device *link)
     if (debug_level >= DEBUG_LEVEL_INFO)
 	    printk("mgslpc_attach\n");
 
-    info = kmalloc(sizeof(MGSLPC_INFO), GFP_KERNEL);
+    info = kzalloc(sizeof(MGSLPC_INFO), GFP_KERNEL);
     if (!info) {
 	    printk("Error can't allocate device instance data\n");
 	    return -ENOMEM;
     }
 
-    memset(info, 0, sizeof(MGSLPC_INFO));
     info->magic = MGSLPC_MAGIC;
     INIT_WORK(&info->task, bh_handler);
     info->max_frame_size = 4096;
@@ -4169,7 +4167,7 @@ static int hdlcdev_xmit(struct sk_buff *skb, struct net_device *dev)
 	netif_stop_queue(dev);
 
 	/* copy data to device buffers */
-	memcpy(info->tx_buf, skb->data, skb->len);
+	skb_copy_from_linear_data(skb, info->tx_buf, skb->len);
 	info->tx_get = 0;
 	info->tx_put = info->tx_count = skb->len;
 

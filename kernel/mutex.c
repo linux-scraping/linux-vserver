@@ -133,11 +133,17 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass)
 
 	debug_mutex_lock_common(lock, &waiter);
 	mutex_acquire(&lock->dep_map, subclass, 0, _RET_IP_);
-	debug_mutex_add_waiter(lock, &waiter, task->thread_info);
+	debug_mutex_add_waiter(lock, &waiter, task_thread_info(task));
 
 	/* add waiting tasks to the end of the waitqueue (FIFO): */
 	list_add_tail(&waiter.list, &lock->wait_list);
 	waiter.task = task;
+
+	old_val = atomic_xchg(&lock->count, -1);
+	if (old_val == 1)
+		goto done;
+
+	lock_contended(&lock->dep_map, _RET_IP_);
 
 	for (;;) {
 		/*
@@ -159,7 +165,7 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass)
 		 */
 		if (unlikely(state == TASK_INTERRUPTIBLE &&
 						signal_pending(task))) {
-			mutex_remove_waiter(lock, &waiter, task->thread_info);
+			mutex_remove_waiter(lock, &waiter, task_thread_info(task));
 			mutex_release(&lock->dep_map, 1, _RET_IP_);
 			spin_unlock_mutex(&lock->wait_lock, flags);
 
@@ -174,9 +180,11 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass)
 		spin_lock_mutex(&lock->wait_lock, flags);
 	}
 
+done:
+	lock_acquired(&lock->dep_map);
 	/* got the lock - rejoice! */
-	mutex_remove_waiter(lock, &waiter, task->thread_info);
-	debug_mutex_set_owner(lock, task->thread_info);
+	mutex_remove_waiter(lock, &waiter, task_thread_info(task));
+	debug_mutex_set_owner(lock, task_thread_info(task));
 
 	/* set it to 0 if there are no waiters left: */
 	if (likely(list_empty(&lock->wait_list)))

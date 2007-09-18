@@ -32,12 +32,12 @@
 #include <asm/mach-types.h>
 
 //#include <asm/debug-ll.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-lcd.h>
 
 #include <asm/arch/idle.h>
-#include <asm/arch/udc.h>
+#include <asm/plat-s3c24xx/udc.h>
 #include <asm/arch/fb.h>
 
 #include <asm/plat-s3c24xx/s3c2410.h>
@@ -110,11 +110,6 @@ static struct platform_device *smdk2413_devices[] __initdata = {
 	&s3c_device_usbgadget,
 };
 
-static struct s3c24xx_board smdk2413_board __initdata = {
-	.devices       = smdk2413_devices,
-	.devices_count = ARRAY_SIZE(smdk2413_devices)
-};
-
 static void __init smdk2413_fixup(struct machine_desc *desc,
 				  struct tag *tags, char **cmdline,
 				  struct meminfo *mi)
@@ -132,7 +127,6 @@ static void __init smdk2413_map_io(void)
 	s3c24xx_init_io(smdk2413_iodesc, ARRAY_SIZE(smdk2413_iodesc));
 	s3c24xx_init_clocks(12000000);
 	s3c24xx_init_uarts(smdk2413_uartcfgs, ARRAY_SIZE(smdk2413_uartcfgs));
-	s3c24xx_set_board(&smdk2413_board);
 }
 
 static void __init smdk2413_machine_init(void)
@@ -149,6 +143,7 @@ static void __init smdk2413_machine_init(void)
 
  	s3c24xx_udc_set_platdata(&smdk2413_udc_cfg);
 
+	platform_add_devices(smdk2413_devices, ARRAY_SIZE(smdk2413_devices));
 	smdk_machine_init();
 }
 

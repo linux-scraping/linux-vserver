@@ -7,7 +7,6 @@
  *    Copyright (C) 1996-2001 Cort Dougan
  *  Adapted for Power Macintosh by Paul Mackerras
  *    Copyright (C) 1996 Paul Mackerras (paulus@cs.anu.edu.au)
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -68,6 +67,7 @@
 #ifdef CONFIG_PPC64
 #include <asm/paca.h>
 #include <asm/firmware.h>
+#include <asm/lv1call.h>
 #endif
 
 int __irq_offset_value;
@@ -163,7 +163,17 @@ void local_irq_restore(unsigned long en)
 	local_paca->hard_enabled = en;
 	if ((int)mfspr(SPRN_DEC) < 0)
 		mtspr(SPRN_DEC, 1);
-	hard_irq_enable();
+
+	/*
+	 * Force the delivery of pending soft-disabled interrupts on PS3.
+	 * Any HV call will have this side effect.
+	 */
+	if (firmware_has_feature(FW_FEATURE_PS3_LV1)) {
+		u64 tmp;
+		lv1_get_version_info(&tmp);
+	}
+
+	__hard_irq_enable();
 }
 #endif /* CONFIG_PPC64 */
 
@@ -327,7 +337,8 @@ void do_IRQ(struct pt_regs *regs)
 
 void __init init_IRQ(void)
 {
-	ppc_md.init_IRQ();
+	if (ppc_md.init_IRQ)
+		ppc_md.init_IRQ();
 #ifdef CONFIG_PPC64
 	irq_ctx_init();
 #endif
@@ -395,17 +406,23 @@ EXPORT_SYMBOL(do_softirq);
 #ifdef CONFIG_PPC_MERGE
 
 static LIST_HEAD(irq_hosts);
-static spinlock_t irq_big_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(irq_big_lock);
 static DEFINE_PER_CPU(unsigned int, irq_radix_reader);
 static unsigned int irq_radix_writer;
 struct irq_map_entry irq_map[NR_IRQS];
 static unsigned int irq_virq_count = NR_IRQS;
 static struct irq_host *irq_default_host;
 
-struct irq_host *irq_alloc_host(unsigned int revmap_type,
-				unsigned int revmap_arg,
-				struct irq_host_ops *ops,
-				irq_hw_number_t inval_irq)
+irq_hw_number_t virq_to_hw(unsigned int virq)
+{
+	return irq_map[virq].hwirq;
+}
+EXPORT_SYMBOL_GPL(virq_to_hw);
+
+__init_refok struct irq_host *irq_alloc_host(unsigned int revmap_type,
+						unsigned int revmap_arg,
+						struct irq_host_ops *ops,
+						irq_hw_number_t inval_irq)
 {
 	struct irq_host *host;
 	unsigned int size = sizeof(struct irq_host);
@@ -479,7 +496,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	case IRQ_HOST_MAP_LINEAR:
 		rmap = (unsigned int *)(host + 1);
 		for (i = 0; i < revmap_arg; i++)
-			rmap[i] = IRQ_NONE;
+			rmap[i] = NO_IRQ;
 		host->revmap_data.linear.size = revmap_arg;
 		smp_wmb();
 		host->revmap_data.linear.revmap = rmap;
@@ -581,6 +598,49 @@ static void irq_radix_rdunlock(unsigned long flags)
 	local_irq_restore(flags);
 }
 
+static int irq_setup_virq(struct irq_host *host, unsigned int virq,
+			    irq_hw_number_t hwirq)
+{
+	/* Clear IRQ_NOREQUEST flag */
+	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
+
+	/* map it */
+	smp_wmb();
+	irq_map[virq].hwirq = hwirq;
+	smp_mb();
+
+	if (host->ops->map(host, virq, hwirq)) {
+		pr_debug("irq: -> mapping failed, freeing\n");
+		irq_free_virt(virq, 1);
+		return -1;
+	}
+
+	return 0;
+}
+
+unsigned int irq_create_direct_mapping(struct irq_host *host)
+{
+	unsigned int virq;
+
+	if (host == NULL)
+		host = irq_default_host;
+
+	BUG_ON(host == NULL);
+	WARN_ON(host->revmap_type != IRQ_HOST_MAP_NOMAP);
+
+	virq = irq_alloc_virt(host, 1, 0);
+	if (virq == NO_IRQ) {
+		pr_debug("irq: create_direct virq allocation failed\n");
+		return NO_IRQ;
+	}
+
+	pr_debug("irq: create_direct obtained virq %d\n", virq);
+
+	if (irq_setup_virq(host, virq, virq))
+		return NO_IRQ;
+
+	return virq;
+}
 
 unsigned int irq_create_mapping(struct irq_host *host,
 				irq_hw_number_t hwirq)
@@ -604,7 +664,7 @@ unsigned int irq_create_mapping(struct irq_host *host,
 	 * host->ops->map() to update the flags
 	 */
 	virq = irq_find_mapping(host, hwirq);
-	if (virq != IRQ_NONE) {
+	if (virq != NO_IRQ) {
 		if (host->ops->remap)
 			host->ops->remap(host, virq, hwirq);
 		pr_debug("irq: -> existing mapping on virq %d\n", virq);
@@ -629,18 +689,9 @@ unsigned int irq_create_mapping(struct irq_host *host,
 	}
 	pr_debug("irq: -> obtained virq %d\n", virq);
 
-	/* Clear IRQ_NOREQUEST flag */
-	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
-
-	/* map it */
-	smp_wmb();
-	irq_map[virq].hwirq = hwirq;
-	smp_mb();
-	if (host->ops->map(host, virq, hwirq)) {
-		pr_debug("irq: -> mapping failed, freeing\n");
-		irq_free_virt(virq, 1);
+	if (irq_setup_virq(host, virq, hwirq))
 		return NO_IRQ;
-	}
+
 	return virq;
 }
 EXPORT_SYMBOL_GPL(irq_create_mapping);
@@ -731,7 +782,7 @@ void irq_dispose_mapping(unsigned int virq)
 	switch(host->revmap_type) {
 	case IRQ_HOST_MAP_LINEAR:
 		if (hwirq < host->revmap_data.linear.size)
-			host->revmap_data.linear.revmap[hwirq] = IRQ_NONE;
+			host->revmap_data.linear.revmap[hwirq] = NO_IRQ;
 		break;
 	case IRQ_HOST_MAP_TREE:
 		/* Check if radix tree allocated yet */
@@ -947,33 +998,6 @@ static int irq_late_init(void)
 arch_initcall(irq_late_init);
 
 #endif /* CONFIG_PPC_MERGE */
-
-#ifdef CONFIG_PCI_MSI
-int pci_enable_msi(struct pci_dev * pdev)
-{
-	if (ppc_md.enable_msi)
-		return ppc_md.enable_msi(pdev);
-	else
-		return -1;
-}
-EXPORT_SYMBOL(pci_enable_msi);
-
-void pci_disable_msi(struct pci_dev * pdev)
-{
-	if (ppc_md.disable_msi)
-		ppc_md.disable_msi(pdev);
-}
-EXPORT_SYMBOL(pci_disable_msi);
-
-void pci_scan_msi_device(struct pci_dev *dev) {}
-int pci_enable_msix(struct pci_dev* dev, struct msix_entry *entries, int nvec) {return -1;}
-void pci_disable_msix(struct pci_dev *dev) {}
-void msi_remove_pci_irq_vectors(struct pci_dev *dev) {}
-void pci_no_msi(void) {}
-EXPORT_SYMBOL(pci_enable_msix);
-EXPORT_SYMBOL(pci_disable_msix);
-
-#endif
 
 #ifdef CONFIG_PPC64
 static int __init setup_noirqdistrib(char *str)

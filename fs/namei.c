@@ -22,7 +22,6 @@
 #include <linux/quotaops.h>
 #include <linux/pagemap.h>
 #include <linux/fsnotify.h>
-#include <linux/smp_lock.h>
 #include <linux/personality.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
@@ -112,6 +111,8 @@
  * implemented.  Let's see if raised priority of ->s_vfs_rename_mutex gives
  * any extra contention...
  */
+
+static int fastcall link_path_walk(const char *name, struct nameidata *nd);
 
 /* In order to reduce some races, while at the same time doing additional
  * checking and hopefully speeding things up, we copy filenames to the
@@ -244,13 +245,12 @@ static inline int dx_permission(struct inode *inode, int mask, struct nameidata 
 {
 	if (dx_barrier(inode))
 		return -EACCES;
-	if (inode->i_tag == 0)
-		return 0;
-	if (dx_check(inode->i_tag, DX_ADMIN|DX_WATCH|DX_IDENT))
+	if (dx_notagcheck(nd) ||
+	    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
 		return 0;
 
-	vxwprintk(1, "xid=%d denied access to %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
+	vxwprintk(1, "tag=%d denied access to %p[#%d,%lu] »%s«.",
+		dx_current_tag(), inode, inode->i_tag, inode->i_ino,
 		vxd_cond_path(nd));
 	return -EACCES;
 }
@@ -820,7 +820,8 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	}
-	if (!dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
+	if (!dx_notagcheck(nd) &&
+	    !dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
 		goto hidden;
 done:
 	path->mnt = mnt;
@@ -828,8 +829,8 @@ done:
 	__follow_mount(path);
 	return 0;
 hidden:
-	vxwprintk(1, "xid=%d did lookup hidden %p[#%d,%lu] »%s«.",
-		vx_current_xid(), inode, inode->i_tag, inode->i_ino,
+	vxwprintk(1, "tag=%d did lookup hidden %p[#%d,%lu] »%s«.",
+		dx_current_tag(), inode, inode->i_tag, inode->i_ino,
 		vxd_path(dentry, mnt));
 	dput(dentry);
 	return -ENOENT;
@@ -1052,7 +1053,7 @@ return_err:
  * Retry the whole path once, forcing real lookup requests
  * instead of relying on the dcache.
  */
-int fastcall link_path_walk(const char *name, struct nameidata *nd)
+static int fastcall link_path_walk(const char *name, struct nameidata *nd)
 {
 	struct nameidata save = *nd;
 	int result;
@@ -1076,7 +1077,7 @@ int fastcall link_path_walk(const char *name, struct nameidata *nd)
 	return result;
 }
 
-int fastcall path_walk(const char * name, struct nameidata *nd)
+static int fastcall path_walk(const char * name, struct nameidata *nd)
 {
 	current->total_link_count = 0;
 	return link_path_walk(name, nd);
@@ -1206,14 +1207,12 @@ static int fastcall do_path_lookup(int dfd, const char *name,
 
 		fput_light(file, fput_needed);
 	}
-	current->total_link_count = 0;
-	retval = link_path_walk(name, nd);
+
+	retval = path_walk(name, nd);
 out:
-	if (likely(retval == 0)) {
-		if (unlikely(!audit_dummy_context() && nd && nd->dentry &&
+	if (unlikely(!retval && !audit_dummy_context() && nd->dentry &&
 				nd->dentry->d_inode))
 		audit_inode(name, nd->dentry->d_inode);
-	}
 out_fail:
 	return retval;
 
@@ -1226,6 +1225,37 @@ int fastcall path_lookup(const char *name, unsigned int flags,
 			struct nameidata *nd)
 {
 	return do_path_lookup(AT_FDCWD, name, flags, nd);
+}
+
+/**
+ * vfs_path_lookup - lookup a file path relative to a dentry-vfsmount pair
+ * @dentry:  pointer to dentry of the base directory
+ * @mnt: pointer to vfs mount of the base directory
+ * @name: pointer to file name
+ * @flags: lookup flags
+ * @nd: pointer to nameidata
+ */
+int vfs_path_lookup(struct dentry *dentry, struct vfsmount *mnt,
+		    const char *name, unsigned int flags,
+		    struct nameidata *nd)
+{
+	int retval;
+
+	/* same as do_path_lookup */
+	nd->last_type = LAST_ROOT;
+	nd->flags = flags;
+	nd->depth = 0;
+
+	nd->mnt = mntget(mnt);
+	nd->dentry = dget(dentry);
+
+	retval = path_walk(name, nd);
+	if (unlikely(!retval && !audit_dummy_context() && nd->dentry &&
+				nd->dentry->d_inode))
+		audit_inode(name, nd->dentry->d_inode);
+
+	return retval;
+
 }
 
 static int __path_lookup_intent_open(int dfd, const char *name,
@@ -1296,22 +1326,13 @@ int __user_path_lookup_open(const char __user *name, unsigned int lookup_flags,
 	return err;
 }
 
-/*
- * Restricted form of lookup. Doesn't follow links, single-component only,
- * needs parent already locked. Doesn't follow mounts.
- * SMP-safe.
- */
-static struct dentry * __lookup_hash(struct qstr *name, struct dentry * base, struct nameidata *nd)
+static inline struct dentry *__lookup_hash_kern(struct qstr *name, struct dentry *base, struct nameidata *nd)
 {
-	struct dentry * dentry;
+	struct dentry *dentry;
 	struct inode *inode;
 	int err;
 
 	inode = base->d_inode;
-	err = permission(inode, MAY_EXEC, nd);
-	dentry = ERR_PTR(err);
-	if (err)
-		goto out;
 
 	/*
 	 * See if the low-level filesystem might want
@@ -1340,48 +1361,78 @@ out:
 	return dentry;
 }
 
+/*
+ * Restricted form of lookup. Doesn't follow links, single-component only,
+ * needs parent already locked. Doesn't follow mounts.
+ * SMP-safe.
+ */
+static inline struct dentry * __lookup_hash(struct qstr *name, struct dentry *base, struct nameidata *nd)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	int err;
+
+	inode = base->d_inode;
+
+	err = permission(inode, MAY_EXEC, nd);
+	dentry = ERR_PTR(err);
+	if (err)
+		goto out;
+
+	dentry = __lookup_hash_kern(name, base, nd);
+out:
+	return dentry;
+}
+
 static struct dentry *lookup_hash(struct nameidata *nd)
 {
 	return __lookup_hash(&nd->last, nd->dentry, nd);
 }
 
 /* SMP-safe */
-struct dentry * lookup_one_len(const char * name, struct dentry * base, int len)
+static inline int __lookup_one_len(const char *name, struct qstr *this, struct dentry *base, int len)
 {
 	unsigned long hash;
-	struct qstr this;
 	unsigned int c;
 
-	this.name = name;
-	this.len = len;
+	this->name = name;
+	this->len = len;
 	if (!len)
-		goto access;
+		return -EACCES;
 
 	hash = init_name_hash();
 	while (len--) {
 		c = *(const unsigned char *)name++;
 		if (c == '/' || c == '\0')
-			goto access;
+			return -EACCES;
 		hash = partial_name_hash(c, hash);
 	}
-	this.hash = end_name_hash(hash);
-
-	return __lookup_hash(&this, base, NULL);
-access:
-	return ERR_PTR(-EACCES);
+	this->hash = end_name_hash(hash);
+	return 0;
 }
 
-/*
- *	namei()
- *
- * is used by most simple commands to get the inode of a specified name.
- * Open, link etc use their own routines, but this is enough for things
- * like 'chmod' etc.
- *
- * namei exists in two versions: namei/lnamei. The only difference is
- * that namei follows links, while lnamei does not.
- * SMP-safe
- */
+struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
+{
+	int err;
+	struct qstr this;
+
+	err = __lookup_one_len(name, &this, base, len);
+	if (err)
+		return ERR_PTR(err);
+	return __lookup_hash(&this, base, NULL);
+}
+
+struct dentry *lookup_one_len_kern(const char *name, struct dentry *base, int len)
+{
+	int err;
+	struct qstr this;
+
+	err = __lookup_one_len(name, &this, base, len);
+	if (err)
+		return ERR_PTR(err);
+	return __lookup_hash_kern(&this, base, NULL);
+}
+
 int fastcall __user_walk_fd(int dfd, const char __user *name, unsigned flags,
 			    struct nameidata *nd)
 {
@@ -1621,7 +1672,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 
 	/* O_NOATIME can only be set by the owner or superuser */
 	if (flag & O_NOATIME)
-		if (current->fsuid != inode->i_uid && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 
 	/*
@@ -1769,7 +1820,7 @@ do_last:
 	 * It already exists.
 	 */
 	mutex_unlock(&dir->d_inode->i_mutex);
-	audit_inode_update(path.dentry->d_inode);
+	audit_inode(pathname, path.dentry->d_inode);
 
 	error = -EEXIST;
 	if (flag & O_EXCL)
@@ -2741,7 +2792,7 @@ struct dentry *cow_break_link(const char *pathname)
 	struct file *old_file;
 	struct file *new_file;
 	char *to, *path, pad='\251';
-	loff_t size;
+	loff_t ppos, size;
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
@@ -2823,8 +2874,10 @@ retry:
 	}
 
 	size = i_size_read(old_file->f_dentry->d_inode);
-	ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
-	vxdprintk(VXD_CBIT(misc, 2), "vfs_sendfile: %d", ret);
+	// ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
+	ppos = 0;
+	ret = do_splice_direct(old_file, &ppos, new_file, size, 0);
+	vxdprintk(VXD_CBIT(misc, 2), "do_splice_direct: %d", ret);
 	if (ret < 0) {
 		res = ERR_PTR(ret);
 		goto out_fput_both;
@@ -2880,19 +2933,9 @@ static char *page_getlink(struct dentry * dentry, struct page **ppage)
 	struct address_space *mapping = dentry->d_inode->i_mapping;
 	page = read_mapping_page(mapping, 0, NULL);
 	if (IS_ERR(page))
-		goto sync_fail;
-	wait_on_page_locked(page);
-	if (!PageUptodate(page))
-		goto async_fail;
+		return (char*)page;
 	*ppage = page;
 	return kmap(page);
-
-async_fail:
-	page_cache_release(page);
-	return ERR_PTR(-EIO);
-
-sync_fail:
-	return (char*)page;
 }
 
 int page_readlink(struct dentry *dentry, char __user *buffer, int buflen)
@@ -3007,8 +3050,8 @@ EXPORT_SYMBOL(__page_symlink);
 EXPORT_SYMBOL(page_symlink);
 EXPORT_SYMBOL(page_symlink_inode_operations);
 EXPORT_SYMBOL(path_lookup);
+EXPORT_SYMBOL(vfs_path_lookup);
 EXPORT_SYMBOL(path_release);
-EXPORT_SYMBOL(path_walk);
 EXPORT_SYMBOL(permission);
 EXPORT_SYMBOL(vfs_permission);
 EXPORT_SYMBOL(file_permission);

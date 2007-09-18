@@ -7,6 +7,22 @@ src := $(obj)
 PHONY := __build
 __build:
 
+# Init all relevant variables used in kbuild files so
+# 1) they have correct type
+# 2) they do not inherit any value from the environment
+obj-y :=
+obj-m :=
+lib-y :=
+lib-m :=
+always :=
+targets :=
+subdir-y :=
+subdir-m :=
+EXTRA_AFLAGS   :=
+EXTRA_CFLAGS   :=
+EXTRA_CPPFLAGS :=
+EXTRA_LDFLAGS  :=
+
 # Read .config if it exist, otherwise ignore
 -include include/config/auto.conf
 
@@ -131,13 +147,13 @@ $(multi-objs-y:.o=.lst) : modname = $(modname-multi)
 quiet_cmd_cc_s_c = CC $(quiet_modtag)  $@
 cmd_cc_s_c       = $(CC) $(c_flags) -fverbose-asm -S -o $@ $<
 
-%.s: %.c FORCE
+$(obj)/%.s: $(src)/%.c FORCE
 	$(call if_changed_dep,cc_s_c)
 
 quiet_cmd_cc_i_c = CPP $(quiet_modtag) $@
 cmd_cc_i_c       = $(CPP) $(c_flags)   -o $@ $<
 
-%.i: %.c FORCE
+$(obj)/%.i: $(src)/%.c FORCE
 	$(call if_changed_dep,cc_i_c)
 
 quiet_cmd_cc_symtypes_c = SYM $(quiet_modtag) $@
@@ -146,7 +162,7 @@ cmd_cc_symtypes_c	   = \
 		| $(GENKSYMS) -T $@ >/dev/null;				\
 		test -s $@ || rm -f $@
 
-%.symtypes : %.c FORCE
+$(obj)/%.symtypes : $(src)/%.c FORCE
 	$(call if_changed_dep,cc_symtypes_c)
 
 # C (.c) files
@@ -198,14 +214,13 @@ define rule_cc_o_c
 endef
 
 # Built-in and composite module parts
-
-%.o: %.c FORCE
+$(obj)/%.o: $(src)/%.c FORCE
 	$(call cmd,force_checksrc)
 	$(call if_changed_rule,cc_o_c)
 
 # Single-part modules are special since we need to mark them in $(MODVERDIR)
 
-$(single-used-m): %.o: %.c FORCE
+$(single-used-m): $(obj)/%.o: $(src)/%.c FORCE
 	$(call cmd,force_checksrc)
 	$(call if_changed_rule,cc_o_c)
 	@{ echo $(@:.o=.ko); echo $@; } > $(MODVERDIR)/$(@F:.o=.mod)
@@ -215,7 +230,7 @@ quiet_cmd_cc_lst_c = MKLST   $@
 		     $(CONFIG_SHELL) $(srctree)/scripts/makelst $*.o \
 				     System.map $(OBJDUMP) > $@
 
-%.lst: %.c FORCE
+$(obj)/%.lst: $(src)/%.c FORCE
 	$(call if_changed_dep,cc_lst_c)
 
 # Compile assembler sources (.S)
@@ -229,13 +244,13 @@ $(real-objs-m:.o=.s): modkern_aflags := $(AFLAGS_MODULE)
 quiet_cmd_as_s_S = CPP $(quiet_modtag) $@
 cmd_as_s_S       = $(CPP) $(a_flags)   -o $@ $< 
 
-%.s: %.S FORCE
+$(obj)/%.s: $(src)/%.S FORCE
 	$(call if_changed_dep,as_s_S)
 
 quiet_cmd_as_o_S = AS $(quiet_modtag)  $@
 cmd_as_o_S       = $(CC) $(a_flags) -c -o $@ $<
 
-%.o: %.S FORCE
+$(obj)/%.o: $(src)/%.S FORCE
 	$(call if_changed_dep,as_o_S)
 
 targets += $(real-objs-y) $(real-objs-m) $(lib-y)
@@ -246,7 +261,7 @@ targets += $(extra-y) $(MAKECMDGOALS) $(always)
 quiet_cmd_cpp_lds_S = LDS     $@
       cmd_cpp_lds_S = $(CPP) $(cpp_flags) -D__ASSEMBLY__ -o $@ $<
 
-%.lds: %.lds.S FORCE
+$(obj)/%.lds: $(src)/%.lds.S FORCE
 	$(call if_changed_dep,cpp_lds_S)
 
 # Build the compiled-in targets
@@ -300,7 +315,7 @@ quiet_cmd_link_multi-y = LD      $@
 cmd_link_multi-y = $(LD) $(ld_flags) -r -o $@ $(link_multi_deps)
 
 quiet_cmd_link_multi-m = LD [M]  $@
-cmd_link_multi-m = $(LD) $(ld_flags) $(LDFLAGS_MODULE) -o $@ $(link_multi_deps)
+cmd_link_multi-m = $(cmd_link_multi-y)
 
 # We would rather have a list of rules like
 # 	foo.o: $(foo-objs)

@@ -41,6 +41,10 @@
 #include <linux/mca.h>
 #endif
 
+#if defined(CONFIG_EDAC)
+#include <linux/edac.h>
+#endif
+
 #include <asm/processor.h>
 #include <asm/system.h>
 #include <asm/io.h>
@@ -52,7 +56,7 @@
 #include <asm/unwind.h>
 #include <asm/smp.h>
 #include <asm/arch_hooks.h>
-#include <asm/kdebug.h>
+#include <linux/kdebug.h>
 #include <asm/stacktrace.h>
 
 #include <linux/module.h>
@@ -97,51 +101,46 @@ asmlinkage void machine_check(void);
 
 int kstack_depth_to_print = 24;
 static unsigned int code_bytes = 64;
-ATOMIC_NOTIFIER_HEAD(i386die_chain);
 
-int register_die_notifier(struct notifier_block *nb)
-{
-	vmalloc_sync_all();
-	return atomic_notifier_chain_register(&i386die_chain, nb);
-}
-EXPORT_SYMBOL(register_die_notifier); /* used modular by kdb */
-
-int unregister_die_notifier(struct notifier_block *nb)
-{
-	return atomic_notifier_chain_unregister(&i386die_chain, nb);
-}
-EXPORT_SYMBOL(unregister_die_notifier); /* used modular by kdb */
-
-static inline int valid_stack_ptr(struct thread_info *tinfo, void *p)
+static inline int valid_stack_ptr(struct thread_info *tinfo, void *p, unsigned size)
 {
 	return	p > (void *)tinfo &&
-		p < (void *)tinfo + THREAD_SIZE - 3;
+		p <= (void *)tinfo + THREAD_SIZE - size;
 }
+
+/* The form of the top of the frame on the stack */
+struct stack_frame {
+	struct stack_frame *next_frame;
+	unsigned long return_address;
+};
 
 static inline unsigned long print_context_stack(struct thread_info *tinfo,
 				unsigned long *stack, unsigned long ebp,
 				struct stacktrace_ops *ops, void *data)
 {
-	unsigned long addr;
-
 #ifdef	CONFIG_FRAME_POINTER
-	while (valid_stack_ptr(tinfo, (void *)ebp)) {
-		unsigned long new_ebp;
-		addr = *(unsigned long *)(ebp + 4);
+	struct stack_frame *frame = (struct stack_frame *)ebp;
+	while (valid_stack_ptr(tinfo, frame, sizeof(*frame))) {
+		struct stack_frame *next;
+		unsigned long addr;
+
+		addr = frame->return_address;
 		ops->address(data, addr);
 		/*
 		 * break out of recursive entries (such as
 		 * end_of_stack_stop_unwind_function). Also,
 		 * we can never allow a frame pointer to
 		 * move downwards!
-	 	 */
-	 	new_ebp = *(unsigned long *)ebp;
-		if (new_ebp <= ebp)
+		 */
+		next = frame->next_frame;
+		if (next <= frame)
 			break;
-		ebp = new_ebp;
+		frame = next;
 	}
 #else
-	while (valid_stack_ptr(tinfo, stack)) {
+	while (valid_stack_ptr(tinfo, stack, sizeof(*stack))) {
+		unsigned long addr;
+
 		addr = *stack++;
 		if (__kernel_text_address(addr))
 			ops->address(data, addr);
@@ -164,7 +163,7 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
 	if (!stack) {
 		unsigned long dummy;
 		stack = &dummy;
-		if (task && task != current)
+		if (task != current)
 			stack = (unsigned long *)task->thread.esp;
 	}
 
@@ -223,6 +222,7 @@ static void print_trace_address(void *data, unsigned long addr)
 {
 	printk("%s [<%08lx>] ", (char *)data, addr);
 	print_symbol("%s\n", addr);
+	touch_nmi_watchdog();
 }
 
 static struct stacktrace_ops print_trace_ops = {
@@ -321,7 +321,7 @@ void show_registers(struct pt_regs *regs)
 	       regs->xds & 0xffff, regs->xes & 0xffff, regs->xfs & 0xffff, gs, ss);
 	printk(KERN_EMERG "Process %.*s (pid: %d[#%u], ti=%p task=%p task.ti=%p)",
 		TASK_COMM_LEN, current->comm, current->pid, current->xid,
-		current_thread_info(), current, current->thread_info);
+		current_thread_info(), current, task_thread_info(current));
 	/*
 	 * When in-kernel, we also print out the stack and code at the
 	 * time of the fault..
@@ -408,7 +408,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 		unsigned long esp;
 		unsigned short ss;
 
-		report_bug(regs->eip);
+		report_bug(regs->eip, regs);
 
 		printk(KERN_EMERG "%s: %04lx [#%d]\n", str, err & 0xffff, ++die_counter);
 #ifdef CONFIG_PREEMPT
@@ -451,6 +451,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 
 	bust_spinlocks(0);
 	die.lock_owner = -1;
+	add_taint(TAINT_DIE);
 	spin_unlock_irqrestore(&die.lock, flags);
 
 	if (!regs)
@@ -480,8 +481,6 @@ static void __kprobes do_trap(int trapnr, int signr, char *str, int vm86,
 			      siginfo_t *info)
 {
 	struct task_struct *tsk = current;
-	tsk->thread.error_code = error_code;
-	tsk->thread.trap_no = trapnr;
 
 	if (regs->eflags & VM_MASK) {
 		if (vm86)
@@ -493,6 +492,18 @@ static void __kprobes do_trap(int trapnr, int signr, char *str, int vm86,
 		goto kernel_trap;
 
 	trap_signal: {
+		/*
+		 * We want error_code and trap_no set for userspace faults and
+		 * kernelspace faults which result in die(), but not
+		 * kernelspace faults which are fixed up.  die() gives the
+		 * process no chance to handle the signal and notice the
+		 * kernel fault information, so that won't result in polluting
+		 * the information about previously queued, but not yet
+		 * delivered, faults.  See also do_general_protection below.
+		 */
+		tsk->thread.error_code = error_code;
+		tsk->thread.trap_no = trapnr;
+
 		if (info)
 			force_sig_info(signr, info, tsk);
 		else
@@ -501,8 +512,11 @@ static void __kprobes do_trap(int trapnr, int signr, char *str, int vm86,
 	}
 
 	kernel_trap: {
-		if (!fixup_exception(regs))
+		if (!fixup_exception(regs)) {
+			tsk->thread.error_code = error_code;
+			tsk->thread.trap_no = trapnr;
 			die(str, regs, error_code);
+		}
 		return;
 	}
 
@@ -522,10 +536,12 @@ fastcall void do_##name(struct pt_regs * regs, long error_code) \
 	do_trap(trapnr, signr, str, 0, regs, error_code, NULL); \
 }
 
-#define DO_ERROR_INFO(trapnr, signr, str, name, sicode, siaddr) \
+#define DO_ERROR_INFO(trapnr, signr, str, name, sicode, siaddr, irq) \
 fastcall void do_##name(struct pt_regs * regs, long error_code) \
 { \
 	siginfo_t info; \
+	if (irq) \
+		local_irq_enable(); \
 	info.si_signo = signr; \
 	info.si_errno = 0; \
 	info.si_code = sicode; \
@@ -565,13 +581,13 @@ DO_VM86_ERROR( 3, SIGTRAP, "int3", int3)
 #endif
 DO_VM86_ERROR( 4, SIGSEGV, "overflow", overflow)
 DO_VM86_ERROR( 5, SIGSEGV, "bounds", bounds)
-DO_ERROR_INFO( 6, SIGILL,  "invalid opcode", invalid_op, ILL_ILLOPN, regs->eip)
+DO_ERROR_INFO( 6, SIGILL,  "invalid opcode", invalid_op, ILL_ILLOPN, regs->eip, 0)
 DO_ERROR( 9, SIGFPE,  "coprocessor segment overrun", coprocessor_segment_overrun)
 DO_ERROR(10, SIGSEGV, "invalid TSS", invalid_TSS)
 DO_ERROR(11, SIGBUS,  "segment not present", segment_not_present)
 DO_ERROR(12, SIGBUS,  "stack segment", stack_segment)
-DO_ERROR_INFO(17, SIGBUS, "alignment check", alignment_check, BUS_ADRALN, 0)
-DO_ERROR_INFO(32, SIGSEGV, "iret exception", iret_error, ILL_BADSTK, 0)
+DO_ERROR_INFO(17, SIGBUS, "alignment check", alignment_check, BUS_ADRALN, 0, 0)
+DO_ERROR_INFO(32, SIGSEGV, "iret exception", iret_error, ILL_BADSTK, 0, 1)
 
 fastcall void __kprobes do_general_protection(struct pt_regs * regs,
 					      long error_code)
@@ -587,7 +603,7 @@ fastcall void __kprobes do_general_protection(struct pt_regs * regs,
 	 * and we set the offset field correctly. Then we let the CPU to
 	 * restart the faulting instruction.
 	 */
-	if (tss->io_bitmap_base == INVALID_IO_BITMAP_OFFSET_LAZY &&
+	if (tss->x86_tss.io_bitmap_base == INVALID_IO_BITMAP_OFFSET_LAZY &&
 	    thread->io_bitmap_ptr) {
 		memcpy(tss->io_bitmap, thread->io_bitmap_ptr,
 		       thread->io_bitmap_max);
@@ -600,15 +616,12 @@ fastcall void __kprobes do_general_protection(struct pt_regs * regs,
 				thread->io_bitmap_max, 0xff,
 				tss->io_bitmap_max - thread->io_bitmap_max);
 		tss->io_bitmap_max = thread->io_bitmap_max;
-		tss->io_bitmap_base = IO_BITMAP_OFFSET;
+		tss->x86_tss.io_bitmap_base = IO_BITMAP_OFFSET;
 		tss->io_bitmap_owner = thread;
 		put_cpu();
 		return;
 	}
 	put_cpu();
-
-	current->thread.error_code = error_code;
-	current->thread.trap_no = 13;
 
 	if (regs->eflags & VM_MASK)
 		goto gp_in_vm86;
@@ -618,6 +631,13 @@ fastcall void __kprobes do_general_protection(struct pt_regs * regs,
 
 	current->thread.error_code = error_code;
 	current->thread.trap_no = 13;
+	if (show_unhandled_signals && unhandled_signal(current, SIGSEGV) &&
+	    printk_ratelimit())
+		printk(KERN_INFO
+		    "%s[%d] general protection eip:%lx esp:%lx error:%lx\n",
+		    current->comm, current->pid,
+		    regs->eip, regs->esp, error_code);
+
 	force_sig(SIGSEGV, current);
 	return;
 
@@ -628,6 +648,8 @@ gp_in_vm86:
 
 gp_in_kernel:
 	if (!fixup_exception(regs)) {
+		current->thread.error_code = error_code;
+		current->thread.trap_no = 13;
 		if (notify_die(DIE_GPF, "general protection fault", regs,
 				error_code, 13, SIGSEGV) == NOTIFY_STOP)
 			return;
@@ -641,6 +663,14 @@ mem_parity_error(unsigned char reason, struct pt_regs * regs)
 	printk(KERN_EMERG "Uhhuh. NMI received for unknown reason %02x on "
 		"CPU %d.\n", reason, smp_processor_id());
 	printk(KERN_EMERG "You have some hardware problem, likely on the PCI bus.\n");
+
+#if defined(CONFIG_EDAC)
+	if(edac_handler_set()) {
+		edac_atomic_assert_error();
+		return;
+	}
+#endif
+
 	if (panic_on_unrecovered_nmi)
                 panic("NMI: Not continuing");
 
@@ -758,6 +788,8 @@ static __kprobes void default_do_nmi(struct pt_regs * regs)
 	reassert_nmi();
 }
 
+static int ignore_nmis;
+
 fastcall __kprobes void do_nmi(struct pt_regs * regs, long error_code)
 {
 	int cpu;
@@ -768,9 +800,22 @@ fastcall __kprobes void do_nmi(struct pt_regs * regs, long error_code)
 
 	++nmi_count(cpu);
 
-	default_do_nmi(regs);
+	if (!ignore_nmis)
+		default_do_nmi(regs);
 
 	nmi_exit();
+}
+
+void stop_nmi(void)
+{
+	acpi_nmi_disable();
+	ignore_nmis++;
+}
+
+void restart_nmi(void)
+{
+	ignore_nmis--;
+	acpi_nmi_enable();
 }
 
 #ifdef CONFIG_KPROBES
@@ -1022,9 +1067,7 @@ fastcall void do_spurious_interrupt_bug(struct pt_regs * regs,
 fastcall unsigned long patch_espfix_desc(unsigned long uesp,
 					  unsigned long kesp)
 {
-	int cpu = smp_processor_id();
-	struct Xgt_desc_struct *cpu_gdt_descr = &per_cpu(cpu_gdt_descr, cpu);
-	struct desc_struct *gdt = (struct desc_struct *)cpu_gdt_descr->address;
+	struct desc_struct *gdt = __get_cpu_var(gdt_page).gdt;
 	unsigned long base = (kesp - uesp) & -THREAD_SIZE;
 	unsigned long new_kesp = kesp - base;
 	unsigned long lim_pages = (new_kesp | (THREAD_SIZE - 1)) >> PAGE_SHIFT;
@@ -1061,6 +1104,7 @@ asmlinkage void math_state_restore(void)
 	thread->status |= TS_USEDFPU;	/* So we fnsave on switch_to() */
 	tsk->fpu_counter++;
 }
+EXPORT_SYMBOL_GPL(math_state_restore);
 
 #ifndef CONFIG_MATH_EMULATION
 

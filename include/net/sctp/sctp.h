@@ -190,6 +190,16 @@ void sctp_assocs_proc_exit(void);
 
 
 /*
+ * Module global variables
+ */
+
+ /*
+  * sctp/protocol.c
+  */
+extern struct kmem_cache *sctp_chunk_cachep __read_mostly;
+extern struct kmem_cache *sctp_bucket_cachep __read_mostly;
+
+/*
  *  Section:  Macros, externs, and inlines
  */
 
@@ -378,11 +388,15 @@ static inline int sctp_sysctl_jiffies_ms(ctl_table *table, int __user *name, int
 
 int sctp_v6_init(void);
 void sctp_v6_exit(void);
+int sctp_v6_add_protocol(void);
+void sctp_v6_del_protocol(void);
 
 #else /* #ifdef defined(CONFIG_IPV6) */
 
 static inline int sctp_v6_init(void) { return 0; }
 static inline void sctp_v6_exit(void) { return; }
+static inline int sctp_v6_add_protocol(void) { return 0; }
+static inline void sctp_v6_del_protocol(void) { return; }
 
 #endif /* #if defined(CONFIG_IPV6) */
 
@@ -497,6 +511,13 @@ static inline int sctp_frag_point(const struct sctp_sock *sp, int pmtu)
 	frag = min_t(int, frag, SCTP_MAX_CHUNK_LEN);
 
 	return frag;
+}
+
+static inline void sctp_assoc_pending_pmtu(struct sctp_association *asoc)
+{
+
+	sctp_assoc_sync_pmtu(asoc);
+	asoc->pmtu_pending = 0;
 }
 
 /* Walk through a list of TLV parameters.  Don't trust the

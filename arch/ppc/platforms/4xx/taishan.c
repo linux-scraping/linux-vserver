@@ -30,6 +30,7 @@
 #include <linux/tty.h>
 #include <linux/serial.h>
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 #include <linux/platform_device.h>
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/nand.h>
@@ -235,7 +236,7 @@ taishan_setup_pcix(void)
 	/* Setup 2GB PCI->PLB inbound memory window at 0, enable MSIs */
 	PCIX_WRITEL(0x00000000, PCIX0_PIM0LAH);
 	PCIX_WRITEL(0x00000000, PCIX0_PIM0LAL);
-	PCIX_WRITEL(0xe0000007, PCIX0_PIM0SA);
+	PCIX_WRITEL(0x80000007, PCIX0_PIM0SA);
 	PCIX_WRITEL(0xffffffff, PCIX0_PIM0SAH);
 
 	iounmap(pcix_reg_base);

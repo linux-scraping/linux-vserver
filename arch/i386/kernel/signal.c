@@ -10,7 +10,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
@@ -200,6 +199,13 @@ asmlinkage int sys_sigreturn(unsigned long __unused)
 	return eax;
 
 badframe:
+	if (show_unhandled_signals && printk_ratelimit())
+		printk("%s%s[%d] bad frame in sigreturn frame:%p eip:%lx"
+		       " esp:%lx oeax:%lx\n",
+		    current->pid > 1 ? KERN_INFO : KERN_EMERG,
+		    current->comm, current->pid, frame, regs->eip,
+		    regs->esp, regs->orig_eax);
+
 	force_sig(SIGSEGV, current);
 	return 0;
 }	

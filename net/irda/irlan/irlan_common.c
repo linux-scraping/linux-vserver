@@ -1039,7 +1039,7 @@ static int __irlan_insert_param(struct sk_buff *skb, char *param, int type,
 	}
 
 	/* Insert at end of sk-buffer */
-	frame = skb->tail;
+	frame = skb_tail_pointer(skb);
 
 	/* Make space for data */
 	if (skb_tailroom(skb) < (param_len+value_len+3)) {
@@ -1217,7 +1217,7 @@ static int irlan_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irlan_seq_ops = {
+static const struct seq_operations irlan_seq_ops = {
 	.start = irlan_seq_start,
 	.next  = irlan_seq_next,
 	.stop  = irlan_seq_stop,

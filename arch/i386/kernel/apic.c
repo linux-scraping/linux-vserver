@@ -19,7 +19,6 @@
 #include <linux/mm.h>
 #include <linux/delay.h>
 #include <linux/bootmem.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/mc146818rtc.h>
 #include <linux/kernel_stat.h>
@@ -62,8 +61,9 @@ static int enable_local_apic __initdata = 0;
 
 /* Local APIC timer verification ok */
 static int local_apic_timer_verify_ok;
-/* Disable local APIC timer from the kernel commandline or via dmi quirk */
-static int local_apic_timer_disabled;
+/* Disable local APIC timer from the kernel commandline or via dmi quirk
+   or using CPU MSR check */
+int local_apic_timer_disabled;
 /* Local APIC timer works in C2 */
 int local_apic_timer_c2_ok;
 EXPORT_SYMBOL_GPL(local_apic_timer_c2_ok);
@@ -127,6 +127,28 @@ static int modern_apic(void)
 	    boot_cpu_data.x86 >= 0xf)
 		return 1;
 	return lapic_get_version() >= 0x14;
+}
+
+void apic_wait_icr_idle(void)
+{
+	while (apic_read(APIC_ICR) & APIC_ICR_BUSY)
+		cpu_relax();
+}
+
+unsigned long safe_apic_wait_icr_idle(void)
+{
+	unsigned long send_status;
+	int timeout;
+
+	timeout = 0;
+	do {
+		send_status = apic_read(APIC_ICR) & APIC_ICR_BUSY;
+		if (!send_status)
+			break;
+		udelay(100);
+	} while (timeout++ < 1000);
+
+	return send_status;
 }
 
 /**
@@ -242,6 +264,9 @@ static void lapic_timer_setup(enum clock_event_mode mode,
 		v |= (APIC_LVT_MASKED | LOCAL_TIMER_VECTOR);
 		apic_write_around(APIC_LVTT, v);
 		break;
+	case CLOCK_EVT_MODE_RESUME:
+		/* Nothing to do here */
+		break;
 	}
 
 	local_irq_restore(flags);
@@ -294,7 +319,7 @@ static void __devinit setup_APIC_timer(void)
 
 #define LAPIC_CAL_LOOPS		(HZ/10)
 
-static __initdata volatile int lapic_cal_loops = -1;
+static __initdata int lapic_cal_loops = -1;
 static __initdata long lapic_cal_t1, lapic_cal_t2;
 static __initdata unsigned long long lapic_cal_tsc1, lapic_cal_tsc2;
 static __initdata unsigned long lapic_cal_pm1, lapic_cal_pm2;
@@ -346,12 +371,9 @@ void __init setup_boot_APIC_clock(void)
 	long delta, deltapm;
 	int pm_referenced = 0;
 
-	if (boot_cpu_has(X86_FEATURE_LAPIC_TIMER_BROKEN))
-		local_apic_timer_disabled = 1;
-
 	/*
 	 * The local apic timer can be disabled via the kernel
-	 * commandline or from the test above. Register the lapic
+	 * commandline or from the CPU detection code. Register the lapic
 	 * timer as a dummy clock event source on SMP systems, so the
 	 * broadcast mechanism is used. On UP systems simply ignore it.
 	 */
@@ -464,7 +486,7 @@ void __init setup_boot_APIC_clock(void)
 		/* Let the interrupts run */
 		local_irq_enable();
 
-		while(lapic_cal_loops <= LAPIC_CAL_LOOPS)
+		while (lapic_cal_loops <= LAPIC_CAL_LOOPS)
 			cpu_relax();
 
 		local_irq_disable();
@@ -500,6 +522,9 @@ void __init setup_boot_APIC_clock(void)
 		 */
 		if (nmi_watchdog != NMI_IO_APIC)
 			lapic_clockevent.features &= ~CLOCK_EVT_FEAT_DUMMY;
+		else
+			printk(KERN_WARNING "APIC timer registered as dummy,"
+			       " due to nmi_watchdog=1!\n");
 	}
 
 	/* Setup the lapic or request the broadcast */
@@ -1060,7 +1085,7 @@ static int __init detect_init_APIC (void)
 	if (l & MSR_IA32_APICBASE_ENABLE)
 		mp_lapic_addr = l & MSR_IA32_APICBASE_BASE;
 
-	if (nmi_watchdog != NMI_NONE)
+	if (nmi_watchdog != NMI_NONE && nmi_watchdog != NMI_DISABLED)
 		nmi_watchdog = NMI_LOCAL_APIC;
 
 	printk(KERN_INFO "Found and enabled local APIC!\n");

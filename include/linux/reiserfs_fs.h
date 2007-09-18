@@ -81,14 +81,16 @@ void reiserfs_warning(struct super_block *s, const char *fmt, ...);
 /* assertions handling */
 
 /** always check a condition and panic if it's false. */
-#define RASSERT( cond, format, args... )					\
+#define __RASSERT( cond, scond, format, args... )					\
 if( !( cond ) ) 								\
-  reiserfs_panic( NULL, "reiserfs[%i]: assertion " #cond " failed at "	\
+  reiserfs_panic( NULL, "reiserfs[%i]: assertion " scond " failed at "	\
 		  __FILE__ ":%i:%s: " format "\n",		\
 		  in_interrupt() ? -1 : current -> pid, __LINE__ , __FUNCTION__ , ##args )
 
+#define RASSERT(cond, format, args...) __RASSERT(cond, #cond, format, ##args)
+
 #if defined( CONFIG_REISERFS_CHECK )
-#define RFALSE( cond, format, args... ) RASSERT( !( cond ), format, ##args )
+#define RFALSE(cond, format, args...) __RASSERT(!(cond), "!(" #cond ")", format, ##args)
 #else
 #define RFALSE( cond, format, args... ) do {;} while( 0 )
 #endif
@@ -834,13 +836,8 @@ struct stat_data_v1 {
 				REISERFS_COMPR_FL |	\
 				REISERFS_NOTAIL_FL )
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define REISERFS_FL_USER_VISIBLE	(REISERFS_IUNLINK_FL|0x80FF)
-#define REISERFS_FL_USER_MODIFIABLE	(REISERFS_IUNLINK_FL|0x80FF)
-#else
 #define REISERFS_FL_USER_VISIBLE	0x80FF
 #define REISERFS_FL_USER_MODIFIABLE	0x80FF
-#endif
 
 /* Stat Data on disk (reiserfs version of UFS disk inode minus the
    address blocks) */

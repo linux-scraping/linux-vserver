@@ -53,6 +53,7 @@ struct gianfar_platform_data {
 	u32	bus_id;
 	u32	phy_id;
 	u8	mac_addr[6];
+	phy_interface_t interface;
 };
 
 struct gianfar_mdio_data {
@@ -112,7 +113,7 @@ struct fsl_usb2_platform_data {
 struct fsl_spi_platform_data {
 	u32 	initial_spmode;	/* initial SPMODE value */
 	u16	bus_num;
-
+	bool	qe_mode;
 	/* board specific information */
 	u16	max_chipselect;
 	void	(*activate_cs)(u8 cs, u8 polarity);
@@ -120,44 +121,10 @@ struct fsl_spi_platform_data {
 	u32	sysclk;
 };
 
-/* Ethernet interface (phy management and speed)
-*/
-enum enet_interface {
-	ENET_10_MII,		/* 10 Base T,   MII interface */
-	ENET_10_RMII,		/* 10 Base T,  RMII interface */
-	ENET_10_RGMII,		/* 10 Base T, RGMII interface */
-	ENET_100_MII,		/* 100 Base T,   MII interface */
-	ENET_100_RMII,		/* 100 Base T,  RMII interface */
-	ENET_100_RGMII,		/* 100 Base T, RGMII interface */
-	ENET_1000_GMII,		/* 1000 Base T,  GMII interface */
-	ENET_1000_RGMII,	/* 1000 Base T, RGMII interface */
-	ENET_1000_TBI,		/* 1000 Base T,   TBI interface */
-	ENET_1000_RTBI		/* 1000 Base T,  RTBI interface */
+struct mpc8xx_pcmcia_ops {
+	void(*hw_ctrl)(int slot, int enable);
+	int(*voltage_set)(int slot, int vcc, int vpp);
 };
-
-struct ucc_geth_platform_data {
-	/* device specific information */
-	u32			device_flags;
-	u32			phy_reg_addr;
-
-	/* board specific information */
-	u32			board_flags;
-	u8			rx_clock;
-	u8			tx_clock;
-	u32			phy_id;
-	enum enet_interface	phy_interface;
-	u32			phy_interrupt;
-	u8			mac_addr[6];
-};
-
-/* Flags related to UCC Gigabit Ethernet device features */
-#define FSL_UGETH_DEV_HAS_GIGABIT		0x00000001
-#define FSL_UGETH_DEV_HAS_COALESCE		0x00000002
-#define FSL_UGETH_DEV_HAS_RMON			0x00000004
-
-/* Flags in ucc_geth_platform_data */
-#define FSL_UGETH_BRD_HAS_PHY_INTR		0x00000001
-				/* if not set use a timer */
 
 #endif /* _FSL_DEVICE_H_ */
 #endif /* __KERNEL__ */

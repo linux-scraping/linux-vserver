@@ -433,49 +433,6 @@ static int acpi_processor_perf_open_fs(struct inode *inode, struct file *file)
 			   PDE(inode)->data);
 }
 
-static ssize_t
-acpi_processor_write_performance(struct file *file,
-				 const char __user * buffer,
-				 size_t count, loff_t * data)
-{
-	int result = 0;
-	struct seq_file *m = file->private_data;
-	struct acpi_processor *pr = m->private;
-	struct acpi_processor_performance *perf;
-	char state_string[12] = { '\0' };
-	unsigned int new_state = 0;
-	struct cpufreq_policy policy;
-
-
-	if (!pr || (count > sizeof(state_string) - 1))
-		return -EINVAL;
-
-	perf = pr->performance;
-	if (!perf)
-		return -EINVAL;
-
-	if (copy_from_user(state_string, buffer, count))
-		return -EFAULT;
-
-	state_string[count] = '\0';
-	new_state = simple_strtoul(state_string, NULL, 0);
-
-	if (new_state >= perf->state_count)
-		return -EINVAL;
-
-	cpufreq_get_policy(&policy, pr->id);
-
-	policy.cpu = pr->id;
-	policy.min = perf->states[new_state].core_frequency * 1000;
-	policy.max = perf->states[new_state].core_frequency * 1000;
-
-	result = cpufreq_set_policy(&policy);
-	if (result)
-		return result;
-
-	return count;
-}
-
 static void acpi_cpufreq_add_file(struct acpi_processor *pr)
 {
 	struct proc_dir_entry *entry = NULL;
@@ -487,10 +444,9 @@ static void acpi_cpufreq_add_file(struct acpi_processor *pr)
 
 	/* add file 'performance' [R/W] */
 	entry = create_proc_entry(ACPI_PROCESSOR_FILE_PERFORMANCE,
-				  S_IFREG | S_IRUGO | S_IWUSR,
+				  S_IFREG | S_IRUGO,
 				  acpi_device_dir(device));
 	if (entry){
-		acpi_processor_perf_fops.write = acpi_processor_write_performance;
 		entry->proc_fops = &acpi_processor_perf_fops;
 		entry->data = acpi_driver_data(device);
 		entry->owner = THIS_MODULE;
@@ -583,7 +539,7 @@ end:
 }
 
 int acpi_processor_preregister_performance(
-		struct acpi_processor_performance **performance)
+		struct acpi_processor_performance *performance)
 {
 	int count, count_target;
 	int retval = 0;
@@ -611,12 +567,12 @@ int acpi_processor_preregister_performance(
 			continue;
 		}
 
-		if (!performance || !performance[i]) {
+		if (!performance || !percpu_ptr(performance, i)) {
 			retval = -EINVAL;
 			continue;
 		}
 
-		pr->performance = performance[i];
+		pr->performance = percpu_ptr(performance, i);
 		cpu_set(i, pr->performance->shared_cpu_map);
 		if (acpi_processor_get_psd(pr)) {
 			retval = -EINVAL;

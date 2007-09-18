@@ -98,8 +98,11 @@ static u8 opcode_table[256] = {
 	0, 0, 0, 0,
 	/* 0x40 - 0x4F */
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	/* 0x50 - 0x5F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* 0x50 - 0x57 */
+	0, 0, 0, 0, 0, 0, 0, 0,
+	/* 0x58 - 0x5F */
+	ImplicitOps, ImplicitOps, ImplicitOps, ImplicitOps,
+	ImplicitOps, ImplicitOps, ImplicitOps, ImplicitOps,
 	/* 0x60 - 0x6F */
 	0, 0, 0, DstReg | SrcMem32 | ModRM | Mov /* movsxd (x86/64) */ ,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -128,9 +131,9 @@ static u8 opcode_table[256] = {
 	/* 0xB0 - 0xBF */
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0xC0 - 0xC7 */
-	ByteOp | DstMem | SrcImm | ModRM, DstMem | SrcImmByte | ModRM, 0, 0,
-	0, 0, ByteOp | DstMem | SrcImm | ModRM | Mov,
-	    DstMem | SrcImm | ModRM | Mov,
+	ByteOp | DstMem | SrcImm | ModRM, DstMem | SrcImmByte | ModRM,
+	0, ImplicitOps, 0, 0,
+	ByteOp | DstMem | SrcImm | ModRM | Mov, DstMem | SrcImm | ModRM | Mov,
 	/* 0xC8 - 0xCF */
 	0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0xD0 - 0xD7 */
@@ -143,7 +146,8 @@ static u8 opcode_table[256] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0xF0 - 0xF7 */
 	0, 0, 0, 0,
-	0, 0, ByteOp | DstMem | SrcNone | ModRM, DstMem | SrcNone | ModRM,
+	ImplicitOps, 0,
+	ByteOp | DstMem | SrcNone | ModRM, DstMem | SrcNone | ModRM,
 	/* 0xF8 - 0xFF */
 	0, 0, 0, 0,
 	0, 0, ByteOp | DstMem | SrcNone | ModRM, DstMem | SrcNone | ModRM
@@ -152,14 +156,14 @@ static u8 opcode_table[256] = {
 static u16 twobyte_table[256] = {
 	/* 0x00 - 0x0F */
 	0, SrcMem | ModRM | DstReg, 0, 0, 0, 0, ImplicitOps, 0,
-	0, 0, 0, 0, 0, ImplicitOps | ModRM, 0, 0,
+	0, ImplicitOps, 0, 0, 0, ImplicitOps | ModRM, 0, 0,
 	/* 0x10 - 0x1F */
 	0, 0, 0, 0, 0, 0, 0, 0, ImplicitOps | ModRM, 0, 0, 0, 0, 0, 0, 0,
 	/* 0x20 - 0x2F */
 	ModRM | ImplicitOps, ModRM, ModRM | ImplicitOps, ModRM, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0x30 - 0x3F */
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	ImplicitOps, 0, ImplicitOps, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0x40 - 0x47 */
 	DstReg | SrcMem | ModRM | Mov, DstReg | SrcMem | ModRM | Mov,
 	DstReg | SrcMem | ModRM | Mov, DstReg | SrcMem | ModRM | Mov,
@@ -481,6 +485,8 @@ x86_emulate_memop(struct x86_emulate_ctxt *ctxt, struct x86_emulate_ops *ops)
 	int mode = ctxt->mode;
 	unsigned long modrm_ea;
 	int use_modrm_ea, index_reg = 0, base_reg = 0, scale, rip_relative = 0;
+	int no_wb = 0;
+	u64 msr_data;
 
 	/* Shadow copy of register state. Committed on successful emulation. */
 	unsigned long _regs[NR_VCPU_REGS];
@@ -833,8 +839,9 @@ done_prefixes:
 		dst.ptr = (unsigned long *)cr2;
 		dst.bytes = (d & ByteOp) ? 1 : op_bytes;
 		if (d & BitOp) {
-			dst.ptr += src.val / BITS_PER_LONG;
-			dst.bytes = sizeof(long);
+			unsigned long mask = ~(dst.bytes * 8 - 1);
+
+			dst.ptr = (void *)dst.ptr + (src.val & mask) / 8;
 		}
 		if (!(d & Mov) && /* optimisation - avoid slow emulated read */
 		    ((rc = ops->read_emulated((unsigned long)dst.ptr,
@@ -1044,9 +1051,9 @@ done_prefixes:
 			if ((rc = ops->write_std(
 				     register_address(ctxt->ss_base,
 						      _regs[VCPU_REGS_RSP]),
-				     dst.val, dst.bytes, ctxt)) != 0)
+				     &dst.val, dst.bytes, ctxt)) != 0)
 				goto done;
-			dst.val = dst.orig_val;	/* skanky: disable writeback */
+			no_wb = 1;
 			break;
 		default:
 			goto cannot_emulate;
@@ -1055,7 +1062,7 @@ done_prefixes:
 	}
 
 writeback:
-	if ((d & Mov) || (dst.orig_val != dst.val)) {
+	if (!no_wb) {
 		switch (dst.type) {
 		case OP_REG:
 			/* The 4-byte case *is* correct: in 64-bit mode we zero-extend. */
@@ -1077,12 +1084,12 @@ writeback:
 		case OP_MEM:
 			if (lock_prefix)
 				rc = ops->cmpxchg_emulated((unsigned long)dst.
-							   ptr, dst.orig_val,
-							   dst.val, dst.bytes,
+							   ptr, &dst.orig_val,
+							   &dst.val, dst.bytes,
 							   ctxt);
 			else
 				rc = ops->write_emulated((unsigned long)dst.ptr,
-							 dst.val, dst.bytes,
+							 &dst.val, dst.bytes,
 							 ctxt);
 			if (rc != 0)
 				goto done;
@@ -1148,12 +1155,31 @@ special_insn:
 	case 0xae ... 0xaf:	/* scas */
 		DPRINTF("Urk! I don't handle SCAS.\n");
 		goto cannot_emulate;
+	case 0xf4:              /* hlt */
+		ctxt->vcpu->halt_request = 1;
+		goto done;
+	case 0xc3: /* ret */
+		dst.ptr = &_eip;
+		goto pop_instruction;
+	case 0x58 ... 0x5f: /* pop reg */
+		dst.ptr = (unsigned long *)&_regs[b & 0x7];
+
+pop_instruction:
+		if ((rc = ops->read_std(register_address(ctxt->ss_base,
+			_regs[VCPU_REGS_RSP]), dst.ptr, op_bytes, ctxt)) != 0)
+			goto done;
+
+		register_address_increment(_regs[VCPU_REGS_RSP], op_bytes);
+		no_wb = 1; /* Disable writeback. */
+		break;
 	}
 	goto writeback;
 
 twobyte_insn:
 	switch (b) {
 	case 0x01: /* lgdt, lidt, lmsw */
+		/* Disable writeback. */
+		no_wb = 1;
 		switch (modrm_reg) {
 			u16 size;
 			unsigned long address;
@@ -1191,11 +1217,13 @@ twobyte_insn:
 		}
 		break;
 	case 0x21: /* mov from dr to reg */
+		no_wb = 1;
 		if (modrm_mod != 3)
 			goto cannot_emulate;
 		rc = emulator_get_dr(ctxt, modrm_reg, &_regs[modrm_rm]);
 		break;
 	case 0x23: /* mov from reg to dr */
+		no_wb = 1;
 		if (modrm_mod != 3)
 			goto cannot_emulate;
 		rc = emulator_set_dr(ctxt, modrm_reg, _regs[modrm_rm]);
@@ -1301,8 +1329,10 @@ twobyte_insn:
 
 twobyte_special_insn:
 	/* Disable writeback. */
-	dst.orig_val = dst.val;
+	no_wb = 1;
 	switch (b) {
+	case 0x09:		/* wbinvd */
+		break;
 	case 0x0d:		/* GrpP (prefetch) */
 	case 0x18:		/* Grp16 (prefetch/nop) */
 		break;
@@ -1319,37 +1349,32 @@ twobyte_special_insn:
 			goto cannot_emulate;
 		realmode_set_cr(ctxt->vcpu, modrm_reg, modrm_val, &_eflags);
 		break;
-	case 0xc7:		/* Grp9 (cmpxchg8b) */
-#if defined(__i386__)
-		{
-			unsigned long old_lo, old_hi;
-			if (((rc = ops->read_emulated(cr2 + 0, &old_lo, 4,
-						      ctxt)) != 0)
-			    || ((rc = ops->read_emulated(cr2 + 4, &old_hi, 4,
-							 ctxt)) != 0))
-				goto done;
-			if ((old_lo != _regs[VCPU_REGS_RAX])
-			    || (old_hi != _regs[VCPU_REGS_RDX])) {
-				_regs[VCPU_REGS_RAX] = old_lo;
-				_regs[VCPU_REGS_RDX] = old_hi;
-				_eflags &= ~EFLG_ZF;
-			} else if (ops->cmpxchg8b_emulated == NULL) {
-				rc = X86EMUL_UNHANDLEABLE;
-				goto done;
-			} else {
-				if ((rc = ops->cmpxchg8b_emulated(cr2, old_lo,
-							  old_hi,
-							  _regs[VCPU_REGS_RBX],
-							  _regs[VCPU_REGS_RCX],
-							  ctxt)) != 0)
-					goto done;
-				_eflags |= EFLG_ZF;
-			}
-			break;
+	case 0x30:
+		/* wrmsr */
+		msr_data = (u32)_regs[VCPU_REGS_RAX]
+			| ((u64)_regs[VCPU_REGS_RDX] << 32);
+		rc = kvm_set_msr(ctxt->vcpu, _regs[VCPU_REGS_RCX], msr_data);
+		if (rc) {
+			kvm_arch_ops->inject_gp(ctxt->vcpu, 0);
+			_eip = ctxt->vcpu->rip;
 		}
-#elif defined(CONFIG_X86_64)
+		rc = X86EMUL_CONTINUE;
+		break;
+	case 0x32:
+		/* rdmsr */
+		rc = kvm_get_msr(ctxt->vcpu, _regs[VCPU_REGS_RCX], &msr_data);
+		if (rc) {
+			kvm_arch_ops->inject_gp(ctxt->vcpu, 0);
+			_eip = ctxt->vcpu->rip;
+		} else {
+			_regs[VCPU_REGS_RAX] = (u32)msr_data;
+			_regs[VCPU_REGS_RDX] = msr_data >> 32;
+		}
+		rc = X86EMUL_CONTINUE;
+		break;
+	case 0xc7:		/* Grp9 (cmpxchg8b) */
 		{
-			unsigned long old, new;
+			u64 old, new;
 			if ((rc = ops->read_emulated(cr2, &old, 8, ctxt)) != 0)
 				goto done;
 			if (((u32) (old >> 0) != (u32) _regs[VCPU_REGS_RAX]) ||
@@ -1358,15 +1383,15 @@ twobyte_special_insn:
 				_regs[VCPU_REGS_RDX] = (u32) (old >> 32);
 				_eflags &= ~EFLG_ZF;
 			} else {
-				new = (_regs[VCPU_REGS_RCX] << 32) | (u32) _regs[VCPU_REGS_RBX];
-				if ((rc = ops->cmpxchg_emulated(cr2, old,
-							  new, 8, ctxt)) != 0)
+				new = ((u64)_regs[VCPU_REGS_RCX] << 32)
+					| (u32) _regs[VCPU_REGS_RBX];
+				if ((rc = ops->cmpxchg_emulated(cr2, &old,
+							  &new, 8, ctxt)) != 0)
 					goto done;
 				_eflags |= EFLG_ZF;
 			}
 			break;
 		}
-#endif
 	}
 	goto writeback;
 

@@ -62,7 +62,7 @@ enum
 	CTL_KERN=1,		/* General kernel info and control */
 	CTL_VM=2,		/* VM management */
 	CTL_NET=3,		/* Networking */
-	/* was CTL_PROC */
+	CTL_PROC=4,		/* removal breaks strace(1) compilation */
 	CTL_FS=5,		/* Filesystems */
 	CTL_DEBUG=6,		/* Debugging */
 	CTL_DEV=7,		/* Devices */
@@ -291,6 +291,7 @@ enum
 	NET_CORE_BUDGET=19,
 	NET_CORE_AEVENT_ETIME=20,
 	NET_CORE_AEVENT_RSEQTH=21,
+	NET_CORE_WARNINGS=22,
 };
 
 /* /proc/sys/net/ethernet */
@@ -439,6 +440,8 @@ enum
 	NET_CIPSOV4_RBM_STRICTVALID=121,
 	NET_TCP_AVAIL_CONG_CONTROL=122,
 	NET_TCP_ALLOWED_CONG_CONTROL=123,
+	NET_TCP_MAX_SSTHRESH=124,
+	NET_TCP_FRTO_RESPONSE=125,
 };
 
 enum {
@@ -790,6 +793,7 @@ enum {
 	NET_BRIDGE_NF_CALL_IPTABLES = 2,
 	NET_BRIDGE_NF_CALL_IP6TABLES = 3,
 	NET_BRIDGE_NF_FILTER_VLAN_TAGGED = 4,
+	NET_BRIDGE_NF_FILTER_PPPOE_TAGGED = 5,
 };
 
 /* CTL_FS names: */

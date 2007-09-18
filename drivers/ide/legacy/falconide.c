@@ -8,6 +8,7 @@
  *  more details.
  */
 
+#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
@@ -54,6 +55,7 @@ static int falconide_offsets[IDE_NR_PORTS] __initdata = {
      */
 
 int falconide_intr_lock;
+EXPORT_SYMBOL(falconide_intr_lock);
 
 
     /*
@@ -70,7 +72,7 @@ void __init falconide_init(void)
 			0, 0, NULL,
 //			falconide_iops,
 			IRQ_MFP_IDE);
-	index = ide_register_hw(&hw, NULL);
+	index = ide_register_hw(&hw, 1, NULL);
 
 	if (index != -1)
 	    printk("ide%d: Falcon IDE interface\n", index);

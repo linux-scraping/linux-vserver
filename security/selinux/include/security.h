@@ -34,13 +34,14 @@
 #define POLICYDB_VERSION_MAX	POLICYDB_VERSION_RANGETRANS
 #endif
 
-struct sk_buff;
+struct netlbl_lsm_secattr;
 
 extern int selinux_enabled;
 extern int selinux_mls_enabled;
 
 int security_load_policy(void * data, size_t len);
 
+#define SEL_VEC_MAX 32
 struct av_decision {
 	u32 allowed;
 	u32 decided;
@@ -82,12 +83,13 @@ int security_netif_sid(char *name, u32 *if_sid,
 int security_node_sid(u16 domain, void *addr, u32 addrlen,
 	u32 *out_sid);
 
-void security_skb_extlbl_sid(struct sk_buff *skb, u32 base_sid, u32 *sid);
-
 int security_validate_transition(u32 oldsid, u32 newsid, u32 tasksid,
                                  u16 tclass);
 
 int security_sid_mls_copy(u32 sid, u32 mls_sid, u32 *new_sid);
+
+int security_get_classes(char ***classes, int *nclasses);
+int security_get_permissions(char *class, char ***perms, int *nperms);
 
 #define SECURITY_FS_USE_XATTR		1 /* use xattr */
 #define SECURITY_FS_USE_TRANS		2 /* use transition SIDs, e.g. devpts/tmpfs */
@@ -101,6 +103,31 @@ int security_fs_use(const char *fstype, unsigned int *behavior,
 
 int security_genfs_sid(const char *fstype, char *name, u16 sclass,
 	u32 *sid);
+
+#ifdef CONFIG_NETLABEL
+int security_netlbl_secattr_to_sid(struct netlbl_lsm_secattr *secattr,
+				   u32 base_sid,
+				   u32 *sid);
+
+int security_netlbl_sid_to_secattr(u32 sid,
+				   struct netlbl_lsm_secattr *secattr);
+#else
+static inline int security_netlbl_secattr_to_sid(
+					    struct netlbl_lsm_secattr *secattr,
+					    u32 base_sid,
+					    u32 *sid)
+{
+	return -EIDRM;
+}
+
+static inline int security_netlbl_sid_to_secattr(u32 sid,
+					   struct netlbl_lsm_secattr *secattr)
+{
+	return -ENOENT;
+}
+#endif /* CONFIG_NETLABEL */
+
+const char *security_get_initial_sid_context(u32 sid);
 
 #endif /* _SELINUX_SECURITY_H_ */
 

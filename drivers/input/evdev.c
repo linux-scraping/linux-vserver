@@ -18,7 +18,6 @@
 #include <linux/init.h>
 #include <linux/input.h>
 #include <linux/major.h>
-#include <linux/smp_lock.h>
 #include <linux/device.h>
 #include <linux/compat.h>
 
@@ -29,11 +28,12 @@ struct evdev {
 	char name[16];
 	struct input_handle handle;
 	wait_queue_head_t wait;
-	struct evdev_list *grab;
-	struct list_head list;
+	struct evdev_client *grab;
+	struct list_head client_list;
+	struct device dev;
 };
 
-struct evdev_list {
+struct evdev_client {
 	struct input_event buffer[EVDEV_BUFFER_SIZE];
 	int head;
 	int tail;
@@ -47,28 +47,28 @@ static struct evdev *evdev_table[EVDEV_MINORS];
 static void evdev_event(struct input_handle *handle, unsigned int type, unsigned int code, int value)
 {
 	struct evdev *evdev = handle->private;
-	struct evdev_list *list;
+	struct evdev_client *client;
 
 	if (evdev->grab) {
-		list = evdev->grab;
+		client = evdev->grab;
 
-		do_gettimeofday(&list->buffer[list->head].time);
-		list->buffer[list->head].type = type;
-		list->buffer[list->head].code = code;
-		list->buffer[list->head].value = value;
-		list->head = (list->head + 1) & (EVDEV_BUFFER_SIZE - 1);
+		do_gettimeofday(&client->buffer[client->head].time);
+		client->buffer[client->head].type = type;
+		client->buffer[client->head].code = code;
+		client->buffer[client->head].value = value;
+		client->head = (client->head + 1) & (EVDEV_BUFFER_SIZE - 1);
 
-		kill_fasync(&list->fasync, SIGIO, POLL_IN);
+		kill_fasync(&client->fasync, SIGIO, POLL_IN);
 	} else
-		list_for_each_entry(list, &evdev->list, node) {
+		list_for_each_entry(client, &evdev->client_list, node) {
 
-			do_gettimeofday(&list->buffer[list->head].time);
-			list->buffer[list->head].type = type;
-			list->buffer[list->head].code = code;
-			list->buffer[list->head].value = value;
-			list->head = (list->head + 1) & (EVDEV_BUFFER_SIZE - 1);
+			do_gettimeofday(&client->buffer[client->head].time);
+			client->buffer[client->head].type = type;
+			client->buffer[client->head].code = code;
+			client->buffer[client->head].value = value;
+			client->head = (client->head + 1) & (EVDEV_BUFFER_SIZE - 1);
 
-			kill_fasync(&list->fasync, SIGIO, POLL_IN);
+			kill_fasync(&client->fasync, SIGIO, POLL_IN);
 		}
 
 	wake_up_interruptible(&evdev->wait);
@@ -76,73 +76,96 @@ static void evdev_event(struct input_handle *handle, unsigned int type, unsigned
 
 static int evdev_fasync(int fd, struct file *file, int on)
 {
+	struct evdev_client *client = file->private_data;
 	int retval;
-	struct evdev_list *list = file->private_data;
 
-	retval = fasync_helper(fd, file, on, &list->fasync);
+	retval = fasync_helper(fd, file, on, &client->fasync);
 
 	return retval < 0 ? retval : 0;
 }
 
 static int evdev_flush(struct file *file, fl_owner_t id)
 {
-	struct evdev_list *list = file->private_data;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 
-	if (!list->evdev->exist)
+	if (!evdev->exist)
 		return -ENODEV;
 
-	return input_flush_device(&list->evdev->handle, file);
+	return input_flush_device(&evdev->handle, file);
 }
 
-static void evdev_free(struct evdev *evdev)
+static void evdev_free(struct device *dev)
 {
+	struct evdev *evdev = container_of(dev, struct evdev, dev);
+
 	evdev_table[evdev->minor] = NULL;
 	kfree(evdev);
 }
 
-static int evdev_release(struct inode * inode, struct file * file)
+static int evdev_release(struct inode *inode, struct file *file)
 {
-	struct evdev_list *list = file->private_data;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 
-	if (list->evdev->grab == list) {
-		input_release_device(&list->evdev->handle);
-		list->evdev->grab = NULL;
+	if (evdev->grab == client) {
+		input_release_device(&evdev->handle);
+		evdev->grab = NULL;
 	}
 
 	evdev_fasync(-1, file, 0);
-	list_del(&list->node);
+	list_del(&client->node);
+	kfree(client);
 
-	if (!--list->evdev->open) {
-		if (list->evdev->exist)
-			input_close_device(&list->evdev->handle);
-		else
-			evdev_free(list->evdev);
-	}
+	if (!--evdev->open && evdev->exist)
+		input_close_device(&evdev->handle);
 
-	kfree(list);
+	put_device(&evdev->dev);
+
 	return 0;
 }
 
-static int evdev_open(struct inode * inode, struct file * file)
+static int evdev_open(struct inode *inode, struct file *file)
 {
-	struct evdev_list *list;
+	struct evdev_client *client;
+	struct evdev *evdev;
 	int i = iminor(inode) - EVDEV_MINOR_BASE;
+	int error;
 
-	if (i >= EVDEV_MINORS || !evdev_table[i] || !evdev_table[i]->exist)
+	if (i >= EVDEV_MINORS)
 		return -ENODEV;
 
-	if (!(list = kzalloc(sizeof(struct evdev_list), GFP_KERNEL)))
-		return -ENOMEM;
+	evdev = evdev_table[i];
 
-	list->evdev = evdev_table[i];
-	list_add_tail(&list->node, &evdev_table[i]->list);
-	file->private_data = list;
+	if (!evdev || !evdev->exist)
+		return -ENODEV;
 
-	if (!list->evdev->open++)
-		if (list->evdev->exist)
-			input_open_device(&list->evdev->handle);
+	get_device(&evdev->dev);
 
+	client = kzalloc(sizeof(struct evdev_client), GFP_KERNEL);
+	if (!client) {
+		error = -ENOMEM;
+		goto err_put_evdev;
+	}
+
+	client->evdev = evdev;
+	list_add_tail(&client->node, &evdev->client_list);
+
+	if (!evdev->open++ && evdev->exist) {
+		error = input_open_device(&evdev->handle);
+		if (error)
+			goto err_free_client;
+	}
+
+	file->private_data = client;
 	return 0;
+
+ err_free_client:
+	list_del(&client->node);
+	kfree(client);
+ err_put_evdev:
+	put_device(&evdev->dev);
+	return error;
 }
 
 #ifdef CONFIG_COMPAT
@@ -163,7 +186,7 @@ struct input_event_compat {
 #elif defined(CONFIG_S390)
 #  define COMPAT_TEST test_thread_flag(TIF_31BIT)
 #elif defined(CONFIG_MIPS)
-#  define COMPAT_TEST (current->thread.mflags & MF_32BIT_ADDR)
+#  define COMPAT_TEST test_thread_flag(TIF_32BIT_ADDR)
 #else
 #  define COMPAT_TEST test_thread_flag(TIF_32BIT)
 #endif
@@ -243,54 +266,55 @@ static int evdev_event_to_user(char __user *buffer, const struct input_event *ev
 
 #endif /* CONFIG_COMPAT */
 
-static ssize_t evdev_write(struct file * file, const char __user * buffer, size_t count, loff_t *ppos)
+static ssize_t evdev_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
 {
-	struct evdev_list *list = file->private_data;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 	struct input_event event;
 	int retval = 0;
 
-	if (!list->evdev->exist)
+	if (!evdev->exist)
 		return -ENODEV;
 
 	while (retval < count) {
 
 		if (evdev_event_from_user(buffer + retval, &event))
 			return -EFAULT;
-		input_inject_event(&list->evdev->handle, event.type, event.code, event.value);
+		input_inject_event(&evdev->handle, event.type, event.code, event.value);
 		retval += evdev_event_size();
 	}
 
 	return retval;
 }
 
-static ssize_t evdev_read(struct file * file, char __user * buffer, size_t count, loff_t *ppos)
+static ssize_t evdev_read(struct file *file, char __user *buffer, size_t count, loff_t *ppos)
 {
-	struct evdev_list *list = file->private_data;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 	int retval;
 
 	if (count < evdev_event_size())
 		return -EINVAL;
 
-	if (list->head == list->tail && list->evdev->exist && (file->f_flags & O_NONBLOCK))
+	if (client->head == client->tail && evdev->exist && (file->f_flags & O_NONBLOCK))
 		return -EAGAIN;
 
-	retval = wait_event_interruptible(list->evdev->wait,
-		list->head != list->tail || (!list->evdev->exist));
-
+	retval = wait_event_interruptible(evdev->wait,
+		client->head != client->tail || !evdev->exist);
 	if (retval)
 		return retval;
 
-	if (!list->evdev->exist)
+	if (!evdev->exist)
 		return -ENODEV;
 
-	while (list->head != list->tail && retval + evdev_event_size() <= count) {
+	while (client->head != client->tail && retval + evdev_event_size() <= count) {
 
-		struct input_event *event = (struct input_event *) list->buffer + list->tail;
+		struct input_event *event = (struct input_event *) client->buffer + client->tail;
 
 		if (evdev_event_to_user(buffer + retval, event))
 			return -EFAULT;
 
-		list->tail = (list->tail + 1) & (EVDEV_BUFFER_SIZE - 1);
+		client->tail = (client->tail + 1) & (EVDEV_BUFFER_SIZE - 1);
 		retval += evdev_event_size();
 	}
 
@@ -300,11 +324,12 @@ static ssize_t evdev_read(struct file * file, char __user * buffer, size_t count
 /* No kernel lock - fine */
 static unsigned int evdev_poll(struct file *file, poll_table *wait)
 {
-	struct evdev_list *list = file->private_data;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 
-	poll_wait(file, &list->evdev->wait, wait);
-	return ((list->head == list->tail) ? 0 : (POLLIN | POLLRDNORM)) |
-		(list->evdev->exist ? 0 : (POLLHUP | POLLERR));
+	poll_wait(file, &evdev->wait, wait);
+	return ((client->head == client->tail) ? 0 : (POLLIN | POLLRDNORM)) |
+		(evdev->exist ? 0 : (POLLHUP | POLLERR));
 }
 
 #ifdef CONFIG_COMPAT
@@ -320,7 +345,7 @@ static int bits_to_user(unsigned long *bits, unsigned int maxbit,
 
 	if (compat) {
 		len = NBITS_COMPAT(maxbit) * sizeof(compat_long_t);
-		if (len < maxlen)
+		if (len > maxlen)
 			len = maxlen;
 
 		for (i = 0; i < len / sizeof(compat_long_t); i++)
@@ -387,8 +412,8 @@ static int str_to_user(const char *str, unsigned int maxlen, void __user *p)
 static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 				void __user *p, int compat_mode)
 {
-	struct evdev_list *list = file->private_data;
-	struct evdev *evdev = list->evdev;
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
 	struct input_dev *dev = evdev->handle.dev;
 	struct input_absinfo abs;
 	struct ff_effect effect;
@@ -434,32 +459,21 @@ static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 		case EVIOCGKEYCODE:
 			if (get_user(t, ip))
 				return -EFAULT;
-			if (t < 0 || t >= dev->keycodemax || !dev->keycodesize)
-				return -EINVAL;
-			if (put_user(INPUT_KEYCODE(dev, t), ip + 1))
+
+			error = dev->getkeycode(dev, t, &v);
+			if (error)
+				return error;
+
+			if (put_user(v, ip + 1))
 				return -EFAULT;
+
 			return 0;
 
 		case EVIOCSKEYCODE:
-			if (get_user(t, ip))
+			if (get_user(t, ip) || get_user(v, ip + 1))
 				return -EFAULT;
-			if (t < 0 || t >= dev->keycodemax || !dev->keycodesize)
-				return -EINVAL;
-			if (get_user(v, ip + 1))
-				return -EFAULT;
-			if (v < 0 || v > KEY_MAX)
-				return -EINVAL;
-			if (dev->keycodesize < sizeof(v) && (v >> (dev->keycodesize * 8)))
-				return -EINVAL;
 
-			u = SET_INPUT_KEYCODE(dev, t, v);
-			clear_bit(u, dev->keybit);
-			set_bit(v, dev->keybit);
-			for (i = 0; i < dev->keycodemax; i++)
-				if (INPUT_KEYCODE(dev, i) == u)
-					set_bit(u, dev->keybit);
-
-			return 0;
+			return dev->setkeycode(dev, t, v);
 
 		case EVIOCSFF:
 			if (copy_from_user(&effect, p, sizeof(effect)))
@@ -487,10 +501,10 @@ static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 					return -EBUSY;
 				if (input_grab_device(&evdev->handle))
 					return -EBUSY;
-				evdev->grab = list;
+				evdev->grab = client;
 				return 0;
 			} else {
-				if (evdev->grab != list)
+				if (evdev->grab != client)
 					return -EINVAL;
 				input_release_device(&evdev->handle);
 				evdev->grab = NULL;
@@ -506,7 +520,7 @@ static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 
 				if ((_IOC_NR(cmd) & ~EV_MAX) == _IOC_NR(EVIOCGBIT(0,0))) {
 
-					long *bits;
+					unsigned long *bits;
 					int len;
 
 					switch (_IOC_NR(cmd) & EV_MAX) {
@@ -551,7 +565,7 @@ static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 
 				if ((_IOC_NR(cmd) & ~ABS_MAX) == _IOC_NR(EVIOCGABS(0))) {
 
-					int t = _IOC_NR(cmd) & ABS_MAX;
+					t = _IOC_NR(cmd) & ABS_MAX;
 
 					abs.value = dev->abs[t];
 					abs.minimum = dev->absmin[t];
@@ -571,7 +585,7 @@ static long evdev_ioctl_handler(struct file *file, unsigned int cmd,
 
 				if ((_IOC_NR(cmd) & ~ABS_MAX) == _IOC_NR(EVIOCSABS(0))) {
 
-					int t = _IOC_NR(cmd) & ABS_MAX;
+					t = _IOC_NR(cmd) & ABS_MAX;
 
 					if (copy_from_user(&abs, p, sizeof(struct input_absinfo)))
 						return -EFAULT;
@@ -616,23 +630,24 @@ static const struct file_operations evdev_fops = {
 	.flush =	evdev_flush
 };
 
-static struct input_handle *evdev_connect(struct input_handler *handler, struct input_dev *dev,
-					  const struct input_device_id *id)
+static int evdev_connect(struct input_handler *handler, struct input_dev *dev,
+			 const struct input_device_id *id)
 {
 	struct evdev *evdev;
-	struct class_device *cdev;
 	int minor;
+	int error;
 
 	for (minor = 0; minor < EVDEV_MINORS && evdev_table[minor]; minor++);
 	if (minor == EVDEV_MINORS) {
 		printk(KERN_ERR "evdev: no more free evdev devices\n");
-		return NULL;
+		return -ENFILE;
 	}
 
-	if (!(evdev = kzalloc(sizeof(struct evdev), GFP_KERNEL)))
-		return NULL;
+	evdev = kzalloc(sizeof(struct evdev), GFP_KERNEL);
+	if (!evdev)
+		return -ENOMEM;
 
-	INIT_LIST_HEAD(&evdev->list);
+	INIT_LIST_HEAD(&evdev->client_list);
 	init_waitqueue_head(&evdev->wait);
 
 	evdev->exist = 1;
@@ -641,39 +656,54 @@ static struct input_handle *evdev_connect(struct input_handler *handler, struct 
 	evdev->handle.name = evdev->name;
 	evdev->handle.handler = handler;
 	evdev->handle.private = evdev;
-	sprintf(evdev->name, "event%d", minor);
+	snprintf(evdev->name, sizeof(evdev->name), "event%d", minor);
+
+	snprintf(evdev->dev.bus_id, sizeof(evdev->dev.bus_id),
+		 "event%d", minor);
+	evdev->dev.class = &input_class;
+	evdev->dev.parent = &dev->dev;
+	evdev->dev.devt = MKDEV(INPUT_MAJOR, EVDEV_MINOR_BASE + minor);
+	evdev->dev.release = evdev_free;
+	device_initialize(&evdev->dev);
 
 	evdev_table[minor] = evdev;
 
-	cdev = class_device_create(&input_class, &dev->cdev,
-			MKDEV(INPUT_MAJOR, EVDEV_MINOR_BASE + minor),
-			dev->cdev.dev, evdev->name);
+	error = device_add(&evdev->dev);
+	if (error)
+		goto err_free_evdev;
 
-	/* temporary symlink to keep userspace happy */
-	sysfs_create_link(&input_class.subsys.kset.kobj, &cdev->kobj,
-			  evdev->name);
+	error = input_register_handle(&evdev->handle);
+	if (error)
+		goto err_delete_evdev;
 
-	return &evdev->handle;
+	return 0;
+
+ err_delete_evdev:
+	device_del(&evdev->dev);
+ err_free_evdev:
+	put_device(&evdev->dev);
+	return error;
 }
 
 static void evdev_disconnect(struct input_handle *handle)
 {
 	struct evdev *evdev = handle->private;
-	struct evdev_list *list;
+	struct evdev_client *client;
 
-	sysfs_remove_link(&input_class.subsys.kset.kobj, evdev->name);
-	class_device_destroy(&input_class,
-			MKDEV(INPUT_MAJOR, EVDEV_MINOR_BASE + evdev->minor));
+	input_unregister_handle(handle);
+	device_del(&evdev->dev);
+
 	evdev->exist = 0;
 
 	if (evdev->open) {
 		input_flush_device(handle, NULL);
 		input_close_device(handle);
+		list_for_each_entry(client, &evdev->client_list, node)
+			kill_fasync(&client->fasync, SIGIO, POLL_HUP);
 		wake_up_interruptible(&evdev->wait);
-		list_for_each_entry(list, &evdev->list, node)
-			kill_fasync(&list->fasync, SIGIO, POLL_HUP);
-	} else
-		evdev_free(evdev);
+	}
+
+	put_device(&evdev->dev);
 }
 
 static const struct input_device_id evdev_ids[] = {

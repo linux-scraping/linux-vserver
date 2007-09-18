@@ -136,11 +136,11 @@ static int __init configfs_init(void)
 
 	configfs_dir_cachep = kmem_cache_create("configfs_dir_cache",
 						sizeof(struct configfs_dirent),
-						0, 0, NULL, NULL);
+						0, 0, NULL);
 	if (!configfs_dir_cachep)
 		goto out;
 
-	kset_set_kset_s(&config_subsys, kernel_subsys);
+	kobj_set_kset_s(&config_subsys, kernel_subsys);
 	err = subsystem_register(&config_subsys);
 	if (err) {
 		kmem_cache_destroy(configfs_dir_cachep);

@@ -28,6 +28,7 @@
 extern void gpio_line_config(int line, int direction);
 extern int  gpio_line_get(int line);
 extern void gpio_line_set(int line, int value);
+extern int init_atu;
 #endif
 
 
@@ -41,7 +42,7 @@ extern void gpio_line_set(int line, int value);
 					IOP3XX_PERIPHERAL_SIZE - 1)
 #define IOP3XX_PERIPHERAL_UPPER_VA (IOP3XX_PERIPHERAL_VIRT_BASE +\
 					IOP3XX_PERIPHERAL_SIZE - 1)
-#define IOP3XX_PMMR_PHYS_TO_VIRT(addr) (u32) ((u32) addr -\
+#define IOP3XX_PMMR_PHYS_TO_VIRT(addr) (u32) ((u32) (addr) -\
 					(IOP3XX_PERIPHERAL_PHYS_BASE\
 					- IOP3XX_PERIPHERAL_VIRT_BASE))
 #define IOP3XX_REG_ADDR(reg)		(IOP3XX_PERIPHERAL_VIRT_BASE + (reg))
@@ -103,6 +104,21 @@ extern void gpio_line_set(int line, int value);
 #define IOP3XX_PCIXCMD		(volatile u16 *)IOP3XX_REG_ADDR(0x01e2)
 #define IOP3XX_PCIXSR		(volatile u32 *)IOP3XX_REG_ADDR(0x01e4)
 #define IOP3XX_PCIIRSR		(volatile u32 *)IOP3XX_REG_ADDR(0x01ec)
+#define IOP3XX_PCSR_OUT_Q_BUSY (1 << 15)
+#define IOP3XX_PCSR_IN_Q_BUSY	(1 << 14)
+#define IOP3XX_ATUCR_OUT_EN	(1 << 1)
+
+#define IOP3XX_INIT_ATU_DEFAULT 0
+#define IOP3XX_INIT_ATU_DISABLE -1
+#define IOP3XX_INIT_ATU_ENABLE	 1
+
+#ifdef CONFIG_IOP3XX_ATU
+#define iop3xx_get_init_atu(x) (init_atu == IOP3XX_INIT_ATU_DEFAULT ?\
+				IOP3XX_INIT_ATU_ENABLE : init_atu)
+#else
+#define iop3xx_get_init_atu(x) (init_atu == IOP3XX_INIT_ATU_DEFAULT ?\
+				IOP3XX_INIT_ATU_DISABLE : init_atu)
+#endif
 
 /* Messaging Unit  */
 #define IOP3XX_IMR0		(volatile u32 *)IOP3XX_REG_ADDR(0x0310)
@@ -128,24 +144,9 @@ extern void gpio_line_set(int line, int value);
 #define IOP3XX_IAR		(volatile u32 *)IOP3XX_REG_ADDR(0x0380)
 
 /* DMA Controller  */
-#define IOP3XX_DMA0_CCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0400)
-#define IOP3XX_DMA0_CSR		(volatile u32 *)IOP3XX_REG_ADDR(0x0404)
-#define IOP3XX_DMA0_DAR		(volatile u32 *)IOP3XX_REG_ADDR(0x040c)
-#define IOP3XX_DMA0_NDAR	(volatile u32 *)IOP3XX_REG_ADDR(0x0410)
-#define IOP3XX_DMA0_PADR	(volatile u32 *)IOP3XX_REG_ADDR(0x0414)
-#define IOP3XX_DMA0_PUADR	(volatile u32 *)IOP3XX_REG_ADDR(0x0418)
-#define IOP3XX_DMA0_LADR	(volatile u32 *)IOP3XX_REG_ADDR(0x041c)
-#define IOP3XX_DMA0_BCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0420)
-#define IOP3XX_DMA0_DCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0424)
-#define IOP3XX_DMA1_CCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0440)
-#define IOP3XX_DMA1_CSR		(volatile u32 *)IOP3XX_REG_ADDR(0x0444)
-#define IOP3XX_DMA1_DAR		(volatile u32 *)IOP3XX_REG_ADDR(0x044c)
-#define IOP3XX_DMA1_NDAR	(volatile u32 *)IOP3XX_REG_ADDR(0x0450)
-#define IOP3XX_DMA1_PADR	(volatile u32 *)IOP3XX_REG_ADDR(0x0454)
-#define IOP3XX_DMA1_PUADR	(volatile u32 *)IOP3XX_REG_ADDR(0x0458)
-#define IOP3XX_DMA1_LADR	(volatile u32 *)IOP3XX_REG_ADDR(0x045c)
-#define IOP3XX_DMA1_BCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0460)
-#define IOP3XX_DMA1_DCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0464)
+#define IOP3XX_DMA_PHYS_BASE(chan) (IOP3XX_PERIPHERAL_PHYS_BASE + \
+					(0x400 + (chan << 6)))
+#define IOP3XX_DMA_UPPER_PA(chan)  (IOP3XX_DMA_PHYS_BASE(chan) + 0x27)
 
 /* Peripheral bus interface  */
 #define IOP3XX_PBCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0680)
@@ -193,49 +194,16 @@ extern void gpio_line_set(int line, int value);
 #define IOP_TMR_PRIVILEGED 0x08
 #define IOP_TMR_RATIO_1_1  0x00
 
+/* Watchdog timer definitions */
+#define IOP_WDTCR_EN_ARM        0x1e1e1e1e
+#define IOP_WDTCR_EN            0xe1e1e1e1
+/* iop3xx does not support stopping the watchdog, so we just re-arm */
+#define IOP_WDTCR_DIS_ARM	(IOP_WDTCR_EN_ARM)
+#define IOP_WDTCR_DIS		(IOP_WDTCR_EN)
+
 /* Application accelerator unit  */
-#define IOP3XX_AAU_ACR		(volatile u32 *)IOP3XX_REG_ADDR(0x0800)
-#define IOP3XX_AAU_ASR		(volatile u32 *)IOP3XX_REG_ADDR(0x0804)
-#define IOP3XX_AAU_ADAR		(volatile u32 *)IOP3XX_REG_ADDR(0x0808)
-#define IOP3XX_AAU_ANDAR	(volatile u32 *)IOP3XX_REG_ADDR(0x080c)
-#define IOP3XX_AAU_SAR1		(volatile u32 *)IOP3XX_REG_ADDR(0x0810)
-#define IOP3XX_AAU_SAR2		(volatile u32 *)IOP3XX_REG_ADDR(0x0814)
-#define IOP3XX_AAU_SAR3		(volatile u32 *)IOP3XX_REG_ADDR(0x0818)
-#define IOP3XX_AAU_SAR4		(volatile u32 *)IOP3XX_REG_ADDR(0x081c)
-#define IOP3XX_AAU_DAR		(volatile u32 *)IOP3XX_REG_ADDR(0x0820)
-#define IOP3XX_AAU_ABCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0824)
-#define IOP3XX_AAU_ADCR		(volatile u32 *)IOP3XX_REG_ADDR(0x0828)
-#define IOP3XX_AAU_SAR5		(volatile u32 *)IOP3XX_REG_ADDR(0x082c)
-#define IOP3XX_AAU_SAR6		(volatile u32 *)IOP3XX_REG_ADDR(0x0830)
-#define IOP3XX_AAU_SAR7		(volatile u32 *)IOP3XX_REG_ADDR(0x0834)
-#define IOP3XX_AAU_SAR8		(volatile u32 *)IOP3XX_REG_ADDR(0x0838)
-#define IOP3XX_AAU_EDCR0	(volatile u32 *)IOP3XX_REG_ADDR(0x083c)
-#define IOP3XX_AAU_SAR9		(volatile u32 *)IOP3XX_REG_ADDR(0x0840)
-#define IOP3XX_AAU_SAR10	(volatile u32 *)IOP3XX_REG_ADDR(0x0844)
-#define IOP3XX_AAU_SAR11	(volatile u32 *)IOP3XX_REG_ADDR(0x0848)
-#define IOP3XX_AAU_SAR12	(volatile u32 *)IOP3XX_REG_ADDR(0x084c)
-#define IOP3XX_AAU_SAR13	(volatile u32 *)IOP3XX_REG_ADDR(0x0850)
-#define IOP3XX_AAU_SAR14	(volatile u32 *)IOP3XX_REG_ADDR(0x0854)
-#define IOP3XX_AAU_SAR15	(volatile u32 *)IOP3XX_REG_ADDR(0x0858)
-#define IOP3XX_AAU_SAR16	(volatile u32 *)IOP3XX_REG_ADDR(0x085c)
-#define IOP3XX_AAU_EDCR1	(volatile u32 *)IOP3XX_REG_ADDR(0x0860)
-#define IOP3XX_AAU_SAR17	(volatile u32 *)IOP3XX_REG_ADDR(0x0864)
-#define IOP3XX_AAU_SAR18	(volatile u32 *)IOP3XX_REG_ADDR(0x0868)
-#define IOP3XX_AAU_SAR19	(volatile u32 *)IOP3XX_REG_ADDR(0x086c)
-#define IOP3XX_AAU_SAR20	(volatile u32 *)IOP3XX_REG_ADDR(0x0870)
-#define IOP3XX_AAU_SAR21	(volatile u32 *)IOP3XX_REG_ADDR(0x0874)
-#define IOP3XX_AAU_SAR22	(volatile u32 *)IOP3XX_REG_ADDR(0x0878)
-#define IOP3XX_AAU_SAR23	(volatile u32 *)IOP3XX_REG_ADDR(0x087c)
-#define IOP3XX_AAU_SAR24	(volatile u32 *)IOP3XX_REG_ADDR(0x0880)
-#define IOP3XX_AAU_EDCR2	(volatile u32 *)IOP3XX_REG_ADDR(0x0884)
-#define IOP3XX_AAU_SAR25	(volatile u32 *)IOP3XX_REG_ADDR(0x0888)
-#define IOP3XX_AAU_SAR26	(volatile u32 *)IOP3XX_REG_ADDR(0x088c)
-#define IOP3XX_AAU_SAR27	(volatile u32 *)IOP3XX_REG_ADDR(0x0890)
-#define IOP3XX_AAU_SAR28	(volatile u32 *)IOP3XX_REG_ADDR(0x0894)
-#define IOP3XX_AAU_SAR29	(volatile u32 *)IOP3XX_REG_ADDR(0x0898)
-#define IOP3XX_AAU_SAR30	(volatile u32 *)IOP3XX_REG_ADDR(0x089c)
-#define IOP3XX_AAU_SAR31	(volatile u32 *)IOP3XX_REG_ADDR(0x08a0)
-#define IOP3XX_AAU_SAR32	(volatile u32 *)IOP3XX_REG_ADDR(0x08a4)
+#define IOP3XX_AAU_PHYS_BASE (IOP3XX_PERIPHERAL_PHYS_BASE + 0x800)
+#define IOP3XX_AAU_UPPER_PA (IOP3XX_AAU_PHYS_BASE + 0xa7)
 
 /* I2C bus interface unit  */
 #define IOP3XX_ICR0		(volatile u32 *)IOP3XX_REG_ADDR(0x1680)
@@ -253,14 +221,12 @@ extern void gpio_line_set(int line, int value);
 /*
  * IOP3XX I/O and Mem space regions for PCI autoconfiguration
  */
-#define IOP3XX_PCI_MEM_WINDOW_SIZE	0x04000000
-#define IOP3XX_PCI_LOWER_MEM_PA		0x80000000
-#define IOP3XX_PCI_LOWER_MEM_BA		(*IOP3XX_OMWTVR0)
+#define IOP3XX_PCI_LOWER_MEM_PA	0x80000000
 
 #define IOP3XX_PCI_IO_WINDOW_SIZE	0x00010000
 #define IOP3XX_PCI_LOWER_IO_PA		0x90000000
 #define IOP3XX_PCI_LOWER_IO_VA		0xfe000000
-#define IOP3XX_PCI_LOWER_IO_BA		(*IOP3XX_OIOWTVR)
+#define IOP3XX_PCI_LOWER_IO_BA		0x90000000
 #define IOP3XX_PCI_UPPER_IO_PA		(IOP3XX_PCI_LOWER_IO_PA +\
 					IOP3XX_PCI_IO_WINDOW_SIZE - 1)
 #define IOP3XX_PCI_UPPER_IO_VA		(IOP3XX_PCI_LOWER_IO_VA +\
@@ -315,6 +281,35 @@ static inline void write_tisr(u32 val)
 	asm volatile("mcr p6, 0, %0, c6, c1, 0" : : "r" (val));
 }
 
+static inline u32 read_wdtcr(void)
+{
+	u32 val;
+	asm volatile("mrc p6, 0, %0, c7, c1, 0":"=r" (val));
+	return val;
+}
+static inline void write_wdtcr(u32 val)
+{
+	asm volatile("mcr p6, 0, %0, c7, c1, 0"::"r" (val));
+}
+
+extern unsigned long get_iop_tick_rate(void);
+
+/* only iop13xx has these registers, we define these to present a
+ * common register interface for the iop_wdt driver.
+ */
+#define IOP_RCSR_WDT	(0)
+static inline u32 read_rcsr(void)
+{
+	return 0;
+}
+static inline void write_wdtsr(u32 val)
+{
+	do { } while (0);
+}
+
+extern struct platform_device iop3xx_dma_0_channel;
+extern struct platform_device iop3xx_dma_1_channel;
+extern struct platform_device iop3xx_aau_channel;
 extern struct platform_device iop3xx_i2c0_device;
 extern struct platform_device iop3xx_i2c1_device;
 

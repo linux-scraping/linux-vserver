@@ -46,6 +46,7 @@
 #include <asm/arch/ohci.h>
 
 #include "generic.h"
+#include "devices.h"
 
 
 static unsigned int lpd270_irq_enabled;
@@ -97,7 +98,7 @@ static void __init lpd270_init_irq(void)
 {
 	int irq;
 
-	pxa_init_irq();
+	pxa27x_init_irq();
 
 	__raw_writew(0, LPD270_INT_MASK);
 	__raw_writew(0, LPD270_INT_STATUS);
@@ -234,7 +235,7 @@ static void lpd270_backlight_power(int on)
 {
 	if (on) {
 		pxa_gpio_mode(GPIO16_PWM0_MD);
-		pxa_set_cken(CKEN0_PWM0, 1);
+		pxa_set_cken(CKEN_PWM0, 1);
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x3ff;
 		PWM_PERVAL0 = 0x3ff;
@@ -242,7 +243,7 @@ static void lpd270_backlight_power(int on)
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x0;
 		PWM_PERVAL0 = 0x3FF;
-		pxa_set_cken(CKEN0_PWM0, 0);
+		pxa_set_cken(CKEN_PWM0, 0);
 	}
 }
 

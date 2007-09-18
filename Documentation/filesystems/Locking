@@ -15,6 +15,7 @@ prototypes:
 	int (*d_delete)(struct dentry *);
 	void (*d_release)(struct dentry *);
 	void (*d_iput)(struct dentry *, struct inode *);
+	char *(*d_dname)((struct dentry *dentry, char *buffer, int buflen);
 
 locking rules:
 	none have BKL
@@ -25,6 +26,7 @@ d_compare:	no		yes		no		no
 d_delete:	yes		no		yes		no
 d_release:	no		no		no		yes
 d_iput:		no		no		no		yes
+d_dname:	no		no		no		no
 
 --------------------------- inode_operations --------------------------- 
 prototypes:
@@ -52,7 +54,7 @@ ata *);
 
 locking rules:
 	all may block, none have BKL
-		i_sem(inode)
+		i_mutex(inode)
 lookup:		yes
 create:		yes
 link:		yes (both)
@@ -72,7 +74,7 @@ setxattr:	yes
 getxattr:	no
 listxattr:	no
 removexattr:	yes
-	Additionally, ->rmdir(), ->unlink() and ->rename() have ->i_sem on
+	Additionally, ->rmdir(), ->unlink() and ->rename() have ->i_mutex on
 victim.
 	cross-directory ->rename() has (per-superblock) ->s_vfs_rename_sem.
 	->truncate() is never called directly - it's a callback, not a
@@ -459,7 +461,7 @@ doesn't take the BKL.
 ->read on directories probably must go away - we should just enforce -EISDIR
 in sys_read() and friends.
 
-->fsync() has i_sem on inode.
+->fsync() has i_mutex on inode.
 
 --------------------------- dquot_operations -------------------------------
 prototypes:
@@ -508,13 +510,24 @@ More details about quota locking can be found in fs/dquot.c.
 prototypes:
 	void (*open)(struct vm_area_struct*);
 	void (*close)(struct vm_area_struct*);
+	int (*fault)(struct vm_area_struct*, struct vm_fault *);
 	struct page *(*nopage)(struct vm_area_struct*, unsigned long, int *);
+	int (*page_mkwrite)(struct vm_area_struct *, struct page *);
 
 locking rules:
-		BKL	mmap_sem
+		BKL	mmap_sem	PageLocked(page)
 open:		no	yes
 close:		no	yes
+fault:		no	yes
 nopage:		no	yes
+page_mkwrite:	no	yes		no
+
+	->page_mkwrite() is called when a previously read-only page is
+about to become writeable. The file system is responsible for
+protecting against truncate races. Once appropriate action has been
+taking to lock out truncate, the page range should be verified to be
+within i_size. The page mapping should also be checked that it is not
+NULL.
 
 ================================================================================
 			Dubious stuff

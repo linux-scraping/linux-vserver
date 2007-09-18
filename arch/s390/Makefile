@@ -19,7 +19,7 @@ CFLAGS		+= -m31
 AFLAGS		+= -m31
 UTS_MACHINE	:= s390
 STACK_SIZE	:= 8192
-CHECKFLAGS	+= -D__s390__
+CHECKFLAGS	+= -D__s390__ -msize-long
 else
 LDFLAGS		:= -m elf64_s390
 MODFLAGS	+= -fpic -D__PIC__
@@ -67,7 +67,9 @@ endif
 
 ifeq ($(call cc-option-yn,-mstack-size=8192 -mstack-guard=128),y)
 cflags-$(CONFIG_CHECK_STACK) += -mstack-size=$(STACK_SIZE)
+ifneq ($(call cc-option-yn,-mstack-size=8192),y)
 cflags-$(CONFIG_CHECK_STACK) += -mstack-guard=$(CONFIG_STACK_GUARD)
+endif
 endif
 
 ifeq ($(call cc-option-yn,-mwarn-dynamicstack),y)
@@ -101,6 +103,9 @@ install: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) $@
 
 image: vmlinux
+	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
+
+zfcpdump:
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
 archclean:

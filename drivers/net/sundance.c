@@ -110,8 +110,7 @@ static char *media[MAX_UNITS];
 
 /* These identify the driver base version and may not be removed. */
 static char version[] =
-KERN_INFO DRV_NAME ".c:v" DRV_VERSION " " DRV_RELDATE "  Written by Donald Becker\n"
-KERN_INFO "  http://www.scyld.com/network/sundance.html\n";
+KERN_INFO DRV_NAME ".c:v" DRV_VERSION " " DRV_RELDATE "  Written by Donald Becker\n";
 
 MODULE_AUTHOR("Donald Becker <becker@scyld.com>");
 MODULE_DESCRIPTION("Sundance Alta Ethernet driver");
@@ -398,7 +397,6 @@ struct netdev_private {
 	unsigned char phys[MII_CNT];		/* MII device addresses, only first one used. */
 	struct pci_dev *pci_dev;
 	void __iomem *base;
-	unsigned char pci_rev_id;
 };
 
 /* The station address location in the EEPROM. */
@@ -544,8 +542,6 @@ static int __devinit sundance_probe1 (struct pci_dev *pdev,
 	dev->watchdog_timeo = TX_TIMEOUT;
 	dev->change_mtu = &change_mtu;
 	pci_set_drvdata(pdev, dev);
-
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &np->pci_rev_id);
 
 	i = register_netdev(dev);
 	if (i)
@@ -829,7 +825,7 @@ static int netdev_open(struct net_device *dev)
 	iowrite8(100, ioaddr + RxDMAPollPeriod);
 	iowrite8(127, ioaddr + TxDMAPollPeriod);
 	/* Fix DFE-580TX packet drop issue */
-	if (np->pci_rev_id >= 0x14)
+	if (np->pci_dev->revision >= 0x14)
 		iowrite8(0x01, ioaddr + DebugCtrl1);
 	netif_start_queue(dev);
 
@@ -1195,7 +1191,7 @@ static irqreturn_t intr_handler(int irq, void *dev_instance)
 			hw_frame_id = ioread8(ioaddr + TxFrameId);
 		}
 
-		if (np->pci_rev_id >= 0x14) {
+		if (np->pci_dev->revision >= 0x14) {
 			spin_lock(&np->lock);
 			for (; np->cur_tx - np->dirty_tx > 0; np->dirty_tx++) {
 				int entry = np->dirty_tx % TX_RING_SIZE;
@@ -1308,14 +1304,13 @@ static void rx_poll(unsigned long data)
 			   to a minimally-sized skbuff. */
 			if (pkt_len < rx_copybreak
 				&& (skb = dev_alloc_skb(pkt_len + 2)) != NULL) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* 16 byte align the IP header */
 				pci_dma_sync_single_for_cpu(np->pci_dev,
 							    desc->frag[0].addr,
 							    np->rx_buf_sz,
 							    PCI_DMA_FROMDEVICE);
 
-				eth_copy_and_sum(skb, np->rx_skbuff[entry]->data, pkt_len, 0);
+				skb_copy_to_linear_data(skb, np->rx_skbuff[entry]->data, pkt_len);
 				pci_dma_sync_single_for_device(np->pci_dev,
 							       desc->frag[0].addr,
 							       np->rx_buf_sz,
@@ -1591,7 +1586,6 @@ static const struct ethtool_ops ethtool_ops = {
 	.get_link = get_link,
 	.get_msglevel = get_msglevel,
 	.set_msglevel = set_msglevel,
-	.get_perm_addr = ethtool_op_get_perm_addr,
 };
 
 static int netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)

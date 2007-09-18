@@ -26,23 +26,26 @@ int resume_device(struct device * dev)
 
 	TRACE_DEVICE(dev);
 	TRACE_RESUME(0);
+
 	down(&dev->sem);
-	if (dev->power.pm_parent
-			&& dev->power.pm_parent->power.power_state.event) {
-		dev_err(dev, "PM: resume from %d, parent %s still %d\n",
-			dev->power.power_state.event,
-			dev->power.pm_parent->bus_id,
-			dev->power.pm_parent->power.power_state.event);
-	}
+
 	if (dev->bus && dev->bus->resume) {
 		dev_dbg(dev,"resuming\n");
 		error = dev->bus->resume(dev);
 	}
-	if (dev->class && dev->class->resume) {
+
+	if (!error && dev->type && dev->type->resume) {
+		dev_dbg(dev,"resuming\n");
+		error = dev->type->resume(dev);
+	}
+
+	if (!error && dev->class && dev->class->resume) {
 		dev_dbg(dev,"class resume\n");
 		error = dev->class->resume(dev);
 	}
+
 	up(&dev->sem);
+
 	TRACE_RESUME(error);
 	return error;
 }
@@ -69,7 +72,7 @@ static int resume_device_early(struct device * dev)
  */
 void dpm_resume(void)
 {
-	down(&dpm_list_sem);
+	mutex_lock(&dpm_list_mtx);
 	while(!list_empty(&dpm_off)) {
 		struct list_head * entry = dpm_off.next;
 		struct device * dev = to_device(entry);
@@ -77,13 +80,12 @@ void dpm_resume(void)
 		get_device(dev);
 		list_move_tail(entry, &dpm_active);
 
-		up(&dpm_list_sem);
-		if (!dev->power.prev_state.event)
-			resume_device(dev);
-		down(&dpm_list_sem);
+		mutex_unlock(&dpm_list_mtx);
+		resume_device(dev);
+		mutex_lock(&dpm_list_mtx);
 		put_device(dev);
 	}
-	up(&dpm_list_sem);
+	mutex_unlock(&dpm_list_mtx);
 }
 
 
@@ -97,9 +99,9 @@ void dpm_resume(void)
 void device_resume(void)
 {
 	might_sleep();
-	down(&dpm_sem);
+	mutex_lock(&dpm_mtx);
 	dpm_resume();
-	up(&dpm_sem);
+	mutex_unlock(&dpm_mtx);
 }
 
 EXPORT_SYMBOL_GPL(device_resume);

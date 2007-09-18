@@ -15,31 +15,6 @@
  * published by the Free Software Foundation.
  *
  *  Serial driver for TX3927/TX4927/TX4925/TX4938 internal SIO controller
- *
- *  Revision History:
- *	0.30	Initial revision. (Renamed from serial_txx927.c)
- *	0.31	Use save_flags instead of local_irq_save.
- *	0.32	Support SCLK.
- *	0.33	Switch TXX9_TTY_NAME by CONFIG_SERIAL_TXX9_STDSERIAL.
- *		Support TIOCSERGETLSR.
- *	0.34	Support slow baudrate.
- *	0.40	Merge codes from mainstream kernel (2.4.22).
- *	0.41	Fix console checking in rs_shutdown_port().
- *		Disable flow-control in serial_console_write().
- *	0.42	Fix minor compiler warning.
- *	1.00	Kernel 2.6.  Converted to new serial core (based on 8250.c).
- *	1.01	Set fifosize to make tx_empry called properly.
- *		Use standard uart_get_divisor.
- *	1.02	Cleanup. (import 8250.c changes)
- *	1.03	Fix low-latency mode. (import 8250.c changes)
- *	1.04	Remove usage of deprecated functions, cleanup.
- *	1.05	More strict check in verify_port.  Cleanup.
- *	1.06	Do not insert a char caused previous overrun.
- *		Fix some spin_locks.
- *		Do not call uart_add_one_port for absent ports.
- *	1.07	Use CONFIG_SERIAL_TXX9_NR_UARTS.  Cleanup.
- *	1.08	Use platform_device.
- *		Fix and cleanup suspend/resume/initialization codes.
  */
 
 #if defined(CONFIG_SERIAL_TXX9_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
@@ -62,7 +37,7 @@
 
 #include <asm/io.h>
 
-static char *serial_version = "1.08";
+static char *serial_version = "1.10";
 static char *serial_name = "TX39/49 Serial driver";
 
 #define PASS_LIMIT	256
@@ -70,13 +45,14 @@ static char *serial_name = "TX39/49 Serial driver";
 #if !defined(CONFIG_SERIAL_TXX9_STDSERIAL)
 /* "ttyS" is used for standard serial driver */
 #define TXX9_TTY_NAME "ttyTX"
-#define TXX9_TTY_MINOR_START	(64 + 64)	/* ttyTX0(128), ttyTX1(129) */
+#define TXX9_TTY_MINOR_START	196
+#define TXX9_TTY_MAJOR	204
 #else
 /* acts like standard serial driver */
 #define TXX9_TTY_NAME "ttyS"
 #define TXX9_TTY_MINOR_START	64
-#endif
 #define TXX9_TTY_MAJOR	TTY_MAJOR
+#endif
 
 /* flag aliases */
 #define UPF_TXX9_HAVE_CTS_LINE	UPF_BUGGY_UART
@@ -460,8 +436,10 @@ static unsigned int serial_txx9_get_mctrl(struct uart_port *port)
 	struct uart_txx9_port *up = (struct uart_txx9_port *)port;
 	unsigned int ret;
 
-	ret =  ((sio_in(up, TXX9_SIFLCR) & TXX9_SIFLCR_RTSSC) ? 0 : TIOCM_RTS)
-		| ((sio_in(up, TXX9_SICISR) & TXX9_SICISR_CTSS) ? 0 : TIOCM_CTS);
+	/* no modem control lines */
+	ret = TIOCM_CAR | TIOCM_DSR;
+	ret |= (sio_in(up, TXX9_SIFLCR) & TXX9_SIFLCR_RTSSC) ? 0 : TIOCM_RTS;
+	ret |= (sio_in(up, TXX9_SICISR) & TXX9_SICISR_CTSS) ? 0 : TIOCM_CTS;
 
 	return ret;
 }
@@ -580,6 +558,12 @@ serial_txx9_set_termios(struct uart_port *port, struct ktermios *termios,
 	unsigned int cval, fcr = 0;
 	unsigned long flags;
 	unsigned int baud, quot;
+
+	/*
+	 * We don't support modem control lines.
+	 */
+	termios->c_cflag &= ~(HUPCL | CMSPAR);
+	termios->c_cflag |= CLOCAL;
 
 	cval = sio_in(up, TXX9_SILCR);
 	/* byte size and parity */
@@ -1067,8 +1051,9 @@ static int __devinit serial_txx9_probe(struct platform_device *dev)
 		ret = serial_txx9_register_port(&port);
 		if (ret < 0) {
 			dev_err(&dev->dev, "unable to register port at index %d "
-				"(IO%x MEM%lx IRQ%d): %d\n", i,
-				p->iobase, p->mapbase, p->irq, ret);
+				"(IO%x MEM%llx IRQ%d): %d\n", i,
+				p->iobase, (unsigned long long)p->mapbase,
+				p->irq, ret);
 		}
 	}
 	return 0;

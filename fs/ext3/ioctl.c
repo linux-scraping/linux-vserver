@@ -30,6 +30,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 
 	switch (cmd) {
 	case EXT3_IOC_GETFLAGS:
+		ext3_get_inode_flags(ei);
 		flags = ei->i_flags & EXT3_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT3_IOC_SETFLAGS: {
@@ -43,7 +44,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -126,7 +127,7 @@ flags_err:
 		__u32 generation;
 		int err;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
@@ -187,7 +188,7 @@ flags_err:
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))
@@ -257,38 +258,6 @@ flags_err:
 		return err;
 	}
 
-#if defined(CONFIG_VSERVER_LEGACY) && !defined(CONFIG_TAGGING_NONE)
-	case EXT3_IOC_SETTAG: {
-		handle_t *handle;
-		struct ext3_iloc iloc;
-		int tag;
-		int err;
-
-		/* fixme: if stealth, return -ENOTTY */
-		if (!capable(CAP_CONTEXT))
-			return -EPERM;
-		if (IS_RDONLY(inode))
-			return -EROFS;
-		if (!(inode->i_sb->s_flags & MS_TAGGED))
-			return -ENOSYS;
-		if (get_user(tag, (int __user *) arg))
-			return -EFAULT;
-
-		handle = ext3_journal_start(inode, 1);
-		if (IS_ERR(handle))
-			return PTR_ERR(handle);
-		err = ext3_reserve_inode_write(handle, inode, &iloc);
-		if (err)
-			return err;
-
-		inode->i_tag = (tag & 0xFFFF);
-		inode->i_ctime = CURRENT_TIME;
-
-		err = ext3_mark_iloc_dirty(handle, inode, &iloc);
-		ext3_journal_stop(handle);
-		return err;
-	}
-#endif
 
 	default:
 		return -ENOTTY;

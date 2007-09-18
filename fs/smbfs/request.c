@@ -6,10 +6,12 @@
  *  Please add a note about your changes to smbfs in the ChangeLog file.
  */
 
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/net.h>
+#include <linux/sched.h>
 
 #include <linux/smb_fs.h>
 #include <linux/smbno.h>
@@ -21,8 +23,6 @@
 
 /* #define SMB_SLAB_DEBUG	(SLAB_RED_ZONE | SLAB_POISON) */
 #define SMB_SLAB_DEBUG	0
-
-#define ROUND_UP(x) (((x)+3) & ~3)
 
 /* cache for request structures */
 static struct kmem_cache *req_cachep;
@@ -40,7 +40,7 @@ int smb_init_request_cache(void)
 	req_cachep = kmem_cache_create("smb_request",
 				       sizeof(struct smb_request), 0,
 				       SMB_SLAB_DEBUG | SLAB_HWCACHE_ALIGN,
-				       NULL, NULL);
+				       NULL);
 	if (req_cachep == NULL)
 		return -ENOMEM;
 
@@ -200,8 +200,8 @@ static int smb_setup_trans2request(struct smb_request *req)
 
 	const int smb_parameters = 15;
 	const int header = SMB_HEADER_LEN + 2 * smb_parameters + 2;
-	const int oparam = ROUND_UP(header + 3);
-	const int odata  = ROUND_UP(oparam + req->rq_lparm);
+	const int oparam = ALIGN(header + 3, sizeof(u32));
+	const int odata  = ALIGN(oparam + req->rq_lparm, sizeof(u32));
 	const int bcc = (req->rq_data ? odata + req->rq_ldata :
 					oparam + req->rq_lparm) - header;
 

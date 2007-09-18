@@ -16,6 +16,8 @@
 #include "sysdep/tls.h"
 #include "sysdep/archsetjmp.h"
 
+#define CATCH_EINTR(expr) while ((errno = 0, ((expr) < 0)) && (errno == EINTR))
+
 #define OS_TYPE_FILE 1
 #define OS_TYPE_DIR 2
 #define OS_TYPE_SYMLINK 3
@@ -237,11 +239,9 @@ extern unsigned long __do_user_copy(void *to, const void *from, int n,
 /* execvp.c */
 extern int execvp_noalloc(char *buf, const char *file, char *const argv[]);
 /* helper.c */
-extern int run_helper(void (*pre_exec)(void *), void *pre_data, char **argv,
-		      unsigned long *stack_out);
+extern int run_helper(void (*pre_exec)(void *), void *pre_data, char **argv);
 extern int run_helper_thread(int (*proc)(void *), void *arg,
-			     unsigned int flags, unsigned long *stack_out,
-			     int stack_order);
+			     unsigned int flags, unsigned long *stack_out);
 extern int helper_wait(int pid);
 
 
@@ -270,11 +270,11 @@ extern void do_longjmp(void *p, int val);
 
 /* util.c */
 extern void stack_protections(unsigned long address);
-extern void task_protections(unsigned long address);
 extern int raw(int fd);
 extern void setup_machinename(char *machine_out);
-extern void setup_hostinfo(void);
+extern void setup_hostinfo(char *buf, int len);
 extern int setjmp_wrapper(void (*proc)(void *, void *), ...);
+extern void os_dump_core(void);
 
 /* time.c */
 #define BILLION (1000 * 1000 * 1000)
@@ -297,13 +297,12 @@ extern long syscall_stub_data(struct mm_id * mm_idp,
 			      unsigned long *data, int data_count,
 			      void **addr, void **stub_addr);
 extern int map(struct mm_id * mm_idp, unsigned long virt,
-	       unsigned long len, int r, int w, int x, int phys_fd,
+	       unsigned long len, int prot, int phys_fd,
 	       unsigned long long offset, int done, void **data);
-extern int unmap(struct mm_id * mm_idp, void *addr, unsigned long len,
+extern int unmap(struct mm_id * mm_idp, unsigned long addr, unsigned long len,
 		 int done, void **data);
 extern int protect(struct mm_id * mm_idp, unsigned long addr,
-		   unsigned long len, int r, int w, int x, int done,
-		   void **data);
+		   unsigned long len, unsigned int prot, int done, void **data);
 
 /* skas/process.c */
 extern int is_skas_winch(int pid, int fd, void *data);
@@ -339,8 +338,11 @@ extern void maybe_sigio_broken(int fd, int read);
 
 /* skas/trap */
 extern void sig_handler_common_skas(int sig, void *sc_ptr);
-extern void user_signal(int sig, union uml_pt_regs *regs, int pid);
 
+/* sys-x86_64/prctl.c */
 extern int os_arch_prctl(int pid, int code, unsigned long *addr);
+
+/* tty.c */
+int get_pty(void);
 
 #endif

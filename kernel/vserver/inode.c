@@ -6,23 +6,22 @@
  *  Copyright (C) 2004-2007  Herbert Pötzl
  *
  *  V0.01  separated from vcontext V0.05
+ *  V0.02  moved to tag (instead of xid)
  *
  */
 
-#include <linux/sched.h>
+#include <linux/tty.h>
 #include <linux/proc_fs.h>
 #include <linux/devpts_fs.h>
-#include <linux/namei.h>
+#include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/mount.h>
 #include <linux/parser.h>
-#include <linux/file.h>
-#include <linux/compat.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vs_base.h>
 #include <linux/vs_tag.h>
 
-#include <asm/errno.h>
 #include <asm/uaccess.h>
 
 
@@ -74,7 +73,7 @@ static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint
 int vc_get_iattr(void __user *data)
 {
 	struct nameidata nd;
-	struct vcmd_ctx_iattr_v1 vc_data = { .xid = -1 };
+	struct vcmd_ctx_iattr_v1 vc_data = { .tag = -1 };
 	int ret;
 
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
@@ -83,7 +82,7 @@ int vc_get_iattr(void __user *data)
 	ret = user_path_walk_link(vc_data.name, &nd);
 	if (!ret) {
 		ret = __vc_get_iattr(nd.dentry->d_inode,
-			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+			&vc_data.tag, &vc_data.flags, &vc_data.mask);
 		path_release(&nd);
 	}
 	if (ret)
@@ -99,7 +98,7 @@ int vc_get_iattr(void __user *data)
 int vc_get_iattr_x32(void __user *data)
 {
 	struct nameidata nd;
-	struct vcmd_ctx_iattr_v1_x32 vc_data = { .xid = -1 };
+	struct vcmd_ctx_iattr_v1_x32 vc_data = { .tag = -1 };
 	int ret;
 
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
@@ -108,7 +107,7 @@ int vc_get_iattr_x32(void __user *data)
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
 	if (!ret) {
 		ret = __vc_get_iattr(nd.dentry->d_inode,
-			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+			&vc_data.tag, &vc_data.flags, &vc_data.mask);
 		path_release(&nd);
 	}
 	if (ret)
@@ -125,7 +124,7 @@ int vc_get_iattr_x32(void __user *data)
 int vc_fget_iattr(uint32_t fd, void __user *data)
 {
 	struct file *filp;
-	struct vcmd_ctx_fiattr_v0 vc_data = { .xid = -1 };
+	struct vcmd_ctx_fiattr_v0 vc_data = { .tag = -1 };
 	int ret;
 
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
@@ -136,7 +135,7 @@ int vc_fget_iattr(uint32_t fd, void __user *data)
 		return -EBADF;
 
 	ret = __vc_get_iattr(filp->f_dentry->d_inode,
-		&vc_data.xid, &vc_data.flags, &vc_data.mask);
+		&vc_data.tag, &vc_data.flags, &vc_data.mask);
 
 	fput(filp);
 
@@ -236,7 +235,7 @@ int vc_set_iattr(void __user *data)
 	ret = user_path_walk_link(vc_data.name, &nd);
 	if (!ret) {
 		ret = __vc_set_iattr(nd.dentry,
-			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+			&vc_data.tag, &vc_data.flags, &vc_data.mask);
 		path_release(&nd);
 	}
 
@@ -261,7 +260,7 @@ int vc_set_iattr_x32(void __user *data)
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
 	if (!ret) {
 		ret = __vc_set_iattr(nd.dentry,
-			&vc_data.xid, &vc_data.flags, &vc_data.mask);
+			&vc_data.tag, &vc_data.flags, &vc_data.mask);
 		path_release(&nd);
 	}
 
@@ -287,7 +286,7 @@ int vc_fset_iattr(uint32_t fd, void __user *data)
 	if (!filp || !filp->f_dentry || !filp->f_dentry->d_inode)
 		return -EBADF;
 
-	ret = __vc_set_iattr(filp->f_dentry, &vc_data.xid,
+	ret = __vc_set_iattr(filp->f_dentry, &vc_data.tag,
 		&vc_data.flags, &vc_data.mask);
 
 	fput(filp);
@@ -297,63 +296,38 @@ int vc_fset_iattr(uint32_t fd, void __user *data)
 	return ret;
 }
 
-#ifdef	CONFIG_VSERVER_LEGACY
 
-#define PROC_DYNAMIC_FIRST 0xF0000000UL
+enum { Opt_notagcheck, Opt_tag, Opt_notag, Opt_tagid, Opt_err };
 
-int vx_proc_ioctl(struct inode *inode, struct file *filp,
-	unsigned int cmd, unsigned long arg)
-{
-	struct proc_dir_entry *entry;
-	int error = 0;
-	int flags;
-
-	if (inode->i_ino < PROC_DYNAMIC_FIRST)
-		return -ENOTTY;
-
-	entry = PROC_I(inode)->pde;
-	if (!entry)
-		return -ENOTTY;
-
-	switch(cmd) {
-	case FIOC_GETXFLG: {
-		/* fixme: if stealth, return -ENOTTY */
-		error = -EPERM;
-		flags = entry->vx_flags;
-		if (capable(CAP_CONTEXT))
-			error = put_user(flags, (int __user *) arg);
-		break;
-	}
-	case FIOC_SETXFLG: {
-		/* fixme: if stealth, return -ENOTTY */
-		error = -EPERM;
-		if (!capable(CAP_CONTEXT))
-			break;
-		error = -EROFS;
-		if (IS_RDONLY(inode))
-			break;
-		error = -EFAULT;
-		if (get_user(flags, (int __user *) arg))
-			break;
-		error = 0;
-		entry->vx_flags = flags;
-		break;
-	}
-	default:
-		return -ENOTTY;
-	}
-	return error;
-}
-#endif	/* CONFIG_VSERVER_LEGACY */
-
+static match_table_t tokens = {
+	{Opt_notagcheck, "notagcheck"},
 #ifdef	CONFIG_PROPAGATE
+	{Opt_notag, "notag"},
+	{Opt_tag, "tag"},
+	{Opt_tagid, "tagid=%u"},
+#endif
+	{Opt_err, NULL}
+};
 
-int dx_parse_tag(char *string, tag_t *tag, int remove)
+
+static void __dx_parse_remove(char *string, char *opt)
 {
-	static match_table_t tokens = {
-		{1, "tagid=%u"},
-		{0, NULL}
-	};
+	char *p = strstr(string, opt);
+	char *q = p;
+
+	if (p) {
+		while (*q != '\0' && *q != ',')
+			q++;
+		while (*q)
+			*p++ = *q++;
+		while (*p)
+			*p++ = '\0';
+	}
+}
+
+static inline
+int __dx_parse_tag(char *string, tag_t *tag, int remove)
+{
 	substring_t args[MAX_OPT_ARGS];
 	int token, option = 0;
 
@@ -361,28 +335,46 @@ int dx_parse_tag(char *string, tag_t *tag, int remove)
 		return 0;
 
 	token = match_token(string, tokens, args);
-	if (token && tag && !match_int(args, &option))
-		*tag = option;
 
 	vxdprintk(VXD_CBIT(tag, 7),
 		"dx_parse_tag(»%s«): %d:#%d",
 		string, token, option);
 
-	if ((token == 1) && remove) {
-		char *p = strstr(string, "tagid=");
-		char *q = p;
-
-		if (p) {
-			while (*q != '\0' && *q != ',')
-				q++;
-			while (*q)
-				*p++ = *q++;
-			while (*p)
-				*p++ = '\0';
-		}
+	switch (token) {
+	case Opt_tag:
+		if (tag)
+			*tag = 0;
+		if (remove)
+			__dx_parse_remove(string, "tag");
+		return MNT_TAGID;
+	case Opt_notag:
+		if (remove)
+			__dx_parse_remove(string, "notag");
+		return MNT_NOTAG;
+	case Opt_notagcheck:
+		if (remove)
+			__dx_parse_remove(string, "notagcheck");
+		return MNT_NOTAGCHECK;
+	case Opt_tagid:
+		if (tag && !match_int(args, &option))
+			*tag = option;
+		if (remove)
+			__dx_parse_remove(string, "tagid");
+		return MNT_TAGID;
 	}
-	return token;
+	return 0;
 }
+
+int dx_parse_tag(char *string, tag_t *tag, int remove)
+{
+	int retval, flags = 0;
+
+	while ((retval = __dx_parse_tag(string, tag, remove)))
+		flags |= retval;
+	return flags;
+}
+
+#ifdef	CONFIG_PROPAGATE
 
 void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 {

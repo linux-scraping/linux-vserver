@@ -48,8 +48,9 @@
 #include "xfs_dir2_trace.h"
 #include "xfs_quota.h"
 #include "xfs_acl.h"
+#include "xfs_filestream.h"
 
-#include <linux/vs_tag.h>
+#include <linux/log2.h>
 
 kmem_zone_t *xfs_ifork_zone;
 kmem_zone_t *xfs_inode_zone;
@@ -66,6 +67,7 @@ STATIC int xfs_iformat_local(xfs_inode_t *, xfs_dinode_t *, int, int);
 STATIC int xfs_iformat_extents(xfs_inode_t *, xfs_dinode_t *, int);
 STATIC int xfs_iformat_btree(xfs_inode_t *, xfs_dinode_t *, int);
 
+#include <linux/vs_tag.h>
 
 #ifdef DEBUG
 /*
@@ -443,6 +445,7 @@ xfs_iformat(
 			return XFS_ERROR(EFSCORRUPTED);
 		}
 		ip->i_d.di_size = 0;
+		ip->i_size = 0;
 		ip->i_df.if_u2.if_rdev = INT_GET(dip->di_u.di_dev, ARCH_CONVERT);
 		break;
 
@@ -643,8 +646,7 @@ xfs_iformat_extents(
 			ep->l1 = INT_GET(get_unaligned((__uint64_t*)&dp->l1),
 								ARCH_CONVERT);
 		}
-		xfs_bmap_trace_exlist("xfs_iformat_extents", ip, nex,
-			whichfork);
+		XFS_BMAP_TRACE_EXLIST(ip, nex, whichfork);
 		if (whichfork != XFS_DATA_FORK ||
 			XFS_EXTFMT_INODE(ip) == XFS_EXTFMT_NOSTATE)
 				if (unlikely(xfs_check_nostate_extents(
@@ -836,6 +838,8 @@ _xfs_dic2xflags(
 			flags |= XFS_XFLAG_EXTSZINHERIT;
 		if (di_flags & XFS_DIFLAG_NODEFRAG)
 			flags |= XFS_XFLAG_NODEFRAG;
+		if (di_flags & XFS_DIFLAG_FILESTREAM)
+			flags |= XFS_XFLAG_FILESTREAM;
 	}
 
 	return flags;
@@ -1000,6 +1004,7 @@ xfs_iread(
 	}
 
 	ip->i_delayed_blks = 0;
+	ip->i_size = ip->i_d.di_size;
 
 	/*
 	 * Mark the buffer containing the inode as something to keep
@@ -1092,6 +1097,11 @@ xfs_iread_extents(
  * also returns the [locked] bp pointing to the head of the freelist
  * as ialloc_context.  The caller should hold this buffer across
  * the commit and pass it back into this routine on the second call.
+ *
+ * If we are allocating quota inodes, we do not have a parent inode
+ * to attach to or associate with (i.e. pip == NULL) because they
+ * are not linked into the directory structure - they are attached
+ * directly to the superblock - and so have no parent.
  */
 int
 xfs_ialloc(
@@ -1117,7 +1127,7 @@ xfs_ialloc(
 	 * Call the space management code to pick
 	 * the on-disk inode to be allocated.
 	 */
-	error = xfs_dialloc(tp, pip->i_ino, mode, okalloc,
+	error = xfs_dialloc(tp, pip ? pip->i_ino : 0, mode, okalloc,
 			    ialloc_context, call_again, &ino);
 	if (error != 0) {
 		return error;
@@ -1169,10 +1179,10 @@ xfs_ialloc(
 	/*
 	 * Project ids won't be stored on disk if we are using a version 1 inode.
 	 */
-	if ( (prid != 0) && (ip->i_d.di_version == XFS_DINODE_VERSION_1))
+	if ((prid != 0) && (ip->i_d.di_version == XFS_DINODE_VERSION_1))
 		xfs_bump_ino_vers2(tp, ip);
 
-	if (XFS_INHERIT_GID(pip, vp->v_vfsp)) {
+	if (pip && XFS_INHERIT_GID(pip, vp->v_vfsp)) {
 		ip->i_d.di_gid = pip->i_d.di_gid;
 		if ((pip->i_d.di_mode & S_ISGID) && (mode & S_IFMT) == S_IFDIR) {
 			ip->i_d.di_mode |= S_ISGID;
@@ -1191,6 +1201,7 @@ xfs_ialloc(
 	}
 
 	ip->i_d.di_size = 0;
+	ip->i_size = 0;
 	ip->i_d.di_nextents = 0;
 	ASSERT(ip->i_d.di_nblocks == 0);
 	xfs_ichgtime(ip, XFS_ICHGTIME_CHG|XFS_ICHGTIME_ACC|XFS_ICHGTIME_MOD);
@@ -1213,8 +1224,16 @@ xfs_ialloc(
 		flags |= XFS_ILOG_DEV;
 		break;
 	case S_IFREG:
+		if (pip && xfs_inode_is_filestream(pip)) {
+			error = xfs_filestream_associate(pip, ip);
+			if (error < 0)
+				return -error;
+			if (!error)
+				xfs_iflags_set(ip, XFS_IFILESTREAM);
+		}
+		/* fall through */
 	case S_IFDIR:
-		if (unlikely(pip->i_d.di_flags & XFS_DIFLAG_ANY)) {
+		if (pip && (pip->i_d.di_flags & XFS_DIFLAG_ANY)) {
 			uint	di_flags = 0;
 
 			if ((mode & S_IFMT) == S_IFDIR) {
@@ -1251,6 +1270,8 @@ xfs_ialloc(
 			if ((pip->i_d.di_flags & XFS_DIFLAG_NODEFRAG) &&
 			    xfs_inherit_nodefrag)
 				di_flags |= XFS_DIFLAG_NODEFRAG;
+			if (pip->i_d.di_flags & XFS_DIFLAG_FILESTREAM)
+				di_flags |= XFS_DIFLAG_FILESTREAM;
 			ip->i_d.di_flags |= di_flags;
 		}
 		/* FALLTHROUGH */
@@ -1361,7 +1382,7 @@ xfs_file_last_byte(
 	} else {
 		last_block = 0;
 	}
-	size_last_block = XFS_B_TO_FSB(mp, (xfs_ufsize_t)ip->i_d.di_size);
+	size_last_block = XFS_B_TO_FSB(mp, (xfs_ufsize_t)ip->i_size);
 	last_block = XFS_FILEOFF_MAX(last_block, size_last_block);
 
 	last_byte = XFS_FSB_TO_B(mp, last_block);
@@ -1442,7 +1463,7 @@ xfs_itrunc_trace(
  * must be called again with all the same restrictions as the initial
  * call.
  */
-void
+int
 xfs_itruncate_start(
 	xfs_inode_t	*ip,
 	uint		flags,
@@ -1452,9 +1473,10 @@ xfs_itruncate_start(
 	xfs_off_t	toss_start;
 	xfs_mount_t	*mp;
 	bhv_vnode_t	*vp;
+	int		error = 0;
 
 	ASSERT(ismrlocked(&ip->i_iolock, MR_UPDATE) != 0);
-	ASSERT((new_size == 0) || (new_size <= ip->i_d.di_size));
+	ASSERT((new_size == 0) || (new_size <= ip->i_size));
 	ASSERT((flags == XFS_ITRUNC_DEFINITE) ||
 	       (flags == XFS_ITRUNC_MAYBE));
 
@@ -1489,7 +1511,7 @@ xfs_itruncate_start(
 		 * file size, so there is no way that the data extended
 		 * out there.
 		 */
-		return;
+		return 0;
 	}
 	last_byte = xfs_file_last_byte(ip);
 	xfs_itrunc_trace(XFS_ITRUNC_START, ip, flags, new_size, toss_start,
@@ -1498,7 +1520,7 @@ xfs_itruncate_start(
 		if (flags & XFS_ITRUNC_DEFINITE) {
 			bhv_vop_toss_pages(vp, toss_start, -1, FI_REMAPF_LOCKED);
 		} else {
-			bhv_vop_flushinval_pages(vp, toss_start, -1, FI_REMAPF_LOCKED);
+			error = bhv_vop_flushinval_pages(vp, toss_start, -1, FI_REMAPF_LOCKED);
 		}
 	}
 
@@ -1507,6 +1529,7 @@ xfs_itruncate_start(
 		ASSERT(VN_CACHED(vp) == 0);
 	}
 #endif
+	return error;
 }
 
 /*
@@ -1577,7 +1600,7 @@ xfs_itruncate_finish(
 
 	ASSERT(ismrlocked(&ip->i_iolock, MR_UPDATE) != 0);
 	ASSERT(ismrlocked(&ip->i_lock, MR_UPDATE) != 0);
-	ASSERT((new_size == 0) || (new_size <= ip->i_d.di_size));
+	ASSERT((new_size == 0) || (new_size <= ip->i_size));
 	ASSERT(*tp != NULL);
 	ASSERT((*tp)->t_flags & XFS_TRANS_PERM_LOG_RES);
 	ASSERT(ip->i_transp == *tp);
@@ -1651,8 +1674,20 @@ xfs_itruncate_finish(
 	 */
 	if (fork == XFS_DATA_FORK) {
 		if (ip->i_d.di_nextents > 0) {
-			ip->i_d.di_size = new_size;
-			xfs_trans_log_inode(ntp, ip, XFS_ILOG_CORE);
+			/*
+			 * If we are not changing the file size then do
+			 * not update the on-disk file size - we may be
+			 * called from xfs_inactive_free_eofblocks().  If we
+			 * update the on-disk file size and then the system
+			 * crashes before the contents of the file are
+			 * flushed to disk then the files may be full of
+			 * holes (ie NULL files bug).
+			 */
+			if (ip->i_size != new_size) {
+				ip->i_d.di_size = new_size;
+				ip->i_size = new_size;
+				xfs_trans_log_inode(ntp, ip, XFS_ILOG_CORE);
+			}
 		}
 	} else if (sync) {
 		ASSERT(!(mp->m_flags & XFS_MOUNT_WSYNC));
@@ -1767,7 +1802,7 @@ xfs_itruncate_finish(
 			xfs_trans_log_inode(ntp, ip, XFS_ILOG_CORE);
 		}
 		ntp = xfs_trans_dup(ntp);
-		(void) xfs_trans_commit(*tp, 0, NULL);
+		(void) xfs_trans_commit(*tp, 0);
 		*tp = ntp;
 		error = xfs_trans_reserve(ntp, 0, XFS_ITRUNCATE_LOG_RES(mp), 0,
 					  XFS_TRANS_PERM_LOG_RES,
@@ -1788,7 +1823,19 @@ xfs_itruncate_finish(
 	 */
 	if (fork == XFS_DATA_FORK) {
 		xfs_isize_check(mp, ip, new_size);
-		ip->i_d.di_size = new_size;
+		/*
+		 * If we are not changing the file size then do
+		 * not update the on-disk file size - we may be
+		 * called from xfs_inactive_free_eofblocks().  If we
+		 * update the on-disk file size and then the system
+		 * crashes before the contents of the file are
+		 * flushed to disk then the files may be full of
+		 * holes (ie NULL files bug).
+		 */
+		if (ip->i_size != new_size) {
+			ip->i_d.di_size = new_size;
+			ip->i_size = new_size;
+		}
 	}
 	xfs_trans_log_inode(ntp, ip, XFS_ILOG_CORE);
 	ASSERT((new_size != 0) ||
@@ -1821,7 +1868,7 @@ xfs_igrow_start(
 
 	ASSERT(ismrlocked(&(ip->i_lock), MR_UPDATE) != 0);
 	ASSERT(ismrlocked(&(ip->i_iolock), MR_UPDATE) != 0);
-	ASSERT(new_size > ip->i_d.di_size);
+	ASSERT(new_size > ip->i_size);
 
 	/*
 	 * Zero any pages that may have been created by
@@ -1829,7 +1876,7 @@ xfs_igrow_start(
 	 * and any blocks between the old and new file sizes.
 	 */
 	error = xfs_zero_eof(XFS_ITOV(ip), &ip->i_iocore, new_size,
-			     ip->i_d.di_size);
+			     ip->i_size);
 	return error;
 }
 
@@ -1853,13 +1900,14 @@ xfs_igrow_finish(
 	ASSERT(ismrlocked(&(ip->i_lock), MR_UPDATE) != 0);
 	ASSERT(ismrlocked(&(ip->i_iolock), MR_UPDATE) != 0);
 	ASSERT(ip->i_transp == tp);
-	ASSERT(new_size > ip->i_d.di_size);
+	ASSERT(new_size > ip->i_size);
 
 	/*
 	 * Update the file size.  Update the inode change timestamp
 	 * if change_flag set.
 	 */
 	ip->i_d.di_size = new_size;
+	ip->i_size = new_size;
 	if (change_flag)
 		xfs_ichgtime(ip, XFS_ICHGTIME_CHG);
 	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
@@ -2342,7 +2390,7 @@ xfs_ifree(
 	ASSERT(ip->i_d.di_nlink == 0);
 	ASSERT(ip->i_d.di_nextents == 0);
 	ASSERT(ip->i_d.di_anextents == 0);
-	ASSERT((ip->i_d.di_size == 0) ||
+	ASSERT((ip->i_d.di_size == 0 && ip->i_size == 0) ||
 	       ((ip->i_d.di_mode & S_IFMT) != S_IFREG));
 	ASSERT(ip->i_d.di_nblocks == 0);
 
@@ -2866,9 +2914,6 @@ xfs_iextents_copy(
 	int			copied;
 	xfs_bmbt_rec_t		*dest_ep;
 	xfs_bmbt_rec_t		*ep;
-#ifdef XFS_BMAP_TRACE
-	static char		fname[] = "xfs_iextents_copy";
-#endif
 	int			i;
 	xfs_ifork_t		*ifp;
 	int			nrecs;
@@ -2879,7 +2924,7 @@ xfs_iextents_copy(
 	ASSERT(ifp->if_bytes > 0);
 
 	nrecs = ifp->if_bytes / (uint)sizeof(xfs_bmbt_rec_t);
-	xfs_bmap_trace_exlist(fname, ip, nrecs, whichfork);
+	XFS_BMAP_TRACE_EXLIST(ip, nrecs, whichfork);
 	ASSERT(nrecs > 0);
 
 	/*
@@ -4175,7 +4220,7 @@ xfs_iext_realloc_direct(
 			ifp->if_bytes = new_size;
 			return;
 		}
-		if ((new_size & (new_size - 1)) != 0) {
+		if (!is_power_of_2(new_size)){
 			rnew_size = xfs_iroundup(new_size);
 		}
 		if (rnew_size != ifp->if_real_bytes) {
@@ -4198,7 +4243,7 @@ xfs_iext_realloc_direct(
 	 */
 	else {
 		new_size += ifp->if_bytes;
-		if ((new_size & (new_size - 1)) != 0) {
+		if (!is_power_of_2(new_size)) {
 			rnew_size = xfs_iroundup(new_size);
 		}
 		xfs_iext_inline_to_direct(ifp, rnew_size);

@@ -46,8 +46,6 @@ typedef u16 kprobe_opcode_t;
 	? (MAX_STACK_SIZE) \
 	: (((unsigned long)current_thread_info()) + THREAD_SIZE - (ADDR)))
 
-#define JPROBE_ENTRY(pentry) (kprobe_opcode_t *)(pentry)
-
 #define ARCH_SUPPORTS_KRETPROBES
 #define ARCH_INACTIVE_KPROBE_COUNT 0
 
@@ -97,18 +95,10 @@ void kretprobe_trampoline(void);
 int  is_prohibited_opcode(kprobe_opcode_t *instruction);
 void get_instruction_type(struct arch_specific_insn *ainsn);
 
+int kprobe_fault_handler(struct pt_regs *regs, int trapnr);
+int kprobe_exceptions_notify(struct notifier_block *self,
+	unsigned long val, void *data);
+
 #define flush_insn_slot(p)	do { } while (0)
 
 #endif	/* _ASM_S390_KPROBES_H */
-
-#ifdef CONFIG_KPROBES
-
-extern int kprobe_exceptions_notify(struct notifier_block *self,
-					unsigned long val, void *data);
-#else	/* !CONFIG_KPROBES */
-static inline int kprobe_exceptions_notify(struct notifier_block *self,
-						unsigned long val, void *data)
-{
-	return 0;
-}
-#endif

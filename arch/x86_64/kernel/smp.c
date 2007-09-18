@@ -14,7 +14,6 @@
 #include <linux/mm.h>
 #include <linux/delay.h>
 #include <linux/spinlock.h>
-#include <linux/smp_lock.h>
 #include <linux/smp.h>
 #include <linux/kernel_stat.h>
 #include <linux/mc146818rtc.h>
@@ -242,7 +241,7 @@ void flush_tlb_mm (struct mm_struct * mm)
 	}
 	if (!cpus_empty(cpu_mask))
 		flush_tlb_others(cpu_mask, mm, FLUSH_ALL);
-
+	check_pgt_cache();
 	preempt_enable();
 }
 EXPORT_SYMBOL(flush_tlb_mm);
@@ -358,7 +357,7 @@ __smp_call_function_single(int cpu, void (*func) (void *info), void *info,
 }
 
 /*
- * smp_call_function_single - Run a function on another CPU
+ * smp_call_function_single - Run a function on a specific CPU
  * @func: The function to run. This must be fast and non-blocking.
  * @info: An arbitrary pointer to pass to the function.
  * @nonatomic: Currently unused.
@@ -375,17 +374,21 @@ int smp_call_function_single (int cpu, void (*func) (void *info), void *info,
 {
 	/* prevent preemption and reschedule on another processor */
 	int me = get_cpu();
-	if (cpu == me) {
-		put_cpu();
-		return 0;
-	}
 
 	/* Can deadlock when called with interrupts disabled */
 	WARN_ON(irqs_disabled());
 
-	spin_lock_bh(&call_lock);
+	if (cpu == me) {
+		local_irq_disable();
+		func(info);
+		local_irq_enable();
+		put_cpu();
+		return 0;
+	}
+
+	spin_lock(&call_lock);
 	__smp_call_function_single(cpu, func, info, nonatomic, wait);
-	spin_unlock_bh(&call_lock);
+	spin_unlock(&call_lock);
 	put_cpu();
 	return 0;
 }
@@ -452,42 +455,34 @@ int smp_call_function (void (*func) (void *info), void *info, int nonatomic,
 }
 EXPORT_SYMBOL(smp_call_function);
 
-void smp_stop_cpu(void)
+static void stop_this_cpu(void *dummy)
 {
-	unsigned long flags;
+	local_irq_disable();
 	/*
 	 * Remove this CPU:
 	 */
 	cpu_clear(smp_processor_id(), cpu_online_map);
-	local_irq_save(flags);
 	disable_local_APIC();
-	local_irq_restore(flags);
-}
-
-static void smp_really_stop_cpu(void *dummy)
-{
-	smp_stop_cpu(); 
 	for (;;) 
 		halt();
 } 
 
 void smp_send_stop(void)
 {
-	int nolock = 0;
+	int nolock;
+	unsigned long flags;
+
 	if (reboot_force)
 		return;
+
 	/* Don't deadlock on the call lock in panic */
-	if (!spin_trylock(&call_lock)) {
-		/* ignore locking because we have panicked anyways */
-		nolock = 1;
-	}
-	__smp_call_function(smp_really_stop_cpu, NULL, 0, 0);
+	nolock = !spin_trylock(&call_lock);
+	local_irq_save(flags);
+	__smp_call_function(stop_this_cpu, NULL, 0, 0);
 	if (!nolock)
 		spin_unlock(&call_lock);
-
-	local_irq_disable();
 	disable_local_APIC();
-	local_irq_enable();
+	local_irq_restore(flags);
 }
 
 /*

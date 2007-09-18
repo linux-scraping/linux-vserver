@@ -255,11 +255,10 @@ static int ep93xx_rx(struct net_device *dev, int *budget)
 
 		skb = dev_alloc_skb(length + 2);
 		if (likely(skb != NULL)) {
-			skb->dev = dev;
 			skb_reserve(skb, 2);
 			dma_sync_single(NULL, ep->descs->rdesc[entry].buf_addr,
 						length, DMA_FROM_DEVICE);
-			eth_copy_and_sum(skb, ep->rx_buf[entry], length, 0);
+			skb_copy_to_linear_data(skb, ep->rx_buf[entry], length);
 			skb_put(skb, length);
 			skb->protocol = eth_type_trans(skb, dev);
 

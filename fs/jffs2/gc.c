@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: gc.c,v 1.155 2005/11/07 11:14:39 gleixner Exp $
  *
  */
 
@@ -144,7 +142,8 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 			       c->unchecked_size);
 			jffs2_dbg_dump_block_lists_nolock(c);
 			spin_unlock(&c->erase_completion_lock);
-			BUG();
+			up(&c->alloc_sem);
+			return -ENOSPC;
 		}
 
 		spin_unlock(&c->erase_completion_lock);
@@ -736,6 +735,7 @@ static int jffs2_garbage_collect_metadata(struct jffs2_sb_info *c, struct jffs2_
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -999,6 +999,7 @@ static int jffs2_garbage_collect_hole(struct jffs2_sb_info *c, struct jffs2_eras
 	ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 	ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 	ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+	ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 	ri.isize = cpu_to_je32(ilen);
 	ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 	ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));
@@ -1257,6 +1258,7 @@ static int jffs2_garbage_collect_dnode(struct jffs2_sb_info *c, struct jffs2_era
 		ri.mode = cpu_to_jemode(JFFS2_F_I_MODE(f));
 		ri.uid = cpu_to_je16(JFFS2_F_I_UID(f));
 		ri.gid = cpu_to_je16(JFFS2_F_I_GID(f));
+		ri.tag = cpu_to_je16(JFFS2_F_I_TAG(f));
 		ri.isize = cpu_to_je32(JFFS2_F_I_SIZE(f));
 		ri.atime = cpu_to_je32(JFFS2_F_I_ATIME(f));
 		ri.ctime = cpu_to_je32(JFFS2_F_I_CTIME(f));

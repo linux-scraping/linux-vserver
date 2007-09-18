@@ -35,7 +35,7 @@ const struct file_operations affs_file_operations = {
 	.open		= affs_file_open,
 	.release	= affs_file_release,
 	.fsync		= file_fsync,
-	.sendfile	= generic_file_sendfile,
+	.splice_read	= generic_file_splice_read,
 };
 
 const struct inode_operations affs_file_inode_operations = {
@@ -628,11 +628,7 @@ static int affs_prepare_write_ofs(struct file *file, struct page *page, unsigned
 			return err;
 	}
 	if (to < PAGE_CACHE_SIZE) {
-		char *kaddr = kmap_atomic(page, KM_USER0);
-
-		memset(kaddr + to, 0, PAGE_CACHE_SIZE - to);
-		flush_dcache_page(page);
-		kunmap_atomic(kaddr, KM_USER0);
+		zero_user_page(page, to, PAGE_CACHE_SIZE - to, KM_USER0);
 		if (size > offset + to) {
 			if (size < offset + PAGE_CACHE_SIZE)
 				tmp = size & ~PAGE_CACHE_MASK;

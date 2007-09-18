@@ -129,6 +129,11 @@ struct scsi_host_template {
 	 * the LLD. When the driver is finished processing the command
 	 * the done callback is invoked.
 	 *
+	 * This is called to inform the LLD to transfer
+	 * cmd->request_bufflen bytes. The cmd->use_sg speciefies the
+	 * number of scatterlist entried in the command and
+	 * cmd->request_buffer contains the scatterlist.
+	 *
 	 * return values: see queuecommand
 	 *
 	 * If the LLD accepts the cmd, it should set the result to an
@@ -139,20 +144,6 @@ struct scsi_host_template {
 	/* TODO: rename */
 	int (* transfer_response)(struct scsi_cmnd *,
 				  void (*done)(struct scsi_cmnd *));
-	/*
-	 * This is called to inform the LLD to transfer cmd->request_bufflen
-	 * bytes of the cmd at cmd->offset in the cmd. The cmd->use_sg
-	 * speciefies the number of scatterlist entried in the command
-	 * and cmd->request_buffer contains the scatterlist.
-	 *
-	 * If the command cannot be processed in one transfer_data call
-	 * becuase a scatterlist within the LLD's limits cannot be
-	 * created then transfer_data will be called multiple times.
-	 * It is initially called from process context, and later
-	 * calls are from the interrup context.
-	 */
-	int (* transfer_data)(struct scsi_cmnd *,
-			      void (*done)(struct scsi_cmnd *));
 
 	/* Used as callback for the completion of task management request. */
 	int (* tsk_mgmt_response)(u64 mid, int result);
@@ -335,15 +326,22 @@ struct scsi_host_template {
 	int (*proc_info)(struct Scsi_Host *, char *, char **, off_t, int, int);
 
 	/*
-	 * suspend support
+	 * This is an optional routine that allows the transport to become
+	 * involved when a scsi io timer fires. The return value tells the
+	 * timer routine how to finish the io timeout handling:
+	 * EH_HANDLED:		I fixed the error, please complete the command
+	 * EH_RESET_TIMER:	I need more time, reset the timer and
+	 *			begin counting again
+	 * EH_NOT_HANDLED	Begin normal error recovery
+	 *
+	 * Status: OPTIONAL
 	 */
-	int (*resume)(struct scsi_device *);
-	int (*suspend)(struct scsi_device *, pm_message_t state);
+	enum scsi_eh_timer_return (* eh_timed_out)(struct scsi_cmnd *);
 
 	/*
 	 * Name of proc directory
 	 */
-	char *proc_name;
+	const char *proc_name;
 
 	/*
 	 * Used to store the procfs directory if a driver implements the
@@ -673,6 +671,10 @@ struct Scsi_Host {
 #define shost_printk(prefix, shost, fmt, a...)	\
 	dev_printk(prefix, &(shost)->shost_gendev, fmt, ##a)
 
+static inline void *shost_priv(struct Scsi_Host *shost)
+{
+	return (void *)shost->hostdata;
+}
 
 int scsi_is_host_device(const struct device *);
 

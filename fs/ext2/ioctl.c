@@ -28,6 +28,7 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 
 	switch (cmd) {
 	case EXT2_IOC_GETFLAGS:
+		ext2_get_inode_flags(ei);
 		flags = ei->i_flags & EXT2_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT2_IOC_SETFLAGS: {
@@ -37,7 +38,7 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -77,7 +78,7 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 	case EXT2_IOC_GETVERSION:
 		return put_user(inode->i_generation, (int __user *) arg);
 	case EXT2_IOC_SETVERSION:
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))

@@ -425,13 +425,15 @@ static void close_dev(struct dm_dev *d, struct mapped_device *md)
 }
 
 /*
- * If possible (ie. blk_size[major] is set), this checks an area
- * of a destination device is valid.
+ * If possible, this checks an area of a destination device is valid.
  */
 static int check_device_area(struct dm_dev *dd, sector_t start, sector_t len)
 {
-	sector_t dev_size;
-	dev_size = dd->bdev->bd_inode->i_size >> SECTOR_SHIFT;
+	sector_t dev_size = dd->bdev->bd_inode->i_size >> SECTOR_SHIFT;
+
+	if (!dev_size)
+		return 1;
+
 	return ((start < dev_size) && (len <= (dev_size - start)));
 }
 
@@ -524,7 +526,7 @@ static int __table_get_device(struct dm_table *t, struct dm_target *ti,
 
 void dm_set_device_limits(struct dm_target *ti, struct block_device *bdev)
 {
-	request_queue_t *q = bdev_get_queue(bdev);
+	struct request_queue *q = bdev_get_queue(bdev);
 	struct io_restrictions *rs = &ti->limits;
 
 	/*
@@ -977,7 +979,7 @@ int dm_table_any_congested(struct dm_table *t, int bdi_bits)
 	devices = dm_table_get_devices(t);
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
+		struct request_queue *q = bdev_get_queue(dd->bdev);
 		r |= bdi_congested(&q->backing_dev_info, bdi_bits);
 	}
 
@@ -990,7 +992,7 @@ void dm_table_unplug_all(struct dm_table *t)
 
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
+		struct request_queue *q = bdev_get_queue(dd->bdev);
 
 		if (q->unplug_fn)
 			q->unplug_fn(q);
@@ -1009,7 +1011,7 @@ int dm_table_flush_all(struct dm_table *t)
 
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
+		struct request_queue *q = bdev_get_queue(dd->bdev);
 		int err;
 
 		if (!q->issue_flush_fn)

@@ -384,8 +384,6 @@ qeth_dev_route_store(struct qeth_card *card, struct qeth_routing_info *route,
 		route->type = PRIMARY_CONNECTOR;
 	} else if (!strcmp(tmp, "secondary_connector")) {
 		route->type = SECONDARY_CONNECTOR;
-	} else if (!strcmp(tmp, "multicast_router")) {
-		route->type = MULTICAST_ROUTER;
 	} else if (!strcmp(tmp, "primary_router")) {
 		route->type = PRIMARY_ROUTER;
 	} else if (!strcmp(tmp, "secondary_router")) {
@@ -993,7 +991,7 @@ static struct attribute_group qeth_osn_device_attr_group = {
 
 #define QETH_DEVICE_ATTR(_id,_name,_mode,_show,_store)			     \
 struct device_attribute dev_attr_##_id = {				     \
-	.attr = {.name=__stringify(_name), .mode=_mode, .owner=THIS_MODULE },\
+	.attr = {.name=__stringify(_name), .mode=_mode, },\
 	.show	= _show,						     \
 	.store	= _store,						     \
 };
@@ -1762,10 +1760,10 @@ qeth_remove_device_attributes(struct device *dev)
 {
 	struct qeth_card *card = dev->driver_data;
 
-	if (card->info.type == QETH_CARD_TYPE_OSN)
-		return sysfs_remove_group(&dev->kobj,
-					  &qeth_osn_device_attr_group);
-
+	if (card->info.type == QETH_CARD_TYPE_OSN) {
+		sysfs_remove_group(&dev->kobj, &qeth_osn_device_attr_group);
+		return;
+	}
 	sysfs_remove_group(&dev->kobj, &qeth_device_attr_group);
 	sysfs_remove_group(&dev->kobj, &qeth_device_ipato_group);
 	sysfs_remove_group(&dev->kobj, &qeth_device_vipa_group);

@@ -38,7 +38,6 @@
 #include <linux/init.h>
 #include <linux/pnp.h>
 #include <linux/fs.h>
-#include <linux/pci.h>
 
 #include <asm/semaphore.h>
 #include <asm/io.h>
@@ -151,8 +150,6 @@ static inline int sc1200wdt_status(void)
 
 static int sc1200wdt_open(struct inode *inode, struct file *file)
 {
-	nonseekable_open(inode, file);
-
 	/* allow one at a time */
 	if (down_trylock(&open_sem))
 		return -EBUSY;
@@ -163,7 +160,7 @@ static int sc1200wdt_open(struct inode *inode, struct file *file)
 	sc1200wdt_start();
 	printk(KERN_INFO PFX "Watchdog enabled, timeout = %d min(s)", timeout);
 
-	return 0;
+	return nonseekable_open(inode, file);
 }
 
 

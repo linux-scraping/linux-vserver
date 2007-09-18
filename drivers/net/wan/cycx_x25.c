@@ -376,11 +376,10 @@ static int cycx_wan_new_if(struct wan_device *wandev, struct net_device *dev,
 	}
 
 	/* allocate and initialize private data */
-	chan = kmalloc(sizeof(struct cycx_x25_channel), GFP_KERNEL);
+	chan = kzalloc(sizeof(struct cycx_x25_channel), GFP_KERNEL);
 	if (!chan)
 		return -ENOMEM;
 
-	memset(chan, 0, sizeof(*chan));
 	strcpy(chan->name, conf->name);
 	chan->card = card;
 	chan->link = conf->port;
@@ -834,7 +833,7 @@ static void cycx_x25_irq_rx(struct cycx_device *card, struct cycx_x25_cmd *cmd)
 	++chan->ifstats.rx_packets;
 	chan->ifstats.rx_bytes += pktlen;
 
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	netif_rx(skb);
 	dev->last_rx = jiffies;		/* timestamp */
 }

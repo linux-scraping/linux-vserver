@@ -885,6 +885,12 @@ struct cx88_board cx88_boards[] = {
 		.input          = {{
 			.type   = CX88_VMUX_DVB,
 			.vmux   = 0,
+		},{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+		},{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
 		}},
 		.mpeg           = CX88_MPEG_DVB,
 	},
@@ -1329,6 +1335,26 @@ struct cx88_board cx88_boards[] = {
 		/* fixme: Add radio support */
 		.mpeg           = CX88_MPEG_DVB | CX88_MPEG_BLACKBIRD,
 	},
+	[CX88_BOARD_ADSTECH_PTV_390] = {
+		.name           = "ADS Tech Instant Video PCI",
+		.tuner_type     = TUNER_ABSENT,
+		.radio_type     = UNSET,
+		.tuner_addr     = ADDR_UNSET,
+		.radio_addr     = ADDR_UNSET,
+		.input          = {{
+			.type   = CX88_VMUX_DEBUG,
+			.vmux   = 3,
+			.gpio0  = 0x04ff,
+		},{
+			.type   = CX88_VMUX_COMPOSITE1,
+			.vmux   = 1,
+			.gpio0  = 0x07fa,
+		},{
+			.type   = CX88_VMUX_SVIDEO,
+			.vmux   = 2,
+			.gpio0  = 0x07fa,
+		}},
+	},
 };
 const unsigned int cx88_bcount = ARRAY_SIZE(cx88_boards);
 
@@ -1537,10 +1563,10 @@ struct cx88_subid cx88_subids[] = {
 	},{
 		.subvendor = 0x17de,
 		.subdevice = 0x0840,
-	       .card      = CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT,
-       },{
-	       .subvendor = 0x1421,
-	       .subdevice = 0x0305,
+		.card      = CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT,
+	},{
+		.subvendor = 0x1421,
+		.subdevice = 0x0305,
 		.card      = CX88_BOARD_KWORLD_HARDWARE_MPEG_TV_XPERT,
 	},{
 		.subvendor = 0x18ac,
@@ -1631,6 +1657,14 @@ struct cx88_subid cx88_subids[] = {
 		.subvendor = 0x0070,
 		.subdevice = 0x1402,
 		.card      = CX88_BOARD_HAUPPAUGE_HVR3000,
+	},{
+		.subvendor = 0x1421,
+		.subdevice = 0x0341, /* ADS Tech InstantTV DVB-S */
+		.card      = CX88_BOARD_KWORLD_DVBS_100,
+	},{
+		.subvendor = 0x1421,
+		.subdevice = 0x0390,
+		.card      = CX88_BOARD_ADSTECH_PTV_390,
 	},
 };
 const unsigned int cx88_idcount = ARRAY_SIZE(cx88_subids);
@@ -1786,7 +1820,7 @@ static void dvico_fusionhdtv_hybrid_init(struct cx88_core *core)
 		{ 0x03, 0x0C },
 	};
 
-	for (i = 0; i < 13; i++) {
+	for (i = 0; i < ARRAY_SIZE(init_bufs); i++) {
 		msg.buf = init_bufs[i];
 		msg.len = (i != 12 ? 5 : 2);
 		err = i2c_transfer(&core->i2c_adap, &msg, 1);
@@ -1913,12 +1947,21 @@ void cx88_card_setup(struct cx88_core *core)
 		if (0 == core->i2c_rc) {
 			/* enable tuner */
 			int i;
-			static const u8 buffer [] = { 0x10,0x12,0x13,0x04,0x16,0x00,0x14,0x04,0x017,0x00 };
+			static const u8 buffer [][2] = {
+				{0x10,0x12},
+				{0x13,0x04},
+				{0x16,0x00},
+				{0x14,0x04},
+				{0x17,0x00}
+			};
 			core->i2c_client.addr = 0x0a;
 
-			for (i = 0; i < 5; i++)
-				if (2 != i2c_master_send(&core->i2c_client,&buffer[i*2],2))
-					printk(KERN_WARNING "%s: Unable to enable tuner(%i).\n",
+			for (i = 0; i < ARRAY_SIZE(buffer); i++)
+				if (2 != i2c_master_send(&core->i2c_client,
+							buffer[i],2))
+					printk(KERN_WARNING
+						"%s: Unable to enable "
+						"tuner(%i).\n",
 						core->name, i);
 		}
 		break;

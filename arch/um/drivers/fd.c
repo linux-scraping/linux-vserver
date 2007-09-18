@@ -9,7 +9,6 @@
 #include <termios.h>
 #include <errno.h>
 #include "user.h"
-#include "user_util.h"
 #include "chan_user.h"
 #include "os.h"
 #include "um_malloc.h"
@@ -38,7 +37,7 @@ static void *fd_init(char *str, int device, const struct chan_opts *opts)
 		printk("fd_init : couldn't parse file descriptor '%s'\n", str);
 		return(NULL);
 	}
-	data = um_kmalloc(sizeof(*data));
+	data = kmalloc(sizeof(*data), UM_GFP_KERNEL);
 	if(data == NULL) return(NULL);
 	*data = ((struct fd_chan) { .fd  	= n,
 				    .raw  	= opts->raw });

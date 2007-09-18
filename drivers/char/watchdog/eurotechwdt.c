@@ -1,5 +1,5 @@
 /*
- *	Eurotech CPU-1220/1410 on board WDT driver
+ *	Eurotech CPU-1220/1410/1420 on board WDT driver
  *
  *	(c) Copyright 2001 Ascensit <support@ascensit.com>
  *	(c) Copyright 2001 Rodolfo Giometti <giometti@ascensit.com>
@@ -25,6 +25,9 @@
 
 /* Changelog:
  *
+ * 2001 - Rodolfo Giometti
+ *	Initial release
+ *
  * 2002/04/25 - Rob Radez
  *	clean up #includes
  *	clean up locking
@@ -33,11 +36,13 @@
  *	add WDIOC_GETSTATUS and WDIOC_SETOPTIONS ioctls
  *	add expect_close support
  *
- * 2001 - Rodolfo Giometti
- *	Initial release
- *
  * 2002.05.30 - Joel Becker <joel.becker@oracle.com>
  * 	Added Matt Domsch's nowayout module option.
+ */
+
+/*
+ *	The eurotech CPU-1220/1410/1420's watchdog is a part
+ *	of the on-board SUPER I/O device SMSC FDC 37B782.
  */
 
 #include <linux/interrupt.h>
@@ -413,17 +418,10 @@ static int __init eurwdt_init(void)
 {
 	int ret;
 
-	ret = misc_register(&eurwdt_miscdev);
-	if (ret) {
-		printk(KERN_ERR "eurwdt: can't misc_register on minor=%d\n",
-		WATCHDOG_MINOR);
-		goto out;
-	}
-
 	ret = request_irq(irq, eurwdt_interrupt, IRQF_DISABLED, "eurwdt", NULL);
 	if(ret) {
 		printk(KERN_ERR "eurwdt: IRQ %d is not free.\n", irq);
-		goto outmisc;
+		goto out;
 	}
 
 	if (!request_region(io, 2, "eurwdt")) {
@@ -438,6 +436,13 @@ static int __init eurwdt_init(void)
 		goto outreg;
 	}
 
+	ret = misc_register(&eurwdt_miscdev);
+	if (ret) {
+		printk(KERN_ERR "eurwdt: can't misc_register on minor=%d\n",
+		WATCHDOG_MINOR);
+		goto outreboot;
+	}
+
 	eurwdt_unlock_chip();
 
 	ret = 0;
@@ -448,14 +453,14 @@ static int __init eurwdt_init(void)
 out:
 	return ret;
 
+outreboot:
+	unregister_reboot_notifier(&eurwdt_notifier);
+
 outreg:
 	release_region(io, 2);
 
 outirq:
 	free_irq(irq, NULL);
-
-outmisc:
-	misc_deregister(&eurwdt_miscdev);
 	goto out;
 }
 

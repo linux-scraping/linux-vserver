@@ -115,7 +115,7 @@ asmlinkage long sys_ioprio_set(int which, int who, int ioprio)
 			if (!who)
 				user = current->user;
 			else
-				user = find_user(vx_current_xid(), who);
+				user = find_user(who);
 
 			if (!user)
 				break;
@@ -208,7 +208,7 @@ asmlinkage long sys_ioprio_get(int which, int who)
 			if (!who)
 				user = current->user;
 			else
-				user = find_user(vx_current_xid(), who);
+				user = find_user(who);
 
 			if (!user)
 				break;

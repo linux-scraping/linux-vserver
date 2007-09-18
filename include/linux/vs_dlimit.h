@@ -1,6 +1,8 @@
 #ifndef _VS_DLIMIT_H
 #define _VS_DLIMIT_H
 
+#include <linux/fs.h>
+
 #include "vserver/dlimit.h"
 #include "vserver/base.h"
 #include "vserver/debug.h"

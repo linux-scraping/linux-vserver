@@ -21,25 +21,6 @@
 #define RTC_DEF_DIVIDER		(32768 - 1)
 #define RTC_DEF_TRIM            0
 
-static unsigned long __init sa1100_get_rtc_time(void)
-{
-	/*
-	 * According to the manual we should be able to let RTTR be zero
-	 * and then a default diviser for a 32.768KHz clock is used.
-	 * Apparently this doesn't work, at least for my SA1110 rev 5.
-	 * If the clock divider is uninitialized then reset it to the
-	 * default value to get the 1Hz clock.
-	 */
-	if (RTTR == 0) {
-		RTTR = RTC_DEF_DIVIDER + (RTC_DEF_TRIM << 16);
-		printk(KERN_WARNING "Warning: uninitialized Real Time Clock\n");
-		/* The current RTC value probably doesn't make sense either */
-		RCNR = 0;
-		return 0;
-	}
-	return RCNR;
-}
-
 static int sa1100_set_rtc(void)
 {
 	unsigned long current_time = xtime.tv_sec;
@@ -111,20 +92,15 @@ sa1100_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction sa1100_timer_irq = {
 	.name		= "SA11xx Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= sa1100_timer_interrupt,
 };
 
 static void __init sa1100_timer_init(void)
 {
-	struct timespec tv;
 	unsigned long flags;
 
 	set_rtc = sa1100_set_rtc;
-
-	tv.tv_nsec = 0;
-	tv.tv_sec = sa1100_get_rtc_time();
-	do_settimeofday(&tv);
 
 	OIER = 0;		/* disable any timer interrupts */
 	OSSR = 0xf;		/* clear status on all timers */

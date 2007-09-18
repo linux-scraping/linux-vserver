@@ -20,7 +20,6 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
 #include <linux/ptrace.h>
@@ -31,6 +30,7 @@
 #include <linux/init_task.h>
 #include <linux/module.h>
 #include <linux/mqueue.h>
+#include <linux/fs.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>

@@ -150,7 +150,7 @@ static void nvGetClocks(struct nvidia_par *par, unsigned int *MClk,
 		M = pll & 0xFF;
 		N = (pll >> 8) & 0xFF;
 		if (((par->Chipset & 0xfff0) == 0x0290) ||
-				((par->Chipset & 0xfff0) == 0x0390)) {
+		    ((par->Chipset & 0xfff0) == 0x0390)) {
 			MB = 1;
 			NB = 1;
 		} else {
@@ -160,7 +160,7 @@ static void nvGetClocks(struct nvidia_par *par, unsigned int *MClk,
 		*MClk = ((N * NB * par->CrystalFreqKHz) / (M * MB)) >> P;
 
 		pll = NV_RD32(par->PMC, 0x4000);
-		P = (pll >> 16) & 0x03;
+		P = (pll >> 16) & 0x07;
 		pll = NV_RD32(par->PMC, 0x4004);
 		M = pll & 0xFF;
 		N = (pll >> 8) & 0xFF;
@@ -686,7 +686,7 @@ static void nForceUpdateArbitrationSettings(unsigned VClk,
 
 	if ((par->Chipset & 0x0FF0) == 0x01A0) {
 		unsigned int uMClkPostDiv;
-		dev = pci_find_slot(0, 3);
+		dev = pci_get_bus_and_slot(0, 3);
 		pci_read_config_dword(dev, 0x6C, &uMClkPostDiv);
 		uMClkPostDiv = (uMClkPostDiv >> 8) & 0xf;
 
@@ -694,11 +694,11 @@ static void nForceUpdateArbitrationSettings(unsigned VClk,
 			uMClkPostDiv = 4;
 		MClk = 400000 / uMClkPostDiv;
 	} else {
-		dev = pci_find_slot(0, 5);
+		dev = pci_get_bus_and_slot(0, 5);
 		pci_read_config_dword(dev, 0x4c, &MClk);
 		MClk /= 1000;
 	}
-
+	pci_dev_put(dev);
 	pll = NV_RD32(par->PRAMDAC0, 0x0500);
 	M = (pll >> 0) & 0xFF;
 	N = (pll >> 8) & 0xFF;
@@ -707,19 +707,21 @@ static void nForceUpdateArbitrationSettings(unsigned VClk,
 	sim_data.pix_bpp = (char)pixelDepth;
 	sim_data.enable_video = 0;
 	sim_data.enable_mp = 0;
-	pci_find_slot(0, 1);
+	dev = pci_get_bus_and_slot(0, 1);
 	pci_read_config_dword(dev, 0x7C, &sim_data.memory_type);
+	pci_dev_put(dev);
 	sim_data.memory_type = (sim_data.memory_type >> 12) & 1;
 	sim_data.memory_width = 64;
 
-	dev = pci_find_slot(0, 3);
+	dev = pci_get_bus_and_slot(0, 3);
 	pci_read_config_dword(dev, 0, &memctrl);
+	pci_dev_put(dev);
 	memctrl >>= 16;
 
 	if ((memctrl == 0x1A9) || (memctrl == 0x1AB) || (memctrl == 0x1ED)) {
 		int dimm[3];
 
-		pci_find_slot(0, 2);
+		dev = pci_get_bus_and_slot(0, 2);
 		pci_read_config_dword(dev, 0x40, &dimm[0]);
 		dimm[0] = (dimm[0] >> 8) & 0x4f;
 		pci_read_config_dword(dev, 0x44, &dimm[1]);
@@ -731,6 +733,7 @@ static void nForceUpdateArbitrationSettings(unsigned VClk,
 			printk("nvidiafb: your nForce DIMMs are not arranged "
 			       "in optimal banks!\n");
 		}
+		pci_dev_put(dev);
 	}
 
 	sim_data.mem_latency = 3;
@@ -888,11 +891,17 @@ void NVCalcStateExt(struct nvidia_par *par,
 		state->general = bpp == 16 ? 0x00101100 : 0x00100100;
 		state->repaint1 = hDisplaySize < 1280 ? 0x04 : 0x00;
 		break;
+	case NV_ARCH_40:
+		if (!par->FlatPanel)
+			state->control = NV_RD32(par->PRAMDAC0, 0x0580) &
+				0xeffffeff;
+		/* fallthrough */
 	case NV_ARCH_10:
 	case NV_ARCH_20:
 	case NV_ARCH_30:
 	default:
-		if ((par->Chipset & 0xfff0) == 0x0240) {
+		if ((par->Chipset & 0xfff0) == 0x0240 ||
+		    (par->Chipset & 0xfff0) == 0x03d0) {
 			state->arbitration0 = 256;
 			state->arbitration1 = 0x0480;
 		} else if (((par->Chipset & 0xffff) == 0x01A0) ||
@@ -935,7 +944,7 @@ void NVCalcStateExt(struct nvidia_par *par,
 
 void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 {
-	int i;
+	int i, j;
 
 	NV_WR32(par->PMC, 0x0140, 0x00000000);
 	NV_WR32(par->PMC, 0x0200, 0xFFFF00FF);
@@ -947,7 +956,8 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 	NV_WR32(par->PTIMER, 0x0100 * 4, 0xFFFFFFFF);
 
 	if (par->Architecture == NV_ARCH_04) {
-		NV_WR32(par->PFB, 0x0200, state->config);
+		if (state)
+			NV_WR32(par->PFB, 0x0200, state->config);
 	} else if ((par->Architecture < NV_ARCH_40) ||
 		   (par->Chipset & 0xfff0) == 0x0040) {
 		for (i = 0; i < 8; i++) {
@@ -960,7 +970,9 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 
 		if (((par->Chipset & 0xfff0) == 0x0090) ||
 		    ((par->Chipset & 0xfff0) == 0x01D0) ||
-		    ((par->Chipset & 0xfff0) == 0x0290))
+		    ((par->Chipset & 0xfff0) == 0x0290) ||
+		    ((par->Chipset & 0xfff0) == 0x0390) ||
+		    ((par->Chipset & 0xfff0) == 0x03D0))
 			regions = 15;
 		for(i = 0; i < regions; i++) {
 			NV_WR32(par->PFB, 0x0600 + (i * 0x10), 0);
@@ -1201,16 +1213,20 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 			NV_WR32(par->PGRAPH, 0x0608, 0xFFFFFFFF);
 		} else {
 			if (par->Architecture >= NV_ARCH_40) {
-				u32 tmp;
-
 				NV_WR32(par->PGRAPH, 0x0084, 0x401287c0);
 				NV_WR32(par->PGRAPH, 0x008C, 0x60de8051);
 				NV_WR32(par->PGRAPH, 0x0090, 0x00008000);
 				NV_WR32(par->PGRAPH, 0x0610, 0x00be3c5f);
+				NV_WR32(par->PGRAPH, 0x0bc4,
+					NV_RD32(par->PGRAPH, 0x0bc4) |
+					0x00008000);
 
-				tmp = NV_RD32(par->REGS, 0x1540) & 0xff;
-				for(i = 0; tmp && !(tmp & 1); tmp >>= 1, i++);
-				NV_WR32(par->PGRAPH, 0x5000, i);
+				j = NV_RD32(par->REGS, 0x1540) & 0xff;
+
+				if (j) {
+					for (i = 0; !(j & 1); j >>= 1, i++);
+					NV_WR32(par->PGRAPH, 0x5000, i);
+				}
 
 				if ((par->Chipset & 0xfff0) == 0x0040) {
 					NV_WR32(par->PGRAPH, 0x09b0,
@@ -1245,6 +1261,7 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 				case 0x0160:
 				case 0x01D0:
 				case 0x0240:
+				case 0x03D0:
 					NV_WR32(par->PMC, 0x1700,
 						NV_RD32(par->PFB, 0x020C));
 					NV_WR32(par->PMC, 0x1704, 0);
@@ -1264,7 +1281,6 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 						0x00000108);
 					break;
 				case 0x0220:
-				case 0x0230:
 					NV_WR32(par->PGRAPH, 0x0860, 0);
 					NV_WR32(par->PGRAPH, 0x0864, 0);
 					NV_WR32(par->PRAMDAC, 0x0608,
@@ -1273,6 +1289,7 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 					break;
 				case 0x0090:
 				case 0x0290:
+				case 0x0390:
 					NV_WR32(par->PRAMDAC, 0x0608,
 						NV_RD32(par->PRAMDAC, 0x0608) |
 						0x00100000);
@@ -1349,7 +1366,9 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 			} else {
 				if (((par->Chipset & 0xfff0) == 0x0090) ||
 				    ((par->Chipset & 0xfff0) == 0x01D0) ||
-				    ((par->Chipset & 0xfff0) == 0x0290)) {
+				    ((par->Chipset & 0xfff0) == 0x0290) ||
+				    ((par->Chipset & 0xfff0) == 0x0390) ||
+				    ((par->Chipset & 0xfff0) == 0x03D0)) {
 					for (i = 0; i < 60; i++) {
 						NV_WR32(par->PGRAPH,
 							0x0D00 + i*4,
@@ -1400,7 +1419,8 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 				} else {
 					if ((par->Chipset & 0xfff0) == 0x0090 ||
 					    (par->Chipset & 0xfff0) == 0x01D0 ||
-					    (par->Chipset & 0xfff0) == 0x0290) {
+					    (par->Chipset & 0xfff0) == 0x0290 ||
+					    (par->Chipset & 0xfff0) == 0x0390) {
 						NV_WR32(par->PGRAPH, 0x0DF0,
 							NV_RD32(par->PFB, 0x0200));
 						NV_WR32(par->PGRAPH, 0x0DF4,
@@ -1487,6 +1507,12 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 	NV_WR32(par->PFIFO, 0x0494 * 4, 0x00000001);
 	NV_WR32(par->PFIFO, 0x0495 * 4, 0x00000001);
 	NV_WR32(par->PFIFO, 0x0140 * 4, 0x00000001);
+
+    if (!state) {
+	    par->CurrentState = NULL;
+	    return;
+    }
+
 	if (par->Architecture >= NV_ARCH_10) {
 		if (par->twoHeads) {
 			NV_WR32(par->PCRTC0, 0x0860, state->head);
@@ -1558,6 +1584,9 @@ void NVLoadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state)
 	VGA_WR08(par->PCIO, 0x03D5, state->interlace);
 
 	if (!par->FlatPanel) {
+		if (par->Architecture >= NV_ARCH_40)
+			NV_WR32(par->PRAMDAC0, 0x0580, state->control);
+
 		NV_WR32(par->PRAMDAC0, 0x050C, state->pllsel);
 		NV_WR32(par->PRAMDAC0, 0x0508, state->vpll);
 		if (par->twoHeads)
@@ -1622,6 +1651,9 @@ void NVUnloadStateExt(struct nvidia_par *par, RIVA_HW_STATE * state) {
 	state->general = NV_RD32(par->PRAMDAC, 0x0600);
 	state->scale = NV_RD32(par->PRAMDAC, 0x0848);
 	state->config = NV_RD32(par->PFB, 0x0200);
+
+	if (par->Architecture >= NV_ARCH_40 && !par->FlatPanel)
+		state->control  = NV_RD32(par->PRAMDAC0, 0x0580);
 
 	if (par->Architecture >= NV_ARCH_10) {
 		if (par->twoHeads) {

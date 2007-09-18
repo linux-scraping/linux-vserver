@@ -2,6 +2,7 @@
 #define __ASM_APIC_H
 
 #include <linux/pm.h>
+#include <linux/delay.h>
 #include <asm/fixmap.h>
 #include <asm/apicdef.h>
 #include <asm/processor.h>
@@ -64,12 +65,8 @@ static __inline fastcall unsigned long native_apic_read(unsigned long reg)
 	return *((volatile unsigned long *)(APIC_BASE+reg));
 }
 
-static __inline__ void apic_wait_icr_idle(void)
-{
-	while ( apic_read( APIC_ICR ) & APIC_ICR_BUSY )
-		cpu_relax();
-}
-
+void apic_wait_icr_idle(void);
+unsigned long safe_apic_wait_icr_idle(void);
 int get_physical_broadcast(void);
 
 #ifdef CONFIG_X86_GOOD_APIC
@@ -118,6 +115,8 @@ extern void enable_NMI_through_LVT0 (void * dummy);
 
 extern int timer_over_8254;
 extern int local_apic_timer_c2_ok;
+
+extern int local_apic_timer_disabled;
 
 #else /* !CONFIG_X86_LOCAL_APIC */
 static inline void lapic_shutdown(void) { }

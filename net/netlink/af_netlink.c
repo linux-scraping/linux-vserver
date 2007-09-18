@@ -45,7 +45,6 @@
 #include <linux/rtnetlink.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
 #include <linux/notifier.h>
 #include <linux/security.h>
 #include <linux/jhash.h>
@@ -56,6 +55,7 @@
 #include <linux/types.h>
 #include <linux/audit.h>
 #include <linux/selinux.h>
+#include <linux/mutex.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vs_limit.h>
@@ -65,6 +65,7 @@
 #include <net/netlink.h>
 
 #define NLGRPSZ(x)	(ALIGN(x, sizeof(unsigned long) * 8) / 8)
+#define NLGRPLONGS(x)	(NLGRPSZ(x)/sizeof(unsigned long))
 
 struct netlink_sock {
 	/* struct sock has to be the first member of netlink_sock */
@@ -79,7 +80,8 @@ struct netlink_sock {
 	unsigned long		state;
 	wait_queue_head_t	wait;
 	struct netlink_callback	*cb;
-	spinlock_t		cb_lock;
+	struct mutex		*cb_mutex;
+	struct mutex		cb_def_mutex;
 	void			(*data_ready)(struct sock *sk, int bytes);
 	struct module		*module;
 };
@@ -111,6 +113,7 @@ struct netlink_table {
 	unsigned long *listeners;
 	unsigned int nl_nonroot;
 	unsigned int groups;
+	struct mutex *cb_mutex;
 	struct module *module;
 	int registered;
 };
@@ -121,6 +124,7 @@ static DECLARE_WAIT_QUEUE_HEAD(nl_table_wait);
 
 static int netlink_dump(struct sock *sk);
 static void netlink_destroy_callback(struct netlink_callback *cb);
+static void netlink_queue_skip(struct nlmsghdr *nlh, struct sk_buff *skb);
 
 static DEFINE_RWLOCK(nl_table_lock);
 static atomic_t nl_table_users = ATOMIC_INIT(0);
@@ -139,6 +143,14 @@ static struct hlist_head *nl_pid_hashfn(struct nl_pid_hash *hash, u32 pid)
 
 static void netlink_sock_destruct(struct sock *sk)
 {
+	struct netlink_sock *nlk = nlk_sk(sk);
+
+	if (nlk->cb) {
+		if (nlk->cb->done)
+			nlk->cb->done(nlk->cb);
+		netlink_destroy_callback(nlk->cb);
+	}
+
 	skb_queue_purge(&sk->sk_receive_queue);
 
 	if (!sock_flag(sk, SOCK_DEAD)) {
@@ -147,7 +159,6 @@ static void netlink_sock_destruct(struct sock *sk)
 	}
 	BUG_TRAP(!atomic_read(&sk->sk_rmem_alloc));
 	BUG_TRAP(!atomic_read(&sk->sk_wmem_alloc));
-	BUG_TRAP(!nlk_sk(sk)->cb);
 	BUG_TRAP(!nlk_sk(sk)->groups);
 }
 
@@ -307,10 +318,12 @@ netlink_update_listeners(struct sock *sk)
 	unsigned long mask;
 	unsigned int i;
 
-	for (i = 0; i < NLGRPSZ(tbl->groups)/sizeof(unsigned long); i++) {
+	for (i = 0; i < NLGRPLONGS(tbl->groups); i++) {
 		mask = 0;
-		sk_for_each_bound(sk, node, &tbl->mc_list)
-			mask |= nlk_sk(sk)->groups[i];
+		sk_for_each_bound(sk, node, &tbl->mc_list) {
+			if (i < NLGRPLONGS(nlk_sk(sk)->ngroups))
+				mask |= nlk_sk(sk)->groups[i];
+		}
 		tbl->listeners[i] = mask;
 	}
 	/* this function is only called with the netlink table "grabbed", which
@@ -373,7 +386,8 @@ static struct proto netlink_proto = {
 	.obj_size = sizeof(struct netlink_sock),
 };
 
-static int __netlink_create(struct socket *sock, int protocol)
+static int __netlink_create(struct socket *sock, struct mutex *cb_mutex,
+			    int protocol)
 {
 	struct sock *sk;
 	struct netlink_sock *nlk;
@@ -387,7 +401,12 @@ static int __netlink_create(struct socket *sock, int protocol)
 	sock_init_data(sock, sk);
 
 	nlk = nlk_sk(sk);
-	spin_lock_init(&nlk->cb_lock);
+	if (cb_mutex)
+		nlk->cb_mutex = cb_mutex;
+	else {
+		nlk->cb_mutex = &nlk->cb_def_mutex;
+		mutex_init(nlk->cb_mutex);
+	}
 	init_waitqueue_head(&nlk->wait);
 
 	sk->sk_destruct = netlink_sock_destruct;
@@ -398,8 +417,8 @@ static int __netlink_create(struct socket *sock, int protocol)
 static int netlink_create(struct socket *sock, int protocol)
 {
 	struct module *module = NULL;
+	struct mutex *cb_mutex;
 	struct netlink_sock *nlk;
-	unsigned int groups;
 	int err = 0;
 
 	sock->state = SS_UNCONNECTED;
@@ -421,10 +440,10 @@ static int netlink_create(struct socket *sock, int protocol)
 	if (nl_table[protocol].registered &&
 	    try_module_get(nl_table[protocol].module))
 		module = nl_table[protocol].module;
-	groups = nl_table[protocol].groups;
+	cb_mutex = nl_table[protocol].cb_mutex;
 	netlink_unlock_table();
 
-	if ((err = __netlink_create(sock, protocol)) < 0)
+	if ((err = __netlink_create(sock, cb_mutex, protocol)) < 0)
 		goto out_module;
 
 	nlk = nlk_sk(sock->sk);
@@ -449,17 +468,10 @@ static int netlink_release(struct socket *sock)
 	sock_orphan(sk);
 	nlk = nlk_sk(sk);
 
-	spin_lock(&nlk->cb_lock);
-	if (nlk->cb) {
-		if (nlk->cb->done)
-			nlk->cb->done(nlk->cb);
-		netlink_destroy_callback(nlk->cb);
-		nlk->cb = NULL;
-	}
-	spin_unlock(&nlk->cb_lock);
-
-	/* OK. Socket is unlinked, and, therefore,
-	   no new packets will arrive */
+	/*
+	 * OK. Socket is unlinked, any packets that arrive now
+	 * will be purged.
+	 */
 
 	sock->sk = NULL;
 	wake_up_interruptible_all(&nlk->wait);
@@ -549,26 +561,37 @@ netlink_update_subscriptions(struct sock *sk, unsigned int subscriptions)
 	nlk->subscriptions = subscriptions;
 }
 
-static int netlink_alloc_groups(struct sock *sk)
+static int netlink_realloc_groups(struct sock *sk)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
 	unsigned int groups;
+	unsigned long *new_groups;
 	int err = 0;
 
-	netlink_lock_table();
+	netlink_table_grab();
+
 	groups = nl_table[sk->sk_protocol].groups;
-	if (!nl_table[sk->sk_protocol].registered)
+	if (!nl_table[sk->sk_protocol].registered) {
 		err = -ENOENT;
-	netlink_unlock_table();
+		goto out_unlock;
+	}
 
-	if (err)
-		return err;
+	if (nlk->ngroups >= groups)
+		goto out_unlock;
 
-	nlk->groups = kzalloc(NLGRPSZ(groups), GFP_KERNEL);
-	if (nlk->groups == NULL)
-		return -ENOMEM;
+	new_groups = krealloc(nlk->groups, NLGRPSZ(groups), GFP_ATOMIC);
+	if (new_groups == NULL) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	memset((char*)new_groups + NLGRPSZ(nlk->ngroups), 0,
+	       NLGRPSZ(groups) - NLGRPSZ(nlk->ngroups));
+
+	nlk->groups = new_groups;
 	nlk->ngroups = groups;
-	return 0;
+ out_unlock:
+	netlink_table_ungrab();
+	return err;
 }
 
 static int netlink_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
@@ -585,11 +608,9 @@ static int netlink_bind(struct socket *sock, struct sockaddr *addr, int addr_len
 	if (nladdr->nl_groups) {
 		if (!netlink_capable(sock, NL_NONROOT_RECV))
 			return -EPERM;
-		if (nlk->groups == NULL) {
-			err = netlink_alloc_groups(sk);
-			if (err)
-				return err;
-		}
+		err = netlink_realloc_groups(sk);
+		if (err)
+			return err;
 	}
 
 	if (nlk->pid) {
@@ -833,10 +854,18 @@ retry:
 int netlink_has_listeners(struct sock *sk, unsigned int group)
 {
 	int res = 0;
+	unsigned long *listeners;
 
 	BUG_ON(!(nlk_sk(sk)->flags & NETLINK_KERNEL_SOCKET));
+
+	rcu_read_lock();
+	listeners = rcu_dereference(nl_table[sk->sk_protocol].listeners);
+
 	if (group - 1 < nl_table[sk->sk_protocol].groups)
-		res = test_bit(group - 1, nl_table[sk->sk_protocol].listeners);
+		res = test_bit(group - 1, listeners);
+
+	rcu_read_unlock();
+
 	return res;
 }
 EXPORT_SYMBOL_GPL(netlink_has_listeners);
@@ -1001,18 +1030,36 @@ void netlink_set_err(struct sock *ssk, u32 pid, u32 group, int code)
 	read_unlock(&nl_table_lock);
 }
 
+/* must be called with netlink table grabbed */
+static void netlink_update_socket_mc(struct netlink_sock *nlk,
+				     unsigned int group,
+				     int is_new)
+{
+	int old, new = !!is_new, subscriptions;
+
+	old = test_bit(group - 1, nlk->groups);
+	subscriptions = nlk->subscriptions - old + new;
+	if (new)
+		__set_bit(group - 1, nlk->groups);
+	else
+		__clear_bit(group - 1, nlk->groups);
+	netlink_update_subscriptions(&nlk->sk, subscriptions);
+	netlink_update_listeners(&nlk->sk);
+}
+
 static int netlink_setsockopt(struct socket *sock, int level, int optname,
 			      char __user *optval, int optlen)
 {
 	struct sock *sk = sock->sk;
 	struct netlink_sock *nlk = nlk_sk(sk);
-	int val = 0, err;
+	unsigned int val = 0;
+	int err;
 
 	if (level != SOL_NETLINK)
 		return -ENOPROTOOPT;
 
 	if (optlen >= sizeof(int) &&
-	    get_user(val, (int __user *)optval))
+	    get_user(val, (unsigned int __user *)optval))
 		return -EFAULT;
 
 	switch (optname) {
@@ -1025,27 +1072,16 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 		break;
 	case NETLINK_ADD_MEMBERSHIP:
 	case NETLINK_DROP_MEMBERSHIP: {
-		unsigned int subscriptions;
-		int old, new = optname == NETLINK_ADD_MEMBERSHIP ? 1 : 0;
-
 		if (!netlink_capable(sock, NL_NONROOT_RECV))
 			return -EPERM;
-		if (nlk->groups == NULL) {
-			err = netlink_alloc_groups(sk);
-			if (err)
-				return err;
-		}
+		err = netlink_realloc_groups(sk);
+		if (err)
+			return err;
 		if (!val || val - 1 >= nlk->ngroups)
 			return -EINVAL;
 		netlink_table_grab();
-		old = test_bit(val - 1, nlk->groups);
-		subscriptions = nlk->subscriptions - old + new;
-		if (new)
-			__set_bit(val - 1, nlk->groups);
-		else
-			__clear_bit(val - 1, nlk->groups);
-		netlink_update_subscriptions(sk, subscriptions);
-		netlink_update_listeners(sk);
+		netlink_update_socket_mc(nlk, val,
+					 optname == NETLINK_ADD_MEMBERSHIP);
 		netlink_table_ungrab();
 		err = 0;
 		break;
@@ -1218,7 +1254,7 @@ static int netlink_recvmsg(struct kiocb *kiocb, struct socket *sock,
 		copied = len;
 	}
 
-	skb->h.raw = skb->data;
+	skb_reset_transport_header(skb);
 	err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
 
 	if (msg->msg_name) {
@@ -1238,13 +1274,14 @@ static int netlink_recvmsg(struct kiocb *kiocb, struct socket *sock,
 		siocb->scm = &scm;
 	}
 	siocb->scm->creds = *NETLINK_CREDS(skb);
+	if (flags & MSG_TRUNC)
+		copied = skb->len;
 	skb_free_datagram(sk, skb);
 
 	if (nlk->cb && atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf / 2)
 		netlink_dump(sk);
 
 	scm_recv(sock, msg, siocb->scm, flags);
-
 out:
 	netlink_rcv_wake(sk);
 	return err ? : copied;
@@ -1268,7 +1305,7 @@ static void netlink_data_ready(struct sock *sk, int len)
 struct sock *
 netlink_kernel_create(int unit, unsigned int groups,
 		      void (*input)(struct sock *sk, int len),
-		      struct module *module)
+		      struct mutex *cb_mutex, struct module *module)
 {
 	struct socket *sock;
 	struct sock *sk;
@@ -1283,7 +1320,7 @@ netlink_kernel_create(int unit, unsigned int groups,
 	if (sock_create_lite(PF_NETLINK, SOCK_DGRAM, unit, &sock))
 		return NULL;
 
-	if (__netlink_create(sock, unit) < 0)
+	if (__netlink_create(sock, cb_mutex, unit) < 0)
 		goto out_sock_release;
 
 	if (groups < 32)
@@ -1307,6 +1344,7 @@ netlink_kernel_create(int unit, unsigned int groups,
 	netlink_table_grab();
 	nl_table[unit].groups = groups;
 	nl_table[unit].listeners = listeners;
+	nl_table[unit].cb_mutex = cb_mutex;
 	nl_table[unit].module = module;
 	nl_table[unit].registered = 1;
 	netlink_table_ungrab();
@@ -1318,6 +1356,71 @@ out_sock_release:
 	sock_release(sock);
 	return NULL;
 }
+
+/**
+ * netlink_change_ngroups - change number of multicast groups
+ *
+ * This changes the number of multicast groups that are available
+ * on a certain netlink family. Note that it is not possible to
+ * change the number of groups to below 32. Also note that it does
+ * not implicitly call netlink_clear_multicast_users() when the
+ * number of groups is reduced.
+ *
+ * @sk: The kernel netlink socket, as returned by netlink_kernel_create().
+ * @groups: The new number of groups.
+ */
+int netlink_change_ngroups(struct sock *sk, unsigned int groups)
+{
+	unsigned long *listeners, *old = NULL;
+	struct netlink_table *tbl = &nl_table[sk->sk_protocol];
+	int err = 0;
+
+	if (groups < 32)
+		groups = 32;
+
+	netlink_table_grab();
+	if (NLGRPSZ(tbl->groups) < NLGRPSZ(groups)) {
+		listeners = kzalloc(NLGRPSZ(groups), GFP_ATOMIC);
+		if (!listeners) {
+			err = -ENOMEM;
+			goto out_ungrab;
+		}
+		old = tbl->listeners;
+		memcpy(listeners, old, NLGRPSZ(tbl->groups));
+		rcu_assign_pointer(tbl->listeners, listeners);
+	}
+	tbl->groups = groups;
+
+ out_ungrab:
+	netlink_table_ungrab();
+	synchronize_rcu();
+	kfree(old);
+	return err;
+}
+EXPORT_SYMBOL(netlink_change_ngroups);
+
+/**
+ * netlink_clear_multicast_users - kick off multicast listeners
+ *
+ * This function removes all listeners from the given group.
+ * @ksk: The kernel netlink socket, as returned by
+ *	netlink_kernel_create().
+ * @group: The multicast group to clear.
+ */
+void netlink_clear_multicast_users(struct sock *ksk, unsigned int group)
+{
+	struct sock *sk;
+	struct hlist_node *node;
+	struct netlink_table *tbl = &nl_table[ksk->sk_protocol];
+
+	netlink_table_grab();
+
+	sk_for_each_bound(sk, node, &tbl->mc_list)
+		netlink_update_socket_mc(nlk_sk(sk), group, 0);
+
+	netlink_table_ungrab();
+}
+EXPORT_SYMBOL(netlink_clear_multicast_users);
 
 void netlink_set_nonroot(int protocol, unsigned int flags)
 {
@@ -1349,7 +1452,7 @@ static int netlink_dump(struct sock *sk)
 	if (!skb)
 		goto errout;
 
-	spin_lock(&nlk->cb_lock);
+	mutex_lock(nlk->cb_mutex);
 
 	cb = nlk->cb;
 	if (cb == NULL) {
@@ -1360,7 +1463,7 @@ static int netlink_dump(struct sock *sk)
 	len = cb->dump(skb, cb);
 
 	if (len > 0) {
-		spin_unlock(&nlk->cb_lock);
+		mutex_unlock(nlk->cb_mutex);
 		skb_queue_tail(&sk->sk_receive_queue, skb);
 		sk->sk_data_ready(sk, len);
 		return 0;
@@ -1378,13 +1481,13 @@ static int netlink_dump(struct sock *sk)
 	if (cb->done)
 		cb->done(cb);
 	nlk->cb = NULL;
-	spin_unlock(&nlk->cb_lock);
+	mutex_unlock(nlk->cb_mutex);
 
 	netlink_destroy_callback(cb);
 	return 0;
 
 errout_skb:
-	spin_unlock(&nlk->cb_lock);
+	mutex_unlock(nlk->cb_mutex);
 	kfree_skb(skb);
 errout:
 	return err;
@@ -1415,20 +1518,25 @@ int netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 		return -ECONNREFUSED;
 	}
 	nlk = nlk_sk(sk);
-	/* A dump or destruction is in progress... */
-	spin_lock(&nlk->cb_lock);
-	if (nlk->cb || sock_flag(sk, SOCK_DEAD)) {
-		spin_unlock(&nlk->cb_lock);
+	/* A dump is in progress... */
+	mutex_lock(nlk->cb_mutex);
+	if (nlk->cb) {
+		mutex_unlock(nlk->cb_mutex);
 		netlink_destroy_callback(cb);
 		sock_put(sk);
 		return -EBUSY;
 	}
 	nlk->cb = cb;
-	spin_unlock(&nlk->cb_lock);
+	mutex_unlock(nlk->cb_mutex);
 
 	netlink_dump(sk);
 	sock_put(sk);
-	return 0;
+
+	/* We successfully started a dump, by returning -EINTR we
+	 * signal the queue mangement to interrupt processing of
+	 * any netlink messages so userspace gets a chance to read
+	 * the results. */
+	return -EINTR;
 }
 
 void netlink_ack(struct sk_buff *in_skb, struct nlmsghdr *nlh, int err)
@@ -1465,27 +1573,35 @@ void netlink_ack(struct sk_buff *in_skb, struct nlmsghdr *nlh, int err)
 }
 
 static int netlink_rcv_skb(struct sk_buff *skb, int (*cb)(struct sk_buff *,
-						     struct nlmsghdr *, int *))
+						     struct nlmsghdr *))
 {
 	struct nlmsghdr *nlh;
 	int err;
 
 	while (skb->len >= nlmsg_total_size(0)) {
-		nlh = (struct nlmsghdr *) skb->data;
+		nlh = nlmsg_hdr(skb);
+		err = 0;
 
 		if (nlh->nlmsg_len < NLMSG_HDRLEN || skb->len < nlh->nlmsg_len)
 			return 0;
 
-		if (cb(skb, nlh, &err) < 0) {
-			/* Not an error, but we have to interrupt processing
-			 * here. Note: that in this case we do not pull
-			 * message from skb, it will be processed later.
-			 */
-			if (err == 0)
-				return -1;
+		/* Only requests are handled by the kernel */
+		if (!(nlh->nlmsg_flags & NLM_F_REQUEST))
+			goto skip;
+
+		/* Skip control messages */
+		if (nlh->nlmsg_type < NLMSG_MIN_TYPE)
+			goto skip;
+
+		err = cb(skb, nlh);
+		if (err == -EINTR) {
+			/* Not an error, but we interrupt processing */
+			netlink_queue_skip(nlh, skb);
+			return err;
+		}
+skip:
+		if (nlh->nlmsg_flags & NLM_F_ACK || err)
 			netlink_ack(skb, nlh, err);
-		} else if (nlh->nlmsg_flags & NLM_F_ACK)
-			netlink_ack(skb, nlh, 0);
 
 		netlink_queue_skip(nlh, skb);
 	}
@@ -1507,9 +1623,14 @@ static int netlink_rcv_skb(struct sk_buff *skb, int (*cb)(struct sk_buff *,
  *
  * qlen must be initialized to 0 before the initial entry, afterwards
  * the function may be called repeatedly until qlen reaches 0.
+ *
+ * The callback function may return -EINTR to signal that processing
+ * of netlink messages shall be interrupted. In this case the message
+ * currently being processed will NOT be requeued onto the receive
+ * queue.
  */
 void netlink_run_queue(struct sock *sk, unsigned int *qlen,
-		       int (*cb)(struct sk_buff *, struct nlmsghdr *, int *))
+		       int (*cb)(struct sk_buff *, struct nlmsghdr *))
 {
 	struct sk_buff *skb;
 
@@ -1540,7 +1661,7 @@ void netlink_run_queue(struct sock *sk, unsigned int *qlen,
  * Pulls the given netlink message off the socket buffer so the next
  * call to netlink_queue_run() will not reconsider the message.
  */
-void netlink_queue_skip(struct nlmsghdr *nlh, struct sk_buff *skb)
+static void netlink_queue_skip(struct nlmsghdr *nlh, struct sk_buff *skb)
 {
 	int msglen = NLMSG_ALIGN(nlh->nlmsg_len);
 
@@ -1687,7 +1808,7 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations netlink_seq_ops = {
+static const struct seq_operations netlink_seq_ops = {
 	.start  = netlink_seq_start,
 	.next   = netlink_seq_next,
 	.stop   = netlink_seq_stop,
@@ -1823,12 +1944,10 @@ core_initcall(netlink_proto_init);
 
 EXPORT_SYMBOL(netlink_ack);
 EXPORT_SYMBOL(netlink_run_queue);
-EXPORT_SYMBOL(netlink_queue_skip);
 EXPORT_SYMBOL(netlink_broadcast);
 EXPORT_SYMBOL(netlink_dump_start);
 EXPORT_SYMBOL(netlink_kernel_create);
 EXPORT_SYMBOL(netlink_register_notifier);
-EXPORT_SYMBOL(netlink_set_err);
 EXPORT_SYMBOL(netlink_set_nonroot);
 EXPORT_SYMBOL(netlink_unicast);
 EXPORT_SYMBOL(netlink_unregister_notifier);

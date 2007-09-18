@@ -14,11 +14,11 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include "user.h"
-#include "user_util.h"
 #include "kern_util.h"
 #include "net_user.h"
 #include "os.h"
 #include "um_malloc.h"
+#include "kern_constants.h"
 
 int tap_open_common(void *dev, char *gate_addr)
 {
@@ -187,7 +187,7 @@ static int change_tramp(char **argv, char *output, int output_len)
 	}
 	pe_data.close_me = fds[0];
 	pe_data.stdout = fds[1];
-	pid = run_helper(change_pre_exec, &pe_data, argv, NULL);
+	pid = run_helper(change_pre_exec, &pe_data, argv);
 
 	if (pid > 0)	/* Avoid hang as we won't get data in failure case. */
 		read_output(fds[0], output, output_len);
@@ -216,8 +216,8 @@ static void change(char *dev, char *what, unsigned char *addr,
 	sprintf(netmask_buf, "%d.%d.%d.%d", netmask[0], netmask[1], 
 		netmask[2], netmask[3]);
 
-	output_len = page_size();
-	output = um_kmalloc(output_len);
+	output_len = UM_KERN_PAGE_SIZE;
+	output = kmalloc(output_len, UM_GFP_KERNEL);
 	if(output == NULL)
 		printk("change : failed to allocate output buffer\n");
 

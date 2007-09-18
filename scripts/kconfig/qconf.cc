@@ -1041,7 +1041,7 @@ void ConfigInfoView::menuInfo(void)
 		if (showDebug())
 			debug = debug_info(sym);
 
-		help = print_filter(_(sym->help));
+		help = print_filter(_(menu_get_help(menu)));
 	} else if (menu->prompt) {
 		head += "<big><b>";
 		head += print_filter(_(menu->prompt->text));
@@ -1182,7 +1182,7 @@ void ConfigInfoView::contentsContextMenuEvent(QContextMenuEvent *e)
 	Parent::contentsContextMenuEvent(e);
 }
 
-ConfigSearchWindow::ConfigSearchWindow(QWidget* parent, const char *name)
+ConfigSearchWindow::ConfigSearchWindow(ConfigMainWindow* parent, const char *name)
 	: Parent(parent, name), result(NULL)
 {
 	setCaption("Search Config");
@@ -1206,6 +1206,9 @@ ConfigSearchWindow::ConfigSearchWindow(QWidget* parent, const char *name)
 	info = new ConfigInfoView(split, name);
 	connect(list->list, SIGNAL(menuChanged(struct menu *)),
 		info, SLOT(setInfo(struct menu *)));
+	connect(list->list, SIGNAL(menuChanged(struct menu *)),
+		parent, SLOT(setMenuLink(struct menu *)));
+
 	layout1->addWidget(split);
 
 	if (name) {

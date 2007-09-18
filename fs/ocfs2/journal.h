@@ -289,6 +289,8 @@ int                  ocfs2_journal_dirty_data(handle_t *handle,
 #define OCFS2_TRUNCATE_LOG_FLUSH_ONE_REC (OCFS2_SUBALLOC_FREE 		      \
 					 + OCFS2_TRUNCATE_LOG_UPDATE)
 
+#define OCFS2_REMOVE_EXTENT_CREDITS (OCFS2_TRUNCATE_LOG_UPDATE + OCFS2_INODE_UPDATE_CREDITS)
+
 /* data block for new dir/symlink, 2 for bitmap updates (bitmap fe +
  * bitmap block for the new bit) */
 #define OCFS2_DIR_LINK_ADDITIONAL_CREDITS (1 + 2)
@@ -390,7 +392,7 @@ static inline int ocfs2_calc_tree_trunc_credits(struct super_block *sb,
 	/* We may be deleting metadata blocks, so metadata alloc dinode +
 	   one desc. block for each possible delete. */
 	if (tree_depth && next_free == 1 &&
-	    le32_to_cpu(last_el->l_recs[i].e_clusters) == clusters_to_del)
+	    ocfs2_rec_clusters(last_el, &last_el->l_recs[i]) == clusters_to_del)
 		credits += 1 + tree_depth;
 
 	/* update to the truncate log. */

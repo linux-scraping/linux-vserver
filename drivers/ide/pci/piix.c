@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/ide/pci/piix.c	Version 0.47	February 8, 2007
+ *  linux/drivers/ide/pci/piix.c	Version 0.51	Jul 6, 2007
  *
  *  Copyright (C) 1998-1999 Andrzej Krzysztofowicz, Author and Maintainer
  *  Copyright (C) 1998-2000 Andre Hedrick <andre@linux-ide.org>
@@ -106,72 +106,10 @@
 static int no_piix_dma;
 
 /**
- *	piix_ratemask		-	compute rate mask for PIIX IDE
- *	@drive: IDE drive to compute for
- *
- *	Returns the available modes for the PIIX IDE controller.
- */
- 
-static u8 piix_ratemask (ide_drive_t *drive)
-{
-	struct pci_dev *dev	= HWIF(drive)->pci_dev;
-	u8 mode;
-
-	switch(dev->device) {
-		case PCI_DEVICE_ID_INTEL_82801EB_1:
-			mode = 3;
-			break;
-		/* UDMA 100 capable */
-		case PCI_DEVICE_ID_INTEL_82801BA_8:
-		case PCI_DEVICE_ID_INTEL_82801BA_9:
-		case PCI_DEVICE_ID_INTEL_82801CA_10:
-		case PCI_DEVICE_ID_INTEL_82801CA_11:
-		case PCI_DEVICE_ID_INTEL_82801E_11:
-		case PCI_DEVICE_ID_INTEL_82801DB_1:
-		case PCI_DEVICE_ID_INTEL_82801DB_10:
-		case PCI_DEVICE_ID_INTEL_82801DB_11:
-		case PCI_DEVICE_ID_INTEL_82801EB_11:
-		case PCI_DEVICE_ID_INTEL_ESB_2:
-		case PCI_DEVICE_ID_INTEL_ICH6_19:
-		case PCI_DEVICE_ID_INTEL_ICH7_21:
-		case PCI_DEVICE_ID_INTEL_ESB2_18:
-		case PCI_DEVICE_ID_INTEL_ICH8_6:
-			mode = 3;
-			break;
-		/* UDMA 66 capable */
-		case PCI_DEVICE_ID_INTEL_82801AA_1:
-		case PCI_DEVICE_ID_INTEL_82372FB_1:
-			mode = 2;
-			break;
-		/* UDMA 33 capable */
-		case PCI_DEVICE_ID_INTEL_82371AB:
-		case PCI_DEVICE_ID_INTEL_82443MX_1:
-		case PCI_DEVICE_ID_INTEL_82451NX:
-		case PCI_DEVICE_ID_INTEL_82801AB_1:
-			return 1;
-		/* Non UDMA capable (MWDMA2) */
-		case PCI_DEVICE_ID_INTEL_82371SB_1:
-		case PCI_DEVICE_ID_INTEL_82371FB_1:
-		case PCI_DEVICE_ID_INTEL_82371FB_0:
-		case PCI_DEVICE_ID_INTEL_82371MX:
-		default:
-			return 0;
-	}
-	
-	/*
-	 *	If we are UDMA66 capable fall back to UDMA33 
-	 *	if the drive cannot see an 80pin cable.
-	 */
-	if (!eighty_ninty_three(drive))
-		mode = min_t(u8, mode, 1);
-	return mode;
-}
-
-/**
  *	piix_dma_2_pio		-	return the PIO mode matching DMA
  *	@xfer_rate: transfer speed
  *
- *	Returns the nearest equivalent PIO timing for the PIO or DMA
+ *	Returns the nearest equivalent PIO timing for the DMA
  *	mode requested by the controller.
  */
  
@@ -185,20 +123,14 @@ static u8 piix_dma_2_pio (u8 xfer_rate) {
 		case XFER_UDMA_1:
 		case XFER_UDMA_0:
 		case XFER_MW_DMA_2:
-		case XFER_PIO_4:
 			return 4;
 		case XFER_MW_DMA_1:
-		case XFER_PIO_3:
 			return 3;
 		case XFER_SW_DMA_2:
-		case XFER_PIO_2:
 			return 2;
 		case XFER_MW_DMA_0:
 		case XFER_SW_DMA_1:
 		case XFER_SW_DMA_0:
-		case XFER_PIO_1:
-		case XFER_PIO_0:
-		case XFER_PIO_SLOW:
 		default:
 			return 0;
 	}
@@ -281,7 +213,7 @@ static void piix_tune_pio (ide_drive_t *drive, u8 pio)
  */
 static void piix_tune_drive (ide_drive_t *drive, u8 pio)
 {
-	pio = ide_get_best_pio_mode(drive, pio, 4, NULL);
+	pio = ide_get_best_pio_mode(drive, pio, 4);
 	piix_tune_pio(drive, pio);
 	(void) ide_config_drive_speed(drive, XFER_PIO_0 + pio);
 }
@@ -301,7 +233,7 @@ static int piix_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
 	u8 maslave		= hwif->channel ? 0x42 : 0x40;
-	u8 speed		= ide_rate_filter(piix_ratemask(drive), xferspeed);
+	u8 speed		= ide_rate_filter(drive, xferspeed);
 	int a_speed		= 3 << (drive->dn * 4);
 	int u_flag		= 1 << drive->dn;
 	int v_flag		= 0x01 << drive->dn;
@@ -331,6 +263,7 @@ static int piix_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 		case XFER_PIO_4:
 		case XFER_PIO_3:
 		case XFER_PIO_2:
+		case XFER_PIO_1:
 		case XFER_PIO_0:	break;
 		default:		return -1;
 	}
@@ -361,32 +294,12 @@ static int piix_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 			pci_write_config_byte(dev, 0x55, (u8) reg55 & ~w_flag);
 	}
 
-	piix_tune_pio(drive, piix_dma_2_pio(speed));
+	if (speed > XFER_PIO_4)
+		piix_tune_pio(drive, piix_dma_2_pio(speed));
+	else
+		piix_tune_pio(drive, speed - XFER_PIO_0);
+
 	return ide_config_drive_speed(drive, speed);
-}
-
-/**
- *	piix_config_drive_for_dma	-	configure drive for DMA
- *	@drive: IDE drive to configure
- *
- *	Set up a PIIX interface channel for the best available speed.
- *	We prefer UDMA if it is available and then MWDMA.  If DMA is
- *	not available we switch to PIO and return 0.
- */
- 
-static int piix_config_drive_for_dma (ide_drive_t *drive)
-{
-	u8 speed = ide_dma_speed(drive, piix_ratemask(drive));
-
-	/*
-	 * If no DMA speed was available or the chipset has DMA bugs
-	 * then disable DMA and use PIO
-	 */
-	if (!speed)
-		return 0;
-
-	(void) piix_tune_chipset(drive, speed);
-	return ide_dma_enable(drive);
 }
 
 /**
@@ -401,7 +314,7 @@ static int piix_config_drive_xfer_rate (ide_drive_t *drive)
 {
 	drive->init_speed = 0;
 
-	if (ide_use_dma(drive) && piix_config_drive_for_dma(drive))
+	if (ide_tune_dma(drive))
 		return 0;
 
 	if (ide_use_fast_pio(drive))
@@ -480,14 +393,45 @@ static void piix_dma_clear_irq(ide_drive_t *drive)
 	hwif->OUTB(dma_stat, hwif->dma_status);
 }
 
-static int __devinit piix_cable_detect(ide_hwif_t *hwif)
+struct ich_laptop {
+	u16 device;
+	u16 subvendor;
+	u16 subdevice;
+};
+
+/*
+ *	List of laptops that use short cables rather than 80 wire
+ */
+
+static const struct ich_laptop ich_laptop[] = {
+	/* devid, subvendor, subdev */
+	{ 0x27DF, 0x0005, 0x0280 },	/* ICH7 on Acer 5602WLMi */
+	{ 0x27DF, 0x1025, 0x0110 },	/* ICH7 on Acer 3682WLMi */
+	{ 0x27DF, 0x1043, 0x1267 },	/* ICH7 on Asus W5F */
+	{ 0x24CA, 0x1025, 0x0061 },	/* ICH4 on Acer Aspire 2023WLMi */
+	/* end marker */
+	{ 0, }
+};
+
+static u8 __devinit piix_cable_detect(ide_hwif_t *hwif)
 {
-	struct pci_dev *dev = hwif->pci_dev;
+	struct pci_dev *pdev = hwif->pci_dev;
+	const struct ich_laptop *lap = &ich_laptop[0];
 	u8 reg54h = 0, mask = hwif->channel ? 0xc0 : 0x30;
 
-	pci_read_config_byte(dev, 0x54, &reg54h);
+	/* check for specials */
+	while (lap->device) {
+		if (lap->device == pdev->device &&
+		    lap->subvendor == pdev->subsystem_vendor &&
+		    lap->subdevice == pdev->subsystem_device) {
+			return ATA_CBL_PATA40_SHORT;
+		}
+		lap++;
+	}
 
-	return (reg54h & mask) ? 1 : 0;
+	pci_read_config_byte(pdev, 0x54, &reg54h);
+
+	return (reg54h & mask) ? ATA_CBL_PATA80 : ATA_CBL_PATA40;
 }
 
 /**
@@ -524,26 +468,14 @@ static void __devinit init_hwif_piix(ide_hwif_t *hwif)
 		hwif->ide_dma_clear_irq = &piix_dma_clear_irq;
 
 	hwif->atapi_dma = 1;
-	hwif->ultra_mask = 0x3f;
+
+	hwif->ultra_mask = hwif->cds->udma_mask;
 	hwif->mwdma_mask = 0x06;
 	hwif->swdma_mask = 0x04;
 
-	switch(hwif->pci_dev->device) {
-		case PCI_DEVICE_ID_INTEL_82371FB_0:
-		case PCI_DEVICE_ID_INTEL_82371FB_1:
-		case PCI_DEVICE_ID_INTEL_82371SB_1:
-			hwif->ultra_mask = 0x80;
-			break;
-		case PCI_DEVICE_ID_INTEL_82371AB:
-		case PCI_DEVICE_ID_INTEL_82443MX_1:
-		case PCI_DEVICE_ID_INTEL_82451NX:
-		case PCI_DEVICE_ID_INTEL_82801AB_1:
-			hwif->ultra_mask = 0x07;
-			break;
-		default:
-			if (!hwif->udma_four)
-				hwif->udma_four = piix_cable_detect(hwif);
-			break;
+	if (hwif->ultra_mask & 0x78) {
+		if (hwif->cbl != ATA_CBL_PATA40_SHORT)
+			hwif->cbl = piix_cable_detect(hwif);
 	}
 
 	if (no_piix_dma)
@@ -557,20 +489,21 @@ static void __devinit init_hwif_piix(ide_hwif_t *hwif)
 	hwif->drives[0].autodma = hwif->autodma;
 }
 
-#define DECLARE_PIIX_DEV(name_str) \
+#define DECLARE_PIIX_DEV(name_str, udma) \
 	{						\
 		.name		= name_str,		\
 		.init_chipset	= init_chipset_piix,	\
 		.init_hwif	= init_hwif_piix,	\
-		.channels	= 2,			\
 		.autodma	= AUTODMA,		\
 		.enablebits	= {{0x41,0x80,0x80}, {0x43,0x80,0x80}}, \
 		.bootable	= ON_BOARD,		\
+		.pio_mask	= ATA_PIO4,		\
+		.udma_mask	= udma,			\
 	}
 
 static ide_pci_device_t piix_pci_info[] __devinitdata = {
-	/*  0 */ DECLARE_PIIX_DEV("PIIXa"),
-	/*  1 */ DECLARE_PIIX_DEV("PIIXb"),
+	/*  0 */ DECLARE_PIIX_DEV("PIIXa", 0x00),	/* no udma */
+	/*  1 */ DECLARE_PIIX_DEV("PIIXb", 0x00),	/* no udma */
 
 	/*  2 */
 	{	/*
@@ -580,35 +513,35 @@ static ide_pci_device_t piix_pci_info[] __devinitdata = {
 		 */
 		.name		= "MPIIX",
 		.init_hwif	= init_hwif_piix,
-		.channels	= 2,
 		.autodma	= NODMA,
 		.enablebits	= {{0x6d,0xc0,0x80}, {0x6d,0xc0,0xc0}},
 		.bootable	= ON_BOARD,
-		.flags		= IDEPCI_FLAG_ISA_PORTS
+		.host_flags	= IDE_HFLAG_ISA_PORTS,
+		.pio_mask	= ATA_PIO4,
 	},
 
-	/*  3 */ DECLARE_PIIX_DEV("PIIX3"),
-	/*  4 */ DECLARE_PIIX_DEV("PIIX4"),
-	/*  5 */ DECLARE_PIIX_DEV("ICH0"),
-	/*  6 */ DECLARE_PIIX_DEV("PIIX4"),
-	/*  7 */ DECLARE_PIIX_DEV("ICH"),
-	/*  8 */ DECLARE_PIIX_DEV("PIIX4"),
-	/*  9 */ DECLARE_PIIX_DEV("PIIX4"),
-	/* 10 */ DECLARE_PIIX_DEV("ICH2"),
-	/* 11 */ DECLARE_PIIX_DEV("ICH2M"),
-	/* 12 */ DECLARE_PIIX_DEV("ICH3M"),
-	/* 13 */ DECLARE_PIIX_DEV("ICH3"),
-	/* 14 */ DECLARE_PIIX_DEV("ICH4"),
-	/* 15 */ DECLARE_PIIX_DEV("ICH5"),
-	/* 16 */ DECLARE_PIIX_DEV("C-ICH"),
-	/* 17 */ DECLARE_PIIX_DEV("ICH4"),
-	/* 18 */ DECLARE_PIIX_DEV("ICH5-SATA"),
-	/* 19 */ DECLARE_PIIX_DEV("ICH5"),
-	/* 20 */ DECLARE_PIIX_DEV("ICH6"),
-	/* 21 */ DECLARE_PIIX_DEV("ICH7"),
-	/* 22 */ DECLARE_PIIX_DEV("ICH4"),
-	/* 23 */ DECLARE_PIIX_DEV("ESB2"),
-	/* 24 */ DECLARE_PIIX_DEV("ICH8M"),
+	/*  3 */ DECLARE_PIIX_DEV("PIIX3", 0x00),	/* no udma */
+	/*  4 */ DECLARE_PIIX_DEV("PIIX4", 0x07),	/* udma0-2 */
+	/*  5 */ DECLARE_PIIX_DEV("ICH0",  0x07),	/* udma0-2 */
+	/*  6 */ DECLARE_PIIX_DEV("PIIX4", 0x07),	/* udma0-2 */
+	/*  7 */ DECLARE_PIIX_DEV("ICH",   0x1f),	/* udma0-4 */
+	/*  8 */ DECLARE_PIIX_DEV("PIIX4", 0x1f),	/* udma0-4 */
+	/*  9 */ DECLARE_PIIX_DEV("PIIX4", 0x07),	/* udma0-2 */
+	/* 10 */ DECLARE_PIIX_DEV("ICH2",  0x3f),	/* udma0-5 */
+	/* 11 */ DECLARE_PIIX_DEV("ICH2M", 0x3f),	/* udma0-5 */
+	/* 12 */ DECLARE_PIIX_DEV("ICH3M", 0x3f),	/* udma0-5 */
+	/* 13 */ DECLARE_PIIX_DEV("ICH3",  0x3f),	/* udma0-5 */
+	/* 14 */ DECLARE_PIIX_DEV("ICH4",  0x3f),	/* udma0-5 */
+	/* 15 */ DECLARE_PIIX_DEV("ICH5",  0x3f),	/* udma0-5 */
+	/* 16 */ DECLARE_PIIX_DEV("C-ICH", 0x3f),	/* udma0-5 */
+	/* 17 */ DECLARE_PIIX_DEV("ICH4",  0x3f),	/* udma0-5 */
+	/* 18 */ DECLARE_PIIX_DEV("ICH5-SATA", 0x3f),	/* udma0-5 */
+	/* 19 */ DECLARE_PIIX_DEV("ICH5",  0x3f),	/* udma0-5 */
+	/* 20 */ DECLARE_PIIX_DEV("ICH6",  0x3f),	/* udma0-5 */
+	/* 21 */ DECLARE_PIIX_DEV("ICH7",  0x3f),	/* udma0-5 */
+	/* 22 */ DECLARE_PIIX_DEV("ICH4",  0x3f),	/* udma0-5 */
+	/* 23 */ DECLARE_PIIX_DEV("ESB2",  0x3f),	/* udma0-5 */
+	/* 24 */ DECLARE_PIIX_DEV("ICH8M", 0x3f),	/* udma0-5 */
 };
 
 /**
@@ -638,18 +571,16 @@ static void __devinit piix_check_450nx(void)
 {
 	struct pci_dev *pdev = NULL;
 	u16 cfg;
-	u8 rev;
 	while((pdev=pci_get_device(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82454NX, pdev))!=NULL)
 	{
 		/* Look for 450NX PXB. Check for problem configurations
 		   A PCI quirk checks bit 6 already */
-		pci_read_config_byte(pdev, PCI_REVISION_ID, &rev);
 		pci_read_config_word(pdev, 0x41, &cfg);
 		/* Only on the original revision: IDE DMA can hang */
-		if(rev == 0x00)
+		if (pdev->revision == 0x00)
 			no_piix_dma = 1;
 		/* On all revisions below 5 PXB bus lock must be disabled for IDE */
-		else if(cfg & (1<<14) && rev < 5)
+		else if (cfg & (1<<14) && pdev->revision < 5)
 			no_piix_dma = 2;
 	}
 	if(no_piix_dma)

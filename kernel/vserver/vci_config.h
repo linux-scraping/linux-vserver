@@ -1,15 +1,11 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020200
-#define VCI_LEGACY_VERSION	0x000100FF
+#define VCI_VERSION		0x00020302
 
 
 enum {
 	VCI_KCBIT_NO_DYNAMIC = 0,
-	VCI_KCBIT_LEGACY = 1,
-	VCI_KCBIT_LEGACYNET = 2,
-	VCI_KCBIT_NGNET = 3,
 
 	VCI_KCBIT_PROC_SECURE = 4,
 	VCI_KCBIT_HARDCPU = 5,
@@ -19,30 +15,21 @@ enum {
 	VCI_KCBIT_COWBL = 8,
 	VCI_KCBIT_FULLCOWBL = 9,
 	VCI_KCBIT_SPACES = 10,
+	VCI_KCBIT_NETV2 = 11,
 
-	VCI_KCBIT_LEGACY_VERSION = 15,
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
 	VCI_KCBIT_TAGGED = 24,
+	VCI_KCBIT_PPTAG = 28,
+
+	VCI_KCBIT_MORE = 31,
 };
 
 
 static inline uint32_t vci_kernel_config(void)
 {
 	return
-	/* various legacy options */
-#ifndef CONFIG_VSERVER_DYNAMIC_IDS
 	(1 << VCI_KCBIT_NO_DYNAMIC) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-	(1 << VCI_KCBIT_LEGACY) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	(1 << VCI_KCBIT_LEGACYNET) |
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY_VERSION
-	(1 << VCI_KCBIT_LEGACY_VERSION) |
-#endif
 
 	/* configured features */
 #ifdef	CONFIG_VSERVER_PROC_SECURE
@@ -62,6 +49,7 @@ static inline uint32_t vci_kernel_config(void)
 	(1 << VCI_KCBIT_FULLCOWBL) |
 #endif
 	(1 << VCI_KCBIT_SPACES) |
+	(1 << VCI_KCBIT_NETV2) |
 
 	/* debug options */
 #ifdef	CONFIG_VSERVER_DEBUG
@@ -87,6 +75,7 @@ static inline uint32_t vci_kernel_config(void)
 #else
 	(7 << VCI_KCBIT_TAGGED) |
 #endif
+	(1 << VCI_KCBIT_PPTAG) |
 	0;
 }
 

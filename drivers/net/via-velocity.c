@@ -890,8 +890,7 @@ static void __devinit velocity_init_info(struct pci_dev *pdev,
 
 static int __devinit velocity_get_pci_info(struct velocity_info *vptr, struct pci_dev *pdev)
 {
-	if (pci_read_config_byte(pdev, PCI_REVISION_ID, &vptr->rev_id) < 0)
-		return -EIO;
+	vptr->rev_id = pdev->revision;
 
 	pci_set_master(pdev);
 
@@ -1339,7 +1338,8 @@ static inline int velocity_rx_copy(struct sk_buff **rx_skb, int pkt_size,
 			if (vptr->flags & VELOCITY_FLAGS_IP_ALIGN)
 				skb_reserve(new_skb, 2);
 
-			memcpy(new_skb->data, rx_skb[0]->data, pkt_size);
+			skb_copy_from_linear_data(rx_skb[0], new_skb->data,
+						  pkt_size);
 			*rx_skb = new_skb;
 			ret = 0;
 		}
@@ -1398,7 +1398,6 @@ static int velocity_receive_frame(struct velocity_info *vptr, int idx)
 		vptr->stats.multicast++;
 
 	skb = rd_info->skb;
-	skb->dev = vptr->dev;
 
 	pci_dma_sync_single_for_cpu(vptr->pdev, rd_info->skb_dma,
 				    vptr->rx_buf_sz, PCI_DMA_FROMDEVICE);
@@ -1428,7 +1427,7 @@ static int velocity_receive_frame(struct velocity_info *vptr, int idx)
 		   PCI_DMA_FROMDEVICE);
 
 	skb_put(skb, pkt_len - 4);
-	skb->protocol = eth_type_trans(skb, skb->dev);
+	skb->protocol = eth_type_trans(skb, vptr->dev);
 
 	stats->rx_bytes += pkt_len;
 	netif_rx(skb);
@@ -1562,7 +1561,7 @@ static void velocity_print_link_status(struct velocity_info *vptr)
 	if (vptr->mii_status & VELOCITY_LINK_FAIL) {
 		VELOCITY_PRT(MSG_LEVEL_INFO, KERN_NOTICE "%s: failed to detect cable link\n", vptr->dev->name);
 	} else if (vptr->options.spd_dpx == SPD_DPX_AUTO) {
-		VELOCITY_PRT(MSG_LEVEL_INFO, KERN_NOTICE "%s: Link autonegation", vptr->dev->name);
+		VELOCITY_PRT(MSG_LEVEL_INFO, KERN_NOTICE "%s: Link auto-negotiation", vptr->dev->name);
 
 		if (vptr->mii_status & VELOCITY_SPEED_1000)
 			VELOCITY_PRT(MSG_LEVEL_INFO, " speed 1000M bps");
@@ -1614,7 +1613,7 @@ static void velocity_error(struct velocity_info *vptr, int status)
 	if (status & ISR_TXSTLI) {
 		struct mac_regs __iomem * regs = vptr->mac_regs;
 
-		printk(KERN_ERR "TD structure errror TDindex=%hx\n", readw(&regs->TDIdx[0]));
+		printk(KERN_ERR "TD structure error TDindex=%hx\n", readw(&regs->TDIdx[0]));
 		BYTE_REG_BITS_ON(TXESR_TDSTR, &regs->TXESR);
 		writew(TRDCSR_RUN, &regs->TDCSRClr);
 		netif_stop_queue(vptr->dev);
@@ -1928,7 +1927,7 @@ static int velocity_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (pktlen < ETH_ZLEN) {
 		/* Cannot occur until ZC support */
 		pktlen = ETH_ZLEN;
-		memcpy(tdinfo->buf, skb->data, skb->len);
+		skb_copy_from_linear_data(skb, tdinfo->buf, skb->len);
 		memset(tdinfo->buf + skb->len, 0, ETH_ZLEN - skb->len);
 		tdinfo->skb = skb;
 		tdinfo->skb_dma[0] = tdinfo->buf_dma;
@@ -1944,7 +1943,7 @@ static int velocity_xmit(struct sk_buff *skb, struct net_device *dev)
 		int nfrags = skb_shinfo(skb)->nr_frags;
 		tdinfo->skb = skb;
 		if (nfrags > 6) {
-			memcpy(tdinfo->buf, skb->data, skb->len);
+			skb_copy_from_linear_data(skb, tdinfo->buf, skb->len);
 			tdinfo->skb_dma[0] = tdinfo->buf_dma;
 			td_ptr->tdesc0.pktsize =
 			td_ptr->td_buf[0].pa_low = cpu_to_le32(tdinfo->skb_dma[0]);
@@ -2007,7 +2006,7 @@ static int velocity_xmit(struct sk_buff *skb, struct net_device *dev)
 	 */
 	if ((vptr->flags & VELOCITY_FLAGS_TX_CSUM)
 				 && (skb->ip_summed == CHECKSUM_PARTIAL)) {
-		struct iphdr *ip = skb->nh.iph;
+		const struct iphdr *ip = ip_hdr(skb);
 		if (ip->protocol == IPPROTO_TCP)
 			td_ptr->tdesc1.TCR |= TCR0_TCPCK;
 		else if (ip->protocol == IPPROTO_UDP)

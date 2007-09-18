@@ -60,6 +60,9 @@ static inline u32 get_longbusy_msecs(int long_busy_ret_code)
 	}
 }
 
+/* Number of pages which can be registered at once by H_REGISTER_HEA_RPAGES */
+#define EHEA_MAX_RPAGE 512
+
 /* Notification Event Queue (NEQ) Entry bit masks */
 #define NEQE_EVENT_CODE		EHEA_BMASK_IBM(2, 7)
 #define NEQE_PORTNUM  		EHEA_BMASK_IBM(32, 47)
@@ -414,7 +417,11 @@ u64 ehea_h_register_rpage(const u64 adapter_handle,
 
 u64 ehea_h_disable_and_get_hea(const u64 adapter_handle, const u64 qp_handle);
 
-u64 ehea_h_free_resource(const u64 adapter_handle, const u64 res_handle);
+#define FORCE_FREE 1
+#define NORMAL_FREE 0
+
+u64 ehea_h_free_resource(const u64 adapter_handle, const u64 res_handle,
+			 u64 force_bit);
 
 u64 ehea_h_alloc_resource_mr(const u64 adapter_handle, const u64 vaddr,
 			     const u64 length, const u32 access_ctrl,

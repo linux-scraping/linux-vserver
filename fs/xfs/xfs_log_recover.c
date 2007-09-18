@@ -927,6 +927,14 @@ xlog_find_tail(
 			ASSIGN_ANY_LSN_HOST(log->l_last_sync_lsn, log->l_curr_cycle,
 					after_umount_blk);
 			*tail_blk = after_umount_blk;
+
+			/*
+			 * Note that the unmount was clean. If the unmount
+			 * was not clean, we need to know this to rebuild the
+			 * superblock counters from the perag headers if we
+			 * have a filesystem using non-persistent counters.
+			 */
+			log->l_mp->m_flags |= XFS_MOUNT_WAS_CLEAN;
 		}
 	}
 
@@ -1358,7 +1366,7 @@ xlog_recover_add_to_cont_trans(
 	int			old_len;
 
 	item = trans->r_itemq;
-	if (item == 0) {
+	if (item == NULL) {
 		/* finish copying rest of trans header */
 		xlog_recover_add_item(&trans->r_itemq);
 		ptr = (xfs_caddr_t) &trans->r_theader +
@@ -1404,7 +1412,7 @@ xlog_recover_add_to_trans(
 	if (!len)
 		return 0;
 	item = trans->r_itemq;
-	if (item == 0) {
+	if (item == NULL) {
 		ASSERT(*(uint *)dp == XFS_TRANS_HEADER_MAGIC);
 		if (len == sizeof(xfs_trans_header_t))
 			xlog_recover_add_item(&trans->r_itemq);
@@ -1459,12 +1467,12 @@ xlog_recover_unlink_tid(
 	xlog_recover_t		*tp;
 	int			found = 0;
 
-	ASSERT(trans != 0);
+	ASSERT(trans != NULL);
 	if (trans == *q) {
 		*q = (*q)->r_next;
 	} else {
 		tp = *q;
-		while (tp != 0) {
+		while (tp) {
 			if (tp->r_next == trans) {
 				found = 1;
 				break;
@@ -1487,7 +1495,7 @@ xlog_recover_insert_item_backq(
 	xlog_recover_item_t	**q,
 	xlog_recover_item_t	*item)
 {
-	if (*q == 0) {
+	if (*q == NULL) {
 		item->ri_prev = item->ri_next = item;
 		*q = item;
 	} else {
@@ -1509,7 +1517,6 @@ xlog_recover_insert_item_frontq(
 
 STATIC int
 xlog_recover_reorder_trans(
-	xlog_t			*log,
 	xlog_recover_t		*trans)
 {
 	xlog_recover_item_t	*first_item, *itemq, *itemq_next;
@@ -1867,7 +1874,6 @@ xlog_recover_do_inode_buffer(
 /*ARGSUSED*/
 STATIC void
 xlog_recover_do_reg_buffer(
-	xfs_mount_t		*mp,
 	xlog_recover_item_t	*item,
 	xfs_buf_t		*bp,
 	xfs_buf_log_format_t	*buf_f)
@@ -1893,7 +1899,7 @@ xlog_recover_do_reg_buffer(
 			break;
 		nbits = xfs_contig_bits(data_map, map_size, bit);
 		ASSERT(nbits > 0);
-		ASSERT(item->ri_buf[i].i_addr != 0);
+		ASSERT(item->ri_buf[i].i_addr != NULL);
 		ASSERT(item->ri_buf[i].i_len % XFS_BLI_CHUNK == 0);
 		ASSERT(XFS_BUF_COUNT(bp) >=
 		       ((uint)bit << XFS_BLI_SHIFT)+(nbits<<XFS_BLI_SHIFT));
@@ -2083,7 +2089,7 @@ xlog_recover_do_dquot_buffer(
 	if (log->l_quotaoffs_flag & type)
 		return;
 
-	xlog_recover_do_reg_buffer(mp, item, bp, buf_f);
+	xlog_recover_do_reg_buffer(item, bp, buf_f);
 }
 
 /*
@@ -2184,7 +2190,7 @@ xlog_recover_do_buffer_trans(
 		  (XFS_BLI_UDQUOT_BUF|XFS_BLI_PDQUOT_BUF|XFS_BLI_GDQUOT_BUF)) {
 		xlog_recover_do_dquot_buffer(mp, log, item, bp, buf_f);
 	} else {
-		xlog_recover_do_reg_buffer(mp, item, bp, buf_f);
+		xlog_recover_do_reg_buffer(item, bp, buf_f);
 	}
 	if (error)
 		return XFS_ERROR(error);
@@ -2765,7 +2771,7 @@ xlog_recover_do_trans(
 	int			error = 0;
 	xlog_recover_item_t	*item, *first_item;
 
-	if ((error = xlog_recover_reorder_trans(log, trans)))
+	if ((error = xlog_recover_reorder_trans(trans)))
 		return error;
 	first_item = item = trans->r_itemq;
 	do {
@@ -3016,7 +3022,7 @@ xlog_recover_process_efi(
 	}
 
 	efip->efi_flags |= XFS_EFI_RECOVERED;
-	xfs_trans_commit(tp, 0, NULL);
+	xfs_trans_commit(tp, 0);
 }
 
 /*
@@ -3143,7 +3149,7 @@ xlog_recover_clear_agi_bucket(
 	xfs_trans_log_buf(tp, agibp, offset,
 			  (offset + sizeof(xfs_agino_t) - 1));
 
-	(void) xfs_trans_commit(tp, 0, NULL);
+	(void) xfs_trans_commit(tp, 0);
 }
 
 /*
@@ -3886,8 +3892,7 @@ xlog_recover(
 		 * under the vfs layer, so we can get away with it unless
 		 * the device itself is read-only, in which case we fail.
 		 */
-		if ((error = xfs_dev_is_read_only(log->l_mp,
-						"recovery required"))) {
+		if ((error = xfs_dev_is_read_only(log->l_mp, "recovery"))) {
 			return error;
 		}
 

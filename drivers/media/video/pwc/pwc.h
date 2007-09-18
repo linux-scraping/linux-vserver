@@ -31,7 +31,7 @@
 #include <linux/wait.h>
 #include <linux/smp_lock.h>
 #include <linux/version.h>
-#include <asm/semaphore.h>
+#include <linux/mutex.h>
 #include <asm/errno.h>
 #include <linux/videodev.h>
 #include <media/v4l2-common.h>
@@ -44,7 +44,7 @@
 #define PWC_MINOR	0
 #define PWC_EXTRAMINOR	12
 #define PWC_VERSION_CODE KERNEL_VERSION(PWC_MAJOR,PWC_MINOR,PWC_EXTRAMINOR)
-#define PWC_VERSION 	"10.0.12"
+#define PWC_VERSION 	"10.0.13"
 #define PWC_NAME 	"pwc"
 #define PFX		PWC_NAME ": "
 
@@ -85,7 +85,7 @@
 #define PWC_INFO(fmt, args...) printk(KERN_INFO PFX fmt, ##args)
 #define PWC_TRACE(fmt, args...) PWC_DEBUG(TRACE, fmt, ##args)
 
-#else /* if ! CONFIG_PWC_DEBUG */
+#else /* if ! CONFIG_USB_PWC_DEBUG */
 
 #define PWC_ERROR(fmt, args...) printk(KERN_ERR PFX fmt, ##args)
 #define PWC_WARNING(fmt, args...) printk(KERN_WARNING PFX fmt, ##args)
@@ -193,6 +193,7 @@ struct pwc_device
    char vsnapshot;		/* snapshot mode */
    char vsync;			/* used by isoc handler */
    char vmirror;		/* for ToUCaM series */
+	char unplugged;
 
    int cmd_len;
    unsigned char cmd_buf[13];
@@ -244,7 +245,7 @@ struct pwc_device
    int image_read_pos;			/* In case we read data in pieces, keep track of were we are in the imagebuffer */
    int image_used[MAX_IMAGES];		/* For MCAPTURE and SYNC */
 
-   struct semaphore modlock;		/* to prevent races in video_open(), etc */
+   struct mutex modlock;		/* to prevent races in video_open(), etc */
    spinlock_t ptrlock;			/* for manipulating the buffer pointers */
 
    /*** motorized pan/tilt feature */
@@ -287,6 +288,7 @@ void pwc_construct(struct pwc_device *pdev);
 /** Functions in pwc-ctrl.c */
 /* Request a certain video mode. Returns < 0 if not possible */
 extern int pwc_set_video_mode(struct pwc_device *pdev, int width, int height, int frames, int compression, int snapshot);
+extern unsigned int pwc_get_fps(struct pwc_device *pdev, unsigned int index, unsigned int size);
 /* Calculate the number of bytes per image (not frame) */
 extern int pwc_mpt_reset(struct pwc_device *pdev, int flags);
 extern int pwc_mpt_set_angle(struct pwc_device *pdev, int pan, int tilt);

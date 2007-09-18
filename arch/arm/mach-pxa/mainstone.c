@@ -46,6 +46,7 @@
 #include <asm/arch/ohci.h>
 
 #include "generic.h"
+#include "devices.h"
 
 
 static unsigned long mainstone_irq_enabled;
@@ -89,7 +90,7 @@ static void __init mainstone_init_irq(void)
 {
 	int irq;
 
-	pxa_init_irq();
+	pxa27x_init_irq();
 
 	/* setup extra Mainstone irqs */
 	for(irq = MAINSTONE_IRQ(0); irq <= MAINSTONE_IRQ(15); irq++) {
@@ -266,7 +267,7 @@ static void mainstone_backlight_power(int on)
 {
 	if (on) {
 		pxa_gpio_mode(GPIO16_PWM0_MD);
-		pxa_set_cken(CKEN0_PWM0, 1);
+		pxa_set_cken(CKEN_PWM0, 1);
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x3ff;
 		PWM_PERVAL0 = 0x3ff;
@@ -274,7 +275,7 @@ static void mainstone_backlight_power(int on)
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x0;
 		PWM_PERVAL0 = 0x3FF;
-		pxa_set_cken(CKEN0_PWM0, 0);
+		pxa_set_cken(CKEN_PWM0, 0);
 	}
 }
 

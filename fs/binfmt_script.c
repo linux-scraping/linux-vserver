@@ -12,7 +12,6 @@
 #include <linux/binfmts.h>
 #include <linux/init.h>
 #include <linux/file.h>
-#include <linux/smp_lock.h>
 #include <linux/err.h>
 #include <linux/fs.h>
 
@@ -68,7 +67,9 @@ static int load_script(struct linux_binprm *bprm,struct pt_regs *regs)
 	 * This is done in reverse order, because of how the
 	 * user environment and arguments are stored.
 	 */
-	remove_arg_zero(bprm);
+	retval = remove_arg_zero(bprm);
+	if (retval)
+		return retval;
 	retval = copy_strings_kernel(1, &bprm->interp, bprm);
 	if (retval < 0) return retval; 
 	bprm->argc++;

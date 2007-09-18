@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
-#include "user_util.h"
 #include "user.h"
 #include "mconsole.h"
 #include "os.h"
@@ -69,7 +68,7 @@ int start_watchdog(int *in_fd_ret, int *out_fd_ret, char *sock)
 		args = pid_args;
 	}
 
-	pid = run_helper(pre_exec, &data, args, NULL);
+	pid = run_helper(pre_exec, &data, args);
 
 	os_close_file(out_fds[0]);
 	os_close_file(in_fds[1]);

@@ -28,7 +28,6 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
-#include <linux/smp_lock.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
@@ -311,8 +310,6 @@ static s32 scx200_acb_smbus_xfer(struct i2c_adapter *adapter,
 		break;
 
 	case I2C_SMBUS_I2C_BLOCK_DATA:
-		if (rw == I2C_SMBUS_READ)
-			data->block[0] = I2C_SMBUS_BLOCK_MAX; /* For now */
 		len = data->block[0];
 		if (len == 0 || len > I2C_SMBUS_BLOCK_MAX)
 			return -EINVAL;
@@ -389,7 +386,7 @@ static const struct i2c_algorithm scx200_acb_algorithm = {
 };
 
 static struct scx200_acb_iface *scx200_acb_list;
-static DECLARE_MUTEX(scx200_acb_list_mutex);
+static DEFINE_MUTEX(scx200_acb_list_mutex);
 
 static __init int scx200_acb_probe(struct scx200_acb_iface *iface)
 {
@@ -441,7 +438,7 @@ static __init struct scx200_acb_iface *scx200_create_iface(const char *text,
 
 	adapter = &iface->adapter;
 	i2c_set_adapdata(adapter, iface);
-	snprintf(adapter->name, I2C_NAME_SIZE, "%s ACB%d", text, index);
+	snprintf(adapter->name, sizeof(adapter->name), "%s ACB%d", text, index);
 	adapter->owner = THIS_MODULE;
 	adapter->id = I2C_HW_SMBUS_SCX200;
 	adapter->algo = &scx200_acb_algorithm;
@@ -473,10 +470,10 @@ static int __init scx200_acb_create(struct scx200_acb_iface *iface)
 		return -ENODEV;
 	}
 
-	down(&scx200_acb_list_mutex);
+	mutex_lock(&scx200_acb_list_mutex);
 	iface->next = scx200_acb_list;
 	scx200_acb_list = iface;
-	up(&scx200_acb_list_mutex);
+	mutex_unlock(&scx200_acb_list_mutex);
 
 	return 0;
 }
@@ -599,6 +596,7 @@ static __init int scx200_scan_pci(void)
 		else {
 			int i;
 
+			pci_dev_put(pdev);
 			for (i = 0; i < MAX_DEVICES; ++i) {
 				if (base[i] == 0)
 					continue;
@@ -633,10 +631,10 @@ static void __exit scx200_acb_cleanup(void)
 {
 	struct scx200_acb_iface *iface;
 
-	down(&scx200_acb_list_mutex);
+	mutex_lock(&scx200_acb_list_mutex);
 	while ((iface = scx200_acb_list) != NULL) {
 		scx200_acb_list = iface->next;
-		up(&scx200_acb_list_mutex);
+		mutex_unlock(&scx200_acb_list_mutex);
 
 		i2c_del_adapter(&iface->adapter);
 
@@ -648,9 +646,9 @@ static void __exit scx200_acb_cleanup(void)
 			release_region(iface->base, 8);
 
 		kfree(iface);
-		down(&scx200_acb_list_mutex);
+		mutex_lock(&scx200_acb_list_mutex);
 	}
-	up(&scx200_acb_list_mutex);
+	mutex_unlock(&scx200_acb_list_mutex);
 }
 
 module_init(scx200_acb_init);

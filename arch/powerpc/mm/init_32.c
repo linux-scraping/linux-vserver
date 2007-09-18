@@ -5,7 +5,6 @@
  *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
  *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
  *    Copyright (C) 1996 Paul Mackerras
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *  PPC44x/36-bit changes by Matt Porter (mporter@mvista.com)
  *
  *  Derived from "arch/i386/mm/init.c"
@@ -115,6 +114,10 @@ void MMU_setup(void)
 	if (strstr(cmd_line, "noltlbs")) {
 		__map_without_ltlbs = 1;
 	}
+#ifdef CONFIG_DEBUG_PAGEALLOC
+	__map_without_bats = 1;
+	__map_without_ltlbs = 1;
+#endif
 }
 
 /*

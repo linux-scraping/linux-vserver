@@ -4,8 +4,9 @@
 #include <linux/fb.h>
 #include <linux/types.h>
 #include <linux/i2c.h>
-#include <linux/i2c-id.h>
 #include <linux/i2c-algo-bit.h>
+#include <linux/mutex.h>
+#include <video/vga.h>
 
 #define NV_ARCH_04  0x04
 #define NV_ARCH_10  0x10
@@ -85,6 +86,7 @@ typedef struct _riva_hw_state {
 	u32 timingV;
 	u32 displayV;
 	u32 crtcSync;
+	u32 control;
 } RIVA_HW_STATE;
 
 struct riva_regs {
@@ -94,13 +96,15 @@ struct riva_regs {
 struct nvidia_par {
 	RIVA_HW_STATE SavedReg;
 	RIVA_HW_STATE ModeReg;
+	RIVA_HW_STATE initial_state;
 	RIVA_HW_STATE *CurrentState;
+	struct vgastate vgastate;
+	struct mutex open_lock;
 	u32 pseudo_palette[16];
 	struct pci_dev *pci_dev;
 	u32 Architecture;
 	u32 CursorStart;
 	int Chipset;
-	int bus;
 	unsigned long FbAddress;
 	u8 __iomem *FbStart;
 	u32 FbMapSize;
@@ -143,6 +147,7 @@ struct nvidia_par {
 	int BlendingPossible;
 	u32 paletteEnabled;
 	u32 forceCRTC;
+	u32 open_count;
 	u8 DDCBase;
 #ifdef CONFIG_MTRR
 	struct {

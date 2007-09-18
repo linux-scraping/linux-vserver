@@ -521,6 +521,7 @@ static void mdio_write(kio_addr_t addr, int phy_id, int loc, int value)
 
 static int axnet_open(struct net_device *dev)
 {
+    int ret;
     axnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
     
@@ -529,9 +530,11 @@ static int axnet_open(struct net_device *dev)
     if (!pcmcia_dev_present(link))
 	return -ENODEV;
 
-    link->open++;
+    ret = request_irq(dev->irq, ei_irq_wrapper, IRQF_SHARED, "axnet_cs", dev);
+    if (ret)
+	    return ret;
 
-    request_irq(dev->irq, ei_irq_wrapper, IRQF_SHARED, "axnet_cs", dev);
+    link->open++;
 
     info->link_status = 0x00;
     init_timer(&info->watchdog);
@@ -1136,7 +1139,7 @@ static int ei_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		ei_block_output(dev, length, skb->data, output_page);
 	else {
 		memset(packet, 0, ETH_ZLEN);
-		memcpy(packet, skb->data, skb->len);
+		skb_copy_from_linear_data(skb, packet, skb->len);
 		ei_block_output(dev, length, packet, output_page);
 	}
 	
@@ -1496,7 +1499,6 @@ static void ei_receive(struct net_device *dev)
 			else
 			{
 				skb_reserve(skb,2);	/* IP headers on 16 byte boundaries */
-				skb->dev = dev;
 				skb_put(skb, pkt_len);	/* Make room */
 				ei_block_input(dev, pkt_len, skb, current_offset + sizeof(rx_frame));
 				skb->protocol=eth_type_trans(skb,dev);

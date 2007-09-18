@@ -24,7 +24,7 @@
  * License. See the file COPYING in the main directory of this archive for
  * more details.
  *
- * 
+ *
  */
 
 #include <linux/module.h>
@@ -58,7 +58,7 @@
 #endif
 
 /*
- * Driver data 
+ * Driver data
  */
 static char *mode __devinitdata = NULL;
 
@@ -81,15 +81,13 @@ static int lowvsync;
 struct pm2fb_par
 {
 	pm2type_t	type;		/* Board type */
-	u32		fb_size;	/* framebuffer memory size */
-	unsigned char	__iomem *v_fb;  /* virtual address of frame buffer */
 	unsigned char	__iomem *v_regs;/* virtual address of p_regs */
-	u32 	   	memclock;	/* memclock */
+	u32		memclock;	/* memclock */
 	u32		video;		/* video flags before blanking */
 	u32		mem_config;	/* MemConfig reg at probe */
 	u32		mem_control;	/* MemControl reg at probe */
 	u32		boot_address;	/* BootAddress reg at probe */
-	u32             palette[16];
+	u32		palette[16];
 };
 
 /*
@@ -97,13 +95,13 @@ struct pm2fb_par
  * if we don't use modedb.
  */
 static struct fb_fix_screeninfo pm2fb_fix __devinitdata = {
-	.id =		"", 
+	.id =		"",
 	.type =		FB_TYPE_PACKED_PIXELS,
 	.visual =	FB_VISUAL_PSEUDOCOLOR,
 	.xpanstep =	1,
 	.ypanstep =	1,
-	.ywrapstep =	0, 
-	.accel =	FB_ACCEL_NONE,
+	.ywrapstep =	0,
+	.accel =	FB_ACCEL_3DLABS_PERMEDIA2,
 };
 
 /*
@@ -111,26 +109,26 @@ static struct fb_fix_screeninfo pm2fb_fix __devinitdata = {
  */
 static struct fb_var_screeninfo pm2fb_var __devinitdata = {
 	/* "640x480, 8 bpp @ 60 Hz */
-	.xres =		640,
-	.yres =		480,
-	.xres_virtual =	640,
-	.yres_virtual =	480,
-	.bits_per_pixel =8,
-	.red =		{0, 8, 0},
-	.blue =		{0, 8, 0},
-	.green =	{0, 8, 0},
-	.activate =	FB_ACTIVATE_NOW,
-	.height =	-1,
-	.width =	-1,
-	.accel_flags =	0,
-	.pixclock =	39721,
-	.left_margin =	40,
-	.right_margin =	24,
-	.upper_margin =	32,
-	.lower_margin =	11,
-	.hsync_len =	96,
-	.vsync_len =	2,
-	.vmode =	FB_VMODE_NONINTERLACED
+	.xres =			640,
+	.yres =			480,
+	.xres_virtual =		640,
+	.yres_virtual =		480,
+	.bits_per_pixel =	8,
+	.red =			{0, 8, 0},
+	.blue =			{0, 8, 0},
+	.green =		{0, 8, 0},
+	.activate =		FB_ACTIVATE_NOW,
+	.height =		-1,
+	.width =		-1,
+	.accel_flags =		0,
+	.pixclock =		39721,
+	.left_margin =		40,
+	.right_margin =		24,
+	.upper_margin =		32,
+	.lower_margin =		11,
+	.hsync_len =		96,
+	.vsync_len =		2,
+	.vmode =		FB_VMODE_NONINTERLACED
 };
 
 /*
@@ -168,7 +166,7 @@ static inline u32 pm2_RDAC_RD(struct pm2fb_par* p, s32 idx)
 		pm2_WR(p, PM2VR_RD_INDEX_LOW, idx & 0xff);
 		index = PM2VR_RD_INDEXED_DATA;
 		break;
-	}	
+	}
 	mb();
 	return pm2_RD(p, index);
 }
@@ -184,20 +182,22 @@ static inline void pm2_RDAC_WR(struct pm2fb_par* p, s32 idx, u32 v)
 		pm2_WR(p, PM2VR_RD_INDEX_LOW, idx & 0xff);
 		index = PM2VR_RD_INDEXED_DATA;
 		break;
-	}	
-	mb();
+	}
+	wmb();
 	pm2_WR(p, index, v);
+	wmb();
 }
 
 static inline void pm2v_RDAC_WR(struct pm2fb_par* p, s32 idx, u32 v)
 {
 	pm2_WR(p, PM2VR_RD_INDEX_LOW, idx & 0xff);
-	mb();
+	wmb();
 	pm2_WR(p, PM2VR_RD_INDEXED_DATA, v);
+	wmb();
 }
 
 #ifdef CONFIG_FB_PM2_FIFO_DISCONNECT
-#define WAIT_FIFO(p,a)
+#define WAIT_FIFO(p, a)
 #else
 static inline void WAIT_FIFO(struct pm2fb_par* p, u32 a)
 {
@@ -209,7 +209,7 @@ static inline void WAIT_FIFO(struct pm2fb_par* p, u32 a)
 /*
  * partial products for the supported horizontal resolutions.
  */
-#define PACKPP(p0,p1,p2)	(((p2) << 6) | ((p1) << 3) | (p0))
+#define PACKPP(p0, p1, p2)	(((p2) << 6) | ((p1) << 3) | (p0))
 static const struct {
 	u16 width;
 	u16 pp;
@@ -302,10 +302,10 @@ static void pm2v_mnp(u32 clk, unsigned char* mm, unsigned char* nn,
 	s32 delta = 1000;
 
 	*mm = *nn = *pp = 0;
-	for (n = 1; n; n++) {
-		for ( m = 1; m; m++) {
+	for ( m = 1; m < 128; m++) {
+		for (n = 2 * m + 1; n; n++) {
 			for ( p = 0; p < 2; p++) {
-				f = PM2_REFERENCE_CLOCK * n / (m * (1 << (p + 1)));
+				f = ( PM2_REFERENCE_CLOCK >> ( p + 1 )) * n / m;
 				if ( clk > f - delta && clk < f + delta ) {
 					delta = ( clk > f ) ? clk - f : f - clk;
 					*mm=m;
@@ -357,7 +357,7 @@ static void reset_card(struct pm2fb_par* p)
 static void reset_config(struct pm2fb_par* p)
 {
 	WAIT_FIFO(p, 52);
-	pm2_WR(p, PM2R_CHIP_CONFIG, pm2_RD(p, PM2R_CHIP_CONFIG)&
+	pm2_WR(p, PM2R_CHIP_CONFIG, pm2_RD(p, PM2R_CHIP_CONFIG) &
 	       ~(PM2F_VGA_ENABLE|PM2F_VGA_FIXED));
 	pm2_WR(p, PM2R_BYPASS_WRITE_MASK, ~(0L));
 	pm2_WR(p, PM2R_FRAMEBUFFER_WRITE_MASK, ~(0L));
@@ -367,7 +367,7 @@ static void reset_config(struct pm2fb_par* p)
 	pm2_WR(p, PM2R_RASTERIZER_MODE, 0);
 	pm2_WR(p, PM2R_DELTA_MODE, PM2F_DELTA_ORDER_RGB);
 	pm2_WR(p, PM2R_LB_READ_FORMAT, 0);
-	pm2_WR(p, PM2R_LB_WRITE_FORMAT, 0); 
+	pm2_WR(p, PM2R_LB_WRITE_FORMAT, 0);
 	pm2_WR(p, PM2R_LB_READ_MODE, 0);
 	pm2_WR(p, PM2R_LB_SOURCE_OFFSET, 0);
 	pm2_WR(p, PM2R_FB_SOURCE_OFFSET, 0);
@@ -462,21 +462,38 @@ static void set_memclock(struct pm2fb_par* par, u32 clk)
 	int i;
 	unsigned char m, n, p;
 
-	pm2_mnp(clk, &m, &n, &p);
-	WAIT_FIFO(par, 10);
-	pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_3, 6);
-	wmb();
-	pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_1, m);
-	pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_2, n);
-	wmb();
-	pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_3, 8|p);
-	wmb();
-	pm2_RDAC_RD(par, PM2I_RD_MEMORY_CLOCK_STATUS);
-	rmb();
-	for (i = 256;
-	     i && !(pm2_RD(par, PM2R_RD_INDEXED_DATA) & PM2F_PLL_LOCKED);
-	     i--)
-		;
+	switch (par->type) {
+	case PM2_TYPE_PERMEDIA2V:
+		pm2v_mnp(clk/2, &m, &n, &p);
+		WAIT_FIFO(par, 8);
+		pm2_WR(par, PM2VR_RD_INDEX_HIGH, PM2VI_RD_MCLK_CONTROL >> 8);
+		pm2v_RDAC_WR(par, PM2VI_RD_MCLK_CONTROL, 0);
+		pm2v_RDAC_WR(par, PM2VI_RD_MCLK_PRESCALE, m);
+		pm2v_RDAC_WR(par, PM2VI_RD_MCLK_FEEDBACK, n);
+		pm2v_RDAC_WR(par, PM2VI_RD_MCLK_POSTSCALE, p);
+		pm2v_RDAC_WR(par, PM2VI_RD_MCLK_CONTROL, 1);
+		rmb();
+		for (i = 256;
+		     i && !(pm2_RDAC_RD(par, PM2VI_RD_MCLK_CONTROL) & 2);
+		     i--)
+			;
+		pm2_WR(par, PM2VR_RD_INDEX_HIGH, 0);
+		break;
+	case PM2_TYPE_PERMEDIA2:
+		pm2_mnp(clk, &m, &n, &p);
+		WAIT_FIFO(par, 10);
+		pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_3, 6);
+		pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_1, m);
+		pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_2, n);
+		pm2_RDAC_WR(par, PM2I_RD_MEMORY_CLOCK_3, 8|p);
+		pm2_RDAC_RD(par, PM2I_RD_MEMORY_CLOCK_STATUS);
+		rmb();
+		for (i = 256;
+		     i && !(pm2_RD(par, PM2R_RD_INDEXED_DATA) & PM2F_PLL_LOCKED);
+		     i--)
+			;
+		break;
+	}
 }
 
 static void set_pixclock(struct pm2fb_par* par, u32 clk)
@@ -489,12 +506,9 @@ static void set_pixclock(struct pm2fb_par* par, u32 clk)
 		pm2_mnp(clk, &m, &n, &p);
 		WAIT_FIFO(par, 8);
 		pm2_RDAC_WR(par, PM2I_RD_PIXEL_CLOCK_A3, 0);
-		wmb();
 		pm2_RDAC_WR(par, PM2I_RD_PIXEL_CLOCK_A1, m);
 		pm2_RDAC_WR(par, PM2I_RD_PIXEL_CLOCK_A2, n);
-		wmb();
 		pm2_RDAC_WR(par, PM2I_RD_PIXEL_CLOCK_A3, 8|p);
-		wmb();
 		pm2_RDAC_RD(par, PM2I_RD_PIXEL_CLOCK_STATUS);
 		rmb();
 		for (i = 256;
@@ -521,7 +535,7 @@ static void set_video(struct pm2fb_par* p, u32 video) {
 	vsync = video;
 
 	DPRINTK("video = 0x%x\n", video);
-	
+
 	/*
 	 * The hardware cursor needs +vsync to recognise vert retrace.
 	 * We may not be using the hardware cursor, but the X Glint
@@ -560,9 +574,9 @@ static void set_video(struct pm2fb_par* p, u32 video) {
  */
 
 /**
- *      pm2fb_check_var - Optional function. Validates a var passed in. 
- *      @var: frame buffer variable screen structure
- *      @info: frame buffer structure that represents a single frame buffer 
+ *	pm2fb_check_var - Optional function. Validates a var passed in.
+ *	@var: frame buffer variable screen structure
+ *	@info: frame buffer structure that represents a single frame buffer
  *
  *	Checks to see if the hardware supports the state requested by
  *	var passed in.
@@ -601,28 +615,30 @@ static int pm2fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 
 	var->xres = (var->xres + 15) & ~15; /* could sometimes be 8 */
 	lpitch = var->xres * ((var->bits_per_pixel + 7)>>3);
-  
+
 	if (var->xres < 320 || var->xres > 1600) {
 		DPRINTK("width not supported: %u\n", var->xres);
 		return -EINVAL;
 	}
-  
+
 	if (var->yres < 200 || var->yres > 1200) {
 		DPRINTK("height not supported: %u\n", var->yres);
 		return -EINVAL;
 	}
-  
+
 	if (lpitch * var->yres_virtual > info->fix.smem_len) {
 		DPRINTK("no memory for screen (%ux%ux%u)\n",
 			var->xres, var->yres_virtual, var->bits_per_pixel);
 		return -EINVAL;
 	}
-  
+
 	if (PICOS2KHZ(var->pixclock) > PM2_MAX_PIXCLOCK) {
 		DPRINTK("pixclock too high (%ldKHz)\n", PICOS2KHZ(var->pixclock));
 		return -EINVAL;
 	}
 
+	var->transp.offset = 0;
+	var->transp.length = 0;
 	switch(var->bits_per_pixel) {
 	case 8:
 		var->red.length = var->green.length = var->blue.length = 8;
@@ -656,17 +672,17 @@ static int pm2fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 		break;
 	}
 	var->height = var->width = -1;
-  
+
 	var->accel_flags = 0;	/* Can't mmap if this is on */
-	
+
 	DPRINTK("Checking graphics mode at %dx%d depth %d\n",
 		var->xres, var->yres, var->bits_per_pixel);
 	return 0;
 }
 
 /**
- *      pm2fb_set_par - Alters the hardware state.
- *      @info: frame buffer structure that represents a single frame buffer
+ *	pm2fb_set_par - Alters the hardware state.
+ *	@info: frame buffer structure that represents a single frame buffer
  *
  *	Using the fb_var_screeninfo in fb_info we set the resolution of the
  *	this particular framebuffer.
@@ -693,7 +709,7 @@ static int pm2fb_set_par(struct fb_info *info)
 	clear_palette(par);
 	if ( par->memclock )
 		set_memclock(par, par->memclock);
-    
+
 	width = (info->var.xres_virtual + 7) & ~7;
 	height = info->var.yres_virtual;
 	depth = (info->var.bits_per_pixel + 7) & ~7;
@@ -706,7 +722,7 @@ static int pm2fb_set_par(struct fb_info *info)
 		DPRINTK("pixclock too high (%uKHz)\n", pixclock);
 		return -EINVAL;
 	}
-    
+
 	hsstart = to3264(info->var.right_margin, depth, data64);
 	hsend = hsstart + to3264(info->var.hsync_len, depth, data64);
 	hbend = hsend + to3264(info->var.left_margin, depth, data64);
@@ -721,7 +737,7 @@ static int pm2fb_set_par(struct fb_info *info)
 	base = to3264(info->var.yoffset * xres + info->var.xoffset, depth, 1);
 	if (data64)
 		video |= PM2F_DATA_64_ENABLE;
-    
+
 	if (info->var.sync & FB_SYNC_HOR_HIGH_ACT) {
 		if (lowhsync) {
 			DPRINTK("ignoring +hsync, using -hsync.\n");
@@ -762,9 +778,9 @@ static int pm2fb_set_par(struct fb_info *info)
 		WAIT_FIFO(par, 1);
 		pm2_WR(par, PM2VR_RD_INDEX_HIGH, 0);
 	}
-    
+
 	set_aperture(par, depth);
-    
+
 	mb();
 	WAIT_FIFO(par, 19);
 	pm2_RDAC_WR(par, PM2I_RD_COLOR_KEY_CONTROL,
@@ -831,22 +847,22 @@ static int pm2fb_set_par(struct fb_info *info)
 	set_pixclock(par, pixclock);
 	DPRINTK("Setting graphics mode at %dx%d depth %d\n",
 		info->var.xres, info->var.yres, info->var.bits_per_pixel);
-	return 0;	
+	return 0;
 }
 
 /**
- *  	pm2fb_setcolreg - Sets a color register.
- *      @regno: boolean, 0 copy local, 1 get_user() function
- *      @red: frame buffer colormap structure
- *	@green: The green value which can be up to 16 bits wide 
+ *	pm2fb_setcolreg - Sets a color register.
+ *	@regno: boolean, 0 copy local, 1 get_user() function
+ *	@red: frame buffer colormap structure
+ *	@green: The green value which can be up to 16 bits wide
  *	@blue:  The blue value which can be up to 16 bits wide.
- *	@transp: If supported the alpha value which can be up to 16 bits wide.	
- *      @info: frame buffer info structure
- * 
- *  	Set a single color register. The values supplied have a 16 bit
- *  	magnitude which needs to be scaled in this function for the hardware.
+ *	@transp: If supported the alpha value which can be up to 16 bits wide.
+ *	@info: frame buffer info structure
+ *
+ *	Set a single color register. The values supplied have a 16 bit
+ *	magnitude which needs to be scaled in this function for the hardware.
  *	Pretty much a direct lift from tdfxfb.c.
- * 
+ *
  *	Returns negative errno on error, or zero on success.
  */
 static int pm2fb_setcolreg(unsigned regno, unsigned red, unsigned green,
@@ -890,7 +906,7 @@ static int pm2fb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	 *    (blue << blue.offset) | (transp << transp.offset)
 	 *    RAMDAC does not exist
 	 */
-#define CNVT_TOHW(val,width) ((((val)<<(width))+0x7FFF-(val))>>16)
+#define CNVT_TOHW(val, width) ((((val) << (width)) + 0x7FFF -(val)) >> 16)
 	switch (info->fix.visual) {
 	case FB_VISUAL_TRUECOLOR:
 	case FB_VISUAL_PSEUDOCOLOR:
@@ -900,9 +916,9 @@ static int pm2fb_setcolreg(unsigned regno, unsigned red, unsigned green,
 		transp = CNVT_TOHW(transp, info->var.transp.length);
 		break;
 	case FB_VISUAL_DIRECTCOLOR:
-		/* example here assumes 8 bit DAC. Might be different 
-		 * for your hardware */	
-		red = CNVT_TOHW(red, 8);       
+		/* example here assumes 8 bit DAC. Might be different
+		 * for your hardware */
+		red = CNVT_TOHW(red, 8);
 		green = CNVT_TOHW(green, 8);
 		blue = CNVT_TOHW(blue, 8);
 		/* hey, there is bug in transp handling... */
@@ -924,11 +940,11 @@ static int pm2fb_setcolreg(unsigned regno, unsigned red, unsigned green,
 
 		switch (info->var.bits_per_pixel) {
 		case 8:
-			break;	
-   		case 16:
+			break;
+		case 16:
 		case 24:
-		case 32:	
-           		par->palette[regno] = v;
+		case 32:
+			par->palette[regno] = v;
 			break;
 		}
 		return 0;
@@ -940,15 +956,15 @@ static int pm2fb_setcolreg(unsigned regno, unsigned red, unsigned green,
 }
 
 /**
- *      pm2fb_pan_display - Pans the display.
- *      @var: frame buffer variable screen structure
- *      @info: frame buffer structure that represents a single frame buffer
+ *	pm2fb_pan_display - Pans the display.
+ *	@var: frame buffer variable screen structure
+ *	@info: frame buffer structure that represents a single frame buffer
  *
  *	Pan (or wrap, depending on the `vmode' field) the display using the
- *  	`xoffset' and `yoffset' fields of the `var' structure.
- *  	If the values don't fit, return -EINVAL.
+ *	`xoffset' and `yoffset' fields of the `var' structure.
+ *	If the values don't fit, return -EINVAL.
  *
- *      Returns negative errno on error, or zero on success.
+ *	Returns negative errno on error, or zero on success.
  *
  */
 static int pm2fb_pan_display(struct fb_var_screeninfo *var,
@@ -964,24 +980,24 @@ static int pm2fb_pan_display(struct fb_var_screeninfo *var,
 	depth = (depth > 32) ? 32 : depth;
 	base = to3264(var->yoffset * xres + var->xoffset, depth, 1);
 	WAIT_FIFO(p, 1);
-	pm2_WR(p, PM2R_SCREEN_BASE, base);    
+	pm2_WR(p, PM2R_SCREEN_BASE, base);
 	return 0;
 }
 
 /**
- *      pm2fb_blank - Blanks the display.
- *      @blank_mode: the blank mode we want. 
- *      @info: frame buffer structure that represents a single frame buffer
+ *	pm2fb_blank - Blanks the display.
+ *	@blank_mode: the blank mode we want.
+ *	@info: frame buffer structure that represents a single frame buffer
  *
- *      Blank the screen if blank_mode != 0, else unblank. Return 0 if
- *      blanking succeeded, != 0 if un-/blanking failed due to e.g. a 
- *      video mode which doesn't support it. Implements VESA suspend
- *      and powerdown modes on hardware that supports disabling hsync/vsync:
- *      blank_mode == 2: suspend vsync
- *      blank_mode == 3: suspend hsync
- *      blank_mode == 4: powerdown
+ *	Blank the screen if blank_mode != 0, else unblank. Return 0 if
+ *	blanking succeeded, != 0 if un-/blanking failed due to e.g. a
+ *	video mode which doesn't support it. Implements VESA suspend
+ *	and powerdown modes on hardware that supports disabling hsync/vsync:
+ *	blank_mode == 2: suspend vsync
+ *	blank_mode == 3: suspend hsync
+ *	blank_mode == 4: powerdown
  *
- *      Returns negative errno on error, or zero on success.
+ *	Returns negative errno on error, or zero on success.
  *
  */
 static int pm2fb_blank(int blank_mode, struct fb_info *info)
@@ -1017,6 +1033,130 @@ static int pm2fb_blank(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
+static int pm2fb_sync(struct fb_info *info)
+{
+	struct pm2fb_par *par = info->par;
+
+	WAIT_FIFO(par, 1);
+	pm2_WR(par, PM2R_SYNC, 0);
+	mb();
+	do {
+		while (pm2_RD(par, PM2R_OUT_FIFO_WORDS) == 0)
+			udelay(10);
+		rmb();
+	} while (pm2_RD(par, PM2R_OUT_FIFO) != PM2TAG(PM2R_SYNC));
+
+	return 0;
+}
+
+/*
+ * block operation. copy=0: rectangle fill, copy=1: rectangle copy.
+ */
+static void pm2fb_block_op(struct fb_info* info, int copy,
+				s32 xsrc, s32 ysrc,
+				s32 x, s32 y, s32 w, s32 h,
+				u32 color) {
+	struct pm2fb_par *par = info->par;
+
+	if (!w || !h)
+		return;
+	WAIT_FIFO(par, 5);
+	pm2_WR(par, PM2R_CONFIG, PM2F_CONFIG_FB_WRITE_ENABLE |
+		PM2F_CONFIG_FB_READ_SOURCE_ENABLE);
+	if (copy)
+		pm2_WR(par, PM2R_FB_SOURCE_DELTA,
+			((ysrc-y) & 0xfff) << 16 | ((xsrc-x) & 0xfff));
+	else
+		pm2_WR(par, PM2R_FB_BLOCK_COLOR, color);
+	pm2_WR(par, PM2R_RECTANGLE_ORIGIN, (y << 16) | x);
+	pm2_WR(par, PM2R_RECTANGLE_SIZE, (h << 16) | w);
+	wmb();
+	pm2_WR(par, PM2R_RENDER, PM2F_RENDER_RECTANGLE |
+				(x<xsrc ? PM2F_INCREASE_X : 0) |
+				(y<ysrc ? PM2F_INCREASE_Y : 0) |
+				(copy ? 0 : PM2F_RENDER_FASTFILL));
+}
+
+static void pm2fb_fillrect (struct fb_info *info,
+				const struct fb_fillrect *region)
+{
+	struct fb_fillrect modded;
+	int vxres, vyres;
+	u32 color = (info->fix.visual == FB_VISUAL_TRUECOLOR) ?
+		((u32*)info->pseudo_palette)[region->color] : region->color;
+
+	if (info->state != FBINFO_STATE_RUNNING)
+		return;
+	if ((info->flags & FBINFO_HWACCEL_DISABLED) ||
+		region->rop != ROP_COPY ) {
+		cfb_fillrect(info, region);
+		return;
+	}
+
+	vxres = info->var.xres_virtual;
+	vyres = info->var.yres_virtual;
+
+	memcpy(&modded, region, sizeof(struct fb_fillrect));
+
+	if(!modded.width || !modded.height ||
+	   modded.dx >= vxres || modded.dy >= vyres)
+		return;
+
+	if(modded.dx + modded.width  > vxres)
+		modded.width  = vxres - modded.dx;
+	if(modded.dy + modded.height > vyres)
+		modded.height = vyres - modded.dy;
+
+	if(info->var.bits_per_pixel == 8)
+		color |= color << 8;
+	if(info->var.bits_per_pixel <= 16)
+		color |= color << 16;
+
+	if(info->var.bits_per_pixel != 24)
+		pm2fb_block_op(info, 0, 0, 0,
+				modded.dx, modded.dy,
+				modded.width, modded.height, color);
+	else
+		cfb_fillrect(info, region);
+}
+
+static void pm2fb_copyarea(struct fb_info *info,
+				const struct fb_copyarea *area)
+{
+	struct fb_copyarea modded;
+	u32 vxres, vyres;
+
+	if (info->state != FBINFO_STATE_RUNNING)
+		return;
+	if (info->flags & FBINFO_HWACCEL_DISABLED) {
+		cfb_copyarea(info, area);
+		return;
+	}
+
+	memcpy(&modded, area, sizeof(struct fb_copyarea));
+
+	vxres = info->var.xres_virtual;
+	vyres = info->var.yres_virtual;
+
+	if(!modded.width || !modded.height ||
+	   modded.sx >= vxres || modded.sy >= vyres ||
+	   modded.dx >= vxres || modded.dy >= vyres)
+		return;
+
+	if(modded.sx + modded.width > vxres)
+		modded.width = vxres - modded.sx;
+	if(modded.dx + modded.width > vxres)
+		modded.width = vxres - modded.dx;
+	if(modded.sy + modded.height > vyres)
+		modded.height = vyres - modded.sy;
+	if(modded.dy + modded.height > vyres)
+		modded.height = vyres - modded.dy;
+
+	pm2fb_block_op(info, 1, modded.sx, modded.sy,
+			modded.dx, modded.dy,
+			modded.width, modded.height, 0);
+}
+
 /* ------------ Hardware Independent Functions ------------ */
 
 /*
@@ -1030,9 +1170,10 @@ static struct fb_ops pm2fb_ops = {
 	.fb_setcolreg	= pm2fb_setcolreg,
 	.fb_blank	= pm2fb_blank,
 	.fb_pan_display	= pm2fb_pan_display,
-	.fb_fillrect	= cfb_fillrect,
-	.fb_copyarea	= cfb_copyarea,
+	.fb_fillrect	= pm2fb_fillrect,
+	.fb_copyarea	= pm2fb_copyarea,
 	.fb_imageblit	= cfb_imageblit,
+	.fb_sync	= pm2fb_sync,
 };
 
 /*
@@ -1093,7 +1234,7 @@ static int __devinit pm2fb_probe(struct pci_dev *pdev,
 	DPRINTK("Adjusting register base for big-endian.\n");
 #endif
 	DPRINTK("Register base at 0x%lx\n", pm2fb_fix.mmio_start);
-    
+
 	/* Registers - request region and map it. */
 	if ( !request_mem_region(pm2fb_fix.mmio_start, pm2fb_fix.mmio_len,
 				 "pm2fb regbase") ) {
@@ -1119,38 +1260,47 @@ static int __devinit pm2fb_probe(struct pci_dev *pdev,
 
 	if(default_par->mem_control == 0 &&
 		default_par->boot_address == 0x31 &&
-		default_par->mem_config == 0x259fffff &&
-		pdev->subsystem_vendor == 0x1048 &&
-		pdev->subsystem_device == 0x0a31) {
-		DPRINTK("subsystem_vendor: %04x, subsystem_device: %04x\n",
-			pdev->subsystem_vendor, pdev->subsystem_device);
-		DPRINTK("We have not been initialized by VGA BIOS "
-			"and are running on an Elsa Winner 2000 Office\n");
-		DPRINTK("Initializing card timings manually...\n");
+		default_par->mem_config == 0x259fffff) {
+		default_par->memclock = CVPPC_MEMCLOCK;
 		default_par->mem_control=0;
 		default_par->boot_address=0x20;
 		default_par->mem_config=0xe6002021;
-		default_par->memclock=100000;
+		if (pdev->subsystem_vendor == 0x1048 &&
+			pdev->subsystem_device == 0x0a31) {
+			DPRINTK("subsystem_vendor: %04x, subsystem_device: %04x\n",
+				pdev->subsystem_vendor, pdev->subsystem_device);
+			DPRINTK("We have not been initialized by VGA BIOS "
+				"and are running on an Elsa Winner 2000 Office\n");
+			DPRINTK("Initializing card timings manually...\n");
+			default_par->memclock=70000;
+		}
+		if (pdev->subsystem_vendor == 0x3d3d &&
+			pdev->subsystem_device == 0x0100) {
+			DPRINTK("subsystem_vendor: %04x, subsystem_device: %04x\n",
+				pdev->subsystem_vendor, pdev->subsystem_device);
+			DPRINTK("We have not been initialized by VGA BIOS "
+				"and are running on an 3dlabs reference board\n");
+			DPRINTK("Initializing card timings manually...\n");
+			default_par->memclock=74894;
+		}
 	}
 
 	/* Now work out how big lfb is going to be. */
 	switch(default_par->mem_config & PM2F_MEM_CONFIG_RAM_MASK) {
 	case PM2F_MEM_BANKS_1:
-		default_par->fb_size=0x200000;
+		pm2fb_fix.smem_len=0x200000;
 		break;
 	case PM2F_MEM_BANKS_2:
-		default_par->fb_size=0x400000;
+		pm2fb_fix.smem_len=0x400000;
 		break;
 	case PM2F_MEM_BANKS_3:
-		default_par->fb_size=0x600000;
+		pm2fb_fix.smem_len=0x600000;
 		break;
 	case PM2F_MEM_BANKS_4:
-		default_par->fb_size=0x800000;
+		pm2fb_fix.smem_len=0x800000;
 		break;
 	}
-	default_par->memclock = CVPPC_MEMCLOCK;
 	pm2fb_fix.smem_start = pci_resource_start(pdev, 1);
-	pm2fb_fix.smem_len = default_par->fb_size;
 
 	/* Linear frame buffer - request region and map it. */
 	if ( !request_mem_region(pm2fb_fix.smem_start, pm2fb_fix.smem_len,
@@ -1158,35 +1308,37 @@ static int __devinit pm2fb_probe(struct pci_dev *pdev,
 		printk(KERN_WARNING "pm2fb: Can't reserve smem.\n");
 		goto err_exit_mmio;
 	}
-	info->screen_base = default_par->v_fb =
+	info->screen_base =
 		ioremap_nocache(pm2fb_fix.smem_start, pm2fb_fix.smem_len);
-	if ( !default_par->v_fb ) {
+	if ( !info->screen_base ) {
 		printk(KERN_WARNING "pm2fb: Can't ioremap smem area.\n");
 		release_mem_region(pm2fb_fix.smem_start, pm2fb_fix.smem_len);
 		goto err_exit_mmio;
 	}
 
 	info->fbops		= &pm2fb_ops;
-	info->fix		= pm2fb_fix; 	
+	info->fix		= pm2fb_fix;
 	info->pseudo_palette	= default_par->palette;
 	info->flags		= FBINFO_DEFAULT |
-                                  FBINFO_HWACCEL_YPAN;
+				  FBINFO_HWACCEL_YPAN |
+				  FBINFO_HWACCEL_COPYAREA |
+				  FBINFO_HWACCEL_FILLRECT;
 
 	if (!mode)
 		mode = "640x480@60";
-	 
-	err = fb_find_mode(&info->var, info, mode, NULL, 0, NULL, 8); 
+
+	err = fb_find_mode(&info->var, info, mode, NULL, 0, NULL, 8);
 	if (!err || err == 4)
 		info->var = pm2fb_var;
 
 	if (fb_alloc_cmap(&info->cmap, 256, 0) < 0)
-		goto err_exit_all;
-
-	if (register_framebuffer(info) < 0)
 		goto err_exit_both;
 
+	if (register_framebuffer(info) < 0)
+		goto err_exit_all;
+
 	printk(KERN_INFO "fb%d: %s frame buffer device, memory = %dK.\n",
-	       info->node, info->fix.id, default_par->fb_size / 1024);
+	       info->node, info->fix.id, pm2fb_fix.smem_len / 1024);
 
 	/*
 	 * Our driver data
@@ -1196,8 +1348,8 @@ static int __devinit pm2fb_probe(struct pci_dev *pdev,
 	return 0;
 
  err_exit_all:
-	fb_dealloc_cmap(&info->cmap);	
- err_exit_both:    
+	fb_dealloc_cmap(&info->cmap);
+ err_exit_both:
 	iounmap(info->screen_base);
 	release_mem_region(pm2fb_fix.smem_start, pm2fb_fix.smem_len);
  err_exit_mmio:
@@ -1222,7 +1374,7 @@ static void __devexit pm2fb_remove(struct pci_dev *pdev)
 	struct pm2fb_par *par = info->par;
 
 	unregister_framebuffer(info);
-    
+
 	iounmap(info->screen_base);
 	release_mem_region(fix->smem_start, fix->smem_len);
 	iounmap(par->v_regs);
@@ -1242,14 +1394,17 @@ static struct pci_device_id pm2fb_id_table[] = {
 	{ PCI_VENDOR_ID_3DLABS, PCI_DEVICE_ID_3DLABS_PERMEDIA2V,
 	  PCI_ANY_ID, PCI_ANY_ID, PCI_BASE_CLASS_DISPLAY << 16,
 	  0xff0000, 0 },
+	{ PCI_VENDOR_ID_3DLABS, PCI_DEVICE_ID_3DLABS_PERMEDIA2V,
+	  PCI_ANY_ID, PCI_ANY_ID, PCI_CLASS_NOT_DEFINED_VGA << 8,
+	  0xff00, 0 },
 	{ 0, }
 };
 
 static struct pci_driver pm2fb_driver = {
 	.name		= "pm2fb",
-	.id_table 	= pm2fb_id_table,
-	.probe 		= pm2fb_probe,
-	.remove 	= __devexit_p(pm2fb_remove),
+	.id_table	= pm2fb_id_table,
+	.probe		= pm2fb_probe,
+	.remove		= __devexit_p(pm2fb_remove),
 };
 
 MODULE_DEVICE_TABLE(pci, pm2fb_id_table);
@@ -1268,7 +1423,7 @@ static int __init pm2fb_setup(char *options)
 	if (!options || !*options)
 		return 0;
 
-	while ((this_opt = strsep(&options, ",")) != NULL) {	
+	while ((this_opt = strsep(&options, ",")) != NULL) {
 		if (!*this_opt)
 			continue;
 		if(!strcmp(this_opt, "lowhsync")) {

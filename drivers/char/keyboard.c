@@ -24,6 +24,7 @@
  * 21-08-02: Converted to input API, major cleanup. (Vojtech Pavlik)
  */
 
+#include <linux/consolemap.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
@@ -41,7 +42,6 @@
 #include <linux/input.h>
 #include <linux/reboot.h>
 
-static void kbd_disconnect(struct input_handle *handle);
 extern void ctrl_alt_del(void);
 
 /*
@@ -110,7 +110,7 @@ struct kbd_struct kbd_table[MAX_NR_CONSOLES];
 static struct kbd_struct *kbd = kbd_table;
 
 struct vt_spawn_console vt_spawn_con = {
-	.lock = SPIN_LOCK_UNLOCKED,
+	.lock = __SPIN_LOCK_UNLOCKED(vt_spawn_con.lock),
 	.pid  = NULL,
 	.sig  = 0,
 };
@@ -159,65 +159,41 @@ static int sysrq_alt_use;
 static int sysrq_alt;
 
 /*
- * Translation of scancodes to keycodes. We set them on only the first attached
- * keyboard - for per-keyboard setting, /dev/input/event is more useful.
+ * Translation of scancodes to keycodes. We set them on only the first
+ * keyboard in the list that accepts the scancode and keycode.
+ * Explanation for not choosing the first attached keyboard anymore:
+ *  USB keyboards for example have two event devices: one for all "normal"
+ *  keys and one for extra function keys (like "volume up", "make coffee",
+ *  etc.). So this means that scancodes for the extra function keys won't
+ *  be valid for the first event device, but will be for the second.
  */
 int getkeycode(unsigned int scancode)
 {
-	struct list_head *node;
-	struct input_dev *dev = NULL;
+	struct input_handle *handle;
+	int keycode;
+	int error = -ENODEV;
 
-	list_for_each(node, &kbd_handler.h_list) {
-		struct input_handle *handle = to_handle_h(node);
-		if (handle->dev->keycodesize) {
-			dev = handle->dev;
-			break;
-		}
+	list_for_each_entry(handle, &kbd_handler.h_list, h_node) {
+		error = handle->dev->getkeycode(handle->dev, scancode, &keycode);
+		if (!error)
+			return keycode;
 	}
 
-	if (!dev)
-		return -ENODEV;
-
-	if (scancode >= dev->keycodemax)
-		return -EINVAL;
-
-	return INPUT_KEYCODE(dev, scancode);
+	return error;
 }
 
 int setkeycode(unsigned int scancode, unsigned int keycode)
 {
-	struct list_head *node;
-	struct input_dev *dev = NULL;
-	unsigned int i, oldkey;
+	struct input_handle *handle;
+	int error = -ENODEV;
 
-	list_for_each(node, &kbd_handler.h_list) {
-		struct input_handle *handle = to_handle_h(node);
-		if (handle->dev->keycodesize) {
-			dev = handle->dev;
+	list_for_each_entry(handle, &kbd_handler.h_list, h_node) {
+		error = handle->dev->setkeycode(handle->dev, scancode, keycode);
+		if (!error)
 			break;
-		}
 	}
 
-	if (!dev)
-		return -ENODEV;
-
-	if (scancode >= dev->keycodemax)
-		return -EINVAL;
-	if (keycode < 0 || keycode > KEY_MAX)
-		return -EINVAL;
-	if (dev->keycodesize < sizeof(keycode) && (keycode >> (dev->keycodesize * 8)))
-		return -EINVAL;
-
-	oldkey = SET_INPUT_KEYCODE(dev, scancode, keycode);
-
-	clear_bit(oldkey, dev->keybit);
-	set_bit(keycode, dev->keybit);
-
-	for (i = 0; i < dev->keycodemax; i++)
-		if (INPUT_KEYCODE(dev,i) == oldkey)
-			set_bit(oldkey, dev->keybit);
-
-	return 0;
+	return error;
 }
 
 /*
@@ -225,10 +201,9 @@ int setkeycode(unsigned int scancode, unsigned int keycode)
  */
 static void kd_nosound(unsigned long ignored)
 {
-	struct list_head *node;
+	struct input_handle *handle;
 
-	list_for_each(node, &kbd_handler.h_list) {
-		struct input_handle *handle = to_handle_h(node);
+	list_for_each_entry(handle, &kbd_handler.h_list, h_node) {
 		if (test_bit(EV_SND, handle->dev->evbit)) {
 			if (test_bit(SND_TONE, handle->dev->sndbit))
 				input_inject_event(handle, EV_SND, SND_TONE, 0);
@@ -334,10 +309,9 @@ static void applkey(struct vc_data *vc, int key, char mode)
  * Many other routines do put_queue, but I think either
  * they produce ASCII, or they produce some user-assigned
  * string, and in both cases we might assume that it is
- * in utf-8 already. UTF-8 is defined for words of up to 31 bits,
- * but we need only 16 bits here
+ * in utf-8 already.
  */
-static void to_utf8(struct vc_data *vc, ushort c)
+static void to_utf8(struct vc_data *vc, uint c)
 {
 	if (c < 0x80)
 		/*  0******* */
@@ -346,9 +320,19 @@ static void to_utf8(struct vc_data *vc, ushort c)
 		/* 110***** 10****** */
 		put_queue(vc, 0xc0 | (c >> 6));
 		put_queue(vc, 0x80 | (c & 0x3f));
-	} else {
+    	} else if (c < 0x10000) {
+	       	if (c >= 0xD800 && c < 0xE000)
+			return;
+		if (c == 0xFFFF)
+			return;
 		/* 1110**** 10****** 10****** */
 		put_queue(vc, 0xe0 | (c >> 12));
+		put_queue(vc, 0x80 | ((c >> 6) & 0x3f));
+		put_queue(vc, 0x80 | (c & 0x3f));
+    	} else if (c < 0x110000) {
+		/* 11110*** 10****** 10****** 10****** */
+		put_queue(vc, 0xf0 | (c >> 18));
+		put_queue(vc, 0x80 | ((c >> 12) & 0x3f));
 		put_queue(vc, 0x80 | ((c >> 6) & 0x3f));
 		put_queue(vc, 0x80 | (c & 0x3f));
 	}
@@ -419,7 +403,7 @@ static unsigned int handle_diacr(struct vc_data *vc, unsigned int ch)
 		return d;
 
 	if (kbd->kbdmode == VC_UNICODE)
-		to_utf8(vc, d);
+		to_utf8(vc, conv_8bit_to_uni(d));
 	else if (d < 0x100)
 		put_queue(vc, d);
 
@@ -433,7 +417,7 @@ static void fn_enter(struct vc_data *vc)
 {
 	if (diacr) {
 		if (kbd->kbdmode == VC_UNICODE)
-			to_utf8(vc, diacr);
+			to_utf8(vc, conv_8bit_to_uni(diacr));
 		else if (diacr < 0x100)
 			put_queue(vc, diacr);
 		diacr = 0;
@@ -643,7 +627,7 @@ static void k_unicode(struct vc_data *vc, unsigned int value, char up_flag)
 		return;
 	}
 	if (kbd->kbdmode == VC_UNICODE)
-		to_utf8(vc, value);
+		to_utf8(vc, conv_8bit_to_uni(value));
 	else if (value < 0x100)
 		put_queue(vc, value);
 }
@@ -801,7 +785,7 @@ static void k_shift(struct vc_data *vc, unsigned char value, char up_flag)
 	/* kludge */
 	if (up_flag && shift_state != old_state && npadch != -1) {
 		if (kbd->kbdmode == VC_UNICODE)
-			to_utf8(vc, npadch & 0xffff);
+			to_utf8(vc, npadch);
 		else
 			put_queue(vc, npadch & 0xff);
 		npadch = -1;
@@ -1031,16 +1015,12 @@ static const unsigned short x86_keycodes[256] =
 	284,285,309,  0,312, 91,327,328,329,331,333,335,336,337,338,339,
 	367,288,302,304,350, 89,334,326,267,126,268,269,125,347,348,349,
 	360,261,262,263,268,376,100,101,321,316,373,286,289,102,351,355,
-	103,104,105,275,287,279,306,106,274,107,294,364,358,363,362,361,
-	291,108,381,281,290,272,292,305,280, 99,112,257,258,359,113,114,
+	103,104,105,275,287,279,258,106,274,107,294,364,358,363,362,361,
+	291,108,381,281,290,272,292,305,280, 99,112,257,306,359,113,114,
 	264,117,271,374,379,265,266, 93, 94, 95, 85,259,375,260, 90,116,
 	377,109,111,277,278,282,283,295,296,297,299,300,301,293,303,307,
 	308,310,313,314,315,317,318,319,320,357,322,323,324,325,276,330,
 	332,340,365,342,343,344,345,346,356,270,341,368,369,370,371,372 };
-
-#ifdef CONFIG_MAC_EMUMOUSEBTN
-extern int mac_hid_mouse_emulate_buttons(int, int, int);
-#endif /* CONFIG_MAC_EMUMOUSEBTN */
 
 #ifdef CONFIG_SPARC
 static int sparc_l1_a_state = 0;
@@ -1161,7 +1141,7 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 
 	if ((raw_mode = (kbd->kbdmode == VC_RAW)) && !hw_raw)
 		if (emulate_raw(vc, keycode, !down << 7))
-			if (keycode < BTN_MISC)
+			if (keycode < BTN_MISC && printk_ratelimit())
 				printk(KERN_WARNING "keyboard.c: can't emulate rawmode for keycode %d\n", keycode);
 
 #ifdef CONFIG_MAGIC_SYSRQ	       /* Handle the SysRq Hack */
@@ -1285,11 +1265,11 @@ static void kbd_event(struct input_handle *handle, unsigned int event_type,
  * likes it, it can open it and get events from it. In this (kbd_connect)
  * function, we should decide which VT to bind that keyboard to initially.
  */
-static struct input_handle *kbd_connect(struct input_handler *handler,
-					struct input_dev *dev,
-					const struct input_device_id *id)
+static int kbd_connect(struct input_handler *handler, struct input_dev *dev,
+			const struct input_device_id *id)
 {
 	struct input_handle *handle;
+	int error;
 	int i;
 
 	for (i = KEY_RESERVED; i < BTN_MISC; i++)
@@ -1297,24 +1277,37 @@ static struct input_handle *kbd_connect(struct input_handler *handler,
 			break;
 
 	if (i == BTN_MISC && !test_bit(EV_SND, dev->evbit))
-		return NULL;
+		return -ENODEV;
 
 	handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
 	if (!handle)
-		return NULL;
+		return -ENOMEM;
 
 	handle->dev = dev;
 	handle->handler = handler;
 	handle->name = "kbd";
 
-	input_open_device(handle);
+	error = input_register_handle(handle);
+	if (error)
+		goto err_free_handle;
 
-	return handle;
+	error = input_open_device(handle);
+	if (error)
+		goto err_unregister_handle;
+
+	return 0;
+
+ err_unregister_handle:
+	input_unregister_handle(handle);
+ err_free_handle:
+	kfree(handle);
+	return error;
 }
 
 static void kbd_disconnect(struct input_handle *handle)
 {
 	input_close_device(handle);
+	input_unregister_handle(handle);
 	kfree(handle);
 }
 

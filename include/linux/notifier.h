@@ -112,32 +112,40 @@ extern void srcu_init_notifier_head(struct srcu_notifier_head *nh);
 
 #ifdef __KERNEL__
 
-extern int atomic_notifier_chain_register(struct atomic_notifier_head *,
-		struct notifier_block *);
-extern int blocking_notifier_chain_register(struct blocking_notifier_head *,
-		struct notifier_block *);
-extern int raw_notifier_chain_register(struct raw_notifier_head *,
-		struct notifier_block *);
-extern int srcu_notifier_chain_register(struct srcu_notifier_head *,
-		struct notifier_block *);
+extern int atomic_notifier_chain_register(struct atomic_notifier_head *nh,
+		struct notifier_block *nb);
+extern int blocking_notifier_chain_register(struct blocking_notifier_head *nh,
+		struct notifier_block *nb);
+extern int raw_notifier_chain_register(struct raw_notifier_head *nh,
+		struct notifier_block *nb);
+extern int srcu_notifier_chain_register(struct srcu_notifier_head *nh,
+		struct notifier_block *nb);
 
-extern int atomic_notifier_chain_unregister(struct atomic_notifier_head *,
-		struct notifier_block *);
-extern int blocking_notifier_chain_unregister(struct blocking_notifier_head *,
-		struct notifier_block *);
-extern int raw_notifier_chain_unregister(struct raw_notifier_head *,
-		struct notifier_block *);
-extern int srcu_notifier_chain_unregister(struct srcu_notifier_head *,
-		struct notifier_block *);
+extern int atomic_notifier_chain_unregister(struct atomic_notifier_head *nh,
+		struct notifier_block *nb);
+extern int blocking_notifier_chain_unregister(struct blocking_notifier_head *nh,
+		struct notifier_block *nb);
+extern int raw_notifier_chain_unregister(struct raw_notifier_head *nh,
+		struct notifier_block *nb);
+extern int srcu_notifier_chain_unregister(struct srcu_notifier_head *nh,
+		struct notifier_block *nb);
 
-extern int atomic_notifier_call_chain(struct atomic_notifier_head *,
+extern int atomic_notifier_call_chain(struct atomic_notifier_head *nh,
 		unsigned long val, void *v);
-extern int blocking_notifier_call_chain(struct blocking_notifier_head *,
+extern int __atomic_notifier_call_chain(struct atomic_notifier_head *nh,
+	unsigned long val, void *v, int nr_to_call, int *nr_calls);
+extern int blocking_notifier_call_chain(struct blocking_notifier_head *nh,
 		unsigned long val, void *v);
-extern int raw_notifier_call_chain(struct raw_notifier_head *,
+extern int __blocking_notifier_call_chain(struct blocking_notifier_head *nh,
+	unsigned long val, void *v, int nr_to_call, int *nr_calls);
+extern int raw_notifier_call_chain(struct raw_notifier_head *nh,
 		unsigned long val, void *v);
-extern int srcu_notifier_call_chain(struct srcu_notifier_head *,
+extern int __raw_notifier_call_chain(struct raw_notifier_head *nh,
+	unsigned long val, void *v, int nr_to_call, int *nr_calls);
+extern int srcu_notifier_call_chain(struct srcu_notifier_head *nh,
 		unsigned long val, void *v);
+extern int __srcu_notifier_call_chain(struct srcu_notifier_head *nh,
+	unsigned long val, void *v, int nr_to_call, int *nr_calls);
 
 #define NOTIFY_DONE		0x0000		/* Don't care */
 #define NOTIFY_OK		0x0001		/* Suits me */
@@ -148,6 +156,19 @@ extern int srcu_notifier_call_chain(struct srcu_notifier_head *,
  * Clean way to return from the notifier and stop further calls.
  */
 #define NOTIFY_STOP		(NOTIFY_OK|NOTIFY_STOP_MASK)
+
+/* Encapsulate (negative) errno value (in particular, NOTIFY_BAD <=> EPERM). */
+static inline int notifier_from_errno(int err)
+{
+	return NOTIFY_STOP_MASK | (NOTIFY_OK - err);
+}
+
+/* Restore (negative) errno value from notify return value. */
+static inline int notifier_to_errno(int ret)
+{
+	ret &= ~NOTIFY_STOP_MASK;
+	return ret > NOTIFY_OK ? NOTIFY_OK - ret : 0;
+}
 
 /*
  *	Declared notifiers so far. I can imagine quite a few more chains
@@ -186,6 +207,29 @@ extern int srcu_notifier_call_chain(struct srcu_notifier_head *,
 #define CPU_DOWN_PREPARE	0x0005 /* CPU (unsigned)v going down */
 #define CPU_DOWN_FAILED		0x0006 /* CPU (unsigned)v NOT going down */
 #define CPU_DEAD		0x0007 /* CPU (unsigned)v dead */
+#define CPU_LOCK_ACQUIRE	0x0008 /* Acquire all hotcpu locks */
+#define CPU_LOCK_RELEASE	0x0009 /* Release all hotcpu locks */
+#define CPU_DYING		0x000A /* CPU (unsigned)v not running any task,
+				        * not handling interrupts, soon dead */
+
+/* Used for CPU hotplug events occuring while tasks are frozen due to a suspend
+ * operation in progress
+ */
+#define CPU_TASKS_FROZEN	0x0010
+
+#define CPU_ONLINE_FROZEN	(CPU_ONLINE | CPU_TASKS_FROZEN)
+#define CPU_UP_PREPARE_FROZEN	(CPU_UP_PREPARE | CPU_TASKS_FROZEN)
+#define CPU_UP_CANCELED_FROZEN	(CPU_UP_CANCELED | CPU_TASKS_FROZEN)
+#define CPU_DOWN_PREPARE_FROZEN	(CPU_DOWN_PREPARE | CPU_TASKS_FROZEN)
+#define CPU_DOWN_FAILED_FROZEN	(CPU_DOWN_FAILED | CPU_TASKS_FROZEN)
+#define CPU_DEAD_FROZEN		(CPU_DEAD | CPU_TASKS_FROZEN)
+#define CPU_DYING_FROZEN	(CPU_DYING | CPU_TASKS_FROZEN)
+
+/* Hibernation and suspend events */
+#define PM_HIBERNATION_PREPARE	0x0001 /* Going to hibernate */
+#define PM_POST_HIBERNATION	0x0002 /* Hibernation finished */
+#define PM_SUSPEND_PREPARE	0x0003 /* Going to suspend the system */
+#define PM_POST_SUSPEND		0x0004 /* Suspend finished */
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_NOTIFIER_H */

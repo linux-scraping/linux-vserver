@@ -87,11 +87,11 @@
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/netfilter_ipv4.h>
+#include <linux/random.h>
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
 
-#include <linux/smp_lock.h>
 #include <linux/inet.h>
 #include <linux/igmp.h>
 #include <linux/inetdevice.h>
@@ -218,6 +218,26 @@ out:
 	return err;
 }
 
+u32 inet_ehash_secret __read_mostly;
+EXPORT_SYMBOL(inet_ehash_secret);
+
+/*
+ * inet_ehash_secret must be set exactly once
+ * Instead of using a dedicated spinlock, we (ab)use inetsw_lock
+ */
+void build_ehash_secret(void)
+{
+	u32 rnd;
+	do {
+		get_random_bytes(&rnd, sizeof(rnd));
+	} while (rnd == 0);
+	spin_lock_bh(&inetsw_lock);
+	if (!inet_ehash_secret)
+		inet_ehash_secret = rnd;
+	spin_unlock_bh(&inetsw_lock);
+}
+EXPORT_SYMBOL(build_ehash_secret);
+
 /*
  *	Create an inet socket.
  */
@@ -233,6 +253,11 @@ static int inet_create(struct socket *sock, int protocol)
 	char answer_no_check;
 	int try_loading_module = 0;
 	int err;
+
+	if (sock->type != SOCK_RAW &&
+	    sock->type != SOCK_DGRAM &&
+	    !inet_ehash_secret)
+		build_ehash_secret();
 
 	sock->state = SS_UNCONNECTED;
 
@@ -284,7 +309,8 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if ((protocol == IPPROTO_ICMP) && vx_ccaps(VXC_RAW_ICMP))
+	if ((protocol == IPPROTO_ICMP) &&
+		nx_capable(answer->capability, NXC_RAW_ICMP))
 		goto override;
 	if (answer->capability > 0 && !capable(answer->capability))
 		goto out_rcu_unlock;
@@ -402,13 +428,10 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sockaddr_in *addr = (struct sockaddr_in *)uaddr;
 	struct sock *sk = sock->sk;
 	struct inet_sock *inet = inet_sk(sk);
+	struct nx_v4_sock_addr nsa;
 	unsigned short snum;
 	int chk_addr_ret;
 	int err;
-	__u32 s_addr;	/* Address used for validation */
-	__u32 s_addr1;	/* Address used for socket */
-	__u32 s_addr2;	/* Broadcast address for the socket */
-	struct nx_info *nxi = sk->sk_nx_info;
 
 	/* If the socket has its own bind function then use it. (RAW) */
 	if (sk->sk_prot->bind) {
@@ -419,40 +442,11 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (addr_len < sizeof(struct sockaddr_in))
 		goto out;
 
-	s_addr = addr->sin_addr.s_addr;
-	s_addr1 = s_addr;
-	s_addr2 = 0xffffffffl;
+	err = v4_map_sock_addr(inet, addr, &nsa);
+	if (err)
+		goto out;
 
-	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p)* %p,%p;%lx " NIPQUAD_FMT,
-		sk, sk->sk_nx_info, sk->sk_socket,
-		(sk->sk_socket?sk->sk_socket->flags:0),
-		NIPQUAD(s_addr));
-	if (nxi) {
-		__u32 v4_bcast = nxi->v4_bcast;
-		__u32 ipv4root = nxi->ipv4[0];
-		int nbipv4 = nxi->nbipv4;
-
-		if (s_addr == 0) {
-			/* bind to any for 1-n */
-			s_addr = ipv4root;
-			s_addr1 = (nbipv4 > 1) ? 0 : s_addr;
-			s_addr2 = v4_bcast;
-		} else if (s_addr == IPI_LOOPBACK) {
-			/* rewrite localhost to ipv4root */
-			s_addr = ipv4root;
-			s_addr1 = ipv4root;
-		} else if (s_addr != v4_bcast) {
-			/* normal address bind */
-			if (!addr_in_nx_info(nxi, s_addr))
-				return -EADDRNOTAVAIL;
-		}
-	}
-	chk_addr_ret = inet_addr_type(s_addr);
-
-	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p) " NIPQUAD_FMT ", " NIPQUAD_FMT ", " NIPQUAD_FMT,
-		sk, NIPQUAD(s_addr), NIPQUAD(s_addr1), NIPQUAD(s_addr2));
+	chk_addr_ret = inet_addr_type(nsa.saddr);
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
@@ -464,7 +458,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	err = -EADDRNOTAVAIL;
 	if (!sysctl_ip_nonlocal_bind &&
 	    !inet->freebind &&
-	    s_addr != INADDR_ANY &&
+	    nsa.saddr != INADDR_ANY &&
 	    chk_addr_ret != RTN_LOCAL &&
 	    chk_addr_ret != RTN_MULTICAST &&
 	    chk_addr_ret != RTN_BROADCAST)
@@ -489,8 +483,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (sk->sk_state != TCP_CLOSE || inet->num)
 		goto out_release_sock;
 
-	inet->rcv_saddr = inet->saddr = s_addr1;
-	inet->rcv_saddr2 = s_addr2;
+	v4_set_sock_addr(inet, &nsa);
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->saddr = 0;  /* Use device */
 
@@ -683,11 +676,13 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		     peer == 1))
 			return -ENOTCONN;
 		sin->sin_port = inet->dport;
-		sin->sin_addr.s_addr = inet->daddr;
+		sin->sin_addr.s_addr =
+			nx_map_sock_lback(sk->sk_nx_info, inet->daddr);
 	} else {
 		__be32 addr = inet->rcv_saddr;
 		if (!addr)
 			addr = inet->saddr;
+		addr = nx_map_sock_lback(sk->sk_nx_info, addr);
 		sin->sin_port = inet->sport;
 		sin->sin_addr.s_addr = addr;
 	}
@@ -796,6 +791,9 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		case SIOCGSTAMP:
 			err = sock_get_timestamp(sk, (struct timeval __user *)arg);
 			break;
+		case SIOCGSTAMPNS:
+			err = sock_get_timestampns(sk, (struct timespec __user *)arg);
+			break;
 		case SIOCADDRT:
 		case SIOCDELRT:
 		case SIOCRTMSG:
@@ -844,7 +842,7 @@ const struct proto_ops inet_stream_ops = {
 	.shutdown	   = inet_shutdown,
 	.setsockopt	   = sock_common_setsockopt,
 	.getsockopt	   = sock_common_getsockopt,
-	.sendmsg	   = inet_sendmsg,
+	.sendmsg	   = tcp_sendmsg,
 	.recvmsg	   = sock_common_recvmsg,
 	.mmap		   = sock_no_mmap,
 	.sendpage	   = tcp_sendpage,
@@ -1150,7 +1148,7 @@ static int inet_gso_send_check(struct sk_buff *skb)
 	if (unlikely(!pskb_may_pull(skb, sizeof(*iph))))
 		goto out;
 
-	iph = skb->nh.iph;
+	iph = ip_hdr(skb);
 	ihl = iph->ihl * 4;
 	if (ihl < sizeof(*iph))
 		goto out;
@@ -1158,8 +1156,9 @@ static int inet_gso_send_check(struct sk_buff *skb)
 	if (unlikely(!pskb_may_pull(skb, ihl)))
 		goto out;
 
-	skb->h.raw = __skb_pull(skb, ihl);
-	iph = skb->nh.iph;
+	__skb_pull(skb, ihl);
+	skb_reset_transport_header(skb);
+	iph = ip_hdr(skb);
 	proto = iph->protocol & (MAX_INET_PROTOS - 1);
 	err = -EPROTONOSUPPORT;
 
@@ -1182,6 +1181,9 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb, int features)
 	int ihl;
 	int id;
 
+	if (!(features & NETIF_F_V4_CSUM))
+		features &= ~NETIF_F_SG;
+
 	if (unlikely(skb_shinfo(skb)->gso_type &
 		     ~(SKB_GSO_TCPV4 |
 		       SKB_GSO_UDP |
@@ -1193,7 +1195,7 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb, int features)
 	if (unlikely(!pskb_may_pull(skb, sizeof(*iph))))
 		goto out;
 
-	iph = skb->nh.iph;
+	iph = ip_hdr(skb);
 	ihl = iph->ihl * 4;
 	if (ihl < sizeof(*iph))
 		goto out;
@@ -1201,8 +1203,9 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb, int features)
 	if (unlikely(!pskb_may_pull(skb, ihl)))
 		goto out;
 
-	skb->h.raw = __skb_pull(skb, ihl);
-	iph = skb->nh.iph;
+	__skb_pull(skb, ihl);
+	skb_reset_transport_header(skb);
+	iph = ip_hdr(skb);
 	id = ntohs(iph->id);
 	proto = iph->protocol & (MAX_INET_PROTOS - 1);
 	segs = ERR_PTR(-EPROTONOSUPPORT);
@@ -1218,16 +1221,56 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb, int features)
 
 	skb = segs;
 	do {
-		iph = skb->nh.iph;
+		iph = ip_hdr(skb);
 		iph->id = htons(id++);
 		iph->tot_len = htons(skb->len - skb->mac_len);
 		iph->check = 0;
-		iph->check = ip_fast_csum(skb->nh.raw, iph->ihl);
+		iph->check = ip_fast_csum(skb_network_header(skb), iph->ihl);
 	} while ((skb = skb->next));
 
 out:
 	return segs;
 }
+
+unsigned long snmp_fold_field(void *mib[], int offt)
+{
+	unsigned long res = 0;
+	int i;
+
+	for_each_possible_cpu(i) {
+		res += *(((unsigned long *) per_cpu_ptr(mib[0], i)) + offt);
+		res += *(((unsigned long *) per_cpu_ptr(mib[1], i)) + offt);
+	}
+	return res;
+}
+EXPORT_SYMBOL_GPL(snmp_fold_field);
+
+int snmp_mib_init(void *ptr[2], size_t mibsize, size_t mibalign)
+{
+	BUG_ON(ptr == NULL);
+	ptr[0] = __alloc_percpu(mibsize);
+	if (!ptr[0])
+		goto err0;
+	ptr[1] = __alloc_percpu(mibsize);
+	if (!ptr[1])
+		goto err1;
+	return 0;
+err1:
+	free_percpu(ptr[0]);
+	ptr[0] = NULL;
+err0:
+	return -ENOMEM;
+}
+EXPORT_SYMBOL_GPL(snmp_mib_init);
+
+void snmp_mib_free(void *ptr[2])
+{
+	BUG_ON(ptr == NULL);
+	free_percpu(ptr[0]);
+	free_percpu(ptr[1]);
+	ptr[0] = ptr[1] = NULL;
+}
+EXPORT_SYMBOL_GPL(snmp_mib_free);
 
 #ifdef CONFIG_IP_MULTICAST
 static struct net_protocol igmp_protocol = {
@@ -1255,28 +1298,47 @@ static struct net_protocol icmp_protocol = {
 
 static int __init init_ipv4_mibs(void)
 {
-	net_statistics[0] = alloc_percpu(struct linux_mib);
-	net_statistics[1] = alloc_percpu(struct linux_mib);
-	ip_statistics[0] = alloc_percpu(struct ipstats_mib);
-	ip_statistics[1] = alloc_percpu(struct ipstats_mib);
-	icmp_statistics[0] = alloc_percpu(struct icmp_mib);
-	icmp_statistics[1] = alloc_percpu(struct icmp_mib);
-	tcp_statistics[0] = alloc_percpu(struct tcp_mib);
-	tcp_statistics[1] = alloc_percpu(struct tcp_mib);
-	udp_statistics[0] = alloc_percpu(struct udp_mib);
-	udp_statistics[1] = alloc_percpu(struct udp_mib);
-	udplite_statistics[0] = alloc_percpu(struct udp_mib);
-	udplite_statistics[1] = alloc_percpu(struct udp_mib);
-	if (!
-	    (net_statistics[0] && net_statistics[1] && ip_statistics[0]
-	     && ip_statistics[1] && tcp_statistics[0] && tcp_statistics[1]
-	     && udp_statistics[0] && udp_statistics[1]
-	     && udplite_statistics[0] && udplite_statistics[1]             ) )
-		return -ENOMEM;
+	if (snmp_mib_init((void **)net_statistics,
+			  sizeof(struct linux_mib),
+			  __alignof__(struct linux_mib)) < 0)
+		goto err_net_mib;
+	if (snmp_mib_init((void **)ip_statistics,
+			  sizeof(struct ipstats_mib),
+			  __alignof__(struct ipstats_mib)) < 0)
+		goto err_ip_mib;
+	if (snmp_mib_init((void **)icmp_statistics,
+			  sizeof(struct icmp_mib),
+			  __alignof__(struct icmp_mib)) < 0)
+		goto err_icmp_mib;
+	if (snmp_mib_init((void **)tcp_statistics,
+			  sizeof(struct tcp_mib),
+			  __alignof__(struct tcp_mib)) < 0)
+		goto err_tcp_mib;
+	if (snmp_mib_init((void **)udp_statistics,
+			  sizeof(struct udp_mib),
+			  __alignof__(struct udp_mib)) < 0)
+		goto err_udp_mib;
+	if (snmp_mib_init((void **)udplite_statistics,
+			  sizeof(struct udp_mib),
+			  __alignof__(struct udp_mib)) < 0)
+		goto err_udplite_mib;
 
-	(void) tcp_mib_init();
+	tcp_mib_init();
 
 	return 0;
+
+err_udplite_mib:
+	snmp_mib_free((void **)udp_statistics);
+err_udp_mib:
+	snmp_mib_free((void **)tcp_statistics);
+err_tcp_mib:
+	snmp_mib_free((void **)icmp_statistics);
+err_icmp_mib:
+	snmp_mib_free((void **)ip_statistics);
+err_ip_mib:
+	snmp_mib_free((void **)net_statistics);
+err_net_mib:
+	return -ENOMEM;
 }
 
 static int ipv4_proc_init(void);
@@ -1377,7 +1439,7 @@ static int __init inet_init(void)
 	 *	Initialise per-cpu ipv4 mibs
 	 */
 
-	if(init_ipv4_mibs())
+	if (init_ipv4_mibs())
 		printk(KERN_CRIT "inet_init: Cannot init ipv4 mibs\n"); ;
 
 	ipv4_proc_init();

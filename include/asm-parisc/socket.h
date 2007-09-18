@@ -33,6 +33,8 @@
 #define SO_PEERCRED	0x4011
 #define SO_TIMESTAMP	0x4012
 #define SCM_TIMESTAMP	SO_TIMESTAMP
+#define SO_TIMESTAMPNS	0x4013
+#define SCM_TIMESTAMPNS	SO_TIMESTAMPNS
 
 /* Security levels - as per NRL IPv6 - don't actually do anything */
 #define SO_SECURITY_AUTHENTICATION		0x4016
@@ -49,5 +51,6 @@
 
 #define SO_PEERSEC		0x401d
 #define SO_PASSSEC		0x401e
+#define SO_PEERTAG		0x401f
 
 #endif /* _ASM_SOCKET_H */

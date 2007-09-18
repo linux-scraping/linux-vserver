@@ -22,7 +22,7 @@ static int em_u32_match(struct sk_buff *skb, struct tcf_ematch *em,
 			struct tcf_pkt_info *info)
 {
 	struct tc_u32_key *key = (struct tc_u32_key *) em->data;
-	unsigned char *ptr = skb->nh.raw;
+	const unsigned char *ptr = skb_network_header(skb);
 
 	if (info) {
 		if (info->ptr)
@@ -60,3 +60,5 @@ MODULE_LICENSE("GPL");
 
 module_init(init_em_u32);
 module_exit(exit_em_u32);
+
+MODULE_ALIAS_TCF_EMATCH(TCF_EM_U32);

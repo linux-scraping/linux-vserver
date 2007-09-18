@@ -71,7 +71,7 @@ static void tune_dtc2278 (ide_drive_t *drive, u8 pio)
 {
 	unsigned long flags;
 
-	pio = ide_get_best_pio_mode(drive, pio, 4, NULL);
+	pio = ide_get_best_pio_mode(drive, pio, 4);
 
 	if (pio >= 3) {
 		spin_lock_irqsave(&ide_lock, flags);
@@ -123,6 +123,7 @@ static int __init dtc2278_probe(void)
 
 	hwif->serialized = 1;
 	hwif->chipset = ide_dtc2278;
+	hwif->pio_mask = ATA_PIO4;
 	hwif->tuneproc = &tune_dtc2278;
 	hwif->drives[0].no_unmask = 1;
 	hwif->drives[1].no_unmask = 1;
@@ -138,7 +139,8 @@ static int __init dtc2278_probe(void)
 	probe_hwif_init(hwif);
 	probe_hwif_init(mate);
 
-	create_proc_ide_interfaces();
+	ide_proc_register_port(hwif);
+	ide_proc_register_port(mate);
 
 	return 0;
 }

@@ -14,6 +14,7 @@
 #include <asm/proto.h>
 #include <asm/tlbflush.h>
 #include <asm/ia32_unistd.h>
+#include <asm/vsyscall32.h>
 
 extern unsigned char syscall32_syscall[], syscall32_syscall_end[];
 extern unsigned char syscall32_sysenter[], syscall32_sysenter_end[];
@@ -47,14 +48,6 @@ int syscall32_setup_pages(struct linux_binprm *bprm, int exstack)
 				      syscall32_pages);
 	up_write(&mm->mmap_sem);
 	return ret;
-}
-
-const char *arch_vma_name(struct vm_area_struct *vma)
-{
-	if (vma->vm_start == VSYSCALL32_BASE &&
-	    vma->vm_mm && vma->vm_mm->task_size == IA32_PAGE_OFFSET)
-		return "[vdso]";
-	return NULL;
 }
 
 static int __init init_syscall32(void)

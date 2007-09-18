@@ -75,8 +75,15 @@ iop_timer_interrupt(int irq, void *dev_id)
 static struct irqaction iop_timer_irq = {
 	.name		= "IOP Timer Tick",
 	.handler	= iop_timer_interrupt,
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 };
+
+static unsigned long iop_tick_rate;
+unsigned long get_iop_tick_rate(void)
+{
+	return iop_tick_rate;
+}
+EXPORT_SYMBOL(get_iop_tick_rate);
 
 void __init iop_init_time(unsigned long tick_rate)
 {
@@ -85,6 +92,7 @@ void __init iop_init_time(unsigned long tick_rate)
 	ticks_per_jiffy = (tick_rate + HZ/2) / HZ;
 	ticks_per_usec = tick_rate / 1000000;
 	next_jiffy_time = 0xffffffff;
+	iop_tick_rate = tick_rate;
 
 	timer_ctl = IOP_TMR_EN | IOP_TMR_PRIVILEGED |
 			IOP_TMR_RELOAD | IOP_TMR_RATIO_1_1;

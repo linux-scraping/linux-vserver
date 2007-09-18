@@ -14,6 +14,7 @@ config IA64
 	select PCI if (!IA64_HP_SIM)
 	select ACPI if (!IA64_HP_SIM)
 	select PM if (!IA64_HP_SIM)
+	select ARCH_SUPPORTS_MSI
 	default y
 	help
 	  The Itanium Processor Family is Intel's 64-bit successor to
@@ -29,6 +30,10 @@ config 64BIT
 config ZONE_DMA
 	def_bool y
 	depends on !IA64_SGI_SN2
+
+config QUICKLIST
+	bool
+	default y
 
 config MMU
 	bool
@@ -57,7 +62,11 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
-config TIME_INTERPOLATION
+config GENERIC_TIME
+	bool
+	default y
+
+config GENERIC_TIME_VSYSCALL
 	bool
 	default y
 
@@ -318,17 +327,7 @@ config FORCE_CPEI_RETARGET
 	This option it useful to enable this feature on older BIOS's as well.
 	You can also enable this by using boot command line option force_cpei=1.
 
-config PREEMPT
-	bool "Preemptible Kernel"
-        help
-          This option reduces the latency of the kernel when reacting to
-          real-time or interactive events by allowing a low priority process to
-          be preempted even if it is in kernel mode executing a system call.
-          This allows applications to run more reliably even when the system is
-          under load.
-
-          Say Y here if you are building a kernel for a desktop, embedded
-          or real-time system.  Say N if you are unsure.
+source "kernel/Kconfig.preempt"
 
 source "mm/Kconfig"
 
@@ -416,6 +415,9 @@ config COMPAT
 	depends on IA32_SUPPORT
 	default y
 
+config COMPAT_FOR_U64_ALIGNMENT
+	def_bool COMPAT
+
 config IA64_MCA_RECOVERY
 	tristate "MCA recovery from errors other than TLB."
 
@@ -438,6 +440,16 @@ config IA64_PALINFO
 	  To use this option, you have to ensure that the "/proc file system
 	  support" (CONFIG_PROC_FS) is enabled, too.
 
+config IA64_MC_ERR_INJECT
+	tristate "MC error injection support"
+	help
+	  Selets whether support for MC error injection. By enabling the
+	  support, kernel provide sysfs interface for user application to
+	  call MC error injection PAL procedure to inject various errors.
+	  This is a useful tool for MCA testing.
+
+	  If you're unsure, do not select this option.
+
 config SGI_SN
 	def_bool y if (IA64_SGI_SN2 || IA64_GENERIC)
 
@@ -457,7 +469,7 @@ config KEXEC
 	help
 	  kexec is a system call that implements the ability to shutdown your
 	  current kernel, and to start another kernel.  It is like a reboot
-	  but it is indepedent of the system firmware.   And like a reboot
+	  but it is independent of the system firmware.   And like a reboot
 	  you can start any kernel with it, not just Linux.
 
 	  The name comes from the similiarity to the exec system call.
@@ -505,8 +517,10 @@ config PCI
 	  here unless you are using a simulator without PCI support.
 
 config PCI_DOMAINS
-	bool
-	default PCI
+	def_bool PCI
+
+config PCI_SYSCALL
+	def_bool PCI
 
 source "drivers/pci/pcie/Kconfig"
 
@@ -565,8 +579,8 @@ menu "Instrumentation Support"
 source "arch/ia64/oprofile/Kconfig"
 
 config KPROBES
-	bool "Kprobes (EXPERIMENTAL)"
-	depends on KALLSYMS && EXPERIMENTAL && MODULES
+	bool "Kprobes"
+	depends on KALLSYMS && MODULES
 	help
 	  Kprobes allows you to trap at almost any kernel address and
 	  execute a callback function.  register_kprobe() establishes

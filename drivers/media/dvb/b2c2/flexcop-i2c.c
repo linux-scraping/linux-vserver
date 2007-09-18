@@ -135,6 +135,13 @@ static int flexcop_master_xfer(struct i2c_adapter *i2c_adap, struct i2c_msg msgs
 	struct flexcop_device *fc = i2c_get_adapdata(i2c_adap);
 	int i, ret = 0;
 
+	/* Some drivers use 1 byte or 0 byte reads as probes, which this
+	 * driver doesn't support.  These probes will always fail, so this
+	 * hack makes them always succeed.  If one knew how, it would of
+	 * course be better to actually do the read.  */
+	if (num == 1 && msgs[0].flags == I2C_M_RD && msgs[0].len <= 1)
+		return 1;
+
 	if (mutex_lock_interruptible(&fc->i2c_mutex))
 		return -ERESTARTSYS;
 
@@ -183,7 +190,8 @@ int flexcop_i2c_init(struct flexcop_device *fc)
 	mutex_init(&fc->i2c_mutex);
 
 	memset(&fc->i2c_adap, 0, sizeof(struct i2c_adapter));
-	strncpy(fc->i2c_adap.name, "B2C2 FlexCop device",I2C_NAME_SIZE);
+	strncpy(fc->i2c_adap.name, "B2C2 FlexCop device",
+		sizeof(fc->i2c_adap.name));
 
 	i2c_set_adapdata(&fc->i2c_adap,fc);
 

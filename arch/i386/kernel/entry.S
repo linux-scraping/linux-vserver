@@ -15,7 +15,7 @@
  * I changed all the .align's to 4 (16 byte alignment), as that's faster
  * on a 486.
  *
- * Stack layout in 'ret_from_system_call':
+ * Stack layout in 'syscall_exit':
  * 	ptrace needs to have all regs on the stack.
  *	if the order here is changed, it needs to be
  *	updated in fork.c:copy_process, signal.c:do_signal,
@@ -132,7 +132,7 @@ VM_MASK		= 0x00020000
 	movl $(__USER_DS), %edx; \
 	movl %edx, %ds; \
 	movl %edx, %es; \
-	movl $(__KERNEL_PDA), %edx; \
+	movl $(__KERNEL_PERCPU), %edx; \
 	movl %edx, %fs
 
 #define RESTORE_INT_REGS \
@@ -305,16 +305,12 @@ sysenter_past_esp:
 	pushl $(__USER_CS)
 	CFI_ADJUST_CFA_OFFSET 4
 	/*CFI_REL_OFFSET cs, 0*/
-#ifndef CONFIG_COMPAT_VDSO
 	/*
 	 * Push current_thread_info()->sysenter_return to the stack.
 	 * A tiny bit of offset fixup is necessary - 4*4 means the 4 words
 	 * pushed above; +8 corresponds to copy_thread's esp0 setting.
 	 */
 	pushl (TI_sysenter_return-THREAD_SIZE+8+4*4)(%esp)
-#else
-	pushl $SYSENTER_RETURN
-#endif
 	CFI_ADJUST_CFA_OFFSET 4
 	CFI_REL_OFFSET eip, 0
 
@@ -342,7 +338,7 @@ sysenter_past_esp:
 	jae syscall_badsys
 	call *sys_call_table(,%eax,4)
 	movl %eax,PT_EAX(%esp)
-	DISABLE_INTERRUPTS(CLBR_ECX|CLBR_EDX)
+	DISABLE_INTERRUPTS(CLBR_ANY)
 	TRACE_IRQS_OFF
 	movl TI_flags(%ebp), %ecx
 	testw $_TIF_ALLWORK_MASK, %cx
@@ -413,8 +409,6 @@ restore_nocheck_notrace:
 1:	INTERRUPT_RETURN
 .section .fixup,"ax"
 iret_exc:
-	TRACE_IRQS_ON
-	ENABLE_INTERRUPTS(CLBR_NONE)
 	pushl $0			# no error code
 	pushl $do_iret_error
 	jmp error_code
@@ -560,9 +554,7 @@ END(syscall_badsys)
 
 #define FIXUP_ESPFIX_STACK \
 	/* since we are on a wrong stack, we cant make it a C code :( */ \
-	movl %fs:PDA_cpu, %ebx; \
-	PER_CPU(cpu_gdt_descr, %ebx); \
-	movl GDS_address(%ebx), %ebx; \
+	PER_CPU(gdt_page, %ebx); \
 	GET_DESC_BASE(GDT_ENTRY_ESPFIX_SS, %ebx, %eax, %ax, %al, %ah); \
 	addl %esp, %eax; \
 	pushl $__KERNEL_DS; \
@@ -635,18 +627,13 @@ ENTRY(name)				\
 	SAVE_ALL;			\
 	TRACE_IRQS_OFF			\
 	movl %esp,%eax;			\
-	call smp_/**/name;		\
+	call smp_##name;		\
 	jmp ret_from_intr;		\
 	CFI_ENDPROC;			\
 ENDPROC(name)
 
 /* The include is where all of the SMP etc. interrupts come from */
 #include "entry_arch.h"
-
-/* This alternate entry is needed because we hijack the apic LVTT */
-#if defined(CONFIG_VMI) && defined(CONFIG_X86_LOCAL_APIC)
-BUILD_INTERRUPT(apic_vmi_timer_interrupt,LOCAL_TIMER_VECTOR)
-#endif
 
 KPROBE_ENTRY(page_fault)
 	RING0_EC_FRAME
@@ -686,7 +673,7 @@ error_code:
 	pushl %fs
 	CFI_ADJUST_CFA_OFFSET 4
 	/*CFI_REL_OFFSET fs, 0*/
-	movl $(__KERNEL_PDA), %ecx
+	movl $(__KERNEL_PERCPU), %ecx
 	movl %ecx, %fs
 	UNWIND_ESPFIX_STACK
 	popl %ecx
@@ -1033,6 +1020,91 @@ ENTRY(kernel_thread_helper)
 	call do_exit
 	CFI_ENDPROC
 ENDPROC(kernel_thread_helper)
+
+#ifdef CONFIG_XEN
+ENTRY(xen_hypervisor_callback)
+	CFI_STARTPROC
+	pushl $0
+	CFI_ADJUST_CFA_OFFSET 4
+	SAVE_ALL
+	TRACE_IRQS_OFF
+
+	/* Check to see if we got the event in the critical
+	   region in xen_iret_direct, after we've reenabled
+	   events and checked for pending events.  This simulates
+	   iret instruction's behaviour where it delivers a
+	   pending interrupt when enabling interrupts. */
+	movl PT_EIP(%esp),%eax
+	cmpl $xen_iret_start_crit,%eax
+	jb   1f
+	cmpl $xen_iret_end_crit,%eax
+	jae  1f
+
+	call xen_iret_crit_fixup
+
+1:	mov %esp, %eax
+	call xen_evtchn_do_upcall
+	jmp  ret_from_intr
+	CFI_ENDPROC
+ENDPROC(xen_hypervisor_callback)
+
+# Hypervisor uses this for application faults while it executes.
+# We get here for two reasons:
+#  1. Fault while reloading DS, ES, FS or GS
+#  2. Fault while executing IRET
+# Category 1 we fix up by reattempting the load, and zeroing the segment
+# register if the load fails.
+# Category 2 we fix up by jumping to do_iret_error. We cannot use the
+# normal Linux return path in this case because if we use the IRET hypercall
+# to pop the stack frame we end up in an infinite loop of failsafe callbacks.
+# We distinguish between categories by maintaining a status value in EAX.
+ENTRY(xen_failsafe_callback)
+	CFI_STARTPROC
+	pushl %eax
+	CFI_ADJUST_CFA_OFFSET 4
+	movl $1,%eax
+1:	mov 4(%esp),%ds
+2:	mov 8(%esp),%es
+3:	mov 12(%esp),%fs
+4:	mov 16(%esp),%gs
+	testl %eax,%eax
+	popl %eax
+	CFI_ADJUST_CFA_OFFSET -4
+	lea 16(%esp),%esp
+	CFI_ADJUST_CFA_OFFSET -16
+	jz 5f
+	addl $16,%esp
+	jmp iret_exc		# EAX != 0 => Category 2 (Bad IRET)
+5:	pushl $0		# EAX == 0 => Category 1 (Bad segment)
+	CFI_ADJUST_CFA_OFFSET 4
+	SAVE_ALL
+	jmp ret_from_exception
+	CFI_ENDPROC
+
+.section .fixup,"ax"
+6:	xorl %eax,%eax
+	movl %eax,4(%esp)
+	jmp 1b
+7:	xorl %eax,%eax
+	movl %eax,8(%esp)
+	jmp 2b
+8:	xorl %eax,%eax
+	movl %eax,12(%esp)
+	jmp 3b
+9:	xorl %eax,%eax
+	movl %eax,16(%esp)
+	jmp 4b
+.previous
+.section __ex_table,"a"
+	.align 4
+	.long 1b,6b
+	.long 2b,7b
+	.long 3b,8b
+	.long 4b,9b
+.previous
+ENDPROC(xen_failsafe_callback)
+
+#endif	/* CONFIG_XEN */
 
 .section .rodata,"a"
 #include "syscall_table.S"

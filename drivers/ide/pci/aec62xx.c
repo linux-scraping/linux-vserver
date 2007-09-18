@@ -1,7 +1,8 @@
 /*
- * linux/drivers/ide/pci/aec62xx.c		Version 0.11	March 27, 2002
+ * linux/drivers/ide/pci/aec62xx.c		Version 0.24	May 24, 2007
  *
  * Copyright (C) 1999-2002	Andre Hedrick <andre@linux-ide.org>
+ * Copyright (C) 2007		MontaVista Software, Inc. <source@mvista.com>
  *
  */
 
@@ -86,38 +87,12 @@ static u8 pci_bus_clock_list_ultra (u8 speed, struct chipset_bus_clock_list_entr
 	return chipset_table->ultra_settings;
 }
 
-static u8 aec62xx_ratemask (ide_drive_t *drive)
-{
-	ide_hwif_t *hwif	= HWIF(drive);
-	u8 mode;
-
-	switch(hwif->pci_dev->device) {
-		case PCI_DEVICE_ID_ARTOP_ATP865:
-		case PCI_DEVICE_ID_ARTOP_ATP865R:
-			mode = (inb(hwif->channel ?
-				    hwif->mate->dma_status :
-				    hwif->dma_status) & 0x10) ? 4 : 3;
-			break;
-		case PCI_DEVICE_ID_ARTOP_ATP860:
-		case PCI_DEVICE_ID_ARTOP_ATP860R:
-			mode = 2;
-			break;
-		case PCI_DEVICE_ID_ARTOP_ATP850UF:
-		default:
-			return 1;
-	}
-
-	if (!eighty_ninty_three(drive))
-		mode = min(mode, (u8)1);
-	return mode;
-}
-
 static int aec6210_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 {
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
 	u16 d_conf		= 0;
-	u8 speed	= ide_rate_filter(aec62xx_ratemask(drive), xferspeed);
+	u8 speed		= ide_rate_filter(drive, xferspeed);
 	u8 ultra = 0, ultra_conf = 0;
 	u8 tmp0 = 0, tmp1 = 0, tmp2 = 0;
 	unsigned long flags;
@@ -144,7 +119,7 @@ static int aec6260_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 {
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
-	u8 speed	= ide_rate_filter(aec62xx_ratemask(drive), xferspeed);
+	u8 speed	= ide_rate_filter(drive, xferspeed);
 	u8 unit		= (drive->select.b.unit & 0x01);
 	u8 tmp1 = 0, tmp2 = 0;
 	u8 ultra = 0, drive_conf = 0, ultra_conf = 0;
@@ -165,65 +140,26 @@ static int aec6260_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 	return(ide_config_drive_speed(drive, speed));
 }
 
-static int aec62xx_tune_chipset (ide_drive_t *drive, u8 speed)
-{
-	switch (HWIF(drive)->pci_dev->device) {
-		case PCI_DEVICE_ID_ARTOP_ATP865:
-		case PCI_DEVICE_ID_ARTOP_ATP865R:
-		case PCI_DEVICE_ID_ARTOP_ATP860:
-		case PCI_DEVICE_ID_ARTOP_ATP860R:
-			return ((int) aec6260_tune_chipset(drive, speed));
-		case PCI_DEVICE_ID_ARTOP_ATP850UF:
-			return ((int) aec6210_tune_chipset(drive, speed));
-		default:
-			return -1;
-	}
-}
-
-static int config_chipset_for_dma (ide_drive_t *drive)
-{
-	u8 speed = ide_dma_speed(drive, aec62xx_ratemask(drive));	
-
-	if (!(speed))
-		return 0;
-
-	(void) aec62xx_tune_chipset(drive, speed);
-	return ide_dma_enable(drive);
-}
-
 static void aec62xx_tune_drive (ide_drive_t *drive, u8 pio)
 {
-	u8 speed = 0;
-	u8 new_pio = XFER_PIO_0 + ide_get_best_pio_mode(drive, 255, 5, NULL);
-
-	switch(pio) {
-		case 5:		speed = new_pio; break;
-		case 4:		speed = XFER_PIO_4; break;
-		case 3:		speed = XFER_PIO_3; break;
-		case 2:		speed = XFER_PIO_2; break;
-		case 1:		speed = XFER_PIO_1; break;
-		default:	speed = XFER_PIO_0; break;
-	}
-	(void) aec62xx_tune_chipset(drive, speed);
+	pio = ide_get_best_pio_mode(drive, pio, 4);
+	(void) HWIF(drive)->speedproc(drive, pio + XFER_PIO_0);
 }
 
 static int aec62xx_config_drive_xfer_rate (ide_drive_t *drive)
 {
-	if (ide_use_dma(drive) && config_chipset_for_dma(drive))
+	if (ide_tune_dma(drive))
 		return 0;
 
 	if (ide_use_fast_pio(drive))
-		aec62xx_tune_drive(drive, 5);
+		aec62xx_tune_drive(drive, 255);
 
 	return -1;
 }
 
-static int aec62xx_irq_timeout (ide_drive_t *drive)
+static void aec62xx_dma_lost_irq (ide_drive_t *drive)
 {
-	ide_hwif_t *hwif	= HWIF(drive);
-	struct pci_dev *dev	= hwif->pci_dev;
-
-	switch(dev->device) {
+	switch (HWIF(drive)->pci_dev->device) {
 		case PCI_DEVICE_ID_ARTOP_ATP860:
 		case PCI_DEVICE_ID_ARTOP_ATP860R:
 		case PCI_DEVICE_ID_ARTOP_ATP865:
@@ -232,18 +168,11 @@ static int aec62xx_irq_timeout (ide_drive_t *drive)
 		default:
 			break;
 	}
-	return 0;
 }
 
 static unsigned int __devinit init_chipset_aec62xx(struct pci_dev *dev, const char *name)
 {
 	int bus_speed = system_bus_clock();
-
-	if (dev->resource[PCI_ROM_RESOURCE].start) {
-		pci_write_config_dword(dev, PCI_ROM_ADDRESS, dev->resource[PCI_ROM_RESOURCE].start | PCI_ROM_ADDRESS_ENABLE);
-		printk(KERN_INFO "%s: ROM enabled at 0x%08lx\n", name,
-			(unsigned long)dev->resource[PCI_ROM_RESOURCE].start);
-	}
 
 	if (bus_speed <= 33)
 		pci_set_drvdata(dev, (void *) aec6xxx_33_base);
@@ -270,55 +199,46 @@ static unsigned int __devinit init_chipset_aec62xx(struct pci_dev *dev, const ch
 
 static void __devinit init_hwif_aec62xx(ide_hwif_t *hwif)
 {
-	hwif->autodma = 0;
+	struct pci_dev *dev	= hwif->pci_dev;
+	u8 reg54 = 0,  mask	= hwif->channel ? 0xf0 : 0x0f;
+	unsigned long flags;
+
 	hwif->tuneproc = &aec62xx_tune_drive;
-	hwif->speedproc = &aec62xx_tune_chipset;
 
-	if (hwif->pci_dev->device == PCI_DEVICE_ID_ARTOP_ATP850UF)
-		hwif->serialized = hwif->channel;
-
-	if (hwif->mate)
-		hwif->mate->serialized = hwif->serialized;
+	if (dev->device == PCI_DEVICE_ID_ARTOP_ATP850UF) {
+		if(hwif->mate)
+			hwif->mate->serialized = hwif->serialized = 1;
+		hwif->speedproc = &aec6210_tune_chipset;
+	} else
+		hwif->speedproc = &aec6260_tune_chipset;
 
 	if (!hwif->dma_base) {
-		hwif->drives[0].autotune = 1;
-		hwif->drives[1].autotune = 1;
+		hwif->drives[0].autotune = hwif->drives[1].autotune = 1;
 		return;
 	}
 
-	hwif->ultra_mask = 0x7f;
+	hwif->ultra_mask = hwif->cds->udma_mask;
 	hwif->mwdma_mask = 0x07;
-	hwif->swdma_mask = 0x07;
 
 	hwif->ide_dma_check	= &aec62xx_config_drive_xfer_rate;
-	hwif->ide_dma_lostirq	= &aec62xx_irq_timeout;
-	hwif->ide_dma_timeout	= &aec62xx_irq_timeout;
-	if (!noautodma)
-		hwif->autodma = 1;
-	hwif->drives[0].autodma = hwif->autodma;
-	hwif->drives[1].autodma = hwif->autodma;
-}
-
-static void __devinit init_dma_aec62xx(ide_hwif_t *hwif, unsigned long dmabase)
-{
-	struct pci_dev *dev	= hwif->pci_dev;
+	hwif->dma_lost_irq	= &aec62xx_dma_lost_irq;
 
 	if (dev->device == PCI_DEVICE_ID_ARTOP_ATP850UF) {
-		u8 reg54h = 0;
-		unsigned long flags;
-
 		spin_lock_irqsave(&ide_lock, flags);
-		pci_read_config_byte(dev, 0x54, &reg54h);
-		pci_write_config_byte(dev, 0x54, reg54h & ~(hwif->channel ? 0xF0 : 0x0F));
+		pci_read_config_byte (dev, 0x54, &reg54);
+		pci_write_config_byte(dev, 0x54, (reg54 & ~mask));
 		spin_unlock_irqrestore(&ide_lock, flags);
-	} else {
-		u8 ata66	= 0;
+	} else if (hwif->cbl != ATA_CBL_PATA40_SHORT) {
+		u8 ata66 = 0, mask = hwif->channel ? 0x02 : 0x01;
+
 		pci_read_config_byte(hwif->pci_dev, 0x49, &ata66);
-	        if (!(hwif->udma_four))
-			hwif->udma_four = (ata66&(hwif->channel?0x02:0x01))?0:1;
+
+		hwif->cbl = (ata66 & mask) ? ATA_CBL_PATA40 : ATA_CBL_PATA80;
 	}
 
-	ide_setup_dma(hwif, dmabase, 8);
+	if (!noautodma)
+		hwif->autodma = 1;
+	hwif->drives[0].autodma = hwif->drives[1].autodma = hwif->autodma;
 }
 
 static int __devinit init_setup_aec62xx(struct pci_dev *dev, ide_pci_device_t *d)
@@ -328,16 +248,12 @@ static int __devinit init_setup_aec62xx(struct pci_dev *dev, ide_pci_device_t *d
 
 static int __devinit init_setup_aec6x80(struct pci_dev *dev, ide_pci_device_t *d)
 {
-	unsigned long bar4reg = pci_resource_start(dev, 4);
+	unsigned long dma_base = pci_resource_start(dev, 4);
 
-	if (inb(bar4reg+2) & 0x10) {
-		strcpy(d->name, "AEC6880");
-		if (dev->device == PCI_DEVICE_ID_ARTOP_ATP865R)
-			strcpy(d->name, "AEC6880R");
-	} else {
-		strcpy(d->name, "AEC6280");
-		if (dev->device == PCI_DEVICE_ID_ARTOP_ATP865R)
-			strcpy(d->name, "AEC6280R");
+	if (inb(dma_base + 2) & 0x10) {
+		d->name = (dev->device == PCI_DEVICE_ID_ARTOP_ATP865R) ?
+			  "AEC6880R" : "AEC6880";
+		d->udma_mask = 0x7f; /* udma0-6 */
 	}
 
 	return ide_setup_pci_device(dev, d);
@@ -349,49 +265,49 @@ static ide_pci_device_t aec62xx_chipsets[] __devinitdata = {
 		.init_setup	= init_setup_aec62xx,
 		.init_chipset	= init_chipset_aec62xx,
 		.init_hwif	= init_hwif_aec62xx,
-		.init_dma	= init_dma_aec62xx,
-		.channels	= 2,
 		.autodma	= AUTODMA,
 		.enablebits	= {{0x4a,0x02,0x02}, {0x4a,0x04,0x04}},
 		.bootable	= OFF_BOARD,
+		.pio_mask	= ATA_PIO4,
+		.udma_mask	= 0x07, /* udma0-2 */
 	},{	/* 1 */
 		.name		= "AEC6260",
 		.init_setup	= init_setup_aec62xx,
 		.init_chipset	= init_chipset_aec62xx,
 		.init_hwif	= init_hwif_aec62xx,
-		.init_dma	= init_dma_aec62xx,
-		.channels	= 2,
 		.autodma	= NOAUTODMA,
 		.bootable	= OFF_BOARD,
+		.pio_mask	= ATA_PIO4,
+		.udma_mask	= 0x1f, /* udma0-4 */
 	},{	/* 2 */
 		.name		= "AEC6260R",
 		.init_setup	= init_setup_aec62xx,
 		.init_chipset	= init_chipset_aec62xx,
 		.init_hwif	= init_hwif_aec62xx,
-		.init_dma	= init_dma_aec62xx,
-		.channels	= 2,
 		.autodma	= AUTODMA,
 		.enablebits	= {{0x4a,0x02,0x02}, {0x4a,0x04,0x04}},
 		.bootable	= NEVER_BOARD,
+		.pio_mask	= ATA_PIO4,
+		.udma_mask	= 0x1f, /* udma0-4 */
 	},{	/* 3 */
-		.name		= "AEC6X80",
+		.name		= "AEC6280",
 		.init_setup	= init_setup_aec6x80,
 		.init_chipset	= init_chipset_aec62xx,
 		.init_hwif	= init_hwif_aec62xx,
-		.init_dma	= init_dma_aec62xx,
-		.channels	= 2,
 		.autodma	= AUTODMA,
 		.bootable	= OFF_BOARD,
+		.pio_mask	= ATA_PIO4,
+		.udma_mask	= 0x3f, /* udma0-5 */
 	},{	/* 4 */
-		.name		= "AEC6X80R",
+		.name		= "AEC6280R",
 		.init_setup	= init_setup_aec6x80,
 		.init_chipset	= init_chipset_aec62xx,
 		.init_hwif	= init_hwif_aec62xx,
-		.init_dma	= init_dma_aec62xx,
-		.channels	= 2,
 		.autodma	= AUTODMA,
 		.enablebits	= {{0x4a,0x02,0x02}, {0x4a,0x04,0x04}},
 		.bootable	= OFF_BOARD,
+		.pio_mask	= ATA_PIO4,
+		.udma_mask	= 0x3f, /* udma0-5 */
 	}
 };
 
@@ -402,13 +318,16 @@ static ide_pci_device_t aec62xx_chipsets[] __devinitdata = {
  *
  *	Called when the PCI registration layer (or the IDE initialization)
  *	finds a device matching our IDE device tables.
+ *
+ *	NOTE: since we're going to modify the 'name' field for AEC-6[26]80[R]
+ *	chips, pass a local copy of 'struct pci_device_id' down the call chain.
  */
  
 static int __devinit aec62xx_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
-	ide_pci_device_t *d = &aec62xx_chipsets[id->driver_data];
+	ide_pci_device_t d = aec62xx_chipsets[id->driver_data];
 
-	return d->init_setup(dev, d);
+	return d.init_setup(dev, &d);
 }
 
 static struct pci_device_id aec62xx_pci_tbl[] = {

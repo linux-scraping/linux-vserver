@@ -149,7 +149,7 @@ static int __hci_request(struct hci_dev *hdev, void (*req)(struct hci_dev *hdev,
 	default:
 		err = -ETIMEDOUT;
 		break;
-	};
+	}
 
 	hdev->req_status = hdev->req_result = 0;
 
@@ -216,10 +216,10 @@ static void hci_init_req(struct hci_dev *hdev, unsigned long opt)
 	/* Host buffer size */
 	{
 		struct hci_cp_host_buffer_size cp;
-		cp.acl_mtu = __cpu_to_le16(HCI_MAX_ACL_SIZE);
+		cp.acl_mtu = cpu_to_le16(HCI_MAX_ACL_SIZE);
 		cp.sco_mtu = HCI_MAX_SCO_SIZE;
-		cp.acl_max_pkt = __cpu_to_le16(0xffff);
-		cp.sco_max_pkt = __cpu_to_le16(0xffff);
+		cp.acl_max_pkt = cpu_to_le16(0xffff);
+		cp.sco_max_pkt = cpu_to_le16(0xffff);
 		hci_send_cmd(hdev, OGF_HOST_CTL, OCF_HOST_BUFFER_SIZE, sizeof(cp), &cp);
 	}
 #endif
@@ -240,11 +240,11 @@ static void hci_init_req(struct hci_dev *hdev, unsigned long opt)
 	}
 
 	/* Page timeout ~20 secs */
-	param = __cpu_to_le16(0x8000);
+	param = cpu_to_le16(0x8000);
 	hci_send_cmd(hdev, OGF_HOST_CTL, OCF_WRITE_PG_TIMEOUT, 2, &param);
 
 	/* Connection accept timeout ~20 secs */
-	param = __cpu_to_le16(0x7d00);
+	param = cpu_to_le16(0x7d00);
 	hci_send_cmd(hdev, OGF_HOST_CTL, OCF_WRITE_CA_TIMEOUT, 2, &param);
 }
 
@@ -826,7 +826,7 @@ EXPORT_SYMBOL(hci_free_dev);
 int hci_register_dev(struct hci_dev *hdev)
 {
 	struct list_head *head = &hci_dev_list, *p;
-	int id = 0;
+	int i, id = 0;
 
 	BT_DBG("%p name %s type %d owner %p", hdev, hdev->name, hdev->type, hdev->owner);
 
@@ -851,6 +851,7 @@ int hci_register_dev(struct hci_dev *hdev)
 
 	hdev->flags = 0;
 	hdev->pkt_type  = (HCI_DM1 | HCI_DH1 | HCI_HV1);
+	hdev->esco_type = (ESCO_HV1);
 	hdev->link_mode = (HCI_LM_ACCEPT);
 
 	hdev->idle_timeout = 0;
@@ -864,6 +865,9 @@ int hci_register_dev(struct hci_dev *hdev)
 	skb_queue_head_init(&hdev->rx_q);
 	skb_queue_head_init(&hdev->cmd_q);
 	skb_queue_head_init(&hdev->raw_q);
+
+	for (i = 0; i < 3; i++)
+		hdev->reassembly[i] = NULL;
 
 	init_waitqueue_head(&hdev->req_wait_q);
 	init_MUTEX(&hdev->req_lock);
@@ -889,6 +893,8 @@ EXPORT_SYMBOL(hci_register_dev);
 /* Unregister HCI device */
 int hci_unregister_dev(struct hci_dev *hdev)
 {
+	int i;
+
 	BT_DBG("%p name %s type %d", hdev, hdev->name, hdev->type);
 
 	hci_unregister_sysfs(hdev);
@@ -899,9 +905,13 @@ int hci_unregister_dev(struct hci_dev *hdev)
 
 	hci_dev_do_close(hdev);
 
+	for (i = 0; i < 3; i++)
+		kfree_skb(hdev->reassembly[i]);
+
 	hci_notify(hdev, HCI_DEV_UNREG);
 
 	__hci_dev_put(hdev);
+
 	return 0;
 }
 EXPORT_SYMBOL(hci_unregister_dev);
@@ -921,6 +931,90 @@ int hci_resume_dev(struct hci_dev *hdev)
 	return 0;
 }
 EXPORT_SYMBOL(hci_resume_dev);
+
+/* Receive packet type fragment */
+#define __reassembly(hdev, type)  ((hdev)->reassembly[(type) - 2])
+
+int hci_recv_fragment(struct hci_dev *hdev, int type, void *data, int count)
+{
+	if (type < HCI_ACLDATA_PKT || type > HCI_EVENT_PKT)
+		return -EILSEQ;
+
+	while (count) {
+		struct sk_buff *skb = __reassembly(hdev, type);
+		struct { int expect; } *scb;
+		int len = 0;
+
+		if (!skb) {
+			/* Start of the frame */
+
+			switch (type) {
+			case HCI_EVENT_PKT:
+				if (count >= HCI_EVENT_HDR_SIZE) {
+					struct hci_event_hdr *h = data;
+					len = HCI_EVENT_HDR_SIZE + h->plen;
+				} else
+					return -EILSEQ;
+				break;
+
+			case HCI_ACLDATA_PKT:
+				if (count >= HCI_ACL_HDR_SIZE) {
+					struct hci_acl_hdr *h = data;
+					len = HCI_ACL_HDR_SIZE + __le16_to_cpu(h->dlen);
+				} else
+					return -EILSEQ;
+				break;
+
+			case HCI_SCODATA_PKT:
+				if (count >= HCI_SCO_HDR_SIZE) {
+					struct hci_sco_hdr *h = data;
+					len = HCI_SCO_HDR_SIZE + h->dlen;
+				} else
+					return -EILSEQ;
+				break;
+			}
+
+			skb = bt_skb_alloc(len, GFP_ATOMIC);
+			if (!skb) {
+				BT_ERR("%s no memory for packet", hdev->name);
+				return -ENOMEM;
+			}
+
+			skb->dev = (void *) hdev;
+			bt_cb(skb)->pkt_type = type;
+
+			__reassembly(hdev, type) = skb;
+
+			scb = (void *) skb->cb;
+			scb->expect = len;
+		} else {
+			/* Continuation */
+
+			scb = (void *) skb->cb;
+			len = scb->expect;
+		}
+
+		len = min(len, count);
+
+		memcpy(skb_put(skb, len), data, len);
+
+		scb->expect -= len;
+
+		if (scb->expect == 0) {
+			/* Complete frame */
+
+			__reassembly(hdev, type) = NULL;
+
+			bt_cb(skb)->pkt_type = type;
+			hci_recv_frame(skb);
+		}
+
+		count -= len; data += len;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(hci_recv_fragment);
 
 /* ---- Interface to upper protocols ---- */
 
@@ -1029,12 +1123,12 @@ int hci_send_cmd(struct hci_dev *hdev, __u16 ogf, __u16 ocf, __u32 plen, void *p
 
 	skb = bt_skb_alloc(len, GFP_ATOMIC);
 	if (!skb) {
-		BT_ERR("%s Can't allocate memory for HCI command", hdev->name);
+		BT_ERR("%s no memory for command", hdev->name);
 		return -ENOMEM;
 	}
 
 	hdr = (struct hci_command_hdr *) skb_put(skb, HCI_COMMAND_HDR_SIZE);
-	hdr->opcode = __cpu_to_le16(hci_opcode_pack(ogf, ocf));
+	hdr->opcode = cpu_to_le16(hci_opcode_pack(ogf, ocf));
 	hdr->plen   = plen;
 
 	if (plen)
@@ -1060,7 +1154,7 @@ void *hci_sent_cmd_data(struct hci_dev *hdev, __u16 ogf, __u16 ocf)
 
 	hdr = (void *) hdev->sent_cmd->data;
 
-	if (hdr->opcode != __cpu_to_le16(hci_opcode_pack(ogf, ocf)))
+	if (hdr->opcode != cpu_to_le16(hci_opcode_pack(ogf, ocf)))
 		return NULL;
 
 	BT_DBG("%s ogf 0x%x ocf 0x%x", hdev->name, ogf, ocf);
@@ -1074,11 +1168,11 @@ static void hci_add_acl_hdr(struct sk_buff *skb, __u16 handle, __u16 flags)
 	struct hci_acl_hdr *hdr;
 	int len = skb->len;
 
-	hdr = (struct hci_acl_hdr *) skb_push(skb, HCI_ACL_HDR_SIZE);
-	hdr->handle = __cpu_to_le16(hci_handle_pack(handle, flags));
-	hdr->dlen   = __cpu_to_le16(len);
-
-	skb->h.raw = (void *) hdr;
+	skb_push(skb, HCI_ACL_HDR_SIZE);
+	skb_reset_transport_header(skb);
+	hdr = (struct hci_acl_hdr *)skb_transport_header(skb);
+	hdr->handle = cpu_to_le16(hci_handle_pack(handle, flags));
+	hdr->dlen   = cpu_to_le16(len);
 }
 
 int hci_send_acl(struct hci_conn *conn, struct sk_buff *skb, __u16 flags)
@@ -1140,11 +1234,12 @@ int hci_send_sco(struct hci_conn *conn, struct sk_buff *skb)
 		return -EINVAL;
 	}
 
-	hdr.handle = __cpu_to_le16(conn->handle);
+	hdr.handle = cpu_to_le16(conn->handle);
 	hdr.dlen   = skb->len;
 
-	skb->h.raw = skb_push(skb, HCI_SCO_HDR_SIZE);
-	memcpy(skb->h.raw, &hdr, HCI_SCO_HDR_SIZE);
+	skb_push(skb, HCI_SCO_HDR_SIZE);
+	skb_reset_transport_header(skb);
+	memcpy(skb_transport_header(skb), &hdr, HCI_SCO_HDR_SIZE);
 
 	skb->dev = (void *) hdev;
 	bt_cb(skb)->pkt_type = HCI_SCODATA_PKT;
@@ -1160,7 +1255,7 @@ EXPORT_SYMBOL(hci_send_sco);
 static inline struct hci_conn *hci_low_sent(struct hci_dev *hdev, __u8 type, int *quote)
 {
 	struct hci_conn_hash *h = &hdev->conn_hash;
-	struct hci_conn  *conn = NULL;
+	struct hci_conn *conn = NULL;
 	int num = 0, min = ~0;
 	struct list_head *p;
 
@@ -1387,7 +1482,7 @@ static void hci_rx_task(unsigned long arg)
 			case HCI_SCODATA_PKT:
 				kfree_skb(skb);
 				continue;
-			};
+			}
 		}
 
 		/* Process frame */

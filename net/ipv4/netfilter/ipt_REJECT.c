@@ -1,7 +1,5 @@
 /*
  * This is a module which is used for rejecting packets.
- * Added support for customized reject packets (Jozsef Kadlecsik).
- * Added support for ICMP type-3-code-13 (Maciej Soltysiak). [RFC 1812]
  */
 
 /* (C) 1999-2001 Paul `Rusty' Russell
@@ -33,17 +31,11 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("iptables REJECT target module");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
 /* Send RST reply */
 static void send_reset(struct sk_buff *oldskb, int hook)
 {
 	struct sk_buff *nskb;
-	struct iphdr *iph = oldskb->nh.iph;
+	struct iphdr *niph;
 	struct tcphdr _otcph, *oth, *tcph;
 	__be16 tmp_port;
 	__be32 tmp_addr;
@@ -51,10 +43,10 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	unsigned int addr_type;
 
 	/* IP header checks: fragment. */
-	if (oldskb->nh.iph->frag_off & htons(IP_OFFSET))
+	if (ip_hdr(oldskb)->frag_off & htons(IP_OFFSET))
 		return;
 
-	oth = skb_header_pointer(oldskb, oldskb->nh.iph->ihl * 4,
+	oth = skb_header_pointer(oldskb, ip_hdrlen(oldskb),
 				 sizeof(_otcph), &_otcph);
 	if (oth == NULL)
 		return;
@@ -64,7 +56,7 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 		return;
 
 	/* Check checksum */
-	if (nf_ip_checksum(oldskb, hook, iph->ihl * 4, IPPROTO_TCP))
+	if (nf_ip_checksum(oldskb, hook, ip_hdrlen(oldskb), IPPROTO_TCP))
 		return;
 
 	/* We need a linear, writeable skb.  We also need to expand
@@ -84,20 +76,21 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	skb_shinfo(nskb)->gso_segs = 0;
 	skb_shinfo(nskb)->gso_type = 0;
 
-	tcph = (struct tcphdr *)((u_int32_t*)nskb->nh.iph + nskb->nh.iph->ihl);
+	tcph = (struct tcphdr *)(skb_network_header(nskb) + ip_hdrlen(nskb));
 
 	/* Swap source and dest */
-	tmp_addr = nskb->nh.iph->saddr;
-	nskb->nh.iph->saddr = nskb->nh.iph->daddr;
-	nskb->nh.iph->daddr = tmp_addr;
+	niph = ip_hdr(nskb);
+	tmp_addr = niph->saddr;
+	niph->saddr = niph->daddr;
+	niph->daddr = tmp_addr;
 	tmp_port = tcph->source;
 	tcph->source = tcph->dest;
 	tcph->dest = tmp_port;
 
 	/* Truncate to length (no data) */
 	tcph->doff = sizeof(struct tcphdr)/4;
-	skb_trim(nskb, nskb->nh.iph->ihl*4 + sizeof(struct tcphdr));
-	nskb->nh.iph->tot_len = htons(nskb->len);
+	skb_trim(nskb, ip_hdrlen(nskb) + sizeof(struct tcphdr));
+	niph->tot_len = htons(nskb->len);
 
 	if (tcph->ack) {
 		needs_ack = 0;
@@ -105,9 +98,9 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 		tcph->ack_seq = 0;
 	} else {
 		needs_ack = 1;
-		tcph->ack_seq = htonl(ntohl(oth->seq) + oth->syn + oth->fin
-				      + oldskb->len - oldskb->nh.iph->ihl*4
-				      - (oth->doff<<2));
+		tcph->ack_seq = htonl(ntohl(oth->seq) + oth->syn + oth->fin +
+				      oldskb->len - ip_hdrlen(oldskb) -
+				      (oth->doff << 2));
 		tcph->seq = 0;
 	}
 
@@ -122,14 +115,13 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	/* Adjust TCP checksum */
 	tcph->check = 0;
 	tcph->check = tcp_v4_check(sizeof(struct tcphdr),
-				   nskb->nh.iph->saddr,
-				   nskb->nh.iph->daddr,
-				   csum_partial((char *)tcph,
+				   niph->saddr, niph->daddr,
+				   csum_partial(tcph,
 						sizeof(struct tcphdr), 0));
 
 	/* Set DF, id = 0 */
-	nskb->nh.iph->frag_off = htons(IP_DF);
-	nskb->nh.iph->id = 0;
+	niph->frag_off = htons(IP_DF);
+	niph->id = 0;
 
 	addr_type = RTN_UNSPEC;
 	if (hook != NF_IP_FORWARD
@@ -145,12 +137,11 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	nskb->ip_summed = CHECKSUM_NONE;
 
 	/* Adjust IP TTL */
-	nskb->nh.iph->ttl = dst_metric(nskb->dst, RTAX_HOPLIMIT);
+	niph->ttl = dst_metric(nskb->dst, RTAX_HOPLIMIT);
 
 	/* Adjust IP checksum */
-	nskb->nh.iph->check = 0;
-	nskb->nh.iph->check = ip_fast_csum((unsigned char *)nskb->nh.iph,
-					   nskb->nh.iph->ihl);
+	niph->check = 0;
+	niph->check = ip_fast_csum(skb_network_header(nskb), niph->ihl);
 
 	/* "Never happens" */
 	if (nskb->len > dst_mtu(nskb->dst))
@@ -182,7 +173,7 @@ static unsigned int reject(struct sk_buff **pskb,
 
 	/* Our naive response construction doesn't deal with IP
 	   options, and probably shouldn't try. */
-	if ((*pskb)->nh.iph->ihl<<2 != sizeof(struct iphdr))
+	if (ip_hdrlen(*pskb) != sizeof(struct iphdr))
 		return NF_DROP;
 
 	/* WARNING: This code causes reentry within iptables.
@@ -220,30 +211,30 @@ static unsigned int reject(struct sk_buff **pskb,
 	return NF_DROP;
 }
 
-static int check(const char *tablename,
-		 const void *e_void,
-		 const struct xt_target *target,
-		 void *targinfo,
-		 unsigned int hook_mask)
+static bool check(const char *tablename,
+		  const void *e_void,
+		  const struct xt_target *target,
+		  void *targinfo,
+		  unsigned int hook_mask)
 {
 	const struct ipt_reject_info *rejinfo = targinfo;
 	const struct ipt_entry *e = e_void;
 
 	if (rejinfo->with == IPT_ICMP_ECHOREPLY) {
-		printk("REJECT: ECHOREPLY no longer supported.\n");
-		return 0;
+		printk("ipt_REJECT: ECHOREPLY no longer supported.\n");
+		return false;
 	} else if (rejinfo->with == IPT_TCP_RESET) {
 		/* Must specify that it's a TCP packet */
 		if (e->ip.proto != IPPROTO_TCP
 		    || (e->ip.invflags & XT_INV_PROTO)) {
-			DEBUGP("REJECT: TCP_RESET invalid for non-tcp\n");
-			return 0;
+			printk("ipt_REJECT: TCP_RESET invalid for non-tcp\n");
+			return false;
 		}
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target ipt_reject_reg = {
+static struct xt_target ipt_reject_reg __read_mostly = {
 	.name		= "REJECT",
 	.family		= AF_INET,
 	.target		= reject,

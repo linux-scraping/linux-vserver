@@ -1,8 +1,8 @@
 /*
  * net/tipc/link.c: TIPC link code
  *
- * Copyright (c) 1996-2006, Ericsson AB
- * Copyright (c) 2004-2006, Wind River Systems
+ * Copyright (c) 1996-2007, Ericsson AB
+ * Copyright (c) 2004-2007, Wind River Systems
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -423,6 +423,17 @@ struct link *tipc_link_create(struct bearer *b_ptr, const u32 peer,
 		return NULL;
 	}
 
+	if (LINK_LOG_BUF_SIZE) {
+		char *pb = kmalloc(LINK_LOG_BUF_SIZE, GFP_ATOMIC);
+
+		if (!pb) {
+			kfree(l_ptr);
+			warn("Link creation failed, no memory for print buffer\n");
+			return NULL;
+		}
+		tipc_printbuf_init(&l_ptr->print_buf, pb, LINK_LOG_BUF_SIZE);
+	}
+
 	l_ptr->addr = peer;
 	if_name = strchr(b_ptr->publ.name, ':') + 1;
 	sprintf(l_ptr->name, "%u.%u.%u:%s-%u.%u.%u:",
@@ -432,8 +443,6 @@ struct link *tipc_link_create(struct bearer *b_ptr, const u32 peer,
 		tipc_zone(peer), tipc_cluster(peer), tipc_node(peer));
 		/* note: peer i/f is appended to link name by reset/activate */
 	memcpy(&l_ptr->media_addr, media_addr, sizeof(*media_addr));
-	k_init_timer(&l_ptr->timer, (Handler)link_timeout, (unsigned long)l_ptr);
-	list_add_tail(&l_ptr->link_list, &b_ptr->links);
 	l_ptr->checkpoint = 1;
 	l_ptr->b_ptr = b_ptr;
 	link_set_supervision_props(l_ptr, b_ptr->media->tolerance);
@@ -459,21 +468,14 @@ struct link *tipc_link_create(struct bearer *b_ptr, const u32 peer,
 
 	l_ptr->owner = tipc_node_attach_link(l_ptr);
 	if (!l_ptr->owner) {
+		if (LINK_LOG_BUF_SIZE)
+			kfree(l_ptr->print_buf.buf);
 		kfree(l_ptr);
 		return NULL;
 	}
 
-	if (LINK_LOG_BUF_SIZE) {
-		char *pb = kmalloc(LINK_LOG_BUF_SIZE, GFP_ATOMIC);
-
-		if (!pb) {
-			kfree(l_ptr);
-			warn("Link creation failed, no memory for print buffer\n");
-			return NULL;
-		}
-		tipc_printbuf_init(&l_ptr->print_buf, pb, LINK_LOG_BUF_SIZE);
-	}
-
+	k_init_timer(&l_ptr->timer, (Handler)link_timeout, (unsigned long)l_ptr);
+	list_add_tail(&l_ptr->link_list, &b_ptr->links);
 	tipc_k_signal((Handler)tipc_link_start, (unsigned long)l_ptr);
 
 	dbg("tipc_link_create(): tolerance = %u,cont intv = %u, abort_limit = %u\n",
@@ -1001,7 +1003,7 @@ static int link_bundle_buf(struct link *l_ptr,
 		return 0;
 
 	skb_put(bundler, pad + size);
-	memcpy(bundler->data + to_pos, buf->data, size);
+	skb_copy_to_linear_data_offset(bundler, to_pos, buf->data, size);
 	msg_set_size(bundler_msg, to_pos + size);
 	msg_set_msgcnt(bundler_msg, msg_msgcnt(bundler_msg) + 1);
 	dbg("Packed msg # %u(%u octets) into pos %u in buf(#%u)\n",
@@ -1109,8 +1111,8 @@ int tipc_link_send_buf(struct link *l_ptr, struct sk_buff *buf)
 			if (bundler) {
 				msg_init(&bundler_hdr, MSG_BUNDLER, OPEN_MSG,
 					 TIPC_OK, INT_H_SIZE, l_ptr->addr);
-				memcpy(bundler->data, (unchar *)&bundler_hdr,
-				       INT_H_SIZE);
+				skb_copy_to_linear_data(bundler, &bundler_hdr,
+							INT_H_SIZE);
 				skb_trim(bundler, INT_H_SIZE);
 				link_bundle_buf(l_ptr, bundler, buf);
 				buf = bundler;
@@ -1260,7 +1262,7 @@ again:
 	 * (Must not hold any locks while building message.)
 	 */
 
-	res = msg_build(hdr, msg_sect, num_sect, sender->max_pkt,
+	res = msg_build(hdr, msg_sect, num_sect, sender->publ.max_pkt,
 			!sender->user_port, &buf);
 
 	read_lock_bh(&tipc_net_lock);
@@ -1271,7 +1273,7 @@ again:
 		if (likely(l_ptr)) {
 			if (likely(buf)) {
 				res = link_send_buf_fast(l_ptr, buf,
-							 &sender->max_pkt);
+							 &sender->publ.max_pkt);
 				if (unlikely(res < 0))
 					buf_discard(buf);
 exit:
@@ -1299,12 +1301,12 @@ exit:
 			 * then re-try fast path or fragment the message
 			 */
 
-			sender->max_pkt = link_max_pkt(l_ptr);
+			sender->publ.max_pkt = link_max_pkt(l_ptr);
 			tipc_node_unlock(node);
 			read_unlock_bh(&tipc_net_lock);
 
 
-			if ((msg_hdr_sz(hdr) + res) <= sender->max_pkt)
+			if ((msg_hdr_sz(hdr) + res) <= sender->publ.max_pkt)
 				goto again;
 
 			return link_send_sections_long(sender, msg_sect,
@@ -1357,7 +1359,7 @@ static int link_send_sections_long(struct port *sender,
 
 again:
 	fragm_no = 1;
-	max_pkt = sender->max_pkt - INT_H_SIZE;
+	max_pkt = sender->publ.max_pkt - INT_H_SIZE;
 		/* leave room for tunnel header in case of link changeover */
 	fragm_sz = max_pkt - INT_H_SIZE;
 		/* leave room for fragmentation header in each fragment */
@@ -1383,9 +1385,9 @@ again:
 	if (!buf)
 		return -ENOMEM;
 	buf->next = NULL;
-	memcpy(buf->data, (unchar *)&fragm_hdr, INT_H_SIZE);
+	skb_copy_to_linear_data(buf, &fragm_hdr, INT_H_SIZE);
 	hsz = msg_hdr_sz(hdr);
-	memcpy(buf->data + INT_H_SIZE, (unchar *)hdr, hsz);
+	skb_copy_to_linear_data_offset(buf, INT_H_SIZE, hdr, hsz);
 	msg_dbg(buf_msg(buf), ">BUILD>");
 
 	/* Chop up message: */
@@ -1416,8 +1418,8 @@ error:
 				return -EFAULT;
 			}
 		} else
-			memcpy(buf->data + fragm_crs, sect_crs, sz);
-
+			skb_copy_to_linear_data_offset(buf, fragm_crs,
+						       sect_crs, sz);
 		sect_crs += sz;
 		sect_rest -= sz;
 		fragm_crs += sz;
@@ -1442,7 +1444,7 @@ error:
 
 			buf->next = NULL;
 			prev->next = buf;
-			memcpy(buf->data, (unchar *)&fragm_hdr, INT_H_SIZE);
+			skb_copy_to_linear_data(buf, &fragm_hdr, INT_H_SIZE);
 			fragm_crs = INT_H_SIZE;
 			fragm_rest = fragm_sz;
 			msg_dbg(buf_msg(buf),"  >BUILD>");
@@ -1463,7 +1465,7 @@ error:
 			goto reject;
 		}
 		if (link_max_pkt(l_ptr) < max_pkt) {
-			sender->max_pkt = link_max_pkt(l_ptr);
+			sender->publ.max_pkt = link_max_pkt(l_ptr);
 			tipc_node_unlock(node);
 			for (; buf_chain; buf_chain = buf) {
 				buf = buf_chain->next;
@@ -2130,7 +2132,7 @@ void tipc_link_send_proto_msg(struct link *l_ptr, u32 msg_typ, int probe_msg,
 		buf = l_ptr->proto_msg_queue;
 		if (!buf)
 			return;
-		memcpy(buf->data, (unchar *)msg, sizeof(l_ptr->proto_msg));
+		skb_copy_to_linear_data(buf, msg, sizeof(l_ptr->proto_msg));
 		return;
 	}
 	msg_set_timestamp(msg, jiffies_to_msecs(jiffies));
@@ -2143,7 +2145,7 @@ void tipc_link_send_proto_msg(struct link *l_ptr, u32 msg_typ, int probe_msg,
 	if (!buf)
 		return;
 
-	memcpy(buf->data, (unchar *)msg, sizeof(l_ptr->proto_msg));
+	skb_copy_to_linear_data(buf, msg, sizeof(l_ptr->proto_msg));
 	msg_set_size(buf_msg(buf), msg_size);
 
 	if (tipc_bearer_send(l_ptr->b_ptr, buf, &l_ptr->media_addr)) {
@@ -2319,8 +2321,8 @@ void tipc_link_tunnel(struct link *l_ptr,
 		     "unable to send tunnel msg\n");
 		return;
 	}
-	memcpy(buf->data, (unchar *)tunnel_hdr, INT_H_SIZE);
-	memcpy(buf->data + INT_H_SIZE, (unchar *)msg, length);
+	skb_copy_to_linear_data(buf, tunnel_hdr, INT_H_SIZE);
+	skb_copy_to_linear_data_offset(buf, INT_H_SIZE, msg, length);
 	dbg("%c->%c:", l_ptr->b_ptr->net_plane, tunnel->b_ptr->net_plane);
 	msg_dbg(buf_msg(buf), ">SEND>");
 	tipc_link_send_buf(tunnel, buf);
@@ -2361,7 +2363,7 @@ void tipc_link_changeover(struct link *l_ptr)
 
 		buf = buf_acquire(INT_H_SIZE);
 		if (buf) {
-			memcpy(buf->data, (unchar *)&tunnel_hdr, INT_H_SIZE);
+			skb_copy_to_linear_data(buf, &tunnel_hdr, INT_H_SIZE);
 			msg_set_size(&tunnel_hdr, INT_H_SIZE);
 			dbg("%c->%c:", l_ptr->b_ptr->net_plane,
 			    tunnel->b_ptr->net_plane);
@@ -2381,10 +2383,10 @@ void tipc_link_changeover(struct link *l_ptr)
 		struct tipc_msg *msg = buf_msg(crs);
 
 		if ((msg_user(msg) == MSG_BUNDLER) && split_bundles) {
-			u32 msgcount = msg_msgcnt(msg);
 			struct tipc_msg *m = msg_get_wrapped(msg);
 			unchar* pos = (unchar*)m;
 
+			msgcount = msg_msgcnt(msg);
 			while (msgcount--) {
 				msg_set_seqno(m,msg_seqno(msg));
 				tipc_link_tunnel(l_ptr, &tunnel_hdr, m,
@@ -2426,8 +2428,9 @@ void tipc_link_send_duplicate(struct link *l_ptr, struct link *tunnel)
 			     "unable to send duplicate msg\n");
 			return;
 		}
-		memcpy(outbuf->data, (unchar *)&tunnel_hdr, INT_H_SIZE);
-		memcpy(outbuf->data + INT_H_SIZE, iter->data, length);
+		skb_copy_to_linear_data(outbuf, &tunnel_hdr, INT_H_SIZE);
+		skb_copy_to_linear_data_offset(outbuf, INT_H_SIZE, iter->data,
+					       length);
 		dbg("%c->%c:", l_ptr->b_ptr->net_plane,
 		    tunnel->b_ptr->net_plane);
 		msg_dbg(buf_msg(outbuf), ">SEND>");
@@ -2457,7 +2460,7 @@ static struct sk_buff *buf_extract(struct sk_buff *skb, u32 from_pos)
 
 	eb = buf_acquire(size);
 	if (eb)
-		memcpy(eb->data, (unchar *)msg, size);
+		skb_copy_to_linear_data(eb, msg, size);
 	return eb;
 }
 
@@ -2569,7 +2572,7 @@ void tipc_link_recv_bundle(struct sk_buff *buf)
 		if (obuf == NULL) {
 			warn("Link unable to unbundle message(s)\n");
 			break;
-		};
+		}
 		pos += align(msg_size(buf_msg(obuf)));
 		msg_dbg(buf_msg(obuf), "     /");
 		tipc_net_route_msg(obuf);
@@ -2631,9 +2634,9 @@ int tipc_link_send_long_buf(struct link *l_ptr, struct sk_buff *buf)
 			goto exit;
 		}
 		msg_set_size(&fragm_hdr, fragm_sz + INT_H_SIZE);
-		memcpy(fragm->data, (unchar *)&fragm_hdr, INT_H_SIZE);
-		memcpy(fragm->data + INT_H_SIZE, crs, fragm_sz);
-
+		skb_copy_to_linear_data(fragm, &fragm_hdr, INT_H_SIZE);
+		skb_copy_to_linear_data_offset(fragm, INT_H_SIZE, crs,
+					       fragm_sz);
 		/*  Send queued messages first, if any: */
 
 		l_ptr->stats.sent_fragments++;
@@ -2733,8 +2736,8 @@ int tipc_link_recv_fragment(struct sk_buff **pending, struct sk_buff **fb,
 		if (pbuf != NULL) {
 			pbuf->next = *pending;
 			*pending = pbuf;
-			memcpy(pbuf->data, (unchar *)imsg, msg_data_sz(fragm));
-
+			skb_copy_to_linear_data(pbuf, imsg,
+						msg_data_sz(fragm));
 			/*  Prepare buffer for subsequent fragments. */
 
 			set_long_msg_seqno(pbuf, long_msg_seq_no);
@@ -2750,7 +2753,8 @@ int tipc_link_recv_fragment(struct sk_buff **pending, struct sk_buff **fb,
 		u32 fsz = get_fragm_size(pbuf);
 		u32 crs = ((msg_fragm_no(fragm) - 1) * fsz);
 		u32 exp_frags = get_expected_frags(pbuf) - 1;
-		memcpy(pbuf->data + crs, msg_data(fragm), dsz);
+		skb_copy_to_linear_data_offset(pbuf, crs,
+					       msg_data(fragm), dsz);
 		buf_discard(fbuf);
 
 		/* Is message complete? */

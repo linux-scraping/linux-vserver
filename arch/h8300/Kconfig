@@ -49,7 +49,15 @@ config GENERIC_HWEIGHT
 	bool
 	default y
 
+config GENERIC_HARDIRQS
+	bool
+	default y
+
 config GENERIC_CALIBRATE_DELAY
+	bool
+	default y
+
+config GENERIC_TIME
 	bool
 	default y
 
@@ -58,6 +66,9 @@ config TIME_LOW_RES
 	default y
 
 config NO_IOPORT
+	def_bool y
+
+config NO_DMA
 	def_bool y
 
 config ISA

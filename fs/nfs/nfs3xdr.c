@@ -51,6 +51,7 @@
 
 #define NFS3_sattrargs_sz	(NFS3_fh_sz+NFS3_sattr_sz+3)
 #define NFS3_diropargs_sz	(NFS3_fh_sz+NFS3_filename_sz)
+#define NFS3_removeargs_sz	(NFS3_fh_sz+NFS3_filename_sz)
 #define NFS3_accessargs_sz	(NFS3_fh_sz+1)
 #define NFS3_readlinkargs_sz	(NFS3_fh_sz)
 #define NFS3_readargs_sz	(NFS3_fh_sz+3)
@@ -66,6 +67,7 @@
 
 #define NFS3_attrstat_sz	(1+NFS3_fattr_sz)
 #define NFS3_wccstat_sz		(1+NFS3_wcc_data_sz)
+#define NFS3_removeres_sz	(NFS3_wccstat_sz)
 #define NFS3_lookupres_sz	(1+NFS3_fh_sz+(2 * NFS3_post_op_attr_sz))
 #define NFS3_accessres_sz	(1+NFS3_post_op_attr_sz+1)
 #define NFS3_readlinkres_sz	(1+NFS3_post_op_attr_sz+1)
@@ -107,7 +109,7 @@ static struct {
  * Common NFS XDR functions as inlines
  */
 static inline __be32 *
-xdr_encode_fhandle(__be32 *p, struct nfs_fh *fh)
+xdr_encode_fhandle(__be32 *p, const struct nfs_fh *fh)
 {
 	return xdr_encode_array(p, fh->data, fh->size);
 }
@@ -304,6 +306,18 @@ nfs3_xdr_diropargs(struct rpc_rqst *req, __be32 *p, struct nfs3_diropargs *args)
 }
 
 /*
+ * Encode REMOVE argument
+ */
+static int
+nfs3_xdr_removeargs(struct rpc_rqst *req, __be32 *p, const struct nfs_removeargs *args)
+{
+	p = xdr_encode_fhandle(p, args->fh);
+	p = xdr_encode_array(p, args->name.name, args->name.len);
+	req->rq_slen = xdr_adjust_iovec(req->rq_svec, p);
+	return 0;
+}
+
+/*
  * Encode access() argument
  */
 static int
@@ -323,7 +337,7 @@ nfs3_xdr_accessargs(struct rpc_rqst *req, __be32 *p, struct nfs3_accessargs *arg
 static int
 nfs3_xdr_readargs(struct rpc_rqst *req, __be32 *p, struct nfs_readargs *args)
 {
-	struct rpc_auth	*auth = req->rq_task->tk_auth;
+	struct rpc_auth	*auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	unsigned int replen;
 	u32 count = args->count;
 
@@ -466,7 +480,7 @@ nfs3_xdr_linkargs(struct rpc_rqst *req, __be32 *p, struct nfs3_linkargs *args)
 static int
 nfs3_xdr_readdirargs(struct rpc_rqst *req, __be32 *p, struct nfs3_readdirargs *args)
 {
-	struct rpc_auth	*auth = req->rq_task->tk_auth;
+	struct rpc_auth	*auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	unsigned int replen;
 	u32 count = args->count;
 
@@ -651,7 +665,7 @@ static int
 nfs3_xdr_getaclargs(struct rpc_rqst *req, __be32 *p,
 		    struct nfs3_getaclargs *args)
 {
-	struct rpc_auth *auth = req->rq_task->tk_auth;
+	struct rpc_auth	*auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	unsigned int replen;
 
 	p = xdr_encode_fhandle(p, args->fh);
@@ -744,6 +758,12 @@ nfs3_xdr_wccstat(struct rpc_rqst *req, __be32 *p, struct nfs_fattr *fattr)
 	return status;
 }
 
+static int
+nfs3_xdr_removeres(struct rpc_rqst *req, __be32 *p, struct nfs_removeres *res)
+{
+	return nfs3_xdr_wccstat(req, p, &res->dir_attr);
+}
+
 /*
  * Decode LOOKUP reply
  */
@@ -781,7 +801,7 @@ nfs3_xdr_accessres(struct rpc_rqst *req, __be32 *p, struct nfs3_accessres *res)
 static int
 nfs3_xdr_readlinkargs(struct rpc_rqst *req, __be32 *p, struct nfs3_readlinkargs *args)
 {
-	struct rpc_auth *auth = req->rq_task->tk_auth;
+	struct rpc_auth	*auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	unsigned int replen;
 
 	p = xdr_encode_fhandle(p, args->fh);
@@ -1110,16 +1130,13 @@ nfs3_xdr_setaclres(struct rpc_rqst *req, __be32 *p, struct nfs_fattr *fattr)
 }
 #endif  /* CONFIG_NFS_V3_ACL */
 
-#ifndef MAX
-# define MAX(a, b)	(((a) > (b))? (a) : (b))
-#endif
-
 #define PROC(proc, argtype, restype, timer)				\
 [NFS3PROC_##proc] = {							\
 	.p_proc      = NFS3PROC_##proc,					\
 	.p_encode    = (kxdrproc_t) nfs3_xdr_##argtype,			\
 	.p_decode    = (kxdrproc_t) nfs3_xdr_##restype,			\
-	.p_bufsiz    = MAX(NFS3_##argtype##_sz,NFS3_##restype##_sz) << 2,	\
+	.p_arglen    = NFS3_##argtype##_sz,				\
+	.p_replen    = NFS3_##restype##_sz,				\
 	.p_timer     = timer,						\
 	.p_statidx   = NFS3PROC_##proc,					\
 	.p_name      = #proc,						\
@@ -1137,7 +1154,7 @@ struct rpc_procinfo	nfs3_procedures[] = {
   PROC(MKDIR,		mkdirargs,	createres, 0),
   PROC(SYMLINK,		symlinkargs,	createres, 0),
   PROC(MKNOD,		mknodargs,	createres, 0),
-  PROC(REMOVE,		diropargs,	wccstat, 0),
+  PROC(REMOVE,		removeargs,	removeres, 0),
   PROC(RMDIR,		diropargs,	wccstat, 0),
   PROC(RENAME,		renameargs,	renameres, 0),
   PROC(LINK,		linkargs,	linkres, 0),
@@ -1161,7 +1178,8 @@ static struct rpc_procinfo	nfs3_acl_procedures[] = {
 		.p_proc = ACLPROC3_GETACL,
 		.p_encode = (kxdrproc_t) nfs3_xdr_getaclargs,
 		.p_decode = (kxdrproc_t) nfs3_xdr_getaclres,
-		.p_bufsiz = MAX(ACL3_getaclargs_sz, ACL3_getaclres_sz) << 2,
+		.p_arglen = ACL3_getaclargs_sz,
+		.p_replen = ACL3_getaclres_sz,
 		.p_timer = 1,
 		.p_name = "GETACL",
 	},
@@ -1169,7 +1187,8 @@ static struct rpc_procinfo	nfs3_acl_procedures[] = {
 		.p_proc = ACLPROC3_SETACL,
 		.p_encode = (kxdrproc_t) nfs3_xdr_setaclargs,
 		.p_decode = (kxdrproc_t) nfs3_xdr_setaclres,
-		.p_bufsiz = MAX(ACL3_setaclargs_sz, ACL3_setaclres_sz) << 2,
+		.p_arglen = ACL3_setaclargs_sz,
+		.p_replen = ACL3_setaclres_sz,
 		.p_timer = 0,
 		.p_name = "SETACL",
 	},

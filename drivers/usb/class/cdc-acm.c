@@ -59,7 +59,6 @@
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
@@ -212,7 +211,41 @@ static int acm_write_start(struct acm *acm)
 	}
 	return rc;
 }
+/*
+ * attributes exported through sysfs
+ */
+static ssize_t show_caps
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
 
+	return sprintf(buf, "%d", acm->ctrl_caps);
+}
+static DEVICE_ATTR(bmCapabilities, S_IRUGO, show_caps, NULL);
+
+static ssize_t show_country_codes
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+
+	memcpy(buf, acm->country_codes, acm->country_code_size);
+	return acm->country_code_size;
+}
+
+static DEVICE_ATTR(wCountryCodes, S_IRUGO, show_country_codes, NULL);
+
+static ssize_t show_country_rel_date
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+
+	return sprintf(buf, "%d", acm->country_rel_date);
+}
+
+static DEVICE_ATTR(iCountryCodeRelDate, S_IRUGO, show_country_rel_date, NULL);
 /*
  * Interrupt handlers for various ACM device responses
  */
@@ -224,9 +257,10 @@ static void acm_ctrl_irq(struct urb *urb)
 	struct usb_cdc_notification *dr = urb->transfer_buffer;
 	unsigned char *data;
 	int newctrl;
-	int status;
+	int retval;
+	int status = urb->status;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -234,10 +268,10 @@ static void acm_ctrl_irq(struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dbg("%s - urb shutting down with status: %d", __FUNCTION__, urb->status);
+		dbg("%s - urb shutting down with status: %d", __FUNCTION__, status);
 		return;
 	default:
-		dbg("%s - nonzero urb status received: %d", __FUNCTION__, urb->status);
+		dbg("%s - nonzero urb status received: %d", __FUNCTION__, status);
 		goto exit;
 	}
 
@@ -278,10 +312,10 @@ static void acm_ctrl_irq(struct urb *urb)
 			break;
 	}
 exit:
-	status = usb_submit_urb (urb, GFP_ATOMIC);
-	if (status)
+	retval = usb_submit_urb (urb, GFP_ATOMIC);
+	if (retval)
 		err ("%s - usb_submit_urb failed with result %d",
-		     __FUNCTION__, status);
+		     __FUNCTION__, retval);
 }
 
 /* data interface returns incoming bytes, or we got unthrottled */
@@ -291,7 +325,8 @@ static void acm_read_bulk(struct urb *urb)
 	struct acm_ru *rcv = urb->context;
 	struct acm *acm = rcv->instance;
 	int status = urb->status;
-	dbg("Entering acm_read_bulk with status %d", urb->status);
+
+	dbg("Entering acm_read_bulk with status %d", status);
 
 	if (!ACM_READY(acm))
 		return;
@@ -514,6 +549,7 @@ static void acm_tty_unregister(struct acm *acm)
 	usb_free_urb(acm->writeurb);
 	for (i = 0; i < nr; i++)
 		usb_free_urb(acm->ru[i].urb);
+	kfree(acm->country_codes);
 	kfree(acm);
 }
 
@@ -761,6 +797,7 @@ static int acm_probe (struct usb_interface *intf,
 		      const struct usb_device_id *id)
 {
 	struct usb_cdc_union_desc *union_header = NULL;
+	struct usb_cdc_country_functional_desc *cfd = NULL;
 	char *buffer = intf->altsetting->extra;
 	int buflen = intf->altsetting->extralen;
 	struct usb_interface *control_interface;
@@ -824,8 +861,9 @@ static int acm_probe (struct usb_interface *intf,
 				union_header = (struct usb_cdc_union_desc *)
 							buffer;
 				break;
-			case USB_CDC_COUNTRY_TYPE: /* maybe somehow export */
-				break; /* for now we ignore it */
+			case USB_CDC_COUNTRY_TYPE: /* export through sysfs*/
+				cfd = (struct usb_cdc_country_functional_desc *)buffer;
+				break;
 			case USB_CDC_HEADER_TYPE: /* maybe check version */ 
 				break; /* for now we ignore it */ 
 			case USB_CDC_ACM_TYPE:
@@ -883,6 +921,10 @@ skip_normal_probe:
 			return -EINVAL;
 		}
 	}
+
+	/* Accept probe requests only for the control interface */
+	if (intf != control_interface)
+		return -ENODEV;
 	
 	if (usb_interface_claimed(data_interface)) { /* valid in this context */
 		dev_dbg(&intf->dev,"The data interface isn't available");
@@ -983,6 +1025,34 @@ skip_normal_probe:
 		goto alloc_fail7;
 	}
 
+	usb_set_intfdata (intf, acm);
+
+	i = device_create_file(&intf->dev, &dev_attr_bmCapabilities);
+	if (i < 0)
+		goto alloc_fail8;
+
+	if (cfd) { /* export the country data */
+		acm->country_codes = kmalloc(cfd->bLength - 4, GFP_KERNEL);
+		if (!acm->country_codes)
+			goto skip_countries;
+		acm->country_code_size = cfd->bLength - 4;
+		memcpy(acm->country_codes, (u8 *)&cfd->wCountyCode0, cfd->bLength - 4);
+		acm->country_rel_date = cfd->iCountryCodeRelDate;
+
+		i = device_create_file(&intf->dev, &dev_attr_wCountryCodes);
+		if (i < 0) {
+			kfree(acm->country_codes);
+			goto skip_countries;
+		}
+
+		i = device_create_file(&intf->dev, &dev_attr_iCountryCodeRelDate);
+		if (i < 0) {
+			kfree(acm->country_codes);
+			goto skip_countries;
+		}
+	}
+
+skip_countries:
 	usb_fill_int_urb(acm->ctrlurb, usb_dev, usb_rcvintpipe(usb_dev, epctrl->bEndpointAddress),
 			 acm->ctrl_buffer, ctrlsize, acm_ctrl_irq, acm, epctrl->bInterval);
 	acm->ctrlurb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
@@ -1006,9 +1076,10 @@ skip_normal_probe:
 	tty_register_device(acm_tty_driver, minor, &control_interface->dev);
 
 	acm_table[minor] = acm;
-	usb_set_intfdata (intf, acm);
-	return 0;
 
+	return 0;
+alloc_fail8:
+	usb_free_urb(acm->writeurb);
 alloc_fail7:
 	for (i = 0; i < num_rx_buf; i++)
 		usb_buffer_free(usb_dev, acm->readsize, acm->rb[i].base, acm->rb[i].dma);
@@ -1027,7 +1098,7 @@ alloc_fail:
 
 static void acm_disconnect(struct usb_interface *intf)
 {
-	struct acm *acm = usb_get_intfdata (intf);
+	struct acm *acm = usb_get_intfdata(intf);
 	struct usb_device *usb_dev = interface_to_usbdev(intf);
 	int i;
 
@@ -1041,6 +1112,13 @@ static void acm_disconnect(struct usb_interface *intf)
 		mutex_unlock(&open_mutex);
 		return;
 	}
+	if (acm->country_codes){
+		device_remove_file(&acm->control->dev,
+				&dev_attr_wCountryCodes);
+		device_remove_file(&acm->control->dev,
+				&dev_attr_iCountryCodeRelDate);
+	}
+	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
 	acm->dev = NULL;
 	usb_set_intfdata(acm->control, NULL);
 	usb_set_intfdata(acm->data, NULL);
@@ -1085,6 +1163,9 @@ static void acm_disconnect(struct usb_interface *intf)
 static struct usb_device_id acm_ids[] = {
 	/* quirky and broken devices */
 	{ USB_DEVICE(0x0870, 0x0001), /* Metricom GS Modem */
+	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
+	},
+	{ USB_DEVICE(0x0e8d, 0x0003), /* FIREFLY, MediaTek Inc; andrey.arapov@gmail.com */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
 	{ USB_DEVICE(0x0482, 0x0203), /* KYOCERA AH-K3001V */

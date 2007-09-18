@@ -7,13 +7,6 @@
  *
  * Author:
  *	Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- ICMPv6 tracking support. Derived from the original ip_conntrack code
- *	  net/ipv4/netfilter/ip_conntrack_proto_icmp.c which had the following
- *	  copyright information:
- *		(C) 1999-2001 Paul `Rusty' Russell
- *		(C) 2002-2004 Netfilter Core Team <coreteam@netfilter.org>
  */
 
 #include <linux/types.h>
@@ -33,12 +26,6 @@
 #include <net/netfilter/ipv6/nf_conntrack_icmpv6.h>
 
 static unsigned long nf_ct_icmpv6_timeout __read_mostly = 30*HZ;
-
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
 
 static int icmpv6_pkt_to_tuple(const struct sk_buff *skb,
 			       unsigned int dataoff,
@@ -132,8 +119,8 @@ static int icmpv6_new(struct nf_conn *conntrack,
 
 	if (type < 0 || type >= sizeof(valid_new) || !valid_new[type]) {
 		/* Can't create a new ICMPv6 `conn' with this. */
-		DEBUGP("icmpv6: can't create new conn with type %u\n",
-		       type + 128);
+		pr_debug("icmpv6: can't create new conn with type %u\n",
+			 type + 128);
 		NF_CT_DUMP_TUPLE(&conntrack->tuplehash[0].tuple);
 		return 0;
 	}
@@ -149,61 +136,36 @@ icmpv6_error_message(struct sk_buff *skb,
 {
 	struct nf_conntrack_tuple intuple, origtuple;
 	struct nf_conntrack_tuple_hash *h;
-	struct icmp6hdr _hdr, *hp;
-	unsigned int inip6off;
 	struct nf_conntrack_l4proto *inproto;
-	u_int8_t inprotonum;
-	unsigned int inprotoff;
 
 	NF_CT_ASSERT(skb->nfct == NULL);
 
-	hp = skb_header_pointer(skb, icmp6off, sizeof(_hdr), &_hdr);
-	if (hp == NULL) {
-		DEBUGP("icmpv6_error: Can't get ICMPv6 hdr.\n");
-		return -NF_ACCEPT;
-	}
-
-	inip6off = icmp6off + sizeof(_hdr);
-	if (skb_copy_bits(skb, inip6off+offsetof(struct ipv6hdr, nexthdr),
-			  &inprotonum, sizeof(inprotonum)) != 0) {
-		DEBUGP("icmpv6_error: Can't get nexthdr in inner IPv6 header.\n");
-		return -NF_ACCEPT;
-	}
-	inprotoff = nf_ct_ipv6_skip_exthdr(skb,
-					   inip6off + sizeof(struct ipv6hdr),
-					   &inprotonum,
-					   skb->len - inip6off
-						    - sizeof(struct ipv6hdr));
-
-	if ((inprotoff < 0) || (inprotoff > skb->len) ||
-	    (inprotonum == NEXTHDR_FRAGMENT)) {
-		DEBUGP("icmpv6_error: Can't get protocol header in ICMPv6 payload.\n");
+	/* Are they talking about one of our connections? */
+	if (!nf_ct_get_tuplepr(skb,
+			       skb_network_offset(skb)
+				+ sizeof(struct ipv6hdr)
+				+ sizeof(struct icmp6hdr),
+			       PF_INET6, &origtuple)) {
+		pr_debug("icmpv6_error: Can't get tuple\n");
 		return -NF_ACCEPT;
 	}
 
 	/* rcu_read_lock()ed by nf_hook_slow */
-	inproto = __nf_ct_l4proto_find(PF_INET6, inprotonum);
-
-	/* Are they talking about one of our connections? */
-	if (!nf_ct_get_tuple(skb, inip6off, inprotoff, PF_INET6, inprotonum,
-			     &origtuple, &nf_conntrack_l3proto_ipv6, inproto)) {
-		DEBUGP("icmpv6_error: Can't get tuple\n");
-		return -NF_ACCEPT;
-	}
+	inproto = __nf_ct_l4proto_find(PF_INET6, origtuple.dst.protonum);
 
 	/* Ordinarily, we'd expect the inverted tupleproto, but it's
 	   been preserved inside the ICMP. */
 	if (!nf_ct_invert_tuple(&intuple, &origtuple,
 				&nf_conntrack_l3proto_ipv6, inproto)) {
-		DEBUGP("icmpv6_error: Can't invert tuple\n");
+		pr_debug("icmpv6_error: Can't invert tuple\n");
 		return -NF_ACCEPT;
 	}
 
 	*ctinfo = IP_CT_RELATED;
 
-	h = nf_conntrack_find_get(&intuple, NULL);
+	h = nf_conntrack_find_get(&intuple);
 	if (!h) {
-		DEBUGP("icmpv6_error: no match\n");
+		pr_debug("icmpv6_error: no match\n");
 		return -NF_ACCEPT;
 	} else {
 		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
@@ -314,7 +276,7 @@ static struct ctl_table icmpv6_sysctl_table[] = {
 };
 #endif /* CONFIG_SYSCTL */
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_icmpv6 =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_icmpv6 __read_mostly =
 {
 	.l3proto		= PF_INET6,
 	.l4proto		= IPPROTO_ICMPV6,
@@ -335,5 +297,3 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_icmpv6 =
 	.ctl_table		= icmpv6_sysctl_table,
 #endif
 };
-
-EXPORT_SYMBOL(nf_conntrack_l4proto_icmpv6);

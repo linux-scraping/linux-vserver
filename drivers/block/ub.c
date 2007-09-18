@@ -503,7 +503,7 @@ static void ub_cleanup(struct ub_dev *sc)
 {
 	struct list_head *p;
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 
 	while (!list_empty(&sc->luns)) {
 		p = sc->luns.next;
@@ -619,7 +619,7 @@ static struct ub_scsi_cmd *ub_cmdq_pop(struct ub_dev *sc)
  * The request function is our main entry point
  */
 
-static void ub_request_fn(request_queue_t *q)
+static void ub_request_fn(struct request_queue *q)
 {
 	struct ub_lun *lun = q->queuedata;
 	struct request *rq;
@@ -1547,10 +1547,8 @@ static void ub_reset_enter(struct ub_dev *sc, int try)
 #endif
 
 #if 0 /* We let them stop themselves. */
-	struct list_head *p;
 	struct ub_lun *lun;
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_stop_queue(lun->disk->queue);
 	}
 #endif
@@ -1562,7 +1560,6 @@ static void ub_reset_task(struct work_struct *work)
 {
 	struct ub_dev *sc = container_of(work, struct ub_dev, reset_work);
 	unsigned long flags;
-	struct list_head *p;
 	struct ub_lun *lun;
 	int lkr, rc;
 
@@ -1608,8 +1605,7 @@ static void ub_reset_task(struct work_struct *work)
 	spin_lock_irqsave(sc->lock, flags);
 	sc->reset = 0;
 	tasklet_schedule(&sc->tasklet);
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_start_queue(lun->disk->queue);
 	}
 	wake_up(&sc->reset_wait);
@@ -1713,7 +1709,7 @@ static int ub_bd_ioctl(struct inode *inode, struct file *filp,
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	void __user *usermem = (void __user *) arg;
 
-	return scsi_cmd_ioctl(filp, disk, cmd, usermem);
+	return scsi_cmd_ioctl(filp, disk->queue, disk, cmd, usermem);
 }
 
 /*
@@ -2132,10 +2128,13 @@ static int ub_get_pipes(struct ub_dev *sc, struct usb_device *dev,
 		if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
 				== USB_ENDPOINT_XFER_BULK) {
 			/* BULK in or out? */
-			if (ep->bEndpointAddress & USB_DIR_IN)
-				ep_in = ep;
-			else
-				ep_out = ep;
+			if (ep->bEndpointAddress & USB_DIR_IN) {
+				if (ep_in == NULL)
+					ep_in = ep;
+			} else {
+				if (ep_out == NULL)
+					ep_out = ep;
+			}
 		}
 	}
 
@@ -2274,7 +2273,7 @@ err_core:
 static int ub_probe_lun(struct ub_dev *sc, int lnum)
 {
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 	struct gendisk *disk;
 	int rc;
 
@@ -2345,7 +2344,6 @@ err_alloc:
 static void ub_disconnect(struct usb_interface *intf)
 {
 	struct ub_dev *sc = usb_get_intfdata(intf);
-	struct list_head *p;
 	struct ub_lun *lun;
 	unsigned long flags;
 
@@ -2400,8 +2398,7 @@ static void ub_disconnect(struct usb_interface *intf)
 	/*
 	 * Unregister the upper layer.
 	 */
-	list_for_each (p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		del_gendisk(lun->disk);
 		/*
 		 * I wish I could do:

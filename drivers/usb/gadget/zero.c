@@ -67,7 +67,6 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/timer.h>
@@ -482,8 +481,7 @@ alloc_ep_req (struct usb_ep *ep, unsigned length)
 	req = usb_ep_alloc_request (ep, GFP_ATOMIC);
 	if (req) {
 		req->length = length;
-		req->buf = usb_ep_alloc_buffer (ep, length,
-				&req->dma, GFP_ATOMIC);
+		req->buf = kmalloc(length, GFP_ATOMIC);
 		if (!req->buf) {
 			usb_ep_free_request (ep, req);
 			req = NULL;
@@ -494,8 +492,7 @@ alloc_ep_req (struct usb_ep *ep, unsigned length)
 
 static void free_ep_req (struct usb_ep *ep, struct usb_request *req)
 {
-	if (req->buf)
-		usb_ep_free_buffer (ep, req->buf, req->dma, req->length);
+	kfree(req->buf);
 	usb_ep_free_request (ep, req);
 }
 
@@ -656,7 +653,8 @@ set_source_sink_config (struct zero_dev *dev, gfp_t gfp_flags)
 			result = usb_ep_enable (ep, d);
 			if (result == 0) {
 				ep->driver_data = dev;
-				if (source_sink_start_ep (ep, gfp_flags) != 0) {
+				if (source_sink_start_ep(ep, gfp_flags)
+						!= NULL) {
 					dev->in_ep = ep;
 					continue;
 				}
@@ -670,7 +668,8 @@ set_source_sink_config (struct zero_dev *dev, gfp_t gfp_flags)
 			result = usb_ep_enable (ep, d);
 			if (result == 0) {
 				ep->driver_data = dev;
-				if (source_sink_start_ep (ep, gfp_flags) != 0) {
+				if (source_sink_start_ep(ep, gfp_flags)
+						!= NULL) {
 					dev->out_ep = ep;
 					continue;
 				}
@@ -1200,8 +1199,7 @@ autoconf_fail:
 	dev->req = usb_ep_alloc_request (gadget->ep0, GFP_KERNEL);
 	if (!dev->req)
 		goto enomem;
-	dev->req->buf = usb_ep_alloc_buffer (gadget->ep0, USB_BUFSIZ,
-				&dev->req->dma, GFP_KERNEL);
+	dev->req->buf = kmalloc(USB_BUFSIZ, GFP_KERNEL);
 	if (!dev->req->buf)
 		goto enomem;
 

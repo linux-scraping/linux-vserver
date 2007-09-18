@@ -39,13 +39,8 @@ extern void		eth_header_cache_update(struct hh_cache *hh, struct net_device *dev
 extern int		eth_header_cache(struct neighbour *neigh,
 					 struct hh_cache *hh);
 
-extern struct net_device *alloc_etherdev(int sizeof_priv);
-static inline void eth_copy_and_sum (struct sk_buff *dest, 
-				     const unsigned char *src, 
-				     int len, int base)
-{
-	memcpy (dest->data, src, len);
-}
+extern struct net_device *alloc_etherdev_mq(int sizeof_priv, unsigned int queue_count);
+#define alloc_etherdev(sizeof_priv) alloc_etherdev_mq(sizeof_priv, 1)
 
 /**
  * is_zero_ether_addr - Determine if give Ethernet address is all zeros.
@@ -68,6 +63,18 @@ static inline int is_zero_ether_addr(const u8 *addr)
 static inline int is_multicast_ether_addr(const u8 *addr)
 {
 	return (0x01 & addr[0]);
+}
+
+/**
+ * is_local_ether_addr - Determine if the Ethernet address is locally-assigned
+ * one (IEEE 802).
+ * @addr: Pointer to a six-byte array containing the Ethernet address
+ *
+ * Return true if the address is a local address.
+ */
+static inline int is_local_ether_addr(const u8 *addr)
+{
+	return (0x02 & addr[0]);
 }
 
 /**

@@ -12,9 +12,8 @@
 
 static int ipip_output(struct xfrm_state *x, struct sk_buff *skb)
 {
-	struct iphdr *iph;
+	struct iphdr *iph = ip_hdr(skb);
 
-	iph = skb->nh.iph;
 	iph->tot_len = htons(skb->len);
 	ip_send_check(iph);
 
@@ -110,3 +109,4 @@ static void __exit ipip_fini(void)
 module_init(ipip_init);
 module_exit(ipip_fini);
 MODULE_LICENSE("GPL");
+MODULE_ALIAS_XFRM_TYPE(AF_INET, XFRM_PROTO_IPIP);

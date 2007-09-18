@@ -152,7 +152,6 @@ acpi_get_firmware_waking_vector(acpi_physical_address * physical_address)
 
 ACPI_EXPORT_SYMBOL(acpi_get_firmware_waking_vector)
 #endif
-
 /*******************************************************************************
  *
  * FUNCTION:    acpi_enter_sleep_state_prep
@@ -577,13 +576,10 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 		ACPI_EXCEPTION((AE_INFO, status, "During Method _BFS"));
 	}
 
-	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
-	}
-	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
-
 	/*
+	 * GPEs must be enabled before _WAK is called as GPEs
+	 * might get fired there
+	 *
 	 * Restore the GPEs:
 	 * 1) Disable/Clear all GPEs
 	 * 2) Enable all runtime GPEs
@@ -592,12 +588,18 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
-	acpi_gbl_system_awake_and_running = TRUE;
-
 	status = acpi_hw_enable_all_runtime_gpes();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
+
+	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
+	}
+	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
+
+	acpi_gbl_system_awake_and_running = TRUE;
 
 	/* Enable power button */
 

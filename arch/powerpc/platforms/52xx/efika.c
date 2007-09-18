@@ -54,7 +54,7 @@ static int rtas_read_config(struct pci_bus *bus, unsigned int devfn, int offset,
 	struct pci_controller *hose = bus->sysdata;
 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
 	    | (((bus->number - hose->first_busno) & 0xff) << 16)
-	    | (hose->index << 24);
+	    | (hose->global_number << 24);
 	int ret = -1;
 	int rval;
 
@@ -69,7 +69,7 @@ static int rtas_write_config(struct pci_bus *bus, unsigned int devfn,
 	struct pci_controller *hose = bus->sysdata;
 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
 	    | (((bus->number - hose->first_busno) & 0xff) << 16)
-	    | (hose->index << 24);
+	    | (hose->global_number << 24);
 	int rval;
 
 	rval = rtas_call(rtas_token("write-pci-config"), 3, 1, NULL,
@@ -83,7 +83,7 @@ static struct pci_ops rtas_pci_ops = {
 };
 
 
-void __init efika_pcisetup(void)
+static void __init efika_pcisetup(void)
 {
 	const int *bus_range;
 	int len;
@@ -112,7 +112,7 @@ void __init efika_pcisetup(void)
 		return;
 	}
 
-	bus_range = get_property(pcictrl, "bus-range", &len);
+	bus_range = of_get_property(pcictrl, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
 		printk(KERN_WARNING EFIKA_PLATFORM_NAME
 		       ": Can't get bus-range for %s\n", pcictrl->full_name);
@@ -128,7 +128,7 @@ void __init efika_pcisetup(void)
 	printk(" controlled by %s\n", pcictrl->full_name);
 	printk("\n");
 
-	hose = pcibios_alloc_controller();
+	hose = pcibios_alloc_controller(of_node_get(pcictrl));
 	if (!hose) {
 		printk(KERN_WARNING EFIKA_PLATFORM_NAME
 		       ": Can't allocate PCI controller structure for %s\n",
@@ -136,7 +136,6 @@ void __init efika_pcisetup(void)
 		return;
 	}
 
-	hose->arch_data = of_node_get(pcictrl);
 	hose->first_busno = bus_range[0];
 	hose->last_busno = bus_range[1];
 	hose->ops = &rtas_pci_ops;
@@ -145,7 +144,7 @@ void __init efika_pcisetup(void)
 }
 
 #else
-void __init efika_pcisetup(void)
+static void __init efika_pcisetup(void)
 {}
 #endif
 
@@ -158,18 +157,17 @@ void __init efika_pcisetup(void)
 static void efika_show_cpuinfo(struct seq_file *m)
 {
 	struct device_node *root;
-	const char *revision = NULL;
-	const char *codegendescription = NULL;
-	const char *codegenvendor = NULL;
+	const char *revision;
+	const char *codegendescription;
+	const char *codegenvendor;
 
 	root = of_find_node_by_path("/");
 	if (!root)
 		return;
 
-	revision = get_property(root, "revision", NULL);
-	codegendescription =
-		    get_property(root, "CODEGEN,description", NULL);
-	codegenvendor = get_property(root, "CODEGEN,vendor", NULL);
+	revision = of_get_property(root, "revision", NULL);
+	codegendescription = of_get_property(root, "CODEGEN,description", NULL);
+	codegenvendor = of_get_property(root, "CODEGEN,vendor", NULL);
 
 	if (codegendescription)
 		seq_printf(m, "machine\t\t: %s\n", codegendescription);
@@ -185,6 +183,16 @@ static void efika_show_cpuinfo(struct seq_file *m)
 	of_node_put(root);
 }
 
+#ifdef CONFIG_PM
+static void efika_suspend_prepare(void __iomem *mbar)
+{
+	u8 pin = 4;	/* GPIO_WKUP_4 (GPIO_PSC6_0 - IRDA_RX) */
+	u8 level = 1;	/* wakeup on high level */
+	/* IOW. to wake it up, short pins 1 and 3 on IRDA connector */
+	mpc52xx_set_wakeup_gpio(pin, level);
+}
+#endif
+
 static void __init efika_setup_arch(void)
 {
 	rtas_initialize();
@@ -199,6 +207,11 @@ static void __init efika_setup_arch(void)
 		ROOT_DEV = Root_SDA2;	/* sda2 (sda1 is for the kernel) */
 
 	efika_pcisetup();
+
+#ifdef CONFIG_PM
+	mpc52xx_suspend.board_suspend_prepare = efika_suspend_prepare;
+	mpc52xx_pm_init();
+#endif
 
 	if (ppc_md.progress)
 		ppc_md.progress("Linux/PPC " UTS_RELEASE " running on Efika ;-)\n", 0x0);
@@ -238,6 +251,8 @@ define_machine(efika)
 	.progress		= rtas_progress,
 	.get_boot_time		= rtas_get_boot_time,
 	.calibrate_decr		= generic_calibrate_decr,
+#ifdef CONFIG_PCI
 	.phys_mem_access_prot	= pci_phys_mem_access_prot,
+#endif
 };
 

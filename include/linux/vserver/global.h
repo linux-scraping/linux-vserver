@@ -13,6 +13,7 @@ extern atomic_t vs_global_fs;
 extern atomic_t vs_global_mnt_ns;
 extern atomic_t vs_global_uts_ns;
 extern atomic_t vs_global_ipc_ns;
+extern atomic_t vs_global_user_ns;
 
 
 #endif /* _VX_GLOBAL_H */

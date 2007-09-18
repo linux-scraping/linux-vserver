@@ -205,7 +205,6 @@ static int __devinit xircom_probe(struct pci_dev *pdev, const struct pci_device_
 {
 	struct net_device *dev = NULL;
 	struct xircom_private *private;
-	unsigned char chip_rev;
 	unsigned long flags;
 	unsigned short tmp16;
 	enter("xircom_probe");
@@ -223,8 +222,6 @@ static int __devinit xircom_probe(struct pci_dev *pdev, const struct pci_device_
 	/* clear PCI status, if any */
 	pci_read_config_word (pdev,PCI_STATUS, &tmp16);
 	pci_write_config_word (pdev, PCI_STATUS,tmp16);
-
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &chip_rev);
 
 	if (!request_region(pci_resource_start(pdev, 0), 128, "xircom_cb")) {
 		printk(KERN_ERR "xircom_probe: failed to allocate io-region\n");
@@ -286,7 +283,7 @@ static int __devinit xircom_probe(struct pci_dev *pdev, const struct pci_device_
 		goto reg_fail;
 	}
 
-	printk(KERN_INFO "%s: Xircom cardbus revision %i at irq %i \n", dev->name, chip_rev, pdev->irq);
+	printk(KERN_INFO "%s: Xircom cardbus revision %i at irq %i \n", dev->name, pdev->revision, pdev->irq);
 	/* start the transmitter to get a heartbeat */
 	/* TODO: send 2 dummy packets here */
 	transceiver_voodoo(private);
@@ -411,9 +408,9 @@ static int xircom_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			   sometimes sends more than you ask it to. */
 
 			memset(&card->tx_buffer[bufferoffsets[desc]/4],0,1536);
-			memcpy(&(card->tx_buffer[bufferoffsets[desc]/4]),skb->data,skb->len);
-
-
+			skb_copy_from_linear_data(skb,
+				  &(card->tx_buffer[bufferoffsets[desc] / 4]),
+						  skb->len);
 			/* FIXME: The specification tells us that the length we send HAS to be a multiple of
 			   4 bytes. */
 
@@ -1043,7 +1040,7 @@ static int enable_promisc(struct xircom_private *card)
 
 
 /*
-link_status() checks the the links status and will return 0 for no link, 10 for 10mbit link and 100 for.. guess what.
+link_status() checks the links status and will return 0 for no link, 10 for 10mbit link and 100 for.. guess what.
 
 Must be called in locked state with interrupts disabled
 */
@@ -1207,9 +1204,8 @@ static void investigate_read_descriptor(struct net_device *dev,struct xircom_pri
 				card->stats.rx_dropped++;
 				goto out;
 			}
-			skb->dev = dev;
 			skb_reserve(skb, 2);
-			eth_copy_and_sum(skb, (unsigned char*)&card->rx_buffer[bufferoffset / 4], pkt_len, 0);
+			skb_copy_to_linear_data(skb, (unsigned char*)&card->rx_buffer[bufferoffset / 4], pkt_len);
 			skb_put(skb, pkt_len);
 			skb->protocol = eth_type_trans(skb, dev);
 			netif_rx(skb);

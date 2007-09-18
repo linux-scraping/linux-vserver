@@ -150,7 +150,7 @@ xfs_growfs_rt_alloc(
 		error = xfs_bmap_finish(&tp, &flist, &committed);
 		if (error)
 			goto error_exit;
-		xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES, NULL);
+		xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES);
 		/*
 		 * Now we need to clear the allocated blocks.
 		 * Do this one block per transaction, to keep it simple.
@@ -187,7 +187,7 @@ xfs_growfs_rt_alloc(
 			/*
 			 * Commit the transaction.
 			 */
-			xfs_trans_commit(tp, 0, NULL);
+			xfs_trans_commit(tp, 0);
 		}
 		/*
 		 * Go on to the next extent, if any.
@@ -1882,11 +1882,13 @@ xfs_growfs_rt(
 	    (nrblocks = in->newblocks) <= sbp->sb_rblocks ||
 	    (sbp->sb_rblocks && (in->extsize != sbp->sb_rextsize)))
 		return XFS_ERROR(EINVAL);
+	if ((error = xfs_sb_validate_fsb_count(sbp, nrblocks)))
+		return error;
 	/*
 	 * Read in the last block of the device, make sure it exists.
 	 */
 	error = xfs_read_buf(mp, mp->m_rtdev_targp,
-			XFS_FSB_TO_BB(mp, in->newblocks - 1),
+			XFS_FSB_TO_BB(mp, nrblocks - 1),
 			XFS_FSB_TO_BB(mp, 1), 0, &bp);
 	if (error)
 		return error;
@@ -2042,7 +2044,7 @@ xfs_growfs_rt(
 		/*
 		 * Commit the transaction.
 		 */
-		xfs_trans_commit(tp, 0, NULL);
+		xfs_trans_commit(tp, 0);
 	}
 
 	if (error)

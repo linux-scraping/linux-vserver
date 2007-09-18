@@ -431,9 +431,8 @@ do_probe( struct i2c_adapter *adapter, int addr, int kind )
 				     | I2C_FUNC_SMBUS_WRITE_BYTE) )
 		return 0;
 
-	if( !(cl=kmalloc(sizeof(*cl), GFP_KERNEL)) )
+	if( !(cl=kzalloc(sizeof(*cl), GFP_KERNEL)) )
 		return -ENOMEM;
-	memset( cl, 0, sizeof(struct i2c_client) );
 
 	cl->addr = addr;
 	cl->adapter = adapter;
@@ -459,7 +458,8 @@ therm_of_probe( struct of_device *dev, const struct of_device_id *match )
 static int
 therm_of_remove( struct of_device *dev )
 {
-	return i2c_del_driver( &g4fan_driver );
+	i2c_del_driver( &g4fan_driver );
+	return 0;
 }
 
 static struct of_device_id therm_of_match[] = {{
@@ -492,7 +492,7 @@ g4fan_init( void )
 
 	if( !(np=of_find_node_by_name(NULL, "power-mgt")) )
 		return -ENODEV;
-	info = get_property(np, "thermal-info", NULL);
+	info = of_get_property(np, "thermal-info", NULL);
 	of_node_put(np);
 
 	if( !info || !machine_is_compatible("PowerMac3,6") )

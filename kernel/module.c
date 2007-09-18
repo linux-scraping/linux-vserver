@@ -19,6 +19,7 @@
 #include <linux/module.h>
 #include <linux/moduleloader.h>
 #include <linux/init.h>
+#include <linux/kallsyms.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -45,6 +46,8 @@
 #include <asm/cacheflush.h>
 #include <linux/license.h>
 
+extern int module_sysfs_initialized;
+
 #if 0
 #define DEBUGP printk
 #else
@@ -58,10 +61,8 @@
 /* If this is set, the section belongs in the init part of the module */
 #define INIT_OFFSET_MASK (1UL << (BITS_PER_LONG-1))
 
-/* Protects module list */
-static DEFINE_SPINLOCK(modlist_lock);
-
-/* List of modules, protected by module_mutex AND modlist_lock */
+/* List of modules, protected by module_mutex or preempt_disable
+ * (add/delete uses stop_machine). */
 static DEFINE_MUTEX(module_mutex);
 static LIST_HEAD(modules);
 
@@ -93,9 +94,9 @@ static inline void add_taint_module(struct module *mod, unsigned flag)
 	mod->taints |= flag;
 }
 
-/* A thread that wants to hold a reference to a module only while it
- * is running can call ths to safely exit.
- * nfsd and lockd use this.
+/*
+ * A thread that wants to hold a reference to a module only while it
+ * is running can call this to safely exit.  nfsd and lockd use this.
  */
 void __module_put_and_exit(struct module *mod, long code)
 {
@@ -308,14 +309,14 @@ static int split_block(unsigned int i, unsigned short size)
 {
 	/* Reallocation required? */
 	if (pcpu_num_used + 1 > pcpu_num_allocated) {
-		int *new = kmalloc(sizeof(new[0]) * pcpu_num_allocated*2,
-				   GFP_KERNEL);
+		int *new;
+
+		new = krealloc(pcpu_size, sizeof(new[0])*pcpu_num_allocated*2,
+			       GFP_KERNEL);
 		if (!new)
 			return 0;
 
-		memcpy(new, pcpu_size, sizeof(new[0])*pcpu_num_allocated);
 		pcpu_num_allocated *= 2;
-		kfree(pcpu_size);
 		pcpu_size = new;
 	}
 
@@ -346,10 +347,10 @@ static void *percpu_modalloc(unsigned long size, unsigned long align,
 	unsigned int i;
 	void *ptr;
 
-	if (align > SMP_CACHE_BYTES) {
-		printk(KERN_WARNING "%s: per-cpu alignment %li > %i\n",
-		       name, align, SMP_CACHE_BYTES);
-		align = SMP_CACHE_BYTES;
+	if (align > PAGE_SIZE) {
+		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
+		       name, align, PAGE_SIZE);
+		align = PAGE_SIZE;
 	}
 
 	ptr = __per_cpu_start;
@@ -430,7 +431,7 @@ static int percpu_modinit(void)
 	pcpu_size = kmalloc(sizeof(pcpu_size[0]) * pcpu_num_allocated,
 			    GFP_KERNEL);
 	/* Static in-kernel percpu data (used). */
-	pcpu_size[0] = -ALIGN(__per_cpu_end-__per_cpu_start, SMP_CACHE_BYTES);
+	pcpu_size[0] = -(__per_cpu_end-__per_cpu_start);
 	/* Free room. */
 	pcpu_size[1] = PERCPU_ENOUGH_ROOM + pcpu_size[0];
 	if (pcpu_size[1] < 0) {
@@ -485,8 +486,7 @@ static void free_modinfo_##field(struct module *mod)                  \
         mod->field = NULL;                                            \
 }                                                                     \
 static struct module_attribute modinfo_##field = {                    \
-	.attr = { .name = __stringify(field), .mode = 0444,           \
-		  .owner = THIS_MODULE },                             \
+	.attr = { .name = __stringify(field), .mode = 0444 },         \
 	.show = show_modinfo_##field,                                 \
 	.setup = setup_modinfo_##field,                               \
 	.test = modinfo_##field##_exists,                             \
@@ -758,14 +758,13 @@ static void print_unload_info(struct seq_file *m, struct module *mod)
 void __symbol_put(const char *symbol)
 {
 	struct module *owner;
-	unsigned long flags;
 	const unsigned long *crc;
 
-	spin_lock_irqsave(&modlist_lock, flags);
+	preempt_disable();
 	if (!__find_symbol(symbol, &owner, &crc, 1))
 		BUG();
 	module_put(owner);
-	spin_unlock_irqrestore(&modlist_lock, flags);
+	preempt_enable();
 }
 EXPORT_SYMBOL(__symbol_put);
 
@@ -785,12 +784,11 @@ EXPORT_SYMBOL_GPL(symbol_put_addr);
 static ssize_t show_refcnt(struct module_attribute *mattr,
 			   struct module *mod, char *buffer)
 {
-	/* sysfs holds a reference */
-	return sprintf(buffer, "%u\n", module_refcount(mod)-1);
+	return sprintf(buffer, "%u\n", module_refcount(mod));
 }
 
 static struct module_attribute refcnt = {
-	.attr = { .name = "refcnt", .mode = 0444, .owner = THIS_MODULE },
+	.attr = { .name = "refcnt", .mode = 0444 },
 	.show = show_refcnt,
 };
 
@@ -848,7 +846,7 @@ static ssize_t show_initstate(struct module_attribute *mattr,
 }
 
 static struct module_attribute initstate = {
-	.attr = { .name = "initstate", .mode = 0444, .owner = THIS_MODULE },
+	.attr = { .name = "initstate", .mode = 0444 },
 	.show = show_initstate,
 };
 
@@ -1029,7 +1027,6 @@ static void add_sect_attrs(struct module *mod, unsigned int nsect,
 		sattr->mattr.show = module_sect_show;
 		sattr->mattr.store = NULL;
 		sattr->mattr.attr.name = sattr->name;
-		sattr->mattr.attr.owner = mod;
 		sattr->mattr.attr.mode = S_IRUGO;
 		*(gattr++) = &(sattr++)->mattr.attr;
 	}
@@ -1087,7 +1084,6 @@ int module_add_modinfo_attrs(struct module *mod)
 		if (!attr->test ||
 		    (attr->test && attr->test(mod))) {
 			memcpy(temp_attr, attr, sizeof(*temp_attr));
-			temp_attr->attr.owner = mod;
 			error = sysfs_create_file(&mod->mkobj.kobj,&temp_attr->attr);
 			++temp_attr;
 		}
@@ -1117,8 +1113,8 @@ int mod_sysfs_init(struct module *mod)
 {
 	int err;
 
-	if (!module_subsys.kset.subsys) {
-		printk(KERN_ERR "%s: module_subsys not initialized\n",
+	if (!module_sysfs_initialized) {
+		printk(KERN_ERR "%s: module sysfs not initialized\n",
 		       mod->name);
 		err = -EINVAL;
 		goto out;
@@ -1148,8 +1144,10 @@ int mod_sysfs_setup(struct module *mod,
 		goto out;
 
 	mod->holders_dir = kobject_add_dir(&mod->mkobj.kobj, "holders");
-	if (!mod->holders_dir)
+	if (!mod->holders_dir) {
+		err = -ENOMEM;
 		goto out_unreg;
+	}
 
 	err = module_param_sysfs_setup(mod, kparam, num_params);
 	if (err)
@@ -1194,7 +1192,7 @@ static int __unlink_module(void *_mod)
 	return 0;
 }
 
-/* Free a module, remove from lists, etc (must hold module mutex). */
+/* Free a module, remove from lists, etc (must hold module_mutex). */
 static void free_module(struct module *mod)
 {
 	/* Delete from various lists */
@@ -1226,14 +1224,14 @@ static void free_module(struct module *mod)
 void *__symbol_get(const char *symbol)
 {
 	struct module *owner;
-	unsigned long value, flags;
+	unsigned long value;
 	const unsigned long *crc;
 
-	spin_lock_irqsave(&modlist_lock, flags);
+	preempt_disable();
 	value = __find_symbol(symbol, &owner, &crc, 1);
 	if (value && !strong_try_module_get(owner))
 		value = 0;
-	spin_unlock_irqrestore(&modlist_lock, flags);
+	preempt_enable();
 
 	return (void *)value;
 }
@@ -1241,7 +1239,7 @@ EXPORT_SYMBOL_GPL(__symbol_get);
 
 /*
  * Ensure that an exported symbol [global namespace] does not already exist
- * in the Kernel or in some other modules exported symbol table.
+ * in the kernel or in some other module's exported symbol table.
  */
 static int verify_export_symbols(struct module *mod)
 {
@@ -1467,7 +1465,7 @@ static void setup_modinfo(struct module *mod, Elf_Shdr *sechdrs,
 }
 
 #ifdef CONFIG_KALLSYMS
-int is_exported(const char *name, const struct module *mod)
+static int is_exported(const char *name, const struct module *mod)
 {
 	if (!mod && lookup_symbol(name, __start___ksymtab, __stop___ksymtab))
 		return 1;
@@ -2093,8 +2091,10 @@ static const char *get_ksymbol(struct module *mod,
 	if (!best)
 		return NULL;
 
-	*size = nextval - mod->symtab[best].st_value;
-	*offset = addr - mod->symtab[best].st_value;
+	if (size)
+		*size = nextval - mod->symtab[best].st_value;
+	if (offset)
+		*offset = addr - mod->symtab[best].st_value;
 	return mod->strtab + mod->symtab[best].st_name;
 }
 
@@ -2119,8 +2119,58 @@ const char *module_address_lookup(unsigned long addr,
 	return NULL;
 }
 
-struct module *module_get_kallsym(unsigned int symnum, unsigned long *value,
-				char *type, char *name, size_t namelen)
+int lookup_module_symbol_name(unsigned long addr, char *symname)
+{
+	struct module *mod;
+
+	mutex_lock(&module_mutex);
+	list_for_each_entry(mod, &modules, list) {
+		if (within(addr, mod->module_init, mod->init_size) ||
+		    within(addr, mod->module_core, mod->core_size)) {
+			const char *sym;
+
+			sym = get_ksymbol(mod, addr, NULL, NULL);
+			if (!sym)
+				goto out;
+			strlcpy(symname, sym, KSYM_NAME_LEN);
+			mutex_unlock(&module_mutex);
+			return 0;
+		}
+	}
+out:
+	mutex_unlock(&module_mutex);
+	return -ERANGE;
+}
+
+int lookup_module_symbol_attrs(unsigned long addr, unsigned long *size,
+			unsigned long *offset, char *modname, char *name)
+{
+	struct module *mod;
+
+	mutex_lock(&module_mutex);
+	list_for_each_entry(mod, &modules, list) {
+		if (within(addr, mod->module_init, mod->init_size) ||
+		    within(addr, mod->module_core, mod->core_size)) {
+			const char *sym;
+
+			sym = get_ksymbol(mod, addr, size, offset);
+			if (!sym)
+				goto out;
+			if (modname)
+				strlcpy(modname, mod->name, MODULE_NAME_LEN);
+			if (name)
+				strlcpy(name, sym, KSYM_NAME_LEN);
+			mutex_unlock(&module_mutex);
+			return 0;
+		}
+	}
+out:
+	mutex_unlock(&module_mutex);
+	return -ERANGE;
+}
+
+int module_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
+			char *name, char *module_name, int *exported)
 {
 	struct module *mod;
 
@@ -2130,14 +2180,16 @@ struct module *module_get_kallsym(unsigned int symnum, unsigned long *value,
 			*value = mod->symtab[symnum].st_value;
 			*type = mod->symtab[symnum].st_info;
 			strlcpy(name, mod->strtab + mod->symtab[symnum].st_name,
-				namelen);
+				KSYM_NAME_LEN);
+			strlcpy(module_name, mod->name, MODULE_NAME_LEN);
+			*exported = is_exported(name, mod);
 			mutex_unlock(&module_mutex);
-			return mod;
+			return 0;
 		}
 		symnum -= mod->num_symtab;
 	}
 	mutex_unlock(&module_mutex);
-	return NULL;
+	return -ERANGE;
 }
 
 static unsigned long mod_find_symname(struct module *mod, const char *name)
@@ -2176,26 +2228,13 @@ unsigned long module_kallsyms_lookup_name(const char *name)
 /* Called by the /proc file system to return a list of modules. */
 static void *m_start(struct seq_file *m, loff_t *pos)
 {
-	struct list_head *i;
-	loff_t n = 0;
-
 	mutex_lock(&module_mutex);
-	list_for_each(i, &modules) {
-		if (n++ == *pos)
-			break;
-	}
-	if (i == &modules)
-		return NULL;
-	return i;
+	return seq_list_start(&modules, *pos);
 }
 
 static void *m_next(struct seq_file *m, void *p, loff_t *pos)
 {
-	struct list_head *i = p;
-	(*pos)++;
-	if (i->next == &modules)
-		return NULL;
-	return i->next;
+	return seq_list_next(p, &modules, pos);
 }
 
 static void m_stop(struct seq_file *m, void *p)
@@ -2265,11 +2304,10 @@ const struct seq_operations modules_op = {
 /* Given an address, look for it in the module exception tables. */
 const struct exception_table_entry *search_module_extables(unsigned long addr)
 {
-	unsigned long flags;
 	const struct exception_table_entry *e = NULL;
 	struct module *mod;
 
-	spin_lock_irqsave(&modlist_lock, flags);
+	preempt_disable();
 	list_for_each_entry(mod, &modules, list) {
 		if (mod->num_exentries == 0)
 			continue;
@@ -2280,7 +2318,7 @@ const struct exception_table_entry *search_module_extables(unsigned long addr)
 		if (e)
 			break;
 	}
-	spin_unlock_irqrestore(&modlist_lock, flags);
+	preempt_enable();
 
 	/* Now, if we found one, we are running inside it now, hence
            we cannot unload the module, hence no refcnt needed. */
@@ -2292,25 +2330,24 @@ const struct exception_table_entry *search_module_extables(unsigned long addr)
  */
 int is_module_address(unsigned long addr)
 {
-	unsigned long flags;
 	struct module *mod;
 
-	spin_lock_irqsave(&modlist_lock, flags);
+	preempt_disable();
 
 	list_for_each_entry(mod, &modules, list) {
 		if (within(addr, mod->module_core, mod->core_size)) {
-			spin_unlock_irqrestore(&modlist_lock, flags);
+			preempt_enable();
 			return 1;
 		}
 	}
 
-	spin_unlock_irqrestore(&modlist_lock, flags);
+	preempt_enable();
 
 	return 0;
 }
 
 
-/* Is this a valid kernel address?  We don't grab the lock: we are oopsing. */
+/* Is this a valid kernel address? */
 struct module *__module_text_address(unsigned long addr)
 {
 	struct module *mod;
@@ -2325,11 +2362,10 @@ struct module *__module_text_address(unsigned long addr)
 struct module *module_text_address(unsigned long addr)
 {
 	struct module *mod;
-	unsigned long flags;
 
-	spin_lock_irqsave(&modlist_lock, flags);
+	preempt_disable();
 	mod = __module_text_address(addr);
-	spin_unlock_irqrestore(&modlist_lock, flags);
+	preempt_enable();
 
 	return mod;
 }
@@ -2383,7 +2419,7 @@ void module_add_driver(struct module *mod, struct device_driver *drv)
 		struct kobject *mkobj;
 
 		/* Lookup built-in module entry in /sys/modules */
-		mkobj = kset_find_obj(&module_subsys.kset, drv->mod_name);
+		mkobj = kset_find_obj(&module_subsys, drv->mod_name);
 		if (mkobj) {
 			mk = container_of(mkobj, struct module_kobject, kobj);
 			/* remember our module structure */

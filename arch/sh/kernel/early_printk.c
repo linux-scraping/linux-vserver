@@ -76,7 +76,7 @@ static void scif_sercon_putc(int c)
 	sci_in(&scif_port, SCxSR);
 	sci_out(&scif_port, SCxSR, 0xf3 & ~(0x20 | 0x40));
 
-	while ((sci_in(&scif_port, SCxSR) & 0x40) == 0);
+	while ((sci_in(&scif_port, SCxSR) & 0x40) == 0)
 		;
 
 	if (c == '\n')
@@ -192,20 +192,14 @@ int __init setup_early_printk(char *buf)
 	}
 #endif
 
-	if (likely(early_console))
+	if (likely(early_console)) {
+		if (keep_early)
+			early_console->flags &= ~CON_BOOT;
+		else
+			early_console->flags |= CON_BOOT;
 		register_console(early_console);
+	}
 
 	return 0;
 }
 early_param("earlyprintk", setup_early_printk);
-
-void __init disable_early_printk(void)
-{
-	if (!early_console_initialized || !early_console)
-		return;
-	if (!keep_early) {
-		printk("disabling early console\n");
-		unregister_console(early_console);
-	} else
-		printk("keeping early console\n");
-}

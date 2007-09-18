@@ -29,7 +29,7 @@ CROSS32CC	:= $(CC) -m32
 CROSS32AS	:= $(AS) -a32
 CROSS32LD	:= $(LD) -m elf32ppc
 CROSS32OBJCOPY	:= $(OBJCOPY)
-CROSS32AR	:= $(AR)
+CROSS32AR	:= GNUTARGET=elf32-powerpc $(AR)
 endif
 endif
 
@@ -58,6 +58,7 @@ ifeq ($(HAS_BIARCH),y)
 override AS	+= -a$(SZ)
 override LD	+= -m elf$(SZ)ppc
 override CC	+= -m$(SZ)
+override AR	:= GNUTARGET=elf$(SZ)-powerpc $(AR)
 endif
 
 LDFLAGS_vmlinux	:= -Bstatic
@@ -102,9 +103,9 @@ CFLAGS += $(call cc-option,-mno-altivec)
 # kernel considerably.
 CFLAGS += $(call cc-option,-funit-at-a-time)
 
-ifndef CONFIG_FSL_BOOKE
-CFLAGS		+= -mstring
-endif
+# Never use string load/store instructions as they are
+# often slow when they are implemented at all
+CFLAGS		+= -mno-string
 
 ifeq ($(CONFIG_6xx),y)
 CFLAGS		+= -mcpu=powerpc
@@ -141,7 +142,6 @@ drivers-$(CONFIG_OPROFILE)	+= arch/powerpc/oprofile/
 
 # Default to zImage, override when needed
 defaultimage-y			:= zImage
-defaultimage-$(CONFIG_PPC_ISERIES) := vmlinux
 defaultimage-$(CONFIG_DEFAULT_UIMAGE) := uImage
 KBUILD_IMAGE := $(defaultimage-y)
 all: $(KBUILD_IMAGE)
@@ -165,6 +165,9 @@ define archhelp
   @echo '                    install to $$(INSTALL_PATH) and run lilo'
   @echo '  *_defconfig     - Select default config from arch/$(ARCH)/configs'
 endef
+
+install:
+	$(Q)$(MAKE) $(build)=$(boot) BOOTIMAGE=$(KBUILD_IMAGE) install
 
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
@@ -197,6 +200,14 @@ checkbin:
 			echo '*** Please upgrade your binutils or downgrade your gcc'; \
 			false; \
 		fi ; \
+	fi
+	@if test "$(call cc-fullversion)" = "040200" \
+	    && test "x${CONFIG_MODULES}${CONFIG_PPC64}" = "xyy" ; then \
+		echo -n '*** GCC-4.2.0 cannot compile the 64-bit powerpc ' ; \
+		echo 'kernel with modules enabled.' ; \
+		echo -n '*** Please use a different GCC version or ' ; \
+		echo 'disable kernel modules' ; \
+		false ; \
 	fi
 	@if ! /bin/echo dssall | $(AS) -many -o $(TOUT) >/dev/null 2>&1 ; then \
 		echo -n '*** ${VERSION}.${PATCHLEVEL} kernels no longer build ' ; \

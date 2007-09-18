@@ -31,7 +31,6 @@
 #include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/errno.h>
-#include <linux/smp_lock.h>
 #include <linux/usb.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
@@ -49,12 +48,13 @@ const char *usbcore_name = "usbcore";
 
 static int nousb;	/* Disable USB when built into kernel image */
 
-struct workqueue_struct *ksuspend_usb_wq;	/* For autosuspend */
+/* Workqueue for autosuspend and for remote wakeup of root hubs */
+struct workqueue_struct *ksuspend_usb_wq;
 
 #ifdef	CONFIG_USB_SUSPEND
 static int usb_autosuspend_delay = 2;		/* Default delay value,
 						 * in seconds */
-module_param_named(autosuspend, usb_autosuspend_delay, uint, 0644);
+module_param_named(autosuspend, usb_autosuspend_delay, int, 0644);
 MODULE_PARM_DESC(autosuspend, "default autosuspend delay");
 
 #else
@@ -184,10 +184,6 @@ static void usb_release_dev(struct device *dev)
 
 	udev = to_usb_device(dev);
 
-#ifdef	CONFIG_USB_SUSPEND
-	cancel_delayed_work(&udev->autosuspend);
-	flush_workqueue(ksuspend_usb_wq);
-#endif
 	usb_destroy_configuration(udev);
 	usb_put_hcd(bus_to_hcd(udev->bus));
 	kfree(udev->product);
@@ -196,11 +192,20 @@ static void usb_release_dev(struct device *dev)
 	kfree(udev);
 }
 
+struct device_type usb_device_type = {
+	.name =		"usb_device",
+	.release =	usb_release_dev,
+};
+
 #ifdef	CONFIG_PM
 
 static int ksuspend_usb_init(void)
 {
-	ksuspend_usb_wq = create_singlethread_workqueue("ksuspend_usbd");
+	/* This workqueue is supposed to be both freezable and
+	 * singlethreaded.  Its job doesn't justify running on more
+	 * than one CPU.
+	 */
+	ksuspend_usb_wq = create_freezeable_workqueue("ksuspend_usbd");
 	if (!ksuspend_usb_wq)
 		return -ENOMEM;
 	return 0;
@@ -210,27 +215,6 @@ static void ksuspend_usb_cleanup(void)
 {
 	destroy_workqueue(ksuspend_usb_wq);
 }
-
-#ifdef	CONFIG_USB_SUSPEND
-
-/* usb_autosuspend_work - callback routine to autosuspend a USB device */
-static void usb_autosuspend_work(struct work_struct *work)
-{
-	struct usb_device *udev =
-		container_of(work, struct usb_device, autosuspend.work);
-
-	usb_pm_lock(udev);
-	udev->auto_pm = 1;
-	usb_suspend_both(udev, PMSG_SUSPEND);
-	usb_pm_unlock(udev);
-}
-
-#else
-
-static void usb_autosuspend_work(struct work_struct *work)
-{}
-
-#endif	/* CONFIG_USB_SUSPEND */
 
 #else
 
@@ -267,12 +251,10 @@ usb_alloc_dev(struct usb_device *parent, struct usb_bus *bus, unsigned port1)
 
 	device_initialize(&dev->dev);
 	dev->dev.bus = &usb_bus_type;
+	dev->dev.type = &usb_device_type;
 	dev->dev.dma_mask = bus->controller->dma_mask;
-	dev->dev.release = usb_release_dev;
+	set_dev_node(&dev->dev, dev_to_node(bus->controller));
 	dev->state = USB_STATE_ATTACHED;
-
-	/* This magic assignment distinguishes devices from interfaces */
-	dev->dev.platform_data = &usb_generic_driver;
 
 	INIT_LIST_HEAD(&dev->ep0.urb_list);
 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
@@ -597,11 +579,12 @@ int __usb_get_extra_descriptor(char *buffer, unsigned size,
  * address (through the pointer provided).
  *
  * These buffers are used with URB_NO_xxx_DMA_MAP set in urb->transfer_flags
- * to avoid behaviors like using "DMA bounce buffers", or tying down I/O
- * mapping hardware for long idle periods.  The implementation varies between
+ * to avoid behaviors like using "DMA bounce buffers", or thrashing IOMMU
+ * hardware during URB completion/resubmit.  The implementation varies between
  * platforms, depending on details of how DMA will work to this device.
- * Using these buffers also helps prevent cacheline sharing problems on
- * architectures where CPU caches are not DMA-coherent.
+ * Using these buffers also eliminates cacheline sharing problems on
+ * architectures where CPU caches are not DMA-coherent.  On systems without
+ * bus-snooping caches, these buffers are uncached.
  *
  * When the buffer is no longer used, free it with usb_buffer_free().
  */
@@ -626,7 +609,7 @@ void *usb_buffer_alloc(
  *
  * This reclaims an I/O buffer, letting it be reused.  The memory must have
  * been allocated using usb_buffer_alloc(), and the parameters must match
- * those provided in that allocation request. 
+ * those provided in that allocation request.
  */
 void usb_buffer_free(
 	struct usb_device *dev,
@@ -902,9 +885,9 @@ static int __init usb_init(void)
 	retval = usb_register(&usbfs_driver);
 	if (retval)
 		goto driver_register_failed;
-	retval = usbdev_init();
+	retval = usb_devio_init();
 	if (retval)
-		goto usbdevice_init_failed;
+		goto usb_devio_init_failed;
 	retval = usbfs_init();
 	if (retval)
 		goto fs_init_failed;
@@ -919,8 +902,8 @@ static int __init usb_init(void)
 hub_init_failed:
 	usbfs_cleanup();
 fs_init_failed:
-	usbdev_cleanup();
-usbdevice_init_failed:
+	usb_devio_cleanup();
+usb_devio_init_failed:
 	usb_deregister(&usbfs_driver);
 driver_register_failed:
 	usb_major_cleanup();
@@ -947,7 +930,7 @@ static void __exit usb_exit(void)
 	usb_major_cleanup();
 	usbfs_cleanup();
 	usb_deregister(&usbfs_driver);
-	usbdev_cleanup();
+	usb_devio_cleanup();
 	usb_hub_cleanup();
 	usb_host_cleanup();
 	bus_unregister(&usb_bus_type);

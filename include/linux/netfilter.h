@@ -275,14 +275,12 @@ struct nf_queue_handler {
 };
 extern int nf_register_queue_handler(int pf, 
                                      struct nf_queue_handler *qh);
-extern int nf_unregister_queue_handler(int pf);
+extern int nf_unregister_queue_handler(int pf,
+				       struct nf_queue_handler *qh);
 extern void nf_unregister_queue_handlers(struct nf_queue_handler *qh);
 extern void nf_reinject(struct sk_buff *skb,
 			struct nf_info *info,
 			unsigned int verdict);
-
-extern void (*ip_ct_attach)(struct sk_buff *, struct sk_buff *);
-extern void nf_ct_attach(struct sk_buff *, struct sk_buff *);
 
 /* FIXME: Before cache is ever used, this must be implemented for real. */
 extern void nf_invalidate_cache(int pf);
@@ -388,11 +386,18 @@ static inline int nf_hook(int pf, unsigned int hook, struct sk_buff **pskb,
 {
 	return 1;
 }
-static inline void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb) {}
 struct flowi;
 static inline void
 nf_nat_decode_session(struct sk_buff *skb, struct flowi *fl, int family) {}
 #endif /*CONFIG_NETFILTER*/
+
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+extern void (*ip_ct_attach)(struct sk_buff *, struct sk_buff *);
+extern void nf_ct_attach(struct sk_buff *, struct sk_buff *);
+extern void (*nf_ct_destroy)(struct nf_conntrack *);
+#else
+static inline void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb) {}
+#endif
 
 #endif /*__KERNEL__*/
 #endif /*__LINUX_NETFILTER_H*/

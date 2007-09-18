@@ -814,7 +814,6 @@ static void _sc92031_rx_tasklet(struct net_device *dev)
 			memcpy(skb_put(skb, pkt_size), rx_ring + rx_ring_offset, pkt_size);
 		}
 
-		skb->dev = dev;
 		skb->protocol = eth_type_trans(skb, dev);
 		dev->last_rx = jiffies;
 		netif_rx(skb);
@@ -1403,7 +1402,6 @@ static struct ethtool_ops sc92031_ethtool_ops = {
 	.get_strings		= sc92031_ethtool_get_strings,
 	.get_stats_count	= sc92031_ethtool_get_stats_count,
 	.get_ethtool_stats	= sc92031_ethtool_get_ethtool_stats,
-	.get_perm_addr		= ethtool_op_get_perm_addr,
 	.get_ufo		= ethtool_op_get_ufo,
 };
 

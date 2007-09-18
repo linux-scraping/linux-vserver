@@ -29,8 +29,7 @@ struct brport_attribute {
 #define BRPORT_ATTR(_name,_mode,_show,_store)		        \
 struct brport_attribute brport_attr_##_name = { 	        \
 	.attr = {.name = __stringify(_name), 			\
-		 .mode = _mode, 				\
-		 .owner = THIS_MODULE, },			\
+		 .mode = _mode },				\
 	.show	= _show,					\
 	.store	= _store,					\
 };
@@ -137,6 +136,13 @@ static ssize_t show_hold_timer(struct net_bridge_port *p,
 }
 static BRPORT_ATTR(hold_timer, S_IRUGO, show_hold_timer, NULL);
 
+static ssize_t store_flush(struct net_bridge_port *p, unsigned long v)
+{
+	br_fdb_delete_by_port(p->br, p, 0); // Don't delete local entry
+	return 0;
+}
+static BRPORT_ATTR(flush, S_IWUSR, NULL, store_flush);
+
 static struct brport_attribute *brport_attrs[] = {
 	&brport_attr_path_cost,
 	&brport_attr_priority,
@@ -152,6 +158,7 @@ static struct brport_attribute *brport_attrs[] = {
 	&brport_attr_message_age_timer,
 	&brport_attr_forward_delay_timer,
 	&brport_attr_hold_timer,
+	&brport_attr_flush,
 	NULL
 };
 

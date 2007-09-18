@@ -7,7 +7,7 @@
 #define VCMD_task_xid		VC_CMD(VINFO, 1, 0)
 
 #ifdef	__KERNEL__
-extern int vc_task_xid(uint32_t, void __user *);
+extern int vc_task_xid(uint32_t);
 
 #endif	/* __KERNEL__ */
 
@@ -79,15 +79,6 @@ extern int vc_set_cflags(struct vx_info *, void __user *);
 
 /* context caps commands */
 
-#define VCMD_get_ccaps_v0	VC_CMD(FLAGS, 3, 0)
-#define VCMD_set_ccaps_v0	VC_CMD(FLAGS, 4, 0)
-
-struct	vcmd_ctx_caps_v0 {
-	uint64_t bcaps;
-	uint64_t ccaps;
-	uint64_t cmask;
-};
-
 #define VCMD_get_ccaps		VC_CMD(FLAGS, 3, 1)
 #define VCMD_set_ccaps		VC_CMD(FLAGS, 4, 1)
 
@@ -97,8 +88,6 @@ struct	vcmd_ctx_caps_v1 {
 };
 
 #ifdef	__KERNEL__
-extern int vc_get_ccaps_v0(struct vx_info *, void __user *);
-extern int vc_set_ccaps_v0(struct vx_info *, void __user *);
 extern int vc_get_ccaps(struct vx_info *, void __user *);
 extern int vc_set_ccaps(struct vx_info *, void __user *);
 
@@ -118,6 +107,22 @@ struct	vcmd_bcaps {
 #ifdef	__KERNEL__
 extern int vc_get_bcaps(struct vx_info *, void __user *);
 extern int vc_set_bcaps(struct vx_info *, void __user *);
+
+#endif	/* __KERNEL__ */
+
+
+/* OOM badness */
+
+#define VCMD_get_badness	VC_CMD(MEMCTRL, 5, 0)
+#define VCMD_set_badness	VC_CMD(MEMCTRL, 6, 0)
+
+struct	vcmd_badness_v0 {
+	int64_t bias;
+};
+
+#ifdef	__KERNEL__
+extern int vc_get_badness(struct vx_info *, void __user *);
+extern int vc_set_badness(struct vx_info *, void __user *);
 
 #endif	/* __KERNEL__ */
 #endif	/* _VX_CONTEXT_CMD_H */

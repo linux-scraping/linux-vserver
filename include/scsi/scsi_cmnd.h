@@ -73,9 +73,6 @@ struct scsi_cmnd {
 	unsigned short use_sg;	/* Number of pieces of scatter-gather */
 	unsigned short sglist_len;	/* size of malloc'd scatter-gather list */
 
-	/* offset in cmd we are at (for multi-transfer tgt cmds) */
-	unsigned offset;
-
 	unsigned underflow;	/* Return error if less than
 				   this amount is transferred */
 
@@ -137,5 +134,25 @@ extern void scsi_kunmap_atomic_sg(void *virt);
 
 extern struct scatterlist *scsi_alloc_sgtable(struct scsi_cmnd *, gfp_t);
 extern void scsi_free_sgtable(struct scatterlist *, int);
+
+extern int scsi_dma_map(struct scsi_cmnd *cmd);
+extern void scsi_dma_unmap(struct scsi_cmnd *cmd);
+
+#define scsi_sg_count(cmd) ((cmd)->use_sg)
+#define scsi_sglist(cmd) ((struct scatterlist *)(cmd)->request_buffer)
+#define scsi_bufflen(cmd) ((cmd)->request_bufflen)
+
+static inline void scsi_set_resid(struct scsi_cmnd *cmd, int resid)
+{
+	cmd->resid = resid;
+}
+
+static inline int scsi_get_resid(struct scsi_cmnd *cmd)
+{
+	return cmd->resid;
+}
+
+#define scsi_for_each_sg(cmd, sg, nseg, __i)			\
+	for (__i = 0, sg = scsi_sglist(cmd); __i < (nseg); __i++, (sg)++)
 
 #endif /* _SCSI_SCSI_CMND_H */

@@ -592,6 +592,7 @@ config ETRAX_IDE
 	select BLK_DEV_IDEDISK
 	select BLK_DEV_IDECD
 	select BLK_DEV_IDEDMA
+	select IDE_GENERIC
 	help
 	  Enables the ETRAX IDE driver.
 
@@ -603,7 +604,7 @@ config ETRAX_CARDBUS
         select HOTPLUG
         select PCCARD_NONSTATIC
         help
-	 Enabled the ETRAX Carbus driver.
+	 Enabled the ETRAX Cardbus driver.
 
 config PCI
        bool

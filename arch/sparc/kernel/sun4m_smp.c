@@ -9,7 +9,6 @@
 #include <linux/sched.h>
 #include <linux/threads.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
 #include <linux/init.h>
@@ -31,6 +30,8 @@
 #include <asm/pgtable.h>
 #include <asm/oplib.h>
 #include <asm/cpudata.h>
+
+#include "irq.h"
 
 #define IRQ_RESCHEDULE		13
 #define IRQ_STOP_CPU		14
@@ -405,7 +406,7 @@ void __init smp4m_blackbox_current(unsigned *addr)
 	
 	addr[0] = 0x81580000 | rd;		/* rd %tbr, reg */
 	addr[2] = 0x8130200a | rd | rs1;    	/* srl reg, 0xa, reg */
-	addr[4] = 0x8008200c | rd | rs1;	/* and reg, 3, reg */
+	addr[4] = 0x8008200c | rd | rs1;	/* and reg, 0xc, reg */
 }
 
 void __init sun4m_init_smp(void)

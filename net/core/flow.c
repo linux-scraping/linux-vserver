@@ -338,7 +338,7 @@ static int flow_cache_cpu(struct notifier_block *nfb,
 			  unsigned long action,
 			  void *hcpu)
 {
-	if (action == CPU_DEAD)
+	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN)
 		__flow_cache_shrink((unsigned long)hcpu, 0);
 	return NOTIFY_OK;
 }
@@ -350,7 +350,7 @@ static int __init flow_cache_init(void)
 	flow_cachep = kmem_cache_create("flow_cache",
 					sizeof(struct flow_cache_entry),
 					0, SLAB_HWCACHE_ALIGN|SLAB_PANIC,
-					NULL, NULL);
+					NULL);
 	flow_hash_shift = 10;
 	flow_lwm = 2 * flow_hash_size;
 	flow_hwm = 4 * flow_hash_size;

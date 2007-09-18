@@ -17,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/init.h>
+#include <linux/sysdev.h>
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
 
@@ -29,7 +30,7 @@
 #include <asm/irq.h>
 #include <asm/mach-types.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-lcd.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-clock.h>
@@ -37,7 +38,7 @@
 #include <asm/arch/h1940.h>
 #include <asm/arch/h1940-latch.h>
 #include <asm/arch/fb.h>
-#include <asm/arch/udc.h>
+#include <asm/plat-s3c24xx/udc.h>
 
 #include <asm/plat-s3c24xx/clock.h>
 #include <asm/plat-s3c24xx/devs.h>
@@ -129,7 +130,6 @@ static struct s3c2410_udc_mach_info h1940_udc_cfg __initdata = {
 };
 
 
-
 /**
  * Set lcd on or off
  **/
@@ -178,6 +178,11 @@ static struct platform_device s3c_device_leds = {
 	.id               = -1,
 };
 
+static struct platform_device s3c_device_bluetooth = {
+	.name             = "h1940-bt",
+	.id               = -1,
+};
+
 static struct platform_device *h1940_devices[] __initdata = {
 	&s3c_device_usb,
 	&s3c_device_lcd,
@@ -186,11 +191,7 @@ static struct platform_device *h1940_devices[] __initdata = {
 	&s3c_device_iis,
 	&s3c_device_usbgadget,
 	&s3c_device_leds,
-};
-
-static struct s3c24xx_board h1940_board __initdata = {
-	.devices       = h1940_devices,
-	.devices_count = ARRAY_SIZE(h1940_devices)
+	&s3c_device_bluetooth,
 };
 
 static void __init h1940_map_io(void)
@@ -198,7 +199,6 @@ static void __init h1940_map_io(void)
 	s3c24xx_init_io(h1940_iodesc, ARRAY_SIZE(h1940_iodesc));
 	s3c24xx_init_clocks(0);
 	s3c24xx_init_uarts(h1940_uartcfgs, ARRAY_SIZE(h1940_uartcfgs));
-	s3c24xx_set_board(&h1940_board);
 
 	/* setup PM */
 
@@ -232,6 +232,8 @@ static void __init h1940_init(void)
 	      | (0x02 << S3C2410_PLLCON_PDIVSHIFT)
 	      | (0x03 << S3C2410_PLLCON_SDIVSHIFT);
 	writel(tmp, S3C2410_UPLLCON);
+
+	platform_add_devices(h1940_devices, ARRAY_SIZE(h1940_devices));
 }
 
 MACHINE_START(H1940, "IPAQ-H1940")

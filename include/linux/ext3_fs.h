@@ -181,16 +181,8 @@ struct ext3_group_desc
 #define EXT3_IUNLINK_FL			0x08000000 /* Immutable unlink */
 #define EXT3_RESERVED_FL		0x80000000 /* reserved for ext3 lib */
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define EXT3_FL_USER_VISIBLE		0x0803DFFF /* User visible flags */
-#define EXT3_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
-#else
 #define EXT3_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
 #define EXT3_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-#define EXT3_IOC_SETTAG			FIOC_SETTAGJ
-#endif
 
 /*
  * Inode dynamic state flags
@@ -837,6 +829,7 @@ extern int ext3_change_inode_journal_flag(struct inode *, int);
 extern int ext3_get_inode_loc(struct inode *, struct ext3_iloc *);
 extern void ext3_truncate (struct inode *);
 extern void ext3_set_inode_flags(struct inode *);
+extern void ext3_get_inode_flags(struct ext3_inode_info *);
 extern void ext3_set_aops(struct inode *inode);
 
 /* ioctl.c */

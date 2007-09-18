@@ -100,8 +100,6 @@ struct iowarrior {
 /*--------------*/
 /*    globals   */
 /*--------------*/
-/* prevent races between open() and disconnect() */
-static DECLARE_MUTEX(disconnect_sem);
 
 /*
  *  USB spec identifies 5 second timeouts.
@@ -118,7 +116,7 @@ static int usb_get_report(struct usb_device *dev,
 			       USB_DIR_IN | USB_TYPE_CLASS |
 			       USB_RECIP_INTERFACE, (type << 8) + id,
 			       inter->desc.bInterfaceNumber, buf, size,
-			       GET_TIMEOUT);
+			       GET_TIMEOUT*HZ);
 }
 //#endif
 
@@ -133,7 +131,7 @@ static int usb_set_report(struct usb_interface *intf, unsigned char type,
 			       USB_TYPE_CLASS | USB_RECIP_INTERFACE,
 			       (type << 8) + id,
 			       intf->cur_altsetting->desc.bInterfaceNumber, buf,
-			       size, 1);
+			       size, HZ);
 }
 
 /*---------------------*/
@@ -160,9 +158,10 @@ static void iowarrior_callback(struct urb *urb)
 	int read_idx;
 	int aux_idx;
 	int offset;
-	int status;
+	int status = urb->status;
+	int retval;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -215,10 +214,10 @@ static void iowarrior_callback(struct urb *urb)
 	wake_up_interruptible(&dev->read_wait);
 
 exit:
-	status = usb_submit_urb(urb, GFP_ATOMIC);
-	if (status)
+	retval = usb_submit_urb(urb, GFP_ATOMIC);
+	if (retval)
 		dev_err(&dev->interface->dev, "%s - usb_submit_urb failed with result %d",
-			__FUNCTION__, status);
+			__FUNCTION__, retval);
 
 }
 
@@ -228,13 +227,15 @@ exit:
 static void iowarrior_write_callback(struct urb *urb)
 {
 	struct iowarrior *dev;
+	int status = urb->status;
+
 	dev = (struct iowarrior *)urb->context;
 	/* sync/async unlink faults aren't errors */
-	if (urb->status &&
-	    !(urb->status == -ENOENT ||
-	      urb->status == -ECONNRESET || urb->status == -ESHUTDOWN)) {
+	if (status &&
+	    !(status == -ENOENT ||
+	      status == -ECONNRESET || status == -ESHUTDOWN)) {
 		dbg("%s - nonzero write bulk status received: %d",
-		    __func__, urb->status);
+		    __func__, status);
 	}
 	/* free up our allocated buffer */
 	usb_buffer_free(urb->dev, urb->transfer_buffer_length,
@@ -417,14 +418,14 @@ static ssize_t iowarrior_write(struct file *file,
 		if (!int_out_urb) {
 			retval = -ENOMEM;
 			dbg("%s Unable to allocate urb ", __func__);
-			goto error;
+			goto error_no_urb;
 		}
 		buf = usb_buffer_alloc(dev->udev, dev->report_size,
 				       GFP_KERNEL, &int_out_urb->transfer_dma);
 		if (!buf) {
 			retval = -ENOMEM;
 			dbg("%s Unable to allocate buffer ", __func__);
-			goto error;
+			goto error_no_buffer;
 		}
 		usb_fill_int_urb(int_out_urb, dev->udev,
 				 usb_sndintpipe(dev->udev,
@@ -459,7 +460,9 @@ static ssize_t iowarrior_write(struct file *file,
 error:
 	usb_buffer_free(dev->udev, dev->report_size, buf,
 			int_out_urb->transfer_dma);
+error_no_buffer:
 	usb_free_urb(int_out_urb);
+error_no_urb:
 	atomic_dec(&dev->write_busy);
 	wake_up_interruptible(&dev->write_wait);
 exit:
@@ -493,8 +496,8 @@ static int iowarrior_ioctl(struct inode *inode, struct file *file,
 
 	/* verify that the device wasn't unplugged */
 	if (!dev->present) {
-		mutex_unlock(&dev->mutex);
-		return -ENODEV;
+		retval = -ENODEV;
+		goto error_out;
 	}
 
 	dbg("%s - minor %d, cmd 0x%.4x, arg %ld", __func__, dev->minor, cmd,
@@ -577,9 +580,10 @@ static int iowarrior_ioctl(struct inode *inode, struct file *file,
 		retval = -ENOTTY;
 		break;
 	}
-
+error_out:
 	/* unlock the device */
 	mutex_unlock(&dev->mutex);
+	kfree(buffer);
 	return retval;
 }
 
@@ -597,22 +601,18 @@ static int iowarrior_open(struct inode *inode, struct file *file)
 
 	subminor = iminor(inode);
 
-	/* prevent disconnects */
-	down(&disconnect_sem);
-
 	interface = usb_find_interface(&iowarrior_driver, subminor);
 	if (!interface) {
 		err("%s - error, can't find device for minor %d", __FUNCTION__,
 		    subminor);
-		retval = -ENODEV;
-		goto out;
+		return -ENODEV;
 	}
 
 	dev = usb_get_intfdata(interface);
-	if (!dev) {
-		retval = -ENODEV;
-		goto out;
-	}
+	if (!dev)
+		return -ENODEV;
+
+	mutex_lock(&dev->mutex);
 
 	/* Only one process can open each device, no sharing. */
 	if (dev->opened) {
@@ -633,7 +633,7 @@ static int iowarrior_open(struct inode *inode, struct file *file)
 	retval = 0;
 
 out:
-	up(&disconnect_sem);
+	mutex_unlock(&dev->mutex);
 	return retval;
 }
 
@@ -748,7 +748,6 @@ static int iowarrior_probe(struct usb_interface *interface,
 	struct usb_endpoint_descriptor *endpoint;
 	int i;
 	int retval = -ENOMEM;
-	int idele = 0;
 
 	/* allocate memory for our device state and intialize it */
 	dev = kzalloc(sizeof(struct iowarrior), GFP_KERNEL);
@@ -824,11 +823,10 @@ static int iowarrior_probe(struct usb_interface *interface,
 
 	/* Set the idle timeout to 0, if this is interface 0 */
 	if (dev->interface->cur_altsetting->desc.bInterfaceNumber == 0) {
-		idele = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
-					0x0A,
-					USB_TYPE_CLASS | USB_RECIP_INTERFACE, 0,
-					0, NULL, 0, USB_CTRL_SET_TIMEOUT);
-		dbg("idele = %d", idele);
+	    usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
+			    0x0A,
+			    USB_TYPE_CLASS | USB_RECIP_INTERFACE, 0,
+			    0, NULL, 0, USB_CTRL_SET_TIMEOUT);
 	}
 	/* allow device read and ioctl */
 	dev->present = 1;
@@ -867,18 +865,15 @@ static void iowarrior_disconnect(struct usb_interface *interface)
 	struct iowarrior *dev;
 	int minor;
 
-	/* prevent races with open() */
-	down(&disconnect_sem);
-
 	dev = usb_get_intfdata(interface);
 	usb_set_intfdata(interface, NULL);
-
-	mutex_lock(&dev->mutex);
 
 	minor = dev->minor;
 
 	/* give back our minor */
 	usb_deregister_dev(interface, &iowarrior_class);
+
+	mutex_lock(&dev->mutex);
 
 	/* prevent device read, write and ioctl */
 	dev->present = 0;
@@ -897,7 +892,6 @@ static void iowarrior_disconnect(struct usb_interface *interface)
 		/* no process is using the device, cleanup now */
 		iowarrior_delete(dev);
 	}
-	up(&disconnect_sem);
 
 	dev_info(&interface->dev, "I/O-Warror #%d now disconnected\n",
 		 minor - IOWARRIOR_MINOR_BASE);

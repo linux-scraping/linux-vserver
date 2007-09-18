@@ -1,9 +1,8 @@
 /*
- *  linux/drivers/ide/pci/atiixp.c	Version 0.01-bart2	Feb. 26, 2004
+ *  linux/drivers/ide/pci/atiixp.c	Version 0.02	Jun 16 2007
  *
  *  Copyright (C) 2003 ATI Inc. <hyu@ati.com>
- *  Copyright (C) 2004 Bartlomiej Zolnierkiewicz
- *
+ *  Copyright (C) 2004,2007 Bartlomiej Zolnierkiewicz
  */
 
 #include <linux/types.h>
@@ -47,22 +46,6 @@ static atiixp_ide_timing mdma_timing[] = {
 static int save_mdma_mode[4];
 
 static DEFINE_SPINLOCK(atiixp_lock);
-
-/**
- *	atiixp_ratemask		-	compute rate mask for ATIIXP IDE
- *	@drive: IDE drive to compute for
- *
- *	Returns the available modes for the ATIIXP IDE controller.
- */
-
-static u8 atiixp_ratemask(ide_drive_t *drive)
-{
-	u8 mode = 3;
-
-	if (!eighty_ninty_three(drive))
-		mode = min(mode, (u8)1);
-	return mode;
-}
 
 /**
  *	atiixp_dma_2_pio		-	return the PIO mode matching DMA
@@ -139,14 +122,14 @@ static void atiixp_dma_host_off(ide_drive_t *drive)
 }
 
 /**
- *	atiixp_tune_drive		-	tune a drive attached to a ATIIXP
+ *	atiixp_tune_pio	-	tune a drive attached to a ATIIXP
  *	@drive: drive to tune
  *	@pio: desired PIO mode
  *
  *	Set the interface PIO mode.
  */
 
-static void atiixp_tuneproc(ide_drive_t *drive, u8 pio)
+static void atiixp_tune_pio(ide_drive_t *drive, u8 pio)
 {
 	struct pci_dev *dev = drive->hwif->pci_dev;
 	unsigned long flags;
@@ -170,6 +153,13 @@ static void atiixp_tuneproc(ide_drive_t *drive, u8 pio)
 	spin_unlock_irqrestore(&atiixp_lock, flags);
 }
 
+static void atiixp_tuneproc(ide_drive_t *drive, u8 pio)
+{
+	pio = ide_get_best_pio_mode(drive, pio, 4);
+	atiixp_tune_pio(drive, pio);
+	(void)ide_config_drive_speed(drive, XFER_PIO_0 + pio);
+}
+
 /**
  *	atiixp_tune_chipset	-	tune a ATIIXP interface
  *	@drive: IDE drive to tune
@@ -189,7 +179,12 @@ static int atiixp_speedproc(ide_drive_t *drive, u8 xferspeed)
 	u16 tmp16;
 	u8 speed, pio;
 
-	speed = ide_rate_filter(atiixp_ratemask(drive), xferspeed);
+	speed = ide_rate_filter(drive, xferspeed);
+
+	if (speed >= XFER_PIO_0 && speed <= XFER_PIO_4) {
+		atiixp_tune_pio(drive, speed - XFER_PIO_0);
+		return ide_config_drive_speed(drive, speed);
+	}
 
 	spin_lock_irqsave(&atiixp_lock, flags);
 
@@ -217,29 +212,9 @@ static int atiixp_speedproc(ide_drive_t *drive, u8 xferspeed)
 	else
 		pio = speed - XFER_PIO_0;
 
-	atiixp_tuneproc(drive, pio);
+	atiixp_tune_pio(drive, pio);
 
 	return ide_config_drive_speed(drive, speed);
-}
-
-/**
- *	atiixp_config_drive_for_dma	-	configure drive for DMA
- *	@drive: IDE drive to configure
- *
- *	Set up a ATIIXP interface channel for the best available speed.
- *	We prefer UDMA if it is available and then MWDMA. If DMA is
- *	not available we switch to PIO and return 0.
- */
-
-static int atiixp_config_drive_for_dma(ide_drive_t *drive)
-{
-	u8 speed = ide_dma_speed(drive, atiixp_ratemask(drive));
-
-	if (!speed)
-		return 0;
-
-	(void) atiixp_speedproc(drive, speed);
-	return ide_dma_enable(drive);
 }
 
 /**
@@ -252,18 +227,13 @@ static int atiixp_config_drive_for_dma(ide_drive_t *drive)
 
 static int atiixp_dma_check(ide_drive_t *drive)
 {
-	u8 tspeed, speed;
-
 	drive->init_speed = 0;
 
-	if (ide_use_dma(drive) && atiixp_config_drive_for_dma(drive))
+	if (ide_tune_dma(drive))
 		return 0;
 
-	if (ide_use_fast_pio(drive)) {
-		tspeed = ide_get_best_pio_mode(drive, 255, 5, NULL);
-		speed = atiixp_dma_2_pio(XFER_PIO_0 + tspeed) + XFER_PIO_0;
-		atiixp_speedproc(drive, speed);
-	}
+	if (ide_use_fast_pio(drive))
+		atiixp_tuneproc(drive, 255);
 
 	return -1;
 }
@@ -300,10 +270,11 @@ static void __devinit init_hwif_atiixp(ide_hwif_t *hwif)
 	hwif->swdma_mask = 0x04;
 
 	pci_read_config_byte(pdev, ATIIXP_IDE_UDMA_MODE + ch, &udma_mode);
+
 	if ((udma_mode & 0x07) >= 0x04 || (udma_mode & 0x70) >= 0x40)
-		hwif->udma_four = 1;
+		hwif->cbl = ATA_CBL_PATA80;
 	else
-		hwif->udma_four = 0;
+		hwif->cbl = ATA_CBL_PATA40;
 
 	hwif->dma_host_on = &atiixp_dma_host_on;
 	hwif->dma_host_off = &atiixp_dma_host_off;
@@ -320,17 +291,18 @@ static ide_pci_device_t atiixp_pci_info[] __devinitdata = {
 	{	/* 0 */
 		.name		= "ATIIXP",
 		.init_hwif	= init_hwif_atiixp,
-		.channels	= 2,
 		.autodma	= AUTODMA,
 		.enablebits	= {{0x48,0x01,0x00}, {0x48,0x08,0x00}},
 		.bootable	= ON_BOARD,
+		.pio_mask	= ATA_PIO4,
 	},{	/* 1 */
 		.name		= "SB600_PATA",
 		.init_hwif	= init_hwif_atiixp,
-		.channels	= 1,
 		.autodma	= AUTODMA,
 		.enablebits	= {{0x48,0x01,0x00}, {0x00,0x00,0x00}},
  		.bootable	= ON_BOARD,
+ 		.host_flags	= IDE_HFLAG_SINGLE,
+		.pio_mask	= ATA_PIO4,
  	},
 };
 
@@ -353,6 +325,7 @@ static struct pci_device_id atiixp_pci_tbl[] = {
 	{ PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_IXP300_IDE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_IXP400_IDE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_IXP600_IDE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1},
+	{ PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_IXP700_IDE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1},
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, atiixp_pci_tbl);

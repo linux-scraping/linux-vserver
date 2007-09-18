@@ -18,6 +18,10 @@
 /*
  *  Changes:
  *
+ *  Brian Braunstein <linuxkernel@bristyle.com> 2007/03/23
+ *    Fixed hw address handling.  Now net_device.dev_addr is kept consistent
+ *    with tun.dev_addr when the address is set by this module.
+ *
  *  Mike Kershaw <dragorn@kismetwireless.net> 2005/08/14
  *    Add TUNSETLINK ioctl to set the link encapsulation
  *
@@ -196,7 +200,10 @@ static void tun_net_init(struct net_device *dev)
 		dev->set_multicast_list = tun_net_mclist;
 
 		ether_setup(dev);
-		random_ether_addr(dev->dev_addr);
+
+		/* random address already created for us by tun_set_iff, use it */
+		memcpy(dev->dev_addr, tun->dev_addr, min(sizeof(tun->dev_addr), sizeof(dev->dev_addr)) );
+
 		dev->tx_queue_len = TUN_READQ_SIZE;  /* We prefer our own queue length */
 		break;
 	}
@@ -254,11 +261,11 @@ static __inline__ ssize_t tun_get_user(struct tun_struct *tun, struct iovec *iv,
 		return -EFAULT;
 	}
 
-	skb->dev = tun->dev;
 	switch (tun->flags & TUN_TYPE_MASK) {
 	case TUN_TUN_DEV:
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = pi.proto;
+		skb->dev = tun->dev;
 		break;
 	case TUN_TAP_DEV:
 		skb->protocol = eth_type_trans(skb, tun->dev);
@@ -386,8 +393,8 @@ static ssize_t tun_chr_aio_read(struct kiocb *iocb, const struct iovec *iv,
 		 *   - we are multicast promiscous.
 		 *   - we belong to the multicast group.
 		 */
-		memcpy(addr, skb->data,
-		       min_t(size_t, sizeof addr, skb->len));
+		skb_copy_from_linear_data(skb, addr, min_t(size_t, sizeof addr,
+								   skb->len));
 		bit_nr = ether_crc(sizeof addr, addr) >> 26;
 		if ((tun->if_flags & IFF_PROMISC) ||
 				memcmp(addr, tun->dev_addr, sizeof addr) == 0 ||
@@ -425,6 +432,7 @@ static void tun_setup(struct net_device *dev)
 	init_waitqueue_head(&tun->read_wait);
 
 	tun->owner = -1;
+	tun->group = -1;
 
 	SET_MODULE_OWNER(dev);
 	dev->open = tun_net_open;
@@ -460,8 +468,11 @@ static int tun_set_iff(struct file *file, struct ifreq *ifr)
 			return -EBUSY;
 
 		/* Check permissions */
-		if (tun->owner != -1 &&
-		    current->euid != tun->owner && !capable(CAP_NET_ADMIN))
+		if (((tun->owner != -1 &&
+		      current->euid != tun->owner) ||
+		     (tun->group != -1 &&
+		      current->egid != tun->group)) &&
+		     !capable(CAP_NET_ADMIN))
 			return -EPERM;
 	}
 	else if (__dev_get_by_name(ifr->ifr_name))
@@ -603,6 +614,13 @@ static int tun_chr_ioctl(struct inode *inode, struct file *file,
 		DBG(KERN_INFO "%s: owner set to %d\n", tun->dev->name, tun->owner);
 		break;
 
+	case TUNSETGROUP:
+		/* Set group of the device */
+		tun->group= (gid_t) arg;
+
+		DBG(KERN_INFO "%s: group set to %d\n", tun->dev->name, tun->group);
+		break;
+
 	case TUNSETLINK:
 		/* Only allow setting the type when the interface is down */
 		if (tun->dev->flags & IFF_UP) {
@@ -636,6 +654,7 @@ static int tun_chr_ioctl(struct inode *inode, struct file *file,
 		return 0;
 
 	case SIOCGIFHWADDR:
+		/* Note: the actual net device's address may be different */
 		memcpy(ifr.ifr_hwaddr.sa_data, tun->dev_addr,
 				min(sizeof ifr.ifr_hwaddr.sa_data, sizeof tun->dev_addr));
 		if (copy_to_user( argp, &ifr, sizeof ifr))
@@ -643,16 +662,24 @@ static int tun_chr_ioctl(struct inode *inode, struct file *file,
 		return 0;
 
 	case SIOCSIFHWADDR:
-		/** Set the character device's hardware address. This is used when
-		 * filtering packets being sent from the network device to the character
-		 * device. */
-		memcpy(tun->dev_addr, ifr.ifr_hwaddr.sa_data,
-				min(sizeof ifr.ifr_hwaddr.sa_data, sizeof tun->dev_addr));
-		DBG(KERN_DEBUG "%s: set hardware address: %x:%x:%x:%x:%x:%x\n",
-				tun->dev->name,
-				tun->dev_addr[0], tun->dev_addr[1], tun->dev_addr[2],
-				tun->dev_addr[3], tun->dev_addr[4], tun->dev_addr[5]);
-		return 0;
+	{
+		/* try to set the actual net device's hw address */
+		int ret = dev_set_mac_address(tun->dev, &ifr.ifr_hwaddr);
+
+		if (ret == 0) {
+			/** Set the character device's hardware address. This is used when
+			 * filtering packets being sent from the network device to the character
+			 * device. */
+			memcpy(tun->dev_addr, ifr.ifr_hwaddr.sa_data,
+					min(sizeof ifr.ifr_hwaddr.sa_data, sizeof tun->dev_addr));
+			DBG(KERN_DEBUG "%s: set hardware address: %x:%x:%x:%x:%x:%x\n",
+					tun->dev->name,
+					tun->dev_addr[0], tun->dev_addr[1], tun->dev_addr[2],
+					tun->dev_addr[3], tun->dev_addr[4], tun->dev_addr[5]);
+		}
+
+		return  ret;
+	}
 
 	case SIOCADDMULTI:
 		/** Add the specified group to the character device's multicast filter

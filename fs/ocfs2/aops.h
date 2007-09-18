@@ -30,12 +30,48 @@ handle_t *ocfs2_start_walk_page_trans(struct inode *inode,
 							 unsigned from,
 							 unsigned to);
 
+int ocfs2_map_page_blocks(struct page *page, u64 *p_blkno,
+			  struct inode *inode, unsigned int from,
+			  unsigned int to, int new);
+
+int walk_page_buffers(	handle_t *handle,
+			struct buffer_head *head,
+			unsigned from,
+			unsigned to,
+			int *partial,
+			int (*fn)(	handle_t *handle,
+					struct buffer_head *bh));
+
+int ocfs2_write_begin(struct file *file, struct address_space *mapping,
+		      loff_t pos, unsigned len, unsigned flags,
+		      struct page **pagep, void **fsdata);
+
+int ocfs2_write_end(struct file *file, struct address_space *mapping,
+		    loff_t pos, unsigned len, unsigned copied,
+		    struct page *page, void *fsdata);
+
+int ocfs2_write_end_nolock(struct address_space *mapping,
+			   loff_t pos, unsigned len, unsigned copied,
+			   struct page *page, void *fsdata);
+
+int ocfs2_write_begin_nolock(struct address_space *mapping,
+			     loff_t pos, unsigned len, unsigned flags,
+			     struct page **pagep, void **fsdata,
+			     struct buffer_head *di_bh, struct page *mmap_page);
+
 /* all ocfs2_dio_end_io()'s fault */
 #define ocfs2_iocb_is_rw_locked(iocb) \
 	test_bit(0, (unsigned long *)&iocb->private)
-#define ocfs2_iocb_set_rw_locked(iocb) \
-	set_bit(0, (unsigned long *)&iocb->private)
+static inline void ocfs2_iocb_set_rw_locked(struct kiocb *iocb, int level)
+{
+	set_bit(0, (unsigned long *)&iocb->private);
+	if (level)
+		set_bit(1, (unsigned long *)&iocb->private);
+	else
+		clear_bit(1, (unsigned long *)&iocb->private);
+}
 #define ocfs2_iocb_clear_rw_locked(iocb) \
 	clear_bit(0, (unsigned long *)&iocb->private)
-
+#define ocfs2_iocb_rw_locked_level(iocb) \
+	test_bit(1, (unsigned long *)&iocb->private)
 #endif /* OCFS2_FILE_H */

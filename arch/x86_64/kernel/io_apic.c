@@ -25,7 +25,6 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
-#include <linux/smp_lock.h>
 #include <linux/pci.h>
 #include <linux/mc146818rtc.h>
 #include <linux/acpi.h>
@@ -151,6 +150,32 @@ static inline void io_apic_modify(unsigned int apic, unsigned int value)
 {
 	struct io_apic __iomem *io_apic = io_apic_base(apic);
 	writel(value, &io_apic->data);
+}
+
+static int io_apic_level_ack_pending(unsigned int irq)
+{
+	struct irq_pin_list *entry;
+	unsigned long flags;
+	int pending = 0;
+
+	spin_lock_irqsave(&ioapic_lock, flags);
+	entry = irq_2_pin + irq;
+	for (;;) {
+		unsigned int reg;
+		int pin;
+
+		pin = entry->pin;
+		if (pin == -1)
+			break;
+		reg = io_apic_read(entry->apic, 0x10 + pin*2);
+		/* Is the remote IRR bit set? */
+		pending |= (reg >> 14) & 1;
+		if (!entry->next)
+			break;
+		entry = irq_2_pin + entry->next;
+	}
+	spin_unlock_irqrestore(&ioapic_lock, flags);
+	return pending;
 }
 
 /*
@@ -372,14 +397,12 @@ static void clear_IO_APIC (void)
 int skip_ioapic_setup;
 int ioapic_force;
 
-/* dummy parsing: see setup.c */
-
-static int __init disable_ioapic_setup(char *str)
+static int __init parse_noapic(char *str)
 {
-	skip_ioapic_setup = 1;
+	disable_ioapic_setup();
 	return 0;
 }
-early_param("noapic", disable_ioapic_setup);
+early_param("noapic", parse_noapic);
 
 /* Actually the next is obsolete, but keep it for paranoid reasons -AK */
 static int __init disable_timer_pin_setup(char *arg)
@@ -775,12 +798,15 @@ static struct irq_chip ioapic_chip;
 
 static void ioapic_register_intr(int irq, unsigned long trigger)
 {
-	if (trigger)
+	if (trigger) {
+		irq_desc[irq].status |= IRQ_LEVEL;
 		set_irq_chip_and_handler_name(irq, &ioapic_chip,
 					      handle_fasteoi_irq, "fasteoi");
-	else
+	} else {
+		irq_desc[irq].status &= ~IRQ_LEVEL;
 		set_irq_chip_and_handler_name(irq, &ioapic_chip,
 					      handle_edge_irq, "edge");
+	}
 }
 
 static void setup_IO_APIC_irq(int apic, int pin, unsigned int irq,
@@ -907,10 +933,6 @@ static void __init setup_ExtINT_IRQ0_pin(unsigned int apic, unsigned int pin, in
 	enable_8259A_irq(0);
 }
 
-void __init UNEXPECTED_IO_APIC(void)
-{
-}
-
 void __apicdebuginit print_IO_APIC(void)
 {
 	int apic, i;
@@ -946,40 +968,16 @@ void __apicdebuginit print_IO_APIC(void)
 	printk(KERN_DEBUG "IO APIC #%d......\n", mp_ioapics[apic].mpc_apicid);
 	printk(KERN_DEBUG ".... register #00: %08X\n", reg_00.raw);
 	printk(KERN_DEBUG ".......    : physical APIC id: %02X\n", reg_00.bits.ID);
-	if (reg_00.bits.__reserved_1 || reg_00.bits.__reserved_2)
-		UNEXPECTED_IO_APIC();
 
 	printk(KERN_DEBUG ".... register #01: %08X\n", *(int *)&reg_01);
 	printk(KERN_DEBUG ".......     : max redirection entries: %04X\n", reg_01.bits.entries);
-	if (	(reg_01.bits.entries != 0x0f) && /* older (Neptune) boards */
-		(reg_01.bits.entries != 0x17) && /* typical ISA+PCI boards */
-		(reg_01.bits.entries != 0x1b) && /* Compaq Proliant boards */
-		(reg_01.bits.entries != 0x1f) && /* dual Xeon boards */
-		(reg_01.bits.entries != 0x22) && /* bigger Xeon boards */
-		(reg_01.bits.entries != 0x2E) &&
-		(reg_01.bits.entries != 0x3F) &&
-		(reg_01.bits.entries != 0x03) 
-	)
-		UNEXPECTED_IO_APIC();
 
 	printk(KERN_DEBUG ".......     : PRQ implemented: %X\n", reg_01.bits.PRQ);
 	printk(KERN_DEBUG ".......     : IO APIC version: %04X\n", reg_01.bits.version);
-	if (	(reg_01.bits.version != 0x01) && /* 82489DX IO-APICs */
-		(reg_01.bits.version != 0x02) && /* 82801BA IO-APICs (ICH2) */
-		(reg_01.bits.version != 0x10) && /* oldest IO-APICs */
-		(reg_01.bits.version != 0x11) && /* Pentium/Pro IO-APICs */
-		(reg_01.bits.version != 0x13) && /* Xeon IO-APICs */
-		(reg_01.bits.version != 0x20)    /* Intel P64H (82806 AA) */
-	)
-		UNEXPECTED_IO_APIC();
-	if (reg_01.bits.__reserved_1 || reg_01.bits.__reserved_2)
-		UNEXPECTED_IO_APIC();
 
 	if (reg_01.bits.version >= 0x10) {
 		printk(KERN_DEBUG ".... register #02: %08X\n", reg_02.raw);
 		printk(KERN_DEBUG ".......     : arbitration: %02X\n", reg_02.bits.arbitration);
-		if (reg_02.bits.__reserved_1 || reg_02.bits.__reserved_2)
-			UNEXPECTED_IO_APIC();
 	}
 
 	printk(KERN_DEBUG ".... IRQ redirection table:\n");
@@ -1407,8 +1405,7 @@ static void irq_complete_move(unsigned int irq)
 
 	vector = ~get_irq_regs()->orig_rax;
 	me = smp_processor_id();
-	if ((vector == cfg->vector) &&
-	    cpu_isset(smp_processor_id(), cfg->domain)) {
+	if ((vector == cfg->vector) && cpu_isset(me, cfg->domain)) {
 		cpumask_t cleanup_mask;
 
 		cpus_and(cleanup_mask, cfg->old_domain, cpu_online_map);
@@ -1443,14 +1440,42 @@ static void ack_apic_level(unsigned int irq)
 
 	/*
 	 * We must acknowledge the irq before we move it or the acknowledge will
-	 * not propogate properly.
+	 * not propagate properly.
 	 */
 	ack_APIC_irq();
 
 	/* Now we can move and renable the irq */
-	move_masked_irq(irq);
-	if (unlikely(do_unmask_irq))
+	if (unlikely(do_unmask_irq)) {
+		/* Only migrate the irq if the ack has been received.
+		 *
+		 * On rare occasions the broadcast level triggered ack gets
+		 * delayed going to ioapics, and if we reprogram the
+		 * vector while Remote IRR is still set the irq will never
+		 * fire again.
+		 *
+		 * To prevent this scenario we read the Remote IRR bit
+		 * of the ioapic.  This has two effects.
+		 * - On any sane system the read of the ioapic will
+		 *   flush writes (and acks) going to the ioapic from
+		 *   this cpu.
+		 * - We get to see if the ACK has actually been delivered.
+		 *
+		 * Based on failed experiments of reprogramming the
+		 * ioapic entry from outside of irq context starting
+		 * with masking the ioapic entry and then polling until
+		 * Remote IRR was clear before reprogramming the
+		 * ioapic I don't trust the Remote IRR bit to be
+		 * completey accurate.
+		 *
+		 * However there appears to be no other way to plug
+		 * this race, so if the Remote IRR bit is not
+		 * accurate and is causing problems then it is a hardware bug
+		 * and you can go talk to the chipset vendor about it.
+		 */
+		if (!io_apic_level_ack_pending(irq))
+			move_masked_irq(irq);
 		unmask_IO_APIC_irq(irq);
+	}
 }
 
 static struct irq_chip ioapic_chip __read_mostly = {
@@ -1522,6 +1547,7 @@ static void ack_lapic_irq (unsigned int irq)
 static void end_lapic_irq (unsigned int i) { /* nothing */ }
 
 static struct hw_interrupt_type lapic_irq_type __read_mostly = {
+	.name = "local-APIC",
 	.typename = "local-APIC-edge",
 	.startup = NULL, /* startup_irq() not used for IRQ0 */
 	.shutdown = NULL, /* shutdown_irq() not used for IRQ0 */
@@ -1983,18 +2009,18 @@ int arch_setup_msi_irq(struct pci_dev *dev, struct msi_desc *desc)
 	if (irq < 0)
 		return irq;
 
-	set_irq_msi(irq, desc);
 	ret = msi_compose_msg(dev, irq, &msg);
 	if (ret < 0) {
 		destroy_irq(irq);
 		return ret;
 	}
 
+	set_irq_msi(irq, desc);
 	write_msi_msg(irq, &msg);
 
 	set_irq_chip_and_handler_name(irq, &msi_chip, handle_edge_irq, "edge");
 
-	return irq;
+	return 0;
 }
 
 void arch_teardown_msi_irq(unsigned int irq)

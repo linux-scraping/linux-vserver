@@ -282,7 +282,7 @@ sysret_careful:
 sysret_signal:
 	TRACE_IRQS_ON
 	sti
-	testl $(_TIF_SIGPENDING|_TIF_NOTIFY_RESUME|_TIF_SINGLESTEP),%edx
+	testl $(_TIF_SIGPENDING|_TIF_SINGLESTEP|_TIF_MCE_NOTIFY),%edx
 	jz    1f
 
 	/* Really a signal */
@@ -375,7 +375,7 @@ int_very_careful:
 	jmp int_restore_rest
 	
 int_signal:
-	testl $(_TIF_NOTIFY_RESUME|_TIF_SIGPENDING|_TIF_SINGLESTEP),%edx
+	testl $(_TIF_SIGPENDING|_TIF_SINGLESTEP|_TIF_MCE_NOTIFY),%edx
 	jz 1f
 	movq %rsp,%rdi		# &ptregs -> arg1
 	xorl %esi,%esi		# oldset -> arg2
@@ -599,7 +599,7 @@ retint_careful:
 	jmp retint_check
 	
 retint_signal:
-	testl $(_TIF_SIGPENDING|_TIF_NOTIFY_RESUME|_TIF_SINGLESTEP),%edx
+	testl $(_TIF_SIGPENDING|_TIF_SINGLESTEP|_TIF_MCE_NOTIFY),%edx
 	jz    retint_swapgs
 	TRACE_IRQS_ON
 	sti
@@ -701,6 +701,7 @@ END(spurious_interrupt)
 	CFI_ADJUST_CFA_OFFSET 8
 	pushq %rax	/* push real oldrax to the rdi slot */ 
 	CFI_ADJUST_CFA_OFFSET 8
+	CFI_REL_OFFSET rax,0
 	leaq  \sym(%rip),%rax
 	jmp error_entry
 	CFI_ENDPROC
@@ -710,6 +711,7 @@ END(spurious_interrupt)
 	XCPT_FRAME
 	pushq %rax
 	CFI_ADJUST_CFA_OFFSET 8
+	CFI_REL_OFFSET rax,0
 	leaq  \sym(%rip),%rax
 	jmp error_entry
 	CFI_ENDPROC
@@ -817,6 +819,7 @@ paranoid_schedule\trace:
  */ 		  				
 KPROBE_ENTRY(error_entry)
 	_frame RDI
+	CFI_REL_OFFSET rax,0
 	/* rdi slot contains rax, oldrax contains error code */
 	cld	
 	subq  $14*8,%rsp
@@ -824,6 +827,7 @@ KPROBE_ENTRY(error_entry)
 	movq %rsi,13*8(%rsp)
 	CFI_REL_OFFSET	rsi,RSI
 	movq 14*8(%rsp),%rsi	/* load rax from rdi slot */
+	CFI_REGISTER	rax,rsi
 	movq %rdx,12*8(%rsp)
 	CFI_REL_OFFSET	rdx,RDX
 	movq %rcx,11*8(%rsp)
@@ -857,6 +861,7 @@ error_swapgs:
 	swapgs
 error_sti:	
 	movq %rdi,RDI(%rsp) 	
+	CFI_REL_OFFSET	rdi,RDI
 	movq %rsp,%rdi
 	movq ORIG_RAX(%rsp),%rsi	/* get error code */ 
 	movq $-1,ORIG_RAX(%rsp)
@@ -1158,3 +1163,10 @@ ENTRY(call_softirq)
 	ret
 	CFI_ENDPROC
 ENDPROC(call_softirq)
+
+KPROBE_ENTRY(ignore_sysret)
+	CFI_STARTPROC
+	mov $-ENOSYS,%eax
+	sysret
+	CFI_ENDPROC
+ENDPROC(ignore_sysret)

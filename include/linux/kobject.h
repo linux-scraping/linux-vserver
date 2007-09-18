@@ -22,7 +22,6 @@
 #include <linux/sysfs.h>
 #include <linux/compiler.h>
 #include <linux/spinlock.h>
-#include <linux/rwsem.h>
 #include <linux/kref.h>
 #include <linux/kernel.h>
 #include <linux/wait.h>
@@ -37,18 +36,28 @@ extern char uevent_helper[];
 /* counter to tag the uevent, read only except for the kobject core */
 extern u64 uevent_seqnum;
 
-/* the actions here must match the proper string in lib/kobject_uevent.c */
-typedef int __bitwise kobject_action_t;
+/*
+ * The actions here must match the index to the string array
+ * in lib/kobject_uevent.c
+ *
+ * Do not add new actions here without checking with the driver-core
+ * maintainers. Action strings are not meant to express subsystem
+ * or device specific properties. In most cases you want to send a
+ * kobject_uevent_env(kobj, KOBJ_CHANGE, env) with additional event
+ * specific variables added to the event environment.
+ */
 enum kobject_action {
-	KOBJ_ADD	= (__force kobject_action_t) 0x01,	/* exclusive to core */
-	KOBJ_REMOVE	= (__force kobject_action_t) 0x02,	/* exclusive to core */
-	KOBJ_CHANGE	= (__force kobject_action_t) 0x03,	/* device state change */
-	KOBJ_MOUNT	= (__force kobject_action_t) 0x04,	/* mount event for block devices (broken) */
-	KOBJ_UMOUNT	= (__force kobject_action_t) 0x05,	/* umount event for block devices (broken) */
-	KOBJ_OFFLINE	= (__force kobject_action_t) 0x06,	/* device offline */
-	KOBJ_ONLINE	= (__force kobject_action_t) 0x07,	/* device online */
-	KOBJ_MOVE	= (__force kobject_action_t) 0x08,	/* device move */
+	KOBJ_ADD,
+	KOBJ_REMOVE,
+	KOBJ_CHANGE,
+	KOBJ_MOVE,
+	KOBJ_ONLINE,
+	KOBJ_OFFLINE,
+	KOBJ_MAX
 };
+
+/* The list of strings defining the valid kobject actions as specified above */
+extern const char *kobject_actions[];
 
 struct kobject {
 	const char		* k_name;
@@ -58,7 +67,7 @@ struct kobject {
 	struct kobject		* parent;
 	struct kset		* kset;
 	struct kobj_type	* ktype;
-	struct dentry		* dentry;
+	struct sysfs_dirent	* sd;
 	wait_queue_head_t	poll;
 };
 
@@ -74,13 +83,14 @@ extern void kobject_init(struct kobject *);
 extern void kobject_cleanup(struct kobject *);
 
 extern int __must_check kobject_add(struct kobject *);
-extern int __must_check kobject_shadow_add(struct kobject *, struct dentry *);
+extern int __must_check kobject_shadow_add(struct kobject *kobj,
+					   struct sysfs_dirent *shadow_parent);
 extern void kobject_del(struct kobject *);
 
 extern int __must_check kobject_rename(struct kobject *, const char *new_name);
 extern int __must_check kobject_shadow_rename(struct kobject *kobj,
-						struct dentry *new_parent,
-						const char *new_name);
+					      struct sysfs_dirent *new_parent,
+					      const char *new_name);
 extern int __must_check kobject_move(struct kobject *, struct kobject *);
 
 extern int __must_check kobject_register(struct kobject *);
@@ -89,6 +99,8 @@ extern void kobject_unregister(struct kobject *);
 extern struct kobject * kobject_get(struct kobject *);
 extern void kobject_put(struct kobject *);
 
+extern struct kobject *kobject_kset_add_dir(struct kset *kset,
+					    struct kobject *, const char *);
 extern struct kobject *kobject_add_dir(struct kobject *, const char *);
 
 extern char * kobject_get_path(struct kobject *, gfp_t);
@@ -99,9 +111,15 @@ struct kobj_type {
 	struct attribute	** default_attrs;
 };
 
+struct kset_uevent_ops {
+	int (*filter)(struct kset *kset, struct kobject *kobj);
+	const char *(*name)(struct kset *kset, struct kobject *kobj);
+	int (*uevent)(struct kset *kset, struct kobject *kobj, char **envp,
+			int num_envp, char *buffer, int buffer_size);
+};
 
-/**
- *	kset - a set of kobjects of a specific type, belonging
+/*
+ *	struct kset - a set of kobjects of a specific type, belonging
  *	to a specific subsystem.
  *
  *	All kobjects of a kset should be embedded in an identical 
@@ -117,15 +135,7 @@ struct kobj_type {
  *	supress the event generation or add subsystem specific
  *	variables carried with the event.
  */
-struct kset_uevent_ops {
-	int (*filter)(struct kset *kset, struct kobject *kobj);
-	const char *(*name)(struct kset *kset, struct kobject *kobj);
-	int (*uevent)(struct kset *kset, struct kobject *kobj, char **envp,
-			int num_envp, char *buffer, int buffer_size);
-};
-
 struct kset {
-	struct subsystem	* subsys;
 	struct kobj_type	* ktype;
 	struct list_head	list;
 	spinlock_t		list_lock;
@@ -165,42 +175,32 @@ static inline struct kobj_type * get_ktype(struct kobject * k)
 extern struct kobject * kset_find_obj(struct kset *, const char *);
 
 
-/**
+/*
  * Use this when initializing an embedded kset with no other 
  * fields to initialize.
  */
 #define set_kset_name(str)	.kset = { .kobj = { .name = str } }
 
 
-
-struct subsystem {
-	struct kset		kset;
-	struct rw_semaphore	rwsem;
-};
-
 #define decl_subsys(_name,_type,_uevent_ops) \
-struct subsystem _name##_subsys = { \
-	.kset = { \
-		.kobj = { .name = __stringify(_name) }, \
-		.ktype = _type, \
-		.uevent_ops =_uevent_ops, \
-	} \
+struct kset _name##_subsys = { \
+	.kobj = { .name = __stringify(_name) }, \
+	.ktype = _type, \
+	.uevent_ops =_uevent_ops, \
 }
 #define decl_subsys_name(_varname,_name,_type,_uevent_ops) \
-struct subsystem _varname##_subsys = { \
-	.kset = { \
-		.kobj = { .name = __stringify(_name) }, \
-		.ktype = _type, \
-		.uevent_ops =_uevent_ops, \
-	} \
+struct kset _varname##_subsys = { \
+	.kobj = { .name = __stringify(_name) }, \
+	.ktype = _type, \
+	.uevent_ops =_uevent_ops, \
 }
 
 /* The global /sys/kernel/ subsystem for people to chain off of */
-extern struct subsystem kernel_subsys;
+extern struct kset kernel_subsys;
 /* The global /sys/hypervisor/ subsystem  */
-extern struct subsystem hypervisor_subsys;
+extern struct kset hypervisor_subsys;
 
-/**
+/*
  * Helpers for setting the kset of registered objects.
  * Often, a registered object belongs to a kset embedded in a 
  * subsystem. These do no magic, just make the resulting code
@@ -216,7 +216,7 @@ extern struct subsystem hypervisor_subsys;
  */
 
 #define kobj_set_kset_s(obj,subsys) \
-	(obj)->kobj.kset = &(subsys).kset
+	(obj)->kobj.kset = &(subsys)
 
 /**
  *	kset_set_kset_s(obj,subsys) - set kset for embedded kset.
@@ -230,12 +230,12 @@ extern struct subsystem hypervisor_subsys;
  */
 
 #define kset_set_kset_s(obj,subsys) \
-	(obj)->kset.kobj.kset = &(subsys).kset
+	(obj)->kset.kobj.kset = &(subsys)
 
 /**
  *	subsys_set_kset(obj,subsys) - set kset for subsystem
  *	@obj:		ptr to some object type.
- *	@subsys:	a subsystem object (not a ptr).
+ *	@_subsys:	a subsystem object (not a ptr).
  *
  *	Can be used for any object type with an embedded ->subsys.
  *	Sets the kset of @obj's kobject to @subsys.kset. This makes
@@ -243,29 +243,31 @@ extern struct subsystem hypervisor_subsys;
  */
 
 #define subsys_set_kset(obj,_subsys) \
-	(obj)->subsys.kset.kobj.kset = &(_subsys).kset
+	(obj)->subsys.kobj.kset = &(_subsys)
 
-extern void subsystem_init(struct subsystem *);
-extern int __must_check subsystem_register(struct subsystem *);
-extern void subsystem_unregister(struct subsystem *);
+extern void subsystem_init(struct kset *);
+extern int __must_check subsystem_register(struct kset *);
+extern void subsystem_unregister(struct kset *);
 
-static inline struct subsystem * subsys_get(struct subsystem * s)
+static inline struct kset *subsys_get(struct kset *s)
 {
-	return s ? container_of(kset_get(&s->kset),struct subsystem,kset) : NULL;
+	if (s)
+		return kset_get(s);
+	return NULL;
 }
 
-static inline void subsys_put(struct subsystem * s)
+static inline void subsys_put(struct kset *s)
 {
-	kset_put(&s->kset);
+	kset_put(s);
 }
 
 struct subsys_attribute {
 	struct attribute attr;
-	ssize_t (*show)(struct subsystem *, char *);
-	ssize_t (*store)(struct subsystem *, const char *, size_t); 
+	ssize_t (*show)(struct kset *, char *);
+	ssize_t (*store)(struct kset *, const char *, size_t);
 };
 
-extern int __must_check subsys_create_file(struct subsystem * ,
+extern int __must_check subsys_create_file(struct kset *,
 					struct subsys_attribute *);
 
 #if defined(CONFIG_HOTPLUG)

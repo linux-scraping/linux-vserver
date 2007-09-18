@@ -204,6 +204,16 @@ xfs_bulkstat_one_dinode(
 	return 0;
 }
 
+STATIC int
+xfs_bulkstat_one_fmt(
+	void			__user *ubuffer,
+	const xfs_bstat_t	*buffer)
+{
+	if (copy_to_user(ubuffer, buffer, sizeof(*buffer)))
+		return -EFAULT;
+	return sizeof(*buffer);
+}
+
 /*
  * Return stat information for one inode.
  * Return 0 if ok, else errno.
@@ -223,6 +233,7 @@ xfs_bulkstat_one(
 	xfs_bstat_t	*buf;		/* return buffer */
 	int		error = 0;	/* error value */
 	xfs_dinode_t	*dip;		/* dinode inode pointer */
+	bulkstat_one_fmt_pf formatter = private_data ? : xfs_bulkstat_one_fmt;
 
 	dip = (xfs_dinode_t *)dibuff;
 	*stat = BULKSTAT_RV_NOTHING;
@@ -245,14 +256,15 @@ xfs_bulkstat_one(
 		xfs_bulkstat_one_dinode(mp, ino, dip, buf);
 	}
 
-	if (copy_to_user(buffer, buf, sizeof(*buf)))  {
+	error = formatter(buffer, buf);
+	if (error < 0)  {
 		error = EFAULT;
 		goto out_free;
 	}
 
 	*stat = BULKSTAT_RV_DIDONE;
 	if (ubused)
-		*ubused = sizeof(*buf);
+		*ubused = error;
 
  out_free:
 	kmem_free(buf, sizeof(*buf));
@@ -750,6 +762,19 @@ xfs_bulkstat_single(
 	return 0;
 }
 
+int
+xfs_inumbers_fmt(
+	void			__user *ubuffer, /* buffer to write to */
+	const xfs_inogrp_t	*buffer,	/* buffer to read from */
+	long			count,		/* # of elements to read */
+	long			*written)	/* # of bytes written */
+{
+	if (copy_to_user(ubuffer, buffer, count * sizeof(*buffer)))
+		return -EFAULT;
+	*written = count * sizeof(*buffer);
+	return 0;
+}
+
 /*
  * Return inode number table for the filesystem.
  */
@@ -758,7 +783,8 @@ xfs_inumbers(
 	xfs_mount_t	*mp,		/* mount point for filesystem */
 	xfs_ino_t	*lastino,	/* last inode returned */
 	int		*count,		/* size of buffer/count returned */
-	xfs_inogrp_t	__user *ubuffer)/* buffer with inode descriptions */
+	void		__user *ubuffer,/* buffer with inode descriptions */
+	inumbers_fmt_pf	formatter)
 {
 	xfs_buf_t	*agbp;
 	xfs_agino_t	agino;
@@ -811,7 +837,7 @@ xfs_inumbers(
 				xfs_buf_relse(agbp);
 				agbp = NULL;
 				/*
-				 * Move up the the last inode in the current
+				 * Move up the last inode in the current
 				 * chunk.  The lookup_ge will always get
 				 * us the first inode in the next chunk.
 				 */
@@ -837,12 +863,12 @@ xfs_inumbers(
 		bufidx++;
 		left--;
 		if (bufidx == bcount) {
-			if (copy_to_user(ubuffer, buffer,
-					bufidx * sizeof(*buffer))) {
+			long written;
+			if (formatter(ubuffer, buffer, bufidx, &written)) {
 				error = XFS_ERROR(EFAULT);
 				break;
 			}
-			ubuffer += bufidx;
+			ubuffer += written;
 			*count += bufidx;
 			bufidx = 0;
 		}
@@ -864,8 +890,8 @@ xfs_inumbers(
 	}
 	if (!error) {
 		if (bufidx) {
-			if (copy_to_user(ubuffer, buffer,
-					bufidx * sizeof(*buffer)))
+			long written;
+			if (formatter(ubuffer, buffer, bufidx, &written))
 				error = XFS_ERROR(EFAULT);
 			else
 				*count += bufidx;

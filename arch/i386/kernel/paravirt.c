@@ -19,7 +19,7 @@
 #include <linux/module.h>
 #include <linux/efi.h>
 #include <linux/bcd.h>
-#include <linux/start_kernel.h>
+#include <linux/highmem.h>
 
 #include <asm/bug.h>
 #include <asm/paravirt.h>
@@ -35,7 +35,7 @@
 #include <asm/timer.h>
 
 /* nop stub */
-static void native_nop(void)
+void _paravirt_nop(void)
 {
 }
 
@@ -54,331 +54,158 @@ char *memory_setup(void)
 #define DEF_NATIVE(name, code)					\
 	extern const char start_##name[], end_##name[];		\
 	asm("start_" #name ": " code "; end_" #name ":")
-DEF_NATIVE(cli, "cli");
-DEF_NATIVE(sti, "sti");
-DEF_NATIVE(popf, "push %eax; popf");
-DEF_NATIVE(pushf, "pushf; pop %eax");
-DEF_NATIVE(pushf_cli, "pushf; pop %eax; cli");
+
+DEF_NATIVE(irq_disable, "cli");
+DEF_NATIVE(irq_enable, "sti");
+DEF_NATIVE(restore_fl, "push %eax; popf");
+DEF_NATIVE(save_fl, "pushf; pop %eax");
 DEF_NATIVE(iret, "iret");
-DEF_NATIVE(sti_sysexit, "sti; sysexit");
+DEF_NATIVE(irq_enable_sysexit, "sti; sysexit");
+DEF_NATIVE(read_cr2, "mov %cr2, %eax");
+DEF_NATIVE(write_cr3, "mov %eax, %cr3");
+DEF_NATIVE(read_cr3, "mov %cr3, %eax");
+DEF_NATIVE(clts, "clts");
+DEF_NATIVE(read_tsc, "rdtsc");
 
-static const struct native_insns
+DEF_NATIVE(ud2a, "ud2a");
+
+static unsigned native_patch(u8 type, u16 clobbers, void *ibuf,
+			     unsigned long addr, unsigned len)
 {
-	const char *start, *end;
-} native_insns[] = {
-	[PARAVIRT_IRQ_DISABLE] = { start_cli, end_cli },
-	[PARAVIRT_IRQ_ENABLE] = { start_sti, end_sti },
-	[PARAVIRT_RESTORE_FLAGS] = { start_popf, end_popf },
-	[PARAVIRT_SAVE_FLAGS] = { start_pushf, end_pushf },
-	[PARAVIRT_SAVE_FLAGS_IRQ_DISABLE] = { start_pushf_cli, end_pushf_cli },
-	[PARAVIRT_INTERRUPT_RETURN] = { start_iret, end_iret },
-	[PARAVIRT_STI_SYSEXIT] = { start_sti_sysexit, end_sti_sysexit },
-};
+	const unsigned char *start, *end;
+	unsigned ret;
 
-static unsigned native_patch(u8 type, u16 clobbers, void *insns, unsigned len)
+	switch(type) {
+#define SITE(x)	case PARAVIRT_PATCH(x):	start = start_##x; end = end_##x; goto patch_site
+		SITE(irq_disable);
+		SITE(irq_enable);
+		SITE(restore_fl);
+		SITE(save_fl);
+		SITE(iret);
+		SITE(irq_enable_sysexit);
+		SITE(read_cr2);
+		SITE(read_cr3);
+		SITE(write_cr3);
+		SITE(clts);
+		SITE(read_tsc);
+#undef SITE
+
+	patch_site:
+		ret = paravirt_patch_insns(ibuf, len, start, end);
+		break;
+
+	case PARAVIRT_PATCH(make_pgd):
+	case PARAVIRT_PATCH(make_pte):
+	case PARAVIRT_PATCH(pgd_val):
+	case PARAVIRT_PATCH(pte_val):
+#ifdef CONFIG_X86_PAE
+	case PARAVIRT_PATCH(make_pmd):
+	case PARAVIRT_PATCH(pmd_val):
+#endif
+		/* These functions end up returning exactly what
+		   they're passed, in the same registers. */
+		ret = paravirt_patch_nop();
+		break;
+
+	default:
+		ret = paravirt_patch_default(type, clobbers, ibuf, addr, len);
+		break;
+	}
+
+	return ret;
+}
+
+unsigned paravirt_patch_nop(void)
 {
-	unsigned int insn_len;
+	return 0;
+}
 
-	/* Don't touch it if we don't have a replacement */
-	if (type >= ARRAY_SIZE(native_insns) || !native_insns[type].start)
-		return len;
+unsigned paravirt_patch_ignore(unsigned len)
+{
+	return len;
+}
 
-	insn_len = native_insns[type].end - native_insns[type].start;
+struct branch {
+	unsigned char opcode;
+	u32 delta;
+} __attribute__((packed));
 
-	/* Similarly if we can't fit replacement. */
-	if (len < insn_len)
-		return len;
+unsigned paravirt_patch_call(void *insnbuf,
+			     const void *target, u16 tgt_clobbers,
+			     unsigned long addr, u16 site_clobbers,
+			     unsigned len)
+{
+	struct branch *b = insnbuf;
+	unsigned long delta = (unsigned long)target - (addr+5);
 
-	memcpy(insns, native_insns[type].start, insn_len);
+	if (tgt_clobbers & ~site_clobbers)
+		return len;	/* target would clobber too much for this site */
+	if (len < 5)
+		return len;	/* call too long for patch site */
+
+	b->opcode = 0xe8; /* call */
+	b->delta = delta;
+	BUILD_BUG_ON(sizeof(*b) != 5);
+
+	return 5;
+}
+
+unsigned paravirt_patch_jmp(const void *target, void *insnbuf,
+			    unsigned long addr, unsigned len)
+{
+	struct branch *b = insnbuf;
+	unsigned long delta = (unsigned long)target - (addr+5);
+
+	if (len < 5)
+		return len;	/* call too long for patch site */
+
+	b->opcode = 0xe9;	/* jmp */
+	b->delta = delta;
+
+	return 5;
+}
+
+unsigned paravirt_patch_default(u8 type, u16 clobbers, void *insnbuf,
+				unsigned long addr, unsigned len)
+{
+	void *opfunc = *((void **)&paravirt_ops + type);
+	unsigned ret;
+
+	if (opfunc == NULL)
+		/* If there's no function, patch it with a ud2a (BUG) */
+		ret = paravirt_patch_insns(insnbuf, len, start_ud2a, end_ud2a);
+	else if (opfunc == paravirt_nop)
+		/* If the operation is a nop, then nop the callsite */
+		ret = paravirt_patch_nop();
+	else if (type == PARAVIRT_PATCH(iret) ||
+		 type == PARAVIRT_PATCH(irq_enable_sysexit))
+		/* If operation requires a jmp, then jmp */
+		ret = paravirt_patch_jmp(opfunc, insnbuf, addr, len);
+	else
+		/* Otherwise call the function; assume target could
+		   clobber any caller-save reg */
+		ret = paravirt_patch_call(insnbuf, opfunc, CLBR_ANY,
+					  addr, clobbers, len);
+
+	return ret;
+}
+
+unsigned paravirt_patch_insns(void *insnbuf, unsigned len,
+			      const char *start, const char *end)
+{
+	unsigned insn_len = end - start;
+
+	if (insn_len > len || start == NULL)
+		insn_len = len;
+	else
+		memcpy(insnbuf, start, insn_len);
+
 	return insn_len;
-}
-
-static unsigned long native_get_debugreg(int regno)
-{
-	unsigned long val = 0; 	/* Damn you, gcc! */
-
-	switch (regno) {
-	case 0:
-		asm("movl %%db0, %0" :"=r" (val)); break;
-	case 1:
-		asm("movl %%db1, %0" :"=r" (val)); break;
-	case 2:
-		asm("movl %%db2, %0" :"=r" (val)); break;
-	case 3:
-		asm("movl %%db3, %0" :"=r" (val)); break;
-	case 6:
-		asm("movl %%db6, %0" :"=r" (val)); break;
-	case 7:
-		asm("movl %%db7, %0" :"=r" (val)); break;
-	default:
-		BUG();
-	}
-	return val;
-}
-
-static void native_set_debugreg(int regno, unsigned long value)
-{
-	switch (regno) {
-	case 0:
-		asm("movl %0,%%db0"	: /* no output */ :"r" (value));
-		break;
-	case 1:
-		asm("movl %0,%%db1"	: /* no output */ :"r" (value));
-		break;
-	case 2:
-		asm("movl %0,%%db2"	: /* no output */ :"r" (value));
-		break;
-	case 3:
-		asm("movl %0,%%db3"	: /* no output */ :"r" (value));
-		break;
-	case 6:
-		asm("movl %0,%%db6"	: /* no output */ :"r" (value));
-		break;
-	case 7:
-		asm("movl %0,%%db7"	: /* no output */ :"r" (value));
-		break;
-	default:
-		BUG();
-	}
 }
 
 void init_IRQ(void)
 {
 	paravirt_ops.init_IRQ();
-}
-
-static void native_clts(void)
-{
-	asm volatile ("clts");
-}
-
-static unsigned long native_read_cr0(void)
-{
-	unsigned long val;
-	asm volatile("movl %%cr0,%0\n\t" :"=r" (val));
-	return val;
-}
-
-static void native_write_cr0(unsigned long val)
-{
-	asm volatile("movl %0,%%cr0": :"r" (val));
-}
-
-static unsigned long native_read_cr2(void)
-{
-	unsigned long val;
-	asm volatile("movl %%cr2,%0\n\t" :"=r" (val));
-	return val;
-}
-
-static void native_write_cr2(unsigned long val)
-{
-	asm volatile("movl %0,%%cr2": :"r" (val));
-}
-
-static unsigned long native_read_cr3(void)
-{
-	unsigned long val;
-	asm volatile("movl %%cr3,%0\n\t" :"=r" (val));
-	return val;
-}
-
-static void native_write_cr3(unsigned long val)
-{
-	asm volatile("movl %0,%%cr3": :"r" (val));
-}
-
-static unsigned long native_read_cr4(void)
-{
-	unsigned long val;
-	asm volatile("movl %%cr4,%0\n\t" :"=r" (val));
-	return val;
-}
-
-static unsigned long native_read_cr4_safe(void)
-{
-	unsigned long val;
-	/* This could fault if %cr4 does not exist */
-	asm("1: movl %%cr4, %0		\n"
-		"2:				\n"
-		".section __ex_table,\"a\"	\n"
-		".long 1b,2b			\n"
-		".previous			\n"
-		: "=r" (val): "0" (0));
-	return val;
-}
-
-static void native_write_cr4(unsigned long val)
-{
-	asm volatile("movl %0,%%cr4": :"r" (val));
-}
-
-static unsigned long native_save_fl(void)
-{
-	unsigned long f;
-	asm volatile("pushfl ; popl %0":"=g" (f): /* no input */);
-	return f;
-}
-
-static void native_restore_fl(unsigned long f)
-{
-	asm volatile("pushl %0 ; popfl": /* no output */
-			     :"g" (f)
-			     :"memory", "cc");
-}
-
-static void native_irq_disable(void)
-{
-	asm volatile("cli": : :"memory");
-}
-
-static void native_irq_enable(void)
-{
-	asm volatile("sti": : :"memory");
-}
-
-static void native_safe_halt(void)
-{
-	asm volatile("sti; hlt": : :"memory");
-}
-
-static void native_halt(void)
-{
-	asm volatile("hlt": : :"memory");
-}
-
-static void native_wbinvd(void)
-{
-	asm volatile("wbinvd": : :"memory");
-}
-
-static unsigned long long native_read_msr(unsigned int msr, int *err)
-{
-	unsigned long long val;
-
-	asm volatile("2: rdmsr ; xorl %0,%0\n"
-		     "1:\n\t"
-		     ".section .fixup,\"ax\"\n\t"
-		     "3:  movl %3,%0 ; jmp 1b\n\t"
-		     ".previous\n\t"
- 		     ".section __ex_table,\"a\"\n"
-		     "   .align 4\n\t"
-		     "   .long 	2b,3b\n\t"
-		     ".previous"
-		     : "=r" (*err), "=A" (val)
-		     : "c" (msr), "i" (-EFAULT));
-
-	return val;
-}
-
-static int native_write_msr(unsigned int msr, unsigned long long val)
-{
-	int err;
-	asm volatile("2: wrmsr ; xorl %0,%0\n"
-		     "1:\n\t"
-		     ".section .fixup,\"ax\"\n\t"
-		     "3:  movl %4,%0 ; jmp 1b\n\t"
-		     ".previous\n\t"
- 		     ".section __ex_table,\"a\"\n"
-		     "   .align 4\n\t"
-		     "   .long 	2b,3b\n\t"
-		     ".previous"
-		     : "=a" (err)
-		     : "c" (msr), "0" ((u32)val), "d" ((u32)(val>>32)),
-		       "i" (-EFAULT));
-	return err;
-}
-
-static unsigned long long native_read_tsc(void)
-{
-	unsigned long long val;
-	asm volatile("rdtsc" : "=A" (val));
-	return val;
-}
-
-static unsigned long long native_read_pmc(void)
-{
-	unsigned long long val;
-	asm volatile("rdpmc" : "=A" (val));
-	return val;
-}
-
-static void native_load_tr_desc(void)
-{
-	asm volatile("ltr %w0"::"q" (GDT_ENTRY_TSS*8));
-}
-
-static void native_load_gdt(const struct Xgt_desc_struct *dtr)
-{
-	asm volatile("lgdt %0"::"m" (*dtr));
-}
-
-static void native_load_idt(const struct Xgt_desc_struct *dtr)
-{
-	asm volatile("lidt %0"::"m" (*dtr));
-}
-
-static void native_store_gdt(struct Xgt_desc_struct *dtr)
-{
-	asm ("sgdt %0":"=m" (*dtr));
-}
-
-static void native_store_idt(struct Xgt_desc_struct *dtr)
-{
-	asm ("sidt %0":"=m" (*dtr));
-}
-
-static unsigned long native_store_tr(void)
-{
-	unsigned long tr;
-	asm ("str %0":"=r" (tr));
-	return tr;
-}
-
-static void native_load_tls(struct thread_struct *t, unsigned int cpu)
-{
-#define C(i) get_cpu_gdt_table(cpu)[GDT_ENTRY_TLS_MIN + i] = t->tls_array[i]
-	C(0); C(1); C(2);
-#undef C
-}
-
-static inline void native_write_dt_entry(void *dt, int entry, u32 entry_low, u32 entry_high)
-{
-	u32 *lp = (u32 *)((char *)dt + entry*8);
-	lp[0] = entry_low;
-	lp[1] = entry_high;
-}
-
-static void native_write_ldt_entry(void *dt, int entrynum, u32 low, u32 high)
-{
-	native_write_dt_entry(dt, entrynum, low, high);
-}
-
-static void native_write_gdt_entry(void *dt, int entrynum, u32 low, u32 high)
-{
-	native_write_dt_entry(dt, entrynum, low, high);
-}
-
-static void native_write_idt_entry(void *dt, int entrynum, u32 low, u32 high)
-{
-	native_write_dt_entry(dt, entrynum, low, high);
-}
-
-static void native_load_esp0(struct tss_struct *tss,
-				      struct thread_struct *thread)
-{
-	tss->esp0 = thread->esp0;
-
-	/* This can only happen when SEP is enabled, no need to test "SEP"arately */
-	if (unlikely(tss->ss1 != thread->sysenter_cs)) {
-		tss->ss1 = thread->sysenter_cs;
-		wrmsr(MSR_IA32_SYSENTER_CS, thread->sysenter_cs, 0);
-	}
-}
-
-static void native_io_delay(void)
-{
-	asm volatile("outb %al,$0x80");
 }
 
 static void native_flush_tlb(void)
@@ -395,82 +222,10 @@ static void native_flush_tlb_global(void)
 	__native_flush_tlb_global();
 }
 
-static void native_flush_tlb_single(u32 addr)
+static void native_flush_tlb_single(unsigned long addr)
 {
 	__native_flush_tlb_single(addr);
 }
-
-#ifndef CONFIG_X86_PAE
-static void native_set_pte(pte_t *ptep, pte_t pteval)
-{
-	*ptep = pteval;
-}
-
-static void native_set_pte_at(struct mm_struct *mm, u32 addr, pte_t *ptep, pte_t pteval)
-{
-	*ptep = pteval;
-}
-
-static void native_set_pmd(pmd_t *pmdp, pmd_t pmdval)
-{
-	*pmdp = pmdval;
-}
-
-#else /* CONFIG_X86_PAE */
-
-static void native_set_pte(pte_t *ptep, pte_t pte)
-{
-	ptep->pte_high = pte.pte_high;
-	smp_wmb();
-	ptep->pte_low = pte.pte_low;
-}
-
-static void native_set_pte_at(struct mm_struct *mm, u32 addr, pte_t *ptep, pte_t pte)
-{
-	ptep->pte_high = pte.pte_high;
-	smp_wmb();
-	ptep->pte_low = pte.pte_low;
-}
-
-static void native_set_pte_present(struct mm_struct *mm, unsigned long addr, pte_t *ptep, pte_t pte)
-{
-	ptep->pte_low = 0;
-	smp_wmb();
-	ptep->pte_high = pte.pte_high;
-	smp_wmb();
-	ptep->pte_low = pte.pte_low;
-}
-
-static void native_set_pte_atomic(pte_t *ptep, pte_t pteval)
-{
-	set_64bit((unsigned long long *)ptep,pte_val(pteval));
-}
-
-static void native_set_pmd(pmd_t *pmdp, pmd_t pmdval)
-{
-	set_64bit((unsigned long long *)pmdp,pmd_val(pmdval));
-}
-
-static void native_set_pud(pud_t *pudp, pud_t pudval)
-{
-	*pudp = pudval;
-}
-
-static void native_pte_clear(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
-{
-	ptep->pte_low = 0;
-	smp_wmb();
-	ptep->pte_high = 0;
-}
-
-static void native_pmd_clear(pmd_t *pmd)
-{
-	u32 *tmp = (u32 *)pmd;
-	*tmp = 0;
-	smp_wmb();
-	*(tmp + 1) = 0;
-}
-#endif /* CONFIG_X86_PAE */
 
 /* These are in entry.S */
 extern void native_iret(void);
@@ -483,14 +238,50 @@ static int __init print_banner(void)
 }
 core_initcall(print_banner);
 
+static struct resource reserve_ioports = {
+	.start = 0,
+	.end = IO_SPACE_LIMIT,
+	.name = "paravirt-ioport",
+	.flags = IORESOURCE_IO | IORESOURCE_BUSY,
+};
+
+static struct resource reserve_iomem = {
+	.start = 0,
+	.end = -1,
+	.name = "paravirt-iomem",
+	.flags = IORESOURCE_MEM | IORESOURCE_BUSY,
+};
+
+/*
+ * Reserve the whole legacy IO space to prevent any legacy drivers
+ * from wasting time probing for their hardware.  This is a fairly
+ * brute-force approach to disabling all non-virtual drivers.
+ *
+ * Note that this must be called very early to have any effect.
+ */
+int paravirt_disable_iospace(void)
+{
+	int ret;
+
+	ret = request_resource(&ioport_resource, &reserve_ioports);
+	if (ret == 0) {
+		ret = request_resource(&iomem_resource, &reserve_iomem);
+		if (ret)
+			release_resource(&reserve_ioports);
+	}
+
+	return ret;
+}
+
 struct paravirt_ops paravirt_ops = {
 	.name = "bare hardware",
 	.paravirt_enabled = 0,
 	.kernel_rpl = 0,
+	.shared_kernel_pmd = 1,	/* Only used when CONFIG_X86_PAE is set */
 
  	.patch = native_patch,
 	.banner = default_banner,
-	.arch_setup = native_nop,
+	.arch_setup = paravirt_nop,
 	.memory_setup = machine_specific_memory_setup,
 	.get_wallclock = native_get_wallclock,
 	.set_wallclock = native_set_wallclock,
@@ -517,11 +308,11 @@ struct paravirt_ops paravirt_ops = {
 	.safe_halt = native_safe_halt,
 	.halt = native_halt,
 	.wbinvd = native_wbinvd,
-	.read_msr = native_read_msr,
-	.write_msr = native_write_msr,
+	.read_msr = native_read_msr_safe,
+	.write_msr = native_write_msr_safe,
 	.read_tsc = native_read_tsc,
 	.read_pmc = native_read_pmc,
-	.get_scheduled_cycles = native_read_tsc,
+	.sched_clock = native_sched_clock,
 	.get_cpu_khz = native_calculate_cpu_khz,
 	.load_tr_desc = native_load_tr_desc,
 	.set_ldt = native_set_ldt,
@@ -531,9 +322,9 @@ struct paravirt_ops paravirt_ops = {
 	.store_idt = native_store_idt,
 	.store_tr = native_store_tr,
 	.load_tls = native_load_tls,
-	.write_ldt_entry = native_write_ldt_entry,
-	.write_gdt_entry = native_write_gdt_entry,
-	.write_idt_entry = native_write_idt_entry,
+	.write_ldt_entry = write_dt_entry,
+	.write_gdt_entry = write_dt_entry,
+	.write_idt_entry = write_dt_entry,
 	.load_esp0 = native_load_esp0,
 
 	.set_iopl_mask = native_set_iopl_mask,
@@ -545,44 +336,57 @@ struct paravirt_ops paravirt_ops = {
 	.apic_read = native_apic_read,
 	.setup_boot_clock = setup_boot_APIC_clock,
 	.setup_secondary_clock = setup_secondary_APIC_clock,
+	.startup_ipi_hook = paravirt_nop,
 #endif
-	.set_lazy_mode = (void *)native_nop,
+	.set_lazy_mode = paravirt_nop,
+
+	.pagetable_setup_start = native_pagetable_setup_start,
+	.pagetable_setup_done = native_pagetable_setup_done,
 
 	.flush_tlb_user = native_flush_tlb,
 	.flush_tlb_kernel = native_flush_tlb_global,
 	.flush_tlb_single = native_flush_tlb_single,
+	.flush_tlb_others = native_flush_tlb_others,
 
-	.map_pt_hook = (void *)native_nop,
-
-	.alloc_pt = (void *)native_nop,
-	.alloc_pd = (void *)native_nop,
-	.alloc_pd_clone = (void *)native_nop,
-	.release_pt = (void *)native_nop,
-	.release_pd = (void *)native_nop,
+	.alloc_pt = paravirt_nop,
+	.alloc_pd = paravirt_nop,
+	.alloc_pd_clone = paravirt_nop,
+	.release_pt = paravirt_nop,
+	.release_pd = paravirt_nop,
 
 	.set_pte = native_set_pte,
 	.set_pte_at = native_set_pte_at,
 	.set_pmd = native_set_pmd,
-	.pte_update = (void *)native_nop,
-	.pte_update_defer = (void *)native_nop,
+	.pte_update = paravirt_nop,
+	.pte_update_defer = paravirt_nop,
+
+#ifdef CONFIG_HIGHPTE
+	.kmap_atomic_pte = kmap_atomic,
+#endif
+
 #ifdef CONFIG_X86_PAE
 	.set_pte_atomic = native_set_pte_atomic,
 	.set_pte_present = native_set_pte_present,
 	.set_pud = native_set_pud,
 	.pte_clear = native_pte_clear,
 	.pmd_clear = native_pmd_clear,
+
+	.pmd_val = native_pmd_val,
+	.make_pmd = native_make_pmd,
 #endif
+
+	.pte_val = native_pte_val,
+	.pgd_val = native_pgd_val,
+
+	.make_pte = native_make_pte,
+	.make_pgd = native_make_pgd,
 
 	.irq_enable_sysexit = native_irq_enable_sysexit,
 	.iret = native_iret,
 
-	.startup_ipi_hook = (void *)native_nop,
+	.dup_mmap = paravirt_nop,
+	.exit_mmap = paravirt_nop,
+	.activate_mm = paravirt_nop,
 };
 
-/*
- * NOTE: CONFIG_PARAVIRT is experimental and the paravirt_ops
- * semantics are subject to change. Hence we only do this
- * internal-only export of this, until it gets sorted out and
- * all lowlevel CPU ops used by modules are separately exported.
- */
-EXPORT_SYMBOL_GPL(paravirt_ops);
+EXPORT_SYMBOL(paravirt_ops);

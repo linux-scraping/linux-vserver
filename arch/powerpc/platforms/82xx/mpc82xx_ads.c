@@ -49,7 +49,7 @@
 #include <linux/fs_enet_pd.h>
 
 #include <sysdev/fsl_soc.h>
-#include <../sysdev/cpm2_pic.h>
+#include <sysdev/cpm2_pic.h>
 
 #include "pq2ads.h"
 
@@ -456,7 +456,7 @@ void m82xx_pci_init_irq(void)
 		iounmap(immap);
 		return;
 	}
-	irq_map = get_property(np, "interrupt-map", &size);
+	irq_map = of_get_property(np, "interrupt-map", &size);
 	if ((!irq_map) || (size <= 7)) {
 		printk(KERN_INFO "No interrupt-map property of pci node\n");
 		iounmap(immap);
@@ -481,7 +481,7 @@ void m82xx_pci_init_irq(void)
 	}
 	pci_pic_node = of_node_get(np);
 	/* PCI interrupt controller registers: status and mask */
-	regs = get_property(np, "reg", &size);
+	regs = of_get_property(np, "reg", &size);
 	if ((!regs) || (size <= 2)) {
 		printk(KERN_INFO "No reg property in pci pic node\n");
 		iounmap(immap);
@@ -507,7 +507,8 @@ void m82xx_pci_init_irq(void)
 	return;
 }
 
-static int m82xx_pci_exclude_device(u_char bus, u_char devfn)
+static int m82xx_pci_exclude_device(struct pci_controller *hose,
+				    u_char bus, u_char devfn)
 {
 	if (bus == 0 && PCI_SLOT(devfn) == 0)
 		return PCIBIOS_DEVICE_NOT_FOUND;
@@ -515,26 +516,26 @@ static int m82xx_pci_exclude_device(u_char bus, u_char devfn)
 		return PCIBIOS_SUCCESSFUL;
 }
 
-void __init add_bridge(struct device_node *np)
+static void __init mpc82xx_add_bridge(struct device_node *np)
 {
 	int len;
 	struct pci_controller *hose;
 	struct resource r;
 	const int *bus_range;
-	const void *ptr;
+	const uint *ptr;
 
 	memset(&r, 0, sizeof(r));
 	if (of_address_to_resource(np, 0, &r)) {
 		printk(KERN_INFO "No PCI reg property in device tree\n");
 		return;
 	}
-	if (!(ptr = get_property(np, "clock-frequency", NULL))) {
+	if (!(ptr = of_get_property(np, "clock-frequency", NULL))) {
 		printk(KERN_INFO "No clock-frequency property in PCI node");
 		return;
 	}
-	pci_clk_frq = *(uint *) ptr;
+	pci_clk_frq = *ptr;
 	of_node_put(np);
-	bus_range = get_property(np, "bus-range", &len);
+	bus_range = of_get_property(np, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
 		printk(KERN_WARNING "Can't get bus-range for %s, assume"
 		       " bus 0\n", np->full_name);
@@ -542,23 +543,18 @@ void __init add_bridge(struct device_node *np)
 
 	pci_assign_all_buses = 1;
 
-	hose = pcibios_alloc_controller();
+	hose = pcibios_alloc_controller(np);
 
 	if (!hose)
 		return;
 
-	hose->arch_data = np;
-	hose->set_cfg_type = 1;
-
 	hose->first_busno = bus_range ? bus_range[0] : 0;
 	hose->last_busno = bus_range ? bus_range[1] : 0xff;
-	hose->bus_offset = 0;
-
-	hose->set_cfg_type = 1;
 
 	setup_indirect_pci(hose,
 			   r.start + offsetof(pci_cpm2_t, pci_cfg_addr),
-			   r.start + offsetof(pci_cpm2_t, pci_cfg_data));
+			   r.start + offsetof(pci_cpm2_t, pci_cfg_data),
+			   0);
 
 	pci_process_bridge_OF_ranges(hose, np, 1);
 }
@@ -584,7 +580,7 @@ static void __init mpc82xx_ads_setup_arch(void)
 #ifdef CONFIG_PCI
 	ppc_md.pci_exclude_device = m82xx_pci_exclude_device;
 	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
-		add_bridge(np);
+		mpc82xx_add_bridge(np);
 
 	of_node_put(np);
 #endif

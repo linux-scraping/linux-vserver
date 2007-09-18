@@ -159,6 +159,13 @@ struct ap_device_id {
 
 #define AP_DEVICE_ID_MATCH_DEVICE_TYPE		0x01
 
+#define ACPI_ID_LEN	16 /* only 9 bytes needed here, 16 bytes are used */
+			   /* to workaround crosscompile issues */
+
+struct acpi_device_id {
+	__u8 id[ACPI_ID_LEN];
+	kernel_ulong_t driver_data;
+};
 
 #define PNP_ID_LEN	8
 #define PNP_MAX_DEVICES	8
@@ -262,6 +269,7 @@ struct i2c_device_id {
 
 /* Input */
 #define INPUT_DEVICE_ID_EV_MAX		0x1f
+#define INPUT_DEVICE_ID_KEY_MIN_INTERESTING	0x71
 #define INPUT_DEVICE_ID_KEY_MAX		0x1ff
 #define INPUT_DEVICE_ID_REL_MAX		0x0f
 #define INPUT_DEVICE_ID_ABS_MAX		0x3f

@@ -34,6 +34,7 @@
 #include "ultrix.h"
 #include "efi.h"
 #include "karma.h"
+#include "sysv68.h"
 
 #ifdef CONFIG_BLK_DEV_MD
 extern void md_autodetect_dev(dev_t dev);
@@ -104,6 +105,9 @@ static int (*check_part[])(struct parsed_partitions *, struct block_device *) = 
 #endif
 #ifdef CONFIG_KARMA_PARTITION
 	karma_partition,
+#endif
+#ifdef CONFIG_SYSV68_PARTITION
+	sysv68_partition,
 #endif
 	NULL
 };
@@ -312,7 +316,7 @@ static struct attribute * default_attrs[] = {
 	NULL,
 };
 
-extern struct subsystem block_subsys;
+extern struct kset block_subsys;
 
 static void part_release(struct kobject *kobj)
 {
@@ -368,11 +372,10 @@ void add_partition(struct gendisk *disk, int part, sector_t start, sector_t len,
 {
 	struct hd_struct *p;
 
-	p = kmalloc(sizeof(*p), GFP_KERNEL);
+	p = kzalloc(sizeof(*p), GFP_KERNEL);
 	if (!p)
 		return;
 	
-	memset(p, 0, sizeof(*p));
 	p->start_sect = start;
 	p->nr_sects = len;
 	p->partno = part;
@@ -388,12 +391,11 @@ void add_partition(struct gendisk *disk, int part, sector_t start, sector_t len,
 	kobject_add(&p->kobj);
 	if (!disk->part_uevent_suppress)
 		kobject_uevent(&p->kobj, KOBJ_ADD);
-	sysfs_create_link(&p->kobj, &block_subsys.kset.kobj, "subsystem");
+	sysfs_create_link(&p->kobj, &block_subsys.kobj, "subsystem");
 	if (flags & ADDPART_FLAG_WHOLEDISK) {
 		static struct attribute addpartattr = {
 			.name = "whole_disk",
 			.mode = S_IRUSR | S_IRGRP | S_IROTH,
-			.owner = THIS_MODULE,
 		};
 
 		sysfs_create_file(&p->kobj, &addpartattr);
@@ -444,7 +446,7 @@ static int disk_sysfs_symlinks(struct gendisk *disk)
 			goto err_out_dev_link;
 	}
 
-	err = sysfs_create_link(&disk->kobj, &block_subsys.kset.kobj,
+	err = sysfs_create_link(&disk->kobj, &block_subsys.kobj,
 				"subsystem");
 	if (err)
 		goto err_out_disk_name_lnk;
@@ -569,9 +571,6 @@ unsigned char *read_dev_sector(struct block_device *bdev, sector_t n, Sector *p)
 	page = read_mapping_page(mapping, (pgoff_t)(n >> (PAGE_CACHE_SHIFT-9)),
 				 NULL);
 	if (!IS_ERR(page)) {
-		wait_on_page_locked(page);
-		if (!PageUptodate(page))
-			goto fail;
 		if (PageError(page))
 			goto fail;
 		p->v = page;

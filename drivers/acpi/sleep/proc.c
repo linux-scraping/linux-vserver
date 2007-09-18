@@ -14,8 +14,16 @@
 #include "sleep.h"
 
 #define _COMPONENT		ACPI_SYSTEM_COMPONENT
+
+/*
+ * this file provides support for:
+ * /proc/acpi/sleep
+ * /proc/acpi/alarm
+ * /proc/acpi/wakeup
+ */
+
 ACPI_MODULE_NAME("sleep")
-#ifdef	CONFIG_ACPI_SLEEP_PROC_SLEEP
+#ifdef	CONFIG_ACPI_PROCFS_SLEEP
 static int acpi_system_sleep_seq_show(struct seq_file *seq, void *offset)
 {
 	int i;
@@ -58,9 +66,9 @@ acpi_system_write_sleep(struct file *file,
 		goto Done;
 	}
 	state = simple_strtoul(str, NULL, 0);
-#ifdef CONFIG_SOFTWARE_SUSPEND
+#ifdef CONFIG_HIBERNATION
 	if (state == 4) {
-		error = software_suspend();
+		error = hibernate();
 		goto Done;
 	}
 #endif
@@ -68,7 +76,15 @@ acpi_system_write_sleep(struct file *file,
       Done:
 	return error ? error : count;
 }
-#endif				/* CONFIG_ACPI_SLEEP_PROC_SLEEP */
+#endif				/* CONFIG_ACPI_PROCFS_SLEEP */
+
+#if defined(CONFIG_RTC_DRV_CMOS) || defined(CONFIG_RTC_DRV_CMOS_MODULE) || !defined(CONFIG_X86)
+/* use /sys/class/rtc/rtcX/wakealarm instead; it's not ACPI-specific */
+#else
+#define	HAVE_ACPI_LEGACY_ALARM
+#endif
+
+#ifdef	HAVE_ACPI_LEGACY_ALARM
 
 static int acpi_system_alarm_seq_show(struct seq_file *seq, void *offset)
 {
@@ -341,6 +357,7 @@ acpi_system_write_alarm(struct file *file,
       end:
 	return_VALUE(result ? result : count);
 }
+#endif				/* HAVE_ACPI_LEGACY_ALARM */
 
 extern struct list_head acpi_wakeup_device_list;
 extern spinlock_t acpi_device_lock;
@@ -350,21 +367,31 @@ acpi_system_wakeup_device_seq_show(struct seq_file *seq, void *offset)
 {
 	struct list_head *node, *next;
 
-	seq_printf(seq, "Device	Sleep state	Status\n");
+	seq_printf(seq, "Device\tS-state\t  Status   Sysfs node\n");
 
 	spin_lock(&acpi_device_lock);
 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
 		struct acpi_device *dev =
 		    container_of(node, struct acpi_device, wakeup_list);
+		struct device *ldev;
 
 		if (!dev->wakeup.flags.valid)
 			continue;
 		spin_unlock(&acpi_device_lock);
-		seq_printf(seq, "%4s	%4d		%s%8s\n",
+
+		ldev = acpi_get_physical_device(dev->handle);
+		seq_printf(seq, "%s\t  S%d\t%c%-8s  ",
 			   dev->pnp.bus_id,
 			   (u32) dev->wakeup.sleep_state,
-			   dev->wakeup.flags.run_wake ? "*" : "",
+			   dev->wakeup.flags.run_wake ? '*' : ' ',
 			   dev->wakeup.state.enabled ? "enabled" : "disabled");
+		if (ldev)
+			seq_printf(seq, "%s:%s",
+				   ldev->bus ? ldev->bus->name : "no-bus",
+				   ldev->bus_id);
+		seq_printf(seq, "\n");
+		put_device(ldev);
+
 		spin_lock(&acpi_device_lock);
 	}
 	spin_unlock(&acpi_device_lock);
@@ -444,7 +471,7 @@ static const struct file_operations acpi_system_wakeup_device_fops = {
 	.release = single_release,
 };
 
-#ifdef	CONFIG_ACPI_SLEEP_PROC_SLEEP
+#ifdef	CONFIG_ACPI_PROCFS_SLEEP
 static const struct file_operations acpi_system_sleep_fops = {
 	.open = acpi_system_sleep_open_fs,
 	.read = seq_read,
@@ -452,8 +479,9 @@ static const struct file_operations acpi_system_sleep_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
-#endif				/* CONFIG_ACPI_SLEEP_PROC_SLEEP */
+#endif				/* CONFIG_ACPI_PROCFS_SLEEP */
 
+#ifdef	HAVE_ACPI_LEGACY_ALARM
 static const struct file_operations acpi_system_alarm_fops = {
 	.open = acpi_system_alarm_open_fs,
 	.read = seq_read,
@@ -469,29 +497,34 @@ static u32 rtc_handler(void *context)
 
 	return ACPI_INTERRUPT_HANDLED;
 }
+#endif				/* HAVE_ACPI_LEGACY_ALARM */
 
-static int acpi_sleep_proc_init(void)
+static int __init acpi_sleep_proc_init(void)
 {
 	struct proc_dir_entry *entry = NULL;
 
 	if (acpi_disabled)
 		return 0;
 
-#ifdef	CONFIG_ACPI_SLEEP_PROC_SLEEP
+#ifdef	CONFIG_ACPI_PROCFS_SLEEP
 	/* 'sleep' [R/W] */
 	entry =
 	    create_proc_entry("sleep", S_IFREG | S_IRUGO | S_IWUSR,
 			      acpi_root_dir);
 	if (entry)
 		entry->proc_fops = &acpi_system_sleep_fops;
-#endif
+#endif				/* CONFIG_ACPI_PROCFS */
 
+#ifdef	HAVE_ACPI_LEGACY_ALARM
 	/* 'alarm' [R/W] */
 	entry =
 	    create_proc_entry("alarm", S_IFREG | S_IRUGO | S_IWUSR,
 			      acpi_root_dir);
 	if (entry)
 		entry->proc_fops = &acpi_system_alarm_fops;
+
+	acpi_install_fixed_event_handler(ACPI_EVENT_RTC, rtc_handler, NULL);
+#endif				/* HAVE_ACPI_LEGACY_ALARM */
 
 	/* 'wakeup device' [R/W] */
 	entry =
@@ -500,7 +533,6 @@ static int acpi_sleep_proc_init(void)
 	if (entry)
 		entry->proc_fops = &acpi_system_wakeup_device_fops;
 
-	acpi_install_fixed_event_handler(ACPI_EVENT_RTC, rtc_handler, NULL);
 	return 0;
 }
 

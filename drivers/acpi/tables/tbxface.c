@@ -52,6 +52,8 @@ ACPI_MODULE_NAME("tbxface")
 /* Local prototypes */
 static acpi_status acpi_tb_load_namespace(void);
 
+static int no_auto_ssdt;
+
 /*******************************************************************************
  *
  * FUNCTION:    acpi_allocate_root_table
@@ -201,6 +203,7 @@ acpi_status acpi_reallocate_root_table(void)
 
 	return_ACPI_STATUS(AE_OK);
 }
+
 /*******************************************************************************
  *
  * FUNCTION:    acpi_load_table
@@ -262,7 +265,7 @@ ACPI_EXPORT_SYMBOL(acpi_load_table)
 acpi_status
 acpi_get_table_header(char *signature,
 		      acpi_native_uint instance,
-		      struct acpi_table_header *out_table_header)
+		      struct acpi_table_header * out_table_header)
 {
 	acpi_native_uint i;
 	acpi_native_uint j;
@@ -321,7 +324,6 @@ acpi_get_table_header(char *signature,
 
 ACPI_EXPORT_SYMBOL(acpi_get_table_header)
 
-
 /******************************************************************************
  *
  * FUNCTION:    acpi_unload_table_id
@@ -346,11 +348,11 @@ acpi_status acpi_unload_table_id(acpi_owner_id id)
 			continue;
 		}
 		/*
-		* Delete all namespace objects owned by this table. Note that these
-		* objects can appear anywhere in the namespace by virtue of the AML
-		* "Scope" operator. Thus, we need to track ownership by an ID, not
-		* simply a position within the hierarchy
-		*/
+		 * Delete all namespace objects owned by this table. Note that these
+		 * objects can appear anywhere in the namespace by virtue of the AML
+		 * "Scope" operator. Thus, we need to track ownership by an ID, not
+		 * simply a position within the hierarchy
+		 */
 		acpi_tb_delete_namespace_by_owner(i);
 		status = acpi_tb_release_owner_id(i);
 		acpi_tb_set_table_loaded_flag(i, FALSE);
@@ -376,7 +378,7 @@ ACPI_EXPORT_SYMBOL(acpi_unload_table_id)
  *****************************************************************************/
 acpi_status
 acpi_get_table(char *signature,
-	       acpi_native_uint instance, struct acpi_table_header ** out_table)
+	       acpi_native_uint instance, struct acpi_table_header **out_table)
 {
 	acpi_native_uint i;
 	acpi_native_uint j;
@@ -536,6 +538,10 @@ static acpi_status acpi_tb_load_namespace(void)
 
 		ACPI_INFO((AE_INFO, "Table DSDT replaced by host OS"));
 		acpi_tb_print_table_header(0, table);
+
+		if (no_auto_ssdt == 0) {
+			printk(KERN_WARNING "ACPI: DSDT override uses original SSDTs unless \"acpi_no_auto_ssdt\"");
+		}
 	}
 
 	status =
@@ -574,6 +580,11 @@ static acpi_status acpi_tb_load_namespace(void)
 		    ||
 		    ACPI_FAILURE(acpi_tb_verify_table
 				 (&acpi_gbl_root_table_list.tables[i]))) {
+			continue;
+		}
+
+		if (no_auto_ssdt) {
+			printk(KERN_WARNING "ACPI: SSDT ignored due to \"acpi_no_auto_ssdt\"\n");
 			continue;
 		}
 
@@ -622,3 +633,15 @@ acpi_status acpi_load_tables(void)
 }
 
 ACPI_EXPORT_SYMBOL(acpi_load_tables)
+
+
+static int __init acpi_no_auto_ssdt_setup(char *s) {
+
+        printk(KERN_NOTICE "ACPI: SSDT auto-load disabled\n");
+
+        no_auto_ssdt = 1;
+
+        return 1;
+}
+
+__setup("acpi_no_auto_ssdt", acpi_no_auto_ssdt_setup);

@@ -2471,7 +2471,6 @@ static s64 get_nr_free_clusters(ntfs_volume *vol)
 	s64 nr_free = vol->nr_clusters;
 	u32 *kaddr;
 	struct address_space *mapping = vol->lcnbmp_ino->i_mapping;
-	filler_t *readpage = (filler_t*)mapping->a_ops->readpage;
 	struct page *page;
 	pgoff_t index, max_index;
 
@@ -2494,21 +2493,11 @@ static s64 get_nr_free_clusters(ntfs_volume *vol)
 		 * Read the page from page cache, getting it from backing store
 		 * if necessary, and increment the use count.
 		 */
-		page = read_cache_page(mapping, index, (filler_t*)readpage,
-				NULL);
+		page = read_mapping_page(mapping, index, NULL);
 		/* Ignore pages which errored synchronously. */
 		if (IS_ERR(page)) {
-			ntfs_debug("Sync read_cache_page() error. Skipping "
+			ntfs_debug("read_mapping_page() error. Skipping "
 					"page (index 0x%lx).", index);
-			nr_free -= PAGE_CACHE_SIZE * 8;
-			continue;
-		}
-		wait_on_page_locked(page);
-		/* Ignore pages which errored asynchronously. */
-		if (!PageUptodate(page)) {
-			ntfs_debug("Async read_cache_page() error. Skipping "
-					"page (index 0x%lx).", index);
-			page_cache_release(page);
 			nr_free -= PAGE_CACHE_SIZE * 8;
 			continue;
 		}
@@ -2562,7 +2551,6 @@ static unsigned long __get_nr_free_mft_records(ntfs_volume *vol,
 {
 	u32 *kaddr;
 	struct address_space *mapping = vol->mftbmp_ino->i_mapping;
-	filler_t *readpage = (filler_t*)mapping->a_ops->readpage;
 	struct page *page;
 	pgoff_t index;
 
@@ -2576,21 +2564,11 @@ static unsigned long __get_nr_free_mft_records(ntfs_volume *vol,
 		 * Read the page from page cache, getting it from backing store
 		 * if necessary, and increment the use count.
 		 */
-		page = read_cache_page(mapping, index, (filler_t*)readpage,
-				NULL);
+		page = read_mapping_page(mapping, index, NULL);
 		/* Ignore pages which errored synchronously. */
 		if (IS_ERR(page)) {
-			ntfs_debug("Sync read_cache_page() error. Skipping "
+			ntfs_debug("read_mapping_page() error. Skipping "
 					"page (index 0x%lx).", index);
-			nr_free -= PAGE_CACHE_SIZE * 8;
-			continue;
-		}
-		wait_on_page_locked(page);
-		/* Ignore pages which errored asynchronously. */
-		if (!PageUptodate(page)) {
-			ntfs_debug("Async read_cache_page() error. Skipping "
-					"page (index 0x%lx).", index);
-			page_cache_release(page);
 			nr_free -= PAGE_CACHE_SIZE * 8;
 			continue;
 		}
@@ -3107,9 +3085,7 @@ static void ntfs_big_inode_init_once(void *foo, struct kmem_cache *cachep,
 {
 	ntfs_inode *ni = (ntfs_inode *)foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-			SLAB_CTOR_CONSTRUCTOR)
-		inode_init_once(VFS_I(ni));
+	inode_init_once(VFS_I(ni));
 }
 
 /*
@@ -3167,7 +3143,7 @@ static int __init init_ntfs_fs(void)
 
 	ntfs_index_ctx_cache = kmem_cache_create(ntfs_index_ctx_cache_name,
 			sizeof(ntfs_index_context), 0 /* offset */,
-			SLAB_HWCACHE_ALIGN, NULL /* ctor */, NULL /* dtor */);
+			SLAB_HWCACHE_ALIGN, NULL /* ctor */);
 	if (!ntfs_index_ctx_cache) {
 		printk(KERN_CRIT "NTFS: Failed to create %s!\n",
 				ntfs_index_ctx_cache_name);
@@ -3175,7 +3151,7 @@ static int __init init_ntfs_fs(void)
 	}
 	ntfs_attr_ctx_cache = kmem_cache_create(ntfs_attr_ctx_cache_name,
 			sizeof(ntfs_attr_search_ctx), 0 /* offset */,
-			SLAB_HWCACHE_ALIGN, NULL /* ctor */, NULL /* dtor */);
+			SLAB_HWCACHE_ALIGN, NULL /* ctor */);
 	if (!ntfs_attr_ctx_cache) {
 		printk(KERN_CRIT "NTFS: Failed to create %s!\n",
 				ntfs_attr_ctx_cache_name);
@@ -3184,7 +3160,7 @@ static int __init init_ntfs_fs(void)
 
 	ntfs_name_cache = kmem_cache_create(ntfs_name_cache_name,
 			(NTFS_MAX_NAME_LEN+1) * sizeof(ntfschar), 0,
-			SLAB_HWCACHE_ALIGN, NULL, NULL);
+			SLAB_HWCACHE_ALIGN, NULL);
 	if (!ntfs_name_cache) {
 		printk(KERN_CRIT "NTFS: Failed to create %s!\n",
 				ntfs_name_cache_name);
@@ -3193,7 +3169,7 @@ static int __init init_ntfs_fs(void)
 
 	ntfs_inode_cache = kmem_cache_create(ntfs_inode_cache_name,
 			sizeof(ntfs_inode), 0,
-			SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD, NULL, NULL);
+			SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD, NULL);
 	if (!ntfs_inode_cache) {
 		printk(KERN_CRIT "NTFS: Failed to create %s!\n",
 				ntfs_inode_cache_name);
@@ -3203,7 +3179,7 @@ static int __init init_ntfs_fs(void)
 	ntfs_big_inode_cache = kmem_cache_create(ntfs_big_inode_cache_name,
 			sizeof(big_ntfs_inode), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
-			ntfs_big_inode_init_once, NULL);
+			ntfs_big_inode_init_once);
 	if (!ntfs_big_inode_cache) {
 		printk(KERN_CRIT "NTFS: Failed to create %s!\n",
 				ntfs_big_inode_cache_name);

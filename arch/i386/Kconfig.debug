@@ -36,11 +36,11 @@ config DEBUG_STACK_USAGE
 	  This option will slow down process creation somewhat.
 
 comment "Page alloc debug is incompatible with Software Suspend on i386"
-	depends on DEBUG_KERNEL && SOFTWARE_SUSPEND
+	depends on DEBUG_KERNEL && HIBERNATION
 
 config DEBUG_PAGEALLOC
 	bool "Debug page memory allocations"
-	depends on DEBUG_KERNEL && !SOFTWARE_SUSPEND && !HUGETLBFS
+	depends on DEBUG_KERNEL && !HIBERNATION && !HUGETLBFS
 	help
 	  Unmap pages from the kernel linear mapping after free_pages().
 	  This results in a large slowdown, but helps to find certain types
@@ -84,15 +84,5 @@ config DOUBLEFAULT
           would otherwise cause a system to silently reboot. Disabling this
           option saves about 4k and might cause you much additional grey
           hair.
-
-config DEBUG_PARAVIRT
-	bool "Enable some paravirtualization debugging"
-	default n
-	depends on PARAVIRT && DEBUG_KERNEL
-	help
-	  Currently deliberately clobbers regs which are allowed to be
-	  clobbered in inlined paravirt hooks, even in native mode.
-	  If turning this off solves a problem, then DISABLE_INTERRUPTS() or
-	  ENABLE_INTERRUPTS() is lying about what registers can be clobbered.
 
 endmenu

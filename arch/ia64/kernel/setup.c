@@ -60,7 +60,7 @@
 #include <asm/smp.h>
 #include <asm/system.h>
 #include <asm/unistd.h>
-#include <asm/system.h>
+#include <asm/hpsim.h>
 
 #if defined(CONFIG_SMP) && (IA64_CPU_SIZE > PAGE_SIZE)
 # error "struct cpuinfo_ia64 too big!"
@@ -75,7 +75,6 @@ extern void ia64_setup_printk_clock(void);
 
 DEFINE_PER_CPU(struct cpuinfo_ia64, cpu_info);
 DEFINE_PER_CPU(unsigned long, local_per_cpu_offset);
-DEFINE_PER_CPU(unsigned long, ia64_phys_stacked_size_p8);
 unsigned long ia64_cycles_per_usec;
 struct ia64_boot_param *ia64_boot_param;
 struct screen_info screen_info;
@@ -391,10 +390,8 @@ early_console_setup (char *cmdline)
 	if (!efi_setup_pcdp_console(cmdline))
 		earlycons++;
 #endif
-#ifdef CONFIG_SERIAL_8250_CONSOLE
-	if (!early_serial_console_init(cmdline))
+	if (!simcons_register())
 		earlycons++;
-#endif
 
 	return (earlycons) ? 0 : -1;
 }
@@ -496,11 +493,16 @@ setup_arch (char **cmdline_p)
 	efi_init();
 	io_port_init();
 
-	parse_early_param();
-
 #ifdef CONFIG_IA64_GENERIC
-	machvec_init(NULL);
+	/* machvec needs to be parsed from the command line
+	 * before parse_early_param() is called to ensure
+	 * that ia64_mv is initialised before any command line
+	 * settings may cause console setup to occur
+	 */
+	machvec_init_from_cmdline(*cmdline_p);
 #endif
+
+	parse_early_param();
 
 	if (early_console_setup(*cmdline_p) == 0)
 		mark_bsp_online();
@@ -577,7 +579,7 @@ setup_arch (char **cmdline_p)
 }
 
 /*
- * Display cpu info for all cpu's.
+ * Display cpu info for all CPUs.
  */
 static int
 show_cpuinfo (struct seq_file *m, void *v)
@@ -762,7 +764,7 @@ identify_cpu (struct cpuinfo_ia64 *c)
 	c->cpu = smp_processor_id();
 
 	/* below default values will be overwritten  by identify_siblings() 
-	 * for Multi-Threading/Multi-Core capable cpu's
+	 * for Multi-Threading/Multi-Core capable CPUs
 	 */
 	c->threads_per_core = c->cores_per_socket = c->num_log = 1;
 	c->socket_id = -1;
@@ -787,7 +789,7 @@ identify_cpu (struct cpuinfo_ia64 *c)
 	c->unimpl_pa_mask = ~((1L<<63) | ((1L << phys_addr_size) - 1));
 }
 
-void
+void __init
 setup_per_cpu_areas (void)
 {
 	/* start_kernel() requires this... */
@@ -806,7 +808,6 @@ static void __cpuinit
 get_max_cacheline_size (void)
 {
 	unsigned long line_size, max = 1;
-	unsigned int cache_size = 0;
 	u64 l, levels, unique_caches;
         pal_cache_config_info_t cci;
         s64 status;
@@ -836,8 +837,6 @@ get_max_cacheline_size (void)
 		line_size = 1 << cci.pcci_line_size;
 		if (line_size > max)
 			max = line_size;
-		if (cache_size < cci.pcci_cache_size)
-			cache_size = cci.pcci_cache_size;
 		if (!cci.pcci_unified) {
 			status = ia64_pal_cache_config_info(l,
 						    /* cache_type (instruction)= */ 1,
@@ -854,9 +853,6 @@ get_max_cacheline_size (void)
 			ia64_i_cache_stride_shift = cci.pcci_stride;
 	}
   out:
-#ifdef CONFIG_SMP
-	max_cache_size = max(max_cache_size, cache_size);
-#endif
 	if (max > ia64_max_cacheline_size)
 		ia64_max_cacheline_size = max;
 }
@@ -869,6 +865,7 @@ void __cpuinit
 cpu_init (void)
 {
 	extern void __cpuinit ia64_mmu_init (void *);
+	static unsigned long max_num_phys_stacked = IA64_NUM_PHYS_STACK_REG;
 	unsigned long num_phys_stacked;
 	pal_vm_info_2_u_t vmi;
 	unsigned int max_ctx;
@@ -947,7 +944,7 @@ cpu_init (void)
 	ia32_cpu_init();
 #endif
 
-	/* Clear ITC to eliminiate sched_clock() overflows in human time.  */
+	/* Clear ITC to eliminate sched_clock() overflows in human time.  */
 	ia64_set_itc(0);
 
 	/* disable all local interrupt sources: */
@@ -959,6 +956,11 @@ cpu_init (void)
 
 	/* clear TPR & XTP to enable all interrupt classes: */
 	ia64_setreg(_IA64_REG_CR_TPR, 0);
+
+	/* Clear any pending interrupts left by SAL/EFI */
+	while (ia64_get_ivr() != IA64_SPURIOUS_INT_VECTOR)
+		ia64_eoi();
+
 #ifdef CONFIG_SMP
 	normal_xtp();
 #endif
@@ -982,18 +984,12 @@ cpu_init (void)
 		num_phys_stacked = 96;
 	}
 	/* size of physical stacked register partition plus 8 bytes: */
-	__get_cpu_var(ia64_phys_stacked_size_p8) = num_phys_stacked*8 + 8;
+	if (num_phys_stacked > max_num_phys_stacked) {
+		ia64_patch_phys_stack_reg(num_phys_stacked*8 + 8);
+		max_num_phys_stacked = num_phys_stacked;
+	}
 	platform_cpu_init();
 	pm_idle = default_idle;
-}
-
-/*
- * On SMP systems, when the scheduler does migration-cost autodetection,
- * it needs a way to flush as much of the CPU's caches as possible.
- */
-void sched_cacheflush(void)
-{
-	ia64_sal_cache_flush(3);
 }
 
 void __init

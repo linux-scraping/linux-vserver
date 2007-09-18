@@ -533,11 +533,10 @@ static int __init lance_probe1(struct net_device *dev, int ioaddr, int irq, int 
 	dev->base_addr = ioaddr;
 	/* Make certain the data structures used by the LANCE are aligned and DMAble. */
 
-	lp = kmalloc(sizeof(*lp), GFP_DMA | GFP_KERNEL);
+	lp = kzalloc(sizeof(*lp), GFP_DMA | GFP_KERNEL);
 	if(lp==NULL)
 		return -ENODEV;
 	if (lance_debug > 6) printk(" (#0x%05lx)", (unsigned long)lp);
-	memset(lp, 0, sizeof(*lp));
 	dev->priv = lp;
 	lp->name = chipname;
 	lp->rx_buffs = (unsigned long)kmalloc(PKT_BUF_SZ*RX_RING_SIZE,
@@ -988,7 +987,7 @@ static int lance_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		if (lance_debug > 5)
 			printk("%s: bouncing a high-memory packet (%#x).\n",
 				   dev->name, (u32)isa_virt_to_bus(skb->data));
-		memcpy(&lp->tx_bounce_buffs[entry], skb->data, skb->len);
+		skb_copy_from_linear_data(skb, &lp->tx_bounce_buffs[entry], skb->len);
 		lp->tx_ring[entry].base =
 			((u32)isa_virt_to_bus((lp->tx_bounce_buffs + entry)) & 0xffffff) | 0x83000000;
 		dev_kfree_skb(skb);
@@ -1184,12 +1183,11 @@ lance_rx(struct net_device *dev)
 					}
 					break;
 				}
-				skb->dev = dev;
 				skb_reserve(skb,2);	/* 16 byte align */
 				skb_put(skb,pkt_len);	/* Make room */
-				eth_copy_and_sum(skb,
+				skb_copy_to_linear_data(skb,
 					(unsigned char *)isa_bus_to_virt((lp->rx_ring[entry].base & 0x00ffffff)),
-					pkt_len,0);
+					pkt_len);
 				skb->protocol=eth_type_trans(skb,dev);
 				netif_rx(skb);
 				dev->last_rx = jiffies;

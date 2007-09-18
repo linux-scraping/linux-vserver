@@ -1,8 +1,8 @@
 /*
  * net/tipc/port.c: TIPC port code
  *
- * Copyright (c) 1992-2006, Ericsson AB
- * Copyright (c) 2004-2005, Wind River Systems
+ * Copyright (c) 1992-2007, Ericsson AB
+ * Copyright (c) 2004-2007, Wind River Systems
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,7 +41,6 @@
 #include "addr.h"
 #include "link.h"
 #include "node.h"
-#include "port.h"
 #include "name_table.h"
 #include "user_reg.h"
 #include "msg.h"
@@ -239,6 +238,8 @@ u32 tipc_createport_raw(void *usr_handle,
 	}
 
 	tipc_port_lock(ref);
+	p_ptr->publ.usr_handle = usr_handle;
+	p_ptr->publ.max_pkt = MAX_PKT_DEFAULT;
 	p_ptr->publ.ref = ref;
 	msg = &p_ptr->publ.phdr;
 	msg_init(msg, DATA_LOW, TIPC_NAMED_MSG, TIPC_OK, LONG_H_SIZE, 0);
@@ -248,11 +249,9 @@ u32 tipc_createport_raw(void *usr_handle,
 	msg_set_importance(msg,importance);
 	p_ptr->last_in_seqno = 41;
 	p_ptr->sent = 1;
-	p_ptr->publ.usr_handle = usr_handle;
 	INIT_LIST_HEAD(&p_ptr->wait_list);
 	INIT_LIST_HEAD(&p_ptr->subscription.nodesub_list);
 	p_ptr->congested_link = NULL;
-	p_ptr->max_pkt = MAX_PKT_DEFAULT;
 	p_ptr->dispatcher = dispatcher;
 	p_ptr->wakeup = wakeup;
 	p_ptr->user_port = NULL;
@@ -464,7 +463,7 @@ int tipc_reject_msg(struct sk_buff *buf, u32 err)
 	msg_set_size(rmsg, data_sz + hdr_sz);
 	msg_set_nametype(rmsg, msg_nametype(msg));
 	msg_set_nameinst(rmsg, msg_nameinst(msg));
-	memcpy(rbuf->data + hdr_sz, msg_data(msg), data_sz);
+	skb_copy_to_linear_data_offset(rbuf, hdr_sz, msg_data(msg), data_sz);
 
 	/* send self-abort message when rejecting on a connected port */
 	if (msg_connected(msg)) {
@@ -1243,7 +1242,7 @@ int tipc_connect2port(u32 ref, struct tipc_portid const *peer)
 	res = TIPC_OK;
 exit:
 	tipc_port_unlock(p_ptr);
-	p_ptr->max_pkt = tipc_link_get_max_pkt(peer->node, ref);
+	p_ptr->publ.max_pkt = tipc_link_get_max_pkt(peer->node, ref);
 	return res;
 }
 
@@ -1419,7 +1418,7 @@ int tipc_send_buf(u32 ref, struct sk_buff *buf, unsigned int dsz)
 		return -ENOMEM;
 
 	skb_push(buf, hsz);
-	memcpy(buf->data, (unchar *)msg, hsz);
+	skb_copy_to_linear_data(buf, msg, hsz);
 	destnode = msg_destnode(msg);
 	p_ptr->publ.congested = 1;
 	if (!tipc_port_congested(p_ptr)) {
@@ -1555,7 +1554,7 @@ int tipc_forward_buf2name(u32 ref,
 	if (skb_cow(buf, LONG_H_SIZE))
 		return -ENOMEM;
 	skb_push(buf, LONG_H_SIZE);
-	memcpy(buf->data, (unchar *)msg, LONG_H_SIZE);
+	skb_copy_to_linear_data(buf, msg, LONG_H_SIZE);
 	msg_dbg(buf_msg(buf),"PREP:");
 	if (likely(destport || destnode)) {
 		p_ptr->sent++;
@@ -1679,7 +1678,7 @@ int tipc_forward_buf2port(u32 ref,
 		return -ENOMEM;
 
 	skb_push(buf, DIR_MSG_H_SIZE);
-	memcpy(buf->data, (unchar *)msg, DIR_MSG_H_SIZE);
+	skb_copy_to_linear_data(buf, msg, DIR_MSG_H_SIZE);
 	msg_dbg(msg, "buf2port: ");
 	p_ptr->sent++;
 	if (dest->node == tipc_own_addr)

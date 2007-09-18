@@ -30,29 +30,14 @@
  *	nfmark match added by Catalin(ux aka Dino) BOIE <catab at umbrella.ro>
  */
 
-#include <asm/uaccess.h>
-#include <asm/system.h>
-#include <linux/bitops.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/mm.h>
-#include <linux/socket.h>
-#include <linux/sockios.h>
-#include <linux/in.h>
 #include <linux/errno.h>
-#include <linux/interrupt.h>
-#include <linux/if_ether.h>
-#include <linux/inet.h>
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/notifier.h>
 #include <linux/rtnetlink.h>
-#include <net/ip.h>
-#include <net/route.h>
 #include <linux/skbuff.h>
-#include <net/sock.h>
+#include <net/netlink.h>
 #include <net/act_api.h>
 #include <net/pkt_cls.h>
 
@@ -119,7 +104,7 @@ static int u32_classify(struct sk_buff *skb, struct tcf_proto *tp, struct tcf_re
 	} stack[TC_U32_MAXDEPTH];
 
 	struct tc_u_hnode *ht = (struct tc_u_hnode*)tp->root;
-	u8 *ptr = skb->nh.raw;
+	u8 *ptr = skb_network_header(skb);
 	struct tc_u_knode *n;
 	int sdepth = 0;
 	int off2 = 0;
@@ -213,7 +198,7 @@ check_terminal:
 			off2 = 0;
 		}
 
-		if (ptr < skb->tail)
+		if (ptr < skb_tail_pointer(skb))
 			goto next_ht;
 	}
 
@@ -435,7 +420,7 @@ static void u32_destroy(struct tcf_proto *tp)
 			BUG_TRAP(ht->refcnt == 0);
 
 			kfree(ht);
-		};
+		}
 
 		kfree(tp_c);
 	}
@@ -718,7 +703,7 @@ static int u32_dump(struct tcf_proto *tp, unsigned long fh,
 		     struct sk_buff *skb, struct tcmsg *t)
 {
 	struct tc_u_knode *n = (struct tc_u_knode*)fh;
-	unsigned char	 *b = skb->tail;
+	unsigned char *b = skb_tail_pointer(skb);
 	struct rtattr *rta;
 
 	if (n == NULL)
@@ -765,14 +750,14 @@ static int u32_dump(struct tcf_proto *tp, unsigned long fh,
 #endif
 	}
 
-	rta->rta_len = skb->tail - b;
+	rta->rta_len = skb_tail_pointer(skb) - b;
 	if (TC_U32_KEY(n->handle))
 		if (tcf_exts_dump_stats(skb, &n->exts, &u32_ext_map) < 0)
 			goto rtattr_failure;
 	return skb->len;
 
 rtattr_failure:
-	skb_trim(skb, b - skb->data);
+	nlmsg_trim(skb, b);
 	return -1;
 }
 
@@ -796,9 +781,6 @@ static int __init init_u32(void)
 	printk("u32 classifier\n");
 #ifdef CONFIG_CLS_U32_PERF
 	printk("    Performance counters on\n");
-#endif
-#ifdef CONFIG_NET_CLS_POLICE
-	printk("    OLD policer on \n");
 #endif
 #ifdef CONFIG_NET_CLS_IND
 	printk("    input device check on \n");

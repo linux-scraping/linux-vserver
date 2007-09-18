@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -176,6 +176,8 @@ static void ipath_ud_loopback(struct ipath_qp *sqp,
 			dev->n_pkt_drops++;
 			goto bail_sge;
 		}
+		/* Make sure entry is read after head index is read. */
+		smp_rmb();
 		wqe = get_rwqe_ptr(rq, tail);
 		if (++tail >= rq->size)
 			tail = 0;
@@ -231,6 +233,8 @@ static void ipath_ud_loopback(struct ipath_qp *sqp,
 
 		if (len > length)
 			len = length;
+		if (len > sge->sge_length)
+			len = sge->sge_length;
 		BUG_ON(len == 0);
 		ipath_copy_sge(&rsge, sge->vaddr, len);
 		sge->vaddr += len;
@@ -305,6 +309,11 @@ int ipath_post_ud_send(struct ipath_qp *qp, struct ib_send_wr *wr)
 
 	if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_SEND_OK)) {
 		ret = 0;
+		goto bail;
+	}
+
+	if (wr->wr.ud.ah->pd != qp->ibqp.pd) {
+		ret = -EPERM;
 		goto bail;
 	}
 
@@ -467,7 +476,7 @@ int ipath_post_ud_send(struct ipath_qp *qp, struct ib_send_wr *wr)
 
 done:
 	/* Queue the completion status entry. */
-	if (!test_bit(IPATH_S_SIGNAL_REQ_WR, &qp->s_flags) ||
+	if (!(qp->s_flags & IPATH_S_SIGNAL_REQ_WR) ||
 	    (wr->send_flags & IB_SEND_SIGNALED)) {
 		wc.wr_id = wr->wr_id;
 		wc.status = IB_WC_SUCCESS;
@@ -647,6 +656,7 @@ void ipath_ud_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 		ipath_skip_sge(&qp->r_sge, sizeof(struct ib_grh));
 	ipath_copy_sge(&qp->r_sge, data,
 		       wc.byte_len - sizeof(struct ib_grh));
+	qp->r_wrid_valid = 0;
 	wc.wr_id = qp->r_wr_id;
 	wc.status = IB_WC_SUCCESS;
 	wc.opcode = IB_WC_RECV;

@@ -9,7 +9,6 @@
  *
  */
 
-#include <linux/in.h>
 #include <linux/netfilter_bridge/ebtables.h>
 #include <linux/netfilter_bridge/ebt_log.h>
 #include <linux/netfilter.h>
@@ -196,13 +195,7 @@ static int __init ebt_log_init(void)
 	ret = ebt_register_watcher(&log);
 	if (ret < 0)
 		return ret;
-	if (nf_log_register(PF_BRIDGE, &ebt_log_logger) < 0) {
-		printk(KERN_WARNING "ebt_log: not logging via system console "
-		       "since somebody else already registered for PF_INET\n");
-		/* we cannot make module load fail here, since otherwise
-		 * ebtables userspace would abort */
-	}
-
+	nf_log_register(PF_BRIDGE, &ebt_log_logger);
 	return 0;
 }
 

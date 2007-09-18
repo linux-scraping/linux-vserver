@@ -1198,10 +1198,11 @@ static int __init sunsu_kbd_ms_init(struct uart_sunsu_port *up)
 	if (up->port.type == PORT_UNKNOWN)
 		return -ENODEV;
 
-	printk("%s: %s port at %lx, irq %u\n",
+	printk("%s: %s port at %llx, irq %u\n",
 	       to_of_device(up->port.dev)->node->full_name,
 	       (up->su_type == SU_PORT_KBD) ? "Keyboard" : "Mouse",
-	       up->port.mapbase, up->port.irq);
+	       (unsigned long long) up->port.mapbase,
+	       up->port.irq);
 
 #ifdef CONFIG_SERIO
 	serio = &up->serio;
@@ -1288,7 +1289,17 @@ static void sunsu_console_write(struct console *co, const char *s,
 				unsigned int count)
 {
 	struct uart_sunsu_port *up = &sunsu_ports[co->index];
+	unsigned long flags;
 	unsigned int ier;
+	int locked = 1;
+
+	local_irq_save(flags);
+	if (up->port.sysrq) {
+		locked = 0;
+	} else if (oops_in_progress) {
+		locked = spin_trylock(&up->port.lock);
+	} else
+		spin_lock(&up->port.lock);
 
 	/*
 	 *	First save the UER then disable the interrupts
@@ -1304,6 +1315,10 @@ static void sunsu_console_write(struct console *co, const char *s,
 	 */
 	wait_for_xmitr(up);
 	serial_out(up, UART_IER, ier);
+
+	if (locked)
+		spin_unlock(&up->port.lock);
+	local_irq_restore(flags);
 }
 
 /*
@@ -1312,7 +1327,7 @@ static void sunsu_console_write(struct console *co, const char *s,
  *	- initialize the serial port
  *	Return non-zero if we didn't find a serial port.
  */
-static int sunsu_console_setup(struct console *co, char *options)
+static int __init sunsu_console_setup(struct console *co, char *options)
 {
 	struct uart_port *port;
 	int baud = 9600;
@@ -1343,7 +1358,7 @@ static int sunsu_console_setup(struct console *co, char *options)
 	return uart_set_options(port, co, baud, parity, bits, flow);
 }
 
-static struct console sunsu_cons = {
+static struct console sunsu_console = {
 	.name	=	"ttyS",
 	.write	=	sunsu_console_write,
 	.device	=	uart_console_device,
@@ -1357,28 +1372,12 @@ static struct console sunsu_cons = {
  *	Register console.
  */
 
-static inline struct console *SUNSU_CONSOLE(int num_uart)
+static inline struct console *SUNSU_CONSOLE(void)
 {
-	int i;
-
-	if (con_is_present())
-		return NULL;
-
-	for (i = 0; i < num_uart; i++) {
-		int this_minor = sunsu_reg.minor + i;
-
-		if ((this_minor - 64) == (serial_console - 1))
-			break;
-	}
-	if (i == num_uart)
-		return NULL;
-
-	sunsu_cons.index = i;
-
-	return &sunsu_cons;
+	return &sunsu_console;
 }
 #else
-#define SUNSU_CONSOLE(num_uart)		(NULL)
+#define SUNSU_CONSOLE()			(NULL)
 #define sunsu_serial_console_init()	do { } while (0)
 #endif
 
@@ -1387,8 +1386,8 @@ static enum su_type __devinit su_get_type(struct device_node *dp)
 	struct device_node *ap = of_find_node_by_path("/aliases");
 
 	if (ap) {
-		char *keyb = of_get_property(ap, "keyboard", NULL);
-		char *ms = of_get_property(ap, "mouse", NULL);
+		const char *keyb = of_get_property(ap, "keyboard", NULL);
+		const char *ms = of_get_property(ap, "mouse", NULL);
 
 		if (keyb) {
 			if (dp == of_find_node_by_path(keyb))
@@ -1468,6 +1467,8 @@ static int __devinit su_probe(struct of_device *op, const struct of_device_id *m
 
 	up->port.ops = &sunsu_pops;
 
+	sunserial_console_match(SUNSU_CONSOLE(), dp,
+				&sunsu_reg, up->port.line);
 	err = uart_add_one_port(&sunsu_reg, &up->port);
 	if (err)
 		goto out_unmap;
@@ -1558,7 +1559,6 @@ static int __init sunsu_init(void)
 			return err;
 		sunsu_reg.tty_driver->name_base = sunsu_reg.minor - 64;
 		sunserial_current_minor += num_uart;
-		sunsu_reg.cons = SUNSU_CONSOLE(num_uart);
 	}
 
 	err = of_register_driver(&su_driver, &of_bus_type);

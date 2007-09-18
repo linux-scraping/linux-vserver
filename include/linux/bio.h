@@ -24,6 +24,8 @@
 #include <linux/mempool.h>
 #include <linux/ioprio.h>
 
+#ifdef CONFIG_BLOCK
+
 /* Platforms may set this to teach the BIO layer about IOMMU hardware. */
 #include <asm/io.h>
 
@@ -276,7 +278,7 @@ extern struct bio_pair *bio_split(struct bio *bi, mempool_t *pool,
 extern mempool_t *bio_split_pool;
 extern void bio_pair_release(struct bio_pair *dbio);
 
-extern struct bio_set *bioset_create(int, int, int);
+extern struct bio_set *bioset_create(int, int);
 extern void bioset_free(struct bio_set *);
 
 extern struct bio *bio_alloc(gfp_t, int);
@@ -361,4 +363,5 @@ static inline char *__bio_kmap_irq(struct bio *bio, unsigned short idx,
 	__bio_kmap_irq((bio), (bio)->bi_idx, (flags))
 #define bio_kunmap_irq(buf,flags)	__bio_kunmap_irq(buf, flags)
 
+#endif /* CONFIG_BLOCK */
 #endif /* __LINUX_BIO_H */

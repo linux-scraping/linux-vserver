@@ -255,6 +255,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x04DD, 0x9102) }, /* SHARP WS003SH USB Modem */
 	{ USB_DEVICE(0x04DD, 0x9121) }, /* SHARP WS004SH USB Modem */
 	{ USB_DEVICE(0x04DD, 0x9123) }, /* SHARP WS007SH USB Modem */
+	{ USB_DEVICE(0x04DD, 0x9151) }, /* SHARP S01SH USB Modem */
 	{ USB_DEVICE(0x04E8, 0x5F00) }, /* Samsung NEXiO USB Sync */
 	{ USB_DEVICE(0x04E8, 0x5F01) }, /* Samsung NEXiO USB Sync */
 	{ USB_DEVICE(0x04E8, 0x5F02) }, /* Samsung NEXiO USB Sync */
@@ -544,6 +545,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x413C, 0x4009) }, /* Dell Axim USB Sync */
 	{ USB_DEVICE(0x4505, 0x0010) }, /* Smartphone */
 	{ USB_DEVICE(0x5E04, 0xCE00) }, /* SAGEM Wireless Assistant */
+	{ USB_DEVICE(0x0BB4, 0x00CF) }, /* HTC smartphone modems */
 	{ }                             /* Terminating entry */
 };
 
@@ -731,11 +733,13 @@ static void ipaq_read_bulk_callback(struct urb *urb)
 	struct tty_struct	*tty;
 	unsigned char		*data = urb->transfer_buffer;
 	int			result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -869,11 +873,13 @@ static void ipaq_write_bulk_callback(struct urb *urb)
 	struct ipaq_private	*priv = usb_get_serial_port_data(port);
 	unsigned long		flags;
 	int			result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
-	if (urb->status) {
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+
+	if (status) {
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 

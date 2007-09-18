@@ -21,7 +21,6 @@
 #include <linux/delay.h>
 #include <linux/initrd.h>
 #include <linux/platform_device.h>
-#include <linux/ide.h>
 #include <linux/seq_file.h>
 #include <linux/ioport.h>
 #include <linux/console.h>
@@ -33,6 +32,7 @@
 #include <linux/unistd.h>
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
+#include <linux/debugfs.h>
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/processor.h>
@@ -304,26 +304,8 @@ struct seq_operations cpuinfo_op = {
 void __init check_for_initrd(void)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-	const unsigned int *prop;
-	int len;
-
-	DBG(" -> check_for_initrd()\n");
-
-	if (of_chosen) {
-		prop = get_property(of_chosen, "linux,initrd-start", &len);
-		if (prop != NULL) {
-			initrd_start = (unsigned long)
-				__va(of_read_ulong(prop, len / 4));
-			prop = get_property(of_chosen,
-					"linux,initrd-end", &len);
-			if (prop != NULL) {
-				initrd_end = (unsigned long)
-					__va(of_read_ulong(prop, len / 4));
-				initrd_below_start_ok = 1;
-			} else
-				initrd_start = 0;
-		}
-	}
+	DBG(" -> check_for_initrd()  initrd_start=0x%lx  initrd_end=0x%lx\n",
+	    initrd_start, initrd_end);
 
 	/* If we were passed an initrd, set the ROOT_DEV properly if the values
 	 * look sensible. If not, clear initrd reference.
@@ -371,11 +353,12 @@ void __init smp_setup_cpu_maps(void)
 		const int *intserv;
 		int j, len = sizeof(u32), nthreads = 1;
 
-		intserv = get_property(dn, "ibm,ppc-interrupt-server#s", &len);
+		intserv = of_get_property(dn, "ibm,ppc-interrupt-server#s",
+				&len);
 		if (intserv)
 			nthreads = len / sizeof(int);
 		else {
-			intserv = get_property(dn, "reg", NULL);
+			intserv = of_get_property(dn, "reg", NULL);
 			if (!intserv)
 				intserv = &cpu;	/* assume logical == phys */
 		}
@@ -398,10 +381,10 @@ void __init smp_setup_cpu_maps(void)
 		int num_addr_cell, num_size_cell, maxcpus;
 		const unsigned int *ireg;
 
-		num_addr_cell = prom_n_addr_cells(dn);
-		num_size_cell = prom_n_size_cells(dn);
+		num_addr_cell = of_n_addr_cells(dn);
+		num_size_cell = of_n_size_cells(dn);
 
-		ireg = get_property(dn, "ibm,lrdr-capacity", NULL);
+		ireg = of_get_property(dn, "ibm,lrdr-capacity", NULL);
 
 		if (!ireg)
 			goto out;
@@ -496,11 +479,51 @@ void probe_machine(void)
 	printk(KERN_INFO "Using %s machine description\n", ppc_md.name);
 }
 
+/* Match a class of boards, not a specific device configuration. */
 int check_legacy_ioport(unsigned long base_port)
 {
-	if (ppc_md.check_legacy_ioport == NULL)
-		return 0;
-	return ppc_md.check_legacy_ioport(base_port);
+	struct device_node *parent, *np = NULL;
+	int ret = -ENODEV;
+
+	switch(base_port) {
+	case I8042_DATA_REG:
+		if (!(np = of_find_compatible_node(NULL, NULL, "pnpPNP,303")))
+			np = of_find_compatible_node(NULL, NULL, "pnpPNP,f03");
+		if (np) {
+			parent = of_get_parent(np);
+			of_node_put(np);
+			np = parent;
+			break;
+		}
+		np = of_find_node_by_type(NULL, "8042");
+		/* Pegasos has no device_type on its 8042 node, look for the
+		 * name instead */
+		if (!np)
+			np = of_find_node_by_name(NULL, "8042");
+		break;
+	case FDC_BASE: /* FDC1 */
+		np = of_find_node_by_type(NULL, "fdc");
+		break;
+#ifdef CONFIG_PPC_PREP
+	case _PIDXR:
+	case _PNPWRP:
+	case PNPBIOS_BASE:
+		/* implement me */
+#endif
+	default:
+		/* ipmi is supposed to fail here */
+		break;
+	}
+	if (!np)
+		return ret;
+	parent = of_get_parent(np);
+	if (parent) {
+		if (strcmp(parent->type, "isa") == 0)
+			ret = 0;
+		of_node_put(parent);
+	}
+	of_node_put(np);
+	return ret;
 }
 EXPORT_SYMBOL(check_legacy_ioport);
 
@@ -520,3 +543,56 @@ void __init setup_panic(void)
 {
 	atomic_notifier_chain_register(&panic_notifier_list, &ppc_panic_block);
 }
+
+#ifdef CONFIG_CHECK_CACHE_COHERENCY
+/*
+ * For platforms that have configurable cache-coherency.  This function
+ * checks that the cache coherency setting of the kernel matches the setting
+ * left by the firmware, as indicated in the device tree.  Since a mismatch
+ * will eventually result in DMA failures, we print * and error and call
+ * BUG() in that case.
+ */
+
+#ifdef CONFIG_NOT_COHERENT_CACHE
+#define KERNEL_COHERENCY	0
+#else
+#define KERNEL_COHERENCY	1
+#endif
+
+static int __init check_cache_coherency(void)
+{
+	struct device_node *np;
+	const void *prop;
+	int devtree_coherency;
+
+	np = of_find_node_by_path("/");
+	prop = of_get_property(np, "coherency-off", NULL);
+	of_node_put(np);
+
+	devtree_coherency = prop ? 0 : 1;
+
+	if (devtree_coherency != KERNEL_COHERENCY) {
+		printk(KERN_ERR
+			"kernel coherency:%s != device tree_coherency:%s\n",
+			KERNEL_COHERENCY ? "on" : "off",
+			devtree_coherency ? "on" : "off");
+		BUG();
+	}
+
+	return 0;
+}
+
+late_initcall(check_cache_coherency);
+#endif /* CONFIG_CHECK_CACHE_COHERENCY */
+
+#ifdef CONFIG_DEBUG_FS
+struct dentry *powerpc_debugfs_root;
+
+static int powerpc_debugfs_init(void)
+{
+	powerpc_debugfs_root = debugfs_create_dir("powerpc", NULL);
+
+	return powerpc_debugfs_root == NULL;
+}
+arch_initcall(powerpc_debugfs_init);
+#endif

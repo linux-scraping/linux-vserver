@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: file.c,v 1.104 2005/10/18 23:29:35 tpoynor Exp $
  *
  */
 
@@ -19,6 +17,7 @@
 #include <linux/highmem.h>
 #include <linux/crc32.h>
 #include <linux/jffs2.h>
+#include <linux/vs_tag.h>
 #include "nodelist.h"
 
 static int jffs2_commit_write (struct file *filp, struct page *pg,
@@ -26,6 +25,9 @@ static int jffs2_commit_write (struct file *filp, struct page *pg,
 static int jffs2_prepare_write (struct file *filp, struct page *pg,
 				unsigned start, unsigned end);
 static int jffs2_readpage (struct file *filp, struct page *pg);
+
+extern int jffs2_sync_flags(struct inode *);
+
 
 int jffs2_fsync(struct file *filp, struct dentry *dentry, int datasync)
 {
@@ -49,7 +51,7 @@ const struct file_operations jffs2_file_operations =
 	.ioctl =	jffs2_ioctl,
 	.mmap =		generic_file_readonly_mmap,
 	.fsync =	jffs2_fsync,
-	.sendfile =	generic_file_sendfile
+	.splice_read =	generic_file_splice_read,
 };
 
 /* jffs2_file_inode_operations */
@@ -58,6 +60,7 @@ const struct inode_operations jffs2_file_inode_operations =
 {
 	.permission =	jffs2_permission,
 	.setattr =	jffs2_setattr,
+	.sync_flags =	jffs2_sync_flags,
 	.setxattr =	jffs2_setxattr,
 	.getxattr =	jffs2_getxattr,
 	.listxattr =	jffs2_listxattr,
@@ -159,12 +162,14 @@ static int jffs2_prepare_write (struct file *filp, struct page *pg,
 		ri.mode = cpu_to_jemode(inode->i_mode);
 		ri.uid = cpu_to_je16(inode->i_uid);
 		ri.gid = cpu_to_je16(inode->i_gid);
+		ri.tag = cpu_to_je16(TAGINO_TAG(DX_TAG(inode), inode->i_tag));
 		ri.isize = cpu_to_je32(max((uint32_t)inode->i_size, pageofs));
 		ri.atime = ri.ctime = ri.mtime = cpu_to_je32(get_seconds());
 		ri.offset = cpu_to_je32(inode->i_size);
 		ri.dsize = cpu_to_je32(pageofs - inode->i_size);
 		ri.csize = cpu_to_je32(0);
 		ri.compr = JFFS2_COMPR_ZERO;
+		ri.flags = cpu_to_je16(f->flags);
 		ri.node_crc = cpu_to_je32(crc32(0, &ri, sizeof(ri)-8));
 		ri.data_crc = cpu_to_je32(0);
 
@@ -250,8 +255,10 @@ static int jffs2_commit_write (struct file *filp, struct page *pg,
 	ri->mode = cpu_to_jemode(inode->i_mode);
 	ri->uid = cpu_to_je16(inode->i_uid);
 	ri->gid = cpu_to_je16(inode->i_gid);
+	ri->tag = cpu_to_je16(TAGINO_TAG(DX_TAG(inode), inode->i_tag));
 	ri->isize = cpu_to_je32((uint32_t)inode->i_size);
 	ri->atime = ri->ctime = ri->mtime = cpu_to_je32(get_seconds());
+	ri->flags = cpu_to_je16(f->flags);
 
 	/* In 2.4, it was already kmapped by generic_file_write(). Doesn't
 	   hurt to do it again. The alternative is ifdefs, which are ugly. */

@@ -4,14 +4,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- move L3 protocol dependent part to this file.
- * 23 Mar 2004: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- add get_features() to support various size of conntrack
- *	  structures.
- *
- * Derived from net/ipv4/netfilter/ip_conntrack_standalone.c
  */
 
 #include <linux/types.h>
@@ -31,12 +23,6 @@
 #include <net/netfilter/nf_conntrack_l3proto.h>
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/ipv4/nf_conntrack_ipv4.h>
-
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
 
 static int ipv4_pkt_to_tuple(const struct sk_buff *skb, unsigned int nhoff,
 			     struct nf_conntrack_tuple *tuple)
@@ -87,39 +73,33 @@ nf_ct_ipv4_gather_frags(struct sk_buff *skb, u_int32_t user)
 	local_bh_enable();
 
 	if (skb)
-		ip_send_check(skb->nh.iph);
+		ip_send_check(ip_hdr(skb));
 
 	return skb;
 }
 
-static int
-ipv4_prepare(struct sk_buff **pskb, unsigned int hooknum, unsigned int *dataoff,
-	     u_int8_t *protonum)
+static int ipv4_get_l4proto(const struct sk_buff *skb, unsigned int nhoff,
+			    unsigned int *dataoff, u_int8_t *protonum)
 {
+	struct iphdr _iph, *iph;
+
+	iph = skb_header_pointer(skb, nhoff, sizeof(_iph), &_iph);
+	if (iph == NULL)
+		return -NF_DROP;
+
 	/* Never happen */
-	if ((*pskb)->nh.iph->frag_off & htons(IP_OFFSET)) {
+	if (iph->frag_off & htons(IP_OFFSET)) {
 		if (net_ratelimit()) {
-			printk(KERN_ERR "ipv4_prepare: Frag of proto %u (hook=%u)\n",
-			(*pskb)->nh.iph->protocol, hooknum);
+			printk(KERN_ERR "ipv4_get_l4proto: Frag of proto %u\n",
+			iph->protocol);
 		}
 		return -NF_DROP;
 	}
 
-	*dataoff = (*pskb)->nh.raw - (*pskb)->data + (*pskb)->nh.iph->ihl*4;
-	*protonum = (*pskb)->nh.iph->protocol;
+	*dataoff = nhoff + (iph->ihl << 2);
+	*protonum = iph->protocol;
 
 	return NF_ACCEPT;
-}
-
-int nf_nat_module_is_loaded = 0;
-EXPORT_SYMBOL_GPL(nf_nat_module_is_loaded);
-
-static u_int32_t ipv4_get_features(const struct nf_conntrack_tuple *tuple)
-{
-	if (nf_nat_module_is_loaded)
-		return NF_CT_F_NAT;
-
-	return NF_CT_F_BASIC;
 }
 
 static unsigned int ipv4_confirm(unsigned int hooknum,
@@ -141,6 +121,7 @@ static unsigned int ipv4_conntrack_help(unsigned int hooknum,
 	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn_help *help;
+	struct nf_conntrack_helper *helper;
 
 	/* This is where we call the helper: as the packet goes out. */
 	ct = nf_ct_get(*pskb, &ctinfo);
@@ -148,13 +129,14 @@ static unsigned int ipv4_conntrack_help(unsigned int hooknum,
 		return NF_ACCEPT;
 
 	help = nfct_help(ct);
-	if (!help || !help->helper)
+	if (!help)
 		return NF_ACCEPT;
-
-	return help->helper->help(pskb,
-			       (*pskb)->nh.raw - (*pskb)->data
-					       + (*pskb)->nh.iph->ihl*4,
-			       ct, ctinfo);
+	/* rcu_read_lock()ed by nf_hook_slow */
+	helper = rcu_dereference(help->helper);
+	if (!helper)
+		return NF_ACCEPT;
+	return helper->help(pskb, skb_network_offset(*pskb) + ip_hdrlen(*pskb),
+			    ct, ctinfo);
 }
 
 static unsigned int ipv4_conntrack_defrag(unsigned int hooknum,
@@ -163,15 +145,13 @@ static unsigned int ipv4_conntrack_defrag(unsigned int hooknum,
 					  const struct net_device *out,
 					  int (*okfn)(struct sk_buff *))
 {
-#if !defined(CONFIG_IP_NF_NAT) && !defined(CONFIG_IP_NF_NAT_MODULE)
 	/* Previously seen (loopback)?  Ignore.  Do this before
 	   fragment check. */
 	if ((*pskb)->nfct)
 		return NF_ACCEPT;
-#endif
 
 	/* Gather fragments. */
-	if ((*pskb)->nh.iph->frag_off & htons(IP_MF|IP_OFFSET)) {
+	if (ip_hdr(*pskb)->frag_off & htons(IP_MF | IP_OFFSET)) {
 		*pskb = nf_ct_ipv4_gather_frags(*pskb,
 						hooknum == NF_IP_PRE_ROUTING ?
 						IP_DEFRAG_CONNTRACK_IN :
@@ -199,7 +179,7 @@ static unsigned int ipv4_conntrack_local(unsigned int hooknum,
 {
 	/* root is playing with raw sockets. */
 	if ((*pskb)->len < sizeof(struct iphdr)
-	    || (*pskb)->nh.iph->ihl * 4 < sizeof(struct iphdr)) {
+	    || ip_hdrlen(*pskb) < sizeof(struct iphdr)) {
 		if (net_ratelimit())
 			printk("ipt_hook: happy cracking.\n");
 		return NF_ACCEPT;
@@ -343,17 +323,17 @@ getorigdst(struct sock *sk, int optval, void __user *user, int *len)
 
 	/* We only do TCP at the moment: is there a better way? */
 	if (strcmp(sk->sk_prot->name, "TCP")) {
-		DEBUGP("SO_ORIGINAL_DST: Not a TCP socket\n");
+		pr_debug("SO_ORIGINAL_DST: Not a TCP socket\n");
 		return -ENOPROTOOPT;
 	}
 
 	if ((unsigned int) *len < sizeof(struct sockaddr_in)) {
-		DEBUGP("SO_ORIGINAL_DST: len %u not %u\n",
-		       *len, sizeof(struct sockaddr_in));
+		pr_debug("SO_ORIGINAL_DST: len %d not %Zu\n",
+			 *len, sizeof(struct sockaddr_in));
 		return -EINVAL;
 	}
 
-	h = nf_conntrack_find_get(&tuple, NULL);
+	h = nf_conntrack_find_get(&tuple);
 	if (h) {
 		struct sockaddr_in sin;
 		struct nf_conn *ct = nf_ct_tuplehash_to_ctrack(h);
@@ -365,17 +345,17 @@ getorigdst(struct sock *sk, int optval, void __user *user, int *len)
 			.tuple.dst.u3.ip;
 		memset(sin.sin_zero, 0, sizeof(sin.sin_zero));
 
-		DEBUGP("SO_ORIGINAL_DST: %u.%u.%u.%u %u\n",
-		       NIPQUAD(sin.sin_addr.s_addr), ntohs(sin.sin_port));
+		pr_debug("SO_ORIGINAL_DST: %u.%u.%u.%u %u\n",
+			 NIPQUAD(sin.sin_addr.s_addr), ntohs(sin.sin_port));
 		nf_ct_put(ct);
 		if (copy_to_user(user, &sin, sizeof(sin)) != 0)
 			return -EFAULT;
 		else
 			return 0;
 	}
-	DEBUGP("SO_ORIGINAL_DST: Can't find %u.%u.%u.%u/%u-%u.%u.%u.%u/%u.\n",
-	       NIPQUAD(tuple.src.u3.ip), ntohs(tuple.src.u.tcp.port),
-	       NIPQUAD(tuple.dst.u3.ip), ntohs(tuple.dst.u.tcp.port));
+	pr_debug("SO_ORIGINAL_DST: Can't find %u.%u.%u.%u/%u-%u.%u.%u.%u/%u.\n",
+		 NIPQUAD(tuple.src.u3.ip), ntohs(tuple.src.u.tcp.port),
+		 NIPQUAD(tuple.dst.u3.ip), ntohs(tuple.dst.u.tcp.port));
 	return -ENOENT;
 }
 
@@ -425,15 +405,14 @@ static struct nf_sockopt_ops so_getorigdst = {
 	.get		= &getorigdst,
 };
 
-struct nf_conntrack_l3proto nf_conntrack_l3proto_ipv4 = {
+struct nf_conntrack_l3proto nf_conntrack_l3proto_ipv4 __read_mostly = {
 	.l3proto	 = PF_INET,
 	.name		 = "ipv4",
 	.pkt_to_tuple	 = ipv4_pkt_to_tuple,
 	.invert_tuple	 = ipv4_invert_tuple,
 	.print_tuple	 = ipv4_print_tuple,
 	.print_conntrack = ipv4_print_conntrack,
-	.prepare	 = ipv4_prepare,
-	.get_features	 = ipv4_get_features,
+	.get_l4proto	 = ipv4_get_l4proto,
 #if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
 	.tuple_to_nfattr = ipv4_tuple_to_nfattr,
 	.nfattr_to_tuple = ipv4_nfattr_to_tuple,
@@ -530,3 +509,9 @@ static void __exit nf_conntrack_l3proto_ipv4_fini(void)
 
 module_init(nf_conntrack_l3proto_ipv4_init);
 module_exit(nf_conntrack_l3proto_ipv4_fini);
+
+void need_ipv4_conntrack(void)
+{
+	return;
+}
+EXPORT_SYMBOL_GPL(need_ipv4_conntrack);

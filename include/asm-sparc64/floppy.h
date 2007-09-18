@@ -1,7 +1,6 @@
-/* $Id: floppy.h,v 1.32 2001/10/26 17:59:36 davem Exp $
- * asm-sparc64/floppy.h: Sparc specific parts of the Floppy driver.
+/* floppy.h: Sparc specific parts of the Floppy driver.
  *
- * Copyright (C) 1996 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1996, 2007 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1997 Jakub Jelinek (jj@sunsite.mff.cuni.cz)
  *
  * Ultra/PCI support added: Sep 1997  Eddie C. Dost  (ecd@skynet.be)
@@ -11,6 +10,7 @@
 #define __ASM_SPARC64_FLOPPY_H
 
 #include <linux/init.h>
+#include <linux/pci.h>
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
@@ -549,7 +549,7 @@ static int __init ebus_fdthree_p(struct linux_ebus_device *edev)
 	if (!strcmp(edev->prom_node->name, "fdthree"))
 		return 1;
 	if (!strcmp(edev->prom_node->name, "floppy")) {
-		char *compat;
+		const char *compat;
 
 		compat = of_get_property(edev->prom_node,
 					 "compatible", NULL);
@@ -661,7 +661,7 @@ static unsigned long __init sun_floppy_init(void)
 		struct linux_ebus_device *edev = NULL;
 		unsigned long config = 0;
 		void __iomem *auxio_reg;
-		char *state_prop;
+		const char *state_prop;
 
 		for_each_ebus(ebus) {
 			for_each_ebusdev(edev, ebus) {

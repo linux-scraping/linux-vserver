@@ -70,7 +70,7 @@
 #define VQ
 #endif
 
-#define IPW2200_VERSION "1.2.0" VK VD VM VP VR VQ
+#define IPW2200_VERSION "1.2.2" VK VD VM VP VR VQ
 #define DRV_DESCRIPTION	"Intel(R) PRO/Wireless 2200/2915 Network Driver"
 #define DRV_COPYRIGHT	"Copyright(c) 2003-2006 Intel Corporation"
 #define DRV_VERSION     IPW2200_VERSION
@@ -1751,7 +1751,7 @@ static int ipw_radio_kill_sw(struct ipw_priv *priv, int disable_radio)
 			/* Make sure the RF_KILL check timer is running */
 			cancel_delayed_work(&priv->rf_kill);
 			queue_delayed_work(priv->workqueue, &priv->rf_kill,
-					   2 * HZ);
+					   round_jiffies(2 * HZ));
 		} else
 			queue_work(priv->workqueue, &priv->up);
 	}
@@ -1846,6 +1846,52 @@ static ssize_t store_net_stats(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(net_stats, S_IWUSR | S_IRUGO,
 		   show_net_stats, store_net_stats);
+
+static ssize_t show_channels(struct device *d,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct ipw_priv *priv = dev_get_drvdata(d);
+	const struct ieee80211_geo *geo = ieee80211_get_geo(priv->ieee);
+	int len = 0, i;
+
+	len = sprintf(&buf[len],
+		      "Displaying %d channels in 2.4Ghz band "
+		      "(802.11bg):\n", geo->bg_channels);
+
+	for (i = 0; i < geo->bg_channels; i++) {
+		len += sprintf(&buf[len], "%d: BSS%s%s, %s, Band %s.\n",
+			       geo->bg[i].channel,
+			       geo->bg[i].flags & IEEE80211_CH_RADAR_DETECT ?
+			       " (radar spectrum)" : "",
+			       ((geo->bg[i].flags & IEEE80211_CH_NO_IBSS) ||
+				(geo->bg[i].flags & IEEE80211_CH_RADAR_DETECT))
+			       ? "" : ", IBSS",
+			       geo->bg[i].flags & IEEE80211_CH_PASSIVE_ONLY ?
+			       "passive only" : "active/passive",
+			       geo->bg[i].flags & IEEE80211_CH_B_ONLY ?
+			       "B" : "B/G");
+	}
+
+	len += sprintf(&buf[len],
+		       "Displaying %d channels in 5.2Ghz band "
+		       "(802.11a):\n", geo->a_channels);
+	for (i = 0; i < geo->a_channels; i++) {
+		len += sprintf(&buf[len], "%d: BSS%s%s, %s.\n",
+			       geo->a[i].channel,
+			       geo->a[i].flags & IEEE80211_CH_RADAR_DETECT ?
+			       " (radar spectrum)" : "",
+			       ((geo->a[i].flags & IEEE80211_CH_NO_IBSS) ||
+				(geo->a[i].flags & IEEE80211_CH_RADAR_DETECT))
+			       ? "" : ", IBSS",
+			       geo->a[i].flags & IEEE80211_CH_PASSIVE_ONLY ?
+			       "passive only" : "active/passive");
+	}
+
+	return len;
+}
+
+static DEVICE_ATTR(channels, S_IRUSR, show_channels, NULL);
 
 static void notify_wx_assoc_event(struct ipw_priv *priv)
 {
@@ -2460,7 +2506,7 @@ static int ipw_send_power_mode(struct ipw_priv *priv, u32 mode)
 		break;
 	}
 
-	param = cpu_to_le32(mode);
+	param = cpu_to_le32(param);
 	return ipw_send_cmd_pdu(priv, IPW_CMD_POWER_MODE, sizeof(param),
 				&param);
 }
@@ -4644,7 +4690,8 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 			else if (priv->config & CFG_BACKGROUND_SCAN
 				 && priv->status & STATUS_ASSOCIATED)
 				queue_delayed_work(priv->workqueue,
-						   &priv->request_scan, HZ);
+						   &priv->request_scan,
+						   round_jiffies(HZ));
 
 			/* Send an empty event to user space.
 			 * We don't send the received data on the event because
@@ -8133,7 +8180,7 @@ static void ipw_handle_mgmt_packet(struct ipw_priv *priv,
 		skb->dev = priv->ieee->dev;
 
 		/* Point raw at the ieee80211_stats */
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 
 		skb->pkt_type = PACKET_OTHERHOST;
 		skb->protocol = __constant_htons(ETH_P_80211_STATS);
@@ -9521,6 +9568,7 @@ static int ipw_wx_set_power(struct net_device *dev,
 		priv->power_mode = IPW_POWER_ENABLED | IPW_POWER_BATTERY;
 	else
 		priv->power_mode = IPW_POWER_ENABLED | priv->power_mode;
+
 	err = ipw_send_power_mode(priv, IPW_POWER_LEVEL(priv->power_mode));
 	if (err) {
 		IPW_DEBUG_WX("failed setting power mode.\n");
@@ -9557,22 +9605,19 @@ static int ipw_wx_set_powermode(struct net_device *dev,
 	struct ipw_priv *priv = ieee80211_priv(dev);
 	int mode = *(int *)extra;
 	int err;
+
 	mutex_lock(&priv->mutex);
-	if ((mode < 1) || (mode > IPW_POWER_LIMIT)) {
+	if ((mode < 1) || (mode > IPW_POWER_LIMIT))
 		mode = IPW_POWER_AC;
-		priv->power_mode = mode;
-	} else {
-		priv->power_mode = IPW_POWER_ENABLED | mode;
-	}
 
-	if (priv->power_mode != mode) {
+	if (IPW_POWER_LEVEL(priv->power_mode) != mode) {
 		err = ipw_send_power_mode(priv, mode);
-
 		if (err) {
 			IPW_DEBUG_WX("failed setting power mode.\n");
 			mutex_unlock(&priv->mutex);
 			return err;
 		}
+		priv->power_mode = IPW_POWER_ENABLED | mode;
 	}
 	mutex_unlock(&priv->mutex);
 	return 0;
@@ -10355,7 +10400,7 @@ static void ipw_handle_promiscuous_tx(struct ipw_priv *priv,
 
 		rt_hdr->it_len = dst->len;
 
-		memcpy(skb_put(dst, len), src->data, len);
+		skb_copy_from_linear_data(src, skb_put(dst, len), len);
 
 		if (!ieee80211_rx(priv->prom_priv->ieee, dst, &dummystats))
 			dev_kfree_skb_any(dst);
@@ -10508,7 +10553,7 @@ static irqreturn_t ipw_isr(int irq, void *data)
 	spin_lock(&priv->irq_lock);
 
 	if (!(priv->status & STATUS_INT_ENABLED)) {
-		/* Shared IRQ */
+		/* IRQ is disabled */
 		goto none;
 	}
 
@@ -11383,6 +11428,7 @@ static struct attribute *ipw_sysfs_entries[] = {
 	&dev_attr_led.attr,
 	&dev_attr_speed_scan.attr,
 	&dev_attr_net_stats.attr,
+	&dev_attr_channels.attr,
 #ifdef CONFIG_IPW2200_PROMISCUOUS
 	&dev_attr_rtap_iface.attr,
 	&dev_attr_rtap_filter.attr,

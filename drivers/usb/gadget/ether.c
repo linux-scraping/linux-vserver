@@ -28,7 +28,6 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/timer.h>
@@ -278,10 +277,13 @@ MODULE_PARM_DESC(host_addr, "Host Ethernet Address");
 #define DEV_CONFIG_CDC
 #endif
 
-#ifdef CONFIG_USB_GADGET_HUSB2DEV
+#ifdef CONFIG_USB_GADGET_ATMEL_USBA
 #define DEV_CONFIG_CDC
 #endif
 
+#ifdef CONFIG_USB_GADGET_FSL_USB2
+#define DEV_CONFIG_CDC
+#endif
 
 /* For CDC-incapable hardware, choose the simple cdc subset.
  * Anything that talks bulk (without notable bugs) can do this.
@@ -290,13 +292,21 @@ MODULE_PARM_DESC(host_addr, "Host Ethernet Address");
 #define	DEV_CONFIG_SUBSET
 #endif
 
-#ifdef CONFIG_USB_GADGET_SH
+#ifdef CONFIG_USB_GADGET_SUPERH
 #define	DEV_CONFIG_SUBSET
 #endif
 
 #ifdef CONFIG_USB_GADGET_SA1100
 /* use non-CDC for backwards compatibility */
 #define	DEV_CONFIG_SUBSET
+#endif
+
+#ifdef CONFIG_USB_GADGET_M66592
+#define DEV_CONFIG_CDC
+#endif
+
+#ifdef CONFIG_USB_GADGET_AMD5536UDC
+#define	DEV_CONFIG_CDC
 #endif
 
 
@@ -1713,7 +1723,8 @@ rx_submit (struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 		size += sizeof (struct rndis_packet_msg_type);
 	size -= size % dev->out_ep->maxpacket;
 
-	if ((skb = alloc_skb (size + NET_IP_ALIGN, gfp_flags)) == 0) {
+	skb = alloc_skb(size + NET_IP_ALIGN, gfp_flags);
+	if (skb == NULL) {
 		DEBUG (dev, "no rx skb\n");
 		goto enomem;
 	}
@@ -1735,7 +1746,8 @@ enomem:
 		defer_kevent (dev, WORK_RX_MEMORY);
 	if (retval) {
 		DEBUG (dev, "rx submit --> %d\n", retval);
-		dev_kfree_skb_any (skb);
+		if (skb)
+			dev_kfree_skb_any(skb);
 		spin_lock(&dev->req_lock);
 		list_add (&req->list, &dev->rx_reqs);
 		spin_unlock(&dev->req_lock);
@@ -1766,7 +1778,6 @@ static void rx_complete (struct usb_ep *ep, struct usb_request *req)
 			break;
 		}
 
-		skb->dev = dev->net;
 		skb->protocol = eth_type_trans (skb, dev->net);
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += skb->len;

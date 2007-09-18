@@ -11,8 +11,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
-
+#include <linux/capability.h>
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
 #include "pci.h"
@@ -481,7 +480,6 @@ static int __init pci_proc_init(void)
 __initcall(pci_proc_init);
 
 #ifdef CONFIG_HOTPLUG
-EXPORT_SYMBOL(pci_proc_attach_device);
 EXPORT_SYMBOL(pci_proc_detach_bus);
 #endif
 

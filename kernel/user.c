@@ -14,20 +14,19 @@
 #include <linux/bitops.h>
 #include <linux/key.h>
 #include <linux/interrupt.h>
+#include <linux/module.h>
+#include <linux/user_namespace.h>
 
 /*
  * UID task count cache, to get fast user lookup in "alloc_uid"
  * when changing user ID's (ie setuid() and friends).
  */
 
-#define UIDHASH_BITS (CONFIG_BASE_SMALL ? 3 : 8)
-#define UIDHASH_SZ		(1 << UIDHASH_BITS)
 #define UIDHASH_MASK		(UIDHASH_SZ - 1)
-#define __uidhashfn(xid,uid)	((((uid) >> UIDHASH_BITS) + ((uid)^(xid))) & UIDHASH_MASK)
-#define uidhashentry(xid,uid)	(uidhash_table + __uidhashfn((xid),(uid)))
+#define __uidhashfn(uid)	(((uid >> UIDHASH_BITS) + uid) & UIDHASH_MASK)
+#define uidhashentry(ns, uid)	((ns)->uidhash_table + __uidhashfn((uid)))
 
 static struct kmem_cache *uid_cachep;
-static struct list_head uidhash_table[UIDHASH_SZ];
 
 /*
  * The uidhash_lock is mostly taken from process context, but it is
@@ -66,7 +65,7 @@ static inline void uid_hash_remove(struct user_struct *up)
 	list_del(&up->uidhash_list);
 }
 
-static inline struct user_struct *uid_hash_find(xid_t xid, uid_t uid, struct list_head *hashent)
+static inline struct user_struct *uid_hash_find(uid_t uid, struct list_head *hashent)
 {
 	struct list_head *up;
 
@@ -75,7 +74,7 @@ static inline struct user_struct *uid_hash_find(xid_t xid, uid_t uid, struct lis
 
 		user = list_entry(up, struct user_struct, uidhash_list);
 
-		if(user->uid == uid && user->xid == xid) {
+		if(user->uid == uid) {
 			atomic_inc(&user->__count);
 			return user;
 		}
@@ -90,13 +89,14 @@ static inline struct user_struct *uid_hash_find(xid_t xid, uid_t uid, struct lis
  *
  * If the user_struct could not be found, return NULL.
  */
-struct user_struct *find_user(xid_t xid, uid_t uid)
+struct user_struct *find_user(uid_t uid)
 {
 	struct user_struct *ret;
 	unsigned long flags;
+	struct user_namespace *ns = current->nsproxy->user_ns;
 
 	spin_lock_irqsave(&uidhash_lock, flags);
-	ret = uid_hash_find(xid, uid, uidhashentry(xid, uid));
+	ret = uid_hash_find(uid, uidhashentry(ns, uid));
 	spin_unlock_irqrestore(&uidhash_lock, flags);
 	return ret;
 }
@@ -120,13 +120,13 @@ void free_uid(struct user_struct *up)
 	}
 }
 
-struct user_struct * alloc_uid(xid_t xid, uid_t uid)
+struct user_struct * alloc_uid(struct user_namespace *ns, uid_t uid)
 {
-	struct list_head *hashent = uidhashentry(xid, uid);
+	struct list_head *hashent = uidhashentry(ns, uid);
 	struct user_struct *up;
 
 	spin_lock_irq(&uidhash_lock);
-	up = uid_hash_find(xid, uid, hashent);
+	up = uid_hash_find(uid, hashent);
 	spin_unlock_irq(&uidhash_lock);
 
 	if (!up) {
@@ -136,7 +136,6 @@ struct user_struct * alloc_uid(xid_t xid, uid_t uid)
 		if (!new)
 			return NULL;
 		new->uid = uid;
-		new->xid = xid;
 		atomic_set(&new->__count, 1);
 		atomic_set(&new->processes, 0);
 		atomic_set(&new->files, 0);
@@ -159,7 +158,7 @@ struct user_struct * alloc_uid(xid_t xid, uid_t uid)
 		 * on adding the same user already..
 		 */
 		spin_lock_irq(&uidhash_lock);
-		up = uid_hash_find(xid, uid, hashent);
+		up = uid_hash_find(uid, hashent);
 		if (up) {
 			key_put(new->uid_keyring);
 			key_put(new->session_keyring);
@@ -209,14 +208,14 @@ static int __init uid_cache_init(void)
 	int n;
 
 	uid_cachep = kmem_cache_create("uid_cache", sizeof(struct user_struct),
-			0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL, NULL);
+			0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
 
 	for(n = 0; n < UIDHASH_SZ; ++n)
-		INIT_LIST_HEAD(uidhash_table + n);
+		INIT_LIST_HEAD(init_user_ns.uidhash_table + n);
 
 	/* Insert the root user immediately (init already runs as root) */
 	spin_lock_irq(&uidhash_lock);
-	uid_hash_insert(&root_user, uidhashentry(0,0));
+	uid_hash_insert(&root_user, uidhashentry(&init_user_ns, 0));
 	spin_unlock_irq(&uidhash_lock);
 
 	return 0;

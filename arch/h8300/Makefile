@@ -41,7 +41,7 @@ LDFLAGS += $(ldflags-y)
 CROSS_COMPILE = h8300-elf-
 LIBGCC := $(shell $(CROSS-COMPILE)$(CC) $(CFLAGS) -print-libgcc-file-name)
 
-head-y := arch/$(ARCH)/platform/$(platform-y)/$(board-y)/crt0_$(model-y).o
+head-y := arch/$(ARCH)/platform/$(PLATFORM)/$(BOARD)/crt0_$(MODEL).o
 
 core-y	+= arch/$(ARCH)/kernel/ \
 	   arch/$(ARCH)/mm/
@@ -61,10 +61,11 @@ archmrproper:
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
 
-vmlinux.srec vmlinux.bin: vmlinux
+vmlinux.srec vmlinux.bin zImage: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
 define archhelp
-  echo  'vmlinux.bin  - Create raw binary'
-  echo  'vmlinux.srec - Create srec binary'
+  @echo  'vmlinux.bin  - Create raw binary'
+  @echo  'vmlinux.srec - Create srec binary'
+  @echo  'zImage       - Compressed kernel image'
 endef

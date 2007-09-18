@@ -22,6 +22,7 @@
 #include <linux/mount.h>
 #include <linux/uio.h>
 #include <linux/namei.h>
+#include <linux/log2.h>
 #include <asm/uaccess.h>
 #include "internal.h"
 
@@ -55,17 +56,19 @@ static sector_t max_block(struct block_device *bdev)
 	return retval;
 }
 
-/* Kill _all_ buffers, dirty or not.. */
+/* Kill _all_ buffers and pagecache , dirty or not.. */
 static void kill_bdev(struct block_device *bdev)
 {
-	invalidate_bdev(bdev, 1);
+	if (bdev->bd_inode->i_mapping->nrpages == 0)
+		return;
+	invalidate_bh_lrus();
 	truncate_inode_pages(bdev->bd_inode->i_mapping, 0);
 }	
 
 int set_blocksize(struct block_device *bdev, int size)
 {
 	/* Size must be a power of two, and between 512 and PAGE_SIZE */
-	if (size > PAGE_SIZE || size < 512 || (size & (size-1)))
+	if (size > PAGE_SIZE || size < 512 || !is_power_of_2(size))
 		return -EINVAL;
 
 	/* Size cannot be smaller than the size supported by the device */
@@ -455,19 +458,15 @@ static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flag
 	struct bdev_inode *ei = (struct bdev_inode *) foo;
 	struct block_device *bdev = &ei->bdev;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR)
-	{
-		memset(bdev, 0, sizeof(*bdev));
-		mutex_init(&bdev->bd_mutex);
-		sema_init(&bdev->bd_mount_sem, 1);
-		INIT_LIST_HEAD(&bdev->bd_inodes);
-		INIT_LIST_HEAD(&bdev->bd_list);
+	memset(bdev, 0, sizeof(*bdev));
+	mutex_init(&bdev->bd_mutex);
+	sema_init(&bdev->bd_mount_sem, 1);
+	INIT_LIST_HEAD(&bdev->bd_inodes);
+	INIT_LIST_HEAD(&bdev->bd_list);
 #ifdef CONFIG_SYSFS
-		INIT_LIST_HEAD(&bdev->bd_holder_list);
+	INIT_LIST_HEAD(&bdev->bd_holder_list);
 #endif
-		inode_init_once(&ei->vfs_inode);
-	}
+	inode_init_once(&ei->vfs_inode);
 }
 
 static inline void __bd_forget(struct inode *inode)
@@ -518,7 +517,7 @@ void __init bdev_cache_init(void)
 	bdev_cachep = kmem_cache_create("bdev_cache", sizeof(struct bdev_inode),
 			0, (SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|
 				SLAB_MEM_SPREAD|SLAB_PANIC),
-			init_once, NULL);
+			init_once);
 	err = register_filesystem(&bd_type);
 	if (err)
 		panic("Cannot register bdev pseudo-fs");
@@ -589,12 +588,10 @@ EXPORT_SYMBOL(bdget);
 
 long nr_blockdev_pages(void)
 {
-	struct list_head *p;
+	struct block_device *bdev;
 	long ret = 0;
 	spin_lock(&bdev_lock);
-	list_for_each(p, &all_bdevs) {
-		struct block_device *bdev;
-		bdev = list_entry(p, struct block_device, bd_list);
+	list_for_each_entry(bdev, &all_bdevs, bd_list) {
 		ret += bdev->bd_inode->i_mapping->nrpages;
 	}
 	spin_unlock(&bdev_lock);
@@ -875,7 +872,7 @@ static struct bd_holder *find_bd_holder(struct block_device *bdev,
  */
 static int add_bd_holder(struct block_device *bdev, struct bd_holder *bo)
 {
-	int ret;
+	int err;
 
 	if (!bo)
 		return -EINVAL;
@@ -883,15 +880,18 @@ static int add_bd_holder(struct block_device *bdev, struct bd_holder *bo)
 	if (!bd_holder_grab_dirs(bdev, bo))
 		return -EBUSY;
 
-	ret = add_symlink(bo->sdir, bo->sdev);
-	if (ret == 0) {
-		ret = add_symlink(bo->hdir, bo->hdev);
-		if (ret)
-			del_symlink(bo->sdir, bo->sdev);
+	err = add_symlink(bo->sdir, bo->sdev);
+	if (err)
+		return err;
+
+	err = add_symlink(bo->hdir, bo->hdev);
+	if (err) {
+		del_symlink(bo->sdir, bo->sdev);
+		return err;
 	}
-	if (ret == 0)
-		list_add_tail(&bo->list, &bdev->bd_holder_list);
-	return ret;
+
+	list_add_tail(&bo->list, &bdev->bd_holder_list);
+	return 0;
 }
 
 /**
@@ -949,7 +949,7 @@ static struct bd_holder *del_bd_holder(struct block_device *bdev,
 static int bd_claim_by_kobject(struct block_device *bdev, void *holder,
 				struct kobject *kobj)
 {
-	int res;
+	int err;
 	struct bd_holder *bo, *found;
 
 	if (!kobj)
@@ -960,21 +960,24 @@ static int bd_claim_by_kobject(struct block_device *bdev, void *holder,
 		return -ENOMEM;
 
 	mutex_lock(&bdev->bd_mutex);
-	res = bd_claim(bdev, holder);
-	if (res == 0) {
-		found = find_bd_holder(bdev, bo);
-		if (found == NULL) {
-			res = add_bd_holder(bdev, bo);
-			if (res)
-				bd_release(bdev);
-		}
-	}
 
-	if (res || found)
-		free_bd_holder(bo);
+	err = bd_claim(bdev, holder);
+	if (err)
+		goto fail;
+
+	found = find_bd_holder(bdev, bo);
+	if (found)
+		goto fail;
+
+	err = add_bd_holder(bdev, bo);
+	if (err)
+		bd_release(bdev);
+	else
+		bo = NULL;
+fail:
 	mutex_unlock(&bdev->bd_mutex);
-
-	return res;
+	free_bd_holder(bo);
+	return err;
 }
 
 /**
@@ -988,15 +991,12 @@ static int bd_claim_by_kobject(struct block_device *bdev, void *holder,
 static void bd_release_from_kobject(struct block_device *bdev,
 					struct kobject *kobj)
 {
-	struct bd_holder *bo;
-
 	if (!kobj)
 		return;
 
 	mutex_lock(&bdev->bd_mutex);
 	bd_release(bdev);
-	if ((bo = del_bd_holder(bdev, kobj)))
-		free_bd_holder(bo);
+	free_bd_holder(del_bd_holder(bdev, kobj));
 	mutex_unlock(&bdev->bd_mutex);
 }
 
@@ -1347,7 +1347,6 @@ const struct file_operations def_blk_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= compat_blkdev_ioctl,
 #endif
-	.sendfile	= generic_file_sendfile,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= generic_file_splice_write,
 };
@@ -1478,7 +1477,7 @@ int __invalidate_device(struct block_device *bdev)
 		res = invalidate_inodes(sb);
 		drop_super(sb);
 	}
-	invalidate_bdev(bdev, 0);
+	invalidate_bdev(bdev);
 	return res;
 }
 EXPORT_SYMBOL(__invalidate_device);

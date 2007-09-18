@@ -10,23 +10,21 @@
 #ifndef __ASM_ARM_PTRACE_H
 #define __ASM_ARM_PTRACE_H
 
+#include <asm/hwcap.h>
 
 #define PTRACE_GETREGS		12
 #define PTRACE_SETREGS		13
 #define PTRACE_GETFPREGS	14
 #define PTRACE_SETFPREGS	15
-
+/* PTRACE_ATTACH is 16 */
+/* PTRACE_DETACH is 17 */
 #define PTRACE_GETWMMXREGS	18
 #define PTRACE_SETWMMXREGS	19
-
+/* 20 is unused */
 #define PTRACE_OLDSETOPTIONS	21
-
 #define PTRACE_GET_THREAD_AREA	22
-
 #define PTRACE_SET_SYSCALL	23
-
 /* PTRACE_SYSCALL is 24 */
-
 #define PTRACE_GETCRUNCHREGS	25
 #define PTRACE_SETCRUNCHREGS	26
 
@@ -49,6 +47,7 @@
 #define PSR_T_BIT	0x00000020
 #define PSR_F_BIT	0x00000040
 #define PSR_I_BIT	0x00000080
+#define PSR_A_BIT	0x00000100
 #define PSR_J_BIT	0x01000000
 #define PSR_Q_BIT	0x08000000
 #define PSR_V_BIT	0x10000000
@@ -107,6 +106,10 @@ struct pt_regs {
 #define thumb_mode(regs) (0)
 #endif
 
+#define isa_mode(regs) \
+	((((regs)->ARM_cpsr & PSR_J_BIT) >> 23) | \
+	 (((regs)->ARM_cpsr & PSR_T_BIT) >> 5))
+
 #define processor_mode(regs) \
 	((regs)->ARM_cpsr & MODE_MASK)
 
@@ -116,22 +119,22 @@ struct pt_regs {
 #define fast_interrupts_enabled(regs) \
 	(!((regs)->ARM_cpsr & PSR_F_BIT))
 
-#define condition_codes(regs) \
-	((regs)->ARM_cpsr & (PSR_V_BIT|PSR_C_BIT|PSR_Z_BIT|PSR_N_BIT))
-	
 /* Are the current registers suitable for user mode?
  * (used to maintain security in signal handlers)
  */
 static inline int valid_user_regs(struct pt_regs *regs)
 {
-	if (user_mode(regs) &&
-	    (regs->ARM_cpsr & (PSR_F_BIT|PSR_I_BIT)) == 0)
+	if (user_mode(regs) && (regs->ARM_cpsr & PSR_I_BIT) == 0) {
+		regs->ARM_cpsr &= ~(PSR_F_BIT | PSR_A_BIT);
 		return 1;
+	}
 
 	/*
 	 * Force CPSR to something logical...
 	 */
-	regs->ARM_cpsr &= PSR_f | PSR_s | PSR_x | PSR_T_BIT | MODE32_BIT;
+	regs->ARM_cpsr &= PSR_f | PSR_s | (PSR_x & ~PSR_A_BIT) | PSR_T_BIT | MODE32_BIT;
+	if (!(elf_hwcap & HWCAP_26BIT))
+		regs->ARM_cpsr |= USR_MODE;
 
 	return 0;
 }

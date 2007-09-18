@@ -2,27 +2,28 @@
 # Makefile for Red Hat Linux AFS client.
 #
 
-#CFLAGS += -finstrument-functions
-
 kafs-objs := \
 	callback.o \
 	cell.o \
 	cmservice.o \
 	dir.o \
 	file.o \
+	flock.o \
 	fsclient.o \
 	inode.o \
-	kafsasyncd.o \
-	kafstimod.o \
 	main.o \
 	misc.o \
 	mntpt.o \
 	proc.o \
+	rxrpc.o \
+	security.o \
 	server.o \
 	super.o \
+	netdevices.o \
 	vlclient.o \
 	vlocation.o \
 	vnode.o \
-	volume.o
+	volume.o \
+	write.o
 
 obj-$(CONFIG_AFS_FS)  := kafs.o

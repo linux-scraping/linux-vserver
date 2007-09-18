@@ -207,13 +207,12 @@ ppp_sync_open(struct tty_struct *tty)
 	struct syncppp *ap;
 	int err;
 
-	ap = kmalloc(sizeof(*ap), GFP_KERNEL);
+	ap = kzalloc(sizeof(*ap), GFP_KERNEL);
 	err = -ENOMEM;
 	if (ap == 0)
 		goto out;
 
 	/* initialize the syncppp structure */
-	memset(ap, 0, sizeof(*ap));
 	ap->tty = tty;
 	ap->mru = PPP_MRU;
 	spin_lock_init(&ap->xmit_lock);
@@ -594,7 +593,8 @@ ppp_sync_txmunge(struct syncppp *ap, struct sk_buff *skb)
 				return NULL;
 			}
 			skb_reserve(npkt,2);
-			memcpy(skb_put(npkt,skb->len), skb->data, skb->len);
+			skb_copy_from_linear_data(skb,
+				      skb_put(npkt, skb->len), skb->len);
 			kfree_skb(skb);
 			skb = npkt;
 		}

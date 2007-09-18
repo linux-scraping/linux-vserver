@@ -889,9 +889,9 @@ int saa7146_video_do_ioctl(struct inode *inode, struct file *file, unsigned int 
 
 		DEB_EE(("VIDIOC_QUERYCAP\n"));
 
-		strcpy(cap->driver, "saa7146 v4l2");
-		strlcpy(cap->card, dev->ext->name, sizeof(cap->card));
-		sprintf(cap->bus_info,"PCI:%s", pci_name(dev->pci));
+		strcpy((char *)cap->driver, "saa7146 v4l2");
+		strlcpy((char *)cap->card, dev->ext->name, sizeof(cap->card));
+		sprintf((char *)cap->bus_info,"PCI:%s", pci_name(dev->pci));
 		cap->version = SAA7146_VERSION_CODE;
 		cap->capabilities =
 			V4L2_CAP_VIDEO_CAPTURE |
@@ -968,7 +968,7 @@ int saa7146_video_do_ioctl(struct inode *inode, struct file *file, unsigned int 
 			}
 			memset(f,0,sizeof(*f));
 			f->index = index;
-			strlcpy(f->description,formats[index].name,sizeof(f->description));
+			strlcpy((char *)f->description,formats[index].name,sizeof(f->description));
 			f->pixelformat = formats[index].pixelformat;
 			break;
 		}
@@ -1428,6 +1428,7 @@ static void video_close(struct saa7146_dev *dev, struct file *file)
 {
 	struct saa7146_fh *fh = (struct saa7146_fh *)file->private_data;
 	struct saa7146_vv *vv = dev->vv_data;
+	struct videobuf_queue *q = &fh->video_q;
 	int err;
 
 	if (IS_CAPTURE_ACTIVE(fh) != 0) {
@@ -1435,6 +1436,11 @@ static void video_close(struct saa7146_dev *dev, struct file *file)
 	} else if (IS_OVERLAY_ACTIVE(fh) != 0) {
 		err = saa7146_stop_preview(fh);
 	}
+
+	// release all capture buffers
+	mutex_lock(&q->lock);
+	videobuf_read_stop(q);
+	mutex_unlock(&q->lock);
 
 	/* hmm, why is this function declared void? */
 	/* return err */

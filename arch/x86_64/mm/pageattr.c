@@ -13,7 +13,7 @@
 #include <asm/tlbflush.h>
 #include <asm/io.h>
 
-static inline pte_t *lookup_address(unsigned long address) 
+pte_t *lookup_address(unsigned long address)
 { 
 	pgd_t *pgd = pgd_offset_k(address);
 	pud_t *pud;
@@ -74,13 +74,13 @@ static void flush_kernel_map(void *arg)
 	struct page *pg;
 
 	/* When clflush is available always use it because it is
-	   much cheaper than WBINVD */
-	if (!cpu_has_clflush)
+	   much cheaper than WBINVD. */
+	/* clflush is still broken. Disable for now. */
+	if (1 || !cpu_has_clflush)
 		asm volatile("wbinvd" ::: "memory");
-	list_for_each_entry(pg, l, lru) {
+	else list_for_each_entry(pg, l, lru) {
 		void *adr = page_address(pg);
-		if (cpu_has_clflush)
-			cache_flush_page(adr);
+		cache_flush_page(adr);
 	}
 	__flush_tlb_all();
 }
@@ -94,7 +94,8 @@ static LIST_HEAD(deferred_pages); /* protected by init_mm.mmap_sem */
 
 static inline void save_page(struct page *fpage)
 {
-	list_add(&fpage->lru, &deferred_pages);
+	if (!test_and_set_bit(PG_arch_1, &fpage->flags))
+		list_add(&fpage->lru, &deferred_pages);
 }
 
 /* 
@@ -128,9 +129,12 @@ __change_page_attr(unsigned long address, unsigned long pfn, pgprot_t prot,
 	pte_t *kpte; 
 	struct page *kpte_page;
 	pgprot_t ref_prot2;
+
 	kpte = lookup_address(address);
 	if (!kpte) return 0;
 	kpte_page = virt_to_page(((unsigned long)kpte) & PAGE_MASK);
+	BUG_ON(PageLRU(kpte_page));
+	BUG_ON(PageCompound(kpte_page));
 	if (pgprot_val(prot) != pgprot_val(ref_prot)) { 
 		if (!pte_huge(*kpte)) {
 			set_pte(kpte, pfn_pte(pfn, prot));
@@ -158,10 +162,9 @@ __change_page_attr(unsigned long address, unsigned long pfn, pgprot_t prot,
 	/* on x86-64 the direct mapping set at boot is not using 4k pages */
  	BUG_ON(PageReserved(kpte_page));
 
-	if (page_private(kpte_page) == 0) {
-		save_page(kpte_page);
+	save_page(kpte_page);
+	if (page_private(kpte_page) == 0)
 		revert_page(address, ref_prot);
- 	}
 	return 0;
 } 
 
@@ -180,16 +183,24 @@ __change_page_attr(unsigned long address, unsigned long pfn, pgprot_t prot,
  */
 int change_page_attr_addr(unsigned long address, int numpages, pgprot_t prot)
 {
-	int err = 0; 
+	int err = 0, kernel_map = 0;
 	int i; 
+
+	if (address >= __START_KERNEL_map
+	    && address < __START_KERNEL_map + KERNEL_TEXT_SIZE) {
+		address = (unsigned long)__va(__pa(address));
+		kernel_map = 1;
+	}
 
 	down_write(&init_mm.mmap_sem);
 	for (i = 0; i < numpages; i++, address += PAGE_SIZE) {
 		unsigned long pfn = __pa(address) >> PAGE_SHIFT;
 
-		err = __change_page_attr(address, pfn, prot, PAGE_KERNEL);
-		if (err) 
-			break; 
+		if (!kernel_map || pte_present(pfn_pte(0, prot))) {
+			err = __change_page_attr(address, pfn, prot, PAGE_KERNEL);
+			if (err)
+				break;
+		}
 		/* Handle kernel mapping too which aliases part of the
 		 * lowmem */
 		if (__pa(address) < KERNEL_TEXT_SIZE) {
@@ -225,6 +236,10 @@ void global_flush_tlb(void)
 	flush_map(&l);
 
 	list_for_each_entry_safe(pg, next, &l, lru) {
+		list_del(&pg->lru);
+		clear_bit(PG_arch_1, &pg->flags);
+		if (page_private(pg) != 0)
+			continue;
 		ClearPagePrivate(pg);
 		__free_page(pg);
 	} 

@@ -19,14 +19,6 @@
 
 #define SEL_TIMEOUT		153	/* 250 ms selection timeout (@ 40 MHz) */
 
-#define pci_dma_lo32(a)			(a & 0xffffffff)
-
-typedef u8		UCHAR;	/*  8 bits */
-typedef u16		USHORT;	/* 16 bits */
-typedef u32		UINT;	/* 32 bits */
-typedef unsigned long	ULONG;	/* 32/64 bits */
-
-
 /*
 ;-----------------------------------------------------------------------
 ; SCSI Request Block
@@ -43,7 +35,9 @@ struct scatterlist	*pSegmentList;
 
 struct scatterlist Segmentx;	/* make a one entry of S/G list table */
 
-unsigned long	SGBusAddr;	/*;a segment starting address as seen by AM53C974A*/
+unsigned long	SGBusAddr;	/*;a segment starting address as seen by AM53C974A
+				  in CPU endianness. We're only getting 32-bit bus
+				  addresses by default */
 unsigned long	SGToBeXferLen;	/*; to be xfer length */
 unsigned long	TotalXferredLen;
 unsigned long	SavedTotXLen;
@@ -63,7 +57,6 @@ u8		SGcount;
 
 u8		MsgCnt;
 u8		EndMessage;
-u8		SavedSGCount;			
 
 u8		MsgInBuf[6];
 u8		MsgOutBuf[6];
@@ -264,13 +257,6 @@ struct dc390_srb	SRB_array[MAX_SRB_CNT]; 	/* 50 SRBs */
 #define H_BAD_CCB_OR_SG  0x1A
 #define H_ABORT 	 0x0FF
 
-/*; SCSI Status byte codes*/ 
-/* The values defined in include/scsi/scsi.h, to be shifted << 1 */
-
-#define SCSI_STAT_UNEXP_BUS_F	0xFD	/*;  Unexpect Bus Free */
-#define SCSI_STAT_BUS_RST_DETECT 0xFE	/*;  Scsi Bus Reset detected */
-#define SCSI_STAT_SEL_TIMEOUT	0xFF	/*;  Selection Time out */
-
 /* cmd->result */
 #define RES_TARGET		0x000000FF	/* Target State */
 #define RES_TARGET_LNX		STATUS_MASK	/* Only official ... */
@@ -279,7 +265,7 @@ struct dc390_srb	SRB_array[MAX_SRB_CNT]; 	/* 50 SRBs */
 #define RES_DRV			0xFF000000	/* DRIVER_ codes */
 
 #define MK_RES(drv,did,msg,tgt) ((int)(drv)<<24 | (int)(did)<<16 | (int)(msg)<<8 | (int)(tgt))
-#define MK_RES_LNX(drv,did,msg,tgt) ((int)(drv)<<24 | (int)(did)<<16 | (int)(msg)<<8 | (int)(tgt)<<1)
+#define MK_RES_LNX(drv,did,msg,tgt) ((int)(drv)<<24 | (int)(did)<<16 | (int)(msg)<<8 | (int)(tgt))
 
 #define SET_RES_TARGET(who, tgt) do { who &= ~RES_TARGET; who |= (int)(tgt); } while (0)
 #define SET_RES_TARGET_LNX(who, tgt) do { who &= ~RES_TARGET_LNX; who |= (int)(tgt) << 1; } while (0)

@@ -21,6 +21,7 @@
 #ifndef __ASM_ARCH_IRQS_H
 #define __ASM_ARCH_IRQS_H
 
+#include <asm/io.h>
 #include <asm/arch/at91_aic.h>
 
 #define NR_AIC_IRQS 32
@@ -40,5 +41,8 @@
  * We make provision for 5 banks of GPIO.
  */
 #define	NR_IRQS		(NR_AIC_IRQS + (5 * 32))
+
+/* FIQ is AIC source 0. */
+#define FIQ_START AT91_ID_FIQ
 
 #endif

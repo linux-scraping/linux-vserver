@@ -491,7 +491,7 @@ int __init smu_init (void)
 		printk(KERN_ERR "SMU: Can't find doorbell GPIO !\n");
 		goto fail;
 	}
-	data = get_property(smu->db_node, "reg", NULL);
+	data = of_get_property(smu->db_node, "reg", NULL);
 	if (data == NULL) {
 		of_node_put(smu->db_node);
 		smu->db_node = NULL;
@@ -512,7 +512,7 @@ int __init smu_init (void)
 		smu->msg_node = of_find_node_by_name(NULL, "smu-interrupt");
 		if (smu->msg_node == NULL)
 			break;
-		data = get_property(smu->msg_node, "reg", NULL);
+		data = of_get_property(smu->msg_node, "reg", NULL);
 		if (data == NULL) {
 			of_node_put(smu->msg_node);
 			smu->msg_node = NULL;
@@ -606,7 +606,7 @@ static void smu_expose_childs(struct work_struct *unused)
 	struct device_node *np;
 
 	for (np = NULL; (np = of_get_next_child(smu->of_node, np)) != NULL;)
-		if (device_is_compatible(np, "smu-sensors"))
+		if (of_device_is_compatible(np, "smu-sensors"))
 			of_platform_device_create(np, "smu-sensors",
 						  &smu->of_dev->dev);
 }
@@ -952,7 +952,7 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 	prop->name = ((char *)prop) + tlen - 18;
 	sprintf(prop->name, "sdb-partition-%02x", id);
 	prop->length = len;
-	prop->value = (unsigned char *)hdr;
+	prop->value = hdr;
 	prop->next = NULL;
 
 	/* Read the datablock */
@@ -1004,7 +1004,7 @@ const struct smu_sdbp_header *__smu_get_sdb_partition(int id,
 	} else
 		mutex_lock(&smu_part_access);
 
-	part = get_property(smu->of_node, pname, size);
+	part = of_get_property(smu->of_node, pname, size);
 	if (part == NULL) {
 		DPRINTK("trying to extract from SMU ...\n");
 		part = smu_create_sdb_partition(id);
@@ -1053,10 +1053,9 @@ static int smu_open(struct inode *inode, struct file *file)
 	struct smu_private *pp;
 	unsigned long flags;
 
-	pp = kmalloc(sizeof(struct smu_private), GFP_KERNEL);
+	pp = kzalloc(sizeof(struct smu_private), GFP_KERNEL);
 	if (pp == 0)
 		return -ENOMEM;
-	memset(pp, 0, sizeof(struct smu_private));
 	spin_lock_init(&pp->lock);
 	pp->mode = smu_file_commands;
 	init_waitqueue_head(&pp->wait);

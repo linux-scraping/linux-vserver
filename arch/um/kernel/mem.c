@@ -13,8 +13,8 @@
 #include "asm/page.h"
 #include "asm/fixmap.h"
 #include "asm/pgalloc.h"
-#include "user_util.h"
 #include "kern_util.h"
+#include "as-layout.h"
 #include "kern.h"
 #include "mem_user.h"
 #include "uml_uaccess.h"
@@ -62,7 +62,7 @@ static void setup_highmem(unsigned long highmem_start,
 }
 #endif
 
-void mem_init(void)
+void __init mem_init(void)
 {
 	/* clear the zero-page */
 	memset((void *) empty_zero_page, 0, PAGE_SIZE);
@@ -216,7 +216,7 @@ static void __init fixaddr_user_init( void)
 #endif
 }
 
-void paging_init(void)
+void __init paging_init(void)
 {
 	unsigned long zones_size[MAX_NR_ZONES], vaddr;
 	int i;

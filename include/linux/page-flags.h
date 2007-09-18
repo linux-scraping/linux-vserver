@@ -6,6 +6,7 @@
 #define PAGE_FLAGS_H
 
 #include <linux/types.h>
+#include <linux/mm_types.h>
 
 /*
  * Various page->flags bits:
@@ -82,17 +83,19 @@
 #define PG_private		11	/* If pagecache, has fs-private data */
 
 #define PG_writeback		12	/* Page is under writeback */
-#define PG_nosave		13	/* Used for system suspend/resume */
 #define PG_compound		14	/* Part of a compound page */
 #define PG_swapcache		15	/* Swap page: swp_entry_t in private */
 
 #define PG_mappedtodisk		16	/* Has blocks allocated on-disk */
 #define PG_reclaim		17	/* To be reclaimed asap */
-#define PG_nosave_free		18	/* Used for system suspend/resume */
 #define PG_buddy		19	/* Page is free, on buddy lists */
+
+/* PG_readahead is only used for file reads; PG_reclaim is only for writes */
+#define PG_readahead		PG_reclaim /* Reminder to do async read-ahead */
 
 /* PG_owner_priv_1 users should have descriptive aliases */
 #define PG_checked		PG_owner_priv_1 /* Used by some filesystems */
+#define PG_pinned		PG_owner_priv_1	/* Xen pinned pagetable */
 
 #if (BITS_PER_LONG > 32)
 /*
@@ -133,7 +136,7 @@
 static inline void SetPageUptodate(struct page *page)
 {
 	if (!test_and_set_bit(PG_uptodate, &page->flags))
-		page_test_and_clear_dirty(page);
+		page_clear_dirty(page);
 }
 #else
 #define SetPageUptodate(page)	set_bit(PG_uptodate, &(page)->flags)
@@ -171,6 +174,10 @@ static inline void SetPageUptodate(struct page *page)
 #define SetPageChecked(page)	set_bit(PG_checked, &(page)->flags)
 #define ClearPageChecked(page)	clear_bit(PG_checked, &(page)->flags)
 
+#define PagePinned(page)	test_bit(PG_pinned, &(page)->flags)
+#define SetPagePinned(page)	set_bit(PG_pinned, &(page)->flags)
+#define ClearPagePinned(page)	clear_bit(PG_pinned, &(page)->flags)
+
 #define PageReserved(page)	test_bit(PG_reserved, &(page)->flags)
 #define SetPageReserved(page)	set_bit(PG_reserved, &(page)->flags)
 #define ClearPageReserved(page)	clear_bit(PG_reserved, &(page)->flags)
@@ -182,47 +189,15 @@ static inline void SetPageUptodate(struct page *page)
 #define __SetPagePrivate(page)  __set_bit(PG_private, &(page)->flags)
 #define __ClearPagePrivate(page) __clear_bit(PG_private, &(page)->flags)
 
+/*
+ * Only test-and-set exist for PG_writeback.  The unconditional operators are
+ * risky: they bypass page accounting.
+ */
 #define PageWriteback(page)	test_bit(PG_writeback, &(page)->flags)
-#define SetPageWriteback(page)						\
-	do {								\
-		if (!test_and_set_bit(PG_writeback,			\
-				&(page)->flags))			\
-			inc_zone_page_state(page, NR_WRITEBACK);	\
-	} while (0)
-#define TestSetPageWriteback(page)					\
-	({								\
-		int ret;						\
-		ret = test_and_set_bit(PG_writeback,			\
-					&(page)->flags);		\
-		if (!ret)						\
-			inc_zone_page_state(page, NR_WRITEBACK);	\
-		ret;							\
-	})
-#define ClearPageWriteback(page)					\
-	do {								\
-		if (test_and_clear_bit(PG_writeback,			\
-				&(page)->flags))			\
-			dec_zone_page_state(page, NR_WRITEBACK);	\
-	} while (0)
-#define TestClearPageWriteback(page)					\
-	({								\
-		int ret;						\
-		ret = test_and_clear_bit(PG_writeback,			\
-				&(page)->flags);			\
-		if (ret)						\
-			dec_zone_page_state(page, NR_WRITEBACK);	\
-		ret;							\
-	})
-
-#define PageNosave(page)	test_bit(PG_nosave, &(page)->flags)
-#define SetPageNosave(page)	set_bit(PG_nosave, &(page)->flags)
-#define TestSetPageNosave(page)	test_and_set_bit(PG_nosave, &(page)->flags)
-#define ClearPageNosave(page)		clear_bit(PG_nosave, &(page)->flags)
-#define TestClearPageNosave(page)	test_and_clear_bit(PG_nosave, &(page)->flags)
-
-#define PageNosaveFree(page)	test_bit(PG_nosave_free, &(page)->flags)
-#define SetPageNosaveFree(page)	set_bit(PG_nosave_free, &(page)->flags)
-#define ClearPageNosaveFree(page)		clear_bit(PG_nosave_free, &(page)->flags)
+#define TestSetPageWriteback(page) test_and_set_bit(PG_writeback,	\
+							&(page)->flags)
+#define TestClearPageWriteback(page) test_and_clear_bit(PG_writeback,	\
+							&(page)->flags)
 
 #define PageBuddy(page)		test_bit(PG_buddy, &(page)->flags)
 #define __SetPageBuddy(page)	__set_bit(PG_buddy, &(page)->flags)
@@ -232,6 +207,10 @@ static inline void SetPageUptodate(struct page *page)
 #define SetPageMappedToDisk(page) set_bit(PG_mappedtodisk, &(page)->flags)
 #define ClearPageMappedToDisk(page) clear_bit(PG_mappedtodisk, &(page)->flags)
 
+#define PageReadahead(page)	test_bit(PG_readahead, &(page)->flags)
+#define SetPageReadahead(page)	set_bit(PG_readahead, &(page)->flags)
+#define ClearPageReadahead(page) clear_bit(PG_readahead, &(page)->flags)
+
 #define PageReclaim(page)	test_bit(PG_reclaim, &(page)->flags)
 #define SetPageReclaim(page)	set_bit(PG_reclaim, &(page)->flags)
 #define ClearPageReclaim(page)	clear_bit(PG_reclaim, &(page)->flags)
@@ -240,6 +219,34 @@ static inline void SetPageUptodate(struct page *page)
 #define PageCompound(page)	test_bit(PG_compound, &(page)->flags)
 #define __SetPageCompound(page)	__set_bit(PG_compound, &(page)->flags)
 #define __ClearPageCompound(page) __clear_bit(PG_compound, &(page)->flags)
+
+/*
+ * PG_reclaim is used in combination with PG_compound to mark the
+ * head and tail of a compound page
+ *
+ * PG_compound & PG_reclaim	=> Tail page
+ * PG_compound & ~PG_reclaim	=> Head page
+ */
+
+#define PG_head_tail_mask ((1L << PG_compound) | (1L << PG_reclaim))
+
+#define PageTail(page)	((page->flags & PG_head_tail_mask) \
+				== PG_head_tail_mask)
+
+static inline void __SetPageTail(struct page *page)
+{
+	page->flags |= PG_head_tail_mask;
+}
+
+static inline void __ClearPageTail(struct page *page)
+{
+	page->flags &= ~PG_head_tail_mask;
+}
+
+#define PageHead(page)	((page->flags & PG_head_tail_mask) \
+				== (1L << PG_compound))
+#define __SetPageHead(page)	__SetPageCompound(page)
+#define __ClearPageHead(page)	__ClearPageCompound(page)
 
 #ifdef CONFIG_SWAP
 #define PageSwapCache(page)	test_bit(PG_swapcache, &(page)->flags)

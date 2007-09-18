@@ -126,14 +126,14 @@ static int cs5520_tune_chipset(ide_drive_t *drive, u8 xferspeed)
 	
 static void cs5520_tune_drive(ide_drive_t *drive, u8 pio)
 {
-	pio = ide_get_best_pio_mode(drive, pio, 4, NULL);
+	pio = ide_get_best_pio_mode(drive, pio, 4);
 	cs5520_tune_chipset(drive, (XFER_PIO_0 + pio));
 }
 
 static int cs5520_config_drive_xfer_rate(ide_drive_t *drive)
 {
 	/* Tune the drive for PIO modes up to PIO 4 */	
-	cs5520_tune_drive(drive, 4);
+	cs5520_tune_drive(drive, 255);
 
 	/* Then tell the core to use DMA operations */
 	return 0;
@@ -194,10 +194,10 @@ static void __devinit init_hwif_cs5520(ide_hwif_t *hwif)
 		.name		= name_str,			\
 		.init_setup_dma = cs5520_init_setup_dma,	\
 		.init_hwif	= init_hwif_cs5520,		\
-		.channels	= 2,				\
 		.autodma	= AUTODMA,			\
 		.bootable	= ON_BOARD,			\
-		.flags		= IDEPCI_FLAG_ISA_PORTS,	\
+		.host_flags	= IDE_HFLAG_ISA_PORTS,		\
+		.pio_mask	= ATA_PIO4,			\
 	}
 
 static ide_pci_device_t cyrix_chipsets[] __devinitdata = {
@@ -213,6 +213,7 @@ static ide_pci_device_t cyrix_chipsets[] __devinitdata = {
  
 static int __devinit cs5520_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
+	ide_hwif_t *hwif = NULL, *mate = NULL;
 	ata_index_t index;
 	ide_pci_device_t *d = &cyrix_chipsets[id->driver_data];
 
@@ -239,10 +240,21 @@ static int __devinit cs5520_init_one(struct pci_dev *dev, const struct pci_devic
 
 	ide_pci_setup_ports(dev, d, 14, &index);
 
-	if((index.b.low & 0xf0) != 0xf0)
-		probe_hwif_init(&ide_hwifs[index.b.low]);
-	if((index.b.high & 0xf0) != 0xf0)
-		probe_hwif_init(&ide_hwifs[index.b.high]);
+	if ((index.b.low & 0xf0) != 0xf0)
+		hwif = &ide_hwifs[index.b.low];
+	if ((index.b.high & 0xf0) != 0xf0)
+		mate = &ide_hwifs[index.b.high];
+
+	if (hwif)
+		probe_hwif_init(hwif);
+	if (mate)
+		probe_hwif_init(mate);
+
+	if (hwif)
+		ide_proc_register_port(hwif);
+	if (mate)
+		ide_proc_register_port(mate);
+
 	return 0;
 }
 

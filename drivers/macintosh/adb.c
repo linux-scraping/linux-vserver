@@ -89,8 +89,8 @@ static int sleepy_trackpad;
 static int autopoll_devs;
 int __adb_probe_sync;
 
-#ifdef CONFIG_PM
-static int adb_notify_sleep(struct pmu_sleep_notifier *self, int when);
+#ifdef CONFIG_PM_SLEEP
+static void adb_notify_sleep(struct pmu_sleep_notifier *self, int when);
 static struct pmu_sleep_notifier adb_sleep_notifier = {
 	adb_notify_sleep,
 	SLEEP_LEVEL_ADB,
@@ -248,21 +248,15 @@ static int adb_scan_bus(void)
 static int
 adb_probe_task(void *x)
 {
-	sigset_t blocked;
-
 	strcpy(current->comm, "kadbprobe");
-
-	sigfillset(&blocked);
-	sigprocmask(SIG_BLOCK, &blocked, NULL);
-	flush_signals(current);
 
 	printk(KERN_INFO "adb: starting probe task...\n");
 	do_adb_reset_bus();
 	printk(KERN_INFO "adb: finished probe task...\n");
-	
+
 	adb_probe_task_pid = 0;
 	up(&adb_probe_mutex);
-	
+
 	return 0;
 }
 
@@ -319,7 +313,7 @@ int __init adb_init(void)
 		printk(KERN_WARNING "Warning: no ADB interface detected\n");
 		adb_controller = NULL;
 	} else {
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 		pmu_register_sleep_notifier(&adb_sleep_notifier);
 #endif /* CONFIG_PM */
 #ifdef CONFIG_PPC
@@ -340,11 +334,9 @@ __initcall(adb_init);
 /*
  * notify clients before sleep and reset bus afterwards
  */
-int
+void
 adb_notify_sleep(struct pmu_sleep_notifier *self, int when)
 {
-	int ret;
-	
 	switch (when) {
 	case PBOOK_SLEEP_REQUEST:
 		adb_got_sleep = 1;
@@ -353,22 +345,8 @@ adb_notify_sleep(struct pmu_sleep_notifier *self, int when)
 		/* Stop autopoll */
 		if (adb_controller->autopoll)
 			adb_controller->autopoll(0);
-		ret = blocking_notifier_call_chain(&adb_client_list,
-				ADB_MSG_POWERDOWN, NULL);
-		if (ret & NOTIFY_STOP_MASK) {
-			up(&adb_probe_mutex);
-			return PBOOK_SLEEP_REFUSE;
-		}
-		break;
-	case PBOOK_SLEEP_REJECT:
-		if (adb_got_sleep) {
-			adb_got_sleep = 0;
-			up(&adb_probe_mutex);
-			adb_reset_bus();
-		}
-		break;
-		
-	case PBOOK_SLEEP_NOW:
+		blocking_notifier_call_chain(&adb_client_list,
+			ADB_MSG_POWERDOWN, NULL);
 		break;
 	case PBOOK_WAKE:
 		adb_got_sleep = 0;
@@ -376,14 +354,13 @@ adb_notify_sleep(struct pmu_sleep_notifier *self, int when)
 		adb_reset_bus();
 		break;
 	}
-	return PBOOK_SLEEP_OK;
 }
 #endif /* CONFIG_PM */
 
 static int
 do_adb_reset_bus(void)
 {
-	int ret, nret;
+	int ret;
 	
 	if (adb_controller == NULL)
 		return -ENXIO;
@@ -391,13 +368,8 @@ do_adb_reset_bus(void)
 	if (adb_controller->autopoll)
 		adb_controller->autopoll(0);
 
-	nret = blocking_notifier_call_chain(&adb_client_list,
-			ADB_MSG_PRE_RESET, NULL);
-	if (nret & NOTIFY_STOP_MASK) {
-		if (adb_controller->autopoll)
-			adb_controller->autopoll(autopoll_devs);
-		return -EBUSY;
-	}
+	blocking_notifier_call_chain(&adb_client_list,
+		ADB_MSG_PRE_RESET, NULL);
 
 	if (sleepy_trackpad) {
 		/* Let the trackpad settle down */
@@ -427,10 +399,8 @@ do_adb_reset_bus(void)
 	}
 	up(&adb_handler_sem);
 
-	nret = blocking_notifier_call_chain(&adb_client_list,
-			ADB_MSG_POST_RESET, NULL);
-	if (nret & NOTIFY_STOP_MASK)
-		return -EBUSY;
+	blocking_notifier_call_chain(&adb_client_list,
+		ADB_MSG_POST_RESET, NULL);
 	
 	return ret;
 }

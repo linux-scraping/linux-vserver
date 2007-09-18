@@ -69,7 +69,7 @@ static void show_tty_range(struct seq_file *m, struct tty_driver *p,
 
 static int show_tty_driver(struct seq_file *m, void *v)
 {
-	struct tty_driver *p = v;
+	struct tty_driver *p = list_entry(v, struct tty_driver, tty_drivers);
 	dev_t from = MKDEV(p->major, p->minor_start);
 	dev_t to = from + p->num;
 
@@ -106,24 +106,18 @@ static int show_tty_driver(struct seq_file *m, void *v)
 /* iterator */
 static void *t_start(struct seq_file *m, loff_t *pos)
 {
-	struct list_head *p;
-	loff_t l = *pos;
-	list_for_each(p, &tty_drivers)
-		if (!l--)
-			return list_entry(p, struct tty_driver, tty_drivers);
-	return NULL;
+	mutex_lock(&tty_mutex);
+	return seq_list_start(&tty_drivers, *pos);
 }
 
 static void *t_next(struct seq_file *m, void *v, loff_t *pos)
 {
-	struct list_head *p = ((struct tty_driver *)v)->tty_drivers.next;
-	(*pos)++;
-	return p==&tty_drivers ? NULL :
-			list_entry(p, struct tty_driver, tty_drivers);
+	return seq_list_next(v, &tty_drivers, pos);
 }
 
 static void t_stop(struct seq_file *m, void *v)
 {
+	mutex_unlock(&tty_mutex);
 }
 
 static struct seq_operations tty_drivers_op = {

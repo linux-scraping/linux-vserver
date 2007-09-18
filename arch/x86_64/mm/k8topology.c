@@ -44,15 +44,12 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 { 
 	unsigned long prevbase;
 	struct bootnode nodes[8];
-	int nodeid, i, nb; 
+	int nodeid, i, j, nb;
 	unsigned char nodeids[8];
 	int found = 0;
 	u32 reg;
 	unsigned numnodes;
-	nodemask_t nodes_parsed;
-	unsigned dualcore = 0;
-
-	nodes_clear(nodes_parsed);
+	unsigned num_cores;
 
 	if (!early_pci_allowed())
 		return -1;
@@ -63,8 +60,13 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 
 	printk(KERN_INFO "Scanning NUMA topology in Northbridge %d\n", nb); 
 
+	num_cores = (cpuid_ecx(0x80000008) & 0xff) + 1;
+	printk(KERN_INFO "CPU has %d num_cores\n", num_cores);
+
 	reg = read_pci_config(0, nb, 0, 0x60); 
 	numnodes = ((reg >> 4) & 0xF) + 1;
+	if (numnodes <= 1)
+		return -1;
 
 	printk(KERN_INFO "Number of nodes %d\n", numnodes);
 
@@ -74,8 +76,6 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 		unsigned long base,limit; 
 		u32 nodeid;
 		
-		/* Undefined before E stepping, but hopefully 0 */
-		dualcore |= ((read_pci_config(0, nb, 3, 0xe8) >> 12) & 3) == 1;
 		base = read_pci_config(0, nb, 1, 0x40 + i*8);
 		limit = read_pci_config(0, nb, 1, 0x44 + i*8);
 
@@ -102,7 +102,7 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 			       nodeid, (base>>8)&3, (limit>>8) & 3); 
 			return -1; 
 		}	
-		if (node_isset(nodeid, nodes_parsed)) { 
+		if (node_isset(nodeid, node_possible_map)) {
 			printk(KERN_INFO "Node %d already present. Skipping\n", 
 			       nodeid);
 			continue;
@@ -155,7 +155,7 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 
 		prevbase = base;
 
-		node_set(nodeid, nodes_parsed);
+		node_set(nodeid, node_possible_map);
 	} 
 
 	if (!found)
@@ -171,8 +171,8 @@ int __init k8_scan_nodes(unsigned long start, unsigned long end)
 	for (i = 0; i < 8; i++) {
 		if (nodes[i].start != nodes[i].end) { 
 			nodeid = nodeids[i];
-			apicid_to_node[nodeid << dualcore] = i;
-			apicid_to_node[(nodeid << dualcore) + dualcore] = i;
+			for (j = 0; j < num_cores; j++)
+				apicid_to_node[(nodeid * num_cores) + j] = i;
 			setup_node_bootmem(i, nodes[i].start, nodes[i].end); 
 		} 
 	}

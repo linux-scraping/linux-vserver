@@ -7,6 +7,7 @@ CFLAGS_btext.o          += -fPIC
 
 wdt-mpc8xx-$(CONFIG_8xx_WDT)	+= m8xx_wdt.o
 
+obj-$(CONFIG_PPC_INDIRECT_PCI)	+= indirect_pci.o
 obj-$(CONFIG_PPCBUG_NVRAM)	+= prep_nvram.o
 obj-$(CONFIG_PPC_OCP)		+= ocp.o
 obj-$(CONFIG_IBM_OCP)		+= ibm_ocp.o
@@ -18,7 +19,8 @@ obj-$(CONFIG_440SP)		+= ibm440gx_common.o ibm440sp_common.o
 obj-$(CONFIG_440SPE)		+= ibm440gx_common.o ibm440sp_common.o ppc440spe_pcie.o
 ifeq ($(CONFIG_4xx),y)
 ifeq ($(CONFIG_XILINX_VIRTEX),y)
-obj-$(CONFIG_40x)		+= xilinx_pic.o ppc_sys.o
+obj-$(CONFIG_40x)		+= xilinx_pic.o
+obj-y				+= virtex_devices.o
 else
 ifeq ($(CONFIG_403),y)
 obj-$(CONFIG_40x)		+= ppc403_pic.o

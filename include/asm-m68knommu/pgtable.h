@@ -49,7 +49,6 @@ static inline int pte_file(pte_t pte) { return 0; }
  * These would be in other places but having them here reduces the diffs.
  */
 extern unsigned int kobjsize(const void *objp);
-extern int is_in_rom(unsigned long);
 
 /*
  * No page table caches to initialise.
@@ -59,15 +58,13 @@ extern int is_in_rom(unsigned long);
 #define io_remap_pfn_range(vma, vaddr, pfn, size, prot)		\
 		remap_pfn_range(vma, vaddr, pfn, size, prot)
 
-#define MK_IOSPACE_PFN(space, pfn)	(pfn)
-#define GET_IOSPACE(pfn)		0
-#define GET_PFN(pfn)			(pfn)
-
 /*
  * All 32bit addresses are effectively valid for vmalloc...
  * Sort of meaningless for non-VM targets.
  */
 #define	VMALLOC_START	0
 #define	VMALLOC_END	0xffffffff
+
+#include <asm-generic/pgtable.h>
 
 #endif /* _M68KNOMMU_PGTABLE_H */

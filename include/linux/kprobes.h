@@ -78,7 +78,7 @@ struct kprobe {
 	kprobe_opcode_t *addr;
 
 	/* Allow user to indicate symbol name of the probe point */
-	char *symbol_name;
+	const char *symbol_name;
 
 	/* Offset into the symbol */
 	unsigned int offset;
@@ -116,18 +116,27 @@ struct kprobe {
  */
 struct jprobe {
 	struct kprobe kp;
-	kprobe_opcode_t *entry;	/* probe handling code to jump to */
+	void *entry;	/* probe handling code to jump to */
 };
+
+/* For backward compatibility with old code using JPROBE_ENTRY() */
+#define JPROBE_ENTRY(handler)	(handler)
 
 DECLARE_PER_CPU(struct kprobe *, current_kprobe);
 DECLARE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 
 #ifdef ARCH_SUPPORTS_KRETPROBES
-extern void arch_prepare_kretprobe(struct kretprobe *rp, struct pt_regs *regs);
+extern void arch_prepare_kretprobe(struct kretprobe_instance *ri,
+				   struct pt_regs *regs);
+extern int arch_trampoline_kprobe(struct kprobe *p);
 #else /* ARCH_SUPPORTS_KRETPROBES */
 static inline void arch_prepare_kretprobe(struct kretprobe *rp,
 					struct pt_regs *regs)
 {
+}
+static inline int arch_trampoline_kprobe(struct kprobe *p)
+{
+	return 0;
 }
 #endif /* ARCH_SUPPORTS_KRETPROBES */
 /*
@@ -156,6 +165,16 @@ struct kretprobe_instance {
 	kprobe_opcode_t *ret_addr;
 	struct task_struct *task;
 };
+
+static inline void kretprobe_assert(struct kretprobe_instance *ri,
+	unsigned long orig_ret_address, unsigned long trampoline_address)
+{
+	if (!orig_ret_address || (orig_ret_address == trampoline_address)) {
+		printk("kretprobe BUG!: Processing kretprobe %p @ %p\n",
+				ri->rp, ri->rp->kp.addr);
+		BUG();
+	}
+}
 
 extern spinlock_t kretprobe_lock;
 extern struct mutex kprobe_mutex;
@@ -195,12 +214,11 @@ int longjmp_break_handler(struct kprobe *, struct pt_regs *);
 int register_jprobe(struct jprobe *p);
 void unregister_jprobe(struct jprobe *p);
 void jprobe_return(void);
+unsigned long arch_deref_entry_point(void *);
 
 int register_kretprobe(struct kretprobe *rp);
 void unregister_kretprobe(struct kretprobe *rp);
 
-struct kretprobe_instance *get_free_rp_inst(struct kretprobe *rp);
-void add_rp_inst(struct kretprobe_instance *ri);
 void kprobe_flush_task(struct task_struct *tk);
 void recycle_rp_inst(struct kretprobe_instance *ri, struct hlist_head *head);
 #else /* CONFIG_KPROBES */

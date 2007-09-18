@@ -453,8 +453,8 @@ static int __init setup_adapter(int card_base, int type, int n)
 	int scc_base = card_base + hw[type].scc_offset;
 	char *chipnames[] = CHIPNAMES;
 
-	/* Allocate memory */
-	info = kmalloc(sizeof(struct scc_info), GFP_KERNEL | GFP_DMA);
+	/* Initialize what is necessary for write_scc and write_scc_data */
+	info = kzalloc(sizeof(struct scc_info), GFP_KERNEL | GFP_DMA);
 	if (!info) {
 		printk(KERN_ERR "dmascc: "
 		       "could not allocate memory for %s at %#3x\n",
@@ -462,8 +462,6 @@ static int __init setup_adapter(int card_base, int type, int n)
 		goto out;
 	}
 
-	/* Initialize what is necessary for write_scc and write_scc_data */
-	memset(info, 0, sizeof(struct scc_info));
 
 	info->dev[0] = alloc_netdev(0, "", dev_setup);
 	if (!info->dev[0]) {
@@ -930,7 +928,7 @@ static int scc_send_packet(struct sk_buff *skb, struct net_device *dev)
 
 	/* Transfer data to DMA buffer */
 	i = priv->tx_head;
-	memcpy(priv->tx_buf[i], skb->data + 1, skb->len - 1);
+	skb_copy_from_linear_data_offset(skb, 1, priv->tx_buf[i], skb->len - 1);
 	priv->tx_len[i] = skb->len - 1;
 
 	/* Clear interrupts while we touch our circular buffers */

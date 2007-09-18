@@ -25,8 +25,7 @@ static spinlock_t cpufreq_stats_lock;
 
 #define CPUFREQ_STATDEVICE_ATTR(_name,_mode,_show) \
 static struct freq_attr _attr_##_name = {\
-	.attr = {.name = __stringify(_name), .owner = THIS_MODULE, \
-		.mode = _mode, }, \
+	.attr = {.name = __stringify(_name), .mode = _mode, }, \
 	.show = _show,\
 };
 
@@ -313,9 +312,11 @@ static int cpufreq_stat_cpu_callback(struct notifier_block *nfb,
 
 	switch (action) {
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		cpufreq_update_policy(cpu);
 		break;
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		cpufreq_stats_free_table(cpu);
 		break;
 	}

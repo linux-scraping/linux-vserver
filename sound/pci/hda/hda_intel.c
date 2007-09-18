@@ -88,6 +88,8 @@ MODULE_SUPPORTED_DEVICE("{{Intel, ICH6},"
 			 "{ATI, SB600},"
 			 "{ATI, RS600},"
 			 "{ATI, RS690},"
+			 "{ATI, RS780},"
+			 "{ATI, R600},"
 			 "{VIA, VT8251},"
 			 "{VIA, VT8237A},"
 			 "{SiS, SIS966},"
@@ -339,6 +341,9 @@ struct azx {
 	unsigned int single_cmd :1;
 	unsigned int polling_mode :1;
 	unsigned int msi :1;
+
+	/* for debugging */
+	unsigned int last_cmd;	/* last issued command (to sync) */
 };
 
 /* driver types */
@@ -464,18 +469,10 @@ static void azx_free_cmd_io(struct azx *chip)
 }
 
 /* send a command */
-static int azx_corb_send_cmd(struct hda_codec *codec, hda_nid_t nid, int direct,
-			     unsigned int verb, unsigned int para)
+static int azx_corb_send_cmd(struct hda_codec *codec, u32 val)
 {
 	struct azx *chip = codec->bus->private_data;
 	unsigned int wp;
-	u32 val;
-
-	val = (u32)(codec->addr & 0x0f) << 28;
-	val |= (u32)direct << 27;
-	val |= (u32)nid << 20;
-	val |= verb << 8;
-	val |= para;
 
 	/* add command to corb */
 	wp = azx_readb(chip, CORBWP);
@@ -536,12 +533,12 @@ static unsigned int azx_rirb_get_response(struct hda_codec *codec)
 		}
 		if (! chip->rirb.cmds)
 			return chip->rirb.res; /* the last value */
-		schedule_timeout_interruptible(1);
+		schedule_timeout(1);
 	} while (time_after_eq(timeout, jiffies));
 
 	if (chip->msi) {
 		snd_printk(KERN_WARNING "hda_intel: No response from codec, "
-			   "disabling MSI...\n");
+			   "disabling MSI: last cmd=0x%08x\n", chip->last_cmd);
 		free_irq(chip->irq, chip);
 		chip->irq = -1;
 		pci_disable_msi(chip->pci);
@@ -553,13 +550,15 @@ static unsigned int azx_rirb_get_response(struct hda_codec *codec)
 
 	if (!chip->polling_mode) {
 		snd_printk(KERN_WARNING "hda_intel: azx_get_response timeout, "
-			   "switching to polling mode...\n");
+			   "switching to polling mode: last cmd=0x%08x\n",
+			   chip->last_cmd);
 		chip->polling_mode = 1;
 		goto again;
 	}
 
 	snd_printk(KERN_ERR "hda_intel: azx_get_response timeout, "
-		   "switching to single_cmd mode...\n");
+		   "switching to single_cmd mode: last cmd=0x%08x\n",
+		   chip->last_cmd);
 	chip->rirb.rp = azx_readb(chip, RIRBWP);
 	chip->rirb.cmds = 0;
 	/* switch to single_cmd mode */
@@ -579,19 +578,10 @@ static unsigned int azx_rirb_get_response(struct hda_codec *codec)
  */
 
 /* send a command */
-static int azx_single_send_cmd(struct hda_codec *codec, hda_nid_t nid,
-			       int direct, unsigned int verb,
-			       unsigned int para)
+static int azx_single_send_cmd(struct hda_codec *codec, u32 val)
 {
 	struct azx *chip = codec->bus->private_data;
-	u32 val;
 	int timeout = 50;
-
-	val = (u32)(codec->addr & 0x0f) << 28;
-	val |= (u32)direct << 27;
-	val |= (u32)nid << 20;
-	val |= verb << 8;
-	val |= para;
 
 	while (timeout--) {
 		/* check ICB busy bit */
@@ -637,10 +627,19 @@ static int azx_send_cmd(struct hda_codec *codec, hda_nid_t nid,
 			unsigned int para)
 {
 	struct azx *chip = codec->bus->private_data;
+	u32 val;
+
+	val = (u32)(codec->addr & 0x0f) << 28;
+	val |= (u32)direct << 27;
+	val |= (u32)nid << 20;
+	val |= verb << 8;
+	val |= para;
+	chip->last_cmd = val;
+
 	if (chip->single_cmd)
-		return azx_single_send_cmd(codec, nid, direct, verb, para);
+		return azx_single_send_cmd(codec, val);
 	else
-		return azx_corb_send_cmd(codec, nid, direct, verb, para);
+		return azx_corb_send_cmd(codec, val);
 }
 
 /* get a response */
@@ -1533,7 +1532,7 @@ static int azx_dev_free(struct snd_device *device)
 /*
  * white/black-listing for position_fix
  */
-static const struct snd_pci_quirk position_fix_list[] __devinitdata = {
+static struct snd_pci_quirk position_fix_list[] __devinitdata = {
 	SND_PCI_QUIRK(0x1028, 0x01cc, "Dell D820", POS_FIX_NONE),
 	{}
 };
@@ -1773,6 +1772,8 @@ static struct pci_device_id azx_ids[] = {
 	{ 0x1002, 0x4383, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ATI }, /* ATI SB600 */
 	{ 0x1002, 0x793b, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ATIHDMI }, /* ATI RS600 HDMI */
 	{ 0x1002, 0x7919, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ATIHDMI }, /* ATI RS690 HDMI */
+	{ 0x1002, 0x960c, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ATIHDMI }, /* ATI RS780 HDMI */
+	{ 0x1002, 0xaa00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ATIHDMI }, /* ATI R600 HDMI */
 	{ 0x1106, 0x3288, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_VIA }, /* VIA VT8251/VT8237A */
 	{ 0x1039, 0x7502, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_SIS }, /* SIS966 */
 	{ 0x10b9, 0x5461, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_ULI }, /* ULI M5461 */
@@ -1784,6 +1785,12 @@ static struct pci_device_id azx_ids[] = {
 	{ 0x10de, 0x044b, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP65 */
 	{ 0x10de, 0x055c, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP67 */
 	{ 0x10de, 0x055d, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP67 */
+	{ 0x10de, 0x07fc, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP73 */
+	{ 0x10de, 0x07fd, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP73 */
+	{ 0x10de, 0x0774, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP77 */
+	{ 0x10de, 0x0775, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP77 */
+	{ 0x10de, 0x0776, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP77 */
+	{ 0x10de, 0x0777, PCI_ANY_ID, PCI_ANY_ID, 0, 0, AZX_DRIVER_NVIDIA }, /* NVIDIA MCP77 */
 	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, azx_ids);

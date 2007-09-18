@@ -11,6 +11,7 @@
  */
 
 #include <linux/irq.h>
+#include <linux/msi.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
@@ -185,6 +186,8 @@ int set_irq_msi(unsigned int irq, struct msi_desc *entry)
 	desc = irq_desc + irq;
 	spin_lock_irqsave(&desc->lock, flags);
 	desc->msi_desc = entry;
+	if (entry)
+		entry->irq = irq;
 	spin_unlock_irqrestore(&desc->lock, flags);
 	return 0;
 }
@@ -349,13 +352,10 @@ handle_level_irq(unsigned int irq, struct irq_desc *desc)
 	 * keep it masked and get out of here
 	 */
 	action = desc->action;
-	if (unlikely(!action || (desc->status & IRQ_DISABLED))) {
-		desc->status |= IRQ_PENDING;
+	if (unlikely(!action || (desc->status & IRQ_DISABLED)))
 		goto out_unlock;
-	}
 
 	desc->status |= IRQ_INPROGRESS;
-	desc->status &= ~IRQ_PENDING;
 	spin_unlock(&desc->lock);
 
 	action_ret = handle_IRQ_event(irq, action);

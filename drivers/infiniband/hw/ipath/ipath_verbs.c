@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -164,9 +164,11 @@ void ipath_copy_sge(struct ipath_sge_state *ss, void *data, u32 length)
 	while (length) {
 		u32 len = sge->length;
 
-		BUG_ON(len == 0);
 		if (len > length)
 			len = length;
+		if (len > sge->sge_length)
+			len = sge->sge_length;
+		BUG_ON(len == 0);
 		memcpy(sge->vaddr, data, len);
 		sge->vaddr += len;
 		sge->length -= len;
@@ -202,9 +204,11 @@ void ipath_skip_sge(struct ipath_sge_state *ss, u32 length)
 	while (length) {
 		u32 len = sge->length;
 
-		BUG_ON(len == 0);
 		if (len > length)
 			len = length;
+		if (len > sge->sge_length)
+			len = sge->sge_length;
+		BUG_ON(len == 0);
 		sge->vaddr += len;
 		sge->length -= len;
 		sge->sge_length -= len;
@@ -323,6 +327,8 @@ static int ipath_post_receive(struct ib_qp *ibqp, struct ib_recv_wr *wr,
 		wqe->num_sge = wr->num_sge;
 		for (i = 0; i < wr->num_sge; i++)
 			wqe->sg_list[i] = wr->sg_list[i];
+		/* Make sure queue entry is written before the head index. */
+		smp_wmb();
 		wq->head = next;
 		spin_unlock_irqrestore(&qp->r_rq.lock, flags);
 	}
@@ -438,6 +444,10 @@ void ipath_ib_rcv(struct ipath_ibdev *dev, void *rhdr, void *data,
 		struct ipath_mcast *mcast;
 		struct ipath_mcast_qp *p;
 
+		if (lnh != IPATH_LRH_GRH) {
+			dev->n_pkt_drops++;
+			goto bail;
+		}
 		mcast = ipath_mcast_find(&hdr->u.l.grh.dgid);
 		if (mcast == NULL) {
 			dev->n_pkt_drops++;
@@ -445,8 +455,7 @@ void ipath_ib_rcv(struct ipath_ibdev *dev, void *rhdr, void *data,
 		}
 		dev->n_multicast_rcv++;
 		list_for_each_entry_rcu(p, &mcast->qp_list, list)
-			ipath_qp_rcv(dev, hdr, lnh == IPATH_LRH_GRH, data,
-				     tlen, p->qp);
+			ipath_qp_rcv(dev, hdr, 1, data, tlen, p->qp);
 		/*
 		 * Notify ipath_multicast_detach() if it is waiting for us
 		 * to finish.
@@ -479,7 +488,7 @@ bail:;
  * This is called from ipath_do_rcv_timer() at interrupt level to check for
  * QPs which need retransmits and to collect performance numbers.
  */
-void ipath_ib_timer(struct ipath_ibdev *dev)
+static void ipath_ib_timer(struct ipath_ibdev *dev)
 {
 	struct ipath_qp *resend = NULL;
 	struct list_head *last;
@@ -773,7 +782,6 @@ int ipath_verbs_send(struct ipath_devdata *dd, u32 hdrwords,
 	/* +1 is for the qword padding of pbc */
 	plen = hdrwords + ((len + 3) >> 2) + 1;
 	if (unlikely((plen << 2) > dd->ipath_ibmaxlen)) {
-		ipath_dbg("packet len 0x%x too long, failing\n", plen);
 		ret = -EINVAL;
 		goto bail;
 	}
@@ -946,6 +954,7 @@ int ipath_ib_piobufavail(struct ipath_ibdev *dev)
 		qp = list_entry(dev->piowait.next, struct ipath_qp,
 				piowait);
 		list_del_init(&qp->piowait);
+		clear_bit(IPATH_S_BUSY, &qp->s_busy);
 		tasklet_hi_schedule(&qp->s_task);
 	}
 	spin_unlock_irqrestore(&dev->pending_lock, flags);
@@ -979,15 +988,17 @@ static int ipath_query_device(struct ib_device *ibdev,
 	props->max_ah = ib_ipath_max_ahs;
 	props->max_cqe = ib_ipath_max_cqes;
 	props->max_mr = dev->lk_table.max;
+	props->max_fmr = dev->lk_table.max;
+	props->max_map_per_fmr = 32767;
 	props->max_pd = ib_ipath_max_pds;
-	props->max_qp_rd_atom = 1;
-	props->max_qp_init_rd_atom = 1;
+	props->max_qp_rd_atom = IPATH_MAX_RDMA_ATOMIC;
+	props->max_qp_init_rd_atom = 255;
 	/* props->max_res_rd_atom */
 	props->max_srq = ib_ipath_max_srqs;
 	props->max_srq_wr = ib_ipath_max_srq_wrs;
 	props->max_srq_sge = ib_ipath_max_srq_sges;
 	/* props->local_ca_ack_delay */
-	props->atomic_cap = IB_ATOMIC_HCA;
+	props->atomic_cap = IB_ATOMIC_GLOB;
 	props->max_pkeys = ipath_get_npkeys(dev->dd);
 	props->max_mcast_grp = ib_ipath_max_mcast_grps;
 	props->max_mcast_qp_attach = ib_ipath_max_mcast_qp_attached;
@@ -1049,7 +1060,12 @@ static int ipath_query_port(struct ib_device *ibdev,
 	props->max_vl_num = 1;		/* VLCap = VL0 */
 	props->init_type_reply = 0;
 
-	props->max_mtu = IB_MTU_4096;
+	/*
+	 * Note: the chips support a maximum MTU of 4096, but the driver
+	 * hasn't implemented this feature yet, so set the maximum value
+	 * to 2048.
+	 */
+	props->max_mtu = IB_MTU_2048;
 	switch (dev->dd->ipath_ibmtu) {
 	case 4096:
 		mtu = IB_MTU_4096;
@@ -1359,13 +1375,6 @@ static void __verbs_timer(unsigned long arg)
 {
 	struct ipath_devdata *dd = (struct ipath_devdata *) arg;
 
-	/*
-	 * If port 0 receive packet interrupts are not available, or
-	 * can be missed, poll the receive queue
-	 */
-	if (dd->ipath_flags & IPATH_POLL_RX_INTR)
-		ipath_kreceive(dd);
-
 	/* Handle verbs layer timeouts. */
 	ipath_ib_timer(dd->verbs_dev);
 
@@ -1385,13 +1394,12 @@ static int enable_timer(struct ipath_devdata *dd)
 	 * processing.
 	 */
 	if (dd->ipath_flags & IPATH_GPIO_INTR) {
-		u64 val;
 		ipath_write_kreg(dd, dd->ipath_kregs->kr_debugportselect,
 				 0x2074076542310ULL);
 		/* Enable GPIO bit 2 interrupt */
-		val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_gpio_mask);
-		val |= (u64) (1 << IPATH_GPIO_PORT0_BIT);
-		ipath_write_kreg( dd, dd->ipath_kregs->kr_gpio_mask, val);
+		dd->ipath_gpio_mask |= (u64) (1 << IPATH_GPIO_PORT0_BIT);
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_gpio_mask,
+				 dd->ipath_gpio_mask);
 	}
 
 	init_timer(&dd->verbs_timer);
@@ -1410,8 +1418,9 @@ static int disable_timer(struct ipath_devdata *dd)
                 u64 val;
                 /* Disable GPIO bit 2 interrupt */
                 val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_gpio_mask);
-                val &= ~((u64) (1 << IPATH_GPIO_PORT0_BIT));
-                ipath_write_kreg( dd, dd->ipath_kregs->kr_gpio_mask, val);
+		dd->ipath_gpio_mask &= ~((u64) (1 << IPATH_GPIO_PORT0_BIT));
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_gpio_mask,
+				 dd->ipath_gpio_mask);
 		/*
 		 * We might want to undo changes to debugportselect,
 		 * but how?
@@ -1474,7 +1483,10 @@ int ipath_register_ib_device(struct ipath_devdata *dd)
 		ret = -ENOMEM;
 		goto err_lk;
 	}
+	INIT_LIST_HEAD(&idev->pending_mmaps);
 	spin_lock_init(&idev->pending_lock);
+	idev->mmap_offset = PAGE_SIZE;
+	spin_lock_init(&idev->mmap_offset_lock);
 	INIT_LIST_HEAD(&idev->pending[0]);
 	INIT_LIST_HEAD(&idev->pending[1]);
 	INIT_LIST_HEAD(&idev->pending[2]);
@@ -1556,8 +1568,8 @@ int ipath_register_ib_device(struct ipath_devdata *dd)
 		(1ull << IB_USER_VERBS_CMD_POST_SRQ_RECV);
 	dev->node_type = RDMA_NODE_IB_CA;
 	dev->phys_port_cnt = 1;
+	dev->num_comp_vectors = 1;
 	dev->dma_device = &dd->pcidev->dev;
-	dev->class_dev.dev = dev->dma_device;
 	dev->query_device = ipath_query_device;
 	dev->modify_device = ipath_modify_device;
 	dev->query_port = ipath_query_port;

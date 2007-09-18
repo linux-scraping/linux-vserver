@@ -1,4 +1,3 @@
-//kernel/linux-omap-fsample/arch/arm/mach-omap1/pm.c#3 - integrate change 4545 (text)
 /*
  * linux/arch/arm/mach-omap1/pm.c
  *
@@ -58,7 +57,6 @@
 #include <asm/arch/tc.h>
 #include <asm/arch/pm.h>
 #include <asm/arch/mux.h>
-#include <asm/arch/tps65010.h>
 #include <asm/arch/dma.h>
 #include <asm/arch/dsp_common.h>
 #include <asm/arch/dmtimer.h>
@@ -72,12 +70,12 @@ static unsigned int mpui1610_sleep_save[MPUI1610_SLEEP_SAVE_SIZE];
 
 static unsigned short enable_dyn_sleep = 1;
 
-static ssize_t omap_pm_sleep_while_idle_show(struct subsystem * subsys, char *buf)
+static ssize_t omap_pm_sleep_while_idle_show(struct kset *kset, char *buf)
 {
 	return sprintf(buf, "%hu\n", enable_dyn_sleep);
 }
 
-static ssize_t omap_pm_sleep_while_idle_store(struct subsystem * subsys,
+static ssize_t omap_pm_sleep_while_idle_store(struct kset *kset,
 					      const char * buf,
 					      size_t n)
 {
@@ -100,7 +98,7 @@ static struct subsys_attribute sleep_while_idle_attr = {
 	.store  = omap_pm_sleep_while_idle_store,
 };
 
-extern struct subsystem power_subsys;
+extern struct kset power_subsys;
 static void (*omap_sram_idle)(void) = NULL;
 static void (*omap_sram_suspend)(unsigned long r0, unsigned long r1) = NULL;
 
@@ -251,11 +249,6 @@ void omap_pm_suspend(void)
 
 	omap_serial_wake_trigger(1);
 
-	if (machine_is_omap_osk()) {
-		/* Stop LED1 (D9) blink */
-		tps65010_set_led(LED1, OFF);
-	}
-
 	if (!cpu_is_omap15xx())
 		omap_writew(0xffff, ULPD_SOFT_DISABLE_REQ_REG);
 
@@ -377,7 +370,7 @@ void omap_pm_suspend(void)
 	 * Jump to assembly code. The processor will stay there
 	 * until wake up.
 	 */
-        omap_sram_suspend(arg0, arg1);
+	omap_sram_suspend(arg0, arg1);
 
 	/*
 	 * If we are here, processor is woken up!
@@ -439,7 +432,7 @@ void omap_pm_suspend(void)
 		omap_writew(0, ULPD_SOFT_DISABLE_REQ_REG);
 
 	/*
-	 * Reenable interrupts
+	 * Re-enable interrupts
 	 */
 
 	local_irq_enable();
@@ -448,11 +441,6 @@ void omap_pm_suspend(void)
 	omap_serial_wake_trigger(0);
 
 	printk("PM: OMAP%x is re-starting from deep sleep...\n", system_rev);
-
-	if (machine_is_omap_osk()) {
-		/* Let LED1 (D9) blink again */
-		tps65010_set_led(LED1, BLINK);
-	}
 }
 
 #if defined(DEBUG) && defined(CONFIG_PROC_FS)
@@ -631,10 +619,6 @@ static int omap_pm_prepare(suspend_state_t state)
 	case PM_SUSPEND_STANDBY:
 	case PM_SUSPEND_MEM:
 		break;
-
-	case PM_SUSPEND_DISK:
-		return -ENOTSUPP;
-
 	default:
 		return -EINVAL;
 	}
@@ -657,10 +641,6 @@ static int omap_pm_enter(suspend_state_t state)
 	case PM_SUSPEND_MEM:
 		omap_pm_suspend();
 		break;
-
-	case PM_SUSPEND_DISK:
-		return -ENOTSUPP;
-
 	default:
 		return -EINVAL;
 	}
@@ -698,10 +678,10 @@ static struct irqaction omap_wakeup_irq = {
 
 
 static struct pm_ops omap_pm_ops ={
-	.pm_disk_mode	= 0,
 	.prepare	= omap_pm_prepare,
 	.enter		= omap_pm_enter,
 	.finish		= omap_pm_finish,
+	.valid		= pm_valid_only_mem,
 };
 
 static int __init omap_pm_init(void)
