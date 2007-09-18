@@ -121,7 +121,6 @@ const struct file_operations ext4_file_operations = {
 	.release	= ext4_release_file,
 	.fsync		= ext4_sync_file,
 	.sendfile	= generic_file_sendfile,
-	.sendpage	= generic_file_sendpage,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= generic_file_splice_write,
 };

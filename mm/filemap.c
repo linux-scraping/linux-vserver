@@ -1245,31 +1245,6 @@ int file_send_actor(read_descriptor_t * desc, struct page *page, unsigned long o
 	return written;
 }
 
-/* FIXME: It would be as simple as this, if we had a (void __user*) to write.
- * We already have a kernel buffer, so it should be even simpler, right? ;)
- *
- * Yes, sorta.  After duplicating the complete path of generic_file_write(),
- * at least some special cases could be removed, so the copy is simpler than
- * the original.  But it remains a copy, so overall complexity increases.
- */
-static ssize_t
-generic_kernel_file_write(struct file *, const char *, size_t, loff_t *);
-
-ssize_t generic_file_sendpage(struct file *file, struct page *page,
-		int offset, size_t size, loff_t *ppos, int more)
-{
-	ssize_t ret;
-	char *kaddr;
-
-	kaddr = kmap(page);
-	ret = generic_kernel_file_write(file, kaddr + offset, size, ppos);
-	kunmap(page);
-
-	return ret;
-}
-
-EXPORT_SYMBOL(generic_file_sendpage);
-
 ssize_t generic_file_sendfile(struct file *in_file, loff_t *ppos,
 			 size_t count, read_actor_t actor, void *target)
 {

@@ -147,7 +147,7 @@ static inline char rt_tos2priority(u8 tos)
 	return ip_tos2prio[IPTOS_TOS(tos)>>1];
 }
 
-#include "route_vs.h"
+extern int ip_v4_find_src(struct nx_info *, struct rtable **, struct flowi *);
 
 static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 				   __be32 src, u32 tos, int oif, u8 protocol,

@@ -73,7 +73,7 @@ static inline uint64_t __nxf_init_set(void) {
 
 struct nx_addr_v4 {
 	struct nx_addr_v4 *next;
-	struct in_addr ip;
+	struct in_addr ip[2];
 	struct in_addr mask;
 	uint16_t type;
 	uint16_t flags;

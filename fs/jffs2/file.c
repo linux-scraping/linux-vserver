@@ -51,8 +51,7 @@ const struct file_operations jffs2_file_operations =
 	.ioctl =	jffs2_ioctl,
 	.mmap =		generic_file_readonly_mmap,
 	.fsync =	jffs2_fsync,
-	.sendfile =	generic_file_sendfile,
-	.sendpage =	generic_file_sendpage,
+	.sendfile =	generic_file_sendfile
 };
 
 /* jffs2_file_inode_operations */

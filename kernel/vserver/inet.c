@@ -1,7 +1,7 @@
 
 #include <linux/vserver/debug.h>
-#include <linux/vs_inet.h>
 #include <linux/vs_inet6.h>
+#include <net/route.h>
 #include <net/addrconf.h>
 
 
@@ -132,5 +132,81 @@ out:
 		"dev_in_nx_info(%p,%p[#%d]) = %d",
 		dev, nxi, nxi ? nxi->nx_id : 0, ret);
 	return ret;
+}
+
+int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
+{
+	if (!nxi || !NX_IPV4(nxi))
+		return 0;
+
+	vxdprintk(VXD_CBIT(net, 4),
+		"ip_v4_find_src(%p[#%u]) " NIPQUAD_FMT " -> " NIPQUAD_FMT,
+		nxi, nxi ? nxi->nx_id : 0,
+		NIPQUAD(fl->fl4_src), NIPQUAD(fl->fl4_dst));
+
+	/* single IP is unconditional */
+	if (nx_info_flags(nxi, NXF_SINGLE_IP, 0) &&
+		(fl->fl4_src == INADDR_ANY))
+		fl->fl4_src = nxi->v4.ip[0].s_addr;
+
+	if (fl->fl4_src == INADDR_ANY) {
+		struct nx_addr_v4 *ptr;
+		__be32 found;
+		int err;
+
+		err = __ip_route_output_key(rp, fl);
+		if (!err) {
+			found = (*rp)->rt_src;
+			ip_rt_put(*rp);
+			vxdprintk(VXD_CBIT(net, 4),
+				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
+				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(found));
+			if (v4_addr_in_nx_info(nxi, found, -1))
+				goto found;
+		}
+
+		for (ptr = &nxi->v4; ptr; ptr = ptr->next) {
+			__be32 primary = ptr->ip[0].s_addr;
+			__be32 mask = ptr->mask.s_addr;
+			__be32 net = primary & mask;
+
+			vxdprintk(VXD_CBIT(net, 4), "ip_v4_find_src(%p[#%u]) chk: "
+				NIPQUAD_FMT "/" NIPQUAD_FMT "/" NIPQUAD_FMT,
+				nxi, nxi ? nxi->nx_id : 0, NIPQUAD(primary),
+				NIPQUAD(mask), NIPQUAD(net));
+			if ((found & mask) != net)
+				continue;
+
+			fl->fl4_src = primary;
+			err = __ip_route_output_key(rp, fl);
+			vxdprintk(VXD_CBIT(net, 4),
+				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
+				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(primary));
+			if (!err) {
+				found = (*rp)->rt_src;
+				ip_rt_put(*rp);
+				if (found == primary)
+					goto found;
+			}
+		}
+		/* still no source ip? */
+		found = (fl->fl4_dst == IPI_LOOPBACK)
+			? IPI_LOOPBACK : nxi->v4_lback.s_addr;
+	found:
+		/* assign src ip to flow */
+		fl->fl4_src = found;
+
+	} else {
+		if (!v4_addr_in_nx_info(nxi, fl->fl4_src, -1))
+			return -EPERM;
+	}
+
+	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
+		if (fl->fl4_dst == IPI_LOOPBACK)
+			fl->fl4_dst = nxi->v4_lback.s_addr;
+		if (fl->fl4_src == IPI_LOOPBACK)
+			fl->fl4_src = nxi->v4_lback.s_addr;
+	}
+	return 0;
 }
 
