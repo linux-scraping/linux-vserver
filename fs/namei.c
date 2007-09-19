@@ -2749,6 +2749,14 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 
 #include <linux/file.h>
 
+static inline
+long do_cow_splice(struct file *in, struct file *out, size_t len)
+{
+	loff_t ppos = 0;
+
+	return do_splice_direct(in, &ppos, out, len, 0);
+}
+
 struct dentry *cow_break_link(const char *pathname)
 {
 	int ret, mode, pathlen;
@@ -2759,7 +2767,7 @@ struct dentry *cow_break_link(const char *pathname)
 	struct file *old_file;
 	struct file *new_file;
 	char *to, *path, pad='\251';
-	loff_t ppos, size;
+	loff_t size;
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
@@ -2841,8 +2849,7 @@ retry:
 	}
 
 	size = i_size_read(old_file->f_dentry->d_inode);
-	ppos = 0;
-	ret = do_splice_direct(old_file, &ppos, new_file, size, 0);
+	ret = do_cow_splice(old_file, new_file, size);
 	vxdprintk(VXD_CBIT(misc, 2), "do_splice_direct: %d", ret);
 	if (ret < 0) {
 		res = ERR_PTR(ret);

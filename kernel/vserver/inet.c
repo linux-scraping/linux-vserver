@@ -210,3 +210,5 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 	return 0;
 }
 
+EXPORT_SYMBOL_GPL(ip_v4_find_src);
+
