@@ -2854,10 +2854,19 @@ retry:
 	if (ret < 0) {
 		res = ERR_PTR(ret);
 		goto out_fput_both;
-	}
-	else if (ret < size) {
+	} else if (ret < size) {
 		res = ERR_PTR(-ENOSPC);
 		goto out_fput_both;
+	} else {
+		struct inode *old_inode = old_dentry->d_inode;
+		struct inode *new_inode = new_dentry->d_inode;
+		struct iattr attr = {
+			.ia_uid = old_inode->i_uid,
+			.ia_gid = old_inode->i_gid,
+			.ia_valid = ATTR_UID | ATTR_GID
+			};
+
+		inode_setattr(new_inode, &attr);
 	}
 
 	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,

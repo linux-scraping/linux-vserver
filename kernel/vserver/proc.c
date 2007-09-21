@@ -1051,7 +1051,7 @@ int proc_pid_nx_info(struct task_struct *p, char *buffer)
 			i, NXAV4(v4a));
 skip_v4:
 #ifdef	CONFIG_IPV6
-	if (!NX_IPV4(nxi))
+	if (!NX_IPV6(nxi))
 		goto skip_v6;
 	for (i = 0, v6a = &nxi->v6; v6a; i++, v6a = v6a->next)
 		buffer += sprintf(buffer, "V6Root[%d]:\t" NXAV6_FMT "\n",

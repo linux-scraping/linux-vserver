@@ -1420,7 +1420,8 @@ long do_fork(unsigned long clone_flags,
 		return -EAGAIN;
 
 	/* kernel threads are host only */
-	if ((clone_flags & CLONE_KTHREAD) && !vx_check(0, VS_ADMIN)) {
+	if ((clone_flags & CLONE_KTHREAD) &&
+		!vx_capable(CAP_SYS_ADMIN, VXC_KTHREAD)) {
 		vxwprintk(1, "xid=%d tried to spawn a kernel thread.",
 			vx_current_xid());
 		free_pid(pid);
