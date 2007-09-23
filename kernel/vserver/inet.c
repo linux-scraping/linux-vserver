@@ -136,8 +136,12 @@ out:
 
 int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 {
-	if (!nxi || !NX_IPV4(nxi))
+	if (!nxi)
 		return 0;
+
+	/* FIXME: handle lback only case */
+	if (!NX_IPV4(nxi))
+		return -EPERM;
 
 	vxdprintk(VXD_CBIT(net, 4),
 		"ip_v4_find_src(%p[#%u]) " NIPQUAD_FMT " -> " NIPQUAD_FMT,
