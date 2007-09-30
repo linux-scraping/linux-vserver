@@ -959,6 +959,8 @@ fastcall NORET_TYPE void do_exit(long code)
 
 	taskstats_exit(tsk, group_dead);
 
+	/* needs to stay before exit_notify() */
+	exit_vx_info_early(tsk, code);
 	exit_mm(tsk);
 
 	if (group_dead)
@@ -980,8 +982,6 @@ fastcall NORET_TYPE void do_exit(long code)
 	tsk->exit_code = code;
 	proc_exit_connector(tsk);
 	exit_task_namespaces(tsk);
-	/* needs to stay before exit_notify() */
-	exit_vx_info_early(tsk, code);
 	exit_notify(tsk);
 #ifdef CONFIG_NUMA
 	mpol_free(tsk->mempolicy);

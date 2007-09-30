@@ -1207,7 +1207,7 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 			if (sk && !nx_v4_ifa_visible(sk->sk_nx_info, ifa))
 				continue;
 			if (ip_idx < s_ip_idx)
-				goto cont;
+				continue;
 			if (inet_fill_ifaddr(skb, ifa, NETLINK_CB(cb->skb).pid,
 					     cb->nlh->nlmsg_seq,
 					     RTM_NEWADDR, NLM_F_MULTI) <= 0)

@@ -1420,7 +1420,7 @@ static inline int sas_ss_flags(unsigned long sp)
 /*
  * Routines for handling mm_structs
  */
-extern struct mm_struct * mm_alloc(void);
+extern struct mm_struct * mm_alloc(struct vx_info *);
 
 /* mmdrop drops the mm and the page tables */
 extern void FASTCALL(__mmdrop(struct mm_struct *));

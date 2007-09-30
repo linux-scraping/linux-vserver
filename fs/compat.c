@@ -1381,7 +1381,7 @@ int compat_do_execve(char * filename,
 	bprm->file = file;
 	bprm->filename = filename;
 	bprm->interp = filename;
-	bprm->mm = mm_alloc();
+	bprm->mm = mm_alloc(current->vx_info);
 	retval = -ENOMEM;
 	if (!bprm->mm)
 		goto out_file;

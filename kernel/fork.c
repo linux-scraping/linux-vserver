@@ -336,7 +336,7 @@ static inline void mm_free_pgd(struct mm_struct * mm)
 
 #include <linux/init_task.h>
 
-static struct mm_struct * mm_init(struct mm_struct * mm)
+static struct mm_struct * mm_init(struct mm_struct * mm, struct vx_info *vxi)
 {
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);
@@ -354,7 +354,7 @@ static struct mm_struct * mm_init(struct mm_struct * mm)
 
 	if (likely(!mm_alloc_pgd(mm))) {
 		mm->def_flags = 0;
-		set_vx_info(&mm->mm_vx_info, current->vx_info);
+		set_vx_info(&mm->mm_vx_info, vxi);
 		return mm;
 	}
 	free_mm(mm);
@@ -364,14 +364,14 @@ static struct mm_struct * mm_init(struct mm_struct * mm)
 /*
  * Allocate and initialize an mm_struct.
  */
-struct mm_struct * mm_alloc(void)
+struct mm_struct * mm_alloc(struct vx_info *vxi)
 {
 	struct mm_struct * mm;
 
 	mm = allocate_mm();
 	if (mm) {
 		memset(mm, 0, sizeof(*mm));
-		mm = mm_init(mm);
+		mm = mm_init(mm, vxi);
 	}
 	return mm;
 }
@@ -507,7 +507,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
 	mm->token_priority = 0;
 	mm->last_interval = 0;
 
-	if (!mm_init(mm))
+	if (!mm_init(mm, oldmm->mm_vx_info))
 		goto fail_nomem;
 
 	if (init_new_context(tsk, mm))

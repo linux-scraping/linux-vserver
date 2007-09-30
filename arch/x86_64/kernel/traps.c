@@ -33,6 +33,8 @@
 #include <linux/uaccess.h>
 #include <linux/bug.h>
 #include <linux/kdebug.h>
+#include <linux/vs_context.h>
+#include <linux/vserver/history.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -519,6 +521,7 @@ void __kprobes __die(const char * str, struct pt_regs * regs, long err)
 	printk("\n");
 	notify_die(DIE_OOPS, str, regs, err, current->thread.trap_no, SIGSEGV);
 	show_registers(regs);
+	vxh_dump_history();
 	/* Executive summary in case the oops scrolled away */
 	printk(KERN_ALERT "RIP ");
 	printk_address(regs->rip); 
@@ -531,6 +534,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 {
 	unsigned long flags = oops_begin();
 
+	vxh_throw_oops();
 	if (!user_mode(regs))
 		report_bug(regs->rip);
 
@@ -543,12 +547,14 @@ void __kprobes die_nmi(char *str, struct pt_regs *regs, int do_panic)
 {
 	unsigned long flags = oops_begin();
 
+	vxh_throw_oops();
 	/*
 	 * We are in trouble anyway, lets at least try
 	 * to get a message out.
 	 */
 	printk(str, smp_processor_id());
 	show_registers(regs);
+	vxh_dump_history();
 	if (kexec_should_crash(current))
 		crash_kexec(regs);
 	if (do_panic || panic_on_oops)

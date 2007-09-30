@@ -189,13 +189,15 @@ void free_vx_info(struct vx_info *vxi)
 {
 	unsigned long flags;
 
-	/* context shutdown is mandatory */
-	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
-
+	/* check for reference counts first */
 	BUG_ON(atomic_read(&vxi->vx_usecnt));
 	BUG_ON(atomic_read(&vxi->vx_tasks));
 
+	/* context must not be hashed */
 	BUG_ON(vx_info_state(vxi, VXS_HASHED));
+
+	/* context shutdown is mandatory */
+	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
 
 	BUG_ON(vxi->vx_nsproxy);
 	BUG_ON(vxi->vx_fs);
