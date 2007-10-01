@@ -300,9 +300,11 @@ void do_schedule_next_timer(struct siginfo *info)
 int posix_timer_event(struct k_itimer *timr,int si_private)
 {
 	struct vx_info_save vxis;
+	struct vx_info *vxi;
 	int ret;
 
-	enter_vx_info(task_get_vx_info(timr->it_process), &vxis);
+	vxi = task_get_vx_info(timr->it_process);
+	enter_vx_info(vxi, &vxis);
 	memset(&timr->sigq->info, 0, sizeof(siginfo_t));
 	timr->sigq->info.si_sys_private = si_private;
 	/* Send signal to the process that owns this timer.*/
@@ -331,7 +333,7 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 				   timr->it_process);
 out:
 	leave_vx_info(&vxis);
-	put_vx_info(vxis.vxi);
+	put_vx_info(vxi);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(posix_timer_event);
