@@ -1,6 +1,7 @@
 
-#include <linux/vserver/debug.h>
+#include <linux/inetdevice.h>
 #include <linux/vs_inet6.h>
+#include <linux/vserver/debug.h>
 #include <net/route.h>
 #include <net/addrconf.h>
 
