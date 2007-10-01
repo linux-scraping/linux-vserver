@@ -916,6 +916,7 @@ static int loop_clr_fd(struct loop_device *lo, struct block_device *bdev)
 	lo->lo_encrypt_key_size = 0;
 	lo->lo_flags = 0;
 	lo->lo_thread = NULL;
+	lo->lo_xid = 0;
 	memset(lo->lo_encrypt_key, 0, LO_KEY_SIZE);
 	memset(lo->lo_crypt_name, 0, LO_NAME_SIZE);
 	memset(lo->lo_file_name, 0, LO_NAME_SIZE);
