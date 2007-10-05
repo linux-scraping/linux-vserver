@@ -74,7 +74,7 @@ int v4_dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 		ifap = &ifa->ifa_next) {
-		if (v4_addr_in_nx_info(nxi, ifa->ifa_local, -1)) {
+		if (v4_addr_in_nx_info(nxi, ifa->ifa_local, NXA_MASK_SHOW)) {
 			ret = 1;
 			break;
 		}
@@ -166,7 +166,7 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 			vxdprintk(VXD_CBIT(net, 4),
 				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
 				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(found));
-			if (v4_addr_in_nx_info(nxi, found, -1))
+			if (v4_addr_in_nx_info(nxi, found, NXA_MASK_BIND))
 				goto found;
 		}
 
@@ -196,13 +196,13 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 		}
 		/* still no source ip? */
 		found = (fl->fl4_dst == IPI_LOOPBACK)
-			? IPI_LOOPBACK : nxi->v4_lback.s_addr;
+			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found:
 		/* assign src ip to flow */
 		fl->fl4_src = found;
 
 	} else {
-		if (!v4_addr_in_nx_info(nxi, fl->fl4_src, -1))
+		if (!v4_addr_in_nx_info(nxi, fl->fl4_src, NXA_MASK_BIND))
 			return -EPERM;
 	}
 

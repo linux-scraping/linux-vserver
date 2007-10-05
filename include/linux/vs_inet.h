@@ -56,9 +56,10 @@ int v4_addr_in_nx_info(struct nx_info *nxi, __be32 addr, uint16_t tmask)
 	if (!nxi)
 		goto out;
 
-	/* allow 127.0.0.1 when remapping lback */
 	ret = 2;
-	if ((addr == IPI_LOOPBACK) &&
+	/* allow 127.0.0.1 when remapping lback */
+	if ((tmask & NXA_LOOPBACK) &&
+		(addr == IPI_LOOPBACK) &&
 		nx_info_flags(nxi, NXF_LBACK_REMAP, 0))
 		goto out;
 	ret = 3;
@@ -122,7 +123,7 @@ int v4_sock_addr_match (
 	if (addr && (saddr == addr || bcast == addr))
 		return 1;
 	if (!saddr)
-		return v4_addr_in_nx_info(nxi, addr, -1);
+		return v4_addr_in_nx_info(nxi, addr, NXA_MASK_BIND);
 	return 0;
 }
 
@@ -197,7 +198,7 @@ int v4_ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
 		return 1;
 	if (!ifa)
 		return 0;
-	return v4_addr_in_nx_info(nxi, ifa->ifa_local, -1);
+	return v4_addr_in_nx_info(nxi, ifa->ifa_local, NXA_MASK_SHOW);
 }
 
 static inline
@@ -243,7 +244,7 @@ int v4_map_sock_addr(struct inet_sock *inet, struct sockaddr_in *addr,
 			if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0))
 				baddr = nxi->v4_lback.s_addr;
 		} else {	/* normal address bind */
-			if (!v4_addr_in_nx_info(nxi, saddr, -1))
+			if (!v4_addr_in_nx_info(nxi, saddr, NXA_MASK_BIND))
 				return -EADDRNOTAVAIL;
 		}
 	}
@@ -280,7 +281,7 @@ static inline int v4_inet_addr_match (
 	if (addr && (saddr == addr))
 		return 1;
 	if (!saddr)
-		return nxi ? v4_addr_in_nx_info(nxi, addr, -1) : 1;
+		return nxi ? v4_addr_in_nx_info(nxi, addr, NXA_MASK_BIND) : 1;
 	return 0;
 }
 

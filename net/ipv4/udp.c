@@ -252,7 +252,8 @@ static struct sock *__udp4_lib_lookup(__be32 saddr, __be16 sport,
 				score+=2;
 			} else {
 				/* block non nx_info ips */
-				if (!v4_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
+				if (!v4_addr_in_nx_info(sk->sk_nx_info,
+					daddr, NXA_MASK_BIND))
 					continue;
 			}
 			if (inet->daddr) {

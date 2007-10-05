@@ -1176,7 +1176,7 @@ int do_execve(char * filename,
 	bprm->file = file;
 	bprm->filename = filename;
 	bprm->interp = filename;
-	bprm->mm = mm_alloc(current->vx_info);
+	bprm->mm = mm_alloc();
 	retval = -ENOMEM;
 	if (!bprm->mm)
 		goto out_file;

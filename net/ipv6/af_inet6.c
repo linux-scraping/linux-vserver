@@ -294,7 +294,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			err = -EADDRNOTAVAIL;
 			goto out;
 		}
-		if (!v4_addr_in_nx_info(sk->sk_nx_info, v4addr, -1)) {
+		if (!v4_addr_in_nx_info(sk->sk_nx_info, v4addr, NXA_MASK_BIND)) {
 			err = -EADDRNOTAVAIL;
 			goto out;
 		}

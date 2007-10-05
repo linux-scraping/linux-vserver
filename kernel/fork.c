@@ -364,14 +364,14 @@ static struct mm_struct * mm_init(struct mm_struct * mm, struct vx_info *vxi)
 /*
  * Allocate and initialize an mm_struct.
  */
-struct mm_struct * mm_alloc(struct vx_info *vxi)
+struct mm_struct * mm_alloc(void)
 {
 	struct mm_struct * mm;
 
 	mm = allocate_mm();
 	if (mm) {
 		memset(mm, 0, sizeof(*mm));
-		mm = mm_init(mm, vxi);
+		mm = mm_init(mm, current->vx_info);
 	}
 	return mm;
 }

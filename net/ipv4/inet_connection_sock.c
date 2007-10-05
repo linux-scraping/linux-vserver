@@ -49,12 +49,12 @@ int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
 
 	if (sk1_rcv_saddr &&
 	    !sk2_rcv_saddr &&
-	    v4_addr_in_nx_info(sk2->sk_nx_info, sk1_rcv_saddr, -1))
+	    v4_addr_in_nx_info(sk2->sk_nx_info, sk1_rcv_saddr, NXA_MASK_BIND))
 		return 1;
 
 	if (sk2_rcv_saddr &&
 	    !sk1_rcv_saddr &&
-	    v4_addr_in_nx_info(sk1->sk_nx_info, sk2_rcv_saddr, -1))
+	    v4_addr_in_nx_info(sk1->sk_nx_info, sk2_rcv_saddr, NXA_MASK_BIND))
 		return 1;
 
 	if (!sk1_rcv_saddr &&
