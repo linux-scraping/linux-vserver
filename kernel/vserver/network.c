@@ -587,7 +587,7 @@ int vc_net_migrate(struct nx_info *nxi, void __user *data)
 
 
 
-int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 mask,
+int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	uint16_t type, uint16_t flags)
 {
 	struct nx_addr_v4 *nxa = &nxi->v4;
@@ -606,7 +606,8 @@ int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 mask,
 		/* remove single ip for ip list */
 		nxi->nx_flags &= ~NXF_SINGLE_IP;
 
-	nxa->ip.s_addr = ip;
+	nxa->ip[0].s_addr = ip;
+	nxa->ip[1].s_addr = ip2;
 	nxa->mask.s_addr = mask;
 	nxa->type = type;
 	nxa->flags = flags;
@@ -629,7 +630,7 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 
 		index = 0;
 		while (index < vc_data.count) {
-			ret = do_add_v4_addr(nxi, vc_data.ip[index].s_addr,
+			ret = do_add_v4_addr(nxi, vc_data.ip[index].s_addr, 0,
 				vc_data.mask[index].s_addr, NXA_TYPE_ADDR, 0);
 			if (ret)
 				return ret;
@@ -686,8 +687,8 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 	case NXA_TYPE_ADDR:
 	case NXA_TYPE_RANGE:
 	case NXA_TYPE_MASK:
-		return do_add_v4_addr(nxi, vc_data.ip.s_addr, vc_data.mask.s_addr,
-			vc_data.type, vc_data.flags);
+		return do_add_v4_addr(nxi, vc_data.ip.s_addr, 0,
+			vc_data.mask.s_addr, vc_data.type, vc_data.flags);
 
 	case NXA_TYPE_ADDR | NXA_MOD_BCAST:
 		nxi->v4_bcast = vc_data.ip;

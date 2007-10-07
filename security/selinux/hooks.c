@@ -60,7 +60,6 @@
 #include <linux/dccp.h>
 #include <linux/quota.h>
 #include <linux/un.h>		/* for Unix socket types */
-#include <net/af_unix.h>	/* for Unix socket types */
 #include <linux/parser.h>
 #include <linux/nfs_mount.h>
 #include <net/ipv6.h>
@@ -316,6 +315,7 @@ static inline int inode_doinit(struct inode *inode)
 }
 
 enum {
+	Opt_error = -1,
 	Opt_context = 1,
 	Opt_fscontext = 2,
 	Opt_defcontext = 4,
@@ -327,6 +327,7 @@ static match_table_t tokens = {
 	{Opt_fscontext, "fscontext=%s"},
 	{Opt_defcontext, "defcontext=%s"},
 	{Opt_rootcontext, "rootcontext=%s"},
+	{Opt_error, NULL},
 };
 
 #define SEL_MOUNT_FAIL_MSG "SELinux:  duplicate or incompatible mount options\n"

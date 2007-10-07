@@ -317,7 +317,7 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	err = -EPERM;
 	if (!nx_check(0, VS_ADMIN) && !capable(CAP_NET_RAW) &&
 		sk->sk_nx_info &&
-		!v4_addr_in_nx_info(sk->sk_nx_info, iph->saddr, -1))
+		!v4_addr_in_nx_info(sk->sk_nx_info, iph->saddr, NXA_MASK_BIND))
 		goto error_free;
 
 	err = NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, rt->u.dst.dev,

@@ -71,6 +71,8 @@
 #define VXC_ADMIN_MAPPER	0x00200000
 #define VXC_ADMIN_CLOOP		0x00400000
 
+#define VXC_KTHREAD		0x01000000
+
 
 #ifdef	__KERNEL__
 

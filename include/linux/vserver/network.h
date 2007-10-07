@@ -58,9 +58,15 @@ static inline uint64_t __nxf_init_set(void) {
 #define NXA_TYPE_MASK		0x0020
 #define NXA_TYPE_RANGE		0x0040
 
+#define NXA_MASK_ALL		(NXA_TYPE_ADDR | NXA_TYPE_MASK | NXA_TYPE_RANGE)
+
 #define NXA_MOD_BCAST		0x0100
 #define NXA_MOD_LBACK		0x0200
 
+#define NXA_LOOPBACK		0x1000
+
+#define NXA_MASK_BIND		(NXA_MASK_ALL | NXA_MOD_BCAST | NXA_MOD_LBACK)
+#define NXA_MASK_SHOW		(NXA_MASK_ALL | NXA_LOOPBACK)
 
 #ifdef	__KERNEL__
 
@@ -73,7 +79,7 @@ static inline uint64_t __nxf_init_set(void) {
 
 struct nx_addr_v4 {
 	struct nx_addr_v4 *next;
-	struct in_addr ip;
+	struct in_addr ip[2];
 	struct in_addr mask;
 	uint16_t type;
 	uint16_t flags;

@@ -2782,6 +2782,14 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 
 #include <linux/file.h>
 
+static inline
+long do_cow_splice(struct file *in, struct file *out, size_t len)
+{
+	loff_t ppos = 0;
+
+	return do_splice_direct(in, &ppos, out, len, 0);
+}
+
 struct dentry *cow_break_link(const char *pathname)
 {
 	int ret, mode, pathlen;
@@ -2792,7 +2800,7 @@ struct dentry *cow_break_link(const char *pathname)
 	struct file *old_file;
 	struct file *new_file;
 	char *to, *path, pad='\251';
-	loff_t ppos, size;
+	loff_t size;
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
@@ -2874,17 +2882,28 @@ retry:
 	}
 
 	size = i_size_read(old_file->f_dentry->d_inode);
-	// ret = vfs_sendfile(new_file, old_file, NULL, size, 0);
-	ppos = 0;
-	ret = do_splice_direct(old_file, &ppos, new_file, size, 0);
+	ret = do_cow_splice(old_file, new_file, size);
 	vxdprintk(VXD_CBIT(misc, 2), "do_splice_direct: %d", ret);
 	if (ret < 0) {
 		res = ERR_PTR(ret);
 		goto out_fput_both;
-	}
-	else if (ret < size) {
+	} else if (ret < size) {
 		res = ERR_PTR(-ENOSPC);
 		goto out_fput_both;
+	} else {
+		struct inode *old_inode = old_dentry->d_inode;
+		struct inode *new_inode = new_dentry->d_inode;
+		struct iattr attr = {
+			.ia_uid = old_inode->i_uid,
+			.ia_gid = old_inode->i_gid,
+			.ia_valid = ATTR_UID | ATTR_GID
+			};
+
+		ret = inode_setattr(new_inode, &attr);
+		if (ret) {
+			res = ERR_PTR(ret);
+			goto out_fput_both;
+		}
 	}
 
 	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,

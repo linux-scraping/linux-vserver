@@ -29,7 +29,9 @@ static struct uts_namespace *clone_uts_ns(struct uts_namespace *old_ns)
 	if (!ns)
 		return ERR_PTR(-ENOMEM);
 
+	down_read(&uts_sem);
 	memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
+	up_read(&uts_sem);
 	atomic_inc(&vs_global_uts_ns);
 	kref_init(&ns->kref);
 	return ns;
