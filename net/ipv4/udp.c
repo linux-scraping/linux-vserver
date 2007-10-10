@@ -879,7 +879,8 @@ try_again:
 	{
 		sin->sin_family = AF_INET;
 		sin->sin_port = udp_hdr(skb)->source;
-		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+		sin->sin_addr.s_addr = nx_map_sock_lback(
+			skb->sk->sk_nx_info, ip_hdr(skb)->saddr);
 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
 	}
 	if (inet->cmsg_flags)

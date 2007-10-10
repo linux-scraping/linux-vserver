@@ -286,8 +286,12 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
 	submask = mask & ~MAY_APPEND;
-	if ((retval = dx_permission(inode, mask, nd)))
+
+	if ((inode->i_sb->s_magic != DEVPTS_SUPER_MAGIC) &&
+		(inode->i_sb->s_magic != PROC_SUPER_MAGIC) &&
+		(retval = dx_permission(inode, mask, nd)))
 		return retval;
+
 	if (inode->i_op && inode->i_op->permission)
 		retval = inode->i_op->permission(inode, submask, nd);
 	else
@@ -812,15 +816,21 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 	inode = dentry->d_inode;
 	if (!inode)
 		goto done;
+
 	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
 		struct proc_dir_entry *de = PDE(inode);
 
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
+	} else if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
+		if (!vx_check((xid_t)inode->i_tag,
+			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
+			goto hidden;
+	} else {
+		if (!dx_notagcheck(nd) && !dx_check(inode->i_tag,
+			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
+			goto hidden;
 	}
-	if (!dx_notagcheck(nd) &&
-	    !dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
-		goto hidden;
 done:
 	path->mnt = mnt;
 	path->dentry = dentry;

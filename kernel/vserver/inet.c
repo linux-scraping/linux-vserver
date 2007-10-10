@@ -1,4 +1,5 @@
 
+#include <linux/in.h>
 #include <linux/inetdevice.h>
 #include <linux/vs_inet6.h>
 #include <linux/vserver/debug.h>
@@ -195,7 +196,7 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 			}
 		}
 		/* still no source ip? */
-		found = (fl->fl4_dst == IPI_LOOPBACK)
+		found = LOOPBACK(fl->fl4_dst)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found:
 		/* assign src ip to flow */
@@ -207,11 +208,13 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 	}
 
 	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
-		if (fl->fl4_dst == IPI_LOOPBACK)
+		if (LOOPBACK(fl->fl4_dst))
 			fl->fl4_dst = nxi->v4_lback.s_addr;
-		if (fl->fl4_src == IPI_LOOPBACK)
+		if (LOOPBACK(fl->fl4_src))
 			fl->fl4_src = nxi->v4_lback.s_addr;
-	}
+	} else if (LOOPBACK(fl->fl4_dst))
+		return -EPERM;
+
 	return 0;
 }
 
