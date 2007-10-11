@@ -2763,9 +2763,14 @@ struct dentry *cow_break_link(const char *pathname)
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!path)
+		goto out;
 
 	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
 	vxdprintk(VXD_CBIT(misc, 2), "path_lookup(old): %d", ret);
+	if (ret < 0)
+		goto out_free_path;
+
 	old_dentry = old_nd.dentry;
 	old_mnt = old_nd.mnt;
 	mode = old_dentry->d_inode->i_mode;
@@ -2878,7 +2883,9 @@ out_rel_both:
 	path_release(&dir_nd);
 out_rel_old:
 	path_release(&old_nd);
+out_free_path:
 	kfree(path);
+out:
 	return res;
 }
 
