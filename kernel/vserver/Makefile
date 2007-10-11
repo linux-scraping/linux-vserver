@@ -14,4 +14,5 @@ vserver-$(CONFIG_PROC_FS) += proc.o
 vserver-$(CONFIG_VSERVER_DEBUG) += sysctl.o debug.o
 vserver-$(CONFIG_VSERVER_HISTORY) += history.o
 vserver-$(CONFIG_VSERVER_MONITOR) += monitor.o
+vserver-$(CONFIG_VSERVER_DEVICE) += device.o
 

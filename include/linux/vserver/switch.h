@@ -51,6 +51,8 @@
 #define VC_CAT_VSETUP		1
 #define VC_CAT_VHOST		2
 
+#define VC_CAT_DEVICE		6
+
 #define VC_CAT_VPROC		9
 #define VC_CAT_PROCALT		10
 #define VC_CAT_PROCMIG		11

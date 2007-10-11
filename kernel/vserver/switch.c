@@ -15,6 +15,7 @@
  *  V0.08  added status commands
  *  V0.09  added tag commands
  *  V0.10  added oom bias
+ *  V0.11  added device commands
  *
  */
 
@@ -49,6 +50,7 @@ int vc_get_vci(uint32_t id)
 #include <linux/vserver/signal_cmd.h>
 #include <linux/vserver/space_cmd.h>
 #include <linux/vserver/tag_cmd.h>
+#include <linux/vserver/device_cmd.h>
 
 #include <linux/vserver/inode.h>
 #include <linux/vserver/dlimit.h>
@@ -245,6 +247,13 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_match_ipv6:
 		return vc_get_match_ipv6(nxi, data);
 #endif	*/
+
+#ifdef	CONFIG_VSERVER_DEVICE
+	case VCMD_set_mapping:
+		return __COMPAT(vc_set_mapping, vxi, data, compat);
+	case VCMD_unset_mapping:
+		return __COMPAT(vc_unset_mapping, vxi, data, compat);
+#endif
 #ifdef	CONFIG_VSERVER_HISTORY
 	case VCMD_dump_history:
 		return vc_dump_history(id);
@@ -371,6 +380,10 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(add_dlimit,	 8, VCA_NONE,	VCF_ARES);
 	__VCMD(rem_dlimit,	 8, VCA_NONE,	VCF_ARES);
 
+#ifdef	CONFIG_VSERVER_DEVICE
+	__VCMD(set_mapping,	 8, VCA_VXI,    VCF_ARES|VCF_ZIDOK);
+	__VCMD(unset_mapping,	 8, VCA_VXI,	VCF_ARES|VCF_ZIDOK);
+#endif
 	/* debug level admin commands */
 #ifdef	CONFIG_VSERVER_HISTORY
 	__VCMD(dump_history,	 9, VCA_NONE,	0);

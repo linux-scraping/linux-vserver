@@ -84,6 +84,7 @@
 #include "sched_def.h"
 #include "cvirt_def.h"
 #include "cacct_def.h"
+#include "device_def.h"
 
 struct _vx_info_pc {
 	struct _vx_sched_pc sched_pc;
@@ -115,6 +116,8 @@ struct vx_info {
 	struct _vx_sched sched;			/* vserver scheduler */
 	struct _vx_cvirt cvirt;			/* virtual/bias stuff */
 	struct _vx_cacct cacct;			/* context accounting */
+
+	struct _vx_device dmap;			/* default device map targets */
 
 #ifndef CONFIG_SMP
 	struct _vx_info_pc info_pc;		/* per cpu data */
