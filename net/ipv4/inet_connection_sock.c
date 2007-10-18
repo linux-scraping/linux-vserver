@@ -39,7 +39,7 @@ int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
 	__be32	sk1_rcv_saddr = inet_rcv_saddr(sk1),
 		sk2_rcv_saddr = inet_rcv_saddr(sk2);
 
-	if (ipv6_only_sock(sk2))
+	if (inet_v6_ipv6only(sk2))
 		return 0;
 
 	if (sk1_rcv_saddr &&

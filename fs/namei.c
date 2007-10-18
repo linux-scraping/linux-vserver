@@ -825,8 +825,7 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
 	} else if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
-		if (!vx_check((xid_t)inode->i_tag,
-			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
+		if (!vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
 			goto hidden;
 	} else {
 		if (!dx_notagcheck(nd) && !dx_check(inode->i_tag,
@@ -2782,7 +2781,7 @@ struct dentry *cow_break_link(const char *pathname)
 	int ret, mode, pathlen;
 	struct nameidata old_nd, dir_nd;
 	struct dentry *old_dentry, *new_dentry;
-	struct dentry *res = ERR_PTR(-EMLINK);
+	struct dentry *res;
 	struct vfsmount *old_mnt, *new_mnt;
 	struct file *old_file;
 	struct file *new_file;
@@ -2791,11 +2790,14 @@ struct dentry *cow_break_link(const char *pathname)
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
+	res = ERR_PTR(-ENOMEM);
 	if (!path)
 		goto out;
 
+	/* old_nd will have refs to dentry and mnt */
 	ret = path_lookup(pathname, LOOKUP_FOLLOW, &old_nd);
 	vxdprintk(VXD_CBIT(misc, 2), "path_lookup(old): %d", ret);
+	res = ERR_PTR(ret);
 	if (ret < 0)
 		goto out_free_path;
 
@@ -2803,17 +2805,24 @@ struct dentry *cow_break_link(const char *pathname)
 	old_mnt = old_nd.mnt;
 	mode = old_dentry->d_inode->i_mode;
 
+	/* lock filesystem during cow */
+	mutex_lock(&old_dentry->d_inode->i_sb->s_vfs_cow_mutex);
+
 	to = d_path(old_dentry, old_mnt, path, PATH_MAX-2);
 	pathlen = strlen(to);
-	vxdprintk(VXD_CBIT(misc, 2), "old path »%s«", to);
+	vxdprintk(VXD_CBIT(misc, 2), "old path »%s« [»%*s«:%d]", to,
+		old_dentry->d_name.len, old_dentry->d_name.name,
+		old_dentry->d_name.len);
 
 	to[pathlen+1] = 0;
 retry:
 	to[pathlen] = pad--;
+	res = ERR_PTR(-EMLINK);
 	if (pad <= '\240')
 		goto out_rel_old;
 
 	vxdprintk(VXD_CBIT(misc, 1), "temp copy »%s«", to);
+	/* dir_nd will have refs to dentry and mnt */
 	ret = path_lookup(to,
 		LOOKUP_PARENT|LOOKUP_OPEN|LOOKUP_CREATE, &dir_nd);
 	vxdprintk(VXD_CBIT(misc, 2),
@@ -2821,10 +2830,12 @@ retry:
 	if (ret < 0)
 		goto retry;
 
-	/* this puppy downs the inode sem */
+	/* this puppy downs the inode mutex */
 	new_dentry = lookup_create(&dir_nd, 0);
 	vxdprintk(VXD_CBIT(misc, 2),
-		"lookup_create(new): %p", new_dentry);
+		"lookup_create(new): %p [»%*s«:%d]", new_dentry,
+		new_dentry->d_name.len, new_dentry->d_name.name,
+		new_dentry->d_name.len);
 	if (!new_dentry || IS_ERR(new_dentry)) {
 		path_release(&dir_nd);
 		goto retry;
@@ -2841,14 +2852,14 @@ retry:
 	}
 	else if (ret < 0) {
 		res = ERR_PTR(ret);
-		goto out_rel_both;
+		goto out_unlock_new;
 	}
 
 	new_mnt = dir_nd.mnt;
 
 	dget(old_dentry);
 	mntget(old_mnt);
-	/* this one cleans up the dentry in case of failure */
+	/* this one cleans up the dentry/mnt in case of failure */
 	old_file = dentry_open(old_dentry, old_mnt, O_RDONLY);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(old): %p", old_file);
@@ -2859,7 +2870,7 @@ retry:
 
 	dget(new_dentry);
 	mntget(new_mnt);
-	/* this one cleans up the dentry in case of failure */
+	/* this one cleans up the dentry/mnt in case of failure */
 	new_file = dentry_open(new_dentry, new_mnt, O_WRONLY);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(new): %p", new_file);
@@ -2867,6 +2878,12 @@ retry:
 		res = IS_ERR(new_file) ? (void *) new_file : res;
 		goto out_fput_old;
 	}
+
+	vxdprintk(VXD_CBIT(misc, 1),
+		"dentries/inodes: %p/%p %p/%p %p/%p",
+		old_dentry, old_dentry->d_inode,
+		new_dentry, new_dentry->d_inode,
+		dir_nd.dentry, dir_nd.dentry->d_inode);
 
 	size = i_size_read(old_file->f_dentry->d_inode);
 	ret = do_cow_splice(old_file, new_file, size);
@@ -2886,11 +2903,23 @@ retry:
 			.ia_valid = ATTR_UID | ATTR_GID
 			};
 
-		inode_setattr(new_inode, &attr);
+		ret = inode_setattr(new_inode, &attr);
+		if (ret) {
+			res = ERR_PTR(ret);
+			goto out_fput_both;
+		}
 	}
 
+	mutex_lock(&old_dentry->d_inode->i_sb->s_vfs_rename_mutex);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"vfs_rename: [»%*s«:%d] -> [»%*s«:%d]",
+		new_dentry->d_name.len, new_dentry->d_name.name,
+		new_dentry->d_name.len,
+		old_dentry->d_name.len, old_dentry->d_name.name,
+		old_dentry->d_name.len);
 	ret = vfs_rename(dir_nd.dentry->d_inode, new_dentry,
 		old_nd.dentry->d_parent->d_inode, old_dentry);
+	mutex_unlock(&old_dentry->d_inode->i_sb->s_vfs_rename_mutex);
 	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
 	if (!ret) {
 		res = new_dentry;
@@ -2911,14 +2940,15 @@ out_fput_old:
 		atomic_read(&old_file->f_count));
 	fput(old_file);
 
-out_rel_both:
+out_unlock_new:
 	mutex_unlock(&dir_nd.dentry->d_inode->i_mutex);
 	if (IS_ERR(res))
 		vfs_unlink(dir_nd.dentry->d_inode, new_dentry, &dir_nd);
 	dput(new_dentry);
-
+out_rel_both:
 	path_release(&dir_nd);
 out_rel_old:
+	mutex_unlock(&old_dentry->d_inode->i_sb->s_vfs_cow_mutex);
 	path_release(&old_nd);
 out_free_path:
 	kfree(path);

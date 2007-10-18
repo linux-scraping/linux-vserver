@@ -39,11 +39,14 @@ extern unsigned int vx_debug_misc;
 
 
 #define VX_LOGLEVEL	"vxD: "
+#define VX_PROC_FMT	"%p: "
+#define VX_PROCESS	current
 
 #define vxdprintk(c, f, x...)					\
 	do {							\
 		if (c)						\
-			printk(VX_LOGLEVEL f "\n" , ##x);	\
+			printk(VX_LOGLEVEL VX_PROC_FMT f "\n",	\
+				VX_PROCESS , ##x);		\
 	} while (0)
 
 #define vxlprintk(c, f, x...)					\
