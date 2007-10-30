@@ -89,11 +89,15 @@ void dump_vx_info_inactive(int);
 #ifdef	CONFIG_VSERVER_WARN
 
 #define VX_WARNLEVEL	KERN_WARNING "vxW: "
+#define VX_WARN_TASK	"[»%s«,%u:#%u|%u|%u] "
+#define VX_WARN_XID	"[xid #%u] "
+#define VX_WARN_NID	"[nid #%u] "
+#define VX_WARN_TAG	"[tag #%u] "
 
 #define vxwprintk(c, f, x...)					\
 	do {							\
 		if (c)						\
-			printk(VX_WARNLEVEL f "\n" , ##x);	\
+			printk(VX_WARNLEVEL f "\n", ##x);	\
 	} while (0)
 
 #else	/* CONFIG_VSERVER_WARN */
@@ -102,6 +106,16 @@ void dump_vx_info_inactive(int);
 
 #endif	/* CONFIG_VSERVER_WARN */
 
+#define vxwprintk_task(c, f, x...)				\
+	vxwprintk(c, VX_WARN_TASK f,				\
+		current->comm, current->pid,			\
+		current->xid, current->nid, current->tag, ##x)
+#define vxwprintk_xid(c, f, x...)				\
+	vxwprintk(c, VX_WARN_XID f, current->xid, x)
+#define vxwprintk_nid(c, f, x...)				\
+	vxwprintk(c, VX_WARN_NID f, current->nid, x)
+#define vxwprintk_tag(c, f, x...)				\
+	vxwprintk(c, VX_WARN_TAG f, current->tag, x)
 
 #ifdef	CONFIG_VSERVER_DEBUG
 #define vxd_assert_lock(l)	assert_spin_locked(l)

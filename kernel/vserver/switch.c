@@ -265,7 +265,7 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return __COMPAT(vc_read_monitor, id, data, compat);
 #endif
 	default:
-		vxwprintk(1, "unimplemented VCMD_%02d_%d[%d]",
+		vxwprintk_task(1, "unimplemented VCMD_%02d_%d[%d]",
 			VC_CATEGORY(cmd), VC_COMMAND(cmd), VC_VERSION(cmd));
 	}
 	return -ENOSYS;

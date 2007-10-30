@@ -87,7 +87,6 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		s->s_count = S_BIAS;
 		atomic_set(&s->s_active, 1);
 		mutex_init(&s->s_vfs_rename_mutex);
-		mutex_init(&s->s_vfs_cow_mutex);
 		mutex_init(&s->s_dquot.dqio_mutex);
 		mutex_init(&s->s_dquot.dqonoff_mutex);
 		init_rwsem(&s->s_dquot.dqptr_sem);

@@ -980,7 +980,6 @@ struct super_block {
 	 * even looking at it. You had been warned.
 	 */
 	struct mutex s_vfs_rename_mutex;	/* Kludge */
-	struct mutex s_vfs_cow_mutex;
 
 	/* Granularity of c/m/atime in ns.
 	   Cannot be worse than a second */
