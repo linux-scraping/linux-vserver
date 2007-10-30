@@ -24,7 +24,7 @@ static inline void vx_info_exit_limit(struct _vx_limit *limit)
 		if ((1 << lim) & VLIM_NOCHECK)
 			continue;
 		value = __rlim_get(limit, lim);
-		vxwprintk(value,
+		vxwprintk_xid(value,
 			"!!! limit: %p[%s,%d] = %ld on exit.",
 			limit, vlimit_name[lim], lim, (long)value);
 	}

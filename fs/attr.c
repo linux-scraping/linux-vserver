@@ -64,22 +64,19 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 		goto fine;
 
 	if (IS_BARRIER(inode)) {
-		vxwprintk(1, "xid=%d messing with the barrier.",
-			vx_current_xid());
+		vxwprintk_task(1, "messing with the barrier.");
 		goto error;
 	}
 	switch (inode->i_sb->s_magic) {
 		case PROC_SUPER_MAGIC:
 			/* maybe allow that in the future? */
-			vxwprintk(1, "xid=%d messing with the procfs.",
-				vx_current_xid());
+			vxwprintk_task(1, "messing with the procfs.");
 			goto error;
 		case DEVPTS_SUPER_MAGIC:
 			/* devpts is xid tagged */
 			if (vx_check((xid_t)inode->i_tag, VS_IDENT))
 				goto fine;
-			vxwprintk(1, "xid=%d messing with the devpts.",
-				vx_current_xid());
+			vxwprintk_task(1, "messing with the devpts.");
 			goto error;
 	}
 fine:

@@ -60,7 +60,6 @@
 #include <linux/dccp.h>
 #include <linux/quota.h>
 #include <linux/un.h>		/* for Unix socket types */
-#include <net/af_unix.h>	/* for Unix socket types */
 #include <linux/parser.h>
 #include <linux/nfs_mount.h>
 #include <net/ipv6.h>
@@ -1905,6 +1904,9 @@ static void selinux_bprm_post_apply_creds(struct linux_binprm *bprm)
 		recalc_sigpending();
 		spin_unlock_irq(&current->sighand->siglock);
 	}
+
+	/* Always clear parent death signal on SID transitions. */
+	current->pdeath_signal = 0;
 
 	/* Check whether the new SID can inherit resource limits
 	   from the old SID.  If not, reset all soft limits to

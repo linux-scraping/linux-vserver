@@ -110,7 +110,6 @@ const struct file_operations jfs_file_operations = {
 	.aio_write	= generic_file_aio_write,
 	.mmap		= generic_file_mmap,
 	.sendfile	= generic_file_sendfile,
-	.sendpage	= generic_file_sendpage,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= generic_file_splice_write,
 	.fsync		= jfs_fsync,

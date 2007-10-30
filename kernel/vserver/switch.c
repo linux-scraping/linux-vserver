@@ -254,7 +254,7 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_set_ipv4root(id, data);
 #endif
 	default:
-		vxwprintk(1, "unimplemented VCMD_%02d_%d[%d]",
+		vxwprintk_task(1, "unimplemented VCMD_%02d_%d[%d]",
 			VC_CATEGORY(cmd), VC_COMMAND(cmd), VC_VERSION(cmd));
 	}
 	return -ENOSYS;
