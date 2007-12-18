@@ -64,7 +64,6 @@
 
 static struct hlist_head kprobe_table[KPROBE_TABLE_SIZE];
 static struct hlist_head kretprobe_inst_table[KPROBE_TABLE_SIZE];
-static atomic_t kprobe_count;
 
 /* NOTE: change this value only with kprobe_mutex held */
 static bool kprobe_enabled;
@@ -72,11 +71,6 @@ static bool kprobe_enabled;
 DEFINE_MUTEX(kprobe_mutex);		/* Protects kprobe_table */
 DEFINE_SPINLOCK(kretprobe_lock);	/* Protects kretprobe_inst_table */
 static DEFINE_PER_CPU(struct kprobe *, kprobe_instance) = NULL;
-
-static struct notifier_block kprobe_page_fault_nb = {
-	.notifier_call = kprobe_exceptions_notify,
-	.priority = 0x7fffffff /* we need to notified first */
-};
 
 #ifdef __ARCH_WANT_KPROBES_INSN_SLOT
 /*
@@ -556,8 +550,6 @@ static int __kprobes __register_kprobe(struct kprobe *p,
 	old_p = get_kprobe(p->addr);
 	if (old_p) {
 		ret = register_aggr_kprobe(old_p, p);
-		if (!ret)
-			atomic_inc(&kprobe_count);
 		goto out;
 	}
 
@@ -569,13 +561,9 @@ static int __kprobes __register_kprobe(struct kprobe *p,
 	hlist_add_head_rcu(&p->hlist,
 		       &kprobe_table[hash_ptr(p->addr, KPROBE_HASH_BITS)]);
 
-	if (kprobe_enabled) {
-		if (atomic_add_return(1, &kprobe_count) == \
-				(ARCH_INACTIVE_KPROBE_COUNT + 1))
-			register_page_fault_notifier(&kprobe_page_fault_nb);
-
+	if (kprobe_enabled)
 		arch_arm_kprobe(p);
-	}
+
 out:
 	mutex_unlock(&kprobe_mutex);
 
@@ -658,16 +646,6 @@ valid_p:
 		}
 		mutex_unlock(&kprobe_mutex);
 	}
-
-	/* Call unregister_page_fault_notifier()
-	 * if no probes are active
-	 */
-	mutex_lock(&kprobe_mutex);
-	if (atomic_add_return(-1, &kprobe_count) == \
-				ARCH_INACTIVE_KPROBE_COUNT)
-		unregister_page_fault_notifier(&kprobe_page_fault_nb);
-	mutex_unlock(&kprobe_mutex);
-	return;
 }
 
 static struct notifier_block kprobe_exceptions_nb = {
@@ -675,9 +653,18 @@ static struct notifier_block kprobe_exceptions_nb = {
 	.priority = 0x7fffffff /* we need to be notified first */
 };
 
+unsigned long __weak arch_deref_entry_point(void *entry)
+{
+	return (unsigned long)entry;
+}
 
 int __kprobes register_jprobe(struct jprobe *jp)
 {
+	unsigned long addr = arch_deref_entry_point(jp->entry);
+
+	if (!kernel_text_address(addr))
+		return -EINVAL;
+
 	/* Todo: Verify probepoint is a function entry point */
 	jp->kp.pre_handler = setjmp_pre_handler;
 	jp->kp.break_handler = longjmp_break_handler;
@@ -729,6 +716,18 @@ int __kprobes register_kretprobe(struct kretprobe *rp)
 	int ret = 0;
 	struct kretprobe_instance *inst;
 	int i;
+	void *addr = rp->kp.addr;
+
+	if (kretprobe_blacklist_size) {
+		if (addr == NULL)
+			kprobe_lookup_name(rp->kp.symbol_name, addr);
+		addr += rp->kp.offset;
+
+		for (i = 0; kretprobe_blacklist[i].name != NULL; i++) {
+			if (kretprobe_blacklist[i].addr == addr)
+				return -EINVAL;
+		}
+	}
 
 	rp->kp.pre_handler = pre_handler_kretprobe;
 	rp->kp.post_handler = NULL;
@@ -806,7 +805,17 @@ static int __init init_kprobes(void)
 		INIT_HLIST_HEAD(&kprobe_table[i]);
 		INIT_HLIST_HEAD(&kretprobe_inst_table[i]);
 	}
-	atomic_set(&kprobe_count, 0);
+
+	if (kretprobe_blacklist_size) {
+		/* lookup the function address from its name */
+		for (i = 0; kretprobe_blacklist[i].name != NULL; i++) {
+			kprobe_lookup_name(kretprobe_blacklist[i].name,
+					   kretprobe_blacklist[i].addr);
+			if (!kretprobe_blacklist[i].addr)
+				printk("kretprobe: lookup failed: %s\n",
+				       kretprobe_blacklist[i].name);
+		}
+	}
 
 	/* By default, kprobes are enabled */
 	kprobe_enabled = true;
@@ -912,13 +921,6 @@ static void __kprobes enable_all_kprobes(void)
 	if (kprobe_enabled)
 		goto already_enabled;
 
-	/*
-	 * Re-register the page fault notifier only if there are any
-	 * active probes at the time of enabling kprobes globally
-	 */
-	if (atomic_read(&kprobe_count) > ARCH_INACTIVE_KPROBE_COUNT)
-		register_page_fault_notifier(&kprobe_page_fault_nb);
-
 	for (i = 0; i < KPROBE_TABLE_SIZE; i++) {
 		head = &kprobe_table[i];
 		hlist_for_each_entry_rcu(p, node, head, hlist)
@@ -959,10 +961,7 @@ static void __kprobes disable_all_kprobes(void)
 	mutex_unlock(&kprobe_mutex);
 	/* Allow all currently running kprobes to complete */
 	synchronize_sched();
-
-	mutex_lock(&kprobe_mutex);
-	/* Unconditionally unregister the page_fault notifier */
-	unregister_page_fault_notifier(&kprobe_page_fault_nb);
+	return;
 
 already_disabled:
 	mutex_unlock(&kprobe_mutex);
@@ -1054,6 +1053,11 @@ EXPORT_SYMBOL_GPL(register_kprobe);
 EXPORT_SYMBOL_GPL(unregister_kprobe);
 EXPORT_SYMBOL_GPL(register_jprobe);
 EXPORT_SYMBOL_GPL(unregister_jprobe);
+#ifdef CONFIG_KPROBES
 EXPORT_SYMBOL_GPL(jprobe_return);
+#endif
+
+#ifdef CONFIG_KPROBES
 EXPORT_SYMBOL_GPL(register_kretprobe);
 EXPORT_SYMBOL_GPL(unregister_kretprobe);
+#endif

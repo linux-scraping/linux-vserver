@@ -272,13 +272,6 @@ static int clear_epp_timeout(struct parport *pb)
  * of these are in parport_pc.h.
  */
 
-static irqreturn_t parport_pc_interrupt(int irq, void *dev_id)
-{
-	parport_generic_irq(irq, (struct parport *) dev_id);
-	/* FIXME! Was it really ours? */
-	return IRQ_HANDLED;
-}
-
 static void parport_pc_init_state(struct pardevice *dev, struct parport_state *s)
 {
 	s->u.pc.ctr = 0xc;
@@ -2301,7 +2294,7 @@ struct parport *parport_pc_probe_port (unsigned long int base,
 		EPP_res = NULL;
 	}
 	if (p->irq != PARPORT_IRQ_NONE) {
-		if (request_irq (p->irq, parport_pc_interrupt,
+		if (request_irq (p->irq, parport_irq_handler,
 				 0, p->name, p)) {
 			printk (KERN_WARNING "%s: irq %d in use, "
 				"resorting to polled operation\n",
@@ -2424,7 +2417,6 @@ static int __devinit sio_ite_8872_probe (struct pci_dev *pdev, int autoirq,
 	u32 ite8872set;
 	u32 ite8872_lpt, ite8872_lpthi;
 	u8 ite8872_irq, type;
-	char *fake_name = "parport probe";
 	int irq;
 	int i;
 
@@ -2432,11 +2424,11 @@ static int __devinit sio_ite_8872_probe (struct pci_dev *pdev, int autoirq,
 	
 	// make sure which one chip
 	for(i = 0; i < 5; i++) {
-		base_res = request_region(inta_addr[i], 0x8, fake_name);
+		base_res = request_region(inta_addr[i], 32, "it887x");
 		if (base_res) {
 			int test;
 			pci_write_config_dword (pdev, 0x60,
-						0xe7000000 | inta_addr[i]);
+						0xe5000000 | inta_addr[i]);
 			pci_write_config_dword (pdev, 0x78,
 						0x00000000 | inta_addr[i]);
 			test = inb (inta_addr[i]);
@@ -3446,7 +3438,6 @@ static void __exit parport_pc_exit(void)
 		pnp_unregister_driver (&parport_pc_pnp_driver);
 	platform_driver_unregister(&parport_pc_platform_driver);
 
-	spin_lock(&ports_lock);
 	while (!list_empty(&ports_list)) {
 		struct parport_pc_private *priv;
 		struct parport *port;
@@ -3456,11 +3447,8 @@ static void __exit parport_pc_exit(void)
 		if (port->dev && port->dev->bus == &platform_bus_type)
 			platform_device_unregister(
 				to_platform_device(port->dev));
-		spin_unlock(&ports_lock);
 		parport_pc_unregister_port(port);
-		spin_lock(&ports_lock);
 	}
-	spin_unlock(&ports_lock);
 }
 
 MODULE_AUTHOR("Phil Blundell, Tim Waugh, others");

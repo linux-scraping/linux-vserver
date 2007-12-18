@@ -9,9 +9,9 @@
  */
 /*
  * Modification history kernel/time.c
- * 
+ *
  * 1993-09-02    Philip Gladstone
- *      Created file with time related functions from sched.c and adjtimex() 
+ *      Created file with time related functions from sched.c and adjtimex()
  * 1993-10-08    Torsten Duwe
  *      adjtime interface update and CMOS clock write code
  * 1995-08-13    Torsten Duwe
@@ -30,16 +30,16 @@
 #include <linux/module.h>
 #include <linux/timex.h>
 #include <linux/capability.h>
+#include <linux/clocksource.h>
 #include <linux/errno.h>
 #include <linux/syscalls.h>
 #include <linux/security.h>
 #include <linux/fs.h>
-#include <linux/module.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
-/* 
+/*
  * The timezone where the local system is located.  Used as a default by some
  * programs who obtain this value by using gettimeofday.
  */
@@ -57,11 +57,8 @@ EXPORT_SYMBOL(sys_tz);
  */
 asmlinkage long sys_time(time_t __user * tloc)
 {
-	time_t i;
-	struct timeval tv;
-
-	vx_gettimeofday(&tv);
-	i = tv.tv_sec;
+	time_t i = get_seconds();
+/*	FIXME: do_gettimeofday(&tv) -> vx_gettimeofday(&tv) */
 
 	if (tloc) {
 		if (put_user(i,tloc))
@@ -76,7 +73,7 @@ asmlinkage long sys_time(time_t __user * tloc)
  * why not move it into the appropriate arch directory (for those
  * architectures that need it).
  */
- 
+
 asmlinkage long sys_stime(time_t __user *tptr)
 {
 	struct timespec tv;
@@ -115,10 +112,10 @@ asmlinkage long sys_gettimeofday(struct timeval __user *tv, struct timezone __us
 /*
  * Adjust the time obtained from the CMOS to be UTC time instead of
  * local time.
- * 
+ *
  * This is ugly, but preferable to the alternatives.  Otherwise we
  * would either need to write a program to do it in /etc/rc (and risk
- * confusion if the program gets run more than once; it would also be 
+ * confusion if the program gets run more than once; it would also be
  * hard to make the program warp the clock precisely n hours)  or
  * compile in the timezone information into the kernel.  Bad, bad....
  *
@@ -133,7 +130,6 @@ static inline void warp_clock(void)
 	write_seqlock_irq(&xtime_lock);
 	wall_to_monotonic.tv_sec -= sys_tz.tz_minuteswest * 60;
 	xtime.tv_sec += sys_tz.tz_minuteswest * 60;
-	time_interpolator_reset();
 	write_sequnlock_irq(&xtime_lock);
 	clock_was_set();
 }
@@ -164,6 +160,7 @@ int do_sys_settimeofday(struct timespec *tv, struct timezone *tz)
 	if (tz) {
 		/* SMP safe, global irq locking makes it work. */
 		sys_tz = *tz;
+		update_vsyscall_tz();
 		if (firsttime) {
 			firsttime = 0;
 			if (!tv)
@@ -215,22 +212,6 @@ asmlinkage long sys_adjtimex(struct timex __user *txc_p)
 	ret = do_adjtimex(&txc);
 	return copy_to_user(txc_p, &txc, sizeof(struct timex)) ? -EFAULT : ret;
 }
-
-inline struct timespec current_kernel_time(void)
-{
-        struct timespec now;
-        unsigned long seq;
-
-	do {
-		seq = read_seqbegin(&xtime_lock);
-		
-		now = xtime;
-	} while (read_seqretry(&xtime_lock, seq));
-
-	return now; 
-}
-
-EXPORT_SYMBOL(current_kernel_time);
 
 /**
  * current_fs_time - Return FS time
@@ -306,79 +287,6 @@ struct timespec timespec_trunc(struct timespec t, unsigned gran)
 }
 EXPORT_SYMBOL(timespec_trunc);
 
-#ifdef CONFIG_TIME_INTERPOLATION
-void getnstimeofday (struct timespec *tv)
-{
-	unsigned long seq,sec,nsec;
-
-	do {
-		seq = read_seqbegin(&xtime_lock);
-		sec = xtime.tv_sec;
-		nsec = xtime.tv_nsec+time_interpolator_get_offset();
-	} while (unlikely(read_seqretry(&xtime_lock, seq)));
-
-	while (unlikely(nsec >= NSEC_PER_SEC)) {
-		nsec -= NSEC_PER_SEC;
-		++sec;
-	}
-	tv->tv_sec = sec;
-	tv->tv_nsec = nsec;
-}
-EXPORT_SYMBOL_GPL(getnstimeofday);
-
-int do_settimeofday (struct timespec *tv)
-{
-	time_t wtm_sec, sec = tv->tv_sec;
-	long wtm_nsec, nsec = tv->tv_nsec;
-
-	if ((unsigned long)tv->tv_nsec >= NSEC_PER_SEC)
-		return -EINVAL;
-
-	write_seqlock_irq(&xtime_lock);
-	{
-		wtm_sec  = wall_to_monotonic.tv_sec + (xtime.tv_sec - sec);
-		wtm_nsec = wall_to_monotonic.tv_nsec + (xtime.tv_nsec - nsec);
-
-		set_normalized_timespec(&xtime, sec, nsec);
-		set_normalized_timespec(&wall_to_monotonic, wtm_sec, wtm_nsec);
-
-		time_adjust = 0;		/* stop active adjtime() */
-		time_status |= STA_UNSYNC;
-		time_maxerror = NTP_PHASE_LIMIT;
-		time_esterror = NTP_PHASE_LIMIT;
-		time_interpolator_reset();
-	}
-	write_sequnlock_irq(&xtime_lock);
-	clock_was_set();
-	return 0;
-}
-EXPORT_SYMBOL(do_settimeofday);
-
-void do_gettimeofday (struct timeval *tv)
-{
-	unsigned long seq, nsec, usec, sec, offset;
-	do {
-		seq = read_seqbegin(&xtime_lock);
-		offset = time_interpolator_get_offset();
-		sec = xtime.tv_sec;
-		nsec = xtime.tv_nsec;
-	} while (unlikely(read_seqretry(&xtime_lock, seq)));
-
-	usec = (nsec + offset) / 1000;
-
-	while (unlikely(usec >= USEC_PER_SEC)) {
-		usec -= USEC_PER_SEC;
-		++sec;
-	}
-
-	tv->tv_sec = sec;
-	tv->tv_usec = usec;
-}
-
-EXPORT_SYMBOL(do_gettimeofday);
-
-
-#else
 #ifndef CONFIG_GENERIC_TIME
 /*
  * Simulate gettimeofday using do_gettimeofday which only allows a timeval
@@ -393,7 +301,6 @@ void getnstimeofday(struct timespec *tv)
 	tv->tv_nsec = x.tv_usec * NSEC_PER_USEC;
 }
 EXPORT_SYMBOL_GPL(getnstimeofday);
-#endif
 #endif
 
 /* Converts Gregorian date to seconds since 1970-01-01 00:00:00.

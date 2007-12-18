@@ -82,16 +82,13 @@
 #include <asm/uaccess.h>
 #include <asm/system.h>
 
-#if defined(__i386__)
+#ifdef CONFIG_X86
 #include <asm/hpet.h>
 #endif
 
-#ifdef __sparc__
+#ifdef CONFIG_SPARC32
 #include <linux/pci.h>
 #include <asm/ebus.h>
-#ifdef __sparc_v9__
-#include <asm/isa.h>
-#endif
 
 static unsigned long rtc_port;
 static int rtc_irq = PCI_IRQ_NONE;
@@ -921,6 +918,31 @@ static const struct file_operations rtc_proc_fops = {
 };
 #endif
 
+static resource_size_t rtc_size;
+
+static struct resource * __init rtc_request_region(resource_size_t size)
+{
+	struct resource *r;
+
+	if (RTC_IOMAPPED)
+		r = request_region(RTC_PORT(0), size, "rtc");
+	else
+		r = request_mem_region(RTC_PORT(0), size, "rtc");
+
+	if (r)
+		rtc_size = size;
+
+	return r;
+}
+
+static void rtc_release_region(void)
+{
+	if (RTC_IOMAPPED)
+		release_region(RTC_PORT(0), rtc_size);
+	else
+		release_mem_region(RTC_PORT(0), rtc_size);
+}
+
 static int __init rtc_init(void)
 {
 #ifdef CONFIG_PROC_FS
@@ -930,13 +952,9 @@ static int __init rtc_init(void)
 	unsigned int year, ctrl;
 	char *guess = NULL;
 #endif
-#ifdef __sparc__
+#ifdef CONFIG_SPARC32
 	struct linux_ebus *ebus;
 	struct linux_ebus_device *edev;
-#ifdef __sparc_v9__
-	struct sparc_isa_bridge *isa_br;
-	struct sparc_isa_device *isa_dev;
-#endif
 #else
 	void *r;
 #ifdef RTC_IRQ
@@ -944,7 +962,7 @@ static int __init rtc_init(void)
 #endif
 #endif
 
-#ifdef __sparc__
+#ifdef CONFIG_SPARC32
 	for_each_ebus(ebus) {
 		for_each_ebusdev(edev, ebus) {
 			if(strcmp(edev->prom_node->name, "rtc") == 0) {
@@ -954,17 +972,6 @@ static int __init rtc_init(void)
 			}
 		}
 	}
-#ifdef __sparc_v9__
-	for_each_isa(isa_br) {
-		for_each_isadev(isa_dev, isa_br) {
-			if (strcmp(isa_dev->prom_node->name, "rtc") == 0) {
-				rtc_port = isa_dev->resource.start;
-				rtc_irq = isa_dev->irq;
-				goto found;
-			}
-		}
-	}
-#endif
 	rtc_has_irq = 0;
 	printk(KERN_ERR "rtc_init: no PC rtc found\n");
 	return -EIO;
@@ -986,10 +993,17 @@ found:
 	}
 no_irq:
 #else
-	if (RTC_IOMAPPED)
-		r = request_region(RTC_PORT(0), RTC_IO_EXTENT, "rtc");
-	else
-		r = request_mem_region(RTC_PORT(0), RTC_IO_EXTENT, "rtc");
+	r = rtc_request_region(RTC_IO_EXTENT);
+
+	/*
+	 * If we've already requested a smaller range (for example, because
+	 * PNPBIOS or ACPI told us how the device is configured), the request
+	 * above might fail because it's too big.
+	 *
+	 * If so, request just the range we actually use.
+	 */
+	if (!r)
+		r = rtc_request_region(RTC_IO_EXTENT_USED);
 	if (!r) {
 #ifdef RTC_IRQ
 		rtc_has_irq = 0;
@@ -1010,24 +1024,21 @@ no_irq:
 		/* Yeah right, seeing as irq 8 doesn't even hit the bus. */
 		rtc_has_irq = 0;
 		printk(KERN_ERR "rtc: IRQ %d is not free.\n", RTC_IRQ);
-		if (RTC_IOMAPPED)
-			release_region(RTC_PORT(0), RTC_IO_EXTENT);
-		else
-			release_mem_region(RTC_PORT(0), RTC_IO_EXTENT);
+		rtc_release_region();
 		return -EIO;
 	}
 	hpet_rtc_timer_init();
 
 #endif
 
-#endif /* __sparc__ vs. others */
+#endif /* CONFIG_SPARC32 vs. others */
 
 	if (misc_register(&rtc_dev)) {
 #ifdef RTC_IRQ
 		free_irq(RTC_IRQ, NULL);
 		rtc_has_irq = 0;
 #endif
-		release_region(RTC_PORT(0), RTC_IO_EXTENT);
+		rtc_release_region();
 		return -ENODEV;
 	}
 
@@ -1105,19 +1116,16 @@ static void __exit rtc_exit (void)
 	remove_proc_entry ("driver/rtc", NULL);
 	misc_deregister(&rtc_dev);
 
-#ifdef __sparc__
+#ifdef CONFIG_SPARC32
 	if (rtc_has_irq)
 		free_irq (rtc_irq, &rtc_port);
 #else
-	if (RTC_IOMAPPED)
-		release_region(RTC_PORT(0), RTC_IO_EXTENT);
-	else
-		release_mem_region(RTC_PORT(0), RTC_IO_EXTENT);
+	rtc_release_region();
 #ifdef RTC_IRQ
 	if (rtc_has_irq)
 		free_irq (RTC_IRQ, NULL);
 #endif
-#endif /* __sparc__ */
+#endif /* CONFIG_SPARC32 */
 }
 
 module_init(rtc_init);
@@ -1159,7 +1167,8 @@ static void rtc_dropped_irq(unsigned long data)
 
 	spin_unlock_irq(&rtc_lock);
 
-	printk(KERN_WARNING "rtc: lost some interrupts at %ldHz.\n", freq);
+	if (printk_ratelimit())
+		printk(KERN_WARNING "rtc: lost some interrupts at %ldHz.\n", freq);
 
 	/* Now we have new data */
 	wake_up_interruptible(&rtc_wait);

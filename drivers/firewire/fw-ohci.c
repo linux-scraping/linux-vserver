@@ -18,21 +18,23 @@
  * Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
-#include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/compiler.h>
+#include <linux/delay.h>
+#include <linux/dma-mapping.h>
+#include <linux/gfp.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
-#include <linux/delay.h>
-#include <linux/poll.h>
-#include <linux/dma-mapping.h>
+#include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/spinlock.h>
 
-#include <asm/uaccess.h>
-#include <asm/semaphore.h>
+#include <asm/page.h>
+#include <asm/system.h>
 
-#include "fw-transaction.h"
 #include "fw-ohci.h"
+#include "fw-transaction.h"
 
 #define DESCRIPTOR_OUTPUT_MORE		0
 #define DESCRIPTOR_OUTPUT_LAST		(1 << 12)
@@ -224,6 +226,7 @@ ohci_update_phy_reg(struct fw_card *card, int addr,
 	u32 val, old;
 
 	reg_write(ohci, OHCI1394_PhyControl, OHCI1394_PhyControl_Read(addr));
+	flush_writes(ohci);
 	msleep(2);
 	val = reg_read(ohci, OHCI1394_PhyControl);
 	if ((val & OHCI1394_PhyControl_ReadDone) == 0) {
@@ -603,7 +606,7 @@ static int
 at_context_queue_packet(struct context *ctx, struct fw_packet *packet)
 {
 	struct fw_ohci *ohci = ctx->ohci;
-	dma_addr_t d_bus, payload_bus;
+	dma_addr_t d_bus, uninitialized_var(payload_bus);
 	struct driver_data *driver_data;
 	struct descriptor *d, *last;
 	__le32 *header;
@@ -677,6 +680,9 @@ at_context_queue_packet(struct context *ctx, struct fw_packet *packet)
 
 	/* FIXME: Document how the locking works. */
 	if (ohci->generation != packet->generation) {
+		if (packet->payload_length > 0)
+			dma_unmap_single(ohci->card.device, payload_bus,
+					 packet->payload_length, DMA_TO_DEVICE);
 		packet->ack = RCODE_GENERATION;
 		return -1;
 	}
@@ -906,13 +912,20 @@ static void bus_reset_tasklet(unsigned long data)
 	int self_id_count, i, j, reg;
 	int generation, new_generation;
 	unsigned long flags;
+	void *free_rom = NULL;
+	dma_addr_t free_rom_bus = 0;
 
 	reg = reg_read(ohci, OHCI1394_NodeID);
 	if (!(reg & OHCI1394_NodeID_idValid)) {
-		fw_error("node ID not valid, new bus reset in progress\n");
+		fw_notify("node ID not valid, new bus reset in progress\n");
 		return;
 	}
-	ohci->node_id = reg & 0xffff;
+	if ((reg & OHCI1394_NodeID_nodeNumber) == 63) {
+		fw_notify("malconfigured bus\n");
+		return;
+	}
+	ohci->node_id = reg & (OHCI1394_NodeID_busNumber |
+			       OHCI1394_NodeID_nodeNumber);
 
 	/*
 	 * The count in the SelfIDCount register is the number of
@@ -923,12 +936,14 @@ static void bus_reset_tasklet(unsigned long data)
 
 	self_id_count = (reg_read(ohci, OHCI1394_SelfIDCount) >> 3) & 0x3ff;
 	generation = (le32_to_cpu(ohci->self_id_cpu[0]) >> 16) & 0xff;
+	rmb();
 
 	for (i = 1, j = 0; j < self_id_count; i += 2, j++) {
 		if (ohci->self_id_cpu[i] != ~ohci->self_id_cpu[i + 1])
 			fw_error("inconsistent self IDs\n");
 		ohci->self_id_buffer[j] = le32_to_cpu(ohci->self_id_cpu[i]);
 	}
+	rmb();
 
 	/*
 	 * Check the consistency of the self IDs we just read.  The
@@ -969,8 +984,10 @@ static void bus_reset_tasklet(unsigned long data)
 	 */
 
 	if (ohci->next_config_rom != NULL) {
-		dma_free_coherent(ohci->card.device, CONFIG_ROM_SIZE,
-				  ohci->config_rom, ohci->config_rom_bus);
+		if (ohci->next_config_rom != ohci->config_rom) {
+			free_rom      = ohci->config_rom;
+			free_rom_bus  = ohci->config_rom_bus;
+		}
 		ohci->config_rom      = ohci->next_config_rom;
 		ohci->config_rom_bus  = ohci->next_config_rom_bus;
 		ohci->next_config_rom = NULL;
@@ -988,6 +1005,10 @@ static void bus_reset_tasklet(unsigned long data)
 	}
 
 	spin_unlock_irqrestore(&ohci->lock, flags);
+
+	if (free_rom)
+		dma_free_coherent(ohci->card.device, CONFIG_ROM_SIZE,
+				  free_rom, free_rom_bus);
 
 	fw_core_handle_bus_reset(&ohci->card, ohci->node_id, generation,
 				 self_id_count, ohci->self_id_buffer);
@@ -1038,6 +1059,9 @@ static irqreturn_t irq_handler(int irq, void *data)
 		tasklet_schedule(&ohci->it_context_list[i].context.tasklet);
 		iso_event &= ~(1 << i);
 	}
+
+	if (unlikely(event & OHCI1394_postedWriteErr))
+		fw_error("PCI posted write error\n");
 
 	if (event & OHCI1394_cycle64Seconds) {
 		cycle_time = reg_read(ohci, OHCI1394_IsochronousCycleTimer);
@@ -1112,8 +1136,8 @@ static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
 		  OHCI1394_RQPkt | OHCI1394_RSPkt |
 		  OHCI1394_reqTxComplete | OHCI1394_respTxComplete |
 		  OHCI1394_isochRx | OHCI1394_isochTx |
-		  OHCI1394_masterIntEnable |
-		  OHCI1394_cycle64Seconds);
+		  OHCI1394_postedWriteErr | OHCI1394_cycle64Seconds |
+		  OHCI1394_masterIntEnable);
 
 	/* Activate link_on bit and contender bit in our self ID packets.*/
 	if (ohci_update_phy_reg(card, 4, 0,
@@ -1139,19 +1163,30 @@ static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
 	 * the right values in the bus reset tasklet.
 	 */
 
-	ohci->next_config_rom =
-		dma_alloc_coherent(ohci->card.device, CONFIG_ROM_SIZE,
-				   &ohci->next_config_rom_bus, GFP_KERNEL);
-	if (ohci->next_config_rom == NULL)
-		return -ENOMEM;
+	if (config_rom) {
+		ohci->next_config_rom =
+			dma_alloc_coherent(ohci->card.device, CONFIG_ROM_SIZE,
+					   &ohci->next_config_rom_bus,
+					   GFP_KERNEL);
+		if (ohci->next_config_rom == NULL)
+			return -ENOMEM;
 
-	memset(ohci->next_config_rom, 0, CONFIG_ROM_SIZE);
-	fw_memcpy_to_be32(ohci->next_config_rom, config_rom, length * 4);
+		memset(ohci->next_config_rom, 0, CONFIG_ROM_SIZE);
+		fw_memcpy_to_be32(ohci->next_config_rom, config_rom, length * 4);
+	} else {
+		/*
+		 * In the suspend case, config_rom is NULL, which
+		 * means that we just reuse the old config rom.
+		 */
+		ohci->next_config_rom = ohci->config_rom;
+		ohci->next_config_rom_bus = ohci->config_rom_bus;
+	}
 
-	ohci->next_header = config_rom[0];
+	ohci->next_header = be32_to_cpu(ohci->next_config_rom[0]);
 	ohci->next_config_rom[0] = 0;
 	reg_write(ohci, OHCI1394_ConfigROMhdr, 0);
-	reg_write(ohci, OHCI1394_BusOptions, config_rom[2]);
+	reg_write(ohci, OHCI1394_BusOptions,
+		  be32_to_cpu(ohci->next_config_rom[2]));
 	reg_write(ohci, OHCI1394_ConfigROMmap, ohci->next_config_rom_bus);
 
 	reg_write(ohci, OHCI1394_AsReqFilterHiSet, 0x80000000);
@@ -1185,7 +1220,7 @@ ohci_set_config_rom(struct fw_card *card, u32 *config_rom, size_t length)
 {
 	struct fw_ohci *ohci;
 	unsigned long flags;
-	int retval = 0;
+	int retval = -EBUSY;
 	__be32 *next_config_rom;
 	dma_addr_t next_config_rom_bus;
 
@@ -1239,10 +1274,7 @@ ohci_set_config_rom(struct fw_card *card, u32 *config_rom, size_t length)
 
 		reg_write(ohci, OHCI1394_ConfigROMmap,
 			  ohci->next_config_rom_bus);
-	} else {
-		dma_free_coherent(ohci->card.device, CONFIG_ROM_SIZE,
-				  next_config_rom, next_config_rom_bus);
-		retval = -EBUSY;
+		retval = 0;
 	}
 
 	spin_unlock_irqrestore(&ohci->lock, flags);
@@ -1256,6 +1288,9 @@ ohci_set_config_rom(struct fw_card *card, u32 *config_rom, size_t length)
 	 */
 	if (retval == 0)
 		fw_core_initiate_bus_reset(&ohci->card, 1);
+	else
+		dma_free_coherent(ohci->card.device, CONFIG_ROM_SIZE,
+				  next_config_rom, next_config_rom_bus);
 
 	return retval;
 }
@@ -1437,7 +1472,7 @@ ohci_allocate_iso_context(struct fw_card *card, int type, size_t header_size)
 	/* FIXME: We need a fallback for pre 1.1 OHCI. */
 	if (callback == handle_ir_dualbuffer_packet &&
 	    ohci->version < OHCI_VERSION_1_1)
-		return ERR_PTR(-EINVAL);
+		return ERR_PTR(-ENOSYS);
 
 	spin_lock_irqsave(&ohci->lock, flags);
 	index = ffs(*mask) - 1;
@@ -1756,7 +1791,7 @@ ohci_queue_iso(struct fw_iso_context *base,
 							 buffer, payload);
 	else
 		/* FIXME: Implement fallback for OHCI 1.0 controllers. */
-		return -EINVAL;
+		return -ENOSYS;
 }
 
 static const struct fw_card_driver ohci_driver = {
@@ -1876,7 +1911,12 @@ pci_probe(struct pci_dev *dev, const struct pci_device_id *ent)
 	ohci->version = reg_read(ohci, OHCI1394_Version) & 0x00ff00ff;
 	fw_notify("Added fw-ohci device %s, OHCI version %x.%x\n",
 		  dev->dev.bus_id, ohci->version >> 16, ohci->version & 0xff);
-
+	if (ohci->version < OHCI_VERSION_1_1) {
+		fw_notify("    Isochronous I/O is not yet implemented for "
+			  "OHCI 1.0 chips.\n");
+		fw_notify("    Cameras, audio devices etc. won't work on "
+			  "this controller with this driver version.\n");
+	}
 	return 0;
 
  fail_self_id:
@@ -1934,7 +1974,7 @@ static int pci_suspend(struct pci_dev *pdev, pm_message_t state)
 	free_irq(pdev->irq, ohci);
 	err = pci_save_state(pdev);
 	if (err) {
-		fw_error("pci_save_state failed with %d\n", err);
+		fw_error("pci_save_state failed\n");
 		return err;
 	}
 	err = pci_set_power_state(pdev, pci_choose_state(pdev, state));
@@ -1953,11 +1993,11 @@ static int pci_resume(struct pci_dev *pdev)
 	pci_restore_state(pdev);
 	err = pci_enable_device(pdev);
 	if (err) {
-		fw_error("pci_enable_device failed with %d\n", err);
+		fw_error("pci_enable_device failed\n");
 		return err;
 	}
 
-	return ohci_enable(&ohci->card, ohci->config_rom, CONFIG_ROM_SIZE);
+	return ohci_enable(&ohci->card, NULL, 0);
 }
 #endif
 

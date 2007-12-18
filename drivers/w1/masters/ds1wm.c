@@ -85,7 +85,7 @@ static struct {
 };
 
 struct ds1wm_data {
-	void		*map;
+	void		__iomem *map;
 	int		bus_shift; /* # of shifts to calc register offsets */
 	struct platform_device *pdev;
 	struct ds1wm_platform_data *pdata;
@@ -307,7 +307,7 @@ static void ds1wm_search(void *data, u8 search_type,
 		rom_id |= (unsigned long long) r << (i * 4);
 
 	}
-	dev_dbg(&ds1wm_data->pdev->dev, "found 0x%08llX", rom_id);
+	dev_dbg(&ds1wm_data->pdev->dev, "found 0x%08llX\n", rom_id);
 
 	ds1wm_write_register(ds1wm_data, DS1WM_CMD, ~DS1WM_CMD_SRA);
 	ds1wm_reset(ds1wm_data);

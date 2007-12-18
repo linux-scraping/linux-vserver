@@ -99,9 +99,10 @@ void __delayacct_blkio_end(void)
 int __delayacct_add_tsk(struct taskstats *d, struct task_struct *tsk)
 {
 	s64 tmp;
-	struct timespec ts;
-	unsigned long t1,t2,t3;
+	unsigned long t1;
+	unsigned long long t2, t3;
 	unsigned long flags;
+	struct timespec ts;
 
 	/* Though tsk->delays accessed later, early exit avoids
 	 * unnecessary returning of other data
@@ -114,21 +115,26 @@ int __delayacct_add_tsk(struct taskstats *d, struct task_struct *tsk)
 	tmp += timespec_to_ns(&ts);
 	d->cpu_run_real_total = (tmp < (s64)d->cpu_run_real_total) ? 0 : tmp;
 
+	tmp = (s64)d->cpu_scaled_run_real_total;
+	cputime_to_timespec(tsk->utimescaled + tsk->stimescaled, &ts);
+	tmp += timespec_to_ns(&ts);
+	d->cpu_scaled_run_real_total =
+		(tmp < (s64)d->cpu_scaled_run_real_total) ? 0 : tmp;
+
 	/*
 	 * No locking available for sched_info (and too expensive to add one)
 	 * Mitigate by taking snapshot of values
 	 */
-	t1 = tsk->sched_info.pcnt;
+	t1 = tsk->sched_info.pcount;
 	t2 = tsk->sched_info.run_delay;
 	t3 = tsk->sched_info.cpu_time;
 
 	d->cpu_count += t1;
 
-	jiffies_to_timespec(t2, &ts);
-	tmp = (s64)d->cpu_delay_total + timespec_to_ns(&ts);
+	tmp = (s64)d->cpu_delay_total + t2;
 	d->cpu_delay_total = (tmp < (s64)d->cpu_delay_total) ? 0 : tmp;
 
-	tmp = (s64)d->cpu_run_virtual_total + (s64)jiffies_to_usecs(t3) * 1000;
+	tmp = (s64)d->cpu_run_virtual_total + t3;
 	d->cpu_run_virtual_total =
 		(tmp < (s64)d->cpu_run_virtual_total) ?	0 : tmp;
 

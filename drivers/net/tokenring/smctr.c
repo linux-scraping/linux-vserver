@@ -3583,8 +3583,6 @@ struct net_device __init *smctr_probe(int unit)
 	if (!dev)
 		return ERR_PTR(-ENOMEM);
 
-	SET_MODULE_OWNER(dev);
-
 	if (unit >= 0) {
 		sprintf(dev->name, "tr%d", unit);
 		netdev_boot_setup_check(dev);
@@ -3692,7 +3690,6 @@ static int smctr_process_rx_packet(MAC_HEADER *rmf, __u16 size,
         __u16 rcode, correlator;
         int err = 0;
         __u8 xframe = 1;
-        __u16 tx_fstatus;
 
         rmf->vl = SWAP_BYTES(rmf->vl);
         if(rx_status & FCB_RX_STATUS_DA_MATCHED)
@@ -3783,7 +3780,9 @@ static int smctr_process_rx_packet(MAC_HEADER *rmf, __u16 size,
                                 }
                                 break;
 
-                        case TX_FORWARD:
+                        case TX_FORWARD: {
+        			__u16 uninitialized_var(tx_fstatus);
+
                                 if((rcode = smctr_rcv_tx_forward(dev, rmf))
                                         != POSITIVE_ACK)
                                 {
@@ -3811,6 +3810,7 @@ static int smctr_process_rx_packet(MAC_HEADER *rmf, __u16 size,
                                         }
                                 }
                                 break;
+			}
 
                         /* Received MAC Frames Processed by CRS/REM/RPS. */
                         case RSP:

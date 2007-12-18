@@ -20,6 +20,8 @@
 #include <linux/platform_device.h>
 #include <linux/dm9000.h>
 
+#include <net/ax88796.h>
+
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
@@ -34,13 +36,13 @@
 #include <asm/mach-types.h>
 
 //#include <asm/debug-ll.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-mem.h>
 #include <asm/arch/regs-lcd.h>
 
-#include <asm/arch/nand.h>
-#include <asm/arch/iic.h>
+#include <asm/plat-s3c/nand.h>
+#include <asm/plat-s3c/iic.h>
 #include <asm/arch/fb.h>
 
 #include <linux/mtd/mtd.h>
@@ -409,36 +411,126 @@ static struct s3c2410_platform_i2c bast_i2c_info = {
 	.max_freq	= 130*1000,
 };
 
+/* Asix AX88796 10/100 ethernet controller */
 
-static struct s3c2410fb_mach_info __initdata bast_lcd_info = {
-	.width		= 640,
-	.height		= 480,
+static struct ax_plat_data bast_asix_platdata = {
+	.flags		= AXFLG_MAC_FROMDEV,
+	.wordlength	= 2,
+	.dcr_val	= 0x48,
+	.rcr_val	= 0x40,
+};
 
-	.xres		= {
-		.min		= 320,
-		.max		= 1024,
-		.defval		= 640,
+static struct resource bast_asix_resource[] = {
+	[0] = {
+		.start = S3C2410_CS5 + BAST_PA_ASIXNET,
+		.end   = S3C2410_CS5 + BAST_PA_ASIXNET + (0x18 * 0x20) - 1,
+		.flags = IORESOURCE_MEM,
 	},
-
-	.yres		= {
-		.min		= 240,
-		.max	        = 600,
-		.defval		= 480,
+	[1] = {
+		.start = S3C2410_CS5 + BAST_PA_ASIXNET + (0x1f * 0x20),
+		.end   = S3C2410_CS5 + BAST_PA_ASIXNET + (0x1f * 0x20),
+		.flags = IORESOURCE_MEM,
 	},
-
-	.bpp		= {
-		.min		= 4,
-		.max		= 16,
-		.defval		= 8,
-	},
-
-	.regs		= {
-		.lcdcon1	= 0x00000176,
-		.lcdcon2	= 0x1d77c7c2,
-		.lcdcon3	= 0x013a7f13,
-		.lcdcon4	= 0x00000057,
-		.lcdcon5	= 0x00014b02,
+	[2] = {
+		.start = IRQ_ASIX,
+		.end   = IRQ_ASIX,
+		.flags = IORESOURCE_IRQ
 	}
+};
+
+static struct platform_device bast_device_asix = {
+	.name		= "ax88796",
+	.id		= 0,
+	.num_resources	= ARRAY_SIZE(bast_asix_resource),
+	.resource	= bast_asix_resource,
+	.dev		= {
+		.platform_data = &bast_asix_platdata
+	}
+};
+
+/* Asix AX88796 10/100 ethernet controller parallel port */
+
+static struct resource bast_asixpp_resource[] = {
+	[0] = {
+		.start = S3C2410_CS5 + BAST_PA_ASIXNET + (0x18 * 0x20),
+		.end   = S3C2410_CS5 + BAST_PA_ASIXNET + (0x1b * 0x20) - 1,
+		.flags = IORESOURCE_MEM,
+	}
+};
+
+static struct platform_device bast_device_axpp = {
+	.name		= "ax88796-pp",
+	.id		= 0,
+	.num_resources	= ARRAY_SIZE(bast_asixpp_resource),
+	.resource	= bast_asixpp_resource,
+};
+
+/* LCD/VGA controller */
+
+static struct s3c2410fb_display __initdata bast_lcd_info[] = {
+	{
+		.type		= S3C2410_LCDCON1_TFT,
+		.width		= 640,
+		.height		= 480,
+
+		.pixclock	= 33333,
+		.xres		= 640,
+		.yres		= 480,
+		.bpp		= 4,
+		.left_margin	= 40,
+		.right_margin	= 20,
+		.hsync_len	= 88,
+		.upper_margin	= 30,
+		.lower_margin	= 32,
+		.vsync_len	= 3,
+
+		.lcdcon5	= 0x00014b02,
+	},
+	{
+		.type		= S3C2410_LCDCON1_TFT,
+		.width		= 640,
+		.height		= 480,
+
+		.pixclock	= 33333,
+		.xres		= 640,
+		.yres		= 480,
+		.bpp		= 8,
+		.left_margin	= 40,
+		.right_margin	= 20,
+		.hsync_len	= 88,
+		.upper_margin	= 30,
+		.lower_margin	= 32,
+		.vsync_len	= 3,
+
+		.lcdcon5	= 0x00014b02,
+	},
+	{
+		.type		= S3C2410_LCDCON1_TFT,
+		.width		= 640,
+		.height		= 480,
+
+		.pixclock	= 33333,
+		.xres		= 640,
+		.yres		= 480,
+		.bpp		= 16,
+		.left_margin	= 40,
+		.right_margin	= 20,
+		.hsync_len	= 88,
+		.upper_margin	= 30,
+		.lower_margin	= 32,
+		.vsync_len	= 3,
+
+		.lcdcon5	= 0x00014b02,
+	},
+};
+
+/* LCD/VGA controller */
+
+static struct s3c2410fb_mach_info __initdata bast_fb_info = {
+
+	.displays = bast_lcd_info,
+	.num_displays = ARRAY_SIZE(bast_lcd_info),
+	.default_display = 4,
 };
 
 /* Standard BAST devices */
@@ -453,6 +545,8 @@ static struct platform_device *bast_devices[] __initdata = {
 	&s3c_device_nand,
 	&bast_device_nor,
 	&bast_device_dm9k,
+	&bast_device_asix,
+	&bast_device_axpp,
 	&bast_sio,
 };
 
@@ -493,7 +587,7 @@ static void __init bast_map_io(void)
 
 static void __init bast_init(void)
 {
-	s3c24xx_fb_set_platdata(&bast_lcd_info);
+	s3c24xx_fb_set_platdata(&bast_fb_info);
 	platform_add_devices(bast_devices, ARRAY_SIZE(bast_devices));
 }
 

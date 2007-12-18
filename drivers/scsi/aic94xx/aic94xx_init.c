@@ -81,6 +81,9 @@ static struct scsi_host_template aic94xx_sht = {
 	.use_clustering		= ENABLE_CLUSTERING,
 	.eh_device_reset_handler	= sas_eh_device_reset_handler,
 	.eh_bus_reset_handler	= sas_eh_bus_reset_handler,
+	.slave_alloc		= sas_slave_alloc,
+	.target_destroy		= sas_target_destroy,
+	.ioctl			= sas_ioctl,
 };
 
 static int __devinit asd_map_memio(struct asd_ha_struct *asd_ha)
@@ -223,13 +226,8 @@ static int __devinit asd_common_setup(struct asd_ha_struct *asd_ha)
 {
 	int err, i;
 
-	err = pci_read_config_byte(asd_ha->pcidev, PCI_REVISION_ID,
-				   &asd_ha->revision_id);
-	if (err) {
-		asd_printk("couldn't read REVISION ID register of %s\n",
-			   pci_name(asd_ha->pcidev));
-		goto Err;
-	}
+	asd_ha->revision_id = asd_ha->pcidev->revision;
+
 	err = -ENODEV;
 	if (asd_ha->revision_id < AIC9410_DEV_REV_B0) {
 		asd_printk("%s is revision %s (%X), which is not supported\n",
@@ -467,7 +465,7 @@ static int asd_create_global_caches(void)
 					    sizeof(struct asd_dma_tok),
 					    0,
 					    SLAB_HWCACHE_ALIGN,
-					    NULL, NULL);
+					    NULL);
 		if (!asd_dma_token_cache) {
 			asd_printk("couldn't create dma token cache\n");
 			return -ENOMEM;
@@ -479,7 +477,7 @@ static int asd_create_global_caches(void)
 						   sizeof(struct asd_ascb),
 						   0,
 						   SLAB_HWCACHE_ALIGN,
-						   NULL, NULL);
+						   NULL);
 		if (!asd_ascb_cache) {
 			asd_printk("couldn't create ascb cache\n");
 			goto Err;
@@ -585,10 +583,10 @@ static int __devinit asd_pci_probe(struct pci_dev *dev,
 	asd_ha = kzalloc(sizeof(*asd_ha), GFP_KERNEL);
 	if (!asd_ha) {
 		asd_printk("out of memory\n");
-		goto Err;
+		goto Err_put;
 	}
 	asd_ha->pcidev = dev;
-	asd_ha->sas_ha.pcidev = asd_ha->pcidev;
+	asd_ha->sas_ha.dev = &asd_ha->pcidev->dev;
 	asd_ha->sas_ha.lldd_ha = asd_ha;
 
 	asd_ha->name = asd_dev->name;
@@ -602,16 +600,12 @@ static int __devinit asd_pci_probe(struct pci_dev *dev,
 	shost->max_cmd_len = 16;
 
 	err = scsi_add_host(shost, &dev->dev);
-	if (err) {
-		scsi_host_put(shost);
+	if (err)
 		goto Err_free;
-	}
-
-
 
 	err = asd_dev->setup(asd_ha);
 	if (err)
-		goto Err_free;
+		goto Err_remove;
 
 	err = -ENODEV;
 	if (!pci_set_dma_mask(dev, DMA_64BIT_MASK)
@@ -622,14 +616,14 @@ static int __devinit asd_pci_probe(struct pci_dev *dev,
 		;
 	else {
 		asd_printk("no suitable DMA mask for %s\n", pci_name(dev));
-		goto Err_free;
+		goto Err_remove;
 	}
 
 	pci_set_drvdata(dev, asd_ha);
 
 	err = asd_map_ha(asd_ha);
 	if (err)
-		goto Err_free;
+		goto Err_remove;
 
 	err = asd_create_ha_caches(asd_ha);
         if (err)
@@ -696,9 +690,12 @@ Err_free_cache:
 	asd_destroy_ha_caches(asd_ha);
 Err_unmap:
 	asd_unmap_ha(asd_ha);
+Err_remove:
+	scsi_remove_host(shost);
 Err_free:
 	kfree(asd_ha);
-	scsi_remove_host(shost);
+Err_put:
+	scsi_host_put(shost);
 Err:
 	pci_disable_device(dev);
 	return err;
@@ -833,22 +830,15 @@ static struct sas_domain_function_template aic94xx_transport_functions = {
 };
 
 static const struct pci_device_id aic94xx_pci_table[] __devinitdata = {
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR10),
-	 0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR12),
-	 0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR1E),
-	 0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR1F),
-	 0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR30),
-	 0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR32),
-	 0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR3E),
-	 0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, PCI_DEVICE_ID_ADAPTEC2_RAZOR3F),
-	 0, 0, 2},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x410),0, 0, 1},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x412),0, 0, 1},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x416),0, 0, 1},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x41E),0, 0, 1},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x41F),0, 0, 1},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x430),0, 0, 2},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x432),0, 0, 2},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x43E),0, 0, 2},
+	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x43F),0, 0, 2},
 	{}
 };
 

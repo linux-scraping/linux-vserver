@@ -2,7 +2,7 @@
 *******************************************************************************
 **
 **  Copyright (C) Sistina Software, Inc.  1997-2003  All rights reserved.
-**  Copyright (C) 2005 Red Hat, Inc.  All rights reserved.
+**  Copyright (C) 2005-2007 Red Hat, Inc.  All rights reserved.
 **
 **  This copyrighted material is made available to anyone wishing to use,
 **  modify, copy, or redistribute it subject to the terms and conditions
@@ -38,7 +38,7 @@ static int create_rcom(struct dlm_ls *ls, int to_nodeid, int type, int len,
 	char *mb;
 	int mb_len = sizeof(struct dlm_rcom) + len;
 
-	mh = dlm_lowcomms_get_buffer(to_nodeid, mb_len, GFP_KERNEL, &mb);
+	mh = dlm_lowcomms_get_buffer(to_nodeid, mb_len, ls->ls_allocation, &mb);
 	if (!mh) {
 		log_print("create_rcom to %d type %d len %d ENOBUFS",
 			  to_nodeid, type, len);
@@ -90,7 +90,7 @@ static int check_config(struct dlm_ls *ls, struct dlm_rcom *rc, int nodeid)
 		log_error(ls, "version mismatch: %x nodeid %d: %x",
 			  DLM_HEADER_MAJOR | DLM_HEADER_MINOR, nodeid,
 			  rc->rc_header.h_version);
-		return -EINVAL;
+		return -EPROTO;
 	}
 
 	if (rf->rf_lvblen != ls->ls_lvblen ||
@@ -98,7 +98,7 @@ static int check_config(struct dlm_ls *ls, struct dlm_rcom *rc, int nodeid)
 		log_error(ls, "config mismatch: %d,%x nodeid %d: %d,%x",
 			  ls->ls_lvblen, ls->ls_exflags,
 			  nodeid, rf->rf_lvblen, rf->rf_lsflags);
-		return -EINVAL;
+		return -EPROTO;
 	}
 	return 0;
 }
@@ -386,7 +386,10 @@ static void receive_rcom_lock_reply(struct dlm_ls *ls, struct dlm_rcom *rc_in)
 	dlm_recover_process_copy(ls, rc_in);
 }
 
-static int send_ls_not_ready(int nodeid, struct dlm_rcom *rc_in)
+/* If the lockspace doesn't exist then still send a status message
+   back; it's possible that it just doesn't have its global_id yet. */
+
+int dlm_send_ls_not_ready(int nodeid, struct dlm_rcom *rc_in)
 {
 	struct dlm_rcom *rc;
 	struct rcom_config *rf;
@@ -394,7 +397,7 @@ static int send_ls_not_ready(int nodeid, struct dlm_rcom *rc_in)
 	char *mb;
 	int mb_len = sizeof(struct dlm_rcom) + sizeof(struct rcom_config);
 
-	mh = dlm_lowcomms_get_buffer(nodeid, mb_len, GFP_KERNEL, &mb);
+	mh = dlm_lowcomms_get_buffer(nodeid, mb_len, GFP_NOFS, &mb);
 	if (!mh)
 		return -ENOBUFS;
 	memset(mb, 0, mb_len);
@@ -446,28 +449,11 @@ static int is_old_reply(struct dlm_ls *ls, struct dlm_rcom *rc)
 	return rv;
 }
 
-/* Called by dlm_recvd; corresponds to dlm_receive_message() but special
+/* Called by dlm_recv; corresponds to dlm_receive_message() but special
    recovery-only comms are sent through here. */
 
-void dlm_receive_rcom(struct dlm_header *hd, int nodeid)
+void dlm_receive_rcom(struct dlm_ls *ls, struct dlm_rcom *rc, int nodeid)
 {
-	struct dlm_rcom *rc = (struct dlm_rcom *) hd;
-	struct dlm_ls *ls;
-
-	dlm_rcom_in(rc);
-
-	/* If the lockspace doesn't exist then still send a status message
-	   back; it's possible that it just doesn't have its global_id yet. */
-
-	ls = dlm_find_lockspace_global(hd->h_lockspace);
-	if (!ls) {
-		log_print("lockspace %x from %d type %x not found",
-			  hd->h_lockspace, nodeid, rc->rc_type);
-		if (rc->rc_type == DLM_RCOM_STATUS)
-			send_ls_not_ready(nodeid, rc);
-		return;
-	}
-
 	if (dlm_recovery_stopped(ls) && (rc->rc_type != DLM_RCOM_STATUS)) {
 		log_debug(ls, "ignoring recovery message %x from %d",
 			  rc->rc_type, nodeid);
@@ -476,12 +462,6 @@ void dlm_receive_rcom(struct dlm_header *hd, int nodeid)
 
 	if (is_old_reply(ls, rc))
 		goto out;
-
-	if (nodeid != rc->rc_header.h_nodeid) {
-		log_error(ls, "bad rcom nodeid %d from %d",
-			  rc->rc_header.h_nodeid, nodeid);
-		goto out;
-	}
 
 	switch (rc->rc_type) {
 	case DLM_RCOM_STATUS:
@@ -520,6 +500,6 @@ void dlm_receive_rcom(struct dlm_header *hd, int nodeid)
 		DLM_ASSERT(0, printk("rc_type=%x\n", rc->rc_type););
 	}
  out:
-	dlm_put_lockspace(ls);
+	return;
 }
 

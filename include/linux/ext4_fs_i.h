@@ -78,11 +78,6 @@ struct ext4_ext_cache {
 struct ext4_inode_info {
 	__le32	i_data[15];	/* unconverted */
 	__u32	i_flags;
-#ifdef EXT4_FRAGMENTS
-	__u32	i_faddr;
-	__u8	i_frag_no;
-	__u8	i_frag_size;
-#endif
 	ext4_fsblk_t	i_file_acl;
 	__u32	i_dir_acl;
 	__u32	i_dtime;
@@ -153,6 +148,11 @@ struct ext4_inode_info {
 
 	unsigned long i_ext_generation;
 	struct ext4_ext_cache i_cached_extent;
+	/*
+	 * File creation time. Its function is same as that of
+	 * struct timespec i_{a,c,m}time in the generic inode.
+	 */
+	struct timespec i_crtime;
 };
 
 #endif	/* _LINUX_EXT4_FS_I */

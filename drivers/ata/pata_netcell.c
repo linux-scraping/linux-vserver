@@ -40,8 +40,6 @@ static struct scsi_host_template netcell_sht = {
 };
 
 static const struct ata_port_operations netcell_ops = {
-	.port_disable		= ata_port_disable,
-
 	/* Task file is PCI ATA format, use helpers */
 	.tf_load		= ata_tf_load,
 	.tf_read		= ata_tf_read,
@@ -68,10 +66,9 @@ static const struct ata_port_operations netcell_ops = {
 	.irq_handler		= ata_interrupt,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 
 	/* Generic PATA PCI ATA helpers */
-	.port_start		= ata_port_start,
+	.port_start		= ata_sff_port_start,
 };
 
 
@@ -94,12 +91,12 @@ static int netcell_init_one (struct pci_dev *pdev, const struct pci_device_id *e
 	static int printed_version;
 	static const struct ata_port_info info = {
 		.sht		= &netcell_sht,
-		.flags		= ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
+		.flags		= ATA_FLAG_SLAVE_POSS,
 		/* Actually we don't really care about these as the
 		   firmware deals with it */
 		.pio_mask	= 0x1f,	/* pio0-4 */
 		.mwdma_mask	= 0x07, /* mwdma0-2 */
-		.udma_mask 	= 0x3f, /* UDMA 133 */
+		.udma_mask 	= ATA_UDMA5, /* UDMA 133 */
 		.port_ops	= &netcell_ops,
 	};
 	const struct ata_port_info *port_info[] = { &info, NULL };

@@ -193,6 +193,12 @@ dcssblk_segment_warn(int rc, char* seg_name)
 	}
 }
 
+static void dcssblk_unregister_callback(struct device *dev)
+{
+	device_unregister(dev);
+	put_device(dev);
+}
+
 /*
  * device attribute for switching shared/nonshared (exclusive)
  * operation (show + store)
@@ -276,8 +282,7 @@ removeseg:
 	blk_cleanup_queue(dev_info->dcssblk_queue);
 	dev_info->gd->queue = NULL;
 	put_disk(dev_info->gd);
-	device_unregister(dev);
-	put_device(dev);
+	rc = device_schedule_callback(dev, dcssblk_unregister_callback);
 out:
 	up_write(&dcssblk_devices_sem);
 	return rc;
@@ -621,7 +626,7 @@ out:
 }
 
 static int
-dcssblk_make_request(request_queue_t *q, struct bio *bio)
+dcssblk_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct dcssblk_dev_info *dev_info;
 	struct bio_vec *bvec;
@@ -674,10 +679,10 @@ dcssblk_make_request(request_queue_t *q, struct bio *bio)
 		}
 		bytes_done += bvec->bv_len;
 	}
-	bio_endio(bio, bytes_done, 0);
+	bio_endio(bio, 0);
 	return 0;
 fail:
-	bio_io_error(bio, bio->bi_size);
+	bio_io_error(bio);
 	return 0;
 }
 
@@ -747,14 +752,9 @@ dcssblk_check_params(void)
 static void __exit
 dcssblk_exit(void)
 {
-	int rc;
-
 	PRINT_DEBUG("DCSSBLOCK EXIT...\n");
 	s390_root_dev_unregister(dcssblk_root_dev);
-	rc = unregister_blkdev(dcssblk_major, DCSSBLK_NAME);
-	if (rc) {
-		PRINT_ERR("unregister_blkdev() failed!\n");
-	}
+	unregister_blkdev(dcssblk_major, DCSSBLK_NAME);
 	PRINT_DEBUG("...finished!\n");
 }
 

@@ -224,7 +224,16 @@ _GLOBAL(_tlbia)
  */
 _GLOBAL(_tlbie)
 #if defined(CONFIG_40x)
+	/* We run the search with interrupts disabled because we have to change
+	 * the PID and I don't want to preempt when that happens.
+	 */
+	mfmsr	r5
+	mfspr	r6,SPRN_PID
+	wrteei	0
+	mtspr	SPRN_PID,r4
 	tlbsx.	r3, 0, r3
+	mtspr	SPRN_PID,r6
+	wrtee	r5
 	bne	10f
 	sync
 	/* There are only 64 TLB entries, so r3 < 64, which means bit 25 is clear.
@@ -234,12 +243,21 @@ _GLOBAL(_tlbie)
 	isync
 10:
 #elif defined(CONFIG_44x)
-	mfspr	r4,SPRN_MMUCR
-	mfspr	r5,SPRN_PID			/* Get PID */
-	rlwimi	r4,r5,0,24,31			/* Set TID */
-	mtspr	SPRN_MMUCR,r4
+	mfspr	r5,SPRN_MMUCR
+	rlwimi	r5,r4,0,24,31			/* Set TID */
 
+	/* We have to run the search with interrupts disabled, even critical
+	 * and debug interrupts (in fact the only critical exceptions we have
+	 * are debug and machine check).  Otherwise  an interrupt which causes
+	 * a TLB miss can clobber the MMUCR between the mtspr and the tlbsx. */
+	mfmsr	r4
+	lis	r6,(MSR_EE|MSR_CE|MSR_ME|MSR_DE)@ha
+	addi	r6,r6,(MSR_EE|MSR_CE|MSR_ME|MSR_DE)@l
+	andc	r6,r4,r6
+	mtmsr	r6
+	mtspr	SPRN_MMUCR,r5
 	tlbsx.	r3, 0, r3
+	mtmsr	r4
 	bne	10f
 	sync
 	/* There are only 64 TLB entries, so r3 < 64,
@@ -328,7 +346,7 @@ BEGIN_FTR_SECTION
 	mtspr   SPRN_L1CSR0,r3
 	isync
 	blr
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_UNIFIED_ID_CACHE)
 	mfspr	r3,SPRN_L1CSR1
 	ori	r3,r3,L1CSR1_ICFI|L1CSR1_ICLFR
 	mtspr	SPRN_L1CSR1,r3
@@ -355,7 +373,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 _GLOBAL(__flush_icache_range)
 BEGIN_FTR_SECTION
 	blr				/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	li	r5,L1_CACHE_BYTES-1
 	andc	r3,r3,r5
 	subf	r4,r3,r4
@@ -472,7 +490,7 @@ _GLOBAL(flush_dcache_all)
 _GLOBAL(__flush_dcache_icache)
 BEGIN_FTR_SECTION
 	blr					/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	rlwinm	r3,r3,0,0,19			/* Get page base address */
 	li	r4,4096/L1_CACHE_BYTES	/* Number of lines in a page */
 	mtctr	r4
@@ -481,12 +499,21 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 	addi	r3,r3,L1_CACHE_BYTES
 	bdnz	0b
 	sync
+#ifndef CONFIG_44x
+	/* We don't flush the icache on 44x. Those have a virtual icache
+	 * and we don't have access to the virtual address here (it's
+	 * not the page vaddr but where it's mapped in user space). The
+	 * flushing of the icache on these is handled elsewhere, when
+	 * a change in the address space occurs, before returning to
+	 * user space
+	 */
 	mtctr	r4
 1:	icbi	0,r6
 	addi	r6,r6,L1_CACHE_BYTES
 	bdnz	1b
 	sync
 	isync
+#endif /* CONFIG_44x */
 	blr
 
 /*
@@ -500,7 +527,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 _GLOBAL(__flush_dcache_icache_phys)
 BEGIN_FTR_SECTION
 	blr					/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	mfmsr	r10
 	rlwinm	r0,r10,0,28,26			/* clear DR */
 	mtmsr	r0

@@ -33,9 +33,14 @@ void ack_bad_irq(unsigned int irq)
 }
 
 #ifdef CONFIG_IA64_GENERIC
+ia64_vector __ia64_irq_to_vector(int irq)
+{
+	return irq_cfg[irq].vector;
+}
+
 unsigned int __ia64_local_vector_to_irq (ia64_vector vec)
 {
-	return (unsigned int) vec;
+	return __get_cpu_var(vector_irq)[vec];
 }
 #endif
 
@@ -56,9 +61,11 @@ int show_interrupts(struct seq_file *p, void *v)
 	unsigned long flags;
 
 	if (i == 0) {
-		seq_printf(p, "           ");
+		char cpuname[16];
+		seq_printf(p, "     ");
 		for_each_online_cpu(j) {
-			seq_printf(p, "CPU%d       ",j);
+			snprintf(cpuname, 10, "CPU%d", j);
+			seq_printf(p, "%10s ", cpuname);
 		}
 		seq_putc(p, '\n');
 	}

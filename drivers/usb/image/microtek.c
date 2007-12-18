@@ -189,7 +189,7 @@ static struct usb_driver mts_usb_driver = {
 #define MTS_DEBUG_INT() \
 	do { MTS_DEBUG_GOT_HERE(); \
 	     MTS_DEBUG("transfer = 0x%x context = 0x%x\n",(int)transfer,(int)context ); \
-	     MTS_DEBUG("status = 0x%x data-length = 0x%x sent = 0x%x\n",(int)transfer->status,(int)context->data_length, (int)transfer->actual_length ); \
+	     MTS_DEBUG("status = 0x%x data-length = 0x%x sent = 0x%x\n",transfer->status,(int)context->data_length, (int)transfer->actual_length ); \
              mts_debug_dump(context->instance);\
 	   } while(0)
 #else
@@ -393,8 +393,6 @@ void mts_int_submit_urb (struct urb* transfer,
 		      context
 		);
 
-	transfer->status = 0;
-
 	res = usb_submit_urb( transfer, GFP_ATOMIC );
 	if ( unlikely(res) ) {
 		MTS_INT_ERROR( "could not submit URB! Error was %d\n",(int)res );
@@ -444,12 +442,14 @@ static void mts_get_status( struct urb *transfer )
 static void mts_data_done( struct urb* transfer )
 /* Interrupt context! */
 {
+	int status = transfer->status;
 	MTS_INT_INIT();
 
 	if ( context->data_length != transfer->actual_length ) {
-		context->srb->resid = context->data_length - transfer->actual_length;
-	} else if ( unlikely(transfer->status) ) {
-		context->srb->result = (transfer->status == -ENOENT ? DID_ABORT : DID_ERROR)<<16;
+		scsi_set_resid(context->srb, context->data_length -
+			       transfer->actual_length);
+	} else if ( unlikely(status) ) {
+		context->srb->result = (status == -ENOENT ? DID_ABORT : DID_ERROR)<<16;
 	}
 
 	mts_get_status(transfer);
@@ -461,10 +461,11 @@ static void mts_data_done( struct urb* transfer )
 static void mts_command_done( struct urb *transfer )
 /* Interrupt context! */
 {
+	int status = transfer->status;
 	MTS_INT_INIT();
 
-	if ( unlikely(transfer->status) ) {
-	        if (transfer->status == -ENOENT) {
+	if ( unlikely(status) ) {
+	        if (status == -ENOENT) {
 		        /* We are being killed */
 			MTS_DEBUG_GOT_HERE();
 			context->srb->result = DID_ABORT<<16;
@@ -490,7 +491,8 @@ static void mts_command_done( struct urb *transfer )
 					   context->data_pipe,
 					   context->data,
 					   context->data_length,
-					   context->srb->use_sg > 1 ? mts_do_sg : mts_data_done);
+					   scsi_sg_count(context->srb) > 1 ?
+					           mts_do_sg : mts_data_done);
 		} else {
 			mts_get_status(transfer);
 		}
@@ -502,23 +504,25 @@ static void mts_command_done( struct urb *transfer )
 static void mts_do_sg (struct urb* transfer)
 {
 	struct scatterlist * sg;
+	int status = transfer->status;
 	MTS_INT_INIT();
 
-	MTS_DEBUG("Processing fragment %d of %d\n", context->fragment,context->srb->use_sg);
+	MTS_DEBUG("Processing fragment %d of %d\n", context->fragment,
+	                                          scsi_sg_count(context->srb));
 
-	if (unlikely(transfer->status)) {
-                context->srb->result = (transfer->status == -ENOENT ? DID_ABORT : DID_ERROR)<<16;
+	if (unlikely(status)) {
+                context->srb->result = (status == -ENOENT ? DID_ABORT : DID_ERROR)<<16;
 		mts_transfer_cleanup(transfer);
         }
 
-	sg = context->srb->request_buffer;
+	sg = scsi_sglist(context->srb);
 	context->fragment++;
 	mts_int_submit_urb(transfer,
 			   context->data_pipe,
-			   page_address(sg[context->fragment].page) +
-			   sg[context->fragment].offset,
+			   sg_virt(&sg[context->fragment]),
 			   sg[context->fragment].length,
-			   context->fragment + 1 == context->srb->use_sg ? mts_data_done : mts_do_sg);
+			   context->fragment + 1 == scsi_sg_count(context->srb) ?
+			   mts_data_done : mts_do_sg);
 	return;
 }
 
@@ -546,21 +550,13 @@ mts_build_transfer_context(struct scsi_cmnd *srb, struct mts_desc* desc)
 	desc->context.srb = srb;
 	desc->context.fragment = 0;
 
-	if (!srb->use_sg) {
-		if ( !srb->request_bufflen ){
-			desc->context.data = NULL;
-			desc->context.data_length = 0;
-			return;
-		} else {
-			desc->context.data = srb->request_buffer;
-			desc->context.data_length = srb->request_bufflen;
-			MTS_DEBUG("length = %d or %d\n",
-				  srb->request_bufflen, srb->bufflen);
-		}
+	if (!scsi_bufflen(srb)) {
+		desc->context.data = NULL;
+		desc->context.data_length = 0;
+		return;
 	} else {
-		MTS_DEBUG("Using scatter/gather\n");
-		sg = srb->request_buffer;
-		desc->context.data = page_address(sg[0].page) + sg[0].offset;
+		sg = scsi_sglist(srb);
+		desc->context.data = sg_virt(&sg[0]);
 		desc->context.data_length = sg[0].length;
 	}
 

@@ -2,7 +2,7 @@
     i2c-viapro.c - Part of lm_sensors, Linux kernel modules for hardware
               monitoring
     Copyright (c) 1998 - 2002  Frodo Looijaard <frodol@dds.nl>,
-    Philip Edelbrock <phil@netroedge.com>, Kyösti Mälkki <kmalkki@cc.hut.fi>,
+    Philip Edelbrock <phil@netroedge.com>, KyÃ¶sti MÃ¤lkki <kmalkki@cc.hut.fi>,
     Mark D. Studebaker <mdsxyz123@yahoo.com>
     Copyright (C) 2005 - 2007  Jean Delvare <khali@linux-fr.org>
 
@@ -235,7 +235,7 @@ static s32 vt596_access(struct i2c_adapter *adap, u16 addr,
 		if (!(vt596_features & FEATURE_I2CBLOCK))
 			goto exit_unsupported;
 		if (read_write == I2C_SMBUS_READ)
-			outb_p(I2C_SMBUS_BLOCK_MAX, SMBHSTDAT0);
+			outb_p(data->block[0], SMBHSTDAT0);
 		/* Fall through */
 	case I2C_SMBUS_BLOCK_DATA:
 		outb_p(command, SMBHSTCMD);
@@ -397,8 +397,7 @@ found:
 	case PCI_DEVICE_ID_VIA_82C686_4:
 		/* The VT82C686B (rev 0x40) does support I2C block
 		   transactions, but the VT82C686A (rev 0x30) doesn't */
-		if (!pci_read_config_byte(pdev, PCI_REVISION_ID, &temp)
-		 && temp >= 0x40)
+		if (pdev->revision >= 0x40)
 			vt596_features |= FEATURE_I2CBLOCK;
 		break;
 	}

@@ -635,7 +635,7 @@ static void kaweth_usb_receive(struct urb *urb)
 
 		skb_reserve(skb, 2);    /* Align IP on 16 byte boundaries */
 
-		eth_copy_and_sum(skb, kaweth->rx_buf + 2, pkt_len, 0);
+		skb_copy_to_linear_data(skb, kaweth->rx_buf + 2, pkt_len);
 
 		skb_put(skb, pkt_len);
 
@@ -1151,8 +1151,6 @@ err_fw:
 	/* kaweth is zeroed as part of alloc_netdev */
 
 	INIT_DELAYED_WORK(&kaweth->lowmem_work, kaweth_resubmit_tl);
-
-	SET_MODULE_OWNER(netdev);
 
 	usb_set_intfdata(intf, kaweth);
 

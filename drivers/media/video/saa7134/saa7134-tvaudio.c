@@ -23,10 +23,11 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/kernel.h>
+#include <linux/kthread.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/freezer.h>
 #include <asm/div64.h>
 
 #include "saa7134-reg.h"
@@ -231,7 +232,7 @@ static void mute_input_7134(struct saa7134_dev *dev)
 	}
 
 	if (dev->hw_mute  == mute &&
-		dev->hw_input == in) {
+		dev->hw_input == in && !dev->insuspend) {
 		dprintk("mute/input: nothing to do [mute=%d,input=%s]\n",
 			mute,in->name);
 		return;
@@ -341,10 +342,8 @@ static void tvaudio_setmode(struct saa7134_dev *dev,
 
 static int tvaudio_sleep(struct saa7134_dev *dev, int timeout)
 {
-	DECLARE_WAITQUEUE(wait, current);
-
-	add_wait_queue(&dev->thread.wq, &wait);
-	if (dev->thread.scan1 == dev->thread.scan2 && !dev->thread.shutdown) {
+	if (dev->thread.scan1 == dev->thread.scan2 &&
+	    !kthread_should_stop()) {
 		if (timeout < 0) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
@@ -353,7 +352,6 @@ static int tvaudio_sleep(struct saa7134_dev *dev, int timeout)
 						(msecs_to_jiffies(timeout));
 		}
 	}
-	remove_wait_queue(&dev->thread.wq, &wait);
 	return dev->thread.scan1 != dev->thread.scan2;
 }
 
@@ -505,14 +503,17 @@ static int tvaudio_thread(void *data)
 	unsigned int i, audio, nscan;
 	int max1,max2,carrier,rx,mode,lastmode,default_carrier;
 
-	daemonize("%s", dev->name);
-	allow_signal(SIGTERM);
+
+	set_freezable();
+
 	for (;;) {
 		tvaudio_sleep(dev,-1);
-		if (dev->thread.shutdown || signal_pending(current))
+		if (kthread_should_stop())
 			goto done;
 
 	restart:
+		try_to_freeze();
+
 		dev->thread.scan1 = dev->thread.scan2;
 		dprintk("tvaudio thread scan start [%d]\n",dev->thread.scan1);
 		dev->tvaudio  = NULL;
@@ -616,9 +617,12 @@ static int tvaudio_thread(void *data)
 
 		lastmode = 42;
 		for (;;) {
+
+			try_to_freeze();
+
 			if (tvaudio_sleep(dev,5000))
 				goto restart;
-			if (dev->thread.shutdown || signal_pending(current))
+			if (kthread_should_stop())
 				break;
 			if (UNSET == dev->thread.mode) {
 				rx = tvaudio_getstereo(dev,&tvaudio[i]);
@@ -634,7 +638,7 @@ static int tvaudio_thread(void *data)
 	}
 
  done:
-	complete_and_exit(&dev->thread.exit, 0);
+	dev->thread.stopped = 1;
 	return 0;
 }
 
@@ -782,8 +786,8 @@ static int tvaudio_thread_ddep(void *data)
 	struct saa7134_dev *dev = data;
 	u32 value, norms, clock;
 
-	daemonize("%s", dev->name);
-	allow_signal(SIGTERM);
+
+	set_freezable();
 
 	clock = saa7134_boards[dev->board].audio_clock;
 	if (UNSET != audio_clock_override)
@@ -796,10 +800,13 @@ static int tvaudio_thread_ddep(void *data)
 
 	for (;;) {
 		tvaudio_sleep(dev,-1);
-		if (dev->thread.shutdown || signal_pending(current))
+		if (kthread_should_stop())
 			goto done;
 
 	restart:
+
+		try_to_freeze();
+
 		dev->thread.scan1 = dev->thread.scan2;
 		dprintk("tvaudio thread scan start [%d]\n",dev->thread.scan1);
 
@@ -876,14 +883,14 @@ static int tvaudio_thread_ddep(void *data)
 	}
 
  done:
-	complete_and_exit(&dev->thread.exit, 0);
+	dev->thread.stopped = 1;
 	return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* common stuff + external entry points                               */
 
-static void saa7134_enable_i2s(struct saa7134_dev *dev)
+void saa7134_enable_i2s(struct saa7134_dev *dev)
 {
 	int i2s_format;
 
@@ -973,7 +980,6 @@ int saa7134_tvaudio_getstereo(struct saa7134_dev *dev)
 
 int saa7134_tvaudio_init2(struct saa7134_dev *dev)
 {
-	DECLARE_MUTEX_LOCKED(sem);
 	int (*my_thread)(void *data) = NULL;
 
 	switch (dev->pci->device) {
@@ -986,15 +992,15 @@ int saa7134_tvaudio_init2(struct saa7134_dev *dev)
 		break;
 	}
 
-	dev->thread.pid = -1;
+	dev->thread.thread = NULL;
 	if (my_thread) {
 		/* start tvaudio thread */
-		init_waitqueue_head(&dev->thread.wq);
-		init_completion(&dev->thread.exit);
-		dev->thread.pid = kernel_thread(my_thread,dev,0);
-		if (dev->thread.pid < 0)
+		dev->thread.thread = kthread_run(my_thread, dev, "%s", dev->name);
+		if (IS_ERR(dev->thread.thread)) {
 			printk(KERN_WARNING "%s: kernel_thread() failed\n",
 			       dev->name);
+			/* XXX: missing error handling here */
+		}
 		saa7134_tvaudio_do_scan(dev);
 	}
 
@@ -1005,11 +1011,9 @@ int saa7134_tvaudio_init2(struct saa7134_dev *dev)
 int saa7134_tvaudio_fini(struct saa7134_dev *dev)
 {
 	/* shutdown tvaudio thread */
-	if (dev->thread.pid > 0) {
-		dev->thread.shutdown = 1;
-		wake_up_interruptible(&dev->thread.wq);
-		wait_for_completion(&dev->thread.exit);
-	}
+	if (dev->thread.thread && !dev->thread.stopped)
+		kthread_stop(dev->thread.thread);
+
 	saa_andorb(SAA7134_ANALOG_IO_SELECT, 0x07, 0x00); /* LINE1 */
 	return 0;
 }
@@ -1020,10 +1024,12 @@ int saa7134_tvaudio_do_scan(struct saa7134_dev *dev)
 		dprintk("sound IF not in use, skipping scan\n");
 		dev->automute = 0;
 		saa7134_tvaudio_setmute(dev);
-	} else if (dev->thread.pid >= 0) {
+	} else if (dev->thread.thread) {
 		dev->thread.mode = UNSET;
 		dev->thread.scan2++;
-		wake_up_interruptible(&dev->thread.wq);
+
+		if (!dev->insuspend && !dev->thread.stopped)
+			wake_up_process(dev->thread.thread);
 	} else {
 		dev->automute = 0;
 		saa7134_tvaudio_setmute(dev);
@@ -1040,4 +1046,3 @@ EXPORT_SYMBOL(saa7134_tvaudio_setmute);
  * c-basic-offset: 8
  * End:
  */
-

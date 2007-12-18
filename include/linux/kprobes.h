@@ -116,8 +116,11 @@ struct kprobe {
  */
 struct jprobe {
 	struct kprobe kp;
-	kprobe_opcode_t *entry;	/* probe handling code to jump to */
+	void *entry;	/* probe handling code to jump to */
 };
+
+/* For backward compatibility with old code using JPROBE_ENTRY() */
+#define JPROBE_ENTRY(handler)	(handler)
 
 DECLARE_PER_CPU(struct kprobe *, current_kprobe);
 DECLARE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
@@ -162,6 +165,12 @@ struct kretprobe_instance {
 	kprobe_opcode_t *ret_addr;
 	struct task_struct *task;
 };
+
+struct kretprobe_blackpoint {
+	const char *name;
+	void *addr;
+};
+extern struct kretprobe_blackpoint kretprobe_blacklist[];
 
 static inline void kretprobe_assert(struct kretprobe_instance *ri,
 	unsigned long orig_ret_address, unsigned long trampoline_address)
@@ -211,6 +220,7 @@ int longjmp_break_handler(struct kprobe *, struct pt_regs *);
 int register_jprobe(struct jprobe *p);
 void unregister_jprobe(struct jprobe *p);
 void jprobe_return(void);
+unsigned long arch_deref_entry_point(void *);
 
 int register_kretprobe(struct kretprobe *rp);
 void unregister_kretprobe(struct kretprobe *rp);

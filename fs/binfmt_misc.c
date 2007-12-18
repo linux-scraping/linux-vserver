@@ -1,7 +1,7 @@
 /*
  *  binfmt_misc.c
  *
- *  Copyright (C) 1997 Richard Günther
+ *  Copyright (C) 1997 Richard GÃ¼nther
  *
  *  binfmt_misc detects binaries via a magic or filename extension and invokes
  *  a specified wrapper. This should obsolete binfmt_java, binfmt_em86 and
@@ -126,7 +126,9 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 		goto _ret;
 
 	if (!(fmt->flags & MISC_FMT_PRESERVE_ARGV0)) {
-		remove_arg_zero(bprm);
+		retval = remove_arg_zero(bprm);
+		if (retval)
+			goto _ret;
 	}
 
 	if (fmt->flags & MISC_FMT_OPEN_BINARY) {

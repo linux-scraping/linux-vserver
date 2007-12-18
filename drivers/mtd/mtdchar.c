@@ -7,6 +7,7 @@
 
 #include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -135,7 +136,8 @@ static int mtd_close(struct inode *inode, struct file *file)
 
 	DEBUG(MTD_DEBUG_LEVEL0, "MTD_close\n");
 
-	if (mtd->sync)
+	/* Only sync if opened RW */
+	if ((file->f_mode & 2) && mtd->sync)
 		mtd->sync(mtd);
 
 	put_mtd_device(mtd);

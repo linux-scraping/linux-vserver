@@ -89,18 +89,6 @@ static void fill_async_lock(struct hpsb_packet *packet, u64 addr, int extcode,
 	packet->expect_response = 1;
 }
 
-static void fill_iso_packet(struct hpsb_packet *packet, int length, int channel,
-			    int tag, int sync)
-{
-	packet->header[0] = (length << 16) | (tag << 14) | (channel << 8)
-	    | (TCODE_ISO_DATA << 4) | sync;
-
-	packet->header_size = 4;
-	packet->data_size = length;
-	packet->type = hpsb_iso;
-	packet->tcode = TCODE_ISO_DATA;
-}
-
 static void fill_phy_packet(struct hpsb_packet *packet, quadlet_t data)
 {
 	packet->header[0] = data;
@@ -247,7 +235,6 @@ int hpsb_packet_success(struct hpsb_packet *packet)
 				 packet->node_id);
 			return -EAGAIN;
 		}
-		BUG();
 
 	case ACK_BUSY_X:
 	case ACK_BUSY_A:
@@ -294,7 +281,6 @@ int hpsb_packet_success(struct hpsb_packet *packet)
 			 packet->ack_code, packet->node_id, packet->tcode);
 		return -EAGAIN;
 	}
-	BUG();
 }
 
 struct hpsb_packet *hpsb_make_readpacket(struct hpsb_host *host, nodeid_t node,
@@ -487,24 +473,6 @@ struct hpsb_packet *hpsb_make_phypacket(struct hpsb_host *host, quadlet_t data)
 
 	p->host = host;
 	fill_phy_packet(p, data);
-
-	return p;
-}
-
-struct hpsb_packet *hpsb_make_isopacket(struct hpsb_host *host,
-					int length, int channel,
-					int tag, int sync)
-{
-	struct hpsb_packet *p;
-
-	p = hpsb_alloc_packet(length);
-	if (!p)
-		return NULL;
-
-	p->host = host;
-	fill_iso_packet(p, length, channel, tag, sync);
-
-	p->generation = get_hpsb_generation(host);
 
 	return p;
 }

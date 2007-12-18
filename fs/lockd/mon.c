@@ -10,6 +10,7 @@
 #include <linux/utsname.h>
 #include <linux/kernel.h>
 #include <linux/sunrpc/clnt.h>
+#include <linux/sunrpc/xprtsock.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
 #include <linux/lockd/sm_inter.h>
@@ -61,6 +62,7 @@ nsm_mon_unmon(struct nsm_handle *nsm, u32 proc, struct nsm_res *res)
 			status);
 	else
 		status = 0;
+	rpc_shutdown_client(clnt);
  out:
 	return status;
 }
@@ -131,14 +133,13 @@ nsm_create(void)
 		.sin_port	= 0,
 	};
 	struct rpc_create_args args = {
-		.protocol	= IPPROTO_UDP,
+		.protocol	= XPRT_TRANSPORT_UDP,
 		.address	= (struct sockaddr *)&sin,
 		.addrsize	= sizeof(sin),
 		.servername	= "localhost",
 		.program	= &nsm_program,
 		.version	= SM_VERSION,
 		.authflavor	= RPC_AUTH_NULL,
-		.flags		= (RPC_CLNT_CREATE_ONESHOT),
 	};
 
 	return rpc_create(&args);

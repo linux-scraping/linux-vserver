@@ -204,8 +204,6 @@ static void inetdev_destroy(struct in_device *in_dev)
 	ASSERT_RTNL();
 
 	dev = in_dev->dev;
-	if (dev == &loopback_dev)
-		return;
 
 	in_dev->dead = 1;
 
@@ -421,7 +419,7 @@ struct in_device *inetdev_by_index(int ifindex)
 	struct net_device *dev;
 	struct in_device *in_dev = NULL;
 	read_lock(&dev_base_lock);
-	dev = __dev_get_by_index(ifindex);
+	dev = __dev_get_by_index(&init_net, ifindex);
 	if (dev)
 		in_dev = in_dev_get(dev);
 	read_unlock(&dev_base_lock);
@@ -507,7 +505,7 @@ static struct in_ifaddr *rtm_to_ifaddr(struct nlmsghdr *nlh)
 		goto errout;
 	}
 
-	dev = __dev_get_by_index(ifm->ifa_index);
+	dev = __dev_get_by_index(&init_net, ifm->ifa_index);
 	if (dev == NULL) {
 		err = -ENODEV;
 		goto errout;
@@ -629,7 +627,7 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		*colon = 0;
 
 #ifdef CONFIG_KMOD
-	dev_load(ifr.ifr_name);
+	dev_load(&init_net, ifr.ifr_name);
 #endif
 
 	switch (cmd) {
@@ -670,7 +668,7 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 	rtnl_lock();
 
 	ret = -ENODEV;
-	if ((dev = __dev_get_by_name(ifr.ifr_name)) == NULL)
+	if ((dev = __dev_get_by_name(&init_net, ifr.ifr_name)) == NULL)
 		goto done;
 
 	if (colon)
@@ -921,7 +919,7 @@ no_in_dev:
 	 */
 	read_lock(&dev_base_lock);
 	rcu_read_lock();
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		if ((in_dev = __in_dev_get_rcu(dev)) == NULL)
 			continue;
 
@@ -1000,7 +998,7 @@ __be32 inet_confirm_addr(const struct net_device *dev, __be32 dst, __be32 local,
 
 	read_lock(&dev_base_lock);
 	rcu_read_lock();
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		if ((in_dev = __in_dev_get_rcu(dev))) {
 			addr = confirm_addr_indev(in_dev, dst, local, scope);
 			if (addr)
@@ -1063,15 +1061,17 @@ static int inetdev_event(struct notifier_block *this, unsigned long event,
 	struct net_device *dev = ptr;
 	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	ASSERT_RTNL();
 
 	if (!in_dev) {
 		if (event == NETDEV_REGISTER) {
 			in_dev = inetdev_init(dev);
-			if (dev == &loopback_dev) {
-				if (!in_dev)
-					panic("devinet: "
-					      "Failed to create loopback\n");
+			if (!in_dev)
+				return notifier_from_errno(-ENOMEM);
+			if (dev->flags & IFF_LOOPBACK) {
 				IN_DEV_CONF_SET(in_dev, NOXFRM, 1);
 				IN_DEV_CONF_SET(in_dev, NOPOLICY, 1);
 			}
@@ -1087,7 +1087,7 @@ static int inetdev_event(struct notifier_block *this, unsigned long event,
 	case NETDEV_UP:
 		if (dev->mtu < 68)
 			break;
-		if (dev == &loopback_dev) {
+		if (dev->flags & IFF_LOOPBACK) {
 			struct in_ifaddr *ifa;
 			if ((ifa = inet_alloc_ifa()) != NULL) {
 				ifa->ifa_local =
@@ -1196,7 +1196,7 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 
 	s_ip_idx = ip_idx = cb->args[1];
 	idx = 0;
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		if (idx < s_idx)
 			goto cont;
 		if (idx > s_idx)
@@ -1258,7 +1258,7 @@ static void devinet_copy_dflt_conf(int i)
 	struct net_device *dev;
 
 	read_lock(&dev_base_lock);
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		struct in_device *in_dev;
 		rcu_read_lock();
 		in_dev = __in_dev_get_rcu(dev);
@@ -1347,7 +1347,7 @@ void inet_forward_change(void)
 	IPV4_DEVCONF_DFLT(FORWARDING) = on;
 
 	read_lock(&dev_base_lock);
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		struct in_device *in_dev;
 		rcu_read_lock();
 		in_dev = __in_dev_get_rcu(dev);

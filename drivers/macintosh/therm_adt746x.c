@@ -335,6 +335,7 @@ static int monitor_task(void *arg)
 {
 	struct thermostat* th = arg;
 
+	set_freezable();
 	while(!kthread_should_stop()) {
 		try_to_freeze();
 		msleep_interruptible(2000);
@@ -378,13 +379,10 @@ static int attach_one_thermostat(struct i2c_adapter *adapter, int addr,
 	if (thermostat)
 		return 0;
 
-	th = (struct thermostat *)
-		kmalloc(sizeof(struct thermostat), GFP_KERNEL);
-
+	th = kzalloc(sizeof(struct thermostat), GFP_KERNEL);
 	if (!th)
 		return -ENOMEM;
 
-	memset(th, 0, sizeof(*th));
 	th->clt.addr = addr;
 	th->clt.adapter = adapter;
 	th->clt.driver = &thermostat_driver;

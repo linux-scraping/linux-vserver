@@ -35,7 +35,7 @@
 #include <linux/dmi.h>
 
 #define DRV_NAME	"pata_cs5530"
-#define DRV_VERSION	"0.7.3"
+#define DRV_VERSION	"0.7.4"
 
 static void __iomem *cs5530_port_base(struct ata_port *ap)
 {
@@ -138,7 +138,7 @@ static void cs5530_set_dmamode(struct ata_port *ap, struct ata_device *adev)
  *
  *	Called when the libata layer is about to issue a command. We wrap
  *	this interface so that we can load the correct ATA timings if
- *	neccessary.  Specifically we have a problem that there is only
+ *	necessary.  Specifically we have a problem that there is only
  *	one MWDMA/UDMA bit.
  */
 
@@ -167,7 +167,7 @@ static struct scsi_host_template cs5530_sht = {
 	.queuecommand		= ata_scsi_queuecmd,
 	.can_queue		= ATA_DEF_QUEUE,
 	.this_id		= ATA_SHT_THIS_ID,
-	.sg_tablesize		= LIBATA_MAX_PRD,
+	.sg_tablesize		= LIBATA_DUMB_MAX_PRD,
 	.cmd_per_lun		= ATA_SHT_CMD_PER_LUN,
 	.emulated		= ATA_SHT_EMULATED,
 	.use_clustering		= ATA_SHT_USE_CLUSTERING,
@@ -179,7 +179,6 @@ static struct scsi_host_template cs5530_sht = {
 };
 
 static struct ata_port_operations cs5530_port_ops = {
-	.port_disable	= ata_port_disable,
 	.set_piomode	= cs5530_set_piomode,
 	.set_dmamode	= cs5530_set_dmamode,
 	.mode_filter	= ata_pci_default_filter,
@@ -201,7 +200,7 @@ static struct ata_port_operations cs5530_port_ops = {
 	.post_internal_cmd = ata_bmdma_post_internal_cmd,
 	.cable_detect	= ata_cable_40wire,
 
-	.qc_prep 	= ata_qc_prep,
+	.qc_prep 	= ata_dumb_qc_prep,
 	.qc_issue	= cs5530_qc_issue_prot,
 
 	.data_xfer	= ata_data_xfer,
@@ -209,12 +208,11 @@ static struct ata_port_operations cs5530_port_ops = {
 	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
 	.irq_on		= ata_irq_on,
-	.irq_ack	= ata_irq_ack,
 
-	.port_start	= ata_port_start,
+	.port_start	= ata_sff_port_start,
 };
 
-static struct dmi_system_id palmax_dmi_table[] = {
+static const struct dmi_system_id palmax_dmi_table[] = {
 	{
 		.ident = "Palmax PD1100",
 		.matches = {
@@ -266,7 +264,7 @@ static int cs5530_init_chip(void)
 	}
 
 	pci_set_master(cs5530_0);
-	pci_set_mwi(cs5530_0);
+	pci_try_set_mwi(cs5530_0);
 
 	/*
 	 * Set PCI CacheLineSize to 16-bytes:
@@ -337,7 +335,7 @@ static int cs5530_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	static const struct ata_port_info info = {
 		.sht = &cs5530_sht,
-		.flags = ATA_FLAG_SLAVE_POSS|ATA_FLAG_SRST,
+		.flags = ATA_FLAG_SLAVE_POSS,
 		.pio_mask = 0x1f,
 		.mwdma_mask = 0x07,
 		.udma_mask = 0x07,
@@ -346,7 +344,7 @@ static int cs5530_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* The docking connector doesn't do UDMA, and it seems not MWDMA */
 	static const struct ata_port_info info_palmax_secondary = {
 		.sht = &cs5530_sht,
-		.flags = ATA_FLAG_SLAVE_POSS|ATA_FLAG_SRST,
+		.flags = ATA_FLAG_SLAVE_POSS,
 		.pio_mask = 0x1f,
 		.port_ops = &cs5530_port_ops
 	};

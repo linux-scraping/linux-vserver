@@ -20,7 +20,7 @@ MODULE_ALIAS("ipt_NFLOG");
 MODULE_ALIAS("ip6t_NFLOG");
 
 static unsigned int
-nflog_target(struct sk_buff **pskb,
+nflog_target(struct sk_buff *skb,
 	     const struct net_device *in, const struct net_device *out,
 	     unsigned int hooknum, const struct xt_target *target,
 	     const void *targinfo)
@@ -33,26 +33,26 @@ nflog_target(struct sk_buff **pskb,
 	li.u.ulog.group	     = info->group;
 	li.u.ulog.qthreshold = info->threshold;
 
-	nf_log_packet(target->family, hooknum, *pskb, in, out, &li,
+	nf_log_packet(target->family, hooknum, skb, in, out, &li,
 		      "%s", info->prefix);
 	return XT_CONTINUE;
 }
 
-static int
+static bool
 nflog_checkentry(const char *tablename, const void *entry,
 		 const struct xt_target *target, void *targetinfo,
 		 unsigned int hookmask)
 {
-	struct xt_nflog_info *info = targetinfo;
+	const struct xt_nflog_info *info = targetinfo;
 
 	if (info->flags & ~XT_NFLOG_MASK)
-		return 0;
+		return false;
 	if (info->prefix[sizeof(info->prefix) - 1] != '\0')
-		return 0;
-	return 1;
+		return false;
+	return true;
 }
 
-static struct xt_target xt_nflog_target[] = {
+static struct xt_target xt_nflog_target[] __read_mostly = {
 	{
 		.name		= "NFLOG",
 		.family		= AF_INET,

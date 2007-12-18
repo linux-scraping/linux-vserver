@@ -32,7 +32,7 @@ static DEFINE_PER_CPU(struct vtimer_queue, virt_cpu_timer);
  * Update process times based on virtual cpu times stored by entry.S
  * to the lowcore fields user_timer, system_timer & steal_clock.
  */
-void account_tick_vtime(struct task_struct *tsk)
+void account_process_tick(struct task_struct *tsk, int user_tick)
 {
 	cputime_t cputime;
 	__u64 timer, clock;
@@ -64,12 +64,6 @@ void account_tick_vtime(struct task_struct *tsk)
 		S390_lowcore.steal_clock -= cputime << 12;
 		account_steal_time(tsk, cputime);
 	}
-
-	run_local_timers();
-	if (rcu_pending(smp_processor_id()))
-		rcu_check_callbacks(smp_processor_id(), rcu_user_flag);
-	scheduler_tick();
- 	run_posix_cpu_timers(tsk);
 }
 
 /*
@@ -415,7 +409,7 @@ EXPORT_SYMBOL(add_virt_timer_periodic);
 
 /*
  * If we change a pending timer the function must be called on the CPU
- * where the timer is running on, e.g. by smp_call_function_on()
+ * where the timer is running on, e.g. by smp_call_function_single()
  *
  * The original mod_timer adds the timer if it is not pending. For compatibility
  * we do the same. The timer will be added on the current CPU as a oneshot timer.
@@ -545,10 +539,10 @@ static int vtimer_idle_notify(struct notifier_block *self,
 			      unsigned long action, void *hcpu)
 {
 	switch (action) {
-	case CPU_IDLE:
+	case S390_CPU_IDLE:
 		stop_cpu_timer();
 		break;
-	case CPU_NOT_IDLE:
+	case S390_CPU_NOT_IDLE:
 		start_cpu_timer();
 		break;
 	}

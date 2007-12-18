@@ -12,7 +12,11 @@
 /* .data section */
 #define DATA_DATA							\
 	*(.data)							\
-	*(.data.init.refok)
+	*(.data.init.refok)						\
+	. = ALIGN(8);							\
+	VMLINUX_SYMBOL(__start___markers) = .;				\
+	*(__markers)							\
+	VMLINUX_SYMBOL(__stop___markers) = .;
 
 #define RO_DATA(align)							\
 	. = ALIGN((align));						\
@@ -20,6 +24,7 @@
 		VMLINUX_SYMBOL(__start_rodata) = .;			\
 		*(.rodata) *(.rodata.*)					\
 		*(__vermagic)		/* Kernel version magic */	\
+		*(__markers_strings)	/* Markers: strings */		\
 	}								\
 									\
 	.rodata1          : AT(ADDR(.rodata1) - LOAD_OFFSET) {		\
@@ -153,7 +158,8 @@
 #define TEXT_TEXT							\
 		ALIGN_FUNCTION();					\
 		*(.text)						\
-		*(.text.init.refok)
+		*(.text.init.refok)					\
+		*(.exit.text.refok)
 
 /* sched.text is aling to function alignment to secure we have same
  * address even at second ld pass when generating System.map */
@@ -224,7 +230,11 @@
 	}
 
 #define NOTES								\
-	.notes : { *(.note.*) } :note
+	.notes : AT(ADDR(.notes) - LOAD_OFFSET) {			\
+		VMLINUX_SYMBOL(__start_notes) = .;			\
+		*(.note.*)						\
+		VMLINUX_SYMBOL(__stop_notes) = .;			\
+	}
 
 #define INITCALLS							\
   	*(.initcall0.init)						\
@@ -245,3 +255,11 @@
   	*(.initcall7.init)						\
   	*(.initcall7s.init)
 
+#define PERCPU(align)							\
+	. = ALIGN(align);						\
+	__per_cpu_start = .;						\
+	.data.percpu  : AT(ADDR(.data.percpu) - LOAD_OFFSET) {		\
+		*(.data.percpu)						\
+		*(.data.percpu.shared_aligned)				\
+	}								\
+	__per_cpu_end = .;

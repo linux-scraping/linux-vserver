@@ -44,6 +44,7 @@
 #include "xfs_trans_space.h"
 #include "xfs_rtalloc.h"
 #include "xfs_rw.h"
+#include "xfs_filestream.h"
 
 /*
  * File system operations
@@ -94,6 +95,8 @@ xfs_fs_geometry(
 				XFS_FSOP_GEOM_FLAGS_DIRV2 : 0) |
 			(XFS_SB_VERSION_HASSECTOR(&mp->m_sb) ?
 				XFS_FSOP_GEOM_FLAGS_SECTOR : 0) |
+			(xfs_sb_version_haslazysbcount(&mp->m_sb) ?
+				XFS_FSOP_GEOM_FLAGS_LAZYSB : 0) |
 			(XFS_SB_VERSION_HASATTR2(&mp->m_sb) ?
 				XFS_FSOP_GEOM_FLAGS_ATTR2 : 0);
 		geo->logsectsize = XFS_SB_VERSION_HASSECTOR(&mp->m_sb) ?
@@ -133,13 +136,14 @@ xfs_growfs_data_private(
 	xfs_rfsblock_t		nfree;
 	xfs_agnumber_t		oagcount;
 	int			pct;
-	xfs_sb_t		*sbp;
 	xfs_trans_t		*tp;
 
 	nb = in->newblocks;
 	pct = in->imaxpct;
 	if (nb < mp->m_sb.sb_dblocks || pct < 0 || pct > 100)
 		return XFS_ERROR(EINVAL);
+	if ((error = xfs_sb_validate_fsb_count(&mp->m_sb, nb)))
+		return error;
 	dpct = pct - mp->m_sb.sb_imax_pct;
 	error = xfs_read_buf(mp, mp->m_ddev_targp,
 			XFS_FSB_TO_BB(mp, nb) - XFS_FSS_TO_BB(mp, 1),
@@ -161,6 +165,7 @@ xfs_growfs_data_private(
 	new = nb - mp->m_sb.sb_dblocks;
 	oagcount = mp->m_sb.sb_agcount;
 	if (nagcount > oagcount) {
+		xfs_filestream_flush(mp);
 		down_write(&mp->m_peraglock);
 		mp->m_perag = kmem_realloc(mp->m_perag,
 			sizeof(xfs_perag_t) * nagcount,
@@ -169,10 +174,11 @@ xfs_growfs_data_private(
 		memset(&mp->m_perag[oagcount], 0,
 			(nagcount - oagcount) * sizeof(xfs_perag_t));
 		mp->m_flags |= XFS_MOUNT_32BITINODES;
-		nagimax = xfs_initialize_perag(XFS_MTOVFS(mp), mp, nagcount);
+		nagimax = xfs_initialize_perag(mp, nagcount);
 		up_write(&mp->m_peraglock);
 	}
 	tp = xfs_trans_alloc(mp, XFS_TRANS_GROWFS);
+	tp->t_flags |= XFS_TRANS_RESERVE;
 	if ((error = xfs_trans_reserve(tp, XFS_GROWFS_SPACE_RES(mp),
 			XFS_GROWDATA_LOG_RES(mp), 0, 0, 0))) {
 		xfs_trans_cancel(tp, 0);
@@ -328,6 +334,7 @@ xfs_growfs_data_private(
 		be32_add(&agf->agf_length, new);
 		ASSERT(be32_to_cpu(agf->agf_length) ==
 		       be32_to_cpu(agi->agi_length));
+		xfs_alloc_log_agf(tp, bp, XFS_AGF_LENGTH);
 		/*
 		 * Free the new space.
 		 */
@@ -369,8 +376,7 @@ xfs_growfs_data_private(
 				error, agno);
 			break;
 		}
-		sbp = XFS_BUF_TO_SBP(bp);
-		xfs_xlatesb(sbp, &mp->m_sb, -1, XFS_SB_ALL_BITS);
+		xfs_sb_to_disk(XFS_BUF_TO_SBP(bp), &mp->m_sb, XFS_SB_ALL_BITS);
 		/*
 		 * If we get an error writing out the alternate superblocks,
 		 * just issue a warning and continue.  The real work is
@@ -427,10 +433,10 @@ xfs_growfs_data(
 	xfs_growfs_data_t	*in)
 {
 	int error;
-	if (!cpsema(&mp->m_growlock))
+	if (!mutex_trylock(&mp->m_growlock))
 		return XFS_ERROR(EWOULDBLOCK);
 	error = xfs_growfs_data_private(mp, in);
-	vsema(&mp->m_growlock);
+	mutex_unlock(&mp->m_growlock);
 	return error;
 }
 
@@ -440,10 +446,10 @@ xfs_growfs_log(
 	xfs_growfs_log_t	*in)
 {
 	int error;
-	if (!cpsema(&mp->m_growlock))
+	if (!mutex_trylock(&mp->m_growlock))
 		return XFS_ERROR(EWOULDBLOCK);
 	error = xfs_growfs_log_private(mp, in);
-	vsema(&mp->m_growlock);
+	mutex_unlock(&mp->m_growlock);
 	return error;
 }
 
@@ -494,8 +500,9 @@ xfs_reserve_blocks(
 	unsigned long		s;
 
 	/* If inval is null, report current values and return */
-
 	if (inval == (__uint64_t *)NULL) {
+		if (!outval)
+			return EINVAL;
 		outval->resblks = mp->m_resblks;
 		outval->resblks_avail = mp->m_resblks_avail;
 		return 0;
@@ -558,8 +565,10 @@ retry:
 		}
 	}
 out:
-	outval->resblks = mp->m_resblks;
-	outval->resblks_avail = mp->m_resblks_avail;
+	if (outval) {
+		outval->resblks = mp->m_resblks;
+		outval->resblks_avail = mp->m_resblks_avail;
+	}
 	XFS_SB_UNLOCK(mp, s);
 
 	if (fdblks_delta) {
@@ -617,8 +626,7 @@ xfs_fs_goingdown(
 {
 	switch (inflags) {
 	case XFS_FSOP_GOING_FLAGS_DEFAULT: {
-		struct bhv_vfs *vfsp = XFS_MTOVFS(mp);
-		struct super_block *sb = freeze_bdev(vfsp->vfs_super->s_bdev);
+		struct super_block *sb = freeze_bdev(mp->m_super->s_bdev);
 
 		if (sb && !IS_ERR(sb)) {
 			xfs_force_shutdown(mp, SHUTDOWN_FORCE_UMOUNT);

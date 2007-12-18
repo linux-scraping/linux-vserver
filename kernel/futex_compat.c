@@ -8,6 +8,7 @@
 
 #include <linux/linkage.h>
 #include <linux/compat.h>
+#include <linux/nsproxy.h>
 #include <linux/futex.h>
 
 #include <asm/uaccess.h>
@@ -29,6 +30,15 @@ fetch_robust_entry(compat_uptr_t *uentry, struct robust_list __user **entry,
 	return 0;
 }
 
+static void __user *futex_uaddr(struct robust_list *entry,
+				compat_long_t futex_offset)
+{
+	compat_uptr_t base = ptr_to_compat(entry);
+	void __user *uaddr = compat_ptr(base + futex_offset);
+
+	return uaddr;
+}
+
 /*
  * Walk curr->robust_list (very carefully, it's a userspace list!)
  * and mark any locks found there dead, and notify any waiters.
@@ -38,10 +48,11 @@ fetch_robust_entry(compat_uptr_t *uentry, struct robust_list __user **entry,
 void compat_exit_robust_list(struct task_struct *curr)
 {
 	struct compat_robust_list_head __user *head = curr->compat_robust_list;
-	struct robust_list __user *entry, *pending;
-	unsigned int limit = ROBUST_LIST_LIMIT, pi, pip;
-	compat_uptr_t uentry, upending;
+	struct robust_list __user *entry, *next_entry, *pending;
+	unsigned int limit = ROBUST_LIST_LIMIT, pi, next_pi, pip;
+	compat_uptr_t uentry, next_uentry, upending;
 	compat_long_t futex_offset;
+	int rc;
 
 	/*
 	 * Fetch the list head (which was registered earlier, via
@@ -61,25 +72,30 @@ void compat_exit_robust_list(struct task_struct *curr)
 	if (fetch_robust_entry(&upending, &pending,
 			       &head->list_op_pending, &pip))
 		return;
-	if (pending)
-		handle_futex_death((void __user *)pending + futex_offset, curr, pip);
 
+	next_entry = NULL;	/* avoid warning with gcc */
 	while (entry != (struct robust_list __user *) &head->list) {
+		/*
+		 * Fetch the next entry in the list before calling
+		 * handle_futex_death:
+		 */
+		rc = fetch_robust_entry(&next_uentry, &next_entry,
+			(compat_uptr_t __user *)&entry->next, &next_pi);
 		/*
 		 * A pending lock might already be on the list, so
 		 * dont process it twice:
 		 */
-		if (entry != pending)
-			if (handle_futex_death((void __user *)entry + futex_offset,
-						curr, pi))
-				return;
+		if (entry != pending) {
+			void __user *uaddr = futex_uaddr(entry, futex_offset);
 
-		/*
-		 * Fetch the next entry in the list:
-		 */
-		if (fetch_robust_entry(&uentry, &entry,
-				       (compat_uptr_t __user *)&entry->next, &pi))
+			if (handle_futex_death(uaddr, curr, pi))
+				return;
+		}
+		if (rc)
 			return;
+		uentry = next_uentry;
+		entry = next_entry;
+		pi = next_pi;
 		/*
 		 * Avoid excessively long or circular lists:
 		 */
@@ -87,6 +103,11 @@ void compat_exit_robust_list(struct task_struct *curr)
 			break;
 
 		cond_resched();
+	}
+	if (pending) {
+		void __user *uaddr = futex_uaddr(pending, futex_offset);
+
+		handle_futex_death(uaddr, curr, pip);
 	}
 }
 
@@ -116,7 +137,7 @@ compat_sys_get_robust_list(int pid, compat_uptr_t __user *head_ptr,
 
 		ret = -ESRCH;
 		read_lock(&tasklist_lock);
-		p = find_task_by_pid(pid);
+		p = find_task_by_vpid(pid);
 		if (!p)
 			goto err_unlock;
 		ret = -EPERM;

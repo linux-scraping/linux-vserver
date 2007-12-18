@@ -221,7 +221,7 @@ static int efficeon_create_gatt_table(struct agp_bridge_data *bridge)
 		SetPageReserved(virt_to_page((char *)page));
 
 		for (offset = 0; offset < PAGE_SIZE; offset += clflush_chunk)
-			asm volatile("clflush %0" : : "m" (*(char *)(page+offset)));
+			clflush((char *)page+offset);
 
 		efficeon_private.l1_table[index] = page;
 
@@ -268,15 +268,16 @@ static int efficeon_insert_memory(struct agp_memory * mem, off_t pg_start, int t
 		*page = insert;
 
 		/* clflush is slow, so don't clflush until we have to */
-		if ( last_page &&
-		     ((unsigned long)page^(unsigned long)last_page) & clflush_mask )
-		    asm volatile("clflush %0" : : "m" (*last_page));
+		if (last_page &&
+		    (((unsigned long)page^(unsigned long)last_page) &
+		     clflush_mask))
+			clflush(last_page);
 
 		last_page = page;
 	}
 
 	if ( last_page )
-		asm volatile("clflush %0" : : "m" (*last_page));
+		clflush(last_page);
 
 	agp_bridge->driver->tlb_flush(mem);
 	return 0;
@@ -375,6 +376,7 @@ static int __devinit agp_efficeon_probe(struct pci_dev *pdev,
 	if (!r->start && r->end) {
 		if (pci_assign_resource(pdev, 0)) {
 			printk(KERN_ERR PFX "could not assign resource 0\n");
+			agp_put_bridge(bridge);
 			return -ENODEV;
 		}
 	}
@@ -386,6 +388,7 @@ static int __devinit agp_efficeon_probe(struct pci_dev *pdev,
 	*/
 	if (pci_enable_device(pdev)) {
 		printk(KERN_ERR PFX "Unable to Enable PCI device\n");
+		agp_put_bridge(bridge);
 		return -ENODEV;
 	}
 

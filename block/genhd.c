@@ -108,28 +108,24 @@ out:
 
 EXPORT_SYMBOL(register_blkdev);
 
-/* todo: make void - error printk here */
-int unregister_blkdev(unsigned int major, const char *name)
+void unregister_blkdev(unsigned int major, const char *name)
 {
 	struct blk_major_name **n;
 	struct blk_major_name *p = NULL;
 	int index = major_to_index(major);
-	int ret = 0;
 
 	mutex_lock(&block_subsys_lock);
 	for (n = &major_names[index]; *n; n = &(*n)->next)
 		if ((*n)->major == major)
 			break;
-	if (!*n || strcmp((*n)->name, name))
-		ret = -EINVAL;
-	else {
+	if (!*n || strcmp((*n)->name, name)) {
+		WARN_ON(1);
+	} else {
 		p = *n;
 		*n = p->next;
 	}
 	mutex_unlock(&block_subsys_lock);
 	kfree(p);
-
-	return ret;
 }
 
 EXPORT_SYMBOL(unregister_blkdev);
@@ -544,60 +540,41 @@ static int block_uevent_filter(struct kset *kset, struct kobject *kobj)
 	return ((ktype == &ktype_block) || (ktype == &ktype_part));
 }
 
-static int block_uevent(struct kset *kset, struct kobject *kobj, char **envp,
-			 int num_envp, char *buffer, int buffer_size)
+static int block_uevent(struct kset *kset, struct kobject *kobj,
+			struct kobj_uevent_env *env)
 {
 	struct kobj_type *ktype = get_ktype(kobj);
 	struct device *physdev;
 	struct gendisk *disk;
 	struct hd_struct *part;
-	int length = 0;
-	int i = 0;
 
 	if (ktype == &ktype_block) {
 		disk = container_of(kobj, struct gendisk, kobj);
-		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
-			       &length, "MINOR=%u", disk->first_minor);
+		add_uevent_var(env, "MINOR=%u", disk->first_minor);
 	} else if (ktype == &ktype_part) {
 		disk = container_of(kobj->parent, struct gendisk, kobj);
 		part = container_of(kobj, struct hd_struct, kobj);
-		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
-			       &length, "MINOR=%u",
+		add_uevent_var(env, "MINOR=%u",
 			       disk->first_minor + part->partno);
 	} else
 		return 0;
 
-	add_uevent_var(envp, num_envp, &i, buffer, buffer_size, &length,
-		       "MAJOR=%u", disk->major);
+	add_uevent_var(env, "MAJOR=%u", disk->major);
 
 	/* add physical device, backing this device  */
 	physdev = disk->driverfs_dev;
 	if (physdev) {
 		char *path = kobject_get_path(&physdev->kobj, GFP_KERNEL);
 
-		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
-			       &length, "PHYSDEVPATH=%s", path);
+		add_uevent_var(env, "PHYSDEVPATH=%s", path);
 		kfree(path);
 
 		if (physdev->bus)
-			add_uevent_var(envp, num_envp, &i,
-				       buffer, buffer_size, &length,
-				       "PHYSDEVBUS=%s",
-				       physdev->bus->name);
+			add_uevent_var(env, "PHYSDEVBUS=%s", physdev->bus->name);
 
 		if (physdev->driver)
-			add_uevent_var(envp, num_envp, &i,
-				       buffer, buffer_size, &length,
-				       "PHYSDEVDRIVER=%s",
-				       physdev->driver->name);
+			add_uevent_var(env, physdev->driver->name);
 	}
-
-	/* terminate, set to next free slot, shrink available space */
-	envp[i] = NULL;
-	envp = &envp[i];
-	num_envp -= i;
-	buffer = &buffer[length];
-	buffer_size -= length;
 
 	return 0;
 }
@@ -726,21 +703,21 @@ struct gendisk *alloc_disk_node(int minors, int node_id)
 {
 	struct gendisk *disk;
 
-	disk = kmalloc_node(sizeof(struct gendisk), GFP_KERNEL, node_id);
+	disk = kmalloc_node(sizeof(struct gendisk),
+				GFP_KERNEL | __GFP_ZERO, node_id);
 	if (disk) {
-		memset(disk, 0, sizeof(struct gendisk));
 		if (!init_disk_stats(disk)) {
 			kfree(disk);
 			return NULL;
 		}
 		if (minors > 1) {
 			int size = (minors - 1) * sizeof(struct hd_struct *);
-			disk->part = kmalloc_node(size, GFP_KERNEL, node_id);
+			disk->part = kmalloc_node(size,
+				GFP_KERNEL | __GFP_ZERO, node_id);
 			if (!disk->part) {
 				kfree(disk);
 				return NULL;
 			}
-			memset(disk->part, 0, size);
 		}
 		disk->minors = minors;
 		kobj_set_kset_s(disk,block_subsys);

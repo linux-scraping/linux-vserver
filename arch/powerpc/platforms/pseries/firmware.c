@@ -25,6 +25,7 @@
 
 #include <asm/firmware.h>
 #include <asm/prom.h>
+#include <asm/udbg.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -66,23 +67,12 @@ firmware_features_table[FIRMWARE_MAX_FEATURES] = {
  * device-tree/ibm,hypertas-functions.  Ultimately this functionality may
  * be moved into prom.c prom_init().
  */
-void __init fw_feature_init(void)
+void __init fw_feature_init(const char *hypertas, unsigned long len)
 {
-	struct device_node *dn;
-	const char *hypertas, *s;
-	int len, i;
+	const char *s;
+	int i;
 
 	DBG(" -> fw_feature_init()\n");
-
-	dn = of_find_node_by_path("/rtas");
-	if (dn == NULL) {
-		printk(KERN_ERR "WARNING! Cannot find RTAS in device-tree!\n");
-		goto out;
-	}
-
-	hypertas = of_get_property(dn, "ibm,hypertas-functions", &len);
-	if (hypertas == NULL)
-		goto out;
 
 	for (s = hypertas; s < hypertas + len; s += strlen(s) + 1) {
 		for (i = 0; i < FIRMWARE_MAX_FEATURES; i++) {
@@ -98,7 +88,5 @@ void __init fw_feature_init(void)
 		}
 	}
 
-out:
-	of_node_put(dn);
 	DBG(" <- fw_feature_init()\n");
 }

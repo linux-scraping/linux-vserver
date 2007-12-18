@@ -266,7 +266,7 @@ static const struct rpc_call_ops nfs_read_direct_ops = {
 static ssize_t nfs_direct_read_schedule(struct nfs_direct_req *dreq, unsigned long user_addr, size_t count, loff_t pos)
 {
 	struct nfs_open_context *ctx = dreq->ctx;
-	struct inode *inode = ctx->dentry->d_inode;
+	struct inode *inode = ctx->path.dentry->d_inode;
 	size_t rsize = NFS_SERVER(inode)->rsize;
 	unsigned int pgbase;
 	int result;
@@ -295,9 +295,14 @@ static ssize_t nfs_direct_read_schedule(struct nfs_direct_req *dreq, unsigned lo
 			break;
 		}
 		if ((unsigned)result < data->npages) {
-			nfs_direct_release_pages(data->pagevec, result);
-			nfs_readdata_release(data);
-			break;
+			bytes = result * PAGE_SIZE;
+			if (bytes <= pgbase) {
+				nfs_direct_release_pages(data->pagevec, result);
+				nfs_readdata_release(data);
+				break;
+			}
+			bytes -= pgbase;
+			data->npages = result;
 		}
 
 		get_dreq(dreq);
@@ -363,7 +368,7 @@ static ssize_t nfs_direct_read(struct kiocb *iocb, unsigned long user_addr, size
 		return -ENOMEM;
 
 	dreq->inode = inode;
-	dreq->ctx = get_nfs_open_context((struct nfs_open_context *)iocb->ki_filp->private_data);
+	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
 	if (!is_sync_kiocb(iocb))
 		dreq->iocb = iocb;
 
@@ -505,7 +510,6 @@ static void nfs_direct_write_complete(struct nfs_direct_req *dreq, struct inode 
 			nfs_direct_write_reschedule(dreq);
 			break;
 		default:
-			nfs_end_data_update(inode);
 			if (dreq->commit_data != NULL)
 				nfs_commit_free(dreq->commit_data);
 			nfs_direct_free_writedata(dreq);
@@ -528,7 +532,6 @@ static inline void nfs_alloc_commit_data(struct nfs_direct_req *dreq)
 
 static void nfs_direct_write_complete(struct nfs_direct_req *dreq, struct inode *inode)
 {
-	nfs_end_data_update(inode);
 	nfs_direct_free_writedata(dreq);
 	nfs_zap_mapping(inode, inode->i_mapping);
 	nfs_direct_complete(dreq);
@@ -546,13 +549,13 @@ static void nfs_direct_write_result(struct rpc_task *task, void *calldata)
 
 	spin_lock(&dreq->lock);
 
-	if (unlikely(dreq->error != 0))
-		goto out_unlock;
 	if (unlikely(status < 0)) {
-		/* An error has occured, so we should not commit */
+		/* An error has occurred, so we should not commit */
 		dreq->flags = 0;
 		dreq->error = status;
 	}
+	if (unlikely(dreq->error != 0))
+		goto out_unlock;
 
 	dreq->count += data->res.count;
 
@@ -601,7 +604,7 @@ static const struct rpc_call_ops nfs_write_direct_ops = {
 static ssize_t nfs_direct_write_schedule(struct nfs_direct_req *dreq, unsigned long user_addr, size_t count, loff_t pos, int sync)
 {
 	struct nfs_open_context *ctx = dreq->ctx;
-	struct inode *inode = ctx->dentry->d_inode;
+	struct inode *inode = ctx->path.dentry->d_inode;
 	size_t wsize = NFS_SERVER(inode)->wsize;
 	unsigned int pgbase;
 	int result;
@@ -630,9 +633,14 @@ static ssize_t nfs_direct_write_schedule(struct nfs_direct_req *dreq, unsigned l
 			break;
 		}
 		if ((unsigned)result < data->npages) {
-			nfs_direct_release_pages(data->pagevec, result);
-			nfs_writedata_release(data);
-			break;
+			bytes = result * PAGE_SIZE;
+			if (bytes <= pgbase) {
+				nfs_direct_release_pages(data->pagevec, result);
+				nfs_writedata_release(data);
+				break;
+			}
+			bytes -= pgbase;
+			data->npages = result;
 		}
 
 		get_dreq(dreq);
@@ -708,13 +716,11 @@ static ssize_t nfs_direct_write(struct kiocb *iocb, unsigned long user_addr, siz
 		sync = FLUSH_STABLE;
 
 	dreq->inode = inode;
-	dreq->ctx = get_nfs_open_context((struct nfs_open_context *)iocb->ki_filp->private_data);
+	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
 	if (!is_sync_kiocb(iocb))
 		dreq->iocb = iocb;
 
 	nfs_add_stats(inode, NFSIOS_DIRECTWRITTENBYTES, count);
-
-	nfs_begin_data_update(inode);
 
 	rpc_clnt_sigmask(clnt, &oldset);
 	result = nfs_direct_write_schedule(dreq, user_addr, count, pos, sync);
@@ -763,10 +769,8 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, const struct iovec *iov,
 		(unsigned long) count, (long long) pos);
 
 	if (nr_segs != 1)
-		return -EINVAL;
-
-	if (count < 0)
 		goto out;
+
 	retval = -EFAULT;
 	if (!access_ok(VERIFY_WRITE, buf, count))
 		goto out;
@@ -814,7 +818,7 @@ out:
 ssize_t nfs_file_direct_write(struct kiocb *iocb, const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos)
 {
-	ssize_t retval;
+	ssize_t retval = -EINVAL;
 	struct file *file = iocb->ki_filp;
 	struct address_space *mapping = file->f_mapping;
 	/* XXX: temporary */
@@ -827,7 +831,7 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, const struct iovec *iov,
 		(unsigned long) count, (long long) pos);
 
 	if (nr_segs != 1)
-		return -EINVAL;
+		goto out;
 
 	retval = generic_write_checks(file, &pos, &count, 0);
 	if (retval)
@@ -867,7 +871,7 @@ int __init nfs_init_directcache(void)
 						sizeof(struct nfs_direct_req),
 						0, (SLAB_RECLAIM_ACCOUNT|
 							SLAB_MEM_SPREAD),
-						NULL, NULL);
+						NULL);
 	if (nfs_direct_cachep == NULL)
 		return -ENOMEM;
 

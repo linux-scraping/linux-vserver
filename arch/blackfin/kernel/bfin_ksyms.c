@@ -28,10 +28,11 @@
  */
 
 #include <linux/module.h>
-#include <asm/irq.h>
+#include <linux/irq.h>
+#include <linux/uaccess.h>
+
 #include <asm/checksum.h>
 #include <asm/cacheflush.h>
-#include <asm/uaccess.h>
 
 /* platform dependent support */
 
@@ -59,6 +60,7 @@ EXPORT_SYMBOL(csum_partial_copy);
  * their interface isn't gonna change any time soon now, so
  * it's OK to leave it out of version control.
  */
+EXPORT_SYMBOL(strcpy);
 EXPORT_SYMBOL(memcpy);
 EXPORT_SYMBOL(memset);
 EXPORT_SYMBOL(memcmp);

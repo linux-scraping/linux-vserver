@@ -24,6 +24,7 @@
  * 21-08-02: Converted to input API, major cleanup. (Vojtech Pavlik)
  */
 
+#include <linux/consolemap.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
@@ -37,9 +38,11 @@
 #include <linux/kbd_kern.h>
 #include <linux/kbd_diacr.h>
 #include <linux/vt_kern.h>
+#include <linux/consolemap.h>
 #include <linux/sysrq.h>
 #include <linux/input.h>
 #include <linux/reboot.h>
+#include <linux/notifier.h>
 
 extern void ctrl_alt_del(void);
 
@@ -79,7 +82,8 @@ void compute_shiftstate(void);
 typedef void (k_handler_fn)(struct vc_data *vc, unsigned char value,
 			    char up_flag);
 static k_handler_fn K_HANDLERS;
-static k_handler_fn *k_handler[16] = { K_HANDLERS };
+k_handler_fn *k_handler[16] = { K_HANDLERS };
+EXPORT_SYMBOL_GPL(k_handler);
 
 #define FN_HANDLERS\
 	fn_null,	fn_enter,	fn_show_ptregs,	fn_show_mem,\
@@ -125,7 +129,7 @@ int shift_state = 0;
  */
 
 static struct input_handler kbd_handler;
-static unsigned long key_down[NBITS(KEY_MAX)];		/* keyboard key bitmap */
+static unsigned long key_down[BITS_TO_LONGS(KEY_CNT)];	/* keyboard key bitmap */
 static unsigned char shift_down[NR_SHIFT];		/* shift state counters.. */
 static int dead_key_next;
 static int npadch = -1;					/* -1 or number assembled on pad */
@@ -156,6 +160,23 @@ static int sysrq_down;
 static int sysrq_alt_use;
 #endif
 static int sysrq_alt;
+
+/*
+ * Notifier list for console keyboard events
+ */
+static ATOMIC_NOTIFIER_HEAD(keyboard_notifier_list);
+
+int register_keyboard_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_register(&keyboard_notifier_list, nb);
+}
+EXPORT_SYMBOL_GPL(register_keyboard_notifier);
+
+int unregister_keyboard_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_unregister(&keyboard_notifier_list, nb);
+}
+EXPORT_SYMBOL_GPL(unregister_keyboard_notifier);
 
 /*
  * Translation of scancodes to keycodes. We set them on only the first
@@ -308,10 +329,9 @@ static void applkey(struct vc_data *vc, int key, char mode)
  * Many other routines do put_queue, but I think either
  * they produce ASCII, or they produce some user-assigned
  * string, and in both cases we might assume that it is
- * in utf-8 already. UTF-8 is defined for words of up to 31 bits,
- * but we need only 16 bits here
+ * in utf-8 already.
  */
-static void to_utf8(struct vc_data *vc, ushort c)
+static void to_utf8(struct vc_data *vc, uint c)
 {
 	if (c < 0x80)
 		/*  0******* */
@@ -320,9 +340,19 @@ static void to_utf8(struct vc_data *vc, ushort c)
 		/* 110***** 10****** */
 		put_queue(vc, 0xc0 | (c >> 6));
 		put_queue(vc, 0x80 | (c & 0x3f));
-	} else {
+    	} else if (c < 0x10000) {
+	       	if (c >= 0xD800 && c < 0xE000)
+			return;
+		if (c == 0xFFFF)
+			return;
 		/* 1110**** 10****** 10****** */
 		put_queue(vc, 0xe0 | (c >> 12));
+		put_queue(vc, 0x80 | ((c >> 6) & 0x3f));
+		put_queue(vc, 0x80 | (c & 0x3f));
+    	} else if (c < 0x110000) {
+		/* 11110*** 10****** 10****** 10****** */
+		put_queue(vc, 0xf0 | (c >> 18));
+		put_queue(vc, 0x80 | ((c >> 12) & 0x3f));
 		put_queue(vc, 0x80 | ((c >> 6) & 0x3f));
 		put_queue(vc, 0x80 | (c & 0x3f));
 	}
@@ -394,8 +424,11 @@ static unsigned int handle_diacr(struct vc_data *vc, unsigned int ch)
 
 	if (kbd->kbdmode == VC_UNICODE)
 		to_utf8(vc, d);
-	else if (d < 0x100)
-		put_queue(vc, d);
+	else {
+		int c = conv_uni_to_8bit(d);
+		if (c != -1)
+			put_queue(vc, c);
+	}
 
 	return ch;
 }
@@ -408,8 +441,11 @@ static void fn_enter(struct vc_data *vc)
 	if (diacr) {
 		if (kbd->kbdmode == VC_UNICODE)
 			to_utf8(vc, diacr);
-		else if (diacr < 0x100)
-			put_queue(vc, diacr);
+		else {
+			int c = conv_uni_to_8bit(diacr);
+			if (c != -1)
+				put_queue(vc, c);
+		}
 		diacr = 0;
 	}
 	put_queue(vc, 13);
@@ -618,8 +654,11 @@ static void k_unicode(struct vc_data *vc, unsigned int value, char up_flag)
 	}
 	if (kbd->kbdmode == VC_UNICODE)
 		to_utf8(vc, value);
-	else if (value < 0x100)
-		put_queue(vc, value);
+	else {
+		int c = conv_uni_to_8bit(value);
+		if (c != -1)
+			put_queue(vc, c);
+	}
 }
 
 /*
@@ -636,7 +675,12 @@ static void k_deadunicode(struct vc_data *vc, unsigned int value, char up_flag)
 
 static void k_self(struct vc_data *vc, unsigned char value, char up_flag)
 {
-	k_unicode(vc, value, up_flag);
+	unsigned int uni;
+	if (kbd->kbdmode == VC_UNICODE)
+		uni = value;
+	else
+		uni = conv_8bit_to_uni(value);
+	k_unicode(vc, uni, up_flag);
 }
 
 static void k_dead2(struct vc_data *vc, unsigned char value, char up_flag)
@@ -775,7 +819,7 @@ static void k_shift(struct vc_data *vc, unsigned char value, char up_flag)
 	/* kludge */
 	if (up_flag && shift_state != old_state && npadch != -1) {
 		if (kbd->kbdmode == VC_UNICODE)
-			to_utf8(vc, npadch & 0xffff);
+			to_utf8(vc, npadch);
 		else
 			put_queue(vc, npadch & 0xff);
 		npadch = -1;
@@ -1005,16 +1049,12 @@ static const unsigned short x86_keycodes[256] =
 	284,285,309,  0,312, 91,327,328,329,331,333,335,336,337,338,339,
 	367,288,302,304,350, 89,334,326,267,126,268,269,125,347,348,349,
 	360,261,262,263,268,376,100,101,321,316,373,286,289,102,351,355,
-	103,104,105,275,287,279,306,106,274,107,294,364,358,363,362,361,
-	291,108,381,281,290,272,292,305,280, 99,112,257,258,359,113,114,
+	103,104,105,275,287,279,258,106,274,107,294,364,358,363,362,361,
+	291,108,381,281,290,272,292,305,280, 99,112,257,306,359,113,114,
 	264,117,271,374,379,265,266, 93, 94, 95, 85,259,375,260, 90,116,
 	377,109,111,277,278,282,283,295,296,297,299,300,301,293,303,307,
 	308,310,313,314,315,317,318,319,320,357,322,323,324,325,276,330,
 	332,340,365,342,343,344,345,346,356,270,341,368,369,370,371,372 };
-
-#ifdef CONFIG_MAC_EMUMOUSEBTN
-extern int mac_hid_mouse_emulate_buttons(int, int, int);
-#endif /* CONFIG_MAC_EMUMOUSEBTN */
 
 #ifdef CONFIG_SPARC
 static int sparc_l1_a_state = 0;
@@ -1109,6 +1149,7 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 	unsigned char type, raw_mode;
 	struct tty_struct *tty;
 	int shift_final;
+	struct keyboard_notifier_param param = { .vc = vc, .value = keycode, .down = down };
 
 	tty = vc->vc_tty;
 
@@ -1196,10 +1237,11 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 		return;
 	}
 
-	shift_final = (shift_state | kbd->slockstate) ^ kbd->lockstate;
+	param.shift = shift_final = (shift_state | kbd->slockstate) ^ kbd->lockstate;
 	key_map = key_maps[shift_final];
 
-	if (!key_map) {
+	if (atomic_notifier_call_chain(&keyboard_notifier_list, KBD_KEYCODE, &param) == NOTIFY_STOP || !key_map) {
+		atomic_notifier_call_chain(&keyboard_notifier_list, KBD_UNBOUND_KEYCODE, &param);
 		compute_shiftstate();
 		kbd->slockstate = 0;
 		return;
@@ -1216,15 +1258,15 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 	type = KTYP(keysym);
 
 	if (type < 0xf0) {
+		param.value = keysym;
+		if (atomic_notifier_call_chain(&keyboard_notifier_list, KBD_UNICODE, &param) == NOTIFY_STOP)
+			return;
 		if (down && !raw_mode)
 			to_utf8(vc, keysym);
 		return;
 	}
 
 	type -= 0xf0;
-
-	if (raw_mode && type != KT_SPEC && type != KT_SHIFT)
-		return;
 
 	if (type == KT_LETTER) {
 		type = KT_LATIN;
@@ -1234,8 +1276,17 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 				keysym = key_map[keycode];
 		}
 	}
+	param.value = keysym;
+
+	if (atomic_notifier_call_chain(&keyboard_notifier_list, KBD_KEYSYM, &param) == NOTIFY_STOP)
+		return;
+
+	if (raw_mode && type != KT_SPEC && type != KT_SHIFT)
+		return;
 
 	(*k_handler[type])(vc, keysym & 0xff, !down);
+
+	atomic_notifier_call_chain(&keyboard_notifier_list, KBD_POST_KEYSYM, &param);
 
 	if (type != KT_SLOCK)
 		kbd->slockstate = 0;
@@ -1326,12 +1377,12 @@ static void kbd_start(struct input_handle *handle)
 static const struct input_device_id kbd_ids[] = {
 	{
                 .flags = INPUT_DEVICE_ID_MATCH_EVBIT,
-                .evbit = { BIT(EV_KEY) },
+                .evbit = { BIT_MASK(EV_KEY) },
         },
 
 	{
                 .flags = INPUT_DEVICE_ID_MATCH_EVBIT,
-                .evbit = { BIT(EV_SND) },
+                .evbit = { BIT_MASK(EV_SND) },
         },
 
 	{ },    /* Terminating entry */
@@ -1360,7 +1411,7 @@ int __init kbd_init(void)
 		kbd_table[i].lockstate = KBD_DEFLOCK;
 		kbd_table[i].slockstate = 0;
 		kbd_table[i].modeflags = KBD_DEFMODE;
-		kbd_table[i].kbdmode = VC_XLATE;
+		kbd_table[i].kbdmode = default_utf8 ? VC_UNICODE : VC_XLATE;
 	}
 
 	error = input_register_handler(&kbd_handler);

@@ -29,7 +29,7 @@
 static struct workqueue_struct *_kcopyd_wq;
 static struct work_struct _kcopyd_work;
 
-static inline void wake(void)
+static void wake(void)
 {
 	queue_work(_kcopyd_wq, &_kcopyd_work);
 }
@@ -198,7 +198,7 @@ struct kcopyd_job {
 	 * These fields are only used if the job has been split
 	 * into more manageable parts.
 	 */
-	struct semaphore lock;
+	struct mutex lock;
 	atomic_t sub_jobs;
 	sector_t progress;
 };
@@ -226,10 +226,7 @@ static LIST_HEAD(_pages_jobs);
 
 static int jobs_init(void)
 {
-	_job_cache = kmem_cache_create("kcopyd-jobs",
-				       sizeof(struct kcopyd_job),
-				       __alignof__(struct kcopyd_job),
-				       0, NULL, NULL);
+	_job_cache = KMEM_CACHE(kcopyd_job, 0);
 	if (!_job_cache)
 		return -ENOMEM;
 
@@ -258,7 +255,7 @@ static void jobs_exit(void)
  * Functions to push and pop a job onto the head of a given job
  * list.
  */
-static inline struct kcopyd_job *pop(struct list_head *jobs)
+static struct kcopyd_job *pop(struct list_head *jobs)
 {
 	struct kcopyd_job *job = NULL;
 	unsigned long flags;
@@ -274,7 +271,7 @@ static inline struct kcopyd_job *pop(struct list_head *jobs)
 	return job;
 }
 
-static inline void push(struct list_head *jobs, struct kcopyd_job *job)
+static void push(struct list_head *jobs, struct kcopyd_job *job)
 {
 	unsigned long flags;
 
@@ -459,7 +456,7 @@ static void segment_complete(int read_err,
 	sector_t count = 0;
 	struct kcopyd_job *job = (struct kcopyd_job *) context;
 
-	down(&job->lock);
+	mutex_lock(&job->lock);
 
 	/* update the error */
 	if (read_err)
@@ -483,7 +480,7 @@ static void segment_complete(int read_err,
 			job->progress += count;
 		}
 	}
-	up(&job->lock);
+	mutex_unlock(&job->lock);
 
 	if (count) {
 		int i;
@@ -565,7 +562,7 @@ int kcopyd_copy(struct kcopyd_client *kc, struct io_region *from,
 		dispatch_job(job);
 
 	else {
-		init_MUTEX(&job->lock);
+		mutex_init(&job->lock);
 		job->progress = 0;
 		split_job(job);
 	}

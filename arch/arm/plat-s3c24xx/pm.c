@@ -40,7 +40,7 @@
 #include <asm/hardware.h>
 #include <asm/io.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-clock.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-mem.h>
@@ -612,9 +612,9 @@ static int s3c2410_pm_enter(suspend_state_t state)
 	return 0;
 }
 
-static struct pm_ops s3c2410_pm_ops = {
+static struct platform_suspend_ops s3c2410_pm_ops = {
 	.enter		= s3c2410_pm_enter,
-	.valid		= pm_valid_only_mem,
+	.valid		= suspend_valid_only_mem,
 };
 
 /* s3c2410_pm_init
@@ -628,6 +628,6 @@ int __init s3c2410_pm_init(void)
 {
 	printk("S3C2410 Power Management, (c) 2004 Simtec Electronics\n");
 
-	pm_set_ops(&s3c2410_pm_ops);
+	suspend_set_ops(&s3c2410_pm_ops);
 	return 0;
 }

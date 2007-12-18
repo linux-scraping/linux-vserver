@@ -23,6 +23,7 @@
 #include <linux/crc32.h>
 #include <linux/firmware.h>
 #include <linux/kref.h>
+#include <linux/dma-mapping.h>
 
 #define IN_CARD_SERVICES
 #include <pcmcia/cs_types.h>
@@ -670,6 +671,9 @@ struct pcmcia_device * pcmcia_device_add(struct pcmcia_socket *s, unsigned int f
 	p_dev->dev.bus = &pcmcia_bus_type;
 	p_dev->dev.parent = s->dev.parent;
 	p_dev->dev.release = pcmcia_release_dev;
+	/* by default don't allow DMA */
+	p_dev->dma_mask = DMA_MASK_NONE;
+	p_dev->dev.dma_mask = &p_dev->dma_mask;
 	bus_id_len = sprintf (p_dev->dev.bus_id, "%d.%d", p_dev->socket->sock, p_dev->device_no);
 
 	p_dev->devname = kmalloc(6 + bus_id_len + 1, GFP_KERNEL);
@@ -1064,11 +1068,10 @@ static int pcmcia_bus_match(struct device * dev, struct device_driver * drv) {
 
 #ifdef CONFIG_HOTPLUG
 
-static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
-			     char *buffer, int buffer_size)
+static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct pcmcia_device *p_dev;
-	int i, length = 0;
+	int i;
 	u32 hash[4] = { 0, 0, 0, 0};
 
 	if (!dev)
@@ -1083,23 +1086,13 @@ static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
 		hash[i] = crc32(0, p_dev->prod_id[i], strlen(p_dev->prod_id[i]));
 	}
 
-	i = 0;
-
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "SOCKET_NO=%u",
-			   p_dev->socket->sock))
+	if (add_uevent_var(env, "SOCKET_NO=%u", p_dev->socket->sock))
 		return -ENOMEM;
 
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "DEVICE_NO=%02X",
-			   p_dev->device_no))
+	if (add_uevent_var(env, "DEVICE_NO=%02X", p_dev->device_no))
 		return -ENOMEM;
 
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "MODALIAS=pcmcia:m%04Xc%04Xf%02Xfn%02Xpfn%02X"
+	if (add_uevent_var(env, "MODALIAS=pcmcia:m%04Xc%04Xf%02Xfn%02Xpfn%02X"
 			   "pa%08Xpb%08Xpc%08Xpd%08X",
 			   p_dev->has_manf_id ? p_dev->manf_id : 0,
 			   p_dev->has_card_id ? p_dev->card_id : 0,
@@ -1112,20 +1105,45 @@ static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
 			   hash[3]))
 		return -ENOMEM;
 
-	envp[i] = NULL;
-
 	return 0;
 }
 
 #else
 
-static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
-			      char *buffer, int buffer_size)
+static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	return -ENODEV;
 }
 
 #endif
+
+/************************ runtime PM support ***************************/
+
+static int pcmcia_dev_suspend(struct device *dev, pm_message_t state);
+static int pcmcia_dev_resume(struct device *dev);
+
+static int runtime_suspend(struct device *dev)
+{
+	int rc;
+
+	down(&dev->sem);
+	rc = pcmcia_dev_suspend(dev, PMSG_SUSPEND);
+	up(&dev->sem);
+	if (!rc)
+		dev->power.power_state.event = PM_EVENT_SUSPEND;
+	return rc;
+}
+
+static void runtime_resume(struct device *dev)
+{
+	int rc;
+
+	down(&dev->sem);
+	rc = pcmcia_dev_resume(dev);
+	up(&dev->sem);
+	if (!rc)
+		dev->power.power_state.event = PM_EVENT_ON;
+}
 
 /************************ per-device sysfs output ***************************/
 
@@ -1173,9 +1191,9 @@ static ssize_t pcmcia_store_pm_state(struct device *dev, struct device_attribute
                 return -EINVAL;
 
 	if ((!p_dev->suspended) && !strncmp(buf, "off", 3))
-		ret = dpm_runtime_suspend(dev, PMSG_SUSPEND);
+		ret = runtime_suspend(dev);
 	else if (p_dev->suspended && !strncmp(buf, "on", 2))
-		dpm_runtime_resume(dev);
+		runtime_resume(dev);
 
 	return ret ? ret : count;
 }
@@ -1312,10 +1330,10 @@ static int pcmcia_bus_suspend_callback(struct device *dev, void * _data)
 	struct pcmcia_socket *skt = _data;
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 
-	if (p_dev->socket != skt)
+	if (p_dev->socket != skt || p_dev->suspended)
 		return 0;
 
-	return dpm_runtime_suspend(dev, PMSG_SUSPEND);
+	return runtime_suspend(dev);
 }
 
 static int pcmcia_bus_resume_callback(struct device *dev, void * _data)
@@ -1323,10 +1341,10 @@ static int pcmcia_bus_resume_callback(struct device *dev, void * _data)
 	struct pcmcia_socket *skt = _data;
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 
-	if (p_dev->socket != skt)
+	if (p_dev->socket != skt || !p_dev->suspended)
 		return 0;
 
-	dpm_runtime_resume(dev);
+	runtime_resume(dev);
 
 	return 0;
 }

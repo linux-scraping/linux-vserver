@@ -35,6 +35,7 @@
 
 #include <linux/compiler.h>
 #include <linux/list.h>
+#include <linux/mutex.h>
 
 #include <rdma/ib_verbs.h>
 #include <rdma/ib_umem.h>
@@ -90,6 +91,11 @@ struct mlx4_ib_mr {
 	struct ib_mr		ibmr;
 	struct mlx4_mr		mmr;
 	struct ib_umem	       *umem;
+};
+
+struct mlx4_ib_fmr {
+	struct ib_fmr           ibfmr;
+	struct mlx4_fmr         mfmr;
 };
 
 struct mlx4_ib_wq {
@@ -198,6 +204,10 @@ static inline struct mlx4_ib_mr *to_mmr(struct ib_mr *ibmr)
 	return container_of(ibmr, struct mlx4_ib_mr, ibmr);
 }
 
+static inline struct mlx4_ib_fmr *to_mfmr(struct ib_fmr *ibfmr)
+{
+	return container_of(ibfmr, struct mlx4_ib_fmr, ibfmr);
+}
 static inline struct mlx4_ib_qp *to_mqp(struct ib_qp *ibqp)
 {
 	return container_of(ibqp, struct mlx4_ib_qp, ibqp);
@@ -255,6 +265,7 @@ struct ib_srq *mlx4_ib_create_srq(struct ib_pd *pd,
 				  struct ib_udata *udata);
 int mlx4_ib_modify_srq(struct ib_srq *ibsrq, struct ib_srq_attr *attr,
 		       enum ib_srq_attr_mask attr_mask, struct ib_udata *udata);
+int mlx4_ib_query_srq(struct ib_srq *srq, struct ib_srq_attr *srq_attr);
 int mlx4_ib_destroy_srq(struct ib_srq *srq);
 void mlx4_ib_free_srq_wqe(struct mlx4_ib_srq *srq, int wqe_index);
 int mlx4_ib_post_srq_recv(struct ib_srq *ibsrq, struct ib_recv_wr *wr,
@@ -266,6 +277,8 @@ struct ib_qp *mlx4_ib_create_qp(struct ib_pd *pd,
 int mlx4_ib_destroy_qp(struct ib_qp *qp);
 int mlx4_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 		      int attr_mask, struct ib_udata *udata);
+int mlx4_ib_query_qp(struct ib_qp *ibqp, struct ib_qp_attr *qp_attr, int qp_attr_mask,
+		     struct ib_qp_init_attr *qp_init_attr);
 int mlx4_ib_post_send(struct ib_qp *ibqp, struct ib_send_wr *wr,
 		      struct ib_send_wr **bad_wr);
 int mlx4_ib_post_recv(struct ib_qp *ibqp, struct ib_recv_wr *wr,
@@ -279,6 +292,13 @@ int mlx4_ib_process_mad(struct ib_device *ibdev, int mad_flags,	u8 port_num,
 			struct ib_mad *in_mad, struct ib_mad *out_mad);
 int mlx4_ib_mad_init(struct mlx4_ib_dev *dev);
 void mlx4_ib_mad_cleanup(struct mlx4_ib_dev *dev);
+
+struct ib_fmr *mlx4_ib_fmr_alloc(struct ib_pd *pd, int mr_access_flags,
+				  struct ib_fmr_attr *fmr_attr);
+int mlx4_ib_map_phys_fmr(struct ib_fmr *ibfmr, u64 *page_list, int npages,
+			 u64 iova);
+int mlx4_ib_unmap_fmr(struct list_head *fmr_list);
+int mlx4_ib_fmr_dealloc(struct ib_fmr *fmr);
 
 static inline int mlx4_ib_ah_grh_present(struct mlx4_ib_ah *ah)
 {

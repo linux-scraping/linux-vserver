@@ -1177,7 +1177,7 @@
 
 #define GPIO_bit(x)	(1 << ((x) & 0x1f))
 
-#ifdef CONFIG_PXA27x
+#if defined(CONFIG_PXA27x) || defined(CONFIG_PXA3xx)
 
 /* Interrupt Controller */
 
@@ -1765,28 +1765,8 @@
 #define SSACD_P(x) (*(((x) == 1) ? &SSACD_P1 : ((x) == 2) ? &SSACD_P2 : ((x) == 3) ? &SSACD_P3 : NULL))
 
 /*
- * MultiMediaCard (MMC) controller
+ * MultiMediaCard (MMC) controller - see drivers/mmc/host/pxamci.h
  */
-
-#define MMC_STRPCL	__REG(0x41100000)  /* Control to start and stop MMC clock */
-#define MMC_STAT	__REG(0x41100004)  /* MMC Status Register (read only) */
-#define MMC_CLKRT	__REG(0x41100008)  /* MMC clock rate */
-#define MMC_SPI		__REG(0x4110000c)  /* SPI mode control bits */
-#define MMC_CMDAT	__REG(0x41100010)  /* Command/response/data sequence control */
-#define MMC_RESTO	__REG(0x41100014)  /* Expected response time out */
-#define MMC_RDTO	__REG(0x41100018)  /* Expected data read time out */
-#define MMC_BLKLEN	__REG(0x4110001c)  /* Block length of data transaction */
-#define MMC_NOB		__REG(0x41100020)  /* Number of blocks, for block mode */
-#define MMC_PRTBUF	__REG(0x41100024)  /* Partial MMC_TXFIFO FIFO written */
-#define MMC_I_MASK	__REG(0x41100028)  /* Interrupt Mask */
-#define MMC_I_REG	__REG(0x4110002c)  /* Interrupt Register (read only) */
-#define MMC_CMD		__REG(0x41100030)  /* Index of current command */
-#define MMC_ARGH	__REG(0x41100034)  /* MSW part of the current command argument */
-#define MMC_ARGL	__REG(0x41100038)  /* LSW part of the current command argument */
-#define MMC_RES		__REG(0x4110003c)  /* Response FIFO (read only) */
-#define MMC_RXFIFO	__REG(0x41100040)  /* Receive FIFO (read only) */
-#define MMC_TXFIFO	__REG(0x41100044)  /* Transmit FIFO (write only) */
-
 
 /*
  * Core Clock
@@ -1843,6 +1823,7 @@
 #define LCCR1		__REG(0x44000004)  /* LCD Controller Control Register 1 */
 #define LCCR2		__REG(0x44000008)  /* LCD Controller Control Register 2 */
 #define LCCR3		__REG(0x4400000C)  /* LCD Controller Control Register 3 */
+#define LCCR4		__REG(0x44000010)  /* LCD Controller Control Register 3 */
 #define DFBR0		__REG(0x44000020)  /* DMA Channel 0 Frame Branch Register */
 #define DFBR1		__REG(0x44000024)  /* DMA Channel 1 Frame Branch Register */
 #define LCSR		__REG(0x44000038)  /* LCD Controller Status Register */
@@ -1855,6 +1836,16 @@
 #define LCCR3_4BPP (2 << 24)
 #define LCCR3_8BPP (3 << 24)
 #define LCCR3_16BPP (4 << 24)
+
+#define LCCR3_PDFOR_0 (0 << 30)
+#define LCCR3_PDFOR_1 (1 << 30)
+#define LCCR3_PDFOR_2 (2 << 30)
+#define LCCR3_PDFOR_3 (3 << 30)
+
+#define LCCR4_PAL_FOR_0 (0 << 15)
+#define LCCR4_PAL_FOR_1 (1 << 15)
+#define LCCR4_PAL_FOR_2 (2 << 15)
+#define LCCR4_PAL_FOR_MASK (3 << 15)
 
 #define FDADR0		__REG(0x44000200)  /* DMA Channel 0 Frame Descriptor Address Register */
 #define FSADR0		__REG(0x44000204)  /* DMA Channel 0 Frame Source Address Register */

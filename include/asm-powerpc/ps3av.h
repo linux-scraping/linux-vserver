@@ -1,20 +1,23 @@
 /*
- * Copyright (C) 2006 Sony Computer Entertainment Inc.
- * Copyright 2006, 2007 Sony Corporation
+ *  PS3 AV backend support.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published
- * by the Free Software Foundation; version 2 of the License.
+ *  Copyright (C) 2007 Sony Computer Entertainment Inc.
+ *  Copyright 2007 Sony Corp.
  *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+
 #ifndef _ASM_POWERPC_PS3AV_H_
 #define _ASM_POWERPC_PS3AV_H_
 
@@ -159,6 +162,9 @@
 #define PS3AV_CMD_VIDEO_FMT_X8R8G8B8			0x0000
 /* video_out_format */
 #define PS3AV_CMD_VIDEO_OUT_FORMAT_RGB_12BIT		0x0000
+/* video_cl_cnv */
+#define PS3AV_CMD_VIDEO_CL_CNV_ENABLE_LUT		0x0000
+#define PS3AV_CMD_VIDEO_CL_CNV_DISABLE_LUT		0x0010
 /* video_sync */
 #define PS3AV_CMD_VIDEO_SYNC_VSYNC			0x0001
 #define PS3AV_CMD_VIDEO_SYNC_CSYNC			0x0004
@@ -277,7 +283,7 @@
 #define PS3AV_CMD_VIDEO_CS_YUV422			0x0002
 #define PS3AV_CMD_VIDEO_CS_YUV444			0x0003
 
-/* for automode */
+/* for broadcast automode */
 #define PS3AV_RESBIT_720x480P			0x0003	/* 0x0001 | 0x0002 */
 #define PS3AV_RESBIT_720x576P			0x0003	/* 0x0001 | 0x0002 */
 #define PS3AV_RESBIT_1280x720P			0x0004
@@ -292,13 +298,22 @@
 						| PS3AV_RESBIT_1920x1080I \
 						| PS3AV_RESBIT_1920x1080P)
 
+/* for VESA automode */
+#define PS3AV_RESBIT_VGA			0x0001
+#define PS3AV_RESBIT_WXGA			0x0002
+#define PS3AV_RESBIT_SXGA			0x0004
+#define PS3AV_RESBIT_WUXGA			0x0008
+#define PS3AV_RES_MASK_VESA			(PS3AV_RESBIT_WXGA |\
+						 PS3AV_RESBIT_SXGA |\
+						 PS3AV_RESBIT_WUXGA)
+
 #define PS3AV_MONITOR_TYPE_HDMI			1	/* HDMI */
 #define PS3AV_MONITOR_TYPE_DVI			2	/* DVI */
-#define PS3AV_DEFAULT_HDMI_VID_REG_60		PS3AV_CMD_VIDEO_VID_480P
-#define PS3AV_DEFAULT_AVMULTI_VID_REG_60	PS3AV_CMD_VIDEO_VID_480I
-#define PS3AV_DEFAULT_HDMI_VID_REG_50		PS3AV_CMD_VIDEO_VID_576P
-#define PS3AV_DEFAULT_AVMULTI_VID_REG_50	PS3AV_CMD_VIDEO_VID_576I
-#define PS3AV_DEFAULT_DVI_VID			PS3AV_CMD_VIDEO_VID_480P
+
+#define PS3AV_DEFAULT_HDMI_MODE_ID_REG_60	2	/* 480p */
+#define PS3AV_DEFAULT_AVMULTI_MODE_ID_REG_60	1	/* 480i */
+#define PS3AV_DEFAULT_HDMI_MODE_ID_REG_50	7	/* 576p */
+#define PS3AV_DEFAULT_AVMULTI_MODE_ID_REG_50	6	/* 576i */
 
 #define PS3AV_REGION_60				0x01
 #define PS3AV_REGION_50				0x02
@@ -311,6 +326,8 @@
 #define PS3AV_MODE_MASK				0x000F
 #define PS3AV_MODE_HDCP_OFF			0x1000	/* Retail PS3 product doesn't support this */
 #define PS3AV_MODE_DITHER			0x0800
+#define PS3AV_MODE_COLOR			0x0400
+#define PS3AV_MODE_WHITE			0x0200
 #define PS3AV_MODE_FULL				0x0080
 #define PS3AV_MODE_DVI				0x0040
 #define PS3AV_MODE_RGB				0x0020
@@ -529,9 +546,9 @@ struct ps3av_pkt_video_mode {
 	u32 video_out_format;	/* in: out format */
 	u32 video_format;	/* in: input frame buffer format */
 	u8 reserved3;
-	u8 reserved4;
+	u8 video_cl_cnv;	/* in: color conversion */
 	u16 video_order;	/* in: input RGB order */
-	u32 reserved5;
+	u32 reserved4;
 };
 
 /* video: format */
@@ -539,7 +556,8 @@ struct ps3av_pkt_video_format {
 	struct ps3av_send_hdr send_hdr;
 	u32 video_head;		/* in: head */
 	u32 video_format;	/* in: frame buffer format */
-	u16 reserved;
+	u8 reserved;
+	u8 video_cl_cnv;	/* in: color conversion */
 	u16 video_order;	/* in: input RGB order */
 };
 
@@ -688,26 +706,12 @@ extern int ps3av_cmd_audio_mute(int, u32 *, u32);
 extern int ps3av_cmd_audio_active(int, u32);
 extern int ps3av_cmd_avb_param(struct ps3av_pkt_avb_param *, u32);
 extern int ps3av_cmd_av_get_hw_conf(struct ps3av_pkt_av_get_hw_conf *);
-#ifdef PS3AV_DEBUG
-extern void ps3av_cmd_av_hw_conf_dump(const struct ps3av_pkt_av_get_hw_conf *);
-extern void ps3av_cmd_av_monitor_info_dump(const struct ps3av_pkt_av_get_monitor_info *);
-#else
-static inline void ps3av_cmd_av_hw_conf_dump(const struct ps3av_pkt_av_get_hw_conf *hw_conf) {}
-static inline void ps3av_cmd_av_monitor_info_dump(const struct ps3av_pkt_av_get_monitor_info *monitor_info) {}
-#endif
 extern int ps3av_cmd_video_get_monitor_info(struct ps3av_pkt_av_get_monitor_info *,
 					    u32);
 
-struct ps3_vuart_port_device;
-extern int ps3av_vuart_write(struct ps3_vuart_port_device *dev,
-			     const void *buf, unsigned long size);
-extern int ps3av_vuart_read(struct ps3_vuart_port_device *dev, void *buf,
-			    unsigned long size, int timeout);
-
-extern int ps3av_set_video_mode(u32, int);
+extern int ps3av_set_video_mode(u32);
 extern int ps3av_set_audio_mode(u32, u32, u32, u32, u32);
-extern int ps3av_get_auto_mode(int);
-extern int ps3av_set_mode(u32, int);
+extern int ps3av_get_auto_mode(void);
 extern int ps3av_get_mode(void);
 extern int ps3av_get_scanmode(int);
 extern int ps3av_get_refresh_rate(int);
@@ -716,5 +720,8 @@ extern int ps3av_video_mute(int);
 extern int ps3av_audio_mute(int);
 extern int ps3av_dev_open(void);
 extern int ps3av_dev_close(void);
+extern void ps3av_register_flip_ctl(void (*flip_ctl)(int on, void *data),
+				    void *flip_data);
+extern void ps3av_flip_ctl(int on);
 
 #endif	/* _ASM_POWERPC_PS3AV_H_ */

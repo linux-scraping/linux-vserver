@@ -13,7 +13,8 @@ extra-y += vmlinux.bin vmlinux.gz
 
 quiet_cmd_uimage = UIMAGE  $@
       cmd_uimage = $(CONFIG_SHELL) $(MKIMAGE) -A $(ARCH) -O linux -T kernel \
-                   -C gzip -a $(CONFIG_BOOT_LOAD) -e $(CONFIG_BOOT_LOAD) -n 'Linux-$(KERNELRELEASE)' \
+                   -C gzip -n 'Linux-$(KERNELRELEASE)' -a $(CONFIG_BOOT_LOAD) \
+                   -e $(shell $(NM) vmlinux | awk '$$NF == "__start" {print $$1}') \
                    -d $< $@
 
 $(obj)/vmlinux.bin: vmlinux FORCE
@@ -25,3 +26,6 @@ $(obj)/vmlinux.gz: $(obj)/vmlinux.bin FORCE
 $(obj)/vmImage: $(obj)/vmlinux.gz
 	$(call if_changed,uimage)
 	@echo 'Kernel: $@ is ready'
+
+install:
+	sh $(srctree)/$(src)/install.sh $(KERNELRELEASE) $(BOOTIMAGE) System.map "$(INSTALL_PATH)"

@@ -22,6 +22,7 @@
 #include <linux/fs.h>
 #include <linux/delay.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/mm.h>
 
 #include <asm/openprom.h>
@@ -54,12 +55,12 @@ static unsigned char saa9051_init_array[VFC_SAA9051_NR] = {
 
 void vfc_lock_device(struct vfc_dev *dev)
 {
-	down(&dev->device_lock_sem);
+	mutex_lock(&dev->device_lock_mtx);
 }
 
 void vfc_unlock_device(struct vfc_dev *dev)
 {
-	up(&dev->device_lock_sem);
+	mutex_unlock(&dev->device_lock_mtx);
 }
 
 
@@ -133,7 +134,7 @@ int init_vfc_hw(struct vfc_dev *dev)
 int init_vfc_devstruct(struct vfc_dev *dev, int instance) 
 {
 	dev->instance=instance;
-	init_MUTEX(&dev->device_lock_sem);
+	mutex_init(&dev->device_lock_mtx);
 	dev->control_reg=0;
 	dev->busy=0;
 	return 0;
@@ -248,6 +249,7 @@ static int vfc_debug(struct vfc_dev *dev, int cmd, void __user *argp)
 					buffer,inout.len);
 
 		if (copy_to_user(argp,&inout,sizeof(inout))) {
+			vfc_unlock_device(dev);
 			kfree(buffer);
 			return -EFAULT;
 		}
@@ -656,12 +658,9 @@ static int vfc_probe(void)
 	if (!cards)
 		return -ENODEV;
 
-	vfc_dev_lst = kmalloc(sizeof(struct vfc_dev *) *
-						 (cards+1),
-						 GFP_KERNEL);
+	vfc_dev_lst = kcalloc(cards + 1, sizeof(struct vfc_dev*), GFP_KERNEL);
 	if (vfc_dev_lst == NULL)
 		return -ENOMEM;
-	memset(vfc_dev_lst, 0, sizeof(struct vfc_dev *) * (cards + 1));
 	vfc_dev_lst[cards] = NULL;
 
 	ret = register_chrdev(VFC_MAJOR, vfcstr, &vfc_fops);

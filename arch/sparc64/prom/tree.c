@@ -13,18 +13,17 @@
 
 #include <asm/openprom.h>
 #include <asm/oplib.h>
+#include <asm/ldc.h>
 
 /* Return the child of node 'node' or zero if no this node has no
  * direct descendent.
  */
-__inline__ int
-__prom_getchild(int node)
+inline int __prom_getchild(int node)
 {
 	return p1275_cmd ("child", P1275_INOUT(1, 1), node);
 }
 
-__inline__ int
-prom_getchild(int node)
+inline int prom_getchild(int node)
 {
 	int cnode;
 
@@ -34,8 +33,7 @@ prom_getchild(int node)
 	return (int)cnode;
 }
 
-__inline__ int
-prom_getparent(int node)
+inline int prom_getparent(int node)
 {
 	int cnode;
 
@@ -48,14 +46,12 @@ prom_getparent(int node)
 /* Return the next sibling of node 'node' or zero if no more siblings
  * at this level of depth in the tree.
  */
-__inline__ int
-__prom_getsibling(int node)
+inline int __prom_getsibling(int node)
 {
 	return p1275_cmd(prom_peer_name, P1275_INOUT(1, 1), node);
 }
 
-__inline__ int
-prom_getsibling(int node)
+inline int prom_getsibling(int node)
 {
 	int sibnode;
 
@@ -71,8 +67,7 @@ prom_getsibling(int node)
 /* Return the length in bytes of property 'prop' at node 'node'.
  * Return -1 on error.
  */
-__inline__ int
-prom_getproplen(int node, const char *prop)
+inline int prom_getproplen(int node, const char *prop)
 {
 	if((!node) || (!prop)) return -1;
 	return p1275_cmd ("getproplen", 
@@ -85,8 +80,8 @@ prom_getproplen(int node, const char *prop)
  * 'buffer' which has a size of 'bufsize'.  If the acquisition
  * was successful the length will be returned, else -1 is returned.
  */
-__inline__ int
-prom_getproperty(int node, const char *prop, char *buffer, int bufsize)
+inline int prom_getproperty(int node, const char *prop,
+			    char *buffer, int bufsize)
 {
 	int plen;
 
@@ -106,8 +101,7 @@ prom_getproperty(int node, const char *prop, char *buffer, int bufsize)
 /* Acquire an integer property and return its value.  Returns -1
  * on failure.
  */
-__inline__ int
-prom_getint(int node, const char *prop)
+inline int prom_getint(int node, const char *prop)
 {
 	int intprop;
 
@@ -121,8 +115,7 @@ prom_getint(int node, const char *prop)
  * integer.
  */
 
-int
-prom_getintdefault(int node, const char *property, int deflt)
+int prom_getintdefault(int node, const char *property, int deflt)
 {
 	int retval;
 
@@ -133,8 +126,7 @@ prom_getintdefault(int node, const char *property, int deflt)
 }
 
 /* Acquire a boolean property, 1=TRUE 0=FALSE. */
-int
-prom_getbool(int node, const char *prop)
+int prom_getbool(int node, const char *prop)
 {
 	int retval;
 
@@ -147,8 +139,7 @@ prom_getbool(int node, const char *prop)
  * string on error.  The char pointer is the user supplied string
  * buffer.
  */
-void
-prom_getstring(int node, const char *prop, char *user_buf, int ubuf_size)
+void prom_getstring(int node, const char *prop, char *user_buf, int ubuf_size)
 {
 	int len;
 
@@ -162,8 +153,7 @@ prom_getstring(int node, const char *prop, char *user_buf, int ubuf_size)
 /* Does the device at node 'node' have name 'name'?
  * YES = 1   NO = 0
  */
-int
-prom_nodematch(int node, const char *name)
+int prom_nodematch(int node, const char *name)
 {
 	char namebuf[128];
 	prom_getproperty(node, "name", namebuf, sizeof(namebuf));
@@ -174,8 +164,7 @@ prom_nodematch(int node, const char *name)
 /* Search siblings at 'node_start' for a node with name
  * 'nodename'.  Return node if successful, zero if not.
  */
-int
-prom_searchsiblings(int node_start, const char *nodename)
+int prom_searchsiblings(int node_start, const char *nodename)
 {
 
 	int thisnode, error;
@@ -196,8 +185,7 @@ prom_searchsiblings(int node_start, const char *nodename)
 /* Return the first property type for node 'node'.
  * buffer should be at least 32B in length
  */
-__inline__ char *
-prom_firstprop(int node, char *buffer)
+inline char *prom_firstprop(int node, char *buffer)
 {
 	*buffer = 0;
 	if(node == -1) return buffer;
@@ -211,8 +199,7 @@ prom_firstprop(int node, char *buffer)
  * at node 'node' .  Returns NULL string if no more
  * property types for this node.
  */
-__inline__ char *
-prom_nextprop(int node, const char *oprop, char *buffer)
+inline char *prom_nextprop(int node, const char *oprop, char *buffer)
 {
 	char buf[32];
 
@@ -261,17 +248,24 @@ int prom_node_has_property(int node, const char *prop)
 int
 prom_setprop(int node, const char *pname, char *value, int size)
 {
-	if(size == 0) return 0;
-	if((pname == 0) || (value == 0)) return 0;
+	if (size == 0)
+		return 0;
+	if ((pname == 0) || (value == 0))
+		return 0;
 	
+#ifdef CONFIG_SUN_LDOMS
+	if (ldom_domaining_enabled) {
+		ldom_set_var(pname, value);
+		return 0;
+	}
+#endif
 	return p1275_cmd ("setprop", P1275_ARG(1,P1275_ARG_IN_STRING)|
 					  P1275_ARG(2,P1275_ARG_IN_BUF)|
 					  P1275_INOUT(4, 1), 
 					  node, pname, value, P1275_SIZE(size));
 }
 
-__inline__ int
-prom_inst2pkg(int inst)
+inline int prom_inst2pkg(int inst)
 {
 	int node;
 	
@@ -294,4 +288,12 @@ prom_pathtoinode(const char *path)
 	prom_devclose (inst);
 	if (node == -1) return 0;
 	return node;
+}
+
+int prom_ihandle2path(int handle, char *buffer, int bufsize)
+{
+	return p1275_cmd("instance-to-path",
+			 P1275_ARG(1,P1275_ARG_OUT_BUF)|
+			 P1275_INOUT(3, 1),
+			 handle, buffer, P1275_SIZE(bufsize));
 }

@@ -66,9 +66,14 @@ _TIF_WORK_INT = (_TIF_SIGPENDING | _TIF_RESTORE_SIGMASK | _TIF_NEED_RESCHED | \
 	.macro	TRACE_IRQS_OFF
 	 brasl	%r14,trace_hardirqs_off
 	.endm
+
+	.macro	LOCKDEP_SYS_EXIT
+	 brasl	%r14,lockdep_sys_exit
+	.endm
 #else
 #define TRACE_IRQS_ON
 #define TRACE_IRQS_OFF
+#define LOCKDEP_SYS_EXIT
 #endif
 
 	.macro	STORE_TIMER lc_offset
@@ -97,6 +102,11 @@ _TIF_WORK_INT = (_TIF_SIGPENDING | _TIF_RESTORE_SIGMASK | _TIF_NEED_RESCHED | \
 	.macro	SAVE_ALL_BASE savearea
 	stmg	%r12,%r15,\savearea
 	larl	%r13,system_call
+	.endm
+
+	.macro	SAVE_ALL_SVC psworg,savearea
+	la	%r12,\psworg
+	lg	%r15,__LC_KERNEL_STACK	# problem state -> load ksp
 	.endm
 
 	.macro	SAVE_ALL_SYNC psworg,savearea
@@ -207,7 +217,7 @@ system_call:
 	STORE_TIMER __LC_SYNC_ENTER_TIMER
 sysc_saveall:
 	SAVE_ALL_BASE __LC_SAVE_AREA
-	SAVE_ALL_SYNC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
+	SAVE_ALL_SVC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	CREATE_STACK_FRAME __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	llgh	%r7,__LC_SVC_INT_CODE	# get svc number from lowcore
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING
@@ -250,6 +260,7 @@ sysc_return:
 	jno	sysc_leave
 	tm	__TI_flags+7(%r9),_TIF_WORK_SVC
 	jnz	sysc_work	# there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 sysc_leave:
 	RESTORE_ALL __LC_RETURN_PSW,1
 
@@ -273,6 +284,7 @@ sysc_work:
 	jo	sysc_restart
 	tm	__TI_flags+7(%r9),_TIF_SINGLE_STEP
 	jo	sysc_singlestep
+	LOCKDEP_SYS_EXIT
 	j	sysc_leave
 
 #
@@ -553,6 +565,7 @@ io_return:
 #endif
 	tm	__TI_flags+7(%r9),_TIF_WORK_INT
 	jnz	io_work 		# there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 io_leave:
 	RESTORE_ALL __LC_RETURN_PSW,0
 io_done:
@@ -600,14 +613,17 @@ io_work_loop:
 	jo	io_reschedule
 	tm	__TI_flags+7(%r9),(_TIF_SIGPENDING | _TIF_RESTORE_SIGMASK)
 	jnz	io_sigpending
+	LOCKDEP_SYS_EXIT
 	j	io_leave
 
 #
 # _TIF_MCCK_PENDING is set, call handler
 #
 io_mcck_pending:
-	larl	%r14,io_work_loop
-	jg	s390_handle_mcck	# TIF bit will be cleared by handler
+	TRACE_IRQS_OFF
+	brasl	%r14,s390_handle_mcck	# TIF bit will be cleared by handler
+	TRACE_IRQS_ON
+	j	io_work_loop
 
 #
 # _TIF_NEED_RESCHED is set, call schedule

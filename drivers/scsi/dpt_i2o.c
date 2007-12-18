@@ -173,12 +173,12 @@ static struct pci_device_id dptids[] = {
 };
 MODULE_DEVICE_TABLE(pci,dptids);
 
-static int adpt_detect(struct scsi_host_template* sht)
+static void adpt_exit(void);
+
+static int adpt_detect(void)
 {
 	struct pci_dev *pDev = NULL;
 	adpt_hba* pHba;
-
-	adpt_init();
 
 	PINFO("Detecting Adaptec I2O RAID controllers...\n");
 
@@ -186,7 +186,7 @@ static int adpt_detect(struct scsi_host_template* sht)
 	while ((pDev = pci_get_device( PCI_DPT_VENDOR_ID, PCI_ANY_ID, pDev))) {
 		if(pDev->device == PCI_DPT_DEVICE_ID ||
 		   pDev->device == PCI_DPT_RAPTOR_DEVICE_ID){
-			if(adpt_install_hba(sht, pDev) ){
+			if(adpt_install_hba(pDev) ){
 				PERROR("Could not Init an I2O RAID device\n");
 				PERROR("Will not try to detect others.\n");
 				return hba_count-1;
@@ -248,34 +248,33 @@ rebuild_sys_tab:
 	}
 
 	for (pHba = hba_chain; pHba; pHba = pHba->next) {
-		if( adpt_scsi_register(pHba,sht) < 0){
+		if (adpt_scsi_register(pHba) < 0) {
 			adpt_i2o_delete_hba(pHba);
 			continue;
 		}
 		pHba->initialized = TRUE;
 		pHba->state &= ~DPTI_STATE_RESET;
+		scsi_scan_host(pHba->host);
 	}
 
 	// Register our control device node
 	// nodes will need to be created in /dev to access this
 	// the nodes can not be created from within the driver
 	if (hba_count && register_chrdev(DPTI_I2O_MAJOR, DPT_DRIVER, &adpt_fops)) {
-		adpt_i2o_sys_shutdown();
+		adpt_exit();
 		return 0;
 	}
 	return hba_count;
 }
 
 
-/*
- * scsi_unregister will be called AFTER we return. 
- */
-static int adpt_release(struct Scsi_Host *host)
+static int adpt_release(adpt_hba *pHba)
 {
-	adpt_hba* pHba = (adpt_hba*) host->hostdata[0];
+	struct Scsi_Host *shost = pHba->host;
+	scsi_remove_host(shost);
 //	adpt_i2o_quiesce_hba(pHba);
 	adpt_i2o_delete_hba(pHba);
-	scsi_unregister(host);
+	scsi_host_put(shost);
 	return 0;
 }
 
@@ -882,7 +881,7 @@ static int adpt_reboot_event(struct notifier_block *n, ulong code, void *p)
 #endif
 
 
-static int adpt_install_hba(struct scsi_host_template* sht, struct pci_dev* pDev) 
+static int adpt_install_hba(struct pci_dev* pDev)
 {
 
 	adpt_hba* pHba = NULL;
@@ -950,16 +949,14 @@ static int adpt_install_hba(struct scsi_host_template* sht, struct pci_dev* pDev
 	}
 	
 	// Allocate and zero the data structure
-	pHba = kmalloc(sizeof(adpt_hba), GFP_KERNEL);
-	if( pHba == NULL) {
-		if(msg_addr_virt != base_addr_virt){
+	pHba = kzalloc(sizeof(adpt_hba), GFP_KERNEL);
+	if (!pHba) {
+		if (msg_addr_virt != base_addr_virt)
 			iounmap(msg_addr_virt);
-		}
 		iounmap(base_addr_virt);
 		pci_release_regions(pDev);
 		return -ENOMEM;
 	}
-	memset(pHba, 0, sizeof(adpt_hba));
 
 	mutex_lock(&adpt_configuration_lock);
 
@@ -1031,8 +1028,6 @@ static void adpt_i2o_delete_hba(adpt_hba* pHba)
 
 
 	mutex_lock(&adpt_configuration_lock);
-	// scsi_unregister calls our adpt_release which
-	// does a quiese
 	if(pHba->host){
 		free_irq(pHba->host->irq, pHba);
 	}
@@ -1081,17 +1076,6 @@ static void adpt_i2o_delete_hba(adpt_hba* pHba)
 	if(hba_count <= 0){
 		unregister_chrdev(DPTI_I2O_MAJOR, DPT_DRIVER);   
 	}
-}
-
-
-static int adpt_init(void)
-{
-	printk("Loading Adaptec I2O RAID: Version " DPT_I2O_VERSION "\n");
-#ifdef REBOOT_NOTIFIER
-	register_reboot_notifier(&adpt_reboot_notifier);
-#endif
-
-	return 0;
 }
 
 
@@ -2078,12 +2062,13 @@ static s32 adpt_scsi_to_i2o(adpt_hba* pHba, struct scsi_cmnd* cmd, struct adpt_d
 	u32 *lenptr;
 	int direction;
 	int scsidir;
+	int nseg;
 	u32 len;
 	u32 reqlen;
 	s32 rcode;
 
 	memset(msg, 0 , sizeof(msg));
-	len = cmd->request_bufflen;
+	len = scsi_bufflen(cmd);
 	direction = 0x00000000;	
 	
 	scsidir = 0x00000000;			// DATA NO XFER
@@ -2140,21 +2125,21 @@ static s32 adpt_scsi_to_i2o(adpt_hba* pHba, struct scsi_cmnd* cmd, struct adpt_d
 	lenptr=mptr++;		/* Remember me - fill in when we know */
 	reqlen = 14;		// SINGLE SGE
 	/* Now fill in the SGList and command */
-	if(cmd->use_sg) {
-		struct scatterlist *sg = (struct scatterlist *)cmd->request_buffer;
-		int sg_count = pci_map_sg(pHba->pDev, sg, cmd->use_sg,
-				cmd->sc_data_direction);
 
+	nseg = scsi_dma_map(cmd);
+	BUG_ON(nseg < 0);
+	if (nseg) {
+		struct scatterlist *sg;
 
 		len = 0;
-		for(i = 0 ; i < sg_count; i++) {
+		scsi_for_each_sg(cmd, sg, nseg, i) {
 			*mptr++ = direction|0x10000000|sg_dma_len(sg);
 			len+=sg_dma_len(sg);
 			*mptr++ = sg_dma_address(sg);
-			sg++;
+			/* Make this an end of list */
+			if (i == nseg - 1)
+				mptr[-2] = direction|0xD0000000|sg_dma_len(sg);
 		}
-		/* Make this an end of list */
-		mptr[-2] = direction|0xD0000000|sg_dma_len(sg-1);
 		reqlen = mptr - msg;
 		*lenptr = len;
 		
@@ -2163,16 +2148,8 @@ static s32 adpt_scsi_to_i2o(adpt_hba* pHba, struct scsi_cmnd* cmd, struct adpt_d
 				len, cmd->underflow);
 		}
 	} else {
-		*lenptr = len = cmd->request_bufflen;
-		if(len == 0) {
-			reqlen = 12;
-		} else {
-			*mptr++ = 0xD0000000|direction|cmd->request_bufflen;
-			*mptr++ = pci_map_single(pHba->pDev,
-				cmd->request_buffer,
-				cmd->request_bufflen,
-				cmd->sc_data_direction);
-		}
+		*lenptr = len = 0;
+		reqlen = 12;
 	}
 	
 	/* Stick the headers on */
@@ -2184,37 +2161,6 @@ static s32 adpt_scsi_to_i2o(adpt_hba* pHba, struct scsi_cmnd* cmd, struct adpt_d
 		return 0;
 	}
 	return rcode;
-}
-
-
-static s32 adpt_scsi_register(adpt_hba* pHba,struct scsi_host_template * sht)
-{
-	struct Scsi_Host *host = NULL;
-
-	host = scsi_register(sht, sizeof(adpt_hba*));
-	if (host == NULL) {
-		printk ("%s: scsi_register returned NULL\n",pHba->name);
-		return -1;
-	}
-	host->hostdata[0] = (unsigned long)pHba;
-	pHba->host = host;
-
-	host->irq = pHba->pDev->irq;
-	/* no IO ports, so don't have to set host->io_port and 
-	 * host->n_io_port
-	 */
-	host->io_port = 0;
-	host->n_io_port = 0;
-				/* see comments in scsi_host.h */
-	host->max_id = 16;
-	host->max_lun = 256;
-	host->max_channel = pHba->top_scsi_channel + 1;
-	host->cmd_per_lun = 1;
-	host->unique_id = (uint) pHba;
-	host->sg_tablesize = pHba->sg_tablesize;
-	host->can_queue = pHba->post_fifo_size;
-
-	return 0;
 }
 
 
@@ -2232,7 +2178,7 @@ static s32 adpt_i2o_to_scsi(void __iomem *reply, struct scsi_cmnd* cmd)
 	hba_status = detailed_status >> 8;
 
 	// calculate resid for sg 
-	cmd->resid = cmd->request_bufflen - readl(reply+5);
+	scsi_set_resid(cmd, scsi_bufflen(cmd) - readl(reply+5));
 
 	pHba = (adpt_hba*) cmd->device->host->hostdata[0];
 
@@ -2674,14 +2620,13 @@ static s32 adpt_i2o_init_outbound_q(adpt_hba* pHba)
 
 	msg=(u32 __iomem *)(pHba->msg_addr_virt+m);
 
-	status = kmalloc(4,GFP_KERNEL|ADDR32);
-	if (status==NULL) {
+	status = kzalloc(4, GFP_KERNEL|ADDR32);
+	if (!status) {
 		adpt_send_nop(pHba, m);
 		printk(KERN_WARNING"%s: IOP reset failed - no free memory.\n",
 			pHba->name);
 		return -ENOMEM;
 	}
-	memset(status, 0, 4);
 
 	writel(EIGHT_WORD_MSG_SIZE| SGL_OFFSET_6, &msg[0]);
 	writel(I2O_CMD_OUTBOUND_INIT<<24 | HOST_TID<<12 | ADAPTER_TID, &msg[1]);
@@ -2720,12 +2665,11 @@ static s32 adpt_i2o_init_outbound_q(adpt_hba* pHba)
 
 	kfree(pHba->reply_pool);
 
-	pHba->reply_pool = kmalloc(pHba->reply_fifo_size * REPLY_FRAME_SIZE * 4, GFP_KERNEL|ADDR32);
-	if(!pHba->reply_pool){
-		printk(KERN_ERR"%s: Could not allocate reply pool\n",pHba->name);
-		return -1;
+	pHba->reply_pool = kzalloc(pHba->reply_fifo_size * REPLY_FRAME_SIZE * 4, GFP_KERNEL|ADDR32);
+	if (!pHba->reply_pool) {
+		printk(KERN_ERR "%s: Could not allocate reply pool\n", pHba->name);
+		return -ENOMEM;
 	}
-	memset(pHba->reply_pool, 0 , pHba->reply_fifo_size * REPLY_FRAME_SIZE * 4);
 
 	ptr = pHba->reply_pool;
 	for(i = 0; i < pHba->reply_fifo_size; i++) {
@@ -2936,12 +2880,11 @@ static int adpt_i2o_build_sys_table(void)
 
 	kfree(sys_tbl);
 
-	sys_tbl = kmalloc(sys_tbl_len, GFP_KERNEL|ADDR32);
-	if(!sys_tbl) {
+	sys_tbl = kzalloc(sys_tbl_len, GFP_KERNEL|ADDR32);
+	if (!sys_tbl) {
 		printk(KERN_WARNING "SysTab Set failed. Out of memory.\n");	
 		return -ENOMEM;
 	}
-	memset(sys_tbl, 0, sys_tbl_len);
 
 	sys_tbl->num_entries = hba_count;
 	sys_tbl->version = I2OVERSION;
@@ -3336,12 +3279,10 @@ static static void adpt_delay(int millisec)
 
 #endif
 
-static struct scsi_host_template driver_template = {
+static struct scsi_host_template adpt_template = {
 	.name			= "dpt_i2o",
 	.proc_name		= "dpt_i2o",
 	.proc_info		= adpt_proc_info,
-	.detect			= adpt_detect,	
-	.release		= adpt_release,
 	.info			= adpt_info,
 	.queuecommand		= adpt_queue,
 	.eh_abort_handler	= adpt_abort,
@@ -3354,6 +3295,64 @@ static struct scsi_host_template driver_template = {
 	.this_id		= 7,
 	.cmd_per_lun		= 1,
 	.use_clustering		= ENABLE_CLUSTERING,
+	.use_sg_chaining	= ENABLE_SG_CHAINING,
 };
-#include "scsi_module.c"
+
+static s32 adpt_scsi_register(adpt_hba* pHba)
+{
+	struct Scsi_Host *host;
+
+	host = scsi_host_alloc(&adpt_template, sizeof(adpt_hba*));
+	if (host == NULL) {
+		printk ("%s: scsi_host_alloc returned NULL\n",pHba->name);
+		return -1;
+	}
+	host->hostdata[0] = (unsigned long)pHba;
+	pHba->host = host;
+
+	host->irq = pHba->pDev->irq;
+	/* no IO ports, so don't have to set host->io_port and
+	 * host->n_io_port
+	 */
+	host->io_port = 0;
+	host->n_io_port = 0;
+				/* see comments in scsi_host.h */
+	host->max_id = 16;
+	host->max_lun = 256;
+	host->max_channel = pHba->top_scsi_channel + 1;
+	host->cmd_per_lun = 1;
+	host->unique_id = (uint) pHba;
+	host->sg_tablesize = pHba->sg_tablesize;
+	host->can_queue = pHba->post_fifo_size;
+
+	if (scsi_add_host(host, &pHba->pDev->dev)) {
+		scsi_host_put(host);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int __init adpt_init(void)
+{
+	int count;
+
+	printk("Loading Adaptec I2O RAID: Version " DPT_I2O_VERSION "\n");
+#ifdef REBOOT_NOTIFIER
+	register_reboot_notifier(&adpt_reboot_notifier);
+#endif
+
+	count = adpt_detect();
+
+	return count > 0 ? 0 : -ENODEV;
+}
+
+static void adpt_exit(void)
+{
+	while (hba_chain)
+		adpt_release(hba_chain);
+}
+
+module_init(adpt_init);
+module_exit(adpt_exit);
 MODULE_LICENSE("GPL");

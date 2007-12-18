@@ -234,15 +234,11 @@ acpi_status acpi_enter_sleep_state_prep(u8 sleep_state)
 				"While executing method _SST"));
 	}
 
-	/*
-	 * 1) Disable/Clear all GPEs
-	 */
-	status = acpi_hw_disable_all_gpes();
-	if (ACPI_FAILURE(status)) {
-		return_ACPI_STATUS(status);
-	}
+	/* Disable/Clear all GPEs */
 
-	return_ACPI_STATUS(AE_OK);
+	status = acpi_hw_disable_all_gpes();
+
+	return_ACPI_STATUS(status);
 }
 
 ACPI_EXPORT_SYMBOL(acpi_enter_sleep_state_prep)
@@ -313,8 +309,7 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	/* Get current value of PM1A control */
 
-	status = acpi_hw_register_read(ACPI_MTX_DO_NOT_LOCK,
-				       ACPI_REGISTER_PM1_CONTROL, &PM1Acontrol);
+	status = acpi_hw_register_read(ACPI_REGISTER_PM1_CONTROL, &PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
@@ -341,15 +336,13 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	/* Write #1: fill in SLP_TYP data */
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1A_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 					PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1B_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 					PM1Bcontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
@@ -364,15 +357,13 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	ACPI_FLUSH_CPU_CACHE();
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1A_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 					PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1B_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 					PM1Bcontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
@@ -392,8 +383,7 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 		 */
 		acpi_os_stall(10000000);
 
-		status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						ACPI_REGISTER_PM1_CONTROL,
+		status = acpi_hw_register_write(ACPI_REGISTER_PM1_CONTROL,
 						sleep_enable_reg_info->
 						access_bit_mask);
 		if (ACPI_FAILURE(status)) {
@@ -404,7 +394,8 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 	/* Wait until we enter sleep state */
 
 	do {
-		status = acpi_get_register(ACPI_BITREG_WAKE_STATUS, &in_value);
+		status = acpi_get_register_unlocked(ACPI_BITREG_WAKE_STATUS,
+						    &in_value);
 		if (ACPI_FAILURE(status)) {
 			return_ACPI_STATUS(status);
 		}
@@ -520,8 +511,7 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 
 		/* Get current value of PM1A control */
 
-		status = acpi_hw_register_read(ACPI_MTX_DO_NOT_LOCK,
-					       ACPI_REGISTER_PM1_CONTROL,
+		status = acpi_hw_register_read(ACPI_REGISTER_PM1_CONTROL,
 					       &PM1Acontrol);
 		if (ACPI_SUCCESS(status)) {
 
@@ -543,11 +533,9 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 
 			/* Just ignore any errors */
 
-			(void)acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						     ACPI_REGISTER_PM1A_CONTROL,
+			(void)acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 						     PM1Acontrol);
-			(void)acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						     ACPI_REGISTER_PM1B_CONTROL,
+			(void)acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 						     PM1Bcontrol);
 		}
 	}
@@ -576,13 +564,10 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 		ACPI_EXCEPTION((AE_INFO, status, "During Method _BFS"));
 	}
 
-	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
-	}
-	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
-
 	/*
+	 * GPEs must be enabled before _WAK is called as GPEs
+	 * might get fired there
+	 *
 	 * Restore the GPEs:
 	 * 1) Disable/Clear all GPEs
 	 * 2) Enable all runtime GPEs
@@ -591,12 +576,18 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
-	acpi_gbl_system_awake_and_running = TRUE;
-
 	status = acpi_hw_enable_all_runtime_gpes();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
+
+	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
+	}
+	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
+
+	acpi_gbl_system_awake_and_running = TRUE;
 
 	/* Enable power button */
 

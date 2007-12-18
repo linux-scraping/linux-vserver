@@ -181,7 +181,7 @@ static void _fd_chose_dma_mode(char *addr, unsigned long size)
 {
 	if(can_use_virtual_dma == 2) {
 		if((unsigned int) addr >= (unsigned int) high_memory ||
-		   virt_to_bus(addr) >= 0x10000000)
+		   virt_to_phys(addr) >= 0x10000000)
 			use_virtual_dma = 1;
 		else
 			use_virtual_dma = 0;
@@ -213,13 +213,13 @@ static int hard_dma_setup(char *addr, unsigned long size, int mode, int io)
 	}
 #endif
 
-	dma_cache_wback_inv(addr, size);
+	__flush_purge_region(addr, size);
 
 	/* actual, physical DMA */
 	doing_pdma = 0;
 	clear_dma_ff(FLOPPY_DMA);
 	set_dma_mode(FLOPPY_DMA,mode);
-	set_dma_addr(FLOPPY_DMA,virt_to_bus(addr));
+	set_dma_addr(FLOPPY_DMA,virt_to_phys(addr));
 	set_dma_count(FLOPPY_DMA,size);
 	enable_dma(FLOPPY_DMA);
 	return 0;
@@ -262,10 +262,6 @@ static int FDC2 = -1;
 
 #define N_FDC 2
 #define N_DRIVE 8
-
-#define FLOPPY_MOTOR_MASK 0xf0
-
-#define AUTO_DMA
 
 #define EXTRA_FLOPPY_PARAMS
 

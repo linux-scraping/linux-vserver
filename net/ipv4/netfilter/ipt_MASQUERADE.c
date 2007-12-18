@@ -27,17 +27,11 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("iptables MASQUERADE target module");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
 /* Lock protects masq region inside conntrack */
 static DEFINE_RWLOCK(masq_lock);
 
 /* FIXME: Multiple targets. --RR */
-static int
+static bool
 masquerade_check(const char *tablename,
 		 const void *e,
 		 const struct xt_target *target,
@@ -47,18 +41,18 @@ masquerade_check(const char *tablename,
 	const struct nf_nat_multi_range_compat *mr = targinfo;
 
 	if (mr->range[0].flags & IP_NAT_RANGE_MAP_IPS) {
-		DEBUGP("masquerade_check: bad MAP_IPS.\n");
-		return 0;
+		pr_debug("masquerade_check: bad MAP_IPS.\n");
+		return false;
 	}
 	if (mr->rangesize != 1) {
-		DEBUGP("masquerade_check: bad rangesize %u.\n", mr->rangesize);
-		return 0;
+		pr_debug("masquerade_check: bad rangesize %u\n", mr->rangesize);
+		return false;
 	}
-	return 1;
+	return true;
 }
 
 static unsigned int
-masquerade_target(struct sk_buff **pskb,
+masquerade_target(struct sk_buff *skb,
 		  const struct net_device *in,
 		  const struct net_device *out,
 		  unsigned int hooknum,
@@ -70,12 +64,12 @@ masquerade_target(struct sk_buff **pskb,
 	enum ip_conntrack_info ctinfo;
 	struct nf_nat_range newrange;
 	const struct nf_nat_multi_range_compat *mr;
-	struct rtable *rt;
+	const struct rtable *rt;
 	__be32 newsrc;
 
 	NF_CT_ASSERT(hooknum == NF_IP_POST_ROUTING);
 
-	ct = nf_ct_get(*pskb, &ctinfo);
+	ct = nf_ct_get(skb, &ctinfo);
 	nat = nfct_nat(ct);
 
 	NF_CT_ASSERT(ct && (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED
@@ -88,7 +82,7 @@ masquerade_target(struct sk_buff **pskb,
 		return NF_ACCEPT;
 
 	mr = targinfo;
-	rt = (struct rtable *)(*pskb)->dst;
+	rt = (struct rtable *)skb->dst;
 	newsrc = inet_select_addr(out, rt->rt_gateway, RT_SCOPE_UNIVERSE);
 	if (!newsrc) {
 		printk("MASQUERADE: %s ate my IP address\n", out->name);
@@ -109,10 +103,10 @@ masquerade_target(struct sk_buff **pskb,
 	return nf_nat_setup_info(ct, &newrange, hooknum);
 }
 
-static inline int
+static int
 device_cmp(struct nf_conn *i, void *ifindex)
 {
-	struct nf_conn_nat *nat = nfct_nat(i);
+	const struct nf_conn_nat *nat = nfct_nat(i);
 	int ret;
 
 	if (!nat)
@@ -129,7 +123,10 @@ static int masq_device_event(struct notifier_block *this,
 			     unsigned long event,
 			     void *ptr)
 {
-	struct net_device *dev = ptr;
+	const struct net_device *dev = ptr;
+
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
 
 	if (event == NETDEV_DOWN) {
 		/* Device was downed.  Search entire table for
@@ -147,7 +144,7 @@ static int masq_inet_event(struct notifier_block *this,
 			   unsigned long event,
 			   void *ptr)
 {
-	struct net_device *dev = ((struct in_ifaddr *)ptr)->ifa_dev->dev;
+	const struct net_device *dev = ((struct in_ifaddr *)ptr)->ifa_dev->dev;
 
 	if (event == NETDEV_DOWN) {
 		/* IP address was deleted.  Search entire table for
@@ -169,7 +166,7 @@ static struct notifier_block masq_inet_notifier = {
 	.notifier_call	= masq_inet_event,
 };
 
-static struct xt_target masquerade = {
+static struct xt_target masquerade __read_mostly = {
 	.name		= "MASQUERADE",
 	.family		= AF_INET,
 	.target		= masquerade_target,

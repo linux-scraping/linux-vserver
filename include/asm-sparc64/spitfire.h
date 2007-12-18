@@ -1,7 +1,6 @@
-/* $Id: spitfire.h,v 1.18 2001/11/29 16:42:10 kanoj Exp $
- * spitfire.h: SpitFire/BlackBird/Cheetah inline MMU operations.
+/* spitfire.h: SpitFire/BlackBird/Cheetah inline MMU operations.
  *
- * Copyright (C) 1996 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
  */
 
 #ifndef _SPARC64_SPITFIRE_H
@@ -38,6 +37,11 @@
 
 #define L1DCACHE_SIZE		0x4000
 
+#define SUN4V_CHIP_INVALID	0x00
+#define SUN4V_CHIP_NIAGARA1	0x01
+#define SUN4V_CHIP_NIAGARA2	0x02
+#define SUN4V_CHIP_UNKNOWN	0xff
+
 #ifndef __ASSEMBLY__
 
 enum ultra_tlb_layout {
@@ -48,6 +52,8 @@ enum ultra_tlb_layout {
 };
 
 extern enum ultra_tlb_layout tlb_type;
+
+extern int sun4v_chip_type;
 
 extern int cheetah_pcache_forced_on;
 extern void cheetah_enable_pcache(void);
@@ -60,7 +66,7 @@ extern void cheetah_enable_pcache(void);
 /* The data cache is write through, so this just invalidates the
  * specified line.
  */
-static __inline__ void spitfire_put_dcache_tag(unsigned long addr, unsigned long tag)
+static inline void spitfire_put_dcache_tag(unsigned long addr, unsigned long tag)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -74,7 +80,7 @@ static __inline__ void spitfire_put_dcache_tag(unsigned long addr, unsigned long
  * a flush instruction (to any address) is sufficient to handle
  * this issue after the line is invalidated.
  */
-static __inline__ void spitfire_put_icache_tag(unsigned long addr, unsigned long tag)
+static inline void spitfire_put_icache_tag(unsigned long addr, unsigned long tag)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -82,7 +88,7 @@ static __inline__ void spitfire_put_icache_tag(unsigned long addr, unsigned long
 			     : "r" (tag), "r" (addr), "i" (ASI_IC_TAG));
 }
 
-static __inline__ unsigned long spitfire_get_dtlb_data(int entry)
+static inline unsigned long spitfire_get_dtlb_data(int entry)
 {
 	unsigned long data;
 
@@ -96,7 +102,7 @@ static __inline__ unsigned long spitfire_get_dtlb_data(int entry)
 	return data;
 }
 
-static __inline__ unsigned long spitfire_get_dtlb_tag(int entry)
+static inline unsigned long spitfire_get_dtlb_tag(int entry)
 {
 	unsigned long tag;
 
@@ -106,7 +112,7 @@ static __inline__ unsigned long spitfire_get_dtlb_tag(int entry)
 	return tag;
 }
 
-static __inline__ void spitfire_put_dtlb_data(int entry, unsigned long data)
+static inline void spitfire_put_dtlb_data(int entry, unsigned long data)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -115,7 +121,7 @@ static __inline__ void spitfire_put_dtlb_data(int entry, unsigned long data)
 			       "i" (ASI_DTLB_DATA_ACCESS));
 }
 
-static __inline__ unsigned long spitfire_get_itlb_data(int entry)
+static inline unsigned long spitfire_get_itlb_data(int entry)
 {
 	unsigned long data;
 
@@ -129,7 +135,7 @@ static __inline__ unsigned long spitfire_get_itlb_data(int entry)
 	return data;
 }
 
-static __inline__ unsigned long spitfire_get_itlb_tag(int entry)
+static inline unsigned long spitfire_get_itlb_tag(int entry)
 {
 	unsigned long tag;
 
@@ -139,7 +145,7 @@ static __inline__ unsigned long spitfire_get_itlb_tag(int entry)
 	return tag;
 }
 
-static __inline__ void spitfire_put_itlb_data(int entry, unsigned long data)
+static inline void spitfire_put_itlb_data(int entry, unsigned long data)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -148,7 +154,7 @@ static __inline__ void spitfire_put_itlb_data(int entry, unsigned long data)
 			       "i" (ASI_ITLB_DATA_ACCESS));
 }
 
-static __inline__ void spitfire_flush_dtlb_nucleus_page(unsigned long page)
+static inline void spitfire_flush_dtlb_nucleus_page(unsigned long page)
 {
 	__asm__ __volatile__("stxa	%%g0, [%0] %1\n\t"
 			     "membar	#Sync"
@@ -156,7 +162,7 @@ static __inline__ void spitfire_flush_dtlb_nucleus_page(unsigned long page)
 			     : "r" (page | 0x20), "i" (ASI_DMMU_DEMAP));
 }
 
-static __inline__ void spitfire_flush_itlb_nucleus_page(unsigned long page)
+static inline void spitfire_flush_itlb_nucleus_page(unsigned long page)
 {
 	__asm__ __volatile__("stxa	%%g0, [%0] %1\n\t"
 			     "membar	#Sync"
@@ -165,7 +171,7 @@ static __inline__ void spitfire_flush_itlb_nucleus_page(unsigned long page)
 }
 
 /* Cheetah has "all non-locked" tlb flushes. */
-static __inline__ void cheetah_flush_dtlb_all(void)
+static inline void cheetah_flush_dtlb_all(void)
 {
 	__asm__ __volatile__("stxa	%%g0, [%0] %1\n\t"
 			     "membar	#Sync"
@@ -173,7 +179,7 @@ static __inline__ void cheetah_flush_dtlb_all(void)
 			     : "r" (0x80), "i" (ASI_DMMU_DEMAP));
 }
 
-static __inline__ void cheetah_flush_itlb_all(void)
+static inline void cheetah_flush_itlb_all(void)
 {
 	__asm__ __volatile__("stxa	%%g0, [%0] %1\n\t"
 			     "membar	#Sync"
@@ -195,7 +201,7 @@ static __inline__ void cheetah_flush_itlb_all(void)
  * ASI_{D,I}TLB_DATA_ACCESS loads, doing the load twice fixes
  * the problem for me. -DaveM
  */
-static __inline__ unsigned long cheetah_get_ldtlb_data(int entry)
+static inline unsigned long cheetah_get_ldtlb_data(int entry)
 {
 	unsigned long data;
 
@@ -208,7 +214,7 @@ static __inline__ unsigned long cheetah_get_ldtlb_data(int entry)
 	return data;
 }
 
-static __inline__ unsigned long cheetah_get_litlb_data(int entry)
+static inline unsigned long cheetah_get_litlb_data(int entry)
 {
 	unsigned long data;
 
@@ -221,7 +227,7 @@ static __inline__ unsigned long cheetah_get_litlb_data(int entry)
 	return data;
 }
 
-static __inline__ unsigned long cheetah_get_ldtlb_tag(int entry)
+static inline unsigned long cheetah_get_ldtlb_tag(int entry)
 {
 	unsigned long tag;
 
@@ -233,7 +239,7 @@ static __inline__ unsigned long cheetah_get_ldtlb_tag(int entry)
 	return tag;
 }
 
-static __inline__ unsigned long cheetah_get_litlb_tag(int entry)
+static inline unsigned long cheetah_get_litlb_tag(int entry)
 {
 	unsigned long tag;
 
@@ -245,7 +251,7 @@ static __inline__ unsigned long cheetah_get_litlb_tag(int entry)
 	return tag;
 }
 
-static __inline__ void cheetah_put_ldtlb_data(int entry, unsigned long data)
+static inline void cheetah_put_ldtlb_data(int entry, unsigned long data)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -255,7 +261,7 @@ static __inline__ void cheetah_put_ldtlb_data(int entry, unsigned long data)
 			       "i" (ASI_DTLB_DATA_ACCESS));
 }
 
-static __inline__ void cheetah_put_litlb_data(int entry, unsigned long data)
+static inline void cheetah_put_litlb_data(int entry, unsigned long data)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -265,7 +271,7 @@ static __inline__ void cheetah_put_litlb_data(int entry, unsigned long data)
 			       "i" (ASI_ITLB_DATA_ACCESS));
 }
 
-static __inline__ unsigned long cheetah_get_dtlb_data(int entry, int tlb)
+static inline unsigned long cheetah_get_dtlb_data(int entry, int tlb)
 {
 	unsigned long data;
 
@@ -277,7 +283,7 @@ static __inline__ unsigned long cheetah_get_dtlb_data(int entry, int tlb)
 	return data;
 }
 
-static __inline__ unsigned long cheetah_get_dtlb_tag(int entry, int tlb)
+static inline unsigned long cheetah_get_dtlb_tag(int entry, int tlb)
 {
 	unsigned long tag;
 
@@ -287,7 +293,7 @@ static __inline__ unsigned long cheetah_get_dtlb_tag(int entry, int tlb)
 	return tag;
 }
 
-static __inline__ void cheetah_put_dtlb_data(int entry, unsigned long data, int tlb)
+static inline void cheetah_put_dtlb_data(int entry, unsigned long data, int tlb)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"
@@ -297,7 +303,7 @@ static __inline__ void cheetah_put_dtlb_data(int entry, unsigned long data, int 
 			       "i" (ASI_DTLB_DATA_ACCESS));
 }
 
-static __inline__ unsigned long cheetah_get_itlb_data(int entry)
+static inline unsigned long cheetah_get_itlb_data(int entry)
 {
 	unsigned long data;
 
@@ -310,7 +316,7 @@ static __inline__ unsigned long cheetah_get_itlb_data(int entry)
 	return data;
 }
 
-static __inline__ unsigned long cheetah_get_itlb_tag(int entry)
+static inline unsigned long cheetah_get_itlb_tag(int entry)
 {
 	unsigned long tag;
 
@@ -320,7 +326,7 @@ static __inline__ unsigned long cheetah_get_itlb_tag(int entry)
 	return tag;
 }
 
-static __inline__ void cheetah_put_itlb_data(int entry, unsigned long data)
+static inline void cheetah_put_itlb_data(int entry, unsigned long data)
 {
 	__asm__ __volatile__("stxa	%0, [%1] %2\n\t"
 			     "membar	#Sync"

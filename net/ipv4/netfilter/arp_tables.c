@@ -197,7 +197,7 @@ static inline int arp_checkentry(const struct arpt_arp *arp)
 	return 1;
 }
 
-static unsigned int arpt_error(struct sk_buff **pskb,
+static unsigned int arpt_error(struct sk_buff *skb,
 			       const struct net_device *in,
 			       const struct net_device *out,
 			       unsigned int hooknum,
@@ -215,7 +215,7 @@ static inline struct arpt_entry *get_entry(void *base, unsigned int offset)
 	return (struct arpt_entry *)(base + offset);
 }
 
-unsigned int arpt_do_table(struct sk_buff **pskb,
+unsigned int arpt_do_table(struct sk_buff *skb,
 			   unsigned int hook,
 			   const struct net_device *in,
 			   const struct net_device *out,
@@ -224,16 +224,16 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 	static const char nulldevname[IFNAMSIZ];
 	unsigned int verdict = NF_DROP;
 	struct arphdr *arp;
-	int hotdrop = 0;
+	bool hotdrop = false;
 	struct arpt_entry *e, *back;
 	const char *indev, *outdev;
 	void *table_base;
 	struct xt_table_info *private;
 
 	/* ARP header, plus 2 device addresses, plus 2 IP addresses.  */
-	if (!pskb_may_pull((*pskb), (sizeof(struct arphdr) +
-				     (2 * (*pskb)->dev->addr_len) +
-				     (2 * sizeof(u32)))))
+	if (!pskb_may_pull(skb, (sizeof(struct arphdr) +
+				 (2 * skb->dev->addr_len) +
+				 (2 * sizeof(u32)))))
 		return NF_DROP;
 
 	indev = in ? in->name : nulldevname;
@@ -245,14 +245,14 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 	e = get_entry(table_base, private->hook_entry[hook]);
 	back = get_entry(table_base, private->underflow[hook]);
 
-	arp = arp_hdr(*pskb);
+	arp = arp_hdr(skb);
 	do {
-		if (arp_packet_match(arp, (*pskb)->dev, indev, outdev, &e->arp)) {
+		if (arp_packet_match(arp, skb->dev, indev, outdev, &e->arp)) {
 			struct arpt_entry_target *t;
 			int hdr_len;
 
 			hdr_len = sizeof(*arp) + (2 * sizeof(struct in_addr)) +
-				(2 * (*pskb)->dev->addr_len);
+				(2 * skb->dev->addr_len);
 			ADD_COUNTER(e->counters, hdr_len, 1);
 
 			t = arpt_get_target(e);
@@ -290,14 +290,14 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 				/* Targets which reenter must return
 				 * abs. verdicts
 				 */
-				verdict = t->u.kernel.target->target(pskb,
+				verdict = t->u.kernel.target->target(skb,
 								     in, out,
 								     hook,
 								     t->u.kernel.target,
 								     t->data);
 
 				/* Target might have changed stuff. */
-				arp = arp_hdr(*pskb);
+				arp = arp_hdr(skb);
 
 				if (verdict == ARPT_CONTINUE)
 					e = (void *)e + e->next_offset;
@@ -1140,13 +1140,13 @@ void arpt_unregister_table(struct arpt_table *table)
 }
 
 /* The built-in targets: standard (NULL) and error. */
-static struct arpt_target arpt_standard_target = {
+static struct arpt_target arpt_standard_target __read_mostly = {
 	.name		= ARPT_STANDARD_TARGET,
 	.targetsize	= sizeof(int),
 	.family		= NF_ARP,
 };
 
-static struct arpt_target arpt_error_target = {
+static struct arpt_target arpt_error_target __read_mostly = {
 	.name		= ARPT_ERROR_TARGET,
 	.target		= arpt_error,
 	.targetsize	= ARPT_FUNCTION_MAXNAMELEN,
@@ -1161,6 +1161,7 @@ static struct nf_sockopt_ops arpt_sockopts = {
 	.get_optmin	= ARPT_BASE_CTL,
 	.get_optmax	= ARPT_SO_GET_MAX+1,
 	.get		= do_arpt_get_ctl,
+	.owner		= THIS_MODULE,
 };
 
 static int __init arp_tables_init(void)
@@ -1184,7 +1185,7 @@ static int __init arp_tables_init(void)
 	if (ret < 0)
 		goto err4;
 
-	printk("arp_tables: (C) 2002 David S. Miller\n");
+	printk(KERN_INFO "arp_tables: (C) 2002 David S. Miller\n");
 	return 0;
 
 err4:

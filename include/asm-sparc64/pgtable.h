@@ -42,6 +42,9 @@
 #define HI_OBP_ADDRESS		_AC(0x0000000100000000,UL)
 #define VMALLOC_START		_AC(0x0000000100000000,UL)
 #define VMALLOC_END		_AC(0x0000000200000000,UL)
+#define VMEMMAP_BASE		_AC(0x0000000200000000,UL)
+
+#define vmemmap			((struct page *)VMEMMAP_BASE)
 
 /* XXX All of this needs to be rethought so we can take advantage
  * XXX cheetah's full 64-bit virtual address space, ie. no more hole
@@ -569,24 +572,6 @@ static inline unsigned long pte_exec(pte_t pte)
 	"	.previous\n"
 	: "=r" (mask)
 	: "i" (_PAGE_EXEC_4U), "i" (_PAGE_EXEC_4V));
-
-	return (pte_val(pte) & mask);
-}
-
-static inline unsigned long pte_read(pte_t pte)
-{
-	unsigned long mask;
-
-	__asm__ __volatile__(
-	"\n661:	mov		%1, %0\n"
-	"	nop\n"
-	"	.section	.sun4v_2insn_patch, \"ax\"\n"
-	"	.word		661b\n"
-	"	sethi		%%uhi(%2), %0\n"
-	"	sllx		%0, 32, %0\n"
-	"	.previous\n"
-	: "=r" (mask)
-	: "i" (_PAGE_READ_4U), "i" (_PAGE_READ_4V));
 
 	return (pte_val(pte) & mask);
 }

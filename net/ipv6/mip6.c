@@ -30,6 +30,7 @@
 #include <net/sock.h>
 #include <net/ipv6.h>
 #include <net/ip6_checksum.h>
+#include <net/rawv6.h>
 #include <net/xfrm.h>
 #include <net/mip6.h>
 
@@ -86,7 +87,7 @@ static int mip6_mh_len(int type)
 	return len;
 }
 
-int mip6_mh_filter(struct sock *sk, struct sk_buff *skb)
+static int mip6_mh_filter(struct sock *sk, struct sk_buff *skb)
 {
 	struct ip6_mh *mh;
 
@@ -152,11 +153,11 @@ static int mip6_destopt_output(struct xfrm_state *x, struct sk_buff *skb)
 	u8 nexthdr;
 	int len;
 
-	iph = (struct ipv6hdr *)skb->data;
-	iph->payload_len = htons(skb->len - sizeof(*iph));
+	skb_push(skb, -skb_network_offset(skb));
+	iph = ipv6_hdr(skb);
 
-	nexthdr = *skb_network_header(skb);
-	*skb_network_header(skb) = IPPROTO_DSTOPTS;
+	nexthdr = *skb_mac_header(skb);
+	*skb_mac_header(skb) = IPPROTO_DSTOPTS;
 
 	dstopt = (struct ipv6_destopt_hdr *)skb_transport_header(skb);
 	dstopt->nexthdr = nexthdr;
@@ -171,7 +172,9 @@ static int mip6_destopt_output(struct xfrm_state *x, struct sk_buff *skb)
 	len = ((char *)hao - (char *)dstopt) + sizeof(*hao);
 
 	memcpy(&hao->addr, &iph->saddr, sizeof(hao->addr));
+	spin_lock_bh(&x->lock);
 	memcpy(&iph->saddr, x->coaddr, sizeof(iph->saddr));
+	spin_unlock_bh(&x->lock);
 
 	BUG_TRAP(len == x->props.header_len);
 	dstopt->hdrlen = (x->props.header_len >> 3) - 1;
@@ -364,11 +367,11 @@ static int mip6_rthdr_output(struct xfrm_state *x, struct sk_buff *skb)
 	struct rt2_hdr *rt2;
 	u8 nexthdr;
 
-	iph = (struct ipv6hdr *)skb->data;
-	iph->payload_len = htons(skb->len - sizeof(*iph));
+	skb_push(skb, -skb_network_offset(skb));
+	iph = ipv6_hdr(skb);
 
-	nexthdr = *skb_network_header(skb);
-	*skb_network_header(skb) = IPPROTO_ROUTING;
+	nexthdr = *skb_mac_header(skb);
+	*skb_mac_header(skb) = IPPROTO_ROUTING;
 
 	rt2 = (struct rt2_hdr *)skb_transport_header(skb);
 	rt2->rt_hdr.nexthdr = nexthdr;
@@ -380,7 +383,9 @@ static int mip6_rthdr_output(struct xfrm_state *x, struct sk_buff *skb)
 	BUG_TRAP(rt2->rt_hdr.hdrlen == 2);
 
 	memcpy(&rt2->addr, &iph->daddr, sizeof(rt2->addr));
+	spin_lock_bh(&x->lock);
 	memcpy(&iph->daddr, x->coaddr, sizeof(iph->daddr));
+	spin_unlock_bh(&x->lock);
 
 	return 0;
 }
@@ -471,7 +476,7 @@ static struct xfrm_type mip6_rthdr_type =
 	.remote_addr	= mip6_xfrm_addr,
 };
 
-int __init mip6_init(void)
+static int __init mip6_init(void)
 {
 	printk(KERN_INFO "Mobile IPv6\n");
 
@@ -483,18 +488,35 @@ int __init mip6_init(void)
 		printk(KERN_INFO "%s: can't add xfrm type(rthdr)\n", __FUNCTION__);
 		goto mip6_rthdr_xfrm_fail;
 	}
+	if (rawv6_mh_filter_register(mip6_mh_filter) < 0) {
+		printk(KERN_INFO "%s: can't add rawv6 mh filter\n", __FUNCTION__);
+		goto mip6_rawv6_mh_fail;
+	}
+
+
 	return 0;
 
+ mip6_rawv6_mh_fail:
+	xfrm_unregister_type(&mip6_rthdr_type, AF_INET6);
  mip6_rthdr_xfrm_fail:
 	xfrm_unregister_type(&mip6_destopt_type, AF_INET6);
  mip6_destopt_xfrm_fail:
 	return -EAGAIN;
 }
 
-void __exit mip6_fini(void)
+static void __exit mip6_fini(void)
 {
+	if (rawv6_mh_filter_unregister(mip6_mh_filter) < 0)
+		printk(KERN_INFO "%s: can't remove rawv6 mh filter\n", __FUNCTION__);
 	if (xfrm_unregister_type(&mip6_rthdr_type, AF_INET6) < 0)
 		printk(KERN_INFO "%s: can't remove xfrm type(rthdr)\n", __FUNCTION__);
 	if (xfrm_unregister_type(&mip6_destopt_type, AF_INET6) < 0)
 		printk(KERN_INFO "%s: can't remove xfrm type(destopt)\n", __FUNCTION__);
 }
+
+module_init(mip6_init);
+module_exit(mip6_fini);
+
+MODULE_LICENSE("GPL");
+MODULE_ALIAS_XFRM_TYPE(AF_INET6, XFRM_PROTO_DSTOPTS);
+MODULE_ALIAS_XFRM_TYPE(AF_INET6, XFRM_PROTO_ROUTING);

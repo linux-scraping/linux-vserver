@@ -397,7 +397,6 @@ struct netdev_private {
 	unsigned char phys[MII_CNT];		/* MII device addresses, only first one used. */
 	struct pci_dev *pci_dev;
 	void __iomem *base;
-	unsigned char pci_rev_id;
 };
 
 /* The station address location in the EEPROM. */
@@ -467,8 +466,8 @@ static int __devinit sundance_probe1 (struct pci_dev *pdev,
 #else
 	int bar = 1;
 #endif
-	int phy, phy_idx = 0;
-
+	int phy, phy_end, phy_idx = 0;
+	DECLARE_MAC_BUF(mac);
 
 /* when built into the kernel, we only print version if device is found */
 #ifndef MODULE
@@ -486,7 +485,6 @@ static int __devinit sundance_probe1 (struct pci_dev *pdev,
 	dev = alloc_etherdev(sizeof(*np));
 	if (!dev)
 		return -ENOMEM;
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	if (pci_request_regions(pdev, DRV_NAME))
@@ -544,25 +542,29 @@ static int __devinit sundance_probe1 (struct pci_dev *pdev,
 	dev->change_mtu = &change_mtu;
 	pci_set_drvdata(pdev, dev);
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &np->pci_rev_id);
-
 	i = register_netdev(dev);
 	if (i)
 		goto err_out_unmap_rx;
 
-	printk(KERN_INFO "%s: %s at %p, ",
-		   dev->name, pci_id_tbl[chip_idx].name, ioaddr);
-	for (i = 0; i < 5; i++)
-			printk("%2.2x:", dev->dev_addr[i]);
-	printk("%2.2x, IRQ %d.\n", dev->dev_addr[i], irq);
+	printk(KERN_INFO "%s: %s at %p, %s, IRQ %d.\n",
+	       dev->name, pci_id_tbl[chip_idx].name, ioaddr,
+	       print_mac(mac, dev->dev_addr), irq);
 
 	np->phys[0] = 1;		/* Default setting */
 	np->mii_preamble_required++;
+
 	/*
 	 * It seems some phys doesn't deal well with address 0 being accessed
-	 * first, so leave address zero to the end of the loop (32 & 31).
+	 * first
 	 */
-	for (phy = 1; phy <= 32 && phy_idx < MII_CNT; phy++) {
+	if (sundance_pci_tbl[np->chip_id].device == 0x0200) {
+		phy = 0;
+		phy_end = 31;
+	} else {
+		phy = 1;
+		phy_end = 32;	/* wraps to zero, due to 'phy & 0x1f' */
+	}
+	for (; phy <= phy_end && phy_idx < MII_CNT; phy++) {
 		int phyx = phy & 0x1f;
 		int mii_status = mdio_read(dev, phyx, MII_BMSR);
 		if (mii_status != 0xffff  &&  mii_status != 0x0000) {
@@ -828,7 +830,7 @@ static int netdev_open(struct net_device *dev)
 	iowrite8(100, ioaddr + RxDMAPollPeriod);
 	iowrite8(127, ioaddr + TxDMAPollPeriod);
 	/* Fix DFE-580TX packet drop issue */
-	if (np->pci_rev_id >= 0x14)
+	if (np->pci_dev->revision >= 0x14)
 		iowrite8(0x01, ioaddr + DebugCtrl1);
 	netif_start_queue(dev);
 
@@ -1194,7 +1196,7 @@ static irqreturn_t intr_handler(int irq, void *dev_instance)
 			hw_frame_id = ioread8(ioaddr + TxFrameId);
 		}
 
-		if (np->pci_rev_id >= 0x14) {
+		if (np->pci_dev->revision >= 0x14) {
 			spin_lock(&np->lock);
 			for (; np->cur_tx - np->dirty_tx > 0; np->dirty_tx++) {
 				int entry = np->dirty_tx % TX_RING_SIZE;
@@ -1313,7 +1315,7 @@ static void rx_poll(unsigned long data)
 							    np->rx_buf_sz,
 							    PCI_DMA_FROMDEVICE);
 
-				eth_copy_and_sum(skb, np->rx_skbuff[entry]->data, pkt_len, 0);
+				skb_copy_to_linear_data(skb, np->rx_skbuff[entry]->data, pkt_len);
 				pci_dma_sync_single_for_device(np->pci_dev,
 							       desc->frag[0].addr,
 							       np->rx_buf_sz,
@@ -1589,7 +1591,6 @@ static const struct ethtool_ops ethtool_ops = {
 	.get_link = get_link,
 	.get_msglevel = get_msglevel,
 	.set_msglevel = set_msglevel,
-	.get_perm_addr = ethtool_op_get_perm_addr,
 };
 
 static int netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)

@@ -1,7 +1,6 @@
-/* $Id: floppy.h,v 1.32 2001/10/26 17:59:36 davem Exp $
- * asm-sparc64/floppy.h: Sparc specific parts of the Floppy driver.
+/* floppy.h: Sparc specific parts of the Floppy driver.
  *
- * Copyright (C) 1996 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1996, 2007 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1997 Jakub Jelinek (jj@sunsite.mff.cuni.cz)
  *
  * Ultra/PCI support added: Sep 1997  Eddie C. Dost  (ecd@skynet.be)
@@ -11,6 +10,7 @@
 #define __ASM_SPARC64_FLOPPY_H
 
 #include <linux/init.h>
+#include <linux/pci.h>
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
@@ -83,8 +83,6 @@ static struct sun_floppy_ops sun_fdops;
 #define fd_request_irq()          sun_fdops.fd_request_irq()
 #define fd_free_irq()             sun_fdops.fd_free_irq()
 #define fd_eject(drive)           sun_fdops.fd_eject(drive)
-
-static int FLOPPY_MOTOR_MASK = 0x10;
 
 /* Super paranoid... */
 #undef HAVE_DISABLE_HLT
@@ -622,7 +620,6 @@ isa_done:
 	sun_fdops.fd_eject = sun_pci_fd_eject;
 
         fdc_status = (unsigned long) &sun_fdc->status_82077;
-	FLOPPY_MOTOR_MASK = 0xf0;
 
 	allowed_drive_mask = 0;
 	sun_floppy_types[0] = 0;
@@ -729,7 +726,6 @@ static unsigned long __init sun_floppy_init(void)
 		sun_fdops.fd_eject = sun_pci_fd_eject;
 
         	fdc_status = (unsigned long) &sun_fdc->status_82077;
-		FLOPPY_MOTOR_MASK = 0xf0;
 
 		/*
 		 * XXX: Find out on which machines this is really needed.

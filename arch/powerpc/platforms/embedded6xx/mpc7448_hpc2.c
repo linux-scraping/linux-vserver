@@ -40,7 +40,6 @@
 #include <asm/pci-bridge.h>
 #include <asm/reg.h>
 #include <mm/mmu_decl.h>
-#include "mpc7448_hpc2.h"
 #include <asm/tsi108_pci.h>
 #include <asm/tsi108_irq.h>
 #include <asm/mpic.h>
@@ -54,15 +53,10 @@
 
 #define MPC7448HPC2_PCI_CFG_PHYS 0xfb000000
 
-#ifndef CONFIG_PCI
-isa_io_base = MPC7448_HPC2_ISA_IO_BASE;
-isa_mem_base = MPC7448_HPC2_ISA_MEM_BASE;
-pci_dram_offset = MPC7448_HPC2_PCI_MEM_OFFSET;
-#endif
-
 extern void _nmask_and_or_msr(unsigned long nmask, unsigned long or_val);
 
-int mpc7448_hpc2_exclude_device(u_char bus, u_char devfn)
+int mpc7448_hpc2_exclude_device(struct pci_controller *hose,
+				u_char bus, u_char devfn)
 {
 	if (bus == 0 && PCI_SLOT(devfn) == 0)
 		return PCIBIOS_DEVICE_NOT_FOUND;
@@ -80,7 +74,7 @@ static void __init mpc7448_hpc2_setup_arch(void)
 
 	/* setup PCI host bridge */
 #ifdef CONFIG_PCI
-	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
+	for_each_compatible_node(np, "pci", "tsi108-pci")
 		tsi108_setup_pci(np, MPC7448HPC2_PCI_CFG_PHYS, 0);
 
 	ppc_md.pci_exclude_device = mpc7448_hpc2_exclude_device;
@@ -96,7 +90,7 @@ static void __init mpc7448_hpc2_setup_arch(void)
 }
 
 /*
- * Interrupt setup and service.  Interrrupts on the mpc7448_hpc2 come
+ * Interrupt setup and service.  Interrupts on the mpc7448_hpc2 come
  * from the four external INT pins, PCI interrupts are routed via
  * PCI interrupt control registers, it generates internal IRQ23
  *

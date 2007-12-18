@@ -73,6 +73,7 @@
 #include <linux/termios.h>
 #include <linux/tty.h>
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 #include <linux/delay.h>
 
 #include <asm/io.h>
@@ -154,6 +155,7 @@ superio_init(struct pci_dev *pcidev)
 	struct superio_device *sio = &sio_dev;
 	struct pci_dev *pdev = sio->lio_pdev;
 	u16 word;
+	int ret;
 
 	if (sio->suckyio_irq_enabled)
 		return;
@@ -199,7 +201,8 @@ superio_init(struct pci_dev *pcidev)
 	pci_write_config_word (pdev, PCI_COMMAND, word);
 
 	pci_set_master (pdev);
-	pci_enable_device(pdev);
+	ret = pci_enable_device(pdev);
+	BUG_ON(ret < 0);	/* not too much we can do about this... */
 
 	/*
 	 * Next project is programming the onboard interrupt controllers.

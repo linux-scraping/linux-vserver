@@ -181,7 +181,7 @@ static int mpc52xx_psc_spi_transfer_rxtx(struct spi_device *spi,
 		}
 
 
-		/* enable interupts and wait for wake up
+		/* enable interrupts and wait for wake up
 		 * if just one byte is expected the Rx FIFO genererates no
 		 * FFULL interrupt, so activate the RxRDY interrupt
 		 */
@@ -270,6 +270,9 @@ static void mpc52xx_psc_spi_work(struct work_struct *work)
 	spin_unlock_irq(&mps->lock);
 }
 
+/* the spi->mode bits understood by this driver: */
+#define MODEBITS (SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_LSB_FIRST)
+
 static int mpc52xx_psc_spi_setup(struct spi_device *spi)
 {
 	struct mpc52xx_psc_spi *mps = spi_master_get_devdata(spi->master);
@@ -278,6 +281,12 @@ static int mpc52xx_psc_spi_setup(struct spi_device *spi)
 
 	if (spi->bits_per_word%8)
 		return -EINVAL;
+
+	if (spi->mode & ~MODEBITS) {
+		dev_dbg(&spi->dev, "setup: unsupported mode bits %x\n",
+			spi->mode & ~MODEBITS);
+		return -EINVAL;
+	}
 
 	if (!cs) {
 		cs = kzalloc(sizeof *cs, GFP_KERNEL);
@@ -494,7 +503,7 @@ static int __init mpc52xx_psc_spi_do_probe(struct device *dev, u32 regaddr,
 	INIT_LIST_HEAD(&mps->queue);
 
 	mps->workqueue = create_singlethread_workqueue(
-		master->cdev.dev->bus_id);
+		master->dev.parent->bus_id);
 	if (mps->workqueue == NULL) {
 		ret = -EBUSY;
 		goto free_irq;

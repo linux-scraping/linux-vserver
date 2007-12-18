@@ -14,8 +14,8 @@
 #include <linux/threads.h>
 #include <linux/kernel.h>
 #include <linux/cpumask.h>
+#include <linux/bitops.h>
 
-#include <asm/bitops.h>
 #include <asm/io.h>
 #include <asm/param.h>
 #include <asm/processor.h>
@@ -58,9 +58,8 @@ extern char no_int_routing __devinitdata;
 
 extern cpumask_t cpu_online_map;
 extern cpumask_t cpu_core_map[NR_CPUS];
-extern cpumask_t cpu_sibling_map[NR_CPUS];
+DECLARE_PER_CPU(cpumask_t, cpu_sibling_map);
 extern int smp_num_siblings;
-extern int smp_num_cpucores;
 extern void __iomem *ipi_base_addr;
 extern unsigned char smp_int_redirect;
 
@@ -116,7 +115,6 @@ max_xtp (void)
 extern int __cpu_disable (void);
 extern void __cpu_die (unsigned int cpu);
 extern void cpu_die (void) __attribute__ ((noreturn));
-extern int __cpu_up (unsigned int cpu);
 extern void __init smp_build_cpu_map(void);
 
 extern void __init init_smp_config (void);

@@ -225,6 +225,7 @@ static int sctp_eps_seq_show(struct seq_file *seq, void *v)
 	struct sctp_ep_common *epb;
 	struct sctp_endpoint *ep;
 	struct sock *sk;
+	struct hlist_node *node;
 	int    hash = *(loff_t *)v;
 
 	if (hash >= sctp_ep_hashsize)
@@ -233,7 +234,7 @@ static int sctp_eps_seq_show(struct seq_file *seq, void *v)
 	head = &sctp_ep_hashtable[hash];
 	sctp_local_bh_disable();
 	read_lock(&head->lock);
-	for (epb = head->chain; epb; epb = epb->next) {
+	sctp_for_each_hentry(epb, node, &head->chain) {
 		ep = sctp_ep(epb);
 		sk = epb->sk;
 		seq_printf(seq, "%8p %8p %-3d %-3d %-4d %-5d %5d %5lu ", ep, sk,
@@ -250,7 +251,7 @@ static int sctp_eps_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations sctp_eps_ops = {
+static const struct seq_operations sctp_eps_ops = {
 	.start = sctp_eps_seq_start,
 	.next  = sctp_eps_seq_next,
 	.stop  = sctp_eps_seq_stop,
@@ -328,6 +329,7 @@ static int sctp_assocs_seq_show(struct seq_file *seq, void *v)
 	struct sctp_ep_common *epb;
 	struct sctp_association *assoc;
 	struct sock *sk;
+	struct hlist_node *node;
 	int    hash = *(loff_t *)v;
 
 	if (hash >= sctp_assoc_hashsize)
@@ -336,7 +338,7 @@ static int sctp_assocs_seq_show(struct seq_file *seq, void *v)
 	head = &sctp_assoc_hashtable[hash];
 	sctp_local_bh_disable();
 	read_lock(&head->lock);
-	for (epb = head->chain; epb; epb = epb->next) {
+	sctp_for_each_hentry(epb, node, &head->chain) {
 		assoc = sctp_assoc(epb);
 		sk = epb->sk;
 		seq_printf(seq,
@@ -361,7 +363,7 @@ static int sctp_assocs_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations sctp_assoc_ops = {
+static const struct seq_operations sctp_assoc_ops = {
 	.start = sctp_assocs_seq_start,
 	.next  = sctp_assocs_seq_next,
 	.stop  = sctp_assocs_seq_stop,

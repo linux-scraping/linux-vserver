@@ -239,7 +239,7 @@ struct snd_ali_image {
 
 
 struct snd_ali {
-	unsigned long	irq;
+	int		irq;
 	unsigned long	port;
 	unsigned char	revision;
 
@@ -731,8 +731,7 @@ static void snd_ali_detect_spdif_rate(struct snd_ali *codec)
 		return;
 	}
 
-	count = 0;
-	while (count++ <= 50000) {
+	for (count = 0; count <= 50000; count++) {
 		snd_ali_delay(codec, 6);
 		bval = inb(ALI_REG(codec,ALI_SPDIF_CTRL + 1));
 		R2 = bval & 0x1F;
@@ -1805,15 +1804,7 @@ static int __devinit snd_ali_build_pcms(struct snd_ali *codec)
 .info = snd_ali5451_spdif_info, .get = snd_ali5451_spdif_get, \
 .put = snd_ali5451_spdif_put, .private_value = value}
 
-static int snd_ali5451_spdif_info(struct snd_kcontrol *kcontrol,
-				  struct snd_ctl_elem_info *uinfo)
-{
-        uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-        uinfo->count = 1;
-        uinfo->value.integer.min = 0;
-        uinfo->value.integer.max = 1;
-        return 0;
-}
+#define snd_ali5451_spdif_info		snd_ctl_boolean_mono_info
 
 static int snd_ali5451_spdif_get(struct snd_kcontrol *kcontrol,
 				 struct snd_ctl_elem_value *ucontrol)
@@ -2218,7 +2209,7 @@ static int __devinit snd_ali_create(struct snd_card *card,
 	codec->card = card;
 	codec->pci = pci;
 	codec->irq = -1;
-	pci_read_config_byte(pci, PCI_REVISION_ID, &codec->revision);
+	codec->revision = pci->revision;
 	codec->spdif_support = spdif_support;
 
 	if (pcm_streams < 1)
@@ -2343,7 +2334,7 @@ static int __devinit snd_ali_probe(struct pci_dev *pci,
 	strcpy(card->driver, "ALI5451");
 	strcpy(card->shortname, "ALI 5451");
 	
-	sprintf(card->longname, "%s at 0x%lx, irq %li",
+	sprintf(card->longname, "%s at 0x%lx, irq %i",
 		card->shortname, codec->port, codec->irq);
 
 	snd_ali_printk("register card.\n");

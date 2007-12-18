@@ -29,7 +29,7 @@
 
 #include <asm/mach/time.h>
 
-#include <asm/arch/regs-rtc.h>
+#include <asm/plat-s3c/regs-rtc.h>
 
 /* I have yet to find an S3C implementation with more than one
  * of these rtc blocks in */
@@ -541,8 +541,6 @@ static int s3c_rtc_probe(struct platform_device *pdev)
 #ifdef CONFIG_PM
 
 /* RTC Power management control */
-
-static struct timespec s3c_rtc_delta;
 
 static int ticnt_save;
 

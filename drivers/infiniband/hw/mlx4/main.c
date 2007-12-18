@@ -169,7 +169,7 @@ static int mlx4_ib_query_port(struct ib_device *ibdev, u8 port,
 	props->phys_state	= out_mad->data[33] >> 4;
 	props->port_cap_flags	= be32_to_cpup((__be32 *) (out_mad->data + 20));
 	props->gid_tbl_len	= to_mdev(ibdev)->dev->caps.gid_table_len[port];
-	props->max_msg_sz	= 0x80000000;
+	props->max_msg_sz	= to_mdev(ibdev)->dev->caps.max_msg_sz;
 	props->pkey_tbl_len	= to_mdev(ibdev)->dev->caps.pkey_table_len[port];
 	props->bad_pkey_cntr	= be16_to_cpup((__be16 *) (out_mad->data + 46));
 	props->qkey_viol_cntr	= be16_to_cpup((__be16 *) (out_mad->data + 48));
@@ -476,9 +476,48 @@ out:
 	return err;
 }
 
+static ssize_t show_hca(struct class_device *cdev, char *buf)
+{
+	struct mlx4_ib_dev *dev = container_of(cdev, struct mlx4_ib_dev, ib_dev.class_dev);
+	return sprintf(buf, "MT%d\n", dev->dev->pdev->device);
+}
+
+static ssize_t show_fw_ver(struct class_device *cdev, char *buf)
+{
+	struct mlx4_ib_dev *dev = container_of(cdev, struct mlx4_ib_dev, ib_dev.class_dev);
+	return sprintf(buf, "%d.%d.%d\n", (int) (dev->dev->caps.fw_ver >> 32),
+		       (int) (dev->dev->caps.fw_ver >> 16) & 0xffff,
+		       (int) dev->dev->caps.fw_ver & 0xffff);
+}
+
+static ssize_t show_rev(struct class_device *cdev, char *buf)
+{
+	struct mlx4_ib_dev *dev = container_of(cdev, struct mlx4_ib_dev, ib_dev.class_dev);
+	return sprintf(buf, "%x\n", dev->dev->rev_id);
+}
+
+static ssize_t show_board(struct class_device *cdev, char *buf)
+{
+	struct mlx4_ib_dev *dev = container_of(cdev, struct mlx4_ib_dev, ib_dev.class_dev);
+	return sprintf(buf, "%.*s\n", MLX4_BOARD_ID_LEN, dev->dev->board_id);
+}
+
+static CLASS_DEVICE_ATTR(hw_rev,   S_IRUGO, show_rev,    NULL);
+static CLASS_DEVICE_ATTR(fw_ver,   S_IRUGO, show_fw_ver, NULL);
+static CLASS_DEVICE_ATTR(hca_type, S_IRUGO, show_hca,    NULL);
+static CLASS_DEVICE_ATTR(board_id, S_IRUGO, show_board,  NULL);
+
+static struct class_device_attribute *mlx4_class_attributes[] = {
+	&class_device_attr_hw_rev,
+	&class_device_attr_fw_ver,
+	&class_device_attr_hca_type,
+	&class_device_attr_board_id
+};
+
 static void *mlx4_ib_add(struct mlx4_dev *dev)
 {
 	struct mlx4_ib_dev *ibdev;
+	int i;
 
 	ibdev = (struct mlx4_ib_dev *) ib_alloc_device(sizeof *ibdev);
 	if (!ibdev) {
@@ -523,11 +562,13 @@ static void *mlx4_ib_add(struct mlx4_dev *dev)
 		(1ull << IB_USER_VERBS_CMD_DESTROY_CQ)		|
 		(1ull << IB_USER_VERBS_CMD_CREATE_QP)		|
 		(1ull << IB_USER_VERBS_CMD_MODIFY_QP)		|
+		(1ull << IB_USER_VERBS_CMD_QUERY_QP)		|
 		(1ull << IB_USER_VERBS_CMD_DESTROY_QP)		|
 		(1ull << IB_USER_VERBS_CMD_ATTACH_MCAST)	|
 		(1ull << IB_USER_VERBS_CMD_DETACH_MCAST)	|
 		(1ull << IB_USER_VERBS_CMD_CREATE_SRQ)		|
 		(1ull << IB_USER_VERBS_CMD_MODIFY_SRQ)		|
+		(1ull << IB_USER_VERBS_CMD_QUERY_SRQ)		|
 		(1ull << IB_USER_VERBS_CMD_DESTROY_SRQ);
 
 	ibdev->ib_dev.query_device	= mlx4_ib_query_device;
@@ -546,10 +587,12 @@ static void *mlx4_ib_add(struct mlx4_dev *dev)
 	ibdev->ib_dev.destroy_ah	= mlx4_ib_destroy_ah;
 	ibdev->ib_dev.create_srq	= mlx4_ib_create_srq;
 	ibdev->ib_dev.modify_srq	= mlx4_ib_modify_srq;
+	ibdev->ib_dev.query_srq		= mlx4_ib_query_srq;
 	ibdev->ib_dev.destroy_srq	= mlx4_ib_destroy_srq;
 	ibdev->ib_dev.post_srq_recv	= mlx4_ib_post_srq_recv;
 	ibdev->ib_dev.create_qp		= mlx4_ib_create_qp;
 	ibdev->ib_dev.modify_qp		= mlx4_ib_modify_qp;
+	ibdev->ib_dev.query_qp		= mlx4_ib_query_qp;
 	ibdev->ib_dev.destroy_qp	= mlx4_ib_destroy_qp;
 	ibdev->ib_dev.post_send		= mlx4_ib_post_send;
 	ibdev->ib_dev.post_recv		= mlx4_ib_post_recv;
@@ -564,6 +607,11 @@ static void *mlx4_ib_add(struct mlx4_dev *dev)
 	ibdev->ib_dev.detach_mcast	= mlx4_ib_mcg_detach;
 	ibdev->ib_dev.process_mad	= mlx4_ib_process_mad;
 
+	ibdev->ib_dev.alloc_fmr		= mlx4_ib_fmr_alloc;
+	ibdev->ib_dev.map_phys_fmr	= mlx4_ib_map_phys_fmr;
+	ibdev->ib_dev.unmap_fmr		= mlx4_ib_unmap_fmr;
+	ibdev->ib_dev.dealloc_fmr	= mlx4_ib_fmr_dealloc;
+
 	if (init_node_data(ibdev))
 		goto err_map;
 
@@ -575,6 +623,12 @@ static void *mlx4_ib_add(struct mlx4_dev *dev)
 
 	if (mlx4_ib_mad_init(ibdev))
 		goto err_reg;
+
+	for (i = 0; i < ARRAY_SIZE(mlx4_class_attributes); ++i) {
+		if (class_device_create_file(&ibdev->ib_dev.class_dev,
+					       mlx4_class_attributes[i]))
+			goto err_reg;
+	}
 
 	return ibdev;
 

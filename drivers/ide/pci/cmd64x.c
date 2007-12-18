@@ -1,5 +1,5 @@
 /*
- * linux/drivers/ide/pci/cmd64x.c		Version 1.47	Mar 19, 2007
+ * linux/drivers/ide/pci/cmd64x.c		Version 1.51	Nov 8, 2007
  *
  * cmd64x.c: Enable interrupts at initialization time on Ultra/PCI machines.
  *           Due to massive hardware bugs, UltraDMA is only supported
@@ -52,9 +52,6 @@
 #define   ARTTIM23_DIS_RA2	0x04
 #define   ARTTIM23_DIS_RA3	0x08
 #define   ARTTIM23_INTR_CH1	0x10
-#define ARTTIM2		0x57
-#define ARTTIM3		0x57
-#define DRWTIM23	0x58
 #define DRWTIM2		0x58
 #define BRST		0x59
 #define DRWTIM3		0x5b
@@ -91,7 +88,6 @@ static char * print_cmd64x_get_info (char *buf, struct pci_dev *dev, int index)
 	u8 reg72 = 0, reg73 = 0;			/* primary */
 	u8 reg7a = 0, reg7b = 0;			/* secondary */
 	u8 reg50 = 1, reg51 = 1, reg57 = 0, reg71 = 0;	/* extra */
-	u8 rev = 0;
 
 	p += sprintf(p, "\nController: %d\n", index);
 	p += sprintf(p, "PCI-%x Chipset.\n", dev->device);
@@ -106,9 +102,8 @@ static char * print_cmd64x_get_info (char *buf, struct pci_dev *dev, int index)
 	(void) pci_read_config_byte(dev, UDIDETCR1, &reg7b);
 
 	/* PCI0643/6 originally didn't have the primary channel enable bit */
-	(void) pci_read_config_byte(dev, PCI_REVISION_ID, &rev);
 	if ((dev->device == PCI_DEVICE_ID_CMD_643) ||
-	    (dev->device == PCI_DEVICE_ID_CMD_646 && rev < 3))
+	    (dev->device == PCI_DEVICE_ID_CMD_646 && dev->revision < 3))
 		reg51 |= CNTRL_ENA_1ST;
 
 	p += sprintf(p, "---------------- Primary Channel "
@@ -219,27 +214,25 @@ static void program_cycle_times (ide_drive_t *drive, int cycle_time, int active_
 }
 
 /*
- * This routine selects drive's best PIO mode and writes into the chipset
- * registers setup/active/recovery timings.
+ * This routine writes into the chipset registers
+ * PIO setup/active/recovery timings.
  */
-static u8 cmd64x_tune_pio (ide_drive_t *drive, u8 mode_wanted)
+static void cmd64x_tune_pio(ide_drive_t *drive, const u8 pio)
 {
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
-	ide_pio_data_t pio;
-	u8 pio_mode, setup_count, arttim = 0;
+	unsigned int cycle_time;
+	u8 setup_count, arttim = 0;
+
 	static const u8 setup_values[] = {0x40, 0x40, 0x40, 0x80, 0, 0xc0};
 	static const u8 arttim_regs[4] = {ARTTIM0, ARTTIM1, ARTTIM23, ARTTIM23};
-	pio_mode = ide_get_best_pio_mode(drive, mode_wanted, 5, &pio);
 
-	cmdprintk("%s: PIO mode wanted %d, selected %d (%d ns)%s\n",
-		  drive->name, mode_wanted, pio_mode, pio.cycle_time,
-		  pio.overridden ? " (overriding vendor mode)" : "");
+	cycle_time = ide_pio_cycle_time(drive, pio);
 
-	program_cycle_times(drive, pio.cycle_time,
-			    ide_pio_timings[pio_mode].active_time);
+	program_cycle_times(drive, cycle_time,
+			    ide_pio_timings[pio].active_time);
 
-	setup_count = quantize_timing(ide_pio_timings[pio_mode].setup_time,
+	setup_count = quantize_timing(ide_pio_timings[pio].setup_time,
 				      1000 / system_bus_clock());
 
 	/*
@@ -270,16 +263,14 @@ static u8 cmd64x_tune_pio (ide_drive_t *drive, u8 mode_wanted)
 	arttim |= setup_values[setup_count];
 	(void) pci_write_config_byte(dev, arttim_regs[drive->dn], arttim);
 	cmdprintk("Write 0x%02x to reg 0x%x\n", arttim, arttim_regs[drive->dn]);
-
-	return pio_mode;
 }
 
 /*
  * Attempts to set drive's PIO mode.
- * Special cases are 8: prefetch off, 9: prefetch on (both never worked),
- * and 255: auto-select best mode (used at boot time).
+ * Special cases are 8: prefetch off, 9: prefetch on (both never worked)
  */
-static void cmd64x_tune_drive (ide_drive_t *drive, u8 pio)
+
+static void cmd64x_set_pio_mode(ide_drive_t *drive, const u8 pio)
 {
 	/*
 	 * Filter out the prefetch control values
@@ -288,18 +279,15 @@ static void cmd64x_tune_drive (ide_drive_t *drive, u8 pio)
 	if (pio == 8 || pio == 9)
 		return;
 
-	pio = cmd64x_tune_pio(drive, pio);
-	(void) ide_config_drive_speed(drive, XFER_PIO_0 + pio);
+	cmd64x_tune_pio(drive, pio);
 }
 
-static int cmd64x_tune_chipset (ide_drive_t *drive, u8 speed)
+static void cmd64x_set_dma_mode(ide_drive_t *drive, const u8 speed)
 {
 	ide_hwif_t *hwif	= HWIF(drive);
 	struct pci_dev *dev	= hwif->pci_dev;
 	u8 unit			= drive->dn & 0x01;
 	u8 regU = 0, pciU	= hwif->channel ? UDIDETCR1 : UDIDETCR0;
-
-	speed = ide_rate_filter(drive, speed);
 
 	if (speed >= XFER_SW_DMA_0) {
 		(void) pci_read_config_byte(dev, pciU, &regU);
@@ -334,33 +322,12 @@ static int cmd64x_tune_chipset (ide_drive_t *drive, u8 speed)
 	case XFER_MW_DMA_0:
 		program_cycle_times(drive, 480, 215);
 		break;
-	case XFER_PIO_5:
-	case XFER_PIO_4:
-	case XFER_PIO_3:
-	case XFER_PIO_2:
-	case XFER_PIO_1:
-	case XFER_PIO_0:
-		(void) cmd64x_tune_pio(drive, speed - XFER_PIO_0);
-		break;
 	default:
-		return 1;
+		return;
 	}
 
 	if (speed >= XFER_SW_DMA_0)
 		(void) pci_write_config_byte(dev, pciU, regU);
-
-	return ide_config_drive_speed(drive, speed);
-}
-
-static int cmd64x_config_drive_for_dma (ide_drive_t *drive)
-{
-	if (ide_tune_dma(drive))
-		return 0;
-
-	if (ide_use_fast_pio(drive))
-		cmd64x_tune_drive(drive, 255);
-
-	return -1;
 }
 
 static int cmd648_ide_dma_end (ide_drive_t *drive)
@@ -372,7 +339,8 @@ static int cmd648_ide_dma_end (ide_drive_t *drive)
 	u8  mrdmode		= inb(hwif->dma_master + 0x01);
 
 	/* clear the interrupt bit */
-	outb(mrdmode | irq_mask, hwif->dma_master + 0x01);
+	outb((mrdmode & ~(MRDMODE_INTR_CH0 | MRDMODE_INTR_CH1)) | irq_mask,
+	     hwif->dma_master + 0x01);
 
 	return err;
 }
@@ -469,71 +437,40 @@ static int cmd646_1_ide_dma_end (ide_drive_t *drive)
 
 static unsigned int __devinit init_chipset_cmd64x(struct pci_dev *dev, const char *name)
 {
-	u32 class_rev = 0;
 	u8 mrdmode = 0;
 
-	pci_read_config_dword(dev, PCI_CLASS_REVISION, &class_rev);
-	class_rev &= 0xff;
+	if (dev->device == PCI_DEVICE_ID_CMD_646) {
 
-	switch(dev->device) {
-		case PCI_DEVICE_ID_CMD_643:
+		switch (dev->revision) {
+		case 0x07:
+		case 0x05:
+			printk("%s: UltraDMA capable\n", name);
 			break;
-		case PCI_DEVICE_ID_CMD_646:
-			printk(KERN_INFO "%s: chipset revision 0x%02X, ", name, class_rev);
-			switch(class_rev) {
-				case 0x07:
-				case 0x05:
-					printk("UltraDMA Capable");
-					break;
-				case 0x03:
-					printk("MultiWord DMA Force Limited");
-					break;
-				case 0x01:
-				default:
-					printk("MultiWord DMA Limited, IRQ workaround enabled");
-					break;
-				}
-			printk("\n");
-                        break;
-		case PCI_DEVICE_ID_CMD_648:
-		case PCI_DEVICE_ID_CMD_649:
-			break;
+		case 0x03:
 		default:
+			printk("%s: MultiWord DMA force limited\n", name);
 			break;
+		case 0x01:
+			printk("%s: MultiWord DMA limited, "
+			       "IRQ workaround enabled\n", name);
+			break;
+		}
 	}
 
 	/* Set a good latency timer and cache line size value. */
 	(void) pci_write_config_byte(dev, PCI_LATENCY_TIMER, 64);
 	/* FIXME: pci_set_master() to ensure a good latency timer value */
 
-	/* Setup interrupts. */
-	(void) pci_read_config_byte(dev, MRDMODE, &mrdmode);
-	mrdmode &= ~(0x30);
-	(void) pci_write_config_byte(dev, MRDMODE, mrdmode);
-
-	/* Use MEMORY READ LINE for reads.
-	 * NOTE: Although not mentioned in the PCI0646U specs,
-	 *       these bits are write only and won't be read
-	 *       back as set or not.  The PCI0646U2 specs clarify
-	 *       this point.
+	/*
+	 * Enable interrupts, select MEMORY READ LINE for reads.
+	 *
+	 * NOTE: although not mentioned in the PCI0646U specs,
+	 * bits 0-1 are write only and won't be read back as
+	 * set or not -- PCI0646U2 specs clarify this point.
 	 */
-	(void) pci_write_config_byte(dev, MRDMODE, mrdmode | 0x02);
-
-	/* Set reasonable active/recovery/address-setup values. */
-	(void) pci_write_config_byte(dev, ARTTIM0,  0x40);
-	(void) pci_write_config_byte(dev, DRWTIM0,  0x3f);
-	(void) pci_write_config_byte(dev, ARTTIM1,  0x40);
-	(void) pci_write_config_byte(dev, DRWTIM1,  0x3f);
-#ifdef __i386__
-	(void) pci_write_config_byte(dev, ARTTIM23, 0x1c);
-#else
-	(void) pci_write_config_byte(dev, ARTTIM23, 0x5c);
-#endif
-	(void) pci_write_config_byte(dev, DRWTIM23, 0x3f);
-	(void) pci_write_config_byte(dev, DRWTIM3,  0x3f);
-#ifdef CONFIG_PPC
-	(void) pci_write_config_byte(dev, UDIDETCR0, 0xf0);
-#endif /* CONFIG_PPC */
+	(void) pci_read_config_byte (dev, MRDMODE, &mrdmode);
+	mrdmode &= ~0x30;
+	(void) pci_write_config_byte(dev, MRDMODE, (mrdmode | 0x02));
 
 #if defined(DISPLAY_CMD64X_TIMINGS) && defined(CONFIG_IDE_PROC_FS)
 
@@ -548,41 +485,30 @@ static unsigned int __devinit init_chipset_cmd64x(struct pci_dev *dev, const cha
 	return 0;
 }
 
-static unsigned int __devinit ata66_cmd64x(ide_hwif_t *hwif)
+static u8 __devinit ata66_cmd64x(ide_hwif_t *hwif)
 {
-	u8 ata66 = 0, mask = (hwif->channel) ? 0x02 : 0x01;
+	struct pci_dev  *dev	= hwif->pci_dev;
+	u8 bmidecsr = 0, mask	= hwif->channel ? 0x02 : 0x01;
 
-	switch(hwif->pci_dev->device) {
-		case PCI_DEVICE_ID_CMD_643:
-		case PCI_DEVICE_ID_CMD_646:
-			return ata66;
-		default:
-			break;
+	switch (dev->device) {
+	case PCI_DEVICE_ID_CMD_648:
+	case PCI_DEVICE_ID_CMD_649:
+ 		pci_read_config_byte(dev, BMIDECSR, &bmidecsr);
+		return (bmidecsr & mask) ? ATA_CBL_PATA80 : ATA_CBL_PATA40;
+	default:
+		return ATA_CBL_PATA40;
 	}
-	pci_read_config_byte(hwif->pci_dev, BMIDECSR, &ata66);
-	return (ata66 & mask) ? 1 : 0;
 }
 
 static void __devinit init_hwif_cmd64x(ide_hwif_t *hwif)
 {
 	struct pci_dev *dev	= hwif->pci_dev;
-	unsigned int class_rev;
 
-	hwif->autodma = 0;
-	pci_read_config_dword(dev, PCI_CLASS_REVISION, &class_rev);
-	class_rev &= 0xff;
-
-	hwif->tuneproc  = &cmd64x_tune_drive;
-	hwif->speedproc = &cmd64x_tune_chipset;
-
-	hwif->drives[0].autotune = hwif->drives[1].autotune = 1;
+	hwif->set_pio_mode = &cmd64x_set_pio_mode;
+	hwif->set_dma_mode = &cmd64x_set_dma_mode;
 
 	if (!hwif->dma_base)
 		return;
-
-	hwif->atapi_dma = 1;
-
-	hwif->ultra_mask = hwif->cds->udma_mask;
 
 	/*
 	 * UltraDMA only supported on PCI646U and PCI646U2, which
@@ -596,16 +522,13 @@ static void __devinit init_hwif_cmd64x(ide_hwif_t *hwif)
 	 *
 	 * So we only do UltraDMA on revision 0x05 and 0x07 chipsets.
 	 */
-	if (dev->device == PCI_DEVICE_ID_CMD_646 && class_rev < 5)
+	if (dev->device == PCI_DEVICE_ID_CMD_646 && dev->revision < 5)
 		hwif->ultra_mask = 0x00;
 
-	hwif->mwdma_mask = 0x07;
+	if (hwif->cbl != ATA_CBL_PATA40_SHORT)
+		hwif->cbl = ata66_cmd64x(hwif);
 
-	hwif->ide_dma_check = &cmd64x_config_drive_for_dma;
-	if (!(hwif->udma_four))
-		hwif->udma_four = ata66_cmd64x(hwif);
-
-	switch(dev->device) {
+	switch (dev->device) {
 	case PCI_DEVICE_ID_CMD_648:
 	case PCI_DEVICE_ID_CMD_649:
 	alt_irq_bits:
@@ -613,11 +536,10 @@ static void __devinit init_hwif_cmd64x(ide_hwif_t *hwif)
 		hwif->ide_dma_test_irq	= &cmd648_ide_dma_test_irq;
 		break;
 	case PCI_DEVICE_ID_CMD_646:
-		hwif->chipset = ide_cmd646;
-		if (class_rev == 0x01) {
+		if (dev->revision == 0x01) {
 			hwif->ide_dma_end = &cmd646_1_ide_dma_end;
 			break;
-		} else if (class_rev >= 0x03)
+		} else if (dev->revision >= 0x03)
 			goto alt_irq_bits;
 		/* fall thru */
 	default:
@@ -625,94 +547,71 @@ static void __devinit init_hwif_cmd64x(ide_hwif_t *hwif)
 		hwif->ide_dma_test_irq	= &cmd64x_ide_dma_test_irq;
 		break;
 	}
-
-
-	if (!noautodma)
-		hwif->autodma = 1;
-	hwif->drives[0].autodma = hwif->autodma;
-	hwif->drives[1].autodma = hwif->autodma;
 }
 
-static int __devinit init_setup_cmd64x(struct pci_dev *dev, ide_pci_device_t *d)
-{
-	return ide_setup_pci_device(dev, d);
-}
+static const struct ide_port_info cmd64x_chipsets[] __devinitdata = {
+	{	/* 0 */
+		.name		= "CMD643",
+		.init_chipset	= init_chipset_cmd64x,
+		.init_hwif	= init_hwif_cmd64x,
+		.enablebits	= {{0x00,0x00,0x00}, {0x51,0x08,0x08}},
+		.host_flags	= IDE_HFLAG_ABUSE_PREFETCH | IDE_HFLAG_BOOTABLE,
+		.pio_mask	= ATA_PIO5,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= 0x00, /* no udma */
+	},{	/* 1 */
+		.name		= "CMD646",
+		.init_chipset	= init_chipset_cmd64x,
+		.init_hwif	= init_hwif_cmd64x,
+		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
+		.host_flags	= IDE_HFLAG_ABUSE_PREFETCH | IDE_HFLAG_BOOTABLE,
+		.pio_mask	= ATA_PIO5,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= ATA_UDMA2,
+	},{	/* 2 */
+		.name		= "CMD648",
+		.init_chipset	= init_chipset_cmd64x,
+		.init_hwif	= init_hwif_cmd64x,
+		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
+		.chipset	= ide_cmd646,
+		.host_flags	= IDE_HFLAG_ABUSE_PREFETCH | IDE_HFLAG_BOOTABLE,
+		.pio_mask	= ATA_PIO5,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= ATA_UDMA4,
+	},{	/* 3 */
+		.name		= "CMD649",
+		.init_chipset	= init_chipset_cmd64x,
+		.init_hwif	= init_hwif_cmd64x,
+		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
+		.host_flags	= IDE_HFLAG_ABUSE_PREFETCH | IDE_HFLAG_BOOTABLE,
+		.pio_mask	= ATA_PIO5,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= ATA_UDMA5,
+	}
+};
 
-static int __devinit init_setup_cmd646(struct pci_dev *dev, ide_pci_device_t *d)
+static int __devinit cmd64x_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
-	u8 rev = 0;
+	struct ide_port_info d;
+	u8 idx = id->driver_data;
+
+	d = cmd64x_chipsets[idx];
 
 	/*
 	 * The original PCI0646 didn't have the primary channel enable bit,
 	 * it appeared starting with PCI0646U (i.e. revision ID 3).
 	 */
-	pci_read_config_byte(dev, PCI_REVISION_ID, &rev);
-	if (rev < 3)
-		d->enablebits[0].reg = 0;
+	if (idx == 1 && dev->revision < 3)
+		d.enablebits[0].reg = 0;
 
-	return ide_setup_pci_device(dev, d);
+	return ide_setup_pci_device(dev, &d);
 }
 
-static ide_pci_device_t cmd64x_chipsets[] __devinitdata = {
-	{	/* 0 */
-		.name		= "CMD643",
-		.init_setup	= init_setup_cmd64x,
-		.init_chipset	= init_chipset_cmd64x,
-		.init_hwif	= init_hwif_cmd64x,
-		.channels	= 2,
-		.autodma	= AUTODMA,
-		.enablebits	= {{0x00,0x00,0x00}, {0x51,0x08,0x08}},
-		.bootable	= ON_BOARD,
-		.udma_mask	= 0x00, /* no udma */
-	},{	/* 1 */
-		.name		= "CMD646",
-		.init_setup	= init_setup_cmd646,
-		.init_chipset	= init_chipset_cmd64x,
-		.init_hwif	= init_hwif_cmd64x,
-		.channels	= 2,
-		.autodma	= AUTODMA,
-		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
-		.bootable	= ON_BOARD,
-		.udma_mask	= 0x07, /* udma0-2 */
-	},{	/* 2 */
-		.name		= "CMD648",
-		.init_setup	= init_setup_cmd64x,
-		.init_chipset	= init_chipset_cmd64x,
-		.init_hwif	= init_hwif_cmd64x,
-		.channels	= 2,
-		.autodma	= AUTODMA,
-		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
-		.bootable	= ON_BOARD,
-		.udma_mask	= 0x1f, /* udma0-4 */
-	},{	/* 3 */
-		.name		= "CMD649",
-		.init_setup	= init_setup_cmd64x,
-		.init_chipset	= init_chipset_cmd64x,
-		.init_hwif	= init_hwif_cmd64x,
-		.channels	= 2,
-		.autodma	= AUTODMA,
-		.enablebits	= {{0x51,0x04,0x04}, {0x51,0x08,0x08}},
-		.bootable	= ON_BOARD,
-		.udma_mask	= 0x3f, /* udma0-5 */
-	}
-};
-
-/*
- * We may have to modify enablebits for PCI0646, so we'd better pass
- * a local copy of the ide_pci_device_t structure down the call chain...
- */
-static int __devinit cmd64x_init_one(struct pci_dev *dev, const struct pci_device_id *id)
-{
-	ide_pci_device_t d = cmd64x_chipsets[id->driver_data];
-
-	return d.init_setup(dev, &d);
-}
-
-static struct pci_device_id cmd64x_pci_tbl[] = {
-	{ PCI_VENDOR_ID_CMD, PCI_DEVICE_ID_CMD_643, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{ PCI_VENDOR_ID_CMD, PCI_DEVICE_ID_CMD_646, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1},
-	{ PCI_VENDOR_ID_CMD, PCI_DEVICE_ID_CMD_648, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 2},
-	{ PCI_VENDOR_ID_CMD, PCI_DEVICE_ID_CMD_649, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 3},
+static const struct pci_device_id cmd64x_pci_tbl[] = {
+	{ PCI_VDEVICE(CMD, PCI_DEVICE_ID_CMD_643), 0 },
+	{ PCI_VDEVICE(CMD, PCI_DEVICE_ID_CMD_646), 1 },
+	{ PCI_VDEVICE(CMD, PCI_DEVICE_ID_CMD_648), 2 },
+	{ PCI_VDEVICE(CMD, PCI_DEVICE_ID_CMD_649), 3 },
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, cmd64x_pci_tbl);

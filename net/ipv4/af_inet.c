@@ -242,7 +242,7 @@ EXPORT_SYMBOL(build_ehash_secret);
  *	Create an inet socket.
  */
 
-static int inet_create(struct socket *sock, int protocol)
+static int inet_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct sock *sk;
 	struct list_head *p;
@@ -253,6 +253,9 @@ static int inet_create(struct socket *sock, int protocol)
 	char answer_no_check;
 	int try_loading_module = 0;
 	int err;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	if (sock->type != SOCK_RAW &&
 	    sock->type != SOCK_DGRAM &&
@@ -323,7 +326,7 @@ override:
 	BUG_TRAP(answer_prot->slab != NULL);
 
 	err = -ENOBUFS;
-	sk = sk_alloc(PF_INET, GFP_KERNEL, answer_prot, 1);
+	sk = sk_alloc(net, PF_INET, GFP_KERNEL, answer_prot);
 	if (sk == NULL)
 		goto out;
 
@@ -980,7 +983,7 @@ static struct inet_protosw inetsw_array[] =
        }
 };
 
-#define INETSW_ARRAY_LEN (sizeof(inetsw_array) / sizeof(struct inet_protosw))
+#define INETSW_ARRAY_LEN ARRAY_SIZE(inetsw_array)
 
 void inet_register_protosw(struct inet_protosw *p)
 {
@@ -1211,6 +1214,9 @@ static struct sk_buff *inet_gso_segment(struct sk_buff *skb, int features)
 	int ihl;
 	int id;
 
+	if (!(features & NETIF_F_V4_CSUM))
+		features &= ~NETIF_F_SG;
+
 	if (unlikely(skb_shinfo(skb)->gso_type &
 		     ~(SKB_GSO_TCPV4 |
 		       SKB_GSO_UDP |
@@ -1337,6 +1343,10 @@ static int __init init_ipv4_mibs(void)
 			  sizeof(struct icmp_mib),
 			  __alignof__(struct icmp_mib)) < 0)
 		goto err_icmp_mib;
+	if (snmp_mib_init((void **)icmpmsg_statistics,
+			  sizeof(struct icmpmsg_mib),
+			  __alignof__(struct icmpmsg_mib)) < 0)
+		goto err_icmpmsg_mib;
 	if (snmp_mib_init((void **)tcp_statistics,
 			  sizeof(struct tcp_mib),
 			  __alignof__(struct tcp_mib)) < 0)
@@ -1359,6 +1369,8 @@ err_udplite_mib:
 err_udp_mib:
 	snmp_mib_free((void **)tcp_statistics);
 err_tcp_mib:
+	snmp_mib_free((void **)icmpmsg_statistics);
+err_icmpmsg_mib:
 	snmp_mib_free((void **)icmp_statistics);
 err_icmp_mib:
 	snmp_mib_free((void **)ip_statistics);

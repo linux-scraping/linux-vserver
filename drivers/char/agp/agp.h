@@ -58,6 +58,9 @@ struct gatt_mask {
 	 * devices this will probably be ignored */
 };
 
+#define AGP_PAGE_DESTROY_UNMAP 1
+#define AGP_PAGE_DESTROY_FREE 2
+
 struct aper_size_info_8 {
 	int size;
 	int num_entries;
@@ -113,7 +116,7 @@ struct agp_bridge_driver {
 	struct agp_memory *(*alloc_by_type) (size_t, int);
 	void (*free_by_type)(struct agp_memory *);
 	void *(*agp_alloc_page)(struct agp_bridge_data *);
-	void (*agp_destroy_page)(void *);
+	void (*agp_destroy_page)(void *, int flags);
         int (*agp_type_to_mask_type) (struct agp_bridge_data *, int);
 };
 
@@ -176,7 +179,7 @@ struct agp_bridge_data {
 #define I830_GMCH_MEM_MASK		0x1
 #define I830_GMCH_MEM_64M		0x1
 #define I830_GMCH_MEM_128M		0
-#define I830_GMCH_GMS_MASK		0xF0
+#define I830_GMCH_GMS_MASK		0x70
 #define I830_GMCH_GMS_DISABLED		0x00
 #define I830_GMCH_GMS_LOCAL		0x10
 #define I830_GMCH_GMS_STOLEN_512	0x20
@@ -190,6 +193,7 @@ struct agp_bridge_data {
 #define INTEL_I830_ERRSTS	0x92
 
 /* Intel 855GM/852GM registers */
+#define I855_GMCH_GMS_MASK		0xF0
 #define I855_GMCH_GMS_STOLEN_0M		0x0
 #define I855_GMCH_GMS_STOLEN_1M		(0x1 << 4)
 #define I855_GMCH_GMS_STOLEN_4M		(0x2 << 4)
@@ -266,7 +270,7 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type);
 struct agp_memory *agp_generic_alloc_by_type(size_t page_count, int type);
 void agp_generic_free_by_type(struct agp_memory *curr);
 void *agp_generic_alloc_page(struct agp_bridge_data *bridge);
-void agp_generic_destroy_page(void *addr);
+void agp_generic_destroy_page(void *addr, int flags);
 void agp_free_key(int key);
 int agp_num_entries(void);
 u32 agp_collect_device_status(struct agp_bridge_data *bridge, u32 mode, u32 command);

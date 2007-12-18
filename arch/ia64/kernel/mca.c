@@ -57,6 +57,9 @@
  *
  * 2006-09-15 Hidetoshi Seto <seto.hidetoshi@jp.fujitsu.com>
  * 	      Add printing support for MCA/INIT.
+ *
+ * 2007-04-27 Russ Anderson <rja@sgi.com>
+ *	      Support multiple cpus going through OS_MCA in the same event.
  */
 #include <linux/types.h>
 #include <linux/init.h>
@@ -96,7 +99,6 @@
 #endif
 
 /* Used by mca_asm.S */
-u32				ia64_mca_serialize;
 DEFINE_PER_CPU(u64, ia64_mca_data); /* == __per_cpu_mca[smp_processor_id()] */
 DEFINE_PER_CPU(u64, ia64_mca_per_cpu_pte); /* PTE to map per-CPU area */
 DEFINE_PER_CPU(u64, ia64_mca_pal_pte);	    /* PTE to map PAL code */
@@ -569,7 +571,7 @@ out:
  *  Outputs
  *      None
  */
-static void __init
+void
 ia64_mca_register_cpev (int cpev)
 {
 	/* Register the CPE interrupt vector with SAL */
@@ -699,8 +701,7 @@ ia64_mca_cmc_vector_enable_keventd(struct work_struct *unused)
 /*
  * ia64_mca_wakeup
  *
- *	Send an inter-cpu interrupt to wake-up a particular cpu
- *	and mark that cpu to be out of rendez.
+ *	Send an inter-cpu interrupt to wake-up a particular cpu.
  *
  *  Inputs  :   cpuid
  *  Outputs :   None
@@ -709,14 +710,12 @@ static void
 ia64_mca_wakeup(int cpu)
 {
 	platform_send_ipi(cpu, IA64_MCA_WAKEUP_VECTOR, IA64_IPI_DM_INT, 0);
-	ia64_mc_info.imi_rendez_checkin[cpu] = IA64_MCA_RENDEZ_CHECKIN_NOTDONE;
-
 }
 
 /*
  * ia64_mca_wakeup_all
  *
- *	Wakeup all the cpus which have rendez'ed previously.
+ *	Wakeup all the slave cpus which have rendez'ed previously.
  *
  *  Inputs  :   None
  *  Outputs :   None
@@ -739,7 +738,10 @@ ia64_mca_wakeup_all(void)
  *
  *	This is handler used to put slave processors into spinloop
  *	while the monarch processor does the mca handling and later
- *	wake each slave up once the monarch is done.
+ *	wake each slave up once the monarch is done.  The state
+ *	IA64_MCA_RENDEZ_CHECKIN_DONE indicates the cpu is rendez'ed
+ *	in SAL.  The state IA64_MCA_RENDEZ_CHECKIN_NOTDONE indicates
+ *	the cpu has come out of OS rendezvous.
  *
  *  Inputs  :   None
  *  Outputs :   None
@@ -776,6 +778,7 @@ ia64_mca_rendez_int_handler(int rendez_irq, void *arg)
 		       (long)&nd, 0, 0) == NOTIFY_STOP)
 		ia64_mca_spin(__FUNCTION__);
 
+	ia64_mc_info.imi_rendez_checkin[cpu] = IA64_MCA_RENDEZ_CHECKIN_NOTDONE;
 	/* Enable all interrupts */
 	local_irq_restore(flags);
 	return IRQ_HANDLED;
@@ -963,11 +966,12 @@ ia64_mca_modify_original_stack(struct pt_regs *regs,
 		goto no_mod;
 	}
 
+	if (r13 != sos->prev_IA64_KR_CURRENT) {
+		msg = "inconsistent previous current and r13";
+		goto no_mod;
+	}
+
 	if (!mca_recover_range(ms->pmsa_iip)) {
-		if (r13 != sos->prev_IA64_KR_CURRENT) {
-			msg = "inconsistent previous current and r13";
-			goto no_mod;
-		}
 		if ((r12 - r13) >= KERNEL_STACK_SIZE) {
 			msg = "inconsistent r12 and r13";
 			goto no_mod;
@@ -1132,30 +1136,27 @@ no_mod:
 static void
 ia64_wait_for_slaves(int monarch, const char *type)
 {
-	int c, wait = 0, missing = 0;
-	for_each_online_cpu(c) {
-		if (c == monarch)
-			continue;
-		if (ia64_mc_info.imi_rendez_checkin[c] == IA64_MCA_RENDEZ_CHECKIN_NOTDONE) {
-			udelay(1000);		/* short wait first */
-			wait = 1;
-			break;
+	int c, i , wait;
+
+	/*
+	 * wait 5 seconds total for slaves (arbitrary)
+	 */
+	for (i = 0; i < 5000; i++) {
+		wait = 0;
+		for_each_online_cpu(c) {
+			if (c == monarch)
+				continue;
+			if (ia64_mc_info.imi_rendez_checkin[c]
+					== IA64_MCA_RENDEZ_CHECKIN_NOTDONE) {
+				udelay(1000);		/* short wait */
+				wait = 1;
+				break;
+			}
 		}
+		if (!wait)
+			goto all_in;
 	}
-	if (!wait)
-		goto all_in;
-	for_each_online_cpu(c) {
-		if (c == monarch)
-			continue;
-		if (ia64_mc_info.imi_rendez_checkin[c] == IA64_MCA_RENDEZ_CHECKIN_NOTDONE) {
-			udelay(5*1000000);	/* wait 5 seconds for slaves (arbitrary) */
-			if (ia64_mc_info.imi_rendez_checkin[c] == IA64_MCA_RENDEZ_CHECKIN_NOTDONE)
-				missing = 1;
-			break;
-		}
-	}
-	if (!missing)
-		goto all_in;
+
 	/*
 	 * Maybe slave(s) dead. Print buffered messages immediately.
 	 */
@@ -1187,6 +1188,13 @@ all_in:
  *	further MCA logging is enabled by clearing logs.
  *	Monarch also has the duty of sending wakeup-IPIs to pull the
  *	slave processors out of rendezvous spinloop.
+ *
+ *	If multiple processors call into OS_MCA, the first will become
+ *	the monarch.  Subsequent cpus will be recorded in the mca_cpu
+ *	bitmask.  After the first monarch has processed its MCA, it
+ *	will wake up the next cpu in the mca_cpu bitmask and then go
+ *	into the rendezvous loop.  When all processors have serviced
+ *	their MCA, the last monarch frees up the rest of the processors.
  */
 void
 ia64_mca_handler(struct pt_regs *regs, struct switch_stack *sw,
@@ -1196,27 +1204,44 @@ ia64_mca_handler(struct pt_regs *regs, struct switch_stack *sw,
 	struct task_struct *previous_current;
 	struct ia64_mca_notify_die nd =
 		{ .sos = sos, .monarch_cpu = &monarch_cpu };
+	static atomic_t mca_count;
+	static cpumask_t mca_cpu;
 
+	if (atomic_add_return(1, &mca_count) == 1) {
+		monarch_cpu = cpu;
+		sos->monarch = 1;
+	} else {
+		cpu_set(cpu, mca_cpu);
+		sos->monarch = 0;
+	}
 	mprintk(KERN_INFO "Entered OS MCA handler. PSP=%lx cpu=%d "
 		"monarch=%ld\n", sos->proc_state_param, cpu, sos->monarch);
 
 	previous_current = ia64_mca_modify_original_stack(regs, sw, sos, "MCA");
-	monarch_cpu = cpu;
+
 	if (notify_die(DIE_MCA_MONARCH_ENTER, "MCA", regs, (long)&nd, 0, 0)
 			== NOTIFY_STOP)
 		ia64_mca_spin(__FUNCTION__);
-	ia64_wait_for_slaves(cpu, "MCA");
 
-	/* Wakeup all the processors which are spinning in the rendezvous loop.
-	 * They will leave SAL, then spin in the OS with interrupts disabled
-	 * until this monarch cpu leaves the MCA handler.  That gets control
-	 * back to the OS so we can backtrace the other cpus, backtrace when
-	 * spinning in SAL does not work.
-	 */
-	ia64_mca_wakeup_all();
-	if (notify_die(DIE_MCA_MONARCH_PROCESS, "MCA", regs, (long)&nd, 0, 0)
-			== NOTIFY_STOP)
-		ia64_mca_spin(__FUNCTION__);
+	ia64_mc_info.imi_rendez_checkin[cpu] = IA64_MCA_RENDEZ_CHECKIN_CONCURRENT_MCA;
+	if (sos->monarch) {
+		ia64_wait_for_slaves(cpu, "MCA");
+
+		/* Wakeup all the processors which are spinning in the
+		 * rendezvous loop.  They will leave SAL, then spin in the OS
+		 * with interrupts disabled until this monarch cpu leaves the
+		 * MCA handler.  That gets control back to the OS so we can
+		 * backtrace the other cpus, backtrace when spinning in SAL
+		 * does not work.
+		 */
+		ia64_mca_wakeup_all();
+		if (notify_die(DIE_MCA_MONARCH_PROCESS, "MCA", regs, (long)&nd, 0, 0)
+				== NOTIFY_STOP)
+			ia64_mca_spin(__FUNCTION__);
+	} else {
+		while (cpu_isset(cpu, mca_cpu))
+			cpu_relax();	/* spin until monarch wakes us */
+        }
 
 	/* Get the MCA error record and log it */
 	ia64_mca_log_sal_error_record(SAL_INFO_TYPE_MCA);
@@ -1244,8 +1269,29 @@ ia64_mca_handler(struct pt_regs *regs, struct switch_stack *sw,
 			== NOTIFY_STOP)
 		ia64_mca_spin(__FUNCTION__);
 
+
+	if (atomic_dec_return(&mca_count) > 0) {
+		int i;
+
+		/* wake up the next monarch cpu,
+		 * and put this cpu in the rendez loop.
+		 */
+		for_each_online_cpu(i) {
+			if (cpu_isset(i, mca_cpu)) {
+				monarch_cpu = i;
+				cpu_clear(i, mca_cpu);	/* wake next cpu */
+				while (monarch_cpu != -1)
+					cpu_relax();	/* spin until last cpu leaves */
+				set_curr_task(cpu, previous_current);
+				ia64_mc_info.imi_rendez_checkin[cpu]
+						= IA64_MCA_RENDEZ_CHECKIN_NOTDONE;
+				return;
+			}
+		}
+	}
 	set_curr_task(cpu, previous_current);
-	monarch_cpu = -1;
+	ia64_mc_info.imi_rendez_checkin[cpu] = IA64_MCA_RENDEZ_CHECKIN_NOTDONE;
+	monarch_cpu = -1;	/* This frees the slaves and previous monarchs */
 }
 
 static DECLARE_WORK(cmc_disable_work, ia64_mca_cmc_vector_disable_keventd);
@@ -1704,8 +1750,17 @@ format_mca_init_stack(void *mca_data, unsigned long offset,
 	strncpy(p->comm, type, sizeof(p->comm)-1);
 }
 
-/* Do per-CPU MCA-related initialization.  */
+/* Caller prevents this from being called after init */
+static void * __init_refok mca_bootmem(void)
+{
+	void *p;
 
+	p = alloc_bootmem(sizeof(struct ia64_mca_cpu) * NR_CPUS +
+	                  KERNEL_STACK_SIZE);
+	return (void *)ALIGN((unsigned long)p, KERNEL_STACK_SIZE);
+}
+
+/* Do per-CPU MCA-related initialization.  */
 void __cpuinit
 ia64_mca_cpu_init(void *cpu_data)
 {
@@ -1717,11 +1772,7 @@ ia64_mca_cpu_init(void *cpu_data)
 		int cpu;
 
 		first_time = 0;
-		mca_data = alloc_bootmem(sizeof(struct ia64_mca_cpu)
-					 * NR_CPUS + KERNEL_STACK_SIZE);
-		mca_data = (void *)(((unsigned long)mca_data +
-					KERNEL_STACK_SIZE - 1) &
-				(-KERNEL_STACK_SIZE));
+		mca_data = mca_bootmem();
 		for (cpu = 0; cpu < NR_CPUS; cpu++) {
 			format_mca_init_stack(mca_data,
 					offsetof(struct ia64_mca_cpu, mca_stack),
@@ -1967,22 +2018,26 @@ ia64_mca_late_init(void)
 
 		if (cpe_vector >= 0) {
 			/* If platform supports CPEI, enable the irq. */
-			cpe_poll_enabled = 0;
-			for (irq = 0; irq < NR_IRQS; ++irq)
-				if (irq_to_vector(irq) == cpe_vector) {
-					desc = irq_desc + irq;
-					desc->status |= IRQ_PER_CPU;
-					setup_irq(irq, &mca_cpe_irqaction);
-					ia64_cpe_irq = irq;
-				}
-			ia64_mca_register_cpev(cpe_vector);
-			IA64_MCA_DEBUG("%s: CPEI/P setup and enabled.\n", __FUNCTION__);
-		} else {
-			/* If platform doesn't support CPEI, get the timer going. */
-			if (cpe_poll_enabled) {
-				ia64_mca_cpe_poll(0UL);
-				IA64_MCA_DEBUG("%s: CPEP setup and enabled.\n", __FUNCTION__);
+			irq = local_vector_to_irq(cpe_vector);
+			if (irq > 0) {
+				cpe_poll_enabled = 0;
+				desc = irq_desc + irq;
+				desc->status |= IRQ_PER_CPU;
+				setup_irq(irq, &mca_cpe_irqaction);
+				ia64_cpe_irq = irq;
+				ia64_mca_register_cpev(cpe_vector);
+				IA64_MCA_DEBUG("%s: CPEI/P setup and enabled.\n",
+					__FUNCTION__);
+				return 0;
 			}
+			printk(KERN_ERR "%s: Failed to find irq for CPE "
+					"interrupt handler, vector %d\n",
+					__FUNCTION__, cpe_vector);
+		}
+		/* If platform doesn't support CPEI, get the timer going. */
+		if (cpe_poll_enabled) {
+			ia64_mca_cpe_poll(0UL);
+			IA64_MCA_DEBUG("%s: CPEP setup and enabled.\n", __FUNCTION__);
 		}
 	}
 #endif

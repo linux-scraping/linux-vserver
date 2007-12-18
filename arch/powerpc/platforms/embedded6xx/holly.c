@@ -45,7 +45,7 @@
 
 #define HOLLY_PCI_CFG_PHYS 0x7c000000
 
-int holly_exclude_device(u_char bus, u_char devfn)
+int holly_exclude_device(struct pci_controller *hose, u_char bus, u_char devfn)
 {
 	if (bus == 0 && PCI_SLOT(devfn) == 0)
 		return PCIBIOS_DEVICE_NOT_FOUND;
@@ -113,23 +113,11 @@ static void holly_remap_bridge(void)
 
 static void __init holly_setup_arch(void)
 {
-	struct device_node *cpu;
 	struct device_node *np;
 
 	if (ppc_md.progress)
 		ppc_md.progress("holly_setup_arch():set_bridge", 0);
 
-	cpu = of_find_node_by_type(NULL, "cpu");
-	if (cpu) {
-		const unsigned int *fp;
-
-		fp = of_get_property(cpu, "clock-frequency", NULL);
-		if (fp)
-			loops_per_jiffy = *fp / HZ;
-		else
-			loops_per_jiffy = 50000000 / HZ;
-		of_node_put(cpu);
-	}
 	tsi108_csr_vir_base = get_vir_csrbase();
 
 	/* setup PCI host bridge */
@@ -147,7 +135,7 @@ static void __init holly_setup_arch(void)
 }
 
 /*
- * Interrupt setup and service.  Interrrupts on the holly come
+ * Interrupt setup and service.  Interrupts on the holly come
  * from the four external INT pins, PCI interrupts are routed via
  * PCI interrupt control registers, it generates internal IRQ23
  *

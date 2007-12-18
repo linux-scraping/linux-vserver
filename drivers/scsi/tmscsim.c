@@ -430,10 +430,7 @@ static __inline__ void dc390_Going_remove (struct dc390_dcb* pDCB, struct dc390_
 
 static struct scatterlist* dc390_sg_build_single(struct scatterlist *sg, void *addr, unsigned int length)
 {
-	memset(sg, 0, sizeof(struct scatterlist));
-	sg->page	= virt_to_page(addr);
-	sg->length	= length;
-	sg->offset	= (unsigned long)addr & ~PAGE_MASK;
+	sg_init_one(sg, addr, length);
 	return sg;
 }
 
@@ -457,28 +454,21 @@ static int dc390_pci_map (struct dc390_srb* pSRB)
 			error = 1;
 		DEBUG1(printk("%s(): Mapped sense buffer %p at %x\n", __FUNCTION__, pcmd->sense_buffer, cmdp->saved_dma_handle));
 	/* Map SG list */
-	} else if (pcmd->use_sg) {
-		pSRB->pSegmentList	= (struct scatterlist *) pcmd->request_buffer;
-		pSRB->SGcount		= pci_map_sg(pdev, pSRB->pSegmentList, pcmd->use_sg,
-						     pcmd->sc_data_direction);
-		/* TODO: error handling */
-		if (!pSRB->SGcount)
-			error = 1;
-		DEBUG1(printk("%s(): Mapped SG %p with %d (%d) elements\n",\
-			      __FUNCTION__, pcmd->request_buffer, pSRB->SGcount, pcmd->use_sg));
-	/* Map single segment */
-	} else if (pcmd->request_buffer && pcmd->request_bufflen) {
-		pSRB->pSegmentList	= dc390_sg_build_single(&pSRB->Segmentx, pcmd->request_buffer, pcmd->request_bufflen);
-		pSRB->SGcount		= pci_map_sg(pdev, pSRB->pSegmentList, 1,
-						     pcmd->sc_data_direction);
-		cmdp->saved_dma_handle	= sg_dma_address(pSRB->pSegmentList);
+	} else if (scsi_sg_count(pcmd)) {
+		int nseg;
+
+		nseg = scsi_dma_map(pcmd);
+
+		pSRB->pSegmentList	= scsi_sglist(pcmd);
+		pSRB->SGcount		= nseg;
 
 		/* TODO: error handling */
-		if (pSRB->SGcount != 1)
+		if (nseg < 0)
 			error = 1;
-		DEBUG1(printk("%s(): Mapped request buffer %p at %x\n", __FUNCTION__, pcmd->request_buffer, cmdp->saved_dma_handle));
-	/* No mapping !? */	
-    	} else
+		DEBUG1(printk("%s(): Mapped SG %p with %d (%d) elements\n",\
+			      __FUNCTION__, scsi_sglist(pcmd), nseg, scsi_sg_count(pcmd)));
+	/* Map single segment */
+	} else
 		pSRB->SGcount = 0;
 
 	return error;
@@ -494,12 +484,10 @@ static void dc390_pci_unmap (struct dc390_srb* pSRB)
 	if (pSRB->SRBFlag) {
 		pci_unmap_sg(pdev, &pSRB->Segmentx, 1, DMA_FROM_DEVICE);
 		DEBUG1(printk("%s(): Unmapped sense buffer at %x\n", __FUNCTION__, cmdp->saved_dma_handle));
-	} else if (pcmd->use_sg) {
-		pci_unmap_sg(pdev, pcmd->request_buffer, pcmd->use_sg, pcmd->sc_data_direction);
-		DEBUG1(printk("%s(): Unmapped SG at %p with %d elements\n", __FUNCTION__, pcmd->request_buffer, pcmd->use_sg));
-	} else if (pcmd->request_buffer && pcmd->request_bufflen) {
-		pci_unmap_sg(pdev, &pSRB->Segmentx, 1, pcmd->sc_data_direction);
-		DEBUG1(printk("%s(): Unmapped request buffer at %x\n", __FUNCTION__, cmdp->saved_dma_handle));
+	} else {
+		scsi_dma_unmap(pcmd);
+		DEBUG1(printk("%s(): Unmapped SG at %p with %d elements\n",
+			      __FUNCTION__, scsi_sglist(pcmd), scsi_sg_count(pcmd)));
 	}
 }
 
@@ -576,12 +564,12 @@ dc390_StartSCSI( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_sr
 	pDCB->TagMask |= 1 << tag[1];
 	pSRB->TagNumber = tag[1];
 	DC390_write8(ScsiFifo, tag[1]);
-	DEBUG1(printk(KERN_INFO "DC390: Select w/DisCn for Cmd %li (SRB %p), block tag %02x\n", scmd->pid, pSRB, tag[1]));
+	DEBUG1(printk(KERN_INFO "DC390: Select w/DisCn for Cmd %li (SRB %p), block tag %02x\n", scmd->serial_number, pSRB, tag[1]));
 	cmd = SEL_W_ATN3;
     } else {
 	/* No TagQ */
 //no_tag:
-	DEBUG1(printk(KERN_INFO "DC390: Select w%s/DisCn for Cmd %li (SRB %p), No TagQ\n", disc_allowed ? "" : "o", scmd->pid, pSRB));
+	DEBUG1(printk(KERN_INFO "DC390: Select w%s/DisCn for Cmd %li (SRB %p), No TagQ\n", disc_allowed ? "" : "o", scmd->serial_number, pSRB));
     }
 
     pSRB->SRBState = SRB_START_;
@@ -632,7 +620,7 @@ dc390_StartSCSI( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_sr
     {
 	dc390_freetag (pDCB, pSRB);
 	DEBUG0(printk ("DC390: Interrupt during Start SCSI (pid %li, target %02i-%02i)\n",
-		scmd->pid, scmd->device->id, scmd->device->lun));
+		scmd->serial_number, scmd->device->id, scmd->device->lun));
 	pSRB->SRBState = SRB_READY;
 	//DC390_write8 (ScsiCmd, CLEAR_FIFO_CMD);
 	pACB->SelLost++;
@@ -1153,9 +1141,9 @@ dc390_restore_ptr (struct dc390_acb* pACB, struct dc390_srb* pSRB)
     struct scatterlist *psgl;
     pSRB->TotalXferredLen = 0;
     pSRB->SGIndex = 0;
-    if (pcmd->use_sg) {
+    if (scsi_sg_count(pcmd)) {
 	size_t saved;
-	pSRB->pSegmentList = (struct scatterlist *)pcmd->request_buffer;
+	pSRB->pSegmentList = scsi_sglist(pcmd);
 	psgl = pSRB->pSegmentList;
 	//dc390_pci_sync(pSRB);
 
@@ -1179,12 +1167,6 @@ dc390_restore_ptr (struct dc390_acb* pACB, struct dc390_srb* pSRB)
 	printk (KERN_INFO "DC390: Pointer restored. Segment %i, Total %li, Bus %08lx\n",
 		pSRB->SGIndex, pSRB->Saved_Ptr, pSRB->SGBusAddr);
 
-    } else if(pcmd->request_buffer) {
-	//dc390_pci_sync(pSRB);
-
-	sg_dma_len(&pSRB->Segmentx) = pcmd->request_bufflen - pSRB->Saved_Ptr;
-	pSRB->SGcount = 1;
-	pSRB->pSegmentList = (struct scatterlist *) &pSRB->Segmentx;
     } else {
 	 pSRB->SGcount = 0;
 	 printk (KERN_INFO "DC390: RESTORE_PTR message for Transfer without Scatter-Gather ??\n");
@@ -1579,7 +1561,8 @@ dc390_Disconnect( struct dc390_acb* pACB )
 	if( (pSRB->SRBState & (SRB_START_+SRB_MSGOUT)) ||
 	   !(pSRB->SRBState & (SRB_DISCONNECT+SRB_COMPLETED)) )
 	{	/* Selection time out */
-		pSRB->TargetStatus = SCSI_STAT_SEL_TIMEOUT;
+		pSRB->AdaptStatus = H_SEL_TIMEOUT;
+		pSRB->TargetStatus = 0;
 		goto  disc1;
 	}
 	else if (!(pSRB->SRBState & SRB_DISCONNECT) && (pSRB->SRBState & SRB_COMPLETED))
@@ -1612,7 +1595,7 @@ dc390_Reselect( struct dc390_acb* pACB )
 	if( !( pACB->scan_devices ) )
 	{
 	    struct scsi_cmnd *pcmd = pSRB->pcmd;
-	    pcmd->resid = pcmd->request_bufflen;
+	    scsi_set_resid(pcmd, scsi_bufflen(pcmd));
 	    SET_RES_DID(pcmd->result, DID_SOFT_ERROR);
 	    dc390_Going_remove(pDCB, pSRB);
 	    dc390_Free_insert(pACB, pSRB);
@@ -1695,7 +1678,6 @@ dc390_RequestSense(struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_
 			      pcmd->cmnd[0], pDCB->TargetID, pDCB->TargetLUN));
 
 	pSRB->SRBFlag |= AUTO_REQSENSE;
-	pSRB->SavedSGCount = pcmd->use_sg;
 	pSRB->SavedTotXLen = pSRB->TotalXferredLen;
 	pSRB->AdaptStatus = 0;
 	pSRB->TargetStatus = 0; /* CHECK_CONDITION<<1; */
@@ -1723,29 +1705,28 @@ dc390_SRBdone( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_srb*
     status = pSRB->TargetStatus;
 
     DEBUG0(printk (" SRBdone (%02x,%08x), SRB %p, pid %li\n", status, pcmd->result,\
-		pSRB, pcmd->pid));
+		pSRB, pcmd->serial_number));
     if(pSRB->SRBFlag & AUTO_REQSENSE)
     {	/* Last command was a Request Sense */
 	pSRB->SRBFlag &= ~AUTO_REQSENSE;
 	pSRB->AdaptStatus = 0;
-	pSRB->TargetStatus = CHECK_CONDITION << 1;
+	pSRB->TargetStatus = SAM_STAT_CHECK_CONDITION;
 
 	//pcmd->result = MK_RES(DRIVER_SENSE,DID_OK,0,status);
-	if (status == (CHECK_CONDITION << 1))
+	if (status == SAM_STAT_CHECK_CONDITION)
 	    pcmd->result = MK_RES_LNX(0, DID_BAD_TARGET, 0, /*CHECK_CONDITION*/0);
 	else /* Retry */
 	{
 	    if( pSRB->pcmd->cmnd[0] == TEST_UNIT_READY /* || pSRB->pcmd->cmnd[0] == START_STOP */)
 	    {
 		/* Don't retry on TEST_UNIT_READY */
-		pcmd->result = MK_RES_LNX(DRIVER_SENSE,DID_OK,0,CHECK_CONDITION);
+		pcmd->result = MK_RES_LNX(DRIVER_SENSE, DID_OK, 0, SAM_STAT_CHECK_CONDITION);
 		REMOVABLEDEBUG(printk(KERN_INFO "Cmd=%02x, Result=%08x, XferL=%08x\n",pSRB->pcmd->cmnd[0],\
 		       (u32) pcmd->result, (u32) pSRB->TotalXferredLen));
 	    } else {
 		SET_RES_DRV(pcmd->result, DRIVER_SENSE);
-		pcmd->use_sg = pSRB->SavedSGCount;
 		//pSRB->ScsiCmdLen	 = (u8) (pSRB->Segment1[0] >> 8);
-		DEBUG0 (printk ("DC390: RETRY pid %li (%02x), target %02i-%02i\n", pcmd->pid, pcmd->cmnd[0], pcmd->device->id, pcmd->device->lun));
+		DEBUG0 (printk ("DC390: RETRY pid %li (%02x), target %02i-%02i\n", pcmd->serial_number, pcmd->cmnd[0], pcmd->device->id, pcmd->device->lun));
 		pSRB->TotalXferredLen = 0;
 		SET_RES_DID(pcmd->result, DID_SOFT_ERROR);
 	    }
@@ -1754,7 +1735,7 @@ dc390_SRBdone( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_srb*
     }
     if( status )
     {
-	if( status_byte(status) == CHECK_CONDITION )
+	if (status == SAM_STAT_CHECK_CONDITION)
 	{
 	    if (dc390_RequestSense(pACB, pDCB, pSRB)) {
 		SET_RES_DID(pcmd->result, DID_ERROR);
@@ -1762,22 +1743,14 @@ dc390_SRBdone( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_srb*
 	    }
 	    return;
 	}
-	else if( status_byte(status) == QUEUE_FULL )
+	else if (status == SAM_STAT_TASK_SET_FULL)
 	{
 	    scsi_track_queue_full(pcmd->device, pDCB->GoingSRBCnt - 1);
-	    pcmd->use_sg = pSRB->SavedSGCount;
-	    DEBUG0 (printk ("DC390: RETRY pid %li (%02x), target %02i-%02i\n", pcmd->pid, pcmd->cmnd[0], pcmd->device->id, pcmd->device->lun));
+	    DEBUG0 (printk ("DC390: RETRY pid %li (%02x), target %02i-%02i\n", pcmd->serial_number, pcmd->cmnd[0], pcmd->device->id, pcmd->device->lun));
 	    pSRB->TotalXferredLen = 0;
 	    SET_RES_DID(pcmd->result, DID_SOFT_ERROR);
 	}
-	else if(status == SCSI_STAT_SEL_TIMEOUT)
-	{
-	    pSRB->AdaptStatus = H_SEL_TIMEOUT;
-	    pSRB->TargetStatus = 0;
-	    pcmd->result = MK_RES(0,DID_NO_CONNECT,0,0);
-	    /* Devices are removed below ... */
-	}
-	else if (status_byte(status) == BUSY && 
+	else if (status == SAM_STAT_BUSY &&
 		 (pcmd->cmnd[0] == TEST_UNIT_READY || pcmd->cmnd[0] == INQUIRY) &&
 		 pACB->scan_devices)
 	{
@@ -1795,11 +1768,16 @@ dc390_SRBdone( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_srb*
     else
     {	/*  Target status == 0 */
 	status = pSRB->AdaptStatus;
-	if(status & H_OVER_UNDER_RUN)
+	if (status == H_OVER_UNDER_RUN)
 	{
 	    pSRB->TargetStatus = 0;
 	    SET_RES_DID(pcmd->result,DID_OK);
 	    SET_RES_MSG(pcmd->result,pSRB->EndMessage);
+	}
+	else if (status == H_SEL_TIMEOUT)
+	{
+	    pcmd->result = MK_RES(0, DID_NO_CONNECT, 0, 0);
+	    /* Devices are removed below ... */
 	}
 	else if( pSRB->SRBStatus & PARITY_ERROR)
 	{
@@ -1816,13 +1794,13 @@ dc390_SRBdone( struct dc390_acb* pACB, struct dc390_dcb* pDCB, struct dc390_srb*
     }
 
 cmd_done:
-    pcmd->resid = pcmd->request_bufflen - pSRB->TotalXferredLen;
+    scsi_set_resid(pcmd, scsi_bufflen(pcmd) - pSRB->TotalXferredLen);
 
     dc390_Going_remove (pDCB, pSRB);
     /* Add to free list */
     dc390_Free_insert (pACB, pSRB);
 
-    DEBUG0(printk (KERN_DEBUG "DC390: SRBdone: done pid %li\n", pcmd->pid));
+    DEBUG0(printk (KERN_DEBUG "DC390: SRBdone: done pid %li\n", pcmd->serial_number));
     pcmd->scsi_done (pcmd);
 
     return;
@@ -2017,7 +1995,7 @@ static int DC390_abort(struct scsi_cmnd *cmd)
 	struct dc390_dcb *pDCB = (struct dc390_dcb*) cmd->device->hostdata;
 
 	scmd_printk(KERN_WARNING, cmd,
-		"DC390: Abort command (pid %li)\n", cmd->pid);
+		"DC390: Abort command (pid %li)\n", cmd->serial_number);
 
 	/* abort() is too stupid for already sent commands at the moment. 
 	 * If it's called we are in trouble anyway, so let's dump some info 
@@ -2025,7 +2003,7 @@ static int DC390_abort(struct scsi_cmnd *cmd)
 	dc390_dumpinfo(pACB, pDCB, NULL);
 
 	pDCB->DCBFlag |= ABORT_DEV_;
-	printk(KERN_INFO "DC390: Aborted pid %li\n", cmd->pid);
+	printk(KERN_INFO "DC390: Aborted pid %li\n", cmd->serial_number);
 
 	return FAILED;
 }
@@ -2101,10 +2079,9 @@ static int dc390_slave_alloc(struct scsi_device *scsi_device)
 	uint id = scsi_device->id;
 	uint lun = scsi_device->lun;
 
-	pDCB = kmalloc(sizeof(struct dc390_dcb), GFP_KERNEL);
+	pDCB = kzalloc(sizeof(struct dc390_dcb), GFP_KERNEL);
 	if (!pDCB)
 		return -ENOMEM;
-	memset(pDCB, 0, sizeof(struct dc390_dcb));
 
 	if (!pACB->DCBCnt++) {
 		pACB->pLinkDCB = pDCB;

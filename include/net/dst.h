@@ -47,7 +47,6 @@ struct dst_entry
 #define DST_NOXFRM		2
 #define DST_NOPOLICY		4
 #define DST_NOHASH		8
-#define DST_BALANCED            0x10
 	unsigned long		expires;
 
 	unsigned short		header_len;	/* more space at head required */
@@ -142,6 +141,13 @@ dst_metric_locked(struct dst_entry *dst, int metric)
 static inline void dst_hold(struct dst_entry * dst)
 {
 	atomic_inc(&dst->__refcnt);
+}
+
+static inline void dst_use(struct dst_entry *dst, unsigned long time)
+{
+	dst_hold(dst);
+	dst->__use++;
+	dst->lastuse = time;
 }
 
 static inline

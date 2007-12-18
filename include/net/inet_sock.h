@@ -24,6 +24,7 @@
 #include <net/flow.h>
 #include <net/sock.h>
 #include <net/request_sock.h>
+#include <net/route.h>
 
 /** struct ip_options - IP Options
  *
@@ -189,6 +190,14 @@ static inline int inet_sk_ehashfn(const struct sock *sk)
 	const __be16 fport = inet->dport;
 
 	return inet_ehashfn(laddr, lport, faddr, fport);
+}
+
+
+static inline int inet_iif(const struct sk_buff *skb)
+{
+	struct rtable *rt = (struct rtable *)skb->dst;
+
+	return rt->rt_iif;
 }
 
 #endif	/* _INET_SOCK_H */

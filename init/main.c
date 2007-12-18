@@ -39,6 +39,7 @@
 #include <linux/writeback.h>
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
+#include <linux/cgroup.h>
 #include <linux/efi.h>
 #include <linux/tick.h>
 #include <linux/interrupt.h>
@@ -55,6 +56,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/device.h>
 #include <linux/kthread.h>
+#include <linux/sched.h>
 #include <linux/vserver/percpu.h>
 
 #include <asm/io.h>
@@ -70,15 +72,7 @@
 /*
  * This is one of the first .c files built. Error out early if we have compiler
  * trouble.
- *
- * Versions of gcc older than that listed below may actually compile and link
- * okay, but the end product can have subtle run time bugs.  To avoid associated
- * bogus bug reports, we flatly refuse to compile with a gcc that is known to be
- * too old from the very beginning.
  */
-#if (__GNUC__ < 3) || (__GNUC__ == 3 && __GNUC_MINOR__ < 2)
-#error Sorry, your GCC is too old. It builds incorrect kernels.
-#endif
 
 #if __GNUC__ == 4 && __GNUC_MINOR__ == 1 && __GNUC_PATCHLEVEL__ == 0
 #warning gcc-4.1.0 is known to miscompile the kernel.  A different compiler version is recommended.
@@ -133,8 +127,46 @@ static char *static_command_line;
 static char *execute_command;
 static char *ramdisk_execute_command;
 
+#ifdef CONFIG_SMP
 /* Setup configured maximum number of CPUs to activate */
-static unsigned int max_cpus = NR_CPUS;
+static unsigned int __initdata max_cpus = NR_CPUS;
+
+/*
+ * Setup routine for controlling SMP activation
+ *
+ * Command-line option of "nosmp" or "maxcpus=0" will disable SMP
+ * activation entirely (the MPS table probe still happens, though).
+ *
+ * Command-line option of "maxcpus=<NUM>", where <NUM> is an integer
+ * greater than 0, limits the maximum number of CPUs activated in
+ * SMP mode to <NUM>.
+ */
+#ifndef CONFIG_X86_IO_APIC
+static inline void disable_ioapic_setup(void) {};
+#endif
+
+static int __init nosmp(char *str)
+{
+	max_cpus = 0;
+	disable_ioapic_setup();
+	return 0;
+}
+
+early_param("nosmp", nosmp);
+
+static int __init maxcpus(char *str)
+{
+	get_option(&str, &max_cpus);
+	if (max_cpus == 0)
+		disable_ioapic_setup();
+
+	return 0;
+}
+
+early_param("maxcpus", maxcpus);
+#else
+#define max_cpus NR_CPUS
+#endif
 
 /*
  * If set, this is an indication to the drivers that reset the underlying
@@ -147,32 +179,6 @@ static unsigned int max_cpus = NR_CPUS;
  */
 unsigned int reset_devices;
 EXPORT_SYMBOL(reset_devices);
-
-/*
- * Setup routine for controlling SMP activation
- *
- * Command-line option of "nosmp" or "maxcpus=0" will disable SMP
- * activation entirely (the MPS table probe still happens, though).
- *
- * Command-line option of "maxcpus=<NUM>", where <NUM> is an integer
- * greater than 0, limits the maximum number of CPUs activated in
- * SMP mode to <NUM>.
- */
-static int __init nosmp(char *str)
-{
-	max_cpus = 0;
-	return 1;
-}
-
-__setup("nosmp", nosmp);
-
-static int __init maxcpus(char *str)
-{
-	get_option(&str, &max_cpus);
-	return 1;
-}
-
-__setup("maxcpus=", maxcpus);
 
 static int __init set_reset_devices(char *str)
 {
@@ -276,7 +282,7 @@ static int __init unknown_bootoption(char *param, char *val)
 		return 0;
 
 	/*
-	 * Preemptive maintenance for "why didn't my mispelled command
+	 * Preemptive maintenance for "why didn't my misspelled command
 	 * line work?"
 	 */
 	if (strchr(param, '.') && (!val || strchr(param, '.') < val)) {
@@ -439,15 +445,16 @@ static void noinline __init_refok rest_init(void)
 
 	/*
 	 * The boot idle thread must execute schedule()
-	 * at least one to get things moving:
+	 * at least once to get things moving:
 	 */
+	init_idle_bootup_task(current);
 	preempt_enable_no_resched();
 	schedule();
 	preempt_disable();
 
 	/* Call into cpu_idle with preempt disabled */
 	cpu_idle();
-} 
+}
 
 /* Check for early params. */
 static int __init do_early_param(char *param, char *val)
@@ -455,7 +462,10 @@ static int __init do_early_param(char *param, char *val)
 	struct obs_kernel_param *p;
 
 	for (p = __setup_start; p < __setup_end; p++) {
-		if (p->early && strcmp(param, p->str) == 0) {
+		if ((p->early && strcmp(param, p->str) == 0) ||
+		    (strcmp(param, "console") == 0 &&
+		     strcmp(p->str, "earlycon") == 0)
+		) {
 			if (p->setup_func(val) != 0)
 				printk(KERN_WARNING
 				       "Malformed early option '%s'\n", param);
@@ -510,6 +520,7 @@ asmlinkage void __init start_kernel(void)
 	 */
 	unwind_init();
 	lockdep_init();
+	cgroup_init_early();
 
 	local_irq_disable();
 	early_boot_irqs_off();
@@ -627,6 +638,7 @@ asmlinkage void __init start_kernel(void)
 #ifdef CONFIG_PROC_FS
 	proc_root_init();
 #endif
+	cgroup_init();
 	cpuset_init();
 	taskstats_init_early();
 	delayacct_init();
@@ -727,16 +739,23 @@ static void __init do_basic_setup(void)
 	do_initcalls();
 }
 
+static int __initdata nosoftlockup;
+
+static int __init nosoftlockup_setup(char *str)
+{
+	nosoftlockup = 1;
+	return 1;
+}
+__setup("nosoftlockup", nosoftlockup_setup);
+
 static void __init do_pre_smp_initcalls(void)
 {
 	extern int spawn_ksoftirqd(void);
-#ifdef CONFIG_SMP
-	extern int migration_init(void);
 
 	migration_init();
-#endif
 	spawn_ksoftirqd();
-	spawn_softlockup_task();
+	if (!nosoftlockup)
+		spawn_softlockup_task();
 }
 
 static void run_init_process(char *init_filename)

@@ -62,6 +62,7 @@
 #include <linux/init.h>
 #include <linux/times.h>
 
+#include <net/net_namespace.h>
 #include <net/icmp.h>
 #include <net/inet_hashtables.h>
 #include <net/tcp.h>
@@ -833,8 +834,7 @@ static struct tcp_md5sig_key *
 		return NULL;
 	for (i = 0; i < tp->md5sig_info->entries4; i++) {
 		if (tp->md5sig_info->keys4[i].addr == addr)
-			return (struct tcp_md5sig_key *)
-						&tp->md5sig_info->keys4[i];
+			return &tp->md5sig_info->keys4[i].base;
 	}
 	return NULL;
 }
@@ -858,11 +858,11 @@ int tcp_v4_md5_do_add(struct sock *sk, __be32 addr,
 		      u8 *newkey, u8 newkeylen)
 {
 	/* Add Key to the list */
-	struct tcp4_md5sig_key *key;
+	struct tcp_md5sig_key *key;
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp4_md5sig_key *keys;
 
-	key = (struct tcp4_md5sig_key *)tcp_v4_md5_do_lookup(sk, addr);
+	key = tcp_v4_md5_do_lookup(sk, addr);
 	if (key) {
 		/* Pre-existing entry - just update that one. */
 		kfree(key->key);
@@ -906,9 +906,9 @@ int tcp_v4_md5_do_add(struct sock *sk, __be32 addr,
 			md5sig->alloced4++;
 		}
 		md5sig->entries4++;
-		md5sig->keys4[md5sig->entries4 - 1].addr   = addr;
-		md5sig->keys4[md5sig->entries4 - 1].key    = newkey;
-		md5sig->keys4[md5sig->entries4 - 1].keylen = newkeylen;
+		md5sig->keys4[md5sig->entries4 - 1].addr        = addr;
+		md5sig->keys4[md5sig->entries4 - 1].base.key    = newkey;
+		md5sig->keys4[md5sig->entries4 - 1].base.keylen = newkeylen;
 	}
 	return 0;
 }
@@ -930,7 +930,7 @@ int tcp_v4_md5_do_del(struct sock *sk, __be32 addr)
 	for (i = 0; i < tp->md5sig_info->entries4; i++) {
 		if (tp->md5sig_info->keys4[i].addr == addr) {
 			/* Free the key */
-			kfree(tp->md5sig_info->keys4[i].key);
+			kfree(tp->md5sig_info->keys4[i].base.key);
 			tp->md5sig_info->entries4--;
 
 			if (tp->md5sig_info->entries4 == 0) {
@@ -964,7 +964,7 @@ static void tcp_v4_clear_md5_list(struct sock *sk)
 	if (tp->md5sig_info->entries4) {
 		int i;
 		for (i = 0; i < tp->md5sig_info->entries4; i++)
-			kfree(tp->md5sig_info->keys4[i].key);
+			kfree(tp->md5sig_info->keys4[i].base.key);
 		tp->md5sig_info->entries4 = 0;
 		tcp_free_md5sig_pool();
 	}
@@ -1055,6 +1055,9 @@ static int tcp_v4_do_calc_md5_hash(char *md5_hash, struct tcp_md5sig_key *key,
 	bp->pad = 0;
 	bp->protocol = protocol;
 	bp->len = htons(tcplen);
+
+	sg_init_table(sg, 4);
+
 	sg_set_buf(&sg[block++], bp, sizeof(*bp));
 	nbytes += sizeof(*bp);
 
@@ -1079,6 +1082,8 @@ static int tcp_v4_do_calc_md5_hash(char *md5_hash, struct tcp_md5sig_key *key,
 	 */
 	sg_set_buf(&sg[block++], key->key, key->keylen);
 	nbytes += key->keylen;
+
+	sg_mark_end(&sg[block - 1]);
 
 	/* Now store the Hash into the packet */
 	err = crypto_hash_init(desc);
@@ -2054,11 +2059,9 @@ static void *established_get_first(struct seq_file *seq)
 		struct sock *sk;
 		struct hlist_node *node;
 		struct inet_timewait_sock *tw;
+		rwlock_t *lock = inet_ehash_lockp(&tcp_hashinfo, st->bucket);
 
-		/* We can reschedule _before_ having picked the target: */
-		cond_resched_softirq();
-
-		read_lock(&tcp_hashinfo.ehash[st->bucket].lock);
+		read_lock_bh(lock);
 		sk_for_each(sk, node, &tcp_hashinfo.ehash[st->bucket].chain) {
 			vxdprintk(VXD_CBIT(net, 6),
 				"sk,egf: %p [#%d] (from %d)",
@@ -2083,7 +2086,7 @@ static void *established_get_first(struct seq_file *seq)
 			rc = tw;
 			goto out;
 		}
-		read_unlock(&tcp_hashinfo.ehash[st->bucket].lock);
+		read_unlock_bh(lock);
 		st->state = TCP_SEQ_STATE_ESTABLISHED;
 	}
 out:
@@ -2111,14 +2114,11 @@ get_tw:
 			cur = tw;
 			goto out;
 		}
-		read_unlock(&tcp_hashinfo.ehash[st->bucket].lock);
+		read_unlock_bh(inet_ehash_lockp(&tcp_hashinfo, st->bucket));
 		st->state = TCP_SEQ_STATE_ESTABLISHED;
 
-		/* We can reschedule between buckets: */
-		cond_resched_softirq();
-
 		if (++st->bucket < tcp_hashinfo.ehash_size) {
-			read_lock(&tcp_hashinfo.ehash[st->bucket].lock);
+			read_lock_bh(inet_ehash_lockp(&tcp_hashinfo, st->bucket));
 			sk = sk_head(&tcp_hashinfo.ehash[st->bucket].chain);
 		} else {
 			cur = NULL;
@@ -2168,7 +2168,6 @@ static void *tcp_get_idx(struct seq_file *seq, loff_t pos)
 
 	if (!rc) {
 		inet_listen_unlock(&tcp_hashinfo);
-		local_bh_disable();
 		st->state = TCP_SEQ_STATE_ESTABLISHED;
 		rc	  = established_get_idx(seq, pos);
 	}
@@ -2201,7 +2200,6 @@ static void *tcp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 		rc = listening_get_next(seq, v);
 		if (!rc) {
 			inet_listen_unlock(&tcp_hashinfo);
-			local_bh_disable();
 			st->state = TCP_SEQ_STATE_ESTABLISHED;
 			rc	  = established_get_first(seq);
 		}
@@ -2233,8 +2231,7 @@ static void tcp_seq_stop(struct seq_file *seq, void *v)
 	case TCP_SEQ_STATE_TIME_WAIT:
 	case TCP_SEQ_STATE_ESTABLISHED:
 		if (v)
-			read_unlock(&tcp_hashinfo.ehash[st->bucket].lock);
-		local_bh_enable();
+			read_unlock_bh(inet_ehash_lockp(&tcp_hashinfo, st->bucket));
 		break;
 	}
 }
@@ -2283,7 +2280,7 @@ int tcp_proc_register(struct tcp_seq_afinfo *afinfo)
 	afinfo->seq_fops->llseek	= seq_lseek;
 	afinfo->seq_fops->release	= seq_release_private;
 
-	p = proc_net_fops_create(afinfo->name, S_IRUGO, afinfo->seq_fops);
+	p = proc_net_fops_create(&init_net, afinfo->name, S_IRUGO, afinfo->seq_fops);
 	if (p)
 		p->data = afinfo;
 	else
@@ -2295,7 +2292,7 @@ void tcp_proc_unregister(struct tcp_seq_afinfo *afinfo)
 {
 	if (!afinfo)
 		return;
-	proc_net_remove(afinfo->name);
+	proc_net_remove(&init_net, afinfo->name);
 	memset(afinfo->seq_fops, 0, sizeof(*afinfo->seq_fops));
 }
 
@@ -2445,6 +2442,8 @@ void tcp4_proc_exit(void)
 }
 #endif /* CONFIG_PROC_FS */
 
+DEFINE_PROTO_INUSE(tcp)
+
 struct proto tcp_prot = {
 	.name			= "TCP",
 	.owner			= THIS_MODULE,
@@ -2479,6 +2478,7 @@ struct proto tcp_prot = {
 	.compat_setsockopt	= compat_tcp_setsockopt,
 	.compat_getsockopt	= compat_tcp_getsockopt,
 #endif
+	REF_PROTO_INUSE(tcp)
 };
 
 void __init tcp_v4_init(struct net_proto_family *ops)
@@ -2503,6 +2503,5 @@ EXPORT_SYMBOL(tcp_v4_syn_recv_sock);
 EXPORT_SYMBOL(tcp_proc_register);
 EXPORT_SYMBOL(tcp_proc_unregister);
 #endif
-EXPORT_SYMBOL(sysctl_local_port_range);
 EXPORT_SYMBOL(sysctl_tcp_low_latency);
 

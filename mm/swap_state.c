@@ -21,7 +21,7 @@
 
 /*
  * swapper_space is a fiction, retained to simplify the path through
- * vmscan's shrink_list, to make sync_page look nicer, and to allow
+ * vmscan's shrink_page_list, to make sync_page look nicer, and to allow
  * future use of radix_tree tags in the swap cache.
  */
 static const struct address_space_operations swap_aops = {
@@ -74,6 +74,7 @@ static int __add_to_swap_cache(struct page *page, swp_entry_t entry,
 {
 	int error;
 
+	BUG_ON(!PageLocked(page));
 	BUG_ON(PageSwapCache(page));
 	BUG_ON(PagePrivate(page));
 	error = radix_tree_preload(gfp_mask);
@@ -83,7 +84,6 @@ static int __add_to_swap_cache(struct page *page, swp_entry_t entry,
 						entry.val, page);
 		if (!error) {
 			page_cache_get(page);
-			SetPageLocked(page);
 			SetPageSwapCache(page);
 			set_page_private(page, entry.val);
 			total_swapcache_pages++;
@@ -99,15 +99,18 @@ static int add_to_swap_cache(struct page *page, swp_entry_t entry)
 {
 	int error;
 
+	BUG_ON(PageLocked(page));
 	if (!swap_duplicate(entry)) {
 		INC_CACHE_INFO(noent_race);
 		return -ENOENT;
 	}
+	SetPageLocked(page);
 	error = __add_to_swap_cache(page, entry, GFP_KERNEL);
 	/*
 	 * Anon pages are already on the LRU, we don't run lru_cache_add here.
 	 */
 	if (error) {
+		ClearPageLocked(page);
 		swap_free(entry);
 		if (error == -EEXIST)
 			INC_CACHE_INFO(exist_race);
@@ -334,7 +337,8 @@ struct page *read_swap_cache_async(swp_entry_t entry,
 		 * Get a new page to read into from swap.
 		 */
 		if (!new_page) {
-			new_page = alloc_page_vma(GFP_HIGHUSER, vma, addr);
+			new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE,
+								vma, addr);
 			if (!new_page)
 				break;		/* Out of memory */
 		}

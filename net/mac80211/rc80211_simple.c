@@ -7,7 +7,6 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/types.h>
@@ -28,8 +27,6 @@
 #define RATE_CONTROL_EMERG_DEC 2
 #define RATE_CONTROL_INTERVAL (HZ / 20)
 #define RATE_CONTROL_MIN_TX 10
-
-MODULE_ALIAS("rc80211_default");
 
 static void rate_control_rate_inc(struct ieee80211_local *local,
 				  struct sta_info *sta)
@@ -147,14 +144,6 @@ static void rate_control_simple_tx_status(void *priv, struct net_device *dev,
 	srctrl = sta->rate_ctrl_priv;
 	srctrl->tx_num_xmit++;
 	if (status->excessive_retries) {
-		sta->antenna_sel_tx = sta->antenna_sel_tx == 1 ? 2 : 1;
-		sta->antenna_sel_rx = sta->antenna_sel_rx == 1 ? 2 : 1;
-		if (local->sta_antenna_sel == STA_ANTENNA_SEL_SW_CTRL_DEBUG) {
-			printk(KERN_DEBUG "%s: " MAC_FMT " TX antenna --> %d "
-			       "RX antenna --> %d (@%lu)\n",
-			       dev->name, MAC_ARG(hdr->addr1),
-			       sta->antenna_sel_tx, sta->antenna_sel_rx, jiffies);
-		}
 		srctrl->tx_num_failures++;
 		sta->tx_retry_failed++;
 		sta->tx_num_consecutive_failures++;
@@ -187,9 +176,13 @@ static void rate_control_simple_tx_status(void *priv, struct net_device *dev,
 		}
 #endif
 
-		if (per_failed > local->rate_ctrl_num_down) {
+		/*
+		 * XXX: Make these configurable once we have an
+		 * interface to the rate control algorithms
+		 */
+		if (per_failed > RATE_CONTROL_NUM_DOWN) {
 			rate_control_rate_dec(local, sta);
-		} else if (per_failed < local->rate_ctrl_num_up) {
+		} else if (per_failed < RATE_CONTROL_NUM_UP) {
 			rate_control_rate_inc(local, sta);
 		}
 		srctrl->tx_avg_rate_sum += status->control.rate->rate;
@@ -205,9 +198,10 @@ static void rate_control_simple_tx_status(void *priv, struct net_device *dev,
 		srctrl->avg_rate_update = jiffies;
 		if (srctrl->tx_avg_rate_num > 0) {
 #ifdef CONFIG_MAC80211_VERBOSE_DEBUG
-			printk(KERN_DEBUG "%s: STA " MAC_FMT " Average rate: "
+			DECLARE_MAC_BUF(mac);
+			printk(KERN_DEBUG "%s: STA %s Average rate: "
 			       "%d (%d/%d)\n",
-			       dev->name, MAC_ARG(sta->addr),
+			       dev->name, print_mac(mac, sta->addr),
 			       srctrl->tx_avg_rate_sum /
 			       srctrl->tx_avg_rate_num,
 			       srctrl->tx_avg_rate_sum,
@@ -283,14 +277,16 @@ static void rate_control_simple_rate_init(void *priv, void *priv_sta,
 	int i;
 	sta->txrate = 0;
 	mode = local->oper_hw_mode;
-	/* TODO: what is a good starting rate for STA? About middle? Maybe not
-	 * the lowest or the highest rate.. Could consider using RSSI from
-	 * previous packets? Need to have IEEE 802.1X auth succeed immediately
-	 * after assoc.. */
+	/* TODO: This routine should consider using RSSI from previous packets
+	 * as we need to have IEEE 802.1X auth succeed immediately after assoc..
+	 * Until that method is implemented, we will use the lowest supported rate
+	 * as a workaround, */
 	for (i = 0; i < mode->num_rates; i++) {
 		if ((sta->supp_rates & BIT(i)) &&
-		    (mode->rates[i].flags & IEEE80211_RATE_SUPPORTED))
+		    (mode->rates[i].flags & IEEE80211_RATE_SUPPORTED)) {
 			sta->txrate = i;
+			break;
+		}
 	}
 }
 
@@ -395,8 +391,7 @@ static void rate_control_simple_remove_sta_debugfs(void *priv, void *priv_sta)
 }
 #endif
 
-static struct rate_control_ops rate_control_simple = {
-	.module = THIS_MODULE,
+struct rate_control_ops mac80211_rcsimple = {
 	.name = "simple",
 	.tx_status = rate_control_simple_tx_status,
 	.get_rate = rate_control_simple_get_rate,
@@ -411,22 +406,3 @@ static struct rate_control_ops rate_control_simple = {
 	.remove_sta_debugfs = rate_control_simple_remove_sta_debugfs,
 #endif
 };
-
-
-static int __init rate_control_simple_init(void)
-{
-	return ieee80211_rate_control_register(&rate_control_simple);
-}
-
-
-static void __exit rate_control_simple_exit(void)
-{
-	ieee80211_rate_control_unregister(&rate_control_simple);
-}
-
-
-module_init(rate_control_simple_init);
-module_exit(rate_control_simple_exit);
-
-MODULE_DESCRIPTION("Simple rate control algorithm for ieee80211");
-MODULE_LICENSE("GPL");

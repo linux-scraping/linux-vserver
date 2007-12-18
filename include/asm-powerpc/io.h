@@ -86,7 +86,7 @@ extern unsigned long pci_dram_offset;
  */
 
 #ifdef CONFIG_PPC64
-#define IO_SET_SYNC_FLAG()	do { get_paca()->io_sync = 1; } while(0)
+#define IO_SET_SYNC_FLAG()	do { local_paca->io_sync = 1; } while(0)
 #else
 #define IO_SET_SYNC_FLAG()
 #endif
@@ -138,12 +138,12 @@ DEF_MMIO_IN_BE(in_be64, 64, ld);
 /* There is no asm instructions for 64 bits reverse loads and stores */
 static inline u64 in_le64(const volatile u64 __iomem *addr)
 {
-	return le64_to_cpu(in_be64(addr));
+	return swab64(in_be64(addr));
 }
 
 static inline void out_le64(volatile u64 __iomem *addr, u64 val)
 {
-	out_be64(addr, cpu_to_le64(val));
+	out_be64(addr, swab64(val));
 }
 #endif /* __powerpc64__ */
 
@@ -498,23 +498,6 @@ static inline void name at					\
 #define writeq	writeq
 #endif
 
-#ifdef CONFIG_NOT_COHERENT_CACHE
-
-#define dma_cache_inv(_start,_size) \
-	invalidate_dcache_range(_start, (_start + _size))
-#define dma_cache_wback(_start,_size) \
-	clean_dcache_range(_start, (_start + _size))
-#define dma_cache_wback_inv(_start,_size) \
-	flush_dcache_range(_start, (_start + _size))
-
-#else /* CONFIG_NOT_COHERENT_CACHE */
-
-#define dma_cache_inv(_start,_size)		do { } while (0)
-#define dma_cache_wback(_start,_size)		do { } while (0)
-#define dma_cache_wback_inv(_start,_size)	do { } while (0)
-
-#endif /* !CONFIG_NOT_COHERENT_CACHE */
-
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem
  * access
@@ -539,7 +522,7 @@ static inline void name at					\
 #else
 /*
  * Enforce synchronisation of stores vs. spin_unlock
- * (this does it explicitely, though our implementation of spin_unlock
+ * (this does it explicitly, though our implementation of spin_unlock
  * does it implicitely too)
  */
 static inline void mmiowb(void)
@@ -607,9 +590,9 @@ static inline void iosync(void)
  *
  * * iounmap undoes such a mapping and can be hooked
  *
- * * __ioremap_explicit (and the pending __iounmap_explicit) are low level
- *   functions to create hand-made mappings for use only by the PCI code
- *   and cannot currently be hooked.
+ * * __ioremap_at (and the pending __iounmap_at) are low level functions to
+ *   create hand-made mappings for use only by the PCI code and cannot
+ *   currently be hooked. Must be page aligned.
  *
  * * __ioremap is the low level implementation used by ioremap and
  *   ioremap_flags and cannot be hooked (but can be used by a hook on one
@@ -629,19 +612,9 @@ extern void __iomem *__ioremap(phys_addr_t, unsigned long size,
 			       unsigned long flags);
 extern void __iounmap(volatile void __iomem *addr);
 
-extern int __ioremap_explicit(phys_addr_t p_addr, unsigned long v_addr,
-		     	      unsigned long size, unsigned long flags);
-extern int __iounmap_explicit(volatile void __iomem *start,
-			      unsigned long size);
-
-extern void __iomem * reserve_phb_iospace(unsigned long size);
-
-/* Those are more 32 bits only functions */
-extern unsigned long iopa(unsigned long addr);
-extern unsigned long mm_ptov(unsigned long addr) __attribute_const__;
-extern void io_block_mapping(unsigned long virt, phys_addr_t phys,
-			     unsigned int size, int flags);
-
+extern void __iomem * __ioremap_at(phys_addr_t pa, void *ea,
+				   unsigned long size, unsigned long flags);
+extern void __iounmap_at(void *ea, unsigned long size);
 
 /*
  * When CONFIG_PPC_INDIRECT_IO is set, we use the generic iomap implementation
@@ -651,8 +624,8 @@ extern void io_block_mapping(unsigned long virt, phys_addr_t phys,
  */
 #define HAVE_ARCH_PIO_SIZE		1
 #define PIO_OFFSET			0x00000000UL
-#define PIO_MASK			0x3fffffffUL
-#define PIO_RESERVED			0x40000000UL
+#define PIO_MASK			(FULL_IO_SIZE - 1)
+#define PIO_RESERVED			(FULL_IO_SIZE)
 
 #define mmio_read16be(addr)		readw_be(addr)
 #define mmio_read32be(addr)		readl_be(addr)
@@ -743,6 +716,32 @@ static inline void * bus_to_virt(unsigned long address)
 
 #define setbits16(_addr, _v) out_be16((_addr), in_be16(_addr) |  (_v))
 #define clrbits16(_addr, _v) out_be16((_addr), in_be16(_addr) & ~(_v))
+
+#define setbits8(_addr, _v) out_8((_addr), in_8(_addr) |  (_v))
+#define clrbits8(_addr, _v) out_8((_addr), in_8(_addr) & ~(_v))
+
+/* Clear and set bits in one shot.  These macros can be used to clear and
+ * set multiple bits in a register using a single read-modify-write.  These
+ * macros can also be used to set a multiple-bit bit pattern using a mask,
+ * by specifying the mask in the 'clear' parameter and the new bit pattern
+ * in the 'set' parameter.
+ */
+
+#define clrsetbits(type, addr, clear, set) \
+	out_##type((addr), (in_##type(addr) & ~(clear)) | (set))
+
+#ifdef __powerpc64__
+#define clrsetbits_be64(addr, clear, set) clrsetbits(be64, addr, clear, set)
+#define clrsetbits_le64(addr, clear, set) clrsetbits(le64, addr, clear, set)
+#endif
+
+#define clrsetbits_be32(addr, clear, set) clrsetbits(be32, addr, clear, set)
+#define clrsetbits_le32(addr, clear, set) clrsetbits(le32, addr, clear, set)
+
+#define clrsetbits_be16(addr, clear, set) clrsetbits(be16, addr, clear, set)
+#define clrsetbits_le16(addr, clear, set) clrsetbits(le32, addr, clear, set)
+
+#define clrsetbits_8(addr, clear, set) clrsetbits(8, addr, clear, set)
 
 #endif /* __KERNEL__ */
 

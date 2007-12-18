@@ -211,6 +211,7 @@ nfs_proc_create(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
 	nfs_fattr_init(&fattr);
 	dprintk("NFS call  create %s\n", dentry->d_name.name);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
+	nfs_mark_for_revalidate(dir);
 	if (status == 0)
 		status = nfs_instantiate(dentry, &fhandle, &fattr);
 	dprintk("NFS reply create: %d\n", status);
@@ -272,14 +273,14 @@ nfs_proc_mknod(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
 static int
 nfs_proc_remove(struct inode *dir, struct qstr *name)
 {
-	struct nfs_diropargs	arg = {
-		.fh		= NFS_FH(dir),
-		.name		= name->name,
-		.len		= name->len
+	struct nfs_removeargs arg = {
+		.fh = NFS_FH(dir),
+		.name.len = name->len,
+		.name.name = name->name,
 	};
-	struct rpc_message	msg = { 
-		.rpc_proc	= &nfs_procedures[NFSPROC_REMOVE],
-		.rpc_argp	= &arg,
+	struct rpc_message msg = { 
+		.rpc_proc = &nfs_procedures[NFSPROC_REMOVE],
+		.rpc_argp = &arg,
 	};
 	int			status;
 
@@ -291,32 +292,16 @@ nfs_proc_remove(struct inode *dir, struct qstr *name)
 	return status;
 }
 
-static int
-nfs_proc_unlink_setup(struct rpc_message *msg, struct dentry *dir, struct qstr *name)
+static void
+nfs_proc_unlink_setup(struct rpc_message *msg, struct inode *dir)
 {
-	struct nfs_diropargs	*arg;
-
-	arg = kmalloc(sizeof(*arg), GFP_KERNEL);
-	if (!arg)
-		return -ENOMEM;
-	arg->fh = NFS_FH(dir->d_inode);
-	arg->name = name->name;
-	arg->len = name->len;
 	msg->rpc_proc = &nfs_procedures[NFSPROC_REMOVE];
-	msg->rpc_argp = arg;
-	return 0;
 }
 
-static int
-nfs_proc_unlink_done(struct dentry *dir, struct rpc_task *task)
+static int nfs_proc_unlink_done(struct rpc_task *task, struct inode *dir)
 {
-	struct rpc_message *msg = &task->tk_msg;
-	
-	if (msg->rpc_argp) {
-		nfs_mark_for_revalidate(dir->d_inode);
-		kfree(msg->rpc_argp);
-	}
-	return 0;
+	nfs_mark_for_revalidate(dir);
+	return 1;
 }
 
 static int
@@ -492,6 +477,8 @@ nfs_proc_readdir(struct dentry *dentry, struct rpc_cred *cred,
 	dprintk("NFS call  readdir %d\n", (unsigned int)cookie);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
 
+	nfs_invalidate_atime(dir);
+
 	dprintk("NFS reply readdir: %d\n", status);
 	return status;
 }
@@ -566,6 +553,7 @@ nfs_proc_pathconf(struct nfs_server *server, struct nfs_fh *fhandle,
 
 static int nfs_read_done(struct rpc_task *task, struct nfs_read_data *data)
 {
+	nfs_invalidate_atime(data->inode);
 	if (task->tk_status >= 0) {
 		nfs_refresh_inode(data->inode, data->res.fattr);
 		/* Emulate the eof flag, which isn't normally needed in NFSv2
@@ -592,7 +580,7 @@ static void nfs_proc_read_setup(struct nfs_read_data *data)
 static int nfs_write_done(struct rpc_task *task, struct nfs_write_data *data)
 {
 	if (task->tk_status >= 0)
-		nfs_post_op_update_inode(data->inode, data->res.fattr);
+		nfs_post_op_update_inode_force_wcc(data->inode, data->res.fattr);
 	return 0;
 }
 

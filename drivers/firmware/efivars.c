@@ -131,21 +131,21 @@ struct efivar_attribute {
 
 #define EFI_ATTR(_name, _mode, _show, _store) \
 struct subsys_attribute efi_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
 
 #define EFIVAR_ATTR(_name, _mode, _show, _store) \
 struct efivar_attribute efivar_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
 
 #define VAR_SUBSYS_ATTR(_name, _mode, _show, _store) \
 struct subsys_attribute var_subsys_attr_##_name = { \
-	.attr = {.name = __stringify(_name), .mode = _mode, .owner = THIS_MODULE}, \
+	.attr = {.name = __stringify(_name), .mode = _mode}, \
 	.show = _show, \
 	.store = _store, \
 };
@@ -402,7 +402,7 @@ static struct attribute *def_attrs[] = {
 	NULL,
 };
 
-static struct kobj_type ktype_efivar = {
+static struct kobj_type efivar_ktype = {
 	.release = efivar_release,
 	.sysfs_ops = &efivar_attr_ops,
 	.default_attrs = def_attrs,
@@ -583,7 +583,7 @@ static struct subsys_attribute *efi_subsys_attrs[] = {
 	NULL,	/* maybe more in the future? */
 };
 
-static decl_subsys(vars, &ktype_efivar, NULL);
+static decl_subsys(vars, &efivar_ktype, NULL);
 static decl_subsys(efi, NULL, NULL);
 
 /*

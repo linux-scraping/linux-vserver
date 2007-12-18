@@ -311,7 +311,6 @@ struct net_device * __init sun3_82586_probe(int unit)
 		sprintf(dev->name, "eth%d", unit);
 		netdev_boot_setup_check(dev);
 	}
-	SET_MODULE_OWNER(dev);
 
 	dev->irq = IE_IRQ;
 	dev->base_addr = ioaddr;
@@ -777,7 +776,7 @@ static void sun3_82586_rcv_int(struct net_device *dev)
 					{
 						skb_reserve(skb,2);
 						skb_put(skb,totlen);
-						eth_copy_and_sum(skb,(char *) p->base+swab32((unsigned long) rbd->buffer),totlen,0);
+						skb_copy_to_linear_data(skb,(char *) p->base+swab32((unsigned long) rbd->buffer),totlen);
 						skb->protocol=eth_type_trans(skb,dev);
 						netif_rx(skb);
 						p->stats.rx_packets++;

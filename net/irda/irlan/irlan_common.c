@@ -17,7 +17,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -1217,7 +1217,7 @@ static int irlan_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irlan_seq_ops = {
+static const struct seq_operations irlan_seq_ops = {
 	.start = irlan_seq_start,
 	.next  = irlan_seq_next,
 	.stop  = irlan_seq_stop,

@@ -19,6 +19,7 @@
 #include <linux/pagemap.h>
 #include <linux/buffer_head.h>
 #include <linux/mm_inline.h>
+#include <linux/nsproxy.h>
 #include <linux/pagevec.h>
 #include <linux/rmap.h>
 #include <linux/topology.h>
@@ -49,9 +50,8 @@ int isolate_lru_page(struct page *page, struct list_head *pagelist)
 		struct zone *zone = page_zone(page);
 
 		spin_lock_irq(&zone->lru_lock);
-		if (PageLRU(page)) {
+		if (PageLRU(page) && get_page_unless_zero(page)) {
 			ret = 0;
-			get_page(page);
 			ClearPageLRU(page);
 			if (PageActive(page))
 				del_page_from_active_list(zone, page);
@@ -172,6 +172,7 @@ static void remove_migration_pte(struct vm_area_struct *vma,
 	pte = pte_mkold(mk_pte(new, vma->vm_page_prot));
 	if (is_write_migration_entry(entry))
 		pte = pte_mkwrite(pte);
+	flush_cache_page(vma, addr, pte_pfn(pte));
 	set_pte_at(mm, addr, ptep, pte);
 
 	if (PageAnon(new))
@@ -181,7 +182,6 @@ static void remove_migration_pte(struct vm_area_struct *vma,
 
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(vma, addr, pte);
-	lazy_mmu_prot_update(pte);
 
 out:
 	pte_unmap_unlock(ptep, ptl);
@@ -612,6 +612,7 @@ static int unmap_and_move(new_page_t get_new_page, unsigned long private,
 	int rc = 0;
 	int *result = NULL;
 	struct page *newpage = get_new_page(page, private, &result);
+	int rcu_locked = 0;
 
 	if (!newpage)
 		return -ENOMEM;
@@ -632,18 +633,41 @@ static int unmap_and_move(new_page_t get_new_page, unsigned long private,
 			goto unlock;
 		wait_on_page_writeback(page);
 	}
-
 	/*
-	 * Establish migration ptes or remove ptes
+	 * By try_to_unmap(), page->mapcount goes down to 0 here. In this case,
+	 * we cannot notice that anon_vma is freed while we migrates a page.
+	 * This rcu_read_lock() delays freeing anon_vma pointer until the end
+	 * of migration. File cache pages are no problem because of page_lock()
+	 * File Caches may use write_page() or lock_page() in migration, then,
+	 * just care Anon page here.
 	 */
+	if (PageAnon(page)) {
+		rcu_read_lock();
+		rcu_locked = 1;
+	}
+	/*
+	 * This is a corner case handling.
+	 * When a new swap-cache is read into, it is linked to LRU
+	 * and treated as swapcache but has no rmap yet.
+	 * Calling try_to_unmap() against a page->mapping==NULL page is
+	 * BUG. So handle it here.
+	 */
+	if (!page->mapping)
+		goto rcu_unlock;
+	/* Establish migration ptes or remove ptes */
 	try_to_unmap(page, 1);
+
 	if (!page_mapped(page))
 		rc = move_to_new_page(newpage, page);
 
 	if (rc)
 		remove_migration_ptes(page, page);
+rcu_unlock:
+	if (rcu_locked)
+		rcu_read_unlock();
 
 unlock:
+
 	unlock_page(page);
 
 	if (rc != -EAGAIN) {
@@ -682,7 +706,7 @@ move_newpage:
  * The function returns after 10 attempts or if no pages
  * are movable anymore because to has become empty
  * or no retryable pages exist anymore. All pages will be
- * retruned to the LRU or freed.
+ * returned to the LRU or freed.
  *
  * Return: Number of pages not migrated or error code.
  */
@@ -761,7 +785,8 @@ static struct page *new_page_node(struct page *p, unsigned long private,
 
 	*result = &pm->status;
 
-	return alloc_pages_node(pm->node, GFP_HIGHUSER | GFP_THISNODE, 0);
+	return alloc_pages_node(pm->node,
+				GFP_HIGHUSER_MOVABLE | GFP_THISNODE, 0);
 }
 
 /*
@@ -900,7 +925,7 @@ asmlinkage long sys_move_pages(pid_t pid, unsigned long nr_pages,
 
 	/* Find the mm_struct */
 	read_lock(&tasklist_lock);
-	task = pid ? find_task_by_pid(pid) : current;
+	task = pid ? find_task_by_vpid(pid) : current;
 	if (!task) {
 		read_unlock(&tasklist_lock);
 		return -ESRCH;
@@ -948,7 +973,7 @@ asmlinkage long sys_move_pages(pid_t pid, unsigned long nr_pages,
 	 * array. Return various errors if the user did something wrong.
 	 */
 	for (i = 0; i < nr_pages; i++) {
-		const void *p;
+		const void __user *p;
 
 		err = -EFAULT;
 		if (get_user(p, pages + i))
@@ -962,7 +987,7 @@ asmlinkage long sys_move_pages(pid_t pid, unsigned long nr_pages,
 				goto out;
 
 			err = -ENODEV;
-			if (!node_online(node))
+			if (!node_state(node, N_HIGH_MEMORY))
 				goto out;
 
 			err = -EACCES;

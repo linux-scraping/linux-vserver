@@ -20,6 +20,9 @@ obj-$(CONFIG_PCI_MSI) += msi.o
 # Build the Hypertransport interrupt support
 obj-$(CONFIG_HT_IRQ) += htirq.o
 
+# Build Intel IOMMU support
+obj-$(CONFIG_DMAR) += dmar.o iova.o intel-iommu.o
+
 #
 # Some architectures use the generic PCI setup functions
 #
@@ -41,9 +44,7 @@ obj-$(CONFIG_ACPI)    += pci-acpi.o
 # Cardbus & CompactPCI use setup-bus
 obj-$(CONFIG_HOTPLUG) += setup-bus.o
 
-ifndef CONFIG_X86
-obj-y += syscall.o
-endif
+obj-$(CONFIG_PCI_SYSCALL) += syscall.o
 
 ifeq ($(CONFIG_PCI_DEBUG),y)
 EXTRA_CFLAGS += -DDEBUG

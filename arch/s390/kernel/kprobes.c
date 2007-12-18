@@ -33,6 +33,8 @@
 DEFINE_PER_CPU(struct kprobe *, current_kprobe) = NULL;
 DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 
+struct kretprobe_blackpoint kretprobe_blacklist[] = {{NULL, NULL}};
+
 int __kprobes arch_prepare_kprobe(struct kprobe *p)
 {
 	/* Make sure the probe isn't going on a difficult instruction */
@@ -85,7 +87,7 @@ void __kprobes get_instruction_type(struct arch_specific_insn *ainsn)
 	ainsn->reg = (*ainsn->insn & 0xf0) >> 4;
 
 	/* save the instruction length (pop 5-5) in bytes */
-	switch (*(__u8 *) (ainsn->insn) >> 4) {
+	switch (*(__u8 *) (ainsn->insn) >> 6) {
 	case 0:
 		ainsn->ilen = 2;
 		break;

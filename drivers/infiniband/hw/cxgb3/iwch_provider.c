@@ -1000,6 +1000,7 @@ static int iwch_query_device(struct ib_device *ibdev,
 	props->max_sge = dev->attr.max_sge_per_wr;
 	props->max_sge_rd = 1;
 	props->max_qp_rd_atom = dev->attr.max_rdma_reads_per_qp;
+	props->max_qp_init_rd_atom = dev->attr.max_rdma_reads_per_qp;
 	props->max_cq = dev->attr.max_cqs;
 	props->max_cqe = dev->attr.max_cqes_per_cq;
 	props->max_mr = dev->attr.max_mem_regs;
@@ -1163,9 +1164,10 @@ int iwch_register_device(struct iwch_dev *dev)
 	dev->ibdev.post_recv = iwch_post_receive;
 
 
-	dev->ibdev.iwcm =
-	    (struct iw_cm_verbs *) kmalloc(sizeof(struct iw_cm_verbs),
-					   GFP_KERNEL);
+	dev->ibdev.iwcm = kmalloc(sizeof(struct iw_cm_verbs), GFP_KERNEL);
+	if (!dev->ibdev.iwcm)
+		return -ENOMEM;
+
 	dev->ibdev.iwcm->connect = iwch_connect;
 	dev->ibdev.iwcm->accept = iwch_accept_cr;
 	dev->ibdev.iwcm->reject = iwch_reject_cr;

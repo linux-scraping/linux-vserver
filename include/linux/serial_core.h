@@ -62,8 +62,9 @@
 /* NEC v850.  */
 #define PORT_V850E_UART	40
 
-/* DZ */
-#define PORT_DZ		47
+/* DEC */
+#define PORT_DZ		46
+#define PORT_ZS		47
 
 /* Parisc type numbers. */
 #define PORT_MUX	48
@@ -141,6 +142,12 @@
 
 /* Micrel KS8695 */
 #define PORT_KS8695	76
+
+/* Broadcom SB1250, etc. SOC */
+#define PORT_SB1250_DUART	77
+
+/* Freescale ColdFire */
+#define PORT_MCF	78
 
 
 #ifdef __KERNEL__
@@ -284,10 +291,11 @@ struct uart_port {
 	const struct uart_ops	*ops;
 	unsigned int		custom_divisor;
 	unsigned int		line;			/* port index */
-	unsigned long		mapbase;		/* for ioremap */
+	resource_size_t		mapbase;		/* for ioremap */
 	struct device		*dev;			/* parent device */
 	unsigned char		hub6;			/* this should be in the 8250 driver */
-	unsigned char		unused[3];
+	unsigned char		suspended;
+	unsigned char		unused[2];
 	void			*private_data;		/* generic platform data pointer */
 };
 

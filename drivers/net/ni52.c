@@ -382,8 +382,6 @@ struct net_device * __init ni52_probe(int unit)
 		memend = dev->mem_end;
 	}
 
-	SET_MODULE_OWNER(dev);
-
 	if (io > 0x1ff)	{	/* Check a single specified location. */
 		err = ni52_probe1(dev, io);
 	} else if (io > 0) {		/* Don't probe at all. */
@@ -936,7 +934,7 @@ static void ni52_rcv_int(struct net_device *dev)
 					{
 						skb_reserve(skb,2);
 						skb_put(skb,totlen);
-						eth_copy_and_sum(skb,(char *) p->base+(unsigned long) rbd->buffer,totlen,0);
+						skb_copy_to_linear_data(skb,(char *) p->base+(unsigned long) rbd->buffer,totlen);
 						skb->protocol=eth_type_trans(skb,dev);
 						netif_rx(skb);
 						dev->last_rx = jiffies;

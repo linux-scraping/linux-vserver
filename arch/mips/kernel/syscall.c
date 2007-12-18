@@ -12,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/linkage.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
 #include <linux/mman.h>
 #include <linux/ptrace.h>
@@ -27,11 +28,11 @@
 #include <linux/shm.h>
 #include <linux/compiler.h>
 #include <linux/module.h>
+#include <linux/ipc.h>
 
 #include <asm/branch.h>
 #include <asm/cachectl.h>
 #include <asm/cacheflush.h>
-#include <asm/ipc.h>
 #include <asm/asm-offsets.h>
 #include <asm/signal.h>
 #include <asm/sim.h>
@@ -72,7 +73,14 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
 
 	task_size = STACK_TOP;
 
+	if (len > task_size)
+		return -ENOMEM;
+
 	if (flags & MAP_FIXED) {
+		/* Even MAP_FIXED mappings must reside within task_size.  */
+		if (task_size - len < addr)
+			return -EINVAL;
+
 		/*
 		 * We do not accept a shared mapping if it would violate
 		 * cache aliasing constraints.
@@ -82,8 +90,6 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
 		return addr;
 	}
 
-	if (len > task_size)
-		return -ENOMEM;
 	do_color_align = 0;
 	if (filp || (flags & MAP_SHARED))
 		do_color_align = 1;
@@ -167,14 +173,14 @@ sys_mmap2(unsigned long addr, unsigned long len, unsigned long prot,
 }
 
 save_static_function(sys_fork);
-__attribute_used__ noinline static int
+static int __used noinline
 _sys_fork(nabi_no_regargs struct pt_regs regs)
 {
 	return do_fork(SIGCHLD, regs.regs[29], &regs, 0, NULL, NULL);
 }
 
 save_static_function(sys_clone);
-__attribute_used__ noinline static int
+static int __used noinline
 _sys_clone(nabi_no_regargs struct pt_regs regs)
 {
 	unsigned long clone_flags;
@@ -244,7 +250,7 @@ asmlinkage int sys_olduname(struct oldold_utsname __user * name)
 
 	if (!name)
 		return -EFAULT;
-	if (!access_ok(VERIFY_WRITE,name,sizeof(struct oldold_utsname)))
+	if (!access_ok(VERIFY_WRITE, name, sizeof(struct oldold_utsname)))
 		return -EFAULT;
 
 	error = __copy_to_user(&name->sysname, &utsname()->sysname,
@@ -272,25 +278,32 @@ asmlinkage int sys_set_thread_area(unsigned long addr)
 	struct thread_info *ti = task_thread_info(current);
 
 	ti->tp_value = addr;
-
-	/* If some future MIPS implementation has this register in hardware,
-	 * we will need to update it here (and in context switches).  */
+	if (cpu_has_userlocal)
+		write_c0_userlocal(addr);
 
 	return 0;
 }
 
 asmlinkage int _sys_sysmips(int cmd, long arg1, int arg2, int arg3)
 {
-	int	tmp;
-
-	switch(cmd) {
+	switch (cmd) {
 	case MIPS_ATOMIC_SET:
 		printk(KERN_CRIT "How did I get here?\n");
 		return -EINVAL;
 
 	case MIPS_FIXADE:
-		tmp = current->thread.mflags & ~3;
-		current->thread.mflags = tmp | (arg1 & 3);
+		if (arg1 & ~3)
+			return -EINVAL;
+
+		if (arg1 & 1)
+			set_thread_flag(TIF_FIXADE);
+		else
+			clear_thread_flag(TIF_FIXADE);
+		if (arg1 & 2)
+			set_thread_flag(TIF_LOGADE);
+		else
+			clear_thread_flag(TIF_FIXADE);
+
 		return 0;
 
 	case FLUSH_CACHE:
@@ -306,8 +319,8 @@ asmlinkage int _sys_sysmips(int cmd, long arg1, int arg2, int arg3)
  *
  * This is really horribly ugly.
  */
-asmlinkage int sys_ipc (unsigned int call, int first, int second,
-			unsigned long third, void __user *ptr, long fifth)
+asmlinkage int sys_ipc(unsigned int call, int first, int second,
+		       unsigned long third, void __user *ptr, long fifth)
 {
 	int version, ret;
 
@@ -316,26 +329,26 @@ asmlinkage int sys_ipc (unsigned int call, int first, int second,
 
 	switch (call) {
 	case SEMOP:
-		return sys_semtimedop (first, (struct sembuf __user *)ptr,
-		                       second, NULL);
+		return sys_semtimedop(first, (struct sembuf __user *)ptr,
+		                      second, NULL);
 	case SEMTIMEDOP:
-		return sys_semtimedop (first, (struct sembuf __user *)ptr,
-				       second,
-				       (const struct timespec __user *)fifth);
+		return sys_semtimedop(first, (struct sembuf __user *)ptr,
+				      second,
+				      (const struct timespec __user *)fifth);
 	case SEMGET:
-		return sys_semget (first, second, third);
+		return sys_semget(first, second, third);
 	case SEMCTL: {
 		union semun fourth;
 		if (!ptr)
 			return -EINVAL;
 		if (get_user(fourth.__pad, (void __user *__user *) ptr))
 			return -EFAULT;
-		return sys_semctl (first, second, third, fourth);
+		return sys_semctl(first, second, third, fourth);
 	}
 
 	case MSGSND:
-		return sys_msgsnd (first, (struct msgbuf __user *) ptr,
-				   second, third);
+		return sys_msgsnd(first, (struct msgbuf __user *) ptr,
+				  second, third);
 	case MSGRCV:
 		switch (version) {
 		case 0: {
@@ -345,45 +358,45 @@ asmlinkage int sys_ipc (unsigned int call, int first, int second,
 
 			if (copy_from_user(&tmp,
 					   (struct ipc_kludge __user *) ptr,
-					   sizeof (tmp)))
+					   sizeof(tmp)))
 				return -EFAULT;
-			return sys_msgrcv (first, tmp.msgp, second,
-					   tmp.msgtyp, third);
+			return sys_msgrcv(first, tmp.msgp, second,
+					  tmp.msgtyp, third);
 		}
 		default:
-			return sys_msgrcv (first,
-					   (struct msgbuf __user *) ptr,
-					   second, fifth, third);
+			return sys_msgrcv(first,
+					  (struct msgbuf __user *) ptr,
+					  second, fifth, third);
 		}
 	case MSGGET:
-		return sys_msgget ((key_t) first, second);
+		return sys_msgget((key_t) first, second);
 	case MSGCTL:
-		return sys_msgctl (first, second,
-				   (struct msqid_ds __user *) ptr);
+		return sys_msgctl(first, second,
+				  (struct msqid_ds __user *) ptr);
 
 	case SHMAT:
 		switch (version) {
 		default: {
 			unsigned long raddr;
-			ret = do_shmat (first, (char __user *) ptr, second,
-					&raddr);
+			ret = do_shmat(first, (char __user *) ptr, second,
+				       &raddr);
 			if (ret)
 				return ret;
-			return put_user (raddr, (unsigned long __user *) third);
+			return put_user(raddr, (unsigned long __user *) third);
 		}
 		case 1:	/* iBCS2 emulator entry point */
 			if (!segment_eq(get_fs(), get_ds()))
 				return -EINVAL;
-			return do_shmat (first, (char __user *) ptr, second,
-					 (unsigned long *) third);
+			return do_shmat(first, (char __user *) ptr, second,
+				        (unsigned long *) third);
 		}
 	case SHMDT:
-		return sys_shmdt ((char __user *)ptr);
+		return sys_shmdt((char __user *)ptr);
 	case SHMGET:
-		return sys_shmget (first, second, third);
+		return sys_shmget(first, second, third);
 	case SHMCTL:
-		return sys_shmctl (first, second,
-				   (struct shmid_ds __user *) ptr);
+		return sys_shmctl(first, second,
+				  (struct shmid_ds __user *) ptr);
 	default:
 		return -ENOSYS;
 	}

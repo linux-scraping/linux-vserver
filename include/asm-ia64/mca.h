@@ -48,6 +48,7 @@ enum {
 	IA64_MCA_RENDEZ_CHECKIN_NOTDONE	=	0x0,
 	IA64_MCA_RENDEZ_CHECKIN_DONE	=	0x1,
 	IA64_MCA_RENDEZ_CHECKIN_INIT	=	0x2,
+	IA64_MCA_RENDEZ_CHECKIN_CONCURRENT_MCA	=	0x3,
 };
 
 /* Information maintained by the MC infrastructure */
@@ -150,6 +151,8 @@ extern void ia64_mca_cmc_vector_setup(void);
 extern int  ia64_reg_MCA_extension(int (*fn)(void *, struct ia64_sal_os_state *));
 extern void ia64_unreg_MCA_extension(void);
 extern u64 ia64_get_rnat(u64 *);
+extern void ia64_mca_printk(const char * fmt, ...)
+	 __attribute__ ((format (printf, 1, 2)));
 
 struct ia64_mca_notify_die {
 	struct ia64_sal_os_state *sos;

@@ -1,20 +1,20 @@
 /*
- *    Disk Array driver for Compaq SA53xx Controllers, SCSI Tape module
- *    Copyright 2001 Compaq Computer Corporation
+ *    Disk Array driver for HP Smart Array controllers, SCSI Tape module.
+ *    (C) Copyright 2001, 2007 Hewlett-Packard Development Company, L.P.
  *
  *    This program is free software; you can redistribute it and/or modify
  *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; either version 2 of the License, or
- *    (at your option) any later version.
+ *    the Free Software Foundation; version 2 of the License.
  *
  *    This program is distributed in the hope that it will be useful,
  *    but WITHOUT ANY WARRANTY; without even the implied warranty of
- *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
- *    NON INFRINGEMENT.  See the GNU General Public License for more details.
+ *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *    General Public License for more details.
  *
  *    You should have received a copy of the GNU General Public License
  *    along with this program; if not, write to the Free Software
- *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *    Foundation, Inc., 59 Temple Place, Suite 300, Boston, MA
+ *    02111-1307, USA.
  *
  *    Questions/Comments/Bugfixes to iss_storagedev@hp.com
  *    
@@ -555,7 +555,6 @@ complete_scsi_command( CommandList_struct *cp, int timeout, __u32 tag)
 {
 	struct scsi_cmnd *cmd;
 	ctlr_info_t *ctlr;
-	u64bit addr64;
 	ErrorInfo_struct *ei;
 
 	ei = cp->err_info;
@@ -569,20 +568,7 @@ complete_scsi_command( CommandList_struct *cp, int timeout, __u32 tag)
 	cmd = (struct scsi_cmnd *) cp->scsi_cmd;	
 	ctlr = hba[cp->ctlr];
 
-	/* undo the DMA mappings */
-
-	if (cmd->use_sg) {
-		pci_unmap_sg(ctlr->pdev,
-			cmd->request_buffer, cmd->use_sg,
-				cmd->sc_data_direction); 
-	}
-	else if (cmd->request_bufflen) {
-		addr64.val32.lower = cp->SG[0].Addr.lower;
-                addr64.val32.upper = cp->SG[0].Addr.upper;
-                pci_unmap_single(ctlr->pdev, (dma_addr_t) addr64.val,
-                	cmd->request_bufflen, 
-				cmd->sc_data_direction);
-	}
+	scsi_dma_unmap(cmd);
 
 	cmd->result = (DID_OK << 16); 		/* host byte */
 	cmd->result |= (COMMAND_COMPLETE << 8);	/* msg byte */
@@ -597,7 +583,7 @@ complete_scsi_command( CommandList_struct *cp, int timeout, __u32 tag)
 		ei->SenseLen > SCSI_SENSE_BUFFERSIZE ?
 			SCSI_SENSE_BUFFERSIZE : 
 			ei->SenseLen);
-	cmd->resid = ei->ResidualCnt;
+	scsi_set_resid(cmd, ei->ResidualCnt);
 
 	if(ei->CommandStatus != 0) 
 	{ /* an error has occurred */ 
@@ -1204,46 +1190,29 @@ cciss_scatter_gather(struct pci_dev *pdev,
 		CommandList_struct *cp,	
 		struct scsi_cmnd *cmd)
 {
-	unsigned int use_sg, nsegs=0, len;
-	struct scatterlist *scatter = (struct scatterlist *) cmd->request_buffer;
+	unsigned int len;
+	struct scatterlist *sg;
 	__u64 addr64;
+	int use_sg, i;
 
-	/* is it just one virtual address? */	
-	if (!cmd->use_sg) {
-		if (cmd->request_bufflen) {	/* anything to xfer? */
+	BUG_ON(scsi_sg_count(cmd) > MAXSGENTRIES);
 
-			addr64 = (__u64) pci_map_single(pdev, 
-				cmd->request_buffer, 
-				cmd->request_bufflen, 
-				cmd->sc_data_direction); 
-	
-			cp->SG[0].Addr.lower = 
-			  (__u32) (addr64 & (__u64) 0x00000000FFFFFFFF);
-			cp->SG[0].Addr.upper =
-			  (__u32) ((addr64 >> 32) & (__u64) 0x00000000FFFFFFFF);
-			cp->SG[0].Len = cmd->request_bufflen;
-			nsegs=1;
+	use_sg = scsi_dma_map(cmd);
+	if (use_sg) {	/* not too many addrs? */
+		scsi_for_each_sg(cmd, sg, use_sg, i) {
+			addr64 = (__u64) sg_dma_address(sg);
+			len  = sg_dma_len(sg);
+			cp->SG[i].Addr.lower =
+				(__u32) (addr64 & (__u64) 0x00000000FFFFFFFF);
+			cp->SG[i].Addr.upper =
+				(__u32) ((addr64 >> 32) & (__u64) 0x00000000FFFFFFFF);
+			cp->SG[i].Len = len;
+			cp->SG[i].Ext = 0;  // we are not chaining
 		}
-	} /* else, must be a list of virtual addresses.... */
-	else if (cmd->use_sg <= MAXSGENTRIES) {	/* not too many addrs? */
+	}
 
-		use_sg = pci_map_sg(pdev, cmd->request_buffer, cmd->use_sg,
-			cmd->sc_data_direction);
-
-		for (nsegs=0; nsegs < use_sg; nsegs++) {
-			addr64 = (__u64) sg_dma_address(&scatter[nsegs]);
-			len  = sg_dma_len(&scatter[nsegs]);
-			cp->SG[nsegs].Addr.lower =
-			  (__u32) (addr64 & (__u64) 0x00000000FFFFFFFF);
-			cp->SG[nsegs].Addr.upper =
-			  (__u32) ((addr64 >> 32) & (__u64) 0x00000000FFFFFFFF);
-			cp->SG[nsegs].Len = len;
-			cp->SG[nsegs].Ext = 0;  // we are not chaining
-		}
-	} else BUG();
-
-	cp->Header.SGList = (__u8) nsegs;   /* no. SGs contig in this cmd */
-	cp->Header.SGTotal = (__u16) nsegs; /* total sgs in this cmd list */
+	cp->Header.SGList = (__u8) use_sg;   /* no. SGs contig in this cmd */
+	cp->Header.SGTotal = (__u16) use_sg; /* total sgs in this cmd list */
 	return;
 }
 

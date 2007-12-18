@@ -98,16 +98,25 @@ static inline void check_for_tasks(int cpu)
 		     !cputime_eq(p->stime, cputime_zero)))
 			printk(KERN_WARNING "Task %s (pid = %d) is on cpu %d\
 				(state = %ld, flags = %x) \n",
-				 p->comm, p->pid, cpu, p->state, p->flags);
+				 p->comm, task_pid_nr(p), cpu,
+				 p->state, p->flags);
 	}
 	write_unlock_irq(&tasklist_lock);
 }
 
+struct take_cpu_down_param {
+	unsigned long mod;
+	void *hcpu;
+};
+
 /* Take this CPU down. */
-static int take_cpu_down(void *unused)
+static int take_cpu_down(void *_param)
 {
+	struct take_cpu_down_param *param = _param;
 	int err;
 
+	raw_notifier_call_chain(&cpu_chain, CPU_DYING | param->mod,
+				param->hcpu);
 	/* Ensure this CPU doesn't handle any more interrupts. */
 	err = __cpu_disable();
 	if (err < 0)
@@ -127,6 +136,10 @@ static int _cpu_down(unsigned int cpu, int tasks_frozen)
 	cpumask_t old_allowed, tmp;
 	void *hcpu = (void *)(long)cpu;
 	unsigned long mod = tasks_frozen ? CPU_TASKS_FROZEN : 0;
+	struct take_cpu_down_param tcd_param = {
+		.mod = mod,
+		.hcpu = hcpu,
+	};
 
 	if (num_online_cpus() == 1)
 		return -EBUSY;
@@ -138,6 +151,7 @@ static int _cpu_down(unsigned int cpu, int tasks_frozen)
 	err = __raw_notifier_call_chain(&cpu_chain, CPU_DOWN_PREPARE | mod,
 					hcpu, -1, &nr_calls);
 	if (err == NOTIFY_BAD) {
+		nr_calls--;
 		__raw_notifier_call_chain(&cpu_chain, CPU_DOWN_FAILED | mod,
 					  hcpu, nr_calls, NULL);
 		printk("%s: attempt to take down CPU %u failed\n",
@@ -153,7 +167,7 @@ static int _cpu_down(unsigned int cpu, int tasks_frozen)
 	set_cpus_allowed(current, tmp);
 
 	mutex_lock(&cpu_bitmask_lock);
-	p = __stop_machine_run(take_cpu_down, NULL, cpu);
+	p = __stop_machine_run(take_cpu_down, &tcd_param, cpu);
 	mutex_unlock(&cpu_bitmask_lock);
 
 	if (IS_ERR(p) || cpu_online(cpu)) {
@@ -221,6 +235,7 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 	ret = __raw_notifier_call_chain(&cpu_chain, CPU_UP_PREPARE | mod, hcpu,
 							-1, &nr_calls);
 	if (ret == NOTIFY_BAD) {
+		nr_calls--;
 		printk("%s: attempt to bring up CPU %u failed\n",
 				__FUNCTION__, cpu);
 		ret = -EINVAL;
@@ -250,6 +265,15 @@ out_notify:
 int __cpuinit cpu_up(unsigned int cpu)
 {
 	int err = 0;
+	if (!cpu_isset(cpu, cpu_possible_map)) {
+		printk(KERN_ERR "can't online cpu %d because it is not "
+			"configured as may-hotadd at boot time\n", cpu);
+#if defined(CONFIG_IA64) || defined(CONFIG_X86_64) || defined(CONFIG_S390)
+		printk(KERN_ERR "please check additional_cpus= boot "
+				"parameter\n");
+#endif
+		return -EINVAL;
+	}
 
 	mutex_lock(&cpu_add_remove_lock);
 	if (cpu_hotplug_disabled)
@@ -261,7 +285,7 @@ int __cpuinit cpu_up(unsigned int cpu)
 	return err;
 }
 
-#ifdef CONFIG_SUSPEND_SMP
+#ifdef CONFIG_PM_SLEEP_SMP
 static cpumask_t frozen_cpus;
 
 int disable_nonboot_cpus(void)
@@ -322,4 +346,4 @@ void enable_nonboot_cpus(void)
 out:
 	mutex_unlock(&cpu_add_remove_lock);
 }
-#endif
+#endif /* CONFIG_PM_SLEEP_SMP */

@@ -30,9 +30,9 @@
 
 #include <linux/device.h>
 #include <linux/platform_device.h>
-#include <asm/irq.h>
+#include <linux/irq.h>
 
-char *bfin_board_name = "UNKNOWN BOARD";
+const char bfin_board_name[] = "UNKNOWN BOARD";
 
 /*
  *  Driver needs to know address, irq and flag pin.
@@ -43,11 +43,11 @@ static struct resource smc91x_resources[] = {
 		.start = 0x2C010300,
 		.end = 0x2C010300 + 16,
 		.flags = IORESOURCE_MEM,
-	},{
+	}, {
 		.start = IRQ_PROG_INTB,
 		.end = IRQ_PROG_INTB,
 		.flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL,
-	},{
+	}, {
 		/*
 		 *  denotes the flag pin and is used directly if
 		 *  CONFIG_IRQCHIP_DEMUX_GPIO is defined.

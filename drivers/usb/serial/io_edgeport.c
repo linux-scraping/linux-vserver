@@ -599,10 +599,11 @@ static void edge_interrupt_callback (struct urb *urb)
 	int txCredits;
 	int portNumber;
 	int result;
+	int status = urb->status;
 
 	dbg("%s", __FUNCTION__);
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -610,10 +611,12 @@ static void edge_interrupt_callback (struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dbg("%s - urb shutting down with status: %d", __FUNCTION__, urb->status);
+		dbg("%s - urb shutting down with status: %d",
+		    __FUNCTION__, status);
 		return;
 	default:
-		dbg("%s - nonzero urb status received: %d", __FUNCTION__, urb->status);
+		dbg("%s - nonzero urb status received: %d",
+		    __FUNCTION__, status);
 		goto exit;
 	}
 
@@ -688,13 +691,15 @@ static void edge_bulk_in_callback (struct urb *urb)
 {
 	struct edgeport_serial	*edge_serial = (struct edgeport_serial *)urb->context;
 	unsigned char		*data = urb->transfer_buffer;
-	int			status;
+	int			retval;
 	__u16			raw_data_length;
+	int status = urb->status;
 
 	dbg("%s", __FUNCTION__);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		edge_serial->read_in_progress = false;
 		return;
 	}
@@ -722,9 +727,11 @@ static void edge_bulk_in_callback (struct urb *urb)
 	if (edge_serial->rxBytesAvail > 0) {
 		dbg("%s - posting a read", __FUNCTION__);
 		edge_serial->read_urb->dev = edge_serial->serial->dev;
-		status = usb_submit_urb(edge_serial->read_urb, GFP_ATOMIC);
-		if (status) {
-			dev_err(&urb->dev->dev, "%s - usb_submit_urb(read bulk) failed, status = %d\n", __FUNCTION__, status);
+		retval = usb_submit_urb(edge_serial->read_urb, GFP_ATOMIC);
+		if (retval) {
+			dev_err(&urb->dev->dev,
+				"%s - usb_submit_urb(read bulk) failed, "
+				"retval = %d\n", __FUNCTION__, retval);
 			edge_serial->read_in_progress = false;
 		}
 	} else {
@@ -744,11 +751,13 @@ static void edge_bulk_out_data_callback (struct urb *urb)
 {
 	struct edgeport_port *edge_port = (struct edgeport_port *)urb->context;
 	struct tty_struct *tty;
+	int status = urb->status;
 
 	dbg("%s", __FUNCTION__);
 
-	if (urb->status) {
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 	}
 
 	tty = edge_port->port->tty;
@@ -1494,31 +1503,16 @@ static void edge_unthrottle (struct usb_serial_port *port)
  *****************************************************************************/
 static void edge_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
+	/* FIXME: This function appears unused ?? */
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	struct tty_struct *tty = port->tty;
 	unsigned int cflag;
 
-	if (!port->tty || !port->tty->termios) {
-		dbg ("%s - no tty or termios", __FUNCTION__);
-		return;
-	}
-
 	cflag = tty->termios->c_cflag;
-	/* check that they really want us to change something */
-	if (old_termios) {
-		if (cflag == old_termios->c_cflag &&
-		    tty->termios->c_iflag == old_termios->c_iflag) {
-			dbg("%s - nothing to change", __FUNCTION__);
-			return;
-		}
-	}
-
 	dbg("%s - clfag %08x iflag %08x", __FUNCTION__, 
 	    tty->termios->c_cflag, tty->termios->c_iflag);
-	if (old_termios) {
-		dbg("%s - old clfag %08x old iflag %08x", __FUNCTION__,
-		    old_termios->c_cflag, old_termios->c_iflag);
-	}
+	dbg("%s - old clfag %08x old iflag %08x", __FUNCTION__,
+	    old_termios->c_cflag, old_termios->c_iflag);
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
@@ -2653,7 +2647,11 @@ static void change_port_settings (struct edgeport_port *edge_port, struct ktermi
 
 	dbg("%s - baud rate = %d", __FUNCTION__, baud);
 	status = send_cmd_write_baud_rate (edge_port, baud);
-
+	if (status == -1) {
+		/* Speed change was not possible - put back the old speed */
+		baud = tty_termios_baud_rate(old_termios);
+		tty_encode_baud_rate(tty, baud, baud);
+	}
 	return;
 }
 
@@ -2882,7 +2880,7 @@ static int edge_startup (struct usb_serial *serial)
 	    (edge_serial->product_info.NumPorts != serial->num_ports)) {
 		dev_warn(&serial->dev->dev, "Device Reported %d serial ports "
 			 "vs. core thinking we have %d ports, email "
-			 "greg@kroah.com this information.",
+			 "greg@kroah.com this information.\n",
 			 edge_serial->product_info.NumPorts,
 			 serial->num_ports);
 	}

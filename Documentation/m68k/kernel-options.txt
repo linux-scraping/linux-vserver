@@ -82,13 +82,6 @@ Valid names are:
   /dev/fd : -> 0x0200 (floppy disk)
   /dev/xda: -> 0x0c00 (first XT disk, unused in Linux/m68k)
   /dev/xdb: -> 0x0c40 (second XT disk, unused in Linux/m68k)
-  /dev/ada: -> 0x1c00 (first ACSI device)
-  /dev/adb: -> 0x1c10 (second ACSI device)
-  /dev/adc: -> 0x1c20 (third ACSI device)
-  /dev/add: -> 0x1c30 (forth ACSI device)
-
-The last four names are available only if the kernel has been compiled
-with Atari and ACSI support.
 
   The name must be followed by a decimal number, that stands for the
 partition number. Internally, the value of the number is just
@@ -199,10 +192,10 @@ Devices possible for Atari:
            seconds.
 
 
-2.6) ramdisk=
+2.6) ramdisk_size=
 -------------
 
-Syntax: ramdisk=<size>
+Syntax: ramdisk_size=<size>
 
   This option instructs the kernel to set up a ramdisk of the given
 size in KBytes. Do not use this option if the ramdisk contents are
@@ -897,10 +890,7 @@ Syntax: nosync:0
 5.5.2) noasync
 --------------
 
-Syntax: noasync:0
-
-  Disables async and sync negotiation for all devices.  Any value
-  after the colon is acceptable (and has the same effect).
+[OBSOLETE, REMOVED]
 
 5.5.3) nodisconnect
 -------------------

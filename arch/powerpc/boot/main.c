@@ -19,24 +19,12 @@
 #include "flatdevtree.h"
 #include "reg.h"
 
-extern char _start[];
-extern char __bss_start[];
-extern char _end[];
-extern char _vmlinux_start[];
-extern char _vmlinux_end[];
-extern char _initrd_start[];
-extern char _initrd_end[];
-extern char _dtb_start[];
-extern char _dtb_end[];
-
 static struct gunzip_state gzstate;
 
 struct addr_range {
 	void *addr;
 	unsigned long size;
 };
-
-typedef void (*kernel_entry_t)(unsigned long, unsigned long, void *);
 
 #undef DEBUG
 

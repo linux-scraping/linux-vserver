@@ -544,7 +544,7 @@ int datagram_send_ctl(struct msghdr *msg, struct flowi *fl,
 				if (!src_info->ipi6_ifindex)
 					return -EINVAL;
 				else {
-					dev = dev_get_by_index(src_info->ipi6_ifindex);
+					dev = dev_get_by_index(&init_net, src_info->ipi6_ifindex);
 					if (!dev)
 						return -ENODEV;
 				}
@@ -657,11 +657,10 @@ int datagram_send_ctl(struct msghdr *msg, struct flowi *fl,
 			rthdr = (struct ipv6_rt_hdr *)CMSG_DATA(cmsg);
 
 			switch (rthdr->type) {
-			case IPV6_SRCRT_TYPE_0:
-#ifdef CONFIG_IPV6_MIP6
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 			case IPV6_SRCRT_TYPE_2:
-#endif
 				break;
+#endif
 			default:
 				err = -EINVAL;
 				goto exit_f;

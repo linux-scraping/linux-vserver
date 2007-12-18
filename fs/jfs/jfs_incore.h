@@ -40,7 +40,7 @@ struct jfs_inode_info {
 	uint	mode2;		/* jfs-specific mode		*/
 	uint	saved_uid;	/* saved for uid mount option */
 	uint	saved_gid;	/* saved for gid mount option */
-	pxd_t   ixpxd;		/* inode extent descriptor	*/
+	pxd_t	ixpxd;		/* inode extent descriptor	*/
 	dxd_t	acl;		/* dxd describing acl	*/
 	dxd_t	ea;		/* dxd describing ea	*/
 	time_t	otime;		/* time created	*/
@@ -49,7 +49,7 @@ struct jfs_inode_info {
 	short	btorder;	/* access order	*/
 	short	btindex;	/* btpage entry index*/
 	struct inode *ipimap;	/* inode map			*/
-	long	cflag;		/* commit flags		*/
+	unsigned long cflag;	/* commit flags		*/
 	u16	bxflag;		/* xflag of pseudo buffer?	*/
 	unchar	agno;		/* ag number			*/
 	signed char active_ag;	/* ag currently allocating from	*/
@@ -190,7 +190,7 @@ struct jfs_sb_info {
 	uint		gengen;		/* inode generation generator*/
 	uint		inostamp;	/* shows inode belongs to fileset*/
 
-        /* Formerly in ipbmap */
+	/* Formerly in ipbmap */
 	struct bmap	*bmap;		/* incore bmap descriptor	*/
 	struct nls_table *nls_tab;	/* current codepage		*/
 	struct inode *direct_inode;	/* metadata inode */

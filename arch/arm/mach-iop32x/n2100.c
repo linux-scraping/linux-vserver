@@ -16,6 +16,7 @@
 
 #include <linux/mm.h>
 #include <linux/init.h>
+#include <linux/f75375s.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
@@ -25,6 +26,7 @@
 #include <linux/serial_core.h>
 #include <linux/serial_8250.h>
 #include <linux/mtd/physmap.h>
+#include <linux/i2c.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <asm/hardware.h>
@@ -199,6 +201,22 @@ static struct platform_device n2100_serial_device = {
 	.resource	= &n2100_uart_resource,
 };
 
+static struct f75375s_platform_data n2100_f75375s = {
+	.pwm		= { 255, 255 },
+	.pwm_enable = { 0, 0 },
+};
+
+static struct i2c_board_info __initdata n2100_i2c_devices[] = {
+	{
+		I2C_BOARD_INFO("rtc-rs5c372", 0x32),
+		.type = "rs5c372b",
+	},
+	{
+		I2C_BOARD_INFO("f75375", 0x2e),
+		.type = "f75375",
+		.platform_data = &n2100_f75375s,
+	},
+};
 
 /*
  * Pull PCA9532 GPIO #8 low to power off the machine.
@@ -245,6 +263,11 @@ static void __init n2100_init_machine(void)
 	platform_device_register(&iop3xx_i2c0_device);
 	platform_device_register(&n2100_flash_device);
 	platform_device_register(&n2100_serial_device);
+	platform_device_register(&iop3xx_dma_0_channel);
+	platform_device_register(&iop3xx_dma_1_channel);
+
+	i2c_register_board_info(0, n2100_i2c_devices,
+		ARRAY_SIZE(n2100_i2c_devices));
 
 	pm_power_off = n2100_power_off;
 

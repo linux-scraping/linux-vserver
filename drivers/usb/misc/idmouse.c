@@ -66,6 +66,7 @@ static struct usb_device_id idmouse_table[] = {
 	USB_TYPE_VENDOR | USB_RECIP_ENDPOINT | USB_DIR_OUT, value, index, NULL, 0, 1000)
 
 MODULE_DEVICE_TABLE(usb, idmouse_table);
+static DEFINE_MUTEX(open_disc_mutex);
 
 /* structure to hold all of our device specific stuff */
 struct usb_idmouse {
@@ -80,7 +81,7 @@ struct usb_idmouse {
 
 	int open; /* if the port is open or not */
 	int present; /* if the device is not disconnected */
-	struct semaphore sem; /* locks this structure */
+	struct mutex lock; /* locks this structure */
 
 };
 
@@ -118,9 +119,6 @@ static struct usb_driver idmouse_driver = {
 	.disconnect = idmouse_disconnect,
 	.id_table = idmouse_table,
 };
-
-/* prevent races between open() and disconnect() */
-static DEFINE_MUTEX(disconnect_mutex);
 
 static int idmouse_create_image(struct usb_idmouse *dev)
 {
@@ -211,24 +209,22 @@ static int idmouse_open(struct inode *inode, struct file *file)
 	struct usb_interface *interface;
 	int result;
 
-	/* prevent disconnects */
-	mutex_lock(&disconnect_mutex);
-
 	/* get the interface from minor number and driver information */
 	interface = usb_find_interface (&idmouse_driver, iminor (inode));
-	if (!interface) {
-		mutex_unlock(&disconnect_mutex);
+	if (!interface)
 		return -ENODEV;
-	}
+
+	mutex_lock(&open_disc_mutex);
 	/* get the device information block from the interface */
 	dev = usb_get_intfdata(interface);
 	if (!dev) {
-		mutex_unlock(&disconnect_mutex);
+		mutex_unlock(&open_disc_mutex);
 		return -ENODEV;
 	}
 
 	/* lock this device */
-	down(&dev->sem);
+	mutex_lock(&dev->lock);
+	mutex_unlock(&open_disc_mutex);
 
 	/* check if already open */
 	if (dev->open) {
@@ -254,10 +250,7 @@ static int idmouse_open(struct inode *inode, struct file *file)
 error:
 
 	/* unlock this device */
-	up(&dev->sem);
-
-	/* unlock the disconnect semaphore */
-	mutex_unlock(&disconnect_mutex);
+	mutex_unlock(&dev->lock);
 	return result;
 }
 
@@ -265,23 +258,19 @@ static int idmouse_release(struct inode *inode, struct file *file)
 {
 	struct usb_idmouse *dev;
 
-	/* prevent a race condition with open() */
-	mutex_lock(&disconnect_mutex);
-
 	dev = file->private_data;
 
-	if (dev == NULL) {
-		mutex_unlock(&disconnect_mutex);
+	if (dev == NULL)
 		return -ENODEV;
-	}
 
+	mutex_lock(&open_disc_mutex);
 	/* lock our device */
-	down(&dev->sem);
+	mutex_lock(&dev->lock);
 
 	/* are we really open? */
 	if (dev->open <= 0) {
-		up(&dev->sem);
-		mutex_unlock(&disconnect_mutex);
+		mutex_unlock(&dev->lock);
+		mutex_unlock(&open_disc_mutex);
 		return -ENODEV;
 	}
 
@@ -289,14 +278,13 @@ static int idmouse_release(struct inode *inode, struct file *file)
 
 	if (!dev->present) {
 		/* the device was unplugged before the file was released */
-		up(&dev->sem);
+		mutex_unlock(&dev->lock);
+		mutex_unlock(&open_disc_mutex);
 		idmouse_delete(dev);
-		mutex_unlock(&disconnect_mutex);
-		return 0;
+	} else {
+		mutex_unlock(&dev->lock);
+		mutex_unlock(&open_disc_mutex);
 	}
-
-	up(&dev->sem);
-	mutex_unlock(&disconnect_mutex);
 	return 0;
 }
 
@@ -307,18 +295,18 @@ static ssize_t idmouse_read(struct file *file, char __user *buffer, size_t count
 	int result;
 
 	/* lock this object */
-	down(&dev->sem);
+	mutex_lock(&dev->lock);
 
 	/* verify that the device wasn't unplugged */
 	if (!dev->present) {
-		up(&dev->sem);
+		mutex_unlock(&dev->lock);
 		return -ENODEV;
 	}
 
 	result = simple_read_from_buffer(buffer, count, ppos,
 					dev->bulk_in_buffer, IMGSIZE);
 	/* unlock the device */
-	up(&dev->sem);
+	mutex_unlock(&dev->lock);
 	return result;
 }
 
@@ -341,7 +329,7 @@ static int idmouse_probe(struct usb_interface *interface,
 	if (dev == NULL)
 		return -ENOMEM;
 
-	init_MUTEX(&dev->sem);
+	mutex_init(&dev->lock);
 	dev->udev = udev;
 	dev->interface = interface;
 
@@ -391,30 +379,29 @@ static void idmouse_disconnect(struct usb_interface *interface)
 {
 	struct usb_idmouse *dev;
 
-	/* prevent races with open() */
-	mutex_lock(&disconnect_mutex);
-
 	/* get device structure */
 	dev = usb_get_intfdata(interface);
-	usb_set_intfdata(interface, NULL);
-
-	/* lock it */
-	down(&dev->sem);
 
 	/* give back our minor */
 	usb_deregister_dev(interface, &idmouse_class);
 
+	mutex_lock(&open_disc_mutex);
+	usb_set_intfdata(interface, NULL);
+	/* lock the device */
+	mutex_lock(&dev->lock);
+	mutex_unlock(&open_disc_mutex);
+
 	/* prevent device read, write and ioctl */
 	dev->present = 0;
 
-	/* unlock */
-	up(&dev->sem);
-
 	/* if the device is opened, idmouse_release will clean this up */
-	if (!dev->open)
+	if (!dev->open) {
+		mutex_unlock(&dev->lock);
 		idmouse_delete(dev);
-
-	mutex_unlock(&disconnect_mutex);
+	} else {
+		/* unlock */
+		mutex_unlock(&dev->lock);
+	}
 
 	info("%s disconnected", DRIVER_DESC);
 }

@@ -54,19 +54,19 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 				(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 				return -EROFS;
 
-			if ((current->fsuid != inode->i_uid)
-			    && !capable(CAP_FOWNER))
+			if (!is_owner_or_cap(inode))
 				return -EPERM;
 
 			if (get_user(flags, (int __user *)arg))
 				return -EFAULT;
 
-			oldflags = REISERFS_I(inode) -> i_attrs;
-			if (((oldflags & REISERFS_IMMUTABLE_FL) ||
-				((flags ^ oldflags) &
-				(REISERFS_IMMUTABLE_FL | REISERFS_IUNLINK_FL |
-				 REISERFS_APPEND_FL))) &&
-				!capable(CAP_LINUX_IMMUTABLE))
+			/* Is it quota file? Do not allow user to mess with it. */
+			if (IS_NOQUOTA(inode))
+				return -EPERM;
+			if (((flags ^ REISERFS_I(inode)->
+			      i_attrs) & (REISERFS_IMMUTABLE_FL |
+					  REISERFS_APPEND_FL))
+			    && !capable(CAP_LINUX_IMMUTABLE))
 				return -EPERM;
 
 			if ((flags & REISERFS_NOTAIL_FL) &&
@@ -89,7 +89,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 	case REISERFS_IOC_GETVERSION:
 		return put_user(inode->i_generation, (int __user *)arg);
 	case REISERFS_IOC_SETVERSION:
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
@@ -138,6 +138,10 @@ long reiserfs_compat_ioctl(struct file *file, unsigned int cmd,
 }
 #endif
 
+int reiserfs_commit_write(struct file *f, struct page *page,
+			  unsigned from, unsigned to);
+int reiserfs_prepare_write(struct file *f, struct page *page,
+			   unsigned from, unsigned to);
 /*
 ** reiserfs_unpack
 ** Function try to convert tail from direct item into indirect.
@@ -185,15 +189,13 @@ static int reiserfs_unpack(struct inode *inode, struct file *filp)
 	if (!page) {
 		goto out;
 	}
-	retval =
-	    mapping->a_ops->prepare_write(NULL, page, write_from, write_from);
+	retval = reiserfs_prepare_write(NULL, page, write_from, write_from);
 	if (retval)
 		goto out_unlock;
 
 	/* conversion can change page contents, must flush */
 	flush_dcache_page(page);
-	retval =
-	    mapping->a_ops->commit_write(NULL, page, write_from, write_from);
+	retval = reiserfs_commit_write(NULL, page, write_from, write_from);
 	REISERFS_I(inode)->i_flags |= i_nopack_mask;
 
       out_unlock:

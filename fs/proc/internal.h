@@ -17,6 +17,11 @@ extern int proc_sys_init(void);
 #else
 static inline void proc_sys_init(void) { }
 #endif
+#ifdef CONFIG_NET
+extern int proc_net_init(void);
+#else
+static inline int proc_net_init(void) { return 0; }
+#endif
 
 struct vmalloc_info {
 	unsigned long	used;
@@ -79,3 +84,5 @@ static inline int proc_fd(struct inode *inode)
 {
 	return PROC_I(inode)->fd;
 }
+
+extern struct file_system_type proc_fs_type;

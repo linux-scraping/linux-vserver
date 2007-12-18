@@ -66,8 +66,7 @@ static int tiocx_match(struct device *dev, struct device_driver *drv)
 
 }
 
-static int tiocx_uevent(struct device *dev, char **envp, int num_envp,
-			 char *buffer, int buffer_size)
+static int tiocx_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	return -ENODEV;
 }
@@ -369,7 +368,7 @@ static void tio_corelet_reset(nasid_t nasid, int corelet)
 
 static int is_fpga_tio(int nasid, int *bt)
 {
-	u16 ioboard_type;
+	u16 uninitialized_var(ioboard_type);	/* GCC be quiet */
 	s64 rc;
 
 	rc = ia64_sn_sysctl_ioboard_get(nasid, &ioboard_type);

@@ -11,7 +11,6 @@
 #include <asm/machvec.h>
 #include <asm/irq.h>
 #include <asm/io.h>
-#include <asm/irq.h>
 
 static struct ipr_data sh7710voipgw_ipr_map[] = {
 	{ TIMER2_IRQ, TIMER2_IPR_ADDR, TIMER2_IPR_POS, TIMER2_PRIORITY },
@@ -88,9 +87,8 @@ static void __init sh7710voipgw_init_irq(void)
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_sh7710voipgw __initmv = {
+static struct sh_machine_vector mv_sh7710voipgw __initmv = {
 	.mv_name		= "SH7710 VoIP Gateway",
 	.mv_nr_irqs		= 104,
 	.mv_init_irq		= sh7710voipgw_init_irq,
 };
-ALIAS_MV(sh7710voipgw)

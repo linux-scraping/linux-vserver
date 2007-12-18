@@ -58,7 +58,8 @@ static void print_amp_caps(struct snd_info_buffer *buffer,
 		snd_iprintf(buffer, "N/A\n");
 		return;
 	}
-	snd_iprintf(buffer, "ofs=0x%02x, nsteps=0x%02x, stepsize=0x%02x, mute=%x\n",
+	snd_iprintf(buffer, "ofs=0x%02x, nsteps=0x%02x, stepsize=0x%02x, "
+		    "mute=%x\n",
 		    caps & AC_AMPCAP_OFFSET,
 		    (caps & AC_AMPCAP_NUM_STEPS) >> AC_AMPCAP_NUM_STEPS_SHIFT,
 		    (caps & AC_AMPCAP_STEP_SIZE) >> AC_AMPCAP_STEP_SIZE_SHIFT,
@@ -76,11 +77,13 @@ static void print_amp_vals(struct snd_info_buffer *buffer,
 	for (i = 0; i < indices; i++) {
 		snd_iprintf(buffer, " [");
 		if (stereo) {
-			val = snd_hda_codec_read(codec, nid, 0, AC_VERB_GET_AMP_GAIN_MUTE,
+			val = snd_hda_codec_read(codec, nid, 0,
+						 AC_VERB_GET_AMP_GAIN_MUTE,
 						 AC_AMP_GET_LEFT | dir | i);
 			snd_iprintf(buffer, "0x%02x ", val);
 		}
-		val = snd_hda_codec_read(codec, nid, 0, AC_VERB_GET_AMP_GAIN_MUTE,
+		val = snd_hda_codec_read(codec, nid, 0,
+					 AC_VERB_GET_AMP_GAIN_MUTE,
 					 AC_AMP_GET_RIGHT | dir | i);
 		snd_iprintf(buffer, "0x%02x]", val);
 	}
@@ -237,7 +240,8 @@ static void print_pin_caps(struct snd_info_buffer *buffer,
 }
 
 
-static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffer *buffer)
+static void print_codec_info(struct snd_info_entry *entry,
+			     struct snd_info_buffer *buffer)
 {
 	struct hda_codec *codec = entry->private_data;
 	char buf[32];
@@ -250,8 +254,15 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 	snd_iprintf(buffer, "Vendor Id: 0x%x\n", codec->vendor_id);
 	snd_iprintf(buffer, "Subsystem Id: 0x%x\n", codec->subsystem_id);
 	snd_iprintf(buffer, "Revision Id: 0x%x\n", codec->revision_id);
+
+	if (codec->mfg)
+		snd_iprintf(buffer, "Modem Function Group: 0x%x\n", codec->mfg);
+	else
+		snd_iprintf(buffer, "No Modem Function Group found\n");
+
 	if (! codec->afg)
 		return;
+	snd_hda_power_up(codec);
 	snd_iprintf(buffer, "Default PCM:\n");
 	print_pcm_caps(buffer, codec, codec->afg);
 	snd_iprintf(buffer, "Default Amp-In caps: ");
@@ -262,12 +273,15 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 	nodes = snd_hda_get_sub_nodes(codec, codec->afg, &nid);
 	if (! nid || nodes < 0) {
 		snd_iprintf(buffer, "Invalid AFG subtree\n");
+		snd_hda_power_down(codec);
 		return;
 	}
 	for (i = 0; i < nodes; i++, nid++) {
-		unsigned int wid_caps = snd_hda_param_read(codec, nid,
-							   AC_PAR_AUDIO_WIDGET_CAP);
-		unsigned int wid_type = (wid_caps & AC_WCAP_TYPE) >> AC_WCAP_TYPE_SHIFT;
+		unsigned int wid_caps =
+			snd_hda_param_read(codec, nid,
+					   AC_PAR_AUDIO_WIDGET_CAP);
+		unsigned int wid_type =
+			(wid_caps & AC_WCAP_TYPE) >> AC_WCAP_TYPE_SHIFT;
 		int conn_len = 0; 
 		hda_nid_t conn[HDA_MAX_CONNECTIONS];
 
@@ -307,7 +321,9 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 		if (wid_type == AC_WID_PIN) {
 			unsigned int pinctls;
 			print_pin_caps(buffer, codec, nid);
-			pinctls = snd_hda_codec_read(codec, nid, 0, AC_VERB_GET_PIN_WIDGET_CONTROL, 0);
+			pinctls = snd_hda_codec_read(codec, nid, 0,
+					     AC_VERB_GET_PIN_WIDGET_CONTROL,
+						     0);
 			snd_iprintf(buffer, "  Pin-ctls: 0x%02x:", pinctls);
 			if (pinctls & AC_PINCTL_IN_EN)
 				snd_iprintf(buffer, " IN");
@@ -327,7 +343,8 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 		if (wid_caps & AC_WCAP_POWER)
 			snd_iprintf(buffer, "  Power: 0x%x\n",
 				    snd_hda_codec_read(codec, nid, 0,
-						       AC_VERB_GET_POWER_STATE, 0));
+						       AC_VERB_GET_POWER_STATE,
+						       0));
 
 		if (wid_caps & AC_WCAP_CONN_LIST) {
 			int c, curr = -1;
@@ -344,6 +361,7 @@ static void print_codec_info(struct snd_info_entry *entry, struct snd_info_buffe
 			snd_iprintf(buffer, "\n");
 		}
 	}
+	snd_hda_power_down(codec);
 }
 
 /*

@@ -565,7 +565,7 @@ typedef struct os_dat_s {
  *	The following parameter is used to select the point in the internal
  *	tape fifo in which we will start to refill the buffer. Decreasing
  *	the following parameter will improve the system's latency and
- *	interactive response, while using a high value might improve sytem
+ *	interactive response, while using a high value might improve system
  *	throughput.
  */
 #define IDETAPE_FIFO_THRESHOLD 		2
@@ -621,7 +621,6 @@ typedef struct os_dat_s {
  */
 #define USE_IOTRACE	0
 #if USE_IOTRACE
-#include <linux/io_trace.h>
 #define IO_IDETAPE_FIFO	500
 #endif
 
@@ -640,7 +639,7 @@ typedef enum {
 } idetape_chrdev_direction_t;
 
 struct idetape_bh {
-	unsigned short b_size;
+	u32 b_size;
 	atomic_t b_count;
 	struct idetape_bh *b_reqnext;
 	char *b_data;

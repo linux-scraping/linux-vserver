@@ -17,7 +17,7 @@
  * Bill Ryder - bryder@sgi.com formerly of Silicon Graphics, Inc.- wrote the 
  * FTDI_SIO implementation.
  *
- * Philipp Gühring - pg@futureware.at - added the Device ID of the USB relais
+ * Philipp GÃ¼hring - pg@futureware.at - added the Device ID of the USB relais
  * from Rudolf Gugler
  *
  */
@@ -44,7 +44,7 @@
 #define FTDI_ACTZWAVE_PID	0xF2D0
 
 
-/* www.starting-point-systems.com µChameleon device */
+/* www.starting-point-systems.com ÂµChameleon device */
 #define FTDI_MICRO_CHAMELEON_PID	0xCAA0	/* Product Id */
 
 /* www.irtrans.de device */
@@ -419,7 +419,7 @@
 
 /*
  * Teratronik product ids.
- * Submitted by O. Wölfelschneider.
+ * Submitted by O. WÃ¶lfelschneider.
  */
 #define FTDI_TERATRONIK_VCP_PID	 0xEC88	/* Teratronik device (preferring VCP driver on windows) */
 #define FTDI_TERATRONIK_D2XX_PID 0xEC89	/* Teratronik device (preferring D2XX driver on windows) */
@@ -430,6 +430,9 @@
  */
 #define EVOLUTION_VID		0xDEEE	/* Vendor ID */
 #define EVOLUTION_ER1_PID	0x0300	/* ER1 Control Module */
+#define EVO_8U232AM_PID	0x02FF	/* Evolution robotics RCM2 (FT232AM)*/
+#define EVO_HYBRID_PID		0x0302	/* Evolution robotics RCM4 PID (FT232BM)*/
+#define EVO_RCM4_PID		0x0303	/* Evolution robotics RCM4 PID */
 
 /* Pyramid Computer GmbH */
 #define FTDI_PYRAMID_PID	0xE6C8	/* Pyramid Appliance Display */
@@ -530,6 +533,14 @@
 /* Olimex */
 #define OLIMEX_VID			0x15BA
 #define OLIMEX_ARM_USB_OCD_PID		0x0003
+
+
+/*
+ * The Mobility Lab (TML)
+ * Submitted by Pierre Castella
+ */
+#define TML_VID			0x1B91	/* Vendor ID */
+#define TML_USB_SERIAL_PID	0x0064	/* USB - Serial Converter */
 
 /* Commands */
 #define FTDI_SIO_RESET 		0 /* Reset the port */

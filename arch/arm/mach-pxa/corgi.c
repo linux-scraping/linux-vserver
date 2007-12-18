@@ -20,6 +20,7 @@
 #include <linux/interrupt.h>
 #include <linux/mmc/host.h>
 #include <linux/pm.h>
+#include <linux/backlight.h>
 
 #include <asm/setup.h>
 #include <asm/memory.h>
@@ -44,6 +45,7 @@
 #include <asm/hardware/scoop.h>
 
 #include "generic.h"
+#include "devices.h"
 #include "sharpsl.h"
 
 
@@ -141,15 +143,28 @@ struct corgissp_machinfo corgi_ssp_machinfo = {
 /*
  * Corgi Backlight Device
  */
-static struct corgibl_machinfo corgi_bl_machinfo = {
+static void corgi_bl_kick_battery(void)
+{
+	void (*kick_batt)(void);
+
+	kick_batt = symbol_get(sharpsl_battery_kick);
+	if (kick_batt) {
+		kick_batt();
+		symbol_put(sharpsl_battery_kick);
+	}
+}
+
+static struct generic_bl_info corgi_bl_machinfo = {
+	.name = "corgi-bl",
 	.max_intensity = 0x2f,
 	.default_intensity = 0x1f,
 	.limit_mask = 0x0b,
 	.set_bl_intensity = corgi_bl_set_intensity,
+	.kick_battery = corgi_bl_kick_battery,
 };
 
 static struct platform_device corgibl_device = {
-	.name		= "corgi-bl",
+	.name		= "generic-bl",
 	.dev		= {
  		.parent = &corgifb_device.dev,
 		.platform_data	= &corgi_bl_machinfo,
@@ -368,7 +383,7 @@ MACHINE_START(CORGI, "SHARP Corgi")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -380,7 +395,7 @@ MACHINE_START(SHEPHERD, "SHARP Shepherd")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -392,7 +407,7 @@ MACHINE_START(HUSKY, "SHARP Husky")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END

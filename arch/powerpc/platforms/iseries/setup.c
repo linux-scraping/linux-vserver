@@ -26,6 +26,8 @@
 #include <linux/major.h>
 #include <linux/root_dev.h>
 #include <linux/kernel.h>
+#include <linux/hrtimer.h>
+#include <linux/tick.h>
 
 #include <asm/processor.h>
 #include <asm/machdep.h>
@@ -41,7 +43,6 @@
 #include <asm/time.h>
 #include <asm/paca.h>
 #include <asm/cache.h>
-#include <asm/sections.h>
 #include <asm/abs_addr.h>
 #include <asm/iseries/hv_lp_config.h>
 #include <asm/iseries/hv_call_event.h>
@@ -79,8 +80,6 @@ extern void iSeries_pci_final_fixup(void);
 static void iSeries_pci_final_fixup(void) { }
 #endif
 
-extern unsigned long iSeries_recal_tb;
-extern unsigned long iSeries_recal_titan;
 
 struct MemoryBlock {
 	unsigned long absStart;
@@ -292,8 +291,8 @@ static void __init iSeries_init_early(void)
 {
 	DBG(" -> iSeries_init_early()\n");
 
-	iSeries_recal_tb = get_tb();
-	iSeries_recal_titan = HvCallXm_loadTod();
+	/* Snapshot the timebase, for use in later recalibration */
+	iSeries_time_init_early();
 
 	/*
 	 * Initialize the DMA/TCE management
@@ -564,6 +563,7 @@ static void yield_shared_processor(void)
 static void iseries_shared_idle(void)
 {
 	while (1) {
+		tick_nohz_stop_sched_tick();
 		while (!need_resched() && !hvlpevent_is_pending()) {
 			local_irq_disable();
 			ppc64_runlatch_off();
@@ -577,6 +577,7 @@ static void iseries_shared_idle(void)
 		}
 
 		ppc64_runlatch_on();
+		tick_nohz_restart_sched_tick();
 
 		if (hvlpevent_is_pending())
 			process_iSeries_events();
@@ -592,6 +593,7 @@ static void iseries_dedicated_idle(void)
 	set_thread_flag(TIF_POLLING_NRFLAG);
 
 	while (1) {
+		tick_nohz_stop_sched_tick();
 		if (!need_resched()) {
 			while (!need_resched()) {
 				ppc64_runlatch_off();
@@ -608,15 +610,12 @@ static void iseries_dedicated_idle(void)
 		}
 
 		ppc64_runlatch_on();
+		tick_nohz_restart_sched_tick();
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
 	}
 }
-
-#ifndef CONFIG_PCI
-void __init iSeries_init_IRQ(void) { }
-#endif
 
 static void __iomem *iseries_ioremap(phys_addr_t address, unsigned long size,
 				     unsigned long flags)

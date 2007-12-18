@@ -97,6 +97,9 @@ enum {
 	RTM_SETNEIGHTBL,
 #define RTM_SETNEIGHTBL	RTM_SETNEIGHTBL
 
+	RTM_NEWNDUSEROPT = 68,
+#define RTM_NEWNDUSEROPT RTM_NEWNDUSEROPT
+
 	__RTM_MAX,
 #define RTM_MAX		(((__RTM_MAX + 3) & ~3) - 1)
 };
@@ -261,7 +264,7 @@ enum rtattr_type_t
 	RTA_FLOW,
 	RTA_CACHEINFO,
 	RTA_SESSION,
-	RTA_MP_ALGO,
+	RTA_MP_ALGO, /* no longer used */
 	RTA_TABLE,
 	__RTA_MAX
 };
@@ -351,6 +354,8 @@ enum
 #define RTAX_INITCWND RTAX_INITCWND
 	RTAX_FEATURES,
 #define RTAX_FEATURES RTAX_FEATURES
+	RTAX_RTO_MIN,
+#define RTAX_RTO_MIN RTAX_RTO_MIN
 	__RTAX_MAX
 };
 
@@ -477,6 +482,32 @@ enum
 #define TCA_RTA(r)  ((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct tcmsg))))
 #define TCA_PAYLOAD(n) NLMSG_PAYLOAD(n,sizeof(struct tcmsg))
 
+/********************************************************************
+ *		Neighbor Discovery userland options
+ ****/
+
+struct nduseroptmsg
+{
+	unsigned char	nduseropt_family;
+	unsigned char	nduseropt_pad1;
+	unsigned short	nduseropt_opts_len;	/* Total length of options */
+	int		nduseropt_ifindex;
+	__u8		nduseropt_icmp_type;
+	__u8		nduseropt_icmp_code;
+	unsigned short	nduseropt_pad2;
+	unsigned int	nduseropt_pad3;
+	/* Followed by one or more ND options */
+};
+
+enum
+{
+	NDUSEROPT_UNSPEC,
+	NDUSEROPT_SRCADDR,
+	__NDUSEROPT_MAX
+};
+
+#define NDUSEROPT_MAX	(__NDUSEROPT_MAX - 1)
+
 #ifndef __KERNEL__
 /* RTnetlink multicast groups - backwards compatibility for userspace */
 #define RTMGRP_LINK		1
@@ -540,6 +571,8 @@ enum rtnetlink_groups {
 #define RTNLGRP_IPV6_PREFIX	RTNLGRP_IPV6_PREFIX
 	RTNLGRP_IPV6_RULE,
 #define RTNLGRP_IPV6_RULE	RTNLGRP_IPV6_RULE
+	RTNLGRP_ND_USEROPT,
+#define RTNLGRP_ND_USEROPT	RTNLGRP_ND_USEROPT
 	__RTNLGRP_MAX
 };
 #define RTNLGRP_MAX	(__RTNLGRP_MAX - 1)
@@ -570,9 +603,15 @@ static __inline__ int rtattr_strcmp(const struct rtattr *rta, const char *str)
 }
 
 extern int rtattr_parse(struct rtattr *tb[], int maxattr, struct rtattr *rta, int len);
+extern int __rtattr_parse_nested_compat(struct rtattr *tb[], int maxattr,
+				        struct rtattr *rta, int len);
 
 #define rtattr_parse_nested(tb, max, rta) \
 	rtattr_parse((tb), (max), RTA_DATA((rta)), RTA_PAYLOAD((rta)))
+
+#define rtattr_parse_nested_compat(tb, max, rta, data, len) \
+({	data = RTA_PAYLOAD(rta) >= len ? RTA_DATA(rta) : NULL; \
+	__rtattr_parse_nested_compat(tb, max, rta, len); })
 
 extern int rtnetlink_send(struct sk_buff *skb, u32 pid, u32 group, int echo);
 extern int rtnl_unicast(struct sk_buff *skb, u32 pid);
@@ -636,6 +675,18 @@ extern void __rta_fill(struct sk_buff *skb, int attrtype, int attrlen, const voi
 
 #define RTA_NEST_END(skb, start) \
 ({	(start)->rta_len = skb_tail_pointer(skb) - (unsigned char *)(start); \
+	(skb)->len; })
+
+#define RTA_NEST_COMPAT(skb, type, attrlen, data) \
+({	struct rtattr *__start = (struct rtattr *)skb_tail_pointer(skb); \
+	RTA_PUT(skb, type, attrlen, data); \
+	RTA_NEST(skb, type); \
+	__start; })
+
+#define RTA_NEST_COMPAT_END(skb, start) \
+({	struct rtattr *__nest = (void *)(start) + NLMSG_ALIGN((start)->rta_len); \
+	(start)->rta_len = skb_tail_pointer(skb) - (unsigned char *)(start); \
+	RTA_NEST_END(skb, __nest); \
 	(skb)->len; })
 
 #define RTA_NEST_CANCEL(skb, start) \

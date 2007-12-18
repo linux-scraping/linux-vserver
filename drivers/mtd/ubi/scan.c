@@ -24,7 +24,7 @@
  * This unit is responsible for scanning the flash media, checking UBI
  * headers and providing complete information about the UBI flash image.
  *
- * The scanning information is reoresented by a &struct ubi_scan_info' object.
+ * The scanning information is represented by a &struct ubi_scan_info' object.
  * Information about found volumes is represented by &struct ubi_scan_volume
  * objects which are kept in volume RB-tree with root at the @volumes field.
  * The RB-tree is indexed by the volume ID.
@@ -45,8 +45,7 @@
 #include "ubi.h"
 
 #ifdef CONFIG_MTD_UBI_DEBUG_PARANOID
-static int paranoid_check_si(const struct ubi_device *ubi,
-			     struct ubi_scan_info *si);
+static int paranoid_check_si(struct ubi_device *ubi, struct ubi_scan_info *si);
 #else
 #define paranoid_check_si(ubi, si) 0
 #endif
@@ -55,8 +54,19 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 static struct ubi_ec_hdr *ech;
 static struct ubi_vid_hdr *vidh;
 
-int ubi_scan_add_to_list(struct ubi_scan_info *si, int pnum, int ec,
-			 struct list_head *list)
+/**
+ * add_to_list - add physical eraseblock to a list.
+ * @si: scanning information
+ * @pnum: physical eraseblock number to add
+ * @ec: erase counter of the physical eraseblock
+ * @list: the list to add to
+ *
+ * This function adds physical eraseblock @pnum to free, erase, corrupted or
+ * alien lists. Returns zero in case of success and a negative error code in
+ * case of failure.
+ */
+static int add_to_list(struct ubi_scan_info *si, int pnum, int ec,
+		       struct list_head *list)
 {
 	struct ubi_scan_leb *seb;
 
@@ -121,9 +131,9 @@ static int validate_vid_hdr(const struct ubi_vid_hdr *vid_hdr,
 			    const struct ubi_scan_volume *sv, int pnum)
 {
 	int vol_type = vid_hdr->vol_type;
-	int vol_id = ubi32_to_cpu(vid_hdr->vol_id);
-	int used_ebs = ubi32_to_cpu(vid_hdr->used_ebs);
-	int data_pad = ubi32_to_cpu(vid_hdr->data_pad);
+	int vol_id = be32_to_cpu(vid_hdr->vol_id);
+	int used_ebs = be32_to_cpu(vid_hdr->used_ebs);
+	int data_pad = be32_to_cpu(vid_hdr->data_pad);
 
 	if (sv->leb_count != 0) {
 		int sv_vol_type;
@@ -189,7 +199,7 @@ static struct ubi_scan_volume *add_volume(struct ubi_scan_info *si, int vol_id,
 	struct ubi_scan_volume *sv;
 	struct rb_node **p = &si->volumes.rb_node, *parent = NULL;
 
-	ubi_assert(vol_id == ubi32_to_cpu(vid_hdr->vol_id));
+	ubi_assert(vol_id == be32_to_cpu(vid_hdr->vol_id));
 
 	/* Walk the volume RB-tree to look if this volume is already present */
 	while (*p) {
@@ -211,11 +221,10 @@ static struct ubi_scan_volume *add_volume(struct ubi_scan_info *si, int vol_id,
 		return ERR_PTR(-ENOMEM);
 
 	sv->highest_lnum = sv->leb_count = 0;
-	si->max_sqnum = 0;
 	sv->vol_id = vol_id;
 	sv->root = RB_ROOT;
-	sv->used_ebs = ubi32_to_cpu(vid_hdr->used_ebs);
-	sv->data_pad = ubi32_to_cpu(vid_hdr->data_pad);
+	sv->used_ebs = be32_to_cpu(vid_hdr->used_ebs);
+	sv->data_pad = be32_to_cpu(vid_hdr->data_pad);
 	sv->compat = vid_hdr->compat;
 	sv->vol_type = vid_hdr->vol_type == UBI_VID_DYNAMIC ? UBI_DYNAMIC_VOLUME
 							    : UBI_STATIC_VOLUME;
@@ -249,18 +258,17 @@ static struct ubi_scan_volume *add_volume(struct ubi_scan_info *si, int vol_id,
  *     o bit 2 is cleared: the older LEB is not corrupted;
  *     o bit 2 is set: the older LEB is corrupted.
  */
-static int compare_lebs(const struct ubi_device *ubi,
-			const struct ubi_scan_leb *seb, int pnum,
-			const struct ubi_vid_hdr *vid_hdr)
+static int compare_lebs(struct ubi_device *ubi, const struct ubi_scan_leb *seb,
+			int pnum, const struct ubi_vid_hdr *vid_hdr)
 {
 	void *buf;
 	int len, err, second_is_newer, bitflips = 0, corrupted = 0;
 	uint32_t data_crc, crc;
-	struct ubi_vid_hdr *vidh = NULL;
-	unsigned long long sqnum2 = ubi64_to_cpu(vid_hdr->sqnum);
+	struct ubi_vid_hdr *vh = NULL;
+	unsigned long long sqnum2 = be64_to_cpu(vid_hdr->sqnum);
 
 	if (seb->sqnum == 0 && sqnum2 == 0) {
-		long long abs, v1 = seb->leb_ver, v2 = ubi32_to_cpu(vid_hdr->leb_ver);
+		long long abs, v1 = seb->leb_ver, v2 = be32_to_cpu(vid_hdr->leb_ver);
 
 		/*
 		 * UBI constantly increases the logical eraseblock version
@@ -313,11 +321,11 @@ static int compare_lebs(const struct ubi_device *ubi,
 	} else {
 		pnum = seb->pnum;
 
-		vidh = ubi_zalloc_vid_hdr(ubi);
-		if (!vidh)
+		vh = ubi_zalloc_vid_hdr(ubi, GFP_KERNEL);
+		if (!vh)
 			return -ENOMEM;
 
-		err = ubi_io_read_vid_hdr(ubi, pnum, vidh, 0);
+		err = ubi_io_read_vid_hdr(ubi, pnum, vh, 0);
 		if (err) {
 			if (err == UBI_IO_BITFLIPS)
 				bitflips = 1;
@@ -331,7 +339,7 @@ static int compare_lebs(const struct ubi_device *ubi,
 			}
 		}
 
-		if (!vidh->copy_flag) {
+		if (!vh->copy_flag) {
 			/* It is not a copy, so it is newer */
 			dbg_bld("first PEB %d is newer, copy_flag is unset",
 				pnum);
@@ -339,13 +347,13 @@ static int compare_lebs(const struct ubi_device *ubi,
 			goto out_free_vidh;
 		}
 
-		vid_hdr = vidh;
+		vid_hdr = vh;
 	}
 
 	/* Read the data of the copy and check the CRC */
 
-	len = ubi32_to_cpu(vid_hdr->data_size);
-	buf = kmalloc(len, GFP_KERNEL);
+	len = be32_to_cpu(vid_hdr->data_size);
+	buf = vmalloc(len);
 	if (!buf) {
 		err = -ENOMEM;
 		goto out_free_vidh;
@@ -355,7 +363,7 @@ static int compare_lebs(const struct ubi_device *ubi,
 	if (err && err != UBI_IO_BITFLIPS)
 		goto out_free_buf;
 
-	data_crc = ubi32_to_cpu(vid_hdr->data_crc);
+	data_crc = be32_to_cpu(vid_hdr->data_crc);
 	crc = crc32(UBI_CRC32_INIT, buf, len);
 	if (crc != data_crc) {
 		dbg_bld("PEB %d CRC error: calculated %#08x, must be %#08x",
@@ -368,8 +376,8 @@ static int compare_lebs(const struct ubi_device *ubi,
 		bitflips = !!err;
 	}
 
-	kfree(buf);
-	ubi_free_vid_hdr(ubi, vidh);
+	vfree(buf);
+	ubi_free_vid_hdr(ubi, vh);
 
 	if (second_is_newer)
 		dbg_bld("second PEB %d is newer, copy_flag is set", pnum);
@@ -379,9 +387,9 @@ static int compare_lebs(const struct ubi_device *ubi,
 	return second_is_newer | (bitflips << 1) | (corrupted << 2);
 
 out_free_buf:
-	kfree(buf);
+	vfree(buf);
 out_free_vidh:
-	ubi_free_vid_hdr(ubi, vidh);
+	ubi_free_vid_hdr(ubi, vh);
 	ubi_assert(err < 0);
 	return err;
 }
@@ -396,10 +404,14 @@ out_free_vidh:
  * @vid_hdr: the volume identifier header
  * @bitflips: if bit-flips were detected when this physical eraseblock was read
  *
- * This function returns zero in case of success and a negative error code in
- * case of failure.
+ * This function adds information about a used physical eraseblock to the
+ * 'used' tree of the corresponding volume. The function is rather complex
+ * because it has to handle cases when this is not the first physical
+ * eraseblock belonging to the same logical eraseblock, and the newer one has
+ * to be picked, while the older one has to be dropped. This function returns
+ * zero in case of success and a negative error code in case of failure.
  */
-int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
+int ubi_scan_add_used(struct ubi_device *ubi, struct ubi_scan_info *si,
 		      int pnum, int ec, const struct ubi_vid_hdr *vid_hdr,
 		      int bitflips)
 {
@@ -410,10 +422,10 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 	struct ubi_scan_leb *seb;
 	struct rb_node **p, *parent = NULL;
 
-	vol_id = ubi32_to_cpu(vid_hdr->vol_id);
-	lnum = ubi32_to_cpu(vid_hdr->lnum);
-	sqnum = ubi64_to_cpu(vid_hdr->sqnum);
-	leb_ver = ubi32_to_cpu(vid_hdr->leb_ver);
+	vol_id = be32_to_cpu(vid_hdr->vol_id);
+	lnum = be32_to_cpu(vid_hdr->lnum);
+	sqnum = be64_to_cpu(vid_hdr->sqnum);
+	leb_ver = be32_to_cpu(vid_hdr->leb_ver);
 
 	dbg_bld("PEB %d, LEB %d:%d, EC %d, sqnum %llu, ver %u, bitflips %d",
 		pnum, vol_id, lnum, ec, sqnum, leb_ver, bitflips);
@@ -421,6 +433,9 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 	sv = add_volume(si, vol_id, pnum, vid_hdr);
 	if (IS_ERR(sv) < 0)
 		return PTR_ERR(sv);
+
+	if (si->max_sqnum < sqnum)
+		si->max_sqnum = sqnum;
 
 	/*
 	 * Walk the RB-tree of logical eraseblocks of volume @vol_id to look
@@ -492,11 +507,11 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 				return err;
 
 			if (cmp_res & 4)
-				err = ubi_scan_add_to_list(si, seb->pnum,
-							   seb->ec, &si->corr);
+				err = add_to_list(si, seb->pnum, seb->ec,
+						  &si->corr);
 			else
-				err = ubi_scan_add_to_list(si, seb->pnum,
-							   seb->ec, &si->erase);
+				err = add_to_list(si, seb->pnum, seb->ec,
+						  &si->erase);
 			if (err)
 				return err;
 
@@ -508,7 +523,7 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 
 			if (sv->highest_lnum == lnum)
 				sv->last_data_size =
-					ubi32_to_cpu(vid_hdr->data_size);
+					be32_to_cpu(vid_hdr->data_size);
 
 			return 0;
 		} else {
@@ -517,11 +532,9 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 			 * previously.
 			 */
 			if (cmp_res & 4)
-				return ubi_scan_add_to_list(si, pnum, ec,
-							    &si->corr);
+				return add_to_list(si, pnum, ec, &si->corr);
 			else
-				return ubi_scan_add_to_list(si, pnum, ec,
-							    &si->erase);
+				return add_to_list(si, pnum, ec, &si->erase);
 		}
 	}
 
@@ -547,11 +560,8 @@ int ubi_scan_add_used(const struct ubi_device *ubi, struct ubi_scan_info *si,
 
 	if (sv->highest_lnum <= lnum) {
 		sv->highest_lnum = lnum;
-		sv->last_data_size = ubi32_to_cpu(vid_hdr->data_size);
+		sv->last_data_size = be32_to_cpu(vid_hdr->data_size);
 	}
-
-	if (si->max_sqnum < sqnum)
-		si->max_sqnum = sqnum;
 
 	sv->leb_count += 1;
 	rb_link_node(&seb->u.rb, parent, p);
@@ -655,15 +665,11 @@ void ubi_scan_rm_volume(struct ubi_scan_info *si, struct ubi_scan_volume *sv)
  * function returns zero in case of success and a negative error code in case
  * of failure.
  */
-int ubi_scan_erase_peb(const struct ubi_device *ubi,
-		       const struct ubi_scan_info *si, int pnum, int ec)
+int ubi_scan_erase_peb(struct ubi_device *ubi, const struct ubi_scan_info *si,
+		       int pnum, int ec)
 {
 	int err;
 	struct ubi_ec_hdr *ec_hdr;
-
-	ec_hdr = kzalloc(ubi->ec_hdr_alsize, GFP_KERNEL);
-	if (!ec_hdr)
-		return -ENOMEM;
 
 	if ((long long)ec >= UBI_MAX_ERASECOUNTER) {
 		/*
@@ -674,7 +680,11 @@ int ubi_scan_erase_peb(const struct ubi_device *ubi,
 		return -EINVAL;
 	}
 
-	ec_hdr->ec = cpu_to_ubi64(ec);
+	ec_hdr = kzalloc(ubi->ec_hdr_alsize, GFP_KERNEL);
+	if (!ec_hdr)
+		return -ENOMEM;
+
+	ec_hdr->ec = cpu_to_be64(ec);
 
 	err = ubi_io_sync_erase(ubi, pnum, 0);
 	if (err < 0)
@@ -700,7 +710,7 @@ out_free:
  * This function returns scanning physical eraseblock information in case of
  * success and an error code in case of failure.
  */
-struct ubi_scan_leb *ubi_scan_get_free_peb(const struct ubi_device *ubi,
+struct ubi_scan_leb *ubi_scan_get_free_peb(struct ubi_device *ubi,
 					   struct ubi_scan_info *si)
 {
 	int err = 0, i;
@@ -754,7 +764,7 @@ struct ubi_scan_leb *ubi_scan_get_free_peb(const struct ubi_device *ubi,
  * @si: scanning information
  * @pnum: the physical eraseblock number
  *
- * This function returns a zero if the physical eraseblock was succesfully
+ * This function returns a zero if the physical eraseblock was successfully
  * handled and a negative error code in case of failure.
  */
 static int process_eb(struct ubi_device *ubi, struct ubi_scan_info *si, int pnum)
@@ -783,8 +793,7 @@ static int process_eb(struct ubi_device *ubi, struct ubi_scan_info *si, int pnum
 	else if (err == UBI_IO_BITFLIPS)
 		bitflips = 1;
 	else if (err == UBI_IO_PEB_EMPTY)
-		return ubi_scan_add_to_list(si, pnum, UBI_SCAN_UNKNOWN_EC,
-					    &si->erase);
+		return add_to_list(si, pnum, UBI_SCAN_UNKNOWN_EC, &si->erase);
 	else if (err == UBI_IO_BAD_EC_HDR) {
 		/*
 		 * We have to also look at the VID header, possibly it is not
@@ -806,7 +815,7 @@ static int process_eb(struct ubi_device *ubi, struct ubi_scan_info *si, int pnum
 			return -EINVAL;
 		}
 
-		ec = ubi64_to_cpu(ech->ec);
+		ec = be64_to_cpu(ech->ec);
 		if (ec > UBI_MAX_ERASECOUNTER) {
 			/*
 			 * Erase counter overflow. The EC headers have 64 bits
@@ -832,28 +841,28 @@ static int process_eb(struct ubi_device *ubi, struct ubi_scan_info *si, int pnum
 	else if (err == UBI_IO_BAD_VID_HDR ||
 		 (err == UBI_IO_PEB_FREE && ec_corr)) {
 		/* VID header is corrupted */
-		err = ubi_scan_add_to_list(si, pnum, ec, &si->corr);
+		err = add_to_list(si, pnum, ec, &si->corr);
 		if (err)
 			return err;
 		goto adjust_mean_ec;
 	} else if (err == UBI_IO_PEB_FREE) {
 		/* No VID header - the physical eraseblock is free */
-		err = ubi_scan_add_to_list(si, pnum, ec, &si->free);
+		err = add_to_list(si, pnum, ec, &si->free);
 		if (err)
 			return err;
 		goto adjust_mean_ec;
 	}
 
-	vol_id = ubi32_to_cpu(vidh->vol_id);
+	vol_id = be32_to_cpu(vidh->vol_id);
 	if (vol_id > UBI_MAX_VOLUMES && vol_id != UBI_LAYOUT_VOL_ID) {
-		int lnum = ubi32_to_cpu(vidh->lnum);
+		int lnum = be32_to_cpu(vidh->lnum);
 
 		/* Unsupported internal volume */
 		switch (vidh->compat) {
 		case UBI_COMPAT_DELETE:
 			ubi_msg("\"delete\" compatible internal volume %d:%d"
 				" found, remove it", vol_id, lnum);
-			err = ubi_scan_add_to_list(si, pnum, ec, &si->corr);
+			err = add_to_list(si, pnum, ec, &si->corr);
 			if (err)
 				return err;
 			break;
@@ -868,7 +877,7 @@ static int process_eb(struct ubi_device *ubi, struct ubi_scan_info *si, int pnum
 		case UBI_COMPAT_PRESERVE:
 			ubi_msg("\"preserve\" compatible internal volume %d:%d"
 				" found", vol_id, lnum);
-			err = ubi_scan_add_to_list(si, pnum, ec, &si->alien);
+			err = add_to_list(si, pnum, ec, &si->alien);
 			if (err)
 				return err;
 			si->alien_peb_count += 1;
@@ -937,7 +946,7 @@ struct ubi_scan_info *ubi_scan(struct ubi_device *ubi)
 	if (!ech)
 		goto out_si;
 
-	vidh = ubi_zalloc_vid_hdr(ubi);
+	vidh = ubi_zalloc_vid_hdr(ubi, GFP_KERNEL);
 	if (!vidh)
 		goto out_ech;
 
@@ -1099,8 +1108,7 @@ void ubi_scan_destroy_si(struct ubi_scan_info *si)
  * This function returns zero if the scanning information is all right, %1 if
  * not and a negative error code if an error occurred.
  */
-static int paranoid_check_si(const struct ubi_device *ubi,
-			     struct ubi_scan_info *si)
+static int paranoid_check_si(struct ubi_device *ubi, struct ubi_scan_info *si)
 {
 	int pnum, err, vols_found = 0;
 	struct rb_node *rb1, *rb2;
@@ -1109,7 +1117,7 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 	uint8_t *buf;
 
 	/*
-	 * At first, check that scanning information is ok.
+	 * At first, check that scanning information is OK.
 	 */
 	ubi_rb_for_each_entry(rb1, sv, &si->volumes, rb) {
 		int leb_count = 0;
@@ -1249,12 +1257,12 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 				goto bad_vid_hdr;
 			}
 
-			if (seb->sqnum != ubi64_to_cpu(vidh->sqnum)) {
+			if (seb->sqnum != be64_to_cpu(vidh->sqnum)) {
 				ubi_err("bad sqnum %llu", seb->sqnum);
 				goto bad_vid_hdr;
 			}
 
-			if (sv->vol_id != ubi32_to_cpu(vidh->vol_id)) {
+			if (sv->vol_id != be32_to_cpu(vidh->vol_id)) {
 				ubi_err("bad vol_id %d", sv->vol_id);
 				goto bad_vid_hdr;
 			}
@@ -1264,22 +1272,22 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 				goto bad_vid_hdr;
 			}
 
-			if (seb->lnum != ubi32_to_cpu(vidh->lnum)) {
+			if (seb->lnum != be32_to_cpu(vidh->lnum)) {
 				ubi_err("bad lnum %d", seb->lnum);
 				goto bad_vid_hdr;
 			}
 
-			if (sv->used_ebs != ubi32_to_cpu(vidh->used_ebs)) {
+			if (sv->used_ebs != be32_to_cpu(vidh->used_ebs)) {
 				ubi_err("bad used_ebs %d", sv->used_ebs);
 				goto bad_vid_hdr;
 			}
 
-			if (sv->data_pad != ubi32_to_cpu(vidh->data_pad)) {
+			if (sv->data_pad != be32_to_cpu(vidh->data_pad)) {
 				ubi_err("bad data_pad %d", sv->data_pad);
 				goto bad_vid_hdr;
 			}
 
-			if (seb->leb_ver != ubi32_to_cpu(vidh->leb_ver)) {
+			if (seb->leb_ver != be32_to_cpu(vidh->leb_ver)) {
 				ubi_err("bad leb_ver %u", seb->leb_ver);
 				goto bad_vid_hdr;
 			}
@@ -1288,12 +1296,12 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 		if (!last_seb)
 			continue;
 
-		if (sv->highest_lnum != ubi32_to_cpu(vidh->lnum)) {
+		if (sv->highest_lnum != be32_to_cpu(vidh->lnum)) {
 			ubi_err("bad highest_lnum %d", sv->highest_lnum);
 			goto bad_vid_hdr;
 		}
 
-		if (sv->last_data_size != ubi32_to_cpu(vidh->data_size)) {
+		if (sv->last_data_size != be32_to_cpu(vidh->data_size)) {
 			ubi_err("bad last_data_size %d", sv->last_data_size);
 			goto bad_vid_hdr;
 		}
@@ -1303,38 +1311,39 @@ static int paranoid_check_si(const struct ubi_device *ubi,
 	 * Make sure that all the physical eraseblocks are in one of the lists
 	 * or trees.
 	 */
-	buf = kmalloc(ubi->peb_count, GFP_KERNEL);
+	buf = kzalloc(ubi->peb_count, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
-	memset(buf, 1, ubi->peb_count);
 	for (pnum = 0; pnum < ubi->peb_count; pnum++) {
 		err = ubi_io_is_bad(ubi, pnum);
-		if (err < 0)
+		if (err < 0) {
+			kfree(buf);
 			return err;
+		}
 		else if (err)
-			buf[pnum] = 0;
+			buf[pnum] = 1;
 	}
 
 	ubi_rb_for_each_entry(rb1, sv, &si->volumes, rb)
 		ubi_rb_for_each_entry(rb2, seb, &sv->root, u.rb)
-			buf[seb->pnum] = 0;
+			buf[seb->pnum] = 1;
 
 	list_for_each_entry(seb, &si->free, u.list)
-		buf[seb->pnum] = 0;
+		buf[seb->pnum] = 1;
 
 	list_for_each_entry(seb, &si->corr, u.list)
-		buf[seb->pnum] = 0;
+		buf[seb->pnum] = 1;
 
 	list_for_each_entry(seb, &si->erase, u.list)
-		buf[seb->pnum] = 0;
+		buf[seb->pnum] = 1;
 
 	list_for_each_entry(seb, &si->alien, u.list)
-		buf[seb->pnum] = 0;
+		buf[seb->pnum] = 1;
 
 	err = 0;
 	for (pnum = 0; pnum < ubi->peb_count; pnum++)
-		if (buf[pnum]) {
+		if (!buf[pnum]) {
 			ubi_err("PEB %d is not referred", pnum);
 			err = 1;
 		}

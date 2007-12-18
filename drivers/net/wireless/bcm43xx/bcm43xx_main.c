@@ -2380,7 +2380,7 @@ static int bcm43xx_chip_init(struct bcm43xx_private *bcm)
 		goto err_gpio_cleanup;
 	bcm43xx_radio_turn_on(bcm);
 	bcm->radio_hw_enable = bcm43xx_is_hw_radio_enabled(bcm);
-	dprintk(KERN_INFO PFX "Radio %s by hardware\n",
+	printk(KERN_INFO PFX "Radio %s by hardware\n",
 		(bcm->radio_hw_enable == 0) ? "disabled" : "enabled");
 
 	bcm43xx_write16(bcm, 0x03E6, 0x0000);
@@ -3129,7 +3129,7 @@ static void bcm43xx_periodic_every1sec(struct bcm43xx_private *bcm)
 	radio_hw_enable = bcm43xx_is_hw_radio_enabled(bcm);
 	if (unlikely(bcm->radio_hw_enable != radio_hw_enable)) {
 		bcm->radio_hw_enable = radio_hw_enable;
-		dprintk(KERN_INFO PFX "Radio hardware status changed to %s\n",
+		printk(KERN_INFO PFX "Radio hardware status changed to %s\n",
 		       (radio_hw_enable == 0) ? "disabled" : "enabled");
 		bcm43xx_leds_update(bcm, 0);
 	}
@@ -3289,7 +3289,7 @@ void bcm43xx_cancel_work(struct bcm43xx_private *bcm)
 	/* The system must be unlocked when this routine is entered.
 	 * If not, the next 2 steps may deadlock */
 	cancel_work_sync(&bcm->restart_work);
-	cancel_rearming_delayed_work(&bcm->periodic_work);
+	cancel_delayed_work_sync(&bcm->periodic_work);
 }
 
 static int bcm43xx_shutdown_all_wireless_cores(struct bcm43xx_private *bcm)
@@ -3753,10 +3753,8 @@ static int bcm43xx_attach_board(struct bcm43xx_private *bcm)
 	                          &bcm->board_type);
 	if (err)
 		goto err_iounmap;
-	err = bcm43xx_pci_read_config16(bcm, PCI_REVISION_ID,
-	                          &bcm->board_revision);
-	if (err)
-		goto err_iounmap;
+
+	bcm->board_revision = bcm->pci_dev->revision;
 
 	err = bcm43xx_chipset_attach(bcm);
 	if (err)
@@ -4094,7 +4092,6 @@ static int __devinit bcm43xx_init_one(struct pci_dev *pdev,
 		goto out;
 	}
 	/* initialize the net_device struct */
-	SET_MODULE_OWNER(net_dev);
 	SET_NETDEV_DEV(net_dev, &pdev->dev);
 
 	net_dev->open = bcm43xx_net_open;

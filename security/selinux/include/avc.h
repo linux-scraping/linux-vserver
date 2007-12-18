@@ -102,13 +102,17 @@ void avc_audit(u32 ssid, u32 tsid,
                u16 tclass, u32 requested,
                struct av_decision *avd, int result, struct avc_audit_data *auditdata);
 
+#define AVC_STRICT 1 /* Ignore permissive mode. */
 int avc_has_perm_noaudit(u32 ssid, u32 tsid,
-                         u16 tclass, u32 requested,
-                         struct av_decision *avd);
+			 u16 tclass, u32 requested,
+			 unsigned flags,
+			 struct av_decision *avd);
 
 int avc_has_perm(u32 ssid, u32 tsid,
                  u16 tclass, u32 requested,
                  struct avc_audit_data *auditdata);
+
+u32 avc_policy_seqno(void);
 
 #define AVC_CALLBACK_GRANT		1
 #define AVC_CALLBACK_TRY_REVOKE		2

@@ -420,7 +420,7 @@ static inline void borken_wait (void)
 #define ULOOP( i ) for (clock = i*8;;)
 #define TIMEOUT (!(clock--))
 
-int __init seagate_st0x_detect (struct scsi_host_template * tpnt)
+static int __init seagate_st0x_detect (struct scsi_host_template * tpnt)
 {
 	struct Scsi_Host *instance;
 	int i, j;
@@ -999,14 +999,14 @@ connect_loop:
 				for (i = 0; i < nobuffs; ++i)
 					printk("scsi%d : buffer %d address = %p length = %d\n",
 					     hostno, i,
-					     page_address(buffer[i].page) + buffer[i].offset,
+					     sg_virt(&buffer[i]),
 					     buffer[i].length);
 			}
 #endif
 
 			buffer = (struct scatterlist *) SCint->request_buffer;
 			len = buffer->length;
-			data = page_address(buffer->page) + buffer->offset;
+			data = sg_virt(buffer);
 		} else {
 			DPRINTK (DEBUG_SG, "scsi%d : scatter gather not requested.\n", hostno);
 			buffer = NULL;
@@ -1239,7 +1239,7 @@ connect_loop:
 					--nobuffs;
 					++buffer;
 					len = buffer->length;
-					data = page_address(buffer->page) + buffer->offset;
+					data = sg_virt(buffer);
 					DPRINTK (DEBUG_SG,
 						 "scsi%d : next scatter-gather buffer len = %d address = %08x\n",
 						 hostno, len, data);
@@ -1396,7 +1396,7 @@ connect_loop:
 					--nobuffs;
 					++buffer;
 					len = buffer->length;
-					data = page_address(buffer->page) + buffer->offset;
+					data = sg_virt(buffer);
 					DPRINTK (DEBUG_SG, "scsi%d : next scatter-gather buffer len = %d address = %08x\n", hostno, len, data);
 				}
 				break;

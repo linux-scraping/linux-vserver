@@ -842,7 +842,6 @@ static void snd_nm256_setup_stream(struct nm256 *chip, struct nm256_stream *s,
 	runtime->private_data = s;
 	s->substream = substream;
 
-	snd_pcm_set_sync(substream);
 	snd_pcm_hw_constraint_list(runtime, 0, SNDRV_PCM_HW_PARAM_RATE,
 				   &constraints_rates);
 }
@@ -1533,7 +1532,8 @@ snd_nm256_create(struct snd_card *card, struct pci_dev *pci,
 				printk(KERN_ERR "  force the driver to load by "
 				       "passing in the module parameter\n");
 				printk(KERN_ERR "    force_ac97=1\n");
-				printk(KERN_ERR "  or try sb16 or cs423x drivers instead.\n");
+				printk(KERN_ERR "  or try sb16, opl3sa2, or "
+				       "cs423x drivers instead.\n");
 				err = -ENXIO;
 				goto __error;
 			}

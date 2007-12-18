@@ -130,7 +130,7 @@ acpi_walk_namespace(acpi_object_type type,
 		    void *context, void **return_value);
 
 acpi_status
-acpi_get_devices(char *HID,
+acpi_get_devices(const char *HID,
 		 acpi_walk_callback user_function,
 		 void *context, void **return_value);
 
@@ -313,6 +313,8 @@ acpi_resource_to_address64(struct acpi_resource *resource,
  * Hardware (ACPI device) interfaces
  */
 acpi_status acpi_get_register(u32 register_id, u32 * return_value);
+
+acpi_status acpi_get_register_unlocked(u32 register_id, u32 *return_value);
 
 acpi_status acpi_set_register(u32 register_id, u32 value);
 

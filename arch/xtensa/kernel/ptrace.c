@@ -50,18 +50,8 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 	switch (request) {
 	case PTRACE_PEEKTEXT: /* read word at location addr. */
 	case PTRACE_PEEKDATA:
-	{
-		unsigned long tmp;
-		int copied;
-
-		copied = access_process_vm(child, addr, &tmp, sizeof(tmp), 0);
-		ret = -EIO;
-		if (copied != sizeof(tmp))
-			break;
-		ret = put_user(tmp,(unsigned long *) data);
-
+		ret = generic_ptrace_peekdata(child, addr, data);
 		goto out;
-	}
 
 	/* Read the word at location addr in the USER area.  */
 
@@ -138,10 +128,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 
 	case PTRACE_POKETEXT: /* write the word at location addr. */
 	case PTRACE_POKEDATA:
-		if (access_process_vm(child, addr, &data, sizeof(data), 1)
-		    == sizeof(data))
-			break;
-		ret = -EIO;
+		ret = generic_ptrace_pokedata(child, addr, data);
 		goto out;
 
 	case PTRACE_POKEUSR:
@@ -315,10 +302,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		 * of elf_fpregset_t
 		 */
 		ret = put_user(sizeof(elf_fpregset_t), (unsigned long *) data);
-		break;
-
-	case PTRACE_DETACH: /* detach a process that was attached. */
-		ret = ptrace_detach(child, data);
 		break;
 
 	default:

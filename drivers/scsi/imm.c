@@ -705,9 +705,7 @@ static int imm_completion(struct scsi_cmnd *cmd)
 				cmd->SCp.buffer++;
 				cmd->SCp.this_residual =
 				    cmd->SCp.buffer->length;
-				cmd->SCp.ptr =
-				    page_address(cmd->SCp.buffer->page) +
-				    cmd->SCp.buffer->offset;
+				cmd->SCp.ptr = sg_virt(cmd->SCp.buffer);
 
 				/*
 				 * Make sure that we transfer even number of bytes
@@ -740,10 +738,6 @@ static void imm_interrupt(struct work_struct *work)
 	struct Scsi_Host *host = cmd->device->host;
 	unsigned long flags;
 
-	if (!cmd) {
-		printk("IMM: bug in imm_interrupt\n");
-		return;
-	}
 	if (imm_engine(dev, cmd)) {
 		schedule_delayed_work(&dev->imm_tq, 1);
 		return;
@@ -848,9 +842,7 @@ static int imm_engine(imm_struct *dev, struct scsi_cmnd *cmd)
 			cmd->SCp.buffer =
 			    (struct scatterlist *) cmd->request_buffer;
 			cmd->SCp.this_residual = cmd->SCp.buffer->length;
-			cmd->SCp.ptr =
-			    page_address(cmd->SCp.buffer->page) +
-			    cmd->SCp.buffer->offset;
+			cmd->SCp.ptr = sg_virt(cmd->SCp.buffer);
 		} else {
 			/* else fill the only available buffer */
 			cmd->SCp.buffer = NULL;
@@ -1159,11 +1151,10 @@ static int __imm_attach(struct parport *pb)
 
 	init_waitqueue_head(&waiting);
 
-	dev = kmalloc(sizeof(imm_struct), GFP_KERNEL);
+	dev = kzalloc(sizeof(imm_struct), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 
-	memset(dev, 0, sizeof(imm_struct));
 
 	dev->base = -1;
 	dev->mode = IMM_AUTODETECT;

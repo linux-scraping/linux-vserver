@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2001 IBM Deutschland Entwicklung GmbH, IBM Corporation
  * Author(s): Fritz Elfert (elfert@de.ibm.com, felfert@millenux.com)
- * Fixes by : Jochen Röhrig (roehrig@de.ibm.com)
+ * Fixes by : Jochen RÃ¶hrig (roehrig@de.ibm.com)
  *            Arnaldo Carvalho de Melo <acme@conectiva.com.br>
 	      Peter Tiedemann (ptiedem@de.ibm.com)
  * Driver Model stuff by : Cornelia Huck <cornelia.huck@de.ibm.com>
@@ -19,7 +19,7 @@
  *  Dieter Wellerdiek (wel@de.ibm.com)
  *  Martin Schwidefsky (schwidefsky@de.ibm.com)
  *  Denis Joseph Barrow (djbarrow@de.ibm.com,barrow_dj@yahoo.com)
- *  Jochen Röhrig (roehrig@de.ibm.com)
+ *  Jochen RÃ¶hrig (roehrig@de.ibm.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -674,7 +674,7 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 	int first = 1;
 	int i;
 	unsigned long duration;
-	struct timespec done_stamp = xtime;
+	struct timespec done_stamp = current_kernel_time();
 
 	DBF_TEXT(trace, 4, __FUNCTION__);
 
@@ -730,7 +730,7 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 		spin_unlock(&ch->collect_lock);
 		ch->ccw[1].count = ch->trans_skb->len;
 		fsm_addtimer(&ch->timer, CTC_TIMEOUT_5SEC, CH_EVENT_TIMER, ch);
-		ch->prof.send_stamp = xtime;
+		ch->prof.send_stamp = current_kernel_time();
 		rc = ccw_device_start(ch->cdev, &ch->ccw[0],
 				      (unsigned long) ch, 0xff, 0);
 		ch->prof.doios_multi++;
@@ -885,7 +885,7 @@ ch_action_firstio(fsm_instance * fi, int event, void *arg)
 	}
 
 	/**
-	 * Don´t setup a timer for receiving the initial RX frame
+	 * Don't setup a timer for receiving the initial RX frame
 	 * if in compatibility mode, since VM TCP delays the initial
 	 * frame until it has some data to send.
 	 */
@@ -905,10 +905,10 @@ ch_action_firstio(fsm_instance * fi, int event, void *arg)
 		ccw_check_return_code(ch, rc, "init IO");
 	}
 	/**
-	 * If in compatibility mode since we don´t setup a timer, we
+	 * If in compatibility mode since we don't setup a timer, we
 	 * also signal RX channel up immediately. This enables us
 	 * to send packets early which in turn usually triggers some
-	 * reply from VM TCP which brings up the RX channel to it´s
+	 * reply from VM TCP which brings up the RX channel to it's
 	 * final state.
 	 */
 	if ((CHANNEL_DIRECTION(ch->flags) == READ) &&
@@ -2281,7 +2281,7 @@ transmit_skb(struct channel *ch, struct sk_buff *skb)
 		fsm_newstate(ch->fsm, CH_STATE_TX);
 		fsm_addtimer(&ch->timer, CTC_TIMEOUT_5SEC, CH_EVENT_TIMER, ch);
 		spin_lock_irqsave(get_ccwdev_lock(ch->cdev), saveflags);
-		ch->prof.send_stamp = xtime;
+		ch->prof.send_stamp = current_kernel_time();
 		rc = ccw_device_start(ch->cdev, &ch->ccw[ccw_idx],
 				      (unsigned long) ch, 0xff, 0);
 		spin_unlock_irqrestore(get_ccwdev_lock(ch->cdev), saveflags);
@@ -2823,7 +2823,6 @@ ctc_init_netdevice(struct net_device * dev, int alloc_device,
 	dev->type = ARPHRD_SLIP;
 	dev->tx_queue_len = 100;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP;
-	SET_MODULE_OWNER(dev);
 	return dev;
 }
 

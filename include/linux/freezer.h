@@ -1,8 +1,12 @@
 /* Freezer declarations */
 
-#include <linux/sched.h>
+#ifndef FREEZER_H_INCLUDED
+#define FREEZER_H_INCLUDED
 
-#ifdef CONFIG_PM
+#include <linux/sched.h>
+#include <linux/wait.h>
+
+#ifdef CONFIG_PM_SLEEP
 /*
  * Check if a process has been frozen
  */
@@ -22,7 +26,7 @@ static inline int freezing(struct task_struct *p)
 /*
  * Request that a process be frozen
  */
-static inline void freeze(struct task_struct *p)
+static inline void set_freeze_flag(struct task_struct *p)
 {
 	set_tsk_thread_flag(p, TIF_FREEZE);
 }
@@ -30,7 +34,7 @@ static inline void freeze(struct task_struct *p)
 /*
  * Sometimes we may need to cancel the previous 'freeze' request
  */
-static inline void do_not_freeze(struct task_struct *p)
+static inline void clear_freeze_flag(struct task_struct *p)
 {
 	clear_tsk_thread_flag(p, TIF_FREEZE);
 }
@@ -53,7 +57,7 @@ static inline int thaw_process(struct task_struct *p)
 		wake_up_process(p);
 		return 1;
 	}
-	clear_tsk_thread_flag(p, TIF_FREEZE);
+	clear_freeze_flag(p);
 	task_unlock(p);
 	return 0;
 }
@@ -115,10 +119,49 @@ static inline int freezer_should_skip(struct task_struct *p)
 	return !!(p->flags & PF_FREEZER_SKIP);
 }
 
-#else
+/*
+ * Tell the freezer that the current task should be frozen by it
+ */
+static inline void set_freezable(void)
+{
+	current->flags &= ~PF_NOFREEZE;
+}
+
+/*
+ * Freezer-friendly wrappers around wait_event_interruptible() and
+ * wait_event_interruptible_timeout(), originally defined in <linux/wait.h>
+ */
+
+#define wait_event_freezable(wq, condition)				\
+({									\
+	int __retval;							\
+	do {								\
+		__retval = wait_event_interruptible(wq, 		\
+				(condition) || freezing(current));	\
+		if (__retval && !freezing(current))			\
+			break;						\
+		else if (!(condition))					\
+			__retval = -ERESTARTSYS;			\
+	} while (try_to_freeze());					\
+	__retval;							\
+})
+
+
+#define wait_event_freezable_timeout(wq, condition, timeout)		\
+({									\
+	long __retval = timeout;					\
+	do {								\
+		__retval = wait_event_interruptible_timeout(wq,		\
+				(condition) || freezing(current),	\
+				__retval); 				\
+	} while (try_to_freeze());					\
+	__retval;							\
+})
+#else /* !CONFIG_PM_SLEEP */
 static inline int frozen(struct task_struct *p) { return 0; }
 static inline int freezing(struct task_struct *p) { return 0; }
-static inline void freeze(struct task_struct *p) { BUG(); }
+static inline void set_freeze_flag(struct task_struct *p) {}
+static inline void clear_freeze_flag(struct task_struct *p) {}
 static inline int thaw_process(struct task_struct *p) { return 1; }
 
 static inline void refrigerator(void) {}
@@ -130,4 +173,14 @@ static inline int try_to_freeze(void) { return 0; }
 static inline void freezer_do_not_count(void) {}
 static inline void freezer_count(void) {}
 static inline int freezer_should_skip(struct task_struct *p) { return 0; }
-#endif
+static inline void set_freezable(void) {}
+
+#define wait_event_freezable(wq, condition)				\
+		wait_event_interruptible(wq, condition)
+
+#define wait_event_freezable_timeout(wq, condition, timeout)		\
+		wait_event_interruptible_timeout(wq, condition, timeout)
+
+#endif /* !CONFIG_PM_SLEEP */
+
+#endif	/* FREEZER_H_INCLUDED */

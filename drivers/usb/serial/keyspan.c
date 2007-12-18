@@ -115,12 +115,13 @@ static int debug;
 /*
  * Version Information
  */
-#define DRIVER_VERSION "v1.1.4"
+#define DRIVER_VERSION "v1.1.5"
 #define DRIVER_AUTHOR "Hugh Blemings <hugh@misc.nu"
 #define DRIVER_DESC "Keyspan USB to Serial Converter Driver"
 
 #define INSTAT_BUFLEN	32
 #define GLOCONT_BUFLEN	64
+#define INDAT49W_BUFLEN	512
 
 	/* Per device and per port private data */
 struct keyspan_serial_private {
@@ -129,9 +130,15 @@ struct keyspan_serial_private {
 	struct urb	*instat_urb;
 	char		instat_buf[INSTAT_BUFLEN];
 
+	/* added to support 49wg, where data from all 4 ports comes in on 1 EP */
+	/* and high-speed supported */
+	struct urb	*indat_urb;
+	char		indat_buf[INDAT49W_BUFLEN];
+
 	/* XXX this one probably will need a lock */
 	struct urb	*glocont_urb;
 	char		glocont_buf[GLOCONT_BUFLEN];
+	char		ctrl_buf[8];			// for EP0 control message
 };
 
 struct keyspan_port_private {
@@ -179,12 +186,13 @@ struct keyspan_port_private {
 
 	
 /* Include Keyspan message headers.  All current Keyspan Adapters
-   make use of one of four message formats which are referred
-   to as USA-26, USA-28 and USA-49, USA-90 by Keyspan and within this driver. */
+   make use of one of five message formats which are referred
+   to as USA-26, USA-28, USA-49, USA-90, USA-67 by Keyspan and within this driver. */
 #include "keyspan_usa26msg.h"
 #include "keyspan_usa28msg.h"
 #include "keyspan_usa49msg.h"
 #include "keyspan_usa90msg.h"
+#include "keyspan_usa67msg.h"
 	
 
 /* Functions used by new usb-serial code. */
@@ -270,28 +278,34 @@ static void keyspan_set_termios (struct usb_serial_port *port,
 	struct keyspan_port_private 	*p_priv;
 	const struct keyspan_device_details	*d_details;
 	unsigned int 			cflag;
+	struct tty_struct		*tty = port->tty;
 
 	dbg("%s", __FUNCTION__); 
 
 	p_priv = usb_get_serial_port_data(port);
 	d_details = p_priv->device_details;
-	cflag = port->tty->termios->c_cflag;
+	cflag = tty->termios->c_cflag;
 	device_port = port->number - port->serial->minor;
 
 	/* Baud rate calculation takes baud rate as an integer
 	   so other rates can be generated if desired. */
-	baud_rate = tty_get_baud_rate(port->tty);
+	baud_rate = tty_get_baud_rate(tty);
 	/* If no match or invalid, don't change */		
-	if (baud_rate >= 0
-	    && d_details->calculate_baud_rate(baud_rate, d_details->baudclk,
+	if (d_details->calculate_baud_rate(baud_rate, d_details->baudclk,
 				NULL, NULL, NULL, device_port) == KEYSPAN_BAUD_RATE_OK) {
 		/* FIXME - more to do here to ensure rate changes cleanly */
+		/* FIXME - calcuate exact rate from divisor ? */
 		p_priv->baud = baud_rate;
-	}
+	} else
+		baud_rate = tty_termios_baud_rate(old_termios);
 
+	tty_encode_baud_rate(tty, baud_rate, baud_rate);
 	/* set CTS/RTS handshake etc. */
 	p_priv->cflag = cflag;
 	p_priv->flow_control = (cflag & CRTSCTS)? flow_cts: flow_none;
+
+	/* Mark/Space not supported */
+	tty->termios->c_cflag &= ~CMSPAR;
 
 	keyspan_send_setup(port, 0);
 }
@@ -419,14 +433,15 @@ static void	usa26_indat_callback(struct urb *urb)
 	struct usb_serial_port	*port;
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__); 
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 
-	if (urb->status) {
+	if (status) {
 		dbg("%s - nonzero status: %x on endpoint %d.",
-		    __FUNCTION__, urb->status, endpoint);
+		    __FUNCTION__, status, endpoint);
 		return;
 	}
 
@@ -511,11 +526,12 @@ static void	usa26_instat_callback(struct urb *urb)
 	struct usb_serial_port			*port;
 	struct keyspan_port_private	 	*p_priv;
 	int old_dcd_state, err;
+	int status = urb->status;
 
 	serial = (struct usb_serial *) urb->context;
 
-	if (urb->status) {
-		dbg("%s - nonzero status: %x", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
 		return;
 	}
 	if (urb->actual_length != 9) {
@@ -579,6 +595,7 @@ static void usa28_indat_callback(struct urb *urb)
 	struct tty_struct       *tty;
 	unsigned char           *data;
 	struct keyspan_port_private             *p_priv;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__);
 
@@ -590,9 +607,9 @@ static void usa28_indat_callback(struct urb *urb)
 		return;
 
 	do {
-		if (urb->status) {
+		if (status) {
 			dbg("%s - nonzero status: %x on endpoint %d.",
-			    __FUNCTION__, urb->status, usb_pipeendpoint(urb->pipe));
+			    __FUNCTION__, status, usb_pipeendpoint(urb->pipe));
 			return;
 		}
 
@@ -648,11 +665,12 @@ static void	usa28_instat_callback(struct urb *urb)
 	struct usb_serial_port			*port;
 	struct keyspan_port_private	 	*p_priv;
 	int old_dcd_state;
+	int status = urb->status;
 
 	serial = (struct usb_serial *) urb->context;
 
-	if (urb->status) {
-		dbg("%s - nonzero status: %x", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
 		return;
 	}
 
@@ -739,13 +757,14 @@ static void	usa49_instat_callback(struct urb *urb)
 	struct usb_serial_port			*port;
 	struct keyspan_port_private	 	*p_priv;
 	int old_dcd_state;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__);
 
 	serial = (struct usb_serial *) urb->context;
 
-	if (urb->status) {
-		dbg("%s - nonzero status: %x", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
 		return;
 	}
 
@@ -805,14 +824,15 @@ static void	usa49_indat_callback(struct urb *urb)
 	struct usb_serial_port	*port;
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 
-	if (urb->status) {
+	if (status) {
 		dbg("%s - nonzero status: %x on endpoint %d.", __FUNCTION__,
-		    urb->status, endpoint);
+		    status, endpoint);
 		return;
 	}
 
@@ -850,13 +870,90 @@ static void	usa49_indat_callback(struct urb *urb)
 		}
 }
 
+static void usa49wg_indat_callback(struct urb *urb)
+{
+	int			i, len, x, err;
+	struct usb_serial	*serial;
+	struct usb_serial_port	*port;
+	struct tty_struct	*tty;
+	unsigned char 		*data = urb->transfer_buffer;
+	int status = urb->status;
+
+	dbg ("%s", __FUNCTION__);
+
+	serial = urb->context;
+
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
+		return;
+	}
+
+	/* inbound data is in the form P#, len, status, data */
+	i = 0;
+	len = 0;
+
+	if (urb->actual_length) {
+		while (i < urb->actual_length) {
+
+			/* Check port number from message*/
+			if (data[i] >= serial->num_ports) {
+				dbg ("%s - Unexpected port number %d",
+					__FUNCTION__, data[i]);
+				return;
+			}
+			port = serial->port[data[i++]];
+			tty = port->tty;
+			len = data[i++];
+
+			/* 0x80 bit is error flag */
+			if ((data[i] & 0x80) == 0) {
+				/* no error on any byte */
+				i++;
+				for (x = 1; x < len ; ++x)
+					if (port->open_count)
+						tty_insert_flip_char(tty,
+								data[i++], 0);
+					else
+						i++;
+			} else {
+				/*
+				 * some bytes had errors, every byte has status
+				 */
+				for (x = 0; x + 1 < len; x += 2) {
+					int stat = data[i], flag = 0;
+					if (stat & RXERROR_OVERRUN)
+						flag |= TTY_OVERRUN;
+					if (stat & RXERROR_FRAMING)
+						flag |= TTY_FRAME;
+					if (stat & RXERROR_PARITY)
+						flag |= TTY_PARITY;
+					/* XXX should handle break (0x10) */
+					if (port->open_count)
+						tty_insert_flip_char(tty,
+							data[i+1], flag);
+					i += 2;
+				}
+			}
+			if (port->open_count)
+				tty_flip_buffer_push(tty);
+		}
+	}
+
+	/* Resubmit urb so we continue receiving */
+	urb->dev = serial->dev;
+
+	err = usb_submit_urb(urb, GFP_ATOMIC);
+	if (err != 0)
+		dbg("%s - resubmit read urb failed. (%d)", __FUNCTION__, err);
+}
+
 /* not used, usa-49 doesn't have per-port control endpoints */
-static void	usa49_outcont_callback(struct urb *urb)
+static void usa49_outcont_callback(struct urb *urb)
 {
 	dbg ("%s", __FUNCTION__);
 }
 
-static void	usa90_indat_callback(struct urb *urb)
+static void usa90_indat_callback(struct urb *urb)
 {
 	int			i, err;
 	int			endpoint;
@@ -864,15 +961,15 @@ static void	usa90_indat_callback(struct urb *urb)
 	struct keyspan_port_private	 	*p_priv;
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__); 
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 
-
-	if (urb->status) {
+	if (status) {
 		dbg("%s - nonzero status: %x on endpoint %d.",
-		    __FUNCTION__, urb->status, endpoint);
+		    __FUNCTION__, status, endpoint);
 		return;
 	}
 
@@ -938,11 +1035,12 @@ static void	usa90_instat_callback(struct urb *urb)
 	struct usb_serial_port			*port;
 	struct keyspan_port_private	 	*p_priv;
 	int old_dcd_state, err;
+	int status = urb->status;
 
 	serial = (struct usb_serial *) urb->context;
 
-	if (urb->status) {
-		dbg("%s - nonzero status: %x", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
 		return;
 	}
 	if (urb->actual_length < 14) {
@@ -995,6 +1093,88 @@ static void	usa90_outcont_callback(struct urb *urb)
 	}
 }
 
+/* Status messages from the 28xg */
+static void	usa67_instat_callback(struct urb *urb)
+{
+	int					err;
+	unsigned char 				*data = urb->transfer_buffer;
+	struct keyspan_usa67_portStatusMessage	*msg;
+	struct usb_serial			*serial;
+	struct usb_serial_port			*port;
+	struct keyspan_port_private	 	*p_priv;
+	int old_dcd_state;
+	int status = urb->status;
+
+	dbg ("%s", __FUNCTION__);
+
+	serial = urb->context;
+
+	if (status) {
+		dbg("%s - nonzero status: %x", __FUNCTION__, status);
+		return;
+	}
+
+	if (urb->actual_length != sizeof(struct keyspan_usa67_portStatusMessage)) {
+		dbg("%s - bad length %d", __FUNCTION__, urb->actual_length);
+		return;
+	}
+
+
+	/* Now do something useful with the data */
+	msg = (struct keyspan_usa67_portStatusMessage *)data;
+
+	/* Check port number from message and retrieve private data */
+	if (msg->port >= serial->num_ports) {
+		dbg ("%s - Unexpected port number %d", __FUNCTION__, msg->port);
+		return;
+	}
+
+	port = serial->port[msg->port];
+	p_priv = usb_get_serial_port_data(port);
+
+	/* Update handshaking pin state information */
+	old_dcd_state = p_priv->dcd_state;
+	p_priv->cts_state = ((msg->hskia_cts) ? 1 : 0);
+	p_priv->dcd_state = ((msg->gpia_dcd) ? 1 : 0);
+
+	if (port->tty && !C_CLOCAL(port->tty)
+	    && old_dcd_state != p_priv->dcd_state) {
+		if (old_dcd_state)
+			tty_hangup(port->tty);
+		/*  else */
+		/*	wake_up_interruptible(&p_priv->open_wait); */
+	}
+
+	/* Resubmit urb so we continue receiving */
+	urb->dev = serial->dev;
+	err = usb_submit_urb(urb, GFP_ATOMIC);
+	if (err != 0)
+		dbg("%s - resubmit read urb failed. (%d)", __FUNCTION__, err);
+}
+
+static void usa67_glocont_callback(struct urb *urb)
+{
+	struct usb_serial *serial;
+	struct usb_serial_port *port;
+	struct keyspan_port_private *p_priv;
+	int i;
+
+	dbg ("%s", __FUNCTION__);
+
+	serial = urb->context;
+	for (i = 0; i < serial->num_ports; ++i) {
+		port = serial->port[i];
+		p_priv = usb_get_serial_port_data(port);
+
+		if (p_priv->resend_cont) {
+			dbg ("%s - sending setup", __FUNCTION__);
+			keyspan_usa67_send_setup(serial, port,
+						p_priv->resend_cont - 1);
+			break;
+		}
+	}
+}
+
 static int keyspan_write_room (struct usb_serial_port *port)
 {
 	struct keyspan_port_private	*p_priv;
@@ -1035,20 +1215,18 @@ static int keyspan_chars_in_buffer (struct usb_serial_port *port)
 
 static int keyspan_open (struct usb_serial_port *port, struct file *filp)
 {
-	struct keyspan_port_private 	*p_priv;
-	struct keyspan_serial_private 	*s_priv;
-	struct usb_serial 		*serial = port->serial;
+	struct keyspan_port_private	*p_priv;
+	struct keyspan_serial_private	*s_priv;
+	struct usb_serial		*serial = port->serial;
 	const struct keyspan_device_details	*d_details;
 	int				i, err;
-	int				baud_rate, device_port;
 	struct urb			*urb;
-	unsigned int			cflag;
 
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
 	d_details = p_priv->device_details;
-	
-	dbg("%s - port%d.", __FUNCTION__, port->number); 
+
+	dbg("%s - port%d.", __FUNCTION__, port->number);
 
 	/* Set some sane defaults */
 	p_priv->rts_state = 1;
@@ -1069,7 +1247,7 @@ static int keyspan_open (struct usb_serial_port *port, struct file *filp)
 		urb->dev = serial->dev;
 
 		/* make sure endpoint data toggle is synchronized with the device */
-		
+
 		usb_clear_halt(urb->dev, urb->pipe);
 
 		if ((err = usb_submit_urb(urb, GFP_KERNEL)) != 0) {
@@ -1084,30 +1262,6 @@ static int keyspan_open (struct usb_serial_port *port, struct file *filp)
 		urb->dev = serial->dev;
 		/* usb_settoggle(urb->dev, usb_pipeendpoint(urb->pipe), usb_pipeout(urb->pipe), 0); */
 	}
-
-	/* get the terminal config for the setup message now so we don't 
-	 * need to send 2 of them */
-
-	cflag = port->tty->termios->c_cflag;
-	device_port = port->number - port->serial->minor;
-
-	/* Baud rate calculation takes baud rate as an integer
-	   so other rates can be generated if desired. */
-	baud_rate = tty_get_baud_rate(port->tty);
-	/* If no match or invalid, leave as default */		
-	if (baud_rate >= 0
-	    && d_details->calculate_baud_rate(baud_rate, d_details->baudclk,
-				NULL, NULL, NULL, device_port) == KEYSPAN_BAUD_RATE_OK) {
-		p_priv->baud = baud_rate;
-	}
-
-	/* set CTS/RTS handshake etc. */
-	p_priv->cflag = cflag;
-	p_priv->flow_control = (cflag & CRTSCTS)? flow_cts: flow_none;
-
-	keyspan_send_setup(port, 1);
-	//mdelay(100);
-	//keyspan_set_termios(port, NULL);
 
 	return (0);
 }
@@ -1311,6 +1465,11 @@ static struct urb *keyspan_setup_urb (struct usb_serial *serial, int endpoint,
 		return NULL;
 	}
 
+	if (endpoint == 0) {
+		/* control EP filled in when used */
+		return urb;
+	}
+
 	ep_desc = find_ep(serial, endpoint);
 	if (!ep_desc) {
 		/* leak the urb, something's wrong and the callers don't care */
@@ -1380,6 +1539,14 @@ static struct callbacks {
 		.outdat_callback =	usa2x_outdat_callback,
 		.inack_callback =	usa28_inack_callback,
 		.outcont_callback =	usa90_outcont_callback,
+	}, {
+		/* msg_usa67 callbacks */
+		.instat_callback =	usa67_instat_callback,
+		.glocont_callback =	usa67_glocont_callback,
+		.indat_callback =	usa26_indat_callback,
+		.outdat_callback =	usa2x_outdat_callback,
+		.inack_callback =	usa26_inack_callback,
+		.outcont_callback =	usa26_outcont_callback,
 	}
 };
 
@@ -1409,6 +1576,11 @@ static void keyspan_setup_urbs(struct usb_serial *serial)
 		(serial, d_details->instat_endpoint, USB_DIR_IN,
 		 serial, s_priv->instat_buf, INSTAT_BUFLEN,
 		 cback->instat_callback);
+
+	s_priv->indat_urb = keyspan_setup_urb
+		(serial, d_details->indat_endpoint, USB_DIR_IN,
+		 serial, s_priv->indat_buf, INDAT49W_BUFLEN,
+		 usa49wg_indat_callback);
 
 	s_priv->glocont_urb = keyspan_setup_urb
 		(serial, d_details->glocont_endpoint, USB_DIR_OUT,
@@ -1685,8 +1857,8 @@ static int keyspan_usa26_send_setup(struct usb_serial *serial,
 	}
 
 	/* Save reset port val for resend.
-	Don't overwrite resend for close condition. */
-	if (p_priv->resend_cont != 3)
+	   Don't overwrite resend for open/close condition. */
+	if ((reset_port + 1) > p_priv->resend_cont)
 		p_priv->resend_cont = reset_port + 1;
 	if (this_urb->status == -EINPROGRESS) {
 		/*  dbg ("%s - already writing", __FUNCTION__); */
@@ -1836,8 +2008,8 @@ static int keyspan_usa28_send_setup(struct usb_serial *serial,
 	}
 
 	/* Save reset port val for resend.
-	   Don't overwrite resend for close condition. */
-	if (p_priv->resend_cont != 3)
+	   Don't overwrite resend for open/close condition. */
+	if ((reset_port + 1) > p_priv->resend_cont)
 		p_priv->resend_cont = reset_port + 1;
 	if (this_urb->status == -EINPROGRESS) {
 		dbg ("%s already writing", __FUNCTION__);
@@ -1940,11 +2112,11 @@ static int keyspan_usa49_send_setup(struct usb_serial *serial,
 				    struct usb_serial_port *port,
 				    int reset_port)
 {
-	struct keyspan_usa49_portControlMessage	msg;		
+	struct keyspan_usa49_portControlMessage	msg;
+	struct usb_ctrlrequest 			*dr = NULL;
 	struct keyspan_serial_private 		*s_priv;
 	struct keyspan_port_private 		*p_priv;
 	const struct keyspan_device_details	*d_details;
-	int 					glocont_urb;
 	struct urb				*this_urb;
 	int 					err, device_port;
 
@@ -1954,10 +2126,9 @@ static int keyspan_usa49_send_setup(struct usb_serial *serial,
 	p_priv = usb_get_serial_port_data(port);
 	d_details = s_priv->device_details;
 
-	glocont_urb = d_details->glocont_endpoint;
 	this_urb = s_priv->glocont_urb;
 
-		/* Work out which port within the device is being setup */
+	/* Work out which port within the device is being setup */
 	device_port = port->number - port->serial->minor;
 
 	dbg("%s - endpoint %d port %d (%d)",__FUNCTION__, usb_pipeendpoint(this_urb->pipe), port->number, device_port);
@@ -1969,9 +2140,10 @@ static int keyspan_usa49_send_setup(struct usb_serial *serial,
 	}
 
 	/* Save reset port val for resend.
-	   Don't overwrite resend for close condition. */
-	if (p_priv->resend_cont != 3)
+	   Don't overwrite resend for open/close condition. */
+	if ((reset_port + 1) > p_priv->resend_cont)
 		p_priv->resend_cont = reset_port + 1;
+
 	if (this_urb->status == -EINPROGRESS) {
 		/*  dbg ("%s - already writing", __FUNCTION__); */
 		mdelay(5);
@@ -2083,20 +2255,39 @@ static int keyspan_usa49_send_setup(struct usb_serial *serial,
 	msg.dtr = p_priv->dtr_state;
 		
 	p_priv->resend_cont = 0;
-	memcpy (this_urb->transfer_buffer, &msg, sizeof(msg));
-	
-	/* send the data out the device on control endpoint */
-	this_urb->transfer_buffer_length = sizeof(msg);
 
-	this_urb->dev = serial->dev;
+	/* if the device is a 49wg, we send control message on usb control EP 0 */
+
+	if (d_details->product_id == keyspan_usa49wg_product_id) {
+		dr = (void *)(s_priv->ctrl_buf);
+		dr->bRequestType = USB_TYPE_VENDOR | USB_DIR_OUT;
+		dr->bRequest = 0xB0;	/* 49wg control message */;
+		dr->wValue = 0;
+		dr->wIndex = 0;
+		dr->wLength = cpu_to_le16(sizeof(msg));
+
+		memcpy (s_priv->glocont_buf, &msg, sizeof(msg));
+
+		usb_fill_control_urb(this_urb, serial->dev, usb_sndctrlpipe(serial->dev, 0),
+			     (unsigned char *)dr, s_priv->glocont_buf, sizeof(msg),
+			     usa49_glocont_callback, serial);
+
+	} else {
+		memcpy(this_urb->transfer_buffer, &msg, sizeof(msg));
+	
+		/* send the data out the device on control endpoint */
+		this_urb->transfer_buffer_length = sizeof(msg);
+
+		this_urb->dev = serial->dev;
+	}
 	if ((err = usb_submit_urb(this_urb, GFP_ATOMIC)) != 0) {
 		dbg("%s - usb_submit_urb(setup) failed (%d)", __FUNCTION__, err);
 	}
 #if 0
 	else {
 		dbg("%s - usb_submit_urb(%d) OK %d bytes (end %d)", __FUNCTION__,
-		    outcont_urb, this_urb->transfer_buffer_length,
-		    usb_pipeendpoint(this_urb->pipe));
+			   outcont_urb, this_urb->transfer_buffer_length,
+			   usb_pipeendpoint(this_urb->pipe));
 	}
 #endif
 
@@ -2241,6 +2432,154 @@ static int keyspan_usa90_send_setup(struct usb_serial *serial,
 	return (0);
 }
 
+static int keyspan_usa67_send_setup(struct usb_serial *serial,
+				    struct usb_serial_port *port,
+				    int reset_port)
+{
+	struct keyspan_usa67_portControlMessage	msg;
+	struct keyspan_serial_private 		*s_priv;
+	struct keyspan_port_private 		*p_priv;
+	const struct keyspan_device_details	*d_details;
+	struct urb				*this_urb;
+	int 					err, device_port;
+
+	dbg ("%s", __FUNCTION__);
+
+	s_priv = usb_get_serial_data(serial);
+	p_priv = usb_get_serial_port_data(port);
+	d_details = s_priv->device_details;
+
+	this_urb = s_priv->glocont_urb;
+
+	/* Work out which port within the device is being setup */
+	device_port = port->number - port->serial->minor;
+
+	/* Make sure we have an urb then send the message */
+	if (this_urb == NULL) {
+		dbg("%s - oops no urb for port %d.", __FUNCTION__,
+			port->number);
+		return -1;
+	}
+
+	/* Save reset port val for resend.
+	   Don't overwrite resend for open/close condition. */
+	if ((reset_port + 1) > p_priv->resend_cont)
+		p_priv->resend_cont = reset_port + 1;
+	if (this_urb->status == -EINPROGRESS) {
+		/*  dbg ("%s - already writing", __FUNCTION__); */
+		mdelay(5);
+		return(-1);
+	}
+
+	memset(&msg, 0, sizeof(struct keyspan_usa67_portControlMessage));
+
+	msg.port = device_port;
+
+	/* Only set baud rate if it's changed */
+	if (p_priv->old_baud != p_priv->baud) {
+		p_priv->old_baud = p_priv->baud;
+		msg.setClocking = 0xff;
+		if (d_details->calculate_baud_rate
+		    (p_priv->baud, d_details->baudclk, &msg.baudHi,
+		     &msg.baudLo, &msg.prescaler, device_port) == KEYSPAN_INVALID_BAUD_RATE ) {
+			dbg("%s - Invalid baud rate %d requested, using 9600.", __FUNCTION__,
+			    p_priv->baud);
+			msg.baudLo = 0;
+			msg.baudHi = 125;	/* Values for 9600 baud */
+			msg.prescaler = 10;
+		}
+		msg.setPrescaler = 0xff;
+	}
+
+	msg.lcr = (p_priv->cflag & CSTOPB) ? STOPBITS_678_2 : STOPBITS_5678_1;
+	switch (p_priv->cflag & CSIZE) {
+	case CS5:
+		msg.lcr |= USA_DATABITS_5;
+		break;
+	case CS6:
+		msg.lcr |= USA_DATABITS_6;
+		break;
+	case CS7:
+		msg.lcr |= USA_DATABITS_7;
+		break;
+	case CS8:
+		msg.lcr |= USA_DATABITS_8;
+		break;
+	}
+	if (p_priv->cflag & PARENB) {
+		/* note USA_PARITY_NONE == 0 */
+		msg.lcr |= (p_priv->cflag & PARODD)?
+			USA_PARITY_ODD: USA_PARITY_EVEN;
+	}
+	msg.setLcr = 0xff;
+
+	msg.ctsFlowControl = (p_priv->flow_control == flow_cts);
+	msg.xonFlowControl = 0;
+	msg.setFlowControl = 0xff;
+	msg.forwardingLength = 16;
+	msg.xonChar = 17;
+	msg.xoffChar = 19;
+
+	if (reset_port == 1) {
+		/* Opening port */
+		msg._txOn = 1;
+		msg._txOff = 0;
+		msg.txFlush = 0;
+		msg.txBreak = 0;
+		msg.rxOn = 1;
+		msg.rxOff = 0;
+		msg.rxFlush = 1;
+		msg.rxForward = 0;
+		msg.returnStatus = 0;
+		msg.resetDataToggle = 0xff;
+	} else if (reset_port == 2) {
+		/* Closing port */
+		msg._txOn = 0;
+		msg._txOff = 1;
+		msg.txFlush = 0;
+		msg.txBreak = 0;
+		msg.rxOn = 0;
+		msg.rxOff = 1;
+		msg.rxFlush = 1;
+		msg.rxForward = 0;
+		msg.returnStatus = 0;
+		msg.resetDataToggle = 0;
+	} else {
+		/* Sending intermediate configs */
+		msg._txOn = (! p_priv->break_on);
+		msg._txOff = 0;
+		msg.txFlush = 0;
+		msg.txBreak = (p_priv->break_on);
+		msg.rxOn = 0;
+		msg.rxOff = 0;
+		msg.rxFlush = 0;
+		msg.rxForward = 0;
+		msg.returnStatus = 0;
+		msg.resetDataToggle = 0x0;
+	}
+
+	/* Do handshaking outputs */
+	msg.setTxTriState_setRts = 0xff;
+	msg.txTriState_rts = p_priv->rts_state;
+
+	msg.setHskoa_setDtr = 0xff;
+	msg.hskoa_dtr = p_priv->dtr_state;
+
+	p_priv->resend_cont = 0;
+
+	memcpy(this_urb->transfer_buffer, &msg, sizeof(msg));
+
+	/* send the data out the device on control endpoint */
+	this_urb->transfer_buffer_length = sizeof(msg);
+	this_urb->dev = serial->dev;
+
+	err = usb_submit_urb(this_urb, GFP_ATOMIC);
+	if (err != 0)
+		dbg("%s - usb_submit_urb(setup) failed (%d)", __FUNCTION__,
+				err);
+	return (0);
+}
+
 static void keyspan_send_setup(struct usb_serial_port *port, int reset_port)
 {
 	struct usb_serial *serial = port->serial;
@@ -2264,6 +2603,9 @@ static void keyspan_send_setup(struct usb_serial_port *port, int reset_port)
 		break;
 	case msg_usa90:
 		keyspan_usa90_send_setup(serial, port, reset_port);
+		break;
+	case msg_usa67:
+		keyspan_usa67_send_setup(serial, port, reset_port);
 		break;
 	}
 }
@@ -2313,9 +2655,19 @@ static int keyspan_startup (struct usb_serial *serial)
 
 	keyspan_setup_urbs(serial);
 
-	s_priv->instat_urb->dev = serial->dev;
-	if ((err = usb_submit_urb(s_priv->instat_urb, GFP_KERNEL)) != 0) {
-		dbg("%s - submit instat urb failed %d", __FUNCTION__, err);
+	if (s_priv->instat_urb != NULL) {
+		s_priv->instat_urb->dev = serial->dev;
+		err = usb_submit_urb(s_priv->instat_urb, GFP_KERNEL);
+		if (err != 0)
+			dbg("%s - submit instat urb failed %d", __FUNCTION__,
+				err);
+	}
+	if (s_priv->indat_urb != NULL) {
+		s_priv->indat_urb->dev = serial->dev;
+		err = usb_submit_urb(s_priv->indat_urb, GFP_KERNEL);
+		if (err != 0)
+			dbg("%s - submit indat urb failed %d", __FUNCTION__,
+				err);
 	}
 			
 	return (0);
@@ -2335,6 +2687,7 @@ static void keyspan_shutdown (struct usb_serial *serial)
 	/* Stop reading/writing urbs */
 	stop_urb(s_priv->instat_urb);
 	stop_urb(s_priv->glocont_urb);
+	stop_urb(s_priv->indat_urb);
 	for (i = 0; i < serial->num_ports; ++i) {
 		port = serial->port[i];
 		p_priv = usb_get_serial_port_data(port);
@@ -2348,6 +2701,7 @@ static void keyspan_shutdown (struct usb_serial *serial)
 
 	/* Now free them */
 	usb_free_urb(s_priv->instat_urb);
+	usb_free_urb(s_priv->indat_urb);
 	usb_free_urb(s_priv->glocont_urb);
 	for (i = 0; i < serial->num_ports; ++i) {
 		port = serial->port[i];

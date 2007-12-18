@@ -9,7 +9,6 @@
 #include <linux/types.h>
 #include <linux/timer.h>
 #include <linux/module.h>
-#include <linux/netfilter.h>
 #include <linux/udp.h>
 #include <linux/seq_file.h>
 #include <linux/skbuff.h>
@@ -147,7 +146,6 @@ static unsigned int udp_sysctl_table_users;
 static struct ctl_table_header *udp_sysctl_header;
 static struct ctl_table udp_sysctl_table[] = {
 	{
-		.ctl_name	= NET_NF_CONNTRACK_UDP_TIMEOUT,
 		.procname	= "nf_conntrack_udp_timeout",
 		.data		= &nf_ct_udp_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -155,7 +153,6 @@ static struct ctl_table udp_sysctl_table[] = {
 		.proc_handler	= &proc_dointvec_jiffies,
 	},
 	{
-		.ctl_name	= NET_NF_CONNTRACK_UDP_TIMEOUT_STREAM,
 		.procname	= "nf_conntrack_udp_timeout_stream",
 		.data		= &nf_ct_udp_timeout_stream,
 		.maxlen		= sizeof(unsigned int),
@@ -169,7 +166,6 @@ static struct ctl_table udp_sysctl_table[] = {
 #ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
 static struct ctl_table udp_compat_sysctl_table[] = {
 	{
-		.ctl_name	= NET_IPV4_NF_CONNTRACK_UDP_TIMEOUT,
 		.procname	= "ip_conntrack_udp_timeout",
 		.data		= &nf_ct_udp_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -177,7 +173,6 @@ static struct ctl_table udp_compat_sysctl_table[] = {
 		.proc_handler	= &proc_dointvec_jiffies,
 	},
 	{
-		.ctl_name	= NET_IPV4_NF_CONNTRACK_UDP_TIMEOUT_STREAM,
 		.procname	= "ip_conntrack_udp_timeout_stream",
 		.data		= &nf_ct_udp_timeout_stream,
 		.maxlen		= sizeof(unsigned int),
@@ -191,7 +186,7 @@ static struct ctl_table udp_compat_sysctl_table[] = {
 #endif /* CONFIG_NF_CONNTRACK_PROC_COMPAT */
 #endif /* CONFIG_SYSCTL */
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4 =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4 __read_mostly =
 {
 	.l3proto		= PF_INET,
 	.l4proto		= IPPROTO_UDP,
@@ -204,8 +199,9 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4 =
 	.new			= udp_new,
 	.error			= udp_error,
 #if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
-	.tuple_to_nfattr	= nf_ct_port_tuple_to_nfattr,
-	.nfattr_to_tuple	= nf_ct_port_nfattr_to_tuple,
+	.tuple_to_nlattr	= nf_ct_port_tuple_to_nlattr,
+	.nlattr_to_tuple	= nf_ct_port_nlattr_to_tuple,
+	.nla_policy		= nf_ct_port_nla_policy,
 #endif
 #ifdef CONFIG_SYSCTL
 	.ctl_table_users	= &udp_sysctl_table_users,
@@ -218,7 +214,7 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4 =
 };
 EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_udp4);
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_udp6 =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_udp6 __read_mostly =
 {
 	.l3proto		= PF_INET6,
 	.l4proto		= IPPROTO_UDP,
@@ -231,8 +227,9 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_udp6 =
 	.new			= udp_new,
 	.error			= udp_error,
 #if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
-	.tuple_to_nfattr	= nf_ct_port_tuple_to_nfattr,
-	.nfattr_to_tuple	= nf_ct_port_nfattr_to_tuple,
+	.tuple_to_nlattr	= nf_ct_port_tuple_to_nlattr,
+	.nlattr_to_tuple	= nf_ct_port_nlattr_to_tuple,
+	.nla_policy		= nf_ct_port_nla_policy,
 #endif
 #ifdef CONFIG_SYSCTL
 	.ctl_table_users	= &udp_sysctl_table_users,

@@ -25,6 +25,7 @@
 #include <linux/usb_usual.h>
 #include <linux/blkdev.h>
 #include <linux/timer.h>
+#include <linux/scatterlist.h>
 #include <scsi/scsi.h>
 
 #define DRV_NAME "ub"
@@ -503,7 +504,7 @@ static void ub_cleanup(struct ub_dev *sc)
 {
 	struct list_head *p;
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 
 	while (!list_empty(&sc->luns)) {
 		p = sc->luns.next;
@@ -619,7 +620,7 @@ static struct ub_scsi_cmd *ub_cmdq_pop(struct ub_dev *sc)
  * The request function is our main entry point
  */
 
-static void ub_request_fn(request_queue_t *q)
+static void ub_request_fn(struct request_queue *q)
 {
 	struct ub_lun *lun = q->queuedata;
 	struct request *rq;
@@ -656,6 +657,7 @@ static int ub_request_fn_1(struct ub_lun *lun, struct request *rq)
 	if ((cmd = ub_get_cmd(lun)) == NULL)
 		return -1;
 	memset(cmd, 0, sizeof(struct ub_scsi_cmd));
+	sg_init_table(cmd->sgv, UB_MAX_REQ_SG);
 
 	blkdev_dequeue_request(rq);
 
@@ -1309,9 +1311,8 @@ static void ub_data_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	else
 		pipe = sc->send_bulk_pipe;
 	sc->last_pipe = pipe;
-	usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe,
-	    page_address(sg->page) + sg->offset, sg->length,
-	    ub_urb_complete, sc);
+	usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe, sg_virt(sg),
+	    sg->length, ub_urb_complete, sc);
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
@@ -1427,9 +1428,9 @@ static void ub_state_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	scmd->state = UB_CMDST_INIT;
 	scmd->nsg = 1;
 	sg = &scmd->sgv[0];
-	sg->page = virt_to_page(sc->top_sense);
-	sg->offset = (unsigned long)sc->top_sense & (PAGE_SIZE-1);
-	sg->length = UB_SENSE_SIZE;
+	sg_init_table(sg, UB_MAX_REQ_SG);
+	sg_set_page(sg, virt_to_page(sc->top_sense), UB_SENSE_SIZE,
+			(unsigned long)sc->top_sense & (PAGE_SIZE-1));
 	scmd->len = UB_SENSE_SIZE;
 	scmd->lun = cmd->lun;
 	scmd->done = ub_top_sense_done;
@@ -1547,10 +1548,8 @@ static void ub_reset_enter(struct ub_dev *sc, int try)
 #endif
 
 #if 0 /* We let them stop themselves. */
-	struct list_head *p;
 	struct ub_lun *lun;
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_stop_queue(lun->disk->queue);
 	}
 #endif
@@ -1562,7 +1561,6 @@ static void ub_reset_task(struct work_struct *work)
 {
 	struct ub_dev *sc = container_of(work, struct ub_dev, reset_work);
 	unsigned long flags;
-	struct list_head *p;
 	struct ub_lun *lun;
 	int lkr, rc;
 
@@ -1608,8 +1606,7 @@ static void ub_reset_task(struct work_struct *work)
 	spin_lock_irqsave(sc->lock, flags);
 	sc->reset = 0;
 	tasklet_schedule(&sc->tasklet);
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_start_queue(lun->disk->queue);
 	}
 	wake_up(&sc->reset_wait);
@@ -1713,7 +1710,7 @@ static int ub_bd_ioctl(struct inode *inode, struct file *filp,
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	void __user *usermem = (void __user *) arg;
 
-	return scsi_cmd_ioctl(filp, disk, cmd, usermem);
+	return scsi_cmd_ioctl(filp, disk->queue, disk, cmd, usermem);
 }
 
 /*
@@ -1867,9 +1864,8 @@ static int ub_sync_read_cap(struct ub_dev *sc, struct ub_lun *lun,
 	cmd->state = UB_CMDST_INIT;
 	cmd->nsg = 1;
 	sg = &cmd->sgv[0];
-	sg->page = virt_to_page(p);
-	sg->offset = (unsigned long)p & (PAGE_SIZE-1);
-	sg->length = 8;
+	sg_init_table(sg, UB_MAX_REQ_SG);
+	sg_set_page(sg, virt_to_page(p), 8, (unsigned long)p & (PAGE_SIZE-1));
 	cmd->len = 8;
 	cmd->lun = lun;
 	cmd->done = ub_probe_done;
@@ -2277,7 +2273,7 @@ err_core:
 static int ub_probe_lun(struct ub_dev *sc, int lnum)
 {
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 	struct gendisk *disk;
 	int rc;
 
@@ -2348,7 +2344,6 @@ err_alloc:
 static void ub_disconnect(struct usb_interface *intf)
 {
 	struct ub_dev *sc = usb_get_intfdata(intf);
-	struct list_head *p;
 	struct ub_lun *lun;
 	unsigned long flags;
 
@@ -2403,8 +2398,7 @@ static void ub_disconnect(struct usb_interface *intf)
 	/*
 	 * Unregister the upper layer.
 	 */
-	list_for_each (p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		del_gendisk(lun->disk);
 		/*
 		 * I wish I could do:

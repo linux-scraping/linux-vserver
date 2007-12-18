@@ -27,7 +27,7 @@
 #include <net/dst.h>
 #include <net/inetpeer.h>
 #include <net/flow.h>
-#include <net/inet_sock.h>
+// #include <net/inet_sock.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/route.h>
@@ -66,7 +66,6 @@ struct rtable
 	
 	unsigned		rt_flags;
 	__u16			rt_type;
-	__u16			rt_multipath_alg;
 
 	__be32			rt_dst;	/* Path destination	*/
 	__be32			rt_src;	/* Path source		*/
@@ -140,7 +139,7 @@ static inline void ip_rt_put(struct rtable * rt)
 
 #define IPTOS_RT_MASK	(IPTOS_TOS_MASK & ~3)
 
-extern __u8 ip_tos2prio[16];
+extern const __u8 ip_tos2prio[16];
 
 static inline char rt_tos2priority(u8 tos)
 {

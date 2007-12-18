@@ -24,14 +24,14 @@
 #include <asm/plat-s3c24xx/dma.h>
 #include <asm/plat-s3c24xx/cpu.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
-#include <asm/arch/regs-ac97.h>
+#include <asm/plat-s3c/regs-ac97.h>
 #include <asm/arch/regs-mem.h>
 #include <asm/arch/regs-lcd.h>
 #include <asm/arch/regs-sdi.h>
-#include <asm/arch/regs-iis.h>
-#include <asm/arch/regs-spi.h>
+#include <asm/plat-s3c24xx/regs-iis.h>
+#include <asm/plat-s3c24xx/regs-spi.h>
 
 #define MAP(x) { (x)| DMA_CH_VALID, (x)| DMA_CH_VALID, (x)| DMA_CH_VALID, (x)| DMA_CH_VALID }
 
@@ -144,7 +144,7 @@ static struct s3c24xx_dma_selection __initdata s3c2412_dma_sel = {
 	.map_size	= ARRAY_SIZE(s3c2412_dma_mappings),
 };
 
-static int s3c2412_dma_add(struct sys_device *sysdev)
+static int __init s3c2412_dma_add(struct sys_device *sysdev)
 {
 	s3c2410_dma_init();
 	return s3c24xx_dma_init_map(&s3c2412_dma_sel);

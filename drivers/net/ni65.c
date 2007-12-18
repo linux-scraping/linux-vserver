@@ -183,7 +183,7 @@ static struct card {
 	short addr_offset;
 	unsigned char *vendor_id;
 	char *cardname;
-	long config;
+	unsigned long config;
 } cards[] = {
 	{
 		.id0	     = NI65_ID0,
@@ -550,7 +550,6 @@ static int __init ni65_probe1(struct net_device *dev,int ioaddr)
 	}
 
 	dev->base_addr = ioaddr;
-	SET_MODULE_OWNER(dev);
 	dev->open		= ni65_open;
 	dev->stop		= ni65_close;
 	dev->hard_start_xmit	= ni65_send_packet;
@@ -1096,7 +1095,7 @@ static void ni65_recv_intr(struct net_device *dev,int csr0)
 #ifdef RCV_VIA_SKB
 				if( (unsigned long) (skb->data + R_BUF_SIZE) > 0x1000000) {
 					skb_put(skb,len);
-					eth_copy_and_sum(skb, (unsigned char *)(p->recv_skb[p->rmdnum]->data),len,0);
+					skb_copy_to_linear_data(skb, (unsigned char *)(p->recv_skb[p->rmdnum]->data),len);
 				}
 				else {
 					struct sk_buff *skb1 = p->recv_skb[p->rmdnum];
@@ -1108,7 +1107,7 @@ static void ni65_recv_intr(struct net_device *dev,int csr0)
 				}
 #else
 				skb_put(skb,len);
-				eth_copy_and_sum(skb, (unsigned char *) p->recvbounce[p->rmdnum],len,0);
+				skb_copy_to_linear_data(skb, (unsigned char *) p->recvbounce[p->rmdnum],len);
 #endif
 				p->stats.rx_packets++;
 				p->stats.rx_bytes += len;

@@ -33,6 +33,7 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
+#include "internal.h"
 
 /* spinlock for vfsmount related operations, inplace of dcache_lock */
 __cacheline_aligned_in_smp DEFINE_SPINLOCK(vfsmount_lock);
@@ -251,7 +252,7 @@ static struct vfsmount *clone_mnt(struct vfsmount *old, struct dentry *root,
 			list_add(&mnt->mnt_slave, &old->mnt_slave_list);
 			mnt->mnt_master = old;
 			CLEAR_MNT_SHARED(mnt);
-		} else {
+		} else if (!(flag & CL_PRIVATE)) {
 			if ((flag & CL_PROPAGATION) || IS_MNT_SHARED(old))
 				list_add(&mnt->mnt_share, &old->mnt_share);
 			if (IS_MNT_SLAVE(old))
@@ -326,22 +327,16 @@ EXPORT_SYMBOL(mnt_unpin);
 static void *m_start(struct seq_file *m, loff_t *pos)
 {
 	struct mnt_namespace *n = m->private;
-	struct list_head *p;
-	loff_t l = *pos;
 
 	down_read(&namespace_sem);
-	list_for_each(p, &n->list)
-		if (!l--)
-			return list_entry(p, struct vfsmount, mnt_list);
-	return NULL;
+	return seq_list_start(&n->list, *pos);
 }
 
 static void *m_next(struct seq_file *m, void *v, loff_t *pos)
 {
 	struct mnt_namespace *n = m->private;
-	struct list_head *p = ((struct vfsmount *)v)->mnt_list.next;
-	(*pos)++;
-	return p == &n->list ? NULL : list_entry(p, struct vfsmount, mnt_list);
+
+	return seq_list_next(v, &n->list, pos);
 }
 
 static void m_stop(struct seq_file *m, void *v)
@@ -382,7 +377,7 @@ static int mnt_is_reachable(struct vfsmount *mnt)
 
 static int show_vfsmnt(struct seq_file *m, void *v)
 {
-	struct vfsmount *mnt = v;
+	struct vfsmount *mnt = list_entry(v, struct vfsmount, mnt_list);
 	int err = 0;
 	static struct proc_fs_info {
 		int s_flag;
@@ -454,7 +449,7 @@ struct seq_operations mounts_op = {
 
 static int show_vfsstat(struct seq_file *m, void *v)
 {
-	struct vfsmount *mnt = v;
+	struct vfsmount *mnt = list_entry(v, struct vfsmount, mnt_list);
 	int err = 0;
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
@@ -808,6 +803,26 @@ Enomem:
 		release_mounts(&umount_list);
 	}
 	return NULL;
+}
+
+struct vfsmount *collect_mounts(struct vfsmount *mnt, struct dentry *dentry)
+{
+	struct vfsmount *tree;
+	down_read(&namespace_sem);
+	tree = copy_tree(mnt, dentry, CL_COPY_ALL | CL_PRIVATE);
+	up_read(&namespace_sem);
+	return tree;
+}
+
+void drop_collected_mounts(struct vfsmount *mnt)
+{
+	LIST_HEAD(umount_list);
+	down_read(&namespace_sem);
+	spin_lock(&vfsmount_lock);
+	umount_tree(mnt, 0, &umount_list);
+	spin_unlock(&vfsmount_lock);
+	up_read(&namespace_sem);
+	release_mounts(&umount_list);
 }
 
 /*
@@ -1499,7 +1514,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (!capable(CAP_SYS_ADMIN))
 		mnt_flags |= MNT_NODEV;
 	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE |
-		   MS_NOATIME | MS_NODIRATIME | MS_RELATIME);
+		   MS_NOATIME | MS_NODIRATIME | MS_RELATIME| MS_KERNMOUNT);
 
 	/* ... and get the mountpoint */
 	retval = path_lookup(dir_name, LOOKUP_FOLLOW, &nd);
@@ -1540,7 +1555,7 @@ static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 
 	new_ns = kmalloc(sizeof(struct mnt_namespace), GFP_KERNEL);
 	if (!new_ns)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	atomic_set(&new_ns->count, 1);
 	INIT_LIST_HEAD(&new_ns->list);
@@ -1554,7 +1569,7 @@ static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 	if (!new_ns->root) {
 		up_write(&namespace_sem);
 		kfree(new_ns);
-		return NULL;
+		return ERR_PTR(-ENOMEM);;
 	}
 	spin_lock(&vfsmount_lock);
 	list_add_tail(&new_ns->list, &new_ns->root->mnt_list);
@@ -1599,7 +1614,7 @@ static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
 	return new_ns;
 }
 
-struct mnt_namespace *copy_mnt_ns(int flags, struct mnt_namespace *ns,
+struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
 		struct fs_struct *new_fs)
 {
 	struct mnt_namespace *new_ns;
@@ -1880,7 +1895,7 @@ static void __init init_mount_tree(void)
 	set_fs_root(current->fs, ns->root, ns->root->mnt_root);
 }
 
-void __init mnt_init(unsigned long mempages)
+void __init mnt_init(void)
 {
 	struct list_head *d;
 	unsigned int nr_hash;
@@ -1890,7 +1905,7 @@ void __init mnt_init(unsigned long mempages)
 	init_rwsem(&namespace_sem);
 
 	mnt_cache = kmem_cache_create("mnt_cache", sizeof(struct vfsmount),
-			0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL, NULL);
+			0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL);
 
 	mount_hashtable = (struct list_head *)__get_free_page(GFP_ATOMIC);
 

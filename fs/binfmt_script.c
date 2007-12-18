@@ -1,7 +1,7 @@
 /*
  *  linux/fs/binfmt_script.c
  *
- *  Copyright (C) 1996  Martin von Löwis
+ *  Copyright (C) 1996  Martin von LÃ¶wis
  *  original #!-checking implemented by tytso.
  */
 
@@ -67,7 +67,9 @@ static int load_script(struct linux_binprm *bprm,struct pt_regs *regs)
 	 * This is done in reverse order, because of how the
 	 * user environment and arguments are stored.
 	 */
-	remove_arg_zero(bprm);
+	retval = remove_arg_zero(bprm);
+	if (retval)
+		return retval;
 	retval = copy_strings_kernel(1, &bprm->interp, bprm);
 	if (retval < 0) return retval; 
 	bprm->argc++;

@@ -7,7 +7,6 @@
  *    Copyright (C) 1996-2001 Cort Dougan
  *  Adapted for Power Macintosh by Paul Mackerras
  *    Copyright (C) 1996 Paul Mackerras (paulus@cs.anu.edu.au)
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -53,6 +52,7 @@
 #include <linux/mutex.h>
 #include <linux/bootmem.h>
 #include <linux/pci.h>
+#include <linux/debugfs.h>
 #include <linux/vs_context.h>
 
 #include <asm/uaccess.h>
@@ -274,7 +274,7 @@ void do_IRQ(struct pt_regs *regs)
 	struct thread_info *curtp, *irqtp;
 #endif
 
-        irq_enter();
+	irq_enter();
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	/* Debugging check for stack overflow: is there less than 2KB free? */
@@ -323,7 +323,7 @@ void do_IRQ(struct pt_regs *regs)
 		/* That's not SMP safe ... but who cares ? */
 		ppc_spurious_interrupts++;
 
-        irq_exit();
+	irq_exit();
 	set_irq_regs(old_regs);
 
 #ifdef CONFIG_PPC_ISERIES
@@ -338,7 +338,8 @@ void do_IRQ(struct pt_regs *regs)
 
 void __init init_IRQ(void)
 {
-	ppc_md.init_IRQ();
+	if (ppc_md.init_IRQ)
+		ppc_md.init_IRQ();
 #ifdef CONFIG_PPC64
 	irq_ctx_init();
 #endif
@@ -396,7 +397,6 @@ void do_softirq(void)
 
 	local_irq_restore(flags);
 }
-EXPORT_SYMBOL(do_softirq);
 
 
 /*
@@ -419,7 +419,13 @@ irq_hw_number_t virq_to_hw(unsigned int virq)
 }
 EXPORT_SYMBOL_GPL(virq_to_hw);
 
-struct irq_host *irq_alloc_host(unsigned int revmap_type,
+static int default_irq_host_match(struct irq_host *h, struct device_node *np)
+{
+	return h->of_node != NULL && h->of_node == np;
+}
+
+struct irq_host *irq_alloc_host(struct device_node *of_node,
+				unsigned int revmap_type,
 				unsigned int revmap_arg,
 				struct irq_host_ops *ops,
 				irq_hw_number_t inval_irq)
@@ -433,13 +439,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	/* Allocate structure and revmap table if using linear mapping */
 	if (revmap_type == IRQ_HOST_MAP_LINEAR)
 		size += revmap_arg * sizeof(unsigned int);
-	if (mem_init_done)
-		host = kzalloc(size, GFP_KERNEL);
-	else {
-		host = alloc_bootmem(size);
-		if (host)
-			memset(host, 0, size);
-	}
+	host = zalloc_maybe_bootmem(size, GFP_KERNEL);
 	if (host == NULL)
 		return NULL;
 
@@ -447,6 +447,10 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	host->revmap_type = revmap_type;
 	host->inval_irq = inval_irq;
 	host->ops = ops;
+	host->of_node = of_node;
+
+	if (host->ops->match == NULL)
+		host->ops->match = default_irq_host_match;
 
 	spin_lock_irqsave(&irq_big_lock, flags);
 
@@ -478,7 +482,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 		host->inval_irq = 0;
 		/* setup us as the host for all legacy interrupts */
 		for (i = 1; i < NUM_ISA_INTERRUPTS; i++) {
-			irq_map[i].hwirq = 0;
+			irq_map[i].hwirq = i;
 			smp_wmb();
 			irq_map[i].host = host;
 			smp_wmb();
@@ -488,7 +492,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 
 			/* Legacy flags are left to default at this point,
 			 * one can then use irq_create_mapping() to
-			 * explicitely change them
+			 * explicitly change them
 			 */
 			ops->map(host, i, i);
 		}
@@ -522,7 +526,7 @@ struct irq_host *irq_find_host(struct device_node *node)
 	 */
 	spin_lock_irqsave(&irq_big_lock, flags);
 	list_for_each_entry(h, &irq_hosts, link)
-		if (h->ops->match == NULL || h->ops->match(h, node)) {
+		if (h->ops->match(h, node)) {
 			found = h;
 			break;
 		}
@@ -598,6 +602,49 @@ static void irq_radix_rdunlock(unsigned long flags)
 	local_irq_restore(flags);
 }
 
+static int irq_setup_virq(struct irq_host *host, unsigned int virq,
+			    irq_hw_number_t hwirq)
+{
+	/* Clear IRQ_NOREQUEST flag */
+	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
+
+	/* map it */
+	smp_wmb();
+	irq_map[virq].hwirq = hwirq;
+	smp_mb();
+
+	if (host->ops->map(host, virq, hwirq)) {
+		pr_debug("irq: -> mapping failed, freeing\n");
+		irq_free_virt(virq, 1);
+		return -1;
+	}
+
+	return 0;
+}
+
+unsigned int irq_create_direct_mapping(struct irq_host *host)
+{
+	unsigned int virq;
+
+	if (host == NULL)
+		host = irq_default_host;
+
+	BUG_ON(host == NULL);
+	WARN_ON(host->revmap_type != IRQ_HOST_MAP_NOMAP);
+
+	virq = irq_alloc_virt(host, 1, 0);
+	if (virq == NO_IRQ) {
+		pr_debug("irq: create_direct virq allocation failed\n");
+		return NO_IRQ;
+	}
+
+	pr_debug("irq: create_direct obtained virq %d\n", virq);
+
+	if (irq_setup_virq(host, virq, virq))
+		return NO_IRQ;
+
+	return virq;
+}
 
 unsigned int irq_create_mapping(struct irq_host *host,
 				irq_hw_number_t hwirq)
@@ -646,18 +693,9 @@ unsigned int irq_create_mapping(struct irq_host *host,
 	}
 	pr_debug("irq: -> obtained virq %d\n", virq);
 
-	/* Clear IRQ_NOREQUEST flag */
-	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
-
-	/* map it */
-	smp_wmb();
-	irq_map[virq].hwirq = hwirq;
-	smp_mb();
-	if (host->ops->map(host, virq, hwirq)) {
-		pr_debug("irq: -> mapping failed, freeing\n");
-		irq_free_virt(virq, 1);
+	if (irq_setup_virq(host, virq, hwirq))
 		return NO_IRQ;
-	}
+
 	return virq;
 }
 EXPORT_SYMBOL_GPL(irq_create_mapping);
@@ -962,6 +1000,68 @@ static int irq_late_init(void)
 	return 0;
 }
 arch_initcall(irq_late_init);
+
+#ifdef CONFIG_VIRQ_DEBUG
+static int virq_debug_show(struct seq_file *m, void *private)
+{
+	unsigned long flags;
+	irq_desc_t *desc;
+	const char *p;
+	char none[] = "none";
+	int i;
+
+	seq_printf(m, "%-5s  %-7s  %-15s  %s\n", "virq", "hwirq",
+		      "chip name", "host name");
+
+	for (i = 1; i < NR_IRQS; i++) {
+		desc = get_irq_desc(i);
+		spin_lock_irqsave(&desc->lock, flags);
+
+		if (desc->action && desc->action->handler) {
+			seq_printf(m, "%5d  ", i);
+			seq_printf(m, "0x%05lx  ", virq_to_hw(i));
+
+			if (desc->chip && desc->chip->typename)
+				p = desc->chip->typename;
+			else
+				p = none;
+			seq_printf(m, "%-15s  ", p);
+
+			if (irq_map[i].host && irq_map[i].host->of_node)
+				p = irq_map[i].host->of_node->full_name;
+			else
+				p = none;
+			seq_printf(m, "%s\n", p);
+		}
+
+		spin_unlock_irqrestore(&desc->lock, flags);
+	}
+
+	return 0;
+}
+
+static int virq_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, virq_debug_show, inode->i_private);
+}
+
+static const struct file_operations virq_debug_fops = {
+	.open = virq_debug_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int __init irq_debugfs_init(void)
+{
+	if (debugfs_create_file("virq_mapping", S_IRUGO, powerpc_debugfs_root,
+				 NULL, &virq_debug_fops))
+		return -ENOMEM;
+
+	return 0;
+}
+__initcall(irq_debugfs_init);
+#endif /* CONFIG_VIRQ_DEBUG */
 
 #endif /* CONFIG_PPC_MERGE */
 

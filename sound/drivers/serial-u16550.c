@@ -1,6 +1,6 @@
 /*
  *   serial.c
- *   Copyright (c) by Jaroslav Kysela <perex@suse.cz>,
+ *   Copyright (c) by Jaroslav Kysela <perex@perex.cz>,
  *                    Isaku Yamahata <yamahata@private.email.ne.jp>,
  *		      George Hansper <ghansper@apana.org.au>,
  *		      Hannu Savolainen
@@ -998,7 +998,7 @@ static struct platform_driver snd_serial_driver = {
 	},
 };
 
-static void __init_or_module snd_serial_unregister_all(void)
+static void snd_serial_unregister_all(void)
 {
 	int i;
 

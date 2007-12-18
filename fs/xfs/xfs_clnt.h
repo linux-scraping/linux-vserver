@@ -89,7 +89,6 @@ struct xfs_mount_args {
 #define XFSMNT_IDELETE		0x08000000	/* inode cluster delete */
 #define XFSMNT_SWALLOC		0x10000000	/* turn on stripe width
 						 * allocation */
-#define XFSMNT_IHASHSIZE	0x20000000	/* inode hash table size */
 #define XFSMNT_DIRSYNC		0x40000000	/* sync creat,link,unlink,rename
 						 * symlink,mkdir,rmdir,mknod */
 #define XFSMNT_FLAGS2		0x80000000	/* more flags set in flags2 */
@@ -99,7 +98,8 @@ struct xfs_mount_args {
  */
 #define XFSMNT2_COMPAT_IOSIZE	0x00000001	/* don't report large preferred
 						 * I/O size in stat(2) */
+#define XFSMNT2_FILESTREAMS	0x00000002	/* enable the filestreams
+						 * allocator */
 #define XFSMNT2_TAGGED		0x80000000	/* context tagging */
-
 
 #endif	/* __XFS_CLNT_H__ */

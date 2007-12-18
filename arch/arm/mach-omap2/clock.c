@@ -651,7 +651,7 @@ static u32 omap2_get_clksel(u32 *div_sel, u32 *field_mask,
 		break;
 	case CM_SYSCLKOUT_SEL1:
 		div_addr = (u32)&PRCM_CLKOUT_CTRL;
-		if ((div_off == 3) || (div_off = 11))
+		if ((div_off == 3) || (div_off == 11))
 			mask= 0x3;
 		break;
 	case CM_CORE_SEL1:
@@ -1160,8 +1160,8 @@ int __init omap2_clk_init(void)
 	clk_enable(&sync_32k_ick);
 	clk_enable(&omapctrl_ick);
 
-	/* Force the APLLs active during bootup to avoid disabling and
-	 * enabling them unnecessarily. */
+	/* Force the APLLs always active. The clocks are idled
+	 * automatically by hardware. */
 	clk_enable(&apll96_ck);
 	clk_enable(&apll54_ck);
 
@@ -1174,12 +1174,3 @@ int __init omap2_clk_init(void)
 
 	return 0;
 }
-
-static int __init omap2_disable_aplls(void)
-{
-	clk_disable(&apll96_ck);
-	clk_disable(&apll54_ck);
-
-	return 0;
-}
-late_initcall(omap2_disable_aplls);

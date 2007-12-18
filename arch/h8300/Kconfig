@@ -1,6 +1,6 @@
 #
 # For a description of the syntax of this configuration file,
-# see Documentation/kbuild/config-language.txt.
+# see Documentation/kbuild/kconfig-language.txt.
 #
 
 mainmenu "uClinux/h8300 (w/o MMU) Kernel Configuration"
@@ -66,6 +66,9 @@ config TIME_LOW_RES
 	default y
 
 config NO_IOPORT
+	def_bool y
+
+config NO_DMA
 	def_bool y
 
 config ISA
@@ -219,6 +222,8 @@ source "drivers/usb/Kconfig"
 endmenu
 
 source "fs/Kconfig"
+
+source "kernel/Kconfig.instrumentation"
 
 source "arch/h8300/Kconfig.debug"
 

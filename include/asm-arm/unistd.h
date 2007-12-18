@@ -378,6 +378,7 @@
 #define __NR_signalfd			(__NR_SYSCALL_BASE+349)
 #define __NR_timerfd			(__NR_SYSCALL_BASE+350)
 #define __NR_eventfd			(__NR_SYSCALL_BASE+351)
+#define __NR_fallocate			(__NR_SYSCALL_BASE+352)
 
 /*
  * The following SWIs are ARM private.
@@ -441,7 +442,6 @@
 /*
  * Unimplemented (or alternatively implemented) syscalls
  */
-#define __IGNORE_sync_file_range	1
 #define __IGNORE_fadvise64_64		1
 
 #endif /* __KERNEL__ */

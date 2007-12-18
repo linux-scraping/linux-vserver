@@ -211,7 +211,7 @@ static int do_out_of_memory(struct pt_regs *regs, unsigned long error_code,
 	struct mm_struct *mm = tsk->mm;
 
 	up_read(&mm->mmap_sem);
-	if (is_init(tsk)) {
+	if (is_global_init(tsk)) {
 		yield();
 		down_read(&mm->mmap_sem);
 		return 1;
@@ -219,7 +219,7 @@ static int do_out_of_memory(struct pt_regs *regs, unsigned long error_code,
 	printk("VM: killing process %s(%d:#%u)\n",
 		tsk->comm, tsk->pid, tsk->xid);
 	if (regs->psw.mask & PSW_MASK_PSTATE)
-		do_exit(SIGKILL);
+		do_group_exit(SIGKILL);
 	do_no_context(regs, error_code, address);
 	return 0;
 }
@@ -308,6 +308,7 @@ do_exception(struct pt_regs *regs, unsigned long error_code, int write)
 	unsigned long address;
 	int space;
 	int si_code;
+	int fault;
 
 	if (notify_page_fault(regs, error_code))
 		return;
@@ -378,23 +379,22 @@ survive:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
-	switch (handle_mm_fault(mm, vma, address, write)) {
-	case VM_FAULT_MINOR:
-		tsk->min_flt++;
-		break;
-	case VM_FAULT_MAJOR:
-		tsk->maj_flt++;
-		break;
-	case VM_FAULT_SIGBUS:
-		do_sigbus(regs, error_code, address);
-		return;
-	case VM_FAULT_OOM:
-		if (do_out_of_memory(regs, error_code, address))
-			goto survive;
-		return;
-	default:
+	fault = handle_mm_fault(mm, vma, address, write);
+	if (unlikely(fault & VM_FAULT_ERROR)) {
+		if (fault & VM_FAULT_OOM) {
+			if (do_out_of_memory(regs, error_code, address))
+				goto survive;
+			return;
+		} else if (fault & VM_FAULT_SIGBUS) {
+			do_sigbus(regs, error_code, address);
+			return;
+		}
 		BUG();
 	}
+	if (fault & VM_FAULT_MAJOR)
+		tsk->maj_flt++;
+	else
+		tsk->min_flt++;
 
         up_read(&mm->mmap_sem);
 	/*
@@ -469,7 +469,7 @@ typedef struct {
 	__u64 refselmk;
 	__u64 refcmpmk;
 	__u64 reserved;
-} __attribute__ ((packed)) pfault_refbk_t;
+} __attribute__ ((packed, aligned(8))) pfault_refbk_t;
 
 int pfault_init(void)
 {

@@ -4,7 +4,7 @@
  * This is a binary format reader.
  *
  * Copyright (C) 2006 Paolo Abeni (paolo.abeni@email.it)
- * Copyright (C) 2006 Pete Zaitcev (zaitcev@redhat.com)
+ * Copyright (C) 2006,2007 Pete Zaitcev (zaitcev@redhat.com)
  */
 
 #include <linux/kernel.h>
@@ -172,6 +172,11 @@ static inline struct mon_bin_hdr *MON_OFF2HDR(const struct mon_reader_bin *rp,
 
 #define MON_RING_EMPTY(rp)	((rp)->b_cnt == 0)
 
+static unsigned char xfer_to_pipe[4] = {
+	PIPE_CONTROL, PIPE_ISOCHRONOUS, PIPE_BULK, PIPE_INTERRUPT
+};
+
+static struct class *mon_bin_class;
 static dev_t mon_bin_dev0;
 static struct cdev mon_bin_cdev;
 
@@ -353,13 +358,9 @@ static inline char mon_bin_get_setup(unsigned char *setupb,
     const struct urb *urb, char ev_type)
 {
 
-	if (!usb_pipecontrol(urb->pipe) || ev_type != 'S')
+	if (!usb_endpoint_xfer_control(&urb->ep->desc) || ev_type != 'S')
 		return '-';
 
-	if (urb->dev->bus->uses_dma &&
-	    (urb->transfer_flags & URB_NO_SETUP_DMA_MAP)) {
-		return mon_dmapeek(setupb, urb->setup_dma, SETUP_LEN);
-	}
 	if (urb->setup_packet == NULL)
 		return 'Z';
 
@@ -385,13 +386,15 @@ static char mon_bin_get_data(const struct mon_reader_bin *rp,
 }
 
 static void mon_bin_event(struct mon_reader_bin *rp, struct urb *urb,
-    char ev_type)
+    char ev_type, int status)
 {
+	const struct usb_endpoint_descriptor *epd = &urb->ep->desc;
 	unsigned long flags;
 	struct timeval ts;
 	unsigned int urb_length;
 	unsigned int offset;
 	unsigned int length;
+	unsigned char dir;
 	struct mon_bin_hdr *ep;
 	char data_tag = 0;
 
@@ -409,16 +412,19 @@ static void mon_bin_event(struct mon_reader_bin *rp, struct urb *urb,
 	if (length >= rp->b_size/5)
 		length = rp->b_size/5;
 
-	if (usb_pipein(urb->pipe)) {
+	if (usb_urb_dir_in(urb)) {
 		if (ev_type == 'S') {
 			length = 0;
 			data_tag = '<';
 		}
+		/* Cannot rely on endpoint number in case of control ep.0 */
+		dir = USB_DIR_IN;
 	} else {
 		if (ev_type == 'C') {
 			length = 0;
 			data_tag = '>';
 		}
+		dir = 0;
 	}
 
 	if (rp->mmap_active)
@@ -439,15 +445,14 @@ static void mon_bin_event(struct mon_reader_bin *rp, struct urb *urb,
 	 */
 	memset(ep, 0, PKT_SIZE);
 	ep->type = ev_type;
-	ep->xfer_type = usb_pipetype(urb->pipe);
-	/* We use the fact that usb_pipein() returns 0x80 */
-	ep->epnum = usb_pipeendpoint(urb->pipe) | usb_pipein(urb->pipe);
-	ep->devnum = usb_pipedevice(urb->pipe);
+	ep->xfer_type = xfer_to_pipe[usb_endpoint_type(epd)];
+	ep->epnum = dir | usb_endpoint_num(epd);
+	ep->devnum = urb->dev->devnum;
 	ep->busnum = urb->dev->bus->busnum;
 	ep->id = (unsigned long) urb;
 	ep->ts_sec = ts.tv_sec;
 	ep->ts_usec = ts.tv_usec;
-	ep->status = urb->status;
+	ep->status = status;
 	ep->len_urb = urb_length;
 	ep->len_cap = length;
 
@@ -470,13 +475,13 @@ static void mon_bin_event(struct mon_reader_bin *rp, struct urb *urb,
 static void mon_bin_submit(void *data, struct urb *urb)
 {
 	struct mon_reader_bin *rp = data;
-	mon_bin_event(rp, urb, 'S');
+	mon_bin_event(rp, urb, 'S', -EINPROGRESS);
 }
 
-static void mon_bin_complete(void *data, struct urb *urb)
+static void mon_bin_complete(void *data, struct urb *urb, int status)
 {
 	struct mon_reader_bin *rp = data;
-	mon_bin_event(rp, urb, 'C');
+	mon_bin_event(rp, urb, 'C', status);
 }
 
 static void mon_bin_error(void *data, struct urb *urb, int error)
@@ -499,10 +504,10 @@ static void mon_bin_error(void *data, struct urb *urb, int error)
 
 	memset(ep, 0, PKT_SIZE);
 	ep->type = 'E';
-	ep->xfer_type = usb_pipetype(urb->pipe);
-	/* We use the fact that usb_pipein() returns 0x80 */
-	ep->epnum = usb_pipeendpoint(urb->pipe) | usb_pipein(urb->pipe);
-	ep->devnum = usb_pipedevice(urb->pipe);
+	ep->xfer_type = xfer_to_pipe[usb_endpoint_type(&urb->ep->desc)];
+	ep->epnum = usb_urb_dir_in(urb) ? USB_DIR_IN : 0;
+	ep->epnum |= usb_endpoint_num(&urb->ep->desc);
+	ep->devnum = urb->dev->devnum;
 	ep->busnum = urb->dev->bus->busnum;
 	ep->id = (unsigned long) urb;
 	ep->status = error;
@@ -1144,9 +1149,37 @@ static void mon_free_buff(struct mon_pgmap *map, int npages)
 		free_page((unsigned long) map[n].ptr);
 }
 
+int mon_bin_add(struct mon_bus *mbus, const struct usb_bus *ubus)
+{
+	struct device *dev;
+	unsigned minor = ubus? ubus->busnum: 0;
+
+	if (minor >= MON_BIN_MAX_MINOR)
+		return 0;
+
+	dev = device_create(mon_bin_class, ubus? ubus->controller: NULL,
+			MKDEV(MAJOR(mon_bin_dev0), minor), "usbmon%d", minor);
+	if (IS_ERR(dev))
+		return 0;
+
+	mbus->classdev = dev;
+	return 1;
+}
+
+void mon_bin_del(struct mon_bus *mbus)
+{
+	device_destroy(mon_bin_class, mbus->classdev->devt);
+}
+
 int __init mon_bin_init(void)
 {
 	int rc;
+
+	mon_bin_class = class_create(THIS_MODULE, "usbmon");
+	if (IS_ERR(mon_bin_class)) {
+		rc = PTR_ERR(mon_bin_class);
+		goto err_class;
+	}
 
 	rc = alloc_chrdev_region(&mon_bin_dev0, 0, MON_BIN_MAX_MINOR, "usbmon");
 	if (rc < 0)
@@ -1164,6 +1197,8 @@ int __init mon_bin_init(void)
 err_add:
 	unregister_chrdev_region(mon_bin_dev0, MON_BIN_MAX_MINOR);
 err_dev:
+	class_destroy(mon_bin_class);
+err_class:
 	return rc;
 }
 
@@ -1171,4 +1206,5 @@ void mon_bin_exit(void)
 {
 	cdev_del(&mon_bin_cdev);
 	unregister_chrdev_region(mon_bin_dev0, MON_BIN_MAX_MINOR);
+	class_destroy(mon_bin_class);
 }

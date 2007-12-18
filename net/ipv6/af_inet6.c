@@ -58,9 +58,6 @@
 #ifdef CONFIG_IPV6_TUNNEL
 #include <net/ip6_tunnel.h>
 #endif
-#ifdef CONFIG_IPV6_MIP6
-#include <net/mip6.h>
-#endif
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -84,7 +81,7 @@ static __inline__ struct ipv6_pinfo *inet6_sk_generic(struct sock *sk)
 	return (struct ipv6_pinfo *)(((u8 *)sk) + offset);
 }
 
-static int inet6_create(struct socket *sock, int protocol)
+static int inet6_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct inet_sock *inet;
 	struct ipv6_pinfo *np;
@@ -96,6 +93,9 @@ static int inet6_create(struct socket *sock, int protocol)
 	char answer_no_check;
 	int try_loading_module = 0;
 	int err;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	if (sock->type != SOCK_RAW &&
 	    sock->type != SOCK_DGRAM &&
@@ -162,7 +162,7 @@ lookup_protocol:
 	BUG_TRAP(answer_prot->slab != NULL);
 
 	err = -ENOBUFS;
-	sk = sk_alloc(PF_INET6, GFP_KERNEL, answer_prot, 1);
+	sk = sk_alloc(net, PF_INET6, GFP_KERNEL, answer_prot);
 	if (sk == NULL)
 		goto out;
 
@@ -302,7 +302,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 					err = -EINVAL;
 					goto out;
 				}
-				dev = dev_get_by_index(sk->sk_bound_dev_if);
+				dev = dev_get_by_index(&init_net, sk->sk_bound_dev_if);
 				if (!dev) {
 					err = -ENODEV;
 					goto out;
@@ -719,6 +719,9 @@ static int __init init_ipv6_mibs(void)
 	if (snmp_mib_init((void **)icmpv6_statistics, sizeof (struct icmpv6_mib),
 			  __alignof__(struct icmpv6_mib)) < 0)
 		goto err_icmp_mib;
+	if (snmp_mib_init((void **)icmpv6msg_statistics,
+	    sizeof (struct icmpv6msg_mib), __alignof__(struct icmpv6_mib)) < 0)
+		goto err_icmpmsg_mib;
 	if (snmp_mib_init((void **)udp_stats_in6, sizeof (struct udp_mib),
 			  __alignof__(struct udp_mib)) < 0)
 		goto err_udp_mib;
@@ -730,6 +733,8 @@ static int __init init_ipv6_mibs(void)
 err_udplite_mib:
 	snmp_mib_free((void **)udp_stats_in6);
 err_udp_mib:
+	snmp_mib_free((void **)icmpv6msg_statistics);
+err_icmpmsg_mib:
 	snmp_mib_free((void **)icmpv6_statistics);
 err_icmp_mib:
 	snmp_mib_free((void **)ipv6_statistics);
@@ -742,6 +747,7 @@ static void cleanup_ipv6_mibs(void)
 {
 	snmp_mib_free((void **)ipv6_statistics);
 	snmp_mib_free((void **)icmpv6_statistics);
+	snmp_mib_free((void **)icmpv6msg_statistics);
 	snmp_mib_free((void **)udp_stats_in6);
 	snmp_mib_free((void **)udplite_stats_in6);
 }
@@ -853,9 +859,6 @@ static int __init inet6_init(void)
 	ipv6_frag_init();
 	ipv6_nodata_init();
 	ipv6_destopt_init();
-#ifdef CONFIG_IPV6_MIP6
-	mip6_init();
-#endif
 
 	/* Init v6 transport protocols. */
 	udpv6_init();
@@ -921,9 +924,7 @@ static void __exit inet6_exit(void)
 
 	/* Cleanup code parts. */
 	ipv6_packet_cleanup();
-#ifdef CONFIG_IPV6_MIP6
-	mip6_fini();
-#endif
+
 	addrconf_cleanup();
 	ip6_flowlabel_cleanup();
 	ip6_route_cleanup();

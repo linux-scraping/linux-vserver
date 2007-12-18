@@ -25,14 +25,8 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("iptables REDIRECT target module");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
 /* FIXME: Take multiple ranges --RR */
-static int
+static bool
 redirect_check(const char *tablename,
 	       const void *e,
 	       const struct xt_target *target,
@@ -42,18 +36,18 @@ redirect_check(const char *tablename,
 	const struct nf_nat_multi_range_compat *mr = targinfo;
 
 	if (mr->range[0].flags & IP_NAT_RANGE_MAP_IPS) {
-		DEBUGP("redirect_check: bad MAP_IPS.\n");
-		return 0;
+		pr_debug("redirect_check: bad MAP_IPS.\n");
+		return false;
 	}
 	if (mr->rangesize != 1) {
-		DEBUGP("redirect_check: bad rangesize %u.\n", mr->rangesize);
-		return 0;
+		pr_debug("redirect_check: bad rangesize %u.\n", mr->rangesize);
+		return false;
 	}
-	return 1;
+	return true;
 }
 
 static unsigned int
-redirect_target(struct sk_buff **pskb,
+redirect_target(struct sk_buff *skb,
 		const struct net_device *in,
 		const struct net_device *out,
 		unsigned int hooknum,
@@ -69,7 +63,7 @@ redirect_target(struct sk_buff **pskb,
 	NF_CT_ASSERT(hooknum == NF_IP_PRE_ROUTING
 		     || hooknum == NF_IP_LOCAL_OUT);
 
-	ct = nf_ct_get(*pskb, &ctinfo);
+	ct = nf_ct_get(skb, &ctinfo);
 	NF_CT_ASSERT(ct && (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED));
 
 	/* Local packets: make them go to loopback */
@@ -82,7 +76,7 @@ redirect_target(struct sk_buff **pskb,
 		newdst = 0;
 
 		rcu_read_lock();
-		indev = __in_dev_get_rcu((*pskb)->dev);
+		indev = __in_dev_get_rcu(skb->dev);
 		if (indev && (ifa = indev->ifa_list))
 			newdst = ifa->ifa_local;
 		rcu_read_unlock();
@@ -101,7 +95,7 @@ redirect_target(struct sk_buff **pskb,
 	return nf_nat_setup_info(ct, &newrange, hooknum);
 }
 
-static struct xt_target redirect_reg = {
+static struct xt_target redirect_reg __read_mostly = {
 	.name		= "REDIRECT",
 	.family		= AF_INET,
 	.target		= redirect_target,

@@ -9,10 +9,6 @@
  * This file is licensed under the terms of the GNU General Public
  * License version 2.  This program is licensed "as is" without
  * any warranty of any kind, whether express or implied.
- *
- * To build:
- *   dtc -I dts -O asm -o ebony.S -b 0 ebony.dts
- *   dtc -I dts -O dtb -o ebony.dtb -b 0 ebony.dts
  */
 
 / {
@@ -31,8 +27,8 @@
 			reg = <0>;
 			clock-frequency = <0>; // Filled in by zImage
 			timebase-frequency = <0>; // Filled in by zImage
-			i-cache-line-size = <32>;
-			d-cache-line-size = <32>;
+			i-cache-line-size = <20>;
+			d-cache-line-size = <20>;
 			i-cache-size = <8000>; /* 32 kB */
 			d-cache-size = <8000>; /* 32 kB */
 			dcr-controller;
@@ -135,22 +131,23 @@
 				#address-cells = <2>;
 				#size-cells = <1>;
 				clock-frequency = <0>; // Filled in by zImage
-				ranges = <0 00000000 fff00000 100000
-					  1 00000000 48000000 100000
-					  2 00000000 ff800000 400000
-					  3 00000000 48200000 100000
-					  7 00000000 48300000 100000>;
+				// ranges property is supplied by zImage
+				// based on firmware's configuration of the
+				// EBC bridge
 				interrupts = <5 4>;
 				interrupt-parent = <&UIC1>;
 
 				small-flash@0,80000 {
-					device_type = "rom";
-					compatible = "direct-mapped";
-					probe-type = "JEDEC";
+					compatible = "jedec-flash";
 					bank-width = <1>;
-					partitions = <0 80000>;
-					partition-names = "OpenBIOS";
 					reg = <0 80000 80000>;
+					#address-cells = <1>;
+					#size-cells = <1>;
+					partition@0 {
+						label = "OpenBIOS";
+						reg = <0 80000>;
+						read-only;
+					};
 				};
 
 				ds1743@1,0 {
@@ -160,14 +157,19 @@
 				};
 
 				large-flash@2,0 {
-					device_type = "rom";
-					compatible = "direct-mapped";
-					probe-type = "JEDEC";
+					compatible = "jedec-flash";
 					bank-width = <1>;
-					partitions = <0 380000
-						      380000 80000>;
-					partition-names = "fs", "firmware";
 					reg = <2 0 400000>;
+					#address-cells = <1>;
+					#size-cells = <1>;
+					partition@0 {
+						label = "fs";
+						reg = <0 380000>;
+					};
+					partition@380000 {
+						label = "firmware";
+						reg = <380000 80000>;
+					};
 				};
 
 				ir@3,0 {
@@ -177,6 +179,7 @@
 				fpga@7,0 {
 					compatible = "Ebony-FPGA";
 					reg = <7 0 10>;
+					virtual-reg = <e8300000>;
 				};
 			};
 

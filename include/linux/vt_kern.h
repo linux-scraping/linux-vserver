@@ -75,6 +75,8 @@ int con_copy_unimap(struct vc_data *dst_vc, struct vc_data *src_vc);
 int vt_waitactive(int vt);
 void change_console(struct vc_data *new_vc);
 void reset_vc(struct vc_data *vc);
+extern int unbind_con_driver(const struct consw *csw, int first, int last,
+			     int deflt);
 
 /*
  * vc_screen.c shares this temporary buffer with the console write code so that
@@ -85,6 +87,7 @@ void reset_vc(struct vc_data *vc);
 extern char con_buf[CON_BUF_SIZE];
 extern struct mutex con_buf_mtx;
 extern char vt_dont_switch;
+extern int default_utf8;
 
 struct vt_spawn_console {
 	spinlock_t lock;

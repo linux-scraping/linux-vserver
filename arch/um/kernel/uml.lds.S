@@ -18,13 +18,6 @@ SECTIONS
 
   . = START + SIZEOF_HEADERS;
 
-#ifdef MODE_TT
-  .remap_data : { UNMAP_PATH (.data .bss) }
-  .remap : { UNMAP_PATH (.text) }
-
-  . = ALIGN(4096);		/* Init code and data */
-#endif
-
   _text = .;
   _stext = .;
   __init_begin = .;
@@ -44,12 +37,13 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
     *(.gnu.linkonce.t*)
+  }
 
-    . = ALIGN(4096);
-    __syscall_stub_start = .;
-    *(.__syscall_stub*)
-    __syscall_stub_end = .;
-    . = ALIGN(4096);
+  . = ALIGN(4096);
+  .syscall_stub : {
+	__syscall_stub_start = .;
+	*(.__syscall_stub*)
+	__syscall_stub_end = .;
   }
 
   #include "asm/common.lds.S"

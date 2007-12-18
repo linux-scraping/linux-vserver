@@ -32,6 +32,7 @@
 #include <linux/unistd.h>
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
+#include <linux/debugfs.h>
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/processor.h>
@@ -74,6 +75,8 @@ struct machdep_calls *machine_id;
 EXPORT_SYMBOL(machine_id);
 
 unsigned long klimit = (unsigned long) _end;
+
+char cmd_line[COMMAND_LINE_SIZE];
 
 /*
  * This still seems to be needed... -- paulus
@@ -410,16 +413,28 @@ void __init smp_setup_cpu_maps(void)
 		of_node_put(dn);
 	}
 
+	vdso_data->processorCount = num_present_cpus();
+#endif /* CONFIG_PPC64 */
+}
+
+/*
+ * Being that cpu_sibling_map is now a per_cpu array, then it cannot
+ * be initialized until the per_cpu areas have been created.  This
+ * function is now called from setup_per_cpu_areas().
+ */
+void __init smp_setup_cpu_sibling_map(void)
+{
+#if defined(CONFIG_PPC64)
+	int cpu;
+
 	/*
 	 * Do the sibling map; assume only two threads per processor.
 	 */
 	for_each_possible_cpu(cpu) {
-		cpu_set(cpu, cpu_sibling_map[cpu]);
+		cpu_set(cpu, per_cpu(cpu_sibling_map, cpu));
 		if (cpu_has_feature(CPU_FTR_SMT))
-			cpu_set(cpu ^ 0x1, cpu_sibling_map[cpu]);
+			cpu_set(cpu ^ 0x1, per_cpu(cpu_sibling_map, cpu));
 	}
-
-	vdso_data->processorCount = num_present_cpus();
 #endif /* CONFIG_PPC64 */
 }
 #endif /* CONFIG_SMP */
@@ -486,7 +501,19 @@ int check_legacy_ioport(unsigned long base_port)
 
 	switch(base_port) {
 	case I8042_DATA_REG:
+		if (!(np = of_find_compatible_node(NULL, NULL, "pnpPNP,303")))
+			np = of_find_compatible_node(NULL, NULL, "pnpPNP,f03");
+		if (np) {
+			parent = of_get_parent(np);
+			of_node_put(np);
+			np = parent;
+			break;
+		}
 		np = of_find_node_by_type(NULL, "8042");
+		/* Pegasos has no device_type on its 8042 node, look for the
+		 * name instead */
+		if (!np)
+			np = of_find_node_by_name(NULL, "8042");
 		break;
 	case FDC_BASE: /* FDC1 */
 		np = of_find_node_by_type(NULL, "fdc");
@@ -571,3 +598,15 @@ static int __init check_cache_coherency(void)
 
 late_initcall(check_cache_coherency);
 #endif /* CONFIG_CHECK_CACHE_COHERENCY */
+
+#ifdef CONFIG_DEBUG_FS
+struct dentry *powerpc_debugfs_root;
+
+static int powerpc_debugfs_init(void)
+{
+	powerpc_debugfs_root = debugfs_create_dir("powerpc", NULL);
+
+	return powerpc_debugfs_root == NULL;
+}
+arch_initcall(powerpc_debugfs_init);
+#endif

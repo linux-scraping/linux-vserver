@@ -45,8 +45,8 @@
      </sect1>
 
      <sect1><title>Atomic and pointer manipulation</title>
-!Iinclude/asm-i386/atomic.h
-!Iinclude/asm-i386/unaligned.h
+!Iinclude/asm-x86/atomic_32.h
+!Iinclude/asm-x86/unaligned.h
      </sect1>
 
      <sect1><title>Delaying, scheduling, and timer routines</title>
@@ -119,7 +119,7 @@ X!Ilib/string.c
 !Elib/string.c
      </sect1>
      <sect1><title>Bit Operations</title>
-!Iinclude/asm-i386/bitops.h
+!Iinclude/asm-x86/bitops_32.h
      </sect1>
   </chapter>
 
@@ -139,8 +139,10 @@ X!Ilib/string.c
 !Elib/cmdline.c
      </sect1>
 
-     <sect1><title>CRC Functions</title>
+     <sect1 id="crc"><title>CRC Functions</title>
+!Elib/crc7.c
 !Elib/crc16.c
+!Elib/crc-itu-t.c
 !Elib/crc32.c
 !Elib/crc-ccitt.c
      </sect1>
@@ -153,11 +155,10 @@ X!Ilib/string.c
 !Emm/slab.c
      </sect1>
      <sect1><title>User Space Memory Access</title>
-!Iinclude/asm-i386/uaccess.h
-!Earch/i386/lib/usercopy.c
+!Iinclude/asm-x86/uaccess_32.h
+!Earch/x86/lib/usercopy_32.c
      </sect1>
      <sect1><title>More Memory Management Functions</title>
-!Iinclude/linux/rmap.h
 !Emm/readahead.c
 !Emm/filemap.c
 !Emm/memory.c
@@ -239,17 +240,23 @@ X!Ilib/string.c
      <sect1><title>Driver Support</title>
 !Enet/core/dev.c
 !Enet/ethernet/eth.c
+!Enet/sched/sch_generic.c
 !Iinclude/linux/etherdevice.h
+!Iinclude/linux/netdevice.h
+     </sect1>
+     <sect1><title>PHY Support</title>
 !Edrivers/net/phy/phy.c
 !Idrivers/net/phy/phy.c
 !Edrivers/net/phy/phy_device.c
 !Idrivers/net/phy/phy_device.c
 !Edrivers/net/phy/mdio_bus.c
 !Idrivers/net/phy/mdio_bus.c
-<!-- FIXME: Removed for now since no structured comments in source
-X!Enet/core/wireless.c
--->
      </sect1>
+<!-- FIXME: Removed for now since no structured comments in source
+     <sect1><title>Wireless</title>
+X!Enet/core/wireless.c
+     </sect1>
+-->
      <sect1><title>Synchronous PPP</title>
 !Edrivers/net/wan/syncppp.c
      </sect1>
@@ -286,7 +293,7 @@ X!Ekernel/module.c
      </sect1>
 
      <sect1><title>MTRR Handling</title>
-!Earch/i386/kernel/cpu/mtrr/main.c
+!Earch/x86/kernel/cpu/mtrr/main.c
      </sect1>
 
      <sect1><title>PCI Support Library</title>
@@ -309,14 +316,14 @@ X!Edrivers/pci/hotplug.c
      <sect1><title>MCA Architecture</title>
 	<sect2><title>MCA Device Functions</title>
            <para>
-              Refer to the file arch/i386/kernel/mca.c for more information.
+              Refer to the file arch/x86/kernel/mca_32.c for more information.
            </para>
 <!-- FIXME: Removed for now since no structured comments in source
-X!Earch/i386/kernel/mca.c
+X!Earch/x86/kernel/mca_32.c
 -->
 	</sect2>
 	<sect2><title>MCA Bus DMA</title>
-!Iinclude/asm-i386/mca_dma.h
+!Iinclude/asm-x86/mca_dma.h
 	</sect2>
      </sect1>
   </chapter>
@@ -333,7 +340,7 @@ X!Earch/i386/kernel/mca.c
 
   <chapter id="security">
      <title>Security Framework</title>
-!Esecurity/security.c
+!Isecurity/security.c
   </chapter>
 
   <chapter id="audit">
@@ -380,8 +387,6 @@ X!Edrivers/base/interface.c
      </sect1>
      <sect1><title>Device Drivers Power Management</title>
 !Edrivers/base/power/main.c
-!Edrivers/base/power/resume.c
-!Edrivers/base/power/suspend.c
      </sect1>
      <sect1><title>Device Drivers ACPI Support</title>
 <!-- Internal functions only
@@ -397,14 +402,18 @@ X!Edrivers/acpi/pci_bind.c
 -->
      </sect1>
      <sect1><title>Device drivers PnP support</title>
-!Edrivers/pnp/core.c
+!Idrivers/pnp/core.c
 <!-- No correct structured comments
 X!Edrivers/pnp/system.c
  -->
 !Edrivers/pnp/card.c
-!Edrivers/pnp/driver.c
+!Idrivers/pnp/driver.c
 !Edrivers/pnp/manager.c
 !Edrivers/pnp/support.c
+     </sect1>
+     <sect1><title>Userspace IO devices</title>
+!Edrivers/uio/uio.c
+!Iinclude/linux/uio_driver.h
      </sect1>
   </chapter>
 
@@ -641,6 +650,80 @@ X!Idrivers/video/console/fonts.c
 !Iinclude/linux/spi/spi.h
 !Fdrivers/spi/spi.c spi_register_board_info
 !Edrivers/spi/spi.c
+  </chapter>
+
+  <chapter id="i2c">
+     <title>I<superscript>2</superscript>C and SMBus Subsystem</title>
+
+     <para>
+	I<superscript>2</superscript>C (or without fancy typography, "I2C")
+	is an acronym for the "Inter-IC" bus, a simple bus protocol which is
+	widely used where low data rate communications suffice.
+	Since it's also a licensed trademark, some vendors use another
+	name (such as "Two-Wire Interface", TWI) for the same bus.
+	I2C only needs two signals (SCL for clock, SDA for data), conserving
+	board real estate and minimizing signal quality issues.
+	Most I2C devices use seven bit addresses, and bus speeds of up
+	to 400 kHz; there's a high speed extension (3.4 MHz) that's not yet
+	found wide use.
+	I2C is a multi-master bus; open drain signaling is used to
+	arbitrate between masters, as well as to handshake and to
+	synchronize clocks from slower clients.
+     </para>
+
+     <para>
+	The Linux I2C programming interfaces support only the master
+	side of bus interactions, not the slave side.
+	The programming interface is structured around two kinds of driver,
+	and two kinds of device.
+	An I2C "Adapter Driver" abstracts the controller hardware; it binds
+	to a physical device (perhaps a PCI device or platform_device) and
+	exposes a <structname>struct i2c_adapter</structname> representing
+	each I2C bus segment it manages.
+	On each I2C bus segment will be I2C devices represented by a
+	<structname>struct i2c_client</structname>.  Those devices will
+	be bound to a <structname>struct i2c_driver</structname>,
+	which should follow the standard Linux driver model.
+	(At this writing, a legacy model is more widely used.)
+	There are functions to perform various I2C protocol operations; at
+	this writing all such functions are usable only from task context.
+     </para>
+
+     <para>
+	The System Management Bus (SMBus) is a sibling protocol.  Most SMBus
+	systems are also I2C conformant.  The electrical constraints are
+	tighter for SMBus, and it standardizes particular protocol messages
+	and idioms.  Controllers that support I2C can also support most
+	SMBus operations, but SMBus controllers don't support all the protocol
+	options that an I2C controller will.
+	There are functions to perform various SMBus protocol operations,
+	either using I2C primitives or by issuing SMBus commands to
+	i2c_adapter devices which don't support those I2C operations.
+     </para>
+
+!Iinclude/linux/i2c.h
+!Fdrivers/i2c/i2c-boardinfo.c i2c_register_board_info
+!Edrivers/i2c/i2c-core.c
+  </chapter>
+
+  <chapter id="splice">
+      <title>splice API</title>
+  <para>
+	splice is a method for moving blocks of data around inside the
+	kernel, without continually transferring them between the kernel
+	and user space.
+  </para>
+!Ffs/splice.c
+  </chapter>
+
+  <chapter id="pipes">
+      <title>pipes API</title>
+  <para>
+	Pipe interfaces are all for in-kernel (builtin image) use.
+	They are not exported for use by modules.
+  </para>
+!Iinclude/linux/pipe_fs_i.h
+!Ffs/pipe.c
   </chapter>
 
 </book>

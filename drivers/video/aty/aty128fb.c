@@ -56,7 +56,7 @@
 #include <linux/vmalloc.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/fb.h>
 #include <linux/init.h>
 #include <linux/pci.h>
@@ -1733,7 +1733,7 @@ static int aty128_bl_get_level_brightness(struct aty128fb_par *par,
 
 static int aty128_bl_update_status(struct backlight_device *bd)
 {
-	struct aty128fb_par *par = class_get_devdata(&bd->class_dev);
+	struct aty128fb_par *par = bl_get_data(bd);
 	unsigned int reg = aty_ld_le32(LVDS_GEN_CNTL);
 	int level;
 

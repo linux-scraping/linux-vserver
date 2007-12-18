@@ -30,6 +30,7 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 
 	switch (cmd) {
 	case EXT4_IOC_GETFLAGS:
+		ext4_get_inode_flags(ei);
 		flags = ei->i_flags & EXT4_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT4_IOC_SETFLAGS: {
@@ -43,7 +44,7 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -53,6 +54,11 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			flags &= ~EXT4_DIRSYNC_FL;
 
 		mutex_lock(&inode->i_mutex);
+		/* Is it quota file? Do not allow user to mess with it */
+		if (IS_NOQUOTA(inode)) {
+			mutex_unlock(&inode->i_mutex);
+			return -EPERM;
+		}
 		oldflags = ei->i_flags;
 
 		/* The JOURNAL_DATA flag is modifiable only by root */
@@ -101,7 +107,7 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		ei->i_flags = flags;
 
 		ext4_set_inode_flags(inode);
-		inode->i_ctime = CURRENT_TIME_SEC;
+		inode->i_ctime = ext4_current_time(inode);
 
 		err = ext4_mark_iloc_dirty(handle, inode, &iloc);
 flags_err:
@@ -126,7 +132,7 @@ flags_err:
 		__u32 generation;
 		int err;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
@@ -139,14 +145,14 @@ flags_err:
 			return PTR_ERR(handle);
 		err = ext4_reserve_inode_write(handle, inode, &iloc);
 		if (err == 0) {
-			inode->i_ctime = CURRENT_TIME_SEC;
+			inode->i_ctime = ext4_current_time(inode);
 			inode->i_generation = generation;
 			err = ext4_mark_iloc_dirty(handle, inode, &iloc);
 		}
 		ext4_journal_stop(handle);
 		return err;
 	}
-#ifdef CONFIG_JBD_DEBUG
+#ifdef CONFIG_JBD2_DEBUG
 	case EXT4_IOC_WAIT_FOR_READONLY:
 		/*
 		 * This is racy - by the time we're woken up and running,
@@ -187,7 +193,7 @@ flags_err:
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))
@@ -324,7 +330,7 @@ long ext4_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case EXT4_IOC32_SETVERSION_OLD:
 		cmd = EXT4_IOC_SETVERSION_OLD;
 		break;
-#ifdef CONFIG_JBD_DEBUG
+#ifdef CONFIG_JBD2_DEBUG
 	case EXT4_IOC32_WAIT_FOR_READONLY:
 		cmd = EXT4_IOC_WAIT_FOR_READONLY;
 		break;

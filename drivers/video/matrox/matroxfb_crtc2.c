@@ -15,7 +15,7 @@
 #include "matroxfb_misc.h"
 #include "matroxfb_DAC1064.h"
 #include <linux/matroxfb.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 /* **************************************************** */
 
@@ -161,11 +161,6 @@ static void matroxfb_dh_disable(struct matroxfb_dh_fb_info* m2info) {
 
 	mga_outl(0x3C10, 0x00000004);	/* disable CRTC2, CRTC1->DAC1, PLL as clock source */
 	ACCESS_FBINFO(hw).crtc2.ctl = 0x00000004;
-}
-
-static void matroxfb_dh_cfbX_init(struct matroxfb_dh_fb_info* m2info) {
-	/* no acceleration for secondary head... */
-	m2info->cmap[16] = 0xFFFFFFFF;
 }
 
 static void matroxfb_dh_pan_var(struct matroxfb_dh_fb_info* m2info,
@@ -385,7 +380,6 @@ static int matroxfb_dh_set_par(struct fb_info* info) {
 			}
 		}
 		up_read(&ACCESS_FBINFO(altout).lock);
-		matroxfb_dh_cfbX_init(m2info);
 	}
 	m2info->initialized = 1;
 	return 0;

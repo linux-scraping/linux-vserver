@@ -91,7 +91,6 @@ static void planb_close(struct video_device *);
 static int planb_ioctl(struct video_device *, unsigned int, void *);
 static int planb_init_done(struct video_device *);
 static int planb_mmap(struct video_device *, const char *, unsigned long);
-static void planb_irq(int, void *);
 static void release_planb(void);
 int init_planbs(struct video_init *);
 
@@ -353,9 +352,8 @@ static int planb_prepare_open(struct planb *pb)
 		* PLANB_DUMMY)*sizeof(struct dbdma_cmd)
 		+(PLANB_MAXLINES*((PLANB_MAXPIXELS+7)& ~7))/8
 		+MAX_GBUFFERS*sizeof(unsigned int);
-	if ((pb->priv_space = kmalloc (size, GFP_KERNEL)) == 0)
+	if ((pb->priv_space = kzalloc (size, GFP_KERNEL)) == 0)
 		return -ENOMEM;
-	memset ((void *) pb->priv_space, 0, size);
 	pb->overlay_last1 = pb->ch1_cmd = (volatile struct dbdma_cmd *)
 						DBDMA_ALIGN (pb->priv_space);
 	pb->overlay_last2 = pb->ch2_cmd = pb->ch1_cmd + pb->tab_size;
@@ -845,21 +843,21 @@ cmd_tab_mask_end:
 /*********************************/
 
 static int palette2fmt[] = {
-       0,
-       PLANB_GRAY,
-       0,
-       0,
-       0,
-       PLANB_COLOUR32,
-       PLANB_COLOUR15,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
+	0,
+	PLANB_GRAY,
+	0,
+	0,
+	0,
+	PLANB_COLOUR32,
+	PLANB_COLOUR15,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
 };
 
 #define PLANB_PALETTE_MAX 15
@@ -1316,7 +1314,7 @@ cmd_tab_data_end:
 	return c1;
 }
 
-static void planb_irq(int irq, void *dev_id)
+static irqreturn_t planb_irq(int irq, void *dev_id)
 {
 	unsigned int stat, astat;
 	struct planb *pb = (struct planb *)dev_id;
@@ -1359,13 +1357,14 @@ static void planb_irq(int irq, void *dev_id)
 		pb->frame_stat[fr] = GBUFFER_DONE;
 		pb->grabbing--;
 		wake_up_interruptible(&pb->capq);
-		return;
+		return IRQ_HANDLED;
 	}
 	/* incorrect interrupts? */
 	pb->intr_mask = PLANB_CLR_IRQ;
 	out_le32(&pb->planb_base->intr_stat, PLANB_CLR_IRQ);
 	printk(KERN_ERR "PlanB: IRQ lockup, cleared intrrupts"
 							" unconditionally\n");
+	return IRQ_HANDLED;
 }
 
 /*******************************
@@ -2014,7 +2013,6 @@ static struct video_device planb_template=
 	.owner		= THIS_MODULE,
 	.name		= PLANB_DEVICE_NAME,
 	.type		= VID_TYPE_OVERLAY,
-	.hardware	= VID_HARDWARE_PLANB,
 	.open		= planb_open,
 	.close		= planb_close,
 	.read		= planb_read,
@@ -2092,7 +2090,7 @@ static int init_planb(struct planb *pb)
 	/* clear interrupt mask */
 	pb->intr_mask = PLANB_CLR_IRQ;
 
-	result = request_irq(pb->irq, planb_irq, 0, "PlanB", (void *)pb);
+	result = request_irq(pb->irq, planb_irq, 0, "PlanB", pb);
 	if (result < 0) {
 		if (result==-EINVAL)
 			printk(KERN_ERR "PlanB: Bad irq number (%d) "

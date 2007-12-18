@@ -26,6 +26,7 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
+#include <linux/pid_namespace.h>
 #include <linux/notifier.h>
 #include <linux/thread_info.h>
 #include <linux/time.h>
@@ -107,14 +108,14 @@ static inline tvec_base_t *tbase_get_base(tvec_base_t *base)
 static inline void timer_set_deferrable(struct timer_list *timer)
 {
 	timer->base = ((tvec_base_t *)((unsigned long)(timer->base) |
-	                               TBASE_DEFERRABLE_FLAG));
+				       TBASE_DEFERRABLE_FLAG));
 }
 
 static inline void
 timer_set_base(struct timer_list *timer, tvec_base_t *new_base)
 {
 	timer->base = (tvec_base_t *)((unsigned long)(new_base) |
-	                              tbase_get_deferrable(timer->base));
+				      tbase_get_deferrable(timer->base));
 }
 
 /**
@@ -309,6 +310,20 @@ void __timer_stats_timer_set_start_info(struct timer_list *timer, void *addr)
 	memcpy(timer->start_comm, current->comm, TASK_COMM_LEN);
 	timer->start_pid = current->pid;
 }
+
+static void timer_stats_account_timer(struct timer_list *timer)
+{
+	unsigned int flag = 0;
+
+	if (unlikely(tbase_get_deferrable(timer->base)))
+		flag |= TIMER_STATS_FLAG_DEFERRABLE;
+
+	timer_stats_update_stats(timer, timer->start_pid, timer->start_site,
+				 timer->function, timer->start_comm, flag);
+}
+
+#else
+static void timer_stats_account_timer(struct timer_list *timer) {}
 #endif
 
 /**
@@ -435,10 +450,10 @@ EXPORT_SYMBOL(__mod_timer);
 void add_timer_on(struct timer_list *timer, int cpu)
 {
 	tvec_base_t *base = per_cpu(tvec_bases, cpu);
-  	unsigned long flags;
+	unsigned long flags;
 
 	timer_stats_timer_set_start_info(timer);
-  	BUG_ON(timer_pending(timer) || !timer->function);
+	BUG_ON(timer_pending(timer) || !timer->function);
 	spin_lock_irqsave(&base->lock, flags);
 	timer_set_base(timer, base);
 	internal_add_timer(base, timer);
@@ -617,7 +632,7 @@ static inline void __run_timers(tvec_base_t *base)
 	while (time_after_eq(jiffies, base->timer_jiffies)) {
 		struct list_head work_list;
 		struct list_head *head = &work_list;
- 		int index = base->timer_jiffies & TVR_MASK;
+		int index = base->timer_jiffies & TVR_MASK;
 
 		/*
 		 * Cascade timers:
@@ -634,8 +649,8 @@ static inline void __run_timers(tvec_base_t *base)
 			unsigned long data;
 
 			timer = list_first_entry(head, struct timer_list,entry);
- 			fn = timer->function;
- 			data = timer->data;
+			fn = timer->function;
+			data = timer->data;
 
 			timer_stats_account_timer(timer);
 
@@ -679,8 +694,8 @@ static unsigned long __next_timer_interrupt(tvec_base_t *base)
 	index = slot = timer_jiffies & TVR_MASK;
 	do {
 		list_for_each_entry(nte, base->tv1.vec + slot, entry) {
- 			if (tbase_get_deferrable(nte->base))
- 				continue;
+			if (tbase_get_deferrable(nte->base))
+				continue;
 
 			found = 1;
 			expires = nte->expires;
@@ -779,7 +794,7 @@ static unsigned long cmp_next_hrtimer_event(unsigned long now,
 }
 
 /**
- * next_timer_interrupt - return the jiffy of the next pending timer
+ * get_next_timer_interrupt - return the jiffy of the next pending timer
  * @now: current time (in jiffies)
  */
 unsigned long get_next_timer_interrupt(unsigned long now)
@@ -806,8 +821,21 @@ unsigned long next_timer_interrupt(void)
 
 #endif
 
+#ifndef CONFIG_VIRT_CPU_ACCOUNTING
+void account_process_tick(struct task_struct *p, int user_tick)
+{
+	if (user_tick) {
+		account_user_time(p, jiffies_to_cputime(1));
+		account_user_time_scaled(p, jiffies_to_cputime(1));
+	} else {
+		account_system_time(p, HARDIRQ_OFFSET, jiffies_to_cputime(1));
+		account_system_time_scaled(p, jiffies_to_cputime(1));
+	}
+}
+#endif
+
 /*
- * Called from the timer interrupt handler to charge one tick to the current 
+ * Called from the timer interrupt handler to charge one tick to the current
  * process.  user_tick is 1 if the tick is user time, 0 for system.
  */
 void update_process_times(int user_tick)
@@ -816,15 +844,12 @@ void update_process_times(int user_tick)
 	int cpu = smp_processor_id();
 
 	/* Note: this timer irq context must be accounted for as well. */
-	if (user_tick)
-		account_user_time(p, jiffies_to_cputime(1));
-	else
-		account_system_time(p, HARDIRQ_OFFSET, jiffies_to_cputime(1));
+	account_process_tick(p, user_tick);
 	run_local_timers();
 	if (rcu_pending(cpu))
 		rcu_check_callbacks(cpu, user_tick);
 	scheduler_tick();
- 	run_posix_cpu_timers(p);
+	run_posix_cpu_timers(p);
 }
 
 /*
@@ -899,7 +924,7 @@ static inline void update_times(unsigned long ticks)
 	update_wall_time();
 	calc_load(ticks);
 }
-  
+
 /*
  * The 64-bit jiffies value is not atomic - you MUST NOT read it
  * without sampling the sequence number in xtime_lock.
@@ -937,7 +962,7 @@ asmlinkage unsigned long sys_alarm(unsigned int seconds)
  */
 asmlinkage long sys_getpid(void)
 {
-	return vx_map_tgid(current->tgid);
+	return task_tgid_vnr(current);
 }
 
 /*
@@ -951,7 +976,7 @@ asmlinkage long sys_getppid(void)
 	int pid;
 
 	rcu_read_lock();
-	pid = rcu_dereference(current->real_parent)->tgid;
+	pid = task_ppid_nr_ns(current, current->nsproxy->pid_ns);
 	rcu_read_unlock();
 	return vx_map_pid(pid);
 }
@@ -1096,13 +1121,13 @@ EXPORT_SYMBOL(schedule_timeout_uninterruptible);
 /* Thread ID - the internal kernel "pid" */
 asmlinkage long sys_gettid(void)
 {
-	return current->pid;
+	return task_pid_vnr(current);
 }
 
 /**
  * do_sysinfo - fill in sysinfo struct
  * @info: pointer to buffer to fill
- */ 
+ */
 int do_sysinfo(struct sysinfo *info)
 {
 	unsigned long mem_total, sav_total;
@@ -1125,6 +1150,7 @@ int do_sysinfo(struct sysinfo *info)
 		getnstimeofday(&tp);
 		tp.tv_sec += wall_to_monotonic.tv_sec;
 		tp.tv_nsec += wall_to_monotonic.tv_nsec;
+		monotonic_to_bootbased(&tp);
 		if (tp.tv_nsec - NSEC_PER_SEC >= 0) {
 			tp.tv_nsec = tp.tv_nsec - NSEC_PER_SEC;
 			tp.tv_sec++;
@@ -1219,7 +1245,8 @@ static int __devinit init_timers_cpu(int cpu)
 			/*
 			 * The APs use this path later in boot
 			 */
-			base = kmalloc_node(sizeof(*base), GFP_KERNEL,
+			base = kmalloc_node(sizeof(*base),
+						GFP_KERNEL | __GFP_ZERO,
 						cpu_to_node(cpu));
 			if (!base)
 				return -ENOMEM;
@@ -1230,7 +1257,6 @@ static int __devinit init_timers_cpu(int cpu)
 				kfree(base);
 				return -ENOMEM;
 			}
-			memset(base, 0, sizeof(*base));
 			per_cpu(tvec_bases, cpu) = base;
 		} else {
 			/*
@@ -1346,194 +1372,6 @@ void __init init_timers(void)
 	register_cpu_notifier(&timers_nb);
 	open_softirq(TIMER_SOFTIRQ, run_timer_softirq, NULL);
 }
-
-#ifdef CONFIG_TIME_INTERPOLATION
-
-struct time_interpolator *time_interpolator __read_mostly;
-static struct time_interpolator *time_interpolator_list __read_mostly;
-static DEFINE_SPINLOCK(time_interpolator_lock);
-
-static inline cycles_t time_interpolator_get_cycles(unsigned int src)
-{
-	unsigned long (*x)(void);
-
-	switch (src)
-	{
-		case TIME_SOURCE_FUNCTION:
-			x = time_interpolator->addr;
-			return x();
-
-		case TIME_SOURCE_MMIO64	:
-			return readq_relaxed((void __iomem *)time_interpolator->addr);
-
-		case TIME_SOURCE_MMIO32	:
-			return readl_relaxed((void __iomem *)time_interpolator->addr);
-
-		default: return get_cycles();
-	}
-}
-
-static inline u64 time_interpolator_get_counter(int writelock)
-{
-	unsigned int src = time_interpolator->source;
-
-	if (time_interpolator->jitter)
-	{
-		cycles_t lcycle;
-		cycles_t now;
-
-		do {
-			lcycle = time_interpolator->last_cycle;
-			now = time_interpolator_get_cycles(src);
-			if (lcycle && time_after(lcycle, now))
-				return lcycle;
-
-			/* When holding the xtime write lock, there's no need
-			 * to add the overhead of the cmpxchg.  Readers are
-			 * force to retry until the write lock is released.
-			 */
-			if (writelock) {
-				time_interpolator->last_cycle = now;
-				return now;
-			}
-			/* Keep track of the last timer value returned. The use of cmpxchg here
-			 * will cause contention in an SMP environment.
-			 */
-		} while (unlikely(cmpxchg(&time_interpolator->last_cycle, lcycle, now) != lcycle));
-		return now;
-	}
-	else
-		return time_interpolator_get_cycles(src);
-}
-
-void time_interpolator_reset(void)
-{
-	time_interpolator->offset = 0;
-	time_interpolator->last_counter = time_interpolator_get_counter(1);
-}
-
-#define GET_TI_NSECS(count,i) (((((count) - i->last_counter) & (i)->mask) * (i)->nsec_per_cyc) >> (i)->shift)
-
-unsigned long time_interpolator_get_offset(void)
-{
-	/* If we do not have a time interpolator set up then just return zero */
-	if (!time_interpolator)
-		return 0;
-
-	return time_interpolator->offset +
-		GET_TI_NSECS(time_interpolator_get_counter(0), time_interpolator);
-}
-
-#define INTERPOLATOR_ADJUST 65536
-#define INTERPOLATOR_MAX_SKIP 10*INTERPOLATOR_ADJUST
-
-void time_interpolator_update(long delta_nsec)
-{
-	u64 counter;
-	unsigned long offset;
-
-	/* If there is no time interpolator set up then do nothing */
-	if (!time_interpolator)
-		return;
-
-	/*
-	 * The interpolator compensates for late ticks by accumulating the late
-	 * time in time_interpolator->offset. A tick earlier than expected will
-	 * lead to a reset of the offset and a corresponding jump of the clock
-	 * forward. Again this only works if the interpolator clock is running
-	 * slightly slower than the regular clock and the tuning logic insures
-	 * that.
-	 */
-
-	counter = time_interpolator_get_counter(1);
-	offset = time_interpolator->offset +
-			GET_TI_NSECS(counter, time_interpolator);
-
-	if (delta_nsec < 0 || (unsigned long) delta_nsec < offset)
-		time_interpolator->offset = offset - delta_nsec;
-	else {
-		time_interpolator->skips++;
-		time_interpolator->ns_skipped += delta_nsec - offset;
-		time_interpolator->offset = 0;
-	}
-	time_interpolator->last_counter = counter;
-
-	/* Tuning logic for time interpolator invoked every minute or so.
-	 * Decrease interpolator clock speed if no skips occurred and an offset is carried.
-	 * Increase interpolator clock speed if we skip too much time.
-	 */
-	if (jiffies % INTERPOLATOR_ADJUST == 0)
-	{
-		if (time_interpolator->skips == 0 && time_interpolator->offset > tick_nsec)
-			time_interpolator->nsec_per_cyc--;
-		if (time_interpolator->ns_skipped > INTERPOLATOR_MAX_SKIP && time_interpolator->offset == 0)
-			time_interpolator->nsec_per_cyc++;
-		time_interpolator->skips = 0;
-		time_interpolator->ns_skipped = 0;
-	}
-}
-
-static inline int
-is_better_time_interpolator(struct time_interpolator *new)
-{
-	if (!time_interpolator)
-		return 1;
-	return new->frequency > 2*time_interpolator->frequency ||
-	    (unsigned long)new->drift < (unsigned long)time_interpolator->drift;
-}
-
-void
-register_time_interpolator(struct time_interpolator *ti)
-{
-	unsigned long flags;
-
-	/* Sanity check */
-	BUG_ON(ti->frequency == 0 || ti->mask == 0);
-
-	ti->nsec_per_cyc = ((u64)NSEC_PER_SEC << ti->shift) / ti->frequency;
-	spin_lock(&time_interpolator_lock);
-	write_seqlock_irqsave(&xtime_lock, flags);
-	if (is_better_time_interpolator(ti)) {
-		time_interpolator = ti;
-		time_interpolator_reset();
-	}
-	write_sequnlock_irqrestore(&xtime_lock, flags);
-
-	ti->next = time_interpolator_list;
-	time_interpolator_list = ti;
-	spin_unlock(&time_interpolator_lock);
-}
-
-void
-unregister_time_interpolator(struct time_interpolator *ti)
-{
-	struct time_interpolator *curr, **prev;
-	unsigned long flags;
-
-	spin_lock(&time_interpolator_lock);
-	prev = &time_interpolator_list;
-	for (curr = *prev; curr; curr = curr->next) {
-		if (curr == ti) {
-			*prev = curr->next;
-			break;
-		}
-		prev = &curr->next;
-	}
-
-	write_seqlock_irqsave(&xtime_lock, flags);
-	if (ti == time_interpolator) {
-		/* we lost the best time-interpolator: */
-		time_interpolator = NULL;
-		/* find the next-best interpolator */
-		for (curr = time_interpolator_list; curr; curr = curr->next)
-			if (is_better_time_interpolator(curr))
-				time_interpolator = curr;
-		time_interpolator_reset();
-	}
-	write_sequnlock_irqrestore(&xtime_lock, flags);
-	spin_unlock(&time_interpolator_lock);
-}
-#endif /* CONFIG_TIME_INTERPOLATION */
 
 /**
  * msleep - sleep safely even with waitqueue interruptions

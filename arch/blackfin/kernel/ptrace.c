@@ -36,14 +36,15 @@
 #include <linux/ptrace.h>
 #include <linux/user.h>
 #include <linux/signal.h>
+#include <linux/uaccess.h>
 
-#include <asm/uaccess.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/system.h>
 #include <asm/processor.h>
 #include <asm/asm-offsets.h>
 #include <asm/dma.h>
+#include <asm/fixed_code.h>
 
 #define MAX_SHARED_LIBS 3
 #define TEXT_OFFSET 0
@@ -122,7 +123,7 @@ static inline long get_reg(struct task_struct *task, int regno)
 static inline int
 put_reg(struct task_struct *task, int regno, unsigned long data)
 {
-	char * reg_ptr;
+	char *reg_ptr;
 
 	struct pt_regs *regs =
 	    (struct pt_regs *)((unsigned long)task_stack_page(task) +
@@ -146,7 +147,7 @@ put_reg(struct task_struct *task, int regno, unsigned long data)
 		break;
 	default:
 		if (regno <= 216)
-		        *(long *)(reg_ptr + regno) = data;
+			*(long *)(reg_ptr + regno) = data;
 	}
 	return 0;
 }
@@ -168,6 +169,9 @@ static inline int is_user_addr_valid(struct task_struct *child,
 		if (start >= (unsigned long)sraml->addr
 		    && start + len <= (unsigned long)sraml->addr + sraml->length)
 			return 0;
+
+	if (start >= FIXED_CODE_START && start + len <= FIXED_CODE_END)
+		return 0;
 
 	return -EIO;
 }
@@ -215,9 +219,13 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 				copied = sizeof(tmp);
 			} else
 #endif
-			copied =
-			    access_process_vm(child, addr + add, &tmp,
-					      sizeof(tmp), 0);
+			if (addr + add >= FIXED_CODE_START
+			    && addr + add + sizeof(tmp) <= FIXED_CODE_END) {
+				memcpy(&tmp, (const void *)(addr + add), sizeof(tmp));
+				copied = sizeof(tmp);
+			} else
+				copied = access_process_vm(child, addr + add, &tmp,
+							   sizeof(tmp), 0);
 			pr_debug("ptrace: copied size %d [0x%08lx]\n", copied, tmp);
 			if (copied != sizeof(tmp))
 				break;
@@ -281,9 +289,13 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 				copied = sizeof(data);
 			} else
 #endif
-			copied =
-			    access_process_vm(child, addr + add, &data,
-					      sizeof(data), 1);
+			if (addr + add >= FIXED_CODE_START
+			    && addr + add + sizeof(data) <= FIXED_CODE_END) {
+				memcpy((void *)(addr + add), &data, sizeof(data));
+				copied = sizeof(data);
+			} else
+				copied = access_process_vm(child, addr + add, &data,
+							   sizeof(data), 1);
 			pr_debug("ptrace: copied size %d\n", copied);
 			if (copied != sizeof(data))
 				break;
@@ -370,12 +382,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			/* give it a chance to run. */
 			wake_up_process(child);
 			ret = 0;
-			break;
-		}
-
-	case PTRACE_DETACH:
-		{		/* detach a process that was attached. */
-			ret = ptrace_detach(child, data);
 			break;
 		}
 

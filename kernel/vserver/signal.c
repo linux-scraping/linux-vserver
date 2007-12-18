@@ -17,6 +17,7 @@
 #include <asm/uaccess.h>
 
 #include <linux/vs_context.h>
+#include <linux/vs_pid.h>
 #include <linux/vserver/signal_cmd.h>
 
 

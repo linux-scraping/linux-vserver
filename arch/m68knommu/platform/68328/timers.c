@@ -18,10 +18,10 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <asm/setup.h>
 #include <asm/system.h>
 #include <asm/pgtable.h>
-#include <asm/irq.h>
 #include <asm/machdep.h>
 #include <asm/MC68VZ328.h>
 
@@ -53,14 +53,29 @@
 
 /***************************************************************************/
 
-void m68328_timer_init(irq_handler_t timer_routine)
+static irqreturn_t hw_tick(int irq, void *dummy)
+{
+	/* Reset Timer1 */
+	TSTAT &= 0;
+
+	return arch_timer_interrupt(irq, dummy);
+}
+
+/***************************************************************************/
+
+static struct irqaction m68328_timer_irq = {
+	.name	 = "timer",
+	.flags	 = IRQF_DISABLED | IRQF_TIMER,
+	.handler = hw_tick,
+};
+
+void hw_timer_init(void)
 {
 	/* disable timer 1 */
 	TCTL = 0;
 
 	/* set ISR */
-	if (request_irq(TMR_IRQ_NUM, timer_routine, IRQ_FLG_LOCK, "timer", NULL)) 
-		panic("Unable to attach timer interrupt\n");
+	setup_irq(TMR_IRQ_NUM, &m68328_timer_irq);
 
 	/* Restart mode, Enable int, Set clock source */
 	TCTL = TCTL_OM | TCTL_IRQEN | CLOCK_SOURCE;
@@ -73,14 +88,7 @@ void m68328_timer_init(irq_handler_t timer_routine)
 
 /***************************************************************************/
 
-void m68328_timer_tick(void)
-{
-	/* Reset Timer1 */
-	TSTAT &= 0;
-}
-/***************************************************************************/
-
-unsigned long m68328_timer_gettimeoffset(void)
+unsigned long hw_timer_offset(void)
 {
 	unsigned long ticks = TCN, offset = 0;
 

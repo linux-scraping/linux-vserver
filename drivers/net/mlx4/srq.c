@@ -102,6 +102,13 @@ static int mlx4_ARM_SRQ(struct mlx4_dev *dev, int srq_num, int limit_watermark)
 			MLX4_CMD_TIME_CLASS_B);
 }
 
+static int mlx4_QUERY_SRQ(struct mlx4_dev *dev, struct mlx4_cmd_mailbox *mailbox,
+			  int srq_num)
+{
+	return mlx4_cmd_box(dev, 0, mailbox->dma, srq_num, 0, MLX4_CMD_QUERY_SRQ,
+			    MLX4_CMD_TIME_CLASS_A);
+}
+
 int mlx4_srq_alloc(struct mlx4_dev *dev, u32 pdn, struct mlx4_mtt *mtt,
 		   u64 db_rec, struct mlx4_srq *srq)
 {
@@ -205,7 +212,30 @@ int mlx4_srq_arm(struct mlx4_dev *dev, struct mlx4_srq *srq, int limit_watermark
 }
 EXPORT_SYMBOL_GPL(mlx4_srq_arm);
 
-int __devinit mlx4_init_srq_table(struct mlx4_dev *dev)
+int mlx4_srq_query(struct mlx4_dev *dev, struct mlx4_srq *srq, int *limit_watermark)
+{
+	struct mlx4_cmd_mailbox *mailbox;
+	struct mlx4_srq_context *srq_context;
+	int err;
+
+	mailbox = mlx4_alloc_cmd_mailbox(dev);
+	if (IS_ERR(mailbox))
+		return PTR_ERR(mailbox);
+
+	srq_context = mailbox->buf;
+
+	err = mlx4_QUERY_SRQ(dev, mailbox, srq->srqn);
+	if (err)
+		goto err_out;
+	*limit_watermark = be16_to_cpu(srq_context->limit_watermark);
+
+err_out:
+	mlx4_free_cmd_mailbox(dev, mailbox);
+	return err;
+}
+EXPORT_SYMBOL_GPL(mlx4_srq_query);
+
+int mlx4_init_srq_table(struct mlx4_dev *dev)
 {
 	struct mlx4_srq_table *srq_table = &mlx4_priv(dev)->srq_table;
 	int err;

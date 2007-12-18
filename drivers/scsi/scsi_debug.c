@@ -38,6 +38,7 @@
 #include <linux/proc_fs.h>
 #include <linux/vmalloc.h>
 #include <linux/moduleparam.h>
+#include <linux/scatterlist.h>
 
 #include <linux/blkdev.h>
 #include "scsi.h"
@@ -600,7 +601,7 @@ static int fill_from_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 	int k, req_len, act_len, len, active;
 	void * kaddr;
 	void * kaddr_off;
-	struct scatterlist * sgpnt;
+	struct scatterlist * sg;
 
 	if (0 == scp->request_bufflen)
 		return 0;
@@ -619,16 +620,16 @@ static int fill_from_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 			scp->resid = req_len - act_len;
 		return 0;
 	}
-	sgpnt = (struct scatterlist *)scp->request_buffer;
 	active = 1;
-	for (k = 0, req_len = 0, act_len = 0; k < scp->use_sg; ++k, ++sgpnt) {
+	req_len = act_len = 0;
+	scsi_for_each_sg(scp, sg, scp->use_sg, k) {
 		if (active) {
 			kaddr = (unsigned char *)
-				kmap_atomic(sgpnt->page, KM_USER0);
+				kmap_atomic(sg_page(sg), KM_USER0);
 			if (NULL == kaddr)
 				return (DID_ERROR << 16);
-			kaddr_off = (unsigned char *)kaddr + sgpnt->offset;
-			len = sgpnt->length;
+			kaddr_off = (unsigned char *)kaddr + sg->offset;
+			len = sg->length;
 			if ((req_len + len) > arr_len) {
 				active = 0;
 				len = arr_len - req_len;
@@ -637,7 +638,7 @@ static int fill_from_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 			kunmap_atomic(kaddr, KM_USER0);
 			act_len += len;
 		}
-		req_len += sgpnt->length;
+		req_len += sg->length;
 	}
 	if (scp->resid)
 		scp->resid -= act_len;
@@ -653,7 +654,7 @@ static int fetch_to_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 	int k, req_len, len, fin;
 	void * kaddr;
 	void * kaddr_off;
-	struct scatterlist * sgpnt;
+	struct scatterlist * sg;
 
 	if (0 == scp->request_bufflen)
 		return 0;
@@ -668,13 +669,14 @@ static int fetch_to_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 		memcpy(arr, scp->request_buffer, len);
 		return len;
 	}
-	sgpnt = (struct scatterlist *)scp->request_buffer;
-	for (k = 0, req_len = 0, fin = 0; k < scp->use_sg; ++k, ++sgpnt) {
-		kaddr = (unsigned char *)kmap_atomic(sgpnt->page, KM_USER0);
+	sg = scsi_sglist(scp);
+	req_len = fin = 0;
+	for (k = 0; k < scp->use_sg; ++k, sg = sg_next(sg)) {
+		kaddr = (unsigned char *)kmap_atomic(sg_page(sg), KM_USER0);
 		if (NULL == kaddr)
 			return -1;
-		kaddr_off = (unsigned char *)kaddr + sgpnt->offset;
-		len = sgpnt->length;
+		kaddr_off = (unsigned char *)kaddr + sg->offset;
+		len = sg->length;
 		if ((req_len + len) > max_arr_len) {
 			len = max_arr_len - req_len;
 			fin = 1;
@@ -683,7 +685,7 @@ static int fetch_to_dev_buffer(struct scsi_cmnd * scp, unsigned char * arr,
 		kunmap_atomic(kaddr, KM_USER0);
 		if (fin)
 			return req_len + len;
-		req_len += sgpnt->length;
+		req_len += sg->length;
 	}
 	return req_len;
 }
@@ -2405,7 +2407,7 @@ MODULE_PARM_DESC(add_host, "0..127 hosts allowed(def=1)");
 MODULE_PARM_DESC(delay, "# of jiffies to delay response(def=1)");
 MODULE_PARM_DESC(dev_size_mb, "size in MB of ram shared by devs(def=8)");
 MODULE_PARM_DESC(dsense, "use descriptor sense format(def=0 -> fixed)");
-MODULE_PARM_DESC(every_nth, "timeout every nth command(def=100)");
+MODULE_PARM_DESC(every_nth, "timeout every nth command(def=0)");
 MODULE_PARM_DESC(fake_rw, "fake reads/writes instead of copying (def=0)");
 MODULE_PARM_DESC(max_luns, "number of LUNs per target to simulate(def=1)");
 MODULE_PARM_DESC(no_lun_0, "no LU number 0 (def=0 -> have lun 0)");
@@ -2875,7 +2877,7 @@ static int __init scsi_debug_init(void)
 
 	init_all_queued();
 
-	sdebug_driver_template.proc_name = (char *)sdebug_proc_name;
+	sdebug_driver_template.proc_name = sdebug_proc_name;
 
 	host_to_add = scsi_debug_add_host;
         scsi_debug_add_host = 0;

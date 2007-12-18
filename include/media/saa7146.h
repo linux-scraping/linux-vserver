@@ -12,6 +12,7 @@
 #include <asm/io.h>		/* for accessing devices */
 #include <linux/stringify.h>
 #include <linux/mutex.h>
+#include <linux/scatterlist.h>
 
 #include <linux/vmalloc.h>	/* for vmalloc() */
 #include <linux/mm.h>		/* for vmalloc_to_page() */
@@ -114,7 +115,7 @@ struct saa7146_dev
 	struct mutex			lock;
 
 	unsigned char			__iomem *mem;		/* pointer to mapped IO memory */
-	int				revision;	/* chip revision; needed for bug-workarounds*/
+	u32				revision;	/* chip revision; needed for bug-workarounds*/
 
 	/* pci-device & irq stuff*/
 	char				name[32];
@@ -146,7 +147,6 @@ struct saa7146_dev
 
 /* from saa7146_i2c.c */
 int saa7146_i2c_adapter_prepare(struct saa7146_dev *dev, struct i2c_adapter *i2c_adapter, u32 bitrate);
-int saa7146_i2c_transfer(struct saa7146_dev *saa, const struct i2c_msg *msgs, int num, int retries);
 
 /* from saa7146_core.c */
 extern struct list_head saa7146_devices;
@@ -157,8 +157,8 @@ struct saa7146_format* format_by_fourcc(struct saa7146_dev *dev, int fourcc);
 int saa7146_pgtable_alloc(struct pci_dev *pci, struct saa7146_pgtable *pt);
 void saa7146_pgtable_free(struct pci_dev *pci, struct saa7146_pgtable *pt);
 int saa7146_pgtable_build_single(struct pci_dev *pci, struct saa7146_pgtable *pt, struct scatterlist *list, int length );
-char *saa7146_vmalloc_build_pgtable(struct pci_dev *pci, long length, struct saa7146_pgtable *pt);
-void saa7146_vfree_destroy_pgtable(struct pci_dev *pci, char *mem, struct saa7146_pgtable *pt);
+void *saa7146_vmalloc_build_pgtable(struct pci_dev *pci, long length, struct saa7146_pgtable *pt);
+void saa7146_vfree_destroy_pgtable(struct pci_dev *pci, void *mem, struct saa7146_pgtable *pt);
 void saa7146_setgpio(struct saa7146_dev *dev, int port, u32 data);
 int saa7146_wait_for_debi_done(struct saa7146_dev *dev, int nobusyloop);
 

@@ -48,6 +48,7 @@
 
 #ifndef __ASSEMBLY__
 #include <linux/kernel.h>
+#define AT_VECTOR_SIZE_ARCH 4 /* entries in ARCH_DLINFO */
 
 /*
  * This is the logout header that should be common to all platforms
@@ -138,16 +139,6 @@ extern void halt(void) __attribute__((noreturn));
 
 struct task_struct;
 extern struct task_struct *alpha_switch_to(unsigned long, struct task_struct*);
-
-/*
- * On SMP systems, when the scheduler does migration-cost autodetection,
- * it needs a way to flush as much of the CPU's caches as possible.
- *
- * TODO: fill this in!
- */
-static inline void sched_cacheflush(void)
-{
-}
 
 #define imb() \
 __asm__ __volatile__ ("call_pal %0 #imb" : : "i" (PAL_imb) : "memory")

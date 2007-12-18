@@ -34,12 +34,12 @@
 #include <asm/arch/idle.h>
 
 #include <asm/arch/regs-clock.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-power.h>
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-gpioj.h>
 #include <asm/arch/regs-dsc.h>
-#include <asm/arch/regs-spi.h>
+#include <asm/plat-s3c24xx/regs-spi.h>
 #include <asm/arch/regs-s3c2412.h>
 
 #include <asm/plat-s3c24xx/s3c2412.h>
@@ -63,7 +63,6 @@ static inline void s3c2412_init_gpio2(void)
 
 static struct map_desc s3c2412_iodesc[] __initdata = {
 	IODESC_ENT(CLKPWR),
-	IODESC_ENT(LCD),
 	IODESC_ENT(TIMER),
 	IODESC_ENT(WATCHDOG),
 };
@@ -78,6 +77,11 @@ void __init s3c2412_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 	s3c_device_sdi.name  = "s3c2412-sdi";
 	s3c_device_lcd.name  = "s3c2412-lcd";
 	s3c_device_nand.name = "s3c2412-nand";
+
+	/* alter IRQ of SDI controller */
+
+	s3c_device_sdi.resource[1].start = IRQ_S3C2412_SDI;
+	s3c_device_sdi.resource[1].end   = IRQ_S3C2412_SDI;
 
 	/* spi channel related changes, s3c2412/13 specific */
 	s3c_device_spi0.name = "s3c2412-spi";

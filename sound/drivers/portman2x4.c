@@ -611,7 +611,7 @@ static int __devinit snd_portman_rawmidi_create(struct snd_card *card)
 /*********************************************************************
  * parport stuff
  *********************************************************************/
-static void snd_portman_interrupt(int irq, void *userdata)
+static void snd_portman_interrupt(void *userdata)
 {
 	unsigned char midivalue = 0;
 	struct portman *pm = ((struct snd_card*)userdata)->private_data;
@@ -833,7 +833,7 @@ static struct platform_driver snd_portman_driver = {
 /*********************************************************************
  * module init stuff
  *********************************************************************/
-static void __init_or_module snd_portman_unregister_all(void)
+static void snd_portman_unregister_all(void)
 {
 	int i;
 

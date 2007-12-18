@@ -26,6 +26,7 @@
 
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/security.h>
 #include <linux/mnt_namespace.h>
 #include <linux/pid_namespace.h>
 
@@ -40,6 +41,7 @@
 
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
+#include <linux/vs_pid.h>
 #include <linux/vserver/context_cmd.h>
 
 #include <linux/err.h>
@@ -588,6 +590,7 @@ void	dump_vx_info_inactive(int level)
 
 #endif
 
+#if 0
 int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 {
 	struct user_struct *new_user, *old_user;
@@ -611,6 +614,7 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 	free_uid(old_user);
 	return 0;
 }
+#endif
 
 void vx_mask_cap_bset(struct vx_info *vxi, struct task_struct *p)
 {
@@ -644,7 +648,7 @@ static int vx_openfd_task(struct task_struct *tsk)
 }
 
 
-/* 	for *space compatibility */
+/*	for *space compatibility */
 
 asmlinkage long sys_unshare(unsigned long);
 
@@ -677,7 +681,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 	if (old_vxi == vxi)
 		goto out;
 
-	if (!(ret = vx_migrate_user(p, vxi))) {
+//	if (!(ret = vx_migrate_user(p, vxi))) {
 		int openfd;
 
 		task_lock(p);
@@ -720,16 +724,16 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 			struct nsproxy *old_nsp, *new_nsp;
 
 			ret = unshare_nsproxy_namespaces(
-				CLONE_NEWUTS | CLONE_NEWIPC,
+				CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER,
 				&new_nsp, NULL);
 			if (ret)
 				goto out;
 
 			old_nsp = xchg(&p->nsproxy, new_nsp);
-			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC);
+			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER);
 			put_nsproxy(old_nsp);
 		}
-	}
+//	}
 out:
 	put_vx_info(old_vxi);
 	return ret;

@@ -30,6 +30,7 @@
 #include <linux/tty.h>
 #include <linux/serial.h>
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 
 #include <asm/system.h>
 #include <asm/pgtable.h>
@@ -258,7 +259,7 @@ ocotea_early_serial_map(void)
 	gen550_init(0, &port);
 
 	/* Purge TLB entry added in head_44x.S for early serial access */
-	_tlbie(UART0_IO_BASE);
+	_tlbie(UART0_IO_BASE, 0);
 #endif
 
 	port.membase = ioremap64(PPC440GX_UART1_ADDR, 8);

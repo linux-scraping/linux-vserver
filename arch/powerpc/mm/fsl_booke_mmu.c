@@ -14,7 +14,6 @@
  *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
  *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
  *    Copyright (C) 1996 Paul Mackerras
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  *  Derived from "arch/i386/mm/init.c"
  *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
@@ -60,6 +59,7 @@ unsigned int num_tlbcam_entries;
 static unsigned long __cam0, __cam1, __cam2;
 extern unsigned long total_lowmem;
 extern unsigned long __max_low_memory;
+extern unsigned long __initial_memory_limit;
 #define MAX_LOW_MEM	CONFIG_LOWMEM_SIZE
 
 #define NUM_TLBCAMS	(16)
@@ -233,4 +233,5 @@ adjust_total_lowmem(void)
 			__cam0 >> 20, __cam1 >> 20, __cam2 >> 20,
 			(total_lowmem - __cam0 - __cam1 - __cam2) >> 20);
 	__max_low_memory = max_low_mem = __cam0 + __cam1 + __cam2;
+	__initial_memory_limit = __max_low_memory;
 }

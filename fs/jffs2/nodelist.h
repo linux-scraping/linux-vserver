@@ -127,7 +127,7 @@ static inline struct jffs2_inode_cache *jffs2_raw_ref_to_ic(struct jffs2_raw_nod
 	return ((struct jffs2_inode_cache *)raw);
 }
 
-        /* flash_offset & 3 always has to be zero, because nodes are
+	/* flash_offset & 3 always has to be zero, because nodes are
 	   always aligned at 4 bytes. So we have a couple of extra bits
 	   to play with, which indicate the node's status; see below: */
 #define REF_UNCHECKED	0	/* We haven't yet checked the CRC or built its inode */
@@ -138,6 +138,11 @@ static inline struct jffs2_inode_cache *jffs2_raw_ref_to_ic(struct jffs2_raw_nod
 #define ref_offset(ref)		((ref)->flash_offset & ~3)
 #define ref_obsolete(ref)	(((ref)->flash_offset & 3) == REF_OBSOLETE)
 #define mark_ref_normal(ref)    do { (ref)->flash_offset = ref_offset(ref) | REF_NORMAL; } while(0)
+
+/* Dirent nodes should be REF_PRISTINE only if they are not a deletion
+   dirent. Deletion dirents should be REF_NORMAL so that GC gets to
+   throw them away when appropriate */
+#define dirent_node_state(rd)	( (je32_to_cpu((rd)->ino)?REF_PRISTINE:REF_NORMAL) )
 
 /* NB: REF_PRISTINE for an inode-less node (ref->next_in_ino == NULL) indicates
    it is an unknown node of type JFFS2_NODETYPE_RWCOMPAT_COPY, so it'll get

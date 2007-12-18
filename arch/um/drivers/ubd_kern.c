@@ -35,6 +35,7 @@
 #include "linux/genhd.h"
 #include "linux/spinlock.h"
 #include "linux/platform_device.h"
+#include "linux/scatterlist.h"
 #include "asm/segment.h"
 #include "asm/uaccess.h"
 #include "asm/irq.h"
@@ -469,7 +470,7 @@ __uml_help(fakehd,
 "    Change the ubd device name to \"hd\".\n\n"
 );
 
-static void do_ubd_request(request_queue_t * q);
+static void do_ubd_request(struct request_queue * q);
 
 /* Only changed by ubd_init, which is an initcall. */
 int thread_fd = -1;
@@ -615,7 +616,7 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 		blk_queue_max_sectors(ubd_dev->queue, 8 * sizeof(long));
 
 		err = -ENOMEM;
-		ubd_dev->cow.bitmap = (void *) vmalloc(ubd_dev->cow.bitmap_len);
+		ubd_dev->cow.bitmap = vmalloc(ubd_dev->cow.bitmap_len);
 		if(ubd_dev->cow.bitmap == NULL){
 			printk(KERN_ERR "Failed to vmalloc COW bitmap\n");
 			goto error;
@@ -704,6 +705,7 @@ static int ubd_add(int n, char **error_out)
 	ubd_dev->size = ROUND_BLOCK(ubd_dev->size);
 
 	INIT_LIST_HEAD(&ubd_dev->restart);
+	sg_init_table(ubd_dev->sg, MAX_SG);
 
 	err = -ENOMEM;
 	ubd_dev->queue = blk_init_queue(do_ubd_request, &ubd_dev->lock);
@@ -1081,11 +1083,11 @@ static void prepare_request(struct request *req, struct io_thread_req *io_req,
 }
 
 /* Called with dev->lock held */
-static void do_ubd_request(request_queue_t *q)
+static void do_ubd_request(struct request_queue *q)
 {
 	struct io_thread_req *io_req;
 	struct request *req;
-	int n;
+	int n, last_sectors;
 
 	while(1){
 		struct ubd *dev = q->queuedata;
@@ -1101,9 +1103,11 @@ static void do_ubd_request(request_queue_t *q)
 		}
 
 		req = dev->request;
+		last_sectors = 0;
 		while(dev->start_sg < dev->end_sg){
 			struct scatterlist *sg = &dev->sg[dev->start_sg];
 
+			req->sector += last_sectors;
 			io_req = kmalloc(sizeof(struct io_thread_req),
 					 GFP_ATOMIC);
 			if(io_req == NULL){
@@ -1113,8 +1117,9 @@ static void do_ubd_request(request_queue_t *q)
 			}
 			prepare_request(req, io_req,
 					(unsigned long long) req->sector << 9,
-					sg->offset, sg->length, sg->page);
+					sg->offset, sg->length, sg_page(sg));
 
+			last_sectors = sg->length >> 9;
 			n = os_write_file(thread_fd, &io_req,
 					  sizeof(struct io_thread_req *));
 			if(n != sizeof(struct io_thread_req *)){
@@ -1126,7 +1131,6 @@ static void do_ubd_request(request_queue_t *q)
 				return;
 			}
 
-			req->sector += sg->length >> 9;
 			dev->start_sg++;
 		}
 		dev->end_sg = 0;

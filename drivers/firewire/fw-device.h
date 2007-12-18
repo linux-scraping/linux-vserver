@@ -40,6 +40,7 @@ struct fw_device {
 	struct fw_node *node;
 	int node_id;
 	int generation;
+	unsigned max_speed;
 	struct fw_card *card;
 	struct device device;
 	struct list_head link;
@@ -100,11 +101,6 @@ fw_unit(struct device *dev)
 #define CSR_MODEL		0x17
 #define CSR_INSTANCE		0x18
 #define CSR_DIRECTORY_ID	0x20
-
-#define SBP2_COMMAND_SET_SPECIFIER	0x38
-#define SBP2_COMMAND_SET		0x39
-#define SBP2_COMMAND_SET_REVISION	0x3b
-#define SBP2_FIRMWARE_REVISION		0x3c
 
 struct fw_csr_iterator {
 	u32 *p;

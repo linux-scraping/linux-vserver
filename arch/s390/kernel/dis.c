@@ -240,8 +240,8 @@ static const unsigned char formats[][7] = {
 	[INSTR_RXY_FRRD]  = { 0xff, F_8,D20_20,X_12,B_16,0,0 },/* e.g. ley   */
 	[INSTR_RX_FRRD]	  = { 0xff, F_8,D_20,X_12,B_16,0,0 },  /* e.g. ae    */
 	[INSTR_RX_RRRD]	  = { 0xff, R_8,D_20,X_12,B_16,0,0 },  /* e.g. l     */
-	[INSTR_RX_URRD]	  = { 0x00, U4_8,D_20,X_12,B_16,0,0 }, /* e.g. bc    */
-	[INSTR_SI_URD]	  = { 0x00, D_20,B_16,U8_8,0,0,0 },    /* e.g. cli   */
+	[INSTR_RX_URRD]	  = { 0xff, U4_8,D_20,X_12,B_16,0,0 }, /* e.g. bc    */
+	[INSTR_SI_URD]	  = { 0xff, D_20,B_16,U8_8,0,0,0 },    /* e.g. cli   */
 	[INSTR_SIY_URD]	  = { 0xff, D20_20,B_16,U8_8,0,0,0 },  /* e.g. tmy   */
 	[INSTR_SSE_RDRD]  = { 0xff, D_20,B_16,D_36,B_32,0,0 }, /* e.g. mvsdk */
 	[INSTR_SS_L0RDRD] = { 0xff, D_20,L8_8,B_16,D_36,B_32,0 },
@@ -577,7 +577,7 @@ static struct insn opcode_b2[] = {
 	{ "esta", 0x4a, INSTR_RRE_RR },
 	{ "lura", 0x4b, INSTR_RRE_RR },
 	{ "tar", 0x4c, INSTR_RRE_AR },
-	{ "cpya", INSTR_RRE_AA },
+	{ "cpya", 0x4d, INSTR_RRE_AA },
 	{ "sar", 0x4e, INSTR_RRE_AR },
 	{ "ear", 0x4f, INSTR_RRE_RA },
 	{ "csp", 0x50, INSTR_RRE_RR },
@@ -1162,6 +1162,7 @@ static int print_insn(char *buffer, unsigned char *code, unsigned long addr)
 	unsigned int value;
 	char separator;
 	char *ptr;
+	int i;
 
 	ptr = buffer;
 	insn = find_insn(code);
@@ -1169,7 +1170,8 @@ static int print_insn(char *buffer, unsigned char *code, unsigned long addr)
 		ptr += sprintf(ptr, "%.5s\t", insn->name);
 		/* Extract the operands. */
 		separator = 0;
-		for (ops = formats[insn->format] + 1; *ops != 0; ops++) {
+		for (ops = formats[insn->format] + 1, i = 0;
+		     *ops != 0 && i < 6; ops++, i++) {
 			operand = operands + *ops;
 			value = extract_operand(code, operand);
 			if ((operand->flags & OPERAND_INDEX)  && value == 0)
@@ -1190,7 +1192,8 @@ static int print_insn(char *buffer, unsigned char *code, unsigned long addr)
 			else if (operand->flags & OPERAND_CR)
 				ptr += sprintf(ptr, "%%c%i", value);
 			else if (operand->flags & OPERAND_PCREL)
-				ptr += sprintf(ptr, "%lx", value + addr);
+				ptr += sprintf(ptr, "%lx", (signed int) value
+								      + addr);
 			else if (operand->flags & OPERAND_SIGNED)
 				ptr += sprintf(ptr, "%i", value);
 			else
@@ -1240,7 +1243,6 @@ void show_code(struct pt_regs *regs)
 	}
 	/* Find a starting point for the disassembly. */
 	while (start < 32) {
-		hops = 0;
 		for (i = 0, hops = 0; start + i < 32 && hops < 3; hops++) {
 			if (!find_insn(code + start + i))
 				break;

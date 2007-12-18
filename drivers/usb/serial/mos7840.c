@@ -434,15 +434,11 @@ static void mos7840_control_callback(struct urb *urb)
 	struct moschip_port *mos7840_port;
 	__u8 regval = 0x0;
 	int result = 0;
-
-	if (!urb) {
-		dbg("%s", "Invalid Pointer !!!!:\n");
-		return;
-	}
+	int status = urb->status;
 
 	mos7840_port = (struct moschip_port *)urb->context;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -451,11 +447,11 @@ static void mos7840_control_callback(struct urb *urb)
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
 		dbg("%s - urb shutting down with status: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		return;
 	default:
 		dbg("%s - nonzero urb status received: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		goto exit;
 	}
 
@@ -521,14 +517,11 @@ static void mos7840_interrupt_callback(struct urb *urb)
 	__u8 sp[5], st;
 	int i, rv = 0;
 	__u16 wval, wreg = 0;
+	int status = urb->status;
 
 	dbg("%s", " : Entering\n");
-	if (!urb) {
-		dbg("%s", "Invalid Pointer !!!!:\n");
-		return;
-	}
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -537,11 +530,11 @@ static void mos7840_interrupt_callback(struct urb *urb)
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
 		dbg("%s - urb shutting down with status: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		return;
 	default:
 		dbg("%s - nonzero urb status received: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		goto exit;
 	}
 
@@ -666,20 +659,16 @@ static struct usb_serial *mos7840_get_usb_serial(struct usb_serial_port *port,
 
 static void mos7840_bulk_in_callback(struct urb *urb)
 {
-	int status;
+	int retval;
 	unsigned char *data;
 	struct usb_serial *serial;
 	struct usb_serial_port *port;
 	struct moschip_port *mos7840_port;
 	struct tty_struct *tty;
+	int status = urb->status;
 
-	if (!urb) {
-		dbg("%s", "Invalid Pointer !!!!:\n");
-		return;
-	}
-
-	if (urb->status) {
-		dbg("nonzero read bulk status received: %d", urb->status);
+	if (status) {
+		dbg("nonzero read bulk status received: %d", status);
 		return;
 	}
 
@@ -729,11 +718,11 @@ static void mos7840_bulk_in_callback(struct urb *urb)
 
 	mos7840_port->read_urb->dev = serial->dev;
 
-	status = usb_submit_urb(mos7840_port->read_urb, GFP_ATOMIC);
+	retval = usb_submit_urb(mos7840_port->read_urb, GFP_ATOMIC);
 
-	if (status) {
-		dbg(" usb_submit_urb(read bulk) failed, status = %d",
-		 status);
+	if (retval) {
+		dbg(" usb_submit_urb(read bulk) failed, retval = %d",
+		 retval);
 	}
 }
 
@@ -747,12 +736,8 @@ static void mos7840_bulk_out_data_callback(struct urb *urb)
 {
 	struct moschip_port *mos7840_port;
 	struct tty_struct *tty;
+	int status = urb->status;
 	int i;
-
-	if (!urb) {
-		dbg("%s", "Invalid Pointer !!!!:\n");
-		return;
-	}
 
 	mos7840_port = (struct moschip_port *)urb->context;
 	spin_lock(&mos7840_port->pool_lock);
@@ -764,8 +749,8 @@ static void mos7840_bulk_out_data_callback(struct urb *urb)
 	}
 	spin_unlock(&mos7840_port->pool_lock);
 
-	if (urb->status) {
-		dbg("nonzero write bulk status received:%d\n", urb->status);
+	if (status) {
+		dbg("nonzero write bulk status received:%d\n", status);
 		return;
 	}
 
@@ -1992,11 +1977,6 @@ static void mos7840_change_port_settings(struct moschip_port *mos7840_port,
 
 	tty = mos7840_port->port->tty;
 
-	if ((!tty) || (!tty->termios)) {
-		dbg("%s - no tty structures", __FUNCTION__);
-		return;
-	}
-
 	dbg("%s", "Entering .......... \n");
 
 	lData = LCR_BITS_8;
@@ -2166,11 +2146,6 @@ static void mos7840_set_termios(struct usb_serial_port *port,
 
 	tty = port->tty;
 
-	if (!port->tty || !port->tty->termios) {
-		dbg("%s - no tty or termios", __FUNCTION__);
-		return;
-	}
-
 	if (!mos7840_port->open) {
 		dbg("%s - port not opened", __FUNCTION__);
 		return;
@@ -2180,29 +2155,10 @@ static void mos7840_set_termios(struct usb_serial_port *port,
 
 	cflag = tty->termios->c_cflag;
 
-	if (!cflag) {
-		dbg("%s %s\n", __FUNCTION__, "cflag is NULL");
-		return;
-	}
-
-	/* check that they really want us to change something */
-	if (old_termios) {
-		if ((cflag == old_termios->c_cflag) &&
-		    (RELEVANT_IFLAG(tty->termios->c_iflag) ==
-		     RELEVANT_IFLAG(old_termios->c_iflag))) {
-			dbg("%s\n", "Nothing to change");
-			return;
-		}
-	}
-
 	dbg("%s - clfag %08x iflag %08x", __FUNCTION__,
 	    tty->termios->c_cflag, RELEVANT_IFLAG(tty->termios->c_iflag));
-
-	if (old_termios) {
-		dbg("%s - old clfag %08x old iflag %08x", __FUNCTION__,
-		    old_termios->c_cflag, RELEVANT_IFLAG(old_termios->c_iflag));
-	}
-
+	dbg("%s - old clfag %08x old iflag %08x", __FUNCTION__,
+	    old_termios->c_cflag, RELEVANT_IFLAG(old_termios->c_iflag));
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	/* change the port settings to the new ones specified */
@@ -2251,30 +2207,6 @@ static int mos7840_get_lsr_info(struct moschip_port *mos7840_port,
 	if (copy_to_user(value, &result, sizeof(int)))
 		return -EFAULT;
 	return 0;
-}
-
-/*****************************************************************************
- * mos7840_get_bytes_avail - get number of bytes available
- *
- * Purpose: Let user call ioctl to get the count of number of bytes available.
- *****************************************************************************/
-
-static int mos7840_get_bytes_avail(struct moschip_port *mos7840_port,
-				   unsigned int __user *value)
-{
-	unsigned int result = 0;
-	struct tty_struct *tty = mos7840_port->port->tty;
-
-	if (!tty)
-		return -ENOIOCTLCMD;
-
-	result = tty->read_cnt;
-
-	dbg("%s(%d) = %d", __FUNCTION__, mos7840_port->port->number, result);
-	if (copy_to_user(value, &result, sizeof(int)))
-		return -EFAULT;
-
-	return -ENOIOCTLCMD;
 }
 
 /*****************************************************************************
@@ -2425,8 +2357,6 @@ static int mos7840_ioctl(struct usb_serial_port *port, struct file *file,
 	struct async_icount cprev;
 	struct serial_icounter_struct icount;
 	int mosret = 0;
-	int retval;
-	struct tty_ldisc *ld;
 
 	if (mos7840_port_paranoia_check(port, __FUNCTION__)) {
 		dbg("%s", "Invalid port \n");
@@ -2444,42 +2374,6 @@ static int mos7840_ioctl(struct usb_serial_port *port, struct file *file,
 
 	switch (cmd) {
 		/* return number of bytes available */
-
-	case TIOCINQ:
-		dbg("%s (%d) TIOCINQ", __FUNCTION__, port->number);
-		return mos7840_get_bytes_avail(mos7840_port, argp);
-
-	case TIOCOUTQ:
-		dbg("%s (%d) TIOCOUTQ", __FUNCTION__, port->number);
-		return put_user(tty->driver->chars_in_buffer ?
-				tty->driver->chars_in_buffer(tty) : 0,
-				(int __user *)arg);
-
-	case TCFLSH:
-		retval = tty_check_change(tty);
-		if (retval)
-			return retval;
-
-		ld = tty_ldisc_ref(tty);
-		switch (arg) {
-		case TCIFLUSH:
-			if (ld && ld->flush_buffer)
-				ld->flush_buffer(tty);
-			break;
-		case TCIOFLUSH:
-			if (ld && ld->flush_buffer)
-				ld->flush_buffer(tty);
-			/* fall through */
-		case TCOFLUSH:
-			if (tty->driver->flush_buffer)
-				tty->driver->flush_buffer(tty);
-			break;
-		default:
-			tty_ldisc_deref(ld);
-			return -EINVAL;
-		}
-		tty_ldisc_deref(ld);
-		return 0;
 
 	case TIOCSERGETLSR:
 		dbg("%s (%d) TIOCSERGETLSR", __FUNCTION__, port->number);

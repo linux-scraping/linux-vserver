@@ -256,6 +256,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x04DD, 0x9121) }, /* SHARP WS004SH USB Modem */
 	{ USB_DEVICE(0x04DD, 0x9123) }, /* SHARP WS007SH USB Modem */
 	{ USB_DEVICE(0x04DD, 0x9151) }, /* SHARP S01SH USB Modem */
+	{ USB_DEVICE(0x04DD, 0x91AC) }, /* SHARP WS011SH USB Modem */
 	{ USB_DEVICE(0x04E8, 0x5F00) }, /* Samsung NEXiO USB Sync */
 	{ USB_DEVICE(0x04E8, 0x5F01) }, /* Samsung NEXiO USB Sync */
 	{ USB_DEVICE(0x04E8, 0x5F02) }, /* Samsung NEXiO USB Sync */
@@ -305,7 +306,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x0930, 0x0705) }, /* TOSHIBA Pocket PC e310 */
 	{ USB_DEVICE(0x0930, 0x0706) }, /* TOSHIBA Pocket PC e740 */
 	{ USB_DEVICE(0x0930, 0x0707) }, /* TOSHIBA Pocket PC e330 Series */
-	{ USB_DEVICE(0x0930, 0x0708) }, /* TOSHIBA Pocket PC e350 Series */
+	{ USB_DEVICE(0x0930, 0x0708) }, /* TOSHIBA Pocket PC e350 Series */
 	{ USB_DEVICE(0x0930, 0x0709) }, /* TOSHIBA Pocket PC e750 Series */
 	{ USB_DEVICE(0x0930, 0x070A) }, /* TOSHIBA Pocket PC e400 Series */
 	{ USB_DEVICE(0x0930, 0x070B) }, /* TOSHIBA Pocket PC e800 Series */
@@ -487,7 +488,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x0BF8, 0x1001) }, /* Fujitsu Siemens Computers USB Sync */
 	{ USB_DEVICE(0x0C44, 0x03A2) }, /* Motorola iDEN Smartphone */
 	{ USB_DEVICE(0x0C8E, 0x6000) }, /* Cesscom Luxian Series */
-	{ USB_DEVICE(0x0CAD, 0x9001) }, /* Motorola PowerPad Pocket PC Device */
+	{ USB_DEVICE(0x0CAD, 0x9001) }, /* Motorola PowerPad Pocket PC Device */
 	{ USB_DEVICE(0x0F4E, 0x0200) }, /* Freedom Scientific USB Sync */
 	{ USB_DEVICE(0x0F98, 0x0201) }, /* Cyberbank USB Sync */
 	{ USB_DEVICE(0x0FB8, 0x3001) }, /* Wistron USB Sync */
@@ -545,6 +546,7 @@ static struct usb_device_id ipaq_id_table [] = {
 	{ USB_DEVICE(0x413C, 0x4009) }, /* Dell Axim USB Sync */
 	{ USB_DEVICE(0x4505, 0x0010) }, /* Smartphone */
 	{ USB_DEVICE(0x5E04, 0xCE00) }, /* SAGEM Wireless Assistant */
+	{ USB_DEVICE(0x0BB4, 0x00CF) }, /* HTC smartphone modems */
 	{ }                             /* Terminating entry */
 };
 
@@ -645,11 +647,13 @@ static int ipaq_open(struct usb_serial_port *port, struct file *filp)
 	kfree(port->bulk_out_buffer);
 	port->bulk_in_buffer = kmalloc(URBDATA_SIZE, GFP_KERNEL);
 	if (port->bulk_in_buffer == NULL) {
+		port->bulk_out_buffer = NULL; /* prevent double free */
 		goto enomem;
 	}
 	port->bulk_out_buffer = kmalloc(URBDATA_SIZE, GFP_KERNEL);
 	if (port->bulk_out_buffer == NULL) {
 		kfree(port->bulk_in_buffer);
+		port->bulk_in_buffer = NULL;
 		goto enomem;
 	}
 	port->read_urb->transfer_buffer = port->bulk_in_buffer;
@@ -732,11 +736,13 @@ static void ipaq_read_bulk_callback(struct urb *urb)
 	struct tty_struct	*tty;
 	unsigned char		*data = urb->transfer_buffer;
 	int			result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -870,11 +876,13 @@ static void ipaq_write_bulk_callback(struct urb *urb)
 	struct ipaq_private	*priv = usb_get_serial_port_data(port);
 	unsigned long		flags;
 	int			result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
-	if (urb->status) {
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+
+	if (status) {
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 

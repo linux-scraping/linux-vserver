@@ -41,6 +41,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/init.h>
+#include <net/net_namespace.h>
 #include <net/ip.h>
 #include <net/route.h>
 #include <linux/skbuff.h>
@@ -64,85 +65,24 @@
  */
 
 /*
- *	Update the multicast list into the physical NIC controller.
- */
-
-static void __dev_mc_upload(struct net_device *dev)
-{
-	/* Don't do anything till we up the interface
-	 * [dev_open will call this function so the list will
-	 * stay sane]
-	 */
-
-	if (!(dev->flags&IFF_UP))
-		return;
-
-	/*
-	 *	Devices with no set multicast or which have been
-	 *	detached don't get set.
-	 */
-
-	if (dev->set_multicast_list == NULL ||
-	    !netif_device_present(dev))
-		return;
-
-	dev->set_multicast_list(dev);
-}
-
-void dev_mc_upload(struct net_device *dev)
-{
-	netif_tx_lock_bh(dev);
-	__dev_mc_upload(dev);
-	netif_tx_unlock_bh(dev);
-}
-
-/*
  *	Delete a device level multicast
  */
 
 int dev_mc_delete(struct net_device *dev, void *addr, int alen, int glbl)
 {
-	int err = 0;
-	struct dev_mc_list *dmi, **dmip;
+	int err;
 
 	netif_tx_lock_bh(dev);
-
-	for (dmip = &dev->mc_list; (dmi = *dmip) != NULL; dmip = &dmi->next) {
+	err = __dev_addr_delete(&dev->mc_list, &dev->mc_count,
+				addr, alen, glbl);
+	if (!err) {
 		/*
-		 *	Find the entry we want to delete. The device could
-		 *	have variable length entries so check these too.
+		 *	We have altered the list, so the card
+		 *	loaded filter is now wrong. Fix it
 		 */
-		if (memcmp(dmi->dmi_addr, addr, dmi->dmi_addrlen) == 0 &&
-		    alen == dmi->dmi_addrlen) {
-			if (glbl) {
-				int old_glbl = dmi->dmi_gusers;
-				dmi->dmi_gusers = 0;
-				if (old_glbl == 0)
-					break;
-			}
-			if (--dmi->dmi_users)
-				goto done;
 
-			/*
-			 *	Last user. So delete the entry.
-			 */
-			*dmip = dmi->next;
-			dev->mc_count--;
-
-			kfree(dmi);
-
-			/*
-			 *	We have altered the list, so the card
-			 *	loaded filter is now wrong. Fix it
-			 */
-			__dev_mc_upload(dev);
-
-			netif_tx_unlock_bh(dev);
-			return 0;
-		}
+		__dev_set_rx_mode(dev);
 	}
-	err = -ENOENT;
-done:
 	netif_tx_unlock_bh(dev);
 	return err;
 }
@@ -153,77 +93,106 @@ done:
 
 int dev_mc_add(struct net_device *dev, void *addr, int alen, int glbl)
 {
-	int err = 0;
-	struct dev_mc_list *dmi, *dmi1;
-
-	dmi1 = kmalloc(sizeof(*dmi), GFP_ATOMIC);
+	int err;
 
 	netif_tx_lock_bh(dev);
-	for (dmi = dev->mc_list; dmi != NULL; dmi = dmi->next) {
-		if (memcmp(dmi->dmi_addr, addr, dmi->dmi_addrlen) == 0 &&
-		    dmi->dmi_addrlen == alen) {
-			if (glbl) {
-				int old_glbl = dmi->dmi_gusers;
-				dmi->dmi_gusers = 1;
-				if (old_glbl)
-					goto done;
-			}
-			dmi->dmi_users++;
-			goto done;
-		}
-	}
-
-	if ((dmi = dmi1) == NULL) {
-		netif_tx_unlock_bh(dev);
-		return -ENOMEM;
-	}
-	memcpy(dmi->dmi_addr, addr, alen);
-	dmi->dmi_addrlen = alen;
-	dmi->next = dev->mc_list;
-	dmi->dmi_users = 1;
-	dmi->dmi_gusers = glbl ? 1 : 0;
-	dev->mc_list = dmi;
-	dev->mc_count++;
-
-	__dev_mc_upload(dev);
-
+	err = __dev_addr_add(&dev->mc_list, &dev->mc_count, addr, alen, glbl);
+	if (!err)
+		__dev_set_rx_mode(dev);
 	netif_tx_unlock_bh(dev);
-	return 0;
-
-done:
-	netif_tx_unlock_bh(dev);
-	kfree(dmi1);
 	return err;
 }
 
-/*
- *	Discard multicast list when a device is downed
+/**
+ *	dev_mc_sync	- Synchronize device's multicast list to another device
+ *	@to: destination device
+ *	@from: source device
+ *
+ * 	Add newly added addresses to the destination device and release
+ * 	addresses that have no users left. The source device must be
+ * 	locked by netif_tx_lock_bh.
+ *
+ *	This function is intended to be called from the dev->set_multicast_list
+ *	function of layered software devices.
  */
-
-void dev_mc_discard(struct net_device *dev)
+int dev_mc_sync(struct net_device *to, struct net_device *from)
 {
-	netif_tx_lock_bh(dev);
+	struct dev_addr_list *da, *next;
+	int err = 0;
 
-	while (dev->mc_list != NULL) {
-		struct dev_mc_list *tmp = dev->mc_list;
-		dev->mc_list = tmp->next;
-		if (tmp->dmi_users > tmp->dmi_gusers)
-			printk("dev_mc_discard: multicast leakage! dmi_users=%d\n", tmp->dmi_users);
-		kfree(tmp);
+	netif_tx_lock_bh(to);
+	da = from->mc_list;
+	while (da != NULL) {
+		next = da->next;
+		if (!da->da_synced) {
+			err = __dev_addr_add(&to->mc_list, &to->mc_count,
+					     da->da_addr, da->da_addrlen, 0);
+			if (err < 0)
+				break;
+			da->da_synced = 1;
+			da->da_users++;
+		} else if (da->da_users == 1) {
+			__dev_addr_delete(&to->mc_list, &to->mc_count,
+					  da->da_addr, da->da_addrlen, 0);
+			__dev_addr_delete(&from->mc_list, &from->mc_count,
+					  da->da_addr, da->da_addrlen, 0);
+		}
+		da = next;
 	}
-	dev->mc_count = 0;
+	if (!err)
+		__dev_set_rx_mode(to);
+	netif_tx_unlock_bh(to);
 
-	netif_tx_unlock_bh(dev);
+	return err;
 }
+EXPORT_SYMBOL(dev_mc_sync);
+
+
+/**
+ * 	dev_mc_unsync	- Remove synchronized addresses from the destination
+ * 			  device
+ *	@to: destination device
+ *	@from: source device
+ *
+ * 	Remove all addresses that were added to the destination device by
+ * 	dev_mc_sync(). This function is intended to be called from the
+ * 	dev->stop function of layered software devices.
+ */
+void dev_mc_unsync(struct net_device *to, struct net_device *from)
+{
+	struct dev_addr_list *da, *next;
+
+	netif_tx_lock_bh(from);
+	netif_tx_lock_bh(to);
+
+	da = from->mc_list;
+	while (da != NULL) {
+		next = da->next;
+		if (da->da_synced) {
+			__dev_addr_delete(&to->mc_list, &to->mc_count,
+					  da->da_addr, da->da_addrlen, 0);
+			da->da_synced = 0;
+			__dev_addr_delete(&from->mc_list, &from->mc_count,
+					  da->da_addr, da->da_addrlen, 0);
+		}
+		da = next;
+	}
+	__dev_set_rx_mode(to);
+
+	netif_tx_unlock_bh(to);
+	netif_tx_unlock_bh(from);
+}
+EXPORT_SYMBOL(dev_mc_unsync);
 
 #ifdef CONFIG_PROC_FS
 static void *dev_mc_seq_start(struct seq_file *seq, loff_t *pos)
 {
+	struct net *net = seq->private;
 	struct net_device *dev;
 	loff_t off = 0;
 
 	read_lock(&dev_base_lock);
-	for_each_netdev(dev) {
+	for_each_netdev(net, dev) {
 		if (off++ == *pos)
 			return dev;
 	}
@@ -244,7 +213,7 @@ static void dev_mc_seq_stop(struct seq_file *seq, void *v)
 
 static int dev_mc_seq_show(struct seq_file *seq, void *v)
 {
-	struct dev_mc_list *m;
+	struct dev_addr_list *m;
 	struct net_device *dev = v;
 
 	netif_tx_lock_bh(dev);
@@ -272,7 +241,26 @@ static const struct seq_operations dev_mc_seq_ops = {
 
 static int dev_mc_seq_open(struct inode *inode, struct file *file)
 {
-	return seq_open(file, &dev_mc_seq_ops);
+	struct seq_file *seq;
+	int res;
+	res = seq_open(file, &dev_mc_seq_ops);
+	if (!res) {
+		seq = file->private_data;
+		seq->private = get_proc_net(inode);
+		if (!seq->private) {
+			seq_release(inode, file);
+			res = -ENXIO;
+		}
+	}
+	return res;
+}
+
+static int dev_mc_seq_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq = file->private_data;
+	struct net *net = seq->private;
+	put_net(net);
+	return seq_release(inode, file);
 }
 
 static const struct file_operations dev_mc_seq_fops = {
@@ -280,16 +268,32 @@ static const struct file_operations dev_mc_seq_fops = {
 	.open    = dev_mc_seq_open,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
-	.release = seq_release,
+	.release = dev_mc_seq_release,
 };
 
 #endif
 
+static int __net_init dev_mc_net_init(struct net *net)
+{
+	if (!proc_net_fops_create(net, "dev_mcast", 0, &dev_mc_seq_fops))
+		return -ENOMEM;
+	return 0;
+}
+
+static void __net_exit dev_mc_net_exit(struct net *net)
+{
+	proc_net_remove(net, "dev_mcast");
+}
+
+static struct pernet_operations __net_initdata dev_mc_net_ops = {
+	.init = dev_mc_net_init,
+	.exit = dev_mc_net_exit,
+};
+
 void __init dev_mcast_init(void)
 {
-	proc_net_fops_create("dev_mcast", 0, &dev_mc_seq_fops);
+	register_pernet_subsys(&dev_mc_net_ops);
 }
 
 EXPORT_SYMBOL(dev_mc_add);
 EXPORT_SYMBOL(dev_mc_delete);
-EXPORT_SYMBOL(dev_mc_upload);

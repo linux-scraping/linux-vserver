@@ -211,9 +211,9 @@ static DEFINE_SPINLOCK(all_mddevs_lock);
 		)
 
 
-static int md_fail_request (request_queue_t *q, struct bio *bio)
+static int md_fail_request (struct request_queue *q, struct bio *bio)
 {
-	bio_io_error(bio, bio->bi_size);
+	bio_io_error(bio);
 	return 0;
 }
 
@@ -384,12 +384,10 @@ static void free_disk_sb(mdk_rdev_t * rdev)
 }
 
 
-static int super_written(struct bio *bio, unsigned int bytes_done, int error)
+static void super_written(struct bio *bio, int error)
 {
 	mdk_rdev_t *rdev = bio->bi_private;
 	mddev_t *mddev = rdev->mddev;
-	if (bio->bi_size)
-		return 1;
 
 	if (error || !test_bit(BIO_UPTODATE, &bio->bi_flags)) {
 		printk("md: super_written gets error=%d, uptodate=%d\n",
@@ -401,16 +399,13 @@ static int super_written(struct bio *bio, unsigned int bytes_done, int error)
 	if (atomic_dec_and_test(&mddev->pending_writes))
 		wake_up(&mddev->sb_wait);
 	bio_put(bio);
-	return 0;
 }
 
-static int super_written_barrier(struct bio *bio, unsigned int bytes_done, int error)
+static void super_written_barrier(struct bio *bio, int error)
 {
 	struct bio *bio2 = bio->bi_private;
 	mdk_rdev_t *rdev = bio2->bi_private;
 	mddev_t *mddev = rdev->mddev;
-	if (bio->bi_size)
-		return 1;
 
 	if (!test_bit(BIO_UPTODATE, &bio->bi_flags) &&
 	    error == -EOPNOTSUPP) {
@@ -424,11 +419,11 @@ static int super_written_barrier(struct bio *bio, unsigned int bytes_done, int e
 		spin_unlock_irqrestore(&mddev->write_lock, flags);
 		wake_up(&mddev->sb_wait);
 		bio_put(bio);
-		return 0;
+	} else {
+		bio_put(bio2);
+		bio->bi_private = rdev;
+		super_written(bio, error);
 	}
-	bio_put(bio2);
-	bio->bi_private = rdev;
-	return super_written(bio, bytes_done, error);
 }
 
 void md_super_write(mddev_t *mddev, mdk_rdev_t *rdev,
@@ -489,13 +484,9 @@ void md_super_wait(mddev_t *mddev)
 	finish_wait(&mddev->sb_wait, &wq);
 }
 
-static int bi_complete(struct bio *bio, unsigned int bytes_done, int error)
+static void bi_complete(struct bio *bio, int error)
 {
-	if (bio->bi_size)
-		return 1;
-
 	complete((struct completion*)bio->bi_private);
-	return 0;
 }
 
 int sync_page_io(struct block_device *bdev, sector_t sector, int size,
@@ -1640,7 +1631,6 @@ static void sync_sbs(mddev_t * mddev, int nospares)
 
 static void md_update_sb(mddev_t * mddev, int force_change)
 {
-	int err;
 	struct list_head *tmp;
 	mdk_rdev_t *rdev;
 	int sync_req;
@@ -1727,7 +1717,7 @@ repeat:
 		"md: updating %s RAID superblock on device (in sync %d)\n",
 		mdname(mddev),mddev->in_sync);
 
-	err = bitmap_update_sb(mddev->bitmap);
+	bitmap_update_sb(mddev->bitmap);
 	ITERATE_RDEV(mddev,rdev,tmp) {
 		char b[BDEVNAME_SIZE];
 		dprintk(KERN_INFO "md: ");
@@ -2073,9 +2063,11 @@ static mdk_rdev_t *md_import_device(dev_t newdev, int super_format, int super_mi
 		err = super_types[super_format].
 			load_super(rdev, NULL, super_minor);
 		if (err == -EINVAL) {
-			printk(KERN_WARNING 
-				"md: %s has invalid sb, not importing!\n",
-				bdevname(rdev->bdev,b));
+			printk(KERN_WARNING
+				"md: %s does not have a valid v%d.%d "
+			       "superblock, not importing!\n",
+				bdevname(rdev->bdev,b),
+			       super_format, super_minor);
 			goto abort_free;
 		}
 		if (err < 0) {
@@ -2722,7 +2714,7 @@ action_show(mddev_t *mddev, char *page)
 {
 	char *type = "idle";
 	if (test_bit(MD_RECOVERY_RUNNING, &mddev->recovery) ||
-	    test_bit(MD_RECOVERY_NEEDED, &mddev->recovery)) {
+	    (!mddev->ro && test_bit(MD_RECOVERY_NEEDED, &mddev->recovery))) {
 		if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery))
 			type = "reshape";
 		else if (test_bit(MD_RECOVERY_SYNC, &mddev->recovery)) {
@@ -2841,6 +2833,12 @@ sync_max_store(mddev_t *mddev, const char *buf, size_t len)
 static struct md_sysfs_entry md_sync_max =
 __ATTR(sync_speed_max, S_IRUGO|S_IWUSR, sync_max_show, sync_max_store);
 
+static ssize_t
+degraded_show(mddev_t *mddev, char *page)
+{
+	return sprintf(page, "%d\n", mddev->degraded);
+}
+static struct md_sysfs_entry md_degraded = __ATTR_RO(degraded);
 
 static ssize_t
 sync_speed_show(mddev_t *mddev, char *page)
@@ -2984,6 +2982,7 @@ static struct attribute *md_redundancy_attrs[] = {
 	&md_suspend_lo.attr,
 	&md_suspend_hi.attr,
 	&md_bitmap.attr,
+	&md_degraded.attr,
 	NULL,
 };
 static struct attribute_group md_redundancy_group = {
@@ -3084,8 +3083,7 @@ static struct kobject *md_probe(dev_t dev, int *part, void *data)
 	mddev->gendisk = disk;
 	mutex_unlock(&disks_mutex);
 	mddev->kobj.parent = &disk->kobj;
-	mddev->kobj.k_name = NULL;
-	snprintf(mddev->kobj.name, KOBJ_NAME_LEN, "%s", "md");
+	kobject_set_name(&mddev->kobj, "%s", "md");
 	mddev->kobj.ktype = &md_ktype;
 	if (kobject_register(&mddev->kobj))
 		printk(KERN_WARNING "md: cannot register %s/md - name in use\n",
@@ -3174,13 +3172,33 @@ static int do_md_run(mddev_t * mddev)
 	 * Drop all container device buffers, from now on
 	 * the only valid external interface is through the md
 	 * device.
-	 * Also find largest hardsector size
 	 */
 	ITERATE_RDEV(mddev,rdev,tmp) {
 		if (test_bit(Faulty, &rdev->flags))
 			continue;
 		sync_blockdev(rdev->bdev);
 		invalidate_bdev(rdev->bdev);
+
+		/* perform some consistency tests on the device.
+		 * We don't want the data to overlap the metadata,
+		 * Internal Bitmap issues has handled elsewhere.
+		 */
+		if (rdev->data_offset < rdev->sb_offset) {
+			if (mddev->size &&
+			    rdev->data_offset + mddev->size*2
+			    > rdev->sb_offset*2) {
+				printk("md: %s: data overlaps metadata\n",
+				       mdname(mddev));
+				return -EINVAL;
+			}
+		} else {
+			if (rdev->sb_offset*2 + rdev->sb_size/512
+			    > rdev->data_offset) {
+				printk("md: %s: metadata overlaps data\n",
+				       mdname(mddev));
+				return -EINVAL;
+			}
+		}
 	}
 
 	md_probe(mddev->unit, NULL, NULL);
@@ -3452,7 +3470,6 @@ static int do_md_stop(mddev_t * mddev, int mode)
 			mddev->pers->stop(mddev);
 			mddev->queue->merge_bvec_fn = NULL;
 			mddev->queue->unplug_fn = NULL;
-			mddev->queue->issue_flush_fn = NULL;
 			mddev->queue->backing_dev_info.congested_fn = NULL;
 			if (mddev->pers->sync_request)
 				sysfs_remove_group(&mddev->kobj, &md_redundancy_group);
@@ -4642,7 +4659,6 @@ static int md_thread(void * arg)
 	 * many dirty RAID5 blocks.
 	 */
 
-	current->flags |= PF_NOFREEZE;
 	allow_signal(SIGKILL);
 	while (!kthread_should_stop()) {
 
@@ -4701,7 +4717,7 @@ mdk_thread_t *md_register_thread(void (*run) (mddev_t *), mddev_t *mddev,
 
 void md_unregister_thread(mdk_thread_t *thread)
 {
-	dprintk("interrupting MD-thread pid %d\n", thread->tsk->pid);
+	dprintk("interrupting MD-thread pid %d\n", task_pid_nr(thread->tsk));
 
 	kthread_stop(thread->tsk);
 	kfree(thread);
@@ -5090,7 +5106,7 @@ static int is_mddev_idle(mddev_t *mddev)
 	mdk_rdev_t * rdev;
 	struct list_head *tmp;
 	int idle;
-	unsigned long curr_events;
+	long curr_events;
 
 	idle = 1;
 	ITERATE_RDEV(mddev,rdev,tmp) {
@@ -5098,20 +5114,29 @@ static int is_mddev_idle(mddev_t *mddev)
 		curr_events = disk_stat_read(disk, sectors[0]) + 
 				disk_stat_read(disk, sectors[1]) - 
 				atomic_read(&disk->sync_io);
-		/* The difference between curr_events and last_events
-		 * will be affected by any new non-sync IO (making
-		 * curr_events bigger) and any difference in the amount of
-		 * in-flight syncio (making current_events bigger or smaller)
-		 * The amount in-flight is currently limited to
-		 * 32*64K in raid1/10 and 256*PAGE_SIZE in raid5/6
-		 * which is at most 4096 sectors.
-		 * These numbers are fairly fragile and should be made
-		 * more robust, probably by enforcing the
-		 * 'window size' that md_do_sync sort-of uses.
+		/* sync IO will cause sync_io to increase before the disk_stats
+		 * as sync_io is counted when a request starts, and
+		 * disk_stats is counted when it completes.
+		 * So resync activity will cause curr_events to be smaller than
+		 * when there was no such activity.
+		 * non-sync IO will cause disk_stat to increase without
+		 * increasing sync_io so curr_events will (eventually)
+		 * be larger than it was before.  Once it becomes
+		 * substantially larger, the test below will cause
+		 * the array to appear non-idle, and resync will slow
+		 * down.
+		 * If there is a lot of outstanding resync activity when
+		 * we set last_event to curr_events, then all that activity
+		 * completing might cause the array to appear non-idle
+		 * and resync will be slowed down even though there might
+		 * not have been non-resync activity.  This will only
+		 * happen once though.  'last_events' will soon reflect
+		 * the state where there is little or no outstanding
+		 * resync requests, and further resync activity will
+		 * always make curr_events less than last_events.
 		 *
-		 * Note: the following is an unsigned comparison.
 		 */
-		if ((long)curr_events - (long)rdev->last_events > 4096) {
+		if (curr_events - rdev->last_events > 4096) {
 			rdev->last_events = curr_events;
 			idle = 0;
 		}
@@ -5420,7 +5445,7 @@ void md_do_sync(mddev_t *mddev)
 		 * about not overloading the IO subsystem. (things like an
 		 * e2fsck being done on the RAID array should execute fast)
 		 */
-		mddev->queue->unplug_fn(mddev->queue);
+		blk_unplug(mddev->queue);
 		cond_resched();
 
 		currspeed = ((unsigned long)(io_sectors-mddev->resync_mark_cnt))/2
@@ -5439,7 +5464,7 @@ void md_do_sync(mddev_t *mddev)
 	 * this also signals 'finished resyncing' to md_stop
 	 */
  out:
-	mddev->queue->unplug_fn(mddev->queue);
+	blk_unplug(mddev->queue);
 
 	wait_event(mddev->recovery_wait, !atomic_read(&mddev->recovery_active));
 
@@ -5752,27 +5777,48 @@ static int __init md_init(void)
  * Searches all registered partitions for autorun RAID arrays
  * at boot time.
  */
-static dev_t detected_devices[128];
-static int dev_cnt;
+
+static LIST_HEAD(all_detected_devices);
+struct detected_devices_node {
+	struct list_head list;
+	dev_t dev;
+};
 
 void md_autodetect_dev(dev_t dev)
 {
-	if (dev_cnt >= 0 && dev_cnt < 127)
-		detected_devices[dev_cnt++] = dev;
+	struct detected_devices_node *node_detected_dev;
+
+	node_detected_dev = kzalloc(sizeof(*node_detected_dev), GFP_KERNEL);
+	if (node_detected_dev) {
+		node_detected_dev->dev = dev;
+		list_add_tail(&node_detected_dev->list, &all_detected_devices);
+	} else {
+		printk(KERN_CRIT "md: md_autodetect_dev: kzalloc failed"
+			", skipping dev(%d,%d)\n", MAJOR(dev), MINOR(dev));
+	}
 }
 
 
 static void autostart_arrays(int part)
 {
 	mdk_rdev_t *rdev;
-	int i;
+	struct detected_devices_node *node_detected_dev;
+	dev_t dev;
+	int i_scanned, i_passed;
+
+	i_scanned = 0;
+	i_passed = 0;
 
 	printk(KERN_INFO "md: Autodetecting RAID arrays.\n");
 
-	for (i = 0; i < dev_cnt; i++) {
-		dev_t dev = detected_devices[i];
-
-		rdev = md_import_device(dev,0, 0);
+	while (!list_empty(&all_detected_devices) && i_scanned < INT_MAX) {
+		i_scanned++;
+		node_detected_dev = list_entry(all_detected_devices.next,
+					struct detected_devices_node, list);
+		list_del(&node_detected_dev->list);
+		dev = node_detected_dev->dev;
+		kfree(node_detected_dev);
+		rdev = md_import_device(dev,0, 90);
 		if (IS_ERR(rdev))
 			continue;
 
@@ -5781,8 +5827,11 @@ static void autostart_arrays(int part)
 			continue;
 		}
 		list_add(&rdev->same_set, &pending_raid_disks);
+		i_passed++;
 	}
-	dev_cnt = 0;
+
+	printk(KERN_INFO "md: Scanned %d and added %d devices.\n",
+						i_scanned, i_passed);
 
 	autorun_devices(part);
 }
@@ -5814,7 +5863,7 @@ static __exit void md_exit(void)
 	}
 }
 
-module_init(md_init)
+subsys_initcall(md_init);
 module_exit(md_exit)
 
 static int get_ro(char *buffer, struct kernel_param *kp)

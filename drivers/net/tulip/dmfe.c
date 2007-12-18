@@ -181,11 +181,12 @@
 	udelay(5);
 
 #define __CHK_IO_SIZE(pci_id, dev_rev) \
- (( ((pci_id)==PCI_DM9132_ID) || ((dev_rev) >= 0x02000030) ) ? \
+ (( ((pci_id)==PCI_DM9132_ID) || ((dev_rev) >= 0x30) ) ? \
 	DM9102A_IO_SIZE: DM9102_IO_SIZE)
 
-#define CHK_IO_SIZE(pci_dev, dev_rev) \
-	(__CHK_IO_SIZE(((pci_dev)->device << 16) | (pci_dev)->vendor, dev_rev))
+#define CHK_IO_SIZE(pci_dev) \
+	(__CHK_IO_SIZE(((pci_dev)->device << 16) | (pci_dev)->vendor, \
+	(pci_dev)->revision))
 
 /* Sten Check */
 #define DEVICE net_device
@@ -205,7 +206,7 @@ struct rx_desc {
 
 struct dmfe_board_info {
 	u32 chip_id;			/* Chip vendor/Device ID */
-	u32 chip_revision;		/* Chip revision */
+	u8 chip_revision;		/* Chip revision */
 	struct DEVICE *next_dev;	/* next device */
 	struct pci_dev *pdev;		/* PCI device */
 	spinlock_t lock;
@@ -359,8 +360,9 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 {
 	struct dmfe_board_info *db;	/* board information structure */
 	struct net_device *dev;
-	u32 dev_rev, pci_pmr;
+	u32 pci_pmr;
 	int i, err;
+	DECLARE_MAC_BUF(mac);
 
 	DMFE_DBUG(0, "dmfe_init_one()", 0);
 
@@ -371,7 +373,6 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 	dev = alloc_etherdev(sizeof(*db));
 	if (dev == NULL)
 		return -ENOMEM;
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	if (pci_set_dma_mask(pdev, DMA_32BIT_MASK)) {
@@ -392,10 +393,7 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 		goto err_out_disable;
 	}
 
-	/* Read Chip revision */
-	pci_read_config_dword(pdev, PCI_REVISION_ID, &dev_rev);
-
-	if (pci_resource_len(pdev, 0) < (CHK_IO_SIZE(pdev, dev_rev)) ) {
+	if (pci_resource_len(pdev, 0) < (CHK_IO_SIZE(pdev)) ) {
 		printk(KERN_ERR DRV_NAME ": Allocated I/O size too small\n");
 		err = -ENODEV;
 		goto err_out_disable;
@@ -433,7 +431,7 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 
 	db->chip_id = ent->driver_data;
 	db->ioaddr = pci_resource_start(pdev, 0);
-	db->chip_revision = dev_rev;
+	db->chip_revision = pdev->revision;
 	db->wol_mode = 0;
 
 	db->pdev = pdev;
@@ -455,7 +453,7 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 
 	pci_read_config_dword(pdev, 0x50, &pci_pmr);
 	pci_pmr &= 0x70000;
-	if ( (pci_pmr == 0x10000) && (dev_rev == 0x02000031) )
+	if ( (pci_pmr == 0x10000) && (db->chip_revision == 0x31) )
 		db->chip_type = 1;	/* DM9102A E3 */
 	else
 		db->chip_type = 0;
@@ -473,13 +471,13 @@ static int __devinit dmfe_init_one (struct pci_dev *pdev,
 	if (err)
 		goto err_out_res;
 
-	printk(KERN_INFO "%s: Davicom DM%04lx at pci%s,",
-		dev->name,
-		ent->driver_data >> 16,
-		pci_name(pdev));
-	for (i = 0; i < 6; i++)
-		printk("%c%02x", i ? ':' : ' ', dev->dev_addr[i]);
-	printk(", irq %d.\n", dev->irq);
+	printk(KERN_INFO "%s: Davicom DM%04lx at pci%s, "
+	       "%s, irq %d.\n",
+	       dev->name,
+	       ent->driver_data >> 16,
+	       pci_name(pdev),
+	       print_mac(mac, dev->dev_addr),
+	       dev->irq);
 
 	pci_set_master(pdev);
 
@@ -553,7 +551,7 @@ static int dmfe_open(struct DEVICE *dev)
 
 	/* CR6 operation mode decision */
 	if ( !chkmode || (db->chip_id == PCI_DM9132_ID) ||
-		(db->chip_revision >= 0x02000030) ) {
+		(db->chip_revision >= 0x30) ) {
     		db->cr6_data |= DMFE_TXTH_256;
 		db->cr0_data = CR0_DEFAULT;
 		db->dm910x_chk_mode=4;		/* Enter the normal mode */
@@ -1199,9 +1197,9 @@ static void dmfe_timer(unsigned long data)
 		tmp_cr12 = inb(db->ioaddr + DCR12);	/* DM9102/DM9102A */
 
 	if ( ((db->chip_id == PCI_DM9102_ID) &&
-		(db->chip_revision == 0x02000030)) ||
+		(db->chip_revision == 0x30)) ||
 		((db->chip_id == PCI_DM9132_ID) &&
-		(db->chip_revision == 0x02000010)) ) {
+		(db->chip_revision == 0x10)) ) {
 		/* DM9102A Chip */
 		if (tmp_cr12 & 2)
 			link_ok = 0;

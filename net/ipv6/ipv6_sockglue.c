@@ -123,7 +123,7 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb, int features)
 	struct ipv6hdr *ipv6h;
 	struct inet6_protocol *ops;
 
-	if (!(features & NETIF_F_HW_CSUM))
+	if (!(features & NETIF_F_V6_CSUM))
 		features &= ~NETIF_F_SG;
 
 	if (unlikely(skb_shinfo(skb)->gso_type &
@@ -249,7 +249,7 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 			}
 
 			if (ipv6_only_sock(sk) ||
-			    !(ipv6_addr_type(&np->daddr) & IPV6_ADDR_MAPPED)) {
+			    !ipv6_addr_v4mapped(&np->daddr)) {
 				retv = -EADDRNOTAVAIL;
 				break;
 			}
@@ -336,16 +336,12 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case IPV6_RECVRTHDR:
-		if (val < 0 || val > 2)
-			goto e_inval;
-		np->rxopt.bits.srcrt = val;
+		np->rxopt.bits.srcrt = valbool;
 		retv = 0;
 		break;
 
 	case IPV6_2292RTHDR:
-		if (val < 0 || val > 2)
-			goto e_inval;
-		np->rxopt.bits.osrcrt = val;
+		np->rxopt.bits.osrcrt = valbool;
 		retv = 0;
 		break;
 
@@ -416,11 +412,10 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		if (optname == IPV6_RTHDR && opt && opt->srcrt) {
 			struct ipv6_rt_hdr *rthdr = opt->srcrt;
 			switch (rthdr->type) {
-			case IPV6_SRCRT_TYPE_0:
-#ifdef CONFIG_IPV6_MIP6
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 			case IPV6_SRCRT_TYPE_2:
-#endif
 				break;
+#endif
 			default:
 				goto sticky_done;
 			}
@@ -544,12 +539,15 @@ done:
 	case IPV6_MULTICAST_IF:
 		if (sk->sk_type == SOCK_STREAM)
 			goto e_inval;
-		if (sk->sk_bound_dev_if && sk->sk_bound_dev_if != val)
-			goto e_inval;
 
-		if (__dev_get_by_index(val) == NULL) {
-			retv = -ENODEV;
-			break;
+		if (val) {
+			if (sk->sk_bound_dev_if && sk->sk_bound_dev_if != val)
+				goto e_inval;
+
+			if (__dev_get_by_index(&init_net, val) == NULL) {
+				retv = -ENODEV;
+				break;
+			}
 		}
 		np->mcast_oif = val;
 		retv = 0;
@@ -558,6 +556,10 @@ done:
 	case IPV6_DROP_MEMBERSHIP:
 	{
 		struct ipv6_mreq mreq;
+
+		retv = -EPROTO;
+		if (inet_sk(sk)->is_icsk)
+			break;
 
 		retv = -EFAULT;
 		if (copy_from_user(&mreq, optval, sizeof(struct ipv6_mreq)))
@@ -664,7 +666,7 @@ done:
 			break;
 		}
 		gsf = kmalloc(optlen,GFP_KERNEL);
-		if (gsf == 0) {
+		if (!gsf) {
 			retv = -ENOBUFS;
 			break;
 		}

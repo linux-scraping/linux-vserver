@@ -149,29 +149,6 @@ static int i2o_block_device_flush(struct i2o_device *dev)
 };
 
 /**
- *	i2o_block_issue_flush - device-flush interface for block-layer
- *	@queue: the request queue of the device which should be flushed
- *	@disk: gendisk
- *	@error_sector: error offset
- *
- *	Helper function to provide flush functionality to block-layer.
- *
- *	Returns 0 on success or negative error code on failure.
- */
-
-static int i2o_block_issue_flush(request_queue_t * queue, struct gendisk *disk,
-				 sector_t * error_sector)
-{
-	struct i2o_block_device *i2o_blk_dev = queue->queuedata;
-	int rc = -ENODEV;
-
-	if (likely(i2o_blk_dev))
-		rc = i2o_block_device_flush(i2o_blk_dev->i2o_dev);
-
-	return rc;
-}
-
-/**
  *	i2o_block_device_mount - Mount (load) the media of device dev
  *	@dev: I2O device which should receive the mount request
  *	@media_id: Media Identifier
@@ -215,7 +192,7 @@ static int i2o_block_device_lock(struct i2o_device *dev, u32 media_id)
 	struct i2o_message *msg;
 
 	msg = i2o_msg_get_wait(dev->iop, I2O_TIMEOUT_MESSAGE_GET);
-	if (IS_ERR(msg) == I2O_QUEUE_EMPTY)
+	if (IS_ERR(msg))
 		return PTR_ERR(msg);
 
 	msg->u.head[0] = cpu_to_le32(FIVE_WORD_MSG_SIZE | SGL_OFFSET_0);
@@ -307,6 +284,7 @@ static inline struct i2o_block_request *i2o_block_request_alloc(void)
 		return ERR_PTR(-ENOMEM);
 
 	INIT_LIST_HEAD(&ireq->queue);
+	sg_init_table(ireq->sg_table, I2O_MAX_PHYS_SEGMENTS);
 
 	return ireq;
 };
@@ -445,7 +423,7 @@ static void i2o_block_end_request(struct request *req, int uptodate,
 {
 	struct i2o_block_request *ireq = req->special;
 	struct i2o_block_device *dev = ireq->i2o_blk_dev;
-	request_queue_t *q = req->q;
+	struct request_queue *q = req->q;
 	unsigned long flags;
 
 	if (end_that_request_chunk(req, uptodate, nr_bytes)) {
@@ -744,7 +722,7 @@ static int i2o_block_transfer(struct request *req)
 {
 	struct i2o_block_device *dev = req->rq_disk->private_data;
 	struct i2o_controller *c;
-	int tid = dev->i2o_dev->lct_data.tid;
+	u32 tid = dev->i2o_dev->lct_data.tid;
 	struct i2o_message *msg;
 	u32 *mptr;
 	struct i2o_block_request *ireq = req->special;
@@ -1009,7 +987,6 @@ static struct i2o_block_device *i2o_block_device_alloc(void)
 	}
 
 	blk_queue_prep_rq(queue, i2o_block_prep_req_fn);
-	blk_queue_issue_flush_fn(queue, i2o_block_issue_flush);
 
 	gd->major = I2O_MAJOR;
 	gd->queue = queue;
@@ -1100,8 +1077,8 @@ static int i2o_block_probe(struct device *dev)
 	blk_queue_max_sectors(queue, max_sectors);
 	blk_queue_max_hw_segments(queue, i2o_sg_tablesize(c, body_size));
 
-	osm_debug("max sectors = %d\n", queue->max_phys_segments);
-	osm_debug("phys segments = %d\n", queue->max_sectors);
+	osm_debug("max sectors = %d\n", queue->max_sectors);
+	osm_debug("phys segments = %d\n", queue->max_phys_segments);
 	osm_debug("max hw segments = %d\n", queue->max_hw_segments);
 
 	/*
@@ -1171,8 +1148,7 @@ static int __init i2o_block_init(void)
 	/* Allocate request mempool and slab */
 	size = sizeof(struct i2o_block_request);
 	i2o_blk_req_pool.slab = kmem_cache_create("i2o_block_req", size, 0,
-						  SLAB_HWCACHE_ALIGN, NULL,
-						  NULL);
+						  SLAB_HWCACHE_ALIGN, NULL);
 	if (!i2o_blk_req_pool.slab) {
 		osm_err("can't init request slab\n");
 		rc = -ENOMEM;

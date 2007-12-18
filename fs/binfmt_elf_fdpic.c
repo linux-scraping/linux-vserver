@@ -75,7 +75,7 @@ static int elf_fdpic_map_file_by_direct_mmap(struct elf_fdpic_params *,
 					     struct file *, struct mm_struct *);
 
 #if defined(USE_ELF_CORE_DUMP) && defined(CONFIG_ELF_CORE)
-static int elf_fdpic_core_dump(long, struct pt_regs *, struct file *);
+static int elf_fdpic_core_dump(long, struct pt_regs *, struct file *, unsigned long limit);
 #endif
 
 static struct linux_binfmt elf_fdpic_format = {
@@ -621,8 +621,8 @@ static int create_elf_fdpic_tables(struct linux_binprm *bprm,
 	p = (char __user *) current->mm->arg_start;
 	for (loop = bprm->argc; loop > 0; loop--) {
 		__put_user((elf_caddr_t) p, argv++);
-		len = strnlen_user(p, PAGE_SIZE * MAX_ARG_PAGES);
-		if (!len || len > PAGE_SIZE * MAX_ARG_PAGES)
+		len = strnlen_user(p, MAX_ARG_STRLEN);
+		if (!len || len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -633,8 +633,8 @@ static int create_elf_fdpic_tables(struct linux_binprm *bprm,
 	current->mm->env_start = (unsigned long) p;
 	for (loop = bprm->envc; loop > 0; loop--) {
 		__put_user((elf_caddr_t)(unsigned long) p, envp++);
-		len = strnlen_user(p, PAGE_SIZE * MAX_ARG_PAGES);
-		if (!len || len > PAGE_SIZE * MAX_ARG_PAGES)
+		len = strnlen_user(p, MAX_ARG_STRLEN);
+		if (!len || len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -1181,8 +1181,10 @@ static int dump_seek(struct file *file, loff_t off)
  *
  * I think we should skip something. But I am not sure how. H.J.
  */
-static int maydump(struct vm_area_struct *vma)
+static int maydump(struct vm_area_struct *vma, unsigned long mm_flags)
 {
+	int dump_ok;
+
 	/* Do not dump I/O mapped devices or special mappings */
 	if (vma->vm_flags & (VM_IO | VM_RESERVED)) {
 		kdcore("%08lx: %08lx: no (IO)", vma->vm_start, vma->vm_flags);
@@ -1197,27 +1199,35 @@ static int maydump(struct vm_area_struct *vma)
 		return 0;
 	}
 
-	/* Dump shared memory only if mapped from an anonymous file. */
+	/* By default, dump shared memory if mapped from an anonymous file. */
 	if (vma->vm_flags & VM_SHARED) {
 		if (vma->vm_file->f_path.dentry->d_inode->i_nlink == 0) {
-			kdcore("%08lx: %08lx: no (share)", vma->vm_start, vma->vm_flags);
-			return 1;
+			dump_ok = test_bit(MMF_DUMP_ANON_SHARED, &mm_flags);
+			kdcore("%08lx: %08lx: %s (share)", vma->vm_start,
+			       vma->vm_flags, dump_ok ? "yes" : "no");
+			return dump_ok;
 		}
 
-		kdcore("%08lx: %08lx: no (share)", vma->vm_start, vma->vm_flags);
-		return 0;
+		dump_ok = test_bit(MMF_DUMP_MAPPED_SHARED, &mm_flags);
+		kdcore("%08lx: %08lx: %s (share)", vma->vm_start,
+		       vma->vm_flags, dump_ok ? "yes" : "no");
+		return dump_ok;
 	}
 
 #ifdef CONFIG_MMU
-	/* If it hasn't been written to, don't write it out */
+	/* By default, if it hasn't been written to, don't write it out */
 	if (!vma->anon_vma) {
-		kdcore("%08lx: %08lx: no (!anon)", vma->vm_start, vma->vm_flags);
-		return 0;
+		dump_ok = test_bit(MMF_DUMP_MAPPED_PRIVATE, &mm_flags);
+		kdcore("%08lx: %08lx: %s (!anon)", vma->vm_start,
+		       vma->vm_flags, dump_ok ? "yes" : "no");
+		return dump_ok;
 	}
 #endif
 
-	kdcore("%08lx: %08lx: yes", vma->vm_start, vma->vm_flags);
-	return 1;
+	dump_ok = test_bit(MMF_DUMP_ANON_PRIVATE, &mm_flags);
+	kdcore("%08lx: %08lx: %s", vma->vm_start, vma->vm_flags,
+	       dump_ok ? "yes" : "no");
+	return dump_ok;
 }
 
 /* An ELF note in memory */
@@ -1332,10 +1342,10 @@ static void fill_prstatus(struct elf_prstatus *prstatus,
 	prstatus->pr_info.si_signo = prstatus->pr_cursig = signr;
 	prstatus->pr_sigpend = p->pending.signal.sig[0];
 	prstatus->pr_sighold = p->blocked.sig[0];
-	prstatus->pr_pid = p->pid;
-	prstatus->pr_ppid = p->parent->pid;
-	prstatus->pr_pgrp = process_group(p);
-	prstatus->pr_sid = process_session(p);
+	prstatus->pr_pid = task_pid_vnr(p);
+	prstatus->pr_ppid = task_pid_vnr(p->parent);
+	prstatus->pr_pgrp = task_pgrp_vnr(p);
+	prstatus->pr_sid = task_session_vnr(p);
 	if (thread_group_leader(p)) {
 		/*
 		 * This is the record for the group leader.  Add in the
@@ -1381,10 +1391,10 @@ static int fill_psinfo(struct elf_prpsinfo *psinfo, struct task_struct *p,
 			psinfo->pr_psargs[i] = ' ';
 	psinfo->pr_psargs[len] = 0;
 
-	psinfo->pr_pid = p->pid;
-	psinfo->pr_ppid = p->parent->pid;
-	psinfo->pr_pgrp = process_group(p);
-	psinfo->pr_sid = process_session(p);
+	psinfo->pr_pid = task_pid_vnr(p);
+	psinfo->pr_ppid = task_pid_vnr(p->parent);
+	psinfo->pr_pgrp = task_pgrp_vnr(p);
+	psinfo->pr_sid = task_session_vnr(p);
 
 	i = p->state ? ffz(~p->state) + 1 : 0;
 	psinfo->pr_state = i;
@@ -1407,7 +1417,7 @@ struct elf_thread_status
 	elf_fpregset_t fpu;		/* NT_PRFPREG */
 	struct task_struct *thread;
 #ifdef ELF_CORE_COPY_XFPREGS
-	elf_fpxregset_t xfpu;		/* NT_PRXFPREG */
+	elf_fpxregset_t xfpu;		/* ELF_CORE_XFPREG_TYPE */
 #endif
 	struct memelfnote notes[3];
 	int num_notes;
@@ -1443,8 +1453,8 @@ static int elf_dump_thread_status(long signr, struct elf_thread_status *t)
 
 #ifdef ELF_CORE_COPY_XFPREGS
 	if (elf_core_copy_task_xfpregs(p, &t->xfpu)) {
-		fill_note(&t->notes[2], "LINUX", NT_PRXFPREG, sizeof(t->xfpu),
-			  &t->xfpu);
+		fill_note(&t->notes[2], "LINUX", ELF_CORE_XFPREG_TYPE,
+			  sizeof(t->xfpu), &t->xfpu);
 		t->num_notes++;
 		sz += notesize(&t->notes[2]);
 	}
@@ -1456,15 +1466,15 @@ static int elf_dump_thread_status(long signr, struct elf_thread_status *t)
  * dump the segments for an MMU process
  */
 #ifdef CONFIG_MMU
-static int elf_fdpic_dump_segments(struct file *file, struct mm_struct *mm,
-				   size_t *size, unsigned long *limit)
+static int elf_fdpic_dump_segments(struct file *file, size_t *size,
+			   unsigned long *limit, unsigned long mm_flags)
 {
 	struct vm_area_struct *vma;
 
 	for (vma = current->mm->mmap; vma; vma = vma->vm_next) {
 		unsigned long addr;
 
-		if (!maydump(vma))
+		if (!maydump(vma, mm_flags))
 			continue;
 
 		for (addr = vma->vm_start;
@@ -1478,7 +1488,7 @@ static int elf_fdpic_dump_segments(struct file *file, struct mm_struct *mm,
 					   &page, &vma) <= 0) {
 				DUMP_SEEK(file->f_pos + PAGE_SIZE);
 			}
-			else if (page == ZERO_PAGE(addr)) {
+			else if (page == ZERO_PAGE(0)) {
 				page_cache_release(page);
 				DUMP_SEEK(file->f_pos + PAGE_SIZE);
 			}
@@ -1511,15 +1521,15 @@ end_coredump:
  * dump the segments for a NOMMU process
  */
 #ifndef CONFIG_MMU
-static int elf_fdpic_dump_segments(struct file *file, struct mm_struct *mm,
-				   size_t *size, unsigned long *limit)
+static int elf_fdpic_dump_segments(struct file *file, size_t *size,
+			   unsigned long *limit, unsigned long mm_flags)
 {
 	struct vm_list_struct *vml;
 
 	for (vml = current->mm->context.vmlist; vml; vml = vml->next) {
 	struct vm_area_struct *vma = vml->vma;
 
-		if (!maydump(vma))
+		if (!maydump(vma, mm_flags))
 			continue;
 
 		if ((*size += PAGE_SIZE) > *limit)
@@ -1542,7 +1552,7 @@ static int elf_fdpic_dump_segments(struct file *file, struct mm_struct *mm,
  * we just truncate.
  */
 static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
-			       struct file *file)
+			       struct file *file, unsigned long limit)
 {
 #define	NUM_NOTES	6
 	int has_dumped = 0;
@@ -1553,7 +1563,6 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 	struct vm_area_struct *vma;
 	struct elfhdr *elf = NULL;
 	loff_t offset = 0, dataoff;
-	unsigned long limit = current->signal->rlim[RLIMIT_CORE].rlim_cur;
 	int numnote;
 	struct memelfnote *notes = NULL;
 	struct elf_prstatus *prstatus = NULL;	/* NT_PRSTATUS */
@@ -1570,6 +1579,7 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 	struct vm_list_struct *vml;
 #endif
 	elf_addr_t *auxv;
+	unsigned long mm_flags;
 
 	/*
 	 * We no longer stop all VM operations.
@@ -1679,7 +1689,7 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 #ifdef ELF_CORE_COPY_XFPREGS
 	if (elf_core_copy_task_xfpregs(current, xfpu))
 		fill_note(notes + numnote++,
-			  "LINUX", NT_PRXFPREG, sizeof(*xfpu), xfpu);
+			  "LINUX", ELF_CORE_XFPREG_TYPE, sizeof(*xfpu), xfpu);
 #endif
 
 	fs = get_fs();
@@ -1707,6 +1717,13 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 	/* Page-align dumped data */
 	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
 
+	/*
+	 * We must use the same mm->flags while dumping core to avoid
+	 * inconsistency between the program headers and bodies, otherwise an
+	 * unusable core file can be generated.
+	 */
+	mm_flags = current->mm->flags;
+
 	/* write program headers for segments dump */
 	for (
 #ifdef CONFIG_MMU
@@ -1728,7 +1745,7 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 		phdr.p_offset = offset;
 		phdr.p_vaddr = vma->vm_start;
 		phdr.p_paddr = 0;
-		phdr.p_filesz = maydump(vma) ? sz : 0;
+		phdr.p_filesz = maydump(vma, mm_flags) ? sz : 0;
 		phdr.p_memsz = sz;
 		offset += phdr.p_filesz;
 		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
@@ -1762,7 +1779,7 @@ static int elf_fdpic_core_dump(long signr, struct pt_regs *regs,
 
 	DUMP_SEEK(dataoff);
 
-	if (elf_fdpic_dump_segments(file, current->mm, &size, &limit) < 0)
+	if (elf_fdpic_dump_segments(file, &size, &limit, mm_flags) < 0)
 		goto end_coredump;
 
 #ifdef ELF_CORE_WRITE_EXTRA_DATA

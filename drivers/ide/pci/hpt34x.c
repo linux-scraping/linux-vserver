@@ -43,10 +43,9 @@
 
 #define HPT343_DEBUG_DRIVE_INFO		0
 
-static int hpt34x_tune_chipset (ide_drive_t *drive, u8 xferspeed)
+static void hpt34x_set_mode(ide_drive_t *drive, const u8 speed)
 {
 	struct pci_dev *dev	= HWIF(drive)->pci_dev;
-	u8 speed = ide_rate_filter(drive, xferspeed);
 	u32 reg1= 0, tmp1 = 0, reg2 = 0, tmp2 = 0;
 	u8			hi_speed, lo_speed;
 
@@ -74,31 +73,11 @@ static int hpt34x_tune_chipset (ide_drive_t *drive, u8 xferspeed)
 		drive->dn, reg1, tmp1, reg2, tmp2,
 		hi_speed, lo_speed);
 #endif /* HPT343_DEBUG_DRIVE_INFO */
-
-	return(ide_config_drive_speed(drive, speed));
 }
 
-static void hpt34x_tune_drive (ide_drive_t *drive, u8 pio)
+static void hpt34x_set_pio_mode(ide_drive_t *drive, const u8 pio)
 {
-	pio = ide_get_best_pio_mode(drive, pio, 5, NULL);
-	(void) hpt34x_tune_chipset(drive, (XFER_PIO_0 + pio));
-}
-
-static int hpt34x_config_drive_xfer_rate (ide_drive_t *drive)
-{
-	drive->init_speed = 0;
-
-	if (ide_tune_dma(drive))
-#ifndef CONFIG_HPT34X_AUTODMA
-		return -1;
-#else
-		return 0;
-#endif
-
-	if (ide_use_fast_pio(drive))
-		hpt34x_tune_drive(drive, 255);
-
-	return -1;
+	hpt34x_set_mode(drive, XFER_PIO_0 + pio);
 }
 
 /*
@@ -120,17 +99,10 @@ static unsigned int __devinit init_chipset_hpt34x(struct pci_dev *dev, const cha
 	pci_write_config_byte(dev, HPT34X_PCI_INIT_REG, 0x00);
 	pci_read_config_word(dev, PCI_COMMAND, &cmd);
 
-	if (cmd & PCI_COMMAND_MEMORY) {
-		if (pci_resource_start(dev, PCI_ROM_RESOURCE)) {
-			pci_write_config_dword(dev, PCI_ROM_ADDRESS,
-				dev->resource[PCI_ROM_RESOURCE].start | PCI_ROM_ADDRESS_ENABLE);
-			printk(KERN_INFO "HPT345: ROM enabled at 0x%08lx\n",
-				(unsigned long)dev->resource[PCI_ROM_RESOURCE].start);
-		}
+	if (cmd & PCI_COMMAND_MEMORY)
 		pci_write_config_byte(dev, PCI_LATENCY_TIMER, 0xF0);
-	} else {
+	else
 		pci_write_config_byte(dev, PCI_LATENCY_TIMER, 0x20);
-	}
 
 	/*
 	 * Since 20-23 can be assigned and are R/W, we correct them.
@@ -153,57 +125,51 @@ static unsigned int __devinit init_chipset_hpt34x(struct pci_dev *dev, const cha
 
 static void __devinit init_hwif_hpt34x(ide_hwif_t *hwif)
 {
-	u16 pcicmd = 0;
-
-	hwif->autodma = 0;
-
-	hwif->tuneproc = &hpt34x_tune_drive;
-	hwif->speedproc = &hpt34x_tune_chipset;
-	hwif->drives[0].autotune = 1;
-	hwif->drives[1].autotune = 1;
-
-	pci_read_config_word(hwif->pci_dev, PCI_COMMAND, &pcicmd);
-
-	if (!hwif->dma_base)
-		return;
-
-	hwif->ultra_mask = 0x07;
-	hwif->mwdma_mask = 0x07;
-	hwif->swdma_mask = 0x07;
-
-	hwif->ide_dma_check = &hpt34x_config_drive_xfer_rate;
-	if (!noautodma)
-		hwif->autodma = (pcicmd & PCI_COMMAND_MEMORY) ? 1 : 0;
-	hwif->drives[0].autodma = hwif->autodma;
-	hwif->drives[1].autodma = hwif->autodma;
+	hwif->set_pio_mode = &hpt34x_set_pio_mode;
+	hwif->set_dma_mode = &hpt34x_set_mode;
 }
 
-static ide_pci_device_t hpt34x_chipset __devinitdata = {
-	.name		= "HPT34X",
-	.init_chipset	= init_chipset_hpt34x,
-	.init_hwif	= init_hwif_hpt34x,
-	.channels	= 2,
-	.autodma	= NOAUTODMA,
-	.bootable	= NEVER_BOARD,
-	.extra		= 16
+static const struct ide_port_info hpt34x_chipsets[] __devinitdata = {
+	{ /* 0 */
+		.name		= "HPT343",
+		.init_chipset	= init_chipset_hpt34x,
+		.init_hwif	= init_hwif_hpt34x,
+		.extra		= 16,
+		.host_flags	= IDE_HFLAG_NO_ATAPI_DMA |
+				  IDE_HFLAG_NO_AUTODMA,
+		.pio_mask	= ATA_PIO5,
+	},
+	{ /* 1 */
+		.name		= "HPT345",
+		.init_chipset	= init_chipset_hpt34x,
+		.init_hwif	= init_hwif_hpt34x,
+		.extra		= 16,
+		.host_flags	= IDE_HFLAG_NO_ATAPI_DMA |
+				  IDE_HFLAG_NO_AUTODMA |
+				  IDE_HFLAG_OFF_BOARD,
+		.pio_mask	= ATA_PIO5,
+#ifdef CONFIG_HPT34X_AUTODMA
+		.swdma_mask	= ATA_SWDMA2,
+		.mwdma_mask	= ATA_MWDMA2,
+		.udma_mask	= ATA_UDMA2,
+#endif
+	}
 };
 
 static int __devinit hpt34x_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
-	ide_pci_device_t *d = &hpt34x_chipset;
-	static char *chipset_names[] = {"HPT343", "HPT345"};
+	const struct ide_port_info *d;
 	u16 pcicmd = 0;
 
 	pci_read_config_word(dev, PCI_COMMAND, &pcicmd);
 
-	d->name = chipset_names[(pcicmd & PCI_COMMAND_MEMORY) ? 1 : 0];
-	d->bootable = (pcicmd & PCI_COMMAND_MEMORY) ? OFF_BOARD : NEVER_BOARD;
+	d = &hpt34x_chipsets[(pcicmd & PCI_COMMAND_MEMORY) ? 1 : 0];
 
 	return ide_setup_pci_device(dev, d);
 }
 
-static struct pci_device_id hpt34x_pci_tbl[] = {
-	{ PCI_VENDOR_ID_TTI, PCI_DEVICE_ID_TTI_HPT343, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+static const struct pci_device_id hpt34x_pci_tbl[] = {
+	{ PCI_VDEVICE(TTI, PCI_DEVICE_ID_TTI_HPT343), 0 },
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, hpt34x_pci_tbl);

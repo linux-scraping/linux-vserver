@@ -23,6 +23,7 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/freezer.h>
+#include <linux/io.h>
 #include <asm/system.h>
 #include <asm/ucontext.h>
 #include <asm/uaccess.h>
@@ -261,7 +262,7 @@ asmlinkage int sys_rt_sigreturn(unsigned long r4, unsigned long r5,
 		goto badframe;
 	/* It is more difficult to avoid calling this function than to
 	   call it and ignore errors.  */
-	do_sigaltstack(&st, NULL, regs->regs[15]);
+	do_sigaltstack((const stack_t __user *)&st, NULL, (unsigned long)frame);
 
 	return r0;
 
@@ -381,7 +382,7 @@ static int setup_frame(int sig, struct k_sigaction *ka,
 	set_fs(USER_DS);
 
 	pr_debug("SIG deliver (%s:%d): sp=%p pc=%08lx pr=%08lx\n",
-		 current->comm, current->pid, frame, regs->pc, regs->pr);
+		 current->comm, task_pid_nr(current), frame, regs->pc, regs->pr);
 
 	flush_cache_sigtramp(regs->pr);
 
@@ -461,7 +462,7 @@ static int setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	set_fs(USER_DS);
 
 	pr_debug("SIG deliver (%s:%d): sp=%p pc=%08lx pr=%08lx\n",
-		 current->comm, current->pid, frame, regs->pc, regs->pr);
+		 current->comm, task_pid_nr(current), frame, regs->pc, regs->pr);
 
 	flush_cache_sigtramp(regs->pr);
 
@@ -506,13 +507,11 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 						ctrl_inw(regs->pc - 4));
 				break;
 		}
+#ifdef CONFIG_GUSA
 	} else {
 		/* gUSA handling */
-#ifdef CONFIG_PREEMPT
-		unsigned long flags;
+		preempt_disable();
 
-		local_irq_save(flags);
-#endif
 		if (regs->regs[15] >= 0xc0000000) {
 			int offset = (int)regs->regs[15];
 
@@ -523,8 +522,8 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 				regs->pc = regs->regs[0] + offset -
 					instruction_size(ctrl_inw(regs->pc-4));
 		}
-#ifdef CONFIG_PREEMPT
-		local_irq_restore(flags);
+
+		preempt_enable_no_resched();
 #endif
 	}
 

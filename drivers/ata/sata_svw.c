@@ -53,7 +53,7 @@
 #endif /* CONFIG_PPC_OF */
 
 #define DRV_NAME	"sata_svw"
-#define DRV_VERSION	"2.2"
+#define DRV_VERSION	"2.3"
 
 enum {
 	/* ap->flags bits */
@@ -103,20 +103,21 @@ static int k2_sata_check_atapi_dma(struct ata_queued_cmd *qc)
 	return 0;
 }
 
-static u32 k2_sata_scr_read (struct ata_port *ap, unsigned int sc_reg)
+static int k2_sata_scr_read(struct ata_port *ap, unsigned int sc_reg, u32 *val)
 {
 	if (sc_reg > SCR_CONTROL)
-		return 0xffffffffU;
-	return readl((void __iomem *) ap->ioaddr.scr_addr + (sc_reg * 4));
+		return -EINVAL;
+	*val = readl(ap->ioaddr.scr_addr + (sc_reg * 4));
+	return 0;
 }
 
 
-static void k2_sata_scr_write (struct ata_port *ap, unsigned int sc_reg,
-			       u32 val)
+static int k2_sata_scr_write(struct ata_port *ap, unsigned int sc_reg, u32 val)
 {
 	if (sc_reg > SCR_CONTROL)
-		return;
-	writel(val, (void __iomem *) ap->ioaddr.scr_addr + (sc_reg * 4));
+		return -EINVAL;
+	writel(val, ap->ioaddr.scr_addr + (sc_reg * 4));
+	return 0;
 }
 
 
@@ -181,7 +182,7 @@ static void k2_sata_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 		tf->hob_lbal = lbal >> 8;
 		tf->hob_lbam = lbam >> 8;
 		tf->hob_lbah = lbah >> 8;
-        }
+	}
 }
 
 /**
@@ -192,12 +193,13 @@ static void k2_sata_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
  *	spin_lock_irqsave(host lock)
  */
 
-static void k2_bmdma_setup_mmio (struct ata_queued_cmd *qc)
+static void k2_bmdma_setup_mmio(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
 	unsigned int rw = (qc->tf.flags & ATA_TFLAG_WRITE);
 	u8 dmactl;
-	void __iomem *mmio = (void __iomem *) ap->ioaddr.bmdma_addr;
+	void __iomem *mmio = ap->ioaddr.bmdma_addr;
+
 	/* load PRD table addr. */
 	mb();	/* make sure PRD table writes are visible to controller */
 	writel(ap->prd_dma, mmio + ATA_DMA_TABLE_OFS);
@@ -222,10 +224,10 @@ static void k2_bmdma_setup_mmio (struct ata_queued_cmd *qc)
  *	spin_lock_irqsave(host lock)
  */
 
-static void k2_bmdma_start_mmio (struct ata_queued_cmd *qc)
+static void k2_bmdma_start_mmio(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
-	void __iomem *mmio = (void __iomem *) ap->ioaddr.bmdma_addr;
+	void __iomem *mmio = ap->ioaddr.bmdma_addr;
 	u8 dmactl;
 
 	/* start host DMA transaction */
@@ -253,7 +255,7 @@ static void k2_bmdma_start_mmio (struct ata_queued_cmd *qc)
 
 static u8 k2_stat_check_status(struct ata_port *ap)
 {
-       	return readl((void __iomem *) ap->ioaddr.status_addr);
+	return readl(ap->ioaddr.status_addr);
 }
 
 #ifdef CONFIG_PPC_OF
@@ -327,7 +329,6 @@ static struct scsi_host_template k2_sata_sht = {
 
 
 static const struct ata_port_operations k2_sata_ops = {
-	.port_disable		= ata_port_disable,
 	.tf_load		= k2_sata_tf_load,
 	.tf_read		= k2_sata_tf_read,
 	.check_status		= k2_stat_check_status,
@@ -347,7 +348,6 @@ static const struct ata_port_operations k2_sata_ops = {
 	.post_internal_cmd	= ata_bmdma_post_internal_cmd,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 	.scr_read		= k2_sata_scr_read,
 	.scr_write		= k2_sata_scr_write,
 	.port_start		= ata_port_start,
@@ -360,7 +360,7 @@ static const struct ata_port_info k2_port_info[] = {
 				  ATA_FLAG_MMIO | K2_FLAG_NO_ATAPI_DMA,
 		.pio_mask	= 0x1f,
 		.mwdma_mask	= 0x07,
-		.udma_mask	= 0x7f,
+		.udma_mask	= ATA_UDMA6,
 		.port_ops	= &k2_sata_ops,
 	},
 	/* board_svw8 */
@@ -370,7 +370,7 @@ static const struct ata_port_info k2_port_info[] = {
 				  K2_FLAG_SATA_8_PORTS,
 		.pio_mask	= 0x1f,
 		.mwdma_mask	= 0x07,
-		.udma_mask	= 0x7f,
+		.udma_mask	= ATA_UDMA6,
 		.port_ops	= &k2_sata_ops,
 	},
 };
@@ -395,7 +395,7 @@ static void k2_sata_setup_port(struct ata_ioports *port, void __iomem *base)
 }
 
 
-static int k2_sata_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
+static int k2_sata_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	static int printed_version;
 	const struct ata_port_info *ppi[] =
@@ -443,9 +443,15 @@ static int k2_sata_init_one (struct pci_dev *pdev, const struct pci_device_id *e
 	/* different controllers have different number of ports - currently 4 or 8 */
 	/* All ports are on the same function. Multi-function device is no
 	 * longer available. This should not be seen in any system. */
-	for (i = 0; i < host->n_ports; i++)
-		k2_sata_setup_port(&host->ports[i]->ioaddr,
-				   mmio_base + i * K2_SATA_PORT_OFFSET);
+	for (i = 0; i < host->n_ports; i++) {
+		struct ata_port *ap = host->ports[i];
+		unsigned int offset = i * K2_SATA_PORT_OFFSET;
+
+		k2_sata_setup_port(&ap->ioaddr, mmio_base + offset);
+
+		ata_port_pbar_desc(ap, 5, -1, "mmio");
+		ata_port_pbar_desc(ap, 5, offset, "port");
+	}
 
 	rc = pci_set_dma_mask(pdev, ATA_DMA_MASK);
 	if (rc)

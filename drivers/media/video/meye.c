@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2001-2004 Stelian Pop <stelian@popies.net>
  *
- * Copyright (C) 2001-2002 Alcôve <www.alcove.com>
+ * Copyright (C) 2001-2002 AlcÃ´ve <www.alcove.com>
  *
  * Copyright (C) 2000 Andrew Tridgell <tridge@valinux.com>
  *
@@ -1762,7 +1762,6 @@ static struct video_device meye_template = {
 	.owner		= THIS_MODULE,
 	.name		= "meye",
 	.type		= VID_TYPE_CAPTURE,
-	.hardware	= VID_HARDWARE_MEYE,
 	.fops		= &meye_fops,
 	.release	= video_device_release,
 	.minor		= -1,
@@ -1809,7 +1808,6 @@ static int __devinit meye_probe(struct pci_dev *pcidev,
 {
 	int ret = -EBUSY;
 	unsigned long mchip_adr;
-	u8 revision;
 
 	if (meye.mchip_dev != NULL) {
 		printk(KERN_ERR "meye: only one device allowed!\n");
@@ -1885,7 +1883,6 @@ static int __devinit meye_probe(struct pci_dev *pcidev,
 		goto outreqirq;
 	}
 
-	pci_read_config_byte(meye.mchip_dev, PCI_REVISION_ID, &revision);
 	pci_write_config_byte(meye.mchip_dev, PCI_CACHE_LINE_SIZE, 8);
 	pci_write_config_byte(meye.mchip_dev, PCI_LATENCY_TIMER, 64);
 
@@ -1939,7 +1936,7 @@ static int __devinit meye_probe(struct pci_dev *pcidev,
 	printk(KERN_INFO "meye: Motion Eye Camera Driver v%s.\n",
 	       MEYE_DRIVER_VERSION);
 	printk(KERN_INFO "meye: mchip KL5A72002 rev. %d, base %lx, irq %d\n",
-	       revision, mchip_adr, meye.mchip_irq);
+	       meye.mchip_dev->revision, mchip_adr, meye.mchip_irq);
 
 	return 0;
 

@@ -120,7 +120,7 @@
  *                       Reformat to match kernel tabbing style.
  *                       Add CDROM_GET_UPC ioctl.
  * 3.10  Apr 10, 1996 -- Fix compilation error with STANDARD_ATAPI.
- * 3.11  Apr 29, 1996 -- Patch from Heiko Eissfeldt <heiko@colossus.escape.de>
+ * 3.11  Apr 29, 1996 -- Patch from Heiko Eißfeldt <heiko@colossus.escape.de>
  *                       to remove redundant verify_area calls.
  * 3.12  May  7, 1996 -- Rudimentary changer support.  Based on patches
  *                        from Gerhard Zuber <zuber@berlin.snafu.de>.
@@ -256,7 +256,7 @@
  *			- Minimize the TOC reading - only do it when we
  *			  know a media change has occurred.
  *			- Moved all the CDROMREADx ioctls to the Uniform layer.
- *			- Heiko Eissfeldt <heiko@colossus.escape.de> supplied
+ *			- Heiko Eißfeldt <heiko@colossus.escape.de> supplied
  *			  some fixes for CDI.
  *			- CD-ROM leaving door locked fix from Andries
  *			  Brouwer <Andries.Brouwer@cwi.nl>
@@ -481,7 +481,7 @@ void cdrom_analyze_sense_data(ide_drive_t *drive,
 		else
 			printk("  Unknown Error Type: ");
 
-		if (sense->sense_key < ARY_LEN(sense_key_texts))
+		if (sense->sense_key < ARRAY_SIZE(sense_key_texts))
 			s = sense_key_texts[sense->sense_key];
 
 		printk("%s -- (Sense key=0x%02x)\n", s, sense->sense_key);
@@ -491,7 +491,7 @@ void cdrom_analyze_sense_data(ide_drive_t *drive,
 				 sense->ascq);
 			s = buf;
 		} else {
-			int lo = 0, mid, hi = ARY_LEN(sense_data_texts);
+			int lo = 0, mid, hi = ARRAY_SIZE(sense_data_texts);
 			unsigned long key = (sense->sense_key << 16);
 			key |= (sense->asc << 8);
 			if (!(sense->ascq >= 0x80 && sense->ascq <= 0xdd))
@@ -524,7 +524,7 @@ void cdrom_analyze_sense_data(ide_drive_t *drive,
 
 		if (failed_command != NULL) {
 
-			int lo=0, mid, hi= ARY_LEN (packet_command_texts);
+			int lo=0, mid, hi= ARRAY_SIZE(packet_command_texts);
 			s = NULL;
 
 			while (hi > lo) {
@@ -2341,7 +2341,7 @@ static int cdrom_read_toc(ide_drive_t *drive, struct request_sense *sense)
 		   If we get an error for the regular case, we assume
 		   a CDI without additional audio tracks. In this case
 		   the readable TOC is empty (CDI tracks are not included)
-		   and only holds the Leadout entry. Heiko Ei�feldt */
+		   and only holds the Leadout entry. Heiko Eißfeldt */
 		ntracks = 0;
 		stat = cdrom_read_tocentry(drive, CDROM_LEADOUT, 1, 0,
 					   (char *)&toc->hdr,
@@ -3071,7 +3071,7 @@ static inline void ide_cdrom_add_settings(ide_drive_t *drive) { ; }
 /*
  * standard prep_rq_fn that builds 10 byte cmds
  */
-static int ide_cdrom_prep_fs(request_queue_t *q, struct request *rq)
+static int ide_cdrom_prep_fs(struct request_queue *q, struct request *rq)
 {
 	int hard_sect = queue_hardsect_size(q);
 	long block = (long)rq->hard_sector / (hard_sect >> 9);
@@ -3137,7 +3137,7 @@ static int ide_cdrom_prep_pc(struct request *rq)
 	return BLKPREP_OK;
 }
 
-static int ide_cdrom_prep_fn(request_queue_t *q, struct request *rq)
+static int ide_cdrom_prep_fn(struct request_queue *q, struct request *rq)
 {
 	if (blk_fs_request(rq))
 		return ide_cdrom_prep_fs(q, rq);

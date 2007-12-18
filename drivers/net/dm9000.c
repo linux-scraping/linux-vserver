@@ -104,6 +104,18 @@
 #define PRINTK(args...)   printk(KERN_DEBUG args)
 #endif
 
+#ifdef CONFIG_BLACKFIN
+#define readsb	insb
+#define readsw	insw
+#define readsl	insl
+#define writesb	outsb
+#define writesw	outsw
+#define writesl	outsl
+#define DM9000_IRQ_FLAGS	(IRQF_SHARED | IRQF_TRIGGER_HIGH)
+#else
+#define DM9000_IRQ_FLAGS	IRQF_SHARED
+#endif
+
 /*
  * Transmit timeout, default 5 seconds.
  */
@@ -136,7 +148,6 @@ typedef struct board_info {
 	struct resource *irq_res;
 
 	struct timer_list timer;
-	struct net_device_stats stats;
 	unsigned char srom[128];
 	spinlock_t lock;
 
@@ -153,8 +164,6 @@ static int dm9000_stop(struct net_device *);
 
 static void dm9000_timer(unsigned long);
 static void dm9000_init_dm9000(struct net_device *);
-
-static struct net_device_stats *dm9000_get_stats(struct net_device *);
 
 static irqreturn_t dm9000_interrupt(int, void *);
 
@@ -404,7 +413,6 @@ dm9000_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	SET_MODULE_OWNER(ndev);
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 
 	PRINTK2("dm9000_probe()");
@@ -430,6 +438,9 @@ dm9000_probe(struct platform_device *pdev)
 		ndev->irq = pdev->resource[1].start;
 		db->io_addr = (void __iomem *)base;
 		db->io_data = (void __iomem *)(base + 4);
+
+		/* ensure at least we have a default set of IO routines */
+		dm9000_set_io(db, 2);
 
 	} else {
 		db->addr_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -531,7 +542,8 @@ dm9000_probe(struct platform_device *pdev)
 
 	if (id_val != DM9000_ID) {
 		printk("%s: wrong id: 0x%08x\n", CARDNAME, id_val);
-		goto release;
+		ret = -ENODEV;
+		goto out;
 	}
 
 	/* from this point we assume that we have found a DM9000 */
@@ -544,7 +556,6 @@ dm9000_probe(struct platform_device *pdev)
 	ndev->tx_timeout         = &dm9000_timeout;
 	ndev->watchdog_timeo = msecs_to_jiffies(watchdog);
 	ndev->stop		 = &dm9000_stop;
-	ndev->get_stats		 = &dm9000_get_stats;
 	ndev->set_multicast_list = &dm9000_hash_table;
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	ndev->poll_controller	 = &dm9000_poll_controller;
@@ -585,16 +596,14 @@ dm9000_probe(struct platform_device *pdev)
 	ret = register_netdev(ndev);
 
 	if (ret == 0) {
-		printk("%s: dm9000 at %p,%p IRQ %d MAC: ",
-		       ndev->name,  db->io_addr, db->io_data, ndev->irq);
-		for (i = 0; i < 5; i++)
-			printk("%02x:", ndev->dev_addr[i]);
-		printk("%02x\n", ndev->dev_addr[5]);
+		DECLARE_MAC_BUF(mac);
+		printk("%s: dm9000 at %p,%p IRQ %d MAC: %s\n",
+		       ndev->name,  db->io_addr, db->io_data, ndev->irq,
+		       print_mac(mac, ndev->dev_addr));
 	}
 	return 0;
 
- release:
- out:
+out:
 	printk("%s: not found (%d).\n", CARDNAME, ret);
 
 	dm9000_release_board(pdev, db);
@@ -614,7 +623,7 @@ dm9000_open(struct net_device *dev)
 
 	PRINTK2("entering dm9000_open\n");
 
-	if (request_irq(dev->irq, &dm9000_interrupt, IRQF_SHARED, dev->name, dev))
+	if (request_irq(dev->irq, &dm9000_interrupt, DM9000_IRQ_FLAGS, dev->name, dev))
 		return -EAGAIN;
 
 	/* Initialize DM9000 board */
@@ -685,6 +694,7 @@ dm9000_init_dm9000(struct net_device *dev)
 static int
 dm9000_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
+	unsigned long flags;
 	board_info_t *db = (board_info_t *) dev->priv;
 
 	PRINTK3("dm9000_start_xmit\n");
@@ -692,23 +702,17 @@ dm9000_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (db->tx_pkt_cnt > 1)
 		return 1;
 
-	netif_stop_queue(dev);
-
-	/* Disable all interrupts */
-	iow(db, DM9000_IMR, IMR_PAR);
+	spin_lock_irqsave(&db->lock, flags);
 
 	/* Move data to DM9000 TX RAM */
 	writeb(DM9000_MWCMD, db->io_addr);
 
 	(db->outblk)(db->io_data, skb->data, skb->len);
-	db->stats.tx_bytes += skb->len;
+	dev->stats.tx_bytes += skb->len;
 
+	db->tx_pkt_cnt++;
 	/* TX control: First packet immediately send, second packet queue */
-	if (db->tx_pkt_cnt == 0) {
-
-		/* First Packet */
-		db->tx_pkt_cnt++;
-
+	if (db->tx_pkt_cnt == 1) {
 		/* Set TX length to DM9000 */
 		iow(db, DM9000_TXPLL, skb->len & 0xff);
 		iow(db, DM9000_TXPLH, (skb->len >> 8) & 0xff);
@@ -717,22 +721,16 @@ dm9000_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		iow(db, DM9000_TCR, TCR_TXREQ);	/* Cleared after TX complete */
 
 		dev->trans_start = jiffies;	/* save the time stamp */
-
 	} else {
 		/* Second packet */
-		db->tx_pkt_cnt++;
 		db->queue_pkt_len = skb->len;
+		netif_stop_queue(dev);
 	}
+
+	spin_unlock_irqrestore(&db->lock, flags);
 
 	/* free this SKB */
 	dev_kfree_skb(skb);
-
-	/* Re-enable resource check */
-	if (db->tx_pkt_cnt == 1)
-		netif_wake_queue(dev);
-
-	/* Re-enable interrupt */
-	iow(db, DM9000_IMR, IMR_PAR | IMR_PTM | IMR_PRM);
 
 	return 0;
 }
@@ -787,7 +785,7 @@ dm9000_tx_done(struct net_device *dev, board_info_t * db)
 	if (tx_status & (NSR_TX2END | NSR_TX1END)) {
 		/* One packet sent complete */
 		db->tx_pkt_cnt--;
-		db->stats.tx_packets++;
+		dev->stats.tx_packets++;
 
 		/* Queue packet check & send */
 		if (db->tx_pkt_cnt > 0) {
@@ -847,17 +845,6 @@ dm9000_interrupt(int irq, void *dev_id)
 
 	return IRQ_HANDLED;
 }
-
-/*
- *  Get statistics from driver.
- */
-static struct net_device_stats *
-dm9000_get_stats(struct net_device *dev)
-{
-	board_info_t *db = (board_info_t *) dev->priv;
-	return &db->stats;
-}
-
 
 /*
  *  A periodic timer routine
@@ -936,15 +923,15 @@ dm9000_rx(struct net_device *dev)
 			GoodPacket = false;
 			if (rxhdr.RxStatus & 0x100) {
 				PRINTK1("fifo error\n");
-				db->stats.rx_fifo_errors++;
+				dev->stats.rx_fifo_errors++;
 			}
 			if (rxhdr.RxStatus & 0x200) {
 				PRINTK1("crc error\n");
-				db->stats.rx_crc_errors++;
+				dev->stats.rx_crc_errors++;
 			}
 			if (rxhdr.RxStatus & 0x8000) {
 				PRINTK1("length error\n");
-				db->stats.rx_length_errors++;
+				dev->stats.rx_length_errors++;
 			}
 		}
 
@@ -957,12 +944,12 @@ dm9000_rx(struct net_device *dev)
 			/* Read received packet from RX SRAM */
 
 			(db->inblk)(db->io_data, rdptr, RxLen);
-			db->stats.rx_bytes += RxLen;
+			dev->stats.rx_bytes += RxLen;
 
 			/* Pass to upper layer */
 			skb->protocol = eth_type_trans(skb, dev);
 			netif_rx(skb);
-			db->stats.rx_packets++;
+			dev->stats.rx_packets++;
 
 		} else {
 			/* need to dump the packet's data */

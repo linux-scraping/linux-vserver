@@ -165,9 +165,9 @@ scc_ide_outbsync(ide_drive_t * drive, u8 addr, unsigned long port)
 	ide_hwif_t *hwif = HWIF(drive);
 
 	out_be32((void*)port, addr);
-	__asm__ __volatile__("eieio":::"memory");
+	eieio();
 	in_be32((void*)(hwif->dma_base + 0x01c));
-	__asm__ __volatile__("eieio":::"memory");
+	eieio();
 }
 
 static void
@@ -190,15 +190,15 @@ scc_ide_outsl(unsigned long port, void *addr, u32 count)
 }
 
 /**
- *	scc_tuneproc	-	tune a drive PIO mode
- *	@drive: drive to tune
- *	@mode_wanted: the target operating mode
+ *	scc_set_pio_mode	-	set host controller for PIO mode
+ *	@drive: drive
+ *	@pio: PIO mode number
  *
  *	Load the timing settings for this device mode into the
  *	controller.
  */
 
-static void scc_tuneproc(ide_drive_t *drive, byte mode_wanted)
+static void scc_set_pio_mode(ide_drive_t *drive, const u8 pio)
 {
 	ide_hwif_t *hwif = HWIF(drive);
 	struct scc_ports *ports = ide_get_hwifdata(hwif);
@@ -207,28 +207,7 @@ static void scc_tuneproc(ide_drive_t *drive, byte mode_wanted)
 	unsigned long piosht_port = ctl_base + 0x000;
 	unsigned long pioct_port = ctl_base + 0x004;
 	unsigned long reg;
-	unsigned char speed = XFER_PIO_0;
 	int offset;
-
-	mode_wanted = ide_get_best_pio_mode(drive, mode_wanted, 4, NULL);
-	switch (mode_wanted) {
-	case 4:
-		speed = XFER_PIO_4;
-		break;
-	case 3:
-		speed = XFER_PIO_3;
-		break;
-	case 2:
-		speed = XFER_PIO_2;
-		break;
-	case 1:
-		speed = XFER_PIO_1;
-		break;
-	case 0:
-	default:
-		speed = XFER_PIO_0;
-		break;
-	}
 
 	reg = in_be32((void __iomem *)cckctrl_port);
 	if (reg & CCKCTRL_ATACLKOEN) {
@@ -236,27 +215,24 @@ static void scc_tuneproc(ide_drive_t *drive, byte mode_wanted)
 	} else {
 		offset = 0; /* 100MHz */
 	}
-	reg = JCHSTtbl[offset][mode_wanted] << 16 | JCHHTtbl[offset][mode_wanted];
+	reg = JCHSTtbl[offset][pio] << 16 | JCHHTtbl[offset][pio];
 	out_be32((void __iomem *)piosht_port, reg);
-	reg = JCHCTtbl[offset][mode_wanted];
+	reg = JCHCTtbl[offset][pio];
 	out_be32((void __iomem *)pioct_port, reg);
-
-	ide_config_drive_speed(drive, speed);
 }
 
 /**
- *	scc_tune_chipset	-	tune a drive DMA mode
- *	@drive: Drive to set up
- *	@xferspeed: speed we want to achieve
+ *	scc_set_dma_mode	-	set host controller for DMA mode
+ *	@drive: drive
+ *	@speed: DMA mode
  *
  *	Load the timing settings for this device mode into the
  *	controller.
  */
 
-static int scc_tune_chipset(ide_drive_t *drive, byte xferspeed)
+static void scc_set_dma_mode(ide_drive_t *drive, const u8 speed)
 {
 	ide_hwif_t *hwif = HWIF(drive);
-	u8 speed = ide_rate_filter(drive, xferspeed);
 	struct scc_ports *ports = ide_get_hwifdata(hwif);
 	unsigned long ctl_base = ports->ctl;
 	unsigned long cckctrl_port = ctl_base + 0xff0;
@@ -280,28 +256,16 @@ static int scc_tune_chipset(ide_drive_t *drive, byte xferspeed)
 
 	switch (speed) {
 	case XFER_UDMA_6:
-		idx = 6;
-		break;
 	case XFER_UDMA_5:
-		idx = 5;
-		break;
 	case XFER_UDMA_4:
-		idx = 4;
-		break;
 	case XFER_UDMA_3:
-		idx = 3;
-		break;
 	case XFER_UDMA_2:
-		idx = 2;
-		break;
 	case XFER_UDMA_1:
-		idx = 1;
-		break;
 	case XFER_UDMA_0:
-		idx = 0;
+		idx = speed - XFER_UDMA_0;
 		break;
 	default:
-		return 1;
+		return;
 	}
 
 	jcactsel = JCACTSELtbl[offset][idx];
@@ -317,30 +281,6 @@ static int scc_tune_chipset(ide_drive_t *drive, byte xferspeed)
 	}
 	reg = JCTSStbl[offset][idx] << 16 | JCENVTtbl[offset][idx];
 	out_be32((void __iomem *)udenvt_port, reg);
-
-	return ide_config_drive_speed(drive, speed);
-}
-
-/**
- *	scc_configure_drive_for_dma	-	set up for DMA transfers
- *	@drive: drive we are going to set up
- *
- *	Set up the drive for DMA, tune the controller and drive as
- *	required.
- *      If the drive isn't suitable for DMA or we hit other problems
- *      then we will drop down to PIO and set up PIO appropriately.
- *      (return 1)
- */
-
-static int scc_config_drive_for_dma(ide_drive_t *drive)
-{
-	if (ide_tune_dma(drive))
-		return 0;
-
-	if (ide_use_fast_pio(drive))
-		scc_tuneproc(drive, 4);
-
-	return -1;
 }
 
 /**
@@ -401,6 +341,33 @@ static int scc_ide_dma_end(ide_drive_t * drive)
 	ide_hwif_t *hwif = HWIF(drive);
 	unsigned long intsts_port = hwif->dma_base + 0x014;
 	u32 reg;
+	int dma_stat, data_loss = 0;
+	static int retry = 0;
+
+	/* errata A308 workaround: Step5 (check data loss) */
+	/* We don't check non ide_disk because it is limited to UDMA4 */
+	if (!(in_be32((void __iomem *)IDE_ALTSTATUS_REG) & ERR_STAT) &&
+	    drive->media == ide_disk && drive->current_speed > XFER_UDMA_4) {
+		reg = in_be32((void __iomem *)intsts_port);
+		if (!(reg & INTSTS_ACTEINT)) {
+			printk(KERN_WARNING "%s: operation failed (transfer data loss)\n",
+			       drive->name);
+			data_loss = 1;
+			if (retry++) {
+				struct request *rq = HWGROUP(drive)->rq;
+				int unit;
+				/* ERROR_RESET and drive->crc_count are needed
+				 * to reduce DMA transfer mode in retry process.
+				 */
+				if (rq)
+					rq->errors |= ERROR_RESET;
+				for (unit = 0; unit < MAX_DRIVES; unit++) {
+					ide_drive_t *drive = &hwif->drives[unit];
+					drive->crc_count++;
+				}
+			}
+		}
+	}
 
 	while (1) {
 		reg = in_be32((void __iomem *)intsts_port);
@@ -469,33 +436,46 @@ static int scc_ide_dma_end(ide_drive_t * drive)
 		break;
 	}
 
-	return __ide_dma_end(drive);
+	dma_stat = __ide_dma_end(drive);
+	if (data_loss)
+		dma_stat |= 2; /* emulate DMA error (to retry command) */
+	return dma_stat;
 }
 
 /* returns 1 if dma irq issued, 0 otherwise */
 static int scc_dma_test_irq(ide_drive_t *drive)
 {
-	ide_hwif_t *hwif	= HWIF(drive);
-	u8 dma_stat		= hwif->INB(hwif->dma_status);
+	ide_hwif_t *hwif = HWIF(drive);
+	u32 int_stat = in_be32((void __iomem *)hwif->dma_base + 0x014);
 
-	/* return 1 if INTR asserted */
-	if ((dma_stat & 4) == 4)
+	/* SCC errata A252,A308 workaround: Step4 */
+	if ((in_be32((void __iomem *)IDE_ALTSTATUS_REG) & ERR_STAT) &&
+	    (int_stat & INTSTS_INTRQ))
 		return 1;
 
-	/* Workaround for PTERADD: emulate DMA_INTR when
-	 * - IDE_STATUS[ERR] = 1
-	 * - INT_STATUS[INTRQ] = 1
-	 * - DMA_STATUS[IORACTA] = 1
-	 */
-	if (in_be32((void __iomem *)IDE_ALTSTATUS_REG) & ERR_STAT &&
-	    in_be32((void __iomem *)(hwif->dma_base + 0x014)) & INTSTS_INTRQ &&
-		dma_stat & 1)
+	/* SCC errata A308 workaround: Step5 (polling IOIRQS) */
+	if (int_stat & INTSTS_IOIRQS)
 		return 1;
 
 	if (!drive->waiting_for_dma)
 		printk(KERN_WARNING "%s: (%s) called while not waiting\n",
 			drive->name, __FUNCTION__);
 	return 0;
+}
+
+static u8 scc_udma_filter(ide_drive_t *drive)
+{
+	ide_hwif_t *hwif = drive->hwif;
+	u8 mask = hwif->ultra_mask;
+
+	/* errata A308 workaround: limit non ide_disk drive to UDMA4 */
+	if ((drive->media != ide_disk) && (mask & 0xE0)) {
+		printk(KERN_INFO "%s: limit %s to UDMA4\n",
+		       SCC_PATA_NAME, drive->name);
+		mask = ATA_UDMA4;
+	}
+
+	return mask;
 }
 
 /**
@@ -511,8 +491,8 @@ static int setup_mmio_scc (struct pci_dev *dev, const char *name)
 	unsigned long dma_base = pci_resource_start(dev, 1);
 	unsigned long ctl_size = pci_resource_len(dev, 0);
 	unsigned long dma_size = pci_resource_len(dev, 1);
-	void *ctl_addr;
-	void *dma_addr;
+	void __iomem *ctl_addr;
+	void __iomem *dma_addr;
 	int i;
 
 	for (i = 0; i < MAX_HWIFS; i++) {
@@ -558,12 +538,13 @@ static int setup_mmio_scc (struct pci_dev *dev, const char *name)
 /**
  *	init_setup_scc	-	set up an SCC PATA Controller
  *	@dev: PCI device
- *	@d: IDE PCI device
+ *	@d: IDE port info
  *
  *	Perform the initial set up for this device.
  */
 
-static int __devinit init_setup_scc(struct pci_dev *dev, ide_pci_device_t *d)
+static int __devinit init_setup_scc(struct pci_dev *dev,
+				    const struct ide_port_info *d)
 {
 	unsigned long ctl_base;
 	unsigned long dma_base;
@@ -698,45 +679,31 @@ static void __devinit init_hwif_scc(ide_hwif_t *hwif)
 
 	hwif->dma_setup = scc_dma_setup;
 	hwif->ide_dma_end = scc_ide_dma_end;
-	hwif->speedproc = scc_tune_chipset;
-	hwif->tuneproc = scc_tuneproc;
-	hwif->ide_dma_check = scc_config_drive_for_dma;
+	hwif->set_pio_mode = scc_set_pio_mode;
+	hwif->set_dma_mode = scc_set_dma_mode;
 	hwif->ide_dma_test_irq = scc_dma_test_irq;
+	hwif->udma_filter = scc_udma_filter;
 
-	hwif->drives[0].autotune = IDE_TUNE_AUTO;
-	hwif->drives[1].autotune = IDE_TUNE_AUTO;
-
-	if (in_be32((void __iomem *)(hwif->config_data + 0xff0)) & CCKCTRL_ATACLKOEN) {
-		hwif->ultra_mask = 0x7f; /* 133MHz */
-	} else {
-		hwif->ultra_mask = 0x3f; /* 100MHz */
-	}
-	hwif->mwdma_mask = 0x00;
-	hwif->swdma_mask = 0x00;
-	hwif->atapi_dma = 1;
+	if (in_be32((void __iomem *)(hwif->config_data + 0xff0)) & CCKCTRL_ATACLKOEN)
+		hwif->ultra_mask = ATA_UDMA6; /* 133MHz */
+	else
+		hwif->ultra_mask = ATA_UDMA5; /* 100MHz */
 
 	/* we support 80c cable only. */
-	hwif->udma_four = 1;
-
-	hwif->autodma = 0;
-	if (!noautodma)
-		hwif->autodma = 1;
-	hwif->drives[0].autodma = hwif->autodma;
-	hwif->drives[1].autodma = hwif->autodma;
+	hwif->cbl = ATA_CBL_PATA80;
 }
 
 #define DECLARE_SCC_DEV(name_str)			\
   {							\
       .name		= name_str,			\
-      .init_setup	= init_setup_scc,		\
       .init_iops	= init_iops_scc,		\
       .init_hwif	= init_hwif_scc,		\
-      .channels	= 1,					\
-      .autodma	= AUTODMA,				\
-      .bootable	= ON_BOARD,				\
+      .host_flags	= IDE_HFLAG_SINGLE |		\
+			  IDE_HFLAG_BOOTABLE,		\
+      .pio_mask		= ATA_PIO4,			\
   }
 
-static ide_pci_device_t scc_chipsets[] __devinitdata = {
+static const struct ide_port_info scc_chipsets[] __devinitdata = {
 	/* 0 */ DECLARE_SCC_DEV("sccIDE"),
 };
 
@@ -751,8 +718,7 @@ static ide_pci_device_t scc_chipsets[] __devinitdata = {
 
 static int __devinit scc_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
-	ide_pci_device_t *d = &scc_chipsets[id->driver_data];
-	return d->init_setup(dev, d);
+	return init_setup_scc(dev, &scc_chipsets[id->driver_data]);
 }
 
 /**
@@ -789,8 +755,8 @@ static void __devexit scc_remove(struct pci_dev *dev)
 	memset(ports, 0, sizeof(*ports));
 }
 
-static struct pci_device_id scc_pci_tbl[] = {
-	{ PCI_VENDOR_ID_TOSHIBA_2, PCI_DEVICE_ID_TOSHIBA_SCC_ATA,  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+static const struct pci_device_id scc_pci_tbl[] = {
+	{ PCI_VDEVICE(TOSHIBA_2, PCI_DEVICE_ID_TOSHIBA_SCC_ATA), 0 },
 	{ 0, },
 };
 MODULE_DEVICE_TABLE(pci, scc_pci_tbl);

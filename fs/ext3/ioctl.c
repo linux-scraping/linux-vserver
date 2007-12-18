@@ -44,7 +44,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -54,6 +54,11 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			flags &= ~EXT3_DIRSYNC_FL;
 
 		mutex_lock(&inode->i_mutex);
+		/* Is it quota file? Do not allow user to mess with it */
+		if (IS_NOQUOTA(inode)) {
+			mutex_unlock(&inode->i_mutex);
+			return -EPERM;
+		}
 		oldflags = ei->i_flags;
 
 		/* The JOURNAL_DATA flag is modifiable only by root */
@@ -127,7 +132,7 @@ flags_err:
 		__u32 generation;
 		int err;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
@@ -188,7 +193,7 @@ flags_err:
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))

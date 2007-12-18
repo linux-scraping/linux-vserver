@@ -1,4 +1,3 @@
-/* $Id: io.h,v 1.47 2001/12/13 10:36:02 davem Exp $ */
 #ifndef __SPARC64_IO_H
 #define __SPARC64_IO_H
 
@@ -14,17 +13,12 @@
 #define __SLOW_DOWN_IO	do { } while (0)
 #define SLOW_DOWN_IO	do { } while (0)
 
-extern unsigned long virt_to_bus_not_defined_use_pci_map(volatile void *addr);
-#define virt_to_bus virt_to_bus_not_defined_use_pci_map
-extern unsigned long bus_to_virt_not_defined_use_pci_map(volatile void *addr);
-#define bus_to_virt bus_to_virt_not_defined_use_pci_map
-
 /* BIO layer definitions. */
 extern unsigned long kern_base, kern_size;
 #define page_to_phys(page)	(page_to_pfn(page) << PAGE_SHIFT)
 #define BIO_VMERGE_BOUNDARY	8192
 
-static __inline__ u8 _inb(unsigned long addr)
+static inline u8 _inb(unsigned long addr)
 {
 	u8 ret;
 
@@ -35,7 +29,7 @@ static __inline__ u8 _inb(unsigned long addr)
 	return ret;
 }
 
-static __inline__ u16 _inw(unsigned long addr)
+static inline u16 _inw(unsigned long addr)
 {
 	u16 ret;
 
@@ -46,7 +40,7 @@ static __inline__ u16 _inw(unsigned long addr)
 	return ret;
 }
 
-static __inline__ u32 _inl(unsigned long addr)
+static inline u32 _inl(unsigned long addr)
 {
 	u32 ret;
 
@@ -57,21 +51,21 @@ static __inline__ u32 _inl(unsigned long addr)
 	return ret;
 }
 
-static __inline__ void _outb(u8 b, unsigned long addr)
+static inline void _outb(u8 b, unsigned long addr)
 {
 	__asm__ __volatile__("stba\t%r0, [%1] %2\t/* pci_outb */"
 			     : /* no outputs */
 			     : "Jr" (b), "r" (addr), "i" (ASI_PHYS_BYPASS_EC_E_L));
 }
 
-static __inline__ void _outw(u16 w, unsigned long addr)
+static inline void _outw(u16 w, unsigned long addr)
 {
 	__asm__ __volatile__("stha\t%r0, [%1] %2\t/* pci_outw */"
 			     : /* no outputs */
 			     : "Jr" (w), "r" (addr), "i" (ASI_PHYS_BYPASS_EC_E_L));
 }
 
-static __inline__ void _outl(u32 l, unsigned long addr)
+static inline void _outl(u32 l, unsigned long addr)
 {
 	__asm__ __volatile__("stwa\t%r0, [%1] %2\t/* pci_outl */"
 			     : /* no outputs */
@@ -210,7 +204,7 @@ static inline void _writeq(u64 q, volatile void __iomem *addr)
 #define writeq(__q, __addr)	_writeq(__q, __addr)
 
 /* Now versions without byte-swapping. */
-static __inline__ u8 _raw_readb(unsigned long addr)
+static inline u8 _raw_readb(unsigned long addr)
 {
 	u8 ret;
 
@@ -221,7 +215,7 @@ static __inline__ u8 _raw_readb(unsigned long addr)
 	return ret;
 }
 
-static __inline__ u16 _raw_readw(unsigned long addr)
+static inline u16 _raw_readw(unsigned long addr)
 {
 	u16 ret;
 
@@ -232,7 +226,7 @@ static __inline__ u16 _raw_readw(unsigned long addr)
 	return ret;
 }
 
-static __inline__ u32 _raw_readl(unsigned long addr)
+static inline u32 _raw_readl(unsigned long addr)
 {
 	u32 ret;
 
@@ -243,7 +237,7 @@ static __inline__ u32 _raw_readl(unsigned long addr)
 	return ret;
 }
 
-static __inline__ u64 _raw_readq(unsigned long addr)
+static inline u64 _raw_readq(unsigned long addr)
 {
 	u64 ret;
 
@@ -254,28 +248,28 @@ static __inline__ u64 _raw_readq(unsigned long addr)
 	return ret;
 }
 
-static __inline__ void _raw_writeb(u8 b, unsigned long addr)
+static inline void _raw_writeb(u8 b, unsigned long addr)
 {
 	__asm__ __volatile__("stba\t%r0, [%1] %2\t/* pci_raw_writeb */"
 			     : /* no outputs */
 			     : "Jr" (b), "r" (addr), "i" (ASI_PHYS_BYPASS_EC_E));
 }
 
-static __inline__ void _raw_writew(u16 w, unsigned long addr)
+static inline void _raw_writew(u16 w, unsigned long addr)
 {
 	__asm__ __volatile__("stha\t%r0, [%1] %2\t/* pci_raw_writew */"
 			     : /* no outputs */
 			     : "Jr" (w), "r" (addr), "i" (ASI_PHYS_BYPASS_EC_E));
 }
 
-static __inline__ void _raw_writel(u32 l, unsigned long addr)
+static inline void _raw_writel(u32 l, unsigned long addr)
 {
 	__asm__ __volatile__("stwa\t%r0, [%1] %2\t/* pci_raw_writel */"
 			     : /* no outputs */
 			     : "Jr" (l), "r" (addr), "i" (ASI_PHYS_BYPASS_EC_E));
 }
 
-static __inline__ void _raw_writeq(u64 q, unsigned long addr)
+static inline void _raw_writeq(u64 q, unsigned long addr)
 {
 	__asm__ __volatile__("stxa\t%r0, [%1] %2\t/* pci_raw_writeq */"
 			     : /* no outputs */
@@ -478,12 +472,6 @@ extern void pci_iounmap(struct pci_dev *dev, void __iomem *);
 
 #define sbus_iounmap(__addr, __size)	\
 	release_region((unsigned long)(__addr), (__size))
-
-/* Nothing to do */
-
-#define dma_cache_inv(_start,_size)		do { } while (0)
-#define dma_cache_wback(_start,_size)		do { } while (0)
-#define dma_cache_wback_inv(_start,_size)	do { } while (0)
 
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem

@@ -236,10 +236,10 @@ static void konicawc_register_input(struct konicawc *cam, struct usb_device *dev
 	input_dev->name = "Konicawc snapshot button";
 	input_dev->phys = cam->input_physname;
 	usb_to_input_id(dev, &input_dev->id);
-	input_dev->cdev.dev = &dev->dev;
+	input_dev->dev.parent = &dev->dev;
 
-	input_dev->evbit[0] = BIT(EV_KEY);
-	input_dev->keybit[LONG(BTN_0)] = BIT(BTN_0);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY);
+	input_dev->keybit[BIT_WORD(BTN_0)] = BIT_MASK(BTN_0);
 
 	input_dev->private = cam;
 

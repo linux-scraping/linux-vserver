@@ -53,7 +53,7 @@ static struct dentry_operations anon_inodefs_dentry_operations = {
 };
 
 /**
- * anon_inode_getfd - creates a new file instance by hooking it up to and
+ * anon_inode_getfd - creates a new file instance by hooking it up to an
  *                    anonymous inode, and a dentry that describe the "class"
  *                    of the file
  *
@@ -66,7 +66,7 @@ static struct dentry_operations anon_inodefs_dentry_operations = {
  *
  * Creates a new file by hooking it on a single inode. This is useful for files
  * that do not need to have a full-fledged inode in order to operate correctly.
- * All the files created with anon_inode_getfd() will share a single inode, by
+ * All the files created with anon_inode_getfd() will share a single inode,
  * hence saving memory and avoiding code duplication for the file/inode/dentry
  * setup.
  */
@@ -76,7 +76,6 @@ int anon_inode_getfd(int *pfd, struct inode **pinode, struct file **pfile,
 {
 	struct qstr this;
 	struct dentry *dentry;
-	struct inode *inode;
 	struct file *file;
 	int error, fd;
 
@@ -86,15 +85,9 @@ int anon_inode_getfd(int *pfd, struct inode **pinode, struct file **pfile,
 	if (!file)
 		return -ENFILE;
 
-	inode = igrab(anon_inode_inode);
-	if (IS_ERR(inode)) {
-		error = PTR_ERR(inode);
-		goto err_put_filp;
-	}
-
 	error = get_unused_fd();
 	if (error < 0)
-		goto err_iput;
+		goto err_put_filp;
 	fd = error;
 
 	/*
@@ -108,14 +101,22 @@ int anon_inode_getfd(int *pfd, struct inode **pinode, struct file **pfile,
 	dentry = d_alloc(anon_inode_mnt->mnt_sb->s_root, &this);
 	if (!dentry)
 		goto err_put_unused_fd;
+
+	/*
+	 * We know the anon_inode inode count is always greater than zero,
+	 * so we can avoid doing an igrab() and we can use an open-coded
+	 * atomic_inc().
+	 */
+	atomic_inc(&anon_inode_inode->i_count);
+
 	dentry->d_op = &anon_inodefs_dentry_operations;
 	/* Do not publish this dentry inside the global dentry hash table */
 	dentry->d_flags &= ~DCACHE_UNHASHED;
-	d_instantiate(dentry, inode);
+	d_instantiate(dentry, anon_inode_inode);
 
 	file->f_path.mnt = mntget(anon_inode_mnt);
 	file->f_path.dentry = dentry;
-	file->f_mapping = inode->i_mapping;
+	file->f_mapping = anon_inode_inode->i_mapping;
 
 	file->f_pos = 0;
 	file->f_flags = O_RDWR;
@@ -127,23 +128,22 @@ int anon_inode_getfd(int *pfd, struct inode **pinode, struct file **pfile,
 	fd_install(fd, file);
 
 	*pfd = fd;
-	*pinode = inode;
+	*pinode = anon_inode_inode;
 	*pfile = file;
 	return 0;
 
 err_put_unused_fd:
 	put_unused_fd(fd);
-err_iput:
-	iput(inode);
 err_put_filp:
 	put_filp(file);
 	return error;
 }
+EXPORT_SYMBOL_GPL(anon_inode_getfd);
 
 /*
- * A single inode exist for all anon_inode files. Contrary to pipes,
- * anon_inode inodes has no per-instance data associated, so we can avoid
- * the allocation of multiple of them.
+ * A single inode exists for all anon_inode files. Contrary to pipes,
+ * anon_inode inodes have no associated per-instance data, so we need
+ * only allocate one of them.
  */
 static struct inode *anon_inode_mkinode(void)
 {

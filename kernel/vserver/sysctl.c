@@ -21,8 +21,6 @@
 #include <asm/unistd.h>
 
 
-#define CTL_VSERVER	4242    /* unused? */
-
 enum {
 	CTL_DEBUG_ERROR		= 0,
 	CTL_DEBUG_SWITCH	= 1,
@@ -55,13 +53,13 @@ unsigned int vx_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
-static ctl_table vserver_table[];
+static ctl_table vserver_root_table[];
 
 
 void vserver_register_sysctl(void)
 {
 	if (!vserver_table_header) {
-		vserver_table_header = register_sysctl_table(vserver_table);
+		vserver_table_header = register_sysctl_table(vserver_root_table);
 	}
 
 }
@@ -132,6 +130,7 @@ done:
 	return 0;
 }
 
+static int zero;
 
 #define	CTL_ENTRY(ctl, name)				\
 	{						\
@@ -140,10 +139,12 @@ done:
 		.data		= &vx_ ## name,		\
 		.maxlen		= sizeof(int),		\
 		.mode		= 0644,			\
-		.proc_handler	= &proc_dodebug		\
+		.proc_handler	= &proc_dodebug,	\
+		.strategy	= &sysctl_intvec,	\
+		.extra1		= &zero,		\
 	}
 
-static ctl_table debug_table[] = {
+static ctl_table vserver_debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_SWITCH,	debug_switch),
 	CTL_ENTRY(CTL_DEBUG_XID,	debug_xid),
 	CTL_ENTRY(CTL_DEBUG_NID,	debug_nid),
@@ -159,12 +160,12 @@ static ctl_table debug_table[] = {
 	{ .ctl_name = 0 }
 };
 
-static ctl_table vserver_table[] = {
+static ctl_table vserver_root_table[] = {
 	{
 		.ctl_name	= CTL_VSERVER,
 		.procname	= "vserver",
 		.mode		= 0555,
-		.child		= debug_table
+		.child		= vserver_debug_table
 	},
 	{ .ctl_name = 0 }
 };

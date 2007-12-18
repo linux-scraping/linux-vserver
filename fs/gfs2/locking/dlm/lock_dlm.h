@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/list.h>
@@ -101,6 +100,7 @@ enum {
 	LFL_NOBAST		= 10,
 	LFL_HEADQUE		= 11,
 	LFL_UNLOCK_DELETE	= 12,
+	LFL_AST_WAIT		= 13,
 };
 
 struct gdlm_lock {
@@ -117,7 +117,6 @@ struct gdlm_lock {
 	unsigned long		flags;		/* lock_dlm flags LFL_ */
 
 	int			bast_mode;	/* protected by async_lock */
-	struct completion	ast_wait;
 
 	struct list_head	clist;		/* complete */
 	struct list_head	blist;		/* blocking */

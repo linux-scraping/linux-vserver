@@ -279,6 +279,25 @@ static void __devinit pci_fixup_cy82c693(struct pci_dev *dev)
 }
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_CONTAQ, PCI_DEVICE_ID_CONTAQ_82C693, pci_fixup_cy82c693);
 
+static void __init pci_fixup_it8152(struct pci_dev *dev)
+{
+	int i;
+	/* fixup for ITE 8152 devices */
+	/* FIXME: add defines for class 0x68000 and 0x80103 */
+	if ((dev->class >> 8) == PCI_CLASS_BRIDGE_HOST ||
+	    dev->class == 0x68000 ||
+	    dev->class == 0x80103) {
+		for (i = 0; i < PCI_NUM_RESOURCES; i++) {
+			dev->resource[i].start = 0;
+			dev->resource[i].end   = 0;
+			dev->resource[i].flags = 0;
+		}
+	}
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_ITE, PCI_DEVICE_ID_ITE_8152, pci_fixup_it8152);
+
+
+
 void __devinit pcibios_update_irq(struct pci_dev *dev, int irq)
 {
 	if (debug_pci)
@@ -292,9 +311,12 @@ void __devinit pcibios_update_irq(struct pci_dev *dev, int irq)
  */
 static inline int pdev_bad_for_parity(struct pci_dev *dev)
 {
-	return (dev->vendor == PCI_VENDOR_ID_INTERG &&
-		(dev->device == PCI_DEVICE_ID_INTERG_2000 ||
-		 dev->device == PCI_DEVICE_ID_INTERG_2010));
+	return ((dev->vendor == PCI_VENDOR_ID_INTERG &&
+		 (dev->device == PCI_DEVICE_ID_INTERG_2000 ||
+		  dev->device == PCI_DEVICE_ID_INTERG_2010)) ||
+		(dev->vendor == PCI_VENDOR_ID_ITE &&
+		 dev->device == PCI_DEVICE_ID_ITE_8152));
+
 }
 
 /*
@@ -338,7 +360,7 @@ pbus_assign_bus_resources(struct pci_bus *bus, struct pci_sys_data *root)
  * pcibios_fixup_bus - Called after each bus is probed,
  * but before its children are examined.
  */
-void __devinit pcibios_fixup_bus(struct pci_bus *bus)
+void pcibios_fixup_bus(struct pci_bus *bus)
 {
 	struct pci_sys_data *root = bus->sysdata;
 	struct pci_dev *dev;
@@ -419,7 +441,7 @@ void __devinit pcibios_fixup_bus(struct pci_bus *bus)
 /*
  * Convert from Linux-centric to bus-centric addresses for bridge devices.
  */
-void __devinit
+void
 pcibios_resource_to_bus(struct pci_dev *dev, struct pci_bus_region *region,
 			 struct resource *res)
 {

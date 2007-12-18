@@ -83,6 +83,8 @@ static void propagate_rate(struct clk *clk)
 			continue;
 		if (likely(clkp->ops && clkp->ops->recalc))
 			clkp->ops->recalc(clkp);
+		if (unlikely(clkp->flags & CLK_RATE_PROPAGATES))
+			propagate_rate(clkp);
 	}
 }
 
@@ -228,6 +230,22 @@ void clk_recalc_rate(struct clk *clk)
 		propagate_rate(clk);
 }
 EXPORT_SYMBOL_GPL(clk_recalc_rate);
+
+long clk_round_rate(struct clk *clk, unsigned long rate)
+{
+	if (likely(clk->ops && clk->ops->round_rate)) {
+		unsigned long flags, rounded;
+
+		spin_lock_irqsave(&clock_lock, flags);
+		rounded = clk->ops->round_rate(clk, rate);
+		spin_unlock_irqrestore(&clock_lock, flags);
+
+		return rounded;
+	}
+
+	return clk_get_rate(clk);
+}
+EXPORT_SYMBOL_GPL(clk_round_rate);
 
 /*
  * Returns a clock. Note that we first try to use device id on the bus

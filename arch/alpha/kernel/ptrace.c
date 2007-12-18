@@ -261,42 +261,11 @@ void ptrace_disable(struct task_struct *child)
 	ptrace_cancel_bpt(child);
 }
 
-asmlinkage long
-do_sys_ptrace(long request, long pid, long addr, long data,
-	      struct pt_regs *regs)
+long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
-	struct task_struct *child;
 	unsigned long tmp;
 	size_t copied;
 	long ret;
-
-	lock_kernel();
-	DBG(DBG_MEM, ("request=%ld pid=%ld addr=0x%lx data=0x%lx\n",
-		      request, pid, addr, data));
-	if (request == PTRACE_TRACEME) {
-		ret = ptrace_traceme();
-		goto out_notsk;
-	}
-
-	child = ptrace_get_task_struct(pid);
-	if (IS_ERR(child)) {
-		ret = PTR_ERR(child);
-		goto out_notsk;
-	}
-
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT)) {
-		ret = -EPERM;
-		goto out;
-	}
-
-	if (request == PTRACE_ATTACH) {
-		ret = ptrace_attach(child);
-		goto out;
-	}
-
-	ret = ptrace_check_attach(child, request == PTRACE_KILL);
-	if (ret < 0)
-		goto out;
 
 	switch (request) {
 	/* When I and D space are separate, these will need to be fixed.  */
@@ -307,13 +276,13 @@ do_sys_ptrace(long request, long pid, long addr, long data,
 		if (copied != sizeof(tmp))
 			break;
 		
-		regs->r0 = 0;	/* special return: no errors */
+		force_successful_syscall_return();
 		ret = tmp;
 		break;
 
 	/* Read register number ADDR. */
 	case PTRACE_PEEKUSR:
-		regs->r0 = 0;	/* special return: no errors */
+		force_successful_syscall_return();
 		ret = get_reg(child, addr);
 		DBG(DBG_MEM, ("peek $%ld->%#lx\n", addr, ret));
 		break;
@@ -321,9 +290,7 @@ do_sys_ptrace(long request, long pid, long addr, long data,
 	/* When I and D space are separate, this will have to be fixed.  */
 	case PTRACE_POKETEXT: /* write the word at location addr. */
 	case PTRACE_POKEDATA:
-		tmp = data;
-		copied = access_process_vm(child, addr, &tmp, sizeof(tmp), 1);
-		ret = (copied == sizeof(tmp)) ? 0 : -EIO;
+		ret = generic_ptrace_pokedata(child, addr, data);
 		break;
 
 	case PTRACE_POKEUSR: /* write the specified register */
@@ -361,7 +328,7 @@ do_sys_ptrace(long request, long pid, long addr, long data,
 		/* make sure single-step breakpoint is gone. */
 		ptrace_cancel_bpt(child);
 		wake_up_process(child);
-		goto out;
+		break;
 
 	case PTRACE_SINGLESTEP:  /* execute single instruction. */
 		ret = -EIO;
@@ -374,20 +341,12 @@ do_sys_ptrace(long request, long pid, long addr, long data,
 		wake_up_process(child);
 		/* give it a chance to run. */
 		ret = 0;
-		goto out;
-
-	case PTRACE_DETACH:	 /* detach a process that was attached. */
-		ret = ptrace_detach(child, data);
-		goto out;
+		break;
 
 	default:
 		ret = ptrace_request(child, request, addr, data);
-		goto out;
+		break;
 	}
- out:
-	put_task_struct(child);
- out_notsk:
-	unlock_kernel();
 	return ret;
 }
 

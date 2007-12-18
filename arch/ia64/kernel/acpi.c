@@ -67,6 +67,8 @@ EXPORT_SYMBOL(pm_power_off);
 unsigned int acpi_cpei_override;
 unsigned int acpi_cpei_phys_cpuid;
 
+unsigned long acpi_wakeup_address = 0;
+
 const char __init *
 acpi_get_sysname(void)
 {
@@ -676,9 +678,11 @@ int __init acpi_boot_init(void)
 	/* I/O APIC */
 
 	if (acpi_table_parse_madt
-	    (ACPI_MADT_TYPE_IO_SAPIC, acpi_parse_iosapic, NR_IOSAPICS) < 1)
-		printk(KERN_ERR PREFIX
-		       "Error parsing MADT - no IOSAPIC entries\n");
+	    (ACPI_MADT_TYPE_IO_SAPIC, acpi_parse_iosapic, NR_IOSAPICS) < 1) {
+		if (!ia64_platform_is("sn2"))
+			printk(KERN_ERR PREFIX
+			       "Error parsing MADT - no IOSAPIC entries\n");
+	}
 
 	/* System-Level Interrupt Routing */
 
@@ -739,16 +743,15 @@ int __init acpi_boot_init(void)
 
 int acpi_gsi_to_irq(u32 gsi, unsigned int *irq)
 {
-	int vector;
+	int tmp;
 
 	if (has_8259 && gsi < 16)
 		*irq = isa_irq_to_vector(gsi);
 	else {
-		vector = gsi_to_vector(gsi);
-		if (vector == -1)
+		tmp = gsi_to_irq(gsi);
+		if (tmp == -1)
 			return -1;
-
-		*irq = vector;
+		*irq = tmp;
 	}
 	return 0;
 }
@@ -985,5 +988,22 @@ int acpi_unregister_ioapic(acpi_handle handle, u32 gsi_base)
 }
 
 EXPORT_SYMBOL(acpi_unregister_ioapic);
+
+/*
+ * acpi_save_state_mem() - save kernel state
+ *
+ * TBD when when IA64 starts to support suspend...
+ */
+int acpi_save_state_mem(void) { return 0; } 
+
+/*
+ * acpi_restore_state()
+ */
+void acpi_restore_state_mem(void) {}
+
+/*
+ * do_suspend_lowlevel()
+ */
+void do_suspend_lowlevel(void) {}
 
 #endif				/* CONFIG_ACPI */

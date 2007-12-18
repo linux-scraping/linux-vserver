@@ -18,18 +18,11 @@
 #include <linux/netfilter/x_tables.h>
 #include <net/netfilter/nf_nat_rule.h>
 
-#define MODULENAME "NETMAP"
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Svenning Soerensen <svenning@post5.tele.dk>");
 MODULE_DESCRIPTION("iptables 1:1 NAT mapping of IP networks target");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
-static int
+static bool
 check(const char *tablename,
       const void *e,
       const struct xt_target *target,
@@ -39,18 +32,18 @@ check(const char *tablename,
 	const struct nf_nat_multi_range_compat *mr = targinfo;
 
 	if (!(mr->range[0].flags & IP_NAT_RANGE_MAP_IPS)) {
-		DEBUGP(MODULENAME":check: bad MAP_IPS.\n");
-		return 0;
+		pr_debug("NETMAP:check: bad MAP_IPS.\n");
+		return false;
 	}
 	if (mr->rangesize != 1) {
-		DEBUGP(MODULENAME":check: bad rangesize %u.\n", mr->rangesize);
-		return 0;
+		pr_debug("NETMAP:check: bad rangesize %u.\n", mr->rangesize);
+		return false;
 	}
-	return 1;
+	return true;
 }
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
@@ -66,14 +59,14 @@ target(struct sk_buff **pskb,
 	NF_CT_ASSERT(hooknum == NF_IP_PRE_ROUTING
 		     || hooknum == NF_IP_POST_ROUTING
 		     || hooknum == NF_IP_LOCAL_OUT);
-	ct = nf_ct_get(*pskb, &ctinfo);
+	ct = nf_ct_get(skb, &ctinfo);
 
 	netmask = ~(mr->range[0].min_ip ^ mr->range[0].max_ip);
 
 	if (hooknum == NF_IP_PRE_ROUTING || hooknum == NF_IP_LOCAL_OUT)
-		new_ip = ip_hdr(*pskb)->daddr & ~netmask;
+		new_ip = ip_hdr(skb)->daddr & ~netmask;
 	else
-		new_ip = ip_hdr(*pskb)->saddr & ~netmask;
+		new_ip = ip_hdr(skb)->saddr & ~netmask;
 	new_ip |= mr->range[0].min_ip & netmask;
 
 	newrange = ((struct nf_nat_range)
@@ -85,8 +78,8 @@ target(struct sk_buff **pskb,
 	return nf_nat_setup_info(ct, &newrange, hooknum);
 }
 
-static struct xt_target target_module = {
-	.name 		= MODULENAME,
+static struct xt_target target_module __read_mostly = {
+	.name 		= "NETMAP",
 	.family		= AF_INET,
 	.target 	= target,
 	.targetsize	= sizeof(struct nf_nat_multi_range_compat),

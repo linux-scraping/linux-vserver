@@ -159,6 +159,13 @@ struct ap_device_id {
 
 #define AP_DEVICE_ID_MATCH_DEVICE_TYPE		0x01
 
+#define ACPI_ID_LEN	16 /* only 9 bytes needed here, 16 bytes are used */
+			   /* to workaround crosscompile issues */
+
+struct acpi_device_id {
+	__u8 id[ACPI_ID_LEN];
+	kernel_ulong_t driver_data;
+};
 
 #define PNP_ID_LEN	8
 #define PNP_MAX_DEVICES	8
@@ -255,11 +262,6 @@ struct pcmcia_device_id {
 #define PCMCIA_DEV_ID_MATCH_FAKE_CIS	0x0200
 #define PCMCIA_DEV_ID_MATCH_ANONYMOUS	0x0400
 
-/* I2C */
-struct i2c_device_id {
-	__u16 id;
-};
-
 /* Input */
 #define INPUT_DEVICE_ID_EV_MAX		0x1f
 #define INPUT_DEVICE_ID_KEY_MIN_INTERESTING	0x71
@@ -332,5 +334,37 @@ struct parisc_device_id {
 #define PA_HVERSION_REV_ANY_ID	0xff
 #define PA_HVERSION_ANY_ID	0xffff
 #define PA_SVERSION_ANY_ID	0xffffffff
+
+/* SDIO */
+
+#define SDIO_ANY_ID (~0)
+
+struct sdio_device_id {
+	__u8	class;			/* Standard interface or SDIO_ANY_ID */
+	__u16	vendor;			/* Vendor or SDIO_ANY_ID */
+	__u16	device;			/* Device ID or SDIO_ANY_ID */
+	kernel_ulong_t driver_data;	/* Data private to the driver */
+};
+
+/* SSB core, see drivers/ssb/ */
+struct ssb_device_id {
+	__u16	vendor;
+	__u16	coreid;
+	__u8	revision;
+};
+#define SSB_DEVICE(_vendor, _coreid, _revision)  \
+	{ .vendor = _vendor, .coreid = _coreid, .revision = _revision, }
+#define SSB_DEVTABLE_END  \
+	{ 0, },
+
+#define SSB_ANY_VENDOR		0xFFFF
+#define SSB_ANY_ID		0xFFFF
+#define SSB_ANY_REV		0xFF
+
+struct virtio_device_id {
+	__u32 device;
+	__u32 vendor;
+};
+#define VIRTIO_DEV_ANY_ID	0xffffffff
 
 #endif /* LINUX_MOD_DEVICETABLE_H */

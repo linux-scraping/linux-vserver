@@ -31,12 +31,6 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("iptables REJECT target module");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
 /* Send RST reply */
 static void send_reset(struct sk_buff *oldskb, int hook)
 {
@@ -122,7 +116,7 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	tcph->check = 0;
 	tcph->check = tcp_v4_check(sizeof(struct tcphdr),
 				   niph->saddr, niph->daddr,
-				   csum_partial((char *)tcph,
+				   csum_partial(tcph,
 						sizeof(struct tcphdr), 0));
 
 	/* Set DF, id = 0 */
@@ -137,7 +131,7 @@ static void send_reset(struct sk_buff *oldskb, int hook)
 	   )
 		addr_type = RTN_LOCAL;
 
-	if (ip_route_me_harder(&nskb, addr_type))
+	if (ip_route_me_harder(nskb, addr_type))
 		goto free_nskb;
 
 	nskb->ip_summed = CHECKSUM_NONE;
@@ -168,7 +162,7 @@ static inline void send_unreach(struct sk_buff *skb_in, int code)
 	icmp_send(skb_in, ICMP_DEST_UNREACH, code, 0);
 }
 
-static unsigned int reject(struct sk_buff **pskb,
+static unsigned int reject(struct sk_buff *skb,
 			   const struct net_device *in,
 			   const struct net_device *out,
 			   unsigned int hooknum,
@@ -179,7 +173,7 @@ static unsigned int reject(struct sk_buff **pskb,
 
 	/* Our naive response construction doesn't deal with IP
 	   options, and probably shouldn't try. */
-	if (ip_hdrlen(*pskb) != sizeof(struct iphdr))
+	if (ip_hdrlen(skb) != sizeof(struct iphdr))
 		return NF_DROP;
 
 	/* WARNING: This code causes reentry within iptables.
@@ -187,28 +181,28 @@ static unsigned int reject(struct sk_buff **pskb,
 	   must return an absolute verdict. --RR */
 	switch (reject->with) {
 	case IPT_ICMP_NET_UNREACHABLE:
-		send_unreach(*pskb, ICMP_NET_UNREACH);
+		send_unreach(skb, ICMP_NET_UNREACH);
 		break;
 	case IPT_ICMP_HOST_UNREACHABLE:
-		send_unreach(*pskb, ICMP_HOST_UNREACH);
+		send_unreach(skb, ICMP_HOST_UNREACH);
 		break;
 	case IPT_ICMP_PROT_UNREACHABLE:
-		send_unreach(*pskb, ICMP_PROT_UNREACH);
+		send_unreach(skb, ICMP_PROT_UNREACH);
 		break;
 	case IPT_ICMP_PORT_UNREACHABLE:
-		send_unreach(*pskb, ICMP_PORT_UNREACH);
+		send_unreach(skb, ICMP_PORT_UNREACH);
 		break;
 	case IPT_ICMP_NET_PROHIBITED:
-		send_unreach(*pskb, ICMP_NET_ANO);
+		send_unreach(skb, ICMP_NET_ANO);
 		break;
 	case IPT_ICMP_HOST_PROHIBITED:
-		send_unreach(*pskb, ICMP_HOST_ANO);
+		send_unreach(skb, ICMP_HOST_ANO);
 		break;
 	case IPT_ICMP_ADMIN_PROHIBITED:
-		send_unreach(*pskb, ICMP_PKT_FILTERED);
+		send_unreach(skb, ICMP_PKT_FILTERED);
 		break;
 	case IPT_TCP_RESET:
-		send_reset(*pskb, hooknum);
+		send_reset(skb, hooknum);
 	case IPT_ICMP_ECHOREPLY:
 		/* Doesn't happen. */
 		break;
@@ -217,30 +211,30 @@ static unsigned int reject(struct sk_buff **pskb,
 	return NF_DROP;
 }
 
-static int check(const char *tablename,
-		 const void *e_void,
-		 const struct xt_target *target,
-		 void *targinfo,
-		 unsigned int hook_mask)
+static bool check(const char *tablename,
+		  const void *e_void,
+		  const struct xt_target *target,
+		  void *targinfo,
+		  unsigned int hook_mask)
 {
 	const struct ipt_reject_info *rejinfo = targinfo;
 	const struct ipt_entry *e = e_void;
 
 	if (rejinfo->with == IPT_ICMP_ECHOREPLY) {
-		printk("REJECT: ECHOREPLY no longer supported.\n");
-		return 0;
+		printk("ipt_REJECT: ECHOREPLY no longer supported.\n");
+		return false;
 	} else if (rejinfo->with == IPT_TCP_RESET) {
 		/* Must specify that it's a TCP packet */
 		if (e->ip.proto != IPPROTO_TCP
 		    || (e->ip.invflags & XT_INV_PROTO)) {
-			DEBUGP("REJECT: TCP_RESET invalid for non-tcp\n");
-			return 0;
+			printk("ipt_REJECT: TCP_RESET invalid for non-tcp\n");
+			return false;
 		}
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target ipt_reject_reg = {
+static struct xt_target ipt_reject_reg __read_mostly = {
 	.name		= "REJECT",
 	.family		= AF_INET,
 	.target		= reject,

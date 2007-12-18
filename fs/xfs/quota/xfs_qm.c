@@ -62,10 +62,8 @@ uint		ndquot;
 
 kmem_zone_t	*qm_dqzone;
 kmem_zone_t	*qm_dqtrxzone;
-static kmem_shaker_t	xfs_qm_shaker;
 
 static cred_t	xfs_zerocr;
-static xfs_inode_t	xfs_zeroino;
 
 STATIC void	xfs_qm_list_init(xfs_dqlist_t *, char *, int);
 STATIC void	xfs_qm_list_destroy(xfs_dqlist_t *);
@@ -78,6 +76,11 @@ STATIC int	xfs_qm_dqhashlock_nowait(xfs_dquot_t *);
 STATIC int	xfs_qm_init_quotainos(xfs_mount_t *);
 STATIC int	xfs_qm_init_quotainfo(xfs_mount_t *);
 STATIC int	xfs_qm_shake(int, gfp_t);
+
+static struct shrinker xfs_qm_shaker = {
+	.shrink = xfs_qm_shake,
+	.seeks = DEFAULT_SEEKS,
+};
 
 #ifdef DEBUG
 extern mutex_t	qcheck_lock;
@@ -117,7 +120,8 @@ xfs_Gqm_init(void)
 	 * Initialize the dquot hash tables.
 	 */
 	udqhash = kmem_zalloc_greedy(&hsize,
-				     XFS_QM_HASHSIZE_LOW, XFS_QM_HASHSIZE_HIGH,
+				     XFS_QM_HASHSIZE_LOW * sizeof(xfs_dqhash_t),
+				     XFS_QM_HASHSIZE_HIGH * sizeof(xfs_dqhash_t),
 				     KM_SLEEP | KM_MAYFAIL | KM_LARGE);
 	gdqhash = kmem_zalloc(hsize, KM_SLEEP | KM_LARGE);
 	hsize /= sizeof(xfs_dqhash_t);
@@ -150,7 +154,7 @@ xfs_Gqm_init(void)
 	} else
 		xqm->qm_dqzone = qm_dqzone;
 
-	xfs_qm_shaker = kmem_shake_register(xfs_qm_shake);
+	register_shrinker(&xfs_qm_shaker);
 
 	/*
 	 * The t_dqinfo portion of transactions.
@@ -182,7 +186,7 @@ xfs_qm_destroy(
 
 	ASSERT(xqm != NULL);
 	ASSERT(xqm->qm_nrefs == 0);
-	kmem_shake_deregister(xfs_qm_shaker);
+	unregister_shrinker(&xfs_qm_shaker);
 	hsize = xqm->qm_dqhashmask + 1;
 	for (i = 0; i < hsize; i++) {
 		xfs_qm_list_destroy(&(xqm->qm_usr_dqhtable[i]));
@@ -281,45 +285,6 @@ xfs_qm_rele_quotafs_ref(
 		xfs_Gqm = NULL;
 	}
 	XFS_QM_UNLOCK(xfs_Gqm);
-}
-
-/*
- * This is called at mount time from xfs_mountfs to initialize the quotainfo
- * structure and start the global quota manager (xfs_Gqm) if it hasn't done
- * so already.	Note that the superblock has not been read in yet.
- */
-void
-xfs_qm_mount_quotainit(
-	xfs_mount_t	*mp,
-	uint		flags)
-{
-	/*
-	 * User, projects or group quotas has to be on.
-	 */
-	ASSERT(flags & (XFSMNT_UQUOTA | XFSMNT_PQUOTA | XFSMNT_GQUOTA));
-
-	/*
-	 * Initialize the flags in the mount structure. From this point
-	 * onwards we look at m_qflags to figure out if quotas's ON/OFF, etc.
-	 * Note that we enforce nothing if accounting is off.
-	 * ie.	XFSMNT_*QUOTA must be ON for XFSMNT_*QUOTAENF.
-	 * It isn't necessary to take the quotaoff lock to do this; this is
-	 * called from mount.
-	 */
-	if (flags & XFSMNT_UQUOTA) {
-		mp->m_qflags |= (XFS_UQUOTA_ACCT | XFS_UQUOTA_ACTIVE);
-		if (flags & XFSMNT_UQUOTAENF)
-			mp->m_qflags |= XFS_UQUOTA_ENFD;
-	}
-	if (flags & XFSMNT_GQUOTA) {
-		mp->m_qflags |= (XFS_GQUOTA_ACCT | XFS_GQUOTA_ACTIVE);
-		if (flags & XFSMNT_GQUOTAENF)
-			mp->m_qflags |= XFS_OQUOTA_ENFD;
-	} else if (flags & XFSMNT_PQUOTA) {
-		mp->m_qflags |= (XFS_PQUOTA_ACCT | XFS_PQUOTA_ACTIVE);
-		if (flags & XFSMNT_PQUOTAENF)
-			mp->m_qflags |= XFS_OQUOTA_ENFD;
-	}
 }
 
 /*
@@ -1035,7 +1000,7 @@ xfs_qm_dqdetach(
 int
 xfs_qm_sync(
 	xfs_mount_t	*mp,
-	short		flags)
+	int		flags)
 {
 	int		recl, restarts;
 	xfs_dquot_t	*dqp;
@@ -1415,7 +1380,7 @@ xfs_qm_qino_alloc(
 		return error;
 	}
 
-	if ((error = xfs_dir_ialloc(&tp, &xfs_zeroino, S_IFREG, 1, 0,
+	if ((error = xfs_dir_ialloc(&tp, NULL, S_IFREG, 1, 0,
 				   &xfs_zerocr, 0, 1, ip, &committed))) {
 		xfs_trans_cancel(tp, XFS_TRANS_RELEASE_LOG_RES |
 				 XFS_TRANS_ABORT);
@@ -1713,7 +1678,6 @@ xfs_qm_get_rtblks(
 	xfs_extnum_t	idx;			/* extent record index */
 	xfs_ifork_t	*ifp;			/* inode fork pointer */
 	xfs_extnum_t	nextents;		/* number of extent entries */
-	xfs_bmbt_rec_t	*ep;			/* pointer to an extent entry */
 	int		error;
 
 	ASSERT(XFS_IS_REALTIME_INODE(ip));
@@ -1724,10 +1688,8 @@ xfs_qm_get_rtblks(
 	}
 	rtblks = 0;
 	nextents = ifp->if_bytes / (uint)sizeof(xfs_bmbt_rec_t);
-	for (idx = 0; idx < nextents; idx++) {
-		ep = xfs_iext_get_ext(ifp, idx);
-		rtblks += xfs_bmbt_get_blockcount(ep);
-	}
+	for (idx = 0; idx < nextents; idx++)
+		rtblks += xfs_bmbt_get_blockcount(xfs_iext_get_ext(ifp, idx));
 	*O_rtblks = (xfs_qcnt_t)rtblks;
 	return 0;
 }
@@ -2455,8 +2417,7 @@ xfs_qm_vop_dqalloc(
 	lockflags = XFS_ILOCK_EXCL;
 	xfs_ilock(ip, lockflags);
 
-	if ((flags & XFS_QMOPT_INHERIT) &&
-	    XFS_INHERIT_GID(ip, XFS_MTOVFS(mp)))
+	if ((flags & XFS_QMOPT_INHERIT) && XFS_INHERIT_GID(ip))
 		gid = ip->i_d.di_gid;
 
 	/*

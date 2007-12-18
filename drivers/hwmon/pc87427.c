@@ -42,7 +42,7 @@ static struct platform_device *pdev;
    device is using banked registers) and the register cache (needed to keep
    the data in the registers and the cache in sync at any time). */
 struct pc87427_data {
-	struct class_device *class_dev;
+	struct device *hwmon_dev;
 	struct mutex lock;
 	int address[2];
 	const char *name;
@@ -454,9 +454,9 @@ static int __devinit pc87427_probe(struct platform_device *pdev)
 			goto exit_remove_files;
 	}
 
-	data->class_dev = hwmon_device_register(&pdev->dev);
-	if (IS_ERR(data->class_dev)) {
-		err = PTR_ERR(data->class_dev);
+	data->hwmon_dev = hwmon_device_register(&pdev->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
 		dev_err(&pdev->dev, "Class registration failed (%d)\n", err);
 		goto exit_remove_files;
 	}
@@ -484,14 +484,14 @@ static int __devexit pc87427_remove(struct platform_device *pdev)
 	struct resource *res;
 	int i;
 
-	platform_set_drvdata(pdev, NULL);
-	hwmon_device_unregister(data->class_dev);
+	hwmon_device_unregister(data->hwmon_dev);
 	device_remove_file(&pdev->dev, &dev_attr_name);
 	for (i = 0; i < 8; i++) {
 		if (!(data->fan_enabled & (1 << i)))
 			continue;
 		sysfs_remove_group(&pdev->dev.kobj, &pc87427_group_fan[i]);
 	}
+	platform_set_drvdata(pdev, NULL);
 	kfree(data);
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);

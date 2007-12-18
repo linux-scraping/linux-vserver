@@ -173,6 +173,12 @@ struct jffs2_full_dnode *jffs2_write_dnode(struct jffs2_sb_info *c, struct jffs2
 		flash_ofs |= REF_NORMAL;
 	}
 	fn->raw = jffs2_add_physical_node_ref(c, flash_ofs, PAD(sizeof(*ri)+datalen), f->inocache);
+	if (IS_ERR(fn->raw)) {
+		void *hold_err = fn->raw;
+		/* Release the full_dnode which is now useless, and return */
+		jffs2_free_full_dnode(fn);
+		return ERR_PTR(PTR_ERR(hold_err));
+	}
 	fn->ofs = je32_to_cpu(ri->offset);
 	fn->size = je32_to_cpu(ri->dsize);
 	fn->frags = 0;
@@ -209,6 +215,17 @@ struct jffs2_full_dirent *jffs2_write_dirent(struct jffs2_sb_info *c, struct jff
 		BUG();
 	   });
 
+	if (strnlen(name, namelen) != namelen) {
+		/* This should never happen, but seems to have done on at least one
+		   occasion: https://dev.laptop.org/ticket/4184 */
+		printk(KERN_CRIT "Error in jffs2_write_dirent() -- name contains zero bytes!\n");
+		printk(KERN_CRIT "Directory inode #%u, name at *0x%p \"%s\"->ino #%u, name_crc 0x%08x\n",
+		       je32_to_cpu(rd->pino), name, name, je32_to_cpu(rd->ino),
+		       je32_to_cpu(rd->name_crc));
+		WARN_ON(1);
+		return ERR_PTR(-EIO);
+	}
+
 	vecs[0].iov_base = rd;
 	vecs[0].iov_len = sizeof(*rd);
 	vecs[1].iov_base = (unsigned char *)name;
@@ -220,7 +237,7 @@ struct jffs2_full_dirent *jffs2_write_dirent(struct jffs2_sb_info *c, struct jff
 
 	fd->version = je32_to_cpu(rd->version);
 	fd->ino = je32_to_cpu(rd->ino);
-	fd->nhash = full_name_hash(name, strlen(name));
+	fd->nhash = full_name_hash(name, namelen);
 	fd->type = rd->type;
 	memcpy(fd->name, name, namelen);
 	fd->name[namelen]=0;
@@ -290,7 +307,14 @@ struct jffs2_full_dirent *jffs2_write_dirent(struct jffs2_sb_info *c, struct jff
 		return ERR_PTR(ret?ret:-EIO);
 	}
 	/* Mark the space used */
-	fd->raw = jffs2_add_physical_node_ref(c, flash_ofs | REF_PRISTINE, PAD(sizeof(*rd)+namelen), f->inocache);
+	fd->raw = jffs2_add_physical_node_ref(c, flash_ofs | dirent_node_state(rd),
+					      PAD(sizeof(*rd)+namelen), f->inocache);
+	if (IS_ERR(fd->raw)) {
+		void *hold_err = fd->raw;
+		/* Release the full_dirent which is now useless, and return */
+		jffs2_free_full_dirent(fd);
+		return ERR_PTR(PTR_ERR(hold_err));
+	}
 
 	if (retried) {
 		jffs2_dbg_acct_sanity_check(c,NULL);
@@ -441,6 +465,14 @@ int jffs2_do_create(struct jffs2_sb_info *c, struct jffs2_inode_info *dir_f, str
 
 	up(&f->sem);
 	jffs2_complete_reservation(c);
+
+	ret = jffs2_init_security(&f->vfs_inode, &dir_f->vfs_inode);
+	if (ret)
+		return ret;
+	ret = jffs2_init_acl_post(&f->vfs_inode);
+	if (ret)
+		return ret;
+
 	ret = jffs2_reserve_space(c, sizeof(*rd)+namelen, &alloclen,
 				ALLOC_NORMAL, JFFS2_SUMMARY_DIRENT_SIZE(namelen));
 

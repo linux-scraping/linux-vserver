@@ -24,9 +24,10 @@ MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("iptables qdisc classification target module");
 MODULE_ALIAS("ipt_CLASSIFY");
+MODULE_ALIAS("ip6t_CLASSIFY");
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
@@ -35,11 +36,11 @@ target(struct sk_buff **pskb,
 {
 	const struct xt_classify_target_info *clinfo = targinfo;
 
-	(*pskb)->priority = clinfo->priority;
+	skb->priority = clinfo->priority;
 	return XT_CONTINUE;
 }
 
-static struct xt_target xt_classify_target[] = {
+static struct xt_target xt_classify_target[] __read_mostly = {
 	{
 		.family		= AF_INET,
 		.name 		= "CLASSIFY",

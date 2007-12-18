@@ -167,11 +167,13 @@ static void ipw_read_bulk_callback(struct urb *urb)
 	unsigned char *data = urb->transfer_buffer;
 	struct tty_struct *tty;
 	int result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -225,7 +227,7 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 				 0,
 				 100000);
 	if (result < 0)
-		dev_err(&port->dev, "Init of modem failed (error = %d)", result);
+		dev_err(&port->dev, "Init of modem failed (error = %d)\n", result);
 
 	/* reset the bulk pipes */
 	usb_clear_halt(dev, usb_rcvbulkpipe(dev, port->bulk_in_endpointAddress));
@@ -253,7 +255,7 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 				 0,
 				 100000);
 	if (result < 0) 
-		dev_err(&port->dev, "Enabling bulk RxRead failed (error = %d)", result);
+		dev_err(&port->dev, "Enabling bulk RxRead failed (error = %d)\n", result);
 
 	/*--4: setup the initial flowcontrol */
 	dbg("%s:setting init flowcontrol (%s)",__FUNCTION__,buf_flow_init);
@@ -266,7 +268,7 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 				 0x10,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "initial flowcontrol failed (error = %d)", result);
+		dev_err(&port->dev, "initial flowcontrol failed (error = %d)\n", result);
 
 
 	/*--5: raise the dtr */
@@ -280,7 +282,7 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 				 0,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "setting dtr failed (error = %d)", result);
+		dev_err(&port->dev, "setting dtr failed (error = %d)\n", result);
 
 	/*--6: raise the rts */
 	dbg("%s:raising rts",__FUNCTION__);
@@ -293,7 +295,7 @@ static int ipw_open(struct usb_serial_port *port, struct file *filp)
 				 0,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "setting dtr failed (error = %d)", result);
+		dev_err(&port->dev, "setting dtr failed (error = %d)\n", result);
 	
 	kfree(buf_flow_init);
 	return 0;
@@ -320,7 +322,7 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 				 0,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "dropping dtr failed (error = %d)", result);
+		dev_err(&port->dev, "dropping dtr failed (error = %d)\n", result);
 
 	/*--2: drop the rts */
 	dbg("%s:dropping rts",__FUNCTION__);
@@ -332,7 +334,7 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 				 0,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "dropping rts failed (error = %d)", result);
+		dev_err(&port->dev, "dropping rts failed (error = %d)\n", result);
 
 
 	/*--3: purge */
@@ -345,7 +347,7 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 				 0,
 				 200000);
 	if (result < 0)
-		dev_err(&port->dev, "purge failed (error = %d)", result);
+		dev_err(&port->dev, "purge failed (error = %d)\n", result);
 
 
 	/* send RXBULK_off (tell modem to stop transmitting bulk data on rx chan) */
@@ -359,7 +361,7 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 				 100000);
 
 	if (result < 0)
-		dev_err(&port->dev, "Disabling bulk RxRead failed (error = %d)", result);
+		dev_err(&port->dev, "Disabling bulk RxRead failed (error = %d)\n", result);
 
 	/* shutdown any in-flight urbs that we know about */
 	usb_kill_urb(port->read_urb);
@@ -369,13 +371,15 @@ static void ipw_close(struct usb_serial_port *port, struct file * filp)
 static void ipw_write_bulk_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
+	int status = urb->status;
 
 	dbg("%s", __FUNCTION__);
 
 	port->write_urb_busy = 0;
 
-	if (urb->status)
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+	if (status)
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 
 	usb_serial_port_softint(port);
 }

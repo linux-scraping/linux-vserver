@@ -40,7 +40,7 @@
 
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
-#define __init		__attribute__ ((__section__ (".init.text")))
+#define __init		__attribute__ ((__section__ (".init.text"))) __cold
 #define __initdata	__attribute__ ((__section__ (".init.data")))
 #define __exitdata	__attribute__ ((__section__(".exit.data")))
 #define __exit_call	__attribute_used__ __attribute__ ((__section__ (".exitcall.exit")))
@@ -57,17 +57,20 @@
  * The markers follow same syntax rules as __init / __initdata. */
 #define __init_refok     noinline __attribute__ ((__section__ (".text.init.refok")))
 #define __initdata_refok          __attribute__ ((__section__ (".data.init.refok")))
+#define __exit_refok     noinline __attribute__ ((__section__ (".exit.text.refok")))
 
 #ifdef MODULE
-#define __exit		__attribute__ ((__section__(".exit.text")))
+#define __exit		__attribute__ ((__section__(".exit.text"))) __cold
 #else
-#define __exit		__attribute_used__ __attribute__ ((__section__(".exit.text")))
+#define __exit		__attribute_used__ __attribute__ ((__section__(".exit.text"))) __cold
 #endif
 
 /* For assembly routines */
 #define __INIT		.section	".init.text","ax"
+#define __INIT_REFOK	.section	".text.init.refok","ax"
 #define __FINIT		.previous
 #define __INITDATA	.section	".init.data","aw"
+#define __INITDATA_REFOK .section	".data.init.refok","aw"
 
 #ifndef __ASSEMBLY__
 /*
@@ -114,7 +117,7 @@ void prepare_namespace(void);
  *
  * This only exists for built-in code, not for modules.
  */
-#define pure_initcall(fn)		__define_initcall("0",fn,1)
+#define pure_initcall(fn)		__define_initcall("0",fn,0)
 
 #define core_initcall(fn)		__define_initcall("1",fn,1)
 #define core_initcall_sync(fn)		__define_initcall("1s",fn,1s)
@@ -158,7 +161,7 @@ struct obs_kernel_param {
  * obs_kernel_param "array" too far apart in .init.setup.
  */
 #define __setup_param(str, unique_id, fn, early)			\
-	static char __setup_str_##unique_id[] __initdata = str;	\
+	static char __setup_str_##unique_id[] __initdata __aligned(1) = str; \
 	static struct obs_kernel_param __setup_##unique_id	\
 		__attribute_used__				\
 		__attribute__((__section__(".init.setup")))	\
@@ -170,9 +173,6 @@ struct obs_kernel_param {
 
 #define __setup(str, fn)					\
 	__setup_param(str, fn, fn, 0)
-
-#define __obsolete_setup(str)					\
-	__setup_null_param(str, __LINE__)
 
 /* NOTE: fn is as per module_param, not __setup!  Emits warning if fn
  * returns non-zero. */
@@ -239,7 +239,6 @@ void __init parse_early_param(void);
 #define __setup_param(str, unique_id, fn)	/* nothing */
 #define __setup_null_param(str, unique_id) 	/* nothing */
 #define __setup(str, func) 			/* nothing */
-#define __obsolete_setup(str) 			/* nothing */
 #endif
 
 /* Data marked not to be saved by software suspend */

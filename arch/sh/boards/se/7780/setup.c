@@ -14,14 +14,17 @@
 #include <asm/machvec.h>
 #include <asm/se7780.h>
 #include <asm/io.h>
+#include <asm/heartbeat.h>
 
 /* Heartbeat */
-static unsigned char heartbeat_bit_pos[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+static struct heartbeat_data heartbeat_data = {
+	.regsize = 16,
+};
 
 static struct resource heartbeat_resources[] = {
 	[0] = {
 		.start  = PA_LED,
-		.end    = PA_LED + ARRAY_SIZE(heartbeat_bit_pos) - 1,
+		.end    = PA_LED,
 		.flags  = IORESOURCE_MEM,
 	},
 };
@@ -29,8 +32,8 @@ static struct resource heartbeat_resources[] = {
 static struct platform_device heartbeat_device = {
 	.name           = "heartbeat",
 	.id             = -1,
-	.dev    = {
-		.platform_data  = heartbeat_bit_pos,
+	.dev = {
+		.platform_data = &heartbeat_data,
 	},
 	.num_resources  = ARRAY_SIZE(heartbeat_resources),
 	.resource       = heartbeat_resources,
@@ -113,10 +116,9 @@ static void __init se7780_setup(char **cmdline_p)
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_se7780 __initmv = {
+static struct sh_machine_vector mv_se7780 __initmv = {
 	.mv_name                = "Solution Engine 7780" ,
 	.mv_setup               = se7780_setup ,
 	.mv_nr_irqs		= 111 ,
 	.mv_init_irq		= init_se7780_IRQ,
 };
-ALIAS_MV(se7780)

@@ -49,9 +49,38 @@ struct ipc_perm
 #define IPC_64  0x0100  /* New version (support 32-bit UIDs, bigger
 			   message sizes, etc. */
 
+/*
+ * These are used to wrap system calls.
+ *
+ * See architecture code for ugly details..
+ */
+struct ipc_kludge {
+	struct msgbuf __user *msgp;
+	long msgtyp;
+};
+
+#define SEMOP		 1
+#define SEMGET		 2
+#define SEMCTL		 3
+#define SEMTIMEDOP	 4
+#define MSGSND		11
+#define MSGRCV		12
+#define MSGGET		13
+#define MSGCTL		14
+#define SHMAT		21
+#define SHMDT		22
+#define SHMGET		23
+#define SHMCTL		24
+
+/* Used by the DIPC package, try and avoid reusing it */
+#define DIPC            25
+
+#define IPCCALL(version,op)	((version)<<16 | (op))
+
 #ifdef __KERNEL__
 
 #include <linux/kref.h>
+#include <linux/spinlock.h>
 
 #define IPCMNI 32768  /* <= MAX_INT limit for ipc arrays (including sysctl changes) */
 
@@ -60,6 +89,7 @@ struct kern_ipc_perm
 {
 	spinlock_t	lock;
 	int		deleted;
+	int		id;
 	key_t		key;
 	uid_t		uid;
 	gid_t		gid;
@@ -82,6 +112,8 @@ struct ipc_namespace {
 	int		msg_ctlmax;
 	int		msg_ctlmnb;
 	int		msg_ctlmni;
+	atomic_t	msg_bytes;
+	atomic_t	msg_hdrs;
 
 	size_t		shm_ctlmax;
 	size_t		shm_ctlall;
@@ -93,6 +125,7 @@ extern struct ipc_namespace init_ipc_ns;
 
 #ifdef CONFIG_SYSVIPC
 #define INIT_IPC_NS(ns)		.ns		= &init_ipc_ns,
+extern void free_ipc_ns(struct kref *kref);
 extern struct ipc_namespace *copy_ipcs(unsigned long flags,
 						struct ipc_namespace *ns);
 #else
@@ -104,13 +137,9 @@ static inline struct ipc_namespace *copy_ipcs(unsigned long flags,
 }
 #endif
 
-#ifdef CONFIG_IPC_NS
-extern void free_ipc_ns(struct kref *kref);
-#endif
-
 static inline struct ipc_namespace *get_ipc_ns(struct ipc_namespace *ns)
 {
-#ifdef CONFIG_IPC_NS
+#ifdef CONFIG_SYSVIPC
 	if (ns)
 		kref_get(&ns->kref);
 #endif
@@ -119,7 +148,7 @@ static inline struct ipc_namespace *get_ipc_ns(struct ipc_namespace *ns)
 
 static inline void put_ipc_ns(struct ipc_namespace *ns)
 {
-#ifdef CONFIG_IPC_NS
+#ifdef CONFIG_SYSVIPC
 	kref_put(&ns->kref, free_ipc_ns);
 #endif
 }
@@ -127,5 +156,3 @@ static inline void put_ipc_ns(struct ipc_namespace *ns)
 #endif /* __KERNEL__ */
 
 #endif /* _LINUX_IPC_H */
-
-

@@ -180,7 +180,7 @@ static inline void remove_metapage(struct page *page, struct metapage *mp)
 
 #endif
 
-static void init_once(void *foo, struct kmem_cache *cachep, unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct metapage *mp = (struct metapage *)foo;
 
@@ -213,7 +213,7 @@ int __init metapage_init(void)
 	 * Allocate the metapage structures
 	 */
 	metapage_cache = kmem_cache_create("jfs_mp", sizeof(struct metapage),
-					   0, 0, init_once, NULL);
+					   0, 0, init_once);
 	if (metapage_cache == NULL)
 		return -ENOMEM;
 
@@ -280,13 +280,9 @@ static void last_read_complete(struct page *page)
 	unlock_page(page);
 }
 
-static int metapage_read_end_io(struct bio *bio, unsigned int bytes_done,
-				int err)
+static void metapage_read_end_io(struct bio *bio, int err)
 {
 	struct page *page = bio->bi_private;
-
-	if (bio->bi_size)
-		return 1;
 
 	if (!test_bit(BIO_UPTODATE, &bio->bi_flags)) {
 		printk(KERN_ERR "metapage_read_end_io: I/O error\n");
@@ -295,8 +291,6 @@ static int metapage_read_end_io(struct bio *bio, unsigned int bytes_done,
 
 	dec_io(page, last_read_complete);
 	bio_put(bio);
-
-	return 0;
 }
 
 static void remove_from_logsync(struct metapage *mp)
@@ -341,15 +335,11 @@ static void last_write_complete(struct page *page)
 	end_page_writeback(page);
 }
 
-static int metapage_write_end_io(struct bio *bio, unsigned int bytes_done,
-				 int err)
+static void metapage_write_end_io(struct bio *bio, int err)
 {
 	struct page *page = bio->bi_private;
 
 	BUG_ON(!PagePrivate(page));
-
-	if (bio->bi_size)
-		return 1;
 
 	if (! test_bit(BIO_UPTODATE, &bio->bi_flags)) {
 		printk(KERN_ERR "metapage_write_end_io: I/O error\n");
@@ -357,7 +347,6 @@ static int metapage_write_end_io(struct bio *bio, unsigned int bytes_done,
 	}
 	dec_io(page, last_write_complete);
 	bio_put(bio);
-	return 0;
 }
 
 static int metapage_writepage(struct page *page, struct writeback_control *wbc)
@@ -472,7 +461,8 @@ add_failed:
 	printk(KERN_ERR "JFS: bio_add_page failed unexpectedly\n");
 	goto skip;
 dump_bio:
-	dump_mem("bio", bio, sizeof(*bio));
+	print_hex_dump(KERN_ERR, "JFS: dump of bio: ", DUMP_PREFIX_ADDRESS, 16,
+		       4, bio, sizeof(*bio), 0);
 skip:
 	bio_put(bio);
 	unlock_page(page);

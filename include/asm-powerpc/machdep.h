@@ -51,22 +51,22 @@ struct machdep_calls {
 #ifdef CONFIG_PPC64
 	void            (*hpte_invalidate)(unsigned long slot,
 					   unsigned long va,
-					   int psize,
+					   int psize, int ssize,
 					   int local);
 	long		(*hpte_updatepp)(unsigned long slot, 
 					 unsigned long newpp, 
 					 unsigned long va,
-					 int pize,
+					 int psize, int ssize,
 					 int local);
 	void            (*hpte_updateboltedpp)(unsigned long newpp, 
 					       unsigned long ea,
-					       int psize);
+					       int psize, int ssize);
 	long		(*hpte_insert)(unsigned long hpte_group,
 				       unsigned long va,
 				       unsigned long prpn,
 				       unsigned long rflags,
 				       unsigned long vflags,
-				       int psize);
+				       int psize, int ssize);
 	long		(*hpte_remove)(unsigned long hpte_group);
 	void		(*flush_hash_range)(unsigned long number, int local);
 
@@ -99,7 +99,7 @@ struct machdep_calls {
 #endif /* CONFIG_PPC64 */
 
 	int		(*probe)(void);
-	void		(*setup_arch)(void);
+	void		(*setup_arch)(void); /* Optional, may be NULL */
 	void		(*init_early)(void);
 	/* Optional, may be NULL. */
 	void		(*show_cpuinfo)(struct seq_file *m);
@@ -218,7 +218,7 @@ struct machdep_calls {
 	int  (*pcibios_enable_device_hook)(struct pci_dev *, int initial);
 
 	/* Called in indirect_* to avoid touching devices */
-	int (*pci_exclude_device)(unsigned char, unsigned char);
+	int (*pci_exclude_device)(struct pci_controller *, unsigned char, unsigned char);
 
 	/* Called at then very end of pcibios_init() */
 	void (*pcibios_after_init)(void);

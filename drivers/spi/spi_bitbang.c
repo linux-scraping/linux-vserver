@@ -187,12 +187,10 @@ int spi_bitbang_setup(struct spi_device *spi)
 
 	bitbang = spi_master_get_devdata(spi->master);
 
-	/* REVISIT: some systems will want to support devices using lsb-first
-	 * bit encodings on the wire.  In pure software that would be trivial,
-	 * just bitbang_txrx_le_cphaX() routines shifting the other way, and
-	 * some hardware controllers also have this support.
+	/* Bitbangers can support SPI_CS_HIGH, SPI_3WIRE, and so on;
+	 * add those to master->flags, and provide the other support.
 	 */
-	if ((spi->mode & SPI_LSB_FIRST) != 0)
+	if ((spi->mode & ~(SPI_CPOL|SPI_CPHA|bitbang->flags)) != 0)
 		return -EINVAL;
 
 	if (!cs) {
@@ -474,7 +472,7 @@ int spi_bitbang_start(struct spi_bitbang *bitbang)
 	/* this task is the only thing to touch the SPI bits */
 	bitbang->busy = 0;
 	bitbang->workqueue = create_singlethread_workqueue(
-			bitbang->master->cdev.dev->bus_id);
+			bitbang->master->dev.parent->bus_id);
 	if (bitbang->workqueue == NULL) {
 		status = -EBUSY;
 		goto err1;

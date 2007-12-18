@@ -23,6 +23,7 @@
 #include <linux/sched.h>
 #include <linux/syscalls.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
 #include <linux/sem.h>
 #include <linux/msg.h>
@@ -37,7 +38,6 @@
 #include <linux/personality.h>
 
 #include <asm/uaccess.h>
-#include <asm/ipc.h>
 #include <asm/semaphore.h>
 #include <asm/syscalls.h>
 #include <asm/time.h>

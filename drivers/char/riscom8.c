@@ -79,7 +79,6 @@
 
 #define RS_EVENT_WRITE_WAKEUP	0
 
-static struct riscom_board * IRQ_to_board[16];
 static struct tty_driver *riscom_driver;
 
 static struct riscom_board rc_board[RC_NBOARD] =  {
@@ -213,14 +212,6 @@ static inline void rc_release_io_range(struct riscom_board * const bp)
 		release_region(RC_TO_ISA(rc_ioport[i]) + bp->base, 1);
 }
 	
-/* Must be called with enabled interrupts */
-static inline void rc_long_delay(unsigned long delay)
-{
-	unsigned long i;
-	
-	for (i = jiffies + delay; time_after(i,jiffies); ) ;
-}
-
 /* Reset and setup CD180 chip */
 static void __init rc_init_CD180(struct riscom_board const * bp)
 {
@@ -231,7 +222,7 @@ static void __init rc_init_CD180(struct riscom_board const * bp)
 	rc_wait_CCR(bp);			   /* Wait for CCR ready        */
 	rc_out(bp, CD180_CCR, CCR_HARDRESET);      /* Reset CD180 chip          */
 	sti();
-	rc_long_delay(HZ/20);                      /* Delay 0.05 sec            */
+	msleep(50);				   /* Delay 0.05 sec            */
 	cli();
 	rc_out(bp, CD180_GIVR, RC_ID);             /* Set ID for this chip      */
 	rc_out(bp, CD180_GICR, 0);                 /* Clear all bits            */
@@ -280,7 +271,7 @@ static int __init rc_probe(struct riscom_board *bp)
 		rc_wait_CCR(bp);
 		rc_out(bp, CD180_CCR, CCR_TXEN);        /* Enable transmitter     */
 		rc_out(bp, CD180_IER, IER_TXRDY);       /* Enable tx empty intr   */
-		rc_long_delay(HZ/20);	       		
+		msleep(50);
 		irqs = probe_irq_off(irqs);
 		val1 = rc_in(bp, RC_BSR);		/* Get Board Status reg   */
 		val2 = rc_in(bp, RC_ACK_TINT);          /* ACK interrupt          */
@@ -545,15 +536,13 @@ static inline void rc_check_modem(struct riscom_board const * bp)
 }
 
 /* The main interrupt processing routine */
-static irqreturn_t rc_interrupt(int irq, void * dev_id)
+static irqreturn_t rc_interrupt(int dummy, void * dev_id)
 {
 	unsigned char status;
 	unsigned char ack;
-	struct riscom_board *bp;
+	struct riscom_board *bp = dev_id;
 	unsigned long loop = 0;
 	int handled = 0;
-
-	bp = IRQ_to_board[irq];
 
 	if (!(bp->flags & RC_BOARD_ACTIVE))
 		return IRQ_NONE;
@@ -611,7 +600,7 @@ static irqreturn_t rc_interrupt(int irq, void * dev_id)
  */
 
 /* Called with disabled interrupts */
-static inline int rc_setup_board(struct riscom_board * bp)
+static int rc_setup_board(struct riscom_board * bp)
 {
 	int error;
 
@@ -619,7 +608,7 @@ static inline int rc_setup_board(struct riscom_board * bp)
 		return 0;
 	
 	error = request_irq(bp->irq, rc_interrupt, IRQF_DISABLED,
-			    "RISCom/8", NULL);
+			    "RISCom/8", bp);
 	if (error) 
 		return error;
 	
@@ -627,14 +616,13 @@ static inline int rc_setup_board(struct riscom_board * bp)
 	bp->DTR = ~0;
 	rc_out(bp, RC_DTR, bp->DTR);	        /* Drop DTR on all ports */
 	
-	IRQ_to_board[bp->irq] = bp;
 	bp->flags |= RC_BOARD_ACTIVE;
 	
 	return 0;
 }
 
 /* Called with disabled interrupts */
-static inline void rc_shutdown_board(struct riscom_board *bp)
+static void rc_shutdown_board(struct riscom_board *bp)
 {
 	if (!(bp->flags & RC_BOARD_ACTIVE))
 		return;
@@ -642,7 +630,6 @@ static inline void rc_shutdown_board(struct riscom_board *bp)
 	bp->flags &= ~RC_BOARD_ACTIVE;
 	
 	free_irq(bp->irq, NULL);
-	IRQ_to_board[bp->irq] = NULL;
 	
 	bp->DTR = ~0;
 	rc_out(bp, RC_DTR, bp->DTR);	       /* Drop DTR on all ports */
@@ -1602,7 +1589,6 @@ static inline int rc_init_drivers(void)
 	if (!riscom_driver)	
 		return -ENOMEM;
 	
-	memset(IRQ_to_board, 0, sizeof(IRQ_to_board));
 	riscom_driver->owner = THIS_MODULE;
 	riscom_driver->name = "ttyL";
 	riscom_driver->major = RISCOM8_NORMAL_MAJOR;

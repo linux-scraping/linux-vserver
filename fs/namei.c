@@ -30,7 +30,6 @@
 #include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fcntl.h>
-#include <linux/namei.h>
 #include <linux/proc_fs.h>
 #include <linux/vserver/inode.h>
 #include <linux/vs_base.h>
@@ -112,6 +111,8 @@
  * implemented.  Let's see if raised priority of ->s_vfs_rename_mutex gives
  * any extra contention...
  */
+
+static int fastcall link_path_walk(const char *name, struct nameidata *nd);
 
 /* In order to reduce some races, while at the same time doing additional
  * checking and hopefully speeding things up, we copy filenames to the
@@ -255,10 +256,14 @@ static inline int dx_permission(struct inode *inode, int mask, struct nameidata 
 
 int permission(struct inode *inode, int mask, struct nameidata *nd)
 {
-	umode_t mode = inode->i_mode;
 	int retval, submask;
+	struct vfsmount *mnt = NULL;
+
+	if (nd)
+		mnt = nd->mnt;
 
 	if (mask & MAY_WRITE) {
+		umode_t mode = inode->i_mode;
 
 		/*
 		 * Nobody gets write access to a read-only fs.
@@ -274,24 +279,36 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 			return -EACCES;
 	}
 
-
-	/*
-	 * MAY_EXEC on regular files requires special handling: We override
-	 * filesystem execute permissions if the mode bits aren't set or
-	 * the fs is mounted with the "noexec" flag.
-	 */
-	if ((mask & MAY_EXEC) && S_ISREG(mode) && (!(mode & S_IXUGO) ||
-			(nd && nd->mnt && (nd->mnt->mnt_flags & MNT_NOEXEC))))
-		return -EACCES;
+	if ((mask & MAY_EXEC) && S_ISREG(inode->i_mode)) {
+		/*
+		 * MAY_EXEC on regular files is denied if the fs is mounted
+		 * with the "noexec" flag.
+		 */
+		if (mnt && (mnt->mnt_flags & MNT_NOEXEC))
+			return -EACCES;
+	}
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
 	submask = mask & ~MAY_APPEND;
 	if ((retval = dx_permission(inode, mask, nd)))
 		return retval;
-	if (inode->i_op && inode->i_op->permission)
+	if (inode->i_op && inode->i_op->permission) {
 		retval = inode->i_op->permission(inode, submask, nd);
-	else
+		if (!retval) {
+			/*
+			 * Exec permission on a regular file is denied if none
+			 * of the execute bits are set.
+			 *
+			 * This check should be done by the ->permission()
+			 * method.
+			 */
+			if ((mask & MAY_EXEC) && S_ISREG(inode->i_mode) &&
+			    !(inode->i_mode & S_IXUGO))
+				return -EACCES;
+		}
+	} else {
 		retval = generic_permission(inode, submask, NULL);
+	}
 	if (retval)
 		return retval;
 
@@ -1049,7 +1066,7 @@ return_err:
  * Retry the whole path once, forcing real lookup requests
  * instead of relying on the dcache.
  */
-int fastcall link_path_walk(const char *name, struct nameidata *nd)
+static int fastcall link_path_walk(const char *name, struct nameidata *nd)
 {
 	struct nameidata save = *nd;
 	int result;
@@ -1073,7 +1090,7 @@ int fastcall link_path_walk(const char *name, struct nameidata *nd)
 	return result;
 }
 
-int fastcall path_walk(const char * name, struct nameidata *nd)
+static int fastcall path_walk(const char * name, struct nameidata *nd)
 {
 	current->total_link_count = 0;
 	return link_path_walk(name, nd);
@@ -1208,7 +1225,7 @@ static int fastcall do_path_lookup(int dfd, const char *name,
 out:
 	if (unlikely(!retval && !audit_dummy_context() && nd->dentry &&
 				nd->dentry->d_inode))
-		audit_inode(name, nd->dentry->d_inode);
+		audit_inode(name, nd->dentry);
 out_fail:
 	return retval;
 
@@ -1221,6 +1238,37 @@ int fastcall path_lookup(const char *name, unsigned int flags,
 			struct nameidata *nd)
 {
 	return do_path_lookup(AT_FDCWD, name, flags, nd);
+}
+
+/**
+ * vfs_path_lookup - lookup a file path relative to a dentry-vfsmount pair
+ * @dentry:  pointer to dentry of the base directory
+ * @mnt: pointer to vfs mount of the base directory
+ * @name: pointer to file name
+ * @flags: lookup flags
+ * @nd: pointer to nameidata
+ */
+int vfs_path_lookup(struct dentry *dentry, struct vfsmount *mnt,
+		    const char *name, unsigned int flags,
+		    struct nameidata *nd)
+{
+	int retval;
+
+	/* same as do_path_lookup */
+	nd->last_type = LAST_ROOT;
+	nd->flags = flags;
+	nd->depth = 0;
+
+	nd->mnt = mntget(mnt);
+	nd->dentry = dget(dentry);
+
+	retval = path_walk(name, nd);
+	if (unlikely(!retval && !audit_dummy_context() && nd->dentry &&
+				nd->dentry->d_inode))
+		audit_inode(name, nd->dentry);
+
+	return retval;
+
 }
 
 static int __path_lookup_intent_open(int dfd, const char *name,
@@ -1291,7 +1339,8 @@ int __user_path_lookup_open(const char __user *name, unsigned int lookup_flags,
 	return err;
 }
 
-static inline struct dentry *__lookup_hash_kern(struct qstr *name, struct dentry *base, struct nameidata *nd)
+static struct dentry *__lookup_hash(struct qstr *name,
+		struct dentry *base, struct nameidata *nd)
 {
 	struct dentry *dentry;
 	struct inode *inode;
@@ -1331,31 +1380,18 @@ out:
  * needs parent already locked. Doesn't follow mounts.
  * SMP-safe.
  */
-static inline struct dentry * __lookup_hash(struct qstr *name, struct dentry *base, struct nameidata *nd)
-{
-	struct dentry *dentry;
-	struct inode *inode;
-	int err;
-
-	inode = base->d_inode;
-
-	err = permission(inode, MAY_EXEC, nd);
-	dentry = ERR_PTR(err);
-	if (err)
-		goto out;
-
-	dentry = __lookup_hash_kern(name, base, nd);
-out:
-	return dentry;
-}
-
 static struct dentry *lookup_hash(struct nameidata *nd)
 {
+	int err;
+
+	err = permission(nd->dentry->d_inode, MAY_EXEC, nd);
+	if (err)
+		return ERR_PTR(err);
 	return __lookup_hash(&nd->last, nd->dentry, nd);
 }
 
-/* SMP-safe */
-static inline int __lookup_one_len(const char *name, struct qstr *this, struct dentry *base, int len)
+static int __lookup_one_len(const char *name, struct qstr *this,
+		struct dentry *base, int len)
 {
 	unsigned long hash;
 	unsigned int c;
@@ -1376,6 +1412,17 @@ static inline int __lookup_one_len(const char *name, struct qstr *this, struct d
 	return 0;
 }
 
+/**
+ * lookup_one_len:  filesystem helper to lookup single pathname component
+ * @name:	pathname component to lookup
+ * @base:	base directory to lookup from
+ * @len:	maximum length @len should be interpreted to
+ *
+ * Note that this routine is purely a helper for filesystem useage and should
+ * not be called by generic code.  Also note that by using this function to
+ * nameidata argument is passed to the filesystem methods and a filesystem
+ * using this helper needs to be prepared for that.
+ */
 struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
 {
 	int err;
@@ -1384,18 +1431,33 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
 	err = __lookup_one_len(name, &this, base, len);
 	if (err)
 		return ERR_PTR(err);
+
+	err = permission(base->d_inode, MAY_EXEC, NULL);
+	if (err)
+		return ERR_PTR(err);
 	return __lookup_hash(&this, base, NULL);
 }
 
-struct dentry *lookup_one_len_kern(const char *name, struct dentry *base, int len)
+/**
+ * lookup_one_noperm - bad hack for sysfs
+ * @name:	pathname component to lookup
+ * @base:	base directory to lookup from
+ *
+ * This is a variant of lookup_one_len that doesn't perform any permission
+ * checks.   It's a horrible hack to work around the braindead sysfs
+ * architecture and should not be used anywhere else.
+ *
+ * DON'T USE THIS FUNCTION EVER, thanks.
+ */
+struct dentry *lookup_one_noperm(const char *name, struct dentry *base)
 {
 	int err;
 	struct qstr this;
 
-	err = __lookup_one_len(name, &this, base, len);
+	err = __lookup_one_len(name, &this, base, strlen(name));
 	if (err)
 		return ERR_PTR(err);
-	return __lookup_hash_kern(&this, base, NULL);
+	return __lookup_hash(&this, base, NULL);
 }
 
 int fastcall __user_walk_fd(int dfd, const char __user *name, unsigned flags,
@@ -1459,7 +1521,7 @@ static int may_delete(struct inode *dir, struct dentry *victim,
 		return -ENOENT;
 
 	BUG_ON(victim->d_parent->d_inode != dir);
-	audit_inode_child(victim->d_name.name, victim->d_inode, dir);
+	audit_inode_child(victim->d_name.name, victim, dir);
 
 	error = permission(dir,MAY_WRITE | MAY_EXEC, nd);
 	if (error)
@@ -1598,18 +1660,6 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
 		return -EISDIR;
 
-#ifdef	CONFIG_VSERVER_COWBL
-	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
-		if (IS_COW_LINK(inode))
-			return -EMLINK;
-		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
-		mark_inode_dirty(inode);
-	}
-#endif
-	error = vfs_permission(nd, acc_mode);
-	if (error)
-		return error;
-
 	/*
 	 * FIFO's, sockets and device files are special: they don't
 	 * actually live on the filesystem itself, and as such you
@@ -1622,9 +1672,20 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 			return -EACCES;
 
 		flag &= ~O_TRUNC;
-	} else if ((IS_RDONLY(inode) || MNT_IS_RDONLY(nd->mnt))
-		&& (flag & FMODE_WRITE))
+	} else if (IS_RDONLY(inode) && (flag & FMODE_WRITE))
 		return -EROFS;
+
+#ifdef	CONFIG_VSERVER_COWBL
+	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
+		if (IS_COW_LINK(inode))
+			return -EMLINK;
+		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
+		mark_inode_dirty(inode);
+	}
+#endif
+	error = vfs_permission(nd, acc_mode);
+	if (error)
+		return error;
 	/*
 	 * An append-only file must be opened in append mode for writing.
 	 */
@@ -1637,7 +1698,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 
 	/* O_NOATIME can only be set by the owner or superuser */
 	if (flag & O_NOATIME)
-		if (current->fsuid != inode->i_uid && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 
 	/*
@@ -1658,8 +1719,10 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 		error = locks_verify_locked(inode);
 		if (!error) {
 			DQUOT_INIT(inode);
-			
-			error = do_truncate(dentry, 0, ATTR_MTIME|ATTR_CTIME, NULL);
+
+			error = do_truncate(dentry, 0,
+					    ATTR_MTIME|ATTR_CTIME|ATTR_OPEN,
+					    NULL);
 		}
 		put_write_access(inode);
 		if (error)
@@ -1785,7 +1848,7 @@ do_last:
 	 * It already exists.
 	 */
 	mutex_unlock(&dir->d_inode->i_mutex);
-	audit_inode(pathname, path.dentry->d_inode);
+	audit_inode(pathname, path.dentry);
 
 	error = -EEXIST;
 	if (flag & O_EXCL)
@@ -2587,7 +2650,7 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	if (!error) {
 		const char *new_name = old_dentry->d_name.name;
 		fsnotify_move(old_dir, new_dir, old_name, new_name, is_dir,
-			      new_dentry->d_inode, old_dentry->d_inode);
+			      new_dentry->d_inode, old_dentry);
 	}
 	fsnotify_oldname_free(old_name);
 
@@ -2999,53 +3062,29 @@ int __page_symlink(struct inode *inode, const char *symname, int len,
 {
 	struct address_space *mapping = inode->i_mapping;
 	struct page *page;
+	void *fsdata;
 	int err;
 	char *kaddr;
 
 retry:
-	err = -ENOMEM;
-	page = find_or_create_page(mapping, 0, gfp_mask);
-	if (!page)
-		goto fail;
-	err = mapping->a_ops->prepare_write(NULL, page, 0, len-1);
-	if (err == AOP_TRUNCATED_PAGE) {
-		page_cache_release(page);
-		goto retry;
-	}
+	err = pagecache_write_begin(NULL, mapping, 0, len-1,
+				AOP_FLAG_UNINTERRUPTIBLE, &page, &fsdata);
 	if (err)
-		goto fail_map;
+		goto fail;
+
 	kaddr = kmap_atomic(page, KM_USER0);
 	memcpy(kaddr, symname, len-1);
 	kunmap_atomic(kaddr, KM_USER0);
-	err = mapping->a_ops->commit_write(NULL, page, 0, len-1);
-	if (err == AOP_TRUNCATED_PAGE) {
-		page_cache_release(page);
-		goto retry;
-	}
-	if (err)
-		goto fail_map;
-	/*
-	 * Notice that we are _not_ going to block here - end of page is
-	 * unmapped, so this will only try to map the rest of page, see
-	 * that it is unmapped (typically even will not look into inode -
-	 * ->i_size will be enough for everything) and zero it out.
-	 * OTOH it's obviously correct and should make the page up-to-date.
-	 */
-	if (!PageUptodate(page)) {
-		err = mapping->a_ops->readpage(NULL, page);
-		if (err != AOP_TRUNCATED_PAGE)
-			wait_on_page_locked(page);
-	} else {
-		unlock_page(page);
-	}
-	page_cache_release(page);
+
+	err = pagecache_write_end(NULL, mapping, 0, len-1, len-1,
+							page, fsdata);
 	if (err < 0)
 		goto fail;
+	if (err < len-1)
+		goto retry;
+
 	mark_inode_dirty(inode);
 	return 0;
-fail_map:
-	unlock_page(page);
-	page_cache_release(page);
 fail:
 	return err;
 }
@@ -3077,8 +3116,8 @@ EXPORT_SYMBOL(__page_symlink);
 EXPORT_SYMBOL(page_symlink);
 EXPORT_SYMBOL(page_symlink_inode_operations);
 EXPORT_SYMBOL(path_lookup);
+EXPORT_SYMBOL(vfs_path_lookup);
 EXPORT_SYMBOL(path_release);
-EXPORT_SYMBOL(path_walk);
 EXPORT_SYMBOL(permission);
 EXPORT_SYMBOL(vfs_permission);
 EXPORT_SYMBOL(file_permission);

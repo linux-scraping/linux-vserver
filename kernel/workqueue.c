@@ -32,6 +32,7 @@
 #include <linux/freezer.h>
 #include <linux/kallsyms.h>
 #include <linux/debug_locks.h>
+#include <linux/lockdep.h>
 
 /*
  * The per-CPU workqueue (if single thread, we always use the first
@@ -61,6 +62,9 @@ struct workqueue_struct {
 	const char *name;
 	int singlethread;
 	int freezeable;		/* Freeze threads during suspend */
+#ifdef CONFIG_LOCKDEP
+	struct lockdep_map lockdep_map;
+#endif
 };
 
 /* All the per-cpu workqueues on the system, for hotplug cpu to add/remove
@@ -250,6 +254,17 @@ static void run_workqueue(struct cpu_workqueue_struct *cwq)
 		struct work_struct *work = list_entry(cwq->worklist.next,
 						struct work_struct, entry);
 		work_func_t f = work->func;
+#ifdef CONFIG_LOCKDEP
+		/*
+		 * It is permissible to free the struct work_struct
+		 * from inside the function that is called from it,
+		 * this we need to take into account for lockdep too.
+		 * To avoid bogus "held lock freed" warnings as well
+		 * as problems when looking into work->lockdep_map,
+		 * make a copy and use that here.
+		 */
+		struct lockdep_map lockdep_map = work->lockdep_map;
+#endif
 
 		cwq->current_work = work;
 		list_del_init(cwq->worklist.next);
@@ -257,13 +272,17 @@ static void run_workqueue(struct cpu_workqueue_struct *cwq)
 
 		BUG_ON(get_wq_data(work) != cwq);
 		work_clear_pending(work);
+		lock_acquire(&cwq->wq->lockdep_map, 0, 0, 0, 2, _THIS_IP_);
+		lock_acquire(&lockdep_map, 0, 0, 0, 2, _THIS_IP_);
 		f(work);
+		lock_release(&lockdep_map, 1, _THIS_IP_);
+		lock_release(&cwq->wq->lockdep_map, 1, _THIS_IP_);
 
 		if (unlikely(in_atomic() || lockdep_depth(current) > 0)) {
 			printk(KERN_ERR "BUG: workqueue leaked lock or atomic: "
 					"%s/0x%08x/%d\n",
 					current->comm, preempt_count(),
-				       	current->pid);
+				       	task_pid_nr(current));
 			printk(KERN_ERR "    last function: ");
 			print_symbol("%s\n", (unsigned long)f);
 			debug_show_held_locks(current);
@@ -282,8 +301,8 @@ static int worker_thread(void *__cwq)
 	struct cpu_workqueue_struct *cwq = __cwq;
 	DEFINE_WAIT(wait);
 
-	if (!cwq->wq->freezeable)
-		current->flags |= PF_NOFREEZE;
+	if (cwq->wq->freezeable)
+		set_freezable();
 
 	set_user_nice(current, -5);
 
@@ -376,22 +395,24 @@ void fastcall flush_workqueue(struct workqueue_struct *wq)
 	int cpu;
 
 	might_sleep();
+	lock_acquire(&wq->lockdep_map, 0, 0, 0, 2, _THIS_IP_);
+	lock_release(&wq->lockdep_map, 1, _THIS_IP_);
 	for_each_cpu_mask(cpu, *cpu_map)
 		flush_cpu_workqueue(per_cpu_ptr(wq->cpu_wq, cpu));
 }
 EXPORT_SYMBOL_GPL(flush_workqueue);
 
 /*
- * Upon a successful return, the caller "owns" WORK_STRUCT_PENDING bit,
+ * Upon a successful return (>= 0), the caller "owns" WORK_STRUCT_PENDING bit,
  * so this work can't be re-armed in any way.
  */
 static int try_to_grab_pending(struct work_struct *work)
 {
 	struct cpu_workqueue_struct *cwq;
-	int ret = 0;
+	int ret = -1;
 
 	if (!test_and_set_bit(WORK_STRUCT_PENDING, work_data_bits(work)))
-		return 1;
+		return 0;
 
 	/*
 	 * The queueing is in progress, or it is already queued. Try to
@@ -446,6 +467,9 @@ static void wait_on_work(struct work_struct *work)
 
 	might_sleep();
 
+	lock_acquire(&work->lockdep_map, 0, 0, 0, 2, _THIS_IP_);
+	lock_release(&work->lockdep_map, 1, _THIS_IP_);
+
 	cwq = get_wq_data(work);
 	if (!cwq)
 		return;
@@ -457,9 +481,27 @@ static void wait_on_work(struct work_struct *work)
 		wait_on_cpu_work(per_cpu_ptr(wq->cpu_wq, cpu), work);
 }
 
+static int __cancel_work_timer(struct work_struct *work,
+				struct timer_list* timer)
+{
+	int ret;
+
+	do {
+		ret = (timer && likely(del_timer(timer)));
+		if (!ret)
+			ret = try_to_grab_pending(work);
+		wait_on_work(work);
+	} while (unlikely(ret < 0));
+
+	work_clear_pending(work);
+	return ret;
+}
+
 /**
  * cancel_work_sync - block until a work_struct's callback has terminated
  * @work: the work which is to be flushed
+ *
+ * Returns true if @work was pending.
  *
  * cancel_work_sync() will cancel the work if it is queued. If the work's
  * callback appears to be running, cancel_work_sync() will block until it
@@ -476,31 +518,26 @@ static void wait_on_work(struct work_struct *work)
  * The caller must ensure that workqueue_struct on which this work was last
  * queued can't be destroyed before this function returns.
  */
-void cancel_work_sync(struct work_struct *work)
+int cancel_work_sync(struct work_struct *work)
 {
-	while (!try_to_grab_pending(work))
-		cpu_relax();
-	wait_on_work(work);
-	work_clear_pending(work);
+	return __cancel_work_timer(work, NULL);
 }
 EXPORT_SYMBOL_GPL(cancel_work_sync);
 
 /**
- * cancel_rearming_delayed_work - reliably kill off a delayed work.
+ * cancel_delayed_work_sync - reliably kill off a delayed work.
  * @dwork: the delayed work struct
+ *
+ * Returns true if @dwork was pending.
  *
  * It is possible to use this function if @dwork rearms itself via queue_work()
  * or queue_delayed_work(). See also the comment for cancel_work_sync().
  */
-void cancel_rearming_delayed_work(struct delayed_work *dwork)
+int cancel_delayed_work_sync(struct delayed_work *dwork)
 {
-	while (!del_timer(&dwork->timer) &&
-	       !try_to_grab_pending(&dwork->work))
-		cpu_relax();
-	wait_on_work(&dwork->work);
-	work_clear_pending(&dwork->work);
+	return __cancel_work_timer(&dwork->work, &dwork->timer);
 }
-EXPORT_SYMBOL(cancel_rearming_delayed_work);
+EXPORT_SYMBOL(cancel_delayed_work_sync);
 
 static struct workqueue_struct *keventd_wq __read_mostly;
 
@@ -622,7 +659,7 @@ int keventd_up(void)
 int current_is_keventd(void)
 {
 	struct cpu_workqueue_struct *cwq;
-	int cpu = smp_processor_id();	/* preempt-safe: keventd is per-cpu */
+	int cpu = raw_smp_processor_id(); /* preempt-safe: keventd is per-cpu */
 	int ret = 0;
 
 	BUG_ON(!keventd_wq);
@@ -682,8 +719,10 @@ static void start_workqueue_thread(struct cpu_workqueue_struct *cwq, int cpu)
 	}
 }
 
-struct workqueue_struct *__create_workqueue(const char *name,
-					    int singlethread, int freezeable)
+struct workqueue_struct *__create_workqueue_key(const char *name,
+						int singlethread,
+						int freezeable,
+						struct lock_class_key *key)
 {
 	struct workqueue_struct *wq;
 	struct cpu_workqueue_struct *cwq;
@@ -700,6 +739,7 @@ struct workqueue_struct *__create_workqueue(const char *name,
 	}
 
 	wq->name = name;
+	lockdep_init_map(&wq->lockdep_map, name, key, 0);
 	wq->singlethread = singlethread;
 	wq->freezeable = freezeable;
 	INIT_LIST_HEAD(&wq->list);
@@ -728,7 +768,7 @@ struct workqueue_struct *__create_workqueue(const char *name,
 	}
 	return wq;
 }
-EXPORT_SYMBOL_GPL(__create_workqueue);
+EXPORT_SYMBOL_GPL(__create_workqueue_key);
 
 static void cleanup_workqueue_thread(struct cpu_workqueue_struct *cwq, int cpu)
 {
@@ -738,6 +778,9 @@ static void cleanup_workqueue_thread(struct cpu_workqueue_struct *cwq, int cpu)
 	 */
 	if (cwq->thread == NULL)
 		return;
+
+	lock_acquire(&cwq->wq->lockdep_map, 0, 0, 0, 2, _THIS_IP_);
+	lock_release(&cwq->wq->lockdep_map, 1, _THIS_IP_);
 
 	flush_cpu_workqueue(cwq);
 	/*

@@ -92,7 +92,6 @@ static void gfs2_put_super(struct super_block *sb)
 	kthread_stop(sdp->sd_recoverd_process);
 	while (sdp->sd_glockd_num--)
 		kthread_stop(sdp->sd_glockd_process[sdp->sd_glockd_num]);
-	kthread_stop(sdp->sd_scand_process);
 
 	if (!(sb->s_flags & MS_RDONLY)) {
 		error = gfs2_make_fs_ro(sdp);
@@ -326,8 +325,10 @@ static void gfs2_clear_inode(struct inode *inode)
 		gfs2_glock_schedule_for_reclaim(ip->i_gl);
 		gfs2_glock_put(ip->i_gl);
 		ip->i_gl = NULL;
-		if (ip->i_iopen_gh.gh_gl)
+		if (ip->i_iopen_gh.gh_gl) {
+			ip->i_iopen_gh.gh_gl->gl_object = NULL;
 			gfs2_glock_dq_uninit(&ip->i_iopen_gh);
+		}
 	}
 }
 
@@ -422,13 +423,13 @@ static void gfs2_delete_inode(struct inode *inode)
 	if (!inode->i_private)
 		goto out;
 
-	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, LM_FLAG_TRY_1CB, &gh);
+	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
 	if (unlikely(error)) {
 		gfs2_glock_dq_uninit(&ip->i_iopen_gh);
 		goto out;
 	}
 
-	gfs2_glock_dq(&ip->i_iopen_gh);
+	gfs2_glock_dq_wait(&ip->i_iopen_gh);
 	gfs2_holder_reinit(LM_ST_EXCLUSIVE, LM_FLAG_TRY_1CB | GL_NOCACHE, &ip->i_iopen_gh);
 	error = gfs2_glock_nq(&ip->i_iopen_gh);
 	if (error)
@@ -454,12 +455,15 @@ static void gfs2_delete_inode(struct inode *inode)
 	}
 
 	error = gfs2_dinode_dealloc(ip);
-	/*
-	 * Must do this before unlock to avoid trying to write back
-	 * potentially dirty data now that inode no longer exists
-	 * on disk.
-	 */
+	if (error)
+		goto out_unlock;
+
+	error = gfs2_trans_begin(sdp, 0, sdp->sd_jdesc->jd_blocks);
+	if (error)
+		goto out_unlock;
+	/* Needs to be done before glock release & also in a transaction */
 	truncate_inode_pages(&inode->i_data, 0);
+	gfs2_trans_end(sdp);
 
 out_unlock:
 	gfs2_glock_dq(&ip->i_iopen_gh);

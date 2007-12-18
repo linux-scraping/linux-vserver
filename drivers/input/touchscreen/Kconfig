@@ -54,6 +54,19 @@ config TOUCHSCREEN_CORGI
 	  To compile this driver as a module, choose M here: the
 	  module will be called corgi_ts.
 
+config TOUCHSCREEN_FUJITSU
+	tristate "Fujitsu serial touchscreen"
+	select SERIO
+	help
+	  Say Y here if you have the Fujitsu touchscreen (such as one
+	  installed in Lifebook P series laptop) connected to your
+	  system.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called fujitsu-ts.
+
 config TOUCHSCREEN_GUNZE
 	tristate "Gunze AHL-51S touchscreen"
 	select SERIO
@@ -112,6 +125,16 @@ config TOUCHSCREEN_HP600
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called hp680_ts_input.
+
+config TOUCHSCREEN_HP7XX
+	tristate "HP Jornada 710/720/728 touchscreen"
+	depends on SA1100_JORNADA720_SSP
+	help
+	  Say Y here if you have a HP Jornada 710/720/728 and want
+	  to support the built-in touchscreen.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called jornada720_ts.
 
 config TOUCHSCREEN_PENMOUNT
 	tristate "Penmount serial touchscreen"
@@ -177,6 +200,9 @@ config TOUCHSCREEN_USB_COMPOSITE
 	  - some other eTurboTouch
 	  - Gunze AHL61
 	  - DMC TSC-10/25
+	  - IRTOUCHSYSTEMS/UNITOP
+	  - IdealTEK URTC1000
+	  - GoTop Super_Q2/GogoPen/PenPower tablets
 
 	  Have a look at <http://linux.chapter7.ch/touchkit/> for
 	  a usage description and the required user-space stuff.
@@ -217,6 +243,26 @@ config TOUCHSCREEN_USB_GUNZE
 config TOUCHSCREEN_USB_DMC_TSC10
 	default y
 	bool "DMC TSC-10/25 device support" if EMBEDDED
+	depends on TOUCHSCREEN_USB_COMPOSITE
+
+config TOUCHSCREEN_USB_IRTOUCH
+	default y
+	bool "IRTOUCHSYSTEMS/UNITOP device support" if EMBEDDED
+	depends on TOUCHSCREEN_USB_COMPOSITE
+
+config TOUCHSCREEN_USB_IDEALTEK
+	default y
+	bool "IdealTEK URTC1000 device support" if EMBEDDED
+	depends on TOUCHSCREEN_USB_COMPOSITE
+
+config TOUCHSCREEN_USB_GENERAL_TOUCH
+	default y
+	bool "GeneralTouch Touchscreen device support" if EMBEDDED
+	depends on TOUCHSCREEN_USB_COMPOSITE
+
+config TOUCHSCREEN_USB_GOTOP
+	default y
+	bool "GoTop Super_Q2/GogoPen/PenPower tablet device support" if EMBEDDED
 	depends on TOUCHSCREEN_USB_COMPOSITE
 
 endif

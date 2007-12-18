@@ -43,14 +43,6 @@ extern int _chrp_type;
 /* what kind of prep workstation we are */
 extern int _prep_type;
 
-/*
- * This is used to identify the board type from a given PReP board
- * vendor. Board revision is also made available. This will be moved
- * elsewhere soon
- */
-extern unsigned char ucBoardRev;
-extern unsigned char ucBoardRevMaj, ucBoardRevMin;
-
 #endif /* CONFIG_PPC_PREP */
 
 #endif /* defined(__KERNEL__) && defined(CONFIG_PPC32) */
@@ -153,9 +145,9 @@ struct thread_struct {
 	unsigned long	dabr;		/* Data address breakpoint register */
 #ifdef CONFIG_ALTIVEC
 	/* Complete AltiVec register set */
-	vector128	vr[32] __attribute((aligned(16)));
+	vector128	vr[32] __attribute__((aligned(16)));
 	/* AltiVec status */
-	vector128	vscr __attribute((aligned(16)));
+	vector128	vscr __attribute__((aligned(16)));
 	unsigned long	vrsave;
 	int		used_vr;	/* set if process has used altivec */
 #endif /* CONFIG_ALTIVEC */

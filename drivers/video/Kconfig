@@ -5,14 +5,21 @@
 menu "Graphics support"
 	depends on HAS_IOMEM
 
-source "drivers/video/backlight/Kconfig"
-source "drivers/video/display/Kconfig"
+source "drivers/char/agp/Kconfig"
+
+source "drivers/char/drm/Kconfig"
 
 config VGASTATE
        tristate
        default n
 
-config FB
+config VIDEO_OUTPUT_CONTROL
+	tristate "Lowlevel video output switch controls"
+	help
+	  This framework adds support for low-level control of the video 
+	  output switch.
+
+menuconfig FB
 	tristate "Support for frame buffer devices"
 	---help---
 	  The frame buffer device provides an abstraction for the graphics
@@ -95,6 +102,15 @@ config FB_CFB_IMAGEBLIT
 	  Include the cfb_imageblit function for generic software image
 	  blitting. This is used by drivers that don't provide their own
 	  (accelerated) version.
+
+config FB_CFB_REV_PIXELS_IN_BYTE
+	bool
+	depends on FB
+	default n
+	---help---
+	  Allow generic frame-buffer functions to work on displays with 1, 2
+	  and 4 bits per pixel depths which has opposite order of pixels in
+	  byte order to bytes in long order.
 
 config FB_SYS_FILLRECT
 	tristate
@@ -487,7 +503,7 @@ config FB_VALKYRIE
 
 config FB_CT65550
 	bool "Chips 65550 display support"
-	depends on (FB = y) && PPC32
+	depends on (FB = y) && PPC32 && PCI
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -527,6 +543,15 @@ config FB_VGA16
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called vga16fb.
+
+config FB_BF54X_LQ043
+	tristate "SHARP LQ043 TFT LCD (BF548 EZKIT)"
+	depends on FB && (BF54x)
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	help
+	 This is the framebuffer device driver for a SHARP LQ043T1DG01 TFT LCD
 
 config FB_STI
 	tristate "HP STI frame buffer device support"
@@ -585,6 +610,24 @@ config FB_TGA
 
 	  Say Y if you have one of those.
 
+config FB_UVESA
+	tristate "Userspace VESA VGA graphics support"
+	depends on FB && CONNECTOR
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	select FB_MODE_HELPERS
+	help
+	  This is the frame buffer driver for generic VBE 2.0 compliant
+	  graphic cards. It can also take advantage of VBE 3.0 features,
+	  such as refresh rate adjustment.
+
+	  This driver generally provides more features than vesafb but
+	  requires a userspace helper application called 'v86d'. See
+	  <file:Documentation/fb/uvesafb.txt> for more information.
+
+	  If unsure, say N.
+
 config FB_VESA
 	bool "VESA VGA graphics support"
 	depends on (FB = y) && X86
@@ -618,7 +661,7 @@ config FB_HECUBA
        help
          This enables support for the Hecuba board. This driver was tested
          with an E-Ink 800x600 display and x86 SBCs through a 16 bit GPIO
-         interface (8 bit data, 4 bit control). If you anticpate using
+         interface (8 bit data, 4 bit control). If you anticipate using
          this driver, say Y or M; otherwise say N. You must specify the
          GPIO IO address to be used for setting control and data.
 
@@ -772,7 +815,7 @@ config FB_XVR500
 	help
 	  This is the framebuffer device for the Sun XVR-500 and similar
 	  graphics cards based upon the 3DLABS Wildcat chipset.  The driver
-	  only works on sparc64 systems where the system firwmare has
+	  only works on sparc64 systems where the system firmware has
 	  mostly initialized the card already.  It is treated as a
 	  completely dumb framebuffer device.
 
@@ -785,7 +828,7 @@ config FB_XVR2500
 	help
 	  This is the framebuffer device for the Sun XVR-2500 and similar
 	  graphics cards based upon the 3DLABS Wildcat chipset.  The driver
-	  only works on sparc64 systems where the system firwmare has
+	  only works on sparc64 systems where the system firmware has
 	  mostly initialized the card already.  It is treated as a
 	  completely dumb framebuffer device.
 
@@ -812,7 +855,7 @@ config FB_PVR2
 
 config FB_EPSON1355
 	bool "Epson 1355 framebuffer support"
-	depends on (FB = y) && (SUPERH || ARCH_CEIVA)
+	depends on (FB = y) && ARCH_CEIVA
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -848,6 +891,16 @@ config FB_INTSRAM
 	help
 	  Say Y if you want to map Frame Buffer in internal SRAM. Say N if you want
 	  to let frame buffer in external SDRAM.
+
+config FB_ATMEL_STN
+	bool "Use a STN display with AT91/AT32 LCD Controller"
+	depends on FB_ATMEL && MACH_AT91SAM9261EK
+	default n
+	help
+	  Say Y if you want to connect a STN LCD display to the AT91/AT32 LCD
+	  Controller. Say N if you want to connect a TFT.
+
+	  If unsure, say N.
 
 config FB_NVIDIA
 	tristate "nVidia Framebuffer Support"
@@ -1456,7 +1509,7 @@ config FB_VOODOO1
 
 	  WARNING: Do not use any application that uses the 3D engine
 	  (namely glide) while using this driver.
-	  Please read the <file:Documentation/fb/README-sstfb.txt> for supported
+	  Please read the <file:Documentation/fb/sstfb.txt> for supported
 	  options and other important info  support.
 
 config FB_VT8623
@@ -1554,7 +1607,14 @@ config FB_PM3
 
 config FB_AU1100
 	bool "Au1100 LCD Driver"
-	depends on (FB = y) && EXPERIMENTAL && PCI && MIPS && MIPS_PB1100=y
+	depends on (FB = y) && MIPS && SOC_AU1100
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	help
+	  This is the framebuffer driver for the AMD Au1100 SOC.  It can drive
+	  various panels and CRTs by passing in kernel cmd line option
+	  au1100fb:panel=<name>.
 
 config FB_AU1200
 	bool "Au1200 LCD Driver"
@@ -1601,7 +1661,7 @@ config FB_PMAG_BA
 
 config FB_PMAGB_B
 	tristate "PMAGB-B TURBOchannel framebuffer support"
-	depends on TC
+	depends on FB && TC
  	select FB_CFB_FILLRECT
  	select FB_CFB_COPYAREA
  	select FB_CFB_IMAGEBLIT
@@ -1620,18 +1680,6 @@ config FB_MAXINE
 	  Support for the onboard framebuffer (1024x768x8) in the Personal
 	  DECstation series (Personal DECstation 5000/20, /25, /33, /50,
 	  Codename "Maxine").
-
-config FB_TX3912
-	bool "TMPTX3912/PR31700 frame buffer support"
-	depends on (FB = y) && NINO
-	select FB_CFB_FILLRECT
-	select FB_CFB_COPYAREA
-	select FB_CFB_IMAGEBLIT
-	help
-	  The TX3912 is a Toshiba RISC processor based on the MIPS 3900 core
-	  see <http://www.toshiba.com/taec/components/Generic/risc/tx3912.htm>.
-
-	  Say Y here to enable kernel support for the on-board framebuffer.
 
 config FB_G364
 	bool "G364 frame buffer support"
@@ -1759,7 +1807,7 @@ config FB_SM501
 	  This driver is also available as a module ( = code which can be
 	  inserted and removed from the running kernel whenever you want). The
 	  module will be called sm501fb. If you want to compile it as a module,
-	  say M here and read <file:Documentation/modules.txt>.
+	  say M here and read <file:Documentation/kbuild/modules.txt>.
 
 	  If unsure, say N.
 
@@ -1781,7 +1829,7 @@ config FB_PNX4008_DUM_RGB
 
 config FB_IBM_GXT4500
 	tristate "Framebuffer support for IBM GXT4500P adaptor"
-	depends on PPC
+	depends on FB && PPC
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -1790,19 +1838,20 @@ config FB_IBM_GXT4500
 	  adaptor, found on some IBM System P (pSeries) machines.
 
 config FB_PS3
-	bool "PS3 GPU framebuffer driver"
-	depends on (FB = y) && PS3_PS3AV
+	tristate "PS3 GPU framebuffer driver"
+	depends on FB && PS3_PS3AV
 	select FB_SYS_FILLRECT
 	select FB_SYS_COPYAREA
 	select FB_SYS_IMAGEBLIT
 	select FB_SYS_FOPS
+	select VT_HW_CONSOLE_BINDING if FRAMEBUFFER_CONSOLE
 	---help---
 	  Include support for the virtual frame buffer in the PS3 platform.
 
 config FB_PS3_DEFAULT_SIZE_M
 	int "PS3 default frame buffer size (in MiB)"
 	depends on FB_PS3
-	default 18
+	default 9
 	---help---
 	  This is the default size (in MiB) of the virtual frame buffer in
 	  the PS3.
@@ -1843,6 +1892,11 @@ config FB_VIRTUAL
 
 	  If unsure, say N.
 
+source "drivers/video/omap/Kconfig"
+
+source "drivers/video/backlight/Kconfig"
+source "drivers/video/display/Kconfig"
+
 if VT
 	source "drivers/video/console/Kconfig"
 endif
@@ -1852,4 +1906,3 @@ if FB || SGI_NEWPORT_CONSOLE
 endif
 
 endmenu
-

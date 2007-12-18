@@ -18,6 +18,7 @@
 #include <linux/module.h>
 #include <linux/elf.h>
 #include <linux/sched.h>
+#include <linux/err.h>
 #include <linux/vs_memory.h>
 
 /*

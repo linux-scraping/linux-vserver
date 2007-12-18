@@ -1,7 +1,6 @@
-/* $Id: traps.c,v 1.85 2002/02/09 19:49:31 davem Exp $
- * arch/sparc64/kernel/traps.c
+/* arch/sparc64/kernel/traps.c
  *
- * Copyright (C) 1995,1997 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1995,1997 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1997,1999,2000 Jakub Jelinek (jakub@redhat.com)
  */
 
@@ -765,7 +764,7 @@ static unsigned long cheetah_afsr_errors;
  */
 struct cheetah_err_info *cheetah_error_log;
 
-static __inline__ struct cheetah_err_info *cheetah_get_error_log(unsigned long afsr)
+static inline struct cheetah_err_info *cheetah_get_error_log(unsigned long afsr)
 {
 	struct cheetah_err_info *p;
 	int cpu = smp_processor_id();
@@ -1085,7 +1084,7 @@ static unsigned char cheetah_mtag_syntab[] = {
 };
 
 /* Return the highest priority error conditon mentioned. */
-static __inline__ unsigned long cheetah_get_hipri(unsigned long afsr)
+static inline unsigned long cheetah_get_hipri(unsigned long afsr)
 {
 	unsigned long tmp = 0;
 	int i;
@@ -2226,10 +2225,11 @@ void die_if_kernel(char *str, struct pt_regs *regs)
 "                 \\__U_/\n");
 
 	printk("%s(%d[#%u]): %s [#%d]\n", current->comm,
-		current->pid, current->xid, str, ++die_counter);
+		task_pid_nr(current), current->xid, str, ++die_counter);
 	notify_die(DIE_OOPS, str, regs, 0, 255, SIGSEGV);
 	__asm__ __volatile__("flushw");
 	__show_regs(regs);
+	add_taint(TAINT_DIE);
 	if (regs->tstate & TSTATE_PRIV) {
 		struct reg_window *rw = (struct reg_window *)
 			(regs->u_regs[UREG_FP] + STACK_BIAS);
@@ -2569,8 +2569,8 @@ void __init trap_init(void)
 	     offsetof(struct trap_per_cpu, tsb_huge)) ||
 	    (TRAP_PER_CPU_TSB_HUGE_TEMP !=
 	     offsetof(struct trap_per_cpu, tsb_huge_temp)) ||
-	    (TRAP_PER_CPU_IRQ_WORKLIST !=
-	     offsetof(struct trap_per_cpu, irq_worklist)) ||
+	    (TRAP_PER_CPU_IRQ_WORKLIST_PA !=
+	     offsetof(struct trap_per_cpu, irq_worklist_pa)) ||
 	    (TRAP_PER_CPU_CPU_MONDO_QMASK !=
 	     offsetof(struct trap_per_cpu, cpu_mondo_qmask)) ||
 	    (TRAP_PER_CPU_DEV_MONDO_QMASK !=

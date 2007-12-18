@@ -9,6 +9,8 @@
 #include <linux/spinlock.h>
 #include <linux/vmalloc.h>
 #include <asm/dma.h>
+#include <asm/pgalloc.h>
+#include <asm/pgtable.h>
 
 /*
  * Permanent SPARSEMEM data:
@@ -41,6 +43,15 @@ int page_to_nid(struct page *page)
 	return section_to_node_table[page_to_section(page)];
 }
 EXPORT_SYMBOL(page_to_nid);
+
+static void set_section_nid(unsigned long section_nr, int nid)
+{
+	section_to_node_table[section_nr] = nid;
+}
+#else /* !NODE_NOT_IN_PAGE_FLAGS */
+static inline void set_section_nid(unsigned long section_nr, int nid)
+{
+}
 #endif
 
 #ifdef CONFIG_SPARSEMEM_EXTREME
@@ -67,10 +78,6 @@ static int __meminit sparse_index_init(unsigned long section_nr, int nid)
 	unsigned long root = SECTION_NR_TO_ROOT(section_nr);
 	struct mem_section *section;
 	int ret = 0;
-
-#ifdef NODE_NOT_IN_PAGE_FLAGS
-	section_to_node_table[section_nr] = nid;
-#endif
 
 	if (mem_section[root])
 		return -EEXIST;
@@ -101,7 +108,7 @@ static inline int sparse_index_init(unsigned long section_nr, int nid)
 
 /*
  * Although written for the SPARSEMEM_EXTREME case, this happens
- * to also work for the flat array case becase
+ * to also work for the flat array case because
  * NR_SECTION_ROOTS==NR_MEM_SECTIONS.
  */
 int __section_nr(struct mem_section* ms)
@@ -148,6 +155,7 @@ void __init memory_present(int nid, unsigned long start, unsigned long end)
 		struct mem_section *ms;
 
 		sparse_index_init(section, nid);
+		set_section_nid(section, nid);
 
 		ms = __nr_to_section(section);
 		if (!ms->section_mem_map)
@@ -170,7 +178,7 @@ unsigned long __init node_memmap_size_bytes(int nid, unsigned long start_pfn,
 		if (nid != early_pfn_to_nid(pfn))
 			continue;
 
-		if (pfn_valid(pfn))
+		if (pfn_present(pfn))
 			nr_pages += PAGES_PER_SECTION;
 	}
 
@@ -198,44 +206,79 @@ struct page *sparse_decode_mem_map(unsigned long coded_mem_map, unsigned long pn
 }
 
 static int __meminit sparse_init_one_section(struct mem_section *ms,
-		unsigned long pnum, struct page *mem_map)
+		unsigned long pnum, struct page *mem_map,
+		unsigned long *pageblock_bitmap)
 {
-	if (!valid_section(ms))
+	if (!present_section(ms))
 		return -EINVAL;
 
 	ms->section_mem_map &= ~SECTION_MAP_MASK;
-	ms->section_mem_map |= sparse_encode_mem_map(mem_map, pnum);
+	ms->section_mem_map |= sparse_encode_mem_map(mem_map, pnum) |
+							SECTION_HAS_MEM_MAP;
+ 	ms->pageblock_flags = pageblock_bitmap;
 
 	return 1;
 }
 
-__attribute__((weak))
-void *alloc_bootmem_high_node(pg_data_t *pgdat, unsigned long size)
+static unsigned long usemap_size(void)
 {
+	unsigned long size_bytes;
+	size_bytes = roundup(SECTION_BLOCKFLAGS_BITS, 8) / 8;
+	size_bytes = roundup(size_bytes, sizeof(unsigned long));
+	return size_bytes;
+}
+
+#ifdef CONFIG_MEMORY_HOTPLUG
+static unsigned long *__kmalloc_section_usemap(void)
+{
+	return kmalloc(usemap_size(), GFP_KERNEL);
+}
+#endif /* CONFIG_MEMORY_HOTPLUG */
+
+static unsigned long *sparse_early_usemap_alloc(unsigned long pnum)
+{
+	unsigned long *usemap;
+	struct mem_section *ms = __nr_to_section(pnum);
+	int nid = sparse_early_nid(ms);
+
+	usemap = alloc_bootmem_node(NODE_DATA(nid), usemap_size());
+	if (usemap)
+		return usemap;
+
+	/* Stupid: suppress gcc warning for SPARSEMEM && !NUMA */
+	nid = 0;
+
+	printk(KERN_WARNING "%s: allocation failed\n", __FUNCTION__);
 	return NULL;
 }
 
-static struct page __init *sparse_early_mem_map_alloc(unsigned long pnum)
+#ifndef CONFIG_SPARSEMEM_VMEMMAP
+struct page __init *sparse_mem_map_populate(unsigned long pnum, int nid)
 {
 	struct page *map;
-	struct mem_section *ms = __nr_to_section(pnum);
-	int nid = sparse_early_nid(ms);
 
 	map = alloc_remap(nid, sizeof(struct page) * PAGES_PER_SECTION);
 	if (map)
 		return map;
 
-  	map = alloc_bootmem_high_node(NODE_DATA(nid),
-                       sizeof(struct page) * PAGES_PER_SECTION);
-	if (map)
-		return map;
-
 	map = alloc_bootmem_node(NODE_DATA(nid),
 			sizeof(struct page) * PAGES_PER_SECTION);
+	return map;
+}
+#endif /* !CONFIG_SPARSEMEM_VMEMMAP */
+
+struct page __init *sparse_early_mem_map_alloc(unsigned long pnum)
+{
+	struct page *map;
+	struct mem_section *ms = __nr_to_section(pnum);
+	int nid = sparse_early_nid(ms);
+
+	map = sparse_mem_map_populate(pnum, nid);
 	if (map)
 		return map;
 
-	printk(KERN_WARNING "%s: allocation failed\n", __FUNCTION__);
+	printk(KERN_ERR "%s: sparsemem memory map backing failed "
+			"some memory will not be available.\n", __FUNCTION__);
 	ms->section_mem_map = 0;
 	return NULL;
 }
@@ -248,19 +291,38 @@ void __init sparse_init(void)
 {
 	unsigned long pnum;
 	struct page *map;
+	unsigned long *usemap;
 
 	for (pnum = 0; pnum < NR_MEM_SECTIONS; pnum++) {
-		if (!valid_section_nr(pnum))
+		if (!present_section_nr(pnum))
 			continue;
 
 		map = sparse_early_mem_map_alloc(pnum);
 		if (!map)
 			continue;
-		sparse_init_one_section(__nr_to_section(pnum), pnum, map);
+
+		usemap = sparse_early_usemap_alloc(pnum);
+		if (!usemap)
+			continue;
+
+		sparse_init_one_section(__nr_to_section(pnum), pnum, map,
+								usemap);
 	}
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG
+#ifdef CONFIG_SPARSEMEM_VMEMMAP
+static inline struct page *kmalloc_section_memmap(unsigned long pnum, int nid,
+						 unsigned long nr_pages)
+{
+	/* This will make the necessary allocations eventually. */
+	return sparse_mem_map_populate(pnum, nid);
+}
+static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
+{
+	return; /* XXX: Not implemented yet */
+}
+#else
 static struct page *__kmalloc_section_memmap(unsigned long nr_pages)
 {
 	struct page *page, *ret;
@@ -283,6 +345,12 @@ got_map_ptr:
 	return ret;
 }
 
+static inline struct page *kmalloc_section_memmap(unsigned long pnum, int nid,
+						  unsigned long nr_pages)
+{
+	return __kmalloc_section_memmap(nr_pages);
+}
+
 static int vaddr_in_vmalloc_area(void *addr)
 {
 	if (addr >= (void *)VMALLOC_START &&
@@ -299,6 +367,7 @@ static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
 		free_pages((unsigned long)memmap,
 			   get_order(sizeof(struct page) * nr_pages));
 }
+#endif /* CONFIG_SPARSEMEM_VMEMMAP */
 
 /*
  * returns the number of sections whose mem_maps were properly
@@ -312,6 +381,7 @@ int sparse_add_one_section(struct zone *zone, unsigned long start_pfn,
 	struct pglist_data *pgdat = zone->zone_pgdat;
 	struct mem_section *ms;
 	struct page *memmap;
+	unsigned long *usemap;
 	unsigned long flags;
 	int ret;
 
@@ -320,7 +390,8 @@ int sparse_add_one_section(struct zone *zone, unsigned long start_pfn,
 	 * plus, it does a kmalloc
 	 */
 	sparse_index_init(section_nr, pgdat->node_id);
-	memmap = __kmalloc_section_memmap(nr_pages);
+	memmap = kmalloc_section_memmap(section_nr, pgdat->node_id, nr_pages);
+	usemap = __kmalloc_section_usemap();
 
 	pgdat_resize_lock(pgdat, &flags);
 
@@ -329,9 +400,14 @@ int sparse_add_one_section(struct zone *zone, unsigned long start_pfn,
 		ret = -EEXIST;
 		goto out;
 	}
+
+	if (!usemap) {
+		ret = -ENOMEM;
+		goto out;
+	}
 	ms->section_mem_map |= SECTION_MARKED_PRESENT;
 
-	ret = sparse_init_one_section(ms, section_nr, memmap);
+	ret = sparse_init_one_section(ms, section_nr, memmap, usemap);
 
 out:
 	pgdat_resize_unlock(pgdat, &flags);

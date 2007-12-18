@@ -16,11 +16,12 @@ endif
 #
 # IMAGE_OFFSET is the load offset of the compression loader
 #
-IMAGE_OFFSET	:= $(shell printf "0x%08x" $$[$(CONFIG_PAGE_OFFSET)  + \
-					      $(CONFIG_MEMORY_START) + \
-					      $(CONFIG_BOOT_LINK_OFFSET)])
+IMAGE_OFFSET	:= $(shell /bin/bash -c 'printf "0x%08x" \
+		     $$[$(CONFIG_PAGE_OFFSET)  + \
+			$(CONFIG_MEMORY_START) + \
+			$(CONFIG_BOOT_LINK_OFFSET)]')
 
-LIBGCC	:= $(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
+LIBGCC	:= $(shell $(CC) $(KBUILD_CFLAGS) -print-libgcc-file-name)
 
 LDFLAGS_vmlinux := -Ttext $(IMAGE_OFFSET) -e startup -T $(obj)/../../kernel/vmlinux.lds
 

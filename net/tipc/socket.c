@@ -1,8 +1,8 @@
 /*
  * net/tipc/socket.c: TIPC socket API
  *
- * Copyright (c) 2001-2006, Ericsson AB
- * Copyright (c) 2004-2006, Wind River Systems
+ * Copyright (c) 2001-2007, Ericsson AB
+ * Copyright (c) 2004-2007, Wind River Systems
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -162,12 +162,15 @@ static void advance_queue(struct tipc_sock *tsock)
  *
  * Returns 0 on success, errno otherwise
  */
-static int tipc_create(struct socket *sock, int protocol)
+static int tipc_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct tipc_sock *tsock;
 	struct tipc_port *port;
 	struct sock *sk;
 	u32 ref;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	if (unlikely(protocol != 0))
 		return -EPROTONOSUPPORT;
@@ -198,7 +201,7 @@ static int tipc_create(struct socket *sock, int protocol)
 		return -EPROTOTYPE;
 	}
 
-	sk = sk_alloc(AF_TIPC, GFP_KERNEL, &tipc_proto, 1);
+	sk = sk_alloc(net, AF_TIPC, GFP_KERNEL, &tipc_proto);
 	if (!sk) {
 		tipc_deleteport(ref);
 		return -ENOMEM;
@@ -607,23 +610,24 @@ exit:
 static int send_stream(struct kiocb *iocb, struct socket *sock,
 		       struct msghdr *m, size_t total_len)
 {
+	struct tipc_port *tport;
 	struct msghdr my_msg;
 	struct iovec my_iov;
 	struct iovec *curr_iov;
 	int curr_iovlen;
 	char __user *curr_start;
+	u32 hdr_size;
 	int curr_left;
 	int bytes_to_send;
 	int bytes_sent;
 	int res;
 
-	if (likely(total_len <= TIPC_MAX_USER_MSG_SIZE))
-		return send_packet(iocb, sock, m, total_len);
-
-	/* Can only send large data streams if already connected */
+	/* Handle special cases where there is no connection */
 
 	if (unlikely(sock->state != SS_CONNECTED)) {
-		if (sock->state == SS_DISCONNECTING)
+		if (sock->state == SS_UNCONNECTED)
+			return send_packet(iocb, sock, m, total_len);
+		else if (sock->state == SS_DISCONNECTING)
 			return -EPIPE;
 		else
 			return -ENOTCONN;
@@ -648,17 +652,25 @@ static int send_stream(struct kiocb *iocb, struct socket *sock,
 	my_msg.msg_name = NULL;
 	bytes_sent = 0;
 
+	tport = tipc_sk(sock->sk)->p;
+	hdr_size = msg_hdr_sz(&tport->phdr);
+
 	while (curr_iovlen--) {
 		curr_start = curr_iov->iov_base;
 		curr_left = curr_iov->iov_len;
 
 		while (curr_left) {
-			bytes_to_send = (curr_left < TIPC_MAX_USER_MSG_SIZE)
-				? curr_left : TIPC_MAX_USER_MSG_SIZE;
+			bytes_to_send = tport->max_pkt - hdr_size;
+			if (bytes_to_send > TIPC_MAX_USER_MSG_SIZE)
+				bytes_to_send = TIPC_MAX_USER_MSG_SIZE;
+			if (curr_left < bytes_to_send)
+				bytes_to_send = curr_left;
 			my_iov.iov_base = curr_start;
 			my_iov.iov_len = bytes_to_send;
 			if ((res = send_packet(iocb, sock, &my_msg, 0)) < 0) {
-				return bytes_sent ? bytes_sent : res;
+				if (bytes_sent != 0)
+					res = bytes_sent;
+				return res;
 			}
 			curr_left -= bytes_to_send;
 			curr_start += bytes_to_send;
@@ -1363,7 +1375,7 @@ static int accept(struct socket *sock, struct socket *newsock, int flags)
 	}
 	buf = skb_peek(&sock->sk->sk_receive_queue);
 
-	res = tipc_create(newsock, 0);
+	res = tipc_create(sock->sk->sk_net, newsock, 0);
 	if (!res) {
 		struct tipc_sock *new_tsock = tipc_sk(newsock->sk);
 		struct tipc_portid id;
@@ -1600,33 +1612,6 @@ static int getsockopt(struct socket *sock,
 }
 
 /**
- * Placeholders for non-implemented functionality
- *
- * Returns error code (POSIX-compliant where defined)
- */
-
-static int ioctl(struct socket *s, u32 cmd, unsigned long arg)
-{
-	return -EINVAL;
-}
-
-static int no_mmap(struct file *file, struct socket *sock,
-		   struct vm_area_struct *vma)
-{
-	return -EINVAL;
-}
-static ssize_t no_sendpage(struct socket *sock, struct page *page,
-			   int offset, size_t size, int flags)
-{
-	return -EINVAL;
-}
-
-static int no_skpair(struct socket *s1, struct socket *s2)
-{
-	return -EOPNOTSUPP;
-}
-
-/**
  * Protocol switches for the various types of TIPC sockets
  */
 
@@ -1636,19 +1621,19 @@ static struct proto_ops msg_ops = {
 	.release	= release,
 	.bind		= bind,
 	.connect	= connect,
-	.socketpair	= no_skpair,
+	.socketpair	= sock_no_socketpair,
 	.accept		= accept,
 	.getname	= get_name,
 	.poll		= poll,
-	.ioctl		= ioctl,
+	.ioctl		= sock_no_ioctl,
 	.listen		= listen,
 	.shutdown	= shutdown,
 	.setsockopt	= setsockopt,
 	.getsockopt	= getsockopt,
 	.sendmsg	= send_msg,
 	.recvmsg	= recv_msg,
-	.mmap		= no_mmap,
-	.sendpage	= no_sendpage
+	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage
 };
 
 static struct proto_ops packet_ops = {
@@ -1657,19 +1642,19 @@ static struct proto_ops packet_ops = {
 	.release	= release,
 	.bind		= bind,
 	.connect	= connect,
-	.socketpair	= no_skpair,
+	.socketpair	= sock_no_socketpair,
 	.accept		= accept,
 	.getname	= get_name,
 	.poll		= poll,
-	.ioctl		= ioctl,
+	.ioctl		= sock_no_ioctl,
 	.listen		= listen,
 	.shutdown	= shutdown,
 	.setsockopt	= setsockopt,
 	.getsockopt	= getsockopt,
 	.sendmsg	= send_packet,
 	.recvmsg	= recv_msg,
-	.mmap		= no_mmap,
-	.sendpage	= no_sendpage
+	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage
 };
 
 static struct proto_ops stream_ops = {
@@ -1678,19 +1663,19 @@ static struct proto_ops stream_ops = {
 	.release	= release,
 	.bind		= bind,
 	.connect	= connect,
-	.socketpair	= no_skpair,
+	.socketpair	= sock_no_socketpair,
 	.accept		= accept,
 	.getname	= get_name,
 	.poll		= poll,
-	.ioctl		= ioctl,
+	.ioctl		= sock_no_ioctl,
 	.listen		= listen,
 	.shutdown	= shutdown,
 	.setsockopt	= setsockopt,
 	.getsockopt	= getsockopt,
 	.sendmsg	= send_stream,
 	.recvmsg	= recv_stream,
-	.mmap		= no_mmap,
-	.sendpage	= no_sendpage
+	.mmap		= sock_no_mmap,
+	.sendpage	= sock_no_sendpage
 };
 
 static struct net_proto_family tipc_family_ops = {

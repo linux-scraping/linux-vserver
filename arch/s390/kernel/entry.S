@@ -68,9 +68,15 @@ STACK_SIZE  = 1 << STACK_SHIFT
 	l	%r1,BASED(.Ltrace_irq_off)
 	basr	%r14,%r1
 	.endm
+
+	.macro	LOCKDEP_SYS_EXIT
+	l	%r1,BASED(.Llockdep_sys_exit)
+	basr	%r14,%r1
+	.endm
 #else
 #define TRACE_IRQS_ON
 #define TRACE_IRQS_OFF
+#define LOCKDEP_SYS_EXIT
 #endif
 
 /*
@@ -105,6 +111,11 @@ STACK_SIZE  = 1 << STACK_SHIFT
 	.macro	SAVE_ALL_BASE savearea
 	stm	%r12,%r15,\savearea
 	l	%r13,__LC_SVC_NEW_PSW+4	# load &system_call to %r13
+	.endm
+
+	.macro	SAVE_ALL_SVC psworg,savearea
+	la	%r12,\psworg
+	l	%r15,__LC_KERNEL_STACK	# problem state -> load ksp
 	.endm
 
 	.macro	SAVE_ALL_SYNC psworg,savearea
@@ -218,7 +229,7 @@ system_call:
 	STORE_TIMER __LC_SYNC_ENTER_TIMER
 sysc_saveall:
 	SAVE_ALL_BASE __LC_SAVE_AREA
-	SAVE_ALL_SYNC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
+	SAVE_ALL_SVC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	CREATE_STACK_FRAME __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	lh	%r7,0x8a	  # get svc number from lowcore
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING
@@ -255,6 +266,7 @@ sysc_return:
 	bno	BASED(sysc_leave)
 	tm	__TI_flags+3(%r9),_TIF_WORK_SVC
 	bnz	BASED(sysc_work)  # there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 sysc_leave:
 	RESTORE_ALL __LC_RETURN_PSW,1
 
@@ -278,6 +290,7 @@ sysc_work:
 	bo	BASED(sysc_restart)
 	tm	__TI_flags+3(%r9),_TIF_SINGLE_STEP
 	bo	BASED(sysc_singlestep)
+	LOCKDEP_SYS_EXIT
 	b	BASED(sysc_leave)
 
 #
@@ -567,6 +580,7 @@ io_return:
 #endif
 	tm	__TI_flags+3(%r9),_TIF_WORK_INT
 	bnz	BASED(io_work)		# there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 io_leave:
 	RESTORE_ALL __LC_RETURN_PSW,0
 io_done:
@@ -613,15 +627,18 @@ io_work_loop:
 	bo	BASED(io_reschedule)
 	tm	__TI_flags+3(%r9),(_TIF_SIGPENDING | _TIF_RESTORE_SIGMASK)
 	bnz	BASED(io_sigpending)
+	LOCKDEP_SYS_EXIT
 	b	BASED(io_leave)
 
 #
 # _TIF_MCCK_PENDING is set, call handler
 #
 io_mcck_pending:
+	TRACE_IRQS_OFF
 	l	%r1,BASED(.Ls390_handle_mcck)
-	la	%r14,BASED(io_work_loop)
-	br	%r1			# TIF bit will be cleared by handler
+	basr	%r14,%r1		# TIF bit will be cleared by handler
+	TRACE_IRQS_ON
+	b	BASED(io_work_loop)
 
 #
 # _TIF_NEED_RESCHED is set, call schedule
@@ -1033,6 +1050,8 @@ cleanup_io_leave_insn:
 .Ltrace_irq_on: .long	trace_hardirqs_on
 .Ltrace_irq_off:
 		.long	trace_hardirqs_off
+.Llockdep_sys_exit:
+		.long	lockdep_sys_exit
 #endif
 .Lcritical_start:
 		.long	__critical_start + 0x80000000

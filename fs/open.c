@@ -26,6 +26,7 @@
 #include <linux/syscalls.h>
 #include <linux/rcupdate.h>
 #include <linux/audit.h>
+#include <linux/falloc.h>
 #include <linux/vs_base.h>
 #include <linux/vs_limit.h>
 #include <linux/vs_dlimit.h>
@@ -264,24 +265,26 @@ static long do_sys_truncate(const char __user * path, loff_t length)
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
 		goto dput_and_out;
 
-	/*
-	 * Make sure that there are no leases.
-	 */
-	error = break_lease(inode, FMODE_WRITE);
-	if (error)
-		goto dput_and_out;
-
 	error = get_write_access(inode);
 	if (error)
 		goto dput_and_out;
+
+	/*
+	 * Make sure that there are no leases.  get_write_access() protects
+	 * against the truncate racing with a lease-granting setlease().
+	 */
+	error = break_lease(inode, FMODE_WRITE);
+	if (error)
+		goto put_write_and_out;
 
 	error = locks_verify_truncate(inode, NULL, length);
 	if (!error) {
 		DQUOT_INIT(inode);
 		error = do_truncate(nd.dentry, length, 0, NULL);
 	}
-	put_write_access(inode);
 
+put_write_and_out:
+	put_write_access(inode);
 dput_and_out:
 	path_release(&nd);
 out:
@@ -360,6 +363,64 @@ asmlinkage long sys_ftruncate64(unsigned int fd, loff_t length)
 	return ret;
 }
 #endif
+
+asmlinkage long sys_fallocate(int fd, int mode, loff_t offset, loff_t len)
+{
+	struct file *file;
+	struct inode *inode;
+	long ret = -EINVAL;
+
+	if (offset < 0 || len <= 0)
+		goto out;
+
+	/* Return error if mode is not supported */
+	ret = -EOPNOTSUPP;
+	if (mode && !(mode & FALLOC_FL_KEEP_SIZE))
+		goto out;
+
+	ret = -EBADF;
+	file = fget(fd);
+	if (!file)
+		goto out;
+	if (!(file->f_mode & FMODE_WRITE))
+		goto out_fput;
+	/*
+	 * Revalidate the write permissions, in case security policy has
+	 * changed since the files were opened.
+	 */
+	ret = security_file_permission(file, MAY_WRITE);
+	if (ret)
+		goto out_fput;
+
+	inode = file->f_path.dentry->d_inode;
+
+	ret = -ESPIPE;
+	if (S_ISFIFO(inode->i_mode))
+		goto out_fput;
+
+	ret = -ENODEV;
+	/*
+	 * Let individual file system decide if it supports preallocation
+	 * for directories or not.
+	 */
+	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode))
+		goto out_fput;
+
+	ret = -EFBIG;
+	/* Check for wrap through zero too */
+	if (((offset + len) > inode->i_sb->s_maxbytes) || ((offset + len) < 0))
+		goto out_fput;
+
+	if (inode->i_op && inode->i_op->fallocate)
+		ret = inode->i_op->fallocate(inode, mode, offset, len);
+	else
+		ret = -EOPNOTSUPP;
+
+out_fput:
+	fput(file);
+out:
+	return ret;
+}
 
 /*
  * access() needs to use the real uid/gid, not the effective uid/gid.
@@ -517,7 +578,7 @@ asmlinkage long sys_fchmod(unsigned int fd, mode_t mode)
 	dentry = file->f_path.dentry;
 	inode = dentry->d_inode;
 
-	audit_inode(NULL, inode);
+	audit_inode(NULL, dentry);
 
 	err = -EROFS;
 	if (IS_RDONLY(inode) || MNT_IS_RDONLY(file->f_vfsmnt))
@@ -607,7 +668,8 @@ static int chown_common(struct dentry *dentry, struct vfsmount *mnt,
 		newattrs.ia_gid = dx_map_gid(group);
 	}
 	if (!S_ISDIR(inode->i_mode))
-		newattrs.ia_valid |= ATTR_KILL_SUID|ATTR_KILL_SGID;
+		newattrs.ia_valid |=
+			ATTR_KILL_SUID | ATTR_KILL_SGID | ATTR_KILL_PRIV;
 	mutex_lock(&inode->i_mutex);
 	error = notify_change(dentry, &newattrs);
 	mutex_unlock(&inode->i_mutex);
@@ -687,7 +749,7 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group)
 		goto out;
 
 	dentry = file->f_path.dentry;
-	audit_inode(NULL, dentry->d_inode);
+	audit_inode(NULL, dentry);
 	error = chown_common(dentry, file->f_vfsmnt, user, group);
 	fput(file);
 out:
@@ -717,6 +779,10 @@ static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
 	f->f_pos = 0;
 	f->f_op = fops_get(inode->i_fop);
 	file_move(f, &inode->i_sb->s_files);
+
+	error = security_dentry_open(f);
+	if (error)
+		goto cleanup_all;
 
 	if (!open && f->f_op)
 		open = f->f_op->open;
@@ -877,7 +943,7 @@ EXPORT_SYMBOL(dentry_open);
 /*
  * Find an empty file descriptor entry, and mark it busy.
  */
-int get_unused_fd(void)
+int get_unused_fd_flags(int flags)
 {
 	struct files_struct * files = current->files;
 	int fd, error;
@@ -913,7 +979,10 @@ repeat:
 	}
 
 	FD_SET(fd, fdt->open_fds);
-	FD_CLR(fd, fdt->close_on_exec);
+	if (flags & O_CLOEXEC)
+		FD_SET(fd, fdt->close_on_exec);
+	else
+		FD_CLR(fd, fdt->close_on_exec);
 	files->next_fd = fd + 1;
 	vx_openfd_inc(fd);
 #if 1
@@ -928,6 +997,11 @@ repeat:
 out:
 	spin_unlock(&files->file_lock);
 	return error;
+}
+
+int get_unused_fd(void)
+{
+	return get_unused_fd_flags(0);
 }
 
 EXPORT_SYMBOL(get_unused_fd);
@@ -983,7 +1057,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
 	int fd = PTR_ERR(tmp);
 
 	if (!IS_ERR(tmp)) {
-		fd = get_unused_fd();
+		fd = get_unused_fd_flags(flags);
 		if (fd >= 0) {
 			struct file *f = do_filp_open(dfd, tmp, flags, mode);
 			if (IS_ERR(f)) {
@@ -1011,7 +1085,7 @@ asmlinkage long sys_open(const char __user *filename, int flags, int mode)
 	prevent_tail_call(ret);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(sys_open);
+EXPORT_UNUSED_SYMBOL_GPL(sys_open); /* To be deleted for 2.6.25 */
 
 asmlinkage long sys_openat(int dfd, const char __user *filename, int flags,
 			   int mode)
@@ -1128,7 +1202,7 @@ asmlinkage long sys_vhangup(void)
 int generic_file_open(struct inode * inode, struct file * filp)
 {
 	if (!(filp->f_flags & O_LARGEFILE) && i_size_read(inode) > MAX_NON_LFS)
-		return -EFBIG;
+		return -EOVERFLOW;
 	return 0;
 }
 

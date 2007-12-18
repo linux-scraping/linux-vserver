@@ -89,7 +89,7 @@ static unsigned char atkbd_set2_keycode[512] = {
 	  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 	217,100,255,  0, 97,165,  0,  0,156,  0,  0,  0,  0,  0,  0,125,
 	173,114,  0,113,  0,  0,  0,126,128,  0,  0,140,  0,  0,  0,127,
-	159,  0,115,  0,164,  0,  0,116,158,  0,150,166,  0,  0,  0,142,
+	159,  0,115,  0,164,  0,  0,116,158,  0,172,166,  0,  0,  0,142,
 	157,  0,  0,  0,  0,  0,  0,  0,155,  0, 98,  0,  0,163,  0,  0,
 	226,  0,  0,  0,  0,  0,  0,  0,  0,255, 96,  0,  0,  0,143,  0,
 	  0,  0,  0,  0,  0,  0,  0,  0,  0,107,  0,105,102,  0,  0,112,
@@ -111,7 +111,7 @@ static unsigned char atkbd_set3_keycode[512] = {
 	 82, 83, 80, 76, 77, 72, 69, 98,  0, 96, 81,  0, 78, 73, 55,183,
 
 	184,185,186,187, 74, 94, 92, 93,  0,  0,  0,125,126,127,112,  0,
-	  0,139,150,163,165,115,152,150,166,140,160,154,113,114,167,168,
+	  0,139,172,163,165,115,152,172,166,140,160,154,113,114,167,168,
 	148,149,147,140
 };
 
@@ -900,27 +900,32 @@ static void atkbd_set_device_attrs(struct atkbd *atkbd)
 
 	input_set_drvdata(input_dev, atkbd);
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REP) | BIT(EV_MSC);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REP) |
+		BIT_MASK(EV_MSC);
 
 	if (atkbd->write) {
-		input_dev->evbit[0] |= BIT(EV_LED);
-		input_dev->ledbit[0] = BIT(LED_NUML) | BIT(LED_CAPSL) | BIT(LED_SCROLLL);
+		input_dev->evbit[0] |= BIT_MASK(EV_LED);
+		input_dev->ledbit[0] = BIT_MASK(LED_NUML) |
+			BIT_MASK(LED_CAPSL) | BIT_MASK(LED_SCROLLL);
 	}
 
 	if (atkbd->extra)
-		input_dev->ledbit[0] |= BIT(LED_COMPOSE) | BIT(LED_SUSPEND) |
-					BIT(LED_SLEEP) | BIT(LED_MUTE) | BIT(LED_MISC);
+		input_dev->ledbit[0] |= BIT_MASK(LED_COMPOSE) |
+			BIT_MASK(LED_SUSPEND) | BIT_MASK(LED_SLEEP) |
+			BIT_MASK(LED_MUTE) | BIT_MASK(LED_MISC);
 
 	if (!atkbd->softrepeat) {
 		input_dev->rep[REP_DELAY] = 250;
 		input_dev->rep[REP_PERIOD] = 33;
 	}
 
-	input_dev->mscbit[0] = atkbd->softraw ? BIT(MSC_SCAN) : BIT(MSC_RAW) | BIT(MSC_SCAN);
+	input_dev->mscbit[0] = atkbd->softraw ? BIT_MASK(MSC_SCAN) :
+		BIT_MASK(MSC_RAW) | BIT_MASK(MSC_SCAN);
 
 	if (atkbd->scroll) {
-		input_dev->evbit[0] |= BIT(EV_REL);
-		input_dev->relbit[0] = BIT(REL_WHEEL) | BIT(REL_HWHEEL);
+		input_dev->evbit[0] |= BIT_MASK(EV_REL);
+		input_dev->relbit[0] = BIT_MASK(REL_WHEEL) |
+			BIT_MASK(REL_HWHEEL);
 		set_bit(BTN_MIDDLE, input_dev->keybit);
 	}
 

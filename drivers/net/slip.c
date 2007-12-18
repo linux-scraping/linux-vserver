@@ -639,8 +639,6 @@ static void sl_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 10;
 
-	SET_MODULE_OWNER(dev);
-
 	/* New-style flags. */
 	dev->flags		= IFF_NOARP|IFF_POINTOPOINT|IFF_MULTICAST;
 }
@@ -957,7 +955,7 @@ slip_close(struct tty_struct *tty)
   *			STANDARD SLIP ENCAPSULATION		  	 *
   ************************************************************************/
 
-int
+static int
 slip_esc(unsigned char *s, unsigned char *d, int len)
 {
 	unsigned char *ptr = d;
@@ -1220,14 +1218,8 @@ static int slip_ioctl(struct tty_struct *tty, struct file *file, unsigned int cm
 		return 0;
 	/* VSV changes end */
 #endif
-
-	/* Allow stty to read, but not set, the serial port */
-	case TCGETS:
-	case TCGETA:
-		return n_tty_ioctl(tty, file, cmd, arg);
-
 	default:
-		return -ENOIOCTLCMD;
+		return tty_mode_ioctl(tty, file, cmd, arg);
 	}
 }
 

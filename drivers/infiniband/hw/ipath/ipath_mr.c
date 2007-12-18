@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -225,7 +225,7 @@ struct ib_mr *ipath_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 		for (i = 0; i < chunk->nents; i++) {
 			void *vaddr;
 
-			vaddr = page_address(chunk->page_list[i].page);
+			vaddr = page_address(sg_page(&chunk->page_list[i]));
 			if (!vaddr) {
 				ret = ERR_PTR(-EINVAL);
 				goto bail;

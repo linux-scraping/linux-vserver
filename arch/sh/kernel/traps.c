@@ -95,14 +95,15 @@ void die(const char * str, struct pt_regs * regs, long err)
 	print_modules();
 	show_regs(regs);
 
-	printk("Process: %s (pid: %d, stack limit = %p)\n",
-	       current->comm, current->pid, task_stack_page(current) + 1);
+	printk("Process: %s (pid: %d, stack limit = %p)\n", current->comm,
+			task_pid_nr(current), task_stack_page(current) + 1);
 
 	if (!user_mode(regs) || in_interrupt())
 		dump_mem("Stack: ", regs->regs[15], THREAD_SIZE +
 			 (unsigned long)task_stack_page(current));
 
 	bust_spinlocks(0);
+	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
 
 	if (kexec_should_crash(current))
@@ -385,7 +386,8 @@ static int handle_unaligned_access(u16 instruction, struct pt_regs *regs)
 
 		printk(KERN_NOTICE "Fixing up unaligned userspace access "
 		       "in \"%s\" pid=%d pc=0x%p ins=0x%04hx\n",
-		       current->comm,current->pid,(u16*)regs->pc,instruction);
+		       current->comm, task_pid_nr(current),
+		       (u16 *)regs->pc, instruction);
 	}
 
 	ret = -EFAULT;
@@ -584,7 +586,7 @@ uspace_segv:
 		info.si_signo = SIGBUS;
 		info.si_errno = 0;
 		info.si_code = si_code;
-		info.si_addr = (void *) address;
+		info.si_addr = (void __user *)address;
 		force_sig_info(SIGBUS, &info, current);
 	} else {
 		if (regs->pc & 1)
@@ -617,7 +619,7 @@ uspace_segv:
  */
 int is_dsp_inst(struct pt_regs *regs)
 {
-	unsigned short inst;
+	unsigned short inst = 0;
 
 	/*
 	 * Safe guard if DSP mode is already enabled or we're lacking
@@ -645,7 +647,6 @@ asmlinkage void do_divide_error(unsigned long r4, unsigned long r5,
 				unsigned long r6, unsigned long r7,
 				struct pt_regs __regs)
 {
-	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 	siginfo_t info;
 
 	switch (r4) {
@@ -807,12 +808,13 @@ static inline void __init gdb_vbr_init(void)
 }
 #endif
 
-void __init per_cpu_trap_init(void)
+void __cpuinit per_cpu_trap_init(void)
 {
 	extern void *vbr_base;
 
 #ifdef CONFIG_SH_STANDARD_BIOS
-	gdb_vbr_init();
+	if (raw_smp_processor_id() == 0)
+		gdb_vbr_init();
 #endif
 
 	/* NOTE: The VBR value should be at P1
@@ -854,8 +856,13 @@ void __init trap_init(void)
 	set_exception_table_evt(0x800, do_reserved_inst);
 	set_exception_table_evt(0x820, do_illegal_slot_inst);
 #elif defined(CONFIG_SH_FPU)
+#ifdef CONFIG_CPU_SUBTYPE_SHX3
+	set_exception_table_evt(0xd80, do_fpu_state_restore);
+	set_exception_table_evt(0xda0, do_fpu_state_restore);
+#else
 	set_exception_table_evt(0x800, do_fpu_state_restore);
 	set_exception_table_evt(0x820, do_fpu_state_restore);
+#endif
 #endif
 
 #ifdef CONFIG_CPU_SH2
@@ -874,7 +881,7 @@ void __init trap_init(void)
 void handle_BUG(struct pt_regs *regs)
 {
 	enum bug_trap_type tt;
-	tt = report_bug(regs->pc);
+	tt = report_bug(regs->pc, regs);
 	if (tt == BUG_TRAP_TYPE_WARN) {
 		regs->pc += 2;
 		return;

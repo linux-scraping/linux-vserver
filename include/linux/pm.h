@@ -25,6 +25,7 @@
 
 #include <linux/list.h>
 #include <asm/atomic.h>
+#include <asm/errno.h>
 
 /*
  * Power management requests... these are passed to pm_send_all() and friends.
@@ -101,97 +102,7 @@ struct pm_dev
  */
 extern void (*pm_idle)(void);
 extern void (*pm_power_off)(void);
-
-typedef int __bitwise suspend_state_t;
-
-#define PM_SUSPEND_ON		((__force suspend_state_t) 0)
-#define PM_SUSPEND_STANDBY	((__force suspend_state_t) 1)
-#define PM_SUSPEND_MEM		((__force suspend_state_t) 3)
-#define PM_SUSPEND_MAX		((__force suspend_state_t) 4)
-
-/**
- * struct pm_ops - Callbacks for managing platform dependent system sleep
- *	states.
- *
- * @valid: Callback to determine if given system sleep state is supported by
- *	the platform.
- *	Valid (ie. supported) states are advertised in /sys/power/state.  Note
- *	that it still may be impossible to enter given system sleep state if the
- *	conditions aren't right.
- *	There is the %pm_valid_only_mem function available that can be assigned
- *	to this if the platform only supports mem sleep.
- *
- * @set_target: Tell the platform which system sleep state is going to be
- *	entered.
- *	@set_target() is executed right prior to suspending devices.  The
- *	information conveyed to the platform code by @set_target() should be
- *	disregarded by the platform as soon as @finish() is executed and if
- *	@prepare() fails.  If @set_target() fails (ie. returns nonzero),
- *	@prepare(), @enter() and @finish() will not be called by the PM core.
- *	This callback is optional.  However, if it is implemented, the argument
- *	passed to @prepare(), @enter() and @finish() is meaningless and should
- *	be ignored.
- *
- * @prepare: Prepare the platform for entering the system sleep state indicated
- *	by @set_target() or represented by the argument if @set_target() is not
- *	implemented.
- *	@prepare() is called right after devices have been suspended (ie. the
- *	appropriate .suspend() method has been executed for each device) and
- *	before the nonboot CPUs are disabled (it is executed with IRQs enabled).
- *	This callback is optional.  It returns 0 on success or a negative
- *	error code otherwise, in which case the system cannot enter the desired
- *	sleep state (@enter() and @finish() will not be called in that case).
- *
- * @enter: Enter the system sleep state indicated by @set_target() or
- *	represented by the argument if @set_target() is not implemented.
- *	This callback is mandatory.  It returns 0 on success or a negative
- *	error code otherwise, in which case the system cannot enter the desired
- *	sleep state.
- *
- * @finish: Called when the system has just left a sleep state, right after
- *	the nonboot CPUs have been enabled and before devices are resumed (it is
- *	executed with IRQs enabled).  If @set_target() is not implemented, the
- *	argument represents the sleep state being left.
- *	This callback is optional, but should be implemented by the platforms
- *	that implement @prepare().  If implemented, it is always called after
- *	@enter() (even if @enter() fails).
- */
-struct pm_ops {
-	int (*valid)(suspend_state_t state);
-	int (*set_target)(suspend_state_t state);
-	int (*prepare)(suspend_state_t state);
-	int (*enter)(suspend_state_t state);
-	int (*finish)(suspend_state_t state);
-};
-
-extern struct pm_ops *pm_ops;
-
-/**
- * pm_set_ops - set platform dependent power management ops
- * @pm_ops: The new power management operations to set.
- */
-extern void pm_set_ops(struct pm_ops *pm_ops);
-extern int pm_valid_only_mem(suspend_state_t state);
-
-/**
- * arch_suspend_disable_irqs - disable IRQs for suspend
- *
- * Disables IRQs (in the default case). This is a weak symbol in the common
- * code and thus allows architectures to override it if more needs to be
- * done. Not called for suspend to disk.
- */
-extern void arch_suspend_disable_irqs(void);
-
-/**
- * arch_suspend_enable_irqs - enable IRQs after suspend
- *
- * Enables IRQs (in the default case). This is a weak symbol in the common
- * code and thus allows architectures to override it if more needs to be
- * done. Not called for suspend to disk.
- */
-extern void arch_suspend_enable_irqs(void);
-
-extern int pm_suspend(suspend_state_t state);
+extern void (*pm_power_off_prepare)(void);
 
 /*
  * Device power management
@@ -265,22 +176,17 @@ typedef struct pm_message {
 struct dev_pm_info {
 	pm_message_t		power_state;
 	unsigned		can_wakeup:1;
-#ifdef	CONFIG_PM
+#ifdef	CONFIG_PM_SLEEP
 	unsigned		should_wakeup:1;
-	pm_message_t		prev_state;
-	void			* saved_state;
-	struct device		* pm_parent;
 	struct list_head	entry;
 #endif
 };
-
-extern void device_pm_set_parent(struct device * dev, struct device * parent);
 
 extern int device_power_down(pm_message_t state);
 extern void device_power_up(void);
 extern void device_resume(void);
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 extern int device_suspend(pm_message_t state);
 extern int device_prepare_suspend(pm_message_t state);
 
@@ -289,8 +195,6 @@ extern int device_prepare_suspend(pm_message_t state);
 #define device_may_wakeup(dev) \
 	(device_can_wakeup(dev) && (dev)->power.should_wakeup)
 
-extern int dpm_runtime_suspend(struct device *, pm_message_t);
-extern void dpm_runtime_resume(struct device *);
 extern void __suspend_report_result(const char *function, void *fn, int ret);
 
 #define suspend_report_result(fn, ret)					\
@@ -312,7 +216,7 @@ static inline int call_platform_enable_wakeup(struct device *dev, int is_on)
 	return 0;
 }
 
-#else /* !CONFIG_PM */
+#else /* !CONFIG_PM_SLEEP */
 
 static inline int device_suspend(pm_message_t state)
 {
@@ -322,15 +226,6 @@ static inline int device_suspend(pm_message_t state)
 #define device_set_wakeup_enable(dev,val)	do{}while(0)
 #define device_may_wakeup(dev)			(0)
 
-static inline int dpm_runtime_suspend(struct device * dev, pm_message_t state)
-{
-	return 0;
-}
-
-static inline void dpm_runtime_resume(struct device * dev)
-{
-}
-
 #define suspend_report_result(fn, ret) do { } while (0)
 
 static inline int call_platform_enable_wakeup(struct device *dev, int is_on)
@@ -338,7 +233,7 @@ static inline int call_platform_enable_wakeup(struct device *dev, int is_on)
 	return 0;
 }
 
-#endif
+#endif /* !CONFIG_PM_SLEEP */
 
 /* changes to device_may_wakeup take effect on the next pm state change.
  * by default, devices should wakeup if they can.

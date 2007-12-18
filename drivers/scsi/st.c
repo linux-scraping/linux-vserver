@@ -1485,7 +1485,7 @@ st_write(struct file *filp, const char __user *buf, size_t count, loff_t * ppos)
 	struct st_buffer *STbp;
 	char *name = tape_name(STp);
 
-	if (down_interruptible(&STp->lock))
+	if (mutex_lock_interruptible(&STp->lock))
 		return -ERESTARTSYS;
 
 	retval = rw_checks(STp, filp, count);
@@ -1736,7 +1736,7 @@ st_write(struct file *filp, const char __user *buf, size_t count, loff_t * ppos)
 	if (SRpnt != NULL)
 		st_release_request(SRpnt);
 	release_buffering(STp, 0);
-	up(&STp->lock);
+	mutex_unlock(&STp->lock);
 
 	return retval;
 }
@@ -1942,7 +1942,7 @@ st_read(struct file *filp, char __user *buf, size_t count, loff_t * ppos)
 	struct st_buffer *STbp = STp->buffer;
 	DEB( char *name = tape_name(STp); )
 
-	if (down_interruptible(&STp->lock))
+	if (mutex_lock_interruptible(&STp->lock))
 		return -ERESTARTSYS;
 
 	retval = rw_checks(STp, filp, count);
@@ -2069,7 +2069,7 @@ st_read(struct file *filp, char __user *buf, size_t count, loff_t * ppos)
 		release_buffering(STp, 1);
 		STbp->buffer_bytes = 0;
 	}
-	up(&STp->lock);
+	mutex_unlock(&STp->lock);
 
 	return retval;
 }
@@ -3226,7 +3226,7 @@ static int st_ioctl(struct inode *inode, struct file *file,
 	char *name = tape_name(STp);
 	void __user *p = (void __user *)arg;
 
-	if (down_interruptible(&STp->lock))
+	if (mutex_lock_interruptible(&STp->lock))
 		return -ERESTARTSYS;
 
         DEB(
@@ -3537,7 +3537,7 @@ static int st_ioctl(struct inode *inode, struct file *file,
 			retval = (-EFAULT);
 		goto out;
 	}
-	up(&STp->lock);
+	mutex_unlock(&STp->lock);
 	switch (cmd_in) {
 		case SCSI_IOCTL_GET_IDLUN:
 		case SCSI_IOCTL_GET_BUS_NUMBER:
@@ -3549,7 +3549,8 @@ static int st_ioctl(struct inode *inode, struct file *file,
 			    !capable(CAP_SYS_RAWIO))
 				i = -EPERM;
 			else
-				i = scsi_cmd_ioctl(file, STp->disk, cmd_in, p);
+				i = scsi_cmd_ioctl(file, STp->disk->queue,
+						   STp->disk, cmd_in, p);
 			if (i != -ENOTTY)
 				return i;
 			break;
@@ -3562,7 +3563,7 @@ static int st_ioctl(struct inode *inode, struct file *file,
 	return retval;
 
  out:
-	up(&STp->lock);
+	mutex_unlock(&STp->lock);
 	return retval;
 }
 
@@ -3796,13 +3797,11 @@ static void buf_to_sg(struct st_buffer *STbp, unsigned int length)
 	sg = &(STbp->sg[0]);
 	frp = STbp->frp;
 	for (i=count=0; count < length; i++) {
-		sg[i].page = frp[i].page;
 		if (length - count > frp[i].length)
-			sg[i].length = frp[i].length;
+			sg_set_page(&sg[i], frp[i].page, frp[i].length, 0);
 		else
-			sg[i].length = length - count;
+			sg_set_page(&sg[i], frp[i].page, length - count, 0);
 		count += sg[i].length;
-		sg[i].offset = 0;
 	}
 	STbp->sg_segs = i;
 	STbp->frp_sg_current = length;
@@ -4028,7 +4027,7 @@ static int st_probe(struct device *dev)
 
 	tpnt->density_changed = tpnt->compression_changed =
 	    tpnt->blksize_changed = 0;
-	init_MUTEX(&tpnt->lock);
+	mutex_init(&tpnt->lock);
 
 	st_nr_dev++;
 	write_unlock(&st_dev_arr_lock);
@@ -4445,15 +4444,13 @@ static int sgl_map_user_pages(struct scatterlist *sgl, const unsigned int max_pa
         }
 
 	/* Populate the scatter/gather list */
-	sgl[0].page = pages[0]; 
-	sgl[0].offset = uaddr & ~PAGE_MASK;
+	sg_set_page(&sgl[0], pages[0], 0, uaddr & ~PAGE_MASK);
 	if (nr_pages > 1) {
 		sgl[0].length = PAGE_SIZE - sgl[0].offset;
 		count -= sgl[0].length;
 		for (i=1; i < nr_pages ; i++) {
-			sgl[i].offset = 0;
-			sgl[i].page = pages[i]; 
-			sgl[i].length = count < PAGE_SIZE ? count : PAGE_SIZE;
+			sg_set_page(&sgl[i], pages[i],
+				    count < PAGE_SIZE ? count : PAGE_SIZE, 0);;
 			count -= PAGE_SIZE;
 		}
 	}
@@ -4482,7 +4479,7 @@ static int sgl_unmap_user_pages(struct scatterlist *sgl, const unsigned int nr_p
 	int i;
 
 	for (i=0; i < nr_pages; i++) {
-		struct page *page = sgl[i].page;
+		struct page *page = sg_page(&sgl[i]);
 
 		if (dirtied)
 			SetPageDirty(page);

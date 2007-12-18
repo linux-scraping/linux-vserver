@@ -129,12 +129,12 @@ MODULE_DEVICE_TABLE (usb, atp_table);
  */
 #define ATP_THRESHOLD	 5
 
-/* MacBook Pro (Geyser 3 & 4) initialization constants */
-#define ATP_GEYSER3_MODE_READ_REQUEST_ID 1
-#define ATP_GEYSER3_MODE_WRITE_REQUEST_ID 9
-#define ATP_GEYSER3_MODE_REQUEST_VALUE 0x300
-#define ATP_GEYSER3_MODE_REQUEST_INDEX 0
-#define ATP_GEYSER3_MODE_VENDOR_VALUE 0x04
+/* Geyser initialization constants */
+#define ATP_GEYSER_MODE_READ_REQUEST_ID		1
+#define ATP_GEYSER_MODE_WRITE_REQUEST_ID	9
+#define ATP_GEYSER_MODE_REQUEST_VALUE		0x300
+#define ATP_GEYSER_MODE_REQUEST_INDEX		0
+#define ATP_GEYSER_MODE_VENDOR_VALUE		0x04
 
 /* Structure to hold all of our device specific stuff */
 struct atp {
@@ -142,9 +142,11 @@ struct atp {
 	struct usb_device *	udev;		/* usb device */
 	struct urb *		urb;		/* usb request block */
 	signed char *		data;		/* transferred data */
-	int			open;		/* non-zero if opened */
-	struct input_dev	*input;		/* input dev */
-	int			valid;		/* are the sensors valid ? */
+	struct input_dev *	input;		/* input dev */
+	unsigned char		open;		/* non-zero if opened */
+	unsigned char		valid;		/* are the sensors valid ? */
+	unsigned char		size_detect_done;
+	unsigned char		overflowwarn;	/* overflow warning printed? */
 	int			x_old;		/* last reported x/y, */
 	int			y_old;		/* used for smoothing */
 						/* current value of the sensors */
@@ -153,8 +155,9 @@ struct atp {
 	signed char		xy_old[ATP_XSENSORS + ATP_YSENSORS];
 						/* accumulated sensors */
 	int			xy_acc[ATP_XSENSORS + ATP_YSENSORS];
-	int			overflowwarn;	/* overflow warning printed? */
 	int			datalen;	/* size of an USB urb transfer */
+	int			idlecount;      /* number of empty packets */
+	struct work_struct      work;
 };
 
 #define dbg_dump(msg, tab) \
@@ -168,7 +171,7 @@ struct atp {
 
 #define dprintk(format, a...)						\
 	do {								\
-		if (debug) printk(format, ##a);				\
+		if (debug) printk(KERN_DEBUG format, ##a);		\
 	} while (0)
 
 MODULE_AUTHOR("Johannes Berg, Stelian Pop, Frank Arnold, Michael Hanselmann");
@@ -185,6 +188,15 @@ MODULE_PARM_DESC(threshold, "Discards any change in data from a sensor (trackpad
 static int debug = 1;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Activate debugging output");
+
+static inline int atp_is_fountain(struct atp *dev)
+{
+	u16 productId = le16_to_cpu(dev->udev->descriptor.idProduct);
+
+	return productId == FOUNTAIN_ANSI_PRODUCT_ID ||
+	       productId == FOUNTAIN_ISO_PRODUCT_ID ||
+	       productId == FOUNTAIN_TP_ONLY_PRODUCT_ID;
+}
 
 /* Checks if the device a Geyser 2 (ANSI, ISO, JIS) */
 static inline int atp_is_geyser_2(struct atp *dev)
@@ -206,6 +218,66 @@ static inline int atp_is_geyser_3(struct atp *dev)
 		(productId == GEYSER4_ANSI_PRODUCT_ID) ||
 		(productId == GEYSER4_ISO_PRODUCT_ID) ||
 		(productId == GEYSER4_JIS_PRODUCT_ID);
+}
+
+/*
+ * By default newer Geyser devices send standard USB HID mouse
+ * packets (Report ID 2). This code changes device mode, so it
+ * sends raw sensor reports (Report ID 5).
+ */
+static int atp_geyser_init(struct usb_device *udev)
+{
+	char data[8];
+	int size;
+
+	size = usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
+			ATP_GEYSER_MODE_READ_REQUEST_ID,
+			USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			ATP_GEYSER_MODE_REQUEST_VALUE,
+			ATP_GEYSER_MODE_REQUEST_INDEX, &data, 8, 5000);
+
+	if (size != 8) {
+		err("Could not do mode read request from device"
+		    " (Geyser Raw mode)");
+		return -EIO;
+	}
+
+	/* Apply the mode switch */
+	data[0] = ATP_GEYSER_MODE_VENDOR_VALUE;
+
+	size = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
+			ATP_GEYSER_MODE_WRITE_REQUEST_ID,
+			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			ATP_GEYSER_MODE_REQUEST_VALUE,
+			ATP_GEYSER_MODE_REQUEST_INDEX, &data, 8, 5000);
+
+	if (size != 8) {
+		err("Could not do mode write request to device"
+		    " (Geyser Raw mode)");
+		return -EIO;
+	}
+	return 0;
+}
+
+/*
+ * Reinitialise the device. This usually stops stream of empty packets
+ * coming from it.
+ */
+static void atp_reinit(struct work_struct *work)
+{
+	struct atp *dev = container_of(work, struct atp, work);
+	struct usb_device *udev = dev->udev;
+	int retval;
+
+	dev->idlecount = 0;
+
+	atp_geyser_init(udev);
+
+	retval = usb_submit_urb(dev->urb, GFP_ATOMIC);
+	if (retval) {
+		err("%s - usb_submit_urb failed with result %d",
+		    __FUNCTION__, retval);
+	}
 }
 
 static int atp_calculate_abs(int *xy_sensors, int nb_sensors, int fact,
@@ -277,6 +349,7 @@ static void atp_complete(struct urb* urb)
 {
 	int x, y, x_z, y_z, x_f, y_f;
 	int retval, i, j;
+	int key;
 	struct atp *dev = urb->context;
 
 	switch (urb->status) {
@@ -285,7 +358,7 @@ static void atp_complete(struct urb* urb)
 		break;
 	case -EOVERFLOW:
 		if(!dev->overflowwarn) {
-			printk("appletouch: OVERFLOW with data "
+			printk(KERN_WARNING "appletouch: OVERFLOW with data "
 				"length %d, actual length is %d\n",
 				dev->datalen, dev->urb->actual_length);
 			dev->overflowwarn = 1;
@@ -374,15 +447,17 @@ static void atp_complete(struct urb* urb)
 		dev->x_old = dev->y_old = -1;
 		memcpy(dev->xy_old, dev->xy_cur, sizeof(dev->xy_old));
 
-		if (atp_is_geyser_3(dev)) /* No 17" Macbooks (yet) */
+		if (dev->size_detect_done ||
+		    atp_is_geyser_3(dev)) /* No 17" Macbooks (yet) */
 			goto exit;
 
 		/* 17" Powerbooks have extra X sensors */
-		for (i = (atp_is_geyser_2(dev)?15:16); i < ATP_XSENSORS; i++) {
-			if (!dev->xy_cur[i]) continue;
+		for (i = (atp_is_geyser_2(dev) ? 15 : 16); i < ATP_XSENSORS; i++) {
+			if (!dev->xy_cur[i])
+				continue;
 
-			printk("appletouch: 17\" model detected.\n");
-			if(atp_is_geyser_2(dev))
+			printk(KERN_INFO "appletouch: 17\" model detected.\n");
+			if (atp_is_geyser_2(dev))
 				input_set_abs_params(dev->input, ABS_X, 0,
 						     (20 - 1) *
 						     ATP_XFACT - 1,
@@ -392,10 +467,10 @@ static void atp_complete(struct urb* urb)
 						     (ATP_XSENSORS - 1) *
 						     ATP_XFACT - 1,
 						     ATP_FUZZ, 0);
-
 			break;
 		}
 
+		dev->size_detect_done = 1;
 		goto exit;
 	}
 
@@ -417,6 +492,7 @@ static void atp_complete(struct urb* urb)
 			      ATP_XFACT, &x_z, &x_f);
 	y = atp_calculate_abs(dev->xy_acc + ATP_XSENSORS, ATP_YSENSORS,
 			      ATP_YFACT, &y_z, &y_f);
+	key = dev->data[dev->datalen - 1] & 1;
 
 	if (x && y) {
 		if (dev->x_old != -1) {
@@ -426,7 +502,7 @@ static void atp_complete(struct urb* urb)
 			dev->y_old = y;
 
 			if (debug > 1)
-				printk("appletouch: X: %3d Y: %3d "
+				printk(KERN_DEBUG "appletouch: X: %3d Y: %3d "
 				       "Xz: %3d Yz: %3d\n",
 				       x, y, x_z, y_z);
 
@@ -439,8 +515,8 @@ static void atp_complete(struct urb* urb)
 		}
 		dev->x_old = x;
 		dev->y_old = y;
-	}
-	else if (!x && !y) {
+
+	} else if (!x && !y) {
 
 		dev->x_old = dev->y_old = -1;
 		input_report_key(dev->input, BTN_TOUCH, 0);
@@ -451,10 +527,28 @@ static void atp_complete(struct urb* urb)
 		memset(dev->xy_acc, 0, sizeof(dev->xy_acc));
 	}
 
-	input_report_key(dev->input, BTN_LEFT,
-			 !!dev->data[dev->datalen - 1]);
-
+	input_report_key(dev->input, BTN_LEFT, key);
 	input_sync(dev->input);
+
+	/*
+	 * Many Geysers will continue to send packets continually after
+	 * the first touch unless reinitialised. Do so if it's been
+	 * idle for a while in order to avoid waking the kernel up
+	 * several hundred times a second. Re-initialization does not
+	 * work on Fountain touchpads.
+	 */
+	if (!atp_is_fountain(dev)) {
+		if (!x && !y && !key) {
+			dev->idlecount++;
+			if (dev->idlecount == 10) {
+				dev->valid = 0;
+				schedule_work(&dev->work);
+				/* Don't resubmit urb here, wait for reinit */
+				return;
+			}
+		} else
+			dev->idlecount = 0;
+	}
 
 exit:
 	retval = usb_submit_urb(dev->urb, GFP_ATOMIC);
@@ -480,6 +574,7 @@ static void atp_close(struct input_dev *input)
 	struct atp *dev = input_get_drvdata(input);
 
 	usb_kill_urb(dev->urb);
+	cancel_work_sync(&dev->work);
 	dev->open = 0;
 }
 
@@ -527,42 +622,12 @@ static int atp_probe(struct usb_interface *iface, const struct usb_device_id *id
 	else
 		dev->datalen = 81;
 
-	if (atp_is_geyser_3(dev)) {
-		/*
-		 * By default Geyser 3 device sends standard USB HID mouse
-		 * packets (Report ID 2). This code changes device mode, so it
-		 * sends raw sensor reports (Report ID 5).
-		 */
-		char data[8];
-		int size;
-
-		size = usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
-			ATP_GEYSER3_MODE_READ_REQUEST_ID,
-			USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-			ATP_GEYSER3_MODE_REQUEST_VALUE,
-			ATP_GEYSER3_MODE_REQUEST_INDEX, &data, 8, 5000);
-
-		if (size != 8) {
-			err("Could not do mode read request from device"
-							" (Geyser 3 mode)");
+	if (!atp_is_fountain(dev)) {
+		/* switch to raw sensor mode */
+		if (atp_geyser_init(udev))
 			goto err_free_devs;
-		}
 
-		/* Apply the mode switch */
-		data[0] = ATP_GEYSER3_MODE_VENDOR_VALUE;
-
-		size = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
-			ATP_GEYSER3_MODE_WRITE_REQUEST_ID,
-			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-			ATP_GEYSER3_MODE_REQUEST_VALUE,
-			ATP_GEYSER3_MODE_REQUEST_INDEX, &data, 8, 5000);
-
-		if (size != 8) {
-			err("Could not do mode write request to device"
-							" (Geyser 3 mode)");
-			goto err_free_devs;
-		}
-		printk("appletouch Geyser 3 inited.\n");
+		printk(KERN_INFO "appletouch: Geyser mode initialized.\n");
 	}
 
 	dev->urb = usb_alloc_urb(0, GFP_KERNEL);
@@ -636,6 +701,8 @@ static int atp_probe(struct usb_interface *iface, const struct usb_device_id *id
 	/* save our data pointer in this interface device */
 	usb_set_intfdata(iface, dev);
 
+	INIT_WORK(&dev->work, atp_reinit);
+
 	return 0;
 
  err_free_buffer:
@@ -669,14 +736,17 @@ static void atp_disconnect(struct usb_interface *iface)
 static int atp_suspend(struct usb_interface *iface, pm_message_t message)
 {
 	struct atp *dev = usb_get_intfdata(iface);
+
 	usb_kill_urb(dev->urb);
 	dev->valid = 0;
+
 	return 0;
 }
 
 static int atp_resume(struct usb_interface *iface)
 {
 	struct atp *dev = usb_get_intfdata(iface);
+
 	if (dev->open && usb_submit_urb(dev->urb, GFP_ATOMIC))
 		return -EIO;
 

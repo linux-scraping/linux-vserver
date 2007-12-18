@@ -27,6 +27,7 @@
 #include <asm/semaphore.h>
 #include <linux/ppp_channel.h>
 #endif /* __KERNEL__ */
+#include <linux/if_pppol2tp.h>
 
 /* For user-space programs to pick up these definitions
  * which they wouldn't get otherwise without defining __KERNEL__
@@ -39,7 +40,7 @@
 /************************************************************************ 
  * PPPoE addressing definition 
  */ 
-typedef __u16 sid_t; 
+typedef __be16 sid_t;
 struct pppoe_addr{ 
        sid_t           sid;                    /* Session identifier */ 
        unsigned char   remote[ETH_ALEN];       /* Remote address */ 
@@ -50,8 +51,9 @@ struct pppoe_addr{
  * Protocols supported by AF_PPPOX 
  */ 
 #define PX_PROTO_OE    0 /* Currently just PPPoE */
-#define PX_MAX_PROTO   1	
- 
+#define PX_PROTO_OL2TP 1 /* Now L2TP also */
+#define PX_MAX_PROTO   2
+
 struct sockaddr_pppox { 
        sa_family_t     sa_family;            /* address family, AF_PPPOX */ 
        unsigned int    sa_protocol;          /* protocol identifier */ 
@@ -60,6 +62,16 @@ struct sockaddr_pppox {
        }sa_addr; 
 }__attribute__ ((packed)); 
 
+/* The use of the above union isn't viable because the size of this
+ * struct must stay fixed over time -- applications use sizeof(struct
+ * sockaddr_pppox) to fill it. We use a protocol specific sockaddr
+ * type instead.
+ */
+struct sockaddr_pppol2tp {
+	sa_family_t     sa_family;      /* address family, AF_PPPOX */
+	unsigned int    sa_protocol;    /* protocol identifier */
+	struct pppol2tp_addr pppol2tp;
+}__attribute__ ((packed));
 
 /*********************************************************************
  *
@@ -78,8 +90,8 @@ struct sockaddr_pppox {
 #define PADS_CODE	0x65
 #define PADT_CODE	0xa7
 struct pppoe_tag {
-	__u16 tag_type;
-	__u16 tag_len;
+	__be16 tag_type;
+	__be16 tag_len;
 	char tag_data[0];
 } __attribute ((packed));
 
@@ -106,8 +118,8 @@ struct pppoe_hdr {
 #error	"Please fix <asm/byteorder.h>"
 #endif
 	__u8 code;
-	__u16 sid;
-	__u16 length;
+	__be16 sid;
+	__be16 length;
 	struct pppoe_tag tag[0];
 } __attribute__ ((packed));
 
@@ -140,7 +152,7 @@ struct pppox_sock {
 	union {
 		struct pppoe_opt pppoe;
 	} proto;
-	unsigned short		num;
+	__be16			num;
 };
 #define pppoe_dev	proto.pppoe.dev
 #define pppoe_ifindex	proto.pppoe.ifindex
@@ -160,7 +172,7 @@ static inline struct sock *sk_pppox(struct pppox_sock *po)
 struct module;
 
 struct pppox_proto {
-	int		(*create)(struct socket *sock);
+	int		(*create)(struct net *net, struct socket *sock);
 	int		(*ioctl)(struct socket *sock, unsigned int cmd,
 				 unsigned long arg);
 	struct module	*owner;

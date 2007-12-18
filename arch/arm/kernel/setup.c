@@ -23,6 +23,8 @@
 #include <linux/cpu.h>
 #include <linux/interrupt.h>
 #include <linux/smp.h>
+#include <linux/fs.h>
+#include <linux/kexec.h>
 
 #include <asm/cpu.h>
 #include <asm/elf.h>
@@ -62,6 +64,8 @@ extern void _stext, _text, _etext, __data_start, _edata, _end;
 unsigned int processor_id;
 unsigned int __machine_arch_type;
 EXPORT_SYMBOL(__machine_arch_type);
+
+unsigned int __atags_pointer __initdata;
 
 unsigned int system_rev;
 EXPORT_SYMBOL(system_rev);
@@ -301,10 +305,23 @@ int cpu_architecture(void)
 		cpu_arch = (processor_id >> 16) & 7;
 		if (cpu_arch)
 			cpu_arch += CPU_ARCH_ARMv3;
-	} else {
-		/* the revised CPUID */
-		cpu_arch = ((processor_id >> 12) & 0xf) - 0xb + CPU_ARCH_ARMv6;
-	}
+	} else if ((processor_id & 0x000f0000) == 0x000f0000) {
+		unsigned int mmfr0;
+
+		/* Revised CPUID format. Read the Memory Model Feature
+		 * Register 0 and check for VMSAv7 or PMSAv7 */
+		asm("mrc	p15, 0, %0, c0, c1, 4"
+		    : "=r" (mmfr0));
+		if ((mmfr0 & 0x0000000f) == 0x00000003 ||
+		    (mmfr0 & 0x000000f0) == 0x00000030)
+			cpu_arch = CPU_ARCH_ARMv7;
+		else if ((mmfr0 & 0x0000000f) == 0x00000002 ||
+			 (mmfr0 & 0x000000f0) == 0x00000020)
+			cpu_arch = CPU_ARCH_ARMv6;
+		else
+			cpu_arch = CPU_ARCH_UNKNOWN;
+	} else
+		cpu_arch = CPU_ARCH_UNKNOWN;
 
 	return cpu_arch;
 }
@@ -767,6 +784,23 @@ static int __init customize_machine(void)
 }
 arch_initcall(customize_machine);
 
+#ifdef CONFIG_KEXEC
+
+/* Physical addr of where the boot params should be for this machine */
+extern unsigned long kexec_boot_params_address;
+
+/* Physical addr of the buffer into which the boot params are copied */
+extern unsigned long kexec_boot_params_copy;
+
+/* Pointer to the boot params buffer, for manipulation and display */
+unsigned long kexec_boot_params;
+EXPORT_SYMBOL(kexec_boot_params);
+
+/* The buffer itself - make sure it is sized correctly */
+static unsigned long kexec_boot_params_buf[(KEXEC_BOOT_PARAMS_SIZE + 3) / 4];
+
+#endif
+
 void __init setup_arch(char **cmdline_p)
 {
 	struct tag *tags = (struct tag *)&init_tags;
@@ -780,8 +814,22 @@ void __init setup_arch(char **cmdline_p)
 	if (mdesc->soft_reboot)
 		reboot_setup("s");
 
-	if (mdesc->boot_params)
+	if (__atags_pointer)
+		tags = phys_to_virt(__atags_pointer);
+	else if (mdesc->boot_params)
 		tags = phys_to_virt(mdesc->boot_params);
+
+#ifdef CONFIG_KEXEC
+	kexec_boot_params_copy = virt_to_phys(kexec_boot_params_buf);
+	kexec_boot_params = (unsigned long)kexec_boot_params_buf;
+	if (__atags_pointer) {
+		kexec_boot_params_address = __atags_pointer;
+		memcpy((void *)kexec_boot_params, tags, KEXEC_BOOT_PARAMS_SIZE);
+	} else if (mdesc->boot_params) {
+		kexec_boot_params_address = mdesc->boot_params;
+		memcpy((void *)kexec_boot_params, tags, KEXEC_BOOT_PARAMS_SIZE);
+	}
+#endif
 
 	/*
 	 * If we have the old style parameters, convert them to

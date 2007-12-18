@@ -108,7 +108,6 @@ cat << EOF
 #define __IGNORE_afs_syscall
 #define __IGNORE_getpmsg
 #define __IGNORE_putpmsg
-#define __IGNORE_vserver
 EOF
 }
 
@@ -119,5 +118,5 @@ sed -n -e '/^\#define/ { s/[^_]*__NR_\([^[:space:]]*\).*/\
 \#endif/p }' $1
 }
 
-(ignore_list && syscall_list ${srctree}/include/asm-i386/unistd.h) | \
+(ignore_list && syscall_list ${srctree}/include/asm-x86/unistd_32.h) | \
 $* -E -x c - > /dev/null

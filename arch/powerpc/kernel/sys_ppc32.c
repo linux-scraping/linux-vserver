@@ -41,10 +41,10 @@
 #include <linux/compat.h>
 #include <linux/ptrace.h>
 #include <linux/elf.h>
+#include <linux/ipc.h>
 
 #include <asm/ptrace.h>
 #include <asm/types.h>
-#include <asm/ipc.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/semaphore.h>
@@ -771,6 +771,13 @@ asmlinkage int compat_sys_truncate64(const char __user * path, u32 reg4,
 				unsigned long high, unsigned long low)
 {
 	return sys_truncate(path, (high << 32) | low);
+}
+
+asmlinkage long compat_sys_fallocate(int fd, int mode, u32 offhi, u32 offlo,
+				     u32 lenhi, u32 lenlo)
+{
+	return sys_fallocate(fd, mode, ((loff_t)offhi << 32) | offlo,
+			     ((loff_t)lenhi << 32) | lenlo);
 }
 
 asmlinkage int compat_sys_ftruncate64(unsigned int fd, u32 reg4, unsigned long high,

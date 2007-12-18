@@ -123,7 +123,6 @@ struct audioformat {
 	unsigned int rate_min, rate_max;	/* min/max rates */
 	unsigned int nr_rates;		/* number of rate table entries */
 	unsigned int *rate_table;	/* rate table */
-	unsigned int needs_knot;	/* any unusual rates? */
 };
 
 struct snd_usb_substream;
@@ -1309,7 +1308,11 @@ static int set_format(struct snd_usb_substream *subs, struct audioformat *fmt)
 
 	/* close the old interface */
 	if (subs->interface >= 0 && subs->interface != fmt->iface) {
-		usb_set_interface(subs->dev, subs->interface, 0);
+		if (usb_set_interface(subs->dev, subs->interface, 0) < 0) {
+			snd_printk(KERN_ERR "%d:%d:%d: return to setting 0 failed\n",
+				dev->devnum, fmt->iface, fmt->altsetting);
+			return -EIO;
+		}
 		subs->interface = -1;
 		subs->format = 0;
 	}
@@ -1761,7 +1764,7 @@ static int check_hw_params_convention(struct snd_usb_substream *subs)
 		channels[f->format] |= (1 << f->channels);
 		rates[f->format] |= f->rates;
 		/* needs knot? */
-		if (f->needs_knot)
+		if (f->rates & SNDRV_PCM_RATE_KNOT)
 			goto __out;
 	}
 	/* check whether channels and rates match for all formats */
@@ -1817,7 +1820,7 @@ static int snd_usb_pcm_check_knot(struct snd_pcm_runtime *runtime,
 		if (fp->rates & SNDRV_PCM_RATE_CONTINUOUS)
 			return 0;
 		count += fp->nr_rates;
-		if (fp->needs_knot)
+		if (fp->rates & SNDRV_PCM_RATE_KNOT)
 			needs_knot = 1;
 	}
 	if (!needs_knot)
@@ -2350,7 +2353,9 @@ static int is_big_endian_format(struct snd_usb_audio *chip, struct audioformat *
 			return 1;
 		break;
 	case USB_ID(0x0763, 0x2003): /* M-Audio Audiophile USB */
-		return 1;
+		if (device_setup[chip->index] == 0x00 ||
+		    fp->altsetting==1 || fp->altsetting==2 || fp->altsetting==3)
+			return 1;
 	}
 	return 0;
 }
@@ -2451,7 +2456,7 @@ static int parse_audio_format_rates(struct snd_usb_audio *chip, struct audioform
 				    unsigned char *fmt, int offset)
 {
 	int nr_rates = fmt[offset];
-	int found;
+
 	if (fmt[0] < offset + 1 + 3 * (nr_rates ? nr_rates : 2)) {
 		snd_printk(KERN_ERR "%d:%u:%d : invalid FORMAT_TYPE desc\n",
 				   chip->dev->devnum, fp->iface, fp->altsetting);
@@ -2462,20 +2467,15 @@ static int parse_audio_format_rates(struct snd_usb_audio *chip, struct audioform
 		/*
 		 * build the rate table and bitmap flags
 		 */
-		int r, idx, c;
+		int r, idx;
 		unsigned int nonzero_rates = 0;
-		/* this table corresponds to the SNDRV_PCM_RATE_XXX bit */
-		static unsigned int conv_rates[] = {
-			5512, 8000, 11025, 16000, 22050, 32000, 44100, 48000,
-			64000, 88200, 96000, 176400, 192000
-		};
+
 		fp->rate_table = kmalloc(sizeof(int) * nr_rates, GFP_KERNEL);
 		if (fp->rate_table == NULL) {
 			snd_printk(KERN_ERR "cannot malloc\n");
 			return -1;
 		}
 
-		fp->needs_knot = 0;
 		fp->nr_rates = nr_rates;
 		fp->rate_min = fp->rate_max = combine_triple(&fmt[8]);
 		for (r = 0, idx = offset + 1; r < nr_rates; r++, idx += 3) {
@@ -2491,23 +2491,12 @@ static int parse_audio_format_rates(struct snd_usb_audio *chip, struct audioform
 				fp->rate_min = rate;
 			else if (rate > fp->rate_max)
 				fp->rate_max = rate;
-			found = 0;
-			for (c = 0; c < (int)ARRAY_SIZE(conv_rates); c++) {
-				if (rate == conv_rates[c]) {
-					found = 1;
-					fp->rates |= (1 << c);
-					break;
-				}
-			}
-			if (!found)
-				fp->needs_knot = 1;
+			fp->rates |= snd_pcm_rate_to_rate_bit(rate);
 		}
 		if (!nonzero_rates) {
 			hwc_debug("All rates were zero. Skipping format!\n");
 			return -1;
 		}
-		if (fp->needs_knot)
-			fp->rates |= SNDRV_PCM_RATE_KNOT;
 	} else {
 		/* continuous rates */
 		fp->rates = SNDRV_PCM_RATE_CONTINUOUS;
@@ -2530,7 +2519,18 @@ static int parse_audio_format_i(struct snd_usb_audio *chip, struct audioformat *
 		 *        but we give normal PCM format to get the existing
 		 *        apps working...
 		 */
-		pcm_format = SNDRV_PCM_FORMAT_S16_LE;
+		switch (chip->usb_id) {
+
+		case USB_ID(0x0763, 0x2003): /* M-Audio Audiophile USB */
+			if (device_setup[chip->index] == 0x00 && 
+			    fp->altsetting == 6)
+				pcm_format = SNDRV_PCM_FORMAT_S16_BE;
+			else
+				pcm_format = SNDRV_PCM_FORMAT_S16_LE;
+			break;
+		default:
+			pcm_format = SNDRV_PCM_FORMAT_S16_LE;
+		}
 	} else {
 		pcm_format = parse_audio_format_i_type(chip, fp, format, fmt);
 		if (pcm_format < 0)
@@ -2844,6 +2844,10 @@ static int snd_usb_create_streams(struct snd_usb_audio *chip, int ctrlif)
 			/* skip non-supported classes */
 			continue;
 		}
+		if (snd_usb_get_speed(dev) == USB_SPEED_LOW) {
+			snd_printk(KERN_ERR "low speed audio streaming not supported\n");
+			continue;
+		}
 		if (! parse_audio_endpoints(chip, j)) {
 			usb_set_interface(dev, j, 0); /* reset the current interface */
 			usb_driver_claim_interface(&usb_audio_driver, iface, (void *)-1L);
@@ -2863,7 +2867,7 @@ static int create_fixed_stream_quirk(struct snd_usb_audio *chip,
 	struct audioformat *fp;
 	struct usb_host_interface *alts;
 	int stream, err;
-	int *rate_table = NULL;
+	unsigned *rate_table = NULL;
 
 	fp = kmemdup(quirk->data, sizeof(*fp), GFP_KERNEL);
 	if (! fp) {
@@ -3251,6 +3255,11 @@ static int snd_usb_cm106_boot_quirk(struct usb_device *dev)
 static int audiophile_skip_setting_quirk(struct snd_usb_audio *chip,
 					 int iface, int altno)
 {
+	/* Reset ALL ifaces to 0 altsetting.
+	 * Call it for every possible altsetting of every interface.
+	 */
+	usb_set_interface(chip->dev, iface, 0);
+
 	if (device_setup[chip->index] & AUDIOPHILE_SET) {
 		if ((device_setup[chip->index] & AUDIOPHILE_SET_DTS)
 		    && altno != 6)
@@ -3381,7 +3390,8 @@ static int snd_usb_audio_create(struct usb_device *dev, int idx,
 
 	*rchip = NULL;
 
-	if (snd_usb_get_speed(dev) != USB_SPEED_FULL &&
+	if (snd_usb_get_speed(dev) != USB_SPEED_LOW &&
+	    snd_usb_get_speed(dev) != USB_SPEED_FULL &&
 	    snd_usb_get_speed(dev) != USB_SPEED_HIGH) {
 		snd_printk(KERN_ERR "unknown device speed %d\n", snd_usb_get_speed(dev));
 		return -ENXIO;
@@ -3455,7 +3465,9 @@ static int snd_usb_audio_create(struct usb_device *dev, int idx,
 		usb_make_path(dev, card->longname + len, sizeof(card->longname) - len);
 
 	strlcat(card->longname,
-		snd_usb_get_speed(dev) == USB_SPEED_FULL ? ", full speed" : ", high speed",
+		snd_usb_get_speed(dev) == USB_SPEED_LOW ? ", low speed" :
+		snd_usb_get_speed(dev) == USB_SPEED_FULL ? ", full speed" :
+		", high speed",
 		sizeof(card->longname));
 
 	snd_usb_audio_create_proc(chip);

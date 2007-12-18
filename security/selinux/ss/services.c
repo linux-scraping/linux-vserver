@@ -292,6 +292,7 @@ static int context_struct_compute_av(struct context *scontext,
 	struct class_datum *tclass_datum;
 	struct ebitmap *sattr, *tattr;
 	struct ebitmap_node *snode, *tnode;
+	const struct selinux_class_perm *kdefs = &selinux_class_perm;
 	unsigned int i, j;
 
 	/*
@@ -305,13 +306,6 @@ static int context_struct_compute_av(struct context *scontext,
 		    tclass <= SECCLASS_NETLINK_DNRT_SOCKET)
 			tclass = SECCLASS_NETLINK_SOCKET;
 
-	if (!tclass || tclass > policydb.p_classes.nprim) {
-		printk(KERN_ERR "security_compute_av:  unrecognized class %d\n",
-		       tclass);
-		return -EINVAL;
-	}
-	tclass_datum = policydb.class_val_to_struct[tclass - 1];
-
 	/*
 	 * Initialize the access vectors to the default values.
 	 */
@@ -322,6 +316,36 @@ static int context_struct_compute_av(struct context *scontext,
 	avd->seqno = latest_granting;
 
 	/*
+	 * Check for all the invalid cases.
+	 * - tclass 0
+	 * - tclass > policy and > kernel
+	 * - tclass > policy but is a userspace class
+	 * - tclass > policy but we do not allow unknowns
+	 */
+	if (unlikely(!tclass))
+		goto inval_class;
+	if (unlikely(tclass > policydb.p_classes.nprim))
+		if (tclass > kdefs->cts_len ||
+		    !kdefs->class_to_string[tclass - 1] ||
+		    !policydb.allow_unknown)
+			goto inval_class;
+
+	/*
+	 * Kernel class and we allow unknown so pad the allow decision
+	 * the pad will be all 1 for unknown classes.
+	 */
+	if (tclass <= kdefs->cts_len && policydb.allow_unknown)
+		avd->allowed = policydb.undefined_perms[tclass - 1];
+
+	/*
+	 * Not in policy. Since decision is completed (all 1 or all 0) return.
+	 */
+	if (unlikely(tclass > policydb.p_classes.nprim))
+		return 0;
+
+	tclass_datum = policydb.class_val_to_struct[tclass - 1];
+
+	/*
 	 * If a specific type enforcement rule was defined for
 	 * this permission check, then use it.
 	 */
@@ -329,12 +353,8 @@ static int context_struct_compute_av(struct context *scontext,
 	avkey.specified = AVTAB_AV;
 	sattr = &policydb.type_attr_map[scontext->type - 1];
 	tattr = &policydb.type_attr_map[tcontext->type - 1];
-	ebitmap_for_each_bit(sattr, snode, i) {
-		if (!ebitmap_node_get_bit(snode, i))
-			continue;
-		ebitmap_for_each_bit(tattr, tnode, j) {
-			if (!ebitmap_node_get_bit(tnode, j))
-				continue;
+	ebitmap_for_each_positive_bit(sattr, snode, i) {
+		ebitmap_for_each_positive_bit(tattr, tnode, j) {
 			avkey.source_type = i + 1;
 			avkey.target_type = j + 1;
 			for (node = avtab_search_node(&policydb.te_avtab, &avkey);
@@ -387,6 +407,10 @@ static int context_struct_compute_av(struct context *scontext,
 	}
 
 	return 0;
+
+inval_class:
+	printk(KERN_ERR "%s:  unrecognized class %d\n", __FUNCTION__, tclass);
+	return -EINVAL;
 }
 
 static int security_validtrans_handle_fail(struct context *ocontext,
@@ -792,7 +816,7 @@ int security_context_to_sid(char *scontext, u32 scontext_len, u32 *sid)
  * @scontext: security context
  * @scontext_len: length in bytes
  * @sid: security identifier, SID
- * @def_sid: default SID to assign on errror
+ * @def_sid: default SID to assign on error
  *
  * Obtains a SID associated with the security context that
  * has the string representation specified by @scontext.
@@ -1054,6 +1078,13 @@ static int validate_classes(struct policydb *p)
 	const char *def_class, *def_perm, *pol_class;
 	struct symtab *perms;
 
+	if (p->allow_unknown) {
+		u32 num_classes = kdefs->cts_len;
+		p->undefined_perms = kcalloc(num_classes, sizeof(u32), GFP_KERNEL);
+		if (!p->undefined_perms)
+			return -ENOMEM;
+	}
+
 	for (i = 1; i < kdefs->cts_len; i++) {
 		def_class = kdefs->class_to_string[i];
 		if (!def_class)
@@ -1062,6 +1093,10 @@ static int validate_classes(struct policydb *p)
 			printk(KERN_INFO
 			       "security:  class %s not defined in policy\n",
 			       def_class);
+			if (p->reject_unknown)
+				return -EINVAL;
+			if (p->allow_unknown)
+				p->undefined_perms[i-1] = ~0U;
 			continue;
 		}
 		pol_class = p->p_class_val_to_name[i-1];
@@ -1087,12 +1122,16 @@ static int validate_classes(struct policydb *p)
 			printk(KERN_INFO
 			       "security:  permission %s in class %s not defined in policy\n",
 			       def_perm, pol_class);
+			if (p->reject_unknown)
+				return -EINVAL;
+			if (p->allow_unknown)
+				p->undefined_perms[class_val-1] |= perm_val;
 			continue;
 		}
 		perdatum = hashtab_search(perms->table, def_perm);
 		if (perdatum == NULL) {
 			printk(KERN_ERR
-			       "security:  permission %s in class %s not found in policy\n",
+			       "security:  permission %s in class %s not found in policy, bad policy\n",
 			       def_perm, pol_class);
 			return -EINVAL;
 		}
@@ -1130,12 +1169,16 @@ static int validate_classes(struct policydb *p)
 				printk(KERN_INFO
 				       "security:  permission %s in class %s not defined in policy\n",
 				       def_perm, pol_class);
+				if (p->reject_unknown)
+					return -EINVAL;
+				if (p->allow_unknown)
+					p->undefined_perms[class_val-1] |= (1 << j);
 				continue;
 			}
 			perdatum = hashtab_search(perms->table, def_perm);
 			if (perdatum == NULL) {
 				printk(KERN_ERR
-				       "security:  permission %s in class %s not found in policy\n",
+				       "security:  permission %s in class %s not found in policy, bad policy\n",
 				       def_perm, pol_class);
 				return -EINVAL;
 			}
@@ -1587,19 +1630,18 @@ int security_get_user_sids(u32 fromsid,
 			   u32 *nel)
 {
 	struct context *fromcon, usercon;
-	u32 *mysids, *mysids2, sid;
+	u32 *mysids = NULL, *mysids2, sid;
 	u32 mynel = 0, maxnel = SIDS_NEL;
 	struct user_datum *user;
 	struct role_datum *role;
-	struct av_decision avd;
 	struct ebitmap_node *rnode, *tnode;
 	int rc = 0, i, j;
 
-	if (!ss_initialized) {
-		*sids = NULL;
-		*nel = 0;
+	*sids = NULL;
+	*nel = 0;
+
+	if (!ss_initialized)
 		goto out;
-	}
 
 	POLICY_RDLOCK;
 
@@ -1622,30 +1664,18 @@ int security_get_user_sids(u32 fromsid,
 		goto out_unlock;
 	}
 
-	ebitmap_for_each_bit(&user->roles, rnode, i) {
-		if (!ebitmap_node_get_bit(rnode, i))
-			continue;
+	ebitmap_for_each_positive_bit(&user->roles, rnode, i) {
 		role = policydb.role_val_to_struct[i];
 		usercon.role = i+1;
-		ebitmap_for_each_bit(&role->types, tnode, j) {
-			if (!ebitmap_node_get_bit(tnode, j))
-				continue;
+		ebitmap_for_each_positive_bit(&role->types, tnode, j) {
 			usercon.type = j+1;
 
 			if (mls_setup_user_range(fromcon, user, &usercon))
 				continue;
 
-			rc = context_struct_compute_av(fromcon, &usercon,
-						       SECCLASS_PROCESS,
-						       PROCESS__TRANSITION,
-						       &avd);
-			if (rc ||  !(avd.allowed & PROCESS__TRANSITION))
-				continue;
 			rc = sidtab_context_to_sid(&sidtab, &usercon, &sid);
-			if (rc) {
-				kfree(mysids);
+			if (rc)
 				goto out_unlock;
-			}
 			if (mynel < maxnel) {
 				mysids[mynel++] = sid;
 			} else {
@@ -1653,7 +1683,6 @@ int security_get_user_sids(u32 fromsid,
 				mysids2 = kcalloc(maxnel, sizeof(*mysids2), GFP_ATOMIC);
 				if (!mysids2) {
 					rc = -ENOMEM;
-					kfree(mysids);
 					goto out_unlock;
 				}
 				memcpy(mysids2, mysids, mynel * sizeof(*mysids2));
@@ -1664,11 +1693,32 @@ int security_get_user_sids(u32 fromsid,
 		}
 	}
 
-	*sids = mysids;
-	*nel = mynel;
-
 out_unlock:
 	POLICY_RDUNLOCK;
+	if (rc || !mynel) {
+		kfree(mysids);
+		goto out;
+	}
+
+	mysids2 = kcalloc(mynel, sizeof(*mysids2), GFP_KERNEL);
+	if (!mysids2) {
+		rc = -ENOMEM;
+		kfree(mysids);
+		goto out;
+	}
+	for (i = 0, j = 0; i < mynel; i++) {
+		rc = avc_has_perm_noaudit(fromsid, mysids[i],
+					  SECCLASS_PROCESS,
+					  PROCESS__TRANSITION, AVC_STRICT,
+					  NULL);
+		if (!rc)
+			mysids2[j++] = mysids[i];
+		cond_resched();
+	}
+	rc = 0;
+	kfree(mysids);
+	*sids = mysids2;
+	*nel = j;
 out:
 	return rc;
 }
@@ -1996,6 +2046,111 @@ out:
 	return rc;
 }
 
+static int get_classes_callback(void *k, void *d, void *args)
+{
+	struct class_datum *datum = d;
+	char *name = k, **classes = args;
+	int value = datum->value - 1;
+
+	classes[value] = kstrdup(name, GFP_ATOMIC);
+	if (!classes[value])
+		return -ENOMEM;
+
+	return 0;
+}
+
+int security_get_classes(char ***classes, int *nclasses)
+{
+	int rc = -ENOMEM;
+
+	POLICY_RDLOCK;
+
+	*nclasses = policydb.p_classes.nprim;
+	*classes = kcalloc(*nclasses, sizeof(*classes), GFP_ATOMIC);
+	if (!*classes)
+		goto out;
+
+	rc = hashtab_map(policydb.p_classes.table, get_classes_callback,
+			*classes);
+	if (rc < 0) {
+		int i;
+		for (i = 0; i < *nclasses; i++)
+			kfree((*classes)[i]);
+		kfree(*classes);
+	}
+
+out:
+	POLICY_RDUNLOCK;
+	return rc;
+}
+
+static int get_permissions_callback(void *k, void *d, void *args)
+{
+	struct perm_datum *datum = d;
+	char *name = k, **perms = args;
+	int value = datum->value - 1;
+
+	perms[value] = kstrdup(name, GFP_ATOMIC);
+	if (!perms[value])
+		return -ENOMEM;
+
+	return 0;
+}
+
+int security_get_permissions(char *class, char ***perms, int *nperms)
+{
+	int rc = -ENOMEM, i;
+	struct class_datum *match;
+
+	POLICY_RDLOCK;
+
+	match = hashtab_search(policydb.p_classes.table, class);
+	if (!match) {
+		printk(KERN_ERR "%s:  unrecognized class %s\n",
+			__FUNCTION__, class);
+		rc = -EINVAL;
+		goto out;
+	}
+
+	*nperms = match->permissions.nprim;
+	*perms = kcalloc(*nperms, sizeof(*perms), GFP_ATOMIC);
+	if (!*perms)
+		goto out;
+
+	if (match->comdatum) {
+		rc = hashtab_map(match->comdatum->permissions.table,
+				get_permissions_callback, *perms);
+		if (rc < 0)
+			goto err;
+	}
+
+	rc = hashtab_map(match->permissions.table, get_permissions_callback,
+			*perms);
+	if (rc < 0)
+		goto err;
+
+out:
+	POLICY_RDUNLOCK;
+	return rc;
+
+err:
+	POLICY_RDUNLOCK;
+	for (i = 0; i < *nperms; i++)
+		kfree((*perms)[i]);
+	kfree(*perms);
+	return rc;
+}
+
+int security_get_reject_unknown(void)
+{
+	return policydb.reject_unknown;
+}
+
+int security_get_allow_unknown(void)
+{
+	return policydb.allow_unknown;
+}
+
 struct selinux_audit_rule {
 	u32 au_seqno;
 	struct context au_ctxt;
@@ -2021,7 +2176,7 @@ int selinux_audit_rule_init(u32 field, u32 op, char *rulestr,
 	*rule = NULL;
 
 	if (!ss_initialized)
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	switch (field) {
 	case AUDIT_SUBJ_USER:
@@ -2311,8 +2466,10 @@ static void security_netlbl_cache_add(struct netlbl_lsm_secattr *secattr,
 
 	cache->type = NETLBL_CACHE_T_MLS;
 	if (ebitmap_cpy(&cache->data.mls_label.level[0].cat,
-			&ctx->range.level[0].cat) != 0)
+			&ctx->range.level[0].cat) != 0) {
+		kfree(cache);
 		return;
+	}
 	cache->data.mls_label.level[1].cat.highbit =
 		cache->data.mls_label.level[0].cat.highbit;
 	cache->data.mls_label.level[1].cat.node =

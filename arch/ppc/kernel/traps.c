@@ -92,6 +92,7 @@ int die(const char * str, struct pt_regs * fp, long err)
 	if (nl)
 		printk("\n");
 	show_regs(fp);
+	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
 	/* do_exit() should take care of panic'ing from an interrupt
 	 * context so we don't handle it here
@@ -120,7 +121,7 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 	 * generate the same exception over and over again and we get
 	 * nowhere.  Better to kill it and let the kernel panic.
 	 */
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		__sighandler_t handler;
 
 		spin_lock_irq(&current->sighand->siglock);
@@ -619,7 +620,7 @@ void program_check_exception(struct pt_regs *regs)
 			return;
 
 		if (!(regs->msr & MSR_PR) &&  /* not user-mode */
-		    report_bug(regs->nip) == BUG_TRAP_TYPE_WARN) {
+		    report_bug(regs->nip, regs) == BUG_TRAP_TYPE_WARN) {
 			regs->nip += 4;
 			return;
 		}

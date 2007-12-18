@@ -36,6 +36,7 @@
 #include <asm/uaccess.h>
 #include <asm/irq_regs.h>
 
+#include "irq.h"
 
 /*
  * I studied different documents and many live PROMs both from 2.30
@@ -752,7 +753,7 @@ void __init pci_time_init(void)
 	local_irq_enable();
 }
 
-static __inline__ unsigned long do_gettimeoffset(void)
+static inline unsigned long do_gettimeoffset(void)
 {
 	/*
 	 * We divide all by 100

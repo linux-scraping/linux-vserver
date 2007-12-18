@@ -312,7 +312,6 @@ static struct scsi_host_template hpt36x_sht = {
  */
 
 static struct ata_port_operations hpt366_port_ops = {
-	.port_disable	= ata_port_disable,
 	.set_piomode	= hpt366_set_piomode,
 	.set_dmamode	= hpt366_set_dmamode,
 	.mode_filter	= hpt366_filter,
@@ -342,9 +341,8 @@ static struct ata_port_operations hpt366_port_ops = {
 	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
 	.irq_on		= ata_irq_on,
-	.irq_ack	= ata_irq_ack,
 
-	.port_start	= ata_port_start,
+	.port_start	= ata_sff_port_start,
 };
 
 /**
@@ -393,10 +391,10 @@ static int hpt36x_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	static const struct ata_port_info info_hpt366 = {
 		.sht = &hpt36x_sht,
-		.flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
+		.flags = ATA_FLAG_SLAVE_POSS,
 		.pio_mask = 0x1f,
 		.mwdma_mask = 0x07,
-		.udma_mask = 0x1f,
+		.udma_mask = ATA_UDMA4,
 		.port_ops = &hpt366_port_ops
 	};
 	struct ata_port_info info = info_hpt366;

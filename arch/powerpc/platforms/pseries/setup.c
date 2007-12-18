@@ -176,7 +176,7 @@ static void __init pseries_mpic_init_IRQ(void)
 		return;
 
 	cascade_irq = irq_of_parse_and_map(cascade, 0);
-	if (cascade == NO_IRQ) {
+	if (cascade_irq == NO_IRQ) {
 		printk(KERN_ERR "mpic: failed to map cascade interrupt");
 		return;
 	}
@@ -257,11 +257,6 @@ static void __init pSeries_setup_arch(void)
 	/* init to some ~sane value until calibrate_delay() runs */
 	loops_per_jiffy = 50000000;
 
-	if (ROOT_DEV == 0) {
-		printk("No ramdisk, default root is /dev/sda2\n");
-		ROOT_DEV = Root_SDA2;
-	}
-
 	fwnmi_init();
 
 	/* Find and initialize PCI host bridges */
@@ -320,8 +315,6 @@ static void __init pSeries_init_early(void)
 {
 	DBG(" -> pSeries_init_early()\n");
 
-	fw_feature_init();
-
 	if (firmware_has_feature(FW_FEATURE_LPAR))
 		find_udbg_vterm();
 
@@ -343,14 +336,21 @@ static int __init pSeries_probe_hypertas(unsigned long node,
 					 const char *uname, int depth,
 					 void *data)
 {
+	const char *hypertas;
+	unsigned long len;
+
 	if (depth != 1 ||
 	    (strcmp(uname, "rtas") != 0 && strcmp(uname, "rtas@0") != 0))
- 		return 0;
+		return 0;
 
-	if (of_get_flat_dt_prop(node, "ibm,hypertas-functions", NULL) != NULL)
- 		powerpc_firmware_features |= FW_FEATURE_LPAR;
+	hypertas = of_get_flat_dt_prop(node, "ibm,hypertas-functions", &len);
+	if (!hypertas)
+		return 1;
 
- 	return 1;
+	powerpc_firmware_features |= FW_FEATURE_LPAR;
+	fw_feature_init(hypertas, len);
+
+	return 1;
 }
 
 static int __init pSeries_probe(void)
@@ -399,6 +399,7 @@ static void pseries_dedicated_idle_sleep(void)
 	 * a good time to find other work to dispatch.
 	 */
 	get_lppaca()->idle = 1;
+	get_lppaca()->donate_dedicated_cpu = 1;
 
 	/*
 	 * We come in with interrupts disabled, and need_resched()
@@ -431,6 +432,7 @@ static void pseries_dedicated_idle_sleep(void)
 
 out:
 	HMT_medium();
+	get_lppaca()->donate_dedicated_cpu = 0;
 	get_lppaca()->idle = 0;
 }
 

@@ -17,14 +17,14 @@
 #include <asm/arch/at32ap7000.h>
 #include <asm/arch/board.h>
 #include <asm/arch/portmux.h>
-#include <asm/arch/sm.h>
 
 #include <video/atmel_lcdc.h>
 
 #include "clock.h"
 #include "hmatrix.h"
 #include "pio.h"
-#include "sm.h"
+#include "pm.h"
+
 
 #define PBMEM(base)					\
 	{						\
@@ -88,6 +88,8 @@ static struct clk devname##_##_name = {				\
 	.index		= _index,				\
 }
 
+static DEFINE_SPINLOCK(pm_lock);
+
 unsigned long at32ap7000_osc_rates[3] = {
 	[0] = 32768,
 	/* FIXME: these are ATSTK1002-specific */
@@ -104,11 +106,11 @@ static unsigned long pll_get_rate(struct clk *clk, unsigned long control)
 {
 	unsigned long div, mul, rate;
 
-	if (!(control & SM_BIT(PLLEN)))
+	if (!(control & PM_BIT(PLLEN)))
 		return 0;
 
-	div = SM_BFEXT(PLLDIV, control) + 1;
-	mul = SM_BFEXT(PLLMUL, control) + 1;
+	div = PM_BFEXT(PLLDIV, control) + 1;
+	mul = PM_BFEXT(PLLMUL, control) + 1;
 
 	rate = clk->parent->get_rate(clk->parent);
 	rate = (rate + div / 2) / div;
@@ -121,7 +123,7 @@ static unsigned long pll0_get_rate(struct clk *clk)
 {
 	u32 control;
 
-	control = sm_readl(&system_manager, PM_PLL0);
+	control = pm_readl(PLL0);
 
 	return pll_get_rate(clk, control);
 }
@@ -130,7 +132,7 @@ static unsigned long pll1_get_rate(struct clk *clk)
 {
 	u32 control;
 
-	control = sm_readl(&system_manager, PM_PLL1);
+	control = pm_readl(PLL1);
 
 	return pll_get_rate(clk, control);
 }
@@ -187,108 +189,139 @@ static unsigned long bus_clk_get_rate(struct clk *clk, unsigned int shift)
 
 static void cpu_clk_mode(struct clk *clk, int enabled)
 {
-	struct at32_sm *sm = &system_manager;
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&sm->lock, flags);
-	mask = sm_readl(sm, PM_CPU_MASK);
+	spin_lock_irqsave(&pm_lock, flags);
+	mask = pm_readl(CPU_MASK);
 	if (enabled)
 		mask |= 1 << clk->index;
 	else
 		mask &= ~(1 << clk->index);
-	sm_writel(sm, PM_CPU_MASK, mask);
-	spin_unlock_irqrestore(&sm->lock, flags);
+	pm_writel(CPU_MASK, mask);
+	spin_unlock_irqrestore(&pm_lock, flags);
 }
 
 static unsigned long cpu_clk_get_rate(struct clk *clk)
 {
 	unsigned long cksel, shift = 0;
 
-	cksel = sm_readl(&system_manager, PM_CKSEL);
-	if (cksel & SM_BIT(CPUDIV))
-		shift = SM_BFEXT(CPUSEL, cksel) + 1;
+	cksel = pm_readl(CKSEL);
+	if (cksel & PM_BIT(CPUDIV))
+		shift = PM_BFEXT(CPUSEL, cksel) + 1;
 
 	return bus_clk_get_rate(clk, shift);
 }
 
+static long cpu_clk_set_rate(struct clk *clk, unsigned long rate, int apply)
+{
+	u32 control;
+	unsigned long parent_rate, child_div, actual_rate, div;
+
+	parent_rate = clk->parent->get_rate(clk->parent);
+	control = pm_readl(CKSEL);
+
+	if (control & PM_BIT(HSBDIV))
+		child_div = 1 << (PM_BFEXT(HSBSEL, control) + 1);
+	else
+		child_div = 1;
+
+	if (rate > 3 * (parent_rate / 4) || child_div == 1) {
+		actual_rate = parent_rate;
+		control &= ~PM_BIT(CPUDIV);
+	} else {
+		unsigned int cpusel;
+		div = (parent_rate + rate / 2) / rate;
+		if (div > child_div)
+			div = child_div;
+		cpusel = (div > 1) ? (fls(div) - 2) : 0;
+		control = PM_BIT(CPUDIV) | PM_BFINS(CPUSEL, cpusel, control);
+		actual_rate = parent_rate / (1 << (cpusel + 1));
+	}
+
+	pr_debug("clk %s: new rate %lu (actual rate %lu)\n",
+			clk->name, rate, actual_rate);
+
+	if (apply)
+		pm_writel(CKSEL, control);
+
+	return actual_rate;
+}
+
 static void hsb_clk_mode(struct clk *clk, int enabled)
 {
-	struct at32_sm *sm = &system_manager;
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&sm->lock, flags);
-	mask = sm_readl(sm, PM_HSB_MASK);
+	spin_lock_irqsave(&pm_lock, flags);
+	mask = pm_readl(HSB_MASK);
 	if (enabled)
 		mask |= 1 << clk->index;
 	else
 		mask &= ~(1 << clk->index);
-	sm_writel(sm, PM_HSB_MASK, mask);
-	spin_unlock_irqrestore(&sm->lock, flags);
+	pm_writel(HSB_MASK, mask);
+	spin_unlock_irqrestore(&pm_lock, flags);
 }
 
 static unsigned long hsb_clk_get_rate(struct clk *clk)
 {
 	unsigned long cksel, shift = 0;
 
-	cksel = sm_readl(&system_manager, PM_CKSEL);
-	if (cksel & SM_BIT(HSBDIV))
-		shift = SM_BFEXT(HSBSEL, cksel) + 1;
+	cksel = pm_readl(CKSEL);
+	if (cksel & PM_BIT(HSBDIV))
+		shift = PM_BFEXT(HSBSEL, cksel) + 1;
 
 	return bus_clk_get_rate(clk, shift);
 }
 
 static void pba_clk_mode(struct clk *clk, int enabled)
 {
-	struct at32_sm *sm = &system_manager;
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&sm->lock, flags);
-	mask = sm_readl(sm, PM_PBA_MASK);
+	spin_lock_irqsave(&pm_lock, flags);
+	mask = pm_readl(PBA_MASK);
 	if (enabled)
 		mask |= 1 << clk->index;
 	else
 		mask &= ~(1 << clk->index);
-	sm_writel(sm, PM_PBA_MASK, mask);
-	spin_unlock_irqrestore(&sm->lock, flags);
+	pm_writel(PBA_MASK, mask);
+	spin_unlock_irqrestore(&pm_lock, flags);
 }
 
 static unsigned long pba_clk_get_rate(struct clk *clk)
 {
 	unsigned long cksel, shift = 0;
 
-	cksel = sm_readl(&system_manager, PM_CKSEL);
-	if (cksel & SM_BIT(PBADIV))
-		shift = SM_BFEXT(PBASEL, cksel) + 1;
+	cksel = pm_readl(CKSEL);
+	if (cksel & PM_BIT(PBADIV))
+		shift = PM_BFEXT(PBASEL, cksel) + 1;
 
 	return bus_clk_get_rate(clk, shift);
 }
 
 static void pbb_clk_mode(struct clk *clk, int enabled)
 {
-	struct at32_sm *sm = &system_manager;
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&sm->lock, flags);
-	mask = sm_readl(sm, PM_PBB_MASK);
+	spin_lock_irqsave(&pm_lock, flags);
+	mask = pm_readl(PBB_MASK);
 	if (enabled)
 		mask |= 1 << clk->index;
 	else
 		mask &= ~(1 << clk->index);
-	sm_writel(sm, PM_PBB_MASK, mask);
-	spin_unlock_irqrestore(&sm->lock, flags);
+	pm_writel(PBB_MASK, mask);
+	spin_unlock_irqrestore(&pm_lock, flags);
 }
 
 static unsigned long pbb_clk_get_rate(struct clk *clk)
 {
 	unsigned long cksel, shift = 0;
 
-	cksel = sm_readl(&system_manager, PM_CKSEL);
-	if (cksel & SM_BIT(PBBDIV))
-		shift = SM_BFEXT(PBBSEL, cksel) + 1;
+	cksel = pm_readl(CKSEL);
+	if (cksel & PM_BIT(PBBDIV))
+		shift = PM_BFEXT(PBBSEL, cksel) + 1;
 
 	return bus_clk_get_rate(clk, shift);
 }
@@ -296,6 +329,7 @@ static unsigned long pbb_clk_get_rate(struct clk *clk)
 static struct clk cpu_clk = {
 	.name		= "cpu",
 	.get_rate	= cpu_clk_get_rate,
+	.set_rate	= cpu_clk_set_rate,
 	.users		= 1,
 };
 static struct clk hsb_clk = {
@@ -327,12 +361,12 @@ static void genclk_mode(struct clk *clk, int enabled)
 {
 	u32 control;
 
-	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
+	control = pm_readl(GCCTRL(clk->index));
 	if (enabled)
-		control |= SM_BIT(CEN);
+		control |= PM_BIT(CEN);
 	else
-		control &= ~SM_BIT(CEN);
-	sm_writel(&system_manager, PM_GCCTRL + 4 * clk->index, control);
+		control &= ~PM_BIT(CEN);
+	pm_writel(GCCTRL(clk->index), control);
 }
 
 static unsigned long genclk_get_rate(struct clk *clk)
@@ -340,9 +374,9 @@ static unsigned long genclk_get_rate(struct clk *clk)
 	u32 control;
 	unsigned long div = 1;
 
-	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
-	if (control & SM_BIT(DIVEN))
-		div = 2 * (SM_BFEXT(DIV, control) + 1);
+	control = pm_readl(GCCTRL(clk->index));
+	if (control & PM_BIT(DIVEN))
+		div = 2 * (PM_BFEXT(DIV, control) + 1);
 
 	return clk->parent->get_rate(clk->parent) / div;
 }
@@ -353,23 +387,22 @@ static long genclk_set_rate(struct clk *clk, unsigned long rate, int apply)
 	unsigned long parent_rate, actual_rate, div;
 
 	parent_rate = clk->parent->get_rate(clk->parent);
-	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
+	control = pm_readl(GCCTRL(clk->index));
 
 	if (rate > 3 * parent_rate / 4) {
 		actual_rate = parent_rate;
-		control &= ~SM_BIT(DIVEN);
+		control &= ~PM_BIT(DIVEN);
 	} else {
 		div = (parent_rate + rate) / (2 * rate) - 1;
-		control = SM_BFINS(DIV, div, control) | SM_BIT(DIVEN);
+		control = PM_BFINS(DIV, div, control) | PM_BIT(DIVEN);
 		actual_rate = parent_rate / (2 * (div + 1));
 	}
 
-	printk("clk %s: new rate %lu (actual rate %lu)\n",
-	       clk->name, rate, actual_rate);
+	dev_dbg(clk->dev, "clk %s: new rate %lu (actual rate %lu)\n",
+		clk->name, rate, actual_rate);
 
 	if (apply)
-		sm_writel(&system_manager, PM_GCCTRL + 4 * clk->index,
-			  control);
+		pm_writel(GCCTRL(clk->index), control);
 
 	return actual_rate;
 }
@@ -378,24 +411,24 @@ int genclk_set_parent(struct clk *clk, struct clk *parent)
 {
 	u32 control;
 
-	printk("clk %s: new parent %s (was %s)\n",
-	       clk->name, parent->name, clk->parent->name);
+	dev_dbg(clk->dev, "clk %s: new parent %s (was %s)\n",
+		clk->name, parent->name, clk->parent->name);
 
-	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
+	control = pm_readl(GCCTRL(clk->index));
 
 	if (parent == &osc1 || parent == &pll1)
-		control |= SM_BIT(OSCSEL);
+		control |= PM_BIT(OSCSEL);
 	else if (parent == &osc0 || parent == &pll0)
-		control &= ~SM_BIT(OSCSEL);
+		control &= ~PM_BIT(OSCSEL);
 	else
 		return -EINVAL;
 
 	if (parent == &pll0 || parent == &pll1)
-		control |= SM_BIT(PLLSEL);
+		control |= PM_BIT(PLLSEL);
 	else
-		control &= ~SM_BIT(PLLSEL);
+		control &= ~PM_BIT(PLLSEL);
 
-	sm_writel(&system_manager, PM_GCCTRL + 4 * clk->index, control);
+	pm_writel(GCCTRL(clk->index), control);
 	clk->parent = parent;
 
 	return 0;
@@ -408,11 +441,11 @@ static void __init genclk_init_parent(struct clk *clk)
 
 	BUG_ON(clk->index > 7);
 
-	control = sm_readl(&system_manager, PM_GCCTRL + 4 * clk->index);
-	if (control & SM_BIT(OSCSEL))
-		parent = (control & SM_BIT(PLLSEL)) ? &pll1 : &osc1;
+	control = pm_readl(GCCTRL(clk->index));
+	if (control & PM_BIT(OSCSEL))
+		parent = (control & PM_BIT(PLLSEL)) ? &pll1 : &osc1;
 	else
-		parent = (control & SM_BIT(PLLSEL)) ? &pll0 : &osc0;
+		parent = (control & PM_BIT(PLLSEL)) ? &pll0 : &osc0;
 
 	clk->parent = parent;
 }
@@ -420,21 +453,53 @@ static void __init genclk_init_parent(struct clk *clk)
 /* --------------------------------------------------------------------
  *  System peripherals
  * -------------------------------------------------------------------- */
-static struct resource sm_resource[] = {
-	PBMEM(0xfff00000),
-	NAMED_IRQ(19, "eim"),
-	NAMED_IRQ(20, "pm"),
-	NAMED_IRQ(21, "rtc"),
+static struct resource at32_pm0_resource[] = {
+	{
+		.start	= 0xfff00000,
+		.end	= 0xfff0007f,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(20),
 };
-struct platform_device at32_sm_device = {
-	.name		= "sm",
-	.id		= 0,
-	.resource	= sm_resource,
-	.num_resources	= ARRAY_SIZE(sm_resource),
+
+static struct resource at32ap700x_rtc0_resource[] = {
+	{
+		.start	= 0xfff00080,
+		.end	= 0xfff000af,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(21),
 };
-static struct clk at32_sm_pclk = {
+
+static struct resource at32_wdt0_resource[] = {
+	{
+		.start	= 0xfff000b0,
+		.end	= 0xfff000cf,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+static struct resource at32_eic0_resource[] = {
+	{
+		.start	= 0xfff00100,
+		.end	= 0xfff0013f,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(19),
+};
+
+DEFINE_DEV(at32_pm, 0);
+DEFINE_DEV(at32ap700x_rtc, 0);
+DEFINE_DEV(at32_wdt, 0);
+DEFINE_DEV(at32_eic, 0);
+
+/*
+ * Peripheral clock for PM, RTC, WDT and EIC. PM will ensure that this
+ * is always running.
+ */
+static struct clk at32_pm_pclk = {
 	.name		= "pclk",
-	.dev		= &at32_sm_device.dev,
+	.dev		= &at32_pm0_device.dev,
 	.parent		= &pbb_clk,
 	.mode		= pbb_clk_mode,
 	.get_rate	= pbb_clk_get_rate,
@@ -490,6 +555,17 @@ static struct clk pico_clk = {
 	.get_rate	= cpu_clk_get_rate,
 	.users		= 1,
 };
+
+static struct resource dmaca0_resource[] = {
+	{
+		.start	= 0xff200000,
+		.end	= 0xff20ffff,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(2),
+};
+DEFINE_DEV(dmaca, 0);
+DEV_CLK(hclk, dmaca0, hsb, 10);
 
 /* --------------------------------------------------------------------
  * HMATRIX
@@ -583,12 +659,14 @@ DEV_CLK(mck, pio4, pba, 14);
 
 void __init at32_add_system_devices(void)
 {
-	system_manager.eim_first_irq = EIM_IRQ_BASE;
-
-	platform_device_register(&at32_sm_device);
+	platform_device_register(&at32_pm0_device);
 	platform_device_register(&at32_intc0_device);
+	platform_device_register(&at32ap700x_rtc0_device);
+	platform_device_register(&at32_wdt0_device);
+	platform_device_register(&at32_eic0_device);
 	platform_device_register(&smc0_device);
 	platform_device_register(&pdc_device);
+	platform_device_register(&dmaca0_device);
 
 	platform_device_register(&at32_systc0_device);
 
@@ -612,7 +690,7 @@ static struct resource atmel_usart0_resource[] = {
 	IRQ(6),
 };
 DEFINE_DEV_DATA(atmel_usart, 0);
-DEV_CLK(usart, atmel_usart0, pba, 4);
+DEV_CLK(usart, atmel_usart0, pba, 3);
 
 static struct atmel_uart_data atmel_usart1_data = {
 	.use_dma_tx	= 1,
@@ -894,6 +972,96 @@ at32_add_device_spi(unsigned int id, struct spi_board_info *b, unsigned int n)
 }
 
 /* --------------------------------------------------------------------
+ *  TWI
+ * -------------------------------------------------------------------- */
+static struct resource atmel_twi0_resource[] __initdata = {
+	PBMEM(0xffe00800),
+	IRQ(5),
+};
+static struct clk atmel_twi0_pclk = {
+	.name		= "twi_pclk",
+	.parent		= &pba_clk,
+	.mode		= pba_clk_mode,
+	.get_rate	= pba_clk_get_rate,
+	.index		= 2,
+};
+
+struct platform_device *__init at32_add_device_twi(unsigned int id)
+{
+	struct platform_device *pdev;
+
+	if (id != 0)
+		return NULL;
+
+	pdev = platform_device_alloc("atmel_twi", id);
+	if (!pdev)
+		return NULL;
+
+	if (platform_device_add_resources(pdev, atmel_twi0_resource,
+				ARRAY_SIZE(atmel_twi0_resource)))
+		goto err_add_resources;
+
+	select_peripheral(PA(6),  PERIPH_A, 0);	/* SDA	*/
+	select_peripheral(PA(7),  PERIPH_A, 0);	/* SDL	*/
+
+	atmel_twi0_pclk.dev = &pdev->dev;
+
+	platform_device_add(pdev);
+	return pdev;
+
+err_add_resources:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
+ * MMC
+ * -------------------------------------------------------------------- */
+static struct resource atmel_mci0_resource[] __initdata = {
+	PBMEM(0xfff02400),
+	IRQ(28),
+};
+static struct clk atmel_mci0_pclk = {
+	.name		= "mci_clk",
+	.parent		= &pbb_clk,
+	.mode		= pbb_clk_mode,
+	.get_rate	= pbb_clk_get_rate,
+	.index		= 9,
+};
+
+struct platform_device *__init at32_add_device_mci(unsigned int id)
+{
+	struct platform_device *pdev;
+
+	if (id != 0)
+		return NULL;
+
+	pdev = platform_device_alloc("atmel_mci", id);
+	if (!pdev)
+		return NULL;
+
+	if (platform_device_add_resources(pdev, atmel_mci0_resource,
+				ARRAY_SIZE(atmel_mci0_resource)))
+		goto err_add_resources;
+
+	select_peripheral(PA(10), PERIPH_A, 0);	/* CLK	 */
+	select_peripheral(PA(11), PERIPH_A, 0);	/* CMD	 */
+	select_peripheral(PA(12), PERIPH_A, 0);	/* DATA0 */
+	select_peripheral(PA(13), PERIPH_A, 0);	/* DATA1 */
+	select_peripheral(PA(14), PERIPH_A, 0);	/* DATA2 */
+	select_peripheral(PA(15), PERIPH_A, 0);	/* DATA3 */
+
+	atmel_mci0_pclk.dev = &pdev->dev;
+
+	platform_device_add(pdev);
+	return pdev;
+
+err_add_resources:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
  *  LCDC
  * -------------------------------------------------------------------- */
 static struct atmel_lcdfb_info atmel_lcdfb0_data;
@@ -1013,6 +1181,390 @@ err_dup_modedb:
 }
 
 /* --------------------------------------------------------------------
+ *  SSC
+ * -------------------------------------------------------------------- */
+static struct resource ssc0_resource[] = {
+	PBMEM(0xffe01c00),
+	IRQ(10),
+};
+DEFINE_DEV(ssc, 0);
+DEV_CLK(pclk, ssc0, pba, 7);
+
+static struct resource ssc1_resource[] = {
+	PBMEM(0xffe02000),
+	IRQ(11),
+};
+DEFINE_DEV(ssc, 1);
+DEV_CLK(pclk, ssc1, pba, 8);
+
+static struct resource ssc2_resource[] = {
+	PBMEM(0xffe02400),
+	IRQ(12),
+};
+DEFINE_DEV(ssc, 2);
+DEV_CLK(pclk, ssc2, pba, 9);
+
+struct platform_device *__init
+at32_add_device_ssc(unsigned int id, unsigned int flags)
+{
+	struct platform_device *pdev;
+
+	switch (id) {
+	case 0:
+		pdev = &ssc0_device;
+		if (flags & ATMEL_SSC_RF)
+			select_peripheral(PA(21), PERIPH_A, 0);	/* RF */
+		if (flags & ATMEL_SSC_RK)
+			select_peripheral(PA(22), PERIPH_A, 0);	/* RK */
+		if (flags & ATMEL_SSC_TK)
+			select_peripheral(PA(23), PERIPH_A, 0);	/* TK */
+		if (flags & ATMEL_SSC_TF)
+			select_peripheral(PA(24), PERIPH_A, 0);	/* TF */
+		if (flags & ATMEL_SSC_TD)
+			select_peripheral(PA(25), PERIPH_A, 0);	/* TD */
+		if (flags & ATMEL_SSC_RD)
+			select_peripheral(PA(26), PERIPH_A, 0);	/* RD */
+		break;
+	case 1:
+		pdev = &ssc1_device;
+		if (flags & ATMEL_SSC_RF)
+			select_peripheral(PA(0), PERIPH_B, 0);	/* RF */
+		if (flags & ATMEL_SSC_RK)
+			select_peripheral(PA(1), PERIPH_B, 0);	/* RK */
+		if (flags & ATMEL_SSC_TK)
+			select_peripheral(PA(2), PERIPH_B, 0);	/* TK */
+		if (flags & ATMEL_SSC_TF)
+			select_peripheral(PA(3), PERIPH_B, 0);	/* TF */
+		if (flags & ATMEL_SSC_TD)
+			select_peripheral(PA(4), PERIPH_B, 0);	/* TD */
+		if (flags & ATMEL_SSC_RD)
+			select_peripheral(PA(5), PERIPH_B, 0);	/* RD */
+		break;
+	case 2:
+		pdev = &ssc2_device;
+		if (flags & ATMEL_SSC_TD)
+			select_peripheral(PB(13), PERIPH_A, 0);	/* TD */
+		if (flags & ATMEL_SSC_RD)
+			select_peripheral(PB(14), PERIPH_A, 0);	/* RD */
+		if (flags & ATMEL_SSC_TK)
+			select_peripheral(PB(15), PERIPH_A, 0);	/* TK */
+		if (flags & ATMEL_SSC_TF)
+			select_peripheral(PB(16), PERIPH_A, 0);	/* TF */
+		if (flags & ATMEL_SSC_RF)
+			select_peripheral(PB(17), PERIPH_A, 0);	/* RF */
+		if (flags & ATMEL_SSC_RK)
+			select_peripheral(PB(18), PERIPH_A, 0);	/* RK */
+		break;
+	default:
+		return NULL;
+	}
+
+	platform_device_register(pdev);
+	return pdev;
+}
+
+/* --------------------------------------------------------------------
+ *  USB Device Controller
+ * -------------------------------------------------------------------- */
+static struct resource usba0_resource[] __initdata = {
+	{
+		.start		= 0xff300000,
+		.end		= 0xff3fffff,
+		.flags		= IORESOURCE_MEM,
+	}, {
+		.start		= 0xfff03000,
+		.end		= 0xfff033ff,
+		.flags		= IORESOURCE_MEM,
+	},
+	IRQ(31),
+};
+static struct clk usba0_pclk = {
+	.name		= "pclk",
+	.parent		= &pbb_clk,
+	.mode		= pbb_clk_mode,
+	.get_rate	= pbb_clk_get_rate,
+	.index		= 12,
+};
+static struct clk usba0_hclk = {
+	.name		= "hclk",
+	.parent		= &hsb_clk,
+	.mode		= hsb_clk_mode,
+	.get_rate	= hsb_clk_get_rate,
+	.index		= 6,
+};
+
+struct platform_device *__init
+at32_add_device_usba(unsigned int id, struct usba_platform_data *data)
+{
+	struct platform_device *pdev;
+
+	if (id != 0)
+		return NULL;
+
+	pdev = platform_device_alloc("atmel_usba_udc", 0);
+	if (!pdev)
+		return NULL;
+
+	if (platform_device_add_resources(pdev, usba0_resource,
+					  ARRAY_SIZE(usba0_resource)))
+		goto out_free_pdev;
+
+	if (data) {
+		if (platform_device_add_data(pdev, data, sizeof(*data)))
+			goto out_free_pdev;
+
+		if (data->vbus_pin != GPIO_PIN_NONE)
+			at32_select_gpio(data->vbus_pin, 0);
+	}
+
+	usba0_pclk.dev = &pdev->dev;
+	usba0_hclk.dev = &pdev->dev;
+
+	platform_device_add(pdev);
+
+	return pdev;
+
+out_free_pdev:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
+ * IDE / CompactFlash
+ * -------------------------------------------------------------------- */
+static struct resource at32_smc_cs4_resource[] __initdata = {
+	{
+		.start	= 0x04000000,
+		.end	= 0x07ffffff,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(~0UL), /* Magic IRQ will be overridden */
+};
+static struct resource at32_smc_cs5_resource[] __initdata = {
+	{
+		.start	= 0x20000000,
+		.end	= 0x23ffffff,
+		.flags	= IORESOURCE_MEM,
+	},
+	IRQ(~0UL), /* Magic IRQ will be overridden */
+};
+
+static int __init at32_init_ide_or_cf(struct platform_device *pdev,
+		unsigned int cs, unsigned int extint)
+{
+	static unsigned int extint_pin_map[4] __initdata = {
+		GPIO_PIN_PB(25),
+		GPIO_PIN_PB(26),
+		GPIO_PIN_PB(27),
+		GPIO_PIN_PB(28),
+	};
+	static bool common_pins_initialized __initdata = false;
+	unsigned int extint_pin;
+	int ret;
+
+	if (extint >= ARRAY_SIZE(extint_pin_map))
+		return -EINVAL;
+	extint_pin = extint_pin_map[extint];
+
+	switch (cs) {
+	case 4:
+		ret = platform_device_add_resources(pdev,
+				at32_smc_cs4_resource,
+				ARRAY_SIZE(at32_smc_cs4_resource));
+		if (ret)
+			return ret;
+
+		select_peripheral(PE(21), PERIPH_A, 0); /* NCS4   -> OE_N  */
+		set_ebi_sfr_bits(HMATRIX_BIT(CS4A));
+		break;
+	case 5:
+		ret = platform_device_add_resources(pdev,
+				at32_smc_cs5_resource,
+				ARRAY_SIZE(at32_smc_cs5_resource));
+		if (ret)
+			return ret;
+
+		select_peripheral(PE(22), PERIPH_A, 0); /* NCS5   -> OE_N  */
+		set_ebi_sfr_bits(HMATRIX_BIT(CS5A));
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (!common_pins_initialized) {
+		select_peripheral(PE(19), PERIPH_A, 0);	/* CFCE1  -> CS0_N */
+		select_peripheral(PE(20), PERIPH_A, 0);	/* CFCE2  -> CS1_N */
+		select_peripheral(PE(23), PERIPH_A, 0); /* CFRNW  -> DIR   */
+		select_peripheral(PE(24), PERIPH_A, 0); /* NWAIT  <- IORDY */
+		common_pins_initialized = true;
+	}
+
+	at32_select_periph(extint_pin, GPIO_PERIPH_A, AT32_GPIOF_DEGLITCH);
+
+	pdev->resource[1].start = EIM_IRQ_BASE + extint;
+	pdev->resource[1].end = pdev->resource[1].start;
+
+	return 0;
+}
+
+struct platform_device *__init
+at32_add_device_ide(unsigned int id, unsigned int extint,
+		    struct ide_platform_data *data)
+{
+	struct platform_device *pdev;
+
+	pdev = platform_device_alloc("at32_ide", id);
+	if (!pdev)
+		goto fail;
+
+	if (platform_device_add_data(pdev, data,
+				sizeof(struct ide_platform_data)))
+		goto fail;
+
+	if (at32_init_ide_or_cf(pdev, data->cs, extint))
+		goto fail;
+
+	platform_device_add(pdev);
+	return pdev;
+
+fail:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+struct platform_device *__init
+at32_add_device_cf(unsigned int id, unsigned int extint,
+		    struct cf_platform_data *data)
+{
+	struct platform_device *pdev;
+
+	pdev = platform_device_alloc("at32_cf", id);
+	if (!pdev)
+		goto fail;
+
+	if (platform_device_add_data(pdev, data,
+				sizeof(struct cf_platform_data)))
+		goto fail;
+
+	if (at32_init_ide_or_cf(pdev, data->cs, extint))
+		goto fail;
+
+	if (data->detect_pin != GPIO_PIN_NONE)
+		at32_select_gpio(data->detect_pin, AT32_GPIOF_DEGLITCH);
+	if (data->reset_pin != GPIO_PIN_NONE)
+		at32_select_gpio(data->reset_pin, 0);
+	if (data->vcc_pin != GPIO_PIN_NONE)
+		at32_select_gpio(data->vcc_pin, 0);
+	/* READY is used as extint, so we can't select it as gpio */
+
+	platform_device_add(pdev);
+	return pdev;
+
+fail:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
+ * AC97C
+ * -------------------------------------------------------------------- */
+static struct resource atmel_ac97c0_resource[] __initdata = {
+	PBMEM(0xfff02800),
+	IRQ(29),
+};
+static struct clk atmel_ac97c0_pclk = {
+	.name		= "pclk",
+	.parent		= &pbb_clk,
+	.mode		= pbb_clk_mode,
+	.get_rate	= pbb_clk_get_rate,
+	.index		= 10,
+};
+
+struct platform_device *__init at32_add_device_ac97c(unsigned int id)
+{
+	struct platform_device *pdev;
+
+	if (id != 0)
+		return NULL;
+
+	pdev = platform_device_alloc("atmel_ac97c", id);
+	if (!pdev)
+		return NULL;
+
+	if (platform_device_add_resources(pdev, atmel_ac97c0_resource,
+				ARRAY_SIZE(atmel_ac97c0_resource)))
+		goto err_add_resources;
+
+	select_peripheral(PB(20), PERIPH_B, 0);	/* SYNC	*/
+	select_peripheral(PB(21), PERIPH_B, 0);	/* SDO	*/
+	select_peripheral(PB(22), PERIPH_B, 0);	/* SDI	*/
+	select_peripheral(PB(23), PERIPH_B, 0);	/* SCLK	*/
+
+	atmel_ac97c0_pclk.dev = &pdev->dev;
+
+	platform_device_add(pdev);
+	return pdev;
+
+err_add_resources:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
+ * ABDAC
+ * -------------------------------------------------------------------- */
+static struct resource abdac0_resource[] __initdata = {
+	PBMEM(0xfff02000),
+	IRQ(27),
+};
+static struct clk abdac0_pclk = {
+	.name		= "pclk",
+	.parent		= &pbb_clk,
+	.mode		= pbb_clk_mode,
+	.get_rate	= pbb_clk_get_rate,
+	.index		= 8,
+};
+static struct clk abdac0_sample_clk = {
+	.name		= "sample_clk",
+	.mode		= genclk_mode,
+	.get_rate	= genclk_get_rate,
+	.set_rate	= genclk_set_rate,
+	.set_parent	= genclk_set_parent,
+	.index		= 6,
+};
+
+struct platform_device *__init at32_add_device_abdac(unsigned int id)
+{
+	struct platform_device *pdev;
+
+	if (id != 0)
+		return NULL;
+
+	pdev = platform_device_alloc("abdac", id);
+	if (!pdev)
+		return NULL;
+
+	if (platform_device_add_resources(pdev, abdac0_resource,
+				ARRAY_SIZE(abdac0_resource)))
+		goto err_add_resources;
+
+	select_peripheral(PB(20), PERIPH_A, 0);	/* DATA1	*/
+	select_peripheral(PB(21), PERIPH_A, 0);	/* DATA0	*/
+	select_peripheral(PB(22), PERIPH_A, 0);	/* DATAN1	*/
+	select_peripheral(PB(23), PERIPH_A, 0);	/* DATAN0	*/
+
+	abdac0_pclk.dev = &pdev->dev;
+	abdac0_sample_clk.dev = &pdev->dev;
+
+	platform_device_add(pdev);
+	return pdev;
+
+err_add_resources:
+	platform_device_put(pdev);
+	return NULL;
+}
+
+/* --------------------------------------------------------------------
  *  GCLK
  * -------------------------------------------------------------------- */
 static struct clk gclk0 = {
@@ -1066,7 +1618,7 @@ struct clk *at32_clock_list[] = {
 	&hsb_clk,
 	&pba_clk,
 	&pbb_clk,
-	&at32_sm_pclk,
+	&at32_pm_pclk,
 	&at32_intc0_pclk,
 	&hmatrix_clk,
 	&ebi_clk,
@@ -1075,6 +1627,7 @@ struct clk *at32_clock_list[] = {
 	&smc0_mck,
 	&pdc_hclk,
 	&pdc_pclk,
+	&dmaca0_hclk,
 	&pico_clk,
 	&pio0_mck,
 	&pio1_mck,
@@ -1092,8 +1645,18 @@ struct clk *at32_clock_list[] = {
 	&macb1_pclk,
 	&atmel_spi0_spi_clk,
 	&atmel_spi1_spi_clk,
+	&atmel_twi0_pclk,
+	&atmel_mci0_pclk,
 	&atmel_lcdfb0_hck1,
 	&atmel_lcdfb0_pixclk,
+	&ssc0_pclk,
+	&ssc1_pclk,
+	&ssc2_pclk,
+	&usba0_hclk,
+	&usba0_pclk,
+	&atmel_ac97c0_pclk,
+	&abdac0_pclk,
+	&abdac0_sample_clk,
 	&gclk0,
 	&gclk1,
 	&gclk2,
@@ -1113,18 +1676,20 @@ void __init at32_portmux_init(void)
 
 void __init at32_clock_init(void)
 {
-	struct at32_sm *sm = &system_manager;
 	u32 cpu_mask = 0, hsb_mask = 0, pba_mask = 0, pbb_mask = 0;
 	int i;
 
-	if (sm_readl(sm, PM_MCCTRL) & SM_BIT(PLLSEL))
+	if (pm_readl(MCCTRL) & PM_BIT(PLLSEL)) {
 		main_clock = &pll0;
-	else
+		cpu_clk.parent = &pll0;
+	} else {
 		main_clock = &osc0;
+		cpu_clk.parent = &osc0;
+	}
 
-	if (sm_readl(sm, PM_PLL0) & SM_BIT(PLLOSC))
+	if (pm_readl(PLL0) & PM_BIT(PLLOSC))
 		pll0.parent = &osc1;
-	if (sm_readl(sm, PM_PLL1) & SM_BIT(PLLOSC))
+	if (pm_readl(PLL1) & PM_BIT(PLLOSC))
 		pll1.parent = &osc1;
 
 	genclk_init_parent(&gclk0);
@@ -1133,6 +1698,7 @@ void __init at32_clock_init(void)
 	genclk_init_parent(&gclk3);
 	genclk_init_parent(&gclk4);
 	genclk_init_parent(&atmel_lcdfb0_pixclk);
+	genclk_init_parent(&abdac0_sample_clk);
 
 	/*
 	 * Turn on all clocks that have at least one user already, and
@@ -1157,8 +1723,8 @@ void __init at32_clock_init(void)
 			pbb_mask |= 1 << clk->index;
 	}
 
-	sm_writel(sm, PM_CPU_MASK, cpu_mask);
-	sm_writel(sm, PM_HSB_MASK, hsb_mask);
-	sm_writel(sm, PM_PBA_MASK, pba_mask);
-	sm_writel(sm, PM_PBB_MASK, pbb_mask);
+	pm_writel(CPU_MASK, cpu_mask);
+	pm_writel(HSB_MASK, hsb_mask);
+	pm_writel(PBA_MASK, pba_mask);
+	pm_writel(PBB_MASK, pbb_mask);
 }

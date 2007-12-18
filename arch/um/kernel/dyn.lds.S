@@ -10,8 +10,6 @@ SECTIONS
   PROVIDE (__executable_start = START);
   . = START + SIZEOF_HEADERS;
   .interp         : { *(.interp) }
-  /* Used in arch/um/kernel/mem.c. Any memory between START and __binary_start
-   * is remapped.*/
   __binary_start = .;
   . = ALIGN(4096);		/* Init code and data */
   _text = .;
@@ -71,11 +69,13 @@ SECTIONS
     *(.gnu.warning)
 
     . = ALIGN(4096);
-    __syscall_stub_start = .;
-    *(.__syscall_stub*)
-    __syscall_stub_end = .;
-    . = ALIGN(4096);
   } =0x90909090
+  . = ALIGN(4096);
+  .syscall_stub : {
+	__syscall_stub_start = .;
+	*(.__syscall_stub*)
+	__syscall_stub_end = .;
+  }
   .fini           : {
     KEEP (*(.fini))
   } =0x90909090
@@ -138,8 +138,8 @@ SECTIONS
   .got            : { *(.got.plt) *(.got) }
   _edata = .;
   PROVIDE (edata = .);
-  __bss_start = .;
   .bss            : {
+   __bss_start = .;
    *(.dynbss)
    *(.bss .bss.* .gnu.linkonce.b.*)
    *(COMMON)

@@ -259,21 +259,21 @@ zfcp_module_init(void)
 	size = sizeof(struct zfcp_fsf_req_qtcb);
 	align = calc_alignment(size);
 	zfcp_data.fsf_req_qtcb_cache =
-		kmem_cache_create("zfcp_fsf", size, align, 0, NULL, NULL);
+		kmem_cache_create("zfcp_fsf", size, align, 0, NULL);
 	if (!zfcp_data.fsf_req_qtcb_cache)
 		goto out;
 
 	size = sizeof(struct fsf_status_read_buffer);
 	align = calc_alignment(size);
 	zfcp_data.sr_buffer_cache =
-		kmem_cache_create("zfcp_sr", size, align, 0, NULL, NULL);
+		kmem_cache_create("zfcp_sr", size, align, 0, NULL);
 	if (!zfcp_data.sr_buffer_cache)
 		goto out_sr_cache;
 
 	size = sizeof(struct zfcp_gid_pn_data);
 	align = calc_alignment(size);
 	zfcp_data.gid_pn_cache =
-		kmem_cache_create("zfcp_gid", size, align, 0, NULL, NULL);
+		kmem_cache_create("zfcp_gid", size, align, 0, NULL);
 	if (!zfcp_data.gid_pn_cache)
 		goto out_gid_cache;
 
@@ -559,10 +559,9 @@ zfcp_sg_list_alloc(struct zfcp_sg_list *sg_list, size_t size)
 		retval = -ENOMEM;
 		goto out;
 	}
+	sg_init_table(sg_list->sg, sg_list->count);
 
 	for (i = 0, sg = sg_list->sg; i < sg_list->count; i++, sg++) {
-		sg->length = min(size, PAGE_SIZE);
-		sg->offset = 0;
 		address = (void *) get_zeroed_page(GFP_KERNEL);
 		if (address == NULL) {
 			sg_list->count = i;
@@ -570,7 +569,7 @@ zfcp_sg_list_alloc(struct zfcp_sg_list *sg_list, size_t size)
 			retval = -ENOMEM;
 			goto out;
 		}
-		zfcp_address_to_sg(address, sg);
+		zfcp_address_to_sg(address, sg, min(size, PAGE_SIZE));
 		size -= sg->length;
 	}
 
@@ -815,9 +814,7 @@ zfcp_get_adapter_by_busid(char *bus_id)
 struct zfcp_unit *
 zfcp_unit_enqueue(struct zfcp_port *port, fcp_lun_t fcp_lun)
 {
-	struct zfcp_unit *unit, *tmp_unit;
-	unsigned int scsi_lun;
-	int found;
+	struct zfcp_unit *unit;
 
 	/*
 	 * check that there is no unit with this FCP_LUN already in list
@@ -863,22 +860,10 @@ zfcp_unit_enqueue(struct zfcp_port *port, fcp_lun_t fcp_lun)
 	}
 
 	zfcp_unit_get(unit);
+	unit->scsi_lun = scsilun_to_int((struct scsi_lun *)&unit->fcp_lun);
 
-	scsi_lun = 0;
-	found = 0;
 	write_lock_irq(&zfcp_data.config_lock);
-	list_for_each_entry(tmp_unit, &port->unit_list_head, list) {
-		if (tmp_unit->scsi_lun != scsi_lun) {
-			found = 1;
-			break;
-		}
-		scsi_lun++;
-	}
-	unit->scsi_lun = scsi_lun;
-	if (found)
-		list_add_tail(&unit->list, &tmp_unit->list);
-	else
-		list_add_tail(&unit->list, &port->unit_list_head);
+	list_add_tail(&unit->list, &port->unit_list_head);
 	atomic_clear_mask(ZFCP_STATUS_COMMON_REMOVE, &unit->status);
 	atomic_set_mask(ZFCP_STATUS_COMMON_RUNNING, &unit->status);
 	write_unlock_irq(&zfcp_data.config_lock);
@@ -905,7 +890,7 @@ zfcp_unit_dequeue(struct zfcp_unit *unit)
 /*
  * Allocates a combined QTCB/fsf_req buffer for erp actions and fcp/SCSI
  * commands.
- * It also genrates fcp-nameserver request/response buffer and unsolicited 
+ * It also genrates fcp-nameserver request/response buffer and unsolicited
  * status read fsf_req buffers.
  *
  * locks:       must only be called with zfcp_data.config_sema taken
@@ -996,7 +981,7 @@ zfcp_adapter_enqueue(struct ccw_device *ccw_device)
 	struct zfcp_adapter *adapter;
 
 	/*
-	 * Note: It is safe to release the list_lock, as any list changes 
+	 * Note: It is safe to release the list_lock, as any list changes
 	 * are protected by the config_sema, which must be held to get here
 	 */
 
@@ -1052,6 +1037,10 @@ zfcp_adapter_enqueue(struct ccw_device *ccw_device)
 	spin_lock_init(&adapter->san_dbf_lock);
 	spin_lock_init(&adapter->scsi_dbf_lock);
 
+	retval = zfcp_adapter_debug_register(adapter);
+	if (retval)
+		goto debug_register_failed;
+
 	/* initialize error recovery stuff */
 
 	rwlock_init(&adapter->erp_lock);
@@ -1072,7 +1061,6 @@ zfcp_adapter_enqueue(struct ccw_device *ccw_device)
 	/* mark adapter unusable as long as sysfs registration is not complete */
 	atomic_set_mask(ZFCP_STATUS_COMMON_REMOVE, &adapter->status);
 
-	adapter->ccw_device = ccw_device;
 	dev_set_drvdata(&ccw_device->dev, adapter);
 
 	if (zfcp_sysfs_adapter_create_files(&ccw_device->dev))
@@ -1099,6 +1087,8 @@ zfcp_adapter_enqueue(struct ccw_device *ccw_device)
  generic_services_failed:
 	zfcp_sysfs_adapter_remove_files(&adapter->ccw_device->dev);
  sysfs_failed:
+	zfcp_adapter_debug_unregister(adapter);
+ debug_register_failed:
 	dev_set_drvdata(&ccw_device->dev, NULL);
 	zfcp_reqlist_free(adapter);
  failed_low_mem_buffers:
@@ -1143,6 +1133,8 @@ zfcp_adapter_dequeue(struct zfcp_adapter *adapter)
 		retval = -EBUSY;
 		goto out;
 	}
+
+	zfcp_adapter_debug_unregister(adapter);
 
 	/* remove specified adapter data structure from list */
 	write_lock_irq(&zfcp_data.config_lock);
@@ -1517,20 +1509,20 @@ zfcp_gid_pn_buffers_alloc(struct zfcp_gid_pn_data **gid_pn, mempool_t *pool)
 			data->ct.pool = pool;
 		}
 	} else {
-		data = kmalloc(sizeof(struct zfcp_gid_pn_data), GFP_ATOMIC);
+		data = kmem_cache_alloc(zfcp_data.gid_pn_cache, GFP_ATOMIC);
 	}
 
         if (NULL == data)
                 return -ENOMEM;
 
 	memset(data, 0, sizeof(*data));
+	sg_init_table(&data->req , 1);
+	sg_init_table(&data->resp , 1);
         data->ct.req = &data->req;
         data->ct.resp = &data->resp;
 	data->ct.req_count = data->ct.resp_count = 1;
-	zfcp_address_to_sg(&data->ct_iu_req, &data->req);
-        zfcp_address_to_sg(&data->ct_iu_resp, &data->resp);
-        data->req.length = sizeof(struct ct_iu_gid_pn_req);
-        data->resp.length = sizeof(struct ct_iu_gid_pn_resp);
+	zfcp_address_to_sg(&data->ct_iu_req, &data->req, sizeof(struct ct_iu_gid_pn_req));
+        zfcp_address_to_sg(&data->ct_iu_resp, &data->resp, sizeof(struct ct_iu_gid_pn_resp));
 
 	*gid_pn = data;
 	return 0;
@@ -1540,15 +1532,12 @@ zfcp_gid_pn_buffers_alloc(struct zfcp_gid_pn_data **gid_pn, mempool_t *pool)
  * zfcp_gid_pn_buffers_free - free buffers for GID_PN nameserver request
  * @gid_pn: pointer to struct zfcp_gid_pn_data which has to be freed
  */
-static void
-zfcp_gid_pn_buffers_free(struct zfcp_gid_pn_data *gid_pn)
+static void zfcp_gid_pn_buffers_free(struct zfcp_gid_pn_data *gid_pn)
 {
-        if ((gid_pn->ct.pool != 0))
+	if (gid_pn->ct.pool)
 		mempool_free(gid_pn, gid_pn->ct.pool);
 	else
-                kfree(gid_pn);
-
-	return;
+		kmem_cache_free(zfcp_data.gid_pn_cache, gid_pn);
 }
 
 /**

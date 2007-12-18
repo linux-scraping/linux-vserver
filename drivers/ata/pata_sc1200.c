@@ -40,7 +40,7 @@
 #include <linux/libata.h>
 
 #define DRV_NAME	"sc1200"
-#define DRV_VERSION	"0.2.5"
+#define DRV_VERSION	"0.2.6"
 
 #define SC1200_REV_A	0x00
 #define SC1200_REV_B1	0x01
@@ -156,7 +156,7 @@ static void sc1200_set_dmamode(struct ata_port *ap, struct ata_device *adev)
  *
  *	Called when the libata layer is about to issue a command. We wrap
  *	this interface so that we can load the correct ATA timings if
- *	neccessary.  Specifically we have a problem that there is only
+ *	necessary.  Specifically we have a problem that there is only
  *	one MWDMA/UDMA bit.
  */
 
@@ -185,7 +185,7 @@ static struct scsi_host_template sc1200_sht = {
 	.queuecommand		= ata_scsi_queuecmd,
 	.can_queue		= ATA_DEF_QUEUE,
 	.this_id		= ATA_SHT_THIS_ID,
-	.sg_tablesize		= LIBATA_MAX_PRD,
+	.sg_tablesize		= LIBATA_DUMB_MAX_PRD,
 	.cmd_per_lun		= ATA_SHT_CMD_PER_LUN,
 	.emulated		= ATA_SHT_EMULATED,
 	.use_clustering		= ATA_SHT_USE_CLUSTERING,
@@ -197,7 +197,6 @@ static struct scsi_host_template sc1200_sht = {
 };
 
 static struct ata_port_operations sc1200_port_ops = {
-	.port_disable	= ata_port_disable,
 	.set_piomode	= sc1200_set_piomode,
 	.set_dmamode	= sc1200_set_dmamode,
 	.mode_filter	= ata_pci_default_filter,
@@ -219,7 +218,7 @@ static struct ata_port_operations sc1200_port_ops = {
 	.bmdma_stop	= ata_bmdma_stop,
 	.bmdma_status 	= ata_bmdma_status,
 
-	.qc_prep 	= ata_qc_prep,
+	.qc_prep 	= ata_dumb_qc_prep,
 	.qc_issue	= sc1200_qc_issue_prot,
 
 	.data_xfer	= ata_data_xfer,
@@ -227,9 +226,8 @@ static struct ata_port_operations sc1200_port_ops = {
 	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
 	.irq_on		= ata_irq_on,
-	.irq_ack	= ata_irq_ack,
 
-	.port_start	= ata_port_start,
+	.port_start	= ata_sff_port_start,
 };
 
 /**
@@ -245,7 +243,7 @@ static int sc1200_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	static const struct ata_port_info info = {
 		.sht = &sc1200_sht,
-		.flags = ATA_FLAG_SLAVE_POSS|ATA_FLAG_SRST,
+		.flags = ATA_FLAG_SLAVE_POSS,
 		.pio_mask = 0x1f,
 		.mwdma_mask = 0x07,
 		.udma_mask = 0x07,

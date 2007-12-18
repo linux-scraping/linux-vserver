@@ -44,6 +44,7 @@
 #include <linux/seq_file.h>
 #include <linux/dmi.h>
 #include <linux/moduleparam.h>
+#include <linux/cpuidle.h>
 
 #include <asm/io.h>
 #include <asm/system.h>
@@ -66,6 +67,7 @@
 #define ACPI_PROCESSOR_FILE_LIMIT	"limit"
 #define ACPI_PROCESSOR_NOTIFY_PERFORMANCE 0x80
 #define ACPI_PROCESSOR_NOTIFY_POWER	0x81
+#define ACPI_PROCESSOR_NOTIFY_THROTTLING	0x82
 
 #define ACPI_PROCESSOR_LIMIT_USER	0
 #define ACPI_PROCESSOR_LIMIT_THERMAL	1
@@ -84,15 +86,25 @@ static int acpi_processor_info_open_fs(struct inode *inode, struct file *file);
 static void acpi_processor_notify(acpi_handle handle, u32 event, void *data);
 static acpi_status acpi_processor_hotadd_init(acpi_handle handle, int *p_cpu);
 static int acpi_processor_handle_eject(struct acpi_processor *pr);
+extern int acpi_processor_tstate_has_changed(struct acpi_processor *pr);
+
+
+static const struct acpi_device_id processor_device_ids[] = {
+	{ACPI_PROCESSOR_HID, 0},
+	{"", 0},
+};
+MODULE_DEVICE_TABLE(acpi, processor_device_ids);
 
 static struct acpi_driver acpi_processor_driver = {
 	.name = "processor",
 	.class = ACPI_PROCESSOR_CLASS,
-	.ids = ACPI_PROCESSOR_HID,
+	.ids = processor_device_ids,
 	.ops = {
 		.add = acpi_processor_add,
 		.remove = acpi_processor_remove,
 		.start = acpi_processor_start,
+		.suspend = acpi_processor_suspend,
+		.resume = acpi_processor_resume,
 		},
 };
 
@@ -115,7 +127,6 @@ struct acpi_processor_errata errata __read_mostly;
 
 static int acpi_processor_errata_piix4(struct pci_dev *dev)
 {
-	u8 rev = 0;
 	u8 value1 = 0;
 	u8 value2 = 0;
 
@@ -127,9 +138,7 @@ static int acpi_processor_errata_piix4(struct pci_dev *dev)
 	 * Note that 'dev' references the PIIX4 ACPI Controller.
 	 */
 
-	pci_read_config_byte(dev, PCI_REVISION_ID, &rev);
-
-	switch (rev) {
+	switch (dev->revision) {
 	case 0:
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Found PIIX4 A-step\n"));
 		break;
@@ -147,7 +156,7 @@ static int acpi_processor_errata_piix4(struct pci_dev *dev)
 		break;
 	}
 
-	switch (rev) {
+	switch (dev->revision) {
 
 	case 0:		/* PIIX4 A-step */
 	case 1:		/* PIIX4 B-step */
@@ -413,12 +422,6 @@ static int map_lsapic_id(struct acpi_subtable_header *entry,
 	return 0;
 }
 
-#ifdef CONFIG_IA64
-#define arch_cpu_to_apicid 	ia64_cpu_to_sapicid
-#else
-#define arch_cpu_to_apicid 	x86_cpu_to_apicid
-#endif
-
 static int map_madt_entry(u32 acpi_id)
 {
 	unsigned long madt_end, entry;
@@ -492,7 +495,7 @@ static int get_cpu_id(acpi_handle handle, u32 acpi_id)
 		return apic_id;
 
 	for (i = 0; i < NR_CPUS; ++i) {
-		if (arch_cpu_to_apicid[i] == apic_id)
+		if (cpu_physical_id(i) == apic_id)
 			return i;
 	}
 	return -1;
@@ -692,13 +695,23 @@ static void acpi_processor_notify(acpi_handle handle, u32 event, void *data)
 	switch (event) {
 	case ACPI_PROCESSOR_NOTIFY_PERFORMANCE:
 		acpi_processor_ppc_has_changed(pr);
-		acpi_bus_generate_event(device, event,
+		acpi_bus_generate_proc_event(device, event,
 					pr->performance_platform_limit);
+		acpi_bus_generate_netlink_event(device->pnp.device_class,
+						  device->dev.bus_id, event,
+						  pr->performance_platform_limit);
 		break;
 	case ACPI_PROCESSOR_NOTIFY_POWER:
 		acpi_processor_cst_has_changed(pr);
-		acpi_bus_generate_event(device, event, 0);
+		acpi_bus_generate_proc_event(device, event, 0);
+		acpi_bus_generate_netlink_event(device->pnp.device_class,
+						  device->dev.bus_id, event, 0);
 		break;
+	case ACPI_PROCESSOR_NOTIFY_THROTTLING:
+		acpi_processor_tstate_has_changed(pr);
+		acpi_bus_generate_proc_event(device, event, 0);
+		acpi_bus_generate_netlink_event(device->pnp.device_class,
+						  device->dev.bus_id, event, 0);
 	default:
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 				  "Unsupported event [0x%x]\n", event));
@@ -707,6 +720,25 @@ static void acpi_processor_notify(acpi_handle handle, u32 event, void *data)
 
 	return;
 }
+
+static int acpi_cpu_soft_notify(struct notifier_block *nfb,
+		unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (unsigned long)hcpu;
+	struct acpi_processor *pr = processors[cpu];
+
+	if (action == CPU_ONLINE && pr) {
+		acpi_processor_ppc_has_changed(pr);
+		acpi_processor_cst_has_changed(pr);
+		acpi_processor_tstate_has_changed(pr);
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block acpi_cpu_notifier =
+{
+	    .notifier_call = acpi_cpu_soft_notify,
+};
 
 static int acpi_processor_add(struct acpi_device *device)
 {
@@ -971,6 +1003,7 @@ void acpi_processor_install_hotplug_notify(void)
 			    ACPI_UINT32_MAX,
 			    processor_walk_namespace_cb, &action, NULL);
 #endif
+	register_hotcpu_notifier(&acpi_cpu_notifier);
 }
 
 static
@@ -983,6 +1016,7 @@ void acpi_processor_uninstall_hotplug_notify(void)
 			    ACPI_UINT32_MAX,
 			    processor_walk_namespace_cb, &action, NULL);
 #endif
+	unregister_hotcpu_notifier(&acpi_cpu_notifier);
 }
 
 /*
@@ -1010,11 +1044,13 @@ static int __init acpi_processor_init(void)
 		return -ENOMEM;
 	acpi_processor_dir->owner = THIS_MODULE;
 
+	result = cpuidle_register_driver(&acpi_idle_driver);
+	if (result < 0)
+		goto out_proc;
+
 	result = acpi_bus_register_driver(&acpi_processor_driver);
-	if (result < 0) {
-		remove_proc_entry(ACPI_PROCESSOR_CLASS, acpi_root_dir);
-		return result;
-	}
+	if (result < 0)
+		goto out_cpuidle;
 
 	acpi_processor_install_hotplug_notify();
 
@@ -1023,11 +1059,18 @@ static int __init acpi_processor_init(void)
 	acpi_processor_ppc_init();
 
 	return 0;
+
+out_cpuidle:
+	cpuidle_unregister_driver(&acpi_idle_driver);
+
+out_proc:
+	remove_proc_entry(ACPI_PROCESSOR_CLASS, acpi_root_dir);
+
+	return result;
 }
 
 static void __exit acpi_processor_exit(void)
 {
-
 	acpi_processor_ppc_exit();
 
 	acpi_thermal_cpufreq_exit();
@@ -1035,6 +1078,8 @@ static void __exit acpi_processor_exit(void)
 	acpi_processor_uninstall_hotplug_notify();
 
 	acpi_bus_unregister_driver(&acpi_processor_driver);
+
+	cpuidle_unregister_driver(&acpi_idle_driver);
 
 	remove_proc_entry(ACPI_PROCESSOR_CLASS, acpi_root_dir);
 

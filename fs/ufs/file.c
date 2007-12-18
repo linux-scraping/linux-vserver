@@ -27,6 +27,9 @@
 #include <linux/ufs_fs.h>
 #include <linux/buffer_head.h>	/* for sync_mapping_buffers() */
 
+#include "ufs.h"
+
+
 static int ufs_sync_file(struct file *file, struct dentry *dentry, int datasync)
 {
 	struct inode *inode = dentry->d_inode;
@@ -60,5 +63,5 @@ const struct file_operations ufs_file_operations = {
 	.mmap		= generic_file_mmap,
 	.open           = generic_file_open,
 	.fsync		= ufs_sync_file,
-	.sendfile	= generic_file_sendfile,
+	.splice_read	= generic_file_splice_read,
 };

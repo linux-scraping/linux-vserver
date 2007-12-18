@@ -635,6 +635,7 @@ static void __init early_cmdline_parse(void)
 /* ibm,dynamic-reconfiguration-memory property supported */
 #define OV5_DRCONF_MEMORY	0x20
 #define OV5_LARGE_PAGES		0x10	/* large pages supported */
+#define OV5_DONATE_DEDICATE_CPU 0x02	/* donate dedicated CPU support */
 /* PCIe/MSI support.  Without MSI full PCIe is not supported */
 #ifdef CONFIG_PCI_MSI
 #define OV5_MSI			0x01	/* PCIe/MSI support */
@@ -685,7 +686,8 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 5: PAPR/OF options */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY | OV5_MSI,
+	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY |
+	OV5_DONATE_DEDICATE_CPU | OV5_MSI,
 };
 
 /* Old method - ELF header with PT_NOTE sections */
@@ -1197,7 +1199,7 @@ static void __init prom_initialize_tce_table(void)
 		if ((type[0] == 0) || (strstr(type, RELOC("pci")) == NULL))
 			continue;
 
-		/* Keep the old logic in tack to avoid regression. */
+		/* Keep the old logic intact to avoid regression. */
 		if (compatible[0] != 0) {
 			if ((strstr(compatible, RELOC("python")) == NULL) &&
 			    (strstr(compatible, RELOC("Speedwagon")) == NULL) &&
@@ -1242,7 +1244,7 @@ static void __init prom_initialize_tce_table(void)
 			local_alloc_bottom = base;
 
 		/* It seems OF doesn't null-terminate the path :-( */
-		memset(path, 0, sizeof(path));
+		memset(path, 0, PROM_SCRATCH_SIZE);
 		/* Call OF to setup the TCE hardware */
 		if (call_prom("package-to-path", 3, 1, node,
 			      path, PROM_SCRATCH_SIZE-1) == PROM_ERROR) {
@@ -2044,6 +2046,7 @@ static void __init fixup_device_tree_maple(void)
 /*
  * Pegasos and BriQ lacks the "ranges" property in the isa node
  * Pegasos needs decimal IRQ 14/15, not hexadecimal
+ * Pegasos has the IDE configured in legacy mode, but advertised as native
  */
 static void __init fixup_device_tree_chrp(void)
 {
@@ -2081,9 +2084,13 @@ static void __init fixup_device_tree_chrp(void)
 		prom_printf("Fixing up IDE interrupt on Pegasos...\n");
 		prop[0] = 14;
 		prop[1] = 0x0;
-		prop[2] = 15;
-		prop[3] = 0x0;
-		prom_setprop(ph, name, "interrupts", prop, 4*sizeof(u32));
+		prom_setprop(ph, name, "interrupts", prop, 2*sizeof(u32));
+		prom_printf("Fixing up IDE class-code on Pegasos...\n");
+		rc = prom_getprop(ph, "class-code", prop, sizeof(u32));
+		if (rc == sizeof(u32)) {
+			prop[0] &= ~0x5;
+			prom_setprop(ph, name, "class-code", prop, sizeof(u32));
+		}
 	}
 }
 #else
@@ -2224,7 +2231,7 @@ static void __init fixup_device_tree(void)
 
 static void __init prom_find_boot_cpu(void)
 {
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 	u32 getprop_rval;
 	ihandle prom_cpu;
 	phandle cpu_pkg;
@@ -2244,7 +2251,7 @@ static void __init prom_find_boot_cpu(void)
 static void __init prom_check_initrd(unsigned long r3, unsigned long r4)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 
 	if (r3 && r4 && r4 != 0xdeadbeef) {
 		unsigned long val;
@@ -2277,7 +2284,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 			       unsigned long pp,
 			       unsigned long r6, unsigned long r7)
 {	
-       	struct prom_t *_prom;
+	struct prom_t *_prom;
 	unsigned long hdr;
 	unsigned long offset = reloc_offset();
 
@@ -2336,8 +2343,8 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	/*
 	 * Copy the CPU hold code
 	 */
-       	if (RELOC(of_platform) != PLATFORM_POWERMAC)
-       		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
+	if (RELOC(of_platform) != PLATFORM_POWERMAC)
+		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
 
 	/*
 	 * Do early parsing of command line

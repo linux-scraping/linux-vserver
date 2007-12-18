@@ -66,7 +66,7 @@
 #define MC_REGISTER_SPACING         0x1000
 
 #define A_MC_BASE(ctlid)            ((ctlid)*MC_REGISTER_SPACING+A_MC_BASE_0)
-#define A_MC_REGISTER(ctlid,reg)    (A_MC_BASE(ctlid)+(reg))
+#define A_MC_REGISTER(ctlid, reg)    (A_MC_BASE(ctlid)+(reg))
 
 #define R_MC_CONFIG                 0x0000000100
 #define R_MC_DRAMCMD                0x0000000120
@@ -173,23 +173,23 @@
 
 #define R_MAC_DMA_CHANNELS		0x800 /* Relative to A_MAC_CHANNEL_BASE */
 
-#define A_MAC_DMA_CHANNEL_BASE(macnum,txrx,chan)    \
+#define A_MAC_DMA_CHANNEL_BASE(macnum, txrx, chan)  \
              ((A_MAC_CHANNEL_BASE(macnum)) +        \
              R_MAC_DMA_CHANNELS +                   \
              (MAC_DMA_TXRX_SPACING*(txrx)) +        \
              (MAC_DMA_CHANNEL_SPACING*(chan)))
 
-#define R_MAC_DMA_CHANNEL_BASE(txrx,chan)    \
+#define R_MAC_DMA_CHANNEL_BASE(txrx, chan)		\
              (R_MAC_DMA_CHANNELS +                   \
              (MAC_DMA_TXRX_SPACING*(txrx)) +        \
              (MAC_DMA_CHANNEL_SPACING*(chan)))
 
-#define A_MAC_DMA_REGISTER(macnum,txrx,chan,reg)           \
-            (A_MAC_DMA_CHANNEL_BASE(macnum,txrx,chan) +    \
+#define A_MAC_DMA_REGISTER(macnum, txrx, chan, reg)           \
+            (A_MAC_DMA_CHANNEL_BASE(macnum, txrx, chan) +    \
             (reg))
 
-#define R_MAC_DMA_REGISTER(txrx,chan,reg)           \
-            (R_MAC_DMA_CHANNEL_BASE(txrx,chan) +    \
+#define R_MAC_DMA_REGISTER(txrx, chan, reg)           \
+            (R_MAC_DMA_CHANNEL_BASE(txrx, chan) +    \
             (reg))
 
 /*
@@ -272,59 +272,69 @@
     ********************************************************************* */
 
 
-#if SIBYTE_HDR_FEATURE_1250_112x		/* This MC only on 1250 & 112x */
+#if SIBYTE_HDR_FEATURE_1250_112x    /* This MC only on 1250 & 112x */
 #define R_DUART_NUM_PORTS           2
 
 #define A_DUART                     0x0010060000
 
 #define DUART_CHANREG_SPACING       0x100
-#define A_DUART_CHANREG(chan,reg)   (A_DUART + DUART_CHANREG_SPACING*(chan) + (reg))
-#define R_DUART_CHANREG(chan,reg)   (DUART_CHANREG_SPACING*(chan) + (reg))
+
+#define A_DUART_CHANREG(chan, reg)					\
+	(A_DUART + DUART_CHANREG_SPACING * ((chan) + 1) + (reg))
 #endif	/* 1250 & 112x */
 
-#define R_DUART_MODE_REG_1	    0x100
-#define R_DUART_MODE_REG_2	    0x110
-#define R_DUART_STATUS              0x120
-#define R_DUART_CLK_SEL             0x130
-#define R_DUART_CMD                 0x150
-#define R_DUART_RX_HOLD             0x160
-#define R_DUART_TX_HOLD             0x170
+#define R_DUART_MODE_REG_1	    0x000
+#define R_DUART_MODE_REG_2	    0x010
+#define R_DUART_STATUS		    0x020
+#define R_DUART_CLK_SEL		    0x030
+#define R_DUART_CMD		    0x050
+#define R_DUART_RX_HOLD		    0x060
+#define R_DUART_TX_HOLD		    0x070
 
 #if SIBYTE_HDR_FEATURE(1250, PASS2) || SIBYTE_HDR_FEATURE(112x, PASS1) || SIBYTE_HDR_FEATURE_CHIP(1480)
-#define R_DUART_FULL_CTL	    0x140
-#define R_DUART_OPCR_X		    0x180
-#define R_DUART_AUXCTL_X	    0x190
-#endif /* 1250 PASS2 || 112x PASS1 || 1480*/
+#define R_DUART_FULL_CTL	    0x040
+#define R_DUART_OPCR_X		    0x080
+#define R_DUART_AUXCTL_X	    0x090
+#endif /* 1250 PASS2 || 112x PASS1 || 1480 */
 
 
 /*
  * The IMR and ISR can't be addressed with A_DUART_CHANREG,
- * so use this macro instead.
+ * so use these macros instead.
  */
 
-#define R_DUART_AUX_CTRL            0x310
-#define R_DUART_ISR_A               0x320
-#define R_DUART_IMR_A               0x330
-#define R_DUART_ISR_B               0x340
-#define R_DUART_IMR_B               0x350
-#define R_DUART_OUT_PORT            0x360
-#define R_DUART_OPCR                0x370
-#define R_DUART_IN_PORT             0x380
+#if SIBYTE_HDR_FEATURE_1250_112x    /* This MC only on 1250 & 112x */
+#define DUART_IMRISR_SPACING	    0x20
+#define DUART_INCHNG_SPACING	    0x10
 
-#define R_DUART_SET_OPR		    0x3B0
-#define R_DUART_CLEAR_OPR	    0x3C0
+#define A_DUART_CTRLREG(reg)						\
+	(A_DUART + DUART_CHANREG_SPACING * 3 + (reg))
 
-#define DUART_IMRISR_SPACING        0x20
+#define R_DUART_IMRREG(chan)						\
+	(R_DUART_IMR_A + (chan) * DUART_IMRISR_SPACING)
+#define R_DUART_ISRREG(chan)						\
+	(R_DUART_ISR_A + (chan) * DUART_IMRISR_SPACING)
+#define R_DUART_INCHREG(chan)						\
+	(R_DUART_IN_CHNG_A + (chan) * DUART_INCHNG_SPACING)
 
-#if SIBYTE_HDR_FEATURE_1250_112x		/* This MC only on 1250 & 112x */
-#define R_DUART_IMRREG(chan)	    (R_DUART_IMR_A + (chan)*DUART_IMRISR_SPACING)
-#define R_DUART_ISRREG(chan)	    (R_DUART_ISR_A + (chan)*DUART_IMRISR_SPACING)
-
-#define A_DUART_IMRREG(chan)	    (A_DUART + R_DUART_IMRREG(chan))
-#define A_DUART_ISRREG(chan)	    (A_DUART + R_DUART_ISRREG(chan))
+#define A_DUART_IMRREG(chan)	    A_DUART_CTRLREG(R_DUART_IMRREG(chan))
+#define A_DUART_ISRREG(chan)	    A_DUART_CTRLREG(R_DUART_ISRREG(chan))
+#define A_DUART_INCHREG(chan)	    A_DUART_CTRLREG(R_DUART_INCHREG(chan))
 #endif	/* 1250 & 112x */
 
+#define R_DUART_AUX_CTRL	    0x010
+#define R_DUART_ISR_A		    0x020
+#define R_DUART_IMR_A		    0x030
+#define R_DUART_ISR_B		    0x040
+#define R_DUART_IMR_B		    0x050
+#define R_DUART_OUT_PORT	    0x060
+#define R_DUART_OPCR		    0x070
+#define R_DUART_IN_PORT		    0x080
 
+#define R_DUART_SET_OPR		    0x0B0
+#define R_DUART_CLEAR_OPR	    0x0C0
+#define R_DUART_IN_CHNG_A	    0x0D0
+#define R_DUART_IN_CHNG_B	    0x0E0
 
 
 /*
@@ -405,8 +415,8 @@
              R_SER_DMA_CHANNELS +                   \
              (SER_DMA_TXRX_SPACING*(txrx)))
 
-#define A_SER_DMA_REGISTER(sernum,txrx,reg)           \
-            (A_SER_DMA_CHANNEL_BASE(sernum,txrx) +    \
+#define A_SER_DMA_REGISTER(sernum, txrx, reg)           \
+            (A_SER_DMA_CHANNEL_BASE(sernum, txrx) +    \
             (reg))
 
 
@@ -489,7 +499,7 @@
 
 #define IO_EXT_REGISTER_SPACING	    8
 #define A_IO_EXT_CS_BASE(cs)	    (A_IO_EXT_CFG_BASE+IO_EXT_REGISTER_SPACING*(cs))
-#define R_IO_EXT_REG(reg,cs)	    ((cs)*IO_EXT_REGISTER_SPACING + (reg))
+#define R_IO_EXT_REG(reg, cs)	    ((cs)*IO_EXT_REGISTER_SPACING + (reg))
 
 #define R_IO_EXT_CFG		    0x0000
 #define R_IO_EXT_MULT_SIZE          0x0100
@@ -577,7 +587,7 @@
 #define A_SMB_1                     0x0010060008
 #define SMB_REGISTER_SPACING        0x8
 #define A_SMB_BASE(idx)             (A_SMB_0+(idx)*SMB_REGISTER_SPACING)
-#define A_SMB_REGISTER(idx,reg)     (A_SMB_BASE(idx)+(reg))
+#define A_SMB_REGISTER(idx, reg)    (A_SMB_BASE(idx)+(reg))
 
 #define R_SMB_XTRA                  0x0000000000
 #define R_SMB_FREQ                  0x0000000010
@@ -601,7 +611,7 @@
 #define SCD_WDOG_SPACING            0x100
 #define SCD_NUM_WDOGS		    2
 #define A_SCD_WDOG_BASE(w)          (A_SCD_WDOG_0+SCD_WDOG_SPACING*(w))
-#define A_SCD_WDOG_REGISTER(w,r)    (A_SCD_WDOG_BASE(w) + (r))
+#define A_SCD_WDOG_REGISTER(w, r)   (A_SCD_WDOG_BASE(w) + (r))
 
 #define R_SCD_WDOG_INIT		    0x0000000000
 #define R_SCD_WDOG_CNT		    0x0000000008
@@ -625,7 +635,7 @@
 #define A_SCD_TIMER_3               0x0010020178
 #define SCD_NUM_TIMERS		    4
 #define A_SCD_TIMER_BASE(w)         (A_SCD_TIMER_0+0x08*((w)&1)+0x100*(((w)&2)>>1))
-#define A_SCD_TIMER_REGISTER(w,r)   (A_SCD_TIMER_BASE(w) + (r))
+#define A_SCD_TIMER_REGISTER(w, r)  (A_SCD_TIMER_BASE(w) + (r))
 
 #define R_SCD_TIMER_INIT	    0x0000000000
 #define R_SCD_TIMER_CNT		    0x0000000010
@@ -704,7 +714,7 @@
 #define IMR_REGISTER_SPACING_SHIFT      13
 
 #define A_IMR_MAPPER(cpu) (A_IMR_CPU0_BASE+(cpu)*IMR_REGISTER_SPACING)
-#define A_IMR_REGISTER(cpu,reg) (A_IMR_MAPPER(cpu)+(reg))
+#define A_IMR_REGISTER(cpu, reg) (A_IMR_MAPPER(cpu)+(reg))
 
 #define R_IMR_INTERRUPT_DIAG            0x0010
 #define R_IMR_INTERRUPT_LDT             0x0018
@@ -811,7 +821,7 @@
 #define DM_REGISTER_SPACING	    0x20
 #define DM_NUM_CHANNELS		    4
 #define A_DM_BASE(idx) (A_DM_0 + ((idx) * DM_REGISTER_SPACING))
-#define A_DM_REGISTER(idx,reg) (A_DM_BASE(idx) + (reg))
+#define A_DM_REGISTER(idx, reg) (A_DM_BASE(idx) + (reg))
 
 #define R_DM_DSCR_BASE		    0x0000000000
 #define R_DM_DSCR_COUNT		    0x0000000008
@@ -833,7 +843,7 @@
 #define DM_CRC_REGISTER_SPACING	    0x10
 #define DM_CRC_NUM_CHANNELS	    2
 #define A_DM_CRC_BASE(idx)	    (A_DM_CRC_0 + ((idx) * DM_CRC_REGISTER_SPACING))
-#define A_DM_CRC_REGISTER(idx,reg)  (A_DM_CRC_BASE(idx) + (reg))
+#define A_DM_CRC_REGISTER(idx, reg)  (A_DM_CRC_BASE(idx) + (reg))
 
 #define R_CRC_DEF_0		    0x00
 #define R_CTCP_DEF_0		    0x08

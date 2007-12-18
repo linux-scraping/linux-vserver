@@ -70,7 +70,6 @@ static int new(struct nf_conn *conntrack, const struct sk_buff *skb,
 static struct ctl_table_header *generic_sysctl_header;
 static struct ctl_table generic_sysctl_table[] = {
 	{
-		.ctl_name	= NET_NF_CONNTRACK_GENERIC_TIMEOUT,
 		.procname	= "nf_conntrack_generic_timeout",
 		.data		= &nf_ct_generic_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -84,7 +83,6 @@ static struct ctl_table generic_sysctl_table[] = {
 #ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
 static struct ctl_table generic_compat_sysctl_table[] = {
 	{
-		.ctl_name	= NET_IPV4_NF_CONNTRACK_GENERIC_TIMEOUT,
 		.procname	= "ip_conntrack_generic_timeout",
 		.data		= &nf_ct_generic_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -98,7 +96,7 @@ static struct ctl_table generic_compat_sysctl_table[] = {
 #endif /* CONFIG_NF_CONNTRACK_PROC_COMPAT */
 #endif /* CONFIG_SYSCTL */
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_generic =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_generic __read_mostly =
 {
 	.l3proto		= PF_UNSPEC,
 	.l4proto		= 0,

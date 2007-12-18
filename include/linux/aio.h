@@ -86,7 +86,7 @@ struct kioctx;
  */
 struct kiocb {
 	struct list_head	ki_run_list;
-	long			ki_flags;
+	unsigned long		ki_flags;
 	int			ki_users;
 	unsigned		ki_key;		/* id of this request */
 
@@ -230,18 +230,6 @@ int FASTCALL(io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 	BUG_ON(atomic_read(&(kioctx)->users) <= 0);			\
 	if (unlikely(atomic_dec_and_test(&(kioctx)->users))) 		\
 		__put_ioctx(kioctx);					\
-} while (0)
-
-#define in_aio() (unlikely(!is_sync_wait(current->io_wait)))
-
-/* may be used for debugging */
-#define warn_if_async()							\
-do {									\
-	if (in_aio()) {							\
-		printk(KERN_ERR "%s(%s:%d) called in async context!\n",	\
-			__FUNCTION__, __FILE__, __LINE__);		\
-		dump_stack();						\
-	}								\
 } while (0)
 
 #define io_wait_to_kiocb(wait) container_of(wait, struct kiocb, ki_wait)

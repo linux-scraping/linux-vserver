@@ -1272,7 +1272,7 @@ struct sysdev_class dma_sysclass = {
 
 /* kmem cache implementation */
 
-static void s3c2410_dma_cache_ctor(void *p, struct kmem_cache *c, unsigned long f)
+static void s3c2410_dma_cache_ctor(struct kmem_cache *c, void *p)
 {
 	memset(p, 0, sizeof(struct s3c2410_dma_buf));
 }
@@ -1333,7 +1333,7 @@ int __init s3c24xx_dma_init(unsigned int channels, unsigned int irq,
 	dma_kmem = kmem_cache_create("dma_desc",
 				     sizeof(struct s3c2410_dma_buf), 0,
 				     SLAB_HWCACHE_ALIGN,
-				     s3c2410_dma_cache_ctor, NULL);
+				     s3c2410_dma_cache_ctor);
 
 	if (dma_kmem == NULL) {
 		printk(KERN_ERR "dma failed to make kmem cache\n");
@@ -1372,7 +1372,7 @@ int __init s3c24xx_dma_init(unsigned int channels, unsigned int irq,
 	return ret;
 }
 
-int s3c2410_dma_init(void)
+int __init s3c2410_dma_init(void)
 {
 	return s3c24xx_dma_init(4, IRQ_DMA0, 0x40);
 }

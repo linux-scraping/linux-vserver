@@ -51,7 +51,6 @@
 
 #include <support/ktrace.h>
 #include <support/debug.h>
-#include <support/move.h>
 #include <support/uuid.h>
 
 #include <linux/mm.h>
@@ -75,6 +74,7 @@
 #include <linux/cpu.h>
 #include <linux/notifier.h>
 #include <linux/delay.h>
+#include <linux/log2.h>
 
 #include <asm/page.h>
 #include <asm/div64.h>
@@ -83,7 +83,6 @@
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
-#include <xfs_behavior.h>
 #include <xfs_vfs.h>
 #include <xfs_cred.h>
 #include <xfs_vnode.h>
@@ -101,7 +100,6 @@
  * Feature macros (disable/enable)
  */
 #undef  HAVE_REFCACHE	/* reference cache not needed for NFS in 2.6 */
-#define HAVE_SENDFILE	/* sendfile(2) exists in 2.6, but not in 2.4 */
 #define HAVE_SPLICE	/* a splice(2) exists in 2.6, but not in 2.4 */
 #ifdef CONFIG_SMP
 #define HAVE_PERCPU_SB	/* per cpu superblock counters are a 2.6 feature */
@@ -124,6 +122,7 @@
 #define xfs_inherit_nosymlinks	xfs_params.inherit_nosym.val
 #define xfs_rotorstep		xfs_params.rotorstep.val
 #define xfs_inherit_nodefrag	xfs_params.inherit_nodfrg.val
+#define xfs_fstrm_centisecs	xfs_params.fstrm_timer.val
 
 #define current_cpu()		(raw_smp_processor_id())
 #define current_pid()		(current->pid)

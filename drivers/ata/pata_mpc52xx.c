@@ -24,7 +24,7 @@
 
 
 #define DRV_NAME	"mpc52xx_ata"
-#define DRV_VERSION	"0.1.0ac2"
+#define DRV_VERSION	"0.1.2"
 
 
 /* Private structures used by the driver */
@@ -283,7 +283,6 @@ static struct scsi_host_template mpc52xx_ata_sht = {
 };
 
 static struct ata_port_operations mpc52xx_ata_port_ops = {
-	.port_disable		= ata_port_disable,
 	.set_piomode		= mpc52xx_ata_set_piomode,
 	.dev_select		= mpc52xx_ata_dev_select,
 	.tf_load		= ata_tf_load,
@@ -299,17 +298,16 @@ static struct ata_port_operations mpc52xx_ata_port_ops = {
 	.data_xfer		= ata_data_xfer,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 	.port_start		= ata_port_start,
 };
 
 static int __devinit
-mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv)
+mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv,
+		     unsigned long raw_ata_regs)
 {
 	struct ata_host *host;
 	struct ata_port *ap;
 	struct ata_ioports *aio;
-	int rc;
 
 	host = ata_host_alloc(dev, 1);
 	if (!host)
@@ -337,6 +335,8 @@ mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv)
 	aio->device_addr	= &priv->ata_regs->tf_dev_head;
 	aio->status_addr	= &priv->ata_regs->tf_command;
 	aio->command_addr	= &priv->ata_regs->tf_command;
+
+	ata_port_desc(ap, "ata_regs 0x%lx", raw_ata_regs);
 
 	/* activate host */
 	return ata_host_activate(host, priv->ata_irq, ata_interrupt, 0,
@@ -434,7 +434,7 @@ mpc52xx_ata_probe(struct of_device *op, const struct of_device_id *match)
 	}
 
 	/* Register ourselves to libata */
-	rv = mpc52xx_ata_init_one(&op->dev, priv);
+	rv = mpc52xx_ata_init_one(&op->dev, priv, res_mem.start);
 	if (rv) {
 		printk(KERN_ERR DRV_NAME ": "
 			"Error while registering to ATA layer\n");
@@ -467,13 +467,27 @@ mpc52xx_ata_remove(struct of_device *op)
 static int
 mpc52xx_ata_suspend(struct of_device *op, pm_message_t state)
 {
-	return 0;	/* FIXME : What to do here ? */
+	struct ata_host *host = dev_get_drvdata(&op->dev);
+
+	return ata_host_suspend(host, state);
 }
 
 static int
 mpc52xx_ata_resume(struct of_device *op)
 {
-	return 0;	/* FIXME : What to do here ? */
+	struct ata_host *host = dev_get_drvdata(&op->dev);
+	struct mpc52xx_ata_priv *priv = host->private_data;
+	int rv;
+
+	rv = mpc52xx_ata_hw_init(priv);
+	if (rv) {
+		printk(KERN_ERR DRV_NAME ": Error during HW init\n");
+		return rv;
+	}
+
+	ata_host_resume(host);
+
+	return 0;
 }
 
 #endif

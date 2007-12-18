@@ -33,6 +33,7 @@
 #endif
 
 #include <linux/list.h>
+#include <linux/mod_devicetable.h>
 
 #include <acpi/acpi.h>
 #include <acpi/acpi_bus.h>
@@ -88,10 +89,8 @@ int acpi_table_parse (char *id, acpi_table_handler handler);
 int __init acpi_table_parse_entries(char *id, unsigned long table_size,
 	int entry_id, acpi_table_entry_handler handler, unsigned int max_entries);
 int acpi_table_parse_madt (enum acpi_madt_type id, acpi_table_entry_handler handler, unsigned int max_entries);
-int acpi_table_parse_srat (enum acpi_srat_type id, acpi_table_entry_handler handler, unsigned int max_entries);
 int acpi_parse_mcfg (struct acpi_table_header *header);
 void acpi_table_print_madt_entry (struct acpi_subtable_header *madt);
-void acpi_table_print_srat_entry (struct acpi_subtable_header *srat);
 
 /* the following four functions are architecture-dependent */
 #ifdef CONFIG_HAVE_ARCH_PARSE_SRAT
@@ -122,7 +121,7 @@ extern struct acpi_mcfg_allocation *pci_mmcfg_config;
 extern int pci_mmcfg_config_num;
 
 extern int sbf_port;
-extern unsigned long acpi_video_flags;
+extern unsigned long acpi_realmode_flags;
 
 #else	/* !CONFIG_ACPI */
 
@@ -190,32 +189,6 @@ extern int ec_transaction(u8 command,
 extern int acpi_blacklisted(void);
 extern void acpi_bios_year(char *s);
 
-#define	ACPI_CSTATE_LIMIT_DEFINED	/* for driver builds */
-#ifdef	CONFIG_ACPI
-
-/*
- * Set highest legal C-state
- * 0: C0 okay, but not C1
- * 1: C1 okay, but not C2
- * 2: C2 okay, but not C3 etc.
- */
-
-extern unsigned int max_cstate;
-
-static inline unsigned int acpi_get_cstate_limit(void)
-{
-	return max_cstate;
-}
-static inline void acpi_set_cstate_limit(unsigned int new_limit)
-{
-	max_cstate = new_limit;
-	return;
-}
-#else
-static inline unsigned int acpi_get_cstate_limit(void) { return 0; }
-static inline void acpi_set_cstate_limit(unsigned int new_limit) { return; }
-#endif
-
 #ifdef CONFIG_ACPI_NUMA
 int acpi_get_pxm(acpi_handle handle);
 int acpi_get_node(acpi_handle *handle);
@@ -232,6 +205,9 @@ static inline int acpi_get_node(acpi_handle *handle)
 extern int acpi_paddr_to_node(u64 start_addr, u64 size);
 
 extern int pnpacpi_disabled;
+
+#define PXM_INVAL	(-1)
+#define NID_INVAL	(-1)
 
 #else	/* CONFIG_ACPI */
 

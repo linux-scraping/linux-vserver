@@ -16,14 +16,17 @@
 #include <asm/machvec.h>
 #include <asm/se7722.h>
 #include <asm/io.h>
+#include <asm/heartbeat.h>
 
 /* Heartbeat */
-static unsigned char heartbeat_bit_pos[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+static struct heartbeat_data heartbeat_data = {
+	.regsize = 16,
+};
 
 static struct resource heartbeat_resources[] = {
 	[0] = {
 		.start  = PA_LED,
-		.end    = PA_LED + ARRAY_SIZE(heartbeat_bit_pos) - 1,
+		.end    = PA_LED,
 		.flags  = IORESOURCE_MEM,
 	},
 };
@@ -31,8 +34,8 @@ static struct resource heartbeat_resources[] = {
 static struct platform_device heartbeat_device = {
 	.name           = "heartbeat",
 	.id             = -1,
-	.dev    = {
-		.platform_data  = heartbeat_bit_pos,
+	.dev = {
+		.platform_data = &heartbeat_data,
 	},
 	.num_resources  = ARRAY_SIZE(heartbeat_resources),
 	.resource       = heartbeat_resources,
@@ -77,6 +80,7 @@ static struct resource cf_ide_resources[] = {
 	},
 	[2] = {
 		.start  = MRSHPC_IRQ0,
+		.end    = MRSHPC_IRQ0,
 		.flags  = IORESOURCE_IRQ,
 	},
 };
@@ -107,8 +111,8 @@ static void __init se7722_setup(char **cmdline_p)
 
 	ctrl_outl(0x00051001, MSTPCR0);
 	ctrl_outl(0x00000000, MSTPCR1);
-	/* KEYSC, VOU, BEU, CEU, VEU, VPU, LCDC */
-	ctrl_outl(0xffffbfC0, MSTPCR2); 
+	/* KEYSC, VOU, BEU, CEU, VEU, VPU, LCDC, USB */
+	ctrl_outl(0xffffb7c0, MSTPCR2);
 
 	ctrl_outw(0x0000, PORT_PECR);   /* PORT E 1 = IRQ5 ,E 0 = BS */
 	ctrl_outw(0x1000, PORT_PJCR);   /* PORT J 1 = IRQ1,J 0 =IRQ0 */
@@ -137,12 +141,9 @@ static void __init se7722_setup(char **cmdline_p)
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_se7722 __initmv = {
+static struct sh_machine_vector mv_se7722 __initmv = {
 	.mv_name                = "Solution Engine 7722" ,
 	.mv_setup               = se7722_setup ,
-	.mv_nr_irqs		= 109 ,
+	.mv_nr_irqs		= SE7722_FPGA_IRQ_BASE + SE7722_FPGA_IRQ_NR,
 	.mv_init_irq		= init_se7722_IRQ,
-	.mv_irq_demux           = se7722_irq_demux,
-
 };
-ALIAS_MV(se7722)

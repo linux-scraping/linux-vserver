@@ -942,7 +942,7 @@ static int __devinit snd_emu10k1x_create(struct snd_card *card,
 
 	pci_set_master(pci);
 	/* read revision & serial */
-	pci_read_config_byte(pci, PCI_REVISION_ID, &chip->revision);
+	chip->revision = pci->revision;
 	pci_read_config_dword(pci, PCI_SUBSYSTEM_VENDOR_ID, &chip->serial);
 	pci_read_config_word(pci, PCI_SUBSYSTEM_ID, &chip->model);
 	snd_printk(KERN_INFO "Model %04x Rev %08x Serial %08x\n", chip->model,
@@ -1062,14 +1062,7 @@ static int __devinit snd_emu10k1x_proc_init(struct emu10k1x * emu)
 	return 0;
 }
 
-static int snd_emu10k1x_shared_spdif_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_emu10k1x_shared_spdif_info	snd_ctl_boolean_mono_info
 
 static int snd_emu10k1x_shared_spdif_get(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)

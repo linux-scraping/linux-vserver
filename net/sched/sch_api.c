@@ -19,29 +19,18 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/mm.h>
-#include <linux/socket.h>
-#include <linux/sockios.h>
-#include <linux/in.h>
 #include <linux/errno.h>
-#include <linux/interrupt.h>
-#include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/init.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/kmod.h>
 #include <linux/list.h>
-#include <linux/bitops.h>
 #include <linux/hrtimer.h>
 
+#include <net/net_namespace.h>
 #include <net/netlink.h>
-#include <net/sock.h>
 #include <net/pkt_sched.h>
-
-#include <asm/processor.h>
-#include <asm/uaccess.h>
-#include <asm/system.h>
 
 static int qdisc_notify(struct sk_buff *oskb, struct nlmsghdr *n, u32 clid,
 			struct Qdisc *old, struct Qdisc *new);
@@ -392,6 +381,10 @@ void qdisc_tree_decrease_qlen(struct Qdisc *sch, unsigned int n)
 		return;
 	while ((parentid = sch->parent)) {
 		sch = qdisc_lookup(sch->dev, TC_H_MAJ(parentid));
+		if (sch == NULL) {
+			WARN_ON(parentid != TC_H_ROOT);
+			return;
+		}
 		cops = sch->ops->cl_ops;
 		if (cops->qlen_notify) {
 			cl = cops->get(sch, parentid);
@@ -432,8 +425,6 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 			unsigned long cl = cops->get(parent, classid);
 			if (cl) {
 				err = cops->graft(parent, cl, new, old);
-				if (new)
-					new->parent = classid;
 				cops->put(parent, cl);
 			}
 		}
@@ -448,7 +439,8 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
  */
 
 static struct Qdisc *
-qdisc_create(struct net_device *dev, u32 handle, struct rtattr **tca, int *errp)
+qdisc_create(struct net_device *dev, u32 parent, u32 handle,
+	   struct rtattr **tca, int *errp)
 {
 	int err;
 	struct rtattr *kind = tca[TCA_KIND-1];
@@ -494,6 +486,8 @@ qdisc_create(struct net_device *dev, u32 handle, struct rtattr **tca, int *errp)
 		goto err_out2;
 	}
 
+	sch->parent = parent;
+
 	if (handle == TC_H_INGRESS) {
 		sch->flags |= TCQ_F_INGRESS;
 		sch->stats_lock = &dev->ingress_lock;
@@ -511,7 +505,6 @@ qdisc_create(struct net_device *dev, u32 handle, struct rtattr **tca, int *errp)
 	sch->handle = handle;
 
 	if (!ops->init || (err = ops->init(sch, tca[TCA_OPTIONS-1])) == 0) {
-#ifdef CONFIG_NET_ESTIMATOR
 		if (tca[TCA_RATE-1]) {
 			err = gen_new_estimator(&sch->bstats, &sch->rate_est,
 						sch->stats_lock,
@@ -527,7 +520,6 @@ qdisc_create(struct net_device *dev, u32 handle, struct rtattr **tca, int *errp)
 				goto err_out3;
 			}
 		}
-#endif
 		qdisc_lock_tree(dev);
 		list_add_tail(&sch->list, &dev->qdisc_list);
 		qdisc_unlock_tree(dev);
@@ -555,11 +547,9 @@ static int qdisc_change(struct Qdisc *sch, struct rtattr **tca)
 		if (err)
 			return err;
 	}
-#ifdef CONFIG_NET_ESTIMATOR
 	if (tca[TCA_RATE-1])
 		gen_replace_estimator(&sch->bstats, &sch->rate_est,
 			sch->stats_lock, tca[TCA_RATE-1]);
-#endif
 	return 0;
 }
 
@@ -617,7 +607,7 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n, void *arg)
 	struct Qdisc *p = NULL;
 	int err;
 
-	if ((dev = __dev_get_by_index(tcm->tcm_ifindex)) == NULL)
+	if ((dev = __dev_get_by_index(&init_net, tcm->tcm_ifindex)) == NULL)
 		return -ENODEV;
 
 	if (clid) {
@@ -684,7 +674,7 @@ replay:
 	clid = tcm->tcm_parent;
 	q = p = NULL;
 
-	if ((dev = __dev_get_by_index(tcm->tcm_ifindex)) == NULL)
+	if ((dev = __dev_get_by_index(&init_net, tcm->tcm_ifindex)) == NULL)
 		return -ENODEV;
 
 	if (clid) {
@@ -774,9 +764,11 @@ create_n_graft:
 	if (!(n->nlmsg_flags&NLM_F_CREATE))
 		return -ENOENT;
 	if (clid == TC_H_INGRESS)
-		q = qdisc_create(dev, tcm->tcm_parent, tca, &err);
+		q = qdisc_create(dev, tcm->tcm_parent, tcm->tcm_parent,
+				 tca, &err);
 	else
-		q = qdisc_create(dev, tcm->tcm_handle, tca, &err);
+		q = qdisc_create(dev, tcm->tcm_parent, tcm->tcm_handle,
+				 tca, &err);
 	if (q == NULL) {
 		if (err == -EAGAIN)
 			goto replay;
@@ -835,9 +827,7 @@ static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
 		goto rtattr_failure;
 
 	if (gnet_stats_copy_basic(&d, &q->bstats) < 0 ||
-#ifdef CONFIG_NET_ESTIMATOR
 	    gnet_stats_copy_rate_est(&d, &q->rate_est) < 0 ||
-#endif
 	    gnet_stats_copy_queue(&d, &q->qstats) < 0)
 		goto rtattr_failure;
 
@@ -891,7 +881,7 @@ static int tc_dump_qdisc(struct sk_buff *skb, struct netlink_callback *cb)
 	s_q_idx = q_idx = cb->args[1];
 	read_lock(&dev_base_lock);
 	idx = 0;
-	for_each_netdev(dev) {
+	for_each_netdev(&init_net, dev) {
 		if (idx < s_idx)
 			goto cont;
 		if (idx > s_idx)
@@ -942,7 +932,7 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n, void *arg)
 	u32 qid = TC_H_MAJ(clid);
 	int err;
 
-	if ((dev = __dev_get_by_index(tcm->tcm_ifindex)) == NULL)
+	if ((dev = __dev_get_by_index(&init_net, tcm->tcm_ifindex)) == NULL)
 		return -ENODEV;
 
 	/*
@@ -1125,7 +1115,7 @@ static int tc_dump_tclass(struct sk_buff *skb, struct netlink_callback *cb)
 
 	if (cb->nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*tcm)))
 		return 0;
-	if ((dev = dev_get_by_index(tcm->tcm_ifindex)) == NULL)
+	if ((dev = dev_get_by_index(&init_net, tcm->tcm_ifindex)) == NULL)
 		return 0;
 
 	s_t = cb->args[0];
@@ -1163,47 +1153,57 @@ static int tc_dump_tclass(struct sk_buff *skb, struct netlink_callback *cb)
    to this qdisc, (optionally) tests for protocol and asks
    specific classifiers.
  */
+int tc_classify_compat(struct sk_buff *skb, struct tcf_proto *tp,
+		       struct tcf_result *res)
+{
+	__be16 protocol = skb->protocol;
+	int err = 0;
+
+	for (; tp; tp = tp->next) {
+		if ((tp->protocol == protocol ||
+		     tp->protocol == htons(ETH_P_ALL)) &&
+		    (err = tp->classify(skb, tp, res)) >= 0) {
+#ifdef CONFIG_NET_CLS_ACT
+			if (err != TC_ACT_RECLASSIFY && skb->tc_verd)
+				skb->tc_verd = SET_TC_VERD(skb->tc_verd, 0);
+#endif
+			return err;
+		}
+	}
+	return -1;
+}
+EXPORT_SYMBOL(tc_classify_compat);
+
 int tc_classify(struct sk_buff *skb, struct tcf_proto *tp,
-	struct tcf_result *res)
+		struct tcf_result *res)
 {
 	int err = 0;
-	__be16 protocol = skb->protocol;
+	__be16 protocol;
 #ifdef CONFIG_NET_CLS_ACT
 	struct tcf_proto *otp = tp;
 reclassify:
 #endif
 	protocol = skb->protocol;
 
-	for ( ; tp; tp = tp->next) {
-		if ((tp->protocol == protocol ||
-			tp->protocol == htons(ETH_P_ALL)) &&
-			(err = tp->classify(skb, tp, res)) >= 0) {
+	err = tc_classify_compat(skb, tp, res);
 #ifdef CONFIG_NET_CLS_ACT
-			if ( TC_ACT_RECLASSIFY == err) {
-				__u32 verd = (__u32) G_TC_VERD(skb->tc_verd);
-				tp = otp;
+	if (err == TC_ACT_RECLASSIFY) {
+		u32 verd = G_TC_VERD(skb->tc_verd);
+		tp = otp;
 
-				if (MAX_REC_LOOP < verd++) {
-					printk("rule prio %d protocol %02x reclassify is buggy packet dropped\n",
-						tp->prio&0xffff, ntohs(tp->protocol));
-					return TC_ACT_SHOT;
-				}
-				skb->tc_verd = SET_TC_VERD(skb->tc_verd,verd);
-				goto reclassify;
-			} else {
-				if (skb->tc_verd)
-					skb->tc_verd = SET_TC_VERD(skb->tc_verd,0);
-				return err;
-			}
-#else
-
-			return err;
-#endif
+		if (verd++ >= MAX_REC_LOOP) {
+			printk("rule prio %u protocol %02x reclassify loop, "
+			       "packet dropped\n",
+			       tp->prio&0xffff, ntohs(tp->protocol));
+			return TC_ACT_SHOT;
 		}
-
+		skb->tc_verd = SET_TC_VERD(skb->tc_verd, verd);
+		goto reclassify;
 	}
-	return -1;
+#endif
+	return err;
 }
+EXPORT_SYMBOL(tc_classify);
 
 void tcf_destroy(struct tcf_proto *tp)
 {
@@ -1226,10 +1226,13 @@ EXPORT_SYMBOL(tcf_destroy_chain);
 #ifdef CONFIG_PROC_FS
 static int psched_show(struct seq_file *seq, void *v)
 {
+	struct timespec ts;
+
+	hrtimer_get_res(CLOCK_MONOTONIC, &ts);
 	seq_printf(seq, "%08x %08x %08x %08x\n",
 		   (u32)NSEC_PER_USEC, (u32)PSCHED_US2NS(1),
 		   1000000,
-		   (u32)NSEC_PER_SEC/(u32)ktime_to_ns(KTIME_MONOTONIC_RES));
+		   (u32)NSEC_PER_SEC/(u32)ktime_to_ns(timespec_to_ktime(ts)));
 
 	return 0;
 }
@@ -1252,7 +1255,7 @@ static int __init pktsched_init(void)
 {
 	register_qdisc(&pfifo_qdisc_ops);
 	register_qdisc(&bfifo_qdisc_ops);
-	proc_net_fops_create("psched", 0, &psched_fops);
+	proc_net_fops_create(&init_net, "psched", 0, &psched_fops);
 
 	rtnl_register(PF_UNSPEC, RTM_NEWQDISC, tc_modify_qdisc, NULL);
 	rtnl_register(PF_UNSPEC, RTM_DELQDISC, tc_get_qdisc, NULL);
@@ -1270,4 +1273,3 @@ EXPORT_SYMBOL(qdisc_get_rtab);
 EXPORT_SYMBOL(qdisc_put_rtab);
 EXPORT_SYMBOL(register_qdisc);
 EXPORT_SYMBOL(unregister_qdisc);
-EXPORT_SYMBOL(tc_classify);

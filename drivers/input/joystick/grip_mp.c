@@ -320,10 +320,10 @@ static int multiport_io(struct gameport* gameport, int sendflags, int sendcode, 
 
 static int dig_mode_start(struct gameport *gameport, u32 *packet)
 {
-	int i, seq_len = sizeof(init_seq)/sizeof(int);
+	int i;
 	int flags, tries = 0, bads = 0;
 
-	for (i = 0; i < seq_len; i++) {     /* Send magic sequence */
+	for (i = 0; i < ARRAY_SIZE(init_seq); i++) {     /* Send magic sequence */
 		if (init_seq[i])
 			gameport_trigger(gameport);
 		udelay(GRIP_INIT_DELAY);
@@ -606,7 +606,7 @@ static int register_slot(int slot, struct grip_mp *grip)
 	input_dev->open = grip_open;
 	input_dev->close = grip_close;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_ABS);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
 
 	for (j = 0; (t = grip_abs[port->mode][j]) >= 0; j++)
 		input_set_abs_params(input_dev, t, -1, 1, 0, 0);

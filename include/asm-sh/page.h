@@ -60,6 +60,7 @@ extern void (*copy_page)(void *to, void *from);
 
 extern unsigned long shm_align_mask;
 extern unsigned long max_low_pfn, min_low_pfn;
+extern unsigned long memory_start, memory_end;
 
 #ifdef CONFIG_MMU
 extern void clear_page_slow(void *to);
@@ -69,14 +70,17 @@ extern void clear_page_nommu(void *to);
 extern void copy_page_nommu(void *to, void *from);
 #endif
 
-#if defined(CONFIG_MMU) && (defined(CONFIG_CPU_SH4) || \
-	defined(CONFIG_SH7705_CACHE_32KB))
+#if !defined(CONFIG_CACHE_OFF) && defined(CONFIG_MMU) && \
+	(defined(CONFIG_CPU_SH4) || defined(CONFIG_SH7705_CACHE_32KB))
 struct page;
-extern void clear_user_page(void *to, unsigned long address, struct page *pg);
-extern void copy_user_page(void *to, void *from, unsigned long address, struct page *pg);
-extern void __clear_user_page(void *to, void *orig_to);
-extern void __copy_user_page(void *to, void *from, void *orig_to);
-#elif defined(CONFIG_CPU_SH2) || defined(CONFIG_CPU_SH3) || !defined(CONFIG_MMU)
+struct vm_area_struct;
+extern void clear_user_page(void *to, unsigned long address, struct page *page);
+#ifdef CONFIG_CPU_SH4
+extern void copy_user_highpage(struct page *to, struct page *from,
+			       unsigned long vaddr, struct vm_area_struct *vma);
+#define __HAVE_ARCH_COPY_USER_HIGHPAGE
+#endif
+#else
 #define clear_user_page(page, vaddr, pg)	clear_page(page)
 #define copy_user_page(to, from, vaddr, pg)	copy_page(to, from)
 #endif
@@ -87,6 +91,7 @@ extern void __copy_user_page(void *to, void *from, void *orig_to);
 #ifdef CONFIG_X2TLB
 typedef struct { unsigned long pte_low, pte_high; } pte_t;
 typedef struct { unsigned long long pgprot; } pgprot_t;
+typedef struct { unsigned long long pgd; } pgd_t;
 #define pte_val(x) \
 	((x).pte_low | ((unsigned long long)(x).pte_high << 32))
 #define __pte(x) \
@@ -94,11 +99,10 @@ typedef struct { unsigned long long pgprot; } pgprot_t;
 #else
 typedef struct { unsigned long pte_low; } pte_t;
 typedef struct { unsigned long pgprot; } pgprot_t;
+typedef struct { unsigned long pgd; } pgd_t;
 #define pte_val(x)	((x).pte_low)
 #define __pte(x) ((pte_t) { (x) } )
 #endif
-
-typedef struct { unsigned long pgd; } pgd_t;
 
 #define pgd_val(x)	((x).pgd)
 #define pgprot_val(x)	((x).pgprot)
@@ -127,14 +131,15 @@ typedef struct { unsigned long pgd; } pgd_t;
 #define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
 
-#define phys_to_page(phys)	(pfn_to_page(phys >> PAGE_SHIFT))
 #define page_to_phys(page)	(page_to_pfn(page) << PAGE_SHIFT)
 
 /* PFN start number, because of __MEMORY_START */
 #define PFN_START		(__MEMORY_START >> PAGE_SHIFT)
 #define ARCH_PFN_OFFSET		(PFN_START)
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
+#ifdef CONFIG_FLATMEM
 #define pfn_valid(pfn)		((pfn) >= min_low_pfn && (pfn) < max_low_pfn)
+#endif
 #define virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
 
 #define VM_DATA_DEFAULT_FLAGS	(VM_READ | VM_WRITE | VM_EXEC | \
@@ -147,6 +152,13 @@ typedef struct { unsigned long pgd; } pgd_t;
 #ifdef CONFIG_VSYSCALL
 #define __HAVE_ARCH_GATE_AREA
 #endif
+
+/*
+ * Slub defaults to 8-byte alignment, we're only interested in 4.
+ * Slab defaults to BYTES_PER_WORD, which ends up being the same anyways.
+ */
+#define ARCH_KMALLOC_MINALIGN	4
+#define ARCH_SLAB_MINALIGN	4
 
 #endif /* __KERNEL__ */
 #endif /* __ASM_SH_PAGE_H */

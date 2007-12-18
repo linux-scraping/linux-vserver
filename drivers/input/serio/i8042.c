@@ -20,6 +20,7 @@
 #include <linux/err.h>
 #include <linux/rcupdate.h>
 #include <linux/platform_device.h>
+#include <linux/i8042.h>
 
 #include <asm/io.h>
 
@@ -208,7 +209,7 @@ static int __i8042_command(unsigned char *param, int command)
 	return 0;
 }
 
-static int i8042_command(unsigned char *param, int command)
+int i8042_command(unsigned char *param, int command)
 {
 	unsigned long flags;
 	int retval;
@@ -219,6 +220,7 @@ static int i8042_command(unsigned char *param, int command)
 
 	return retval;
 }
+EXPORT_SYMBOL(i8042_command);
 
 /*
  * i8042_kbd_write() sends a byte out through the keyboard interface.
@@ -385,6 +387,8 @@ static int i8042_enable_kbd_port(void)
 	i8042_ctr |= I8042_CTR_KBDINT;
 
 	if (i8042_command(&i8042_ctr, I8042_CMD_CTL_WCTR)) {
+		i8042_ctr &= ~I8042_CTR_KBDINT;
+		i8042_ctr |= I8042_CTR_KBDDIS;
 		printk(KERN_ERR "i8042.c: Failed to enable KBD port.\n");
 		return -EIO;
 	}
@@ -402,6 +406,8 @@ static int i8042_enable_aux_port(void)
 	i8042_ctr |= I8042_CTR_AUXINT;
 
 	if (i8042_command(&i8042_ctr, I8042_CMD_CTL_WCTR)) {
+		i8042_ctr &= ~I8042_CTR_AUXINT;
+		i8042_ctr |= I8042_CTR_AUXDIS;
 		printk(KERN_ERR "i8042.c: Failed to enable AUX port.\n");
 		return -EIO;
 	}
@@ -512,6 +518,7 @@ static irqreturn_t __devinit i8042_aux_test_irq(int irq, void *dev_id)
 {
 	unsigned long flags;
 	unsigned char str, data;
+	int ret = 0;
 
 	spin_lock_irqsave(&i8042_lock, flags);
 	str = i8042_read_status();
@@ -520,10 +527,11 @@ static irqreturn_t __devinit i8042_aux_test_irq(int irq, void *dev_id)
 		if (i8042_irq_being_tested &&
 		    data == 0xa5 && (str & I8042_STR_AUXDATA))
 			complete(&i8042_aux_irq_delivered);
+		ret = 1;
 	}
 	spin_unlock_irqrestore(&i8042_lock, flags);
 
-	return IRQ_HANDLED;
+	return IRQ_RETVAL(ret);
 }
 
 /*
@@ -1038,7 +1046,7 @@ static void __devinit i8042_register_ports(void)
 	}
 }
 
-static void __devinit i8042_unregister_ports(void)
+static void __devexit i8042_unregister_ports(void)
 {
 	int i;
 

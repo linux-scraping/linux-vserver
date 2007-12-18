@@ -43,7 +43,7 @@
 #include <linux/libata.h>
 
 #define DRV_NAME		"pata_scc"
-#define DRV_VERSION		"0.2"
+#define DRV_VERSION		"0.3"
 
 #define PCI_DEVICE_ID_TOSHIBA_SCC_ATA		0x01b4
 
@@ -256,6 +256,17 @@ static void scc_set_dmamode (struct ata_port *ap, struct ata_device *adev)
 	}
 	out_be32(udenvt_port,
 		 JCTSStbl[offset][idx] << 16 | JCENVTtbl[offset][idx]);
+}
+
+unsigned long scc_mode_filter(struct ata_device *adev, unsigned long mask)
+{
+	/* errata A308 workaround: limit ATAPI UDMA mode to UDMA4 */
+	if (adev->class == ATA_DEV_ATAPI &&
+	    (mask & (0xE0 << ATA_SHIFT_UDMA))) {
+		printk(KERN_INFO "%s: limit ATAPI UDMA to UDMA4\n", DRV_NAME);
+		mask &= ~(0xE0 << ATA_SHIFT_UDMA);
+	}
+	return ata_pci_default_filter(adev, mask);
 }
 
 /**
@@ -559,17 +570,8 @@ static unsigned int scc_bus_softreset(struct ata_port *ap, unsigned int devmask,
 	udelay(20);
 	out_be32(ioaddr->ctl_addr, ap->ctl);
 
-	/* spec mandates ">= 2ms" before checking status.
-	 * We wait 150ms, because that was the magic delay used for
-	 * ATAPI devices in Hale Landis's ATADRVR, for the period of time
-	 * between when the ATA command register is written, and then
-	 * status is checked.  Because waiting for "a while" before
-	 * checking status is fine, post SRST, we perform this magic
-	 * delay here as well.
-	 *
-	 * Old drivers/ide uses the 2mS rule and then waits for ready
-	 */
-	msleep(150);
+	/* wait a while before checking status */
+	ata_wait_after_reset(ap, deadline);
 
 	/* Before we perform post reset processing we want to see if
 	 * the bus shows 0xFF because the odd clown forgets the D7
@@ -592,16 +594,17 @@ static unsigned int scc_bus_softreset(struct ata_port *ap, unsigned int devmask,
  *	Note: Original code is ata_std_softreset().
  */
 
-static int scc_std_softreset (struct ata_port *ap, unsigned int *classes,
-                              unsigned long deadline)
+static int scc_std_softreset(struct ata_link *link, unsigned int *classes,
+                             unsigned long deadline)
 {
+	struct ata_port *ap = link->ap;
 	unsigned int slave_possible = ap->flags & ATA_FLAG_SLAVE_POSS;
 	unsigned int devmask = 0, err_mask;
 	u8 err;
 
 	DPRINTK("ENTER\n");
 
-	if (ata_port_offline(ap)) {
+	if (ata_link_offline(link)) {
 		classes[0] = ATA_DEV_NONE;
 		goto out;
 	}
@@ -625,9 +628,11 @@ static int scc_std_softreset (struct ata_port *ap, unsigned int *classes,
 	}
 
 	/* determine by signature whether we have ATA or ATAPI devices */
-	classes[0] = ata_dev_try_classify(ap, 0, &err);
+	classes[0] = ata_dev_try_classify(&ap->link.device[0],
+					  devmask & (1 << 0), &err);
 	if (slave_possible && err != 0x81)
-		classes[1] = ata_dev_try_classify(ap, 1, &err);
+		classes[1] = ata_dev_try_classify(&ap->link.device[1],
+						  devmask & (1 << 1), &err);
 
  out:
 	DPRINTK("EXIT, classes[0]=%u [1]=%u\n", classes[0], classes[1]);
@@ -690,7 +695,7 @@ static void scc_bmdma_stop (struct ata_queued_cmd *qc)
 			printk(KERN_WARNING "%s: Internal Bus Error\n", DRV_NAME);
 			out_be32(bmid_base + SCC_DMA_INTST, INTSTS_BMSINT);
 			/* TBD: SW reset */
-			scc_std_softreset(ap, &classes, deadline);
+			scc_std_softreset(&ap->link, &classes, deadline);
 			continue;
 		}
 
@@ -726,22 +731,36 @@ static void scc_bmdma_stop (struct ata_queued_cmd *qc)
 
 static u8 scc_bmdma_status (struct ata_port *ap)
 {
-	u8 host_stat;
 	void __iomem *mmio = ap->ioaddr.bmdma_addr;
+	u8 host_stat = in_be32(mmio + SCC_DMA_STATUS);
+	u32 int_status = in_be32(mmio + SCC_DMA_INTST);
+	struct ata_queued_cmd *qc = ata_qc_from_tag(ap, ap->link.active_tag);
+	static int retry = 0;
 
-	host_stat = in_be32(mmio + SCC_DMA_STATUS);
+	/* return if IOS_SS is cleared */
+	if (!(in_be32(mmio + SCC_DMA_CMD) & ATA_DMA_START))
+		return host_stat;
 
-	/* Workaround for PTERADD: emulate DMA_INTR when
-	 * - IDE_STATUS[ERR] = 1
-	 * - INT_STATUS[INTRQ] = 1
-	 * - DMA_STATUS[IORACTA] = 1
-	 */
-	if (!(host_stat & ATA_DMA_INTR)) {
-		u32 int_status = in_be32(mmio + SCC_DMA_INTST);
-		if (ata_altstatus(ap) & ATA_ERR &&
-		    int_status & INTSTS_INTRQ &&
-		    host_stat & ATA_DMA_ACTIVE)
-			host_stat |= ATA_DMA_INTR;
+	/* errata A252,A308 workaround: Step4 */
+	if ((ata_altstatus(ap) & ATA_ERR) && (int_status & INTSTS_INTRQ))
+		return (host_stat | ATA_DMA_INTR);
+
+	/* errata A308 workaround Step5 */
+	if (int_status & INTSTS_IOIRQS) {
+		host_stat |= ATA_DMA_INTR;
+
+		/* We don't check ATAPI DMA because it is limited to UDMA4 */
+		if ((qc->tf.protocol == ATA_PROT_DMA &&
+		     qc->dev->xfer_mode > XFER_UDMA_4)) {
+			if (!(int_status & INTSTS_ACTEINT)) {
+				printk(KERN_WARNING "ata%u: operation failed (transfer data loss)\n",
+				       ap->print_id);
+				host_stat |= ATA_DMA_ERR;
+				if (retry++)
+					ap->udma_mask &= ~(1 << qc->dev->xfer_mode);
+			} else
+				retry = 0;
+		}
 	}
 
 	return host_stat;
@@ -760,7 +779,7 @@ static u8 scc_bmdma_status (struct ata_port *ap)
 static void scc_data_xfer (struct ata_device *adev, unsigned char *buf,
 			   unsigned int buflen, int write_data)
 {
-	struct ata_port *ap = adev->ap;
+	struct ata_port *ap = adev->link->ap;
 	unsigned int words = buflen >> 1;
 	unsigned int i;
 	u16 *buf16 = (u16 *) buf;
@@ -814,38 +833,6 @@ static u8 scc_irq_on (struct ata_port *ap)
 }
 
 /**
- *	scc_irq_ack - Acknowledge a device interrupt.
- *	@ap: Port on which interrupts are enabled.
- *
- *	Note: Original code is ata_irq_ack().
- */
-
-static u8 scc_irq_ack (struct ata_port *ap, unsigned int chk_drq)
-{
-	unsigned int bits = chk_drq ? ATA_BUSY | ATA_DRQ : ATA_BUSY;
-	u8 host_stat, post_stat, status;
-
-	status = ata_busy_wait(ap, bits, 1000);
-	if (status & bits)
-		if (ata_msg_err(ap))
-			printk(KERN_ERR "abnormal status 0x%X\n", status);
-
-	/* get controller status; clear intr, err bits */
-	host_stat = in_be32(ap->ioaddr.bmdma_addr + SCC_DMA_STATUS);
-	out_be32(ap->ioaddr.bmdma_addr + SCC_DMA_STATUS,
-		 host_stat | ATA_DMA_INTR | ATA_DMA_ERR);
-
-	post_stat = in_be32(ap->ioaddr.bmdma_addr + SCC_DMA_STATUS);
-
-	if (ata_msg_intr(ap))
-		printk(KERN_INFO "%s: irq ack: host_stat 0x%X, new host_stat 0x%X, drv_stat 0x%X\n",
-		       __FUNCTION__,
-		       host_stat, post_stat, status);
-
-	return status;
-}
-
-/**
  *	scc_bmdma_freeze - Freeze BMDMA controller port
  *	@ap: port to freeze
  *
@@ -876,10 +863,10 @@ static void scc_bmdma_freeze (struct ata_port *ap)
  *	@deadline: deadline jiffies for the operation
  */
 
-static int scc_pata_prereset(struct ata_port *ap, unsigned long deadline)
+static int scc_pata_prereset(struct ata_link *link, unsigned long deadline)
 {
-	ap->cbl = ATA_CBL_PATA80;
-	return ata_std_prereset(ap, deadline);
+	link->ap->cbl = ATA_CBL_PATA80;
+	return ata_std_prereset(link, deadline);
 }
 
 /**
@@ -890,13 +877,11 @@ static int scc_pata_prereset(struct ata_port *ap, unsigned long deadline)
  *	Note: Original code is ata_std_postreset().
  */
 
-static void scc_std_postreset (struct ata_port *ap, unsigned int *classes)
+static void scc_std_postreset(struct ata_link *link, unsigned int *classes)
 {
-	DPRINTK("ENTER\n");
+	struct ata_port *ap = link->ap;
 
-	/* re-enable interrupts */
-	if (!ap->ops->error_handler)
-		ap->ops->irq_on(ap);
+	DPRINTK("ENTER\n");
 
 	/* is double-select really necessary? */
 	if (classes[0] != ATA_DEV_NONE)
@@ -999,10 +984,9 @@ static struct scsi_host_template scc_sht = {
 };
 
 static const struct ata_port_operations scc_pata_ops = {
-	.port_disable		= ata_port_disable,
 	.set_piomode		= scc_set_piomode,
 	.set_dmamode		= scc_set_dmamode,
-	.mode_filter		= ata_pci_default_filter,
+	.mode_filter		= scc_mode_filter,
 
 	.tf_load		= scc_tf_load,
 	.tf_read		= scc_tf_read,
@@ -1026,7 +1010,6 @@ static const struct ata_port_operations scc_pata_ops = {
 
 	.irq_clear		= scc_bmdma_irq_clear,
 	.irq_on			= scc_irq_on,
-	.irq_ack		= scc_irq_ack,
 
 	.port_start		= scc_port_start,
 	.port_stop		= scc_port_stop,
@@ -1171,6 +1154,9 @@ static int scc_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (rc)
 		return rc;
 	host->iomap = pcim_iomap_table(pdev);
+
+	ata_port_pbar_desc(host->ports[0], SCC_CTRL_BAR, -1, "ctrl");
+	ata_port_pbar_desc(host->ports[0], SCC_BMID_BAR, -1, "bmid");
 
 	rc = scc_host_init(host);
 	if (rc)

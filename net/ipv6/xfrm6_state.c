@@ -65,7 +65,7 @@ __xfrm6_state_sort(struct xfrm_state **dst, struct xfrm_state **src, int n)
 		goto end;
 
 	/* Rule 2: select MIPv6 RO or inbound trigger */
-#ifdef CONFIG_IPV6_MIP6
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 	for (i = 0; i < n; i++) {
 		if (src[i] &&
 		    (src[i]->props.mode == XFRM_MODE_ROUTEOPTIMIZATION ||
@@ -93,7 +93,8 @@ __xfrm6_state_sort(struct xfrm_state **dst, struct xfrm_state **src, int n)
 	/* Rule 4: select IPsec tunnel */
 	for (i = 0; i < n; i++) {
 		if (src[i] &&
-		    src[i]->props.mode == XFRM_MODE_TUNNEL) {
+		    (src[i]->props.mode == XFRM_MODE_TUNNEL ||
+		     src[i]->props.mode == XFRM_MODE_BEET)) {
 			dst[j++] = src[i];
 			src[i] = NULL;
 		}
@@ -130,7 +131,7 @@ __xfrm6_tmpl_sort(struct xfrm_tmpl **dst, struct xfrm_tmpl **src, int n)
 		goto end;
 
 	/* Rule 2: select MIPv6 RO or inbound trigger */
-#ifdef CONFIG_IPV6_MIP6
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 	for (i = 0; i < n; i++) {
 		if (src[i] &&
 		    (src[i]->mode == XFRM_MODE_ROUTEOPTIMIZATION ||
@@ -146,7 +147,8 @@ __xfrm6_tmpl_sort(struct xfrm_tmpl **dst, struct xfrm_tmpl **src, int n)
 	/* Rule 3: select IPsec tunnel */
 	for (i = 0; i < n; i++) {
 		if (src[i] &&
-		    src[i]->mode == XFRM_MODE_TUNNEL) {
+		    (src[i]->mode == XFRM_MODE_TUNNEL ||
+		     src[i]->mode == XFRM_MODE_BEET)) {
 			dst[j++] = src[i];
 			src[i] = NULL;
 		}
@@ -168,6 +170,7 @@ __xfrm6_tmpl_sort(struct xfrm_tmpl **dst, struct xfrm_tmpl **src, int n)
 
 static struct xfrm_state_afinfo xfrm6_state_afinfo = {
 	.family			= AF_INET6,
+	.owner			= THIS_MODULE,
 	.init_tempsel		= __xfrm6_init_tempsel,
 	.tmpl_sort		= __xfrm6_tmpl_sort,
 	.state_sort		= __xfrm6_state_sort,

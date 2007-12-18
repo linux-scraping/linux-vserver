@@ -3,12 +3,9 @@
 
 #ifdef	__KERNEL__
 
-#define BITS_TO_LONGS(bits) \
-	(((bits)+BITS_PER_LONG-1)/BITS_PER_LONG)
 #define DECLARE_BITMAP(name,bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
 
-#define BITS_PER_BYTE 8
 #endif
 
 #include <linux/posix_types.h>
@@ -42,6 +39,8 @@ typedef __kernel_gid16_t        gid16_t;
 typedef unsigned int		xid_t;
 typedef unsigned int		nid_t;
 typedef unsigned int		tag_t;
+
+typedef unsigned long		uintptr_t;
 
 #ifdef CONFIG_UID16
 /* This is defined by include/asm-{arch}/posix_types.h */

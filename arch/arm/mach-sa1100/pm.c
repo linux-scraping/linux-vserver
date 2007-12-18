@@ -57,12 +57,7 @@ enum {	SLEEP_SAVE_SP = 0,
 static int sa11x0_pm_enter(suspend_state_t state)
 {
 	unsigned long gpio, sleep_save[SLEEP_SAVE_SIZE];
-	struct timespec delta, rtc;
 
-	/* preserve current time */
-	rtc.tv_sec = RCNR;
-	rtc.tv_nsec = 0;
-	save_time_delta(&delta, &rtc);
 	gpio = GPLR;
 
 	/* save vital registers */
@@ -119,10 +114,6 @@ static int sa11x0_pm_enter(suspend_state_t state)
 	 */
 	PSSR = PSSR_PH;
 
-	/* restore current time */
-	rtc.tv_sec = RCNR;
-	restore_time_delta(&delta, &rtc);
-
 	return 0;
 }
 
@@ -131,14 +122,14 @@ unsigned long sleep_phys_sp(void *sp)
 	return virt_to_phys(sp);
 }
 
-static struct pm_ops sa11x0_pm_ops = {
+static struct platform_suspend_ops sa11x0_pm_ops = {
 	.enter		= sa11x0_pm_enter,
-	.valid		= pm_valid_only_mem,
+	.valid		= suspend_valid_only_mem,
 };
 
 static int __init sa11x0_pm_init(void)
 {
-	pm_set_ops(&sa11x0_pm_ops);
+	suspend_set_ops(&sa11x0_pm_ops);
 	return 0;
 }
 

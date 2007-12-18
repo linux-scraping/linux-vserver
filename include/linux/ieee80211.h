@@ -16,6 +16,7 @@
 #define IEEE80211_H
 
 #include <linux/types.h>
+#include <asm/byteorder.h>
 
 #define FCS_LEN 4
 
@@ -227,6 +228,17 @@ struct ieee80211_cts {
 #define WLAN_CAPABILITY_SHORT_SLOT_TIME	(1<<10)
 #define WLAN_CAPABILITY_DSSS_OFDM	(1<<13)
 
+/* 802.11g ERP information element */
+#define WLAN_ERP_NON_ERP_PRESENT (1<<0)
+#define WLAN_ERP_USE_PROTECTION (1<<1)
+#define WLAN_ERP_BARKER_PREAMBLE (1<<2)
+
+/* WLAN_ERP_BARKER_PREAMBLE values */
+enum {
+	WLAN_ERP_PREAMBLE_SHORT = 0,
+	WLAN_ERP_PREAMBLE_LONG = 1,
+};
+
 /* Status codes */
 enum ieee80211_statuscode {
 	WLAN_STATUS_SUCCESS = 0,
@@ -338,5 +350,65 @@ enum ieee80211_eid {
 #define WLAN_CIPHER_SUITE_WEP104	0x000FAC05
 
 #define WLAN_MAX_KEY_LEN		32
+
+/**
+ * ieee80211_get_SA - get pointer to SA
+ *
+ * Given an 802.11 frame, this function returns the offset
+ * to the source address (SA). It does not verify that the
+ * header is long enough to contain the address, and the
+ * header must be long enough to contain the frame control
+ * field.
+ *
+ * @hdr: the frame
+ */
+static inline u8 *ieee80211_get_SA(struct ieee80211_hdr *hdr)
+{
+	u8 *raw = (u8 *) hdr;
+	u8 tofrom = (*(raw+1)) & 3; /* get the TODS and FROMDS bits */
+
+	switch (tofrom) {
+		case 2:
+			return hdr->addr3;
+		case 3:
+			return hdr->addr4;
+	}
+	return hdr->addr2;
+}
+
+/**
+ * ieee80211_get_DA - get pointer to DA
+ *
+ * Given an 802.11 frame, this function returns the offset
+ * to the destination address (DA). It does not verify that
+ * the header is long enough to contain the address, and the
+ * header must be long enough to contain the frame control
+ * field.
+ *
+ * @hdr: the frame
+ */
+static inline u8 *ieee80211_get_DA(struct ieee80211_hdr *hdr)
+{
+	u8 *raw = (u8 *) hdr;
+	u8 to_ds = (*(raw+1)) & 1; /* get the TODS bit */
+
+	if (to_ds)
+		return hdr->addr3;
+	return hdr->addr1;
+}
+
+/**
+ * ieee80211_get_morefrag - determine whether the MOREFRAGS bit is set
+ *
+ * This function determines whether the "more fragments" bit is set
+ * in the frame.
+ *
+ * @hdr: the frame
+ */
+static inline int ieee80211_get_morefrag(struct ieee80211_hdr *hdr)
+{
+	return (le16_to_cpu(hdr->frame_control) &
+		IEEE80211_FCTL_MOREFRAGS) != 0;
+}
 
 #endif /* IEEE80211_H */

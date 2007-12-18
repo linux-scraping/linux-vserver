@@ -150,7 +150,7 @@
 # ifndef __ASSEMBLY__
 
 #include <linux/sched.h>	/* for mm_struct */
-#include <asm/bitops.h>
+#include <linux/bitops.h>
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
@@ -223,12 +223,6 @@ ia64_phys_addr_valid (unsigned long addr)
  * page table.
  */
 
-/*
- * On some architectures, special things need to be done when setting
- * the PTE in a page table.  Nothing special needs to be on IA-64.
- */
-#define set_pte(ptep, pteval)	(*(ptep) = (pteval))
-#define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
 
 #define VMALLOC_START		(RGN_BASE(RGN_GATE) + 0x200000000UL)
 #ifdef CONFIG_VIRTUAL_MEM_MAP
@@ -236,7 +230,13 @@ ia64_phys_addr_valid (unsigned long addr)
 # define VMALLOC_END		vmalloc_end
   extern unsigned long vmalloc_end;
 #else
+#if defined(CONFIG_SPARSEMEM) && defined(CONFIG_SPARSEMEM_VMEMMAP)
+/* SPARSEMEM_VMEMMAP uses half of vmalloc... */
+# define VMALLOC_END		(RGN_BASE(RGN_GATE) + (1UL << (4*PAGE_SHIFT - 10)))
+# define vmemmap		((struct page *)VMALLOC_END)
+#else
 # define VMALLOC_END		(RGN_BASE(RGN_GATE) + (1UL << (4*PAGE_SHIFT - 9)))
+#endif
 #endif
 
 /* fs/proc/kcore.c */
@@ -297,8 +297,6 @@ ia64_phys_addr_valid (unsigned long addr)
 /*
  * The following have defined behavior only work if pte_present() is true.
  */
-#define pte_user(pte)		((pte_val(pte) & _PAGE_PL_MASK) == _PAGE_PL_3)
-#define pte_read(pte)		(((pte_val(pte) & _PAGE_AR_MASK) >> _PAGE_AR_SHIFT) < 6)
 #define pte_write(pte)	((unsigned) (((pte_val(pte) & _PAGE_AR_MASK) >> _PAGE_AR_SHIFT) - 2) <= 4)
 #define pte_exec(pte)		((pte_val(pte) & _PAGE_AR_RX) != 0)
 #define pte_dirty(pte)		((pte_val(pte) & _PAGE_D) != 0)
@@ -310,12 +308,41 @@ ia64_phys_addr_valid (unsigned long addr)
  */
 #define pte_wrprotect(pte)	(__pte(pte_val(pte) & ~_PAGE_AR_RW))
 #define pte_mkwrite(pte)	(__pte(pte_val(pte) | _PAGE_AR_RW))
-#define pte_mkexec(pte)		(__pte(pte_val(pte) | _PAGE_AR_RX))
 #define pte_mkold(pte)		(__pte(pte_val(pte) & ~_PAGE_A))
 #define pte_mkyoung(pte)	(__pte(pte_val(pte) | _PAGE_A))
 #define pte_mkclean(pte)	(__pte(pte_val(pte) & ~_PAGE_D))
 #define pte_mkdirty(pte)	(__pte(pte_val(pte) | _PAGE_D))
 #define pte_mkhuge(pte)		(__pte(pte_val(pte)))
+
+/*
+ * Because ia64's Icache and Dcache is not coherent (on a cpu), we need to
+ * sync icache and dcache when we insert *new* executable page.
+ *  __ia64_sync_icache_dcache() check Pg_arch_1 bit and flush icache
+ * if necessary.
+ *
+ *  set_pte() is also called by the kernel, but we can expect that the kernel
+ *  flushes icache explicitly if necessary.
+ */
+#define pte_present_exec_user(pte)\
+	((pte_val(pte) & (_PAGE_P | _PAGE_PL_MASK | _PAGE_AR_RX)) == \
+		(_PAGE_P | _PAGE_PL_3 | _PAGE_AR_RX))
+
+extern void __ia64_sync_icache_dcache(pte_t pteval);
+static inline void set_pte(pte_t *ptep, pte_t pteval)
+{
+	/* page is present && page is user  && page is executable
+	 * && (page swapin or new page or page migraton
+	 *	|| copy_on_write with page copying.)
+	 */
+	if (pte_present_exec_user(pteval) &&
+	    (!pte_present(*ptep) ||
+		pte_pfn(*ptep) != pte_pfn(pteval)))
+		/* load_module() calles flush_icache_range() explicitly*/
+		__ia64_sync_icache_dcache(pteval);
+	*ptep = pteval;
+}
+
+#define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
 
 /*
  * Make page protection values cacheable, uncacheable, or write-
@@ -394,22 +421,6 @@ ptep_test_and_clear_young (struct vm_area_struct *vma, unsigned long addr, pte_t
 	if (!pte_young(pte))
 		return 0;
 	set_pte_at(vma->vm_mm, addr, ptep, pte_mkold(pte));
-	return 1;
-#endif
-}
-
-static inline int
-ptep_test_and_clear_dirty (struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
-{
-#ifdef CONFIG_SMP
-	if (!pte_dirty(*ptep))
-		return 0;
-	return test_and_clear_bit(_PAGE_D_BIT, ptep);
-#else
-	pte_t pte = *ptep;
-	if (!pte_dirty(pte))
-		return 0;
-	set_pte_at(vma->vm_mm, addr, ptep, pte_mkclean(pte));
 	return 1;
 #endif
 }
@@ -502,12 +513,6 @@ extern struct page *zero_page_memmap_ptr;
 #define HUGETLB_PGDIR_MASK	(~(HUGETLB_PGDIR_SIZE-1))
 #endif
 
-/*
- * IA-64 doesn't have any external MMU info: the page tables contain all the necessary
- * information.  However, we use this routine to take care of any (delayed) i-cache
- * flushing that may be necessary.
- */
-extern void lazy_mmu_prot_update (pte_t pte);
 
 #define __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
 /*
@@ -546,8 +551,10 @@ extern void lazy_mmu_prot_update (pte_t pte);
 # define ptep_set_access_flags(__vma, __addr, __ptep, __entry, __safely_writable) \
 ({									\
 	int __changed = !pte_same(*(__ptep), __entry);			\
-	if (__changed)							\
-		ptep_establish(__vma, __addr, __ptep, __entry);		\
+	if (__changed) {						\
+		set_pte_at((__vma)->vm_mm, (__addr), __ptep, __entry);	\
+		flush_tlb_page(__vma, __addr);				\
+	}								\
 	__changed;							\
 })
 #endif
@@ -591,12 +598,11 @@ extern void lazy_mmu_prot_update (pte_t pte);
 #endif
 
 #define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
-#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
 #define __HAVE_ARCH_PTEP_GET_AND_CLEAR
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
 #define __HAVE_ARCH_PTE_SAME
 #define __HAVE_ARCH_PGD_OFFSET_GATE
-#define __HAVE_ARCH_LAZY_MMU_PROT_UPDATE
+
 
 #ifndef CONFIG_PGTABLE_4
 #include <asm-generic/pgtable-nopud.h>

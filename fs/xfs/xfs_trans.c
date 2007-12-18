@@ -234,7 +234,7 @@ xfs_trans_alloc(
 	xfs_mount_t	*mp,
 	uint		type)
 {
-	vfs_wait_for_freeze(XFS_MTOVFS(mp), SB_FREEZE_TRANS);
+	xfs_wait_for_freeze(mp, SB_FREEZE_TRANS);
 	return _xfs_trans_alloc(mp, type);
 }
 
@@ -427,6 +427,14 @@ undo_blocks:
  *
  * Mark the transaction structure to indicate that the superblock
  * needs to be updated before committing.
+ *
+ * Because we may not be keeping track of allocated/free inodes and
+ * used filesystem blocks in the superblock, we do not mark the
+ * superblock dirty in this transaction if we modify these fields.
+ * We still need to update the transaction deltas so that they get
+ * applied to the incore superblock, but we don't want them to
+ * cause the superblock to get locked and logged if these are the
+ * only fields in the superblock that the transaction modifies.
  */
 void
 xfs_trans_mod_sb(
@@ -434,13 +442,19 @@ xfs_trans_mod_sb(
 	uint		field,
 	int64_t		delta)
 {
+	uint32_t	flags = (XFS_TRANS_DIRTY|XFS_TRANS_SB_DIRTY);
+	xfs_mount_t	*mp = tp->t_mountp;
 
 	switch (field) {
 	case XFS_TRANS_SB_ICOUNT:
 		tp->t_icount_delta += delta;
+		if (xfs_sb_version_haslazysbcount(&mp->m_sb))
+			flags &= ~XFS_TRANS_SB_DIRTY;
 		break;
 	case XFS_TRANS_SB_IFREE:
 		tp->t_ifree_delta += delta;
+		if (xfs_sb_version_haslazysbcount(&mp->m_sb))
+			flags &= ~XFS_TRANS_SB_DIRTY;
 		break;
 	case XFS_TRANS_SB_FDBLOCKS:
 		/*
@@ -453,6 +467,8 @@ xfs_trans_mod_sb(
 			ASSERT(tp->t_blk_res_used <= tp->t_blk_res);
 		}
 		tp->t_fdblocks_delta += delta;
+		if (xfs_sb_version_haslazysbcount(&mp->m_sb))
+			flags &= ~XFS_TRANS_SB_DIRTY;
 		break;
 	case XFS_TRANS_SB_RES_FDBLOCKS:
 		/*
@@ -462,6 +478,8 @@ xfs_trans_mod_sb(
 		 */
 		ASSERT(delta < 0);
 		tp->t_res_fdblocks_delta += delta;
+		if (xfs_sb_version_haslazysbcount(&mp->m_sb))
+			flags &= ~XFS_TRANS_SB_DIRTY;
 		break;
 	case XFS_TRANS_SB_FREXTENTS:
 		/*
@@ -515,7 +533,7 @@ xfs_trans_mod_sb(
 		return;
 	}
 
-	tp->t_flags |= (XFS_TRANS_SB_DIRTY | XFS_TRANS_DIRTY);
+	tp->t_flags |= flags;
 }
 
 /*
@@ -530,7 +548,7 @@ STATIC void
 xfs_trans_apply_sb_deltas(
 	xfs_trans_t	*tp)
 {
-	xfs_sb_t	*sbp;
+	xfs_dsb_t	*sbp;
 	xfs_buf_t	*bp;
 	int		whole = 0;
 
@@ -544,56 +562,55 @@ xfs_trans_apply_sb_deltas(
 	       (tp->t_ag_freeblks_delta + tp->t_ag_flist_delta +
 		tp->t_ag_btree_delta));
 
-	if (tp->t_icount_delta != 0) {
-		INT_MOD(sbp->sb_icount, ARCH_CONVERT, tp->t_icount_delta);
-	}
-	if (tp->t_ifree_delta != 0) {
-		INT_MOD(sbp->sb_ifree, ARCH_CONVERT, tp->t_ifree_delta);
+	/*
+	 * Only update the superblock counters if we are logging them
+	 */
+	if (!xfs_sb_version_haslazysbcount(&(tp->t_mountp->m_sb))) {
+		if (tp->t_icount_delta)
+			be64_add(&sbp->sb_icount, tp->t_icount_delta);
+		if (tp->t_ifree_delta)
+			be64_add(&sbp->sb_ifree, tp->t_ifree_delta);
+		if (tp->t_fdblocks_delta)
+			be64_add(&sbp->sb_fdblocks, tp->t_fdblocks_delta);
+		if (tp->t_res_fdblocks_delta)
+			be64_add(&sbp->sb_fdblocks, tp->t_res_fdblocks_delta);
 	}
 
-	if (tp->t_fdblocks_delta != 0) {
-		INT_MOD(sbp->sb_fdblocks, ARCH_CONVERT, tp->t_fdblocks_delta);
-	}
-	if (tp->t_res_fdblocks_delta != 0) {
-		INT_MOD(sbp->sb_fdblocks, ARCH_CONVERT, tp->t_res_fdblocks_delta);
-	}
+	if (tp->t_frextents_delta)
+		be64_add(&sbp->sb_frextents, tp->t_frextents_delta);
+	if (tp->t_res_frextents_delta)
+		be64_add(&sbp->sb_frextents, tp->t_res_frextents_delta);
 
-	if (tp->t_frextents_delta != 0) {
-		INT_MOD(sbp->sb_frextents, ARCH_CONVERT, tp->t_frextents_delta);
-	}
-	if (tp->t_res_frextents_delta != 0) {
-		INT_MOD(sbp->sb_frextents, ARCH_CONVERT, tp->t_res_frextents_delta);
-	}
-	if (tp->t_dblocks_delta != 0) {
-		INT_MOD(sbp->sb_dblocks, ARCH_CONVERT, tp->t_dblocks_delta);
+	if (tp->t_dblocks_delta) {
+		be64_add(&sbp->sb_dblocks, tp->t_dblocks_delta);
 		whole = 1;
 	}
-	if (tp->t_agcount_delta != 0) {
-		INT_MOD(sbp->sb_agcount, ARCH_CONVERT, tp->t_agcount_delta);
+	if (tp->t_agcount_delta) {
+		be32_add(&sbp->sb_agcount, tp->t_agcount_delta);
 		whole = 1;
 	}
-	if (tp->t_imaxpct_delta != 0) {
-		INT_MOD(sbp->sb_imax_pct, ARCH_CONVERT, tp->t_imaxpct_delta);
+	if (tp->t_imaxpct_delta) {
+		sbp->sb_imax_pct += tp->t_imaxpct_delta;
 		whole = 1;
 	}
-	if (tp->t_rextsize_delta != 0) {
-		INT_MOD(sbp->sb_rextsize, ARCH_CONVERT, tp->t_rextsize_delta);
+	if (tp->t_rextsize_delta) {
+		be32_add(&sbp->sb_rextsize, tp->t_rextsize_delta);
 		whole = 1;
 	}
-	if (tp->t_rbmblocks_delta != 0) {
-		INT_MOD(sbp->sb_rbmblocks, ARCH_CONVERT, tp->t_rbmblocks_delta);
+	if (tp->t_rbmblocks_delta) {
+		be32_add(&sbp->sb_rbmblocks, tp->t_rbmblocks_delta);
 		whole = 1;
 	}
-	if (tp->t_rblocks_delta != 0) {
-		INT_MOD(sbp->sb_rblocks, ARCH_CONVERT, tp->t_rblocks_delta);
+	if (tp->t_rblocks_delta) {
+		be64_add(&sbp->sb_rblocks, tp->t_rblocks_delta);
 		whole = 1;
 	}
-	if (tp->t_rextents_delta != 0) {
-		INT_MOD(sbp->sb_rextents, ARCH_CONVERT, tp->t_rextents_delta);
+	if (tp->t_rextents_delta) {
+		be64_add(&sbp->sb_rextents, tp->t_rextents_delta);
 		whole = 1;
 	}
-	if (tp->t_rextslog_delta != 0) {
-		INT_MOD(sbp->sb_rextslog, ARCH_CONVERT, tp->t_rextslog_delta);
+	if (tp->t_rextslog_delta) {
+		sbp->sb_rextslog += tp->t_rextslog_delta;
 		whole = 1;
 	}
 
@@ -601,25 +618,37 @@ xfs_trans_apply_sb_deltas(
 		/*
 		 * Log the whole thing, the fields are noncontiguous.
 		 */
-		xfs_trans_log_buf(tp, bp, 0, sizeof(xfs_sb_t) - 1);
+		xfs_trans_log_buf(tp, bp, 0, sizeof(xfs_dsb_t) - 1);
 	else
 		/*
 		 * Since all the modifiable fields are contiguous, we
 		 * can get away with this.
 		 */
-		xfs_trans_log_buf(tp, bp, offsetof(xfs_sb_t, sb_icount),
-				  offsetof(xfs_sb_t, sb_frextents) +
+		xfs_trans_log_buf(tp, bp, offsetof(xfs_dsb_t, sb_icount),
+				  offsetof(xfs_dsb_t, sb_frextents) +
 				  sizeof(sbp->sb_frextents) - 1);
 
-	XFS_MTOVFS(tp->t_mountp)->vfs_super->s_dirt = 1;
+	tp->t_mountp->m_super->s_dirt = 1;
 }
 
 /*
- * xfs_trans_unreserve_and_mod_sb() is called to release unused
- * reservations and apply superblock counter changes to the in-core
- * superblock.
+ * xfs_trans_unreserve_and_mod_sb() is called to release unused reservations
+ * and apply superblock counter changes to the in-core superblock.  The
+ * t_res_fdblocks_delta and t_res_frextents_delta fields are explicitly NOT
+ * applied to the in-core superblock.  The idea is that that has already been
+ * done.
  *
  * This is done efficiently with a single call to xfs_mod_incore_sb_batch().
+ * However, we have to ensure that we only modify each superblock field only
+ * once because the application of the delta values may not be atomic. That can
+ * lead to ENOSPC races occurring if we have two separate modifcations of the
+ * free space counter to put back the entire reservation and then take away
+ * what we used.
+ *
+ * If we are not logging superblock counters, then the inode allocated/free and
+ * used block counts are not updated in the on disk superblock. In this case,
+ * XFS_TRANS_SB_DIRTY will not be set when the transaction is updated but we
+ * still need to update the incore superblock with the changes.
  */
 STATIC void
 xfs_trans_unreserve_and_mod_sb(
@@ -627,40 +656,49 @@ xfs_trans_unreserve_and_mod_sb(
 {
 	xfs_mod_sb_t	msb[14];	/* If you add cases, add entries */
 	xfs_mod_sb_t	*msbp;
+	xfs_mount_t	*mp = tp->t_mountp;
 	/* REFERENCED */
 	int		error;
 	int		rsvd;
+	int64_t		blkdelta = 0;
+	int64_t		rtxdelta = 0;
 
 	msbp = msb;
 	rsvd = (tp->t_flags & XFS_TRANS_RESERVE) != 0;
 
-	/*
-	 * Release any reserved blocks.  Any that were allocated
-	 * will be taken back again by fdblocks_delta below.
-	 */
-	if (tp->t_blk_res > 0) {
+	/* calculate free blocks delta */
+	if (tp->t_blk_res > 0)
+		blkdelta = tp->t_blk_res;
+
+	if ((tp->t_fdblocks_delta != 0) &&
+	    (xfs_sb_version_haslazysbcount(&mp->m_sb) ||
+	     (tp->t_flags & XFS_TRANS_SB_DIRTY)))
+	        blkdelta += tp->t_fdblocks_delta;
+
+	if (blkdelta != 0) {
 		msbp->msb_field = XFS_SBS_FDBLOCKS;
-		msbp->msb_delta = tp->t_blk_res;
+		msbp->msb_delta = blkdelta;
 		msbp++;
 	}
 
-	/*
-	 * Release any reserved real time extents .  Any that were
-	 * allocated will be taken back again by frextents_delta below.
-	 */
-	if (tp->t_rtx_res > 0) {
+	/* calculate free realtime extents delta */
+	if (tp->t_rtx_res > 0)
+		rtxdelta = tp->t_rtx_res;
+
+	if ((tp->t_frextents_delta != 0) &&
+	    (tp->t_flags & XFS_TRANS_SB_DIRTY))
+		rtxdelta += tp->t_frextents_delta;
+
+	if (rtxdelta != 0) {
 		msbp->msb_field = XFS_SBS_FREXTENTS;
-		msbp->msb_delta = tp->t_rtx_res;
+		msbp->msb_delta = rtxdelta;
 		msbp++;
 	}
 
-	/*
-	 * Apply any superblock modifications to the in-core version.
-	 * The t_res_fdblocks_delta and t_res_frextents_delta fields are
-	 * explicitly NOT applied to the in-core superblock.
-	 * The idea is that that has already been done.
-	 */
-	if (tp->t_flags & XFS_TRANS_SB_DIRTY) {
+	/* apply remaining deltas */
+
+	if (xfs_sb_version_haslazysbcount(&mp->m_sb) ||
+	     (tp->t_flags & XFS_TRANS_SB_DIRTY)) {
 		if (tp->t_icount_delta != 0) {
 			msbp->msb_field = XFS_SBS_ICOUNT;
 			msbp->msb_delta = tp->t_icount_delta;
@@ -671,16 +709,9 @@ xfs_trans_unreserve_and_mod_sb(
 			msbp->msb_delta = tp->t_ifree_delta;
 			msbp++;
 		}
-		if (tp->t_fdblocks_delta != 0) {
-			msbp->msb_field = XFS_SBS_FDBLOCKS;
-			msbp->msb_delta = tp->t_fdblocks_delta;
-			msbp++;
-		}
-		if (tp->t_frextents_delta != 0) {
-			msbp->msb_field = XFS_SBS_FREXTENTS;
-			msbp->msb_delta = tp->t_frextents_delta;
-			msbp++;
-		}
+	}
+
+	if (tp->t_flags & XFS_TRANS_SB_DIRTY) {
 		if (tp->t_dblocks_delta != 0) {
 			msbp->msb_field = XFS_SBS_DBLOCKS;
 			msbp->msb_delta = tp->t_dblocks_delta;

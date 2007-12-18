@@ -161,7 +161,7 @@ static void radisys_set_dmamode (struct ata_port *ap, struct ata_device *adev)
  *
  *	Called when the libata layer is about to issue a command. We wrap
  *	this interface so that we can load the correct ATA timings if
- *	neccessary. Our logic also clears TIME0/TIME1 for the other device so
+ *	necessary. Our logic also clears TIME0/TIME1 for the other device so
  *	that, even if we get this wrong, cycles to the other device will
  *	be made PIO0.
  */
@@ -203,7 +203,6 @@ static struct scsi_host_template radisys_sht = {
 };
 
 static const struct ata_port_operations radisys_pata_ops = {
-	.port_disable		= ata_port_disable,
 	.set_piomode		= radisys_set_piomode,
 	.set_dmamode		= radisys_set_dmamode,
 	.mode_filter		= ata_pci_default_filter,
@@ -231,9 +230,8 @@ static const struct ata_port_operations radisys_pata_ops = {
 	.irq_handler		= ata_interrupt,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 
-	.port_start		= ata_port_start,
+	.port_start		= ata_sff_port_start,
 };
 
 
@@ -257,7 +255,7 @@ static int radisys_init_one (struct pci_dev *pdev, const struct pci_device_id *e
 	static int printed_version;
 	static const struct ata_port_info info = {
 		.sht		= &radisys_sht,
-		.flags		= ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
+		.flags		= ATA_FLAG_SLAVE_POSS,
 		.pio_mask	= 0x1f,	/* pio0-4 */
 		.mwdma_mask	= 0x07, /* mwdma1-2 */
 		.udma_mask	= 0x14, /* UDMA33/66 only */

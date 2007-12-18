@@ -24,14 +24,17 @@
 #include "acl.h"
 
 /*
- * Called when an inode is released. Note that this is different
- * from ext2_open_file: open gets called at every open, but release
- * gets called only when /all/ the files are closed.
+ * Called when filp is released. This happens when all file descriptors
+ * for a single struct file are closed. Note that different open() calls
+ * for the same file yield different struct file structures.
  */
 static int ext2_release_file (struct inode * inode, struct file * filp)
 {
-	if (filp->f_mode & FMODE_WRITE)
-		ext2_discard_prealloc (inode);
+	if (filp->f_mode & FMODE_WRITE) {
+		mutex_lock(&EXT2_I(inode)->truncate_mutex);
+		ext2_discard_reservation(inode);
+		mutex_unlock(&EXT2_I(inode)->truncate_mutex);
+	}
 	return 0;
 }
 
@@ -53,7 +56,6 @@ const struct file_operations ext2_file_operations = {
 	.open		= generic_file_open,
 	.release	= ext2_release_file,
 	.fsync		= ext2_sync_file,
-	.sendfile	= generic_file_sendfile,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= generic_file_splice_write,
 };
@@ -71,7 +73,6 @@ const struct file_operations ext2_xip_file_operations = {
 	.open		= generic_file_open,
 	.release	= ext2_release_file,
 	.fsync		= ext2_sync_file,
-	.sendfile	= xip_file_sendfile,
 };
 #endif
 

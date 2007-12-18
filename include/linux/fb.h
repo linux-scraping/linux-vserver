@@ -119,6 +119,7 @@ struct dentry;
 #define FB_ACCEL_NV_40          46      /* nVidia Arch 40               */
 #define FB_ACCEL_XGI_VOLARI_V	47	/* XGI Volari V3XT, V5, V8      */
 #define FB_ACCEL_XGI_VOLARI_Z	48	/* XGI Volari Z7                */
+#define FB_ACCEL_OMAP1610	49	/* TI OMAP16xx                  */
 #define FB_ACCEL_NEOMAGIC_NM2070 90	/* NeoMagic NM2070              */
 #define FB_ACCEL_NEOMAGIC_NM2090 91	/* NeoMagic NM2090              */
 #define FB_ACCEL_NEOMAGIC_NM2093 92	/* NeoMagic NM2093              */
@@ -179,6 +180,7 @@ struct fb_bitfield {
 };
 
 #define FB_NONSTD_HAM		1	/* Hold-And-Modify (HAM)        */
+#define FB_NONSTD_REV_PIX_IN_B	2	/* order of pixels in each byte is reversed */
 
 #define FB_ACTIVATE_NOW		0	/* set values immediately (or vbl)*/
 #define FB_ACTIVATE_NXTOPEN	1	/* activate on next open	*/
@@ -205,6 +207,7 @@ struct fb_bitfield {
 #define FB_VMODE_NONINTERLACED  0	/* non interlaced */
 #define FB_VMODE_INTERLACED	1	/* interlaced	*/
 #define FB_VMODE_DOUBLE		2	/* double scan */
+#define FB_VMODE_ODD_FLD_FIRST	4	/* interlaced: top line first */
 #define FB_VMODE_MASK		255
 
 #define FB_VMODE_YWRAP		256	/* ywrap instead of panning     */
@@ -529,6 +532,8 @@ struct fb_cursor_user {
 #define FB_EVENT_CONBLANK               0x0C
 /*      Get drawing requirements        */
 #define FB_EVENT_GET_REQ                0x0D
+/*      Unbind from the console if possible */
+#define FB_EVENT_FB_UNBIND              0x0E
 
 struct fb_event {
 	struct fb_info *info;
@@ -1051,6 +1056,7 @@ struct fb_videomode {
 	u32 flag;
 };
 
+extern const char *fb_mode_option;
 extern const struct fb_videomode vesa_modes[];
 
 struct fb_modelist {

@@ -62,19 +62,6 @@ static int atihdmi_init(struct hda_codec *codec)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-/*
- * resume
- */
-static int atihdmi_resume(struct hda_codec *codec)
-{
-	atihdmi_init(codec);
-	snd_hda_resume_spdif_out(codec);
-
-	return 0;
-}
-#endif
-
 /*
  * Digital out
  */
@@ -141,9 +128,6 @@ static struct hda_codec_ops atihdmi_patch_ops = {
 	.build_pcms = atihdmi_build_pcms,
 	.init = atihdmi_init,
 	.free = atihdmi_free,
-#ifdef CONFIG_PM
-	.resume = atihdmi_resume,
-#endif
 };
 
 static int patch_atihdmi(struct hda_codec *codec)
@@ -172,6 +156,7 @@ static int patch_atihdmi(struct hda_codec *codec)
  */
 struct hda_codec_preset snd_hda_preset_atihdmi[] = {
 	{ .id = 0x1002793c, .name = "ATI RS600 HDMI", .patch = patch_atihdmi },
+	{ .id = 0x10027919, .name = "ATI RS600 HDMI", .patch = patch_atihdmi },
 	{ .id = 0x1002791a, .name = "ATI RS690/780 HDMI", .patch = patch_atihdmi },
 	{ .id = 0x1002aa01, .name = "ATI R600 HDMI", .patch = patch_atihdmi },
 	{} /* terminator */

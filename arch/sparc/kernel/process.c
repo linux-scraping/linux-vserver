@@ -1,7 +1,6 @@
-/*  $Id: process.c,v 1.161 2002/01/23 11:27:32 davem Exp $
- *  linux/arch/sparc/kernel/process.c
+/*  linux/arch/sparc/kernel/process.c
  *
- *  Copyright (C) 1995 David S. Miller (davem@caip.rutgers.edu)
+ *  Copyright (C) 1995 David S. Miller (davem@davemloft.net)
  *  Copyright (C) 1996 Eddie C. Dost   (ecd@skynet.be)
  */
 
@@ -39,6 +38,7 @@
 #include <asm/processor.h>
 #include <asm/psr.h>
 #include <asm/elf.h>
+#include <asm/prom.h>
 #include <asm/unistd.h>
 
 /* 
@@ -150,7 +150,7 @@ void machine_halt(void)
 	local_irq_enable();
 	mdelay(8);
 	local_irq_disable();
-	if (!serial_console && prom_palette)
+	if (prom_palette)
 		prom_palette (1);
 	prom_halt();
 	panic("Halt failed!");
@@ -166,7 +166,7 @@ void machine_restart(char * cmd)
 
 	p = strchr (reboot_command, '\n');
 	if (p) *p = 0;
-	if (!serial_console && prom_palette)
+	if (prom_palette)
 		prom_palette (1);
 	if (cmd)
 		prom_reboot(cmd);
@@ -179,7 +179,8 @@ void machine_restart(char * cmd)
 void machine_power_off(void)
 {
 #ifdef CONFIG_SUN_AUXIO
-	if (auxio_power_register && (!serial_console || scons_pwroff))
+	if (auxio_power_register &&
+	    (strcmp(of_console_device->type, "serial") || scons_pwroff))
 		*auxio_power_register |= AUXIO_POWER_OFF;
 #endif
 	machine_halt();
@@ -395,7 +396,7 @@ void flush_thread(void)
 	}
 }
 
-static __inline__ struct sparc_stackf __user *
+static inline struct sparc_stackf __user *
 clone_stackframe(struct sparc_stackf __user *dst,
 		 struct sparc_stackf __user *src)
 {

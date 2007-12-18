@@ -16,6 +16,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/blkdev.h>
 #include <linux/blkpg.h>
+#include <linux/freezer.h>
 #include <linux/spinlock.h>
 #include <linux/hdreg.h>
 #include <linux/init.h>
@@ -23,10 +24,9 @@
 #include <linux/kthread.h>
 #include <asm/uaccess.h>
 
-static LIST_HEAD(blktrans_majors);
+#include "mtdcore.h"
 
-extern struct mutex mtd_table_mutex;
-extern struct mtd_info *mtd_table[];
+static LIST_HEAD(blktrans_majors);
 
 struct mtd_blkcore_priv {
 	struct task_struct *thread;
@@ -80,7 +80,7 @@ static int mtd_blktrans_thread(void *arg)
 	struct request_queue *rq = tr->blkcore_priv->rq;
 
 	/* we might get involved when memory gets low, so use PF_MEMALLOC */
-	current->flags |= PF_MEMALLOC | PF_NOFREEZE;
+	current->flags |= PF_MEMALLOC;
 
 	spin_lock_irq(rq->queue_lock);
 	while (!kthread_should_stop()) {
@@ -201,7 +201,7 @@ static int blktrans_ioctl(struct inode *inode, struct file *file,
 	}
 }
 
-struct block_device_operations mtd_blktrans_ops = {
+static struct block_device_operations mtd_blktrans_ops = {
 	.owner		= THIS_MODULE,
 	.open		= blktrans_open,
 	.release	= blktrans_release,

@@ -58,7 +58,7 @@
 #include <linux/capability.h>
 #include <linux/fs.h>
 #include <linux/types.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 #ifdef CONFIG_MTRR
 #include <asm/mtrr.h>
@@ -1248,7 +1248,6 @@ sisfb_do_set_var(struct fb_var_screeninfo *var, int isactive, struct fb_info *in
 	if(found_mode) {
 		ivideo->sisfb_mode_idx = sisfb_validate_mode(ivideo,
 				ivideo->sisfb_mode_idx, ivideo->currentvbflags);
-		ivideo->mode_no = sisbios_mode[ivideo->sisfb_mode_idx].mode_no[ivideo->mni];
 	} else {
 		ivideo->sisfb_mode_idx = -1;
 	}
@@ -1259,6 +1258,8 @@ sisfb_do_set_var(struct fb_var_screeninfo *var, int isactive, struct fb_info *in
 		ivideo->sisfb_mode_idx = old_mode;
 		return -EINVAL;
 	}
+
+	ivideo->mode_no = sisbios_mode[ivideo->sisfb_mode_idx].mode_no[ivideo->mni];
 
 	if(sisfb_search_refresh_rate(ivideo, ivideo->refresh_rate, ivideo->sisfb_mode_idx) == 0) {
 		ivideo->rate_idx = sisbios_mode[ivideo->sisfb_mode_idx].rate_idx;
@@ -1405,12 +1406,18 @@ sisfb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue,
 		}
 		break;
 	case 16:
+		if (regno >= 16)
+			break;
+
 		((u32 *)(info->pseudo_palette))[regno] =
 				(red & 0xf800)          |
 				((green & 0xfc00) >> 5) |
 				((blue & 0xf800) >> 11);
 		break;
 	case 32:
+		if (regno >= 16)
+			break;
+
 		red >>= 8;
 		green >>= 8;
 		blue >>= 8;
@@ -5789,7 +5796,7 @@ sisfb_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	ivideo->warncount = 0;
 	ivideo->chip_id = pdev->device;
 	ivideo->chip_vendor = pdev->vendor;
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &ivideo->revision_id);
+	ivideo->revision_id = pdev->revision;
 	ivideo->SiS_Pr.ChipRevision = ivideo->revision_id;
 	pci_read_config_word(pdev, PCI_COMMAND, &reg16);
 	ivideo->sisvga_enabled = reg16 & 0x01;

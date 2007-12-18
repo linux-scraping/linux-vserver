@@ -10,22 +10,22 @@
 
 
 struct signalfd_siginfo {
-	__u32 signo;
-	__s32 err;
-	__s32 code;
-	__u32 pid;
-	__u32 uid;
-	__s32 fd;
-	__u32 tid;
-	__u32 band;
-	__u32 overrun;
-	__u32 trapno;
-	__s32 status;
-	__s32 svint;
-	__u64 svptr;
-	__u64 utime;
-	__u64 stime;
-	__u64 addr;
+	__u32 ssi_signo;
+	__s32 ssi_errno;
+	__s32 ssi_code;
+	__u32 ssi_pid;
+	__u32 ssi_uid;
+	__s32 ssi_fd;
+	__u32 ssi_tid;
+	__u32 ssi_band;
+	__u32 ssi_overrun;
+	__u32 ssi_trapno;
+	__s32 ssi_status;
+	__s32 ssi_int;
+	__u64 ssi_ptr;
+	__u64 ssi_utime;
+	__u64 ssi_stime;
+	__u64 ssi_addr;
 
 	/*
 	 * Pad strcture to 128 bytes. Remember to update the
@@ -45,49 +45,17 @@ struct signalfd_siginfo {
 #ifdef CONFIG_SIGNALFD
 
 /*
- * Deliver the signal to listening signalfd. This must be called
- * with the sighand lock held. Same are the following that end up
- * calling signalfd_deliver().
- */
-void signalfd_deliver(struct task_struct *tsk, int sig);
-
-/*
- * No need to fall inside signalfd_deliver() if no signal listeners
- * are available.
+ * Deliver the signal to listening signalfd.
  */
 static inline void signalfd_notify(struct task_struct *tsk, int sig)
 {
-	if (unlikely(!list_empty(&tsk->sighand->signalfd_list)))
-		signalfd_deliver(tsk, sig);
-}
-
-/*
- * The signal -1 is used to notify the signalfd that the sighand
- * is on its way to be detached.
- */
-static inline void signalfd_detach_locked(struct task_struct *tsk)
-{
-	if (unlikely(!list_empty(&tsk->sighand->signalfd_list)))
-		signalfd_deliver(tsk, -1);
-}
-
-static inline void signalfd_detach(struct task_struct *tsk)
-{
-	struct sighand_struct *sighand = tsk->sighand;
-
-	if (unlikely(!list_empty(&sighand->signalfd_list))) {
-		spin_lock_irq(&sighand->siglock);
-		signalfd_deliver(tsk, -1);
-		spin_unlock_irq(&sighand->siglock);
-	}
+	if (unlikely(waitqueue_active(&tsk->sighand->signalfd_wqh)))
+		wake_up(&tsk->sighand->signalfd_wqh);
 }
 
 #else /* CONFIG_SIGNALFD */
 
-#define signalfd_deliver(t, s) do { } while (0)
-#define signalfd_notify(t, s) do { } while (0)
-#define signalfd_detach_locked(t) do { } while (0)
-#define signalfd_detach(t) do { } while (0)
+static inline void signalfd_notify(struct task_struct *tsk, int sig) { }
 
 #endif /* CONFIG_SIGNALFD */
 

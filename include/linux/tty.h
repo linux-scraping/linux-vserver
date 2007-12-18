@@ -21,7 +21,6 @@
  * (Note: the *_driver.minor_start values 1, 64, 128, 192 are
  * hardcoded at present.)
  */
-#define NR_PTYS	CONFIG_LEGACY_PTY_COUNT   /* Number of legacy ptys */
 #define NR_UNIX98_PTY_DEFAULT	4096      /* Default maximum for Unix98 ptys */
 #define NR_UNIX98_PTY_MAX	(1 << MINORBITS) /* Absolute limit */
 #define NR_LDISCS		17
@@ -81,11 +80,6 @@ struct tty_bufhead {
 	struct tty_buffer *free;	/* Free queue head */
 	int memory_used;		/* Buffer space used excluding free queue */
 };
-/*
- * The pty uses char_buf and flag_buf as a contiguous buffer
- */
-#define PTY_BUF_SIZE	4*TTY_FLIPBUF_SIZE
-
 /*
  * When a break, frame error, or parity error happens, these codes are
  * stuffed into the flags buffer.
@@ -178,6 +172,7 @@ struct tty_bufhead {
 #define L_IEXTEN(tty)	_L_FLAG((tty),IEXTEN)
 
 struct device;
+struct signal_struct;
 /*
  * Where all of the state associated with a tty is kept while the tty
  * is open.  Since the termios state should be kept even if the tty
@@ -273,6 +268,8 @@ struct tty_struct {
 #define TTY_PTY_LOCK 		16	/* pty private */
 #define TTY_NO_WRITE_SPLIT 	17	/* Preserve write boundaries to driver */
 #define TTY_HUPPED 		18	/* Post driver->hangup() */
+#define TTY_FLUSHING		19	/* Flushing to ldisc in progress */
+#define TTY_FLUSHPENDING	20	/* Queued buffer flush pending */
 
 #define TTY_WRITE_FLUSH(tty) tty_write_flush((tty))
 
@@ -310,6 +307,7 @@ extern void tty_hangup(struct tty_struct * tty);
 extern void tty_vhangup(struct tty_struct * tty);
 extern void tty_unhangup(struct file *filp);
 extern int tty_hung_up_p(struct file * filp);
+extern int is_tty(struct file *filp);
 extern void do_SAK(struct tty_struct *tty);
 extern void __do_SAK(struct tty_struct *tty);
 extern void disassociate_ctty(int priv);
@@ -318,6 +316,9 @@ extern void tty_flip_buffer_push(struct tty_struct *tty);
 extern speed_t tty_get_baud_rate(struct tty_struct *tty);
 extern speed_t tty_termios_baud_rate(struct ktermios *termios);
 extern speed_t tty_termios_input_baud_rate(struct ktermios *termios);
+extern void tty_termios_encode_baud_rate(struct ktermios *termios, speed_t ibaud, speed_t obaud);
+extern void tty_encode_baud_rate(struct tty_struct *tty, speed_t ibaud, speed_t obaud);
+extern void tty_termios_copy_hw(struct ktermios *new, struct ktermios *old);
 
 extern struct tty_ldisc *tty_ldisc_ref(struct tty_struct *);
 extern void tty_ldisc_deref(struct tty_ldisc *);
@@ -331,15 +332,54 @@ extern void tty_ldisc_flush(struct tty_struct *tty);
 
 extern int tty_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		     unsigned long arg);
-
+extern int tty_mode_ioctl(struct tty_struct *tty, struct file *file,
+			unsigned int cmd, unsigned long arg);
+extern int tty_perform_flush(struct tty_struct *tty, unsigned long arg);
 extern dev_t tty_devnum(struct tty_struct *tty);
 extern void proc_clear_tty(struct task_struct *p);
 extern struct tty_struct *get_current_tty(void);
 
 extern struct mutex tty_mutex;
 
+extern void tty_write_unlock(struct tty_struct *tty);
+extern int tty_write_lock(struct tty_struct *tty, int ndelay);
+#define tty_is_writelocked(tty)  (mutex_is_locked(&tty->atomic_write_lock))
+
+
+
 /* n_tty.c */
 extern struct tty_ldisc tty_ldisc_N_TTY;
+
+/* tty_audit.c */
+#ifdef CONFIG_AUDIT
+extern void tty_audit_add_data(struct tty_struct *tty, unsigned char *data,
+			       size_t size);
+extern void tty_audit_exit(void);
+extern void tty_audit_fork(struct signal_struct *sig);
+extern void tty_audit_push(struct tty_struct *tty);
+extern void tty_audit_push_task(struct task_struct *tsk, uid_t loginuid);
+extern void tty_audit_opening(void);
+#else
+static inline void tty_audit_add_data(struct tty_struct *tty,
+				      unsigned char *data, size_t size)
+{
+}
+static inline void tty_audit_exit(void)
+{
+}
+static inline void tty_audit_fork(struct signal_struct *sig)
+{
+}
+static inline void tty_audit_push(struct tty_struct *tty)
+{
+}
+static inline void tty_audit_push_task(struct task_struct *tsk, uid_t loginuid)
+{
+}
+static inline void tty_audit_opening(void)
+{
+}
+#endif
 
 /* tty_ioctl.c */
 extern int n_tty_ioctl(struct tty_struct * tty, struct file * file,

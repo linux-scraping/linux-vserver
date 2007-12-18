@@ -64,12 +64,9 @@ struct bus_type {
 	struct bus_attribute	* bus_attrs;
 	struct device_attribute	* dev_attrs;
 	struct driver_attribute	* drv_attrs;
-	struct bus_attribute drivers_autoprobe_attr;
-	struct bus_attribute drivers_probe_attr;
 
 	int		(*match)(struct device * dev, struct device_driver * drv);
-	int		(*uevent)(struct device *dev, char **envp,
-				  int num_envp, char *buffer, int buffer_size);
+	int		(*uevent)(struct device *dev, struct kobj_uevent_env *env);
 	int		(*probe)(struct device * dev);
 	int		(*remove)(struct device * dev);
 	void		(*shutdown)(struct device * dev);
@@ -189,10 +186,8 @@ struct class {
 	struct class_device_attribute	* class_dev_attrs;
 	struct device_attribute		* dev_attrs;
 
-	int	(*uevent)(struct class_device *dev, char **envp,
-			   int num_envp, char *buffer, int buffer_size);
-	int	(*dev_uevent)(struct device *dev, char **envp, int num_envp,
-				char *buffer, int buffer_size);
+	int	(*uevent)(struct class_device *dev, struct kobj_uevent_env *env);
+	int	(*dev_uevent)(struct device *dev, struct kobj_uevent_env *env);
 
 	void	(*release)(struct class_device *dev);
 	void	(*class_release)(struct class *class);
@@ -238,7 +233,6 @@ extern int __must_check class_device_create_file(struct class_device *,
  * @devt: for internal use by the driver core only.
  * @node: for internal use by the driver core only.
  * @kobj: for internal use by the driver core only.
- * @devt_attr: for internal use by the driver core only.
  * @groups: optional additional groups to be created
  * @dev: if set, a symlink to the struct device is created in the sysfs
  * directory for this struct class device.
@@ -263,16 +257,13 @@ struct class_device {
 	struct kobject		kobj;
 	struct class		* class;	/* required */
 	dev_t			devt;		/* dev_t, creates the sysfs "dev" */
-	struct class_device_attribute *devt_attr;
-	struct class_device_attribute uevent_attr;
 	struct device		* dev;		/* not necessary, but nice to have */
 	void			* class_data;	/* class-specific data */
 	struct class_device	*parent;	/* parent of this child device, if there is one */
 	struct attribute_group  ** groups;	/* optional groups */
 
 	void	(*release)(struct class_device *dev);
-	int	(*uevent)(struct class_device *dev, char **envp,
-			   int num_envp, char *buffer, int buffer_size);
+	int	(*uevent)(struct class_device *dev, struct kobj_uevent_env *env);
 	char	class_id[BUS_ID_SIZE];	/* unique to this class */
 };
 
@@ -340,8 +331,7 @@ extern void class_device_destroy(struct class *cls, dev_t devt);
 struct device_type {
 	const char *name;
 	struct attribute_group **groups;
-	int (*uevent)(struct device *dev, char **envp, int num_envp,
-		      char *buffer, int buffer_size);
+	int (*uevent)(struct device *dev, struct kobj_uevent_env *env);
 	void (*release)(struct device *dev);
 	int (*suspend)(struct device * dev, pm_message_t state);
 	int (*resume)(struct device * dev);
@@ -419,8 +409,6 @@ struct device {
 	struct device_type	*type;
 	unsigned		is_registered:1;
 	unsigned		uevent_suppress:1;
-	struct device_attribute uevent_attr;
-	struct device_attribute *devt_attr;
 
 	struct semaphore	sem;	/* semaphore to synchronize calls to
 					 * its driver.
@@ -556,6 +544,9 @@ extern void put_device(struct device * dev);
 /* drivers/base/power/shutdown.c */
 extern void device_shutdown(void);
 
+/* drivers/base/sys.c */
+extern void sysdev_shutdown(void);
+
 
 /* drivers/base/firmware.c */
 extern int __must_check firmware_register(struct kset *);
@@ -572,6 +563,16 @@ extern const char *dev_driver_string(struct device *dev);
 #else
 static inline int __attribute__ ((format (printf, 2, 3)))
 dev_dbg(struct device * dev, const char * fmt, ...)
+{
+	return 0;
+}
+#endif
+
+#ifdef VERBOSE_DEBUG
+#define dev_vdbg	dev_dbg
+#else
+static inline int __attribute__ ((format (printf, 2, 3)))
+dev_vdbg(struct device * dev, const char * fmt, ...)
 {
 	return 0;
 }

@@ -89,16 +89,17 @@ static inline void qdisc_run(struct net_device *dev)
 		__qdisc_run(dev);
 }
 
+extern int tc_classify_compat(struct sk_buff *skb, struct tcf_proto *tp,
+			      struct tcf_result *res);
 extern int tc_classify(struct sk_buff *skb, struct tcf_proto *tp,
-	struct tcf_result *res);
+		       struct tcf_result *res);
 
 /* Calculate maximal size of packet seen by hard_start_xmit
    routine of this device.
  */
-static inline unsigned psched_mtu(struct net_device *dev)
+static inline unsigned psched_mtu(const struct net_device *dev)
 {
-	unsigned mtu = dev->mtu;
-	return dev->hard_header ? mtu + dev->hard_header_len : mtu;
+	return dev->mtu + dev->hard_header_len;
 }
 
 #endif

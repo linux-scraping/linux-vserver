@@ -106,11 +106,11 @@ int dvb_usb_remote_init(struct dvb_usb_device *d)
 	if (!input_dev)
 		return -ENOMEM;
 
-	input_dev->evbit[0] = BIT(EV_KEY);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY);
 	input_dev->name = "IR-receiver inside an USB DVB receiver";
 	input_dev->phys = d->rc_phys;
 	usb_to_input_id(d->udev, &input_dev->id);
-	input_dev->cdev.dev = &d->udev->dev;
+	input_dev->dev.parent = &d->udev->dev;
 
 	/* set the bits for the keys */
 	deb_rc("key map size: %d\n", d->props.rc_key_map_size);

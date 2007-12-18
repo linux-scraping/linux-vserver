@@ -34,8 +34,9 @@
 #include <linux/spinlock.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/io.h>
+#include <linux/scatterlist.h>
 #include <asm/cacheflush.h>
-#include <asm/io.h>
 #include <asm/bfin-global.h>
 
 static spinlock_t dma_page_lock;
@@ -159,10 +160,13 @@ dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 
 	BUG_ON(direction == DMA_NONE);
 
-	for (i = 0; i < nents; i++)
-		invalidate_dcache_range(sg_dma_address(&sg[i]),
-					sg_dma_address(&sg[i]) +
-					sg_dma_len(&sg[i]));
+	for (i = 0; i < nents; i++, sg++) {
+		sg->dma_address = (dma_addr_t) sg_virt(sg);
+
+		invalidate_dcache_range(sg_dma_address(sg),
+					sg_dma_address(sg) +
+					sg_dma_len(sg));
+	}
 
 	return nents;
 }

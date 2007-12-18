@@ -11,7 +11,6 @@
 #include <linux/module.h>
 #include <linux/kernel_stat.h>
 #include <linux/seq_file.h>
-#include <linux/irq.h>
 #include <linux/vs_context.h>
 #include <asm/processor.h>
 #include <asm/machvec.h>
@@ -70,7 +69,7 @@ unlock:
 }
 #endif
 
-#ifdef CONFIG_4KSTACKS
+#ifdef CONFIG_IRQSTACKS
 /*
  * per-CPU IRQ handling contexts (thread information and stack)
  */
@@ -86,7 +85,7 @@ static union irq_ctx *softirq_ctx[NR_CPUS] __read_mostly;
 asmlinkage int do_IRQ(unsigned int irq, struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
-#ifdef CONFIG_4KSTACKS
+#ifdef CONFIG_IRQSTACKS
 	union irq_ctx *curctx, *irqctx;
 #endif
 
@@ -110,7 +109,7 @@ asmlinkage int do_IRQ(unsigned int irq, struct pt_regs *regs)
 
 	irq = irq_demux(evt2irq(irq));
 
-#ifdef CONFIG_4KSTACKS
+#ifdef CONFIG_IRQSTACKS
 	curctx = (union irq_ctx *)current_thread_info();
 	irqctx = hardirq_ctx[smp_processor_id()];
 
@@ -158,16 +157,12 @@ asmlinkage int do_IRQ(unsigned int irq, struct pt_regs *regs)
 	return 1;
 }
 
-#ifdef CONFIG_4KSTACKS
-/*
- * These should really be __section__(".bss.page_aligned") as well, but
- * gcc's 3.0 and earlier don't handle that correctly.
- */
+#ifdef CONFIG_IRQSTACKS
 static char softirq_stack[NR_CPUS * THREAD_SIZE]
-		__attribute__((__aligned__(THREAD_SIZE)));
+		__attribute__((__section__(".bss.page_aligned")));
 
 static char hardirq_stack[NR_CPUS * THREAD_SIZE]
-		__attribute__((__aligned__(THREAD_SIZE)));
+		__attribute__((__section__(".bss.page_aligned")));
 
 /*
  * allocate per-cpu stacks for hardirq and for softirq processing
@@ -250,7 +245,6 @@ asmlinkage void do_softirq(void)
 
 	local_irq_restore(flags);
 }
-EXPORT_SYMBOL(do_softirq);
 #endif
 
 void __init init_IRQ(void)
@@ -258,14 +252,7 @@ void __init init_IRQ(void)
 #ifdef CONFIG_CPU_HAS_PINT_IRQ
 	init_IRQ_pint();
 #endif
-
-#ifdef CONFIG_CPU_HAS_INTC2_IRQ
-	init_IRQ_intc2();
-#endif
-
-#ifdef CONFIG_CPU_HAS_IPR_IRQ
-	init_IRQ_ipr();
-#endif
+	plat_irq_setup();
 
 	/* Perform the machine specific initialisation */
 	if (sh_mv.mv_init_irq)

@@ -79,8 +79,7 @@ static int bf533_target(struct cpufreq_policy *policy,
 	int i;
 
 	struct cpufreq_freqs freqs;
-	if (cpufreq_frequency_table_target
-	    (policy, bf533_freq_table, target_freq, relation, &index))
+	if (cpufreq_frequency_table_target(policy, bf533_freq_table, target_freq, relation, &index))
 		return -EINVAL;
 	cclk_mhz = bf533_freq_table[index].frequency;
 	vco_mhz = bf533_freq_table[index].index;
@@ -118,8 +117,6 @@ static int __init __bf533_cpu_init(struct cpufreq_policy *policy)
 
 	if (policy->cpu != 0)
 		return -EINVAL;
-
-	policy->governor = CPUFREQ_DEFAULT_GOVERNOR;
 
 	policy->cpuinfo.transition_latency = CPUFREQ_ETERNAL;
 	/*Now ,only support one cpu */

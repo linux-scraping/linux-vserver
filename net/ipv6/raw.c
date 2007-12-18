@@ -35,6 +35,7 @@
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
 
+#include <net/net_namespace.h>
 #include <net/ip.h>
 #include <net/sock.h>
 #include <net/snmp.h>
@@ -49,7 +50,7 @@
 #include <net/udp.h>
 #include <net/inet_common.h>
 #include <net/tcp_states.h>
-#ifdef CONFIG_IPV6_MIP6
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 #include <net/mip6.h>
 #endif
 
@@ -137,6 +138,28 @@ static __inline__ int icmpv6_filter(struct sock *sk, struct sk_buff *skb)
 	return 0;
 }
 
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
+static int (*mh_filter)(struct sock *sock, struct sk_buff *skb);
+
+int rawv6_mh_filter_register(int (*filter)(struct sock *sock,
+					   struct sk_buff *skb))
+{
+	rcu_assign_pointer(mh_filter, filter);
+	return 0;
+}
+EXPORT_SYMBOL(rawv6_mh_filter_register);
+
+int rawv6_mh_filter_unregister(int (*filter)(struct sock *sock,
+					     struct sk_buff *skb))
+{
+	rcu_assign_pointer(mh_filter, NULL);
+	synchronize_rcu();
+	return 0;
+}
+EXPORT_SYMBOL(rawv6_mh_filter_unregister);
+
+#endif
+
 /*
  *	demultiplex raw sockets.
  *	(should consider queueing the skb in the sock receive_queue
@@ -178,16 +201,22 @@ int ipv6_raw_deliver(struct sk_buff *skb, int nexthdr)
 		case IPPROTO_ICMPV6:
 			filtered = icmpv6_filter(sk, skb);
 			break;
-#ifdef CONFIG_IPV6_MIP6
+
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
 		case IPPROTO_MH:
+		{
 			/* XXX: To validate MH only once for each packet,
 			 * this is placed here. It should be after checking
 			 * xfrm policy, however it doesn't. The checking xfrm
 			 * policy is placed in rawv6_rcv() because it is
 			 * required for each socket.
 			 */
-			filtered = mip6_mh_filter(sk, skb);
+			int (*filter)(struct sock *sock, struct sk_buff *skb);
+
+			filter = rcu_dereference(mh_filter);
+			filtered = filter ? filter(sk, skb) : 0;
 			break;
+		}
 #endif
 		default:
 			filtered = 0;
@@ -254,7 +283,7 @@ static int rawv6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 			if (!sk->sk_bound_dev_if)
 				goto out;
 
-			dev = dev_get_by_index(sk->sk_bound_dev_if);
+			dev = dev_get_by_index(&init_net, sk->sk_bound_dev_if);
 			if (!dev) {
 				err = -ENODEV;
 				goto out;
@@ -611,9 +640,7 @@ static int rawv6_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 	struct iovec *iov;
 	u8 __user *type = NULL;
 	u8 __user *code = NULL;
-#ifdef CONFIG_IPV6_MIP6
 	u8 len = 0;
-#endif
 	int probed = 0;
 	int i;
 
@@ -646,7 +673,6 @@ static int rawv6_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 				probed = 1;
 			}
 			break;
-#ifdef CONFIG_IPV6_MIP6
 		case IPPROTO_MH:
 			if (iov->iov_base && iov->iov_len < 1)
 				break;
@@ -660,7 +686,6 @@ static int rawv6_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 				len += iov->iov_len;
 
 			break;
-#endif
 		default:
 			probed = 1;
 			break;
@@ -1119,6 +1144,8 @@ static int rawv6_init_sk(struct sock *sk)
 	return(0);
 }
 
+DEFINE_PROTO_INUSE(rawv6)
+
 struct proto rawv6_prot = {
 	.name		   = "RAWv6",
 	.owner		   = THIS_MODULE,
@@ -1141,6 +1168,7 @@ struct proto rawv6_prot = {
 	.compat_setsockopt = compat_rawv6_setsockopt,
 	.compat_getsockopt = compat_rawv6_getsockopt,
 #endif
+	REF_PROTO_INUSE(rawv6)
 };
 
 #ifdef CONFIG_PROC_FS
@@ -1255,7 +1283,7 @@ static int raw6_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations raw6_seq_ops = {
+static const struct seq_operations raw6_seq_ops = {
 	.start =	raw6_seq_start,
 	.next =		raw6_seq_next,
 	.stop =		raw6_seq_stop,
@@ -1264,21 +1292,8 @@ static struct seq_operations raw6_seq_ops = {
 
 static int raw6_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct raw6_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
-	if (!s)
-		goto out;
-	rc = seq_open(file, &raw6_seq_ops);
-	if (rc)
-		goto out_kfree;
-	seq = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &raw6_seq_ops,
+			sizeof(struct raw6_iter_state));
 }
 
 static const struct file_operations raw6_seq_fops = {
@@ -1291,13 +1306,13 @@ static const struct file_operations raw6_seq_fops = {
 
 int __init raw6_proc_init(void)
 {
-	if (!proc_net_fops_create("raw6", S_IRUGO, &raw6_seq_fops))
+	if (!proc_net_fops_create(&init_net, "raw6", S_IRUGO, &raw6_seq_fops))
 		return -ENOMEM;
 	return 0;
 }
 
 void raw6_proc_exit(void)
 {
-	proc_net_remove("raw6");
+	proc_net_remove(&init_net, "raw6");
 }
 #endif	/* CONFIG_PROC_FS */

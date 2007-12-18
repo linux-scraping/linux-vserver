@@ -134,7 +134,7 @@ static struct i2c_driver fscher_driver = {
 
 struct fscher_data {
 	struct i2c_client client;
-	struct class_device *class_dev;
+	struct device *hwmon_dev;
 	struct mutex update_lock;
 	char valid; /* zero until following fields are valid */
 	unsigned long last_updated; /* in jiffies */
@@ -344,9 +344,9 @@ static int fscher_detect(struct i2c_adapter *adapter, int address, int kind)
 	if ((err = sysfs_create_group(&new_client->dev.kobj, &fscher_group)))
 		goto exit_detach;
 
-	data->class_dev = hwmon_device_register(&new_client->dev);
-	if (IS_ERR(data->class_dev)) {
-		err = PTR_ERR(data->class_dev);
+	data->hwmon_dev = hwmon_device_register(&new_client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
 		goto exit_remove_files;
 	}
 
@@ -367,7 +367,7 @@ static int fscher_detach_client(struct i2c_client *client)
 	struct fscher_data *data = i2c_get_clientdata(client);
 	int err;
 
-	hwmon_device_unregister(data->class_dev);
+	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &fscher_group);
 
 	if ((err = i2c_detach_client(client)))
@@ -441,6 +441,8 @@ static struct fscher_data *fscher_update_device(struct device *dev)
 		data->watchdog[2] = fscher_read_value(client, FSCHER_REG_WDOG_CONTROL);
 
 		data->global_event = fscher_read_value(client, FSCHER_REG_EVENT_STATE);
+		data->global_control = fscher_read_value(client,
+							FSCHER_REG_CONTROL);
 
 		data->last_updated = jiffies;
 		data->valid = 1;                 
@@ -599,7 +601,7 @@ static ssize_t set_control(struct i2c_client *client, struct fscher_data *data,
 	unsigned long v = simple_strtoul(buf, NULL, 10) & 0x01;
 
 	mutex_lock(&data->update_lock);
-	data->global_control &= ~v;
+	data->global_control = v;
 	fscher_write_value(client, reg, v);
 	mutex_unlock(&data->update_lock);
 	return count;

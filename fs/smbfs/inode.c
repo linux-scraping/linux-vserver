@@ -67,20 +67,20 @@ static void smb_destroy_inode(struct inode *inode)
 	kmem_cache_free(smb_inode_cachep, SMB_I(inode));
 }
 
-static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct smb_inode_info *ei = (struct smb_inode_info *) foo;
 
 	inode_init_once(&ei->vfs_inode);
 }
- 
+
 static int init_inodecache(void)
 {
 	smb_inode_cachep = kmem_cache_create("smb_inode_cache",
 					     sizeof(struct smb_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
 						SLAB_MEM_SPREAD),
-					     init_once, NULL);
+					     init_once);
 	if (smb_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -536,7 +536,7 @@ static int smb_fill_super(struct super_block *sb, void *raw_data, int silent)
 
 	/* Allocate the global temp buffer and some superblock helper structs */
 	/* FIXME: move these to the smb_sb_info struct */
-	VERBOSE("alloc chunk = %d\n", sizeof(struct smb_ops) +
+	VERBOSE("alloc chunk = %lu\n", sizeof(struct smb_ops) +
 		sizeof(struct smb_mount_data_kernel));
 	mem = kmalloc(sizeof(struct smb_ops) +
 		      sizeof(struct smb_mount_data_kernel), GFP_KERNEL);

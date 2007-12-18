@@ -12,13 +12,7 @@
 #define __ASM_VIRTEX_DEVICES_H__
 
 #include <linux/platform_device.h>
-
-/* ML300/403 reference design framebuffer driver platform data struct */
-struct xilinxfb_platform_data {
-	u32 rotate_screen;
-	u32 screen_height_mm;
-	u32 screen_width_mm;
-};
+#include <linux/xilinxfb.h>
 
 void __init virtex_early_serial_map(void);
 
@@ -30,5 +24,12 @@ void __init virtex_early_serial_map(void);
  * registered with the platform bus
  */
 int virtex_device_fixup(struct platform_device *dev);
+
+/* SPI Controller IP */
+struct xspi_platform_data {
+	s16 bus_num;
+	u16 num_chipselect;
+	u32 speed_hz;
+};
 
 #endif  /* __ASM_VIRTEX_DEVICES_H__ */

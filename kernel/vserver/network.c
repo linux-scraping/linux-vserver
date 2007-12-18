@@ -22,6 +22,7 @@
 #include <asm/errno.h>
 #include <linux/vserver/base.h>
 #include <linux/vserver/network_cmd.h>
+#include <linux/vs_pid.h>
 
 
 atomic_t nx_global_ctotal	= ATOMIC_INIT(0);
