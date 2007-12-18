@@ -24,27 +24,9 @@ static void __init report_dev(struct sparc_isa_device *isa_dev, int child)
 
 static void __init isa_dev_get_resource(struct sparc_isa_device *isa_dev)
 {
-	struct linux_prom_registers *pregs;
-	unsigned long base, len;
-	int prop_len;
+	struct of_device *op = of_find_device_by_node(isa_dev->prom_node);
 
-	pregs = of_get_property(isa_dev->prom_node, "reg", &prop_len);
-	if (!pregs)
-		return;
-
-	/* Only the first one is interesting. */
-	len = pregs[0].reg_size;
-	base = (((unsigned long)pregs[0].which_io << 32) |
-		(unsigned long)pregs[0].phys_addr);
-	base += isa_dev->bus->parent->io_space.start;
-
-	isa_dev->resource.start = base;
-	isa_dev->resource.end   = (base + len - 1UL);
-	isa_dev->resource.flags = IORESOURCE_IO;
-	isa_dev->resource.name  = isa_dev->prom_node->name;
-
-	request_resource(&isa_dev->bus->parent->io_space,
-			 &isa_dev->resource);
+	memcpy(&isa_dev->resource, &op->resource[0], sizeof(struct resource));
 }
 
 static void __init isa_dev_get_irq(struct sparc_isa_device *isa_dev)
@@ -97,12 +79,19 @@ static void __init isa_fill_devices(struct sparc_isa_bridge *isa_br)
 
 	while (dp) {
 		struct sparc_isa_device *isa_dev;
+		struct dev_archdata *sd;
 
 		isa_dev = kzalloc(sizeof(*isa_dev), GFP_KERNEL);
 		if (!isa_dev) {
 			printk(KERN_DEBUG "ISA: cannot allocate isa_dev");
 			return;
 		}
+
+		sd = &isa_dev->ofdev.dev.archdata;
+		sd->prom_node = dp;
+		sd->op = &isa_dev->ofdev;
+		sd->iommu = isa_br->ofdev.dev.parent->archdata.iommu;
+		sd->stc = isa_br->ofdev.dev.parent->archdata.stc;
 
 		isa_dev->ofdev.node = dp;
 		isa_dev->ofdev.dev.parent = &isa_br->ofdev.dev;
@@ -158,19 +147,10 @@ void __init isa_init(void)
 
 	pdev = NULL;
 	while ((pdev = pci_get_device(vendor, device, pdev)) != NULL) {
-		struct pcidev_cookie *pdev_cookie;
-		struct pci_pbm_info *pbm;
 		struct sparc_isa_bridge *isa_br;
 		struct device_node *dp;
 
-		pdev_cookie = pdev->sysdata;
-		if (!pdev_cookie) {
-			printk("ISA: Warning, ISA bridge ignored due to "
-			       "lack of OBP data.\n");
-			continue;
-		}
-		pbm = pdev_cookie->pbm;
-		dp = pdev_cookie->prom_node;
+		dp = pci_device_to_OF_node(pdev);
 
 		isa_br = kzalloc(sizeof(*isa_br), GFP_KERNEL);
 		if (!isa_br) {
@@ -195,10 +175,9 @@ void __init isa_init(void)
 		isa_br->next = isa_chain;
 		isa_chain = isa_br;
 
-		isa_br->parent = pbm;
 		isa_br->self = pdev;
 		isa_br->index = index++;
-		isa_br->prom_node = pdev_cookie->prom_node;
+		isa_br->prom_node = dp;
 
 		printk("isa%d:", isa_br->index);
 

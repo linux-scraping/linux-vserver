@@ -24,53 +24,29 @@ static struct
 	struct ip6t_replace repl;
 	struct ip6t_standard entries[3];
 	struct ip6t_error term;
-} initial_table __initdata
-= { { "filter", FILTER_VALID_HOOKS, 4,
-      sizeof(struct ip6t_standard) * 3 + sizeof(struct ip6t_error),
-      { [NF_IP6_LOCAL_IN] = 0,
-	[NF_IP6_FORWARD] = sizeof(struct ip6t_standard),
-	[NF_IP6_LOCAL_OUT] = sizeof(struct ip6t_standard) * 2 },
-      { [NF_IP6_LOCAL_IN] = 0,
-	[NF_IP6_FORWARD] = sizeof(struct ip6t_standard),
-	[NF_IP6_LOCAL_OUT] = sizeof(struct ip6t_standard) * 2 },
-      0, NULL, { } },
-    {
-	    /* LOCAL_IN */
-	    { { { { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, "", "", { 0 }, { 0 }, 0, 0, 0 },
-		0,
-		sizeof(struct ip6t_entry),
-		sizeof(struct ip6t_standard),
-		0, { 0, 0 }, { } },
-	      { { { { IP6T_ALIGN(sizeof(struct ip6t_standard_target)), "" } }, { } },
-		-NF_ACCEPT - 1 } },
-	    /* FORWARD */
-	    { { { { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, "", "", { 0 }, { 0 }, 0, 0, 0 },
-		0,
-		sizeof(struct ip6t_entry),
-		sizeof(struct ip6t_standard),
-		0, { 0, 0 }, { } },
-	      { { { { IP6T_ALIGN(sizeof(struct ip6t_standard_target)), "" } }, { } },
-		-NF_ACCEPT - 1 } },
-	    /* LOCAL_OUT */
-	    { { { { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, "", "", { 0 }, { 0 }, 0, 0, 0 },
-		0,
-		sizeof(struct ip6t_entry),
-		sizeof(struct ip6t_standard),
-		0, { 0, 0 }, { } },
-	      { { { { IP6T_ALIGN(sizeof(struct ip6t_standard_target)), "" } }, { } },
-		-NF_ACCEPT - 1 } }
-    },
-    /* ERROR */
-    { { { { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, { { { 0 } } }, "", "", { 0 }, { 0 }, 0, 0, 0 },
-	0,
-	sizeof(struct ip6t_entry),
-	sizeof(struct ip6t_error),
-	0, { 0, 0 }, { } },
-      { { { { IP6T_ALIGN(sizeof(struct ip6t_error_target)), IP6T_ERROR_TARGET } },
-	  { } },
-	"ERROR"
-      }
-    }
+} initial_table __initdata = {
+	.repl = {
+		.name = "filter",
+		.valid_hooks = FILTER_VALID_HOOKS,
+		.num_entries = 4,
+		.size = sizeof(struct ip6t_standard) * 3 + sizeof(struct ip6t_error),
+		.hook_entry = {
+			[NF_IP6_LOCAL_IN] = 0,
+			[NF_IP6_FORWARD] = sizeof(struct ip6t_standard),
+			[NF_IP6_LOCAL_OUT] = sizeof(struct ip6t_standard) * 2
+		},
+		.underflow = {
+			[NF_IP6_LOCAL_IN] = 0,
+			[NF_IP6_FORWARD] = sizeof(struct ip6t_standard),
+			[NF_IP6_LOCAL_OUT] = sizeof(struct ip6t_standard) * 2
+		},
+	},
+	.entries = {
+		IP6T_STANDARD_INIT(NF_ACCEPT),	/* LOCAL_IN */
+		IP6T_STANDARD_INIT(NF_ACCEPT),	/* FORWARD */
+		IP6T_STANDARD_INIT(NF_ACCEPT),	/* LOCAL_OUT */
+	},
+	.term = IP6T_ERROR_INIT,		/* ERROR */
 };
 
 static struct xt_table packet_filter = {
@@ -84,32 +60,32 @@ static struct xt_table packet_filter = {
 /* The work comes in here from netfilter.c. */
 static unsigned int
 ip6t_hook(unsigned int hook,
-	 struct sk_buff **pskb,
+	 struct sk_buff *skb,
 	 const struct net_device *in,
 	 const struct net_device *out,
 	 int (*okfn)(struct sk_buff *))
 {
-	return ip6t_do_table(pskb, hook, in, out, &packet_filter);
+	return ip6t_do_table(skb, hook, in, out, &packet_filter);
 }
 
 static unsigned int
 ip6t_local_out_hook(unsigned int hook,
-		   struct sk_buff **pskb,
+		   struct sk_buff *skb,
 		   const struct net_device *in,
 		   const struct net_device *out,
 		   int (*okfn)(struct sk_buff *))
 {
 #if 0
 	/* root is playing with raw sockets. */
-	if ((*pskb)->len < sizeof(struct iphdr)
-	    || (*pskb)->nh.iph->ihl * 4 < sizeof(struct iphdr)) {
+	if (skb->len < sizeof(struct iphdr)
+	    || ip_hdrlen(skb) < sizeof(struct iphdr)) {
 		if (net_ratelimit())
 			printk("ip6t_hook: happy cracking.\n");
 		return NF_ACCEPT;
 	}
 #endif
 
-	return ip6t_do_table(pskb, hook, in, out, &packet_filter);
+	return ip6t_do_table(skb, hook, in, out, &packet_filter);
 }
 
 static struct nf_hook_ops ip6t_ops[] = {

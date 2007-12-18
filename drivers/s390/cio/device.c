@@ -21,6 +21,7 @@
 #include <asm/ccwdev.h>
 #include <asm/cio.h>
 #include <asm/param.h>		/* HZ */
+#include <asm/cmb.h>
 
 #include "cio.h"
 #include "cio_debug.h"
@@ -56,13 +57,12 @@ ccw_bus_match (struct device * dev, struct device_driver * drv)
 /* Store modalias string delimited by prefix/suffix string into buffer with
  * specified size. Return length of resulting string (excluding trailing '\0')
  * even if string doesn't fit buffer (snprintf semantics). */
-static int snprint_alias(char *buf, size_t size, const char *prefix,
+static int snprint_alias(char *buf, size_t size,
 			 struct ccw_device_id *id, const char *suffix)
 {
 	int len;
 
-	len = snprintf(buf, size, "%sccw:t%04Xm%02X", prefix, id->cu_type,
-		       id->cu_model);
+	len = snprintf(buf, size, "ccw:t%04Xm%02X", id->cu_type, id->cu_model);
 	if (len > size)
 		return len;
 	buf += len;
@@ -79,59 +79,38 @@ static int snprint_alias(char *buf, size_t size, const char *prefix,
 
 /* Set up environment variables for ccw device uevent. Return 0 on success,
  * non-zero otherwise. */
-static int ccw_uevent(struct device *dev, char **envp, int num_envp,
-		      char *buffer, int buffer_size)
+static int ccw_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct ccw_device *cdev = to_ccwdev(dev);
 	struct ccw_device_id *id = &(cdev->id);
-	int i = 0;
-	int len;
+	int ret;
+	char modalias_buf[30];
 
 	/* CU_TYPE= */
-	len = snprintf(buffer, buffer_size, "CU_TYPE=%04X", id->cu_type) + 1;
-	if (len > buffer_size || i >= num_envp)
-		return -ENOMEM;
-	envp[i++] = buffer;
-	buffer += len;
-	buffer_size -= len;
+	ret = add_uevent_var(env, "CU_TYPE=%04X", id->cu_type);
+	if (ret)
+		return ret;
 
 	/* CU_MODEL= */
-	len = snprintf(buffer, buffer_size, "CU_MODEL=%02X", id->cu_model) + 1;
-	if (len > buffer_size || i >= num_envp)
-		return -ENOMEM;
-	envp[i++] = buffer;
-	buffer += len;
-	buffer_size -= len;
+	ret = add_uevent_var(env, "CU_MODEL=%02X", id->cu_model);
+	if (ret)
+		return ret;
 
 	/* The next two can be zero, that's ok for us */
 	/* DEV_TYPE= */
-	len = snprintf(buffer, buffer_size, "DEV_TYPE=%04X", id->dev_type) + 1;
-	if (len > buffer_size || i >= num_envp)
-		return -ENOMEM;
-	envp[i++] = buffer;
-	buffer += len;
-	buffer_size -= len;
+	ret = add_uevent_var(env, "DEV_TYPE=%04X", id->dev_type);
+	if (ret)
+		return ret;
 
 	/* DEV_MODEL= */
-	len = snprintf(buffer, buffer_size, "DEV_MODEL=%02X",
-			(unsigned char) id->dev_model) + 1;
-	if (len > buffer_size || i >= num_envp)
-		return -ENOMEM;
-	envp[i++] = buffer;
-	buffer += len;
-	buffer_size -= len;
+	ret = add_uevent_var(env, "DEV_MODEL=%02X", id->dev_model);
+	if (ret)
+		return ret;
 
 	/* MODALIAS=  */
-	len = snprint_alias(buffer, buffer_size, "MODALIAS=", id, "") + 1;
-	if (len > buffer_size || i >= num_envp)
-		return -ENOMEM;
-	envp[i++] = buffer;
-	buffer += len;
-	buffer_size -= len;
-
-	envp[i] = NULL;
-
-	return 0;
+	snprint_alias(modalias_buf, sizeof(modalias_buf), id, "");
+	ret = add_uevent_var(env, "MODALIAS=%s", modalias_buf);
+	return ret;
 }
 
 struct bus_type ccw_bus_type;
@@ -143,7 +122,7 @@ static void io_subchannel_verify(struct device *);
 static void io_subchannel_ioterm(struct device *);
 static void io_subchannel_shutdown(struct subchannel *);
 
-struct css_driver io_subchannel_driver = {
+static struct css_driver io_subchannel_driver = {
 	.subchannel_type = SUBCHANNEL_TYPE_IO,
 	.drv = {
 		.name = "io_subchannel",
@@ -230,12 +209,18 @@ static ssize_t
 chpids_show (struct device * dev, struct device_attribute *attr, char * buf)
 {
 	struct subchannel *sch = to_subchannel(dev);
-	struct ssd_info *ssd = &sch->ssd_info;
+	struct chsc_ssd_info *ssd = &sch->ssd_info;
 	ssize_t ret = 0;
 	int chp;
+	int mask;
 
-	for (chp = 0; chp < 8; chp++)
-		ret += sprintf (buf+ret, "%02x ", ssd->chpid[chp]);
+	for (chp = 0; chp < 8; chp++) {
+		mask = 0x80 >> chp;
+		if (ssd->path_mask & mask)
+			ret += sprintf(buf + ret, "%02x ", ssd->chpid[chp].id);
+		else
+			ret += sprintf(buf + ret, "00 ");
+	}
 	ret += sprintf (buf+ret, "\n");
 	return min((ssize_t)PAGE_SIZE, ret);
 }
@@ -280,7 +265,7 @@ modalias_show (struct device *dev, struct device_attribute *attr, char *buf)
 	struct ccw_device_id *id = &(cdev->id);
 	int len;
 
-	len = snprint_alias(buf, PAGE_SIZE, "", id, "\n") + 1;
+	len = snprint_alias(buf, PAGE_SIZE, id, "\n");
 
 	return len > PAGE_SIZE ? PAGE_SIZE : len;
 }
@@ -298,40 +283,25 @@ int ccw_device_is_orphan(struct ccw_device *cdev)
 	return sch_is_pseudo_sch(to_subchannel(cdev->dev.parent));
 }
 
-static void ccw_device_unregister(struct work_struct *work)
+static void ccw_device_unregister(struct ccw_device *cdev)
 {
-	struct ccw_device_private *priv;
-	struct ccw_device *cdev;
-
-	priv = container_of(work, struct ccw_device_private, kick_work);
-	cdev = priv->cdev;
 	if (test_and_clear_bit(1, &cdev->private->registered))
-		device_unregister(&cdev->dev);
+		device_del(&cdev->dev);
+}
+
+static void ccw_device_remove_orphan_cb(struct device *dev)
+{
+	struct ccw_device *cdev = to_ccwdev(dev);
+
+	ccw_device_unregister(cdev);
 	put_device(&cdev->dev);
 }
 
-static void
-ccw_device_remove_disconnected(struct ccw_device *cdev)
+static void ccw_device_remove_sch_cb(struct device *dev)
 {
 	struct subchannel *sch;
-	unsigned long flags;
-	/*
-	 * Forced offline in disconnected state means
-	 * 'throw away device'.
-	 */
-	if (ccw_device_is_orphan(cdev)) {
-		/* Deregister ccw device. */
-		spin_lock_irqsave(cdev->ccwlock, flags);
-		cdev->private->state = DEV_STATE_NOT_OPER;
-		spin_unlock_irqrestore(cdev->ccwlock, flags);
-		if (get_device(&cdev->dev)) {
-			PREPARE_WORK(&cdev->private->kick_work,
-				     ccw_device_unregister);
-			queue_work(ccw_device_work, &cdev->private->kick_work);
-		}
-		return ;
-	}
-	sch = to_subchannel(cdev->dev.parent);
+
+	sch = to_subchannel(dev);
 	css_sch_device_unregister(sch);
 	/* Reset intparm to zeroes. */
 	sch->schib.pmcw.intparm = 0;
@@ -339,8 +309,56 @@ ccw_device_remove_disconnected(struct ccw_device *cdev)
 	put_device(&sch->dev);
 }
 
-int
-ccw_device_set_offline(struct ccw_device *cdev)
+static void
+ccw_device_remove_disconnected(struct ccw_device *cdev)
+{
+	unsigned long flags;
+	int rc;
+
+	/*
+	 * Forced offline in disconnected state means
+	 * 'throw away device'.
+	 */
+	if (ccw_device_is_orphan(cdev)) {
+		/*
+		 * Deregister ccw device.
+		 * Unfortunately, we cannot do this directly from the
+		 * attribute method.
+		 */
+		spin_lock_irqsave(cdev->ccwlock, flags);
+		cdev->private->state = DEV_STATE_NOT_OPER;
+		spin_unlock_irqrestore(cdev->ccwlock, flags);
+		rc = device_schedule_callback(&cdev->dev,
+					      ccw_device_remove_orphan_cb);
+		if (rc)
+			CIO_MSG_EVENT(2, "Couldn't unregister orphan "
+				      "0.%x.%04x\n",
+				      cdev->private->dev_id.ssid,
+				      cdev->private->dev_id.devno);
+		return;
+	}
+	/* Deregister subchannel, which will kill the ccw device. */
+	rc = device_schedule_callback(cdev->dev.parent,
+				      ccw_device_remove_sch_cb);
+	if (rc)
+		CIO_MSG_EVENT(2, "Couldn't unregister disconnected device "
+			      "0.%x.%04x\n",
+			      cdev->private->dev_id.ssid,
+			      cdev->private->dev_id.devno);
+}
+
+/**
+ * ccw_device_set_offline() - disable a ccw device for I/O
+ * @cdev: target ccw device
+ *
+ * This function calls the driver's set_offline() function for @cdev, if
+ * given, and then disables @cdev.
+ * Returns:
+ *   %0 on success and a negative error value on failure.
+ * Context:
+ *  enabled, ccw device lock not held
+ */
+int ccw_device_set_offline(struct ccw_device *cdev)
 {
 	int ret;
 
@@ -369,15 +387,28 @@ ccw_device_set_offline(struct ccw_device *cdev)
 	if (ret == 0)
 		wait_event(cdev->private->wait_q, dev_fsm_final_state(cdev));
 	else {
-		pr_debug("ccw_device_offline returned %d, device %s\n",
-			 ret, cdev->dev.bus_id);
+		CIO_MSG_EVENT(2, "ccw_device_offline returned %d, "
+			      "device 0.%x.%04x\n",
+			      ret, cdev->private->dev_id.ssid,
+			      cdev->private->dev_id.devno);
 		cdev->online = 1;
 	}
  	return ret;
 }
 
-int
-ccw_device_set_online(struct ccw_device *cdev)
+/**
+ * ccw_device_set_online() - enable a ccw device for I/O
+ * @cdev: target ccw device
+ *
+ * This function first enables @cdev and then calls the driver's set_online()
+ * function for @cdev, if given. If set_online() returns an error, @cdev is
+ * disabled again.
+ * Returns:
+ *   %0 on success and a negative error value on failure.
+ * Context:
+ *  enabled, ccw device lock not held
+ */
+int ccw_device_set_online(struct ccw_device *cdev)
 {
 	int ret;
 
@@ -392,8 +423,10 @@ ccw_device_set_online(struct ccw_device *cdev)
 	if (ret == 0)
 		wait_event(cdev->private->wait_q, dev_fsm_final_state(cdev));
 	else {
-		pr_debug("ccw_device_online returned %d, device %s\n",
-			 ret, cdev->dev.bus_id);
+		CIO_MSG_EVENT(2, "ccw_device_online returned %d, "
+			      "device 0.%x.%04x\n",
+			      ret, cdev->private->dev_id.ssid,
+			      cdev->private->dev_id.devno);
 		return ret;
 	}
 	if (cdev->private->state != DEV_STATE_ONLINE)
@@ -407,17 +440,69 @@ ccw_device_set_online(struct ccw_device *cdev)
 	spin_unlock_irq(cdev->ccwlock);
 	if (ret == 0)
 		wait_event(cdev->private->wait_q, dev_fsm_final_state(cdev));
-	else 
-		pr_debug("ccw_device_offline returned %d, device %s\n",
-			 ret, cdev->dev.bus_id);
+	else
+		CIO_MSG_EVENT(2, "ccw_device_offline returned %d, "
+			      "device 0.%x.%04x\n",
+			      ret, cdev->private->dev_id.ssid,
+			      cdev->private->dev_id.devno);
 	return (ret == 0) ? -ENODEV : ret;
 }
 
-static ssize_t
-online_store (struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static void online_store_handle_offline(struct ccw_device *cdev)
+{
+	if (cdev->private->state == DEV_STATE_DISCONNECTED)
+		ccw_device_remove_disconnected(cdev);
+	else if (cdev->drv && cdev->drv->set_offline)
+		ccw_device_set_offline(cdev);
+}
+
+static int online_store_recog_and_online(struct ccw_device *cdev)
+{
+	int ret;
+
+	/* Do device recognition, if needed. */
+	if (cdev->id.cu_type == 0) {
+		ret = ccw_device_recognition(cdev);
+		if (ret) {
+			CIO_MSG_EVENT(0, "Couldn't start recognition "
+				      "for device 0.%x.%04x (ret=%d)\n",
+				      cdev->private->dev_id.ssid,
+				      cdev->private->dev_id.devno, ret);
+			return ret;
+		}
+		wait_event(cdev->private->wait_q,
+			   cdev->private->flags.recog_done);
+	}
+	if (cdev->drv && cdev->drv->set_online)
+		ccw_device_set_online(cdev);
+	return 0;
+}
+static void online_store_handle_online(struct ccw_device *cdev, int force)
+{
+	int ret;
+
+	ret = online_store_recog_and_online(cdev);
+	if (ret)
+		return;
+	if (force && cdev->private->state == DEV_STATE_BOXED) {
+		ret = ccw_device_stlck(cdev);
+		if (ret) {
+			dev_warn(&cdev->dev,
+				 "ccw_device_stlck returned %d!\n", ret);
+			return;
+		}
+		if (cdev->id.cu_type == 0)
+			cdev->private->state = DEV_STATE_NOT_OPER;
+		online_store_recog_and_online(cdev);
+	}
+
+}
+
+static ssize_t online_store (struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t count)
 {
 	struct ccw_device *cdev = to_ccwdev(dev);
-	int i, force, ret;
+	int i, force;
 	char *tmp;
 
 	if (atomic_cmpxchg(&cdev->private->onoff, 0, 1) != 0)
@@ -434,51 +519,17 @@ online_store (struct device *dev, struct device_attribute *attr, const char *buf
 		force = 0;
 		i = simple_strtoul(buf, &tmp, 16);
 	}
-	if (i == 1) {
-		/* Do device recognition, if needed. */
-		if (cdev->id.cu_type == 0) {
-			ret = ccw_device_recognition(cdev);
-			if (ret) {
-				printk(KERN_WARNING"Couldn't start recognition "
-				       "for device %s (ret=%d)\n",
-				       cdev->dev.bus_id, ret);
-				goto out;
-			}
-			wait_event(cdev->private->wait_q,
-				   cdev->private->flags.recog_done);
-		}
-		if (cdev->drv && cdev->drv->set_online)
-			ccw_device_set_online(cdev);
-	} else if (i == 0) {
-		if (cdev->private->state == DEV_STATE_DISCONNECTED)
-			ccw_device_remove_disconnected(cdev);
-		else if (cdev->drv && cdev->drv->set_offline)
-			ccw_device_set_offline(cdev);
+
+	switch (i) {
+	case 0:
+		online_store_handle_offline(cdev);
+		break;
+	case 1:
+		online_store_handle_online(cdev, force);
+		break;
+	default:
+		count = -EINVAL;
 	}
-	if (force && cdev->private->state == DEV_STATE_BOXED) {
-		ret = ccw_device_stlck(cdev);
-		if (ret) {
-			printk(KERN_WARNING"ccw_device_stlck for device %s "
-			       "returned %d!\n", cdev->dev.bus_id, ret);
-			goto out;
-		}
-		/* Do device recognition, if needed. */
-		if (cdev->id.cu_type == 0) {
-			cdev->private->state = DEV_STATE_NOT_OPER;
-			ret = ccw_device_recognition(cdev);
-			if (ret) {
-				printk(KERN_WARNING"Couldn't start recognition "
-				       "for device %s (ret=%d)\n",
-				       cdev->dev.bus_id, ret);
-				goto out;
-			}
-			wait_event(cdev->private->wait_q,
-				   cdev->private->flags.recog_done);
-		}
-		if (cdev->drv && cdev->drv->set_online)
-			ccw_device_set_online(cdev);
-	}
-	out:
 	if (cdev->drv)
 		module_put(cdev->drv->owner);
 	atomic_set(&cdev->private->onoff, 0);
@@ -548,17 +599,10 @@ static struct attribute_group ccwdev_attr_group = {
 	.attrs = ccwdev_attrs,
 };
 
-static int
-device_add_files (struct device *dev)
-{
-	return sysfs_create_group(&dev->kobj, &ccwdev_attr_group);
-}
-
-static void
-device_remove_files(struct device *dev)
-{
-	sysfs_remove_group(&dev->kobj, &ccwdev_attr_group);
-}
+static struct attribute_group *ccwdev_attr_groups[] = {
+	&ccwdev_attr_group,
+	NULL,
+};
 
 /* this is a simple abstraction for device_register that sets the
  * correct bus type and adds the bus specific files */
@@ -573,10 +617,6 @@ static int ccw_device_register(struct ccw_device *cdev)
 		return ret;
 
 	set_bit(1, &cdev->private->registered);
-	if ((ret = device_add_files(dev))) {
-		if (test_and_clear_bit(1, &cdev->private->registered))
-			device_del(dev);
-	}
 	return ret;
 }
 
@@ -648,10 +688,6 @@ ccw_device_add_changed(struct work_struct *work)
 		return;
 	}
 	set_bit(1, &cdev->private->registered);
-	if (device_add_files(&cdev->dev)) {
-		if (test_and_clear_bit(1, &cdev->private->registered))
-			device_unregister(&cdev->dev);
-	}
 }
 
 void ccw_device_do_unreg_rereg(struct work_struct *work)
@@ -664,9 +700,7 @@ void ccw_device_do_unreg_rereg(struct work_struct *work)
 	cdev = priv->cdev;
 	sch = to_subchannel(cdev->dev.parent);
 
-	device_remove_files(&cdev->dev);
-	if (test_and_clear_bit(1, &cdev->private->registered))
-		device_del(&cdev->dev);
+	ccw_device_unregister(cdev);
 	PREPARE_WORK(&cdev->private->kick_work,
 		     ccw_device_add_changed);
 	queue_work(ccw_device_work, &cdev->private->kick_work);
@@ -704,7 +738,8 @@ static int io_subchannel_initialize_dev(struct subchannel *sch,
 	atomic_set(&cdev->private->onoff, 0);
 	cdev->dev.parent = &sch->dev;
 	cdev->dev.release = ccw_device_release;
-	INIT_LIST_HEAD(&cdev->private->kick_work.entry);
+	INIT_WORK(&cdev->private->kick_work, NULL);
+	cdev->dev.groups = ccwdev_attr_groups;
 	/* Do first half of device_register. */
 	device_initialize(&cdev->dev);
 	if (!get_device(&sch->dev)) {
@@ -736,6 +771,7 @@ static int io_subchannel_recog(struct ccw_device *, struct subchannel *);
 static void sch_attach_device(struct subchannel *sch,
 			      struct ccw_device *cdev)
 {
+	css_update_ssd_info(sch);
 	spin_lock_irq(sch->lock);
 	sch->dev.driver_data = cdev;
 	cdev->private->schid = sch->schid;
@@ -871,7 +907,7 @@ io_subchannel_register(struct work_struct *work)
 	priv = container_of(work, struct ccw_device_private, kick_work);
 	cdev = priv->cdev;
 	sch = to_subchannel(cdev->dev.parent);
-
+	css_update_ssd_info(sch);
 	/*
 	 * io_subchannel_register() will also be called after device
 	 * recognition has been done for a boxed device (which will already
@@ -883,16 +919,25 @@ io_subchannel_register(struct work_struct *work)
 			ret = device_reprobe(&cdev->dev);
 			if (ret)
 				/* We can't do much here. */
-				dev_info(&cdev->dev, "device_reprobe() returned"
-					 " %d\n", ret);
+				CIO_MSG_EVENT(2, "device_reprobe() returned"
+					      " %d for 0.%x.%04x\n", ret,
+					      cdev->private->dev_id.ssid,
+					      cdev->private->dev_id.devno);
 		}
 		goto out;
 	}
+	/*
+	 * Now we know this subchannel will stay, we can throw
+	 * our delayed uevent.
+	 */
+	sch->dev.uevent_suppress = 0;
+	kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
 	/* make it known to the system */
 	ret = ccw_device_register(cdev);
 	if (ret) {
-		printk (KERN_WARNING "%s: could not register %s\n",
-			__func__, cdev->dev.bus_id);
+		CIO_MSG_EVENT(0, "Could not register ccw dev 0.%x.%04x: %d\n",
+			      cdev->private->dev_id.ssid,
+			      cdev->private->dev_id.devno, ret);
 		put_device(&cdev->dev);
 		spin_lock_irqsave(sch->lock, flags);
 		sch->dev.driver_data = NULL;
@@ -913,8 +958,7 @@ out:
 		wake_up(&ccw_device_init_wq);
 }
 
-void
-ccw_device_call_sch_unregister(struct work_struct *work)
+static void ccw_device_call_sch_unregister(struct work_struct *work)
 {
 	struct ccw_device_private *priv;
 	struct ccw_device *cdev;
@@ -1067,6 +1111,7 @@ io_subchannel_probe (struct subchannel *sch)
 		 * device, e.g. the console.
 		 */
 		cdev = sch->dev.driver_data;
+		cdev->dev.groups = ccwdev_attr_groups;
 		device_initialize(&cdev->dev);
 		ccw_device_register(cdev);
 		/*
@@ -1133,15 +1178,8 @@ io_subchannel_remove (struct subchannel *sch)
 	sch->dev.driver_data = NULL;
 	cdev->private->state = DEV_STATE_NOT_OPER;
 	spin_unlock_irqrestore(cdev->ccwlock, flags);
-	/*
-	 * Put unregistration on workqueue to avoid livelocks on the css bus
-	 * semaphore.
-	 */
-	if (get_device(&cdev->dev)) {
-		PREPARE_WORK(&cdev->private->kick_work,
-			     ccw_device_unregister);
-		queue_work(ccw_device_work, &cdev->private->kick_work);
-	}
+	ccw_device_unregister(cdev);
+	put_device(&cdev->dev);
 	return 0;
 }
 
@@ -1299,8 +1337,19 @@ __ccwdev_check_busid(struct device *dev, void *id)
 }
 
 
-struct ccw_device *
-get_ccwdev_by_busid(struct ccw_driver *cdrv, const char *bus_id)
+/**
+ * get_ccwdev_by_busid() - obtain device from a bus id
+ * @cdrv: driver the device is owned by
+ * @bus_id: bus id of the device to be searched
+ *
+ * This function searches all devices owned by @cdrv for a device with a bus
+ * id matching @bus_id.
+ * Returns:
+ *  If a match is found, its reference count of the found device is increased
+ *  and it is returned; else %NULL is returned.
+ */
+struct ccw_device *get_ccwdev_by_busid(struct ccw_driver *cdrv,
+				       const char *bus_id)
 {
 	struct device *dev;
 	struct device_driver *drv;
@@ -1352,7 +1401,6 @@ ccw_device_remove (struct device *dev)
 	struct ccw_driver *cdrv = cdev->drv;
 	int ret;
 
-	pr_debug("removing device %s\n", cdev->dev.bus_id);
 	if (cdrv->remove)
 		cdrv->remove(cdev);
 	if (cdev->online) {
@@ -1365,12 +1413,24 @@ ccw_device_remove (struct device *dev)
 				   dev_fsm_final_state(cdev));
 		else
 			//FIXME: we can't fail!
-			pr_debug("ccw_device_offline returned %d, device %s\n",
-				 ret, cdev->dev.bus_id);
+			CIO_MSG_EVENT(2, "ccw_device_offline returned %d, "
+				      "device 0.%x.%04x\n",
+				      ret, cdev->private->dev_id.ssid,
+				      cdev->private->dev_id.devno);
 	}
 	ccw_device_set_timeout(cdev, 0);
 	cdev->drv = NULL;
 	return 0;
+}
+
+static void ccw_device_shutdown(struct device *dev)
+{
+	struct ccw_device *cdev;
+
+	cdev = to_ccwdev(dev);
+	if (cdev->drv && cdev->drv->shutdown)
+		cdev->drv->shutdown(cdev);
+	disable_cmf(cdev);
 }
 
 struct bus_type ccw_bus_type = {
@@ -1379,10 +1439,18 @@ struct bus_type ccw_bus_type = {
 	.uevent = ccw_uevent,
 	.probe  = ccw_device_probe,
 	.remove = ccw_device_remove,
+	.shutdown = ccw_device_shutdown,
 };
 
-int
-ccw_driver_register (struct ccw_driver *cdriver)
+/**
+ * ccw_driver_register() - register a ccw driver
+ * @cdriver: driver to be registered
+ *
+ * This function is mainly a wrapper around driver_register().
+ * Returns:
+ *   %0 on success and a negative error value on failure.
+ */
+int ccw_driver_register(struct ccw_driver *cdriver)
 {
 	struct device_driver *drv = &cdriver->driver;
 
@@ -1392,8 +1460,13 @@ ccw_driver_register (struct ccw_driver *cdriver)
 	return driver_register(drv);
 }
 
-void
-ccw_driver_unregister (struct ccw_driver *cdriver)
+/**
+ * ccw_driver_unregister() - deregister a ccw driver
+ * @cdriver: driver to be deregistered
+ *
+ * This function is mainly a wrapper around driver_unregister().
+ */
+void ccw_driver_unregister(struct ccw_driver *cdriver)
 {
 	driver_unregister(&cdriver->driver);
 }

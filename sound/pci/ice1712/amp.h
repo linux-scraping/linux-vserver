@@ -6,7 +6,7 @@
  *
  *   Lowlevel functions for Advanced Micro Peripherals Ltd AUDIO2000
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -42,7 +42,7 @@
 #define WM_DAC_CTRL	0x02
 #define WM_INT_CTRL	0x03
 
-extern const struct snd_ice1712_card_info  snd_vt1724_amp_cards[];
+extern struct snd_ice1712_card_info  snd_vt1724_amp_cards[];
 
 
 #endif /* __SOUND_AMP_H */

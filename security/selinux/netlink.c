@@ -17,6 +17,7 @@
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/selinux_netlink.h>
+#include <net/net_namespace.h>
 
 static struct sock *selnl;
 
@@ -66,7 +67,7 @@ static void selnl_add_payload(struct nlmsghdr *nlh, int len, int msgtype, void *
 static void selnl_notify(int msgtype, void *data)
 {
 	int len;
-	unsigned char *tmp;
+	sk_buff_data_t tmp;
 	struct sk_buff *skb;
 	struct nlmsghdr *nlh;
 	
@@ -104,8 +105,8 @@ void selnl_notify_policyload(u32 seqno)
 
 static int __init selnl_init(void)
 {
-	selnl = netlink_kernel_create(NETLINK_SELINUX, SELNLGRP_MAX, NULL,
-	                              THIS_MODULE);
+	selnl = netlink_kernel_create(&init_net, NETLINK_SELINUX,
+				      SELNLGRP_MAX, NULL, NULL, THIS_MODULE);
 	if (selnl == NULL)
 		panic("SELinux:  Cannot create netlink socket.");
 	netlink_set_nonroot(NETLINK_SELINUX, NL_NONROOT_RECV);	

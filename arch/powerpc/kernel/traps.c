@@ -33,8 +33,8 @@
 #include <linux/kexec.h>
 #include <linux/backlight.h>
 #include <linux/bug.h>
+#include <linux/kdebug.h>
 
-#include <asm/kdebug.h>
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -72,39 +72,15 @@ EXPORT_SYMBOL(__debugger_dabr_match);
 EXPORT_SYMBOL(__debugger_fault_handler);
 #endif
 
-ATOMIC_NOTIFIER_HEAD(powerpc_die_chain);
-
-int register_die_notifier(struct notifier_block *nb)
-{
-	return atomic_notifier_chain_register(&powerpc_die_chain, nb);
-}
-EXPORT_SYMBOL(register_die_notifier);
-
-int unregister_die_notifier(struct notifier_block *nb)
-{
-	return atomic_notifier_chain_unregister(&powerpc_die_chain, nb);
-}
-EXPORT_SYMBOL(unregister_die_notifier);
-
 /*
  * Trap & Exception support
  */
 
-static DEFINE_SPINLOCK(die_lock);
-
-int die(const char *str, struct pt_regs *regs, long err)
-{
-	static int die_counter;
-
-	if (debugger(regs))
-		return 1;
-
-	console_verbose();
-	spin_lock_irq(&die_lock);
-	bust_spinlocks(1);
 #ifdef CONFIG_PMAC_BACKLIGHT
+static void pmac_backlight_unblank(void)
+{
 	mutex_lock(&pmac_backlight_mutex);
-	if (machine_is(powermac) && pmac_backlight) {
+	if (pmac_backlight) {
 		struct backlight_properties *props;
 
 		props = &pmac_backlight->props;
@@ -113,26 +89,68 @@ int die(const char *str, struct pt_regs *regs, long err)
 		backlight_update_status(pmac_backlight);
 	}
 	mutex_unlock(&pmac_backlight_mutex);
+}
+#else
+static inline void pmac_backlight_unblank(void) { }
 #endif
-	printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
+
+int die(const char *str, struct pt_regs *regs, long err)
+{
+	static struct {
+		spinlock_t lock;
+		u32 lock_owner;
+		int lock_owner_depth;
+	} die = {
+		.lock =			__SPIN_LOCK_UNLOCKED(die.lock),
+		.lock_owner =		-1,
+		.lock_owner_depth =	0
+	};
+	static int die_counter;
+	unsigned long flags;
+
+	if (debugger(regs))
+		return 1;
+
+	oops_enter();
+
+	if (die.lock_owner != raw_smp_processor_id()) {
+		console_verbose();
+		spin_lock_irqsave(&die.lock, flags);
+		die.lock_owner = smp_processor_id();
+		die.lock_owner_depth = 0;
+		bust_spinlocks(1);
+		if (machine_is(powermac))
+			pmac_backlight_unblank();
+	} else {
+		local_save_flags(flags);
+	}
+
+	if (++die.lock_owner_depth < 3) {
+		printk("Oops: %s, sig: %ld [#%d]\n", str, err, ++die_counter);
 #ifdef CONFIG_PREEMPT
-	printk("PREEMPT ");
+		printk("PREEMPT ");
 #endif
 #ifdef CONFIG_SMP
-	printk("SMP NR_CPUS=%d ", NR_CPUS);
+		printk("SMP NR_CPUS=%d ", NR_CPUS);
 #endif
 #ifdef CONFIG_DEBUG_PAGEALLOC
-	printk("DEBUG_PAGEALLOC ");
+		printk("DEBUG_PAGEALLOC ");
 #endif
 #ifdef CONFIG_NUMA
-	printk("NUMA ");
+		printk("NUMA ");
 #endif
-	printk("%s\n", ppc_md.name ? "" : ppc_md.name);
+		printk("%s\n", ppc_md.name ? ppc_md.name : "");
 
-	print_modules();
-	show_regs(regs);
+		print_modules();
+		show_regs(regs);
+	} else {
+		printk("Recursive die() failure, output suppressed\n");
+	}
+
 	bust_spinlocks(0);
-	spin_unlock_irq(&die_lock);
+	die.lock_owner = -1;
+	add_taint(TAINT_DIE);
+	spin_unlock_irqrestore(&die.lock, flags);
 
 	if (kexec_should_crash(current) ||
 		kexec_sr_activated(smp_processor_id()))
@@ -145,6 +163,7 @@ int die(const char *str, struct pt_regs *regs, long err)
 	if (panic_on_oops)
 		panic("Fatal exception");
 
+	oops_exit();
 	do_exit(err);
 
 	return 0;
@@ -153,11 +172,21 @@ int die(const char *str, struct pt_regs *regs, long err)
 void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 {
 	siginfo_t info;
+	const char fmt32[] = KERN_INFO "%s[%d]: unhandled signal %d " \
+			"at %08lx nip %08lx lr %08lx code %x\n";
+	const char fmt64[] = KERN_INFO "%s[%d]: unhandled signal %d " \
+			"at %016lx nip %016lx lr %016lx code %x\n";
 
 	if (!user_mode(regs)) {
 		if (die("Exception in kernel mode", regs, signr))
 			return;
-	}
+	} else if (show_unhandled_signals &&
+		    unhandled_signal(current, signr) &&
+		    printk_ratelimit()) {
+			printk(regs->msr & MSR_SF ? fmt64 : fmt32,
+				current->comm, current->pid, signr,
+				addr, regs->nip, regs->link, code);
+		}
 
 	memset(&info, 0, sizeof(info));
 	info.si_signo = signr;
@@ -172,7 +201,7 @@ void _exception(int signr, struct pt_regs *regs, int code, unsigned long addr)
 	 * generate the same exception over and over again and we get
 	 * nowhere.  Better to kill it and let the kernel panic.
 	 */
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		__sighandler_t handler;
 
 		spin_lock_irq(&current->sighand->siglock);
@@ -280,7 +309,7 @@ static inline int check_io_access(struct pt_regs *regs)
 #ifndef CONFIG_FSL_BOOKE
 #define get_mc_reason(regs)	((regs)->dsisr)
 #else
-#define get_mc_reason(regs)	(mfspr(SPRN_MCSR))
+#define get_mc_reason(regs)	(mfspr(SPRN_MCSR) & MCSR_MASK)
 #endif
 #define REASON_FP		ESR_FP
 #define REASON_ILLEGAL		(ESR_PIL | ESR_PUO)
@@ -305,46 +334,9 @@ static inline int check_io_access(struct pt_regs *regs)
 #define clear_single_step(regs)	((regs)->msr &= ~MSR_SE)
 #endif
 
-/*
- * This is "fall-back" implementation for configurations
- * which don't provide platform-specific machine check info
- */
-void __attribute__ ((weak))
-platform_machine_check(struct pt_regs *regs)
+static int generic_machine_check_exception(struct pt_regs *regs)
 {
-}
-
-void machine_check_exception(struct pt_regs *regs)
-{
-	int recover = 0;
 	unsigned long reason = get_mc_reason(regs);
-
-	/* See if any machine dependent calls */
-	if (ppc_md.machine_check_exception)
-		recover = ppc_md.machine_check_exception(regs);
-
-	if (recover)
-		return;
-
-	if (user_mode(regs)) {
-		regs->msr |= MSR_RI;
-		_exception(SIGBUS, regs, BUS_ADRERR, regs->nip);
-		return;
-	}
-
-#if defined(CONFIG_8xx) && defined(CONFIG_PCI)
-	/* the qspan pci read routines can cause machine checks -- Cort */
-	bad_page_fault(regs, regs->dar, SIGBUS);
-	return;
-#endif
-
-	if (debugger_fault_handler(regs)) {
-		regs->msr |= MSR_RI;
-		return;
-	}
-
-	if (check_io_access(regs))
-		return;
 
 #if defined(CONFIG_4xx) && !defined(CONFIG_440A)
 	if (reason & ESR_IMCP) {
@@ -395,8 +387,6 @@ void machine_check_exception(struct pt_regs *regs)
 		printk("Data Cache Push Parity Error\n");
 	if (reason & MCSR_DCPERR)
 		printk("Data Cache Parity Error\n");
-	if (reason & MCSR_GL_CI)
-		printk("Guarded Load or Cache-Inhibited stwcx.\n");
 	if (reason & MCSR_BUS_IAERR)
 		printk("Bus - Instruction Address Error\n");
 	if (reason & MCSR_BUS_RAERR)
@@ -463,11 +453,41 @@ void machine_check_exception(struct pt_regs *regs)
 	}
 #endif /* CONFIG_4xx */
 
-	/*
-	 * Optional platform-provided routine to print out
-	 * additional info, e.g. bus error registers.
-	 */
-	platform_machine_check(regs);
+	return 0;
+}
+
+void machine_check_exception(struct pt_regs *regs)
+{
+	int recover = 0;
+
+	/* See if any machine dependent calls */
+	if (ppc_md.machine_check_exception)
+		recover = ppc_md.machine_check_exception(regs);
+	else
+		recover = generic_machine_check_exception(regs);
+
+	if (recover)
+		return;
+
+	if (user_mode(regs)) {
+		regs->msr |= MSR_RI;
+		_exception(SIGBUS, regs, BUS_ADRERR, regs->nip);
+		return;
+	}
+
+#if defined(CONFIG_8xx) && defined(CONFIG_PCI)
+	/* the qspan pci read routines can cause machine checks -- Cort */
+	bad_page_fault(regs, regs->dar, SIGBUS);
+	return;
+#endif
+
+	if (debugger_fault_handler(regs)) {
+		regs->msr |= MSR_RI;
+		return;
+	}
+
+	if (check_io_access(regs))
+		return;
 
 	if (debugger_fault_handler(regs))
 		return;
@@ -759,7 +779,7 @@ void __kprobes program_check_exception(struct pt_regs *regs)
 			return;
 
 		if (!(regs->msr & MSR_PR) &&  /* not user-mode */
-		    report_bug(regs->nip) == BUG_TRAP_TYPE_WARN) {
+		    report_bug(regs->nip, regs) == BUG_TRAP_TYPE_WARN) {
 			regs->nip += 4;
 			return;
 		}
@@ -861,7 +881,7 @@ void nonrecoverable_exception(struct pt_regs *regs)
 void trace_syscall(struct pt_regs *regs)
 {
 	printk("Task: %p(%d[#%u]), PC: %08lX/%08lX, Syscall: %3ld, Result: %s%ld    %s\n",
-	       current, current->pid, current->xid,
+	       current, task_pid_nr(current), current->xid,
 	       regs->nip, regs->link, regs->gpr[0],
 	       regs->ccr&0x10000000?"Error=":"", regs->gpr[3], print_tainted());
 }
@@ -897,7 +917,9 @@ void SoftwareEmulation(struct pt_regs *regs)
 {
 	extern int do_mathemu(struct pt_regs *);
 	extern int Soft_emulate_8xx(struct pt_regs *);
+#if defined(CONFIG_MATH_EMULATION) || defined(CONFIG_8XX_MINIMAL_FPEMU)
 	int errcode;
+#endif
 
 	CHECK_FULL_REGS(regs);
 
@@ -927,7 +949,7 @@ void SoftwareEmulation(struct pt_regs *regs)
 		return;
 	}
 
-#else
+#elif defined(CONFIG_8XX_MINIMAL_FPEMU)
 	errcode = Soft_emulate_8xx(regs);
 	switch (errcode) {
 	case 0:
@@ -940,6 +962,8 @@ void SoftwareEmulation(struct pt_regs *regs)
 		_exception(SIGSEGV, regs, SEGV_MAPERR, regs->nip);
 		return;
 	}
+#else
+	_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
 #endif
 }
 #endif /* CONFIG_8xx */

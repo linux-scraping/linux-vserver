@@ -5180,7 +5180,7 @@ ahd_handle_devreset(struct ahd_softc *ahd, struct ahd_devinfo *devinfo,
 			cur_lun = lun;
 			max_lun = lun;
 		}
-		for (cur_lun <= max_lun; cur_lun++) {
+		for (;cur_lun <= max_lun; cur_lun++) {
 			struct ahd_tmode_lstate* lstate;
 
 			lstate = tstate->enabled_luns[cur_lun];
@@ -7175,7 +7175,6 @@ ahd_pause_and_flushwork(struct ahd_softc *ahd)
 	ahd->flags &= ~AHD_ALL_INTERRUPTS;
 }
 
-#if 0
 int
 ahd_suspend(struct ahd_softc *ahd)
 {
@@ -7189,19 +7188,15 @@ ahd_suspend(struct ahd_softc *ahd)
 	ahd_shutdown(ahd);
 	return (0);
 }
-#endif  /*  0  */
 
-#if 0
-int
+void
 ahd_resume(struct ahd_softc *ahd)
 {
 
 	ahd_reset(ahd, /*reinit*/TRUE);
 	ahd_intr_enable(ahd, TRUE); 
 	ahd_restart(ahd);
-	return (0);
 }
-#endif  /*  0  */
 
 /************************** Busy Target Table *********************************/
 /*

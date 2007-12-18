@@ -4,6 +4,7 @@
 #include "vserver/context.h"
 #include "vserver/network.h"
 #include "vserver/base.h"
+#include "vserver/check.h"
 #include "vserver/debug.h"
 
 

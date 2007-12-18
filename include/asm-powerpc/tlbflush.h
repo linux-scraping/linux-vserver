@@ -1,5 +1,6 @@
 #ifndef _ASM_POWERPC_TLBFLUSH_H
 #define _ASM_POWERPC_TLBFLUSH_H
+
 /*
  * TLB flushing:
  *
@@ -8,7 +9,6 @@
  *  - flush_tlb_page_nohash(vma, vmaddr) flushes one page if SW loaded TLB
  *  - flush_tlb_range(vma, start, end) flushes a range of pages
  *  - flush_tlb_kernel_range(start, end) flushes a range of kernel pages
- *  - flush_tlb_pgtables(mm, start, end) flushes a range of page tables
  *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU General Public License
@@ -17,10 +17,72 @@
  */
 #ifdef __KERNEL__
 
+#if defined(CONFIG_4xx) || defined(CONFIG_8xx) || defined(CONFIG_FSL_BOOKE)
+/*
+ * TLB flushing for software loaded TLB chips
+ *
+ * TODO: (CONFIG_FSL_BOOKE) determine if flush_tlb_range &
+ * flush_tlb_kernel_range are best implemented as tlbia vs
+ * specific tlbie's
+ */
 
-struct mm_struct;
+#include <linux/mm.h>
 
-#ifdef CONFIG_PPC64
+extern void _tlbie(unsigned long address, unsigned int pid);
+
+#if defined(CONFIG_40x) || defined(CONFIG_8xx)
+#define _tlbia()	asm volatile ("tlbia; sync" : : : "memory")
+#else /* CONFIG_44x || CONFIG_FSL_BOOKE */
+extern void _tlbia(void);
+#endif
+
+static inline void flush_tlb_mm(struct mm_struct *mm)
+{
+	_tlbia();
+}
+
+static inline void flush_tlb_page(struct vm_area_struct *vma,
+				  unsigned long vmaddr)
+{
+	_tlbie(vmaddr, vma ? vma->vm_mm->context.id : 0);
+}
+
+static inline void flush_tlb_page_nohash(struct vm_area_struct *vma,
+					 unsigned long vmaddr)
+{
+	_tlbie(vmaddr, vma ? vma->vm_mm->context.id : 0);
+}
+
+static inline void flush_tlb_range(struct vm_area_struct *vma,
+				   unsigned long start, unsigned long end)
+{
+	_tlbia();
+}
+
+static inline void flush_tlb_kernel_range(unsigned long start,
+					  unsigned long end)
+{
+	_tlbia();
+}
+
+#elif defined(CONFIG_PPC32)
+/*
+ * TLB flushing for "classic" hash-MMMU 32-bit CPUs, 6xx, 7xx, 7xxx
+ */
+extern void _tlbie(unsigned long address);
+extern void _tlbia(void);
+
+extern void flush_tlb_mm(struct mm_struct *mm);
+extern void flush_tlb_page(struct vm_area_struct *vma, unsigned long vmaddr);
+extern void flush_tlb_page_nohash(struct vm_area_struct *vma, unsigned long addr);
+extern void flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
+			    unsigned long end);
+extern void flush_tlb_kernel_range(unsigned long start, unsigned long end);
+
+#else
+/*
+ * TLB flushing for 64-bit has-MMU CPUs
+ */
 
 #include <linux/percpu.h>
 #include <asm/page.h>
@@ -28,46 +90,76 @@ struct mm_struct;
 #define PPC64_TLB_BATCH_NR 192
 
 struct ppc64_tlb_batch {
-	unsigned long index;
-	struct mm_struct *mm;
-	real_pte_t pte[PPC64_TLB_BATCH_NR];
-	unsigned long vaddr[PPC64_TLB_BATCH_NR];
-	unsigned int psize;
+	int			active;
+	unsigned long		index;
+	struct mm_struct	*mm;
+	real_pte_t		pte[PPC64_TLB_BATCH_NR];
+	unsigned long		vaddr[PPC64_TLB_BATCH_NR];
+	unsigned int		psize;
+	int			ssize;
 };
 DECLARE_PER_CPU(struct ppc64_tlb_batch, ppc64_tlb_batch);
 
 extern void __flush_tlb_pending(struct ppc64_tlb_batch *batch);
 
-static inline void flush_tlb_pending(void)
+extern void hpte_need_flush(struct mm_struct *mm, unsigned long addr,
+			    pte_t *ptep, unsigned long pte, int huge);
+
+#define __HAVE_ARCH_ENTER_LAZY_MMU_MODE
+
+static inline void arch_enter_lazy_mmu_mode(void)
 {
-	struct ppc64_tlb_batch *batch = &get_cpu_var(ppc64_tlb_batch);
+	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
+
+	batch->active = 1;
+}
+
+static inline void arch_leave_lazy_mmu_mode(void)
+{
+	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
 
 	if (batch->index)
 		__flush_tlb_pending(batch);
-	put_cpu_var(ppc64_tlb_batch);
+	batch->active = 0;
 }
 
+#define arch_flush_lazy_mmu_mode()      do {} while (0)
+
+
 extern void flush_hash_page(unsigned long va, real_pte_t pte, int psize,
-			    int local);
+			    int ssize, int local);
 extern void flush_hash_range(unsigned long number, int local);
 
-#else /* CONFIG_PPC64 */
 
-#include <linux/mm.h>
+static inline void flush_tlb_mm(struct mm_struct *mm)
+{
+}
 
-extern void _tlbie(unsigned long address);
-extern void _tlbia(void);
+static inline void flush_tlb_page(struct vm_area_struct *vma,
+				  unsigned long vmaddr)
+{
+}
 
-/*
- * TODO: (CONFIG_FSL_BOOKE) determine if flush_tlb_range &
- * flush_tlb_kernel_range are best implemented as tlbia vs
- * specific tlbie's
- */
+static inline void flush_tlb_page_nohash(struct vm_area_struct *vma,
+					 unsigned long vmaddr)
+{
+}
 
-#if (defined(CONFIG_4xx) && !defined(CONFIG_44x)) || defined(CONFIG_8xx)
-#define flush_tlb_pending()	asm volatile ("tlbia; sync" : : : "memory")
-#elif defined(CONFIG_4xx) || defined(CONFIG_FSL_BOOKE)
-#define flush_tlb_pending()	_tlbia()
+static inline void flush_tlb_range(struct vm_area_struct *vma,
+				   unsigned long start, unsigned long end)
+{
+}
+
+static inline void flush_tlb_kernel_range(unsigned long start,
+					  unsigned long end)
+{
+}
+
+/* Private function for use by PCI IO mapping code */
+extern void __flush_hash_table_range(struct mm_struct *mm, unsigned long start,
+				     unsigned long end);
+
+
 #endif
 
 /*
@@ -80,67 +172,6 @@ extern void _tlbia(void);
  * waiting for the inevitable extra hash-table miss exception.
  */
 extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t);
-
-#endif /* CONFIG_PPC64 */
-
-#if defined(CONFIG_PPC64) || defined(CONFIG_4xx) || \
-	defined(CONFIG_FSL_BOOKE) || defined(CONFIG_8xx)
-
-static inline void flush_tlb_mm(struct mm_struct *mm)
-{
-	flush_tlb_pending();
-}
-
-static inline void flush_tlb_page(struct vm_area_struct *vma,
-				unsigned long vmaddr)
-{
-#ifdef CONFIG_PPC64
-	flush_tlb_pending();
-#else
-	_tlbie(vmaddr);
-#endif
-}
-
-static inline void flush_tlb_page_nohash(struct vm_area_struct *vma,
-					 unsigned long vmaddr)
-{
-#ifndef CONFIG_PPC64
-	_tlbie(vmaddr);
-#endif
-}
-
-static inline void flush_tlb_range(struct vm_area_struct *vma,
-		unsigned long start, unsigned long end)
-{
-	flush_tlb_pending();
-}
-
-static inline void flush_tlb_kernel_range(unsigned long start,
-		unsigned long end)
-{
-	flush_tlb_pending();
-}
-
-#else	/* 6xx, 7xx, 7xxx cpus */
-
-extern void flush_tlb_mm(struct mm_struct *mm);
-extern void flush_tlb_page(struct vm_area_struct *vma, unsigned long vmaddr);
-extern void flush_tlb_page_nohash(struct vm_area_struct *vma, unsigned long addr);
-extern void flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
-			    unsigned long end);
-extern void flush_tlb_kernel_range(unsigned long start, unsigned long end);
-
-#endif
-
-/*
- * This is called in munmap when we have freed up some page-table
- * pages.  We don't need to do anything here, there's nothing special
- * about our page-table pages.  -- paulus
- */
-static inline void flush_tlb_pgtables(struct mm_struct *mm,
-		unsigned long start, unsigned long end)
-{
-}
 
 #endif /*__KERNEL__ */
 #endif /* _ASM_POWERPC_TLBFLUSH_H */

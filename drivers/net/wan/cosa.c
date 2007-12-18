@@ -90,7 +90,6 @@
 #include <linux/ioport.h>
 #include <linux/netdevice.h>
 #include <linux/spinlock.h>
-#include <linux/smp_lock.h>
 #include <linux/device.h>
 
 #undef COSA_SLOW_IO	/* for testing purposes only */
@@ -155,8 +154,8 @@ struct cosa_data {
 	int nchannels;			/* # of channels on this card */
 	int driver_status;		/* For communicating with firmware */
 	int firmware_status;		/* Downloaded, reseted, etc. */
-	long int rxbitmap, txbitmap;	/* Bitmap of channels who are willing to send/receive data */
-	long int rxtx;			/* RX or TX in progress? */
+	unsigned long rxbitmap, txbitmap;/* Bitmap of channels who are willing to send/receive data */
+	unsigned long rxtx;		/* RX or TX in progress? */
 	int enabled;
 	int usage;				/* usage count */
 	int txchan, txsize, rxsize;
@@ -573,13 +572,11 @@ static int cosa_probe(int base, int irq, int dma)
 	sprintf(cosa->name, "cosa%d", cosa->num);
 
 	/* Initialize the per-channel data */
-	cosa->chan = kmalloc(sizeof(struct channel_data)*cosa->nchannels,
-			     GFP_KERNEL);
+	cosa->chan = kcalloc(cosa->nchannels, sizeof(struct channel_data), GFP_KERNEL);
 	if (!cosa->chan) {
 	        err = -ENOMEM;
 		goto err_out3;
 	}
-	memset(cosa->chan, 0, sizeof(struct channel_data)*cosa->nchannels);
 	for (i=0; i<cosa->nchannels; i++) {
 		cosa->chan[i].cosa = cosa;
 		cosa->chan[i].num = i;
@@ -773,7 +770,7 @@ static int sppp_rx_done(struct channel_data *chan)
 	}
 	chan->rx_skb->protocol = htons(ETH_P_WAN_PPP);
 	chan->rx_skb->dev = chan->pppdev.dev;
-	chan->rx_skb->mac.raw = chan->rx_skb->data;
+	skb_reset_mac_header(chan->rx_skb);
 	chan->stats.rx_packets++;
 	chan->stats.rx_bytes += chan->cosa->rxsize;
 	netif_rx(chan->rx_skb);

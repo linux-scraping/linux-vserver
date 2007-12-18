@@ -28,6 +28,7 @@
 #include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/pci.h>
+#include <linux/scatterlist.h>
 
 #include <asm/byteorder.h>
 #include <asm/io.h>
@@ -112,8 +113,6 @@ static int sba_reserve_agpgart = 1;
 module_param(sba_reserve_agpgart, int, 0444);
 MODULE_PARM_DESC(sba_reserve_agpgart, "Reserve half of IO pdir as AGPGART");
 #endif
-
-#define ROUNDUP(x,y) ((x + ((y)-1)) & ~((y)-1))
 
 
 /************************************
@@ -352,7 +351,7 @@ sba_search_bitmap(struct ioc *ioc, unsigned long bits_wanted)
 		** SBA HW features in the unmap path.
 		*/
 		unsigned long o = 1 << get_order(bits_wanted << PAGE_SHIFT);
-		uint bitshiftcnt = ROUNDUP(ioc->res_bitshift, o);
+		uint bitshiftcnt = ALIGN(ioc->res_bitshift, o);
 		unsigned long mask;
 
 		if (bitshiftcnt >= BITS_PER_LONG) {
@@ -779,7 +778,7 @@ sba_unmap_single(struct device *dev, dma_addr_t iova, size_t size,
 	offset = iova & ~IOVP_MASK;
 	iova ^= offset;        /* clear offset bits */
 	size += offset;
-	size = ROUNDUP(size, IOVP_SIZE);
+	size = ALIGN(size, IOVP_SIZE);
 
 	spin_lock_irqsave(&ioc->res_lock, flags);
 
@@ -1911,8 +1910,8 @@ sba_driver_callback(struct parisc_device *dev)
 			global_ioc_cnt *= 2;
 	}
 
-	printk(KERN_INFO "%s found %s at 0x%lx\n",
-		MODULE_NAME, version, dev->hpa.start);
+	printk(KERN_INFO "%s found %s at 0x%llx\n",
+		MODULE_NAME, version, (unsigned long long)dev->hpa.start);
 
 	sba_dev = kzalloc(sizeof(struct sba_device), GFP_KERNEL);
 	if (!sba_dev) {

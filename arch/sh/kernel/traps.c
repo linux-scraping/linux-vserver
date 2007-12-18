@@ -5,7 +5,7 @@
  *  SuperH version: Copyright (C) 1999 Niibe Yutaka
  *                  Copyright (C) 2000 Philipp Rumpf
  *                  Copyright (C) 2000 David Howells
- *                  Copyright (C) 2002 - 2006 Paul Mundt
+ *                  Copyright (C) 2002 - 2007 Paul Mundt
  *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file "COPYING" in the main directory of this archive
@@ -18,7 +18,10 @@
 #include <linux/module.h>
 #include <linux/kallsyms.h>
 #include <linux/io.h>
+#include <linux/bug.h>
 #include <linux/debug_locks.h>
+#include <linux/kdebug.h>
+#include <linux/kexec.h>
 #include <linux/limits.h>
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -74,11 +77,13 @@ static void dump_mem(const char *str, unsigned long bottom, unsigned long top)
 	}
 }
 
-DEFINE_SPINLOCK(die_lock);
+static DEFINE_SPINLOCK(die_lock);
 
 void die(const char * str, struct pt_regs * regs, long err)
 {
 	static int die_counter;
+
+	oops_enter();
 
 	console_verbose();
 	spin_lock_irq(&die_lock);
@@ -90,15 +95,27 @@ void die(const char * str, struct pt_regs * regs, long err)
 	print_modules();
 	show_regs(regs);
 
-	printk("Process: %s (pid: %d, stack limit = %p)\n",
-	       current->comm, current->pid, task_stack_page(current) + 1);
+	printk("Process: %s (pid: %d, stack limit = %p)\n", current->comm,
+			task_pid_nr(current), task_stack_page(current) + 1);
 
 	if (!user_mode(regs) || in_interrupt())
 		dump_mem("Stack: ", regs->regs[15], THREAD_SIZE +
 			 (unsigned long)task_stack_page(current));
 
 	bust_spinlocks(0);
+	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
+
+	if (kexec_should_crash(current))
+		crash_kexec(regs);
+
+	if (in_interrupt())
+		panic("Fatal exception in interrupt");
+
+	if (panic_on_oops)
+		panic("Fatal exception");
+
+	oops_exit();
 	do_exit(SIGSEGV);
 }
 
@@ -129,40 +146,6 @@ static int die_if_no_fixup(const char * str, struct pt_regs * regs, long err)
 	}
 	return -EFAULT;
 }
-
-#ifdef CONFIG_BUG
-#ifdef CONFIG_DEBUG_BUGVERBOSE
-static inline void do_bug_verbose(struct pt_regs *regs)
-{
-	struct bug_frame f;
-	long len;
-
-	if (__copy_from_user(&f, (const void __user *)regs->pc,
-			     sizeof(struct bug_frame)))
-		return;
-
-	len = __strnlen_user(f.file, PATH_MAX) - 1;
-	if (unlikely(len < 0 || len >= PATH_MAX))
-		f.file = "<bad filename>";
-	len = __strnlen_user(f.func, PATH_MAX) - 1;
-	if (unlikely(len < 0 || len >= PATH_MAX))
-		f.func = "<bad function>";
-
-	printk(KERN_ALERT "kernel BUG in %s() at %s:%d!\n",
-	       f.func, f.file, f.line);
-}
-#else
-static inline void do_bug_verbose(struct pt_regs *regs)
-{
-}
-#endif /* CONFIG_DEBUG_BUGVERBOSE */
-
-void handle_BUG(struct pt_regs *regs)
-{
-	do_bug_verbose(regs);
-	die("Kernel BUG", regs, TRAPA_BUG_OPCODE & 0xff);
-}
-#endif /* CONFIG_BUG */
 
 /*
  * handle an instruction that does an unaligned memory access by emulating the
@@ -403,7 +386,8 @@ static int handle_unaligned_access(u16 instruction, struct pt_regs *regs)
 
 		printk(KERN_NOTICE "Fixing up unaligned userspace access "
 		       "in \"%s\" pid=%d pc=0x%p ins=0x%04hx\n",
-		       current->comm,current->pid,(u16*)regs->pc,instruction);
+		       current->comm, task_pid_nr(current),
+		       (u16 *)regs->pc, instruction);
 	}
 
 	ret = -EFAULT;
@@ -523,7 +507,7 @@ static int handle_unaligned_access(u16 instruction, struct pt_regs *regs)
  simple:
 	ret = handle_unaligned_ins(instruction,regs);
 	if (ret==0)
-		regs->pc += 2;
+		regs->pc += instruction_size(instruction);
 	return ret;
 }
 #endif /* CONFIG_CPU_SH2A */
@@ -545,7 +529,7 @@ static int handle_unaligned_access(u16 instruction, struct pt_regs *regs)
  *       misaligned data access
  *       access to >= 0x80000000 is user mode
  * Unfortuntaly we can't distinguish between instruction address error
- * and data address errors caused by read acceses.
+ * and data address errors caused by read accesses.
  */
 asmlinkage void do_address_error(struct pt_regs *regs,
 				 unsigned long writeaccess,
@@ -602,7 +586,7 @@ uspace_segv:
 		info.si_signo = SIGBUS;
 		info.si_errno = 0;
 		info.si_code = si_code;
-		info.si_addr = (void *) address;
+		info.si_addr = (void __user *)address;
 		force_sig_info(SIGBUS, &info, current);
 	} else {
 		if (regs->pc & 1)
@@ -635,7 +619,7 @@ uspace_segv:
  */
 int is_dsp_inst(struct pt_regs *regs)
 {
-	unsigned short inst;
+	unsigned short inst = 0;
 
 	/*
 	 * Safe guard if DSP mode is already enabled or we're lacking
@@ -663,7 +647,6 @@ asmlinkage void do_divide_error(unsigned long r4, unsigned long r5,
 				unsigned long r6, unsigned long r7,
 				struct pt_regs __regs)
 {
-	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 	siginfo_t info;
 
 	switch (r4) {
@@ -700,7 +683,7 @@ asmlinkage void do_reserved_inst(unsigned long r4, unsigned long r5,
 
 	err = do_fpu_inst(inst, regs);
 	if (!err) {
-		regs->pc += 2;
+		regs->pc += instruction_size(inst);
 		return;
 	}
 	/* not a FPU inst. */
@@ -825,12 +808,13 @@ static inline void __init gdb_vbr_init(void)
 }
 #endif
 
-void __init per_cpu_trap_init(void)
+void __cpuinit per_cpu_trap_init(void)
 {
 	extern void *vbr_base;
 
 #ifdef CONFIG_SH_STANDARD_BIOS
-	gdb_vbr_init();
+	if (raw_smp_processor_id() == 0)
+		gdb_vbr_init();
 #endif
 
 	/* NOTE: The VBR value should be at P1
@@ -872,8 +856,13 @@ void __init trap_init(void)
 	set_exception_table_evt(0x800, do_reserved_inst);
 	set_exception_table_evt(0x820, do_illegal_slot_inst);
 #elif defined(CONFIG_SH_FPU)
+#ifdef CONFIG_CPU_SUBTYPE_SHX3
+	set_exception_table_evt(0xd80, do_fpu_state_restore);
+	set_exception_table_evt(0xda0, do_fpu_state_restore);
+#else
 	set_exception_table_evt(0x800, do_fpu_state_restore);
 	set_exception_table_evt(0x820, do_fpu_state_restore);
+#endif
 #endif
 
 #ifdef CONFIG_CPU_SH2
@@ -887,6 +876,25 @@ void __init trap_init(void)
 	/* Setup VBR for boot cpu */
 	per_cpu_trap_init();
 }
+
+#ifdef CONFIG_BUG
+void handle_BUG(struct pt_regs *regs)
+{
+	enum bug_trap_type tt;
+	tt = report_bug(regs->pc, regs);
+	if (tt == BUG_TRAP_TYPE_WARN) {
+		regs->pc += 2;
+		return;
+	}
+
+	die("Kernel BUG", regs, TRAPA_BUG_OPCODE & 0xff);
+}
+
+int is_valid_bugaddr(unsigned long addr)
+{
+	return addr >= PAGE_OFFSET;
+}
+#endif
 
 void show_trace(struct task_struct *tsk, unsigned long *sp,
 		struct pt_regs *regs)

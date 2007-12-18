@@ -21,8 +21,8 @@
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
 #include <linux/ptrace.h>
@@ -44,6 +44,7 @@
 #include <asm/processor.h>
 #include <asm/irq.h>
 #include <asm/timer.h>
+#include <asm/cpu.h>
 
 asmlinkage void ret_from_fork(void) asm ("ret_from_fork");
 
@@ -91,11 +92,20 @@ EXPORT_SYMBOL(unregister_idle_notifier);
 
 void do_monitor_call(struct pt_regs *regs, long interruption_code)
 {
+#ifdef CONFIG_SMP
+	struct s390_idle_data *idle;
+
+	idle = &__get_cpu_var(s390_idle);
+	spin_lock(&idle->lock);
+	idle->idle_time += get_clock() - idle->idle_enter;
+	idle->in_idle = 0;
+	spin_unlock(&idle->lock);
+#endif
 	/* disable monitor call class 0 */
 	__ctl_clear_bit(8, 15);
 
-	atomic_notifier_call_chain(&idle_chain, CPU_NOT_IDLE,
-			    (void *)(long) smp_processor_id());
+	atomic_notifier_call_chain(&idle_chain, S390_CPU_NOT_IDLE,
+				   (void *)(long) smp_processor_id());
 }
 
 extern void s390_handle_mcck(void);
@@ -105,6 +115,9 @@ extern void s390_handle_mcck(void);
 static void default_idle(void)
 {
 	int cpu, rc;
+#ifdef CONFIG_SMP
+	struct s390_idle_data *idle;
+#endif
 
 	/* CPU is going idle. */
 	cpu = smp_processor_id();
@@ -116,7 +129,7 @@ static void default_idle(void)
 	}
 
 	rc = atomic_notifier_call_chain(&idle_chain,
-			CPU_IDLE, (void *)(long) cpu);
+					S390_CPU_IDLE, (void *)(long) cpu);
 	if (rc != NOTIFY_OK && rc != NOTIFY_DONE)
 		BUG();
 	if (rc != NOTIFY_OK) {
@@ -141,7 +154,14 @@ static void default_idle(void)
 		s390_handle_mcck();
 		return;
 	}
-
+#ifdef CONFIG_SMP
+	idle = &__get_cpu_var(s390_idle);
+	spin_lock(&idle->lock);
+	idle->idle_count++;
+	idle->in_idle = 1;
+	idle->idle_enter = get_clock();
+	spin_unlock(&idle->lock);
+#endif
 	trace_hardirqs_on();
 	/* Wait for external, I/O or machine check interrupt. */
 	__load_psw_mask(psw_kernel_bits | PSW_MASK_WAIT |
@@ -166,7 +186,7 @@ void show_regs(struct pt_regs *regs)
 
         printk("CPU:    %d    %s\n", task_thread_info(tsk)->cpu, print_tainted());
 	printk("Process %s (pid: %d[#%u], task: %p, ksp: %p)\n",
-	       current->comm, current->pid, current->xid,
+	       current->comm, task_pid_nr(current), current->xid,
 	       (void *) tsk, (void *) tsk->thread.ksp);
 
 	show_registers(regs);
@@ -254,14 +274,12 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long new_stackp,
 	save_fp_regs(&current->thread.fp_regs);
 	memcpy(&p->thread.fp_regs, &current->thread.fp_regs,
 	       sizeof(s390_fp_regs));
-        p->thread.user_seg = __pa((unsigned long) p->mm->pgd) | _SEGMENT_TABLE;
 	/* Set a new TLS ?  */
 	if (clone_flags & CLONE_SETTLS)
 		p->thread.acrs[0] = regs->gprs[6];
 #else /* CONFIG_64BIT */
 	/* Save the fpu registers to new thread structure. */
 	save_fp_regs(&p->thread.fp_regs);
-        p->thread.user_seg = __pa((unsigned long) p->mm->pgd) | _REGION_TABLE;
 	/* Set a new TLS ?  */
 	if (clone_flags & CLONE_SETTLS) {
 		if (test_thread_flag(TIF_31BIT)) {
@@ -280,24 +298,26 @@ int copy_thread(int nr, unsigned long clone_flags, unsigned long new_stackp,
         return 0;
 }
 
-asmlinkage long sys_fork(struct pt_regs regs)
+asmlinkage long sys_fork(void)
 {
-	return do_fork(SIGCHLD, regs.gprs[15], &regs, 0, NULL, NULL);
+	struct pt_regs *regs = task_pt_regs(current);
+	return do_fork(SIGCHLD, regs->gprs[15], regs, 0, NULL, NULL);
 }
 
-asmlinkage long sys_clone(struct pt_regs regs)
+asmlinkage long sys_clone(void)
 {
-        unsigned long clone_flags;
-        unsigned long newsp;
+	struct pt_regs *regs = task_pt_regs(current);
+	unsigned long clone_flags;
+	unsigned long newsp;
 	int __user *parent_tidptr, *child_tidptr;
 
-        clone_flags = regs.gprs[3];
-        newsp = regs.orig_gpr2;
-	parent_tidptr = (int __user *) regs.gprs[4];
-	child_tidptr = (int __user *) regs.gprs[5];
-        if (!newsp)
-                newsp = regs.gprs[15];
-        return do_fork(clone_flags, newsp, &regs, 0,
+	clone_flags = regs->gprs[3];
+	newsp = regs->orig_gpr2;
+	parent_tidptr = (int __user *) regs->gprs[4];
+	child_tidptr = (int __user *) regs->gprs[5];
+	if (!newsp)
+		newsp = regs->gprs[15];
+	return do_fork(clone_flags, newsp, regs, 0,
 		       parent_tidptr, child_tidptr);
 }
 
@@ -311,39 +331,51 @@ asmlinkage long sys_clone(struct pt_regs regs)
  * do not have enough call-clobbered registers to hold all
  * the information you need.
  */
-asmlinkage long sys_vfork(struct pt_regs regs)
+asmlinkage long sys_vfork(void)
 {
+	struct pt_regs *regs = task_pt_regs(current);
 	return do_fork(CLONE_VFORK | CLONE_VM | SIGCHLD,
-		       regs.gprs[15], &regs, 0, NULL, NULL);
+		       regs->gprs[15], regs, 0, NULL, NULL);
+}
+
+asmlinkage void execve_tail(void)
+{
+	task_lock(current);
+	current->ptrace &= ~PT_DTRACE;
+	task_unlock(current);
+	current->thread.fp_regs.fpc = 0;
+	if (MACHINE_HAS_IEEE)
+		asm volatile("sfpc %0,%0" : : "d" (0));
 }
 
 /*
  * sys_execve() executes a new program.
  */
-asmlinkage long sys_execve(struct pt_regs regs)
+asmlinkage long sys_execve(void)
 {
-        int error;
-        char * filename;
+	struct pt_regs *regs = task_pt_regs(current);
+	char *filename;
+	unsigned long result;
+	int rc;
 
-        filename = getname((char __user *) regs.orig_gpr2);
-        error = PTR_ERR(filename);
-        if (IS_ERR(filename))
-                goto out;
-        error = do_execve(filename, (char __user * __user *) regs.gprs[3],
-			  (char __user * __user *) regs.gprs[4], &regs);
-	if (error == 0) {
-		task_lock(current);
-		current->ptrace &= ~PT_DTRACE;
-		task_unlock(current);
-		current->thread.fp_regs.fpc = 0;
-		if (MACHINE_HAS_IEEE)
-			asm volatile("sfpc %0,%0" : : "d" (0));
+	filename = getname((char __user *) regs->orig_gpr2);
+	if (IS_ERR(filename)) {
+		result = PTR_ERR(filename);
+		goto out;
 	}
-        putname(filename);
+	rc = do_execve(filename, (char __user * __user *) regs->gprs[3],
+		       (char __user * __user *) regs->gprs[4], regs);
+	if (rc) {
+		result = rc;
+		goto out_putname;
+	}
+	execve_tail();
+	result = regs->gprs[2];
+out_putname:
+	putname(filename);
 out:
-        return error;
+	return result;
 }
-
 
 /*
  * fill in the FPU structure for a core dump.

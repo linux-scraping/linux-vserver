@@ -25,7 +25,7 @@
 struct linux_ebus *ebus_chain = NULL;
 
 /* We are together with pcic.c under CONFIG_PCI. */
-extern unsigned int pcic_pin_to_irq(unsigned int, char *name);
+extern unsigned int pcic_pin_to_irq(unsigned int, const char *name);
 
 /*
  * IRQ Blacklist
@@ -69,7 +69,7 @@ static inline unsigned long ebus_alloc(size_t size)
 
 /*
  */
-int __init ebus_blacklist_irq(char *name)
+int __init ebus_blacklist_irq(const char *name)
 {
 	struct ebus_device_irq *dp;
 
@@ -86,8 +86,8 @@ int __init ebus_blacklist_irq(char *name)
 void __init fill_ebus_child(struct device_node *dp,
 			    struct linux_ebus_child *dev)
 {
-	int *regs;
-	int *irqs;
+	const int *regs;
+	const int *irqs;
 	int i, len;
 
 	dev->prom_node = dp;
@@ -146,15 +146,18 @@ void __init fill_ebus_child(struct device_node *dp,
 
 void __init fill_ebus_device(struct device_node *dp, struct linux_ebus_device *dev)
 {
-	struct linux_prom_registers *regs;
+	const struct linux_prom_registers *regs;
 	struct linux_ebus_child *child;
-	int *irqs;
+	struct dev_archdata *sd;
+	const int *irqs;
 	int i, n, len;
 	unsigned long baseaddr;
 
 	dev->prom_node = dp;
 
 	regs = of_get_property(dp, "reg", &len);
+	if (!regs)
+		len = 0;
 	if (len % sizeof(struct linux_prom_registers)) {
 		prom_printf("UGH: proplen for %s was %d, need multiple of %d\n",
 			    dev->prom_node->name, len,
@@ -234,6 +237,11 @@ void __init fill_ebus_device(struct device_node *dp, struct linux_ebus_device *d
 		}
 	}
 
+	sd = &dev->ofdev.dev.archdata;
+	sd->prom_node = dp;
+	sd->op = &dev->ofdev;
+	sd->iommu = dev->bus->ofdev.dev.parent->archdata.iommu;
+
 	dev->ofdev.node = dp;
 	dev->ofdev.dev.parent = &dev->bus->ofdev.dev;
 	dev->ofdev.dev.bus = &ebus_bus_type;
@@ -269,7 +277,7 @@ void __init fill_ebus_device(struct device_node *dp, struct linux_ebus_device *d
 
 void __init ebus_init(void)
 {
-	struct linux_prom_pci_registers *regs;
+	const struct linux_prom_pci_registers *regs;
 	struct linux_pbm_info *pbm;
 	struct linux_ebus_device *dev;
 	struct linux_ebus *ebus;

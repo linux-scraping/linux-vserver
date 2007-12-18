@@ -22,7 +22,9 @@
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/phy.h>
+#include <linux/spi/spi.h>
 #include <linux/fsl_devices.h>
 #include <linux/fs_enet_pd.h>
 #include <linux/fs_uart_pd.h>
@@ -51,13 +53,13 @@ phys_addr_t get_immrbase(void)
 
 	soc = of_find_node_by_type(NULL, "soc");
 	if (soc) {
-		unsigned int size;
-		const void *prop = get_property(soc, "reg", &size);
+		int size;
+		const void *prop = of_get_property(soc, "reg", &size);
 
 		if (prop)
 			immrbase = of_translate_address(soc, prop);
 		of_node_put(soc);
-	};
+	}
 
 	return immrbase;
 }
@@ -71,20 +73,31 @@ static u32 brgfreq = -1;
 u32 get_brgfreq(void)
 {
 	struct device_node *node;
+	const unsigned int *prop;
+	int size;
 
 	if (brgfreq != -1)
 		return brgfreq;
 
+	node = of_find_compatible_node(NULL, NULL, "fsl,cpm-brg");
+	if (node) {
+		prop = of_get_property(node, "clock-frequency", &size);
+		if (prop && size == 4)
+			brgfreq = *prop;
+
+		of_node_put(node);
+		return brgfreq;
+	}
+
+	/* Legacy device binding -- will go away when no users are left. */
 	node = of_find_node_by_type(NULL, "cpm");
 	if (node) {
-		unsigned int size;
-		const unsigned int *prop = get_property(node, "brg-frequency",
-					&size);
-
-		if (prop)
+		prop = of_get_property(node, "brg-frequency", &size);
+		if (prop && size == 4)
 			brgfreq = *prop;
+
 		of_node_put(node);
-	};
+	}
 
 	return brgfreq;
 }
@@ -102,14 +115,14 @@ u32 get_baudrate(void)
 
 	node = of_find_node_by_type(NULL, "serial");
 	if (node) {
-		unsigned int size;
-		const unsigned int *prop = get_property(node, "current-speed",
-				&size);
+		int size;
+		const unsigned int *prop = of_get_property(node,
+				"current-speed", &size);
 
 		if (prop)
 			fs_baudrate = *prop;
 		of_node_put(node);
-	};
+	}
 
 	return fs_baudrate;
 }
@@ -153,7 +166,8 @@ static int __init gfar_mdio_of_init(void)
 		while ((child = of_get_next_child(np, child)) != NULL) {
 			int irq = irq_of_parse_and_map(child, 0);
 			if (irq != NO_IRQ) {
-				const u32 *id = get_property(child, "reg", NULL);
+				const u32 *id = of_get_property(child,
+							"reg", NULL);
 				mdio_data.irq[*id] = irq;
 			}
 		}
@@ -196,6 +210,7 @@ static int __init gfar_of_init(void)
 		struct gianfar_platform_data gfar_data;
 		const unsigned int *id;
 		const char *model;
+		const char *ctype;
 		const void *mac_addr;
 		const phandle *ph;
 		int n_res = 2;
@@ -209,7 +224,7 @@ static int __init gfar_of_init(void)
 
 		of_irq_to_resource(np, 0, &r[1]);
 
-		model = get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 
 		/* If we aren't the FEC we have multiple interrupts */
 		if (model && strcasecmp(model, "FEC")) {
@@ -253,7 +268,15 @@ static int __init gfar_of_init(void)
 			    FSL_GIANFAR_DEV_HAS_VLAN |
 			    FSL_GIANFAR_DEV_HAS_EXTENDED_HASH;
 
-		ph = get_property(np, "phy-handle", NULL);
+		ctype = of_get_property(np, "phy-connection-type", NULL);
+
+		/* We only care about rgmii-id.  The rest are autodetected */
+		if (ctype && !strcmp(ctype, "rgmii-id"))
+			gfar_data.interface = PHY_INTERFACE_MODE_RGMII_ID;
+		else
+			gfar_data.interface = PHY_INTERFACE_MODE_MII;
+
+		ph = of_get_property(np, "phy-handle", NULL);
 		phy = of_find_node_by_phandle(*ph);
 
 		if (phy == NULL) {
@@ -263,7 +286,7 @@ static int __init gfar_of_init(void)
 
 		mdio = of_get_parent(phy);
 
-		id = get_property(phy, "reg", NULL);
+		id = of_get_property(phy, "reg", NULL);
 		ret = of_address_to_resource(mdio, 0, &res);
 		if (ret) {
 			of_node_put(phy);
@@ -295,6 +318,75 @@ err:
 
 arch_initcall(gfar_of_init);
 
+#ifdef CONFIG_I2C_BOARDINFO
+#include <linux/i2c.h>
+struct i2c_driver_device {
+	char	*of_device;
+	char	*i2c_driver;
+	char	*i2c_type;
+};
+
+static struct i2c_driver_device i2c_devices[] __initdata = {
+	{"ricoh,rs5c372a", "rtc-rs5c372", "rs5c372a",},
+	{"ricoh,rs5c372b", "rtc-rs5c372", "rs5c372b",},
+	{"ricoh,rv5c386",  "rtc-rs5c372", "rv5c386",},
+	{"ricoh,rv5c387a", "rtc-rs5c372", "rv5c387a",},
+	{"dallas,ds1307",  "rtc-ds1307",  "ds1307",},
+	{"dallas,ds1337",  "rtc-ds1307",  "ds1337",},
+	{"dallas,ds1338",  "rtc-ds1307",  "ds1338",},
+	{"dallas,ds1339",  "rtc-ds1307",  "ds1339",},
+	{"dallas,ds1340",  "rtc-ds1307",  "ds1340",},
+	{"stm,m41t00",     "rtc-ds1307",  "m41t00"},
+	{"dallas,ds1374",  "rtc-ds1374",  "rtc-ds1374",},
+};
+
+static int __init of_find_i2c_driver(struct device_node *node,
+				     struct i2c_board_info *info)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(i2c_devices); i++) {
+		if (!of_device_is_compatible(node, i2c_devices[i].of_device))
+			continue;
+		if (strlcpy(info->driver_name, i2c_devices[i].i2c_driver,
+			    KOBJ_NAME_LEN) >= KOBJ_NAME_LEN ||
+		    strlcpy(info->type, i2c_devices[i].i2c_type,
+			    I2C_NAME_SIZE) >= I2C_NAME_SIZE)
+			return -ENOMEM;
+		return 0;
+	}
+	return -ENODEV;
+}
+
+static void __init of_register_i2c_devices(struct device_node *adap_node,
+					   int bus_num)
+{
+	struct device_node *node = NULL;
+
+	while ((node = of_get_next_child(adap_node, node))) {
+		struct i2c_board_info info = {};
+		const u32 *addr;
+		int len;
+
+		addr = of_get_property(node, "reg", &len);
+		if (!addr || len < sizeof(int) || *addr > (1 << 10) - 1) {
+			printk(KERN_WARNING "fsl_soc.c: invalid i2c device entry\n");
+			continue;
+		}
+
+		info.irq = irq_of_parse_and_map(node, 0);
+		if (info.irq == NO_IRQ)
+			info.irq = -1;
+
+		if (of_find_i2c_driver(node, &info) < 0)
+			continue;
+
+		info.addr = *addr;
+
+		i2c_register_board_info(bus_num, &info, 1);
+	}
+}
+
 static int __init fsl_i2c_of_init(void)
 {
 	struct device_node *np;
@@ -325,11 +417,11 @@ static int __init fsl_i2c_of_init(void)
 		}
 
 		i2c_data.device_flags = 0;
-		flags = get_property(np, "dfsrr", NULL);
+		flags = of_get_property(np, "dfsrr", NULL);
 		if (flags)
 			i2c_data.device_flags |= FSL_I2C_DEV_SEPARATE_DFSRR;
 
-		flags = get_property(np, "fsl5200-clocking", NULL);
+		flags = of_get_property(np, "fsl5200-clocking", NULL);
 		if (flags)
 			i2c_data.device_flags |= FSL_I2C_DEV_CLOCK_5200;
 
@@ -339,6 +431,8 @@ static int __init fsl_i2c_of_init(void)
 						    fsl_i2c_platform_data));
 		if (ret)
 			goto unreg;
+
+		of_register_i2c_devices(np, i);
 	}
 
 	return 0;
@@ -350,6 +444,7 @@ err:
 }
 
 arch_initcall(fsl_i2c_of_init);
+#endif
 
 #ifdef CONFIG_PPC_83xx
 static int __init mpc83xx_wdt_init(void)
@@ -374,7 +469,7 @@ static int __init mpc83xx_wdt_init(void)
 		goto nosoc;
 	}
 
-	freq = get_property(soc, "bus-frequency", NULL);
+	freq = of_get_property(soc, "bus-frequency", NULL);
 	if (!freq) {
 		ret = -ENODEV;
 		goto err;
@@ -466,15 +561,15 @@ static int __init fsl_usb_of_init(void)
 
 		usb_data.operating_mode = FSL_USB2_MPH_HOST;
 
-		prop = get_property(np, "port0", NULL);
+		prop = of_get_property(np, "port0", NULL);
 		if (prop)
 			usb_data.port_enables |= FSL_USB2_PORT0_ENABLED;
 
-		prop = get_property(np, "port1", NULL);
+		prop = of_get_property(np, "port1", NULL);
 		if (prop)
 			usb_data.port_enables |= FSL_USB2_PORT1_ENABLED;
 
-		prop = get_property(np, "phy_type", NULL);
+		prop = of_get_property(np, "phy_type", NULL);
 		usb_data.phy_mode = determine_usb_phy(prop);
 
 		ret =
@@ -501,7 +596,7 @@ static int __init fsl_usb_of_init(void)
 
 		of_irq_to_resource(np, 0, &r[1]);
 
-		prop = get_property(np, "dr_mode", NULL);
+		prop = of_get_property(np, "dr_mode", NULL);
 
 		if (!prop || !strcmp(prop, "host")) {
 			usb_data.operating_mode = FSL_USB2_DR_HOST;
@@ -538,7 +633,7 @@ static int __init fsl_usb_of_init(void)
 			goto err;
 		}
 
-		prop = get_property(np, "phy_type", NULL);
+		prop = of_get_property(np, "phy_type", NULL);
 		usb_data.phy_mode = determine_usb_phy(prop);
 
 		if (usb_dev_dr_host) {
@@ -576,6 +671,7 @@ err:
 
 arch_initcall(fsl_usb_of_init);
 
+#ifndef CONFIG_PPC_CPM_NEW_BINDING
 #ifdef CONFIG_CPM2
 
 extern void init_scc_ioports(struct fs_uart_platform_info*);
@@ -633,7 +729,7 @@ static int __init fs_enet_of_init(void)
 			goto err;
 		}
 
-		model = get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 		if (model == NULL) {
 			ret = -ENODEV;
 			goto unreg;
@@ -643,7 +739,7 @@ static int __init fs_enet_of_init(void)
 		if (mac_addr)
 			memcpy(fs_enet_data.macaddr, mac_addr, 6);
 
-		ph = get_property(np, "phy-handle", NULL);
+		ph = of_get_property(np, "phy-handle", NULL);
 		phy = of_find_node_by_phandle(*ph);
 
 		if (phy == NULL) {
@@ -651,12 +747,12 @@ static int __init fs_enet_of_init(void)
 			goto unreg;
 		}
 
-		phy_addr = get_property(phy, "reg", NULL);
+		phy_addr = of_get_property(phy, "reg", NULL);
 		fs_enet_data.phy_addr = *phy_addr;
 
-		phy_irq = get_property(phy, "interrupts", NULL);
+		phy_irq = of_get_property(phy, "interrupts", NULL);
 
-		id = get_property(np, "device-id", NULL);
+		id = of_get_property(np, "device-id", NULL);
 		fs_enet_data.fs_no = *id;
 		strcpy(fs_enet_data.fs_type, model);
 
@@ -668,8 +764,10 @@ static int __init fs_enet_of_init(void)
                         goto unreg;
                 }
 
-		fs_enet_data.clk_rx = *((u32 *) get_property(np, "rx-clock", NULL));
-		fs_enet_data.clk_tx = *((u32 *) get_property(np, "tx-clock", NULL));
+		fs_enet_data.clk_rx = *((u32 *)of_get_property(np,
+						"rx-clock", NULL));
+		fs_enet_data.clk_tx = *((u32 *)of_get_property(np,
+						"tx-clock", NULL));
 
 		if (strstr(model, "FCC")) {
 			int fcc_index = *id - 1;
@@ -690,7 +788,7 @@ static int __init fs_enet_of_init(void)
 			fs_enet_data.bus_id = (char*)&bus_id[(*id)];
 			fs_enet_data.init_ioports = init_fcc_ioports;
 
-			mdio_bb_prop = get_property(phy, "bitbang", NULL);
+			mdio_bb_prop = of_get_property(phy, "bitbang", NULL);
 			if (mdio_bb_prop) {
 				struct platform_device *fs_enet_mdio_bb_dev;
 				struct fs_mii_bb_platform_info fs_enet_mdio_bb_data;
@@ -796,10 +894,10 @@ static int __init cpm_uart_of_init(void)
 			goto err;
 		}
 
-		id = get_property(np, "device-id", NULL);
+		id = of_get_property(np, "device-id", NULL);
 		cpm_uart_data.fs_no = *id;
 
-		model = (char*)get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 		strcpy(cpm_uart_data.fs_type, model);
 
 		cpm_uart_data.uart_clk = ppc_proc_freq;
@@ -808,8 +906,10 @@ static int __init cpm_uart_of_init(void)
 		cpm_uart_data.tx_buf_size = 32;
 		cpm_uart_data.rx_num_fifo = 4;
 		cpm_uart_data.rx_buf_size = 32;
-		cpm_uart_data.clk_rx = *((u32 *) get_property(np, "rx-clock", NULL));
-		cpm_uart_data.clk_tx = *((u32 *) get_property(np, "tx-clock", NULL));
+		cpm_uart_data.clk_rx = *((u32 *)of_get_property(np,
+						"rx-clock", NULL));
+		cpm_uart_data.clk_tx = *((u32 *)of_get_property(np,
+						"tx-clock", NULL));
 
 		ret =
 		    platform_device_add_data(cpm_uart_dev, &cpm_uart_data,
@@ -833,7 +933,7 @@ arch_initcall(cpm_uart_of_init);
 #ifdef CONFIG_8xx
 
 extern void init_scc_ioports(struct fs_platform_info*);
-extern int platform_device_skip(char *model, int id);
+extern int platform_device_skip(const char *model, int id);
 
 static int __init fs_enet_mdio_of_init(void)
 {
@@ -900,21 +1000,22 @@ static int __init fs_enet_of_init(void)
 		struct resource r[4];
 		struct device_node *phy = NULL, *mdio = NULL;
 		struct fs_platform_info fs_enet_data;
-		unsigned int *id, *phy_addr;
-		void *mac_addr;
-		phandle *ph;
-		char *model;
+		const unsigned int *id;
+		const unsigned int *phy_addr;
+		const void *mac_addr;
+		const phandle *ph;
+		const char *model;
 
 		memset(r, 0, sizeof(r));
 		memset(&fs_enet_data, 0, sizeof(fs_enet_data));
 
-		model = (char *)get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 		if (model == NULL) {
 			ret = -ENODEV;
 			goto unreg;
 		}
 
-		id = (u32 *) get_property(np, "device-id", NULL);
+		id = of_get_property(np, "device-id", NULL);
 		fs_enet_data.fs_no = *id;
 
 		if (platform_device_skip(model, *id))
@@ -929,12 +1030,12 @@ static int __init fs_enet_of_init(void)
 		if (mac_addr)
 			memcpy(fs_enet_data.macaddr, mac_addr, 6);
 
-		ph = (phandle *) get_property(np, "phy-handle", NULL);
+		ph = of_get_property(np, "phy-handle", NULL);
 		if (ph != NULL)
 			phy = of_find_node_by_phandle(*ph);
 
 		if (phy != NULL) {
-			phy_addr = (u32 *) get_property(phy, "reg", NULL);
+			phy_addr = of_get_property(phy, "reg", NULL);
 			fs_enet_data.phy_addr = *phy_addr;
 			fs_enet_data.has_phy = 1;
 
@@ -947,7 +1048,7 @@ static int __init fs_enet_of_init(void)
 			}
 		}
 
-		model = (char*)get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 		strcpy(fs_enet_data.fs_type, model);
 
 		if (strstr(model, "FEC")) {
@@ -1022,6 +1123,19 @@ err:
 
 arch_initcall(fs_enet_of_init);
 
+static int __init fsl_pcmcia_of_init(void)
+{
+	struct device_node *np = NULL;
+	/*
+	 * Register all the devices which type is "pcmcia"
+	 */
+	while ((np = of_find_compatible_node(np,
+			"pcmcia", "fsl,pq-pcmcia")) != NULL)
+			    of_platform_device_create(np, "m8xx-pcmcia", NULL);
+	return 0;
+}
+
+arch_initcall(fsl_pcmcia_of_init);
 
 static const char *smc_regs = "regs";
 static const char *smc_pram = "pram";
@@ -1038,8 +1152,8 @@ static int __init cpm_smc_uart_of_init(void)
 	     i++) {
 		struct resource r[3];
 		struct fs_uart_platform_info cpm_uart_data;
-		int *id;
-		char *model;
+		const int *id;
+		const char *model;
 
 		memset(r, 0, sizeof(r));
 		memset(&cpm_uart_data, 0, sizeof(cpm_uart_data));
@@ -1066,10 +1180,10 @@ static int __init cpm_smc_uart_of_init(void)
 			goto err;
 		}
 
-		model = (char*)get_property(np, "model", NULL);
+		model = of_get_property(np, "model", NULL);
 		strcpy(cpm_uart_data.fs_type, model);
 
-		id = (int*)get_property(np, "device-id", NULL);
+		id = of_get_property(np, "device-id", NULL);
 		cpm_uart_data.fs_no = *id;
 		cpm_uart_data.uart_clk = ppc_proc_freq;
 
@@ -1097,3 +1211,132 @@ err:
 arch_initcall(cpm_smc_uart_of_init);
 
 #endif /* CONFIG_8xx */
+#endif /* CONFIG_PPC_CPM_NEW_BINDING */
+
+int __init fsl_spi_init(struct spi_board_info *board_infos,
+			unsigned int num_board_infos,
+			void (*activate_cs)(u8 cs, u8 polarity),
+			void (*deactivate_cs)(u8 cs, u8 polarity))
+{
+	struct device_node *np;
+	unsigned int i;
+	const u32 *sysclk;
+
+	/* SPI controller is either clocked from QE or SoC clock */
+	np = of_find_node_by_type(NULL, "qe");
+	if (!np)
+		np = of_find_node_by_type(NULL, "soc");
+
+	if (!np)
+		return -ENODEV;
+
+	sysclk = of_get_property(np, "bus-frequency", NULL);
+	if (!sysclk)
+		return -ENODEV;
+
+	for (np = NULL, i = 1;
+	     (np = of_find_compatible_node(np, "spi", "fsl_spi")) != NULL;
+	     i++) {
+		int ret = 0;
+		unsigned int j;
+		const void *prop;
+		struct resource res[2];
+		struct platform_device *pdev;
+		struct fsl_spi_platform_data pdata = {
+			.activate_cs = activate_cs,
+			.deactivate_cs = deactivate_cs,
+		};
+
+		memset(res, 0, sizeof(res));
+
+		pdata.sysclk = *sysclk;
+
+		prop = of_get_property(np, "reg", NULL);
+		if (!prop)
+			goto err;
+		pdata.bus_num = *(u32 *)prop;
+
+		prop = of_get_property(np, "mode", NULL);
+		if (prop && !strcmp(prop, "cpu-qe"))
+			pdata.qe_mode = 1;
+
+		for (j = 0; j < num_board_infos; j++) {
+			if (board_infos[j].bus_num == pdata.bus_num)
+				pdata.max_chipselect++;
+		}
+
+		if (!pdata.max_chipselect)
+			goto err;
+
+		ret = of_address_to_resource(np, 0, &res[0]);
+		if (ret)
+			goto err;
+
+		ret = of_irq_to_resource(np, 0, &res[1]);
+		if (ret == NO_IRQ)
+			goto err;
+
+		pdev = platform_device_alloc("mpc83xx_spi", i);
+		if (!pdev)
+			goto err;
+
+		ret = platform_device_add_data(pdev, &pdata, sizeof(pdata));
+		if (ret)
+			goto unreg;
+
+		ret = platform_device_add_resources(pdev, res,
+						    ARRAY_SIZE(res));
+		if (ret)
+			goto unreg;
+
+		ret = platform_device_register(pdev);
+		if (ret)
+			goto unreg;
+
+		continue;
+unreg:
+		platform_device_del(pdev);
+err:
+		continue;
+	}
+
+	return spi_register_board_info(board_infos, num_board_infos);
+}
+
+#if defined(CONFIG_PPC_85xx) || defined(CONFIG_PPC_86xx)
+static __be32 __iomem *rstcr;
+
+static int __init setup_rstcr(void)
+{
+	struct device_node *np;
+	np = of_find_node_by_name(NULL, "global-utilities");
+	if ((np && of_get_property(np, "fsl,has-rstcr", NULL))) {
+		const u32 *prop = of_get_property(np, "reg", NULL);
+		if (prop) {
+			/* map reset control register
+			 * 0xE00B0 is offset of reset control register
+			 */
+			rstcr = ioremap(get_immrbase() + *prop + 0xB0, 0xff);
+			if (!rstcr)
+				printk (KERN_EMERG "Error: reset control "
+						"register not mapped!\n");
+		}
+	} else
+		printk (KERN_INFO "rstcr compatible register does not exist!\n");
+	if (np)
+		of_node_put(np);
+	return 0;
+}
+
+arch_initcall(setup_rstcr);
+
+void fsl_rstcr_restart(char *cmd)
+{
+	local_irq_disable();
+	if (rstcr)
+		/* set reset control register */
+		out_be32(rstcr, 0x2);	/* HRESET_REQ */
+
+	while (1) ;
+}
+#endif

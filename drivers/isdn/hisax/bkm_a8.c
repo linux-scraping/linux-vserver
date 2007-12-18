@@ -20,8 +20,6 @@
 #include <linux/pci.h>
 #include "bkm_ax.h"
 
-#ifdef CONFIG_PCI
-
 #define	ATTEMPT_PCI_REMAPPING	/* Required for PLX rev 1 */
 
 extern const char *CardType[];
@@ -279,15 +277,11 @@ static u_char pci_bus __devinitdata = 0;
 static u_char pci_device_fn __devinitdata = 0;
 static u_char pci_irq __devinitdata = 0;
 
-#endif /* CONFIG_PCI */
-
 int __devinit
 setup_sct_quadro(struct IsdnCard *card)
 {
-#ifdef CONFIG_PCI
 	struct IsdnCardState *cs = card->cs;
 	char tmp[64];
-	u_char pci_rev_id;
 	u_int found = 0;
 	u_int pci_ioaddr1, pci_ioaddr2, pci_ioaddr3, pci_ioaddr4, pci_ioaddr5;
 
@@ -335,8 +329,7 @@ setup_sct_quadro(struct IsdnCard *card)
 		}
 #ifdef ATTEMPT_PCI_REMAPPING
 /* HACK: PLX revision 1 bug: PLX address bit 7 must not be set */
-		pci_read_config_byte(dev_a8, PCI_REVISION_ID, &pci_rev_id);
-		if ((pci_ioaddr1 & 0x80) && (pci_rev_id == 1)) {
+		if ((pci_ioaddr1 & 0x80) && (dev_a8->revision == 1)) {
 			printk(KERN_WARNING "HiSax: %s (%s): PLX rev 1, remapping required!\n",
 				CardType[card->typ],
 				sct_quadro_subtypes[cs->subtyp]);
@@ -444,7 +437,4 @@ setup_sct_quadro(struct IsdnCard *card)
 		sct_quadro_subtypes[cs->subtyp],
 		readreg(cs->hw.ax.base, cs->hw.ax.data_adr, IPAC_ID));
 	return (1);
-#else
-	printk(KERN_ERR "HiSax: bkm_a8 only supported on PCI Systems\n");
-#endif /* CONFIG_PCI */
 }

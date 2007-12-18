@@ -65,20 +65,15 @@ xfs_get_dir_entry(
 
 int
 xfs_dir_lookup_int(
-	bhv_desc_t	*dir_bdp,
+	xfs_inode_t	*dp,
 	uint		lock_mode,
 	bhv_vname_t	*dentry,
 	xfs_ino_t	*inum,
 	xfs_inode_t	**ipp)
 {
-	bhv_vnode_t	*dir_vp;
-	xfs_inode_t	*dp;
 	int		error;
 
-	dir_vp = BHV_TO_VNODE(dir_bdp);
-	vn_trace_entry(dir_vp, __FUNCTION__, (inst_t *)__return_address);
-
-	dp = XFS_BHVTOI(dir_bdp);
+	vn_trace_entry(dp, __FUNCTION__, (inst_t *)__return_address);
 
 	error = xfs_dir_lookup(NULL, dp, VNAME(dentry), VNAMELEN(dentry), inum);
 	if (!error) {
@@ -222,7 +217,7 @@ xfs_dir_ialloc(
 		}
 
 		ntp = xfs_trans_dup(tp);
-		code = xfs_trans_commit(tp, 0, NULL);
+		code = xfs_trans_commit(tp, 0);
 		tp = ntp;
 		if (committed != NULL) {
 			*committed = 1;
@@ -420,7 +415,11 @@ xfs_truncate_file(
 	 * in a transaction.
 	 */
 	xfs_ilock(ip, XFS_IOLOCK_EXCL);
-	xfs_itruncate_start(ip, XFS_ITRUNC_DEFINITE, (xfs_fsize_t)0);
+	error = xfs_itruncate_start(ip, XFS_ITRUNC_DEFINITE, (xfs_fsize_t)0);
+	if (error) {
+		xfs_iunlock(ip, XFS_IOLOCK_EXCL);
+		return error;
+	}
 
 	tp = xfs_trans_alloc(mp, XFS_TRANS_TRUNCATE_FILE);
 	if ((error = xfs_trans_reserve(tp, 0, XFS_ITRUNCATE_LOG_RES(mp), 0,
@@ -460,8 +459,7 @@ xfs_truncate_file(
 				 XFS_TRANS_ABORT);
 	} else {
 		xfs_ichgtime(ip, XFS_ICHGTIME_MOD | XFS_ICHGTIME_CHG);
-		error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES,
-					 NULL);
+		error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES);
 	}
 	xfs_iunlock(ip, XFS_ILOCK_EXCL | XFS_IOLOCK_EXCL);
 

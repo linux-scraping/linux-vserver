@@ -8,10 +8,17 @@
 
 #define pcibios_scan_all_fns(a, b)	0
 
+#ifdef CONFIG_PCI_HOST_ITE8152
+/* ITE bridge requires setting latency timer to avoid early bus access
+   termination by PIC bus mater devices
+*/
+extern void pcibios_set_master(struct pci_dev *dev);
+#else
 static inline void pcibios_set_master(struct pci_dev *dev)
 {
 	/* No special bus mastering setup handling */
 }
+#endif
 
 static inline void pcibios_penalize_isa_irq(int irq, int active)
 {
@@ -24,11 +31,6 @@ static inline void pcibios_penalize_isa_irq(int irq, int active)
  * buffer decisions.
  */
 #define PCI_DMA_BUS_IS_PHYS     (0)
-
-/*
- * We don't support DAC DMA cycles.
- */
-#define pci_dac_dma_supported(pci_dev, mask)	(0)
 
 /*
  * Whether pci_unmap_{single,page} is a nop depends upon the
@@ -74,10 +76,6 @@ pcibios_select_root(struct pci_dev *pdev, struct resource *res)
 		root = &iomem_resource;
 
 	return root;
-}
-
-static inline void pcibios_add_platform_entries(struct pci_dev *dev)
-{
 }
 
 #endif /* __KERNEL__ */

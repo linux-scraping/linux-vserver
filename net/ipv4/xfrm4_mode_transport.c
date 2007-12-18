@@ -17,22 +17,18 @@
  *
  * The IP header will be moved forward to make space for the encapsulation
  * header.
- *
- * On exit, skb->h will be set to the start of the payload to be processed
- * by x->type->output and skb->nh will be set to the top IP header.
  */
 static int xfrm4_transport_output(struct xfrm_state *x, struct sk_buff *skb)
 {
-	struct iphdr *iph;
-	int ihl;
+	struct iphdr *iph = ip_hdr(skb);
+	int ihl = iph->ihl * 4;
 
-	iph = skb->nh.iph;
-	skb->h.ipiph = iph;
-
-	ihl = iph->ihl * 4;
-	skb->h.raw += ihl;
-
-	skb->nh.raw = memmove(skb_push(skb, x->props.header_len), iph, ihl);
+	skb_set_network_header(skb, -x->props.header_len);
+	skb->mac_header = skb->network_header +
+			  offsetof(struct iphdr, protocol);
+	skb->transport_header = skb->network_header + ihl;
+	__skb_pull(skb, ihl);
+	memmove(skb_network_header(skb), iph, ihl);
 	return 0;
 }
 
@@ -46,12 +42,15 @@ static int xfrm4_transport_output(struct xfrm_state *x, struct sk_buff *skb)
  */
 static int xfrm4_transport_input(struct xfrm_state *x, struct sk_buff *skb)
 {
-	int ihl = skb->data - skb->h.raw;
+	int ihl = skb->data - skb_transport_header(skb);
 
-	if (skb->h.raw != skb->nh.raw)
-		skb->nh.raw = memmove(skb->h.raw, skb->nh.raw, ihl);
-	skb->nh.iph->tot_len = htons(skb->len + ihl);
-	skb->h.raw = skb->data;
+	if (skb->transport_header != skb->network_header) {
+		memmove(skb_transport_header(skb),
+			skb_network_header(skb), ihl);
+		skb->network_header = skb->transport_header;
+	}
+	ip_hdr(skb)->tot_len = htons(skb->len + ihl);
+	skb_reset_transport_header(skb);
 	return 0;
 }
 

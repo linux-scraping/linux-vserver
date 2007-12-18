@@ -24,37 +24,42 @@
 #include <linux/ethtool.h>
 #include <linux/netdevice.h>
 #include <linux/spinlock.h>
+#include <linux/phy.h>
 
 struct pasemi_mac_txring {
 	spinlock_t	 lock;
-	struct pas_dma_xct_descr	*desc;
+	u64		*ring;
 	dma_addr_t	 dma;
 	unsigned int	 size;
-	unsigned int	 next_to_use;
+	unsigned int	 next_to_fill;
 	unsigned int	 next_to_clean;
-	struct pasemi_mac_buffer *desc_info;
+	struct pasemi_mac_buffer *ring_info;
 	char		 irq_name[10];  /* "eth%d tx" */
 };
 
 struct pasemi_mac_rxring {
 	spinlock_t	 lock;
-	struct pas_dma_xct_descr	*desc;	/* RX channel descriptor ring */
+	u64		*ring;	/* RX channel descriptor ring */
 	dma_addr_t	 dma;
 	u64		*buffers;	/* RX interface buffer ring */
 	dma_addr_t	 buf_dma;
 	unsigned int	 size;
 	unsigned int	 next_to_fill;
 	unsigned int	 next_to_clean;
-	struct pasemi_mac_buffer *desc_info;
+	struct pasemi_mac_buffer *ring_info;
 	char		 irq_name[10];  /* "eth%d rx" */
 };
 
 struct pasemi_mac {
 	struct net_device *netdev;
+	void __iomem *regs;
+	void __iomem *dma_regs;
+	void __iomem *iob_regs;
 	struct pci_dev *pdev;
 	struct pci_dev *dma_pdev;
 	struct pci_dev *iob_pdev;
-	struct net_device_stats stats;
+	struct phy_device *phydev;
+	struct napi_struct napi;
 
 	/* Pointer to the cacheable per-channel status registers */
 	u64	*rx_status;
@@ -73,9 +78,17 @@ struct pasemi_mac {
 
 	struct pasemi_mac_txring *tx;
 	struct pasemi_mac_rxring *rx;
+	unsigned long	tx_irq;
+	unsigned long	rx_irq;
+	int	link;
+	int	speed;
+	int	duplex;
+
+	unsigned int	msg_enable;
+	char	phy_id[BUS_ID_SIZE];
 };
 
-/* Software status descriptor (desc_info) */
+/* Software status descriptor (ring_info) */
 struct pasemi_mac_buffer {
 	struct sk_buff *skb;
 	dma_addr_t	dma;
@@ -88,20 +101,7 @@ struct pasdma_status {
 	u64 tx_sta[20];
 };
 
-/* descriptor structure */
-struct pas_dma_xct_descr {
-	union {
-		u64	mactx;
-		u64	macrx;
-	};
-	union {
-		u64	ptr;
-		u64	rxb;
-	};
-};
-
 /* MAC CFG register offsets */
-
 enum {
 	PAS_MAC_CFG_PCFG = 0x80,
 	PAS_MAC_CFG_TXP = 0x98,
@@ -193,14 +193,32 @@ enum {
 #define PAS_DMA_RXINT_RCMDSTA(i)	(0x200+(i)*_PAS_DMA_RXINT_STRIDE)
 #define    PAS_DMA_RXINT_RCMDSTA_EN	0x00000001
 #define    PAS_DMA_RXINT_RCMDSTA_ST	0x00000002
-#define    PAS_DMA_RXINT_RCMDSTA_OO	0x00000100
-#define    PAS_DMA_RXINT_RCMDSTA_BP	0x00000200
-#define    PAS_DMA_RXINT_RCMDSTA_DR	0x00000400
+#define    PAS_DMA_RXINT_RCMDSTA_MBT	0x00000008
+#define    PAS_DMA_RXINT_RCMDSTA_MDR	0x00000010
+#define    PAS_DMA_RXINT_RCMDSTA_MOO	0x00000020
+#define    PAS_DMA_RXINT_RCMDSTA_MBP	0x00000040
 #define    PAS_DMA_RXINT_RCMDSTA_BT	0x00000800
-#define    PAS_DMA_RXINT_RCMDSTA_TB	0x00001000
+#define    PAS_DMA_RXINT_RCMDSTA_DR	0x00001000
+#define    PAS_DMA_RXINT_RCMDSTA_OO	0x00002000
+#define    PAS_DMA_RXINT_RCMDSTA_BP	0x00004000
+#define    PAS_DMA_RXINT_RCMDSTA_TB	0x00008000
 #define    PAS_DMA_RXINT_RCMDSTA_ACT	0x00010000
 #define    PAS_DMA_RXINT_RCMDSTA_DROPS_M	0xfffe0000
 #define    PAS_DMA_RXINT_RCMDSTA_DROPS_S	17
+#define PAS_DMA_RXINT_CFG(i)		(0x204+(i)*_PAS_DMA_RXINT_STRIDE)
+#define    PAS_DMA_RXINT_CFG_RBP	0x80000000
+#define    PAS_DMA_RXINT_CFG_ITRR	0x40000000
+#define    PAS_DMA_RXINT_CFG_DHL_M	0x07000000
+#define    PAS_DMA_RXINT_CFG_DHL_S	24
+#define    PAS_DMA_RXINT_CFG_DHL(x)	(((x) << PAS_DMA_RXINT_CFG_DHL_S) & \
+					 PAS_DMA_RXINT_CFG_DHL_M)
+#define    PAS_DMA_RXINT_CFG_ITR	0x00400000
+#define    PAS_DMA_RXINT_CFG_LW		0x00200000
+#define    PAS_DMA_RXINT_CFG_L2		0x00100000
+#define    PAS_DMA_RXINT_CFG_HEN	0x00080000
+#define    PAS_DMA_RXINT_CFG_WIF	0x00000002
+#define    PAS_DMA_RXINT_CFG_WIL	0x00000001
+
 #define PAS_DMA_RXINT_INCR(i)		(0x210+(i)*_PAS_DMA_RXINT_STRIDE)
 #define    PAS_DMA_RXINT_INCR_INCR_M	0x0000ffff
 #define    PAS_DMA_RXINT_INCR_INCR_S	0
@@ -227,6 +245,10 @@ enum {
 #define    PAS_DMA_TXCHAN_TCMDSTA_EN	0x00000001	/* Enabled */
 #define    PAS_DMA_TXCHAN_TCMDSTA_ST	0x00000002	/* Stop interface */
 #define    PAS_DMA_TXCHAN_TCMDSTA_ACT	0x00010000	/* Active */
+#define    PAS_DMA_TXCHAN_TCMDSTA_SZ	0x00000800
+#define    PAS_DMA_TXCHAN_TCMDSTA_DB	0x00000400
+#define    PAS_DMA_TXCHAN_TCMDSTA_DE	0x00000200
+#define    PAS_DMA_TXCHAN_TCMDSTA_DA	0x00000100
 #define PAS_DMA_TXCHAN_CFG(c)     (0x304+(c)*_PAS_DMA_TXCHAN_STRIDE)
 #define    PAS_DMA_TXCHAN_CFG_TY_IFACE	0x00000000	/* Type = interface */
 #define    PAS_DMA_TXCHAN_CFG_TATTR_M	0x0000003c
@@ -237,9 +259,11 @@ enum {
 #define    PAS_DMA_TXCHAN_CFG_WT_S	6
 #define    PAS_DMA_TXCHAN_CFG_WT(x)	(((x) << PAS_DMA_TXCHAN_CFG_WT_S) & \
 					 PAS_DMA_TXCHAN_CFG_WT_M)
-#define    PAS_DMA_TXCHAN_CFG_CF	0x00001000	/* Clean first line */
-#define    PAS_DMA_TXCHAN_CFG_CL	0x00002000	/* Clean last line */
+#define    PAS_DMA_TXCHAN_CFG_TRD	0x00010000	/* translate data */
+#define    PAS_DMA_TXCHAN_CFG_TRR	0x00008000	/* translate rings */
 #define    PAS_DMA_TXCHAN_CFG_UP	0x00004000	/* update tx descr when sent */
+#define    PAS_DMA_TXCHAN_CFG_CL	0x00002000	/* Clean last line */
+#define    PAS_DMA_TXCHAN_CFG_CF	0x00001000	/* Clean first line */
 #define PAS_DMA_TXCHAN_INCR(c)    (0x310+(c)*_PAS_DMA_TXCHAN_STRIDE)
 #define PAS_DMA_TXCHAN_BASEL(c)   (0x318+(c)*_PAS_DMA_TXCHAN_STRIDE)
 #define    PAS_DMA_TXCHAN_BASEL_BRBL_M	0xffffffc0
@@ -269,7 +293,11 @@ enum {
 #define    PAS_DMA_RXCHAN_CCMDSTA_ST	0x00000002	/* Stop interface */
 #define    PAS_DMA_RXCHAN_CCMDSTA_ACT	0x00010000	/* Active */
 #define    PAS_DMA_RXCHAN_CCMDSTA_DU	0x00020000
+#define    PAS_DMA_RXCHAN_CCMDSTA_OD	0x00002000
+#define    PAS_DMA_RXCHAN_CCMDSTA_FD	0x00001000
+#define    PAS_DMA_RXCHAN_CCMDSTA_DT	0x00000800
 #define PAS_DMA_RXCHAN_CFG(c)     (0x804+(c)*_PAS_DMA_RXCHAN_STRIDE)
+#define    PAS_DMA_RXCHAN_CFG_CTR	0x00000400
 #define    PAS_DMA_RXCHAN_CFG_HBU_M	0x00000380
 #define    PAS_DMA_RXCHAN_CFG_HBU_S	7
 #define    PAS_DMA_RXCHAN_CFG_HBU(x)	(((x) << PAS_DMA_RXCHAN_CFG_HBU_S) & \
@@ -297,10 +325,17 @@ enum {
 #define    PAS_STATUS_DCNT_S		16
 #define    PAS_STATUS_BPCNT_M		0x0000ffff00000000ull
 #define    PAS_STATUS_BPCNT_S		32
+#define    PAS_STATUS_CAUSE_M		0xf000000000000000ull
 #define    PAS_STATUS_TIMER		0x1000000000000000ull
 #define    PAS_STATUS_ERROR		0x2000000000000000ull
 #define    PAS_STATUS_SOFT		0x4000000000000000ull
 #define    PAS_STATUS_INT		0x8000000000000000ull
+
+#define PAS_IOB_COM_PKTHDRCNT		0x120
+#define    PAS_IOB_COM_PKTHDRCNT_PKTHDR1_M	0x0fff0000
+#define    PAS_IOB_COM_PKTHDRCNT_PKTHDR1_S	16
+#define    PAS_IOB_COM_PKTHDRCNT_PKTHDR0_M	0x00000fff
+#define    PAS_IOB_COM_PKTHDRCNT_PKTHDR0_S	0
 
 #define PAS_IOB_DMA_RXCH_CFG(i)		(0x1100 + (i)*4)
 #define    PAS_IOB_DMA_RXCH_CFG_CNTTH_M		0x00000fff
@@ -326,7 +361,7 @@ enum {
 						 PAS_IOB_DMA_TXCH_STAT_CNTDEL_M)
 #define PAS_IOB_DMA_RXCH_RESET(i)	(0x1500 + (i)*4)
 #define    PAS_IOB_DMA_RXCH_RESET_PCNT_M	0xffff0000
-#define    PAS_IOB_DMA_RXCH_RESET_PCNT_S	0
+#define    PAS_IOB_DMA_RXCH_RESET_PCNT_S	16
 #define    PAS_IOB_DMA_RXCH_RESET_PCNT(x)	(((x) << PAS_IOB_DMA_RXCH_RESET_PCNT_S) & \
 						 PAS_IOB_DMA_RXCH_RESET_PCNT_M)
 #define    PAS_IOB_DMA_RXCH_RESET_PCNTRST	0x00000020
@@ -337,7 +372,7 @@ enum {
 #define    PAS_IOB_DMA_RXCH_RESET_PINTC		0x00000001
 #define PAS_IOB_DMA_TXCH_RESET(i)	(0x1600 + (i)*4)
 #define    PAS_IOB_DMA_TXCH_RESET_PCNT_M	0xffff0000
-#define    PAS_IOB_DMA_TXCH_RESET_PCNT_S	0
+#define    PAS_IOB_DMA_TXCH_RESET_PCNT_S	16
 #define    PAS_IOB_DMA_TXCH_RESET_PCNT(x)	(((x) << PAS_IOB_DMA_TXCH_RESET_PCNT_S) & \
 						 PAS_IOB_DMA_TXCH_RESET_PCNT_M)
 #define    PAS_IOB_DMA_TXCH_RESET_PCNTRST	0x00000020
@@ -397,10 +432,9 @@ enum {
 /* Receive descriptor fields */
 #define	XCT_MACRX_T		0x8000000000000000ull
 #define	XCT_MACRX_ST		0x4000000000000000ull
-#define XCT_MACRX_NORES		0x0000000000000000ull
-#define XCT_MACRX_8BRES		0x1000000000000000ull
-#define XCT_MACRX_24BRES	0x2000000000000000ull
-#define XCT_MACRX_40BRES	0x3000000000000000ull
+#define XCT_MACRX_RR_M		0x3000000000000000ull
+#define XCT_MACRX_RR_NORES	0x0000000000000000ull
+#define XCT_MACRX_RR_8BRES	0x1000000000000000ull
 #define XCT_MACRX_O		0x0400000000000000ull
 #define XCT_MACRX_E		0x0200000000000000ull
 #define XCT_MACRX_FF		0x0100000000000000ull
@@ -447,6 +481,17 @@ enum {
 #define XCT_PTR_ADDR_S		0
 #define XCT_PTR_ADDR(x)		((((long)(x)) << XCT_PTR_ADDR_S) & \
 				 XCT_PTR_ADDR_M)
+
+/* Receive interface 8byte result fields */
+#define XCT_RXRES_8B_L4O_M	0xff00000000000000ull
+#define XCT_RXRES_8B_L4O_S	56
+#define XCT_RXRES_8B_RULE_M	0x00ffff0000000000ull
+#define XCT_RXRES_8B_RULE_S	40
+#define XCT_RXRES_8B_EVAL_M	0x000000ffff000000ull
+#define XCT_RXRES_8B_EVAL_S	24
+#define XCT_RXRES_8B_HTYPE_M	0x0000000000f00000ull
+#define XCT_RXRES_8B_HASH_M	0x00000000000fffffull
+#define XCT_RXRES_8B_HASH_S	0
 
 /* Receive interface buffer fields */
 #define XCT_RXB_LEN_M		0x0ffff00000000000ull

@@ -17,7 +17,6 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/ioctl.h>
 #include <linux/fs.h>
 #include <linux/file.h>
@@ -200,6 +199,5 @@ int __init init_socksys(void)
 
 void __exit cleanup_socksys(void)
 {
-	if (unregister_chrdev(30, "socksys"))
-		printk ("Couldn't unregister socksys character device\n");
+	unregister_chrdev(30, "socksys");
 }

@@ -37,7 +37,7 @@
 #include <asm/hardware.h>
 #include <asm/io.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-clock.h>
 #include <asm/arch/regs-gpio.h>
 
@@ -238,7 +238,7 @@ int __init s3c2410_baseclk_add(void)
 	}
 
 	/* We must be careful disabling the clocks we are not intending to
-	 * be using at boot time, as subsytems such as the LCD which do
+	 * be using at boot time, as subsystems such as the LCD which do
 	 * their own DMA requests to the bus can cause the system to lockup
 	 * if they where in the middle of requesting bus access.
 	 *

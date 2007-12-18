@@ -533,7 +533,6 @@ static int __devinit TLan_probe1(struct pci_dev *pdev,
 
 	struct net_device  *dev;
 	TLanPrivateInfo    *priv;
-	u8		   pci_rev;
 	u16		   device_id;
 	int		   reg, rc = -ENODEV;
 
@@ -557,7 +556,6 @@ static int __devinit TLan_probe1(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto err_out_regions;
 	}
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	priv = netdev_priv(dev);
@@ -577,8 +575,6 @@ static int __devinit TLan_probe1(struct pci_dev *pdev,
 			goto err_out_free_dev;
 		}
 
-		pci_read_config_byte ( pdev, PCI_REVISION_ID, &pci_rev);
-
 		for ( reg= 0; reg <= 5; reg ++ ) {
 			if (pci_resource_flags(pdev, reg) & IORESOURCE_IO) {
 				pci_io_base = pci_resource_start(pdev, reg);
@@ -595,7 +591,7 @@ static int __devinit TLan_probe1(struct pci_dev *pdev,
 
 		dev->base_addr = pci_io_base;
 		dev->irq = pdev->irq;
-		priv->adapterRev = pci_rev;
+		priv->adapterRev = pdev->revision;
 		pci_set_master(pdev);
 		pci_set_drvdata(pdev, dev);
 
@@ -1112,7 +1108,7 @@ static int TLan_StartTx( struct sk_buff *skb, struct net_device *dev )
 
 	if ( bbuf ) {
 		tail_buffer = priv->txBuffer + ( priv->txTail * TLAN_MAX_FRAME_SIZE );
-		memcpy( tail_buffer, skb->data, skb->len );
+		skb_copy_from_linear_data(skb, tail_buffer, skb->len);
 	} else {
 		tail_list->buffer[0].address = pci_map_single(priv->pciDev, skb->data, skb->len, PCI_DMA_TODEVICE);
 		TLan_StoreSKB(tail_list, skb);
@@ -1577,7 +1573,6 @@ u32 TLan_HandleRxEOF( struct net_device *dev, u16 host_int )
 				printk(KERN_INFO "TLAN: Couldn't allocate memory for received data.\n");
 			else {
 				head_buffer = priv->rxBuffer + (priv->rxHead * TLAN_MAX_FRAME_SIZE);
-				skb->dev = dev;
 				skb_reserve(skb, 2);
 				t = (void *) skb_put(skb, frameSize);
 
@@ -1608,7 +1603,6 @@ u32 TLan_HandleRxEOF( struct net_device *dev, u16 host_int )
 				skb->protocol = eth_type_trans( skb, dev );
 				netif_rx( skb );
 
-				new_skb->dev = dev;
 				skb_reserve( new_skb, 2 );
 				t = (void *) skb_put( new_skb, TLAN_MAX_FRAME_SIZE );
 				head_list->buffer[0].address = pci_map_single(priv->pciDev, new_skb->data, TLAN_MAX_FRAME_SIZE, PCI_DMA_FROMDEVICE);

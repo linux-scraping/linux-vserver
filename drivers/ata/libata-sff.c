@@ -1,5 +1,5 @@
 /*
- *  libata-bmdma.c - helper library for PCI IDE BMDMA
+ *  libata-sff.c - helper library for PCI IDE BMDMA
  *
  *  Maintained by:  Jeff Garzik <jgarzik@pobox.com>
  *    		    Please ALWAYS copy linux-ide@vger.kernel.org
@@ -63,46 +63,6 @@ u8 ata_irq_on(struct ata_port *ap)
 
 	return tmp;
 }
-
-u8 ata_dummy_irq_on (struct ata_port *ap) 	{ return 0; }
-
-/**
- *	ata_irq_ack - Acknowledge a device interrupt.
- *	@ap: Port on which interrupts are enabled.
- *
- *	Wait up to 10 ms for legacy IDE device to become idle (BUSY
- *	or BUSY+DRQ clear).  Obtain dma status and port status from
- *	device.  Clear the interrupt.  Return port status.
- *
- *	LOCKING:
- */
-
-u8 ata_irq_ack(struct ata_port *ap, unsigned int chk_drq)
-{
-	unsigned int bits = chk_drq ? ATA_BUSY | ATA_DRQ : ATA_BUSY;
-	u8 host_stat, post_stat, status;
-
-	status = ata_busy_wait(ap, bits, 1000);
-	if (status & bits)
-		if (ata_msg_err(ap))
-			printk(KERN_ERR "abnormal status 0x%X\n", status);
-
-	/* get controller status; clear intr, err bits */
-	host_stat = ioread8(ap->ioaddr.bmdma_addr + ATA_DMA_STATUS);
-	iowrite8(host_stat | ATA_DMA_INTR | ATA_DMA_ERR,
-		 ap->ioaddr.bmdma_addr + ATA_DMA_STATUS);
-
-	post_stat = ioread8(ap->ioaddr.bmdma_addr + ATA_DMA_STATUS);
-
-	if (ata_msg_intr(ap))
-		printk(KERN_INFO "%s: irq ack: host_stat 0x%X, new host_stat 0x%X, drv_stat 0x%X\n",
-			__FUNCTION__,
-			host_stat, post_stat, status);
-
-	return status;
-}
-
-u8 ata_dummy_irq_ack(struct ata_port *ap, unsigned int chk_drq) { return 0; }
 
 /**
  *	ata_tf_load - send taskfile registers to host controller
@@ -196,7 +156,7 @@ void ata_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 {
 	struct ata_ioports *ioaddr = &ap->ioaddr;
 
-	tf->command = ata_check_status(ap);
+	tf->command = ata_chk_status(ap);
 	tf->feature = ioread8(ioaddr->error_addr);
 	tf->nsect = ioread8(ioaddr->nsect_addr);
 	tf->lbal = ioread8(ioaddr->lbal_addr);
@@ -211,6 +171,8 @@ void ata_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 		tf->hob_lbal = ioread8(ioaddr->lbal_addr);
 		tf->hob_lbam = ioread8(ioaddr->lbam_addr);
 		tf->hob_lbah = ioread8(ioaddr->lbah_addr);
+		iowrite8(tf->ctl, ioaddr->ctl_addr);
+		ap->last_ctl = tf->ctl;
 	}
 }
 
@@ -286,7 +248,7 @@ void ata_bmdma_setup(struct ata_queued_cmd *qc)
  *	LOCKING:
  *	spin_lock_irqsave(host lock)
  */
-void ata_bmdma_start (struct ata_queued_cmd *qc)
+void ata_bmdma_start(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
 	u8 dmactl;
@@ -295,7 +257,7 @@ void ata_bmdma_start (struct ata_queued_cmd *qc)
 	dmactl = ioread8(ap->ioaddr.bmdma_addr + ATA_DMA_CMD);
 	iowrite8(dmactl | ATA_DMA_START, ap->ioaddr.bmdma_addr + ATA_DMA_CMD);
 
-	/* Strictly, one may wish to issue a readb() here, to
+	/* Strictly, one may wish to issue an ioread8() here, to
 	 * flush the mmio write.  However, control also passes
 	 * to the hardware at this point, and it will interrupt
 	 * us when we are to resume control.  So, in effect,
@@ -305,6 +267,9 @@ void ata_bmdma_start (struct ata_queued_cmd *qc)
 	 * is expected, so I think it is best to not add a readb()
 	 * without first all the MMIO ATA cards/mobos.
 	 * Or maybe I'm just being paranoid.
+	 *
+	 * FIXME: The posting of this write means I/O starts are
+	 * unneccessarily delayed for MMIO
 	 */
 }
 
@@ -440,7 +405,7 @@ void ata_bmdma_drive_eh(struct ata_port *ap, ata_prereset_fn_t prereset,
 	unsigned long flags;
 	int thaw = 0;
 
-	qc = __ata_qc_from_tag(ap, ap->active_tag);
+	qc = __ata_qc_from_tag(ap, ap->link.active_tag);
 	if (qc && !(qc->flags & ATA_QCFLAG_FAILED))
 		qc = NULL;
 
@@ -495,7 +460,7 @@ void ata_bmdma_error_handler(struct ata_port *ap)
 	ata_reset_fn_t hardreset;
 
 	hardreset = NULL;
-	if (sata_scr_valid(ap))
+	if (sata_scr_valid(&ap->link))
 		hardreset = sata_std_hardreset;
 
 	ata_bmdma_drive_eh(ap, ata_std_prereset, ata_std_softreset, hardreset,
@@ -516,6 +481,27 @@ void ata_bmdma_post_internal_cmd(struct ata_queued_cmd *qc)
 		ata_bmdma_stop(qc);
 }
 
+/**
+ *	ata_sff_port_start - Set port up for dma.
+ *	@ap: Port to initialize
+ *
+ *	Called just after data structures for each port are
+ *	initialized.  Allocates space for PRD table if the device
+ *	is DMA capable SFF.
+ *
+ *	May be used as the port_start() entry in ata_port_operations.
+ *
+ *	LOCKING:
+ *	Inherited from caller.
+ */
+
+int ata_sff_port_start(struct ata_port *ap)
+{
+	if (ap->ioaddr.bmdma_addr)
+		return ata_port_start(ap);
+	return 0;
+}
+
 #ifdef CONFIG_PCI
 
 static int ata_resources_present(struct pci_dev *pdev, int port)
@@ -526,185 +512,208 @@ static int ata_resources_present(struct pci_dev *pdev, int port)
 	port = port * 2;
 	for (i = 0; i < 2; i ++) {
 		if (pci_resource_start(pdev, port + i) == 0 ||
-			pci_resource_len(pdev, port + i) == 0)
-		return 0;
+		    pci_resource_len(pdev, port + i) == 0)
+			return 0;
 	}
 	return 1;
 }
 
 /**
- *	ata_pci_init_native_mode - Initialize native-mode driver
- *	@pdev:  pci device to be initialized
- *	@port:  array[2] of pointers to port info structures.
- *	@ports: bitmap of ports present
+ *	ata_pci_init_bmdma - acquire PCI BMDMA resources and init ATA host
+ *	@host: target ATA host
  *
- *	Utility function which allocates and initializes an
- *	ata_probe_ent structure for a standard dual-port
- *	PIO-based IDE controller.  The returned ata_probe_ent
- *	structure can be passed to ata_device_add().  The returned
- *	ata_probe_ent structure should then be freed with kfree().
+ *	Acquire PCI BMDMA resources and initialize @host accordingly.
  *
- *	The caller need only pass the address of the primary port, the
- *	secondary will be deduced automatically. If the device has non
- *	standard secondary port mappings this function can be called twice,
- *	once for each interface.
+ *	LOCKING:
+ *	Inherited from calling layer (may sleep).
+ *
+ *	RETURNS:
+ *	0 on success, -errno otherwise.
  */
-
-struct ata_probe_ent *
-ata_pci_init_native_mode(struct pci_dev *pdev, struct ata_port_info **port, int ports)
+int ata_pci_init_bmdma(struct ata_host *host)
 {
-	struct ata_probe_ent *probe_ent;
-	int i, p = 0;
-	void __iomem * const *iomap;
+	struct device *gdev = host->dev;
+	struct pci_dev *pdev = to_pci_dev(gdev);
+	int i, rc;
 
-	/* Discard disabled ports. Some controllers show their
-	   unused channels this way */
-	if (ata_resources_present(pdev, 0) == 0)
-		ports &= ~ATA_PORT_PRIMARY;
-	if (ata_resources_present(pdev, 1) == 0)
-		ports &= ~ATA_PORT_SECONDARY;
+	/* No BAR4 allocation: No DMA */
+	if (pci_resource_start(pdev, 4) == 0)
+		return 0;
 
-	/* iomap BARs */
-	if (ports & ATA_PORT_PRIMARY) {
-		for (i = 0; i <= 1; i++) {
-			if (pcim_iomap(pdev, i, 0) == NULL) {
-				dev_printk(KERN_ERR, &pdev->dev,
-					   "failed to iomap PCI BAR %d\n", i);
-				return NULL;
-			}
-		}
+	/* TODO: If we get no DMA mask we should fall back to PIO */
+	rc = pci_set_dma_mask(pdev, ATA_DMA_MASK);
+	if (rc)
+		return rc;
+	rc = pci_set_consistent_dma_mask(pdev, ATA_DMA_MASK);
+	if (rc)
+		return rc;
+
+	/* request and iomap DMA region */
+	rc = pcim_iomap_regions(pdev, 1 << 4, DRV_NAME);
+	if (rc) {
+		dev_printk(KERN_ERR, gdev, "failed to request/iomap BAR4\n");
+		return -ENOMEM;
 	}
-	if (ports & ATA_PORT_SECONDARY) {
-		for (i = 2; i <= 3; i++) {
-			if (pcim_iomap(pdev, i, 0) == NULL) {
-				dev_printk(KERN_ERR, &pdev->dev,
-					   "failed to iomap PCI BAR %d\n", i);
-				return NULL;
-			}
-		}
-	}
+	host->iomap = pcim_iomap_table(pdev);
 
-	pcim_iomap(pdev, 4, 0); /* may fail */
-	iomap = pcim_iomap_table(pdev);
+	for (i = 0; i < 2; i++) {
+		struct ata_port *ap = host->ports[i];
+		void __iomem *bmdma = host->iomap[4] + 8 * i;
 
-	/* alloc and init probe_ent */
-	probe_ent = ata_probe_ent_alloc(pci_dev_to_dev(pdev), port[0]);
-	if (!probe_ent)
-		return NULL;
+		if (ata_port_is_dummy(ap))
+			continue;
 
-	probe_ent->irq = pdev->irq;
-	probe_ent->irq_flags = IRQF_SHARED;
+		ap->ioaddr.bmdma_addr = bmdma;
+		if ((!(ap->flags & ATA_FLAG_IGN_SIMPLEX)) &&
+		    (ioread8(bmdma + 2) & 0x80))
+			host->flags |= ATA_HOST_SIMPLEX;
 
-	if (ports & ATA_PORT_PRIMARY) {
-		probe_ent->port[p].cmd_addr = iomap[0];
-		probe_ent->port[p].altstatus_addr =
-		probe_ent->port[p].ctl_addr = (void __iomem *)
-			((unsigned long)iomap[1] | ATA_PCI_CTL_OFS);
-		if (iomap[4]) {
-			if ((!(port[p]->flags & ATA_FLAG_IGN_SIMPLEX)) &&
-			    (ioread8(iomap[4] + 2) & 0x80))
-				probe_ent->_host_flags |= ATA_HOST_SIMPLEX;
-			probe_ent->port[p].bmdma_addr = iomap[4];
-		}
-		ata_std_ports(&probe_ent->port[p]);
-		p++;
+		ata_port_desc(ap, "bmdma 0x%llx",
+			(unsigned long long)pci_resource_start(pdev, 4) + 8 * i);
 	}
 
-	if (ports & ATA_PORT_SECONDARY) {
-		probe_ent->port[p].cmd_addr = iomap[2];
-		probe_ent->port[p].altstatus_addr =
-		probe_ent->port[p].ctl_addr = (void __iomem *)
-			((unsigned long)iomap[3] | ATA_PCI_CTL_OFS);
-		if (iomap[4]) {
-			if ((!(port[p]->flags & ATA_FLAG_IGN_SIMPLEX)) &&
-			    (ioread8(iomap[4] + 10) & 0x80))
-				probe_ent->_host_flags |= ATA_HOST_SIMPLEX;
-			probe_ent->port[p].bmdma_addr = iomap[4] + 8;
-		}
-		ata_std_ports(&probe_ent->port[p]);
-		probe_ent->pinfo2 = port[1];
-		p++;
-	}
-
-	probe_ent->n_ports = p;
-	return probe_ent;
+	return 0;
 }
 
-static struct ata_probe_ent *ata_pci_init_legacy_port(struct pci_dev *pdev,
-				struct ata_port_info **port, int port_mask)
+/**
+ *	ata_pci_init_sff_host - acquire native PCI ATA resources and init host
+ *	@host: target ATA host
+ *
+ *	Acquire native PCI ATA resources for @host and initialize the
+ *	first two ports of @host accordingly.  Ports marked dummy are
+ *	skipped and allocation failure makes the port dummy.
+ *
+ *	Note that native PCI resources are valid even for legacy hosts
+ *	as we fix up pdev resources array early in boot, so this
+ *	function can be used for both native and legacy SFF hosts.
+ *
+ *	LOCKING:
+ *	Inherited from calling layer (may sleep).
+ *
+ *	RETURNS:
+ *	0 if at least one port is initialized, -ENODEV if no port is
+ *	available.
+ */
+int ata_pci_init_sff_host(struct ata_host *host)
 {
-	struct ata_probe_ent *probe_ent;
-	void __iomem *iomap[5] = { }, *bmdma;
+	struct device *gdev = host->dev;
+	struct pci_dev *pdev = to_pci_dev(gdev);
+	unsigned int mask = 0;
+	int i, rc;
 
-	if (port_mask & ATA_PORT_PRIMARY) {
-		iomap[0] = devm_ioport_map(&pdev->dev, ATA_PRIMARY_CMD, 8);
-		iomap[1] = devm_ioport_map(&pdev->dev, ATA_PRIMARY_CTL, 1);
-		if (!iomap[0] || !iomap[1])
-			return NULL;
+	/* request, iomap BARs and init port addresses accordingly */
+	for (i = 0; i < 2; i++) {
+		struct ata_port *ap = host->ports[i];
+		int base = i * 2;
+		void __iomem * const *iomap;
+
+		if (ata_port_is_dummy(ap))
+			continue;
+
+		/* Discard disabled ports.  Some controllers show
+		 * their unused channels this way.  Disabled ports are
+		 * made dummy.
+		 */
+		if (!ata_resources_present(pdev, i)) {
+			ap->ops = &ata_dummy_port_ops;
+			continue;
+		}
+
+		rc = pcim_iomap_regions(pdev, 0x3 << base, DRV_NAME);
+		if (rc) {
+			dev_printk(KERN_WARNING, gdev,
+				   "failed to request/iomap BARs for port %d "
+				   "(errno=%d)\n", i, rc);
+			if (rc == -EBUSY)
+				pcim_pin_device(pdev);
+			ap->ops = &ata_dummy_port_ops;
+			continue;
+		}
+		host->iomap = iomap = pcim_iomap_table(pdev);
+
+		ap->ioaddr.cmd_addr = iomap[base];
+		ap->ioaddr.altstatus_addr =
+		ap->ioaddr.ctl_addr = (void __iomem *)
+			((unsigned long)iomap[base + 1] | ATA_PCI_CTL_OFS);
+		ata_std_ports(&ap->ioaddr);
+
+		ata_port_desc(ap, "cmd 0x%llx ctl 0x%llx",
+			(unsigned long long)pci_resource_start(pdev, base),
+			(unsigned long long)pci_resource_start(pdev, base + 1));
+
+		mask |= 1 << i;
 	}
 
-	if (port_mask & ATA_PORT_SECONDARY) {
-		iomap[2] = devm_ioport_map(&pdev->dev, ATA_SECONDARY_CMD, 8);
-		iomap[3] = devm_ioport_map(&pdev->dev, ATA_SECONDARY_CTL, 1);
-		if (!iomap[2] || !iomap[3])
-			return NULL;
+	if (!mask) {
+		dev_printk(KERN_ERR, gdev, "no available native port\n");
+		return -ENODEV;
 	}
 
-	bmdma = pcim_iomap(pdev, 4, 16); /* may fail */
-
-	/* alloc and init probe_ent */
-	probe_ent = ata_probe_ent_alloc(pci_dev_to_dev(pdev), port[0]);
-	if (!probe_ent)
-		return NULL;
-
-	probe_ent->n_ports = 2;
-	probe_ent->irq_flags = IRQF_SHARED;
-
-	if (port_mask & ATA_PORT_PRIMARY) {
-		probe_ent->irq = ATA_PRIMARY_IRQ(pdev);
-		probe_ent->port[0].cmd_addr = iomap[0];
-		probe_ent->port[0].altstatus_addr =
-		probe_ent->port[0].ctl_addr = iomap[1];
-		if (bmdma) {
-			probe_ent->port[0].bmdma_addr = bmdma;
-			if ((!(port[0]->flags & ATA_FLAG_IGN_SIMPLEX)) &&
-			    (ioread8(bmdma + 2) & 0x80))
-				probe_ent->_host_flags |= ATA_HOST_SIMPLEX;
-		}
-		ata_std_ports(&probe_ent->port[0]);
-	} else
-		probe_ent->dummy_port_mask |= ATA_PORT_PRIMARY;
-
-	if (port_mask & ATA_PORT_SECONDARY) {
-		if (probe_ent->irq)
-			probe_ent->irq2 = ATA_SECONDARY_IRQ(pdev);
-		else
-			probe_ent->irq = ATA_SECONDARY_IRQ(pdev);
-		probe_ent->port[1].cmd_addr = iomap[2];
-		probe_ent->port[1].altstatus_addr =
-		probe_ent->port[1].ctl_addr = iomap[3];
-		if (bmdma) {
-			probe_ent->port[1].bmdma_addr = bmdma + 8;
-			if ((!(port[1]->flags & ATA_FLAG_IGN_SIMPLEX)) &&
-			    (ioread8(bmdma + 10) & 0x80))
-				probe_ent->_host_flags |= ATA_HOST_SIMPLEX;
-		}
-		ata_std_ports(&probe_ent->port[1]);
-
-		/* FIXME: could be pointing to stack area; must copy */
-		probe_ent->pinfo2 = port[1];
-	} else
-		probe_ent->dummy_port_mask |= ATA_PORT_SECONDARY;
-
-	return probe_ent;
+	return 0;
 }
 
+/**
+ *	ata_pci_prepare_sff_host - helper to prepare native PCI ATA host
+ *	@pdev: target PCI device
+ *	@ppi: array of port_info, must be enough for two ports
+ *	@r_host: out argument for the initialized ATA host
+ *
+ *	Helper to allocate ATA host for @pdev, acquire all native PCI
+ *	resources and initialize it accordingly in one go.
+ *
+ *	LOCKING:
+ *	Inherited from calling layer (may sleep).
+ *
+ *	RETURNS:
+ *	0 on success, -errno otherwise.
+ */
+int ata_pci_prepare_sff_host(struct pci_dev *pdev,
+			     const struct ata_port_info * const * ppi,
+			     struct ata_host **r_host)
+{
+	struct ata_host *host;
+	int rc;
+
+	if (!devres_open_group(&pdev->dev, NULL, GFP_KERNEL))
+		return -ENOMEM;
+
+	host = ata_host_alloc_pinfo(&pdev->dev, ppi, 2);
+	if (!host) {
+		dev_printk(KERN_ERR, &pdev->dev,
+			   "failed to allocate ATA host\n");
+		rc = -ENOMEM;
+		goto err_out;
+	}
+
+	rc = ata_pci_init_sff_host(host);
+	if (rc)
+		goto err_out;
+
+	/* init DMA related stuff */
+	rc = ata_pci_init_bmdma(host);
+	if (rc)
+		goto err_bmdma;
+
+	devres_remove_group(&pdev->dev, NULL);
+	*r_host = host;
+	return 0;
+
+ err_bmdma:
+	/* This is necessary because PCI and iomap resources are
+	 * merged and releasing the top group won't release the
+	 * acquired resources if some of those have been acquired
+	 * before entering this function.
+	 */
+	pcim_iounmap_regions(pdev, 0xf);
+ err_out:
+	devres_release_group(&pdev->dev, NULL);
+	return rc;
+}
 
 /**
  *	ata_pci_init_one - Initialize/register PCI IDE host controller
  *	@pdev: Controller to be initialized
- *	@port_info: Information from low-level host driver
- *	@n_ports: Number of ports attached to host controller
+ *	@ppi: array of port_info, must be enough for two ports
  *
  *	This is a helper function which can be called from a driver's
  *	xxx_init_one() probe function if the hardware uses traditional
@@ -724,29 +733,34 @@ static struct ata_probe_ent *ata_pci_init_legacy_port(struct pci_dev *pdev,
  *	RETURNS:
  *	Zero on success, negative on errno-based value on error.
  */
-
-int ata_pci_init_one (struct pci_dev *pdev, struct ata_port_info **port_info,
-		      unsigned int n_ports)
+int ata_pci_init_one(struct pci_dev *pdev,
+		     const struct ata_port_info * const * ppi)
 {
 	struct device *dev = &pdev->dev;
-	struct ata_probe_ent *probe_ent = NULL;
-	struct ata_port_info *port[2];
+	const struct ata_port_info *pi = NULL;
+	struct ata_host *host = NULL;
 	u8 mask;
-	unsigned int legacy_mode = 0;
-	int rc;
+	int legacy_mode = 0;
+	int i, rc;
 
 	DPRINTK("ENTER\n");
 
+	/* look up the first valid port_info */
+	for (i = 0; i < 2 && ppi[i]; i++) {
+		if (ppi[i]->port_ops != &ata_dummy_port_ops) {
+			pi = ppi[i];
+			break;
+		}
+	}
+
+	if (!pi) {
+		dev_printk(KERN_ERR, &pdev->dev,
+			   "no valid port_info specified\n");
+		return -EINVAL;
+	}
+
 	if (!devres_open_group(dev, NULL, GFP_KERNEL))
 		return -ENOMEM;
-
-	BUG_ON(n_ports < 1 || n_ports > 2);
-
-	port[0] = port_info[0];
-	if (n_ports > 1)
-		port[1] = port_info[1];
-	else
-		port[1] = port[0];
 
 	/* FIXME: Really for ATA it isn't safe because the device may be
 	   multi-purpose and we want to leave it alone if it was already
@@ -754,7 +768,7 @@ int ata_pci_init_one (struct pci_dev *pdev, struct ata_port_info **port_info,
 
 	   Checking dev->is_enabled is insufficient as this is not set at
 	   boot for the primary video which is BIOS enabled
-         */
+	  */
 
 	rc = pcim_enable_device(pdev);
 	if (rc)
@@ -767,7 +781,7 @@ int ata_pci_init_one (struct pci_dev *pdev, struct ata_port_info **port_info,
 		pci_read_config_byte(pdev, PCI_CLASS_PROG, &tmp8);
 		mask = (1 << 2) | (1 << 0);
 		if ((tmp8 & mask) != mask)
-			legacy_mode = (1 << 3);
+			legacy_mode = 1;
 #if defined(CONFIG_NO_ATA_LEGACY)
 		/* Some platforms with PCI limits cannot address compat
 		   port space. In that case we punt if their firmware has
@@ -780,96 +794,55 @@ int ata_pci_init_one (struct pci_dev *pdev, struct ata_port_info **port_info,
 #endif
 	}
 
-	if (!legacy_mode) {
-		rc = pci_request_regions(pdev, DRV_NAME);
-		if (rc) {
-			pcim_pin_device(pdev);
-			goto err_out;
-		}
-	} else {
-		/* Deal with combined mode hack. This side of the logic all
-		   goes away once the combined mode hack is killed in 2.6.21 */
-		if (!devm_request_region(dev, ATA_PRIMARY_CMD, 8, "libata")) {
-			struct resource *conflict, res;
-			res.start = ATA_PRIMARY_CMD;
-			res.end = ATA_PRIMARY_CMD + 8 - 1;
-			conflict = ____request_resource(&ioport_resource, &res);
-			while (conflict->child)
-				conflict = ____request_resource(conflict, &res);
-			if (!strcmp(conflict->name, "libata"))
-				legacy_mode |= ATA_PORT_PRIMARY;
-			else {
-				pcim_pin_device(pdev);
-				printk(KERN_WARNING "ata: 0x%0X IDE port busy\n" \
-						    "ata: conflict with %s\n",
-						    ATA_PRIMARY_CMD,
-						    conflict->name);
-			}
-		} else
-			legacy_mode |= ATA_PORT_PRIMARY;
-
-		if (!devm_request_region(dev, ATA_SECONDARY_CMD, 8, "libata")) {
-			struct resource *conflict, res;
-			res.start = ATA_SECONDARY_CMD;
-			res.end = ATA_SECONDARY_CMD + 8 - 1;
-			conflict = ____request_resource(&ioport_resource, &res);
-			while (conflict->child)
-				conflict = ____request_resource(conflict, &res);
-			if (!strcmp(conflict->name, "libata"))
-				legacy_mode |= ATA_PORT_SECONDARY;
-			else {
-				pcim_pin_device(pdev);
-				printk(KERN_WARNING "ata: 0x%X IDE port busy\n" \
-						    "ata: conflict with %s\n",
-						    ATA_SECONDARY_CMD,
-						    conflict->name);
-			}
-		} else
-			legacy_mode |= ATA_PORT_SECONDARY;
-
-		if (legacy_mode & ATA_PORT_PRIMARY)
-			pci_request_region(pdev, 1, DRV_NAME);
-		if (legacy_mode & ATA_PORT_SECONDARY)
-			pci_request_region(pdev, 3, DRV_NAME);
-		/* If there is a DMA resource, allocate it */
-		pci_request_region(pdev, 4, DRV_NAME);
-	}
-
-	/* we have legacy mode, but all ports are unavailable */
-	if (legacy_mode == (1 << 3)) {
-		rc = -EBUSY;
-		goto err_out;
-	}
-
-	/* TODO: If we get no DMA mask we should fall back to PIO */
-	rc = pci_set_dma_mask(pdev, ATA_DMA_MASK);
+	/* prepare host */
+	rc = ata_pci_prepare_sff_host(pdev, ppi, &host);
 	if (rc)
 		goto err_out;
-	rc = pci_set_consistent_dma_mask(pdev, ATA_DMA_MASK);
-	if (rc)
-		goto err_out;
-
-	if (legacy_mode) {
-		probe_ent = ata_pci_init_legacy_port(pdev, port, legacy_mode);
-	} else {
-		if (n_ports == 2)
-			probe_ent = ata_pci_init_native_mode(pdev, port, ATA_PORT_PRIMARY | ATA_PORT_SECONDARY);
-		else
-			probe_ent = ata_pci_init_native_mode(pdev, port, ATA_PORT_PRIMARY);
-	}
-	if (!probe_ent) {
-		rc = -ENOMEM;
-		goto err_out;
-	}
 
 	pci_set_master(pdev);
 
-	if (!ata_device_add(probe_ent)) {
-		rc = -ENODEV;
+	/* start host and request IRQ */
+	rc = ata_host_start(host);
+	if (rc)
 		goto err_out;
+
+	if (!legacy_mode) {
+		rc = devm_request_irq(dev, pdev->irq, pi->port_ops->irq_handler,
+				      IRQF_SHARED, DRV_NAME, host);
+		if (rc)
+			goto err_out;
+
+		ata_port_desc(host->ports[0], "irq %d", pdev->irq);
+		ata_port_desc(host->ports[1], "irq %d", pdev->irq);
+	} else {
+		if (!ata_port_is_dummy(host->ports[0])) {
+			rc = devm_request_irq(dev, ATA_PRIMARY_IRQ(pdev),
+					      pi->port_ops->irq_handler,
+					      IRQF_SHARED, DRV_NAME, host);
+			if (rc)
+				goto err_out;
+
+			ata_port_desc(host->ports[0], "irq %d",
+				      ATA_PRIMARY_IRQ(pdev));
+		}
+
+		if (!ata_port_is_dummy(host->ports[1])) {
+			rc = devm_request_irq(dev, ATA_SECONDARY_IRQ(pdev),
+					      pi->port_ops->irq_handler,
+					      IRQF_SHARED, DRV_NAME, host);
+			if (rc)
+				goto err_out;
+
+			ata_port_desc(host->ports[1], "irq %d",
+				      ATA_SECONDARY_IRQ(pdev));
+		}
 	}
 
-	devm_kfree(dev, probe_ent);
+	/* register */
+	rc = ata_host_register(host, pi->sht);
+	if (rc)
+		goto err_out;
+
 	devres_remove_group(dev, NULL);
 	return 0;
 
@@ -883,7 +856,7 @@ err_out:
  *	@pdev: PCI device
  *
  *	Some PCI ATA devices report simplex mode but in fact can be told to
- *	enter non simplex mode. This implements the neccessary logic to
+ *	enter non simplex mode. This implements the necessary logic to
  *	perform the task on such devices. Calling it on other devices will
  *	have -undefined- behaviour.
  */
@@ -904,12 +877,12 @@ int ata_pci_clear_simplex(struct pci_dev *pdev)
 	return 0;
 }
 
-unsigned long ata_pci_default_filter(const struct ata_port *ap, struct ata_device *adev, unsigned long xfer_mask)
+unsigned long ata_pci_default_filter(struct ata_device *adev, unsigned long xfer_mask)
 {
 	/* Filter out DMA modes if the device has been configured by
 	   the BIOS as PIO only */
 
-	if (ap->ioaddr.bmdma_addr == 0)
+	if (adev->link->ap->ioaddr.bmdma_addr == NULL)
 		xfer_mask &= ~(ATA_MASK_MWDMA | ATA_MASK_UDMA);
 	return xfer_mask;
 }

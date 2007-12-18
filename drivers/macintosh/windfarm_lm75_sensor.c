@@ -117,10 +117,9 @@ static struct wf_lm75_sensor *wf_lm75_create(struct i2c_adapter *adapter,
 	DBG("wf_lm75: creating  %s device at address 0x%02x\n",
 	    ds1775 ? "ds1775" : "lm75", addr);
 
-	lm = kmalloc(sizeof(struct wf_lm75_sensor), GFP_KERNEL);
+	lm = kzalloc(sizeof(struct wf_lm75_sensor), GFP_KERNEL);
 	if (lm == NULL)
 		return NULL;
-	memset(lm, 0, sizeof(struct wf_lm75_sensor));
 
 	/* Usual rant about sensor names not beeing very consistent in
 	 * the device-tree, oh well ...
@@ -176,7 +175,7 @@ static int wf_lm75_attach(struct i2c_adapter *adapter)
 	for (dev = NULL;
 	     (dev = of_get_next_child(busnode, dev)) != NULL;) {
 		const char *loc =
-			get_property(dev, "hwsensor-location", NULL);
+			of_get_property(dev, "hwsensor-location", NULL);
 		u8 addr;
 
 		/* We must re-match the adapter in order to properly check
@@ -188,10 +187,10 @@ static int wf_lm75_attach(struct i2c_adapter *adapter)
 		if (loc == NULL || addr == 0)
 			continue;
 		/* real lm75 */
-		if (device_is_compatible(dev, "lm75"))
+		if (of_device_is_compatible(dev, "lm75"))
 			wf_lm75_create(adapter, addr, 0, loc);
 		/* ds1775 (compatible, better resolution */
-		else if (device_is_compatible(dev, "ds1775"))
+		else if (of_device_is_compatible(dev, "ds1775"))
 			wf_lm75_create(adapter, addr, 1, loc);
 	}
 	return 0;

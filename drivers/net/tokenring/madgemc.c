@@ -23,7 +23,6 @@ static const char version[] = "madgemc.c: v0.91 23/01/2000 by Adam Fritzler\n";
 #include <linux/mca.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
-#include <linux/pci.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/trdevice.h>
@@ -152,7 +151,8 @@ static int __devinit madgemc_probe(struct device *device)
 	struct net_local *tp;
 	struct card_info *card;
 	struct mca_device *mdev = to_mca_device(device);
-	int ret = 0, i = 0;
+	int ret = 0;
+	DECLARE_MAC_BUF(mac);
 
 	if (versionprinted++ == 0)
 		printk("%s", version);
@@ -169,7 +169,6 @@ static int __devinit madgemc_probe(struct device *device)
 		goto getout;
 	}
 
-	SET_MODULE_OWNER(dev);
 	dev->dma = 0;
 
 	card = kmalloc(sizeof(struct card_info), GFP_KERNEL);
@@ -324,11 +323,8 @@ static int __devinit madgemc_probe(struct device *device)
 	mca_device_set_name(mdev, (card->cardtype == 0x08)?MADGEMC16_CARDNAME:MADGEMC32_CARDNAME);
 	mca_set_adapter_procfn(mdev->slot, madgemc_mcaproc, dev);
 
-	printk("%s:     Ring Station Address: ", dev->name);
-	printk("%2.2x", dev->dev_addr[0]);
-	for (i = 1; i < 6; i++)
-		printk(":%2.2x", dev->dev_addr[i]);
-	printk("\n");
+	printk("%s:     Ring Station Address: %s\n",
+	       dev->name, print_mac(mac, dev->dev_addr));
 
 	if (tmsdev_init(dev, device)) {
 		printk("%s: unable to get memory for dev->priv.\n", 
@@ -691,14 +687,14 @@ static int madgemc_close(struct net_device *dev)
 static int madgemc_mcaproc(char *buf, int slot, void *d) 
 {	
 	struct net_device *dev = (struct net_device *)d;
-	struct net_local *tp = dev->priv;
+	struct net_local *tp = netdev_priv(dev);
 	struct card_info *curcard = tp->tmspriv;
 	int len = 0;
+	DECLARE_MAC_BUF(mac);
 	
 	len += sprintf(buf+len, "-------\n");
 	if (curcard) {
 		struct net_local *tp = netdev_priv(dev);
-		int i;
 		
 		len += sprintf(buf+len, "Card Revision: %d\n", curcard->cardrev);
 		len += sprintf(buf+len, "RAM Size: %dkb\n", curcard->ramsize);
@@ -718,11 +714,8 @@ static int madgemc_mcaproc(char *buf, int slot, void *d)
 		}
 		len += sprintf(buf+len, " (%s)\n", (curcard->fairness)?"Unfair":"Fair");
 		
-		len += sprintf(buf+len, "Ring Station Address: ");
-		len += sprintf(buf+len, "%2.2x", dev->dev_addr[0]);
-		for (i = 1; i < 6; i++)
-			len += sprintf(buf+len, " %2.2x", dev->dev_addr[i]);
-		len += sprintf(buf+len, "\n");
+		len += sprintf(buf+len, "Ring Station Address: %s\n",
+			       print_mac(mac, dev->dev_addr));
 	} else 
 		len += sprintf(buf+len, "Card not configured\n");
 
@@ -737,7 +730,7 @@ static int __devexit madgemc_remove(struct device *device)
 
 	BUG_ON(!dev);
 
-	tp = dev->priv;
+	tp = netdev_priv(dev);
 	card = tp->tmspriv;
 	kfree(card);
 	tp->tmspriv = NULL;

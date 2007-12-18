@@ -32,6 +32,8 @@
  *		- first public version
  */
 
+#include <linux/input.h>
+
 #define UINPUT_VERSION		3
 
 #ifdef __KERNEL__
@@ -159,10 +161,6 @@ struct uinput_ff_erase {
 #define EV_UINPUT		0x0101
 #define UI_FF_UPLOAD		1
 #define UI_FF_ERASE		2
-
-#ifndef NBITS
-#define NBITS(x) ((((x)-1)/(sizeof(long)*8))+1)
-#endif	/* NBITS */
 
 #define UINPUT_MAX_NAME_SIZE	80
 struct uinput_user_dev {

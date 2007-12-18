@@ -962,16 +962,6 @@ struct ahc_softc {
 	ahc_bus_chip_init_t	  bus_chip_init;
 
 	/*
-	 * Bus specific suspend routine.
-	 */
-	ahc_bus_suspend_t	  bus_suspend;
-
-	/*
-	 * Bus specific resume routine.
-	 */
-	ahc_bus_resume_t	  bus_resume;
-
-	/*
 	 * Target mode related state kept on a per enabled lun basis.
 	 * Targets that are not enabled will have null entries.
 	 * As an initiator, we keep one target entry for our initiator
@@ -1153,6 +1143,7 @@ struct ahc_pci_identity	*ahc_find_pci_device(ahc_dev_softc_t);
 int			 ahc_pci_config(struct ahc_softc *,
 					struct ahc_pci_identity *);
 int			 ahc_pci_test_register_access(struct ahc_softc *);
+void			 ahc_pci_resume(struct ahc_softc *ahc);
 
 /*************************** EISA/VL Front End ********************************/
 struct aic7770_identity *aic7770_find_device(uint32_t);
@@ -1277,11 +1268,6 @@ typedef enum {
 	AHC_QUEUE_BASIC,
 	AHC_QUEUE_TAGGED
 } ahc_queue_alg;
-
-void			ahc_set_tags(struct ahc_softc *ahc,
-				     struct scsi_cmnd *cmd,
-				     struct ahc_devinfo *devinfo,
-				     ahc_queue_alg alg);
 
 /**************************** Target Mode *************************************/
 #ifdef AHC_TARGET_MODE

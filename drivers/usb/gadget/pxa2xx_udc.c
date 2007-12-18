@@ -24,9 +24,9 @@
  *
  */
 
-#undef	DEBUG
 // #define	VERBOSE	DBG_VERBOSE
 
+#include <linux/device.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/ioport.h>
@@ -43,22 +43,22 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/irq.h>
+#include <linux/clk.h>
+#include <linux/err.h>
 
 #include <asm/byteorder.h>
 #include <asm/dma.h>
+#include <asm/gpio.h>
 #include <asm/io.h>
 #include <asm/system.h>
 #include <asm/mach-types.h>
 #include <asm/unaligned.h>
 #include <asm/hardware.h>
-#ifdef CONFIG_ARCH_PXA
-#include <asm/arch/pxa-regs.h>
-#endif
 
 #include <linux/usb/ch9.h>
-#include <linux/usb_gadget.h>
+#include <linux/usb/gadget.h>
 
-#include <asm/arch/udc.h>
+#include <asm/mach/udc_pxa2xx.h>
 
 
 /*
@@ -71,14 +71,22 @@
  * by the host to interact with this device, and allocates endpoints to
  * the different protocol interfaces.  The controller driver virtualizes
  * usb hardware so that the gadget drivers will be more portable.
- * 
+ *
  * This UDC hardware wants to implement a bit too much USB protocol, so
  * it constrains the sorts of USB configuration change events that work.
  * The errata for these chips are misleading; some "fixed" bugs from
  * pxa250 a0/a1 b0/b1/b2 sure act like they're still there.
+ *
+ * Note that the UDC hardware supports DMA (except on IXP) but that's
+ * not used here.  IN-DMA (to host) is simple enough, when the data is
+ * suitably aligned (16 bytes) ... the network stack doesn't do that,
+ * other software can.  OUT-DMA is buggy in most chip versions, as well
+ * as poorly designed (data toggle not automatic).  So this driver won't
+ * bother using DMA.  (Mostly-working IN-DMA support was available in
+ * kernels before 2.6.23, but was never enabled or well tested.)
  */
 
-#define	DRIVER_VERSION	"4-May-2005"
+#define	DRIVER_VERSION	"30-June-2007"
 #define	DRIVER_DESC	"PXA 25x USB Device Controller driver"
 
 
@@ -87,12 +95,7 @@ static const char driver_name [] = "pxa2xx_udc";
 static const char ep0name [] = "ep0";
 
 
-// #define	USE_DMA
-// #define	USE_OUT_DMA
-// #define	DISABLE_TEST_MODE
-
 #ifdef CONFIG_ARCH_IXP4XX
-#undef USE_DMA
 
 /* cpu-specific register addresses are compiled in to this code */
 #ifdef CONFIG_ARCH_PXA
@@ -104,44 +107,14 @@ static const char ep0name [] = "ep0";
 #include "pxa2xx_udc.h"
 
 
-#ifdef	USE_DMA
-static int use_dma = 1;
-module_param(use_dma, bool, 0);
-MODULE_PARM_DESC (use_dma, "true to use dma");
-
-static void dma_nodesc_handler (int dmach, void *_ep);
-static void kick_dma(struct pxa2xx_ep *ep, struct pxa2xx_request *req);
-
-#ifdef USE_OUT_DMA
-#define	DMASTR " (dma support)"
-#else
-#define	DMASTR " (dma in)"
-#endif
-
-#else	/* !USE_DMA */
-#define	DMASTR " (pio only)"
-#undef	USE_OUT_DMA
-#endif
-
 #ifdef	CONFIG_USB_PXA2XX_SMALL
 #define SIZE_STR	" (small)"
 #else
 #define SIZE_STR	""
 #endif
 
-#ifdef DISABLE_TEST_MODE
-/* (mode == 0) == no undocumented chip tweaks
- * (mode & 1)  == double buffer bulk IN
- * (mode & 2)  == double buffer bulk OUT
- * ... so mode = 3 (or 7, 15, etc) does it for both
- */
-static ushort fifo_mode = 0;
-module_param(fifo_mode, ushort, 0);
-MODULE_PARM_DESC (fifo_mode, "pxa2xx udc fifo mode");
-#endif
-
 /* ---------------------------------------------------------------------------
- * 	endpoint related parts of the api to the usb controller hardware,
+ *	endpoint related parts of the api to the usb controller hardware,
  *	used by gadget driver; and the inner talker-to-hardware core.
  * ---------------------------------------------------------------------------
  */
@@ -155,7 +128,7 @@ static int is_vbus_present(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_vbus)
-		return udc_gpio_get(mach->gpio_vbus);
+		return gpio_get_value(mach->gpio_vbus);
 	if (mach->udc_is_connected)
 		return mach->udc_is_connected();
 	return 1;
@@ -167,7 +140,7 @@ static void pullup_off(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_pullup)
-		udc_gpio_set(mach->gpio_pullup, 0);
+		gpio_set_value(mach->gpio_pullup, 0);
 	else if (mach->udc_command)
 		mach->udc_command(PXA2XX_UDC_CMD_DISCONNECT);
 }
@@ -177,7 +150,7 @@ static void pullup_on(void)
 	struct pxa2xx_udc_mach_info		*mach = the_controller->mach;
 
 	if (mach->gpio_pullup)
-		udc_gpio_set(mach->gpio_pullup, 1);
+		gpio_set_value(mach->gpio_pullup, 1);
 	else if (mach->udc_command)
 		mach->udc_command(PXA2XX_UDC_CMD_CONNECT);
 }
@@ -281,39 +254,14 @@ static int pxa2xx_ep_enable (struct usb_ep *_ep,
 	}
 
 	ep->desc = desc;
-	ep->dma = -1;
 	ep->stopped = 0;
-	ep->pio_irqs = ep->dma_irqs = 0;
+	ep->pio_irqs = 0;
 	ep->ep.maxpacket = le16_to_cpu (desc->wMaxPacketSize);
 
 	/* flush fifo (mostly for OUT buffers) */
 	pxa2xx_ep_fifo_flush (_ep);
 
 	/* ... reset halt state too, if we could ... */
-
-#ifdef	USE_DMA
-	/* for (some) bulk and ISO endpoints, try to get a DMA channel and
-	 * bind it to the endpoint.  otherwise use PIO. 
-	 */
-	switch (ep->bmAttributes) {
-	case USB_ENDPOINT_XFER_ISOC:
-		if (le16_to_cpu(desc->wMaxPacketSize) % 32)
-			break;
-		// fall through
-	case USB_ENDPOINT_XFER_BULK:
-		if (!use_dma || !ep->reg_drcmr)
-			break;
-		ep->dma = pxa_request_dma ((char *)_ep->name,
- 				(le16_to_cpu (desc->wMaxPacketSize) > 64)
-					? DMA_PRIO_MEDIUM /* some iso */
-					: DMA_PRIO_LOW,
-				dma_nodesc_handler, ep);
-		if (ep->dma >= 0) {
-			*ep->reg_drcmr = DRCMR_MAPVLD | ep->dma;
-			DMSG("%s using dma%d\n", _ep->name, ep->dma);
-		}
-	}
-#endif
 
 	DBG(DBG_VERBOSE, "enabled %s\n", _ep->name);
 	return 0;
@@ -334,14 +282,6 @@ static int pxa2xx_ep_disable (struct usb_ep *_ep)
 
 	nuke (ep, -ESHUTDOWN);
 
-#ifdef	USE_DMA
-	if (ep->dma >= 0) {
-		*ep->reg_drcmr = 0;
-		pxa_free_dma (ep->dma);
-		ep->dma = -1;
-	}
-#endif
-
 	/* flush fifo (mostly for IN buffers) */
 	pxa2xx_ep_fifo_flush (_ep);
 
@@ -361,7 +301,7 @@ static int pxa2xx_ep_disable (struct usb_ep *_ep)
  */
 
 /*
- * 	pxa2xx_ep_alloc_request - allocate a request data structure
+ *	pxa2xx_ep_alloc_request - allocate a request data structure
  */
 static struct usb_request *
 pxa2xx_ep_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
@@ -378,7 +318,7 @@ pxa2xx_ep_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 
 
 /*
- * 	pxa2xx_ep_free_request - deallocate a request data structure
+ *	pxa2xx_ep_free_request - deallocate a request data structure
  */
 static void
 pxa2xx_ep_free_request (struct usb_ep *_ep, struct usb_request *_req)
@@ -388,35 +328,6 @@ pxa2xx_ep_free_request (struct usb_ep *_ep, struct usb_request *_req)
 	req = container_of (_req, struct pxa2xx_request, req);
 	WARN_ON (!list_empty (&req->queue));
 	kfree(req);
-}
-
-
-/* PXA cache needs flushing with DMA I/O (it's dma-incoherent), but there's
- * no device-affinity and the heap works perfectly well for i/o buffers.
- * It wastes much less memory than dma_alloc_coherent() would, and even
- * prevents cacheline (32 bytes wide) sharing problems.
- */
-static void *
-pxa2xx_ep_alloc_buffer(struct usb_ep *_ep, unsigned bytes,
-	dma_addr_t *dma, gfp_t gfp_flags)
-{
-	char			*retval;
-
-	retval = kmalloc (bytes, gfp_flags & ~(__GFP_DMA|__GFP_HIGHMEM));
-	if (retval)
-#ifdef	USE_DMA
-		*dma = virt_to_bus (retval);
-#else
-		*dma = (dma_addr_t)~0;
-#endif
-	return retval;
-}
-
-static void
-pxa2xx_ep_free_buffer(struct usb_ep *_ep, void *buf, dma_addr_t dma,
-		unsigned bytes)
-{
-	kfree (buf);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -518,18 +429,8 @@ write_fifo (struct pxa2xx_ep *ep, struct pxa2xx_request *req)
 		/* requests complete when all IN data is in the FIFO */
 		if (is_last) {
 			done (ep, req, 0);
-			if (list_empty(&ep->queue) || unlikely(ep->dma >= 0)) {
+			if (list_empty(&ep->queue))
 				pio_irq_disable (ep->bEndpointAddress);
-#ifdef USE_DMA
-				/* unaligned data and zlps couldn't use dma */
-				if (unlikely(!list_empty(&ep->queue))) {
-					req = list_entry(ep->queue.next,
-						struct pxa2xx_request, queue);
-					kick_dma(ep,req);
-					return 0;
-				}
-#endif
-			}
 			return 1;
 		}
 
@@ -728,182 +629,6 @@ read_ep0_fifo (struct pxa2xx_ep *ep, struct pxa2xx_request *req)
 	return 0;
 }
 
-#ifdef	USE_DMA
-
-#define	MAX_IN_DMA	((DCMD_LENGTH + 1) - BULK_FIFO_SIZE)
-
-static void
-start_dma_nodesc(struct pxa2xx_ep *ep, struct pxa2xx_request *req, int is_in)
-{
-	u32	dcmd = req->req.length;
-	u32	buf = req->req.dma;
-	u32	fifo = io_v2p ((u32)ep->reg_uddr);
-
-	/* caller guarantees there's a packet or more remaining
-	 *  - IN may end with a short packet (TSP set separately),
-	 *  - OUT is always full length
-	 */
-	buf += req->req.actual;
-	dcmd -= req->req.actual;
-	ep->dma_fixup = 0;
-
-	/* no-descriptor mode can be simple for bulk-in, iso-in, iso-out */
-	DCSR(ep->dma) = DCSR_NODESC;
-	if (is_in) {
-		DSADR(ep->dma) = buf;
-		DTADR(ep->dma) = fifo;
-		if (dcmd > MAX_IN_DMA)
-			dcmd = MAX_IN_DMA;
-		else
-			ep->dma_fixup = (dcmd % ep->ep.maxpacket) != 0;
-		dcmd |= DCMD_BURST32 | DCMD_WIDTH1
-			| DCMD_FLOWTRG | DCMD_INCSRCADDR;
-	} else {
-#ifdef USE_OUT_DMA
-		DSADR(ep->dma) = fifo;
-		DTADR(ep->dma) = buf;
-		if (ep->bmAttributes != USB_ENDPOINT_XFER_ISOC)
-			dcmd = ep->ep.maxpacket;
-		dcmd |= DCMD_BURST32 | DCMD_WIDTH1
-			| DCMD_FLOWSRC | DCMD_INCTRGADDR;
-#endif
-	}
-	DCMD(ep->dma) = dcmd;
-	DCSR(ep->dma) = DCSR_RUN | DCSR_NODESC
-		| (unlikely(is_in)
-			? DCSR_STOPIRQEN	/* use dma_nodesc_handler() */
-			: 0);			/* use handle_ep() */
-}
-
-static void kick_dma(struct pxa2xx_ep *ep, struct pxa2xx_request *req)
-{
-	int	is_in = ep->bEndpointAddress & USB_DIR_IN;
-
-	if (is_in) {
-		/* unaligned tx buffers and zlps only work with PIO */
-		if ((req->req.dma & 0x0f) != 0
-				|| unlikely((req->req.length - req->req.actual)
-						== 0)) {
-			pio_irq_enable(ep->bEndpointAddress);
-			if ((*ep->reg_udccs & UDCCS_BI_TFS) != 0)
-				(void) write_fifo(ep, req);
-		} else {
-			start_dma_nodesc(ep, req, USB_DIR_IN);
-		}
-	} else {
-		if ((req->req.length - req->req.actual) < ep->ep.maxpacket) {
-			DMSG("%s short dma read...\n", ep->ep.name);
-			/* we're always set up for pio out */
-			read_fifo (ep, req);
-		} else {
-			*ep->reg_udccs = UDCCS_BO_DME
-				| (*ep->reg_udccs & UDCCS_BO_FST);
-			start_dma_nodesc(ep, req, USB_DIR_OUT);
-		}
-	}
-}
-
-static void cancel_dma(struct pxa2xx_ep *ep)
-{
-	struct pxa2xx_request	*req;
-	u32			tmp;
-
-	if (DCSR(ep->dma) == 0 || list_empty(&ep->queue))
-		return;
-
-	DCSR(ep->dma) = 0;
-	while ((DCSR(ep->dma) & DCSR_STOPSTATE) == 0)
-		cpu_relax();
-
-	req = list_entry(ep->queue.next, struct pxa2xx_request, queue);
-	tmp = DCMD(ep->dma) & DCMD_LENGTH;
-	req->req.actual = req->req.length - (tmp & DCMD_LENGTH);
-
-	/* the last tx packet may be incomplete, so flush the fifo.
-	 * FIXME correct req.actual if we can
-	 */
-	if (ep->bEndpointAddress & USB_DIR_IN)
-		*ep->reg_udccs = UDCCS_BI_FTF;
-}
-
-/* dma channel stopped ... normal tx end (IN), or on error (IN/OUT) */
-static void dma_nodesc_handler(int dmach, void *_ep)
-{
-	struct pxa2xx_ep	*ep = _ep;
-	struct pxa2xx_request	*req;
-	u32			tmp, completed;
-
-	local_irq_disable();
-
-	req = list_entry(ep->queue.next, struct pxa2xx_request, queue);
-
-	ep->dma_irqs++;
-	ep->dev->stats.irqs++;
-	HEX_DISPLAY(ep->dev->stats.irqs);
-
-	/* ack/clear */
-	tmp = DCSR(ep->dma);
-	DCSR(ep->dma) = tmp;
-	if ((tmp & DCSR_STOPSTATE) == 0
-			|| (DDADR(ep->dma) & DDADR_STOP) != 0) {
-		DBG(DBG_VERBOSE, "%s, dcsr %08x ddadr %08x\n",
-			ep->ep.name, DCSR(ep->dma), DDADR(ep->dma));
-		goto done;
-	}
-	DCSR(ep->dma) = 0;	/* clear DCSR_STOPSTATE */
-
-	/* update transfer status */
-	completed = tmp & DCSR_BUSERR;
-	if (ep->bEndpointAddress & USB_DIR_IN)
-		tmp = DSADR(ep->dma);
-	else
-		tmp = DTADR(ep->dma);
-	req->req.actual = tmp - req->req.dma;
-
-	/* FIXME seems we sometimes see partial transfers... */
-
-	if (unlikely(completed != 0))
-		req->req.status = -EIO;
-	else if (req->req.actual) {
-		/* these registers have zeroes in low bits; they miscount
-		 * some (end-of-transfer) short packets:  tx 14 as tx 12
-		 */
-		if (ep->dma_fixup)
-			req->req.actual = min(req->req.actual + 3,
-						req->req.length);
-
-		tmp = (req->req.length - req->req.actual);
-		completed = (tmp == 0);
-		if (completed && (ep->bEndpointAddress & USB_DIR_IN)) {
-
-			/* maybe validate final short packet ... */
-			if ((req->req.actual % ep->ep.maxpacket) != 0)
-				*ep->reg_udccs = UDCCS_BI_TSP/*|UDCCS_BI_TPC*/;
-
-			/* ... or zlp, using pio fallback */
-			else if (ep->bmAttributes == USB_ENDPOINT_XFER_BULK
-					&& req->req.zero) {
-				DMSG("%s zlp terminate ...\n", ep->ep.name);
-				completed = 0;
-			}
-		}
-	}
-
-	if (likely(completed)) {
-		done(ep, req, 0);
-
-		/* maybe re-activate after completion */
-		if (ep->stopped || list_empty(&ep->queue))
-			goto done;
-		req = list_entry(ep->queue.next, struct pxa2xx_request, queue);
-	}
-	kick_dma(ep, req);
-done:
-	local_irq_enable();
-}
-
-#endif
-
 /*-------------------------------------------------------------------------*/
 
 static int
@@ -942,19 +667,8 @@ pxa2xx_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 						(ep->desc->wMaxPacketSize)))
 		return -EMSGSIZE;
 
-#ifdef	USE_DMA
-	// FIXME caller may already have done the dma mapping
-	if (ep->dma >= 0) {
-		_req->dma = dma_map_single(dev->dev,
-			_req->buf, _req->length,
-			((ep->bEndpointAddress & USB_DIR_IN) != 0)
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
-	}
-#endif
-
 	DBG(DBG_NOISY, "%s queue req %p, len %d buf %p\n",
-	     _ep->name, _req, _req->length, _req->buf);
+		_ep->name, _req, _req->length, _req->buf);
 
 	local_irq_save(flags);
 
@@ -1002,11 +716,6 @@ pxa2xx_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 				local_irq_restore (flags);
 				return -EL2HLT;
 			}
-#ifdef	USE_DMA
-		/* either start dma or prime pio pump */
-		} else if (ep->dma >= 0) {
-			kick_dma(ep, req);
-#endif
 		/* can the FIFO can satisfy the request immediately? */
 		} else if ((ep->bEndpointAddress & USB_DIR_IN) != 0) {
 			if ((*ep->reg_udccs & UDCCS_BI_TFS) != 0
@@ -1017,7 +726,7 @@ pxa2xx_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 			req = NULL;
 		}
 
-		if (likely (req && ep->desc) && ep->dma < 0)
+		if (likely (req && ep->desc))
 			pio_irq_enable(ep->bEndpointAddress);
 	}
 
@@ -1031,17 +740,13 @@ pxa2xx_ep_queue(struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 
 
 /*
- * 	nuke - dequeue ALL requests
+ *	nuke - dequeue ALL requests
  */
 static void nuke(struct pxa2xx_ep *ep, int status)
 {
 	struct pxa2xx_request *req;
 
 	/* called with irqs blocked */
-#ifdef	USE_DMA
-	if (ep->dma >= 0 && !ep->stopped)
-		cancel_dma(ep);
-#endif
 	while (!list_empty(&ep->queue)) {
 		req = list_entry(ep->queue.next,
 				struct pxa2xx_request,
@@ -1076,19 +781,7 @@ static int pxa2xx_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 		return -EINVAL;
 	}
 
-#ifdef	USE_DMA
-	if (ep->dma >= 0 && ep->queue.next == &req->queue && !ep->stopped) {
-		cancel_dma(ep);
-		done(ep, req, -ECONNRESET);
-		/* restart i/o */
-		if (!list_empty(&ep->queue)) {
-			req = list_entry(ep->queue.next,
-					struct pxa2xx_request, queue);
-			kick_dma(ep, req);
-		}
-	} else
-#endif
-		done(ep, req, -ECONNRESET);
+	done(ep, req, -ECONNRESET);
 
 	local_irq_restore(flags);
 	return 0;
@@ -1136,16 +829,16 @@ static int pxa2xx_ep_set_halt(struct usb_ep *_ep, int value)
 		ep->dev->req_pending = 0;
 		ep->dev->ep0state = EP0_STALL;
 
- 	/* and bulk/intr endpoints like dropping stalls too */
- 	} else {
- 		unsigned i;
- 		for (i = 0; i < 1000; i += 20) {
- 			if (*ep->reg_udccs & UDCCS_BI_SST)
- 				break;
- 			udelay(20);
- 		}
-  	}
- 	local_irq_restore(flags);
+	/* and bulk/intr endpoints like dropping stalls too */
+	} else {
+		unsigned i;
+		for (i = 0; i < 1000; i += 20) {
+			if (*ep->reg_udccs & UDCCS_BI_SST)
+				break;
+			udelay(20);
+		}
+	}
+	local_irq_restore(flags);
 
 	DBG(DBG_VERBOSE, "%s halt\n", _ep->name);
 	return 0;
@@ -1203,9 +896,6 @@ static struct usb_ep_ops pxa2xx_ep_ops = {
 	.alloc_request	= pxa2xx_ep_alloc_request,
 	.free_request	= pxa2xx_ep_free_request,
 
-	.alloc_buffer	= pxa2xx_ep_alloc_buffer,
-	.free_buffer	= pxa2xx_ep_free_buffer,
-
 	.queue		= pxa2xx_ep_queue,
 	.dequeue	= pxa2xx_ep_dequeue,
 
@@ -1216,7 +906,7 @@ static struct usb_ep_ops pxa2xx_ep_ops = {
 
 
 /* ---------------------------------------------------------------------------
- * 	device-scoped parts of the api to the usb controller hardware
+ *	device-scoped parts of the api to the usb controller hardware
  * ---------------------------------------------------------------------------
  */
 
@@ -1239,7 +929,7 @@ static void udc_enable (struct pxa2xx_udc *);
 static void udc_disable(struct pxa2xx_udc *);
 
 /* We disable the UDC -- and its 48 MHz clock -- whenever it's not
- * in active use.  
+ * in active use.
  */
 static int pullup(struct pxa2xx_udc *udc, int is_active)
 {
@@ -1279,7 +969,7 @@ static int pxa2xx_udc_pullup(struct usb_gadget *_gadget, int is_active)
 	udc = container_of(_gadget, struct pxa2xx_udc, gadget);
 
 	/* not all boards support pullup control */
-	if (!udc->mach->udc_command)
+	if (!udc->mach->gpio_pullup && !udc->mach->udc_command)
 		return -EOPNOTSUPP;
 
 	is_active = (is_active != 0);
@@ -1325,7 +1015,7 @@ udc_proc_read(char *page, char **start, off_t off, int count,
 	/* basic device status */
 	t = scnprintf(next, size, DRIVER_DESC "\n"
 		"%s version: %s\nGadget driver: %s\nHost %s\n\n",
-		driver_name, DRIVER_VERSION SIZE_STR DMASTR,
+		driver_name, DRIVER_VERSION SIZE_STR "(pio)",
 		dev->driver ? dev->driver->driver.name : "(none)",
 		is_vbus_present() ? "full speed" : "disconnected");
 	size -= t;
@@ -1390,7 +1080,6 @@ udc_proc_read(char *page, char **start, off_t off, int count,
 	for (i = 0; i < PXA_UDC_NUM_ENDPOINTS; i++) {
 		struct pxa2xx_ep	*ep = &dev->ep [i];
 		struct pxa2xx_request	*req;
-		int			t;
 
 		if (i != 0) {
 			const struct usb_endpoint_descriptor	*d;
@@ -1400,10 +1089,9 @@ udc_proc_read(char *page, char **start, off_t off, int count,
 				continue;
 			tmp = *dev->ep [i].reg_udccs;
 			t = scnprintf(next, size,
-				"%s max %d %s udccs %02x irqs %lu/%lu\n",
+				"%s max %d %s udccs %02x irqs %lu\n",
 				ep->ep.name, le16_to_cpu (d->wMaxPacketSize),
-				(ep->dma >= 0) ? "dma" : "pio", tmp,
-				ep->pio_irqs, ep->dma_irqs);
+				"pio", tmp, ep->pio_irqs);
 			/* TODO translate all five groups of udccs bits! */
 
 		} else /* ep0 should only have one transfer queued */
@@ -1423,19 +1111,7 @@ udc_proc_read(char *page, char **start, off_t off, int count,
 			continue;
 		}
 		list_for_each_entry(req, &ep->queue, queue) {
-#ifdef	USE_DMA
-			if (ep->dma >= 0 && req->queue.prev == &ep->queue)
-				t = scnprintf(next, size,
-					"\treq %p len %d/%d "
-					"buf %p (dma%d dcmd %08x)\n",
-					&req->req, req->req.actual,
-					req->req.length, req->req.buf,
-					ep->dma, DCMD(ep->dma)
-					// low 13 bits == bytes-to-go
-					);
-			else
-#endif
-				t = scnprintf(next, size,
+			t = scnprintf(next, size,
 					"\treq %p len %d/%d buf %p\n",
 					&req->req, req->req.actual,
 					req->req.length, req->req.buf);
@@ -1464,24 +1140,10 @@ done:
 
 #endif	/* CONFIG_USB_GADGET_DEBUG_FILES */
 
-/* "function" sysfs attribute */
-static ssize_t
-show_function (struct device *_dev, struct device_attribute *attr, char *buf)
-{
-	struct pxa2xx_udc	*dev = dev_get_drvdata (_dev);
-
-	if (!dev->driver
-			|| !dev->driver->function
-			|| strlen (dev->driver->function) > PAGE_SIZE)
-		return 0;
-	return scnprintf (buf, PAGE_SIZE, "%s\n", dev->driver->function);
-}
-static DEVICE_ATTR (function, S_IRUGO, show_function, NULL);
-
 /*-------------------------------------------------------------------------*/
 
 /*
- * 	udc_disable - disable USB device controller
+ *	udc_disable - disable USB device controller
  */
 static void udc_disable(struct pxa2xx_udc *dev)
 {
@@ -1497,17 +1159,16 @@ static void udc_disable(struct pxa2xx_udc *dev)
 
 #ifdef	CONFIG_ARCH_PXA
         /* Disable clock for USB device */
-	pxa_set_cken(CKEN11_USB, 0);
+	clk_disable(dev->clk);
 #endif
 
 	ep0_idle (dev);
 	dev->gadget.speed = USB_SPEED_UNKNOWN;
-	LED_CONNECTED_OFF;
 }
 
 
 /*
- * 	udc_reinit - initialize software state
+ *	udc_reinit - initialize software state
  */
 static void udc_reinit(struct pxa2xx_udc *dev)
 {
@@ -1528,7 +1189,7 @@ static void udc_reinit(struct pxa2xx_udc *dev)
 		ep->desc = NULL;
 		ep->stopped = 0;
 		INIT_LIST_HEAD (&ep->queue);
-		ep->pio_irqs = ep->dma_irqs = 0;
+		ep->pio_irqs = 0;
 	}
 
 	/* the rest was statically initialized, and is read-only */
@@ -1543,8 +1204,7 @@ static void udc_enable (struct pxa2xx_udc *dev)
 
 #ifdef	CONFIG_ARCH_PXA
         /* Enable clock for USB device */
-	pxa_set_cken(CKEN11_USB, 1);
-	udelay(5);
+	clk_enable(dev->clk);
 #endif
 
 	/* try to clear these bits before we enable the udc */
@@ -1579,23 +1239,6 @@ static void udc_enable (struct pxa2xx_udc *dev)
 		UDC_RES1 = 0x00;
 		UDC_RES2 = 0x00;
 	}
-
-#ifdef	DISABLE_TEST_MODE
-	/* "test mode" seems to have become the default in later chip
-	 * revs, preventing double buffering (and invalidating docs).
-	 * this EXPERIMENT enables it for bulk endpoints by tweaking
-	 * undefined/reserved register bits (that other drivers clear).
-	 * Belcarra code comments noted this usage.
-	 */
-	if (fifo_mode & 1) {	/* IN endpoints */
-		UDC_RES1 |= USIR0_IR1|USIR0_IR6;
-		UDC_RES2 |= USIR1_IR11;
-	}
-	if (fifo_mode & 2) {	/* OUT endpoints */
-		UDC_RES1 |= USIR0_IR2|USIR0_IR7;
-		UDC_RES2 |= USIR1_IR12;
-	}
-#endif
 
 	/* enable suspend/resume and reset irqs */
 	udc_clear_mask_UDCCR(UDCCR_SRM | UDCCR_REM);
@@ -1635,18 +1278,20 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 	dev->gadget.dev.driver = &driver->driver;
 	dev->pullup = 1;
 
-	device_add (&dev->gadget.dev);
+	retval = device_add (&dev->gadget.dev);
+	if (retval) {
+fail:
+		dev->driver = NULL;
+		dev->gadget.dev.driver = NULL;
+		return retval;
+	}
 	retval = driver->bind(&dev->gadget);
 	if (retval) {
 		DMSG("bind to driver %s --> error %d\n",
 				driver->driver.name, retval);
 		device_del (&dev->gadget.dev);
-
-		dev->driver = NULL;
-		dev->gadget.dev.driver = NULL;
-		return retval;
+		goto fail;
 	}
-	device_create_file(dev->dev, &dev_attr_function);
 
 	/* ... then enable host detection and ep0; and we're ready
 	 * for set_configuration as well as eventual disconnect.
@@ -1678,7 +1323,6 @@ stop_activity(struct pxa2xx_udc *dev, struct usb_gadget_driver *driver)
 	del_timer_sync(&dev->timer);
 
 	/* report disconnect; the driver is already quiesced */
-	LED_CONNECTED_OFF;
 	if (driver)
 		driver->disconnect(&dev->gadget);
 
@@ -1704,7 +1348,6 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 	dev->driver = NULL;
 
 	device_del (&dev->gadget.dev);
-	device_remove_file(dev->dev, &dev_attr_function);
 
 	DMSG("unregistered gadget driver '%s'\n", driver->driver.name);
 	dump_state(dev);
@@ -1728,16 +1371,13 @@ lubbock_vbus_irq(int irq, void *_dev)
 	int			vbus;
 
 	dev->stats.irqs++;
-	HEX_DISPLAY(dev->stats.irqs);
 	switch (irq) {
 	case LUBBOCK_USB_IRQ:
-		LED_CONNECTED_ON;
 		vbus = 1;
 		disable_irq(LUBBOCK_USB_IRQ);
 		enable_irq(LUBBOCK_USB_DISC_IRQ);
 		break;
 	case LUBBOCK_USB_DISC_IRQ:
-		LED_CONNECTED_OFF;
 		vbus = 0;
 		disable_irq(LUBBOCK_USB_DISC_IRQ);
 		enable_irq(LUBBOCK_USB_IRQ);
@@ -1755,7 +1395,7 @@ lubbock_vbus_irq(int irq, void *_dev)
 static irqreturn_t udc_vbus_irq(int irq, void *_dev)
 {
 	struct pxa2xx_udc	*dev = _dev;
-	int			vbus = udc_gpio_get(dev->mach->gpio_vbus);
+	int			vbus = gpio_get_value(dev->mach->gpio_vbus);
 
 	pxa2xx_udc_vbus_session(&dev->gadget, vbus);
 	return IRQ_HANDLED;
@@ -2053,18 +1693,6 @@ static void handle_ep(struct pxa2xx_ep *ep)
 
 			/* fifos can hold packets, ready for reading... */
 			if (likely(req)) {
-#ifdef USE_OUT_DMA
-// TODO didn't yet debug out-dma.  this approach assumes
-// the worst about short packets and RPC; it might be better.
-
-				if (likely(ep->dma >= 0)) {
-					if (!(udccs & UDCCS_BO_RSP)) {
-						*ep->reg_udccs = UDCCS_BO_RPC;
-						ep->dma_irqs++;
-						return;
-					}
-				}
-#endif
 				completed = read_fifo(ep, req);
 			} else
 				pio_irq_disable (ep->bEndpointAddress);
@@ -2087,7 +1715,6 @@ pxa2xx_udc_irq(int irq, void *_dev)
 	int			handled;
 
 	dev->stats.irqs++;
-	HEX_DISPLAY(dev->stats.irqs);
 	do {
 		u32		udccr = UDCCR;
 
@@ -2138,7 +1765,6 @@ pxa2xx_udc_irq(int irq, void *_dev)
 			} else {
 				DBG(DBG_VERBOSE, "USB reset end\n");
 				dev->gadget.speed = USB_SPEED_FULL;
-				LED_CONNECTED_ON;
 				memset(&dev->stats, 0, sizeof dev->stats);
 				/* driver and endpoints are still reset */
 			}
@@ -2230,7 +1856,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_BULK,
 		.reg_udccs	= &UDCCS1,
 		.reg_uddr	= &UDDR1,
-		drcmr (25)
 	},
 	.ep[2] = {
 		.ep = {
@@ -2245,7 +1870,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS2,
 		.reg_ubcr	= &UBCR2,
 		.reg_uddr	= &UDDR2,
-		drcmr (26)
 	},
 #ifndef CONFIG_USB_PXA2XX_SMALL
 	.ep[3] = {
@@ -2260,7 +1884,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_ISOC,
 		.reg_udccs	= &UDCCS3,
 		.reg_uddr	= &UDDR3,
-		drcmr (27)
 	},
 	.ep[4] = {
 		.ep = {
@@ -2275,7 +1898,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS4,
 		.reg_ubcr	= &UBCR4,
 		.reg_uddr	= &UDDR4,
-		drcmr (28)
 	},
 	.ep[5] = {
 		.ep = {
@@ -2304,7 +1926,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_BULK,
 		.reg_udccs	= &UDCCS6,
 		.reg_uddr	= &UDDR6,
-		drcmr (30)
 	},
 	.ep[7] = {
 		.ep = {
@@ -2319,7 +1940,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS7,
 		.reg_ubcr	= &UBCR7,
 		.reg_uddr	= &UDDR7,
-		drcmr (31)
 	},
 	.ep[8] = {
 		.ep = {
@@ -2333,7 +1953,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_ISOC,
 		.reg_udccs	= &UDCCS8,
 		.reg_uddr	= &UDDR8,
-		drcmr (32)
 	},
 	.ep[9] = {
 		.ep = {
@@ -2348,7 +1967,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS9,
 		.reg_ubcr	= &UBCR9,
 		.reg_uddr	= &UDDR9,
-		drcmr (33)
 	},
 	.ep[10] = {
 		.ep = {
@@ -2377,7 +1995,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_BULK,
 		.reg_udccs	= &UDCCS11,
 		.reg_uddr	= &UDDR11,
-		drcmr (35)
 	},
 	.ep[12] = {
 		.ep = {
@@ -2392,7 +2009,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS12,
 		.reg_ubcr	= &UBCR12,
 		.reg_uddr	= &UDDR12,
-		drcmr (36)
 	},
 	.ep[13] = {
 		.ep = {
@@ -2406,7 +2022,6 @@ static struct pxa2xx_udc memory = {
 		.bmAttributes	= USB_ENDPOINT_XFER_ISOC,
 		.reg_udccs	= &UDCCS13,
 		.reg_uddr	= &UDDR13,
-		drcmr (37)
 	},
 	.ep[14] = {
 		.ep = {
@@ -2421,7 +2036,6 @@ static struct pxa2xx_udc memory = {
 		.reg_udccs	= &UDCCS14,
 		.reg_ubcr	= &UBCR14,
 		.reg_uddr	= &UDDR14,
-		drcmr (38)
 	},
 	.ep[15] = {
 		.ep = {
@@ -2474,12 +2088,12 @@ static struct pxa2xx_udc memory = {
 #define IXP465_AD		0x00000200
 
 /*
- * 	probe - binds to the platform device
+ *	probe - binds to the platform device
  */
 static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 {
 	struct pxa2xx_udc *dev = &memory;
-	int retval, out_dma = 1, vbus_irq;
+	int retval, vbus_irq, irq;
 	u32 chiprev;
 
 	/* insist on Intel/ARM/XScale */
@@ -2502,7 +2116,7 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 	case PXA250_B2: case PXA210_B2:
 	case PXA250_B1: case PXA210_B1:
 	case PXA250_B0: case PXA210_B0:
-		out_dma = 0;
+		/* OUT-DMA is broken ... */
 		/* fall through */
 	case PXA250_C0: case PXA210_C0:
 		break;
@@ -2511,47 +2125,59 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 	case IXP425_B0:
 	case IXP465_AD:
 		dev->has_cfr = 1;
-		out_dma = 0;
 		break;
 #endif
 	default:
-		out_dma = 0;
 		printk(KERN_ERR "%s: unrecognized processor: %08x\n",
 			driver_name, chiprev);
 		/* iop3xx, ixp4xx, ... */
 		return -ENODEV;
 	}
 
-	pr_debug("%s: IRQ %d%s%s%s\n", driver_name, IRQ_USB,
-		dev->has_cfr ? "" : " (!cfr)",
-		out_dma ? "" : " (broken dma-out)",
-		SIZE_STR DMASTR
-		);
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0)
+		return -ENODEV;
 
-#ifdef	USE_DMA
-#ifndef	USE_OUT_DMA
-	out_dma = 0;
-#endif
-	/* pxa 250 erratum 130 prevents using OUT dma (fixed C0) */
-	if (!out_dma) {
-		DMSG("disabled OUT dma\n");
-		dev->ep[ 2].reg_drcmr = dev->ep[ 4].reg_drcmr = 0;
-		dev->ep[ 7].reg_drcmr = dev->ep[ 9].reg_drcmr = 0;
-		dev->ep[12].reg_drcmr = dev->ep[14].reg_drcmr = 0;
+#ifdef	CONFIG_ARCH_PXA
+	dev->clk = clk_get(&pdev->dev, "UDCCLK");
+	if (IS_ERR(dev->clk)) {
+		retval = PTR_ERR(dev->clk);
+		goto err_clk;
 	}
 #endif
+
+	pr_debug("%s: IRQ %d%s%s\n", driver_name, irq,
+		dev->has_cfr ? "" : " (!cfr)",
+		SIZE_STR "(pio)"
+		);
 
 	/* other non-static parts of init */
 	dev->dev = &pdev->dev;
 	dev->mach = pdev->dev.platform_data;
+
 	if (dev->mach->gpio_vbus) {
-		udc_gpio_init_vbus(dev->mach->gpio_vbus);
-		vbus_irq = udc_gpio_to_irq(dev->mach->gpio_vbus);
-		set_irq_type(vbus_irq, IRQT_BOTHEDGE);
+		if ((retval = gpio_request(dev->mach->gpio_vbus,
+				"pxa2xx_udc GPIO VBUS"))) {
+			dev_dbg(&pdev->dev,
+				"can't get vbus gpio %d, err: %d\n",
+				dev->mach->gpio_vbus, retval);
+			goto err_gpio_vbus;
+		}
+		gpio_direction_input(dev->mach->gpio_vbus);
+		vbus_irq = gpio_to_irq(dev->mach->gpio_vbus);
 	} else
 		vbus_irq = 0;
-	if (dev->mach->gpio_pullup)
-		udc_gpio_init_pullup(dev->mach->gpio_pullup);
+
+	if (dev->mach->gpio_pullup) {
+		if ((retval = gpio_request(dev->mach->gpio_pullup,
+				"pca2xx_udc GPIO PULLUP"))) {
+			dev_dbg(&pdev->dev,
+				"can't get pullup gpio %d, err: %d\n",
+				dev->mach->gpio_pullup, retval);
+			goto err_gpio_pullup;
+		}
+		gpio_direction_output(dev->mach->gpio_pullup, 0);
+	}
 
 	init_timer(&dev->timer);
 	dev->timer.function = udc_watchdog;
@@ -2570,12 +2196,12 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 	dev->vbus = is_vbus_present();
 
 	/* irq setup after old hardware state is cleaned up */
-	retval = request_irq(IRQ_USB, pxa2xx_udc_irq,
+	retval = request_irq(irq, pxa2xx_udc_irq,
 			IRQF_DISABLED, driver_name, dev);
 	if (retval != 0) {
-		printk(KERN_ERR "%s: can't get irq %i, err %d\n",
-			driver_name, IRQ_USB, retval);
-		return -EBUSY;
+		printk(KERN_ERR "%s: can't get irq %d, err %d\n",
+			driver_name, irq, retval);
+		goto err_irq1;
 	}
 	dev->got_irq = 1;
 
@@ -2589,8 +2215,7 @@ static int __init pxa2xx_udc_probe(struct platform_device *pdev)
 			printk(KERN_ERR "%s: can't get irq %i, err %d\n",
 				driver_name, LUBBOCK_USB_DISC_IRQ, retval);
 lubbock_fail0:
-			free_irq(IRQ_USB, dev);
-			return -EBUSY;
+			goto err_irq_lub;
 		}
 		retval = request_irq(LUBBOCK_USB_IRQ,
 				lubbock_vbus_irq,
@@ -2602,27 +2227,41 @@ lubbock_fail0:
 			free_irq(LUBBOCK_USB_DISC_IRQ, dev);
 			goto lubbock_fail0;
 		}
-#ifdef DEBUG
-		/* with U-Boot (but not BLOB), hex is off by default */
-		HEX_DISPLAY(dev->stats.irqs);
-		LUB_DISC_BLNK_LED &= 0xff;
-#endif
 	} else
 #endif
 	if (vbus_irq) {
 		retval = request_irq(vbus_irq, udc_vbus_irq,
-				IRQF_DISABLED | IRQF_SAMPLE_RANDOM,
+				IRQF_DISABLED | IRQF_SAMPLE_RANDOM |
+				IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 				driver_name, dev);
 		if (retval != 0) {
 			printk(KERN_ERR "%s: can't get irq %i, err %d\n",
 				driver_name, vbus_irq, retval);
-			free_irq(IRQ_USB, dev);
-			return -EBUSY;
+			goto err_vbus_irq;
 		}
 	}
 	create_proc_files();
 
 	return 0;
+
+ err_vbus_irq:
+#ifdef	CONFIG_ARCH_LUBBOCK
+	free_irq(LUBBOCK_USB_DISC_IRQ, dev);
+ err_irq_lub:
+#endif
+	free_irq(irq, dev);
+ err_irq1:
+	if (dev->mach->gpio_pullup)
+		gpio_free(dev->mach->gpio_pullup);
+ err_gpio_pullup:
+	if (dev->mach->gpio_vbus)
+		gpio_free(dev->mach->gpio_vbus);
+ err_gpio_vbus:
+#ifdef	CONFIG_ARCH_PXA
+	clk_put(dev->clk);
+ err_clk:
+#endif
+	return retval;
 }
 
 static void pxa2xx_udc_shutdown(struct platform_device *_dev)
@@ -2641,7 +2280,7 @@ static int __exit pxa2xx_udc_remove(struct platform_device *pdev)
 	remove_proc_files();
 
 	if (dev->got_irq) {
-		free_irq(IRQ_USB, dev);
+		free_irq(platform_get_irq(pdev, 0), dev);
 		dev->got_irq = 0;
 	}
 #ifdef CONFIG_ARCH_LUBBOCK
@@ -2650,8 +2289,17 @@ static int __exit pxa2xx_udc_remove(struct platform_device *pdev)
 		free_irq(LUBBOCK_USB_IRQ, dev);
 	}
 #endif
-	if (dev->mach->gpio_vbus)
-		free_irq(IRQ_GPIO(dev->mach->gpio_vbus), dev);
+	if (dev->mach->gpio_vbus) {
+		free_irq(gpio_to_irq(dev->mach->gpio_vbus), dev);
+		gpio_free(dev->mach->gpio_vbus);
+	}
+	if (dev->mach->gpio_pullup)
+		gpio_free(dev->mach->gpio_pullup);
+
+#ifdef	CONFIG_ARCH_PXA
+	clk_put(dev->clk);
+#endif
+
 	platform_set_drvdata(pdev, NULL);
 	the_controller = NULL;
 	return 0;
@@ -2668,7 +2316,7 @@ static int __exit pxa2xx_udc_remove(struct platform_device *pdev)
  *
  * For now, we punt and forcibly disconnect from the USB host when PXA
  * enters any suspend state.  While we're disconnected, we always disable
- * the 48MHz USB clock ... allowing PXA sleep and/or 33 MHz idle states. 
+ * the 48MHz USB clock ... allowing PXA sleep and/or 33 MHz idle states.
  * Boards without software pullup control shouldn't use those states.
  * VBUS IRQs should probably be ignored so that the PXA device just acts
  * "dead" to USB hosts until system resume.
@@ -2677,7 +2325,7 @@ static int pxa2xx_udc_suspend(struct platform_device *dev, pm_message_t state)
 {
 	struct pxa2xx_udc	*udc = platform_get_drvdata(dev);
 
-	if (!udc->mach->udc_command)
+	if (!udc->mach->gpio_pullup && !udc->mach->udc_command)
 		WARN("USB host won't detect disconnect!\n");
 	pullup(udc, 0);
 
@@ -2701,7 +2349,6 @@ static int pxa2xx_udc_resume(struct platform_device *dev)
 /*-------------------------------------------------------------------------*/
 
 static struct platform_driver udc_driver = {
-	.probe		= pxa2xx_udc_probe,
 	.shutdown	= pxa2xx_udc_shutdown,
 	.remove		= __exit_p(pxa2xx_udc_remove),
 	.suspend	= pxa2xx_udc_suspend,
@@ -2715,7 +2362,7 @@ static struct platform_driver udc_driver = {
 static int __init udc_init(void)
 {
 	printk(KERN_INFO "%s: version %s\n", driver_name, DRIVER_VERSION);
-	return platform_driver_register(&udc_driver);
+	return platform_driver_probe(&udc_driver, pxa2xx_udc_probe);
 }
 module_init(udc_init);
 

@@ -21,11 +21,11 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <signal.h>
 
 #include <linux/genetlink.h>
 #include <linux/taskstats.h>
+#include <linux/cgroupstats.h>
 
 /*
  * Generic macros for dealing with netlink sockets. Might be duplicated
@@ -49,6 +49,7 @@ char name[100];
 int dbg;
 int print_delays;
 int print_io_accounting;
+int print_task_context_switch_counts;
 __u64 stime, utime;
 
 #define PRINTF(fmt, arg...) {			\
@@ -61,8 +62,6 @@ __u64 stime, utime;
 #define MAX_MSG_SIZE	1024
 /* Maximum number of cpus expected to be specified in a cpumask */
 #define MAX_CPUS	32
-/* Maximum length of pathname to log file */
-#define MAX_FILENAME	256
 
 struct msgtemplate {
 	struct nlmsghdr n;
@@ -71,6 +70,17 @@ struct msgtemplate {
 };
 
 char cpumask[100+6*MAX_CPUS];
+
+static void usage(void)
+{
+	fprintf(stderr, "getdelays [-dilv] [-w logfile] [-r bufsize] "
+			"[-m cpumask] [-t tgid] [-p pid]\n");
+	fprintf(stderr, "  -d: print delayacct stats\n");
+	fprintf(stderr, "  -i: print IO accounting (works only with -p)\n");
+	fprintf(stderr, "  -l: listen forever\n");
+	fprintf(stderr, "  -v: debug on\n");
+	fprintf(stderr, "  -C: container path\n");
+}
 
 /*
  * Create a raw netlink socket and bind
@@ -187,7 +197,7 @@ void print_delayacct(struct taskstats *t)
 	       "IO    %15s%15s\n"
 	       "      %15llu%15llu\n"
 	       "MEM   %15s%15s\n"
-	       "      %15llu%15llu\n\n",
+	       "      %15llu%15llu\n",
 	       "count", "real total", "virtual total", "delay total",
 	       t->cpu_count, t->cpu_run_real_total, t->cpu_run_virtual_total,
 	       t->cpu_delay_total,
@@ -195,6 +205,22 @@ void print_delayacct(struct taskstats *t)
 	       t->blkio_count, t->blkio_delay_total,
 	       "count", "delay total", t->swapin_count, t->swapin_delay_total);
 }
+
+void task_context_switch_counts(struct taskstats *t)
+{
+	printf("\n\nTask   %15s%15s\n"
+	       "       %15lu%15lu\n",
+	       "voluntary", "nonvoluntary",
+	       t->nvcsw, t->nivcsw);
+}
+
+void print_cgroupstats(struct cgroupstats *c)
+{
+	printf("sleeping %llu, blocked %llu, running %llu, stopped %llu, "
+		"uninterruptible %llu\n", c->nr_sleeping, c->nr_io_wait,
+		c->nr_running, c->nr_stopped, c->nr_uninterruptible);
+}
+
 
 void print_ioacct(struct taskstats *t)
 {
@@ -221,13 +247,16 @@ int main(int argc, char *argv[])
 	int count = 0;
 	int write_file = 0;
 	int maskset = 0;
-	char logfile[128];
+	char *logfile = NULL;
 	int loop = 0;
+	int containerset = 0;
+	char containerpath[1024];
+	int cfd = 0;
 
 	struct msgtemplate msg;
 
 	while (1) {
-		c = getopt(argc, argv, "diw:r:m:t:p:v:l");
+		c = getopt(argc, argv, "qdiw:r:m:t:p:vlC:");
 		if (c < 0)
 			break;
 
@@ -240,8 +269,16 @@ int main(int argc, char *argv[])
 			printf("printing IO accounting\n");
 			print_io_accounting = 1;
 			break;
+		case 'q':
+			printf("printing task/process context switch rates\n");
+			print_task_context_switch_counts = 1;
+			break;
+		case 'C':
+			containerset = 1;
+			strncpy(containerpath, optarg, strlen(optarg) + 1);
+			break;
 		case 'w':
-			strncpy(logfile, optarg, MAX_FILENAME);
+			logfile = strdup(optarg);
 			printf("write to file %s\n", logfile);
 			write_file = 1;
 			break;
@@ -277,7 +314,7 @@ int main(int argc, char *argv[])
 			loop = 1;
 			break;
 		default:
-			printf("Unknown option %d\n", c);
+			usage();
 			exit(-1);
 		}
 	}
@@ -314,6 +351,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (tid && containerset) {
+		fprintf(stderr, "Select either -t or -C, not both\n");
+		goto err;
+	}
+
 	if (tid) {
 		rc = send_cmd(nl_sd, id, mypid, TASKSTATS_CMD_GET,
 			      cmd_type, &tid, sizeof(__u32));
@@ -321,6 +363,20 @@ int main(int argc, char *argv[])
 		if (rc < 0) {
 			fprintf(stderr, "error sending tid/tgid cmd\n");
 			goto done;
+		}
+	}
+
+	if (containerset) {
+		cfd = open(containerpath, O_RDONLY);
+		if (cfd < 0) {
+			perror("error opening container file");
+			goto err;
+		}
+		rc = send_cmd(nl_sd, id, mypid, CGROUPSTATS_CMD_GET,
+			      CGROUPSTATS_CMD_ATTR_FD, &cfd, sizeof(__u32));
+		if (rc < 0) {
+			perror("error sending cgroupstats command");
+			goto err;
 		}
 	}
 
@@ -381,6 +437,8 @@ int main(int argc, char *argv[])
 							print_delayacct((struct taskstats *) NLA_DATA(na));
 						if (print_io_accounting)
 							print_ioacct((struct taskstats *) NLA_DATA(na));
+						if (print_task_context_switch_counts)
+							task_context_switch_counts((struct taskstats *) NLA_DATA(na));
 						if (fd) {
 							if (write(fd, NLA_DATA(na), na->nla_len) < 0) {
 								err(1,"write error\n");
@@ -400,6 +458,9 @@ int main(int argc, char *argv[])
 				}
 				break;
 
+			case CGROUPSTATS_TYPE_CGROUP_STATS:
+				print_cgroupstats(NLA_DATA(na));
+				break;
 			default:
 				fprintf(stderr, "Unknown nla_type %d\n",
 					na->nla_type);
@@ -421,5 +482,7 @@ err:
 	close(nl_sd);
 	if (fd)
 		close(fd);
+	if (cfd)
+		close(cfd);
 	return 0;
 }

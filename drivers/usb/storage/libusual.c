@@ -30,7 +30,7 @@ static atomic_t usu_bias = ATOMIC_INIT(USB_US_DEFAULT_BIAS);
 #define BIAS_NAME_SIZE  (sizeof("usb-storage"))
 static const char *bias_names[3] = { "none", "usb-storage", "ub" };
 
-static DECLARE_MUTEX_LOCKED(usu_init_notify);
+static struct semaphore usu_init_notify;
 static DECLARE_COMPLETION(usu_end_notify);
 static atomic_t total_threads = ATOMIC_INIT(0);
 
@@ -117,6 +117,7 @@ EXPORT_SYMBOL_GPL(usb_usual_check_type);
 static int usu_probe(struct usb_interface *intf,
 			 const struct usb_device_id *id)
 {
+	int rc;
 	unsigned long type;
 	struct task_struct* task;
 	unsigned long flags;
@@ -135,7 +136,7 @@ static int usu_probe(struct usb_interface *intf,
 
 	task = kthread_run(usu_probe_thread, (void*)type, "libusual_%d", type);
 	if (IS_ERR(task)) {
-		int rc = PTR_ERR(task);
+		rc = PTR_ERR(task);
 		printk(KERN_WARNING "libusual: "
 		    "Unable to start the thread for %s: %d\n",
 		    bias_names[type], rc);
@@ -202,6 +203,8 @@ static int usu_probe_thread(void *arg)
 static int __init usb_usual_init(void)
 {
 	int rc;
+
+	sema_init(&usu_init_notify, 0);
 
 	rc = usb_register(&usu_driver);
 	up(&usu_init_notify);

@@ -29,10 +29,11 @@
 
 struct configfs_dirent {
 	atomic_t		s_count;
+	int			s_dependent_count;
 	struct list_head	s_sibling;
 	struct list_head	s_children;
 	struct list_head	s_links;
-	void 			* s_element;
+	void			* s_element;
 	int			s_type;
 	umode_t			s_mode;
 	struct dentry		* s_dentry;
@@ -41,8 +42,8 @@ struct configfs_dirent {
 
 #define CONFIGFS_ROOT		0x0001
 #define CONFIGFS_DIR		0x0002
-#define CONFIGFS_ITEM_ATTR 	0x0004
-#define CONFIGFS_ITEM_LINK 	0x0020
+#define CONFIGFS_ITEM_ATTR	0x0004
+#define CONFIGFS_ITEM_LINK	0x0020
 #define CONFIGFS_USET_DIR	0x0040
 #define CONFIGFS_USET_DEFAULT	0x0080
 #define CONFIGFS_USET_DROPPING	0x0100
@@ -55,6 +56,8 @@ extern int configfs_is_root(struct config_item *item);
 
 extern struct inode * configfs_new_inode(mode_t mode, struct configfs_dirent *);
 extern int configfs_create(struct dentry *, int mode, int (*init)(struct inode *));
+extern int configfs_inode_init(void);
+extern void configfs_inode_exit(void);
 
 extern int configfs_create_file(struct config_item *, const struct configfs_attribute *);
 extern int configfs_make_dirent(struct configfs_dirent *,

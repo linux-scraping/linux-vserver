@@ -22,6 +22,7 @@
 #include <linux/netdevice.h>
 #include <linux/timer.h>
 #include <linux/delay.h>
+#include <linux/pci.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 
@@ -132,7 +133,7 @@ enum pci_cfg_driver_reg {
 /* The bits in the CSR5 status registers, mostly interrupt sources. */
 enum status_bits {
 	TimerInt = 0x800,
-	SytemError = 0x2000,
+	SystemError = 0x2000,
 	TPLnkFail = 0x1000,
 	TPLnkPass = 0x10,
 	NormalIntr = 0x10000,
@@ -177,18 +178,18 @@ enum tulip_busconfig_bits {
 
 /* The Tulip Rx and Tx buffer descriptors. */
 struct tulip_rx_desc {
-	s32 status;
-	s32 length;
-	u32 buffer1;
-	u32 buffer2;
+	__le32 status;
+	__le32 length;
+	__le32 buffer1;
+	__le32 buffer2;
 };
 
 
 struct tulip_tx_desc {
-	s32 status;
-	s32 length;
-	u32 buffer1;
-	u32 buffer2;		/* We use only buffer 1.  */
+	__le32 status;
+	__le32 length;
+	__le32 buffer1;
+	__le32 buffer2;		/* We use only buffer 1.  */
 };
 
 
@@ -352,6 +353,7 @@ struct tulip_private {
 	int chip_id;
 	int revision;
 	int flags;
+	struct napi_struct napi;
 	struct net_device_stats stats;
 	struct timer_list timer;	/* Media selection timer. */
 	struct timer_list oom_timer;    /* Out of memory timer. */
@@ -428,7 +430,7 @@ extern int tulip_rx_copybreak;
 irqreturn_t tulip_interrupt(int irq, void *dev_instance);
 int tulip_refill_rx(struct net_device *dev);
 #ifdef CONFIG_TULIP_NAPI
-int tulip_poll(struct net_device *dev, int *budget);
+int tulip_poll(struct napi_struct *napi, int budget);
 #endif
 
 
@@ -482,8 +484,11 @@ static inline void tulip_stop_rxtx(struct tulip_private *tp)
 			udelay(10);
 
 		if (!i)
-			printk(KERN_DEBUG "%s: tulip_stop_rxtx() failed\n",
-					pci_name(tp->pdev));
+			printk(KERN_DEBUG "%s: tulip_stop_rxtx() failed"
+					" (CSR5 0x%x CSR6 0x%x)\n",
+					pci_name(tp->pdev),
+					ioread32(ioaddr + CSR5),
+					ioread32(ioaddr + CSR6));
 	}
 }
 

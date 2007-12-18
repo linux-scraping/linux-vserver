@@ -49,35 +49,6 @@ struct fib4_rule
 #endif
 };
 
-static struct fib4_rule default_rule = {
-	.common = {
-		.refcnt =	ATOMIC_INIT(2),
-		.pref =		0x7FFF,
-		.table =	RT_TABLE_DEFAULT,
-		.action =	FR_ACT_TO_TBL,
-	},
-};
-
-static struct fib4_rule main_rule = {
-	.common = {
-		.refcnt =	ATOMIC_INIT(2),
-		.pref =		0x7FFE,
-		.table =	RT_TABLE_MAIN,
-		.action =	FR_ACT_TO_TBL,
-	},
-};
-
-static struct fib4_rule local_rule = {
-	.common = {
-		.refcnt =	ATOMIC_INIT(2),
-		.table =	RT_TABLE_LOCAL,
-		.action =	FR_ACT_TO_TBL,
-		.flags =	FIB_RULE_PERMANENT,
-	},
-};
-
-static LIST_HEAD(fib4_rules);
-
 #ifdef CONFIG_NET_CLS_ROUTE
 u32 fib_rules_tclass(struct fib_result *res)
 {
@@ -169,7 +140,7 @@ static struct fib_table *fib_empty_table(void)
 	return NULL;
 }
 
-static struct nla_policy fib4_rule_policy[FRA_MAX+1] __read_mostly = {
+static const struct nla_policy fib4_rule_policy[FRA_MAX+1] = {
 	FRA_GENERIC_POLICY,
 	[FRA_FLOW]	= { .type = NLA_U32 },
 };
@@ -274,19 +245,14 @@ nla_put_failure:
 	return -ENOBUFS;
 }
 
-int fib4_rules_dump(struct sk_buff *skb, struct netlink_callback *cb)
-{
-	return fib_rules_dump(skb, cb, AF_INET);
-}
-
 static u32 fib4_rule_default_pref(void)
 {
 	struct list_head *pos;
 	struct fib_rule *rule;
 
-	if (!list_empty(&fib4_rules)) {
-		pos = fib4_rules.next;
-		if (pos->next != &fib4_rules) {
+	if (!list_empty(&fib4_rules_ops.rules_list)) {
+		pos = fib4_rules_ops.rules_list.next;
+		if (pos->next != &fib4_rules_ops.rules_list) {
 			rule = list_entry(pos->next, struct fib_rule, list);
 			if (rule->pref)
 				return rule->pref - 1;
@@ -303,6 +269,11 @@ static size_t fib4_rule_nlmsg_payload(struct fib_rule *rule)
 	       + nla_total_size(4); /* flow */
 }
 
+static void fib4_rule_flush_cache(void)
+{
+	rt_cache_flush(-1);
+}
+
 static struct fib_rules_ops fib4_rules_ops = {
 	.family		= AF_INET,
 	.rule_size	= sizeof(struct fib4_rule),
@@ -314,17 +285,34 @@ static struct fib_rules_ops fib4_rules_ops = {
 	.fill		= fib4_rule_fill,
 	.default_pref	= fib4_rule_default_pref,
 	.nlmsg_payload	= fib4_rule_nlmsg_payload,
+	.flush_cache	= fib4_rule_flush_cache,
 	.nlgroup	= RTNLGRP_IPV4_RULE,
 	.policy		= fib4_rule_policy,
-	.rules_list	= &fib4_rules,
+	.rules_list	= LIST_HEAD_INIT(fib4_rules_ops.rules_list),
 	.owner		= THIS_MODULE,
 };
 
+static int __init fib_default_rules_init(void)
+{
+	int err;
+
+	err = fib_default_rule_add(&fib4_rules_ops, 0,
+				   RT_TABLE_LOCAL, FIB_RULE_PERMANENT);
+	if (err < 0)
+		return err;
+	err = fib_default_rule_add(&fib4_rules_ops, 0x7FFE,
+				   RT_TABLE_MAIN, 0);
+	if (err < 0)
+		return err;
+	err = fib_default_rule_add(&fib4_rules_ops, 0x7FFF,
+				   RT_TABLE_DEFAULT, 0);
+	if (err < 0)
+		return err;
+	return 0;
+}
+
 void __init fib4_rules_init(void)
 {
-	list_add_tail(&local_rule.common.list, &fib4_rules);
-	list_add_tail(&main_rule.common.list, &fib4_rules);
-	list_add_tail(&default_rule.common.list, &fib4_rules);
-
+	BUG_ON(fib_default_rules_init());
 	fib_rules_register(&fib4_rules_ops);
 }

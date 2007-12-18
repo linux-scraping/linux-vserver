@@ -21,7 +21,18 @@
 #include	<asm/mmu.h>
 
 register struct paca_struct *local_paca asm("r13");
+
+#if defined(CONFIG_DEBUG_PREEMPT) && defined(CONFIG_SMP)
+extern unsigned int debug_smp_processor_id(void); /* from linux/smp.h */
+/*
+ * Add standard checks that preemption cannot occur when using get_paca():
+ * otherwise the paca_struct it points to may be the wrong one just after.
+ */
+#define get_paca()	((void) debug_smp_processor_id(), local_paca)
+#else
 #define get_paca()	local_paca
+#endif
+
 #define get_lppaca()	(get_paca()->lppaca_ptr)
 #define get_slb_shadow()	(get_paca()->slb_shadow_ptr)
 
@@ -70,6 +81,7 @@ struct paca_struct {
 	s16 hw_cpu_id;			/* Physical processor number */
 	u8 cpu_start;			/* At startup, processor spins until */
 					/* this becomes non-zero. */
+	struct slb_shadow *slb_shadow_ptr;
 
 	/*
 	 * Now, starting in cacheline 2, the exception save areas
@@ -82,8 +94,8 @@ struct paca_struct {
 
 	mm_context_t context;
 	u16 vmalloc_sllp;
-	u16 slb_cache[SLB_CACHE_ENTRIES];
 	u16 slb_cache_ptr;
+	u16 slb_cache[SLB_CACHE_ENTRIES];
 
 	/*
 	 * then miscellaneous read-write fields
@@ -93,6 +105,7 @@ struct paca_struct {
 	u64 stab_rr;			/* stab/slb round-robin counter */
 	u64 saved_r1;			/* r1 save for RTAS calls */
 	u64 saved_msr;			/* MSR saved here by enter_rtas */
+	u16 trap_save;			/* Used when bad stack is encountered */
 	u8 soft_enabled;		/* irq soft-enable flag */
 	u8 hard_enabled;		/* set if irqs are enabled in MSR */
 	u8 io_sync;			/* writel() needs spin_unlock sync */
@@ -101,13 +114,12 @@ struct paca_struct {
 	u64 user_time;			/* accumulated usermode TB ticks */
 	u64 system_time;		/* accumulated system TB ticks */
 	u64 startpurr;			/* PURR/TB value snapshot */
-
-	struct slb_shadow *slb_shadow_ptr;
+	u64 startspurr;			/* SPURR value snapshot */
+	u64 purrdelta;			/* FIXME: document */
+	u64 spurrdelta;			/* FIXME: document */
 };
 
 extern struct paca_struct paca[];
-
-void setup_boot_paca(void);
 
 #endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_PACA_H */

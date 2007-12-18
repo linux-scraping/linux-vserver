@@ -116,7 +116,7 @@ static int ep93xx_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction ep93xx_timer_irq = {
 	.name		= "ep93xx timer",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= ep93xx_timer_interrupt,
 };
 
@@ -336,7 +336,7 @@ static int ep93xx_gpio_irq_type(unsigned int irq, unsigned int type)
 	if (line >= 0 && line < 16) {
 		gpio_line_config(line, GPIO_IN);
 	} else {
-		gpio_line_config(EP93XX_GPIO_LINE_F(line), GPIO_IN);
+		gpio_line_config(EP93XX_GPIO_LINE_F(line-16), GPIO_IN);
 	}
 
 	port = line >> 3;

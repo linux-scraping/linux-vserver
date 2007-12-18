@@ -647,9 +647,14 @@ static inline void atalk_dev_down(struct net_device *dev)
 static int ddp_device_event(struct notifier_block *this, unsigned long event,
 			    void *ptr)
 {
+	struct net_device *dev = ptr;
+
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	if (event == NETDEV_DOWN)
 		/* Discard any use of this */
-		atalk_dev_down(ptr);
+		atalk_dev_down(dev);
 
 	return NOTIFY_DONE;
 }
@@ -672,7 +677,7 @@ static int atif_ioctl(int cmd, void __user *arg)
 	if (copy_from_user(&atreq, arg, sizeof(atreq)))
 		return -EFAULT;
 
-	dev = __dev_get_by_name(atreq.ifr_name);
+	dev = __dev_get_by_name(&init_net, atreq.ifr_name);
 	if (!dev)
 		return -ENODEV;
 
@@ -896,7 +901,7 @@ static int atrtr_ioctl(unsigned int cmd, void __user *arg)
 				if (copy_from_user(name, rt.rt_dev, IFNAMSIZ-1))
 					return -EFAULT;
 				name[IFNAMSIZ-1] = '\0';
-				dev = __dev_get_by_name(name);
+				dev = __dev_get_by_name(&init_net, name);
 				if (!dev)
 					return -ENODEV;
 			}
@@ -1024,10 +1029,13 @@ static struct proto ddp_proto = {
  * Create a socket. Initialise the socket, blank the addresses
  * set the state.
  */
-static int atalk_create(struct socket *sock, int protocol)
+static int atalk_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct sock *sk;
 	int rc = -ESOCKTNOSUPPORT;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	/*
 	 * We permit SOCK_DGRAM and RAW is an extension. It is trivial to do
@@ -1036,7 +1044,7 @@ static int atalk_create(struct socket *sock, int protocol)
 	if (sock->type != SOCK_RAW && sock->type != SOCK_DGRAM)
 		goto out;
 	rc = -ENOMEM;
-	sk = sk_alloc(PF_APPLETALK, GFP_KERNEL, &ddp_proto, 1);
+	sk = sk_alloc(net, PF_APPLETALK, GFP_KERNEL, &ddp_proto);
 	if (!sk)
 		goto out;
 	rc = 0;
@@ -1265,7 +1273,7 @@ static __inline__ int is_ip_over_ddp(struct sk_buff *skb)
 
 static int handle_ip_over_ddp(struct sk_buff *skb)
 {
-	struct net_device *dev = __dev_get_by_name("ipddp0");
+	struct net_device *dev = __dev_get_by_name(&init_net, "ipddp0");
 	struct net_device_stats *stats;
 
 	/* This needs to be able to handle ipddp"N" devices */
@@ -1275,7 +1283,7 @@ static int handle_ip_over_ddp(struct sk_buff *skb)
 	skb->protocol = htons(ETH_P_IP);
 	skb_pull(skb, 13);
 	skb->dev   = dev;
-	skb->h.raw = skb->data;
+	skb_reset_transport_header(skb);
 
 	stats = dev->priv;
 	stats->rx_packets++;
@@ -1383,10 +1391,10 @@ free_it:
  *	@pt - packet type
  *
  *	Receive a packet (in skb) from device dev. This has come from the SNAP
- *	decoder, and on entry skb->h.raw is the DDP header, skb->len is the DDP
- *	header, skb->len is the DDP length. The physical headers have been
- *	extracted. PPP should probably pass frames marked as for this layer.
- *	[ie ARPHRD_ETHERTALK]
+ *	decoder, and on entry skb->transport_header is the DDP header, skb->len
+ *	is the DDP header, skb->len is the DDP length. The physical headers
+ *	have been extracted. PPP should probably pass frames marked as for this
+ *	layer.  [ie ARPHRD_ETHERTALK]
  */
 static int atalk_rcv(struct sk_buff *skb, struct net_device *dev,
 		     struct packet_type *pt, struct net_device *orig_dev)
@@ -1397,6 +1405,9 @@ static int atalk_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct sockaddr_at tosat;
 	int origlen;
 	__u16 len_hops;
+
+	if (dev->nd_net != &init_net)
+		goto freeit;
 
 	/* Don't mangle buffer if shared */
 	if (!(skb = skb_share_check(skb, GFP_ATOMIC)))
@@ -1483,8 +1494,11 @@ freeit:
 static int ltalk_rcv(struct sk_buff *skb, struct net_device *dev,
 		     struct packet_type *pt, struct net_device *orig_dev)
 {
+	if (dev->nd_net != &init_net)
+		goto freeit;
+
 	/* Expand any short form frames */
-	if (skb->mac.raw[2] == 1) {
+	if (skb_mac_header(skb)[2] == 1) {
 		struct ddpehdr *ddp;
 		/* Find our address */
 		struct atalk_addr *ap = atalk_find_dev_addr(dev);
@@ -1510,8 +1524,8 @@ static int ltalk_rcv(struct sk_buff *skb, struct net_device *dev,
 		 * we write the network numbers !
 		 */
 
-		ddp->deh_dnode = skb->mac.raw[0];     /* From physical header */
-		ddp->deh_snode = skb->mac.raw[1];     /* From physical header */
+		ddp->deh_dnode = skb_mac_header(skb)[0];     /* From physical header */
+		ddp->deh_snode = skb_mac_header(skb)[1];     /* From physical header */
 
 		ddp->deh_dnet  = ap->s_net;	/* Network number */
 		ddp->deh_snet  = ap->s_net;
@@ -1522,7 +1536,7 @@ static int ltalk_rcv(struct sk_buff *skb, struct net_device *dev,
 		/* Non routable, so force a drop if we slip up later */
 		ddp->deh_len_hops = htons(skb->len + (DDP_MAXHOPS << 10));
 	}
-	skb->h.raw = skb->data;
+	skb_reset_transport_header(skb);
 
 	return atalk_rcv(skb, dev, pt, orig_dev);
 freeit:
@@ -1771,6 +1785,9 @@ static int atalk_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		case SIOCGSTAMP:
 			rc = sock_get_timestamp(sk, argp);
 			break;
+		case SIOCGSTAMPNS:
+			rc = sock_get_timestampns(sk, argp);
+			break;
 		/* Routing */
 		case SIOCADDRT:
 		case SIOCDELRT:
@@ -1841,7 +1858,6 @@ static const struct proto_ops SOCKOPS_WRAPPED(atalk_dgram_ops) = {
 	.sendpage	= sock_no_sendpage,
 };
 
-#include <linux/smp_lock.h>
 SOCKOPS_WRAP(atalk_dgram, PF_APPLETALK);
 
 static struct notifier_block ddp_notifier = {

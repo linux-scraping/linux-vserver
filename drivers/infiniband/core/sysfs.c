@@ -311,7 +311,7 @@ static ssize_t show_pma_counter(struct ib_port *p, struct port_attribute *attr,
 		return sprintf(buf, "N/A (no PMA)\n");
 
 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
-	out_mad = kmalloc(sizeof *in_mad, GFP_KERNEL);
+	out_mad = kmalloc(sizeof *out_mad, GFP_KERNEL);
 	if (!in_mad || !out_mad) {
 		ret = -ENOMEM;
 		goto out;
@@ -434,21 +434,18 @@ static void ib_device_release(struct class_device *cdev)
 	kfree(dev);
 }
 
-static int ib_device_uevent(struct class_device *cdev, char **envp,
-			    int num_envp, char *buf, int size)
+static int ib_device_uevent(struct class_device *cdev,
+			    struct kobj_uevent_env *env)
 {
 	struct ib_device *dev = container_of(cdev, struct ib_device, class_dev);
-	int i = 0, len = 0;
 
-	if (add_uevent_var(envp, num_envp, &i, buf, size, &len,
-			   "NAME=%s", dev->name))
+	if (add_uevent_var(env, "NAME=%s", dev->name))
 		return -ENOMEM;
 
 	/*
 	 * It would be nice to pass the node GUID with the event...
 	 */
 
-	envp[i] = NULL;
 	return 0;
 }
 
@@ -479,7 +476,6 @@ alloc_group_attrs(ssize_t (*show)(struct ib_port *,
 
 		element->attr.attr.name  = element->name;
 		element->attr.attr.mode  = S_IRUGO;
-		element->attr.attr.owner = THIS_MODULE;
 		element->attr.show       = show;
 		element->index		 = i;
 
@@ -683,6 +679,7 @@ int ib_device_register_sysfs(struct ib_device *device)
 
 	class_dev->class      = &ib_class;
 	class_dev->class_data = device;
+	class_dev->dev	      = device->dma_device;
 	strlcpy(class_dev->class_id, device->name, BUS_ID_SIZE);
 
 	INIT_LIST_HEAD(&device->port_list);

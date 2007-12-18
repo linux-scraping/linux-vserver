@@ -68,9 +68,15 @@ STACK_SIZE  = 1 << STACK_SHIFT
 	l	%r1,BASED(.Ltrace_irq_off)
 	basr	%r14,%r1
 	.endm
+
+	.macro	LOCKDEP_SYS_EXIT
+	l	%r1,BASED(.Llockdep_sys_exit)
+	basr	%r14,%r1
+	.endm
 #else
 #define TRACE_IRQS_ON
 #define TRACE_IRQS_OFF
+#define LOCKDEP_SYS_EXIT
 #endif
 
 /*
@@ -105,6 +111,11 @@ STACK_SIZE  = 1 << STACK_SHIFT
 	.macro	SAVE_ALL_BASE savearea
 	stm	%r12,%r15,\savearea
 	l	%r13,__LC_SVC_NEW_PSW+4	# load &system_call to %r13
+	.endm
+
+	.macro	SAVE_ALL_SVC psworg,savearea
+	la	%r12,\psworg
+	l	%r15,__LC_KERNEL_STACK	# problem state -> load ksp
 	.endm
 
 	.macro	SAVE_ALL_SYNC psworg,savearea
@@ -218,7 +229,7 @@ system_call:
 	STORE_TIMER __LC_SYNC_ENTER_TIMER
 sysc_saveall:
 	SAVE_ALL_BASE __LC_SAVE_AREA
-	SAVE_ALL_SYNC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
+	SAVE_ALL_SVC __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	CREATE_STACK_FRAME __LC_SVC_OLD_PSW,__LC_SAVE_AREA
 	lh	%r7,0x8a	  # get svc number from lowcore
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING
@@ -249,14 +260,13 @@ sysc_do_restart:
 	bnz	BASED(sysc_tracesys)
 	basr	%r14,%r8	  # call sys_xxxx
 	st	%r2,SP_R2(%r15)   # store return value (change R2 on stack)
-				  # ATTENTION: check sys_execve_glue before
-				  # changing anything here !!
 
 sysc_return:
 	tm	SP_PSW+1(%r15),0x01	# returning to user ?
 	bno	BASED(sysc_leave)
 	tm	__TI_flags+3(%r9),_TIF_WORK_SVC
 	bnz	BASED(sysc_work)  # there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 sysc_leave:
 	RESTORE_ALL __LC_RETURN_PSW,1
 
@@ -280,6 +290,7 @@ sysc_work:
 	bo	BASED(sysc_restart)
 	tm	__TI_flags+3(%r9),_TIF_SINGLE_STEP
 	bo	BASED(sysc_singlestep)
+	LOCKDEP_SYS_EXIT
 	b	BASED(sysc_leave)
 
 #
@@ -381,50 +392,37 @@ ret_from_fork:
 	b	BASED(sysc_return)
 
 #
-# clone, fork, vfork, exec and sigreturn need glue,
-# because they all expect pt_regs as parameter,
-# but are called with different parameter.
-# return-address is set up above
+# kernel_execve function needs to deal with pt_regs that is not
+# at the usual place
 #
-sys_clone_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs
-	l	%r1,BASED(.Lclone)
-	br	%r1			# branch to sys_clone
-
-sys_fork_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs
-	l	%r1,BASED(.Lfork)
-	br	%r1			# branch to sys_fork
-
-sys_vfork_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs
-	l	%r1,BASED(.Lvfork)
-	br	%r1			# branch to sys_vfork
-
-sys_execve_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs
-	l	%r1,BASED(.Lexecve)
-	lr	%r12,%r14		# save return address
-	basr	%r14,%r1		# call sys_execve
-	ltr	%r2,%r2			# check if execve failed
-	bnz	0(%r12)			# it did fail -> store result in gpr2
-	b	4(%r12)			# SKIP ST 2,SP_R2(15) after BASR 14,8
-					# in system_call/sysc_tracesys
-
-sys_sigreturn_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs as parameter
-	l	%r1,BASED(.Lsigreturn)
-	br	%r1			# branch to sys_sigreturn
-
-sys_rt_sigreturn_glue:
-	la	%r2,SP_PTREGS(%r15)	# load pt_regs as parameter
-	l	%r1,BASED(.Lrt_sigreturn)
-	br	%r1			# branch to sys_sigreturn
-
-sys_sigaltstack_glue:
-	la	%r4,SP_PTREGS(%r15)	# load pt_regs as parameter
-	l	%r1,BASED(.Lsigaltstack)
-	br	%r1			# branch to sys_sigreturn
+	.globl	kernel_execve
+kernel_execve:
+	stm	%r12,%r15,48(%r15)
+	lr	%r14,%r15
+	l	%r13,__LC_SVC_NEW_PSW+4
+	s	%r15,BASED(.Lc_spsize)
+	st	%r14,__SF_BACKCHAIN(%r15)
+	la	%r12,SP_PTREGS(%r15)
+	xc	0(__PT_SIZE,%r12),0(%r12)
+	l	%r1,BASED(.Ldo_execve)
+	lr	%r5,%r12
+	basr	%r14,%r1
+	ltr	%r2,%r2
+	be	BASED(0f)
+	a	%r15,BASED(.Lc_spsize)
+	lm	%r12,%r15,48(%r15)
+	br	%r14
+	# execve succeeded.
+0:	stnsm	__SF_EMPTY(%r15),0xfc	# disable interrupts
+	l	%r15,__LC_KERNEL_STACK	# load ksp
+	s	%r15,BASED(.Lc_spsize)	# make room for registers & psw
+	l	%r9,__LC_THREAD_INFO
+	mvc	SP_PTREGS(__PT_SIZE,%r15),0(%r12)	# copy pt_regs
+	xc	__SF_BACKCHAIN(4,%r15),__SF_BACKCHAIN(%r15)
+	stosm	__SF_EMPTY(%r15),0x03	# reenable interrupts
+	l	%r1,BASED(.Lexecve_tail)
+	basr	%r14,%r1
+	b	BASED(sysc_return)
 
 /*
  * Program check handler routine
@@ -582,6 +580,7 @@ io_return:
 #endif
 	tm	__TI_flags+3(%r9),_TIF_WORK_INT
 	bnz	BASED(io_work)		# there is work to do (signals etc.)
+	LOCKDEP_SYS_EXIT
 io_leave:
 	RESTORE_ALL __LC_RETURN_PSW,0
 io_done:
@@ -628,15 +627,18 @@ io_work_loop:
 	bo	BASED(io_reschedule)
 	tm	__TI_flags+3(%r9),(_TIF_SIGPENDING | _TIF_RESTORE_SIGMASK)
 	bnz	BASED(io_sigpending)
+	LOCKDEP_SYS_EXIT
 	b	BASED(io_leave)
 
 #
 # _TIF_MCCK_PENDING is set, call handler
 #
 io_mcck_pending:
+	TRACE_IRQS_OFF
 	l	%r1,BASED(.Ls390_handle_mcck)
-	la	%r14,BASED(io_work_loop)
-	br	%r1			# TIF bit will be cleared by handler
+	basr	%r14,%r1		# TIF bit will be cleared by handler
+	TRACE_IRQS_ON
+	b	BASED(io_work_loop)
 
 #
 # _TIF_NEED_RESCHED is set, call schedule
@@ -784,10 +786,13 @@ mcck_return:
 
 	RESTORE_ALL __LC_RETURN_MCCK_PSW,0
 
-#ifdef CONFIG_SMP
 /*
  * Restart interruption handler, kick starter for additional CPUs
  */
+#ifdef CONFIG_SMP
+#ifndef CONFIG_HOTPLUG_CPU
+	.section .init.text,"ax"
+#endif
 	.globl restart_int_handler
 restart_int_handler:
 	l	%r15,__LC_SAVE_AREA+60	# load ksp
@@ -800,6 +805,9 @@ restart_int_handler:
 	br	%r14			# branch to start_secondary
 restart_addr:
 	.long	start_secondary
+#ifndef CONFIG_HOTPLUG_CPU
+	.previous
+#endif
 #else
 /*
  * If we do not run with SMP enabled, let the new CPU crash ...
@@ -1031,25 +1039,19 @@ cleanup_io_leave_insn:
 .Ldo_extint:	.long	do_extint
 .Ldo_signal:	.long	do_signal
 .Lhandle_per:	.long	do_single_step
+.Ldo_execve:	.long	do_execve
+.Lexecve_tail:	.long	execve_tail
 .Ljump_table:	.long	pgm_check_table
 .Lschedule:	.long	schedule
-.Lclone:	.long	sys_clone
-.Lexecve:	.long	sys_execve
-.Lfork: 	.long	sys_fork
-.Lrt_sigreturn: .long	sys_rt_sigreturn
-.Lrt_sigsuspend:
-		.long	sys_rt_sigsuspend
-.Lsigreturn:	.long	sys_sigreturn
-.Lsigsuspend:	.long	sys_sigsuspend
-.Lsigaltstack:	.long	sys_sigaltstack
 .Ltrace:	.long	syscall_trace
-.Lvfork:	.long	sys_vfork
 .Lschedtail:	.long	schedule_tail
 .Lsysc_table:	.long	sys_call_table
 #ifdef CONFIG_TRACE_IRQFLAGS
 .Ltrace_irq_on: .long	trace_hardirqs_on
 .Ltrace_irq_off:
 		.long	trace_hardirqs_off
+.Llockdep_sys_exit:
+		.long	lockdep_sys_exit
 #endif
 .Lcritical_start:
 		.long	__critical_start + 0x80000000

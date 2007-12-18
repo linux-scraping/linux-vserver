@@ -22,6 +22,9 @@
 #include <linux/bitops.h>
 #include <asm/system.h>
 #include <asm/irq.h>
+#include <asm/hpsim.h>
+
+#include "hpsim_ssc.h"
 
 #define SIMETH_RECV_MAX	10
 
@@ -34,12 +37,6 @@
  */
 #define SIMETH_FRAME_SIZE	ETH_FRAME_LEN
 
-
-#define SSC_NETDEV_PROBE		100
-#define SSC_NETDEV_SEND			101
-#define SSC_NETDEV_RECV			102
-#define SSC_NETDEV_ATTACH		103
-#define SSC_NETDEV_DETACH		104
 
 #define NETWORK_INTR			8
 
@@ -123,9 +120,6 @@ simeth_probe (void)
 
 	return r;
 }
-
-extern long ia64_ssc (long, long, long, long, int);
-extern void ia64_ssc_connect_irq (long intr, long irq);
 
 static inline int
 netdev_probe(char *name, unsigned char *ether)
@@ -300,6 +294,9 @@ simeth_device_event(struct notifier_block *this,unsigned long event, void *ptr)
 		return NOTIFY_DONE;
 	}
 
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	if ( event != NETDEV_UP && event != NETDEV_DOWN ) return NOTIFY_DONE;
 
 	/*
@@ -427,7 +424,6 @@ make_new_skb(struct net_device *dev)
 		printk(KERN_NOTICE "%s: memory squeeze. dropping packet.\n", dev->name);
 		return NULL;
 	}
-	nskb->dev = dev;
 
 	skb_reserve(nskb, 2);	/* Align IP on 16 byte boundaries */
 
@@ -474,7 +470,7 @@ simeth_rx(struct net_device *dev)
 		 * XXX Fix me
 		 * Should really do a csum+copy here
 		 */
-		memcpy(skb->data, frame, len);
+		skb_copy_to_linear_data(skb, frame, len);
 #endif
 		skb->protocol = eth_type_trans(skb, dev);
 

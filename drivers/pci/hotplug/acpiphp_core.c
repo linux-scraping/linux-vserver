@@ -40,7 +40,6 @@
 #include <linux/pci_hotplug.h>
 #include <linux/slab.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include "acpiphp.h"
 
 #define MY_NAME	"acpiphp"
@@ -157,11 +156,15 @@ static int enable_slot(struct hotplug_slot *hotplug_slot)
 static int disable_slot(struct hotplug_slot *hotplug_slot)
 {
 	struct slot *slot = hotplug_slot->private;
+	int retval;
 
 	dbg("%s - physical_slot = %s\n", __FUNCTION__, hotplug_slot->name);
 
 	/* disable the specified slot */
-	return acpiphp_disable_slot(slot->acpi_slot);
+	retval = acpiphp_disable_slot(slot->acpi_slot);
+	if (!retval)
+		retval = acpiphp_eject_slot(slot->acpi_slot);
+	return retval;
 }
 
 

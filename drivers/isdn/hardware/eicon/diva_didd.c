@@ -15,6 +15,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
+#include <net/net_namespace.h>
 
 #include "platform.h"
 #include "di_defs.h"
@@ -86,7 +87,7 @@ proc_read(char *page, char **start, off_t off, int count, int *eof,
 
 static int DIVA_INIT_FUNCTION create_proc(void)
 {
-	proc_net_eicon = proc_mkdir("net/eicon", NULL);
+	proc_net_eicon = proc_mkdir("eicon", init_net.proc_net);
 
 	if (proc_net_eicon) {
 		if ((proc_didd =
@@ -99,10 +100,10 @@ static int DIVA_INIT_FUNCTION create_proc(void)
 	return (0);
 }
 
-static void DIVA_EXIT_FUNCTION remove_proc(void)
+static void remove_proc(void)
 {
 	remove_proc_entry(DRIVERLNAME, proc_net_eicon);
-	remove_proc_entry("net/eicon", NULL);
+	remove_proc_entry("eicon", init_net.proc_net);
 }
 
 static int DIVA_INIT_FUNCTION divadidd_init(void)

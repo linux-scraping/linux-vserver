@@ -63,7 +63,6 @@ enum {
 
 struct spider_pic {
 	struct irq_host		*host;
-	struct device_node	*of_node;
 	void __iomem		*regs;
 	unsigned int		node_id;
 };
@@ -176,12 +175,6 @@ static struct irq_chip spider_pic = {
 	.set_type = spider_set_irq_type,
 };
 
-static int spider_host_match(struct irq_host *h, struct device_node *node)
-{
-	struct spider_pic *pic = h->host_data;
-	return node == pic->of_node;
-}
-
 static int spider_host_map(struct irq_host *h, unsigned int virq,
 			irq_hw_number_t hw)
 {
@@ -208,7 +201,6 @@ static int spider_host_xlate(struct irq_host *h, struct device_node *ct,
 }
 
 static struct irq_host_ops spider_host_ops = {
-	.match = spider_host_match,
 	.map = spider_host_map,
 	.xlate = spider_host_xlate,
 };
@@ -247,32 +239,32 @@ static unsigned int __init spider_find_cascade_and_node(struct spider_pic *pic)
 	 * tree in case the device-tree is ever fixed
 	 */
 	struct of_irq oirq;
-	if (of_irq_map_one(pic->of_node, 0, &oirq) == 0) {
+	if (of_irq_map_one(pic->host->of_node, 0, &oirq) == 0) {
 		virq = irq_create_of_mapping(oirq.controller, oirq.specifier,
 					     oirq.size);
 		return virq;
 	}
 
 	/* Now do the horrible hacks */
-	tmp = get_property(pic->of_node, "#interrupt-cells", NULL);
+	tmp = of_get_property(pic->host->of_node, "#interrupt-cells", NULL);
 	if (tmp == NULL)
 		return NO_IRQ;
 	intsize = *tmp;
-	imap = get_property(pic->of_node, "interrupt-map", &imaplen);
+	imap = of_get_property(pic->host->of_node, "interrupt-map", &imaplen);
 	if (imap == NULL || imaplen < (intsize + 1))
 		return NO_IRQ;
 	iic = of_find_node_by_phandle(imap[intsize]);
 	if (iic == NULL)
 		return NO_IRQ;
 	imap += intsize + 1;
-	tmp = get_property(iic, "#interrupt-cells", NULL);
+	tmp = of_get_property(iic, "#interrupt-cells", NULL);
 	if (tmp == NULL)
 		return NO_IRQ;
 	intsize = *tmp;
 	/* Assume unit is last entry of interrupt specifier */
 	unit = imap[intsize - 1];
 	/* Ok, we have a unit, now let's try to get the node */
-	tmp = get_property(iic, "ibm,interrupt-server-ranges", NULL);
+	tmp = of_get_property(iic, "ibm,interrupt-server-ranges", NULL);
 	if (tmp == NULL) {
 		of_node_put(iic);
 		return NO_IRQ;
@@ -308,14 +300,12 @@ static void __init spider_init_one(struct device_node *of_node, int chip,
 		panic("spider_pic: can't map registers !");
 
 	/* Allocate a host */
-	pic->host = irq_alloc_host(IRQ_HOST_MAP_LINEAR, SPIDER_SRC_COUNT,
-				   &spider_host_ops, SPIDER_IRQ_INVALID);
+	pic->host = irq_alloc_host(of_node_get(of_node), IRQ_HOST_MAP_LINEAR,
+				   SPIDER_SRC_COUNT, &spider_host_ops,
+				   SPIDER_IRQ_INVALID);
 	if (pic->host == NULL)
 		panic("spider_pic: can't allocate irq host !");
 	pic->host->host_data = pic;
-
-	/* Fill out other bits */
-	pic->of_node = of_node_get(of_node);
 
 	/* Go through all sources and disable them */
 	for (i = 0; i < SPIDER_SRC_COUNT; i++) {
@@ -358,12 +348,12 @@ void __init spider_init_IRQ(void)
 	 */
 	for (dn = NULL;
 	     (dn = of_find_node_by_name(dn, "interrupt-controller"));) {
-		if (device_is_compatible(dn, "CBEA,platform-spider-pic")) {
+		if (of_device_is_compatible(dn, "CBEA,platform-spider-pic")) {
 			if (of_address_to_resource(dn, 0, &r)) {
 				printk(KERN_WARNING "spider-pic: Failed\n");
 				continue;
 			}
-		} else if (device_is_compatible(dn, "sti,platform-spider-pic")
+		} else if (of_device_is_compatible(dn, "sti,platform-spider-pic")
 			   && (chip < 2)) {
 			static long hard_coded_pics[] =
 				{ 0x24000008000ul, 0x34000008000ul};

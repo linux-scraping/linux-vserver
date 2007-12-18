@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>,
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>,
  *                   Takashi Iwai <tiwai@suse.de>
  *                   Creative Labs, Inc.
  *  Routines for control of EMU10K1 chips / mixer routines
@@ -77,6 +77,10 @@ static int snd_emu10k1_spdif_get_mask(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+/*
+ * Items labels in enum mixer controls assigning source data to
+ * each destination
+ */
 static char *emu1010_src_texts[] = { 
 	"Silence",
 	"Dock Mic A",
@@ -133,6 +137,9 @@ static char *emu1010_src_texts[] = {
 	"DSP 31",
 };
 
+/*
+ * List of data sources available for each destination
+ */
 static unsigned int emu1010_src_regs[] = {
 	EMU_SRC_SILENCE,/* 0 */
 	EMU_SRC_DOCK_MIC_A1, /* 1 */
@@ -189,6 +196,10 @@ static unsigned int emu1010_src_regs[] = {
 	EMU_SRC_ALICE_EMU32B+0xf, /* 52 */
 };
 
+/*
+ * Data destinations - physical EMU outputs.
+ * Each destination has an enum mixer control to choose a data source
+ */
 static unsigned int emu1010_output_dst[] = {
 	EMU_DST_DOCK_DAC1_LEFT1, /* 0 */
 	EMU_DST_DOCK_DAC1_RIGHT1, /* 1 */
@@ -216,6 +227,11 @@ static unsigned int emu1010_output_dst[] = {
 	EMU_DST_HANA_ADAT+7, /* 23 */
 };
 
+/*
+ * Data destinations - HANA outputs going to Alice2 (audigy) for
+ *   capture (EMU32 + I2S links)
+ * Each destination has an enum mixer control to choose a data source
+ */
 static unsigned int emu1010_input_dst[] = {
 	EMU_DST_ALICE2_EMU32_0,
 	EMU_DST_ALICE2_EMU32_1,
@@ -384,15 +400,7 @@ static struct snd_kcontrol_new snd_emu1010_input_enum_ctls[] __devinitdata = {
 
 
 
-
-static int snd_emu1010_adc_pads_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_emu1010_adc_pads_info	snd_ctl_boolean_mono_info
 
 static int snd_emu1010_adc_pads_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -440,14 +448,7 @@ static struct snd_kcontrol_new snd_emu1010_adc_pads[] __devinitdata = {
 	EMU1010_ADC_PADS("ADC1 14dB PAD 0202 Capture Switch", EMU_HANA_0202_ADC_PAD1),
 };
 
-static int snd_emu1010_dac_pads_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_emu1010_dac_pads_info	snd_ctl_boolean_mono_info
 
 static int snd_emu1010_dac_pads_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -500,17 +501,19 @@ static struct snd_kcontrol_new snd_emu1010_dac_pads[] __devinitdata = {
 static int snd_emu1010_internal_clock_info(struct snd_kcontrol *kcontrol,
 					  struct snd_ctl_elem_info *uinfo)
 {
-	static char *texts[2] = {
-		"44100", "48000"
+	static char *texts[4] = {
+		"44100", "48000", "SPDIF", "ADAT"
 	};
-
+		
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
 	uinfo->count = 1;
-	uinfo->value.enumerated.items = 2;
-	if (uinfo->value.enumerated.item > 1)
-                uinfo->value.enumerated.item = 1;
+	uinfo->value.enumerated.items = 4;
+	if (uinfo->value.enumerated.item >= uinfo->value.enumerated.items)
+		uinfo->value.enumerated.item = uinfo->value.enumerated.items - 1;
 	strcpy(uinfo->value.enumerated.name, texts[uinfo->value.enumerated.item]);
 	return 0;
+	
+	
 }
 
 static int snd_emu1010_internal_clock_get(struct snd_kcontrol *kcontrol,
@@ -568,6 +571,44 @@ static int snd_emu1010_internal_clock_put(struct snd_kcontrol *kcontrol,
 			/* Unmute all */
 			snd_emu1010_fpga_write(emu, EMU_HANA_UNMUTE, EMU_UNMUTE );
 			break;
+			
+		case 2: /* Take clock from S/PDIF IN */
+			/* Mute all */
+			snd_emu1010_fpga_write(emu, EMU_HANA_UNMUTE, EMU_MUTE );
+			/* Default fallback clock 48kHz */
+			snd_emu1010_fpga_write(emu, EMU_HANA_DEFCLOCK, EMU_HANA_DEFCLOCK_48K );
+			/* Word Clock source, sync to S/PDIF input */
+			snd_emu1010_fpga_write(emu, EMU_HANA_WCLOCK,
+				EMU_HANA_WCLOCK_HANA_SPDIF_IN | EMU_HANA_WCLOCK_1X );
+			/* Set LEDs on Audio Dock */
+			snd_emu1010_fpga_write(emu, EMU_HANA_DOCK_LEDS_2,
+				EMU_HANA_DOCK_LEDS_2_EXT | EMU_HANA_DOCK_LEDS_2_LOCK );
+			/* FIXME: We should set EMU_HANA_DOCK_LEDS_2_LOCK only when clock signal is present and valid */	
+			/* Allow DLL to settle */
+			msleep(10);
+			/* Unmute all */
+			snd_emu1010_fpga_write(emu, EMU_HANA_UNMUTE, EMU_UNMUTE );
+			break;
+		
+		case 3: 			
+			/* Take clock from ADAT IN */
+			/* Mute all */
+			snd_emu1010_fpga_write(emu, EMU_HANA_UNMUTE, EMU_MUTE );
+			/* Default fallback clock 48kHz */
+			snd_emu1010_fpga_write(emu, EMU_HANA_DEFCLOCK, EMU_HANA_DEFCLOCK_48K );
+			/* Word Clock source, sync to ADAT input */
+			snd_emu1010_fpga_write(emu, EMU_HANA_WCLOCK,
+				EMU_HANA_WCLOCK_HANA_ADAT_IN | EMU_HANA_WCLOCK_1X );
+			/* Set LEDs on Audio Dock */
+			snd_emu1010_fpga_write(emu, EMU_HANA_DOCK_LEDS_2, EMU_HANA_DOCK_LEDS_2_EXT | EMU_HANA_DOCK_LEDS_2_LOCK );
+			/* FIXME: We should set EMU_HANA_DOCK_LEDS_2_LOCK only when clock signal is present and valid */	
+			/* Allow DLL to settle */
+			msleep(10);
+			/*   Unmute all */
+			snd_emu1010_fpga_write(emu, EMU_HANA_UNMUTE, EMU_UNMUTE );
+			 
+			
+			break;		
 		}
 	}
         return change;
@@ -855,7 +896,7 @@ static struct snd_kcontrol_new snd_emu10k1_spdif_mask_control =
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =        SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,MASK),
-	.count =	4,
+	.count =	3,
 	.info =         snd_emu10k1_spdif_info,
 	.get =          snd_emu10k1_spdif_get_mask
 };
@@ -864,7 +905,7 @@ static struct snd_kcontrol_new snd_emu10k1_spdif_control =
 {
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),
-	.count =	4,
+	.count =	3,
 	.info =         snd_emu10k1_spdif_info,
 	.get =          snd_emu10k1_spdif_get,
 	.put =          snd_emu10k1_spdif_put
@@ -1310,14 +1351,7 @@ static struct snd_kcontrol_new snd_emu10k1_efx_attn_control =
 	.put =          snd_emu10k1_efx_attn_put
 };
 
-static int snd_emu10k1_shared_spdif_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_emu10k1_shared_spdif_info	snd_ctl_boolean_mono_info
 
 static int snd_emu10k1_shared_spdif_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)

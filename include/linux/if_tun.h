@@ -36,12 +36,12 @@ struct tun_struct {
 	unsigned long 		flags;
 	int			attached;
 	uid_t			owner;
+	gid_t			group;
 
 	wait_queue_head_t	read_wait;
 	struct sk_buff_head	readq;
 
 	struct net_device	*dev;
-	struct net_device_stats	stats;
 
 	struct fasync_struct    *fasync;
 
@@ -78,6 +78,7 @@ struct tun_struct {
 #define TUNSETPERSIST _IOW('T', 203, int) 
 #define TUNSETOWNER   _IOW('T', 204, int)
 #define TUNSETLINK    _IOW('T', 205, int)
+#define TUNSETGROUP   _IOW('T', 206, int)
 
 /* TUNSETIFF ifr flags */
 #define IFF_TUN		0x0001

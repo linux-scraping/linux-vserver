@@ -24,7 +24,7 @@
  *    o Automatic Mic Bias support
  *    o Jack insertion power event initiation - e.g. hp insertion will enable
  *      sinks, dacs, etc
- *    o Delayed powerdown of audio susbsytem to reduce pops between a quick
+ *    o Delayed powerdown of audio susbsystem to reduce pops between a quick
  *      device reopen.
  *
  *  Todo:
@@ -63,7 +63,7 @@
 #define POP_DEBUG 0
 #if POP_DEBUG
 #define POP_TIME 500 /* 500 msecs - change if pop debug is too fast */
-#define pop_wait(time) schedule_timeout_interruptible(msecs_to_jiffies(time))
+#define pop_wait(time) schedule_timeout_uninterruptible(msecs_to_jiffies(time))
 #define pop_dbg(format, arg...) printk(format, ## arg); pop_wait(POP_TIME)
 #else
 #define pop_dbg(format, arg...)
@@ -882,13 +882,15 @@ int snd_soc_dapm_connect_input(struct snd_soc_codec *codec, const char *sink,
 	if (wsink->id == snd_soc_dapm_input) {
 		if (wsource->id == snd_soc_dapm_micbias ||
 			wsource->id == snd_soc_dapm_mic ||
-			wsink->id == snd_soc_dapm_line)
+			wsink->id == snd_soc_dapm_line ||
+			wsink->id == snd_soc_dapm_output)
 			wsink->ext = 1;
 	}
 	if (wsource->id == snd_soc_dapm_output) {
 		if (wsink->id == snd_soc_dapm_spk ||
 			wsink->id == snd_soc_dapm_hp ||
-			wsink->id == snd_soc_dapm_line)
+			wsink->id == snd_soc_dapm_line ||
+			wsink->id == snd_soc_dapm_input)
 			wsource->ext = 1;
 	}
 

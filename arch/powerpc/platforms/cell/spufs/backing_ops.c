@@ -28,7 +28,6 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
 #include <linux/poll.h>
@@ -163,7 +162,8 @@ static int spu_backing_wbox_write(struct spu_context *ctx, u32 data)
 		BUG_ON(avail != (4 - slot));
 		ctx->csa.spu_mailbox_data[slot] = data;
 		ctx->csa.spu_chnlcnt_RW[29] = ++slot;
-		ctx->csa.prob.mb_stat_R = (((4 - slot) & 0xff) << 8);
+		ctx->csa.prob.mb_stat_R &= ~(0x00ff00);
+		ctx->csa.prob.mb_stat_R |= (((4 - slot) & 0xff) << 8);
 		gen_spu_event(ctx, MFC_SPU_MAILBOX_WRITTEN_EVENT);
 		ret = 4;
 	} else {
@@ -321,6 +321,12 @@ static int spu_backing_set_mfc_query(struct spu_context * ctx, u32 mask,
 	/* FIXME: what are the side-effects of this? */
 	prob->dma_querymask_RW = mask;
 	prob->dma_querytype_RW = mode;
+	/* In the current implementation, the SPU context is always
+	 * acquired in runnable state when new bits are added to the
+	 * mask (tagwait), so it's sufficient just to mask
+	 * dma_tagstatus_R with the 'mask' parameter here.
+	 */
+	ctx->csa.prob.dma_tagstatus_R &= mask;
 out:
 	spin_unlock(&ctx->csa.register_lock);
 
@@ -350,6 +356,11 @@ static int spu_backing_send_mfc_command(struct spu_context *ctx,
 	return ret;
 }
 
+static void spu_backing_restart_dma(struct spu_context *ctx)
+{
+	/* nothing to do here */
+}
+
 struct spu_context_ops spu_backing_ops = {
 	.mbox_read = spu_backing_mbox_read,
 	.mbox_stat_read = spu_backing_mbox_stat_read,
@@ -376,4 +387,5 @@ struct spu_context_ops spu_backing_ops = {
 	.read_mfc_tagstatus = spu_backing_read_mfc_tagstatus,
 	.get_mfc_free_elements = spu_backing_get_mfc_free_elements,
 	.send_mfc_command = spu_backing_send_mfc_command,
+	.restart_dma = spu_backing_restart_dma,
 };

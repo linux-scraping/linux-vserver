@@ -9,30 +9,17 @@
  */
 
 #include <linux/module.h>
-#include <asm/uaccess.h>
-#include <asm/system.h>
-#include <linux/bitops.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/mm.h>
-#include <linux/socket.h>
-#include <linux/sockios.h>
-#include <linux/in.h>
 #include <linux/errno.h>
-#include <linux/interrupt.h>
 #include <linux/if_arp.h>
-#include <linux/if_ether.h>
-#include <linux/inet.h>
 #include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/notifier.h>
 #include <linux/init.h>
-#include <net/ip.h>
-#include <net/route.h>
 #include <linux/skbuff.h>
 #include <linux/moduleparam.h>
-#include <net/sock.h>
+#include <net/dst.h>
+#include <net/neighbour.h>
 #include <net/pkt_sched.h>
 
 /*
@@ -94,14 +81,13 @@ teql_enqueue(struct sk_buff *skb, struct Qdisc* sch)
 	struct net_device *dev = sch->dev;
 	struct teql_sched_data *q = qdisc_priv(sch);
 
-	__skb_queue_tail(&q->q, skb);
-	if (q->q.qlen <= dev->tx_queue_len) {
+	if (q->q.qlen < dev->tx_queue_len) {
+		__skb_queue_tail(&q->q, skb);
 		sch->bstats.bytes += skb->len;
 		sch->bstats.packets++;
 		return 0;
 	}
 
-	__skb_unlink(skb, &q->q);
 	kfree_skb(skb);
 	sch->qstats.drops++;
 	return NET_XMIT_DROP;
@@ -226,7 +212,6 @@ static int teql_qdisc_init(struct Qdisc *sch, struct rtattr *opt)
 	return 0;
 }
 
-/* "teql*" netdevice routines */
 
 static int
 __teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res, struct net_device *dev)
@@ -247,9 +232,12 @@ __teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res, struct net_device *
 	}
 	if (neigh_event_send(n, skb_res) == 0) {
 		int err;
+
 		read_lock(&n->lock);
-		err = dev->hard_header(skb, dev, ntohs(skb->protocol), n->ha, NULL, skb->len);
+		err = dev_hard_header(skb, dev, ntohs(skb->protocol),
+				      n->ha, NULL, skb->len);
 		read_unlock(&n->lock);
+
 		if (err < 0) {
 			neigh_release(n);
 			return -EINVAL;
@@ -261,10 +249,13 @@ __teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res, struct net_device *
 	return (skb_res == NULL) ? -EAGAIN : 1;
 }
 
-static __inline__ int
-teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res, struct net_device *dev)
+static inline int teql_resolve(struct sk_buff *skb,
+			       struct sk_buff *skb_res, struct net_device *dev)
 {
-	if (dev->hard_header == NULL ||
+	if (dev->qdisc == &noop_qdisc)
+		return -ENODEV;
+
+	if (dev->header_ops == NULL ||
 	    skb->dst == NULL ||
 	    skb->dst->neighbour == NULL)
 		return 0;
@@ -278,6 +269,7 @@ static int teql_master_xmit(struct sk_buff *skb, struct net_device *dev)
 	int busy;
 	int nores;
 	int len = skb->len;
+	int subq = skb_get_queue_mapping(skb);
 	struct sk_buff *skb_res = NULL;
 
 	start = master->slaves;
@@ -294,7 +286,9 @@ restart:
 
 		if (slave->qdisc_sleeping != q)
 			continue;
-		if (netif_queue_stopped(slave) || ! netif_running(slave)) {
+		if (netif_queue_stopped(slave) ||
+		    __netif_subqueue_stopped(slave, subq) ||
+		    !netif_running(slave)) {
 			busy = 1;
 			continue;
 		}
@@ -303,6 +297,7 @@ restart:
 		case 0:
 			if (netif_tx_trylock(slave)) {
 				if (!netif_queue_stopped(slave) &&
+				    !__netif_subqueue_stopped(slave, subq) &&
 				    slave->hard_start_xmit(skb, slave) == 0) {
 					netif_tx_unlock(slave);
 					master->slaves = NEXT_SLAVE(q);
@@ -323,7 +318,7 @@ restart:
 			nores = 1;
 			break;
 		}
-		__skb_pull(skb, skb->nh.raw - skb->data);
+		__skb_pull(skb, skb_network_offset(skb));
 	} while ((q = NEXT_SLAVE(q)) != start);
 
 	if (nores && skb_res == NULL) {
@@ -443,7 +438,6 @@ static __init void teql_master_setup(struct net_device *dev)
 	dev->tx_queue_len	= 100;
 	dev->flags		= IFF_NOARP;
 	dev->hard_header_len	= LL_MAX_HEADER;
-	SET_MODULE_OWNER(dev);
 }
 
 static LIST_HEAD(master_dev_list);

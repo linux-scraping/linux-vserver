@@ -490,35 +490,14 @@ static int snd_pmac_pcm_open(struct snd_pmac *chip, struct pmac_stream *rec,
 			     struct snd_pcm_substream *subs)
 {
 	struct snd_pcm_runtime *runtime = subs->runtime;
-	int i, j, fflags;
-	static int typical_freqs[] = {
-		44100,
-		22050,
-		11025,
-		0,
-	};
-	static int typical_freq_flags[] = {
-		SNDRV_PCM_RATE_44100,
-		SNDRV_PCM_RATE_22050,
-		SNDRV_PCM_RATE_11025,
-		0,
-	};
+	int i;
 
 	/* look up frequency table and fill bit mask */
 	runtime->hw.rates = 0;
-	fflags = chip->freqs_ok;
-	for (i = 0; typical_freqs[i]; i++) {
-		for (j = 0; j < chip->num_freqs; j++) {
-			if ((chip->freqs_ok & (1 << j)) &&
-			    chip->freq_table[j] == typical_freqs[i]) {
-				runtime->hw.rates |= typical_freq_flags[i];
-				fflags &= ~(1 << j);
-				break;
-			}
-		}
-	}
-	if (fflags) /* rest */
-		runtime->hw.rates |= SNDRV_PCM_RATE_KNOT;
+	for (i = 0; i < chip->num_freqs; i++)
+		if (chip->freqs_ok & (1 << i))
+			runtime->hw.rates |=
+				snd_pcm_rate_to_rate_bit(chip->freq_table[i]);
 
 	/* check for minimum and maximum rates */
 	for (i = 0; i < chip->num_freqs; i++) {
@@ -550,9 +529,6 @@ static int snd_pmac_pcm_open(struct snd_pmac *chip, struct pmac_stream *rec,
 #endif
 
 	runtime->hw.periods_max = rec->cmd.size - 1;
-
-	if (chip->can_duplex)
-		snd_pcm_set_sync(subs);
 
 	/* constraints to fix choppy sound */
 	snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
@@ -775,7 +751,8 @@ static int snd_pmac_free(struct snd_pmac *chip)
 		out_le32(&chip->awacs->control, in_le32(&chip->awacs->control) & 0xfff);
 	}
 
-	snd_pmac_sound_feature(chip, 0);
+	if (chip->node)
+		snd_pmac_sound_feature(chip, 0);
 
 	/* clean up mixer if any */
 	if (chip->mixer_free)
@@ -816,6 +793,7 @@ static int snd_pmac_free(struct snd_pmac *chip)
 
 	if (chip->pdev)
 		pci_dev_put(chip->pdev);
+	of_node_put(chip->node);
 	kfree(chip);
 	return 0;
 }
@@ -842,7 +820,7 @@ static void __init detect_byte_swap(struct snd_pmac *chip)
 	/* if seems that Keylargo can't byte-swap  */
 	for (mio = chip->node->parent; mio; mio = mio->parent) {
 		if (strcmp(mio->name, "mac-io") == 0) {
-			if (device_is_compatible(mio, "Keylargo"))
+			if (of_device_is_compatible(mio, "Keylargo"))
 				chip->can_byte_swap = 0;
 			break;
 		}
@@ -863,8 +841,10 @@ static void __init detect_byte_swap(struct snd_pmac *chip)
  */
 static int __init snd_pmac_detect(struct snd_pmac *chip)
 {
-	struct device_node *sound = NULL;
-	unsigned int *prop, l;
+	struct device_node *sound;
+	struct device_node *dn;
+	const unsigned int *prop;
+	unsigned int l;
 	struct macio_chip* macio;
 
 	if (!machine_is(powermac))
@@ -890,25 +870,24 @@ static int __init snd_pmac_detect(struct snd_pmac *chip)
 	else if (machine_is_compatible("PowerBook1,1")
 		 || machine_is_compatible("AAPL,PowerBook1998"))
 		chip->is_pbook_G3 = 1;
-	chip->node = find_devices("awacs");
-	if (chip->node)
-		sound = chip->node;
+	chip->node = of_find_node_by_name(NULL, "awacs");
+	sound = of_node_get(chip->node);
 
 	/*
 	 * powermac G3 models have a node called "davbus"
 	 * with a child called "sound".
 	 */
 	if (!chip->node)
-		chip->node = find_devices("davbus");
+		chip->node = of_find_node_by_name(NULL, "davbus");
 	/*
 	 * if we didn't find a davbus device, try 'i2s-a' since
 	 * this seems to be what iBooks have
 	 */
 	if (! chip->node) {
-		chip->node = find_devices("i2s-a");
+		chip->node = of_find_node_by_name(NULL, "i2s-a");
 		if (chip->node && chip->node->parent &&
 		    chip->node->parent->parent) {
-			if (device_is_compatible(chip->node->parent->parent,
+			if (of_device_is_compatible(chip->node->parent->parent,
 						 "K2-Keylargo"))
 				chip->is_k2 = 1;
 		}
@@ -917,41 +896,47 @@ static int __init snd_pmac_detect(struct snd_pmac *chip)
 		return -ENODEV;
 
 	if (!sound) {
-		sound = find_devices("sound");
+		sound = of_find_node_by_name(NULL, "sound");
 		while (sound && sound->parent != chip->node)
-			sound = sound->next;
+			sound = of_find_node_by_name(sound, "sound");
 	}
-	if (! sound)
+	if (! sound) {
+		of_node_put(chip->node);
+		chip->node = NULL;
 		return -ENODEV;
-	prop = (unsigned int *) get_property(sound, "sub-frame", NULL);
+	}
+	prop = of_get_property(sound, "sub-frame", NULL);
 	if (prop && *prop < 16)
 		chip->subframe = *prop;
-	prop = (unsigned int *) get_property(sound, "layout-id", NULL);
+	prop = of_get_property(sound, "layout-id", NULL);
 	if (prop) {
 		/* partly deprecate snd-powermac, for those machines
 		 * that have a layout-id property for now */
 		printk(KERN_INFO "snd-powermac no longer handles any "
 				 "machines with a layout-id property "
 				 "in the device-tree, use snd-aoa.\n");
+		of_node_put(sound);
+		of_node_put(chip->node);
+		chip->node = NULL;
 		return -ENODEV;
 	}
 	/* This should be verified on older screamers */
-	if (device_is_compatible(sound, "screamer")) {
+	if (of_device_is_compatible(sound, "screamer")) {
 		chip->model = PMAC_SCREAMER;
 		// chip->can_byte_swap = 0; /* FIXME: check this */
 	}
-	if (device_is_compatible(sound, "burgundy")) {
+	if (of_device_is_compatible(sound, "burgundy")) {
 		chip->model = PMAC_BURGUNDY;
 		chip->control_mask = MASK_IEPC | 0x11; /* disable IEE */
 	}
-	if (device_is_compatible(sound, "daca")) {
+	if (of_device_is_compatible(sound, "daca")) {
 		chip->model = PMAC_DACA;
 		chip->can_capture = 0;  /* no capture */
 		chip->can_duplex = 0;
 		// chip->can_byte_swap = 0; /* FIXME: check this */
 		chip->control_mask = MASK_IEPC | 0x11; /* disable IEE */
 	}
-	if (device_is_compatible(sound, "tumbler")) {
+	if (of_device_is_compatible(sound, "tumbler")) {
 		chip->model = PMAC_TUMBLER;
 		chip->can_capture = 0;  /* no capture */
 		chip->can_duplex = 0;
@@ -960,17 +945,19 @@ static int __init snd_pmac_detect(struct snd_pmac *chip)
 		chip->freq_table = tumbler_freqs;
 		chip->control_mask = MASK_IEPC | 0x11; /* disable IEE */
 	}
-	if (device_is_compatible(sound, "snapper")) {
+	if (of_device_is_compatible(sound, "snapper")) {
 		chip->model = PMAC_SNAPPER;
 		// chip->can_byte_swap = 0; /* FIXME: check this */
 		chip->num_freqs = ARRAY_SIZE(tumbler_freqs);
 		chip->freq_table = tumbler_freqs;
 		chip->control_mask = MASK_IEPC | 0x11; /* disable IEE */
 	}
-	prop = (unsigned int *)get_property(sound, "device-id", NULL);
+	prop = of_get_property(sound, "device-id", NULL);
 	if (prop)
 		chip->device_id = *prop;
-	chip->has_iic = (find_devices("perch") != NULL);
+	dn = of_find_node_by_name(NULL, "perch");
+	chip->has_iic = (dn != NULL);
+	of_node_put(dn);
 
 	/* We need the PCI device for DMA allocations, let's use a crude method
 	 * for now ...
@@ -997,10 +984,9 @@ static int __init snd_pmac_detect(struct snd_pmac *chip)
 
 	/* look for a property saying what sample rates
 	   are available */
-	prop = (unsigned int *) get_property(sound, "sample-rates", &l);
+	prop = of_get_property(sound, "sample-rates", &l);
 	if (! prop)
-		prop = (unsigned int *) get_property(sound,
-						     "output-frame-rates", &l);
+		prop = of_get_property(sound, "output-frame-rates", &l);
 	if (prop) {
 		int i;
 		chip->freqs_ok = 0;
@@ -1021,29 +1007,7 @@ static int __init snd_pmac_detect(struct snd_pmac *chip)
 		chip->freqs_ok = 1;
 	}
 
-	return 0;
-}
-
-/*
- * exported - boolean info callbacks for ease of programming
- */
-int snd_pmac_boolean_stereo_info(struct snd_kcontrol *kcontrol,
-				 struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-
-int snd_pmac_boolean_mono_info(struct snd_kcontrol *kcontrol,
-			       struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
+	of_node_put(sound);
 	return 0;
 }
 
@@ -1290,8 +1254,6 @@ int __init snd_pmac_new(struct snd_card *card, struct snd_pmac **chip_return)
 	return 0;
 
  __error:
-	if (chip->pdev)
-		pci_dev_put(chip->pdev);
 	snd_pmac_free(chip);
 	return err;
 }

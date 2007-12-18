@@ -15,31 +15,6 @@
  * published by the Free Software Foundation.
  *
  *  Serial driver for TX3927/TX4927/TX4925/TX4938 internal SIO controller
- *
- *  Revision History:
- *	0.30	Initial revision. (Renamed from serial_txx927.c)
- *	0.31	Use save_flags instead of local_irq_save.
- *	0.32	Support SCLK.
- *	0.33	Switch TXX9_TTY_NAME by CONFIG_SERIAL_TXX9_STDSERIAL.
- *		Support TIOCSERGETLSR.
- *	0.34	Support slow baudrate.
- *	0.40	Merge codes from mainstream kernel (2.4.22).
- *	0.41	Fix console checking in rs_shutdown_port().
- *		Disable flow-control in serial_console_write().
- *	0.42	Fix minor compiler warning.
- *	1.00	Kernel 2.6.  Converted to new serial core (based on 8250.c).
- *	1.01	Set fifosize to make tx_empry called properly.
- *		Use standard uart_get_divisor.
- *	1.02	Cleanup. (import 8250.c changes)
- *	1.03	Fix low-latency mode. (import 8250.c changes)
- *	1.04	Remove usage of deprecated functions, cleanup.
- *	1.05	More strict check in verify_port.  Cleanup.
- *	1.06	Do not insert a char caused previous overrun.
- *		Fix some spin_locks.
- *		Do not call uart_add_one_port for absent ports.
- *	1.07	Use CONFIG_SERIAL_TXX9_NR_UARTS.  Cleanup.
- *	1.08	Use platform_device.
- *		Fix and cleanup suspend/resume/initialization codes.
  */
 
 #if defined(CONFIG_SERIAL_TXX9_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
@@ -50,19 +25,15 @@
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/console.h>
-#include <linux/sysrq.h>
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/pci.h>
-#include <linux/tty.h>
-#include <linux/tty_flip.h>
 #include <linux/serial_core.h>
 #include <linux/serial.h>
-#include <linux/mutex.h>
 
 #include <asm/io.h>
 
-static char *serial_version = "1.08";
+static char *serial_version = "1.11";
 static char *serial_name = "TX39/49 Serial driver";
 
 #define PASS_LIMIT	256
@@ -70,13 +41,14 @@ static char *serial_name = "TX39/49 Serial driver";
 #if !defined(CONFIG_SERIAL_TXX9_STDSERIAL)
 /* "ttyS" is used for standard serial driver */
 #define TXX9_TTY_NAME "ttyTX"
-#define TXX9_TTY_MINOR_START	(64 + 64)	/* ttyTX0(128), ttyTX1(129) */
+#define TXX9_TTY_MINOR_START	196
+#define TXX9_TTY_MAJOR	204
 #else
 /* acts like standard serial driver */
 #define TXX9_TTY_NAME "ttyS"
 #define TXX9_TTY_MINOR_START	64
-#endif
 #define TXX9_TTY_MAJOR	TTY_MAJOR
+#endif
 
 /* flag aliases */
 #define UPF_TXX9_HAVE_CTS_LINE	UPF_BUGGY_UART
@@ -91,8 +63,6 @@ static char *serial_name = "TX39/49 Serial driver";
  * Number of serial ports
  */
 #define UART_NR  CONFIG_SERIAL_TXX9_NR_UARTS
-
-#define HIGH_BITS_OFFSET	((sizeof(long)-sizeof(int))*8)
 
 struct uart_txx9_port {
 	struct uart_port	port;
@@ -460,8 +430,10 @@ static unsigned int serial_txx9_get_mctrl(struct uart_port *port)
 	struct uart_txx9_port *up = (struct uart_txx9_port *)port;
 	unsigned int ret;
 
-	ret =  ((sio_in(up, TXX9_SIFLCR) & TXX9_SIFLCR_RTSSC) ? 0 : TIOCM_RTS)
-		| ((sio_in(up, TXX9_SICISR) & TXX9_SICISR_CTSS) ? 0 : TIOCM_CTS);
+	/* no modem control lines */
+	ret = TIOCM_CAR | TIOCM_DSR;
+	ret |= (sio_in(up, TXX9_SIFLCR) & TXX9_SIFLCR_RTSSC) ? 0 : TIOCM_RTS;
+	ret |= (sio_in(up, TXX9_SICISR) & TXX9_SICISR_CTSS) ? 0 : TIOCM_CTS;
 
 	return ret;
 }
@@ -581,6 +553,12 @@ serial_txx9_set_termios(struct uart_port *port, struct ktermios *termios,
 	unsigned long flags;
 	unsigned int baud, quot;
 
+	/*
+	 * We don't support modem control lines.
+	 */
+	termios->c_cflag &= ~(HUPCL | CMSPAR);
+	termios->c_cflag |= CLOCAL;
+
 	cval = sio_in(up, TXX9_SILCR);
 	/* byte size and parity */
 	cval &= ~TXX9_SILCR_UMODE_MASK;
@@ -679,7 +657,15 @@ static void
 serial_txx9_pm(struct uart_port *port, unsigned int state,
 	      unsigned int oldstate)
 {
-	if (state == 0)
+	/*
+	 * If oldstate was -1 this is called from
+	 * uart_configure_port().  In this case do not initialize the
+	 * port now, because the port was already initialized (for
+	 * non-console port) or should not be initialized here (for
+	 * console port).  If we initialized the port here we lose
+	 * serial console settings.
+	 */
+	if (state == 0 && oldstate != -1)
 		serial_txx9_initialize(port);
 }
 
@@ -772,21 +758,6 @@ static void serial_txx9_config_port(struct uart_port *port, int uflags)
 	serial_txx9_initialize(port);
 }
 
-static int
-serial_txx9_verify_port(struct uart_port *port, struct serial_struct *ser)
-{
-	unsigned long new_port = ser->port;
-	if (HIGH_BITS_OFFSET)
-		new_port += (unsigned long)ser->port_high << HIGH_BITS_OFFSET;
-	if (ser->type != port->type ||
-	    ser->irq != port->irq ||
-	    ser->io_type != port->iotype ||
-	    new_port != port->iobase ||
-	    (unsigned long)ser->iomem_base != port->mapbase)
-		return -EINVAL;
-	return 0;
-}
-
 static const char *
 serial_txx9_type(struct uart_port *port)
 {
@@ -810,7 +781,6 @@ static struct uart_ops serial_txx9_pops = {
 	.release_port	= serial_txx9_release_port,
 	.request_port	= serial_txx9_request_port,
 	.config_port	= serial_txx9_config_port,
-	.verify_port	= serial_txx9_verify_port,
 };
 
 static struct uart_txx9_port serial_txx9_ports[UART_NR];
@@ -966,7 +936,8 @@ int __init early_serial_txx9_setup(struct uart_port *port)
 
 	serial_txx9_ports[port->line].port = *port;
 	serial_txx9_ports[port->line].port.ops = &serial_txx9_pops;
-	serial_txx9_ports[port->line].port.flags |= UPF_BOOT_AUTOCONF;
+	serial_txx9_ports[port->line].port.flags |=
+		UPF_BOOT_AUTOCONF | UPF_FIXED_PORT;
 	return 0;
 }
 
@@ -1011,7 +982,8 @@ static int __devinit serial_txx9_register_port(struct uart_port *port)
 		uart->port.irq      = port->irq;
 		uart->port.uartclk  = port->uartclk;
 		uart->port.iotype   = port->iotype;
-		uart->port.flags    = port->flags | UPF_BOOT_AUTOCONF;
+		uart->port.flags    = port->flags
+			| UPF_BOOT_AUTOCONF | UPF_FIXED_PORT;
 		uart->port.mapbase  = port->mapbase;
 		if (port->dev)
 			uart->port.dev = port->dev;
@@ -1067,8 +1039,9 @@ static int __devinit serial_txx9_probe(struct platform_device *dev)
 		ret = serial_txx9_register_port(&port);
 		if (ret < 0) {
 			dev_err(&dev->dev, "unable to register port at index %d "
-				"(IO%x MEM%lx IRQ%d): %d\n", i,
-				p->iobase, p->mapbase, p->irq, ret);
+				"(IO%x MEM%llx IRQ%d): %d\n", i,
+				p->iobase, (unsigned long long)p->mapbase,
+				p->irq, ret);
 		}
 	}
 	return 0;

@@ -21,7 +21,6 @@
 
 #include <linux/bitops.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -610,7 +609,8 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 		lgdt330x_reset(card);
 		card->fe = dvb_attach(lgdt330x_attach, &tdvs_tua6034_config, card->i2c_adapter);
 		if (card->fe != NULL) {
-			dvb_attach(lgh06xf_attach, card->fe, card->i2c_adapter);
+			dvb_attach(dvb_pll_attach, card->fe, 0x61,
+				   card->i2c_adapter, DVB_PLL_LG_TDVS_H06XF);
 			dprintk ("dvb_bt8xx: lgdt330x detected\n");
 		}
 		break;
@@ -691,6 +691,9 @@ static void frontend_init(struct dvb_bt8xx_card *card, u32 type)
 
 	case BTTV_BOARD_PC_HDTV:
 		card->fe = dvb_attach(or51211_attach, &or51211_config, card->i2c_adapter);
+		if (card->fe != NULL)
+			dvb_attach(dvb_pll_attach, card->fe, 0x61,
+				   card->i2c_adapter, DVB_PLL_FCV1236D);
 		break;
 	}
 

@@ -61,11 +61,11 @@ struct thread_info *secondary_ti;
 
 cpumask_t cpu_possible_map = CPU_MASK_NONE;
 cpumask_t cpu_online_map = CPU_MASK_NONE;
-cpumask_t cpu_sibling_map[NR_CPUS] = { [0 ... NR_CPUS-1] = CPU_MASK_NONE };
+DEFINE_PER_CPU(cpumask_t, cpu_sibling_map) = CPU_MASK_NONE;
 
 EXPORT_SYMBOL(cpu_online_map);
 EXPORT_SYMBOL(cpu_possible_map);
-EXPORT_SYMBOL(cpu_sibling_map);
+EXPORT_PER_CPU_SYMBOL(cpu_sibling_map);
 
 /* SMP operations for this machine */
 struct smp_ops_t *smp_ops;
@@ -152,11 +152,6 @@ static void stop_this_cpu(void *dummy)
 		;
 }
 
-void smp_send_stop(void)
-{
-	smp_call_function(stop_this_cpu, NULL, 1, 0);
-}
-
 /*
  * Structure and data for smp_call_function(). This is designed to minimise
  * static memory requirements. It also looks cleaner.
@@ -176,10 +171,10 @@ static struct call_data_struct {
 #define SMP_CALL_TIMEOUT	8
 
 /*
- * This function sends a 'generic call function' IPI to all other CPUs
- * in the system.
+ * These functions send a 'generic call function' IPI to other online
+ * CPUS in the system.
  *
- * [SUMMARY] Run a function on all other CPUs.
+ * [SUMMARY] Run a function on other CPUs.
  * <func> The function to run. This must be fast and non-blocking.
  * <info> An arbitrary pointer to pass to the function.
  * <nonatomic> currently unused.
@@ -190,18 +185,16 @@ static struct call_data_struct {
  * You must not call this function with disabled interrupts or from a
  * hardware interrupt handler or from a bottom half handler.
  */
-int smp_call_function (void (*func) (void *info), void *info, int nonatomic,
-		       int wait)
-{ 
+int smp_call_function_map(void (*func) (void *info), void *info, int nonatomic,
+			int wait, cpumask_t map)
+{
 	struct call_data_struct data;
-	int ret = -1, cpus;
+	int ret = -1, num_cpus;
+	int cpu;
 	u64 timeout;
 
-	/* Can deadlock when called with interrupts disabled */
-	WARN_ON(irqs_disabled());
-
 	if (unlikely(smp_ops == NULL))
-		return -1;
+		return ret;
 
 	data.func = func;
 	data.info = info;
@@ -211,48 +204,55 @@ int smp_call_function (void (*func) (void *info), void *info, int nonatomic,
 		atomic_set(&data.finished, 0);
 
 	spin_lock(&call_lock);
-	/* Must grab online cpu count with preempt disabled, otherwise
-	 * it can change. */
-	cpus = num_online_cpus() - 1;
-	if (!cpus) {
-		ret = 0;
-		goto out;
-	}
+
+	/* remove 'self' from the map */
+	if (cpu_isset(smp_processor_id(), map))
+		cpu_clear(smp_processor_id(), map);
+
+	/* sanity check the map, remove any non-online processors. */
+	cpus_and(map, map, cpu_online_map);
+
+	num_cpus = cpus_weight(map);
+	if (!num_cpus)
+		goto done;
 
 	call_data = &data;
 	smp_wmb();
-	/* Send a message to all other CPUs and wait for them to respond */
-	smp_ops->message_pass(MSG_ALL_BUT_SELF, PPC_MSG_CALL_FUNCTION);
+	/* Send a message to all CPUs in the map */
+	for_each_cpu_mask(cpu, map)
+		smp_ops->message_pass(cpu, PPC_MSG_CALL_FUNCTION);
 
 	timeout = get_tb() + (u64) SMP_CALL_TIMEOUT * tb_ticks_per_sec;
 
-	/* Wait for response */
-	while (atomic_read(&data.started) != cpus) {
+	/* Wait for indication that they have received the message */
+	while (atomic_read(&data.started) != num_cpus) {
 		HMT_low();
 		if (get_tb() >= timeout) {
 			printk("smp_call_function on cpu %d: other cpus not "
-			       "responding (%d)\n", smp_processor_id(),
-			       atomic_read(&data.started));
+				"responding (%d)\n", smp_processor_id(),
+				atomic_read(&data.started));
 			debugger(NULL);
 			goto out;
 		}
 	}
 
+	/* optionally wait for the CPUs to complete */
 	if (wait) {
-		while (atomic_read(&data.finished) != cpus) {
+		while (atomic_read(&data.finished) != num_cpus) {
 			HMT_low();
 			if (get_tb() >= timeout) {
 				printk("smp_call_function on cpu %d: other "
-				       "cpus not finishing (%d/%d)\n",
-				       smp_processor_id(),
-				       atomic_read(&data.finished),
-				       atomic_read(&data.started));
+					"cpus not finishing (%d/%d)\n",
+					smp_processor_id(),
+					atomic_read(&data.finished),
+					atomic_read(&data.started));
 				debugger(NULL);
 				goto out;
 			}
 		}
 	}
 
+ done:
 	ret = 0;
 
  out:
@@ -262,7 +262,51 @@ int smp_call_function (void (*func) (void *info), void *info, int nonatomic,
 	return ret;
 }
 
+static int __smp_call_function(void (*func)(void *info), void *info,
+			       int nonatomic, int wait)
+{
+	return smp_call_function_map(func,info,nonatomic,wait,cpu_online_map);
+}
+
+int smp_call_function(void (*func) (void *info), void *info, int nonatomic,
+			int wait)
+{
+	/* Can deadlock when called with interrupts disabled */
+	WARN_ON(irqs_disabled());
+
+	return __smp_call_function(func, info, nonatomic, wait);
+}
 EXPORT_SYMBOL(smp_call_function);
+
+int smp_call_function_single(int cpu, void (*func) (void *info), void *info, int nonatomic,
+			int wait)
+{
+	cpumask_t map = CPU_MASK_NONE;
+	int ret = 0;
+
+	/* Can deadlock when called with interrupts disabled */
+	WARN_ON(irqs_disabled());
+
+	if (!cpu_online(cpu))
+		return -EINVAL;
+
+	cpu_set(cpu, map);
+	if (cpu != get_cpu())
+		ret = smp_call_function_map(func,info,nonatomic,wait,map);
+	else {
+		local_irq_disable();
+		func(info);
+		local_irq_enable();
+	}
+	put_cpu();
+	return ret;
+}
+EXPORT_SYMBOL(smp_call_function_single);
+
+void smp_send_stop(void)
+{
+	__smp_call_function(stop_this_cpu, NULL, 1, 0);
+}
 
 void smp_call_function_interrupt(void)
 {
@@ -428,10 +472,6 @@ void generic_mach_cpu_die(void)
 	smp_wmb();
 	while (__get_cpu_var(cpu_state) != CPU_UP_PREPARE)
 		cpu_relax();
-
-#ifdef CONFIG_PPC64
-	flush_tlb_pending();
-#endif
 	cpu_set(cpu, cpu_online_map);
 	local_irq_enable();
 }
@@ -528,6 +568,8 @@ int __devinit start_secondary(void *unused)
 
 	if (system_state > SYSTEM_BOOTING)
 		snapshot_timebase();
+
+	secondary_cpu_time_init();
 
 	spin_lock(&call_lock);
 	cpu_set(cpu, cpu_online_map);

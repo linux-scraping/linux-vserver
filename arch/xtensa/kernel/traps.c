@@ -83,7 +83,7 @@ typedef struct {
 	void* handler;
 } dispatch_init_table_t;
 
-dispatch_init_table_t __init dispatch_init_table[] = {
+static dispatch_init_table_t __initdata dispatch_init_table[] = {
 
 { EXCCAUSE_ILLEGAL_INSTRUCTION,	0,	   do_illegal_instruction},
 { EXCCAUSE_SYSTEM_CALL,		KRNL,	   fast_syscall_kernel },
@@ -176,7 +176,7 @@ void do_unhandled(struct pt_regs *regs, unsigned long exccause)
 	printk("Caught unhandled exception in '%s' "
 	       "(pid = %d, pc = %#010lx) - should not happen\n"
 	       "\tEXCCAUSE is %ld\n",
-	       current->comm, current->pid, regs->pc, exccause);
+	       current->comm, task_pid_nr(current), regs->pc, exccause);
 	force_sig(SIGILL, current);
 }
 
@@ -228,7 +228,7 @@ do_illegal_instruction(struct pt_regs *regs)
 	/* If in user mode, send SIGILL signal to current process. */
 
 	printk("Illegal Instruction in '%s' (pid = %d, pc = %#010lx)\n",
-	    current->comm, current->pid, regs->pc);
+	    current->comm, task_pid_nr(current), regs->pc);
 	force_sig(SIGILL, current);
 }
 
@@ -254,7 +254,7 @@ do_unaligned_user (struct pt_regs *regs)
 	current->thread.error_code = -3;
 	printk("Unaligned memory access to %08lx in '%s' "
 	       "(pid = %d, pc = %#010lx)\n",
-	       regs->excvaddr, current->comm, current->pid, regs->pc);
+	       regs->excvaddr, current->comm, task_pid_nr(current), regs->pc);
 	info.si_signo = SIGBUS;
 	info.si_errno = 0;
 	info.si_code = BUS_ADRALN;
@@ -305,7 +305,7 @@ do_debug(struct pt_regs *regs)
 
 #define set_handler(idx,handler) (exc_table[idx] = (unsigned long) (handler))
 
-void trap_init(void)
+void __init trap_init(void)
 {
 	int i;
 
@@ -482,6 +482,7 @@ void die(const char * str, struct pt_regs * regs, long err)
 	if (!user_mode(regs))
 		show_stack(NULL, (unsigned long*)regs->areg[1]);
 
+	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
 
 	if (in_interrupt())

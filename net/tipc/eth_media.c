@@ -1,8 +1,8 @@
 /*
  * net/tipc/eth_media.c: Ethernet bearer support for TIPC
  *
- * Copyright (c) 2001-2006, Ericsson AB
- * Copyright (c) 2005-2006, Wind River Systems
+ * Copyright (c) 2001-2007, Ericsson AB
+ * Copyright (c) 2005-2007, Wind River Systems
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,7 @@
 #include <net/tipc/tipc_bearer.h>
 #include <net/tipc/tipc_msg.h>
 #include <linux/netdevice.h>
+#include <net/net_namespace.h>
 
 #define MAX_ETH_BEARERS		2
 #define ETH_LINK_PRIORITY	TIPC_DEF_LINK_PRI
@@ -73,10 +74,10 @@ static int send_msg(struct sk_buff *buf, struct tipc_bearer *tb_ptr,
 
 	clone = skb_clone(buf, GFP_ATOMIC);
 	if (clone) {
-		clone->nh.raw = clone->data;
+		skb_reset_network_header(clone);
 		dev = ((struct eth_bearer *)(tb_ptr->usr_handle))->dev;
 		clone->dev = dev;
-		dev->hard_header(clone, dev, ETH_P_TIPC,
+		dev_hard_header(clone, dev, ETH_P_TIPC,
 				 &dest->dev_addr.eth_addr,
 				 dev->dev_addr, clone->len);
 		dev_queue_xmit(clone);
@@ -87,6 +88,9 @@ static int send_msg(struct sk_buff *buf, struct tipc_bearer *tb_ptr,
 /**
  * recv_msg - handle incoming TIPC message from an Ethernet interface
  *
+ * Accept only packets explicitly sent to this node, or broadcast packets;
+ * ignores packets sent using Ethernet multicast, and traffic sent to other
+ * nodes (which can happen if interface is running in promiscuous mode).
  * Routine truncates any Ethernet padding/CRC appended to the message,
  * and ensures message size matches actual length
  */
@@ -97,10 +101,13 @@ static int recv_msg(struct sk_buff *buf, struct net_device *dev,
 	struct eth_bearer *eb_ptr = (struct eth_bearer *)pt->af_packet_priv;
 	u32 size;
 
+	if (dev->nd_net != &init_net) {
+		kfree_skb(buf);
+		return 0;
+	}
+
 	if (likely(eb_ptr->bearer)) {
-	       if (likely(!dev->promiscuity) ||
-		   !memcmp(buf->mac.raw,dev->dev_addr,ETH_ALEN) ||
-		   !memcmp(buf->mac.raw,dev->broadcast,ETH_ALEN)) {
+		if (likely(buf->pkt_type <= PACKET_BROADCAST)) {
 			size = msg_size((struct tipc_msg *)buf->data);
 			skb_trim(buf, size);
 			if (likely(buf->len == size)) {
@@ -120,15 +127,19 @@ static int recv_msg(struct sk_buff *buf, struct net_device *dev,
 
 static int enable_bearer(struct tipc_bearer *tb_ptr)
 {
-	struct net_device *dev = dev_base;
+	struct net_device *dev = NULL;
+	struct net_device *pdev = NULL;
 	struct eth_bearer *eb_ptr = &eth_bearers[0];
 	struct eth_bearer *stop = &eth_bearers[MAX_ETH_BEARERS];
 	char *driver_name = strchr((const char *)tb_ptr->name, ':') + 1;
 
 	/* Find device with specified name */
 
-	while (dev && dev->name && strncmp(dev->name, driver_name, IFNAMSIZ)) {
-		dev = dev->next;
+	for_each_netdev(&init_net, pdev){
+		if (!strncmp(pdev->name, driver_name, IFNAMSIZ)) {
+			dev = pdev;
+			break;
+		}
 	}
 	if (!dev)
 		return -ENODEV;
@@ -140,7 +151,7 @@ static int enable_bearer(struct tipc_bearer *tb_ptr)
 		return -EDQUOT;
 	if (!eb_ptr->dev) {
 		eb_ptr->dev = dev;
-		eb_ptr->tipc_packet_type.type = __constant_htons(ETH_P_TIPC);
+		eb_ptr->tipc_packet_type.type = htons(ETH_P_TIPC);
 		eb_ptr->tipc_packet_type.dev = dev;
 		eb_ptr->tipc_packet_type.func = recv_msg;
 		eb_ptr->tipc_packet_type.af_packet_priv = eb_ptr;
@@ -187,6 +198,9 @@ static int recv_notification(struct notifier_block *nb, unsigned long evt,
 	struct eth_bearer *eb_ptr = &eth_bearers[0];
 	struct eth_bearer *stop = &eth_bearers[MAX_ETH_BEARERS];
 
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	while ((eb_ptr->dev != dev)) {
 		if (++eb_ptr == stop)
 			return NOTIFY_DONE;	/* couldn't find device */
@@ -229,12 +243,12 @@ static int recv_notification(struct notifier_block *nb, unsigned long evt,
 static char *eth_addr2str(struct tipc_media_addr *a, char *str_buf, int str_size)
 {
 	unchar *addr = (unchar *)&a->dev_addr;
+	DECLARE_MAC_BUF(mac);
 
 	if (str_size < 18)
 		*str_buf = '\0';
 	else
-		sprintf(str_buf, "%02x:%02x:%02x:%02x:%02x:%02x",
-			addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+		sprintf(str_buf, "%s", print_mac(mac, addr));
 	return str_buf;
 }
 

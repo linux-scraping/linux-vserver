@@ -33,13 +33,20 @@
 #include <linux/ethtool.h>
 #include <linux/vmalloc.h>
 #include <linux/if_vlan.h>
+#include <linux/inet_lro.h>
 
 #include <asm/ibmebus.h>
 #include <asm/abs_addr.h>
 #include <asm/io.h>
 
 #define DRV_NAME	"ehea"
-#define DRV_VERSION	"EHEA_0046"
+#define DRV_VERSION	"EHEA_0080"
+
+/* eHEA capability flags */
+#define DLPAR_PORT_ADD_REM 1
+#define DLPAR_MEM_ADD      2
+#define DLPAR_MEM_REM      4
+#define EHEA_CAPABILITIES  (DLPAR_PORT_ADD_REM | DLPAR_MEM_ADD)
 
 #define EHEA_MSG_DEFAULT (NETIF_MSG_LINK | NETIF_MSG_TIMER \
 	| NETIF_MSG_RX_ERR | NETIF_MSG_TX_ERR)
@@ -52,6 +59,7 @@
 
 #define EHEA_SMALL_QUEUES
 #define EHEA_NUM_TX_QP 1
+#define EHEA_LRO_MAX_AGGR 64
 
 #ifdef EHEA_SMALL_QUEUES
 #define EHEA_MAX_CQE_COUNT      1023
@@ -78,10 +86,9 @@
 #define EHEA_RQ2_PKT_SIZE       1522
 #define EHEA_L_PKT_SIZE         256	/* low latency */
 
-#define EHEA_POLL_MAX_RWQE      1000
+#define MAX_LRO_DESCRIPTORS 8
 
 /* Send completion signaling */
-#define EHEA_SIG_IV_LONG           1
 
 /* Protection Domain Identifier */
 #define EHEA_PD_ID        0xaabcdeff
@@ -108,11 +115,9 @@
 #define EHEA_CACHE_LINE          128
 
 /* Memory Regions */
-#define EHEA_MR_MAX_TX_PAGES   20
-#define EHEA_MR_TX_DATA_PN      3
 #define EHEA_MR_ACC_CTRL       0x00800000
-#define EHEA_RWQES_PER_MR_RQ2  10
-#define EHEA_RWQES_PER_MR_RQ3  10
+
+#define EHEA_BUSMAP_START      0x8000000000000000ULL
 
 #define EHEA_WATCH_DOG_TIMEOUT 10*HZ
 
@@ -143,10 +148,10 @@ void ehea_dump(void *adr, int len, char *msg);
 	(0xffffffffffffffffULL >> ((64 - (mask)) & 0xffff))
 
 #define EHEA_BMASK_SET(mask, value) \
-        ((EHEA_BMASK_MASK(mask) & ((u64)(value))) << EHEA_BMASK_SHIFTPOS(mask))
+	((EHEA_BMASK_MASK(mask) & ((u64)(value))) << EHEA_BMASK_SHIFTPOS(mask))
 
 #define EHEA_BMASK_GET(mask, value) \
-        (EHEA_BMASK_MASK(mask) & (((u64)(value)) >> EHEA_BMASK_SHIFTPOS(mask)))
+	(EHEA_BMASK_MASK(mask) & (((u64)(value)) >> EHEA_BMASK_SHIFTPOS(mask)))
 
 /*
  * Generic ehea page
@@ -187,6 +192,12 @@ struct h_epas {
 				   set to 0 if unused */
 };
 
+struct ehea_busmap {
+	unsigned int entries;		/* total number of entries */
+	unsigned int valid_sections;	/* number of valid sections */
+	u64 *vaddr;
+};
+
 struct ehea_qp;
 struct ehea_cq;
 struct ehea_eq;
@@ -197,7 +208,7 @@ struct ehea_av;
  * Queue attributes passed to ehea_create_qp()
  */
 struct ehea_qp_init_attr {
-        /* input parameter */
+	/* input parameter */
 	u32 qp_token;           /* queue token */
 	u8 low_lat_rq1;
 	u8 signalingtype;       /* cqe generation flag */
@@ -219,7 +230,7 @@ struct ehea_qp_init_attr {
 	u64 recv_cq_handle;
 	u64 aff_eq_handle;
 
-        /* output parameter */
+	/* output parameter */
 	u32 qp_nr;
 	u16 act_nr_send_wqes;
 	u16 act_nr_rwqes_rq1;
@@ -286,12 +297,12 @@ struct ehea_qp {
  * Completion Queue attributes
  */
 struct ehea_cq_attr {
-        /* input parameter */
+	/* input parameter */
 	u32 max_nr_of_cqes;
 	u32 cq_token;
 	u64 eq_handle;
 
-        /* output parameter */
+	/* output parameter */
 	u32 act_nr_of_cqes;
 	u32 nr_pages;
 };
@@ -311,6 +322,7 @@ struct ehea_cq {
  * Memory Region
  */
 struct ehea_mr {
+	struct ehea_adapter *adapter;
 	u64 handle;
 	u64 vaddr;
 	u32 lkey;
@@ -319,17 +331,12 @@ struct ehea_mr {
 /*
  * Port state information
  */
-struct port_state {
-	int poll_max_processed;
+struct port_stats {
 	int poll_receive_errors;
-	int ehea_poll;
 	int queue_stopped;
-	int min_swqe_avail;
-	u64 sqc_stop_sum;
-	int pkt_send;
-	int pkt_xmit;
-	int send_tasklet;
-	int nwqe;
+	int err_tcp_cksum;
+	int err_ip_cksum;
+	int err_frame_crc;
 };
 
 #define EHEA_IRQ_NAME_SIZE 20
@@ -348,6 +355,8 @@ struct ehea_q_skb_arr {
  * Port resources
  */
 struct ehea_port_res {
+	struct napi_struct napi;
+	struct port_stats p_stats;
 	struct ehea_mr send_mr;       	/* send memory region */
 	struct ehea_mr recv_mr;       	/* receive memory region */
 	spinlock_t xmit_lock;
@@ -357,9 +366,7 @@ struct ehea_port_res {
 	struct ehea_qp *qp;
 	struct ehea_cq *send_cq;
 	struct ehea_cq *recv_cq;
-	struct ehea_eq *send_eq;
-	struct ehea_eq *recv_eq;
-	spinlock_t send_lock;
+	struct ehea_eq *eq;
 	struct ehea_q_skb_arr rq1_skba;
 	struct ehea_q_skb_arr rq2_skba;
 	struct ehea_q_skb_arr rq3_skba;
@@ -369,27 +376,27 @@ struct ehea_port_res {
 	int swqe_refill_th;
 	atomic_t swqe_avail;
 	int swqe_ll_count;
-	int swqe_count;
 	u32 swqe_id_counter;
 	u64 tx_packets;
-	struct tasklet_struct send_comp_task;
-	spinlock_t recv_lock;
-	struct port_state p_state;
 	u64 rx_packets;
 	u32 poll_counter;
+	struct net_lro_mgr lro_mgr;
+	struct net_lro_desc lro_desc[MAX_LRO_DESCRIPTORS];
 };
 
 
+#define EHEA_MAX_PORTS 16
 struct ehea_adapter {
 	u64 handle;
-	u8 num_ports;
-	struct ehea_port *port[16];
+	struct of_device *ofdev;
+	struct ehea_port *port[EHEA_MAX_PORTS];
 	struct ehea_eq *neq;       /* notification event queue */
-	struct workqueue_struct *ehea_wq;
 	struct tasklet_struct neq_tasklet;
 	struct ehea_mr mr;
 	u32 pd;                    /* protection domain */
 	u64 max_mc_mac;            /* max number of multicast mac addresses */
+	int active_ports;
+	struct list_head list;
 };
 
 
@@ -400,13 +407,15 @@ struct ehea_mc_list {
 
 #define EHEA_PORT_UP 1
 #define EHEA_PORT_DOWN 0
+#define EHEA_PHY_LINK_UP 1
+#define EHEA_PHY_LINK_DOWN 0
 #define EHEA_MAX_PORT_RES 16
 struct ehea_port {
 	struct ehea_adapter *adapter;	 /* adapter that owns this port */
 	struct net_device *netdev;
 	struct net_device_stats stats;
 	struct ehea_port_res port_res[EHEA_MAX_PORT_RES];
-	struct device_node *of_dev_node; /* Open Firmware Device Node */
+	struct of_device  ofdev; /* Open Firmware Device */
 	struct ehea_mc_list *mc_list;	 /* Multicast MAC addresses */
 	struct vlan_group *vgrp;
 	struct ehea_eq *qp_eq;
@@ -415,7 +424,9 @@ struct ehea_port {
 	char int_aff_name[EHEA_IRQ_NAME_SIZE];
 	int allmulti;			 /* Indicates IFF_ALLMULTI state */
 	int promisc;		 	 /* Indicates IFF_PROMISC state */
+	int num_tx_qps;
 	int num_add_tx_qps;
+	int num_mcs;
 	int resets;
 	u64 mac_addr;
 	u32 logical_port_id;
@@ -423,6 +434,8 @@ struct ehea_port {
 	u32 msg_enable;
 	u32 sig_comp_iv;
 	u32 state;
+	u32 lro_max_aggr;
+	u8 phy_link;
 	u8 full_duplex;
 	u8 autoneg;
 	u8 num_def_qps;
@@ -437,6 +450,9 @@ struct port_res_cfg {
 	int max_entries_rq3;
 };
 
+enum ehea_flag_bits {
+	__EHEA_STOP_XFER
+};
 
 void ehea_set_ethtool_ops(struct net_device *netdev);
 int ehea_sense_port_attr(struct ehea_port *port);

@@ -15,7 +15,6 @@
 #include "line.h"
 #include "ssl.h"
 #include "chan_kern.h"
-#include "user_util.h"
 #include "kern_util.h"
 #include "kern.h"
 #include "init.h"
@@ -43,8 +42,6 @@ static struct chan_opts opts = {
 	.announce 	= ssl_announce,
 	.xterm_title	= "Serial Line #%d",
 	.raw		= 1,
-	.tramp_stack 	= 0,
-	.in_kernel 	= 1,
 };
 
 static int ssl_config(char *str, char **error_out);
@@ -100,7 +97,13 @@ static int ssl_remove(int n, char **error_out)
 
 static int ssl_open(struct tty_struct *tty, struct file *filp)
 {
-	return line_open(serial_lines, tty);
+	int err = line_open(serial_lines, tty);
+
+	if (err)
+		printk(KERN_ERR "Failed to open serial line %d, err = %d\n",
+		       tty->index, err);
+
+	return err;
 }
 
 #if 0
@@ -192,11 +195,11 @@ static int ssl_init(void)
 	ssl_driver = register_lines(&driver, &ssl_ops, serial_lines,
 				    ARRAY_SIZE(serial_lines));
 
-	lines_init(serial_lines, ARRAY_SIZE(serial_lines), &opts);
-
 	new_title = add_xterm_umid(opts.xterm_title);
 	if (new_title != NULL)
 		opts.xterm_title = new_title;
+
+	lines_init(serial_lines, ARRAY_SIZE(serial_lines), &opts);
 
 	ssl_init_done = 1;
 	register_console(&ssl_cons);

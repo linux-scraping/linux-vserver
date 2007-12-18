@@ -94,7 +94,8 @@ typedef struct xfs_trans_header {
 #define	XFS_TRANS_GROWFSRT_ZERO		38
 #define	XFS_TRANS_GROWFSRT_FREE		39
 #define	XFS_TRANS_SWAPEXT		40
-#define	XFS_TRANS_TYPE_MAX		40
+#define	XFS_TRANS_SB_COUNT		41
+#define	XFS_TRANS_TYPE_MAX		41
 /* new transaction types need to be reflected in xfs_logprint(8) */
 
 
@@ -988,10 +989,8 @@ void		xfs_trans_log_efd_extent(xfs_trans_t *,
 					 xfs_extlen_t);
 int		_xfs_trans_commit(xfs_trans_t *,
 				  uint flags,
-				  xfs_lsn_t *,
 				  int *);
-#define xfs_trans_commit(tp, flags, lsn) \
-	_xfs_trans_commit(tp, flags, lsn, NULL)
+#define xfs_trans_commit(tp, flags)	_xfs_trans_commit(tp, flags, NULL)
 void		xfs_trans_cancel(xfs_trans_t *, int);
 void		xfs_trans_ail_init(struct xfs_mount *);
 xfs_lsn_t	xfs_trans_push_ail(struct xfs_mount *, xfs_lsn_t);

@@ -10,16 +10,17 @@
  */
 
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/fs.h>
 #include <linux/unistd.h>
 #include <linux/string.h>
 #include <linux/stat.h>
 #include <linux/dcache.h>
+#include <linux/exportfs.h>
 #include <linux/mount.h>
 
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svc.h>
+#include <linux/sunrpc/svcauth_gss.h>
 #include <linux/nfsd/nfsd.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_FH
@@ -27,10 +28,6 @@
 
 static int nfsd_nr_verified;
 static int nfsd_nr_put;
-
-extern struct export_operations export_op_default;
-
-#define	CALL(ops,fun) ((ops->fun)?(ops->fun):export_op_default.fun)
 
 /*
  * our acceptability function.
@@ -98,6 +95,22 @@ nfsd_mode_check(struct svc_rqst *rqstp, umode_t mode, int type)
 	return 0;
 }
 
+static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
+					  struct svc_export *exp)
+{
+	/* Check if the request originated from a secure port. */
+	if (!rqstp->rq_secure && EX_SECURE(exp)) {
+		char buf[RPC_MAX_ADDRBUFLEN];
+		dprintk(KERN_WARNING
+		       "nfsd: request from insecure port %s!\n",
+		       svc_print_addr(rqstp, buf, sizeof(buf)));
+		return nfserr_perm;
+	}
+
+	/* Set user creds for this exportpoint */
+	return nfserrno(nfsd_setuser(rqstp, exp));
+}
+
 /*
  * Perform sanity checks on the dentry in a client's file handle.
  *
@@ -118,14 +131,11 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 	dprintk("nfsd: fh_verify(%s)\n", SVCFH_fmt(fhp));
 
 	if (!fhp->fh_dentry) {
-		__u32 *datap=NULL;
-		__u32 tfh[3];		/* filehandle fragment for oldstyle filehandles */
+		struct fid *fid = NULL, sfid;
 		int fileid_type;
 		int data_left = fh->fh_size/4;
 
 		error = nfserr_stale;
-		if (rqstp->rq_client == NULL)
-			goto out;
 		if (rqstp->rq_vers > 2)
 			error = nfserr_badhandle;
 		if (rqstp->rq_vers == 4 && fh->fh_size == 0)
@@ -133,7 +143,6 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 
 		if (fh->fh_version == 1) {
 			int len;
-			datap = fh->fh_auth;
 			if (--data_left<0) goto out;
 			switch (fh->fh_auth_type) {
 			case 0: break;
@@ -149,9 +158,11 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 				fh->fh_fsid[1] = fh->fh_fsid[2];
 			}
 			if ((data_left -= len)<0) goto out;
-			exp = exp_find(rqstp->rq_client, fh->fh_fsid_type, datap, &rqstp->rq_chandle);
-			datap += len;
+			exp = rqst_exp_find(rqstp, fh->fh_fsid_type,
+					    fh->fh_auth);
+			fid = (struct fid *)(fh->fh_auth + len);
 		} else {
+			__u32 tfh[2];
 			dev_t xdev;
 			ino_t xino;
 			if (fh->fh_size != NFS_FHSIZE)
@@ -160,32 +171,19 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 			xdev = old_decode_dev(fh->ofh_xdev);
 			xino = u32_to_ino_t(fh->ofh_xino);
 			mk_fsid(FSID_DEV, tfh, xdev, xino, 0, NULL);
-			exp = exp_find(rqstp->rq_client, FSID_DEV, tfh,
-				       &rqstp->rq_chandle);
+			exp = rqst_exp_find(rqstp, FSID_DEV, tfh);
 		}
 
-		if (IS_ERR(exp) && (PTR_ERR(exp) == -EAGAIN
-				|| PTR_ERR(exp) == -ETIMEDOUT)) {
+		error = nfserr_stale;
+		if (PTR_ERR(exp) == -ENOENT)
+			goto out;
+
+		if (IS_ERR(exp)) {
 			error = nfserrno(PTR_ERR(exp));
 			goto out;
 		}
 
-		error = nfserr_stale; 
-		if (!exp || IS_ERR(exp))
-			goto out;
-
-		/* Check if the request originated from a secure port. */
-		error = nfserr_perm;
-		if (!rqstp->rq_secure && EX_SECURE(exp)) {
-			char buf[RPC_MAX_ADDRBUFLEN];
-			printk(KERN_WARNING
-			       "nfsd: request from insecure port %s!\n",
-			       svc_print_addr(rqstp, buf, sizeof(buf)));
-			goto out;
-		}
-
-		/* Set user creds for this exportpoint */
-		error = nfserrno(nfsd_setuser(rqstp, exp));
+		error = nfsd_setuser_and_check_port(rqstp, exp);
 		if (error)
 			goto out;
 
@@ -197,26 +195,24 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 			error = nfserr_badhandle;
 
 		if (fh->fh_version != 1) {
-			tfh[0] = fh->ofh_ino;
-			tfh[1] = fh->ofh_generation;
-			tfh[2] = fh->ofh_dirino;
-			datap = tfh;
+			sfid.i32.ino = fh->ofh_ino;
+			sfid.i32.gen = fh->ofh_generation;
+			sfid.i32.parent_ino = fh->ofh_dirino;
+			fid = &sfid;
 			data_left = 3;
 			if (fh->ofh_dirino == 0)
-				fileid_type = 1;
+				fileid_type = FILEID_INO32_GEN;
 			else
-				fileid_type = 2;
+				fileid_type = FILEID_INO32_GEN_PARENT;
 		} else
 			fileid_type = fh->fh_fileid_type;
 
-		if (fileid_type == 0)
+		if (fileid_type == FILEID_ROOT)
 			dentry = dget(exp->ex_dentry);
 		else {
-			struct export_operations *nop = exp->ex_mnt->mnt_sb->s_export_op;
-			dentry = CALL(nop,decode_fh)(exp->ex_mnt->mnt_sb,
-						     datap, data_left,
-						     fileid_type,
-						     nfsd_acceptable, exp);
+			dentry = exportfs_decode_fh(exp->ex_mnt, fid,
+					data_left, fileid_type,
+					nfsd_acceptable, exp);
 		}
 		if (dentry == NULL)
 			goto out;
@@ -236,18 +232,22 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 		fhp->fh_export = exp;
 		nfsd_nr_verified++;
 	} else {
-		/* just rechecking permissions
-		 * (e.g. nfsproc_create calls fh_verify, then nfsd_create does as well)
+		/*
+		 * just rechecking permissions
+		 * (e.g. nfsproc_create calls fh_verify, then nfsd_create
+		 * does as well)
 		 */
 		dprintk("nfsd: fh_verify - just checking\n");
 		dentry = fhp->fh_dentry;
 		exp = fhp->fh_export;
-		/* Set user creds for this exportpoint; necessary even
+		/*
+		 * Set user creds for this exportpoint; necessary even
 		 * in the "just checking" case because this may be a
 		 * filehandle that was created by fh_compose, and that
 		 * is about to be used in another nfsv4 compound
-		 * operation */
-		error = nfserrno(nfsd_setuser(rqstp, exp));
+		 * operation.
+		 */
+		error = nfsd_setuser_and_check_port(rqstp, exp);
 		if (error)
 			goto out;
 	}
@@ -258,8 +258,19 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, int type, int access)
 	if (error)
 		goto out;
 
+	if (!(access & MAY_LOCK)) {
+		/*
+		 * pseudoflavor restrictions are not enforced on NLM,
+		 * which clients virtually always use auth_sys for,
+		 * even while using RPCSEC_GSS for NFS.
+		 */
+		error = check_nfsd_access(exp, rqstp);
+		if (error)
+			goto out;
+	}
+
 	/* Finally, check access permissions. */
-	error = nfsd_permission(exp, dentry, access);
+	error = nfsd_permission(rqstp, exp, dentry, access);
 
 	if (error) {
 		dprintk("fh_verify: %s/%s permission failure, "
@@ -284,18 +295,21 @@ out:
  * an inode.  In this case a call to fh_update should be made
  * before the fh goes out on the wire ...
  */
-static inline int _fh_update(struct dentry *dentry, struct svc_export *exp,
-			     __u32 *datap, int *maxsize)
+static void _fh_update(struct svc_fh *fhp, struct svc_export *exp,
+		struct dentry *dentry)
 {
-	struct export_operations *nop = exp->ex_mnt->mnt_sb->s_export_op;
+	if (dentry != exp->ex_dentry) {
+		struct fid *fid = (struct fid *)
+			(fhp->fh_handle.fh_auth + fhp->fh_handle.fh_size/4 - 1);
+		int maxsize = (fhp->fh_maxsize - fhp->fh_handle.fh_size)/4;
+		int subtreecheck = !(exp->ex_flags & NFSEXP_NOSUBTREECHECK);
 
-	if (dentry == exp->ex_dentry) {
-		*maxsize = 0;
-		return 0;
+		fhp->fh_handle.fh_fileid_type =
+			exportfs_encode_fh(dentry, fid, &maxsize, subtreecheck);
+		fhp->fh_handle.fh_size += maxsize * 4;
+	} else {
+		fhp->fh_handle.fh_fileid_type = FILEID_ROOT;
 	}
-
-	return CALL(nop,encode_fh)(dentry, datap, maxsize,
-			  !(exp->ex_flags&NFSEXP_NOSUBTREECHECK));
 }
 
 /*
@@ -324,7 +338,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 	 *
 	 */
 
-	u8 version = 1;
+	u8 version;
 	u8 fsid_type = 0;
 	struct inode * inode = dentry->d_inode;
 	struct dentry *parent = dentry->d_parent;
@@ -342,15 +356,59 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 	 * the reference filehandle (if it is in the same export)
 	 * or the export options.
 	 */
+ retry:
+	version = 1;
 	if (ref_fh && ref_fh->fh_export == exp) {
 		version = ref_fh->fh_handle.fh_version;
-		if (version == 0xca)
+		fsid_type = ref_fh->fh_handle.fh_fsid_type;
+
+		if (ref_fh == fhp)
+			fh_put(ref_fh);
+		ref_fh = NULL;
+
+		switch (version) {
+		case 0xca:
 			fsid_type = FSID_DEV;
-		else
-			fsid_type = ref_fh->fh_handle.fh_fsid_type;
-		/* We know this version/type works for this export
-		 * so there is no need for further checks.
+			break;
+		case 1:
+			break;
+		default:
+			goto retry;
+		}
+
+		/* Need to check that this type works for this
+		 * export point.  As the fsid -> filesystem mapping
+		 * was guided by user-space, there is no guarantee
+		 * that the filesystem actually supports that fsid
+		 * type. If it doesn't we loop around again without
+		 * ref_fh set.
 		 */
+		switch(fsid_type) {
+		case FSID_DEV:
+			if (!old_valid_dev(ex_dev))
+				goto retry;
+			/* FALL THROUGH */
+		case FSID_MAJOR_MINOR:
+		case FSID_ENCODE_DEV:
+			if (!(exp->ex_dentry->d_inode->i_sb->s_type->fs_flags
+			      & FS_REQUIRES_DEV))
+				goto retry;
+			break;
+		case FSID_NUM:
+			if (! (exp->ex_flags & NFSEXP_FSID))
+				goto retry;
+			break;
+		case FSID_UUID8:
+		case FSID_UUID16:
+			if (!root_export)
+				goto retry;
+			/* fall through */
+		case FSID_UUID4_INUM:
+		case FSID_UUID16_INUM:
+			if (exp->ex_uuid == NULL)
+				goto retry;
+			break;
+		}
 	} else if (exp->ex_uuid) {
 		if (fhp->fh_maxsize >= 64) {
 			if (root_export)
@@ -413,12 +471,8 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 		datap += len/4;
 		fhp->fh_handle.fh_size = 4 + len;
 
-		if (inode) {
-			int size = (fhp->fh_maxsize-len-4)/4;
-			fhp->fh_handle.fh_fileid_type =
-				_fh_update(dentry, exp, datap, &size);
-			fhp->fh_handle.fh_size += size*4;
-		}
+		if (inode)
+			_fh_update(fhp, exp, dentry);
 		if (fhp->fh_handle.fh_fileid_type == 255)
 			return nfserr_opnotsupp;
 	}
@@ -435,7 +489,6 @@ __be32
 fh_update(struct svc_fh *fhp)
 {
 	struct dentry *dentry;
-	__u32 *datap;
 
 	if (!fhp->fh_dentry)
 		goto out_bad;
@@ -446,15 +499,10 @@ fh_update(struct svc_fh *fhp)
 	if (fhp->fh_handle.fh_version != 1) {
 		_fh_update_old(dentry, fhp->fh_export, &fhp->fh_handle);
 	} else {
-		int size;
-		if (fhp->fh_handle.fh_fileid_type != 0)
+		if (fhp->fh_handle.fh_fileid_type != FILEID_ROOT)
 			goto out;
-		datap = fhp->fh_handle.fh_auth+
-			fhp->fh_handle.fh_size/4 -1;
-		size = (fhp->fh_maxsize - fhp->fh_handle.fh_size)/4;
-		fhp->fh_handle.fh_fileid_type =
-			_fh_update(dentry, fhp->fh_export, datap, &size);
-		fhp->fh_handle.fh_size += size*4;
+
+		_fh_update(fhp, fhp->fh_export, dentry);
 		if (fhp->fh_handle.fh_fileid_type == 255)
 			return nfserr_opnotsupp;
 	}
@@ -522,13 +570,23 @@ enum fsid_source fsid_source(struct svc_fh *fhp)
 	case FSID_DEV:
 	case FSID_ENCODE_DEV:
 	case FSID_MAJOR_MINOR:
-		return FSIDSOURCE_DEV;
+		if (fhp->fh_export->ex_dentry->d_inode->i_sb->s_type->fs_flags
+		    & FS_REQUIRES_DEV)
+			return FSIDSOURCE_DEV;
+		break;
 	case FSID_NUM:
-		return FSIDSOURCE_FSID;
-	default:
 		if (fhp->fh_export->ex_flags & NFSEXP_FSID)
 			return FSIDSOURCE_FSID;
-		else
-			return FSIDSOURCE_UUID;
+		break;
+	default:
+		break;
 	}
+	/* either a UUID type filehandle, or the filehandle doesn't
+	 * match the export.
+	 */
+	if (fhp->fh_export->ex_flags & NFSEXP_FSID)
+		return FSIDSOURCE_FSID;
+	if (fhp->fh_export->ex_uuid)
+		return FSIDSOURCE_UUID;
+	return FSIDSOURCE_DEV;
 }

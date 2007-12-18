@@ -10,6 +10,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/unistd.h>
 #include <asm/errno.h>
+#include <asm/page.h>
 #include <asm/psw.h>
 #include <asm/thread_info.h>
 #include <asm/assembly.h>
@@ -38,7 +39,7 @@
 	 * pointers.
 	 */
 
-	.align ASM_PAGE_SIZE
+	.align PAGE_SIZE
 ENTRY(linux_gateway_page)
 
         /* ADDRESS 0x00 to 0xb0 = 176 bytes / 4 bytes per insn = 44 insns */
@@ -181,7 +182,7 @@ linux_gateway_entry:
 	/* Are we being ptraced? */
 	mfctl	%cr30, %r1
 	LDREG	TI_TASK(%r1),%r1
-	LDREG	TASK_PTRACE(%r1), %r1
+	ldw	TASK_PTRACE(%r1), %r1
 	bb,<,n	%r1,31,.Ltracesys
 	
 	/* Note!  We cannot use the syscall table that is mapped
@@ -198,7 +199,7 @@ linux_gateway_entry:
 	ldil	L%sys_call_table, %r1
 	ldo     R%sys_call_table(%r1), %r19
 #endif	
-	comiclr,>>=	__NR_Linux_syscalls, %r20, %r0
+	comiclr,>>	__NR_Linux_syscalls, %r20, %r0
 	b,n	.Lsyscall_nosys
 	
 	LDREGX  %r20(%r19), %r19
@@ -501,7 +502,7 @@ lws_compare_and_swap:
 	shlw	%r20, 4, %r20
 	add	%r20, %r28, %r20
 
-# ifdef ENABLE_LWS_DEBUG
+# if ENABLE_LWS_DEBUG
 	/*	
 		DEBUG, check for deadlock! 
 		If the thread register values are the same
@@ -550,7 +551,7 @@ cas_wouldblock:
 		perspective
 	*/
 cas_action:
-#if defined CONFIG_SMP && defined ENABLE_LWS_DEBUG
+#if defined CONFIG_SMP && ENABLE_LWS_DEBUG
 	/* DEBUG */
 	mfctl	%cr27, %r1
 	stw	%r1, 4(%sr2,%r20)
@@ -562,7 +563,7 @@ cas_action:
 #ifdef CONFIG_SMP
 	/* Free lock */
 	stw	%r20, 0(%sr2,%r20)
-# ifdef ENABLE_LWS_DEBUG
+# if ENABLE_LWS_DEBUG
 	/* Clear thread register indicator */
 	stw	%r0, 4(%sr2,%r20)
 # endif
@@ -576,7 +577,7 @@ cas_action:
 #ifdef CONFIG_SMP
 	/* Free lock */
 	stw	%r20, 0(%sr2,%r20)
-# ifdef ENABLE_LWS_DEBUG
+# if ENABLE_LWS_DEBUG
 	stw	%r0, 4(%sr2,%r20)
 # endif
 #endif
@@ -597,7 +598,7 @@ cas_action:
 
 
 	/* Make sure nothing else is placed on this page */
-	.align ASM_PAGE_SIZE
+	.align PAGE_SIZE
 END(linux_gateway_page)
 ENTRY(end_linux_gateway_page)
 
@@ -608,7 +609,7 @@ ENTRY(end_linux_gateway_page)
 
 	.section .rodata,"a"
 
-	.align ASM_PAGE_SIZE
+	.align PAGE_SIZE
 	/* Light-weight-syscall table */
 	/* Start of lws table. */
 ENTRY(lws_table)
@@ -617,13 +618,13 @@ ENTRY(lws_table)
 END(lws_table)
 	/* End of lws table */
 
-	.align ASM_PAGE_SIZE
+	.align PAGE_SIZE
 ENTRY(sys_call_table)
 #include "syscall_table.S"
 END(sys_call_table)
 
 #ifdef CONFIG_64BIT
-	.align ASM_PAGE_SIZE
+	.align PAGE_SIZE
 ENTRY(sys_call_table64)
 #define SYSCALL_TABLE_64BIT
 #include "syscall_table.S"
@@ -636,7 +637,7 @@ END(sys_call_table64)
 		will use this set of locks 
 	*/
 	.section .data
-	.align 4096
+	.align	PAGE_SIZE
 ENTRY(lws_lock_start)
 	/* lws locks */
 	.align 16

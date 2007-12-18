@@ -31,6 +31,7 @@
 #include <linux/ppp_defs.h>
 #include <linux/if_ppp.h>
 #include <linux/ppp_channel.h>
+#include <linux/kmod.h>
 
 #include <net/sock.h>
 
@@ -58,7 +59,7 @@ void pppox_unbind_sock(struct sock *sk)
 {
 	/* Clear connection to ppp device, if attached. */
 
-	if (sk->sk_state & (PPPOX_BOUND | PPPOX_ZOMBIE)) {
+	if (sk->sk_state & (PPPOX_BOUND | PPPOX_CONNECTED | PPPOX_ZOMBIE)) {
 		ppp_unregister_channel(&pppox_sk(sk)->chan);
 		sk->sk_state = PPPOX_DEAD;
 	}
@@ -72,7 +73,7 @@ int pppox_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
 	struct sock *sk = sock->sk;
 	struct pppox_sock *po = pppox_sk(sk);
-	int rc = 0;
+	int rc;
 
 	lock_sock(sk);
 
@@ -93,12 +94,9 @@ int pppox_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		break;
 	}
 	default:
-		if (pppox_protos[sk->sk_protocol]->ioctl)
-			rc = pppox_protos[sk->sk_protocol]->ioctl(sock, cmd,
-								  arg);
-
-		break;
-	};
+		rc = pppox_protos[sk->sk_protocol]->ioctl ?
+			pppox_protos[sk->sk_protocol]->ioctl(sock, cmd, arg) : -ENOTTY;
+	}
 
 	release_sock(sk);
 	return rc;
@@ -106,19 +104,29 @@ int pppox_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 
 EXPORT_SYMBOL(pppox_ioctl);
 
-static int pppox_create(struct socket *sock, int protocol)
+static int pppox_create(struct net *net, struct socket *sock, int protocol)
 {
 	int rc = -EPROTOTYPE;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	if (protocol < 0 || protocol > PX_MAX_PROTO)
 		goto out;
 
 	rc = -EPROTONOSUPPORT;
+#ifdef CONFIG_KMOD
+	if (!pppox_protos[protocol]) {
+		char buffer[32];
+		sprintf(buffer, "pppox-proto-%d", protocol);
+		request_module(buffer);
+	}
+#endif
 	if (!pppox_protos[protocol] ||
 	    !try_module_get(pppox_protos[protocol]->owner))
 		goto out;
 
-	rc = pppox_protos[protocol]->create(sock);
+	rc = pppox_protos[protocol]->create(net, sock);
 
 	module_put(pppox_protos[protocol]->owner);
 out:

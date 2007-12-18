@@ -1,4 +1,4 @@
-/* linux/include/asm/arch-s3c2410/regs-power.h
+/* linux/include/asm-arm/arch-s3c2410/regs-power.h
  *
  * Copyright (c) 2003,2004,2005,2006 Simtec Electronics <linux@simtec.co.uk>
  *		      http://armlinux.simtec.co.uk/
@@ -17,6 +17,11 @@
 
 #define S3C2412_PWRMODECON	S3C24XX_PWRREG(0x20)
 #define S3C2412_PWRCFG		S3C24XX_PWRREG(0x24)
+
+#define S3C2412_INFORM0		S3C24XX_PWRREG(0x70)
+#define S3C2412_INFORM1		S3C24XX_PWRREG(0x74)
+#define S3C2412_INFORM2		S3C24XX_PWRREG(0x78)
+#define S3C2412_INFORM3		S3C24XX_PWRREG(0x7C)
 
 #define S3C2412_PWRCFG_BATF_IGNORE		(0<<0)
 #define S3C2412_PWRCFG_BATF_SLEEP		(3<<0)

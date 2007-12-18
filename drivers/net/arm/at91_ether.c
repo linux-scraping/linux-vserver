@@ -225,6 +225,16 @@ static irqreturn_t at91ether_phy_interrupt(int irq, void *dev_id)
 		if (!(phy & ((1 << 2) | 1)))
 			goto done;
 	}
+	else if (lp->phy_type == MII_T78Q21x3_ID) {			/* ack interrupt in Teridian PHY */
+		read_phy(lp->phy_address, MII_T78Q21INT_REG, &phy);
+		if (!(phy & ((1 << 2) | 1)))
+			goto done;
+	}
+	else if (lp->phy_type == MII_DP83848_ID) {
+		read_phy(lp->phy_address, MII_DPPHYSTS_REG, &phy);	/* ack interrupt in DP83848 PHY */
+		if (!(phy & (1 << 7)))
+			goto done;
+	}
 
 	update_linkspeed(dev, 0);
 
@@ -280,6 +290,19 @@ static void enable_phyirq(struct net_device *dev)
 		dsintr = (1 << 10) | ( 1 << 8);
 		write_phy(lp->phy_address, MII_TPISTATUS, dsintr);
 	}
+	else if (lp->phy_type == MII_T78Q21x3_ID) {	/* for Teridian PHY */
+		read_phy(lp->phy_address, MII_T78Q21INT_REG, &dsintr);
+		dsintr = dsintr | 0x500;		/* set bits 8, 10 */
+		write_phy(lp->phy_address, MII_T78Q21INT_REG, dsintr);
+	}
+	else if (lp->phy_type == MII_DP83848_ID) {	/* National Semiconductor DP83848 PHY */
+		read_phy(lp->phy_address, MII_DPMISR_REG, &dsintr);
+		dsintr = dsintr | 0x3c;			/* set bits 2..5 */
+		write_phy(lp->phy_address, MII_DPMISR_REG, dsintr);
+		read_phy(lp->phy_address, MII_DPMICR_REG, &dsintr);
+		dsintr = dsintr | 0x3;			/* set bits 0,1 */
+		write_phy(lp->phy_address, MII_DPMICR_REG, dsintr);
+	}
 
 	disable_mdi();
 	spin_unlock_irq(&lp->lock);
@@ -322,6 +345,19 @@ static void disable_phyirq(struct net_device *dev)
 		read_phy(lp->phy_address, MII_TPISTATUS, &dsintr);
 		dsintr = ~((1 << 10) | (1 << 8));
 		write_phy(lp->phy_address, MII_TPISTATUS, dsintr);
+	}
+	else if (lp->phy_type == MII_T78Q21x3_ID) {	/* for Teridian PHY */
+		read_phy(lp->phy_address, MII_T78Q21INT_REG, &dsintr);
+		dsintr = dsintr & ~0x500;			/* clear bits 8, 10 */
+		write_phy(lp->phy_address, MII_T78Q21INT_REG, dsintr);
+	}
+	else if (lp->phy_type == MII_DP83848_ID) {	/* National Semiconductor DP83848 PHY */
+		read_phy(lp->phy_address, MII_DPMICR_REG, &dsintr);
+		dsintr = dsintr & ~0x3;				/* clear bits 0, 1 */
+		write_phy(lp->phy_address, MII_DPMICR_REG, dsintr);
+		read_phy(lp->phy_address, MII_DPMISR_REG, &dsintr);
+		dsintr = dsintr & ~0x3c;			/* clear bits 2..5 */
+		write_phy(lp->phy_address, MII_DPMISR_REG, dsintr);
 	}
 
 	disable_mdi();
@@ -449,6 +485,7 @@ static void update_mac_address(struct net_device *dev)
 static int set_mac_address(struct net_device *dev, void* addr)
 {
 	struct sockaddr *address = addr;
+	DECLARE_MAC_BUF(mac);
 
 	if (!is_valid_ether_addr(address->sa_data))
 		return -EADDRNOTAVAIL;
@@ -456,9 +493,8 @@ static int set_mac_address(struct net_device *dev, void* addr)
 	memcpy(dev->dev_addr, address->sa_data, dev->addr_len);
 	update_mac_address(dev);
 
-	printk("%s: Setting MAC address to %02x:%02x:%02x:%02x:%02x:%02x\n", dev->name,
-		dev->dev_addr[0], dev->dev_addr[1], dev->dev_addr[2],
-		dev->dev_addr[3], dev->dev_addr[4], dev->dev_addr[5]);
+	printk("%s: Setting MAC address to %s\n", dev->name,
+	       print_mac(mac, dev->dev_addr));
 
 	return 0;
 }
@@ -535,8 +571,8 @@ static void at91ether_sethashtable(struct net_device *dev)
 		mc_filter[bitnr >> 5] |= 1 << (bitnr & 31);
 	}
 
-	at91_emac_write(AT91_EMAC_HSH, mc_filter[0]);
-	at91_emac_write(AT91_EMAC_HSL, mc_filter[1]);
+	at91_emac_write(AT91_EMAC_HSL, mc_filter[0]);
+	at91_emac_write(AT91_EMAC_HSH, mc_filter[1]);
 }
 
 /*
@@ -858,7 +894,6 @@ static void at91ether_rx(struct net_device *dev)
 			skb_reserve(skb, 2);
 			memcpy(skb_put(skb, pktlen), p_recv, pktlen);
 
-			skb->dev = dev;
 			skb->protocol = eth_type_trans(skb, dev);
 			dev->last_rx = jiffies;
 			lp->stats.rx_bytes += pktlen;
@@ -944,6 +979,7 @@ static int __init at91ether_setup(unsigned long phy_type, unsigned short phy_add
 	struct at91_private *lp;
 	unsigned int val;
 	int res;
+	DECLARE_MAC_BUF(mac);
 
 	dev = alloc_etherdev(sizeof(struct at91_private));
 	if (!dev)
@@ -951,7 +987,6 @@ static int __init at91ether_setup(unsigned long phy_type, unsigned short phy_add
 
 	dev->base_addr = AT91_VA_BASE_EMAC;
 	dev->irq = AT91RM9200_ID_EMAC;
-	SET_MODULE_OWNER(dev);
 
 	/* Install the interrupt handler */
 	if (request_irq(dev->irq, at91ether_interrupt, 0, dev->name, dev)) {
@@ -1047,12 +1082,11 @@ static int __init at91ether_setup(unsigned long phy_type, unsigned short phy_add
 	}
 
 	/* Display ethernet banner */
-	printk(KERN_INFO "%s: AT91 ethernet at 0x%08x int=%d %s%s (%02x:%02x:%02x:%02x:%02x:%02x)\n",
-		dev->name, (uint) dev->base_addr, dev->irq,
-		at91_emac_read(AT91_EMAC_CFG) & AT91_EMAC_SPD ? "100-" : "10-",
-		at91_emac_read(AT91_EMAC_CFG) & AT91_EMAC_FD ? "FullDuplex" : "HalfDuplex",
-		dev->dev_addr[0], dev->dev_addr[1], dev->dev_addr[2],
-		dev->dev_addr[3], dev->dev_addr[4], dev->dev_addr[5]);
+	printk(KERN_INFO "%s: AT91 ethernet at 0x%08x int=%d %s%s (%s)\n",
+	       dev->name, (uint) dev->base_addr, dev->irq,
+	       at91_emac_read(AT91_EMAC_CFG) & AT91_EMAC_SPD ? "100-" : "10-",
+	       at91_emac_read(AT91_EMAC_CFG) & AT91_EMAC_FD ? "FullDuplex" : "HalfDuplex",
+	       print_mac(mac, dev->dev_addr));
 	if ((phy_type == MII_DM9161_ID) || (lp->phy_type == MII_DM9161A_ID))
 		printk(KERN_INFO "%s: Davicom 9161 PHY %s\n", dev->name, (lp->phy_media == PORT_FIBRE) ? "(Fiber)" : "(Copper)");
 	else if (phy_type == MII_LXT971A_ID)
@@ -1063,10 +1097,16 @@ static int __init at91ether_setup(unsigned long phy_type, unsigned short phy_add
 		printk(KERN_INFO "%s: Broadcom BCM5221 PHY\n", dev->name);
 	else if (phy_type == MII_DP83847_ID)
 		printk(KERN_INFO "%s: National Semiconductor DP83847 PHY\n", dev->name);
+	else if (phy_type == MII_DP83848_ID)
+		printk(KERN_INFO "%s: National Semiconductor DP83848 PHY\n", dev->name);
 	else if (phy_type == MII_AC101L_ID)
 		printk(KERN_INFO "%s: Altima AC101L PHY\n", dev->name);
 	else if (phy_type == MII_KS8721_ID)
 		printk(KERN_INFO "%s: Micrel KS8721 PHY\n", dev->name);
+	else if (phy_type == MII_T78Q21x3_ID)
+		printk(KERN_INFO "%s: Teridian 78Q21x3 PHY\n", dev->name);
+	else if (phy_type == MII_LAN83C185_ID)
+		printk(KERN_INFO "%s: SMSC LAN83C185 PHY\n", dev->name);
 
 	return 0;
 }
@@ -1104,8 +1144,11 @@ static int __init at91ether_probe(struct platform_device *pdev)
 			case MII_RTL8201_ID:		/* Realtek RTL8201: PHY_ID1 = 0, PHY_ID2 = 0x8201 */
 			case MII_BCM5221_ID:		/* Broadcom BCM5221: PHY_ID1 = 0x40, PHY_ID2 = 0x61e0 */
 			case MII_DP83847_ID:		/* National Semiconductor DP83847:  */
+			case MII_DP83848_ID:		/* National Semiconductor DP83848:  */
 			case MII_AC101L_ID:		/* Altima AC101L: PHY_ID1 = 0x22, PHY_ID2 = 0x5520 */
 			case MII_KS8721_ID:		/* Micrel KS8721: PHY_ID1 = 0x22, PHY_ID2 = 0x1610 */
+			case MII_T78Q21x3_ID:		/* Teridian 78Q21x3: PHY_ID1 = 0x0E, PHY_ID2 = 7237 */
+			case MII_LAN83C185_ID:		/* SMSC LAN83C185: PHY_ID1 = 0x0007, PHY_ID2 = 0xC0A1 */
 				detected = at91ether_setup(phy_id, phy_address, pdev, ether_clk);
 				break;
 		}

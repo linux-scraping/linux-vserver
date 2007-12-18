@@ -9,7 +9,6 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/errno.h>
 #include <linux/user.h>
@@ -21,11 +20,11 @@
 #include <asm/uaccess.h>
 #include <asm/ocd.h>
 #include <asm/mmu_context.h>
-#include <asm/kdebug.h>
+#include <linux/kdebug.h>
 
 static struct pt_regs *get_user_regs(struct task_struct *tsk)
 {
-	return (struct pt_regs *)((unsigned long) tsk->thread_info +
+	return (struct pt_regs *)((unsigned long)task_stack_page(tsk) +
 				  THREAD_SIZE - sizeof(struct pt_regs));
 }
 
@@ -154,7 +153,6 @@ static int ptrace_setregs(struct task_struct *tsk, const void __user *uregs)
 
 long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
-	unsigned long tmp;
 	int ret;
 
 	pr_debug("arch_ptrace(%ld, %d, %#lx, %#lx)\n",
@@ -167,11 +165,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 	/* Read the word at location addr in the child process */
 	case PTRACE_PEEKTEXT:
 	case PTRACE_PEEKDATA:
-		ret = access_process_vm(child, addr, &tmp, sizeof(tmp), 0);
-		if (ret == sizeof(tmp))
-			ret = put_user(tmp, (unsigned long __user *)data);
-		else
-			ret = -EIO;
+		ret = generic_ptrace_peekdata(child, addr, data);
 		break;
 
 	case PTRACE_PEEKUSR:
@@ -182,11 +176,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 	/* Write the word in data at location addr */
 	case PTRACE_POKETEXT:
 	case PTRACE_POKEDATA:
-		ret = access_process_vm(child, addr, &data, sizeof(data), 1);
-		if (ret == sizeof(data))
-			ret = 0;
-		else
-			ret = -EIO;
+		ret = generic_ptrace_pokedata(child, addr, data);
 		break;
 
 	case PTRACE_POKEUSR:
@@ -235,11 +225,6 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		child->exit_code = data;
 		wake_up_process(child);
 		ret = 0;
-		break;
-
-	/* Detach a process that was attached */
-	case PTRACE_DETACH:
-		ret = ptrace_detach(child, data);
 		break;
 
 	case PTRACE_GETREGS:
@@ -300,7 +285,7 @@ asmlinkage void do_debug_priv(struct pt_regs *regs)
 	else
 		die_val = DIE_BREAKPOINT;
 
-	if (notify_die(die_val, regs, 0, SIGTRAP) == NOTIFY_STOP)
+	if (notify_die(die_val, "ptrace", regs, 0, 0, SIGTRAP) == NOTIFY_STOP)
 		return;
 
 	if (likely(ds & DS_SSS)) {

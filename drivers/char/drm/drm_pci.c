@@ -8,12 +8,12 @@
  * \todo Implement the remaining ioctl's for the PCI pools.
  * \todo The wrappers here are so thin that they would be better off inlined..
  *
- * \author Jose Fonseca <jrfonseca@tungstengraphics.com>
+ * \author José Fonseca <jrfonseca@tungstengraphics.com>
  * \author Leif Delgass <ldelgass@retinalburn.net>
  */
 
 /*
- * Copyright 2003 Jos�Fonseca.
+ * Copyright 2003 José Fonseca.
  * Copyright 2003 Leif Delgass.
  * All Rights Reserved.
  *
@@ -47,7 +47,7 @@
 /**
  * \brief Allocate a PCI consistent memory block, for DMA.
  */
-drm_dma_handle_t *drm_pci_alloc(drm_device_t * dev, size_t size, size_t align,
+drm_dma_handle_t *drm_pci_alloc(struct drm_device * dev, size_t size, size_t align,
 				dma_addr_t maxaddr)
 {
 	drm_dma_handle_t *dmah;
@@ -126,7 +126,7 @@ EXPORT_SYMBOL(drm_pci_alloc);
  *
  * This function is for internal use in the Linux-specific DRM core code.
  */
-void __drm_pci_free(drm_device_t * dev, drm_dma_handle_t * dmah)
+void __drm_pci_free(struct drm_device * dev, drm_dma_handle_t * dmah)
 {
 #if 1
 	unsigned long addr;
@@ -172,7 +172,7 @@ void __drm_pci_free(drm_device_t * dev, drm_dma_handle_t * dmah)
 /**
  * \brief Free a PCI consistent memory block
  */
-void drm_pci_free(drm_device_t * dev, drm_dma_handle_t * dmah)
+void drm_pci_free(struct drm_device * dev, drm_dma_handle_t * dmah)
 {
 	__drm_pci_free(dev, dmah);
 	kfree(dmah);

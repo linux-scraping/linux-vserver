@@ -22,7 +22,6 @@
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
-#include <linux/pci.h>
 #include <linux/device.h>
 #include <linux/mutex.h>
 #include <asm/system.h>
@@ -284,7 +283,9 @@ static ssize_t pccard_extract_cis(struct pcmcia_socket *s, char *buf, loff_t off
 	return (ret);
 }
 
-static ssize_t pccard_show_cis(struct kobject *kobj, char *buf, loff_t off, size_t count)
+static ssize_t pccard_show_cis(struct kobject *kobj,
+			       struct bin_attribute *bin_attr,
+			       char *buf, loff_t off, size_t count)
 {
 	unsigned int size = 0x200;
 
@@ -312,7 +313,9 @@ static ssize_t pccard_show_cis(struct kobject *kobj, char *buf, loff_t off, size
 	return (count);
 }
 
-static ssize_t pccard_store_cis(struct kobject *kobj, char *buf, loff_t off, size_t count)
+static ssize_t pccard_store_cis(struct kobject *kobj,
+				struct bin_attribute *bin_attr,
+				char *buf, loff_t off, size_t count)
 {
 	struct pcmcia_socket *s = to_socket(container_of(kobj, struct device, kobj));
 	cisdump_t *cis;
@@ -367,7 +370,7 @@ static struct device_attribute *pccard_socket_attributes[] = {
 };
 
 static struct bin_attribute pccard_cis_attr = {
-	.attr = { .name = "cis", .mode = S_IRUGO | S_IWUSR, .owner = THIS_MODULE},
+	.attr = { .name = "cis", .mode = S_IRUGO | S_IWUSR },
 	.size = 0x200,
 	.read = pccard_show_cis,
 	.write = pccard_store_cis,

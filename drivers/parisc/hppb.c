@@ -16,13 +16,12 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
+#include <linux/dma-mapping.h>
 #include <linux/ioport.h>
 
 #include <asm/io.h>
 #include <asm/hardware.h>
 #include <asm/parisc-device.h>
-
-#include <linux/pci.h>
 
 struct hppb_card {
 	unsigned long hpa;

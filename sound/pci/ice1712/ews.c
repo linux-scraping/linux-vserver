@@ -3,7 +3,7 @@
  *
  *   Lowlevel functions for Terratec EWS88MT/D, EWX24/96, DMX 6Fire
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *                    2002 Takashi Iwai <tiwai@suse.de>
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -332,7 +332,7 @@ static void ews88_setup_spdif(struct snd_ice1712 *ice, int rate)
 
 /*
  */
-static const struct snd_akm4xxx akm_ews88mt __devinitdata = {
+static struct snd_akm4xxx akm_ews88mt __devinitdata = {
 	.num_adcs = 8,
 	.num_dacs = 8,
 	.type = SND_AK4524,
@@ -342,7 +342,7 @@ static const struct snd_akm4xxx akm_ews88mt __devinitdata = {
 	}
 };
 
-static const struct snd_ak4xxx_private akm_ews88mt_priv __devinitdata = {
+static struct snd_ak4xxx_private akm_ews88mt_priv __devinitdata = {
 	.caddr = 2,
 	.cif = 1, /* CIF high */
 	.data_mask = ICE1712_EWS88_SERIAL_DATA,
@@ -354,7 +354,7 @@ static const struct snd_ak4xxx_private akm_ews88mt_priv __devinitdata = {
 	.mask_flags = 0,
 };
 
-static const struct snd_akm4xxx akm_ewx2496 __devinitdata = {
+static struct snd_akm4xxx akm_ewx2496 __devinitdata = {
 	.num_adcs = 2,
 	.num_dacs = 2,
 	.type = SND_AK4524,
@@ -363,7 +363,7 @@ static const struct snd_akm4xxx akm_ewx2496 __devinitdata = {
 	}
 };
 
-static const struct snd_ak4xxx_private akm_ewx2496_priv __devinitdata = {
+static struct snd_ak4xxx_private akm_ewx2496_priv __devinitdata = {
 	.caddr = 2,
 	.cif = 1, /* CIF high */
 	.data_mask = ICE1712_EWS88_SERIAL_DATA,
@@ -375,7 +375,7 @@ static const struct snd_ak4xxx_private akm_ewx2496_priv __devinitdata = {
 	.mask_flags = 0,
 };
 
-static const struct snd_akm4xxx akm_6fire __devinitdata = {
+static struct snd_akm4xxx akm_6fire __devinitdata = {
 	.num_adcs = 6,
 	.num_dacs = 6,
 	.type = SND_AK4524,
@@ -384,7 +384,7 @@ static const struct snd_akm4xxx akm_6fire __devinitdata = {
 	}
 };
 
-static const struct snd_ak4xxx_private akm_6fire_priv __devinitdata = {
+static struct snd_ak4xxx_private akm_6fire_priv __devinitdata = {
 	.caddr = 2,
 	.cif = 1, /* CIF high */
 	.data_mask = ICE1712_6FIRE_SERIAL_DATA,
@@ -578,7 +578,7 @@ static int snd_ice1712_ewx_io_sense_put(struct snd_kcontrol *kcontrol, struct sn
 	return val != nval;
 }
 
-static const struct snd_kcontrol_new snd_ice1712_ewx2496_controls[] __devinitdata = {
+static struct snd_kcontrol_new snd_ice1712_ewx2496_controls[] __devinitdata = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 		.name = "Input Sensitivity Switch",
@@ -678,7 +678,7 @@ static int snd_ice1712_ews88mt_input_sense_put(struct snd_kcontrol *kcontrol, st
 	return ndata != data;
 }
 
-static const struct snd_kcontrol_new snd_ice1712_ews88mt_input_sense __devinitdata = {
+static struct snd_kcontrol_new snd_ice1712_ews88mt_input_sense __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Input Sensitivity Switch",
 	.info = snd_ice1712_ewx_io_sense_info,
@@ -687,7 +687,7 @@ static const struct snd_kcontrol_new snd_ice1712_ews88mt_input_sense __devinitda
 	.count = 8,
 };
 
-static const struct snd_kcontrol_new snd_ice1712_ews88mt_output_sense __devinitdata = {
+static struct snd_kcontrol_new snd_ice1712_ews88mt_output_sense __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Output Sensitivity Switch",
 	.info = snd_ice1712_ewx_io_sense_info,
@@ -700,14 +700,7 @@ static const struct snd_kcontrol_new snd_ice1712_ews88mt_output_sense __devinitd
  * EWS88D specific controls
  */
 
-static int snd_ice1712_ews88d_control_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_ews88d_control_info		snd_ctl_boolean_mono_info
 
 static int snd_ice1712_ews88d_control_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -769,7 +762,7 @@ static int snd_ice1712_ews88d_control_put(struct snd_kcontrol *kcontrol, struct 
   .private_value = xshift | (xinvert << 8),\
 }
 
-static const struct snd_kcontrol_new snd_ice1712_ews88d_controls[] __devinitdata = {
+static struct snd_kcontrol_new snd_ice1712_ews88d_controls[] __devinitdata = {
 	EWS88D_CONTROL(SNDRV_CTL_ELEM_IFACE_MIXER, "IEC958 Input Optical", 0, 1, 0), /* inverted */
 	EWS88D_CONTROL(SNDRV_CTL_ELEM_IFACE_MIXER, "ADAT Output Optical", 1, 0, 0),
 	EWS88D_CONTROL(SNDRV_CTL_ELEM_IFACE_MIXER, "ADAT External Master Clock", 2, 0, 0),
@@ -812,14 +805,7 @@ static int snd_ice1712_6fire_write_pca(struct snd_ice1712 *ice, unsigned char re
 	return 0;
 }
 
-static int snd_ice1712_6fire_control_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_6fire_control_info		snd_ctl_boolean_mono_info
 
 static int snd_ice1712_6fire_control_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -909,7 +895,7 @@ static int snd_ice1712_6fire_select_input_put(struct snd_kcontrol *kcontrol, str
   .private_value = xshift | (xinvert << 8),\
 }
 
-static const struct snd_kcontrol_new snd_ice1712_6fire_controls[] __devinitdata = {
+static struct snd_kcontrol_new snd_ice1712_6fire_controls[] __devinitdata = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 		.name = "Analog Input Select",
@@ -989,7 +975,7 @@ static int __devinit snd_ice1712_ews_add_controls(struct snd_ice1712 *ice)
 
 
 /* entry point */
-const struct snd_ice1712_card_info snd_ice1712_ews_cards[] __devinitdata = {
+struct snd_ice1712_card_info snd_ice1712_ews_cards[] __devinitdata = {
 	{
 		.subvendor = ICE1712_SUBDEVICE_EWX2496,
 		.name = "TerraTec EWX24/96",

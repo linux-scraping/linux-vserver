@@ -15,7 +15,6 @@
 
 #include <asm/sni.h>
 #include <asm/time.h>
-#include <asm/ds1216.h>
 
 #define PORT(_base,_irq)				\
 	{						\
@@ -40,20 +39,34 @@ static struct platform_device a20r_serial8250_device = {
 	},
 };
 
+static struct resource a20r_ds1216_rsrc[] = {
+        {
+                .start = 0x1c081ffc,
+                .end   = 0x1c081fff,
+                .flags = IORESOURCE_MEM
+        }
+};
+
+static struct platform_device a20r_ds1216_device = {
+        .name           = "rtc-ds1216",
+        .num_resources  = ARRAY_SIZE(a20r_ds1216_rsrc),
+        .resource       = a20r_ds1216_rsrc
+};
+
 static struct resource snirm_82596_rsrc[] = {
 	{
-		.start = 0xb8000000,
-		.end   = 0xb8000004,
+		.start = 0x18000000,
+		.end   = 0x18000004,
 		.flags = IORESOURCE_MEM
 	},
 	{
-		.start = 0xb8010000,
-		.end   = 0xb8010004,
+		.start = 0x18010000,
+		.end   = 0x18010004,
 		.flags = IORESOURCE_MEM
 	},
 	{
-		.start = 0xbff00000,
-		.end   = 0xbff00020,
+		.start = 0x1ff00000,
+		.end   = 0x1ff00020,
 		.flags = IORESOURCE_MEM
 	},
 	{
@@ -74,8 +87,8 @@ static struct platform_device snirm_82596_pdev = {
 
 static struct resource snirm_53c710_rsrc[] = {
 	{
-		.start = 0xb9000000,
-		.end   = 0xb90fffff,
+		.start = 0x19000000,
+		.end   = 0x190fffff,
 		.flags = IORESOURCE_MEM
 	},
 	{
@@ -93,8 +106,8 @@ static struct platform_device snirm_53c710_pdev = {
 
 static struct resource sc26xx_rsrc[] = {
 	{
-		.start = 0xbc070000,
-		.end   = 0xbc0700ff,
+		.start = 0x1c070000,
+		.end   = 0x1c0700ff,
 		.flags = IORESOURCE_MEM
 	},
 	{
@@ -114,7 +127,7 @@ static u32 a20r_ack_hwint(void)
 {
 	u32 status = read_c0_status();
 
-	write_c0_status (status | 0x00010000);
+	write_c0_status(status | 0x00010000);
 	asm volatile(
 	"	.set	push			\n"
 	"	.set	noat			\n"
@@ -182,7 +195,7 @@ static void a20r_hwint(void)
 	u32 cause, status;
 	int irq;
 
-	clear_c0_status (IE_IRQ0);
+	clear_c0_status(IE_IRQ0);
 	status = a20r_ack_hwint();
 	cause = read_c0_cause();
 
@@ -200,13 +213,12 @@ void __init sni_a20r_irq_init(void)
 		set_irq_chip(i, &a20r_irq_type);
 	sni_hwint = a20r_hwint;
 	change_c0_status(ST0_IM, IE_IRQ0);
-	setup_irq (SNI_A20R_IRQ_BASE + 3, &sni_isa_irq);
+	setup_irq(SNI_A20R_IRQ_BASE + 3, &sni_isa_irq);
 }
 
 void sni_a20r_init(void)
 {
-	ds1216_base = (volatile unsigned char *) SNI_DS1216_A20R_BASE;
-	rtc_mips_get_time = ds1216_get_cmos_time;
+	/* FIXME, remove if not needed */
 }
 
 static int __init snirm_a20r_setup_devinit(void)
@@ -218,6 +230,7 @@ static int __init snirm_a20r_setup_devinit(void)
 	        platform_device_register(&snirm_53c710_pdev);
 	        platform_device_register(&sc26xx_pdev);
 	        platform_device_register(&a20r_serial8250_device);
+	        platform_device_register(&a20r_ds1216_device);
 	        break;
 	}
 

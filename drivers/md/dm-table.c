@@ -102,6 +102,8 @@ static void combine_restrictions_low(struct io_restrictions *lhs,
 	lhs->seg_boundary_mask =
 		min_not_zero(lhs->seg_boundary_mask, rhs->seg_boundary_mask);
 
+	lhs->bounce_pfn = min_not_zero(lhs->bounce_pfn, rhs->bounce_pfn);
+
 	lhs->no_cluster |= rhs->no_cluster;
 }
 
@@ -213,12 +215,11 @@ static int alloc_targets(struct dm_table *t, unsigned int num)
 int dm_table_create(struct dm_table **result, int mode,
 		    unsigned num_targets, struct mapped_device *md)
 {
-	struct dm_table *t = kmalloc(sizeof(*t), GFP_KERNEL);
+	struct dm_table *t = kzalloc(sizeof(*t), GFP_KERNEL);
 
 	if (!t)
 		return -ENOMEM;
 
-	memset(t, 0, sizeof(*t));
 	INIT_LIST_HEAD(&t->devices);
 	atomic_set(&t->holders, 1);
 
@@ -425,13 +426,15 @@ static void close_dev(struct dm_dev *d, struct mapped_device *md)
 }
 
 /*
- * If possible (ie. blk_size[major] is set), this checks an area
- * of a destination device is valid.
+ * If possible, this checks an area of a destination device is valid.
  */
 static int check_device_area(struct dm_dev *dd, sector_t start, sector_t len)
 {
-	sector_t dev_size;
-	dev_size = dd->bdev->bd_inode->i_size >> SECTOR_SHIFT;
+	sector_t dev_size = dd->bdev->bd_inode->i_size >> SECTOR_SHIFT;
+
+	if (!dev_size)
+		return 1;
+
 	return ((start < dev_size) && (len <= (dev_size - start)));
 }
 
@@ -524,7 +527,7 @@ static int __table_get_device(struct dm_table *t, struct dm_target *ti,
 
 void dm_set_device_limits(struct dm_target *ti, struct block_device *bdev)
 {
-	request_queue_t *q = bdev_get_queue(bdev);
+	struct request_queue *q = bdev_get_queue(bdev);
 	struct io_restrictions *rs = &ti->limits;
 
 	/*
@@ -564,6 +567,8 @@ void dm_set_device_limits(struct dm_target *ti, struct block_device *bdev)
 	rs->seg_boundary_mask =
 		min_not_zero(rs->seg_boundary_mask,
 			     q->seg_boundary_mask);
+
+	rs->bounce_pfn = min_not_zero(rs->bounce_pfn, q->bounce_pfn);
 
 	rs->no_cluster |= !test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
 }
@@ -706,6 +711,8 @@ static void check_for_valid_limits(struct io_restrictions *rs)
 		rs->max_segment_size = MAX_SEGMENT_SIZE;
 	if (!rs->seg_boundary_mask)
 		rs->seg_boundary_mask = -1;
+	if (!rs->bounce_pfn)
+		rs->bounce_pfn = -1;
 }
 
 int dm_table_add_target(struct dm_table *t, const char *type,
@@ -890,6 +897,7 @@ void dm_table_set_restrictions(struct dm_table *t, struct request_queue *q)
 	q->hardsect_size = t->limits.hardsect_size;
 	q->max_segment_size = t->limits.max_segment_size;
 	q->seg_boundary_mask = t->limits.seg_boundary_mask;
+	q->bounce_pfn = t->limits.bounce_pfn;
 	if (t->limits.no_cluster)
 		q->queue_flags &= ~(1 << QUEUE_FLAG_CLUSTER);
 	else
@@ -977,7 +985,7 @@ int dm_table_any_congested(struct dm_table *t, int bdi_bits)
 	devices = dm_table_get_devices(t);
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
+		struct request_queue *q = bdev_get_queue(dd->bdev);
 		r |= bdi_congested(&q->backing_dev_info, bdi_bits);
 	}
 
@@ -990,38 +998,10 @@ void dm_table_unplug_all(struct dm_table *t)
 
 	for (d = devices->next; d != devices; d = d->next) {
 		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
+		struct request_queue *q = bdev_get_queue(dd->bdev);
 
-		if (q->unplug_fn)
-			q->unplug_fn(q);
+		blk_unplug(q);
 	}
-}
-
-int dm_table_flush_all(struct dm_table *t)
-{
-	struct list_head *d, *devices = dm_table_get_devices(t);
-	int ret = 0;
-	unsigned i;
-
-	for (i = 0; i < t->num_targets; i++)
-		if (t->targets[i].type->flush)
-			t->targets[i].type->flush(&t->targets[i]);
-
-	for (d = devices->next; d != devices; d = d->next) {
-		struct dm_dev *dd = list_entry(d, struct dm_dev, list);
-		request_queue_t *q = bdev_get_queue(dd->bdev);
-		int err;
-
-		if (!q->issue_flush_fn)
-			err = -EOPNOTSUPP;
-		else
-			err = q->issue_flush_fn(q, dd->bdev->bd_disk, NULL);
-
-		if (!ret)
-			ret = err;
-	}
-
-	return ret;
 }
 
 struct mapped_device *dm_table_get_md(struct dm_table *t)
@@ -1041,4 +1021,3 @@ EXPORT_SYMBOL(dm_table_get_md);
 EXPORT_SYMBOL(dm_table_put);
 EXPORT_SYMBOL(dm_table_get);
 EXPORT_SYMBOL(dm_table_unplug_all);
-EXPORT_SYMBOL(dm_table_flush_all);

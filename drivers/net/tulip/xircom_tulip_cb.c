@@ -65,7 +65,7 @@ static int rx_copybreak = 100;
 static int csr0 = 0x01A00000 | 0xE000;
 #elif defined(__powerpc__)
 static int csr0 = 0x01B00000 | 0x8000;
-#elif defined(__sparc__)
+#elif defined(CONFIG_SPARC)
 static int csr0 = 0x01B00080 | 0x8000;
 #elif defined(__i386__)
 static int csr0 = 0x01A00000 | 0x8000;
@@ -524,7 +524,6 @@ static int __devinit xircom_init_one(struct pci_dev *pdev, const struct pci_devi
 	int chip_idx = id->driver_data;
 	long ioaddr;
 	int i;
-	u8 chip_rev;
 
 /* when built into the kernel, we only print version if device is found */
 #ifndef MODULE
@@ -548,7 +547,6 @@ static int __devinit xircom_init_one(struct pci_dev *pdev, const struct pci_devi
 		printk (KERN_ERR DRV_NAME "%d: cannot alloc etherdev, aborting\n", board_idx);
 		return -ENOMEM;
 	}
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	dev->base_addr = ioaddr;
@@ -620,9 +618,8 @@ static int __devinit xircom_init_one(struct pci_dev *pdev, const struct pci_devi
 	if (register_netdev(dev))
 		goto err_out_cleardev;
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &chip_rev);
 	printk(KERN_INFO "%s: %s rev %d at %#3lx,",
-	       dev->name, xircom_tbl[chip_idx].chip_name, chip_rev, ioaddr);
+	       dev->name, xircom_tbl[chip_idx].chip_name, pdev->revision, ioaddr);
 	for (i = 0; i < 6; i++)
 		printk("%c%2.2X", i ? ':' : ' ', dev->dev_addr[i]);
 	printk(", IRQ %d.\n", dev->irq);
@@ -915,7 +912,9 @@ xircom_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	tp->tx_skbuff[entry] = skb;
 	if (tp->chip_id == X3201_3) {
-		memcpy(tp->tx_aligned_skbuff[entry]->data,skb->data,skb->len);
+		skb_copy_from_linear_data(skb,
+					  tp->tx_aligned_skbuff[entry]->data,
+					  skb->len);
 		tp->tx_ring[entry].buffer1 = virt_to_bus(tp->tx_aligned_skbuff[entry]->data);
 	} else
 		tp->tx_ring[entry].buffer1 = virt_to_bus(skb->data);
@@ -1238,11 +1237,10 @@ xircom_rx(struct net_device *dev)
 			   to a minimally-sized skbuff. */
 			if (pkt_len < rx_copybreak
 				&& (skb = dev_alloc_skb(pkt_len + 2)) != NULL) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* 16 byte align the IP header */
 #if ! defined(__alpha__)
-				eth_copy_and_sum(skb, bus_to_virt(tp->rx_ring[entry].buffer1),
-								 pkt_len, 0);
+				skb_copy_to_linear_data(skb, bus_to_virt(tp->rx_ring[entry].buffer1),
+								 pkt_len);
 				skb_put(skb, pkt_len);
 #else
 				memcpy(skb_put(skb, pkt_len),

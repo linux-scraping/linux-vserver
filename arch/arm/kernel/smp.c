@@ -17,6 +17,7 @@
 #include <linux/profile.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
+#include <linux/err.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
 #include <linux/seq_file.h>
@@ -486,7 +487,7 @@ static void ipi_timer(void)
 }
 
 #ifdef CONFIG_LOCAL_TIMERS
-asmlinkage void do_local_timer(struct pt_regs *regs)
+asmlinkage void __exception do_local_timer(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	int cpu = smp_processor_id();
@@ -551,7 +552,7 @@ static void ipi_cpu_stop(unsigned int cpu)
  *
  *  Bit 0 - Inter-processor function call
  */
-asmlinkage void do_IPI(struct pt_regs *regs)
+asmlinkage void __exception do_IPI(struct pt_regs *regs)
 {
 	unsigned int cpu = smp_processor_id();
 	struct ipi_data *ipi = &per_cpu(ipi_data, cpu);
@@ -630,7 +631,7 @@ void smp_send_stop(void)
 /*
  * not supported here
  */
-int __init setup_profiling_timer(unsigned int multiplier)
+int setup_profiling_timer(unsigned int multiplier)
 {
 	return -EINVAL;
 }

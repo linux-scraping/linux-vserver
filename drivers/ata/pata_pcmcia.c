@@ -42,7 +42,7 @@
 
 
 #define DRV_NAME "pata_pcmcia"
-#define DRV_VERSION "0.3.0"
+#define DRV_VERSION "0.3.2"
 
 /*
  *	Private data structure to glue stuff together
@@ -53,6 +53,38 @@ struct ata_pcmcia_info {
 	int		ndev;
 	dev_node_t	node;
 };
+
+/**
+ *	pcmcia_set_mode	-	PCMCIA specific mode setup
+ *	@link: link
+ *	@r_failed_dev: Return pointer for failed device
+ *
+ *	Perform the tuning and setup of the devices and timings, which
+ *	for PCMCIA is the same as any other controller. We wrap it however
+ *	as we need to spot hardware with incorrect or missing master/slave
+ *	decode, which alas is embarrassingly common in the PC world
+ */
+
+static int pcmcia_set_mode(struct ata_link *link, struct ata_device **r_failed_dev)
+{
+	struct ata_device *master = &link->device[0];
+	struct ata_device *slave = &link->device[1];
+
+	if (!ata_dev_enabled(master) || !ata_dev_enabled(slave))
+		return ata_do_set_mode(link, r_failed_dev);
+
+	if (memcmp(master->id + ATA_ID_FW_REV,  slave->id + ATA_ID_FW_REV,
+			   ATA_ID_FW_REV_LEN + ATA_ID_PROD_LEN) == 0) {
+		/* Suspicious match, but could be two cards from
+		   the same vendor - check serial */
+		if (memcmp(master->id + ATA_ID_SERNO, slave->id + ATA_ID_SERNO,
+			   ATA_ID_SERNO_LEN) == 0 && master->id[ATA_ID_SERNO] >> 8) {
+			ata_dev_printk(slave, KERN_WARNING, "is a ghost device, ignoring.\n");
+			ata_dev_disable(slave);
+		}
+	}
+	return ata_do_set_mode(link, r_failed_dev);
+}
 
 static struct scsi_host_template pcmcia_sht = {
 	.module			= THIS_MODULE,
@@ -73,7 +105,7 @@ static struct scsi_host_template pcmcia_sht = {
 };
 
 static struct ata_port_operations pcmcia_port_ops = {
-	.port_disable	= ata_port_disable,
+	.set_mode	= pcmcia_set_mode,
 	.tf_load	= ata_tf_load,
 	.tf_read	= ata_tf_read,
 	.check_status 	= ata_check_status,
@@ -84,18 +116,17 @@ static struct ata_port_operations pcmcia_port_ops = {
 	.thaw		= ata_bmdma_thaw,
 	.error_handler	= ata_bmdma_error_handler,
 	.post_internal_cmd = ata_bmdma_post_internal_cmd,
+	.cable_detect	= ata_cable_40wire,
 
 	.qc_prep 	= ata_qc_prep,
 	.qc_issue	= ata_qc_issue_prot,
 
 	.data_xfer	= ata_data_xfer_noirq,
 
-	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
 	.irq_on		= ata_irq_on,
-	.irq_ack	= ata_irq_ack,
 
-	.port_start	= ata_port_start,
+	.port_start	= ata_sff_port_start,
 };
 
 #define CS_CHECK(fn, ret) \
@@ -111,7 +142,8 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 
 static int pcmcia_init_one(struct pcmcia_device *pdev)
 {
-	struct ata_probe_ent ae;
+	struct ata_host *host;
+	struct ata_port *ap;
 	struct ata_pcmcia_info *info;
 	tuple_t tuple;
 	struct {
@@ -215,7 +247,8 @@ static int pcmcia_init_one(struct pcmcia_device *pdev)
 					goto next_entry;
 				io_base = pdev->io.BasePort1;
 				ctl_base = pdev->io.BasePort1 + 0x0e;
-			} else goto next_entry;
+			} else
+				goto next_entry;
 			/* If we've got this far, we're done */
 			break;
 		}
@@ -252,27 +285,29 @@ next_entry:
 		printk(KERN_WARNING DRV_NAME ": second channel not yet supported.\n");
 
 	/*
- 	 *	Having done the PCMCIA plumbing the ATA side is relatively
- 	 *	sane.
+	 *	Having done the PCMCIA plumbing the ATA side is relatively
+	 *	sane.
 	 */
+	ret = -ENOMEM;
+	host = ata_host_alloc(&pdev->dev, 1);
+	if (!host)
+		goto failed;
+	ap = host->ports[0];
 
-	memset(&ae, 0, sizeof(struct ata_probe_ent));
-	INIT_LIST_HEAD(&ae.node);
-	ae.dev = &pdev->dev;
-	ae.port_ops = &pcmcia_port_ops;
-	ae.sht = &pcmcia_sht;
-	ae.n_ports = 1;
-	ae.pio_mask = 1;		/* ISA so PIO 0 cycles */
-	ae.irq = pdev->irq.AssignedIRQ;
-	ae.irq_flags = IRQF_SHARED;
-	ae.port_flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST;
-	ae.port[0].cmd_addr = io_addr;
-	ae.port[0].altstatus_addr = ctl_addr;
-	ae.port[0].ctl_addr = ctl_addr;
-	ata_std_ports(&ae.port[0]);
+	ap->ops = &pcmcia_port_ops;
+	ap->pio_mask = 1;		/* ISA so PIO 0 cycles */
+	ap->flags |= ATA_FLAG_SLAVE_POSS;
+	ap->ioaddr.cmd_addr = io_addr;
+	ap->ioaddr.altstatus_addr = ctl_addr;
+	ap->ioaddr.ctl_addr = ctl_addr;
+	ata_std_ports(&ap->ioaddr);
 
-	ret = -ENODEV;
-	if (ata_device_add(&ae) == 0)
+	ata_port_desc(ap, "cmd 0x%lx ctl 0x%lx", io_base, ctl_base);
+
+	/* activate */
+	ret = ata_host_activate(host, pdev->irq.AssignedIRQ, ata_interrupt,
+				IRQF_SHARED, &pcmcia_sht);
+	if (ret)
 		goto failed;
 
 	info->ndev = 1;
@@ -318,15 +353,17 @@ static void pcmcia_remove_one(struct pcmcia_device *pdev)
 
 static struct pcmcia_device_id pcmcia_devices[] = {
 	PCMCIA_DEVICE_FUNC_ID(4),
+	PCMCIA_DEVICE_MANF_CARD(0x0000, 0x0000),	/* Corsair */
 	PCMCIA_DEVICE_MANF_CARD(0x0007, 0x0000),	/* Hitachi */
 	PCMCIA_DEVICE_MANF_CARD(0x000a, 0x0000),	/* I-O Data CFA */
 	PCMCIA_DEVICE_MANF_CARD(0x001c, 0x0001),	/* Mitsubishi CFA */
 	PCMCIA_DEVICE_MANF_CARD(0x0032, 0x0704),
+	PCMCIA_DEVICE_MANF_CARD(0x0032, 0x2904),
 	PCMCIA_DEVICE_MANF_CARD(0x0045, 0x0401),	/* SanDisk CFA */
 	PCMCIA_DEVICE_MANF_CARD(0x0098, 0x0000),	/* Toshiba */
 	PCMCIA_DEVICE_MANF_CARD(0x00a4, 0x002d),
 	PCMCIA_DEVICE_MANF_CARD(0x00ce, 0x0000),	/* Samsung */
- 	PCMCIA_DEVICE_MANF_CARD(0x0319, 0x0000),	/* Hitachi */
+	PCMCIA_DEVICE_MANF_CARD(0x0319, 0x0000),	/* Hitachi */
 	PCMCIA_DEVICE_MANF_CARD(0x2080, 0x0001),
 	PCMCIA_DEVICE_MANF_CARD(0x4e01, 0x0100),	/* Viking CFA */
 	PCMCIA_DEVICE_MANF_CARD(0x4e01, 0x0200),	/* Lexar, Viking CFA */
@@ -342,10 +379,12 @@ static struct pcmcia_device_id pcmcia_devices[] = {
 	PCMCIA_DEVICE_PROD_ID12("EXP   ", "CD-ROM", 0x0a5c52fd, 0x66536591),
 	PCMCIA_DEVICE_PROD_ID12("EXP   ", "PnPIDE", 0x0a5c52fd, 0x0c694728),
 	PCMCIA_DEVICE_PROD_ID12("FREECOM", "PCCARD-IDE", 0x5714cbf7, 0x48e0ab8e),
+	PCMCIA_DEVICE_PROD_ID12("Hyperstone", "Model1", 0x3d5b9ef5, 0xca6ab420),
 	PCMCIA_DEVICE_PROD_ID12("HITACHI", "FLASH", 0xf4f43949, 0x9eb86aae),
 	PCMCIA_DEVICE_PROD_ID12("HITACHI", "microdrive", 0xf4f43949, 0xa6d76178),
 	PCMCIA_DEVICE_PROD_ID12("IBM", "microdrive", 0xb569a6e5, 0xa6d76178),
 	PCMCIA_DEVICE_PROD_ID12("IBM", "IBM17JSSFP20", 0xb569a6e5, 0xf2508753),
+	PCMCIA_DEVICE_PROD_ID12("KINGSTON", "CF8GB", 0x2e6d1829, 0xacbe682e),
 	PCMCIA_DEVICE_PROD_ID12("IO DATA", "CBIDE2      ", 0x547e66dc, 0x8671043b),
 	PCMCIA_DEVICE_PROD_ID12("IO DATA", "PCIDE", 0x547e66dc, 0x5c5ab149),
 	PCMCIA_DEVICE_PROD_ID12("IO DATA", "PCIDEII", 0x547e66dc, 0xb3662674),
@@ -361,6 +400,7 @@ static struct pcmcia_device_id pcmcia_devices[] = {
 	PCMCIA_DEVICE_PROD_ID12("TOSHIBA", "MK2001MPL", 0xb4585a1a, 0x3489e003),
 	PCMCIA_DEVICE_PROD_ID1("TRANSCEND    512M   ", 0xd0909443),
 	PCMCIA_DEVICE_PROD_ID12("TRANSCEND", "TS1GCF80", 0x709b1bf1, 0x2a54d4b1),
+	PCMCIA_DEVICE_PROD_ID12("TRANSCEND", "TS2GCF120", 0x709b1bf1, 0x969aa4f2),
 	PCMCIA_DEVICE_PROD_ID12("TRANSCEND", "TS4GCF120", 0x709b1bf1, 0xf54a91c8),
 	PCMCIA_DEVICE_PROD_ID12("WIT", "IDE16", 0x244e5994, 0x3e232852),
 	PCMCIA_DEVICE_PROD_ID12("WEIDA", "TWTTI", 0xcc7cf69c, 0x212bb918),

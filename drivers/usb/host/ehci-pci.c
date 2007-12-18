@@ -58,8 +58,6 @@ static int ehci_pci_reinit(struct ehci_hcd *ehci, struct pci_dev *pdev)
 	if (!retval)
 		ehci_dbg(ehci, "MWI active\n");
 
-	ehci_port_power(ehci, 0);
-
 	return 0;
 }
 
@@ -149,16 +147,14 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 		 * fixed in newer silicon.
 		 */
 		case 0x0068:
-			pci_read_config_dword(pdev, PCI_REVISION_ID, &temp);
-			if ((temp & 0xff) < 0xa4)
+			if (pdev->revision < 0xa4)
 				ehci->no_selective_suspend = 1;
 			break;
 		}
 		break;
 	}
 
-	if (ehci_is_TDI(ehci))
-		ehci_reset(ehci);
+	ehci_reset(ehci);
 
 	/* at least the Genesys GL880S needs fixup here */
 	temp = HCS_N_CC(ehci->hcs_params) * HCS_N_PCC(ehci->hcs_params);
@@ -313,12 +309,13 @@ static int ehci_pci_resume(struct usb_hcd *hcd)
 	ehci_work(ehci);
 	spin_unlock_irq(&ehci->lock);
 
-	/* here we "know" root ports should always stay powered */
-	ehci_port_power(ehci, 1);
-
 	ehci_writel(ehci, ehci->command, &ehci->regs->command);
 	ehci_writel(ehci, FLAG_CF, &ehci->regs->configured_flag);
 	ehci_readl(ehci, &ehci->regs->command);	/* unblock posted writes */
+
+	/* here we "know" root ports should always stay powered */
+	ehci_port_power(ehci, 1);
+	ehci_handover_companion_ports(ehci);
 
 	hcd->state = HC_STATE_SUSPENDED;
 	return 0;

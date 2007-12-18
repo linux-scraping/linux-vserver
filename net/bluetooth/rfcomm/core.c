@@ -37,6 +37,7 @@
 #include <linux/device.h>
 #include <linux/net.h>
 #include <linux/mutex.h>
+#include <linux/kthread.h>
 
 #include <net/sock.h>
 #include <asm/uaccess.h>
@@ -67,7 +68,6 @@ static DEFINE_MUTEX(rfcomm_mutex);
 static unsigned long rfcomm_event;
 
 static LIST_HEAD(session_list);
-static atomic_t terminate, running;
 
 static int rfcomm_send_frame(struct rfcomm_session *s, u8 *data, int len);
 static int rfcomm_send_sabm(struct rfcomm_session *s, u8 dlci);
@@ -622,7 +622,7 @@ static struct rfcomm_session *rfcomm_session_create(bdaddr_t *src, bdaddr_t *dst
 	bacpy(&addr.l2_bdaddr, src);
 	addr.l2_family = AF_BLUETOOTH;
 	addr.l2_psm    = 0;
-	*err = sock->ops->bind(sock, (struct sockaddr *) &addr, sizeof(addr));
+	*err = kernel_bind(sock, (struct sockaddr *) &addr, sizeof(addr));
 	if (*err < 0)
 		goto failed;
 
@@ -643,7 +643,7 @@ static struct rfcomm_session *rfcomm_session_create(bdaddr_t *src, bdaddr_t *dst
 	bacpy(&addr.l2_bdaddr, dst);
 	addr.l2_family = AF_BLUETOOTH;
 	addr.l2_psm    = htobs(RFCOMM_PSM);
-	*err = sock->ops->connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_NONBLOCK);
+	*err = kernel_connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_NONBLOCK);
 	if (*err == 0 || *err == -EINPROGRESS)
 		return s;
 
@@ -1058,6 +1058,12 @@ static int rfcomm_recv_ua(struct rfcomm_session *s, u8 dlci)
 		case BT_DISCONN:
 			d->state = BT_CLOSED;
 			__rfcomm_dlc_close(d, 0);
+
+			if (list_empty(&s->dlcs)) {
+				s->state = BT_DISCONN;
+				rfcomm_send_disc(s, 0);
+			}
+
 			break;
 		}
 	} else {
@@ -1066,6 +1072,10 @@ static int rfcomm_recv_ua(struct rfcomm_session *s, u8 dlci)
 		case BT_CONNECT:
 			s->state = BT_CONNECTED;
 			rfcomm_process_connect(s);
+			break;
+
+		case BT_DISCONN:
+			rfcomm_session_put(s);
 			break;
 		}
 	}
@@ -1567,7 +1577,7 @@ static int rfcomm_recv_frame(struct rfcomm_session *s, struct sk_buff *skb)
 
 	/* Trim FCS */
 	skb->len--; skb->tail--;
-	fcs = *(u8 *) skb->tail;
+	fcs = *(u8 *)skb_tail_pointer(skb);
 
 	if (__check_fcs(skb->data, type, fcs)) {
 		BT_ERR("bad checksum in packet");
@@ -1757,18 +1767,11 @@ static inline void rfcomm_accept_connection(struct rfcomm_session *s)
 
 	BT_DBG("session %p", s);
 
-	if (sock_create_lite(PF_BLUETOOTH, sock->type, BTPROTO_L2CAP, &nsock))
+	err = kernel_accept(sock, &nsock, O_NONBLOCK);
+	if (err < 0)
 		return;
-
-	nsock->ops  = sock->ops;
 
 	__module_get(nsock->ops->owner);
-
-	err = sock->ops->accept(sock, nsock, O_NONBLOCK);
-	if (err < 0) {
-		sock_release(nsock);
-		return;
-	}
 
 	/* Set our callbacks */
 	nsock->sk->sk_data_ready   = rfcomm_l2data_ready;
@@ -1846,26 +1849,6 @@ static inline void rfcomm_process_sessions(void)
 	rfcomm_unlock();
 }
 
-static void rfcomm_worker(void)
-{
-	BT_DBG("");
-
-	while (!atomic_read(&terminate)) {
-		if (!test_bit(RFCOMM_SCHED_WAKEUP, &rfcomm_event)) {
-			/* No pending events. Let's sleep.
-			 * Incoming connections and data will wake us up. */
-			set_current_state(TASK_INTERRUPTIBLE);
-			schedule();
-		}
-
-		/* Process stuff */
-		clear_bit(RFCOMM_SCHED_WAKEUP, &rfcomm_event);
-		rfcomm_process_sessions();
-	}
-	set_current_state(TASK_RUNNING);
-	return;
-}
-
 static int rfcomm_add_listener(bdaddr_t *ba)
 {
 	struct sockaddr_l2 addr;
@@ -1885,7 +1868,7 @@ static int rfcomm_add_listener(bdaddr_t *ba)
 	bacpy(&addr.l2_bdaddr, ba);
 	addr.l2_family = AF_BLUETOOTH;
 	addr.l2_psm    = htobs(RFCOMM_PSM);
-	err = sock->ops->bind(sock, (struct sockaddr *) &addr, sizeof(addr));
+	err = kernel_bind(sock, (struct sockaddr *) &addr, sizeof(addr));
 	if (err < 0) {
 		BT_ERR("Bind failed %d", err);
 		goto failed;
@@ -1898,7 +1881,7 @@ static int rfcomm_add_listener(bdaddr_t *ba)
 	release_sock(sk);
 
 	/* Start listening on the socket */
-	err = sock->ops->listen(sock, 10);
+	err = kernel_listen(sock, 10);
 	if (err) {
 		BT_ERR("Listen failed %d", err);
 		goto failed;
@@ -1931,23 +1914,28 @@ static void rfcomm_kill_listener(void)
 
 static int rfcomm_run(void *unused)
 {
-	rfcomm_thread = current;
-
-	atomic_inc(&running);
-
-	daemonize("krfcommd");
-	set_user_nice(current, -10);
-	current->flags |= PF_NOFREEZE;
-
 	BT_DBG("");
+
+	set_user_nice(current, -10);
 
 	rfcomm_add_listener(BDADDR_ANY);
 
-	rfcomm_worker();
+	while (!kthread_should_stop()) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (!test_bit(RFCOMM_SCHED_WAKEUP, &rfcomm_event)) {
+			/* No pending events. Let's sleep.
+			 * Incoming connections and data will wake us up. */
+			schedule();
+		}
+		set_current_state(TASK_RUNNING);
+
+		/* Process stuff */
+		clear_bit(RFCOMM_SCHED_WAKEUP, &rfcomm_event);
+		rfcomm_process_sessions();
+	}
 
 	rfcomm_kill_listener();
 
-	atomic_dec(&running);
 	return 0;
 }
 
@@ -2056,7 +2044,11 @@ static int __init rfcomm_init(void)
 
 	hci_register_cb(&rfcomm_cb);
 
-	kernel_thread(rfcomm_run, NULL, CLONE_KERNEL);
+	rfcomm_thread = kthread_run(rfcomm_run, NULL, "krfcommd");
+	if (IS_ERR(rfcomm_thread)) {
+		hci_unregister_cb(&rfcomm_cb);
+		return PTR_ERR(rfcomm_thread);
+	}
 
 	if (class_create_file(bt_class, &class_attr_rfcomm_dlc) < 0)
 		BT_ERR("Failed to create RFCOMM info file");
@@ -2078,14 +2070,7 @@ static void __exit rfcomm_exit(void)
 
 	hci_unregister_cb(&rfcomm_cb);
 
-	/* Terminate working thread.
-	 * ie. Set terminate flag and wake it up */
-	atomic_inc(&terminate);
-	rfcomm_schedule(RFCOMM_SCHED_STATE);
-
-	/* Wait until thread is running */
-	while (atomic_read(&running))
-		schedule();
+	kthread_stop(rfcomm_thread);
 
 #ifdef CONFIG_BT_RFCOMM_TTY
 	rfcomm_cleanup_ttys();

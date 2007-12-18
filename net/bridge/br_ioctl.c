@@ -18,6 +18,7 @@
 #include <linux/if_bridge.h>
 #include <linux/netdevice.h>
 #include <linux/times.h>
+#include <net/net_namespace.h>
 #include <asm/uaccess.h>
 #include "br_private.h"
 
@@ -27,7 +28,9 @@ static int get_bridge_ifindices(int *indices, int num)
 	struct net_device *dev;
 	int i = 0;
 
-	for (dev = dev_base; dev && i < num; dev = dev->next) {
+	for_each_netdev(&init_net, dev) {
+		if (i >= num)
+			break;
 		if (dev->priv_flags & IFF_EBRIDGE)
 			indices[i++] = dev->ifindex;
 	}
@@ -88,7 +91,7 @@ static int add_del_if(struct net_bridge *br, int ifindex, int isadd)
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	dev = dev_get_by_index(ifindex);
+	dev = dev_get_by_index(&init_net, ifindex);
 	if (dev == NULL)
 		return -EINVAL;
 
@@ -137,7 +140,8 @@ static int old_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		b.topology_change = br->topology_change;
 		b.topology_change_detected = br->topology_change_detected;
 		b.root_port = br->root_port;
-		b.stp_enabled = br->stp_enabled;
+
+		b.stp_enabled = (br->stp_enabled != BR_NO_STP);
 		b.ageing_time = jiffies_to_clock_t(br->ageing_time);
 		b.hello_timer_value = br_timer_value(&br->hello_timer);
 		b.tcn_timer_value = br_timer_value(&br->tcn_timer);
@@ -251,7 +255,7 @@ static int old_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
 
-		br->stp_enabled = args[1]?1:0;
+		br_stp_set_enabled(br, args[1]);
 		return 0;
 
 	case BRCTL_SET_BRIDGE_PRIORITY:
@@ -361,7 +365,7 @@ static int old_deviceless(void __user *uarg)
 	return -EOPNOTSUPP;
 }
 
-int br_ioctl_deviceless_stub(unsigned int cmd, void __user *uarg)
+int br_ioctl_deviceless_stub(struct net *net, unsigned int cmd, void __user *uarg)
 {
 	switch (cmd) {
 	case SIOCGIFBR:

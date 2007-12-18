@@ -45,6 +45,7 @@
 #include <linux/completion.h>
 
 #include <rdma/ib_verbs.h>
+#include <rdma/ib_umem.h>
 #include <rdma/ib_user_verbs.h>
 
 /*
@@ -147,7 +148,6 @@ void idr_remove_uobj(struct idr *idp, struct ib_uobject *uobj);
 
 struct file *ib_uverbs_alloc_event_file(struct ib_uverbs_file *uverbs_file,
 					int is_async, int *fd);
-void ib_uverbs_release_event_file(struct kref *ref);
 struct ib_uverbs_event_file *ib_uverbs_lookup_comp_file(int fd);
 
 void ib_uverbs_release_ucq(struct ib_uverbs_file *file,
@@ -162,11 +162,6 @@ void ib_uverbs_qp_event_handler(struct ib_event *event, void *context_ptr);
 void ib_uverbs_srq_event_handler(struct ib_event *event, void *context_ptr);
 void ib_uverbs_event_handler(struct ib_event_handler *handler,
 			     struct ib_event *event);
-
-int ib_umem_get(struct ib_device *dev, struct ib_umem *mem,
-		void *addr, size_t size, int write);
-void ib_umem_release(struct ib_device *dev, struct ib_umem *umem);
-void ib_umem_release_on_close(struct ib_device *dev, struct ib_umem *umem);
 
 #define IB_UVERBS_DECLARE_CMD(name)					\
 	ssize_t ib_uverbs_##name(struct ib_uverbs_file *file,		\

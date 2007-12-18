@@ -321,14 +321,13 @@ void unregister_chrdev_region(dev_t from, unsigned count)
 	}
 }
 
-int unregister_chrdev(unsigned int major, const char *name)
+void unregister_chrdev(unsigned int major, const char *name)
 {
 	struct char_device_struct *cd;
 	cd = __unregister_chrdev_region(major, 0, 256);
 	if (cd && cd->cdev)
 		cdev_del(cd->cdev);
 	kfree(cd);
-	return 0;
 }
 
 static DEFINE_SPINLOCK(cdev_lock);
@@ -546,6 +545,7 @@ static struct kobject *base_probe(dev_t dev, int *part, void *data)
 void __init chrdev_init(void)
 {
 	cdev_map = kobj_map_init(base_probe, &chrdevs_lock);
+	bdi_init(&directly_mappable_cdev_bdi);
 }
 
 

@@ -17,7 +17,6 @@
 #include <linux/stat.h>
 #include <linux/param.h>
 #include <linux/time.h>
-#include <linux/smp_lock.h>
 #include "autofs_i.h"
 
 static int autofs4_dir_symlink(struct inode *,struct dentry *,const char *);
@@ -583,24 +582,25 @@ static struct dentry *autofs4_lookup(struct inode *dir, struct dentry *dentry, s
 	oz_mode = autofs4_oz_mode(sbi);
 
 	DPRINTK("pid = %u, pgrp = %u, catatonic = %d, oz_mode = %d",
-		 current->pid, process_group(current), sbi->catatonic, oz_mode);
+		 current->pid, task_pgrp_nr(current), sbi->catatonic, oz_mode);
 
 	unhashed = autofs4_lookup_unhashed(sbi, dentry->d_parent, &dentry->d_name);
 	if (!unhashed) {
 		/*
-		 * Mark the dentry incomplete, but add it. This is needed so
-		 * that the VFS layer knows about the dentry, and we can count
-		 * on catching any lookups through the revalidate.
-		 *
-		 * Let all the hard work be done by the revalidate function that
-		 * needs to be able to do this anyway..
-		 *
-		 * We need to do this before we release the directory semaphore.
+		 * Mark the dentry incomplete but don't hash it. We do this
+		 * to serialize our inode creation operations (symlink and
+		 * mkdir) which prevents deadlock during the callback to
+		 * the daemon. Subsequent user space lookups for the same
+		 * dentry are placed on the wait queue while the daemon
+		 * itself is allowed passage unresticted so the create
+		 * operation itself can then hash the dentry. Finally,
+		 * we check for the hashed dentry and return the newly
+		 * hashed dentry.
 		 */
 		dentry->d_op = &autofs4_root_dentry_operations;
 
 		dentry->d_fsdata = NULL;
-		d_add(dentry, NULL);
+		d_instantiate(dentry, NULL);
 	} else {
 		struct autofs_info *ino = autofs4_dentry_ino(unhashed);
 		DPRINTK("rehash %p with %p", dentry, unhashed);
@@ -608,15 +608,17 @@ static struct dentry *autofs4_lookup(struct inode *dir, struct dentry *dentry, s
 		 * If we are racing with expire the request might not
 		 * be quite complete but the directory has been removed
 		 * so it must have been successful, so just wait for it.
+		 * We need to ensure the AUTOFS_INF_EXPIRING flag is clear
+		 * before continuing as revalidate may fail when calling
+		 * try_to_fill_dentry (returning EAGAIN) if we don't.
 		 */
-		if (ino && (ino->flags & AUTOFS_INF_EXPIRING)) {
+		while (ino && (ino->flags & AUTOFS_INF_EXPIRING)) {
 			DPRINTK("wait for incomplete expire %p name=%.*s",
 				unhashed, unhashed->d_name.len,
 				unhashed->d_name.name);
 			autofs4_wait(sbi, unhashed, NFY_NONE);
 			DPRINTK("request completed");
 		}
-		d_rehash(unhashed);
 		dentry = unhashed;
 	}
 
@@ -659,7 +661,7 @@ static struct dentry *autofs4_lookup(struct inode *dir, struct dentry *dentry, s
 	 * for all system calls, but it should be OK for the operations
 	 * we permit from an autofs.
 	 */
-	if (dentry->d_inode && d_unhashed(dentry)) {
+	if (!oz_mode && d_unhashed(dentry)) {
 		/*
 		 * A user space application can (and has done in the past)
 		 * remove and re-create this directory during the callback.
@@ -717,7 +719,7 @@ static int autofs4_dir_symlink(struct inode *dir,
 	strcpy(cp, symname);
 
 	inode = autofs4_get_inode(dir->i_sb, ino);
-	d_instantiate(dentry, inode);
+	d_add(dentry, inode);
 
 	if (dir == dir->i_sb->s_root->d_inode)
 		dentry->d_op = &autofs4_root_dentry_operations;
@@ -760,7 +762,7 @@ static int autofs4_dir_unlink(struct inode *dir, struct dentry *dentry)
 	struct autofs_info *p_ino;
 	
 	/* This allows root to remove symlinks */
-	if ( !autofs4_oz_mode(sbi) && !capable(CAP_SYS_ADMIN) )
+	if (!autofs4_oz_mode(sbi) && !capable(CAP_SYS_ADMIN))
 		return -EACCES;
 
 	if (atomic_dec_and_test(&ino->count)) {
@@ -834,7 +836,7 @@ static int autofs4_dir_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	struct autofs_info *p_ino;
 	struct inode *inode;
 
-	if ( !autofs4_oz_mode(sbi) )
+	if (!autofs4_oz_mode(sbi))
 		return -EACCES;
 
 	DPRINTK("dentry %p, creating %.*s",
@@ -845,7 +847,7 @@ static int autofs4_dir_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 		return -ENOSPC;
 
 	inode = autofs4_get_inode(dir->i_sb, ino);
-	d_instantiate(dentry, inode);
+	d_add(dentry, inode);
 
 	if (dir == dir->i_sb->s_root->d_inode)
 		dentry->d_op = &autofs4_root_dentry_operations;
@@ -872,11 +874,11 @@ static inline int autofs4_get_set_timeout(struct autofs_sb_info *sbi,
 	int rv;
 	unsigned long ntimeout;
 
-	if ( (rv = get_user(ntimeout, p)) ||
-	     (rv = put_user(sbi->exp_timeout/HZ, p)) )
+	if ((rv = get_user(ntimeout, p)) ||
+	     (rv = put_user(sbi->exp_timeout/HZ, p)))
 		return rv;
 
-	if ( ntimeout > ULONG_MAX/HZ )
+	if (ntimeout > ULONG_MAX/HZ)
 		sbi->exp_timeout = 0;
 	else
 		sbi->exp_timeout = ntimeout * HZ;
@@ -907,7 +909,7 @@ static inline int autofs4_ask_reghost(struct autofs_sb_info *sbi, int __user *p)
 	DPRINTK("returning %d", sbi->needs_reghost);
 
 	status = put_user(sbi->needs_reghost, p);
-	if ( status )
+	if (status)
 		return status;
 
 	sbi->needs_reghost = 0;
@@ -974,13 +976,13 @@ static int autofs4_root_ioctl(struct inode *inode, struct file *filp,
 	void __user *p = (void __user *)arg;
 
 	DPRINTK("cmd = 0x%08x, arg = 0x%08lx, sbi = %p, pgrp = %u",
-		cmd,arg,sbi,process_group(current));
+		cmd,arg,sbi,task_pgrp_nr(current));
 
-	if ( _IOC_TYPE(cmd) != _IOC_TYPE(AUTOFS_IOC_FIRST) ||
-	     _IOC_NR(cmd) - _IOC_NR(AUTOFS_IOC_FIRST) >= AUTOFS_IOC_COUNT )
+	if (_IOC_TYPE(cmd) != _IOC_TYPE(AUTOFS_IOC_FIRST) ||
+	     _IOC_NR(cmd) - _IOC_NR(AUTOFS_IOC_FIRST) >= AUTOFS_IOC_COUNT)
 		return -ENOTTY;
 	
-	if ( !autofs4_oz_mode(sbi) && !capable(CAP_SYS_ADMIN) )
+	if (!autofs4_oz_mode(sbi) && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	
 	switch(cmd) {

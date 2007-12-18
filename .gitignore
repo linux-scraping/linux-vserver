@@ -7,10 +7,12 @@
 #
 .*
 *.o
+*.o.*
 *.a
 *.s
 *.ko
 *.so
+*.so.dbg
 *.mod.c
 *.i
 *.lst
@@ -22,8 +24,10 @@
 tags
 TAGS
 vmlinux*
+!vmlinux.lds.S
 System.map
 Module.symvers
+!.gitignore
 
 #
 # Generated include files
@@ -45,3 +49,6 @@ series
 
 # cscope files
 cscope.*
+
+*.orig
+*.rej

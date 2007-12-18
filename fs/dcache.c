@@ -21,7 +21,6 @@
 #include <linux/fsnotify.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/hash.h>
 #include <linux/cache.h>
 #include <linux/module.h>
@@ -40,7 +39,7 @@ int sysctl_vfs_cache_pressure __read_mostly = 100;
 EXPORT_SYMBOL_GPL(sysctl_vfs_cache_pressure);
 
  __cacheline_aligned_in_smp DEFINE_SPINLOCK(dcache_lock);
-static __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
+__cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
 
 EXPORT_SYMBOL(dcache_lock);
 
@@ -122,6 +121,28 @@ static void dentry_iput(struct dentry * dentry)
 	}
 }
 
+/**
+ * d_kill - kill dentry and return parent
+ * @dentry: dentry to kill
+ *
+ * Called with dcache_lock and d_lock, releases both.  The dentry must
+ * already be unhashed and removed from the LRU.
+ *
+ * If this is the root of the dentry tree, return NULL.
+ */
+static struct dentry *d_kill(struct dentry *dentry)
+{
+	struct dentry *parent;
+
+	list_del(&dentry->d_u.d_child);
+	dentry_stat.nr_dentry--;	/* For d_free, below */
+	/*drops the locks, at that point nobody can reach this dentry */
+	dentry_iput(dentry);
+	parent = dentry->d_parent;
+	d_free(dentry);
+	return dentry == parent ? NULL : parent;
+}
+
 /* 
  * This is dput
  *
@@ -193,28 +214,17 @@ repeat:
 
 unhash_it:
 	__d_drop(dentry);
-
-kill_it: {
-		struct dentry *parent;
-
-		/* If dentry was on d_lru list
-		 * delete it from there
-		 */
-  		if (!list_empty(&dentry->d_lru)) {
-  			list_del(&dentry->d_lru);
-  			dentry_stat.nr_unused--;
-  		}
-  		list_del(&dentry->d_u.d_child);
-		dentry_stat.nr_dentry--;	/* For d_free, below */
-		/*drops the locks, at that point nobody can reach this dentry */
-		dentry_iput(dentry);
-		parent = dentry->d_parent;
-		d_free(dentry);
-		if (dentry == parent)
-			return;
-		dentry = parent;
-		goto repeat;
+kill_it:
+	/* If dentry was on d_lru list
+	 * delete it from there
+	 */
+	if (!list_empty(&dentry->d_lru)) {
+		list_del(&dentry->d_lru);
+		dentry_stat.nr_unused--;
 	}
+	dentry = d_kill(dentry);
+	if (dentry)
+		goto repeat;
 }
 
 /**
@@ -376,22 +386,37 @@ restart:
  * Throw away a dentry - free the inode, dput the parent.  This requires that
  * the LRU list has already been removed.
  *
+ * Try to prune ancestors as well.  This is necessary to prevent
+ * quadratic behavior of shrink_dcache_parent(), but is also expected
+ * to be beneficial in reducing dentry cache fragmentation.
+ *
  * Called with dcache_lock, drops it and then regains.
  * Called with dentry->d_lock held, drops it.
  */
 static void prune_one_dentry(struct dentry * dentry)
 {
-	struct dentry * parent;
-
 	__d_drop(dentry);
-	list_del(&dentry->d_u.d_child);
-	dentry_stat.nr_dentry--;	/* For d_free, below */
-	dentry_iput(dentry);
-	parent = dentry->d_parent;
-	d_free(dentry);
-	if (parent != dentry)
-		dput(parent);
+	dentry = d_kill(dentry);
+
+	/*
+	 * Prune ancestors.  Locking is simpler than in dput(),
+	 * because dcache_lock needs to be taken anyway.
+	 */
 	spin_lock(&dcache_lock);
+	while (dentry) {
+		if (!atomic_dec_and_lock(&dentry->d_count, &dentry->d_lock))
+			return;
+
+		if (dentry->d_op && dentry->d_op->d_delete)
+			dentry->d_op->d_delete(dentry);
+		if (!list_empty(&dentry->d_lru)) {
+			list_del(&dentry->d_lru);
+			dentry_stat.nr_unused--;
+		}
+		__d_drop(dentry);
+		dentry = d_kill(dentry);
+		spin_lock(&dcache_lock);
+	}
 }
 
 /**
@@ -533,18 +558,18 @@ void shrink_dcache_sb(struct super_block * sb)
 	 * superblock to the most recent end of the unused list.
 	 */
 	spin_lock(&dcache_lock);
-	list_for_each_safe(tmp, next, &dentry_unused) {
+	list_for_each_prev_safe(tmp, next, &dentry_unused) {
 		dentry = list_entry(tmp, struct dentry, d_lru);
 		if (dentry->d_sb != sb)
 			continue;
-		list_move(tmp, &dentry_unused);
+		list_move_tail(tmp, &dentry_unused);
 	}
 
 	/*
 	 * Pass two ... free the dentries for this superblock.
 	 */
 repeat:
-	list_for_each_safe(tmp, next, &dentry_unused) {
+	list_for_each_prev_safe(tmp, next, &dentry_unused) {
 		dentry = list_entry(tmp, struct dentry, d_lru);
 		if (dentry->d_sb != sb)
 			continue;
@@ -859,6 +884,11 @@ static int shrink_dcache_memory(int nr, gfp_t gfp_mask)
 	return (dentry_stat.nr_unused / 100) * sysctl_vfs_cache_pressure;
 }
 
+static struct shrinker dcache_shrinker = {
+	.shrink = shrink_dcache_memory,
+	.seeks = DEFAULT_SEEKS,
+};
+
 /**
  * d_alloc	-	allocate a dcache entry
  * @parent: parent of entry to allocate
@@ -877,7 +907,7 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 	if (!vx_dentry_avail(1))
 		return NULL;
 
-	dentry = kmem_cache_alloc(dentry_cache, GFP_KERNEL); 
+	dentry = kmem_cache_alloc(dentry_cache, GFP_KERNEL);
 	if (!dentry)
 		return NULL;
 
@@ -1459,6 +1489,8 @@ static void switch_names(struct dentry *dentry, struct dentry *target)
 			 * dentry:internal, target:external.  Steal target's
 			 * storage and make target internal.
 			 */
+			memcpy(target->d_iname, dentry->d_name.name,
+					dentry->d_name.len + 1);
 			dentry->d_name.name = target->d_name.name;
 			target->d_name.name = target->d_iname;
 		}
@@ -1490,8 +1522,8 @@ static void switch_names(struct dentry *dentry, struct dentry *target)
  * This forceful removal will result in ugly /proc output if
  * somebody holds a file open that got deleted due to a rename.
  * We could be nicer about the deleted file, and let it show
- * up under the name it got deleted rather than the name that
- * deleted it.
+ * up under the name it had before it was deleted rather than
+ * under the original name of the file that was moved on top of it.
  */
  
 /*
@@ -1522,7 +1554,7 @@ static void d_move_locked(struct dentry * dentry, struct dentry * target)
 	}
 
 	/* Move the dentry to the target hash queue, if on different bucket */
-	if (dentry->d_flags & DCACHE_UNHASHED)
+	if (d_unhashed(dentry))
 		goto already_unhashed;
 
 	hlist_del_rcu(&dentry->d_hash);
@@ -1833,6 +1865,16 @@ char * d_path(struct dentry *dentry, struct vfsmount *vfsmnt,
 	struct vfsmount *rootmnt;
 	struct dentry *root;
 
+	/*
+	 * We have various synthetic filesystems that never get mounted.  On
+	 * these filesystems dentries are never used for lookup purposes, and
+	 * thus don't need to be hashed.  They also don't need a name until a
+	 * user wants to identify the object in /proc/pid/fd/.  The little hack
+	 * below allows us to generate a name for these objects on demand:
+	 */
+	if (dentry->d_op && dentry->d_op->d_dname)
+		return dentry->d_op->d_dname(dentry, buf, buflen);
+
 	read_lock(&current->fs->lock);
 	rootmnt = mntget(current->fs->rootmnt);
 	root = dget(current->fs->root);
@@ -1843,6 +1885,27 @@ char * d_path(struct dentry *dentry, struct vfsmount *vfsmnt,
 	dput(root);
 	mntput(rootmnt);
 	return res;
+}
+
+/*
+ * Helper function for dentry_operations.d_dname() members
+ */
+char *dynamic_dname(struct dentry *dentry, char *buffer, int buflen,
+			const char *fmt, ...)
+{
+	va_list args;
+	char temp[64];
+	int sz;
+
+	va_start(args, fmt);
+	sz = vsnprintf(temp, sizeof(temp), fmt, args) + 1;
+	va_end(args);
+
+	if (sz > sizeof(temp) || sz > buflen)
+		return ERR_PTR(-ENAMETOOLONG);
+
+	buffer += buflen - sz;
+	return memcpy(buffer, temp, sz);
 }
 
 /*
@@ -2053,7 +2116,7 @@ static void __init dcache_init_early(void)
 		INIT_HLIST_HEAD(&dentry_hashtable[loop]);
 }
 
-static void __init dcache_init(unsigned long mempages)
+static void __init dcache_init(void)
 {
 	int loop;
 
@@ -2062,14 +2125,10 @@ static void __init dcache_init(unsigned long mempages)
 	 * but it is probably not worth it because of the cache nature
 	 * of the dcache. 
 	 */
-	dentry_cache = kmem_cache_create("dentry_cache",
-					 sizeof(struct dentry),
-					 0,
-					 (SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
-					 SLAB_MEM_SPREAD),
-					 NULL, NULL);
+	dentry_cache = KMEM_CACHE(dentry,
+		SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|SLAB_MEM_SPREAD);
 	
-	set_shrinker(DEFAULT_SEEKS, shrink_dcache_memory);
+	register_shrinker(&dcache_shrinker);
 
 	/* Hash may have been set up in dcache_init_early */
 	if (!hashdist)
@@ -2114,15 +2173,15 @@ void __init vfs_caches_init(unsigned long mempages)
 	mempages -= reserve;
 
 	names_cachep = kmem_cache_create("names_cache", PATH_MAX, 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL, NULL);
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
 
 	filp_cachep = kmem_cache_create("filp", sizeof(struct file), 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL, NULL);
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
 
-	dcache_init(mempages);
-	inode_init(mempages);
+	dcache_init();
+	inode_init();
 	files_init(mempages);
-	mnt_init(mempages);
+	mnt_init();
 	bdev_cache_init();
 	chrdev_init();
 }

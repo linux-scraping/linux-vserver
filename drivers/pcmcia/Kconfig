@@ -2,9 +2,7 @@
 # PCCARD (PCMCIA/CardBus) bus subsystem configuration
 #
 
-menu "PCCARD (PCMCIA/CardBus) support"
-
-config PCCARD
+menuconfig PCCARD
 	tristate "PCCard (PCMCIA/CardBus) support"
 	depends on HOTPLUG
 	---help---
@@ -180,14 +178,15 @@ config TCIC
 	  PCMCIA cards are plugged into. If unsure, say N.
 
 config PCMCIA_M8XX
-        tristate "MPC8xx PCMCIA support"
-        depends on PCMCIA && PPC && 8xx 
-        select PCCARD_IODYN
-        help
-        Say Y here to include support for PowerPC 8xx series PCMCIA
-        controller.
+	tristate "MPC8xx PCMCIA support"
+	depends on PCMCIA && PPC && 8xx
+	select PCCARD_IODYN
+	select PCCARD_NONSTATIC
+	help
+	  Say Y here to include support for PowerPC 8xx series PCMCIA
+	  controller.
 
-        This driver is also available as a module called m8xx_pcmcia.
+	  This driver is also available as a module called m8xx_pcmcia.
 
 config HD64465_PCMCIA
 	tristate "HD64465 host bridge support"
@@ -270,6 +269,13 @@ config AT91_CF
 	  Say Y here to support the CompactFlash controller on AT91 chips.
 	  Or choose M to compile the driver as a module named "at91_cf".
 
+config ELECTRA_CF
+	tristate "Electra CompactFlash Controller"
+	depends on PCMCIA && PPC_PASEMI
+	help
+	  Say Y here to support the CompactFlash controller on the
+	  PA Semi Electra eval board.
+
 config PCCARD_NONSTATIC
 	tristate
 
@@ -277,5 +283,3 @@ config PCCARD_IODYN
 	bool
 
 endif	# PCCARD
-
-endmenu

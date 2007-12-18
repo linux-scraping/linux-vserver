@@ -3,7 +3,7 @@
  *
  *  Copyright (C) 1995  Linus Torvalds
  *  Modifications for ARM processor (c) 1995-2001 Russell King
- *  Thumb aligment fault fixups (c) 2004 MontaVista Software, Inc.
+ *  Thumb alignment fault fixups (c) 2004 MontaVista Software, Inc.
  *  - Adapted from gdb/sim/arm/thumbemu.c -- Thumb instruction emulation.
  *    Copyright (C) 1996, Cygnus Software Technologies Ltd.
  *
@@ -15,7 +15,6 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
-#include <linux/ptrace.h>
 #include <linux/proc_fs.h>
 #include <linux/init.h>
 
@@ -631,7 +630,7 @@ do_alignment(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 
 	fs = get_fs();
 	set_fs(KERNEL_DS);
-	if thumb_mode(regs) {
+	if (thumb_mode(regs)) {
 		fault = __get_user(tinstr, (u16 *)(instrptr & ~1));
 		if (!(fault))
 			instr = thumb2arm(tinstr);
@@ -758,7 +757,7 @@ do_alignment(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	if (ai_usermode & 1)
 		printk("Alignment trap: %s (%d) PC=0x%08lx Instr=0x%0*lx "
 		       "Address=0x%08lx FSR 0x%03x\n", current->comm,
-			current->pid, instrptr,
+			task_pid_nr(current), instrptr,
 		        thumb_mode(regs) ? 4 : 8,
 		        thumb_mode(regs) ? tinstr : instr,
 		        addr, fsr);

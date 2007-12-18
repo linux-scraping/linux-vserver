@@ -8,7 +8,7 @@
  * Tony Lindgren <tony@atomide.com> and Imre Deak <imre.deak@nokia.com>
  * Copyright (C) 2005 Nokia Corporation
  *
- * Cleaned up by Juha Yrjölä <juha.yrjola@nokia.com>
+ * Cleaned up by Juha YrjÃ¶lÃ¤ <juha.yrjola@nokia.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -605,7 +605,8 @@ omap_i2c_probe(struct platform_device *pdev)
 	adap->dev.parent = &pdev->dev;
 
 	/* i2c device drivers may be active on return from add_adapter() */
-	r = i2c_add_adapter(adap);
+	adap->nr = pdev->id;
+	r = i2c_add_numbered_adapter(adap);
 	if (r) {
 		dev_err(dev->dev, "failure adding adapter\n");
 		goto err_free_irq;

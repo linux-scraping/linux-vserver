@@ -65,10 +65,6 @@
 
 /****** Kernel includes ******/
 
-#ifdef MODVERSIONS
-#include <config/modversions.h>
-#endif				
-
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/major.h>
@@ -85,15 +81,16 @@
 #include <linux/string.h>
 #include <linux/fcntl.h>
 #include <linux/ptrace.h>
+#include <linux/mutex.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
+#include <linux/completion.h>
 #include <linux/wait.h>
 #include <linux/pci.h>
 #include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/bitops.h>
 #include <linux/spinlock.h>
-#include <asm/semaphore.h>
 #include <linux/init.h>
 
 /****** RocketPort includes ******/
@@ -552,8 +549,8 @@ static void rp_handle_port(struct r_port *info)
 static void rp_do_poll(unsigned long dummy)
 {
 	CONTROLLER_t *ctlp;
-	int ctrl, aiop, ch, line, i;
-	unsigned int xmitmask;
+	int ctrl, aiop, ch, line;
+	unsigned int xmitmask, i;
 	unsigned int CtlMask;
 	unsigned char AiopMask;
 	Word_t bit;
@@ -566,7 +563,7 @@ static void rp_do_poll(unsigned long dummy)
 		/*  Get a ptr to the board's control struct */
 		ctlp = sCtlNumToCtlPtr(ctrl);
 
-		/*  Get the interupt status from the board */
+		/*  Get the interrupt status from the board */
 #ifdef CONFIG_PCI
 		if (ctlp->BusType == isPCI)
 			CtlMask = sPCIGetControllerIntStatus(ctlp);
@@ -639,12 +636,11 @@ static void init_r_port(int board, int aiop, int chan, struct pci_dev *pci_dev)
 	ctlp = sCtlNumToCtlPtr(board);
 
 	/*  Get a r_port struct for the port, fill it in and save it globally, indexed by line number */
-	info = kmalloc(sizeof (struct r_port), GFP_KERNEL);
+	info = kzalloc(sizeof (struct r_port), GFP_KERNEL);
 	if (!info) {
 		printk(KERN_INFO "Couldn't allocate info struct for line #%d\n", line);
 		return;
 	}
-	memset(info, 0, sizeof (struct r_port));
 
 	info->magic = RPORT_MAGIC;
 	info->line = line;
@@ -655,7 +651,7 @@ static void init_r_port(int board, int aiop, int chan, struct pci_dev *pci_dev)
 	info->closing_wait = 3000;
 	info->close_delay = 50;
 	init_waitqueue_head(&info->open_wait);
-	init_waitqueue_head(&info->close_wait);
+	init_completion(&info->close_wait);
 	info->flags &= ~ROCKET_MODE_MASK;
 	switch (pc104[board][line]) {
 	case 422:
@@ -702,10 +698,10 @@ static void init_r_port(int board, int aiop, int chan, struct pci_dev *pci_dev)
 		}
 	}
 	spin_lock_init(&info->slock);
-	sema_init(&info->write_sem, 1);
+	mutex_init(&info->write_mtx);
 	rp_table[line] = info;
-	if (pci_dev)
-		tty_register_device(rocket_driver, line, &pci_dev->dev);
+	tty_register_device(rocket_driver, line, pci_dev ? &pci_dev->dev :
+			NULL);
 }
 
 /*
@@ -883,7 +879,8 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 	if (tty_hung_up_p(filp))
 		return ((info->flags & ROCKET_HUP_NOTIFY) ? -EAGAIN : -ERESTARTSYS);
 	if (info->flags & ROCKET_CLOSING) {
-		interruptible_sleep_on(&info->close_wait);
+		if (wait_for_completion_interruptible(&info->close_wait))
+			return -ERESTARTSYS;
 		return ((info->flags & ROCKET_HUP_NOTIFY) ? -EAGAIN : -ERESTARTSYS);
 	}
 
@@ -947,7 +944,7 @@ static int block_til_ready(struct tty_struct *tty, struct file *filp,
 #endif
 		schedule();	/*  Don't hold spinlock here, will hang PC */
 	}
-	current->state = TASK_RUNNING;
+	__set_current_state(TASK_RUNNING);
 	remove_wait_queue(&info->open_wait, &wait);
 
 	spin_lock_irqsave(&info->slock, flags);
@@ -988,8 +985,10 @@ static int rp_open(struct tty_struct *tty, struct file *filp)
 		return -ENOMEM;
 
 	if (info->flags & ROCKET_CLOSING) {
-		interruptible_sleep_on(&info->close_wait);
+		retval = wait_for_completion_interruptible(&info->close_wait);
 		free_page(page);
+		if (retval)
+			return retval;
 		return ((info->flags & ROCKET_HUP_NOTIFY) ? -EAGAIN : -ERESTARTSYS);
 	}
 
@@ -1018,9 +1017,6 @@ static int rp_open(struct tty_struct *tty, struct file *filp)
 	/*
 	 * Info->count is now 1; so it's safe to sleep now.
 	 */
-	info->session = process_session(current);
-	info->pgrp = process_group(current);
-
 	if ((info->flags & ROCKET_INITIALIZED) == 0) {
 		cp = &info->channel;
 		sSetRxTrigger(cp, TRIG_1);
@@ -1184,7 +1180,7 @@ static void rp_close(struct tty_struct *tty, struct file *filp)
 	}
 	info->flags &= ~(ROCKET_INITIALIZED | ROCKET_CLOSING | ROCKET_NORMAL_ACTIVE);
 	tty->closing = 0;
-	wake_up_interruptible(&info->close_wait);
+	complete_all(&info->close_wait);
 	atomic_dec(&rp_num_ports_open);
 
 #ifdef ROCKET_DEBUG_OPEN
@@ -1602,7 +1598,7 @@ static void rp_wait_until_sent(struct tty_struct *tty, int timeout)
 		if (signal_pending(current))
 			break;
 	}
-	current->state = TASK_RUNNING;
+	__set_current_state(TASK_RUNNING);
 #ifdef ROCKET_DEBUG_WAIT_UNTIL_SENT
 	printk(KERN_INFO "txcnt = %d (jiff=%lu)...done\n", txcnt, jiffies);
 #endif
@@ -1661,8 +1657,11 @@ static void rp_put_char(struct tty_struct *tty, unsigned char ch)
 	if (rocket_paranoia_check(info, "rp_put_char"))
 		return;
 
-	/*  Grab the port write semaphore, locking out other processes that try to write to this port */
-	down(&info->write_sem);
+	/*
+	 * Grab the port write mutex, locking out other processes that try to
+	 * write to this port
+	 */
+	mutex_lock(&info->write_mtx);
 
 #ifdef ROCKET_DEBUG_WRITE
 	printk(KERN_INFO "rp_put_char %c...", ch);
@@ -1684,12 +1683,12 @@ static void rp_put_char(struct tty_struct *tty, unsigned char ch)
 		info->xmit_fifo_room--;
 	}
 	spin_unlock_irqrestore(&info->slock, flags);
-	up(&info->write_sem);
+	mutex_unlock(&info->write_mtx);
 }
 
 /*
  *  Exception handler - write routine, called when user app writes to the device.
- *  A per port write semaphore is used to protect from another process writing to
+ *  A per port write mutex is used to protect from another process writing to
  *  this port at the same time.  This other process could be running on the other CPU
  *  or get control of the CPU if the copy_from_user() blocks due to a page fault (swapped out). 
  *  Spinlocks protect the info xmit members.
@@ -1706,7 +1705,8 @@ static int rp_write(struct tty_struct *tty,
 	if (count <= 0 || rocket_paranoia_check(info, "rp_write"))
 		return 0;
 
-	down_interruptible(&info->write_sem);
+	if (mutex_lock_interruptible(&info->write_mtx))
+		return -ERESTARTSYS;
 
 #ifdef ROCKET_DEBUG_WRITE
 	printk(KERN_INFO "rp_write %d chars...", count);
@@ -1777,7 +1777,7 @@ end:
 		wake_up_interruptible(&tty->poll_wait);
 #endif
 	}
-	up(&info->write_sem);
+	mutex_unlock(&info->write_mtx);
 	return retval;
 }
 
@@ -1852,6 +1852,12 @@ static void rp_flush_buffer(struct tty_struct *tty)
 
 #ifdef CONFIG_PCI
 
+static struct pci_device_id __devinitdata rocket_pci_ids[] = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_RP, PCI_ANY_ID) },
+	{ }
+};
+MODULE_DEVICE_TABLE(pci, rocket_pci_ids);
+
 /*
  *  Called when a PCI card is found.  Retrieves and stores model information,
  *  init's aiopic and serial port hardware.
@@ -1867,8 +1873,6 @@ static __init int register_PCI(int i, struct pci_dev *dev)
 	int fast_clock = 0;
 	int altChanRingIndicator = 0;
 	int ports_per_aiop = 8;
-	int ret;
-	unsigned int class_rev;
 	WordIO_t ConfigIO = 0;
 	ByteIO_t UPCIRingInd = 0;
 
@@ -1876,12 +1880,6 @@ static __init int register_PCI(int i, struct pci_dev *dev)
 		return 0;
 
 	rcktpt_io_addr[i] = pci_resource_start(dev, 0);
-	ret = pci_read_config_dword(dev, PCI_CLASS_REVISION, &class_rev);
-
-	if (ret) {
-		printk(KERN_INFO "  Error during register_PCI(), unable to read config dword \n");
-		return 0;
-	}
 
 	rcktpt_type[i] = ROCKET_TYPE_NORMAL;
 	rocketModel[i].loadrm2 = 0;
@@ -2035,8 +2033,9 @@ static __init int register_PCI(int i, struct pci_dev *dev)
 		ports_per_aiop = 6;
 		str = "6-port";
 
-		/*  If class_rev is 1, the rocketmodem flash must be loaded.  If it is 2 it is a "socketed" version. */
-		if ((class_rev & 0xFF) == 1) {
+		/*  If revision is 1, the rocketmodem flash must be loaded.
+		 *  If it is 2 it is a "socketed" version. */
+		if (dev->revision == 1) {
 			rcktpt_type[i] = ROCKET_TYPE_MODEMII;
 			rocketModel[i].loadrm2 = 1;
 		} else {
@@ -2051,7 +2050,7 @@ static __init int register_PCI(int i, struct pci_dev *dev)
 		max_num_aiops = 1;
 		ports_per_aiop = 4;
 		str = "4-port";
-		if ((class_rev & 0xFF) == 1) {
+		if (dev->revision == 1) {
 			rcktpt_type[i] = ROCKET_TYPE_MODEMII;
 			rocketModel[i].loadrm2 = 1;
 		} else {
@@ -2360,26 +2359,14 @@ static const struct tty_operations rocket_ops = {
  */
 static int __init rp_init(void)
 {
-	int retval, pci_boards_found, isa_boards_found, i;
+	int ret = -ENOMEM, pci_boards_found, isa_boards_found, i;
 
 	printk(KERN_INFO "RocketPort device driver module, version %s, %s\n",
 	       ROCKET_VERSION, ROCKET_DATE);
 
 	rocket_driver = alloc_tty_driver(MAX_RP_PORTS);
 	if (!rocket_driver)
-		return -ENOMEM;
-
-	/*
-	 * Initialize the array of pointers to our own internal state
-	 * structures.
-	 */
-	memset(rp_table, 0, sizeof (rp_table));
-	memset(xmit_flags, 0, sizeof (xmit_flags));
-
-	for (i = 0; i < MAX_RP_PORTS; i++)
-		lineNumbers[i] = 0;
-	nextLineNumber = 0;
-	memset(rocketModel, 0, sizeof (rocketModel));
+		goto err;
 
 	/*
 	 *  If board 1 is non-zero, there is at least one ISA configured.  If controller is 
@@ -2394,8 +2381,11 @@ static int __init rp_init(void)
 
 	/*  If an ISA card is configured, reserve the 4 byte IO space for the Mudbac controller */
 	if (controller && (!request_region(controller, 4, "Comtrol RocketPort"))) {
-		printk(KERN_INFO "Unable to reserve IO region for first configured ISA RocketPort controller 0x%lx.  Driver exiting \n", controller);
-		return -EBUSY;
+		printk(KERN_ERR "Unable to reserve IO region for first "
+			"configured ISA RocketPort controller 0x%lx.  "
+			"Driver exiting\n", controller);
+		ret = -EBUSY;
+		goto err_tty;
 	}
 
 	/*  Store ISA variable retrieved from command line or .conf file. */
@@ -2432,15 +2422,14 @@ static int __init rp_init(void)
 	rocket_driver->init_termios.c_ispeed = 9600;
 	rocket_driver->init_termios.c_ospeed = 9600;
 #ifdef ROCKET_SOFT_FLOW
-	rocket_driver->flags |= TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV;
+	rocket_driver->flags |= TTY_DRIVER_REAL_RAW;
 #endif
 	tty_set_operations(rocket_driver, &rocket_ops);
 
-	retval = tty_register_driver(rocket_driver);
-	if (retval < 0) {
-		printk(KERN_INFO "Couldn't install tty RocketPort driver (error %d)\n", -retval);
-		put_tty_driver(rocket_driver);
-		return -1;
+	ret = tty_register_driver(rocket_driver);
+	if (ret < 0) {
+		printk(KERN_ERR "Couldn't install tty RocketPort driver\n");
+		goto err_tty;
 	}
 
 #ifdef ROCKET_DEBUG_OPEN
@@ -2467,14 +2456,18 @@ static int __init rp_init(void)
 	max_board = pci_boards_found + isa_boards_found;
 
 	if (max_board == 0) {
-		printk(KERN_INFO "No rocketport ports found; unloading driver.\n");
-		del_timer_sync(&rocket_timer);
-		tty_unregister_driver(rocket_driver);
-		put_tty_driver(rocket_driver);
-		return -ENXIO;
+		printk(KERN_ERR "No rocketport ports found; unloading driver\n");
+		ret = -ENXIO;
+		goto err_ttyu;
 	}
 
 	return 0;
+err_ttyu:
+	tty_unregister_driver(rocket_driver);
+err_tty:
+	put_tty_driver(rocket_driver);
+err:
+	return ret;
 }
 
 
@@ -2489,10 +2482,14 @@ static void rp_cleanup_module(void)
 	if (retval)
 		printk(KERN_INFO "Error %d while trying to unregister "
 		       "rocketport driver\n", -retval);
-	put_tty_driver(rocket_driver);
 
 	for (i = 0; i < MAX_RP_PORTS; i++)
-		kfree(rp_table[i]);
+		if (rp_table[i]) {
+			tty_unregister_device(rocket_driver, i);
+			kfree(rp_table[i]);
+		}
+
+	put_tty_driver(rocket_driver);
 
 	for (i = 0; i < NUM_BOARDS; i++) {
 		if (rcktpt_io_addr[i] <= 0 || is_PCI[i])

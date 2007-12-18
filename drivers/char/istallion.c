@@ -1753,9 +1753,6 @@ static void stli_settermios(struct tty_struct *tty, struct ktermios *old)
 		return;
 
 	tiosp = tty->termios;
-	if ((tiosp->c_cflag == old->c_cflag) &&
-	    (tiosp->c_iflag == old->c_iflag))
-		return;
 
 	stli_mkasyport(portp, &aport, tiosp);
 	stli_cmdwait(brdp, portp, A_SETPORT, &aport, sizeof(asyport_t), 0);
@@ -2166,14 +2163,10 @@ static void __stli_sendcmd(struct stlibrd *brdp, struct stliport *portp, unsigne
 	cdkhdr_t __iomem *hdrp;
 	cdkctrl_t __iomem *cp;
 	unsigned char __iomem *bits;
-	unsigned long flags;
-
-	spin_lock_irqsave(&brd_lock, flags);
 
 	if (test_bit(ST_CMDING, &portp->state)) {
 		printk(KERN_ERR "STALLION: command already busy, cmd=%x!\n",
 				(int) cmd);
-		spin_unlock_irqrestore(&brd_lock, flags);
 		return;
 	}
 
@@ -2194,7 +2187,6 @@ static void __stli_sendcmd(struct stlibrd *brdp, struct stliport *portp, unsigne
 	writeb(readb(bits) | portp->portbit, bits);
 	set_bit(ST_CMDING, &portp->state);
 	EBRDDISABLE(brdp);
-	spin_unlock_irqrestore(&brd_lock, flags);
 }
 
 static void stli_sendcmd(struct stlibrd *brdp, struct stliport *portp, unsigned long cmd, void *arg, int size, int copyback)
@@ -3218,12 +3210,12 @@ static int stli_initecp(struct stlibrd *brdp)
 		goto err;
 	}
 
+	brdp->iosize = ECP_IOSIZE;
+
 	if (!request_region(brdp->iobase, brdp->iosize, "istallion")) {
 		retval = -EIO;
 		goto err;
 	}
-
-	brdp->iosize = ECP_IOSIZE;
 
 /*
  *	Based on the specific board type setup the common vars to access
@@ -4632,9 +4624,8 @@ static int __init istallion_module_init(void)
 
 	istallion_class = class_create(THIS_MODULE, "staliomem");
 	for (i = 0; i < 4; i++)
-		class_device_create(istallion_class, NULL,
-				MKDEV(STL_SIOMEMMAJOR, i),
-				NULL, "staliomem%d", i);
+		device_create(istallion_class, NULL, MKDEV(STL_SIOMEMMAJOR, i),
+			      "staliomem%d", i);
 
 	return 0;
 err_deinit:
@@ -4667,8 +4658,7 @@ static void __exit istallion_module_exit(void)
 	unregister_chrdev(STL_SIOMEMMAJOR, "staliomem");
 
 	for (j = 0; j < 4; j++)
-		class_device_destroy(istallion_class, MKDEV(STL_SIOMEMMAJOR,
-					j));
+		device_destroy(istallion_class, MKDEV(STL_SIOMEMMAJOR, j));
 	class_destroy(istallion_class);
 
 	pci_unregister_driver(&stli_pcidriver);

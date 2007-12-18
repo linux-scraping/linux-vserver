@@ -212,13 +212,13 @@ static void cn_rx_skb(struct sk_buff *__skb)
 	skb = skb_get(__skb);
 
 	if (skb->len >= NLMSG_SPACE(0)) {
-		nlh = (struct nlmsghdr *)skb->data;
+		nlh = nlmsg_hdr(skb);
 
 		if (nlh->nlmsg_len < sizeof(struct cn_msg) ||
 		    skb->len < nlh->nlmsg_len ||
 		    nlh->nlmsg_len > CONNECTOR_MAX_MSG_SIZE) {
 			kfree_skb(skb);
-			goto out;
+			return;
 		}
 
 		len = NLMSG_ALIGN(nlh->nlmsg_len);
@@ -229,21 +229,6 @@ static void cn_rx_skb(struct sk_buff *__skb)
 		if (err < 0)
 			kfree_skb(skb);
 	}
-
-out:
-	kfree_skb(__skb);
-}
-
-/*
- * Netlink socket input callback - dequeues the skbs and calls the
- * main netlink receiving function.
- */
-static void cn_input(struct sock *sk, int len)
-{
-	struct sk_buff *skb;
-
-	while ((skb = skb_dequeue(&sk->sk_receive_queue)) != NULL)
-		cn_rx_skb(skb);
 }
 
 /*
@@ -442,13 +427,13 @@ static int __devinit cn_init(void)
 	struct cn_dev *dev = &cdev;
 	int err;
 
-	dev->input = cn_input;
+	dev->input = cn_rx_skb;
 	dev->id.idx = cn_idx;
 	dev->id.val = cn_val;
 
-	dev->nls = netlink_kernel_create(NETLINK_CONNECTOR,
+	dev->nls = netlink_kernel_create(&init_net, NETLINK_CONNECTOR,
 					 CN_NETLINK_USERS + 0xf,
-					 dev->input, THIS_MODULE);
+					 dev->input, NULL, THIS_MODULE);
 	if (!dev->nls)
 		return -EIO;
 

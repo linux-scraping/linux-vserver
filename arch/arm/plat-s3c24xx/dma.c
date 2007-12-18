@@ -44,7 +44,7 @@ static struct kmem_cache *dma_kmem;
 
 static int dma_channels;
 
-struct s3c24xx_dma_selection dma_sel;
+static struct s3c24xx_dma_selection dma_sel;
 
 /* dma channel state information */
 struct s3c2410_dma_chan s3c2410_chans[S3C2410_DMA_CHANNELS];
@@ -880,7 +880,7 @@ static int s3c2410_dma_dostop(struct s3c2410_dma_chan *chan)
 	return 0;
 }
 
-void s3c2410_dma_waitforstop(struct s3c2410_dma_chan *chan)
+static void s3c2410_dma_waitforstop(struct s3c2410_dma_chan *chan)
 {
 	unsigned long tmp;
 	unsigned int timeout = 0x10000;
@@ -957,8 +957,7 @@ static int s3c2410_dma_flush(struct s3c2410_dma_chan *chan)
 	return 0;
 }
 
-int
-s3c2410_dma_started(struct s3c2410_dma_chan *chan)
+static int s3c2410_dma_started(struct s3c2410_dma_chan *chan)
 {
 	unsigned long flags;
 
@@ -1154,7 +1153,7 @@ EXPORT_SYMBOL(s3c2410_dma_set_buffdone_fn);
  *
  * hwcfg:     the value for xxxSTCn register,
  *            bit 0: 0=increment pointer, 1=leave pointer
- *            bit 1: 0=soucre is AHB, 1=soucre is APB
+ *            bit 1: 0=source is AHB, 1=source is APB
  *
  * devaddr:   physical address of the source
 */
@@ -1273,14 +1272,14 @@ struct sysdev_class dma_sysclass = {
 
 /* kmem cache implementation */
 
-static void s3c2410_dma_cache_ctor(void *p, struct kmem_cache *c, unsigned long f)
+static void s3c2410_dma_cache_ctor(struct kmem_cache *c, void *p)
 {
 	memset(p, 0, sizeof(struct s3c2410_dma_buf));
 }
 
 /* initialisation code */
 
-int __init s3c24xx_dma_sysclass_init(void)
+static int __init s3c24xx_dma_sysclass_init(void)
 {
 	int ret = sysdev_class_register(&dma_sysclass);
 
@@ -1292,7 +1291,7 @@ int __init s3c24xx_dma_sysclass_init(void)
 
 core_initcall(s3c24xx_dma_sysclass_init);
 
-int __init s3c24xx_dma_sysdev_register(void)
+static int __init s3c24xx_dma_sysdev_register(void)
 {
 	struct s3c2410_dma_chan *cp = s3c2410_chans;
 	int channel, ret;
@@ -1334,7 +1333,7 @@ int __init s3c24xx_dma_init(unsigned int channels, unsigned int irq,
 	dma_kmem = kmem_cache_create("dma_desc",
 				     sizeof(struct s3c2410_dma_buf), 0,
 				     SLAB_HWCACHE_ALIGN,
-				     s3c2410_dma_cache_ctor, NULL);
+				     s3c2410_dma_cache_ctor);
 
 	if (dma_kmem == NULL) {
 		printk(KERN_ERR "dma failed to make kmem cache\n");
@@ -1373,7 +1372,7 @@ int __init s3c24xx_dma_init(unsigned int channels, unsigned int irq,
 	return ret;
 }
 
-int s3c2410_dma_init(void)
+int __init s3c2410_dma_init(void)
 {
 	return s3c24xx_dma_init(4, IRQ_DMA0, 0x40);
 }
@@ -1396,7 +1395,7 @@ static struct s3c24xx_dma_order *dma_order;
  * channel
 */
 
-struct s3c2410_dma_chan *s3c2410_dma_map_channel(int channel)
+static struct s3c2410_dma_chan *s3c2410_dma_map_channel(int channel)
 {
 	struct s3c24xx_dma_order_ch *ord = NULL;
 	struct s3c24xx_dma_map *ch_map;

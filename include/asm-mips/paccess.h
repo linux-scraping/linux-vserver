@@ -25,16 +25,16 @@
 extern asmlinkage void handle_ibe(void);
 extern asmlinkage void handle_dbe(void);
 
-#define put_dbe(x,ptr) __put_dbe((x),(ptr),sizeof(*(ptr)))
-#define get_dbe(x,ptr) __get_dbe((x),(ptr),sizeof(*(ptr)))
+#define put_dbe(x, ptr) __put_dbe((x), (ptr), sizeof(*(ptr)))
+#define get_dbe(x, ptr) __get_dbe((x), (ptr), sizeof(*(ptr)))
 
 struct __large_pstruct { unsigned long buf[100]; };
 #define __mp(x) (*(struct __large_pstruct *)(x))
 
-#define __get_dbe(x,ptr,size)						\
+#define __get_dbe(x, ptr, size)						\
 ({									\
 	long __gu_err;							\
-	__typeof(*(ptr)) __gu_val;					\
+	__typeof__(*(ptr)) __gu_val;					\
 	unsigned long __gu_addr;					\
 	__asm__("":"=r" (__gu_val));					\
 	__gu_addr = (unsigned long) (ptr);				\
@@ -70,7 +70,7 @@ struct __large_pstruct { unsigned long buf[100]; };
 
 extern void __get_dbe_unknown(void);
 
-#define __put_dbe(x,ptr,size)						\
+#define __put_dbe(x, ptr, size)						\
 ({									\
 	long __pu_err;							\
 	__typeof__(*(ptr)) __pu_val;					\

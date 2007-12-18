@@ -360,9 +360,9 @@ static void free_sglist (struct scatterlist *sg, int nents)
 	if (!sg)
 		return;
 	for (i = 0; i < nents; i++) {
-		if (!sg [i].page)
+		if (!sg_page(&sg[i]))
 			continue;
-		kfree (page_address (sg [i].page) + sg [i].offset);
+		kfree (sg_virt(&sg[i]));
 	}
 	kfree (sg);
 }
@@ -768,8 +768,8 @@ static void ctrl_complete (struct urb *urb)
 
 		/* some faults are allowed, not required */
 		if (subcase->expected > 0 && (
-			  ((urb->status == -subcase->expected	/* happened */
-			   || urb->status == 0))))		/* didn't */
+			  ((status == -subcase->expected	/* happened */
+			   || status == 0))))			/* didn't */
 			status = 0;
 		/* sometimes more than one fault is allowed */
 		else if (subcase->number == 12 && status == -EPIPE)

@@ -45,20 +45,16 @@ static void __init voyagergx_serial_init(void)
 static struct resource cf_ide_resources[] = {
 	[0] = {
 		.start	= PA_AREA5_IO + 0x1000,
-		.end	= PA_AREA5_IO + 0x1000 + 0x08 - 1,
+		.end	= PA_AREA5_IO + 0x1000 + 0x10 - 0x2,
 		.flags	= IORESOURCE_MEM,
 	},
 	[1] = {
 		.start	= PA_AREA5_IO + 0x80c,
-		.end	= PA_AREA5_IO + 0x80c + 0x16 - 1,
+		.end	= PA_AREA5_IO + 0x80c,
 		.flags	= IORESOURCE_MEM,
 	},
 	[2] = {
-#ifdef CONFIG_RTS7751R2D_REV11
-		.start	= 1,
-#else
-		.start	= 2,
-#endif
+		.start	= IRQ_CF_IDE,
 		.flags	= IORESOURCE_IRQ,
 	},
 };
@@ -77,30 +73,10 @@ static struct platform_device cf_ide_device  = {
 	},
 };
 
-static struct plat_serial8250_port uart_platform_data[] = {
-	{
-		.membase	= (void __iomem *)VOYAGER_UART_BASE,
-		.mapbase	= VOYAGER_UART_BASE,
-		.iotype		= UPIO_MEM,
-		.irq		= VOYAGER_UART0_IRQ,
-		.flags		= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST,
-		.regshift	= 2,
-		.uartclk	= (9600 * 16),
-	}
-};
-
-static struct platform_device uart_device = {
-	.name		= "serial8250",
-	.id		= PLAT8250_DEV_PLATFORM,
-	.dev		= {
-		.platform_data	= uart_platform_data,
-	},
-};
-
 static struct resource heartbeat_resources[] = {
 	[0] = {
 		.start	= PA_OUTPORT,
-		.end	= PA_OUTPORT + 8 - 1,
+		.end	= PA_OUTPORT,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -110,6 +86,28 @@ static struct platform_device heartbeat_device = {
 	.id		= -1,
 	.num_resources	= ARRAY_SIZE(heartbeat_resources),
 	.resource	= heartbeat_resources,
+};
+
+#ifdef CONFIG_MFD_SM501
+static struct plat_serial8250_port uart_platform_data[] = {
+	{
+		.membase	= (void __iomem *)VOYAGER_UART_BASE,
+		.mapbase	= VOYAGER_UART_BASE,
+		.iotype		= UPIO_MEM,
+		.irq		= IRQ_SM501_U0,
+		.flags		= UPF_BOOT_AUTOCONF | UPF_SKIP_TEST,
+		.regshift	= 2,
+		.uartclk	= (9600 * 16),
+	},
+	{ 0 },
+};
+
+static struct platform_device uart_device = {
+	.name		= "serial8250",
+	.id		= PLAT8250_DEV_PLATFORM,
+	.dev		= {
+		.platform_data	= uart_platform_data,
+	},
 };
 
 static struct resource sm501_resources[] = {
@@ -124,7 +122,7 @@ static struct resource sm501_resources[] = {
 		.flags	= IORESOURCE_MEM,
 	},
 	[2]	= {
-		.start	= 32,
+		.start	= IRQ_SM501_CV,
 		.flags	= IORESOURCE_IRQ,
 	},
 };
@@ -136,11 +134,15 @@ static struct platform_device sm501_device = {
 	.resource	= sm501_resources,
 };
 
+#endif /* CONFIG_MFD_SM501 */
+
 static struct platform_device *rts7751r2d_devices[] __initdata = {
+#ifdef CONFIG_MFD_SM501
 	&uart_device,
-	&heartbeat_device,
-	&cf_ide_device,
 	&sm501_device,
+#endif
+	&cf_ide_device,
+	&heartbeat_device,
 };
 
 static int __init rts7751r2d_devices_setup(void)
@@ -153,6 +155,34 @@ __initcall(rts7751r2d_devices_setup);
 static void rts7751r2d_power_off(void)
 {
 	ctrl_outw(0x0001, PA_POWOFF);
+}
+
+static inline unsigned char is_ide_ioaddr(unsigned long addr)
+{
+	return ((cf_ide_resources[0].start <= addr &&
+		 addr <= cf_ide_resources[0].end) ||
+		(cf_ide_resources[1].start <= addr &&
+		 addr <= cf_ide_resources[1].end));
+}
+
+void rts7751r2d_writeb(u8 b, void __iomem *addr)
+{
+	unsigned long tmp = (unsigned long __force)addr;
+
+	if (is_ide_ioaddr(tmp))
+		ctrl_outw((u16)b, tmp);
+	else
+		ctrl_outb(b, tmp);
+}
+
+u8 rts7751r2d_readb(void __iomem *addr)
+{
+	unsigned long tmp = (unsigned long __force)addr;
+
+	if (is_ide_ioaddr(tmp))
+		return ctrl_inw(tmp) & 0xff;
+	else
+		return ctrl_inb(tmp);
 }
 
 /*
@@ -176,17 +206,15 @@ static void __init rts7751r2d_setup(char **cmdline_p)
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_rts7751r2d __initmv = {
+static struct sh_machine_vector mv_rts7751r2d __initmv = {
 	.mv_name		= "RTS7751R2D",
 	.mv_setup		= rts7751r2d_setup,
-	.mv_nr_irqs		= 72,
-
 	.mv_init_irq		= init_rts7751r2d_IRQ,
 	.mv_irq_demux		= rts7751r2d_irq_demux,
-
-#ifdef CONFIG_USB_SM501
+	.mv_writeb		= rts7751r2d_writeb,
+	.mv_readb		= rts7751r2d_readb,
+#if defined(CONFIG_MFD_SM501) && defined(CONFIG_USB_OHCI_HCD)
 	.mv_consistent_alloc	= voyagergx_consistent_alloc,
 	.mv_consistent_free	= voyagergx_consistent_free,
 #endif
 };
-ALIAS_MV(rts7751r2d)

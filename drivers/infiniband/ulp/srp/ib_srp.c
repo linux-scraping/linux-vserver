@@ -47,6 +47,7 @@
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_dbg.h>
 #include <scsi/srp.h>
+#include <scsi/scsi_transport_srp.h>
 
 #include <rdma/ib_cache.h>
 
@@ -75,20 +76,18 @@ module_param(topspin_workarounds, int, 0444);
 MODULE_PARM_DESC(topspin_workarounds,
 		 "Enable workarounds for Topspin/Cisco SRP target bugs if != 0");
 
-static const u8 topspin_oui[3] = { 0x00, 0x05, 0xad };
-
 static int mellanox_workarounds = 1;
 
 module_param(mellanox_workarounds, int, 0444);
 MODULE_PARM_DESC(mellanox_workarounds,
 		 "Enable workarounds for Mellanox SRP target bugs if != 0");
 
-static const u8 mellanox_oui[3] = { 0x00, 0x02, 0xc9 };
-
 static void srp_add_one(struct ib_device *device);
 static void srp_remove_one(struct ib_device *device);
 static void srp_completion(struct ib_cq *cq, void *target_ptr);
 static int srp_cm_handler(struct ib_cm_id *cm_id, struct ib_cm_event *event);
+
+static struct scsi_transport_template *ib_srp_transport_template;
 
 static struct ib_client srp_client = {
 	.name   = "srp",
@@ -106,6 +105,24 @@ static inline struct srp_target_port *host_to_target(struct Scsi_Host *host)
 static const char *srp_target_info(struct Scsi_Host *host)
 {
 	return host_to_target(host)->target_name;
+}
+
+static int srp_target_is_topspin(struct srp_target_port *target)
+{
+	static const u8 topspin_oui[3] = { 0x00, 0x05, 0xad };
+	static const u8 cisco_oui[3]   = { 0x00, 0x1b, 0x0d };
+
+	return topspin_workarounds &&
+		(!memcmp(&target->ioc_guid, topspin_oui, sizeof topspin_oui) ||
+		 !memcmp(&target->ioc_guid, cisco_oui, sizeof cisco_oui));
+}
+
+static int srp_target_is_mellanox(struct srp_target_port *target)
+{
+	static const u8 mellanox_oui[3] = { 0x00, 0x02, 0xc9 };
+
+	return mellanox_workarounds &&
+		!memcmp(&target->ioc_guid, mellanox_oui, sizeof mellanox_oui);
 }
 
 static struct srp_iu *srp_alloc_iu(struct srp_host *host, size_t size,
@@ -197,7 +214,7 @@ static int srp_create_target_ib(struct srp_target_port *target)
 		return -ENOMEM;
 
 	target->cq = ib_create_cq(target->srp_host->dev->dev, srp_completion,
-				  NULL, target, SRP_CQ_SIZE);
+				  NULL, target, SRP_CQ_SIZE, 0);
 	if (IS_ERR(target->cq)) {
 		ret = PTR_ERR(target->cq);
 		goto out;
@@ -271,6 +288,7 @@ static int srp_lookup_path(struct srp_target_port *target)
 						   target->srp_host->dev->dev,
 						   target->srp_host->port,
 						   &target->path,
+						   IB_SA_PATH_REC_SERVICE_ID	|
 						   IB_SA_PATH_REC_DGID		|
 						   IB_SA_PATH_REC_SGID		|
 						   IB_SA_PATH_REC_NUMB_PATH	|
@@ -360,7 +378,7 @@ static int srp_send_req(struct srp_target_port *target)
 	 * zero out the first 8 bytes of our initiator port ID and set
 	 * the second 8 bytes to the local node GUID.
 	 */
-	if (topspin_workarounds && !memcmp(&target->ioc_guid, topspin_oui, 3)) {
+	if (srp_target_is_topspin(target)) {
 		printk(KERN_DEBUG PFX "Topspin/Cisco initiator port ID workaround "
 		       "activated for target GUID %016llx\n",
 		       (unsigned long long) be64_to_cpu(target->ioc_guid));
@@ -405,6 +423,7 @@ static void srp_remove_work(struct work_struct *work)
 	list_del(&target->list);
 	spin_unlock(&target->srp_host->target_lock);
 
+	srp_remove_host(target->scsi_host);
 	scsi_remove_host(target->scsi_host);
 	ib_destroy_cm_id(target->cm_id);
 	srp_free_target_ib(target);
@@ -455,10 +474,7 @@ static void srp_unmap_data(struct scsi_cmnd *scmnd,
 			   struct srp_target_port *target,
 			   struct srp_request *req)
 {
-	struct scatterlist *scat;
-	int nents;
-
-	if (!scmnd->request_buffer ||
+	if (!scsi_sglist(scmnd) ||
 	    (scmnd->sc_data_direction != DMA_TO_DEVICE &&
 	     scmnd->sc_data_direction != DMA_FROM_DEVICE))
 		return;
@@ -468,20 +484,8 @@ static void srp_unmap_data(struct scsi_cmnd *scmnd,
 		req->fmr = NULL;
 	}
 
-	/*
-	 * This handling of non-SG commands can be killed when the
-	 * SCSI midlayer no longer generates non-SG commands.
-	 */
-	if (likely(scmnd->use_sg)) {
-		nents = scmnd->use_sg;
-		scat  = scmnd->request_buffer;
-	} else {
-		nents = 1;
-		scat  = &req->fake_sg;
-	}
-
-	ib_dma_unmap_sg(target->srp_host->dev->dev, scat, nents,
-			scmnd->sc_data_direction);
+	ib_dma_unmap_sg(target->srp_host->dev->dev, scsi_sglist(scmnd),
+			scsi_sg_count(scmnd), scmnd->sc_data_direction);
 }
 
 static void srp_remove_req(struct srp_target_port *target, struct srp_request *req)
@@ -595,25 +599,26 @@ static int srp_map_fmr(struct srp_target_port *target, struct scatterlist *scat,
 	int ret;
 	struct srp_device *dev = target->srp_host->dev;
 	struct ib_device *ibdev = dev->dev;
+	struct scatterlist *sg;
 
 	if (!dev->fmr_pool)
 		return -ENODEV;
 
-	if ((ib_sg_dma_address(ibdev, &scat[0]) & ~dev->fmr_page_mask) &&
-	    mellanox_workarounds && !memcmp(&target->ioc_guid, mellanox_oui, 3))
+	if (srp_target_is_mellanox(target) &&
+	    (ib_sg_dma_address(ibdev, &scat[0]) & ~dev->fmr_page_mask))
 		return -EINVAL;
 
 	len = page_cnt = 0;
-	for (i = 0; i < sg_cnt; ++i) {
-		unsigned int dma_len = ib_sg_dma_len(ibdev, &scat[i]);
+	scsi_for_each_sg(req->scmnd, sg, sg_cnt, i) {
+		unsigned int dma_len = ib_sg_dma_len(ibdev, sg);
 
-		if (ib_sg_dma_address(ibdev, &scat[i]) & ~dev->fmr_page_mask) {
+		if (ib_sg_dma_address(ibdev, sg) & ~dev->fmr_page_mask) {
 			if (i > 0)
 				return -EINVAL;
 			else
 				++page_cnt;
 		}
-		if ((ib_sg_dma_address(ibdev, &scat[i]) + dma_len) &
+		if ((ib_sg_dma_address(ibdev, sg) + dma_len) &
 		    ~dev->fmr_page_mask) {
 			if (i < sg_cnt - 1)
 				return -EINVAL;
@@ -633,12 +638,12 @@ static int srp_map_fmr(struct srp_target_port *target, struct scatterlist *scat,
 		return -ENOMEM;
 
 	page_cnt = 0;
-	for (i = 0; i < sg_cnt; ++i) {
-		unsigned int dma_len = ib_sg_dma_len(ibdev, &scat[i]);
+	scsi_for_each_sg(req->scmnd, sg, sg_cnt, i) {
+		unsigned int dma_len = ib_sg_dma_len(ibdev, sg);
 
 		for (j = 0; j < dma_len; j += dev->fmr_page_size)
 			dma_pages[page_cnt++] =
-				(ib_sg_dma_address(ibdev, &scat[i]) &
+				(ib_sg_dma_address(ibdev, sg) &
 				 dev->fmr_page_mask) + j;
 	}
 
@@ -673,7 +678,7 @@ static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 	struct srp_device *dev;
 	struct ib_device *ibdev;
 
-	if (!scmnd->request_buffer || scmnd->sc_data_direction == DMA_NONE)
+	if (!scsi_sglist(scmnd) || scmnd->sc_data_direction == DMA_NONE)
 		return sizeof (struct srp_cmd);
 
 	if (scmnd->sc_data_direction != DMA_FROM_DEVICE &&
@@ -683,18 +688,8 @@ static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 		return -EINVAL;
 	}
 
-	/*
-	 * This handling of non-SG commands can be killed when the
-	 * SCSI midlayer no longer generates non-SG commands.
-	 */
-	if (likely(scmnd->use_sg)) {
-		nents = scmnd->use_sg;
-		scat  = scmnd->request_buffer;
-	} else {
-		nents = 1;
-		scat  = &req->fake_sg;
-		sg_init_one(scat, scmnd->request_buffer, scmnd->request_bufflen);
-	}
+	nents = scsi_sg_count(scmnd);
+	scat  = scsi_sglist(scmnd);
 
 	dev = target->srp_host->dev;
 	ibdev = dev->dev;
@@ -724,6 +719,7 @@ static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 		 * descriptor.
 		 */
 		struct srp_indirect_buf *buf = (void *) cmd->add_data;
+		struct scatterlist *sg;
 		u32 datalen = 0;
 		int i;
 
@@ -732,11 +728,11 @@ static int srp_map_data(struct scsi_cmnd *scmnd, struct srp_target_port *target,
 			sizeof (struct srp_indirect_buf) +
 			count * sizeof (struct srp_direct_buf);
 
-		for (i = 0; i < count; ++i) {
-			unsigned int dma_len = ib_sg_dma_len(ibdev, &scat[i]);
+		scsi_for_each_sg(scmnd, sg, count, i) {
+			unsigned int dma_len = ib_sg_dma_len(ibdev, sg);
 
 			buf->desc_list[i].va  =
-				cpu_to_be64(ib_sg_dma_address(ibdev, &scat[i]));
+				cpu_to_be64(ib_sg_dma_address(ibdev, sg));
 			buf->desc_list[i].key =
 				cpu_to_be32(dev->mr->rkey);
 			buf->desc_list[i].len = cpu_to_be32(dma_len);
@@ -802,9 +798,9 @@ static void srp_process_rsp(struct srp_target_port *target, struct srp_rsp *rsp)
 		}
 
 		if (rsp->flags & (SRP_RSP_FLAG_DOOVER | SRP_RSP_FLAG_DOUNDER))
-			scmnd->resid = be32_to_cpu(rsp->data_out_res_cnt);
+			scsi_set_resid(scmnd, be32_to_cpu(rsp->data_out_res_cnt));
 		else if (rsp->flags & (SRP_RSP_FLAG_DIOVER | SRP_RSP_FLAG_DIUNDER))
-			scmnd->resid = be32_to_cpu(rsp->data_in_res_cnt);
+			scsi_set_resid(scmnd, be32_to_cpu(rsp->data_in_res_cnt));
 
 		if (!req->tsk_mgmt) {
 			scmnd->host_scribble = (void *) -1L;
@@ -1110,8 +1106,7 @@ static void srp_cm_rej_handler(struct ib_cm_id *cm_id,
 		break;
 
 	case IB_CM_REJ_PORT_REDIRECT:
-		if (topspin_workarounds &&
-		    !memcmp(&target->ioc_guid, topspin_oui, 3)) {
+		if (srp_target_is_topspin(target)) {
 			/*
 			 * Topspin/Cisco SRP gateways incorrectly send
 			 * reject reason code 25 when they mean 24
@@ -1468,6 +1463,25 @@ static ssize_t show_dgid(struct class_device *cdev, char *buf)
 		       be16_to_cpu(((__be16 *) target->path.dgid.raw)[7]));
 }
 
+static ssize_t show_orig_dgid(struct class_device *cdev, char *buf)
+{
+	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
+
+	if (target->state == SRP_TARGET_DEAD ||
+	    target->state == SRP_TARGET_REMOVED)
+		return -ENODEV;
+
+	return sprintf(buf, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
+		       be16_to_cpu(target->orig_dgid[0]),
+		       be16_to_cpu(target->orig_dgid[1]),
+		       be16_to_cpu(target->orig_dgid[2]),
+		       be16_to_cpu(target->orig_dgid[3]),
+		       be16_to_cpu(target->orig_dgid[4]),
+		       be16_to_cpu(target->orig_dgid[5]),
+		       be16_to_cpu(target->orig_dgid[6]),
+		       be16_to_cpu(target->orig_dgid[7]));
+}
+
 static ssize_t show_zero_req_lim(struct class_device *cdev, char *buf)
 {
 	struct srp_target_port *target = host_to_target(class_to_shost(cdev));
@@ -1498,6 +1512,7 @@ static CLASS_DEVICE_ATTR(ioc_guid,	  S_IRUGO, show_ioc_guid,	 NULL);
 static CLASS_DEVICE_ATTR(service_id,	  S_IRUGO, show_service_id,	 NULL);
 static CLASS_DEVICE_ATTR(pkey,		  S_IRUGO, show_pkey,		 NULL);
 static CLASS_DEVICE_ATTR(dgid,		  S_IRUGO, show_dgid,		 NULL);
+static CLASS_DEVICE_ATTR(orig_dgid,	  S_IRUGO, show_orig_dgid,	 NULL);
 static CLASS_DEVICE_ATTR(zero_req_lim,	  S_IRUGO, show_zero_req_lim,	 NULL);
 static CLASS_DEVICE_ATTR(local_ib_port,   S_IRUGO, show_local_ib_port,	 NULL);
 static CLASS_DEVICE_ATTR(local_ib_device, S_IRUGO, show_local_ib_device, NULL);
@@ -1508,6 +1523,7 @@ static struct class_device_attribute *srp_host_attrs[] = {
 	&class_device_attr_service_id,
 	&class_device_attr_pkey,
 	&class_device_attr_dgid,
+	&class_device_attr_orig_dgid,
 	&class_device_attr_zero_req_lim,
 	&class_device_attr_local_ib_port,
 	&class_device_attr_local_ib_device,
@@ -1516,7 +1532,8 @@ static struct class_device_attribute *srp_host_attrs[] = {
 
 static struct scsi_host_template srp_template = {
 	.module				= THIS_MODULE,
-	.name				= DRV_NAME,
+	.name				= "InfiniBand SRP initiator",
+	.proc_name			= DRV_NAME,
 	.info				= srp_target_info,
 	.queuecommand			= srp_queuecommand,
 	.eh_abort_handler		= srp_abort,
@@ -1531,11 +1548,23 @@ static struct scsi_host_template srp_template = {
 
 static int srp_add_target(struct srp_host *host, struct srp_target_port *target)
 {
+	struct srp_rport_identifiers ids;
+	struct srp_rport *rport;
+
 	sprintf(target->target_name, "SRP.T10:%016llX",
 		 (unsigned long long) be64_to_cpu(target->id_ext));
 
 	if (scsi_add_host(target->scsi_host, host->dev->dev->dma_device))
 		return -ENODEV;
+
+	memcpy(ids.port_id, &target->id_ext, 8);
+	memcpy(ids.port_id + 8, &target->ioc_guid, 8);
+	ids.roles = SRP_RPORT_ROLE_TARGET;
+	rport = srp_rport_add(target->scsi_host, &ids);
+	if (IS_ERR(rport)) {
+		scsi_remove_host(target->scsi_host);
+		return PTR_ERR(rport);
+	}
 
 	spin_lock(&host->target_lock);
 	list_add_tail(&target->list, &host->target_list);
@@ -1662,6 +1691,7 @@ static int srp_parse_options(const char *buf, struct srp_target_port *target)
 				target->path.dgid.raw[i] = simple_strtoul(dgid, NULL, 16);
 			}
 			kfree(p);
+			memcpy(target->orig_dgid, target->path.dgid.raw, 16);
 			break;
 
 		case SRP_OPT_PKEY:
@@ -1679,6 +1709,7 @@ static int srp_parse_options(const char *buf, struct srp_target_port *target)
 				goto out;
 			}
 			target->service_id = cpu_to_be64(simple_strtoull(p, NULL, 16));
+			target->path.service_id = target->service_id;
 			kfree(p);
 			break;
 
@@ -1760,6 +1791,7 @@ static ssize_t srp_create_target(struct class_device *class_dev,
 	if (!target_host)
 		return -ENOMEM;
 
+	target_host->transportt = ib_srp_transport_template;
 	target_host->max_lun     = SRP_MAX_LUN;
 	target_host->max_cmd_len = sizeof ((struct srp_cmd *) (void *) 0L)->cdb;
 
@@ -2039,9 +2071,17 @@ static void srp_remove_one(struct ib_device *device)
 	kfree(srp_dev);
 }
 
+static struct srp_function_template ib_srp_transport_functions = {
+};
+
 static int __init srp_init_module(void)
 {
 	int ret;
+
+	ib_srp_transport_template =
+		srp_attach_transport(&ib_srp_transport_functions);
+	if (!ib_srp_transport_template)
+		return -ENOMEM;
 
 	srp_template.sg_tablesize = srp_sg_tablesize;
 	srp_max_iu_len = (sizeof (struct srp_cmd) +
@@ -2051,6 +2091,7 @@ static int __init srp_init_module(void)
 	ret = class_register(&srp_class);
 	if (ret) {
 		printk(KERN_ERR PFX "couldn't register class infiniband_srp\n");
+		srp_release_transport(ib_srp_transport_template);
 		return ret;
 	}
 
@@ -2059,6 +2100,7 @@ static int __init srp_init_module(void)
 	ret = ib_register_client(&srp_client);
 	if (ret) {
 		printk(KERN_ERR PFX "couldn't register IB client\n");
+		srp_release_transport(ib_srp_transport_template);
 		ib_sa_unregister_client(&srp_sa_client);
 		class_unregister(&srp_class);
 		return ret;
@@ -2072,6 +2114,7 @@ static void __exit srp_cleanup_module(void)
 	ib_unregister_client(&srp_client);
 	ib_sa_unregister_client(&srp_sa_client);
 	class_unregister(&srp_class);
+	srp_release_transport(ib_srp_transport_template);
 }
 
 module_init(srp_init_module);

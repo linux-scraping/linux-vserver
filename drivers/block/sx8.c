@@ -27,6 +27,7 @@
 #include <linux/hdreg.h>
 #include <linux/dma-mapping.h>
 #include <linux/completion.h>
+#include <linux/scatterlist.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
@@ -278,7 +279,7 @@ struct carm_host {
 	unsigned int			state;
 	u32				fw_ver;
 
-	request_queue_t			*oob_q;
+	struct request_queue		*oob_q;
 	unsigned int			n_oob;
 
 	unsigned int			hw_sg_used;
@@ -287,7 +288,7 @@ struct carm_host {
 
 	unsigned int			wait_q_prod;
 	unsigned int			wait_q_cons;
-	request_queue_t			*wait_q[CARM_MAX_WAIT_Q];
+	struct request_queue		*wait_q[CARM_MAX_WAIT_Q];
 
 	unsigned int			n_msgs;
 	u64				msg_alloc;
@@ -522,6 +523,7 @@ static struct carm_request *carm_get_request(struct carm_host *host)
 			host->n_msgs++;
 
 			assert(host->n_msgs <= CARM_MAX_REQ);
+			sg_init_table(crq->sg, CARM_MAX_REQ_SG);
 			return crq;
 		}
 
@@ -756,7 +758,7 @@ static inline void carm_end_request_queued(struct carm_host *host,
 	assert(rc == 0);
 }
 
-static inline void carm_push_q (struct carm_host *host, request_queue_t *q)
+static inline void carm_push_q (struct carm_host *host, struct request_queue *q)
 {
 	unsigned int idx = host->wait_q_prod % CARM_MAX_WAIT_Q;
 
@@ -768,7 +770,7 @@ static inline void carm_push_q (struct carm_host *host, request_queue_t *q)
 	BUG_ON(host->wait_q_prod == host->wait_q_cons); /* overrun */
 }
 
-static inline request_queue_t *carm_pop_q(struct carm_host *host)
+static inline struct request_queue *carm_pop_q(struct carm_host *host)
 {
 	unsigned int idx;
 
@@ -783,7 +785,7 @@ static inline request_queue_t *carm_pop_q(struct carm_host *host)
 
 static inline void carm_round_robin(struct carm_host *host)
 {
-	request_queue_t *q = carm_pop_q(host);
+	struct request_queue *q = carm_pop_q(host);
 	if (q) {
 		blk_start_queue(q);
 		VPRINTK("STARTED QUEUE %p\n", q);
@@ -802,7 +804,7 @@ static inline void carm_end_rq(struct carm_host *host, struct carm_request *crq,
 	}
 }
 
-static void carm_oob_rq_fn(request_queue_t *q)
+static void carm_oob_rq_fn(struct request_queue *q)
 {
 	struct carm_host *host = q->queuedata;
 	struct carm_request *crq;
@@ -833,7 +835,7 @@ static void carm_oob_rq_fn(request_queue_t *q)
 	}
 }
 
-static void carm_rq_fn(request_queue_t *q)
+static void carm_rq_fn(struct request_queue *q)
 {
 	struct carm_port *port = q->queuedata;
 	struct carm_host *host = port->host;
@@ -1494,7 +1496,7 @@ static int carm_init_disks(struct carm_host *host)
 
 	for (i = 0; i < CARM_MAX_PORTS; i++) {
 		struct gendisk *disk;
-		request_queue_t *q;
+		struct request_queue *q;
 		struct carm_port *port;
 
 		port = &host->port[i];
@@ -1538,7 +1540,7 @@ static void carm_free_disks(struct carm_host *host)
 	for (i = 0; i < CARM_MAX_PORTS; i++) {
 		struct gendisk *disk = host->port[i].disk;
 		if (disk) {
-			request_queue_t *q = disk->queue;
+			struct request_queue *q = disk->queue;
 
 			if (disk->flags & GENHD_FL_UP)
 				del_gendisk(disk);
@@ -1571,7 +1573,7 @@ static int carm_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct carm_host *host;
 	unsigned int pci_dac;
 	int rc;
-	request_queue_t *q;
+	struct request_queue *q;
 	unsigned int i;
 
 	if (!printed_version++)
@@ -1608,7 +1610,7 @@ static int carm_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 #endif
 
-	host = kmalloc(sizeof(*host), GFP_KERNEL);
+	host = kzalloc(sizeof(*host), GFP_KERNEL);
 	if (!host) {
 		printk(KERN_ERR DRV_NAME "(%s): memory alloc failure\n",
 		       pci_name(pdev));
@@ -1616,7 +1618,6 @@ static int carm_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_out_regions;
 	}
 
-	memset(host, 0, sizeof(*host));
 	host->pdev = pdev;
 	host->flags = pci_dac ? FL_DAC : 0;
 	spin_lock_init(&host->lock);

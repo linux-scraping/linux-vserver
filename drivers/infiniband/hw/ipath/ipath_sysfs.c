@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -32,7 +32,6 @@
  */
 
 #include <linux/ctype.h>
-#include <linux/pci.h>
 
 #include "ipath_kernel.h"
 #include "ipath_common.h"
@@ -164,6 +163,42 @@ static ssize_t show_boardversion(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s", dd->ipath_boardversion);
 }
 
+static ssize_t show_lmc(struct device *dev,
+			struct device_attribute *attr,
+			char *buf)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", dd->ipath_lmc);
+}
+
+static ssize_t store_lmc(struct device *dev,
+			 struct device_attribute *attr,
+			 const char *buf,
+			 size_t count)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	u16 lmc = 0;
+	int ret;
+
+	ret = ipath_parse_ushort(buf, &lmc);
+	if (ret < 0)
+		goto invalid;
+
+	if (lmc > 7) {
+		ret = -EINVAL;
+		goto invalid;
+	}
+
+	ipath_set_lid(dd, dd->ipath_lid, lmc);
+
+	goto bail;
+invalid:
+	ipath_dev_err(dd, "attempt to set invalid LMC %u\n", lmc);
+bail:
+	return ret;
+}
+
 static ssize_t show_lid(struct device *dev,
 			struct device_attribute *attr,
 			char *buf)
@@ -191,7 +226,7 @@ static ssize_t store_lid(struct device *dev,
 		goto invalid;
 	}
 
-	ipath_set_lid(dd, lid, 0);
+	ipath_set_lid(dd, lid, dd->ipath_lmc);
 
 	goto bail;
 invalid:
@@ -597,6 +632,43 @@ bail:
 	return ret;
 }
 
+static ssize_t store_led_override(struct device *dev,
+			  struct device_attribute *attr,
+			  const char *buf,
+			  size_t count)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	int ret;
+	u16 val;
+
+	ret = ipath_parse_ushort(buf, &val);
+	if (ret > 0)
+		ipath_set_led_override(dd, val);
+	else
+		ipath_dev_err(dd, "attempt to set invalid LED override\n");
+	return ret;
+}
+
+static ssize_t show_logged_errs(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	int idx, count;
+
+	/* force consistency with actual EEPROM */
+	if (ipath_update_eeprom_log(dd) != 0)
+		return -ENXIO;
+
+	count = 0;
+	for (idx = 0; idx < IPATH_EEP_LOG_CNT; ++idx) {
+		count += scnprintf(buf + count, PAGE_SIZE - count, "%d%c",
+			dd->ipath_eep_st_errs[idx],
+			idx == (IPATH_EEP_LOG_CNT - 1) ? '\n' : ' ');
+	}
+
+	return count;
+}
 
 static DRIVER_ATTR(num_units, S_IRUGO, show_num_units, NULL);
 static DRIVER_ATTR(version, S_IRUGO, show_version, NULL);
@@ -612,6 +684,7 @@ static struct attribute_group driver_attr_group = {
 };
 
 static DEVICE_ATTR(guid, S_IWUSR | S_IRUGO, show_guid, store_guid);
+static DEVICE_ATTR(lmc, S_IWUSR | S_IRUGO, show_lmc, store_lmc);
 static DEVICE_ATTR(lid, S_IWUSR | S_IRUGO, show_lid, store_lid);
 static DEVICE_ATTR(link_state, S_IWUSR, NULL, store_link_state);
 static DEVICE_ATTR(mlid, S_IWUSR | S_IRUGO, show_mlid, store_mlid);
@@ -626,9 +699,12 @@ static DEVICE_ATTR(status_str, S_IRUGO, show_status_str, NULL);
 static DEVICE_ATTR(boardversion, S_IRUGO, show_boardversion, NULL);
 static DEVICE_ATTR(unit, S_IRUGO, show_unit, NULL);
 static DEVICE_ATTR(rx_pol_inv, S_IWUSR, NULL, store_rx_pol_inv);
+static DEVICE_ATTR(led_override, S_IWUSR, NULL, store_led_override);
+static DEVICE_ATTR(logged_errors, S_IRUGO, show_logged_errs, NULL);
 
 static struct attribute *dev_attributes[] = {
 	&dev_attr_guid.attr,
+	&dev_attr_lmc.attr,
 	&dev_attr_lid.attr,
 	&dev_attr_link_state.attr,
 	&dev_attr_mlid.attr,
@@ -642,6 +718,8 @@ static struct attribute *dev_attributes[] = {
 	&dev_attr_unit.attr,
 	&dev_attr_enabled.attr,
 	&dev_attr_rx_pol_inv.attr,
+	&dev_attr_led_override.attr,
+	&dev_attr_logged_errors.attr,
 	NULL
 };
 

@@ -52,7 +52,6 @@
 #include <linux/kthread.h>
 #include <linux/freezer.h>
 #include <net/irda/irda.h>
-#include <net/irda/irlap.h>
 #include <net/irda/irda_device.h>
 #include <net/irda/wrapper.h>
 #include <net/irda/crc.h>
@@ -333,7 +332,7 @@ static void fir_eof(struct stir_cb *stir)
 	}
 
 	fcs = ~(crc32_le(~0, rx_buff->data, len));
-	if (fcs != le32_to_cpu(get_unaligned((u32 *)(rx_buff->data+len)))) {
+	if (fcs != le32_to_cpu(get_unaligned((__le32 *)(rx_buff->data+len)))) {
 		pr_debug("crc error calc 0x%x len %d\n", fcs, len);
 		stir->stats.rx_errors++;
 		stir->stats.rx_crc_errors++;
@@ -349,7 +348,7 @@ static void fir_eof(struct stir_cb *stir)
 		}
 		skb_reserve(nskb, 1);
 		skb = nskb;
-		memcpy(nskb->data, rx_buff->data, len);
+		skb_copy_to_linear_data(nskb, rx_buff->data, len);
 	} else {
 		nskb = dev_alloc_skb(rx_buff->truesize);
 		if (unlikely(!nskb)) {
@@ -364,7 +363,7 @@ static void fir_eof(struct stir_cb *stir)
 
 	skb_put(skb, len);
 
-	skb->mac.raw  = skb->data;
+	skb_reset_mac_header(skb);
 	skb->protocol = htons(ETH_P_IRDA);
 	skb->dev = stir->netdev;
 
@@ -1035,7 +1034,6 @@ static int stir_probe(struct usb_interface *intf,
 	if(!net)
 		goto err_out1;
 
-	SET_MODULE_OWNER(net);
 	SET_NETDEV_DEV(net, &intf->dev);
 	stir = netdev_priv(net);
 	stir->netdev = net;

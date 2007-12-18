@@ -13,6 +13,7 @@
 #include <linux/uts.h>
 #include <linux/utsname.h>
 #include <linux/version.h>
+#include <linux/err.h>
 #include <linux/vserver/global.h>
 
 /*
@@ -25,30 +26,15 @@ static struct uts_namespace *clone_uts_ns(struct uts_namespace *old_ns)
 	struct uts_namespace *ns;
 
 	ns = kmalloc(sizeof(struct uts_namespace), GFP_KERNEL);
-	if (ns) {
-		memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
-		kref_init(&ns->kref);
-		atomic_inc(&vs_global_uts_ns);
-	}
+	if (!ns)
+		return ERR_PTR(-ENOMEM);
+
+	down_read(&uts_sem);
+	memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
+	up_read(&uts_sem);
+	kref_init(&ns->kref);
+	atomic_inc(&vs_global_uts_ns);
 	return ns;
-}
-
-/*
- * unshare the current process' utsname namespace.
- * called only in sys_unshare()
- */
-int unshare_utsname(unsigned long unshare_flags, struct uts_namespace **new_uts)
-{
-	if (unshare_flags & CLONE_NEWUTS) {
-		if (!capable(CAP_SYS_ADMIN))
-			return -EPERM;
-
-		*new_uts = clone_uts_ns(current->nsproxy->uts_ns);
-		if (!*new_uts)
-			return -ENOMEM;
-	}
-
-	return 0;
 }
 
 /*
@@ -57,35 +43,20 @@ int unshare_utsname(unsigned long unshare_flags, struct uts_namespace **new_uts)
  * utsname of this process won't be seen by parent, and vice
  * versa.
  */
-int copy_utsname(int flags, struct task_struct *tsk)
+struct uts_namespace *copy_utsname(unsigned long flags, struct uts_namespace *old_ns)
 {
-	struct uts_namespace *old_ns = tsk->nsproxy->uts_ns;
 	struct uts_namespace *new_ns;
-	int err = 0;
 
-	if (!old_ns)
-		return 0;
-
+	BUG_ON(!old_ns);
 	get_uts_ns(old_ns);
 
 	if (!(flags & CLONE_NEWUTS))
-		return 0;
-
-	if (!capable(CAP_SYS_ADMIN)) {
-		err = -EPERM;
-		goto out;
-	}
+		return old_ns;
 
 	new_ns = clone_uts_ns(old_ns);
-	if (!new_ns) {
-		err = -ENOMEM;
-		goto out;
-	}
-	tsk->nsproxy->uts_ns = new_ns;
 
-out:
 	put_uts_ns(old_ns);
-	return err;
+	return new_ns;
 }
 
 void free_uts_ns(struct kref *kref)

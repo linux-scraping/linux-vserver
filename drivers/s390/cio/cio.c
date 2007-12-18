@@ -22,6 +22,7 @@
 #include <asm/setup.h>
 #include <asm/reset.h>
 #include <asm/ipl.h>
+#include <asm/chpid.h>
 #include "airq.h"
 #include "cio.h"
 #include "css.h"
@@ -29,6 +30,7 @@
 #include "ioasm.h"
 #include "blacklist.h"
 #include "cio_debug.h"
+#include "chp.h"
 #include "../s390mach.h"
 
 debug_info_t *cio_debug_msg_id;
@@ -45,8 +47,8 @@ cio_setup (char *parm)
 	else if (!strcmp (parm, "no"))
 		cio_show_msg = 0;
 	else
-		printk (KERN_ERR "cio_setup : invalid cio_msg parameter '%s'",
-			parm);
+		printk(KERN_ERR "cio: cio_setup: "
+		       "invalid cio_msg parameter '%s'", parm);
 	return 1;
 }
 
@@ -78,7 +80,6 @@ cio_debug_init (void)
 		goto out_unregister;
 	debug_register_view (cio_debug_crw_id, &debug_sprintf_view);
 	debug_set_level (cio_debug_crw_id, 2);
-	pr_debug("debugging initialized\n");
 	return 0;
 
 out_unregister:
@@ -88,7 +89,7 @@ out_unregister:
 		debug_unregister (cio_debug_trace_id);
 	if (cio_debug_crw_id)
 		debug_unregister (cio_debug_crw_id);
-	pr_debug("could not initialize debugging\n");
+	printk(KERN_WARNING"cio: could not initialize debugging\n");
 	return -1;
 }
 
@@ -566,7 +567,7 @@ cio_validate_subchannel (struct subchannel *sch, struct subchannel_id schid)
 	 */
 	if (sch->st != 0) {
 		CIO_DEBUG(KERN_INFO, 0,
-			  "Subchannel 0.%x.%04x reports "
+			  "cio: Subchannel 0.%x.%04x reports "
 			  "non-I/O subchannel type %04X\n",
 			  sch->schid.ssid, sch->schid.sch_no, sch->st);
 		/* We stop here for non-io subchannels. */
@@ -592,13 +593,14 @@ cio_validate_subchannel (struct subchannel *sch, struct subchannel_id schid)
 		err = -ENODEV;
 		goto out;
 	}
-	sch->opm = 0xff;
-	if (!cio_is_console(sch->schid))
-		chsc_validate_chpids(sch);
+	if (cio_is_console(sch->schid))
+		sch->opm = 0xff;
+	else
+		sch->opm = chp_get_sch_opm(sch);
 	sch->lpm = sch->schib.pmcw.pam & sch->opm;
 
 	CIO_DEBUG(KERN_INFO, 0,
-		  "Detected device %04x on subchannel 0.%x.%04X"
+		  "cio: Detected device %04x on subchannel 0.%x.%04X"
 		  " - PIM = %02X, PAM = %02X, POM = %02X\n",
 		  sch->schib.pmcw.dev, sch->schid.ssid,
 		  sch->schid.sch_no, sch->schib.pmcw.pim,
@@ -617,6 +619,11 @@ cio_validate_subchannel (struct subchannel *sch, struct subchannel_id schid)
 	sch->schib.pmcw.ena = 0;
 	if ((sch->lpm & (sch->lpm - 1)) != 0)
 		sch->schib.pmcw.mp = 1;	/* multipath mode */
+	/* clean up possible residual cmf stuff */
+	sch->schib.pmcw.mme = 0;
+	sch->schib.pmcw.mbfc = 0;
+	sch->schib.pmcw.mbi = 0;
+	sch->schib.mba = 0;
 	return 0;
 out:
 	if (!cio_is_console(schid))
@@ -763,7 +770,7 @@ cio_get_console_sch_no(void)
 		/* unlike in 2.4, we cannot autoprobe here, since
 		 * the channel subsystem is not fully initialized.
 		 * With some luck, the HWC console can take over */
-		printk(KERN_WARNING "No ccw console found!\n");
+		printk(KERN_WARNING "cio: No ccw console found!\n");
 		return -1;
 	}
 	return console_irq;
@@ -954,6 +961,7 @@ static void css_reset(void)
 {
 	int i, ret;
 	unsigned long long timeout;
+	struct chp_id chpid;
 
 	/* Reset subchannels. */
 	for_each_subchannel(__shutdown_subchannel_easy,  NULL);
@@ -963,8 +971,10 @@ static void css_reset(void)
 	__ctl_set_bit(14, 28);
 	/* Temporarily reenable machine checks. */
 	local_mcck_enable();
+	chp_id_init(&chpid);
 	for (i = 0; i <= __MAX_CHPID; i++) {
-		ret = rchp(i);
+		chpid.id = i;
+		ret = rchp(chpid);
 		if ((ret == 0) || (ret == 2))
 			/*
 			 * rchp either succeeded, or another rchp is already
@@ -1048,37 +1058,19 @@ void reipl_ccw_dev(struct ccw_dev_id *devid)
 	do_reipl_asm(*((__u32*)&schid));
 }
 
-static struct schib __initdata ipl_schib;
-
-/*
- * ipl_save_parameters gets called very early. It is not allowed to access
- * anything in the bss section at all. The bss section is not cleared yet,
- * but may contain some ipl parameters written by the firmware.
- * These parameters (if present) are copied to 0x2000.
- * To avoid corruption of the ipl parameters, all variables used by this
- * function must reside on the stack or in the data section.
- */
-void ipl_save_parameters(void)
+int __init cio_get_iplinfo(struct cio_iplinfo *iplinfo)
 {
 	struct subchannel_id schid;
-	unsigned int *ipl_ptr;
-	void *src, *dst;
+	struct schib schib;
 
 	schid = *(struct subchannel_id *)__LC_SUBCHANNEL_ID;
 	if (!schid.one)
-		return;
-	if (stsch(schid, &ipl_schib))
-		return;
-	if (!ipl_schib.pmcw.dnv)
-		return;
-	ipl_devno = ipl_schib.pmcw.dev;
-	ipl_flags |= IPL_DEVNO_VALID;
-	if (!ipl_schib.pmcw.qf)
-		return;
-	ipl_flags |= IPL_PARMBLOCK_VALID;
-	ipl_ptr = (unsigned int *)__LC_IPL_PARMBLOCK_PTR;
-	src = (void *)(unsigned long)*ipl_ptr;
-	dst = (void *)IPL_PARMBLOCK_ORIGIN;
-	memmove(dst, src, PAGE_SIZE);
-	*ipl_ptr = IPL_PARMBLOCK_ORIGIN;
+		return -ENODEV;
+	if (stsch(schid, &schib))
+		return -ENODEV;
+	if (!schib.pmcw.dnv)
+		return -ENODEV;
+	iplinfo->devno = schib.pmcw.dev;
+	iplinfo->is_qdio = schib.pmcw.qf;
+	return 0;
 }

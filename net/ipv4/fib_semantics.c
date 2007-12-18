@@ -42,7 +42,6 @@
 #include <net/tcp.h>
 #include <net/sock.h>
 #include <net/ip_fib.h>
-#include <net/ip_mp_alg.h>
 #include <net/netlink.h>
 #include <net/nexthop.h>
 
@@ -301,7 +300,8 @@ static inline size_t fib_nlmsg_size(struct fib_info *fi)
 }
 
 void rtmsg_fib(int event, __be32 key, struct fib_alias *fa,
-	       int dst_len, u32 tb_id, struct nl_info *info)
+	       int dst_len, u32 tb_id, struct nl_info *info,
+	       unsigned int nlm_flags)
 {
 	struct sk_buff *skb;
 	u32 seq = info->nlh ? info->nlh->nlmsg_seq : 0;
@@ -313,7 +313,7 @@ void rtmsg_fib(int event, __be32 key, struct fib_alias *fa,
 
 	err = fib_dump_info(skb, info->pid, seq, event, tb_id,
 			    fa->fa_type, fa->fa_scope, key, dst_len,
-			    fa->fa_tos, fa->fa_info, 0);
+			    fa->fa_tos, fa->fa_info, nlm_flags);
 	if (err < 0) {
 		/* -EMSGSIZE implies BUG in fib_nlmsg_size() */
 		WARN_ON(err == -EMSGSIZE);
@@ -533,7 +533,7 @@ static int fib_check_nh(struct fib_config *cfg, struct fib_info *fi,
 				return -EINVAL;
 			if (inet_addr_type(nh->nh_gw) != RTN_UNICAST)
 				return -EINVAL;
-			if ((dev = __dev_get_by_index(nh->nh_oif)) == NULL)
+			if ((dev = __dev_get_by_index(&init_net, nh->nh_oif)) == NULL)
 				return -ENODEV;
 			if (!(dev->flags&IFF_UP))
 				return -ENETDOWN;
@@ -696,13 +696,6 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 			goto err_inval;
 	}
 #endif
-#ifdef CONFIG_IP_ROUTE_MULTIPATH_CACHED
-	if (cfg->fc_mp_alg) {
-		if (cfg->fc_mp_alg < IP_MP_ALG_NONE ||
-		    cfg->fc_mp_alg > IP_MP_ALG_MAX)
-			goto err_inval;
-	}
-#endif
 
 	err = -ENOBUFS;
 	if (fib_info_cnt >= fib_hash_size) {
@@ -750,7 +743,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 		int remaining;
 
 		nla_for_each_attr(nla, cfg->fc_mx, cfg->fc_mx_len, remaining) {
-			int type = nla->nla_type;
+			int type = nla_type(nla);
 
 			if (type) {
 				if (type > RTAX_MAX)
@@ -790,10 +783,6 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 #endif
 	}
 
-#ifdef CONFIG_IP_ROUTE_MULTIPATH_CACHED
-	fi->fib_mp_alg = cfg->fc_mp_alg;
-#endif
-
 	if (fib_props[cfg->fc_type].error) {
 		if (cfg->fc_gw || cfg->fc_oif || cfg->fc_mp)
 			goto err_inval;
@@ -810,7 +799,7 @@ struct fib_info *fib_create_info(struct fib_config *cfg)
 		if (nhs != 1 || nh->nh_gw)
 			goto err_inval;
 		nh->nh_scope = RT_SCOPE_NOWHERE;
-		nh->nh_dev = dev_get_by_index(fi->fib_nh->nh_oif);
+		nh->nh_dev = dev_get_by_index(&init_net, fi->fib_nh->nh_oif);
 		err = -ENODEV;
 		if (nh->nh_dev == NULL)
 			goto failure;
@@ -927,7 +916,7 @@ int fib_semantic_match(struct list_head *head, const struct flowi *flp,
 			default:
 				printk(KERN_DEBUG "impossible 102\n");
 				return -EINVAL;
-			};
+			}
 		}
 		return err;
 	}
@@ -939,10 +928,6 @@ out_fill_res:
 	res->type = fa->fa_type;
 	res->scope = fa->fa_scope;
 	res->fi = fa->fa_info;
-#ifdef CONFIG_IP_ROUTE_MULTIPATH_CACHED
-	res->netmask = mask;
-	res->network = zone & inet_make_mask(prefixlen);
-#endif
 	atomic_inc(&res->fi->fib_clntref);
 	return 0;
 }

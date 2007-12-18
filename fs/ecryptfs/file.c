@@ -28,67 +28,9 @@
 #include <linux/mount.h>
 #include <linux/pagemap.h>
 #include <linux/security.h>
-#include <linux/smp_lock.h>
 #include <linux/compat.h>
 #include <linux/fs_stack.h>
 #include "ecryptfs_kernel.h"
-
-/**
- * ecryptfs_llseek
- * @file: File we are seeking in
- * @offset: The offset to seek to
- * @origin: 2 - offset from i_size; 1 - offset from f_pos
- *
- * Returns the position we have seeked to, or negative on error
- */
-static loff_t ecryptfs_llseek(struct file *file, loff_t offset, int origin)
-{
-	loff_t rv;
-	loff_t new_end_pos;
-	int rc;
-	int expanding_file = 0;
-	struct inode *inode = file->f_mapping->host;
-
-	/* If our offset is past the end of our file, we're going to
-	 * need to grow it so we have a valid length of 0's */
-	new_end_pos = offset;
-	switch (origin) {
-	case 2:
-		new_end_pos += i_size_read(inode);
-		expanding_file = 1;
-		break;
-	case 1:
-		new_end_pos += file->f_pos;
-		if (new_end_pos > i_size_read(inode)) {
-			ecryptfs_printk(KERN_DEBUG, "new_end_pos(=[0x%.16x]) "
-					"> i_size_read(inode)(=[0x%.16x])\n",
-					new_end_pos, i_size_read(inode));
-			expanding_file = 1;
-		}
-		break;
-	default:
-		if (new_end_pos > i_size_read(inode)) {
-			ecryptfs_printk(KERN_DEBUG, "new_end_pos(=[0x%.16x]) "
-					"> i_size_read(inode)(=[0x%.16x])\n",
-					new_end_pos, i_size_read(inode));
-			expanding_file = 1;
-		}
-	}
-	ecryptfs_printk(KERN_DEBUG, "new_end_pos = [0x%.16x]\n", new_end_pos);
-	if (expanding_file) {
-		rc = ecryptfs_truncate(file->f_path.dentry, new_end_pos);
-		if (rc) {
-			rv = rc;
-			ecryptfs_printk(KERN_ERR, "Error on attempt to "
-					"truncate to (higher) offset [0x%.16x];"
-					" rc = [%d]\n", new_end_pos, rc);
-			goto out;
-		}
-	}
-	rv = generic_file_llseek(file, offset, origin);
-out:
-	return rv;
-}
 
 /**
  * ecryptfs_read_update_atime
@@ -199,34 +141,6 @@ retry:
 
 struct kmem_cache *ecryptfs_file_info_cache;
 
-int ecryptfs_open_lower_file(struct file **lower_file,
-			     struct dentry *lower_dentry,
-			     struct vfsmount *lower_mnt, int flags)
-{
-	int rc = 0;
-
-	flags |= O_LARGEFILE;
-	dget(lower_dentry);
-	mntget(lower_mnt);
-	*lower_file = dentry_open(lower_dentry, lower_mnt, flags);
-	if (IS_ERR(*lower_file)) {
-		printk(KERN_ERR "Error opening lower file for lower_dentry "
-		       "[0x%p], lower_mnt [0x%p], and flags [0x%x]\n",
-		       lower_dentry, lower_mnt, flags);
-		rc = PTR_ERR(*lower_file);
-		*lower_file = NULL;
-		goto out;
-	}
-out:
-	return rc;
-}
-
-int ecryptfs_close_lower_file(struct file *lower_file)
-{
-	fput(lower_file);
-	return 0;
-}
-
 /**
  * ecryptfs_open
  * @inode: inode speciying file to open
@@ -245,11 +159,7 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 	/* Private value of ecryptfs_dentry allocated in
 	 * ecryptfs_lookup() */
 	struct dentry *lower_dentry = ecryptfs_dentry_to_lower(ecryptfs_dentry);
-	struct inode *lower_inode = NULL;
-	struct file *lower_file = NULL;
-	struct vfsmount *lower_mnt;
 	struct ecryptfs_file_info *file_info;
-	int lower_flags;
 
 	mount_crypt_stat = &ecryptfs_superblock_to_private(
 		ecryptfs_dentry->d_sb)->mount_crypt_stat;
@@ -277,25 +187,12 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 	if (!(crypt_stat->flags & ECRYPTFS_POLICY_APPLIED)) {
 		ecryptfs_printk(KERN_DEBUG, "Setting flags for stat...\n");
 		/* Policy code enabled in future release */
-		crypt_stat->flags |= ECRYPTFS_POLICY_APPLIED;
-		crypt_stat->flags |= ECRYPTFS_ENCRYPTED;
+		crypt_stat->flags |= (ECRYPTFS_POLICY_APPLIED
+				      | ECRYPTFS_ENCRYPTED);
 	}
 	mutex_unlock(&crypt_stat->cs_mutex);
-	lower_flags = file->f_flags;
-	if ((lower_flags & O_ACCMODE) == O_WRONLY)
-		lower_flags = (lower_flags & O_ACCMODE) | O_RDWR;
-	if (file->f_flags & O_APPEND)
-		lower_flags &= ~O_APPEND;
-	lower_mnt = ecryptfs_dentry_to_lower_mnt(ecryptfs_dentry);
-	/* Corresponding fput() in ecryptfs_release() */
-	if ((rc = ecryptfs_open_lower_file(&lower_file, lower_dentry, lower_mnt,
-					   lower_flags))) {
-		ecryptfs_printk(KERN_ERR, "Error opening lower file\n");
-		goto out_puts;
-	}
-	ecryptfs_set_file_lower(file, lower_file);
-	/* Isn't this check the same as the one in lookup? */
-	lower_inode = lower_dentry->d_inode;
+	ecryptfs_set_file_lower(
+		file, ecryptfs_inode_to_private(inode)->lower_file);
 	if (S_ISDIR(ecryptfs_dentry->d_inode->i_mode)) {
 		ecryptfs_printk(KERN_DEBUG, "This is a directory\n");
 		crypt_stat->flags &= ~(ECRYPTFS_ENCRYPTED);
@@ -305,7 +202,7 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 	mutex_lock(&crypt_stat->cs_mutex);
 	if (!(crypt_stat->flags & ECRYPTFS_POLICY_APPLIED)
 	    || !(crypt_stat->flags & ECRYPTFS_KEY_VALID)) {
-		rc = ecryptfs_read_metadata(ecryptfs_dentry, lower_file);
+		rc = ecryptfs_read_metadata(ecryptfs_dentry);
 		if (rc) {
 			ecryptfs_printk(KERN_DEBUG,
 					"Valid headers not found\n");
@@ -317,7 +214,7 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 				       "and plaintext passthrough mode is not "
 				       "enabled; returning -EIO\n");
 				mutex_unlock(&crypt_stat->cs_mutex);
-				goto out_puts;
+				goto out_free;
 			}
 			rc = 0;
 			crypt_stat->flags &= ~(ECRYPTFS_ENCRYPTED);
@@ -329,11 +226,8 @@ static int ecryptfs_open(struct inode *inode, struct file *file)
 	ecryptfs_printk(KERN_DEBUG, "inode w/ addr = [0x%p], i_ino = [0x%.16x] "
 			"size: [0x%.16x]\n", inode, inode->i_ino,
 			i_size_read(inode));
-	ecryptfs_set_file_lower(file, lower_file);
 	goto out;
-out_puts:
-	mntput(lower_mnt);
-	dput(lower_dentry);
+out_free:
 	kmem_cache_free(ecryptfs_file_info_cache,
 			ecryptfs_file_to_private(file));
 out:
@@ -353,19 +247,9 @@ static int ecryptfs_flush(struct file *file, fl_owner_t td)
 
 static int ecryptfs_release(struct inode *inode, struct file *file)
 {
-	struct file *lower_file = ecryptfs_file_to_lower(file);
-	struct ecryptfs_file_info *file_info = ecryptfs_file_to_private(file);
-	struct inode *lower_inode = ecryptfs_inode_to_lower(inode);
-	int rc;
-
-	if ((rc = ecryptfs_close_lower_file(lower_file))) {
-		printk(KERN_ERR "Error closing lower_file\n");
-		goto out;
-	}
-	inode->i_blocks = lower_inode->i_blocks;
-	kmem_cache_free(ecryptfs_file_info_cache, file_info);
-out:
-	return rc;
+	kmem_cache_free(ecryptfs_file_info_cache,
+			ecryptfs_file_to_private(file));
+	return 0;
 }
 
 static int
@@ -396,20 +280,6 @@ static int ecryptfs_fasync(int fd, struct file *file, int flag)
 	return rc;
 }
 
-static ssize_t ecryptfs_sendfile(struct file *file, loff_t * ppos,
-				 size_t count, read_actor_t actor, void *target)
-{
-	struct file *lower_file = NULL;
-	int rc = -EINVAL;
-
-	lower_file = ecryptfs_file_to_lower(file);
-	if (lower_file->f_op && lower_file->f_op->sendfile)
-		rc = lower_file->f_op->sendfile(lower_file, ppos, count,
-						actor, target);
-
-	return rc;
-}
-
 static int ecryptfs_ioctl(struct inode *inode, struct file *file,
 			  unsigned int cmd, unsigned long arg);
 
@@ -422,11 +292,11 @@ const struct file_operations ecryptfs_dir_fops = {
 	.release = ecryptfs_release,
 	.fsync = ecryptfs_fsync,
 	.fasync = ecryptfs_fasync,
-	.sendfile = ecryptfs_sendfile,
+	.splice_read = generic_file_splice_read,
 };
 
 const struct file_operations ecryptfs_main_fops = {
-	.llseek = ecryptfs_llseek,
+	.llseek = generic_file_llseek,
 	.read = do_sync_read,
 	.aio_read = ecryptfs_read_update_atime,
 	.write = do_sync_write,
@@ -439,7 +309,7 @@ const struct file_operations ecryptfs_main_fops = {
 	.release = ecryptfs_release,
 	.fsync = ecryptfs_fsync,
 	.fasync = ecryptfs_fasync,
-	.sendfile = ecryptfs_sendfile,
+	.splice_read = generic_file_splice_read,
 };
 
 static int

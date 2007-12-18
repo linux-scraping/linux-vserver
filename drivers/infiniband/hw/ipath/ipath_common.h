@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -78,6 +78,8 @@
 #define IPATH_IB_LINKINIT		3
 #define IPATH_IB_LINKDOWN_SLEEP		4
 #define IPATH_IB_LINKDOWN_DISABLE	5
+#define IPATH_IB_LINK_LOOPBACK	6 /* enable local loopback */
+#define IPATH_IB_LINK_EXTERNAL	7 /* normal, disable local loopback */
 
 /*
  * stats maintained by the driver.  For now, at least, this is global
@@ -98,8 +100,7 @@ struct infinipath_stats {
 	__u64 sps_hwerrs;
 	/* number of times IB link changed state unexpectedly */
 	__u64 sps_iblink;
-	/* kernel receive interrupts that didn't read intstat */
-	__u64 sps_fastrcvint;
+	__u64 sps_unused; /* was fastrcvint, no longer implemented */
 	/* number of kernel (port0) packets received */
 	__u64 sps_port0pkts;
 	/* number of "ethernet" packets sent by driver */
@@ -187,8 +188,9 @@ typedef enum _ipath_ureg {
 #define IPATH_RUNTIME_FORCE_WC_ORDER	0x4
 #define IPATH_RUNTIME_RCVHDR_COPY	0x8
 #define IPATH_RUNTIME_MASTER	0x10
-#define IPATH_RUNTIME_PBC_REWRITE 0x20
-#define IPATH_RUNTIME_LOOSE_DMA_ALIGN 0x40
+/* 0x20 and 0x40 are no longer used, but are reserved for ABI compatibility */
+#define IPATH_RUNTIME_FORCE_PIOAVAIL 0x400
+#define IPATH_RUNTIME_PIO_REGSWAPPED 0x800
 
 /*
  * This structure is returned by ipath_userinit() immediately after
@@ -316,10 +318,16 @@ struct ipath_base_info {
 	/* address of readonly memory copy of the rcvhdrq tail register. */
 	__u64 spi_rcvhdr_tailaddr;
 
-	/* shared memory pages for subports if IPATH_RUNTIME_MASTER is set */
+	/* shared memory pages for subports if port is shared */
 	__u64 spi_subport_uregbase;
 	__u64 spi_subport_rcvegrbuf;
 	__u64 spi_subport_rcvhdr_base;
+
+	/* shared memory page for hardware port if it is shared */
+	__u64 spi_port_uregbase;
+	__u64 spi_port_rcvegrbuf;
+	__u64 spi_port_rcvhdr_base;
+	__u64 spi_port_rcvhdr_tailaddr;
 
 } __attribute__ ((aligned(8)));
 
@@ -344,7 +352,7 @@ struct ipath_base_info {
  * may not be implemented; the user code must deal with this if it
  * cares, or it must abort after initialization reports the difference.
  */
-#define IPATH_USER_SWMINOR 3
+#define IPATH_USER_SWMINOR 6
 
 #define IPATH_USER_SWVERSION ((IPATH_USER_SWMAJOR<<16) | IPATH_USER_SWMINOR)
 
@@ -418,11 +426,21 @@ struct ipath_user_info {
 #define IPATH_CMD_TID_UPDATE	19	/* update expected TID entries */
 #define IPATH_CMD_TID_FREE	20	/* free expected TID entries */
 #define IPATH_CMD_SET_PART_KEY	21	/* add partition key */
-#define IPATH_CMD_SLAVE_INFO	22	/* return info on slave processes */
+#define __IPATH_CMD_SLAVE_INFO	22	/* return info on slave processes (for old user code) */
 #define IPATH_CMD_ASSIGN_PORT	23	/* allocate HCA and port */
 #define IPATH_CMD_USER_INIT 	24	/* set up userspace */
+#define IPATH_CMD_UNUSED_1	25
+#define IPATH_CMD_UNUSED_2	26
+#define IPATH_CMD_PIOAVAILUPD	27	/* force an update of PIOAvail reg */
+#define IPATH_CMD_POLL_TYPE	28	/* set the kind of polling we want */
 
-#define IPATH_CMD_MAX		24
+#define IPATH_CMD_MAX		28
+
+/*
+ * Poll types
+ */
+#define IPATH_POLL_TYPE_URGENT	 0x01
+#define IPATH_POLL_TYPE_OVERFLOW 0x02
 
 struct ipath_port_info {
 	__u32 num_active;	/* number of active units */
@@ -430,7 +448,7 @@ struct ipath_port_info {
 	__u16 port;		/* port on unit assigned to caller */
 	__u16 subport;		/* subport on unit assigned to caller */
 	__u16 num_ports;	/* number of ports available on unit */
-	__u16 num_subports;	/* number of subport slaves opened on port */
+	__u16 num_subports;	/* number of subports opened on port */
 };
 
 struct ipath_tid_info {
@@ -463,6 +481,8 @@ struct ipath_cmd {
 		__u16 part_key;
 		/* user address of __u32 bitmask of active slaves */
 		__u64 slave_mask_addr;
+		/* type of polling we want */
+		__u16 poll_type;
 	} cmd;
 };
 
@@ -491,10 +511,27 @@ struct __ipath_sendpkt {
 	struct ipath_iovec sps_iov[4];
 };
 
-/* Passed into diag data special file's ->write method. */
+/*
+ * diagnostics can send a packet by "writing" one of the following
+ * two structs to diag data special file
+ * The first is the legacy version for backward compatibility
+ */
 struct ipath_diag_pkt {
 	__u32 unit;
 	__u64 data;
+	__u32 len;
+};
+
+/* The second diag_pkt struct is the expanded version that allows
+ * more control over the packet, specifically, by allowing a custom
+ * pbc (+ extra) qword, so that special modes and deliberate
+ * changes to CRCs can be used. The elements were also re-ordered
+ * for better alignment and to avoid padding issues.
+ */
+struct ipath_diag_xpkt {
+	__u64 data;
+	__u64 pbc_wd;
+	__u32 unit;
 	__u32 len;
 };
 

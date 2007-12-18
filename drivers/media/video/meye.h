@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2001-2004 Stelian Pop <stelian@popies.net>
  *
- * Copyright (C) 2001-2002 Alcôve <www.alcove.com>
+ * Copyright (C) 2001-2002 AlcÃ´ve <www.alcove.com>
  *
  * Copyright (C) 2000 Andrew Tridgell <tridge@valinux.com>
  *
@@ -255,7 +255,7 @@
 /****************************************************************************/
 
 /* Sony Programmable I/O Controller for accessing the camera commands */
-#include <linux/sonypi.h>
+#include <linux/sony-laptop.h>
 
 /* private API definitions */
 #include <linux/meye.h>

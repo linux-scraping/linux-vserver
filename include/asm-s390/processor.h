@@ -57,6 +57,7 @@ struct cpuinfo_S390
 
 extern void s390_adjust_jiffies(void);
 extern void print_cpu_info(struct cpuinfo_S390 *);
+extern int get_cpu_capability(unsigned int *);
 
 /* Lazy FPU handling on uni-processor */
 extern struct task_struct *last_task_used_math;
@@ -92,7 +93,6 @@ struct thread_struct {
 	s390_fp_regs fp_regs;
 	unsigned int  acrs[NUM_ACRS];
         unsigned long ksp;              /* kernel stack pointer             */
-        unsigned long user_seg;         /* HSTD                             */
 	mm_segment_t mm_segment;
         unsigned long prot_addr;        /* address of protection-excep.     */
         unsigned int error_code;        /* error-code of last prog-excep.   */
@@ -127,22 +127,9 @@ struct stack_frame {
 
 #define ARCH_MIN_TASKALIGN	8
 
-#ifndef __s390x__
-# define __SWAPPER_PG_DIR __pa(&swapper_pg_dir[0]) + _SEGMENT_TABLE
-#else /* __s390x__ */
-# define __SWAPPER_PG_DIR __pa(&swapper_pg_dir[0]) + _REGION_TABLE
-#endif /* __s390x__ */
-
-#define INIT_THREAD {{0,{{0},{0},{0},{0},{0},{0},{0},{0},{0},{0},	       \
-			    {0},{0},{0},{0},{0},{0}}},			       \
-		     {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},	       \
-		     sizeof(init_stack) + (unsigned long) &init_stack,	       \
-		     __SWAPPER_PG_DIR,					       \
-		     {0},						       \
-		     0,0,0,						       \
-		     (per_struct) {{{{0,}}},0,0,0,0,{{0,}}},		       \
-		     0, 0						       \
-} 
+#define INIT_THREAD {							\
+	.ksp = sizeof(init_stack) + (unsigned long) &init_stack,	\
+}
 
 /*
  * Do necessary setup to start up a new thread.
@@ -196,6 +183,7 @@ extern unsigned long thread_saved_pc(struct task_struct *t);
 extern char *task_show_regs(struct task_struct *task, char *buffer);
 
 extern void show_registers(struct pt_regs *regs);
+extern void show_code(struct pt_regs *regs);
 extern void show_trace(struct task_struct *task, unsigned long *sp);
 
 unsigned long get_wchan(struct task_struct *p);
@@ -212,6 +200,11 @@ static inline void cpu_relax(void)
 	if (MACHINE_HAS_DIAG44)
 		asm volatile("diag 0,0,68");
 	barrier();
+}
+
+static inline void psw_set_key(unsigned int key)
+{
+	asm volatile("spka 0(%0)" : : "d" (key));
 }
 
 /*
@@ -350,8 +343,8 @@ extern void (*s390_base_ext_handler_fn)(void);
 /*
  * CPU idle notifier chain.
  */
-#define CPU_IDLE	0
-#define CPU_NOT_IDLE	1
+#define S390_CPU_IDLE		0
+#define S390_CPU_NOT_IDLE	1
 
 struct notifier_block;
 int register_idle_notifier(struct notifier_block *nb);

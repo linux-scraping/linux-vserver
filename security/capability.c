@@ -8,7 +8,6 @@
  *
  */
 
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/security.h>
@@ -17,7 +16,6 @@
 #include <linux/mman.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
-#include <linux/smp_lock.h>
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/ptrace.h>
@@ -39,7 +37,13 @@ static struct security_operations capability_ops = {
 
 	.inode_setxattr =		cap_inode_setxattr,
 	.inode_removexattr =		cap_inode_removexattr,
+	.inode_need_killpriv =		cap_inode_need_killpriv,
+	.inode_killpriv =		cap_inode_killpriv,
 
+	.task_kill =			cap_task_kill,
+	.task_setscheduler =		cap_task_setscheduler,
+	.task_setioprio =		cap_task_setioprio,
+	.task_setnice =			cap_task_setnice,
 	.task_post_setuid =		cap_task_post_setuid,
 	.task_reparent_to_init =	cap_task_reparent_to_init,
 
@@ -53,7 +57,6 @@ static int secondary;
 
 static int capability_disable;
 module_param_named(disable, capability_disable, int, 0);
-MODULE_PARM_DESC(disable, "To disable capabilities module set disable = 1");
 
 static int __init capability_init (void)
 {
@@ -76,26 +79,4 @@ static int __init capability_init (void)
 	return 0;
 }
 
-static void __exit capability_exit (void)
-{
-	if (capability_disable)
-		return;
-	/* remove ourselves from the security framework */
-	if (secondary) {
-		if (mod_unreg_security (KBUILD_MODNAME, &capability_ops))
-			printk (KERN_INFO "Failure unregistering capabilities "
-				"with primary module.\n");
-		return;
-	}
-
-	if (unregister_security (&capability_ops)) {
-		printk (KERN_INFO
-			"Failure unregistering capabilities with the kernel\n");
-	}
-}
-
 security_initcall (capability_init);
-module_exit (capability_exit);
-
-MODULE_DESCRIPTION("Standard Linux Capabilities Security Module");
-MODULE_LICENSE("GPL");

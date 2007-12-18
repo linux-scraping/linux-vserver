@@ -6,7 +6,6 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/pci.h>
 #include <linux/device.h>
 
 #include <asm/system.h>
@@ -34,8 +33,9 @@ struct sbus_bus *sbus_root;
 
 static void __init fill_sbus_device(struct device_node *dp, struct sbus_dev *sdev)
 {
+	struct dev_archdata *sd;
 	unsigned long base;
-	void *pval;
+	const void *pval;
 	int len, err;
 
 	sdev->prom_node = dp->node;
@@ -68,6 +68,10 @@ static void __init fill_sbus_device(struct device_node *dp, struct sbus_dev *sde
 
 	sbus_fill_device_irq(sdev);
 
+	sd = &sdev->ofdev.dev.archdata;
+	sd->prom_node = dp;
+	sd->op = &sdev->ofdev;
+
 	sdev->ofdev.node = dp;
 	if (sdev->parent)
 		sdev->ofdev.dev.parent = &sdev->parent->ofdev.dev;
@@ -86,7 +90,7 @@ static void __init fill_sbus_device(struct device_node *dp, struct sbus_dev *sde
 
 static void __init sbus_bus_ranges_init(struct device_node *dp, struct sbus_bus *sbus)
 {
-	void *pval;
+	const void *pval;
 	int len;
 
 	pval = of_get_property(dp, "ranges", &len);
@@ -206,6 +210,10 @@ static void __init walk_children(struct device_node *dp, struct sbus_dev *parent
 
 			sdev->bus = sbus;
 			sdev->parent = parent;
+			sdev->ofdev.dev.archdata.iommu =
+				sbus->ofdev.dev.archdata.iommu;
+			sdev->ofdev.dev.archdata.stc =
+				sbus->ofdev.dev.archdata.stc;
 
 			fill_sbus_device(dp, sdev);
 
@@ -265,6 +273,11 @@ static void __init build_one_sbus(struct device_node *dp, int num_sbus)
 
 			sdev->bus = sbus;
 			sdev->parent = NULL;
+			sdev->ofdev.dev.archdata.iommu =
+				sbus->ofdev.dev.archdata.iommu;
+			sdev->ofdev.dev.archdata.stc =
+				sbus->ofdev.dev.archdata.stc;
+
 			fill_sbus_device(dev_dp, sdev);
 
 			walk_children(dev_dp, sdev, sbus);

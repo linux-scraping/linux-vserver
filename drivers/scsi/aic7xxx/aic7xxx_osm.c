@@ -335,8 +335,8 @@ static uint32_t aic7xxx_periodic_otag;
  */
 static char *aic7xxx = NULL;
 
-MODULE_AUTHOR("Maintainer: Justin T. Gibbs <gibbs@scsiguy.com>");
-MODULE_DESCRIPTION("Adaptec Aic77XX/78XX SCSI Host Bus Adapter driver");
+MODULE_AUTHOR("Maintainer: Hannes Reinecke <hare@suse.de>");
+MODULE_DESCRIPTION("Adaptec AIC77XX/78XX SCSI Host Bus Adapter driver");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION(AIC7XXX_DRIVER_VERSION);
 module_param(aic7xxx, charp, 0444);
@@ -402,18 +402,8 @@ ahc_linux_unmap_scb(struct ahc_softc *ahc, struct scb *scb)
 
 	cmd = scb->io_ctx;
 	ahc_sync_sglist(ahc, scb, BUS_DMASYNC_POSTWRITE);
-	if (cmd->use_sg != 0) {
-		struct scatterlist *sg;
 
-		sg = (struct scatterlist *)cmd->request_buffer;
-		pci_unmap_sg(ahc->dev_softc, sg, cmd->use_sg,
-			     cmd->sc_data_direction);
-	} else if (cmd->request_bufflen != 0) {
-		pci_unmap_single(ahc->dev_softc,
-				 scb->platform_data->buf_busaddr,
-				 cmd->request_bufflen,
-				 cmd->sc_data_direction);
-	}
+	scsi_dma_unmap(cmd);
 }
 
 static __inline int
@@ -757,6 +747,7 @@ struct scsi_host_template aic7xxx_driver_template = {
 	.max_sectors		= 8192,
 	.cmd_per_lun		= 2,
 	.use_clustering		= ENABLE_CLUSTERING,
+	.use_sg_chaining	= ENABLE_SG_CHAINING,
 	.slave_alloc		= ahc_linux_slave_alloc,
 	.slave_configure	= ahc_linux_slave_configure,
 	.target_alloc		= ahc_linux_target_alloc,
@@ -1381,6 +1372,7 @@ ahc_linux_run_command(struct ahc_softc *ahc, struct ahc_linux_device *dev,
 	struct	 ahc_tmode_tstate *tstate;
 	uint16_t mask;
 	struct scb_tailq *untagged_q = NULL;
+	int nseg;
 
 	/*
 	 * Schedule us to run later.  The only reason we are not
@@ -1472,23 +1464,21 @@ ahc_linux_run_command(struct ahc_softc *ahc, struct ahc_linux_device *dev,
 	ahc_set_residual(scb, 0);
 	ahc_set_sense_residual(scb, 0);
 	scb->sg_count = 0;
-	if (cmd->use_sg != 0) {
+
+	nseg = scsi_dma_map(cmd);
+	BUG_ON(nseg < 0);
+	if (nseg > 0) {
 		struct	ahc_dma_seg *sg;
 		struct	scatterlist *cur_seg;
-		struct	scatterlist *end_seg;
-		int	nseg;
+		int i;
 
-		cur_seg = (struct scatterlist *)cmd->request_buffer;
-		nseg = pci_map_sg(ahc->dev_softc, cur_seg, cmd->use_sg,
-				  cmd->sc_data_direction);
-		end_seg = cur_seg + nseg;
 		/* Copy the segments into the SG list. */
 		sg = scb->sg_list;
 		/*
 		 * The sg_count may be larger than nseg if
 		 * a transfer crosses a 32bit page.
-		 */ 
-		while (cur_seg < end_seg) {
+		 */
+		scsi_for_each_sg(cmd, cur_seg, nseg, i) {
 			dma_addr_t addr;
 			bus_size_t len;
 			int consumed;
@@ -1499,7 +1489,6 @@ ahc_linux_run_command(struct ahc_softc *ahc, struct ahc_linux_device *dev,
 						     sg, addr, len);
 			sg += consumed;
 			scb->sg_count += consumed;
-			cur_seg++;
 		}
 		sg--;
 		sg->len |= ahc_htole32(AHC_DMA_LAST_SEG);
@@ -1516,33 +1505,6 @@ ahc_linux_run_command(struct ahc_softc *ahc, struct ahc_linux_device *dev,
 		 */
 		scb->hscb->dataptr = scb->sg_list->addr;
 		scb->hscb->datacnt = scb->sg_list->len;
-	} else if (cmd->request_bufflen != 0) {
-		struct	 ahc_dma_seg *sg;
-		dma_addr_t addr;
-
-		sg = scb->sg_list;
-		addr = pci_map_single(ahc->dev_softc,
-				      cmd->request_buffer,
-				      cmd->request_bufflen,
-				      cmd->sc_data_direction);
-		scb->platform_data->buf_busaddr = addr;
-		scb->sg_count = ahc_linux_map_seg(ahc, scb,
-						  sg, addr,
-						  cmd->request_bufflen);
-		sg->len |= ahc_htole32(AHC_DMA_LAST_SEG);
-
-		/*
-		 * Reset the sg list pointer.
-		 */
-		scb->hscb->sgptr =
-			ahc_htole32(scb->sg_list_phys | SG_FULL_RESID);
-
-		/*
-		 * Copy the first SG into the "current"
-		 * data pointer area.
-		 */
-		scb->hscb->dataptr = sg->addr;
-		scb->hscb->datacnt = sg->len;
 	} else {
 		scb->hscb->sgptr = ahc_htole32(SG_LIST_NULL);
 		scb->hscb->dataptr = 0;
@@ -2356,8 +2318,13 @@ static void ahc_linux_set_period(struct scsi_target *starget, int period)
 
 	if (period < 9)
 		period = 9;	/* 12.5ns is our minimum */
-	if (period == 9)
-		ppr_options |= MSG_EXT_PPR_DT_REQ;
+	if (period == 9) {
+		if (spi_max_width(starget))
+			ppr_options |= MSG_EXT_PPR_DT_REQ;
+		else
+			/* need wide for DT and need DT for 12.5 ns */
+			period = 10;
+	}
 
 	ahc_compile_devinfo(&devinfo, shost->this_id, starget->id, 0,
 			    starget->channel + 'A', ROLE_INITIATOR);
@@ -2420,7 +2387,7 @@ static void ahc_linux_set_dt(struct scsi_target *starget, int dt)
 	unsigned long flags;
 	struct ahc_syncrate *syncrate;
 
-	if (dt) {
+	if (dt && spi_max_width(starget)) {
 		ppr_options |= MSG_EXT_PPR_DT_REQ;
 		if (!width)
 			ahc_linux_set_width(starget, 1);

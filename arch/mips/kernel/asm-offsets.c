@@ -82,7 +82,7 @@ void output_task_defines(void)
 {
 	text("/* MIPS task_struct offsets. */");
 	offset("#define TASK_STATE         ", struct task_struct, state);
-	offset("#define TASK_THREAD_INFO   ", struct task_struct, thread_info);
+	offset("#define TASK_THREAD_INFO   ", struct task_struct, stack);
 	offset("#define TASK_FLAGS         ", struct task_struct, flags);
 	offset("#define TASK_MM            ", struct task_struct, mm);
 	offset("#define TASK_PID           ", struct task_struct, pid);
@@ -102,7 +102,6 @@ void output_thread_info_defines(void)
 	offset("#define TI_ADDR_LIMIT      ", struct thread_info, addr_limit);
 	offset("#define TI_RESTART_BLOCK   ", struct thread_info, restart_block);
 	offset("#define TI_REGS            ", struct thread_info, regs);
-	constant("#define _THREAD_SIZE_ORDER ", THREAD_SIZE_ORDER);
 	constant("#define _THREAD_SIZE       ", THREAD_SIZE);
 	constant("#define _THREAD_MASK       ", THREAD_MASK);
 	linefeed;
@@ -133,7 +132,6 @@ void output_thread_defines(void)
 	offset("#define THREAD_ECODE   ", struct task_struct, \
 	       thread.error_code);
 	offset("#define THREAD_TRAPNO  ", struct task_struct, thread.trap_no);
-	offset("#define THREAD_MFLAGS  ", struct task_struct, thread.mflags);
 	offset("#define THREAD_TRAMP   ", struct task_struct, \
 	       thread.irix_trampoline);
 	offset("#define THREAD_OLDCTX  ", struct task_struct, \
@@ -233,6 +231,10 @@ void output_mm_defines(void)
 	constant("#define _PGD_T_LOG2    ", PGD_T_LOG2);
 	constant("#define _PMD_T_LOG2    ", PMD_T_LOG2);
 	constant("#define _PTE_T_LOG2    ", PTE_T_LOG2);
+	linefeed;
+	constant("#define _PGD_ORDER     ", PGD_ORDER);
+	constant("#define _PMD_ORDER     ", PMD_ORDER);
+	constant("#define _PTE_ORDER     ", PTE_ORDER);
 	linefeed;
 	constant("#define _PMD_SHIFT     ", PMD_SHIFT);
 	constant("#define _PGDIR_SHIFT   ", PGDIR_SHIFT);

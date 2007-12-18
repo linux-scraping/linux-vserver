@@ -46,7 +46,7 @@ static struct timer_list power_timer, blink_timer, debounce_timer, volume_timer;
 
 static int machine_state;
 
-static void ATTRIB_NORET sgi_machine_power_off(void)
+static void __noreturn sgi_machine_power_off(void)
 {
 	unsigned int tmp;
 
@@ -68,7 +68,7 @@ static void ATTRIB_NORET sgi_machine_power_off(void)
 	}
 }
 
-static void ATTRIB_NORET sgi_machine_restart(char *command)
+static void __noreturn sgi_machine_restart(char *command)
 {
 	if (machine_state & MACHINE_SHUTTING_DOWN)
 		sgi_machine_power_off();
@@ -76,7 +76,7 @@ static void ATTRIB_NORET sgi_machine_restart(char *command)
 	while (1);
 }
 
-static void ATTRIB_NORET sgi_machine_halt(void)
+static void __noreturn sgi_machine_halt(void)
 {
 	if (machine_state & MACHINE_SHUTTING_DOWN)
 		sgi_machine_power_off();
@@ -232,11 +232,18 @@ static struct notifier_block panic_block = {
 
 static int __init reboot_setup(void)
 {
+	int res;
+
 	_machine_restart = sgi_machine_restart;
 	_machine_halt = sgi_machine_halt;
 	pm_power_off = sgi_machine_power_off;
 
-	request_irq(SGI_PANEL_IRQ, panel_int, 0, "Front Panel", NULL);
+	res = request_irq(SGI_PANEL_IRQ, panel_int, 0, "Front Panel", NULL);
+	if (res) {
+		printk(KERN_ERR "Allocation of front panel IRQ failed\n");
+		return res;
+	}
+
 	init_timer(&blink_timer);
 	blink_timer.function = blink_timeout;
 	atomic_notifier_chain_register(&panic_notifier_list, &panic_block);

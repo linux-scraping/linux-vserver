@@ -37,6 +37,7 @@
  */
 
 #include <linux/hardirq.h>
+#include <linux/sched.h>
 
 #include <asm/io.h>
 
@@ -203,16 +204,11 @@ static void dump_cqe(struct mthca_dev *dev, void *cqe_ptr)
 static inline void update_cons_index(struct mthca_dev *dev, struct mthca_cq *cq,
 				     int incr)
 {
-	__be32 doorbell[2];
-
 	if (mthca_is_memfree(dev)) {
 		*cq->set_ci_db = cpu_to_be32(cq->cons_index);
 		wmb();
 	} else {
-		doorbell[0] = cpu_to_be32(MTHCA_TAVOR_CQ_DB_INC_CI | cq->cqn);
-		doorbell[1] = cpu_to_be32(incr - 1);
-
-		mthca_write64(doorbell,
+		mthca_write64(MTHCA_TAVOR_CQ_DB_INC_CI | cq->cqn, incr - 1,
 			      dev->kar + MTHCA_CQ_DOORBELL,
 			      MTHCA_GET_DOORBELL_LOCK(&dev->doorbell_lock));
 		/*
@@ -284,7 +280,7 @@ void mthca_cq_clean(struct mthca_dev *dev, struct mthca_cq *cq, u32 qpn,
 {
 	struct mthca_cqe *cqe;
 	u32 prod_index;
-	int nfreed = 0;
+	int i, nfreed = 0;
 
 	spin_lock_irq(&cq->lock);
 
@@ -321,6 +317,8 @@ void mthca_cq_clean(struct mthca_dev *dev, struct mthca_cq *cq, u32 qpn,
 	}
 
 	if (nfreed) {
+		for (i = 0; i < nfreed; ++i)
+			set_cqe_hw(get_cqe(cq, (cq->cons_index + i) & cq->ibcq.cqe));
 		wmb();
 		cq->cons_index += nfreed;
 		update_cons_index(dev, cq, nfreed);
@@ -726,38 +724,32 @@ repoll:
 	return err == 0 || err == -EAGAIN ? npolled : err;
 }
 
-int mthca_tavor_arm_cq(struct ib_cq *cq, enum ib_cq_notify notify)
+int mthca_tavor_arm_cq(struct ib_cq *cq, enum ib_cq_notify_flags flags)
 {
-	__be32 doorbell[2];
+	u32 dbhi = ((flags & IB_CQ_SOLICITED_MASK) == IB_CQ_SOLICITED ?
+		    MTHCA_TAVOR_CQ_DB_REQ_NOT_SOL :
+		    MTHCA_TAVOR_CQ_DB_REQ_NOT) |
+		to_mcq(cq)->cqn;
 
-	doorbell[0] = cpu_to_be32((notify == IB_CQ_SOLICITED ?
-				   MTHCA_TAVOR_CQ_DB_REQ_NOT_SOL :
-				   MTHCA_TAVOR_CQ_DB_REQ_NOT)      |
-				  to_mcq(cq)->cqn);
-	doorbell[1] = (__force __be32) 0xffffffff;
-
-	mthca_write64(doorbell,
-		      to_mdev(cq->device)->kar + MTHCA_CQ_DOORBELL,
+	mthca_write64(dbhi, 0xffffffff, to_mdev(cq->device)->kar + MTHCA_CQ_DOORBELL,
 		      MTHCA_GET_DOORBELL_LOCK(&to_mdev(cq->device)->doorbell_lock));
 
 	return 0;
 }
 
-int mthca_arbel_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify notify)
+int mthca_arbel_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 {
 	struct mthca_cq *cq = to_mcq(ibcq);
-	__be32 doorbell[2];
-	u32 sn;
-	__be32 ci;
+	__be32 db_rec[2];
+	u32 dbhi;
+	u32 sn = cq->arm_sn & 3;
 
-	sn = cq->arm_sn & 3;
-	ci = cpu_to_be32(cq->cons_index);
+	db_rec[0] = cpu_to_be32(cq->cons_index);
+	db_rec[1] = cpu_to_be32((cq->cqn << 8) | (2 << 5) | (sn << 3) |
+				((flags & IB_CQ_SOLICITED_MASK) ==
+				 IB_CQ_SOLICITED ? 1 : 2));
 
-	doorbell[0] = ci;
-	doorbell[1] = cpu_to_be32((cq->cqn << 8) | (2 << 5) | (sn << 3) |
-				  (notify == IB_CQ_SOLICITED ? 1 : 2));
-
-	mthca_write_db_rec(doorbell, cq->arm_db);
+	mthca_write_db_rec(db_rec, cq->arm_db);
 
 	/*
 	 * Make sure that the doorbell record in host memory is
@@ -765,14 +757,12 @@ int mthca_arbel_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify notify)
 	 */
 	wmb();
 
-	doorbell[0] = cpu_to_be32((sn << 28)                       |
-				  (notify == IB_CQ_SOLICITED ?
-				   MTHCA_ARBEL_CQ_DB_REQ_NOT_SOL :
-				   MTHCA_ARBEL_CQ_DB_REQ_NOT)      |
-				  cq->cqn);
-	doorbell[1] = ci;
+	dbhi = (sn << 28) |
+		((flags & IB_CQ_SOLICITED_MASK) == IB_CQ_SOLICITED ?
+		 MTHCA_ARBEL_CQ_DB_REQ_NOT_SOL :
+		 MTHCA_ARBEL_CQ_DB_REQ_NOT) | cq->cqn;
 
-	mthca_write64(doorbell,
+	mthca_write64(dbhi, cq->cons_index,
 		      to_mdev(ibcq->device)->kar + MTHCA_CQ_DOORBELL,
 		      MTHCA_GET_DOORBELL_LOCK(&to_mdev(ibcq->device)->doorbell_lock));
 

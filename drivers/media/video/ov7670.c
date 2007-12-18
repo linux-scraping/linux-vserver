@@ -5,16 +5,18 @@
  * by Jonathan Corbet with substantial inspiration from Mark
  * McClelland's ovcamchip code.
  *
+ * Copyright 2006-7 Jonathan Corbet <corbet@lwn.net>
+ *
  * This file may be distributed under the terms of the GNU General
  * Public License, version 2.
  */
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/videodev.h>
 #include <media/v4l2-common.h>
+#include <media/v4l2-chip-ident.h>
 #include <linux/i2c.h>
 
 
@@ -162,6 +164,10 @@ MODULE_LICENSE("GPL");
 
 #define REG_GFIX	0x69	/* Fix gain control */
 
+#define REG_REG76	0x76	/* OV's name */
+#define   R76_BLKPCOR	  0x80	  /* Black pixel correction enable */
+#define   R76_WHTPCOR	  0x40	  /* White pixel correction enable */
+
 #define REG_RGB444	0x8c	/* RGB 444 control */
 #define   R444_ENABLE	  0x02	  /* Turn on RGB444, overrides 5x5 */
 #define   R444_RGBX	  0x01	  /* Empty nibble at end */
@@ -255,7 +261,7 @@ static struct regval_list ov7670_default_regs[] = {
 
 	/* Almost all of these are magic "reserved" values.  */
 	{ REG_COM5, 0x61 },	{ REG_COM6, 0x4b },
-	{ 0x16, 0x02 },		{ REG_MVFP, 0x07|MVFP_MIRROR },
+	{ 0x16, 0x02 },		{ REG_MVFP, 0x07 },
 	{ 0x21, 0x02 },		{ 0x22, 0x91 },
 	{ 0x29, 0x07 },		{ 0x33, 0x0b },
 	{ 0x35, 0x0b },		{ 0x37, 0x1d },
@@ -380,6 +386,13 @@ static struct regval_list ov7670_fmt_rgb444[] = {
 	{ 0xff, 0xff },
 };
 
+static struct regval_list ov7670_fmt_raw[] = {
+	{ REG_COM7, COM7_BAYER },
+	{ REG_COM13, 0x08 }, /* No gamma, magic rsvd bit */
+	{ REG_COM16, 0x3d }, /* Edge enhancement, denoise */
+	{ REG_REG76, 0xe1 }, /* Pix correction, magic rsvd */
+	{ 0xff, 0xff },
+};
 
 
 
@@ -402,7 +415,10 @@ static int ov7670_read(struct i2c_client *c, unsigned char reg,
 static int ov7670_write(struct i2c_client *c, unsigned char reg,
 		unsigned char value)
 {
-	return i2c_smbus_write_byte_data(c, reg, value);
+	int ret = i2c_smbus_write_byte_data(c, reg, value);
+	if (reg == REG_COM7 && (value & COM7_RESET))
+		msleep(2);  /* Wait for reset to run */
+	return ret;
 }
 
 
@@ -483,32 +499,39 @@ static struct ov7670_format_struct {
 	__u32 pixelformat;
 	struct regval_list *regs;
 	int cmatrix[CMATRIX_LEN];
+	int bpp;   /* Bytes per pixel */
 } ov7670_formats[] = {
 	{
 		.desc		= "YUYV 4:2:2",
 		.pixelformat	= V4L2_PIX_FMT_YUYV,
 		.regs 		= ov7670_fmt_yuv422,
 		.cmatrix	= { 128, -128, 0, -34, -94, 128 },
+		.bpp		= 2,
 	},
 	{
 		.desc		= "RGB 444",
 		.pixelformat	= V4L2_PIX_FMT_RGB444,
 		.regs		= ov7670_fmt_rgb444,
 		.cmatrix	= { 179, -179, 0, -61, -176, 228 },
+		.bpp		= 2,
 	},
 	{
 		.desc		= "RGB 565",
 		.pixelformat	= V4L2_PIX_FMT_RGB565,
 		.regs		= ov7670_fmt_rgb565,
 		.cmatrix	= { 179, -179, 0, -61, -176, 228 },
+		.bpp		= 2,
+	},
+	{
+		.desc		= "Raw RGB Bayer",
+		.pixelformat	= V4L2_PIX_FMT_SBGGR8,
+		.regs 		= ov7670_fmt_raw,
+		.cmatrix	= { 0, 0, 0, 0, 0, 0 },
+		.bpp		= 1
 	},
 };
-#define N_OV7670_FMTS (sizeof(ov7670_formats)/sizeof(ov7670_formats[0]))
+#define N_OV7670_FMTS ARRAY_SIZE(ov7670_formats)
 
-/*
- * All formats we support are 2 bytes/pixel.
- */
-#define BYTES_PER_PIXEL 2
 
 /*
  * Then there is the issue of window sizes.  Try to capture the info here.
@@ -596,7 +619,7 @@ static struct ov7670_win_size {
 	},
 };
 
-#define N_WIN_SIZES (sizeof(ov7670_win_sizes)/sizeof(ov7670_win_sizes[0]))
+#define N_WIN_SIZES (ARRAY_SIZE(ov7670_win_sizes))
 
 
 /*
@@ -685,7 +708,7 @@ static int ov7670_try_fmt(struct i2c_client *c, struct v4l2_format *fmt,
 	 */
 	pix->width = wsize->width;
 	pix->height = wsize->height;
-	pix->bytesperline = pix->width*BYTES_PER_PIXEL;
+	pix->bytesperline = pix->width*ov7670_formats[index].bpp;
 	pix->sizeimage = pix->height*pix->bytesperline;
 	return 0;
 }
@@ -699,11 +722,21 @@ static int ov7670_s_fmt(struct i2c_client *c, struct v4l2_format *fmt)
 	struct ov7670_format_struct *ovfmt;
 	struct ov7670_win_size *wsize;
 	struct ov7670_info *info = i2c_get_clientdata(c);
-	unsigned char com7;
+	unsigned char com7, clkrc;
 
 	ret = ov7670_try_fmt(c, fmt, &ovfmt, &wsize);
 	if (ret)
 		return ret;
+	/*
+	 * HACK: if we're running rgb565 we need to grab then rewrite
+	 * CLKRC.  If we're *not*, however, then rewriting clkrc hoses
+	 * the colors.
+	 */
+	if (fmt->fmt.pix.pixelformat == V4L2_PIX_FMT_RGB565) {
+		ret = ov7670_read(c, REG_CLKRC, &clkrc);
+		if (ret)
+			return ret;
+	}
 	/*
 	 * COM7 is a pain in the ass, it doesn't like to be read then
 	 * quickly written afterward.  But we have everything we need
@@ -723,7 +756,10 @@ static int ov7670_s_fmt(struct i2c_client *c, struct v4l2_format *fmt)
 	if (wsize->regs)
 		ret = ov7670_write_array(c, wsize->regs);
 	info->fmt = ovfmt;
-	return 0;
+
+	if (fmt->fmt.pix.pixelformat == V4L2_PIX_FMT_RGB565 && ret == 0)
+		ret = ov7670_write(c, REG_CLKRC, clkrc);
+	return ret;
 }
 
 /*
@@ -1149,7 +1185,7 @@ static struct ov7670_control {
 		.query = ov7670_q_hflip,
 	},
 };
-#define N_CONTROLS (sizeof(ov7670_controls)/sizeof(ov7670_controls[0]))
+#define N_CONTROLS (ARRAY_SIZE(ov7670_controls))
 
 static struct ov7670_control *ov7670_find_control(__u32 id)
 {
@@ -1246,7 +1282,9 @@ static int ov7670_attach(struct i2c_adapter *adapter)
 	ret = ov7670_detect(client);
 	if (ret)
 		goto out_free_info;
-	i2c_attach_client(client);
+	ret = i2c_attach_client(client);
+	if (ret)
+		goto out_free_info;
 	return 0;
 
   out_free_info:
@@ -1270,9 +1308,8 @@ static int ov7670_command(struct i2c_client *client, unsigned int cmd,
 		void *arg)
 {
 	switch (cmd) {
-	case VIDIOC_INT_G_CHIP_IDENT:
-		* (enum v4l2_chip_ident *) arg = V4L2_IDENT_OV7670;
-		return 0;
+	case VIDIOC_G_CHIP_IDENT:
+		return v4l2_chip_ident_i2c_client(client, arg, V4L2_IDENT_OV7670, 0);
 
 	case VIDIOC_INT_RESET:
 		ov7670_reset(client);

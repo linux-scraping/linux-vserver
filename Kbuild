@@ -2,16 +2,18 @@
 # Kbuild for top-level directory of the kernel
 # This file takes care of the following:
 # 1) Generate asm-offsets.h
+# 2) Check for missing system calls
 
 #####
 # 1) Generate asm-offsets.h
 #
 
-offsets-file := include/asm-$(ARCH)/asm-offsets.h
+offsets-file := include/asm-$(SRCARCH)/asm-offsets.h
 
 always  := $(offsets-file)
 targets := $(offsets-file)
-targets += arch/$(ARCH)/kernel/asm-offsets.s
+targets += arch/$(SRCARCH)/kernel/asm-offsets.s
+clean-files := $(addprefix $(objtree)/,$(targets))
 
 # Default sed regexp - multiline due to syntax constraints
 define sed-y
@@ -38,11 +40,21 @@ define cmd_offsets
 endef
 
 # We use internal kbuild rules to avoid the "is up to date" message from make
-arch/$(ARCH)/kernel/asm-offsets.s: arch/$(ARCH)/kernel/asm-offsets.c FORCE
+arch/$(SRCARCH)/kernel/asm-offsets.s: arch/$(SRCARCH)/kernel/asm-offsets.c FORCE
 	$(Q)mkdir -p $(dir $@)
 	$(call if_changed_dep,cc_s_c)
 
-$(obj)/$(offsets-file): arch/$(ARCH)/kernel/asm-offsets.s Kbuild
+$(obj)/$(offsets-file): arch/$(SRCARCH)/kernel/asm-offsets.s Kbuild
 	$(Q)mkdir -p $(dir $@)
 	$(call cmd,offsets)
 
+#####
+# 2) Check for missing system calls
+#
+
+quiet_cmd_syscalls = CALL    $<
+      cmd_syscalls = $(CONFIG_SHELL) $< $(CC) $(c_flags)
+
+PHONY += missing-syscalls
+missing-syscalls: scripts/checksyscalls.sh FORCE
+	$(call cmd,syscalls)

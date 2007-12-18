@@ -27,7 +27,7 @@
  *  device model.  The devices on the OCP bus are seeded by an
  *  an initial OCP device array created by the arch-specific
  *  Device entries can be added/removed/modified through OCP
- *  helper functions to accomodate system and  board-specific
+ *  helper functions to accommodate system and  board-specific
  *  parameters commonly found in embedded systems. OCP also
  *  provides a standard method for devices to describe extended
  *  attributes about themselves to the system.  A standard access
@@ -44,11 +44,11 @@
 #include <linux/pm.h>
 #include <linux/bootmem.h>
 #include <linux/device.h>
+#include <linux/rwsem.h>
 
 #include <asm/io.h>
 #include <asm/ocp.h>
 #include <asm/errno.h>
-#include <asm/rwsem.h>
 #include <asm/semaphore.h>
 
 //#define DBG(x)	printk x

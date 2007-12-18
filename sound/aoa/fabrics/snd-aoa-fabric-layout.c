@@ -582,15 +582,7 @@ static int layouts_list_items;
  * make the fabric handle all the card stuff, etc... */
 static struct layout_dev *layout_device;
 
-static int control_info(struct snd_kcontrol *kcontrol,
-			struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define control_info	snd_ctl_boolean_mono_info
 
 #define AMP_CONTROL(n, description)					\
 static int n##_control_get(struct snd_kcontrol *kcontrol,		\
@@ -724,7 +716,7 @@ static int check_codec(struct aoa_codec *codec,
 		       struct layout_dev *ldev,
 		       struct codec_connect_info *cci)
 {
-	u32 *ref;
+	const u32 *ref;
 	char propname[32];
 	struct codec_connection *cc;
 
@@ -732,7 +724,7 @@ static int check_codec(struct aoa_codec *codec,
 	if (codec->node && (strcmp(codec->node->name, "codec") == 0)) {
 		snprintf(propname, sizeof(propname),
 			 "platform-%s-codec-ref", codec->name);
-		ref = (u32*)get_property(ldev->sound, propname, NULL);
+		ref = of_get_property(ldev->sound, propname, NULL);
 		if (!ref) {
 			printk(KERN_INFO "snd-aoa-fabric-layout: "
 				"required property %s not present\n", propname);
@@ -946,7 +938,7 @@ static struct aoa_fabric layout_fabric = {
 static int aoa_fabric_layout_probe(struct soundbus_dev *sdev)
 {
 	struct device_node *sound = NULL;
-	unsigned int *layout_id;
+	const unsigned int *layout_id;
 	struct layout *layout;
 	struct layout_dev *ldev = NULL;
 	int err;
@@ -962,7 +954,7 @@ static int aoa_fabric_layout_probe(struct soundbus_dev *sdev)
 	}
 	if (!sound) return -ENODEV;
 
-	layout_id = (unsigned int *) get_property(sound, "layout-id", NULL);
+	layout_id = of_get_property(sound, "layout-id", NULL);
 	if (!layout_id)
 		goto outnodev;
 	printk(KERN_INFO "snd-aoa-fabric-layout: found bus with layout %d\n",

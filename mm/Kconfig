@@ -37,7 +37,7 @@ config DISCONTIGMEM_MANUAL
 	  in their physical address spaces, and this option provides
 	  more efficient handling of these holes.  However, the vast
 	  majority of hardware has quite flat address spaces, and
-	  can have degraded performance from extra overhead that
+	  can have degraded performance from the extra overhead that
 	  this option imposes.
 
 	  Many NUMA configurations will have this as the only option.
@@ -112,19 +112,37 @@ config SPARSEMEM_EXTREME
 	def_bool y
 	depends on SPARSEMEM && !SPARSEMEM_STATIC
 
+#
+# SPARSEMEM_VMEMMAP uses a virtually mapped mem_map to optimise pfn_to_page
+# and page_to_pfn.  The most efficient option where kernel virtual space is
+# not under pressure.
+#
+config SPARSEMEM_VMEMMAP_ENABLE
+	def_bool n
+
+config SPARSEMEM_VMEMMAP
+	bool
+	depends on SPARSEMEM
+	default y if (SPARSEMEM_VMEMMAP_ENABLE)
+
 # eventually, we can have this option just 'select SPARSEMEM'
 config MEMORY_HOTPLUG
 	bool "Allow for memory hot-add"
 	depends on SPARSEMEM || X86_64_ACPI_NUMA
-	depends on HOTPLUG && !SOFTWARE_SUSPEND && ARCH_ENABLE_MEMORY_HOTPLUG
-	depends on (IA64 || X86 || PPC64)
+	depends on HOTPLUG && !HIBERNATION && ARCH_ENABLE_MEMORY_HOTPLUG
+	depends on (IA64 || X86 || PPC64 || SUPERH)
 
 comment "Memory hotplug is currently incompatible with Software Suspend"
-	depends on SPARSEMEM && HOTPLUG && SOFTWARE_SUSPEND
+	depends on SPARSEMEM && HOTPLUG && HIBERNATION
 
 config MEMORY_HOTPLUG_SPARSE
 	def_bool y
 	depends on SPARSEMEM && MEMORY_HOTPLUG
+
+config MEMORY_HOTREMOVE
+	bool "Allow for memory hot remove"
+	depends on MEMORY_HOTPLUG && ARCH_ENABLE_MEMORY_HOTREMOVE
+	depends on MIGRATION
 
 # Heavily threaded applications may benefit from splitting the mm-wide
 # page_table_lock, so that faults on different parts of the user address
@@ -163,3 +181,16 @@ config ZONE_DMA_FLAG
 	default "0" if !ZONE_DMA
 	default "1"
 
+config BOUNCE
+	def_bool y
+	depends on BLOCK && MMU && (ZONE_DMA || HIGHMEM)
+
+config NR_QUICK
+	int
+	depends on QUICKLIST
+	default "2" if (SUPERH && !SUPERH64)
+	default "1"
+
+config VIRT_TO_BUS
+	def_bool y
+	depends on !ARCH_NO_VIRT_TO_BUS

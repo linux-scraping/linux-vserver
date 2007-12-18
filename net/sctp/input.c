@@ -79,14 +79,10 @@ static void sctp_add_backlog(struct sock *sk, struct sk_buff *skb);
 /* Calculate the SCTP checksum of an SCTP packet.  */
 static inline int sctp_rcv_checksum(struct sk_buff *skb)
 {
-	struct sctphdr *sh;
-	__u32 cmp, val;
 	struct sk_buff *list = skb_shinfo(skb)->frag_list;
-
-	sh = (struct sctphdr *) skb->h.raw;
-	cmp = ntohl(sh->checksum);
-
-	val = sctp_start_cksum((__u8 *)sh, skb_headlen(skb));
+	struct sctphdr *sh = sctp_hdr(skb);
+	__u32 cmp = ntohl(sh->checksum);
+	__u32 val = sctp_start_cksum((__u8 *)sh, skb_headlen(skb));
 
 	for (; list; list = list->next)
 		val = sctp_update_cksum((__u8 *)list->data, skb_headlen(list),
@@ -138,14 +134,13 @@ int sctp_rcv(struct sk_buff *skb)
 	if (skb_linearize(skb))
 		goto discard_it;
 
-	sh = (struct sctphdr *) skb->h.raw;
+	sh = sctp_hdr(skb);
 
 	/* Pull up the IP and SCTP headers. */
-	__skb_pull(skb, skb->h.raw - skb->data);
+	__skb_pull(skb, skb_transport_offset(skb));
 	if (skb->len < sizeof(struct sctphdr))
 		goto discard_it;
-	if ((skb->ip_summed != CHECKSUM_UNNECESSARY) &&
-	    (sctp_rcv_checksum(skb) < 0))
+	if (!skb_csum_unnecessary(skb) && sctp_rcv_checksum(skb) < 0)
 		goto discard_it;
 
 	skb_pull(skb, sizeof(struct sctphdr));
@@ -154,7 +149,7 @@ int sctp_rcv(struct sk_buff *skb)
 	if (skb->len < sizeof(struct sctp_chunkhdr))
 		goto discard_it;
 
-	family = ipver2af(skb->nh.iph->version);
+	family = ipver2af(ip_hdr(skb)->version);
 	af = sctp_get_af_specific(family);
 	if (unlikely(!af))
 		goto discard_it;
@@ -372,24 +367,18 @@ static void sctp_add_backlog(struct sock *sk, struct sk_buff *skb)
 void sctp_icmp_frag_needed(struct sock *sk, struct sctp_association *asoc,
 			   struct sctp_transport *t, __u32 pmtu)
 {
-	if (sock_owned_by_user(sk) || !t || (t->pathmtu == pmtu))
+	if (!t || (t->pathmtu == pmtu))
 		return;
 
+	if (sock_owned_by_user(sk)) {
+		asoc->pmtu_pending = 1;
+		t->pmtu_pending = 1;
+		return;
+	}
+
 	if (t->param_flags & SPP_PMTUD_ENABLE) {
-		if (unlikely(pmtu < SCTP_DEFAULT_MINSEGMENT)) {
-			printk(KERN_WARNING "%s: Reported pmtu %d too low, "
-			       "using default minimum of %d\n",
-			       __FUNCTION__, pmtu,
-			       SCTP_DEFAULT_MINSEGMENT);
-			/* Use default minimum segment size and disable
-			 * pmtu discovery on this transport.
-			 */
-			t->pathmtu = SCTP_DEFAULT_MINSEGMENT;
-			t->param_flags = (t->param_flags & ~SPP_PMTUD) |
-				SPP_PMTUD_DISABLE;
-		} else {
-			t->pathmtu = pmtu;
-		}
+		/* Update transports view of the MTU */
+		sctp_transport_update_pmtu(t, pmtu);
 
 		/* Update association pmtu. */
 		sctp_assoc_sync_pmtu(asoc);
@@ -510,30 +499,30 @@ void sctp_err_finish(struct sock *sk, struct sctp_association *asoc)
 void sctp_v4_err(struct sk_buff *skb, __u32 info)
 {
 	struct iphdr *iph = (struct iphdr *)skb->data;
-	struct sctphdr *sh = (struct sctphdr *)(skb->data + (iph->ihl <<2));
-	int type = skb->h.icmph->type;
-	int code = skb->h.icmph->code;
+	const int ihlen = iph->ihl * 4;
+	const int type = icmp_hdr(skb)->type;
+	const int code = icmp_hdr(skb)->code;
 	struct sock *sk;
 	struct sctp_association *asoc = NULL;
 	struct sctp_transport *transport;
 	struct inet_sock *inet;
-	char *saveip, *savesctp;
+	sk_buff_data_t saveip, savesctp;
 	int err;
 
-	if (skb->len < ((iph->ihl << 2) + 8)) {
+	if (skb->len < ihlen + 8) {
 		ICMP_INC_STATS_BH(ICMP_MIB_INERRORS);
 		return;
 	}
 
 	/* Fix up skb to look at the embedded net header. */
-	saveip = skb->nh.raw;
-	savesctp  = skb->h.raw;
-	skb->nh.iph = iph;
-	skb->h.raw = (char *)sh;
-	sk = sctp_err_lookup(AF_INET, skb, sh, &asoc, &transport);
-	/* Put back, the original pointers. */
-	skb->nh.raw = saveip;
-	skb->h.raw = savesctp;
+	saveip = skb->network_header;
+	savesctp = skb->transport_header;
+	skb_reset_network_header(skb);
+	skb_set_transport_header(skb, ihlen);
+	sk = sctp_err_lookup(AF_INET, skb, sctp_hdr(skb), &asoc, &transport);
+	/* Put back, the original values. */
+	skb->network_header = saveip;
+	skb->transport_header = savesctp;
 	if (!sk) {
 		ICMP_INC_STATS_BH(ICMP_MIB_INERRORS);
 		return;
@@ -601,7 +590,7 @@ out_unlock:
  * Return 0 - If further processing is needed.
  * Return 1 - If the packet can be discarded right away.
  */
-int sctp_rcv_ootb(struct sk_buff *skb)
+static int sctp_rcv_ootb(struct sk_buff *skb)
 {
 	sctp_chunkhdr_t *ch;
 	__u8 *ch_end;
@@ -616,7 +605,7 @@ int sctp_rcv_ootb(struct sk_buff *skb)
 			break;
 
 		ch_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
-		if (ch_end > skb->tail)
+		if (ch_end > skb_tail_pointer(skb))
 			break;
 
 		/* RFC 8.4, 2) If the OOTB packet contains an ABORT chunk, the
@@ -631,6 +620,14 @@ int sctp_rcv_ootb(struct sk_buff *skb)
 		 * and take no further action.
 		 */
 		if (SCTP_CID_SHUTDOWN_COMPLETE == ch->type)
+			goto discard;
+
+		/* RFC 4460, 2.11.2
+		 * This will discard packets with INIT chunk bundled as
+		 * subsequent chunks in the packet.  When INIT is first,
+		 * the normal INIT processing will discard the chunk.
+		 */
+		if (SCTP_CID_INIT == ch->type && (void *)ch != skb->data)
 			goto discard;
 
 		/* RFC 8.4, 7) If the packet contains a "Stale cookie" ERROR
@@ -648,7 +645,7 @@ int sctp_rcv_ootb(struct sk_buff *skb)
 		}
 
 		ch = (sctp_chunkhdr_t *) ch_end;
-	} while (ch_end < skb->tail);
+	} while (ch_end < skb_tail_pointer(skb));
 
 	return 0;
 
@@ -659,7 +656,6 @@ discard:
 /* Insert endpoint into the hash table.  */
 static void __sctp_hash_endpoint(struct sctp_endpoint *ep)
 {
-	struct sctp_ep_common **epp;
 	struct sctp_ep_common *epb;
 	struct sctp_hashbucket *head;
 
@@ -669,12 +665,7 @@ static void __sctp_hash_endpoint(struct sctp_endpoint *ep)
 	head = &sctp_ep_hashtable[epb->hashent];
 
 	sctp_write_lock(&head->lock);
-	epp = &head->chain;
-	epb->next = *epp;
-	if (epb->next)
-		(*epp)->pprev = &epb->next;
-	*epp = epb;
-	epb->pprev = epp;
+	hlist_add_head(&epb->node, &head->chain);
 	sctp_write_unlock(&head->lock);
 }
 
@@ -694,19 +685,15 @@ static void __sctp_unhash_endpoint(struct sctp_endpoint *ep)
 
 	epb = &ep->base;
 
+	if (hlist_unhashed(&epb->node))
+		return;
+
 	epb->hashent = sctp_ep_hashfn(epb->bind_addr.port);
 
 	head = &sctp_ep_hashtable[epb->hashent];
 
 	sctp_write_lock(&head->lock);
-
-	if (epb->pprev) {
-		if (epb->next)
-			epb->next->pprev = epb->pprev;
-		*epb->pprev = epb->next;
-		epb->pprev = NULL;
-	}
-
+	__hlist_del(&epb->node);
 	sctp_write_unlock(&head->lock);
 }
 
@@ -724,12 +711,13 @@ static struct sctp_endpoint *__sctp_rcv_lookup_endpoint(const union sctp_addr *l
 	struct sctp_hashbucket *head;
 	struct sctp_ep_common *epb;
 	struct sctp_endpoint *ep;
+	struct hlist_node *node;
 	int hash;
 
 	hash = sctp_ep_hashfn(ntohs(laddr->v4.sin_port));
 	head = &sctp_ep_hashtable[hash];
 	read_lock(&head->lock);
-	for (epb = head->chain; epb; epb = epb->next) {
+	sctp_for_each_hentry(epb, node, &head->chain) {
 		ep = sctp_ep(epb);
 		if (sctp_endpoint_is_match(ep, laddr))
 			goto hit;
@@ -747,7 +735,6 @@ hit:
 /* Insert association into the hash table.  */
 static void __sctp_hash_established(struct sctp_association *asoc)
 {
-	struct sctp_ep_common **epp;
 	struct sctp_ep_common *epb;
 	struct sctp_hashbucket *head;
 
@@ -759,12 +746,7 @@ static void __sctp_hash_established(struct sctp_association *asoc)
 	head = &sctp_assoc_hashtable[epb->hashent];
 
 	sctp_write_lock(&head->lock);
-	epp = &head->chain;
-	epb->next = *epp;
-	if (epb->next)
-		(*epp)->pprev = &epb->next;
-	*epp = epb;
-	epb->pprev = epp;
+	hlist_add_head(&epb->node, &head->chain);
 	sctp_write_unlock(&head->lock);
 }
 
@@ -793,14 +775,7 @@ static void __sctp_unhash_established(struct sctp_association *asoc)
 	head = &sctp_assoc_hashtable[epb->hashent];
 
 	sctp_write_lock(&head->lock);
-
-	if (epb->pprev) {
-		if (epb->next)
-			epb->next->pprev = epb->pprev;
-		*epb->pprev = epb->next;
-		epb->pprev = NULL;
-	}
-
+	__hlist_del(&epb->node);
 	sctp_write_unlock(&head->lock);
 }
 
@@ -825,6 +800,7 @@ static struct sctp_association *__sctp_lookup_association(
 	struct sctp_ep_common *epb;
 	struct sctp_association *asoc;
 	struct sctp_transport *transport;
+	struct hlist_node *node;
 	int hash;
 
 	/* Optimize here for direct hit, only listening connections can
@@ -833,7 +809,7 @@ static struct sctp_association *__sctp_lookup_association(
 	hash = sctp_assoc_hashfn(ntohs(local->v4.sin_port), ntohs(peer->v4.sin_port));
 	head = &sctp_assoc_hashtable[hash];
 	read_lock(&head->lock);
-	for (epb = head->chain; epb; epb = epb->next) {
+	sctp_for_each_hentry(epb, node, &head->chain) {
 		asoc = sctp_assoc(epb);
 		transport = sctp_assoc_is_match(asoc, local, peer);
 		if (transport)
@@ -905,7 +881,7 @@ static struct sctp_association *__sctp_rcv_init_lookup(struct sk_buff *skb,
 	struct sctp_association *asoc;
 	union sctp_addr addr;
 	union sctp_addr *paddr = &addr;
-	struct sctphdr *sh = (struct sctphdr *) skb->h.raw;
+	struct sctphdr *sh = sctp_hdr(skb);
 	sctp_chunkhdr_t *ch;
 	union sctp_params params;
 	sctp_init_chunk_t *init;
@@ -913,15 +889,6 @@ static struct sctp_association *__sctp_rcv_init_lookup(struct sk_buff *skb,
 	struct sctp_af *af;
 
 	ch = (sctp_chunkhdr_t *) skb->data;
-
-	/* If this is INIT/INIT-ACK look inside the chunk too. */
-	switch (ch->type) {
-	case SCTP_CID_INIT:
-	case SCTP_CID_INIT_ACK:
-		break;
-	default:
-		return NULL;
-	}
 
 	/* The code below will attempt to walk the chunk and extract
 	 * parameter information.  Before we do that, we need to verify
@@ -967,6 +934,60 @@ static struct sctp_association *__sctp_rcv_init_lookup(struct sk_buff *skb,
 	return NULL;
 }
 
+/* SCTP-AUTH, Section 6.3:
+*    If the receiver does not find a STCB for a packet containing an AUTH
+*    chunk as the first chunk and not a COOKIE-ECHO chunk as the second
+*    chunk, it MUST use the chunks after the AUTH chunk to look up an existing
+*    association.
+*
+* This means that any chunks that can help us identify the association need
+* to be looked at to find this assocation.
+*
+* TODO: The only chunk currently defined that can do that is ASCONF, but we
+* don't support that functionality yet.
+*/
+static struct sctp_association *__sctp_rcv_auth_lookup(struct sk_buff *skb,
+				      const union sctp_addr *paddr,
+				      const union sctp_addr *laddr,
+				      struct sctp_transport **transportp)
+{
+	/* XXX - walk through the chunks looking for something that can
+	 * help us find the association.  INIT, and INIT-ACK are not permitted.
+	 * That leaves ASCONF, but we don't support that yet.
+	 */
+	return NULL;
+}
+
+/*
+ * There are circumstances when we need to look inside the SCTP packet
+ * for information to help us find the association.   Examples
+ * include looking inside of INIT/INIT-ACK chunks or after the AUTH
+ * chunks.
+ */
+static struct sctp_association *__sctp_rcv_lookup_harder(struct sk_buff *skb,
+				      const union sctp_addr *paddr,
+				      const union sctp_addr *laddr,
+				      struct sctp_transport **transportp)
+{
+	sctp_chunkhdr_t *ch;
+
+	ch = (sctp_chunkhdr_t *) skb->data;
+
+	/* If this is INIT/INIT-ACK look inside the chunk too. */
+	switch (ch->type) {
+	case SCTP_CID_INIT:
+	case SCTP_CID_INIT_ACK:
+		return __sctp_rcv_init_lookup(skb, laddr, transportp);
+		break;
+
+	case SCTP_CID_AUTH:
+		return __sctp_rcv_auth_lookup(skb, paddr, laddr, transportp);
+		break;
+	}
+
+	return NULL;
+}
+
 /* Lookup an association for an inbound skb. */
 static struct sctp_association *__sctp_rcv_lookup(struct sk_buff *skb,
 				      const union sctp_addr *paddr,
@@ -982,7 +1003,7 @@ static struct sctp_association *__sctp_rcv_lookup(struct sk_buff *skb,
 	 * parameters within the INIT or INIT-ACK.
 	 */
 	if (!asoc)
-		asoc = __sctp_rcv_init_lookup(skb, laddr, transportp);
+		asoc = __sctp_rcv_lookup_harder(skb, paddr, laddr, transportp);
 
 	return asoc;
 }

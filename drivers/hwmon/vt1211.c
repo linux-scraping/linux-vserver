@@ -31,6 +31,7 @@
 #include <linux/hwmon-vid.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
+#include <linux/ioport.h>
 #include <asm/io.h>
 
 static int uch_config = -1;
@@ -107,7 +108,7 @@ static const u8 bitalarmfan[]	= {6, 7};
 struct vt1211_data {
 	unsigned short addr;
 	const char *name;
-	struct class_device *class_dev;
+	struct device *hwmon_dev;
 
 	struct mutex update_lock;
 	char valid;			/* !=0 if following fields are valid */
@@ -794,7 +795,7 @@ static ssize_t set_pwm_auto_point_pwm(struct device *dev,
 
 	if ((val < 0) || (val > 255)) {
 		dev_err(dev, "pwm value %ld is out of range. "
-			"Choose a value between 0 and 255." , val);
+			"Choose a value between 0 and 255.\n" , val);
 		return -EINVAL;
 	}
 
@@ -1130,6 +1131,12 @@ static int __devinit vt1211_probe(struct platform_device *pdev)
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
+	if (!request_region(res->start, res->end - res->start + 1, DRVNAME)) {
+		err = -EBUSY;
+		dev_err(dev, "Failed to request region 0x%lx-0x%lx\n",
+			(unsigned long)res->start, (unsigned long)res->end);
+		goto EXIT_KFREE;
+	}
 	data->addr = res->start;
 	data->name = DRVNAME;
 	mutex_init(&data->update_lock);
@@ -1184,9 +1191,9 @@ static int __devinit vt1211_probe(struct platform_device *pdev)
 	}
 
 	/* Register device */
-	data->class_dev = hwmon_device_register(dev);
-	if (IS_ERR(data->class_dev)) {
-		err = PTR_ERR(data->class_dev);
+	data->hwmon_dev = hwmon_device_register(dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
 		dev_err(dev, "Class registration failed (%d)\n", err);
 		goto EXIT_DEV_REMOVE_SILENT;
 	}
@@ -1197,6 +1204,8 @@ EXIT_DEV_REMOVE:
 	dev_err(dev, "Sysfs interface creation failed (%d)\n", err);
 EXIT_DEV_REMOVE_SILENT:
 	vt1211_remove_sysfs(pdev);
+	release_region(res->start, res->end - res->start + 1);
+EXIT_KFREE:
 	platform_set_drvdata(pdev, NULL);
 	kfree(data);
 EXIT:
@@ -1206,11 +1215,15 @@ EXIT:
 static int __devexit vt1211_remove(struct platform_device *pdev)
 {
 	struct vt1211_data *data = platform_get_drvdata(pdev);
+	struct resource *res;
 
-	hwmon_device_unregister(data->class_dev);
+	hwmon_device_unregister(data->hwmon_dev);
 	vt1211_remove_sysfs(pdev);
 	platform_set_drvdata(pdev, NULL);
 	kfree(data);
+
+	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
+	release_region(res->start, res->end - res->start + 1);
 
 	return 0;
 }

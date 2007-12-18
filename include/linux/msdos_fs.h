@@ -146,7 +146,7 @@ struct fat_boot_fsinfo {
 };
 
 struct msdos_dir_entry {
-	__u8	name[8],ext[3];	/* name and extension */
+	__u8	name[MSDOS_NAME];/* name and extension */
 	__u8	attr;		/* attribute bits */
 	__u8    lcase;		/* Case for base and extension */
 	__u8	ctime_cs;	/* Creation time, centiseconds (0-199) */
@@ -205,7 +205,8 @@ struct fat_mount_options {
 		 numtail:1,       /* Does first alias have a numeric '~1' type tail? */
 		 atari:1,         /* Use Atari GEMDOS variation of MS-DOS fs */
 		 flush:1,	  /* write things quickly */
-		 nocase:1;	  /* Does this need case conversion? 0=need case conversion*/
+		 nocase:1,	  /* Does this need case conversion? 0=need case conversion*/
+		 usefree:1;	  /* Use free_clusters for FAT32 */
 };
 
 #define FAT_HASH_BITS	8

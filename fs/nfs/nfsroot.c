@@ -43,7 +43,7 @@
  *				from being used (thanks to Leo Spiekman)
  *	Andy Walker	:	Allow to specify the NFS server in nfs_root
  *				without giving a path name
- *	Swen Thümmler	:	Allow to specify the NFS options in nfs_root
+ *	Swen ThÃ¼mmler	:	Allow to specify the NFS options in nfs_root
  *				without giving a path name. Fix BOOTP request
  *				for domainname (domainname is NIS domain, not
  *				DNS domain!). Skip dummy devices for BOOTP.
@@ -76,6 +76,7 @@
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/sunrpc/clnt.h>
+#include <linux/sunrpc/xprtsock.h>
 #include <linux/nfs.h>
 #include <linux/nfs_fs.h>
 #include <linux/nfs_mount.h>
@@ -446,7 +447,7 @@ static int __init root_nfs_getport(int program, int version, int proto)
 	printk(KERN_NOTICE "Looking up port of RPC %d/%d on %u.%u.%u.%u\n",
 		program, version, NIPQUAD(servaddr));
 	set_sockaddr(&sin, servaddr, 0);
-	return rpc_getport_external(&sin, program, version, proto);
+	return rpcb_getport_sync(&sin, program, version, proto);
 }
 
 
@@ -509,12 +510,13 @@ static int __init root_nfs_get_handle(void)
 	struct sockaddr_in sin;
 	int status;
 	int protocol = (nfs_data.flags & NFS_MOUNT_TCP) ?
-					IPPROTO_TCP : IPPROTO_UDP;
+					XPRT_TRANSPORT_TCP : XPRT_TRANSPORT_UDP;
 	int version = (nfs_data.flags & NFS_MOUNT_VER3) ?
 					NFS_MNT3_VERSION : NFS_MNT_VERSION;
 
 	set_sockaddr(&sin, servaddr, htons(mount_port));
-	status = nfsroot_mount(&sin, nfs_path, &fh, version, protocol);
+	status = nfs_mount((struct sockaddr *) &sin, sizeof(sin), NULL,
+			   nfs_path, version, protocol, &fh);
 	if (status < 0)
 		printk(KERN_ERR "Root-NFS: Server returned error %d "
 				"while mounting %s\n", status, nfs_path);

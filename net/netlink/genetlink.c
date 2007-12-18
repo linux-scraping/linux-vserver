@@ -3,6 +3,7 @@
  *
  * 		Authors:	Jamal Hadi Salim
  * 				Thomas Graf <tgraf@suug.ch>
+ *				Johannes Berg <johannes@sipsolutions.net>
  */
 
 #include <linux/module.h>
@@ -13,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/skbuff.h>
 #include <linux/mutex.h>
+#include <linux/bitmap.h>
 #include <net/sock.h>
 #include <net/genetlink.h>
 
@@ -20,28 +22,30 @@ struct sock *genl_sock = NULL;
 
 static DEFINE_MUTEX(genl_mutex); /* serialization of message processing */
 
-static void genl_lock(void)
+static inline void genl_lock(void)
 {
 	mutex_lock(&genl_mutex);
 }
 
-static int genl_trylock(void)
-{
-	return !mutex_trylock(&genl_mutex);
-}
-
-static void genl_unlock(void)
+static inline void genl_unlock(void)
 {
 	mutex_unlock(&genl_mutex);
-
-	if (genl_sock && genl_sock->sk_receive_queue.qlen)
-		genl_sock->sk_data_ready(genl_sock, 0);
 }
 
 #define GENL_FAM_TAB_SIZE	16
 #define GENL_FAM_TAB_MASK	(GENL_FAM_TAB_SIZE - 1)
 
 static struct list_head family_ht[GENL_FAM_TAB_SIZE];
+/*
+ * Bitmap of multicast groups that are currently in use.
+ *
+ * To avoid an allocation at boot of just one unsigned long,
+ * declare it global instead.
+ * Bit 0 is marked as already used since group 0 is invalid.
+ */
+static unsigned long mc_group_start = 0x1;
+static unsigned long *mc_groups = &mc_group_start;
+static unsigned long mc_groups_longs = 1;
 
 static int genl_ctrl_event(int event, void *data);
 
@@ -114,6 +118,122 @@ static inline u16 genl_generate_id(void)
 	} while (genl_family_find_byid(id_gen_idx));
 
 	return id_gen_idx;
+}
+
+static struct genl_multicast_group notify_grp;
+
+/**
+ * genl_register_mc_group - register a multicast group
+ *
+ * Registers the specified multicast group and notifies userspace
+ * about the new group.
+ *
+ * Returns 0 on success or a negative error code.
+ *
+ * @family: The generic netlink family the group shall be registered for.
+ * @grp: The group to register, must have a name.
+ */
+int genl_register_mc_group(struct genl_family *family,
+			   struct genl_multicast_group *grp)
+{
+	int id;
+	unsigned long *new_groups;
+	int err;
+
+	BUG_ON(grp->name[0] == '\0');
+
+	genl_lock();
+
+	/* special-case our own group */
+	if (grp == &notify_grp)
+		id = GENL_ID_CTRL;
+	else
+		id = find_first_zero_bit(mc_groups,
+					 mc_groups_longs * BITS_PER_LONG);
+
+
+	if (id >= mc_groups_longs * BITS_PER_LONG) {
+		size_t nlen = (mc_groups_longs + 1) * sizeof(unsigned long);
+
+		if (mc_groups == &mc_group_start) {
+			new_groups = kzalloc(nlen, GFP_KERNEL);
+			if (!new_groups) {
+				err = -ENOMEM;
+				goto out;
+			}
+			mc_groups = new_groups;
+			*mc_groups = mc_group_start;
+		} else {
+			new_groups = krealloc(mc_groups, nlen, GFP_KERNEL);
+			if (!new_groups) {
+				err = -ENOMEM;
+				goto out;
+			}
+			mc_groups = new_groups;
+			mc_groups[mc_groups_longs] = 0;
+		}
+		mc_groups_longs++;
+	}
+
+	err = netlink_change_ngroups(genl_sock,
+				     mc_groups_longs * BITS_PER_LONG);
+	if (err)
+		goto out;
+
+	grp->id = id;
+	set_bit(id, mc_groups);
+	list_add_tail(&grp->list, &family->mcast_groups);
+	grp->family = family;
+
+	genl_ctrl_event(CTRL_CMD_NEWMCAST_GRP, grp);
+ out:
+	genl_unlock();
+	return err;
+}
+EXPORT_SYMBOL(genl_register_mc_group);
+
+static void __genl_unregister_mc_group(struct genl_family *family,
+				       struct genl_multicast_group *grp)
+{
+	BUG_ON(grp->family != family);
+	netlink_clear_multicast_users(genl_sock, grp->id);
+	clear_bit(grp->id, mc_groups);
+	list_del(&grp->list);
+	genl_ctrl_event(CTRL_CMD_DELMCAST_GRP, grp);
+	grp->id = 0;
+	grp->family = NULL;
+}
+
+/**
+ * genl_unregister_mc_group - unregister a multicast group
+ *
+ * Unregisters the specified multicast group and notifies userspace
+ * about it. All current listeners on the group are removed.
+ *
+ * Note: It is not necessary to unregister all multicast groups before
+ *       unregistering the family, unregistering the family will cause
+ *       all assigned multicast groups to be unregistered automatically.
+ *
+ * @family: Generic netlink family the group belongs to.
+ * @grp: The group to unregister, must have been registered successfully
+ *	 previously.
+ */
+void genl_unregister_mc_group(struct genl_family *family,
+			      struct genl_multicast_group *grp)
+{
+	genl_lock();
+	__genl_unregister_mc_group(family, grp);
+	genl_unlock();
+}
+
+static void genl_unregister_mc_groups(struct genl_family *family)
+{
+	struct genl_multicast_group *grp, *tmp;
+
+	genl_lock();
+	list_for_each_entry_safe(grp, tmp, &family->mcast_groups, list)
+		__genl_unregister_mc_group(family, grp);
+	genl_unlock();
 }
 
 /**
@@ -216,6 +336,7 @@ int genl_register_family(struct genl_family *family)
 		goto errout;
 
 	INIT_LIST_HEAD(&family->ops_list);
+	INIT_LIST_HEAD(&family->mcast_groups);
 
 	genl_lock();
 
@@ -275,6 +396,8 @@ int genl_unregister_family(struct genl_family *family)
 {
 	struct genl_family *rc;
 
+	genl_unregister_mc_groups(family);
+
 	genl_lock();
 
 	list_for_each_entry(rc, genl_family_chain(family->id), family_list) {
@@ -295,66 +418,46 @@ int genl_unregister_family(struct genl_family *family)
 	return -ENOENT;
 }
 
-static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
-			       int *errp)
+static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	struct genl_ops *ops;
 	struct genl_family *family;
 	struct genl_info info;
 	struct genlmsghdr *hdr = nlmsg_data(nlh);
-	int hdrlen, err = -EINVAL;
-
-	if (!(nlh->nlmsg_flags & NLM_F_REQUEST))
-		goto ignore;
-
-	if (nlh->nlmsg_type < NLMSG_MIN_TYPE)
-		goto ignore;
+	int hdrlen, err;
 
 	family = genl_family_find_byid(nlh->nlmsg_type);
-	if (family == NULL) {
-		err = -ENOENT;
-		goto errout;
-	}
+	if (family == NULL)
+		return -ENOENT;
 
 	hdrlen = GENL_HDRLEN + family->hdrsize;
 	if (nlh->nlmsg_len < nlmsg_msg_size(hdrlen))
-		goto errout;
+		return -EINVAL;
 
 	ops = genl_get_cmd(hdr->cmd, family);
-	if (ops == NULL) {
-		err = -EOPNOTSUPP;
-		goto errout;
-	}
+	if (ops == NULL)
+		return -EOPNOTSUPP;
 
-	if ((ops->flags & GENL_ADMIN_PERM) && security_netlink_recv(skb, CAP_NET_ADMIN)) {
-		err = -EPERM;
-		goto errout;
-	}
+	if ((ops->flags & GENL_ADMIN_PERM) &&
+	    security_netlink_recv(skb, CAP_NET_ADMIN))
+		return -EPERM;
 
 	if (nlh->nlmsg_flags & NLM_F_DUMP) {
-		if (ops->dumpit == NULL) {
-			err = -EOPNOTSUPP;
-			goto errout;
-		}
+		if (ops->dumpit == NULL)
+			return -EOPNOTSUPP;
 
-		*errp = err = netlink_dump_start(genl_sock, skb, nlh,
-						 ops->dumpit, ops->done);
-		if (err == 0)
-			skb_pull(skb, min(NLMSG_ALIGN(nlh->nlmsg_len),
-					  skb->len));
-		return -1;
+		return netlink_dump_start(genl_sock, skb, nlh,
+					  ops->dumpit, ops->done);
 	}
 
-	if (ops->doit == NULL) {
-		err = -EOPNOTSUPP;
-		goto errout;
-	}
+	if (ops->doit == NULL)
+		return -EOPNOTSUPP;
 
 	if (family->attrbuf) {
 		err = nlmsg_parse(nlh, hdrlen, family->attrbuf, family->maxattr,
 				  ops->policy);
 		if (err < 0)
-			goto errout;
+			return err;
 	}
 
 	info.snd_seq = nlh->nlmsg_seq;
@@ -364,27 +467,14 @@ static int genl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 	info.userhdr = nlmsg_data(nlh) + GENL_HDRLEN;
 	info.attrs = family->attrbuf;
 
-	*errp = err = ops->doit(skb, &info);
-	return err;
-
-ignore:
-	return 0;
-
-errout:
-	*errp = err;
-	return -1;
+	return ops->doit(skb, &info);
 }
 
-static void genl_rcv(struct sock *sk, int len)
+static void genl_rcv(struct sk_buff *skb)
 {
-	unsigned int qlen = 0;
-
-	do {
-		if (genl_trylock())
-			return;
-		netlink_run_queue(sk, &qlen, genl_rcv_msg);
-		genl_unlock();
-	} while (qlen && genl_sock && genl_sock->sk_receive_queue.qlen);
+	genl_lock();
+	netlink_rcv_skb(skb, &genl_rcv_msg);
+	genl_unlock();
 }
 
 /**************************************************************************
@@ -438,6 +528,67 @@ static int ctrl_fill_info(struct genl_family *family, u32 pid, u32 seq,
 		nla_nest_end(skb, nla_ops);
 	}
 
+	if (!list_empty(&family->mcast_groups)) {
+		struct genl_multicast_group *grp;
+		struct nlattr *nla_grps;
+		int idx = 1;
+
+		nla_grps = nla_nest_start(skb, CTRL_ATTR_MCAST_GROUPS);
+		if (nla_grps == NULL)
+			goto nla_put_failure;
+
+		list_for_each_entry(grp, &family->mcast_groups, list) {
+			struct nlattr *nest;
+
+			nest = nla_nest_start(skb, idx++);
+			if (nest == NULL)
+				goto nla_put_failure;
+
+			NLA_PUT_U32(skb, CTRL_ATTR_MCAST_GRP_ID, grp->id);
+			NLA_PUT_STRING(skb, CTRL_ATTR_MCAST_GRP_NAME,
+				       grp->name);
+
+			nla_nest_end(skb, nest);
+		}
+		nla_nest_end(skb, nla_grps);
+	}
+
+	return genlmsg_end(skb, hdr);
+
+nla_put_failure:
+	return genlmsg_cancel(skb, hdr);
+}
+
+static int ctrl_fill_mcgrp_info(struct genl_multicast_group *grp, u32 pid,
+				u32 seq, u32 flags, struct sk_buff *skb,
+				u8 cmd)
+{
+	void *hdr;
+	struct nlattr *nla_grps;
+	struct nlattr *nest;
+
+	hdr = genlmsg_put(skb, pid, seq, &genl_ctrl, flags, cmd);
+	if (hdr == NULL)
+		return -1;
+
+	NLA_PUT_STRING(skb, CTRL_ATTR_FAMILY_NAME, grp->family->name);
+	NLA_PUT_U16(skb, CTRL_ATTR_FAMILY_ID, grp->family->id);
+
+	nla_grps = nla_nest_start(skb, CTRL_ATTR_MCAST_GROUPS);
+	if (nla_grps == NULL)
+		goto nla_put_failure;
+
+	nest = nla_nest_start(skb, 1);
+	if (nest == NULL)
+		goto nla_put_failure;
+
+	NLA_PUT_U32(skb, CTRL_ATTR_MCAST_GRP_ID, grp->id);
+	NLA_PUT_STRING(skb, CTRL_ATTR_MCAST_GRP_NAME,
+		       grp->name);
+
+	nla_nest_end(skb, nest);
+	nla_nest_end(skb, nla_grps);
+
 	return genlmsg_end(skb, hdr);
 
 nla_put_failure:
@@ -481,8 +632,8 @@ errout:
 	return skb->len;
 }
 
-static struct sk_buff *ctrl_build_msg(struct genl_family *family, u32 pid,
-				      int seq, u8 cmd)
+static struct sk_buff *ctrl_build_family_msg(struct genl_family *family,
+					     u32 pid, int seq, u8 cmd)
 {
 	struct sk_buff *skb;
 	int err;
@@ -500,7 +651,26 @@ static struct sk_buff *ctrl_build_msg(struct genl_family *family, u32 pid,
 	return skb;
 }
 
-static struct nla_policy ctrl_policy[CTRL_ATTR_MAX+1] __read_mostly = {
+static struct sk_buff *ctrl_build_mcgrp_msg(struct genl_multicast_group *grp,
+					    u32 pid, int seq, u8 cmd)
+{
+	struct sk_buff *skb;
+	int err;
+
+	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (skb == NULL)
+		return ERR_PTR(-ENOBUFS);
+
+	err = ctrl_fill_mcgrp_info(grp, pid, seq, 0, skb, cmd);
+	if (err < 0) {
+		nlmsg_free(skb);
+		return ERR_PTR(err);
+	}
+
+	return skb;
+}
+
+static const struct nla_policy ctrl_policy[CTRL_ATTR_MAX+1] = {
 	[CTRL_ATTR_FAMILY_ID]	= { .type = NLA_U16 },
 	[CTRL_ATTR_FAMILY_NAME]	= { .type = NLA_NUL_STRING,
 				    .len = GENL_NAMSIZ - 1 },
@@ -529,8 +699,8 @@ static int ctrl_getfamily(struct sk_buff *skb, struct genl_info *info)
 		goto errout;
 	}
 
-	msg = ctrl_build_msg(res, info->snd_pid, info->snd_seq,
-			     CTRL_CMD_NEWFAMILY);
+	msg = ctrl_build_family_msg(res, info->snd_pid, info->snd_seq,
+				    CTRL_CMD_NEWFAMILY);
 	if (IS_ERR(msg)) {
 		err = PTR_ERR(msg);
 		goto errout;
@@ -551,7 +721,15 @@ static int genl_ctrl_event(int event, void *data)
 	switch (event) {
 	case CTRL_CMD_NEWFAMILY:
 	case CTRL_CMD_DELFAMILY:
-		msg = ctrl_build_msg(data, 0, 0, event);
+		msg = ctrl_build_family_msg(data, 0, 0, event);
+		if (IS_ERR(msg))
+			return PTR_ERR(msg);
+
+		genlmsg_multicast(msg, 0, GENL_ID_CTRL, GFP_KERNEL);
+		break;
+	case CTRL_CMD_NEWMCAST_GRP:
+	case CTRL_CMD_DELMCAST_GRP:
+		msg = ctrl_build_mcgrp_msg(data, 0, 0, event);
 		if (IS_ERR(msg))
 			return PTR_ERR(msg);
 
@@ -567,6 +745,10 @@ static struct genl_ops genl_ctrl_ops = {
 	.doit		= ctrl_getfamily,
 	.dumpit		= ctrl_dumpfamily,
 	.policy		= ctrl_policy,
+};
+
+static struct genl_multicast_group notify_grp = {
+	.name		= "notify",
 };
 
 static int __init genl_init(void)
@@ -585,10 +767,16 @@ static int __init genl_init(void)
 		goto errout_register;
 
 	netlink_set_nonroot(NETLINK_GENERIC, NL_NONROOT_RECV);
-	genl_sock = netlink_kernel_create(NETLINK_GENERIC, GENL_MAX_ID,
-					  genl_rcv, THIS_MODULE);
+
+	/* we'll bump the group number right afterwards */
+	genl_sock = netlink_kernel_create(&init_net, NETLINK_GENERIC, 0,
+					  genl_rcv, NULL, THIS_MODULE);
 	if (genl_sock == NULL)
 		panic("GENL: Cannot initialize generic netlink\n");
+
+	err = genl_register_mc_group(&genl_ctrl, &notify_grp);
+	if (err < 0)
+		goto errout_register;
 
 	return 0;
 

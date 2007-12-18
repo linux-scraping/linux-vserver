@@ -35,7 +35,6 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/pci.h>
 #include <sound/core.h>
 #include "hda_codec.h"
 #include "hda_local.h"
@@ -115,7 +114,11 @@ struct via_spec {
 	unsigned int num_kctl_alloc, num_kctl_used;
 	struct snd_kcontrol_new *kctl_alloc;
 	struct hda_input_mux private_imux;
-	hda_nid_t private_dac_nids[4];	
+	hda_nid_t private_dac_nids[AUTO_CFG_MAX_OUTS];
+
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+	struct hda_loopback_check loopback;
+#endif
 };
 
 static hda_nid_t vt1708_adc_nids[2] = {
@@ -306,15 +309,15 @@ static struct hda_verb vt1708_volume_init_verbs[] = {
 	{0x27, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
 
 
-	/* Unmute input amps (CD, Line In, Mic 1 & Mic 2) of the analog-loopback
+	/* Mute input amps (CD, Line In, Mic 1 & Mic 2) of the analog-loopback
 	 * mixer widget
 	 */
 	/* Amp Indices: CD = 1, Mic1 = 2, Line = 3, Mic2 = 4 */
-	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
-	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(1)},
-	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(2)},
-	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(3)},
-	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(4)},
+	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)}, /* master */
+	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(1)},
+	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(2)},
+	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(3)},
+	{0x17, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(4)},
 
 	/*
 	 * Set up output mixers (0x19 - 0x1b)
@@ -378,6 +381,17 @@ static int via_dig_playback_pcm_close(struct hda_pcm_stream *hinfo,
 	return snd_hda_multi_out_dig_close(codec, &spec->multiout);
 }
 
+static int via_dig_playback_pcm_prepare(struct hda_pcm_stream *hinfo,
+					struct hda_codec *codec,
+					unsigned int stream_tag,
+					unsigned int format,
+					struct snd_pcm_substream *substream)
+{
+	struct via_spec *spec = codec->spec;
+	return snd_hda_multi_out_dig_prepare(codec, &spec->multiout,
+					     stream_tag, format, substream);
+}
+
 /*
  * Analog capture
  */
@@ -434,7 +448,8 @@ static struct hda_pcm_stream vt1708_pcm_digital_playback = {
 	/* NID is set in via_build_pcms */
 	.ops = {
 		.open = via_dig_playback_pcm_open,
-		.close = via_dig_playback_pcm_close
+		.close = via_dig_playback_pcm_close,
+		.prepare = via_dig_playback_pcm_prepare
 	},
 };
 
@@ -532,24 +547,11 @@ static int via_init(struct hda_codec *codec)
  	return 0;
 }
 
-#ifdef CONFIG_PM
-/*
- * resume
- */
-static int via_resume(struct hda_codec *codec)
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+static int via_check_power_status(struct hda_codec *codec, hda_nid_t nid)
 {
 	struct via_spec *spec = codec->spec;
-	int i;
-
-	via_init(codec);
-	for (i = 0; i < spec->num_mixers; i++)
-		snd_hda_resume_ctls(codec, spec->mixers[i]);
-	if (spec->multiout.dig_out_nid)
-		snd_hda_resume_spdif_out(codec);
-	if (spec->dig_in_nid)
-		snd_hda_resume_spdif_in(codec);
-
-	return 0;
+	return snd_hda_check_amp_list_power(codec, &spec->loopback, nid);
 }
 #endif
 
@@ -560,8 +562,8 @@ static struct hda_codec_ops via_patch_ops = {
 	.build_pcms = via_build_pcms,
 	.init = via_init,
 	.free = via_free,
-#ifdef CONFIG_PM
-	.resume = via_resume,
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+	.check_power_status = via_check_power_status,
 #endif
 };
 
@@ -751,6 +753,16 @@ static int vt1708_auto_create_analog_input_ctls(struct via_spec *spec,
 	return 0;
 }
 
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+static struct hda_amp_list vt1708_loopbacks[] = {
+	{ 0x17, HDA_INPUT, 1 },
+	{ 0x17, HDA_INPUT, 2 },
+	{ 0x17, HDA_INPUT, 3 },
+	{ 0x17, HDA_INPUT, 4 },
+	{ } /* end */
+};
+#endif
+
 static int vt1708_parse_auto_config(struct hda_codec *codec)
 {
 	struct via_spec *spec = codec->spec;
@@ -844,6 +856,9 @@ static int patch_vt1708(struct hda_codec *codec)
 	codec->patch_ops = via_patch_ops;
 
 	codec->patch_ops.init = via_auto_init;
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+	spec->loopback.amplist = vt1708_loopbacks;
+#endif
 
 	return 0;
 }
@@ -884,15 +899,15 @@ static struct hda_verb vt1709_10ch_volume_init_verbs[] = {
 	{0x16, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
 
 
-	/* Unmute input amps (CD, Line In, Mic 1 & Mic 2) of the analog-loopback
+	/* Mute input amps (CD, Line In, Mic 1 & Mic 2) of the analog-loopback
 	 * mixer widget
 	 */
 	/* Amp Indices: AOW0=0, CD = 1, Mic1 = 2, Line = 3, Mic2 = 4 */
-	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)},
-	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(1)},
-	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(2)},
-	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(3)},
-	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(4)},
+	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_UNMUTE(0)}, /* unmute master */
+	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(1)},
+	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(2)},
+	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(3)},
+	{0x18, AC_VERB_SET_AMP_GAIN_MUTE, AMP_IN_MUTE(4)},
 
 	/*
 	 * Set up output selector (0x1a, 0x1b, 0x29)
@@ -1240,6 +1255,16 @@ static int vt1709_parse_auto_config(struct hda_codec *codec)
 	return 1;
 }
 
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+static struct hda_amp_list vt1709_loopbacks[] = {
+	{ 0x18, HDA_INPUT, 1 },
+	{ 0x18, HDA_INPUT, 2 },
+	{ 0x18, HDA_INPUT, 3 },
+	{ 0x18, HDA_INPUT, 4 },
+	{ } /* end */
+};
+#endif
+
 static int patch_vt1709_10ch(struct hda_codec *codec)
 {
 	struct via_spec *spec;
@@ -1282,6 +1307,9 @@ static int patch_vt1709_10ch(struct hda_codec *codec)
 	codec->patch_ops = via_patch_ops;
 
 	codec->patch_ops.init = via_auto_init;
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+	spec->loopback.amplist = vt1709_loopbacks;
+#endif
 
 	return 0;
 }
@@ -1372,6 +1400,9 @@ static int patch_vt1709_6ch(struct hda_codec *codec)
 	codec->patch_ops = via_patch_ops;
 
 	codec->patch_ops.init = via_auto_init;
+#ifdef CONFIG_SND_HDA_POWER_SAVE
+	spec->loopback.amplist = vt1709_loopbacks;
+#endif
 
 	return 0;
 }

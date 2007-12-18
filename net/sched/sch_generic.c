@@ -11,185 +11,178 @@
  *              - Ingress support
  */
 
-#include <asm/uaccess.h>
-#include <asm/system.h>
 #include <linux/bitops.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/string.h>
-#include <linux/mm.h>
-#include <linux/socket.h>
-#include <linux/sockios.h>
-#include <linux/in.h>
 #include <linux/errno.h>
-#include <linux/interrupt.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/rtnetlink.h>
 #include <linux/init.h>
 #include <linux/rcupdate.h>
 #include <linux/list.h>
-#include <net/sock.h>
 #include <net/pkt_sched.h>
 
 /* Main transmission queue. */
 
-/* Main qdisc structure lock.
-
-   However, modifications
-   to data, participating in scheduling must be additionally
-   protected with dev->queue_lock spinlock.
-
-   The idea is the following:
-   - enqueue, dequeue are serialized via top level device
-     spinlock dev->queue_lock.
-   - tree walking is protected by read_lock(qdisc_tree_lock)
-     and this lock is used only in process context.
-   - updates to tree are made only under rtnl semaphore,
-     hence this lock may be made without local bh disabling.
-
-   qdisc_tree_lock must be grabbed BEFORE dev->queue_lock!
+/* Modifications to data participating in scheduling must be protected with
+ * dev->queue_lock spinlock.
+ *
+ * The idea is the following:
+ * - enqueue, dequeue are serialized via top level device
+ *   spinlock dev->queue_lock.
+ * - ingress filtering is serialized via top level device
+ *   spinlock dev->ingress_lock.
+ * - updates to tree and tree walking are only done under the rtnl mutex.
  */
-DEFINE_RWLOCK(qdisc_tree_lock);
 
 void qdisc_lock_tree(struct net_device *dev)
 {
-	write_lock(&qdisc_tree_lock);
 	spin_lock_bh(&dev->queue_lock);
+	spin_lock(&dev->ingress_lock);
 }
 
 void qdisc_unlock_tree(struct net_device *dev)
 {
+	spin_unlock(&dev->ingress_lock);
 	spin_unlock_bh(&dev->queue_lock);
-	write_unlock(&qdisc_tree_lock);
+}
+
+static inline int qdisc_qlen(struct Qdisc *q)
+{
+	return q->q.qlen;
+}
+
+static inline int dev_requeue_skb(struct sk_buff *skb, struct net_device *dev,
+				  struct Qdisc *q)
+{
+	if (unlikely(skb->next))
+		dev->gso_skb = skb;
+	else
+		q->ops->requeue(skb, q);
+
+	netif_schedule(dev);
+	return 0;
+}
+
+static inline struct sk_buff *dev_dequeue_skb(struct net_device *dev,
+					      struct Qdisc *q)
+{
+	struct sk_buff *skb;
+
+	if ((skb = dev->gso_skb))
+		dev->gso_skb = NULL;
+	else
+		skb = q->dequeue(q);
+
+	return skb;
+}
+
+static inline int handle_dev_cpu_collision(struct sk_buff *skb,
+					   struct net_device *dev,
+					   struct Qdisc *q)
+{
+	int ret;
+
+	if (unlikely(dev->xmit_lock_owner == smp_processor_id())) {
+		/*
+		 * Same CPU holding the lock. It may be a transient
+		 * configuration error, when hard_start_xmit() recurses. We
+		 * detect it by checking xmit owner and drop the packet when
+		 * deadloop is detected. Return OK to try the next skb.
+		 */
+		kfree_skb(skb);
+		if (net_ratelimit())
+			printk(KERN_WARNING "Dead loop on netdevice %s, "
+			       "fix it urgently!\n", dev->name);
+		ret = qdisc_qlen(q);
+	} else {
+		/*
+		 * Another cpu is holding lock, requeue & delay xmits for
+		 * some time.
+		 */
+		__get_cpu_var(netdev_rx_stat).cpu_collision++;
+		ret = dev_requeue_skb(skb, dev, q);
+	}
+
+	return ret;
 }
 
 /*
-   dev->queue_lock serializes queue accesses for this device
-   AND dev->qdisc pointer itself.
-
-   netif_tx_lock serializes accesses to device driver.
-
-   dev->queue_lock and netif_tx_lock are mutually exclusive,
-   if one is grabbed, another must be free.
+ * NOTE: Called under dev->queue_lock with locally disabled BH.
+ *
+ * __LINK_STATE_QDISC_RUNNING guarantees only one CPU can process this
+ * device at a time. dev->queue_lock serializes queue accesses for
+ * this device AND dev->qdisc pointer itself.
+ *
+ *  netif_tx_lock serializes accesses to device driver.
+ *
+ *  dev->queue_lock and netif_tx_lock are mutually exclusive,
+ *  if one is grabbed, another must be free.
+ *
+ * Note, that this procedure can be called by a watchdog timer
+ *
+ * Returns to the caller:
+ *				0  - queue is empty or throttled.
+ *				>0 - queue is not empty.
+ *
  */
-
-
-/* Kick device.
-   Note, that this procedure can be called by a watchdog timer, so that
-   we do not check dev->tbusy flag here.
-
-   Returns:  0  - queue is empty.
-	    >0  - queue is not empty, but throttled.
-	    <0  - queue is not empty. Device is throttled, if dev->tbusy != 0.
-
-   NOTE: Called under dev->queue_lock with locally disabled BH.
-*/
-
 static inline int qdisc_restart(struct net_device *dev)
 {
 	struct Qdisc *q = dev->qdisc;
 	struct sk_buff *skb;
+	int ret = NETDEV_TX_BUSY;
 
 	/* Dequeue packet */
-	if (((skb = dev->gso_skb)) || ((skb = q->dequeue(q)))) {
-		unsigned nolock = (dev->features & NETIF_F_LLTX);
+	if (unlikely((skb = dev_dequeue_skb(dev, q)) == NULL))
+		return 0;
 
-		dev->gso_skb = NULL;
 
-		/*
-		 * When the driver has LLTX set it does its own locking
-		 * in start_xmit. No need to add additional overhead by
-		 * locking again. These checks are worth it because
-		 * even uncongested locks can be quite expensive.
-		 * The driver can do trylock like here too, in case
-		 * of lock congestion it should return -1 and the packet
-		 * will be requeued.
-		 */
-		if (!nolock) {
-			if (!netif_tx_trylock(dev)) {
-			collision:
-				/* So, someone grabbed the driver. */
+	/* And release queue */
+	spin_unlock(&dev->queue_lock);
 
-				/* It may be transient configuration error,
-				   when hard_start_xmit() recurses. We detect
-				   it by checking xmit owner and drop the
-				   packet when deadloop is detected.
-				*/
-				if (dev->xmit_lock_owner == smp_processor_id()) {
-					kfree_skb(skb);
-					if (net_ratelimit())
-						printk(KERN_DEBUG "Dead loop on netdevice %s, fix it urgently!\n", dev->name);
-					return -1;
-				}
-				__get_cpu_var(netdev_rx_stat).cpu_collision++;
-				goto requeue;
-			}
-		}
+	HARD_TX_LOCK(dev, smp_processor_id());
+	if (!netif_subqueue_stopped(dev, skb))
+		ret = dev_hard_start_xmit(skb, dev);
+	HARD_TX_UNLOCK(dev);
 
-		{
-			/* And release queue */
-			spin_unlock(&dev->queue_lock);
+	spin_lock(&dev->queue_lock);
+	q = dev->qdisc;
 
-			if (!netif_queue_stopped(dev)) {
-				int ret;
+	switch (ret) {
+	case NETDEV_TX_OK:
+		/* Driver sent out skb successfully */
+		ret = qdisc_qlen(q);
+		break;
 
-				ret = dev_hard_start_xmit(skb, dev);
-				if (ret == NETDEV_TX_OK) {
-					if (!nolock) {
-						netif_tx_unlock(dev);
-					}
-					spin_lock(&dev->queue_lock);
-					return -1;
-				}
-				if (ret == NETDEV_TX_LOCKED && nolock) {
-					spin_lock(&dev->queue_lock);
-					goto collision;
-				}
-			}
+	case NETDEV_TX_LOCKED:
+		/* Driver try lock failed */
+		ret = handle_dev_cpu_collision(skb, dev, q);
+		break;
 
-			/* NETDEV_TX_BUSY - we need to requeue */
-			/* Release the driver */
-			if (!nolock) {
-				netif_tx_unlock(dev);
-			}
-			spin_lock(&dev->queue_lock);
-			q = dev->qdisc;
-		}
+	default:
+		/* Driver returned NETDEV_TX_BUSY - requeue skb */
+		if (unlikely (ret != NETDEV_TX_BUSY && net_ratelimit()))
+			printk(KERN_WARNING "BUG %s code %d qlen %d\n",
+			       dev->name, ret, q->q.qlen);
 
-		/* Device kicked us out :(
-		   This is possible in three cases:
-
-		   0. driver is locked
-		   1. fastroute is enabled
-		   2. device cannot determine busy state
-		      before start of transmission (f.e. dialout)
-		   3. device is buggy (ppp)
-		 */
-
-requeue:
-		if (skb->next)
-			dev->gso_skb = skb;
-		else
-			q->ops->requeue(skb, q);
-		netif_schedule(dev);
-		return 1;
+		ret = dev_requeue_skb(skb, dev, q);
+		break;
 	}
-	BUG_ON((int) q->q.qlen < 0);
-	return q->q.qlen;
+
+	return ret;
 }
 
 void __qdisc_run(struct net_device *dev)
 {
-	if (unlikely(dev->qdisc == &noop_qdisc))
-		goto out;
+	do {
+		if (!qdisc_restart(dev))
+			break;
+	} while (!netif_queue_stopped(dev));
 
-	while (qdisc_restart(dev) < 0 && !netif_queue_stopped(dev))
-		/* NOTHING */;
-
-out:
 	clear_bit(__LINK_STATE_QDISC_RUNNING, &dev->state);
 }
 
@@ -230,7 +223,8 @@ void __netdev_watchdog_up(struct net_device *dev)
 	if (dev->tx_timeout) {
 		if (dev->watchdog_timeo <= 0)
 			dev->watchdog_timeo = 5*HZ;
-		if (!mod_timer(&dev->watchdog_timer, jiffies + dev->watchdog_timeo))
+		if (!mod_timer(&dev->watchdog_timer,
+			       round_jiffies(jiffies + dev->watchdog_timeo)))
 			dev_hold(dev);
 	}
 }
@@ -248,14 +242,27 @@ static void dev_watchdog_down(struct net_device *dev)
 	netif_tx_unlock_bh(dev);
 }
 
+/**
+ *	netif_carrier_on - set carrier
+ *	@dev: network device
+ *
+ * Device has detected that carrier.
+ */
 void netif_carrier_on(struct net_device *dev)
 {
-	if (test_and_clear_bit(__LINK_STATE_NOCARRIER, &dev->state))
+	if (test_and_clear_bit(__LINK_STATE_NOCARRIER, &dev->state)) {
 		linkwatch_fire_event(dev);
-	if (netif_running(dev))
-		__netdev_watchdog_up(dev);
+		if (netif_running(dev))
+			__netdev_watchdog_up(dev);
+	}
 }
 
+/**
+ *	netif_carrier_off - clear carrier
+ *	@dev: network device
+ *
+ * Device has detected loss of carrier.
+ */
 void netif_carrier_off(struct net_device *dev)
 {
 	if (!test_and_set_bit(__LINK_STATE_NOCARRIER, &dev->state))
@@ -442,7 +449,6 @@ struct Qdisc *qdisc_alloc(struct net_device *dev, struct Qdisc_ops *ops)
 	sch->dequeue = ops->dequeue;
 	sch->dev = dev;
 	dev_hold(dev);
-	sch->stats_lock = &dev->queue_lock;
 	atomic_set(&sch->refcnt, 1);
 
 	return sch;
@@ -458,6 +464,7 @@ struct Qdisc * qdisc_create_dflt(struct net_device *dev, struct Qdisc_ops *ops,
 	sch = qdisc_alloc(dev, ops);
 	if (IS_ERR(sch))
 		goto errout;
+	sch->stats_lock = &dev->queue_lock;
 	sch->parent = parentid;
 
 	if (!ops->init || ops->init(sch, NULL) == 0)
@@ -498,9 +505,7 @@ void qdisc_destroy(struct Qdisc *qdisc)
 		return;
 
 	list_del(&qdisc->list);
-#ifdef CONFIG_NET_ESTIMATOR
 	gen_kill_estimator(&qdisc->bstats, &qdisc->rate_est);
-#endif
 	if (ops->reset)
 		ops->reset(qdisc);
 	if (ops->destroy)
@@ -528,15 +533,11 @@ void dev_activate(struct net_device *dev)
 				printk(KERN_INFO "%s: activation failed\n", dev->name);
 				return;
 			}
-			write_lock(&qdisc_tree_lock);
 			list_add_tail(&qdisc->list, &dev->qdisc_list);
-			write_unlock(&qdisc_tree_lock);
 		} else {
 			qdisc =  &noqueue_qdisc;
 		}
-		write_lock(&qdisc_tree_lock);
 		dev->qdisc_sleeping = qdisc;
-		write_unlock(&qdisc_tree_lock);
 	}
 
 	if (!netif_carrier_ok(dev))
@@ -555,6 +556,8 @@ void dev_activate(struct net_device *dev)
 void dev_deactivate(struct net_device *dev)
 {
 	struct Qdisc *qdisc;
+	struct sk_buff *skb;
+	int running;
 
 	spin_lock_bh(&dev->queue_lock);
 	qdisc = dev->qdisc;
@@ -562,21 +565,39 @@ void dev_deactivate(struct net_device *dev)
 
 	qdisc_reset(qdisc);
 
+	skb = dev->gso_skb;
+	dev->gso_skb = NULL;
 	spin_unlock_bh(&dev->queue_lock);
+
+	kfree_skb(skb);
 
 	dev_watchdog_down(dev);
 
-	/* Wait for outstanding dev_queue_xmit calls. */
+	/* Wait for outstanding qdisc-less dev_queue_xmit calls. */
 	synchronize_rcu();
 
 	/* Wait for outstanding qdisc_run calls. */
-	while (test_bit(__LINK_STATE_QDISC_RUNNING, &dev->state))
-		yield();
+	do {
+		while (test_bit(__LINK_STATE_QDISC_RUNNING, &dev->state))
+			yield();
 
-	if (dev->gso_skb) {
-		kfree_skb(dev->gso_skb);
-		dev->gso_skb = NULL;
-	}
+		/*
+		 * Double-check inside queue lock to ensure that all effects
+		 * of the queue run are visible when we return.
+		 */
+		spin_lock_bh(&dev->queue_lock);
+		running = test_bit(__LINK_STATE_QDISC_RUNNING, &dev->state);
+		spin_unlock_bh(&dev->queue_lock);
+
+		/*
+		 * The running flag should never be set at this point because
+		 * we've already set dev->qdisc to noop_qdisc *inside* the same
+		 * pair of spin locks.  That is, if any qdisc_run starts after
+		 * our initial test it should see the noop_qdisc and then
+		 * clear the RUNNING bit before dropping the queue lock.  So
+		 * if it is set here then we've found a bug.
+		 */
+	} while (WARN_ON_ONCE(running));
 }
 
 void dev_init_scheduler(struct net_device *dev)

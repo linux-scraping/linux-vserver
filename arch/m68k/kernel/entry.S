@@ -692,7 +692,7 @@ sys_call_table:
 	.long sys_tgkill	/* 265 */
 	.long sys_utimes
 	.long sys_fadvise64_64
-	.long sys_mbind	
+	.long sys_mbind
 	.long sys_get_mempolicy
 	.long sys_set_mempolicy	/* 270 */
 	.long sys_mq_open
@@ -735,4 +735,14 @@ sys_call_table:
 	.long sys_tee
 	.long sys_vmsplice
 	.long sys_move_pages		/* 310 */
+	.long sys_sched_setaffinity
+	.long sys_sched_getaffinity
+	.long sys_kexec_load
+	.long sys_getcpu
+	.long sys_epoll_pwait		/* 315 */
+	.long sys_utimensat
+	.long sys_signalfd
+	.long sys_timerfd
+	.long sys_eventfd
+	.long sys_fallocate		/* 320 */
 

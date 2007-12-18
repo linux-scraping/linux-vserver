@@ -26,6 +26,8 @@ platform-$(CONFIG_M5407)	:= 5407
 PLATFORM := $(platform-y)
 
 board-$(CONFIG_PILOT)		:= pilot
+board-$(CONFIG_UC5272)          := UC5272
+board-$(CONFIG_UC5282)          := UC5282
 board-$(CONFIG_UCSIMM)		:= ucsimm
 board-$(CONFIG_UCDIMM)		:= ucdimm
 board-$(CONFIG_UCQUICC)		:= uCquicc
@@ -46,6 +48,7 @@ board-$(CONFIG_SNEHA) 	        := SNEHA
 board-$(CONFIG_M5208EVB)	:= M5208EVB
 board-$(CONFIG_MOD5272)		:= MOD5272
 board-$(CONFIG_AVNET)           := AVNET
+board-$(CONFIG_SAVANT)		:= SAVANT
 BOARD := $(board-y)
 
 model-$(CONFIG_RAMKERNEL)	:= ram
@@ -100,11 +103,11 @@ cflags-$(CONFIG_M68EZ328)	:= -m68000
 cflags-$(CONFIG_M68VZ328)	:= -m68000
 cflags-$(CONFIG_M68360)		:= -m68332
 
-AFLAGS += $(cflags-y)
+KBUILD_AFLAGS += $(cflags-y)
 
-CFLAGS += $(cflags-y)
-CFLAGS += -D__linux__
-CFLAGS += -DUTS_SYSNAME=\"uClinux\"
+KBUILD_CFLAGS += $(cflags-y)
+KBUILD_CFLAGS += -D__linux__
+KBUILD_CFLAGS += -DUTS_SYSNAME=\"uClinux\"
 
 head-y := arch/m68knommu/platform/$(cpuclass-y)/head.o
 
@@ -115,4 +118,4 @@ core-y	+= arch/m68knommu/kernel/ \
 libs-y	+= arch/m68knommu/lib/
 
 archclean:
-	$(Q)$(MAKE) $(clean)=arch/m68knommu/boot
+

@@ -4,6 +4,7 @@
 /* TLB flushing routines.... */
 
 #include <linux/mm.h>
+#include <linux/sched.h>
 #include <asm/mmu_context.h>
 
 
@@ -56,10 +57,6 @@ static inline void flush_tlb_mm(struct mm_struct *mm)
 #endif
 }
 
-extern __inline__ void flush_tlb_pgtables(struct mm_struct *mm, unsigned long start, unsigned long end)
-{
-}
- 
 static inline void flush_tlb_page(struct vm_area_struct *vma,
 	unsigned long addr)
 {

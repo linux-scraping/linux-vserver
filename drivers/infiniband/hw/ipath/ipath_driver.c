@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -34,6 +34,7 @@
 #include <linux/spinlock.h>
 #include <linux/idr.h>
 #include <linux/pci.h>
+#include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
 #include <linux/vmalloc.h>
@@ -104,6 +105,9 @@ static int __devinit ipath_init_one(struct pci_dev *,
 #define PCI_DEVICE_ID_INFINIPATH_HT 0xd
 #define PCI_DEVICE_ID_INFINIPATH_PE800 0x10
 
+/* Number of seconds before our card status check...  */
+#define STATUS_TIMEOUT 60
+
 static const struct pci_device_id ipath_pci_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_PATHSCALE, PCI_DEVICE_ID_INFINIPATH_HT) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_PATHSCALE, PCI_DEVICE_ID_INFINIPATH_PE800) },
@@ -119,6 +123,18 @@ static struct pci_driver ipath_driver = {
 	.id_table = ipath_pci_tbl,
 };
 
+static void ipath_check_status(struct work_struct *work)
+{
+	struct ipath_devdata *dd = container_of(work, struct ipath_devdata,
+						status_work.work);
+
+	/*
+	 * If we don't have any interrupts, let the user know and
+	 * don't bother checking again.
+	 */
+	if (dd->ipath_int_counter == 0)
+		dev_err(&dd->pcidev->dev, "No interrupts detected.\n");
+}
 
 static inline void read_bars(struct ipath_devdata *dd, struct pci_dev *dev,
 			     u32 *bar0, u32 *bar1)
@@ -186,6 +202,8 @@ static struct ipath_devdata *ipath_alloc_devdata(struct pci_dev *pdev)
 
 	dd->pcidev = pdev;
 	pci_set_drvdata(pdev, dd);
+
+	INIT_DELAYED_WORK(&dd->status_work, ipath_check_status);
 
 	list_add(&dd->ipath_list, &ipath_dev_list);
 
@@ -263,6 +281,89 @@ void __attribute__((weak)) ipath_disable_wc(struct ipath_devdata *dd)
 {
 }
 
+/*
+ * Perform a PIO buffer bandwidth write test, to verify proper system
+ * configuration.  Even when all the setup calls work, occasionally
+ * BIOS or other issues can prevent write combining from working, or
+ * can cause other bandwidth problems to the chip.
+ *
+ * This test simply writes the same buffer over and over again, and
+ * measures close to the peak bandwidth to the chip (not testing
+ * data bandwidth to the wire).   On chips that use an address-based
+ * trigger to send packets to the wire, this is easy.  On chips that
+ * use a count to trigger, we want to make sure that the packet doesn't
+ * go out on the wire, or trigger flow control checks.
+ */
+static void ipath_verify_pioperf(struct ipath_devdata *dd)
+{
+	u32 pbnum, cnt, lcnt;
+	u32 __iomem *piobuf;
+	u32 *addr;
+	u64 msecs, emsecs;
+
+	piobuf = ipath_getpiobuf(dd, &pbnum);
+	if (!piobuf) {
+		dev_info(&dd->pcidev->dev,
+			"No PIObufs for checking perf, skipping\n");
+		return;
+	}
+
+	/*
+	 * Enough to give us a reasonable test, less than piobuf size, and
+	 * likely multiple of store buffer length.
+	 */
+	cnt = 1024;
+
+	addr = vmalloc(cnt);
+	if (!addr) {
+		dev_info(&dd->pcidev->dev,
+			"Couldn't get memory for checking PIO perf,"
+			" skipping\n");
+		goto done;
+	}
+
+	preempt_disable();  /* we want reasonably accurate elapsed time */
+	msecs = 1 + jiffies_to_msecs(jiffies);
+	for (lcnt = 0; lcnt < 10000U; lcnt++) {
+		/* wait until we cross msec boundary */
+		if (jiffies_to_msecs(jiffies) >= msecs)
+			break;
+		udelay(1);
+	}
+
+	writeq(0, piobuf); /* length 0, no dwords actually sent */
+	ipath_flush_wc();
+
+	/*
+	 * this is only roughly accurate, since even with preempt we
+	 * still take interrupts that could take a while.   Running for
+	 * >= 5 msec seems to get us "close enough" to accurate values
+	 */
+	msecs = jiffies_to_msecs(jiffies);
+	for (emsecs = lcnt = 0; emsecs <= 5UL; lcnt++) {
+		__iowrite32_copy(piobuf + 64, addr, cnt >> 2);
+		emsecs = jiffies_to_msecs(jiffies) - msecs;
+	}
+
+	/* 1 GiB/sec, slightly over IB SDR line rate */
+	if (lcnt < (emsecs * 1024U))
+		ipath_dev_err(dd,
+			"Performance problem: bandwidth to PIO buffers is "
+			"only %u MiB/sec\n",
+			lcnt / (u32) emsecs);
+	else
+		ipath_dbg("PIO buffer bandwidth %u MiB/sec is OK\n",
+			lcnt / (u32) emsecs);
+
+	preempt_enable();
+
+	vfree(addr);
+
+done:
+	/* disarm piobuf, so it's available again */
+	ipath_disarm_piobufs(dd, pbnum, 1);
+}
+
 static int __devinit ipath_init_one(struct pci_dev *pdev,
 				    const struct pci_device_id *ent)
 {
@@ -270,7 +371,6 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 	struct ipath_devdata *dd;
 	unsigned long long addr;
 	u32 bar0 = 0, bar1 = 0;
-	u8 rev;
 
 	dd = ipath_alloc_devdata(pdev);
 	if (IS_ERR(dd)) {
@@ -281,8 +381,6 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 	}
 
 	ipath_cdbg(VERBOSE, "initializing unit #%u\n", dd->ipath_unit);
-
-	read_bars(dd, pdev, &bar0, &bar1);
 
 	ret = pci_enable_device(pdev);
 	if (ret) {
@@ -390,15 +488,23 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 
 	/* setup the chip-specific functions, as early as possible. */
 	switch (ent->device) {
-#ifdef CONFIG_HT_IRQ
 	case PCI_DEVICE_ID_INFINIPATH_HT:
+#ifdef CONFIG_HT_IRQ
 		ipath_init_iba6110_funcs(dd);
 		break;
+#else
+		ipath_dev_err(dd, "QLogic HT device 0x%x cannot work if "
+			      "CONFIG_HT_IRQ is not enabled\n", ent->device);
+		return -ENODEV;
 #endif
-#ifdef CONFIG_PCI_MSI
 	case PCI_DEVICE_ID_INFINIPATH_PE800:
+#ifdef CONFIG_PCI_MSI
 		ipath_init_iba6120_funcs(dd);
 		break;
+#else
+		ipath_dev_err(dd, "QLogic PCIE device 0x%x cannot work if "
+			      "CONFIG_PCI_MSI is not enabled\n", ent->device);
+		return -ENODEV;
 #endif
 	default:
 		ipath_dev_err(dd, "Found unknown QLogic deviceid 0x%x, "
@@ -421,16 +527,7 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 		goto bail_regions;
 	}
 
-	dd->ipath_deviceid = ent->device;	/* save for later use */
-	dd->ipath_vendorid = ent->vendor;
-
-	ret = pci_read_config_byte(pdev, PCI_REVISION_ID, &rev);
-	if (ret) {
-		ipath_dev_err(dd, "Failed to read PCI revision ID unit "
-			      "%u: err %d\n", dd->ipath_unit, -ret);
-		goto bail_regions;	/* shouldn't ever happen */
-	}
-	dd->ipath_pcirev = rev;
+	dd->ipath_pcirev = pdev->revision;
 
 #if defined(__powerpc__)
 	/* There isn't a generic way to specify writethrough mappings */
@@ -486,7 +583,7 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 
 	ret = ipath_init_chip(dd, 0);	/* do the chip-specific init */
 	if (ret)
-		goto bail_iounmap;
+		goto bail_irqsetup;
 
 	ret = ipath_enable_wc(dd);
 
@@ -497,13 +594,21 @@ static int __devinit ipath_init_one(struct pci_dev *pdev,
 		ret = 0;
 	}
 
+	ipath_verify_pioperf(dd);
+
 	ipath_device_create_group(&pdev->dev, dd);
 	ipathfs_add_device(dd);
 	ipath_user_add(dd);
 	ipath_diag_add(dd);
 	ipath_register_ib_device(dd);
 
+	/* Check that card status in STATUS_TIMEOUT seconds. */
+	schedule_delayed_work(&dd->status_work, HZ * STATUS_TIMEOUT);
+
 	goto bail;
+
+bail_irqsetup:
+	if (pdev->irq) free_irq(pdev->irq, dd);
 
 bail_iounmap:
 	iounmap((volatile void __iomem *) dd->ipath_kregbase);
@@ -524,8 +629,6 @@ bail:
 static void __devexit cleanup_device(struct ipath_devdata *dd)
 {
 	int port;
-
-	ipath_shutdown_device(dd);
 
 	if (*dd->ipath_statusp & IPATH_STATUS_CHIP_PRESENT) {
 		/* can't do anything more with chip; needs re-init */
@@ -594,8 +697,9 @@ static void __devexit cleanup_device(struct ipath_devdata *dd)
 
 		ipath_cdbg(VERBOSE, "Free shadow page tid array at %p\n",
 			   dd->ipath_pageshadow);
-		vfree(dd->ipath_pageshadow);
+		tmpp = dd->ipath_pageshadow;
 		dd->ipath_pageshadow = NULL;
+		vfree(tmpp);
 	}
 
 	/*
@@ -621,6 +725,15 @@ static void __devexit ipath_remove_one(struct pci_dev *pdev)
 	struct ipath_devdata *dd = pci_get_drvdata(pdev);
 
 	ipath_cdbg(VERBOSE, "removing, pdev=%p, dd=%p\n", pdev, dd);
+
+	/*
+	 * disable the IB link early, to be sure no new packets arrive, which
+	 * complicates the shutdown process
+	 */
+	ipath_shutdown_device(dd);
+
+	cancel_delayed_work(&dd->status_work);
+	flush_scheduled_work();
 
 	if (dd->verbs_dev)
 		ipath_unregister_ib_device(dd->verbs_dev);
@@ -690,9 +803,9 @@ void ipath_disarm_piobufs(struct ipath_devdata *dd, unsigned first,
 	u64 sendctrl, sendorig;
 
 	ipath_cdbg(PKT, "disarm %u PIObufs first=%u\n", cnt, first);
-	sendorig = dd->ipath_sendctrl | INFINIPATH_S_DISARM;
+	sendorig = dd->ipath_sendctrl;
 	for (i = first; i < last; i++) {
-		sendctrl = sendorig |
+		sendctrl = sendorig  | INFINIPATH_S_DISARM |
 			(i << INFINIPATH_S_DISARMPIOBUF_SHIFT);
 		ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
 				 sendctrl);
@@ -703,12 +816,12 @@ void ipath_disarm_piobufs(struct ipath_devdata *dd, unsigned first,
 	 * while we were looping; no critical bits that would require
 	 * locking.
 	 *
-	 * Write a 0, and then the original value, reading scratch in
+	 * disable PIOAVAILUPD, then re-enable, reading scratch in
 	 * between.  This seems to avoid a chip timing race that causes
 	 * pioavail updates to memory to stop.
 	 */
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
-			 0);
+			 sendorig & ~INFINIPATH_S_PIOBUFAVAILUPD);
 	sendorig = ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
 			 dd->ipath_sendctrl);
@@ -754,9 +867,42 @@ static int ipath_wait_linkstate(struct ipath_devdata *dd, u32 state,
 	return (dd->ipath_flags & state) ? 0 : -ETIMEDOUT;
 }
 
-void ipath_decode_err(char *buf, size_t blen, ipath_err_t err)
+/*
+ * Decode the error status into strings, deciding whether to always
+ * print * it or not depending on "normal packet errors" vs everything
+ * else.   Return 1 if "real" errors, otherwise 0 if only packet
+ * errors, so caller can decide what to print with the string.
+ */
+int ipath_decode_err(char *buf, size_t blen, ipath_err_t err)
 {
+	int iserr = 1;
 	*buf = '\0';
+	if (err & INFINIPATH_E_PKTERRS) {
+		if (!(err & ~INFINIPATH_E_PKTERRS))
+			iserr = 0; // if only packet errors.
+		if (ipath_debug & __IPATH_ERRPKTDBG) {
+			if (err & INFINIPATH_E_REBP)
+				strlcat(buf, "EBP ", blen);
+			if (err & INFINIPATH_E_RVCRC)
+				strlcat(buf, "VCRC ", blen);
+			if (err & INFINIPATH_E_RICRC) {
+				strlcat(buf, "CRC ", blen);
+				// clear for check below, so only once
+				err &= INFINIPATH_E_RICRC;
+			}
+			if (err & INFINIPATH_E_RSHORTPKTLEN)
+				strlcat(buf, "rshortpktlen ", blen);
+			if (err & INFINIPATH_E_SDROPPEDDATAPKT)
+				strlcat(buf, "sdroppeddatapkt ", blen);
+			if (err & INFINIPATH_E_SPKTLEN)
+				strlcat(buf, "spktlen ", blen);
+		}
+		if ((err & INFINIPATH_E_RICRC) &&
+			!(err&(INFINIPATH_E_RVCRC|INFINIPATH_E_REBP)))
+			strlcat(buf, "CRC ", blen);
+		if (!iserr)
+			goto done;
+	}
 	if (err & INFINIPATH_E_RHDRLEN)
 		strlcat(buf, "rhdrlen ", blen);
 	if (err & INFINIPATH_E_RBADTID)
@@ -767,12 +913,12 @@ void ipath_decode_err(char *buf, size_t blen, ipath_err_t err)
 		strlcat(buf, "rhdr ", blen);
 	if (err & INFINIPATH_E_RLONGPKTLEN)
 		strlcat(buf, "rlongpktlen ", blen);
-	if (err & INFINIPATH_E_RSHORTPKTLEN)
-		strlcat(buf, "rshortpktlen ", blen);
 	if (err & INFINIPATH_E_RMAXPKTLEN)
 		strlcat(buf, "rmaxpktlen ", blen);
 	if (err & INFINIPATH_E_RMINPKTLEN)
 		strlcat(buf, "rminpktlen ", blen);
+	if (err & INFINIPATH_E_SMINPKTLEN)
+		strlcat(buf, "sminpktlen ", blen);
 	if (err & INFINIPATH_E_RFORMATERR)
 		strlcat(buf, "rformaterr ", blen);
 	if (err & INFINIPATH_E_RUNSUPVL)
@@ -781,32 +927,20 @@ void ipath_decode_err(char *buf, size_t blen, ipath_err_t err)
 		strlcat(buf, "runexpchar ", blen);
 	if (err & INFINIPATH_E_RIBFLOW)
 		strlcat(buf, "ribflow ", blen);
-	if (err & INFINIPATH_E_REBP)
-		strlcat(buf, "EBP ", blen);
 	if (err & INFINIPATH_E_SUNDERRUN)
 		strlcat(buf, "sunderrun ", blen);
 	if (err & INFINIPATH_E_SPIOARMLAUNCH)
 		strlcat(buf, "spioarmlaunch ", blen);
 	if (err & INFINIPATH_E_SUNEXPERRPKTNUM)
 		strlcat(buf, "sunexperrpktnum ", blen);
-	if (err & INFINIPATH_E_SDROPPEDDATAPKT)
-		strlcat(buf, "sdroppeddatapkt ", blen);
 	if (err & INFINIPATH_E_SDROPPEDSMPPKT)
 		strlcat(buf, "sdroppedsmppkt ", blen);
 	if (err & INFINIPATH_E_SMAXPKTLEN)
 		strlcat(buf, "smaxpktlen ", blen);
-	if (err & INFINIPATH_E_SMINPKTLEN)
-		strlcat(buf, "sminpktlen ", blen);
 	if (err & INFINIPATH_E_SUNSUPVL)
 		strlcat(buf, "sunsupVL ", blen);
-	if (err & INFINIPATH_E_SPKTLEN)
-		strlcat(buf, "spktlen ", blen);
 	if (err & INFINIPATH_E_INVALIDADDR)
 		strlcat(buf, "invalidaddr ", blen);
-	if (err & INFINIPATH_E_RICRC)
-		strlcat(buf, "CRC ", blen);
-	if (err & INFINIPATH_E_RVCRC)
-		strlcat(buf, "VCRC ", blen);
 	if (err & INFINIPATH_E_RRCVEGRFULL)
 		strlcat(buf, "rcvegrfull ", blen);
 	if (err & INFINIPATH_E_RRCVHDRFULL)
@@ -819,6 +953,8 @@ void ipath_decode_err(char *buf, size_t blen, ipath_err_t err)
 		strlcat(buf, "hardware ", blen);
 	if (err & INFINIPATH_E_RESET)
 		strlcat(buf, "reset ", blen);
+done:
+	return iserr;
 }
 
 /**
@@ -982,14 +1118,10 @@ void ipath_kreceive(struct ipath_devdata *dd)
 		goto bail;
 	}
 
-	/* There is already a thread processing this queue. */
-	if (test_and_set_bit(0, &dd->ipath_rcv_pending))
-		goto bail;
-
 	l = dd->ipath_port0head;
 	hdrqtail = (u32) le64_to_cpu(*dd->ipath_hdrqtailptr);
 	if (l == hdrqtail)
-		goto done;
+		goto bail;
 
 reloop:
 	for (i = 0; l != hdrqtail; i++) {
@@ -1123,10 +1255,6 @@ reloop:
 	ipath_stats.sps_port0pkts += pkttot;
 	ipath_stats.sps_avgpkts_call =
 		ipath_stats.sps_port0pkts / ++totcalls;
-
-done:
-	clear_bit(0, &dd->ipath_rcv_pending);
-	smp_mb__after_clear_bit();
 
 bail:;
 }
@@ -1557,6 +1685,38 @@ int ipath_waitfor_mdio_cmdready(struct ipath_devdata *dd)
 	return ret;
 }
 
+
+/*
+ * Flush all sends that might be in the ready to send state, as well as any
+ * that are in the process of being sent.   Used whenever we need to be
+ * sure the send side is idle.  Cleans up all buffer state by canceling
+ * all pio buffers, and issuing an abort, which cleans up anything in the
+ * launch fifo.  The cancel is superfluous on some chip versions, but
+ * it's safer to always do it.
+ * PIOAvail bits are updated by the chip as if normal send had happened.
+ */
+void ipath_cancel_sends(struct ipath_devdata *dd, int restore_sendctrl)
+{
+	ipath_dbg("Cancelling all in-progress send buffers\n");
+	dd->ipath_lastcancel = jiffies+HZ/2; /* skip armlaunch errs a bit */
+	/*
+	 * the abort bit is auto-clearing.  We read scratch to be sure
+	 * that cancels and the abort have taken effect in the chip.
+	 */
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
+		INFINIPATH_S_ABORT);
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+	ipath_disarm_piobufs(dd, 0,
+		(unsigned)(dd->ipath_piobcnt2k + dd->ipath_piobcnt4k));
+	if (restore_sendctrl) /* else done by caller later */
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
+				 dd->ipath_sendctrl);
+
+	/* and again, be sure all have hit the chip */
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+}
+
+
 static void ipath_set_ib_lstate(struct ipath_devdata *dd, int which)
 {
 	static const char *what[4] = {
@@ -1578,14 +1738,8 @@ static void ipath_set_ib_lstate(struct ipath_devdata *dd, int which)
 			   INFINIPATH_IBCS_LINKTRAININGSTATE_MASK]);
 	/* flush all queued sends when going to DOWN or INIT, to be sure that
 	 * they don't block MAD packets */
-	if (!linkcmd || linkcmd == INFINIPATH_IBCC_LINKCMD_INIT) {
-		ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
-				 INFINIPATH_S_ABORT);
-		ipath_disarm_piobufs(dd, dd->ipath_lastport_piobuf,
-		                    (unsigned)(dd->ipath_piobcnt2k +
-				    dd->ipath_piobcnt4k) -
-				    dd->ipath_lastport_piobuf);
-	}
+	if (!linkcmd || linkcmd == INFINIPATH_IBCC_LINKCMD_INIT)
+		ipath_cancel_sends(dd, 1);
 
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
 			 dd->ipath_ibcctrl | which);
@@ -1661,6 +1815,22 @@ int ipath_set_linkstate(struct ipath_devdata *dd, u8 newstate)
 				    INFINIPATH_IBCC_LINKCMD_SHIFT);
 		lstate = IPATH_LINKACTIVE;
 		break;
+
+	case IPATH_IB_LINK_LOOPBACK:
+		dev_info(&dd->pcidev->dev, "Enabling IB local loopback\n");
+		dd->ipath_ibcctrl |= INFINIPATH_IBCC_LOOPBACK;
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+				 dd->ipath_ibcctrl);
+		ret = 0;
+		goto bail; // no state change to wait for
+
+	case IPATH_IB_LINK_EXTERNAL:
+		dev_info(&dd->pcidev->dev, "Disabling IB local loopback (normal)\n");
+		dd->ipath_ibcctrl &= ~INFINIPATH_IBCC_LOOPBACK;
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_ibcctrl,
+				 dd->ipath_ibcctrl);
+		ret = 0;
+		goto bail; // no state change to wait for
 
 	default:
 		ipath_dbg("Invalid linkstate 0x%x requested\n", newstate);
@@ -1765,29 +1935,6 @@ int ipath_set_lid(struct ipath_devdata *dd, u32 arg, u8 lmc)
 	return 0;
 }
 
-/**
- * ipath_read_kreg64_port - read a device's per-port 64-bit kernel register
- * @dd: the infinipath device
- * @regno: the register number to read
- * @port: the port containing the register
- *
- * Registers that vary with the chip implementation constants (port)
- * use this routine.
- */
-u64 ipath_read_kreg64_port(const struct ipath_devdata *dd, ipath_kreg regno,
-			   unsigned port)
-{
-	u16 where;
-
-	if (port < dd->ipath_portcnt &&
-	    (regno == dd->ipath_kregs->kr_rcvhdraddr ||
-	     regno == dd->ipath_kregs->kr_rcvhdrtailaddr))
-		where = regno + port;
-	else
-		where = -1;
-
-	return ipath_read_kreg64(dd, where);
-}
 
 /**
  * ipath_write_kreg_port - write a device's per-port 64-bit kernel register
@@ -1812,6 +1959,87 @@ void ipath_write_kreg_port(const struct ipath_devdata *dd, ipath_kreg regno,
 		where = -1;
 
 	ipath_write_kreg(dd, where, value);
+}
+
+/*
+ * Following deal with the "obviously simple" task of overriding the state
+ * of the LEDS, which normally indicate link physical and logical status.
+ * The complications arise in dealing with different hardware mappings
+ * and the board-dependent routine being called from interrupts.
+ * and then there's the requirement to _flash_ them.
+ */
+#define LED_OVER_FREQ_SHIFT 8
+#define LED_OVER_FREQ_MASK (0xFF<<LED_OVER_FREQ_SHIFT)
+/* Below is "non-zero" to force override, but both actual LEDs are off */
+#define LED_OVER_BOTH_OFF (8)
+
+static void ipath_run_led_override(unsigned long opaque)
+{
+	struct ipath_devdata *dd = (struct ipath_devdata *)opaque;
+	int timeoff;
+	int pidx;
+	u64 lstate, ltstate, val;
+
+	if (!(dd->ipath_flags & IPATH_INITTED))
+		return;
+
+	pidx = dd->ipath_led_override_phase++ & 1;
+	dd->ipath_led_override = dd->ipath_led_override_vals[pidx];
+	timeoff = dd->ipath_led_override_timeoff;
+
+	/*
+	 * below potentially restores the LED values per current status,
+	 * should also possibly setup the traffic-blink register,
+	 * but leave that to per-chip functions.
+	 */
+	val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_ibcstatus);
+	ltstate = (val >> INFINIPATH_IBCS_LINKTRAININGSTATE_SHIFT) &
+		  INFINIPATH_IBCS_LINKTRAININGSTATE_MASK;
+	lstate = (val >> INFINIPATH_IBCS_LINKSTATE_SHIFT) &
+		 INFINIPATH_IBCS_LINKSTATE_MASK;
+
+	dd->ipath_f_setextled(dd, lstate, ltstate);
+	mod_timer(&dd->ipath_led_override_timer, jiffies + timeoff);
+}
+
+void ipath_set_led_override(struct ipath_devdata *dd, unsigned int val)
+{
+	int timeoff, freq;
+
+	if (!(dd->ipath_flags & IPATH_INITTED))
+		return;
+
+	/* First check if we are blinking. If not, use 1HZ polling */
+	timeoff = HZ;
+	freq = (val & LED_OVER_FREQ_MASK) >> LED_OVER_FREQ_SHIFT;
+
+	if (freq) {
+		/* For blink, set each phase from one nybble of val */
+		dd->ipath_led_override_vals[0] = val & 0xF;
+		dd->ipath_led_override_vals[1] = (val >> 4) & 0xF;
+		timeoff = (HZ << 4)/freq;
+	} else {
+		/* Non-blink set both phases the same. */
+		dd->ipath_led_override_vals[0] = val & 0xF;
+		dd->ipath_led_override_vals[1] = val & 0xF;
+	}
+	dd->ipath_led_override_timeoff = timeoff;
+
+	/*
+	 * If the timer has not already been started, do so. Use a "quick"
+	 * timeout so the function will be called soon, to look at our request.
+	 */
+	if (atomic_inc_return(&dd->ipath_led_override_timer_active) == 1) {
+		/* Need to start timer */
+		init_timer(&dd->ipath_led_override_timer);
+		dd->ipath_led_override_timer.function =
+						 ipath_run_led_override;
+		dd->ipath_led_override_timer.data = (unsigned long) dd;
+		dd->ipath_led_override_timer.expires = jiffies + 1;
+		add_timer(&dd->ipath_led_override_timer);
+	} else {
+		atomic_dec(&dd->ipath_led_override_timer_active);
+	}
 }
 
 /**
@@ -1854,17 +2082,11 @@ void ipath_shutdown_device(struct ipath_devdata *dd)
 	 */
 	udelay(5);
 
-	/*
-	 * abort any armed or launched PIO buffers that didn't go. (self
-	 * clearing).  Will cause any packet currently being transmitted to
-	 * go out with an EBP, and may also cause a short packet error on
-	 * the receiver.
-	 */
-	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
-			 INFINIPATH_S_ABORT);
-
 	ipath_set_ib_lstate(dd, INFINIPATH_IBCC_LINKINITCMD_DISABLE <<
 			    INFINIPATH_IBCC_LINKINITCMD_SHIFT);
+	ipath_cancel_sends(dd, 0);
+
+	signal_ib_event(dd, IB_EVENT_PORT_ERR);
 
 	/* disable IBC */
 	dd->ipath_control &= ~INFINIPATH_C_LINKENABLE;
@@ -1877,7 +2099,6 @@ void ipath_shutdown_device(struct ipath_devdata *dd)
 	 * Turn the LEDs off explictly for the same reason.
 	 */
 	dd->ipath_f_quiet_serdes(dd);
-	dd->ipath_f_setextled(dd, 0, 0);
 
 	if (dd->ipath_stats_timer_active) {
 		del_timer_sync(&dd->ipath_stats_timer);
@@ -1893,6 +2114,9 @@ void ipath_shutdown_device(struct ipath_devdata *dd)
 			 ~0ULL & ~INFINIPATH_HWE_MEMBISTFAILED);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_errorclear, -1LL);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_intclear, -1LL);
+
+	ipath_cdbg(VERBOSE, "Flush time and errors to EEPROM\n");
+	ipath_update_eeprom_log(dd);
 }
 
 /**
@@ -1973,7 +2197,8 @@ static int __init infinipath_init(void)
 {
 	int ret;
 
-	ipath_dbg(KERN_INFO DRIVER_LOAD_MSG "%s", ib_ipath_version);
+	if (ipath_debug & __IPATH_DBG)
+		printk(KERN_INFO DRIVER_LOAD_MSG "%s", ib_ipath_version);
 
 	/*
 	 * These must be called before the driver is registered with
@@ -2051,6 +2276,16 @@ int ipath_reset_device(int unit)
 		ret = -ENODEV;
 		goto bail;
 	}
+
+	if (atomic_read(&dd->ipath_led_override_timer_active)) {
+		/* Need to stop LED timer, _then_ shut off LEDs */
+		del_timer_sync(&dd->ipath_led_override_timer);
+		atomic_set(&dd->ipath_led_override_timer_active, 0);
+	}
+
+	/* Shut off LEDs after we are sure timer is not running */
+	dd->ipath_led_override = LED_OVER_BOTH_OFF;
+	dd->ipath_f_setextled(dd, 0, 0);
 
 	dev_info(&dd->pcidev->dev, "Reset on unit %u requested\n", unit);
 

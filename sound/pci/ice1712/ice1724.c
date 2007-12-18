@@ -2,7 +2,7 @@
  *   ALSA driver for VT1724 ICEnsemble ICE1724 / VIA VT1724 (Envy24HT)
  *                   VIA VT1720 (Envy24PT)
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *                    2002 James Stafford <jstafford@ampltd.com>
  *                    2003 Takashi Iwai <tiwai@suse.de>
  *
@@ -52,7 +52,7 @@
 #include "phase.h"
 #include "wtm.h"
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("VIA ICEnsemble ICE1724/1720 (Envy24HT/PT)");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{"
@@ -337,16 +337,16 @@ static int snd_vt1724_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 	struct snd_ice1712 *ice = snd_pcm_substream_chip(substream);
 	unsigned char what;
 	unsigned char old;
-	struct list_head *pos;
 	struct snd_pcm_substream *s;
 
 	what = 0;
-	snd_pcm_group_for_each(pos, substream) {
-		const struct vt1724_pcm_reg *reg;
-		s = snd_pcm_group_substream_entry(pos);
-		reg = s->runtime->private_data;
-		what |= reg->start;
-		snd_pcm_trigger_done(s, substream);
+	snd_pcm_group_for_each_entry(s, substream) {
+		if (snd_pcm_substream_chip(s) == ice) {
+			const struct vt1724_pcm_reg *reg;
+			reg = s->runtime->private_data;
+			what |= reg->start;
+			snd_pcm_trigger_done(s, substream);
+		}
 	}
 
 	switch (cmd) {
@@ -1318,7 +1318,7 @@ static int snd_vt1724_eeprom_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_eeprom __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_eeprom __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_CARD,
 	.name = "ICE1724 EEPROM",
 	.access = SNDRV_CTL_ELEM_ACCESS_READ,
@@ -1431,7 +1431,7 @@ static int snd_vt1724_spdif_default_put(struct snd_kcontrol *kcontrol,
 	return (val != old);
 }
 
-static const struct snd_kcontrol_new snd_vt1724_spdif_default __devinitdata =
+static struct snd_kcontrol_new snd_vt1724_spdif_default __devinitdata =
 {
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =         SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),
@@ -1463,7 +1463,7 @@ static int snd_vt1724_spdif_maskp_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_spdif_maskc __devinitdata =
+static struct snd_kcontrol_new snd_vt1724_spdif_maskc __devinitdata =
 {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
@@ -1472,7 +1472,7 @@ static const struct snd_kcontrol_new snd_vt1724_spdif_maskc __devinitdata =
 	.get =		snd_vt1724_spdif_maskc_get,
 };
 
-static const struct snd_kcontrol_new snd_vt1724_spdif_maskp __devinitdata =
+static struct snd_kcontrol_new snd_vt1724_spdif_maskp __devinitdata =
 {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
@@ -1481,15 +1481,7 @@ static const struct snd_kcontrol_new snd_vt1724_spdif_maskp __devinitdata =
 	.get =		snd_vt1724_spdif_maskp_get,
 };
 
-static int snd_vt1724_spdif_sw_info(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_vt1724_spdif_sw_info		snd_ctl_boolean_mono_info
 
 static int snd_vt1724_spdif_sw_get(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
@@ -1517,7 +1509,7 @@ static int snd_vt1724_spdif_sw_put(struct snd_kcontrol *kcontrol,
 	return old != val;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_spdif_switch __devinitdata =
+static struct snd_kcontrol_new snd_vt1724_spdif_switch __devinitdata =
 {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	/* FIXME: the following conflict with IEC958 Playback Route */
@@ -1534,15 +1526,7 @@ static const struct snd_kcontrol_new snd_vt1724_spdif_switch __devinitdata =
  * GPIO access from extern
  */
 
-int snd_vt1724_gpio_info(struct snd_kcontrol *kcontrol,
-			 struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_vt1724_gpio_info		snd_ctl_boolean_mono_info
 
 int snd_vt1724_gpio_get(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
@@ -1668,7 +1652,12 @@ static int snd_vt1724_pro_internal_clock_put(struct snd_kcontrol *kcontrol,
 	spin_lock_irq(&ice->reg_lock);
 	oval = inb(ICEMT1724(ice, RATE));
 	if (ucontrol->value.enumerated.item[0] == spdif) {
+		unsigned char i2s_oval;
 		outb(oval | VT1724_SPDIF_MASTER, ICEMT1724(ice, RATE));
+		/* setting 256fs */
+		i2s_oval = inb(ICEMT1724(ice, I2S_FORMAT));
+		outb(i2s_oval & ~VT1724_MT_I2S_MCLK_128X,
+		     ICEMT1724(ice, I2S_FORMAT));
 	} else {
 		rate = rates[ucontrol->value.integer.value[0] % 15];
 		if (rate <= get_max_rate(ice)) {
@@ -1695,7 +1684,7 @@ static int snd_vt1724_pro_internal_clock_put(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_pro_internal_clock __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_pro_internal_clock __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Multi Track Internal Clock",
 	.info = snd_vt1724_pro_internal_clock_info,
@@ -1703,15 +1692,7 @@ static const struct snd_kcontrol_new snd_vt1724_pro_internal_clock __devinitdata
 	.put = snd_vt1724_pro_internal_clock_put
 };
 
-static int snd_vt1724_pro_rate_locking_info(struct snd_kcontrol *kcontrol,
-					    struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_vt1724_pro_rate_locking_info	snd_ctl_boolean_mono_info
 
 static int snd_vt1724_pro_rate_locking_get(struct snd_kcontrol *kcontrol,
 					   struct snd_ctl_elem_value *ucontrol)
@@ -1734,7 +1715,7 @@ static int snd_vt1724_pro_rate_locking_put(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_pro_rate_locking __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_pro_rate_locking __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Multi Track Rate Locking",
 	.info = snd_vt1724_pro_rate_locking_info,
@@ -1742,15 +1723,7 @@ static const struct snd_kcontrol_new snd_vt1724_pro_rate_locking __devinitdata =
 	.put = snd_vt1724_pro_rate_locking_put
 };
 
-static int snd_vt1724_pro_rate_reset_info(struct snd_kcontrol *kcontrol,
-					  struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_vt1724_pro_rate_reset_info		snd_ctl_boolean_mono_info
 
 static int snd_vt1724_pro_rate_reset_get(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)
@@ -1773,7 +1746,7 @@ static int snd_vt1724_pro_rate_reset_put(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_pro_rate_reset __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_pro_rate_reset __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Multi Track Rate Reset",
 	.info = snd_vt1724_pro_rate_reset_info,
@@ -1892,7 +1865,7 @@ static int snd_vt1724_pro_route_spdif_put(struct snd_kcontrol *kcontrol,
 			     digital_route_shift(idx));
 }
 
-static const struct snd_kcontrol_new snd_vt1724_mixer_pro_analog_route __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_mixer_pro_analog_route __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "H/W Playback Route",
 	.info = snd_vt1724_pro_route_info,
@@ -1900,7 +1873,7 @@ static const struct snd_kcontrol_new snd_vt1724_mixer_pro_analog_route __devinit
 	.put = snd_vt1724_pro_route_analog_put,
 };
 
-static const struct snd_kcontrol_new snd_vt1724_mixer_pro_spdif_route __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_mixer_pro_spdif_route __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = SNDRV_CTL_NAME_IEC958("",PLAYBACK,NONE) "Route",
 	.info = snd_vt1724_pro_route_info,
@@ -1936,7 +1909,7 @@ static int snd_vt1724_pro_peak_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new snd_vt1724_mixer_pro_peak __devinitdata = {
+static struct snd_kcontrol_new snd_vt1724_mixer_pro_peak __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Multi Track Peak",
 	.access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
@@ -1948,9 +1921,9 @@ static const struct snd_kcontrol_new snd_vt1724_mixer_pro_peak __devinitdata = {
  *
  */
 
-static const struct snd_ice1712_card_info no_matched __devinitdata;
+static struct snd_ice1712_card_info no_matched __devinitdata;
 
-static const struct snd_ice1712_card_info *card_tables[] __devinitdata = {
+static struct snd_ice1712_card_info *card_tables[] __devinitdata = {
 	snd_vt1724_revo_cards,
 	snd_vt1724_amp_cards, 
 	snd_vt1724_aureon_cards,
@@ -2009,7 +1982,7 @@ static int __devinit snd_vt1724_read_eeprom(struct snd_ice1712 *ice,
 {
 	const int dev = 0xa0;		/* EEPROM device address */
 	unsigned int i, size;
-	const struct snd_ice1712_card_info **tbl, *c;
+	struct snd_ice1712_card_info * const *tbl, *c;
 
 	if (! modelname || ! *modelname) {
 		ice->eeprom.subvendor = 0;
@@ -2308,7 +2281,7 @@ static int __devinit snd_vt1724_probe(struct pci_dev *pci,
 	struct snd_card *card;
 	struct snd_ice1712 *ice;
 	int pcm_dev = 0, err;
-	const struct snd_ice1712_card_info **tbl, *c;
+	struct snd_ice1712_card_info * const *tbl, *c;
 
 	if (dev >= SNDRV_CARDS)
 		return -ENODEV;
@@ -2347,6 +2320,14 @@ static int __devinit snd_vt1724_probe(struct pci_dev *pci,
 	}
 	c = &no_matched;
  __found:
+       /*
+        * VT1724 has separate DMAs for the analog and the SPDIF streams while
+        * ICE1712 has only one for both (mixed up).
+        *
+        * Confusingly the analog PCM is named "professional" here because it
+        * was called so in ice1712 driver, and vt1724 driver is derived from
+        * ice1712 driver.
+        */
 
 	if ((err = snd_vt1724_pcm_profi(ice, pcm_dev++)) < 0) {
 		snd_card_free(card);

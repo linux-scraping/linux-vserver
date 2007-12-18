@@ -36,7 +36,6 @@
 #endif
 
 extern void mips_reboot_setup(void);
-extern void mips_time_init(void);
 extern unsigned long mips_rtc_get_time(void);
 
 #ifdef CONFIG_KGDB
@@ -55,6 +54,12 @@ const char *get_system_type(void)
 {
 	return "MIPS Malta";
 }
+
+#if defined(CONFIG_MIPS_MT_SMTC)
+const char display_string[] = "       SMTC LINUX ON MALTA       ";
+#else
+const char display_string[] = "        LINUX ON MALTA       ";
+#endif /* CONFIG_MIPS_MT_SMTC */
 
 #ifdef CONFIG_BLK_DEV_FD
 void __init fd_activate(void)
@@ -94,18 +99,16 @@ void __init plat_mem_setup(void)
 	enable_dma(4);
 
 #ifdef CONFIG_KGDB
-	kgdb_config ();
+	kgdb_config();
 #endif
 
-	if ((mips_revision_corid == MIPS_REVISION_CORID_BONITO64) ||
-	    (mips_revision_corid == MIPS_REVISION_CORID_CORE_20K) ||
-	    (mips_revision_corid == MIPS_REVISION_CORID_CORE_EMUL_BON)) {
+	if (mips_revision_sconid == MIPS_REVISION_SCON_BONITO) {
 		char *argptr;
 
 		argptr = prom_getcmdline();
 		if (strstr(argptr, "debug")) {
 			BONITO_BONGENCFG |= BONITO_BONGENCFG_DEBUGMODE;
-			printk ("Enabled Bonito debug mode\n");
+			printk("Enabled Bonito debug mode\n");
 		}
 		else
 			BONITO_BONGENCFG &= ~BONITO_BONGENCFG_DEBUGMODE;
@@ -145,7 +148,8 @@ void __init plat_mem_setup(void)
 #ifdef CONFIG_BLK_DEV_IDE
 	/* Check PCI clock */
 	{
-		int jmpr = (*((volatile unsigned int *)ioremap(MALTA_JMPRS_REG, sizeof(unsigned int))) >> 2) & 0x07;
+		unsigned int __iomem *jmpr_p = (unsigned int *) ioremap(MALTA_JMPRS_REG, sizeof(unsigned int));
+		int jmpr = (readw(jmpr_p) >> 2) & 0x07;
 		static const int pciclocks[] __initdata = {
 			33, 20, 25, 30, 12, 16, 37, 10
 		};
@@ -155,14 +159,14 @@ void __init plat_mem_setup(void)
 		if (pciclock != 33 && !strstr (argptr, "idebus=")) {
 			printk("WARNING: PCI clock is %dMHz, setting idebus\n", pciclock);
 			argptr += strlen(argptr);
-			sprintf (argptr, " idebus=%d", pciclock);
+			sprintf(argptr, " idebus=%d", pciclock);
 			if (pciclock < 20 || pciclock > 66)
-				printk ("WARNING: IDE timing calculations will be incorrect\n");
+				printk("WARNING: IDE timing calculations will be incorrect\n");
 		}
 	}
 #endif
 #ifdef CONFIG_BLK_DEV_FD
-	fd_activate ();
+	fd_activate();
 #endif
 #ifdef CONFIG_VT
 #if defined(CONFIG_VGA_CONSOLE)
@@ -172,16 +176,12 @@ void __init plat_mem_setup(void)
 		0,			/* orig-video-page */
 		0,			/* orig-video-mode */
 		80,			/* orig-video-cols */
-		0,0,0,			/* ega_ax, ega_bx, ega_cx */
+		0, 0, 0,		/* ega_ax, ega_bx, ega_cx */
 		25,			/* orig-video-lines */
 		VIDEO_TYPE_VGAC,	/* orig-video-isVGA */
 		16			/* orig-video-points */
 	};
 #endif
 #endif
-
 	mips_reboot_setup();
-
-	board_time_init = mips_time_init;
-	rtc_mips_get_time = mips_rtc_get_time;
 }

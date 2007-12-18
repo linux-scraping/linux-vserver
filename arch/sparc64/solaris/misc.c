@@ -6,7 +6,6 @@
 
 #include <linux/module.h> 
 #include <linux/types.h>
-#include <linux/smp_lock.h>
 #include <linux/utsname.h>
 #include <linux/limits.h>
 #include <linux/mm.h>
@@ -224,7 +223,8 @@ static char *serial(char *buffer, int sz)
 
 	*buffer = 0;
 	if (dp) {
-		char *val = of_get_property(dp, "system-board-serial#", &len);
+		const char *val =
+			of_get_property(dp, "system-board-serial#", &len);
 
 		if (val && len > 0) {
 			if (len > sz)
@@ -415,7 +415,7 @@ asmlinkage int solaris_procids(int cmd, s32 pid, s32 pgid)
 	
 	switch (cmd) {
 	case 0: /* getpgrp */
-		return process_group(current);
+		return task_pgrp_nr(current);
 	case 1: /* setpgrp */
 		{
 			int (*sys_setpgid)(pid_t,pid_t) =
@@ -426,7 +426,7 @@ asmlinkage int solaris_procids(int cmd, s32 pid, s32 pgid)
 			ret = sys_setpgid(0, 0);
 			if (ret) return ret;
 			proc_clear_tty(current);
-			return process_group(current);
+			return task_pgrp_nr(current);
 		}
 	case 2: /* getsid */
 		{

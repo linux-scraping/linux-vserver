@@ -5,8 +5,8 @@
   Portions of this file are based on the WEP enablement code provided by the
   Host AP project hostap-drivers v0.1.3
   Copyright (c) 2001-2002, SSH Communications Security Corp and Jouni Malinen
-  <jkmaline@cc.hut.fi>
-  Copyright (c) 2002-2003, Jouni Malinen <jkmaline@cc.hut.fi>
+  <j@w1.fi>
+  Copyright (c) 2002-2003, Jouni Malinen <j@w1.fi>
 
   This program is free software; you can redistribute it and/or modify it
   under the terms of version 2 of the GNU General Public License as
@@ -89,12 +89,11 @@ static char *ieee80211_translate_scan(struct ieee80211_device *ieee,
 		start = iwe_stream_add_event(start, stop, &iwe, IW_EV_UINT_LEN);
 	}
 
-	/* Add frequency/channel */
+	/* Add channel and frequency */
+	/* Note : userspace automatically computes channel using iwrange */
 	iwe.cmd = SIOCGIWFREQ;
-/*	iwe.u.freq.m = ieee80211_frequency(network->channel, network->mode);
-	iwe.u.freq.e = 3; */
-	iwe.u.freq.m = network->channel;
-	iwe.u.freq.e = 0;
+	iwe.u.freq.m = ieee80211_channel_to_freq(ieee, network->channel);
+	iwe.u.freq.e = 6;
 	iwe.u.freq.i = 0;
 	start = iwe_stream_add_event(start, stop, &iwe, IW_EV_FREQ_LEN);
 
@@ -258,6 +257,7 @@ int ieee80211_wx_get_scan(struct ieee80211_device *ieee,
 	char *ev = extra;
 	char *stop = ev + wrqu->data.length;
 	int i = 0;
+	DECLARE_MAC_BUF(mac);
 
 	IEEE80211_DEBUG_WX("Getting scan\n");
 
@@ -275,10 +275,10 @@ int ieee80211_wx_get_scan(struct ieee80211_device *ieee,
 			ev = ieee80211_translate_scan(ieee, ev, stop, network);
 		else
 			IEEE80211_DEBUG_SCAN("Not showing network '%s ("
-					     MAC_FMT ")' due to age (%dms).\n",
+					     "%s)' due to age (%dms).\n",
 					     escape_essid(network->ssid,
 							  network->ssid_len),
-					     MAC_ARG(network->bssid),
+					     print_mac(mac, network->bssid),
 					     jiffies_to_msecs(jiffies -
 							      network->
 							      last_scanned));
@@ -409,7 +409,7 @@ int ieee80211_wx_set_encode(struct ieee80211_device *ieee,
 					       (*crypt)->priv);
 		sec.flags |= (1 << key);
 		/* This ensures a key will be activated if no key is
-		 * explicitely set */
+		 * explicitly set */
 		if (key == sec.active_key)
 			sec.flags |= SEC_ACTIVE_KEY;
 

@@ -21,6 +21,14 @@
 #		(default ./arch/powerpc/boot)
 # -W dir	specify working directory for temporary files (default .)
 
+# Stop execution if any command fails
+set -e
+
+# Allow for verbose output
+if [ "$V" = 1 ]; then
+    set -x
+fi
+
 # defaults
 kernel=
 ofile=zImage
@@ -29,6 +37,8 @@ initrd=
 dtb=
 dts=
 cacheit=
+binary=
+gzip=.gz
 
 # cross-compilation prefix
 CROSS=
@@ -42,7 +52,7 @@ tmpdir=.
 usage() {
     echo 'Usage: wrapper [-o output] [-p platform] [-i initrd]' >&2
     echo '       [-d devtree] [-s tree.dts] [-c] [-C cross-prefix]' >&2
-    echo '       [-D datadir] [-W workingdir] [vmlinux]' >&2
+    echo '       [-D datadir] [-W workingdir] [--no-gzip] [vmlinux]' >&2
     exit 1
 }
 
@@ -91,6 +101,9 @@ while [ "$#" -gt 0 ]; do
 	[ "$#" -gt 0 ] || usage
 	tmpdir="$1"
 	;;
+    --no-gzip)
+        gzip=
+        ;;
     -?)
 	usage
 	;;
@@ -106,7 +119,7 @@ if [ -n "$dts" ]; then
     if [ -z "$dtb" ]; then
 	dtb="$platform.dtb"
     fi
-    dtc -O dtb -o "$dtb" -b 0 -V 16 "$dts" || exit 1
+    dtc -O dtb -o "$dtb" -b 0 -V 16 "$dts"
 fi
 
 if [ -z "$kernel" ]; then
@@ -125,7 +138,7 @@ case "$platform" in
 pmac|pseries|chrp)
     platformo=$object/of.o
     ;;
-pmaccoff)
+coff)
     platformo=$object/of.o
     lds=$object/zImage.coff.lds
     ;;
@@ -137,31 +150,57 @@ miboot|uboot)
     ksection=image
     isection=initrd
     ;;
+cuboot*)
+    binary=y
+    gzip=
+    ;;
+ps3)
+    platformo="$object/ps3-head.o $object/ps3-hvcall.o $object/ps3.o"
+    lds=$object/zImage.ps3.lds
+    gzip=
+    ext=bin
+    objflags="-O binary --set-section-flags=.bss=contents,alloc,load,data"
+    ksection=.kernel:vmlinux.bin
+    isection=.kernel:initrd
+    ;;
+ep88xc)
+    platformo="$object/fixed-head.o $object/$platform.o"
+    binary=y
+    ;;
 esac
 
 vmz="$tmpdir/`basename \"$kernel\"`.$ext"
-if [ -z "$cacheit" -o ! -f "$vmz.gz" -o "$vmz.gz" -ot "$kernel" ]; then
+if [ -z "$cacheit" -o ! -f "$vmz$gzip" -o "$vmz$gzip" -ot "$kernel" ]; then
     ${CROSS}objcopy $objflags "$kernel" "$vmz.$$"
-    gzip -f -9 "$vmz.$$"
+
+    if [ -n "$gzip" ]; then
+        gzip -f -9 "$vmz.$$"
+    fi
+
     if [ -n "$cacheit" ]; then
-	mv -f "$vmz.$$.gz" "$vmz.gz"
+	mv -f "$vmz.$$$gzip" "$vmz$gzip"
     else
 	vmz="$vmz.$$"
     fi
 fi
 
+vmz="$vmz$gzip"
+
+# Extract kernel version information, some platforms want to include
+# it in the image header
+version=`${CROSS}strings "$kernel" | grep '^Linux version [-0-9.]' | \
+    cut -d' ' -f3`
+if [ -n "$version" ]; then
+    uboot_version="-n Linux-$version"
+fi
+
 case "$platform" in
 uboot)
     rm -f "$ofile"
-    version=`${CROSS}strings "$kernel" | grep '^Linux version [-0-9.]' | \
-	cut -d' ' -f3`
-    if [ -n "$version" ]; then
-	version="-n Linux-$version"
-    fi
     mkimage -A ppc -O linux -T kernel -C gzip -a 00000000 -e 00000000 \
-	$version -d "$vmz.gz" "$ofile"
+	$uboot_version -d "$vmz" "$ofile"
     if [ -z "$cacheit" ]; then
-	rm -f $vmz.gz
+	rm -f "$vmz"
     fi
     exit 0
     ;;
@@ -173,9 +212,9 @@ addsec() {
 	--set-section-flags=$3=contents,alloc,load,readonly,data
 }
 
-addsec $tmp "$vmz.gz" $ksection $object/empty.o
+addsec $tmp "$vmz" $ksection $object/empty.o
 if [ -z "$cacheit" ]; then
-    rm -f "$vmz.gz"
+    rm -f "$vmz"
 fi
 
 if [ -n "$initrd" ]; then
@@ -191,8 +230,17 @@ fi
 
 if [ "$platform" != "miboot" ]; then
     ${CROSS}ld -m elf32ppc -T $lds -o "$ofile" \
-	$object/crt0.o $platformo $tmp $object/wrapper.a
+	$platformo $tmp $object/wrapper.a
     rm $tmp
+fi
+
+# Some platforms need the zImage's entry point and base address
+base=0x`${CROSS}nm "$ofile" | grep ' _start$' | cut -d' ' -f1`
+entry=`${CROSS}objdump -f "$ofile" | grep '^start address ' | cut -d' ' -f3`
+
+if [ -n "$binary" ]; then
+    mv "$ofile" "$ofile".elf
+    ${CROSS}objcopy -O binary "$ofile".elf "$ofile"
 fi
 
 # post-processing needed for some platforms
@@ -200,8 +248,57 @@ case "$platform" in
 pseries|chrp)
     $object/addnote "$ofile"
     ;;
-pmaccoff)
-    ${CROSS}objcopy -O aixcoff-rs6000 --set-start 0x500000 "$ofile"
+coff)
+    ${CROSS}objcopy -O aixcoff-rs6000 --set-start "$entry" "$ofile"
     $object/hack-coff "$ofile"
+    ;;
+cuboot*)
+    gzip -f -9 "$ofile"
+    mkimage -A ppc -O linux -T kernel -C gzip -a "$base" -e "$entry" \
+            $uboot_version -d "$ofile".gz "$ofile"
+    ;;
+treeboot*)
+    mv "$ofile" "$ofile.elf"
+    $object/mktree "$ofile.elf" "$ofile" "$base" "$entry"
+    if [ -z "$cacheit" ]; then
+	rm -f "$ofile.elf"
+    fi
+    exit 0
+    ;;
+ps3)
+    # The ps3's loader supports loading gzipped binary images from flash
+    # rom to addr zero. The loader enters the image at addr 0x100.  A
+    # bootwrapper overlay is use to arrange for the kernel to be loaded
+    # to addr zero and to have a suitable bootwrapper entry at 0x100.
+    # To construct the rom image, 0x100 bytes from offset 0x100 in the
+    # kernel is copied to the bootwrapper symbol __system_reset_kernel.
+    # The 0x100 bytes at the bootwrapper symbol __system_reset_overlay is
+    # then copied to offset 0x100.  At runtime the bootwrapper program
+    # copies the 0x100 bytes at __system_reset_kernel to addr 0x100.
+
+    system_reset_overlay=0x`${CROSS}nm "$ofile" \
+        | grep ' __system_reset_overlay$'       \
+        | cut -d' ' -f1`
+    system_reset_overlay=`printf "%d" $system_reset_overlay`
+    system_reset_kernel=0x`${CROSS}nm "$ofile" \
+        | grep ' __system_reset_kernel$'       \
+        | cut -d' ' -f1`
+    system_reset_kernel=`printf "%d" $system_reset_kernel`
+    overlay_dest="256"
+    overlay_size="256"
+
+    rm -f "$object/otheros.bld"
+
+    ${CROSS}objcopy -O binary "$ofile" "$ofile.bin"
+
+    dd if="$ofile.bin" of="$ofile.bin" conv=notrunc   \
+        skip=$overlay_dest seek=$system_reset_kernel  \
+        count=$overlay_size bs=1
+
+    dd if="$ofile.bin" of="$ofile.bin" conv=notrunc   \
+        skip=$system_reset_overlay seek=$overlay_dest \
+        count=$overlay_size bs=1
+
+    gzip --force -9 --stdout "$ofile.bin" > "$object/otheros.bld"
     ;;
 esac

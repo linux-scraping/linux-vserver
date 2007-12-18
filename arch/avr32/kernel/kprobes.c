@@ -15,12 +15,14 @@
 #include <linux/ptrace.h>
 
 #include <asm/cacheflush.h>
-#include <asm/kdebug.h>
+#include <linux/kdebug.h>
 #include <asm/ocd.h>
 
 DEFINE_PER_CPU(struct kprobe *, current_kprobe);
 static unsigned long kprobe_status;
 static struct pt_regs jprobe_saved_regs;
+
+struct kretprobe_blackpoint kretprobe_blacklist[] = {{NULL, NULL}};
 
 int __kprobes arch_prepare_kprobe(struct kprobe *p)
 {
@@ -179,7 +181,7 @@ static int __kprobes post_kprobe_handler(struct pt_regs *regs)
 	return 1;
 }
 
-static int __kprobes kprobe_fault_handler(struct pt_regs *regs, int trapnr)
+int __kprobes kprobe_fault_handler(struct pt_regs *regs, int trapnr)
 {
 	struct kprobe *cur = kprobe_running();
 
@@ -214,11 +216,6 @@ int __kprobes kprobe_exceptions_notify(struct notifier_block *self,
 		break;
 	case DIE_SSTEP:
 		if (post_kprobe_handler(args->regs))
-			ret = NOTIFY_STOP;
-		break;
-	case DIE_FAULT:
-		if (kprobe_running()
-		    && kprobe_fault_handler(args->regs, args->trapnr))
 			ret = NOTIFY_STOP;
 		break;
 	default:

@@ -7,6 +7,7 @@
 config CPU_S3C2412
 	bool
 	depends on ARCH_S3C2410
+	select CPU_LLSERIAL_S3C2440
 	select S3C2412_PM if PM
 	select S3C2412_DMA if S3C2410_DMA
 	help
@@ -46,6 +47,15 @@ config MACH_S3C2413
 	  Internal node for S3C2413 version of SMDK2413, so that
 	  machine_is_s3c2413() will work when MACH_SMDK2413 is
 	  selected
+
+config MACH_SMDK2412
+	bool "SMDK2412"
+	select MACH_SMDK2413
+	help
+	  Say Y here if you are using an SMDK2412
+
+	  Note, this shares support with SMDK2413, so will automatically
+	  select MACH_SMDK2413.
 
 config MACH_VSTMS
 	bool "VMSTMS"

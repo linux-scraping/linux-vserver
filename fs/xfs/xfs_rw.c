@@ -83,7 +83,7 @@ xfs_write_clear_setuid(
 	}
 	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
 	xfs_trans_set_sync(tp);
-	error = xfs_trans_commit(tp, 0, NULL);
+	error = xfs_trans_commit(tp, 0);
 	xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	return 0;
 }
@@ -164,7 +164,7 @@ xfs_write_sync_logforce(
 			xfs_trans_ihold(tp, ip);
 			xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
 			xfs_trans_set_sync(tp);
-			error = xfs_trans_commit(tp, 0, NULL);
+			error = xfs_trans_commit(tp, 0);
 			xfs_iunlock(ip, XFS_ILOCK_EXCL);
 		}
 	}
@@ -178,18 +178,15 @@ xfs_write_sync_logforce(
  * the shop, make sure that absolutely nothing persistent happens to
  * this filesystem after this point.
  */
-
 void
 xfs_do_force_shutdown(
-	bhv_desc_t	*bdp,
+	xfs_mount_t	*mp,
 	int		flags,
 	char		*fname,
 	int		lnnum)
 {
 	int		logerror;
-	xfs_mount_t	*mp;
 
-	mp = XFS_BHVTOM(bdp);
 	logerror = flags & SHUTDOWN_LOG_IO_ERROR;
 
 	if (!(flags & SHUTDOWN_FORCE_UMOUNT)) {

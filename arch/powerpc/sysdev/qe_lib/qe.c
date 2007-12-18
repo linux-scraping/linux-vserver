@@ -71,7 +71,7 @@ phys_addr_t get_qe_base(void)
 	qe = of_find_node_by_type(NULL, "qe");
 	if (qe) {
 		unsigned int size;
-		const void *prop = get_property(qe, "reg", &size);
+		const void *prop = of_get_property(qe, "reg", &size);
 		qebase = of_translate_address(qe, prop);
 		of_node_put(qe);
 	};
@@ -141,7 +141,7 @@ EXPORT_SYMBOL(qe_issue_cmd);
  * 16 BRGs, which can be connected to the QE channels or output
  * as clocks. The BRGs are in two different block of internal
  * memory mapped space.
- * The baud rate clock is the system clock divided by something.
+ * The BRG clock is the QE clock divided by 2.
  * It was set up long ago during the initial boot phase and is
  * is given to us.
  * Baud rate clocks are zero-based in the driver code (as that maps
@@ -158,35 +158,45 @@ unsigned int get_brg_clk(void)
 	qe = of_find_node_by_type(NULL, "qe");
 	if (qe) {
 		unsigned int size;
-		const u32 *prop = get_property(qe, "brg-frequency", &size);
+		const u32 *prop = of_get_property(qe, "brg-frequency", &size);
 		brg_clk = *prop;
 		of_node_put(qe);
 	};
 	return brg_clk;
 }
 
-/* This function is used by UARTS, or anything else that uses a 16x
- * oversampled clock.
+/* Program the BRG to the given sampling rate and multiplier
+ *
+ * @brg: the BRG, 1-16
+ * @rate: the desired sampling rate
+ * @multiplier: corresponds to the value programmed in GUMR_L[RDCR] or
+ * GUMR_L[TDCR].  E.g., if this BRG is the RX clock, and GUMR_L[RDCR]=01,
+ * then 'multiplier' should be 8.
+ *
+ * Also note that the value programmed into the BRGC register must be even.
  */
-void qe_setbrg(u32 brg, u32 rate)
+void qe_setbrg(unsigned int brg, unsigned int rate, unsigned int multiplier)
 {
-	volatile u32 *bp;
 	u32 divisor, tempval;
-	int div16 = 0;
+	u32 div16 = 0;
 
-	bp = &qe_immr->brg.brgc[brg];
+	divisor = get_brg_clk() / (rate * multiplier);
 
-	divisor = (get_brg_clk() / rate);
 	if (divisor > QE_BRGC_DIVISOR_MAX + 1) {
-		div16 = 1;
+		div16 = QE_BRGC_DIV16;
 		divisor /= 16;
 	}
 
-	tempval = ((divisor - 1) << QE_BRGC_DIVISOR_SHIFT) | QE_BRGC_ENABLE;
-	if (div16)
-		tempval |= QE_BRGC_DIV16;
+	/* Errata QE_General4, which affects some MPC832x and MPC836x SOCs, says
+	   that the BRG divisor must be even if you're not using divide-by-16
+	   mode. */
+	if (!div16 && (divisor & 1))
+		divisor++;
 
-	out_be32(bp, tempval);
+	tempval = ((divisor - 1) << QE_BRGC_DIVISOR_SHIFT) |
+		QE_BRGC_ENABLE | div16;
+
+	out_be32(&qe_immr->brg.brgc[brg - 1], tempval);
 }
 
 /* Initialize SNUMs (thread serial numbers) according to
@@ -244,7 +254,7 @@ EXPORT_SYMBOL(qe_put_snum);
 static int qe_sdma_init(void)
 {
 	struct sdma *sdma = &qe_immr->sdma;
-	u32 sdma_buf_offset;
+	unsigned long sdma_buf_offset;
 
 	if (!sdma)
 		return -ENODEV;
@@ -252,10 +262,10 @@ static int qe_sdma_init(void)
 	/* allocate 2 internal temporary buffers (512 bytes size each) for
 	 * the SDMA */
  	sdma_buf_offset = qe_muram_alloc(512 * 2, 4096);
-	if (IS_MURAM_ERR(sdma_buf_offset))
+	if (IS_ERR_VALUE(sdma_buf_offset))
 		return -ENOMEM;
 
-	out_be32(&sdma->sdebcr, sdma_buf_offset & QE_SDEBCR_BA_MASK);
+	out_be32(&sdma->sdebcr, (u32) sdma_buf_offset & QE_SDEBCR_BA_MASK);
  	out_be32(&sdma->sdmr, (QE_SDMR_GLB_1_MSK |
  					(0x1 << QE_SDMR_CEN_SHIFT)));
 
@@ -291,33 +301,32 @@ static void qe_muram_init(void)
 	if ((np = of_find_node_by_name(NULL, "data-only")) != NULL) {
 		address = *of_get_address(np, 0, &size, &flags);
 		of_node_put(np);
-		rh_attach_region(&qe_muram_info,
-			(void *)address, (int)size);
+		rh_attach_region(&qe_muram_info, address, (int) size);
 	}
 }
 
 /* This function returns an index into the MURAM area.
  */
-u32 qe_muram_alloc(u32 size, u32 align)
+unsigned long qe_muram_alloc(int size, int align)
 {
-	void *start;
+	unsigned long start;
 	unsigned long flags;
 
 	spin_lock_irqsave(&qe_muram_lock, flags);
 	start = rh_alloc_align(&qe_muram_info, size, align, "QE");
 	spin_unlock_irqrestore(&qe_muram_lock, flags);
 
-	return (u32) start;
+	return start;
 }
 EXPORT_SYMBOL(qe_muram_alloc);
 
-int qe_muram_free(u32 offset)
+int qe_muram_free(unsigned long offset)
 {
 	int ret;
 	unsigned long flags;
 
 	spin_lock_irqsave(&qe_muram_lock, flags);
-	ret = rh_free(&qe_muram_info, (void *)offset);
+	ret = rh_free(&qe_muram_info, offset);
 	spin_unlock_irqrestore(&qe_muram_lock, flags);
 
 	return ret;
@@ -325,16 +334,16 @@ int qe_muram_free(u32 offset)
 EXPORT_SYMBOL(qe_muram_free);
 
 /* not sure if this is ever needed */
-u32 qe_muram_alloc_fixed(u32 offset, u32 size)
+unsigned long qe_muram_alloc_fixed(unsigned long offset, int size)
 {
-	void *start;
+	unsigned long start;
 	unsigned long flags;
 
 	spin_lock_irqsave(&qe_muram_lock, flags);
-	start = rh_alloc_fixed(&qe_muram_info, (void *)offset, size, "commproc");
+	start = rh_alloc_fixed(&qe_muram_info, offset, size, "commproc");
 	spin_unlock_irqrestore(&qe_muram_lock, flags);
 
-	return (u32) start;
+	return start;
 }
 EXPORT_SYMBOL(qe_muram_alloc_fixed);
 
@@ -344,7 +353,7 @@ void qe_muram_dump(void)
 }
 EXPORT_SYMBOL(qe_muram_dump);
 
-void *qe_muram_addr(u32 offset)
+void *qe_muram_addr(unsigned long offset)
 {
 	return (void *)&qe_immr->muram[offset];
 }

@@ -34,8 +34,6 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
-#include <asm/io.h>
-#include <asm/scatterlist.h>
 #include <linux/scatterlist.h>
 #include <linux/kfifo.h>
 #include <scsi/scsi_cmnd.h>
@@ -201,7 +199,7 @@ static int iser_post_receive_control(struct iscsi_conn *conn)
 	 * what's common for both schemes is that the connection is not started
 	 */
 	if (conn->c_stage != ISCSI_CONN_STARTED)
-		rx_data_size = DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH;
+		rx_data_size = ISCSI_DEF_MAX_RECV_SEG_LEN;
 	else /* FIXME till user space sets conn->max_recv_dlength correctly */
 		rx_data_size = 128;
 
@@ -351,18 +349,12 @@ int iser_send_command(struct iscsi_conn     *conn,
 	else
 		data_buf = &iser_ctask->data[ISER_DIR_OUT];
 
-	if (sc->use_sg) { /* using a scatter list */
-		data_buf->buf  = sc->request_buffer;
-		data_buf->size = sc->use_sg;
-	} else if (sc->request_bufflen) {
-		/* using a single buffer - convert it into one entry SG */
-		sg_init_one(&data_buf->sg_single,
-			    sc->request_buffer, sc->request_bufflen);
-		data_buf->buf   = &data_buf->sg_single;
-		data_buf->size  = 1;
+	if (scsi_sg_count(sc)) { /* using a scatter list */
+		data_buf->buf  = scsi_sglist(sc);
+		data_buf->size = scsi_sg_count(sc);
 	}
 
-	data_buf->data_len = sc->request_bufflen;
+	data_buf->data_len = scsi_bufflen(sc);
 
 	if (hdr->flags & ISCSI_FLAG_CMD_READ) {
 		err = iser_prepare_read_cmd(ctask, edtl);

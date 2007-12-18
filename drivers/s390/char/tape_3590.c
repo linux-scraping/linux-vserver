@@ -623,21 +623,19 @@ tape_3590_bread(struct tape_device *device, struct request *req)
 {
 	struct tape_request *request;
 	struct ccw1 *ccw;
-	int count = 0, start_block, i;
+	int count = 0, start_block;
 	unsigned off;
 	char *dst;
 	struct bio_vec *bv;
-	struct bio *bio;
+	struct req_iterator iter;
 
 	DBF_EVENT(6, "xBREDid:");
 	start_block = req->sector >> TAPEBLOCK_HSEC_S2B;
 	DBF_EVENT(6, "start_block = %i\n", start_block);
 
-	rq_for_each_bio(bio, req) {
-		bio_for_each_segment(bv, bio, i) {
-			count += bv->bv_len >> (TAPEBLOCK_HSEC_S2B + 9);
-		}
-	}
+	rq_for_each_segment(bv, req, iter)
+		count += bv->bv_len >> (TAPEBLOCK_HSEC_S2B + 9);
+
 	request = tape_alloc_request(2 + count + 1, 4);
 	if (IS_ERR(request))
 		return request;
@@ -653,21 +651,18 @@ tape_3590_bread(struct tape_device *device, struct request *req)
 	 */
 	ccw = tape_ccw_cc(ccw, NOP, 0, NULL);
 
-	rq_for_each_bio(bio, req) {
-		bio_for_each_segment(bv, bio, i) {
-			dst = page_address(bv->bv_page) + bv->bv_offset;
-			for (off = 0; off < bv->bv_len;
-			     off += TAPEBLOCK_HSEC_SIZE) {
-				ccw->flags = CCW_FLAG_CC;
-				ccw->cmd_code = READ_FORWARD;
-				ccw->count = TAPEBLOCK_HSEC_SIZE;
-				set_normalized_cda(ccw, (void *) __pa(dst));
-				ccw++;
-				dst += TAPEBLOCK_HSEC_SIZE;
-			}
-			if (off > bv->bv_len)
-				BUG();
+	rq_for_each_segment(bv, req, iter) {
+		dst = page_address(bv->bv_page) + bv->bv_offset;
+		for (off = 0; off < bv->bv_len; off += TAPEBLOCK_HSEC_SIZE) {
+			ccw->flags = CCW_FLAG_CC;
+			ccw->cmd_code = READ_FORWARD;
+			ccw->count = TAPEBLOCK_HSEC_SIZE;
+			set_normalized_cda(ccw, (void *) __pa(dst));
+			ccw++;
+			dst += TAPEBLOCK_HSEC_SIZE;
 		}
+		if (off > bv->bv_len)
+			BUG();
 	}
 	ccw = tape_ccw_end(ccw, NOP, 0, NULL);
 	DBF_EVENT(6, "xBREDccwg\n");
@@ -713,16 +708,22 @@ static void tape_3590_med_state_set(struct tape_device *device,
 
 	c_info = &TAPE_3590_CRYPT_INFO(device);
 
-	if (sense->masst == MSENSE_UNASSOCIATED) {
+	DBF_EVENT(6, "medium state: %x:%x\n", sense->macst, sense->masst);
+	switch (sense->macst) {
+	case 0x04:
+	case 0x05:
+	case 0x06:
 		tape_med_state_set(device, MS_UNLOADED);
 		TAPE_3590_CRYPT_INFO(device).medium_status = 0;
 		return;
-	}
-	if (sense->masst != MSENSE_ASSOCIATED_MOUNT) {
-		PRINT_ERR("Unknown medium state: %x\n", sense->masst);
+	case 0x08:
+	case 0x09:
+		tape_med_state_set(device, MS_LOADED);
+		break;
+	default:
+		tape_med_state_set(device, MS_UNKNOWN);
 		return;
 	}
-	tape_med_state_set(device, MS_LOADED);
 	c_info->medium_status |= TAPE390_MEDIUM_LOADED_MASK;
 	if (sense->flags & MSENSE_CRYPT_MASK) {
 		PRINT_INFO("Medium is encrypted (%04x)\n", sense->flags);
@@ -788,6 +789,7 @@ tape_3590_done(struct tape_device *device, struct tape_request *request)
 	case TO_SIZE:
 	case TO_KEKL_SET:
 	case TO_KEKL_QUERY:
+	case TO_RDC:
 		break;
 	}
 	return TAPE_IO_SUCCESS;
@@ -839,15 +841,17 @@ tape_3590_unsolicited_irq(struct tape_device *device, struct irb *irb)
 		/* Probably result of halt ssch */
 		return TAPE_IO_PENDING;
 	else if (irb->scsw.dstat == 0x85)
-		/* Device Ready -> check medium state */
-		tape_3590_schedule_work(device, TO_MSEN);
-	else if (irb->scsw.dstat & DEV_STAT_ATTENTION)
+		/* Device Ready */
+		DBF_EVENT(3, "unsol.irq! tape ready: %08x\n", device->cdev_id);
+	else if (irb->scsw.dstat & DEV_STAT_ATTENTION) {
 		tape_3590_schedule_work(device, TO_READ_ATTMSG);
-	else {
+	} else {
 		DBF_EVENT(3, "unsol.irq! dev end: %08x\n", device->cdev_id);
 		PRINT_WARN("Unsolicited IRQ (Device End) caught.\n");
 		tape_dump_sense(device, NULL, irb);
 	}
+	/* check medium state */
+	tape_3590_schedule_work(device, TO_MSEN);
 	return TAPE_IO_SUCCESS;
 }
 
@@ -1549,6 +1553,26 @@ tape_3590_irq(struct tape_device *device, struct tape_request *request,
 	return TAPE_IO_STOP;
 }
 
+
+static int tape_3590_read_dev_chars(struct tape_device *device,
+				    struct tape_3590_rdc_data *rdc_data)
+{
+	int rc;
+	struct tape_request *request;
+
+	request = tape_alloc_request(1, sizeof(*rdc_data));
+	if (IS_ERR(request))
+		return PTR_ERR(request);
+	request->op = TO_RDC;
+	tape_ccw_end(request->cpaddr, CCW_CMD_RDC, sizeof(*rdc_data),
+		     request->cpdata);
+	rc = tape_do_io(device, request);
+	if (rc == 0)
+		memcpy(rdc_data, request->cpdata, sizeof(*rdc_data));
+	tape_free_request(request);
+	return rc;
+}
+
 /*
  * Setup device function
  */
@@ -1557,7 +1581,7 @@ tape_3590_setup_device(struct tape_device *device)
 {
 	int rc;
 	struct tape_3590_disc_data *data;
-	char *rdc_data;
+	struct tape_3590_rdc_data *rdc_data;
 
 	DBF_EVENT(6, "3590 device setup\n");
 	data = kzalloc(sizeof(struct tape_3590_disc_data), GFP_KERNEL | GFP_DMA);
@@ -1566,12 +1590,12 @@ tape_3590_setup_device(struct tape_device *device)
 	data->read_back_op = READ_PREVIOUS;
 	device->discdata = data;
 
-	rdc_data = kmalloc(64, GFP_KERNEL | GFP_DMA);
+	rdc_data = kmalloc(sizeof(*rdc_data), GFP_KERNEL | GFP_DMA);
 	if (!rdc_data) {
 		rc = -ENOMEM;
 		goto fail_kmalloc;
 	}
-	rc = read_dev_chars(device->cdev, (void**)&rdc_data, 64);
+	rc = tape_3590_read_dev_chars(device, rdc_data);
 	if (rc) {
 		DBF_LH(3, "Read device characteristics failed!\n");
 		goto fail_kmalloc;
@@ -1579,7 +1603,7 @@ tape_3590_setup_device(struct tape_device *device)
 	rc = tape_std_assign(device);
 	if (rc)
 		goto fail_rdc_data;
-	if (rdc_data[31] == 0x13) {
+	if (rdc_data->data[31] == 0x13) {
 		PRINT_INFO("Device has crypto support\n");
 		data->crypt_info.capability |= TAPE390_CRYPT_SUPPORTED_MASK;
 		tape_3592_disable_crypt(device);

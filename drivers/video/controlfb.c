@@ -94,7 +94,7 @@ static inline int VAR_MATCH(struct fb_var_screeninfo *x, struct fb_var_screeninf
 struct fb_info_control {
 	struct fb_info		info;
 	struct fb_par_control	par;
-	u32			pseudo_palette[17];
+	u32			pseudo_palette[16];
 		
 	struct cmap_regs	__iomem *cmap_regs;
 	unsigned long		cmap_regs_phys;
@@ -179,12 +179,14 @@ MODULE_LICENSE("GPL");
 int init_module(void)
 {
 	struct device_node *dp;
+	int ret = -ENXIO;
 
-	dp = find_devices("control");
+	dp = of_find_node_by_name(NULL, "control");
 	if (dp != 0 && !control_of_init(dp))
-		return 0;
+		ret = 0;
+	of_node_put(dp);
 
-	return -ENXIO;
+	return ret;
 }
 
 void cleanup_module(void)
@@ -589,16 +591,18 @@ static int __init control_init(void)
 {
 	struct device_node *dp;
 	char *option = NULL;
+	int ret = -ENXIO;
 
 	if (fb_get_options("controlfb", &option))
 		return -ENODEV;
 	control_setup(option);
 
-	dp = find_devices("control");
+	dp = of_find_node_by_name(NULL, "control");
 	if (dp != 0 && !control_of_init(dp))
-		return 0;
+		ret = 0;
+	of_node_put(dp);
 
-	return -ENXIO;
+	return ret;
 }
 
 module_init(control_init);

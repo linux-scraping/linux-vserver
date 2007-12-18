@@ -55,7 +55,7 @@ struct rtc_plat_data {
 	void __iomem *ioaddr_rtc;
 	size_t size_nvram;
 	size_t size;
-	unsigned long baseaddr;
+	resource_size_t baseaddr;
 	unsigned long last_jiffies;
 };
 
@@ -127,8 +127,9 @@ static const struct rtc_class_ops ds1742_rtc_ops = {
 	.set_time	= ds1742_rtc_set_time,
 };
 
-static ssize_t ds1742_nvram_read(struct kobject *kobj, char *buf,
-				 loff_t pos, size_t size)
+static ssize_t ds1742_nvram_read(struct kobject *kobj,
+				 struct bin_attribute *bin_attr,
+				 char *buf, loff_t pos, size_t size)
 {
 	struct platform_device *pdev =
 		to_platform_device(container_of(kobj, struct device, kobj));
@@ -141,8 +142,9 @@ static ssize_t ds1742_nvram_read(struct kobject *kobj, char *buf,
 	return count;
 }
 
-static ssize_t ds1742_nvram_write(struct kobject *kobj, char *buf,
-				  loff_t pos, size_t size)
+static ssize_t ds1742_nvram_write(struct kobject *kobj,
+				  struct bin_attribute *bin_attr,
+				  char *buf, loff_t pos, size_t size)
 {
 	struct platform_device *pdev =
 		to_platform_device(container_of(kobj, struct device, kobj));
@@ -158,11 +160,13 @@ static ssize_t ds1742_nvram_write(struct kobject *kobj, char *buf,
 static struct bin_attribute ds1742_nvram_attr = {
 	.attr = {
 		.name = "nvram",
-		.mode = S_IRUGO | S_IWUGO,
-		.owner = THIS_MODULE,
+		.mode = S_IRUGO | S_IWUSR,
 	},
 	.read = ds1742_nvram_read,
 	.write = ds1742_nvram_write,
+	/* REVISIT: size in sysfs won't match actual size... if it's
+	 * not a constant, each RTC should have its own attribute.
+	 */
 };
 
 static int __devinit ds1742_rtc_probe(struct platform_device *pdev)
@@ -250,7 +254,7 @@ static struct platform_driver ds1742_rtc_driver = {
 	.probe		= ds1742_rtc_probe,
 	.remove		= __devexit_p(ds1742_rtc_remove),
 	.driver		= {
-		.name	= "ds1742",
+		.name	= "rtc-ds1742",
 		.owner	= THIS_MODULE,
 	},
 };
@@ -262,7 +266,7 @@ static __init int ds1742_init(void)
 
 static __exit void ds1742_exit(void)
 {
-	return platform_driver_unregister(&ds1742_rtc_driver);
+	platform_driver_unregister(&ds1742_rtc_driver);
 }
 
 module_init(ds1742_init);

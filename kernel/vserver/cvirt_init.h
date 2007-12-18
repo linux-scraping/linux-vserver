@@ -46,16 +46,16 @@ static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 {
 	int value;
 
-	vxwprintk((value = atomic_read(&cvirt->nr_threads)),
+	vxwprintk_xid((value = atomic_read(&cvirt->nr_threads)),
 		"!!! cvirt: %p[nr_threads] = %d on exit.",
 		cvirt, value);
-	vxwprintk((value = atomic_read(&cvirt->nr_running)),
+	vxwprintk_xid((value = atomic_read(&cvirt->nr_running)),
 		"!!! cvirt: %p[nr_running] = %d on exit.",
 		cvirt, value);
-	vxwprintk((value = atomic_read(&cvirt->nr_uninterruptible)),
+	vxwprintk_xid((value = atomic_read(&cvirt->nr_uninterruptible)),
 		"!!! cvirt: %p[nr_uninterruptible] = %d on exit.",
 		cvirt, value);
-	vxwprintk((value = atomic_read(&cvirt->nr_onhold)),
+	vxwprintk_xid((value = atomic_read(&cvirt->nr_onhold)),
 		"!!! cvirt: %p[nr_onhold] = %d on exit.",
 		cvirt, value);
 	return;

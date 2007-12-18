@@ -52,7 +52,7 @@
 
 static int fddi_header(struct sk_buff *skb, struct net_device *dev,
 		       unsigned short type,
-		       void *daddr, void *saddr, unsigned len)
+		       const void *daddr, const void *saddr, unsigned len)
 {
 	int hl = FDDI_K_SNAP_HLEN;
 	struct fddihdr *fddi;
@@ -100,7 +100,7 @@ static int fddi_rebuild_header(struct sk_buff	*skb)
 	struct fddihdr *fddi = (struct fddihdr *)skb->data;
 
 #ifdef CONFIG_INET
-	if (fddi->hdr.llc_snap.ethertype == __constant_htons(ETH_P_IP))
+	if (fddi->hdr.llc_snap.ethertype == htons(ETH_P_IP))
 		/* Try to get ARP to resolve the header and fill destination address */
 		return arp_find(fddi->daddr, skb);
 	else
@@ -130,12 +130,13 @@ __be16 fddi_type_trans(struct sk_buff *skb, struct net_device *dev)
 	 * to start of packet data.  Assume 802.2 SNAP frames for now.
 	 */
 
-	skb->mac.raw = skb->data;	/* point to frame control (FC) */
+	skb->dev = dev;
+	skb_reset_mac_header(skb);	/* point to frame control (FC) */
 
 	if(fddi->hdr.llc_8022_1.dsap==0xe0)
 	{
 		skb_pull(skb, FDDI_K_8022_HLEN-3);
-		type = __constant_htons(ETH_P_802_2);
+		type = htons(ETH_P_802_2);
 	}
 	else
 	{
@@ -174,11 +175,15 @@ static int fddi_change_mtu(struct net_device *dev, int new_mtu)
 	return(0);
 }
 
+static const struct header_ops fddi_header_ops = {
+	.create		= fddi_header,
+	.rebuild	= fddi_rebuild_header,
+};
+
 static void fddi_setup(struct net_device *dev)
 {
 	dev->change_mtu		= fddi_change_mtu;
-	dev->hard_header	= fddi_header;
-	dev->rebuild_header	= fddi_rebuild_header;
+	dev->header_ops		= &fddi_header_ops;
 
 	dev->type		= ARPHRD_FDDI;
 	dev->hard_header_len	= FDDI_K_SNAP_HLEN+3;	/* Assume 802.2 SNAP hdr len + 3 pad bytes */

@@ -3,6 +3,7 @@
 #
 
 menu "Input device support"
+	depends on !S390
 
 config INPUT
 	tristate "Generic input layer (needed for keyboard, mouse, ...)" if EMBEDDED
@@ -37,6 +38,19 @@ config INPUT_FF_MEMLESS
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ff-memless.
+
+config INPUT_POLLDEV
+	tristate "Polled input device skeleton"
+	help
+	  Say Y here if you are using a driver for an input
+	  device that periodically polls hardware state. This
+	  option is only useful for out-of-tree drivers since
+	  in-tree drivers select it automatically.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called input-polldev.
 
 comment "Userland interfaces"
 
@@ -100,28 +114,6 @@ config INPUT_JOYDEV
 	  To compile this driver as a module, choose M here: the
 	  module will be called joydev.
 
-config INPUT_TSDEV
-	tristate "Touchscreen interface"
-	---help---
-	  Say Y here if you have an application that only can understand the
-	  Compaq touchscreen protocol for absolute pointer data. This is
-	  useful namely for embedded configurations.
-
-	  If unsure, say N.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called tsdev.
-
-config INPUT_TSDEV_SCREEN_X
-	int "Horizontal screen resolution"
-	depends on INPUT_TSDEV
-	default "240"
-
-config INPUT_TSDEV_SCREEN_Y
-	int "Vertical screen resolution"
-	depends on INPUT_TSDEV
-	default "320"
-
 config INPUT_EVDEV
 	tristate "Event interface"
 	help
@@ -152,6 +144,8 @@ source "drivers/input/keyboard/Kconfig"
 source "drivers/input/mouse/Kconfig"
 
 source "drivers/input/joystick/Kconfig"
+
+source "drivers/input/tablet/Kconfig"
 
 source "drivers/input/touchscreen/Kconfig"
 

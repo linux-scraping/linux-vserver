@@ -44,7 +44,7 @@ struct xfs_trans;
 #define	XFS_DIR2_DATA_SPACE	0
 #define	XFS_DIR2_DATA_OFFSET	(XFS_DIR2_DATA_SPACE * XFS_DIR2_SPACE_SIZE)
 #define	XFS_DIR2_DATA_FIRSTDB(mp)	\
-	XFS_DIR2_BYTE_TO_DB(mp, XFS_DIR2_DATA_OFFSET)
+	xfs_dir2_byte_to_db(mp, XFS_DIR2_DATA_OFFSET)
 
 /*
  * Offsets of . and .. in data space (always block 0)
@@ -52,9 +52,9 @@ struct xfs_trans;
 #define	XFS_DIR2_DATA_DOT_OFFSET	\
 	((xfs_dir2_data_aoff_t)sizeof(xfs_dir2_data_hdr_t))
 #define	XFS_DIR2_DATA_DOTDOT_OFFSET	\
-	(XFS_DIR2_DATA_DOT_OFFSET + XFS_DIR2_DATA_ENTSIZE(1))
+	(XFS_DIR2_DATA_DOT_OFFSET + xfs_dir2_data_entsize(1))
 #define	XFS_DIR2_DATA_FIRST_OFFSET		\
-	(XFS_DIR2_DATA_DOTDOT_OFFSET + XFS_DIR2_DATA_ENTSIZE(2))
+	(XFS_DIR2_DATA_DOTDOT_OFFSET + xfs_dir2_data_entsize(2))
 
 /*
  * Structures.
@@ -123,7 +123,6 @@ typedef struct xfs_dir2_data {
 /*
  * Size of a data entry.
  */
-#define XFS_DIR2_DATA_ENTSIZE(n)	xfs_dir2_data_entsize(n)
 static inline int xfs_dir2_data_entsize(int n)
 {
 	return (int)roundup(offsetof(xfs_dir2_data_entry_t, name[0]) + (n) + \
@@ -133,19 +132,16 @@ static inline int xfs_dir2_data_entsize(int n)
 /*
  * Pointer to an entry's tag word.
  */
-#define	XFS_DIR2_DATA_ENTRY_TAG_P(dep)	xfs_dir2_data_entry_tag_p(dep)
 static inline __be16 *
 xfs_dir2_data_entry_tag_p(xfs_dir2_data_entry_t *dep)
 {
 	return (__be16 *)((char *)dep +
-		XFS_DIR2_DATA_ENTSIZE(dep->namelen) - sizeof(__be16));
+		xfs_dir2_data_entsize(dep->namelen) - sizeof(__be16));
 }
 
 /*
  * Pointer to a freespace's tag word.
  */
-#define	XFS_DIR2_DATA_UNUSED_TAG_P(dup) \
-	xfs_dir2_data_unused_tag_p(dup)
 static inline __be16 *
 xfs_dir2_data_unused_tag_p(xfs_dir2_data_unused_t *dup)
 {
@@ -166,7 +162,7 @@ extern xfs_dir2_data_free_t *xfs_dir2_data_freefind(xfs_dir2_data_t *d,
 extern xfs_dir2_data_free_t *xfs_dir2_data_freeinsert(xfs_dir2_data_t *d,
 				xfs_dir2_data_unused_t *dup, int *loghead);
 extern void xfs_dir2_data_freescan(struct xfs_mount *mp, xfs_dir2_data_t *d,
-				int *loghead, char *aendp);
+				int *loghead);
 extern int xfs_dir2_data_init(struct xfs_da_args *args, xfs_dir2_db_t blkno,
 				struct xfs_dabuf **bpp);
 extern void xfs_dir2_data_log_entry(struct xfs_trans *tp, struct xfs_dabuf *bp,

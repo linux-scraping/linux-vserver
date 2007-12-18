@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: gc.c,v 1.155 2005/11/07 11:14:39 gleixner Exp $
  *
  */
 
@@ -124,6 +122,7 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 	struct jffs2_inode_cache *ic;
 	struct jffs2_eraseblock *jeb;
 	struct jffs2_raw_node_ref *raw;
+	uint32_t gcblock_dirty;
 	int ret = 0, inum, nlink;
 	int xattr = 0;
 
@@ -144,7 +143,8 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 			       c->unchecked_size);
 			jffs2_dbg_dump_block_lists_nolock(c);
 			spin_unlock(&c->erase_completion_lock);
-			BUG();
+			up(&c->alloc_sem);
+			return -ENOSPC;
 		}
 
 		spin_unlock(&c->erase_completion_lock);
@@ -237,6 +237,7 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 	}
 
 	raw = jeb->gc_node;
+	gcblock_dirty = jeb->dirty_size;
 
 	while(ref_obsolete(raw)) {
 		D1(printk(KERN_DEBUG "Node at 0x%08x is obsolete... skipping\n", ref_offset(raw)));
@@ -283,7 +284,7 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 		} else {
 			ret = jffs2_garbage_collect_xattr_ref(c, (struct jffs2_xattr_ref *)ic, raw);
 		}
-		goto release_sem;
+		goto test_gcnode;
 	}
 #endif
 
@@ -377,7 +378,7 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 
 		if (ret != -EBADFD) {
 			spin_unlock(&c->inocache_lock);
-			goto release_sem;
+			goto test_gcnode;
 		}
 
 		/* Fall through if it wanted us to, with inocache_lock held */
@@ -408,6 +409,12 @@ int jffs2_garbage_collect_pass(struct jffs2_sb_info *c)
 
 	jffs2_gc_release_inode(c, f);
 
+ test_gcnode:
+	if (jeb->dirty_size == gcblock_dirty && !ref_obsolete(jeb->gc_node)) {
+		/* Eep. This really should never happen. GC is broken */
+		printk(KERN_ERR "Error garbage collecting node at %08x!\n", ref_offset(jeb->gc_node));
+		ret = -ENOSPC;
+	}
  release_sem:
 	up(&c->alloc_sem);
 
@@ -557,7 +564,7 @@ static int jffs2_garbage_collect_pristine(struct jffs2_sb_info *c,
 
 	node = kmalloc(rawlen, GFP_KERNEL);
 	if (!node)
-               return -ENOMEM;
+		return -ENOMEM;
 
 	ret = jffs2_flash_read(c, ref_offset(raw), rawlen, &retlen, (char *)node);
 	if (!ret && retlen != rawlen)
@@ -599,10 +606,15 @@ static int jffs2_garbage_collect_pristine(struct jffs2_sb_info *c,
 			goto bail;
 		}
 
+		if (strnlen(node->d.name, node->d.nsize) != node->d.nsize) {
+			printk(KERN_WARNING "Name in dirent node at 0x%08x contains zeroes\n", ref_offset(raw));
+			goto bail;
+		}
+
 		if (node->d.nsize) {
 			crc = crc32(0, node->d.name, node->d.nsize);
 			if (je32_to_cpu(node->d.name_crc) != crc) {
-				printk(KERN_WARNING "Name CRC failed on REF_PRISTINE dirent ode at 0x%08x: Read 0x%08x, calculated 0x%08x\n",
+				printk(KERN_WARNING "Name CRC failed on REF_PRISTINE dirent node at 0x%08x: Read 0x%08x, calculated 0x%08x\n",
 				       ref_offset(raw), je32_to_cpu(node->d.name_crc), crc);
 				goto bail;
 			}
@@ -625,7 +637,7 @@ static int jffs2_garbage_collect_pristine(struct jffs2_sb_info *c,
 
 	if (ret || (retlen != rawlen)) {
 		printk(KERN_NOTICE "Write of %d bytes at 0x%08x failed. returned %d, retlen %zd\n",
-                       rawlen, phys_ofs, ret, retlen);
+		       rawlen, phys_ofs, ret, retlen);
 		if (retlen) {
 			jffs2_add_physical_node_ref(c, phys_ofs | REF_OBSOLETE, rawlen, NULL);
 		} else {

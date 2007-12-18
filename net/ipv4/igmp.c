@@ -91,6 +91,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/times.h>
 
+#include <net/net_namespace.h>
 #include <net/arp.h>
 #include <net/ip.h>
 #include <net/protocol.h>
@@ -128,14 +129,16 @@
  * contradict to specs provided this delay is small enough.
  */
 
-#define IGMP_V1_SEEN(in_dev) (ipv4_devconf.force_igmp_version == 1 || \
-		(in_dev)->cnf.force_igmp_version == 1 || \
-		((in_dev)->mr_v1_seen && \
-		time_before(jiffies, (in_dev)->mr_v1_seen)))
-#define IGMP_V2_SEEN(in_dev) (ipv4_devconf.force_igmp_version == 2 || \
-		(in_dev)->cnf.force_igmp_version == 2 || \
-		((in_dev)->mr_v2_seen && \
-		time_before(jiffies, (in_dev)->mr_v2_seen)))
+#define IGMP_V1_SEEN(in_dev) \
+	(IPV4_DEVCONF_ALL(FORCE_IGMP_VERSION) == 1 || \
+	 IN_DEV_CONF_GET((in_dev), FORCE_IGMP_VERSION) == 1 || \
+	 ((in_dev)->mr_v1_seen && \
+	  time_before(jiffies, (in_dev)->mr_v1_seen)))
+#define IGMP_V2_SEEN(in_dev) \
+	(IPV4_DEVCONF_ALL(FORCE_IGMP_VERSION) == 2 || \
+	 IN_DEV_CONF_GET((in_dev), FORCE_IGMP_VERSION) == 2 || \
+	 ((in_dev)->mr_v2_seen && \
+	  time_before(jiffies, (in_dev)->mr_v2_seen)))
 
 static void igmpv3_add_delrec(struct in_device *in_dev, struct ip_mc_list *im);
 static void igmpv3_del_delrec(struct in_device *in_dev, __be32 multiaddr);
@@ -314,7 +317,9 @@ static struct sk_buff *igmpv3_newpack(struct net_device *dev, int size)
 
 	skb_reserve(skb, LL_RESERVED_SPACE(dev));
 
-	skb->nh.iph = pip =(struct iphdr *)skb_put(skb, sizeof(struct iphdr)+4);
+	skb_reset_network_header(skb);
+	pip = ip_hdr(skb);
+	skb_put(skb, sizeof(struct iphdr) + 4);
 
 	pip->version  = 4;
 	pip->ihl      = (sizeof(struct iphdr)+4)>>2;
@@ -331,8 +336,9 @@ static struct sk_buff *igmpv3_newpack(struct net_device *dev, int size)
 	((u8*)&pip[1])[2] = 0;
 	((u8*)&pip[1])[3] = 0;
 
-	pig =(struct igmpv3_report *)skb_put(skb, sizeof(*pig));
-	skb->h.igmph = (struct igmphdr *)pig;
+	skb->transport_header = skb->network_header + sizeof(struct iphdr) + 4;
+	skb_put(skb, sizeof(*pig));
+	pig = igmpv3_report_hdr(skb);
 	pig->type = IGMPV3_HOST_MEMBERSHIP_REPORT;
 	pig->resv1 = 0;
 	pig->csum = 0;
@@ -343,16 +349,14 @@ static struct sk_buff *igmpv3_newpack(struct net_device *dev, int size)
 
 static int igmpv3_sendpack(struct sk_buff *skb)
 {
-	struct iphdr *pip = skb->nh.iph;
-	struct igmphdr *pig = skb->h.igmph;
-	int iplen, igmplen;
+	struct iphdr *pip = ip_hdr(skb);
+	struct igmphdr *pig = igmp_hdr(skb);
+	const int iplen = skb->tail - skb->network_header;
+	const int igmplen = skb->tail - skb->transport_header;
 
-	iplen = skb->tail - (unsigned char *)skb->nh.iph;
 	pip->tot_len = htons(iplen);
 	ip_send_check(pip);
-
-	igmplen = skb->tail - (unsigned char *)skb->h.igmph;
-	pig->csum = ip_compute_csum((void *)skb->h.igmph, igmplen);
+	pig->csum = ip_compute_csum(igmp_hdr(skb), igmplen);
 
 	return NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, skb->dev,
 		       dst_output);
@@ -379,7 +383,7 @@ static struct sk_buff *add_grhead(struct sk_buff *skb, struct ip_mc_list *pmc,
 	pgr->grec_auxwords = 0;
 	pgr->grec_nsrcs = 0;
 	pgr->grec_mca = pmc->multiaddr;
-	pih = (struct igmpv3_report *)skb->h.igmph;
+	pih = igmpv3_report_hdr(skb);
 	pih->ngrec = htons(ntohs(pih->ngrec)+1);
 	*ppgr = pgr;
 	return skb;
@@ -412,7 +416,7 @@ static struct sk_buff *add_grec(struct sk_buff *skb, struct ip_mc_list *pmc,
 	if (!*psf_list)
 		goto empty_source;
 
-	pih = skb ? (struct igmpv3_report *)skb->h.igmph : NULL;
+	pih = skb ? igmpv3_report_hdr(skb) : NULL;
 
 	/* EX and TO_EX get a fresh packet, if needed */
 	if (truncate) {
@@ -664,7 +668,9 @@ static int igmp_send_report(struct in_device *in_dev, struct ip_mc_list *pmc,
 
 	skb_reserve(skb, LL_RESERVED_SPACE(dev));
 
-	skb->nh.iph = iph = (struct iphdr *)skb_put(skb, sizeof(struct iphdr)+4);
+	skb_reset_network_header(skb);
+	iph = ip_hdr(skb);
+	skb_put(skb, sizeof(struct iphdr) + 4);
 
 	iph->version  = 4;
 	iph->ihl      = (sizeof(struct iphdr)+4)>>2;
@@ -827,8 +833,8 @@ static void igmp_heard_report(struct in_device *in_dev, __be32 group)
 static void igmp_heard_query(struct in_device *in_dev, struct sk_buff *skb,
 	int len)
 {
-	struct igmphdr 		*ih = skb->h.igmph;
-	struct igmpv3_query *ih3 = (struct igmpv3_query *)ih;
+	struct igmphdr 		*ih = igmp_hdr(skb);
+	struct igmpv3_query *ih3 = igmpv3_query_hdr(skb);
 	struct ip_mc_list	*im;
 	__be32			group = ih->group;
 	int			max_delay;
@@ -861,12 +867,12 @@ static void igmp_heard_query(struct in_device *in_dev, struct sk_buff *skb,
 		if (!pskb_may_pull(skb, sizeof(struct igmpv3_query)))
 			return;
 
-		ih3 = (struct igmpv3_query *) skb->h.raw;
+		ih3 = igmpv3_query_hdr(skb);
 		if (ih3->nsrcs) {
 			if (!pskb_may_pull(skb, sizeof(struct igmpv3_query)
 					   + ntohs(ih3->nsrcs)*sizeof(__be32)))
 				return;
-			ih3 = (struct igmpv3_query *) skb->h.raw;
+			ih3 = igmpv3_query_hdr(skb);
 		}
 
 		max_delay = IGMPV3_MRC(ih3->code)*(HZ/IGMP_TIMER_SCALE);
@@ -943,7 +949,7 @@ int igmp_rcv(struct sk_buff *skb)
 			goto drop;
 	}
 
-	ih = skb->h.igmph;
+	ih = igmp_hdr(skb);
 	switch (ih->type) {
 	case IGMP_HOST_MEMBERSHIP_QUERY:
 		igmp_heard_query(in_dev, skb, len);
@@ -1689,8 +1695,8 @@ static int ip_mc_add_src(struct in_device *in_dev, __be32 *pmca, int sfmode,
 			(void) ip_mc_del1_src(pmc, sfmode, &psfsrc[i]);
 	} else if (isexclude != (pmc->sfcount[MCAST_EXCLUDE] != 0)) {
 #ifdef CONFIG_IP_MULTICAST
-		struct in_device *in_dev = pmc->interface;
 		struct ip_sf_list *psf;
+		in_dev = pmc->interface;
 #endif
 
 		/* filter mode change */
@@ -1793,7 +1799,7 @@ static int ip_mc_leave_src(struct sock *sk, struct ip_mc_socklist *iml,
 {
 	int err;
 
-	if (iml->sflist == 0) {
+	if (iml->sflist == NULL) {
 		/* any-source empty exclude case */
 		return ip_mc_del_src(in_dev, &iml->multi.imr_multiaddr.s_addr,
 			iml->sfmode, 0, NULL, 0);
@@ -2161,7 +2167,6 @@ int ip_mc_gsfget(struct sock *sk, struct group_filter *gsf,
 		return -EFAULT;
 	}
 	for (i=0; i<copycount; i++) {
-		struct sockaddr_in *psin;
 		struct sockaddr_storage ss;
 
 		psin = (struct sockaddr_in *)&ss;
@@ -2285,9 +2290,8 @@ static inline struct ip_mc_list *igmp_mc_get_first(struct seq_file *seq)
 	struct ip_mc_list *im = NULL;
 	struct igmp_mc_iter_state *state = igmp_mc_seq_private(seq);
 
-	for (state->dev = dev_base, state->in_dev = NULL;
-	     state->dev;
-	     state->dev = state->dev->next) {
+	state->in_dev = NULL;
+	for_each_netdev(&init_net, state->dev) {
 		struct in_device *in_dev;
 		in_dev = in_dev_get(state->dev);
 		if (!in_dev)
@@ -2313,7 +2317,7 @@ static struct ip_mc_list *igmp_mc_get_next(struct seq_file *seq, struct ip_mc_li
 			read_unlock(&state->in_dev->mc_list_lock);
 			in_dev_put(state->in_dev);
 		}
-		state->dev = state->dev->next;
+		state->dev = next_net_device(state->dev);
 		if (!state->dev) {
 			state->in_dev = NULL;
 			break;
@@ -2397,7 +2401,7 @@ static int igmp_mc_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations igmp_mc_seq_ops = {
+static const struct seq_operations igmp_mc_seq_ops = {
 	.start	=	igmp_mc_seq_start,
 	.next	=	igmp_mc_seq_next,
 	.stop	=	igmp_mc_seq_stop,
@@ -2406,23 +2410,8 @@ static struct seq_operations igmp_mc_seq_ops = {
 
 static int igmp_mc_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct igmp_mc_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
-
-	if (!s)
-		goto out;
-	rc = seq_open(file, &igmp_mc_seq_ops);
-	if (rc)
-		goto out_kfree;
-
-	seq = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &igmp_mc_seq_ops,
+			sizeof(struct igmp_mc_iter_state));
 }
 
 static const struct file_operations igmp_mc_seq_fops = {
@@ -2447,9 +2436,9 @@ static inline struct ip_sf_list *igmp_mcf_get_first(struct seq_file *seq)
 	struct ip_mc_list *im = NULL;
 	struct igmp_mcf_iter_state *state = igmp_mcf_seq_private(seq);
 
-	for (state->dev = dev_base, state->idev = NULL, state->im = NULL;
-	     state->dev;
-	     state->dev = state->dev->next) {
+	state->idev = NULL;
+	state->im = NULL;
+	for_each_netdev(&init_net, state->dev) {
 		struct in_device *idev;
 		idev = in_dev_get(state->dev);
 		if (unlikely(idev == NULL))
@@ -2485,7 +2474,7 @@ static struct ip_sf_list *igmp_mcf_get_next(struct seq_file *seq, struct ip_sf_l
 				read_unlock(&state->idev->mc_list_lock);
 				in_dev_put(state->idev);
 			}
-			state->dev = state->dev->next;
+			state->dev = next_net_device(state->dev);
 			if (!state->dev) {
 				state->idev = NULL;
 				goto out;
@@ -2571,7 +2560,7 @@ static int igmp_mcf_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations igmp_mcf_seq_ops = {
+static const struct seq_operations igmp_mcf_seq_ops = {
 	.start	=	igmp_mcf_seq_start,
 	.next	=	igmp_mcf_seq_next,
 	.stop	=	igmp_mcf_seq_stop,
@@ -2580,23 +2569,8 @@ static struct seq_operations igmp_mcf_seq_ops = {
 
 static int igmp_mcf_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct igmp_mcf_iter_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
-
-	if (!s)
-		goto out;
-	rc = seq_open(file, &igmp_mcf_seq_ops);
-	if (rc)
-		goto out_kfree;
-
-	seq = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &igmp_mcf_seq_ops,
+			sizeof(struct igmp_mcf_iter_state));
 }
 
 static const struct file_operations igmp_mcf_seq_fops = {
@@ -2609,8 +2583,8 @@ static const struct file_operations igmp_mcf_seq_fops = {
 
 int __init igmp_mc_proc_init(void)
 {
-	proc_net_fops_create("igmp", S_IRUGO, &igmp_mc_seq_fops);
-	proc_net_fops_create("mcfilter", S_IRUGO, &igmp_mcf_seq_fops);
+	proc_net_fops_create(&init_net, "igmp", S_IRUGO, &igmp_mc_seq_fops);
+	proc_net_fops_create(&init_net, "mcfilter", S_IRUGO, &igmp_mcf_seq_fops);
 	return 0;
 }
 #endif

@@ -34,42 +34,41 @@ struct xfs_mount;
  * because we only need the core part in the in-core inode.
  */
 typedef struct xfs_timestamp {
-	__int32_t	t_sec;		/* timestamp seconds */
-	__int32_t	t_nsec;		/* timestamp nanoseconds */
+	__be32		t_sec;		/* timestamp seconds */
+	__be32		t_nsec;		/* timestamp nanoseconds */
 } xfs_timestamp_t;
 
 /*
  * Note: Coordinate changes to this structure with the XFS_DI_* #defines
- * below and the offsets table in xfs_ialloc_log_di().
+ * below, the offsets table in xfs_ialloc_log_di() and struct xfs_icdinode
+ * in xfs_inode.h.
  */
-typedef struct xfs_dinode_core
-{
-	__uint16_t	di_magic;	/* inode magic # = XFS_DINODE_MAGIC */
-	__uint16_t	di_mode;	/* mode and type of file */
-	__int8_t	di_version;	/* inode version */
-	__int8_t	di_format;	/* format of di_c data */
-	__uint16_t	di_onlink;	/* old number of links to file */
-	__uint32_t	di_uid;		/* owner's user id */
-	__uint32_t	di_gid;		/* owner's group id */
-	__uint32_t	di_nlink;	/* number of links to file */
-	__uint16_t	di_projid;	/* owner's project id */
-	__uint16_t	di_tag;		/* context tagging */
-	__uint8_t	di_pad[6];	/* unused, zeroed space */
-	__uint16_t	di_flushiter;	/* incremented on flush */
+typedef struct xfs_dinode_core {
+	__be16		di_magic;	/* inode magic # = XFS_DINODE_MAGIC */
+	__be16		di_mode;	/* mode and type of file */
+	__u8		di_version;	/* inode version */
+	__u8		di_format;	/* format of di_c data */
+	__be16		di_onlink;	/* old number of links to file */
+	__be32		di_uid;		/* owner's user id */
+	__be32		di_gid;		/* owner's group id */
+	__be32		di_nlink;	/* number of links to file */
+	__be16		di_projid;	/* owner's project id */
+	__u8		di_pad[8];	/* unused, zeroed space */
+	__be16		di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */
 	xfs_timestamp_t	di_mtime;	/* time last modified */
 	xfs_timestamp_t	di_ctime;	/* time created/inode modified */
-	xfs_fsize_t	di_size;	/* number of bytes in file */
-	xfs_drfsbno_t	di_nblocks;	/* # of direct & btree blocks used */
-	xfs_extlen_t	di_extsize;	/* basic/minimum extent size for file */
-	xfs_extnum_t	di_nextents;	/* number of extents in data fork */
-	xfs_aextnum_t	di_anextents;	/* number of extents in attribute fork*/
-	__uint8_t	di_forkoff;	/* attr fork offs, <<3 for 64b align */
-	__int8_t	di_aformat;	/* format of attr fork's data */
-	__uint32_t	di_dmevmask;	/* DMIG event mask */
-	__uint16_t	di_dmstate;	/* DMIG state info */
-	__uint16_t	di_flags;	/* random flags, XFS_DIFLAG_... */
-	__uint32_t	di_gen;		/* generation number */
+	__be64		di_size;	/* number of bytes in file */
+	__be64		di_nblocks;	/* # of direct & btree blocks used */
+	__be32		di_extsize;	/* basic/minimum extent size for file */
+	__be32		di_nextents;	/* number of extents in data fork */
+	__be16		di_anextents;	/* number of extents in attribute fork*/
+	__u8		di_forkoff;	/* attr fork offs, <<3 for 64b align */
+	__s8		di_aformat;	/* format of attr fork's data */
+	__be32		di_dmevmask;	/* DMIG event mask */
+	__be16		di_dmstate;	/* DMIG state info */
+	__be16		di_flags;	/* random flags, XFS_DIFLAG_... */
+	__be32		di_gen;		/* generation number */
 } xfs_dinode_core_t;
 
 #define DI_MAX_FLUSH 0xffff
@@ -82,13 +81,13 @@ typedef struct xfs_dinode
 	 * sure to update the macros like XFS_LITINO below and
 	 * XFS_BMAP_RBLOCK_DSIZE in xfs_bmap_btree.h.
 	 */
-	xfs_agino_t		di_next_unlinked;/* agi unlinked list ptr */
+	__be32			di_next_unlinked;/* agi unlinked list ptr */
 	union {
 		xfs_bmdr_block_t di_bmbt;	/* btree root block */
 		xfs_bmbt_rec_32_t di_bmx[1];	/* extent list */
 		xfs_dir2_sf_t	di_dir2sf;	/* shortform directory v2 */
 		char		di_c[1];	/* local contents */
-		xfs_dev_t	di_dev;		/* device for S_IFCHR/S_IFBLK */
+		__be32		di_dev;		/* device for S_IFCHR/S_IFBLK */
 		uuid_t		di_muuid;	/* mount point value */
 		char		di_symlink[1];	/* local symbolic link */
 	}		di_u;
@@ -176,8 +175,7 @@ typedef enum xfs_dinode_fmt
 #define	XFS_CFORK_Q_DISK(dcp)		    ((dcp)->di_forkoff != 0)
 
 #define XFS_CFORK_BOFF(dcp)                 ((int)((dcp)->di_forkoff << 3))
-#define	XFS_CFORK_BOFF_DISK(dcp) \
-	((int)(INT_GET((dcp)->di_forkoff, ARCH_CONVERT) << 3))
+#define	XFS_CFORK_BOFF_DISK(dcp)	    ((int)((dcp)->di_forkoff << 3))
 
 #define	XFS_CFORK_DSIZE_DISK(dcp,mp) \
 	(XFS_CFORK_Q_DISK(dcp) ? XFS_CFORK_BOFF_DISK(dcp) : XFS_LITINO(mp))
@@ -226,8 +224,8 @@ typedef enum xfs_dinode_fmt
 
 #define	XFS_CFORK_NEXTENTS_DISK(dcp,w) \
 	((w) == XFS_DATA_FORK ? \
-	 	INT_GET((dcp)->di_nextents, ARCH_CONVERT) : \
-	 	INT_GET((dcp)->di_anextents, ARCH_CONVERT))
+	 	be32_to_cpu((dcp)->di_nextents) : \
+	 	be16_to_cpu((dcp)->di_anextents))
 #define XFS_CFORK_NEXTENTS(dcp,w) \
 	((w) == XFS_DATA_FORK ? (dcp)->di_nextents : (dcp)->di_anextents)
 #define	XFS_DFORK_NEXTENTS(dip,w) XFS_CFORK_NEXTENTS_DISK(&(dip)->di_core, w)
@@ -258,9 +256,7 @@ typedef enum xfs_dinode_fmt
 #define XFS_DIFLAG_EXTSIZE_BIT      11	/* inode extent size allocator hint */
 #define XFS_DIFLAG_EXTSZINHERIT_BIT 12	/* inherit inode extent size */
 #define XFS_DIFLAG_NODEFRAG_BIT     13	/* do not reorganize/defragment */
-#define XFS_DIFLAG_BARRIER_BIT	14	/* chroot() barrier */
-#define XFS_DIFLAG_IUNLINK_BIT	15	/* immutable unlink */
-
+#define XFS_DIFLAG_FILESTREAM_BIT   14  /* use filestream allocator */
 #define XFS_DIFLAG_REALTIME      (1 << XFS_DIFLAG_REALTIME_BIT)
 #define XFS_DIFLAG_PREALLOC      (1 << XFS_DIFLAG_PREALLOC_BIT)
 #define XFS_DIFLAG_NEWRTBM       (1 << XFS_DIFLAG_NEWRTBM_BIT)
@@ -275,15 +271,13 @@ typedef enum xfs_dinode_fmt
 #define XFS_DIFLAG_EXTSIZE       (1 << XFS_DIFLAG_EXTSIZE_BIT)
 #define XFS_DIFLAG_EXTSZINHERIT  (1 << XFS_DIFLAG_EXTSZINHERIT_BIT)
 #define XFS_DIFLAG_NODEFRAG      (1 << XFS_DIFLAG_NODEFRAG_BIT)
-#define XFS_DIFLAG_BARRIER	 (1 << XFS_DIFLAG_BARRIER_BIT)
-#define XFS_DIFLAG_IUNLINK	 (1 << XFS_DIFLAG_IUNLINK_BIT)
+#define XFS_DIFLAG_FILESTREAM    (1 << XFS_DIFLAG_FILESTREAM_BIT)
 
 #define XFS_DIFLAG_ANY \
 	(XFS_DIFLAG_REALTIME | XFS_DIFLAG_PREALLOC | XFS_DIFLAG_NEWRTBM | \
 	 XFS_DIFLAG_IMMUTABLE | XFS_DIFLAG_APPEND | XFS_DIFLAG_SYNC | \
 	 XFS_DIFLAG_NOATIME | XFS_DIFLAG_NODUMP | XFS_DIFLAG_RTINHERIT | \
 	 XFS_DIFLAG_PROJINHERIT | XFS_DIFLAG_NOSYMLINKS | XFS_DIFLAG_EXTSIZE | \
-	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_BARRIER | \
-	 XFS_DIFLAG_IUNLINK)
+	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_FILESTREAM)
 
 #endif	/* __XFS_DINODE_H__ */

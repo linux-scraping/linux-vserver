@@ -66,8 +66,6 @@
 #include <linux/poll.h>
 #include <linux/major.h>
 #include <linux/ppdev.h>
-#include <linux/smp_lock.h>
-#include <linux/device.h>
 #include <asm/uaccess.h>
 
 #define PP_VERSION "ppdev: user-space parallel port driver"
@@ -269,9 +267,9 @@ static ssize_t pp_write (struct file * file, const char __user * buf,
 	return bytes_written;
 }
 
-static void pp_irq (int irq, void * private)
+static void pp_irq (void *private)
 {
-	struct pp_struct * pp = (struct pp_struct *) private;
+	struct pp_struct *pp = private;
 
 	if (pp->irqresponse) {
 		parport_write_control (pp->pdev->port, pp->irqctl);
@@ -752,7 +750,7 @@ static const struct file_operations pp_fops = {
 
 static void pp_attach(struct parport *port)
 {
-	device_create(ppdev_class, NULL, MKDEV(PP_MAJOR, port->number),
+	device_create(ppdev_class, port->dev, MKDEV(PP_MAJOR, port->number),
 			"parport%d", port->number);
 }
 

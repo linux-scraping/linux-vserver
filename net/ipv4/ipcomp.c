@@ -14,9 +14,9 @@
  *   - Adaptive compression.
  */
 #include <linux/module.h>
-#include <asm/scatterlist.h>
 #include <asm/semaphore.h>
 #include <linux/crypto.h>
+#include <linux/err.h>
 #include <linux/pfkeyv2.h>
 #include <linux/percpu.h>
 #include <linux/smp.h>
@@ -43,21 +43,15 @@ static LIST_HEAD(ipcomp_tfms_list);
 
 static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 {
-	int err, plen, dlen;
 	struct ipcomp_data *ipcd = x->data;
-	u8 *start, *scratch;
-	struct crypto_comp *tfm;
-	int cpu;
+	const int plen = skb->len;
+	int dlen = IPCOMP_SCRATCH_SIZE;
+	const u8 *start = skb->data;
+	const int cpu = get_cpu();
+	u8 *scratch = *per_cpu_ptr(ipcomp_scratches, cpu);
+	struct crypto_comp *tfm = *per_cpu_ptr(ipcd->tfms, cpu);
+	int err = crypto_comp_decompress(tfm, start, plen, scratch, &dlen);
 
-	plen = skb->len;
-	dlen = IPCOMP_SCRATCH_SIZE;
-	start = skb->data;
-
-	cpu = get_cpu();
-	scratch = *per_cpu_ptr(ipcomp_scratches, cpu);
-	tfm = *per_cpu_ptr(ipcd->tfms, cpu);
-
-	err = crypto_comp_decompress(tfm, start, plen, scratch, &dlen);
 	if (err)
 		goto out;
 
@@ -72,7 +66,7 @@ static int ipcomp_decompress(struct xfrm_state *x, struct sk_buff *skb)
 
 	skb->truesize += dlen - plen;
 	__skb_put(skb, dlen - plen);
-	memcpy(skb->data, scratch, dlen);
+	skb_copy_to_linear_data(skb, scratch, dlen);
 out:
 	put_cpu();
 	return err;
@@ -81,7 +75,6 @@ out:
 static int ipcomp_input(struct xfrm_state *x, struct sk_buff *skb)
 {
 	int err = -ENOMEM;
-	struct iphdr *iph;
 	struct ip_comp_hdr *ipch;
 
 	if (skb_linearize_cow(skb))
@@ -90,12 +83,14 @@ static int ipcomp_input(struct xfrm_state *x, struct sk_buff *skb)
 	skb->ip_summed = CHECKSUM_NONE;
 
 	/* Remove ipcomp header and decompress original payload */
-	iph = skb->nh.iph;
 	ipch = (void *)skb->data;
-	iph->protocol = ipch->nexthdr;
-	skb->h.raw = skb->nh.raw + sizeof(*ipch);
+	skb->transport_header = skb->network_header + sizeof(*ipch);
 	__skb_pull(skb, sizeof(*ipch));
 	err = ipcomp_decompress(x, skb);
+	if (err)
+		goto out;
+
+	err = ipch->nexthdr;
 
 out:
 	return err;
@@ -103,23 +98,15 @@ out:
 
 static int ipcomp_compress(struct xfrm_state *x, struct sk_buff *skb)
 {
-	int err, plen, dlen, ihlen;
-	struct iphdr *iph = skb->nh.iph;
 	struct ipcomp_data *ipcd = x->data;
-	u8 *start, *scratch;
-	struct crypto_comp *tfm;
-	int cpu;
+	const int plen = skb->len;
+	int dlen = IPCOMP_SCRATCH_SIZE;
+	u8 *start = skb->data;
+	const int cpu = get_cpu();
+	u8 *scratch = *per_cpu_ptr(ipcomp_scratches, cpu);
+	struct crypto_comp *tfm = *per_cpu_ptr(ipcd->tfms, cpu);
+	int err = crypto_comp_compress(tfm, start, plen, scratch, &dlen);
 
-	ihlen = iph->ihl * 4;
-	plen = skb->len - ihlen;
-	dlen = IPCOMP_SCRATCH_SIZE;
-	start = skb->data + ihlen;
-
-	cpu = get_cpu();
-	scratch = *per_cpu_ptr(ipcomp_scratches, cpu);
-	tfm = *per_cpu_ptr(ipcd->tfms, cpu);
-
-	err = crypto_comp_compress(tfm, start, plen, scratch, &dlen);
 	if (err)
 		goto out;
 
@@ -131,7 +118,7 @@ static int ipcomp_compress(struct xfrm_state *x, struct sk_buff *skb)
 	memcpy(start + sizeof(struct ip_comp_hdr), scratch, dlen);
 	put_cpu();
 
-	pskb_trim(skb, ihlen + dlen + sizeof(struct ip_comp_hdr));
+	pskb_trim(skb, dlen + sizeof(struct ip_comp_hdr));
 	return 0;
 
 out:
@@ -142,15 +129,10 @@ out:
 static int ipcomp_output(struct xfrm_state *x, struct sk_buff *skb)
 {
 	int err;
-	struct iphdr *iph;
 	struct ip_comp_hdr *ipch;
 	struct ipcomp_data *ipcd = x->data;
-	int hdr_len = 0;
 
-	iph = skb->nh.iph;
-	iph->tot_len = htons(skb->len);
-	hdr_len = iph->ihl * 4;
-	if ((skb->len - hdr_len) < ipcd->threshold) {
+	if (skb->len < ipcd->threshold) {
 		/* Don't bother compressing */
 		goto out_ok;
 	}
@@ -159,25 +141,19 @@ static int ipcomp_output(struct xfrm_state *x, struct sk_buff *skb)
 		goto out_ok;
 
 	err = ipcomp_compress(x, skb);
-	iph = skb->nh.iph;
 
 	if (err) {
 		goto out_ok;
 	}
 
 	/* Install ipcomp header, convert into ipcomp datagram. */
-	iph->tot_len = htons(skb->len);
-	ipch = (struct ip_comp_hdr *)((char *)iph + iph->ihl * 4);
-	ipch->nexthdr = iph->protocol;
+	ipch = ip_comp_hdr(skb);
+	ipch->nexthdr = *skb_mac_header(skb);
 	ipch->flags = 0;
 	ipch->cpi = htons((u16 )ntohl(x->id.spi));
-	iph->protocol = IPPROTO_COMP;
-	ip_send_check(iph);
-	return 0;
-
+	*skb_mac_header(skb) = IPPROTO_COMP;
 out_ok:
-	if (x->props.mode == XFRM_MODE_TUNNEL)
-		ip_send_check(iph);
+	skb_push(skb, -skb_network_offset(skb));
 	return 0;
 }
 
@@ -188,8 +164,8 @@ static void ipcomp4_err(struct sk_buff *skb, u32 info)
 	struct ip_comp_hdr *ipch = (struct ip_comp_hdr *)(skb->data+(iph->ihl<<2));
 	struct xfrm_state *x;
 
-	if (skb->h.icmph->type != ICMP_DEST_UNREACH ||
-	    skb->h.icmph->code != ICMP_FRAG_NEEDED)
+	if (icmp_hdr(skb)->type != ICMP_DEST_UNREACH ||
+	    icmp_hdr(skb)->code != ICMP_FRAG_NEEDED)
 		return;
 
 	spi = htonl(ntohs(ipch->cpi));
@@ -369,7 +345,7 @@ static struct crypto_comp **ipcomp_alloc_tfms(const char *alg_name)
 	for_each_possible_cpu(cpu) {
 		struct crypto_comp *tfm = crypto_alloc_comp(alg_name, 0,
 							    CRYPTO_ALG_ASYNC);
-		if (!tfm)
+		if (IS_ERR(tfm))
 			goto error;
 		*per_cpu_ptr(tfms, cpu) = tfm;
 	}
@@ -499,3 +475,4 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("IP Payload Compression Protocol (IPComp) - RFC3173");
 MODULE_AUTHOR("James Morris <jmorris@intercode.com.au>");
 
+MODULE_ALIAS_XFRM_TYPE(AF_INET, XFRM_PROTO_COMP);

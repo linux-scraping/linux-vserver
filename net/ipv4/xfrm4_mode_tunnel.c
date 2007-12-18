@@ -16,8 +16,8 @@
 
 static inline void ipip_ecn_decapsulate(struct sk_buff *skb)
 {
-	struct iphdr *outer_iph = skb->nh.iph;
-	struct iphdr *inner_iph = skb->h.ipiph;
+	struct iphdr *outer_iph = ip_hdr(skb);
+	struct iphdr *inner_iph = ipip_hdr(skb);
 
 	if (INET_ECN_is_ce(outer_iph->tos))
 		IP_ECN_set_ce(inner_iph);
@@ -26,18 +26,12 @@ static inline void ipip_ecn_decapsulate(struct sk_buff *skb)
 static inline void ipip6_ecn_decapsulate(struct iphdr *iph, struct sk_buff *skb)
 {
 	if (INET_ECN_is_ce(iph->tos))
-		IP6_ECN_set_ce(skb->nh.ipv6h);
+		IP6_ECN_set_ce(ipv6_hdr(skb));
 }
 
 /* Add encapsulation header.
  *
- * The top IP header will be constructed per RFC 2401.  The following fields
- * in it shall be filled in by x->type->output:
- *      tot_len
- *      check
- *
- * On exit, skb->h will be set to the start of the payload to be processed
- * by x->type->output and skb->nh will be set to the top IP header.
+ * The top IP header will be constructed per RFC 2401.
  */
 static int xfrm4_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 {
@@ -46,11 +40,13 @@ static int xfrm4_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 	struct iphdr *iph, *top_iph;
 	int flags;
 
-	iph = skb->nh.iph;
-	skb->h.ipiph = iph;
+	iph = ip_hdr(skb);
 
-	skb->nh.raw = skb_push(skb, x->props.header_len);
-	top_iph = skb->nh.iph;
+	skb_set_network_header(skb, -x->props.header_len);
+	skb->mac_header = skb->network_header +
+			  offsetof(struct iphdr, protocol);
+	skb->transport_header = skb->network_header + sizeof(*iph);
+	top_iph = ip_hdr(skb);
 
 	top_iph->ihl = 5;
 	top_iph->version = 4;
@@ -92,10 +88,11 @@ static int xfrm4_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 
 static int xfrm4_tunnel_input(struct xfrm_state *x, struct sk_buff *skb)
 {
-	struct iphdr *iph = skb->nh.iph;
+	struct iphdr *iph = ip_hdr(skb);
+	const unsigned char *old_mac;
 	int err = -EINVAL;
 
-	switch(iph->protocol){
+	switch (iph->protocol){
 		case IPPROTO_IPIP:
 			break;
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
@@ -113,10 +110,10 @@ static int xfrm4_tunnel_input(struct xfrm_state *x, struct sk_buff *skb)
 	    (err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC)))
 		goto out;
 
-	iph = skb->nh.iph;
+	iph = ip_hdr(skb);
 	if (iph->protocol == IPPROTO_IPIP) {
 		if (x->props.flags & XFRM_STATE_DECAP_DSCP)
-			ipv4_copy_dscp(iph, skb->h.ipiph);
+			ipv4_copy_dscp(iph, ipip_hdr(skb));
 		if (!(x->props.flags & XFRM_STATE_NOECN))
 			ipip_ecn_decapsulate(skb);
 	}
@@ -127,9 +124,10 @@ static int xfrm4_tunnel_input(struct xfrm_state *x, struct sk_buff *skb)
 		skb->protocol = htons(ETH_P_IPV6);
 	}
 #endif
-	skb->mac.raw = memmove(skb->data - skb->mac_len,
-			       skb->mac.raw, skb->mac_len);
-	skb->nh.raw = skb->data;
+	old_mac = skb_mac_header(skb);
+	skb_set_mac_header(skb, -skb->mac_len);
+	memmove(skb_mac_header(skb), old_mac, skb->mac_len);
+	skb_reset_network_header(skb);
 	err = 0;
 
 out:
@@ -141,6 +139,7 @@ static struct xfrm_mode xfrm4_tunnel_mode = {
 	.output = xfrm4_tunnel_output,
 	.owner = THIS_MODULE,
 	.encap = XFRM_MODE_TUNNEL,
+	.flags = XFRM_MODE_FLAG_TUNNEL,
 };
 
 static int __init xfrm4_tunnel_init(void)

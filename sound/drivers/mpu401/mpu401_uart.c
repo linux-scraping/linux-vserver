@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Routines for control of MPU-401 in UART mode
  *
  *  MPU-401 supports UART mode which is not capable generate transmit
@@ -39,7 +39,7 @@
 #include <sound/core.h>
 #include <sound/mpu401.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Routines for control of MPU-401 in UART mode");
 MODULE_LICENSE("GPL");
 
@@ -266,6 +266,15 @@ static int snd_mpu401_uart_cmd(struct snd_mpu401 * mpu, unsigned char cmd,
 	return 0;
 }
 
+static int snd_mpu401_do_reset(struct snd_mpu401 *mpu)
+{
+	if (snd_mpu401_uart_cmd(mpu, MPU401_RESET, 1))
+		return -EIO;
+	if (snd_mpu401_uart_cmd(mpu, MPU401_ENTER_UART, 0))
+		return -EIO;
+	return 0;
+}
+
 /*
  * input/output open/close - protected by open_mutex in rawmidi.c
  */
@@ -278,9 +287,7 @@ static int snd_mpu401_uart_input_open(struct snd_rawmidi_substream *substream)
 	if (mpu->open_input && (err = mpu->open_input(mpu)) < 0)
 		return err;
 	if (! test_bit(MPU401_MODE_BIT_OUTPUT, &mpu->mode)) {
-		if (snd_mpu401_uart_cmd(mpu, MPU401_RESET, 1))
-			goto error_out;
-		if (snd_mpu401_uart_cmd(mpu, MPU401_ENTER_UART, 1))
+		if (snd_mpu401_do_reset(mpu) < 0)
 			goto error_out;
 	}
 	mpu->substream_input = substream;
@@ -302,9 +309,7 @@ static int snd_mpu401_uart_output_open(struct snd_rawmidi_substream *substream)
 	if (mpu->open_output && (err = mpu->open_output(mpu)) < 0)
 		return err;
 	if (! test_bit(MPU401_MODE_BIT_INPUT, &mpu->mode)) {
-		if (snd_mpu401_uart_cmd(mpu, MPU401_RESET, 1))
-			goto error_out;
-		if (snd_mpu401_uart_cmd(mpu, MPU401_ENTER_UART, 1))
+		if (snd_mpu401_do_reset(mpu) < 0)
 			goto error_out;
 	}
 	mpu->substream_output = substream;

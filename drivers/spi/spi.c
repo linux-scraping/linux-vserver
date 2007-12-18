@@ -23,6 +23,7 @@
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/cache.h>
+#include <linux/mutex.h>
 #include <linux/spi/spi.h>
 
 
@@ -66,14 +67,11 @@ static int spi_match_device(struct device *dev, struct device_driver *drv)
 	return strncmp(spi->modalias, drv->name, BUS_ID_SIZE) == 0;
 }
 
-static int spi_uevent(struct device *dev, char **envp, int num_envp,
-		char *buffer, int buffer_size)
+static int spi_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	const struct spi_device		*spi = to_spi_device(dev);
 
-	envp[0] = buffer;
-	snprintf(buffer, buffer_size, "MODALIAS=%s", spi->modalias);
-	envp[1] = NULL;
+	add_uevent_var(env, "MODALIAS=%s", spi->modalias);
 	return 0;
 }
 
@@ -152,6 +150,11 @@ static void spi_drv_shutdown(struct device *dev)
 	sdrv->shutdown(to_spi_device(dev));
 }
 
+/**
+ * spi_register_driver - register a SPI driver
+ * @sdrv: the driver to register
+ * Context: can sleep
+ */
 int spi_register_driver(struct spi_driver *sdrv)
 {
 	sdrv->driver.bus = &spi_bus_type;
@@ -180,23 +183,44 @@ struct boardinfo {
 };
 
 static LIST_HEAD(board_list);
-static DECLARE_MUTEX(board_lock);
+static DEFINE_MUTEX(board_lock);
 
 
-/* On typical mainboards, this is purely internal; and it's not needed
+/**
+ * spi_new_device - instantiate one new SPI device
+ * @master: Controller to which device is connected
+ * @chip: Describes the SPI device
+ * Context: can sleep
+ *
+ * On typical mainboards, this is purely internal; and it's not needed
  * after board init creates the hard-wired devices.  Some development
  * platforms may not be able to use spi_register_board_info though, and
  * this is exported so that for example a USB or parport based adapter
  * driver could add devices (which it would learn about out-of-band).
+ *
+ * Returns the new device, or NULL.
  */
 struct spi_device *spi_new_device(struct spi_master *master,
 				  struct spi_board_info *chip)
 {
 	struct spi_device	*proxy;
-	struct device		*dev = master->cdev.dev;
+	struct device		*dev = master->dev.parent;
 	int			status;
 
-	/* NOTE:  caller did any chip->bus_num checks necessary */
+	/* NOTE:  caller did any chip->bus_num checks necessary.
+	 *
+	 * Also, unless we change the return value convention to use
+	 * error-or-pointer (not NULL-or-pointer), troubleshootability
+	 * suggests syslogged diagnostics are best here (ugh).
+	 */
+
+	/* Chipselects are numbered 0..max; validate. */
+	if (chip->chip_select >= master->num_chipselect) {
+		dev_err(dev, "cs%d > max %d\n",
+			chip->chip_select,
+			master->num_chipselect);
+		return NULL;
+	}
 
 	if (!spi_master_get(master))
 		return NULL;
@@ -215,7 +239,7 @@ struct spi_device *spi_new_device(struct spi_master *master,
 	proxy->modalias = chip->modalias;
 
 	snprintf(proxy->dev.bus_id, sizeof proxy->dev.bus_id,
-			"%s.%u", master->cdev.class_id,
+			"%s.%u", master->dev.bus_id,
 			chip->chip_select);
 	proxy->dev.parent = dev;
 	proxy->dev.bus = &spi_bus_type;
@@ -224,10 +248,10 @@ struct spi_device *spi_new_device(struct spi_master *master,
 	proxy->controller_state = NULL;
 	proxy->dev.release = spidev_release;
 
-	/* drivers may modify this default i/o setup */
+	/* drivers may modify this initial i/o setup */
 	status = master->setup(proxy);
 	if (status < 0) {
-		dev_dbg(dev, "can't %s %s, status %d\n",
+		dev_err(dev, "can't %s %s, status %d\n",
 				"setup", proxy->dev.bus_id, status);
 		goto fail;
 	}
@@ -237,7 +261,7 @@ struct spi_device *spi_new_device(struct spi_master *master,
 	 */
 	status = device_register(&proxy->dev);
 	if (status < 0) {
-		dev_dbg(dev, "can't %s %s, status %d\n",
+		dev_err(dev, "can't %s %s, status %d\n",
 				"add", proxy->dev.bus_id, status);
 		goto fail;
 	}
@@ -251,7 +275,12 @@ fail:
 }
 EXPORT_SYMBOL_GPL(spi_new_device);
 
-/*
+/**
+ * spi_register_board_info - register SPI devices for a given board
+ * @info: array of chip descriptors
+ * @n: how many descriptors are provided
+ * Context: can sleep
+ *
  * Board-specific early init code calls this (probably during arch_initcall)
  * with segments of the SPI device table.  Any device nodes are created later,
  * after the relevant parent SPI controller (bus_num) is defined.  We keep
@@ -276,9 +305,9 @@ spi_register_board_info(struct spi_board_info const *info, unsigned n)
 	bi->n_board_info = n;
 	memcpy(bi->board_info, info, n * sizeof *info);
 
-	down(&board_lock);
+	mutex_lock(&board_lock);
 	list_add_tail(&bi->list, &board_list);
-	up(&board_lock);
+	mutex_unlock(&board_lock);
 	return 0;
 }
 
@@ -286,13 +315,11 @@ spi_register_board_info(struct spi_board_info const *info, unsigned n)
  * creates board info from kernel command lines
  */
 
-static void __init_or_module
-scan_boardinfo(struct spi_master *master)
+static void scan_boardinfo(struct spi_master *master)
 {
 	struct boardinfo	*bi;
-	struct device		*dev = master->cdev.dev;
 
-	down(&board_lock);
+	mutex_lock(&board_lock);
 	list_for_each_entry(bi, &board_list, list) {
 		struct spi_board_info	*chip = bi->board_info;
 		unsigned		n;
@@ -300,46 +327,39 @@ scan_boardinfo(struct spi_master *master)
 		for (n = bi->n_board_info; n > 0; n--, chip++) {
 			if (chip->bus_num != master->bus_num)
 				continue;
-			/* some controllers only have one chip, so they
-			 * might not use chipselects.  otherwise, the
-			 * chipselects are numbered 0..max.
+			/* NOTE: this relies on spi_new_device to
+			 * issue diagnostics when given bogus inputs
 			 */
-			if (chip->chip_select >= master->num_chipselect
-					&& master->num_chipselect) {
-				dev_dbg(dev, "cs%d > max %d\n",
-					chip->chip_select,
-					master->num_chipselect);
-				continue;
-			}
 			(void) spi_new_device(master, chip);
 		}
 	}
-	up(&board_lock);
+	mutex_unlock(&board_lock);
 }
 
 /*-------------------------------------------------------------------------*/
 
-static void spi_master_release(struct class_device *cdev)
+static void spi_master_release(struct device *dev)
 {
 	struct spi_master *master;
 
-	master = container_of(cdev, struct spi_master, cdev);
+	master = container_of(dev, struct spi_master, dev);
 	kfree(master);
 }
 
 static struct class spi_master_class = {
 	.name		= "spi_master",
 	.owner		= THIS_MODULE,
-	.release	= spi_master_release,
+	.dev_release	= spi_master_release,
 };
 
 
 /**
  * spi_alloc_master - allocate SPI master controller
  * @dev: the controller, possibly using the platform_bus
- * @size: how much driver-private data to preallocate; the pointer to this
- *	memory is in the class_data field of the returned class_device,
+ * @size: how much zeroed driver-private data to allocate; the pointer to this
+ *	memory is in the driver_data field of the returned device,
  *	accessible with spi_master_get_devdata().
+ * Context: can sleep
  *
  * This call is used only by SPI master controller drivers, which are the
  * only ones directly touching chip registers.  It's how they allocate
@@ -363,9 +383,9 @@ struct spi_master *spi_alloc_master(struct device *dev, unsigned size)
 	if (!master)
 		return NULL;
 
-	class_device_initialize(&master->cdev);
-	master->cdev.class = &spi_master_class;
-	master->cdev.dev = get_device(dev);
+	device_initialize(&master->dev);
+	master->dev.class = &spi_master_class;
+	master->dev.parent = get_device(dev);
 	spi_master_set_devdata(master, &master[1]);
 
 	return master;
@@ -375,6 +395,7 @@ EXPORT_SYMBOL_GPL(spi_alloc_master);
 /**
  * spi_register_master - register SPI master controller
  * @master: initialized master, originally from spi_alloc_master()
+ * Context: can sleep
  *
  * SPI master controllers connect to their drivers using some non-SPI bus,
  * such as the platform bus.  The final stage of probe() in that code
@@ -393,16 +414,25 @@ EXPORT_SYMBOL_GPL(spi_alloc_master);
  */
 int spi_register_master(struct spi_master *master)
 {
-	static atomic_t		dyn_bus_id = ATOMIC_INIT((1<<16) - 1);
-	struct device		*dev = master->cdev.dev;
+	static atomic_t		dyn_bus_id = ATOMIC_INIT((1<<15) - 1);
+	struct device		*dev = master->dev.parent;
 	int			status = -ENODEV;
 	int			dynamic = 0;
 
 	if (!dev)
 		return -ENODEV;
 
+	/* even if it's just one always-selected device, there must
+	 * be at least one chipselect
+	 */
+	if (master->num_chipselect == 0)
+		return -EINVAL;
+
 	/* convention:  dynamically assigned bus IDs count down from the max */
 	if (master->bus_num < 0) {
+		/* FIXME switch to an IDR based scheme, something like
+		 * I2C now uses, so we can't run out of "dynamic" IDs
+		 */
 		master->bus_num = atomic_dec_return(&dyn_bus_id);
 		dynamic = 1;
 	}
@@ -410,12 +440,12 @@ int spi_register_master(struct spi_master *master)
 	/* register the device, then userspace will see it.
 	 * registration fails if the bus ID is in use.
 	 */
-	snprintf(master->cdev.class_id, sizeof master->cdev.class_id,
+	snprintf(master->dev.bus_id, sizeof master->dev.bus_id,
 		"spi%u", master->bus_num);
-	status = class_device_add(&master->cdev);
+	status = device_add(&master->dev);
 	if (status < 0)
 		goto done;
-	dev_dbg(dev, "registered master %s%s\n", master->cdev.class_id,
+	dev_dbg(dev, "registered master %s%s\n", master->dev.bus_id,
 			dynamic ? " (dynamic)" : "");
 
 	/* populate children from any spi device tables */
@@ -427,16 +457,18 @@ done:
 EXPORT_SYMBOL_GPL(spi_register_master);
 
 
-static int __unregister(struct device *dev, void *unused)
+static int __unregister(struct device *dev, void *master_dev)
 {
 	/* note: before about 2.6.14-rc1 this would corrupt memory: */
-	spi_unregister_device(to_spi_device(dev));
+	if (dev != master_dev)
+		spi_unregister_device(to_spi_device(dev));
 	return 0;
 }
 
 /**
  * spi_unregister_master - unregister SPI master controller
  * @master: the master being unregistered
+ * Context: can sleep
  *
  * This call is used only by SPI master controller drivers, which are the
  * only ones directly touching chip registers.
@@ -447,14 +479,16 @@ void spi_unregister_master(struct spi_master *master)
 {
 	int dummy;
 
-	dummy = device_for_each_child(master->cdev.dev, NULL, __unregister);
-	class_device_unregister(&master->cdev);
+	dummy = device_for_each_child(master->dev.parent, &master->dev,
+					__unregister);
+	device_unregister(&master->dev);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_master);
 
 /**
  * spi_busnum_to_master - look up master associated with bus_num
  * @bus_num: the master's bus number
+ * Context: can sleep
  *
  * This call may be used with devices that are registered after
  * arch init time.  It returns a refcounted pointer to the relevant
@@ -463,13 +497,13 @@ EXPORT_SYMBOL_GPL(spi_unregister_master);
  */
 struct spi_master *spi_busnum_to_master(u16 bus_num)
 {
-	struct class_device	*cdev;
+	struct device		*dev;
 	struct spi_master	*master = NULL;
 	struct spi_master	*m;
 
 	down(&spi_master_class.sem);
-	list_for_each_entry(cdev, &spi_master_class.children, node) {
-		m = container_of(cdev, struct spi_master, cdev);
+	list_for_each_entry(dev, &spi_master_class.children, node) {
+		m = container_of(dev, struct spi_master, dev);
 		if (m->bus_num == bus_num) {
 			master = spi_master_get(m);
 			break;
@@ -492,6 +526,7 @@ static void spi_complete(void *arg)
  * spi_sync - blocking/synchronous SPI data transfers
  * @spi: device with which data will be exchanged
  * @message: describes the data transfers
+ * Context: can sleep
  *
  * This call may only be used from a context that may sleep.  The sleep
  * is non-interruptible, and has no timeout.  Low-overhead controller
@@ -508,7 +543,7 @@ static void spi_complete(void *arg)
  *
  * The return value is a negative error code if the message could not be
  * submitted, else zero.  When the value is zero, then message->status is
- * also defined:  it's the completion code for the transfer, either zero
+ * also defined;  it's the completion code for the transfer, either zero
  * or a negative error code from the controller driver.
  */
 int spi_sync(struct spi_device *spi, struct spi_message *message)
@@ -538,6 +573,7 @@ static u8	*buf;
  * @n_tx: size of txbuf, in bytes
  * @rxbuf: buffer into which data will be read
  * @n_rx: size of rxbuf, in bytes (need not be dma-safe)
+ * Context: can sleep
  *
  * This performs a half duplex MicroWire style transaction with the
  * device, sending txbuf and then reading rxbuf.  The return value
@@ -545,7 +581,8 @@ static u8	*buf;
  * This call may only be used from a context that may sleep.
  *
  * Parameters to this routine are always copied using a small buffer;
- * performance-sensitive or bulk transfer code should instead use
+ * portable code should never use this for more than 32 bytes.
+ * Performance-sensitive or bulk transfer code should instead use
  * spi_{async,sync}() calls with dma-safe buffers.
  */
 int spi_write_then_read(struct spi_device *spi,

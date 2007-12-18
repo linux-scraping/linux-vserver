@@ -644,7 +644,7 @@ static int tms380tr_hardware_send_packet(struct sk_buff *skb, struct net_device 
 		dmabuf  = 0;
 		i 	= tp->TplFree->TPLIndex;
 		buf 	= tp->LocalTxBuffers[i];
-		memcpy(buf, skb->data, length);
+		skb_copy_from_linear_data(skb, buf, length);
 		newbuf 	= ((char *)buf - (char *)tp) + tp->dmabuffer;
 	}
 	else {
@@ -2124,7 +2124,7 @@ static void tms380tr_rcv_status_irq(struct net_device *dev)
 		/* Get the frame size (Byte swap for Intel).
 		 * Do this early (see workaround comment below)
 		 */
-		Length = be16_to_cpu((unsigned short)rpl->FrameSize);
+		Length = be16_to_cpu(rpl->FrameSize);
 
 		/* Check if the Frame_Start, Frame_End and
 		 * Frame_Complete bits are set.
@@ -2140,7 +2140,7 @@ static void tms380tr_rcv_status_irq(struct net_device *dev)
 			 * Length2 is there because there have also been
 			 * cases where the FrameSize was partially written
 			 */
-			Length2 = be16_to_cpu((unsigned short)rpl->FrameSize);
+			Length2 = be16_to_cpu(rpl->FrameSize);
 
 			if(Length == 0 || Length != Length2)
 			{
@@ -2168,7 +2168,6 @@ static void tms380tr_rcv_status_irq(struct net_device *dev)
 				}
 				else
 				{
-					skb->dev	= dev;
 					skb_put(skb, tp->MaxPacketSize);
 					rpl->SkbStat 	= SKB_DATA_COPY;
 					ReceiveDataPtr 	= rpl->MData;
@@ -2179,7 +2178,8 @@ static void tms380tr_rcv_status_irq(struct net_device *dev)
 				|| rpl->SkbStat == SKB_DMA_DIRECT))
 			{
 				if(rpl->SkbStat == SKB_DATA_COPY)
-					memcpy(skb->data, ReceiveDataPtr, Length);
+					skb_copy_to_linear_data(skb, ReceiveDataPtr,
+						       Length);
 
 				/* Deliver frame to system */
 				rpl->Skb = NULL;

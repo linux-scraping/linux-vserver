@@ -121,16 +121,6 @@ static int bit_getsda(void *data)
 	return reg_read((struct ti_lynx *) data, SERIAL_EEPROM_CONTROL) & 0x00000010;
 }
 
-static int bit_reg(struct i2c_client *client)
-{
-	return 0;
-}
-
-static int bit_unreg(struct i2c_client *client)
-{
-	return 0;
-}
-
 static struct i2c_algo_bit_data bit_data = {
 	.setsda			= bit_setsda,
 	.setscl			= bit_setscl,
@@ -139,14 +129,6 @@ static struct i2c_algo_bit_data bit_data = {
 	.udelay			= 5,
 	.timeout		= 100,
 };
-
-static struct i2c_adapter bit_ops = {
-	.id 			= 0xAA, //FIXME: probably we should get an id in i2c-id.h
-	.client_register	= bit_reg,
-	.client_unregister	= bit_unreg,
-	.name			= "PCILynx I2C",
-};
-
 
 
 /*
@@ -477,7 +459,11 @@ static void send_next(struct ti_lynx *lynx, int what)
         struct lynx_send_data *d;
         struct hpsb_packet *packet;
 
+#if 0 /* has been removed from ieee1394 core */
         d = (what == hpsb_iso ? &lynx->iso_send : &lynx->async);
+#else
+	d = &lynx->async;
+#endif
         if (!list_empty(&d->pcl_queue)) {
                 PRINT(KERN_ERR, lynx->id, "trying to queue a new packet in nonempty fifo");
                 BUG();
@@ -511,9 +497,11 @@ static void send_next(struct ti_lynx *lynx, int what)
         case hpsb_async:
                 pcl.buffer[0].control |= PCL_CMD_XMT;
                 break;
+#if 0 /* has been removed from ieee1394 core */
         case hpsb_iso:
                 pcl.buffer[0].control |= PCL_CMD_XMT | PCL_ISOMODE;
                 break;
+#endif
         case hpsb_raw:
                 pcl.buffer[0].control |= PCL_CMD_UNFXMT;
                 break;
@@ -542,9 +530,11 @@ static int lynx_transmit(struct hpsb_host *host, struct hpsb_packet *packet)
         case hpsb_raw:
                 d = &lynx->async;
                 break;
+#if 0 /* has been removed from ieee1394 core */
         case hpsb_iso:
                 d = &lynx->iso_send;
                 break;
+#endif
         default:
                 PRINT(KERN_ERR, lynx->id, "invalid packet type %d",
                       packet->type);
@@ -757,7 +747,6 @@ static int lynx_devctl(struct hpsb_host *host, enum devctl_cmd cmd, int arg)
                 } else {
                         struct ti_pcl pcl;
                         u32 ack;
-                        struct hpsb_packet *packet;
 
                         PRINT(KERN_INFO, lynx->id, "cancelling async packet, that was already in PCL");
 
@@ -797,7 +786,7 @@ static int lynx_devctl(struct hpsb_host *host, enum devctl_cmd cmd, int arg)
 		}
 
                 break;
-
+#if 0 /* has been removed from ieee1394 core */
         case ISO_LISTEN_CHANNEL:
                 spin_lock_irqsave(&lynx->iso_rcv.lock, flags);
 
@@ -819,7 +808,7 @@ static int lynx_devctl(struct hpsb_host *host, enum devctl_cmd cmd, int arg)
 
                 spin_unlock_irqrestore(&lynx->iso_rcv.lock, flags);
                 break;
-
+#endif
         default:
                 PRINT(KERN_ERR, lynx->id, "unknown devctl command %d", cmd);
                 retval = -1;
@@ -1009,11 +998,11 @@ static irqreturn_t lynx_irq_handler(int irq, void *dev_id)
                                 pci_unmap_single(lynx->dev, lynx->iso_send.data_dma,
                                                  packet->data_size, PCI_DMA_TODEVICE);
                         }
-
+#if 0 /* has been removed from ieee1394 core */
                         if (!list_empty(&lynx->iso_send.queue)) {
                                 send_next(lynx, hpsb_iso);
                         }
-
+#endif
                         spin_unlock(&lynx->iso_send.queue_lock);
 
                         if (pcl.pcl_status & DMA_CHAN_STAT_PKTCMPL) {
@@ -1428,9 +1417,11 @@ static int __devinit add_card(struct pci_dev *dev,
         	struct i2c_algo_bit_data i2c_adapter_data;
 
         	error = -ENOMEM;
-		i2c_ad = kmemdup(&bit_ops, sizeof(*i2c_ad), GFP_KERNEL);
+		i2c_ad = kzalloc(sizeof(*i2c_ad), GFP_KERNEL);
         	if (!i2c_ad) FAIL("failed to allocate I2C adapter memory");
 
+		i2c_ad->id = I2C_HW_B_PCILYNX;
+		strlcpy(i2c_ad->name, "PCILynx I2C", sizeof(i2c_ad->name));
                 i2c_adapter_data = bit_data;
                 i2c_ad->algo_data = &i2c_adapter_data;
                 i2c_adapter_data.data = lynx;
@@ -1457,13 +1448,11 @@ static int __devinit add_card(struct pci_dev *dev,
                                                   { 0x50, I2C_M_RD, 20, (unsigned char*) lynx->bus_info_block }
                                                 };
 
-                        /* we use i2c_transfer, because i2c_smbus_read_block_data does not work properly and we
-                           do it more efficiently in one transaction rather then using several reads */
+			/* we use i2c_transfer because we have no i2c_client
+			   at hand */
                         if (i2c_transfer(i2c_ad, msg, 2) < 0) {
                                 PRINT(KERN_ERR, lynx->id, "unable to read bus info block from i2c");
                         } else {
-                                int i;
-
                                 PRINT(KERN_INFO, lynx->id, "got bus info block from serial eeprom");
 				/* FIXME: probably we shoud rewrite the max_rec, max_ROM(1394a),
 				 * generation(1394a) and link_spd(1394a) field and recalculate

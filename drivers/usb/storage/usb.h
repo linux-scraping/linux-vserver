@@ -47,7 +47,6 @@
 #include <linux/usb.h>
 #include <linux/usb_usual.h>
 #include <linux/blkdev.h>
-#include <linux/smp_lock.h>
 #include <linux/completion.h>
 #include <linux/mutex.h>
 #include <scsi/scsi_host.h>
@@ -145,11 +144,13 @@ struct us_data {
 	unsigned char		*sensebuf;	 /* sense data buffer	 */
 	dma_addr_t		cr_dma;		 /* buffer DMA addresses */
 	dma_addr_t		iobuf_dma;
+	struct task_struct	*ctl_thread;	 /* the control thread   */
 
 	/* mutual exclusion and synchronization structures */
 	struct semaphore	sema;		 /* to sleep thread on	    */
 	struct completion	notify;		 /* thread begin/end	    */
 	wait_queue_head_t	delay_wait;	 /* wait during scan, reset */
+	struct completion	scanning_done;	 /* wait for scan thread    */
 
 	/* subdriver information */
 	void			*extra;		 /* Any extra data          */

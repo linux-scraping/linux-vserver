@@ -2,9 +2,13 @@
 #define _ASM_PARISC_SCATTERLIST_H
 
 #include <asm/page.h>
+#include <asm/types.h>
 
 struct scatterlist {
-	struct page *page;
+#ifdef CONFIG_DEBUG_SG
+	unsigned long sg_magic;
+#endif
+	unsigned long page_link;
 	unsigned int offset;
 
 	unsigned int length;
@@ -14,7 +18,7 @@ struct scatterlist {
 	__u32      iova_length; /* bytes mapped */
 };
 
-#define sg_virt_addr(sg) ((unsigned long)(page_address(sg->page) + sg->offset))
+#define sg_virt_addr(sg) ((unsigned long)sg_virt(sg))
 #define sg_dma_address(sg) ((sg)->iova)
 #define sg_dma_len(sg)     ((sg)->iova_length)
 

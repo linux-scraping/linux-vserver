@@ -40,17 +40,17 @@
 #include <asm/mipsregs.h>
 #include <asm/reboot.h>
 #include <asm/pgtable.h>
-#include <asm/mach-au1x00/au1000.h>
 #include <asm/time.h>
 
-extern char * prom_getcmdline(void);
+#include <au1000.h>
+#include <prom.h>
+
 extern void __init board_setup(void);
 extern void au1000_restart(char *);
 extern void au1000_halt(void);
 extern void au1000_power_off(void);
 extern void au1x_time_init(void);
 extern void au1x_timer_setup(struct irqaction *irq);
-extern void au1xxx_time_init(void);
 extern void set_cpuspec(void);
 
 void __init plat_mem_setup(void)
@@ -100,18 +100,9 @@ void __init plat_mem_setup(void)
         argptr = prom_getcmdline();
         /* default panel */
         /*strcat(argptr, " video=au1100fb:panel:Sharp_320x240_16");*/
-#ifdef CONFIG_MIPS_HYDROGEN3
-         strcat(argptr, " video=au1100fb:panel:Hydrogen_3_NEC_panel_320x240,nohwcursor");
-#endif
     }
 #endif
 
-#ifdef CONFIG_FB_XPERT98
-	if ((argptr = strstr(argptr, "video=")) == NULL) {
-		argptr = prom_getcmdline();
-		strcat(argptr, " video=atyfb:1024x768-8@70");
-	}
-#endif
 
 #if defined(CONFIG_SOUND_AU1X00) && !defined(CONFIG_SOC_AU1000)
 	/* au1000 does not support vra, au1500 and au1100 do */
@@ -121,7 +112,6 @@ void __init plat_mem_setup(void)
 	_machine_restart = au1000_restart;
 	_machine_halt = au1000_halt;
 	pm_power_off = au1000_power_off;
-	board_time_init = au1xxx_time_init;
 
 	/* IO/MEM resources. */
 	set_io_port_base(0);

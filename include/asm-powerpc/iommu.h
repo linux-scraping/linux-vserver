@@ -26,8 +26,9 @@
 #include <linux/spinlock.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/bitops.h>
+#include <asm/machdep.h>
 #include <asm/types.h>
-#include <asm/bitops.h>
 
 #define IOMMU_PAGE_SHIFT      12
 #define IOMMU_PAGE_SIZE       (ASM_CONST(1) << IOMMU_PAGE_SHIFT)
@@ -109,6 +110,19 @@ static inline void pci_iommu_init(void) { }
 #endif
 
 extern void alloc_dart_table(void);
+#if defined(CONFIG_PPC64) && defined(CONFIG_PM)
+static inline void iommu_save(void)
+{
+	if (ppc_md.iommu_save)
+		ppc_md.iommu_save();
+}
+
+static inline void iommu_restore(void)
+{
+	if (ppc_md.iommu_restore)
+		ppc_md.iommu_restore();
+}
+#endif
 
 #endif /* __KERNEL__ */
 #endif /* _ASM_IOMMU_H */

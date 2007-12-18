@@ -99,6 +99,15 @@ struct inodes_stat_t inodes_stat;
 
 static struct kmem_cache * inode_cachep __read_mostly;
 
+static void wake_up_inode(struct inode *inode)
+{
+	/*
+	 * Prevent speculative execution through spin_unlock(&inode_lock);
+	 */
+	smp_mb();
+	wake_up_bit(&inode->i_state, __I_LOCK);
+}
+
 static struct inode *alloc_inode(struct super_block *sb)
 {
 	static const struct address_space_operations empty_aops;
@@ -145,10 +154,19 @@ static struct inode *alloc_inode(struct super_block *sb)
 			return NULL;
 		}
 
+		spin_lock_init(&inode->i_lock);
+		lockdep_set_class(&inode->i_lock, &sb->s_type->i_lock_key);
+
+		mutex_init(&inode->i_mutex);
+		lockdep_set_class(&inode->i_mutex, &sb->s_type->i_mutex_key);
+
+		init_rwsem(&inode->i_alloc_sem);
+		lockdep_set_class(&inode->i_alloc_sem, &sb->s_type->i_alloc_sem_key);
+
 		mapping->a_ops = &empty_aops;
  		mapping->host = inode;
 		mapping->flags = 0;
-		mapping_set_gfp_mask(mapping, GFP_HIGHUSER);
+		mapping_set_gfp_mask(mapping, GFP_HIGHUSER_PAGECACHE);
 		mapping->assoc_mapping = NULL;
 		mapping->backing_dev_info = &default_backing_dev_info;
 
@@ -193,8 +211,6 @@ void inode_init_once(struct inode *inode)
 	INIT_HLIST_NODE(&inode->i_hash);
 	INIT_LIST_HEAD(&inode->i_dentry);
 	INIT_LIST_HEAD(&inode->i_devices);
-	mutex_init(&inode->i_mutex);
-	init_rwsem(&inode->i_alloc_sem);
 	INIT_RADIX_TREE(&inode->i_data.page_tree, GFP_ATOMIC);
 	rwlock_init(&inode->i_data.tree_lock);
 	spin_lock_init(&inode->i_data.i_mmap_lock);
@@ -202,7 +218,6 @@ void inode_init_once(struct inode *inode)
 	spin_lock_init(&inode->i_data.private_lock);
 	INIT_RAW_PRIO_TREE_ROOT(&inode->i_data.i_mmap);
 	INIT_LIST_HEAD(&inode->i_data.i_mmap_nonlinear);
-	spin_lock_init(&inode->i_lock);
 	i_size_ordered_init(inode);
 #ifdef CONFIG_INOTIFY
 	INIT_LIST_HEAD(&inode->inotify_watches);
@@ -212,13 +227,11 @@ void inode_init_once(struct inode *inode)
 
 EXPORT_SYMBOL(inode_init_once);
 
-static void init_once(void * foo, struct kmem_cache * cachep, unsigned long flags)
+static void init_once(struct kmem_cache * cachep, void *foo)
 {
 	struct inode * inode = (struct inode *) foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR)
-		inode_init_once(inode);
+	inode_init_once(inode);
 }
 
 /*
@@ -231,7 +244,7 @@ void __iget(struct inode * inode)
 		return;
 	}
 	atomic_inc(&inode->i_count);
-	if (!(inode->i_state & (I_DIRTY|I_LOCK)))
+	if (!(inode->i_state & (I_DIRTY|I_SYNC)))
 		list_move(&inode->i_list, &inode_in_use);
 	inodes_stat.nr_unused--;
 }
@@ -254,9 +267,9 @@ void clear_inode(struct inode *inode)
 	BUG_ON(inode->i_data.nrpages);
 	BUG_ON(!(inode->i_state & I_FREEING));
 	BUG_ON(inode->i_state & I_CLEAR);
-	wait_on_inode(inode);
+	inode_sync_wait(inode);
 	DQUOT_DROP(inode);
-	if (inode->i_sb && inode->i_sb->s_op->clear_inode)
+	if (inode->i_sb->s_op->clear_inode)
 		inode->i_sb->s_op->clear_inode(inode);
 	if (S_ISBLK(inode->i_mode) && inode->i_bdev)
 		bd_forget(inode);
@@ -281,7 +294,7 @@ static void dispose_list(struct list_head *head)
 	while (!list_empty(head)) {
 		struct inode *inode;
 
-		inode = list_entry(head->next, struct inode, i_list);
+		inode = list_first_entry(head, struct inode, i_list);
 		list_del(&inode->i_list);
 
 		if (inode->i_data.nrpages)
@@ -469,6 +482,11 @@ static int shrink_icache_memory(int nr, gfp_t gfp_mask)
 	return (inodes_stat.nr_unused / 100) * sysctl_vfs_cache_pressure;
 }
 
+static struct shrinker icache_shrinker = {
+	.shrink = shrink_icache_memory,
+	.seeks = DEFAULT_SEEKS,
+};
+
 static void __wait_on_freeing_inode(struct inode *inode);
 /*
  * Called with the inode lock held.
@@ -526,11 +544,22 @@ repeat:
  *	new_inode 	- obtain an inode
  *	@sb: superblock
  *
- *	Allocates a new inode for given superblock.
+ *	Allocates a new inode for given superblock. The default gfp_mask
+ *	for allocations related to inode->i_mapping is GFP_HIGHUSER_PAGECACHE.
+ *	If HIGHMEM pages are unsuitable or it is known that pages allocated
+ *	for the page cache are not reclaimable or migratable,
+ *	mapping_set_gfp_mask() must be called with suitable flags on the
+ *	newly created inode's mapping
+ *
  */
 struct inode *new_inode(struct super_block *sb)
 {
-	static unsigned long last_ino;
+	/*
+	 * On a 32bit, non LFS stat() call, glibc will generate an EOVERFLOW
+	 * error if st_ino won't fit in target struct field. Use 32bit counter
+	 * here to attempt to avoid that.
+	 */
+	static unsigned int last_ino;
 	struct inode * inode;
 
 	spin_lock_prefetch(&inode_lock);
@@ -552,6 +581,18 @@ EXPORT_SYMBOL(new_inode);
 
 void unlock_new_inode(struct inode *inode)
 {
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	if (inode->i_mode & S_IFDIR) {
+		struct file_system_type *type = inode->i_sb->s_type;
+
+		/*
+		 * ensure nobody is actually holding i_mutex
+		 */
+		mutex_destroy(&inode->i_mutex);
+		mutex_init(&inode->i_mutex);
+		lockdep_set_class(&inode->i_mutex, &type->i_mutex_dir_key);
+	}
+#endif
 	/*
 	 * This is special!  We do not need the spinlock
 	 * when clearing I_LOCK, because we're guaranteed
@@ -689,27 +730,28 @@ static unsigned long hash(struct super_block *sb, unsigned long hashval)
  */
 ino_t iunique(struct super_block *sb, ino_t max_reserved)
 {
-	static ino_t counter;
+	/*
+	 * On a 32bit, non LFS stat() call, glibc will generate an EOVERFLOW
+	 * error if st_ino won't fit in target struct field. Use 32bit counter
+	 * here to attempt to avoid that.
+	 */
+	static unsigned int counter;
 	struct inode *inode;
-	struct hlist_head * head;
+	struct hlist_head *head;
 	ino_t res;
-	spin_lock(&inode_lock);
-retry:
-	if (counter > max_reserved) {
-		head = inode_hashtable + hash(sb,counter);
-		res = counter++;
-		inode = find_inode_fast(sb, head, res);
-		if (!inode) {
-			spin_unlock(&inode_lock);
-			return res;
-		}
-	} else {
-		counter = max_reserved + 1;
-	}
-	goto retry;
-	
-}
 
+	spin_lock(&inode_lock);
+	do {
+		if (counter <= max_reserved)
+			counter = max_reserved + 1;
+		res = counter++;
+		head = inode_hashtable + hash(sb, res);
+		inode = find_inode_fast(sb, head, res);
+	} while (inode != NULL);
+	spin_unlock(&inode_lock);
+
+	return res;
+}
 EXPORT_SYMBOL(iunique);
 
 struct inode *igrab(struct inode *inode)
@@ -1043,10 +1085,10 @@ static void generic_forget_inode(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 
 	if (!hlist_unhashed(&inode->i_hash)) {
-		if (!(inode->i_state & (I_DIRTY|I_LOCK)))
+		if (!(inode->i_state & (I_DIRTY|I_SYNC)))
 			list_move(&inode->i_list, &inode_unused);
 		inodes_stat.nr_unused++;
-		if (!sb || (sb->s_flags & MS_ACTIVE)) {
+		if (sb->s_flags & MS_ACTIVE) {
 			spin_unlock(&inode_lock);
 			return;
 		}
@@ -1286,15 +1328,6 @@ static void __wait_on_freeing_inode(struct inode *inode)
 	spin_lock(&inode_lock);
 }
 
-void wake_up_inode(struct inode *inode)
-{
-	/*
-	 * Prevent speculative execution through spin_unlock(&inode_lock);
-	 */
-	smp_mb();
-	wake_up_bit(&inode->i_state, __I_LOCK);
-}
-
 /*
  * We rarely want to lock two inodes that do not have a parent/child
  * relationship (such as directory, child inode) simultaneously. The
@@ -1368,7 +1401,7 @@ void __init inode_init_early(void)
 		INIT_HLIST_HEAD(&inode_hashtable[loop]);
 }
 
-void __init inode_init(unsigned long mempages)
+void __init inode_init(void)
 {
 	int loop;
 
@@ -1378,9 +1411,8 @@ void __init inode_init(unsigned long mempages)
 					 0,
 					 (SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
 					 SLAB_MEM_SPREAD),
-					 init_once,
-					 NULL);
-	set_shrinker(DEFAULT_SEEKS, shrink_icache_memory);
+					 init_once);
+	register_shrinker(&icache_shrinker);
 
 	/* Hash may have been set up in inode_init_early */
 	if (!hashdist)

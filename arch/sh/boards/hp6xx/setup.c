@@ -2,14 +2,16 @@
  * linux/arch/sh/boards/hp6xx/setup.c
  *
  * Copyright (C) 2002 Andriy Skulysh
+ * Copyright (C) 2007 Kristoffer Ericson <Kristoffer_e1@hotmail.com>
  *
  * May be copied or modified under the terms of the GNU General Public
  * License.  See linux/COPYING for more information.
  *
- * Setup code for an HP680  (internal peripherials only)
+ * Setup code for HP620/HP660/HP680/HP690 (internal peripherials only)
  */
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/platform_device.h>
 #include <asm/hd64461.h>
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -17,7 +19,53 @@
 #include <asm/cpu/dac.h>
 
 #define	SCPCR	0xa4000116
-#define SCPDR	0xa4000136
+#define	SCPDR	0xa4000136
+
+/* CF Slot */
+static struct resource cf_ide_resources[] = {
+	[0] = {
+		.start = 0x15000000 + 0x1f0,
+		.end   = 0x15000000 + 0x1f0 + 0x08 - 0x01,
+		.flags = IORESOURCE_MEM,
+	},
+	[1] = {
+		.start = 0x15000000 + 0x1fe,
+		.end   = 0x15000000 + 0x1fe + 0x01,
+		.flags = IORESOURCE_MEM,
+	},
+	[2] = {
+		.start = 77,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device cf_ide_device = {
+	.name		=  "pata_platform",
+	.id		=  -1,
+	.num_resources	= ARRAY_SIZE(cf_ide_resources),
+	.resource	= cf_ide_resources,
+};
+
+static struct platform_device jornadakbd_device = {
+	.name		= "jornada680_kbd",
+	.id		= -1,
+};
+
+static struct platform_device *hp6xx_devices[] __initdata = {
+	&cf_ide_device,
+	&jornadakbd_device,
+};
+
+static void __init hp6xx_init_irq(void)
+{
+	/* Gets touchscreen and powerbutton IRQ working */
+	plat_irq_setup_pins(IRQ_MODE_IRQ);
+}
+
+static int __init hp6xx_devices_setup(void)
+{
+	return platform_add_devices(hp6xx_devices, ARRAY_SIZE(hp6xx_devices));
+}
 
 static void __init hp6xx_setup(char **cmdline_p)
 {
@@ -25,11 +73,11 @@ static void __init hp6xx_setup(char **cmdline_p)
 	u16 v;
 
 	v = inw(HD64461_STBCR);
-	v |= HD64461_STBCR_SURTST | HD64461_STBCR_SIRST |
-	    HD64461_STBCR_STM1ST | HD64461_STBCR_STM0ST |
-	    HD64461_STBCR_SAFEST | HD64461_STBCR_SPC0ST |
-	    HD64461_STBCR_SMIAST | HD64461_STBCR_SAFECKE_OST |
-	    HD64461_STBCR_SAFECKE_IST;
+	v |=	HD64461_STBCR_SURTST | HD64461_STBCR_SIRST	|
+		HD64461_STBCR_STM1ST | HD64461_STBCR_STM0ST	|
+		HD64461_STBCR_SAFEST | HD64461_STBCR_SPC0ST	|
+		HD64461_STBCR_SMIAST | HD64461_STBCR_SAFECKE_OST|
+		HD64461_STBCR_SAFECKE_IST;
 #ifndef CONFIG_HD64461_ENABLER
 	v |= HD64461_STBCR_SPC1ST;
 #endif
@@ -60,41 +108,14 @@ static void __init hp6xx_setup(char **cmdline_p)
 	v |= SCPCR_TS_ENABLE;
 	ctrl_outw(v, SCPCR);
 }
+device_initcall(hp6xx_devices_setup);
 
-/*
- * XXX: This is stupid, we should have a generic machine vector for the cchips
- * and just wrap the platform setup code in to this, as it's the only thing
- * that ends up being different.
- */
-struct sh_machine_vector mv_hp6xx __initmv = {
+static struct sh_machine_vector mv_hp6xx __initmv = {
 	.mv_name = "hp6xx",
 	.mv_setup = hp6xx_setup,
-	.mv_nr_irqs = HD64461_IRQBASE + HD64461_IRQ_NUM,
-
-	.mv_inb = hd64461_inb,
-	.mv_inw = hd64461_inw,
-	.mv_inl = hd64461_inl,
-	.mv_outb = hd64461_outb,
-	.mv_outw = hd64461_outw,
-	.mv_outl = hd64461_outl,
-
-	.mv_inb_p = hd64461_inb_p,
-	.mv_inw_p = hd64461_inw,
-	.mv_inl_p = hd64461_inl,
-	.mv_outb_p = hd64461_outb_p,
-	.mv_outw_p = hd64461_outw,
-	.mv_outl_p = hd64461_outl,
-
-	.mv_insb = hd64461_insb,
-	.mv_insw = hd64461_insw,
-	.mv_insl = hd64461_insl,
-	.mv_outsb = hd64461_outsb,
-	.mv_outsw = hd64461_outsw,
-	.mv_outsl = hd64461_outsl,
-
-	.mv_readw = hd64461_readw,
-	.mv_writew = hd64461_writew,
-
+	/* IRQ's : CPU(64) + CCHIP(16) + FREE_TO_USE(6) */
+	.mv_nr_irqs = HD64461_IRQBASE + HD64461_IRQ_NUM + 6,
 	.mv_irq_demux = hd64461_irq_demux,
+	/* Enable IRQ0 -> IRQ3 in IRQ_MODE */
+	.mv_init_irq = hp6xx_init_irq,
 };
-ALIAS_MV(hp6xx)

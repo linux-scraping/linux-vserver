@@ -43,8 +43,6 @@ extern struct task_struct *sh64_switch_to(struct task_struct *prev,
 
 #define xchg(ptr,x) ((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
 
-#define tas(ptr) (xchg((ptr), 1))
-
 extern void __xchg_called_with_bad_pointer(void);
 
 #define mb()	__asm__ __volatile__ ("synco": : :"memory")
@@ -64,8 +62,7 @@ extern void __xchg_called_with_bad_pointer(void);
 #define smp_read_barrier_depends()	do { } while (0)
 #endif /* CONFIG_SMP */
 
-#define set_rmb(var, value) do { (void)xchg(&var, value); } while (0)
-#define set_mb(var, value) set_rmb(var, value)
+#define set_mb(var, value) do { (void)xchg(&var, value); } while (0)
 
 /* Interrupt Control */
 #ifndef HARD_CLI

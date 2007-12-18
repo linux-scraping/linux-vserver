@@ -21,17 +21,17 @@
 
 #include <linux/module.h>
 #include <linux/skbuff.h>
+#include <net/netfilter/nf_conntrack.h>
+#include <linux/netfilter/x_tables.h>
+#include <linux/netfilter/xt_connmark.h>
 
-MODULE_AUTHOR("Henrik Nordstrom <hno@marasytems.com>");
+MODULE_AUTHOR("Henrik Nordstrom <hno@marasystems.com>");
 MODULE_DESCRIPTION("IP tables connmark match module");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("ipt_connmark");
+MODULE_ALIAS("ip6t_connmark");
 
-#include <linux/netfilter/x_tables.h>
-#include <linux/netfilter/xt_connmark.h>
-#include <net/netfilter/nf_conntrack_compat.h>
-
-static int
+static bool
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
@@ -39,36 +39,38 @@ match(const struct sk_buff *skb,
       const void *matchinfo,
       int offset,
       unsigned int protoff,
-      int *hotdrop)
+      bool *hotdrop)
 {
 	const struct xt_connmark_info *info = matchinfo;
-	u_int32_t ctinfo;
-	const u_int32_t *ctmark = nf_ct_get_mark(skb, &ctinfo);
-	if (!ctmark)
-		return 0;
+	const struct nf_conn *ct;
+	enum ip_conntrack_info ctinfo;
 
-	return (((*ctmark) & info->mask) == info->mark) ^ info->invert;
+	ct = nf_ct_get(skb, &ctinfo);
+	if (!ct)
+		return false;
+
+	return ((ct->mark & info->mask) == info->mark) ^ info->invert;
 }
 
-static int
+static bool
 checkentry(const char *tablename,
 	   const void *ip,
 	   const struct xt_match *match,
 	   void *matchinfo,
 	   unsigned int hook_mask)
 {
-	struct xt_connmark_info *cm = matchinfo;
+	const struct xt_connmark_info *cm = matchinfo;
 
 	if (cm->mark > 0xffffffff || cm->mask > 0xffffffff) {
 		printk(KERN_WARNING "connmark: only support 32bit mark\n");
-		return 0;
+		return false;
 	}
 	if (nf_ct_l3proto_try_module_get(match->family) < 0) {
 		printk(KERN_WARNING "can't load conntrack support for "
 				    "proto=%d\n", match->family);
-		return 0;
+		return false;
 	}
-	return 1;
+	return true;
 }
 
 static void
@@ -87,7 +89,7 @@ struct compat_xt_connmark_info {
 
 static void compat_from_user(void *dst, void *src)
 {
-	struct compat_xt_connmark_info *cm = src;
+	const struct compat_xt_connmark_info *cm = src;
 	struct xt_connmark_info m = {
 		.mark	= cm->mark,
 		.mask	= cm->mask,
@@ -98,7 +100,7 @@ static void compat_from_user(void *dst, void *src)
 
 static int compat_to_user(void __user *dst, void *src)
 {
-	struct xt_connmark_info *m = src;
+	const struct xt_connmark_info *m = src;
 	struct compat_xt_connmark_info cm = {
 		.mark	= m->mark,
 		.mask	= m->mask,
@@ -108,7 +110,7 @@ static int compat_to_user(void __user *dst, void *src)
 }
 #endif /* CONFIG_COMPAT */
 
-static struct xt_match xt_connmark_match[] = {
+static struct xt_match xt_connmark_match[] __read_mostly = {
 	{
 		.name		= "connmark",
 		.family		= AF_INET,

@@ -12,23 +12,13 @@
 #include <asm/titan.h>
 #include <asm/io.h>
 
-static struct ipr_data titan_ipr_map[] = {
-	/* IRQ, IPR idx, shift, prio */
-	{ TITAN_IRQ_WAN,   3, 12, 8 },	/* eth0 (WAN) */
-	{ TITAN_IRQ_LAN,   3,  8, 8 },	/* eth1 (LAN) */
-	{ TITAN_IRQ_MPCIA, 3,  4, 8 },	/* mPCI A (top) */
-	{ TITAN_IRQ_USB,   3,  0, 8 },	/* mPCI B (bottom), USB */
-};
-
 static void __init init_titan_irq(void)
 {
 	/* enable individual interrupt mode for externals */
-	ipr_irq_enable_irlm();
-	/* register ipr irqs */
-	make_ipr_irq(titan_ipr_map, ARRAY_SIZE(titan_ipr_map));
+	plat_irq_setup_pins(IRQ_MODE_IRQ);
 }
 
-struct sh_machine_vector mv_titan __initmv = {
+static struct sh_machine_vector mv_titan __initmv = {
 	.mv_name =	"Titan",
 
 	.mv_inb =	titan_inb,
@@ -52,4 +42,3 @@ struct sh_machine_vector mv_titan __initmv = {
 
 	.mv_init_irq =	init_titan_irq,
 };
-ALIAS_MV(titan)

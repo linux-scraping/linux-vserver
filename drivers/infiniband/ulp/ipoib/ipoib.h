@@ -41,7 +41,6 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/workqueue.h>
-#include <linux/pci.h>
 #include <linux/kref.h>
 #include <linux/if_infiniband.h>
 #include <linux/mutex.h>
@@ -85,8 +84,8 @@ enum {
 	IPOIB_MCAST_RUN 	  = 6,
 	IPOIB_STOP_REAPER         = 7,
 	IPOIB_MCAST_STARTED       = 8,
-	IPOIB_FLAG_NETIF_STOPPED  = 9,
-	IPOIB_FLAG_ADMIN_CM 	  = 10,
+	IPOIB_FLAG_ADMIN_CM 	  = 9,
+	IPOIB_FLAG_UMCAST	  = 10,
 
 	IPOIB_MAX_BACKOFF_SECONDS = 16,
 
@@ -98,9 +97,9 @@ enum {
 
 #define	IPOIB_OP_RECV   (1ul << 31)
 #ifdef CONFIG_INFINIBAND_IPOIB_CM
-#define	IPOIB_CM_OP_SRQ (1ul << 30)
+#define	IPOIB_OP_CM     (1ul << 30)
 #else
-#define	IPOIB_CM_OP_SRQ (0)
+#define	IPOIB_OP_CM     (0)
 #endif
 
 /* structs */
@@ -114,7 +113,27 @@ struct ipoib_pseudoheader {
 	u8  hwaddr[INFINIBAND_ALEN];
 };
 
-struct ipoib_mcast;
+/* Used for all multicast joins (broadcast, IPv4 mcast and IPv6 mcast) */
+struct ipoib_mcast {
+	struct ib_sa_mcmember_rec mcmember;
+	struct ib_sa_multicast	 *mc;
+	struct ipoib_ah          *ah;
+
+	struct rb_node    rb_node;
+	struct list_head  list;
+
+	unsigned long created;
+	unsigned long backoff;
+
+	unsigned long flags;
+	unsigned char logcount;
+
+	struct list_head  neigh_list;
+
+	struct sk_buff_head pkt_queue;
+
+	struct net_device *dev;
+};
 
 struct ipoib_rx_buf {
 	struct sk_buff *skb;
@@ -133,17 +152,50 @@ struct ipoib_cm_data {
 	__be32 mtu;
 };
 
+/*
+ * Quoting 10.3.1 Queue Pair and EE Context States:
+ *
+ * Note, for QPs that are associated with an SRQ, the Consumer should take the
+ * QP through the Error State before invoking a Destroy QP or a Modify QP to the
+ * Reset State.  The Consumer may invoke the Destroy QP without first performing
+ * a Modify QP to the Error State and waiting for the Affiliated Asynchronous
+ * Last WQE Reached Event. However, if the Consumer does not wait for the
+ * Affiliated Asynchronous Last WQE Reached Event, then WQE and Data Segment
+ * leakage may occur. Therefore, it is good programming practice to tear down a
+ * QP that is associated with an SRQ by using the following process:
+ *
+ * - Put the QP in the Error State
+ * - Wait for the Affiliated Asynchronous Last WQE Reached Event;
+ * - either:
+ *       drain the CQ by invoking the Poll CQ verb and either wait for CQ
+ *       to be empty or the number of Poll CQ operations has exceeded
+ *       CQ capacity size;
+ * - or
+ *       post another WR that completes on the same CQ and wait for this
+ *       WR to return as a WC;
+ * - and then invoke a Destroy QP or Reset QP.
+ *
+ * We use the second option and wait for a completion on the
+ * same CQ before destroying QPs attached to our SRQ.
+ */
+
+enum ipoib_cm_state {
+	IPOIB_CM_RX_LIVE,
+	IPOIB_CM_RX_ERROR, /* Ignored by stale task */
+	IPOIB_CM_RX_FLUSH  /* Last WQE Reached event observed */
+};
+
 struct ipoib_cm_rx {
 	struct ib_cm_id     *id;
 	struct ib_qp        *qp;
 	struct list_head     list;
 	struct net_device   *dev;
 	unsigned long        jiffies;
+	enum ipoib_cm_state  state;
 };
 
 struct ipoib_cm_tx {
 	struct ib_cm_id     *id;
-	struct ib_cq        *cq;
 	struct ib_qp        *qp;
 	struct list_head     list;
 	struct net_device   *dev;
@@ -166,10 +218,15 @@ struct ipoib_cm_dev_priv {
 	struct ib_srq  	       *srq;
 	struct ipoib_cm_rx_buf *srq_ring;
 	struct ib_cm_id        *id;
-	struct list_head        passive_ids;
+	struct list_head        passive_ids;   /* state: LIVE */
+	struct list_head        rx_error_list; /* state: ERROR */
+	struct list_head        rx_flush_list; /* state: FLUSH, drain not started */
+	struct list_head        rx_drain_list; /* state: FLUSH, drain started */
+	struct list_head        rx_reap_list;  /* state: FLUSH, drain done */
 	struct work_struct      start_task;
 	struct work_struct      reap_task;
 	struct work_struct      skb_task;
+	struct work_struct      rx_reap_task;
 	struct delayed_work     stale_task;
 	struct sk_buff_head     skb_queue;
 	struct list_head        start_list;
@@ -190,6 +247,8 @@ struct ipoib_dev_priv {
 
 	struct net_device *dev;
 
+	struct napi_struct napi;
+
 	unsigned long flags;
 
 	struct mutex mcast_mutex;
@@ -202,15 +261,17 @@ struct ipoib_dev_priv {
 	struct list_head multicast_list;
 	struct rb_root multicast_tree;
 
-	struct delayed_work pkey_task;
+	struct delayed_work pkey_poll_task;
 	struct delayed_work mcast_task;
 	struct work_struct flush_task;
 	struct work_struct restart_task;
 	struct delayed_work ah_reap_task;
+	struct work_struct pkey_event_task;
 
 	struct ib_device *ca;
 	u8            	  port;
 	u16           	  pkey;
+	u16               pkey_index;
 	struct ib_pd  	 *pd;
 	struct ib_mr  	 *mr;
 	struct ib_cq  	 *cq;
@@ -231,14 +292,13 @@ struct ipoib_dev_priv {
 	unsigned             tx_tail;
 	struct ib_sge        tx_sge;
 	struct ib_send_wr    tx_wr;
+	unsigned             tx_outstanding;
 
 	struct ib_wc ibwc[IPOIB_NUM_WC];
 
 	struct list_head dead_ahs;
 
 	struct ib_event_handler event_handler;
-
-	struct net_device_stats stats;
 
 	struct net_device *parent;
 	struct list_head child_intfs;
@@ -288,6 +348,7 @@ struct ipoib_neigh {
 	struct sk_buff_head queue;
 
 	struct neighbour   *neighbour;
+	struct net_device *dev;
 
 	struct list_head    list;
 };
@@ -304,13 +365,15 @@ static inline struct ipoib_neigh **to_ipoib_neigh(struct neighbour *neigh)
 				     INFINIBAND_ALEN, sizeof(void *));
 }
 
-struct ipoib_neigh *ipoib_neigh_alloc(struct neighbour *neigh);
+struct ipoib_neigh *ipoib_neigh_alloc(struct neighbour *neigh,
+				      struct net_device *dev);
 void ipoib_neigh_free(struct net_device *dev, struct ipoib_neigh *neigh);
 
 extern struct workqueue_struct *ipoib_workqueue;
 
 /* functions */
 
+int ipoib_poll(struct napi_struct *napi, int budget);
 void ipoib_ib_completion(struct ib_cq *cq, void *dev_ptr);
 
 struct ipoib_ah *ipoib_create_ah(struct net_device *dev,
@@ -323,6 +386,7 @@ static inline void ipoib_put_ah(struct ipoib_ah *ah)
 
 int ipoib_open(struct net_device *dev);
 int ipoib_add_pkey_attr(struct net_device *dev);
+int ipoib_add_umcast_attr(struct net_device *dev);
 
 void ipoib_send(struct net_device *dev, struct sk_buff *skb,
 		struct ipoib_ah *address, u32 qpn);
@@ -333,12 +397,13 @@ struct ipoib_dev_priv *ipoib_intf_alloc(const char *format);
 
 int ipoib_ib_dev_init(struct net_device *dev, struct ib_device *ca, int port);
 void ipoib_ib_dev_flush(struct work_struct *work);
+void ipoib_pkey_event(struct work_struct *work);
 void ipoib_ib_dev_cleanup(struct net_device *dev);
 
 int ipoib_ib_dev_open(struct net_device *dev);
 int ipoib_ib_dev_up(struct net_device *dev);
 int ipoib_ib_dev_down(struct net_device *dev, int flush);
-int ipoib_ib_dev_stop(struct net_device *dev);
+int ipoib_ib_dev_stop(struct net_device *dev, int flush);
 
 int ipoib_dev_init(struct net_device *dev, struct ib_device *ca, int port);
 void ipoib_dev_cleanup(struct net_device *dev);
@@ -386,6 +451,7 @@ int ipoib_vlan_delete(struct net_device *pdev, unsigned short pkey);
 
 void ipoib_pkey_poll(struct work_struct *work);
 int ipoib_pkey_dev_delay_open(struct net_device *dev);
+void ipoib_drain_cq(struct net_device *dev);
 
 #ifdef CONFIG_INFINIBAND_IPOIB_CM
 
@@ -437,6 +503,7 @@ void ipoib_cm_destroy_tx(struct ipoib_cm_tx *tx);
 void ipoib_cm_skb_too_long(struct net_device* dev, struct sk_buff *skb,
 			   unsigned int mtu);
 void ipoib_cm_handle_rx_wc(struct net_device *dev, struct ib_wc *wc);
+void ipoib_cm_handle_tx_wc(struct net_device *dev, struct ib_wc *wc);
 #else
 
 struct ipoib_cm_tx;
@@ -525,6 +592,9 @@ static inline void ipoib_cm_handle_rx_wc(struct net_device *dev, struct ib_wc *w
 {
 }
 
+static inline void ipoib_cm_handle_tx_wc(struct net_device *dev, struct ib_wc *wc)
+{
+}
 #endif
 
 #ifdef CONFIG_INFINIBAND_IPOIB_DEBUG

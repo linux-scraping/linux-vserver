@@ -1,15 +1,14 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
  *
- * $Id: debug.h,v 1.21 2005/11/07 11:14:39 gleixner Exp $
- *
  */
+
 #ifndef _JFFS2_DEBUG_H_
 #define _JFFS2_DEBUG_H_
 
@@ -81,28 +80,28 @@
 #define JFFS2_ERROR(fmt, ...)						\
 	do {								\
 		printk(JFFS2_ERR_MSG_PREFIX				\
-			" (%d) %s: " fmt, current->pid,			\
+			" (%d) %s: " fmt, task_pid_nr(current),		\
 			__FUNCTION__ , ##__VA_ARGS__);			\
 	} while(0)
 
 #define JFFS2_WARNING(fmt, ...)						\
 	do {								\
 		printk(JFFS2_WARN_MSG_PREFIX				\
-			" (%d) %s: " fmt, current->pid,			\
+			" (%d) %s: " fmt, task_pid_nr(current),		\
 			__FUNCTION__ , ##__VA_ARGS__);			\
 	} while(0)
 
 #define JFFS2_NOTICE(fmt, ...)						\
 	do {								\
 		printk(JFFS2_NOTICE_MSG_PREFIX				\
-			" (%d) %s: " fmt, current->pid,			\
+			" (%d) %s: " fmt, task_pid_nr(current),		\
 			__FUNCTION__ , ##__VA_ARGS__);			\
 	} while(0)
 
 #define JFFS2_DEBUG(fmt, ...)						\
 	do {								\
 		printk(JFFS2_DBG_MSG_PREFIX				\
-			" (%d) %s: " fmt, current->pid,			\
+			" (%d) %s: " fmt, task_pid_nr(current),		\
 			__FUNCTION__ , ##__VA_ARGS__);			\
 	} while(0)
 

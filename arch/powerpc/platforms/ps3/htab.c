@@ -29,23 +29,23 @@
 #include "platform.h"
 
 #if defined(DEBUG)
-#define DBG(fmt...) udbg_printf(fmt)
+#define DBG udbg_printf
 #else
-#define DBG(fmt...) do{if(0)printk(fmt);}while(0)
+#define DBG pr_debug
 #endif
 
-static hpte_t *htab;
+static struct hash_pte *htab;
 static unsigned long htab_addr;
 static unsigned char *bolttab;
 static unsigned char *inusetab;
 
-static spinlock_t ps3_bolttab_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(ps3_bolttab_lock);
 
 #define debug_dump_hpte(_a, _b, _c, _d, _e, _f, _g) \
 	_debug_dump_hpte(_a, _b, _c, _d, _e, _f, _g, __func__, __LINE__)
 static void _debug_dump_hpte(unsigned long pa, unsigned long va,
-	unsigned long group, unsigned long bitmap, hpte_t lhpte, int psize,
-	unsigned long slot, const char* func, int line)
+	unsigned long group, unsigned long bitmap, struct hash_pte lhpte,
+	int psize, unsigned long slot, const char* func, int line)
 {
 	DBG("%s:%d: pa     = %lxh\n", func, line, pa);
 	DBG("%s:%d: lpar   = %lxh\n", func, line,
@@ -60,10 +60,11 @@ static void _debug_dump_hpte(unsigned long pa, unsigned long va,
 }
 
 static long ps3_hpte_insert(unsigned long hpte_group, unsigned long va,
-	unsigned long pa, unsigned long rflags, unsigned long vflags, int psize)
+	unsigned long pa, unsigned long rflags, unsigned long vflags,
+	int psize, int ssize)
 {
 	unsigned long slot;
-	hpte_t lhpte;
+	struct hash_pte lhpte;
 	int secondary = 0;
 	unsigned long result;
 	unsigned long bitmap;
@@ -72,7 +73,8 @@ static long ps3_hpte_insert(unsigned long hpte_group, unsigned long va,
 
 	vflags &= ~HPTE_V_SECONDARY; /* this bit is ignored */
 
-	lhpte.v = hpte_encode_v(va, psize) | vflags | HPTE_V_VALID;
+	lhpte.v = hpte_encode_v(va, psize, MMU_SEGSIZE_256M) |
+		vflags | HPTE_V_VALID;
 	lhpte.r = hpte_encode_r(ps3_mm_phys_to_lpar(pa), psize) | rflags;
 
 	p_pteg = hpte_group / HPTES_PER_GROUP;
@@ -167,14 +169,14 @@ static long ps3_hpte_remove(unsigned long hpte_group)
 }
 
 static long ps3_hpte_updatepp(unsigned long slot, unsigned long newpp,
-	unsigned long va, int psize, int local)
+	unsigned long va, int psize, int ssize, int local)
 {
 	unsigned long flags;
 	unsigned long result;
 	unsigned long pteg, bit;
 	unsigned long hpte_v, want_v;
 
-	want_v = hpte_encode_v(va, psize);
+	want_v = hpte_encode_v(va, psize, MMU_SEGSIZE_256M);
 
 	spin_lock_irqsave(&ps3_bolttab_lock, flags);
 
@@ -205,13 +207,13 @@ static long ps3_hpte_updatepp(unsigned long slot, unsigned long newpp,
 }
 
 static void ps3_hpte_updateboltedpp(unsigned long newpp, unsigned long ea,
-	int psize)
+	int psize, int ssize)
 {
 	panic("ps3_hpte_updateboltedpp() not implemented");
 }
 
 static void ps3_hpte_invalidate(unsigned long slot, unsigned long va,
-	int psize, int local)
+	int psize, int ssize, int local)
 {
 	unsigned long flags;
 	unsigned long result;
@@ -234,10 +236,17 @@ static void ps3_hpte_invalidate(unsigned long slot, unsigned long va,
 
 static void ps3_hpte_clear(void)
 {
-	/* Make sure to clean up the frame buffer device first */
-	ps3fb_cleanup();
+	int result;
 
-	lv1_unmap_htab(htab_addr);
+	DBG(" -> %s:%d\n", __func__, __LINE__);
+
+	result = lv1_unmap_htab(htab_addr);
+	BUG_ON(result);
+
+	ps3_mm_shutdown();
+	ps3_mm_vas_destroy();
+
+	DBG(" <- %s:%d\n", __func__, __LINE__);
 }
 
 void __init ps3_hpte_init(unsigned long htab_size)
@@ -255,7 +264,7 @@ void __init ps3_hpte_init(unsigned long htab_size)
 
 	ppc64_pft_size = __ilog2(htab_size);
 
-	bitmap_size = htab_size / sizeof(hpte_t) / 8;
+	bitmap_size = htab_size / sizeof(struct hash_pte) / 8;
 
 	bolttab = __va(lmb_alloc(bitmap_size, 1));
 	inusetab = __va(lmb_alloc(bitmap_size, 1));
@@ -273,7 +282,8 @@ void __init ps3_map_htab(void)
 
 	result = lv1_map_htab(0, &htab_addr);
 
-	htab = (hpte_t *)__ioremap(htab_addr, htab_size, PAGE_READONLY_X);
+	htab = (__force struct hash_pte *)ioremap_flags(htab_addr, htab_size,
+					    pgprot_val(PAGE_READONLY_X));
 
 	DBG("%s:%d: lpar %016lxh, virt %016lxh\n", __func__, __LINE__,
 		htab_addr, (unsigned long)htab);

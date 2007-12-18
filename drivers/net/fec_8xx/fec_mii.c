@@ -19,7 +19,6 @@
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
@@ -309,12 +308,11 @@ int fec_mii_phy_id_detect(struct net_device *dev)
 		return -1;
 	}
 
-	for (i = 0, phy = phy_info; i < sizeof(phy_info) / sizeof(phy_info[0]);
-	     i++, phy++)
+	for (i = 0, phy = phy_info; i < ARRAY_SIZE(phy_info); i++, phy++)
 		if (phy->id == (phy_hwid >> 4) || phy->id == 0)
 			break;
 
-	if (i >= sizeof(phy_info) / sizeof(phy_info[0])) {
+	if (i >= ARRAY_SIZE(phy_info)) {
 		printk(KERN_ERR DRV_MODULE_NAME
 		       ": %s PHY id 0x%08x is not supported!\n",
 		       dev->name, phy_hwid);

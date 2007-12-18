@@ -297,15 +297,7 @@ static struct snd_kcontrol_new capture_source_control = {
 	.put = onyx_snd_capture_source_put,
 };
 
-static int onyx_snd_mute_info(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define onyx_snd_mute_info	snd_ctl_boolean_stereo_info
 
 static int onyx_snd_mute_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -359,15 +351,7 @@ static struct snd_kcontrol_new mute_control = {
 };
 
 
-static int onyx_snd_single_bit_info(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define onyx_snd_single_bit_info	snd_ctl_boolean_mono_info
 
 #define FLAG_POLARITY_INVERT	1
 #define FLAG_SPDIFLOCK		2
@@ -661,7 +645,7 @@ static struct transfer_info onyx_transfers[] = {
 		.tag = 2,
 	},
 #ifdef SNDRV_PCM_FMTBIT_COMPRESSED_16BE
-Once alsa gets supports for this kind of thing we can add it...
+	/* Once alsa gets supports for this kind of thing we can add it... */
 	{
 		/* digital compressed output */
 		.formats =  SNDRV_PCM_FMTBIT_COMPRESSED_16BE,
@@ -713,7 +697,7 @@ static int onyx_prepare(struct codec_info_item *cii,
 	if (substream->runtime->format == SNDRV_PCM_FMTBIT_COMPRESSED_16BE) {
 		/* mute and lock analog output */
 		onyx_read_register(onyx, ONYX_REG_DAC_CONTROL, &v);
-		if (onyx_write_register(onyx
+		if (onyx_write_register(onyx,
 					ONYX_REG_DAC_CONTROL,
 					v | ONYX_MUTE_RIGHT | ONYX_MUTE_LEFT))
 			goto out_unlock;
@@ -1018,7 +1002,7 @@ static int onyx_create(struct i2c_adapter *adapter,
 	onyx->i2c.driver = &onyx_driver;
 	onyx->i2c.adapter = adapter;
 	onyx->i2c.addr = addr & 0x7f;
-	strlcpy(onyx->i2c.name, "onyx audio codec", I2C_NAME_SIZE-1);
+	strlcpy(onyx->i2c.name, "onyx audio codec", I2C_NAME_SIZE);
 
 	if (i2c_attach_client(&onyx->i2c)) {
 		printk(KERN_ERR PFX "failed to attach to i2c\n");
@@ -1033,7 +1017,7 @@ static int onyx_create(struct i2c_adapter *adapter,
 		goto fail;
 	}
 
-	strlcpy(onyx->codec.name, "onyx", MAX_CODEC_NAME_LEN-1);
+	strlcpy(onyx->codec.name, "onyx", MAX_CODEC_NAME_LEN);
 	onyx->codec.owner = THIS_MODULE;
 	onyx->codec.init = onyx_init_codec;
 	onyx->codec.exit = onyx_exit_codec;
@@ -1061,10 +1045,10 @@ static int onyx_i2c_attach(struct i2c_adapter *adapter)
 	busnode = pmac_i2c_get_bus_node(bus);
 
 	while ((dev = of_get_next_child(busnode, dev)) != NULL) {
-		if (device_is_compatible(dev, "pcm3052")) {
-			u32 *addr;
+		if (of_device_is_compatible(dev, "pcm3052")) {
+			const u32 *addr;
 			printk(KERN_DEBUG PFX "found pcm3052\n");
-			addr = (u32 *) get_property(dev, "reg", NULL);
+			addr = of_get_property(dev, "reg", NULL);
 			if (!addr)
 				return -ENODEV;
 			return onyx_create(adapter, dev, (*addr)>>1);
@@ -1074,7 +1058,7 @@ static int onyx_i2c_attach(struct i2c_adapter *adapter)
 	/* if that didn't work, try desperate mode for older
 	 * machines that have stuff missing from the device tree */
 	
-	if (!device_is_compatible(busnode, "k2-i2c"))
+	if (!of_device_is_compatible(busnode, "k2-i2c"))
 		return -ENODEV;
 
 	printk(KERN_DEBUG PFX "found k2-i2c, checking if onyx chip is on it\n");

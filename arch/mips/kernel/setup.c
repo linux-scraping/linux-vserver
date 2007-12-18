@@ -20,6 +20,7 @@
 #include <linux/highmem.h>
 #include <linux/console.h>
 #include <linux/pfn.h>
+#include <linux/debugfs.h>
 
 #include <asm/addrspace.h>
 #include <asm/bootinfo.h>
@@ -50,10 +51,8 @@ EXPORT_SYMBOL(PCI_DMA_BUS_IS_PHYS);
  * These are initialized so they are in the .data section
  */
 unsigned long mips_machtype __read_mostly = MACH_UNKNOWN;
-unsigned long mips_machgroup __read_mostly = MACH_GROUP_UNKNOWN;
 
 EXPORT_SYMBOL(mips_machtype);
-EXPORT_SYMBOL(mips_machgroup);
 
 struct boot_mem_map boot_mem_map;
 
@@ -574,3 +573,18 @@ __setup("nodsp", dsp_disable);
 
 unsigned long kernelsp[NR_CPUS];
 unsigned long fw_arg0, fw_arg1, fw_arg2, fw_arg3;
+
+#ifdef CONFIG_DEBUG_FS
+struct dentry *mips_debugfs_dir;
+static int __init debugfs_mips(void)
+{
+	struct dentry *d;
+
+	d = debugfs_create_dir("mips", NULL);
+	if (IS_ERR(d))
+		return PTR_ERR(d);
+	mips_debugfs_dir = d;
+	return 0;
+}
+arch_initcall(debugfs_mips);
+#endif

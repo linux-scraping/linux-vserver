@@ -9,6 +9,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/genhd.h>
+#include <net/net_namespace.h>
 #include <asm/unaligned.h>
 #include "aoe.h"
 
@@ -27,7 +28,8 @@ new_skb(ulong len)
 
 	skb = alloc_skb(len, GFP_ATOMIC);
 	if (skb) {
-		skb->nh.raw = skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
+		skb_reset_network_header(skb);
 		skb->protocol = __constant_htons(ETH_P_AOE);
 		skb->priority = 0;
 		skb->next = skb->prev = NULL;
@@ -118,7 +120,7 @@ aoecmd_ata_rw(struct aoedev *d, struct frame *f)
 
 	/* initialize the headers & frame */
 	skb = f->skb;
-	h = (struct aoe_hdr *) skb->mac.raw;
+	h = (struct aoe_hdr *) skb_mac_header(skb);
 	ah = (struct aoe_atahdr *) (h+1);
 	skb_put(skb, sizeof *h + sizeof *ah);
 	memset(h, 0, skb->len);
@@ -193,21 +195,21 @@ aoecmd_cfg_pkts(ushort aoemajor, unsigned char aoeminor, struct sk_buff **tail)
 	sl = sl_tail = NULL;
 
 	read_lock(&dev_base_lock);
-	for (ifp = dev_base; ifp; dev_put(ifp), ifp = ifp->next) {
+	for_each_netdev(&init_net, ifp) {
 		dev_hold(ifp);
 		if (!is_aoe_netif(ifp))
-			continue;
+			goto cont;
 
 		skb = new_skb(sizeof *h + sizeof *ch);
 		if (skb == NULL) {
 			printk(KERN_INFO "aoe: skb alloc failure\n");
-			continue;
+			goto cont;
 		}
 		skb_put(skb, sizeof *h + sizeof *ch);
 		skb->dev = ifp;
 		if (sl_tail == NULL)
 			sl_tail = skb;
-		h = (struct aoe_hdr *) skb->mac.raw;
+		h = (struct aoe_hdr *) skb_mac_header(skb);
 		memset(h, 0, sizeof *h + sizeof *ch);
 
 		memset(h->dst, 0xff, sizeof h->dst);
@@ -220,6 +222,8 @@ aoecmd_cfg_pkts(ushort aoemajor, unsigned char aoeminor, struct sk_buff **tail)
 
 		skb->next = sl;
 		sl = skb;
+cont:
+		dev_put(ifp);
 	}
 	read_unlock(&dev_base_lock);
 
@@ -300,7 +304,7 @@ rexmit(struct aoedev *d, struct frame *f)
 	aoechr_error(buf);
 
 	skb = f->skb;
-	h = (struct aoe_hdr *) skb->mac.raw;
+	h = (struct aoe_hdr *) skb_mac_header(skb);
 	ah = (struct aoe_atahdr *) (h+1);
 	f->tag = n;
 	h->tag = cpu_to_be32(n);
@@ -529,7 +533,7 @@ aoecmd_ata_rsp(struct sk_buff *skb)
 	char ebuf[128];
 	u16 aoemajor;
 
-	hin = (struct aoe_hdr *) skb->mac.raw;
+	hin = (struct aoe_hdr *) skb_mac_header(skb);
 	aoemajor = be16_to_cpu(get_unaligned(&hin->major));
 	d = aoedev_by_aoeaddr(aoemajor, hin->minor);
 	if (d == NULL) {
@@ -561,7 +565,7 @@ aoecmd_ata_rsp(struct sk_buff *skb)
 	calc_rttavg(d, tsince(f->tag));
 
 	ahin = (struct aoe_atahdr *) (hin+1);
-	hout = (struct aoe_hdr *) f->skb->mac.raw;
+	hout = (struct aoe_hdr *) skb_mac_header(f->skb);
 	ahout = (struct aoe_atahdr *) (hout+1);
 	buf = f->buf;
 
@@ -649,7 +653,7 @@ aoecmd_ata_rsp(struct sk_buff *skb)
 			disk_stat_add(disk, sectors[rw], n_sect);
 			disk_stat_add(disk, io_ticks, duration);
 			n = (buf->flags & BUFFL_FAIL) ? -EIO : 0;
-			bio_endio(buf->bio, buf->bio->bi_size, n);
+			bio_endio(buf->bio, n);
 			mempool_free(buf, d->bufpool);
 		}
 	}
@@ -695,7 +699,7 @@ aoecmd_ata_id(struct aoedev *d)
 
 	/* initialize the headers & frame */
 	skb = f->skb;
-	h = (struct aoe_hdr *) skb->mac.raw;
+	h = (struct aoe_hdr *) skb_mac_header(skb);
 	ah = (struct aoe_atahdr *) (h+1);
 	skb_put(skb, sizeof *h + sizeof *ah);
 	memset(h, 0, skb->len);
@@ -726,7 +730,7 @@ aoecmd_cfg_rsp(struct sk_buff *skb)
 	enum { MAXFRAMES = 16 };
 	u16 n;
 
-	h = (struct aoe_hdr *) skb->mac.raw;
+	h = (struct aoe_hdr *) skb_mac_header(skb);
 	ch = (struct aoe_cfghdr *) (h+1);
 
 	/*

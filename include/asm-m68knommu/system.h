@@ -104,8 +104,7 @@ asmlinkage void resume(void);
 #define mb()   asm volatile (""   : : :"memory")
 #define rmb()  asm volatile (""   : : :"memory")
 #define wmb()  asm volatile (""   : : :"memory")
-#define set_rmb(var, value)    do { xchg(&var, value); } while (0)
-#define set_mb(var, value)     set_rmb(var, value)
+#define set_mb(var, value) do { xchg(&var, value); } while (0)
 
 #ifdef CONFIG_SMP
 #define smp_mb()	mb()
@@ -120,7 +119,6 @@ asmlinkage void resume(void);
 #endif
 
 #define xchg(ptr,x) ((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
-#define tas(ptr) (xchg((ptr),1))
 
 struct __xchg_dummy { unsigned long a[100]; };
 #define __xg(x) ((volatile struct __xchg_dummy *)(x))
@@ -254,8 +252,7 @@ cmpxchg(volatile int *p, int old, int new)
         ");				\
 })
 #elif defined(CONFIG_NETtel) || defined(CONFIG_eLIA) || \
-      defined(CONFIG_DISKtel) || defined(CONFIG_SECUREEDGEMP3) || \
-      defined(CONFIG_CLEOPATRA)
+      defined(CONFIG_SECUREEDGEMP3) || defined(CONFIG_CLEOPATRA)
 #define HARD_RESET_NOW() ({		\
         asm("				\
 	movew #0x2700, %sr;		\
@@ -297,7 +294,7 @@ cmpxchg(volatile int *p, int old, int new)
 ({						\
 	unsigned char volatile *reset;		\
 	asm("move.w	#0x2700, %sr");		\
-	reset = ((volatile unsigned short *)(MCF_IPSBAR + 0x110000));	\
+	reset = ((volatile unsigned char *)(MCF_IPSBAR + 0x110000));	\
 	while(1)				\
 	*reset |= (0x01 << 7);\
 })
@@ -319,7 +316,7 @@ cmpxchg(volatile int *p, int old, int new)
 ({					\
 	unsigned char volatile *reset;	\
 	asm("move.w     #0x2700, %sr");	\
-	reset = ((volatile unsigned short *)(MCF_IPSBAR + 0xA0000));	\
+	reset = ((volatile unsigned char *)(MCF_IPSBAR + 0xA0000));	\
 	while(1)			\
 		*reset |= 0x80;		\
 })

@@ -88,7 +88,7 @@ static unsigned int __init detect_bus_frequency(unsigned long rtc_base)
 	return clock[reg];
 }
 
-static void __init emma2rh_time_init(void)
+void __init plat_time_init(void)
 {
 	u32 reg;
 	if (bus_frequency == 0)
@@ -104,41 +104,11 @@ static void __init emma2rh_time_init(void)
 	mips_hpt_frequency = (bus_frequency * (4 + reg)) / 4 / 2;
 }
 
-void __init plat_timer_setup(struct irqaction *irq)
-{
-	/* we are using the cpu counter for timer interrupts */
-	setup_irq(CPU_IRQ_BASE + 7, irq);
-}
-
 static void markeins_board_init(void);
 extern void markeins_irq_setup(void);
 
 static void inline __init markeins_sio_setup(void)
 {
-#ifdef CONFIG_KGDB_8250
-	struct uart_port emma_port;
-
-	memset(&emma_port, 0, sizeof(emma_port));
-
-	emma_port.flags =
-	    UPF_BOOT_AUTOCONF | UPF_SKIP_TEST;
-	emma_port.iotype = UPIO_MEM;
-	emma_port.regshift = 4;	/* I/O addresses are every 8 bytes */
-	emma_port.uartclk = 18544000;	/* Clock rate of the chip */
-
-	emma_port.line = 0;
-	emma_port.mapbase = KSEG1ADDR(EMMA2RH_PFUR0_BASE + 3);
-	emma_port.membase = (u8*)emma_port.mapbase;
-	early_serial_setup(&emma_port);
-
-	emma_port.line = 1;
-	emma_port.mapbase = KSEG1ADDR(EMMA2RH_PFUR1_BASE + 3);
-	emma_port.membase = (u8*)emma_port.mapbase;
-	early_serial_setup(&emma_port);
-
-	emma_port.irq = EMMA2RH_IRQ_PFUR1;
-	kgdb8250_add_port(1, &emma_port);
-#endif
 }
 
 void __init plat_mem_setup(void)
@@ -147,8 +117,6 @@ void __init plat_mem_setup(void)
 	markeins_board_init();
 
 	set_io_port_base(KSEG1ADDR(EMMA2RH_PCI_IO_BASE));
-
-	board_time_init = emma2rh_time_init;
 
 	_machine_restart = markeins_machine_restart;
 	_machine_halt = markeins_machine_halt;

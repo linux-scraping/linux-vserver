@@ -1,4 +1,13 @@
-/* $Id: jffs2_fs_sb.h,v 1.54 2005/09/21 13:37:34 dedekind Exp $ */
+/*
+ * JFFS2 -- Journalling Flash File System, Version 2.
+ *
+ * Copyright © 2001-2007 Red Hat, Inc.
+ *
+ * Created by David Woodhouse <dwmw2@infradead.org>
+ *
+ * For licensing information, see the file 'LICENCE' in this directory.
+ *
+ */
 
 #ifndef _JFFS2_FS_SB
 #define _JFFS2_FS_SB
@@ -60,6 +69,8 @@ struct jffs2_sb_info {
 	uint8_t resv_blocks_gctrigger;	/* ... wake up the GC thread */
 	uint8_t resv_blocks_gcbad;	/* ... pick a block from the bad_list to GC */
 	uint8_t resv_blocks_gcmerge;	/* ... merge pages when garbage collecting */
+	/* Number of 'very dirty' blocks before we trigger immediate GC */
+	uint8_t vdirty_blocks_gctrigger;
 
 	uint32_t nospc_dirty_size;
 
@@ -97,6 +108,9 @@ struct jffs2_sb_info {
 
 	uint32_t wbuf_pagesize; /* 0 for NOR and other flashes with no wbuf */
 
+#ifdef CONFIG_JFFS2_FS_WBUF_VERIFY
+	unsigned char *wbuf_verify; /* read-back buffer for verification */
+#endif
 #ifdef CONFIG_JFFS2_FS_WRITEBUFFER
 	unsigned char *wbuf; /* Write-behind buffer for NAND flash */
 	uint32_t wbuf_ofs;

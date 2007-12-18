@@ -15,7 +15,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
-#include <linux/ptrace.h>
 
 #include <asm/hardware.h>
 #include <asm/irq.h>
@@ -31,12 +30,12 @@
 
 static void pxa_mask_low_irq(unsigned int irq)
 {
-	ICMR &= ~(1 << (irq + PXA_IRQ_SKIP));
+	ICMR &= ~(1 << irq);
 }
 
 static void pxa_unmask_low_irq(unsigned int irq)
 {
-	ICMR |= (1 << (irq + PXA_IRQ_SKIP));
+	ICMR |= (1 << irq);
 }
 
 static struct irq_chip pxa_internal_chip_low = {
@@ -46,7 +45,27 @@ static struct irq_chip pxa_internal_chip_low = {
 	.unmask		= pxa_unmask_low_irq,
 };
 
-#if PXA_INTERNAL_IRQS > 32
+void __init pxa_init_irq_low(void)
+{
+	int irq;
+
+	/* disable all IRQs */
+	ICMR = 0;
+
+	/* all IRQs are IRQ, not FIQ */
+	ICLR = 0;
+
+	/* only unmasked interrupts kick us out of idle */
+	ICCR = 1;
+
+	for (irq = PXA_IRQ(0); irq <= PXA_IRQ(31); irq++) {
+		set_irq_chip(irq, &pxa_internal_chip_low);
+		set_irq_handler(irq, handle_level_irq);
+		set_irq_flags(irq, IRQF_VALID);
+	}
+}
+
+#if defined(CONFIG_PXA27x) || defined(CONFIG_PXA3xx)
 
 /*
  * This is for the second set of internal IRQs as found on the PXA27x.
@@ -54,12 +73,12 @@ static struct irq_chip pxa_internal_chip_low = {
 
 static void pxa_mask_high_irq(unsigned int irq)
 {
-	ICMR2 &= ~(1 << (irq - 32 + PXA_IRQ_SKIP));
+	ICMR2 &= ~(1 << (irq - 32));
 }
 
 static void pxa_unmask_high_irq(unsigned int irq)
 {
-	ICMR2 |= (1 << (irq - 32 + PXA_IRQ_SKIP));
+	ICMR2 |= (1 << (irq - 32));
 }
 
 static struct irq_chip pxa_internal_chip_high = {
@@ -69,6 +88,19 @@ static struct irq_chip pxa_internal_chip_high = {
 	.unmask		= pxa_unmask_high_irq,
 };
 
+void __init pxa_init_irq_high(void)
+{
+	int irq;
+
+	ICMR2 = 0;
+	ICLR2 = 0;
+
+	for (irq = PXA_IRQ(32); irq < PXA_IRQ(64); irq++) {
+		set_irq_chip(irq, &pxa_internal_chip_high);
+		set_irq_handler(irq, handle_level_irq);
+		set_irq_flags(irq, IRQF_VALID);
+	}
+}
 #endif
 
 /*
@@ -106,14 +138,16 @@ static int pxa_gpio_irq_type(unsigned int irq, unsigned int type)
 	if (type & __IRQT_RISEDGE) {
 		/* printk("rising "); */
 		__set_bit (gpio, GPIO_IRQ_rising_edge);
-	} else
+	} else {
 		__clear_bit (gpio, GPIO_IRQ_rising_edge);
+	}
 
 	if (type & __IRQT_FALEDGE) {
 		/* printk("falling "); */
 		__set_bit (gpio, GPIO_IRQ_falling_edge);
-	} else
+	} else {
 		__clear_bit (gpio, GPIO_IRQ_falling_edge);
+	}
 
 	/* printk("edges\n"); */
 
@@ -151,7 +185,7 @@ static void pxa_gpio_demux_handler(unsigned int irq, struct irq_desc *desc)
 	do {
 		loop = 0;
 
-		mask = GEDR0 & ~3;
+		mask = GEDR0 & GPIO_IRQ_mask[0] & ~3;
 		if (mask) {
 			GEDR0 = mask;
 			irq = IRQ_GPIO(2);
@@ -167,7 +201,7 @@ static void pxa_gpio_demux_handler(unsigned int irq, struct irq_desc *desc)
 			loop = 1;
 		}
 
-		mask = GEDR1;
+		mask = GEDR1 & GPIO_IRQ_mask[1];
 		if (mask) {
 			GEDR1 = mask;
 			irq = IRQ_GPIO(32);
@@ -182,7 +216,7 @@ static void pxa_gpio_demux_handler(unsigned int irq, struct irq_desc *desc)
 			loop = 1;
 		}
 
-		mask = GEDR2;
+		mask = GEDR2 & GPIO_IRQ_mask[2];
 		if (mask) {
 			GEDR2 = mask;
 			irq = IRQ_GPIO(64);
@@ -197,8 +231,7 @@ static void pxa_gpio_demux_handler(unsigned int irq, struct irq_desc *desc)
 			loop = 1;
 		}
 
-#if PXA_LAST_GPIO >= 96
-		mask = GEDR3;
+		mask = GEDR3 & GPIO_IRQ_mask[3];
 		if (mask) {
 			GEDR3 = mask;
 			irq = IRQ_GPIO(96);
@@ -212,7 +245,6 @@ static void pxa_gpio_demux_handler(unsigned int irq, struct irq_desc *desc)
 			} while (mask);
 			loop = 1;
 		}
-#endif
 	} while (loop);
 }
 
@@ -247,56 +279,21 @@ static struct irq_chip pxa_muxed_gpio_chip = {
 	.set_type	= pxa_gpio_irq_type,
 };
 
-
-void __init pxa_init_irq(void)
+void __init pxa_init_irq_gpio(int gpio_nr)
 {
-	int irq;
+	int irq, i;
 
-	/* disable all IRQs */
-	ICMR = 0;
-
-	/* all IRQs are IRQ, not FIQ */
-	ICLR = 0;
+	pxa_last_gpio = gpio_nr - 1;
 
 	/* clear all GPIO edge detects */
-	GFER0 = 0;
-	GFER1 = 0;
-	GFER2 = 0;
-	GRER0 = 0;
-	GRER1 = 0;
-	GRER2 = 0;
-	GEDR0 = GEDR0;
-	GEDR1 = GEDR1;
-	GEDR2 = GEDR2;
-
-#ifdef CONFIG_PXA27x
-	/* And similarly for the extra regs on the PXA27x */
-	ICMR2 = 0;
-	ICLR2 = 0;
-	GFER3 = 0;
-	GRER3 = 0;
-	GEDR3 = GEDR3;
-#endif
-
-	/* only unmasked interrupts kick us out of idle */
-	ICCR = 1;
+	for (i = 0; i < gpio_nr; i += 32) {
+		GFER(i) = 0;
+		GRER(i) = 0;
+		GEDR(i) = GEDR(i);
+	}
 
 	/* GPIO 0 and 1 must have their mask bit always set */
 	GPIO_IRQ_mask[0] = 3;
-
-	for (irq = PXA_IRQ(PXA_IRQ_SKIP); irq <= PXA_IRQ(31); irq++) {
-		set_irq_chip(irq, &pxa_internal_chip_low);
-		set_irq_handler(irq, handle_level_irq);
-		set_irq_flags(irq, IRQF_VALID);
-	}
-
-#if PXA_INTERNAL_IRQS > 32
-	for (irq = PXA_IRQ(32); irq < PXA_IRQ(PXA_INTERNAL_IRQS); irq++) {
-		set_irq_chip(irq, &pxa_internal_chip_high);
-		set_irq_handler(irq, handle_level_irq);
-		set_irq_flags(irq, IRQF_VALID);
-	}
-#endif
 
 	for (irq = IRQ_GPIO0; irq <= IRQ_GPIO1; irq++) {
 		set_irq_chip(irq, &pxa_low_gpio_chip);
@@ -304,7 +301,7 @@ void __init pxa_init_irq(void)
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 
-	for (irq = IRQ_GPIO(2); irq <= IRQ_GPIO(PXA_LAST_GPIO); irq++) {
+	for (irq = IRQ_GPIO(2); irq < IRQ_GPIO(gpio_nr); irq++) {
 		set_irq_chip(irq, &pxa_muxed_gpio_chip);
 		set_irq_handler(irq, handle_edge_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
@@ -313,4 +310,14 @@ void __init pxa_init_irq(void)
 	/* Install handler for GPIO>=2 edge detect interrupts */
 	set_irq_chip(IRQ_GPIO_2_x, &pxa_internal_chip_low);
 	set_irq_chained_handler(IRQ_GPIO_2_x, pxa_gpio_demux_handler);
+}
+
+void __init pxa_init_irq_set_wake(int (*set_wake)(unsigned int, unsigned int))
+{
+	pxa_internal_chip_low.set_wake = set_wake;
+#ifdef CONFIG_PXA27x
+	pxa_internal_chip_high.set_wake = set_wake;
+#endif
+	pxa_low_gpio_chip.set_wake = set_wake;
+	pxa_muxed_gpio_chip.set_wake = set_wake;
 }

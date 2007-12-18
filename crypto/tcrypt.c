@@ -57,6 +57,11 @@
 #define ENCRYPT 1
 #define DECRYPT 0
 
+struct tcrypt_result {
+	struct completion completion;
+	int err;
+};
+
 static unsigned int IDX[8] = { IDX1, IDX2, IDX3, IDX4, IDX5, IDX6, IDX7, IDX8 };
 
 /*
@@ -73,7 +78,7 @@ static char *check[] = {
 	"twofish", "serpent", "sha384", "sha512", "md4", "aes", "cast6",
 	"arc4", "michael_mic", "deflate", "crc32c", "tea", "xtea",
 	"khazad", "wp512", "wp384", "wp256", "tnepres", "xeta",  "fcrypt",
-	"camellia", NULL
+	"camellia", "seed", NULL
 };
 
 static void hexdump(unsigned char *buf, unsigned int len)
@@ -82,6 +87,17 @@ static void hexdump(unsigned char *buf, unsigned int len)
 		printk("%02x", *buf++);
 
 	printk("\n");
+}
+
+static void tcrypt_complete(struct crypto_async_request *req, int err)
+{
+	struct tcrypt_result *res = req->data;
+
+	if (err == -EINPROGRESS)
+		return;
+
+	res->err = err;
+	complete(&res->completion);
 }
 
 static void test_hash(char *algo, struct hash_testvec *template,
@@ -123,7 +139,7 @@ static void test_hash(char *algo, struct hash_testvec *template,
 		printk("test %u:\n", i + 1);
 		memset(result, 0, 64);
 
-		sg_set_buf(&sg[0], hash_tv[i].plaintext, hash_tv[i].psize);
+		sg_init_one(&sg[0], hash_tv[i].plaintext, hash_tv[i].psize);
 
 		if (hash_tv[i].ksize) {
 			ret = crypto_hash_setkey(tfm, hash_tv[i].key,
@@ -160,6 +176,7 @@ static void test_hash(char *algo, struct hash_testvec *template,
 			memset(result, 0, 64);
 
 			temp = 0;
+			sg_init_table(sg, hash_tv[i].np);
 			for (k = 0; k < hash_tv[i].np; k++) {
 				memcpy(&xbuf[IDX[k]],
 				       hash_tv[i].plaintext + temp,
@@ -203,15 +220,14 @@ static void test_cipher(char *algo, int enc,
 {
 	unsigned int ret, i, j, k, temp;
 	unsigned int tsize;
-	unsigned int iv_len;
-	unsigned int len;
 	char *q;
-	struct crypto_blkcipher *tfm;
+	struct crypto_ablkcipher *tfm;
 	char *key;
 	struct cipher_testvec *cipher_tv;
-	struct blkcipher_desc desc;
+	struct ablkcipher_request *req;
 	struct scatterlist sg[8];
 	const char *e;
+	struct tcrypt_result result;
 
 	if (enc == ENCRYPT)
 	        e = "encryption";
@@ -232,15 +248,24 @@ static void test_cipher(char *algo, int enc,
 	memcpy(tvmem, template, tsize);
 	cipher_tv = (void *)tvmem;
 
-	tfm = crypto_alloc_blkcipher(algo, 0, CRYPTO_ALG_ASYNC);
+	init_completion(&result.completion);
+
+	tfm = crypto_alloc_ablkcipher(algo, 0, 0);
 
 	if (IS_ERR(tfm)) {
 		printk("failed to load transform for %s: %ld\n", algo,
 		       PTR_ERR(tfm));
 		return;
 	}
-	desc.tfm = tfm;
-	desc.flags = 0;
+
+	req = ablkcipher_request_alloc(tfm, GFP_KERNEL);
+	if (!req) {
+		printk("failed to allocate request for %s\n", algo);
+		goto out;
+	}
+
+	ablkcipher_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG,
+					tcrypt_complete, &result);
 
 	j = 0;
 	for (i = 0; i < tcount; i++) {
@@ -249,42 +274,51 @@ static void test_cipher(char *algo, int enc,
 			printk("test %u (%d bit key):\n",
 			j, cipher_tv[i].klen * 8);
 
-			crypto_blkcipher_clear_flags(tfm, ~0);
+			crypto_ablkcipher_clear_flags(tfm, ~0);
 			if (cipher_tv[i].wk)
-				crypto_blkcipher_set_flags(
+				crypto_ablkcipher_set_flags(
 					tfm, CRYPTO_TFM_REQ_WEAK_KEY);
 			key = cipher_tv[i].key;
 
-			ret = crypto_blkcipher_setkey(tfm, key,
-						      cipher_tv[i].klen);
+			ret = crypto_ablkcipher_setkey(tfm, key,
+						       cipher_tv[i].klen);
 			if (ret) {
 				printk("setkey() failed flags=%x\n",
-				       crypto_blkcipher_get_flags(tfm));
+				       crypto_ablkcipher_get_flags(tfm));
 
 				if (!cipher_tv[i].fail)
 					goto out;
 			}
 
-			sg_set_buf(&sg[0], cipher_tv[i].input,
-				   cipher_tv[i].ilen);
+			sg_init_one(&sg[0], cipher_tv[i].input,
+				    cipher_tv[i].ilen);
 
-			iv_len = crypto_blkcipher_ivsize(tfm);
-			if (iv_len)
-				crypto_blkcipher_set_iv(tfm, cipher_tv[i].iv,
-							iv_len);
+			ablkcipher_request_set_crypt(req, sg, sg,
+						     cipher_tv[i].ilen,
+						     cipher_tv[i].iv);
 
-			len = cipher_tv[i].ilen;
 			ret = enc ?
-				crypto_blkcipher_encrypt(&desc, sg, sg, len) :
-				crypto_blkcipher_decrypt(&desc, sg, sg, len);
+				crypto_ablkcipher_encrypt(req) :
+				crypto_ablkcipher_decrypt(req);
 
-			if (ret) {
-				printk("%s () failed flags=%x\n", e,
-				       desc.flags);
+			switch (ret) {
+			case 0:
+				break;
+			case -EINPROGRESS:
+			case -EBUSY:
+				ret = wait_for_completion_interruptible(
+					&result.completion);
+				if (!ret && !((ret = result.err))) {
+					INIT_COMPLETION(result.completion);
+					break;
+				}
+				/* fall through */
+			default:
+				printk("%s () failed err=%d\n", e, -ret);
 				goto out;
 			}
 
-			q = kmap(sg[0].page) + sg[0].offset;
+			q = kmap(sg_page(&sg[0])) + sg[0].offset;
 			hexdump(q, cipher_tv[i].rlen);
 
 			printk("%s\n",
@@ -303,23 +337,24 @@ static void test_cipher(char *algo, int enc,
 			printk("test %u (%d bit key):\n",
 			j, cipher_tv[i].klen * 8);
 
-			crypto_blkcipher_clear_flags(tfm, ~0);
+			crypto_ablkcipher_clear_flags(tfm, ~0);
 			if (cipher_tv[i].wk)
-				crypto_blkcipher_set_flags(
+				crypto_ablkcipher_set_flags(
 					tfm, CRYPTO_TFM_REQ_WEAK_KEY);
 			key = cipher_tv[i].key;
 
-			ret = crypto_blkcipher_setkey(tfm, key,
-						      cipher_tv[i].klen);
+			ret = crypto_ablkcipher_setkey(tfm, key,
+						       cipher_tv[i].klen);
 			if (ret) {
 				printk("setkey() failed flags=%x\n",
-				       crypto_blkcipher_get_flags(tfm));
+				       crypto_ablkcipher_get_flags(tfm));
 
 				if (!cipher_tv[i].fail)
 					goto out;
 			}
 
 			temp = 0;
+			sg_init_table(sg, cipher_tv[i].np);
 			for (k = 0; k < cipher_tv[i].np; k++) {
 				memcpy(&xbuf[IDX[k]],
 				       cipher_tv[i].input + temp,
@@ -329,26 +364,35 @@ static void test_cipher(char *algo, int enc,
 					   cipher_tv[i].tap[k]);
 			}
 
-			iv_len = crypto_blkcipher_ivsize(tfm);
-			if (iv_len)
-				crypto_blkcipher_set_iv(tfm, cipher_tv[i].iv,
-							iv_len);
+			ablkcipher_request_set_crypt(req, sg, sg,
+						     cipher_tv[i].ilen,
+						     cipher_tv[i].iv);
 
-			len = cipher_tv[i].ilen;
 			ret = enc ?
-				crypto_blkcipher_encrypt(&desc, sg, sg, len) :
-				crypto_blkcipher_decrypt(&desc, sg, sg, len);
+				crypto_ablkcipher_encrypt(req) :
+				crypto_ablkcipher_decrypt(req);
 
-			if (ret) {
-				printk("%s () failed flags=%x\n", e,
-				       desc.flags);
+			switch (ret) {
+			case 0:
+				break;
+			case -EINPROGRESS:
+			case -EBUSY:
+				ret = wait_for_completion_interruptible(
+					&result.completion);
+				if (!ret && !((ret = result.err))) {
+					INIT_COMPLETION(result.completion);
+					break;
+				}
+				/* fall through */
+			default:
+				printk("%s () failed err=%d\n", e, -ret);
 				goto out;
 			}
 
 			temp = 0;
 			for (k = 0; k < cipher_tv[i].np; k++) {
 				printk("page %u\n", k);
-				q = kmap(sg[k].page) + sg[k].offset;
+				q = kmap(sg_page(&sg[k])) + sg[k].offset;
 				hexdump(q, cipher_tv[i].tap[k]);
 				printk("%s\n",
 					memcmp(q, cipher_tv[i].result + temp,
@@ -360,7 +404,8 @@ static void test_cipher(char *algo, int enc,
 	}
 
 out:
-	crypto_free_blkcipher(tfm);
+	crypto_free_ablkcipher(tfm);
+	ablkcipher_request_free(req);
 }
 
 static int test_cipher_jiffies(struct blkcipher_desc *desc, int enc, char *p,
@@ -371,7 +416,7 @@ static int test_cipher_jiffies(struct blkcipher_desc *desc, int enc, char *p,
 	int bcount;
 	int ret;
 
-	sg_set_buf(sg, p, blen);
+	sg_init_one(sg, p, blen);
 
 	for (start = jiffies, end = start + sec * HZ, bcount = 0;
 	     time_before(jiffies, end); bcount++) {
@@ -397,7 +442,7 @@ static int test_cipher_cycles(struct blkcipher_desc *desc, int enc, char *p,
 	int ret = 0;
 	int i;
 
-	sg_set_buf(sg, p, blen);
+	sg_init_one(sg, p, blen);
 
 	local_bh_disable();
 	local_irq_disable();
@@ -527,6 +572,8 @@ static int test_hash_jiffies_digest(struct hash_desc *desc, char *p, int blen,
 	int bcount;
 	int ret;
 
+	sg_init_table(sg, 1);
+
 	for (start = jiffies, end = start + sec * HZ, bcount = 0;
 	     time_before(jiffies, end); bcount++) {
 		sg_set_buf(sg, p, blen);
@@ -551,6 +598,8 @@ static int test_hash_jiffies(struct hash_desc *desc, char *p, int blen,
 
 	if (plen == blen)
 		return test_hash_jiffies_digest(desc, p, blen, out, sec);
+
+	sg_init_table(sg, 1);
 
 	for (start = jiffies, end = start + sec * HZ, bcount = 0;
 	     time_before(jiffies, end); bcount++) {
@@ -582,6 +631,8 @@ static int test_hash_cycles_digest(struct hash_desc *desc, char *p, int blen,
 	unsigned long cycles = 0;
 	int i;
 	int ret;
+
+	sg_init_table(sg, 1);
 
 	local_bh_disable();
 	local_irq_disable();
@@ -634,6 +685,8 @@ static int test_hash_cycles(struct hash_desc *desc, char *p, int blen,
 	if (plen == blen)
 		return test_hash_cycles_digest(desc, p, blen, out);
 
+	sg_init_table(sg, 1);
+
 	local_bh_disable();
 	local_irq_disable();
 
@@ -648,7 +701,7 @@ static int test_hash_cycles(struct hash_desc *desc, char *p, int blen,
 			if (ret)
 				goto out;
 		}
-		crypto_hash_final(desc, out);
+		ret = crypto_hash_final(desc, out);
 		if (ret)
 			goto out;
 	}
@@ -832,7 +885,7 @@ static void test_available(void)
 
 	while (*name) {
 		printk("alg %s ", *name);
-		printk(crypto_has_alg(*name, 0, CRYPTO_ALG_ASYNC) ?
+		printk(crypto_has_alg(*name, 0, 0) ?
 		       "found\n" : "not found\n");
 		name++;
 	}
@@ -912,6 +965,10 @@ static void do_test(void)
 			    AES_LRW_ENC_TEST_VECTORS);
 		test_cipher("lrw(aes)", DECRYPT, aes_lrw_dec_tv_template,
 			    AES_LRW_DEC_TEST_VECTORS);
+		test_cipher("xts(aes)", ENCRYPT, aes_xts_enc_tv_template,
+			    AES_XTS_ENC_TEST_VECTORS);
+		test_cipher("xts(aes)", DECRYPT, aes_xts_dec_tv_template,
+			    AES_XTS_DEC_TEST_VECTORS);
 
 		//CAST5
 		test_cipher("ecb(cast5)", ENCRYPT, cast5_enc_tv_template,
@@ -985,6 +1042,12 @@ static void do_test(void)
 		test_cipher("cbc(camellia)", DECRYPT,
 			    camellia_cbc_dec_tv_template,
 			    CAMELLIA_CBC_DEC_TEST_VECTORS);
+
+		//SEED
+		test_cipher("ecb(seed)", ENCRYPT, seed_enc_tv_template,
+			    SEED_ENC_TEST_VECTORS);
+		test_cipher("ecb(seed)", DECRYPT, seed_dec_tv_template,
+			    SEED_DEC_TEST_VECTORS);
 
 		test_hash("sha384", sha384_tv_template, SHA384_TEST_VECTORS);
 		test_hash("sha512", sha512_tv_template, SHA512_TEST_VECTORS);
@@ -1089,6 +1152,10 @@ static void do_test(void)
 			    AES_LRW_ENC_TEST_VECTORS);
 		test_cipher("lrw(aes)", DECRYPT, aes_lrw_dec_tv_template,
 			    AES_LRW_DEC_TEST_VECTORS);
+		test_cipher("xts(aes)", ENCRYPT, aes_xts_enc_tv_template,
+			    AES_XTS_ENC_TEST_VECTORS);
+		test_cipher("xts(aes)", DECRYPT, aes_xts_dec_tv_template,
+			    AES_XTS_DEC_TEST_VECTORS);
 		break;
 
 	case 11:
@@ -1264,6 +1331,10 @@ static void do_test(void)
 				  aes_lrw_speed_template);
 		test_cipher_speed("lrw(aes)", DECRYPT, sec, NULL, 0,
 				  aes_lrw_speed_template);
+		test_cipher_speed("xts(aes)", ENCRYPT, sec, NULL, 0,
+				  aes_xts_speed_template);
+		test_cipher_speed("xts(aes)", DECRYPT, sec, NULL, 0,
+				  aes_xts_speed_template);
 		break;
 
 	case 201:

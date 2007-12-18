@@ -121,6 +121,7 @@ typedef struct { pte_t pte; } real_pte_t;
 #endif
 
 /* PMD level */
+#ifdef CONFIG_PPC64
 typedef struct { unsigned long pmd; } pmd_t;
 #define pmd_val(x)	((x).pmd)
 #define __pmd(x)	((pmd_t) { (x) })
@@ -130,7 +131,8 @@ typedef struct { unsigned long pmd; } pmd_t;
 typedef struct { unsigned long pud; } pud_t;
 #define pud_val(x)	((x).pud)
 #define __pud(x)	((pud_t) { (x) })
-#endif
+#endif /* !CONFIG_PPC_64K_PAGES */
+#endif /* CONFIG_PPC64 */
 
 /* PGD level */
 typedef struct { unsigned long pgd; } pgd_t;
@@ -159,15 +161,17 @@ typedef unsigned long real_pte_t;
 #endif
 
 
+#ifdef CONFIG_PPC64
 typedef unsigned long pmd_t;
 #define pmd_val(x)	(x)
 #define __pmd(x)	(x)
 
-#if defined(CONFIG_PPC64) && !defined(CONFIG_PPC_64K_PAGES)
+#ifndef CONFIG_PPC_64K_PAGES
 typedef unsigned long pud_t;
 #define pud_val(x)	(x)
 #define __pud(x)	(x)
-#endif
+#endif /* !CONFIG_PPC_64K_PAGES */
+#endif /* CONFIG_PPC64 */
 
 typedef unsigned long pgd_t;
 #define pgd_val(x)	(x)
@@ -186,7 +190,6 @@ extern void copy_user_page(void *to, void *from, unsigned long vaddr,
 extern int page_is_ram(unsigned long pfn);
 
 struct vm_area_struct;
-extern const char *arch_vma_name(struct vm_area_struct *vma);
 
 #include <asm-generic/memory_model.h>
 #endif /* __ASSEMBLY__ */

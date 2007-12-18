@@ -255,8 +255,11 @@ static int cxgb_open(struct net_device *dev)
 	struct adapter *adapter = dev->priv;
 	int other_ports = adapter->open_device_map & PORT_MASK;
 
-	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0)
+	napi_enable(&adapter->napi);
+	if (!adapter->open_device_map && (err = cxgb_up(adapter)) < 0) {
+		napi_disable(&adapter->napi);
 		return err;
+	}
 
 	__set_bit(dev->if_port, &adapter->open_device_map);
 	link_start(&adapter->port[dev->if_port]);
@@ -274,6 +277,7 @@ static int cxgb_close(struct net_device *dev)
 	struct cmac *mac = p->mac;
 
 	netif_stop_queue(dev);
+	napi_disable(&adapter->napi);
 	mac->ops->disable(mac, MAC_DIRECTION_TX | MAC_DIRECTION_RX);
 	netif_carrier_off(dev);
 
@@ -435,9 +439,14 @@ static void get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 	strcpy(info->bus_info, pci_name(adapter->pdev));
 }
 
-static int get_stats_count(struct net_device *dev)
+static int get_sset_count(struct net_device *dev, int sset)
 {
-	return ARRAY_SIZE(stats_strings);
+	switch (sset) {
+	case ETH_SS_STATS:
+		return ARRAY_SIZE(stats_strings);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static void get_strings(struct net_device *dev, u32 stringset, u8 *data)
@@ -790,17 +799,14 @@ static const struct ethtool_ops t1_ethtool_ops = {
 	.set_pauseparam    = set_pauseparam,
 	.get_rx_csum       = get_rx_csum,
 	.set_rx_csum       = set_rx_csum,
-	.get_tx_csum       = ethtool_op_get_tx_csum,
 	.set_tx_csum       = ethtool_op_set_tx_csum,
-	.get_sg            = ethtool_op_get_sg,
 	.set_sg            = ethtool_op_set_sg,
 	.get_link          = ethtool_op_get_link,
 	.get_strings       = get_strings,
-	.get_stats_count   = get_stats_count,
+	.get_sset_count	   = get_sset_count,
 	.get_ethtool_stats = get_stats,
 	.get_regs_len      = get_regs_len,
 	.get_regs          = get_regs,
-	.get_tso           = ethtool_op_get_tso,
 	.set_tso           = set_tso,
 };
 
@@ -881,15 +887,6 @@ static void vlan_rx_register(struct net_device *dev,
 	spin_lock_irq(&adapter->async_lock);
 	adapter->vlan_grp = grp;
 	t1_set_vlan_accel(adapter, grp != NULL);
-	spin_unlock_irq(&adapter->async_lock);
-}
-
-static void vlan_rx_kill_vid(struct net_device *dev, unsigned short vid)
-{
-	struct adapter *adapter = dev->priv;
-
-	spin_lock_irq(&adapter->async_lock);
-	vlan_group_set_device(adapter->vlan_grp, vid, NULL);
 	spin_unlock_irq(&adapter->async_lock);
 }
 #endif
@@ -1041,7 +1038,6 @@ static int __devinit init_one(struct pci_dev *pdev,
 			goto out_free_dev;
 		}
 
-		SET_MODULE_OWNER(netdev);
 		SET_NETDEV_DEV(netdev, &pdev->dev);
 
 		if (!adapter) {
@@ -1099,7 +1095,6 @@ static int __devinit init_one(struct pci_dev *pdev,
 			netdev->features |=
 				NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
 			netdev->vlan_rx_register = vlan_rx_register;
-			netdev->vlan_rx_kill_vid = vlan_rx_kill_vid;
 #endif
 
 			/* T204: disable TSO */
@@ -1123,8 +1118,7 @@ static int __devinit init_one(struct pci_dev *pdev,
 		netdev->poll_controller = t1_netpoll;
 #endif
 #ifdef CONFIG_CHELSIO_T1_NAPI
-		netdev->weight = 64;
-		netdev->poll = t1_poll;
+		netif_napi_add(netdev, &adapter->napi, t1_poll, 64);
 #endif
 
 		SET_ETHTOOL_OPS(netdev, &t1_ethtool_ops);

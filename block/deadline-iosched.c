@@ -55,6 +55,20 @@ static void deadline_move_request(struct deadline_data *, struct request *);
 
 #define RQ_RB_ROOT(dd, rq)	(&(dd)->sort_list[rq_data_dir((rq))])
 
+/*
+ * get the request after `rq' in sector-sorted order
+ */
+static inline struct request *
+deadline_latter_request(struct request *rq)
+{
+	struct rb_node *node = rb_next(&rq->rb_node);
+
+	if (node)
+		return rb_entry_rq(node);
+
+	return NULL;
+}
+
 static void
 deadline_add_rq_rb(struct deadline_data *dd, struct request *rq)
 {
@@ -74,13 +88,8 @@ deadline_del_rq_rb(struct deadline_data *dd, struct request *rq)
 {
 	const int data_dir = rq_data_dir(rq);
 
-	if (dd->next_rq[data_dir] == rq) {
-		struct rb_node *rbnext = rb_next(&rq->rb_node);
-
-		dd->next_rq[data_dir] = NULL;
-		if (rbnext)
-			dd->next_rq[data_dir] = rb_entry_rq(rbnext);
-	}
+	if (dd->next_rq[data_dir] == rq)
+		dd->next_rq[data_dir] = deadline_latter_request(rq);
 
 	elv_rb_del(RQ_RB_ROOT(dd, rq), rq);
 }
@@ -106,7 +115,7 @@ deadline_add_request(struct request_queue *q, struct request *rq)
 /*
  * remove rq from rbtree and fifo.
  */
-static void deadline_remove_request(request_queue_t *q, struct request *rq)
+static void deadline_remove_request(struct request_queue *q, struct request *rq)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 
@@ -115,7 +124,7 @@ static void deadline_remove_request(request_queue_t *q, struct request *rq)
 }
 
 static int
-deadline_merge(request_queue_t *q, struct request **req, struct bio *bio)
+deadline_merge(struct request_queue *q, struct request **req, struct bio *bio)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 	struct request *__rq;
@@ -144,8 +153,8 @@ out:
 	return ret;
 }
 
-static void deadline_merged_request(request_queue_t *q, struct request *req,
-				    int type)
+static void deadline_merged_request(struct request_queue *q,
+				    struct request *req, int type)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 
@@ -159,7 +168,7 @@ static void deadline_merged_request(request_queue_t *q, struct request *req,
 }
 
 static void
-deadline_merged_requests(request_queue_t *q, struct request *req,
+deadline_merged_requests(struct request_queue *q, struct request *req,
 			 struct request *next)
 {
 	/*
@@ -185,7 +194,7 @@ deadline_merged_requests(request_queue_t *q, struct request *req,
 static inline void
 deadline_move_to_dispatch(struct deadline_data *dd, struct request *rq)
 {
-	request_queue_t *q = rq->q;
+	struct request_queue *q = rq->q;
 
 	deadline_remove_request(q, rq);
 	elv_dispatch_add_tail(q, rq);
@@ -198,14 +207,11 @@ static void
 deadline_move_request(struct deadline_data *dd, struct request *rq)
 {
 	const int data_dir = rq_data_dir(rq);
-	struct rb_node *rbnext = rb_next(&rq->rb_node);
 
 	dd->next_rq[READ] = NULL;
 	dd->next_rq[WRITE] = NULL;
+	dd->next_rq[data_dir] = deadline_latter_request(rq);
 
-	if (rbnext)
-		dd->next_rq[data_dir] = rb_entry_rq(rbnext);
-	
 	dd->last_sector = rq->sector + rq->nr_sectors;
 
 	/*
@@ -236,7 +242,7 @@ static inline int deadline_check_fifo(struct deadline_data *dd, int ddir)
  * deadline_dispatch_requests selects the best request according to
  * read/write expire, fifo_batch, etc
  */
-static int deadline_dispatch_requests(request_queue_t *q, int force)
+static int deadline_dispatch_requests(struct request_queue *q, int force)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 	const int reads = !list_empty(&dd->fifo_list[READ]);
@@ -301,29 +307,22 @@ dispatch_find_request:
 	/*
 	 * we are not running a batch, find best request for selected data_dir
 	 */
-	if (deadline_check_fifo(dd, data_dir)) {
-		/* An expired request exists - satisfy it */
-		dd->batching = 0;
+	if (deadline_check_fifo(dd, data_dir) || !dd->next_rq[data_dir]) {
+		/*
+		 * A deadline has expired, the last request was in the other
+		 * direction, or we have run out of higher-sectored requests.
+		 * Start again from the request with the earliest expiry time.
+		 */
 		rq = rq_entry_fifo(dd->fifo_list[data_dir].next);
-		
-	} else if (dd->next_rq[data_dir]) {
+	} else {
 		/*
 		 * The last req was the same dir and we have a next request in
 		 * sort order. No expired requests so continue on from here.
 		 */
 		rq = dd->next_rq[data_dir];
-	} else {
-		struct rb_node *node;
-		/*
-		 * The last req was the other direction or we have run out of
-		 * higher-sectored requests. Go back to the lowest sectored
-		 * request (1 way elevator) and start a new batch.
-		 */
-		dd->batching = 0;
-		node = rb_first(&dd->sort_list[data_dir]);
-		if (node)
-			rq = rb_entry_rq(node);
 	}
+
+	dd->batching = 0;
 
 dispatch_request:
 	/*
@@ -335,7 +334,7 @@ dispatch_request:
 	return 1;
 }
 
-static int deadline_queue_empty(request_queue_t *q)
+static int deadline_queue_empty(struct request_queue *q)
 {
 	struct deadline_data *dd = q->elevator->elevator_data;
 
@@ -356,14 +355,13 @@ static void deadline_exit_queue(elevator_t *e)
 /*
  * initialize elevator private data (deadline_data).
  */
-static void *deadline_init_queue(request_queue_t *q)
+static void *deadline_init_queue(struct request_queue *q)
 {
 	struct deadline_data *dd;
 
-	dd = kmalloc_node(sizeof(*dd), GFP_KERNEL, q->node);
+	dd = kmalloc_node(sizeof(*dd), GFP_KERNEL | __GFP_ZERO, q->node);
 	if (!dd)
 		return NULL;
-	memset(dd, 0, sizeof(*dd));
 
 	INIT_LIST_HEAD(&dd->fifo_list[READ]);
 	INIT_LIST_HEAD(&dd->fifo_list[WRITE]);

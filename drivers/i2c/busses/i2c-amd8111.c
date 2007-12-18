@@ -326,7 +326,7 @@ static u32 amd8111_func(struct i2c_adapter *adapter)
 		I2C_FUNC_SMBUS_BYTE_DATA |
 		I2C_FUNC_SMBUS_WORD_DATA | I2C_FUNC_SMBUS_BLOCK_DATA |
 		I2C_FUNC_SMBUS_PROC_CALL | I2C_FUNC_SMBUS_BLOCK_PROC_CALL |
-		I2C_FUNC_SMBUS_I2C_BLOCK | I2C_FUNC_SMBUS_HWPEC_CALC;
+		I2C_FUNC_SMBUS_I2C_BLOCK | I2C_FUNC_SMBUS_PEC;
 }
 
 static const struct i2c_algorithm smbus_algorithm = {
@@ -365,7 +365,7 @@ static int __devinit amd8111_probe(struct pci_dev *dev,
 	}
 
 	smbus->adapter.owner = THIS_MODULE;
-	snprintf(smbus->adapter.name, I2C_NAME_SIZE,
+	snprintf(smbus->adapter.name, sizeof(smbus->adapter.name),
 		"SMBus2 AMD8111 adapter at %04x", smbus->base);
 	smbus->adapter.id = I2C_HW_SMBUS_AMD8111;
 	smbus->adapter.class = I2C_CLASS_HWMON;

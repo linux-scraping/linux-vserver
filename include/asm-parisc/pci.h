@@ -207,7 +207,7 @@ extern struct pci_bios_ops *pci_bios;
 extern void pcibios_register_hba(struct pci_hba_data *);
 extern void pcibios_set_master(struct pci_dev *);
 #else
-extern inline void pcibios_register_hba(struct pci_hba_data *x)
+static inline void pcibios_register_hba(struct pci_hba_data *x)
 {
 }
 #endif
@@ -237,9 +237,6 @@ extern inline void pcibios_register_hba(struct pci_hba_data *x)
 
 #define PCIBIOS_MIN_IO          0x10
 #define PCIBIOS_MIN_MEM         0x1000 /* NBPG - but pci/setup-res.c dies */
-
-/* Don't support DAC yet. */
-#define pci_dac_dma_supported(pci_dev, mask)   (0)
 
 /* export the pci_ DMA API in terms of the dma_ one */
 #include <asm-generic/pci-dma-compat.h>
@@ -282,10 +279,6 @@ pcibios_select_root(struct pci_dev *pdev, struct resource *res)
 		root = &iomem_resource;
 
 	return root;
-}
-
-static inline void pcibios_add_platform_entries(struct pci_dev *dev)
-{
 }
 
 static inline void pcibios_penalize_isa_irq(int irq, int active)

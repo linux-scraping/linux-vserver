@@ -18,11 +18,15 @@ extern int hard_smp_processor_id(void);
 extern int ncpus;
 
 
-extern inline void smp_cpus_done(unsigned int maxcpus)
+static inline void smp_cpus_done(unsigned int maxcpus)
 {
 }
 
 extern struct task_struct *idle_threads[NR_CPUS];
+
+#else
+
+#define hard_smp_processor_id()		0
 
 #endif
 

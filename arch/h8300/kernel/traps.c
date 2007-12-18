@@ -5,7 +5,7 @@
  * Cloned from Linux/m68k.
  *
  * No original Copyright holder listed,
- * Probabily original (C) Roman Zippel (assigned DJD, 1999)
+ * Probable original (C) Roman Zippel (assigned DJD, 1999)
  *
  * Copyright 1999-2000 D. Jeff Dionne, <jeff@rt-control.com>
  *
@@ -136,7 +136,7 @@ void show_stack(struct task_struct *task, unsigned long *esp)
 	printk("\nCall Trace:");
 	i = 0;
 	stack = esp;
-	while (((unsigned long)stack & (THREAD_SIZE - 1)) == 0) {
+	while (((unsigned long)stack & (THREAD_SIZE - 1)) != 0) {
 		addr = *stack++;
 		/*
 		 * If the address is either in the text segment of the

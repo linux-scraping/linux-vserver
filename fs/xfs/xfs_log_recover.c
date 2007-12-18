@@ -927,6 +927,14 @@ xlog_find_tail(
 			ASSIGN_ANY_LSN_HOST(log->l_last_sync_lsn, log->l_curr_cycle,
 					after_umount_blk);
 			*tail_blk = after_umount_blk;
+
+			/*
+			 * Note that the unmount was clean. If the unmount
+			 * was not clean, we need to know this to rebuild the
+			 * superblock counters from the perag headers if we
+			 * have a filesystem using non-persistent counters.
+			 */
+			log->l_mp->m_flags |= XFS_MOUNT_WAS_CLEAN;
 		}
 	}
 
@@ -1358,7 +1366,7 @@ xlog_recover_add_to_cont_trans(
 	int			old_len;
 
 	item = trans->r_itemq;
-	if (item == 0) {
+	if (item == NULL) {
 		/* finish copying rest of trans header */
 		xlog_recover_add_item(&trans->r_itemq);
 		ptr = (xfs_caddr_t) &trans->r_theader +
@@ -1404,7 +1412,7 @@ xlog_recover_add_to_trans(
 	if (!len)
 		return 0;
 	item = trans->r_itemq;
-	if (item == 0) {
+	if (item == NULL) {
 		ASSERT(*(uint *)dp == XFS_TRANS_HEADER_MAGIC);
 		if (len == sizeof(xfs_trans_header_t))
 			xlog_recover_add_item(&trans->r_itemq);
@@ -1459,12 +1467,12 @@ xlog_recover_unlink_tid(
 	xlog_recover_t		*tp;
 	int			found = 0;
 
-	ASSERT(trans != 0);
+	ASSERT(trans != NULL);
 	if (trans == *q) {
 		*q = (*q)->r_next;
 	} else {
 		tp = *q;
-		while (tp != 0) {
+		while (tp) {
 			if (tp->r_next == trans) {
 				found = 1;
 				break;
@@ -1487,7 +1495,7 @@ xlog_recover_insert_item_backq(
 	xlog_recover_item_t	**q,
 	xlog_recover_item_t	*item)
 {
-	if (*q == 0) {
+	if (*q == NULL) {
 		item->ri_prev = item->ri_next = item;
 		*q = item;
 	} else {
@@ -1509,7 +1517,6 @@ xlog_recover_insert_item_frontq(
 
 STATIC int
 xlog_recover_reorder_trans(
-	xlog_t			*log,
 	xlog_recover_t		*trans)
 {
 	xlog_recover_item_t	*first_item, *itemq, *itemq_next;
@@ -1867,7 +1874,6 @@ xlog_recover_do_inode_buffer(
 /*ARGSUSED*/
 STATIC void
 xlog_recover_do_reg_buffer(
-	xfs_mount_t		*mp,
 	xlog_recover_item_t	*item,
 	xfs_buf_t		*bp,
 	xfs_buf_log_format_t	*buf_f)
@@ -1893,7 +1899,7 @@ xlog_recover_do_reg_buffer(
 			break;
 		nbits = xfs_contig_bits(data_map, map_size, bit);
 		ASSERT(nbits > 0);
-		ASSERT(item->ri_buf[i].i_addr != 0);
+		ASSERT(item->ri_buf[i].i_addr != NULL);
 		ASSERT(item->ri_buf[i].i_len % XFS_BLI_CHUNK == 0);
 		ASSERT(XFS_BUF_COUNT(bp) >=
 		       ((uint)bit << XFS_BLI_SHIFT)+(nbits<<XFS_BLI_SHIFT));
@@ -2083,7 +2089,7 @@ xlog_recover_do_dquot_buffer(
 	if (log->l_quotaoffs_flag & type)
 		return;
 
-	xlog_recover_do_reg_buffer(mp, item, bp, buf_f);
+	xlog_recover_do_reg_buffer(item, bp, buf_f);
 }
 
 /*
@@ -2184,7 +2190,7 @@ xlog_recover_do_buffer_trans(
 		  (XFS_BLI_UDQUOT_BUF|XFS_BLI_PDQUOT_BUF|XFS_BLI_GDQUOT_BUF)) {
 		xlog_recover_do_dquot_buffer(mp, log, item, bp, buf_f);
 	} else {
-		xlog_recover_do_reg_buffer(mp, item, bp, buf_f);
+		xlog_recover_do_reg_buffer(item, bp, buf_f);
 	}
 	if (error)
 		return XFS_ERROR(error);
@@ -2239,7 +2245,7 @@ xlog_recover_do_inode_trans(
 	int			error;
 	int			attr_index;
 	uint			fields;
-	xfs_dinode_core_t	*dicp;
+	xfs_icdinode_t		*dicp;
 	int			need_free = 0;
 
 	if (pass == XLOG_RECOVER_PASS1) {
@@ -2303,7 +2309,7 @@ xlog_recover_do_inode_trans(
 	 * Make sure the place we're flushing out to really looks
 	 * like an inode!
 	 */
-	if (unlikely(INT_GET(dip->di_core.di_magic, ARCH_CONVERT) != XFS_DINODE_MAGIC)) {
+	if (unlikely(be16_to_cpu(dip->di_core.di_magic) != XFS_DINODE_MAGIC)) {
 		xfs_buf_relse(bp);
 		xfs_fs_cmn_err(CE_ALERT, mp,
 			"xfs_inode_recover: Bad inode magic number, dino ptr = 0x%p, dino bp = 0x%p, ino = %Ld",
@@ -2313,7 +2319,7 @@ xlog_recover_do_inode_trans(
 		error = EFSCORRUPTED;
 		goto error;
 	}
-	dicp = (xfs_dinode_core_t*)(item->ri_buf[1].i_addr);
+	dicp = (xfs_icdinode_t *)(item->ri_buf[1].i_addr);
 	if (unlikely(dicp->di_magic != XFS_DINODE_MAGIC)) {
 		xfs_buf_relse(bp);
 		xfs_fs_cmn_err(CE_ALERT, mp,
@@ -2326,15 +2332,13 @@ xlog_recover_do_inode_trans(
 	}
 
 	/* Skip replay when the on disk inode is newer than the log one */
-	if (dicp->di_flushiter <
-	    INT_GET(dip->di_core.di_flushiter, ARCH_CONVERT)) {
+	if (dicp->di_flushiter < be16_to_cpu(dip->di_core.di_flushiter)) {
 		/*
 		 * Deal with the wrap case, DI_MAX_FLUSH is less
 		 * than smaller numbers
 		 */
-		if ((INT_GET(dip->di_core.di_flushiter, ARCH_CONVERT)
-							== DI_MAX_FLUSH) &&
-		    (dicp->di_flushiter < (DI_MAX_FLUSH>>1))) {
+		if (be16_to_cpu(dip->di_core.di_flushiter) == DI_MAX_FLUSH &&
+		    dicp->di_flushiter < (DI_MAX_FLUSH >> 1)) {
 			/* do nothing */
 		} else {
 			xfs_buf_relse(bp);
@@ -2405,8 +2409,8 @@ xlog_recover_do_inode_trans(
 	}
 
 	/* The core is in in-core format */
-	xfs_xlate_dinode_core((xfs_caddr_t)&dip->di_core,
-			      (xfs_dinode_core_t*)item->ri_buf[1].i_addr, -1);
+	xfs_dinode_to_disk(&dip->di_core,
+		(xfs_icdinode_t *)item->ri_buf[1].i_addr);
 
 	/* the rest is in on-disk format */
 	if (item->ri_buf[1].i_len > sizeof(xfs_dinode_core_t)) {
@@ -2418,8 +2422,7 @@ xlog_recover_do_inode_trans(
 	fields = in_f->ilf_fields;
 	switch (fields & (XFS_ILOG_DEV | XFS_ILOG_UUID)) {
 	case XFS_ILOG_DEV:
-		INT_SET(dip->di_u.di_dev, ARCH_CONVERT, in_f->ilf_u.ilfu_rdev);
-
+		dip->di_u.di_dev = cpu_to_be32(in_f->ilf_u.ilfu_rdev);
 		break;
 	case XFS_ILOG_UUID:
 		dip->di_u.di_muuid = in_f->ilf_u.ilfu_uuid;
@@ -2765,7 +2768,7 @@ xlog_recover_do_trans(
 	int			error = 0;
 	xlog_recover_item_t	*item, *first_item;
 
-	if ((error = xlog_recover_reorder_trans(log, trans)))
+	if ((error = xlog_recover_reorder_trans(trans)))
 		return error;
 	first_item = item = trans->r_itemq;
 	do {
@@ -3016,7 +3019,7 @@ xlog_recover_process_efi(
 	}
 
 	efip->efi_flags |= XFS_EFI_RECOVERED;
-	xfs_trans_commit(tp, 0, NULL);
+	xfs_trans_commit(tp, 0);
 }
 
 /*
@@ -3143,7 +3146,7 @@ xlog_recover_clear_agi_bucket(
 	xfs_trans_log_buf(tp, agibp, offset,
 			  (offset + sizeof(xfs_agino_t) - 1));
 
-	(void) xfs_trans_commit(tp, 0, NULL);
+	(void) xfs_trans_commit(tp, 0);
 }
 
 /*
@@ -3228,8 +3231,8 @@ xlog_recover_process_iunlinks(
 					ASSERT(ip->i_d.di_nlink == 0);
 
 					/* setup for the next pass */
-					agino = INT_GET(dip->di_next_unlinked,
-							ARCH_CONVERT);
+					agino = be32_to_cpu(
+							dip->di_next_unlinked);
 					xfs_buf_relse(ibp);
 					/*
 					 * Prevent any DMAPI event from
@@ -3831,7 +3834,10 @@ xlog_do_recover(
 	 */
 	bp = xfs_getsb(log->l_mp, 0);
 	XFS_BUF_UNDONE(bp);
+	ASSERT(!(XFS_BUF_ISWRITE(bp)));
+	ASSERT(!(XFS_BUF_ISDELAYWRITE(bp)));
 	XFS_BUF_READ(bp);
+	XFS_BUF_UNASYNC(bp);
 	xfsbdstrat(log->l_mp, bp);
 	if ((error = xfs_iowait(bp))) {
 		xfs_ioerror_alert("xlog_do_recover",
@@ -3843,7 +3849,7 @@ xlog_do_recover(
 
 	/* Convert superblock from on-disk format */
 	sbp = &log->l_mp->m_sb;
-	xfs_xlatesb(XFS_BUF_TO_SBP(bp), sbp, 1, XFS_SB_ALL_BITS);
+	xfs_sb_from_disk(sbp, XFS_BUF_TO_SBP(bp));
 	ASSERT(sbp->sb_magicnum == XFS_SB_MAGIC);
 	ASSERT(XFS_SB_GOOD_VERSION(sbp));
 	xfs_buf_relse(bp);
@@ -3886,8 +3892,7 @@ xlog_recover(
 		 * under the vfs layer, so we can get away with it unless
 		 * the device itself is read-only, in which case we fail.
 		 */
-		if ((error = xfs_dev_is_read_only(log->l_mp,
-						"recovery required"))) {
+		if ((error = xfs_dev_is_read_only(log->l_mp, "recovery"))) {
 			return error;
 		}
 
@@ -4022,7 +4027,7 @@ xlog_recover_check_summary(
 	sbbp = xfs_getsb(mp, 0);
 #ifdef XFS_LOUD_RECOVERY
 	sbp = &mp->m_sb;
-	xfs_xlatesb(XFS_BUF_TO_SBP(sbbp), sbp, 1, XFS_SB_ALL_BITS);
+	xfs_sb_from_disk(sbp, XFS_BUF_TO_SBP(sbbp));
 	cmn_err(CE_NOTE,
 		"xlog_recover_check_summary: sb_icount %Lu itotal %Lu",
 		sbp->sb_icount, itotal);

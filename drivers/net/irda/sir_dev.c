@@ -14,7 +14,6 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/delay.h>
 
 #include <net/irda/irda.h>
@@ -415,7 +414,7 @@ EXPORT_SYMBOL(sirdev_raw_read);
 int sirdev_set_dtr_rts(struct sir_dev *dev, int dtr, int rts)
 {
 	int ret = -ENXIO;
-	if (dev->drv->set_dtr_rts != 0)
+	if (dev->drv->set_dtr_rts)
 		ret =  dev->drv->set_dtr_rts(dev, dtr, rts);
 	return ret;
 }
@@ -913,8 +912,6 @@ struct sir_dev * sirdev_get_instance(const struct sir_driver *drv, const char *n
 
 	dev->drv = drv;
 	dev->netdev = ndev;
-
-	SET_MODULE_OWNER(ndev);
 
 	/* Override the network functions we need to use */
 	ndev->hard_start_xmit = sirdev_hard_xmit;

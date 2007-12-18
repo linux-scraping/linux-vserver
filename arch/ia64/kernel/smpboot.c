@@ -35,7 +35,6 @@
 #include <linux/mm.h>
 #include <linux/notifier.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/spinlock.h>
 #include <linux/efi.h>
 #include <linux/percpu.h>
@@ -59,6 +58,7 @@
 #include <asm/system.h>
 #include <asm/tlbflush.h>
 #include <asm/unistd.h>
+#include <asm/sn/arch.h>
 
 #define SMP_DEBUG 0
 
@@ -138,9 +138,10 @@ cpumask_t cpu_possible_map = CPU_MASK_NONE;
 EXPORT_SYMBOL(cpu_possible_map);
 
 cpumask_t cpu_core_map[NR_CPUS] __cacheline_aligned;
-cpumask_t cpu_sibling_map[NR_CPUS] __cacheline_aligned;
+DEFINE_PER_CPU_SHARED_ALIGNED(cpumask_t, cpu_sibling_map);
+EXPORT_PER_CPU_SYMBOL(cpu_sibling_map);
+
 int smp_num_siblings = 1;
-int smp_num_cpucores = 1;
 
 /* which logical CPU number maps to which CPU (physical APIC ID) */
 volatile int ia64_cpu_to_sapicid[NR_CPUS];
@@ -371,7 +372,7 @@ smp_setup_percpu_timer (void)
 {
 }
 
-static void __devinit
+static void __cpuinit
 smp_callin (void)
 {
 	int cpuid, phys_id, itc_master;
@@ -396,9 +397,13 @@ smp_callin (void)
 	fix_b0_for_bsp();
 
 	lock_ipi_calllock();
+	spin_lock(&vector_lock);
+	/* Setup the per cpu irq handling data structures */
+	__setup_vector_irq(cpuid);
 	cpu_set(cpuid, cpu_online_map);
 	unlock_ipi_calllock();
 	per_cpu(cpu_state, cpuid) = CPU_ONLINE;
+	spin_unlock(&vector_lock);
 
 	smp_setup_percpu_timer();
 
@@ -457,7 +462,7 @@ smp_callin (void)
 /*
  * Activate a secondary processor.  head.S calls this.
  */
-int __devinit
+int __cpuinit
 start_secondary (void *unused)
 {
 	/* Early console may use I/O ports */
@@ -484,7 +489,7 @@ struct create_idle {
 	int cpu;
 };
 
-void
+void __cpuinit
 do_fork_idle(struct work_struct *work)
 {
 	struct create_idle *c_idle =
@@ -494,7 +499,7 @@ do_fork_idle(struct work_struct *work)
 	complete(&c_idle->done);
 }
 
-static int __devinit
+static int __cpuinit
 do_boot_cpu (int sapicid, int cpu)
 {
 	int timeout;
@@ -646,12 +651,12 @@ clear_cpu_sibling_map(int cpu)
 {
 	int i;
 
-	for_each_cpu_mask(i, cpu_sibling_map[cpu])
-		cpu_clear(cpu, cpu_sibling_map[i]);
+	for_each_cpu_mask(i, per_cpu(cpu_sibling_map, cpu))
+		cpu_clear(cpu, per_cpu(cpu_sibling_map, i));
 	for_each_cpu_mask(i, cpu_core_map[cpu])
 		cpu_clear(cpu, cpu_core_map[i]);
 
-	cpu_sibling_map[cpu] = cpu_core_map[cpu] = CPU_MASK_NONE;
+	per_cpu(cpu_sibling_map, cpu) = cpu_core_map[cpu] = CPU_MASK_NONE;
 }
 
 static void
@@ -662,7 +667,7 @@ remove_siblinginfo(int cpu)
 	if (cpu_data(cpu)->threads_per_core == 1 &&
 	    cpu_data(cpu)->cores_per_socket == 1) {
 		cpu_clear(cpu, cpu_core_map[cpu]);
-		cpu_clear(cpu, cpu_sibling_map[cpu]);
+		cpu_clear(cpu, per_cpu(cpu_sibling_map, cpu));
 		return;
 	}
 
@@ -695,7 +700,7 @@ int migrate_platform_irqs(unsigned int cpu)
 			set_cpei_target_cpu(new_cpei_cpu);
 			desc = irq_desc + ia64_cpe_irq;
 			/*
-			 * Switch for now, immediatly, we need to do fake intr
+			 * Switch for now, immediately, we need to do fake intr
 			 * as other interrupts, but need to study CPEI behaviour with
 			 * polling before making changes.
 			 */
@@ -725,6 +730,11 @@ int __cpu_disable(void)
 	if (cpu == 0 && !bsp_remove_ok) {
 		printk ("Your platform does not support removal of BSP\n");
 		return (-EBUSY);
+	}
+
+	if (ia64_platform_is("sn2")) {
+		if (!sn_cpu_disable_allowed(cpu))
+			return -EBUSY;
 	}
 
 	cpu_clear(cpu, cpu_online_map);
@@ -798,14 +808,14 @@ set_cpu_sibling_map(int cpu)
 			cpu_set(i, cpu_core_map[cpu]);
 			cpu_set(cpu, cpu_core_map[i]);
 			if (cpu_data(cpu)->core_id == cpu_data(i)->core_id) {
-				cpu_set(i, cpu_sibling_map[cpu]);
-				cpu_set(cpu, cpu_sibling_map[i]);
+				cpu_set(i, per_cpu(cpu_sibling_map, cpu));
+				cpu_set(cpu, per_cpu(cpu_sibling_map, i));
 			}
 		}
 	}
 }
 
-int __devinit
+int __cpuinit
 __cpu_up (unsigned int cpu)
 {
 	int ret;
@@ -830,7 +840,7 @@ __cpu_up (unsigned int cpu)
 
 	if (cpu_data(cpu)->threads_per_core == 1 &&
 	    cpu_data(cpu)->cores_per_socket == 1) {
-		cpu_set(cpu, cpu_sibling_map[cpu]);
+		cpu_set(cpu, per_cpu(cpu_sibling_map, cpu));
 		cpu_set(cpu, cpu_core_map[cpu]);
 		return 0;
 	}
@@ -841,7 +851,7 @@ __cpu_up (unsigned int cpu)
 }
 
 /*
- * Assume that CPU's have been discovered by some platform-dependent interface.  For
+ * Assume that CPUs have been discovered by some platform-dependent interface.  For
  * SoftSDV/Lion, that would be ACPI.
  *
  * Setup of the IPI irq handler is done in irq.c:init_IRQ_SMP().
@@ -855,7 +865,7 @@ init_smp_config(void)
 	} *ap_startup;
 	long sal_ret;
 
-	/* Tell SAL where to drop the AP's.  */
+	/* Tell SAL where to drop the APs.  */
 	ap_startup = (struct fptr *) start_ap;
 	sal_ret = ia64_sal_set_vectors(SAL_VECTOR_OS_BOOT_RENDEZ,
 				       ia64_tpa(ap_startup->fp), ia64_tpa(ap_startup->gp), 0, 0, 0, 0);
@@ -875,13 +885,17 @@ identify_siblings(struct cpuinfo_ia64 *c)
 	u16 pltid;
 	pal_logical_to_physical_t info;
 
-	if (smp_num_cpucores == 1 && smp_num_siblings == 1)
-		return;
-
 	if ((status = ia64_pal_logical_to_phys(-1, &info)) != PAL_STATUS_SUCCESS) {
-		printk(KERN_ERR "ia64_pal_logical_to_phys failed with %ld\n",
-		       status);
-		return;
+		if (status != PAL_STATUS_UNIMPLEMENTED) {
+			printk(KERN_ERR
+				"ia64_pal_logical_to_phys failed with %ld\n",
+				status);
+			return;
+		}
+
+		info.overview_ppid = 0;
+		info.overview_cpp  = 1;
+		info.overview_tpc  = 1;
 	}
 	if ((status = ia64_sal_physical_id_info(&pltid)) != PAL_STATUS_SUCCESS) {
 		printk(KERN_ERR "ia64_sal_pltid failed with %ld\n", status);
@@ -889,6 +903,10 @@ identify_siblings(struct cpuinfo_ia64 *c)
 	}
 
 	c->socket_id =  (pltid << 8) | info.overview_ppid;
+
+	if (info.overview_cpp == 1 && info.overview_tpc == 1)
+		return;
+
 	c->cores_per_socket = info.overview_cpp;
 	c->threads_per_core = info.overview_tpc;
 	c->num_log = info.overview_num_log;

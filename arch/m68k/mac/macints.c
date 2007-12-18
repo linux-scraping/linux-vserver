@@ -114,6 +114,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -219,12 +220,12 @@ static void mac_disable_irq(unsigned int irq);
 
 static struct irq_controller mac_irq_controller = {
 	.name		= "mac",
-	.lock		= SPIN_LOCK_UNLOCKED,
+	.lock		= __SPIN_LOCK_UNLOCKED(mac_irq_controller.lock),
 	.enable		= mac_enable_irq,
 	.disable	= mac_disable_irq,
 };
 
-void mac_init_IRQ(void)
+void __init mac_init_IRQ(void)
 {
 #ifdef DEBUG_MACINTS
 	printk("mac_init_IRQ(): Setting things up...\n");
@@ -391,6 +392,7 @@ int mac_irq_pending(unsigned int irq)
 	}
 	return 0;
 }
+EXPORT_SYMBOL(mac_irq_pending);
 
 static int num_debug[8];
 

@@ -17,23 +17,11 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/msg_prot.h>
 
-extern unsigned int xprt_udp_slot_table_entries;
-extern unsigned int xprt_tcp_slot_table_entries;
+#ifdef __KERNEL__
 
 #define RPC_MIN_SLOT_TABLE	(2U)
 #define RPC_DEF_SLOT_TABLE	(16U)
 #define RPC_MAX_SLOT_TABLE	(128U)
-
-/*
- * Parameters for choosing a free port
- */
-extern unsigned int xprt_min_resvport;
-extern unsigned int xprt_max_resvport;
-
-#define RPC_MIN_RESVPORT	(1U)
-#define RPC_MAX_RESVPORT	(65535U)
-#define RPC_DEF_MIN_RESVPORT	(665U)
-#define RPC_DEF_MAX_RESVPORT	(1023U)
 
 /*
  * This describes a timeout strategy
@@ -51,6 +39,10 @@ enum rpc_display_format_t {
 	RPC_DISPLAY_PORT,
 	RPC_DISPLAY_PROTO,
 	RPC_DISPLAY_ALL,
+	RPC_DISPLAY_HEX_ADDR,
+	RPC_DISPLAY_HEX_PORT,
+	RPC_DISPLAY_UNIVERSAL_ADDR,
+	RPC_DISPLAY_NETID,
 	RPC_DISPLAY_MAX,
 };
 
@@ -84,7 +76,9 @@ struct rpc_rqst {
 	struct list_head	rq_list;
 
 	__u32 *			rq_buffer;	/* XDR encode buffer */
-	size_t			rq_bufsize;
+	size_t			rq_bufsize,
+				rq_callsize,
+				rq_rcvsize;
 
 	struct xdr_buf		rq_private_buf;		/* The receive buffer
 							 * used in the softirq.
@@ -112,7 +106,7 @@ struct rpc_xprt_ops {
 	void		(*set_port)(struct rpc_xprt *xprt, unsigned short port);
 	void		(*connect)(struct rpc_task *task);
 	void *		(*buf_alloc)(struct rpc_task *task, size_t size);
-	void		(*buf_free)(struct rpc_task *task);
+	void		(*buf_free)(void *buffer);
 	int		(*send_request)(struct rpc_task *task);
 	void		(*set_retrans_timeout)(struct rpc_task *task);
 	void		(*timer)(struct rpc_task *task);
@@ -150,6 +144,7 @@ struct rpc_xprt {
 	unsigned long		state;		/* transport state */
 	unsigned char		shutdown   : 1,	/* being shut down */
 				resvport   : 1; /* use a reserved port */
+	unsigned int		bind_index;	/* bind function index */
 
 	/*
 	 * Connection of transports
@@ -191,7 +186,21 @@ struct rpc_xprt {
 	char *			address_strings[RPC_DISPLAY_MAX];
 };
 
-#ifdef __KERNEL__
+struct xprt_create {
+	int			ident;		/* XPRT_TRANSPORT identifier */
+	struct sockaddr *	srcaddr;	/* optional local address */
+	struct sockaddr *	dstaddr;	/* remote peer address */
+	size_t			addrlen;
+	struct rpc_timeout *	timeout;	/* optional timeout parameters */
+};
+
+struct xprt_class {
+	struct list_head	list;
+	int			ident;		/* XPRT_TRANSPORT identifier */
+	struct rpc_xprt *	(*setup)(struct xprt_create *);
+	struct module		*owner;
+	char			name[32];
+};
 
 /*
  * Transport operations used by ULPs
@@ -201,7 +210,7 @@ void			xprt_set_timeout(struct rpc_timeout *to, unsigned int retr, unsigned long
 /*
  * Generic internal transport functions
  */
-struct rpc_xprt *	xprt_create_transport(int proto, struct sockaddr *addr, size_t size, struct rpc_timeout *toparms);
+struct rpc_xprt		*xprt_create_transport(struct xprt_create *args);
 void			xprt_connect(struct rpc_task *task);
 void			xprt_reserve(struct rpc_task *task);
 int			xprt_reserve_xprt(struct rpc_task *task);
@@ -224,6 +233,8 @@ static inline __be32 *xprt_skip_transport_header(struct rpc_xprt *xprt, __be32 *
 /*
  * Transport switch helper functions
  */
+int			xprt_register_transport(struct xprt_class *type);
+int			xprt_unregister_transport(struct xprt_class *type);
 void			xprt_set_retrans_timeout_def(struct rpc_task *task);
 void			xprt_set_retrans_timeout_rtt(struct rpc_task *task);
 void			xprt_wake_pending_tasks(struct rpc_xprt *xprt, int status);
@@ -235,12 +246,6 @@ struct rpc_rqst *	xprt_lookup_rqst(struct rpc_xprt *xprt, __be32 xid);
 void			xprt_complete_rqst(struct rpc_task *task, int copied);
 void			xprt_release_rqst_cong(struct rpc_task *task);
 void			xprt_disconnect(struct rpc_xprt *xprt);
-
-/*
- * Socket transport setup operations
- */
-struct rpc_xprt *	xs_setup_udp(struct sockaddr *addr, size_t addrlen, struct rpc_timeout *to);
-struct rpc_xprt *	xs_setup_tcp(struct sockaddr *addr, size_t addrlen, struct rpc_timeout *to);
 
 /*
  * Reserved bit positions in xprt->state

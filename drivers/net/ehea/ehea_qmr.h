@@ -36,8 +36,14 @@
  * page size of ehea hardware queues
  */
 
-#define EHEA_PAGESHIFT  12
-#define EHEA_PAGESIZE   4096UL
+#define EHEA_PAGESHIFT         12
+#define EHEA_PAGESIZE          (1UL << EHEA_PAGESHIFT)
+#define EHEA_SECTSIZE          (1UL << 24)
+#define EHEA_PAGES_PER_SECTION (EHEA_SECTSIZE >> EHEA_PAGESHIFT)
+
+#if (1UL << SECTION_SIZE_BITS) < EHEA_SECTSIZE
+#error eHEA module can't work if kernel sectionsize < ehea sectionsize
+#endif
 
 /* Some abbreviations used here:
  *
@@ -139,9 +145,11 @@ struct ehea_rwqe {
 #define EHEA_CQE_VLAN_TAG_XTRACT   0x0400
 
 #define EHEA_CQE_TYPE_RQ           0x60
-#define EHEA_CQE_STAT_ERR_MASK     0x721F
+#define EHEA_CQE_STAT_ERR_MASK     0x720F
 #define EHEA_CQE_STAT_FAT_ERR_MASK 0x1F
 #define EHEA_CQE_STAT_ERR_TCP      0x4000
+#define EHEA_CQE_STAT_ERR_IP       0x2000
+#define EHEA_CQE_STAT_ERR_CRC      0x1000
 
 struct ehea_cqe {
 	u64 wr_id;		/* work request ID from WQE */
@@ -320,6 +328,11 @@ static inline struct ehea_cqe *ehea_poll_rq1(struct ehea_qp *qp, int *wqe_index)
 	return hw_qeit_get_valid(queue);
 }
 
+static inline void ehea_inc_cq(struct ehea_cq *cq)
+{
+	hw_qeit_inc(&cq->hw_queue);
+}
+
 static inline void ehea_inc_rq1(struct ehea_qp *qp)
 {
 	hw_qeit_inc(&qp->hw_rqueue1);
@@ -327,7 +340,7 @@ static inline void ehea_inc_rq1(struct ehea_qp *qp)
 
 static inline struct ehea_cqe *ehea_poll_cq(struct ehea_cq *my_cq)
 {
-	return hw_qeit_get_inc_valid(&my_cq->hw_queue);
+	return hw_qeit_get_valid(&my_cq->hw_queue);
 }
 
 #define EHEA_CQ_REGISTER_ORIG 0
@@ -356,8 +369,17 @@ struct ehea_qp *ehea_create_qp(struct ehea_adapter * adapter, u32 pd,
 
 int ehea_destroy_qp(struct ehea_qp *qp);
 
-int ehea_reg_mr_adapter(struct ehea_adapter *adapter);
+int ehea_reg_kernel_mr(struct ehea_adapter *adapter, struct ehea_mr *mr);
+
+int ehea_gen_smr(struct ehea_adapter *adapter, struct ehea_mr *old_mr,
+		 struct ehea_mr *shared_mr);
+
+int ehea_rem_mr(struct ehea_mr *mr);
 
 void ehea_error_data(struct ehea_adapter *adapter, u64 res_handle);
+
+int ehea_create_busmap( void );
+void ehea_destroy_busmap( void );
+u64 ehea_map_vaddr(void *caddr);
 
 #endif	/* __EHEA_QMR_H__ */

@@ -2,7 +2,7 @@
 #define __ASM_SH_DMA_MAPPING_H
 
 #include <linux/mm.h>
-#include <asm/scatterlist.h>
+#include <linux/scatterlist.h>
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 
@@ -69,11 +69,11 @@ static inline dma_addr_t dma_map_single(struct device *dev,
 {
 #if defined(CONFIG_PCI) && !defined(CONFIG_SH_PCIDMA_NONCOHERENT)
 	if (dev->bus == &pci_bus_type)
-		return virt_to_bus(ptr);
+		return virt_to_phys(ptr);
 #endif
 	dma_cache_sync(dev, ptr, size, dir);
 
-	return virt_to_bus(ptr);
+	return virt_to_phys(ptr);
 }
 
 #define dma_unmap_single(dev, addr, size, dir)	do { } while (0)
@@ -85,10 +85,9 @@ static inline int dma_map_sg(struct device *dev, struct scatterlist *sg,
 
 	for (i = 0; i < nents; i++) {
 #if !defined(CONFIG_PCI) || defined(CONFIG_SH_PCIDMA_NONCOHERENT)
-		dma_cache_sync(dev, page_address(sg[i].page) + sg[i].offset,
-			       sg[i].length, dir);
+		dma_cache_sync(dev, sg_virt(&sg[i]), sg[i].length, dir);
 #endif
-		sg[i].dma_address = page_to_phys(sg[i].page) + sg[i].offset;
+		sg[i].dma_address = sg_phys(&sg[i]);
 	}
 
 	return nents;
@@ -116,7 +115,7 @@ static inline void dma_sync_single(struct device *dev, dma_addr_t dma_handle,
 	if (dev->bus == &pci_bus_type)
 		return;
 #endif
-	dma_cache_sync(dev, bus_to_virt(dma_handle), size, dir);
+	dma_cache_sync(dev, phys_to_virt(dma_handle), size, dir);
 }
 
 static inline void dma_sync_single_range(struct device *dev,
@@ -128,7 +127,7 @@ static inline void dma_sync_single_range(struct device *dev,
 	if (dev->bus == &pci_bus_type)
 		return;
 #endif
-	dma_cache_sync(dev, bus_to_virt(dma_handle) + offset, size, dir);
+	dma_cache_sync(dev, phys_to_virt(dma_handle) + offset, size, dir);
 }
 
 static inline void dma_sync_sg(struct device *dev, struct scatterlist *sg,
@@ -138,10 +137,9 @@ static inline void dma_sync_sg(struct device *dev, struct scatterlist *sg,
 
 	for (i = 0; i < nelems; i++) {
 #if !defined(CONFIG_PCI) || defined(CONFIG_SH_PCIDMA_NONCOHERENT)
-		dma_cache_sync(dev, page_address(sg[i].page) + sg[i].offset,
-			       sg[i].length, dir);
+		dma_cache_sync(dev, sg_virt(&sg[i]), sg[i].length, dir);
 #endif
-		sg[i].dma_address = page_to_phys(sg[i].page) + sg[i].offset;
+		sg[i].dma_address = sg_phys(&sg[i]);
 	}
 }
 
@@ -159,6 +157,25 @@ static inline void dma_sync_single_for_device(struct device *dev,
 {
 	dma_sync_single(dev, dma_handle, size, dir);
 }
+
+static inline void dma_sync_single_range_for_cpu(struct device *dev,
+						 dma_addr_t dma_handle,
+						 unsigned long offset,
+						 size_t size,
+						 enum dma_data_direction direction)
+{
+	dma_sync_single_for_cpu(dev, dma_handle+offset, size, direction);
+}
+
+static inline void dma_sync_single_range_for_device(struct device *dev,
+						    dma_addr_t dma_handle,
+						    unsigned long offset,
+						    size_t size,
+						    enum dma_data_direction direction)
+{
+	dma_sync_single_for_device(dev, dma_handle+offset, size, direction);
+}
+
 
 static inline void dma_sync_sg_for_cpu(struct device *dev,
 				       struct scatterlist *sg, int nelems,

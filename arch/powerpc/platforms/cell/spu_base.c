@@ -31,19 +31,40 @@
 #include <linux/mm.h>
 #include <linux/io.h>
 #include <linux/mutex.h>
+#include <linux/linux_logo.h>
 #include <asm/spu.h>
 #include <asm/spu_priv1.h>
 #include <asm/xmon.h>
+#include <asm/prom.h>
 
 const struct spu_management_ops *spu_management_ops;
+EXPORT_SYMBOL_GPL(spu_management_ops);
+
 const struct spu_priv1_ops *spu_priv1_ops;
-
-static struct list_head spu_list[MAX_NUMNODES];
-static LIST_HEAD(spu_full_list);
-static DEFINE_MUTEX(spu_mutex);
-static spinlock_t spu_list_lock = SPIN_LOCK_UNLOCKED;
-
 EXPORT_SYMBOL_GPL(spu_priv1_ops);
+
+struct cbe_spu_info cbe_spu_info[MAX_NUMNODES];
+EXPORT_SYMBOL_GPL(cbe_spu_info);
+
+/*
+ * Protects cbe_spu_info and spu->number.
+ */
+static DEFINE_SPINLOCK(spu_lock);
+
+/*
+ * List of all spus in the system.
+ *
+ * This list is iterated by callers from irq context and callers that
+ * want to sleep.  Thus modifications need to be done with both
+ * spu_full_list_lock and spu_full_list_mutex held, while iterating
+ * through it requires either of these locks.
+ *
+ * In addition spu_full_list_lock protects all assignmens to
+ * spu->mm.
+ */
+static LIST_HEAD(spu_full_list);
+static DEFINE_SPINLOCK(spu_full_list_lock);
+static DEFINE_MUTEX(spu_full_list_mutex);
 
 void spu_invalidate_slbs(struct spu *spu)
 {
@@ -62,12 +83,12 @@ void spu_flush_all_slbs(struct mm_struct *mm)
 	struct spu *spu;
 	unsigned long flags;
 
-	spin_lock_irqsave(&spu_list_lock, flags);
+	spin_lock_irqsave(&spu_full_list_lock, flags);
 	list_for_each_entry(spu, &spu_full_list, full_list) {
 		if (spu->mm == mm)
 			spu_invalidate_slbs(spu);
 	}
-	spin_unlock_irqrestore(&spu_list_lock, flags);
+	spin_unlock_irqrestore(&spu_full_list_lock, flags);
 }
 
 /* The hack below stinks... try to do something better one of
@@ -85,9 +106,9 @@ void spu_associate_mm(struct spu *spu, struct mm_struct *mm)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&spu_list_lock, flags);
+	spin_lock_irqsave(&spu_full_list_lock, flags);
 	spu->mm = mm;
-	spin_unlock_irqrestore(&spu_list_lock, flags);
+	spin_unlock_irqrestore(&spu_full_list_lock, flags);
 	if (mm)
 		mm_needs_global_tlbie(mm);
 }
@@ -142,13 +163,12 @@ static int __spu_trap_data_seg(struct spu *spu, unsigned long ea)
 
 	switch(REGION_ID(ea)) {
 	case USER_REGION_ID:
-#ifdef CONFIG_HUGETLB_PAGE
-		if (in_hugepage_area(mm->context, ea))
-			psize = mmu_huge_psize;
-		else
+#ifdef CONFIG_PPC_MM_SLICES
+		psize = get_slice_psize(mm, ea);
+#else
+		psize = mm->context.user_psize;
 #endif
-			psize = mm->context.user_psize;
-		vsid = (get_vsid(mm->context.id, ea) << SLB_VSID_SHIFT) |
+		vsid = (get_vsid(mm->context.id, ea, MMU_SEGSIZE_256M) << SLB_VSID_SHIFT) |
 				SLB_VSID_USER;
 		break;
 	case VMALLOC_REGION_ID:
@@ -156,12 +176,12 @@ static int __spu_trap_data_seg(struct spu *spu, unsigned long ea)
 			psize = mmu_vmalloc_psize;
 		else
 			psize = mmu_io_psize;
-		vsid = (get_kernel_vsid(ea) << SLB_VSID_SHIFT) |
+		vsid = (get_kernel_vsid(ea, MMU_SEGSIZE_256M) << SLB_VSID_SHIFT) |
 			SLB_VSID_KERNEL;
 		break;
 	case KERNEL_REGION_ID:
 		psize = mmu_linear_psize;
-		vsid = (get_kernel_vsid(ea) << SLB_VSID_SHIFT) |
+		vsid = (get_kernel_vsid(ea, MMU_SEGSIZE_256M) << SLB_VSID_SHIFT) |
 			SLB_VSID_KERNEL;
 		break;
 	default:
@@ -182,7 +202,7 @@ static int __spu_trap_data_seg(struct spu *spu, unsigned long ea)
 		spu->slb_replace = 0;
 
 	spu_restart_dma(spu);
-
+	spu->stats.slb_flt++;
 	return 0;
 }
 
@@ -216,10 +236,21 @@ static irqreturn_t
 spu_irq_class_0(int irq, void *data)
 {
 	struct spu *spu;
+	unsigned long stat, mask;
 
 	spu = data;
-	spu->class_0_pending = 1;
+
+	mask = spu_int_mask_get(spu, 0);
+	stat = spu_int_stat_get(spu, 0);
+	stat &= mask;
+
+	spin_lock(&spu->register_lock);
+	spu->class_0_pending |= stat;
+	spin_unlock(&spu->register_lock);
+
 	spu->stop_callback(spu);
+
+	spu_int_stat_clear(spu, 0, stat);
 
 	return IRQ_HANDLED;
 }
@@ -227,16 +258,12 @@ spu_irq_class_0(int irq, void *data)
 int
 spu_irq_class_0_bottom(struct spu *spu)
 {
-	unsigned long stat, mask;
 	unsigned long flags;
-
-	spu->class_0_pending = 0;
+	unsigned long stat;
 
 	spin_lock_irqsave(&spu->register_lock, flags);
-	mask = spu_int_mask_get(spu, 0);
-	stat = spu_int_stat_get(spu, 0);
-
-	stat &= mask;
+	stat = spu->class_0_pending;
+	spu->class_0_pending = 0;
 
 	if (stat & 1) /* invalid DMA alignment */
 		__spu_trap_dma_align(spu);
@@ -247,7 +274,6 @@ spu_irq_class_0_bottom(struct spu *spu)
 	if (stat & 4) /* error on SPU */
 		__spu_trap_error(spu);
 
-	spu_int_stat_clear(spu, 0, stat);
 	spin_unlock_irqrestore(&spu->register_lock, flags);
 
 	return (stat & 0x7) ? -EIO : 0;
@@ -290,7 +316,6 @@ spu_irq_class_1(int irq, void *data)
 
 	return stat ? IRQ_HANDLED : IRQ_NONE;
 }
-EXPORT_SYMBOL_GPL(spu_irq_class_1_bottom);
 
 static irqreturn_t
 spu_irq_class_2(int irq, void *data)
@@ -332,6 +357,7 @@ spu_irq_class_2(int irq, void *data)
 	if (stat & 0x10) /* SPU mailbox threshold */
 		spu->wbox_callback(spu);
 
+	spu->stats.class2_intr++;
 	return stat ? IRQ_HANDLED : IRQ_NONE;
 }
 
@@ -388,7 +414,7 @@ static void spu_free_irqs(struct spu *spu)
 		free_irq(spu->irqs[2], spu);
 }
 
-static void spu_init_channels(struct spu *spu)
+void spu_init_channels(struct spu *spu)
 {
 	static const struct {
 		 unsigned channel;
@@ -421,161 +447,31 @@ static void spu_init_channels(struct spu *spu)
 		out_be64(&priv2->spu_chnlcnt_RW, count_list[i].count);
 	}
 }
+EXPORT_SYMBOL_GPL(spu_init_channels);
 
-struct spu *spu_alloc_node(int node)
+static int spu_shutdown(struct sys_device *sysdev)
 {
-	struct spu *spu = NULL;
+	struct spu *spu = container_of(sysdev, struct spu, sysdev);
 
-	mutex_lock(&spu_mutex);
-	if (!list_empty(&spu_list[node])) {
-		spu = list_entry(spu_list[node].next, struct spu, list);
-		list_del_init(&spu->list);
-		pr_debug("Got SPU %d %d\n", spu->number, spu->node);
-		spu_init_channels(spu);
-	}
-	mutex_unlock(&spu_mutex);
-
-	return spu;
-}
-EXPORT_SYMBOL_GPL(spu_alloc_node);
-
-struct spu *spu_alloc(void)
-{
-	struct spu *spu = NULL;
-	int node;
-
-	for (node = 0; node < MAX_NUMNODES; node++) {
-		spu = spu_alloc_node(node);
-		if (spu)
-			break;
-	}
-
-	return spu;
+	spu_free_irqs(spu);
+	spu_destroy_spu(spu);
+	return 0;
 }
 
-void spu_free(struct spu *spu)
-{
-	mutex_lock(&spu_mutex);
-	list_add_tail(&spu->list, &spu_list[spu->node]);
-	mutex_unlock(&spu_mutex);
-}
-EXPORT_SYMBOL_GPL(spu_free);
-
-static int spu_handle_mm_fault(struct spu *spu)
-{
-	struct mm_struct *mm = spu->mm;
-	struct vm_area_struct *vma;
-	u64 ea, dsisr, is_write;
-	int ret;
-
-	ea = spu->dar;
-	dsisr = spu->dsisr;
-#if 0
-	if (!IS_VALID_EA(ea)) {
-		return -EFAULT;
-	}
-#endif /* XXX */
-	if (mm == NULL) {
-		return -EFAULT;
-	}
-	if (mm->pgd == NULL) {
-		return -EFAULT;
-	}
-
-	down_read(&mm->mmap_sem);
-	vma = find_vma(mm, ea);
-	if (!vma)
-		goto bad_area;
-	if (vma->vm_start <= ea)
-		goto good_area;
-	if (!(vma->vm_flags & VM_GROWSDOWN))
-		goto bad_area;
-#if 0
-	if (expand_stack(vma, ea))
-		goto bad_area;
-#endif /* XXX */
-good_area:
-	is_write = dsisr & MFC_DSISR_ACCESS_PUT;
-	if (is_write) {
-		if (!(vma->vm_flags & VM_WRITE))
-			goto bad_area;
-	} else {
-		if (dsisr & MFC_DSISR_ACCESS_DENIED)
-			goto bad_area;
-		if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
-			goto bad_area;
-	}
-	ret = 0;
-	switch (handle_mm_fault(mm, vma, ea, is_write)) {
-	case VM_FAULT_MINOR:
-		current->min_flt++;
-		break;
-	case VM_FAULT_MAJOR:
-		current->maj_flt++;
-		break;
-	case VM_FAULT_SIGBUS:
-		ret = -EFAULT;
-		goto bad_area;
-	case VM_FAULT_OOM:
-		ret = -ENOMEM;
-		goto bad_area;
-	default:
-		BUG();
-	}
-	up_read(&mm->mmap_sem);
-	return ret;
-
-bad_area:
-	up_read(&mm->mmap_sem);
-	return -EFAULT;
-}
-
-int spu_irq_class_1_bottom(struct spu *spu)
-{
-	u64 ea, dsisr, access, error = 0UL;
-	int ret = 0;
-
-	ea = spu->dar;
-	dsisr = spu->dsisr;
-	if (dsisr & (MFC_DSISR_PTE_NOT_FOUND | MFC_DSISR_ACCESS_DENIED)) {
-		u64 flags;
-
-		access = (_PAGE_PRESENT | _PAGE_USER);
-		access |= (dsisr & MFC_DSISR_ACCESS_PUT) ? _PAGE_RW : 0UL;
-		local_irq_save(flags);
-		if (hash_page(ea, access, 0x300) != 0)
-			error |= CLASS1_ENABLE_STORAGE_FAULT_INTR;
-		local_irq_restore(flags);
-	}
-	if (error & CLASS1_ENABLE_STORAGE_FAULT_INTR) {
-		if ((ret = spu_handle_mm_fault(spu)) != 0)
-			error |= CLASS1_ENABLE_STORAGE_FAULT_INTR;
-		else
-			error &= ~CLASS1_ENABLE_STORAGE_FAULT_INTR;
-	}
-	spu->dar = 0UL;
-	spu->dsisr = 0UL;
-	if (!error) {
-		spu_restart_dma(spu);
-	} else {
-		spu->dma_callback(spu, SPE_EVENT_SPE_DATA_STORAGE);
-	}
-	return ret;
-}
-
-struct sysdev_class spu_sysdev_class = {
-	set_kset_name("spu")
+static struct sysdev_class spu_sysdev_class = {
+	set_kset_name("spu"),
+	.shutdown = spu_shutdown,
 };
 
 int spu_add_sysdev_attr(struct sysdev_attribute *attr)
 {
 	struct spu *spu;
-	mutex_lock(&spu_mutex);
 
+	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
 		sysdev_create_file(&spu->sysdev, attr);
+	mutex_unlock(&spu_full_list_mutex);
 
-	mutex_unlock(&spu_mutex);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(spu_add_sysdev_attr);
@@ -583,12 +479,12 @@ EXPORT_SYMBOL_GPL(spu_add_sysdev_attr);
 int spu_add_sysdev_attr_group(struct attribute_group *attrs)
 {
 	struct spu *spu;
-	mutex_lock(&spu_mutex);
 
+	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
 		sysfs_create_group(&spu->sysdev.kobj, attrs);
+	mutex_unlock(&spu_full_list_mutex);
 
-	mutex_unlock(&spu_mutex);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(spu_add_sysdev_attr_group);
@@ -597,24 +493,22 @@ EXPORT_SYMBOL_GPL(spu_add_sysdev_attr_group);
 void spu_remove_sysdev_attr(struct sysdev_attribute *attr)
 {
 	struct spu *spu;
-	mutex_lock(&spu_mutex);
 
+	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
 		sysdev_remove_file(&spu->sysdev, attr);
-
-	mutex_unlock(&spu_mutex);
+	mutex_unlock(&spu_full_list_mutex);
 }
 EXPORT_SYMBOL_GPL(spu_remove_sysdev_attr);
 
 void spu_remove_sysdev_attr_group(struct attribute_group *attrs)
 {
 	struct spu *spu;
-	mutex_lock(&spu_mutex);
 
+	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
 		sysfs_remove_group(&spu->sysdev.kobj, attrs);
-
-	mutex_unlock(&spu_mutex);
+	mutex_unlock(&spu_full_list_mutex);
 }
 EXPORT_SYMBOL_GPL(spu_remove_sysdev_attr_group);
 
@@ -636,28 +530,25 @@ static int spu_create_sysdev(struct spu *spu)
 	return 0;
 }
 
-static void spu_destroy_sysdev(struct spu *spu)
-{
-	sysfs_remove_device_from_node(&spu->sysdev, spu->node);
-	sysdev_unregister(&spu->sysdev);
-}
-
 static int __init create_spu(void *data)
 {
 	struct spu *spu;
 	int ret;
 	static int number;
 	unsigned long flags;
+	struct timespec ts;
 
 	ret = -ENOMEM;
 	spu = kzalloc(sizeof (*spu), GFP_KERNEL);
 	if (!spu)
 		goto out;
 
+	spu->alloc_state = SPU_FREE;
+
 	spin_lock_init(&spu->register_lock);
-	mutex_lock(&spu_mutex);
+	spin_lock(&spu_lock);
 	spu->number = number++;
-	mutex_unlock(&spu_mutex);
+	spin_unlock(&spu_lock);
 
 	ret = spu_create_spu(spu, data);
 
@@ -674,12 +565,22 @@ static int __init create_spu(void *data)
 	if (ret)
 		goto out_free_irqs;
 
-	mutex_lock(&spu_mutex);
-	spin_lock_irqsave(&spu_list_lock, flags);
-	list_add(&spu->list, &spu_list[spu->node]);
+	mutex_lock(&cbe_spu_info[spu->node].list_mutex);
+	list_add(&spu->cbe_list, &cbe_spu_info[spu->node].spus);
+	cbe_spu_info[spu->node].n_spus++;
+	mutex_unlock(&cbe_spu_info[spu->node].list_mutex);
+
+	mutex_lock(&spu_full_list_mutex);
+	spin_lock_irqsave(&spu_full_list_lock, flags);
 	list_add(&spu->full_list, &spu_full_list);
-	spin_unlock_irqrestore(&spu_list_lock, flags);
-	mutex_unlock(&spu_mutex);
+	spin_unlock_irqrestore(&spu_full_list_lock, flags);
+	mutex_unlock(&spu_full_list_mutex);
+
+	spu->stats.util_state = SPU_UTIL_IDLE_LOADED;
+	ktime_get_ts(&ts);
+	spu->stats.tstamp = timespec_to_ns(&ts);
+
+	INIT_LIST_HEAD(&spu->aff_list);
 
 	goto out;
 
@@ -693,58 +594,103 @@ out:
 	return ret;
 }
 
-static void destroy_spu(struct spu *spu)
+static const char *spu_state_names[] = {
+	"user", "system", "iowait", "idle"
+};
+
+static unsigned long long spu_acct_time(struct spu *spu,
+		enum spu_utilization_state state)
 {
-	list_del_init(&spu->list);
-	list_del_init(&spu->full_list);
+	struct timespec ts;
+	unsigned long long time = spu->stats.times[state];
 
-	spu_destroy_sysdev(spu);
-	spu_free_irqs(spu);
-	spu_destroy_spu(spu);
-	kfree(spu);
-}
-
-static void cleanup_spu_base(void)
-{
-	struct spu *spu, *tmp;
-	int node;
-
-	mutex_lock(&spu_mutex);
-	for (node = 0; node < MAX_NUMNODES; node++) {
-		list_for_each_entry_safe(spu, tmp, &spu_list[node], list)
-			destroy_spu(spu);
+	/*
+	 * If the spu is idle or the context is stopped, utilization
+	 * statistics are not updated.  Apply the time delta from the
+	 * last recorded state of the spu.
+	 */
+	if (spu->stats.util_state == state) {
+		ktime_get_ts(&ts);
+		time += timespec_to_ns(&ts) - spu->stats.tstamp;
 	}
-	mutex_unlock(&spu_mutex);
-	sysdev_class_unregister(&spu_sysdev_class);
+
+	return time / NSEC_PER_MSEC;
 }
-module_exit(cleanup_spu_base);
+
+
+static ssize_t spu_stat_show(struct sys_device *sysdev, char *buf)
+{
+	struct spu *spu = container_of(sysdev, struct spu, sysdev);
+
+	return sprintf(buf, "%s %llu %llu %llu %llu "
+		      "%llu %llu %llu %llu %llu %llu %llu %llu\n",
+		spu_state_names[spu->stats.util_state],
+		spu_acct_time(spu, SPU_UTIL_USER),
+		spu_acct_time(spu, SPU_UTIL_SYSTEM),
+		spu_acct_time(spu, SPU_UTIL_IOWAIT),
+		spu_acct_time(spu, SPU_UTIL_IDLE_LOADED),
+		spu->stats.vol_ctx_switch,
+		spu->stats.invol_ctx_switch,
+		spu->stats.slb_flt,
+		spu->stats.hash_flt,
+		spu->stats.min_flt,
+		spu->stats.maj_flt,
+		spu->stats.class2_intr,
+		spu->stats.libassist);
+}
+
+static SYSDEV_ATTR(stat, 0644, spu_stat_show, NULL);
 
 static int __init init_spu_base(void)
 {
-	int i, ret;
+	int i, ret = 0;
+
+	for (i = 0; i < MAX_NUMNODES; i++) {
+		mutex_init(&cbe_spu_info[i].list_mutex);
+		INIT_LIST_HEAD(&cbe_spu_info[i].spus);
+	}
 
 	if (!spu_management_ops)
-		return 0;
+		goto out;
 
 	/* create sysdev class for spus */
 	ret = sysdev_class_register(&spu_sysdev_class);
 	if (ret)
-		return ret;
-
-	for (i = 0; i < MAX_NUMNODES; i++)
-		INIT_LIST_HEAD(&spu_list[i]);
+		goto out;
 
 	ret = spu_enumerate_spus(create_spu);
 
-	if (ret) {
+	if (ret < 0) {
 		printk(KERN_WARNING "%s: Error initializing spus\n",
 			__FUNCTION__);
-		cleanup_spu_base();
-		return ret;
+		goto out_unregister_sysdev_class;
 	}
 
-	xmon_register_spus(&spu_full_list);
+	if (ret > 0) {
+		/*
+		 * We cannot put the forward declaration in
+		 * <linux/linux_logo.h> because of conflicting session type
+		 * conflicts for const and __initdata with different compiler
+		 * versions
+		 */
+		extern const struct linux_logo logo_spe_clut224;
 
+		fb_append_extra_logo(&logo_spe_clut224, ret);
+	}
+
+	mutex_lock(&spu_full_list_mutex);
+	xmon_register_spus(&spu_full_list);
+	crash_register_spus(&spu_full_list);
+	mutex_unlock(&spu_full_list_mutex);
+	spu_add_sysdev_attr(&attr_stat);
+
+	spu_init_affinity();
+
+	return 0;
+
+ out_unregister_sysdev_class:
+	sysdev_class_unregister(&spu_sysdev_class);
+ out:
 	return ret;
 }
 module_init(init_spu_base);

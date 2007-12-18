@@ -1,15 +1,13 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
- * Copyright (C) 2004 Thomas Gleixner <tglx@linutronix.de>
+ * Copyright © 2001-2007 Red Hat, Inc.
+ * Copyright © 2004 Thomas Gleixner <tglx@linutronix.de>
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  * Modified debugged and enhanced by Thomas Gleixner <tglx@linutronix.de>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: wbuf.c,v 1.100 2005/09/30 13:59:13 dedekind Exp $
  *
  */
 
@@ -222,6 +220,47 @@ static struct jffs2_raw_node_ref **jffs2_incore_replace_raw(struct jffs2_sb_info
 	return NULL;
 }
 
+#ifdef CONFIG_JFFS2_FS_WBUF_VERIFY
+static int jffs2_verify_write(struct jffs2_sb_info *c, unsigned char *buf,
+			      uint32_t ofs)
+{
+	int ret;
+	size_t retlen;
+	char *eccstr;
+
+	ret = c->mtd->read(c->mtd, ofs, c->wbuf_pagesize, &retlen, c->wbuf_verify);
+	if (ret && ret != -EUCLEAN && ret != -EBADMSG) {
+		printk(KERN_WARNING "jffs2_verify_write(): Read back of page at %08x failed: %d\n", c->wbuf_ofs, ret);
+		return ret;
+	} else if (retlen != c->wbuf_pagesize) {
+		printk(KERN_WARNING "jffs2_verify_write(): Read back of page at %08x gave short read: %zd not %d.\n", ofs, retlen, c->wbuf_pagesize);
+		return -EIO;
+	}
+	if (!memcmp(buf, c->wbuf_verify, c->wbuf_pagesize))
+		return 0;
+
+	if (ret == -EUCLEAN)
+		eccstr = "corrected";
+	else if (ret == -EBADMSG)
+		eccstr = "correction failed";
+	else
+		eccstr = "OK or unused";
+
+	printk(KERN_WARNING "Write verify error (ECC %s) at %08x. Wrote:\n",
+	       eccstr, c->wbuf_ofs);
+	print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET, 16, 1,
+		       c->wbuf, c->wbuf_pagesize, 0);
+
+	printk(KERN_WARNING "Read back:\n");
+	print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET, 16, 1,
+		       c->wbuf_verify, c->wbuf_pagesize, 0);
+
+	return -EIO;
+}
+#else
+#define jffs2_verify_write(c,b,o) (0)
+#endif
+
 /* Recover from failure to write wbuf. Recover the nodes up to the
  * wbuf, not the one which we were starting to try to write. */
 
@@ -345,6 +384,9 @@ static void jffs2_wbuf_recover(struct jffs2_sb_info *c)
 		return;
 	}
 
+	/* The summary is not recovered, so it must be disabled for this erase block */
+	jffs2_sum_disable_collecting(c->summary);
+
 	ret = jffs2_prealloc_raw_node_refs(c, c->nextblock, nr_refile);
 	if (ret) {
 		printk(KERN_WARNING "Failed to allocate node refs for wbuf recovery. Data loss ensues.\n");
@@ -379,7 +421,7 @@ static void jffs2_wbuf_recover(struct jffs2_sb_info *c)
 			ret = c->mtd->write(c->mtd, ofs, towrite, &retlen,
 					    rewrite_buf);
 
-		if (ret || retlen != towrite) {
+		if (ret || retlen != towrite || jffs2_verify_write(c, rewrite_buf, ofs)) {
 			/* Argh. We tried. Really we did. */
 			printk(KERN_CRIT "Recovery of wbuf failed due to a second write error\n");
 			kfree(buf);
@@ -586,15 +628,16 @@ static int __jffs2_flush_wbuf(struct jffs2_sb_info *c, int pad)
 
 		ret = c->mtd->write(c->mtd, c->wbuf_ofs, c->wbuf_pagesize, &retlen, c->wbuf);
 
-	if (ret || retlen != c->wbuf_pagesize) {
-		if (ret)
-			printk(KERN_WARNING "jffs2_flush_wbuf(): Write failed with %d\n",ret);
-		else {
-			printk(KERN_WARNING "jffs2_flush_wbuf(): Write was short: %zd instead of %d\n",
-				retlen, c->wbuf_pagesize);
-			ret = -EIO;
-		}
-
+	if (ret) {
+		printk(KERN_WARNING "jffs2_flush_wbuf(): Write failed with %d\n", ret);
+		goto wfail;
+	} else if (retlen != c->wbuf_pagesize) {
+		printk(KERN_WARNING "jffs2_flush_wbuf(): Write was short: %zd instead of %d\n",
+		       retlen, c->wbuf_pagesize);
+		ret = -EIO;
+		goto wfail;
+	} else if ((ret = jffs2_verify_write(c, c->wbuf, c->wbuf_ofs))) {
+	wfail:
 		jffs2_wbuf_recover(c);
 
 		return ret;
@@ -636,7 +679,10 @@ static int __jffs2_flush_wbuf(struct jffs2_sb_info *c, int pad)
 
 	memset(c->wbuf,0xff,c->wbuf_pagesize);
 	/* adjust write buffer offset, else we get a non contiguous write bug */
-	c->wbuf_ofs += c->wbuf_pagesize;
+	if (SECTOR_ADDR(c->wbuf_ofs) == SECTOR_ADDR(c->wbuf_ofs+c->wbuf_pagesize))
+		c->wbuf_ofs += c->wbuf_pagesize;
+	else
+		c->wbuf_ofs = 0xffffffff;
 	c->wbuf_len = 0;
 	return 0;
 }
@@ -962,14 +1008,14 @@ exit:
 
 #define NR_OOB_SCAN_PAGES 4
 
-/* For historical reasons we use only 12 bytes for OOB clean marker */
-#define OOB_CM_SIZE 12
+/* For historical reasons we use only 8 bytes for OOB clean marker */
+#define OOB_CM_SIZE 8
 
 static const struct jffs2_unknown_node oob_cleanmarker =
 {
-	.magic = cpu_to_je16(JFFS2_MAGIC_BITMASK),
-	.nodetype = cpu_to_je16(JFFS2_NODETYPE_CLEANMARKER),
-	.totlen = cpu_to_je32(8)
+	.magic = constant_cpu_to_je16(JFFS2_MAGIC_BITMASK),
+	.nodetype = constant_cpu_to_je16(JFFS2_NODETYPE_CLEANMARKER),
+	.totlen = constant_cpu_to_je32(8)
 };
 
 /*
@@ -1017,8 +1063,8 @@ int jffs2_check_oob_empty(struct jffs2_sb_info *c,
 /*
  * Check for a valid cleanmarker.
  * Returns: 0 if a valid cleanmarker was found
- *          1 if no cleanmarker was found
- *          negative error code if an error occurred
+ *	    1 if no cleanmarker was found
+ *	    negative error code if an error occurred
  */
 int jffs2_check_nand_cleanmarker(struct jffs2_sb_info *c,
 				 struct jffs2_eraseblock *jeb)
@@ -1134,11 +1180,22 @@ int jffs2_nand_flash_setup(struct jffs2_sb_info *c)
 		return -ENOMEM;
 	}
 
+#ifdef CONFIG_JFFS2_FS_WBUF_VERIFY
+	c->wbuf_verify = kmalloc(c->wbuf_pagesize, GFP_KERNEL);
+	if (!c->wbuf_verify) {
+		kfree(c->oobbuf);
+		kfree(c->wbuf);
+		return -ENOMEM;
+	}
+#endif
 	return 0;
 }
 
 void jffs2_nand_flash_cleanup(struct jffs2_sb_info *c)
 {
+#ifdef CONFIG_JFFS2_FS_WBUF_VERIFY
+	kfree(c->wbuf_verify);
+#endif
 	kfree(c->wbuf);
 	kfree(c->oobbuf);
 }
@@ -1206,5 +1263,29 @@ int jffs2_nor_wbuf_flash_setup(struct jffs2_sb_info *c) {
 }
 
 void jffs2_nor_wbuf_flash_cleanup(struct jffs2_sb_info *c) {
+	kfree(c->wbuf);
+}
+
+int jffs2_ubivol_setup(struct jffs2_sb_info *c) {
+	c->cleanmarker_size = 0;
+
+	if (c->mtd->writesize == 1)
+		/* We do not need write-buffer */
+		return 0;
+
+	init_rwsem(&c->wbuf_sem);
+
+	c->wbuf_pagesize =  c->mtd->writesize;
+	c->wbuf_ofs = 0xFFFFFFFF;
+	c->wbuf = kmalloc(c->wbuf_pagesize, GFP_KERNEL);
+	if (!c->wbuf)
+		return -ENOMEM;
+
+	printk(KERN_INFO "JFFS2 write-buffering enabled buffer (%d) erasesize (%d)\n", c->wbuf_pagesize, c->sector_size);
+
+	return 0;
+}
+
+void jffs2_ubivol_cleanup(struct jffs2_sb_info *c) {
 	kfree(c->wbuf);
 }

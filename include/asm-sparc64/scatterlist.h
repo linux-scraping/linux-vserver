@@ -3,9 +3,13 @@
 #define _SPARC64_SCATTERLIST_H
 
 #include <asm/page.h>
+#include <asm/types.h>
 
 struct scatterlist {
-	struct page	*page;
+#ifdef CONFIG_DEBUG_SG
+	unsigned long	sg_magic;
+#endif
+	unsigned long	page_link;
 	unsigned int	offset;
 
 	unsigned int	length;
@@ -18,5 +22,7 @@ struct scatterlist {
 #define sg_dma_len(sg)     	((sg)->dma_length)
 
 #define ISA_DMA_THRESHOLD	(~0UL)
+
+#define ARCH_HAS_SG_CHAIN
 
 #endif /* !(_SPARC64_SCATTERLIST_H) */

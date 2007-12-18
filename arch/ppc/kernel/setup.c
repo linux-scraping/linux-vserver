@@ -25,7 +25,6 @@
 #include <asm/pgtable.h>
 #include <asm/bootinfo.h>
 #include <asm/setup.h>
-#include <asm/amigappc.h>
 #include <asm/smp.h>
 #include <asm/elf.h>
 #include <asm/cputable.h>
@@ -526,7 +525,7 @@ void __init setup_arch(char **cmdline_p)
 	 * Systems with OF can look in the properties on the cpu node(s)
 	 * for a possibly more accurate value.
 	 */
-	if (cpu_has_feature(CPU_FTR_SPLIT_ID_CACHE)) {
+	if (! cpu_has_feature(CPU_FTR_UNIFIED_ID_CACHE)) {
 		dcache_bsize = cur_cpu_spec->dcache_bsize;
 		icache_bsize = cur_cpu_spec->icache_bsize;
 		ucache_bsize = 0;

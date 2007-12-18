@@ -19,7 +19,7 @@
 #include <linux/skbuff.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/xt_CONNSECMARK.h>
-#include <net/netfilter/nf_conntrack_compat.h>
+#include <net/netfilter/nf_conntrack.h>
 
 #define PFX "CONNSECMARK: "
 
@@ -33,15 +33,15 @@ MODULE_ALIAS("ip6t_CONNSECMARK");
  * If the packet has a security mark and the connection does not, copy
  * the security mark from the packet to the connection.
  */
-static void secmark_save(struct sk_buff *skb)
+static void secmark_save(const struct sk_buff *skb)
 {
 	if (skb->secmark) {
-		u32 *connsecmark;
+		struct nf_conn *ct;
 		enum ip_conntrack_info ctinfo;
 
-		connsecmark = nf_ct_get_secmark(skb, &ctinfo);
-		if (connsecmark && !*connsecmark)
-			*connsecmark = skb->secmark;
+		ct = nf_ct_get(skb, &ctinfo);
+		if (ct && !ct->secmark)
+			ct->secmark = skb->secmark;
 	}
 }
 
@@ -52,21 +52,20 @@ static void secmark_save(struct sk_buff *skb)
 static void secmark_restore(struct sk_buff *skb)
 {
 	if (!skb->secmark) {
-		u32 *connsecmark;
+		struct nf_conn *ct;
 		enum ip_conntrack_info ctinfo;
 
-		connsecmark = nf_ct_get_secmark(skb, &ctinfo);
-		if (connsecmark && *connsecmark)
-			skb->secmark = *connsecmark;
+		ct = nf_ct_get(skb, &ctinfo);
+		if (ct && ct->secmark)
+			skb->secmark = ct->secmark;
 	}
 }
 
-static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
+static unsigned int target(struct sk_buff *skb, const struct net_device *in,
 			   const struct net_device *out, unsigned int hooknum,
 			   const struct xt_target *target,
 			   const void *targinfo)
 {
-	struct sk_buff *skb = *pskb;
 	const struct xt_connsecmark_target_info *info = targinfo;
 
 	switch (info->mode) {
@@ -85,16 +84,16 @@ static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
 	return XT_CONTINUE;
 }
 
-static int checkentry(const char *tablename, const void *entry,
-		      const struct xt_target *target, void *targinfo,
-		      unsigned int hook_mask)
+static bool checkentry(const char *tablename, const void *entry,
+		       const struct xt_target *target, void *targinfo,
+		       unsigned int hook_mask)
 {
-	struct xt_connsecmark_target_info *info = targinfo;
+	const struct xt_connsecmark_target_info *info = targinfo;
 
 	if (nf_ct_l3proto_try_module_get(target->family) < 0) {
 		printk(KERN_WARNING "can't load conntrack support for "
 				    "proto=%d\n", target->family);
-		return 0;
+		return false;
 	}
 	switch (info->mode) {
 	case CONNSECMARK_SAVE:
@@ -103,10 +102,10 @@ static int checkentry(const char *tablename, const void *entry,
 
 	default:
 		printk(KERN_INFO PFX "invalid mode: %hu\n", info->mode);
-		return 0;
+		return false;
 	}
 
-	return 1;
+	return true;
 }
 
 static void
@@ -115,7 +114,7 @@ destroy(const struct xt_target *target, void *targinfo)
 	nf_ct_l3proto_module_put(target->family);
 }
 
-static struct xt_target xt_connsecmark_target[] = {
+static struct xt_target xt_connsecmark_target[] __read_mostly = {
 	{
 		.name		= "CONNSECMARK",
 		.family		= AF_INET,

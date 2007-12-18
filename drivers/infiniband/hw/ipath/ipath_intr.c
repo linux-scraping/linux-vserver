@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -38,10 +38,39 @@
 #include "ipath_common.h"
 
 /*
+ * clear (write) a pio buffer, to clear a parity error.   This routine
+ * should only be called when in freeze mode, and the buffer should be
+ * canceled afterwards.
+ */
+static void ipath_clrpiobuf(struct ipath_devdata *dd, u32 pnum)
+{
+	u32 __iomem *pbuf;
+	u32 dwcnt; /* dword count to write */
+	if (pnum < dd->ipath_piobcnt2k) {
+		pbuf = (u32 __iomem *) (dd->ipath_pio2kbase + pnum *
+			dd->ipath_palign);
+		dwcnt = dd->ipath_piosize2k >> 2;
+	}
+	else {
+		pbuf = (u32 __iomem *) (dd->ipath_pio4kbase +
+			(pnum - dd->ipath_piobcnt2k) * dd->ipath_4kalign);
+		dwcnt = dd->ipath_piosize4k >> 2;
+	}
+	dev_info(&dd->pcidev->dev,
+		"Rewrite PIO buffer %u, to recover from parity error\n",
+		pnum);
+	*pbuf = dwcnt+1; /* no flush required, since already in freeze */
+	while(--dwcnt)
+		*pbuf++ = 0;
+}
+
+/*
  * Called when we might have an error that is specific to a particular
  * PIO buffer, and may need to cancel that buffer, so it can be re-used.
+ * If rewrite is true, and bits are set in the sendbufferror registers,
+ * we'll write to the buffer, for error recovery on parity errors.
  */
-void ipath_disarm_senderrbufs(struct ipath_devdata *dd)
+static void ipath_disarm_senderrbufs(struct ipath_devdata *dd, int rewrite)
 {
 	u32 piobcnt;
 	unsigned long sbuf[4];
@@ -64,7 +93,8 @@ void ipath_disarm_senderrbufs(struct ipath_devdata *dd)
 
 	if (sbuf[0] || sbuf[1] || (piobcnt > 128 && (sbuf[2] || sbuf[3]))) {
 		int i;
-		if (ipath_debug & (__IPATH_PKTDBG|__IPATH_DBG)) {
+		if (ipath_debug & (__IPATH_PKTDBG|__IPATH_DBG) &&
+			dd->ipath_lastcancel > jiffies) {
 			__IPATH_DBG_WHICH(__IPATH_PKTDBG|__IPATH_DBG,
 					  "SendbufErrs %lx %lx", sbuf[0],
 					  sbuf[1]);
@@ -74,9 +104,13 @@ void ipath_disarm_senderrbufs(struct ipath_devdata *dd)
 		}
 
 		for (i = 0; i < piobcnt; i++)
-			if (test_bit(i, sbuf))
+			if (test_bit(i, sbuf)) {
+				if (rewrite)
+					ipath_clrpiobuf(dd, i);
 				ipath_disarm_piobufs(dd, i, 1);
-		dd->ipath_lastcancel = jiffies+3; /* no armlaunch for a bit */
+			}
+		/* ignore armlaunch errs for a bit */
+		dd->ipath_lastcancel = jiffies+3;
 	}
 }
 
@@ -99,6 +133,17 @@ void ipath_disarm_senderrbufs(struct ipath_devdata *dd)
 	 INFINIPATH_E_INVALIDADDR)
 
 /*
+ * this is similar to E_SUM_ERRS, but can't ignore armlaunch, don't ignore
+ * errors not related to freeze and cancelling buffers.  Can't ignore
+ * armlaunch because could get more while still cleaning up, and need
+ * to cancel those as they happen.
+ */
+#define E_SPKT_ERRS_IGNORE \
+	 (INFINIPATH_E_SDROPPEDDATAPKT | INFINIPATH_E_SDROPPEDSMPPKT | \
+	 INFINIPATH_E_SMAXPKTLEN | INFINIPATH_E_SMINPKTLEN | \
+	 INFINIPATH_E_SPKTLEN)
+
+/*
  * these are errors that can occur when the link changes state while
  * a packet is being sent or received.  This doesn't cover things
  * like EBP or VCRC that can be the result of a sending having the
@@ -114,7 +159,7 @@ static u64 handle_e_sum_errs(struct ipath_devdata *dd, ipath_err_t errs)
 {
 	u64 ignore_this_time = 0;
 
-	ipath_disarm_senderrbufs(dd);
+	ipath_disarm_senderrbufs(dd, 0);
 	if ((errs & E_SUM_LINK_PKTERRS) &&
 	    !(dd->ipath_flags & IPATH_LINKACTIVE)) {
 		/*
@@ -230,6 +275,16 @@ static char *ib_linkstate(u32 linkstate)
 	return ret;
 }
 
+void signal_ib_event(struct ipath_devdata *dd, enum ib_event_type ev)
+{
+	struct ib_event event;
+
+	event.device = &dd->verbs_dev->ibdev;
+	event.element.port_num = 1;
+	event.event = ev;
+	ib_dispatch_event(&event);
+}
+
 static void handle_e_ibstatuschanged(struct ipath_devdata *dd,
 				     ipath_err_t errs, int noprint)
 {
@@ -258,12 +313,7 @@ static void handle_e_ibstatuschanged(struct ipath_devdata *dd,
 		 * Flush all queued sends when link went to DOWN or INIT,
 		 * to be sure that they don't block SMA and other MAD packets
 		 */
-		ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
-				 INFINIPATH_S_ABORT);
-		ipath_disarm_piobufs(dd, dd->ipath_lastport_piobuf,
-							(unsigned)(dd->ipath_piobcnt2k +
-					dd->ipath_piobcnt4k) -
-					dd->ipath_lastport_piobuf);
+		ipath_cancel_sends(dd, 1);
 	}
 	else if (lstate == IPATH_IBSTATE_INIT || lstate == IPATH_IBSTATE_ARM ||
 	    lstate == IPATH_IBSTATE_ACTIVE) {
@@ -333,6 +383,8 @@ static void handle_e_ibstatuschanged(struct ipath_devdata *dd,
 	dd->ipath_ibpollcnt = 0;	/* some state other than 2 or 3 */
 	ipath_stats.sps_iblink++;
 	if (ltstate != INFINIPATH_IBCS_LT_STATE_LINKUP) {
+		if (dd->ipath_flags & IPATH_LINKACTIVE)
+			signal_ib_event(dd, IB_EVENT_PORT_ERR);
 		dd->ipath_flags |= IPATH_LINKDOWN;
 		dd->ipath_flags &= ~(IPATH_LINKUNK | IPATH_LINKINIT
 				     | IPATH_LINKACTIVE |
@@ -365,7 +417,10 @@ static void handle_e_ibstatuschanged(struct ipath_devdata *dd,
 		*dd->ipath_statusp |=
 			IPATH_STATUS_IB_READY | IPATH_STATUS_IB_CONF;
 		dd->ipath_f_setextled(dd, lstate, ltstate);
+		signal_ib_event(dd, IB_EVENT_PORT_ACTIVE);
 	} else if ((val & IPATH_IBSTATE_MASK) == IPATH_IBSTATE_INIT) {
+		if (dd->ipath_flags & IPATH_LINKACTIVE)
+			signal_ib_event(dd, IB_EVENT_PORT_ERR);
 		/*
 		 * set INIT and DOWN.  Down is checked by most of the other
 		 * code, but INIT is useful to know in a few places.
@@ -378,6 +433,8 @@ static void handle_e_ibstatuschanged(struct ipath_devdata *dd,
 					| IPATH_STATUS_IB_READY);
 		dd->ipath_f_setextled(dd, lstate, ltstate);
 	} else if ((val & IPATH_IBSTATE_MASK) == IPATH_IBSTATE_ARM) {
+		if (dd->ipath_flags & IPATH_LINKACTIVE)
+			signal_ib_event(dd, IB_EVENT_PORT_ERR);
 		dd->ipath_flags |= IPATH_LINKARMED;
 		dd->ipath_flags &=
 			~(IPATH_LINKUNK | IPATH_LINKDOWN | IPATH_LINKINIT |
@@ -396,17 +453,20 @@ skip_ibchange:
 }
 
 static void handle_supp_msgs(struct ipath_devdata *dd,
-			     unsigned supp_msgs, char msg[512])
+			     unsigned supp_msgs, char *msg, int msgsz)
 {
 	/*
 	 * Print the message unless it's ibc status change only, which
 	 * happens so often we never want to count it.
 	 */
 	if (dd->ipath_lasterror & ~INFINIPATH_E_IBSTATUSCHANGED) {
-		ipath_decode_err(msg, sizeof msg, dd->ipath_lasterror &
-				 ~INFINIPATH_E_IBSTATUSCHANGED);
+		int iserr;
+		iserr = ipath_decode_err(msg, msgsz,
+					 dd->ipath_lasterror &
+					 ~INFINIPATH_E_IBSTATUSCHANGED);
 		if (dd->ipath_lasterror &
-		    ~(INFINIPATH_E_RRCVEGRFULL | INFINIPATH_E_RRCVHDRFULL))
+			~(INFINIPATH_E_RRCVEGRFULL |
+			INFINIPATH_E_RRCVHDRFULL | INFINIPATH_E_PKTERRS))
 			ipath_dev_err(dd, "Suppressed %u messages for "
 				      "fast-repeating errors (%s) (%llx)\n",
 				      supp_msgs, msg,
@@ -420,15 +480,20 @@ static void handle_supp_msgs(struct ipath_devdata *dd,
 			 * them. So only complain about these at debug
 			 * level.
 			 */
-			ipath_dbg("Suppressed %u messages for %s\n",
-				  supp_msgs, msg);
+			if (iserr)
+				ipath_dbg("Suppressed %u messages for %s\n",
+					  supp_msgs, msg);
+			else
+				ipath_cdbg(ERRPKT,
+					"Suppressed %u messages for %s\n",
+					  supp_msgs, msg);
 		}
 	}
 }
 
 static unsigned handle_frequent_errors(struct ipath_devdata *dd,
-				       ipath_err_t errs, char msg[512],
-				       int *noprint)
+				       ipath_err_t errs, char *msg,
+				       int msgsz, int *noprint)
 {
 	unsigned long nc;
 	static unsigned long nextmsg_time;
@@ -447,7 +512,7 @@ static unsigned handle_frequent_errors(struct ipath_devdata *dd,
 				nextmsg_time = nc + HZ * 3;
 		}
 		else if (supp_msgs) {
-			handle_supp_msgs(dd, supp_msgs, msg);
+			handle_supp_msgs(dd, supp_msgs, msg, msgsz);
 			supp_msgs = 0;
 			nmsgs = 0;
 		}
@@ -460,24 +525,29 @@ static unsigned handle_frequent_errors(struct ipath_devdata *dd,
 
 static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 {
-	char msg[512];
+	char msg[128];
 	u64 ignore_this_time = 0;
-	int i;
+	int i, iserr = 0;
 	int chkerrpkts = 0, noprint = 0;
 	unsigned supp_msgs;
+	int log_idx;
 
-	supp_msgs = handle_frequent_errors(dd, errs, msg, &noprint);
+	supp_msgs = handle_frequent_errors(dd, errs, msg, sizeof msg, &noprint);
 
-	/*
-	 * don't report errors that are masked (includes those always
-	 * ignored)
-	 */
+	/* don't report errors that are masked */
 	errs &= ~dd->ipath_maskederrs;
 
 	/* do these first, they are most important */
 	if (errs & INFINIPATH_E_HARDWARE) {
 		/* reuse same msg buf */
 		dd->ipath_f_handle_hwerrors(dd, msg, sizeof msg);
+	} else {
+		u64 mask;
+		for (log_idx = 0; log_idx < IPATH_EEP_LOG_CNT; ++log_idx) {
+			mask = dd->ipath_eep_st_masks[log_idx].errs_to_log;
+			if (errs & mask)
+				ipath_inc_eeprom_err(dd, log_idx, 1);
+		}
 	}
 
 	if (!noprint && (errs & ~dd->ipath_e_bitsextant))
@@ -502,6 +572,7 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 	}
 
 	if (supp_msgs == 250000) {
+		int s_iserr;
 		/*
 		 * It's not entirely reasonable assuming that the errors set
 		 * in the last clear period are all responsible for the
@@ -509,19 +580,19 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 		 * ones on this particular interrupt, which also isn't great
 		 */
 		dd->ipath_maskederrs |= dd->ipath_lasterror | errs;
+		dd->ipath_errormask &= ~dd->ipath_maskederrs;
 		ipath_write_kreg(dd, dd->ipath_kregs->kr_errormask,
-				 ~dd->ipath_maskederrs);
-		ipath_decode_err(msg, sizeof msg,
-				 (dd->ipath_maskederrs & ~dd->
-				  ipath_ignorederrs));
+			dd->ipath_errormask);
+		s_iserr = ipath_decode_err(msg, sizeof msg,
+			dd->ipath_maskederrs);
 
-		if ((dd->ipath_maskederrs & ~dd->ipath_ignorederrs) &
-		    ~(INFINIPATH_E_RRCVEGRFULL | INFINIPATH_E_RRCVHDRFULL))
-			ipath_dev_err(dd, "Disabling error(s) %llx because "
-				      "occurring too frequently (%s)\n",
-				      (unsigned long long)
-				      (dd->ipath_maskederrs &
-				       ~dd->ipath_ignorederrs), msg);
+		if (dd->ipath_maskederrs &
+			~(INFINIPATH_E_RRCVEGRFULL |
+			INFINIPATH_E_RRCVHDRFULL | INFINIPATH_E_PKTERRS))
+			ipath_dev_err(dd, "Temporarily disabling "
+			    "error(s) %llx reporting; too frequent (%s)\n",
+				(unsigned long long)dd->ipath_maskederrs,
+				msg);
 		else {
 			/*
 			 * rcvegrfull and rcvhdrqfull are "normal",
@@ -530,8 +601,15 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 			 * processing them.  So only complain about
 			 * these at debug level.
 			 */
-			ipath_dbg("Disabling frequent queue full errors "
-				  "(%s)\n", msg);
+			if (s_iserr)
+				ipath_dbg("Temporarily disabling reporting "
+				    "too frequent queue full errors (%s)\n",
+				    msg);
+			else
+				ipath_cdbg(ERRPKT,
+				    "Temporarily disabling reporting too"
+				    " frequent packet errors (%s)\n",
+				    msg);
 		}
 
 		/*
@@ -589,6 +667,8 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 		ipath_stats.sps_crcerrs++;
 		chkerrpkts = 1;
 	}
+	iserr = errs & ~(E_SUM_PKTERRS | INFINIPATH_E_PKTERRS);
+
 
 	/*
 	 * We don't want to print these two as they happen, or we can make
@@ -625,6 +705,9 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 					chkerrpkts = 1;
 				dd->ipath_lastrcvhdrqtails[i] = tl;
 				pd->port_hdrqfull++;
+				/* flush hdrqfull so that poll() sees it */
+				wmb();
+				wake_up_interruptible(&pd->port_wait);
 			}
 		}
 	}
@@ -677,8 +760,13 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 		*dd->ipath_statusp &= ~IPATH_STATUS_IB_CONF;
 	}
 
-	if (!noprint && *msg)
-		ipath_dev_err(dd, "%s error\n", msg);
+	if (!noprint && *msg) {
+		if (iserr)
+			ipath_dev_err(dd, "%s error\n", msg);
+		else
+			dev_info(&dd->pcidev->dev, "%s packet problems\n",
+				msg);
+	}
 	if (dd->ipath_state_wanted & dd->ipath_flags) {
 		ipath_cdbg(VERBOSE, "driver wanted state %x, iflags now %x, "
 			   "waking\n", dd->ipath_state_wanted,
@@ -688,6 +776,76 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 
 	return chkerrpkts;
 }
+
+
+/*
+ * try to cleanup as much as possible for anything that might have gone
+ * wrong while in freeze mode, such as pio buffers being written by user
+ * processes (causing armlaunch), send errors due to going into freeze mode,
+ * etc., and try to avoid causing extra interrupts while doing so.
+ * Forcibly update the in-memory pioavail register copies after cleanup
+ * because the chip won't do it for anything changing while in freeze mode
+ * (we don't want to wait for the next pio buffer state change).
+ * Make sure that we don't lose any important interrupts by using the chip
+ * feature that says that writing 0 to a bit in *clear that is set in
+ * *status will cause an interrupt to be generated again (if allowed by
+ * the *mask value).
+ */
+void ipath_clear_freeze(struct ipath_devdata *dd)
+{
+	int i, im;
+	__le64 val;
+
+	/* disable error interrupts, to avoid confusion */
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_errormask, 0ULL);
+
+	/* also disable interrupts; errormask is sometimes overwriten */
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_intmask, 0ULL);
+
+	/*
+	 * clear all sends, because they have may been
+	 * completed by usercode while in freeze mode, and
+	 * therefore would not be sent, and eventually
+	 * might cause the process to run out of bufs
+	 */
+	ipath_cancel_sends(dd, 0);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_control,
+			 dd->ipath_control);
+
+	/* ensure pio avail updates continue */
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
+		 dd->ipath_sendctrl & ~INFINIPATH_S_PIOBUFAVAILUPD);
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl,
+		 dd->ipath_sendctrl);
+
+	/*
+	 * We just enabled pioavailupdate, so dma copy is almost certainly
+	 * not yet right, so read the registers directly.  Similar to init
+	 */
+	for (i = 0; i < dd->ipath_pioavregs; i++) {
+		/* deal with 6110 chip bug */
+		im = i > 3 ? ((i&1) ? i-1 : i+1) : i;
+		val = ipath_read_kreg64(dd, (0x1000/sizeof(u64))+im);
+		dd->ipath_pioavailregs_dma[i] = dd->ipath_pioavailshadow[i]
+			= le64_to_cpu(val);
+	}
+
+	/*
+	 * force new interrupt if any hwerr, error or interrupt bits are
+	 * still set, and clear "safe" send packet errors related to freeze
+	 * and cancelling sends.  Re-enable error interrupts before possible
+	 * force of re-interrupt on pending interrupts.
+	 */
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_hwerrclear, 0ULL);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_errorclear,
+		E_SPKT_ERRS_IGNORE);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_errormask,
+		dd->ipath_errormask);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_intmask, -1LL);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_intclear, 0ULL);
+}
+
 
 /* this is separate to allow for better optimization of ipath_intr() */
 
@@ -811,21 +969,26 @@ static void handle_urcv(struct ipath_devdata *dd, u32 istat)
 	int i;
 	int rcvdint = 0;
 
+	/* test_bit below needs this... */
+	rmb();
 	portr = ((istat >> INFINIPATH_I_RCVAVAIL_SHIFT) &
 		 dd->ipath_i_rcvavail_mask)
 		| ((istat >> INFINIPATH_I_RCVURG_SHIFT) &
 		   dd->ipath_i_rcvurg_mask);
 	for (i = 1; i < dd->ipath_cfgports; i++) {
 		struct ipath_portdata *pd = dd->ipath_pd[i];
-		if (portr & (1 << i) && pd && pd->port_cnt &&
-			test_bit(IPATH_PORT_WAITING_RCV, &pd->port_flag)) {
-			int rcbit;
-			clear_bit(IPATH_PORT_WAITING_RCV,
-				  &pd->port_flag);
-			rcbit = i + INFINIPATH_R_INTRAVAIL_SHIFT;
-			clear_bit(1UL << rcbit, &dd->ipath_rcvctrl);
-			wake_up_interruptible(&pd->port_wait);
-			rcvdint = 1;
+		if (portr & (1 << i) && pd && pd->port_cnt) {
+			if (test_and_clear_bit(IPATH_PORT_WAITING_RCV,
+					       &pd->port_flag)) {
+				clear_bit(i + INFINIPATH_R_INTRAVAIL_SHIFT,
+					  &dd->ipath_rcvctrl);
+				wake_up_interruptible(&pd->port_wait);
+				rcvdint = 1;
+			} else if (test_and_clear_bit(IPATH_PORT_WAITING_URG,
+						      &pd->port_flag)) {
+				pd->port_urgent++;
+				wake_up_interruptible(&pd->port_wait);
+			}
 		}
 	}
 	if (rcvdint) {
@@ -844,12 +1007,14 @@ irqreturn_t ipath_intr(int irq, void *data)
 	u32 istat, chk0rcv = 0;
 	ipath_err_t estat = 0;
 	irqreturn_t ret;
-	u32 oldhead, curtail;
 	static unsigned unexpected = 0;
 	static const u32 port0rbits = (1U<<INFINIPATH_I_RCVAVAIL_SHIFT) |
 		 (1U<<INFINIPATH_I_RCVURG_SHIFT);
 
 	ipath_stats.sps_ints++;
+
+	if (dd->ipath_int_counter != (u32) -1)
+		dd->ipath_int_counter++;
 
 	if (!(dd->ipath_flags & IPATH_PRESENT)) {
 		/*
@@ -872,36 +1037,6 @@ irqreturn_t ipath_intr(int irq, void *data)
 		ipath_bad_intr(dd, &unexpected);
 		ret = IRQ_NONE;
 		goto bail;
-	}
-
-	/*
-	 * We try to avoid reading the interrupt status register, since
-	 * that's a PIO read, and stalls the processor for up to about
-	 * ~0.25 usec. The idea is that if we processed a port0 packet,
-	 * we blindly clear the  port 0 receive interrupt bits, and nothing
-	 * else, then return.  If other interrupts are pending, the chip
-	 * will re-interrupt us as soon as we write the intclear register.
-	 * We then won't process any more kernel packets (if not the 2nd
-	 * time, then the 3rd or 4th) and we'll then handle the other
-	 * interrupts.   We clear the interrupts first so that we don't
-	 * lose intr for later packets that arrive while we are processing.
-	 */
-	oldhead = dd->ipath_port0head;
-	curtail = (u32)le64_to_cpu(*dd->ipath_hdrqtailptr);
-	if (oldhead != curtail) {
-		if (dd->ipath_flags & IPATH_GPIO_INTR) {
-			ipath_write_kreg(dd, dd->ipath_kregs->kr_gpio_clear,
-					 (u64) (1 << IPATH_GPIO_PORT0_BIT));
-			istat = port0rbits | INFINIPATH_I_GPIO;
-		}
-		else
-			istat = port0rbits;
-		ipath_write_kreg(dd, dd->ipath_kregs->kr_intclear, istat);
-		ipath_kreceive(dd);
-		if (oldhead != dd->ipath_port0head) {
-			ipath_stats.sps_fastrcvint++;
-			goto done;
-		}
 	}
 
 	istat = ipath_read_kreg32(dd, dd->ipath_kregs->kr_intstatus);
@@ -954,8 +1089,8 @@ irqreturn_t ipath_intr(int irq, void *data)
 		 * GPIO_2 indicates (on some HT4xx boards) that a packet
 		 *        has arrived for Port 0. Checking for this
 		 *        is controlled by flag IPATH_GPIO_INTR.
-		 * GPIO_3..5 on IBA6120 Rev2 chips indicate errors
-		 *        that we need to count. Checking for this
+		 * GPIO_3..5 on IBA6120 Rev2 and IBA6110 Rev4 chips indicate
+		 *        errors that we need to count. Checking for this
 		 *        is controlled by flag IPATH_GPIO_ERRINTRS.
 		 */
 		u32 gpiostatus;
@@ -1002,22 +1137,23 @@ irqreturn_t ipath_intr(int irq, void *data)
 			gpiostatus &= ~(1 << IPATH_GPIO_PORT0_BIT);
 			chk0rcv = 1;
 		}
-		if (unlikely(gpiostatus)) {
+		if (gpiostatus) {
 			/*
 			 * Some unexpected bits remain. If they could have
 			 * caused the interrupt, complain and clear.
-			 * MEA: this is almost certainly non-ideal.
-			 * we should look into auto-disable of unexpected
-			 * GPIO interrupts, possibly on a "three strikes"
-			 * basis.
+			 * To avoid repetition of this condition, also clear
+			 * the mask. It is almost certainly due to error.
 			 */
-			u32 mask;
-			mask = ipath_read_kreg32(
-				dd, dd->ipath_kregs->kr_gpio_mask);
+			const u32 mask = (u32) dd->ipath_gpio_mask;
+
 			if (mask & gpiostatus) {
 				ipath_dbg("Unexpected GPIO IRQ bits %x\n",
 				  gpiostatus & mask);
 				to_clear |= (gpiostatus & mask);
+				dd->ipath_gpio_mask &= ~(gpiostatus & mask);
+				ipath_write_kreg(dd,
+					dd->ipath_kregs->kr_gpio_mask,
+					dd->ipath_gpio_mask);
 			}
 		}
 		if (to_clear) {
@@ -1065,7 +1201,6 @@ irqreturn_t ipath_intr(int irq, void *data)
 		handle_layer_pioavail(dd);
 	}
 
-done:
 	ret = IRQ_HANDLED;
 
 bail:

@@ -37,6 +37,7 @@
 #include <linux/vmalloc.h>
 #include <linux/dma-mapping.h>
 #include <linux/mm.h>
+#include <linux/sched.h>
 #include <asm/io.h>
 #include <asm/cacheflush.h>
 #include <asm/pgtable.h>
@@ -50,28 +51,6 @@ int agp_memory_reserved;
  * nice to do this some other way instead of needing this export.
  */
 EXPORT_SYMBOL_GPL(agp_memory_reserved);
-
-#if defined(CONFIG_X86)
-int map_page_into_agp(struct page *page)
-{
-	int i;
-	i = change_page_attr(page, 1, PAGE_KERNEL_NOCACHE);
-	/* Caller's responsibility to call global_flush_tlb() for
-	 * performance reasons */
-	return i;
-}
-EXPORT_SYMBOL_GPL(map_page_into_agp);
-
-int unmap_page_from_agp(struct page *page)
-{
-	int i;
-	i = change_page_attr(page, 1, PAGE_KERNEL);
-	/* Caller's responsibility to call global_flush_tlb() for
-	 * performance reasons */
-	return i;
-}
-EXPORT_SYMBOL_GPL(unmap_page_from_agp);
-#endif
 
 /*
  * Generic routines for handling agp_memory structures -
@@ -216,9 +195,12 @@ void agp_free_memory(struct agp_memory *curr)
 	}
 	if (curr->page_count != 0) {
 		for (i = 0; i < curr->page_count; i++) {
-			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]));
+			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]), AGP_PAGE_DESTROY_UNMAP);
 		}
 		flush_agp_mappings();
+		for (i = 0; i < curr->page_count; i++) {
+			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]), AGP_PAGE_DESTROY_FREE);
+		}
 	}
 	agp_free_key(curr->key);
 	agp_free_page_array(curr);
@@ -1191,14 +1173,13 @@ void *agp_generic_alloc_page(struct agp_bridge_data *bridge)
 	map_page_into_agp(page);
 
 	get_page(page);
-	SetPageLocked(page);
 	atomic_inc(&agp_bridge->current_memory_agp);
 	return page_address(page);
 }
 EXPORT_SYMBOL(agp_generic_alloc_page);
 
 
-void agp_generic_destroy_page(void *addr)
+void agp_generic_destroy_page(void *addr, int flags)
 {
 	struct page *page;
 
@@ -1206,11 +1187,14 @@ void agp_generic_destroy_page(void *addr)
 		return;
 
 	page = virt_to_page(addr);
-	unmap_page_from_agp(page);
-	put_page(page);
-	unlock_page(page);
-	free_page((unsigned long)addr);
-	atomic_dec(&agp_bridge->current_memory_agp);
+	if (flags & AGP_PAGE_DESTROY_UNMAP)
+		unmap_page_from_agp(page);
+
+	if (flags & AGP_PAGE_DESTROY_FREE) {
+		put_page(page);
+		free_page((unsigned long)addr);
+		atomic_dec(&agp_bridge->current_memory_agp);
+	}
 }
 EXPORT_SYMBOL(agp_generic_destroy_page);
 

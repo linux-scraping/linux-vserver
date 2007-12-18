@@ -827,14 +827,14 @@ static int start_tx(struct sk_buff *skb, struct net_device *dev)
 	if (priv->wep_is_on)
 		frame_ctl |= IEEE80211_FCTL_PROTECTED;
 	if (priv->operating_mode == IW_MODE_ADHOC) {
-		memcpy(&header.addr1, skb->data, 6);
+		skb_copy_from_linear_data(skb, &header.addr1, 6);
 		memcpy(&header.addr2, dev->dev_addr, 6);
 		memcpy(&header.addr3, priv->BSSID, 6);
 	} else {
 		frame_ctl |= IEEE80211_FCTL_TODS;
 		memcpy(&header.addr1, priv->CurrentBSSID, 6);
 		memcpy(&header.addr2, dev->dev_addr, 6);
-		memcpy(&header.addr3, skb->data, 6);
+		skb_copy_from_linear_data(skb, &header.addr3, 6);
 	}
 
 	if (priv->use_wpa)
@@ -920,7 +920,6 @@ static void fast_rx_path(struct atmel_private *priv,
 		memcpy(&skbp[6], header->addr2, 6); /* source address */
 
 	priv->dev->last_rx = jiffies;
-	skb->dev = priv->dev;
 	skb->protocol = eth_type_trans(skb, priv->dev);
 	skb->ip_summed = CHECKSUM_NONE;
 	netif_rx(skb);
@@ -1028,7 +1027,6 @@ static void frag_rx_path(struct atmel_private *priv,
 				       priv->rx_buf,
 				       priv->frag_len + 12);
 				priv->dev->last_rx = jiffies;
-				skb->dev = priv->dev;
 				skb->protocol = eth_type_trans(skb, priv->dev);
 				skb->ip_summed = CHECKSUM_NONE;
 				netif_rx(skb);
@@ -1486,6 +1484,7 @@ struct net_device *init_atmel_card(unsigned short irq, unsigned long port,
 	struct net_device *dev;
 	struct atmel_private *priv;
 	int rc;
+	DECLARE_MAC_BUF(mac);
 
 	/* Create the network device object. */
         dev = alloc_etherdev(sizeof(*priv));
@@ -1600,12 +1599,9 @@ struct net_device *init_atmel_card(unsigned short irq, unsigned long port,
 	if (!ent)
 		printk(KERN_WARNING "atmel: unable to create /proc entry.\n");
 
-	printk(KERN_INFO "%s: Atmel at76c50x. Version %d.%d. MAC %.2x:%.2x:%.2x:%.2x:%.2x:%.2x\n",
-	       dev->name, DRIVER_MAJOR, DRIVER_MINOR,
-	       dev->dev_addr[0], dev->dev_addr[1], dev->dev_addr[2],
-	       dev->dev_addr[3], dev->dev_addr[4], dev->dev_addr[5] );
+	printk(KERN_INFO "%s: Atmel at76c50x. Version %d.%d. MAC %s\n",
+	       dev->name, DRIVER_MAJOR, DRIVER_MINOR, print_mac(mac, dev->dev_addr));
 
-	SET_MODULE_OWNER(dev);
 	return dev;
 
 err_out_res:

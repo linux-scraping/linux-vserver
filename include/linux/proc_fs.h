@@ -7,6 +7,9 @@
 #include <linux/magic.h>
 #include <asm/atomic.h>
 
+struct net;
+struct completion;
+
 /*
  * The proc filesystem constants/structures
  */
@@ -57,6 +60,14 @@ struct proc_dir_entry {
 	int vx_flags;
 	loff_t size;
 	const struct inode_operations *proc_iops;
+	/*
+	 * NULL ->proc_fops means "PDE is going away RSN" or
+	 * "PDE is just created". In either case, e.g. ->read_proc won't be
+	 * called because it's too late or too early, respectively.
+	 *
+	 * If you're allocating ->proc_fops dynamically, save a pointer
+	 * somewhere.
+	 */
 	const struct file_operations *proc_fops;
 	get_info_t *get_info;
 	struct module *owner;
@@ -66,7 +77,9 @@ struct proc_dir_entry {
 	write_proc_t *write_proc;
 	atomic_t count;		/* use count */
 	int deleted;		/* delete flag */
-	void *set;
+	int pde_users;	/* number of callers into module in progress */
+	spinlock_t pde_unload_lock; /* proc_fops checks and pde_users bumps */
+	struct completion *pde_unload_completion;
 };
 
 struct kcore_list {
@@ -86,8 +99,6 @@ struct vmcore {
 
 extern struct proc_dir_entry proc_root;
 extern struct proc_dir_entry *proc_root_fs;
-extern struct proc_dir_entry *proc_net;
-extern struct proc_dir_entry *proc_net_stat;
 extern struct proc_dir_entry *proc_bus;
 extern struct proc_dir_entry *proc_root_driver;
 extern struct proc_dir_entry *proc_root_kcore;
@@ -105,13 +116,18 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir);
 unsigned long task_vsize(struct mm_struct *);
 int task_statm(struct mm_struct *, int *, int *, int *, int *);
 char *task_mem(struct mm_struct *, char *);
+void clear_refs_smap(struct mm_struct *mm);
+
+struct proc_dir_entry *de_get(struct proc_dir_entry *de);
+void de_put(struct proc_dir_entry *de);
 
 extern struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
 						struct proc_dir_entry *parent);
 extern void remove_proc_entry(const char *name, struct proc_dir_entry *parent);
 
 extern struct vfsmount *proc_mnt;
-extern int proc_fill_super(struct super_block *,void *,int);
+struct pid_namespace;
+extern int proc_fill_super(struct super_block *);
 extern struct inode *proc_get_inode(struct super_block *, unsigned int, struct proc_dir_entry *);
 
 /*
@@ -127,6 +143,9 @@ extern struct dentry *proc_lookup(struct inode *, struct dentry *, struct nameid
 extern const struct file_operations proc_kcore_operations;
 extern const struct file_operations proc_kmsg_operations;
 extern const struct file_operations ppc_htab_operations;
+
+extern int pid_ns_prepare_proc(struct pid_namespace *ns);
+extern void pid_ns_release_proc(struct pid_namespace *ns);
 
 /*
  * proc_tty.c
@@ -177,38 +196,22 @@ static inline struct proc_dir_entry *create_proc_info_entry(const char *name,
 	if (res) res->get_info=get_info;
 	return res;
 }
- 
-static inline struct proc_dir_entry *proc_net_create(const char *name,
-	mode_t mode, get_info_t *get_info)
-{
-	return create_proc_info_entry(name,mode,proc_net,get_info);
-}
 
-static inline struct proc_dir_entry *proc_net_fops_create(const char *name,
-	mode_t mode, const struct file_operations *fops)
-{
-	struct proc_dir_entry *res = create_proc_entry(name, mode, proc_net);
-	if (res)
-		res->proc_fops = fops;
-	return res;
-}
-
-static inline void proc_net_remove(const char *name)
-{
-	remove_proc_entry(name,proc_net);
-}
+extern struct proc_dir_entry *proc_net_fops_create(struct net *net,
+	const char *name, mode_t mode, const struct file_operations *fops);
+extern void proc_net_remove(struct net *net, const char *name);
 
 #else
 
 #define proc_root_driver NULL
-#define proc_net NULL
 #define proc_bus NULL
 
-#define proc_net_fops_create(name, mode, fops)  ({ (void)(mode), NULL; })
-#define proc_net_create(name, mode, info)	({ (void)(mode), NULL; })
-static inline void proc_net_remove(const char *name) {}
+#define proc_net_fops_create(net, name, mode, fops)  ({ (void)(mode), NULL; })
+static inline void proc_net_remove(struct net *net, const char *name) {}
 
-static inline void proc_flush_task(struct task_struct *task) { }
+static inline void proc_flush_task(struct task_struct *task)
+{
+}
 
 static inline struct proc_dir_entry *create_proc_entry(const char *name,
 	mode_t mode, struct proc_dir_entry *parent) { return NULL; }
@@ -232,6 +235,15 @@ static inline void proc_tty_register_driver(struct tty_driver *driver) {};
 static inline void proc_tty_unregister_driver(struct tty_driver *driver) {};
 
 extern struct proc_dir_entry proc_root;
+
+static inline int pid_ns_prepare_proc(struct pid_namespace *ns)
+{
+	return 0;
+}
+
+static inline void pid_ns_release_proc(struct pid_namespace *ns)
+{
+}
 
 #endif /* CONFIG_PROC_FS */
 
@@ -272,6 +284,13 @@ static inline struct proc_dir_entry *PDE(const struct inode *inode)
 {
 	return PROC_I(inode)->pde;
 }
+
+static inline struct net *PDE_NET(struct proc_dir_entry *pde)
+{
+	return pde->parent->data;
+}
+
+struct net *get_proc_net(const struct inode *inode);
 
 struct proc_maps_private {
 	struct pid *pid;

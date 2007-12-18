@@ -59,6 +59,7 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_dbg.h>
 #include <scsi/scsi_device.h>
+#include <scsi/scsi_driver.h>
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_tcq.h>
@@ -288,7 +289,7 @@ int scsi_setup_command_freelist(struct Scsi_Host *shost)
 	if (!pool->users) {
 		pool->slab = kmem_cache_create(pool->name,
 				sizeof(struct scsi_cmnd), 0,
-				pool->slab_flags, NULL, NULL);
+				pool->slab_flags, NULL);
 		if (!pool->slab)
 			goto fail;
 	}
@@ -344,7 +345,6 @@ void scsi_destroy_command_freelist(struct Scsi_Host *shost)
 void scsi_log_send(struct scsi_cmnd *cmd)
 {
 	unsigned int level;
-	struct scsi_device *sdev;
 
 	/*
 	 * If ML QUEUE log level is greater than or equal to:
@@ -361,22 +361,16 @@ void scsi_log_send(struct scsi_cmnd *cmd)
 		level = SCSI_LOG_LEVEL(SCSI_LOG_MLQUEUE_SHIFT,
 				       SCSI_LOG_MLQUEUE_BITS);
 		if (level > 1) {
-			sdev = cmd->device;
-			sdev_printk(KERN_INFO, sdev, "send ");
+			scmd_printk(KERN_INFO, cmd, "Send: ");
 			if (level > 2)
 				printk("0x%p ", cmd);
-			/*
-			 * spaces to match disposition and cmd->result
-			 * output in scsi_log_completion.
-			 */
-			printk("                 ");
+			printk("\n");
 			scsi_print_command(cmd);
 			if (level > 3) {
 				printk(KERN_INFO "buffer = 0x%p, bufflen = %d,"
-				       " done = 0x%p, queuecommand 0x%p\n",
-					cmd->request_buffer, cmd->request_bufflen,
-					cmd->done,
-					sdev->host->hostt->queuecommand);
+				       " queuecommand 0x%p\n",
+					scsi_sglist(cmd), scsi_bufflen(cmd),
+					cmd->device->host->hostt->queuecommand);
 
 			}
 		}
@@ -386,7 +380,6 @@ void scsi_log_send(struct scsi_cmnd *cmd)
 void scsi_log_completion(struct scsi_cmnd *cmd, int disposition)
 {
 	unsigned int level;
-	struct scsi_device *sdev;
 
 	/*
 	 * If ML COMPLETE log level is greater than or equal to:
@@ -405,8 +398,7 @@ void scsi_log_completion(struct scsi_cmnd *cmd, int disposition)
 				       SCSI_LOG_MLCOMPLETE_BITS);
 		if (((level > 0) && (cmd->result || disposition != SUCCESS)) ||
 		    (level > 1)) {
-			sdev = cmd->device;
-			sdev_printk(KERN_INFO, sdev, "done ");
+			scmd_printk(KERN_INFO, cmd, "Done: ");
 			if (level > 2)
 				printk("0x%p ", cmd);
 			/*
@@ -415,47 +407,42 @@ void scsi_log_completion(struct scsi_cmnd *cmd, int disposition)
 			 */
 			switch (disposition) {
 			case SUCCESS:
-				printk("SUCCESS");
+				printk("SUCCESS\n");
 				break;
 			case NEEDS_RETRY:
-				printk("RETRY  ");
+				printk("RETRY\n");
 				break;
 			case ADD_TO_MLQUEUE:
-				printk("MLQUEUE");
+				printk("MLQUEUE\n");
 				break;
 			case FAILED:
-				printk("FAILED ");
+				printk("FAILED\n");
 				break;
 			case TIMEOUT_ERROR:
 				/* 
 				 * If called via scsi_times_out.
 				 */
-				printk("TIMEOUT");
+				printk("TIMEOUT\n");
 				break;
 			default:
-				printk("UNKNOWN");
+				printk("UNKNOWN\n");
 			}
-			printk(" %8x ", cmd->result);
+			scsi_print_result(cmd);
 			scsi_print_command(cmd);
-			if (status_byte(cmd->result) & CHECK_CONDITION) {
-				/*
-				 * XXX The scsi_print_sense formatting/prefix
-				 * doesn't match this function.
-				 */
+			if (status_byte(cmd->result) & CHECK_CONDITION)
 				scsi_print_sense("", cmd);
-			}
-			if (level > 3) {
-				printk(KERN_INFO "scsi host busy %d failed %d\n",
-				       sdev->host->host_busy,
-				       sdev->host->host_failed);
-			}
+			if (level > 3)
+				scmd_printk(KERN_INFO, cmd,
+					    "scsi host busy %d failed %d\n",
+					    cmd->device->host->host_busy,
+					    cmd->device->host->host_failed);
 		}
 	}
 }
 #endif
 
 /* 
- * Assign a serial number and pid to the request for error recovery
+ * Assign a serial number to the request for error recovery
  * and debugging purposes.  Protected by the Host_Lock of host.
  */
 static inline void scsi_cmd_get_serial(struct Scsi_Host *host, struct scsi_cmnd *cmd)
@@ -463,10 +450,6 @@ static inline void scsi_cmd_get_serial(struct Scsi_Host *host, struct scsi_cmnd 
 	cmd->serial_number = host->cmd_serial_number++;
 	if (cmd->serial_number == 0) 
 		cmd->serial_number = host->cmd_serial_number++;
-	
-	cmd->pid = host->cmd_pid++;
-	if (cmd->pid == 0)
-		cmd->pid = host->cmd_pid++;
 }
 
 /*
@@ -671,6 +654,12 @@ void __scsi_done(struct scsi_cmnd *cmd)
 	blk_complete_request(rq);
 }
 
+/* Move this to a header if it becomes more generally useful */
+static struct scsi_driver *scsi_cmd_to_driver(struct scsi_cmnd *cmd)
+{
+	return *(struct scsi_driver **)cmd->request->rq_disk->private_data;
+}
+
 /*
  * Function:    scsi_finish_command
  *
@@ -682,6 +671,8 @@ void scsi_finish_command(struct scsi_cmnd *cmd)
 {
 	struct scsi_device *sdev = cmd->device;
 	struct Scsi_Host *shost = sdev->host;
+	struct scsi_driver *drv;
+	unsigned int good_bytes;
 
 	scsi_device_unbusy(sdev);
 
@@ -707,7 +698,13 @@ void scsi_finish_command(struct scsi_cmnd *cmd)
 				"Notifying upper driver of completion "
 				"(result %x)\n", cmd->result));
 
-	cmd->done(cmd);
+	good_bytes = cmd->request_bufflen;
+        if (cmd->request->cmd_type != REQ_TYPE_BLOCK_PC) {
+		drv = scsi_cmd_to_driver(cmd);
+		if (drv->done)
+			good_bytes = drv->done(cmd);
+	}
+	scsi_io_completion(cmd, good_bytes);
 }
 EXPORT_SYMBOL(scsi_finish_command);
 
@@ -1028,52 +1025,6 @@ struct scsi_device *scsi_device_lookup(struct Scsi_Host *shost,
 	return sdev;
 }
 EXPORT_SYMBOL(scsi_device_lookup);
-
-/**
- * scsi_device_cancel - cancel outstanding IO to this device
- * @sdev:	Pointer to struct scsi_device
- * @recovery:	Boolean instructing function to recover device or not.
- *
- **/
-int scsi_device_cancel(struct scsi_device *sdev, int recovery)
-{
-	struct scsi_cmnd *scmd;
-	LIST_HEAD(active_list);
-	struct list_head *lh, *lh_sf;
-	unsigned long flags;
-
-	scsi_device_set_state(sdev, SDEV_CANCEL);
-
-	spin_lock_irqsave(&sdev->list_lock, flags);
-	list_for_each_entry(scmd, &sdev->cmd_list, list) {
-		if (scmd->request) {
-			/*
-			 * If we are unable to remove the timer, it means
-			 * that the command has already timed out or
-			 * finished.
-			 */
-			if (!scsi_delete_timer(scmd))
-				continue;
-			list_add_tail(&scmd->eh_entry, &active_list);
-		}
-	}
-	spin_unlock_irqrestore(&sdev->list_lock, flags);
-
-	if (!list_empty(&active_list)) {
-		list_for_each_safe(lh, lh_sf, &active_list) {
-			scmd = list_entry(lh, struct scsi_cmnd, eh_entry);
-			list_del_init(lh);
-			if (recovery &&
-			    !scsi_eh_scmd_add(scmd, SCSI_EH_CANCEL_CMD)) {
-				scmd->result = (DID_ABORT << 16);
-				scsi_finish_command(scmd);
-			}
-		}
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL(scsi_device_cancel);
 
 MODULE_DESCRIPTION("SCSI core");
 MODULE_LICENSE("GPL");

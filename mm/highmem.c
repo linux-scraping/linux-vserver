@@ -46,9 +46,14 @@ unsigned int nr_free_highpages (void)
 	pg_data_t *pgdat;
 	unsigned int pages = 0;
 
-	for_each_online_pgdat(pgdat)
+	for_each_online_pgdat(pgdat) {
 		pages += zone_page_state(&pgdat->node_zones[ZONE_HIGHMEM],
 			NR_FREE_PAGES);
+		if (zone_movable_is_highmem())
+			pages += zone_page_state(
+					&pgdat->node_zones[ZONE_MOVABLE],
+					NR_FREE_PAGES);
+	}
 
 	return pages;
 }
@@ -97,6 +102,15 @@ static void flush_all_zero_pkmaps(void)
 		set_page_address(page, NULL);
 	}
 	flush_tlb_kernel_range(PKMAP_ADDR(0), PKMAP_ADDR(LAST_PKMAP));
+}
+
+/* Flush all unused kmap mappings in order to remove stray
+   mappings. */
+void kmap_flush_unused(void)
+{
+	spin_lock(&kmap_lock);
+	flush_all_zero_pkmaps();
+	spin_unlock(&kmap_lock);
 }
 
 static inline unsigned long map_new_virtual(struct page *page)

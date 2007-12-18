@@ -42,12 +42,12 @@ ConnectTech WhiteHEAT 4 port converter
   http://www.connecttech.com
 
   For any questions or problems with this driver, please contact
-  Stuart MacDonald at stuartm@connecttech.com
+  Connect Tech's Support Department at support@connecttech.com
 
 
-HandSpring Visor, Palm USB, and Clié USB driver
+HandSpring Visor, Palm USB, and CliÃ© USB driver
 
-  This driver works with all HandSpring USB, Palm USB, and Sony Clié USB
+  This driver works with all HandSpring USB, Palm USB, and Sony CliÃ© USB
   devices.
 
   Only when the device tries to connect to the host, will the device show
@@ -69,7 +69,7 @@ HandSpring Visor, Palm USB, and Clié USB driver
   the port to use for the HotSync transfer. The "Generic" port can be used
   for other device communication, such as a PPP link.
 
-  For some Sony Clié devices, /dev/ttyUSB0 must be used to talk to the
+  For some Sony CliÃ© devices, /dev/ttyUSB0 must be used to talk to the
   device.  This is true for all OS version 3.5 devices, and most devices
   that have had a flash upgrade to a newer version of the OS.  See the
   kernel system log for information on which is the correct port to use.
@@ -338,7 +338,7 @@ MCT USB Single Port Serial Adapter U232
   This driver is for the MCT USB-RS232 Converter (25 pin, Model No.
   U232-P25) from Magic Control Technology Corp. (there is also a 9 pin
   Model No. U232-P9). More information about this device can be found at
-  the manufacture's web-site: http://www.mct.com.tw.
+  the manufacturer's web-site: http://www.mct.com.tw.
 
   The driver is generally working, though it still needs some more testing.
   It is derived from the Belkin USB Serial Adapter F5U103 driver and its
@@ -427,6 +427,17 @@ Options supported:
 
   See http://www.uuhaus.de/linux/palmconnect.html for up-to-date
   information on this driver.
+
+Winchiphead CH341 Driver
+
+  This driver is for the Winchiphead CH341 USB-RS232 Converter. This chip
+  also implements an IEEE 1284 parallel port, I2C and SPI, but that is not
+  supported by the driver. The protocol was analyzed from the behaviour
+  of the Windows driver, no datasheet is available at present.
+  The manufacturer's website: http://www.winchiphead.com/.
+  For any questions or problems with this driver, please contact
+  frank@kingswood-consulting.co.uk.
+
 
 Generic Serial driver
 

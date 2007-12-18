@@ -21,6 +21,7 @@
 #include <asm/ccwdev.h>
 #include <asm/cio.h>
 #include <asm/ebcdic.h>
+#include <asm/diag.h>
 
 #include "raw3270.h"
 
@@ -47,8 +48,8 @@ struct raw3270 {
 	struct timer_list timer;	/* Device timer. */
 
 	unsigned char *ascebc;		/* ascii -> ebcdic table */
-	struct class_device *clttydev;	/* 3270-class tty device ptr */
-	struct class_device *cltubdev;	/* 3270-class tub device ptr */
+	struct device *clttydev;	/* 3270-class tty device ptr */
+	struct device *cltubdev;	/* 3270-class tub device ptr */
 
 	struct raw3270_request init_request;
 	unsigned char init_data[256];
@@ -147,8 +148,7 @@ raw3270_request_alloc(size_t size)
  * Allocate a new 3270 ccw request from bootmem. Only works very
  * early in the boot process. Only con3270.c should be using this.
  */
-struct raw3270_request *
-raw3270_request_alloc_bootmem(size_t size)
+struct raw3270_request __init *raw3270_request_alloc_bootmem(size_t size)
 {
 	struct raw3270_request *rq;
 
@@ -487,7 +487,7 @@ struct raw3270_ua {	/* Query Reply structure for Usable Area */
 } __attribute__ ((packed));
 
 static struct diag210 raw3270_init_diag210;
-static DECLARE_MUTEX(raw3270_init_sem);
+static DEFINE_MUTEX(raw3270_init_mutex);
 
 static int
 raw3270_init_irq(struct raw3270_view *view, struct raw3270_request *rq,
@@ -589,9 +589,10 @@ static int
 __raw3270_size_device_vm(struct raw3270 *rp)
 {
 	int rc, model;
+	struct ccw_dev_id dev_id;
 
-	raw3270_init_diag210.vrdcdvno = 
-		_ccw_device_get_device_number(rp->cdev);
+	ccw_device_get_id(rp->cdev, &dev_id);
+	raw3270_init_diag210.vrdcdvno = dev_id.devno;
 	raw3270_init_diag210.vrdclen = sizeof(struct diag210);
 	rc = diag210(&raw3270_init_diag210);
 	if (rc)
@@ -712,7 +713,7 @@ raw3270_size_device(struct raw3270 *rp)
 {
 	int rc;
 
-	down(&raw3270_init_sem);
+	mutex_lock(&raw3270_init_mutex);
 	rp->view = &raw3270_init_view;
 	raw3270_init_view.dev = rp;
 	if (MACHINE_IS_VM)
@@ -721,7 +722,7 @@ raw3270_size_device(struct raw3270 *rp)
 		rc = __raw3270_size_device(rp);
 	raw3270_init_view.dev = NULL;
 	rp->view = NULL;
-	up(&raw3270_init_sem);
+	mutex_unlock(&raw3270_init_mutex);
 	if (rc == 0) {	/* Found something. */
 		/* Try to find a model. */
 		rp->model = 0;
@@ -748,7 +749,7 @@ raw3270_reset_device(struct raw3270 *rp)
 {
 	int rc;
 
-	down(&raw3270_init_sem);
+	mutex_lock(&raw3270_init_mutex);
 	memset(&rp->init_request, 0, sizeof(rp->init_request));
 	memset(&rp->init_data, 0, sizeof(rp->init_data));
 	/* Store reset data stream to init_data/init_request */
@@ -763,7 +764,7 @@ raw3270_reset_device(struct raw3270 *rp)
 	rc = raw3270_start_init(rp, &raw3270_init_view, &rp->init_request);
 	raw3270_init_view.dev = NULL;
 	rp->view = NULL;
-	up(&raw3270_init_sem);
+	mutex_unlock(&raw3270_init_mutex);
 	return rc;
 }
 
@@ -847,8 +848,7 @@ raw3270_setup_device(struct ccw_device *cdev, struct raw3270 *rp, char *ascebc)
 /*
  * Setup 3270 device configured as console.
  */
-struct raw3270 *
-raw3270_setup_console(struct ccw_device *cdev)
+struct raw3270 __init *raw3270_setup_console(struct ccw_device *cdev)
 {
 	struct raw3270 *rp;
 	char *ascebc;
@@ -1107,11 +1107,9 @@ raw3270_delete_device(struct raw3270 *rp)
 	/* Remove from device chain. */
 	mutex_lock(&raw3270_mutex);
 	if (rp->clttydev && !IS_ERR(rp->clttydev))
-		class_device_destroy(class3270,
-				     MKDEV(IBM_TTY3270_MAJOR, rp->minor));
+		device_destroy(class3270, MKDEV(IBM_TTY3270_MAJOR, rp->minor));
 	if (rp->cltubdev && !IS_ERR(rp->cltubdev))
-		class_device_destroy(class3270,
-				     MKDEV(IBM_FS3270_MAJOR, rp->minor));
+		device_destroy(class3270, MKDEV(IBM_FS3270_MAJOR, rp->minor));
 	list_del_init(&rp->list);
 	mutex_unlock(&raw3270_mutex);
 
@@ -1181,24 +1179,22 @@ static int raw3270_create_attributes(struct raw3270 *rp)
 	if (rc)
 		goto out;
 
-	rp->clttydev = class_device_create(class3270, NULL,
-					   MKDEV(IBM_TTY3270_MAJOR, rp->minor),
-					   &rp->cdev->dev, "tty%s",
-					   rp->cdev->dev.bus_id);
+	rp->clttydev = device_create(class3270, &rp->cdev->dev,
+				     MKDEV(IBM_TTY3270_MAJOR, rp->minor),
+				     "tty%s", rp->cdev->dev.bus_id);
 	if (IS_ERR(rp->clttydev)) {
 		rc = PTR_ERR(rp->clttydev);
 		goto out_ttydev;
 	}
 
-	rp->cltubdev = class_device_create(class3270, NULL,
-					   MKDEV(IBM_FS3270_MAJOR, rp->minor),
-					   &rp->cdev->dev, "tub%s",
-					   rp->cdev->dev.bus_id);
+	rp->cltubdev = device_create(class3270, &rp->cdev->dev,
+				     MKDEV(IBM_FS3270_MAJOR, rp->minor),
+				     "tub%s", rp->cdev->dev.bus_id);
 	if (!IS_ERR(rp->cltubdev))
 		goto out;
 
 	rc = PTR_ERR(rp->cltubdev);
-	class_device_destroy(class3270, MKDEV(IBM_TTY3270_MAJOR, rp->minor));
+	device_destroy(class3270, MKDEV(IBM_TTY3270_MAJOR, rp->minor));
 
 out_ttydev:
 	sysfs_remove_group(&rp->cdev->dev.kobj, &raw3270_attr_group);

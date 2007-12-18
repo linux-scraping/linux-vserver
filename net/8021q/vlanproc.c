@@ -33,6 +33,7 @@
 #include <linux/fs.h>
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
+#include <net/net_namespace.h>
 #include "vlanproc.h"
 #include "vlan.h"
 
@@ -69,7 +70,7 @@ static const char name_conf[]	 = "config";
  *	Generic /proc/net/vlan/<file> file and inode operations
  */
 
-static struct seq_operations vlan_seq_ops = {
+static const struct seq_operations vlan_seq_ops = {
 	.start = vlan_seq_start,
 	.next = vlan_seq_next,
 	.stop = vlan_seq_stop,
@@ -143,7 +144,7 @@ void vlan_proc_cleanup(void)
 		remove_proc_entry(name_conf, proc_vlan_dir);
 
 	if (proc_vlan_dir)
-		proc_net_remove(name_root);
+		proc_net_remove(&init_net, name_root);
 
 	/* Dynamically added entries should be cleaned up as their vlan_device
 	 * is removed, so we should not have to take care of it here...
@@ -156,7 +157,7 @@ void vlan_proc_cleanup(void)
 
 int __init vlan_proc_init(void)
 {
-	proc_vlan_dir = proc_mkdir(name_root, proc_net);
+	proc_vlan_dir = proc_mkdir(name_root, init_net.proc_net);
 	if (proc_vlan_dir) {
 		proc_vlan_conf = create_proc_entry(name_conf,
 						   S_IFREG|S_IRUSR|S_IWUSR,
@@ -237,13 +238,9 @@ int vlan_proc_rem_dev(struct net_device *vlandev)
  * The following few functions build the content of /proc/net/vlan/config
  */
 
-/* starting at dev, find a VLAN device */
-static struct net_device *vlan_skip(struct net_device *dev)
+static inline int is_vlan_dev(struct net_device *dev)
 {
-	while (dev && !(dev->priv_flags & IFF_802_1Q_VLAN))
-		dev = dev->next;
-
-	return dev;
+	return dev->priv_flags & IFF_802_1Q_VLAN;
 }
 
 /* start read of /proc/net/vlan/config */
@@ -257,19 +254,35 @@ static void *vlan_seq_start(struct seq_file *seq, loff_t *pos)
 	if (*pos == 0)
 		return SEQ_START_TOKEN;
 
-	for (dev = vlan_skip(dev_base); dev && i < *pos;
-	     dev = vlan_skip(dev->next), ++i);
+	for_each_netdev(&init_net, dev) {
+		if (!is_vlan_dev(dev))
+			continue;
 
-	return  (i == *pos) ? dev : NULL;
+		if (i++ == *pos)
+			return dev;
+	}
+
+	return  NULL;
 }
 
 static void *vlan_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
+	struct net_device *dev;
+
 	++*pos;
 
-	return vlan_skip((v == SEQ_START_TOKEN)
-			    ? dev_base
-			    : ((struct net_device *)v)->next);
+	dev = (struct net_device *)v;
+	if (v == SEQ_START_TOKEN)
+		dev = net_device_entry(&init_net.dev_base_head);
+
+	for_each_netdev_continue(&init_net, dev) {
+		if (!is_vlan_dev(dev))
+			continue;
+
+		return dev;
+	}
+
+	return NULL;
 }
 
 static void vlan_seq_stop(struct seq_file *seq, void *v)
@@ -307,7 +320,7 @@ static int vlandev_seq_show(struct seq_file *seq, void *offset)
 	static const char fmt[] = "%30s %12lu\n";
 	int i;
 
-	if ((vlandev == NULL) || (!(vlandev->priv_flags & IFF_802_1Q_VLAN)))
+	if (!(vlandev->priv_flags & IFF_802_1Q_VLAN))
 		return 0;
 
 	seq_printf(seq, "%s  VID: %d	 REORDER_HDR: %i  dev->priv_flags: %hx\n",
@@ -330,7 +343,7 @@ static int vlandev_seq_show(struct seq_file *seq, void *offset)
 	seq_printf(seq, "Device: %s", dev_info->real_dev->name);
 	/* now show all PRIORITY mappings relating to this VLAN */
 	seq_printf(seq,
-		       "\nINGRESS priority mappings: 0:%lu  1:%lu  2:%lu  3:%lu  4:%lu  5:%lu  6:%lu 7:%lu\n",
+		       "\nINGRESS priority mappings: 0:%u  1:%u  2:%u  3:%u  4:%u  5:%u  6:%u 7:%u\n",
 		       dev_info->ingress_priority_map[0],
 		       dev_info->ingress_priority_map[1],
 		       dev_info->ingress_priority_map[2],
@@ -345,7 +358,7 @@ static int vlandev_seq_show(struct seq_file *seq, void *offset)
 		const struct vlan_priority_tci_mapping *mp
 			= dev_info->egress_priority_map[i];
 		while (mp) {
-			seq_printf(seq, "%lu:%hu ",
+			seq_printf(seq, "%u:%hu ",
 				   mp->priority, ((mp->vlan_qos >> 13) & 0x7));
 			mp = mp->next;
 		}

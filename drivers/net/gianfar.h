@@ -45,7 +45,6 @@
 #include <linux/crc32.h>
 #include <linux/workqueue.h>
 #include <linux/ethtool.h>
-#include <linux/netdevice.h>
 #include <linux/fsl_devices.h>
 #include "gianfar_mii.h"
 
@@ -135,6 +134,12 @@ extern const char gfar_driver_version[];
 #define MIIMCFG_INIT_VALUE	0x00000007
 #define MIIMCFG_RESET           0x80000000
 #define MIIMIND_BUSY            0x00000001
+
+/* TBI register addresses */
+#define MII_TBICON		0x11
+
+/* TBICON register bit fields */
+#define TBICON_CLK_SELECT	0x0020
 
 /* MAC register bits */
 #define MACCFG1_SOFT_RESET	0x80000000
@@ -685,6 +690,9 @@ struct gfar_private {
 	/* RX Locked fields */
 	spinlock_t rxlock;
 
+	struct net_device *dev;
+	struct napi_struct napi;
+
 	/* skb array and index */
 	struct sk_buff ** rx_skbuff;
 	u16 skb_currx;
@@ -741,7 +749,6 @@ struct gfar_private {
 	uint32_t msg_enable;
 
 	/* Network Statistics */
-	struct net_device_stats stats;
 	struct gfar_extra_stats extra_stats;
 };
 

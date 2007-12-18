@@ -24,15 +24,15 @@ static u16 nla_attr_minlen[NLA_TYPE_MAX+1] __read_mostly = {
 };
 
 static int validate_nla(struct nlattr *nla, int maxtype,
-			struct nla_policy *policy)
+			const struct nla_policy *policy)
 {
-	struct nla_policy *pt;
-	int minlen = 0, attrlen = nla_len(nla);
+	const struct nla_policy *pt;
+	int minlen = 0, attrlen = nla_len(nla), type = nla_type(nla);
 
-	if (nla->nla_type <= 0 || nla->nla_type > maxtype)
+	if (type <= 0 || type > maxtype)
 		return 0;
 
-	pt = &policy[nla->nla_type];
+	pt = &policy[type];
 
 	BUG_ON(pt->type > NLA_TYPE_MAX);
 
@@ -67,6 +67,22 @@ static int validate_nla(struct nlattr *nla, int maxtype,
 		}
 		break;
 
+	case NLA_BINARY:
+		if (pt->len && attrlen > pt->len)
+			return -ERANGE;
+		break;
+
+	case NLA_NESTED_COMPAT:
+		if (attrlen < pt->len)
+			return -ERANGE;
+		if (attrlen < NLA_ALIGN(pt->len))
+			break;
+		if (attrlen < NLA_ALIGN(pt->len) + NLA_HDRLEN)
+			return -ERANGE;
+		nla = nla_data(nla) + NLA_ALIGN(pt->len);
+		if (attrlen < NLA_ALIGN(pt->len) + NLA_HDRLEN + nla_len(nla))
+			return -ERANGE;
+		break;
 	default:
 		if (pt->len)
 			minlen = pt->len;
@@ -94,7 +110,7 @@ static int validate_nla(struct nlattr *nla, int maxtype,
  * Returns 0 on success or a negative error code.
  */
 int nla_validate(struct nlattr *head, int len, int maxtype,
-		 struct nla_policy *policy)
+		 const struct nla_policy *policy)
 {
 	struct nlattr *nla;
 	int rem, err;
@@ -125,7 +141,7 @@ errout:
  * Returns 0 on success or a negative error code.
  */
 int nla_parse(struct nlattr *tb[], int maxtype, struct nlattr *head, int len,
-	      struct nla_policy *policy)
+	      const struct nla_policy *policy)
 {
 	struct nlattr *nla;
 	int rem, err;
@@ -133,7 +149,7 @@ int nla_parse(struct nlattr *tb[], int maxtype, struct nlattr *head, int len,
 	memset(tb, 0, sizeof(struct nlattr *) * (maxtype + 1));
 
 	nla_for_each_attr(nla, head, len, rem) {
-		u16 type = nla->nla_type;
+		u16 type = nla_type(nla);
 
 		if (type > 0 && type <= maxtype) {
 			if (policy) {
@@ -169,7 +185,7 @@ struct nlattr *nla_find(struct nlattr *head, int len, int attrtype)
 	int rem;
 
 	nla_for_each_attr(nla, head, len, rem)
-		if (nla->nla_type == attrtype)
+		if (nla_type(nla) == attrtype)
 			return nla;
 
 	return NULL;

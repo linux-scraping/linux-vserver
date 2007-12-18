@@ -26,7 +26,7 @@
  *			   Anthony Tong <atong@uiuc.edu>
  *
  *  Generic LCD support written by Daniel Mantione, ported from 2.4.20 by Alex Kern
- *  Many Thanks to Ville Syrj‰l‰ for patches and fixing nasting 16 bit color bug.
+ *  Many Thanks to Ville Syrj√§l√§ for patches and fixing nasting 16 bit color bug.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -68,7 +68,7 @@
 #include <linux/backlight.h>
 
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <video/mach64.h>
 #include "atyfb.h"
@@ -80,8 +80,9 @@
 #include "../macmodes.h"
 #endif
 #ifdef __sparc__
-#include <asm/pbm.h>
 #include <asm/fbio.h>
+#include <asm/oplib.h>
+#include <asm/prom.h>
 #endif
 
 #ifdef CONFIG_ADB_PMU
@@ -539,8 +540,6 @@ static char ram_sdram32[] __devinitdata = "SDRAM (2:1) (32-bit)";
 static char ram_off[] __devinitdata = "OFF";
 #endif /* CONFIG_FB_ATY_CT */
 
-
-static u32 pseudo_palette[17];
 
 #ifdef CONFIG_FB_ATY_GX
 static char *aty_gx_ram[8] __devinitdata = {
@@ -2140,7 +2139,7 @@ static int aty_bl_get_level_brightness(struct atyfb_par *par, int level)
 
 static int aty_bl_update_status(struct backlight_device *bd)
 {
-	struct atyfb_par *par = class_get_devdata(&bd->class_dev);
+	struct atyfb_par *par = bl_get_data(bd);
 	unsigned int reg = aty_ld_lcd(LCD_MISC_CNTL, par);
 	int level;
 
@@ -2289,29 +2288,6 @@ static int __devinit aty_init(struct fb_info *info)
 	init_waitqueue_head(&par->vblank.wait);
 	spin_lock_init(&par->int_lock);
 
-#ifdef CONFIG_PPC_PMAC
-	/* The Apple iBook1 uses non-standard memory frequencies. We detect it
-	 * and set the frequency manually. */
-	if (machine_is_compatible("PowerBook2,1")) {
-		par->pll_limits.mclk = 70;
-		par->pll_limits.xclk = 53;
-	}
-#endif
-	if (pll)
-		par->pll_limits.pll_max = pll;
-	if (mclk)
-		par->pll_limits.mclk = mclk;
-	if (xclk)
-		par->pll_limits.xclk = xclk;
-
-	aty_calc_mem_refresh(par, par->pll_limits.xclk);
-	par->pll_per = 1000000/par->pll_limits.pll_max;
-	par->mclk_per = 1000000/par->pll_limits.mclk;
-	par->xclk_per = 1000000/par->pll_limits.xclk;
-
-	par->ref_clk_per = 1000000000000ULL / 14318180;
-	xtal = "14.31818";
-
 #ifdef CONFIG_FB_ATY_GX
 	if (!M64_HAS(INTEGRATED)) {
 		u32 stat0;
@@ -2338,6 +2314,7 @@ static int __devinit aty_init(struct fb_info *info)
 		case DAC_IBMRGB514:
 			par->dac_ops = &aty_dac_ibm514;
 			break;
+#ifdef CONFIG_ATARI
 		case DAC_ATI68860_B:
 		case DAC_ATI68860_C:
 			par->dac_ops = &aty_dac_ati68860b;
@@ -2346,6 +2323,7 @@ static int __devinit aty_init(struct fb_info *info)
 		case DAC_ATT21C498:
 			par->dac_ops = &aty_dac_att21c498;
 			break;
+#endif
 		default:
 			PRINTKI("aty_init: DAC type not implemented yet!\n");
 			par->dac_ops = &aty_dac_unsupported;
@@ -2389,8 +2367,37 @@ static int __devinit aty_init(struct fb_info *info)
 		/* for many chips, the mclk is 67 MHz for SDRAM, 63 MHz otherwise */
 		if (par->pll_limits.mclk == 67 && par->ram_type < SDRAM)
 			par->pll_limits.mclk = 63;
+		/* Mobility + 32bit memory interface need halved XCLK. */
+		if (M64_HAS(MOBIL_BUS) && par->ram_type == SDRAM32)
+			par->pll_limits.xclk = (par->pll_limits.xclk + 1) >> 1;
 	}
+#endif
+#ifdef CONFIG_PPC_PMAC
+	/* The Apple iBook1 uses non-standard memory frequencies. We detect it
+	 * and set the frequency manually. */
+	if (machine_is_compatible("PowerBook2,1")) {
+		par->pll_limits.mclk = 70;
+		par->pll_limits.xclk = 53;
+	}
+#endif
 
+	/* Allow command line to override clocks. */
+	if (pll)
+		par->pll_limits.pll_max = pll;
+	if (mclk)
+		par->pll_limits.mclk = mclk;
+	if (xclk)
+		par->pll_limits.xclk = xclk;
+
+	aty_calc_mem_refresh(par, par->pll_limits.xclk);
+	par->pll_per = 1000000/par->pll_limits.pll_max;
+	par->mclk_per = 1000000/par->pll_limits.mclk;
+	par->xclk_per = 1000000/par->pll_limits.xclk;
+
+	par->ref_clk_per = 1000000000000ULL / 14318180;
+	xtal = "14.31818";
+
+#ifdef CONFIG_FB_ATY_CT
 	if (M64_HAS(GTB_DSP)) {
 		u8 pll_ref_div = aty_ld_pll_ct(PLL_REF_DIV, par);
 
@@ -2568,7 +2575,7 @@ static int __devinit aty_init(struct fb_info *info)
 #endif
 
 	info->fbops = &atyfb_ops;
-	info->pseudo_palette = pseudo_palette;
+	info->pseudo_palette = par->pseudo_palette;
 	info->flags = FBINFO_DEFAULT           |
 	              FBINFO_HWACCEL_IMAGEBLIT |
 	              FBINFO_HWACCEL_FILLRECT  |
@@ -2899,14 +2906,10 @@ static int __devinit atyfb_setup_sparc(struct pci_dev *pdev,
 			struct fb_info *info, unsigned long addr)
 {
 	struct atyfb_par *par = info->par;
-	struct pcidev_cookie *pcp;
+	struct device_node *dp;
 	char prop[128];
 	int node, len, i, j, ret;
 	u32 mem, chip_id;
-
-	/* Do not attach when we have a serial console. */
-	if (!con_is_present())
-		return -ENXIO;
 
 	/*
 	 * Map memory-mapped registers.
@@ -2928,12 +2931,11 @@ static int __devinit atyfb_setup_sparc(struct pci_dev *pdev,
 		/* nothing */ ;
 	j = i + 4;
 
-	par->mmap_map = kmalloc(j * sizeof(*par->mmap_map), GFP_ATOMIC);
+	par->mmap_map = kcalloc(j, sizeof(*par->mmap_map), GFP_ATOMIC);
 	if (!par->mmap_map) {
 		PRINTKE("atyfb_setup_sparc() can't alloc mmap_map\n");
 		return -ENOMEM;
 	}
-	memset(par->mmap_map, 0, j * sizeof(*par->mmap_map));
 
 	for (i = 0, j = 2; i < 6 && pdev->resource[i].start; i++) {
 		struct resource *rp = &pdev->resource[i];
@@ -3037,8 +3039,8 @@ static int __devinit atyfb_setup_sparc(struct pci_dev *pdev,
 			node = 0;
 	}
 
-	pcp = pdev->sysdata;
-	if (node == pcp->prom_node->node) {
+	dp = pci_device_to_OF_node(pdev);
+	if (node == dp->node) {
 		struct fb_var_screeninfo *var = &default_var;
 		unsigned int N, P, Q, M, T, R;
 		u32 v_total, h_total;

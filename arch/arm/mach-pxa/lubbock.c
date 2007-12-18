@@ -48,6 +48,7 @@
 #include <asm/arch/mmc.h>
 
 #include "generic.h"
+#include "devices.h"
 
 
 #define LUB_MISC_WR		__LUB_REG(LUBBOCK_FPGA_PHYS + 0x080)
@@ -103,7 +104,7 @@ static void __init lubbock_init_irq(void)
 {
 	int irq;
 
-	pxa_init_irq();
+	pxa25x_init_irq();
 
 	/* setup extra lubbock irqs */
 	for (irq = LUBBOCK_IRQ(0); irq <= LUBBOCK_LAST_IRQ; irq++) {
@@ -220,7 +221,7 @@ static struct resource pxa_ssp_resources[] = {
 
 static struct pxa2xx_spi_master pxa_ssp_master_info = {
 	.ssp_type	= PXA25x_SSP,
-	.clock_enable	= CKEN3_SSP,
+	.clock_enable	= CKEN_SSP,
 	.num_chipselect	= 0,
 };
 
@@ -510,6 +511,25 @@ static void __init lubbock_map_io(void)
 	pxa_gpio_mode(GPIO43_BTTXD_MD);
 	pxa_gpio_mode(GPIO44_BTCTS_MD);
 	pxa_gpio_mode(GPIO45_BTRTS_MD);
+
+	GPSR(GPIO48_nPOE) =
+		GPIO_bit(GPIO48_nPOE) |
+		GPIO_bit(GPIO49_nPWE) |
+		GPIO_bit(GPIO50_nPIOR) |
+		GPIO_bit(GPIO51_nPIOW) |
+		GPIO_bit(GPIO52_nPCE_1) |
+		GPIO_bit(GPIO53_nPCE_2);
+
+	pxa_gpio_mode(GPIO48_nPOE_MD);
+	pxa_gpio_mode(GPIO49_nPWE_MD);
+	pxa_gpio_mode(GPIO50_nPIOR_MD);
+	pxa_gpio_mode(GPIO51_nPIOW_MD);
+	pxa_gpio_mode(GPIO52_nPCE_1_MD);
+	pxa_gpio_mode(GPIO53_nPCE_2_MD);
+	pxa_gpio_mode(GPIO54_pSKTSEL_MD);
+	pxa_gpio_mode(GPIO55_nPREG_MD);
+	pxa_gpio_mode(GPIO56_nPWAIT_MD);
+	pxa_gpio_mode(GPIO57_nIOIS16_MD);
 
 	/* This is for the SMC chip select */
 	pxa_gpio_mode(GPIO79_nCS_3_MD);

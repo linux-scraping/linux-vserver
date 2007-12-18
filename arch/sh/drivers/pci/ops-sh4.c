@@ -153,7 +153,7 @@ static void __init pci_fixup_ide_bases(struct pci_dev *d)
 }
 DECLARE_PCI_FIXUP_HEADER(PCI_ANY_ID, PCI_ANY_ID, pci_fixup_ide_bases);
 
-char * __init pcibios_setup(char *str)
+char * __devinit pcibios_setup(char *str)
 {
 	if (!strcmp(str, "off")) {
 		pci_probe = 0;
@@ -161,4 +161,10 @@ char * __init pcibios_setup(char *str)
 	}
 
 	return str;
+}
+
+int __attribute__((weak)) pci_fixup_pcic(void)
+{
+	/* Nothing to do. */
+	return 0;
 }

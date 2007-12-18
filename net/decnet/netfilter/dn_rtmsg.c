@@ -33,7 +33,7 @@ static struct sk_buff *dnrmg_build_message(struct sk_buff *rt_skb, int *errp)
 {
 	struct sk_buff *skb = NULL;
 	size_t size;
-	unsigned char *old_tail;
+	sk_buff_data_t old_tail;
 	struct nlmsghdr *nlh;
 	unsigned char *ptr;
 	struct nf_dn_rtmsg *rtm;
@@ -48,7 +48,7 @@ static struct sk_buff *dnrmg_build_message(struct sk_buff *rt_skb, int *errp)
 	rtm = (struct nf_dn_rtmsg *)NLMSG_DATA(nlh);
 	rtm->nfdn_ifindex = rt_skb->dev->ifindex;
 	ptr = NFDN_RTMSG(rtm);
-	memcpy(ptr, rt_skb->data, rt_skb->len);
+	skb_copy_from_linear_data(rt_skb, ptr, rt_skb->len);
 	nlh->nlmsg_len = skb->tail - old_tail;
 	return skb;
 
@@ -88,12 +88,12 @@ static void dnrmg_send_peer(struct sk_buff *skb)
 
 
 static unsigned int dnrmg_hook(unsigned int hook,
-			struct sk_buff **pskb,
+			struct sk_buff *skb,
 			const struct net_device *in,
 			const struct net_device *out,
 			int (*okfn)(struct sk_buff *))
 {
-	dnrmg_send_peer(*pskb);
+	dnrmg_send_peer(skb);
 	return NF_ACCEPT;
 }
 
@@ -102,7 +102,7 @@ static unsigned int dnrmg_hook(unsigned int hook,
 
 static inline void dnrmg_receive_user_skb(struct sk_buff *skb)
 {
-	struct nlmsghdr *nlh = (struct nlmsghdr *)skb->data;
+	struct nlmsghdr *nlh = nlmsg_hdr(skb);
 
 	if (nlh->nlmsg_len < sizeof(*nlh) || skb->len < nlh->nlmsg_len)
 		return;
@@ -113,17 +113,6 @@ static inline void dnrmg_receive_user_skb(struct sk_buff *skb)
 	/* Eventually we might send routing messages too */
 
 	RCV_SKB_FAIL(-EINVAL);
-}
-
-static void dnrmg_receive_user_sk(struct sock *sk, int len)
-{
-	struct sk_buff *skb;
-	unsigned int qlen = skb_queue_len(&sk->sk_receive_queue);
-
-	for (; qlen && (skb = skb_dequeue(&sk->sk_receive_queue)); qlen--) {
-		dnrmg_receive_user_skb(skb);
-		kfree_skb(skb);
-	}
 }
 
 static struct nf_hook_ops dnrmg_ops = {
@@ -137,8 +126,10 @@ static int __init dn_rtmsg_init(void)
 {
 	int rv = 0;
 
-	dnrmg = netlink_kernel_create(NETLINK_DNRTMSG, DNRNG_NLGRP_MAX,
-				      dnrmg_receive_user_sk, THIS_MODULE);
+	dnrmg = netlink_kernel_create(&init_net,
+				      NETLINK_DNRTMSG, DNRNG_NLGRP_MAX,
+				      dnrmg_receive_user_skb,
+				      NULL, THIS_MODULE);
 	if (dnrmg == NULL) {
 		printk(KERN_ERR "dn_rtmsg: Cannot create netlink socket");
 		return -ENOMEM;

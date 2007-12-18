@@ -24,7 +24,7 @@ MODULE_ALIAS("ip6t_NFQUEUE");
 MODULE_ALIAS("arpt_NFQUEUE");
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
@@ -36,7 +36,7 @@ target(struct sk_buff **pskb,
 	return NF_QUEUE_NR(tinfo->queuenum);
 }
 
-static struct xt_target xt_nfqueue_target[] = {
+static struct xt_target xt_nfqueue_target[] __read_mostly = {
 	{
 		.name		= "NFQUEUE",
 		.family		= AF_INET,

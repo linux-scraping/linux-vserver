@@ -21,7 +21,6 @@
 	#size-cells = <1>;
 
 	cpus {
-		#cpus = <1>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -35,7 +34,6 @@
 			timebase-frequency = <0>;
 			bus-frequency = <0>;
 			clock-frequency = <0>;
-			32-bit;
 		};
 	};
 
@@ -52,26 +50,50 @@
 	soc8568@e0000000 {
 		#address-cells = <1>;
 		#size-cells = <1>;
-		#interrupt-cells = <2>;
 		device_type = "soc";
 		ranges = <0 e0000000 00100000>;
-		reg = <e0000000 00100000>;
+		reg = <e0000000 00001000>;
 		bus-frequency = <0>;
 
+		memory-controller@2000 {
+			compatible = "fsl,8568-memory-controller";
+			reg = <2000 1000>;
+			interrupt-parent = <&mpic>;
+			interrupts = <12 2>;
+		};
+
+		l2-cache-controller@20000 {
+			compatible = "fsl,8568-l2-cache-controller";
+			reg = <20000 1000>;
+			cache-line-size = <20>;	// 32 bytes
+			cache-size = <80000>;	// L2, 512K
+			interrupt-parent = <&mpic>;
+			interrupts = <10 2>;
+		};
+
 		i2c@3000 {
+			#address-cells = <1>;
+			#size-cells = <0>;
 			device_type = "i2c";
 			compatible = "fsl-i2c";
 			reg = <3000 100>;
-			interrupts = <1b 2>;
+			interrupts = <2b 2>;
 			interrupt-parent = <&mpic>;
 			dfsrr;
+
+			rtc@68 {
+				compatible = "dallas,ds1374";
+				reg = <68>;
+			};
 		};
 
 		i2c@3100 {
+			#address-cells = <1>;
+			#size-cells = <0>;
 			device_type = "i2c";
 			compatible = "fsl-i2c";
 			reg = <3100 100>;
-			interrupts = <1b 2>;
+			interrupts = <2b 2>;
 			interrupt-parent = <&mpic>;
 			dfsrr;
 		};
@@ -82,27 +104,27 @@
 			device_type = "mdio";
 			compatible = "gianfar";
 			reg = <24520 20>;
-			phy0: ethernet-phy@0 {
+			phy0: ethernet-phy@7 {
 				interrupt-parent = <&mpic>;
-				interrupts = <31 1>;
-				reg = <0>;
+				interrupts = <1 1>;
+				reg = <7>;
 				device_type = "ethernet-phy";
 			};
 			phy1: ethernet-phy@1 {
 				interrupt-parent = <&mpic>;
-				interrupts = <32 1>;
+				interrupts = <2 1>;
 				reg = <1>;
 				device_type = "ethernet-phy";
 			};
 			phy2: ethernet-phy@2 {
 				interrupt-parent = <&mpic>;
-				interrupts = <31 1>;
+				interrupts = <1 1>;
 				reg = <2>;
 				device_type = "ethernet-phy";
 			};
 			phy3: ethernet-phy@3 {
 				interrupt-parent = <&mpic>;
-				interrupts = <32 1>;
+				interrupts = <2 1>;
 				reg = <3>;
 				device_type = "ethernet-phy";
 			};
@@ -115,8 +137,14 @@
 			model = "eTSEC";
 			compatible = "gianfar";
 			reg = <24000 1000>;
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
 			mac-address = [ 00 00 00 00 00 00 ];
-			interrupts = <d 2 e 2 12 2>;
+			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <1d 2 1e 2 22 2>;
 			interrupt-parent = <&mpic>;
 			phy-handle = <&phy2>;
 		};
@@ -128,8 +156,14 @@
 			model = "eTSEC";
 			compatible = "gianfar";
 			reg = <25000 1000>;
-			mac-address = [ 00 00 00 00 00 00];
-			interrupts = <13 2 14 2 18 2>;
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
+			mac-address = [ 00 00 00 00 00 00 ];
+			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <23 2 24 2 28 2>;
 			interrupt-parent = <&mpic>;
 			phy-handle = <&phy3>;
 		};
@@ -139,8 +173,14 @@
 			compatible = "ns16550";
 			reg = <4500 100>;
 			clock-frequency = <0>;
-			interrupts = <1a 2>;
+			interrupts = <2a 2>;
 			interrupt-parent = <&mpic>;
+		};
+
+		global-utilities@e0000 {	//global utilities block
+			compatible = "fsl,mpc8548-guts";
+			reg = <e0000 1000>;
+			fsl,has-rstcr;
 		};
 
 		serial@4600 {
@@ -148,7 +188,7 @@
 			compatible = "ns16550";
 			reg = <4600 100>;
 			clock-frequency = <0>;
-			interrupts = <1a 2>;
+			interrupts = <2a 2>;
 			interrupt-parent = <&mpic>;
 		};
 
@@ -157,7 +197,7 @@
 			model = "SEC2";
 			compatible = "talitos";
 			reg = <30000 f000>;
-			interrupts = <1d 2>;
+			interrupts = <2d 2>;
 			interrupt-parent = <&mpic>;
 			num-channels = <4>;
 			channel-fifo-len = <18>;
@@ -171,11 +211,11 @@
 			#address-cells = <0>;
 			#interrupt-cells = <2>;
 			reg = <40000 40000>;
-			built-in;
 			compatible = "chrp,open-pic";
 			device_type = "open-pic";
                         big-endian;
 		};
+
 		par_io@e0100 {
 			reg = <e0100 100>;
 			device_type = "par_io";
@@ -202,12 +242,13 @@
 					4  1a  2  0  2  0 	/* RxD7 */
 					4  0b  1  0  2  0 	/* TX_EN */
 					4  18  1  0  2  0 	/* TX_ER */
-					4  0f  2  0  2  0 	/* RX_DV */
+					4  10  2  0  2  0 	/* RX_DV */
 					4  1e  2  0  2  0 	/* RX_ER */
 					4  11  2  0  2  0 	/* RX_CLK */
 					4  13  1  0  2  0 	/* GTX_CLK */
 					1  1f  2  0  3  0>;	/* GTX125 */
 			};
+
 			pio2: ucc_pin@02 {
 				pio-map = <
 			/* port  pin  dir  open_drain  assignment  has_irq */
@@ -285,11 +326,18 @@
 			reg = <2000 200>;
 			interrupts = <20>;
 			interrupt-parent = <&qeic>;
-			mac-address = [ 00 04 9f 00 23 23 ];
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
+			mac-address = [ 00 00 00 00 00 00 ];
+			local-mac-address = [ 00 00 00 00 00 00 ];
 			rx-clock = <0>;
-			tx-clock = <19>;
-			phy-handle = <&qe_phy0>;
+			tx-clock = <20>;
 			pio-handle = <&pio1>;
+			phy-handle = <&phy0>;
+			phy-connection-type = "rgmii-id";
 		};
 
 		ucc@3000 {
@@ -300,11 +348,18 @@
 			reg = <3000 200>;
 			interrupts = <21>;
 			interrupt-parent = <&qeic>;
-			mac-address = [ 00 11 22 33 44 55 ];
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
+			mac-address = [ 00 00 00 00 00 00 ];
+			local-mac-address = [ 00 00 00 00 00 00 ];
 			rx-clock = <0>;
-			tx-clock = <14>;
-			phy-handle = <&qe_phy1>;
+			tx-clock = <20>;
 			pio-handle = <&pio2>;
+			phy-handle = <&phy1>;
+			phy-connection-type = "rgmii-id";
 		};
 
 		mdio@2120 {
@@ -316,33 +371,29 @@
 
 			/* These are the same PHYs as on
 			 * gianfar's MDIO bus */
-			qe_phy0: ethernet-phy@00 {
+			qe_phy0: ethernet-phy@07 {
 				interrupt-parent = <&mpic>;
-				interrupts = <31 1>;
-				reg = <0>;
+				interrupts = <1 1>;
+				reg = <7>;
 				device_type = "ethernet-phy";
-				interface = <6>; //ENET_1000_GMII
 			};
 			qe_phy1: ethernet-phy@01 {
 				interrupt-parent = <&mpic>;
-				interrupts = <32 1>;
+				interrupts = <2 1>;
 				reg = <1>;
 				device_type = "ethernet-phy";
-				interface = <6>;
 			};
 			qe_phy2: ethernet-phy@02 {
 				interrupt-parent = <&mpic>;
-				interrupts = <31 1>;
+				interrupts = <1 1>;
 				reg = <2>;
 				device_type = "ethernet-phy";
-				interface = <6>; //ENET_1000_GMII
 			};
 			qe_phy3: ethernet-phy@03 {
 				interrupt-parent = <&mpic>;
-				interrupts = <32 1>;
+				interrupts = <2 1>;
 				reg = <3>;
 				device_type = "ethernet-phy";
-				interface = <6>; //ENET_1000_GMII
 			};
 		};
 
@@ -352,11 +403,77 @@
 			#address-cells = <0>;
 			#interrupt-cells = <1>;
 			reg = <80 80>;
-			built-in;
 			big-endian;
-			interrupts = <1e 2 1e 2>; //high:30 low:30
+			interrupts = <2e 2 2e 2>; //high:30 low:30
 			interrupt-parent = <&mpic>;
 		};
 
+	};
+
+	pci@e0008000 {
+		interrupt-map-mask = <f800 0 0 7>;
+		interrupt-map = <
+			/* IDSEL 0x12 AD18 */
+			9000 0 0 1 &mpic 5 1
+			9000 0 0 2 &mpic 6 1
+			9000 0 0 3 &mpic 7 1
+			9000 0 0 4 &mpic 4 1
+
+			/* IDSEL 0x13 AD19 */
+			9800 0 0 1 &mpic 6 1
+			9800 0 0 2 &mpic 7 1
+			9800 0 0 3 &mpic 4 1
+			9800 0 0 4 &mpic 5 1>;
+
+		interrupt-parent = <&mpic>;
+		interrupts = <18 2>;
+		bus-range = <0 ff>;
+		ranges = <02000000 0 80000000 80000000 0 20000000
+			  01000000 0 00000000 e2000000 0 00800000>;
+		clock-frequency = <3f940aa>;
+		#interrupt-cells = <1>;
+		#size-cells = <2>;
+		#address-cells = <3>;
+		reg = <e0008000 1000>;
+		compatible = "fsl,mpc8540-pci";
+		device_type = "pci";
+	};
+
+	/* PCI Express */
+	pcie@e000a000 {
+		interrupt-map-mask = <f800 0 0 7>;
+		interrupt-map = <
+
+			/* IDSEL 0x0 (PEX) */
+			00000 0 0 1 &mpic 0 1
+			00000 0 0 2 &mpic 1 1
+			00000 0 0 3 &mpic 2 1
+			00000 0 0 4 &mpic 3 1>;
+
+		interrupt-parent = <&mpic>;
+		interrupts = <1a 2>;
+		bus-range = <0 ff>;
+		ranges = <02000000 0 a0000000 a0000000 0 10000000
+			  01000000 0 00000000 e2800000 0 00800000>;
+		clock-frequency = <1fca055>;
+		#interrupt-cells = <1>;
+		#size-cells = <2>;
+		#address-cells = <3>;
+		reg = <e000a000 1000>;
+		compatible = "fsl,mpc8548-pcie";
+		device_type = "pci";
+		pcie@0 {
+			reg = <0 0 0 0 0>;
+			#size-cells = <2>;
+			#address-cells = <3>;
+			device_type = "pci";
+			ranges = <02000000 0 a0000000
+				  02000000 0 a0000000
+				  0 10000000
+
+				  01000000 0 00000000
+				  01000000 0 00000000
+				  0 00800000>;
+		};
 	};
 };

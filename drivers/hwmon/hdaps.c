@@ -28,12 +28,14 @@
 
 #include <linux/delay.h>
 #include <linux/platform_device.h>
-#include <linux/input.h>
+#include <linux/input-polldev.h>
 #include <linux/kernel.h>
+#include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/timer.h>
 #include <linux/dmi.h>
 #include <linux/jiffies.h>
+
 #include <asm/io.h>
 
 #define HDAPS_LOW_PORT		0x1600	/* first port used by hdaps */
@@ -59,22 +61,21 @@
 #define INIT_TIMEOUT_MSECS	4000	/* wait up to 4s for device init ... */
 #define INIT_WAIT_MSECS		200	/* ... in 200ms increments */
 
-#define HDAPS_POLL_PERIOD	(HZ/20)	/* poll for input every 1/20s */
+#define HDAPS_POLL_INTERVAL	50	/* poll for input every 1/20s (50 ms)*/
 #define HDAPS_INPUT_FUZZ	4	/* input event threshold */
 #define HDAPS_INPUT_FLAT	4
 
-static struct timer_list hdaps_timer;
 static struct platform_device *pdev;
-static struct input_dev *hdaps_idev;
+static struct input_polled_dev *hdaps_idev;
 static unsigned int hdaps_invert;
 static u8 km_activity;
 static int rest_x;
 static int rest_y;
 
-static DECLARE_MUTEX(hdaps_sem);
+static DEFINE_MUTEX(hdaps_mtx);
 
 /*
- * __get_latch - Get the value from a given port.  Callers must hold hdaps_sem.
+ * __get_latch - Get the value from a given port.  Callers must hold hdaps_mtx.
  */
 static inline u8 __get_latch(u16 port)
 {
@@ -83,7 +84,7 @@ static inline u8 __get_latch(u16 port)
 
 /*
  * __check_latch - Check a port latch for a given value.  Returns zero if the
- * port contains the given value.  Callers must hold hdaps_sem.
+ * port contains the given value.  Callers must hold hdaps_mtx.
  */
 static inline int __check_latch(u16 port, u8 val)
 {
@@ -94,7 +95,7 @@ static inline int __check_latch(u16 port, u8 val)
 
 /*
  * __wait_latch - Wait up to 100us for a port latch to get a certain value,
- * returning zero if the value is obtained.  Callers must hold hdaps_sem.
+ * returning zero if the value is obtained.  Callers must hold hdaps_mtx.
  */
 static int __wait_latch(u16 port, u8 val)
 {
@@ -111,7 +112,7 @@ static int __wait_latch(u16 port, u8 val)
 
 /*
  * __device_refresh - request a refresh from the accelerometer.  Does not wait
- * for refresh to complete.  Callers must hold hdaps_sem.
+ * for refresh to complete.  Callers must hold hdaps_mtx.
  */
 static void __device_refresh(void)
 {
@@ -125,7 +126,7 @@ static void __device_refresh(void)
 /*
  * __device_refresh_sync - request a synchronous refresh from the
  * accelerometer.  We wait for the refresh to complete.  Returns zero if
- * successful and nonzero on error.  Callers must hold hdaps_sem.
+ * successful and nonzero on error.  Callers must hold hdaps_mtx.
  */
 static int __device_refresh_sync(void)
 {
@@ -135,7 +136,7 @@ static int __device_refresh_sync(void)
 
 /*
  * __device_complete - indicate to the accelerometer that we are done reading
- * data, and then initiate an async refresh.  Callers must hold hdaps_sem.
+ * data, and then initiate an async refresh.  Callers must hold hdaps_mtx.
  */
 static inline void __device_complete(void)
 {
@@ -153,7 +154,7 @@ static int hdaps_readb_one(unsigned int port, u8 *val)
 {
 	int ret;
 
-	down(&hdaps_sem);
+	mutex_lock(&hdaps_mtx);
 
 	/* do a sync refresh -- we need to be sure that we read fresh data */
 	ret = __device_refresh_sync();
@@ -164,7 +165,7 @@ static int hdaps_readb_one(unsigned int port, u8 *val)
 	__device_complete();
 
 out:
-	up(&hdaps_sem);
+	mutex_unlock(&hdaps_mtx);
 	return ret;
 }
 
@@ -199,9 +200,9 @@ static int hdaps_read_pair(unsigned int port1, unsigned int port2,
 {
 	int ret;
 
-	down(&hdaps_sem);
+	mutex_lock(&hdaps_mtx);
 	ret = __hdaps_read_pair(port1, port2, val1, val2);
-	up(&hdaps_sem);
+	mutex_unlock(&hdaps_mtx);
 
 	return ret;
 }
@@ -214,7 +215,7 @@ static int hdaps_device_init(void)
 {
 	int total, ret = -ENXIO;
 
-	down(&hdaps_sem);
+	mutex_lock(&hdaps_mtx);
 
 	outb(0x13, 0x1610);
 	outb(0x01, 0x161f);
@@ -280,7 +281,7 @@ static int hdaps_device_init(void)
 	}
 
 out:
-	up(&hdaps_sem);
+	mutex_unlock(&hdaps_mtx);
 	return ret;
 }
 
@@ -314,34 +315,29 @@ static struct platform_driver hdaps_driver = {
 };
 
 /*
- * hdaps_calibrate - Set our "resting" values.  Callers must hold hdaps_sem.
+ * hdaps_calibrate - Set our "resting" values.  Callers must hold hdaps_mtx.
  */
 static void hdaps_calibrate(void)
 {
 	__hdaps_read_pair(HDAPS_PORT_XPOS, HDAPS_PORT_YPOS, &rest_x, &rest_y);
 }
 
-static void hdaps_mousedev_poll(unsigned long unused)
+static void hdaps_mousedev_poll(struct input_polled_dev *dev)
 {
+	struct input_dev *input_dev = dev->input;
 	int x, y;
 
-	/* Cannot sleep.  Try nonblockingly.  If we fail, try again later. */
-	if (down_trylock(&hdaps_sem)) {
-		mod_timer(&hdaps_timer,jiffies + HDAPS_POLL_PERIOD);
-		return;
-	}
+	mutex_lock(&hdaps_mtx);
 
 	if (__hdaps_read_pair(HDAPS_PORT_XPOS, HDAPS_PORT_YPOS, &x, &y))
 		goto out;
 
-	input_report_abs(hdaps_idev, ABS_X, x - rest_x);
-	input_report_abs(hdaps_idev, ABS_Y, y - rest_y);
-	input_sync(hdaps_idev);
-
-	mod_timer(&hdaps_timer, jiffies + HDAPS_POLL_PERIOD);
+	input_report_abs(input_dev, ABS_X, x - rest_x);
+	input_report_abs(input_dev, ABS_Y, y - rest_y);
+	input_sync(input_dev);
 
 out:
-	up(&hdaps_sem);
+	mutex_unlock(&hdaps_mtx);
 }
 
 
@@ -421,9 +417,9 @@ static ssize_t hdaps_calibrate_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
-	down(&hdaps_sem);
+	mutex_lock(&hdaps_mtx);
 	hdaps_calibrate();
-	up(&hdaps_sem);
+	mutex_unlock(&hdaps_mtx);
 
 	return count;
 }
@@ -478,14 +474,14 @@ static struct attribute_group hdaps_attribute_group = {
 /* Module stuff */
 
 /* hdaps_dmi_match - found a match.  return one, short-circuiting the hunt. */
-static int __init hdaps_dmi_match(struct dmi_system_id *id)
+static int __init hdaps_dmi_match(const struct dmi_system_id *id)
 {
 	printk(KERN_INFO "hdaps: %s detected.\n", id->ident);
 	return 1;
 }
 
 /* hdaps_dmi_match_invert - found an inverted match. */
-static int __init hdaps_dmi_match_invert(struct dmi_system_id *id)
+static int __init hdaps_dmi_match_invert(const struct dmi_system_id *id)
 {
 	hdaps_invert = 1;
 	printk(KERN_INFO "hdaps: inverting axis readings.\n");
@@ -534,6 +530,7 @@ static struct dmi_system_id __initdata hdaps_whitelist[] = {
 
 static int __init hdaps_init(void)
 {
+	struct input_dev *idev;
 	int ret;
 
 	if (!dmi_check_system(hdaps_whitelist)) {
@@ -561,39 +558,37 @@ static int __init hdaps_init(void)
 	if (ret)
 		goto out_device;
 
-	hdaps_idev = input_allocate_device();
+	hdaps_idev = input_allocate_polled_device();
 	if (!hdaps_idev) {
 		ret = -ENOMEM;
 		goto out_group;
 	}
 
+	hdaps_idev->poll = hdaps_mousedev_poll;
+	hdaps_idev->poll_interval = HDAPS_POLL_INTERVAL;
+
 	/* initial calibrate for the input device */
 	hdaps_calibrate();
 
 	/* initialize the input class */
-	hdaps_idev->name = "hdaps";
-	hdaps_idev->cdev.dev = &pdev->dev;
-	hdaps_idev->evbit[0] = BIT(EV_ABS);
-	input_set_abs_params(hdaps_idev, ABS_X,
+	idev = hdaps_idev->input;
+	idev->name = "hdaps";
+	idev->dev.parent = &pdev->dev;
+	idev->evbit[0] = BIT_MASK(EV_ABS);
+	input_set_abs_params(idev, ABS_X,
 			-256, 256, HDAPS_INPUT_FUZZ, HDAPS_INPUT_FLAT);
-	input_set_abs_params(hdaps_idev, ABS_Y,
+	input_set_abs_params(idev, ABS_Y,
 			-256, 256, HDAPS_INPUT_FUZZ, HDAPS_INPUT_FLAT);
 
-	ret = input_register_device(hdaps_idev);
+	ret = input_register_polled_device(hdaps_idev);
 	if (ret)
 		goto out_idev;
-
-	/* start up our timer for the input device */
-	init_timer(&hdaps_timer);
-	hdaps_timer.function = hdaps_mousedev_poll;
-	hdaps_timer.expires = jiffies + HDAPS_POLL_PERIOD;
-	add_timer(&hdaps_timer);
 
 	printk(KERN_INFO "hdaps: driver successfully loaded.\n");
 	return 0;
 
 out_idev:
-	input_free_device(hdaps_idev);
+	input_free_polled_device(hdaps_idev);
 out_group:
 	sysfs_remove_group(&pdev->dev.kobj, &hdaps_attribute_group);
 out_device:
@@ -609,8 +604,8 @@ out:
 
 static void __exit hdaps_exit(void)
 {
-	del_timer_sync(&hdaps_timer);
-	input_unregister_device(hdaps_idev);
+	input_unregister_polled_device(hdaps_idev);
+	input_free_polled_device(hdaps_idev);
 	sysfs_remove_group(&pdev->dev.kobj, &hdaps_attribute_group);
 	platform_device_unregister(pdev);
 	platform_driver_unregister(&hdaps_driver);

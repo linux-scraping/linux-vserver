@@ -2,7 +2,7 @@
  * Page fault handler for SH with an MMU.
  *
  *  Copyright (C) 1999  Niibe Yutaka
- *  Copyright (C) 2003  Paul Mundt
+ *  Copyright (C) 2003 - 2007  Paul Mundt
  *
  *  Based on linux/arch/i386/mm/fault.c:
  *   Copyright (C) 1995  Linus Torvalds
@@ -20,8 +20,6 @@
 #include <asm/tlbflush.h>
 #include <asm/kgdb.h>
 
-extern void die(const char *,struct pt_regs *,long);
-
 /*
  * This routine handles page faults.  It determines the address,
  * and the problem, and then passes it off to one of the appropriate
@@ -34,8 +32,8 @@ asmlinkage void __kprobes do_page_fault(struct pt_regs *regs,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	struct vm_area_struct * vma;
-	unsigned long page;
 	int si_code;
+	int fault;
 	siginfo_t info;
 
 	trace_hardirqs_on();
@@ -127,20 +125,18 @@ good_area:
 	 * the fault.
 	 */
 survive:
-	switch (handle_mm_fault(mm, vma, address, writeaccess)) {
-		case VM_FAULT_MINOR:
-			tsk->min_flt++;
-			break;
-		case VM_FAULT_MAJOR:
-			tsk->maj_flt++;
-			break;
-		case VM_FAULT_SIGBUS:
-			goto do_sigbus;
-		case VM_FAULT_OOM:
+	fault = handle_mm_fault(mm, vma, address, writeaccess);
+	if (unlikely(fault & VM_FAULT_ERROR)) {
+		if (fault & VM_FAULT_OOM)
 			goto out_of_memory;
-		default:
-			BUG();
+		else if (fault & VM_FAULT_SIGBUS)
+			goto do_sigbus;
+		BUG();
 	}
+	if (fault & VM_FAULT_MAJOR)
+		tsk->maj_flt++;
+	else
+		tsk->min_flt++;
 
 	up_read(&mm->mmap_sem);
 	return;
@@ -172,24 +168,37 @@ no_context:
  * terminate things with extreme prejudice.
  *
  */
-	if (address < PAGE_SIZE)
-		printk(KERN_ALERT "Unable to handle kernel NULL pointer dereference");
-	else
-		printk(KERN_ALERT "Unable to handle kernel paging request");
-	printk(" at virtual address %08lx\n", address);
-	printk(KERN_ALERT "pc = %08lx\n", regs->pc);
-	page = (unsigned long)get_TTB();
-	if (page) {
-		page = ((unsigned long *) page)[address >> PGDIR_SHIFT];
-		printk(KERN_ALERT "*pde = %08lx\n", page);
-		if (page & _PAGE_PRESENT) {
-			page &= PAGE_MASK;
-			address &= 0x003ff000;
-			page = ((unsigned long *) __va(page))[address >> PAGE_SHIFT];
-			printk(KERN_ALERT "*pte = %08lx\n", page);
+
+	bust_spinlocks(1);
+
+	if (oops_may_print()) {
+		__typeof__(pte_val(__pte(0))) page;
+
+		if (address < PAGE_SIZE)
+			printk(KERN_ALERT "Unable to handle kernel NULL "
+					  "pointer dereference");
+		else
+			printk(KERN_ALERT "Unable to handle kernel paging "
+					  "request");
+		printk(" at virtual address %08lx\n", address);
+		printk(KERN_ALERT "pc = %08lx\n", regs->pc);
+		page = (unsigned long)get_TTB();
+		if (page) {
+			page = ((__typeof__(page) *)page)[address >> PGDIR_SHIFT];
+			printk(KERN_ALERT "*pde = %08lx\n", page);
+			if (page & _PAGE_PRESENT) {
+				page &= PAGE_MASK;
+				address &= 0x003ff000;
+				page = ((__typeof__(page) *)
+						__va(page))[address >>
+							    PAGE_SHIFT];
+				printk(KERN_ALERT "*pte = %08lx\n", page);
+			}
 		}
 	}
+
 	die("Oops", regs, writeaccess);
+	bust_spinlocks(0);
 	do_exit(SIGKILL);
 
 /*
@@ -198,7 +207,7 @@ no_context:
  */
 out_of_memory:
 	up_read(&mm->mmap_sem);
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		yield();
 		down_read(&mm->mmap_sem);
 		goto survive;
@@ -206,7 +215,7 @@ out_of_memory:
 	printk("VM: killing process %s(%d:#%u)\n",
 		tsk->comm, tsk->pid, tsk->xid);
 	if (user_mode(regs))
-		do_exit(SIGKILL);
+		do_group_exit(SIGKILL);
 	goto no_context;
 
 do_sigbus:
@@ -251,7 +260,7 @@ asmlinkage int __kprobes __do_page_fault(struct pt_regs *regs,
 	pte_t *pte;
 	pte_t entry;
 	struct mm_struct *mm = current->mm;
-	spinlock_t *ptl;
+	spinlock_t *ptl = NULL;
 	int ret = 1;
 
 #ifdef CONFIG_SH_KGDB

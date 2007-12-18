@@ -31,8 +31,10 @@ typedef s32	compat_timer_t;
 
 typedef s32	compat_int_t;
 typedef s32	compat_long_t;
+typedef s64	compat_s64;
 typedef u32	compat_uint_t;
 typedef u32	compat_ulong_t;
+typedef u64	compat_u64;
 
 struct compat_timespec {
 	compat_time_t		tv_sec;
@@ -152,7 +154,7 @@ static __inline__ void __user *compat_alloc_user_space(long len)
 
 static inline int __is_compat_task(struct task_struct *t)
 {
-	return test_ti_thread_flag(t->thread_info, TIF_32BIT);
+	return test_ti_thread_flag(task_thread_info(t), TIF_32BIT);
 }
 
 static inline int is_compat_task(void)

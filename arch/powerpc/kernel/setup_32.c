@@ -10,7 +10,9 @@
 #include <linux/reboot.h>
 #include <linux/delay.h>
 #include <linux/initrd.h>
+#if defined(CONFIG_IDE) || defined(CONFIG_IDE_MODULE)
 #include <linux/ide.h>
+#endif
 #include <linux/tty.h>
 #include <linux/bootmem.h>
 #include <linux/seq_file.h>
@@ -18,13 +20,11 @@
 #include <linux/cpu.h>
 #include <linux/console.h>
 
-#include <asm/residual.h>
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/processor.h>
 #include <asm/pgtable.h>
 #include <asm/setup.h>
-#include <asm/amigappc.h>
 #include <asm/smp.h>
 #include <asm/elf.h>
 #include <asm/cputable.h>
@@ -51,7 +51,10 @@
 
 extern void bootx_init(unsigned long r4, unsigned long phys);
 
+#if defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE)
 struct ide_machdep_calls ppc_ide_md;
+EXPORT_SYMBOL(ppc_ide_md);
+#endif
 
 int boot_cpuid;
 EXPORT_SYMBOL_GPL(boot_cpuid);
@@ -92,7 +95,8 @@ unsigned long __init early_init(unsigned long dt_ptr)
 
 	/* First zero the BSS -- use memset_io, some platforms don't have
 	 * caches on yet */
-	memset_io((void __iomem *)PTRRELOC(&__bss_start), 0, _end - __bss_start);
+	memset_io((void __iomem *)PTRRELOC(&__bss_start), 0,
+			__bss_stop - __bss_start);
 
 	/*
 	 * Identify the CPU type and fix up code sections
@@ -195,18 +199,22 @@ EXPORT_SYMBOL(nvram_sync);
 
 #endif /* CONFIG_NVRAM */
 
-static struct cpu cpu_devices[NR_CPUS];
+static DEFINE_PER_CPU(struct cpu, cpu_devices);
 
 int __init ppc_init(void)
 {
-	int i;
+	int cpu;
 
 	/* clear the progress line */
-	if ( ppc_md.progress ) ppc_md.progress("             ", 0xffff);
+	if (ppc_md.progress)
+		ppc_md.progress("             ", 0xffff);
 
 	/* register CPU devices */
-	for_each_possible_cpu(i)
-		register_cpu(&cpu_devices[i], i);
+	for_each_possible_cpu(cpu) {
+		struct cpu *c = &per_cpu(cpu_devices, cpu);
+		c->hotpluggable = 1;
+		register_cpu(c, cpu);
+	}
 
 	/* call platform init */
 	if (ppc_md.init != NULL) {
@@ -257,13 +265,11 @@ void __init setup_arch(char **cmdline_p)
 	 * Systems with OF can look in the properties on the cpu node(s)
 	 * for a possibly more accurate value.
 	 */
-	if (cpu_has_feature(CPU_FTR_SPLIT_ID_CACHE)) {
-		dcache_bsize = cur_cpu_spec->dcache_bsize;
-		icache_bsize = cur_cpu_spec->icache_bsize;
-		ucache_bsize = 0;
-	} else
-		ucache_bsize = dcache_bsize = icache_bsize
-			= cur_cpu_spec->dcache_bsize;
+	dcache_bsize = cur_cpu_spec->dcache_bsize;
+	icache_bsize = cur_cpu_spec->icache_bsize;
+	ucache_bsize = 0;
+	if (cpu_has_feature(CPU_FTR_UNIFIED_ID_CACHE))
+		ucache_bsize = icache_bsize = dcache_bsize;
 
 	/* reboot on panic */
 	panic_timeout = 180;
@@ -284,7 +290,8 @@ void __init setup_arch(char **cmdline_p)
 	conswitchp = &dummy_con;
 #endif
 
-	ppc_md.setup_arch();
+	if (ppc_md.setup_arch)
+		ppc_md.setup_arch();
 	if ( ppc_md.progress ) ppc_md.progress("arch: exit", 0x3eab);
 
 	paging_init();

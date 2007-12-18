@@ -1400,10 +1400,13 @@ lcs_irq(struct ccw_device *cdev, unsigned long intparm, struct irb *irb)
 		PRINT_WARN("check on device %s, dstat=0x%X, cstat=0x%X \n",
 			    cdev->dev.bus_id, dstat, cstat);
 		if (rc) {
-			lcs_schedule_recovery(card);
-			wake_up(&card->wait_q);
-			return;
+			channel->state = LCS_CH_STATE_ERROR;
 		}
+	}
+	if (channel->state == LCS_CH_STATE_ERROR) {
+		lcs_schedule_recovery(card);
+		wake_up(&card->wait_q);
+		return;
 	}
 	/* How far in the ccw chain have we processed? */
 	if ((channel->state != LCS_CH_STATE_INIT) &&
@@ -1576,7 +1579,7 @@ __lcs_start_xmit(struct lcs_card *card, struct sk_buff *skb,
 	header->offset = card->tx_buffer->count;
 	header->type = card->lan_type;
 	header->slot = card->portno;
-	memcpy(header + 1, skb->data, skb->len);
+	skb_copy_from_linear_data(skb, header + 1, skb->len);
 	spin_unlock(&card->lock);
 	card->stats.tx_bytes += skb->len;
 	card->stats.tx_packets++;
@@ -1708,6 +1711,8 @@ lcs_stopcard(struct lcs_card *card)
 
 	if (card->read.state != LCS_CH_STATE_STOPPED &&
 	    card->write.state != LCS_CH_STATE_STOPPED &&
+	    card->read.state != LCS_CH_STATE_ERROR &&
+	    card->write.state != LCS_CH_STATE_ERROR &&
 	    card->state == DEV_STATE_UP) {
 		lcs_clear_multicast_list(card);
 		rc = lcs_send_stoplan(card,LCS_INITIATOR_TCPIP);
@@ -1784,7 +1789,6 @@ lcs_get_skb(struct lcs_card *card, char *skb_data, unsigned int skb_len)
 		card->stats.rx_dropped++;
 		return;
 	}
-	skb->dev = card->dev;
 	memcpy(skb_put(skb, skb_len), skb_data, skb_len);
 	skb->protocol =	card->lan_type_trans(skb, card->dev);
 	card->stats.rx_bytes += skb_len;
@@ -2146,7 +2150,6 @@ lcs_new_device(struct ccwgroup_device *ccwgdev)
 	card->dev->stop = lcs_stop_device;
 	card->dev->hard_start_xmit = lcs_start_xmit;
 	card->dev->get_stats = lcs_getstats;
-	SET_MODULE_OWNER(dev);
 	memcpy(card->dev->dev_addr, card->mac, LCS_MAC_LENGTH);
 #ifdef CONFIG_IP_MULTICAST
 	if (!lcs_check_multicast_support(card))

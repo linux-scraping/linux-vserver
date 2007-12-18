@@ -5,10 +5,6 @@
  * way.
  *
  * Rusty Russell (C)2000 -- This code is GPL.
- *
- * February 2000: Modified by James Morris to have 1 queue per protocol.
- * 15-Mar-2000:   Added NF_REPEAT --RR.
- * 08-May-2003:	  Internal logging interface added by Jozsef Kadlecsik.
  */
 #include <linux/kernel.h>
 #include <linux/netfilter.h>
@@ -23,6 +19,7 @@
 #include <linux/inetdevice.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
+#include <net/net_namespace.h>
 #include <net/sock.h>
 
 #include "nf_internals.h"
@@ -120,7 +117,7 @@ void nf_unregister_hooks(struct nf_hook_ops *reg, unsigned int n)
 EXPORT_SYMBOL(nf_unregister_hooks);
 
 unsigned int nf_iterate(struct list_head *head,
-			struct sk_buff **skb,
+			struct sk_buff *skb,
 			int hook,
 			const struct net_device *indev,
 			const struct net_device *outdev,
@@ -163,7 +160,7 @@ unsigned int nf_iterate(struct list_head *head,
 
 /* Returns 1 if okfn() needs to be executed by the caller,
  * -EPERM for NF_DROP, 0 otherwise. */
-int nf_hook_slow(int pf, unsigned int hook, struct sk_buff **pskb,
+int nf_hook_slow(int pf, unsigned int hook, struct sk_buff *skb,
 		 struct net_device *indev,
 		 struct net_device *outdev,
 		 int (*okfn)(struct sk_buff *),
@@ -178,17 +175,17 @@ int nf_hook_slow(int pf, unsigned int hook, struct sk_buff **pskb,
 
 	elem = &nf_hooks[pf][hook];
 next_hook:
-	verdict = nf_iterate(&nf_hooks[pf][hook], pskb, hook, indev,
+	verdict = nf_iterate(&nf_hooks[pf][hook], skb, hook, indev,
 			     outdev, &elem, okfn, hook_thresh);
 	if (verdict == NF_ACCEPT || verdict == NF_STOP) {
 		ret = 1;
 		goto unlock;
 	} else if (verdict == NF_DROP) {
-		kfree_skb(*pskb);
+		kfree_skb(skb);
 		ret = -EPERM;
 	} else if ((verdict & NF_VERDICT_MASK)  == NF_QUEUE) {
 		NFDEBUG("nf_hook: Verdict = QUEUE.\n");
-		if (!nf_queue(*pskb, elem, pf, hook, indev, outdev, okfn,
+		if (!nf_queue(skb, elem, pf, hook, indev, outdev, okfn,
 			      verdict >> NF_VERDICT_BITS))
 			goto next_hook;
 	}
@@ -199,32 +196,24 @@ unlock:
 EXPORT_SYMBOL(nf_hook_slow);
 
 
-int skb_make_writable(struct sk_buff **pskb, unsigned int writable_len)
+int skb_make_writable(struct sk_buff *skb, unsigned int writable_len)
 {
-	struct sk_buff *nskb;
-
-	if (writable_len > (*pskb)->len)
+	if (writable_len > skb->len)
 		return 0;
 
 	/* Not exclusive use of packet?  Must copy. */
-	if (skb_shared(*pskb) || skb_cloned(*pskb))
-		goto copy_skb;
+	if (!skb_cloned(skb)) {
+		if (writable_len <= skb_headlen(skb))
+			return 1;
+	} else if (skb_clone_writable(skb, writable_len))
+		return 1;
 
-	return pskb_may_pull(*pskb, writable_len);
+	if (writable_len <= skb_headlen(skb))
+		writable_len = 0;
+	else
+		writable_len -= skb_headlen(skb);
 
-copy_skb:
-	nskb = skb_copy(*pskb, GFP_ATOMIC);
-	if (!nskb)
-		return 0;
-	BUG_ON(skb_is_nonlinear(nskb));
-
-	/* Rest of kernel will get very unhappy if we pass it a
-	   suddenly-orphaned skbuff */
-	if ((*pskb)->sk)
-		skb_set_owner_w(nskb, (*pskb)->sk);
-	kfree_skb(*pskb);
-	*pskb = nskb;
-	return 1;
+	return !!__pskb_pull_tail(skb, writable_len);
 }
 EXPORT_SYMBOL(skb_make_writable);
 
@@ -233,17 +222,18 @@ void nf_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
 {
 	__be32 diff[] = { ~from, to };
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
-		*sum = csum_fold(csum_partial((char *)diff, sizeof(diff),
+		*sum = csum_fold(csum_partial(diff, sizeof(diff),
 				~csum_unfold(*sum)));
 		if (skb->ip_summed == CHECKSUM_COMPLETE && pseudohdr)
-			skb->csum = ~csum_partial((char *)diff, sizeof(diff),
+			skb->csum = ~csum_partial(diff, sizeof(diff),
 						~skb->csum);
 	} else if (pseudohdr)
-		*sum = ~csum_fold(csum_partial((char *)diff, sizeof(diff),
+		*sum = ~csum_fold(csum_partial(diff, sizeof(diff),
 				csum_unfold(*sum)));
 }
 EXPORT_SYMBOL(nf_proto_csum_replace4);
 
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 /* This does not belong here, but locally generated errors need it if connection
    tracking in use: without this, connection may not be in hash table, and hence
    manufactured ICMP or RST packets will not be associated with it. */
@@ -264,6 +254,22 @@ void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(nf_ct_attach);
 
+void (*nf_ct_destroy)(struct nf_conntrack *);
+EXPORT_SYMBOL(nf_ct_destroy);
+
+void nf_conntrack_destroy(struct nf_conntrack *nfct)
+{
+	void (*destroy)(struct nf_conntrack *);
+
+	rcu_read_lock();
+	destroy = rcu_dereference(nf_ct_destroy);
+	BUG_ON(destroy == NULL);
+	destroy(nfct);
+	rcu_read_unlock();
+}
+EXPORT_SYMBOL(nf_conntrack_destroy);
+#endif /* CONFIG_NF_CONNTRACK */
+
 #ifdef CONFIG_PROC_FS
 struct proc_dir_entry *proc_net_netfilter;
 EXPORT_SYMBOL(proc_net_netfilter);
@@ -278,7 +284,7 @@ void __init netfilter_init(void)
 	}
 
 #ifdef CONFIG_PROC_FS
-	proc_net_netfilter = proc_mkdir("netfilter", proc_net);
+	proc_net_netfilter = proc_mkdir("netfilter", init_net.proc_net);
 	if (!proc_net_netfilter)
 		panic("cannot create netfilter proc entry");
 #endif

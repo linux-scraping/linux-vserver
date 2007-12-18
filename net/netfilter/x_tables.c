@@ -22,6 +22,7 @@
 #include <linux/vmalloc.h>
 #include <linux/mutex.h>
 #include <linux/mm.h>
+#include <net/net_namespace.h>
 
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_arp.h>
@@ -56,8 +57,8 @@ enum {
 };
 
 static const char *xt_prefix[NPROTO] = {
-	[AF_INET] 	= "ip",
-	[AF_INET6] 	= "ip6",
+	[AF_INET]	= "ip",
+	[AF_INET6]	= "ip6",
 	[NF_ARP]	= "arp",
 };
 
@@ -320,8 +321,8 @@ int xt_check_match(const struct xt_match *match, unsigned short family,
 		return -EINVAL;
 	}
 	if (match->hooks && (hook_mask & ~match->hooks) != 0) {
-		printk("%s_tables: %s match: bad hook_mask %u\n",
-		       xt_prefix[family], match->name, hook_mask);
+		printk("%s_tables: %s match: bad hook_mask %u/%u\n",
+		       xt_prefix[family], match->name, hook_mask, match->hooks);
 		return -EINVAL;
 	}
 	if (match->proto && (match->proto != proto || inv_proto)) {
@@ -410,8 +411,9 @@ int xt_check_target(const struct xt_target *target, unsigned short family,
 		return -EINVAL;
 	}
 	if (target->hooks && (hook_mask & ~target->hooks) != 0) {
-		printk("%s_tables: %s target: bad hook_mask %u\n",
-		       xt_prefix[family], target->name, hook_mask);
+		printk("%s_tables: %s target: bad hook_mask %u/%u\n",
+		       xt_prefix[family], target->name, hook_mask,
+		       target->hooks);
 		return -EINVAL;
 	}
 	if (target->proto && (target->proto != proto || inv_proto)) {
@@ -651,12 +653,6 @@ void *xt_unregister_table(struct xt_table *table)
 EXPORT_SYMBOL_GPL(xt_unregister_table);
 
 #ifdef CONFIG_PROC_FS
-static char *xt_proto_prefix[NPROTO] = {
-	[AF_INET]	= "ip",
-	[AF_INET6]	= "ip6",
-	[NF_ARP]	= "arp",
-};
-
 static struct list_head *xt_get_idx(struct list_head *list, struct seq_file *seq, loff_t pos)
 {
 	struct list_head *head = list->next;
@@ -750,7 +746,7 @@ static int xt_name_seq_show(struct seq_file *seq, void *v)
 		return 0;
 }
 
-static struct seq_operations xt_tgt_seq_ops = {
+static const struct seq_operations xt_tgt_seq_ops = {
 	.start	= xt_tgt_seq_start,
 	.next	= xt_tgt_seq_next,
 	.stop	= xt_tgt_seq_stop,
@@ -798,24 +794,24 @@ int xt_proto_init(int af)
 
 
 #ifdef CONFIG_PROC_FS
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TABLES, sizeof(buf));
-	proc = proc_net_fops_create(buf, 0440, &xt_file_ops);
+	proc = proc_net_fops_create(&init_net, buf, 0440, &xt_file_ops);
 	if (!proc)
 		goto out;
 	proc->data = (void *) ((unsigned long) af | (TABLE << 16));
 
 
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_MATCHES, sizeof(buf));
-	proc = proc_net_fops_create(buf, 0440, &xt_file_ops);
+	proc = proc_net_fops_create(&init_net, buf, 0440, &xt_file_ops);
 	if (!proc)
 		goto out_remove_tables;
 	proc->data = (void *) ((unsigned long) af | (MATCH << 16));
 
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TARGETS, sizeof(buf));
-	proc = proc_net_fops_create(buf, 0440, &xt_file_ops);
+	proc = proc_net_fops_create(&init_net, buf, 0440, &xt_file_ops);
 	if (!proc)
 		goto out_remove_matches;
 	proc->data = (void *) ((unsigned long) af | (TARGET << 16));
@@ -825,14 +821,14 @@ int xt_proto_init(int af)
 
 #ifdef CONFIG_PROC_FS
 out_remove_matches:
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_MATCHES, sizeof(buf));
-	proc_net_remove(buf);
+	proc_net_remove(&init_net, buf);
 
 out_remove_tables:
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TABLES, sizeof(buf));
-	proc_net_remove(buf);
+	proc_net_remove(&init_net, buf);
 out:
 	return -1;
 #endif
@@ -844,17 +840,17 @@ void xt_proto_fini(int af)
 #ifdef CONFIG_PROC_FS
 	char buf[XT_FUNCTION_MAXNAMELEN];
 
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TABLES, sizeof(buf));
-	proc_net_remove(buf);
+	proc_net_remove(&init_net, buf);
 
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TARGETS, sizeof(buf));
-	proc_net_remove(buf);
+	proc_net_remove(&init_net, buf);
 
-	strlcpy(buf, xt_proto_prefix[af], sizeof(buf));
+	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_MATCHES, sizeof(buf));
-	proc_net_remove(buf);
+	proc_net_remove(&init_net, buf);
 #endif /*CONFIG_PROC_FS*/
 }
 EXPORT_SYMBOL_GPL(xt_proto_fini);

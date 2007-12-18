@@ -19,10 +19,12 @@
 
 #include <linux/string.h>
 #include <linux/types.h>
+#include <linux/jhash.h>
 
 #include <net/flow.h>
 #include <net/sock.h>
 #include <net/request_sock.h>
+#include <net/route.h>
 
 /** struct ip_options - IP Options
  *
@@ -168,13 +170,15 @@ static inline void inet_sk_copy_descendant(struct sock *sk_to,
 
 extern int inet_sk_rebuild_header(struct sock *sk);
 
+extern u32 inet_ehash_secret;
+extern void build_ehash_secret(void);
+
 static inline unsigned int inet_ehashfn(const __be32 laddr, const __u16 lport,
 					const __be32 faddr, const __be16 fport)
 {
-	unsigned int h = ((__force __u32)laddr ^ lport) ^ ((__force __u32)faddr ^ (__force __u32)fport);
-	h ^= h >> 16;
-	h ^= h >> 8;
-	return h;
+	return jhash_2words((__force __u32) laddr ^ (__force __u32) faddr,
+			    ((__u32) lport) << 16 | (__force __u32)fport,
+			    inet_ehash_secret);
 }
 
 static inline int inet_sk_ehashfn(const struct sock *sk)
@@ -186,6 +190,14 @@ static inline int inet_sk_ehashfn(const struct sock *sk)
 	const __be16 fport = inet->dport;
 
 	return inet_ehashfn(laddr, lport, faddr, fport);
+}
+
+
+static inline int inet_iif(const struct sk_buff *skb)
+{
+	struct rtable *rt = (struct rtable *)skb->dst;
+
+	return rt->rt_iif;
 }
 
 #endif	/* _INET_SOCK_H */

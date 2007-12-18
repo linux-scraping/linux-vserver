@@ -30,29 +30,14 @@
  *	nfmark match added by Catalin(ux aka Dino) BOIE <catab at umbrella.ro>
  */
 
-#include <asm/uaccess.h>
-#include <asm/system.h>
-#include <linux/bitops.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
-#include <linux/mm.h>
-#include <linux/socket.h>
-#include <linux/sockios.h>
-#include <linux/in.h>
 #include <linux/errno.h>
-#include <linux/interrupt.h>
-#include <linux/if_ether.h>
-#include <linux/inet.h>
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/notifier.h>
 #include <linux/rtnetlink.h>
-#include <net/ip.h>
-#include <net/route.h>
 #include <linux/skbuff.h>
-#include <net/sock.h>
+#include <net/netlink.h>
 #include <net/act_api.h>
 #include <net/pkt_cls.h>
 
@@ -106,7 +91,7 @@ static struct tc_u_common *u32_list;
 
 static __inline__ unsigned u32_hash_fold(u32 key, struct tc_u32_sel *sel, u8 fshift)
 {
-	unsigned h = (key & sel->hmask)>>fshift;
+	unsigned h = ntohl(key & sel->hmask)>>fshift;
 
 	return h;
 }
@@ -119,7 +104,7 @@ static int u32_classify(struct sk_buff *skb, struct tcf_proto *tp, struct tcf_re
 	} stack[TC_U32_MAXDEPTH];
 
 	struct tc_u_hnode *ht = (struct tc_u_hnode*)tp->root;
-	u8 *ptr = skb->nh.raw;
+	u8 *ptr = skb_network_header(skb);
 	struct tc_u_knode *n;
 	int sdepth = 0;
 	int off2 = 0;
@@ -213,7 +198,7 @@ check_terminal:
 			off2 = 0;
 		}
 
-		if (ptr < skb->tail)
+		if (ptr < skb_tail_pointer(skb))
 			goto next_ht;
 	}
 
@@ -435,7 +420,7 @@ static void u32_destroy(struct tcf_proto *tp)
 			BUG_TRAP(ht->refcnt == 0);
 
 			kfree(ht);
-		};
+		}
 
 		kfree(tp_c);
 	}
@@ -517,7 +502,7 @@ static int u32_set_parms(struct tcf_proto *tp, unsigned long base,
 
 #ifdef CONFIG_NET_CLS_IND
 	if (tb[TCA_U32_INDEV-1]) {
-		int err = tcf_change_indev(tp, n->indev, tb[TCA_U32_INDEV-1]);
+		err = tcf_change_indev(tp, n->indev, tb[TCA_U32_INDEV-1]);
 		if (err < 0)
 			goto errout;
 	}
@@ -607,7 +592,7 @@ static int u32_change(struct tcf_proto *tp, unsigned long base, u32 handle,
 	} else
 		handle = gen_new_kid(ht, htid);
 
-	if (tb[TCA_U32_SEL-1] == 0 ||
+	if (tb[TCA_U32_SEL-1] == NULL ||
 	    RTA_PAYLOAD(tb[TCA_U32_SEL-1]) < sizeof(struct tc_u32_sel))
 		return -EINVAL;
 
@@ -628,17 +613,7 @@ static int u32_change(struct tcf_proto *tp, unsigned long base, u32 handle,
 	memcpy(&n->sel, s, sizeof(*s) + s->nkeys*sizeof(struct tc_u32_key));
 	n->ht_up = ht;
 	n->handle = handle;
-{
-	u8 i = 0;
-	u32 mask = s->hmask;
-	if (mask) {
-		while (!(mask & 1)) {
-			i++;
-			mask>>=1;
-		}
-	}
-	n->fshift = i;
-}
+	n->fshift = s->hmask ? ffs(ntohl(s->hmask)) - 1 : 0;
 
 #ifdef CONFIG_CLS_U32_MARK
 	if (tb[TCA_U32_MARK-1]) {
@@ -718,7 +693,7 @@ static int u32_dump(struct tcf_proto *tp, unsigned long fh,
 		     struct sk_buff *skb, struct tcmsg *t)
 {
 	struct tc_u_knode *n = (struct tc_u_knode*)fh;
-	unsigned char	 *b = skb->tail;
+	unsigned char *b = skb_tail_pointer(skb);
 	struct rtattr *rta;
 
 	if (n == NULL)
@@ -765,14 +740,14 @@ static int u32_dump(struct tcf_proto *tp, unsigned long fh,
 #endif
 	}
 
-	rta->rta_len = skb->tail - b;
+	rta->rta_len = skb_tail_pointer(skb) - b;
 	if (TC_U32_KEY(n->handle))
 		if (tcf_exts_dump_stats(skb, &n->exts, &u32_ext_map) < 0)
 			goto rtattr_failure;
 	return skb->len;
 
 rtattr_failure:
-	skb_trim(skb, b - skb->data);
+	nlmsg_trim(skb, b);
 	return -1;
 }
 
@@ -796,9 +771,6 @@ static int __init init_u32(void)
 	printk("u32 classifier\n");
 #ifdef CONFIG_CLS_U32_PERF
 	printk("    Performance counters on\n");
-#endif
-#ifdef CONFIG_NET_CLS_POLICE
-	printk("    OLD policer on \n");
 #endif
 #ifdef CONFIG_NET_CLS_IND
 	printk("    input device check on \n");

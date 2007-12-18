@@ -16,7 +16,6 @@
 #include <linux/signal.h>
 #include <linux/spinlock.h>
 #include <linux/personality.h>
-#include <linux/ptrace.h>
 #include <linux/kallsyms.h>
 #include <linux/delay.h>
 #include <linux/init.h>
@@ -45,7 +44,18 @@ static int __init user_debug_setup(char *str)
 __setup("user_debug=", user_debug_setup);
 #endif
 
-void dump_backtrace_entry(unsigned long where, unsigned long from)
+static void dump_mem(const char *str, unsigned long bottom, unsigned long top);
+
+static inline int in_exception_text(unsigned long ptr)
+{
+	extern char __exception_text_start[];
+	extern char __exception_text_end[];
+
+	return ptr >= (unsigned long)&__exception_text_start &&
+	       ptr < (unsigned long)&__exception_text_end;
+}
+
+void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long frame)
 {
 #ifdef CONFIG_KALLSYMS
 	printk("[<%08lx>] ", where);
@@ -55,6 +65,9 @@ void dump_backtrace_entry(unsigned long where, unsigned long from)
 #else
 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
 #endif
+
+	if (in_exception_text(where))
+		dump_mem("Exception stack", frame + 4, frame + 4 + sizeof(struct pt_regs));
 }
 
 /*
@@ -168,9 +181,7 @@ static void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 
 void dump_stack(void)
 {
-#ifdef CONFIG_DEBUG_ERRORS
 	__backtrace();
-#endif
 }
 
 EXPORT_SYMBOL(dump_stack);
@@ -191,16 +202,28 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 	barrier();
 }
 
+#ifdef CONFIG_PREEMPT
+#define S_PREEMPT " PREEMPT"
+#else
+#define S_PREEMPT ""
+#endif
+#ifdef CONFIG_SMP
+#define S_SMP " SMP"
+#else
+#define S_SMP ""
+#endif
+
 static void __die(const char *str, int err, struct thread_info *thread, struct pt_regs *regs)
 {
 	struct task_struct *tsk = thread->task;
 	static int die_counter;
 
-	printk("Internal error: %s: %x [#%d]\n", str, err, ++die_counter);
+	printk("Internal error: %s: %x [#%d]" S_PREEMPT S_SMP "\n",
+	       str, err, ++die_counter);
 	print_modules();
 	__show_regs(regs);
 	printk("Process %s (pid: %d:#%u, stack limit = 0x%p)\n",
-		tsk->comm, tsk->pid, tsk->xid, thread + 1);
+		tsk->comm, task_pid_nr(tsk), tsk->xid, thread + 1);
 
 	if (!user_mode(regs) || in_interrupt()) {
 		dump_mem("Stack: ", regs->ARM_sp,
@@ -219,21 +242,28 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 {
 	struct thread_info *thread = current_thread_info();
 
+	oops_enter();
+
 	console_verbose();
 	spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
 	__die(str, err, thread, regs);
 	bust_spinlocks(0);
+	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
+
+	if (in_interrupt())
+		panic("Fatal exception in interrupt");
 
 	if (panic_on_oops)
 		panic("Fatal exception");
 
+	oops_exit();
 	do_exit(SIGSEGV);
 }
 
-void notify_die(const char *str, struct pt_regs *regs, struct siginfo *info,
-		unsigned long err, unsigned long trap)
+void arm_notify_die(const char *str, struct pt_regs *regs,
+		struct siginfo *info, unsigned long err, unsigned long trap)
 {
 	if (user_mode(regs)) {
 		current->thread.error_code = err;
@@ -266,7 +296,7 @@ void unregister_undef_hook(struct undef_hook *hook)
 	spin_unlock_irqrestore(&undef_lock, flags);
 }
 
-asmlinkage void do_undefinstr(struct pt_regs *regs)
+asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 {
 	unsigned int correction = thumb_mode(regs) ? 2 : 4;
 	unsigned int instr;
@@ -307,7 +337,7 @@ asmlinkage void do_undefinstr(struct pt_regs *regs)
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_UNDEFINED) {
 		printk(KERN_INFO "%s (%d): undefined instruction: pc=%p\n",
-			current->comm, current->pid, pc);
+			current->comm, task_pid_nr(current), pc);
 		dump_instr(regs);
 	}
 #endif
@@ -317,15 +347,13 @@ asmlinkage void do_undefinstr(struct pt_regs *regs)
 	info.si_code  = ILL_ILLOPC;
 	info.si_addr  = pc;
 
-	notify_die("Oops - undefined instruction", regs, &info, 0, 6);
+	arm_notify_die("Oops - undefined instruction", regs, &info, 0, 6);
 }
 
 asmlinkage void do_unexp_fiq (struct pt_regs *regs)
 {
-#ifndef CONFIG_IGNORE_FIQ
 	printk("Hmm.  Unexpected FIQ received, but trying to continue\n");
 	printk("You may have a hardware problem...\n");
-#endif
 }
 
 /*
@@ -360,7 +388,7 @@ static int bad_syscall(int n, struct pt_regs *regs)
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_SYSCALL) {
 		printk(KERN_ERR "[%d] %s: obsolete system call %08x.\n",
-			current->pid, current->comm, n);
+			task_pid_nr(current), current->comm, n);
 		dump_instr(regs);
 	}
 #endif
@@ -371,7 +399,7 @@ static int bad_syscall(int n, struct pt_regs *regs)
 	info.si_addr  = (void __user *)instruction_pointer(regs) -
 			 (thumb_mode(regs) ? 2 : 4);
 
-	notify_die("Oops - bad syscall", regs, &info, n, 0);
+	arm_notify_die("Oops - bad syscall", regs, &info, n, 0);
 
 	return regs->ARM_r0;
 }
@@ -415,7 +443,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 		info.si_code  = SEGV_MAPERR;
 		info.si_addr  = NULL;
 
-		notify_die("branch through zero", regs, &info, 0, 0);
+		arm_notify_die("branch through zero", regs, &info, 0, 0);
 		return 0;
 
 	case NR(breakpoint): /* SWI BREAK_POINT */
@@ -537,7 +565,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	 */
 	if (user_debug & UDBG_SYSCALL) {
 		printk("[%d] %s: arm syscall %d\n",
-		       current->pid, current->comm, no);
+		       task_pid_nr(current), current->comm, no);
 		dump_instr(regs);
 		if (user_mode(regs)) {
 			__show_regs(regs);
@@ -551,7 +579,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	info.si_addr  = (void __user *)instruction_pointer(regs) -
 			 (thumb_mode(regs) ? 2 : 4);
 
-	notify_die("Oops - bad syscall(2)", regs, &info, no, 0);
+	arm_notify_die("Oops - bad syscall(2)", regs, &info, no, 0);
 	return 0;
 }
 
@@ -614,7 +642,7 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_BADABORT) {
 		printk(KERN_ERR "[%d] %s: bad data abort: code %d instr 0x%08lx\n",
-			current->pid, current->comm, code, instr);
+			task_pid_nr(current), current->comm, code, instr);
 		dump_instr(regs);
 		show_pte(current->mm, addr);
 	}
@@ -625,7 +653,7 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 	info.si_code  = ILL_ILLOPC;
 	info.si_addr  = (void __user *)addr;
 
-	notify_die("unknown data abort code", regs, &info, instr, 0);
+	arm_notify_die("unknown data abort code", regs, &info, instr, 0);
 }
 
 void __attribute__((noreturn)) __bug(const char *file, int line)

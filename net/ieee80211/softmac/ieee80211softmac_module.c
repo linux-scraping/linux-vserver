@@ -33,8 +33,16 @@ struct net_device *alloc_ieee80211softmac(int sizeof_priv)
 	struct ieee80211softmac_device *softmac;
 	struct net_device *dev;
 
-	dev = alloc_ieee80211(sizeof(struct ieee80211softmac_device) + sizeof_priv);
+	dev = alloc_ieee80211(sizeof(*softmac) + sizeof_priv);
+	if (!dev)
+		return NULL;
 	softmac = ieee80211_priv(dev);
+	softmac->wq = create_freezeable_workqueue("softmac");
+	if (!softmac->wq) {
+		free_ieee80211(dev);
+		return NULL;
+	}
+
 	softmac->dev = dev;
 	softmac->ieee = netdev_priv(dev);
 	spin_lock_init(&softmac->lock);
@@ -102,7 +110,7 @@ ieee80211softmac_clear_pending_work(struct ieee80211softmac_device *sm)
 		cancel_delayed_work(&eventptr->work);
 
 	spin_unlock_irqrestore(&sm->lock, flags);
-	flush_scheduled_work();
+	flush_workqueue(sm->wq);
 
 	/* now we should be save and no longer need locking... */
 	spin_lock_irqsave(&sm->lock, flags);
@@ -136,6 +144,7 @@ void free_ieee80211softmac(struct net_device *dev)
 	ieee80211softmac_clear_pending_work(sm);
 	kfree(sm->scaninfo);
 	kfree(sm->wpa.IE);
+	destroy_workqueue(sm->wq);
 	free_ieee80211(dev);
 }
 EXPORT_SYMBOL_GPL(free_ieee80211softmac);
@@ -453,18 +462,13 @@ void
 ieee80211softmac_add_network_locked(struct ieee80211softmac_device *mac,
 	struct ieee80211softmac_network *add_net)
 {
-	struct list_head *list_ptr;
-	struct ieee80211softmac_network *softmac_net = NULL;
+	struct ieee80211softmac_network *softmac_net;
 
-	list_for_each(list_ptr, &mac->network_list) {
-		softmac_net = list_entry(list_ptr, struct ieee80211softmac_network, list);
+	list_for_each_entry(softmac_net, &mac->network_list, list) {
 		if(!memcmp(softmac_net->bssid, add_net->bssid, ETH_ALEN))
-			break;
-		else
-			softmac_net = NULL;
+			return;
 	}
-	if(softmac_net == NULL)
-		list_add(&(add_net->list), &mac->network_list);
+	list_add(&(add_net->list), &mac->network_list);
 }
 
 /* Add a network to the list, with locking */
@@ -503,16 +507,13 @@ struct ieee80211softmac_network *
 ieee80211softmac_get_network_by_bssid_locked(struct ieee80211softmac_device *mac,
 	u8 *bssid)
 {
-	struct list_head *list_ptr;
-	struct ieee80211softmac_network *softmac_net = NULL;
-	list_for_each(list_ptr, &mac->network_list) {
-		softmac_net = list_entry(list_ptr, struct ieee80211softmac_network, list);
+	struct ieee80211softmac_network *softmac_net;
+
+	list_for_each_entry(softmac_net, &mac->network_list, list) {
 		if(!memcmp(softmac_net->bssid, bssid, ETH_ALEN))
-			break;
-		else
-			softmac_net = NULL;
+			return softmac_net;
 	}
-	return softmac_net;
+	return NULL;
 }
 
 /* Get a network from the list by BSSID with locking */
@@ -534,11 +535,9 @@ struct ieee80211softmac_network *
 ieee80211softmac_get_network_by_essid_locked(struct ieee80211softmac_device *mac,
 	struct ieee80211softmac_essid *essid)
 {
-	struct list_head *list_ptr;
-	struct ieee80211softmac_network *softmac_net = NULL;
+	struct ieee80211softmac_network *softmac_net;
 
-	list_for_each(list_ptr, &mac->network_list) {
-		softmac_net = list_entry(list_ptr, struct ieee80211softmac_network, list);
+	list_for_each_entry(softmac_net, &mac->network_list, list) {
 		if (softmac_net->essid.len == essid->len &&
 			!memcmp(softmac_net->essid.data, essid->data, essid->len))
 			return softmac_net;

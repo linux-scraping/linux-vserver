@@ -88,9 +88,14 @@ static void atl1_get_ethtool_stats(struct net_device *netdev,
 
 }
 
-static int atl1_get_stats_count(struct net_device *netdev)
+static int atl1_get_sset_count(struct net_device *netdev, int sset)
 {
-	return ARRAY_SIZE(atl1_gstrings_stats);
+	switch (sset) {
+	case ETH_SS_STATS:
+		return ARRAY_SIZE(atl1_gstrings_stats);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static int atl1_get_settings(struct net_device *netdev,
@@ -156,8 +161,7 @@ static int atl1_set_settings(struct net_device *netdev,
 	u16 old_media_type = hw->media_type;
 
 	if (netif_running(adapter->netdev)) {
-		printk(KERN_DEBUG "%s: ethtool shutting down adapter\n",
-			atl1_driver_name);
+		dev_dbg(&adapter->pdev->dev, "ethtool shutting down adapter\n");
 		atl1_down(adapter);
 	}
 
@@ -166,9 +170,8 @@ static int atl1_set_settings(struct net_device *netdev,
 	else {
 		if (ecmd->speed == SPEED_1000) {
 			if (ecmd->duplex != DUPLEX_FULL) {
-				printk(KERN_WARNING
-				       "%s: can't force to 1000M half duplex\n",
-					atl1_driver_name);
+				dev_warn(&adapter->pdev->dev,
+					"can't force to 1000M half duplex\n");
 				ret_val = -EINVAL;
 				goto exit_sset;
 			}
@@ -206,9 +209,8 @@ static int atl1_set_settings(struct net_device *netdev,
 	}
 	if (atl1_phy_setup_autoneg_adv(hw)) {
 		ret_val = -EINVAL;
-		printk(KERN_WARNING
-			"%s: invalid ethtool speed/duplex setting\n",
-			atl1_driver_name);
+		dev_warn(&adapter->pdev->dev,
+			"invalid ethtool speed/duplex setting\n");
 		goto exit_sset;
 	}
 	if (hw->media_type == MEDIA_TYPE_AUTO_SENSOR ||
@@ -239,12 +241,10 @@ exit_sset:
 		hw->media_type = old_media_type;
 
 	if (netif_running(adapter->netdev)) {
-		printk(KERN_DEBUG "%s: ethtool starting adapter\n",
-			atl1_driver_name);
+		dev_dbg(&adapter->pdev->dev, "ethtool starting adapter\n");
 		atl1_up(adapter);
 	} else if (!ret_val) {
-		printk(KERN_DEBUG "%s: ethtool resetting adapter\n",
-			atl1_driver_name);
+		dev_dbg(&adapter->pdev->dev, "ethtool resetting adapter\n");
 		atl1_reset(adapter);
 	}
 	return ret_val;
@@ -494,15 +494,12 @@ const struct ethtool_ops atl1_ethtool_ops = {
 	.get_pauseparam		= atl1_get_pauseparam,
 	.set_pauseparam 	= atl1_set_pauseparam,
 	.get_rx_csum		= atl1_get_rx_csum,
-	.get_tx_csum		= ethtool_op_get_tx_csum,
 	.set_tx_csum		= ethtool_op_set_tx_hw_csum,
 	.get_link		= ethtool_op_get_link,
-	.get_sg			= ethtool_op_get_sg,
 	.set_sg			= ethtool_op_set_sg,
 	.get_strings		= atl1_get_strings,
 	.nway_reset		= atl1_nway_reset,
 	.get_ethtool_stats	= atl1_get_ethtool_stats,
-	.get_stats_count	= atl1_get_stats_count,
-	.get_tso		= ethtool_op_get_tso,
+	.get_sset_count		= atl1_get_sset_count,
 	.set_tso		= ethtool_op_set_tso,
 };

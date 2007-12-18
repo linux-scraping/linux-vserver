@@ -23,6 +23,7 @@
 #include <linux/crc32.h>
 #include <linux/firmware.h>
 #include <linux/kref.h>
+#include <linux/dma-mapping.h>
 
 #define IN_CARD_SERVICES
 #include <pcmcia/cs_types.h>
@@ -234,6 +235,89 @@ static void pcmcia_check_driver(struct pcmcia_driver *p_drv)
 /*======================================================================*/
 
 
+struct pcmcia_dynid {
+	struct list_head 		node;
+	struct pcmcia_device_id 	id;
+};
+
+/**
+ * pcmcia_store_new_id - add a new PCMCIA device ID to this driver and re-probe devices
+ * @driver: target device driver
+ * @buf: buffer for scanning device ID data
+ * @count: input size
+ *
+ * Adds a new dynamic PCMCIA device ID to this driver,
+ * and causes the driver to probe for all devices again.
+ */
+static ssize_t
+pcmcia_store_new_id(struct device_driver *driver, const char *buf, size_t count)
+{
+	struct pcmcia_dynid *dynid;
+	struct pcmcia_driver *pdrv = to_pcmcia_drv(driver);
+	__u16 match_flags, manf_id, card_id;
+	__u8 func_id, function, device_no;
+	__u32 prod_id_hash[4] = {0, 0, 0, 0};
+	int fields=0;
+	int retval = 0;
+
+	fields = sscanf(buf, "%hx %hx %hx %hhx %hhx %hhx %x %x %x %x",
+			&match_flags, &manf_id, &card_id, &func_id, &function, &device_no,
+			&prod_id_hash[0], &prod_id_hash[1], &prod_id_hash[2], &prod_id_hash[3]);
+	if (fields < 6)
+		return -EINVAL;
+
+	dynid = kzalloc(sizeof(struct pcmcia_dynid), GFP_KERNEL);
+	if (!dynid)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&dynid->node);
+	dynid->id.match_flags = match_flags;
+	dynid->id.manf_id = manf_id;
+	dynid->id.card_id = card_id;
+	dynid->id.func_id = func_id;
+	dynid->id.function = function;
+	dynid->id.device_no = device_no;
+	memcpy(dynid->id.prod_id_hash, prod_id_hash, sizeof(__u32) * 4);
+
+	spin_lock(&pdrv->dynids.lock);
+	list_add_tail(&pdrv->dynids.list, &dynid->node);
+	spin_unlock(&pdrv->dynids.lock);
+
+	if (get_driver(&pdrv->drv)) {
+		retval = driver_attach(&pdrv->drv);
+		put_driver(&pdrv->drv);
+	}
+
+	if (retval)
+		return retval;
+	return count;
+}
+static DRIVER_ATTR(new_id, S_IWUSR, NULL, pcmcia_store_new_id);
+
+static void
+pcmcia_free_dynids(struct pcmcia_driver *drv)
+{
+	struct pcmcia_dynid *dynid, *n;
+
+	spin_lock(&drv->dynids.lock);
+	list_for_each_entry_safe(dynid, n, &drv->dynids.list, node) {
+		list_del(&dynid->node);
+		kfree(dynid);
+	}
+	spin_unlock(&drv->dynids.lock);
+}
+
+static int
+pcmcia_create_newid_file(struct pcmcia_driver *drv)
+{
+	int error = 0;
+	if (drv->probe != NULL)
+		error = sysfs_create_file(&drv->drv.kobj,
+					  &driver_attr_new_id.attr);
+	return error;
+}
+
+
 /**
  * pcmcia_register_driver - register a PCMCIA driver with the bus core
  *
@@ -241,6 +325,8 @@ static void pcmcia_check_driver(struct pcmcia_driver *p_drv)
  */
 int pcmcia_register_driver(struct pcmcia_driver *driver)
 {
+	int error;
+
 	if (!driver)
 		return -EINVAL;
 
@@ -249,10 +335,20 @@ int pcmcia_register_driver(struct pcmcia_driver *driver)
 	/* initialize common fields */
 	driver->drv.bus = &pcmcia_bus_type;
 	driver->drv.owner = driver->owner;
+	spin_lock_init(&driver->dynids.lock);
+	INIT_LIST_HEAD(&driver->dynids.list);
 
 	ds_dbg(3, "registering driver %s\n", driver->drv.name);
 
-	return driver_register(&driver->drv);
+	error = driver_register(&driver->drv);
+	if (error < 0)
+		return error;
+
+	error = pcmcia_create_newid_file(driver);
+	if (error)
+		driver_unregister(&driver->drv);
+
+	return error;
 }
 EXPORT_SYMBOL(pcmcia_register_driver);
 
@@ -263,6 +359,7 @@ void pcmcia_unregister_driver(struct pcmcia_driver *driver)
 {
 	ds_dbg(3, "unregistering driver %s\n", driver->drv.name);
 	driver_unregister(&driver->drv);
+	pcmcia_free_dynids(driver);
 }
 EXPORT_SYMBOL(pcmcia_unregister_driver);
 
@@ -574,6 +671,9 @@ struct pcmcia_device * pcmcia_device_add(struct pcmcia_socket *s, unsigned int f
 	p_dev->dev.bus = &pcmcia_bus_type;
 	p_dev->dev.parent = s->dev.parent;
 	p_dev->dev.release = pcmcia_release_dev;
+	/* by default don't allow DMA */
+	p_dev->dma_mask = DMA_MASK_NONE;
+	p_dev->dev.dma_mask = &p_dev->dma_mask;
 	bus_id_len = sprintf (p_dev->dev.bus_id, "%d.%d", p_dev->socket->sock, p_dev->device_no);
 
 	p_dev->devname = kmalloc(6 + bus_id_len + 1, GFP_KERNEL);
@@ -927,6 +1027,21 @@ static int pcmcia_bus_match(struct device * dev, struct device_driver * drv) {
 	struct pcmcia_device * p_dev = to_pcmcia_dev(dev);
 	struct pcmcia_driver * p_drv = to_pcmcia_drv(drv);
 	struct pcmcia_device_id *did = p_drv->id_table;
+	struct pcmcia_dynid *dynid;
+
+	/* match dynamic devices first */
+	spin_lock(&p_drv->dynids.lock);
+	list_for_each_entry(dynid, &p_drv->dynids.list, node) {
+		ds_dbg(3, "trying to match %s to %s\n", dev->bus_id,
+		       drv->name);
+		if (pcmcia_devmatch(p_dev, &dynid->id)) {
+			ds_dbg(0, "matched %s to %s\n", dev->bus_id,
+			       drv->name);
+			spin_unlock(&p_drv->dynids.lock);
+			return 1;
+		}
+	}
+	spin_unlock(&p_drv->dynids.lock);
 
 #ifdef CONFIG_PCMCIA_IOCTL
 	/* matching by cardmgr */
@@ -953,11 +1068,10 @@ static int pcmcia_bus_match(struct device * dev, struct device_driver * drv) {
 
 #ifdef CONFIG_HOTPLUG
 
-static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
-			     char *buffer, int buffer_size)
+static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct pcmcia_device *p_dev;
-	int i, length = 0;
+	int i;
 	u32 hash[4] = { 0, 0, 0, 0};
 
 	if (!dev)
@@ -972,23 +1086,13 @@ static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
 		hash[i] = crc32(0, p_dev->prod_id[i], strlen(p_dev->prod_id[i]));
 	}
 
-	i = 0;
-
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "SOCKET_NO=%u",
-			   p_dev->socket->sock))
+	if (add_uevent_var(env, "SOCKET_NO=%u", p_dev->socket->sock))
 		return -ENOMEM;
 
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "DEVICE_NO=%02X",
-			   p_dev->device_no))
+	if (add_uevent_var(env, "DEVICE_NO=%02X", p_dev->device_no))
 		return -ENOMEM;
 
-	if (add_uevent_var(envp, num_envp, &i,
-			   buffer, buffer_size, &length,
-			   "MODALIAS=pcmcia:m%04Xc%04Xf%02Xfn%02Xpfn%02X"
+	if (add_uevent_var(env, "MODALIAS=pcmcia:m%04Xc%04Xf%02Xfn%02Xpfn%02X"
 			   "pa%08Xpb%08Xpc%08Xpd%08X",
 			   p_dev->has_manf_id ? p_dev->manf_id : 0,
 			   p_dev->has_card_id ? p_dev->card_id : 0,
@@ -1001,20 +1105,45 @@ static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
 			   hash[3]))
 		return -ENOMEM;
 
-	envp[i] = NULL;
-
 	return 0;
 }
 
 #else
 
-static int pcmcia_bus_uevent(struct device *dev, char **envp, int num_envp,
-			      char *buffer, int buffer_size)
+static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	return -ENODEV;
 }
 
 #endif
+
+/************************ runtime PM support ***************************/
+
+static int pcmcia_dev_suspend(struct device *dev, pm_message_t state);
+static int pcmcia_dev_resume(struct device *dev);
+
+static int runtime_suspend(struct device *dev)
+{
+	int rc;
+
+	down(&dev->sem);
+	rc = pcmcia_dev_suspend(dev, PMSG_SUSPEND);
+	up(&dev->sem);
+	if (!rc)
+		dev->power.power_state.event = PM_EVENT_SUSPEND;
+	return rc;
+}
+
+static void runtime_resume(struct device *dev)
+{
+	int rc;
+
+	down(&dev->sem);
+	rc = pcmcia_dev_resume(dev);
+	up(&dev->sem);
+	if (!rc)
+		dev->power.power_state.event = PM_EVENT_ON;
+}
 
 /************************ per-device sysfs output ***************************/
 
@@ -1062,9 +1191,9 @@ static ssize_t pcmcia_store_pm_state(struct device *dev, struct device_attribute
                 return -EINVAL;
 
 	if ((!p_dev->suspended) && !strncmp(buf, "off", 3))
-		ret = dpm_runtime_suspend(dev, PMSG_SUSPEND);
+		ret = runtime_suspend(dev);
 	else if (p_dev->suspended && !strncmp(buf, "on", 2))
-		dpm_runtime_resume(dev);
+		runtime_resume(dev);
 
 	return ret ? ret : count;
 }
@@ -1201,10 +1330,10 @@ static int pcmcia_bus_suspend_callback(struct device *dev, void * _data)
 	struct pcmcia_socket *skt = _data;
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 
-	if (p_dev->socket != skt)
+	if (p_dev->socket != skt || p_dev->suspended)
 		return 0;
 
-	return dpm_runtime_suspend(dev, PMSG_SUSPEND);
+	return runtime_suspend(dev);
 }
 
 static int pcmcia_bus_resume_callback(struct device *dev, void * _data)
@@ -1212,10 +1341,10 @@ static int pcmcia_bus_resume_callback(struct device *dev, void * _data)
 	struct pcmcia_socket *skt = _data;
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 
-	if (p_dev->socket != skt)
+	if (p_dev->socket != skt || !p_dev->suspended)
 		return 0;
 
-	dpm_runtime_resume(dev);
+	runtime_resume(dev);
 
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*arch/ppc/platforms/mpc86xads-setup.c
+/*arch/powerpc/platforms/8xx/mpc86xads_setup.c
  *
  * Platform setup for the Freescale mpc86xads board
  *
@@ -31,21 +31,13 @@
 #include <asm/processor.h>
 #include <asm/system.h>
 #include <asm/time.h>
-#include <asm/ppcboot.h>
 #include <asm/mpc8xx.h>
 #include <asm/8xx_immap.h>
 #include <asm/commproc.h>
 #include <asm/fs_pd.h>
 #include <asm/prom.h>
 
-extern void cpm_reset(void);
-extern void mpc8xx_show_cpuinfo(struct seq_file*);
-extern void mpc8xx_restart(char *cmd);
-extern void mpc8xx_calibrate_decr(void);
-extern int mpc8xx_set_rtc_time(struct rtc_time *tm);
-extern void mpc8xx_get_rtc_time(struct rtc_time *tm);
-extern void m8xx_pic_init(void);
-extern unsigned int mpc8xx_get_irq(void);
+#include <sysdev/commproc.h>
 
 static void init_smc1_uart_ioports(struct fs_uart_platform_info* fpi);
 static void init_smc2_uart_ioports(struct fs_uart_platform_info* fpi);
@@ -247,27 +239,13 @@ void init_smc_ioports(struct fs_uart_platform_info *data)
 	}
 }
 
-int platform_device_skip(char *model, int id)
+int platform_device_skip(const char *model, int id)
 {
 	return 0;
 }
 
 static void __init mpc86xads_setup_arch(void)
 {
-	struct device_node *cpu;
-
-	cpu = of_find_node_by_type(NULL, "cpu");
-	if (cpu != 0) {
-		const unsigned int *fp;
-
-		fp = get_property(cpu, "clock-frequency", NULL);
-		if (fp != 0)
-			loops_per_jiffy = *fp / HZ;
-		else
-			loops_per_jiffy = 50000000 / HZ;
-		of_node_put(cpu);
-	}
-
 	cpm_reset();
 
 	mpc86xads_board_setup();
@@ -292,7 +270,6 @@ define_machine(mpc86x_ads) {
 	.probe			= mpc86xads_probe,
 	.setup_arch		= mpc86xads_setup_arch,
 	.init_IRQ		= m8xx_pic_init,
-	.show_cpuinfo		= mpc8xx_show_cpuinfo,
 	.get_irq		= mpc8xx_get_irq,
 	.restart		= mpc8xx_restart,
 	.calibrate_decr		= mpc8xx_calibrate_decr,

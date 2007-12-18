@@ -14,9 +14,9 @@
 
 #define KEXEC_ARCH KEXEC_ARCH_ARM
 
-#ifndef __ASSEMBLY__
+#define KEXEC_BOOT_PARAMS_SIZE 1536
 
-#define MAX_NOTE_BYTES 1024
+#ifndef __ASSEMBLY__
 
 struct kimage;
 /* Provide a dummy definition to avoid build failures. */

@@ -24,7 +24,6 @@
 #include <linux/sysrq.h>
 #include <linux/kbd_kern.h>
 #include <linux/quotaops.h>
-#include <linux/smp_lock.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/suspend.h>
@@ -37,6 +36,7 @@
 #include <linux/kexec.h>
 #include <linux/irq.h>
 #include <linux/hrtimer.h>
+#include <linux/oom.h>
 #include <linux/vserver/debug.h>
 
 #include <asm/ptrace.h>
@@ -109,12 +109,12 @@ static void sysrq_handle_unraw(int key, struct tty_struct *tty)
 	struct kbd_struct *kbd = &kbd_table[fg_console];
 
 	if (kbd)
-		kbd->kbdmode = VC_XLATE;
+		kbd->kbdmode = default_utf8 ? VC_UNICODE : VC_XLATE;
 }
 static struct sysrq_key_op sysrq_unraw_op = {
 	.handler	= sysrq_handle_unraw,
 	.help_msg	= "unRaw",
-	.action_msg	= "Keyboard mode set to XLATE",
+	.action_msg	= "Keyboard mode set to system default",
 	.enable_mask	= SYSRQ_ENABLE_KEYBOARD,
 };
 #else
@@ -252,7 +252,7 @@ static void send_sig_all(int sig)
 	struct task_struct *p;
 
 	for_each_process(p) {
-		if (p->mm && !is_init(p))
+		if (p->mm && !is_global_init(p))
 			/* Not swapper, init nor kernel thread */
 			force_sig(sig, p);
 	}

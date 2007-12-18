@@ -383,8 +383,8 @@ void alloc586(struct net_device *dev)
 static int elmc_getinfo(char *buf, int slot, void *d)
 {
 	int len = 0;
-	struct net_device *dev = (struct net_device *) d;
-	int i;
+	struct net_device *dev = d;
+	DECLARE_MAC_BUF(mac);
 
 	if (dev == NULL)
 		return len;
@@ -399,12 +399,8 @@ static int elmc_getinfo(char *buf, int slot, void *d)
 	len += sprintf(buf + len, "Transceiver: %s\n", dev->if_port ?
 		       "External" : "Internal");
 	len += sprintf(buf + len, "Device: %s\n", dev->name);
-	len += sprintf(buf + len, "Hardware Address:");
-	for (i = 0; i < 6; i++) {
-		len += sprintf(buf + len, " %02x", dev->dev_addr[i]);
-	}
-	buf[len++] = '\n';
-	buf[len] = 0;
+	len += sprintf(buf + len, "Hardware Address: %s\n",
+		       print_mac(mac, dev->dev_addr));
 
 	return len;
 }				/* elmc_getinfo() */
@@ -422,8 +418,8 @@ static int __init do_elmc_probe(struct net_device *dev)
 	unsigned int size = 0;
 	int retval;
 	struct priv *pr = dev->priv;
+	DECLARE_MAC_BUF(mac);
 
-	SET_MODULE_OWNER(dev);
 	if (MCA_bus == 0) {
 		return -ENODEV;
 	}
@@ -545,12 +541,11 @@ static int __init do_elmc_probe(struct net_device *dev)
 
 	/* The hardware address for the 3c523 is stored in the first six
 	   bytes of the IO address. */
-	printk(KERN_INFO "%s: hardware address ", dev->name);
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < 6; i++)
 		dev->dev_addr[i] = inb(dev->base_addr + i);
-		printk(" %02x", dev->dev_addr[i]);
-	}
-	printk("\n");
+
+	printk(KERN_INFO "%s: hardware address %s\n",
+	       dev->name, print_mac(mac, dev->dev_addr));
 
 	dev->open = &elmc_open;
 	dev->stop = &elmc_close;
@@ -988,10 +983,9 @@ static void elmc_rcv_int(struct net_device *dev)
 				rbd->status = 0;
 				skb = (struct sk_buff *) dev_alloc_skb(totlen + 2);
 				if (skb != NULL) {
-					skb->dev = dev;
 					skb_reserve(skb, 2);	/* 16 byte alignment */
 					skb_put(skb,totlen);
-					eth_copy_and_sum(skb, (char *) p->base+(unsigned long) rbd->buffer,totlen,0);
+					skb_copy_to_linear_data(skb, (char *) p->base+(unsigned long) rbd->buffer,totlen);
 					skb->protocol = eth_type_trans(skb, dev);
 					netif_rx(skb);
 					dev->last_rx = jiffies;
@@ -1146,7 +1140,7 @@ static int elmc_send_packet(struct sk_buff *skb, struct net_device *dev)
 
 	if (len != skb->len)
 		memset((char *) p->xmit_cbuffs[p->xmit_count], 0, ETH_ZLEN);
-	memcpy((char *) p->xmit_cbuffs[p->xmit_count], (char *) (skb->data), skb->len);
+	skb_copy_from_linear_data(skb, (char *) p->xmit_cbuffs[p->xmit_count], skb->len);
 
 #if (NUM_XMIT_BUFFS == 1)
 #ifdef NO_NOPCOMMANDS

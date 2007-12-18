@@ -12,7 +12,6 @@
 #include <linux/kallsyms.h>
 
 static unsigned long save_context_stack(struct stack_trace *trace,
-					unsigned int *skip,
 					unsigned long sp,
 					unsigned long low,
 					unsigned long high)
@@ -28,10 +27,10 @@ static unsigned long save_context_stack(struct stack_trace *trace,
 		sf = (struct stack_frame *)sp;
 		while(1) {
 			addr = sf->gprs[8] & PSW_ADDR_INSN;
-			if (!(*skip))
+			if (!trace->skip)
 				trace->entries[trace->nr_entries++] = addr;
 			else
-				(*skip)--;
+				trace->skip--;
 			if (trace->nr_entries >= trace->max_entries)
 				return sp;
 			low = sp;
@@ -48,10 +47,10 @@ static unsigned long save_context_stack(struct stack_trace *trace,
 			return sp;
 		regs = (struct pt_regs *)sp;
 		addr = regs->psw.addr & PSW_ADDR_INSN;
-		if (!(*skip))
+		if (!trace->skip)
 			trace->entries[trace->nr_entries++] = addr;
 		else
-			(*skip)--;
+			trace->skip--;
 		if (trace->nr_entries >= trace->max_entries)
 			return sp;
 		low = sp;
@@ -59,30 +58,23 @@ static unsigned long save_context_stack(struct stack_trace *trace,
 	}
 }
 
-void save_stack_trace(struct stack_trace *trace, struct task_struct *task)
+void save_stack_trace(struct stack_trace *trace)
 {
 	register unsigned long sp asm ("15");
 	unsigned long orig_sp, new_sp;
 
 	orig_sp = sp & PSW_ADDR_INSN;
-
-	new_sp = save_context_stack(trace, &trace->skip, orig_sp,
-				S390_lowcore.panic_stack - PAGE_SIZE,
-				S390_lowcore.panic_stack);
-	if ((new_sp != orig_sp) && !trace->all_contexts)
+	new_sp = save_context_stack(trace, orig_sp,
+				    S390_lowcore.panic_stack - PAGE_SIZE,
+				    S390_lowcore.panic_stack);
+	if (new_sp != orig_sp)
 		return;
-	new_sp = save_context_stack(trace, &trace->skip, new_sp,
-				S390_lowcore.async_stack - ASYNC_SIZE,
-				S390_lowcore.async_stack);
-	if ((new_sp != orig_sp) && !trace->all_contexts)
+	new_sp = save_context_stack(trace, new_sp,
+				    S390_lowcore.async_stack - ASYNC_SIZE,
+				    S390_lowcore.async_stack);
+	if (new_sp != orig_sp)
 		return;
-	if (task)
-		save_context_stack(trace, &trace->skip, new_sp,
-				   (unsigned long) task_stack_page(task),
-				   (unsigned long) task_stack_page(task) + THREAD_SIZE);
-	else
-		save_context_stack(trace, &trace->skip, new_sp,
-				   S390_lowcore.thread_info,
-				   S390_lowcore.thread_info + THREAD_SIZE);
-	return;
+	save_context_stack(trace, new_sp,
+			   S390_lowcore.thread_info,
+			   S390_lowcore.thread_info + THREAD_SIZE);
 }

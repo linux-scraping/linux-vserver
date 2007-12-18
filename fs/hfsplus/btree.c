@@ -10,6 +10,7 @@
 
 #include <linux/slab.h>
 #include <linux/pagemap.h>
+#include <linux/log2.h>
 
 #include "hfsplus_fs.h"
 #include "hfsplus_raw.h"
@@ -61,15 +62,17 @@ struct hfs_btree *hfs_btree_open(struct super_block *sb, u32 id)
 		if ((HFSPLUS_SB(sb).flags & HFSPLUS_SB_HFSX) &&
 		    (head->key_type == HFSPLUS_KEY_BINARY))
 			tree->keycmp = hfsplus_cat_bin_cmp_key;
-		else
+		else {
 			tree->keycmp = hfsplus_cat_case_cmp_key;
+			HFSPLUS_SB(sb).flags |= HFSPLUS_SB_CASEFOLD;
+		}
 	} else {
 		printk(KERN_ERR "hfs: unknown B*Tree requested\n");
 		goto fail_page;
 	}
 
 	size = tree->node_size;
-	if (!size || size & (size - 1))
+	if (!is_power_of_2(size))
 		goto fail_page;
 	if (!tree->node_count)
 		goto fail_page;

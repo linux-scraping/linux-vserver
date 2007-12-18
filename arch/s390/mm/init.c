@@ -42,54 +42,46 @@ DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
 pgd_t swapper_pg_dir[PTRS_PER_PGD] __attribute__((__aligned__(PAGE_SIZE)));
 char  empty_zero_page[PAGE_SIZE] __attribute__((__aligned__(PAGE_SIZE)));
 
-void diag10(unsigned long addr)
-{
-        if (addr >= 0x7ff00000)
-                return;
-	asm volatile(
-#ifdef CONFIG_64BIT
-		"	sam31\n"
-		"	diag	%0,%0,0x10\n"
-		"0:	sam64\n"
-#else
-		"	diag	%0,%0,0x10\n"
-		"0:\n"
-#endif
-		EX_TABLE(0b,0b)
-		: : "a" (addr));
-}
-
 void show_mem(void)
 {
-        int i, total = 0, reserved = 0;
-        int shared = 0, cached = 0;
+	int i, total = 0, reserved = 0;
+	int shared = 0, cached = 0;
 	struct page *page;
 
-        printk("Mem-info:\n");
-        show_free_areas();
-        printk("Free swap:       %6ldkB\n", nr_swap_pages<<(PAGE_SHIFT-10));
-        i = max_mapnr;
-        while (i-- > 0) {
+	printk("Mem-info:\n");
+	show_free_areas();
+	printk("Free swap:       %6ldkB\n", nr_swap_pages << (PAGE_SHIFT - 10));
+	i = max_mapnr;
+	while (i-- > 0) {
 		if (!pfn_valid(i))
 			continue;
 		page = pfn_to_page(i);
-                total++;
+		total++;
 		if (PageReserved(page))
-                        reserved++;
+			reserved++;
 		else if (PageSwapCache(page))
-                        cached++;
+			cached++;
 		else if (page_count(page))
 			shared += page_count(page) - 1;
-        }
-        printk("%d pages of RAM\n",total);
-        printk("%d reserved pages\n",reserved);
-        printk("%d pages shared\n",shared);
-        printk("%d pages swap cached\n",cached);
+	}
+	printk("%d pages of RAM\n", total);
+	printk("%d reserved pages\n", reserved);
+	printk("%d pages shared\n", shared);
+	printk("%d pages swap cached\n", cached);
+
+	printk("%lu pages dirty\n", global_page_state(NR_FILE_DIRTY));
+	printk("%lu pages writeback\n", global_page_state(NR_WRITEBACK));
+	printk("%lu pages mapped\n", global_page_state(NR_FILE_MAPPED));
+	printk("%lu pages slab\n",
+	       global_page_state(NR_SLAB_RECLAIMABLE) +
+	       global_page_state(NR_SLAB_UNRECLAIMABLE));
+	printk("%lu pages pagetables\n", global_page_state(NR_PAGETABLE));
 }
 
 static void __init setup_ro_region(void)
 {
 	pgd_t *pgd;
+	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	pte_t new_pte;
@@ -100,7 +92,8 @@ static void __init setup_ro_region(void)
 
 	for (; address < end; address += PAGE_SIZE) {
 		pgd = pgd_offset_k(address);
-		pmd = pmd_offset(pgd, address);
+		pud = pud_offset(pgd, address);
+		pmd = pmd_offset(pud, address);
 		pte = pte_offset_kernel(pmd, address);
 		new_pte = mk_pte_phys(address, __pgprot(_PAGE_RO));
 		*pte = new_pte;
@@ -112,32 +105,28 @@ static void __init setup_ro_region(void)
  */
 void __init paging_init(void)
 {
-	pgd_t *pg_dir;
-	int i;
-	unsigned long pgdir_k;
 	static const int ssm_mask = 0x04000000L;
 	unsigned long max_zone_pfns[MAX_NR_ZONES];
+	unsigned long pgd_type;
 
-	pg_dir = swapper_pg_dir;
-	
+	init_mm.pgd = swapper_pg_dir;
+	S390_lowcore.kernel_asce = __pa(init_mm.pgd) & PAGE_MASK;
 #ifdef CONFIG_64BIT
-	pgdir_k = (__pa(swapper_pg_dir) & PAGE_MASK) | _KERN_REGION_TABLE;
-	for (i = 0; i < PTRS_PER_PGD; i++)
-		pgd_clear_kernel(pg_dir + i);
+	S390_lowcore.kernel_asce |= _ASCE_TYPE_REGION3 | _ASCE_TABLE_LENGTH;
+	pgd_type = _REGION3_ENTRY_EMPTY;
 #else
-	pgdir_k = (__pa(swapper_pg_dir) & PAGE_MASK) | _KERNSEG_TABLE;
-	for (i = 0; i < PTRS_PER_PGD; i++)
-		pmd_clear_kernel((pmd_t *)(pg_dir + i));
+	S390_lowcore.kernel_asce |= _ASCE_TABLE_LENGTH;
+	pgd_type = _SEGMENT_ENTRY_EMPTY;
 #endif
+	clear_table((unsigned long *) init_mm.pgd, pgd_type,
+		    sizeof(unsigned long)*2048);
 	vmem_map_init();
 	setup_ro_region();
 
-	S390_lowcore.kernel_asce = pgdir_k;
-
         /* enable virtual mapping in kernel mode */
-	__ctl_load(pgdir_k, 1, 1);
-	__ctl_load(pgdir_k, 7, 7);
-	__ctl_load(pgdir_k, 13, 13);
+	__ctl_load(S390_lowcore.kernel_asce, 1, 1);
+	__ctl_load(S390_lowcore.kernel_asce, 7, 7);
+	__ctl_load(S390_lowcore.kernel_asce, 13, 13);
 	__raw_local_irq_ssm(ssm_mask);
 
 	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));

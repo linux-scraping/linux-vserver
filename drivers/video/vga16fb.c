@@ -1364,7 +1364,7 @@ static int __init vga16fb_probe(struct platform_device *dev)
 	par = info->par;
 
 	mutex_init(&par->open_lock);
-	par->isVGA = ORIG_VIDEO_ISVGA;
+	par->isVGA = screen_info.orig_video_isVGA;
 	par->palette_blanked = 0;
 	par->vesa_blanked = 0;
 
@@ -1378,6 +1378,8 @@ static int __init vga16fb_probe(struct platform_device *dev)
 	info->fbops = &vga16fb_ops;
 	info->var = vga16fb_defined;
 	info->fix = vga16fb_fix;
+	/* supports rectangles with widths of multiples of 8 */
+	info->pixmap.blit_x = 1 << 7 | 1 << 15 | 1 << 23 | 1 << 31;
 	info->flags = FBINFO_FLAG_DEFAULT |
 		FBINFO_HWACCEL_YPAN;
 

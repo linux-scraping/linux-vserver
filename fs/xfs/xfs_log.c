@@ -252,6 +252,29 @@ xlog_grant_add_space(struct log *log, int bytes)
 	xlog_grant_add_space_reserve(log, bytes);
 }
 
+static void
+xlog_tic_reset_res(xlog_ticket_t *tic)
+{
+	tic->t_res_num = 0;
+	tic->t_res_arr_sum = 0;
+	tic->t_res_num_ophdrs = 0;
+}
+
+static void
+xlog_tic_add_region(xlog_ticket_t *tic, uint len, uint type)
+{
+	if (tic->t_res_num == XLOG_TIC_LEN_MAX) {
+		/* add to overflow and start again */
+		tic->t_res_o_flow += tic->t_res_arr_sum;
+		tic->t_res_num = 0;
+		tic->t_res_arr_sum = 0;
+	}
+
+	tic->t_res_arr[tic->t_res_num].r_len = len;
+	tic->t_res_arr[tic->t_res_num].r_type = type;
+	tic->t_res_arr_sum += len;
+	tic->t_res_num++;
+}
 
 /*
  * NOTES:
@@ -486,7 +509,7 @@ xfs_log_mount(xfs_mount_t	*mp,
 		cmn_err(CE_NOTE,
 			"!Mounting filesystem \"%s\" in no-recovery mode.  Filesystem will be inconsistent.",
 			mp->m_fsname);
-		ASSERT(XFS_MTOVFS(mp)->vfs_flag & VFS_RDONLY);
+		ASSERT(mp->m_flags & XFS_MOUNT_RDONLY);
 	}
 
 	mp->m_log = xlog_alloc_log(mp, log_target, blk_offset, num_bblks);
@@ -496,16 +519,15 @@ xfs_log_mount(xfs_mount_t	*mp,
 	 * just worked.
 	 */
 	if (!(mp->m_flags & XFS_MOUNT_NORECOVERY)) {
-		bhv_vfs_t	*vfsp = XFS_MTOVFS(mp);
-		int		error, readonly = (vfsp->vfs_flag & VFS_RDONLY);
+		int		error, readonly = (mp->m_flags & XFS_MOUNT_RDONLY);
 
 		if (readonly)
-			vfsp->vfs_flag &= ~VFS_RDONLY;
+			mp->m_flags &= ~XFS_MOUNT_RDONLY;
 
 		error = xlog_recover(mp->m_log);
 
 		if (readonly)
-			vfsp->vfs_flag |= VFS_RDONLY;
+			mp->m_flags |= XFS_MOUNT_RDONLY;
 		if (error) {
 			cmn_err(CE_WARN, "XFS: log mount/recovery failed: error %d", error);
 			xlog_dealloc_log(mp->m_log);
@@ -537,7 +559,7 @@ xfs_log_mount_finish(xfs_mount_t *mp, int mfsi_flags)
 		error = xlog_recover_finish(mp->m_log, mfsi_flags);
 	else {
 		error = 0;
-		ASSERT(XFS_MTOVFS(mp)->vfs_flag & VFS_RDONLY);
+		ASSERT(mp->m_flags & XFS_MOUNT_RDONLY);
 	}
 
 	return error;
@@ -597,7 +619,7 @@ xfs_log_unmount_write(xfs_mount_t *mp)
 	 * Don't write out unmount record on read-only mounts.
 	 * Or, if we are doing a forced umount (typically because of IO errors).
 	 */
-	if (XFS_MTOVFS(mp)->vfs_flag & VFS_RDONLY)
+	if (mp->m_flags & XFS_MOUNT_RDONLY)
 		return 0;
 
 	xfs_log_force(mp, 0, XFS_LOG_FORCE|XFS_LOG_SYNC);
@@ -817,10 +839,8 @@ xfs_log_need_covered(xfs_mount_t *mp)
 	SPLDECL(s);
 	int		needed = 0, gen;
 	xlog_t		*log = mp->m_log;
-	bhv_vfs_t	*vfsp = XFS_MTOVFS(mp);
 
-	if (vfs_test_for_freeze(vfsp) || XFS_FORCED_SHUTDOWN(mp) ||
-	    (vfsp->vfs_flag & VFS_RDONLY))
+	if (!xfs_fs_writable(mp))
 		return 0;
 
 	s = LOG_LOCK(log);
@@ -951,6 +971,19 @@ xlog_iodone(xfs_buf_t *bp)
 	l = iclog->ic_log;
 
 	/*
+	 * If the ordered flag has been removed by a lower
+	 * layer, it means the underlyin device no longer supports
+	 * barrier I/O. Warn loudly and turn off barriers.
+	 */
+	if ((l->l_mp->m_flags & XFS_MOUNT_BARRIER) && !XFS_BUF_ORDERED(bp)) {
+		l->l_mp->m_flags &= ~XFS_MOUNT_BARRIER;
+		xfs_fs_cmn_err(CE_WARN, l->l_mp,
+				"xlog_iodone: Barriers are no longer supported"
+				" by device. Disabling barriers\n");
+		xfs_buftrace("XLOG_IODONE BARRIERS OFF", bp);
+	}
+
+	/*
 	 * Race to shutdown the filesystem if we see an error.
 	 */
 	if (XFS_TEST_ERROR((XFS_BUF_GETERROR(bp)), l->l_mp,
@@ -967,14 +1000,16 @@ xlog_iodone(xfs_buf_t *bp)
 	} else if (iclog->ic_state & XLOG_STATE_IOERROR) {
 		aborted = XFS_LI_ABORTED;
 	}
+
+	/* log I/O is always issued ASYNC */
+	ASSERT(XFS_BUF_ISASYNC(bp));
 	xlog_state_done_syncing(iclog, aborted);
-	if (!(XFS_BUF_ISASYNC(bp))) {
-		/*
-		 * Corresponding psema() will be done in bwrite().  If we don't
-		 * vsema() here, panic.
-		 */
-		XFS_BUF_V_IODONESEMA(bp);
-	}
+	/*
+	 * do not reference the buffer (bp) here as we could race
+	 * with it being freed after writing the unmount record to the
+	 * log.
+	 */
+
 }	/* xlog_iodone */
 
 /*
@@ -1012,10 +1047,7 @@ xlog_bdstrat_cb(struct xfs_buf *bp)
 /*
  * Return size of each in-core log record buffer.
  *
- * Low memory machines only get 2 16KB buffers.  We don't want to waste
- * memory here.  However, all other machines get at least 2 32KB buffers.
- * The number is hard coded because we don't care about the minimum
- * memory size, just 32MB systems.
+ * All machines get 8 x 32KB buffers by default, unless tuned otherwise.
  *
  * If the filesystem blocksize is too large, we may need to choose a
  * larger size since the directory code currently logs entire blocks.
@@ -1028,17 +1060,10 @@ xlog_get_iclog_buffer_size(xfs_mount_t	*mp,
 	int size;
 	int xhdrs;
 
-	if (mp->m_logbufs <= 0) {
-		if (xfs_physmem <= btoc(128*1024*1024)) {
-			log->l_iclog_bufs = XLOG_MIN_ICLOGS;
-		} else if (xfs_physmem <= btoc(400*1024*1024)) {
-			log->l_iclog_bufs = XLOG_MED_ICLOGS;
-		} else {	/* 256K with 32K bufs */
-			log->l_iclog_bufs = XLOG_MAX_ICLOGS;
-		}
-	} else {
+	if (mp->m_logbufs <= 0)
+		log->l_iclog_bufs = XLOG_MAX_ICLOGS;
+	else
 		log->l_iclog_bufs = mp->m_logbufs;
-	}
 
 	/*
 	 * Buffer size passed in from mount system call.
@@ -1069,18 +1094,9 @@ xlog_get_iclog_buffer_size(xfs_mount_t	*mp,
 		goto done;
 	}
 
-	/*
-	 * Special case machines that have less than 32MB of memory.
-	 * All machines with more memory use 32KB buffers.
-	 */
-	if (xfs_physmem <= btoc(32*1024*1024)) {
-		/* Don't change; min configuration */
-		log->l_iclog_size = XLOG_RECORD_BSIZE;		/* 16k */
-		log->l_iclog_size_log = XLOG_RECORD_BSHIFT;
-	} else {
-		log->l_iclog_size = XLOG_BIG_RECORD_BSIZE;	/* 32k */
-		log->l_iclog_size_log = XLOG_BIG_RECORD_BSHIFT;
-	}
+	/* All machines use 32KB buffers by default. */
+	log->l_iclog_size = XLOG_BIG_RECORD_BSIZE;
+	log->l_iclog_size_log = XLOG_BIG_RECORD_BSHIFT;
 
 	/* the default log size is 16k or 32k which is one header sector */
 	log->l_iclog_hsize = BBSIZE;
@@ -1199,11 +1215,18 @@ xlog_alloc_log(xfs_mount_t	*mp,
 		*iclogp = (xlog_in_core_t *)
 			  kmem_zalloc(sizeof(xlog_in_core_t), KM_SLEEP);
 		iclog = *iclogp;
-		iclog->hic_data = (xlog_in_core_2_t *)
-			  kmem_zalloc(iclogsize, KM_SLEEP | KM_LARGE);
-
 		iclog->ic_prev = prev_iclog;
 		prev_iclog = iclog;
+
+		bp = xfs_buf_get_noaddr(log->l_iclog_size, mp->m_logdev_targp);
+		if (!XFS_BUF_CPSEMA(bp))
+			ASSERT(0);
+		XFS_BUF_SET_IODONE_FUNC(bp, xlog_iodone);
+		XFS_BUF_SET_BDSTRAT_FUNC(bp, xlog_bdstrat_cb);
+		XFS_BUF_SET_FSPRIVATE2(bp, (unsigned long)1);
+		iclog->ic_bp = bp;
+		iclog->hic_data = bp->b_addr;
+
 		log->l_iclog_bak[i] = (xfs_caddr_t)&(iclog->ic_header);
 
 		head = &iclog->ic_header;
@@ -1216,11 +1239,6 @@ xlog_alloc_log(xfs_mount_t	*mp,
 		INT_SET(head->h_fmt, ARCH_CONVERT, XLOG_FMT);
 		memcpy(&head->h_fs_uuid, &mp->m_sb.sb_uuid, sizeof(uuid_t));
 
-		bp = xfs_buf_get_empty(log->l_iclog_size, mp->m_logdev_targp);
-		XFS_BUF_SET_IODONE_FUNC(bp, xlog_iodone);
-		XFS_BUF_SET_BDSTRAT_FUNC(bp, xlog_bdstrat_cb);
-		XFS_BUF_SET_FSPRIVATE2(bp, (unsigned long)1);
-		iclog->ic_bp = bp;
 
 		iclog->ic_size = XFS_BUF_SIZE(bp) - log->l_iclog_hsize;
 		iclog->ic_state = XLOG_STATE_ACTIVE;
@@ -1432,7 +1450,7 @@ xlog_sync(xlog_t		*log,
 	} else {
 		iclog->ic_bwritecnt = 1;
 	}
-	XFS_BUF_SET_PTR(bp, (xfs_caddr_t) &(iclog->ic_header), count);
+	XFS_BUF_SET_COUNT(bp, count);
 	XFS_BUF_SET_FSPRIVATE(bp, iclog);	/* save for later */
 	XFS_BUF_ZEROFLAGS(bp);
 	XFS_BUF_BUSY(bp);
@@ -1528,7 +1546,6 @@ xlog_dealloc_log(xlog_t *log)
 		}
 #endif
 		next_iclog = iclog->ic_next;
-		kmem_free(iclog->hic_data, log->l_iclog_size);
 		kmem_free(iclog, sizeof(xlog_in_core_t));
 		iclog = next_iclog;
 	}
@@ -1770,14 +1787,14 @@ xlog_write(xfs_mount_t *	mp,
     len = 0;
     if (ticket->t_flags & XLOG_TIC_INITED) {    /* acct for start rec of xact */
 	len += sizeof(xlog_op_header_t);
-	XLOG_TIC_ADD_OPHDR(ticket);
+	ticket->t_res_num_ophdrs++;
     }
 
     for (index = 0; index < nentries; index++) {
 	len += sizeof(xlog_op_header_t);	    /* each region gets >= 1 */
-	XLOG_TIC_ADD_OPHDR(ticket);
+	ticket->t_res_num_ophdrs++;
 	len += reg[index].i_len;
-	XLOG_TIC_ADD_REGION(ticket, reg[index].i_len, reg[index].i_type);
+	xlog_tic_add_region(ticket, reg[index].i_len, reg[index].i_type);
     }
     contwr = *start_lsn = 0;
 
@@ -1886,7 +1903,7 @@ xlog_write(xfs_mount_t *	mp,
 		len += sizeof(xlog_op_header_t); /* from splitting of region */
 		/* account for new log op header */
 		ticket->t_curr_res -= sizeof(xlog_op_header_t);
-		XLOG_TIC_ADD_OPHDR(ticket);
+		ticket->t_res_num_ophdrs++;
 	    }
 	    xlog_verify_dest_ptr(log, ptr);
 
@@ -2184,13 +2201,13 @@ xlog_state_do_callback(
 			}
 			cb = iclog->ic_callback;
 
-			while (cb != 0) {
+			while (cb) {
 				iclog->ic_callback_tail = &(iclog->ic_callback);
 				iclog->ic_callback = NULL;
 				LOG_UNLOCK(log, s);
 
 				/* perform callbacks in the order given */
-				for (; cb != 0; cb = cb_next) {
+				for (; cb; cb = cb_next) {
 					cb_next = cb->cb_next;
 					cb->cb_func(cb->cb_arg, aborted);
 				}
@@ -2201,7 +2218,7 @@ xlog_state_do_callback(
 			loopdidcallbacks++;
 			funcdidcallbacks++;
 
-			ASSERT(iclog->ic_callback == 0);
+			ASSERT(iclog->ic_callback == NULL);
 			if (!(iclog->ic_state & XLOG_STATE_IOERROR))
 				iclog->ic_state = XLOG_STATE_DIRTY;
 
@@ -2384,7 +2401,7 @@ restart:
 	 */
 	if (log_offset == 0) {
 		ticket->t_curr_res -= log->l_iclog_hsize;
-		XLOG_TIC_ADD_REGION(ticket,
+		xlog_tic_add_region(ticket,
 				    log->l_iclog_hsize,
 				    XLOG_REG_TYPE_LRHEADER);
 		INT_SET(head->h_cycle, ARCH_CONVERT, log->l_curr_cycle);
@@ -2572,7 +2589,7 @@ xlog_regrant_write_log_space(xlog_t	   *log,
 #endif
 
 	tic->t_curr_res = tic->t_unit_res;
-	XLOG_TIC_RESET_RES(tic);
+	xlog_tic_reset_res(tic);
 
 	if (tic->t_cnt > 0)
 		return 0;
@@ -2713,7 +2730,7 @@ xlog_regrant_reserve_log_space(xlog_t	     *log,
 	s = GRANT_LOCK(log);
 	xlog_grant_sub_space(log, ticket->t_curr_res);
 	ticket->t_curr_res = ticket->t_unit_res;
-	XLOG_TIC_RESET_RES(ticket);
+	xlog_tic_reset_res(ticket);
 	xlog_trace_loggrant(log, ticket,
 			    "xlog_regrant_reserve_log_space: sub current res");
 	xlog_verify_grant_head(log, 1);
@@ -2730,7 +2747,7 @@ xlog_regrant_reserve_log_space(xlog_t	     *log,
 	xlog_verify_grant_head(log, 0);
 	GRANT_UNLOCK(log, s);
 	ticket->t_curr_res = ticket->t_unit_res;
-	XLOG_TIC_RESET_RES(ticket);
+	xlog_tic_reset_res(ticket);
 }	/* xlog_regrant_reserve_log_space */
 
 
@@ -3241,10 +3258,10 @@ xlog_ticket_put(xlog_t		*log,
 #else
 	/* When we debug, it is easier if tickets are cycled */
 	ticket->t_next     = NULL;
-	if (log->l_tail != 0) {
+	if (log->l_tail) {
 		log->l_tail->t_next = ticket;
 	} else {
-		ASSERT(log->l_freelist == 0);
+		ASSERT(log->l_freelist == NULL);
 		log->l_freelist = ticket;
 	}
 	log->l_tail	    = ticket;
@@ -3353,7 +3370,7 @@ xlog_ticket_get(xlog_t		*log,
 		tic->t_flags |= XLOG_TIC_PERM_RESERV;
 	sv_init(&(tic->t_sema), SV_DEFAULT, "logtick");
 
-	XLOG_TIC_RESET_RES(tic);
+	xlog_tic_reset_res(tic);
 
 	return tic;
 }	/* xlog_ticket_get */
@@ -3462,7 +3479,7 @@ xlog_verify_iclog(xlog_t	 *log,
 	s = LOG_LOCK(log);
 	icptr = log->l_iclog;
 	for (i=0; i < log->l_iclog_bufs; i++) {
-		if (icptr == 0)
+		if (icptr == NULL)
 			xlog_panic("xlog_verify_iclog: invalid ptr");
 		icptr = icptr->ic_next;
 	}

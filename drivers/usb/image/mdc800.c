@@ -94,7 +94,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/wait.h>
 #include <linux/mutex.h>
 
@@ -285,9 +284,9 @@ static void mdc800_usb_irq (struct urb *urb)
 	int data_received=0, wake_up;
 	unsigned char* b=urb->transfer_buffer;
 	struct mdc800_data* mdc800=urb->context;
+	int status = urb->status;
 
-	if (urb->status >= 0)
-	{
+	if (status >= 0) {
 
 		//dbg ("%i %i %i %i %i %i %i %i \n",b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
 
@@ -325,7 +324,7 @@ static void mdc800_usb_irq (struct urb *urb)
 		||
 			((mdc800->camera_request_ready == 3) && (mdc800->camera_busy))
 		||
-			(urb->status < 0)
+			(status < 0)
 		);
 
 	if (wake_up)
@@ -377,15 +376,12 @@ static int mdc800_usb_waitForIRQ (int mode, int msec)
 static void mdc800_usb_write_notify (struct urb *urb)
 {
 	struct mdc800_data* mdc800=urb->context;
+	int status = urb->status;
 
-	if (urb->status != 0)
-	{
-		err ("writing command fails (status=%i)", urb->status);
-	}
+	if (status != 0)
+		err ("writing command fails (status=%i)", status);
 	else
-	{	
 		mdc800->state=READY;
-	}
 	mdc800->written = 1;
 	wake_up (&mdc800->write_wait);
 }
@@ -397,9 +393,9 @@ static void mdc800_usb_write_notify (struct urb *urb)
 static void mdc800_usb_download_notify (struct urb *urb)
 {
 	struct mdc800_data* mdc800=urb->context;
+	int status = urb->status;
 
-	if (urb->status == 0)
-	{
+	if (status == 0) {
 		/* Fill output buffer with these data */
 		memcpy (mdc800->out,  urb->transfer_buffer, 64);
 		mdc800->out_count=64;
@@ -409,10 +405,8 @@ static void mdc800_usb_download_notify (struct urb *urb)
 		{
 			mdc800->state=READY;
 		}
-	}
-	else
-	{
-		err ("request bytes fails (status:%i)", urb->status);
+	} else {
+		err ("request bytes fails (status:%i)", status);
 	}
 	mdc800->downloaded = 1;
 	wake_up (&mdc800->download_wait);
@@ -650,9 +644,9 @@ static int mdc800_device_open (struct inode* inode, struct file *file)
 
 	retval=0;
 	mdc800->irq_urb->dev = mdc800->dev;
-	if (usb_submit_urb (mdc800->irq_urb, GFP_KERNEL))
-	{
-		err ("request USB irq fails (submit_retval=%i urb_status=%i).",retval, mdc800->irq_urb->status);
+	retval = usb_submit_urb (mdc800->irq_urb, GFP_KERNEL);
+	if (retval) {
+		err ("request USB irq fails (submit_retval=%i).", retval);
 		errn = -EIO;
 		goto error_out;
 	}
@@ -699,6 +693,7 @@ static ssize_t mdc800_device_read (struct file *file, char __user *buf, size_t l
 {
 	size_t left=len, sts=len; /* single transfer size */
 	char __user *ptr = buf;
+	int retval;
 
 	mutex_lock(&mdc800->io_lock);
 	if (mdc800->state == NOT_CONNECTED)
@@ -738,9 +733,9 @@ static ssize_t mdc800_device_read (struct file *file, char __user *buf, size_t l
 
 				/* Download -> Request new bytes */
 				mdc800->download_urb->dev = mdc800->dev;
-				if (usb_submit_urb (mdc800->download_urb, GFP_KERNEL))
-				{
-					err ("Can't submit download urb (status=%i)",mdc800->download_urb->status);
+				retval = usb_submit_urb (mdc800->download_urb, GFP_KERNEL);
+				if (retval) {
+					err ("Can't submit download urb (retval=%i)",retval);
 					mutex_unlock(&mdc800->io_lock);
 					return len-left;
 				}
@@ -789,6 +784,7 @@ static ssize_t mdc800_device_read (struct file *file, char __user *buf, size_t l
 static ssize_t mdc800_device_write (struct file *file, const char __user *buf, size_t len, loff_t *pos)
 {
 	size_t i=0;
+	int retval;
 
 	mutex_lock(&mdc800->io_lock);
 	if (mdc800->state != READY)
@@ -855,9 +851,9 @@ static ssize_t mdc800_device_write (struct file *file, const char __user *buf, s
 			mdc800->state=WORKING;
 			memcpy (mdc800->write_urb->transfer_buffer, mdc800->in,8);
 			mdc800->write_urb->dev = mdc800->dev;
-			if (usb_submit_urb (mdc800->write_urb, GFP_KERNEL))
-			{
-				err ("submitting write urb fails (status=%i)", mdc800->write_urb->status);
+			retval = usb_submit_urb (mdc800->write_urb, GFP_KERNEL);
+			if (retval) {
+				err ("submitting write urb fails (retval=%i)", retval);
 				mutex_unlock(&mdc800->io_lock);
 				return -EIO;
 			}

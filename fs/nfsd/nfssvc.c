@@ -9,7 +9,7 @@
  */
 
 #include <linux/module.h>
-
+#include <linux/sched.h>
 #include <linux/time.h>
 #include <linux/errno.h>
 #include <linux/nfs.h>
@@ -19,6 +19,7 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
+#include <linux/freezer.h>
 #include <linux/fs_struct.h>
 
 #include <linux/sunrpc/types.h>
@@ -348,9 +349,7 @@ nfsd_svc(unsigned short port, int nrservs)
 	error =	nfsd_racache_init(2*nrservs);
 	if (error<0)
 		goto out;
-	error = nfs4_state_start();
-	if (error<0)
-		goto out;
+	nfs4_state_start();
 
 	nfsd_reset_versions();
 
@@ -432,6 +431,7 @@ nfsd(struct svc_rqst *rqstp)
 	 * dirty pages.
 	 */
 	current->flags |= PF_LESS_THROTTLE;
+	set_freezable();
 
 	/*
 	 * The main request loop
@@ -492,6 +492,15 @@ out:
 	module_put_and_exit(0);
 }
 
+static __be32 map_new_errors(u32 vers, __be32 nfserr)
+{
+	if (nfserr == nfserr_jukebox && vers == 2)
+		return nfserr_dropit;
+	if (nfserr == nfserr_wrongsec && vers < 4)
+		return nfserr_acces;
+	return nfserr;
+}
+
 int
 nfsd_dispatch(struct svc_rqst *rqstp, __be32 *statp)
 {
@@ -534,10 +543,9 @@ nfsd_dispatch(struct svc_rqst *rqstp, __be32 *statp)
 
 	/* Now call the procedure handler, and encode NFS status. */
 	nfserr = proc->pc_func(rqstp, rqstp->rq_argp, rqstp->rq_resp);
-	if (nfserr == nfserr_jukebox && rqstp->rq_vers == 2)
-		nfserr = nfserr_dropit;
+	nfserr = map_new_errors(rqstp->rq_vers, nfserr);
 	if (nfserr == nfserr_dropit) {
-		dprintk("nfsd: Dropping request due to malloc failure!\n");
+		dprintk("nfsd: Dropping request; may be revisited later\n");
 		nfsd_cache_update(rqstp, RC_NOCACHE, NULL);
 		return 0;
 	}

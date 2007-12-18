@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-s3c2410/sleep.S
+/* linux/arch/arm/plat-s3c24xx/sleep.S
  *
  * Copyright (c) 2004 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
@@ -32,7 +32,7 @@
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-clock.h>
 #include <asm/arch/regs-mem.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 
 /* CONFIG_DEBUG_RESUME is dangerous if your bootloader does not
  * reset the UART configuration, only enable if you really need this!
@@ -95,6 +95,14 @@ resume_with_mmu:
 	.global	s3c2410_sleep_save_phys
 s3c2410_sleep_save_phys:
 	.word	0
+
+
+	/* sleep magic, to allow the bootloader to check for an valid
+	 * image to resume to. Must be the first word before the
+	 * s3c2410_cpu_resume entry.
+	*/
+
+	.word	0x2bedf00d
 
 	/* s3c2410_cpu_resume
 	 *

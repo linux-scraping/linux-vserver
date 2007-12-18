@@ -13,39 +13,7 @@ extern void unix_gc(void);
 
 #define UNIX_HASH_SIZE	256
 
-extern struct hlist_head unix_socket_table[UNIX_HASH_SIZE + 1];
-extern spinlock_t unix_table_lock;
-
-extern atomic_t unix_tot_inflight;
-
-static inline struct sock *next_unix_socket_table(int *i)
-{
-	for ((*i)++; *i <= UNIX_HASH_SIZE; (*i)++) {
-		if (!hlist_empty(&unix_socket_table[*i]))
-			return __sk_head(&unix_socket_table[*i]);
-	}
-	return NULL;
-}
-
-static inline struct sock *next_unix_socket(int *i, struct sock *s)
-{
-	do {
-		if (s)
-			s = sk_next(s);
-		if (!s)
-			s = next_unix_socket_table(i);
-	} while (s && !nx_check(s->sk_nid, VS_WATCH_P | VS_IDENT));
-	return s;
-}
-
-static inline struct sock *first_unix_socket(int *i)
-{
-	*i = 0;
-	return next_unix_socket(i, NULL);
-}
-
-#define forall_unix_sockets(i, s) \
-	for (s = first_unix_socket(&(i)); s; s = next_unix_socket(&(i),(s)))
+extern unsigned int unix_tot_inflight;
 
 struct unix_address {
 	atomic_t	refcnt;
@@ -83,9 +51,10 @@ struct unix_sock {
 	struct mutex		readlock;
         struct sock		*peer;
         struct sock		*other;
-        struct sock		*gc_tree;
+	struct list_head	link;
         atomic_t                inflight;
         spinlock_t		lock;
+	unsigned int		gc_candidate : 1;
         wait_queue_head_t       peer_wait;
 };
 #define unix_sk(__sk) ((struct unix_sock *)__sk)

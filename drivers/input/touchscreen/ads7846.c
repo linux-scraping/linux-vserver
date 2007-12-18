@@ -39,7 +39,9 @@
 /*
  * This code has been heavily tested on a Nokia 770, and lightly
  * tested on other ads7846 devices (OSK/Mistral, Lubbock).
- * Support for ads7843 and ads7845 has only been stubbed in.
+ * TSC2046 is just newer ads7846 silicon.
+ * Support for ads7843 tested on Atmel at91sam926x-EK.
+ * Support for ads7845 has only been stubbed in.
  *
  * IRQ handling needs a workaround because of a shortcoming in handling
  * edge triggered IRQs on some platforms like the OMAP1/2. These
@@ -81,7 +83,7 @@ struct ads7846 {
 
 #if defined(CONFIG_HWMON) || defined(CONFIG_HWMON_MODULE)
 	struct attribute_group	*attr_group;
-	struct class_device	*hwmon;
+	struct device		*hwmon;
 #endif
 
 	u16			model;
@@ -93,7 +95,7 @@ struct ads7846 {
 	u16			dummy;		/* for the pwrdown read */
 	struct ts_event		tc;
 
-	struct spi_transfer	xfer[10];
+	struct spi_transfer	xfer[18];
 	struct spi_message	msg[5];
 	struct spi_message	*last_msg;
 	int			msg_idx;
@@ -104,6 +106,8 @@ struct ads7846 {
 	u16			debounce_max;
 	u16			debounce_tol;
 	u16			debounce_rep;
+
+	u16			penirq_recheck_delay_usecs;
 
 	spinlock_t		lock;
 	struct hrtimer		timer;
@@ -246,18 +250,16 @@ static int ads7846_read12_ser(struct device *dev, unsigned command)
 
 	/* REVISIT:  take a few more samples, and compare ... */
 
-	/* maybe off internal vREF */
-	if (use_internal) {
-		req->ref_off = REF_OFF;
-		req->xfer[4].tx_buf = &req->ref_off;
-		req->xfer[4].len = 1;
-		spi_message_add_tail(&req->xfer[4], &req->msg);
+	/* converter in low power mode & enable PENIRQ */
+	req->ref_off = PWRDOWN;
+	req->xfer[4].tx_buf = &req->ref_off;
+	req->xfer[4].len = 1;
+	spi_message_add_tail(&req->xfer[4], &req->msg);
 
-		req->xfer[5].rx_buf = &req->scratch;
-		req->xfer[5].len = 2;
-		CS_CHANGE(req->xfer[5]);
-		spi_message_add_tail(&req->xfer[5], &req->msg);
-	}
+	req->xfer[5].rx_buf = &req->scratch;
+	req->xfer[5].len = 2;
+	CS_CHANGE(req->xfer[5]);
+	spi_message_add_tail(&req->xfer[5], &req->msg);
 
 	ts->irq_disabled = 1;
 	disable_irq(spi->irq);
@@ -367,7 +369,7 @@ static struct attribute_group ads7845_attr_group = {
 
 static int ads784x_hwmon_register(struct spi_device *spi, struct ads7846 *ts)
 {
-	struct class_device *hwmon;
+	struct device *hwmon;
 	int err;
 
 	/* hwmon sensors need a reference voltage */
@@ -536,6 +538,9 @@ static void ads7846_rx(void *ads)
 	} else
 		Rt = 0;
 
+	if (ts->model == 7843)
+		Rt = ts->pressure_max / 2;
+
 	/* Sample found inconsistent by debouncing or pressure is beyond
 	 * the maximum. Don't report it to user space, repeat at least
 	 * once more the measurement
@@ -548,6 +553,15 @@ static void ads7846_rx(void *ads)
 		hrtimer_start(&ts->timer, ktime_set(0, TS_POLL_PERIOD),
 			      HRTIMER_MODE_REL);
 		return;
+	}
+
+	/* Maybe check the pendown state before reporting. This discards
+	 * false readings when the pen is lifted.
+	 */
+	if (ts->penirq_recheck_delay_usecs) {
+		udelay(ts->penirq_recheck_delay_usecs);
+		if (!ts->get_pendown_state())
+			Rt = 0;
 	}
 
 	/* NOTE: We can't rely on the pressure to determine the pen down
@@ -845,7 +859,7 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	 * may not.  So we stick to very-portable 8 bit words, both RX and TX.
 	 */
 	spi->bits_per_word = 8;
-	spi->mode = SPI_MODE_1;
+	spi->mode = SPI_MODE_0;
 	err = spi_setup(spi);
 	if (err < 0)
 		return err;
@@ -893,14 +907,18 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 		ts->filter = ads7846_no_filter;
 	ts->get_pendown_state = pdata->get_pendown_state;
 
+	if (pdata->penirq_recheck_delay_usecs)
+		ts->penirq_recheck_delay_usecs =
+				pdata->penirq_recheck_delay_usecs;
+
 	snprintf(ts->phys, sizeof(ts->phys), "%s/input0", spi->dev.bus_id);
 
 	input_dev->name = "ADS784x Touchscreen";
 	input_dev->phys = ts->phys;
-	input_dev->cdev.dev = &spi->dev;
+	input_dev->dev.parent = &spi->dev;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_ABS);
-	input_dev->keybit[LONG(BTN_TOUCH)] = BIT(BTN_TOUCH);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
+	input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
 	input_set_abs_params(input_dev, ABS_X,
 			pdata->x_min ? : 0,
 			pdata->x_max ? : MAX_12BIT,
@@ -933,6 +951,24 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	x->len = 2;
 	spi_message_add_tail(x, m);
 
+	/* the first sample after switching drivers can be low quality;
+	 * optionally discard it, using a second one after the signals
+	 * have had enough time to stabilize.
+	 */
+	if (pdata->settle_delay_usecs) {
+		x->delay_usecs = pdata->settle_delay_usecs;
+
+		x++;
+		x->tx_buf = &ts->read_y;
+		x->len = 1;
+		spi_message_add_tail(x, m);
+
+		x++;
+		x->rx_buf = &ts->tc.y;
+		x->len = 2;
+		spi_message_add_tail(x, m);
+	}
+
 	m->complete = ads7846_rx_val;
 	m->context = ts;
 
@@ -950,6 +986,21 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	x->rx_buf = &ts->tc.x;
 	x->len = 2;
 	spi_message_add_tail(x, m);
+
+	/* ... maybe discard first sample ... */
+	if (pdata->settle_delay_usecs) {
+		x->delay_usecs = pdata->settle_delay_usecs;
+
+		x++;
+		x->tx_buf = &ts->read_x;
+		x->len = 1;
+		spi_message_add_tail(x, m);
+
+		x++;
+		x->rx_buf = &ts->tc.x;
+		x->len = 2;
+		spi_message_add_tail(x, m);
+	}
 
 	m->complete = ads7846_rx_val;
 	m->context = ts;
@@ -970,6 +1021,21 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 		x->len = 2;
 		spi_message_add_tail(x, m);
 
+		/* ... maybe discard first sample ... */
+		if (pdata->settle_delay_usecs) {
+			x->delay_usecs = pdata->settle_delay_usecs;
+
+			x++;
+			x->tx_buf = &ts->read_z1;
+			x->len = 1;
+			spi_message_add_tail(x, m);
+
+			x++;
+			x->rx_buf = &ts->tc.z1;
+			x->len = 2;
+			spi_message_add_tail(x, m);
+		}
+
 		m->complete = ads7846_rx_val;
 		m->context = ts;
 
@@ -986,6 +1052,21 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 		x->rx_buf = &ts->tc.z2;
 		x->len = 2;
 		spi_message_add_tail(x, m);
+
+		/* ... maybe discard first sample ... */
+		if (pdata->settle_delay_usecs) {
+			x->delay_usecs = pdata->settle_delay_usecs;
+
+			x++;
+			x->tx_buf = &ts->read_z2;
+			x->len = 1;
+			spi_message_add_tail(x, m);
+
+			x++;
+			x->rx_buf = &ts->tc.z2;
+			x->len = 2;
+			spi_message_add_tail(x, m);
+		}
 
 		m->complete = ads7846_rx_val;
 		m->context = ts;

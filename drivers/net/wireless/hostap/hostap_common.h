@@ -4,12 +4,6 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 
-#define BIT(x) (1 << (x))
-
-#define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
-#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
-
-
 /* IEEE 802.11 defines */
 
 /* Information Element IDs */
@@ -368,9 +362,9 @@ enum {
 
 #define PRISM2_HOSTAPD_MAX_BUF_SIZE 1024
 #define PRISM2_HOSTAPD_RID_HDR_LEN \
-((int) (&((struct prism2_hostapd_param *) 0)->u.rid.data))
+offsetof(struct prism2_hostapd_param, u.rid.data)
 #define PRISM2_HOSTAPD_GENERIC_ELEMENT_HDR_LEN \
-((int) (&((struct prism2_hostapd_param *) 0)->u.generic_elem.data))
+offsetof(struct prism2_hostapd_param, u.generic_elem.data)
 
 /* Maximum length for algorithm names (-1 for nul termination) used in ioctl()
  */

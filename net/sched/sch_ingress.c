@@ -9,20 +9,14 @@
 
 #include <linux/module.h>
 #include <linux/types.h>
+#include <linux/list.h>
 #include <linux/skbuff.h>
-#include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
 #include <linux/netfilter.h>
-#include <linux/smp.h>
+#include <net/netlink.h>
 #include <net/pkt_sched.h>
-#include <asm/byteorder.h>
-#include <asm/uaccess.h>
-#include <linux/kmod.h>
-#include <linux/stat.h>
-#include <linux/interrupt.h>
-#include <linux/list.h>
 
 
 #undef DEBUG_INGRESS
@@ -164,36 +158,16 @@ static int ingress_enqueue(struct sk_buff *skb,struct Qdisc *sch)
 			break;
 		case TC_ACT_RECLASSIFY:
 		case TC_ACT_OK:
-		case TC_ACT_UNSPEC:
-		default:
 			skb->tc_index = TC_H_MIN(res.classid);
+		default:
 			result = TC_ACT_OK;
 			break;
-	};
-/* backward compat */
-#else
-#ifdef	CONFIG_NET_CLS_POLICE
-	switch (result) {
-		case TC_POLICE_SHOT:
-		result = NF_DROP;
-		sch->qstats.drops++;
-		break;
-		case TC_POLICE_RECLASSIFY: /* DSCP remarking here ? */
-		case TC_POLICE_OK:
-		case TC_POLICE_UNSPEC:
-		default:
-		sch->bstats.packets++;
-		sch->bstats.bytes += skb->len;
-		result = NF_ACCEPT;
-		break;
-	};
-
+	}
 #else
 	D2PRINTK("Overriding result to ACCEPT\n");
 	result = NF_ACCEPT;
 	sch->bstats.packets++;
 	sch->bstats.bytes += skb->len;
-#endif
 #endif
 
 	return result;
@@ -231,32 +205,26 @@ static unsigned int ingress_drop(struct Qdisc *sch)
 #ifndef CONFIG_NET_CLS_ACT
 #ifdef CONFIG_NETFILTER
 static unsigned int
-ing_hook(unsigned int hook, struct sk_buff **pskb,
+ing_hook(unsigned int hook, struct sk_buff *skb,
 			     const struct net_device *indev,
 			     const struct net_device *outdev,
 			     int (*okfn)(struct sk_buff *))
 {
 
 	struct Qdisc *q;
-	struct sk_buff *skb = *pskb;
 	struct net_device *dev = skb->dev;
 	int fwres=NF_ACCEPT;
 
 	DPRINTK("ing_hook: skb %s dev=%s len=%u\n",
 		skb->sk ? "(owned)" : "(unowned)",
-		skb->dev ? (*pskb)->dev->name : "(no dev)",
+		skb->dev ? skb->dev->name : "(no dev)",
 		skb->len);
 
-/*
-revisit later: Use a private since lock dev->queue_lock is also
-used on the egress (might slow things for an iota)
-*/
-
 	if (dev->qdisc_ingress) {
-		spin_lock(&dev->queue_lock);
+		spin_lock(&dev->ingress_lock);
 		if ((q = dev->qdisc_ingress) != NULL)
 			fwres = q->enqueue(skb, q);
-		spin_unlock(&dev->queue_lock);
+		spin_unlock(&dev->ingress_lock);
 	}
 
 	return fwres;
@@ -345,14 +313,9 @@ static void ingress_reset(struct Qdisc *sch)
 static void ingress_destroy(struct Qdisc *sch)
 {
 	struct ingress_qdisc_data *p = PRIV(sch);
-	struct tcf_proto *tp;
 
 	DPRINTK("ingress_destroy(sch %p,[qdisc %p])\n", sch, p);
-	while (p->filter_list) {
-		tp = p->filter_list;
-		p->filter_list = tp->next;
-		tcf_destroy(tp);
-	}
+	tcf_destroy_chain(p->filter_list);
 #if 0
 /* for future use */
 	qdisc_destroy(p->q);
@@ -362,16 +325,16 @@ static void ingress_destroy(struct Qdisc *sch)
 
 static int ingress_dump(struct Qdisc *sch, struct sk_buff *skb)
 {
-	unsigned char *b = skb->tail;
+	unsigned char *b = skb_tail_pointer(skb);
 	struct rtattr *rta;
 
 	rta = (struct rtattr *) b;
 	RTA_PUT(skb, TCA_OPTIONS, 0, NULL);
-	rta->rta_len = skb->tail - b;
+	rta->rta_len = skb_tail_pointer(skb) - b;
 	return skb->len;
 
 rtattr_failure:
-	skb_trim(skb, b - skb->data);
+	nlmsg_trim(skb, b);
 	return -1;
 }
 

@@ -66,8 +66,7 @@ struct fsxattr {
 #define XFS_XFLAG_EXTSIZE	0x00000800	/* extent size allocator hint */
 #define XFS_XFLAG_EXTSZINHERIT	0x00001000	/* inherit inode extent size */
 #define XFS_XFLAG_NODEFRAG	0x00002000  	/* do not defragment */
-#define XFS_XFLAG_BARRIER	0x00004000	/* chroot() barrier */
-#define XFS_XFLAG_IUNLINK	0x00008000	/* immutable unlink */
+#define XFS_XFLAG_FILESTREAM	0x00004000	/* use filestream allocator */
 #define XFS_XFLAG_HASATTR	0x80000000	/* no DIFLAG for this	*/
 
 /*
@@ -240,6 +239,7 @@ typedef struct xfs_fsop_resblks {
 #define XFS_FSOP_GEOM_FLAGS_LOGV2	0x0100	/* log format version 2	*/
 #define XFS_FSOP_GEOM_FLAGS_SECTOR	0x0200	/* sector sizes >1BB	*/
 #define XFS_FSOP_GEOM_FLAGS_ATTR2	0x0400	/* inline attributes rework */
+#define XFS_FSOP_GEOM_FLAGS_LAZYSB	0x4000	/* lazy superblock counters */
 
 
 /*
@@ -390,29 +390,12 @@ typedef struct xfs_fsop_attrmulti_handlereq {
  */
 typedef struct { __u32 val[2]; } xfs_fsid_t; /* file system id type */
 
-
-#ifndef HAVE_FID
-#define MAXFIDSZ	46
-
-typedef struct fid {
-	__u16		fid_len;		/* length of data in bytes */
-	unsigned char	fid_data[MAXFIDSZ];	/* data (fid_len worth)  */
-} fid_t;
-#endif
-
 typedef struct xfs_fid {
-	__u16	xfs_fid_len;		/* length of remainder	*/
-	__u16	xfs_fid_pad;
-	__u32	xfs_fid_gen;		/* generation number	*/
-	__u64	xfs_fid_ino;		/* 64 bits inode number */
+	__u16	fid_len;		/* length of remainder	*/
+	__u16	fid_pad;
+	__u32	fid_gen;		/* generation number	*/
+	__u64	fid_ino;		/* 64 bits inode number */
 } xfs_fid_t;
-
-typedef struct xfs_fid2 {
-	__u16	fid_len;	/* length of remainder */
-	__u16	fid_pad;	/* padding, must be zero */
-	__u32	fid_gen;	/* generation number */
-	__u64	fid_ino;	/* inode number */
-} xfs_fid2_t;
 
 typedef struct xfs_handle {
 	union {
@@ -423,9 +406,9 @@ typedef struct xfs_handle {
 } xfs_handle_t;
 #define ha_fsid ha_u._ha_fsid
 
-#define XFS_HSIZE(handle)	(((char *) &(handle).ha_fid.xfs_fid_pad	 \
+#define XFS_HSIZE(handle)	(((char *) &(handle).ha_fid.fid_pad	 \
 				 - (char *) &(handle))			  \
-				 + (handle).ha_fid.xfs_fid_len)
+				 + (handle).ha_fid.fid_len)
 
 /*
  * Flags for going down operation

@@ -48,7 +48,7 @@ before suspend (it is limited to 500 MB by default).
 
 Article about goals and implementation of Software Suspend for Linux
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Author: G‚ábor Kuti
+Author: GÂ‚Ã¡bor Kuti
 Last revised: 2003-10-20 by Pavel Machek
 
 Idea and goals to achieve
@@ -140,24 +140,13 @@ should be sent to the mailing list available through the suspend2
 website, and not to the Linux Kernel Mailing List. We are working
 toward merging suspend2 into the mainline kernel.
 
-Q: A kernel thread must voluntarily freeze itself (call 'refrigerator').
-I found some kernel threads that don't do it, and they don't freeze
-so the system can't sleep. Is this a known behavior?
+Q: What is the freezing of tasks and why are we using it?
 
-A: All such kernel threads need to be fixed, one by one. Select the
-place where the thread is safe to be frozen (no kernel semaphores
-should be held at that point and it must be safe to sleep there), and
-add:
+A: The freezing of tasks is a mechanism by which user space processes and some
+kernel threads are controlled during hibernation or system-wide suspend (on some
+architectures).  See freezing-of-tasks.txt for details.
 
-       try_to_freeze();
-
-If the thread is needed for writing the image to storage, you should
-instead set the PF_NOFREEZE process flag when creating the thread (and
-be very careful).
-
-
-Q: What is the difference between "platform", "shutdown" and
-"firmware" in /sys/power/disk?
+Q: What is the difference between "platform" and "shutdown"?
 
 A:
 
@@ -166,11 +155,8 @@ shutdown: save state in linux, then tell bios to powerdown
 platform: save state in linux, then tell bios to powerdown and blink
           "suspended led"
 
-firmware: tell bios to save state itself [needs BIOS-specific suspend
-	  partition, and has very little to do with swsusp]
-
-"platform" is actually right thing to do, but "shutdown" is most
-reliable.
+"platform" is actually right thing to do where supported, but
+"shutdown" is most reliable (except on ACPI systems).
 
 Q: I do not understand why you have such strong objections to idea of
 selective suspend.
@@ -388,14 +374,17 @@ while the system is asleep, maintaining the connection, using true sleep
 modes like "suspend-to-RAM" or "standby".  (Don't write "disk" to the
 /sys/power/state file; write "standby" or "mem".)  We've not seen any
 hardware that can use these modes through software suspend, although in
-theory some systems might support "platform" or "firmware" modes that
-won't break the USB connections.
+theory some systems might support "platform" modes that won't break the
+USB connections.
 
 Remember that it's always a bad idea to unplug a disk drive containing a
 mounted filesystem.  That's true even when your system is asleep!  The
 safest thing is to unmount all filesystems on removable media (such USB,
 Firewire, CompactFlash, MMC, external SATA, or even IDE hotplug bays)
 before suspending; then remount them after resuming.
+
+There is a work-around for this problem.  For more information, see
+Documentation/usb/persist.txt.
 
 Q: I upgraded the kernel from 2.6.15 to 2.6.16. Both kernels were
 compiled with the similar configuration files. Anyway I found that

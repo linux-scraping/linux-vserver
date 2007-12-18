@@ -34,7 +34,6 @@
 
 #include <asm/hardware.h>
 #include <asm/io.h>
-#include <asm/uaccess.h>
 #include <asm/arch/imxfb.h>
 
 /*
@@ -394,26 +393,18 @@ static void imxfb_setup_gpio(struct imxfb_info *fbi)
 
 	/* initialize GPIOs */
 	imx_gpio_mode(PD6_PF_LSCLK);
-	imx_gpio_mode(PD10_PF_SPL_SPR);
 	imx_gpio_mode(PD11_PF_CONTRAST);
 	imx_gpio_mode(PD14_PF_FLM_VSYNC);
 	imx_gpio_mode(PD13_PF_LP_HSYNC);
-	imx_gpio_mode(PD7_PF_REV);
-	imx_gpio_mode(PD8_PF_CLS);
-
-#ifndef CONFIG_MACH_PIMX1
-	/* on PiMX1 used as buffers enable signal
-	 */
-	imx_gpio_mode(PD9_PF_PS);
-#endif
-
-#ifndef CONFIG_MACH_MX1FS2
-	/* on mx1fs2 this pin is used to (de)activate the display, so we need
-	 * it as a normal gpio
-	 */
 	imx_gpio_mode(PD12_PF_ACD_OE);
-#endif
 
+	/* These are only needed for Sharp HR TFT displays */
+	if (fbi->pcr & PCR_SHARP) {
+		imx_gpio_mode(PD7_PF_REV);
+		imx_gpio_mode(PD8_PF_CLS);
+		imx_gpio_mode(PD9_PF_PS);
+		imx_gpio_mode(PD10_PF_SPL_SPR);
+	}
 }
 
 #ifdef CONFIG_PM
@@ -475,8 +466,7 @@ static int __init imxfb_init_fbinfo(struct device *dev)
 	info->var.vmode	= FB_VMODE_NONINTERLACED;
 
 	info->fbops			= &imxfb_ops;
-	info->flags			= FBINFO_FLAG_DEFAULT;
-	info->pseudo_palette		= (fbi + 1);
+	info->flags			= FBINFO_FLAG_DEFAULT | FBINFO_READS_FAST;
 
 	fbi->rgb[RGB_16]		= &def_rgb_16;
 	fbi->rgb[RGB_8]			= &def_rgb_8;
@@ -489,6 +479,7 @@ static int __init imxfb_init_fbinfo(struct device *dev)
 	info->var.yres_virtual		= inf->yres;
 	fbi->max_bpp			= inf->bpp;
 	info->var.bits_per_pixel	= inf->bpp;
+	info->var.nonstd		= inf->nonstd;
 	info->var.pixclock		= inf->pixclock;
 	info->var.hsync_len		= inf->hsync_len;
 	info->var.left_margin		= inf->left_margin;
@@ -499,6 +490,7 @@ static int __init imxfb_init_fbinfo(struct device *dev)
 	info->var.sync			= inf->sync;
 	info->var.grayscale		= inf->cmap_greyscale;
 	fbi->cmap_inverse		= inf->cmap_inverse;
+	fbi->cmap_static		= inf->cmap_static;
 	fbi->pcr			= inf->pcr;
 	fbi->lscr1			= inf->lscr1;
 	fbi->dmacr			= inf->dmacr;

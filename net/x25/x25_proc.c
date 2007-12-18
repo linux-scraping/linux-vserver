@@ -20,6 +20,7 @@
 #include <linux/init.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/x25.h>
 
@@ -234,21 +235,21 @@ out:
 	return 0;
 }
 
-static struct seq_operations x25_seq_route_ops = {
+static const struct seq_operations x25_seq_route_ops = {
 	.start  = x25_seq_route_start,
 	.next   = x25_seq_route_next,
 	.stop   = x25_seq_route_stop,
 	.show   = x25_seq_route_show,
 };
 
-static struct seq_operations x25_seq_socket_ops = {
+static const struct seq_operations x25_seq_socket_ops = {
 	.start  = x25_seq_socket_start,
 	.next   = x25_seq_socket_next,
 	.stop   = x25_seq_socket_stop,
 	.show   = x25_seq_socket_show,
 };
 
-static struct seq_operations x25_seq_forward_ops = {
+static const struct seq_operations x25_seq_forward_ops = {
 	.start  = x25_seq_forward_start,
 	.next   = x25_seq_forward_next,
 	.stop   = x25_seq_forward_stop,
@@ -301,7 +302,7 @@ int __init x25_proc_init(void)
 	struct proc_dir_entry *p;
 	int rc = -ENOMEM;
 
-	x25_proc_dir = proc_mkdir("x25", proc_net);
+	x25_proc_dir = proc_mkdir("x25", init_net.proc_net);
 	if (!x25_proc_dir)
 		goto out;
 
@@ -328,7 +329,7 @@ out_forward:
 out_socket:
 	remove_proc_entry("route", x25_proc_dir);
 out_route:
-	remove_proc_entry("x25", proc_net);
+	remove_proc_entry("x25", init_net.proc_net);
 	goto out;
 }
 
@@ -337,7 +338,7 @@ void __exit x25_proc_exit(void)
 	remove_proc_entry("forward", x25_proc_dir);
 	remove_proc_entry("route", x25_proc_dir);
 	remove_proc_entry("socket", x25_proc_dir);
-	remove_proc_entry("x25", proc_net);
+	remove_proc_entry("x25", init_net.proc_net);
 }
 
 #else /* CONFIG_PROC_FS */

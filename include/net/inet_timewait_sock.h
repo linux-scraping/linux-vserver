@@ -115,9 +115,10 @@ struct inet_timewait_sock {
 #define tw_refcnt		__tw_common.skc_refcnt
 #define tw_hash			__tw_common.skc_hash
 #define tw_prot			__tw_common.skc_prot
-#define tw_xid		__tw_common.skc_xid
+#define tw_net			__tw_common.skc_net
+#define tw_xid			__tw_common.skc_xid
 #define tw_vx_info		__tw_common.skc_vx_info
-#define tw_nid		__tw_common.skc_nid
+#define tw_nid			__tw_common.skc_nid
 #define tw_nx_info		__tw_common.skc_nx_info
 	volatile unsigned char	tw_substate;
 	/* 3 bits hole, try to pack */
@@ -212,9 +213,6 @@ static inline void inet_twsk_put(struct inet_timewait_sock *tw)
 
 extern struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 						  const int state);
-
-extern void __inet_twsk_kill(struct inet_timewait_sock *tw,
-			     struct inet_hashinfo *hashinfo);
 
 extern void __inet_twsk_hashdance(struct inet_timewait_sock *tw,
 				  struct sock *sk,

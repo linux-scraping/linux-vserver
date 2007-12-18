@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *                   Uros Bizjak <uros@kss-loka.si>
  *
  *  Lowlevel routines for control of Sound Blaster cards
@@ -33,7 +33,7 @@
 #include <asm/io.h>
 #include <asm/dma.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("ALSA lowlevel driver for Sound Blaster cards");
 MODULE_LICENSE("GPL");
 
@@ -128,7 +128,7 @@ static int snd_sbdsp_probe(struct snd_sb * chip)
 	minor = version & 0xff;
 	snd_printdd("SB [0x%lx]: DSP chip found, version = %i.%i\n",
 		    chip->port, major, minor);
-	
+
 	switch (chip->hardware) {
 	case SB_HW_AUTO:
 		switch (major) {
@@ -167,6 +167,9 @@ static int snd_sbdsp_probe(struct snd_sb * chip)
 		break;
 	case SB_HW_DT019X:
 		str = "(DT019X/ALS007)";
+		break;
+	case SB_HW_CS5530:
+		str = "16 (CS5530)";
 		break;
 	default:
 		return -ENODEV;
@@ -231,7 +234,9 @@ int snd_sbdsp_create(struct snd_card *card,
 	chip->dma16 = -1;
 	chip->port = port;
 	
-	if (request_irq(irq, irq_handler, hardware == SB_HW_ALS4000 ?
+	if (request_irq(irq, irq_handler,
+			(hardware == SB_HW_ALS4000 ||
+			 hardware == SB_HW_CS5530) ?
 			IRQF_SHARED : IRQF_DISABLED,
 			"SoundBlaster", (void *) chip)) {
 		snd_printk(KERN_ERR "sb: can't grab irq %d\n", irq);

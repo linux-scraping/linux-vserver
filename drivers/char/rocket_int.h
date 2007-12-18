@@ -15,6 +15,8 @@
 #define ROCKET_TYPE_MODEMIII	3
 #define ROCKET_TYPE_PC104       4
 
+#include <linux/mutex.h>
+
 #include <asm/io.h>
 #include <asm/byteorder.h>
 
@@ -1156,22 +1158,15 @@ struct r_port {
 	int xmit_head;
 	int xmit_tail;
 	int xmit_cnt;
-	int session;
-	int pgrp;
 	int cd_status;
 	int ignore_status_mask;
 	int read_status_mask;
 	int cps;
 
-#ifdef DECLARE_WAITQUEUE
 	wait_queue_head_t open_wait;
-	wait_queue_head_t close_wait;
-#else
-	struct wait_queue *open_wait;
-	struct wait_queue *close_wait;
-#endif
+	struct completion close_wait;
 	spinlock_t slock;
-	struct semaphore write_sem;
+	struct mutex write_mtx;
 };
 
 #define RPORT_MAGIC 0x525001

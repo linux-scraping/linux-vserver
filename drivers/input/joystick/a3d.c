@@ -241,7 +241,7 @@ static void a3d_adc_close(struct gameport *gameport)
 
 static int a3d_open(struct input_dev *dev)
 {
-	struct a3d *a3d = dev->private;
+	struct a3d *a3d = input_get_drvdata(dev);
 
 	gameport_start_polling(a3d->gameport);
 	return 0;
@@ -253,7 +253,7 @@ static int a3d_open(struct input_dev *dev)
 
 static void a3d_close(struct input_dev *dev)
 {
-	struct a3d *a3d = dev->private;
+	struct a3d *a3d = input_get_drvdata(dev);
 
 	gameport_stop_polling(a3d->gameport);
 }
@@ -314,10 +314,11 @@ static int a3d_connect(struct gameport *gameport, struct gameport_driver *drv)
 	input_dev->id.vendor = GAMEPORT_ID_VENDOR_MADCATZ;
 	input_dev->id.product = a3d->mode;
 	input_dev->id.version = 0x0100;
-	input_dev->cdev.dev = &gameport->dev;
-	input_dev->private = a3d;
+	input_dev->dev.parent = &gameport->dev;
 	input_dev->open = a3d_open;
 	input_dev->close = a3d_close;
+
+	input_set_drvdata(input_dev, a3d);
 
 	if (a3d->mode == A3D_MODE_PXL) {
 
@@ -325,14 +326,19 @@ static int a3d_connect(struct gameport *gameport, struct gameport_driver *drv)
 
 		a3d->length = 33;
 
-		input_dev->evbit[0] |= BIT(EV_ABS) | BIT(EV_KEY) | BIT(EV_REL);
-		input_dev->relbit[0] |= BIT(REL_X) | BIT(REL_Y);
-		input_dev->absbit[0] |= BIT(ABS_X) | BIT(ABS_Y) | BIT(ABS_THROTTLE) | BIT(ABS_RUDDER)
-					| BIT(ABS_HAT0X) | BIT(ABS_HAT0Y) | BIT(ABS_HAT1X) | BIT(ABS_HAT1Y);
-		input_dev->keybit[LONG(BTN_MOUSE)] |= BIT(BTN_RIGHT) | BIT(BTN_LEFT) | BIT(BTN_MIDDLE)
-							| BIT(BTN_SIDE) | BIT(BTN_EXTRA);
-		input_dev->keybit[LONG(BTN_JOYSTICK)] |= BIT(BTN_TRIGGER) | BIT(BTN_THUMB) | BIT(BTN_TOP)
-							| BIT(BTN_PINKIE);
+		input_dev->evbit[0] |= BIT_MASK(EV_ABS) | BIT_MASK(EV_KEY) |
+			BIT_MASK(EV_REL);
+		input_dev->relbit[0] |= BIT_MASK(REL_X) | BIT_MASK(REL_Y);
+		input_dev->absbit[0] |= BIT_MASK(ABS_X) | BIT_MASK(ABS_Y) |
+			BIT_MASK(ABS_THROTTLE) | BIT_MASK(ABS_RUDDER) |
+			BIT_MASK(ABS_HAT0X) | BIT_MASK(ABS_HAT0Y) |
+			BIT_MASK(ABS_HAT1X) | BIT_MASK(ABS_HAT1Y);
+		input_dev->keybit[BIT_WORD(BTN_MOUSE)] |= BIT_MASK(BTN_RIGHT) |
+			BIT_MASK(BTN_LEFT) | BIT_MASK(BTN_MIDDLE) |
+			BIT_MASK(BTN_SIDE) | BIT_MASK(BTN_EXTRA);
+		input_dev->keybit[BIT_WORD(BTN_JOYSTICK)] |=
+			BIT_MASK(BTN_TRIGGER) | BIT_MASK(BTN_THUMB) |
+			BIT_MASK(BTN_TOP) | BIT_MASK(BTN_PINKIE);
 
 		a3d_read(a3d, data);
 
@@ -347,9 +353,10 @@ static int a3d_connect(struct gameport *gameport, struct gameport_driver *drv)
 	} else {
 		a3d->length = 29;
 
-		input_dev->evbit[0] |= BIT(EV_KEY) | BIT(EV_REL);
-		input_dev->relbit[0] |= BIT(REL_X) | BIT(REL_Y);
-		input_dev->keybit[LONG(BTN_MOUSE)] |= BIT(BTN_RIGHT) | BIT(BTN_LEFT) | BIT(BTN_MIDDLE);
+		input_dev->evbit[0] |= BIT_MASK(EV_KEY) | BIT_MASK(EV_REL);
+		input_dev->relbit[0] |= BIT_MASK(REL_X) | BIT_MASK(REL_Y);
+		input_dev->keybit[BIT_WORD(BTN_MOUSE)] |= BIT_MASK(BTN_RIGHT) |
+			BIT_MASK(BTN_LEFT) | BIT_MASK(BTN_MIDDLE);
 
 		a3d_read(a3d, data);
 

@@ -23,11 +23,13 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 {
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	unsigned int flags;
+	unsigned short rsv_window_size;
 
 	ext2_debug ("cmd = %u, arg = %lu\n", cmd, arg);
 
 	switch (cmd) {
 	case EXT2_IOC_GETFLAGS:
+		ext2_get_inode_flags(ei);
 		flags = ei->i_flags & EXT2_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT2_IOC_SETFLAGS: {
@@ -37,7 +39,7 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -47,6 +49,11 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			flags &= ~EXT2_DIRSYNC_FL;
 
 		mutex_lock(&inode->i_mutex);
+		/* Is it quota file? Do not allow user to mess with it */
+		if (IS_NOQUOTA(inode)) {
+			mutex_unlock(&inode->i_mutex);
+			return -EPERM;
+		}
 		oldflags = ei->i_flags;
 
 		/*
@@ -77,7 +84,7 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 	case EXT2_IOC_GETVERSION:
 		return put_user(inode->i_generation, (int __user *) arg);
 	case EXT2_IOC_SETVERSION:
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode) ||
 			(filp && MNT_IS_RDONLY(filp->f_vfsmnt)))
@@ -87,6 +94,50 @@ int ext2_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		inode->i_ctime = CURRENT_TIME_SEC;
 		mark_inode_dirty(inode);
 		return 0;
+	case EXT2_IOC_GETRSVSZ:
+		if (test_opt(inode->i_sb, RESERVATION)
+			&& S_ISREG(inode->i_mode)
+			&& ei->i_block_alloc_info) {
+			rsv_window_size = ei->i_block_alloc_info->rsv_window_node.rsv_goal_size;
+			return put_user(rsv_window_size, (int __user *)arg);
+		}
+		return -ENOTTY;
+	case EXT2_IOC_SETRSVSZ: {
+
+		if (!test_opt(inode->i_sb, RESERVATION) ||!S_ISREG(inode->i_mode))
+			return -ENOTTY;
+
+		if (IS_RDONLY(inode))
+			return -EROFS;
+
+		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+			return -EACCES;
+
+		if (get_user(rsv_window_size, (int __user *)arg))
+			return -EFAULT;
+
+		if (rsv_window_size > EXT2_MAX_RESERVE_BLOCKS)
+			rsv_window_size = EXT2_MAX_RESERVE_BLOCKS;
+
+		/*
+		 * need to allocate reservation structure for this inode
+		 * before set the window size
+		 */
+		/*
+		 * XXX What lock should protect the rsv_goal_size?
+		 * Accessed in ext2_get_block only.  ext3 uses i_truncate.
+		 */
+		mutex_lock(&ei->truncate_mutex);
+		if (!ei->i_block_alloc_info)
+			ext2_init_block_alloc_info(inode);
+
+		if (ei->i_block_alloc_info){
+			struct ext2_reserve_window_node *rsv = &ei->i_block_alloc_info->rsv_window_node;
+			rsv->rsv_goal_size = rsv_window_size;
+		}
+		mutex_unlock(&ei->truncate_mutex);
+		return 0;
+	}
 	default:
 		return -ENOTTY;
 	}

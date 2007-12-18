@@ -15,7 +15,7 @@
  *  Added kerneld support: Jacques Gelinas and Bjorn Ekwall
  *  Added change_root: Werner Almesberger & Hans Lermen, Feb '96
  *  Added options to /proc/mounts:
- *    Torbjörn Lindh (torbjorn.lindh@gopta.se), April 14, 1996.
+ *    TorbjÃ¶rn Lindh (torbjorn.lindh@gopta.se), April 14, 1996.
  *  Added devfs support: Richard Gooch <rgooch@atnf.csiro.au>, 13-JAN-1998
  *  Heavily rewritten for 'one fs - one tree' dcache architecture. AV, Mar 2000
  */
@@ -43,10 +43,6 @@
 #include <asm/uaccess.h>
 
 
-void get_filesystem(struct file_system_type *fs);
-void put_filesystem(struct file_system_type *fs);
-struct file_system_type *get_fs_type(const char *name);
-
 LIST_HEAD(super_blocks);
 DEFINE_SPINLOCK(sb_lock);
 
@@ -70,6 +66,7 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		}
 		INIT_LIST_HEAD(&s->s_dirty);
 		INIT_LIST_HEAD(&s->s_io);
+		INIT_LIST_HEAD(&s->s_more_io);
 		INIT_LIST_HEAD(&s->s_files);
 		INIT_LIST_HEAD(&s->s_instances);
 		INIT_HLIST_HEAD(&s->s_anon);
@@ -110,6 +107,7 @@ out:
 static inline void destroy_super(struct super_block *s)
 {
 	security_sb_free(s);
+	kfree(s->s_subtype);
 	kfree(s);
 }
 
@@ -337,21 +335,21 @@ struct super_block *sget(struct file_system_type *type,
 			void *data)
 {
 	struct super_block *s = NULL;
-	struct list_head *p;
+	struct super_block *old;
 	int err;
 
 retry:
 	spin_lock(&sb_lock);
-	if (test) list_for_each(p, &type->fs_supers) {
-		struct super_block *old;
-		old = list_entry(p, struct super_block, s_instances);
-		if (!test(old, data))
-			continue;
-		if (!grab_super(old))
-			goto retry;
-		if (s)
-			destroy_super(s);
-		return old;
+	if (test) {
+		list_for_each_entry(old, &type->fs_supers, s_instances) {
+			if (!test(old, data))
+				continue;
+			if (!grab_super(old))
+				goto retry;
+			if (s)
+				destroy_super(s);
+			return old;
+		}
 	}
 	if (!s) {
 		spin_unlock(&sb_lock);
@@ -422,7 +420,7 @@ restart:
 }
 
 /*
- * Call the ->sync_fs super_op against all filesytems which are r/w and
+ * Call the ->sync_fs super_op against all filesystems which are r/w and
  * which implement it.
  *
  * This operation is careful to avoid the livelock which could easily happen
@@ -430,7 +428,7 @@ restart:
  * is used only here.  We set it against all filesystems and then clear it as
  * we sync them.  So redirtied filesystems are skipped.
  *
- * But if process A is currently running sync_filesytems and then process B
+ * But if process A is currently running sync_filesystems and then process B
  * calls sync_filesystems as well, process B will set all the s_need_sync_fs
  * flags again, which will cause process A to resync everything.  Fix that with
  * a local mutex.
@@ -728,16 +726,6 @@ static int test_bdev_super(struct super_block *s, void *data)
 	return (void *)s->s_bdev == data;
 }
 
-static void bdev_uevent(struct block_device *bdev, enum kobject_action action)
-{
-	if (bdev->bd_disk) {
-		if (bdev->bd_part)
-			kobject_uevent(&bdev->bd_part->kobj, action);
-		else
-			kobject_uevent(&bdev->bd_disk->kobj, action);
-	}
-}
-
 int get_sb_bdev(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data,
 	int (*fill_super)(struct super_block *, void *, int),
@@ -785,7 +773,6 @@ int get_sb_bdev(struct file_system_type *fs_type,
 		}
 
 		s->s_flags |= MS_ACTIVE;
-		bdev_uevent(bdev, KOBJ_MOUNT);
 	}
 
 	return simple_set_mnt(mnt, s);
@@ -804,7 +791,6 @@ void kill_block_super(struct super_block *sb)
 {
 	struct block_device *bdev = sb->s_bdev;
 
-	bdev_uevent(bdev, KOBJ_UMOUNT);
 	generic_shutdown_super(sb);
 	sync_blockdev(bdev);
 	close_bdev_excl(bdev);
@@ -881,6 +867,11 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (!type)
 		return ERR_PTR(-ENODEV);
 
+	error = -EPERM;
+	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
+		!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT))
+		goto out;
+
 	error = -ENOMEM;
 	mnt = alloc_vfsmnt(name);
 	if (!mnt)
@@ -899,6 +890,7 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	error = type->get_sb(type, flags, name, data, mnt);
 	if (error < 0)
 		goto out_free_secdata;
+	BUG_ON(!mnt->mnt_sb);
 
 	sb = mnt->mnt_sb;
 	error = -EPERM;
@@ -930,29 +922,47 @@ out:
 
 EXPORT_SYMBOL_GPL(vfs_kern_mount);
 
+static struct vfsmount *fs_set_subtype(struct vfsmount *mnt, const char *fstype)
+{
+	int err;
+	const char *subtype = strchr(fstype, '.');
+	if (subtype) {
+		subtype++;
+		err = -EINVAL;
+		if (!subtype[0])
+			goto err;
+	} else
+		subtype = "";
+
+	mnt->mnt_sb->s_subtype = kstrdup(subtype, GFP_KERNEL);
+	err = -ENOMEM;
+	if (!mnt->mnt_sb->s_subtype)
+		goto err;
+	return mnt;
+
+ err:
+	mntput(mnt);
+	return ERR_PTR(err);
+}
+
 struct vfsmount *
 do_kern_mount(const char *fstype, int flags, const char *name, void *data)
 {
 	struct file_system_type *type = get_fs_type(fstype);
 	struct vfsmount *mnt;
-
 	if (!type)
 		return ERR_PTR(-ENODEV);
-
-	mnt = ERR_PTR(-EPERM);
-	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
-		!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT))
-		goto out_put;
-
 	mnt = vfs_kern_mount(type, flags, name, data);
-out_put:
+	if (!IS_ERR(mnt) && (type->fs_flags & FS_HAS_SUBTYPE) &&
+	    !mnt->mnt_sb->s_subtype)
+		mnt = fs_set_subtype(mnt, fstype);
 	put_filesystem(type);
 	return mnt;
 }
 
-struct vfsmount *kern_mount(struct file_system_type *type)
+struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 {
-	return vfs_kern_mount(type, 0, type->name, NULL);
+	return vfs_kern_mount(type, MS_KERNMOUNT, type->name, data);
 }
 
-EXPORT_SYMBOL(kern_mount);
+EXPORT_SYMBOL_GPL(kern_mount_data);

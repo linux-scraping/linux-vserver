@@ -10,10 +10,9 @@
  * (at your option) any later version.
  */
 
-#include <linux/pm.h>
+#include <linux/suspend.h>
 #include <linux/sched.h>
 #include <linux/proc_fs.h>
-#include <linux/pm.h>
 #include <linux/interrupt.h>
 #include <linux/sysfs.h>
 #include <linux/module.h>
@@ -53,7 +52,7 @@ static suspend_state_t target_state;
 /*
  * Called after processes are frozen, but before we shutdown devices.
  */
-static int at91_pm_prepare(suspend_state_t state)
+static int at91_pm_set_target(suspend_state_t state)
 {
 	target_state = state;
 	return 0;
@@ -76,12 +75,11 @@ static int at91_pm_verify_clocks(void)
 			pr_debug("AT91: PM - Suspend-to-RAM with USB still active\n");
 			return 0;
 		}
-	} else if (cpu_is_at91sam9260()) {
-#warning "Check SAM9260 USB clocks"
-	} else if (cpu_is_at91sam9261()) {
-#warning "Check SAM9261 USB clocks"
-	} else if (cpu_is_at91sam9263()) {
-#warning "Check SAM9263 USB clocks"
+	} else if (cpu_is_at91sam9260() || cpu_is_at91sam9261() || cpu_is_at91sam9263()) {
+		if ((scsr & (AT91SAM926x_PMC_UHP | AT91SAM926x_PMC_UDP)) != 0) {
+			pr_debug("AT91: PM - Suspend-to-RAM with USB still active\n");
+			return 0;
+		}
 	}
 
 #ifdef CONFIG_AT91_PROGRAMMABLE_CLOCKS
@@ -200,10 +198,9 @@ error:
 }
 
 
-static struct pm_ops at91_pm_ops ={
-	.pm_disk_mode	= 0,
+static struct platform_suspend_ops at91_pm_ops ={
 	.valid		= at91_pm_valid_state,
-	.prepare	= at91_pm_prepare,
+	.set_target	= at91_pm_set_target,
 	.enter		= at91_pm_enter,
 };
 
@@ -222,7 +219,7 @@ static int __init at91_pm_init(void)
 	/* Disable SDRAM low-power mode.  Cannot be used with self-refresh. */
 	at91_sys_write(AT91_SDRAMC_LPR, 0);
 
-	pm_set_ops(&at91_pm_ops);
+	suspend_set_ops(&at91_pm_ops);
 
 	return 0;
 }

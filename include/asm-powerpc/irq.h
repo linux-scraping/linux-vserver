@@ -124,6 +124,9 @@ struct irq_host {
 	struct irq_host_ops	*ops;
 	void			*host_data;
 	irq_hw_number_t		inval_irq;
+
+	/* Optional device node pointer */
+	struct device_node	*of_node;
 };
 
 /* The main irq map itself is an array of NR_IRQ entries containing the
@@ -138,14 +141,11 @@ struct irq_map_entry {
 
 extern struct irq_map_entry irq_map[NR_IRQS];
 
-static inline irq_hw_number_t virq_to_hw(unsigned int virq)
-{
-	return irq_map[virq].hwirq;
-}
+extern irq_hw_number_t virq_to_hw(unsigned int virq);
 
 /**
  * irq_alloc_host - Allocate a new irq_host data structure
- * @node: device-tree node of the interrupt controller
+ * @of_node: optional device-tree node of the interrupt controller
  * @revmap_type: type of reverse mapping to use
  * @revmap_arg: for IRQ_HOST_MAP_LINEAR linear only: size of the map
  * @ops: map/unmap host callbacks
@@ -159,7 +159,8 @@ static inline irq_hw_number_t virq_to_hw(unsigned int virq)
  * later during boot automatically (the reverse mapping will use the slow path
  * until that happens).
  */
-extern struct irq_host *irq_alloc_host(unsigned int revmap_type,
+extern struct irq_host *irq_alloc_host(struct device_node *of_node,
+				       unsigned int revmap_type,
 				       unsigned int revmap_arg,
 				       struct irq_host_ops *ops,
 				       irq_hw_number_t inval_irq);
@@ -226,6 +227,15 @@ extern void irq_dispose_mapping(unsigned int virq);
 extern unsigned int irq_find_mapping(struct irq_host *host,
 				     irq_hw_number_t hwirq);
 
+/**
+ * irq_create_direct_mapping - Allocate a virq for direct mapping
+ * @host: host to allocate the virq for or NULL for default host
+ *
+ * This routine is used for irq controllers which can choose the hardware
+ * interrupt numbers they generate. In such a case it's simplest to use
+ * the linux virq as the hardware interrupt number.
+ */
+extern unsigned int irq_create_direct_mapping(struct irq_host *host);
 
 /**
  * irq_radix_revmap - Find a linux virq from a hw irq number.

@@ -5,14 +5,13 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * ipt_ECN.c,v 1.5 2002/08/18 19:36:51 laforge Exp
 */
 
 #include <linux/in.h>
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/ip.h>
+#include <net/ip.h>
 #include <linux/tcp.h>
 #include <net/checksum.h>
 
@@ -25,47 +24,46 @@ MODULE_AUTHOR("Harald Welte <laforge@netfilter.org>");
 MODULE_DESCRIPTION("iptables ECN modification module");
 
 /* set ECT codepoint from IP header.
- * 	return 0 if there was an error. */
-static inline int
-set_ect_ip(struct sk_buff **pskb, const struct ipt_ECN_info *einfo)
+ * 	return false if there was an error. */
+static inline bool
+set_ect_ip(struct sk_buff *skb, const struct ipt_ECN_info *einfo)
 {
-	struct iphdr *iph = (*pskb)->nh.iph;
+	struct iphdr *iph = ip_hdr(skb);
 
 	if ((iph->tos & IPT_ECN_IP_MASK) != (einfo->ip_ect & IPT_ECN_IP_MASK)) {
 		__u8 oldtos;
-		if (!skb_make_writable(pskb, sizeof(struct iphdr)))
-			return 0;
-		iph = (*pskb)->nh.iph;
+		if (!skb_make_writable(skb, sizeof(struct iphdr)))
+			return false;
+		iph = ip_hdr(skb);
 		oldtos = iph->tos;
 		iph->tos &= ~IPT_ECN_IP_MASK;
 		iph->tos |= (einfo->ip_ect & IPT_ECN_IP_MASK);
 		nf_csum_replace2(&iph->check, htons(oldtos), htons(iph->tos));
 	}
-	return 1;
+	return true;
 }
 
-/* Return 0 if there was an error. */
-static inline int
-set_ect_tcp(struct sk_buff **pskb, const struct ipt_ECN_info *einfo)
+/* Return false if there was an error. */
+static inline bool
+set_ect_tcp(struct sk_buff *skb, const struct ipt_ECN_info *einfo)
 {
 	struct tcphdr _tcph, *tcph;
 	__be16 oldval;
 
 	/* Not enought header? */
-	tcph = skb_header_pointer(*pskb, (*pskb)->nh.iph->ihl*4,
-				  sizeof(_tcph), &_tcph);
+	tcph = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_tcph), &_tcph);
 	if (!tcph)
-		return 0;
+		return false;
 
 	if ((!(einfo->operation & IPT_ECN_OP_SET_ECE) ||
 	     tcph->ece == einfo->proto.tcp.ece) &&
-	    ((!(einfo->operation & IPT_ECN_OP_SET_CWR) ||
-	     tcph->cwr == einfo->proto.tcp.cwr)))
-		return 1;
+	    (!(einfo->operation & IPT_ECN_OP_SET_CWR) ||
+	     tcph->cwr == einfo->proto.tcp.cwr))
+		return true;
 
-	if (!skb_make_writable(pskb, (*pskb)->nh.iph->ihl*4+sizeof(*tcph)))
-		return 0;
-	tcph = (void *)(*pskb)->nh.iph + (*pskb)->nh.iph->ihl*4;
+	if (!skb_make_writable(skb, ip_hdrlen(skb) + sizeof(*tcph)))
+		return false;
+	tcph = (void *)ip_hdr(skb) + ip_hdrlen(skb);
 
 	oldval = ((__be16 *)tcph)[6];
 	if (einfo->operation & IPT_ECN_OP_SET_ECE)
@@ -73,13 +71,13 @@ set_ect_tcp(struct sk_buff **pskb, const struct ipt_ECN_info *einfo)
 	if (einfo->operation & IPT_ECN_OP_SET_CWR)
 		tcph->cwr = einfo->proto.tcp.cwr;
 
-	nf_proto_csum_replace2(&tcph->check, *pskb,
+	nf_proto_csum_replace2(&tcph->check, skb,
 				oldval, ((__be16 *)tcph)[6], 0);
-	return 1;
+	return true;
 }
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
@@ -89,18 +87,18 @@ target(struct sk_buff **pskb,
 	const struct ipt_ECN_info *einfo = targinfo;
 
 	if (einfo->operation & IPT_ECN_OP_SET_IP)
-		if (!set_ect_ip(pskb, einfo))
+		if (!set_ect_ip(skb, einfo))
 			return NF_DROP;
 
 	if (einfo->operation & (IPT_ECN_OP_SET_ECE | IPT_ECN_OP_SET_CWR)
-	    && (*pskb)->nh.iph->protocol == IPPROTO_TCP)
-		if (!set_ect_tcp(pskb, einfo))
+	    && ip_hdr(skb)->protocol == IPPROTO_TCP)
+		if (!set_ect_tcp(skb, einfo))
 			return NF_DROP;
 
 	return XT_CONTINUE;
 }
 
-static int
+static bool
 checkentry(const char *tablename,
 	   const void *e_void,
 	   const struct xt_target *target,
@@ -113,23 +111,23 @@ checkentry(const char *tablename,
 	if (einfo->operation & IPT_ECN_OP_MASK) {
 		printk(KERN_WARNING "ECN: unsupported ECN operation %x\n",
 			einfo->operation);
-		return 0;
+		return false;
 	}
 	if (einfo->ip_ect & ~IPT_ECN_IP_MASK) {
 		printk(KERN_WARNING "ECN: new ECT codepoint %x out of mask\n",
 			einfo->ip_ect);
-		return 0;
+		return false;
 	}
 	if ((einfo->operation & (IPT_ECN_OP_SET_ECE|IPT_ECN_OP_SET_CWR))
 	    && (e->ip.proto != IPPROTO_TCP || (e->ip.invflags & XT_INV_PROTO))) {
 		printk(KERN_WARNING "ECN: cannot use TCP operations on a "
 		       "non-tcp rule\n");
-		return 0;
+		return false;
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target ipt_ecn_reg = {
+static struct xt_target ipt_ecn_reg __read_mostly = {
 	.name		= "ECN",
 	.family		= AF_INET,
 	.target		= target,

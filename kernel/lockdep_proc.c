@@ -5,7 +5,8 @@
  *
  * Started by Ingo Molnar:
  *
- *  Copyright (C) 2006 Red Hat, Inc., Ingo Molnar <mingo@redhat.com>
+ *  Copyright (C) 2006,2007 Red Hat, Inc., Ingo Molnar <mingo@redhat.com>
+ *  Copyright (C) 2007 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
  *
  * Code for /proc/lockdep and /proc/lockdep_stats:
  *
@@ -15,33 +16,47 @@
 #include <linux/seq_file.h>
 #include <linux/kallsyms.h>
 #include <linux/debug_locks.h>
+#include <linux/vmalloc.h>
+#include <linux/sort.h>
+#include <asm/uaccess.h>
+#include <asm/div64.h>
 
 #include "lockdep_internals.h"
 
 static void *l_next(struct seq_file *m, void *v, loff_t *pos)
 {
-	struct lock_class *class = v;
+	struct lock_class *class;
 
 	(*pos)++;
 
-	if (class->lock_entry.next != &all_lock_classes)
-		class = list_entry(class->lock_entry.next, struct lock_class,
-				  lock_entry);
-	else
-		class = NULL;
-	m->private = class;
+	if (v == SEQ_START_TOKEN)
+		class = m->private;
+	else {
+		class = v;
+
+		if (class->lock_entry.next != &all_lock_classes)
+			class = list_entry(class->lock_entry.next,
+					   struct lock_class, lock_entry);
+		else
+			class = NULL;
+	}
 
 	return class;
 }
 
 static void *l_start(struct seq_file *m, loff_t *pos)
 {
-	struct lock_class *class = m->private;
+	struct lock_class *class;
+	loff_t i = 0;
 
-	if (&class->lock_entry == all_lock_classes.next)
-		seq_printf(m, "all lock classes:\n");
+	if (*pos == 0)
+		return SEQ_START_TOKEN;
 
-	return class;
+	list_for_each_entry(class, &all_lock_classes, lock_entry) {
+		if (++i == *pos)
+		return class;
+	}
+	return NULL;
 }
 
 static void l_stop(struct seq_file *m, void *v)
@@ -96,9 +111,14 @@ static void print_name(struct seq_file *m, struct lock_class *class)
 static int l_show(struct seq_file *m, void *v)
 {
 	unsigned long nr_forward_deps, nr_backward_deps;
-	struct lock_class *class = m->private;
+	struct lock_class *class = v;
 	struct lock_list *entry;
 	char c1, c2, c3, c4;
+
+	if (v == SEQ_START_TOKEN) {
+		seq_printf(m, "all lock classes:\n");
+		return 0;
+	}
 
 	seq_printf(m, "%p", class->key);
 #ifdef CONFIG_DEBUG_LOCKDEP
@@ -271,8 +291,10 @@ static int lockdep_stats_show(struct seq_file *m, void *v)
 	if (nr_list_entries)
 		factor = sum_forward_deps / nr_list_entries;
 
+#ifdef CONFIG_PROVE_LOCKING
 	seq_printf(m, " dependency chains:             %11lu [max: %lu]\n",
 			nr_lock_chains, MAX_LOCKDEP_CHAINS);
+#endif
 
 #ifdef CONFIG_TRACE_IRQFLAGS
 	seq_printf(m, " in-hardirq chains:             %11u\n",
@@ -339,8 +361,302 @@ static const struct file_operations proc_lockdep_stats_operations = {
 	.open		= lockdep_stats_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
-	.release	= seq_release,
+	.release	= single_release,
 };
+
+#ifdef CONFIG_LOCK_STAT
+
+struct lock_stat_data {
+	struct lock_class *class;
+	struct lock_class_stats stats;
+};
+
+struct lock_stat_seq {
+	struct lock_stat_data *iter;
+	struct lock_stat_data *iter_end;
+	struct lock_stat_data stats[MAX_LOCKDEP_KEYS];
+};
+
+/*
+ * sort on absolute number of contentions
+ */
+static int lock_stat_cmp(const void *l, const void *r)
+{
+	const struct lock_stat_data *dl = l, *dr = r;
+	unsigned long nl, nr;
+
+	nl = dl->stats.read_waittime.nr + dl->stats.write_waittime.nr;
+	nr = dr->stats.read_waittime.nr + dr->stats.write_waittime.nr;
+
+	return nr - nl;
+}
+
+static void seq_line(struct seq_file *m, char c, int offset, int length)
+{
+	int i;
+
+	for (i = 0; i < offset; i++)
+		seq_puts(m, " ");
+	for (i = 0; i < length; i++)
+		seq_printf(m, "%c", c);
+	seq_puts(m, "\n");
+}
+
+static void snprint_time(char *buf, size_t bufsiz, s64 nr)
+{
+	unsigned long rem;
+
+	rem = do_div(nr, 1000); /* XXX: do_div_signed */
+	snprintf(buf, bufsiz, "%lld.%02d", (long long)nr, ((int)rem+5)/10);
+}
+
+static void seq_time(struct seq_file *m, s64 time)
+{
+	char num[15];
+
+	snprint_time(num, sizeof(num), time);
+	seq_printf(m, " %14s", num);
+}
+
+static void seq_lock_time(struct seq_file *m, struct lock_time *lt)
+{
+	seq_printf(m, "%14lu", lt->nr);
+	seq_time(m, lt->min);
+	seq_time(m, lt->max);
+	seq_time(m, lt->total);
+}
+
+static void seq_stats(struct seq_file *m, struct lock_stat_data *data)
+{
+	char name[39];
+	struct lock_class *class;
+	struct lock_class_stats *stats;
+	int i, namelen;
+
+	class = data->class;
+	stats = &data->stats;
+
+	namelen = 38;
+	if (class->name_version > 1)
+		namelen -= 2; /* XXX truncates versions > 9 */
+	if (class->subclass)
+		namelen -= 2;
+
+	if (!class->name) {
+		char str[KSYM_NAME_LEN];
+		const char *key_name;
+
+		key_name = __get_key_name(class->key, str);
+		snprintf(name, namelen, "%s", key_name);
+	} else {
+		snprintf(name, namelen, "%s", class->name);
+	}
+	namelen = strlen(name);
+	if (class->name_version > 1) {
+		snprintf(name+namelen, 3, "#%d", class->name_version);
+		namelen += 2;
+	}
+	if (class->subclass) {
+		snprintf(name+namelen, 3, "/%d", class->subclass);
+		namelen += 2;
+	}
+
+	if (stats->write_holdtime.nr) {
+		if (stats->read_holdtime.nr)
+			seq_printf(m, "%38s-W:", name);
+		else
+			seq_printf(m, "%40s:", name);
+
+		seq_printf(m, "%14lu ", stats->bounces[bounce_contended_write]);
+		seq_lock_time(m, &stats->write_waittime);
+		seq_printf(m, " %14lu ", stats->bounces[bounce_acquired_write]);
+		seq_lock_time(m, &stats->write_holdtime);
+		seq_puts(m, "\n");
+	}
+
+	if (stats->read_holdtime.nr) {
+		seq_printf(m, "%38s-R:", name);
+		seq_printf(m, "%14lu ", stats->bounces[bounce_contended_read]);
+		seq_lock_time(m, &stats->read_waittime);
+		seq_printf(m, " %14lu ", stats->bounces[bounce_acquired_read]);
+		seq_lock_time(m, &stats->read_holdtime);
+		seq_puts(m, "\n");
+	}
+
+	if (stats->read_waittime.nr + stats->write_waittime.nr == 0)
+		return;
+
+	if (stats->read_holdtime.nr)
+		namelen += 2;
+
+	for (i = 0; i < ARRAY_SIZE(class->contention_point); i++) {
+		char sym[KSYM_SYMBOL_LEN];
+		char ip[32];
+
+		if (class->contention_point[i] == 0)
+			break;
+
+		if (!i)
+			seq_line(m, '-', 40-namelen, namelen);
+
+		sprint_symbol(sym, class->contention_point[i]);
+		snprintf(ip, sizeof(ip), "[<%p>]",
+				(void *)class->contention_point[i]);
+		seq_printf(m, "%40s %14lu %29s %s\n", name,
+				stats->contention_point[i],
+				ip, sym);
+	}
+	if (i) {
+		seq_puts(m, "\n");
+		seq_line(m, '.', 0, 40 + 1 + 10 * (14 + 1));
+		seq_puts(m, "\n");
+	}
+}
+
+static void seq_header(struct seq_file *m)
+{
+	seq_printf(m, "lock_stat version 0.2\n");
+	seq_line(m, '-', 0, 40 + 1 + 10 * (14 + 1));
+	seq_printf(m, "%40s %14s %14s %14s %14s %14s %14s %14s %14s "
+			"%14s %14s\n",
+			"class name",
+			"con-bounces",
+			"contentions",
+			"waittime-min",
+			"waittime-max",
+			"waittime-total",
+			"acq-bounces",
+			"acquisitions",
+			"holdtime-min",
+			"holdtime-max",
+			"holdtime-total");
+	seq_line(m, '-', 0, 40 + 1 + 10 * (14 + 1));
+	seq_printf(m, "\n");
+}
+
+static void *ls_start(struct seq_file *m, loff_t *pos)
+{
+	struct lock_stat_seq *data = m->private;
+
+	if (*pos == 0)
+		return SEQ_START_TOKEN;
+
+	data->iter = data->stats + *pos;
+	if (data->iter >= data->iter_end)
+		data->iter = NULL;
+
+	return data->iter;
+}
+
+static void *ls_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	struct lock_stat_seq *data = m->private;
+
+	(*pos)++;
+
+	if (v == SEQ_START_TOKEN)
+		data->iter = data->stats;
+	else {
+		data->iter = v;
+		data->iter++;
+	}
+
+	if (data->iter == data->iter_end)
+		data->iter = NULL;
+
+	return data->iter;
+}
+
+static void ls_stop(struct seq_file *m, void *v)
+{
+}
+
+static int ls_show(struct seq_file *m, void *v)
+{
+	if (v == SEQ_START_TOKEN)
+		seq_header(m);
+	else
+		seq_stats(m, v);
+
+	return 0;
+}
+
+static struct seq_operations lockstat_ops = {
+	.start	= ls_start,
+	.next	= ls_next,
+	.stop	= ls_stop,
+	.show	= ls_show,
+};
+
+static int lock_stat_open(struct inode *inode, struct file *file)
+{
+	int res;
+	struct lock_class *class;
+	struct lock_stat_seq *data = vmalloc(sizeof(struct lock_stat_seq));
+
+	if (!data)
+		return -ENOMEM;
+
+	res = seq_open(file, &lockstat_ops);
+	if (!res) {
+		struct lock_stat_data *iter = data->stats;
+		struct seq_file *m = file->private_data;
+
+		data->iter = iter;
+		list_for_each_entry(class, &all_lock_classes, lock_entry) {
+			iter->class = class;
+			iter->stats = lock_stats(class);
+			iter++;
+		}
+		data->iter_end = iter;
+
+		sort(data->stats, data->iter_end - data->iter,
+				sizeof(struct lock_stat_data),
+				lock_stat_cmp, NULL);
+
+		m->private = data;
+	} else
+		vfree(data);
+
+	return res;
+}
+
+static ssize_t lock_stat_write(struct file *file, const char __user *buf,
+			       size_t count, loff_t *ppos)
+{
+	struct lock_class *class;
+	char c;
+
+	if (count) {
+		if (get_user(c, buf))
+			return -EFAULT;
+
+		if (c != '0')
+			return count;
+
+		list_for_each_entry(class, &all_lock_classes, lock_entry)
+			clear_lock_stats(class);
+	}
+	return count;
+}
+
+static int lock_stat_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq = file->private_data;
+
+	vfree(seq->private);
+	seq->private = NULL;
+	return seq_release(inode, file);
+}
+
+static const struct file_operations proc_lock_stat_operations = {
+	.open		= lock_stat_open,
+	.write		= lock_stat_write,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= lock_stat_release,
+};
+#endif /* CONFIG_LOCK_STAT */
 
 static int __init lockdep_proc_init(void)
 {
@@ -353,6 +669,12 @@ static int __init lockdep_proc_init(void)
 	entry = create_proc_entry("lockdep_stats", S_IRUSR, NULL);
 	if (entry)
 		entry->proc_fops = &proc_lockdep_stats_operations;
+
+#ifdef CONFIG_LOCK_STAT
+	entry = create_proc_entry("lock_stat", S_IRUSR, NULL);
+	if (entry)
+		entry->proc_fops = &proc_lock_stat_operations;
+#endif
 
 	return 0;
 }

@@ -38,15 +38,8 @@ static inline void gpio_free(unsigned gpio)
 	return;
 }
 
-static inline int gpio_direction_input(unsigned gpio)
-{
-	return pxa_gpio_mode(gpio | GPIO_IN);
-}
-
-static inline int gpio_direction_output(unsigned gpio, int value)
-{
-	return pxa_gpio_mode(gpio | GPIO_OUT | (value ? 0 : GPIO_DFLT_LOW));
-}
+extern int gpio_direction_input(unsigned gpio);
+extern int gpio_direction_output(unsigned gpio, int value);
 
 static inline int __gpio_get_value(unsigned gpio)
 {

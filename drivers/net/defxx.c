@@ -200,6 +200,7 @@
 
 /* Include files */
 #include <linux/bitops.h>
+#include <linux/compiler.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/eisa.h>
@@ -239,8 +240,6 @@ static char version[] __devinitdata =
  * alignment for compatibility with old EISA boards.
  */
 #define NEW_SKB_SIZE (PI_RCV_DATA_K_SIZE_MAX+128)
-
-#define __unused __attribute__ ((unused))
 
 #ifdef CONFIG_PCI
 #define DFX_BUS_PCI(dev) (dev->bus == &pci_bus_type)
@@ -375,7 +374,7 @@ static inline void dfx_outl(DFX_board_t *bp, int offset, u32 data)
 
 static void dfx_port_write_long(DFX_board_t *bp, int offset, u32 data)
 {
-	struct device __unused *bdev = bp->bus_dev;
+	struct device __maybe_unused *bdev = bp->bus_dev;
 	int dfx_bus_tc = DFX_BUS_TC(bdev);
 	int dfx_use_mmio = DFX_MMIO || dfx_bus_tc;
 
@@ -399,7 +398,7 @@ static inline void dfx_inl(DFX_board_t *bp, int offset, u32 *data)
 
 static void dfx_port_read_long(DFX_board_t *bp, int offset, u32 *data)
 {
-	struct device __unused *bdev = bp->bus_dev;
+	struct device __maybe_unused *bdev = bp->bus_dev;
 	int dfx_bus_tc = DFX_BUS_TC(bdev);
 	int dfx_use_mmio = DFX_MMIO || dfx_bus_tc;
 
@@ -540,7 +539,6 @@ static int __devinit dfx_register(struct device *bdev)
 		goto err_out;
 	}
 
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, bdev);
 
 	bp = netdev_priv(dev);
@@ -566,6 +564,7 @@ static int __devinit dfx_register(struct device *bdev)
 		bp->base.mem = ioremap_nocache(bar_start, bar_len);
 		if (!bp->base.mem) {
 			printk(KERN_ERR "%s: Cannot map MMIO\n", print_name);
+			err = -ENOMEM;
 			goto err_out_region;
 		}
 	} else {
@@ -806,7 +805,7 @@ static void __devinit dfx_bus_init(struct net_device *dev)
  *   Interrupts are disabled at the adapter bus-specific logic.
  */
 
-static void __devinit dfx_bus_uninit(struct net_device *dev)
+static void __devexit dfx_bus_uninit(struct net_device *dev)
 {
 	DFX_board_t *bp = netdev_priv(dev);
 	struct device *bdev = bp->bus_dev;
@@ -865,7 +864,7 @@ static void __devinit dfx_bus_uninit(struct net_device *dev)
 
 static void __devinit dfx_bus_config_check(DFX_board_t *bp)
 {
-	struct device __unused *bdev = bp->bus_dev;
+	struct device __maybe_unused *bdev = bp->bus_dev;
 	int dfx_bus_eisa = DFX_BUS_EISA(bdev);
 	int	status;				/* return code from adapter port control call */
 	u32	host_data;			/* LW data returned from port control call */
@@ -3091,13 +3090,13 @@ static void dfx_rcv_queue_process(
 					{
 						/* Receive buffer allocated, pass receive packet up */
 
-						memcpy(skb->data, p_buff + RCV_BUFF_K_PADDING, pkt_len+3);
+						skb_copy_to_linear_data(skb,
+							       p_buff + RCV_BUFF_K_PADDING,
+							       pkt_len + 3);
 					}
 
 					skb_reserve(skb,3);		/* adjust data field so that it points to FC byte */
 					skb_put(skb, pkt_len);		/* pass up packet length, NOT including CRC */
-					skb->dev = bp->dev;		/* pass up device pointer */
-
 					skb->protocol = fddi_type_trans(skb, bp->dev);
 					bp->rcv_total_bytes += skb->len;
 					netif_rx(skb);
@@ -3623,8 +3622,8 @@ static void __devexit dfx_unregister(struct device *bdev)
 }
 
 
-static int __devinit __unused dfx_dev_register(struct device *);
-static int __devexit __unused dfx_dev_unregister(struct device *);
+static int __devinit __maybe_unused dfx_dev_register(struct device *);
+static int __devexit __maybe_unused dfx_dev_unregister(struct device *);
 
 #ifdef CONFIG_PCI
 static int __devinit dfx_pci_register(struct pci_dev *,
@@ -3698,7 +3697,7 @@ static struct tc_driver dfx_tc_driver = {
 };
 #endif /* CONFIG_TC */
 
-static int __devinit __unused dfx_dev_register(struct device *dev)
+static int __devinit __maybe_unused dfx_dev_register(struct device *dev)
 {
 	int status;
 
@@ -3708,7 +3707,7 @@ static int __devinit __unused dfx_dev_register(struct device *dev)
 	return status;
 }
 
-static int __devexit __unused dfx_dev_unregister(struct device *dev)
+static int __devexit __maybe_unused dfx_dev_unregister(struct device *dev)
 {
 	put_device(dev);
 	dfx_unregister(dev);

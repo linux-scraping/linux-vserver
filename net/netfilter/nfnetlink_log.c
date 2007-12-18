@@ -10,11 +10,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 2006-01-26 Harald Welte <laforge@netfilter.org>
- * 	- Add optional local and global sequence number to detect lost
- * 	  events from userspace
- *
  */
 #include <linux/module.h>
 #include <linux/skbuff.h>
@@ -42,8 +37,9 @@
 #endif
 
 #define NFULNL_NLBUFSIZ_DEFAULT	NLMSG_GOODSIZE
-#define NFULNL_TIMEOUT_DEFAULT 	100	/* every second */
+#define NFULNL_TIMEOUT_DEFAULT 	HZ	/* every second */
 #define NFULNL_QTHRESH_DEFAULT 	100	/* 100 packets */
+#define NFULNL_COPY_RANGE_MAX	0xFFFF	/* max packet size is limited by 16-bit struct nfattr nfa_len field */
 
 #define PRINTR(x, args...)	do { if (net_ratelimit()) \
 				     printk(x, ## args); } while (0);
@@ -63,7 +59,6 @@ struct nfulnl_instance {
 
 	unsigned int qlen;		/* number of nlmsgs in skb */
 	struct sk_buff *skb;		/* pre-allocatd skb */
-	struct nlmsghdr *lastnlh;	/* netlink header of last msg in skb */
 	struct timer_list timer;
 	int peer_pid;			/* PID of the peer process */
 
@@ -158,15 +153,17 @@ instance_create(u_int16_t group_num, int pid)
 	if (!inst)
 		goto out_unlock;
 
+	if (!try_module_get(THIS_MODULE)) {
+		kfree(inst);
+		goto out_unlock;
+	}
+
 	INIT_HLIST_NODE(&inst->hlist);
 	spin_lock_init(&inst->lock);
 	/* needs to be two, since we _put() after creation */
 	atomic_set(&inst->use, 2);
 
-	init_timer(&inst->timer);
-	inst->timer.function = nfulnl_timer;
-	inst->timer.data = (unsigned long)inst;
-	/* don't start timer yet. (re)start it  with every packet */
+	setup_timer(&inst->timer, nfulnl_timer, (unsigned long)inst);
 
 	inst->peer_pid = pid;
 	inst->group_num = group_num;
@@ -175,10 +172,7 @@ instance_create(u_int16_t group_num, int pid)
 	inst->flushtimeout 	= NFULNL_TIMEOUT_DEFAULT;
 	inst->nlbufsiz 		= NFULNL_NLBUFSIZ_DEFAULT;
 	inst->copy_mode 	= NFULNL_COPY_PACKET;
-	inst->copy_range 	= 0xffff;
-
-	if (!try_module_get(THIS_MODULE))
-		goto out_free;
+	inst->copy_range 	= NFULNL_COPY_RANGE_MAX;
 
 	hlist_add_head(&inst->hlist,
 		       &instance_table[instance_hashfn(group_num)]);
@@ -190,44 +184,27 @@ instance_create(u_int16_t group_num, int pid)
 
 	return inst;
 
-out_free:
-	instance_put(inst);
 out_unlock:
 	write_unlock_bh(&instances_lock);
 	return NULL;
 }
 
-static int __nfulnl_send(struct nfulnl_instance *inst);
+static void __nfulnl_flush(struct nfulnl_instance *inst);
 
 static void
-_instance_destroy2(struct nfulnl_instance *inst, int lock)
+__instance_destroy(struct nfulnl_instance *inst)
 {
 	/* first pull it out of the global list */
-	if (lock)
-		write_lock_bh(&instances_lock);
-
 	UDEBUG("removing instance %p (queuenum=%u) from hash\n",
 		inst, inst->group_num);
 
 	hlist_del(&inst->hlist);
 
-	if (lock)
-		write_unlock_bh(&instances_lock);
-
 	/* then flush all pending packets from skb */
 
 	spin_lock_bh(&inst->lock);
-	if (inst->skb) {
-		/* timer "holds" one reference (we have one more) */
-		if (del_timer(&inst->timer))
-			instance_put(inst);
-		if (inst->qlen)
-			__nfulnl_send(inst);
-		if (inst->skb) {
-			kfree_skb(inst->skb);
-			inst->skb = NULL;
-		}
-	}
+	if (inst->skb)
+		__nfulnl_flush(inst);
 	spin_unlock_bh(&inst->lock);
 
 	/* and finally put the refcount */
@@ -235,15 +212,11 @@ _instance_destroy2(struct nfulnl_instance *inst, int lock)
 }
 
 static inline void
-__instance_destroy(struct nfulnl_instance *inst)
-{
-	_instance_destroy2(inst, 0);
-}
-
-static inline void
 instance_destroy(struct nfulnl_instance *inst)
 {
-	_instance_destroy2(inst, 1);
+	write_lock_bh(&instances_lock);
+	__instance_destroy(inst);
+	write_unlock_bh(&instances_lock);
 }
 
 static int
@@ -263,11 +236,8 @@ nfulnl_set_mode(struct nfulnl_instance *inst, u_int8_t mode,
 
 	case NFULNL_COPY_PACKET:
 		inst->copy_mode = mode;
-		/* we're using struct nfattr which has 16bit nfa_len */
-		if (range > 0xffff)
-			inst->copy_range = 0xffff;
-		else
-			inst->copy_range = range;
+		inst->copy_range = min_t(unsigned int,
+					 range, NFULNL_COPY_RANGE_MAX);
 		break;
 
 	default:
@@ -329,8 +299,8 @@ nfulnl_set_flags(struct nfulnl_instance *inst, u_int16_t flags)
 	return 0;
 }
 
-static struct sk_buff *nfulnl_alloc_skb(unsigned int inst_size,
-					unsigned int pkt_size)
+static struct sk_buff *
+nfulnl_alloc_skb(unsigned int inst_size, unsigned int pkt_size)
 {
 	struct sk_buff *skb;
 	unsigned int n;
@@ -363,13 +333,12 @@ static struct sk_buff *nfulnl_alloc_skb(unsigned int inst_size,
 static int
 __nfulnl_send(struct nfulnl_instance *inst)
 {
-	int status;
-
-	if (!inst->skb)
-		return 0;
+	int status = -1;
 
 	if (inst->qlen > 1)
-		inst->lastnlh->nlmsg_type = NLMSG_DONE;
+		NLMSG_PUT(inst->skb, 0, 0,
+			  NLMSG_DONE,
+			  sizeof(struct nfgenmsg));
 
 	status = nfnetlink_unicast(inst->skb, inst->peer_pid, MSG_DONTWAIT);
 	if (status < 0) {
@@ -379,19 +348,31 @@ __nfulnl_send(struct nfulnl_instance *inst)
 
 	inst->qlen = 0;
 	inst->skb = NULL;
-	inst->lastnlh = NULL;
 
+nlmsg_failure:
 	return status;
 }
 
-static void nfulnl_timer(unsigned long data)
+static void
+__nfulnl_flush(struct nfulnl_instance *inst)
+{
+	/* timer holds a reference */
+	if (del_timer(&inst->timer))
+		instance_put(inst);
+	if (inst->skb)
+		__nfulnl_send(inst);
+}
+
+static void
+nfulnl_timer(unsigned long data)
 {
 	struct nfulnl_instance *inst = (struct nfulnl_instance *)data;
 
 	UDEBUG("timer function called, flushing buffer\n");
 
 	spin_lock_bh(&inst->lock);
-	__nfulnl_send(inst);
+	if (inst->skb)
+		__nfulnl_send(inst);
 	spin_unlock_bh(&inst->lock);
 	instance_put(inst);
 }
@@ -409,15 +390,14 @@ __build_packet_message(struct nfulnl_instance *inst,
 			const struct nf_loginfo *li,
 			const char *prefix, unsigned int plen)
 {
-	unsigned char *old_tail;
 	struct nfulnl_msg_packet_hdr pmsg;
 	struct nlmsghdr *nlh;
 	struct nfgenmsg *nfmsg;
 	__be32 tmp_uint;
+	sk_buff_data_t old_tail = inst->skb->tail;
 
 	UDEBUG("entered\n");
 
-	old_tail = inst->skb->tail;
 	nlh = NLMSG_PUT(inst->skb, 0, 0,
 			NFNL_SUBSYS_ULOG << 8 | NFULNL_MSG_PACKET,
 			sizeof(struct nfgenmsg));
@@ -429,36 +409,36 @@ __build_packet_message(struct nfulnl_instance *inst,
 	pmsg.hw_protocol	= skb->protocol;
 	pmsg.hook		= hooknum;
 
-	NFA_PUT(inst->skb, NFULA_PACKET_HDR, sizeof(pmsg), &pmsg);
+	NLA_PUT(inst->skb, NFULA_PACKET_HDR, sizeof(pmsg), &pmsg);
 
 	if (prefix)
-		NFA_PUT(inst->skb, NFULA_PREFIX, plen, prefix);
+		NLA_PUT(inst->skb, NFULA_PREFIX, plen, prefix);
 
 	if (indev) {
 		tmp_uint = htonl(indev->ifindex);
 #ifndef CONFIG_BRIDGE_NETFILTER
-		NFA_PUT(inst->skb, NFULA_IFINDEX_INDEV, sizeof(tmp_uint),
+		NLA_PUT(inst->skb, NFULA_IFINDEX_INDEV, sizeof(tmp_uint),
 			&tmp_uint);
 #else
 		if (pf == PF_BRIDGE) {
 			/* Case 1: outdev is physical input device, we need to
 			 * look for bridge group (when called from
 			 * netfilter_bridge) */
-			NFA_PUT(inst->skb, NFULA_IFINDEX_PHYSINDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_PHYSINDEV,
 				sizeof(tmp_uint), &tmp_uint);
 			/* this is the bridge group "brX" */
 			tmp_uint = htonl(indev->br_port->br->dev->ifindex);
-			NFA_PUT(inst->skb, NFULA_IFINDEX_INDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_INDEV,
 				sizeof(tmp_uint), &tmp_uint);
 		} else {
 			/* Case 2: indev is bridge group, we need to look for
 			 * physical device (when called from ipv4) */
-			NFA_PUT(inst->skb, NFULA_IFINDEX_INDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_INDEV,
 				sizeof(tmp_uint), &tmp_uint);
 			if (skb->nf_bridge && skb->nf_bridge->physindev) {
 				tmp_uint =
 				    htonl(skb->nf_bridge->physindev->ifindex);
-				NFA_PUT(inst->skb, NFULA_IFINDEX_PHYSINDEV,
+				NLA_PUT(inst->skb, NFULA_IFINDEX_PHYSINDEV,
 					sizeof(tmp_uint), &tmp_uint);
 			}
 		}
@@ -468,28 +448,28 @@ __build_packet_message(struct nfulnl_instance *inst,
 	if (outdev) {
 		tmp_uint = htonl(outdev->ifindex);
 #ifndef CONFIG_BRIDGE_NETFILTER
-		NFA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV, sizeof(tmp_uint),
+		NLA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV, sizeof(tmp_uint),
 			&tmp_uint);
 #else
 		if (pf == PF_BRIDGE) {
 			/* Case 1: outdev is physical output device, we need to
 			 * look for bridge group (when called from
 			 * netfilter_bridge) */
-			NFA_PUT(inst->skb, NFULA_IFINDEX_PHYSOUTDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_PHYSOUTDEV,
 				sizeof(tmp_uint), &tmp_uint);
 			/* this is the bridge group "brX" */
 			tmp_uint = htonl(outdev->br_port->br->dev->ifindex);
-			NFA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV,
 				sizeof(tmp_uint), &tmp_uint);
 		} else {
 			/* Case 2: indev is a bridge group, we need to look
 			 * for physical device (when called from ipv4) */
-			NFA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV,
+			NLA_PUT(inst->skb, NFULA_IFINDEX_OUTDEV,
 				sizeof(tmp_uint), &tmp_uint);
 			if (skb->nf_bridge && skb->nf_bridge->physoutdev) {
 				tmp_uint =
 				    htonl(skb->nf_bridge->physoutdev->ifindex);
-				NFA_PUT(inst->skb, NFULA_IFINDEX_PHYSOUTDEV,
+				NLA_PUT(inst->skb, NFULA_IFINDEX_PHYSOUTDEV,
 					sizeof(tmp_uint), &tmp_uint);
 			}
 		}
@@ -498,24 +478,25 @@ __build_packet_message(struct nfulnl_instance *inst,
 
 	if (skb->mark) {
 		tmp_uint = htonl(skb->mark);
-		NFA_PUT(inst->skb, NFULA_MARK, sizeof(tmp_uint), &tmp_uint);
+		NLA_PUT(inst->skb, NFULA_MARK, sizeof(tmp_uint), &tmp_uint);
 	}
 
-	if (indev && skb->dev && skb->dev->hard_header_parse) {
+	if (indev && skb->dev) {
 		struct nfulnl_msg_packet_hw phw;
-		int len = skb->dev->hard_header_parse((struct sk_buff *)skb,
-						    phw.hw_addr);
-		phw.hw_addrlen = htons(len);
-		NFA_PUT(inst->skb, NFULA_HWADDR, sizeof(phw), &phw);
+		int len = dev_parse_header(skb, phw.hw_addr);
+		if (len > 0) {
+			phw.hw_addrlen = htons(len);
+			NLA_PUT(inst->skb, NFULA_HWADDR, sizeof(phw), &phw);
+		}
 	}
 
-	if (skb->tstamp.off_sec) {
+	if (skb->tstamp.tv64) {
 		struct nfulnl_msg_packet_timestamp ts;
+		struct timeval tv = ktime_to_timeval(skb->tstamp);
+		ts.sec = cpu_to_be64(tv.tv_sec);
+		ts.usec = cpu_to_be64(tv.tv_usec);
 
-		ts.sec = cpu_to_be64(skb->tstamp.off_sec);
-		ts.usec = cpu_to_be64(skb->tstamp.off_usec);
-
-		NFA_PUT(inst->skb, NFULA_TIMESTAMP, sizeof(ts), &ts);
+		NLA_PUT(inst->skb, NFULA_TIMESTAMP, sizeof(ts), &ts);
 	}
 
 	/* UID */
@@ -523,9 +504,9 @@ __build_packet_message(struct nfulnl_instance *inst,
 		read_lock_bh(&skb->sk->sk_callback_lock);
 		if (skb->sk->sk_socket && skb->sk->sk_socket->file) {
 			__be32 uid = htonl(skb->sk->sk_socket->file->f_uid);
-			/* need to unlock here since NFA_PUT may goto */
+			/* need to unlock here since NLA_PUT may goto */
 			read_unlock_bh(&skb->sk->sk_callback_lock);
-			NFA_PUT(inst->skb, NFULA_UID, sizeof(uid), &uid);
+			NLA_PUT(inst->skb, NFULA_UID, sizeof(uid), &uid);
 		} else
 			read_unlock_bh(&skb->sk->sk_callback_lock);
 	}
@@ -533,38 +514,37 @@ __build_packet_message(struct nfulnl_instance *inst,
 	/* local sequence number */
 	if (inst->flags & NFULNL_CFG_F_SEQ) {
 		tmp_uint = htonl(inst->seq++);
-		NFA_PUT(inst->skb, NFULA_SEQ, sizeof(tmp_uint), &tmp_uint);
+		NLA_PUT(inst->skb, NFULA_SEQ, sizeof(tmp_uint), &tmp_uint);
 	}
 	/* global sequence number */
 	if (inst->flags & NFULNL_CFG_F_SEQ_GLOBAL) {
 		tmp_uint = htonl(atomic_inc_return(&global_seq));
-		NFA_PUT(inst->skb, NFULA_SEQ_GLOBAL, sizeof(tmp_uint), &tmp_uint);
+		NLA_PUT(inst->skb, NFULA_SEQ_GLOBAL, sizeof(tmp_uint), &tmp_uint);
 	}
 
 	if (data_len) {
-		struct nfattr *nfa;
-		int size = NFA_LENGTH(data_len);
+		struct nlattr *nla;
+		int size = nla_attr_size(data_len);
 
-		if (skb_tailroom(inst->skb) < (int)NFA_SPACE(data_len)) {
+		if (skb_tailroom(inst->skb) < nla_total_size(data_len)) {
 			printk(KERN_WARNING "nfnetlink_log: no tailroom!\n");
 			goto nlmsg_failure;
 		}
 
-		nfa = (struct nfattr *)skb_put(inst->skb, NFA_ALIGN(size));
-		nfa->nfa_type = NFULA_PAYLOAD;
-		nfa->nfa_len = size;
+		nla = (struct nlattr *)skb_put(inst->skb, nla_total_size(data_len));
+		nla->nla_type = NFULA_PAYLOAD;
+		nla->nla_len = size;
 
-		if (skb_copy_bits(skb, 0, NFA_DATA(nfa), data_len))
+		if (skb_copy_bits(skb, 0, nla_data(nla), data_len))
 			BUG();
 	}
 
 	nlh->nlmsg_len = inst->skb->tail - old_tail;
-	inst->lastnlh = nlh;
 	return 0;
 
 nlmsg_failure:
 	UDEBUG("nlmsg_failure\n");
-nfattr_failure:
+nla_put_failure:
 	PRINTR(KERN_ERR "nfnetlink_log: error creating log nlmsg\n");
 	return -1;
 }
@@ -596,7 +576,6 @@ nfulnl_log_packet(unsigned int pf,
 	struct nfulnl_instance *inst;
 	const struct nf_loginfo *li;
 	unsigned int qthreshold;
-	unsigned int nlbufsiz;
 	unsigned int plen;
 
 	if (li_user && li_user->type == NF_LOG_TYPE_ULOG)
@@ -606,43 +585,37 @@ nfulnl_log_packet(unsigned int pf,
 
 	inst = instance_lookup_get(li->u.ulog.group);
 	if (!inst)
-		inst = instance_lookup_get(0);
-	if (!inst) {
-		PRINTR("nfnetlink_log: trying to log packet, "
-			"but no instance for group %u\n", li->u.ulog.group);
 		return;
-	}
 
 	plen = 0;
 	if (prefix)
 		plen = strlen(prefix) + 1;
 
-	/* all macros expand to constant values at compile time */
 	/* FIXME: do we want to make the size calculation conditional based on
 	 * what is actually present?  way more branches and checks, but more
 	 * memory efficient... */
-	size =    NLMSG_SPACE(sizeof(struct nfgenmsg))
-		+ NFA_SPACE(sizeof(struct nfulnl_msg_packet_hdr))
-		+ NFA_SPACE(sizeof(u_int32_t))	/* ifindex */
-		+ NFA_SPACE(sizeof(u_int32_t))	/* ifindex */
+	size =    NLMSG_ALIGN(sizeof(struct nfgenmsg))
+		+ nla_total_size(sizeof(struct nfulnl_msg_packet_hdr))
+		+ nla_total_size(sizeof(u_int32_t))	/* ifindex */
+		+ nla_total_size(sizeof(u_int32_t))	/* ifindex */
 #ifdef CONFIG_BRIDGE_NETFILTER
-		+ NFA_SPACE(sizeof(u_int32_t))	/* ifindex */
-		+ NFA_SPACE(sizeof(u_int32_t))	/* ifindex */
+		+ nla_total_size(sizeof(u_int32_t))	/* ifindex */
+		+ nla_total_size(sizeof(u_int32_t))	/* ifindex */
 #endif
-		+ NFA_SPACE(sizeof(u_int32_t))	/* mark */
-		+ NFA_SPACE(sizeof(u_int32_t))	/* uid */
-		+ NFA_SPACE(plen)		/* prefix */
-		+ NFA_SPACE(sizeof(struct nfulnl_msg_packet_hw))
-		+ NFA_SPACE(sizeof(struct nfulnl_msg_packet_timestamp));
+		+ nla_total_size(sizeof(u_int32_t))	/* mark */
+		+ nla_total_size(sizeof(u_int32_t))	/* uid */
+		+ nla_total_size(plen)			/* prefix */
+		+ nla_total_size(sizeof(struct nfulnl_msg_packet_hw))
+		+ nla_total_size(sizeof(struct nfulnl_msg_packet_timestamp));
 
 	UDEBUG("initial size=%u\n", size);
 
 	spin_lock_bh(&inst->lock);
 
 	if (inst->flags & NFULNL_CFG_F_SEQ)
-		size += NFA_SPACE(sizeof(u_int32_t));
+		size += nla_total_size(sizeof(u_int32_t));
 	if (inst->flags & NFULNL_CFG_F_SEQ_GLOBAL)
-		size += NFA_SPACE(sizeof(u_int32_t));
+		size += nla_total_size(sizeof(u_int32_t));
 
 	qthreshold = inst->qthreshold;
 	/* per-rule qthreshold overrides per-instance */
@@ -662,43 +635,27 @@ nfulnl_log_packet(unsigned int pf,
 		else
 			data_len = inst->copy_range;
 
-		size += NFA_SPACE(data_len);
+		size += nla_total_size(data_len);
 		UDEBUG("copy_packet, therefore size now %u\n", size);
 		break;
 
 	default:
-		spin_unlock_bh(&inst->lock);
-		instance_put(inst);
-		return;
+		goto unlock_and_release;
 	}
 
-	if (size > inst->nlbufsiz)
-		nlbufsiz = size;
-	else
-		nlbufsiz = inst->nlbufsiz;
-
-	if (!inst->skb) {
-		if (!(inst->skb = nfulnl_alloc_skb(nlbufsiz, size))) {
-			UDEBUG("error in nfulnl_alloc_skb(%u, %u)\n",
-				inst->nlbufsiz, size);
-			goto alloc_failure;
-		}
-	} else if (inst->qlen >= qthreshold ||
-		   size > skb_tailroom(inst->skb)) {
+	if (inst->skb &&
+	    size > skb_tailroom(inst->skb) - sizeof(struct nfgenmsg)) {
 		/* either the queue len is too high or we don't have
 		 * enough room in the skb left. flush to userspace. */
 		UDEBUG("flushing old skb\n");
 
-		/* timer "holds" one reference (we have another one) */
-		if (del_timer(&inst->timer))
-			instance_put(inst);
-		__nfulnl_send(inst);
+		__nfulnl_flush(inst);
+	}
 
-		if (!(inst->skb = nfulnl_alloc_skb(nlbufsiz, size))) {
-			UDEBUG("error in nfulnl_alloc_skb(%u, %u)\n",
-				inst->nlbufsiz, size);
+	if (!inst->skb) {
+		inst->skb = nfulnl_alloc_skb(inst->nlbufsiz, size);
+		if (!inst->skb)
 			goto alloc_failure;
-		}
 	}
 
 	UDEBUG("qlen %d, qthreshold %d\n", inst->qlen, qthreshold);
@@ -707,9 +664,11 @@ nfulnl_log_packet(unsigned int pf,
 	__build_packet_message(inst, skb, data_len, pf,
 				hooknum, in, out, li, prefix, plen);
 
+	if (inst->qlen >= qthreshold)
+		__nfulnl_flush(inst);
 	/* timer_pending always called within inst->lock, so there
 	 * is no chance of a race here */
-	if (!timer_pending(&inst->timer)) {
+	else if (!timer_pending(&inst->timer)) {
 		instance_get(inst);
 		inst->timer.expires = jiffies + (inst->flushtimeout*HZ/100);
 		add_timer(&inst->timer);
@@ -745,7 +704,8 @@ nfulnl_rcv_nl_event(struct notifier_block *this,
 
 			hlist_for_each_entry_safe(inst, tmp, t2, head, hlist) {
 				UDEBUG("node = %p\n", inst);
-				if (n->pid == inst->peer_pid)
+				if ((n->net == &init_net) &&
+				    (n->pid == inst->peer_pid))
 					__instance_destroy(inst);
 			}
 		}
@@ -760,7 +720,7 @@ static struct notifier_block nfulnl_rtnl_notifier = {
 
 static int
 nfulnl_recv_unsupp(struct sock *ctnl, struct sk_buff *skb,
-		  struct nlmsghdr *nlh, struct nfattr *nfqa[], int *errp)
+		  struct nlmsghdr *nlh, struct nlattr *nfqa[])
 {
 	return -ENOTSUPP;
 }
@@ -771,34 +731,18 @@ static struct nf_logger nfulnl_logger = {
 	.me	= THIS_MODULE,
 };
 
-static const int nfula_min[NFULA_MAX] = {
-	[NFULA_PACKET_HDR-1]	= sizeof(struct nfulnl_msg_packet_hdr),
-	[NFULA_MARK-1]		= sizeof(u_int32_t),
-	[NFULA_TIMESTAMP-1]	= sizeof(struct nfulnl_msg_packet_timestamp),
-	[NFULA_IFINDEX_INDEV-1]	= sizeof(u_int32_t),
-	[NFULA_IFINDEX_OUTDEV-1]= sizeof(u_int32_t),
-	[NFULA_IFINDEX_PHYSINDEV-1]	= sizeof(u_int32_t),
-	[NFULA_IFINDEX_PHYSOUTDEV-1]	= sizeof(u_int32_t),
-	[NFULA_HWADDR-1]	= sizeof(struct nfulnl_msg_packet_hw),
-	[NFULA_PAYLOAD-1]	= 0,
-	[NFULA_PREFIX-1]	= 0,
-	[NFULA_UID-1]		= sizeof(u_int32_t),
-	[NFULA_SEQ-1]		= sizeof(u_int32_t),
-	[NFULA_SEQ_GLOBAL-1]	= sizeof(u_int32_t),
-};
-
-static const int nfula_cfg_min[NFULA_CFG_MAX] = {
-	[NFULA_CFG_CMD-1]	= sizeof(struct nfulnl_msg_config_cmd),
-	[NFULA_CFG_MODE-1]	= sizeof(struct nfulnl_msg_config_mode),
-	[NFULA_CFG_TIMEOUT-1]	= sizeof(u_int32_t),
-	[NFULA_CFG_QTHRESH-1]	= sizeof(u_int32_t),
-	[NFULA_CFG_NLBUFSIZ-1]	= sizeof(u_int32_t),
-	[NFULA_CFG_FLAGS-1]	= sizeof(u_int16_t),
+static const struct nla_policy nfula_cfg_policy[NFULA_CFG_MAX+1] = {
+	[NFULA_CFG_CMD]		= { .len = sizeof(struct nfulnl_msg_config_cmd) },
+	[NFULA_CFG_MODE]	= { .len = sizeof(struct nfulnl_msg_config_mode) },
+	[NFULA_CFG_TIMEOUT]	= { .type = NLA_U32 },
+	[NFULA_CFG_QTHRESH]	= { .type = NLA_U32 },
+	[NFULA_CFG_NLBUFSIZ]	= { .type = NLA_U32 },
+	[NFULA_CFG_FLAGS]	= { .type = NLA_U16 },
 };
 
 static int
 nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
-		   struct nlmsghdr *nlh, struct nfattr *nfula[], int *errp)
+		   struct nlmsghdr *nlh, struct nlattr *nfula[])
 {
 	struct nfgenmsg *nfmsg = NLMSG_DATA(nlh);
 	u_int16_t group_num = ntohs(nfmsg->res_id);
@@ -807,16 +751,11 @@ nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
 
 	UDEBUG("entering for msg %u\n", NFNL_MSG_TYPE(nlh->nlmsg_type));
 
-	if (nfattr_bad_size(nfula, NFULA_CFG_MAX, nfula_cfg_min)) {
-		UDEBUG("bad attribute size\n");
-		return -EINVAL;
-	}
-
 	inst = instance_lookup_get(group_num);
-	if (nfula[NFULA_CFG_CMD-1]) {
+	if (nfula[NFULA_CFG_CMD]) {
 		u_int8_t pf = nfmsg->nfgen_family;
 		struct nfulnl_msg_config_cmd *cmd;
-		cmd = NFA_DATA(nfula[NFULA_CFG_CMD-1]);
+		cmd = nla_data(nfula[NFULA_CFG_CMD]);
 		UDEBUG("found CFG_CMD for\n");
 
 		switch (cmd->command) {
@@ -830,13 +769,13 @@ nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
 					       NETLINK_CB(skb).pid);
 			if (!inst) {
 				ret = -EINVAL;
-				goto out_put;
+				goto out;
 			}
 			break;
 		case NFULNL_CFG_CMD_UNBIND:
 			if (!inst) {
 				ret = -ENODEV;
-				goto out_put;
+				goto out;
 			}
 
 			if (inst->peer_pid != NETLINK_CB(skb).pid) {
@@ -845,7 +784,7 @@ nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
 			}
 
 			instance_destroy(inst);
-			break;
+			goto out;
 		case NFULNL_CFG_CMD_PF_BIND:
 			UDEBUG("registering log handler for pf=%u\n", pf);
 			ret = nf_log_register(pf, &nfulnl_logger);
@@ -869,7 +808,7 @@ nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
 				"group=%u pid=%u =>ENOENT\n",
 				group_num, NETLINK_CB(skb).pid);
 			ret = -ENOENT;
-			goto out_put;
+			goto out;
 		}
 
 		if (inst->peer_pid != NETLINK_CB(skb).pid) {
@@ -879,38 +818,38 @@ nfulnl_recv_config(struct sock *ctnl, struct sk_buff *skb,
 		}
 	}
 
-	if (nfula[NFULA_CFG_MODE-1]) {
+	if (nfula[NFULA_CFG_MODE]) {
 		struct nfulnl_msg_config_mode *params;
-		params = NFA_DATA(nfula[NFULA_CFG_MODE-1]);
+		params = nla_data(nfula[NFULA_CFG_MODE]);
 
 		nfulnl_set_mode(inst, params->copy_mode,
 				ntohl(params->copy_range));
 	}
 
-	if (nfula[NFULA_CFG_TIMEOUT-1]) {
+	if (nfula[NFULA_CFG_TIMEOUT]) {
 		__be32 timeout =
-			*(__be32 *)NFA_DATA(nfula[NFULA_CFG_TIMEOUT-1]);
+			*(__be32 *)nla_data(nfula[NFULA_CFG_TIMEOUT]);
 
 		nfulnl_set_timeout(inst, ntohl(timeout));
 	}
 
-	if (nfula[NFULA_CFG_NLBUFSIZ-1]) {
+	if (nfula[NFULA_CFG_NLBUFSIZ]) {
 		__be32 nlbufsiz =
-			*(__be32 *)NFA_DATA(nfula[NFULA_CFG_NLBUFSIZ-1]);
+			*(__be32 *)nla_data(nfula[NFULA_CFG_NLBUFSIZ]);
 
 		nfulnl_set_nlbufsiz(inst, ntohl(nlbufsiz));
 	}
 
-	if (nfula[NFULA_CFG_QTHRESH-1]) {
+	if (nfula[NFULA_CFG_QTHRESH]) {
 		__be32 qthresh =
-			*(__be32 *)NFA_DATA(nfula[NFULA_CFG_QTHRESH-1]);
+			*(__be32 *)nla_data(nfula[NFULA_CFG_QTHRESH]);
 
 		nfulnl_set_qthresh(inst, ntohl(qthresh));
 	}
 
-	if (nfula[NFULA_CFG_FLAGS-1]) {
+	if (nfula[NFULA_CFG_FLAGS]) {
 		__be16 flags =
-			*(__be16 *)NFA_DATA(nfula[NFULA_CFG_FLAGS-1]);
+			*(__be16 *)nla_data(nfula[NFULA_CFG_FLAGS]);
 		nfulnl_set_flags(inst, ntohs(flags));
 	}
 
@@ -920,14 +859,15 @@ out:
 	return ret;
 }
 
-static struct nfnl_callback nfulnl_cb[NFULNL_MSG_MAX] = {
+static const struct nfnl_callback nfulnl_cb[NFULNL_MSG_MAX] = {
 	[NFULNL_MSG_PACKET]	= { .call = nfulnl_recv_unsupp,
 				    .attr_count = NFULA_MAX, },
 	[NFULNL_MSG_CONFIG]	= { .call = nfulnl_recv_config,
-				    .attr_count = NFULA_CFG_MAX, },
+				    .attr_count = NFULA_CFG_MAX,
+				    .policy = nfula_cfg_policy },
 };
 
-static struct nfnetlink_subsystem nfulnl_subsys = {
+static const struct nfnetlink_subsystem nfulnl_subsys = {
 	.name		= "log",
 	.subsys_id	= NFNL_SUBSYS_ULOG,
 	.cb_count	= NFULNL_MSG_MAX,
@@ -939,10 +879,8 @@ struct iter_state {
 	unsigned int bucket;
 };
 
-static struct hlist_node *get_first(struct seq_file *seq)
+static struct hlist_node *get_first(struct iter_state *st)
 {
-	struct iter_state *st = seq->private;
-
 	if (!st)
 		return NULL;
 
@@ -953,10 +891,8 @@ static struct hlist_node *get_first(struct seq_file *seq)
 	return NULL;
 }
 
-static struct hlist_node *get_next(struct seq_file *seq, struct hlist_node *h)
+static struct hlist_node *get_next(struct iter_state *st, struct hlist_node *h)
 {
-	struct iter_state *st = seq->private;
-
 	h = h->next;
 	while (!h) {
 		if (++st->bucket >= INSTANCE_BUCKETS)
@@ -967,13 +903,13 @@ static struct hlist_node *get_next(struct seq_file *seq, struct hlist_node *h)
 	return h;
 }
 
-static struct hlist_node *get_idx(struct seq_file *seq, loff_t pos)
+static struct hlist_node *get_idx(struct iter_state *st, loff_t pos)
 {
 	struct hlist_node *head;
-	head = get_first(seq);
+	head = get_first(st);
 
 	if (head)
-		while (pos && (head = get_next(seq, head)))
+		while (pos && (head = get_next(st, head)))
 			pos--;
 	return pos ? NULL : head;
 }
@@ -981,13 +917,13 @@ static struct hlist_node *get_idx(struct seq_file *seq, loff_t pos)
 static void *seq_start(struct seq_file *seq, loff_t *pos)
 {
 	read_lock_bh(&instances_lock);
-	return get_idx(seq, *pos);
+	return get_idx(seq->private, *pos);
 }
 
 static void *seq_next(struct seq_file *s, void *v, loff_t *pos)
 {
 	(*pos)++;
-	return get_next(s, v);
+	return get_next(s->private, v);
 }
 
 static void seq_stop(struct seq_file *s, void *v)
@@ -1006,7 +942,7 @@ static int seq_show(struct seq_file *s, void *v)
 			  inst->flushtimeout, atomic_read(&inst->use));
 }
 
-static struct seq_operations nful_seq_ops = {
+static const struct seq_operations nful_seq_ops = {
 	.start	= seq_start,
 	.next	= seq_next,
 	.stop	= seq_stop,
@@ -1015,22 +951,8 @@ static struct seq_operations nful_seq_ops = {
 
 static int nful_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	struct iter_state *is;
-	int ret;
-
-	is = kzalloc(sizeof(*is), GFP_KERNEL);
-	if (!is)
-		return -ENOMEM;
-	ret = seq_open(file, &nful_seq_ops);
-	if (ret < 0)
-		goto out_free;
-	seq = file->private_data;
-	seq->private = is;
-	return ret;
-out_free:
-	kfree(is);
-	return ret;
+	return seq_open_private(file, &nful_seq_ops,
+			sizeof(struct iter_state));
 }
 
 static const struct file_operations nful_file_ops = {

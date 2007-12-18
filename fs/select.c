@@ -14,10 +14,10 @@
  *     of fds to overcome nfds < 16390 descriptors limit (Tigran Aivazian).
  */
 
+#include <linux/kernel.h>
 #include <linux/syscalls.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/poll.h>
 #include <linux/personality.h> /* for STICKY_TIMEOUTS */
 #include <linux/file.h>
@@ -25,9 +25,6 @@
 #include <linux/rcupdate.h>
 
 #include <asm/uaccess.h>
-
-#define ROUND_UP(x,y) (((x)+(y)-1)/(y))
-#define DEFAULT_POLLMASK (POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM)
 
 struct poll_table_page {
 	struct poll_table_page * next;
@@ -65,7 +62,7 @@ EXPORT_SYMBOL(poll_initwait);
 
 static void free_poll_entry(struct poll_table_entry *entry)
 {
-	remove_wait_queue(entry->wait_address,&entry->wait);
+	remove_wait_queue(entry->wait_address, &entry->wait);
 	fput(entry->filp);
 }
 
@@ -129,7 +126,7 @@ static void __pollwait(struct file *filp, wait_queue_head_t *wait_address,
 	entry->filp = filp;
 	entry->wait_address = wait_address;
 	init_waitqueue_entry(&entry->wait, current);
-	add_wait_queue(wait_address,&entry->wait);
+	add_wait_queue(wait_address, &entry->wait);
 }
 
 #define FDS_IN(fds, n)		(fds->in + n)
@@ -179,11 +176,6 @@ get_max:
 
 	return max;
 }
-
-#define BIT(i)		(1UL << ((i)&(__NFDBITS-1)))
-#define MEM(i,m)	((m)+(unsigned)(i)/__NFDBITS)
-#define ISSET(i,m)	(((i)&*(m)) != 0)
-#define SET(i,m)	(*(m) |= (i))
 
 #define POLLIN_SET (POLLRDNORM | POLLRDBAND | POLLIN | POLLHUP | POLLERR)
 #define POLLOUT_SET (POLLWRBAND | POLLWRNORM | POLLOUT | POLLERR)
@@ -399,7 +391,7 @@ asmlinkage long sys_select(int n, fd_set __user *inp, fd_set __user *outp,
 		if ((u64)tv.tv_sec >= (u64)MAX_INT64_SECONDS)
 			timeout = -1;	/* infinite */
 		else {
-			timeout = ROUND_UP(tv.tv_usec, USEC_PER_SEC/HZ);
+			timeout = DIV_ROUND_UP(tv.tv_usec, USEC_PER_SEC/HZ);
 			timeout += tv.tv_sec * HZ;
 		}
 	}
@@ -454,7 +446,7 @@ asmlinkage long sys_pselect7(int n, fd_set __user *inp, fd_set __user *outp,
 		if ((u64)ts.tv_sec >= (u64)MAX_INT64_SECONDS)
 			timeout = -1;	/* infinite */
 		else {
-			timeout = ROUND_UP(ts.tv_nsec, NSEC_PER_SEC/HZ);
+			timeout = DIV_ROUND_UP(ts.tv_nsec, NSEC_PER_SEC/HZ);
 			timeout += ts.tv_sec * HZ;
 		}
 	}
@@ -589,7 +581,7 @@ static int do_poll(unsigned int nfds,  struct poll_list *list,
 	/* Optimise the no-wait case */
 	if (!(*timeout))
 		pt = NULL;
- 
+
 	for (;;) {
 		struct poll_list *walk;
 		long __timeout;
@@ -619,10 +611,12 @@ static int do_poll(unsigned int nfds,  struct poll_list *list,
 		 * a poll_table to them on the next loop iteration.
 		 */
 		pt = NULL;
-		if (count || !*timeout || signal_pending(current))
-			break;
-		count = wait->error;
-		if (count)
+		if (!count) {
+			count = wait->error;
+			if (signal_pending(current))
+				count = -EINTR;
+		}
+		if (count || !*timeout)
 			break;
 
 		if (*timeout < 0) {
@@ -654,93 +648,89 @@ static int do_poll(unsigned int nfds,  struct poll_list *list,
 int do_sys_poll(struct pollfd __user *ufds, unsigned int nfds, s64 *timeout)
 {
 	struct poll_wqueues table;
- 	int fdcount, err;
- 	unsigned int i;
-	struct poll_list *head;
- 	struct poll_list *walk;
+ 	int err = -EFAULT, fdcount, len, size;
 	/* Allocate small arguments on the stack to save memory and be
 	   faster - use long to make sure the buffer is aligned properly
 	   on 64 bit archs to avoid unaligned access */
 	long stack_pps[POLL_STACK_ALLOC/sizeof(long)];
-	struct poll_list *stack_pp = NULL;
+	struct poll_list *const head = (struct poll_list *)stack_pps;
+ 	struct poll_list *walk = head;
+ 	unsigned long todo = nfds;
 
-	/* Do a sanity check on nfds ... */
 	if (nfds > current->signal->rlim[RLIMIT_NOFILE].rlim_cur)
 		return -EINVAL;
 
-	poll_initwait(&table);
+	len = min_t(unsigned int, nfds, N_STACK_PPS);
+	for (;;) {
+		walk->next = NULL;
+		walk->len = len;
+		if (!len)
+			break;
 
-	head = NULL;
-	walk = NULL;
-	i = nfds;
-	err = -ENOMEM;
-	while(i!=0) {
-		struct poll_list *pp;
-		int num, size;
-		if (stack_pp == NULL)
-			num = N_STACK_PPS;
-		else
-			num = POLLFD_PER_PAGE;
-		if (num > i)
-			num = i;
-		size = sizeof(struct poll_list) + sizeof(struct pollfd)*num;
-		if (!stack_pp)
-			stack_pp = pp = (struct poll_list *)stack_pps;
-		else {
-			pp = kmalloc(size, GFP_KERNEL);
-			if (!pp)
-				goto out_fds;
-		}
-		pp->next=NULL;
-		pp->len = num;
-		if (head == NULL)
-			head = pp;
-		else
-			walk->next = pp;
+		if (copy_from_user(walk->entries, ufds + nfds-todo,
+					sizeof(struct pollfd) * walk->len))
+			goto out_fds;
 
-		walk = pp;
-		if (copy_from_user(pp->entries, ufds + nfds-i, 
-				sizeof(struct pollfd)*num)) {
-			err = -EFAULT;
+		todo -= walk->len;
+		if (!todo)
+			break;
+
+		len = min(todo, POLLFD_PER_PAGE);
+		size = sizeof(struct poll_list) + sizeof(struct pollfd) * len;
+		walk = walk->next = kmalloc(size, GFP_KERNEL);
+		if (!walk) {
+			err = -ENOMEM;
 			goto out_fds;
 		}
-		i -= pp->len;
 	}
 
+	poll_initwait(&table);
 	fdcount = do_poll(nfds, head, &table, timeout);
+	poll_freewait(&table);
 
-	/* OK, now copy the revents fields back to user space. */
-	walk = head;
-	err = -EFAULT;
-	while(walk != NULL) {
+	for (walk = head; walk; walk = walk->next) {
 		struct pollfd *fds = walk->entries;
 		int j;
 
-		for (j=0; j < walk->len; j++, ufds++) {
-			if(__put_user(fds[j].revents, &ufds->revents))
+		for (j = 0; j < walk->len; j++, ufds++)
+			if (__put_user(fds[j].revents, &ufds->revents))
 				goto out_fds;
-		}
-		walk = walk->next;
   	}
+
 	err = fdcount;
-	if (!fdcount && signal_pending(current))
-		err = -EINTR;
 out_fds:
-	walk = head;
-	while(walk!=NULL) {
-		struct poll_list *pp = walk->next;
-		if (walk != stack_pp)
-			kfree(walk);
-		walk = pp;
+	walk = head->next;
+	while (walk) {
+		struct poll_list *pos = walk;
+		walk = walk->next;
+		kfree(pos);
 	}
-	poll_freewait(&table);
+
 	return err;
+}
+
+static long do_restart_poll(struct restart_block *restart_block)
+{
+	struct pollfd __user *ufds = (struct pollfd __user*)restart_block->arg0;
+	int nfds = restart_block->arg1;
+	s64 timeout = ((s64)restart_block->arg3<<32) | (s64)restart_block->arg2;
+	int ret;
+
+	ret = do_sys_poll(ufds, nfds, &timeout);
+	if (ret == -EINTR) {
+		restart_block->fn = do_restart_poll;
+		restart_block->arg2 = timeout & 0xFFFFFFFF;
+		restart_block->arg3 = (u64)timeout >> 32;
+		ret = -ERESTART_RESTARTBLOCK;
+	}
+	return ret;
 }
 
 asmlinkage long sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 			long timeout_msecs)
 {
 	s64 timeout_jiffies;
+	int ret;
 
 	if (timeout_msecs > 0) {
 #if HZ > 1000
@@ -755,7 +745,18 @@ asmlinkage long sys_poll(struct pollfd __user *ufds, unsigned int nfds,
 		timeout_jiffies = timeout_msecs;
 	}
 
-	return do_sys_poll(ufds, nfds, &timeout_jiffies);
+	ret = do_sys_poll(ufds, nfds, &timeout_jiffies);
+	if (ret == -EINTR) {
+		struct restart_block *restart_block;
+		restart_block = &current_thread_info()->restart_block;
+		restart_block->fn = do_restart_poll;
+		restart_block->arg0 = (unsigned long)ufds;
+		restart_block->arg1 = nfds;
+		restart_block->arg2 = timeout_jiffies & 0xFFFFFFFF;
+		restart_block->arg3 = (u64)timeout_jiffies >> 32;
+		ret = -ERESTART_RESTARTBLOCK;
+	}
+	return ret;
 }
 
 #ifdef TIF_RESTORE_SIGMASK
@@ -776,7 +777,7 @@ asmlinkage long sys_ppoll(struct pollfd __user *ufds, unsigned int nfds,
 		if ((u64)ts.tv_sec >= (u64)MAX_INT64_SECONDS)
 			timeout = -1;	/* infinite */
 		else {
-			timeout = ROUND_UP(ts.tv_nsec, NSEC_PER_SEC/HZ);
+			timeout = DIV_ROUND_UP(ts.tv_nsec, NSEC_PER_SEC/HZ);
 			timeout += ts.tv_sec * HZ;
 		}
 	}

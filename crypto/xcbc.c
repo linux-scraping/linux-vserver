@@ -120,7 +120,7 @@ static int crypto_xcbc_digest_update2(struct hash_desc *pdesc,
 
 	do {
 
-		struct page *pg = sg[i].page;
+		struct page *pg = sg_page(&sg[i]);
 		unsigned int offset = sg[i].offset;
 		unsigned int slen = sg[i].length;
 
@@ -288,12 +288,18 @@ static void xcbc_exit_tfm(struct crypto_tfm *tfm)
 	crypto_free_cipher(ctx->child);
 }
 
-static struct crypto_instance *xcbc_alloc(void *param, unsigned int len)
+static struct crypto_instance *xcbc_alloc(struct rtattr **tb)
 {
 	struct crypto_instance *inst;
 	struct crypto_alg *alg;
-	alg = crypto_get_attr_alg(param, len, CRYPTO_ALG_TYPE_CIPHER,
-				  CRYPTO_ALG_TYPE_HASH_MASK | CRYPTO_ALG_ASYNC);
+	int err;
+
+	err = crypto_check_attr_type(tb, CRYPTO_ALG_TYPE_HASH);
+	if (err)
+		return ERR_PTR(err);
+
+	alg = crypto_get_attr_alg(tb, CRYPTO_ALG_TYPE_CIPHER,
+				  CRYPTO_ALG_TYPE_MASK);
 	if (IS_ERR(alg))
 		return ERR_PTR(PTR_ERR(alg));
 

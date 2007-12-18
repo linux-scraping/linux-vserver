@@ -18,7 +18,7 @@ MODULE_AUTHOR("Maciej Soltysiak <solt@dns.toxicfilms.tv>");
 MODULE_DESCRIPTION("IP6 tables Hop Limit modification module");
 MODULE_LICENSE("GPL");
 
-static unsigned int ip6t_hl_target(struct sk_buff **pskb,
+static unsigned int ip6t_hl_target(struct sk_buff *skb,
 				   const struct net_device *in,
 				   const struct net_device *out,
 				   unsigned int hooknum,
@@ -29,10 +29,10 @@ static unsigned int ip6t_hl_target(struct sk_buff **pskb,
 	const struct ip6t_HL_info *info = targinfo;
 	int new_hl;
 
-	if (!skb_make_writable(pskb, (*pskb)->len))
+	if (!skb_make_writable(skb, skb->len))
 		return NF_DROP;
 
-	ip6h = (*pskb)->nh.ipv6h;
+	ip6h = ipv6_hdr(skb);
 
 	switch (info->mode) {
 		case IP6T_HL_SET:
@@ -58,28 +58,28 @@ static unsigned int ip6t_hl_target(struct sk_buff **pskb,
 	return XT_CONTINUE;
 }
 
-static int ip6t_hl_checkentry(const char *tablename,
+static bool ip6t_hl_checkentry(const char *tablename,
 		const void *entry,
 		const struct xt_target *target,
 		void *targinfo,
 		unsigned int hook_mask)
 {
-	struct ip6t_HL_info *info = targinfo;
+	const struct ip6t_HL_info *info = targinfo;
 
 	if (info->mode > IP6T_HL_MAXMODE) {
 		printk(KERN_WARNING "ip6t_HL: invalid or unknown Mode %u\n",
 			info->mode);
-		return 0;
+		return false;
 	}
-	if ((info->mode != IP6T_HL_SET) && (info->hop_limit == 0)) {
+	if (info->mode != IP6T_HL_SET && info->hop_limit == 0) {
 		printk(KERN_WARNING "ip6t_HL: increment/decrement doesn't "
 			"make sense with value 0\n");
-		return 0;
+		return false;
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target ip6t_HL = {
+static struct xt_target ip6t_HL __read_mostly = {
 	.name 		= "HL",
 	.family		= AF_INET6,
 	.target		= ip6t_hl_target,

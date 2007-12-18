@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
+#include <linux/splice.h>
 #include "read_write.h"
 
 #include <asm/uaccess.h>
@@ -25,7 +26,7 @@ const struct file_operations generic_ro_fops = {
 	.read		= do_sync_read,
 	.aio_read	= generic_file_aio_read,
 	.mmap		= generic_file_readonly_mmap,
-	.sendfile	= generic_file_sendfile,
+	.splice_read	= generic_file_splice_read,
 };
 
 EXPORT_SYMBOL(generic_ro_fops);
@@ -37,10 +38,10 @@ loff_t generic_file_llseek(struct file *file, loff_t offset, int origin)
 
 	mutex_lock(&inode->i_mutex);
 	switch (origin) {
-		case 2:
+		case SEEK_END:
 			offset += inode->i_size;
 			break;
-		case 1:
+		case SEEK_CUR:
 			offset += file->f_pos;
 	}
 	retval = -EINVAL;
@@ -63,10 +64,10 @@ loff_t remote_llseek(struct file *file, loff_t offset, int origin)
 
 	lock_kernel();
 	switch (origin) {
-		case 2:
+		case SEEK_END:
 			offset += i_size_read(file->f_path.dentry->d_inode);
 			break;
-		case 1:
+		case SEEK_CUR:
 			offset += file->f_pos;
 	}
 	retval = -EINVAL;
@@ -94,10 +95,10 @@ loff_t default_llseek(struct file *file, loff_t offset, int origin)
 
 	lock_kernel();
 	switch (origin) {
-		case 2:
+		case SEEK_END:
 			offset += i_size_read(file->f_path.dentry->d_inode);
 			break;
-		case 1:
+		case SEEK_CUR:
 			offset += file->f_pos;
 	}
 	retval = -EINVAL;
@@ -139,7 +140,7 @@ asmlinkage off_t sys_lseek(unsigned int fd, off_t offset, unsigned int origin)
 		goto bad;
 
 	retval = -EINVAL;
-	if (origin <= 2) {
+	if (origin <= SEEK_MAX) {
 		loff_t res = vfs_llseek(file, offset, origin);
 		retval = res;
 		if (res != (loff_t)retval)
@@ -166,7 +167,7 @@ asmlinkage long sys_llseek(unsigned int fd, unsigned long offset_high,
 		goto bad;
 
 	retval = -EINVAL;
-	if (origin > 2)
+	if (origin > SEEK_MAX)
 		goto out_putf;
 
 	offset = vfs_llseek(file, ((loff_t) offset_high << 32) | offset_low,
@@ -204,7 +205,7 @@ int rw_verify_area(int read_write, struct file *file, loff_t *ppos, size_t count
 	if (unlikely((pos < 0) || (loff_t) (pos + count) < 0))
 		goto Einval;
 
-	if (unlikely(inode->i_flock && MANDATORY_LOCK(inode))) {
+	if (unlikely(inode->i_flock && mandatory_lock(inode))) {
 		int retval = locks_mandatory_area(
 			read_write == READ ? FLOCK_VERIFY_READ : FLOCK_VERIFY_WRITE,
 			inode, file, pos, count);
@@ -369,7 +370,7 @@ asmlinkage ssize_t sys_read(unsigned int fd, char __user * buf, size_t count)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(sys_read);
+EXPORT_UNUSED_SYMBOL_GPL(sys_read); /* to be deleted for 2.6.25 */
 
 asmlinkage ssize_t sys_write(unsigned int fd, const char __user * buf, size_t count)
 {
@@ -701,79 +702,14 @@ sys_writev(unsigned long fd, const struct iovec __user *vec, unsigned long vlen)
 	return ret;
 }
 
-ssize_t vfs_sendfile(struct file *out_file, struct file *in_file, loff_t *ppos,
-		     size_t count, loff_t max)
-{
-	struct inode * in_inode, * out_inode;
-	loff_t pos;
-	ssize_t ret;
-
-	/* verify in_file */
-	in_inode = in_file->f_path.dentry->d_inode;
-	if (!in_inode)
-		return -EINVAL;
-	if (!in_file->f_op || !in_file->f_op->sendfile)
-		return -EINVAL;
-
-	if (!ppos)
-		ppos = &in_file->f_pos;
-	else
-		if (!(in_file->f_mode & FMODE_PREAD))
-			return -ESPIPE;
-
-	ret = rw_verify_area(READ, in_file, ppos, count);
-	if (ret < 0)
-		return ret;
-	count = ret;
-
-	/* verify out_file */
-	out_inode = out_file->f_path.dentry->d_inode;
-	if (!out_inode)
-		return -EINVAL;
-	if (!out_file->f_op || !out_file->f_op->sendpage)
-		return -EINVAL;
-
-	ret = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
-	if (ret < 0)
-		return ret;
-	count = ret;
-
-	ret = security_file_permission (out_file, MAY_WRITE);
-	if (ret)
-		return ret;
-
-	if (!max)
-		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
-
-	pos = *ppos;
-	if (unlikely(pos < 0))
-		return -EINVAL;
-	if (unlikely(pos + count > max)) {
-		if (pos >= max)
-			return -EOVERFLOW;
-		count = max - pos;
-	}
-
-	ret = in_file->f_op->sendfile(in_file, ppos, count, file_send_actor, out_file);
-
-	if (ret > 0) {
-		add_rchar(current, ret);
-		add_wchar(current, ret);
-	}
-
-	if (*ppos > max)
-		return -EOVERFLOW;
-	return ret;
-}
-
-EXPORT_SYMBOL(vfs_sendfile);
-
 static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 			   size_t count, loff_t max)
 {
 	struct file * in_file, * out_file;
+	struct inode * in_inode, * out_inode;
+	loff_t pos;
 	ssize_t retval;
-	int fput_needed_in, fput_needed_out;
+	int fput_needed_in, fput_needed_out, fl;
 
 	/*
 	 * Get input file, and verify that it is ok..
@@ -784,6 +720,22 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		goto out;
 	if (!(in_file->f_mode & FMODE_READ))
 		goto fput_in;
+	retval = -EINVAL;
+	in_inode = in_file->f_path.dentry->d_inode;
+	if (!in_inode)
+		goto fput_in;
+	if (!in_file->f_op || !in_file->f_op->splice_read)
+		goto fput_in;
+	retval = -ESPIPE;
+	if (!ppos)
+		ppos = &in_file->f_pos;
+	else
+		if (!(in_file->f_mode & FMODE_PREAD))
+			goto fput_in;
+	retval = rw_verify_area(READ, in_file, ppos, count);
+	if (retval < 0)
+		goto fput_in;
+	count = retval;
 
 	retval = security_file_permission (in_file, MAY_READ);
 	if (retval)
@@ -798,11 +750,56 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		goto fput_in;
 	if (!(out_file->f_mode & FMODE_WRITE))
 		goto fput_out;
+	retval = -EINVAL;
+	if (!out_file->f_op || !out_file->f_op->sendpage)
+		goto fput_out;
+	out_inode = out_file->f_path.dentry->d_inode;
+	retval = rw_verify_area(WRITE, out_file, &out_file->f_pos, count);
+	if (retval < 0)
+		goto fput_out;
+	count = retval;
 
-	retval = vfs_sendfile(out_file, in_file, ppos, count, max);
+	retval = security_file_permission (out_file, MAY_WRITE);
+	if (retval)
+		goto fput_out;
+
+	if (!max)
+		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
+
+	pos = *ppos;
+	retval = -EINVAL;
+	if (unlikely(pos < 0))
+		goto fput_out;
+	if (unlikely(pos + count > max)) {
+		retval = -EOVERFLOW;
+		if (pos >= max)
+			goto fput_out;
+		count = max - pos;
+	}
+
+	fl = 0;
+#if 0
+	/*
+	 * We need to debate whether we can enable this or not. The
+	 * man page documents EAGAIN return for the output at least,
+	 * and the application is arguably buggy if it doesn't expect
+	 * EAGAIN on a non-blocking file descriptor.
+	 */
+	if (in_file->f_flags & O_NONBLOCK)
+		fl = SPLICE_F_NONBLOCK;
+#endif
+	retval = do_splice_direct(in_file, ppos, out_file, count, fl);
+
+	if (retval > 0) {
+		add_rchar(current, retval);
+		add_wchar(current, retval);
+	}
 
 	inc_syscr(current);
 	inc_syscw(current);
+	if (*ppos > max)
+		retval = -EOVERFLOW;
+
 fput_out:
 	fput_light(out_file, fput_needed_out);
 fput_in:

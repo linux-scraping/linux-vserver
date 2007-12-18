@@ -76,8 +76,6 @@ static int file_ioctl(struct file *filp, unsigned int cmd,
 			return put_user(res, p);
 		}
 		case FIGETBSZ:
-			if (inode->i_sb == NULL)
-				return -EBADF;
 			return put_user(inode->i_sb->s_blocksize, p);
 		case FIONREAD:
 			return put_user(i_size_read(inode) - filp->f_pos, p);
@@ -227,11 +225,3 @@ asmlinkage long sys_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg)
  out:
 	return error;
 }
-
-/*
- * Platforms implementing 32 bit compatibility ioctl handlers in
- * modules need this exported
- */
-#ifdef CONFIG_COMPAT
-EXPORT_SYMBOL(sys_ioctl);
-#endif

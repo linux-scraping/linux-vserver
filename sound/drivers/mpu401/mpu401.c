@@ -1,6 +1,6 @@
 /*
  *  Driver for generic MPU-401 boards (UART mode only)
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Copyright (c) 2004 by Castet Matthieu <castet.matthieu@free.fr>
  *
  *
@@ -30,7 +30,7 @@
 #include <sound/mpu401.h>
 #include <sound/initval.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("MPU-401 UART");
 MODULE_LICENSE("GPL");
 
@@ -42,6 +42,7 @@ static int pnp[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
 #endif
 static long port[SNDRV_CARDS] = SNDRV_DEFAULT_PORT;	/* MPU-401 port number */
 static int irq[SNDRV_CARDS] = SNDRV_DEFAULT_IRQ;	/* MPU-401 IRQ */
+static int uart_enter[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for MPU-401 device.");
@@ -57,6 +58,8 @@ module_param_array(port, long, NULL, 0444);
 MODULE_PARM_DESC(port, "Port # for MPU-401 device.");
 module_param_array(irq, int, NULL, 0444);
 MODULE_PARM_DESC(irq, "IRQ # for MPU-401 device.");
+module_param_array(uart_enter, bool, NULL, 0444);
+MODULE_PARM_DESC(uart_enter, "Issue UART_ENTER command at open.");
 
 static struct platform_device *platform_devices[SNDRV_CARDS];
 static int pnp_registered;
@@ -66,6 +69,9 @@ static int snd_mpu401_create(int dev, struct snd_card **rcard)
 {
 	struct snd_card *card;
 	int err;
+
+	if (!uart_enter[dev])
+		snd_printk(KERN_ERR "the uart_enter option is obsolete; remove it\n");
 
 	*rcard = NULL;
 	card = snd_card_new(index[dev], id[dev], THIS_MODULE, 0);
@@ -80,10 +86,10 @@ static int snd_mpu401_create(int dev, struct snd_card **rcard)
 		strcat(card->longname, "polled");
 	}
 
-	if ((err = snd_mpu401_uart_new(card, 0,
-				       MPU401_HW_MPU401,
-				       port[dev], 0,
-				       irq[dev], irq[dev] >= 0 ? IRQF_DISABLED : 0, NULL)) < 0) {
+	err = snd_mpu401_uart_new(card, 0, MPU401_HW_MPU401, port[dev], 0,
+				  irq[dev], irq[dev] >= 0 ? IRQF_DISABLED : 0,
+				  NULL);
+	if (err < 0) {
 		printk(KERN_ERR "MPU401 not detected at 0x%lx\n", port[dev]);
 		goto _err;
 	}
@@ -224,7 +230,7 @@ static struct pnp_driver snd_mpu401_pnp_driver = {
 static struct pnp_driver snd_mpu401_pnp_driver;
 #endif
 
-static void __init_or_module snd_mpu401_unregister_all(void)
+static void snd_mpu401_unregister_all(void)
 {
 	int i;
 

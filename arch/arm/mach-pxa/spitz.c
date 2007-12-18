@@ -21,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/mmc/host.h>
 #include <linux/pm.h>
+#include <linux/backlight.h>
 
 #include <asm/setup.h>
 #include <asm/memory.h>
@@ -48,6 +49,7 @@
 #include <asm/hardware/scoop.h>
 
 #include "generic.h"
+#include "devices.h"
 #include "sharpsl.h"
 
 /*
@@ -221,14 +223,27 @@ struct corgissp_machinfo spitz_ssp_machinfo = {
 /*
  * Spitz Backlight Device
  */
-static struct corgibl_machinfo spitz_bl_machinfo = {
+static void spitz_bl_kick_battery(void)
+{
+	void (*kick_batt)(void);
+
+	kick_batt = symbol_get(sharpsl_battery_kick);
+	if (kick_batt) {
+		kick_batt();
+		symbol_put(sharpsl_battery_kick);
+	}
+}
+
+static struct generic_bl_info spitz_bl_machinfo = {
+	.name = "corgi-bl",
 	.default_intensity = 0x1f,
 	.limit_mask = 0x0b,
 	.max_intensity = 0x2f,
+	.kick_battery = spitz_bl_kick_battery,
 };
 
 static struct platform_device spitzbl_device = {
-	.name		= "corgi-bl",
+	.name		= "generic-bl",
 	.dev		= {
  		.platform_data	= &spitz_bl_machinfo,
 	},
@@ -560,7 +575,7 @@ MACHINE_START(SPITZ, "SHARP Spitz")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_spitz,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa27x_init_irq,
 	.init_machine	= spitz_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -572,7 +587,7 @@ MACHINE_START(BORZOI, "SHARP Borzoi")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_spitz,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa27x_init_irq,
 	.init_machine	= spitz_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -584,7 +599,7 @@ MACHINE_START(AKITA, "SHARP Akita")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_spitz,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa27x_init_irq,
 	.init_machine	= akita_init,
 	.timer		= &pxa_timer,
 MACHINE_END

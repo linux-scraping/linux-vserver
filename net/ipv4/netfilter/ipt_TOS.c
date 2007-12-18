@@ -21,7 +21,7 @@ MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("iptables TOS mangling module");
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
@@ -29,13 +29,13 @@ target(struct sk_buff **pskb,
        const void *targinfo)
 {
 	const struct ipt_tos_target_info *tosinfo = targinfo;
-	struct iphdr *iph = (*pskb)->nh.iph;
+	struct iphdr *iph = ip_hdr(skb);
 
 	if ((iph->tos & IPTOS_TOS_MASK) != tosinfo->tos) {
 		__u8 oldtos;
-		if (!skb_make_writable(pskb, sizeof(struct iphdr)))
+		if (!skb_make_writable(skb, sizeof(struct iphdr)))
 			return NF_DROP;
-		iph = (*pskb)->nh.iph;
+		iph = ip_hdr(skb);
 		oldtos = iph->tos;
 		iph->tos = (iph->tos & IPTOS_PREC_MASK) | tosinfo->tos;
 		nf_csum_replace2(&iph->check, htons(oldtos), htons(iph->tos));
@@ -43,7 +43,7 @@ target(struct sk_buff **pskb,
 	return XT_CONTINUE;
 }
 
-static int
+static bool
 checkentry(const char *tablename,
 	   const void *e_void,
 	   const struct xt_target *target,
@@ -58,12 +58,12 @@ checkentry(const char *tablename,
 	    && tos != IPTOS_MINCOST
 	    && tos != IPTOS_NORMALSVC) {
 		printk(KERN_WARNING "TOS: bad tos value %#x\n", tos);
-		return 0;
+		return false;
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target ipt_tos_reg = {
+static struct xt_target ipt_tos_reg __read_mostly = {
 	.name		= "TOS",
 	.family		= AF_INET,
 	.target		= target,

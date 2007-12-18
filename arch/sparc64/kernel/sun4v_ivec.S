@@ -22,12 +22,12 @@ sun4v_cpu_mondo:
 	be,pn	%xcc, sun4v_cpu_mondo_queue_empty
 	 nop
 
-	/* Get &trap_block[smp_processor_id()] into %g3.  */
-	ldxa	[%g0] ASI_SCRATCHPAD, %g3
-	sub	%g3, TRAP_PER_CPU_FAULT_INFO, %g3
+	/* Get &trap_block[smp_processor_id()] into %g4.  */
+	ldxa	[%g0] ASI_SCRATCHPAD, %g4
+	sub	%g4, TRAP_PER_CPU_FAULT_INFO, %g4
 
 	/* Get CPU mondo queue base phys address into %g7.  */
-	ldx	[%g3 + TRAP_PER_CPU_CPU_MONDO_PA], %g7
+	ldx	[%g4 + TRAP_PER_CPU_CPU_MONDO_PA], %g7
 
 	/* Now get the cross-call arguments and handler PC, same
 	 * layout as sun4u:
@@ -47,8 +47,7 @@ sun4v_cpu_mondo:
 	add	%g2, 0x40 - 0x8 - 0x8, %g2
 
 	/* Update queue head pointer.  */
-	sethi	%hi(8192 - 1), %g4
-	or	%g4, %lo(8192 - 1), %g4
+	lduw	[%g4 + TRAP_PER_CPU_CPU_MONDO_QMASK], %g4
 	and	%g2, %g4, %g2
 
 	mov	INTRQ_CPU_MONDO_HEAD, %g4
@@ -71,12 +70,12 @@ sun4v_dev_mondo:
 	be,pn	%xcc, sun4v_dev_mondo_queue_empty
 	 nop
 
-	/* Get &trap_block[smp_processor_id()] into %g3.  */
-	ldxa	[%g0] ASI_SCRATCHPAD, %g3
-	sub	%g3, TRAP_PER_CPU_FAULT_INFO, %g3
+	/* Get &trap_block[smp_processor_id()] into %g4.  */
+	ldxa	[%g0] ASI_SCRATCHPAD, %g4
+	sub	%g4, TRAP_PER_CPU_FAULT_INFO, %g4
 
 	/* Get DEV mondo queue base phys address into %g5.  */
-	ldx	[%g3 + TRAP_PER_CPU_DEV_MONDO_PA], %g5
+	ldx	[%g4 + TRAP_PER_CPU_DEV_MONDO_PA], %g5
 
 	/* Load IVEC into %g3.  */
 	ldxa	[%g5 + %g2] ASI_PHYS_USE_EC, %g3
@@ -90,27 +89,28 @@ sun4v_dev_mondo:
 	 */
 
 	/* Update queue head pointer, this frees up some registers.  */
-	sethi	%hi(8192 - 1), %g4
-	or	%g4, %lo(8192 - 1), %g4
+	lduw	[%g4 + TRAP_PER_CPU_DEV_MONDO_QMASK], %g4
 	and	%g2, %g4, %g2
 
 	mov	INTRQ_DEVICE_MONDO_HEAD, %g4
 	stxa	%g2, [%g4] ASI_QUEUE
 	membar	#Sync
 
-	/* Get &__irq_work[smp_processor_id()] into %g1.  */
-	TRAP_LOAD_IRQ_WORK(%g1, %g4)
+	TRAP_LOAD_IRQ_WORK_PA(%g1, %g4)
 
-	/* Get &ivector_table[IVEC] into %g4.  */
-	sethi	%hi(ivector_table), %g4
-	sllx	%g3, 3, %g3
-	or	%g4, %lo(ivector_table), %g4
+	/* For VIRQs, cookie is encoded as ~bucket_phys_addr  */
+	brlz,pt %g3, 1f
+	 xnor	%g3, %g0, %g4
+
+	/* Get __pa(&ivector_table[IVEC]) into %g4.  */
+	sethi	%hi(ivector_table_pa), %g4
+	ldx	[%g4 + %lo(ivector_table_pa)], %g4
+	sllx	%g3, 4, %g3
 	add	%g4, %g3, %g4
 
-	/* Insert ivector_table[] entry into __irq_work[] queue.  */
-	lduw	[%g1], %g2		/* g2 = irq_work(cpu) */
-	stw	%g2, [%g4 + 0x00]	/* bucket->irq_chain = g2 */
-	stw	%g4, [%g1]		/* irq_work(cpu) = bucket */
+1:	ldx	[%g1], %g2
+	stxa	%g2, [%g4] ASI_PHYS_USE_EC
+	stx	%g4, [%g1]
 
 	/* Signal the interrupt by setting (1 << pil) in %softint.  */
 	wr	%g0, 1 << PIL_DEVICE_IRQ, %set_softint
@@ -143,6 +143,8 @@ sun4v_res_mondo:
 	brnz,pn	%g1, sun4v_res_mondo_queue_full
 	 nop
 
+	lduw	[%g3 + TRAP_PER_CPU_RESUM_QMASK], %g4
+
 	/* Remember this entry's offset in %g1.  */
 	mov	%g2, %g1
 
@@ -173,8 +175,6 @@ sun4v_res_mondo:
 	add	%g2, 0x08, %g2
 
 	/* Update queue head pointer.  */
-	sethi	%hi(8192 - 1), %g4
-	or	%g4, %lo(8192 - 1), %g4
 	and	%g2, %g4, %g2
 
 	mov	INTRQ_RESUM_MONDO_HEAD, %g4
@@ -254,6 +254,8 @@ sun4v_nonres_mondo:
 	brnz,pn	%g1, sun4v_nonres_mondo_queue_full
 	 nop
 
+	lduw	[%g3 + TRAP_PER_CPU_NONRESUM_QMASK], %g4
+
 	/* Remember this entry's offset in %g1.  */
 	mov	%g2, %g1
 
@@ -284,8 +286,6 @@ sun4v_nonres_mondo:
 	add	%g2, 0x08, %g2
 
 	/* Update queue head pointer.  */
-	sethi	%hi(8192 - 1), %g4
-	or	%g4, %lo(8192 - 1), %g4
 	and	%g2, %g4, %g2
 
 	mov	INTRQ_NONRESUM_MONDO_HEAD, %g4

@@ -1177,7 +1177,7 @@
 
 #define GPIO_bit(x)	(1 << ((x) & 0x1f))
 
-#ifdef CONFIG_PXA27x
+#if defined(CONFIG_PXA27x) || defined(CONFIG_PXA3xx)
 
 /* Interrupt Controller */
 
@@ -1765,28 +1765,8 @@
 #define SSACD_P(x) (*(((x) == 1) ? &SSACD_P1 : ((x) == 2) ? &SSACD_P2 : ((x) == 3) ? &SSACD_P3 : NULL))
 
 /*
- * MultiMediaCard (MMC) controller
+ * MultiMediaCard (MMC) controller - see drivers/mmc/host/pxamci.h
  */
-
-#define MMC_STRPCL	__REG(0x41100000)  /* Control to start and stop MMC clock */
-#define MMC_STAT	__REG(0x41100004)  /* MMC Status Register (read only) */
-#define MMC_CLKRT	__REG(0x41100008)  /* MMC clock rate */
-#define MMC_SPI		__REG(0x4110000c)  /* SPI mode control bits */
-#define MMC_CMDAT	__REG(0x41100010)  /* Command/response/data sequence control */
-#define MMC_RESTO	__REG(0x41100014)  /* Expected response time out */
-#define MMC_RDTO	__REG(0x41100018)  /* Expected data read time out */
-#define MMC_BLKLEN	__REG(0x4110001c)  /* Block length of data transaction */
-#define MMC_NOB		__REG(0x41100020)  /* Number of blocks, for block mode */
-#define MMC_PRTBUF	__REG(0x41100024)  /* Partial MMC_TXFIFO FIFO written */
-#define MMC_I_MASK	__REG(0x41100028)  /* Interrupt Mask */
-#define MMC_I_REG	__REG(0x4110002c)  /* Interrupt Register (read only) */
-#define MMC_CMD		__REG(0x41100030)  /* Index of current command */
-#define MMC_ARGH	__REG(0x41100034)  /* MSW part of the current command argument */
-#define MMC_ARGL	__REG(0x41100038)  /* LSW part of the current command argument */
-#define MMC_RES		__REG(0x4110003c)  /* Response FIFO (read only) */
-#define MMC_RXFIFO	__REG(0x41100040)  /* Receive FIFO (read only) */
-#define MMC_TXFIFO	__REG(0x41100044)  /* Transmit FIFO (write only) */
-
 
 /*
  * Core Clock
@@ -1801,35 +1781,35 @@
 #define CCCR_M_MASK	0x0060		/* Memory Frequency to Run Mode Frequency Multiplier */
 #define CCCR_L_MASK	0x001f		/* Crystal Frequency to Memory Frequency Multiplier */
 
-#define CKEN24_CAMERA	(1 << 24)	/* Camera Interface Clock Enable */
-#define CKEN23_SSP1	(1 << 23)	/* SSP1 Unit Clock Enable */
-#define CKEN22_MEMC	(1 << 22)	/* Memory Controller Clock Enable */
-#define CKEN21_MEMSTK	(1 << 21)	/* Memory Stick Host Controller */
-#define CKEN20_IM	(1 << 20)	/* Internal Memory Clock Enable */
-#define CKEN19_KEYPAD	(1 << 19)	/* Keypad Interface Clock Enable */
-#define CKEN18_USIM	(1 << 18)	/* USIM Unit Clock Enable */
-#define CKEN17_MSL	(1 << 17)	/* MSL Unit Clock Enable */
-#define CKEN16_LCD	(1 << 16)	/* LCD Unit Clock Enable */
-#define CKEN15_PWRI2C	(1 << 15)	/* PWR I2C Unit Clock Enable */
-#define CKEN14_I2C	(1 << 14)	/* I2C Unit Clock Enable */
-#define CKEN13_FICP	(1 << 13)	/* FICP Unit Clock Enable */
-#define CKEN12_MMC	(1 << 12)	/* MMC Unit Clock Enable */
-#define CKEN11_USB	(1 << 11)	/* USB Unit Clock Enable */
-#define CKEN10_ASSP	(1 << 10)	/* ASSP (SSP3) Clock Enable */
-#define CKEN10_USBHOST	(1 << 10)	/* USB Host Unit Clock Enable */
-#define CKEN9_OSTIMER	(1 << 9)	/* OS Timer Unit Clock Enable */
-#define CKEN9_NSSP	(1 << 9)	/* NSSP (SSP2) Clock Enable */
-#define CKEN8_I2S	(1 << 8)	/* I2S Unit Clock Enable */
-#define CKEN7_BTUART	(1 << 7)	/* BTUART Unit Clock Enable */
-#define CKEN6_FFUART	(1 << 6)	/* FFUART Unit Clock Enable */
-#define CKEN5_STUART	(1 << 5)	/* STUART Unit Clock Enable */
-#define CKEN4_HWUART	(1 << 4)	/* HWUART Unit Clock Enable */
-#define CKEN4_SSP3	(1 << 4)	/* SSP3 Unit Clock Enable */
-#define CKEN3_SSP	(1 << 3)	/* SSP Unit Clock Enable */
-#define CKEN3_SSP2	(1 << 3)	/* SSP2 Unit Clock Enable */
-#define CKEN2_AC97	(1 << 2)	/* AC97 Unit Clock Enable */
-#define CKEN1_PWM1	(1 << 1)	/* PWM1 Clock Enable */
-#define CKEN0_PWM0	(1 << 0)	/* PWM0 Clock Enable */
+#define CKEN_CAMERA	(24)	/* Camera Interface Clock Enable */
+#define CKEN_SSP1	(23)	/* SSP1 Unit Clock Enable */
+#define CKEN_MEMC	(22)	/* Memory Controller Clock Enable */
+#define CKEN_MEMSTK	(21)	/* Memory Stick Host Controller */
+#define CKEN_IM		(20)	/* Internal Memory Clock Enable */
+#define CKEN_KEYPAD	(19)	/* Keypad Interface Clock Enable */
+#define CKEN_USIM	(18)	/* USIM Unit Clock Enable */
+#define CKEN_MSL	(17)	/* MSL Unit Clock Enable */
+#define CKEN_LCD	(16)	/* LCD Unit Clock Enable */
+#define CKEN_PWRI2C	(15)	/* PWR I2C Unit Clock Enable */
+#define CKEN_I2C	(14)	/* I2C Unit Clock Enable */
+#define CKEN_FICP	(13)	/* FICP Unit Clock Enable */
+#define CKEN_MMC	(12)	/* MMC Unit Clock Enable */
+#define CKEN_USB	(11)	/* USB Unit Clock Enable */
+#define CKEN_ASSP	(10)	/* ASSP (SSP3) Clock Enable */
+#define CKEN_USBHOST	(10)	/* USB Host Unit Clock Enable */
+#define CKEN_OSTIMER	(9)	/* OS Timer Unit Clock Enable */
+#define CKEN_NSSP	(9)	/* NSSP (SSP2) Clock Enable */
+#define CKEN_I2S	(8)	/* I2S Unit Clock Enable */
+#define CKEN_BTUART	(7)	/* BTUART Unit Clock Enable */
+#define CKEN_FFUART	(6)	/* FFUART Unit Clock Enable */
+#define CKEN_STUART	(5)	/* STUART Unit Clock Enable */
+#define CKEN_HWUART	(4)	/* HWUART Unit Clock Enable */
+#define CKEN_SSP3	(4)	/* SSP3 Unit Clock Enable */
+#define CKEN_SSP	(3)	/* SSP Unit Clock Enable */
+#define CKEN_SSP2	(3)	/* SSP2 Unit Clock Enable */
+#define CKEN_AC97	(2)	/* AC97 Unit Clock Enable */
+#define CKEN_PWM1	(1)	/* PWM1 Clock Enable */
+#define CKEN_PWM0	(0)	/* PWM0 Clock Enable */
 
 #define OSCC_OON	(1 << 1)	/* 32.768kHz OON (write-once only bit) */
 #define OSCC_OOK	(1 << 0)	/* 32.768kHz OOK (read-only bit) */
@@ -1843,6 +1823,7 @@
 #define LCCR1		__REG(0x44000004)  /* LCD Controller Control Register 1 */
 #define LCCR2		__REG(0x44000008)  /* LCD Controller Control Register 2 */
 #define LCCR3		__REG(0x4400000C)  /* LCD Controller Control Register 3 */
+#define LCCR4		__REG(0x44000010)  /* LCD Controller Control Register 3 */
 #define DFBR0		__REG(0x44000020)  /* DMA Channel 0 Frame Branch Register */
 #define DFBR1		__REG(0x44000024)  /* DMA Channel 1 Frame Branch Register */
 #define LCSR		__REG(0x44000038)  /* LCD Controller Status Register */
@@ -1855,6 +1836,16 @@
 #define LCCR3_4BPP (2 << 24)
 #define LCCR3_8BPP (3 << 24)
 #define LCCR3_16BPP (4 << 24)
+
+#define LCCR3_PDFOR_0 (0 << 30)
+#define LCCR3_PDFOR_1 (1 << 30)
+#define LCCR3_PDFOR_2 (2 << 30)
+#define LCCR3_PDFOR_3 (3 << 30)
+
+#define LCCR4_PAL_FOR_0 (0 << 15)
+#define LCCR4_PAL_FOR_1 (1 << 15)
+#define LCCR4_PAL_FOR_2 (2 << 15)
+#define LCCR4_PAL_FOR_MASK (3 << 15)
 
 #define FDADR0		__REG(0x44000200)  /* DMA Channel 0 Frame Descriptor Address Register */
 #define FSADR0		__REG(0x44000204)  /* DMA Channel 0 Frame Source Address Register */

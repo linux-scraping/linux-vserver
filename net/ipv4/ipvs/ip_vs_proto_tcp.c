@@ -20,6 +20,7 @@
 #include <linux/tcp.h>                  /* for tcphdr */
 #include <net/ip.h>
 #include <net/tcp.h>                    /* for csum_tcpudp_magic */
+#include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
 
 #include <net/ip_vs.h>
@@ -76,16 +77,15 @@ tcp_conn_schedule(struct sk_buff *skb,
 	struct ip_vs_service *svc;
 	struct tcphdr _tcph, *th;
 
-	th = skb_header_pointer(skb, skb->nh.iph->ihl*4,
-				sizeof(_tcph), &_tcph);
+	th = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_tcph), &_tcph);
 	if (th == NULL) {
 		*verdict = NF_DROP;
 		return 0;
 	}
 
 	if (th->syn &&
-	    (svc = ip_vs_service_get(skb->mark, skb->nh.iph->protocol,
-				     skb->nh.iph->daddr, th->dest))) {
+	    (svc = ip_vs_service_get(skb->mark, ip_hdr(skb)->protocol,
+				     ip_hdr(skb)->daddr, th->dest))) {
 		if (ip_vs_todrop()) {
 			/*
 			 * It seems that we are very loaded.
@@ -123,27 +123,27 @@ tcp_fast_csum_update(struct tcphdr *tcph, __be32 oldip, __be32 newip,
 
 
 static int
-tcp_snat_handler(struct sk_buff **pskb,
+tcp_snat_handler(struct sk_buff *skb,
 		 struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
 {
 	struct tcphdr *tcph;
-	unsigned int tcphoff = (*pskb)->nh.iph->ihl * 4;
+	const unsigned int tcphoff = ip_hdrlen(skb);
 
 	/* csum_check requires unshared skb */
-	if (!ip_vs_make_skb_writable(pskb, tcphoff+sizeof(*tcph)))
+	if (!skb_make_writable(skb, tcphoff+sizeof(*tcph)))
 		return 0;
 
 	if (unlikely(cp->app != NULL)) {
 		/* Some checks before mangling */
-		if (pp->csum_check && !pp->csum_check(*pskb, pp))
+		if (pp->csum_check && !pp->csum_check(skb, pp))
 			return 0;
 
 		/* Call application helper if needed */
-		if (!ip_vs_app_pkt_out(cp, pskb))
+		if (!ip_vs_app_pkt_out(cp, skb))
 			return 0;
 	}
 
-	tcph = (void *)(*pskb)->nh.iph + tcphoff;
+	tcph = (void *)ip_hdr(skb) + tcphoff;
 	tcph->source = cp->vport;
 
 	/* Adjust TCP checksums */
@@ -151,17 +151,15 @@ tcp_snat_handler(struct sk_buff **pskb,
 		/* Only port and addr are changed, do fast csum update */
 		tcp_fast_csum_update(tcph, cp->daddr, cp->vaddr,
 				     cp->dport, cp->vport);
-		if ((*pskb)->ip_summed == CHECKSUM_COMPLETE)
-			(*pskb)->ip_summed = CHECKSUM_NONE;
+		if (skb->ip_summed == CHECKSUM_COMPLETE)
+			skb->ip_summed = CHECKSUM_NONE;
 	} else {
 		/* full checksum calculation */
 		tcph->check = 0;
-		(*pskb)->csum = skb_checksum(*pskb, tcphoff,
-					     (*pskb)->len - tcphoff, 0);
+		skb->csum = skb_checksum(skb, tcphoff, skb->len - tcphoff, 0);
 		tcph->check = csum_tcpudp_magic(cp->vaddr, cp->caddr,
-						(*pskb)->len - tcphoff,
-						cp->protocol,
-						(*pskb)->csum);
+						skb->len - tcphoff,
+						cp->protocol, skb->csum);
 		IP_VS_DBG(11, "O-pkt: %s O-csum=%d (+%zd)\n",
 			  pp->name, tcph->check,
 			  (char*)&(tcph->check) - (char*)tcph);
@@ -171,30 +169,30 @@ tcp_snat_handler(struct sk_buff **pskb,
 
 
 static int
-tcp_dnat_handler(struct sk_buff **pskb,
+tcp_dnat_handler(struct sk_buff *skb,
 		 struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
 {
 	struct tcphdr *tcph;
-	unsigned int tcphoff = (*pskb)->nh.iph->ihl * 4;
+	const unsigned int tcphoff = ip_hdrlen(skb);
 
 	/* csum_check requires unshared skb */
-	if (!ip_vs_make_skb_writable(pskb, tcphoff+sizeof(*tcph)))
+	if (!skb_make_writable(skb, tcphoff+sizeof(*tcph)))
 		return 0;
 
 	if (unlikely(cp->app != NULL)) {
 		/* Some checks before mangling */
-		if (pp->csum_check && !pp->csum_check(*pskb, pp))
+		if (pp->csum_check && !pp->csum_check(skb, pp))
 			return 0;
 
 		/*
 		 *	Attempt ip_vs_app call.
 		 *	It will fix ip_vs_conn and iph ack_seq stuff
 		 */
-		if (!ip_vs_app_pkt_in(cp, pskb))
+		if (!ip_vs_app_pkt_in(cp, skb))
 			return 0;
 	}
 
-	tcph = (void *)(*pskb)->nh.iph + tcphoff;
+	tcph = (void *)ip_hdr(skb) + tcphoff;
 	tcph->dest = cp->dport;
 
 	/*
@@ -204,18 +202,16 @@ tcp_dnat_handler(struct sk_buff **pskb,
 		/* Only port and addr are changed, do fast csum update */
 		tcp_fast_csum_update(tcph, cp->vaddr, cp->daddr,
 				     cp->vport, cp->dport);
-		if ((*pskb)->ip_summed == CHECKSUM_COMPLETE)
-			(*pskb)->ip_summed = CHECKSUM_NONE;
+		if (skb->ip_summed == CHECKSUM_COMPLETE)
+			skb->ip_summed = CHECKSUM_NONE;
 	} else {
 		/* full checksum calculation */
 		tcph->check = 0;
-		(*pskb)->csum = skb_checksum(*pskb, tcphoff,
-					     (*pskb)->len - tcphoff, 0);
+		skb->csum = skb_checksum(skb, tcphoff, skb->len - tcphoff, 0);
 		tcph->check = csum_tcpudp_magic(cp->caddr, cp->daddr,
-						(*pskb)->len - tcphoff,
-						cp->protocol,
-						(*pskb)->csum);
-		(*pskb)->ip_summed = CHECKSUM_UNNECESSARY;
+						skb->len - tcphoff,
+						cp->protocol, skb->csum);
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	}
 	return 1;
 }
@@ -224,15 +220,15 @@ tcp_dnat_handler(struct sk_buff **pskb,
 static int
 tcp_csum_check(struct sk_buff *skb, struct ip_vs_protocol *pp)
 {
-	unsigned int tcphoff = skb->nh.iph->ihl*4;
+	const unsigned int tcphoff = ip_hdrlen(skb);
 
 	switch (skb->ip_summed) {
 	case CHECKSUM_NONE:
 		skb->csum = skb_checksum(skb, tcphoff, skb->len - tcphoff, 0);
 	case CHECKSUM_COMPLETE:
-		if (csum_tcpudp_magic(skb->nh.iph->saddr, skb->nh.iph->daddr,
+		if (csum_tcpudp_magic(ip_hdr(skb)->saddr, ip_hdr(skb)->daddr,
 				      skb->len - tcphoff,
-				      skb->nh.iph->protocol, skb->csum)) {
+				      ip_hdr(skb)->protocol, skb->csum)) {
 			IP_VS_DBG_RL_PKT(0, pp, skb, 0,
 					 "Failed checksum for");
 			return 0;
@@ -467,8 +463,7 @@ tcp_state_transition(struct ip_vs_conn *cp, int direction,
 {
 	struct tcphdr _tcph, *th;
 
-	th = skb_header_pointer(skb, skb->nh.iph->ihl*4,
-				sizeof(_tcph), &_tcph);
+	th = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_tcph), &_tcph);
 	if (th == NULL)
 		return 0;
 

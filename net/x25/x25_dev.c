@@ -48,7 +48,7 @@ static int x25_receive_data(struct sk_buff *skb, struct x25_neigh *nb)
 	if ((sk = x25_find_socket(lci, nb)) != NULL) {
 		int queued = 1;
 
-		skb->h.raw = skb->data;
+		skb_reset_transport_header(skb);
 		bh_lock_sock(sk);
 		if (!sock_owned_by_user(sk)) {
 			queued = x25_process_rx_frame(sk, skb);
@@ -94,6 +94,9 @@ int x25_lapb_receive_frame(struct sk_buff *skb, struct net_device *dev,
 {
 	struct sk_buff *nskb;
 	struct x25_neigh *nb;
+
+	if (dev->nd_net != &init_net)
+		goto drop;
 
 	nskb = skb_copy(skb, GFP_ATOMIC);
 	if (!nskb)
@@ -191,7 +194,7 @@ void x25_send_frame(struct sk_buff *skb, struct x25_neigh *nb)
 {
 	unsigned char *dptr;
 
-	skb->nh.raw = skb->data;
+	skb_reset_network_header(skb);
 
 	switch (nb->dev->type) {
 		case ARPHRD_X25:

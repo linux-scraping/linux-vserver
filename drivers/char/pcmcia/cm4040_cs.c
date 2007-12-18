@@ -41,7 +41,7 @@
 
 
 #ifdef PCMCIA_DEBUG
-#define reader_to_dev(x)	(&handle_to_dev(x->p_dev->handle))
+#define reader_to_dev(x)	(&handle_to_dev(x->p_dev))
 static int pc_debug = PCMCIA_DEBUG;
 module_param(pc_debug, int, 0600);
 #define DEBUGP(n, rdr, x, args...) do { 				\
@@ -599,7 +599,7 @@ cs_release:
 
 static void reader_release(struct pcmcia_device *link)
 {
-	cm4040_reader_release(link->priv);
+	cm4040_reader_release(link);
 	pcmcia_disable_device(link);
 }
 
@@ -636,11 +636,13 @@ static int reader_probe(struct pcmcia_device *link)
 	setup_timer(&dev->poll_timer, cm4040_do_poll, 0);
 
 	ret = reader_config(link, i);
-	if (ret)
+	if (ret) {
+		dev_table[i] = NULL;
+		kfree(dev);
 		return ret;
+	}
 
-	class_device_create(cmx_class, NULL, MKDEV(major, i), NULL,
-			    "cmx%d", i);
+	device_create(cmx_class, NULL, MKDEV(major, i), "cmx%d", i);
 
 	return 0;
 }
@@ -663,7 +665,7 @@ static void reader_detach(struct pcmcia_device *link)
 	dev_table[devno] = NULL;
 	kfree(dev);
 
-	class_device_destroy(cmx_class, MKDEV(major, devno));
+	device_destroy(cmx_class, MKDEV(major, devno));
 
 	return;
 }
@@ -708,12 +710,14 @@ static int __init cm4040_init(void)
 	if (major < 0) {
 		printk(KERN_WARNING MODULE_NAME
 			": could not get major number\n");
+		class_destroy(cmx_class);
 		return major;
 	}
 
 	rc = pcmcia_register_driver(&reader_driver);
 	if (rc < 0) {
 		unregister_chrdev(major, DEVICE_NAME);
+		class_destroy(cmx_class);
 		return rc;
 	}
 

@@ -33,7 +33,7 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/cpu.h>
-
+#include <asm/param.h>
 #include <asm/cache.h>
 #include <asm/hardware.h>	/* for register_parisc_driver() stuff */
 #include <asm/processor.h>
@@ -63,7 +63,7 @@ extern int update_cr16_clocksource(void);	/* from time.c */
 ** will call register_parisc_driver(&cpu_driver) before calling do_inventory().
 **
 ** The goal of consolidating CPU initialization into one place is
-** to make sure all CPU's get initialized the same way.
+** to make sure all CPUs get initialized the same way.
 ** The code path not shared is how PDC hands control of the CPU to the OS.
 ** The initialization of OS data structures is the same (done below).
 */
@@ -76,13 +76,18 @@ extern int update_cr16_clocksource(void);	/* from time.c */
  * (return 1).  If so, initialize the chip and tell other partners in crime 
  * they have work to do.
  */
-static int __init processor_probe(struct parisc_device *dev)
+static int __cpuinit processor_probe(struct parisc_device *dev)
 {
 	unsigned long txn_addr;
 	unsigned long cpuid;
 	struct cpuinfo_parisc *p;
 
-#ifndef CONFIG_SMP
+#ifdef CONFIG_SMP
+	if (num_online_cpus() >= NR_CPUS) {
+		printk(KERN_INFO "num_online_cpus() >= NR_CPUS\n");
+		return 1;
+	}
+#else
 	if (boot_cpu_data.cpu_count > 0) {
 		printk(KERN_INFO "CONFIG_SMP=n  ignoring additional CPUs\n");
 		return 1;
@@ -166,7 +171,7 @@ static int __init processor_probe(struct parisc_device *dev)
 #endif
 
 	/*
-	** CONFIG_SMP: init_smp_config() will attempt to get CPU's into
+	** CONFIG_SMP: init_smp_config() will attempt to get CPUs into
 	** OS control. RENDEZVOUS is the default state - see mem_set above.
 	**	p->state = STATE_RENDEZVOUS;
 	*/
@@ -334,7 +339,7 @@ int __init init_per_cpu(int cpunum)
 }
 
 /*
- * Display cpu info for all cpu's.
+ * Display CPU info for all CPUs.
  */
 int
 show_cpuinfo (struct seq_file *m, void *v)
@@ -381,19 +386,19 @@ show_cpuinfo (struct seq_file *m, void *v)
 	return 0;
 }
 
-static struct parisc_device_id processor_tbl[] __read_mostly = {
+static const struct parisc_device_id processor_tbl[] = {
 	{ HPHW_NPROC, HVERSION_REV_ANY_ID, HVERSION_ANY_ID, SVERSION_ANY_ID },
 	{ 0, }
 };
 
-static struct parisc_driver cpu_driver __read_mostly = {
+static struct parisc_driver cpu_driver = {
 	.name		= "CPU",
 	.id_table	= processor_tbl,
 	.probe		= processor_probe
 };
 
 /**
- * processor_init - Processor initalization procedure.
+ * processor_init - Processor initialization procedure.
  *
  * Register this driver.
  */

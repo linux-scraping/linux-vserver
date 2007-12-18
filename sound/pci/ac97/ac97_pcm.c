@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Universal interface for Audio Codec '97
  *
  *  For more details look to AC '97 component specification revision 2.2
@@ -34,7 +34,6 @@
 #include <sound/control.h>
 #include <sound/ac97_codec.h>
 #include <sound/asoundef.h>
-#include "ac97_patch.h"
 #include "ac97_id.h"
 #include "ac97_local.h"
 

@@ -20,6 +20,8 @@
 #include <linux/dcache.h>
 #include <linux/mount.h>
 #include <linux/nsproxy.h>
+#include <linux/user_namespace.h>
+#include <linux/pid_namespace.h>
 #include <linux/fs.h>
 
 #include <asm/errno.h>
@@ -31,6 +33,8 @@ atomic_t vs_global_fs		= ATOMIC_INIT(0);
 atomic_t vs_global_mnt_ns	= ATOMIC_INIT(0);
 atomic_t vs_global_uts_ns	= ATOMIC_INIT(0);
 atomic_t vs_global_ipc_ns	= ATOMIC_INIT(0);
+atomic_t vs_global_user_ns	= ATOMIC_INIT(0);
+atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 
 
 /* namespace functions */
@@ -41,6 +45,7 @@ const struct vcmd_space_mask space_mask = {
 	.mask = CLONE_NEWNS |
 		CLONE_NEWUTS |
 		CLONE_NEWIPC |
+		CLONE_NEWUSER |
 		CLONE_FS
 };
 
@@ -58,9 +63,11 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct mnt_namespace *old_ns;
 	struct uts_namespace *old_uts;
 	struct ipc_namespace *old_ipc;
+	struct pid_namespace *old_pid;
+	struct user_namespace *old_user;
 	struct nsproxy *nsproxy;
 
-	nsproxy = dup_namespaces(old_nsproxy);
+	nsproxy = copy_nsproxy(old_nsproxy);
 	if (!nsproxy)
 		goto out;
 
@@ -88,12 +95,32 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	} else
 		old_ipc = NULL;
 
+	if (mask & CLONE_NEWUSER) {
+		old_user = nsproxy->user_ns;
+		nsproxy->user_ns = new_nsproxy->user_ns;
+		if (nsproxy->user_ns)
+			get_user_ns(nsproxy->user_ns);
+	} else
+		old_user = NULL;
+
+	if (mask & CLONE_NEWPID) {
+		old_pid = nsproxy->pid_ns;
+		nsproxy->pid_ns = new_nsproxy->pid_ns;
+		if (nsproxy->pid_ns)
+			get_pid_ns(nsproxy->pid_ns);
+	} else
+		old_pid = NULL;
+
 	if (old_ns)
 		put_mnt_ns(old_ns);
 	if (old_uts)
 		put_uts_ns(old_uts);
 	if (old_ipc)
 		put_ipc_ns(old_ipc);
+	if (old_pid)
+		put_pid_ns(old_pid);
+	if (old_user)
+		put_user_ns(old_user);
 out:
 	return nsproxy;
 }
@@ -113,9 +140,11 @@ struct nsproxy *__vs_merge_nsproxy(struct nsproxy *old,
 	if (!proxy)
 		return NULL;
 
-	if (mask)
+	if (mask) {
+		/* vs_mix_nsproxy returns with reference */
 		return vs_mix_nsproxy(old ? old : &null_proxy,
 			proxy, mask);
+	}
 	get_nsproxy(proxy);
 	return proxy;
 }

@@ -37,8 +37,8 @@ static char ixgb_driver_string[] = "Intel(R) PRO/10GbE Network Driver";
 #define DRIVERNAPI "-NAPI"
 #endif
 #define DRV_VERSION		"1.0.126-k2"DRIVERNAPI
-char ixgb_driver_version[] = DRV_VERSION;
-static char ixgb_copyright[] = "Copyright (c) 1999-2006 Intel Corporation.";
+const char ixgb_driver_version[] = DRV_VERSION;
+static const char ixgb_copyright[] = "Copyright (c) 1999-2006 Intel Corporation.";
 
 /* ixgb_pci_tbl - PCI Device ID Table
  *
@@ -97,14 +97,13 @@ static irqreturn_t ixgb_intr(int irq, void *data);
 static boolean_t ixgb_clean_tx_irq(struct ixgb_adapter *adapter);
 
 #ifdef CONFIG_IXGB_NAPI
-static int ixgb_clean(struct net_device *netdev, int *budget);
+static int ixgb_clean(struct napi_struct *napi, int budget);
 static boolean_t ixgb_clean_rx_irq(struct ixgb_adapter *adapter,
 				   int *work_done, int work_to_do);
 #else
 static boolean_t ixgb_clean_rx_irq(struct ixgb_adapter *adapter);
 #endif
 static void ixgb_alloc_rx_buffers(struct ixgb_adapter *adapter);
-void ixgb_set_ethtool_ops(struct net_device *netdev);
 static void ixgb_tx_timeout(struct net_device *dev);
 static void ixgb_tx_timeout_task(struct work_struct *work);
 static void ixgb_vlan_rx_register(struct net_device *netdev,
@@ -122,9 +121,6 @@ static pci_ers_result_t ixgb_io_error_detected (struct pci_dev *pdev,
 	                     enum pci_channel_state state);
 static pci_ers_result_t ixgb_io_slot_reset (struct pci_dev *pdev);
 static void ixgb_io_resume (struct pci_dev *pdev);
-
-/* Exported from other modules */
-extern void ixgb_check_options(struct ixgb_adapter *adapter);
 
 static struct pci_error_handlers ixgb_err_handler = {
 	.error_detected = ixgb_io_error_detected,
@@ -227,7 +223,7 @@ int
 ixgb_up(struct ixgb_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
-	int err;
+	int err, irq_flags = IRQF_SHARED;
 	int max_frame = netdev->mtu + ENET_HEADER_SIZE + ENET_FCS_LENGTH;
 	struct ixgb_hw *hw = &adapter->hw;
 
@@ -246,26 +242,21 @@ ixgb_up(struct ixgb_adapter *adapter)
 	/* disable interrupts and get the hardware into a known state */
 	IXGB_WRITE_REG(&adapter->hw, IMC, 0xffffffff);
 
-#ifdef CONFIG_PCI_MSI
-	{
-	boolean_t pcix = (IXGB_READ_REG(&adapter->hw, STATUS) & 
-						  IXGB_STATUS_PCIX_MODE) ? TRUE : FALSE;
-	adapter->have_msi = TRUE;
-
-	if (!pcix)
-	   adapter->have_msi = FALSE;
-	else if((err = pci_enable_msi(adapter->pdev))) {
-		DPRINTK(PROBE, ERR,
-		 "Unable to allocate MSI interrupt Error: %d\n", err);
-		adapter->have_msi = FALSE;
+	/* only enable MSI if bus is in PCI-X mode */
+	if (IXGB_READ_REG(&adapter->hw, STATUS) & IXGB_STATUS_PCIX_MODE) {
+		err = pci_enable_msi(adapter->pdev);
+		if (!err) {
+			adapter->have_msi = 1;
+			irq_flags = 0;
+		}
 		/* proceed to try to request regular interrupt */
 	}
-	}
 
-#endif
-	if((err = request_irq(adapter->pdev->irq, &ixgb_intr,
-				  IRQF_SHARED | IRQF_SAMPLE_RANDOM,
-			          netdev->name, netdev))) {
+	err = request_irq(adapter->pdev->irq, &ixgb_intr, irq_flags,
+	                  netdev->name, netdev);
+	if (err) {
+		if (adapter->have_msi)
+			pci_disable_msi(adapter->pdev);
 		DPRINTK(PROBE, ERR,
 		 "Unable to allocate interrupt Error: %d\n", err);
 		return err;
@@ -293,7 +284,7 @@ ixgb_up(struct ixgb_adapter *adapter)
 	mod_timer(&adapter->watchdog_timer, jiffies);
 
 #ifdef CONFIG_IXGB_NAPI
-	netif_poll_enable(netdev);
+	napi_enable(&adapter->napi);
 #endif
 	ixgb_irq_enable(adapter);
 
@@ -307,15 +298,14 @@ ixgb_down(struct ixgb_adapter *adapter, boolean_t kill_watchdog)
 
 	ixgb_irq_disable(adapter);
 	free_irq(adapter->pdev->irq, netdev);
-#ifdef CONFIG_PCI_MSI
-	if(adapter->have_msi == TRUE)
+
+	if (adapter->have_msi)
 		pci_disable_msi(adapter->pdev);
 
-#endif
 	if(kill_watchdog)
 		del_timer_sync(&adapter->watchdog_timer);
 #ifdef CONFIG_IXGB_NAPI
-	netif_poll_disable(netdev);
+	napi_disable(&adapter->napi);
 #endif
 	adapter->link_speed = 0;
 	adapter->link_duplex = 0;
@@ -388,7 +378,6 @@ ixgb_probe(struct pci_dev *pdev,
 		goto err_alloc_etherdev;
 	}
 
-	SET_MODULE_OWNER(netdev);
 	SET_NETDEV_DEV(netdev, &pdev->dev);
 
 	pci_set_drvdata(pdev, netdev);
@@ -427,8 +416,7 @@ ixgb_probe(struct pci_dev *pdev,
 	netdev->tx_timeout = &ixgb_tx_timeout;
 	netdev->watchdog_timeo = 5 * HZ;
 #ifdef CONFIG_IXGB_NAPI
-	netdev->poll = &ixgb_clean;
-	netdev->weight = 64;
+	netif_napi_add(netdev, &adapter->napi, ixgb_clean, 64);
 #endif
 	netdev->vlan_rx_register = ixgb_vlan_rx_register;
 	netdev->vlan_rx_add_vid = ixgb_vlan_rx_add_vid;
@@ -685,7 +673,7 @@ ixgb_setup_tx_resources(struct ixgb_adapter *adapter)
 	/* round up to nearest 4K */
 
 	txdr->size = txdr->count * sizeof(struct ixgb_tx_desc);
-	IXGB_ROUNDUP(txdr->size, 4096);
+	txdr->size = ALIGN(txdr->size, 4096);
 
 	txdr->desc = pci_alloc_consistent(pdev, txdr->size, &txdr->dma);
 	if(!txdr->desc) {
@@ -774,7 +762,7 @@ ixgb_setup_rx_resources(struct ixgb_adapter *adapter)
 	/* Round up to nearest 4K */
 
 	rxdr->size = rxdr->count * sizeof(struct ixgb_rx_desc);
-	IXGB_ROUNDUP(rxdr->size, 4096);
+	rxdr->size = ALIGN(rxdr->size, 4096);
 
 	rxdr->desc = pci_alloc_consistent(pdev, rxdr->size, &rxdr->dma);
 
@@ -1093,7 +1081,8 @@ ixgb_set_multi(struct net_device *netdev)
 		rctl |= IXGB_RCTL_MPE;
 		IXGB_WRITE_REG(hw, RCTL, rctl);
 	} else {
-		uint8_t mta[netdev->mc_count * IXGB_ETH_LENGTH_OF_ADDRESS];
+		uint8_t mta[IXGB_MAX_NUM_MULTICAST_ADDRESSES *
+			    IXGB_ETH_LENGTH_OF_ADDRESS];
 
 		IXGB_WRITE_REG(hw, RCTL, rctl);
 
@@ -1182,24 +1171,27 @@ ixgb_tso(struct ixgb_adapter *adapter, struct sk_buff *skb)
 
 	if (likely(skb_is_gso(skb))) {
 		struct ixgb_buffer *buffer_info;
+		struct iphdr *iph;
+
 		if (skb_header_cloned(skb)) {
 			err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
 			if (err)
 				return err;
 		}
 
-		hdr_len = ((skb->h.raw - skb->data) + (skb->h.th->doff << 2));
+		hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
 		mss = skb_shinfo(skb)->gso_size;
-		skb->nh.iph->tot_len = 0;
-		skb->nh.iph->check = 0;
-		skb->h.th->check = ~csum_tcpudp_magic(skb->nh.iph->saddr,
-						      skb->nh.iph->daddr,
-						      0, IPPROTO_TCP, 0);
-		ipcss = skb->nh.raw - skb->data;
-		ipcso = (void *)&(skb->nh.iph->check) - (void *)skb->data;
-		ipcse = skb->h.raw - skb->data - 1;
-		tucss = skb->h.raw - skb->data;
-		tucso = (void *)&(skb->h.th->check) - (void *)skb->data;
+		iph = ip_hdr(skb);
+		iph->tot_len = 0;
+		iph->check = 0;
+		tcp_hdr(skb)->check = ~csum_tcpudp_magic(iph->saddr,
+							 iph->daddr, 0,
+							 IPPROTO_TCP, 0);
+		ipcss = skb_network_offset(skb);
+		ipcso = (void *)&(iph->check) - (void *)skb->data;
+		ipcse = skb_transport_offset(skb) - 1;
+		tucss = skb_transport_offset(skb);
+		tucso = (void *)&(tcp_hdr(skb)->check) - (void *)skb->data;
 		tucse = 0;
 
 		i = adapter->tx_ring.next_to_use;
@@ -1243,7 +1235,7 @@ ixgb_tx_csum(struct ixgb_adapter *adapter, struct sk_buff *skb)
 
 	if(likely(skb->ip_summed == CHECKSUM_PARTIAL)) {
 		struct ixgb_buffer *buffer_info;
-		css = skb->h.raw - skb->data;
+		css = skb_transport_offset(skb);
 		cso = css + skb->csum_offset;
 
 		i = adapter->tx_ring.next_to_use;
@@ -1329,8 +1321,8 @@ ixgb_tx_map(struct ixgb_adapter *adapter, struct sk_buff *skb,
 
 			/* Workaround for premature desc write-backs
 			 * in TSO mode.  Append 4-byte sentinel desc */
-			if (unlikely(mss && !nr_frags && size == len
-			             && size > 8))
+			if (unlikely(mss && (f == (nr_frags - 1))
+				     && size == len && size > 8))
 				size -= 4;
 
 			buffer_info->length = size;
@@ -1749,7 +1741,7 @@ ixgb_intr(int irq, void *data)
 	}
 
 #ifdef CONFIG_IXGB_NAPI
-	if(netif_rx_schedule_prep(netdev)) {
+	if (netif_rx_schedule_prep(netdev, &adapter->napi)) {
 
 		/* Disable interrupts and register for poll. The flush 
 		  of the posted write is intentionally left out.
@@ -1757,7 +1749,7 @@ ixgb_intr(int irq, void *data)
 
 		atomic_inc(&adapter->irq_sem);
 		IXGB_WRITE_REG(&adapter->hw, IMC, ~0);
-		__netif_rx_schedule(netdev);
+		__netif_rx_schedule(netdev, &adapter->napi);
 	}
 #else
 	/* yes, that is actually a & and it is meant to make sure that
@@ -1779,27 +1771,23 @@ ixgb_intr(int irq, void *data)
  **/
 
 static int
-ixgb_clean(struct net_device *netdev, int *budget)
+ixgb_clean(struct napi_struct *napi, int budget)
 {
-	struct ixgb_adapter *adapter = netdev_priv(netdev);
-	int work_to_do = min(*budget, netdev->quota);
+	struct ixgb_adapter *adapter = container_of(napi, struct ixgb_adapter, napi);
+	struct net_device *netdev = adapter->netdev;
 	int tx_cleaned;
 	int work_done = 0;
 
 	tx_cleaned = ixgb_clean_tx_irq(adapter);
-	ixgb_clean_rx_irq(adapter, &work_done, work_to_do);
-
-	*budget -= work_done;
-	netdev->quota -= work_done;
+	ixgb_clean_rx_irq(adapter, &work_done, budget);
 
 	/* if no Tx and not enough Rx work done, exit the polling mode */
 	if((!tx_cleaned && (work_done == 0)) || !netif_running(netdev)) {
-		netif_rx_complete(netdev);
+		netif_rx_complete(netdev, napi);
 		ixgb_irq_enable(adapter);
-		return 0;
 	}
 
-	return 1;
+	return work_done;
 }
 #endif
 
@@ -2014,9 +2002,12 @@ ixgb_clean_rx_irq(struct ixgb_adapter *adapter)
 			    netdev_alloc_skb(netdev, length + NET_IP_ALIGN);
 			if (new_skb) {
 				skb_reserve(new_skb, NET_IP_ALIGN);
-				memcpy(new_skb->data - NET_IP_ALIGN,
-				       skb->data - NET_IP_ALIGN,
-				       length + NET_IP_ALIGN);
+				skb_copy_to_linear_data_offset(new_skb,
+							       -NET_IP_ALIGN,
+							       (skb->data -
+							        NET_IP_ALIGN),
+							       (length +
+							        NET_IP_ALIGN));
 				/* save the skb in buffer_info as good */
 				buffer_info->skb = skb;
 				skb = new_skb;

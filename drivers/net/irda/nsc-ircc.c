@@ -20,7 +20,7 @@
  *     published by the Free Software Foundation; either version 2 of 
  *     the License, or (at your option) any later version.
  *  
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is 
  *     provided "AS-IS" and at no charge.
  *
@@ -437,7 +437,6 @@ static int __init nsc_ircc_open(chipio_t *info)
 	self->tx_fifo.tail = self->tx_buff.head;
 
 	/* Override the network functions we need to use */
-	SET_MODULE_OWNER(dev);
 	dev->hard_start_xmit = nsc_ircc_hard_xmit_sir;
 	dev->open            = nsc_ircc_net_open;
 	dev->stop            = nsc_ircc_net_close;
@@ -1466,9 +1465,8 @@ static int nsc_ircc_hard_xmit_fir(struct sk_buff *skb, struct net_device *dev)
 
 	self->stats.tx_bytes += skb->len;
 
-	memcpy(self->tx_fifo.queue[self->tx_fifo.free].start, skb->data, 
-	       skb->len);
-	
+	skb_copy_from_linear_data(skb, self->tx_fifo.queue[self->tx_fifo.free].start,
+		      skb->len);
 	self->tx_fifo.len++;
 	self->tx_fifo.free++;
 
@@ -1869,10 +1867,14 @@ static int nsc_ircc_dma_receive_complete(struct nsc_ircc_cb *self, int iobase)
 			/* Copy frame without CRC */
 			if (self->io.speed < 4000000) {
 				skb_put(skb, len-2);
-				memcpy(skb->data, self->rx_buff.data, len-2);
+				skb_copy_to_linear_data(skb,
+							self->rx_buff.data,
+							len - 2);
 			} else {
 				skb_put(skb, len-4);
-				memcpy(skb->data, self->rx_buff.data, len-4);
+				skb_copy_to_linear_data(skb,
+							self->rx_buff.data,
+							len - 4);
 			}
 
 			/* Move to next frame */
@@ -1881,7 +1883,7 @@ static int nsc_ircc_dma_receive_complete(struct nsc_ircc_cb *self, int iobase)
 			self->stats.rx_packets++;
 
 			skb->dev = self->netdev;
-			skb->mac.raw  = skb->data;
+			skb_reset_mac_header(skb);
 			skb->protocol = htons(ETH_P_IRDA);
 			netif_rx(skb);
 			self->netdev->last_rx = jiffies;

@@ -16,7 +16,6 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
 #include <linux/lockd/bind.h>
-#include <linux/smp_lock.h>
 #include <linux/nfs_mount.h>
 
 #include "iostat.h"
@@ -167,6 +166,7 @@ nfs3_proc_lookup(struct inode *dir, struct qstr *name,
 	nfs_fattr_init(&dir_attr);
 	nfs_fattr_init(fattr);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
+	nfs_refresh_inode(dir, &dir_attr);
 	if (status >= 0 && !(fattr->valid & NFS_ATTR_FATTR)) {
 		msg.rpc_proc = &nfs3_procedures[NFS3PROC_GETATTR];
 		msg.rpc_argp = fhandle;
@@ -174,8 +174,6 @@ nfs3_proc_lookup(struct inode *dir, struct qstr *name,
 		status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
 	}
 	dprintk("NFS reply lookup: %d\n", status);
-	if (status >= 0)
-		status = nfs_refresh_inode(dir, &dir_attr);
 	return status;
 }
 
@@ -336,9 +334,7 @@ again:
 		 * not sure this buys us anything (and I'd have
 		 * to revamp the NFSv3 XDR code) */
 		status = nfs3_proc_setattr(dentry, &fattr, sattr);
-		if (status == 0)
-			nfs_setattr_update_inode(dentry->d_inode, sattr);
-		nfs_refresh_inode(dentry->d_inode, &fattr);
+		nfs_post_op_update_inode(dentry->d_inode, &fattr);
 		dprintk("NFS reply setattr (post-create): %d\n", status);
 	}
 	if (status != 0)
@@ -352,62 +348,42 @@ out:
 static int
 nfs3_proc_remove(struct inode *dir, struct qstr *name)
 {
-	struct nfs_fattr	dir_attr;
-	struct nfs3_diropargs	arg = {
-		.fh		= NFS_FH(dir),
-		.name		= name->name,
-		.len		= name->len
+	struct nfs_removeargs arg = {
+		.fh = NFS_FH(dir),
+		.name.len = name->len,
+		.name.name = name->name,
 	};
-	struct rpc_message	msg = {
-		.rpc_proc	= &nfs3_procedures[NFS3PROC_REMOVE],
-		.rpc_argp	= &arg,
-		.rpc_resp	= &dir_attr,
+	struct nfs_removeres res;
+	struct rpc_message msg = {
+		.rpc_proc = &nfs3_procedures[NFS3PROC_REMOVE],
+		.rpc_argp = &arg,
+		.rpc_resp = &res,
 	};
 	int			status;
 
 	dprintk("NFS call  remove %s\n", name->name);
-	nfs_fattr_init(&dir_attr);
+	nfs_fattr_init(&res.dir_attr);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
-	nfs_post_op_update_inode(dir, &dir_attr);
+	nfs_post_op_update_inode(dir, &res.dir_attr);
 	dprintk("NFS reply remove: %d\n", status);
 	return status;
 }
 
-static int
-nfs3_proc_unlink_setup(struct rpc_message *msg, struct dentry *dir, struct qstr *name)
+static void
+nfs3_proc_unlink_setup(struct rpc_message *msg, struct inode *dir)
 {
-	struct unlinkxdr {
-		struct nfs3_diropargs arg;
-		struct nfs_fattr res;
-	} *ptr;
-
-	ptr = kmalloc(sizeof(*ptr), GFP_KERNEL);
-	if (!ptr)
-		return -ENOMEM;
-	ptr->arg.fh = NFS_FH(dir->d_inode);
-	ptr->arg.name = name->name;
-	ptr->arg.len = name->len;
-	nfs_fattr_init(&ptr->res);
 	msg->rpc_proc = &nfs3_procedures[NFS3PROC_REMOVE];
-	msg->rpc_argp = &ptr->arg;
-	msg->rpc_resp = &ptr->res;
-	return 0;
 }
 
 static int
-nfs3_proc_unlink_done(struct dentry *dir, struct rpc_task *task)
+nfs3_proc_unlink_done(struct rpc_task *task, struct inode *dir)
 {
-	struct rpc_message *msg = &task->tk_msg;
-	struct nfs_fattr	*dir_attr;
-
-	if (nfs3_async_handle_jukebox(task, dir->d_inode))
-		return 1;
-	if (msg->rpc_argp) {
-		dir_attr = (struct nfs_fattr*)msg->rpc_resp;
-		nfs_post_op_update_inode(dir->d_inode, dir_attr);
-		kfree(msg->rpc_argp);
-	}
-	return 0;
+	struct nfs_removeres *res;
+	if (nfs3_async_handle_jukebox(task, dir))
+		return 0;
+	res = task->tk_msg.rpc_resp;
+	nfs_post_op_update_inode(dir, &res->dir_attr);
+	return 1;
 }
 
 static int
@@ -630,6 +606,9 @@ nfs3_proc_readdir(struct dentry *dentry, struct rpc_cred *cred,
 
 	nfs_fattr_init(&dir_attr);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
+
+	nfs_invalidate_atime(dir);
+
 	nfs_refresh_inode(dir, &dir_attr);
 	dprintk("NFS reply readdir: %d\n", status);
 	return status;
@@ -747,9 +726,9 @@ static int nfs3_read_done(struct rpc_task *task, struct nfs_read_data *data)
 {
 	if (nfs3_async_handle_jukebox(task, data->inode))
 		return -EAGAIN;
-	/* Call back common NFS readpage processing */
-	if (task->tk_status >= 0)
-		nfs_refresh_inode(data->inode, &data->fattr);
+
+	nfs_invalidate_atime(data->inode);
+	nfs_refresh_inode(data->inode, &data->fattr);
 	return 0;
 }
 
@@ -770,7 +749,7 @@ static int nfs3_write_done(struct rpc_task *task, struct nfs_write_data *data)
 	if (nfs3_async_handle_jukebox(task, data->inode))
 		return -EAGAIN;
 	if (task->tk_status >= 0)
-		nfs_post_op_update_inode(data->inode, data->res.fattr);
+		nfs_post_op_update_inode_force_wcc(data->inode, data->res.fattr);
 	return 0;
 }
 
@@ -798,8 +777,7 @@ static int nfs3_commit_done(struct rpc_task *task, struct nfs_write_data *data)
 {
 	if (nfs3_async_handle_jukebox(task, data->inode))
 		return -EAGAIN;
-	if (task->tk_status >= 0)
-		nfs_post_op_update_inode(data->inode, data->res.fattr);
+	nfs_refresh_inode(data->inode, data->res.fattr);
 	return 0;
 }
 

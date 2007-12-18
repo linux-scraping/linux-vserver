@@ -40,11 +40,11 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
-#include <linux/pci.h>
 #include <linux/dma-mapping.h>
 #include <linux/poll.h>
 #include <linux/rwsem.h>
 #include <linux/kref.h>
+#include <linux/compat.h>
 
 #include <asm/uaccess.h>
 #include <asm/semaphore.h>
@@ -119,6 +119,8 @@ struct ib_umad_file {
 	wait_queue_head_t	recv_wait;
 	struct ib_mad_agent    *agent[IB_UMAD_MAX_AGENTS];
 	int			agents_dead;
+	u8			use_pkey_index;
+	u8			already_used;
 };
 
 struct ib_umad_packet {
@@ -135,7 +137,7 @@ static const dev_t base_dev = MKDEV(IB_UMAD_MAJOR, IB_UMAD_MINOR_BASE);
 
 static DEFINE_SPINLOCK(port_lock);
 static struct ib_umad_port *umad_port[IB_UMAD_MAX_PORTS];
-static DECLARE_BITMAP(dev_map, IB_UMAD_MAX_PORTS * 2);
+static DECLARE_BITMAP(dev_map, IB_UMAD_MAX_PORTS);
 
 static void ib_umad_add_one(struct ib_device *device);
 static void ib_umad_remove_one(struct ib_device *device);
@@ -146,6 +148,12 @@ static void ib_umad_release_dev(struct kref *ref)
 		container_of(ref, struct ib_umad_device, ref);
 
 	kfree(dev);
+}
+
+static int hdr_size(struct ib_umad_file *file)
+{
+	return file->use_pkey_index ? sizeof (struct ib_user_mad_hdr) :
+		sizeof (struct ib_user_mad_hdr_old);
 }
 
 /* caller must hold port->mutex at least for reading */
@@ -222,21 +230,26 @@ static void recv_handler(struct ib_mad_agent *agent,
 	packet->length = mad_recv_wc->mad_len;
 	packet->recv_wc = mad_recv_wc;
 
-	packet->mad.hdr.status    = 0;
-	packet->mad.hdr.length    = sizeof (struct ib_user_mad) +
-				    mad_recv_wc->mad_len;
-	packet->mad.hdr.qpn 	  = cpu_to_be32(mad_recv_wc->wc->src_qp);
-	packet->mad.hdr.lid 	  = cpu_to_be16(mad_recv_wc->wc->slid);
-	packet->mad.hdr.sl  	  = mad_recv_wc->wc->sl;
-	packet->mad.hdr.path_bits = mad_recv_wc->wc->dlid_path_bits;
+	packet->mad.hdr.status	   = 0;
+	packet->mad.hdr.length	   = hdr_size(file) + mad_recv_wc->mad_len;
+	packet->mad.hdr.qpn	   = cpu_to_be32(mad_recv_wc->wc->src_qp);
+	packet->mad.hdr.lid	   = cpu_to_be16(mad_recv_wc->wc->slid);
+	packet->mad.hdr.sl	   = mad_recv_wc->wc->sl;
+	packet->mad.hdr.path_bits  = mad_recv_wc->wc->dlid_path_bits;
+	packet->mad.hdr.pkey_index = mad_recv_wc->wc->pkey_index;
 	packet->mad.hdr.grh_present = !!(mad_recv_wc->wc->wc_flags & IB_WC_GRH);
 	if (packet->mad.hdr.grh_present) {
-		/* XXX parse GRH */
-		packet->mad.hdr.gid_index 	= 0;
-		packet->mad.hdr.hop_limit 	= 0;
-		packet->mad.hdr.traffic_class	= 0;
-		memset(packet->mad.hdr.gid, 0, 16);
-		packet->mad.hdr.flow_label	= 0;
+		struct ib_ah_attr ah_attr;
+
+		ib_init_ah_from_wc(agent->device, agent->port_num,
+				   mad_recv_wc->wc, mad_recv_wc->recv_buf.grh,
+				   &ah_attr);
+
+		packet->mad.hdr.gid_index = ah_attr.grh.sgid_index;
+		packet->mad.hdr.hop_limit = ah_attr.grh.hop_limit;
+		packet->mad.hdr.traffic_class = ah_attr.grh.traffic_class;
+		memcpy(packet->mad.hdr.gid, &ah_attr.grh.dgid, 16);
+		packet->mad.hdr.flow_label = cpu_to_be32(ah_attr.grh.flow_label);
 	}
 
 	if (queue_packet(file, agent, packet))
@@ -249,8 +262,8 @@ err1:
 	ib_free_recv_mad(mad_recv_wc);
 }
 
-static ssize_t copy_recv_mad(char __user *buf, struct ib_umad_packet *packet,
-			     size_t count)
+static ssize_t copy_recv_mad(struct ib_umad_file *file, char __user *buf,
+			     struct ib_umad_packet *packet, size_t count)
 {
 	struct ib_mad_recv_buf *recv_buf;
 	int left, seg_payload, offset, max_seg_payload;
@@ -258,15 +271,15 @@ static ssize_t copy_recv_mad(char __user *buf, struct ib_umad_packet *packet,
 	/* We need enough room to copy the first (or only) MAD segment. */
 	recv_buf = &packet->recv_wc->recv_buf;
 	if ((packet->length <= sizeof (*recv_buf->mad) &&
-	     count < sizeof (packet->mad) + packet->length) ||
+	     count < hdr_size(file) + packet->length) ||
 	    (packet->length > sizeof (*recv_buf->mad) &&
-	     count < sizeof (packet->mad) + sizeof (*recv_buf->mad)))
+	     count < hdr_size(file) + sizeof (*recv_buf->mad)))
 		return -EINVAL;
 
-	if (copy_to_user(buf, &packet->mad, sizeof (packet->mad)))
+	if (copy_to_user(buf, &packet->mad, hdr_size(file)))
 		return -EFAULT;
 
-	buf += sizeof (packet->mad);
+	buf += hdr_size(file);
 	seg_payload = min_t(int, packet->length, sizeof (*recv_buf->mad));
 	if (copy_to_user(buf, recv_buf->mad, seg_payload))
 		return -EFAULT;
@@ -276,7 +289,7 @@ static ssize_t copy_recv_mad(char __user *buf, struct ib_umad_packet *packet,
 		 * Multipacket RMPP MAD message. Copy remainder of message.
 		 * Note that last segment may have a shorter payload.
 		 */
-		if (count < sizeof (packet->mad) + packet->length) {
+		if (count < hdr_size(file) + packet->length) {
 			/*
 			 * The buffer is too small, return the first RMPP segment,
 			 * which includes the RMPP message length.
@@ -296,18 +309,23 @@ static ssize_t copy_recv_mad(char __user *buf, struct ib_umad_packet *packet,
 				return -EFAULT;
 		}
 	}
-	return sizeof (packet->mad) + packet->length;
+	return hdr_size(file) + packet->length;
 }
 
-static ssize_t copy_send_mad(char __user *buf, struct ib_umad_packet *packet,
-			     size_t count)
+static ssize_t copy_send_mad(struct ib_umad_file *file, char __user *buf,
+			     struct ib_umad_packet *packet, size_t count)
 {
-	ssize_t size = sizeof (packet->mad) + packet->length;
+	ssize_t size = hdr_size(file) + packet->length;
 
 	if (count < size)
 		return -EINVAL;
 
-	if (copy_to_user(buf, &packet->mad, size))
+	if (copy_to_user(buf, &packet->mad, hdr_size(file)))
+		return -EFAULT;
+
+	buf += hdr_size(file);
+
+	if (copy_to_user(buf, packet->mad.data, packet->length))
 		return -EFAULT;
 
 	return size;
@@ -320,7 +338,7 @@ static ssize_t ib_umad_read(struct file *filp, char __user *buf,
 	struct ib_umad_packet *packet;
 	ssize_t ret;
 
-	if (count < sizeof (struct ib_user_mad))
+	if (count < hdr_size(file))
 		return -EINVAL;
 
 	spin_lock_irq(&file->recv_lock);
@@ -344,9 +362,9 @@ static ssize_t ib_umad_read(struct file *filp, char __user *buf,
 	spin_unlock_irq(&file->recv_lock);
 
 	if (packet->recv_wc)
-		ret = copy_recv_mad(buf, packet, count);
+		ret = copy_recv_mad(file, buf, packet, count);
 	else
-		ret = copy_send_mad(buf, packet, count);
+		ret = copy_send_mad(file, buf, packet, count);
 
 	if (ret < 0) {
 		/* Requeue packet */
@@ -438,15 +456,14 @@ static ssize_t ib_umad_write(struct file *filp, const char __user *buf,
 	__be64 *tid;
 	int ret, data_len, hdr_len, copy_offset, rmpp_active;
 
-	if (count < sizeof (struct ib_user_mad) + IB_MGMT_RMPP_HDR)
+	if (count < hdr_size(file) + IB_MGMT_RMPP_HDR)
 		return -EINVAL;
 
 	packet = kzalloc(sizeof *packet + IB_MGMT_RMPP_HDR, GFP_KERNEL);
 	if (!packet)
 		return -ENOMEM;
 
-	if (copy_from_user(&packet->mad, buf,
-			    sizeof (struct ib_user_mad) + IB_MGMT_RMPP_HDR)) {
+	if (copy_from_user(&packet->mad, buf, hdr_size(file))) {
 		ret = -EFAULT;
 		goto err;
 	}
@@ -454,6 +471,13 @@ static ssize_t ib_umad_write(struct file *filp, const char __user *buf,
 	if (packet->mad.hdr.id < 0 ||
 	    packet->mad.hdr.id >= IB_UMAD_MAX_AGENTS) {
 		ret = -EINVAL;
+		goto err;
+	}
+
+	buf += hdr_size(file);
+
+	if (copy_from_user(packet->mad.data, buf, IB_MGMT_RMPP_HDR)) {
+		ret = -EFAULT;
 		goto err;
 	}
 
@@ -473,6 +497,7 @@ static ssize_t ib_umad_write(struct file *filp, const char __user *buf,
 	if (packet->mad.hdr.grh_present) {
 		ah_attr.ah_flags = IB_AH_GRH;
 		memcpy(ah_attr.grh.dgid.raw, packet->mad.hdr.gid, 16);
+		ah_attr.grh.sgid_index	   = packet->mad.hdr.gid_index;
 		ah_attr.grh.flow_label 	   = be32_to_cpu(packet->mad.hdr.flow_label);
 		ah_attr.grh.hop_limit  	   = packet->mad.hdr.hop_limit;
 		ah_attr.grh.traffic_class  = packet->mad.hdr.traffic_class;
@@ -495,11 +520,11 @@ static ssize_t ib_umad_write(struct file *filp, const char __user *buf,
 			      IB_MGMT_RMPP_FLAG_ACTIVE;
 	}
 
-	data_len = count - sizeof (struct ib_user_mad) - hdr_len;
+	data_len = count - hdr_size(file) - hdr_len;
 	packet->msg = ib_create_send_mad(agent,
 					 be32_to_cpu(packet->mad.hdr.qpn),
-					 0, rmpp_active, hdr_len,
-					 data_len, GFP_KERNEL);
+					 packet->mad.hdr.pkey_index, rmpp_active,
+					 hdr_len, data_len, GFP_KERNEL);
 	if (IS_ERR(packet->msg)) {
 		ret = PTR_ERR(packet->msg);
 		goto err_ah;
@@ -512,7 +537,6 @@ static ssize_t ib_umad_write(struct file *filp, const char __user *buf,
 
 	/* Copy MAD header.  Any RMPP header is already in place. */
 	memcpy(packet->msg->mad, packet->mad.data, IB_MGMT_MAD_HDR);
-	buf += sizeof (struct ib_user_mad);
 
 	if (!rmpp_active) {
 		if (copy_from_user(packet->msg->mad + copy_offset,
@@ -584,7 +608,8 @@ static unsigned int ib_umad_poll(struct file *filp, struct poll_table_struct *wa
 	return mask;
 }
 
-static int ib_umad_reg_agent(struct ib_umad_file *file, unsigned long arg)
+static int ib_umad_reg_agent(struct ib_umad_file *file, void __user *arg,
+			     int compat_method_mask)
 {
 	struct ib_user_mad_reg_req ureq;
 	struct ib_mad_reg_req req;
@@ -599,7 +624,7 @@ static int ib_umad_reg_agent(struct ib_umad_file *file, unsigned long arg)
 		goto out;
 	}
 
-	if (copy_from_user(&ureq, (void __user *) arg, sizeof ureq)) {
+	if (copy_from_user(&ureq, arg, sizeof ureq)) {
 		ret = -EFAULT;
 		goto out;
 	}
@@ -620,8 +645,18 @@ found:
 	if (ureq.mgmt_class) {
 		req.mgmt_class         = ureq.mgmt_class;
 		req.mgmt_class_version = ureq.mgmt_class_version;
-		memcpy(req.method_mask, ureq.method_mask, sizeof req.method_mask);
-		memcpy(req.oui,         ureq.oui,         sizeof req.oui);
+		memcpy(req.oui, ureq.oui, sizeof req.oui);
+
+		if (compat_method_mask) {
+			u32 *umm = (u32 *) ureq.method_mask;
+			int i;
+
+			for (i = 0; i < BITS_TO_LONGS(IB_MGMT_MAX_METHODS); ++i)
+				req.method_mask[i] =
+					umm[i * 2] | ((u64) umm[i * 2 + 1] << 32);
+		} else
+			memcpy(req.method_mask, ureq.method_mask,
+			       sizeof req.method_mask);
 	}
 
 	agent = ib_register_mad_agent(file->port->ib_dev, file->port->port_num,
@@ -641,6 +676,16 @@ found:
 		goto out;
 	}
 
+	if (!file->already_used) {
+		file->already_used = 1;
+		if (!file->use_pkey_index) {
+			printk(KERN_WARNING "user_mad: process %s did not enable "
+			       "P_Key index support.\n", current->comm);
+			printk(KERN_WARNING "user_mad:   Documentation/infiniband/user_mad.txt "
+			       "has info on the new ABI.\n");
+		}
+	}
+
 	file->agent[agent_id] = agent;
 	ret = 0;
 
@@ -649,13 +694,13 @@ out:
 	return ret;
 }
 
-static int ib_umad_unreg_agent(struct ib_umad_file *file, unsigned long arg)
+static int ib_umad_unreg_agent(struct ib_umad_file *file, u32 __user *arg)
 {
 	struct ib_mad_agent *agent = NULL;
 	u32 id;
 	int ret = 0;
 
-	if (get_user(id, (u32 __user *) arg))
+	if (get_user(id, arg))
 		return -EFAULT;
 
 	down_write(&file->port->mutex);
@@ -677,18 +722,51 @@ out:
 	return ret;
 }
 
+static long ib_umad_enable_pkey(struct ib_umad_file *file)
+{
+	int ret = 0;
+
+	down_write(&file->port->mutex);
+	if (file->already_used)
+		ret = -EINVAL;
+	else
+		file->use_pkey_index = 1;
+	up_write(&file->port->mutex);
+
+	return ret;
+}
+
 static long ib_umad_ioctl(struct file *filp, unsigned int cmd,
 			  unsigned long arg)
 {
 	switch (cmd) {
 	case IB_USER_MAD_REGISTER_AGENT:
-		return ib_umad_reg_agent(filp->private_data, arg);
+		return ib_umad_reg_agent(filp->private_data, (void __user *) arg, 0);
 	case IB_USER_MAD_UNREGISTER_AGENT:
-		return ib_umad_unreg_agent(filp->private_data, arg);
+		return ib_umad_unreg_agent(filp->private_data, (__u32 __user *) arg);
+	case IB_USER_MAD_ENABLE_PKEY:
+		return ib_umad_enable_pkey(filp->private_data);
 	default:
 		return -ENOIOCTLCMD;
 	}
 }
+
+#ifdef CONFIG_COMPAT
+static long ib_umad_compat_ioctl(struct file *filp, unsigned int cmd,
+				 unsigned long arg)
+{
+	switch (cmd) {
+	case IB_USER_MAD_REGISTER_AGENT:
+		return ib_umad_reg_agent(filp->private_data, compat_ptr(arg), 1);
+	case IB_USER_MAD_UNREGISTER_AGENT:
+		return ib_umad_unreg_agent(filp->private_data, compat_ptr(arg));
+	case IB_USER_MAD_ENABLE_PKEY:
+		return ib_umad_enable_pkey(filp->private_data);
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+#endif
 
 static int ib_umad_open(struct inode *inode, struct file *filp)
 {
@@ -777,7 +855,9 @@ static const struct file_operations umad_fops = {
 	.write 	 	= ib_umad_write,
 	.poll 	 	= ib_umad_poll,
 	.unlocked_ioctl = ib_umad_ioctl,
-	.compat_ioctl 	= ib_umad_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl 	= ib_umad_compat_ioctl,
+#endif
 	.open 	 	= ib_umad_open,
 	.release 	= ib_umad_close
 };

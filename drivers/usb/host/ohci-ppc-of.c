@@ -97,8 +97,8 @@ ohci_hcd_ppc_of_probe(struct of_device *op, const struct of_device_id *match)
 		return -ENODEV;
 
 	is_bigendian =
-		device_is_compatible(dn, "ohci-bigendian") ||
-		device_is_compatible(dn, "ohci-be");
+		of_device_is_compatible(dn, "ohci-bigendian") ||
+		of_device_is_compatible(dn, "ohci-be");
 
 	dev_dbg(&op->dev, "initializing PPC-OF USB Controller\n");
 
@@ -134,8 +134,11 @@ ohci_hcd_ppc_of_probe(struct of_device *op, const struct of_device_id *match)
 	}
 
 	ohci = hcd_to_ohci(hcd);
-	if (is_bigendian)
+	if (is_bigendian) {
 		ohci->flags |= OHCI_QUIRK_BE_MMIO | OHCI_QUIRK_BE_DESC;
+		if (of_device_is_compatible(dn, "mpc5200-ohci"))
+			ohci->flags |= OHCI_QUIRK_FRAME_NO;
+	}
 
 	ohci_hcd_init(ohci);
 
