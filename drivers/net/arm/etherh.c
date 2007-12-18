@@ -31,7 +31,6 @@
 #include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/interrupt.h>
-#include <linux/ptrace.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
 #include <linux/slab.h>
@@ -649,6 +648,7 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 	struct net_device *dev;
 	struct etherh_priv *eh;
 	int i, ret;
+	DECLARE_MAC_BUF(mac);
 
 	etherh_banner();
 
@@ -662,7 +662,6 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 		goto release;
 	}
 
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &ec->dev);
 
 	dev->open		= etherh_open;
@@ -686,7 +685,7 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 	eh->supported		= data->supported;
 	eh->ctrl		= 0;
 	eh->id			= ec->cid.product;
-	eh->memc		= ioremap(ecard_resource_start(ec, ECARD_RES_MEMC), PAGE_SIZE);
+	eh->memc		= ecardm_iomap(ec, ECARD_RES_MEMC, 0, PAGE_SIZE);
 	if (!eh->memc) {
 		ret = -ENOMEM;
 		goto free;
@@ -694,7 +693,7 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 
 	eh->ctrl_port = eh->memc;
 	if (data->ctrl_ioc) {
-		eh->ioc_fast = ioremap(ecard_resource_start(ec, ECARD_RES_IOCFAST), PAGE_SIZE);
+		eh->ioc_fast = ecardm_iomap(ec, ECARD_RES_IOCFAST, 0, PAGE_SIZE);
 		if (!eh->ioc_fast) {
 			ret = -ENOMEM;
 			goto free;
@@ -710,8 +709,7 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 	 * IRQ and control port handling - only for non-NIC slot cards.
 	 */
 	if (ec->slot_no != 8) {
-		ec->ops		= &etherh_ops;
-		ec->irq_data	= eh;
+		ecard_setirq(ec, &etherh_ops, eh);
 	} else {
 		/*
 		 * If we're in the NIC slot, make sure the IRQ is enabled
@@ -748,21 +746,14 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 	if (ret)
 		goto free;
 
-	printk(KERN_INFO "%s: %s in slot %d, ",
-		dev->name, data->name, ec->slot_no);
-
-	for (i = 0; i < 6; i++)
-		printk("%2.2x%c", dev->dev_addr[i], i == 5 ? '\n' : ':');
+	printk(KERN_INFO "%s: %s in slot %d, %s\n",
+		dev->name, data->name, ec->slot_no, print_mac(mac, dev->dev_addr));
 
 	ecard_set_drvdata(ec, dev);
 
 	return 0;
 
  free:
-	if (eh->ioc_fast)
-		iounmap(eh->ioc_fast);
-	if (eh->memc)
-		iounmap(eh->memc);
 	free_netdev(dev);
  release:
 	ecard_release_resources(ec);
@@ -773,16 +764,10 @@ etherh_probe(struct expansion_card *ec, const struct ecard_id *id)
 static void __devexit etherh_remove(struct expansion_card *ec)
 {
 	struct net_device *dev = ecard_get_drvdata(ec);
-	struct etherh_priv *eh = etherh_priv(dev);
 
 	ecard_set_drvdata(ec, NULL);
 
 	unregister_netdev(dev);
-	ec->ops = NULL;
-
-	if (eh->ioc_fast)
-		iounmap(eh->ioc_fast);
-	iounmap(eh->memc);
 
 	free_netdev(dev);
 

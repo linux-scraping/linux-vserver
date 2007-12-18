@@ -193,7 +193,11 @@ static struct irq_chip clps7500_no_chip = {
 	.unmask	= cl7500_no_action,
 };
 
-static struct irqaction irq_isa = { no_action, 0, CPU_MASK_NONE, "isa", NULL, NULL };
+static struct irqaction irq_isa = {
+	.handler = no_action,
+	.mask = CPU_MASK_NONE,
+	.name = "isa",
+};
 
 static void __init clps7500_init_irq(void)
 {
@@ -316,7 +320,7 @@ clps7500_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction clps7500_timer_irq = {
 	.name		= "CLPS7500 Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= clps7500_timer_interrupt,
 };
 

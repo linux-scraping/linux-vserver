@@ -26,6 +26,7 @@
 #include <asm/sections.h>
 #include <asm/semaphore.h>
 #include <asm/irq_regs.h>
+#include <asm/ptrace.h>
 
 struct profile_hit {
 	u32 pc, hits;
@@ -36,7 +37,7 @@ struct profile_hit {
 #define NR_PROFILE_GRP		(NR_PROFILE_HIT/PROFILE_GRPSZ)
 
 /* Oprofile timer tick hook */
-int (*timer_hook)(struct pt_regs *) __read_mostly;
+static int (*timer_hook)(struct pt_regs *) __read_mostly;
 
 static atomic_t *prof_buffer;
 static unsigned long prof_len, prof_shift;
@@ -59,6 +60,7 @@ static int __init profile_setup(char * str)
 	int par;
 
 	if (!strncmp(str, sleepstr, strlen(sleepstr))) {
+#ifdef CONFIG_SCHEDSTATS
 		prof_on = SLEEP_PROFILING;
 		if (str[strlen(sleepstr)] == ',')
 			str += strlen(sleepstr) + 1;
@@ -67,6 +69,10 @@ static int __init profile_setup(char * str)
 		printk(KERN_INFO
 			"kernel sleep profiling enabled (shift: %ld)\n",
 			prof_shift);
+#else
+		printk(KERN_WARNING
+			"kernel sleep profiling requires CONFIG_SCHEDSTATS\n");
+#endif /* CONFIG_SCHEDSTATS */
 	} else if (!strncmp(str, schedstr, strlen(schedstr))) {
 		prof_on = SCHED_PROFILING;
 		if (str[strlen(schedstr)] == ',')
@@ -198,11 +204,11 @@ EXPORT_SYMBOL_GPL(register_timer_hook);
 EXPORT_SYMBOL_GPL(unregister_timer_hook);
 EXPORT_SYMBOL_GPL(task_handoff_register);
 EXPORT_SYMBOL_GPL(task_handoff_unregister);
+EXPORT_SYMBOL_GPL(profile_event_register);
+EXPORT_SYMBOL_GPL(profile_event_unregister);
 
 #endif /* CONFIG_PROFILING */
 
-EXPORT_SYMBOL_GPL(profile_event_register);
-EXPORT_SYMBOL_GPL(profile_event_unregister);
 
 #ifdef CONFIG_SMP
 /*
@@ -340,11 +346,12 @@ static int __devinit profile_cpu_callback(struct notifier_block *info,
 
 	switch (action) {
 	case CPU_UP_PREPARE:
+	case CPU_UP_PREPARE_FROZEN:
 		node = cpu_to_node(cpu);
 		per_cpu(cpu_profile_flip, cpu) = 0;
 		if (!per_cpu(cpu_profile_hits, cpu)[1]) {
 			page = alloc_pages_node(node,
-					GFP_KERNEL | __GFP_ZERO | GFP_THISNODE,
+					GFP_KERNEL | __GFP_ZERO,
 					0);
 			if (!page)
 				return NOTIFY_BAD;
@@ -352,7 +359,7 @@ static int __devinit profile_cpu_callback(struct notifier_block *info,
 		}
 		if (!per_cpu(cpu_profile_hits, cpu)[0]) {
 			page = alloc_pages_node(node,
-					GFP_KERNEL | __GFP_ZERO | GFP_THISNODE,
+					GFP_KERNEL | __GFP_ZERO,
 					0);
 			if (!page)
 				goto out_free;
@@ -365,10 +372,13 @@ static int __devinit profile_cpu_callback(struct notifier_block *info,
 		__free_page(page);
 		return NOTIFY_BAD;
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		cpu_set(cpu, prof_cpu_mask);
 		break;
 	case CPU_UP_CANCELED:
+	case CPU_UP_CANCELED_FROZEN:
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		cpu_clear(cpu, prof_cpu_mask);
 		if (per_cpu(cpu_profile_hits, cpu)[0]) {
 			page = virt_to_page(per_cpu(cpu_profile_hits, cpu)[0]);

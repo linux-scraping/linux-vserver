@@ -10,6 +10,7 @@
 #include <linux/utsname.h>
 #include <linux/kernel.h>
 #include <linux/sunrpc/clnt.h>
+#include <linux/sunrpc/xprtsock.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/lockd/lockd.h>
 #include <linux/lockd/sm_inter.h>
@@ -61,6 +62,7 @@ nsm_mon_unmon(struct nsm_handle *nsm, u32 proc, struct nsm_res *res)
 			status);
 	else
 		status = 0;
+	rpc_shutdown_client(clnt);
  out:
 	return status;
 }
@@ -131,14 +133,13 @@ nsm_create(void)
 		.sin_port	= 0,
 	};
 	struct rpc_create_args args = {
-		.protocol	= IPPROTO_UDP,
+		.protocol	= XPRT_TRANSPORT_UDP,
 		.address	= (struct sockaddr *)&sin,
 		.addrsize	= sizeof(sin),
 		.servername	= "localhost",
 		.program	= &nsm_program,
 		.version	= SM_VERSION,
 		.authflavor	= RPC_AUTH_NULL,
-		.flags		= (RPC_CLNT_CREATE_ONESHOT),
 	};
 
 	return rpc_create(&args);
@@ -225,16 +226,13 @@ xdr_decode_stat(struct rpc_rqst *rqstp, __be32 *p, struct nsm_res *resp)
 #define SM_monres_sz	2
 #define SM_unmonres_sz	1
 
-#ifndef MAX
-# define MAX(a, b)	(((a) > (b))? (a) : (b))
-#endif
-
 static struct rpc_procinfo	nsm_procedures[] = {
 [SM_MON] = {
 		.p_proc		= SM_MON,
 		.p_encode	= (kxdrproc_t) xdr_encode_mon,
 		.p_decode	= (kxdrproc_t) xdr_decode_stat_res,
-		.p_bufsiz	= MAX(SM_mon_sz, SM_monres_sz) << 2,
+		.p_arglen	= SM_mon_sz,
+		.p_replen	= SM_monres_sz,
 		.p_statidx	= SM_MON,
 		.p_name		= "MONITOR",
 	},
@@ -242,7 +240,8 @@ static struct rpc_procinfo	nsm_procedures[] = {
 		.p_proc		= SM_UNMON,
 		.p_encode	= (kxdrproc_t) xdr_encode_unmon,
 		.p_decode	= (kxdrproc_t) xdr_decode_stat,
-		.p_bufsiz	= MAX(SM_mon_id_sz, SM_unmonres_sz) << 2,
+		.p_arglen	= SM_mon_id_sz,
+		.p_replen	= SM_unmonres_sz,
 		.p_statidx	= SM_UNMON,
 		.p_name		= "UNMONITOR",
 	},

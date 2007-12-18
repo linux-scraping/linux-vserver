@@ -360,10 +360,6 @@ static int ali_ircc_open(int i, chipio_t *info)
 	self->tx_fifo.len = self->tx_fifo.ptr = self->tx_fifo.free = 0;
 	self->tx_fifo.tail = self->tx_buff.head;
 
-	
-	/* Keep track of module usage */
-	SET_MODULE_OWNER(dev);
-
 	/* Override the network functions we need to use */
 	dev->hard_start_xmit = ali_ircc_sir_hard_xmit;
 	dev->open            = ali_ircc_net_open;
@@ -1472,9 +1468,8 @@ static int ali_ircc_fir_hard_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	self->stats.tx_bytes += skb->len;
 
-	memcpy(self->tx_fifo.queue[self->tx_fifo.free].start, skb->data, 
-	       skb->len);
-	
+	skb_copy_from_linear_data(skb, self->tx_fifo.queue[self->tx_fifo.free].start,
+		      skb->len);
 	self->tx_fifo.len++;
 	self->tx_fifo.free++;
 
@@ -1924,7 +1919,7 @@ static int  ali_ircc_dma_receive_complete(struct ali_ircc_cb *self)
 			
 			/* Copy frame without CRC, CRC is removed by hardware*/
 			skb_put(skb, len);
-			memcpy(skb->data, self->rx_buff.data, len);
+			skb_copy_to_linear_data(skb, self->rx_buff.data, len);
 
 			/* Move to next frame */
 			self->rx_buff.data += len;
@@ -1932,7 +1927,7 @@ static int  ali_ircc_dma_receive_complete(struct ali_ircc_cb *self)
 			self->stats.rx_packets++;
 
 			skb->dev = self->netdev;
-			skb->mac.raw  = skb->data;
+			skb_reset_mac_header(skb);
 			skb->protocol = htons(ETH_P_IRDA);
 			netif_rx(skb);
 			self->netdev->last_rx = jiffies;

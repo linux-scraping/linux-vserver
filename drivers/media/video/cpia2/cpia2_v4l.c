@@ -37,7 +37,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/moduleparam.h>
 
 #include "cpia2.h"
 #include "cpia2dev.h"
@@ -87,10 +86,6 @@ MODULE_LICENSE("GPL");
 
 #define ABOUT "V4L-Driver for Vision CPiA2 based cameras"
 
-#ifndef VID_HARDWARE_CPIA2
-#error "VID_HARDWARE_CPIA2 should have been defined in linux/videodev.h"
-#endif
-
 struct control_menu_info {
 	int value;
 	char name[32];
@@ -105,7 +100,7 @@ static struct control_menu_info framerate_controls[] =
 	{ CPIA2_VP_FRAMERATE_25,   "25 fps"   },
 	{ CPIA2_VP_FRAMERATE_30,   "30 fps"   },
 };
-#define NUM_FRAMERATE_CONTROLS (sizeof(framerate_controls)/sizeof(framerate_controls[0]))
+#define NUM_FRAMERATE_CONTROLS (ARRAY_SIZE(framerate_controls))
 
 static struct control_menu_info flicker_controls[] =
 {
@@ -113,7 +108,7 @@ static struct control_menu_info flicker_controls[] =
 	{ FLICKER_50,    "50 Hz" },
 	{ FLICKER_60,    "60 Hz"  },
 };
-#define NUM_FLICKER_CONTROLS (sizeof(flicker_controls)/sizeof(flicker_controls[0]))
+#define NUM_FLICKER_CONTROLS (ARRAY_SIZE(flicker_controls))
 
 static struct control_menu_info lights_controls[] =
 {
@@ -122,7 +117,7 @@ static struct control_menu_info lights_controls[] =
 	{ 128, "Bottom"  },
 	{ 192, "Both"  },
 };
-#define NUM_LIGHTS_CONTROLS (sizeof(lights_controls)/sizeof(lights_controls[0]))
+#define NUM_LIGHTS_CONTROLS (ARRAY_SIZE(lights_controls))
 #define GPIO_LIGHTS_MASK 192
 
 static struct v4l2_queryctrl controls[] = {
@@ -235,7 +230,7 @@ static struct v4l2_queryctrl controls[] = {
 		.default_value = 0,
 	},
 };
-#define NUM_CONTROLS (sizeof(controls)/sizeof(controls[0]))
+#define NUM_CONTROLS (ARRAY_SIZE(controls))
 
 
 /******************************************************************************
@@ -1943,7 +1938,6 @@ static struct video_device cpia2_template = {
 	.type=		VID_TYPE_CAPTURE,
 	.type2 = 	V4L2_CAP_VIDEO_CAPTURE |
 			V4L2_CAP_STREAMING,
-	.hardware=	VID_HARDWARE_CPIA2,
 	.minor=		-1,
 	.fops=		&fops_template,
 	.release=	video_device_release,

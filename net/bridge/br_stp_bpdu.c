@@ -17,6 +17,7 @@
 #include <linux/netfilter_bridge.h>
 #include <linux/etherdevice.h>
 #include <linux/llc.h>
+#include <net/net_namespace.h>
 #include <net/llc.h>
 #include <net/llc_pdu.h>
 #include <asm/unaligned.h>
@@ -32,9 +33,6 @@ static void br_send_bpdu(struct net_bridge_port *p,
 			 const unsigned char *data, int length)
 {
 	struct sk_buff *skb;
-
-	if (!p->br->stp_enabled)
-		return;
 
 	skb = dev_alloc_skb(length+LLC_RESERVE);
 	if (!skb)
@@ -67,13 +65,16 @@ static inline int br_get_ticks(const unsigned char *src)
 {
 	unsigned long ticks = ntohs(get_unaligned((__be16 *)src));
 
-	return (ticks * HZ + STP_HZ - 1) / STP_HZ;
+	return DIV_ROUND_UP(ticks * HZ, STP_HZ);
 }
 
 /* called under bridge lock */
 void br_send_config_bpdu(struct net_bridge_port *p, struct br_config_bpdu *bpdu)
 {
 	unsigned char buf[35];
+
+	if (p->br->stp_enabled != BR_KERNEL_STP)
+		return;
 
 	buf[0] = 0;
 	buf[1] = 0;
@@ -117,6 +118,9 @@ void br_send_tcn_bpdu(struct net_bridge_port *p)
 {
 	unsigned char buf[4];
 
+	if (p->br->stp_enabled != BR_KERNEL_STP)
+		return;
+
 	buf[0] = 0;
 	buf[1] = 0;
 	buf[2] = 0;
@@ -138,6 +142,9 @@ int br_stp_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct net_bridge *br;
 	const unsigned char *buf;
 
+	if (dev->nd_net != &init_net)
+		goto err;
+
 	if (!p)
 		goto err;
 
@@ -157,9 +164,13 @@ int br_stp_rcv(struct sk_buff *skb, struct net_device *dev,
 	br = p->br;
 	spin_lock(&br->lock);
 
-	if (p->state == BR_STATE_DISABLED
-	    || !br->stp_enabled
-	    || !(br->dev->flags & IFF_UP))
+	if (br->stp_enabled != BR_KERNEL_STP)
+		goto out;
+
+	if (!(br->dev->flags & IFF_UP))
+		goto out;
+
+	if (p->state == BR_STATE_DISABLED)
 		goto out;
 
 	if (compare_ether_addr(dest, br->group_addr) != 0)

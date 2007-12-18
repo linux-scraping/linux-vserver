@@ -35,13 +35,12 @@
 #include <linux/sched.h>
 #include <asm/atomic.h>
 #include <linux/bitops.h>
-#include <linux/module.h>
 #include <linux/completion.h>
 #include <linux/moduleparam.h>
 #include <linux/percpu.h>
 #include <linux/notifier.h>
+#include <linux/freezer.h>
 #include <linux/cpu.h>
-#include <linux/random.h>
 #include <linux/delay.h>
 #include <linux/byteorder/swabb.h>
 #include <linux/stat.h>
@@ -165,16 +164,14 @@ struct rcu_random_state {
 
 /*
  * Crude but fast random-number generator.  Uses a linear congruential
- * generator, with occasional help from get_random_bytes().
+ * generator, with occasional help from cpu_clock().
  */
 static unsigned long
 rcu_random(struct rcu_random_state *rrsp)
 {
-	long refresh;
-
 	if (--rrsp->rrs_count < 0) {
-		get_random_bytes(&refresh, sizeof(refresh));
-		rrsp->rrs_state += refresh;
+		rrsp->rrs_state +=
+			(unsigned long)cpu_clock(raw_smp_processor_id());
 		rrsp->rrs_count = RCU_RANDOM_REFRESH;
 	}
 	rrsp->rrs_state = rrsp->rrs_state * RCU_RANDOM_MULT + RCU_RANDOM_ADD;
@@ -502,10 +499,6 @@ static struct rcu_torture_ops sched_ops = {
 	.name = "sched"
 };
 
-static struct rcu_torture_ops *torture_ops[] =
-	{ &rcu_ops, &rcu_sync_ops, &rcu_bh_ops, &rcu_bh_sync_ops, &srcu_ops,
-	  &sched_ops, NULL };
-
 /*
  * RCU torture writer kthread.  Repeatedly substitutes a new structure
  * for that pointed to by rcu_torture_current, freeing the old structure
@@ -522,7 +515,6 @@ rcu_torture_writer(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_writer task started");
 	set_user_nice(current, 19);
-	current->flags |= PF_NOFREEZE;
 
 	do {
 		schedule_timeout_uninterruptible(1);
@@ -534,7 +526,7 @@ rcu_torture_writer(void *arg)
 		rp->rtort_mbtest = 1;
 		rcu_assign_pointer(rcu_torture_current, rp);
 		smp_wmb();
-		if (old_rp != NULL) {
+		if (old_rp) {
 			i = old_rp->rtort_pipe_count;
 			if (i > RCU_TORTURE_PIPE_LEN)
 				i = RCU_TORTURE_PIPE_LEN;
@@ -562,7 +554,6 @@ rcu_torture_fakewriter(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_fakewriter task started");
 	set_user_nice(current, 19);
-	current->flags |= PF_NOFREEZE;
 
 	do {
 		schedule_timeout_uninterruptible(1 + rcu_random(&rand)%10);
@@ -593,7 +584,6 @@ rcu_torture_reader(void *arg)
 
 	VERBOSE_PRINTK_STRING("rcu_torture_reader task started");
 	set_user_nice(current, 19);
-	current->flags |= PF_NOFREEZE;
 
 	do {
 		idx = cur_ops->readlock();
@@ -685,7 +675,7 @@ rcu_torture_printk(char *page)
 			       atomic_read(&rcu_torture_wcount[i]));
 	}
 	cnt += sprintf(&page[cnt], "\n");
-	if (cur_ops->stats != NULL)
+	if (cur_ops->stats)
 		cnt += cur_ops->stats(&page[cnt]);
 	return cnt;
 }
@@ -749,13 +739,13 @@ static void rcu_torture_shuffle_tasks(void)
 
 	set_cpus_allowed(current, tmp_mask);
 
-	if (reader_tasks != NULL) {
+	if (reader_tasks) {
 		for (i = 0; i < nrealreaders; i++)
 			if (reader_tasks[i])
 				set_cpus_allowed(reader_tasks[i], tmp_mask);
 	}
 
-	if (fakewriter_tasks != NULL) {
+	if (fakewriter_tasks) {
 		for (i = 0; i < nfakewriters; i++)
 			if (fakewriter_tasks[i])
 				set_cpus_allowed(fakewriter_tasks[i], tmp_mask);
@@ -808,21 +798,21 @@ rcu_torture_cleanup(void)
 	int i;
 
 	fullstop = 1;
-	if (shuffler_task != NULL) {
+	if (shuffler_task) {
 		VERBOSE_PRINTK_STRING("Stopping rcu_torture_shuffle task");
 		kthread_stop(shuffler_task);
 	}
 	shuffler_task = NULL;
 
-	if (writer_task != NULL) {
+	if (writer_task) {
 		VERBOSE_PRINTK_STRING("Stopping rcu_torture_writer task");
 		kthread_stop(writer_task);
 	}
 	writer_task = NULL;
 
-	if (reader_tasks != NULL) {
+	if (reader_tasks) {
 		for (i = 0; i < nrealreaders; i++) {
-			if (reader_tasks[i] != NULL) {
+			if (reader_tasks[i]) {
 				VERBOSE_PRINTK_STRING(
 					"Stopping rcu_torture_reader task");
 				kthread_stop(reader_tasks[i]);
@@ -834,9 +824,9 @@ rcu_torture_cleanup(void)
 	}
 	rcu_torture_current = NULL;
 
-	if (fakewriter_tasks != NULL) {
+	if (fakewriter_tasks) {
 		for (i = 0; i < nfakewriters; i++) {
-			if (fakewriter_tasks[i] != NULL) {
+			if (fakewriter_tasks[i]) {
 				VERBOSE_PRINTK_STRING(
 					"Stopping rcu_torture_fakewriter task");
 				kthread_stop(fakewriter_tasks[i]);
@@ -847,7 +837,7 @@ rcu_torture_cleanup(void)
 		fakewriter_tasks = NULL;
 	}
 
-	if (stats_task != NULL) {
+	if (stats_task) {
 		VERBOSE_PRINTK_STRING("Stopping rcu_torture_stats task");
 		kthread_stop(stats_task);
 	}
@@ -858,7 +848,7 @@ rcu_torture_cleanup(void)
 
 	rcu_torture_stats_print();  /* -After- the stats thread is stopped! */
 
-	if (cur_ops->cleanup != NULL)
+	if (cur_ops->cleanup)
 		cur_ops->cleanup();
 	if (atomic_read(&n_rcu_torture_error))
 		rcu_torture_print_module_parms("End of test: FAILURE");
@@ -866,27 +856,28 @@ rcu_torture_cleanup(void)
 		rcu_torture_print_module_parms("End of test: SUCCESS");
 }
 
-static int
+static int __init
 rcu_torture_init(void)
 {
 	int i;
 	int cpu;
 	int firsterr = 0;
+	static struct rcu_torture_ops *torture_ops[] =
+		{ &rcu_ops, &rcu_sync_ops, &rcu_bh_ops, &rcu_bh_sync_ops,
+		  &srcu_ops, &sched_ops, };
 
 	/* Process args and tell the world that the torturer is on the job. */
-
-	for (i = 0; cur_ops = torture_ops[i], cur_ops != NULL; i++) {
+	for (i = 0; i < ARRAY_SIZE(torture_ops); i++) {
 		cur_ops = torture_ops[i];
-		if (strcmp(torture_type, cur_ops->name) == 0) {
+		if (strcmp(torture_type, cur_ops->name) == 0)
 			break;
-		}
 	}
-	if (cur_ops == NULL) {
+	if (i == ARRAY_SIZE(torture_ops)) {
 		printk(KERN_ALERT "rcutorture: invalid torture type: \"%s\"\n",
 		       torture_type);
 		return (-EINVAL);
 	}
-	if (cur_ops->init != NULL)
+	if (cur_ops->init)
 		cur_ops->init(); /* no "goto unwind" prior to this point!!! */
 
 	if (nreaders >= 0)
@@ -899,7 +890,7 @@ rcu_torture_init(void)
 	/* Set up the freelist. */
 
 	INIT_LIST_HEAD(&rcu_torture_freelist);
-	for (i = 0; i < sizeof(rcu_tortures) / sizeof(rcu_tortures[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(rcu_tortures); i++) {
 		rcu_tortures[i].rtort_mbtest = 0;
 		list_add_tail(&rcu_tortures[i].rtort_free,
 			      &rcu_torture_freelist);

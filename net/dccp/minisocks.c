@@ -27,7 +27,7 @@
 struct inet_timewait_death_row dccp_death_row = {
 	.sysctl_max_tw_buckets = NR_FILE * 2,
 	.period		= DCCP_TIMEWAIT_LEN / INET_TWDR_TWKILL_SLOTS,
-	.death_lock	= SPIN_LOCK_UNLOCKED,
+	.death_lock	= __SPIN_LOCK_UNLOCKED(dccp_death_row.death_lock),
 	.hashinfo	= &dccp_hashinfo,
 	.tw_timer	= TIMER_INITIALIZER(inet_twdr_hangman, 0,
 					    (unsigned long)&dccp_death_row),
@@ -41,6 +41,16 @@ struct inet_timewait_death_row dccp_death_row = {
 };
 
 EXPORT_SYMBOL_GPL(dccp_death_row);
+
+void dccp_minisock_init(struct dccp_minisock *dmsk)
+{
+	dmsk->dccpms_sequence_window = sysctl_dccp_feat_sequence_window;
+	dmsk->dccpms_rx_ccid	     = sysctl_dccp_feat_rx_ccid;
+	dmsk->dccpms_tx_ccid	     = sysctl_dccp_feat_tx_ccid;
+	dmsk->dccpms_ack_ratio	     = sysctl_dccp_feat_ack_ratio;
+	dmsk->dccpms_send_ack_vector = sysctl_dccp_feat_send_ack_vector;
+	dmsk->dccpms_send_ndp_count  = sysctl_dccp_feat_send_ndp_count;
+}
 
 void dccp_time_wait(struct sock *sk, int state, int timeo)
 {
@@ -112,7 +122,6 @@ struct sock *dccp_create_openreq_child(struct sock *sk,
 		newdp->dccps_service_list  = NULL;
 		newdp->dccps_service	   = dreq->dreq_service;
 		newicsk->icsk_rto	   = DCCP_TIMEOUT_INIT;
-		do_gettimeofday(&newdp->dccps_epoch);
 
 		if (dccp_feat_clone(sk, newsk))
 			goto out_free;

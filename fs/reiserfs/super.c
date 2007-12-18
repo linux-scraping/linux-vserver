@@ -18,10 +18,10 @@
 #include <linux/reiserfs_fs.h>
 #include <linux/reiserfs_acl.h>
 #include <linux/reiserfs_xattr.h>
-#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
+#include <linux/exportfs.h>
 #include <linux/vfs.h>
 #include <linux/mnt_namespace.h>
 #include <linux/mount.h>
@@ -145,7 +145,7 @@ static int finish_unfinished(struct super_block *s)
 {
 	INITIALIZE_PATH(path);
 	struct cpu_key max_cpu_key, obj_key;
-	struct reiserfs_key save_link_key;
+	struct reiserfs_key save_link_key, last_inode_key;
 	int retval = 0;
 	struct item_head *ih;
 	struct buffer_head *bh;
@@ -165,6 +165,8 @@ static int finish_unfinished(struct super_block *s)
 	max_cpu_key.on_disk_key.k_objectid = ~0U;
 	set_cpu_key_k_offset(&max_cpu_key, ~0U);
 	max_cpu_key.key_length = 3;
+
+	memset(&last_inode_key, 0, sizeof(last_inode_key));
 
 #ifdef CONFIG_QUOTA
 	/* Needed for iput() to work correctly and not trash data */
@@ -278,8 +280,18 @@ static int finish_unfinished(struct super_block *s)
 			REISERFS_I(inode)->i_flags |= i_link_saved_unlink_mask;
 			/* not completed unlink (rmdir) found */
 			reiserfs_info(s, "Removing %k..", INODE_PKEY(inode));
-			/* removal gets completed in iput */
-			retval = 0;
+			if (memcmp(&last_inode_key, INODE_PKEY(inode),
+					sizeof(last_inode_key))){
+				last_inode_key = *INODE_PKEY(inode);
+				/* removal gets completed in iput */
+				retval = 0;
+			} else {
+				reiserfs_warning(s, "Dead loop in "
+						"finish_unfinished detected, "
+						"just remove save link\n");
+				retval = remove_save_link_only(s,
+							&save_link_key, 0);
+			}
 		}
 
 		iput(inode);
@@ -307,7 +319,7 @@ static int finish_unfinished(struct super_block *s)
 
 /* to protect file being unlinked from getting lost we "safe" link files
    being unlinked. This link will be deleted in the same transaction with last
-   item of file. mounting the filesytem we scan all these links and remove
+   item of file. mounting the filesystem we scan all these links and remove
    files which almost got lost */
 void add_save_link(struct reiserfs_transaction_handle *th,
 		   struct inode *inode, int truncate)
@@ -433,12 +445,13 @@ int remove_save_link(struct inode *inode, int truncate)
 static void reiserfs_kill_sb(struct super_block *s)
 {
 	if (REISERFS_SB(s)) {
+#ifdef CONFIG_REISERFS_FS_XATTR
 		if (REISERFS_SB(s)->xattr_root) {
 			d_invalidate(REISERFS_SB(s)->xattr_root);
 			dput(REISERFS_SB(s)->xattr_root);
 			REISERFS_SB(s)->xattr_root = NULL;
 		}
-
+#endif
 		if (REISERFS_SB(s)->priv_root) {
 			d_invalidate(REISERFS_SB(s)->priv_root);
 			dput(REISERFS_SB(s)->priv_root);
@@ -507,19 +520,16 @@ static void reiserfs_destroy_inode(struct inode *inode)
 	kmem_cache_free(reiserfs_inode_cachep, REISERFS_I(inode));
 }
 
-static void init_once(void *foo, struct kmem_cache * cachep, unsigned long flags)
+static void init_once(struct kmem_cache * cachep, void *foo)
 {
 	struct reiserfs_inode_info *ei = (struct reiserfs_inode_info *)foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY | SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR) {
-		INIT_LIST_HEAD(&ei->i_prealloc_list);
-		inode_init_once(&ei->vfs_inode);
+	INIT_LIST_HEAD(&ei->i_prealloc_list);
+	inode_init_once(&ei->vfs_inode);
 #ifdef CONFIG_REISERFS_FS_POSIX_ACL
-		ei->i_acl_access = NULL;
-		ei->i_acl_default = NULL;
+	ei->i_acl_access = NULL;
+	ei->i_acl_default = NULL;
 #endif
-	}
 }
 
 static int init_inodecache(void)
@@ -529,7 +539,7 @@ static int init_inodecache(void)
 							 reiserfs_inode_info),
 						  0, (SLAB_RECLAIM_ACCOUNT|
 							SLAB_MEM_SPREAD),
-						  init_once, NULL);
+						  init_once);
 	if (reiserfs_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -651,11 +661,11 @@ static struct quotactl_ops reiserfs_qctl_operations = {
 };
 #endif
 
-static struct export_operations reiserfs_export_ops = {
+static const struct export_operations reiserfs_export_ops = {
 	.encode_fh = reiserfs_encode_fh,
-	.decode_fh = reiserfs_decode_fh,
+	.fh_to_dentry = reiserfs_fh_to_dentry,
+	.fh_to_parent = reiserfs_fh_to_parent,
 	.get_parent = reiserfs_get_parent,
-	.get_dentry = reiserfs_get_dentry,
 };
 
 /* this struct is used in reiserfs_getopt () for containing the value for those
@@ -1577,9 +1587,10 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 	REISERFS_SB(s)->s_alloc_options.preallocmin = 0;
 	/* Preallocate by 16 blocks (17-1) at once */
 	REISERFS_SB(s)->s_alloc_options.preallocsize = 17;
+#ifdef CONFIG_REISERFS_FS_XATTR
 	/* Initialize the rwsem for xattr dir */
 	init_rwsem(&REISERFS_SB(s)->xattr_dir_sem);
-
+#endif
 	/* setup default block allocator options */
 	reiserfs_init_alloc_options(s);
 
@@ -1731,6 +1742,21 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 
 		set_sb_umount_state(rs, REISERFS_ERROR_FS);
 		set_sb_fs_state(rs, 0);
+
+		/* Clear out s_bmap_nr if it would wrap. We can handle this
+		 * case, but older revisions can't. This will cause the
+		 * file system to fail mount on those older implementations,
+		 * avoiding corruption. -jeffm */
+		if (bmap_would_wrap(reiserfs_bmap_count(s)) &&
+		    sb_bmap_nr(rs) != 0) {
+			reiserfs_warning(s, "super-2030: This file system "
+					"claims to use %u bitmap blocks in "
+					"its super block, but requires %u. "
+					"Clearing to zero.", sb_bmap_nr(rs),
+					reiserfs_bmap_count(s));
+
+			set_sb_bmap_nr(rs, 0);
+		}
 
 		if (old_format_only(s)) {
 			/* filesystem of format 3.5 either with standard or non-standard
@@ -1934,8 +1960,11 @@ static int reiserfs_release_dquot(struct dquot *dquot)
 	ret =
 	    journal_begin(&th, dquot->dq_sb,
 			  REISERFS_QUOTA_DEL_BLOCKS(dquot->dq_sb));
-	if (ret)
+	if (ret) {
+		/* Release dquot anyway to avoid endless cycle in dqput() */
+		dquot_release(dquot);
 		goto out;
+	}
 	ret = dquot_release(dquot);
 	err =
 	    journal_end(&th, dquot->dq_sb,
@@ -2086,6 +2115,12 @@ static ssize_t reiserfs_quota_write(struct super_block *sb, int type,
 	size_t towrite = len;
 	struct buffer_head tmp_bh, *bh;
 
+	if (!current->journal_info) {
+		printk(KERN_WARNING "reiserfs: Quota write (off=%Lu, len=%Lu)"
+			" cancelled because transaction is not started.\n",
+			(unsigned long long)off, (unsigned long long)len);
+		return -EIO;
+	}
 	mutex_lock_nested(&inode->i_mutex, I_MUTEX_QUOTA);
 	while (towrite > 0) {
 		tocopy = sb->s_blocksize - offset < towrite ?
@@ -2117,7 +2152,7 @@ static ssize_t reiserfs_quota_write(struct super_block *sb, int type,
 		data += tocopy;
 		blk++;
 	}
-      out:
+out:
 	if (len == towrite)
 		return err;
 	if (inode->i_size < off + len - towrite)

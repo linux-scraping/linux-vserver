@@ -21,7 +21,6 @@
 	#size-cells = <1>;
 
 	cpus {
-		#cpus = <1>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -35,7 +34,6 @@
 			timebase-frequency = <3EF1480>;
 			bus-frequency = <FBC5200>;
 			clock-frequency = <1F78A400>;
-			32-bit;
 		};
 	};
 
@@ -52,7 +50,6 @@
 	soc8360@e0000000 {
 		#address-cells = <1>;
 		#size-cells = <1>;
-		#interrupt-cells = <2>;
 		device_type = "soc";
 		ranges = <0 e0000000 00100000>;
 		reg = <e0000000 00000200>;
@@ -114,72 +111,11 @@
 			descriptor-types-mask = <01010ebf>;
 		};
 
-		pci@8500 {
-			interrupt-map-mask = <f800 0 0 7>;
-			interrupt-map = <
-
-					/* IDSEL 0x11 AD17 */
-					 8800 0 0 1 &ipic 14 8
-					 8800 0 0 2 &ipic 15 8
-					 8800 0 0 3 &ipic 16 8
-					 8800 0 0 4 &ipic 17 8
-
-					/* IDSEL 0x12 AD18 */
-					 9000 0 0 1 &ipic 16 8
-					 9000 0 0 2 &ipic 17 8
-					 9000 0 0 3 &ipic 14 8
-					 9000 0 0 4 &ipic 15 8
-
-					/* IDSEL 0x13 AD19 */
-					 9800 0 0 1 &ipic 17 8
-					 9800 0 0 2 &ipic 14 8
-					 9800 0 0 3 &ipic 15 8
-					 9800 0 0 4 &ipic 16 8
-
-					/* IDSEL 0x15 AD21*/
-					 a800 0 0 1 &ipic 14 8
-					 a800 0 0 2 &ipic 15 8
-					 a800 0 0 3 &ipic 16 8
-					 a800 0 0 4 &ipic 17 8
-
-					/* IDSEL 0x16 AD22*/
-					 b000 0 0 1 &ipic 17 8
-					 b000 0 0 2 &ipic 14 8
-					 b000 0 0 3 &ipic 15 8
-					 b000 0 0 4 &ipic 16 8
-
-					/* IDSEL 0x17 AD23*/
-					 b800 0 0 1 &ipic 16 8
-					 b800 0 0 2 &ipic 17 8
-					 b800 0 0 3 &ipic 14 8
-					 b800 0 0 4 &ipic 15 8
-
-					/* IDSEL 0x18 AD24*/
-					 c000 0 0 1 &ipic 15 8
-					 c000 0 0 2 &ipic 16 8
-					 c000 0 0 3 &ipic 17 8
-					 c000 0 0 4 &ipic 14 8>;
-			interrupt-parent = < &ipic >;
-			interrupts = <42 8>;
-			bus-range = <0 0>;
-			ranges = <02000000 0 a0000000 a0000000 0 10000000
-				  42000000 0 80000000 80000000 0 10000000
-				  01000000 0 00000000 e2000000 0 00100000>;
-			clock-frequency = <3f940aa>;
-			#interrupt-cells = <1>;
-			#size-cells = <2>;
-			#address-cells = <3>;
-			reg = <8500 100>;
-			compatible = "83xx";
-			device_type = "pci";
-		};
-
 		ipic: pic@700 {
 			interrupt-controller;
 			#address-cells = <0>;
 			#interrupt-cells = <2>;
 			reg = <700 100>;
-			built-in;
 			device_type = "ipic";
 		};
 
@@ -302,10 +238,17 @@
 			reg = <2000 200>;
 			interrupts = <20>;
 			interrupt-parent = < &qeic >;
-			mac-address = [ 00 04 9f 00 23 23 ];
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
+			mac-address = [ 00 00 00 00 00 00 ];
+			local-mac-address = [ 00 00 00 00 00 00 ];
 			rx-clock = <0>;
 			tx-clock = <19>;
 			phy-handle = < &phy0 >;
+			phy-connection-type = "rgmii-id";
 			pio-handle = < &pio1 >;
 		};
 
@@ -317,10 +260,17 @@
 			reg = <3000 200>;
 			interrupts = <21>;
 			interrupt-parent = < &qeic >;
-			mac-address = [ 00 11 22 33 44 55 ];
+			/*
+			 * mac-address is deprecated and will be removed
+			 * in 2.6.25.  Only recent versions of
+			 * U-Boot support local-mac-address, however.
+			 */
+			mac-address = [ 00 00 00 00 00 00 ];
+			local-mac-address = [ 00 00 00 00 00 00 ];
 			rx-clock = <0>;
 			tx-clock = <14>;
 			phy-handle = < &phy1 >;
+			phy-connection-type = "rgmii-id";
 			pio-handle = < &pio2 >;
 		};
 
@@ -336,14 +286,12 @@
 				interrupts = <11 8>;
 				reg = <0>;
 				device_type = "ethernet-phy";
-				interface = <6>; //ENET_1000_GMII
 			};
 			phy1: ethernet-phy@01 {
 				interrupt-parent = < &ipic >;
 				interrupts = <12 8>;
 				reg = <1>;
 				device_type = "ethernet-phy";
-				interface = <6>;
 			};
 		};
 
@@ -353,11 +301,69 @@
 			#address-cells = <0>;
 			#interrupt-cells = <1>;
 			reg = <80 80>;
-			built-in;
 			big-endian;
 			interrupts = <20 8 21 8>; //high:32 low:33
 			interrupt-parent = < &ipic >;
 		};
+	};
 
+	pci@e0008500 {
+		interrupt-map-mask = <f800 0 0 7>;
+		interrupt-map = <
+
+				/* IDSEL 0x11 AD17 */
+				 8800 0 0 1 &ipic 14 8
+				 8800 0 0 2 &ipic 15 8
+				 8800 0 0 3 &ipic 16 8
+				 8800 0 0 4 &ipic 17 8
+
+				/* IDSEL 0x12 AD18 */
+				 9000 0 0 1 &ipic 16 8
+				 9000 0 0 2 &ipic 17 8
+				 9000 0 0 3 &ipic 14 8
+				 9000 0 0 4 &ipic 15 8
+
+				/* IDSEL 0x13 AD19 */
+				 9800 0 0 1 &ipic 17 8
+				 9800 0 0 2 &ipic 14 8
+				 9800 0 0 3 &ipic 15 8
+				 9800 0 0 4 &ipic 16 8
+
+				/* IDSEL 0x15 AD21*/
+				 a800 0 0 1 &ipic 14 8
+				 a800 0 0 2 &ipic 15 8
+				 a800 0 0 3 &ipic 16 8
+				 a800 0 0 4 &ipic 17 8
+
+				/* IDSEL 0x16 AD22*/
+				 b000 0 0 1 &ipic 17 8
+				 b000 0 0 2 &ipic 14 8
+				 b000 0 0 3 &ipic 15 8
+				 b000 0 0 4 &ipic 16 8
+
+				/* IDSEL 0x17 AD23*/
+				 b800 0 0 1 &ipic 16 8
+				 b800 0 0 2 &ipic 17 8
+				 b800 0 0 3 &ipic 14 8
+				 b800 0 0 4 &ipic 15 8
+
+				/* IDSEL 0x18 AD24*/
+				 c000 0 0 1 &ipic 15 8
+				 c000 0 0 2 &ipic 16 8
+				 c000 0 0 3 &ipic 17 8
+				 c000 0 0 4 &ipic 14 8>;
+		interrupt-parent = < &ipic >;
+		interrupts = <42 8>;
+		bus-range = <0 0>;
+		ranges = <02000000 0 a0000000 a0000000 0 10000000
+			  42000000 0 80000000 80000000 0 10000000
+			  01000000 0 00000000 e2000000 0 00100000>;
+		clock-frequency = <3f940aa>;
+		#interrupt-cells = <1>;
+		#size-cells = <2>;
+		#address-cells = <3>;
+		reg = <e0008500 100>;
+		compatible = "fsl,mpc8349-pci";
+		device_type = "pci";
 	};
 };

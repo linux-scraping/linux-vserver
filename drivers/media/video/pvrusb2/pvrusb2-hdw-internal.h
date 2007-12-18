@@ -225,11 +225,12 @@ struct pvr2_hdw {
 	unsigned int cmd_debug_write_len;  //
 	unsigned int cmd_debug_read_len;   //
 
-	int flag_ok;            // device in known good state
-	int flag_disconnected;  // flag_ok == 0 due to disconnect
-	int flag_init_ok;       // true if structure is fully initialized
-	int flag_streaming_enabled; // true if streaming should be on
-	int fw1_state;          // current situation with fw1
+	int flag_ok;            /* device in known good state */
+	int flag_disconnected;  /* flag_ok == 0 due to disconnect */
+	int flag_init_ok;       /* true if structure is fully initialized */
+	int flag_streaming_enabled; /* true if streaming should be on */
+	int fw1_state;          /* current situation with fw1 */
+	int flag_encoder_ok;    /* True if encoder is healthy */
 
 	int flag_decoder_is_tuned;
 
@@ -238,6 +239,7 @@ struct pvr2_hdw {
 	// CPU firmware info (used to help find / save firmware data)
 	char *fw_buffer;
 	unsigned int fw_size;
+	int fw_cpu_flag; /* True if we are dealing with the CPU */
 
 	// Which subsystem pieces have been enabled / configured
 	unsigned long subsys_enabled_mask;
@@ -282,6 +284,8 @@ struct pvr2_hdw {
 
 	int unit_number;             /* ID for driver instance */
 	unsigned long serial_number; /* ID for hardware itself */
+
+	char bus_info[32]; /* Bus location info */
 
 	/* Minor numbers used by v4l logic (yes, this is a hack, as there
 	   should be no v4l junk here).  Probably a better way to do this. */

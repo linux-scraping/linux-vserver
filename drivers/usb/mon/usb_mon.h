@@ -20,9 +20,11 @@ struct mon_bus {
 	struct usb_bus *u_bus;
 
 	int text_inited;
+	int bin_inited;
 	struct dentry *dent_s;		/* Debugging file */
 	struct dentry *dent_t;		/* Text interface file */
-	int uses_dma;
+	struct dentry *dent_u;		/* Second text interface file */
+	struct device *classdev;	/* Device in usbmon class */
 
 	/* Ref */
 	int nreaders;			/* Under mon_lock AND mbus->lock */
@@ -44,7 +46,7 @@ struct mon_reader {
 
 	void (*rnf_submit)(void *data, struct urb *urb);
 	void (*rnf_error)(void *data, struct urb *urb, int error);
-	void (*rnf_complete)(void *data, struct urb *urb);
+	void (*rnf_complete)(void *data, struct urb *urb, int status);
 };
 
 void mon_reader_add(struct mon_bus *mbus, struct mon_reader *r);
@@ -54,7 +56,8 @@ struct mon_bus *mon_bus_lookup(unsigned int num);
 
 int /*bool*/ mon_text_add(struct mon_bus *mbus, const struct usb_bus *ubus);
 void mon_text_del(struct mon_bus *mbus);
-// void mon_bin_add(struct mon_bus *);
+int /*bool*/ mon_bin_add(struct mon_bus *mbus, const struct usb_bus *ubus);
+void mon_bin_del(struct mon_bus *mbus);
 
 int __init mon_text_init(void);
 void mon_text_exit(void);
@@ -80,5 +83,7 @@ extern unsigned int mon_copy_to_buff(const struct mon_reader_bin *rp,
 extern struct mutex mon_lock;
 
 extern const struct file_operations mon_fops_stat;
+
+extern struct mon_bus mon_bus0;		/* Only for redundant checks */
 
 #endif /* __USB_MON_H */

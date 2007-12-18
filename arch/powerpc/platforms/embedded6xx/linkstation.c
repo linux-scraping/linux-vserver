@@ -11,15 +11,15 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/pci.h>
 #include <linux/initrd.h>
 #include <linux/mtd/physmap.h>
 
 #include <asm/time.h>
 #include <asm/prom.h>
 #include <asm/mpic.h>
-#include <asm/mpc10x.h>
 #include <asm/pci-bridge.h>
+
+#include "mpc10x.h"
 
 static struct mtd_partition linkstation_physmap_partitions[] = {
 	{
@@ -54,31 +54,31 @@ static struct mtd_partition linkstation_physmap_partitions[] = {
 	},
 };
 
-static int __init add_bridge(struct device_node *dev)
+static int __init linkstation_add_bridge(struct device_node *dev)
 {
+#ifdef CONFIG_PCI
 	int len;
 	struct pci_controller *hose;
-	int *bus_range;
+	const int *bus_range;
 
 	printk("Adding PCI host bridge %s\n", dev->full_name);
 
-	bus_range = (int *) get_property(dev, "bus-range", &len);
+	bus_range = of_get_property(dev, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int))
 		printk(KERN_WARNING "Can't get bus-range for %s, assume"
 				" bus 0\n", dev->full_name);
 
-	hose = pcibios_alloc_controller();
+	hose = pcibios_alloc_controller(dev);
 	if (hose == NULL)
 		return -ENOMEM;
 	hose->first_busno = bus_range ? bus_range[0] : 0;
 	hose->last_busno = bus_range ? bus_range[1] : 0xff;
-	hose->arch_data = dev;
-	setup_indirect_pci(hose, 0xfec00000, 0xfee00000);
+	setup_indirect_pci(hose, 0xfec00000, 0xfee00000, 0);
 
 	/* Interpret the "ranges" property */
 	/* This also maps the I/O region and sets isa_io/mem_base */
 	pci_process_bridge_OF_ranges(hose, dev, 1);
-
+#endif
 	return 0;
 }
 
@@ -91,22 +91,22 @@ static void __init linkstation_setup_arch(void)
 #endif
 
 	/* Lookup PCI host bridges */
-	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
-		add_bridge(np);
+	for_each_compatible_node(np, "pci", "mpc10x-pci")
+		linkstation_add_bridge(np);
 
 	printk(KERN_INFO "BUFFALO Network Attached Storage Series\n");
 	printk(KERN_INFO "(C) 2002-2005 BUFFALO INC.\n");
 }
 
 /*
- * Interrupt setup and service.  Interrrupts on the linkstation come
+ * Interrupt setup and service.  Interrupts on the linkstation come
  * from the four PCI slots plus onboard 8241 devices: I2C, DUART.
  */
 static void __init linkstation_init_IRQ(void)
 {
 	struct mpic *mpic;
 	struct device_node *dnp;
-	void *prop;
+	const u32 *prop;
 	int size;
 	phys_addr_t paddr;
 
@@ -114,7 +114,7 @@ static void __init linkstation_init_IRQ(void)
 	if (dnp == NULL)
 		return;
 
-	prop = (struct device_node *)get_property(dnp, "reg", &size);
+	prop = of_get_property(dnp, "reg", &size);
 	paddr = (phys_addr_t)of_translate_address(dnp, prop);
 
 	mpic = mpic_alloc(dnp, paddr, MPIC_PRIMARY | MPIC_WANTS_RESET, 4, 32, " EPIC     ");

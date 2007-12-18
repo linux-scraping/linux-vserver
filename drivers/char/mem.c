@@ -18,14 +18,13 @@
 #include <linux/raw.h>
 #include <linux/tty.h>
 #include <linux/capability.h>
-#include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/device.h>
 #include <linux/highmem.h>
 #include <linux/crash_dump.h>
 #include <linux/backing-dev.h>
 #include <linux/bootmem.h>
-#include <linux/pipe_fs_i.h>
+#include <linux/splice.h>
 #include <linux/pfn.h>
 
 #include <asm/uaccess.h>
@@ -42,7 +41,7 @@
  */
 static inline int uncached_access(struct file *file, unsigned long addr)
 {
-#if defined(__i386__)
+#if defined(__i386__) && !defined(__arch_um__)
 	/*
 	 * On the PPro and successors, the MTRRs are used to set
 	 * memory types for physical addresses outside main memory,
@@ -58,7 +57,7 @@ static inline int uncached_access(struct file *file, unsigned long addr)
 		  test_bit(X86_FEATURE_CYRIX_ARR, boot_cpu_data.x86_capability) ||
 		  test_bit(X86_FEATURE_CENTAUR_MCR, boot_cpu_data.x86_capability) )
 	  && addr >= __pa(high_memory);
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) && !defined(__arch_um__)
 	/* 
 	 * This is broken because it can generate memory type aliases,
 	 * which can cause cache corruptions
@@ -76,6 +75,13 @@ static inline int uncached_access(struct file *file, unsigned long addr)
 	 * On ia64, we ignore O_SYNC because we cannot tolerate memory attribute aliases.
 	 */
 	return !(efi_mem_attributes(addr) & EFI_MEMORY_WB);
+#elif defined(CONFIG_MIPS)
+	{
+		extern int __uncached_access(struct file *file,
+					     unsigned long addr);
+
+		return __uncached_access(file, addr);
+	}
 #else
 	/*
 	 * Accessing memory above the top the kernel knows about or through a file pointer
@@ -552,7 +558,7 @@ static ssize_t write_kmem(struct file * file, const char __user * buf,
  	return virtr + wrote;
 }
 
-#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
+#ifdef CONFIG_DEVPORT
 static ssize_t read_port(struct file * file, char __user * buf,
 			 size_t count, loff_t *ppos)
 {
@@ -619,65 +625,10 @@ static ssize_t splice_write_null(struct pipe_inode_info *pipe,struct file *out,
 	return splice_from_pipe(pipe, out, ppos, len, flags, pipe_to_null);
 }
 
-#ifdef CONFIG_MMU
-/*
- * For fun, we are using the MMU for this.
- */
-static inline size_t read_zero_pagealigned(char __user * buf, size_t size)
-{
-	struct mm_struct *mm;
-	struct vm_area_struct * vma;
-	unsigned long addr=(unsigned long)buf;
-
-	mm = current->mm;
-	/* Oops, this was forgotten before. -ben */
-	down_read(&mm->mmap_sem);
-
-	/* For private mappings, just map in zero pages. */
-	for (vma = find_vma(mm, addr); vma; vma = vma->vm_next) {
-		unsigned long count;
-
-		if (vma->vm_start > addr || (vma->vm_flags & VM_WRITE) == 0)
-			goto out_up;
-		if (vma->vm_flags & (VM_SHARED | VM_HUGETLB))
-			break;
-		count = vma->vm_end - addr;
-		if (count > size)
-			count = size;
-
-		zap_page_range(vma, addr, count, NULL);
-        	if (zeromap_page_range(vma, addr, count, PAGE_COPY))
-			break;
-
-		size -= count;
-		buf += count;
-		addr += count;
-		if (size == 0)
-			goto out_up;
-	}
-
-	up_read(&mm->mmap_sem);
-	
-	/* The shared case is hard. Let's do the conventional zeroing. */ 
-	do {
-		unsigned long unwritten = clear_user(buf, PAGE_SIZE);
-		if (unwritten)
-			return size + unwritten - PAGE_SIZE;
-		cond_resched();
-		buf += PAGE_SIZE;
-		size -= PAGE_SIZE;
-	} while (size);
-
-	return size;
-out_up:
-	up_read(&mm->mmap_sem);
-	return size;
-}
-
 static ssize_t read_zero(struct file * file, char __user * buf, 
 			 size_t count, loff_t *ppos)
 {
-	unsigned long left, unwritten, written = 0;
+	size_t written;
 
 	if (!count)
 		return 0;
@@ -685,69 +636,33 @@ static ssize_t read_zero(struct file * file, char __user * buf,
 	if (!access_ok(VERIFY_WRITE, buf, count))
 		return -EFAULT;
 
-	left = count;
+	written = 0;
+	while (count) {
+		unsigned long unwritten;
+		size_t chunk = count;
 
-	/* do we want to be clever? Arbitrary cut-off */
-	if (count >= PAGE_SIZE*4) {
-		unsigned long partial;
-
-		/* How much left of the page? */
-		partial = (PAGE_SIZE-1) & -(unsigned long) buf;
-		unwritten = clear_user(buf, partial);
-		written = partial - unwritten;
+		if (chunk > PAGE_SIZE)
+			chunk = PAGE_SIZE;	/* Just for latency reasons */
+		unwritten = clear_user(buf, chunk);
+		written += chunk - unwritten;
 		if (unwritten)
-			goto out;
-		left -= partial;
-		buf += partial;
-		unwritten = read_zero_pagealigned(buf, left & PAGE_MASK);
-		written += (left & PAGE_MASK) - unwritten;
-		if (unwritten)
-			goto out;
-		buf += left & PAGE_MASK;
-		left &= ~PAGE_MASK;
+			break;
+		buf += chunk;
+		count -= chunk;
+		cond_resched();
 	}
-	unwritten = clear_user(buf, left);
-	written += left - unwritten;
-out:
 	return written ? written : -EFAULT;
 }
 
 static int mmap_zero(struct file * file, struct vm_area_struct * vma)
 {
-	int err;
-
+#ifndef CONFIG_MMU
+	return -ENOSYS;
+#endif
 	if (vma->vm_flags & VM_SHARED)
 		return shmem_zero_setup(vma);
-	err = zeromap_page_range(vma, vma->vm_start,
-			vma->vm_end - vma->vm_start, vma->vm_page_prot);
-	BUG_ON(err == -EEXIST);
-	return err;
+	return 0;
 }
-#else /* CONFIG_MMU */
-static ssize_t read_zero(struct file * file, char * buf, 
-			 size_t count, loff_t *ppos)
-{
-	size_t todo = count;
-
-	while (todo) {
-		size_t chunk = todo;
-
-		if (chunk > 4096)
-			chunk = 4096;	/* Just for latency reasons */
-		if (clear_user(buf, chunk))
-			return -EFAULT;
-		buf += chunk;
-		todo -= chunk;
-		cond_resched();
-	}
-	return count;
-}
-
-static int mmap_zero(struct file * file, struct vm_area_struct * vma)
-{
-	return -ENOSYS;
-}
-#endif /* CONFIG_MMU */
 
 static ssize_t write_full(struct file * file, const char __user * buf,
 			  size_t count, loff_t *ppos)
@@ -835,7 +750,7 @@ static const struct file_operations null_fops = {
 	.splice_write	= splice_write_null,
 };
 
-#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
+#ifdef CONFIG_DEVPORT
 static const struct file_operations port_fops = {
 	.llseek		= memory_lseek,
 	.read		= read_port,
@@ -913,7 +828,7 @@ static int memory_open(struct inode * inode, struct file * filp)
 		case 3:
 			filp->f_op = &null_fops;
 			break;
-#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
+#ifdef CONFIG_DEVPORT
 		case 4:
 			filp->f_op = &port_fops;
 			break;
@@ -960,7 +875,7 @@ static const struct {
 	{1, "mem",     S_IRUSR | S_IWUSR | S_IRGRP, &mem_fops},
 	{2, "kmem",    S_IRUSR | S_IWUSR | S_IRGRP, &kmem_fops},
 	{3, "null",    S_IRUGO | S_IWUGO,           &null_fops},
-#if (defined(CONFIG_ISA) || defined(CONFIG_PCI)) && !defined(__mc68000__)
+#ifdef CONFIG_DEVPORT
 	{4, "port",    S_IRUSR | S_IWUSR | S_IRGRP, &port_fops},
 #endif
 	{5, "zero",    S_IRUGO | S_IWUGO,           &zero_fops},
@@ -978,6 +893,11 @@ static struct class *mem_class;
 static int __init chr_dev_init(void)
 {
 	int i;
+	int err;
+
+	err = bdi_init(&zero_bdi);
+	if (err)
+		return err;
 
 	if (register_chrdev(MEM_MAJOR,"mem",&memory_fops))
 		printk("unable to get major %d for memory devs\n", MEM_MAJOR);

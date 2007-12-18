@@ -50,6 +50,18 @@
 #include <asm/mca.h>
 
 /*
+ * Note: alignment of 4 entries/cacheline was empirically determined
+ * to be a good tradeoff between hot cachelines & spreading the array
+ * across too many cacheline.
+ */
+static struct local_tlb_flush_counts {
+	unsigned int count;
+} __attribute__((__aligned__(32))) local_tlb_flush_counts[NR_CPUS];
+
+static DEFINE_PER_CPU(unsigned int, shadow_flush_counts[NR_CPUS]) ____cacheline_aligned;
+
+
+/*
  * Structure and data for smp_call_function(). This is designed to minimise static memory
  * requirements. It also looks cleaner.
  */
@@ -70,7 +82,7 @@ static volatile struct call_data_struct *call_data;
 #define IPI_KDUMP_CPU_STOP	3
 
 /* This needs to be cacheline aligned because it is written to by *other* CPUs.  */
-static DEFINE_PER_CPU(u64, ipi_operation) ____cacheline_aligned;
+static DEFINE_PER_CPU_SHARED_ALIGNED(u64, ipi_operation);
 
 extern void cpu_halt (void);
 
@@ -174,7 +186,7 @@ handle_IPI (int irq, void *dev_id)
 }
 
 /*
- * Called with preeemption disabled.
+ * Called with preemption disabled.
  */
 static inline void
 send_IPI_single (int dest_cpu, int op)
@@ -184,7 +196,7 @@ send_IPI_single (int dest_cpu, int op)
 }
 
 /*
- * Called with preeemption disabled.
+ * Called with preemption disabled.
  */
 static inline void
 send_IPI_allbutself (int op)
@@ -198,7 +210,7 @@ send_IPI_allbutself (int op)
 }
 
 /*
- * Called with preeemption disabled.
+ * Called with preemption disabled.
  */
 static inline void
 send_IPI_all (int op)
@@ -211,7 +223,7 @@ send_IPI_all (int op)
 }
 
 /*
- * Called with preeemption disabled.
+ * Called with preemption disabled.
  */
 static inline void
 send_IPI_self (int op)
@@ -240,12 +252,68 @@ kdump_smp_send_init(void)
 }
 #endif
 /*
- * Called with preeemption disabled.
+ * Called with preemption disabled.
  */
 void
 smp_send_reschedule (int cpu)
 {
 	platform_send_ipi(cpu, IA64_IPI_RESCHEDULE, IA64_IPI_DM_INT, 0);
+}
+
+/*
+ * Called with preemption disabled.
+ */
+static void
+smp_send_local_flush_tlb (int cpu)
+{
+	platform_send_ipi(cpu, IA64_IPI_LOCAL_TLB_FLUSH, IA64_IPI_DM_INT, 0);
+}
+
+void
+smp_local_flush_tlb(void)
+{
+	/*
+	 * Use atomic ops. Otherwise, the load/increment/store sequence from
+	 * a "++" operation can have the line stolen between the load & store.
+	 * The overhead of the atomic op in negligible in this case & offers
+	 * significant benefit for the brief periods where lots of cpus
+	 * are simultaneously flushing TLBs.
+	 */
+	ia64_fetchadd(1, &local_tlb_flush_counts[smp_processor_id()].count, acq);
+	local_flush_tlb_all();
+}
+
+#define FLUSH_DELAY	5 /* Usec backoff to eliminate excessive cacheline bouncing */
+
+void
+smp_flush_tlb_cpumask(cpumask_t xcpumask)
+{
+	unsigned int *counts = __ia64_per_cpu_var(shadow_flush_counts);
+	cpumask_t cpumask = xcpumask;
+	int mycpu, cpu, flush_mycpu = 0;
+
+	preempt_disable();
+	mycpu = smp_processor_id();
+
+	for_each_cpu_mask(cpu, cpumask)
+		counts[cpu] = local_tlb_flush_counts[cpu].count;
+
+	mb();
+	for_each_cpu_mask(cpu, cpumask) {
+		if (cpu == mycpu)
+			flush_mycpu = 1;
+		else
+			smp_send_local_flush_tlb(cpu);
+	}
+
+	if (flush_mycpu)
+		smp_local_flush_tlb();
+
+	for_each_cpu_mask(cpu, cpumask)
+		while(counts[cpu] == local_tlb_flush_counts[cpu].count)
+			udelay(FLUSH_DELAY);
+
+	preempt_enable();
 }
 
 void
@@ -278,7 +346,7 @@ smp_flush_tlb_mm (struct mm_struct *mm)
 }
 
 /*
- * Run a function on another CPU
+ * Run a function on a specific CPU
  *  <func>	The function to run. This must be fast and non-blocking.
  *  <info>	An arbitrary pointer to pass to the function.
  *  <nonatomic>	Currently unused.
@@ -298,9 +366,11 @@ smp_call_function_single (int cpuid, void (*func) (void *info), void *info, int 
 	int me = get_cpu(); /* prevent preemption and reschedule on another processor */
 
 	if (cpuid == me) {
-		printk(KERN_INFO "%s: trying to call self\n", __FUNCTION__);
+		local_irq_disable();
+		func(info);
+		local_irq_enable();
 		put_cpu();
-		return -EBUSY;
+		return 0;
 	}
 
 	data.func = func;
@@ -400,7 +470,7 @@ smp_send_stop (void)
 	send_IPI_allbutself(IPI_CPU_STOP);
 }
 
-int __init
+int
 setup_profiling_timer (unsigned int multiplier)
 {
 	return -EINVAL;

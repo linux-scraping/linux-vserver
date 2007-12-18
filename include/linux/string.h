@@ -3,15 +3,13 @@
 
 /* We don't want strings.h stuff being user by user stuff by accident */
 
-#ifdef __KERNEL__
+#ifndef __KERNEL__
+#include <string.h>
+#else
 
 #include <linux/compiler.h>	/* for inline */
 #include <linux/types.h>	/* for size_t */
 #include <linux/stddef.h>	/* for NULL */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 extern char *strndup_user(const char __user *, long);
 
@@ -46,6 +44,12 @@ extern int strncmp(const char *,const char *,__kernel_size_t);
 #endif
 #ifndef __HAVE_ARCH_STRNICMP
 extern int strnicmp(const char *, const char *, __kernel_size_t);
+#endif
+#ifndef __HAVE_ARCH_STRCASECMP
+extern int strcasecmp(const char *s1, const char *s2);
+#endif
+#ifndef __HAVE_ARCH_STRNCASECMP
+extern int strncasecmp(const char *s1, const char *s2, size_t n);
 #endif
 #ifndef __HAVE_ARCH_STRCHR
 extern char * strchr(const char *,int);
@@ -99,11 +103,11 @@ extern void * memchr(const void *,int,__kernel_size_t);
 #endif
 
 extern char *kstrdup(const char *s, gfp_t gfp);
+extern char *kstrndup(const char *s, size_t len, gfp_t gfp);
 extern void *kmemdup(const void *src, size_t len, gfp_t gfp);
 
-#ifdef __cplusplus
-}
-#endif
+extern char **argv_split(gfp_t gfp, const char *str, int *argcp);
+extern void argv_free(char **argv);
 
 #endif
 #endif /* _LINUX_STRING_H_ */

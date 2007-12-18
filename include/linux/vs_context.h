@@ -2,6 +2,7 @@
 #define _VS_CONTEXT_H
 
 #include "vserver/base.h"
+#include "vserver/check.h"
 #include "vserver/context.h"
 #include "vserver/history.h"
 #include "vserver/debug.h"

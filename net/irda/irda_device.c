@@ -95,14 +95,14 @@ int __init irda_device_init( void)
 	return 0;
 }
 
-static void __exit leftover_dongle(void *arg)
+static void leftover_dongle(void *arg)
 {
 	struct dongle_reg *reg = arg;
 	IRDA_WARNING("IrDA: Dongle type %x not unregistered\n",
 		     reg->type);
 }
 
-void __exit irda_device_cleanup(void)
+void irda_device_cleanup(void)
 {
 	IRDA_DEBUG(4, "%s()\n", __FUNCTION__);
 
@@ -375,7 +375,7 @@ EXPORT_SYMBOL(alloc_irdadev);
 dongle_t *irda_device_dongle_init(struct net_device *dev, int type)
 {
 	struct dongle_reg *reg;
-	dongle_t *dongle = NULL;
+	dongle_t *dongle = kzalloc(sizeof(dongle_t), GFP_KERNEL);
 
 	might_sleep();
 
@@ -397,19 +397,14 @@ dongle_t *irda_device_dongle_init(struct net_device *dev, int type)
 	if (!reg || !try_module_get(reg->owner) ) {
 		IRDA_ERROR("IrDA: Unable to find requested dongle type %x\n",
 			   type);
-		goto out;
+		kfree(dongle);
+		dongle = NULL;
 	}
-
-	/* Allocate dongle info for this instance */
-	dongle = kzalloc(sizeof(dongle_t), GFP_KERNEL);
-	if (!dongle)
-		goto out;
-
-	/* Bind the registration info to this particular instance */
-	dongle->issue = reg;
-	dongle->dev = dev;
-
- out:
+	if (dongle) {
+		/* Bind the registration info to this particular instance */
+		dongle->issue = reg;
+		dongle->dev = dev;
+	}
 	spin_unlock(&dongles->hb_spinlock);
 	return dongle;
 }

@@ -1753,7 +1753,7 @@ prism54_get_oid(struct net_device *ndev, struct iw_request_info *info,
 	int rvalue;
 	enum oid_num_t n = dwrq->flags;
 
-	rvalue = mgt_get_request((islpci_private *) ndev->priv, n, 0, NULL, &r);
+	rvalue = mgt_get_request(netdev_priv(ndev), n, 0, NULL, &r);
 	dwrq->length = mgt_response_to_str(n, &r, extra);
 	if ((isl_oid[n].flags & OID_FLAG_TYPE) != OID_TYPE_U32)
 		kfree(r.ptr);
@@ -1766,7 +1766,7 @@ prism54_set_u32(struct net_device *ndev, struct iw_request_info *info,
 {
 	u32 oid = uwrq[0], u = uwrq[1];
 
-	return mgt_set_request((islpci_private *) ndev->priv, oid, 0, &u);
+	return mgt_set_request(netdev_priv(ndev), oid, 0, &u);
 }
 
 static int
@@ -1775,7 +1775,7 @@ prism54_set_raw(struct net_device *ndev, struct iw_request_info *info,
 {
 	u32 oid = dwrq->flags;
 
-	return mgt_set_request((islpci_private *) ndev->priv, oid, 0, extra);
+	return mgt_set_request(netdev_priv(ndev), oid, 0, extra);
 }
 
 void
@@ -1853,7 +1853,6 @@ prism54_del_mac(struct net_device *ndev, struct iw_request_info *info,
 	islpci_private *priv = netdev_priv(ndev);
 	struct islpci_acl *acl = &priv->acl;
 	struct mac_entry *entry;
-	struct list_head *ptr;
 	struct sockaddr *addr = (struct sockaddr *) extra;
 
 	if (addr->sa_family != ARPHRD_ETHER)
@@ -1861,11 +1860,9 @@ prism54_del_mac(struct net_device *ndev, struct iw_request_info *info,
 
 	if (down_interruptible(&acl->sem))
 		return -ERESTARTSYS;
-	for (ptr = acl->mac_list.next; ptr != &acl->mac_list; ptr = ptr->next) {
-		entry = list_entry(ptr, struct mac_entry, _list);
-
+	list_for_each_entry(entry, &acl->mac_list, _list) {
 		if (memcmp(entry->addr, addr->sa_data, ETH_ALEN) == 0) {
-			list_del(ptr);
+			list_del(&entry->_list);
 			acl->size--;
 			kfree(entry);
 			up(&acl->sem);
@@ -1883,7 +1880,6 @@ prism54_get_mac(struct net_device *ndev, struct iw_request_info *info,
 	islpci_private *priv = netdev_priv(ndev);
 	struct islpci_acl *acl = &priv->acl;
 	struct mac_entry *entry;
-	struct list_head *ptr;
 	struct sockaddr *dst = (struct sockaddr *) extra;
 
 	dwrq->length = 0;
@@ -1891,9 +1887,7 @@ prism54_get_mac(struct net_device *ndev, struct iw_request_info *info,
 	if (down_interruptible(&acl->sem))
 		return -ERESTARTSYS;
 
-	for (ptr = acl->mac_list.next; ptr != &acl->mac_list; ptr = ptr->next) {
-		entry = list_entry(ptr, struct mac_entry, _list);
-
+	list_for_each_entry(entry, &acl->mac_list, _list) {
 		memcpy(dst->sa_data, entry->addr, ETH_ALEN);
 		dst->sa_family = ARPHRD_ETHER;
 		dwrq->length++;
@@ -1960,7 +1954,6 @@ prism54_get_policy(struct net_device *ndev, struct iw_request_info *info,
 static int
 prism54_mac_accept(struct islpci_acl *acl, char *mac)
 {
-	struct list_head *ptr;
 	struct mac_entry *entry;
 	int res = 0;
 
@@ -1972,8 +1965,7 @@ prism54_mac_accept(struct islpci_acl *acl, char *mac)
 		return 1;
 	}
 
-	for (ptr = acl->mac_list.next; ptr != &acl->mac_list; ptr = ptr->next) {
-		entry = list_entry(ptr, struct mac_entry, _list);
+	list_for_each_entry(entry, &acl->mac_list, _list) {
 		if (memcmp(entry->addr, mac, ETH_ALEN) == 0) {
 			res = 1;
 			break;
@@ -2037,12 +2029,12 @@ static void
 format_event(islpci_private *priv, char *dest, const char *str,
 	     const struct obj_mlme *mlme, u16 *length, int error)
 {
-	const u8 *a = mlme->address;
+	DECLARE_MAC_BUF(mac);
 	int n = snprintf(dest, IW_CUSTOM_MAX,
-			 "%s %s %2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X %s (%2.2X)",
+			 "%s %s %s %s (%2.2X)",
 			 str,
 			 ((priv->iw_mode == IW_MODE_MASTER) ? "from" : "to"),
-			 a[0], a[1], a[2], a[3], a[4], a[5],
+			 print_mac(mac, mlme->address),
 			 (error ? (mlme->code ? " : REJECTED " : " : ACCEPTED ")
 			  : ""), mlme->code);
 	BUG_ON(n > IW_CUSTOM_MAX);
@@ -2113,15 +2105,13 @@ struct ieee80211_beacon_phdr {
 #define WLAN_EID_GENERIC 0xdd
 static u8 wpa_oid[4] = { 0x00, 0x50, 0xf2, 1 };
 
-#define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
-#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
-
 static void
 prism54_wpa_bss_ie_add(islpci_private *priv, u8 *bssid,
 		       u8 *wpa_ie, size_t wpa_ie_len)
 {
 	struct list_head *ptr;
 	struct islpci_bss_wpa_ie *bss = NULL;
+	DECLARE_MAC_BUF(mac);
 
 	if (wpa_ie_len > MAX_WPA_IE_LEN)
 		wpa_ie_len = MAX_WPA_IE_LEN;
@@ -2162,8 +2152,8 @@ prism54_wpa_bss_ie_add(islpci_private *priv, u8 *bssid,
 		bss->wpa_ie_len = wpa_ie_len;
 		bss->last_update = jiffies;
 	} else {
-		printk(KERN_DEBUG "Failed to add BSS WPA entry for " MACSTR
-		       "\n", MAC2STR(bssid));
+		printk(KERN_DEBUG "Failed to add BSS WPA entry for "
+		       "%s\n", print_mac(mac, bssid));
 	}
 
 	/* expire old entries from WPA list */
@@ -2216,11 +2206,9 @@ prism54_wpa_bss_ie_init(islpci_private *priv)
 void
 prism54_wpa_bss_ie_clean(islpci_private *priv)
 {
-	struct list_head *ptr, *n;
+	struct islpci_bss_wpa_ie *bss, *n;
 
-	list_for_each_safe(ptr, n, &priv->bss_wpa_list) {
-		struct islpci_bss_wpa_ie *bss;
-		bss = list_entry(ptr, struct islpci_bss_wpa_ie, list);
+	list_for_each_entry_safe(bss, n, &priv->bss_wpa_list, list) {
 		kfree(bss);
 	}
 }
@@ -2231,6 +2219,7 @@ prism54_process_bss_data(islpci_private *priv, u32 oid, u8 *addr,
 {
 	struct ieee80211_beacon_phdr *hdr;
 	u8 *pos, *end;
+	DECLARE_MAC_BUF(mac);
 
 	if (!priv->wpa)
 		return;
@@ -2241,7 +2230,7 @@ prism54_process_bss_data(islpci_private *priv, u32 oid, u8 *addr,
 	while (pos < end) {
 		if (pos + 2 + pos[1] > end) {
 			printk(KERN_DEBUG "Parsing Beacon/ProbeResp failed "
-			       "for " MACSTR "\n", MAC2STR(addr));
+			       "for %s\n", print_mac(mac, addr));
 			return;
 		}
 		if (pos[0] == WLAN_EID_GENERIC && pos[1] >= 4 &&
@@ -2280,6 +2269,7 @@ prism54_process_trap_helper(islpci_private *priv, enum oid_num_t oid,
 	size_t len = 0; /* u16, better? */
 	u8 *payload = NULL, *pos = NULL;
 	int ret;
+	DECLARE_MAC_BUF(mac);
 
 	/* I think all trapable objects are listed here.
 	 * Some oids have a EX version. The difference is that they are emitted
@@ -2368,14 +2358,8 @@ prism54_process_trap_helper(islpci_private *priv, enum oid_num_t oid,
 			break;
 
 		memcpy(&confirm->address, mlmeex->address, ETH_ALEN);
-		printk(KERN_DEBUG "Authenticate from: address:\t%02x:%02x:%02x:%02x:%02x:%02x\n",
-				mlmeex->address[0],
-				mlmeex->address[1],
-				mlmeex->address[2],
-				mlmeex->address[3],
-				mlmeex->address[4],
-				mlmeex->address[5]
-				);
+		printk(KERN_DEBUG "Authenticate from: address:\t%s\n",
+		       print_mac(mac, mlmeex->address));
 		confirm->id = -1; /* or mlmeex->id ? */
 		confirm->state = 0; /* not used */
 		confirm->code = 0;
@@ -2420,15 +2404,8 @@ prism54_process_trap_helper(islpci_private *priv, enum oid_num_t oid,
 		wpa_ie_len = prism54_wpa_bss_ie_get(priv, mlmeex->address, wpa_ie);
 
 		if (!wpa_ie_len) {
-			printk(KERN_DEBUG "No WPA IE found from "
-					"address:\t%02x:%02x:%02x:%02x:%02x:%02x\n",
-				mlmeex->address[0],
-				mlmeex->address[1],
-				mlmeex->address[2],
-				mlmeex->address[3],
-				mlmeex->address[4],
-				mlmeex->address[5]
-				);
+			printk(KERN_DEBUG "No WPA IE found from address:\t%s\n",
+			       print_mac(mac, mlmeex->address));
 			kfree(confirm);
 			break;
 		}
@@ -2464,15 +2441,8 @@ prism54_process_trap_helper(islpci_private *priv, enum oid_num_t oid,
 		wpa_ie_len = prism54_wpa_bss_ie_get(priv, mlmeex->address, wpa_ie);
 
 		if (!wpa_ie_len) {
-			printk(KERN_DEBUG "No WPA IE found from "
-					"address:\t%02x:%02x:%02x:%02x:%02x:%02x\n",
-				mlmeex->address[0],
-				mlmeex->address[1],
-				mlmeex->address[2],
-				mlmeex->address[3],
-				mlmeex->address[4],
-				mlmeex->address[5]
-				);
+			printk(KERN_DEBUG "No WPA IE found from address:\t%s\n",
+			       print_mac(mac, mlmeex->address));
 			kfree(confirm);
 			break;
 		}
@@ -3054,7 +3024,7 @@ static const iw_handler prism54_handler[] = {
 	(iw_handler) prism54_set_wap,	/* SIOCSIWAP */
 	(iw_handler) prism54_get_wap,	/* SIOCGIWAP */
 	(iw_handler) NULL,	/* -- hole -- */
-	(iw_handler) NULL,	/* SIOCGIWAPLIST depreciated */
+	(iw_handler) NULL,	/* SIOCGIWAPLIST deprecated */
 	(iw_handler) prism54_set_scan,	/* SIOCSIWSCAN */
 	(iw_handler) prism54_get_scan,	/* SIOCGIWSCAN */
 	(iw_handler) prism54_set_essid,	/* SIOCSIWESSID */
@@ -3249,10 +3219,9 @@ static const iw_handler prism54_private_handler[] = {
 };
 
 const struct iw_handler_def prism54_handler_def = {
-	.num_standard = sizeof (prism54_handler) / sizeof (iw_handler),
-	.num_private = sizeof (prism54_private_handler) / sizeof (iw_handler),
-	.num_private_args =
-	    sizeof (prism54_private_args) / sizeof (struct iw_priv_args),
+	.num_standard = ARRAY_SIZE(prism54_handler),
+	.num_private = ARRAY_SIZE(prism54_private_handler),
+	.num_private_args = ARRAY_SIZE(prism54_private_args),
 	.standard = (iw_handler *) prism54_handler,
 	.private = (iw_handler *) prism54_private_handler,
 	.private_args = (struct iw_priv_args *) prism54_private_args,

@@ -32,13 +32,12 @@ struct nf_conntrack_expect;
 
 /* For NAT to hook in when we find a packet which describes what other
  * connection we should expect. */
-extern unsigned int (*nf_nat_ftp_hook)(struct sk_buff **pskb,
+extern unsigned int (*nf_nat_ftp_hook)(struct sk_buff *skb,
 				       enum ip_conntrack_info ctinfo,
 				       enum nf_ct_ftp_type type,
 				       unsigned int matchoff,
 				       unsigned int matchlen,
-				       struct nf_conntrack_expect *exp,
-				       u32 *seq);
+				       struct nf_conntrack_expect *exp);
 #endif /* __KERNEL__ */
 
 #endif /* _NF_CONNTRACK_FTP_H */

@@ -21,12 +21,6 @@
 #include <net/netfilter/nf_conntrack_helper.h>
 #include <linux/netfilter/nf_conntrack_sip.h>
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Christian Hentschel <chentschel@arnet.com.ar>");
 MODULE_DESCRIPTION("SIP connection tracking helper");
@@ -42,13 +36,13 @@ static unsigned int sip_timeout __read_mostly = SIP_TIMEOUT;
 module_param(sip_timeout, uint, 0600);
 MODULE_PARM_DESC(sip_timeout, "timeout for the master SIP session");
 
-unsigned int (*nf_nat_sip_hook)(struct sk_buff **pskb,
+unsigned int (*nf_nat_sip_hook)(struct sk_buff *skb,
 				enum ip_conntrack_info ctinfo,
 				struct nf_conn *ct,
 				const char **dptr) __read_mostly;
 EXPORT_SYMBOL_GPL(nf_nat_sip_hook);
 
-unsigned int (*nf_nat_sdp_hook)(struct sk_buff **pskb,
+unsigned int (*nf_nat_sdp_hook)(struct sk_buff *skb,
 				enum ip_conntrack_info ctinfo,
 				struct nf_conntrack_expect *exp,
 				const char *dptr) __read_mostly;
@@ -285,7 +279,7 @@ static int epaddr_len(struct nf_conn *ct, const char *dptr,
 	const char *aux = dptr;
 
 	if (!parse_addr(ct, dptr, &dptr, &addr, limit)) {
-		DEBUGP("ip: %s parse failed.!\n", dptr);
+		pr_debug("ip: %s parse failed.!\n", dptr);
 		return 0;
 	}
 
@@ -301,6 +295,7 @@ static int epaddr_len(struct nf_conn *ct, const char *dptr,
 static int skp_epaddr_len(struct nf_conn *ct, const char *dptr,
 			  const char *limit, int *shift)
 {
+	const char *start = dptr;
 	int s = *shift;
 
 	/* Search for @, but stop at the end of the line.
@@ -315,8 +310,10 @@ static int skp_epaddr_len(struct nf_conn *ct, const char *dptr,
 	if (dptr <= limit && *dptr == '@') {
 		dptr++;
 		(*shift)++;
-	} else
+	} else {
+		dptr = start;
 		*shift = s;
+	}
 
 	return epaddr_len(ct, dptr, limit, shift);
 }
@@ -336,7 +333,8 @@ int ct_sip_get_info(struct nf_conn *ct,
 
 	while (dptr <= limit) {
 		if ((strncmp(dptr, hnfo->lname, hnfo->lnlen) != 0) &&
-		    (strncmp(dptr, hnfo->sname, hnfo->snlen) != 0)) {
+		    (hnfo->sname == NULL ||
+		     strncmp(dptr, hnfo->sname, hnfo->snlen) != 0)) {
 			dptr++;
 			continue;
 		}
@@ -344,8 +342,8 @@ int ct_sip_get_info(struct nf_conn *ct,
 				    ct_sip_lnlen(dptr, limit),
 				    hnfo->case_sensitive);
 		if (!aux) {
-			DEBUGP("'%s' not found in '%s'.\n", hnfo->ln_str,
-			       hnfo->lname);
+			pr_debug("'%s' not found in '%s'.\n", hnfo->ln_str,
+				 hnfo->lname);
 			return -1;
 		}
 		aux += hnfo->ln_strlen;
@@ -356,16 +354,16 @@ int ct_sip_get_info(struct nf_conn *ct,
 
 		*matchoff = (aux - k) + shift;
 
-		DEBUGP("%s match succeeded! - len: %u\n", hnfo->lname,
-		       *matchlen);
+		pr_debug("%s match succeeded! - len: %u\n", hnfo->lname,
+			 *matchlen);
 		return 1;
 	}
-	DEBUGP("%s header not found.\n", hnfo->lname);
+	pr_debug("%s header not found.\n", hnfo->lname);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(ct_sip_get_info);
 
-static int set_expected_rtp(struct sk_buff **pskb,
+static int set_expected_rtp(struct sk_buff *skb,
 			    struct nf_conn *ct,
 			    enum ip_conntrack_info ctinfo,
 			    union nf_conntrack_address *addr,
@@ -378,28 +376,28 @@ static int set_expected_rtp(struct sk_buff **pskb,
 	int ret;
 	typeof(nf_nat_sdp_hook) nf_nat_sdp;
 
-	exp = nf_conntrack_expect_alloc(ct);
+	exp = nf_ct_expect_alloc(ct);
 	if (exp == NULL)
 		return NF_DROP;
-	nf_conntrack_expect_init(exp, family,
-				 &ct->tuplehash[!dir].tuple.src.u3, addr,
-				 IPPROTO_UDP, NULL, &port);
+	nf_ct_expect_init(exp, family,
+			  &ct->tuplehash[!dir].tuple.src.u3, addr,
+			  IPPROTO_UDP, NULL, &port);
 
 	nf_nat_sdp = rcu_dereference(nf_nat_sdp_hook);
 	if (nf_nat_sdp && ct->status & IPS_NAT_MASK)
-		ret = nf_nat_sdp(pskb, ctinfo, exp, dptr);
+		ret = nf_nat_sdp(skb, ctinfo, exp, dptr);
 	else {
-		if (nf_conntrack_expect_related(exp) != 0)
+		if (nf_ct_expect_related(exp) != 0)
 			ret = NF_DROP;
 		else
 			ret = NF_ACCEPT;
 	}
-	nf_conntrack_expect_put(exp);
+	nf_ct_expect_put(exp);
 
 	return ret;
 }
 
-static int sip_help(struct sk_buff **pskb,
+static int sip_help(struct sk_buff *skb,
 		    unsigned int protoff,
 		    struct nf_conn *ct,
 		    enum ip_conntrack_info ctinfo)
@@ -416,32 +414,35 @@ static int sip_help(struct sk_buff **pskb,
 
 	/* No Data ? */
 	dataoff = protoff + sizeof(struct udphdr);
-	if (dataoff >= (*pskb)->len)
+	if (dataoff >= skb->len)
 		return NF_ACCEPT;
 
-	nf_ct_refresh(ct, *pskb, sip_timeout * HZ);
+	nf_ct_refresh(ct, skb, sip_timeout * HZ);
 
-	if (!skb_is_nonlinear(*pskb))
-		dptr = (*pskb)->data + dataoff;
+	if (!skb_is_nonlinear(skb))
+		dptr = skb->data + dataoff;
 	else {
-		DEBUGP("Copy of skbuff not supported yet.\n");
+		pr_debug("Copy of skbuff not supported yet.\n");
 		goto out;
 	}
 
 	nf_nat_sip = rcu_dereference(nf_nat_sip_hook);
 	if (nf_nat_sip && ct->status & IPS_NAT_MASK) {
-		if (!nf_nat_sip(pskb, ctinfo, ct, &dptr)) {
+		if (!nf_nat_sip(skb, ctinfo, ct, &dptr)) {
 			ret = NF_DROP;
 			goto out;
 		}
 	}
 
-	datalen = (*pskb)->len - dataoff;
+	datalen = skb->len - dataoff;
 	if (datalen < sizeof("SIP/2.0 200") - 1)
 		goto out;
 
 	/* RTP info only in some SDP pkts */
 	if (memcmp(dptr, "INVITE", sizeof("INVITE") - 1) != 0 &&
+	    memcmp(dptr, "UPDATE", sizeof("UPDATE") - 1) != 0 &&
+	    memcmp(dptr, "SIP/2.0 180", sizeof("SIP/2.0 180") - 1) != 0 &&
+	    memcmp(dptr, "SIP/2.0 183", sizeof("SIP/2.0 183") - 1) != 0 &&
 	    memcmp(dptr, "SIP/2.0 200", sizeof("SIP/2.0 200") - 1) != 0) {
 		goto out;
 	}
@@ -463,7 +464,7 @@ static int sip_help(struct sk_buff **pskb,
 				ret = NF_DROP;
 				goto out;
 			}
-			ret = set_expected_rtp(pskb, ct, ctinfo, &addr,
+			ret = set_expected_rtp(skb, ct, ctinfo, &addr,
 					       htons(port), dptr);
 		}
 	}
@@ -503,9 +504,6 @@ static int __init nf_conntrack_sip_init(void)
 		for (j = 0; j < 2; j++) {
 			sip[i][j].tuple.dst.protonum = IPPROTO_UDP;
 			sip[i][j].tuple.src.u.udp.port = htons(ports[i]);
-			sip[i][j].mask.src.l3num = 0xFFFF;
-			sip[i][j].mask.src.u.udp.port = htons(0xFFFF);
-			sip[i][j].mask.dst.protonum = 0xFF;
 			sip[i][j].max_expected = 2;
 			sip[i][j].timeout = 3 * 60; /* 3 minutes */
 			sip[i][j].me = THIS_MODULE;
@@ -518,7 +516,7 @@ static int __init nf_conntrack_sip_init(void)
 				sprintf(tmpname, "sip-%u", i);
 			sip[i][j].name = tmpname;
 
-			DEBUGP("port #%u: %u\n", i, ports[i]);
+			pr_debug("port #%u: %u\n", i, ports[i]);
 
 			ret = nf_conntrack_helper_register(&sip[i][j]);
 			if (ret) {

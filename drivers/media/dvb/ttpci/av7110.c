@@ -40,7 +40,6 @@
 #include <linux/smp_lock.h>
 
 #include <linux/kernel.h>
-#include <linux/moduleparam.h>
 #include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
@@ -137,6 +136,15 @@ static void init_av7110_av(struct av7110 *av7110)
 	if (ret < 0)
 		printk("dvb-ttpci:cannot set internal volume to maximum:%d\n",ret);
 
+	ret = av7110_fw_cmd(av7110, COMTYPE_ENCODER, SetMonitorType,
+			    1, (u16) av7110->display_ar);
+	if (ret < 0)
+		printk("dvb-ttpci: unable to set aspect ratio\n");
+	ret = av7110_fw_cmd(av7110, COMTYPE_ENCODER, SetPanScanType,
+			    1, av7110->display_panscan);
+	if (ret < 0)
+		printk("dvb-ttpci: unable to set pan scan\n");
+
 	ret = av7110_fw_cmd(av7110, COMTYPE_ENCODER, SetWSSConfig, 2, 2, wss_cfg_4_3);
 	if (ret < 0)
 		printk("dvb-ttpci: unable to configure 4:3 wss\n");
@@ -219,7 +227,10 @@ static void recover_arm(struct av7110 *av7110)
 		av7110->recover(av7110);
 
 	restart_feeds(av7110);
-	av7110_fw_cmd(av7110, COMTYPE_PIDFILTER, SetIR, 1, av7110->ir_config);
+
+#if defined(CONFIG_INPUT_EVDEV) || defined(CONFIG_INPUT_EVDEV_MODULE)
+	av7110_check_ir_config(av7110, true);
+#endif
 }
 
 static void av7110_arm_sync(struct av7110 *av7110)
@@ -249,6 +260,10 @@ static int arm_thread(void *data)
 
 		if (!av7110->arm_ready)
 			continue;
+
+#if defined(CONFIG_INPUT_EVDEV) || defined(CONFIG_INPUT_EVDEV_MODULE)
+		av7110_check_ir_config(av7110, false);
+#endif
 
 		if (mutex_lock_interruptible(&av7110->dcomlock))
 			break;
@@ -667,8 +682,8 @@ static void gpioirq(unsigned long data)
 		return;
 
 	case DATA_IRCOMMAND:
-		if (av7110->ir_handler)
-			av7110->ir_handler(av7110,
+		if (av7110->ir.ir_handler)
+			av7110->ir.ir_handler(av7110,
 				swahw32(irdebi(av7110, DEBINOSWAP, Reserved, 0, 4)));
 		iwdebi(av7110, DEBINOSWAP, RX_BUFF, 0, 2);
 		break;
@@ -1239,6 +1254,9 @@ static void vpeirq(unsigned long data)
 	if (!budget->feeding1 || (newdma == olddma))
 		return;
 
+	/* Ensure streamed PCI data is synced to CPU */
+	pci_dma_sync_sg_for_cpu(budget->dev->pci, budget->pt.slist, budget->pt.nents, PCI_DMA_FROMDEVICE);
+
 #if 0
 	/* track rps1 activity */
 	printk("vpeirq: %02x Event Counter 1 0x%04x\n",
@@ -1524,7 +1542,7 @@ static int get_firmware(struct av7110* av7110)
 	}
 
 	/* check if the firmware is available */
-	av7110->bin_fw = (unsigned char *) vmalloc(fw->size);
+	av7110->bin_fw = vmalloc(fw->size);
 	if (NULL == av7110->bin_fw) {
 		dprintk(1, "out of memory\n");
 		release_firmware(fw);
@@ -1907,8 +1925,10 @@ static int av7110_fe_lock_fix(struct av7110* av7110, fe_status_t status)
 	if (av7110->fe_synced == synced)
 		return 0;
 
-	if (av7110->playing)
+	if (av7110->playing) {
+		av7110->fe_synced = synced;
 		return 0;
+	}
 
 	if (mutex_lock_interruptible(&av7110->pid_mutex))
 		return -ERESTARTSYS;
@@ -2246,7 +2266,7 @@ static int frontend_init(struct av7110 *av7110)
 		FE_FUNC_OVERRIDE(av7110->fe->ops.diseqc_send_master_cmd, av7110->fe_diseqc_send_master_cmd, av7110_fe_diseqc_send_master_cmd);
 		FE_FUNC_OVERRIDE(av7110->fe->ops.diseqc_send_burst, av7110->fe_diseqc_send_burst, av7110_fe_diseqc_send_burst);
 		FE_FUNC_OVERRIDE(av7110->fe->ops.set_tone, av7110->fe_set_tone, av7110_fe_set_tone);
-		FE_FUNC_OVERRIDE(av7110->fe->ops.set_voltage, av7110->fe_set_voltage, av7110_fe_set_voltage;)
+		FE_FUNC_OVERRIDE(av7110->fe->ops.set_voltage, av7110->fe_set_voltage, av7110_fe_set_voltage);
 		FE_FUNC_OVERRIDE(av7110->fe->ops.dishnetwork_send_legacy_command, av7110->fe_dishnetwork_send_legacy_command, av7110_fe_dishnetwork_send_legacy_command);
 		FE_FUNC_OVERRIDE(av7110->fe->ops.set_frontend, av7110->fe_set_frontend, av7110_fe_set_frontend);
 
@@ -2627,11 +2647,11 @@ static int __devinit av7110_attach(struct saa7146_dev* dev,
 	av7110->mixer.volume_left  = volume;
 	av7110->mixer.volume_right = volume;
 
-	init_av7110_av(av7110);
-
 	ret = av7110_register(av7110);
 	if (ret < 0)
 		goto err_arm_thread_stop_10;
+
+	init_av7110_av(av7110);
 
 	/* special case DVB-C: these cards have an analog tuner
 	   plus need some special handling, so we have separate
@@ -2670,8 +2690,8 @@ err_iobuf_vfree_6:
 err_pci_free_5:
 	pci_free_consistent(pdev, 8192, av7110->debi_virt, av7110->debi_bus);
 err_saa71466_vfree_4:
-	if (!av7110->grabbing)
-		saa7146_pgtable_free(pdev, &av7110->pt);
+	if (av7110->grabbing)
+		saa7146_vfree_destroy_pgtable(pdev, av7110->grabbing, &av7110->pt);
 err_i2c_del_3:
 	i2c_del_adapter(&av7110->i2c_adap);
 err_dvb_unregister_adapter_2:
@@ -2701,7 +2721,7 @@ static int __devexit av7110_detach(struct saa7146_dev* saa)
 		SAA7146_ISR_CLEAR(saa, MASK_10);
 		msleep(50);
 		tasklet_kill(&av7110->vpe_tasklet);
-		saa7146_pgtable_free(saa->pci, &av7110->pt);
+		saa7146_vfree_destroy_pgtable(saa->pci, av7110->grabbing, &av7110->pt);
 	}
 	av7110_exit_v4l(av7110);
 

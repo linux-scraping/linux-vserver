@@ -152,10 +152,10 @@ static spinlock_t pmu_lock;
 static u8 pmu_intr_mask;
 static int pmu_version;
 static int drop_interrupts;
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 static int option_lid_wakeup = 1;
-#endif /* CONFIG_PM && CONFIG_PPC32 */
-#if (defined(CONFIG_PM)&&defined(CONFIG_PPC32))||defined(CONFIG_PMAC_BACKLIGHT_LEGACY)
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
+#if (defined(CONFIG_PM_SLEEP)&&defined(CONFIG_PPC32))||defined(CONFIG_PMAC_BACKLIGHT_LEGACY)
 static int sleep_in_progress;
 #endif
 static unsigned long async_req_locks;
@@ -289,7 +289,7 @@ int __init find_via_pmu(void)
 	if (vias == NULL)
 		return 0;
 
-	reg = get_property(vias, "reg", NULL);
+	reg = of_get_property(vias, "reg", NULL);
 	if (reg == NULL) {
 		printk(KERN_ERR "via-pmu: No \"reg\" property !\n");
 		goto fail;
@@ -310,19 +310,22 @@ int __init find_via_pmu(void)
 			PMU_INT_TICK;
 	
 	if (vias->parent->name && ((strcmp(vias->parent->name, "ohare") == 0)
-	    || device_is_compatible(vias->parent, "ohare")))
+	    || of_device_is_compatible(vias->parent, "ohare")))
 		pmu_kind = PMU_OHARE_BASED;
-	else if (device_is_compatible(vias->parent, "paddington"))
+	else if (of_device_is_compatible(vias->parent, "paddington"))
 		pmu_kind = PMU_PADDINGTON_BASED;
-	else if (device_is_compatible(vias->parent, "heathrow"))
+	else if (of_device_is_compatible(vias->parent, "heathrow"))
 		pmu_kind = PMU_HEATHROW_BASED;
-	else if (device_is_compatible(vias->parent, "Keylargo")
-		 || device_is_compatible(vias->parent, "K2-Keylargo")) {
+	else if (of_device_is_compatible(vias->parent, "Keylargo")
+		 || of_device_is_compatible(vias->parent, "K2-Keylargo")) {
 		struct device_node *gpiop;
+		struct device_node *adbp;
 		u64 gaddr = OF_BAD_ADDR;
 
 		pmu_kind = PMU_KEYLARGO_BASED;
-		pmu_has_adb = (find_type_devices("adb") != NULL);
+		adbp = of_find_node_by_type(NULL, "adb");
+		pmu_has_adb = (adbp != NULL);
+		of_node_put(adbp);
 		pmu_intr_mask =	PMU_INT_PCEJECT |
 				PMU_INT_SNDBRT |
 				PMU_INT_ADB |
@@ -331,7 +334,7 @@ int __init find_via_pmu(void)
 		
 		gpiop = of_find_node_by_name(NULL, "gpio");
 		if (gpiop) {
-			reg = get_property(gpiop, "reg", NULL);
+			reg = of_get_property(gpiop, "reg", NULL);
 			if (reg)
 				gaddr = of_translate_address(gpiop, reg);
 			if (gaddr != OF_BAD_ADDR)
@@ -407,7 +410,7 @@ static int __init via_pmu_start(void)
 
 	irq = irq_of_parse_and_map(vias, 0);
 	if (irq == NO_IRQ) {
-		printk(KERN_ERR "via-pmu: can't map interruptn");
+		printk(KERN_ERR "via-pmu: can't map interrupt\n");
 		return -ENODEV;
 	}
 	if (request_irq(irq, via_pmu_interrupt, 0, "VIA-PMU", (void *)0)) {
@@ -484,10 +487,11 @@ static int __init via_pmu_dev_init(void)
 		pmu_batteries[0].flags |= PMU_BATT_TYPE_SMART;
 		pmu_batteries[1].flags |= PMU_BATT_TYPE_SMART;
 	} else {
-		struct device_node* prim = find_devices("power-mgt");
+		struct device_node* prim =
+			of_find_node_by_name(NULL, "power-mgt");
 		const u32 *prim_info = NULL;
 		if (prim)
-			prim_info = get_property(prim, "prim-info", NULL);
+			prim_info = of_get_property(prim, "prim-info", NULL);
 		if (prim_info) {
 			/* Other stuffs here yet unknown */
 			pmu_battery_count = (prim_info[6] >> 16) & 0xff;
@@ -495,6 +499,7 @@ static int __init via_pmu_dev_init(void)
 			if (pmu_battery_count > 1)
 				pmu_batteries[1].flags |= PMU_BATT_TYPE_SMART;
 		}
+		of_node_put(prim);
 	}
 #endif /* CONFIG_PPC32 */
 
@@ -870,7 +875,7 @@ proc_read_options(char *page, char **start, off_t off,
 {
 	char *p = page;
 
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 	if (pmu_kind == PMU_KEYLARGO_BASED &&
 	    pmac_call_feature(PMAC_FTR_SLEEP_STATE,NULL,0,-1) >= 0)
 		p += sprintf(p, "lid_wakeup=%d\n", option_lid_wakeup);
@@ -911,7 +916,7 @@ proc_write_options(struct file *file, const char __user *buffer,
 	*(val++) = 0;
 	while(*val == ' ')
 		val++;
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 	if (pmu_kind == PMU_KEYLARGO_BASED &&
 	    pmac_call_feature(PMAC_FTR_SLEEP_STATE,NULL,0,-1) >= 0)
 		if (!strcmp(label, "lid_wakeup"))
@@ -1516,7 +1521,7 @@ pmu_sr_intr(void)
 			req = current_req;
 			/* 
 			 * For PMU sleep and freq change requests, we lock the
-			 * PMU until it's explicitely unlocked. This avoids any
+			 * PMU until it's explicitly unlocked. This avoids any
 			 * spurrious event polling getting in
 			 */
 			current_req = req->next;
@@ -1733,7 +1738,7 @@ pmu_present(void)
 	return via != 0;
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 
 static LIST_HEAD(sleep_notifiers);
 
@@ -1764,40 +1769,26 @@ pmu_unregister_sleep_notifier(struct pmu_sleep_notifier* n)
 	return 0;
 }
 EXPORT_SYMBOL(pmu_unregister_sleep_notifier);
-#endif /* CONFIG_PM */
+#endif /* CONFIG_PM_SLEEP */
 
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 
 /* Sleep is broadcast last-to-first */
-static int
-broadcast_sleep(int when, int fallback)
+static void broadcast_sleep(int when)
 {
-	int ret = PBOOK_SLEEP_OK;
 	struct list_head *list;
 	struct pmu_sleep_notifier *notifier;
 
 	for (list = sleep_notifiers.prev; list != &sleep_notifiers;
 	     list = list->prev) {
 		notifier = list_entry(list, struct pmu_sleep_notifier, list);
-		ret = notifier->notifier_call(notifier, when);
-		if (ret != PBOOK_SLEEP_OK) {
-			printk(KERN_DEBUG "sleep %d rejected by %p (%p)\n",
-			       when, notifier, notifier->notifier_call);
-			for (; list != &sleep_notifiers; list = list->next) {
-				notifier = list_entry(list, struct pmu_sleep_notifier, list);
-				notifier->notifier_call(notifier, fallback);
-			}
-			return ret;
-		}
+		notifier->notifier_call(notifier, when);
 	}
-	return ret;
 }
 
 /* Wake is broadcast first-to-last */
-static int
-broadcast_wake(void)
+static void broadcast_wake(void)
 {
-	int ret = PBOOK_SLEEP_OK;
 	struct list_head *list;
 	struct pmu_sleep_notifier *notifier;
 
@@ -1806,7 +1797,6 @@ broadcast_wake(void)
 		notifier = list_entry(list, struct pmu_sleep_notifier, list);
 		notifier->notifier_call(notifier, PBOOK_WAKE);
 	}
-	return ret;
 }
 
 /*
@@ -2013,12 +2003,8 @@ pmac_suspend_devices(void)
 
 	pm_prepare_console();
 	
-	/* Notify old-style device drivers & userland */
-	ret = broadcast_sleep(PBOOK_SLEEP_REQUEST, PBOOK_SLEEP_REJECT);
-	if (ret != PBOOK_SLEEP_OK) {
-		printk(KERN_ERR "Sleep rejected by drivers\n");
-		return -EBUSY;
-	}
+	/* Notify old-style device drivers */
+	broadcast_sleep(PBOOK_SLEEP_REQUEST);
 
 	/* Sync the disks. */
 	/* XXX It would be nice to have some way to ensure that
@@ -2028,12 +2014,7 @@ pmac_suspend_devices(void)
 	 */
 	sys_sync();
 
-	/* Sleep can fail now. May not be very robust but useful for debugging */
-	ret = broadcast_sleep(PBOOK_SLEEP_NOW, PBOOK_WAKE);
-	if (ret != PBOOK_SLEEP_OK) {
-		printk(KERN_ERR "Driver sleep failed\n");
-		return -EBUSY;
-	}
+	broadcast_sleep(PBOOK_SLEEP_NOW);
 
 	/* Send suspend call to devices, hold the device core's dpm_sem */
 	ret = device_suspend(PMSG_SUSPEND);
@@ -2154,7 +2135,7 @@ static int powerbook_sleep_grackle(void)
 	int ret;
 	struct pci_dev *grackle;
 
-	grackle = pci_find_slot(0, 0);
+	grackle = pci_get_bus_and_slot(0, 0);
 	if (!grackle)
 		return -ENODEV;
 
@@ -2201,6 +2182,8 @@ static int powerbook_sleep_grackle(void)
 	pci_read_config_word(grackle, 0x70, &pmcr1);
 	pmcr1 &= ~(GRACKLE_PM|GRACKLE_DOZE|GRACKLE_SLEEP|GRACKLE_NAP); 
 	pci_write_config_word(grackle, 0x70, pmcr1);
+
+	pci_dev_put(grackle);
 
 	/* Make sure the PMU is idle */
 	pmac_call_feature(PMAC_FTR_SLEEP_STATE,NULL,0,0);
@@ -2407,7 +2390,7 @@ powerbook_sleep_3400(void)
 	return 0;
 }
 
-#endif /* CONFIG_PM && CONFIG_PPC32 */
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
 
 /*
  * Support for /dev/pmu device
@@ -2590,7 +2573,7 @@ pmu_ioctl(struct inode * inode, struct file *filp,
 	int error = -EINVAL;
 
 	switch (cmd) {
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 	case PMU_IOC_SLEEP:
 		if (!capable(CAP_SYS_ADMIN))
 			return -EACCES;
@@ -2618,7 +2601,7 @@ pmu_ioctl(struct inode * inode, struct file *filp,
 			return put_user(0, argp);
 		else
 			return put_user(1, argp);
-#endif /* CONFIG_PM && CONFIG_PPC32 */
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
 
 #ifdef CONFIG_PMAC_BACKLIGHT_LEGACY
 	/* Compatibility ioctl's for backlight */
@@ -2774,9 +2757,9 @@ pmu_polled_request(struct adb_request *req)
  * to do suspend-to-disk.
  */
 
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 
-static int pmu_sys_suspended;
+int pmu_sys_suspended;
 
 static int pmu_sys_suspend(struct sys_device *sysdev, pm_message_t state)
 {
@@ -2809,7 +2792,7 @@ static int pmu_sys_resume(struct sys_device *sysdev)
 	return 0;
 }
 
-#endif /* CONFIG_PM && CONFIG_PPC32 */
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
 
 static struct sysdev_class pmu_sysclass = {
 	set_kset_name("pmu"),
@@ -2820,10 +2803,10 @@ static struct sys_device device_pmu = {
 };
 
 static struct sysdev_driver driver_pmu = {
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 	.suspend	= &pmu_sys_suspend,
 	.resume		= &pmu_sys_resume,
-#endif /* CONFIG_PM && CONFIG_PPC32 */
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
 };
 
 static int __init init_pmu_sysfs(void)
@@ -2858,10 +2841,10 @@ EXPORT_SYMBOL(pmu_wait_complete);
 EXPORT_SYMBOL(pmu_suspend);
 EXPORT_SYMBOL(pmu_resume);
 EXPORT_SYMBOL(pmu_unlock);
-#if defined(CONFIG_PM) && defined(CONFIG_PPC32)
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_PPC32)
 EXPORT_SYMBOL(pmu_enable_irled);
 EXPORT_SYMBOL(pmu_battery_count);
 EXPORT_SYMBOL(pmu_batteries);
 EXPORT_SYMBOL(pmu_power_flags);
-#endif /* CONFIG_PM && CONFIG_PPC32 */
+#endif /* CONFIG_PM_SLEEP && CONFIG_PPC32 */
 

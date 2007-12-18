@@ -15,6 +15,7 @@
 #include <linux/timer.h>
 #include <linux/reboot.h>
 #include <linux/jiffies.h>
+#include <linux/init.h>
 #include <asm/types.h>
 #include <asm/s390_ext.h>
 
@@ -92,6 +93,7 @@ static volatile enum sclp_mask_state_t {
 #define SCLP_RETRY_INTERVAL	30
 
 static void sclp_process_queue(void);
+static void __sclp_make_read_req(void);
 static int sclp_init_mask(int calculate);
 static int sclp_init(void);
 
@@ -114,7 +116,6 @@ sclp_service_call(sclp_cmdw_t command, void *sccb)
 	return 0;
 }
 
-static inline void __sclp_make_read_req(void);
 
 static void
 __sclp_queue_read_req(void)
@@ -317,8 +318,7 @@ sclp_read_cb(struct sclp_req *req, void *data)
 }
 
 /* Prepare read event data request. Called while sclp_lock is locked. */
-static inline void
-__sclp_make_read_req(void)
+static void __sclp_make_read_req(void)
 {
 	struct sccb_header *sccb;
 
@@ -510,7 +510,7 @@ sclp_state_change_cb(struct evbuf_header *evbuf)
 }
 
 static struct sclp_register sclp_state_change_event = {
-	.receive_mask = EvTyp_StateChange_Mask,
+	.receive_mask = EVTYP_STATECHANGE_MASK,
 	.receiver_fn = sclp_state_change_cb
 };
 
@@ -930,3 +930,10 @@ sclp_init(void)
 	sclp_init_mask(1);
 	return 0;
 }
+
+static __init int sclp_initcall(void)
+{
+	return sclp_init();
+}
+
+arch_initcall(sclp_initcall);

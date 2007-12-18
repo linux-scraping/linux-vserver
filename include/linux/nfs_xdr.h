@@ -62,7 +62,8 @@ struct nfs_fattr {
 #define NFS_ATTR_FATTR		0x0002		/* post-op attributes */
 #define NFS_ATTR_FATTR_V3	0x0004		/* NFSv3 attributes */
 #define NFS_ATTR_FATTR_V4	0x0008		/* NFSv4 change attribute */
-#define NFS_ATTR_FATTR_V4_REFERRAL	0x0010		/* NFSv4 referral */
+#define NFS_ATTR_WCC_V4		0x0010		/* pre-op change attribute */
+#define NFS_ATTR_FATTR_V4_REFERRAL	0x0020		/* NFSv4 referral */
 
 /*
  * Info on the file system
@@ -119,7 +120,7 @@ struct nfs_openargs {
 	struct nfs_seqid *	seqid;
 	int			open_flags;
 	__u64                   clientid;
-	__u32                   id;
+	__u64                   id;
 	union {
 		struct iattr *  attrs;    /* UNCHECKED, GUARDED */
 		nfs4_verifier   verifier; /* EXCLUSIVE */
@@ -144,6 +145,7 @@ struct nfs_openres {
 	nfs4_stateid		delegation;
 	__u32			do_recall;
 	__u64			maxsize;
+	__u32			attrset[NFS4_BITMAP_SIZE];
 };
 
 /*
@@ -180,7 +182,7 @@ struct nfs_closeres {
  *   */
 struct nfs_lowner {
 	__u64			clientid;
-	u32			id;
+	__u64			id;
 };
 
 struct nfs_lock_args {
@@ -274,6 +276,21 @@ struct nfs_writeres {
 	struct nfs_writeverf *	verf;
 	__u32			count;
 	const struct nfs_server *server;
+};
+
+/*
+ * Common arguments to the unlink call
+ */
+struct nfs_removeargs {
+	const struct nfs_fh	*fh;
+	struct qstr		name;
+	const u32 *		bitmask;
+};
+
+struct nfs_removeres {
+	const struct nfs_server *server;
+	struct nfs4_change_info	cinfo;
+	struct nfs_fattr	dir_attr;
 };
 
 /*
@@ -522,10 +539,13 @@ typedef u64 clientid4;
 
 struct nfs4_accessargs {
 	const struct nfs_fh *		fh;
+	const u32 *			bitmask;
 	u32				access;
 };
 
 struct nfs4_accessres {
+	const struct nfs_server *	server;
+	struct nfs_fattr *		fattr;
 	u32				supported;
 	u32				access;
 };
@@ -628,18 +648,6 @@ struct nfs4_readlink {
 	unsigned int			pgbase;
 	unsigned int			pglen;   /* zero-copy data */
 	struct page **			pages;   /* zero-copy data */
-};
-
-struct nfs4_remove_arg {
-	const struct nfs_fh *		fh;
-	const struct qstr *		name;
-	const u32 *			bitmask;
-};
-
-struct nfs4_remove_res {
-	const struct nfs_server *	server;
-	struct nfs4_change_info		cinfo;
-	struct nfs_fattr *		dir_attr;
 };
 
 struct nfs4_rename_arg {
@@ -787,9 +795,8 @@ struct nfs_rpc_ops {
 	int	(*create)  (struct inode *, struct dentry *,
 			    struct iattr *, int, struct nameidata *);
 	int	(*remove)  (struct inode *, struct qstr *);
-	int	(*unlink_setup)  (struct rpc_message *,
-			    struct dentry *, struct qstr *);
-	int	(*unlink_done) (struct dentry *, struct rpc_task *);
+	void	(*unlink_setup)  (struct rpc_message *, struct inode *dir);
+	int	(*unlink_done) (struct rpc_task *, struct inode *);
 	int	(*rename)  (struct inode *, struct qstr *,
 			    struct inode *, struct qstr *);
 	int	(*link)    (struct inode *, struct inode *, struct qstr *);

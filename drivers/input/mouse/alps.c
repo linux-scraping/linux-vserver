@@ -48,11 +48,13 @@ static const struct alps_model_info alps_model_data[] = {
 	{ { 0x63, 0x02, 0x50 },	0xef, 0xef, ALPS_FW_BK_1 },		/* NEC Versa L320 */
 	{ { 0x63, 0x02, 0x64 },	0xf8, 0xf8, 0 },
 	{ { 0x63, 0x03, 0xc8 }, 0xf8, 0xf8, ALPS_PASS },		/* Dell Latitude D800 */
+	{ { 0x73, 0x00, 0x0a },	0xf8, 0xf8, ALPS_DUALPOINT },		/* ThinkPad R61 8918-5QG */
 	{ { 0x73, 0x02, 0x0a },	0xf8, 0xf8, 0 },
 	{ { 0x73, 0x02, 0x14 },	0xf8, 0xf8, ALPS_FW_BK_2 },		/* Ahtec Laptop */
 	{ { 0x20, 0x02, 0x0e },	0xf8, 0xf8, ALPS_PASS | ALPS_DUALPOINT }, /* XXX */
 	{ { 0x22, 0x02, 0x0a },	0xf8, 0xf8, ALPS_PASS | ALPS_DUALPOINT },
 	{ { 0x22, 0x02, 0x14 }, 0xff, 0xff, ALPS_PASS | ALPS_DUALPOINT }, /* Dell Latitude D600 */
+	{ { 0x73, 0x02, 0x50 }, 0xcf, 0xff, ALPS_FW_BK_1 } /* Dell Vostro 1400 */
 };
 
 /*
@@ -251,11 +253,15 @@ static const struct alps_model_info *alps_get_model(struct psmouse *psmouse, int
 
 	dbg("E7 report: %2.2x %2.2x %2.2x", param[0], param[1], param[2]);
 
-	for (i = 0; i < ARRAY_SIZE(rates) && param[2] != rates[i]; i++);
-	*version = (param[0] << 8) | (param[1] << 4) | i;
+	if (version) {
+		for (i = 0; i < ARRAY_SIZE(rates) && param[2] != rates[i]; i++)
+			/* empty */;
+		*version = (param[0] << 8) | (param[1] << 4) | i;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(alps_model_data); i++)
-		if (!memcmp(param, alps_model_data[i].signature, sizeof(alps_model_data[i].signature)))
+		if (!memcmp(param, alps_model_data[i].signature,
+			    sizeof(alps_model_data[i].signature)))
 			return alps_model_data + i;
 
 	return NULL;
@@ -380,30 +386,44 @@ static int alps_poll(struct psmouse *psmouse)
 	return 0;
 }
 
-static int alps_reconnect(struct psmouse *psmouse)
+static int alps_hw_init(struct psmouse *psmouse, int *version)
 {
 	struct alps_data *priv = psmouse->private;
-	int version;
 
-	psmouse_reset(psmouse);
-
-	if (!(priv->i = alps_get_model(psmouse, &version)))
+	priv->i = alps_get_model(psmouse, version);
+	if (!priv->i)
 		return -1;
 
 	if ((priv->i->flags & ALPS_PASS) && alps_passthrough_mode(psmouse, 1))
 		return -1;
 
 	if (alps_tap_mode(psmouse, 1)) {
-		printk(KERN_WARNING "alps.c: Failed to reenable hardware tapping\n");
+		printk(KERN_WARNING "alps.c: Failed to enable hardware tapping\n");
 		return -1;
 	}
 
 	if (alps_absolute_mode(psmouse)) {
-		printk(KERN_ERR "alps.c: Failed to reenable absolute mode\n");
+		printk(KERN_ERR "alps.c: Failed to enable absolute mode\n");
 		return -1;
 	}
 
 	if ((priv->i->flags & ALPS_PASS) && alps_passthrough_mode(psmouse, 0))
+		return -1;
+
+	/* ALPS needs stream mode, otherwise it won't report any data */
+	if (ps2_command(&psmouse->ps2dev, NULL, PSMOUSE_CMD_SETSTREAM)) {
+		printk(KERN_ERR "alps.c: Failed to enable stream mode\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int alps_reconnect(struct psmouse *psmouse)
+{
+	psmouse_reset(psmouse);
+
+	if (alps_hw_init(psmouse, NULL))
 		return -1;
 
 	return 0;
@@ -424,48 +444,36 @@ int alps_init(struct psmouse *psmouse)
 	struct input_dev *dev1 = psmouse->dev, *dev2;
 	int version;
 
-	psmouse->private = priv = kzalloc(sizeof(struct alps_data), GFP_KERNEL);
+	priv = kzalloc(sizeof(struct alps_data), GFP_KERNEL);
 	dev2 = input_allocate_device();
 	if (!priv || !dev2)
 		goto init_fail;
 
 	priv->dev2 = dev2;
+	psmouse->private = priv;
 
-	if (!(priv->i = alps_get_model(psmouse, &version)))
+	if (alps_hw_init(psmouse, &version))
 		goto init_fail;
 
-	if ((priv->i->flags & ALPS_PASS) && alps_passthrough_mode(psmouse, 1))
-		goto init_fail;
+	dev1->evbit[BIT_WORD(EV_KEY)] |= BIT_MASK(EV_KEY);
+	dev1->keybit[BIT_WORD(BTN_TOUCH)] |= BIT_MASK(BTN_TOUCH);
+	dev1->keybit[BIT_WORD(BTN_TOOL_FINGER)] |= BIT_MASK(BTN_TOOL_FINGER);
+	dev1->keybit[BIT_WORD(BTN_LEFT)] |= BIT_MASK(BTN_LEFT) |
+		BIT_MASK(BTN_MIDDLE) | BIT_MASK(BTN_RIGHT);
 
-	if (alps_tap_mode(psmouse, 1))
-		printk(KERN_WARNING "alps.c: Failed to enable hardware tapping\n");
-
-	if (alps_absolute_mode(psmouse)) {
-		printk(KERN_ERR "alps.c: Failed to enable absolute mode\n");
-		goto init_fail;
-	}
-
-	if ((priv->i->flags & ALPS_PASS) && alps_passthrough_mode(psmouse, 0))
-		goto init_fail;
-
-	dev1->evbit[LONG(EV_KEY)] |= BIT(EV_KEY);
-	dev1->keybit[LONG(BTN_TOUCH)] |= BIT(BTN_TOUCH);
-	dev1->keybit[LONG(BTN_TOOL_FINGER)] |= BIT(BTN_TOOL_FINGER);
-	dev1->keybit[LONG(BTN_LEFT)] |= BIT(BTN_LEFT) | BIT(BTN_MIDDLE) | BIT(BTN_RIGHT);
-
-	dev1->evbit[LONG(EV_ABS)] |= BIT(EV_ABS);
+	dev1->evbit[BIT_WORD(EV_ABS)] |= BIT_MASK(EV_ABS);
 	input_set_abs_params(dev1, ABS_X, 0, 1023, 0, 0);
 	input_set_abs_params(dev1, ABS_Y, 0, 767, 0, 0);
 	input_set_abs_params(dev1, ABS_PRESSURE, 0, 127, 0, 0);
 
 	if (priv->i->flags & ALPS_WHEEL) {
-		dev1->evbit[LONG(EV_REL)] |= BIT(EV_REL);
-		dev1->relbit[LONG(REL_WHEEL)] |= BIT(REL_WHEEL);
+		dev1->evbit[BIT_WORD(EV_REL)] |= BIT_MASK(EV_REL);
+		dev1->relbit[BIT_WORD(REL_WHEEL)] |= BIT_MASK(REL_WHEEL);
 	}
 
 	if (priv->i->flags & (ALPS_FW_BK_1 | ALPS_FW_BK_2)) {
-		dev1->keybit[LONG(BTN_FORWARD)] |= BIT(BTN_FORWARD);
-		dev1->keybit[LONG(BTN_BACK)] |= BIT(BTN_BACK);
+		dev1->keybit[BIT_WORD(BTN_FORWARD)] |= BIT_MASK(BTN_FORWARD);
+		dev1->keybit[BIT_WORD(BTN_BACK)] |= BIT_MASK(BTN_BACK);
 	}
 
 	snprintf(priv->phys, sizeof(priv->phys), "%s/input1", psmouse->ps2dev.serio->phys);
@@ -476,11 +484,13 @@ int alps_init(struct psmouse *psmouse)
 	dev2->id.product = PSMOUSE_ALPS;
 	dev2->id.version = 0x0000;
 
-	dev2->evbit[0] = BIT(EV_KEY) | BIT(EV_REL);
-	dev2->relbit[LONG(REL_X)] |= BIT(REL_X) | BIT(REL_Y);
-	dev2->keybit[LONG(BTN_LEFT)] |= BIT(BTN_LEFT) | BIT(BTN_MIDDLE) | BIT(BTN_RIGHT);
+	dev2->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REL);
+	dev2->relbit[BIT_WORD(REL_X)] |= BIT_MASK(REL_X) | BIT_MASK(REL_Y);
+	dev2->keybit[BIT_WORD(BTN_LEFT)] |= BIT_MASK(BTN_LEFT) |
+		BIT_MASK(BTN_MIDDLE) | BIT_MASK(BTN_RIGHT);
 
-	input_register_device(priv->dev2);
+	if (input_register_device(priv->dev2))
+		goto init_fail;
 
 	psmouse->protocol_handler = alps_process_byte;
 	psmouse->poll = alps_poll;
@@ -494,8 +504,10 @@ int alps_init(struct psmouse *psmouse)
 	return 0;
 
 init_fail:
+	psmouse_reset(psmouse);
 	input_free_device(dev2);
 	kfree(priv);
+	psmouse->private = NULL;
 	return -1;
 }
 
@@ -504,7 +516,8 @@ int alps_detect(struct psmouse *psmouse, int set_properties)
 	int version;
 	const struct alps_model_info *model;
 
-	if (!(model = alps_get_model(psmouse, &version)))
+	model = alps_get_model(psmouse, &version);
+	if (!model)
 		return -1;
 
 	if (set_properties) {

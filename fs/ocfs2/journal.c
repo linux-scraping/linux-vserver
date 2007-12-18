@@ -35,13 +35,13 @@
 #include "ocfs2.h"
 
 #include "alloc.h"
+#include "dir.h"
 #include "dlmglue.h"
 #include "extent_map.h"
 #include "heartbeat.h"
 #include "inode.h"
 #include "journal.h"
 #include "localalloc.h"
-#include "namei.h"
 #include "slot_map.h"
 #include "super.h"
 #include "vote.h"
@@ -435,7 +435,8 @@ static int ocfs2_journal_toggle_dirty(struct ocfs2_super *osb,
 		 * handle the errors in a specific manner, so no need
 		 * to call ocfs2_error() here. */
 		mlog(ML_ERROR, "Journal dinode %llu  has invalid "
-		     "signature: %.*s", (unsigned long long)fe->i_blkno, 7,
+		     "signature: %.*s",
+		     (unsigned long long)le64_to_cpu(fe->i_blkno), 7,
 		     fe->i_signature);
 		status = -EIO;
 		goto out;
@@ -649,29 +650,20 @@ bail:
 static int ocfs2_force_read_journal(struct inode *inode)
 {
 	int status = 0;
-	int i, p_blocks;
-	u64 v_blkno, p_blkno;
-#define CONCURRENT_JOURNAL_FILL 32
+	int i;
+	u64 v_blkno, p_blkno, p_blocks, num_blocks;
+#define CONCURRENT_JOURNAL_FILL 32ULL
 	struct buffer_head *bhs[CONCURRENT_JOURNAL_FILL];
 
 	mlog_entry_void();
 
-	BUG_ON(inode->i_blocks !=
-		     ocfs2_align_bytes_to_sectors(i_size_read(inode)));
-
 	memset(bhs, 0, sizeof(struct buffer_head *) * CONCURRENT_JOURNAL_FILL);
 
-	mlog(0, "Force reading %llu blocks\n",
-		(unsigned long long)(inode->i_blocks >>
-			(inode->i_sb->s_blocksize_bits - 9)));
-
+	num_blocks = ocfs2_blocks_for_bytes(inode->i_sb, inode->i_size);
 	v_blkno = 0;
-	while (v_blkno <
-	       (inode->i_blocks >> (inode->i_sb->s_blocksize_bits - 9))) {
-
+	while (v_blkno < num_blocks) {
 		status = ocfs2_extent_map_get_blocks(inode, v_blkno,
-						     1, &p_blkno,
-						     &p_blocks);
+						     &p_blkno, &p_blocks, NULL);
 		if (status < 0) {
 			mlog_errno(status);
 			goto bail;
@@ -730,8 +722,7 @@ void ocfs2_complete_recovery(struct work_struct *work)
 		container_of(work, struct ocfs2_journal, j_recovery_work);
 	struct ocfs2_super *osb = journal->j_osb;
 	struct ocfs2_dinode *la_dinode, *tl_dinode;
-	struct ocfs2_la_recovery_item *item;
-	struct list_head *p, *n;
+	struct ocfs2_la_recovery_item *item, *n;
 	LIST_HEAD(tmp_la_list);
 
 	mlog_entry_void();
@@ -742,8 +733,7 @@ void ocfs2_complete_recovery(struct work_struct *work)
 	list_splice_init(&journal->j_la_cleanups, &tmp_la_list);
 	spin_unlock(&journal->j_lock);
 
-	list_for_each_safe(p, n, &tmp_la_list) {
-		item = list_entry(p, struct ocfs2_la_recovery_item, lri_list);
+	list_for_each_entry_safe(item, n, &tmp_la_list, lri_list) {
 		list_del_init(&item->lri_list);
 
 		mlog(0, "Complete recovery for slot %d\n", item->lri_slot);
@@ -751,7 +741,7 @@ void ocfs2_complete_recovery(struct work_struct *work)
 		la_dinode = item->lri_la_dinode;
 		if (la_dinode) {
 			mlog(0, "Clean up local alloc %llu\n",
-			     (unsigned long long)la_dinode->i_blkno);
+			     (unsigned long long)le64_to_cpu(la_dinode->i_blkno));
 
 			ret = ocfs2_complete_local_alloc_recovery(osb,
 								  la_dinode);
@@ -764,7 +754,7 @@ void ocfs2_complete_recovery(struct work_struct *work)
 		tl_dinode = item->lri_tl_dinode;
 		if (tl_dinode) {
 			mlog(0, "Clean up truncate log %llu\n",
-			     (unsigned long long)tl_dinode->i_blkno);
+			     (unsigned long long)le64_to_cpu(tl_dinode->i_blkno));
 
 			ret = ocfs2_complete_truncate_log_recovery(osb,
 								   tl_dinode);
@@ -1223,17 +1213,49 @@ bail:
 	return status;
 }
 
+struct ocfs2_orphan_filldir_priv {
+	struct inode		*head;
+	struct ocfs2_super	*osb;
+};
+
+static int ocfs2_orphan_filldir(void *priv, const char *name, int name_len,
+				loff_t pos, u64 ino, unsigned type)
+{
+	struct ocfs2_orphan_filldir_priv *p = priv;
+	struct inode *iter;
+
+	if (name_len == 1 && !strncmp(".", name, 1))
+		return 0;
+	if (name_len == 2 && !strncmp("..", name, 2))
+		return 0;
+
+	/* Skip bad inodes so that recovery can continue */
+	iter = ocfs2_iget(p->osb, ino,
+			  OCFS2_FI_FLAG_ORPHAN_RECOVERY);
+	if (IS_ERR(iter))
+		return 0;
+
+	mlog(0, "queue orphan %llu\n",
+	     (unsigned long long)OCFS2_I(iter)->ip_blkno);
+	/* No locking is required for the next_orphan queue as there
+	 * is only ever a single process doing orphan recovery. */
+	OCFS2_I(iter)->ip_next_orphan = p->head;
+	p->head = iter;
+
+	return 0;
+}
+
 static int ocfs2_queue_orphans(struct ocfs2_super *osb,
 			       int slot,
 			       struct inode **head)
 {
 	int status;
 	struct inode *orphan_dir_inode = NULL;
-	struct inode *iter;
-	unsigned long offset, blk, local;
-	struct buffer_head *bh = NULL;
-	struct ocfs2_dir_entry *de;
-	struct super_block *sb = osb->sb;
+	struct ocfs2_orphan_filldir_priv priv;
+	loff_t pos = 0;
+
+	priv.osb = osb;
+	priv.head = *head;
 
 	orphan_dir_inode = ocfs2_get_system_file_inode(osb,
 						       ORPHAN_DIR_SYSTEM_INODE,
@@ -1251,77 +1273,15 @@ static int ocfs2_queue_orphans(struct ocfs2_super *osb,
 		goto out;
 	}
 
-	offset = 0;
-	iter = NULL;
-	while(offset < i_size_read(orphan_dir_inode)) {
-		blk = offset >> sb->s_blocksize_bits;
-
-		bh = ocfs2_bread(orphan_dir_inode, blk, &status, 0);
-		if (!bh)
-			status = -EINVAL;
-		if (status < 0) {
-			if (bh)
-				brelse(bh);
-			mlog_errno(status);
-			goto out_unlock;
-		}
-
-		local = 0;
-		while(offset < i_size_read(orphan_dir_inode)
-		      && local < sb->s_blocksize) {
-			de = (struct ocfs2_dir_entry *) (bh->b_data + local);
-
-			if (!ocfs2_check_dir_entry(orphan_dir_inode,
-						  de, bh, local)) {
-				status = -EINVAL;
-				mlog_errno(status);
-				brelse(bh);
-				goto out_unlock;
-			}
-
-			local += le16_to_cpu(de->rec_len);
-			offset += le16_to_cpu(de->rec_len);
-
-			/* I guess we silently fail on no inode? */
-			if (!le64_to_cpu(de->inode))
-				continue;
-			if (de->file_type > OCFS2_FT_MAX) {
-				mlog(ML_ERROR,
-				     "block %llu contains invalid de: "
-				     "inode = %llu, rec_len = %u, "
-				     "name_len = %u, file_type = %u, "
-				     "name='%.*s'\n",
-				     (unsigned long long)bh->b_blocknr,
-				     (unsigned long long)le64_to_cpu(de->inode),
-				     le16_to_cpu(de->rec_len),
-				     de->name_len,
-				     de->file_type,
-				     de->name_len,
-				     de->name);
-				continue;
-			}
-			if (de->name_len == 1 && !strncmp(".", de->name, 1))
-				continue;
-			if (de->name_len == 2 && !strncmp("..", de->name, 2))
-				continue;
-
-			iter = ocfs2_iget(osb, le64_to_cpu(de->inode),
-					  OCFS2_FI_FLAG_NOLOCK);
-			if (IS_ERR(iter))
-				continue;
-
-			mlog(0, "queue orphan %llu\n",
-			     (unsigned long long)OCFS2_I(iter)->ip_blkno);
-			/* No locking is required for the next_orphan
-			 * queue as there is only ever a single
-			 * process doing orphan recovery. */
-			OCFS2_I(iter)->ip_next_orphan = *head;
-			*head = iter;
-		}
-		brelse(bh);
+	status = ocfs2_dir_foreach(orphan_dir_inode, &pos, &priv,
+				   ocfs2_orphan_filldir);
+	if (status) {
+		mlog_errno(status);
+		goto out;
 	}
 
-out_unlock:
+	*head = priv.head;
+
 	ocfs2_meta_unlock(orphan_dir_inode, 0);
 out:
 	mutex_unlock(&orphan_dir_inode->i_mutex);
@@ -1418,7 +1378,6 @@ static int ocfs2_recover_orphans(struct ocfs2_super *osb,
 		/* Set the proper information to get us going into
 		 * ocfs2_delete_inode. */
 		oi->ip_flags |= OCFS2_INODE_MAYBE_ORPHANED;
-		oi->ip_orphaned_slot = slot;
 		spin_unlock(&oi->ip_lock);
 
 		iput(inode);

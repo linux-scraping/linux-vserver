@@ -15,8 +15,11 @@
  * Magic nums for obj red zoning.
  * Placed in the first word before and the first word after an obj.
  */
-#define	RED_INACTIVE	0x5A2CF071UL	/* when obj is inactive */
-#define	RED_ACTIVE	0x170FC2A5UL	/* when obj is active */
+#define	RED_INACTIVE	0x09F911029D74E35BULL	/* when obj is inactive */
+#define	RED_ACTIVE	0xD84156C5635688C0ULL	/* when obj is active */
+
+#define SLUB_RED_INACTIVE	0xbb
+#define SLUB_RED_ACTIVE		0xcc
 
 /* ...and for poisoning */
 #define	POISON_INUSE	0x5a	/* for use-uninitialised poisoning */
@@ -26,9 +29,6 @@
 /********** arch/$ARCH/mm/init.c **********/
 #define POISON_FREE_INITMEM	0xcc
 
-/********** arch/x86_64/mm/init.c **********/
-#define	POISON_FREE_INITDATA	0xba
-
 /********** arch/ia64/hp/common/sba_iommu.c **********/
 /*
  * arch/ia64/hp/common/sba_iommu.c uses a 16-byte poison string with a
@@ -36,7 +36,8 @@
  */
 
 /********** fs/jbd/journal.c **********/
-#define JBD_POISON_FREE	0x5b
+#define JBD_POISON_FREE		0x5b
+#define JBD2_POISON_FREE	0x5c
 
 /********** drivers/base/dmapool.c **********/
 #define	POOL_POISON_FREED	0xa7	/* !inuse */

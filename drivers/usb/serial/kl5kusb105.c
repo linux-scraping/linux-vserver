@@ -238,7 +238,7 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,
 	if (rc < 0)
 		err("Reading line status failed (error = %d)", rc);
 	else {
-		status = status_buf[0] + (status_buf[1]<<8);
+		status = le16_to_cpu(*(u16 *)status_buf);
 
 		info("%s - read status %x %x", __FUNCTION__,
 		     status_buf[0], status_buf[1]);
@@ -257,7 +257,7 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,
 static int klsi_105_startup (struct usb_serial *serial)
 {
 	struct klsi_105_private *priv;
-	int i;
+	int i, j;
 
 	/* check if we support the product id (see keyspan.c)
 	 * FIXME
@@ -265,12 +265,12 @@ static int klsi_105_startup (struct usb_serial *serial)
 
 	/* allocate the private data structure */
 	for (i=0; i<serial->num_ports; i++) {
-		int j;
 		priv = kmalloc(sizeof(struct klsi_105_private),
 						   GFP_KERNEL);
 		if (!priv) {
 			dbg("%skmalloc for klsi_105_private failed.", __FUNCTION__);
-			return -ENOMEM;
+			i--;
+			goto err_cleanup;
 		}
 		/* set initial values for control structures */
 		priv->cfg.pktlen    = 5;
@@ -292,15 +292,14 @@ static int klsi_105_startup (struct usb_serial *serial)
 			priv->write_urb_pool[j] = urb;
 			if (urb == NULL) {
 				err("No more urbs???");
-				continue;
+				goto err_cleanup;
 			}
 
-			urb->transfer_buffer = NULL;
 			urb->transfer_buffer = kmalloc (URB_TRANSFER_BUFFER_SIZE,
 							GFP_KERNEL);
 			if (!urb->transfer_buffer) {
 				err("%s - out of memory for urb buffers.", __FUNCTION__);
-				continue;
+				goto err_cleanup;
 			}
 		}
 
@@ -308,7 +307,20 @@ static int klsi_105_startup (struct usb_serial *serial)
 		init_waitqueue_head(&serial->port[i]->write_wait);
 	}
 	
-	return (0);
+	return 0;
+
+err_cleanup:
+	for (; i >= 0; i--) {
+		priv = usb_get_serial_port_data(serial->port[i]);
+		for (j=0; j < NUM_URBS; j++) {
+			if (priv->write_urb_pool[j]) {
+				kfree(priv->write_urb_pool[j]->transfer_buffer);
+				usb_free_urb(priv->write_urb_pool[j]);
+			}
+		}
+		usb_set_serial_port_data(serial->port[i], NULL);
+	}
+	return -ENOMEM;
 } /* klsi_105_startup */
 
 
@@ -555,12 +567,13 @@ exit:
 static void klsi_105_write_bulk_callback ( struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
-	if (urb->status) {
+
+	if (status) {
 		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		return;
 	}
 
@@ -619,16 +632,17 @@ static void klsi_105_read_bulk_callback (struct urb *urb)
 	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	int rc;
+	int status = urb->status;
 
-        dbg("%s - port %d", __FUNCTION__, port->number);
+	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	/* The urb might have been killed. */
-        if (urb->status) {
-                dbg("%s - nonzero read bulk status received: %d", __FUNCTION__,
-		    urb->status);
-                return;
-        }
-	
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__,
+		    status);
+		return;
+	}
+
 	/* The data received is again preceded by a length double-byte in LSB-
 	 * first order (see klsi_105_write() )
 	 */
@@ -714,24 +728,32 @@ static void klsi_105_set_termios (struct usb_serial_port *port,
 #endif
 		}
 		
-		switch(cflag & CBAUD) {
-		case B0: /* handled below */
+		switch(tty_get_baud_rate(port->tty)) {
+		case 0: /* handled below */
 			break;
-		case B1200: priv->cfg.baudrate = kl5kusb105a_sio_b1200;
+		case 1200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b1200;
 			break;
-		case B2400: priv->cfg.baudrate = kl5kusb105a_sio_b2400;
+		case 2400:
+			priv->cfg.baudrate = kl5kusb105a_sio_b2400;
 			break;
-		case B4800: priv->cfg.baudrate = kl5kusb105a_sio_b4800;
+		case 4800:
+			priv->cfg.baudrate = kl5kusb105a_sio_b4800;
 			break;
-		case B9600: priv->cfg.baudrate = kl5kusb105a_sio_b9600;
+		case 9600:
+			priv->cfg.baudrate = kl5kusb105a_sio_b9600;
 			break;
-		case B19200: priv->cfg.baudrate = kl5kusb105a_sio_b19200;
+		case 19200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b19200;
 			break;
-		case B38400: priv->cfg.baudrate = kl5kusb105a_sio_b38400;
+		case 38400:
+			priv->cfg.baudrate = kl5kusb105a_sio_b38400;
 			break;
-		case B57600: priv->cfg.baudrate = kl5kusb105a_sio_b57600;
+		case 57600:
+			priv->cfg.baudrate = kl5kusb105a_sio_b57600;
 			break;
-		case B115200: priv->cfg.baudrate = kl5kusb105a_sio_b115200;
+		case 115200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b115200;
 			break;
 		default:
 			err("KLSI USB->Serial converter:"

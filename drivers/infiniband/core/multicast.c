@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Intel Corporation.  All rights reserved.
+ * Copyright (c) 2006 Intel Corporation.  All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -34,7 +34,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/bitops.h>
 #include <linux/random.h>
 
@@ -197,7 +196,7 @@ static void queue_join(struct mcast_member *member)
 	unsigned long flags;
 
 	spin_lock_irqsave(&group->lock, flags);
-	list_add(&member->list, &group->pending_list);
+	list_add_tail(&member->list, &group->pending_list);
 	if (group->state == MCAST_IDLE) {
 		group->state = MCAST_BUSY;
 		atomic_inc(&group->refcount);

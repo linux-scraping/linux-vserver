@@ -98,7 +98,6 @@
 	 * The "get_stack" macros are responsible for determining the
 	 * kernel stack value.
 	 *
-	 * For Faults:
 	 *      If sr7 == 0
 	 *          Already using a kernel stack, so call the
 	 *          get_stack_use_r30 macro to push a pt_regs structure
@@ -109,26 +108,6 @@
 	 *          to the pt_regs structure contained within the
 	 *          task pointer pointed to by cr30. Set the stack
 	 *          pointer to point to the end of the task structure.
-	 *
-	 * For Interrupts:
-	 *      If sr7 == 0
-	 *          Already using a kernel stack, check to see if r30
-	 *          is already pointing to the per processor interrupt
-	 *          stack. If it is, call the get_stack_use_r30 macro
-	 *          to push a pt_regs structure on the stack, and store
-	 *          registers there. Otherwise, call get_stack_use_cr31
-	 *          to get a pointer to the base of the interrupt stack
-	 *          and push a pt_regs structure on that stack.
-	 *      else
-	 *          Need to set up a kernel stack, so call the
-	 *          get_stack_use_cr30 macro to set up a pointer
-	 *          to the pt_regs structure contained within the
-	 *          task pointer pointed to by cr30. Set the stack
-	 *          pointer to point to the end of the task structure.
-	 *          N.B: We don't use the interrupt stack for the
-	 *          first interrupt from userland, because signals/
-	 *          resched's are processed when returning to userland,
-	 *          and we can sleep in those cases.
 	 *
 	 * Note that we use shadowed registers for temps until
 	 * we can save %r26 and %r29. %r26 is used to preserve
@@ -652,7 +631,7 @@
 
 	.text
 
-	.align 4096
+	.align	PAGE_SIZE
 
 ENTRY(fault_vector_20)
 	/* First vector is invalid (0) */
@@ -905,7 +884,7 @@ ENDPROC(_switch_to)
 	 *
 	 */
 
-	.align 4096
+	.align	PAGE_SIZE
 
 ENTRY(syscall_exit_rfi)
 	mfctl   %cr30,%r16
@@ -954,21 +933,6 @@ ENTRY(syscall_exit_rfi)
 intr_return:
 	/* NOTE: Need to enable interrupts incase we schedule. */
 	ssm     PSW_SM_I, %r0
-
-	/* Check for software interrupts */
-
-	.import irq_stat,data
-
-	load32	irq_stat,%r19
-#ifdef CONFIG_SMP
-	mfctl   %cr30,%r1
-	ldw	TI_CPU(%r1),%r1 /* get cpu # - int */
-	/* shift left ____cacheline_aligned (aka L1_CACHE_BYTES) amount
-	** irq_stat[] is defined using ____cacheline_aligned.
-	*/
-	SHLREG	%r1,L1_CACHE_SHIFT,%r20
-	add     %r19,%r20,%r19	/* now have &irq_stat[smp_processor_id()] */
-#endif /* CONFIG_SMP */
 
 intr_check_resched:
 
@@ -1102,23 +1066,13 @@ intr_do_preempt:
 
 intr_extint:
 	CMPIB=,n 0,%r16,1f
+
 	get_stack_use_cr30
-	b,n 3f
+	b,n 2f
 
 1:
-#if 0  /* Interrupt Stack support not working yet! */
-	mfctl	%cr31,%r1
-	copy	%r30,%r17
-	/* FIXME! depi below has hardcoded idea of interrupt stack size (32k)*/
-	DEPI	0,31,15,%r17
-	CMPB=,n	%r1,%r17,2f
-	get_stack_use_cr31
-	b,n 3f
-#endif
-2:
 	get_stack_use_r30
-
-3:
+2:
 	save_specials	%r29
 	virt_map
 	save_general	%r29
@@ -2035,10 +1989,9 @@ ENTRY(syscall_exit)
 	STREG     %r28,TASK_PT_GR28(%r1)
 
 #ifdef CONFIG_HPUX
-
 /* <linux/personality.h> cannot be easily included */
 #define PER_HPUX 0x10
-	LDREG     TASK_PERSONALITY(%r1),%r19
+	ldw	TASK_PERSONALITY(%r1),%r19
 
 	/* We can't use "CMPIB<> PER_HPUX" since "im5" field is sign extended */
 	ldo	  -PER_HPUX(%r19), %r19
@@ -2055,24 +2008,6 @@ ENTRY(syscall_exit)
 	 * calling a module, and nothing got round to restoring dp on return.
 	 */
 	loadgp
-
-syscall_check_bh:
-
-	/* Check for software interrupts */
-
-	.import irq_stat,data
-
-	load32	irq_stat,%r19
-
-#ifdef CONFIG_SMP
-	/* sched.h: int processor */
-	/* %r26 is used as scratch register to index into irq_stat[] */
-	ldw     TI_CPU-THREAD_SZ_ALGN-FRAME_SIZE(%r30),%r26 /* cpu # */
-
-	/* shift left ____cacheline_aligned (aka L1_CACHE_BYTES) bits */
-	SHLREG	%r26,L1_CACHE_SHIFT,%r20
-	add     %r19,%r20,%r19	/* now have &irq_stat[smp_processor_id()] */
-#endif /* CONFIG_SMP */
 
 syscall_check_resched:
 
@@ -2115,7 +2050,7 @@ syscall_restore:
 	/* Are we being ptraced? */
 	LDREG	TI_TASK-THREAD_SZ_ALGN-FRAME_SIZE(%r30),%r1
 
-	LDREG	TASK_PTRACE(%r1), %r19
+	ldw	TASK_PTRACE(%r1), %r19
 	bb,<	%r19,31,syscall_restore_rfi
 	nop
 
@@ -2245,7 +2180,7 @@ syscall_do_resched:
 #else
 	nop
 #endif
-	b       syscall_check_bh  /* if resched, we start over again */
+	b	syscall_check_resched	/* if resched, we start over again */
 	nop
 ENDPROC(syscall_exit)
 

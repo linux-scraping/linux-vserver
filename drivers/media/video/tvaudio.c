@@ -15,7 +15,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/string.h>
@@ -25,14 +24,13 @@
 #include <linux/slab.h>
 #include <linux/videodev.h>
 #include <linux/i2c.h>
-#include <linux/i2c-algo-bit.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
 
 #include <media/tvaudio.h>
 #include <media/v4l2-common.h>
+#include <media/v4l2-chip-ident.h>
 
 #include <media/i2c-addr.h>
 
@@ -272,7 +270,7 @@ static int chip_thread(void *data)
 	struct CHIPDESC  *desc = chiplist + chip->type;
 
 	v4l_dbg(1, debug, &chip->c, "%s: thread started\n", chip->c.name);
-
+	set_freezable();
 	for (;;) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (!kthread_should_stop())
@@ -291,7 +289,7 @@ static int chip_thread(void *data)
 		desc->checkmode(chip);
 
 		/* schedule next check */
-		mod_timer(&chip->wt, jiffies+2*HZ);
+		mod_timer(&chip->wt, jiffies+msecs_to_jiffies(2000));
 	}
 
 	v4l_dbg(1, debug, &chip->c, "%s: thread exiting\n", chip->c.name);
@@ -1771,10 +1769,13 @@ static int chip_command(struct i2c_client *client,
 			desc->setmode(chip,VIDEO_SOUND_MONO);
 			if (chip->prevmode != VIDEO_SOUND_MONO)
 				chip->prevmode = -1; /* reset previous mode */
-			mod_timer(&chip->wt, jiffies+2*HZ);
+			mod_timer(&chip->wt, jiffies+msecs_to_jiffies(2000));
 			/* the thread will call checkmode() later */
 		}
 		break;
+
+	case VIDIOC_G_CHIP_IDENT:
+		return v4l2_chip_ident_i2c_client(client, arg, V4L2_IDENT_TVAUDIO, 0);
 	}
 	return 0;
 }

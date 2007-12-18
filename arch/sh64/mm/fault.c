@@ -22,7 +22,6 @@
 #include <linux/mman.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 
 #include <asm/system.h>
@@ -82,7 +81,7 @@ static inline void print_vma(struct vm_area_struct *vma)
 
 static inline void print_task(struct task_struct *tsk)
 {
-	printk("Task pid %d:#%u\n", tsk->pid, tsk->xid);
+	printk("Task pid %d:#%u\n", task_pid_nr(tsk), tsk->xid);
 }
 
 static pte_t *lookup_pte(struct mm_struct *mm, unsigned long address)
@@ -128,6 +127,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long writeaccess,
 	struct vm_area_struct * vma;
 	const struct exception_table_entry *fixup;
 	pte_t *pte;
+	int fault;
 
 #if defined(CONFIG_SH64_PROC_TLB)
         ++calls_to_do_slow_page_fault;
@@ -136,7 +136,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long writeaccess,
 	/* SIM
 	 * Note this is now called with interrupts still disabled
 	 * This is to cope with being called for a missing IO port
-	 * address with interupts disabled. This should be fixed as
+	 * address with interrupts disabled. This should be fixed as
 	 * soon as we have a better 'fast path' miss handler.
 	 *
 	 * Plus take care how you try and debug this stuff.
@@ -222,18 +222,19 @@ good_area:
 	 * the fault.
 	 */
 survive:
-	switch (handle_mm_fault(mm, vma, address, writeaccess)) {
-	case VM_FAULT_MINOR:
-		tsk->min_flt++;
-		break;
-	case VM_FAULT_MAJOR:
-		tsk->maj_flt++;
-		break;
-	case VM_FAULT_SIGBUS:
-		goto do_sigbus;
-	default:
-		goto out_of_memory;
+	fault = handle_mm_fault(mm, vma, address, writeaccess);
+	if (unlikely(fault & VM_FAULT_ERROR)) {
+		if (fault & VM_FAULT_OOM)
+			goto out_of_memory;
+		else if (fault & VM_FAULT_SIGBUS)
+			goto do_sigbus;
+		BUG();
 	}
+	if (fault & VM_FAULT_MAJOR)
+		tsk->maj_flt++;
+	else
+		tsk->min_flt++;
+
 	/* If we get here, the page fault has been handled.  Do the TLB refill
 	   now from the newly-setup PTE, to avoid having to fault again right
 	   away on the same instruction. */
@@ -271,13 +272,13 @@ bad_area:
 			 * usermode, so only need a few */
 			count++;
 			printk("user mode bad_area address=%08lx pid=%d (%s) pc=%08lx\n",
-				address, current->pid, current->comm,
+				address, task_pid_nr(current), current->comm,
 				(unsigned long) regs->pc);
 #if 0
 			show_regs(regs);
 #endif
 		}
-		if (is_init(tsk)) {
+		if (is_global_init(tsk)) {
 			panic("INIT had user mode bad_area\n");
 		}
 		tsk->thread.address = address;
@@ -319,14 +320,14 @@ no_context:
  * us unable to handle the page fault gracefully.
  */
 out_of_memory:
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		panic("INIT out of memory\n");
 		yield();
 		goto survive;
 	}
 	printk("fault:Out of memory\n");
 	up_read(&mm->mmap_sem);
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		yield();
 		down_read(&mm->mmap_sem);
 		goto survive;
@@ -334,7 +335,7 @@ out_of_memory:
 	printk("VM: killing process %s(%d:#%u)\n",
 		tsk->comm, tsk->pid, tsk->xid);
 	if (user_mode(regs))
-		do_exit(SIGKILL);
+		do_group_exit(SIGKILL);
 	goto no_context;
 
 do_sigbus:

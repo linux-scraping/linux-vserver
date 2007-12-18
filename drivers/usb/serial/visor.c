@@ -5,9 +5,9 @@
  *	Copyright (C) 1999 - 2004
  *	    Greg Kroah-Hartman (greg@kroah.com)
  *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License.
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License version
+ *	2 as published by the Free Software Foundation.
  *
  * See Documentation/usb/usb-serial.txt for more information on using this driver
  *
@@ -46,7 +46,6 @@ static int  visor_probe		(struct usb_serial *serial, const struct usb_device_id 
 static int  visor_calc_num_ports(struct usb_serial *serial);
 static void visor_shutdown	(struct usb_serial *serial);
 static int  visor_ioctl		(struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg);
-static void visor_set_termios	(struct usb_serial_port *port, struct ktermios *old_termios);
 static void visor_write_bulk_callback	(struct urb *urb);
 static void visor_read_bulk_callback	(struct urb *urb);
 static void visor_read_int_callback	(struct urb *urb);
@@ -103,6 +102,8 @@ static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(SONY_VENDOR_ID, SONY_CLIE_NZ90V_ID),
 		.driver_info = (kernel_ulong_t)&palm_os_4_probe },
 	{ USB_DEVICE(SONY_VENDOR_ID, SONY_CLIE_TJ25_ID),
+		.driver_info = (kernel_ulong_t)&palm_os_4_probe },
+	{ USB_DEVICE(ACER_VENDOR_ID, ACER_S10_ID),
 		.driver_info = (kernel_ulong_t)&palm_os_4_probe },
 	{ USB_DEVICE(SAMSUNG_VENDOR_ID, SAMSUNG_SCH_I330_ID), 
 		.driver_info = (kernel_ulong_t)&palm_os_4_probe },
@@ -201,7 +202,6 @@ static struct usb_serial_driver handspring_device = {
 	.calc_num_ports =	visor_calc_num_ports,
 	.shutdown =		visor_shutdown,
 	.ioctl =		visor_ioctl,
-	.set_termios =		visor_set_termios,
 	.write =		visor_write,
 	.write_room =		visor_write_room,
 	.chars_in_buffer =	visor_chars_in_buffer,
@@ -232,7 +232,6 @@ static struct usb_serial_driver clie_5_device = {
 	.calc_num_ports =	visor_calc_num_ports,
 	.shutdown =		visor_shutdown,
 	.ioctl =		visor_ioctl,
-	.set_termios =		visor_set_termios,
 	.write =		visor_write,
 	.write_room =		visor_write_room,
 	.chars_in_buffer =	visor_chars_in_buffer,
@@ -260,7 +259,6 @@ static struct usb_serial_driver clie_3_5_device = {
 	.unthrottle =		visor_unthrottle,
 	.attach =		clie_3_5_startup,
 	.ioctl =		visor_ioctl,
-	.set_termios =		visor_set_termios,
 	.write =		visor_write,
 	.write_room =		visor_write_room,
 	.chars_in_buffer =	visor_chars_in_buffer,
@@ -273,7 +271,8 @@ struct visor_private {
 	int bytes_in;
 	int bytes_out;
 	int outstanding_urbs;
-	int throttled;
+	unsigned char throttled;
+	unsigned char actually_throttled;
 };
 
 /* number of outstanding urbs to prevent userspace DoS from happening */
@@ -384,19 +383,21 @@ static int visor_write (struct usb_serial_port *port, const unsigned char *buf, 
 		dbg("%s - write limit hit\n", __FUNCTION__);
 		return 0;
 	}
+	priv->outstanding_urbs++;
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	buffer = kmalloc (count, GFP_ATOMIC);
 	if (!buffer) {
 		dev_err(&port->dev, "out of memory\n");
-		return -ENOMEM;
+		count = -ENOMEM;
+		goto error_no_buffer;
 	}
 
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
 	if (!urb) {
 		dev_err(&port->dev, "no more free urbs\n");
-		kfree (buffer);
-		return -ENOMEM;
+		count = -ENOMEM;
+		goto error_no_urb;
 	}
 
 	memcpy (buffer, buf, count);
@@ -415,18 +416,26 @@ static int visor_write (struct usb_serial_port *port, const unsigned char *buf, 
 		dev_err(&port->dev, "%s - usb_submit_urb(write bulk) failed with status = %d\n",
 			__FUNCTION__, status);
 		count = status;
-		kfree (buffer);
+		goto error;
 	} else {
 		spin_lock_irqsave(&priv->lock, flags);
-		++priv->outstanding_urbs;
 		priv->bytes_out += count;
 		spin_unlock_irqrestore(&priv->lock, flags);
 	}
 
 	/* we are done with this urb, so let the host driver
 	 * really free it when it is finished with it */
-	usb_free_urb (urb);
+	usb_free_urb(urb);
 
+	return count;
+error:
+	usb_free_urb(urb);
+error_no_urb:
+	kfree(buffer);
+error_no_buffer:
+	spin_lock_irqsave(&priv->lock, flags);
+	--priv->outstanding_urbs;
+	spin_unlock_irqrestore(&priv->lock, flags);
 	return count;
 }
 
@@ -474,16 +483,17 @@ static void visor_write_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct visor_private *priv = usb_get_serial_port_data(port);
+	int status = urb->status;
 	unsigned long flags;
 
 	/* free up the transfer buffer, as usb_free_urb() does not do this */
 	kfree (urb->transfer_buffer);
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
-	if (urb->status)
+
+	if (status)
 		dbg("%s - nonzero write bulk status received: %d",
-		    __FUNCTION__, urb->status);
+		    __FUNCTION__, status);
 
 	spin_lock_irqsave(&priv->lock, flags);
 	--priv->outstanding_urbs;
@@ -498,15 +508,16 @@ static void visor_read_bulk_callback (struct urb *urb)
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct visor_private *priv = usb_get_serial_port_data(port);
 	unsigned char *data = urb->transfer_buffer;
+	int status = urb->status;
 	struct tty_struct *tty;
-	unsigned long flags;
-	int throttled;
 	int result;
+	int available_room;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -514,17 +525,20 @@ static void visor_read_bulk_callback (struct urb *urb)
 
 	tty = port->tty;
 	if (tty && urb->actual_length) {
-		tty_buffer_request_room(tty, urb->actual_length);
-		tty_insert_flip_string(tty, data, urb->actual_length);
-		tty_flip_buffer_push(tty);
+		available_room = tty_buffer_request_room(tty, urb->actual_length);
+		if (available_room) {
+			tty_insert_flip_string(tty, data, available_room);
+			tty_flip_buffer_push(tty);
+		}
+		spin_lock(&priv->lock);
+		priv->bytes_in += available_room;
+
+	} else {
+		spin_lock(&priv->lock);
 	}
-	spin_lock_irqsave(&priv->lock, flags);
-	priv->bytes_in += urb->actual_length;
-	throttled = priv->throttled;
-	spin_unlock_irqrestore(&priv->lock, flags);
 
 	/* Continue trying to always read if we should */
-	if (!throttled) {
+	if (!priv->throttled) {
 		usb_fill_bulk_urb (port->read_urb, port->serial->dev,
 				   usb_rcvbulkpipe(port->serial->dev,
 						   port->bulk_in_endpointAddress),
@@ -534,16 +548,19 @@ static void visor_read_bulk_callback (struct urb *urb)
 		result = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 		if (result)
 			dev_err(&port->dev, "%s - failed resubmitting read urb, error %d\n", __FUNCTION__, result);
+	} else {
+		priv->actually_throttled = 1;
 	}
-	return;
+	spin_unlock(&priv->lock);
 }
 
 static void visor_read_int_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
+	int status = urb->status;
 	int result;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -552,11 +569,11 @@ static void visor_read_int_callback (struct urb *urb)
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
 		dbg("%s - urb shutting down with status: %d",
-		    __FUNCTION__, urb->status);
+		    __FUNCTION__, status);
 		return;
 	default:
 		dbg("%s - nonzero urb status received: %d",
-		    __FUNCTION__, urb->status);
+		    __FUNCTION__, status);
 		goto exit;
 	}
 
@@ -598,6 +615,7 @@ static void visor_unthrottle (struct usb_serial_port *port)
 	dbg("%s - port %d", __FUNCTION__, port->number);
 	spin_lock_irqsave(&priv->lock, flags);
 	priv->throttled = 0;
+	priv->actually_throttled = 0;
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	port->read_urb->dev = port->serial->dev;
@@ -913,74 +931,6 @@ static int visor_ioctl (struct usb_serial_port *port, struct file * file, unsign
 
 	return -ENOIOCTLCMD;
 }
-
-
-/* This function is all nice and good, but we don't change anything based on it :) */
-static void visor_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
-{
-	unsigned int cflag;
-
-	dbg("%s - port %d", __FUNCTION__, port->number);
-
-	if ((!port->tty) || (!port->tty->termios)) {
-		dbg("%s - no tty structures", __FUNCTION__);
-		return;
-	}
-
-	cflag = port->tty->termios->c_cflag;
-	/* check that they really want us to change something */
-	if (old_termios) {
-		if ((cflag == old_termios->c_cflag) &&
-		    (RELEVANT_IFLAG(port->tty->termios->c_iflag) == RELEVANT_IFLAG(old_termios->c_iflag))) {
-			dbg("%s - nothing to change...", __FUNCTION__);
-			return;
-		}
-	}
-
-	/* get the byte size */
-	switch (cflag & CSIZE) {
-		case CS5:	dbg("%s - data bits = 5", __FUNCTION__);   break;
-		case CS6:	dbg("%s - data bits = 6", __FUNCTION__);   break;
-		case CS7:	dbg("%s - data bits = 7", __FUNCTION__);   break;
-		default:
-		case CS8:	dbg("%s - data bits = 8", __FUNCTION__);   break;
-	}
-	
-	/* determine the parity */
-	if (cflag & PARENB)
-		if (cflag & PARODD)
-			dbg("%s - parity = odd", __FUNCTION__);
-		else
-			dbg("%s - parity = even", __FUNCTION__);
-	else
-		dbg("%s - parity = none", __FUNCTION__);
-
-	/* figure out the stop bits requested */
-	if (cflag & CSTOPB)
-		dbg("%s - stop bits = 2", __FUNCTION__);
-	else
-		dbg("%s - stop bits = 1", __FUNCTION__);
-
-	
-	/* figure out the flow control settings */
-	if (cflag & CRTSCTS)
-		dbg("%s - RTS/CTS is enabled", __FUNCTION__);
-	else
-		dbg("%s - RTS/CTS is disabled", __FUNCTION__);
-	
-	/* determine software flow control */
-	if (I_IXOFF(port->tty))
-		dbg("%s - XON/XOFF is enabled, XON = %2x, XOFF = %2x",
-		    __FUNCTION__, START_CHAR(port->tty), STOP_CHAR(port->tty));
-	else
-		dbg("%s - XON/XOFF is disabled", __FUNCTION__);
-
-	/* get the baud rate wanted */
-	dbg("%s - baud rate = %d", __FUNCTION__, tty_get_baud_rate(port->tty));
-
-	return;
-}
-
 
 static int __init visor_init (void)
 {

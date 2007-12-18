@@ -25,6 +25,10 @@
 #include <asm/mips-boards/msc01_pci.h>
 #include <asm/gt64120.h>
 
+/* Mips interrupt controller found in SOCit variations */
+#define MIPS_MSC01_IC_REG_BASE		0x1bc40000
+#define MIPS_SOCITSC_IC_REG_BASE	0x1ffa0000
+
 /*
  * Malta I/O ports base address for the Galileo GT64120 and Algorithmics
  * Bonito system controllers.
@@ -68,7 +72,7 @@ static inline unsigned long get_msc_port_base(unsigned long reg)
 
 #define SMSC_CONFIG_ACTIVATE_ENABLE   1
 
-#define SMSC_WRITE(x,a)     outb(x,a)
+#define SMSC_WRITE(x, a)     outb(x, a)
 
 #define MALTA_JMPRS_REG		0x1f000210
 

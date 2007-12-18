@@ -1,10 +1,18 @@
 #
+# Generic algorithms support
+#
+config XOR_BLOCKS
+	tristate
+
+#
+# async_tx api: hardware offloaded memory transfer/transform support
+#
+source "crypto/async_tx/Kconfig"
+
+#
 # Cryptographic API Configuration
 #
-
-menu "Cryptographic options"
-
-config CRYPTO
+menuconfig CRYPTO
 	bool "Cryptographic API"
 	help
 	  This option provides the core Cryptographic API.
@@ -15,6 +23,14 @@ config CRYPTO_ALGAPI
 	tristate
 	help
 	  This option provides the API for cryptographic algorithms.
+
+config CRYPTO_ABLKCIPHER
+	tristate
+	select CRYPTO_BLKCIPHER
+
+config CRYPTO_AEAD
+	tristate
+	select CRYPTO_ALGAPI
 
 config CRYPTO_BLKCIPHER
 	tristate
@@ -134,7 +150,6 @@ config CRYPTO_ECB
 	tristate "ECB support"
 	select CRYPTO_BLKCIPHER
 	select CRYPTO_MANAGER
-	default m
 	help
 	  ECB: Electronic CodeBook mode
 	  This is the simplest block cipher algorithm.  It simply encrypts
@@ -144,7 +159,6 @@ config CRYPTO_CBC
 	tristate "CBC support"
 	select CRYPTO_BLKCIPHER
 	select CRYPTO_MANAGER
-	default m
 	help
 	  CBC: Cipher Block Chaining mode
 	  This block cipher algorithm is required for IPSec.
@@ -153,7 +167,6 @@ config CRYPTO_PCBC
 	tristate "PCBC support"
 	select CRYPTO_BLKCIPHER
 	select CRYPTO_MANAGER
-	default m
 	help
 	  PCBC: Propagating Cipher Block Chaining mode
 	  This block cipher algorithm is required for RxRPC.
@@ -170,6 +183,26 @@ config CRYPTO_LRW
 	  specification string aes-lrw-benbi, the key must be 256, 320 or 384.
 	  The first 128, 192 or 256 bits in the key are used for AES and the
 	  rest is used to tie each cipher block to its logical position.
+
+config CRYPTO_XTS
+	tristate "XTS support (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	select CRYPTO_BLKCIPHER
+	select CRYPTO_MANAGER
+	select CRYPTO_GF128MUL
+	help
+	  XTS: IEEE1619/D16 narrow block cipher use with aes-xts-plain,
+	  key size 256, 384 or 512 bits. This implementation currently
+	  can't handle a sectorsize which is not a multiple of 16 bytes.
+
+config CRYPTO_CRYPTD
+	tristate "Software async crypto daemon"
+	select CRYPTO_ABLKCIPHER
+	select CRYPTO_MANAGER
+	help
+	  This is a generic software asynchronous crypto daemon that
+	  converts an arbitrary synchronous software crypto algorithm
+	  into an asynchronous algorithm that executes in a kernel thread.
 
 config CRYPTO_DES
 	tristate "DES and Triple DES EDE cipher algorithms"
@@ -258,7 +291,7 @@ config CRYPTO_SERPENT
 
 	  Keys are allowed to be from 0 to 256 bits in length, in steps
 	  of 8 bits.  Also includes the 'Tnepres' algorithm, a reversed
-	  variant of Serpent for compatibility with old kerneli code.
+	  variant of Serpent for compatibility with old kerneli.org code.
 
 	  See also:
 	  <http://www.cl.cam.ac.uk/~rja14/serpent.html>
@@ -394,6 +427,20 @@ config CRYPTO_ANUBIS
 	  <https://www.cosic.esat.kuleuven.ac.be/nessie/reports/>
 	  <http://planeta.terra.com.br/informatica/paulobarreto/AnubisPage.html>
 
+config CRYPTO_SEED
+	tristate "SEED cipher algorithm"
+	select CRYPTO_ALGAPI
+	help
+	  SEED cipher algorithm (RFC4269).
+
+	  SEED is a 128-bit symmetric key block cipher that has been
+	  developed by KISA (Korea Information Security Agency) as a
+	  national standard encryption algorithm of the Republic of Korea.
+	  It is a 16 round block cipher with the key size of 128 bit.
+
+	  See also:
+	  <http://www.kisa.or.kr/kisa/seed/jsp/seed_eng.jsp>
+
 
 config CRYPTO_DEFLATE
 	tristate "Deflate compression algorithm"
@@ -447,8 +494,14 @@ config CRYPTO_TEST
 	help
 	  Quick & dirty crypto test module.
 
+config CRYPTO_AUTHENC
+	tristate "Authenc support"
+	select CRYPTO_AEAD
+	select CRYPTO_MANAGER
+	help
+	  Authenc: Combined mode wrapper for IPsec.
+	  This is required for IPSec.
+
 source "drivers/crypto/Kconfig"
 
 endif	# if CRYPTO
-
-endmenu

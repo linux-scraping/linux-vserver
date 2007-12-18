@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -44,6 +44,7 @@
 #include <linux/io.h>
 #include <linux/pci.h>
 #include <linux/vmalloc.h>
+#include <linux/fs.h>
 #include <asm/uaccess.h>
 
 #include "ipath_kernel.h"
@@ -296,7 +297,7 @@ static int ipath_diag_open(struct inode *in, struct file *fp)
 	}
 
 	fp->private_data = dd;
-	ipath_diag_inuse = 1;
+	ipath_diag_inuse = -2;
 	diag_set_link = 0;
 	ret = 0;
 
@@ -323,13 +324,14 @@ static ssize_t ipath_diagpkt_write(struct file *fp,
 {
 	u32 __iomem *piobuf;
 	u32 plen, clen, pbufn;
-	struct ipath_diag_pkt dp;
+	struct ipath_diag_pkt odp;
+	struct ipath_diag_xpkt dp;
 	u32 *tmpbuf = NULL;
 	struct ipath_devdata *dd;
 	ssize_t ret = 0;
 	u64 val;
 
-	if (count < sizeof(dp)) {
+	if (count != sizeof(dp)) {
 		ret = -EINVAL;
 		goto bail;
 	}
@@ -337,6 +339,29 @@ static ssize_t ipath_diagpkt_write(struct file *fp,
 	if (copy_from_user(&dp, data, sizeof(dp))) {
 		ret = -EFAULT;
 		goto bail;
+	}
+
+	/*
+	 * Due to padding/alignment issues (lessened with new struct)
+	 * the old and new structs are the same length. We need to
+	 * disambiguate them, which we can do because odp.len has never
+	 * been less than the total of LRH+BTH+DETH so far, while
+	 * dp.unit (same offset) unit is unlikely to get that high.
+	 * Similarly, dp.data, the pointer to user at the same offset
+	 * as odp.unit, is almost certainly at least one (512byte)page
+	 * "above" NULL. The if-block below can be omitted if compatibility
+	 * between a new driver and older diagnostic code is unimportant.
+	 * compatibility the other direction (new diags, old driver) is
+	 * handled in the diagnostic code, with a warning.
+	 */
+	if (dp.unit >= 20 && dp.data < 512) {
+		/* very probable version mismatch. Fix it up */
+		memcpy(&odp, &dp, sizeof(odp));
+		/* We got a legacy dp, copy elements to dp */
+		dp.unit = odp.unit;
+		dp.data = odp.data;
+		dp.len = odp.len;
+		dp.pbc_wd = 0; /* Indicate we need to compute PBC wd */
 	}
 
 	/* send count must be an exact number of dwords */
@@ -371,9 +396,10 @@ static ssize_t ipath_diagpkt_write(struct file *fp,
 		ret = -ENODEV;
 		goto bail;
 	}
+	/* Check link state, but not if we have custom PBC */
 	val = dd->ipath_lastibcstat & IPATH_IBSTATE_MASK;
-	if (val != IPATH_IBSTATE_INIT && val != IPATH_IBSTATE_ARM &&
-	    val != IPATH_IBSTATE_ACTIVE) {
+	if (!dp.pbc_wd && val != IPATH_IBSTATE_INIT &&
+		val != IPATH_IBSTATE_ARM && val != IPATH_IBSTATE_ACTIVE) {
 		ipath_cdbg(VERBOSE, "unit %u not ready (state %llx)\n",
 			   dd->ipath_unit, (unsigned long long) val);
 		ret = -EINVAL;
@@ -419,16 +445,22 @@ static ssize_t ipath_diagpkt_write(struct file *fp,
 		ipath_cdbg(VERBOSE, "unit %u 0x%x+1w pio%d\n",
 			   dd->ipath_unit, plen - 1, pbufn);
 
-	/* we have to flush after the PBC for correctness on some cpus
-	 * or WC buffer can be written out of order */
-	writeq(plen, piobuf);
-	ipath_flush_wc();
-	/* copy all by the trigger word, then flush, so it's written
+	if (dp.pbc_wd == 0)
+		dp.pbc_wd = plen;
+	writeq(dp.pbc_wd, piobuf);
+	/*
+	 * Copy all by the trigger word, then flush, so it's written
 	 * to chip before trigger word, then write trigger word, then
-	 * flush again, so packet is sent. */
-	__iowrite32_copy(piobuf + 2, tmpbuf, clen - 1);
-	ipath_flush_wc();
-	__raw_writel(tmpbuf[clen - 1], piobuf + clen + 1);
+	 * flush again, so packet is sent.
+	 */
+	if (dd->ipath_flags & IPATH_PIO_FLUSH_WC) {
+		ipath_flush_wc();
+		__iowrite32_copy(piobuf + 2, tmpbuf, clen - 1);
+		ipath_flush_wc();
+		__raw_writel(tmpbuf[clen - 1], piobuf + clen + 1);
+	} else
+		__iowrite32_copy(piobuf + 2, tmpbuf, clen);
+
 	ipath_flush_wc();
 
 	ret = sizeof(dp);
@@ -461,6 +493,8 @@ static ssize_t ipath_diag_read(struct file *fp, char __user *data,
 	else if ((count % 4) || (*off % 4))
 		/* address or length is not 32-bit aligned, hence invalid */
 		ret = -EINVAL;
+	else if (ipath_diag_inuse < 1 && (*off || count != 8))
+		ret = -EINVAL;  /* prevent cat /dev/ipath_diag* */
 	else if ((count % 8) || (*off % 8))
 		/* address or length not 64-bit aligned; do 32-bit reads */
 		ret = ipath_read_umem32(dd, data, kreg_base + *off, count);
@@ -470,6 +504,8 @@ static ssize_t ipath_diag_read(struct file *fp, char __user *data,
 	if (ret >= 0) {
 		*off += count;
 		ret = count;
+		if (ipath_diag_inuse == -2)
+			ipath_diag_inuse++;
 	}
 
 	return ret;
@@ -489,6 +525,9 @@ static ssize_t ipath_diag_write(struct file *fp, const char __user *data,
 	else if ((count % 4) || (*off % 4))
 		/* address or length is not 32-bit aligned, hence invalid */
 		ret = -EINVAL;
+	else if ((ipath_diag_inuse == -1 && (*off || count != 8)) ||
+		 ipath_diag_inuse == -2)  /* read qw off 0, write qw off 0 */
+		ret = -EINVAL;  /* before any other write allowed */
 	else if ((count % 8) || (*off % 8))
 		/* address or length not 64-bit aligned; do 32-bit writes */
 		ret = ipath_write_umem32(dd, kreg_base + *off, data, count);
@@ -498,6 +537,8 @@ static ssize_t ipath_diag_write(struct file *fp, const char __user *data,
 	if (ret >= 0) {
 		*off += count;
 		ret = count;
+		if (ipath_diag_inuse == -1)
+			ipath_diag_inuse = 1; /* all read/write OK now */
 	}
 
 	return ret;

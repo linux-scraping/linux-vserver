@@ -93,8 +93,6 @@ static int rx_copybreak;
 static char version[] __devinitdata =
 DRV_NAME ".c:v1.11 1/7/2001 Written by Donald Becker <becker@scyld.com>\n";
 static char version2[] __devinitdata =
-"  http://www.scyld.com/network/epic100.html\n";
-static char version3[] __devinitdata =
 "  (unofficial 2.4.x kernel port, version " DRV_VERSION ", " DRV_RELDATE ")\n";
 
 MODULE_AUTHOR("Donald Becker <becker@scyld.com>");
@@ -264,6 +262,7 @@ struct epic_private {
 	/* Ring pointers. */
 	spinlock_t lock;				/* Group with Tx control cache line. */
 	spinlock_t napi_lock;
+	struct napi_struct napi;
 	unsigned int reschedule_in_poll;
 	unsigned int cur_tx, dirty_tx;
 
@@ -296,7 +295,7 @@ static void epic_tx_timeout(struct net_device *dev);
 static void epic_init_ring(struct net_device *dev);
 static int epic_start_xmit(struct sk_buff *skb, struct net_device *dev);
 static int epic_rx(struct net_device *dev, int budget);
-static int epic_poll(struct net_device *dev, int *budget);
+static int epic_poll(struct napi_struct *napi, int budget);
 static irqreturn_t epic_interrupt(int irq, void *dev_instance);
 static int netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 static const struct ethtool_ops netdev_ethtool_ops;
@@ -318,13 +317,14 @@ static int __devinit epic_init_one (struct pci_dev *pdev,
 	int i, ret, option = 0, duplex = 0;
 	void *ring_space;
 	dma_addr_t ring_dma;
+	DECLARE_MAC_BUF(mac);
 
 /* when built into the kernel, we only print version if device is found */
 #ifndef MODULE
 	static int printed_version;
 	if (!printed_version++)
-		printk (KERN_INFO "%s" KERN_INFO "%s" KERN_INFO "%s",
-			version, version2, version3);
+		printk (KERN_INFO "%s" KERN_INFO "%s",
+			version, version2);
 #endif
 
 	card_idx++;
@@ -353,7 +353,6 @@ static int __devinit epic_init_one (struct pci_dev *pdev,
 		dev_err(&pdev->dev, "no memory for eth device\n");
 		goto err_out_free_res;
 	}
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 #ifdef USE_IO_OPS
@@ -489,18 +488,15 @@ static int __devinit epic_init_one (struct pci_dev *pdev,
 	dev->ethtool_ops = &netdev_ethtool_ops;
 	dev->watchdog_timeo = TX_TIMEOUT;
 	dev->tx_timeout = &epic_tx_timeout;
-	dev->poll = epic_poll;
-	dev->weight = 64;
+	netif_napi_add(dev, &ep->napi, epic_poll, 64);
 
 	ret = register_netdev(dev);
 	if (ret < 0)
 		goto err_out_unmap_rx;
 
-	printk(KERN_INFO "%s: %s at %#lx, IRQ %d, ",
-		   dev->name, pci_id_tbl[chip_idx].name, ioaddr, dev->irq);
-	for (i = 0; i < 5; i++)
-		printk("%2.2x:", dev->dev_addr[i]);
-	printk("%2.2x.\n", dev->dev_addr[i]);
+	printk(KERN_INFO "%s: %s at %#lx, IRQ %d, %s\n",
+	       dev->name, pci_id_tbl[chip_idx].name, ioaddr, dev->irq,
+	       print_mac(mac, dev->dev_addr));
 
 out:
 	return ret;
@@ -662,8 +658,11 @@ static int epic_open(struct net_device *dev)
 	/* Soft reset the chip. */
 	outl(0x4001, ioaddr + GENCTL);
 
-	if ((retval = request_irq(dev->irq, &epic_interrupt, IRQF_SHARED, dev->name, dev)))
+	napi_enable(&ep->napi);
+	if ((retval = request_irq(dev->irq, &epic_interrupt, IRQF_SHARED, dev->name, dev))) {
+		napi_disable(&ep->napi);
 		return retval;
+	}
 
 	epic_init_ring(dev);
 
@@ -934,7 +933,6 @@ static void epic_init_ring(struct net_device *dev)
 		ep->rx_skbuff[i] = skb;
 		if (skb == NULL)
 			break;
-		skb->dev = dev;			/* Mark as being used by this device. */
 		skb_reserve(skb, 2);	/* 16 byte align the IP header. */
 		ep->rx_ring[i].bufaddr = pci_map_single(ep->pci_dev,
 			skb->data, ep->rx_buf_sz, PCI_DMA_FROMDEVICE);
@@ -1106,9 +1104,9 @@ static irqreturn_t epic_interrupt(int irq, void *dev_instance)
 
 	if ((status & EpicNapiEvent) && !ep->reschedule_in_poll) {
 		spin_lock(&ep->napi_lock);
-		if (netif_rx_schedule_prep(dev)) {
+		if (netif_rx_schedule_prep(dev, &ep->napi)) {
 			epic_napi_irq_off(dev, ep);
-			__netif_rx_schedule(dev);
+			__netif_rx_schedule(dev, &ep->napi);
 		} else
 			ep->reschedule_in_poll++;
 		spin_unlock(&ep->napi_lock);
@@ -1199,13 +1197,12 @@ static int epic_rx(struct net_device *dev, int budget)
 			   to a minimally-sized skbuff. */
 			if (pkt_len < rx_copybreak
 				&& (skb = dev_alloc_skb(pkt_len + 2)) != NULL) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* 16 byte align the IP header */
 				pci_dma_sync_single_for_cpu(ep->pci_dev,
 							    ep->rx_ring[entry].bufaddr,
 							    ep->rx_buf_sz,
 							    PCI_DMA_FROMDEVICE);
-				eth_copy_and_sum(skb, ep->rx_skbuff[entry]->data, pkt_len, 0);
+				skb_copy_to_linear_data(skb, ep->rx_skbuff[entry]->data, pkt_len);
 				skb_put(skb, pkt_len);
 				pci_dma_sync_single_for_device(ep->pci_dev,
 							       ep->rx_ring[entry].bufaddr,
@@ -1236,7 +1233,6 @@ static int epic_rx(struct net_device *dev, int budget)
 			skb = ep->rx_skbuff[entry] = dev_alloc_skb(ep->rx_buf_sz);
 			if (skb == NULL)
 				break;
-			skb->dev = dev;			/* Mark as being used by this device. */
 			skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
 			ep->rx_ring[entry].bufaddr = pci_map_single(ep->pci_dev,
 				skb->data, ep->rx_buf_sz, PCI_DMA_FROMDEVICE);
@@ -1262,26 +1258,22 @@ static void epic_rx_err(struct net_device *dev, struct epic_private *ep)
 		outw(RxQueued, ioaddr + COMMAND);
 }
 
-static int epic_poll(struct net_device *dev, int *budget)
+static int epic_poll(struct napi_struct *napi, int budget)
 {
-	struct epic_private *ep = dev->priv;
-	int work_done = 0, orig_budget;
+	struct epic_private *ep = container_of(napi, struct epic_private, napi);
+	struct net_device *dev = ep->mii.dev;
+	int work_done = 0;
 	long ioaddr = dev->base_addr;
-
-	orig_budget = (*budget > dev->quota) ? dev->quota : *budget;
 
 rx_action:
 
 	epic_tx(dev, ep);
 
-	work_done += epic_rx(dev, *budget);
+	work_done += epic_rx(dev, budget);
 
 	epic_rx_err(dev, ep);
 
-	*budget -= work_done;
-	dev->quota -= work_done;
-
-	if (netif_running(dev) && (work_done < orig_budget)) {
+	if (netif_running(dev) && (work_done < budget)) {
 		unsigned long flags;
 		int more;
 
@@ -1291,7 +1283,7 @@ rx_action:
 
 		more = ep->reschedule_in_poll;
 		if (!more) {
-			__netif_rx_complete(dev);
+			__netif_rx_complete(dev, napi);
 			outl(EpicNapiEvent, ioaddr + INTSTAT);
 			epic_napi_irq_on(dev, ep);
 		} else
@@ -1303,7 +1295,7 @@ rx_action:
 			goto rx_action;
 	}
 
-	return (work_done >= orig_budget);
+	return work_done;
 }
 
 static int epic_close(struct net_device *dev)
@@ -1314,6 +1306,7 @@ static int epic_close(struct net_device *dev)
 	int i;
 
 	netif_stop_queue(dev);
+	napi_disable(&ep->napi);
 
 	if (debug > 1)
 		printk(KERN_DEBUG "%s: Shutting down ethercard, status was %2.2x.\n",
@@ -1500,8 +1493,6 @@ static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_link		= netdev_get_link,
 	.get_msglevel		= netdev_get_msglevel,
 	.set_msglevel		= netdev_set_msglevel,
-	.get_sg			= ethtool_op_get_sg,
-	.get_tx_csum		= ethtool_op_get_tx_csum,
 	.begin			= ethtool_begin,
 	.complete		= ethtool_complete
 };
@@ -1599,8 +1590,8 @@ static int __init epic_init (void)
 {
 /* when a module, this is printed whether or not devices are found in probe */
 #ifdef MODULE
-	printk (KERN_INFO "%s" KERN_INFO "%s" KERN_INFO "%s",
-		version, version2, version3);
+	printk (KERN_INFO "%s" KERN_INFO "%s",
+		version, version2);
 #endif
 
 	return pci_register_driver(&epic_driver);

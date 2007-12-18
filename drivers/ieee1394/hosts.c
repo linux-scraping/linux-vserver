@@ -15,7 +15,6 @@
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/slab.h>
-#include <linux/pci.h>
 #include <linux/timer.h>
 #include <linux/jiffies.h>
 #include <linux/mutex.h>
@@ -94,14 +93,6 @@ static int alloc_hostnum_cb(struct hpsb_host *host, void *__data)
 	return 0;
 }
 
-/*
- * The pending_packet_queue is special in that it's processed
- * from hardirq context too (such as hpsb_bus_reset()). Hence
- * split the lock class from the usual networking skb-head
- * lock class by using a separate key for it:
- */
-static struct lock_class_key pending_packet_queue_key;
-
 static DEFINE_MUTEX(host_num_alloc);
 
 /**
@@ -137,9 +128,7 @@ struct hpsb_host *hpsb_alloc_host(struct hpsb_host_driver *drv, size_t extra,
 	h->hostdata = h + 1;
 	h->driver = drv;
 
-	skb_queue_head_init(&h->pending_packet_queue);
-	lockdep_set_class(&h->pending_packet_queue.lock,
-			   &pending_packet_queue_key);
+	INIT_LIST_HEAD(&h->pending_packets);
 	INIT_LIST_HEAD(&h->addr_space);
 
 	for (i = 2; i < 16; i++)
@@ -165,15 +154,16 @@ struct hpsb_host *hpsb_alloc_host(struct hpsb_host_driver *drv, size_t extra,
 
 	memcpy(&h->device, &nodemgr_dev_template_host, sizeof(h->device));
 	h->device.parent = dev;
+	set_dev_node(&h->device, dev_to_node(dev));
 	snprintf(h->device.bus_id, BUS_ID_SIZE, "fw-host%d", h->id);
 
-	h->class_dev.dev = &h->device;
-	h->class_dev.class = &hpsb_host_class;
-	snprintf(h->class_dev.class_id, BUS_ID_SIZE, "fw-host%d", h->id);
+	h->host_dev.parent = &h->device;
+	h->host_dev.class = &hpsb_host_class;
+	snprintf(h->host_dev.bus_id, BUS_ID_SIZE, "fw-host%d", h->id);
 
 	if (device_register(&h->device))
 		goto fail;
-	if (class_device_register(&h->class_dev)) {
+	if (device_register(&h->host_dev)) {
 		device_unregister(&h->device);
 		goto fail;
 	}
@@ -190,7 +180,7 @@ int hpsb_add_host(struct hpsb_host *host)
 {
 	if (hpsb_default_host_entry(host))
 		return -ENOMEM;
-	hpsb_add_extra_config_roms(host);
+
 	highlevel_add_host(host);
 	return 0;
 }
@@ -212,12 +202,19 @@ void hpsb_remove_host(struct hpsb_host *host)
 
 	host->driver = &dummy_driver;
 	highlevel_remove_host(host);
-	hpsb_remove_extra_config_roms(host);
 
-	class_device_unregister(&host->class_dev);
+	device_unregister(&host->host_dev);
 	device_unregister(&host->device);
 }
 
+/**
+ * hpsb_update_config_rom_image - updates configuration ROM image of a host
+ *
+ * Updates the configuration ROM image of a host.  rom_version must be the
+ * current version, otherwise it will fail with return value -1. If this
+ * host does not support config-rom-update, it will return -%EINVAL.
+ * Return value 0 indicates success.
+ */
 int hpsb_update_config_rom_image(struct hpsb_host *host)
 {
 	unsigned long reset_delay;

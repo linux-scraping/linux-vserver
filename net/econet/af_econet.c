@@ -162,7 +162,7 @@ static int econet_recvmsg(struct kiocb *iocb, struct socket *sock,
 	err = memcpy_toiovec(msg->msg_iov, skb->data, copied);
 	if (err)
 		goto out_free;
-	skb_get_timestamp(skb, &sk->sk_stamp);
+	sk->sk_stamp = skb->tstamp;
 
 	if (msg->msg_name)
 		memcpy(msg->msg_name, skb->cb, msg->msg_namelen);
@@ -336,6 +336,7 @@ static int econet_sendmsg(struct kiocb *iocb, struct socket *sock,
 		/* Real hardware Econet.  We're not worthy etc. */
 #ifdef CONFIG_ECONET_NATIVE
 		unsigned short proto = 0;
+		int res;
 
 		dev_hold(dev);
 
@@ -345,7 +346,7 @@ static int econet_sendmsg(struct kiocb *iocb, struct socket *sock,
 			goto out_unlock;
 
 		skb_reserve(skb, LL_RESERVED_SPACE(dev));
-		skb->nh.raw = skb->data;
+		skb_reset_network_header(skb);
 
 		eb = (struct ec_cb *)&skb->cb;
 
@@ -354,22 +355,21 @@ static int econet_sendmsg(struct kiocb *iocb, struct socket *sock,
 		eb->sec = *saddr;
 		eb->sent = ec_tx_done;
 
-		if (dev->hard_header) {
-			int res;
+		err = -EINVAL;
+		res = dev_hard_header(skb, dev, ntohs(proto), &addr, NULL, len);
+		if (res < 0)
+			goto out_free;
+		if (res > 0) {
 			struct ec_framehdr *fh;
-			err = -EINVAL;
-			res = dev->hard_header(skb, dev, ntohs(proto),
-					       &addr, NULL, len);
 			/* Poke in our control byte and
 			   port number.  Hack, hack.  */
 			fh = (struct ec_framehdr *)(skb->data);
 			fh->cb = cb;
 			fh->port = port;
 			if (sock->type != SOCK_DGRAM) {
-				skb->tail = skb->data;
+				skb_reset_tail_pointer(skb);
 				skb->len = 0;
-			} else if (res < 0)
-				goto out_free;
+			}
 		}
 
 		/* Copy the data. Returns -EFAULT on error */
@@ -608,11 +608,14 @@ static struct proto econet_proto = {
  *	Create an Econet socket
  */
 
-static int econet_create(struct socket *sock, int protocol)
+static int econet_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct sock *sk;
 	struct econet_sock *eo;
 	int err;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	/* Econet only provides datagram services. */
 	if (sock->type != SOCK_DGRAM)
@@ -621,7 +624,7 @@ static int econet_create(struct socket *sock, int protocol)
 	sock->state = SS_UNCONNECTED;
 
 	err = -ENOBUFS;
-	sk = sk_alloc(PF_ECONET, GFP_KERNEL, &econet_proto, 1);
+	sk = sk_alloc(net, PF_ECONET, GFP_KERNEL, &econet_proto);
 	if (sk == NULL)
 		goto out;
 
@@ -659,7 +662,7 @@ static int ec_dev_ioctl(struct socket *sock, unsigned int cmd, void __user *arg)
 	if (copy_from_user(&ifr, arg, sizeof(struct ifreq)))
 		return -EFAULT;
 
-	if ((dev = dev_get_by_name(ifr.ifr_name)) == NULL)
+	if ((dev = dev_get_by_name(&init_net, ifr.ifr_name)) == NULL)
 		return -ENODEV;
 
 	sec = (struct sockaddr_ec *)&ifr.ifr_addr;
@@ -726,6 +729,9 @@ static int econet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg
 	switch(cmd) {
 		case SIOCGSTAMP:
 			return sock_get_timestamp(sk, argp);
+
+		case SIOCGSTAMPNS:
+			return sock_get_timestampns(sk, argp);
 
 		case SIOCSIFADDR:
 		case SIOCGIFADDR:
@@ -845,7 +851,7 @@ static void aun_send_response(__u32 addr, unsigned long seq, int code, int cb)
 
 static void aun_incoming(struct sk_buff *skb, struct aunhdr *ah, size_t len)
 {
-	struct iphdr *ip = skb->nh.iph;
+	struct iphdr *ip = ip_hdr(skb);
 	unsigned char stn = ntohl(ip->saddr) & 0xff;
 	struct sock *sk;
 	struct sk_buff *newskb;
@@ -940,10 +946,10 @@ static void aun_data_available(struct sock *sk, int slen)
 		printk(KERN_DEBUG "AUN: recvfrom() error %d\n", -err);
 	}
 
-	data = skb->h.raw + sizeof(struct udphdr);
+	data = skb_transport_header(skb) + sizeof(struct udphdr);
 	ah = (struct aunhdr *)data;
 	len = skb->len - sizeof(struct udphdr);
-	ip = skb->nh.iph;
+	ip = ip_hdr(skb);
 
 	switch (ah->code)
 	{
@@ -1059,6 +1065,9 @@ static int econet_rcv(struct sk_buff *skb, struct net_device *dev, struct packet
 	struct sock *sk;
 	struct ec_device *edev = dev->ec_ptr;
 
+	if (dev->nd_net != &init_net)
+		goto drop;
+
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
@@ -1113,6 +1122,9 @@ static int econet_notifier(struct notifier_block *this, unsigned long msg, void 
 	struct net_device *dev = (struct net_device *)data;
 	struct ec_device *edev;
 
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	switch (msg) {
 	case NETDEV_UNREGISTER:
 		/* A device has gone down - kill any data we hold for it. */
@@ -1143,6 +1155,9 @@ static void __exit econet_proto_exit(void)
 		sock_release(udpsock);
 #endif
 	unregister_netdevice_notifier(&econet_netdev_notifier);
+#ifdef CONFIG_ECONET_NATIVE
+	dev_remove_pack(&econet_packet_type);
+#endif
 	sock_unregister(econet_family_ops.family);
 	proto_unregister(&econet_proto);
 }

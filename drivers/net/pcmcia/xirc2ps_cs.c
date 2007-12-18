@@ -580,7 +580,6 @@ xirc2ps_probe(struct pcmcia_device *link)
     link->irq.Instance = dev;
 
     /* Fill in card specific entries */
-    SET_MODULE_OWNER(dev);
     dev->hard_start_xmit = &do_start_xmit;
     dev->set_config = &do_config;
     dev->get_stats = &do_get_stats;
@@ -732,6 +731,7 @@ xirc2ps_config(struct pcmcia_device * link)
     u_char buf[64];
     cistpl_lan_node_id_t *node_id = (cistpl_lan_node_id_t*)parse.funce.data;
     cistpl_cftable_entry_t *cf = &parse.cftable_entry;
+    DECLARE_MAC_BUF(mac);
 
     local->dingo_ccr = NULL;
 
@@ -886,7 +886,7 @@ xirc2ps_config(struct pcmcia_device * link)
 	}
 	printk(KNOT_XIRC "no ports available\n");
     } else {
-	link->irq.Attributes |= IRQ_TYPE_EXCLUSIVE;
+	link->irq.Attributes |= IRQ_TYPE_DYNAMIC_SHARING;
 	link->io.NumPorts1 = 16;
 	for (ioaddr = 0x300; ioaddr < 0x400; ioaddr += 0x10) {
 	    link->io.BasePort1 = ioaddr;
@@ -1033,11 +1033,9 @@ xirc2ps_config(struct pcmcia_device * link)
     strcpy(local->node.dev_name, dev->name);
 
     /* give some infos about the hardware */
-    printk(KERN_INFO "%s: %s: port %#3lx, irq %d, hwaddr",
-	 dev->name, local->manf_str,(u_long)dev->base_addr, (int)dev->irq);
-    for (i = 0; i < 6; i++)
-	printk("%c%02X", i?':':' ', dev->dev_addr[i]);
-    printk("\n");
+    printk(KERN_INFO "%s: %s: port %#3lx, irq %d, hwaddr %s\n",
+	   dev->name, local->manf_str,(u_long)dev->base_addr, (int)dev->irq,
+	   print_mac(mac, dev->dev_addr));
 
     return 0;
 
@@ -1226,7 +1224,6 @@ xirc2ps_interrupt(int irq, void *dev_id)
 			    (pktlen+1)>>1);
 		}
 		skb->protocol = eth_type_trans(skb, dev);
-		skb->dev = dev;
 		netif_rx(skb);
 		dev->last_rx = jiffies;
 		lp->stats.rx_packets++;
@@ -1421,7 +1418,7 @@ set_addresses(struct net_device *dev)
     kio_addr_t ioaddr = dev->base_addr;
     local_info_t *lp = netdev_priv(dev);
     struct dev_mc_list *dmi = dev->mc_list;
-    char *addr;
+    unsigned char *addr;
     int i,j,k,n;
 
     SelectPage(k=0x50);
@@ -1430,6 +1427,9 @@ set_addresses(struct net_device *dev)
 	    if (++n > 9)
 		break;
 	    i = 0;
+	    if (n > 1 && n <= dev->mc_count && dmi) {
+	   	 dmi = dmi->next;
+	    }
 	}
 	if (j > 15) {
 	    j = 8;
@@ -1437,10 +1437,9 @@ set_addresses(struct net_device *dev)
 	    SelectPage(k);
 	}
 
-	if (n && n <= dev->mc_count && dmi) {
+	if (n && n <= dev->mc_count && dmi)
 	    addr = dmi->dmi_addr;
-	    dmi = dmi->next;
-	} else
+	else
 	    addr = dev->dev_addr;
 
 	if (lp->mohawk)
@@ -1466,10 +1465,10 @@ set_multicast_list(struct net_device *dev)
     if (dev->flags & IFF_PROMISC) { /* snoop */
 	PutByte(XIRCREG42_SWC1, 0x06); /* set MPE and PME */
     } else if (dev->mc_count > 9 || (dev->flags & IFF_ALLMULTI)) {
-	PutByte(XIRCREG42_SWC1, 0x06); /* set MPE */
+	PutByte(XIRCREG42_SWC1, 0x02); /* set MPE */
     } else if (dev->mc_count) {
 	/* the chip can filter 9 addresses perfectly */
-	PutByte(XIRCREG42_SWC1, 0x00);
+	PutByte(XIRCREG42_SWC1, 0x01);
 	SelectPage(0x40);
 	PutByte(XIRCREG40_CMD0, Offline);
 	set_addresses(dev);

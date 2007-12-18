@@ -31,13 +31,12 @@
 #include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/errno.h>
-#include <linux/smp_lock.h>
 #include <linux/usb.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
 
 #include <asm/io.h>
-#include <asm/scatterlist.h>
+#include <linux/scatterlist.h>
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
 
@@ -49,12 +48,13 @@ const char *usbcore_name = "usbcore";
 
 static int nousb;	/* Disable USB when built into kernel image */
 
-struct workqueue_struct *ksuspend_usb_wq;	/* For autosuspend */
+/* Workqueue for autosuspend and for remote wakeup of root hubs */
+struct workqueue_struct *ksuspend_usb_wq;
 
 #ifdef	CONFIG_USB_SUSPEND
 static int usb_autosuspend_delay = 2;		/* Default delay value,
 						 * in seconds */
-module_param_named(autosuspend, usb_autosuspend_delay, uint, 0644);
+module_param_named(autosuspend, usb_autosuspend_delay, int, 0644);
 MODULE_PARM_DESC(autosuspend, "default autosuspend delay");
 
 #else
@@ -184,10 +184,6 @@ static void usb_release_dev(struct device *dev)
 
 	udev = to_usb_device(dev);
 
-#ifdef	CONFIG_USB_SUSPEND
-	cancel_delayed_work(&udev->autosuspend);
-	flush_workqueue(ksuspend_usb_wq);
-#endif
 	usb_destroy_configuration(udev);
 	usb_put_hcd(bus_to_hcd(udev->bus));
 	kfree(udev->product);
@@ -196,11 +192,20 @@ static void usb_release_dev(struct device *dev)
 	kfree(udev);
 }
 
+struct device_type usb_device_type = {
+	.name =		"usb_device",
+	.release =	usb_release_dev,
+};
+
 #ifdef	CONFIG_PM
 
 static int ksuspend_usb_init(void)
 {
-	ksuspend_usb_wq = create_singlethread_workqueue("ksuspend_usbd");
+	/* This workqueue is supposed to be both freezable and
+	 * singlethreaded.  Its job doesn't justify running on more
+	 * than one CPU.
+	 */
+	ksuspend_usb_wq = create_freezeable_workqueue("ksuspend_usbd");
 	if (!ksuspend_usb_wq)
 		return -ENOMEM;
 	return 0;
@@ -211,33 +216,21 @@ static void ksuspend_usb_cleanup(void)
 	destroy_workqueue(ksuspend_usb_wq);
 }
 
-#ifdef	CONFIG_USB_SUSPEND
-
-/* usb_autosuspend_work - callback routine to autosuspend a USB device */
-static void usb_autosuspend_work(struct work_struct *work)
-{
-	struct usb_device *udev =
-		container_of(work, struct usb_device, autosuspend.work);
-
-	usb_pm_lock(udev);
-	udev->auto_pm = 1;
-	usb_suspend_both(udev, PMSG_SUSPEND);
-	usb_pm_unlock(udev);
-}
-
-#else
-
-static void usb_autosuspend_work(struct work_struct *work)
-{}
-
-#endif	/* CONFIG_USB_SUSPEND */
-
 #else
 
 #define ksuspend_usb_init()	0
 #define ksuspend_usb_cleanup()	do {} while (0)
 
 #endif	/* CONFIG_PM */
+
+
+/* Returns 1 if @usb_bus is WUSB, 0 otherwise */
+static unsigned usb_bus_is_wusb(struct usb_bus *bus)
+{
+	struct usb_hcd *hcd = container_of(bus, struct usb_hcd, self);
+	return hcd->wireless;
+}
+
 
 /**
  * usb_alloc_dev - usb device constructor (usbcore-internal)
@@ -255,6 +248,8 @@ struct usb_device *
 usb_alloc_dev(struct usb_device *parent, struct usb_bus *bus, unsigned port1)
 {
 	struct usb_device *dev;
+	struct usb_hcd *usb_hcd = container_of(bus, struct usb_hcd, self);
+	unsigned root_hub = 0;
 
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
@@ -267,18 +262,18 @@ usb_alloc_dev(struct usb_device *parent, struct usb_bus *bus, unsigned port1)
 
 	device_initialize(&dev->dev);
 	dev->dev.bus = &usb_bus_type;
+	dev->dev.type = &usb_device_type;
 	dev->dev.dma_mask = bus->controller->dma_mask;
-	dev->dev.release = usb_release_dev;
+	set_dev_node(&dev->dev, dev_to_node(bus->controller));
 	dev->state = USB_STATE_ATTACHED;
-
-	/* This magic assignment distinguishes devices from interfaces */
-	dev->dev.platform_data = &usb_generic_driver;
+	atomic_set(&dev->urbnum, 0);
 
 	INIT_LIST_HEAD(&dev->ep0.urb_list);
 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 	dev->ep0.desc.bDescriptorType = USB_DT_ENDPOINT;
 	/* ep0 maxpacket comes later, from device descriptor */
-	dev->ep_in[0] = dev->ep_out[0] = &dev->ep0;
+	usb_enable_endpoint(dev, &dev->ep0);
+	dev->can_submit = 1;
 
 	/* Save readable and stable topology id, distinguishing devices
 	 * by location for diagnostics, tools, driver model, etc.  The
@@ -293,6 +288,7 @@ usb_alloc_dev(struct usb_device *parent, struct usb_bus *bus, unsigned port1)
 
 		dev->dev.parent = bus->controller;
 		sprintf(&dev->dev.bus_id[0], "usb%d", bus->busnum);
+		root_hub = 1;
 	} else {
 		/* match any labeling on the hubs; it's one-based */
 		if (parent->devpath[0] == '0')
@@ -319,6 +315,12 @@ usb_alloc_dev(struct usb_device *parent, struct usb_bus *bus, unsigned port1)
 	INIT_DELAYED_WORK(&dev->autosuspend, usb_autosuspend_work);
 	dev->autosuspend_delay = usb_autosuspend_delay * HZ;
 #endif
+	if (root_hub)	/* Root hub always ok [and always wired] */
+		dev->authorized = 1;
+	else {
+		dev->authorized = usb_hcd->authorized_default;
+		dev->wusb = usb_bus_is_wusb(bus)? 1 : 0;
+	}
 	return dev;
 }
 
@@ -597,11 +599,12 @@ int __usb_get_extra_descriptor(char *buffer, unsigned size,
  * address (through the pointer provided).
  *
  * These buffers are used with URB_NO_xxx_DMA_MAP set in urb->transfer_flags
- * to avoid behaviors like using "DMA bounce buffers", or tying down I/O
- * mapping hardware for long idle periods.  The implementation varies between
+ * to avoid behaviors like using "DMA bounce buffers", or thrashing IOMMU
+ * hardware during URB completion/resubmit.  The implementation varies between
  * platforms, depending on details of how DMA will work to this device.
- * Using these buffers also helps prevent cacheline sharing problems on
- * architectures where CPU caches are not DMA-coherent.
+ * Using these buffers also eliminates cacheline sharing problems on
+ * architectures where CPU caches are not DMA-coherent.  On systems without
+ * bus-snooping caches, these buffers are uncached.
  *
  * When the buffer is no longer used, free it with usb_buffer_free().
  */
@@ -626,7 +629,7 @@ void *usb_buffer_alloc(
  *
  * This reclaims an I/O buffer, letting it be reused.  The memory must have
  * been allocated using usb_buffer_alloc(), and the parameters must match
- * those provided in that allocation request. 
+ * those provided in that allocation request.
  */
 void usb_buffer_free(
 	struct usb_device *dev,
@@ -765,7 +768,7 @@ void usb_buffer_unmap(struct urb *urb)
 /**
  * usb_buffer_map_sg - create scatterlist DMA mapping(s) for an endpoint
  * @dev: device to which the scatterlist will be mapped
- * @pipe: endpoint defining the mapping direction
+ * @is_in: mapping transfer direction
  * @sg: the scatterlist to map
  * @nents: the number of entries in the scatterlist
  *
@@ -788,14 +791,13 @@ void usb_buffer_unmap(struct urb *urb)
  *
  * Reverse the effect of this call with usb_buffer_unmap_sg().
  */
-int usb_buffer_map_sg(const struct usb_device *dev, unsigned pipe,
+int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
 		      struct scatterlist *sg, int nents)
 {
 	struct usb_bus		*bus;
 	struct device		*controller;
 
 	if (!dev
-			|| usb_pipecontrol(pipe)
 			|| !(bus = dev->bus)
 			|| !(controller = bus->controller)
 			|| !controller->dma_mask)
@@ -803,7 +805,7 @@ int usb_buffer_map_sg(const struct usb_device *dev, unsigned pipe,
 
 	// FIXME generic api broken like pci, can't report errors
 	return dma_map_sg(controller, sg, nents,
-			usb_pipein(pipe) ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 }
 
 /* XXX DISABLED, no users currently.  If you wish to re-enable this
@@ -816,14 +818,14 @@ int usb_buffer_map_sg(const struct usb_device *dev, unsigned pipe,
 /**
  * usb_buffer_dmasync_sg - synchronize DMA and CPU view of scatterlist buffer(s)
  * @dev: device to which the scatterlist will be mapped
- * @pipe: endpoint defining the mapping direction
+ * @is_in: mapping transfer direction
  * @sg: the scatterlist to synchronize
  * @n_hw_ents: the positive return value from usb_buffer_map_sg
  *
  * Use this when you are re-using a scatterlist's data buffers for
  * another USB request.
  */
-void usb_buffer_dmasync_sg(const struct usb_device *dev, unsigned pipe,
+void usb_buffer_dmasync_sg(const struct usb_device *dev, int is_in,
 			   struct scatterlist *sg, int n_hw_ents)
 {
 	struct usb_bus		*bus;
@@ -836,20 +838,20 @@ void usb_buffer_dmasync_sg(const struct usb_device *dev, unsigned pipe,
 		return;
 
 	dma_sync_sg(controller, sg, n_hw_ents,
-			usb_pipein(pipe) ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 }
 #endif
 
 /**
  * usb_buffer_unmap_sg - free DMA mapping(s) for a scatterlist
  * @dev: device to which the scatterlist will be mapped
- * @pipe: endpoint defining the mapping direction
+ * @is_in: mapping transfer direction
  * @sg: the scatterlist to unmap
  * @n_hw_ents: the positive return value from usb_buffer_map_sg
  *
  * Reverses the effect of usb_buffer_map_sg().
  */
-void usb_buffer_unmap_sg(const struct usb_device *dev, unsigned pipe,
+void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
 			 struct scatterlist *sg, int n_hw_ents)
 {
 	struct usb_bus		*bus;
@@ -862,7 +864,7 @@ void usb_buffer_unmap_sg(const struct usb_device *dev, unsigned pipe,
 		return;
 
 	dma_unmap_sg(controller, sg, n_hw_ents,
-			usb_pipein(pipe) ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+			is_in ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 }
 
 /* format to disable USB on kernel command line is: nousb */
@@ -902,9 +904,9 @@ static int __init usb_init(void)
 	retval = usb_register(&usbfs_driver);
 	if (retval)
 		goto driver_register_failed;
-	retval = usbdev_init();
+	retval = usb_devio_init();
 	if (retval)
-		goto usbdevice_init_failed;
+		goto usb_devio_init_failed;
 	retval = usbfs_init();
 	if (retval)
 		goto fs_init_failed;
@@ -919,8 +921,8 @@ static int __init usb_init(void)
 hub_init_failed:
 	usbfs_cleanup();
 fs_init_failed:
-	usbdev_cleanup();
-usbdevice_init_failed:
+	usb_devio_cleanup();
+usb_devio_init_failed:
 	usb_deregister(&usbfs_driver);
 driver_register_failed:
 	usb_major_cleanup();
@@ -947,7 +949,7 @@ static void __exit usb_exit(void)
 	usb_major_cleanup();
 	usbfs_cleanup();
 	usb_deregister(&usbfs_driver);
-	usbdev_cleanup();
+	usb_devio_cleanup();
 	usb_hub_cleanup();
 	usb_host_cleanup();
 	bus_unregister(&usb_bus_type);
@@ -980,7 +982,6 @@ EXPORT_SYMBOL(usb_altnum_to_altsetting);
 
 EXPORT_SYMBOL(__usb_get_extra_descriptor);
 
-EXPORT_SYMBOL(usb_find_device);
 EXPORT_SYMBOL(usb_get_current_frame_number);
 
 EXPORT_SYMBOL(usb_buffer_alloc);

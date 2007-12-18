@@ -635,6 +635,13 @@ static void __init early_cmdline_parse(void)
 /* ibm,dynamic-reconfiguration-memory property supported */
 #define OV5_DRCONF_MEMORY	0x20
 #define OV5_LARGE_PAGES		0x10	/* large pages supported */
+#define OV5_DONATE_DEDICATE_CPU 0x02	/* donate dedicated CPU support */
+/* PCIe/MSI support.  Without MSI full PCIe is not supported */
+#ifdef CONFIG_PCI_MSI
+#define OV5_MSI			0x01	/* PCIe/MSI support */
+#else
+#define OV5_MSI			0x00
+#endif /* CONFIG_PCI_MSI */
 
 /*
  * The architecture vector has an array of PVR mask/value pairs,
@@ -679,7 +686,8 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 5: PAPR/OF options */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY,
+	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY |
+	OV5_DONATE_DEDICATE_CPU | OV5_MSI,
 };
 
 /* Old method - ELF header with PT_NOTE sections */
@@ -967,7 +975,7 @@ static unsigned long __init prom_next_cell(int s, cell_t **cellp)
  * If problems seem to show up, it would be a good start to track
  * them down.
  */
-static void reserve_mem(u64 base, u64 size)
+static void __init reserve_mem(u64 base, u64 size)
 {
 	u64 top = base + size;
 	unsigned long cnt = RELOC(mem_reserve_cnt);
@@ -1191,7 +1199,7 @@ static void __init prom_initialize_tce_table(void)
 		if ((type[0] == 0) || (strstr(type, RELOC("pci")) == NULL))
 			continue;
 
-		/* Keep the old logic in tack to avoid regression. */
+		/* Keep the old logic intact to avoid regression. */
 		if (compatible[0] != 0) {
 			if ((strstr(compatible, RELOC("python")) == NULL) &&
 			    (strstr(compatible, RELOC("Speedwagon")) == NULL) &&
@@ -1236,7 +1244,7 @@ static void __init prom_initialize_tce_table(void)
 			local_alloc_bottom = base;
 
 		/* It seems OF doesn't null-terminate the path :-( */
-		memset(path, 0, sizeof(path));
+		memset(path, 0, PROM_SCRATCH_SIZE);
 		/* Call OF to setup the TCE hardware */
 		if (call_prom("package-to-path", 3, 1, node,
 			      path, PROM_SCRATCH_SIZE-1) == PROM_ERROR) {
@@ -2035,39 +2043,55 @@ static void __init fixup_device_tree_maple(void)
 #endif
 
 #ifdef CONFIG_PPC_CHRP
-/* Pegasos and BriQ lacks the "ranges" property in the isa node */
+/*
+ * Pegasos and BriQ lacks the "ranges" property in the isa node
+ * Pegasos needs decimal IRQ 14/15, not hexadecimal
+ * Pegasos has the IDE configured in legacy mode, but advertised as native
+ */
 static void __init fixup_device_tree_chrp(void)
 {
-	phandle isa;
-	u32 isa_ranges[6];
+	phandle ph;
+	u32 prop[6];
 	u32 rloc = 0x01006000; /* IO space; PCI device = 12 */
 	char *name;
 	int rc;
 
 	name = "/pci@80000000/isa@c";
-	isa = call_prom("finddevice", 1, 1, ADDR(name));
-	if (!PHANDLE_VALID(isa)) {
+	ph = call_prom("finddevice", 1, 1, ADDR(name));
+	if (!PHANDLE_VALID(ph)) {
 		name = "/pci@ff500000/isa@6";
-		isa = call_prom("finddevice", 1, 1, ADDR(name));
+		ph = call_prom("finddevice", 1, 1, ADDR(name));
 		rloc = 0x01003000; /* IO space; PCI device = 6 */
 	}
-	if (!PHANDLE_VALID(isa))
-		return;
+	if (PHANDLE_VALID(ph)) {
+		rc = prom_getproplen(ph, "ranges");
+		if (rc == 0 || rc == PROM_ERROR) {
+			prom_printf("Fixing up missing ISA range on Pegasos...\n");
 
-	rc = prom_getproplen(isa, "ranges");
-	if (rc != 0 && rc != PROM_ERROR)
-		return;
+			prop[0] = 0x1;
+			prop[1] = 0x0;
+			prop[2] = rloc;
+			prop[3] = 0x0;
+			prop[4] = 0x0;
+			prop[5] = 0x00010000;
+			prom_setprop(ph, name, "ranges", prop, sizeof(prop));
+		}
+	}
 
-	prom_printf("Fixing up missing ISA range on Pegasos...\n");
-
-	isa_ranges[0] = 0x1;
-	isa_ranges[1] = 0x0;
-	isa_ranges[2] = rloc;
-	isa_ranges[3] = 0x0;
-	isa_ranges[4] = 0x0;
-	isa_ranges[5] = 0x00010000;
-	prom_setprop(isa, name, "ranges",
-			isa_ranges, sizeof(isa_ranges));
+	name = "/pci@80000000/ide@C,1";
+	ph = call_prom("finddevice", 1, 1, ADDR(name));
+	if (PHANDLE_VALID(ph)) {
+		prom_printf("Fixing up IDE interrupt on Pegasos...\n");
+		prop[0] = 14;
+		prop[1] = 0x0;
+		prom_setprop(ph, name, "interrupts", prop, 2*sizeof(u32));
+		prom_printf("Fixing up IDE class-code on Pegasos...\n");
+		rc = prom_getprop(ph, "class-code", prop, sizeof(u32));
+		if (rc == sizeof(u32)) {
+			prop[0] &= ~0x5;
+			prom_setprop(ph, name, "class-code", prop, sizeof(u32));
+		}
+	}
 }
 #else
 #define fixup_device_tree_chrp()
@@ -2142,7 +2166,7 @@ static void __init fixup_device_tree_efika(void)
 	                             3,12,0, 3,13,0, 3,14,0, 3,15,0 };
 	struct subst_entry efika_subst_table[] = {
 		{ "/",			"device_type",	prop_cstr("efika") },
-		{ "/builtin",		"compatible",	prop_cstr("soc") },
+		{ "/builtin",		"device_type",	prop_cstr("soc") },
 		{ "/builtin/ata",	"compatible",	prop_cstr("mpc5200b-ata\0mpc5200-ata"), },
 		{ "/builtin/bestcomm",	"compatible",	prop_cstr("mpc5200b-bestcomm\0mpc5200-bestcomm") },
 		{ "/builtin/bestcomm",	"interrupts",	prop_bcomm_irq, sizeof(prop_bcomm_irq) },
@@ -2207,7 +2231,7 @@ static void __init fixup_device_tree(void)
 
 static void __init prom_find_boot_cpu(void)
 {
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 	u32 getprop_rval;
 	ihandle prom_cpu;
 	phandle cpu_pkg;
@@ -2227,7 +2251,7 @@ static void __init prom_find_boot_cpu(void)
 static void __init prom_check_initrd(unsigned long r3, unsigned long r4)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 
 	if (r3 && r4 && r4 != 0xdeadbeef) {
 		unsigned long val;
@@ -2260,7 +2284,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 			       unsigned long pp,
 			       unsigned long r6, unsigned long r7)
 {	
-       	struct prom_t *_prom;
+	struct prom_t *_prom;
 	unsigned long hdr;
 	unsigned long offset = reloc_offset();
 
@@ -2319,8 +2343,8 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	/*
 	 * Copy the CPU hold code
 	 */
-       	if (RELOC(of_platform) != PLATFORM_POWERMAC)
-       		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
+	if (RELOC(of_platform) != PLATFORM_POWERMAC)
+		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
 
 	/*
 	 * Do early parsing of command line

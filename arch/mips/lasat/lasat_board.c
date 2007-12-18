@@ -29,7 +29,7 @@
 /* New model description table */
 #include "lasat_models.h"
 
-#define EEPROM_CRC(data, len) (~0 ^ crc32(~0, data, len))
+#define EEPROM_CRC(data, len) (~crc32(~0, data, len))
 
 struct lasat_info lasat_board_info;
 
@@ -39,16 +39,17 @@ int EEPROMRead(unsigned int pos, unsigned char *data, int len)
 {
 	int i;
 
-	for (i=0; i<len; i++)
+	for (i = 0; i < len; i++)
 		*data++ = at93c_read(pos++);
 
 	return 0;
 }
+
 int EEPROMWrite(unsigned int pos, unsigned char *data, int len)
 {
 	int i;
 
-	for (i=0; i<len; i++)
+	for (i = 0; i < len; i++)
 		at93c_write(pos++, *data++);
 
 	return 0;
@@ -56,9 +57,9 @@ int EEPROMWrite(unsigned int pos, unsigned char *data, int len)
 
 static void init_flash_sizes(void)
 {
-	int i;
 	unsigned long *lb = lasat_board_info.li_flashpart_base;
 	unsigned long *ls = lasat_board_info.li_flashpart_size;
+	int i;
 
 	ls[LASAT_MTD_BOOTLOADER] = 0x40000;
 	ls[LASAT_MTD_SERVICE] = 0xC0000;
@@ -79,9 +80,9 @@ static void init_flash_sizes(void)
 		if (lasat_board_info.li_flash_size < 0x1000000) {
 			lb[LASAT_MTD_BOOTLOADER] = 0x10000000;
 			ls[LASAT_MTD_CONFIG] = 0x100000;
-			if (lasat_board_info.li_flash_size >= 0x400000) {
-				ls[LASAT_MTD_FS] = lasat_board_info.li_flash_size - 0x300000;
-			}
+			if (lasat_board_info.li_flash_size >= 0x400000)
+				ls[LASAT_MTD_FS] =
+				     lasat_board_info.li_flash_size - 0x300000;
 		}
 	}
 
@@ -94,7 +95,7 @@ int lasat_init_board_info(void)
 	int c;
 	unsigned long crc;
 	unsigned long cfg0, cfg1;
-	const product_info_t   *ppi;
+	const struct product_info   *ppi;
 	int i_n_base_models = N_BASE_MODELS;
 	const char * const * i_txt_base_models = txt_base_models;
 	int i_n_prids = N_PRIDS;
@@ -124,7 +125,7 @@ int lasat_init_board_info(void)
 	cfg0 = lasat_board_info.li_eeprom_info.cfg[0];
 	cfg1 = lasat_board_info.li_eeprom_info.cfg[1];
 
-	if ( LASAT_W0_DSCTYPE(cfg0) != 1) {
+	if (LASAT_W0_DSCTYPE(cfg0) != 1) {
 		printk(KERN_WARNING "WARNING...\nWARNING...\n"
 		       "Invalid configuration read from EEPROM, attempting to "
 		       "soldier on...");
@@ -240,7 +241,8 @@ int lasat_init_board_info(void)
 	/* Base model stuff */
 	if (lasat_board_info.li_bmid > i_n_base_models)
 		lasat_board_info.li_bmid = i_n_base_models;
-	strcpy(lasat_board_info.li_bmstr, i_txt_base_models[lasat_board_info.li_bmid]);
+	strcpy(lasat_board_info.li_bmstr,
+	       i_txt_base_models[lasat_board_info.li_bmid]);
 
 	/* Product ID dependent values */
 	c = lasat_board_info.li_prid;
@@ -253,7 +255,7 @@ int lasat_init_board_info(void)
 		if (ppi->pi_type)
 			strcpy(lasat_board_info.li_typestr, ppi->pi_type);
 		else
-			sprintf(lasat_board_info.li_typestr, "%d",10*c);
+			sprintf(lasat_board_info.li_typestr, "%d", 10 * c);
 	}
 
 #if defined(CONFIG_INET) && defined(CONFIG_SYSCTL)
@@ -276,4 +278,3 @@ void lasat_write_eeprom_info(void)
 	EEPROMWrite(0, (unsigned char *)&lasat_board_info.li_eeprom_info,
 		    sizeof(struct lasat_eeprom_struct));
 }
-

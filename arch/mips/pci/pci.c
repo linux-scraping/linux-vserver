@@ -75,8 +75,15 @@ pcibios_align_resource(void *data, struct resource *res,
 	res->start = start;
 }
 
-void __init register_pci_controller(struct pci_controller *hose)
+void __devinit register_pci_controller(struct pci_controller *hose)
 {
+	if (request_resource(&iomem_resource, hose->mem_resource) < 0)
+		goto out;
+	if (request_resource(&ioport_resource, hose->io_resource) < 0) {
+		release_resource(hose->mem_resource);
+		goto out;
+	}
+
 	*hose_tail = hose;
 	hose_tail = &hose->next;
 
@@ -87,6 +94,11 @@ void __init register_pci_controller(struct pci_controller *hose)
 		printk(KERN_WARNING
 		       "registering PCI controller with io_map_base unset\n");
 	}
+	return;
+
+out:
+	printk(KERN_WARNING
+	       "Skipping PCI bus scan due to resource conflict\n");
 }
 
 /* Most MIPS systems have straight-forward swizzling needs.  */
@@ -121,11 +133,6 @@ static int __init pcibios_init(void)
 	/* Scan all of the recorded PCI controllers.  */
 	for (next_busno = 0, hose = hose_head; hose; hose = hose->next) {
 
-		if (request_resource(&iomem_resource, hose->mem_resource) < 0)
-			goto out;
-		if (request_resource(&ioport_resource, hose->io_resource) < 0)
-			goto out_free_mem_resource;
-
 		if (!hose->iommu)
 			PCI_DMA_BUS_IS_PHYS = 1;
 
@@ -134,6 +141,7 @@ static int __init pcibios_init(void)
 
 		bus = pci_scan_bus(next_busno, hose->pci_ops, hose);
 		hose->bus = bus;
+		need_domain_info = need_domain_info || hose->index;
 		hose->need_domain_info = need_domain_info;
 		if (bus) {
 			next_busno = bus->subordinate + 1;
@@ -144,14 +152,6 @@ static int __init pcibios_init(void)
 				need_domain_info = 1;
 			}
 		}
-		continue;
-
-out_free_mem_resource:
-		release_resource(hose->mem_resource);
-
-out:
-		printk(KERN_WARNING
-		       "Skipping PCI bus scan due to resource conflict\n");
 	}
 
 	if (!pci_probe_only)
@@ -231,7 +231,7 @@ int pcibios_enable_device(struct pci_dev *dev, int mask)
 	return pcibios_plat_dev_init(dev);
 }
 
-static void __devinit pcibios_fixup_device_resources(struct pci_dev *dev,
+static void pcibios_fixup_device_resources(struct pci_dev *dev,
 	struct pci_bus *bus)
 {
 	/* Update device resources.  */
@@ -252,7 +252,7 @@ static void __devinit pcibios_fixup_device_resources(struct pci_dev *dev,
 	}
 }
 
-void __devinit pcibios_fixup_bus(struct pci_bus *bus)
+void pcibios_fixup_bus(struct pci_bus *bus)
 {
 	/* Propagate hose info into the subordinate devices.  */
 
@@ -270,7 +270,7 @@ void __devinit pcibios_fixup_bus(struct pci_bus *bus)
 	}
 
 	for (ln = bus->devices.next; ln != &bus->devices; ln = ln->next) {
-		struct pci_dev *dev = pci_dev_b(ln);
+		dev = pci_dev_b(ln);
 
 		if ((dev->class >> 8) != PCI_CLASS_BRIDGE_PCI)
 			pcibios_fixup_device_resources(dev, bus);
@@ -283,8 +283,7 @@ pcibios_update_irq(struct pci_dev *dev, int irq)
 	pci_write_config_byte(dev, PCI_INTERRUPT_LINE, irq);
 }
 
-void __devinit
-pcibios_resource_to_bus(struct pci_dev *dev, struct pci_bus_region *region,
+void pcibios_resource_to_bus(struct pci_dev *dev, struct pci_bus_region *region,
 			 struct resource *res)
 {
 	struct pci_controller *hose = (struct pci_controller *)dev->sysdata;

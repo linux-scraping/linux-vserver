@@ -16,7 +16,7 @@
 #include <asm/sn/pcidev.h>
 #include <asm/sn/sn_sal.h>
 
-#define SG_ENT_VIRT_ADDRESS(sg)	(page_address((sg)->page) + (sg)->offset)
+#define SG_ENT_VIRT_ADDRESS(sg)	(sg_virt((sg)))
 #define SG_ENT_PHYS_ADDRESS(SG)	virt_to_phys(SG_ENT_VIRT_ADDRESS(SG))
 
 /**
@@ -218,16 +218,17 @@ EXPORT_SYMBOL(sn_dma_unmap_single);
  *
  * Unmap a set of streaming mode DMA translations.
  */
-void sn_dma_unmap_sg(struct device *dev, struct scatterlist *sg,
+void sn_dma_unmap_sg(struct device *dev, struct scatterlist *sgl,
 		     int nhwentries, int direction)
 {
 	int i;
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct sn_pcibus_provider *provider = SN_PCIDEV_BUSPROVIDER(pdev);
+	struct scatterlist *sg;
 
 	BUG_ON(dev->bus != &pci_bus_type);
 
-	for (i = 0; i < nhwentries; i++, sg++) {
+	for_each_sg(sgl, sg, nhwentries, i) {
 		provider->dma_unmap(pdev, sg->dma_address, direction);
 		sg->dma_address = (dma_addr_t) NULL;
 		sg->dma_length = 0;
@@ -244,11 +245,11 @@ EXPORT_SYMBOL(sn_dma_unmap_sg);
  *
  * Maps each entry of @sg for DMA.
  */
-int sn_dma_map_sg(struct device *dev, struct scatterlist *sg, int nhwentries,
+int sn_dma_map_sg(struct device *dev, struct scatterlist *sgl, int nhwentries,
 		  int direction)
 {
 	unsigned long phys_addr;
-	struct scatterlist *saved_sg = sg;
+	struct scatterlist *saved_sg = sgl, *sg;
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct sn_pcibus_provider *provider = SN_PCIDEV_BUSPROVIDER(pdev);
 	int i;
@@ -258,7 +259,7 @@ int sn_dma_map_sg(struct device *dev, struct scatterlist *sg, int nhwentries,
 	/*
 	 * Setup a DMA address for each entry in the scatterlist.
 	 */
-	for (i = 0; i < nhwentries; i++, sg++) {
+	for_each_sg(sgl, sg, nhwentries, i) {
 		phys_addr = SG_ENT_PHYS_ADDRESS(sg);
 		sg->dma_address = provider->dma_map(pdev,
 						    phys_addr, sg->length,
@@ -333,7 +334,7 @@ int sn_pci_legacy_read(struct pci_bus *bus, u16 port, u32 *val, u8 size)
 	/*
 	 * First, try the SN_SAL_IOIF_PCI_SAFE SAL call which can work
 	 * around hw issues at the pci bus level.  SGI proms older than
-	 * 4.10 don't implment this.
+	 * 4.10 don't implement this.
 	 */
 
 	SAL_CALL(isrv, SN_SAL_IOIF_PCI_SAFE,
@@ -348,7 +349,7 @@ int sn_pci_legacy_read(struct pci_bus *bus, u16 port, u32 *val, u8 size)
 	/*
 	 * If the above failed, retry using the SAL_PROBE call which should
 	 * be present in all proms (but which cannot work round PCI chipset
-	 * bugs).  This code is retained for compatability with old
+	 * bugs).  This code is retained for compatibility with old
 	 * pre-4.10 proms, and should be removed at some point in the future.
 	 */
 
@@ -379,7 +380,7 @@ int sn_pci_legacy_write(struct pci_bus *bus, u16 port, u32 val, u8 size)
 	/*
 	 * First, try the SN_SAL_IOIF_PCI_SAFE SAL call which can work
 	 * around hw issues at the pci bus level.  SGI proms older than
-	 * 4.10 don't implment this.
+	 * 4.10 don't implement this.
 	 */
 
 	SAL_CALL(isrv, SN_SAL_IOIF_PCI_SAFE,
@@ -394,7 +395,7 @@ int sn_pci_legacy_write(struct pci_bus *bus, u16 port, u32 val, u8 size)
 	/*
 	 * If the above failed, retry using the SAL_PROBE call which should
 	 * be present in all proms (but which cannot work round PCI chipset
-	 * bugs).  This code is retained for compatability with old
+	 * bugs).  This code is retained for compatibility with old
 	 * pre-4.10 proms, and should be removed at some point in the future.
 	 */
 

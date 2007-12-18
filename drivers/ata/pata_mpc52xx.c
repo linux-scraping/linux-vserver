@@ -24,7 +24,7 @@
 
 
 #define DRV_NAME	"mpc52xx_ata"
-#define DRV_VERSION	"0.1.0"
+#define DRV_VERSION	"0.1.2"
 
 
 /* Private structures used by the driver */
@@ -280,14 +280,9 @@ static struct scsi_host_template mpc52xx_ata_sht = {
 	.dma_boundary		= ATA_DMA_BOUNDARY,
 	.slave_configure	= ata_scsi_slave_config,
 	.bios_param		= ata_std_bios_param,
-#ifdef CONFIG_PM
-	.suspend		= ata_scsi_device_suspend,
-	.resume			= ata_scsi_device_resume,
-#endif
 };
 
 static struct ata_port_operations mpc52xx_ata_port_ops = {
-	.port_disable		= ata_port_disable,
 	.set_piomode		= mpc52xx_ata_set_piomode,
 	.dev_select		= mpc52xx_ata_dev_select,
 	.tf_load		= ata_tf_load,
@@ -297,38 +292,36 @@ static struct ata_port_operations mpc52xx_ata_port_ops = {
 	.freeze			= ata_bmdma_freeze,
 	.thaw			= ata_bmdma_thaw,
 	.error_handler		= mpc52xx_ata_error_handler,
+	.cable_detect		= ata_cable_40wire,
 	.qc_prep		= ata_qc_prep,
 	.qc_issue		= ata_qc_issue_prot,
 	.data_xfer		= ata_data_xfer,
-	.irq_handler		= ata_interrupt,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 	.port_start		= ata_port_start,
 };
 
-static struct ata_probe_ent mpc52xx_ata_probe_ent = {
-	.port_ops	= &mpc52xx_ata_port_ops,
-	.sht		= &mpc52xx_ata_sht,
-	.n_ports	= 1,
-	.pio_mask	= 0x1f,		/* Up to PIO4 */
-	.mwdma_mask	= 0x00,		/* No MWDMA   */
-	.udma_mask	= 0x00,		/* No UDMA    */
-	.port_flags	= ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
-	.irq_flags	= 0,
-};
-
 static int __devinit
-mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv)
+mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv,
+		     unsigned long raw_ata_regs)
 {
-	struct ata_probe_ent *ae = &mpc52xx_ata_probe_ent;
-	struct ata_ioports *aio = &ae->port[0];
-	int rv;
+	struct ata_host *host;
+	struct ata_port *ap;
+	struct ata_ioports *aio;
 
-	INIT_LIST_HEAD(&ae->node);
-	ae->dev = dev;
-	ae->irq = priv->ata_irq;
+	host = ata_host_alloc(dev, 1);
+	if (!host)
+		return -ENOMEM;
 
+	ap = host->ports[0];
+	ap->flags		|= ATA_FLAG_SLAVE_POSS;
+	ap->pio_mask		= 0x1f;	/* Up to PIO4 */
+	ap->mwdma_mask		= 0x00;	/* No MWDMA   */
+	ap->udma_mask		= 0x00;	/* No UDMA    */
+	ap->ops			= &mpc52xx_ata_port_ops;
+	host->private_data	= priv;
+
+	aio = &ap->ioaddr;
 	aio->cmd_addr		= NULL;	/* Don't have a classic reg block */
 	aio->altstatus_addr	= &priv->ata_regs->tf_control;
 	aio->ctl_addr		= &priv->ata_regs->tf_control;
@@ -343,11 +336,11 @@ mpc52xx_ata_init_one(struct device *dev, struct mpc52xx_ata_priv *priv)
 	aio->status_addr	= &priv->ata_regs->tf_command;
 	aio->command_addr	= &priv->ata_regs->tf_command;
 
-	ae->private_data = priv;
+	ata_port_desc(ap, "ata_regs 0x%lx", raw_ata_regs);
 
-	rv = ata_device_add(ae);
-
-	return rv ? 0 : -EINVAL;
+	/* activate host */
+	return ata_host_activate(host, priv->ata_irq, ata_interrupt, 0,
+				 &mpc52xx_ata_sht);
 }
 
 static struct mpc52xx_ata_priv *
@@ -441,7 +434,7 @@ mpc52xx_ata_probe(struct of_device *op, const struct of_device_id *match)
 	}
 
 	/* Register ourselves to libata */
-	rv = mpc52xx_ata_init_one(&op->dev, priv);
+	rv = mpc52xx_ata_init_one(&op->dev, priv, res_mem.start);
 	if (rv) {
 		printk(KERN_ERR DRV_NAME ": "
 			"Error while registering to ATA layer\n");
@@ -474,13 +467,27 @@ mpc52xx_ata_remove(struct of_device *op)
 static int
 mpc52xx_ata_suspend(struct of_device *op, pm_message_t state)
 {
-	return 0;	/* FIXME : What to do here ? */
+	struct ata_host *host = dev_get_drvdata(&op->dev);
+
+	return ata_host_suspend(host, state);
 }
 
 static int
 mpc52xx_ata_resume(struct of_device *op)
 {
-	return 0;	/* FIXME : What to do here ? */
+	struct ata_host *host = dev_get_drvdata(&op->dev);
+	struct mpc52xx_ata_priv *priv = host->private_data;
+	int rv;
+
+	rv = mpc52xx_ata_hw_init(priv);
+	if (rv) {
+		printk(KERN_ERR DRV_NAME ": Error during HW init\n");
+		return rv;
+	}
+
+	ata_host_resume(host);
+
+	return 0;
 }
 
 #endif

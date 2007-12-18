@@ -257,9 +257,10 @@ mpc52xx_uart_shutdown(struct uart_port *port)
 {
 	struct mpc52xx_psc __iomem *psc = PSC(port);
 
-	/* Shut down the port, interrupt and all */
+	/* Shut down the port.  Leave TX active if on a console port */
 	out_8(&psc->command,MPC52xx_PSC_RST_RX);
-	out_8(&psc->command,MPC52xx_PSC_RST_TX);
+	if (!uart_console(port))
+		out_8(&psc->command,MPC52xx_PSC_RST_TX);
 
 	port->read_status_mask = 0;
 	out_be16(&psc->mpc52xx_psc_imr,port->read_status_mask);
@@ -755,8 +756,8 @@ mpc52xx_console_setup(struct console *co, char *options)
 	if (port->membase == NULL)
 		return -EINVAL;
 
-	pr_debug("mpc52xx-psc uart at %lx, mapped to %p, irq=%x, freq=%i\n",
-	         port->mapbase, port->membase, port->irq, port->uartclk);
+	pr_debug("mpc52xx-psc uart at %p, mapped to %p, irq=%x, freq=%i\n",
+	         (void*)port->mapbase, port->membase, port->irq, port->uartclk);
 
 	/* Setup the port parameters accoding to options */
 	if (options)
@@ -973,8 +974,8 @@ mpc52xx_uart_of_probe(struct of_device *op, const struct of_device_id *match)
 	port->mapbase = res.start;
 	port->irq = irq_of_parse_and_map(op->node, 0);
 
-	dev_dbg(&op->dev, "mpc52xx-psc uart at %lx, irq=%x, freq=%i\n",
-	        port->mapbase, port->irq, port->uartclk);
+	dev_dbg(&op->dev, "mpc52xx-psc uart at %p, irq=%x, freq=%i\n",
+	        (void*)port->mapbase, port->irq, port->uartclk);
 
 	if ((port->irq==NO_IRQ) || !port->mapbase) {
 		printk(KERN_ERR "Could not allocate resources for PSC\n");
@@ -1050,7 +1051,7 @@ mpc52xx_uart_of_assign(struct device_node *np, int idx)
 	/* If the slot is already occupied, then swap slots */
 	if (mpc52xx_uart_nodes[idx] && (free_idx != -1))
 		mpc52xx_uart_nodes[free_idx] = mpc52xx_uart_nodes[idx];
-	mpc52xx_uart_nodes[i] = np;
+	mpc52xx_uart_nodes[idx] = np;
 }
 
 static void
@@ -1069,7 +1070,7 @@ mpc52xx_uart_of_enumerate(void)
 			continue;
 
 		/* Is a particular device number requested? */
-		devno = get_property(np, "port-number", NULL);
+		devno = of_get_property(np, "port-number", NULL);
 		mpc52xx_uart_of_assign(of_node_get(np), devno ? *devno : -1);
 	}
 

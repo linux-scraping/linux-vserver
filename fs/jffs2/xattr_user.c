@@ -1,13 +1,14 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2006  NEC Corporation
+ * Copyright © 2006  NEC Corporation
  *
  * Created by KaiGai Kohei <kaigai@ak.jp.nec.com>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
  *
  */
+
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/jffs2.h>
@@ -16,7 +17,7 @@
 #include "nodelist.h"
 
 static int jffs2_user_getxattr(struct inode *inode, const char *name,
-                               void *buffer, size_t size)
+			       void *buffer, size_t size)
 {
 	if (!strcmp(name, ""))
 		return -EINVAL;
@@ -24,7 +25,7 @@ static int jffs2_user_getxattr(struct inode *inode, const char *name,
 }
 
 static int jffs2_user_setxattr(struct inode *inode, const char *name, const void *buffer,
-                               size_t size, int flags)
+			       size_t size, int flags)
 {
 	if (!strcmp(name, ""))
 		return -EINVAL;

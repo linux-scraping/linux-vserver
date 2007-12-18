@@ -3,7 +3,7 @@
  *
  *   VT82C686A/B/C, VT8233A/C, VT8235
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *	                   Tjeerd.Mulder <Tjeerd.Mulder@fujitsu-siemens.com>
  *                    2002 Takashi Iwai <tiwai@suse.de>
  *
@@ -68,7 +68,7 @@
 #define POINTER_DEBUG
 #endif
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("VIA VT82xx audio");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{VIA,VT82C686A/B/C,pci},{VIA,VT8233A/C,8235}}");
@@ -1572,15 +1572,7 @@ static struct snd_kcontrol_new snd_via8233_capture_source __devinitdata = {
 	.put = snd_via8233_capture_source_put,
 };
 
-static int snd_via8233_dxs3_spdif_info(struct snd_kcontrol *kcontrol,
-				       struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_via8233_dxs3_spdif_info	snd_ctl_boolean_mono_info
 
 static int snd_via8233_dxs3_spdif_get(struct snd_kcontrol *kcontrol,
 				      struct snd_ctl_elem_value *ucontrol)
@@ -2117,7 +2109,7 @@ static int snd_via82xx_chip_init(struct via82xx *chip)
 			chip->ac97_secondary = 1;
 			goto __ac97_ok2;
 		}
-		schedule_timeout_interruptible(1);
+		schedule_timeout_uninterruptible(1);
 	} while (time_before(jiffies, end_time));
 	/* This is ok, the most of motherboards have only one codec */
 
@@ -2371,6 +2363,7 @@ static struct snd_pci_quirk dxs_whitelist[] __devinitdata = {
 	SND_PCI_QUIRK(0x1071, 0, "Diverse Notebook", VIA_DXS_NO_VRA),
 	SND_PCI_QUIRK(0x10cf, 0x118e, "FSC Laptop", VIA_DXS_ENABLE),
 	SND_PCI_QUIRK(0x1106, 0, "ASRock", VIA_DXS_SRC),
+	SND_PCI_QUIRK(0x1297, 0xa231, "Shuttle AK31v2", VIA_DXS_SRC),
 	SND_PCI_QUIRK(0x1297, 0xa232, "Shuttle", VIA_DXS_ENABLE),
 	SND_PCI_QUIRK(0x1297, 0xc160, "Shuttle Sk41G", VIA_DXS_ENABLE),
 	SND_PCI_QUIRK(0x1458, 0xa002, "Gigabyte GA-7VAXP", VIA_DXS_ENABLE),
@@ -2431,7 +2424,6 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 {
 	struct snd_card *card;
 	struct via82xx *chip;
-	unsigned char revision;
 	int chip_type = 0, card_type;
 	unsigned int i;
 	int err;
@@ -2441,18 +2433,17 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		return -ENOMEM;
 
 	card_type = pci_id->driver_data;
-	pci_read_config_byte(pci, PCI_REVISION_ID, &revision);
 	switch (card_type) {
 	case TYPE_CARD_VIA686:
 		strcpy(card->driver, "VIA686A");
-		sprintf(card->shortname, "VIA 82C686A/B rev%x", revision);
+		sprintf(card->shortname, "VIA 82C686A/B rev%x", pci->revision);
 		chip_type = TYPE_VIA686;
 		break;
 	case TYPE_CARD_VIA8233:
 		chip_type = TYPE_VIA8233;
-		sprintf(card->shortname, "VIA 823x rev%x", revision);
+		sprintf(card->shortname, "VIA 823x rev%x", pci->revision);
 		for (i = 0; i < ARRAY_SIZE(via823x_cards); i++) {
-			if (revision == via823x_cards[i].revision) {
+			if (pci->revision == via823x_cards[i].revision) {
 				chip_type = via823x_cards[i].type;
 				strcpy(card->shortname, via823x_cards[i].name);
 				break;
@@ -2460,7 +2451,7 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		}
 		if (chip_type != TYPE_VIA8233A) {
 			if (dxs_support == VIA_DXS_AUTO)
-				dxs_support = check_dxs_list(pci, revision);
+				dxs_support = check_dxs_list(pci, pci->revision);
 			/* force to use VIA8233 or 8233A model according to
 			 * dxs_support module option
 			 */
@@ -2471,7 +2462,7 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		}
 		if (chip_type == TYPE_VIA8233A)
 			strcpy(card->driver, "VIA8233A");
-		else if (revision >= VIA_REV_8237)
+		else if (pci->revision >= VIA_REV_8237)
 			strcpy(card->driver, "VIA8237"); /* no slog assignment */
 		else
 			strcpy(card->driver, "VIA8233");
@@ -2482,7 +2473,7 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		goto __error;
 	}
 		
-	if ((err = snd_via82xx_create(card, pci, chip_type, revision,
+	if ((err = snd_via82xx_create(card, pci, chip_type, pci->revision,
 				      ac97_clock, &chip)) < 0)
 		goto __error;
 	card->private_data = chip;

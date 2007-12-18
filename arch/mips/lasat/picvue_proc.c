@@ -21,47 +21,49 @@ static int pvc_linedata[PVC_NLINES];
 static struct proc_dir_entry *pvc_display_dir;
 static char *pvc_linename[PVC_NLINES] = {"line1", "line2"};
 #define DISPLAY_DIR_NAME "display"
-static int scroll_dir = 0, scroll_interval = 0;
+static int scroll_dir, scroll_interval;
 
 static struct timer_list timer;
 
-static void pvc_display(unsigned long data) {
+static void pvc_display(unsigned long data)
+{
 	int i;
 
 	pvc_clear();
-	for (i=0; i<PVC_NLINES; i++)
+	for (i = 0; i < PVC_NLINES; i++)
 		pvc_write_string(pvc_lines[i], 0, i);
 }
 
 static DECLARE_TASKLET(pvc_display_tasklet, &pvc_display, 0);
 
 static int pvc_proc_read_line(char *page, char **start,
-                             off_t off, int count,
-                             int *eof, void *data)
+			     off_t off, int count,
+			     int *eof, void *data)
 {
-        char *origpage = page;
+	char *origpage = page;
 	int lineno = *(int *)data;
 
 	if (lineno < 0 || lineno > PVC_NLINES) {
-		printk("proc_read_line: invalid lineno %d\n", lineno);
+		printk(KERN_WARNING "proc_read_line: invalid lineno %d\n", lineno);
 		return 0;
 	}
 
 	down(&pvc_sem);
-        page += sprintf(page, "%s\n", pvc_lines[lineno]);
+	page += sprintf(page, "%s\n", pvc_lines[lineno]);
 	up(&pvc_sem);
 
-        return page - origpage;
+	return page - origpage;
 }
 
 static int pvc_proc_write_line(struct file *file, const char *buffer,
-                           unsigned long count, void *data)
+			   unsigned long count, void *data)
 {
-        int origcount = count;
+	int origcount = count;
 	int lineno = *(int *)data;
 
 	if (lineno < 0 || lineno > PVC_NLINES) {
-		printk("proc_write_line: invalid lineno %d\n", lineno);
+		printk(KERN_WARNING "proc_write_line: invalid lineno %d\n",
+		       lineno);
 		return origcount;
 	}
 
@@ -78,13 +80,13 @@ static int pvc_proc_write_line(struct file *file, const char *buffer,
 
 	tasklet_schedule(&pvc_display_tasklet);
 
-        return origcount;
+	return origcount;
 }
 
 static int pvc_proc_write_scroll(struct file *file, const char *buffer,
-                           unsigned long count, void *data)
+			   unsigned long count, void *data)
 {
-        int origcount = count;
+	int origcount = count;
 	int cmd = simple_strtol(buffer, NULL, 10);
 
 	down(&pvc_sem);
@@ -106,20 +108,20 @@ static int pvc_proc_write_scroll(struct file *file, const char *buffer,
 	}
 	up(&pvc_sem);
 
-        return origcount;
+	return origcount;
 }
 
 static int pvc_proc_read_scroll(char *page, char **start,
-                             off_t off, int count,
-                             int *eof, void *data)
+			     off_t off, int count,
+			     int *eof, void *data)
 {
-        char *origpage = page;
+	char *origpage = page;
 
 	down(&pvc_sem);
-        page += sprintf(page, "%d\n", scroll_dir * scroll_interval);
+	page += sprintf(page, "%d\n", scroll_dir * scroll_interval);
 	up(&pvc_sem);
 
-        return page - origpage;
+	return page - origpage;
 }
 
 
@@ -137,7 +139,7 @@ void pvc_proc_timerfunc(unsigned long data)
 static void pvc_proc_cleanup(void)
 {
 	int i;
-	for (i=0; i<PVC_NLINES; i++)
+	for (i = 0; i < PVC_NLINES; i++)
 		remove_proc_entry(pvc_linename[i], pvc_display_dir);
 	remove_proc_entry("scroll", pvc_display_dir);
 	remove_proc_entry(DISPLAY_DIR_NAME, NULL);
@@ -154,14 +156,16 @@ static int __init pvc_proc_init(void)
 	if (pvc_display_dir == NULL)
 		goto error;
 
-	for (i=0; i<PVC_NLINES; i++) {
+	for (i = 0; i < PVC_NLINES; i++) {
 		strcpy(pvc_lines[i], "");
 		pvc_linedata[i] = i;
 	}
-	for (i=0; i<PVC_NLINES; i++) {
-		proc_entry = create_proc_entry(pvc_linename[i], 0644, pvc_display_dir);
+	for (i = 0; i < PVC_NLINES; i++) {
+		proc_entry = create_proc_entry(pvc_linename[i], 0644,
+					       pvc_display_dir);
 		if (proc_entry == NULL)
 			goto error;
+
 		proc_entry->read_proc = pvc_proc_read_line;
 		proc_entry->write_proc = pvc_proc_write_line;
 		proc_entry->data = &pvc_linedata[i];
@@ -169,6 +173,7 @@ static int __init pvc_proc_init(void)
 	proc_entry = create_proc_entry("scroll", 0644, pvc_display_dir);
 	if (proc_entry == NULL)
 		goto error;
+
 	proc_entry->write_proc = pvc_proc_write_scroll;
 	proc_entry->read_proc = pvc_proc_read_scroll;
 

@@ -22,20 +22,15 @@
 #include <asm/snapgear.h>
 #include <asm/irq.h>
 #include <asm/io.h>
-#include <asm/rtc.h>
 #include <asm/cpu/timer.h>
 
-extern void secureedge5410_rtc_init(void);
-extern void pcibios_init(void);
-
-/****************************************************************************/
 /*
  * EraseConfig handling functions
  */
 
 static irqreturn_t eraseconfig_interrupt(int irq, void *dev_id)
 {
-	volatile char dummy __attribute__((unused)) = * (volatile char *) 0xb8000000;
+	(void)ctrl_inb(0xb8000000);	/* dummy read */
 
 	printk("SnapGear: erase switch interrupt!\n");
 
@@ -68,37 +63,18 @@ module_init(eraseconfig_init);
  * IRL3 = crypto
  */
 
-static struct ipr_data snapgear_ipr_map[] = {
-	make_ipr_irq(IRL0_IRQ, IRL0_IPR_ADDR, IRL0_IPR_POS, IRL0_PRIORITY);
-	make_ipr_irq(IRL1_IRQ, IRL1_IPR_ADDR, IRL1_IPR_POS, IRL1_PRIORITY);
-	make_ipr_irq(IRL2_IRQ, IRL2_IPR_ADDR, IRL2_IPR_POS, IRL2_PRIORITY);
-	make_ipr_irq(IRL3_IRQ, IRL3_IPR_ADDR, IRL3_IPR_POS, IRL3_PRIORITY);
-};
-
 static void __init init_snapgear_IRQ(void)
 {
-	/* enable individual interrupt mode for externals */
-	ctrl_outw(ctrl_inw(INTC_ICR) | INTC_ICR_IRLM, INTC_ICR);
-
 	printk("Setup SnapGear IRQ/IPR ...\n");
-
-	make_ipr_irq(snapgear_ipr_map, ARRAY_SIZE(snapgear_ipr_map));
-}
-
-/*
- * Initialize the board
- */
-static void __init snapgear_setup(char **cmdline_p)
-{
-	board_time_init = secureedge5410_rtc_init;
+	/* enable individual interrupt mode for externals */
+	plat_irq_setup_pins(IRQ_MODE_IRQ);
 }
 
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_snapgear __initmv = {
+static struct sh_machine_vector mv_snapgear __initmv = {
 	.mv_name		= "SnapGear SecureEdge5410",
-	.mv_setup		= snapgear_setup,
 	.mv_nr_irqs		= 72,
 
 	.mv_inb			= snapgear_inb,
@@ -117,4 +93,3 @@ struct sh_machine_vector mv_snapgear __initmv = {
 
 	.mv_init_irq		= init_snapgear_IRQ,
 };
-ALIAS_MV(snapgear)

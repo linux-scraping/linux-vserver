@@ -157,8 +157,7 @@ static int msp_read(struct i2c_client *client, int dev, int addr)
 			break;
 		v4l_warn(client, "I/O error #%d (read 0x%02x/0x%02x)\n", err,
 		       dev, addr);
-		current->state = TASK_INTERRUPTIBLE;
-		schedule_timeout(msecs_to_jiffies(10));
+		schedule_timeout_interruptible(msecs_to_jiffies(10));
 	}
 	if (err == 3) {
 		v4l_warn(client, "giving up, resetting chip. Sound will go off, sorry folks :-|\n");
@@ -197,8 +196,7 @@ static int msp_write(struct i2c_client *client, int dev, int addr, int val)
 			break;
 		v4l_warn(client, "I/O error #%d (write 0x%02x/0x%02x)\n", err,
 		       dev, addr);
-		current->state = TASK_INTERRUPTIBLE;
-		schedule_timeout(msecs_to_jiffies(10));
+		schedule_timeout_interruptible(msecs_to_jiffies(10));
 	}
 	if (err == 3) {
 		v4l_warn(client, "giving up, resetting chip. Sound will go off, sorry folks :-|\n");
@@ -246,17 +244,17 @@ int msp_write_dsp(struct i2c_client *client, int addr, int val)
  * ----------------------------------------------------------------------- */
 
 static int scarts[3][9] = {
-       /* MASK   IN1     IN2     IN3     IN4     IN1_DA  IN2_DA  MONO    MUTE   */
+	/* MASK   IN1     IN2     IN3     IN4     IN1_DA  IN2_DA  MONO    MUTE   */
 	/* SCART DSP Input select */
-       { 0x0320, 0x0000, 0x0200, 0x0300, 0x0020, -1,     -1,     0x0100, 0x0320 },
+	{ 0x0320, 0x0000, 0x0200, 0x0300, 0x0020, -1,     -1,     0x0100, 0x0320 },
 	/* SCART1 Output select */
-       { 0x0c40, 0x0440, 0x0400, 0x0000, 0x0840, 0x0c00, 0x0040, 0x0800, 0x0c40 },
+	{ 0x0c40, 0x0440, 0x0400, 0x0000, 0x0840, 0x0c00, 0x0040, 0x0800, 0x0c40 },
 	/* SCART2 Output select */
-       { 0x3080, 0x1000, 0x1080, 0x2080, 0x3080, 0x0000, 0x0080, 0x2000, 0x3000 },
+	{ 0x3080, 0x1000, 0x1080, 0x2080, 0x3080, 0x0000, 0x0080, 0x2000, 0x3000 },
 };
 
 static char *scart_names[] = {
-       "in1", "in2", "in3", "in4", "in1 da", "in2 da", "mono", "mute"
+	"in1", "in2", "in3", "in4", "in1 da", "in2 da", "mono", "mute"
 };
 
 void msp_set_scart(struct i2c_client *client, int in, int out)
@@ -773,6 +771,9 @@ static int msp_command(struct i2c_client *client, unsigned int cmd, void *arg)
 		break;
 	}
 
+	case VIDIOC_G_CHIP_IDENT:
+		return v4l2_chip_ident_i2c_client(client, arg, state->ident, (state->rev1 << 16) | state->rev2);
+
 	default:
 		/* unknown */
 		return -EINVAL;
@@ -811,10 +812,10 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	int msp_product, msp_prod_hi, msp_prod_lo;
 	int msp_rom;
 
-	client = kmalloc(sizeof(*client), GFP_KERNEL);
-	if (client == NULL)
+	client = kzalloc(sizeof(*client), GFP_KERNEL);
+	if (!client)
 		return -ENOMEM;
-	memset(client, 0, sizeof(*client));
+
 	client->addr = address;
 	client->adapter = adapter;
 	client->driver = &i2c_driver;
@@ -826,14 +827,14 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 		return 0;
 	}
 
-	state = kmalloc(sizeof(*state), GFP_KERNEL);
-	if (state == NULL) {
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	if (!state) {
 		kfree(client);
 		return -ENOMEM;
 	}
+
 	i2c_set_clientdata(client, state);
 
-	memset(state, 0, sizeof(*state));
 	state->v4l2_std = V4L2_STD_NTSC;
 	state->audmode = V4L2_TUNER_MODE_STEREO;
 	state->volume = 58880;	/* 0db gain */
@@ -872,6 +873,8 @@ static int msp_attach(struct i2c_adapter *adapter, int address, int kind)
 	snprintf(client->name, sizeof(client->name), "MSP%d4%02d%c-%c%d",
 			msp_family, msp_product,
 			msp_revision, msp_hard, msp_rom);
+	/* Rev B=2, C=3, D=4, G=7 */
+	state->ident = msp_family * 10000 + 4000 + msp_product * 10 + msp_revision - '@';
 
 	/* Has NICAM support: all mspx41x and mspx45x products have NICAM */
 	state->has_nicam = msp_prod_hi == 1 || msp_prod_hi == 5;

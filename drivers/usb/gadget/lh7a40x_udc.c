@@ -75,10 +75,6 @@ static int lh7a40x_ep_enable(struct usb_ep *ep,
 static int lh7a40x_ep_disable(struct usb_ep *ep);
 static struct usb_request *lh7a40x_alloc_request(struct usb_ep *ep, gfp_t);
 static void lh7a40x_free_request(struct usb_ep *ep, struct usb_request *);
-static void *lh7a40x_alloc_buffer(struct usb_ep *ep, unsigned, dma_addr_t *,
-				  gfp_t);
-static void lh7a40x_free_buffer(struct usb_ep *ep, void *, dma_addr_t,
-				unsigned);
 static int lh7a40x_queue(struct usb_ep *ep, struct usb_request *, gfp_t);
 static int lh7a40x_dequeue(struct usb_ep *ep, struct usb_request *);
 static int lh7a40x_set_halt(struct usb_ep *ep, int);
@@ -103,9 +99,6 @@ static struct usb_ep_ops lh7a40x_ep_ops = {
 
 	.alloc_request = lh7a40x_alloc_request,
 	.free_request = lh7a40x_free_request,
-
-	.alloc_buffer = lh7a40x_alloc_buffer,
-	.free_buffer = lh7a40x_free_buffer,
 
 	.queue = lh7a40x_queue,
 	.dequeue = lh7a40x_dequeue,
@@ -1134,26 +1127,6 @@ static void lh7a40x_free_request(struct usb_ep *ep, struct usb_request *_req)
 	kfree(req);
 }
 
-static void *lh7a40x_alloc_buffer(struct usb_ep *ep, unsigned bytes,
-				  dma_addr_t * dma, gfp_t gfp_flags)
-{
-	char *retval;
-
-	DEBUG("%s (%p, %d, %d)\n", __FUNCTION__, ep, bytes, gfp_flags);
-
-	retval = kmalloc(bytes, gfp_flags & ~(__GFP_DMA | __GFP_HIGHMEM));
-	if (retval)
-		*dma = virt_to_bus(retval);
-	return retval;
-}
-
-static void lh7a40x_free_buffer(struct usb_ep *ep, void *buf, dma_addr_t dma,
-				unsigned bytes)
-{
-	DEBUG("%s, %p\n", __FUNCTION__, ep);
-	kfree(buf);
-}
-
 /** Queue one request
  *  Kickstart transfer if needed
  *  NOTE: Sets INDEX register
@@ -1299,7 +1272,7 @@ static int lh7a40x_set_halt(struct usb_ep *_ep, int value)
 			/*
 			 * Attempts to halt IN endpoints will fail (returning -EAGAIN)
 			 * if any transfer requests are still queued, or if the controller
-			 * FIFO still holds bytes that the host hasn’t collected.
+			 * FIFO still holds bytes that the host hasn't collected.
 			 */
 			spin_unlock_irqrestore(&ep->dev->lock, flags);
 			DEBUG

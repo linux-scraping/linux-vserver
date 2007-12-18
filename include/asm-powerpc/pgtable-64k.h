@@ -1,6 +1,5 @@
 #ifndef _ASM_POWERPC_PGTABLE_64K_H
 #define _ASM_POWERPC_PGTABLE_64K_H
-#ifdef __KERNEL__
 
 #include <asm-generic/pgtable-nopud.h>
 
@@ -10,9 +9,11 @@
 #define PUD_INDEX_SIZE	0
 #define PGD_INDEX_SIZE  4
 
+#ifndef __ASSEMBLY__
 #define PTE_TABLE_SIZE	(sizeof(real_pte_t) << PTE_INDEX_SIZE)
 #define PMD_TABLE_SIZE	(sizeof(pmd_t) << PMD_INDEX_SIZE)
 #define PGD_TABLE_SIZE	(sizeof(pgd_t) << PGD_INDEX_SIZE)
+#endif	/* __ASSEMBLY__ */
 
 #define PTRS_PER_PTE	(1 << PTE_INDEX_SIZE)
 #define PTRS_PER_PMD	(1 << PMD_INDEX_SIZE)
@@ -35,6 +36,12 @@
 #define _PAGE_HPTE_SUB	0x0ffff000 /* combo only: sub pages HPTE bits */
 #define _PAGE_HPTE_SUB0	0x08000000 /* combo only: first sub page */
 #define _PAGE_COMBO	0x10000000 /* this is a combo 4k page */
+#define _PAGE_4K_PFN	0x20000000 /* PFN is for a single 4k page */
+
+/* Note the full page bits must be in the same location as for normal
+ * 4k pages as the same asssembly will be used to insert 64K pages
+ * wether the kernel has CONFIG_PPC_64K_PAGES or not
+ */
 #define _PAGE_F_SECOND  0x00008000 /* full page: hidx bits */
 #define _PAGE_F_GIX     0x00007000 /* full page: hidx bits */
 
@@ -44,12 +51,10 @@
 
 /* Shift to put page number into pte.
  *
- * That gives us a max RPN of 32 bits, which means a max of 48 bits
- * of addressable physical space.
- * We could get 3 more bits here by setting PTE_RPN_SHIFT to 29 but
- * 32 makes PTEs more readable for debugging for now :)
+ * That gives us a max RPN of 34 bits, which means a max of 50 bits
+ * of addressable physical space, or 46 bits for the special 4k PFNs.
  */
-#define PTE_RPN_SHIFT	(32)
+#define PTE_RPN_SHIFT	(30)
 #define PTE_RPN_MAX	(1UL << (64 - PTE_RPN_SHIFT))
 #define PTE_RPN_MASK	(~((1UL<<PTE_RPN_SHIFT)-1))
 
@@ -63,8 +68,6 @@
 #define PMD_MASKED_BITS		0x1ff
 /* Bits to mask out from a PGD/PUD to get to the PMD page */
 #define PUD_MASKED_BITS		0x1ff
-
-#ifndef __ASSEMBLY__
 
 /* Manipulate "rpte" values */
 #define __real_pte(e,p) 	((real_pte_t) { \
@@ -90,9 +93,11 @@
 
 #define pte_iterate_hashed_end() } while(0); } } while(0)
 
-#define pte_pagesize_index(pte)	\
+#define pte_pagesize_index(mm, addr, pte)	\
 	(((pte) & _PAGE_COMBO)? MMU_PAGE_4K: MMU_PAGE_64K)
 
-#endif /*  __ASSEMBLY__ */
-#endif /* __KERNEL__ */
+#define remap_4k_pfn(vma, addr, pfn, prot)				\
+	remap_pfn_range((vma), (addr), (pfn), PAGE_SIZE,		\
+			__pgprot(pgprot_val((prot)) | _PAGE_4K_PFN))
+
 #endif /* _ASM_POWERPC_PGTABLE_64K_H */

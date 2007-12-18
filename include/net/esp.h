@@ -3,7 +3,7 @@
 
 #include <linux/crypto.h>
 #include <net/xfrm.h>
-#include <asm/scatterlist.h>
+#include <linux/scatterlist.h>
 
 #define ESP_NUM_FAST_SG		4
 
@@ -13,8 +13,6 @@ struct esp_data
 
 	/* Confidentiality */
 	struct {
-		u8			*key;		/* Key */
-		int			key_len;	/* Key length */
 		int			padlen;		/* 0..255 */
 		/* ivlen is offset from enc_data, where encrypted data start.
 		 * It is logically different of crypto_tfm_alg_ivsize(tfm).
@@ -28,20 +26,13 @@ struct esp_data
 
 	/* Integrity. It is active when icv_full_len != 0 */
 	struct {
-		u8			*key;		/* Key */
-		int			key_len;	/* Length of the key */
 		u8			*work_icv;
 		int			icv_full_len;
 		int			icv_trunc_len;
-		void			(*icv)(struct esp_data*,
-		                               struct sk_buff *skb,
-		                               int offset, int len, u8 *icv);
 		struct crypto_hash	*tfm;
 	} auth;
 };
 
-extern int skb_to_sgvec(struct sk_buff *skb, struct scatterlist *sg, int offset, int len);
-extern int skb_cow_data(struct sk_buff *skb, int tailbits, struct sk_buff **trailer);
 extern void *pskb_put(struct sk_buff *skb, struct sk_buff *tail, int len);
 
 static inline int esp_mac_digest(struct esp_data *esp, struct sk_buff *skb,
@@ -60,6 +51,13 @@ static inline int esp_mac_digest(struct esp_data *esp, struct sk_buff *skb,
 	if (unlikely(err))
 		return err;
 	return crypto_hash_final(&desc, esp->auth.work_icv);
+}
+
+struct ip_esp_hdr;
+
+static inline struct ip_esp_hdr *ip_esp_hdr(const struct sk_buff *skb)
+{
+	return (struct ip_esp_hdr *)skb_transport_header(skb);
 }
 
 #endif

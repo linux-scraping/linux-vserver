@@ -25,6 +25,8 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 
+#include <asm/atomic.h>
+
 #define PHY_BASIC_FEATURES	(SUPPORTED_10baseT_Half | \
 				 SUPPORTED_10baseT_Full | \
 				 SUPPORTED_100baseT_Half | \
@@ -55,6 +57,7 @@ typedef enum {
 	PHY_INTERFACE_MODE_TBI,
 	PHY_INTERFACE_MODE_RMII,
 	PHY_INTERFACE_MODE_RGMII,
+	PHY_INTERFACE_MODE_RGMII_ID,
 	PHY_INTERFACE_MODE_RTBI
 } phy_interface_t;
 
@@ -280,6 +283,7 @@ struct phy_device {
 	/* Interrupt and Polling infrastructure */
 	struct work_struct phy_queue;
 	struct timer_list phy_timer;
+	atomic_t irq_disable;
 
 	spinlock_t lock;
 

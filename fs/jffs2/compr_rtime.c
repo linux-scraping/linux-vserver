@@ -1,13 +1,12 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by Arjan van de Ven <arjanv@redhat.com>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
  *
- * $Id: compr_rtime.c,v 1.14 2004/06/23 16:34:40 havasi Exp $
  *
  *
  * Very simple lz77-ish encoder.
@@ -105,7 +104,7 @@ static int jffs2_rtime_decompress(unsigned char *data_in,
 			}
 		}
 	}
-        return 0;
+	return 0;
 }
 
 static struct jffs2_compressor jffs2_rtime_comp = {

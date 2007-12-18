@@ -5,8 +5,6 @@
 #include <linux/mount.h>
 
 struct nfs_string;
-struct nfs_mount_data;
-struct nfs4_mount_data;
 
 /* Maximum number of readahead requests
  * FIXME: this should really be a sysctl so that users may tune it to suit
@@ -27,20 +25,50 @@ struct nfs_clone_mount {
 	rpc_authflavor_t authflavor;
 };
 
+/*
+ * In-kernel mount arguments
+ */
+struct nfs_parsed_mount_data {
+	int			flags;
+	int			rsize, wsize;
+	int			timeo, retrans;
+	int			acregmin, acregmax,
+				acdirmin, acdirmax;
+	int			namlen;
+	unsigned int		bsize;
+	unsigned int		auth_flavor_len;
+	rpc_authflavor_t	auth_flavors[1];
+	char			*client_address;
+
+	struct {
+		struct sockaddr_in	address;
+		char			*hostname;
+		unsigned int		program;
+		unsigned int		version;
+		unsigned short		port;
+		int			protocol;
+	} mount_server;
+
+	struct {
+		struct sockaddr_in	address;
+		char			*hostname;
+		char			*export_path;
+		unsigned int		program;
+		int			protocol;
+	} nfs_server;
+};
+
 /* client.c */
 extern struct rpc_program nfs_program;
 
 extern void nfs_put_client(struct nfs_client *);
 extern struct nfs_client *nfs_find_client(const struct sockaddr_in *, int);
-extern struct nfs_server *nfs_create_server(const struct nfs_mount_data *,
-					    struct nfs_fh *);
-extern struct nfs_server *nfs4_create_server(const struct nfs4_mount_data *,
-					     const char *,
-					     const struct sockaddr_in *,
-					     const char *,
-					     const char *,
-					     rpc_authflavor_t,
-					     struct nfs_fh *);
+extern struct nfs_server *nfs_create_server(
+					const struct nfs_parsed_mount_data *,
+					struct nfs_fh *);
+extern struct nfs_server *nfs4_create_server(
+					const struct nfs_parsed_mount_data *,
+					struct nfs_fh *);
 extern struct nfs_server *nfs4_create_referral_server(struct nfs_clone_mount *,
 						      struct nfs_fh *);
 extern void nfs_free_server(struct nfs_server *server);
@@ -183,9 +211,9 @@ unsigned long nfs_block_bits(unsigned long bsize, unsigned char *nrbitsp)
 /*
  * Calculate the number of 512byte blocks used.
  */
-static inline unsigned long nfs_calc_block_size(u64 tsize)
+static inline blkcnt_t nfs_calc_block_size(u64 tsize)
 {
-	loff_t used = (tsize + 511) >> 9;
+	blkcnt_t used = (tsize + 511) >> 9;
 	return (used > ULONG_MAX) ? ULONG_MAX : used;
 }
 
@@ -231,3 +259,15 @@ unsigned int nfs_page_length(struct page *page)
 	}
 	return 0;
 }
+
+/*
+ * Determine the number of pages in an array of length 'len' and
+ * with a base offset of 'base'
+ */
+static inline
+unsigned int nfs_page_array_len(unsigned int base, size_t len)
+{
+	return ((unsigned long)len + (unsigned long)base +
+		PAGE_SIZE - 1) >> PAGE_SHIFT;
+}
+

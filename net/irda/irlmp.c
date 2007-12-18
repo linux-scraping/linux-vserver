@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -116,7 +116,7 @@ int __init irlmp_init(void)
  *    Remove IrLMP layer
  *
  */
-void __exit irlmp_cleanup(void)
+void irlmp_cleanup(void)
 {
 	/* Check for main structure */
 	IRDA_ASSERT(irlmp != NULL, return;);
@@ -1994,7 +1994,7 @@ static int irlmp_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irlmp_seq_ops = {
+static const struct seq_operations irlmp_seq_ops = {
 	.start  = irlmp_seq_start,
 	.next   = irlmp_seq_next,
 	.stop   = irlmp_seq_stop,
@@ -2003,27 +2003,10 @@ static struct seq_operations irlmp_seq_ops = {
 
 static int irlmp_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct irlmp_iter_state *s;
-
 	IRDA_ASSERT(irlmp != NULL, return -EINVAL;);
 
-	s = kmalloc(sizeof(*s), GFP_KERNEL);
-	if (!s)
-		goto out;
-
-	rc = seq_open(file, &irlmp_seq_ops);
-	if (rc)
-		goto out_kfree;
-
-	seq	     = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &irlmp_seq_ops,
+			sizeof(struct irlmp_iter_state));
 }
 
 const struct file_operations irlmp_seq_fops = {

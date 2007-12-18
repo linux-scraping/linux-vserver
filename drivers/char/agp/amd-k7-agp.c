@@ -100,21 +100,16 @@ static int amd_create_gatt_pages(int nr_tables)
 
 	for (i = 0; i < nr_tables; i++) {
 		entry = kzalloc(sizeof(struct amd_page_map), GFP_KERNEL);
+		tables[i] = entry;
 		if (entry == NULL) {
-			while (i > 0) {
-				kfree(tables[i-1]);
-				i--;
-			}
-			kfree(tables);
 			retval = -ENOMEM;
 			break;
 		}
-		tables[i] = entry;
 		retval = amd_create_page_map(entry);
 		if (retval != 0)
 			break;
 	}
-	amd_irongate_private.num_tables = nr_tables;
+	amd_irongate_private.num_tables = i;
 	amd_irongate_private.gatt_pages = tables;
 
 	if (retval != 0)
@@ -223,6 +218,8 @@ static int amd_irongate_configure(void)
 	pci_read_config_dword(agp_bridge->dev, AMD_MMBASE, &temp);
 	temp = (temp & PCI_BASE_ADDRESS_MEM_MASK);
 	amd_irongate_private.registers = (volatile u8 __iomem *) ioremap(temp, 4096);
+	if (!amd_irongate_private.registers)
+		return -ENOMEM;
 
 	/* Write out the address of the gatt table */
 	writel(agp_bridge->gatt_bus_addr, amd_irongate_private.registers+AMD_ATTBASE);
@@ -462,9 +459,7 @@ static int __devinit agp_amdk7_probe(struct pci_dev *pdev,
 	 * erratum 46: Setup violation on AGP SBA pins - Disable side band addressing.
 	 * With this lot disabled, we should prevent lockups. */
 	if (agp_bridge->dev->device == PCI_DEVICE_ID_AMD_FE_GATE_700E) {
-		u8 revision=0;
-		pci_read_config_byte(pdev, PCI_REVISION_ID, &revision);
-		if (revision == 0x10 || revision == 0x11) {
+		if (pdev->revision == 0x10 || pdev->revision == 0x11) {
 			agp_bridge->flags = AGP_ERRATA_FASTWRITES;
 			agp_bridge->flags |= AGP_ERRATA_SBA;
 			agp_bridge->flags |= AGP_ERRATA_1X;

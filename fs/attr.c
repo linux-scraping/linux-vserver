@@ -9,7 +9,6 @@
 #include <linux/time.h>
 #include <linux/mm.h>
 #include <linux/string.h>
-#include <linux/smp_lock.h>
 #include <linux/capability.h>
 #include <linux/fsnotify.h>
 #include <linux/fcntl.h>
@@ -46,7 +45,7 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 
 	/* Make sure a caller can chmod. */
 	if (ia_valid & ATTR_MODE) {
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			goto error;
 		/* Also check the setgid bit! */
 		if (!in_group_p((ia_valid & ATTR_GID) ? attr->ia_gid :
@@ -56,7 +55,7 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 
 	/* Check for setting the inode time. */
 	if (ia_valid & (ATTR_MTIME_SET | ATTR_ATIME_SET)) {
-		if (current->fsuid != inode->i_uid && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			goto error;
 	}
 
@@ -65,22 +64,19 @@ int inode_change_ok(struct inode *inode, struct iattr *attr)
 		goto fine;
 
 	if (IS_BARRIER(inode)) {
-		vxwprintk(1, "xid=%d messing with the barrier.",
-			vx_current_xid());
+		vxwprintk_task(1, "messing with the barrier.");
 		goto error;
 	}
 	switch (inode->i_sb->s_magic) {
 		case PROC_SUPER_MAGIC:
 			/* maybe allow that in the future? */
-			vxwprintk(1, "xid=%d messing with the procfs.",
-				vx_current_xid());
+			vxwprintk_task(1, "messing with the procfs.");
 			goto error;
 		case DEVPTS_SUPER_MAGIC:
 			/* devpts is xid tagged */
 			if (vx_check((xid_t)inode->i_tag, VS_IDENT))
 				goto fine;
-			vxwprintk(1, "xid=%d messing with the devpts.",
-				vx_current_xid());
+			vxwprintk_task(1, "messing with the devpts.");
 			goto error;
 	}
 fine:
@@ -133,12 +129,11 @@ EXPORT_SYMBOL(inode_setattr);
 int notify_change(struct dentry * dentry, struct iattr * attr)
 {
 	struct inode *inode = dentry->d_inode;
-	mode_t mode;
+	mode_t mode = inode->i_mode;
 	int error;
 	struct timespec now;
 	unsigned int ia_valid = attr->ia_valid;
 
-	mode = inode->i_mode;
 	now = current_fs_time(inode->i_sb);
 
 	attr->ia_ctime = now;
@@ -146,18 +141,34 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 		attr->ia_atime = now;
 	if (!(ia_valid & ATTR_MTIME_SET))
 		attr->ia_mtime = now;
+	if (ia_valid & ATTR_KILL_PRIV) {
+		attr->ia_valid &= ~ATTR_KILL_PRIV;
+		ia_valid &= ~ATTR_KILL_PRIV;
+		error = security_inode_need_killpriv(dentry);
+		if (error > 0)
+			error = security_inode_killpriv(dentry);
+		if (error)
+			return error;
+	}
+
+	/*
+	 * We now pass ATTR_KILL_S*ID to the lower level setattr function so
+	 * that the function has the ability to reinterpret a mode change
+	 * that's due to these bits. This adds an implicit restriction that
+	 * no function will ever call notify_change with both ATTR_MODE and
+	 * ATTR_KILL_S*ID set.
+	 */
+	if ((ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID)) &&
+	    (ia_valid & ATTR_MODE))
+		BUG();
+
 	if (ia_valid & ATTR_KILL_SUID) {
-		attr->ia_valid &= ~ATTR_KILL_SUID;
 		if (mode & S_ISUID) {
-			if (!(ia_valid & ATTR_MODE)) {
-				ia_valid = attr->ia_valid |= ATTR_MODE;
-				attr->ia_mode = inode->i_mode;
-			}
-			attr->ia_mode &= ~S_ISUID;
+			ia_valid = attr->ia_valid |= ATTR_MODE;
+			attr->ia_mode = (inode->i_mode & ~S_ISUID);
 		}
 	}
 	if (ia_valid & ATTR_KILL_SGID) {
-		attr->ia_valid &= ~ ATTR_KILL_SGID;
 		if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP)) {
 			if (!(ia_valid & ATTR_MODE)) {
 				ia_valid = attr->ia_valid |= ATTR_MODE;
@@ -166,7 +177,7 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 			attr->ia_mode &= ~S_ISGID;
 		}
 	}
-	if (!attr->ia_valid)
+	if (!(attr->ia_valid & ~(ATTR_KILL_SUID | ATTR_KILL_SGID)))
 		return 0;
 
 	if (ia_valid & ATTR_SIZE)

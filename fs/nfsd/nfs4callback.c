@@ -38,6 +38,8 @@
 #include <linux/inet.h>
 #include <linux/errno.h>
 #include <linux/delay.h>
+#include <linux/sched.h>
+#include <linux/kthread.h>
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/clnt.h>
@@ -74,7 +76,7 @@ enum nfs_cb_opnum4 {
 #define op_enc_sz			1
 #define op_dec_sz			2
 #define enc_nfs4_fh_sz			(1 + (NFS4_FHSIZE >> 2))
-#define enc_stateid_sz			16
+#define enc_stateid_sz			(NFS4_STATEID_SIZE >> 2)
 #define NFS4_enc_cb_recall_sz		(cb_compound_enc_hdr_sz +       \
 					1 + enc_stateid_sz +            \
 					enc_nfs4_fh_sz)
@@ -315,16 +317,13 @@ out:
 /*
  * RPC procedure tables
  */
-#ifndef MAX
-# define MAX(a, b)      (((a) > (b))? (a) : (b))
-#endif
-
 #define PROC(proc, call, argtype, restype)                              \
 [NFSPROC4_CLNT_##proc] = {                                      	\
         .p_proc   = NFSPROC4_CB_##call,					\
         .p_encode = (kxdrproc_t) nfs4_xdr_##argtype,                    \
         .p_decode = (kxdrproc_t) nfs4_xdr_##restype,                    \
-        .p_bufsiz = MAX(NFS4_##argtype##_sz,NFS4_##restype##_sz) << 2,  \
+        .p_arglen = NFS4_##argtype##_sz,                                \
+        .p_replen = NFS4_##restype##_sz,                                \
         .p_statidx = NFSPROC4_CB_##call,				\
 	.p_name   = #proc,                                              \
 }
@@ -345,26 +344,28 @@ static struct rpc_version *	nfs_cb_version[] = {
 	&nfs_cb_version4,
 };
 
-/*
- * Use the SETCLIENTID credential
- */
-static struct rpc_cred *
-nfsd4_lookupcred(struct nfs4_client *clp, int taskflags)
+/* Reference counting, callback cleanup, etc., all look racy as heck.
+ * And why is cb_set an atomic? */
+
+static int do_probe_callback(void *data)
 {
-        struct auth_cred acred;
-	struct rpc_clnt *clnt = clp->cl_callback.cb_client;
-	struct rpc_cred *ret;
+	struct nfs4_client *clp = data;
+	struct nfs4_callback *cb = &clp->cl_callback;
+	struct rpc_message msg = {
+		.rpc_proc       = &nfs4_cb_procedures[NFSPROC4_CLNT_CB_NULL],
+		.rpc_argp       = clp,
+	};
+	int status;
 
-        get_group_info(clp->cl_cred.cr_group_info);
-        acred.uid = clp->cl_cred.cr_uid;
-        acred.gid = clp->cl_cred.cr_gid;
-        acred.group_info = clp->cl_cred.cr_group_info;
+	status = rpc_call_sync(cb->cb_client, &msg, RPC_TASK_SOFT);
 
-        dprintk("NFSD:     looking up %s cred\n",
-                clnt->cl_auth->au_ops->au_name);
-        ret = rpcauth_lookup_credcache(clnt->cl_auth, &acred, taskflags);
-        put_group_info(clp->cl_cred.cr_group_info);
-        return ret;
+	if (status) {
+		rpc_shutdown_client(cb->cb_client);
+		cb->cb_client = NULL;
+	} else
+		atomic_set(&cb->cb_set, 1);
+	put_nfs4_client(clp);
+	return 0;
 }
 
 /*
@@ -392,12 +393,7 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 		.authflavor	= RPC_AUTH_UNIX,	/* XXX: need AUTH_GSS... */
 		.flags		= (RPC_CLNT_CREATE_NOPING),
 	};
-	struct rpc_message msg = {
-		.rpc_proc       = &nfs4_cb_procedures[NFSPROC4_CLNT_CB_NULL],
-		.rpc_argp       = clp,
-	};
-	char clientname[16];
-	int status;
+	struct task_struct *t;
 
 	if (atomic_read(&cb->cb_set))
 		return;
@@ -419,11 +415,6 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 	memset(program->stats, 0, sizeof(cb->cb_stat));
 	program->stats->program = program;
 
-	/* Just here to make some printk's more useful: */
-	snprintf(clientname, sizeof(clientname),
-		"%u.%u.%u.%u", NIPQUAD(addr.sin_addr));
-	args.servername = clientname;
-
 	/* Create RPC client */
 	cb->cb_client = rpc_create(&args);
 	if (IS_ERR(cb->cb_client)) {
@@ -431,59 +422,24 @@ nfsd4_probe_callback(struct nfs4_client *clp)
 		goto out_err;
 	}
 
-	/* Kick rpciod, put the call on the wire. */
-	if (rpciod_up() != 0)
-		goto out_clnt;
-
 	/* the task holds a reference to the nfs4_client struct */
 	atomic_inc(&clp->cl_count);
 
-	msg.rpc_cred = nfsd4_lookupcred(clp,0);
-	if (IS_ERR(msg.rpc_cred))
-		goto out_rpciod;
-	status = rpc_call_async(cb->cb_client, &msg, RPC_TASK_ASYNC, &nfs4_cb_null_ops, NULL);
-	put_rpccred(msg.rpc_cred);
+	t = kthread_run(do_probe_callback, clp, "nfs4_cb_probe");
 
-	if (status != 0) {
-		dprintk("NFSD: asynchronous NFSPROC4_CB_NULL failed!\n");
-		goto out_rpciod;
-	}
+	if (IS_ERR(t))
+		goto out_release_clp;
+
 	return;
 
-out_rpciod:
+out_release_clp:
 	atomic_dec(&clp->cl_count);
-	rpciod_down();
-out_clnt:
 	rpc_shutdown_client(cb->cb_client);
 out_err:
 	cb->cb_client = NULL;
 	dprintk("NFSD: warning: no callback path to client %.*s\n",
 		(int)clp->cl_name.len, clp->cl_name.data);
 }
-
-static void
-nfs4_cb_null(struct rpc_task *task, void *dummy)
-{
-	struct nfs4_client *clp = (struct nfs4_client *)task->tk_msg.rpc_argp;
-	struct nfs4_callback *cb = &clp->cl_callback;
-	__be32 addr = htonl(cb->cb_addr);
-
-	dprintk("NFSD: nfs4_cb_null task->tk_status %d\n", task->tk_status);
-
-	if (task->tk_status < 0) {
-		dprintk("NFSD: callback establishment to client %.*s failed\n",
-			(int)clp->cl_name.len, clp->cl_name.data);
-		goto out;
-	}
-	atomic_set(&cb->cb_set, 1);
-	dprintk("NFSD: callback set to client %u.%u.%u.%u\n", NIPQUAD(addr));
-out:
-	put_nfs4_client(clp);
-}
-
-static const struct rpc_call_ops nfs4_cb_null_ops = {
-	.rpc_call_done = nfs4_cb_null,
-};
 
 /*
  * called with dp->dl_count inc'ed.
@@ -505,10 +461,6 @@ nfsd4_cb_recall(struct nfs4_delegation *dp)
 	if ((!atomic_read(&clp->cl_callback.cb_set)) || !clnt)
 		return;
 
-	msg.rpc_cred = nfsd4_lookupcred(clp, 0);
-	if (IS_ERR(msg.rpc_cred))
-		goto out;
-
 	cbr->cbr_trunc = 0; /* XXX need to implement truncate optimization */
 	cbr->cbr_dp = dp;
 
@@ -529,13 +481,12 @@ nfsd4_cb_recall(struct nfs4_delegation *dp)
 		status = rpc_call_sync(clnt, &msg, RPC_TASK_SOFT);
 	}
 out_put_cred:
-	put_rpccred(msg.rpc_cred);
-out:
 	if (status == -EIO)
 		atomic_set(&clp->cl_callback.cb_set, 0);
 	/* Success or failure, now we're either waiting for lease expiration
 	 * or deleg_return. */
 	dprintk("NFSD: nfs4_cb_recall: dp %p dl_flock %p dl_count %d\n",dp, dp->dl_flock, atomic_read(&dp->dl_count));
+	put_nfs4_client(clp);
 	nfs4_put_delegation(dp);
 	return;
 }

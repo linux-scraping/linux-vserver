@@ -47,7 +47,6 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/pci.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -782,7 +781,7 @@ int ahd_get_transfer_dir(struct scb *scb)
 static __inline
 void ahd_set_residual(struct scb *scb, u_long resid)
 {
-	scb->io_ctx->resid = resid;
+	scsi_set_resid(scb->io_ctx, resid);
 }
 
 static __inline
@@ -794,7 +793,7 @@ void ahd_set_sense_residual(struct scb *scb, u_long resid)
 static __inline
 u_long ahd_get_residual(struct scb *scb)
 {
-	return (scb->io_ctx->resid);
+	return scsi_get_resid(scb->io_ctx);
 }
 
 static __inline
@@ -837,8 +836,6 @@ int	ahd_platform_alloc(struct ahd_softc *ahd, void *platform_arg);
 void	ahd_platform_free(struct ahd_softc *ahd);
 void	ahd_platform_init(struct ahd_softc *ahd);
 void	ahd_platform_freeze_devq(struct ahd_softc *ahd, struct scb *scb);
-void	ahd_freeze_simq(struct ahd_softc *ahd);
-void	ahd_release_simq(struct ahd_softc *ahd);
 
 static __inline void
 ahd_freeze_scb(struct scb *scb)

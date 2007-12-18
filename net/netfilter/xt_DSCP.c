@@ -8,8 +8,6 @@
  * published by the Free Software Foundation.
  *
  * See RFC2474 for a description of the DSCP field within the IP Header.
- *
- * xt_DSCP.c,v 1.8 2002/08/06 18:41:57 laforge Exp
 */
 
 #include <linux/module.h>
@@ -27,7 +25,7 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS("ipt_DSCP");
 MODULE_ALIAS("ip6t_DSCP");
 
-static unsigned int target(struct sk_buff **pskb,
+static unsigned int target(struct sk_buff *skb,
 			   const struct net_device *in,
 			   const struct net_device *out,
 			   unsigned int hooknum,
@@ -35,20 +33,20 @@ static unsigned int target(struct sk_buff **pskb,
 			   const void *targinfo)
 {
 	const struct xt_DSCP_info *dinfo = targinfo;
-	u_int8_t dscp = ipv4_get_dsfield((*pskb)->nh.iph) >> XT_DSCP_SHIFT;
+	u_int8_t dscp = ipv4_get_dsfield(ip_hdr(skb)) >> XT_DSCP_SHIFT;
 
 	if (dscp != dinfo->dscp) {
-		if (!skb_make_writable(pskb, sizeof(struct iphdr)))
+		if (!skb_make_writable(skb, sizeof(struct iphdr)))
 			return NF_DROP;
 
-		ipv4_change_dsfield((*pskb)->nh.iph, (__u8)(~XT_DSCP_MASK),
+		ipv4_change_dsfield(ip_hdr(skb), (__u8)(~XT_DSCP_MASK),
 				    dinfo->dscp << XT_DSCP_SHIFT);
 
 	}
 	return XT_CONTINUE;
 }
 
-static unsigned int target6(struct sk_buff **pskb,
+static unsigned int target6(struct sk_buff *skb,
 			    const struct net_device *in,
 			    const struct net_device *out,
 			    unsigned int hooknum,
@@ -56,34 +54,34 @@ static unsigned int target6(struct sk_buff **pskb,
 			    const void *targinfo)
 {
 	const struct xt_DSCP_info *dinfo = targinfo;
-	u_int8_t dscp = ipv6_get_dsfield((*pskb)->nh.ipv6h) >> XT_DSCP_SHIFT;
+	u_int8_t dscp = ipv6_get_dsfield(ipv6_hdr(skb)) >> XT_DSCP_SHIFT;
 
 	if (dscp != dinfo->dscp) {
-		if (!skb_make_writable(pskb, sizeof(struct ipv6hdr)))
+		if (!skb_make_writable(skb, sizeof(struct ipv6hdr)))
 			return NF_DROP;
 
-		ipv6_change_dsfield((*pskb)->nh.ipv6h, (__u8)(~XT_DSCP_MASK),
+		ipv6_change_dsfield(ipv6_hdr(skb), (__u8)(~XT_DSCP_MASK),
 				    dinfo->dscp << XT_DSCP_SHIFT);
 	}
 	return XT_CONTINUE;
 }
 
-static int checkentry(const char *tablename,
-		      const void *e_void,
-		      const struct xt_target *target,
-		      void *targinfo,
-		      unsigned int hook_mask)
+static bool checkentry(const char *tablename,
+		       const void *e_void,
+		       const struct xt_target *target,
+		       void *targinfo,
+		       unsigned int hook_mask)
 {
 	const u_int8_t dscp = ((struct xt_DSCP_info *)targinfo)->dscp;
 
-	if ((dscp > XT_DSCP_MAX)) {
+	if (dscp > XT_DSCP_MAX) {
 		printk(KERN_WARNING "DSCP: dscp %x out of range\n", dscp);
-		return 0;
+		return false;
 	}
-	return 1;
+	return true;
 }
 
-static struct xt_target xt_dscp_target[] = {
+static struct xt_target xt_dscp_target[] __read_mostly = {
 	{
 		.name		= "DSCP",
 		.family		= AF_INET,

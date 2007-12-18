@@ -48,7 +48,7 @@
 #include <asm/mach-types.h>
 #include <asm/arch/fb.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-lcd.h>
 #include <asm/arch/regs-gpio.h>
 
@@ -160,27 +160,39 @@ static struct platform_device *amlm5900_devices[] __initdata = {
 #endif
 };
 
-static struct s3c24xx_board amlm5900_board __initdata = {
-	.devices       = amlm5900_devices,
-	.devices_count = ARRAY_SIZE(amlm5900_devices)
-};
-
-void __init amlm5900_map_io(void)
+static void __init amlm5900_map_io(void)
 {
 	s3c24xx_init_io(amlm5900_iodesc, ARRAY_SIZE(amlm5900_iodesc));
 	s3c24xx_init_clocks(0);
 	s3c24xx_init_uarts(amlm5900_uartcfgs, ARRAY_SIZE(amlm5900_uartcfgs));
-	s3c24xx_set_board(&amlm5900_board);
 }
 
 #ifdef CONFIG_FB_S3C2410
-static struct s3c2410fb_mach_info __initdata amlm5900_lcd_info = {
+static struct s3c2410fb_display __initdata amlm5900_lcd_info = {
 	.width		= 160,
 	.height		= 160,
 
-/* commented out until stn patch is submitted
-*	.type		= S3C2410_LCDCON1_STN4,
-*/
+	.type		= S3C2410_LCDCON1_STN4,
+
+	.pixclock	= 680000, /* HCLK = 100MHz */
+	.xres		= 160,
+	.yres		= 160,
+	.bpp		= 4,
+	.left_margin	= 1 << (4 + 3),
+	.right_margin	= 8 << 3,
+	.hsync_len	= 48,
+	.upper_margin	= 0,
+	.lower_margin	= 0,
+
+	.lcdcon5	= 0x00000001,
+};
+
+static struct s3c2410fb_mach_info __initdata amlm5900_fb_info = {
+
+	.displays = &amlm5900_lcd_info,
+	.num_displays = 1,
+	.default_display = 0,
+
 	.gpccon =	0xaaaaaaaa,
 	.gpccon_mask =	0xffffffff,
 	.gpcup =	0x0000ffff,
@@ -190,32 +202,6 @@ static struct s3c2410fb_mach_info __initdata amlm5900_lcd_info = {
 	.gpdcon_mask =	0xffffffff,
 	.gpdup =	0x0000ffff,
 	.gpdup_mask =	0xffffffff,
-
-	.xres		= {
-		.min		= 160,
-		.max		= 160,
-		.defval		= 160,
-	},
-
-	.yres		= {
-		.min		= 160,
-		.max	        = 160,
-		.defval		= 160,
-	},
-
-	.bpp		= {
-		.min		= 4,
-		.max		= 4,
-		.defval		= 4,
-	},
-
-	.regs		= {
-		.lcdcon1	= 0x00008225,
-		.lcdcon2	= 0x0027c000,
-		.lcdcon3	= 0x00182708,
-		.lcdcon4	= 0x00000002,
-		.lcdcon5	= 0x00000001,
-	}
 };
 #endif
 
@@ -245,8 +231,9 @@ static void __init amlm5900_init(void)
 {
 	amlm5900_init_pm();
 #ifdef CONFIG_FB_S3C2410
-	s3c24xx_fb_set_platdata(&amlm5900_lcd_info);
+	s3c24xx_fb_set_platdata(&amlm5900_fb_info);
 #endif
+	platform_add_devices(amlm5900_devices, ARRAY_SIZE(amlm5900_devices));
 }
 
 MACHINE_START(AML_M5900, "AML_M5900")

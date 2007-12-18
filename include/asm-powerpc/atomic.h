@@ -5,17 +5,29 @@
  * PowerPC atomic operations
  */
 
-typedef struct { volatile int counter; } atomic_t;
+typedef struct { int counter; } atomic_t;
 
 #ifdef __KERNEL__
 #include <linux/compiler.h>
 #include <asm/synch.h>
 #include <asm/asm-compat.h>
+#include <asm/system.h>
 
 #define ATOMIC_INIT(i)		{ (i) }
 
-#define atomic_read(v)		((v)->counter)
-#define atomic_set(v,i)		(((v)->counter) = (i))
+static __inline__ int atomic_read(const atomic_t *v)
+{
+	int t;
+
+	__asm__ __volatile__("lwz%U1%X1 %0,%1" : "=r"(t) : "m"(v->counter));
+
+	return t;
+}
+
+static __inline__ void atomic_set(atomic_t *v, int i)
+{
+	__asm__ __volatile__("stw%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
+}
 
 static __inline__ void atomic_add(int a, atomic_t *v)
 {
@@ -165,8 +177,7 @@ static __inline__ int atomic_dec_return(atomic_t *v)
 	return t;
 }
 
-#define atomic_cmpxchg(v, o, n) \
-	((__typeof__((v)->counter))cmpxchg(&((v)->counter), (o), (n)))
+#define atomic_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
 #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
 
 /**
@@ -240,12 +251,23 @@ static __inline__ int atomic_dec_if_positive(atomic_t *v)
 
 #ifdef __powerpc64__
 
-typedef struct { volatile long counter; } atomic64_t;
+typedef struct { long counter; } atomic64_t;
 
 #define ATOMIC64_INIT(i)	{ (i) }
 
-#define atomic64_read(v)	((v)->counter)
-#define atomic64_set(v,i)	(((v)->counter) = (i))
+static __inline__ long atomic64_read(const atomic64_t *v)
+{
+	long t;
+
+	__asm__ __volatile__("ld%U1%X1 %0,%1" : "=r"(t) : "m"(v->counter));
+
+	return t;
+}
+
+static __inline__ void atomic64_set(atomic64_t *v, long i)
+{
+	__asm__ __volatile__("std%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
+}
 
 static __inline__ void atomic64_add(long a, atomic64_t *v)
 {
@@ -414,8 +436,7 @@ static __inline__ long atomic64_dec_if_positive(atomic64_t *v)
 	return t;
 }
 
-#define atomic64_cmpxchg(v, o, n) \
-	((__typeof__((v)->counter))cmpxchg(&((v)->counter), (o), (n)))
+#define atomic64_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
 #define atomic64_xchg(v, new) (xchg(&((v)->counter), new))
 
 /**

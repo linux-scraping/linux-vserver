@@ -44,7 +44,7 @@ MODULE_LICENSE("GPL");
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
 
@@ -595,7 +595,7 @@ static int vlsi_process_rx(struct vlsi_ring *r, struct ring_descr *rd)
 	rd->skb = NULL;
 	skb->dev = ndev;
 	memcpy(skb_put(skb,len), rd->buf, len);
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	if (in_interrupt())
 		netif_rx(skb);
 	else
@@ -993,7 +993,7 @@ static int vlsi_hard_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			goto drop;
 		}
 		else
-			memcpy(rd->buf, skb->data, len);
+			skb_copy_from_linear_data(skb, rd->buf, len);
 	}
 
 	rd->skb = skb;			/* remember skb for tx-complete stats */
@@ -1584,8 +1584,6 @@ static int vlsi_irda_init(struct net_device *ndev)
 	vlsi_irda_dev_t *idev = ndev->priv;
 	struct pci_dev *pdev = idev->pdev;
 
-	SET_MODULE_OWNER(ndev);
-
 	ndev->irq = pdev->irq;
 	ndev->base_addr = pci_resource_start(pdev,0);
 
@@ -1661,8 +1659,8 @@ vlsi_irda_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	idev = ndev->priv;
 
 	spin_lock_init(&idev->lock);
-	init_MUTEX(&idev->sem);
-	down(&idev->sem);
+	mutex_init(&idev->mtx);
+	mutex_lock(&idev->mtx);
 	idev->pdev = pdev;
 
 	if (vlsi_irda_init(ndev) < 0)
@@ -1690,12 +1688,12 @@ vlsi_irda_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	IRDA_MESSAGE("%s: registered device %s\n", drivername, ndev->name);
 
 	pci_set_drvdata(pdev, ndev);
-	up(&idev->sem);
+	mutex_unlock(&idev->mtx);
 
 	return 0;
 
 out_freedev:
-	up(&idev->sem);
+	mutex_unlock(&idev->mtx);
 	free_netdev(ndev);
 out_disable:
 	pci_disable_device(pdev);
@@ -1717,12 +1715,12 @@ static void __devexit vlsi_irda_remove(struct pci_dev *pdev)
 	unregister_netdev(ndev);
 
 	idev = ndev->priv;
-	down(&idev->sem);
+	mutex_lock(&idev->mtx);
 	if (idev->proc_entry) {
 		remove_proc_entry(ndev->name, vlsi_proc_root);
 		idev->proc_entry = NULL;
 	}
-	up(&idev->sem);
+	mutex_unlock(&idev->mtx);
 
 	free_netdev(ndev);
 
@@ -1752,7 +1750,7 @@ static int vlsi_irda_suspend(struct pci_dev *pdev, pm_message_t state)
 		return 0;
 	}
 	idev = ndev->priv;	
-	down(&idev->sem);
+	mutex_lock(&idev->mtx);
 	if (pdev->current_state != 0) {			/* already suspended */
 		if (state.event > pdev->current_state) {	/* simply go deeper */
 			pci_set_power_state(pdev, pci_choose_state(pdev, state));
@@ -1760,7 +1758,7 @@ static int vlsi_irda_suspend(struct pci_dev *pdev, pm_message_t state)
 		}
 		else
 			IRDA_ERROR("%s - %s: invalid suspend request %u -> %u\n", __FUNCTION__, pci_name(pdev), pdev->current_state, state.event);
-		up(&idev->sem);
+		mutex_unlock(&idev->mtx);
 		return 0;
 	}
 
@@ -1776,7 +1774,7 @@ static int vlsi_irda_suspend(struct pci_dev *pdev, pm_message_t state)
 	pci_set_power_state(pdev, pci_choose_state(pdev, state));
 	pdev->current_state = state.event;
 	idev->resume_ok = 1;
-	up(&idev->sem);
+	mutex_unlock(&idev->mtx);
 	return 0;
 }
 
@@ -1791,9 +1789,9 @@ static int vlsi_irda_resume(struct pci_dev *pdev)
 		return 0;
 	}
 	idev = ndev->priv;	
-	down(&idev->sem);
+	mutex_lock(&idev->mtx);
 	if (pdev->current_state == 0) {
-		up(&idev->sem);
+		mutex_unlock(&idev->mtx);
 		IRDA_WARNING("%s - %s: already resumed\n",
 			     __FUNCTION__, pci_name(pdev));
 		return 0;
@@ -1815,7 +1813,7 @@ static int vlsi_irda_resume(struct pci_dev *pdev)
 		 * device and independently resume_ok should catch any garbage config.
 		 */
 		IRDA_WARNING("%s - hm, nothing to resume?\n", __FUNCTION__);
-		up(&idev->sem);
+		mutex_unlock(&idev->mtx);
 		return 0;
 	}
 
@@ -1825,7 +1823,7 @@ static int vlsi_irda_resume(struct pci_dev *pdev)
 		netif_device_attach(ndev);
 	}
 	idev->resume_ok = 0;
-	up(&idev->sem);
+	mutex_unlock(&idev->mtx);
 	return 0;
 }
 

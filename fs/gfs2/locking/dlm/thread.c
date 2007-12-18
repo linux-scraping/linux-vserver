@@ -44,6 +44,13 @@ static void process_blocking(struct gdlm_lock *lp, int bast_mode)
 	ls->fscb(ls->sdp, cb, &lp->lockname);
 }
 
+static void wake_up_ast(struct gdlm_lock *lp)
+{
+	clear_bit(LFL_AST_WAIT, &lp->flags);
+	smp_mb__after_clear_bit();
+	wake_up_bit(&lp->flags, LFL_AST_WAIT);
+}
+
 static void process_complete(struct gdlm_lock *lp)
 {
 	struct gdlm_ls *ls = lp->ls;
@@ -136,7 +143,7 @@ static void process_complete(struct gdlm_lock *lp)
 	 */
 
 	if (test_and_clear_bit(LFL_SYNC_LVB, &lp->flags)) {
-		complete(&lp->ast_wait);
+		wake_up_ast(lp);
 		return;
 	}
 
@@ -214,7 +221,7 @@ out:
 	if (test_bit(LFL_INLOCK, &lp->flags)) {
 		clear_bit(LFL_NOBLOCK, &lp->flags);
 		lp->cur = lp->req;
-		complete(&lp->ast_wait);
+		wake_up_ast(lp);
 		return;
 	}
 
@@ -261,19 +268,15 @@ static inline int check_drop(struct gdlm_ls *ls)
 	return 0;
 }
 
-static int gdlm_thread(void *data)
+static int gdlm_thread(void *data, int blist)
 {
 	struct gdlm_ls *ls = (struct gdlm_ls *) data;
 	struct gdlm_lock *lp = NULL;
-	int blist = 0;
 	uint8_t complete, blocking, submit, drop;
 	DECLARE_WAITQUEUE(wait, current);
 
 	/* Only thread1 is allowed to do blocking callbacks since gfs
 	   may wait for a completion callback within a blocking cb. */
-
-	if (current == ls->thread1)
-		blist = 1;
 
 	while (!kthread_should_stop()) {
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -326,12 +329,22 @@ static int gdlm_thread(void *data)
 	return 0;
 }
 
+static int gdlm_thread1(void *data)
+{
+	return gdlm_thread(data, 1);
+}
+
+static int gdlm_thread2(void *data)
+{
+	return gdlm_thread(data, 0);
+}
+
 int gdlm_init_threads(struct gdlm_ls *ls)
 {
 	struct task_struct *p;
 	int error;
 
-	p = kthread_run(gdlm_thread, ls, "lock_dlm1");
+	p = kthread_run(gdlm_thread1, ls, "lock_dlm1");
 	error = IS_ERR(p);
 	if (error) {
 		log_error("can't start lock_dlm1 thread %d", error);
@@ -339,7 +352,7 @@ int gdlm_init_threads(struct gdlm_ls *ls)
 	}
 	ls->thread1 = p;
 
-	p = kthread_run(gdlm_thread, ls, "lock_dlm2");
+	p = kthread_run(gdlm_thread2, ls, "lock_dlm2");
 	error = IS_ERR(p);
 	if (error) {
 		log_error("can't start lock_dlm2 thread %d", error);

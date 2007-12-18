@@ -2,7 +2,7 @@
  *   ALSA driver for AK4524 / AK4528 / AK4529 / AK4355 / AK4358 / AK4381
  *   AD and DA converters
  *
- *	Copyright (c) 2000-2004 Jaroslav Kysela <perex@suse.cz>,
+ *	Copyright (c) 2000-2004 Jaroslav Kysela <perex@perex.cz>,
  *				Takashi Iwai <tiwai@suse.de>
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,7 @@
 #include <sound/tlv.h>
 #include <sound/ak4xxx-adda.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>, Takashi Iwai <tiwai@suse.de>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>, Takashi Iwai <tiwai@suse.de>");
 MODULE_DESCRIPTION("Routines for control of AK452x / AK43xx  AD/DA converters");
 MODULE_LICENSE("GPL");
 
@@ -463,15 +463,7 @@ static int snd_akm4xxx_deemphasis_put(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
-static int ak4xxx_switch_info(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define ak4xxx_switch_info	snd_ctl_boolean_mono_info
 
 static int ak4xxx_switch_get(struct snd_kcontrol *kcontrol,
 			     struct snd_ctl_elem_value *ucontrol)
@@ -481,8 +473,8 @@ static int ak4xxx_switch_get(struct snd_kcontrol *kcontrol,
 	int addr = AK_GET_ADDR(kcontrol->private_value);
 	int shift = AK_GET_SHIFT(kcontrol->private_value);
 	int invert = AK_GET_INVERT(kcontrol->private_value);
-	unsigned char val = snd_akm4xxx_get(ak, chip, addr);
-
+	/* we observe the (1<<shift) bit only */
+	unsigned char val = snd_akm4xxx_get(ak, chip, addr) & (1<<shift);
 	if (invert)
 		val = ! val;
 	ucontrol->value.integer.value[0] = (val & (1<<shift)) != 0;
@@ -585,6 +577,26 @@ static int build_dac_controls(struct snd_akm4xxx *ak)
 
 	mixer_ch = 0;
 	for (idx = 0; idx < ak->num_dacs; ) {
+		/* mute control for Revolution 7.1 - AK4381 */
+		if (ak->type == SND_AK4381 
+				&&  ak->dac_info[mixer_ch].switch_name) {
+			memset(&knew, 0, sizeof(knew));
+			knew.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+			knew.count = 1;
+			knew.access = SNDRV_CTL_ELEM_ACCESS_READWRITE;
+			knew.name = ak->dac_info[mixer_ch].switch_name;
+			knew.info = ak4xxx_switch_info;
+			knew.get = ak4xxx_switch_get;
+			knew.put = ak4xxx_switch_put;
+			knew.access = 0;
+			/* register 1, bit 0 (SMUTE): 0 = normal operation,
+			   1 = mute */
+			knew.private_value =
+				AK_COMPOSE(idx/2, 1, 0, 0) | AK_INVERT;
+			err = snd_ctl_add(ak->card, snd_ctl_new1(&knew, ak));
+			if (err < 0)
+				return err;
+		}
 		memset(&knew, 0, sizeof(knew));
 		if (! ak->dac_info || ! ak->dac_info[mixer_ch].name) {
 			knew.name = "DAC Volume";

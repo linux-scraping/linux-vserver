@@ -6,16 +6,15 @@
 
 #include <linux/kernel.h>
 #include <linux/types.h>
-#include <linux/smp_lock.h>
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/shm.h>
 #include <linux/sem.h>
 #include <linux/msg.h>
+#include <linux/ipc.h>
 
 #include <asm/uaccess.h>
 #include <asm/string.h>
-#include <asm/ipc.h>
 
 #include "conv.h"
 

@@ -11,7 +11,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
@@ -24,7 +23,8 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/freezer.h>
-
+#include <linux/io.h>
+#include <asm/system.h>
 #include <asm/ucontext.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -262,14 +262,14 @@ asmlinkage int sys_rt_sigreturn(unsigned long r4, unsigned long r5,
 		goto badframe;
 	/* It is more difficult to avoid calling this function than to
 	   call it and ignore errors.  */
-	do_sigaltstack(&st, NULL, regs->regs[15]);
+	do_sigaltstack((const stack_t __user *)&st, NULL, (unsigned long)frame);
 
 	return r0;
 
 badframe:
 	force_sig(SIGSEGV, current);
 	return 0;
-}	
+}
 
 /*
  * Set up a signal frame.
@@ -382,7 +382,7 @@ static int setup_frame(int sig, struct k_sigaction *ka,
 	set_fs(USER_DS);
 
 	pr_debug("SIG deliver (%s:%d): sp=%p pc=%08lx pr=%08lx\n",
-		 current->comm, current->pid, frame, regs->pc, regs->pr);
+		 current->comm, task_pid_nr(current), frame, regs->pc, regs->pr);
 
 	flush_cache_sigtramp(regs->pr);
 
@@ -462,7 +462,7 @@ static int setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 	set_fs(USER_DS);
 
 	pr_debug("SIG deliver (%s:%d): sp=%p pc=%08lx pr=%08lx\n",
-		 current->comm, current->pid, frame, regs->pc, regs->pr);
+		 current->comm, task_pid_nr(current), frame, regs->pc, regs->pr);
 
 	flush_cache_sigtramp(regs->pr);
 
@@ -482,7 +482,7 @@ give_sigsegv:
 
 static int
 handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
-	      sigset_t *oldset, struct pt_regs *regs)
+	      sigset_t *oldset, struct pt_regs *regs, unsigned int save_r0)
 {
 	int ret;
 
@@ -490,6 +490,7 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 	if (regs->tra >= 0) {
 		/* If so, check system call restarting.. */
 		switch (regs->regs[0]) {
+			case -ERESTART_RESTARTBLOCK:
 			case -ERESTARTNOHAND:
 				regs->regs[0] = -EINTR;
 				break;
@@ -501,15 +502,16 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 				}
 			/* fallthrough */
 			case -ERESTARTNOINTR:
-				regs->pc -= 2;
+				regs->regs[0] = save_r0;
+				regs->pc -= instruction_size(
+						ctrl_inw(regs->pc - 4));
+				break;
 		}
+#ifdef CONFIG_GUSA
 	} else {
 		/* gUSA handling */
-#ifdef CONFIG_PREEMPT
-		unsigned long flags;
+		preempt_disable();
 
-		local_irq_save(flags);
-#endif
 		if (regs->regs[15] >= 0xc0000000) {
 			int offset = (int)regs->regs[15];
 
@@ -517,10 +519,11 @@ handle_signal(unsigned long sig, struct k_sigaction *ka, siginfo_t *info,
 			regs->regs[15] = regs->regs[1];
 			if (regs->pc < regs->regs[0])
 				/* Go to rewind point #1 */
-				regs->pc = regs->regs[0] + offset - 2;
+				regs->pc = regs->regs[0] + offset -
+					instruction_size(ctrl_inw(regs->pc-4));
 		}
-#ifdef CONFIG_PREEMPT
-		local_irq_restore(flags);
+
+		preempt_enable_no_resched();
 #endif
 	}
 
@@ -581,7 +584,8 @@ static void do_signal(struct pt_regs *regs, unsigned int save_r0)
 	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 	if (signr > 0) {
 		/* Whee!  Actually deliver the signal.  */
-		if (handle_signal(signr, &ka, &info, oldset, regs) == 0) {
+		if (handle_signal(signr, &ka, &info, oldset,
+				  regs, save_r0) == 0) {
 			/* a signal was successfully delivered; the saved
 			 * sigmask will have been stored in the signal frame,
 			 * and will be restored by sigreturn, so we can simply
@@ -601,9 +605,9 @@ static void do_signal(struct pt_regs *regs, unsigned int save_r0)
 		    regs->regs[0] == -ERESTARTSYS ||
 		    regs->regs[0] == -ERESTARTNOINTR) {
 			regs->regs[0] = save_r0;
-			regs->pc -= 2;
+			regs->pc -= instruction_size(ctrl_inw(regs->pc - 4));
 		} else if (regs->regs[0] == -ERESTART_RESTARTBLOCK) {
-			regs->pc -= 2;
+			regs->pc -= instruction_size(ctrl_inw(regs->pc - 4));
 			regs->regs[3] = __NR_restart_syscall;
 		}
 	}

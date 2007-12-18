@@ -160,9 +160,9 @@ static void pxa2xx_ac97_cold_reset(struct snd_ac97 *ac97)
 	gsr_bits = 0;
 #ifdef CONFIG_PXA27x
 	/* PXA27x Developers Manual section 13.5.2.2.1 */
-	pxa_set_cken(1 << 31, 1);
+	pxa_set_cken(31, 1);
 	udelay(5);
-	pxa_set_cken(1 << 31, 0);
+	pxa_set_cken(31, 0);
 	GCR = GCR_COLD_RST;
 	udelay(50);
 #else
@@ -256,7 +256,7 @@ static int pxa2xx_ac97_suspend(struct platform_device *pdev,
 	struct snd_soc_cpu_dai *dai)
 {
 	GCR |= GCR_ACLINK_OFF;
-	pxa_set_cken(CKEN2_AC97, 0);
+	pxa_set_cken(CKEN_AC97, 0);
 	return 0;
 }
 
@@ -271,7 +271,7 @@ static int pxa2xx_ac97_resume(struct platform_device *pdev,
 	/* Use GPIO 113 as AC97 Reset on Bulverde */
 	pxa_gpio_mode(113 | GPIO_ALT_FN_2_OUT);
 #endif
-	pxa_set_cken(CKEN2_AC97, 1);
+	pxa_set_cken(CKEN_AC97, 1);
 	return 0;
 }
 
@@ -296,14 +296,14 @@ static int pxa2xx_ac97_probe(struct platform_device *pdev)
 	/* Use GPIO 113 as AC97 Reset on Bulverde */
 	pxa_gpio_mode(113 | GPIO_ALT_FN_2_OUT);
 #endif
-	pxa_set_cken(CKEN2_AC97, 1);
+	pxa_set_cken(CKEN_AC97, 1);
 	return 0;
 
  err:
-	if (CKEN & CKEN2_AC97) {
+	if (CKEN & (1 << CKEN_AC97)) {
 		GCR |= GCR_ACLINK_OFF;
 		free_irq(IRQ_AC97, NULL);
-		pxa_set_cken(CKEN2_AC97, 0);
+		pxa_set_cken(CKEN_AC97, 0);
 	}
 	return ret;
 }
@@ -312,7 +312,7 @@ static void pxa2xx_ac97_remove(struct platform_device *pdev)
 {
 	GCR |= GCR_ACLINK_OFF;
 	free_irq(IRQ_AC97, NULL);
-	pxa_set_cken(CKEN2_AC97, 0);
+	pxa_set_cken(CKEN_AC97, 0);
 }
 
 static int pxa2xx_ac97_hw_params(struct snd_pcm_substream *substream,

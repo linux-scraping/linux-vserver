@@ -39,7 +39,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/usb.h>
-#include <linux/smp_lock.h>
 #include <linux/wait.h>
 
 #include "rio500_usb.h"
@@ -119,10 +118,7 @@ ioctl_rio(struct inode *inode, struct file *file, unsigned int cmd,
 
 	mutex_lock(&(rio->lock));
         /* Sanity check to make sure rio is connected, powered, etc */
-        if ( rio == NULL ||
-             rio->present == 0 ||
-             rio->rio_dev == NULL )
-	{
+        if (rio->present == 0 || rio->rio_dev == NULL) {
 		retval = -ENODEV;
 		goto err_out;
 	}
@@ -281,10 +277,7 @@ write_rio(struct file *file, const char __user *buffer,
 	if (intr)
 		return -EINTR;
         /* Sanity check to make sure rio is connected, powered, etc */
-        if ( rio == NULL ||
-             rio->present == 0 ||
-             rio->rio_dev == NULL )
-	{
+        if (rio->present == 0 || rio->rio_dev == NULL) {
 		mutex_unlock(&(rio->lock));
 		return -ENODEV;
 	}
@@ -370,10 +363,7 @@ read_rio(struct file *file, char __user *buffer, size_t count, loff_t * ppos)
 	if (intr)
 		return -EINTR;
 	/* Sanity check to make sure rio is connected, powered, etc */
-        if ( rio == NULL ||
-             rio->present == 0 ||
-             rio->rio_dev == NULL )
-	{
+        if (rio->present == 0 || rio->rio_dev == NULL) {
 		mutex_unlock(&(rio->lock));
 		return -ENODEV;
 	}

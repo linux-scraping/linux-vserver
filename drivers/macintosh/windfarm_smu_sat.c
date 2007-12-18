@@ -67,26 +67,6 @@ static struct i2c_driver wf_sat_driver = {
 	.detach_client	= wf_sat_detach,
 };
 
-/*
- * XXX i2c_smbus_read_i2c_block_data doesn't pass the requested
- * length down to the low-level driver, so we use this, which
- * works well enough with the SMU i2c driver code...
- */
-static int sat_read_block(struct i2c_client *client, u8 command,
-			  u8 *values, int len)
-{
-	union i2c_smbus_data data;
-	int err;
-
-	data.block[0] = len;
-	err = i2c_smbus_xfer(client->adapter, client->addr, client->flags,
-			     I2C_SMBUS_READ, command, I2C_SMBUS_I2C_BLOCK_DATA,
-			     &data);
-	if (!err)
-		memcpy(values, data.block, len);
-	return err;
-}
-
 struct smu_sdbp_header *smu_sat_get_sdb_partition(unsigned int sat_id, int id,
 						  unsigned int *size)
 {
@@ -124,8 +104,8 @@ struct smu_sdbp_header *smu_sat_get_sdb_partition(unsigned int sat_id, int id,
 		return NULL;
 
 	for (i = 0; i < len; i += 4) {
-		err = sat_read_block(&sat->i2c, 0xa, data, 4);
-		if (err) {
+		err = i2c_smbus_read_i2c_block_data(&sat->i2c, 0xa, 4, data);
+		if (err < 0) {
 			printk(KERN_ERR "smu_sat_get_sdb_part rd err %d\n",
 			       err);
 			goto fail;
@@ -157,8 +137,8 @@ static int wf_sat_read_cache(struct wf_sat *sat)
 {
 	int err;
 
-	err = sat_read_block(&sat->i2c, 0x3f, sat->cache, 16);
-	if (err)
+	err = i2c_smbus_read_i2c_block_data(&sat->i2c, 0x3f, 16, sat->cache);
+	if (err < 0)
 		return err;
 	sat->last_read = jiffies;
 #ifdef LOTSA_DEBUG
@@ -241,7 +221,7 @@ static void wf_sat_create(struct i2c_adapter *adapter, struct device_node *dev)
 	char *name;
 	int vsens[2], isens[2];
 
-	reg = get_property(dev, "reg", NULL);
+	reg = of_get_property(dev, "reg", NULL);
 	if (reg == NULL)
 		return;
 	addr = *reg;
@@ -268,9 +248,9 @@ static void wf_sat_create(struct i2c_adapter *adapter, struct device_node *dev)
 	isens[0] = isens[1] = -1;
 	child = NULL;
 	while ((child = of_get_next_child(dev, child)) != NULL) {
-		reg = get_property(child, "reg", NULL);
-		type = get_property(child, "device_type", NULL);
-		loc = get_property(child, "location", NULL);
+		reg = of_get_property(child, "reg", NULL);
+		type = of_get_property(child, "device_type", NULL);
+		loc = of_get_property(child, "location", NULL);
 		if (reg == NULL || loc == NULL)
 			continue;
 
@@ -380,7 +360,7 @@ static int wf_sat_attach(struct i2c_adapter *adapter)
 	busnode = pmac_i2c_get_bus_node(bus);
 
 	while ((dev = of_get_next_child(busnode, dev)) != NULL)
-		if (device_is_compatible(dev, "smu-sat"))
+		if (of_device_is_compatible(dev, "smu-sat"))
 			wf_sat_create(adapter, dev);
 	return 0;
 }
@@ -400,10 +380,12 @@ static int __init sat_sensors_init(void)
 	return i2c_add_driver(&wf_sat_driver);
 }
 
+#if 0	/* uncomment when module_exit() below is uncommented */
 static void __exit sat_sensors_exit(void)
 {
 	i2c_del_driver(&wf_sat_driver);
 }
+#endif
 
 module_init(sat_sensors_init);
 /*module_exit(sat_sensors_exit); Uncomment when cleanup is implemented */

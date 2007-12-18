@@ -131,19 +131,47 @@ static inline void sctp_ulpevent_release_owner(struct sctp_ulpevent *event)
 struct sctp_ulpevent  *sctp_ulpevent_make_assoc_change(
 	const struct sctp_association *asoc,
 	__u16 flags, __u16 state, __u16 error, __u16 outbound,
-	__u16 inbound, gfp_t gfp)
+	__u16 inbound, struct sctp_chunk *chunk, gfp_t gfp)
 {
 	struct sctp_ulpevent *event;
 	struct sctp_assoc_change *sac;
 	struct sk_buff *skb;
 
-	event = sctp_ulpevent_new(sizeof(struct sctp_assoc_change),
+	/* If the lower layer passed in the chunk, it will be
+	 * an ABORT, so we need to include it in the sac_info.
+	 */
+	if (chunk) {
+		/* Copy the chunk data to a new skb and reserve enough
+		 * head room to use as notification.
+		 */
+		skb = skb_copy_expand(chunk->skb,
+				      sizeof(struct sctp_assoc_change), 0, gfp);
+
+		if (!skb)
+			goto fail;
+
+		/* Embed the event fields inside the cloned skb.  */
+		event = sctp_skb2event(skb);
+		sctp_ulpevent_init(event, MSG_NOTIFICATION, skb->truesize);
+
+		/* Include the notification structure */
+		sac = (struct sctp_assoc_change *)
+			skb_push(skb, sizeof(struct sctp_assoc_change));
+
+		/* Trim the buffer to the right length.  */
+		skb_trim(skb, sizeof(struct sctp_assoc_change) +
+			 ntohs(chunk->chunk_hdr->length) -
+			 sizeof(sctp_chunkhdr_t));
+	} else {
+		event = sctp_ulpevent_new(sizeof(struct sctp_assoc_change),
 				  MSG_NOTIFICATION, gfp);
-	if (!event)
-		goto fail;
-	skb = sctp_event2skb(event);
-	sac = (struct sctp_assoc_change *)
-		skb_put(skb, sizeof(struct sctp_assoc_change));
+		if (!event)
+			goto fail;
+
+		skb = sctp_event2skb(event);
+		sac = (struct sctp_assoc_change *) skb_put(skb,
+					sizeof(struct sctp_assoc_change));
+	}
 
 	/* Socket Extensions for SCTP
 	 * 5.3.1.1 SCTP_ASSOC_CHANGE
@@ -657,6 +685,24 @@ struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	struct sctp_ulpevent *event = NULL;
 	struct sk_buff *skb;
 	size_t padding, len;
+	int rx_count;
+
+	/*
+	 * check to see if we need to make space for this
+	 * new skb, expand the rcvbuffer if needed, or drop
+	 * the frame
+	 */
+	if (asoc->ep->rcvbuf_policy)
+		rx_count = atomic_read(&asoc->rmem_alloc);
+	else
+		rx_count = atomic_read(&asoc->base.sk->sk_rmem_alloc);
+
+	if (rx_count >= asoc->base.sk->sk_rcvbuf) {
+
+		if ((asoc->base.sk->sk_userlocks & SOCK_RCVBUF_LOCK) ||
+		   (!sk_stream_rmem_schedule(asoc->base.sk, chunk->skb)))
+			goto fail;
+	}
 
 	/* Clone the original skb, sharing the data.  */
 	skb = skb_clone(chunk->skb, gfp);
@@ -766,6 +812,43 @@ struct sctp_ulpevent *sctp_ulpevent_make_pdapi(
 fail:
 	return NULL;
 }
+
+struct sctp_ulpevent *sctp_ulpevent_make_authkey(
+	const struct sctp_association *asoc, __u16 key_id,
+	__u32 indication, gfp_t gfp)
+{
+	struct sctp_ulpevent *event;
+	struct sctp_authkey_event *ak;
+	struct sk_buff *skb;
+
+	event = sctp_ulpevent_new(sizeof(struct sctp_authkey_event),
+				  MSG_NOTIFICATION, gfp);
+	if (!event)
+		goto fail;
+
+	skb = sctp_event2skb(event);
+	ak = (struct sctp_authkey_event *)
+		skb_put(skb, sizeof(struct sctp_authkey_event));
+
+	ak->auth_type = SCTP_AUTHENTICATION_EVENT;
+	ak->auth_flags = 0;
+	ak->auth_length = sizeof(struct sctp_authkey_event);
+
+	ak->auth_keynumber = key_id;
+	ak->auth_altkeynumber = 0;
+	ak->auth_indication = indication;
+
+	/*
+	 * The association id field, holds the identifier for the association.
+	 */
+	sctp_ulpevent_set_owner(event, asoc);
+	ak->auth_assoc_id = sctp_assoc2id(asoc);
+
+	return event;
+fail:
+	return NULL;
+}
+
 
 /* Return the notification type, assuming this is a notification
  * event.

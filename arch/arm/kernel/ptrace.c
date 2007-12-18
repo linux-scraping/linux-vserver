@@ -13,7 +13,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/ptrace.h>
 #include <linux/user.h>
 #include <linux/security.h>
@@ -383,16 +382,16 @@ static void clear_breakpoint(struct task_struct *task, struct debug_entry *bp)
 
 		if (ret != 2 || old_insn.thumb != BREAKINST_THUMB)
 			printk(KERN_ERR "%s:%d: corrupted Thumb breakpoint at "
-				"0x%08lx (0x%04x)\n", task->comm, task->pid,
-				addr, old_insn.thumb);
+				"0x%08lx (0x%04x)\n", task->comm,
+				task_pid_nr(task), addr, old_insn.thumb);
 	} else {
 		ret = swap_insn(task, addr & ~3, &old_insn.arm,
 				&bp->insn.arm, 4);
 
 		if (ret != 4 || old_insn.arm != BREAKINST_ARM)
 			printk(KERN_ERR "%s:%d: corrupted ARM breakpoint at "
-				"0x%08lx (0x%08x)\n", task->comm, task->pid,
-				addr, old_insn.arm);
+				"0x%08lx (0x%08x)\n", task->comm,
+				task_pid_nr(task), addr, old_insn.arm);
 	}
 }
 
@@ -457,13 +456,10 @@ void ptrace_cancel_bpt(struct task_struct *child)
 
 /*
  * Called by kernel/ptrace.c when detaching..
- *
- * Make sure the single step bit is not set.
  */
 void ptrace_disable(struct task_struct *child)
 {
-	child->ptrace &= ~PT_SINGLESTEP;
-	ptrace_cancel_bpt(child);
+	single_step_disable(child);
 }
 
 /*
@@ -661,7 +657,6 @@ static int ptrace_setcrunchregs(struct task_struct *tsk, void __user *ufp)
 
 long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 {
-	unsigned long tmp;
 	int ret;
 
 	switch (request) {
@@ -670,12 +665,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		 */
 		case PTRACE_PEEKTEXT:
 		case PTRACE_PEEKDATA:
-			ret = access_process_vm(child, addr, &tmp,
-						sizeof(unsigned long), 0);
-			if (ret == sizeof(unsigned long))
-				ret = put_user(tmp, (unsigned long __user *) data);
-			else
-				ret = -EIO;
+			ret = generic_ptrace_peekdata(child, addr, data);
 			break;
 
 		case PTRACE_PEEKUSR:
@@ -687,12 +677,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		 */
 		case PTRACE_POKETEXT:
 		case PTRACE_POKEDATA:
-			ret = access_process_vm(child, addr, &data,
-						sizeof(unsigned long), 1);
-			if (ret == sizeof(unsigned long))
-				ret = 0;
-			else
-				ret = -EIO;
+			ret = generic_ptrace_pokedata(child, addr, data);
 			break;
 
 		case PTRACE_POKEUSR:
@@ -712,9 +697,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			else
 				clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);
 			child->exit_code = data;
-			/* make sure single-step breakpoint is gone. */
-			child->ptrace &= ~PT_SINGLESTEP;
-			ptrace_cancel_bpt(child);
+			single_step_disable(child);
 			wake_up_process(child);
 			ret = 0;
 			break;
@@ -725,9 +708,7 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		 * exit.
 		 */
 		case PTRACE_KILL:
-			/* make sure single-step breakpoint is gone. */
-			child->ptrace &= ~PT_SINGLESTEP;
-			ptrace_cancel_bpt(child);
+			single_step_disable(child);
 			if (child->exit_state != EXIT_ZOMBIE) {
 				child->exit_code = SIGKILL;
 				wake_up_process(child);
@@ -742,16 +723,12 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			ret = -EIO;
 			if (!valid_signal(data))
 				break;
-			child->ptrace |= PT_SINGLESTEP;
+			single_step_enable(child);
 			clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);
 			child->exit_code = data;
 			/* give it a chance to run. */
 			wake_up_process(child);
 			ret = 0;
-			break;
-
-		case PTRACE_DETACH:
-			ret = ptrace_detach(child, data);
 			break;
 
 		case PTRACE_GETREGS:
@@ -786,8 +763,8 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 			break;
 
 		case PTRACE_SET_SYSCALL:
+			task_thread_info(child)->syscall = data;
 			ret = 0;
-			child->ptrace_message = data;
 			break;
 
 #ifdef CONFIG_CRUNCH
@@ -824,7 +801,7 @@ asmlinkage int syscall_trace(int why, struct pt_regs *regs, int scno)
 	ip = regs->ARM_ip;
 	regs->ARM_ip = why;
 
-	current->ptrace_message = scno;
+	current_thread_info()->syscall = scno;
 
 	/* the 0x80 provides a way for the tracing parent to distinguish
 	   between a syscall stop and SIGTRAP delivery */
@@ -841,5 +818,5 @@ asmlinkage int syscall_trace(int why, struct pt_regs *regs, int scno)
 	}
 	regs->ARM_ip = ip;
 
-	return current->ptrace_message;
+	return current_thread_info()->syscall;
 }

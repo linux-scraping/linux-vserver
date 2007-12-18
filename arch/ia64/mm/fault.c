@@ -7,50 +7,37 @@
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/kprobes.h>
+#include <linux/kdebug.h>
 #include <linux/vs_memory.h>
 
 #include <asm/pgtable.h>
 #include <asm/processor.h>
 #include <asm/system.h>
 #include <asm/uaccess.h>
-#include <asm/kdebug.h>
 
 extern void die (char *, struct pt_regs *, long);
 
 #ifdef CONFIG_KPROBES
-ATOMIC_NOTIFIER_HEAD(notify_page_fault_chain);
-
-/* Hook to register for page fault notifications */
-int register_page_fault_notifier(struct notifier_block *nb)
+static inline int notify_page_fault(struct pt_regs *regs, int trap)
 {
-	return atomic_notifier_chain_register(&notify_page_fault_chain, nb);
-}
+	int ret = 0;
 
-int unregister_page_fault_notifier(struct notifier_block *nb)
-{
-	return atomic_notifier_chain_unregister(&notify_page_fault_chain, nb);
-}
+	if (!user_mode(regs)) {
+		/* kprobe_running() needs smp_processor_id() */
+		preempt_disable();
+		if (kprobe_running() && kprobes_fault_handler(regs, trap))
+			ret = 1;
+		preempt_enable();
+	}
 
-static inline int notify_page_fault(enum die_val val, const char *str,
-			struct pt_regs *regs, long err, int trap, int sig)
-{
-	struct die_args args = {
-		.regs = regs,
-		.str = str,
-		.err = err,
-		.trapnr = trap,
-		.signr = sig
-	};
-	return atomic_notifier_call_chain(&notify_page_fault_chain, val, &args);
+	return ret;
 }
 #else
-static inline int notify_page_fault(enum die_val val, const char *str,
-			struct pt_regs *regs, long err, int trap, int sig)
+static inline int notify_page_fault(struct pt_regs *regs, int trap)
 {
-	return NOTIFY_DONE;
+	return 0;
 }
 #endif
 
@@ -94,6 +81,7 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 	struct mm_struct *mm = current->mm;
 	struct siginfo si;
 	unsigned long mask;
+	int fault;
 
 	/* mmap_sem is performance critical.... */
 	prefetchw(&mm->mmap_sem);
@@ -119,18 +107,23 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 	/*
 	 * This is to handle the kprobes on user space access instructions
 	 */
-	if (notify_page_fault(DIE_PAGE_FAULT, "page fault", regs, code, TRAP_BRKPT,
-					SIGSEGV) == NOTIFY_STOP)
+	if (notify_page_fault(regs, TRAP_BRKPT))
 		return;
 
 	down_read(&mm->mmap_sem);
 
 	vma = find_vma_prev(mm, address, &prev_vma);
-	if (!vma)
+	if (!vma && !prev_vma )
 		goto bad_area;
 
-	/* find_vma_prev() returns vma such that address < vma->vm_end or NULL */
-	if (address < vma->vm_start)
+        /*
+         * find_vma_prev() returns vma such that address < vma->vm_end or NULL
+         *
+         * May find no vma, but could be that the last vm area is the
+         * register backing store that needs to expand upwards, in
+         * this case vma will be null, but prev_vma will ne non-null
+         */
+        if (( !vma && prev_vma ) || (address < vma->vm_start) )
 		goto check_expansion;
 
   good_area:
@@ -162,31 +155,32 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 	 * sure we exit gracefully rather than endlessly redo the
 	 * fault.
 	 */
-	switch (handle_mm_fault(mm, vma, address, (mask & VM_WRITE) != 0)) {
-	      case VM_FAULT_MINOR:
-		++current->min_flt;
-		break;
-	      case VM_FAULT_MAJOR:
-		++current->maj_flt;
-		break;
-	      case VM_FAULT_SIGBUS:
+	fault = handle_mm_fault(mm, vma, address, (mask & VM_WRITE) != 0);
+	if (unlikely(fault & VM_FAULT_ERROR)) {
 		/*
 		 * We ran out of memory, or some other thing happened
 		 * to us that made us unable to handle the page fault
 		 * gracefully.
 		 */
-		signal = SIGBUS;
-		goto bad_area;
-	      case VM_FAULT_OOM:
-		goto out_of_memory;
-	      default:
+		if (fault & VM_FAULT_OOM) {
+			goto out_of_memory;
+		} else if (fault & VM_FAULT_SIGBUS) {
+			signal = SIGBUS;
+			goto bad_area;
+		}
 		BUG();
 	}
+	if (fault & VM_FAULT_MAJOR)
+		current->maj_flt++;
+	else
+		current->min_flt++;
 	up_read(&mm->mmap_sem);
 	return;
 
   check_expansion:
 	if (!(prev_vma && (prev_vma->vm_flags & VM_GROWSUP) && (address == prev_vma->vm_end))) {
+		if (!vma)
+			goto bad_area;
 		if (!(vma->vm_flags & VM_GROWSDOWN))
 			goto bad_area;
 		if (REGION_NUMBER(address) != REGION_NUMBER(vma->vm_start)
@@ -281,13 +275,13 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 
   out_of_memory:
 	up_read(&mm->mmap_sem);
-	if (is_init(current)) {
+	if (is_global_init(current)) {
 		yield();
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
 	printk(KERN_CRIT "VM: killing process %s\n", current->comm);
 	if (user_mode(regs))
-		do_exit(SIGKILL);
+		do_group_exit(SIGKILL);
 	goto no_context;
 }

@@ -1,6 +1,6 @@
 /*
  *  Driver for Ensoniq ES1370/ES1371 AudioPCI soundcard
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>,
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>,
  *		     Thomas Sailer <sailer@ife.ee.ethz.ch>
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -61,7 +61,7 @@
 #endif
 
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>, Thomas Sailer <sailer@ife.ee.ethz.ch>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>, Thomas Sailer <sailer@ife.ee.ethz.ch>");
 MODULE_LICENSE("GPL");
 #ifdef CHIP1370
 MODULE_DESCRIPTION("Ensoniq AudioPCI ES1370");
@@ -798,10 +798,8 @@ static int snd_ensoniq_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	{
 		unsigned int what = 0;
-		struct list_head *pos;
 		struct snd_pcm_substream *s;
-		snd_pcm_group_for_each(pos, substream) {
-			s = snd_pcm_group_substream_entry(pos);
+		snd_pcm_group_for_each_entry(s, substream) {
 			if (s == ensoniq->playback1_substream) {
 				what |= ES_P1_PAUSE;
 				snd_pcm_trigger_done(s, substream);
@@ -824,10 +822,8 @@ static int snd_ensoniq_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_STOP:
 	{
 		unsigned int what = 0;
-		struct list_head *pos;
 		struct snd_pcm_substream *s;
-		snd_pcm_group_for_each(pos, substream) {
-			s = snd_pcm_group_substream_entry(pos);
+		snd_pcm_group_for_each_entry(s, substream) {
 			if (s == ensoniq->playback1_substream) {
 				what |= ES_DAC1_EN;
 				snd_pcm_trigger_done(s, substream);
@@ -1423,15 +1419,7 @@ static int snd_ens1373_spdif_stream_put(struct snd_kcontrol *kcontrol,
 { .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .info = snd_es1371_spdif_info, \
   .get = snd_es1371_spdif_get, .put = snd_es1371_spdif_put }
 
-static int snd_es1371_spdif_info(struct snd_kcontrol *kcontrol,
-				 struct snd_ctl_elem_info *uinfo)
-{
-        uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-        uinfo->count = 1;
-        uinfo->value.integer.min = 0;
-        uinfo->value.integer.max = 1;
-        return 0;
-}
+#define snd_es1371_spdif_info		snd_ctl_boolean_mono_info
 
 static int snd_es1371_spdif_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
@@ -1493,15 +1481,7 @@ static struct snd_kcontrol_new snd_es1371_mixer_spdif[] __devinitdata = {
 };
 
 
-static int snd_es1373_rear_info(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_info *uinfo)
-{
-        uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-        uinfo->count = 1;
-        uinfo->value.integer.min = 0;
-        uinfo->value.integer.max = 1;
-        return 0;
-}
+#define snd_es1373_rear_info		snd_ctl_boolean_mono_info
 
 static int snd_es1373_rear_get(struct snd_kcontrol *kcontrol,
 			       struct snd_ctl_elem_value *ucontrol)
@@ -1546,15 +1526,7 @@ static struct snd_kcontrol_new snd_ens1373_rear __devinitdata =
 	.put =		snd_es1373_rear_put,
 };
 
-static int snd_es1373_line_info(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_es1373_line_info		snd_ctl_boolean_mono_info
 
 static int snd_es1373_line_get(struct snd_kcontrol *kcontrol,
 			       struct snd_ctl_elem_value *ucontrol)
@@ -1611,8 +1583,8 @@ struct es1371_quirk {
 	unsigned char rev;		/* revision */
 };
 
-static int __devinit es1371_quirk_lookup(struct ensoniq *ensoniq,
-					 struct es1371_quirk *list)
+static int es1371_quirk_lookup(struct ensoniq *ensoniq,
+				struct es1371_quirk *list)
 {
 	while (list->vid != (unsigned short)PCI_ANY_ID) {
 		if (ensoniq->pci->vendor == list->vid &&
@@ -1711,15 +1683,7 @@ static int __devinit snd_ensoniq_1371_mixer(struct ensoniq *ensoniq,
   .get = snd_ensoniq_control_get, .put = snd_ensoniq_control_put, \
   .private_value = mask }
 
-static int snd_ensoniq_control_info(struct snd_kcontrol *kcontrol,
-				    struct snd_ctl_elem_info *uinfo)
-{
-        uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-        uinfo->count = 1;
-        uinfo->value.integer.min = 0;
-        uinfo->value.integer.max = 1;
-        return 0;
-}
+#define snd_ensoniq_control_info	snd_ctl_boolean_mono_info
 
 static int snd_ensoniq_control_get(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
@@ -2114,7 +2078,6 @@ static int __devinit snd_ensoniq_create(struct snd_card *card,
 				     struct ensoniq ** rensoniq)
 {
 	struct ensoniq *ensoniq;
-	unsigned char cmdb;
 	int err;
 	static struct snd_device_ops ops = {
 		.dev_free =	snd_ensoniq_dev_free,
@@ -2155,8 +2118,7 @@ static int __devinit snd_ensoniq_create(struct snd_card *card,
 	}
 #endif
 	pci_set_master(pci);
-	pci_read_config_byte(pci, PCI_REVISION_ID, &cmdb);
-	ensoniq->rev = cmdb;
+	ensoniq->rev = pci->revision;
 #ifdef CHIP1370
 #if 0
 	ensoniq->ctrl = ES_1370_CDC_EN | ES_1370_SERR_DISABLE |

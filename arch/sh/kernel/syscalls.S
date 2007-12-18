@@ -14,24 +14,6 @@
 #include <linux/sys.h>
 #include <linux/linkage.h>
 
-#if !defined(CONFIG_NFSD) && !defined(CONFIG_NFSD_MODULE)
-#define sys_nfsservctl		sys_ni_syscall
-#endif
-
-#if !defined(CONFIG_MMU)
-#define sys_madvise		sys_ni_syscall
-#define sys_readahead		sys_ni_syscall
-#define sys_mprotect		sys_ni_syscall
-#define sys_msync		sys_ni_syscall
-#define sys_mlock		sys_ni_syscall
-#define sys_munlock		sys_ni_syscall
-#define sys_mlockall		sys_ni_syscall
-#define sys_munlockall		sys_ni_syscall
-#define sys_mremap		sys_ni_syscall
-#define sys_mincore		sys_ni_syscall
-#define sys_remap_file_pages	sys_ni_syscall
-#endif
-
 	.data
 ENTRY(sys_call_table)
 	.long sys_restart_syscall	/* 0  -  old "setup()" system call*/
@@ -308,9 +290,9 @@ ENTRY(sys_call_table)
 	.long sys_utimes
  	.long sys_fadvise64_64_wrapper
 	.long sys_ni_syscall	/* Reserved for vserver */
-	.long sys_ni_syscall	/* Reserved for mbind */
-	.long sys_ni_syscall	/* 275 - get_mempolicy */
-	.long sys_ni_syscall	/* set_mempolicy */
+	.long sys_mbind
+	.long sys_get_mempolicy		/* 275 */
+	.long sys_set_mempolicy
 	.long sys_mq_open
 	.long sys_mq_unlink
 	.long sys_mq_timedsend
@@ -354,3 +336,8 @@ ENTRY(sys_call_table)
 	.long sys_move_pages
 	.long sys_getcpu
 	.long sys_epoll_pwait
+	.long sys_utimensat		/* 320 */
+	.long sys_signalfd
+	.long sys_timerfd
+	.long sys_eventfd
+	.long sys_fallocate

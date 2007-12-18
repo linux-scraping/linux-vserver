@@ -18,19 +18,11 @@
  * lethal@linux-sh.org:          15th May 2003
  *    Use the generic procfs cpuinfo interface, just return a valid board name.
  */
-
-#include <linux/stddef.h>
 #include <linux/init.h>
-#include <linux/mm.h>
-#include <linux/bootmem.h>
-#include <linux/delay.h>
 #include <linux/kernel.h>
-#include <linux/seq_file.h>
-#include <asm/processor.h>
 #include <asm/platform.h>
-#include <asm/io.h>
 #include <asm/irq.h>
-#include <asm/page.h>
+#include <asm/io.h>
 
 /*
  * Platform Dependent Interrupt Priorities.
@@ -213,7 +205,7 @@ static int __init smsc_superio_setup(void)
 	SMSC_SUPERIO_WRITE_INDEXED(0x00, 0xc7); /* GP47 = nIOWOP */
 #endif
 
-	/* Exit the configuraton state */
+	/* Exit the configuration state */
 	outb(SMSC_EXIT_CONFIG_KEY, SMSC_CONFIG_PORT_ADDR);
 
 	return 0;

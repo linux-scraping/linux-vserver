@@ -1,132 +1,13 @@
 #include <linux/string.h>
 #include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/mod_devicetable.h>
 #include <linux/slab.h>
-
-#include <asm/errno.h>
-#include <asm/of_device.h>
-
-/**
- * of_match_device - Tell if an of_device structure has a matching
- * of_match structure
- * @ids: array of of device match structures to search in
- * @dev: the of device structure to match against
- *
- * Used by a driver to check whether an of_device present in the
- * system is in its list of supported devices.
- */
-const struct of_device_id *of_match_device(const struct of_device_id *matches,
-					const struct of_device *dev)
-{
-	if (!dev->node)
-		return NULL;
-	while (matches->name[0] || matches->type[0] || matches->compatible[0]) {
-		int match = 1;
-		if (matches->name[0])
-			match &= dev->node->name
-				&& !strcmp(matches->name, dev->node->name);
-		if (matches->type[0])
-			match &= dev->node->type
-				&& !strcmp(matches->type, dev->node->type);
-		if (matches->compatible[0])
-			match &= of_device_is_compatible(dev->node,
-							 matches->compatible);
-		if (match)
-			return matches;
-		matches++;
-	}
-	return NULL;
-}
-
-static int of_platform_bus_match(struct device *dev, struct device_driver *drv)
-{
-	struct of_device * of_dev = to_of_device(dev);
-	struct of_platform_driver * of_drv = to_of_platform_driver(drv);
-	const struct of_device_id * matches = of_drv->match_table;
-
-	if (!matches)
-		return 0;
-
-	return of_match_device(matches, of_dev) != NULL;
-}
-
-struct of_device *of_dev_get(struct of_device *dev)
-{
-	struct device *tmp;
-
-	if (!dev)
-		return NULL;
-	tmp = get_device(&dev->dev);
-	if (tmp)
-		return to_of_device(tmp);
-	else
-		return NULL;
-}
-
-void of_dev_put(struct of_device *dev)
-{
-	if (dev)
-		put_device(&dev->dev);
-}
-
-
-static int of_device_probe(struct device *dev)
-{
-	int error = -ENODEV;
-	struct of_platform_driver *drv;
-	struct of_device *of_dev;
-	const struct of_device_id *match;
-
-	drv = to_of_platform_driver(dev->driver);
-	of_dev = to_of_device(dev);
-
-	if (!drv->probe)
-		return error;
-
-	of_dev_get(of_dev);
-
-	match = of_match_device(drv->match_table, of_dev);
-	if (match)
-		error = drv->probe(of_dev, match);
-	if (error)
-		of_dev_put(of_dev);
-
-	return error;
-}
-
-static int of_device_remove(struct device *dev)
-{
-	struct of_device * of_dev = to_of_device(dev);
-	struct of_platform_driver * drv = to_of_platform_driver(dev->driver);
-
-	if (dev->driver && drv->remove)
-		drv->remove(of_dev);
-	return 0;
-}
-
-static int of_device_suspend(struct device *dev, pm_message_t state)
-{
-	struct of_device * of_dev = to_of_device(dev);
-	struct of_platform_driver * drv = to_of_platform_driver(dev->driver);
-	int error = 0;
-
-	if (dev->driver && drv->suspend)
-		error = drv->suspend(of_dev, state);
-	return error;
-}
-
-static int of_device_resume(struct device * dev)
-{
-	struct of_device * of_dev = to_of_device(dev);
-	struct of_platform_driver * drv = to_of_platform_driver(dev->driver);
-	int error = 0;
-
-	if (dev->driver && drv->resume)
-		error = drv->resume(of_dev);
-	return error;
-}
+#include <linux/errno.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
 
 void __iomem *of_ioremap(struct resource *res, unsigned long offset, unsigned long size, char *name)
 {
@@ -163,7 +44,7 @@ static int node_match(struct device *dev, void *data)
 
 struct of_device *of_find_device_by_node(struct device_node *dp)
 {
-	struct device *dev = bus_find_device(&of_bus_type, NULL,
+	struct device *dev = bus_find_device(&of_platform_bus_type, NULL,
 					     dp, node_match);
 
 	if (dev)
@@ -174,48 +55,20 @@ struct of_device *of_find_device_by_node(struct device_node *dp)
 EXPORT_SYMBOL(of_find_device_by_node);
 
 #ifdef CONFIG_PCI
-struct bus_type isa_bus_type = {
-       .name	= "isa",
-       .match	= of_platform_bus_match,
-       .probe	= of_device_probe,
-       .remove	= of_device_remove,
-       .suspend	= of_device_suspend,
-       .resume	= of_device_resume,
-};
+struct bus_type isa_bus_type;
 EXPORT_SYMBOL(isa_bus_type);
 
-struct bus_type ebus_bus_type = {
-       .name	= "ebus",
-       .match	= of_platform_bus_match,
-       .probe	= of_device_probe,
-       .remove	= of_device_remove,
-       .suspend	= of_device_suspend,
-       .resume	= of_device_resume,
-};
+struct bus_type ebus_bus_type;
 EXPORT_SYMBOL(ebus_bus_type);
 #endif
 
 #ifdef CONFIG_SBUS
-struct bus_type sbus_bus_type = {
-       .name	= "sbus",
-       .match	= of_platform_bus_match,
-       .probe	= of_device_probe,
-       .remove	= of_device_remove,
-       .suspend	= of_device_suspend,
-       .resume	= of_device_resume,
-};
+struct bus_type sbus_bus_type;
 EXPORT_SYMBOL(sbus_bus_type);
 #endif
 
-struct bus_type of_bus_type = {
-       .name	= "of",
-       .match	= of_platform_bus_match,
-       .probe	= of_device_probe,
-       .remove	= of_device_remove,
-       .suspend	= of_device_suspend,
-       .resume	= of_device_resume,
-};
-EXPORT_SYMBOL(of_bus_type);
+struct bus_type of_platform_bus_type;
+EXPORT_SYMBOL(of_platform_bus_type);
 
 static inline u64 of_read_addr(const u32 *cell, int size)
 {
@@ -245,7 +98,7 @@ struct of_bus {
 				       int *addrc, int *sizec);
 	int		(*map)(u32 *addr, const u32 *range,
 			       int na, int ns, int pna);
-	unsigned int	(*get_flags)(u32 *addr);
+	unsigned int	(*get_flags)(const u32 *addr);
 };
 
 /*
@@ -305,7 +158,7 @@ static int of_bus_default_map(u32 *addr, const u32 *range,
 	return 0;
 }
 
-static unsigned int of_bus_default_get_flags(u32 *addr)
+static unsigned int of_bus_default_get_flags(const u32 *addr)
 {
 	return IORESOURCE_MEM;
 }
@@ -317,6 +170,11 @@ static unsigned int of_bus_default_get_flags(u32 *addr)
 static int of_bus_pci_match(struct device_node *np)
 {
 	if (!strcmp(np->type, "pci") || !strcmp(np->type, "pciex")) {
+		const char *model = of_get_property(np, "model", NULL);
+
+		if (model && !strcmp(model, "SUNW,simba"))
+			return 0;
+
 		/* Do not do PCI specific frobbing if the
 		 * PCI bridge lacks a ranges property.  We
 		 * want to pass it through up to the next
@@ -329,6 +187,30 @@ static int of_bus_pci_match(struct device_node *np)
 		return 1;
 	}
 
+	return 0;
+}
+
+static int of_bus_simba_match(struct device_node *np)
+{
+	const char *model = of_get_property(np, "model", NULL);
+
+	if (model && !strcmp(model, "SUNW,simba"))
+		return 1;
+
+	/* Treat PCI busses lacking ranges property just like
+	 * simba.
+	 */
+	if (!strcmp(np->type, "pci") || !strcmp(np->type, "pciex")) {
+		if (!of_find_property(np, "ranges", NULL))
+			return 1;
+	}
+
+	return 0;
+}
+
+static int of_bus_simba_map(u32 *addr, const u32 *range,
+			    int na, int ns, int pna)
+{
 	return 0;
 }
 
@@ -369,7 +251,7 @@ static int of_bus_pci_map(u32 *addr, const u32 *range,
 	return 0;
 }
 
-static unsigned int of_bus_pci_get_flags(u32 *addr)
+static unsigned int of_bus_pci_get_flags(const u32 *addr)
 {
 	unsigned int flags = 0;
 	u32 w = addr[0];
@@ -436,6 +318,15 @@ static struct of_bus of_busses[] = {
 		.map = of_bus_pci_map,
 		.get_flags = of_bus_pci_get_flags,
 	},
+	/* SIMBA */
+	{
+		.name = "simba",
+		.addr_prop_name = "assigned-addresses",
+		.match = of_bus_simba_match,
+		.count_cells = of_bus_pci_count_cells,
+		.map = of_bus_simba_map,
+		.get_flags = of_bus_pci_get_flags,
+	},
 	/* SBUS */
 	{
 		.name = "sbus",
@@ -482,7 +373,7 @@ static int __init build_one_resource(struct device_node *parent,
 				     u32 *addr,
 				     int na, int ns, int pna)
 {
-	u32 *ranges;
+	const u32 *ranges;
 	unsigned int rlen;
 	int rone;
 
@@ -520,8 +411,6 @@ static int __init build_one_resource(struct device_node *parent,
 
 static int __init use_1to1_mapping(struct device_node *pp)
 {
-	char *model;
-
 	/* If this is on the PMU bus, don't try to translate it even
 	 * if a ranges property exists.
 	 */
@@ -538,9 +427,11 @@ static int __init use_1to1_mapping(struct device_node *pp)
 	if (!strcmp(pp->name, "dma"))
 		return 0;
 
-	/* Similarly for Simba PCI bridges.  */
-	model = of_get_property(pp, "model", NULL);
-	if (model && !strcmp(model, "SUNW,simba"))
+	/* Similarly for all PCI bridges, if we get this far
+	 * it lacks a ranges property, and this will include
+	 * cases like Simba.
+	 */
+	if (!strcmp(pp->type, "pci") || !strcmp(pp->type, "pciex"))
 		return 0;
 
 	return 1;
@@ -555,7 +446,7 @@ static void __init build_device_resources(struct of_device *op,
 	struct of_bus *bus;
 	int na, ns;
 	int index, num_reg;
-	void *preg;
+	const void *preg;
 
 	if (!parent)
 		return;
@@ -574,7 +465,7 @@ static void __init build_device_resources(struct of_device *op,
 	/* Convert to num-entries.  */
 	num_reg /= na + ns;
 
-	/* Prevent overruning the op->resources[] array.  */
+	/* Prevent overrunning the op->resources[] array.  */
 	if (num_reg > PROMREG_MAX) {
 		printk(KERN_WARNING "%s: Too many regs (%d), "
 		       "limiting to %d.\n",
@@ -585,7 +476,7 @@ static void __init build_device_resources(struct of_device *op,
 	for (index = 0; index < num_reg; index++) {
 		struct resource *r = &op->resource[index];
 		u32 addr[OF_MAX_ADDR_CELLS];
-		u32 *reg = (preg + (index * ((na + ns) * 4)));
+		const u32 *reg = (preg + (index * ((na + ns) * 4)));
 		struct device_node *dp = op->node;
 		struct device_node *pp = p_op->node;
 		struct of_bus *pbus, *dbus;
@@ -650,14 +541,14 @@ static void __init build_device_resources(struct of_device *op,
 
 static struct device_node * __init
 apply_interrupt_map(struct device_node *dp, struct device_node *pp,
-		    u32 *imap, int imlen, u32 *imask,
+		    const u32 *imap, int imlen, const u32 *imask,
 		    unsigned int *irq_p)
 {
 	struct device_node *cp;
 	unsigned int irq = *irq_p;
 	struct of_bus *bus;
 	phandle handle;
-	u32 *reg;
+	const u32 *reg;
 	int na, num_reg, i;
 
 	bus = of_match_bus(pp);
@@ -712,7 +603,7 @@ static unsigned int __init pci_irq_swizzle(struct device_node *dp,
 					   struct device_node *pp,
 					   unsigned int irq)
 {
-	struct linux_prom_pci_registers *regs;
+	const struct linux_prom_pci_registers *regs;
 	unsigned int bus, devfn, slot, ret;
 
 	if (irq < 1 || irq > 4)
@@ -737,12 +628,6 @@ static unsigned int __init pci_irq_swizzle(struct device_node *dp,
 		 * D: 2-bit slot number, derived from PCI device number as
 		 *    (dev - 1) for bus A, or (dev - 2) for bus B
 		 * L: 2-bit line number
-		 *
-		 * Actually, more "portable" way to calculate the funky
-		 * slot number is to subtract pbm->pci_first_slot from the
-		 * device number, and that's exactly what the pre-OF
-		 * sparc64 code did, but we're building this stuff generically
-		 * using the OBP tree, not in the PCI controller layer.
 		 */
 		if (bus & 0x80) {
 			/* PBM-A */
@@ -801,7 +686,7 @@ static unsigned int __init build_one_device_irq(struct of_device *op,
 	pp = dp->parent;
 	ip = NULL;
 	while (pp) {
-		void *imap, *imsk;
+		const void *imap, *imsk;
 		int imlen;
 
 		imap = of_get_property(pp, "interrupt-map", &imlen);
@@ -866,11 +751,16 @@ static struct of_device * __init scan_one_device(struct device_node *dp,
 						 struct device *parent)
 {
 	struct of_device *op = kzalloc(sizeof(*op), GFP_KERNEL);
-	unsigned int *irq;
+	const unsigned int *irq;
+	struct dev_archdata *sd;
 	int len, i;
 
 	if (!op)
 		return NULL;
+
+	sd = &op->dev.archdata;
+	sd->prom_node = dp;
+	sd->op = op;
 
 	op->node = dp;
 
@@ -888,7 +778,7 @@ static struct of_device * __init scan_one_device(struct device_node *dp,
 		op->num_irqs = 0;
 	}
 
-	/* Prevent overruning the op->irqs[] array.  */
+	/* Prevent overrunning the op->irqs[] array.  */
 	if (op->num_irqs > PROMINTR_MAX) {
 		printk(KERN_WARNING "%s: Too many irqs (%d), "
 		       "limiting to %d.\n",
@@ -901,7 +791,7 @@ static struct of_device * __init scan_one_device(struct device_node *dp,
 		op->irqs[i] = build_one_device_irq(op, parent, op->irqs[i]);
 
 	op->dev.parent = parent;
-	op->dev.bus = &of_bus_type;
+	op->dev.bus = &of_platform_bus_type;
 	if (!parent)
 		strcpy(op->dev.bus_id, "root");
 	else
@@ -945,16 +835,16 @@ static int __init of_bus_driver_init(void)
 {
 	int err;
 
-	err = bus_register(&of_bus_type);
+	err = of_bus_type_init(&of_platform_bus_type, "of");
 #ifdef CONFIG_PCI
 	if (!err)
-		err = bus_register(&isa_bus_type);
+		err = of_bus_type_init(&isa_bus_type, "isa");
 	if (!err)
-		err = bus_register(&ebus_bus_type);
+		err = of_bus_type_init(&ebus_bus_type, "ebus");
 #endif
 #ifdef CONFIG_SBUS
 	if (!err)
-		err = bus_register(&sbus_bus_type);
+		err = of_bus_type_init(&sbus_bus_type, "sbus");
 #endif
 
 	if (!err)
@@ -978,71 +868,6 @@ static int __init of_debug(char *str)
 }
 
 __setup("of_debug=", of_debug);
-
-int of_register_driver(struct of_platform_driver *drv, struct bus_type *bus)
-{
-	/* initialize common driver fields */
-	drv->driver.name = drv->name;
-	drv->driver.bus = bus;
-
-	/* register with core */
-	return driver_register(&drv->driver);
-}
-
-void of_unregister_driver(struct of_platform_driver *drv)
-{
-	driver_unregister(&drv->driver);
-}
-
-
-static ssize_t dev_show_devspec(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct of_device *ofdev;
-
-	ofdev = to_of_device(dev);
-	return sprintf(buf, "%s", ofdev->node->full_name);
-}
-
-static DEVICE_ATTR(devspec, S_IRUGO, dev_show_devspec, NULL);
-
-/**
- * of_release_dev - free an of device structure when all users of it are finished.
- * @dev: device that's been disconnected
- *
- * Will be called only by the device core when all users of this of device are
- * done.
- */
-void of_release_dev(struct device *dev)
-{
-	struct of_device *ofdev;
-
-        ofdev = to_of_device(dev);
-
-	kfree(ofdev);
-}
-
-int of_device_register(struct of_device *ofdev)
-{
-	int rc;
-
-	BUG_ON(ofdev->node == NULL);
-
-	rc = device_register(&ofdev->dev);
-	if (rc)
-		return rc;
-
-	rc = device_create_file(&ofdev->dev, &dev_attr_devspec);
-	if (rc)
-		device_unregister(&ofdev->dev);
-
-	return rc;
-}
-
-void of_device_unregister(struct of_device *ofdev)
-{
-	device_remove_file(&ofdev->dev, &dev_attr_devspec);
-	device_unregister(&ofdev->dev);
-}
 
 struct of_device* of_platform_device_create(struct device_node *np,
 					    const char *bus_id,
@@ -1068,13 +893,4 @@ struct of_device* of_platform_device_create(struct device_node *np,
 
 	return dev;
 }
-
-EXPORT_SYMBOL(of_match_device);
-EXPORT_SYMBOL(of_register_driver);
-EXPORT_SYMBOL(of_unregister_driver);
-EXPORT_SYMBOL(of_device_register);
-EXPORT_SYMBOL(of_device_unregister);
-EXPORT_SYMBOL(of_dev_get);
-EXPORT_SYMBOL(of_dev_put);
 EXPORT_SYMBOL(of_platform_device_create);
-EXPORT_SYMBOL(of_release_dev);

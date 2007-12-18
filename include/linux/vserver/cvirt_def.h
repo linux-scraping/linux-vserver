@@ -5,7 +5,6 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/time.h>
-#include <linux/utsname.h>
 #include <asm/atomic.h>
 
 

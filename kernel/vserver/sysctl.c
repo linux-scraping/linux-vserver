@@ -21,8 +21,6 @@
 #include <asm/unistd.h>
 
 
-#define CTL_VSERVER	4242    /* unused? */
-
 enum {
 	CTL_DEBUG_ERROR		= 0,
 	CTL_DEBUG_SWITCH	= 1,
@@ -35,6 +33,7 @@ enum {
 	CTL_DEBUG_DLIM,
 	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
+	CTL_DEBUG_SPACE,
 	CTL_DEBUG_MISC,
 };
 
@@ -49,17 +48,18 @@ unsigned int vx_debug_cres	= 0;
 unsigned int vx_debug_dlim	= 0;
 unsigned int vx_debug_quota	= 0;
 unsigned int vx_debug_cvirt	= 0;
+unsigned int vx_debug_space	= 0;
 unsigned int vx_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
-static ctl_table vserver_table[];
+static ctl_table vserver_root_table[];
 
 
 void vserver_register_sysctl(void)
 {
 	if (!vserver_table_header) {
-		vserver_table_header = register_sysctl_table(vserver_table);
+		vserver_table_header = register_sysctl_table(vserver_root_table);
 	}
 
 }
@@ -130,6 +130,7 @@ done:
 	return 0;
 }
 
+static int zero;
 
 #define	CTL_ENTRY(ctl, name)				\
 	{						\
@@ -138,10 +139,12 @@ done:
 		.data		= &vx_ ## name,		\
 		.maxlen		= sizeof(int),		\
 		.mode		= 0644,			\
-		.proc_handler	= &proc_dodebug		\
+		.proc_handler	= &proc_dodebug,	\
+		.strategy	= &sysctl_intvec,	\
+		.extra1		= &zero,		\
 	}
 
-static ctl_table debug_table[] = {
+static ctl_table vserver_debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_SWITCH,	debug_switch),
 	CTL_ENTRY(CTL_DEBUG_XID,	debug_xid),
 	CTL_ENTRY(CTL_DEBUG_NID,	debug_nid),
@@ -152,16 +155,17 @@ static ctl_table debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_DLIM,	debug_dlim),
 	CTL_ENTRY(CTL_DEBUG_QUOTA,	debug_quota),
 	CTL_ENTRY(CTL_DEBUG_CVIRT,	debug_cvirt),
+	CTL_ENTRY(CTL_DEBUG_SPACE,	debug_space),
 	CTL_ENTRY(CTL_DEBUG_MISC,	debug_misc),
 	{ .ctl_name = 0 }
 };
 
-static ctl_table vserver_table[] = {
+static ctl_table vserver_root_table[] = {
 	{
 		.ctl_name	= CTL_VSERVER,
 		.procname	= "vserver",
 		.mode		= 0555,
-		.child		= debug_table
+		.child		= vserver_debug_table
 	},
 	{ .ctl_name = 0 }
 };
@@ -178,6 +182,7 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_DLIM,	"dlim=%x"	},
 	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
 	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
+	{ CTL_DEBUG_SPACE,	"space=%x"	},
 	{ CTL_DEBUG_MISC,	"misc=%x"	},
 	{ CTL_DEBUG_ERROR,	NULL		}
 };
@@ -216,6 +221,7 @@ static int __init vs_debug_setup(char *str)
 		HANDLE_CASE(DLIM,   dlim,   value);
 		HANDLE_CASE(QUOTA,  quota,  value);
 		HANDLE_CASE(CVIRT,  cvirt,  value);
+		HANDLE_CASE(SPACE,  space,  value);
 		HANDLE_CASE(MISC,   misc,   value);
 		default:
 			return -EINVAL;
@@ -238,5 +244,6 @@ EXPORT_SYMBOL_GPL(vx_debug_cres);
 EXPORT_SYMBOL_GPL(vx_debug_dlim);
 EXPORT_SYMBOL_GPL(vx_debug_quota);
 EXPORT_SYMBOL_GPL(vx_debug_cvirt);
+EXPORT_SYMBOL_GPL(vx_debug_space);
 EXPORT_SYMBOL_GPL(vx_debug_misc);
 

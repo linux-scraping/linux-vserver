@@ -64,7 +64,7 @@ config DMASCC
 	  dmascc. If you don't pass any parameter to the driver, all
 	  possible I/O addresses are probed. This could irritate other devices
 	  that are currently not in use. You may specify the list of addresses
-	  to be probed by "dmascc=addr1,addr2,..." (when compiled into the
+	  to be probed by "dmascc.io=addr1,addr2,..." (when compiled into the
 	  kernel image) or "io=addr1,addr2,..." (when loaded as a module). The
 	  network interfaces will be called dmascc0 and dmascc1 for the board
 	  detected first, dmascc2 and dmascc3 for the second one, and so on.
@@ -140,7 +140,7 @@ config BAYCOM_SER_HDX
 	  modems that connect to a serial interface. The driver supports the
 	  ser12 design in half-duplex mode. This is the old driver.  It is
 	  still provided in case your serial interface chip does not work with
-	  the full-duplex driver. This driver is depreciated.  To configure
+	  the full-duplex driver. This driver is deprecated.  To configure
 	  the driver, use the sethdlc utility available in the standard ax25
 	  utilities package. For information on the modems, see
 	  <http://www.baycom.de/> and

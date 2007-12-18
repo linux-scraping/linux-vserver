@@ -45,7 +45,6 @@
 #include <asm/jazzdma.h>
 
 static char jazz_sonic_string[] = "jazzsonic";
-static struct platform_device *jazz_sonic_device;
 
 #define SONIC_MEM_SIZE	0x100
 
@@ -70,14 +69,6 @@ static unsigned int sonic_debug = 1;
 #endif
 
 /*
- * Base address and interrupt of the SONIC controller on JAZZ boards
- */
-static struct {
-	unsigned int port;
-	unsigned int irq;
-} sonic_portlist[] = { {JAZZ_ETHERNET_BASE, JAZZ_ETHERNET_IRQ}, {0, 0}};
-
-/*
  * We cannot use station (ethernet) address prefixes to detect the
  * sonic controller since these are board manufacturer depended.
  * So we check for known Silicon Revision IDs instead.
@@ -87,6 +78,23 @@ static unsigned short known_revisions[] =
 	0x04,			/* Mips Magnum 4000 */
 	0xffff			/* end of list */
 };
+
+static int jazzsonic_open(struct net_device* dev)
+{
+	if (request_irq(dev->irq, &sonic_interrupt, IRQF_DISABLED, "sonic", dev)) {
+		printk(KERN_ERR "%s: unable to get IRQ %d.\n", dev->name, dev->irq);
+		return -EAGAIN;
+	}
+	return sonic_open(dev);
+}
+
+static int jazzsonic_close(struct net_device* dev)
+{
+	int err;
+	err = sonic_close(dev);
+	free_irq(dev->irq, dev);
+	return err;
+}
 
 static int __init sonic_probe1(struct net_device *dev)
 {
@@ -169,8 +177,8 @@ static int __init sonic_probe1(struct net_device *dev)
 	lp->rra_laddr = lp->rda_laddr + (SIZEOF_SONIC_RD * SONIC_NUM_RDS
 	                     * SONIC_BUS_SCALE(lp->dma_bitmode));
 
-	dev->open = sonic_open;
-	dev->stop = sonic_close;
+	dev->open = jazzsonic_open;
+	dev->stop = jazzsonic_close;
 	dev->hard_start_xmit = sonic_send_packet;
 	dev->get_stats = sonic_get_stats;
 	dev->set_multicast_list = &sonic_multicast_list;
@@ -198,13 +206,12 @@ static int __init jazz_sonic_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
 	struct sonic_local *lp;
+	struct resource *res;
 	int err = 0;
-	int i;
+	DECLARE_MAC_BUF(mac);
 
-	/*
-	 * Don't probe if we're not running on a Jazz board.
-	 */
-	if (mips_machgroup != MACH_GROUP_JAZZ)
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
 		return -ENODEV;
 
 	dev = alloc_etherdev(sizeof(struct sonic_local));
@@ -214,37 +221,20 @@ static int __init jazz_sonic_probe(struct platform_device *pdev)
 	lp = netdev_priv(dev);
 	lp->device = &pdev->dev;
 	SET_NETDEV_DEV(dev, &pdev->dev);
- 	SET_MODULE_OWNER(dev);
 
 	netdev_boot_setup_check(dev);
 
-	if (dev->base_addr >= KSEG0) { /* Check a single specified location. */
-		err = sonic_probe1(dev);
-	} else if (dev->base_addr != 0) { /* Don't probe at all. */
-		err = -ENXIO;
-	} else {
-		for (i = 0; sonic_portlist[i].port; i++) {
-			dev->base_addr = sonic_portlist[i].port;
-			dev->irq = sonic_portlist[i].irq;
-			if (sonic_probe1(dev) == 0)
-				break;
-		}
-		if (!sonic_portlist[i].port)
-			err = -ENODEV;
-	}
+	dev->base_addr = res->start;
+	dev->irq = platform_get_irq(pdev, 0);
+	err = sonic_probe1(dev);
 	if (err)
 		goto out;
 	err = register_netdev(dev);
 	if (err)
 		goto out1;
 
-	printk("%s: MAC ", dev->name);
-	for (i = 0; i < 6; i++) {
-		printk("%2.2x", dev->dev_addr[i]);
-		if (i < 5)
-			printk(":");
-	}
-	printk(" IRQ %d\n", dev->irq);
+	printk("%s: MAC %s IRQ %d\n",
+	       dev->name, print_mac(mac, dev->dev_addr), dev->irq);
 
 	return 0;
 
@@ -260,8 +250,6 @@ MODULE_DESCRIPTION("Jazz SONIC ethernet driver");
 module_param(sonic_debug, int, 0);
 MODULE_PARM_DESC(sonic_debug, "jazzsonic debug level (1-4)");
 
-#define SONIC_IRQ_FLAG IRQF_DISABLED
-
 #include "sonic.c"
 
 static int __devexit jazz_sonic_device_remove (struct platform_device *pdev)
@@ -269,11 +257,11 @@ static int __devexit jazz_sonic_device_remove (struct platform_device *pdev)
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct sonic_local* lp = netdev_priv(dev);
 
-	unregister_netdev (dev);
+	unregister_netdev(dev);
 	dma_free_coherent(lp->device, SIZEOF_SONIC_DESC * SONIC_BUS_SCALE(lp->dma_bitmode),
 	                  lp->descriptors, lp->descriptors_laddr);
 	release_region (dev->base_addr, SONIC_MEM_SIZE);
-	free_netdev (dev);
+	free_netdev(dev);
 
 	return 0;
 }
@@ -288,38 +276,12 @@ static struct platform_driver jazz_sonic_driver = {
 
 static int __init jazz_sonic_init_module(void)
 {
-	int err;
-
-	if ((err = platform_driver_register(&jazz_sonic_driver))) {
-		printk(KERN_ERR "Driver registration failed\n");
-		return err;
-	}
-
-	jazz_sonic_device = platform_device_alloc(jazz_sonic_string, 0);
-	if (!jazz_sonic_device)
-		goto out_unregister;
-
-	if (platform_device_add(jazz_sonic_device)) {
-		platform_device_put(jazz_sonic_device);
-		jazz_sonic_device = NULL;
-	}
-
-	return 0;
-
-out_unregister:
-	platform_driver_unregister(&jazz_sonic_driver);
-
-	return -ENOMEM;
+	return platform_driver_register(&jazz_sonic_driver);
 }
 
 static void __exit jazz_sonic_cleanup_module(void)
 {
 	platform_driver_unregister(&jazz_sonic_driver);
-
-	if (jazz_sonic_device) {
-		platform_device_unregister(jazz_sonic_device);
-		jazz_sonic_device = NULL;
-	}
 }
 
 module_init(jazz_sonic_init_module);

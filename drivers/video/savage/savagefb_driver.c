@@ -57,7 +57,6 @@
 #include <asm/irq.h>
 #include <asm/pgtable.h>
 #include <asm/system.h>
-#include <asm/uaccess.h>
 
 #ifdef CONFIG_MTRR
 #include <asm/mtrr.h>
@@ -1623,8 +1622,46 @@ static void savagefb_restore_state(struct fb_info *info)
 	savagefb_blank(FB_BLANK_UNBLANK, info);
 }
 
+static int savagefb_open(struct fb_info *info, int user)
+{
+	struct savagefb_par *par = info->par;
+
+	mutex_lock(&par->open_lock);
+
+	if (!par->open_count) {
+		memset(&par->vgastate, 0, sizeof(par->vgastate));
+		par->vgastate.flags = VGA_SAVE_CMAP | VGA_SAVE_FONTS |
+			VGA_SAVE_MODE;
+		par->vgastate.vgabase = par->mmio.vbase + 0x8000;
+		save_vga(&par->vgastate);
+		savage_get_default_par(par, &par->initial);
+	}
+
+	par->open_count++;
+	mutex_unlock(&par->open_lock);
+	return 0;
+}
+
+static int savagefb_release(struct fb_info *info, int user)
+{
+	struct savagefb_par *par = info->par;
+
+	mutex_lock(&par->open_lock);
+
+	if (par->open_count == 1) {
+		savage_set_default_par(par, &par->initial);
+		restore_vga(&par->vgastate);
+	}
+
+	par->open_count--;
+	mutex_unlock(&par->open_lock);
+	return 0;
+}
+
 static struct fb_ops savagefb_ops = {
 	.owner          = THIS_MODULE,
+	.fb_open        = savagefb_open,
+	.fb_release     = savagefb_release,
 	.fb_check_var   = savagefb_check_var,
 	.fb_set_par     = savagefb_set_par,
 	.fb_setcolreg   = savagefb_setcolreg,
@@ -2136,11 +2173,10 @@ static int __devinit savage_init_fb_info(struct fb_info *info,
 
 #if defined(CONFIG_FB_SAVAGE_ACCEL)
 	/* FIFO size + padding for commands */
-	info->pixmap.addr = kmalloc(8*1024, GFP_KERNEL);
+	info->pixmap.addr = kcalloc(8, 1024, GFP_KERNEL);
 
 	err = -ENOMEM;
 	if (info->pixmap.addr) {
-		memset(info->pixmap.addr, 0, 8*1024);
 		info->pixmap.size = 8*1024;
 		info->pixmap.scan_align = 4;
 		info->pixmap.buf_align = 4;
@@ -2173,6 +2209,7 @@ static int __devinit savagefb_probe(struct pci_dev* dev,
 	if (!info)
 		return -ENOMEM;
 	par = info->par;
+	mutex_init(&par->open_lock);
 	err = pci_enable_device(dev);
 	if (err)
 		goto failed_enable;

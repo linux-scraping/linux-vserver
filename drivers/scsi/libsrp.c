@@ -22,7 +22,6 @@
 #include <linux/kfifo.h>
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
-#include <linux/pci.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_tcq.h>
@@ -225,8 +224,7 @@ static int srp_indirect_data(struct scsi_cmnd *sc, struct srp_cmd *cmd,
 	struct srp_direct_buf *md = NULL;
 	struct scatterlist dummy, *sg = NULL;
 	dma_addr_t token = 0;
-	long err;
-	unsigned int done = 0;
+	int err = 0;
 	int nmd, nsg = 0, len;
 
 	if (dma_map || ext_desc) {
@@ -256,10 +254,11 @@ static int srp_indirect_data(struct scsi_cmnd *sc, struct srp_cmd *cmd,
 
 		sg_init_one(&dummy, md, id->table_desc.len);
 		sg_dma_address(&dummy) = token;
+		sg_dma_len(&dummy) = id->table_desc.len;
 		err = rdma_io(sc, &dummy, 1, &id->table_desc, 1, DMA_TO_DEVICE,
 			      id->table_desc.len);
-		if (err < 0) {
-			eprintk("Error copying indirect table %ld\n", err);
+		if (err) {
+			eprintk("Error copying indirect table %d\n", err);
 			goto free_mem;
 		}
 	} else {
@@ -272,6 +271,7 @@ rdma:
 		nsg = dma_map_sg(iue->target->dev, sg, sc->use_sg, DMA_BIDIRECTIONAL);
 		if (!nsg) {
 			eprintk("fail to map %p %d\n", iue, sc->use_sg);
+			err = -EIO;
 			goto free_mem;
 		}
 		len = min(sc->request_bufflen, id->len);
@@ -287,7 +287,7 @@ free_mem:
 	if (token && dma_map)
 		dma_free_coherent(iue->target->dev, id->table_desc.len, md, token);
 
-	return done;
+	return err;
 }
 
 static int data_out_desc_size(struct srp_cmd *cmd)
@@ -352,7 +352,7 @@ int srp_transfer_data(struct scsi_cmnd *sc, struct srp_cmd *cmd,
 		break;
 	default:
 		eprintk("Unknown format %d %x\n", dir, format);
-		break;
+		err = -EINVAL;
 	}
 
 	return err;
@@ -392,7 +392,7 @@ static int vscsis_data_length(struct srp_cmd *cmd, enum dma_data_direction dir)
 }
 
 int srp_cmd_queue(struct Scsi_Host *shost, struct srp_cmd *cmd, void *info,
-		  u64 addr)
+		  u64 itn_id, u64 addr)
 {
 	enum dma_data_direction dir;
 	struct scsi_cmnd *sc;
@@ -428,7 +428,8 @@ int srp_cmd_queue(struct Scsi_Host *shost, struct srp_cmd *cmd, void *info,
 	sc->request_bufflen = len;
 	sc->request_buffer = (void *) (unsigned long) addr;
 	sc->tag = tag;
-	err = scsi_tgt_queue_command(sc, (struct scsi_lun *) &cmd->lun, cmd->tag);
+	err = scsi_tgt_queue_command(sc, itn_id, (struct scsi_lun *)&cmd->lun,
+				     cmd->tag);
 	if (err)
 		scsi_host_put_command(shost, sc);
 

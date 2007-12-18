@@ -312,17 +312,16 @@ static int elo_connect(struct serio *serio, struct serio_driver *drv)
 	init_completion(&elo->cmd_done);
 	snprintf(elo->phys, sizeof(elo->phys), "%s/input0", serio->phys);
 
-	input_dev->private = elo;
 	input_dev->name = "Elo Serial TouchScreen";
 	input_dev->phys = elo->phys;
 	input_dev->id.bustype = BUS_RS232;
 	input_dev->id.vendor = SERIO_ELO;
 	input_dev->id.product = elo->id;
 	input_dev->id.version = 0x0100;
-	input_dev->cdev.dev = &serio->dev;
+	input_dev->dev.parent = &serio->dev;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_ABS);
-	input_dev->keybit[LONG(BTN_TOUCH)] = BIT(BTN_TOUCH);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
+	input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
 
 	serio_set_drvdata(serio, elo);
 	err = serio_open(serio, drv);

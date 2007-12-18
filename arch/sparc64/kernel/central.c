@@ -1,7 +1,6 @@
-/* $Id: central.c,v 1.15 2001/12/19 00:29:51 davem Exp $
- * central.c: Central FHC driver for Sunfire/Starfire/Wildfire.
+/* central.c: Central FHC driver for Sunfire/Starfire/Wildfire.
  *
- * Copyright (C) 1997, 1999 David S. Miller (davem@redhat.com)
+ * Copyright (C) 1997, 1999 David S. Miller (davem@davemloft.net)
  */
 
 #include <linux/kernel.h>
@@ -32,7 +31,7 @@ static void central_probe_failure(int line)
 static void central_ranges_init(struct linux_central *central)
 {
 	struct device_node *dp = central->prom_node;
-	void *pval;
+	const void *pval;
 	int len;
 	
 	central->num_central_ranges = 0;
@@ -47,7 +46,7 @@ static void central_ranges_init(struct linux_central *central)
 static void fhc_ranges_init(struct linux_fhc *fhc)
 {
 	struct device_node *dp = fhc->prom_node;
-	void *pval;
+	const void *pval;
 	int len;
 	
 	fhc->num_fhc_ranges = 0;
@@ -98,7 +97,7 @@ void apply_central_ranges(struct linux_central *central,
 			    central->num_central_ranges);
 }
 
-void * __init central_alloc_bootmem(unsigned long size)
+static void * __init central_alloc_bootmem(unsigned long size)
 {
 	void *ret;
 
@@ -116,10 +115,10 @@ static unsigned long prom_reg_to_paddr(struct linux_prom_registers *r)
 	return ret | (unsigned long) r->phys_addr;
 }
 
-static void probe_other_fhcs(void)
+static void __init probe_other_fhcs(void)
 {
 	struct device_node *dp;
-	struct linux_prom64_registers *fpregs;
+	const struct linux_prom64_registers *fpregs;
 
 	for_each_node_by_name(dp, "fhc") {
 		struct linux_fhc *fhc;
@@ -190,7 +189,8 @@ static void probe_clock_board(struct linux_central *central,
 			      struct device_node *fp)
 {
 	struct device_node *dp;
-	struct linux_prom_registers cregs[3], *pr;
+	struct linux_prom_registers cregs[3];
+	const struct linux_prom_registers *pr;
 	int nslots, tmp, nregs;
 
 	dp = fp->child;
@@ -297,9 +297,10 @@ static void init_all_fhc_hw(void)
 
 }
 
-void central_probe(void)
+void __init central_probe(void)
 {
-	struct linux_prom_registers fpregs[6], *pr;
+	struct linux_prom_registers fpregs[6];
+	const struct linux_prom_registers *pr;
 	struct linux_fhc *fhc;
 	struct device_node *dp, *fp;
 	int err;
@@ -383,7 +384,7 @@ void central_probe(void)
 	init_all_fhc_hw();
 }
 
-static __inline__ void fhc_ledblink(struct linux_fhc *fhc, int on)
+static inline void fhc_ledblink(struct linux_fhc *fhc, int on)
 {
 	u32 tmp;
 
@@ -400,7 +401,7 @@ static __inline__ void fhc_ledblink(struct linux_fhc *fhc, int on)
 	upa_readl(fhc->fhc_regs.pregs + FHC_PREGS_CTRL);
 }
 
-static __inline__ void central_ledblink(struct linux_central *central, int on)
+static inline void central_ledblink(struct linux_central *central, int on)
 {
 	u8 tmp;
 

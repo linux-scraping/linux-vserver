@@ -38,6 +38,7 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/module.h>
+#include <linux/bitops.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
 
@@ -107,11 +108,18 @@ static int  option_send_setup(struct usb_serial_port *port);
 #define HUAWEI_VENDOR_ID			0x12D1
 #define HUAWEI_PRODUCT_E600			0x1001
 #define HUAWEI_PRODUCT_E220			0x1003
+#define HUAWEI_PRODUCT_E220BIS			0x1004
 
 #define NOVATELWIRELESS_VENDOR_ID		0x1410
+#define DELL_VENDOR_ID				0x413C
 
 #define ANYDATA_VENDOR_ID			0x16d5
-#define ANYDATA_PRODUCT_ID			0x6501
+#define ANYDATA_PRODUCT_ADU_E100A		0x6501
+#define ANYDATA_PRODUCT_ADU_500A		0x6502
+
+#define BANDRICH_VENDOR_ID			0x1A8D
+#define BANDRICH_PRODUCT_C100_1			0x1002
+#define BANDRICH_PRODUCT_C100_2			0x1003
 
 static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(OPTION_VENDOR_ID, OPTION_PRODUCT_COLT) },
@@ -151,6 +159,7 @@ static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(OPTION_VENDOR_ID, OPTION_PRODUCT_ETNA_KOI_NETWORK) },
 	{ USB_DEVICE(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E600) },
 	{ USB_DEVICE(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E220) },
+	{ USB_DEVICE(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E220BIS) },
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1100) }, /* Novatel Merlin XS620/S640 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1110) }, /* Novatel Merlin S620 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1120) }, /* Novatel Merlin EX720 */
@@ -159,12 +168,23 @@ static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1410) }, /* Novatel U740 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1420) }, /* Novatel EU870 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1430) }, /* Novatel Merlin XU870 HSDPA/3G */
-	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1430) }, /* Novatel XU870 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2100) }, /* Novatel EV620 CDMA/EV-DO */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2110) }, /* Novatel Merlin ES620 / Merlin ES720 / Ovation U720 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2130) }, /* Novatel Merlin ES620 SM Bus */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2410) }, /* Novatel EU740 */
-	{ USB_DEVICE(ANYDATA_VENDOR_ID, ANYDATA_PRODUCT_ID) },
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x4100) }, /* Novatel U727 */
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x4400) }, /* Novatel MC950 */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8114) },	/* Dell Wireless 5700 Mobile Broadband CDMA/EVDO Mini-Card == Novatel Expedite EV620 CDMA/EV-DO */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8115) },	/* Dell Wireless 5500 Mobile Broadband HSDPA Mini-Card == Novatel Expedite EU740 HSDPA/3G */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8116) },	/* Dell Wireless 5505 Mobile Broadband HSDPA Mini-Card == Novatel Expedite EU740 HSDPA/3G */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8117) },	/* Dell Wireless 5700 Mobile Broadband CDMA/EVDO ExpressCard == Novatel Merlin XV620 CDMA/EV-DO */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8118) },	/* Dell Wireless 5510 Mobile Broadband HSDPA ExpressCard == Novatel Merlin XU870 HSDPA/3G */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8128) },	/* Dell Wireless 5700 Mobile Broadband CDMA/EVDO Mini-Card == Novatel Expedite E720 CDMA/EV-DO */
+	{ USB_DEVICE(DELL_VENDOR_ID, 0x8137) },	/* Dell Wireless HSDPA 5520 */
+	{ USB_DEVICE(ANYDATA_VENDOR_ID, ANYDATA_PRODUCT_ADU_E100A) },
+	{ USB_DEVICE(ANYDATA_VENDOR_ID, ANYDATA_PRODUCT_ADU_500A) },
+	{ USB_DEVICE(BANDRICH_VENDOR_ID, BANDRICH_PRODUCT_C100_1) },
+	{ USB_DEVICE(BANDRICH_VENDOR_ID, BANDRICH_PRODUCT_C100_2) },
 	{ } /* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, option_ids);
@@ -230,6 +250,7 @@ struct option_port_private {
 	/* Output endpoints and buffer for this port */
 	struct urb *out_urbs[N_OUT_URB];
 	char out_buffer[N_OUT_URB][OUT_BUFLEN];
+	unsigned long out_busy;		/* Bit vector of URBs in use */
 
 	/* Settings for the port */
 	int rts_state;	/* Handshaking pins (outputs) */
@@ -292,7 +313,8 @@ static void option_set_termios(struct usb_serial_port *port,
 			struct ktermios *old_termios)
 {
 	dbg("%s", __FUNCTION__);
-
+	/* Doesn't support option setting */
+	tty_termios_copy_hw(port->tty->termios, old_termios);
 	option_send_setup(port);
 }
 
@@ -360,7 +382,7 @@ static int option_write(struct usb_serial_port *port,
 			todo = OUT_BUFLEN;
 
 		this_urb = portdata->out_urbs[i];
-		if (this_urb->status == -EINPROGRESS) {
+		if (test_and_set_bit(i, &portdata->out_busy)) {
 			if (time_before(jiffies,
 					portdata->tx_start_time[i] + 10 * HZ))
 				continue;
@@ -384,6 +406,7 @@ static int option_write(struct usb_serial_port *port,
 			dbg("usb_submit_urb %p (write bulk) failed "
 				"(%d, has %d)", this_urb,
 				err, this_urb->status);
+			clear_bit(i, &portdata->out_busy);
 			continue;
 		}
 		portdata->tx_start_time[i] = jiffies;
@@ -403,15 +426,16 @@ static void option_indat_callback(struct urb *urb)
 	struct usb_serial_port *port;
 	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
+	int status = urb->status;
 
 	dbg("%s: %p", __FUNCTION__, urb);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 	port = (struct usb_serial_port *) urb->context;
 
-	if (urb->status) {
+	if (status) {
 		dbg("%s: nonzero status: %d on endpoint %02x.",
-		    __FUNCTION__, urb->status, endpoint);
+		    __FUNCTION__, status, endpoint);
 	} else {
 		tty = port->tty;
 		if (urb->actual_length) {
@@ -423,7 +447,7 @@ static void option_indat_callback(struct urb *urb)
 		}
 
 		/* Resubmit urb so we continue receiving */
-		if (port->open_count && urb->status != -ESHUTDOWN) {
+		if (port->open_count && status != -ESHUTDOWN) {
 			err = usb_submit_urb(urb, GFP_ATOMIC);
 			if (err)
 				printk(KERN_ERR "%s: resubmit read urb failed. "
@@ -436,17 +460,29 @@ static void option_indat_callback(struct urb *urb)
 static void option_outdat_callback(struct urb *urb)
 {
 	struct usb_serial_port *port;
+	struct option_port_private *portdata;
+	int i;
 
 	dbg("%s", __FUNCTION__);
 
 	port = (struct usb_serial_port *) urb->context;
 
 	usb_serial_port_softint(port);
+
+	portdata = usb_get_serial_port_data(port);
+	for (i = 0; i < N_OUT_URB; ++i) {
+		if (portdata->out_urbs[i] == urb) {
+			smp_mb__before_clear_bit();
+			clear_bit(i, &portdata->out_busy);
+			break;
+		}
+	}
 }
 
 static void option_instat_callback(struct urb *urb)
 {
 	int err;
+	int status = urb->status;
 	struct usb_serial_port *port = (struct usb_serial_port *) urb->context;
 	struct option_port_private *portdata = usb_get_serial_port_data(port);
 	struct usb_serial *serial = port->serial;
@@ -454,7 +490,7 @@ static void option_instat_callback(struct urb *urb)
 	dbg("%s", __FUNCTION__);
 	dbg("%s: urb %p port %p has data %p", __FUNCTION__,urb,port,portdata);
 
-	if (urb->status == 0) {
+	if (status == 0) {
 		struct usb_ctrlrequest *req_pkt =
 				(struct usb_ctrlrequest *)urb->transfer_buffer;
 
@@ -485,10 +521,10 @@ static void option_instat_callback(struct urb *urb)
 				req_pkt->bRequestType,req_pkt->bRequest);
 		}
 	} else
-		dbg("%s: error %d", __FUNCTION__, urb->status);
+		dbg("%s: error %d", __FUNCTION__, status);
 
 	/* Resubmit urb so we continue receiving IRQ data */
-	if (urb->status != -ESHUTDOWN) {
+	if (status != -ESHUTDOWN) {
 		urb->dev = serial->dev;
 		err = usb_submit_urb(urb, GFP_ATOMIC);
 		if (err)
@@ -508,7 +544,7 @@ static int option_write_room(struct usb_serial_port *port)
 
 	for (i=0; i < N_OUT_URB; i++) {
 		this_urb = portdata->out_urbs[i];
-		if (this_urb && this_urb->status != -EINPROGRESS)
+		if (this_urb && !test_bit(i, &portdata->out_busy))
 			data_len += OUT_BUFLEN;
 	}
 
@@ -527,7 +563,7 @@ static int option_chars_in_buffer(struct usb_serial_port *port)
 
 	for (i=0; i < N_OUT_URB; i++) {
 		this_urb = portdata->out_urbs[i];
-		if (this_urb && this_urb->status == -EINPROGRESS)
+		if (this_urb && test_bit(i, &portdata->out_busy))
 			data_len += this_urb->transfer_buffer_length;
 	}
 	dbg("%s: %d", __FUNCTION__, data_len);
@@ -591,12 +627,6 @@ static int option_open(struct usb_serial_port *port, struct file *filp)
 	return (0);
 }
 
-static inline void stop_urb(struct urb *urb)
-{
-	if (urb && urb->status == -EINPROGRESS)
-		usb_kill_urb(urb);
-}
-
 static void option_close(struct usb_serial_port *port, struct file *filp)
 {
 	int i;
@@ -614,9 +644,9 @@ static void option_close(struct usb_serial_port *port, struct file *filp)
 
 		/* Stop reading/writing urbs */
 		for (i = 0; i < N_IN_URB; i++)
-			stop_urb(portdata->in_urbs[i]);
+			usb_kill_urb(portdata->in_urbs[i]);
 		for (i = 0; i < N_OUT_URB; i++)
-			stop_urb(portdata->out_urbs[i]);
+			usb_kill_urb(portdata->out_urbs[i]);
 	}
 	port->tty = NULL;
 }
@@ -747,9 +777,9 @@ static void option_shutdown(struct usb_serial *serial)
 		port = serial->port[i];
 		portdata = usb_get_serial_port_data(port);
 		for (j = 0; j < N_IN_URB; j++)
-			stop_urb(portdata->in_urbs[j]);
+			usb_kill_urb(portdata->in_urbs[j]);
 		for (j = 0; j < N_OUT_URB; j++)
-			stop_urb(portdata->out_urbs[j]);
+			usb_kill_urb(portdata->out_urbs[j]);
 	}
 
 	/* Now free them */

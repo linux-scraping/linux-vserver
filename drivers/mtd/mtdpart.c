@@ -347,7 +347,6 @@ int add_mtd_partitions(struct mtd_info *master,
 		slave->mtd.subpage_sft = master->subpage_sft;
 
 		slave->mtd.name = parts[i].name;
-		slave->mtd.bank_size = master->bank_size;
 		slave->mtd.owner = master->owner;
 
 		slave->mtd.read = part_read;
@@ -561,7 +560,3 @@ int parse_mtd_partitions(struct mtd_info *master, const char **types,
 EXPORT_SYMBOL_GPL(parse_mtd_partitions);
 EXPORT_SYMBOL_GPL(register_mtd_parser);
 EXPORT_SYMBOL_GPL(deregister_mtd_parser);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Nicolas Pitre <nico@cam.org>");
-MODULE_DESCRIPTION("Generic support for partitioning of MTD devices");

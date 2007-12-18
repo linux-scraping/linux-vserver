@@ -105,7 +105,9 @@ static ssize_t w1_slave_read_name(struct device *dev, struct device_attribute *a
 	return sprintf(buf, "%s\n", sl->name);
 }
 
-static ssize_t w1_slave_read_id(struct kobject *kobj, char *buf, loff_t off, size_t count)
+static ssize_t w1_slave_read_id(struct kobject *kobj,
+				struct bin_attribute *bin_attr,
+				char *buf, loff_t off, size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
 
@@ -128,7 +130,6 @@ static struct bin_attribute w1_slave_attr_bin_id = {
       .attr = {
               .name = "id",
               .mode = S_IRUGO,
-              .owner = THIS_MODULE,
       },
       .size = 8,
       .read = w1_slave_read_id,
@@ -136,7 +137,9 @@ static struct bin_attribute w1_slave_attr_bin_id = {
 
 /* Default family */
 
-static ssize_t w1_default_write(struct kobject *kobj, char *buf, loff_t off, size_t count)
+static ssize_t w1_default_write(struct kobject *kobj,
+				struct bin_attribute *bin_attr,
+				char *buf, loff_t off, size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
 
@@ -153,7 +156,9 @@ out_up:
 	return count;
 }
 
-static ssize_t w1_default_read(struct kobject *kobj, char *buf, loff_t off, size_t count)
+static ssize_t w1_default_read(struct kobject *kobj,
+			       struct bin_attribute *bin_attr,
+			       char *buf, loff_t off, size_t count)
 {
 	struct w1_slave *sl = kobj_to_w1_slave(kobj);
 
@@ -167,7 +172,6 @@ static struct bin_attribute w1_default_attr = {
       .attr = {
               .name = "rw",
               .mode = S_IRUGO | S_IWUSR,
-              .owner = THIS_MODULE,
       },
       .size = PAGE_SIZE,
       .read = w1_default_read,
@@ -193,7 +197,7 @@ static struct w1_family w1_default_family = {
 	.fops = &w1_default_fops,
 };
 
-static int w1_uevent(struct device *dev, char **envp, int num_envp, char *buffer, int buffer_size);
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env);
 
 static struct bus_type w1_bus_type = {
 	.name = "w1",
@@ -392,13 +396,12 @@ static void w1_destroy_master_attributes(struct w1_master *master)
 }
 
 #ifdef CONFIG_HOTPLUG
-static int w1_uevent(struct device *dev, char **envp, int num_envp,
-			char *buffer, int buffer_size)
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	struct w1_master *md = NULL;
 	struct w1_slave *sl = NULL;
 	char *event_owner, *name;
-	int err, cur_index=0, cur_len=0;
+	int err;
 
 	if (dev->driver == &w1_master_driver) {
 		md = container_of(dev, struct w1_master, dev);
@@ -419,22 +422,19 @@ static int w1_uevent(struct device *dev, char **envp, int num_envp,
 	if (dev->driver != &w1_slave_driver || !sl)
 		return 0;
 
-	err = add_uevent_var(envp, num_envp, &cur_index, buffer, buffer_size,
-			&cur_len, "W1_FID=%02X", sl->reg_num.family);
+	err = add_uevent_var(env, "W1_FID=%02X", sl->reg_num.family);
 	if (err)
 		return err;
 
-	err = add_uevent_var(envp, num_envp, &cur_index, buffer, buffer_size,
-			&cur_len, "W1_SLAVE_ID=%024LX",
-			(unsigned long long)sl->reg_num.id);
+	err = add_uevent_var(env, "W1_SLAVE_ID=%024LX",
+			     (unsigned long long)sl->reg_num.id);
 	if (err)
 		return err;
 
 	return 0;
 };
 #else
-static int w1_uevent(struct device *dev, char **envp, int num_envp,
-			char *buffer, int buffer_size)
+static int w1_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
 	return 0;
 }
@@ -459,7 +459,7 @@ static int __w1_attach_slave_device(struct w1_slave *sl)
 		 (unsigned long long) sl->reg_num.id);
 
 	dev_dbg(&sl->dev, "%s: registering %s as %p.\n", __func__,
-		&sl->dev.bus_id[0]);
+		&sl->dev.bus_id[0], sl);
 
 	err = device_register(&sl->dev);
 	if (err < 0) {
@@ -516,7 +516,7 @@ static int w1_attach_slave_device(struct w1_master *dev, struct w1_reg_num *rn)
 	int err;
 	struct w1_netlink_msg msg;
 
-	sl = kmalloc(sizeof(struct w1_slave), GFP_KERNEL);
+	sl = kzalloc(sizeof(struct w1_slave), GFP_KERNEL);
 	if (!sl) {
 		dev_err(&dev->dev,
 			 "%s: failed to allocate new slave device.\n",
@@ -524,7 +524,6 @@ static int w1_attach_slave_device(struct w1_master *dev, struct w1_reg_num *rn)
 		return -ENOMEM;
 	}
 
-	memset(sl, 0, sizeof(*sl));
 
 	sl->owner = THIS_MODULE;
 	sl->master = dev;
@@ -801,6 +800,7 @@ static int w1_control(void *data)
 	struct w1_master *dev, *n;
 	int have_to_wait = 0;
 
+	set_freezable();
 	while (!kthread_should_stop() || have_to_wait) {
 		have_to_wait = 0;
 

@@ -66,6 +66,7 @@ extern int ia64_last_device_vector;
 #define IA64_PERFMON_VECTOR		0xee	/* performanc monitor interrupt vector */
 #define IA64_TIMER_VECTOR		0xef	/* use highest-prio group 15 interrupt for timer */
 #define	IA64_MCA_WAKEUP_VECTOR		0xf0	/* MCA wakeup (must be >MCA_RENDEZ_VECTOR) */
+#define IA64_IPI_LOCAL_TLB_FLUSH	0xfc	/* SMP flush local TLB */
 #define IA64_IPI_RESCHEDULE		0xfd	/* SMP reschedule */
 #define IA64_IPI_VECTOR			0xfe	/* inter-processor interrupt vector */
 
@@ -89,13 +90,27 @@ enum {
 extern __u8 isa_irq_to_vector_map[16];
 #define isa_irq_to_vector(x)	isa_irq_to_vector_map[(x)]
 
+struct irq_cfg {
+	ia64_vector vector;
+	cpumask_t domain;
+};
+extern spinlock_t vector_lock;
+extern struct irq_cfg irq_cfg[NR_IRQS];
+#define irq_to_domain(x)	irq_cfg[(x)].domain
+DECLARE_PER_CPU(int[IA64_NUM_VECTORS], vector_irq);
+
 extern struct hw_interrupt_type irq_type_ia64_lsapic;	/* CPU-internal interrupt controller */
 
+extern int bind_irq_vector(int irq, int vector, cpumask_t domain);
 extern int assign_irq_vector (int irq);	/* allocate a free vector */
 extern void free_irq_vector (int vector);
 extern int reserve_irq_vector (int vector);
+extern void __setup_vector_irq(int cpu);
+extern int reassign_irq_vector(int irq, int cpu);
 extern void ia64_send_ipi (int cpu, int vector, int delivery_mode, int redirect);
 extern void register_percpu_irq (ia64_vector vec, struct irqaction *action);
+extern int check_irq_used (int irq);
+extern void destroy_and_reserve_irq (unsigned int irq);
 
 static inline void ia64_resend_irq(unsigned int vector)
 {
@@ -109,10 +124,15 @@ static inline void ia64_resend_irq(unsigned int vector)
 extern irq_desc_t irq_desc[NR_IRQS];
 
 #ifndef CONFIG_IA64_GENERIC
+static inline ia64_vector __ia64_irq_to_vector(int irq)
+{
+	return irq_cfg[irq].vector;
+}
+
 static inline unsigned int
 __ia64_local_vector_to_irq (ia64_vector vec)
 {
-	return (unsigned int) vec;
+	return __get_cpu_var(vector_irq)[vec];
 }
 #endif
 
@@ -130,7 +150,7 @@ __ia64_local_vector_to_irq (ia64_vector vec)
 static inline ia64_vector
 irq_to_vector (int irq)
 {
-	return (ia64_vector) irq;
+	return platform_irq_to_vector(irq);
 }
 
 /*

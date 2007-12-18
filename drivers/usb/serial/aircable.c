@@ -9,7 +9,7 @@
  * The device works as an standard CDC device, it has 2 interfaces, the first
  * one is for firmware access and the second is the serial one.
  * The protocol is very simply, there are two posibilities reading or writing.
- * When writting the first urb must have a Header that starts with 0x20 0x29 the
+ * When writing the first urb must have a Header that starts with 0x20 0x29 the
  * next two bytes must say how much data will be sended.
  * When reading the process is almost equal except that the header starts with
  * 0x00 0x20.
@@ -18,7 +18,7 @@
  * buffer: The First and Second byte is used for a Header, the Third and Fourth
  * tells the  device the amount of information the package holds.
  * Packages are 60 bytes long Header Stuff.
- * When writting to the device the first two bytes of the header are 0x20 0x29
+ * When writing to the device the first two bytes of the header are 0x20 0x29
  * When reading the bytes are 0x00 0x20, or 0x00 0x10, there is an strange
  * situation, when too much data arrives to the device because it sends the data
  * but with out the header. I will use a simply hack to override this situation,
@@ -209,6 +209,7 @@ static void aircable_send(struct usb_serial_port *port)
 	int count, result;
 	struct aircable_private *priv = usb_get_serial_port_data(port);
 	unsigned char* buf;
+	u16 *dbuf;
 	dbg("%s - port %d", __FUNCTION__, port->number);
 	if (port->write_urb_busy)
 		return;
@@ -226,8 +227,8 @@ static void aircable_send(struct usb_serial_port *port)
 
 	buf[0] = TX_HEADER_0;
 	buf[1] = TX_HEADER_1;
-	buf[2] = (unsigned char)count;
-	buf[3] = (unsigned char)(count >> 8);
+	dbuf = (u16 *)&buf[2];
+	*dbuf = cpu_to_le16((u16)count);
 	serial_buf_get(priv->tx_buf,buf + HCI_HEADER_LENGTH, MAX_HCI_FRAMESIZE);
 
 	memcpy(port->write_urb->transfer_buffer, buf,
@@ -410,12 +411,13 @@ static int aircable_write(struct usb_serial_port *port,
 static void aircable_write_bulk_callback(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
+	int status = urb->status;
 	int result;
 
-	dbg("%s - urb->status: %d", __FUNCTION__ , urb->status);
+	dbg("%s - urb status: %d", __FUNCTION__ , status);
 
 	/* This has been taken from cypress_m8.c cypress_write_int_callback */
-	switch (urb->status) {
+	switch (status) {
 		case 0:
 			/* success */
 			break;
@@ -424,17 +426,17 @@ static void aircable_write_bulk_callback(struct urb *urb)
 		case -ESHUTDOWN:
 			/* this urb is terminated, clean up */
 			dbg("%s - urb shutting down with status: %d",
-			    __FUNCTION__, urb->status);
+			    __FUNCTION__, status);
 			port->write_urb_busy = 0;
 			return;
 		default:
 			/* error in the urb, so we have to resubmit it */
 			dbg("%s - Overflow in write", __FUNCTION__);
 			dbg("%s - nonzero write bulk status received: %d",
-			    __FUNCTION__, urb->status);
+			    __FUNCTION__, status);
 			port->write_urb->transfer_buffer_length = 1;
 			port->write_urb->dev = port->serial->dev;
-			result = usb_submit_urb(port->write_urb, GFP_KERNEL);
+			result = usb_submit_urb(port->write_urb, GFP_ATOMIC);
 			if (result)
 				dev_err(&urb->dev->dev,
 					"%s - failed resubmitting write urb, error %d\n",
@@ -456,16 +458,17 @@ static void aircable_read_bulk_callback(struct urb *urb)
 	unsigned long no_packages, remaining, package_length, i;
 	int result, shift = 0;
 	unsigned char *temp;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - urb->status = %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - urb status = %d", __FUNCTION__, status);
 		if (!port->open_count) {
 			dbg("%s - port is closed, exiting.", __FUNCTION__);
 			return;
 		}
-		if (urb->status == -EPROTO) {
+		if (status == -EPROTO) {
 			dbg("%s - caught -EPROTO, resubmitting the urb",
 			    __FUNCTION__);
 			usb_fill_bulk_urb(port->read_urb, port->serial->dev,

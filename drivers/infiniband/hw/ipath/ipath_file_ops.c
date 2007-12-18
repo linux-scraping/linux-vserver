@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -41,12 +41,6 @@
 #include "ipath_kernel.h"
 #include "ipath_common.h"
 
-/*
- * mmap64 doesn't allow all 64 bits for 32-bit applications
- * so only use the low 43 bits.
- */
-#define MMAP64_MASK	0x7FFFFFFFFFFUL
-
 static int ipath_open(struct inode *, struct file *);
 static int ipath_close(struct inode *, struct file *);
 static ssize_t ipath_write(struct file *, const char __user *, size_t,
@@ -62,6 +56,24 @@ static const struct file_operations ipath_file_ops = {
 	.poll = ipath_poll,
 	.mmap = ipath_mmap
 };
+
+/*
+ * Convert kernel virtual addresses to physical addresses so they don't
+ * potentially conflict with the chip addresses used as mmap offsets.
+ * It doesn't really matter what mmap offset we use as long as we can
+ * interpret it correctly.
+ */
+static u64 cvt_kvaddr(void *p)
+{
+	struct page *page;
+	u64 paddr = 0;
+
+	page = vmalloc_to_page(p);
+	if (page)
+		paddr = page_to_pfn(page) << PAGE_SHIFT;
+
+	return paddr;
+}
 
 static int ipath_get_base_info(struct file *fp,
 			       void __user *ubase, size_t ubase_size)
@@ -87,7 +99,7 @@ static int ipath_get_base_info(struct file *fp,
 	sz = sizeof(*kinfo);
 	/* If port sharing is not requested, allow the old size structure */
 	if (!shared)
-		sz -= 3 * sizeof(u64);
+		sz -= 7 * sizeof(u64);
 	if (ubase_size < sz) {
 		ipath_cdbg(PROC,
 			   "Base size %zu, need %zu (version mismatch?)\n",
@@ -165,24 +177,41 @@ static int ipath_get_base_info(struct file *fp,
 		kinfo->spi_piobufbase = (u64) pd->port_piobufs +
 			dd->ipath_palign *
 			(dd->ipath_pbufsport - kinfo->spi_piocnt);
-		kinfo->__spi_uregbase = (u64) dd->ipath_uregbase +
-			dd->ipath_palign * pd->port_port;
 	} else {
 		unsigned slave = subport_fp(fp) - 1;
 
 		kinfo->spi_piocnt = dd->ipath_pbufsport / subport_cnt;
 		kinfo->spi_piobufbase = (u64) pd->port_piobufs +
 			dd->ipath_palign * kinfo->spi_piocnt * slave;
-		kinfo->__spi_uregbase = ((u64) pd->subport_uregbase +
-			PAGE_SIZE * slave) & MMAP64_MASK;
+	}
+	if (shared) {
+		kinfo->spi_port_uregbase = (u64) dd->ipath_uregbase +
+			dd->ipath_palign * pd->port_port;
+		kinfo->spi_port_rcvegrbuf = kinfo->spi_rcv_egrbufs;
+		kinfo->spi_port_rcvhdr_base = kinfo->spi_rcvhdr_base;
+		kinfo->spi_port_rcvhdr_tailaddr = kinfo->spi_rcvhdr_tailaddr;
 
-		kinfo->spi_rcvhdr_base = ((u64) pd->subport_rcvhdr_base +
-			pd->port_rcvhdrq_size * slave) & MMAP64_MASK;
-		kinfo->spi_rcvhdr_tailaddr =
-			(u64) pd->port_rcvhdrqtailaddr_phys & MMAP64_MASK;
-		kinfo->spi_rcv_egrbufs = ((u64) pd->subport_rcvegrbuf +
-			dd->ipath_rcvegrcnt * dd->ipath_rcvegrbufsize * slave) &
-			MMAP64_MASK;
+		kinfo->__spi_uregbase = cvt_kvaddr(pd->subport_uregbase +
+			PAGE_SIZE * subport_fp(fp));
+
+		kinfo->spi_rcvhdr_base = cvt_kvaddr(pd->subport_rcvhdr_base +
+			pd->port_rcvhdrq_size * subport_fp(fp));
+		kinfo->spi_rcvhdr_tailaddr = 0;
+		kinfo->spi_rcv_egrbufs = cvt_kvaddr(pd->subport_rcvegrbuf +
+			pd->port_rcvegrbuf_chunks * pd->port_rcvegrbuf_size *
+			subport_fp(fp));
+
+		kinfo->spi_subport_uregbase =
+			cvt_kvaddr(pd->subport_uregbase);
+		kinfo->spi_subport_rcvegrbuf =
+			cvt_kvaddr(pd->subport_rcvegrbuf);
+		kinfo->spi_subport_rcvhdr_base =
+			cvt_kvaddr(pd->subport_rcvhdr_base);
+		ipath_cdbg(PROC, "port %u flags %x %llx %llx %llx\n",
+			kinfo->spi_port, kinfo->spi_runtime_flags,
+			(unsigned long long) kinfo->spi_subport_uregbase,
+			(unsigned long long) kinfo->spi_subport_rcvegrbuf,
+			(unsigned long long) kinfo->spi_subport_rcvhdr_base);
 	}
 
 	kinfo->spi_pioindex = (kinfo->spi_piobufbase - dd->ipath_piobufbase) /
@@ -199,20 +228,10 @@ static int ipath_get_base_info(struct file *fp,
 
 	if (master) {
 		kinfo->spi_runtime_flags |= IPATH_RUNTIME_MASTER;
-		kinfo->spi_subport_uregbase =
-			(u64) pd->subport_uregbase & MMAP64_MASK;
-		kinfo->spi_subport_rcvegrbuf =
-			(u64) pd->subport_rcvegrbuf & MMAP64_MASK;
-		kinfo->spi_subport_rcvhdr_base =
-			(u64) pd->subport_rcvhdr_base & MMAP64_MASK;
-		ipath_cdbg(PROC, "port %u flags %x %llx %llx %llx\n",
-			kinfo->spi_port, kinfo->spi_runtime_flags,
-			(unsigned long long) kinfo->spi_subport_uregbase,
-			(unsigned long long) kinfo->spi_subport_rcvegrbuf,
-			(unsigned long long) kinfo->spi_subport_rcvhdr_base);
 	}
 
-	if (copy_to_user(ubase, kinfo, sizeof(*kinfo)))
+	sz = (ubase_size < sizeof(*kinfo)) ? ubase_size : sizeof(*kinfo);
+	if (copy_to_user(ubase, kinfo, sz))
 		ret = -EFAULT;
 
 bail:
@@ -377,7 +396,8 @@ static int ipath_tid_update(struct ipath_portdata *pd, struct file *fp,
 			   "TID %u, vaddr %lx, physaddr %llx pgp %p\n",
 			   tid, vaddr, (unsigned long long) physaddr,
 			   pagep[i]);
-		dd->ipath_f_put_tid(dd, &tidbase[tid], 1, physaddr);
+		dd->ipath_f_put_tid(dd, &tidbase[tid], RCVHQ_RCV_TYPE_EXPECTED,
+				    physaddr);
 		/*
 		 * don't check this tid in ipath_portshadow, since we
 		 * just filled it in; start with the next one.
@@ -403,7 +423,8 @@ static int ipath_tid_update(struct ipath_portdata *pd, struct file *fp,
 			if (dd->ipath_pageshadow[porttid + tid]) {
 				ipath_cdbg(VERBOSE, "Freeing TID %u\n",
 					   tid);
-				dd->ipath_f_put_tid(dd, &tidbase[tid], 1,
+				dd->ipath_f_put_tid(dd, &tidbase[tid],
+						    RCVHQ_RCV_TYPE_EXPECTED,
 						    dd->ipath_tidinvalid);
 				pci_unmap_page(dd->pcidev,
 					dd->ipath_physshadow[porttid + tid],
@@ -517,16 +538,18 @@ static int ipath_tid_free(struct ipath_portdata *pd, unsigned subport,
 			continue;
 		cnt++;
 		if (dd->ipath_pageshadow[porttid + tid]) {
+			struct page *p;
+			p = dd->ipath_pageshadow[porttid + tid];
+			dd->ipath_pageshadow[porttid + tid] = NULL;
 			ipath_cdbg(VERBOSE, "PID %u freeing TID %u\n",
 				   pd->port_pid, tid);
-			dd->ipath_f_put_tid(dd, &tidbase[tid], 1,
+			dd->ipath_f_put_tid(dd, &tidbase[tid],
+					    RCVHQ_RCV_TYPE_EXPECTED,
 					    dd->ipath_tidinvalid);
 			pci_unmap_page(dd->pcidev,
 				dd->ipath_physshadow[porttid + tid],
 				PAGE_SIZE, PCI_DMA_FROMDEVICE);
-			ipath_release_user_pages(
-				&dd->ipath_pageshadow[porttid + tid], 1);
-			dd->ipath_pageshadow[porttid + tid] = NULL;
+			ipath_release_user_pages(&p, 1);
 			ipath_stats.sps_pageunlocks++;
 		} else
 			ipath_dbg("Unused tid %u, ignoring\n", tid);
@@ -902,7 +925,8 @@ static int ipath_create_user_egr(struct ipath_portdata *pd)
 					    (u64 __iomem *)
 					    ((char __iomem *)
 					     dd->ipath_kregbase +
-					     dd->ipath_rcvegrbase), 0, pa);
+					     dd->ipath_rcvegrbase),
+					    RCVHQ_RCV_TYPE_EAGER, pa);
 			pa += egrsize;
 		}
 		cond_resched();	/* don't hog the cpu */
@@ -1132,67 +1156,55 @@ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
 	struct ipath_devdata *dd;
 	void *addr;
 	size_t size;
-	int ret;
+	int ret = 0;
 
 	/* If the port is not shared, all addresses should be physical */
-	if (!pd->port_subport_cnt) {
-		ret = -EINVAL;
+	if (!pd->port_subport_cnt)
 		goto bail;
-	}
 
 	dd = pd->port_dd;
 	size = pd->port_rcvegrbuf_chunks * pd->port_rcvegrbuf_size;
 
 	/*
-	 * Master has all the slave uregbase, rcvhdrq, and
-	 * rcvegrbufs mmapped.
+	 * Each process has all the subport uregbase, rcvhdrq, and
+	 * rcvegrbufs mmapped - as an array for all the processes,
+	 * and also separately for this process.
 	 */
-	if (subport == 0) {
-		unsigned num_slaves = pd->port_subport_cnt - 1;
-
-		if (pgaddr == ((u64) pd->subport_uregbase & MMAP64_MASK)) {
-			addr = pd->subport_uregbase;
-			size = PAGE_SIZE * num_slaves;
-		} else if (pgaddr == ((u64) pd->subport_rcvhdr_base &
-				      MMAP64_MASK)) {
-			addr = pd->subport_rcvhdr_base;
-			size = pd->port_rcvhdrq_size * num_slaves;
-		} else if (pgaddr == ((u64) pd->subport_rcvegrbuf &
-				      MMAP64_MASK)) {
-			addr = pd->subport_rcvegrbuf;
-			size *= num_slaves;
-		} else {
-			ret = -EINVAL;
-			goto bail;
-		}
-	} else if (pgaddr == (((u64) pd->subport_uregbase +
-			       PAGE_SIZE * (subport - 1)) & MMAP64_MASK)) {
-		addr = pd->subport_uregbase + PAGE_SIZE * (subport - 1);
-		size = PAGE_SIZE;
-	} else if (pgaddr == (((u64) pd->subport_rcvhdr_base +
-			       pd->port_rcvhdrq_size * (subport - 1)) &
-			      MMAP64_MASK)) {
-		addr = pd->subport_rcvhdr_base +
-			pd->port_rcvhdrq_size * (subport - 1);
-		size = pd->port_rcvhdrq_size;
-	} else if (pgaddr == (((u64) pd->subport_rcvegrbuf +
-			       size * (subport - 1)) & MMAP64_MASK)) {
-		addr = pd->subport_rcvegrbuf + size * (subport - 1);
-		/* rcvegrbufs are read-only on the slave */
-		if (vma->vm_flags & VM_WRITE) {
-			dev_info(&dd->pcidev->dev,
-				 "Can't map eager buffers as "
-				 "writable (flags=%lx)\n", vma->vm_flags);
-			ret = -EPERM;
-			goto bail;
-		}
-		/*
-		 * Don't allow permission to later change to writeable
-		 * with mprotect.
-		 */
-		vma->vm_flags &= ~VM_MAYWRITE;
+	if (pgaddr == cvt_kvaddr(pd->subport_uregbase)) {
+		addr = pd->subport_uregbase;
+		size = PAGE_SIZE * pd->port_subport_cnt;
+	} else if (pgaddr == cvt_kvaddr(pd->subport_rcvhdr_base)) {
+		addr = pd->subport_rcvhdr_base;
+		size = pd->port_rcvhdrq_size * pd->port_subport_cnt;
+	} else if (pgaddr == cvt_kvaddr(pd->subport_rcvegrbuf)) {
+		addr = pd->subport_rcvegrbuf;
+		size *= pd->port_subport_cnt;
+        } else if (pgaddr == cvt_kvaddr(pd->subport_uregbase +
+                                        PAGE_SIZE * subport)) {
+                addr = pd->subport_uregbase + PAGE_SIZE * subport;
+                size = PAGE_SIZE;
+        } else if (pgaddr == cvt_kvaddr(pd->subport_rcvhdr_base +
+                                pd->port_rcvhdrq_size * subport)) {
+                addr = pd->subport_rcvhdr_base +
+                        pd->port_rcvhdrq_size * subport;
+                size = pd->port_rcvhdrq_size;
+        } else if (pgaddr == cvt_kvaddr(pd->subport_rcvegrbuf +
+                               size * subport)) {
+                addr = pd->subport_rcvegrbuf + size * subport;
+                /* rcvegrbufs are read-only on the slave */
+                if (vma->vm_flags & VM_WRITE) {
+                        dev_info(&dd->pcidev->dev,
+                                 "Can't map eager buffers as "
+                                 "writable (flags=%lx)\n", vma->vm_flags);
+                        ret = -EPERM;
+                        goto bail;
+                }
+                /*
+                 * Don't allow permission to later change to writeable
+                 * with mprotect.
+                 */
+                vma->vm_flags &= ~VM_MAYWRITE;
 	} else {
-		ret = -EINVAL;
 		goto bail;
 	}
 	len = vma->vm_end - vma->vm_start;
@@ -1205,7 +1217,7 @@ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
 	vma->vm_pgoff = (unsigned long) addr >> PAGE_SHIFT;
 	vma->vm_ops = &ipath_file_vm_ops;
 	vma->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
-	ret = 0;
+	ret = 1;
 
 bail:
 	return ret;
@@ -1265,19 +1277,20 @@ static int ipath_mmap(struct file *fp, struct vm_area_struct *vma)
 	 * Check for kernel virtual addresses first, anything else must
 	 * match a HW or memory address.
 	 */
-	if (pgaddr >= (1ULL<<40)) {
-		ret = mmap_kvaddr(vma, pgaddr, pd, subport_fp(fp));
+	ret = mmap_kvaddr(vma, pgaddr, pd, subport_fp(fp));
+	if (ret) {
+		if (ret > 0)
+			ret = 0;
 		goto bail;
 	}
 
+	ureg = dd->ipath_uregbase + dd->ipath_palign * pd->port_port;
 	if (!pd->port_subport_cnt) {
 		/* port is not shared */
-		ureg = dd->ipath_uregbase + dd->ipath_palign * pd->port_port;
 		piocnt = dd->ipath_pbufsport;
 		piobufs = pd->port_piobufs;
 	} else if (!subport_fp(fp)) {
 		/* caller is the master */
-		ureg = dd->ipath_uregbase + dd->ipath_palign * pd->port_port;
 		piocnt = (dd->ipath_pbufsport / pd->port_subport_cnt) +
 			 (dd->ipath_pbufsport % pd->port_subport_cnt);
 		piobufs = pd->port_piobufs +
@@ -1286,7 +1299,6 @@ static int ipath_mmap(struct file *fp, struct vm_area_struct *vma)
 		unsigned slave = subport_fp(fp) - 1;
 
 		/* caller is a slave */
-		ureg = 0;
 		piocnt = dd->ipath_pbufsport / pd->port_subport_cnt;
 		piobufs = pd->port_piobufs + dd->ipath_palign * piocnt * slave;
 	}
@@ -1300,9 +1312,6 @@ static int ipath_mmap(struct file *fp, struct vm_area_struct *vma)
 		ret = ipath_mmap_mem(vma, pd, PAGE_SIZE, 0,
 			      	     (void *) dd->ipath_pioavailregs_dma,
 				     "pioavail registers");
-	else if (subport_fp(fp))
-		/* Subports don't mmap the physical receive buffers */
-		ret = -EINVAL;
 	else if (pgaddr == pd->port_rcvegr_phys)
 		ret = mmap_rcvegrbufs(vma, pd);
 	else if (pgaddr == (u64) pd->port_rcvhdrq_phys)
@@ -1333,66 +1342,138 @@ bail:
 	return ret;
 }
 
+static unsigned ipath_poll_hdrqfull(struct ipath_portdata *pd)
+{
+	unsigned pollflag = 0;
+
+	if ((pd->poll_type & IPATH_POLL_TYPE_OVERFLOW) &&
+	    pd->port_hdrqfull != pd->port_hdrqfull_poll) {
+		pollflag |= POLLIN | POLLRDNORM;
+		pd->port_hdrqfull_poll = pd->port_hdrqfull;
+	}
+
+	return pollflag;
+}
+
+static unsigned int ipath_poll_urgent(struct ipath_portdata *pd,
+				      struct file *fp,
+				      struct poll_table_struct *pt)
+{
+	unsigned pollflag = 0;
+	struct ipath_devdata *dd;
+
+	dd = pd->port_dd;
+
+	/* variable access in ipath_poll_hdrqfull() needs this */
+	rmb();
+	pollflag = ipath_poll_hdrqfull(pd);
+
+	if (pd->port_urgent != pd->port_urgent_poll) {
+		pollflag |= POLLIN | POLLRDNORM;
+		pd->port_urgent_poll = pd->port_urgent;
+	}
+
+	if (!pollflag) {
+		/* this saves a spin_lock/unlock in interrupt handler... */
+		set_bit(IPATH_PORT_WAITING_URG, &pd->port_flag);
+		/* flush waiting flag so don't miss an event... */
+		wmb();
+		poll_wait(fp, &pd->port_wait, pt);
+	}
+
+	return pollflag;
+}
+
+static unsigned int ipath_poll_next(struct ipath_portdata *pd,
+				    struct file *fp,
+				    struct poll_table_struct *pt)
+{
+	u32 head;
+	u32 tail;
+	unsigned pollflag = 0;
+	struct ipath_devdata *dd;
+
+	dd = pd->port_dd;
+
+	/* variable access in ipath_poll_hdrqfull() needs this */
+	rmb();
+	pollflag = ipath_poll_hdrqfull(pd);
+
+	head = ipath_read_ureg32(dd, ur_rcvhdrhead, pd->port_port);
+	tail = *(volatile u64 *)pd->port_rcvhdrtail_kvaddr;
+
+	if (head != tail)
+		pollflag |= POLLIN | POLLRDNORM;
+	else {
+		/* this saves a spin_lock/unlock in interrupt handler */
+		set_bit(IPATH_PORT_WAITING_RCV, &pd->port_flag);
+		/* flush waiting flag so we don't miss an event */
+		wmb();
+
+		set_bit(pd->port_port + INFINIPATH_R_INTRAVAIL_SHIFT,
+			&dd->ipath_rcvctrl);
+
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_rcvctrl,
+				 dd->ipath_rcvctrl);
+
+		if (dd->ipath_rhdrhead_intr_off) /* arm rcv interrupt */
+			ipath_write_ureg(dd, ur_rcvhdrhead,
+					 dd->ipath_rhdrhead_intr_off | head,
+					 pd->port_port);
+
+		poll_wait(fp, &pd->port_wait, pt);
+	}
+
+	return pollflag;
+}
+
 static unsigned int ipath_poll(struct file *fp,
 			       struct poll_table_struct *pt)
 {
 	struct ipath_portdata *pd;
-	u32 head, tail;
-	int bit;
-	unsigned pollflag = 0;
-	struct ipath_devdata *dd;
+	unsigned pollflag;
 
 	pd = port_fp(fp);
 	if (!pd)
-		goto bail;
-	dd = pd->port_dd;
+		pollflag = 0;
+	else if (pd->poll_type & IPATH_POLL_TYPE_URGENT)
+		pollflag = ipath_poll_urgent(pd, fp, pt);
+	else
+		pollflag = ipath_poll_next(pd, fp, pt);
 
-	bit = pd->port_port + INFINIPATH_R_INTRAVAIL_SHIFT;
-	set_bit(bit, &dd->ipath_rcvctrl);
-
-	/*
-	 * Before blocking, make sure that head is still == tail,
-	 * reading from the chip, so we can be sure the interrupt
-	 * enable has made it to the chip.  If not equal, disable
-	 * interrupt again and return immediately.  This avoids races,
-	 * and the overhead of the chip read doesn't matter much at
-	 * this point, since we are waiting for something anyway.
-	 */
-
-	ipath_write_kreg(dd, dd->ipath_kregs->kr_rcvctrl,
-			 dd->ipath_rcvctrl);
-
-	head = ipath_read_ureg32(dd, ur_rcvhdrhead, pd->port_port);
-	tail = ipath_read_ureg32(dd, ur_rcvhdrtail, pd->port_port);
-
-	if (tail == head) {
-		set_bit(IPATH_PORT_WAITING_RCV, &pd->port_flag);
-		if (dd->ipath_rhdrhead_intr_off) /* arm rcv interrupt */
-			(void)ipath_write_ureg(dd, ur_rcvhdrhead,
-					       dd->ipath_rhdrhead_intr_off
-					       | head, pd->port_port);
-		poll_wait(fp, &pd->port_wait, pt);
-
-		if (test_bit(IPATH_PORT_WAITING_RCV, &pd->port_flag)) {
-			/* timed out, no packets received */
-			clear_bit(IPATH_PORT_WAITING_RCV, &pd->port_flag);
-			pd->port_rcvwait_to++;
-		}
-		else
-			pollflag = POLLIN | POLLRDNORM;
-	}
-	else {
-		/* it's already happened; don't do wait_event overhead */
-		pollflag = POLLIN | POLLRDNORM;
-		pd->port_rcvnowait++;
-	}
-
-	clear_bit(bit, &dd->ipath_rcvctrl);
-	ipath_write_kreg(dd, dd->ipath_kregs->kr_rcvctrl,
-			 dd->ipath_rcvctrl);
-
-bail:
 	return pollflag;
+}
+
+static int ipath_supports_subports(int user_swmajor, int user_swminor)
+{
+	/* no subport implementation prior to software version 1.3 */
+	return (user_swmajor > 1) || (user_swminor >= 3);
+}
+
+static int ipath_compatible_subports(int user_swmajor, int user_swminor)
+{
+	/* this code is written long-hand for clarity */
+	if (IPATH_USER_SWMAJOR != user_swmajor) {
+		/* no promise of compatibility if major mismatch */
+		return 0;
+	}
+	if (IPATH_USER_SWMAJOR == 1) {
+		switch (IPATH_USER_SWMINOR) {
+		case 0:
+		case 1:
+		case 2:
+			/* no subport implementation so cannot be compatible */
+			return 0;
+		case 3:
+			/* 3 is only compatible with itself */
+			return user_swminor == 3;
+		default:
+			/* >= 4 are compatible (or are expected to be) */
+			return user_swminor >= 4;
+		}
+	}
+	/* make no promises yet for future major versions */
+	return 0;
 }
 
 static int init_subports(struct ipath_devdata *dd,
@@ -1400,32 +1481,53 @@ static int init_subports(struct ipath_devdata *dd,
 			 const struct ipath_user_info *uinfo)
 {
 	int ret = 0;
-	unsigned num_slaves;
+	unsigned num_subports;
 	size_t size;
 
-	/* Old user binaries don't know about subports */
-	if ((uinfo->spu_userversion & 0xffff) != IPATH_USER_SWMINOR)
-		goto bail;
 	/*
-	 * If the user is requesting zero or one port,
+	 * If the user is requesting zero subports,
 	 * skip the subport allocation.
 	 */
-	if (uinfo->spu_subport_cnt <= 1)
+	if (uinfo->spu_subport_cnt <= 0)
 		goto bail;
-	if (uinfo->spu_subport_cnt > 4) {
+
+	/* Self-consistency check for ipath_compatible_subports() */
+	if (ipath_supports_subports(IPATH_USER_SWMAJOR, IPATH_USER_SWMINOR) &&
+	    !ipath_compatible_subports(IPATH_USER_SWMAJOR,
+				       IPATH_USER_SWMINOR)) {
+		dev_info(&dd->pcidev->dev,
+			 "Inconsistent ipath_compatible_subports()\n");
+		goto bail;
+	}
+
+	/* Check for subport compatibility */
+	if (!ipath_compatible_subports(uinfo->spu_userversion >> 16,
+				       uinfo->spu_userversion & 0xffff)) {
+		dev_info(&dd->pcidev->dev,
+			 "Mismatched user version (%d.%d) and driver "
+			 "version (%d.%d) while port sharing. Ensure "
+                         "that driver and library are from the same "
+                         "release.\n",
+			 (int) (uinfo->spu_userversion >> 16),
+                         (int) (uinfo->spu_userversion & 0xffff),
+			 IPATH_USER_SWMAJOR,
+	                 IPATH_USER_SWMINOR);
+		goto bail;
+	}
+	if (uinfo->spu_subport_cnt > INFINIPATH_MAX_SUBPORT) {
 		ret = -EINVAL;
 		goto bail;
 	}
 
-	num_slaves = uinfo->spu_subport_cnt - 1;
-	pd->subport_uregbase = vmalloc(PAGE_SIZE * num_slaves);
+	num_subports = uinfo->spu_subport_cnt;
+	pd->subport_uregbase = vmalloc(PAGE_SIZE * num_subports);
 	if (!pd->subport_uregbase) {
 		ret = -ENOMEM;
 		goto bail;
 	}
 	/* Note: pd->port_rcvhdrq_size isn't initialized yet. */
 	size = ALIGN(dd->ipath_rcvhdrcnt * dd->ipath_rcvhdrentsize *
-		     sizeof(u32), PAGE_SIZE) * num_slaves;
+		     sizeof(u32), PAGE_SIZE) * num_subports;
 	pd->subport_rcvhdr_base = vmalloc(size);
 	if (!pd->subport_rcvhdr_base) {
 		ret = -ENOMEM;
@@ -1434,7 +1536,7 @@ static int init_subports(struct ipath_devdata *dd,
 
 	pd->subport_rcvegrbuf = vmalloc(pd->port_rcvegrbuf_chunks *
 					pd->port_rcvegrbuf_size *
-					num_slaves);
+					num_subports);
 	if (!pd->subport_rcvegrbuf) {
 		ret = -ENOMEM;
 		goto bail_rhdr;
@@ -1443,6 +1545,12 @@ static int init_subports(struct ipath_devdata *dd,
 	pd->port_subport_cnt = uinfo->spu_subport_cnt;
 	pd->port_subport_id = uinfo->spu_subport_id;
 	pd->active_slaves = 1;
+	set_bit(IPATH_PORT_MASTER_UNINIT, &pd->port_flag);
+	memset(pd->subport_uregbase, 0, PAGE_SIZE * num_subports);
+	memset(pd->subport_rcvhdr_base, 0, size);
+	memset(pd->subport_rcvegrbuf, 0, pd->port_rcvegrbuf_chunks *
+				         pd->port_rcvegrbuf_size *
+				         num_subports);
 	goto bail;
 
 bail_rhdr:
@@ -1573,18 +1681,19 @@ static int find_best_unit(struct file *fp,
 	 */
 	if (!cpus_empty(current->cpus_allowed) &&
 	    !cpus_full(current->cpus_allowed)) {
-		int ncpus = num_online_cpus(), curcpu = -1;
+		int ncpus = num_online_cpus(), curcpu = -1, nset = 0;
 		for (i = 0; i < ncpus; i++)
 			if (cpu_isset(i, current->cpus_allowed)) {
 				ipath_cdbg(PROC, "%s[%u] affinity set for "
-					   "cpu %d\n", current->comm,
-					   current->pid, i);
+					   "cpu %d/%d\n", current->comm,
+					   current->pid, i, ncpus);
 				curcpu = i;
+				nset++;
 			}
-		if (curcpu != -1) {
+		if (curcpu != -1 && nset != ncpus) {
 			if (npresent) {
 				prefunit = curcpu / (ncpus / npresent);
-				ipath_dbg("%s[%u] %d chips, %d cpus, "
+				ipath_cdbg(PROC,"%s[%u] %d chips, %d cpus, "
 					  "%d cpus/chip, select unit %d\n",
 					  current->comm, current->pid,
 					  npresent, ncpus, ncpus / npresent,
@@ -1705,14 +1814,13 @@ static int ipath_open(struct inode *in, struct file *fp)
 	return fp->private_data ? 0 : -ENOMEM;
 }
 
-
 /* Get port early, so can set affinity prior to memory allocation */
 static int ipath_assign_port(struct file *fp,
 			      const struct ipath_user_info *uinfo)
 {
 	int ret;
 	int i_minor;
-	unsigned swminor;
+	unsigned swmajor, swminor;
 
 	/* Check to be sure we haven't already initialized this file */
 	if (port_fp(fp)) {
@@ -1721,7 +1829,8 @@ static int ipath_assign_port(struct file *fp,
 	}
 
 	/* for now, if major version is different, bail */
-	if ((uinfo->spu_userversion >> 16) != IPATH_USER_SWMAJOR) {
+	swmajor = uinfo->spu_userversion >> 16;
+	if (swmajor != IPATH_USER_SWMAJOR) {
 		ipath_dbg("User major version %d not same as driver "
 			  "major %d\n", uinfo->spu_userversion >> 16,
 			  IPATH_USER_SWMAJOR);
@@ -1736,7 +1845,8 @@ static int ipath_assign_port(struct file *fp,
 
 	mutex_lock(&ipath_mutex);
 
-	if (swminor == IPATH_USER_SWMINOR && uinfo->spu_subport_cnt &&
+	if (ipath_compatible_subports(swmajor, swminor) &&
+	    uinfo->spu_subport_cnt &&
 	    (ret = find_shared_port(fp, uinfo))) {
 		mutex_unlock(&ipath_mutex);
 		if (ret > 0)
@@ -1764,11 +1874,17 @@ static int ipath_do_user_init(struct file *fp,
 			      const struct ipath_user_info *uinfo)
 {
 	int ret;
-	struct ipath_portdata *pd;
+	struct ipath_portdata *pd = port_fp(fp);
 	struct ipath_devdata *dd;
 	u32 head32;
 
-	pd = port_fp(fp);
+	/* Subports don't need to initialize anything since master did it. */
+	if (subport_fp(fp)) {
+		ret = wait_event_interruptible(pd->port_wait,
+			!test_bit(IPATH_PORT_MASTER_UNINIT, &pd->port_flag));
+		goto done;
+	}
+
 	dd = pd->port_dd;
 
 	if (uinfo->spu_rcvhdrsize) {
@@ -1809,6 +1925,12 @@ static int ipath_do_user_init(struct file *fp,
 	ipath_cdbg(VERBOSE, "Wrote port%d egrhead %x from tail regs\n",
 		pd->port_port, head32);
 	pd->port_tidcursor = 0;	/* start at beginning after open */
+
+	/* initialize poll variables... */
+	pd->port_urgent = 0;
+	pd->port_urgent_poll = 0;
+	pd->port_hdrqfull_poll = pd->port_hdrqfull;
+
 	/*
 	 * now enable the port; the tail registers will be written to memory
 	 * by the chip as soon as it sees the write to
@@ -1826,6 +1948,11 @@ static int ipath_do_user_init(struct file *fp,
 			 dd->ipath_rcvctrl & ~INFINIPATH_R_TAILUPD);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_rcvctrl,
 			 dd->ipath_rcvctrl);
+	/* Notify any waiting slaves */
+	if (pd->port_subport_cnt) {
+		clear_bit(IPATH_PORT_MASTER_UNINIT, &pd->port_flag);
+		wake_up(&pd->port_wait);
+	}
 done:
 	return ret;
 }
@@ -1926,8 +2053,10 @@ static int ipath_close(struct inode *in, struct file *fp)
 
 	if (dd->ipath_kregbase) {
 		int i;
-		/* atomically clear receive enable port. */
+		/* atomically clear receive enable port and intr avail. */
 		clear_bit(INFINIPATH_R_PORTENABLE_SHIFT + port,
+			  &dd->ipath_rcvctrl);
+		clear_bit(pd->port_port + INFINIPATH_R_INTRAVAIL_SHIFT,
 			  &dd->ipath_rcvctrl);
 		ipath_write_kreg( dd, dd->ipath_kregs->kr_rcvctrl,
 			dd->ipath_rcvctrl);
@@ -1989,7 +2118,8 @@ static int ipath_port_info(struct ipath_portdata *pd, u16 subport,
 	info.port = pd->port_port;
 	info.subport = subport;
 	/* Don't return new fields if old library opened the port. */
-	if ((pd->userversion & 0xffff) == IPATH_USER_SWMINOR) {
+	if (ipath_supports_subports(pd->userversion >> 16,
+				    pd->userversion & 0xffff)) {
 		/* Number of user ports available for this device. */
 		info.num_ports = pd->port_dd->ipath_cfgports - 1;
 		info.num_subports = pd->port_subport_cnt;
@@ -2015,6 +2145,17 @@ static int ipath_get_slave_info(struct ipath_portdata *pd,
 	if (copy_to_user(slave_mask_addr, &pd->active_slaves, sizeof(u32)))
 		ret = -EFAULT;
 	return ret;
+}
+
+static int ipath_force_pio_avail_update(struct ipath_devdata *dd)
+{
+	u64 reg = dd->ipath_sendctrl;
+
+	clear_bit(IPATH_S_PIOBUFAVAILUPD, &reg);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl, reg);
+	ipath_write_kreg(dd, dd->ipath_kregs->kr_sendctrl, dd->ipath_sendctrl);
+
+	return 0;
 }
 
 static ssize_t ipath_write(struct file *fp, const char __user *data,
@@ -2071,27 +2212,40 @@ static ssize_t ipath_write(struct file *fp, const char __user *data,
 		dest = &cmd.cmd.part_key;
 		src = &ucmd->cmd.part_key;
 		break;
-	case IPATH_CMD_SLAVE_INFO:
+	case __IPATH_CMD_SLAVE_INFO:
 		copy = sizeof(cmd.cmd.slave_mask_addr);
 		dest = &cmd.cmd.slave_mask_addr;
 		src = &ucmd->cmd.slave_mask_addr;
+		break;
+	case IPATH_CMD_PIOAVAILUPD:	// force an update of PIOAvail reg
+		copy = 0;
+		src = NULL;
+		dest = NULL;
+		break;
+	case IPATH_CMD_POLL_TYPE:
+		copy = sizeof(cmd.cmd.poll_type);
+		dest = &cmd.cmd.poll_type;
+		src = &ucmd->cmd.poll_type;
 		break;
 	default:
 		ret = -EINVAL;
 		goto bail;
 	}
 
-	if ((count - consumed) < copy) {
-		ret = -EINVAL;
-		goto bail;
+	if (copy) {
+		if ((count - consumed) < copy) {
+			ret = -EINVAL;
+			goto bail;
+		}
+
+		if (copy_from_user(dest, src, copy)) {
+			ret = -EFAULT;
+			goto bail;
+		}
+
+		consumed += copy;
 	}
 
-	if (copy_from_user(dest, src, copy)) {
-		ret = -EFAULT;
-		goto bail;
-	}
-
-	consumed += copy;
 	pd = port_fp(fp);
 	if (!pd && cmd.type != __IPATH_CMD_USER_INIT &&
 		cmd.type != IPATH_CMD_ASSIGN_PORT) {
@@ -2137,10 +2291,16 @@ static ssize_t ipath_write(struct file *fp, const char __user *data,
 	case IPATH_CMD_SET_PART_KEY:
 		ret = ipath_set_part_key(pd, cmd.cmd.part_key);
 		break;
-	case IPATH_CMD_SLAVE_INFO:
+	case __IPATH_CMD_SLAVE_INFO:
 		ret = ipath_get_slave_info(pd,
 					   (void __user *) (unsigned long)
 					   cmd.cmd.slave_mask_addr);
+		break;
+	case IPATH_CMD_PIOAVAILUPD:
+		ret = ipath_force_pio_avail_update(pd->port_dd);
+		break;
+	case IPATH_CMD_POLL_TYPE:
+		pd->poll_type = cmd.cmd.poll_type;
 		break;
 	}
 

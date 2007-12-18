@@ -8,6 +8,7 @@
 #include <linux/mount.h>
 #include <linux/vfs.h>
 #include <linux/mutex.h>
+#include <linux/exportfs.h>
 
 #include <asm/uaccess.h>
 
@@ -162,7 +163,10 @@ static inline int do_dcache_readdir_filter(struct file *filp,
 					continue;
 
 				spin_unlock(&dcache_lock);
-				if (filldir(dirent, next->d_name.name, next->d_name.len, filp->f_pos, next->d_inode->i_ino, dt_type(next->d_inode)) < 0)
+				if (filldir(dirent, next->d_name.name, 
+					    next->d_name.len, filp->f_pos, 
+					    next->d_inode->i_ino, 
+					    dt_type(next->d_inode)) < 0)
 					return 0;
 				spin_lock(&dcache_lock);
 				/* next is still alive */
@@ -235,6 +239,12 @@ int get_sb_pseudo(struct file_system_type *fs_type, char *name,
 	root = new_inode(s);
 	if (!root)
 		goto Enomem;
+	/*
+	 * since this is the first inode, make it number 1. New inodes created
+	 * after this must take care not to collide with it (by passing
+	 * max_reserved of 1 to iunique).
+	 */
+	root->i_ino = 1;
 	root->i_mode = S_IFDIR | S_IRUSR | S_IWUSR;
 	root->i_uid = root->i_gid = 0;
 	root->i_atime = root->i_mtime = root->i_ctime = CURRENT_TIME;
@@ -357,8 +367,28 @@ int simple_prepare_write(struct file *file, struct page *page,
 	return 0;
 }
 
-int simple_commit_write(struct file *file, struct page *page,
-			unsigned from, unsigned to)
+int simple_write_begin(struct file *file, struct address_space *mapping,
+			loff_t pos, unsigned len, unsigned flags,
+			struct page **pagep, void **fsdata)
+{
+	struct page *page;
+	pgoff_t index;
+	unsigned from;
+
+	index = pos >> PAGE_CACHE_SHIFT;
+	from = pos & (PAGE_CACHE_SIZE - 1);
+
+	page = __grab_cache_page(mapping, index);
+	if (!page)
+		return -ENOMEM;
+
+	*pagep = page;
+
+	return simple_prepare_write(file, page, from, from+len);
+}
+
+static int simple_commit_write(struct file *file, struct page *page,
+			       unsigned from, unsigned to)
 {
 	struct inode *inode = page->mapping->host;
 	loff_t pos = ((loff_t)page->index << PAGE_CACHE_SHIFT) + to;
@@ -375,6 +405,33 @@ int simple_commit_write(struct file *file, struct page *page,
 	return 0;
 }
 
+int simple_write_end(struct file *file, struct address_space *mapping,
+			loff_t pos, unsigned len, unsigned copied,
+			struct page *page, void *fsdata)
+{
+	unsigned from = pos & (PAGE_CACHE_SIZE - 1);
+
+	/* zero the stale part of the page if we did a short copy */
+	if (copied < len) {
+		void *kaddr = kmap_atomic(page, KM_USER0);
+		memset(kaddr + from + copied, 0, len - copied);
+		flush_dcache_page(page);
+		kunmap_atomic(kaddr, KM_USER0);
+	}
+
+	simple_commit_write(file, page, from, from+copied);
+
+	unlock_page(page);
+	page_cache_release(page);
+
+	return copied;
+}
+
+/*
+ * the inodes created here are not hashed. If you use iunique to generate
+ * unique inode values later for this filesystem, then you must take care
+ * to pass it an appropriate max_reserved value to avoid collisions.
+ */
 int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files)
 {
 	struct inode *inode;
@@ -391,6 +448,11 @@ int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files
 	inode = new_inode(s);
 	if (!inode)
 		return -ENOMEM;
+	/*
+	 * because the root inode is 1, the files array must not contain an
+	 * entry at index 1
+	 */
+	inode->i_ino = 1;
 	inode->i_mode = S_IFDIR | 0755;
 	inode->i_uid = inode->i_gid = 0;
 	inode->i_blocks = 0;
@@ -406,6 +468,13 @@ int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files
 	for (i = 0; !files->name || files->name[0]; i++, files++) {
 		if (!files->name)
 			continue;
+
+		/* warn if it tries to conflict with the root inode */
+		if (unlikely(i == 1))
+			printk(KERN_WARNING "%s: %s passed in a files array"
+				"with an index of 1!\n", __func__,
+				s->s_type->name);
+
 		dentry = d_alloc_name(root, files->name);
 		if (!dentry)
 			goto out;
@@ -625,6 +694,93 @@ out:
 	return ret;
 }
 
+/*
+ * This is what d_alloc_anon should have been.  Once the exportfs
+ * argument transition has been finished I will update d_alloc_anon
+ * to this prototype and this wrapper will go away.   --hch
+ */
+static struct dentry *exportfs_d_alloc(struct inode *inode)
+{
+	struct dentry *dentry;
+
+	if (!inode)
+		return NULL;
+	if (IS_ERR(inode))
+		return ERR_PTR(PTR_ERR(inode));
+
+	dentry = d_alloc_anon(inode);
+	if (!dentry) {
+		iput(inode);
+		dentry = ERR_PTR(-ENOMEM);
+	}
+	return dentry;
+}
+
+/**
+ * generic_fh_to_dentry - generic helper for the fh_to_dentry export operation
+ * @sb:		filesystem to do the file handle conversion on
+ * @fid:	file handle to convert
+ * @fh_len:	length of the file handle in bytes
+ * @fh_type:	type of file handle
+ * @get_inode:	filesystem callback to retrieve inode
+ *
+ * This function decodes @fid as long as it has one of the well-known
+ * Linux filehandle types and calls @get_inode on it to retrieve the
+ * inode for the object specified in the file handle.
+ */
+struct dentry *generic_fh_to_dentry(struct super_block *sb, struct fid *fid,
+		int fh_len, int fh_type, struct inode *(*get_inode)
+			(struct super_block *sb, u64 ino, u32 gen))
+{
+	struct inode *inode = NULL;
+
+	if (fh_len < 2)
+		return NULL;
+
+	switch (fh_type) {
+	case FILEID_INO32_GEN:
+	case FILEID_INO32_GEN_PARENT:
+		inode = get_inode(sb, fid->i32.ino, fid->i32.gen);
+		break;
+	}
+
+	return exportfs_d_alloc(inode);
+}
+EXPORT_SYMBOL_GPL(generic_fh_to_dentry);
+
+/**
+ * generic_fh_to_dentry - generic helper for the fh_to_parent export operation
+ * @sb:		filesystem to do the file handle conversion on
+ * @fid:	file handle to convert
+ * @fh_len:	length of the file handle in bytes
+ * @fh_type:	type of file handle
+ * @get_inode:	filesystem callback to retrieve inode
+ *
+ * This function decodes @fid as long as it has one of the well-known
+ * Linux filehandle types and calls @get_inode on it to retrieve the
+ * inode for the _parent_ object specified in the file handle if it
+ * is specified in the file handle, or NULL otherwise.
+ */
+struct dentry *generic_fh_to_parent(struct super_block *sb, struct fid *fid,
+		int fh_len, int fh_type, struct inode *(*get_inode)
+			(struct super_block *sb, u64 ino, u32 gen))
+{
+	struct inode *inode = NULL;
+
+	if (fh_len <= 2)
+		return NULL;
+
+	switch (fh_type) {
+	case FILEID_INO32_GEN_PARENT:
+		inode = get_inode(sb, fid->i32.parent_ino,
+				  (fh_len > 3 ? fid->i32.parent_gen : 0));
+		break;
+	}
+
+	return exportfs_d_alloc(inode);
+}
+EXPORT_SYMBOL_GPL(generic_fh_to_parent);
+
 EXPORT_SYMBOL(dcache_dir_close);
 EXPORT_SYMBOL(dcache_dir_lseek);
 EXPORT_SYMBOL(dcache_dir_open);
@@ -632,7 +788,8 @@ EXPORT_SYMBOL(dcache_readdir);
 EXPORT_SYMBOL(dcache_readdir_filter);
 EXPORT_SYMBOL(generic_read_dir);
 EXPORT_SYMBOL(get_sb_pseudo);
-EXPORT_SYMBOL(simple_commit_write);
+EXPORT_SYMBOL(simple_write_begin);
+EXPORT_SYMBOL(simple_write_end);
 EXPORT_SYMBOL(simple_dir_inode_operations);
 EXPORT_SYMBOL(simple_dir_operations);
 EXPORT_SYMBOL(simple_empty);

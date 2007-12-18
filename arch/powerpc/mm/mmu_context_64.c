@@ -49,10 +49,13 @@ again:
 		return -ENOMEM;
 	}
 
+	/* The old code would re-promote on fork, we don't do that
+	 * when using slices as it could cause problem promoting slices
+	 * that have been forced down to 4K
+	 */
+	if (slice_mm_new_context(mm))
+		slice_set_user_psize(mm, mmu_virtual_psize);
 	mm->context.id = index;
-	mm->context.user_psize = mmu_virtual_psize;
-	mm->context.sllp = SLB_VSID_USER |
-		mmu_psize_defs[mmu_virtual_psize].sllp;
 
 	return 0;
 }

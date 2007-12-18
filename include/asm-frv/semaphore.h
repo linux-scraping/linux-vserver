@@ -20,8 +20,6 @@
 #include <linux/spinlock.h>
 #include <linux/rwsem.h>
 
-#define SEMAPHORE_DEBUG		0
-
 /*
  * the semaphore definition
  * - if counter is >0 then there are tokens available on the semaphore for down to collect
@@ -32,12 +30,12 @@ struct semaphore {
 	unsigned		counter;
 	spinlock_t		wait_lock;
 	struct list_head	wait_list;
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 	unsigned		__magic;
 #endif
 };
 
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 # define __SEM_DEBUG_INIT(name) , (long)&(name).__magic
 #else
 # define __SEM_DEBUG_INIT(name)
@@ -51,7 +49,6 @@ struct semaphore {
 	struct semaphore name = __SEMAPHORE_INITIALIZER(name,count)
 
 #define DECLARE_MUTEX(name) __DECLARE_SEMAPHORE_GENERIC(name,1)
-#define DECLARE_MUTEX_LOCKED(name) __DECLARE_SEMAPHORE_GENERIC(name,0)
 
 static inline void sema_init (struct semaphore *sem, int val)
 {
@@ -76,7 +73,7 @@ static inline void down(struct semaphore *sem)
 {
 	unsigned long flags;
 
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 	CHECK_MAGIC(sem->__magic);
 #endif
 
@@ -95,7 +92,7 @@ static inline int down_interruptible(struct semaphore *sem)
 	unsigned long flags;
 	int ret = 0;
 
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 	CHECK_MAGIC(sem->__magic);
 #endif
 
@@ -119,7 +116,7 @@ static inline int down_trylock(struct semaphore *sem)
 	unsigned long flags;
 	int success = 0;
 
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 	CHECK_MAGIC(sem->__magic);
 #endif
 
@@ -136,7 +133,7 @@ static inline void up(struct semaphore *sem)
 {
 	unsigned long flags;
 
-#if SEMAPHORE_DEBUG
+#ifdef CONFIG_DEBUG_SEMAPHORE
 	CHECK_MAGIC(sem->__magic);
 #endif
 

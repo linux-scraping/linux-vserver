@@ -10,6 +10,7 @@
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
 #include <linux/smp.h>
 #include <linux/smp_lock.h>
 #include <linux/sem.h>
@@ -20,12 +21,12 @@
 #include <linux/mman.h>
 #include <linux/file.h>
 #include <linux/utsname.h>
+#include <linux/ipc.h>
 
 #include <asm/setup.h>
 #include <asm/uaccess.h>
 #include <asm/cachectl.h>
 #include <asm/traps.h>
-#include <asm/ipc.h>
 #include <asm/page.h>
 #include <asm/unistd.h>
 

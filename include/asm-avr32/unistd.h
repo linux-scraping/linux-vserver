@@ -295,9 +295,27 @@
 #define __NR_shmdt		276
 #define __NR_shmctl		277
 
-#ifdef __KERNEL__
-#define NR_syscalls		278
+#define __NR_utimensat		278
+#define __NR_signalfd		279
+#define __NR_timerfd		280
+#define __NR_eventfd		281
 
+#ifdef __KERNEL__
+#define NR_syscalls		282
+
+/* Old stuff */
+#define __IGNORE_uselib
+#define __IGNORE_mmap
+
+/* NUMA stuff */
+#define __IGNORE_mbind
+#define __IGNORE_get_mempolicy
+#define __IGNORE_set_mempolicy
+#define __IGNORE_migrate_pages
+#define __IGNORE_move_pages
+
+/* SMP stuff */
+#define __IGNORE_getcpu
 
 #define __ARCH_WANT_IPC_PARSE_VERSION
 #define __ARCH_WANT_STAT64

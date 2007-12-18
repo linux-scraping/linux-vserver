@@ -23,6 +23,8 @@
 #include <asm/mmu.h>
 #endif
 
+#include <linux/pagemap.h>
+
 struct mmu_gather;
 
 #define tlb_start_vma(tlb, vma)	do { } while (0)
@@ -38,7 +40,15 @@ extern void pte_free_finish(void);
 
 static inline void tlb_flush(struct mmu_gather *tlb)
 {
-	flush_tlb_pending();
+	struct ppc64_tlb_batch *tlbbatch = &__get_cpu_var(ppc64_tlb_batch);
+
+	/* If there's a TLB batch pending, then we must flush it because the
+	 * pages are going to be freed and we really don't want to have a CPU
+	 * access a freed page because it has a stale TLB
+	 */
+	if (tlbbatch->index)
+		__flush_tlb_pending(tlbbatch);
+
 	pte_free_finish();
 }
 

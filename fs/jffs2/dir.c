@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: dir.c,v 1.90 2005/11/07 11:14:39 gleixner Exp $
  *
  */
 
@@ -34,7 +32,7 @@ static int jffs2_mkdir (struct inode *,struct dentry *,int);
 static int jffs2_rmdir (struct inode *,struct dentry *);
 static int jffs2_mknod (struct inode *,struct dentry *,int,dev_t);
 static int jffs2_rename (struct inode *, struct dentry *,
-                        struct inode *, struct dentry *);
+			 struct inode *, struct dentry *);
 
 const struct file_operations jffs2_dir_operations =
 {
@@ -212,14 +210,6 @@ static int jffs2_create(struct inode *dir_i, struct dentry *dentry, int mode,
 
 	ret = jffs2_do_create(c, dir_f, f, ri,
 			      dentry->d_name.name, dentry->d_name.len);
-
-	if (ret)
-		goto fail;
-
-	ret = jffs2_init_security(inode, dir_i);
-	if (ret)
-		goto fail;
-	ret = jffs2_init_acl(inode, dir_i);
 	if (ret)
 		goto fail;
 
@@ -393,7 +383,7 @@ static int jffs2_symlink (struct inode *dir_i, struct dentry *dentry, const char
 		jffs2_clear_inode(inode);
 		return ret;
 	}
-	ret = jffs2_init_acl(inode, dir_i);
+	ret = jffs2_init_acl_post(inode);
 	if (ret) {
 		jffs2_clear_inode(inode);
 		return ret;
@@ -535,7 +525,7 @@ static int jffs2_mkdir (struct inode *dir_i, struct dentry *dentry, int mode)
 		jffs2_clear_inode(inode);
 		return ret;
 	}
-	ret = jffs2_init_acl(inode, dir_i);
+	ret = jffs2_init_acl_post(inode);
 	if (ret) {
 		jffs2_clear_inode(inode);
 		return ret;
@@ -701,7 +691,7 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 		jffs2_clear_inode(inode);
 		return ret;
 	}
-	ret = jffs2_init_acl(inode, dir_i);
+	ret = jffs2_init_acl_post(inode);
 	if (ret) {
 		jffs2_clear_inode(inode);
 		return ret;
@@ -772,7 +762,7 @@ static int jffs2_mknod (struct inode *dir_i, struct dentry *dentry, int mode, de
 }
 
 static int jffs2_rename (struct inode *old_dir_i, struct dentry *old_dentry,
-                        struct inode *new_dir_i, struct dentry *new_dentry)
+			 struct inode *new_dir_i, struct dentry *new_dentry)
 {
 	int ret;
 	struct jffs2_sb_info *c = JFFS2_SB_INFO(old_dir_i->i_sb);

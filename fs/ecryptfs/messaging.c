@@ -19,7 +19,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
  * 02111-1307, USA.
  */
-
+#include <linux/sched.h>
 #include "ecryptfs_kernel.h"
 
 static LIST_HEAD(ecryptfs_msg_ctx_free_list);
@@ -419,8 +419,9 @@ int ecryptfs_init_messaging(unsigned int transport)
 	}
 	mutex_init(&ecryptfs_daemon_id_hash_mux);
 	mutex_lock(&ecryptfs_daemon_id_hash_mux);
-	ecryptfs_hash_buckets = 0;
-	while (ecryptfs_number_of_users >> ++ecryptfs_hash_buckets);
+	ecryptfs_hash_buckets = 1;
+	while (ecryptfs_number_of_users >> ecryptfs_hash_buckets)
+		ecryptfs_hash_buckets++;
 	ecryptfs_daemon_id_hash = kmalloc(sizeof(struct hlist_head)
 					  * ecryptfs_hash_buckets, GFP_KERNEL);
 	if (!ecryptfs_daemon_id_hash) {

@@ -1,7 +1,7 @@
 /*
  * serial.h: Arch-dep definitions for the Etrax100 serial driver.
  *
- * Copyright (C) 1998, 1999, 2000 Axis Communications AB
+ * Copyright (C) 1998-2007 Axis Communications AB
  */
 
 #ifndef _ETRAX_SERIAL_H
@@ -9,6 +9,8 @@
 
 #include <linux/circ_buf.h>
 #include <asm/termios.h>
+#include <asm/dma.h>
+#include <asm/arch/io_interface_mux.h>
 
 /* Software state per channel */
 
@@ -34,33 +36,46 @@ struct etrax_recv_buffer {
 };
 
 struct e100_serial {
-	int			baud;
-	volatile u8		*port; /* R_SERIALx_CTRL */
-	u32			irq;  /* bitnr in R_IRQ_MASK2 for dmaX_descr */
+	int baud;
+	volatile u8	*port;	/* R_SERIALx_CTRL */
+	u32		irq;	/* bitnr in R_IRQ_MASK2 for dmaX_descr */
 
 	/* Output registers */
-	volatile u8		*oclrintradr; /* adr to R_DMA_CHx_CLR_INTR */
-	volatile u32		*ofirstadr;   /* adr to R_DMA_CHx_FIRST */
-	volatile u8		*ocmdadr;     /* adr to R_DMA_CHx_CMD */
-	const volatile u8	*ostatusadr;  /* adr to R_DMA_CHx_STATUS */
+	volatile u8 *oclrintradr;	/* adr to R_DMA_CHx_CLR_INTR */
+	volatile u32 *ofirstadr;	/* adr to R_DMA_CHx_FIRST */
+	volatile u8 *ocmdadr;		/* adr to R_DMA_CHx_CMD */
+	const volatile u8 *ostatusadr;	/* adr to R_DMA_CHx_STATUS */
 
 	/* Input registers */
-	volatile u8		*iclrintradr; /* adr to R_DMA_CHx_CLR_INTR */
-	volatile u32		*ifirstadr;   /* adr to R_DMA_CHx_FIRST */
-	volatile u8		*icmdadr;     /* adr to R_DMA_CHx_CMD */
-	volatile u32		*idescradr;   /* adr to R_DMA_CHx_DESCR */
+	volatile u8 *iclrintradr;	/* adr to R_DMA_CHx_CLR_INTR */
+	volatile u32 *ifirstadr;	/* adr to R_DMA_CHx_FIRST */
+	volatile u8 *icmdadr;		/* adr to R_DMA_CHx_CMD */
+	volatile u32 *idescradr;	/* adr to R_DMA_CHx_DESCR */
 
-	int			flags;	/* defined in tty.h */
+	int flags;	/* defined in tty.h */
 
-	u8			rx_ctrl; /* shadow for R_SERIALx_REC_CTRL */
-	u8			tx_ctrl; /* shadow for R_SERIALx_TR_CTRL */
-	u8			iseteop; /* bit number for R_SET_EOP for the input dma */
-	int			enabled; /* Set to 1 if the port is enabled in HW config */
+	u8 rx_ctrl;	/* shadow for R_SERIALx_REC_CTRL */
+	u8 tx_ctrl;	/* shadow for R_SERIALx_TR_CTRL */
+	u8 iseteop;	/* bit number for R_SET_EOP for the input dma */
+	int enabled;	/* Set to 1 if the port is enabled in HW config */
 
-	u8		dma_out_enabled:1; /* Set to 1 if DMA should be used */
-	u8		dma_in_enabled:1;  /* Set to 1 if DMA should be used */
+	u8 dma_out_enabled;	/* Set to 1 if DMA should be used */
+	u8 dma_in_enabled;	/* Set to 1 if DMA should be used */
 
 	/* end of fields defined in rs_table[] in .c-file */
+	int		dma_owner;
+	unsigned int	dma_in_nbr;
+	unsigned int	dma_out_nbr;
+	unsigned int	dma_in_irq_nbr;
+	unsigned int	dma_out_irq_nbr;
+	unsigned long	dma_in_irq_flags;
+	unsigned long	dma_out_irq_flags;
+	char		*dma_in_irq_description;
+	char		*dma_out_irq_description;
+
+	enum cris_io_interface io_if;
+	char            *io_if_description;
+
 	u8		uses_dma_in;  /* Set to 1 if DMA is used */
 	u8		uses_dma_out; /* Set to 1 if DMA is used */
 	u8		forced_eop;   /* a fifo eop has been forced */
@@ -95,23 +110,18 @@ struct e100_serial {
 	struct async_icount	icount;   /* error-statistics etc.*/
 	struct ktermios		normal_termios;
 	struct ktermios		callout_termios;
-#ifdef DECLARE_WAITQUEUE
 	wait_queue_head_t	open_wait;
 	wait_queue_head_t	close_wait;
-#else
-	struct wait_queue	*open_wait;
-	struct wait_queue	*close_wait;
-#endif
 
-	unsigned long		char_time_usec;       /* The time for 1 char, in usecs */
-	unsigned long		flush_time_usec;      /* How often we should flush */
-	unsigned long		last_tx_active_usec;  /* Last tx usec in the jiffies */
-	unsigned long		last_tx_active;       /* Last tx time in jiffies */
-	unsigned long		last_rx_active_usec;  /* Last rx usec in the jiffies */
-	unsigned long		last_rx_active;       /* Last rx time in jiffies */
+	unsigned long char_time_usec;       /* The time for 1 char, in usecs */
+	unsigned long flush_time_usec;      /* How often we should flush */
+	unsigned long last_tx_active_usec;  /* Last tx usec in the jiffies */
+	unsigned long last_tx_active;       /* Last tx time in jiffies */
+	unsigned long last_rx_active_usec;  /* Last rx usec in the jiffies */
+	unsigned long last_rx_active;       /* Last rx time in jiffies */
 
-	int			break_detected_cnt;
-	int			errorcode;
+	int break_detected_cnt;
+	int errorcode;
 
 #ifdef CONFIG_ETRAX_RS485
 	struct rs485_control	rs485;  /* RS-485 support */

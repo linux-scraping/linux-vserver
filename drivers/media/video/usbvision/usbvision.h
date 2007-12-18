@@ -146,7 +146,6 @@
 #define USBVISION_CLIPMASK_SIZE		(MAX_FRAME_WIDTH * MAX_FRAME_HEIGHT / 8) //bytesize of clipmask
 
 #define USBVISION_URB_FRAMES		32
-#define USBVISION_MAX_ISOC_PACKET_SIZE 	959			// NT1003 Specs Document says 1023
 
 #define USBVISION_NUM_HEADERMARKER	20
 #define USBVISION_NUMFRAMES		3  /* Maximum number of frames an application can get */
@@ -221,6 +220,8 @@ enum {
 	(!(udevice)->remove_pending))
 
 #define I2C_USB_ADAP_MAX	16
+
+#define USBVISION_NORMS (V4L2_STD_PAL | V4L2_STD_NTSC | V4L2_STD_SECAM | V4L2_STD_PAL_M)
 
 /* ----------------------------------------------------------------- */
 /* usbvision video structures                                        */
@@ -302,14 +303,6 @@ struct usbvision_frame_header {
 	__u16 frameHeight;				/* 10 - 11 after endian correction*/
 };
 
-/* tvnorms */
-struct usbvision_tvnorm {
-	char *name;
-	v4l2_std_id id;
-	/* mode for saa7113h */
-	int mode;
-};
-
 struct usbvision_frame {
 	char *data;					/* Frame buffer */
 	struct usbvision_frame_header isocHeader;	/* Header from stream */
@@ -342,23 +335,24 @@ struct usbvision_frame {
 #define BRIDGE_NT1005   1005
 
 struct usbvision_device_data_st {
-	int idVendor;
-	int idProduct;
-	int Interface; /* to handle special interface number like BELKIN and Hauppauge WinTV-USB II */
-	int Codec;
-	int VideoChannels;
 	__u64 VideoNorm;
-	int AudioChannels;
-	int Radio;
-	int vbi;
-	int Tuner;
-	int TunerType;
-	int Vin_Reg1;
-	int Vin_Reg2;
-	int X_Offset;
-	int Y_Offset;
-	int Dvi_yuv;
-	char *ModelString;
+	const char *ModelString;
+	int Interface; /* to handle special interface number like BELKIN and Hauppauge WinTV-USB II */
+	__u16 Codec;
+	unsigned VideoChannels:3;
+	unsigned AudioChannels:2;
+	unsigned Radio:1;
+	unsigned vbi:1;
+	unsigned Tuner:1;
+	unsigned Vin_Reg1_override:1;	/* Override default value with */
+	unsigned Vin_Reg2_override:1;   /* Vin_Reg1, Vin_Reg2, etc. */
+	unsigned Dvi_yuv_override:1;
+	__u8 Vin_Reg1;
+	__u8 Vin_Reg2;
+	__u8 Dvi_yuv;
+	__u8 TunerType;
+	__s16 X_Offset;
+	__s16 Y_Offset;
 };
 
 /* Declared on usbvision-cards.c */
@@ -386,7 +380,6 @@ struct usb_usbvision {
 	int tuner_type;
 	int tuner_addr;
 	int bridgeType;							// NT1003, NT1004, NT1005
-	int channel;
 	int radio;
 	int video_inputs;						// # of inputs
 	unsigned long freq;
@@ -441,7 +434,7 @@ struct usb_usbvision {
 
 	struct v4l2_capability vcap;					/* Video capabilities */
 	unsigned int ctl_input;						/* selected input */
-	struct usbvision_tvnorm *tvnorm;				/* selected tv norm */
+	v4l2_std_id tvnormId;						/* selected tv norm */
 	unsigned char video_endp;					/* 0x82 for USBVISION devices based */
 
 	// Decompression stuff:
@@ -481,13 +474,11 @@ struct usb_usbvision {
 /* i2c-algo-usb declaration                                        */
 /* --------------------------------------------------------------- */
 
-int usbvision_i2c_usb_del_bus(struct i2c_adapter *);
-
-
 /* ----------------------------------------------------------------------- */
 /* usbvision specific I2C functions                                        */
 /* ----------------------------------------------------------------------- */
-int usbvision_init_i2c(struct usb_usbvision *usbvision);
+int usbvision_i2c_register(struct usb_usbvision *usbvision);
+int usbvision_i2c_unregister(struct usb_usbvision *usbvision);
 void call_i2c_clients(struct usb_usbvision *usbvision, unsigned int cmd,void *arg);
 
 /* defined in usbvision-core.c                                      */

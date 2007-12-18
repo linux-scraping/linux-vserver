@@ -7,7 +7,7 @@
  *
  *  SuperH version:  Copyright (C) 1999, 2000  Niibe Yutaka & Kaz Kojima
  *		     Copyright (C) 2006 Lineo Solutions Inc. support SH4A UBC
- *		     Copyright (C) 2002 - 2006  Paul Mundt
+ *		     Copyright (C) 2002 - 2007  Paul Mundt
  */
 #include <linux/module.h>
 #include <linux/mm.h>
@@ -15,14 +15,19 @@
 #include <linux/pm.h>
 #include <linux/kallsyms.h>
 #include <linux/kexec.h>
+#include <linux/kdebug.h>
+#include <linux/tick.h>
+#include <linux/reboot.h>
+#include <linux/fs.h>
+#include <linux/preempt.h>
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
+#include <asm/pgalloc.h>
+#include <asm/system.h>
 #include <asm/ubc.h>
 
 static int hlt_counter;
 int ubc_usercnt = 0;
-
-#define HARD_IDLE_TIMEOUT (HZ / 3)
 
 void (*pm_idle)(void);
 void (*pm_power_off)(void);
@@ -40,16 +45,39 @@ void enable_hlt(void)
 }
 EXPORT_SYMBOL(enable_hlt);
 
+static int __init nohlt_setup(char *__unused)
+{
+	hlt_counter = 1;
+	return 1;
+}
+__setup("nohlt", nohlt_setup);
+
+static int __init hlt_setup(char *__unused)
+{
+	hlt_counter = 0;
+	return 1;
+}
+__setup("hlt", hlt_setup);
+
 void default_idle(void)
 {
-	if (!hlt_counter)
-		cpu_sleep();
-	else
-		cpu_relax();
+	if (!hlt_counter) {
+		clear_thread_flag(TIF_POLLING_NRFLAG);
+		smp_mb__after_clear_bit();
+		set_bl_bit();
+		while (!need_resched())
+			cpu_sleep();
+		clear_bl_bit();
+		set_thread_flag(TIF_POLLING_NRFLAG);
+	} else
+		while (!need_resched())
+			cpu_relax();
 }
 
 void cpu_idle(void)
 {
+	set_thread_flag(TIF_POLLING_NRFLAG);
+
 	/* endless idle loop with no priority at all */
 	while (1) {
 		void (*idle)(void) = pm_idle;
@@ -57,12 +85,15 @@ void cpu_idle(void)
 		if (!idle)
 			idle = default_idle;
 
+		tick_nohz_stop_sched_tick();
 		while (!need_resched())
 			idle();
+		tick_nohz_restart_sched_tick();
 
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
+		check_pgt_cache();
 	}
 }
 
@@ -91,7 +122,7 @@ void show_regs(struct pt_regs * regs)
 {
 	printk("\n");
 	printk("Pid : %d:#%u, Comm: %20s\n",
-		current->pid, current->xid, current->comm);
+		task_pid_nr(current), current->xid, current->comm);
 	print_symbol("PC is at %s\n", instruction_pointer(regs));
 	printk("PC  : %08lx SP  : %08lx SR  : %08lx ",
 	       regs->pc, regs->regs[15], regs->sr);
@@ -292,15 +323,14 @@ static void ubc_set_tracing(int asid, unsigned long pc)
 	ctrl_outl(pc, UBC_BARA);
 
 #ifdef CONFIG_MMU
-	/* We don't have any ASID settings for the SH-2! */
-	if (current_cpu_data.type != CPU_SH7604)
-		ctrl_outb(asid, UBC_BASRA);
+	ctrl_outb(asid, UBC_BASRA);
 #endif
 
 	ctrl_outl(0, UBC_BAMRA);
 
 	if (current_cpu_data.type == CPU_SH7729 ||
-	    current_cpu_data.type == CPU_SH7710) {
+	    current_cpu_data.type == CPU_SH7710 ||
+	    current_cpu_data.type == CPU_SH7712) {
 		ctrl_outw(BBR_INST | BBR_READ | BBR_CPU, UBC_BBRA);
 		ctrl_outl(BRCR_PCBA | BRCR_PCTE, UBC_BRCR);
 	} else {
@@ -321,12 +351,11 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	unlazy_fpu(prev, task_pt_regs(prev));
 #endif
 
-#ifdef CONFIG_PREEMPT
+#if defined(CONFIG_GUSA) && defined(CONFIG_PREEMPT)
 	{
-		unsigned long flags;
 		struct pt_regs *regs;
 
-		local_irq_save(flags);
+		preempt_disable();
 		regs = task_pt_regs(prev);
 		if (user_mode(regs) && regs->regs[15] >= 0xc0000000) {
 			int offset = (int)regs->regs[15];
@@ -337,7 +366,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 				/* Go to rewind point */
 				regs->pc = regs->regs[0] + offset;
 		}
-		local_irq_restore(flags);
+		preempt_enable_no_resched();
 	}
 #endif
 
@@ -377,8 +406,8 @@ asmlinkage int sys_fork(unsigned long r4, unsigned long r5,
 			unsigned long r6, unsigned long r7,
 			struct pt_regs __regs)
 {
-	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 #ifdef CONFIG_MMU
+	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 	return do_fork(SIGCHLD, regs->regs[15], regs, 0, NULL, NULL);
 #else
 	/* fork almost works, enough to trick you into looking elsewhere :-( */
@@ -421,23 +450,20 @@ asmlinkage int sys_vfork(unsigned long r4, unsigned long r5,
 /*
  * sys_execve() executes a new program.
  */
-asmlinkage int sys_execve(char *ufilename, char **uargv,
-			  char **uenvp, unsigned long r7,
+asmlinkage int sys_execve(char __user *ufilename, char __user * __user *uargv,
+			  char __user * __user *uenvp, unsigned long r7,
 			  struct pt_regs __regs)
 {
 	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 	int error;
 	char *filename;
 
-	filename = getname((char __user *)ufilename);
+	filename = getname(ufilename);
 	error = PTR_ERR(filename);
 	if (IS_ERR(filename))
 		goto out;
 
-	error = do_execve(filename,
-			  (char __user * __user *)uargv,
-			  (char __user * __user *)uenvp,
-			  regs);
+	error = do_execve(filename, uargv, uenvp, regs);
 	if (error == 0) {
 		task_lock(current);
 		current->ptrace &= ~PT_DTRACE;
@@ -450,7 +476,6 @@ out:
 
 unsigned long get_wchan(struct task_struct *p)
 {
-	unsigned long schedule_frame;
 	unsigned long pc;
 
 	if (!p || p == current || p->state == TASK_RUNNING)
@@ -460,10 +485,13 @@ unsigned long get_wchan(struct task_struct *p)
 	 * The same comment as on the Alpha applies here, too ...
 	 */
 	pc = thread_saved_pc(p);
+
+#ifdef CONFIG_FRAME_POINTER
 	if (in_sched_functions(pc)) {
-		schedule_frame = (unsigned long)p->thread.sp;
+		unsigned long schedule_frame = (unsigned long)p->thread.sp;
 		return ((unsigned long *)schedule_frame)[21];
 	}
+#endif
 
 	return pc;
 }
@@ -494,7 +522,11 @@ asmlinkage void debug_trap_handler(unsigned long r4, unsigned long r5,
 	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 
 	/* Rewind */
-	regs->pc -= 2;
+	regs->pc -= instruction_size(ctrl_inw(regs->pc - 4));
+
+	if (notify_die(DIE_TRAP, "debug trap", regs, 0, regs->tra & 0xff,
+		       SIGTRAP) == NOTIFY_STOP)
+		return;
 
 	force_sig(SIGTRAP, current);
 }
@@ -509,7 +541,11 @@ asmlinkage void bug_trap_handler(unsigned long r4, unsigned long r5,
 	struct pt_regs *regs = RELOC_HIDE(&__regs, 0);
 
 	/* Rewind */
-	regs->pc -= 2;
+	regs->pc -= instruction_size(ctrl_inw(regs->pc - 4));
+
+	if (notify_die(DIE_TRAP, "bug trap", regs, 0, TRAPA_BUG_OPCODE & 0xff,
+		       SIGTRAP) == NOTIFY_STOP)
+		return;
 
 #ifdef CONFIG_BUG
 	if (__kernel_text_address(instruction_pointer(regs))) {

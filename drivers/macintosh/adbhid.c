@@ -52,6 +52,11 @@
 
 MODULE_AUTHOR("Franz Sirl <Franz.Sirl-kernel@lauterbach.com>");
 
+static int restore_capslock_events;
+module_param(restore_capslock_events, int, 0644);
+MODULE_PARM_DESC(restore_capslock_events,
+	"Produce keypress events for capslock on both keyup and keydown.");
+
 #define KEYB_KEYREG	0	/* register # for key up/down data */
 #define KEYB_LEDREG	2	/* register # for leds on ADB keyboard */
 #define MOUSE_DATAREG	0	/* reg# for movement/button codes from mouse */
@@ -70,7 +75,7 @@ static struct notifier_block adbhid_adb_notifier = {
 #define ADB_KEY_POWER_OLD	0x7e
 #define ADB_KEY_POWER		0x7f
 
-u8 adb_to_linux_keycodes[128] = {
+u16 adb_to_linux_keycodes[128] = {
 	/* 0x00 */ KEY_A, 		/*  30 */
 	/* 0x01 */ KEY_S, 		/*  31 */
 	/* 0x02 */ KEY_D,		/*  32 */
@@ -134,7 +139,7 @@ u8 adb_to_linux_keycodes[128] = {
 	/* 0x3c */ KEY_RIGHT,		/* 106 */
 	/* 0x3d */ KEY_DOWN,		/* 108 */
 	/* 0x3e */ KEY_UP,		/* 103 */
-	/* 0x3f */ 0,
+	/* 0x3f */ KEY_FN,		/* 0x1d0 */
 	/* 0x40 */ 0,
 	/* 0x41 */ KEY_KPDOT,		/*  83 */
 	/* 0x42 */ 0,
@@ -208,7 +213,7 @@ struct adbhid {
 	int original_handler_id;
 	int current_handler_id;
 	int mouse_kind;
-	unsigned char *keycode;
+	u16 *keycode;
 	char name[64];
 	char phys[32];
 	int flags;
@@ -217,6 +222,8 @@ struct adbhid {
 #define FLAG_FN_KEY_PRESSED	0x00000001
 #define FLAG_POWER_FROM_FN	0x00000002
 #define FLAG_EMU_FWDEL_DOWN	0x00000004
+#define FLAG_CAPSLOCK_TRANSLATE	0x00000008
+#define FLAG_CAPSLOCK_DOWN	0x00000010
 
 static struct adbhid *adbhid[16];
 
@@ -272,19 +279,50 @@ adbhid_keyboard_input(unsigned char *data, int nb, int apoll)
 }
 
 static void
-adbhid_input_keycode(int id, int keycode, int repeat)
+adbhid_input_keycode(int id, int scancode, int repeat)
 {
 	struct adbhid *ahid = adbhid[id];
-	int up_flag;
+	int keycode, up_flag, key;
 
-	up_flag = (keycode & 0x80);
-	keycode &= 0x7f;
+	keycode = scancode & 0x7f;
+	up_flag = scancode & 0x80;
+
+	if (restore_capslock_events) {
+		if (keycode == ADB_KEY_CAPSLOCK && !up_flag) {
+			/* Key pressed, turning on the CapsLock LED.
+			 * The next 0xff will be interpreted as a release. */
+			ahid->flags |= FLAG_CAPSLOCK_TRANSLATE
+					| FLAG_CAPSLOCK_DOWN;
+		} else if (scancode == 0xff) {
+			/* Scancode 0xff usually signifies that the capslock
+			 * key was either pressed or released. */
+			if (ahid->flags & FLAG_CAPSLOCK_TRANSLATE) {
+				keycode = ADB_KEY_CAPSLOCK;
+				if (ahid->flags & FLAG_CAPSLOCK_DOWN) {
+					/* Key released */
+					up_flag = 1;
+					ahid->flags &= ~FLAG_CAPSLOCK_DOWN;
+				} else {
+					/* Key pressed */
+					up_flag = 0;
+					ahid->flags &= ~FLAG_CAPSLOCK_TRANSLATE;
+				}
+			} else {
+				printk(KERN_INFO "Spurious caps lock event "
+						"(scancode 0xff).");
+			}
+		}
+	}
 
 	switch (keycode) {
-	case ADB_KEY_CAPSLOCK: /* Generate down/up events for CapsLock everytime. */
-		input_report_key(ahid->input, KEY_CAPSLOCK, 1);
-		input_report_key(ahid->input, KEY_CAPSLOCK, 0);
-		input_sync(ahid->input);
+	case ADB_KEY_CAPSLOCK:
+		if (!restore_capslock_events) {
+			/* Generate down/up events for CapsLock everytime. */
+			input_report_key(ahid->input, KEY_CAPSLOCK, 1);
+			input_sync(ahid->input);
+			input_report_key(ahid->input, KEY_CAPSLOCK, 0);
+			input_sync(ahid->input);
+		}
 		return;
 #ifdef CONFIG_PPC_PMAC
 	case ADB_KEY_POWER_OLD: /* Power key on PBook 3400 needs remapping */
@@ -296,7 +334,7 @@ adbhid_input_keycode(int id, int keycode, int repeat)
 			keycode = ADB_KEY_POWER;
 		}
 		break;
-	case ADB_KEY_POWER: 
+	case ADB_KEY_POWER:
 		/* Fn + Command will produce a bogus "power" keycode */
 		if (ahid->flags & FLAG_FN_KEY_PRESSED) {
 			keycode = ADB_KEY_CMD;
@@ -321,8 +359,7 @@ adbhid_input_keycode(int id, int keycode, int repeat)
 			}
 		} else
 			ahid->flags |= FLAG_FN_KEY_PRESSED;
-		/* Swallow the key press */
-		return;
+		break;
 	case ADB_KEY_DEL:
 		/* Emulate Fn+delete = forward delete */
 		if (ahid->flags & FLAG_FN_KEY_PRESSED) {
@@ -336,9 +373,9 @@ adbhid_input_keycode(int id, int keycode, int repeat)
 #endif /* CONFIG_PPC_PMAC */
 	}
 
-	if (adbhid[id]->keycode[keycode]) {
-		input_report_key(adbhid[id]->input,
-				 adbhid[id]->keycode[keycode], !up_flag);
+	key = adbhid[id]->keycode[keycode];
+	if (key) {
+		input_report_key(adbhid[id]->input, key, !up_flag);
 		input_sync(adbhid[id]->input);
 	} else
 		printk(KERN_INFO "Unhandled ADB key (scancode %#02x) %s.\n", keycode,
@@ -628,16 +665,16 @@ static void real_leds(unsigned char leds, int device)
  */
 static int adbhid_kbd_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
-	struct adbhid *adbhid = dev->private;
+	struct adbhid *adbhid = input_get_drvdata(dev);
 	unsigned char leds;
 
 	switch (type) {
 	case EV_LED:
-	  leds = (test_bit(LED_SCROLLL, dev->led) ? 4 : 0)
-	       | (test_bit(LED_NUML,    dev->led) ? 1 : 0)
-	       | (test_bit(LED_CAPSL,   dev->led) ? 2 : 0);
-	  real_leds(leds, adbhid->id);
-	  return 0;
+		leds =  (test_bit(LED_SCROLLL, dev->led) ? 4 : 0) |
+			(test_bit(LED_NUML,    dev->led) ? 1 : 0) |
+			(test_bit(LED_CAPSL,   dev->led) ? 2 : 0);
+		real_leds(leds, adbhid->id);
+		return 0;
 	}
 
 	return -1;
@@ -649,7 +686,7 @@ adb_message_handler(struct notifier_block *this, unsigned long code, void *x)
 	switch (code) {
 	case ADB_MSG_PRE_RESET:
 	case ADB_MSG_POWERDOWN:
-	    	/* Stop the repeat timer. Autopoll is already off at this point */
+		/* Stop the repeat timer. Autopoll is already off at this point */
 		{
 			int i;
 			for (i = 1; i < 16; i++) {
@@ -699,7 +736,7 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 	hid->current_handler_id = current_handler_id;
 	hid->mouse_kind = mouse_kind;
 	hid->flags = 0;
-	input_dev->private = hid;
+	input_set_drvdata(input_dev, hid);
 	input_dev->name = hid->name;
 	input_dev->phys = hid->phys;
 	input_dev->id.bustype = BUS_ADB;
@@ -754,26 +791,30 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 			if (hid->keycode[i])
 				set_bit(hid->keycode[i], input_dev->keybit);
 
-		input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_LED) | BIT(EV_REP);
-		input_dev->ledbit[0] = BIT(LED_SCROLLL) | BIT(LED_CAPSL) | BIT(LED_NUML);
+		input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) |
+			BIT_MASK(EV_REP);
+		input_dev->ledbit[0] = BIT_MASK(LED_SCROLLL) |
+			BIT_MASK(LED_CAPSL) | BIT_MASK(LED_NUML);
 		input_dev->event = adbhid_kbd_event;
-		input_dev->keycodemax = 127;
-		input_dev->keycodesize = 1;
+		input_dev->keycodemax = KEY_FN;
+		input_dev->keycodesize = sizeof(hid->keycode[0]);
 		break;
 
 	case ADB_MOUSE:
 		sprintf(hid->name, "ADB mouse");
 
-		input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REL);
-		input_dev->keybit[LONG(BTN_MOUSE)] = BIT(BTN_LEFT) | BIT(BTN_MIDDLE) | BIT(BTN_RIGHT);
-		input_dev->relbit[0] = BIT(REL_X) | BIT(REL_Y);
+		input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REL);
+		input_dev->keybit[BIT_WORD(BTN_MOUSE)] = BIT_MASK(BTN_LEFT) |
+			BIT_MASK(BTN_MIDDLE) | BIT_MASK(BTN_RIGHT);
+		input_dev->relbit[0] = BIT_MASK(REL_X) | BIT_MASK(REL_Y);
 		break;
 
 	case ADB_MISC:
 		switch (original_handler_id) {
 		case 0x02: /* Adjustable keyboard button device */
 			sprintf(hid->name, "ADB adjustable keyboard buttons");
-			input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REP);
+			input_dev->evbit[0] = BIT_MASK(EV_KEY) |
+				BIT_MASK(EV_REP);
 			set_bit(KEY_SOUND, input_dev->keybit);
 			set_bit(KEY_MUTE, input_dev->keybit);
 			set_bit(KEY_VOLUMEUP, input_dev->keybit);
@@ -781,7 +822,8 @@ adbhid_input_register(int id, int default_id, int original_handler_id,
 			break;
 		case 0x1f: /* Powerbook button device */
 			sprintf(hid->name, "ADB Powerbook buttons");
-			input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REP);
+			input_dev->evbit[0] = BIT_MASK(EV_KEY) |
+				BIT_MASK(EV_REP);
 			set_bit(KEY_MUTE, input_dev->keybit);
 			set_bit(KEY_VOLUMEUP, input_dev->keybit);
 			set_bit(KEY_VOLUMEDOWN, input_dev->keybit);

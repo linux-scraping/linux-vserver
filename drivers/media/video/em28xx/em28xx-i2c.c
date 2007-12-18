@@ -70,7 +70,7 @@ static int em2800_i2c_send_max4(struct em28xx *dev, unsigned char addr,
 
 	ret = dev->em28xx_write_regs(dev, 4 - len, &b2[4 - len], 2 + len);
 	if (ret != 2 + len) {
-		em28xx_warn("writting to i2c device failed (error=%i)\n", ret);
+		em28xx_warn("writing to i2c device failed (error=%i)\n", ret);
 		return -EIO;
 	}
 	for (write_timeout = EM2800_I2C_WRITE_TIMEOUT; write_timeout > 0;
@@ -383,15 +383,6 @@ static int em28xx_i2c_eeprom(struct em28xx *dev, unsigned char *eedata, int len)
 /* ----------------------------------------------------------- */
 
 /*
- * algo_control()
- */
-static int algo_control(struct i2c_adapter *adapter,
-			unsigned int cmd, unsigned long arg)
-{
-	return 0;
-}
-
-/*
  * functionality()
  */
 static u32 functionality(struct i2c_adapter *adap)
@@ -425,8 +416,10 @@ static int attach_inform(struct i2c_client *client)
 	struct em28xx *dev = client->adapter->algo_data;
 
 	switch (client->addr << 1) {
-		case 0x43:
-		case 0x4b:
+		case 0x86:
+		case 0x84:
+		case 0x96:
+		case 0x94:
 		{
 			struct tuner_setup tun_setup;
 
@@ -475,7 +468,6 @@ static int attach_inform(struct i2c_client *client)
 
 static struct i2c_algorithm em28xx_algo = {
 	.master_xfer   = em28xx_i2c_xfer,
-	.algo_control  = algo_control,
 	.functionality = functionality,
 };
 
@@ -523,7 +515,7 @@ static void do_i2c_scan(char *name, struct i2c_client *c)
 	unsigned char buf;
 	int i, rc;
 
-	for (i = 0; i < 128; i++) {
+	for (i = 0; i < ARRAY_SIZE(i2c_devs); i++) {
 		c->addr = i;
 		rc = i2c_master_recv(c, &buf, 0);
 		if (rc < 0)

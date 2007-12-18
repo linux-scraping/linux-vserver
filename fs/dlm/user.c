@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006 Red Hat, Inc.  All rights reserved.
+ * Copyright (C) 2006-2007 Red Hat, Inc.  All rights reserved.
  *
  * This copyrighted material is made available to anyone wishing to use,
  * modify, copy, or redistribute it subject to the terms and conditions
@@ -33,16 +33,17 @@ static const struct file_operations device_fops;
 struct dlm_lock_params32 {
 	__u8 mode;
 	__u8 namelen;
-	__u16 flags;
+	__u16 unused;
+	__u32 flags;
 	__u32 lkid;
 	__u32 parent;
-
+	__u64 xid;
+	__u64 timeout;
 	__u32 castparam;
 	__u32 castaddr;
 	__u32 bastparam;
 	__u32 bastaddr;
 	__u32 lksb;
-
 	char lvb[DLM_USER_LVB_LEN];
 	char name[0];
 };
@@ -56,6 +57,7 @@ struct dlm_write_request32 {
 	union  {
 		struct dlm_lock_params32 lock;
 		struct dlm_lspace_params lspace;
+		struct dlm_purge_params purge;
 	} i;
 };
 
@@ -67,6 +69,7 @@ struct dlm_lksb32 {
 };
 
 struct dlm_lock_result32 {
+	__u32 version[3];
 	__u32 length;
 	__u32 user_astaddr;
 	__u32 user_astparam;
@@ -92,12 +95,17 @@ static void compat_input(struct dlm_write_request *kb,
 		kb->i.lspace.flags = kb32->i.lspace.flags;
 		kb->i.lspace.minor = kb32->i.lspace.minor;
 		strcpy(kb->i.lspace.name, kb32->i.lspace.name);
+	} else if (kb->cmd == DLM_USER_PURGE) {
+		kb->i.purge.nodeid = kb32->i.purge.nodeid;
+		kb->i.purge.pid = kb32->i.purge.pid;
 	} else {
 		kb->i.lock.mode = kb32->i.lock.mode;
 		kb->i.lock.namelen = kb32->i.lock.namelen;
 		kb->i.lock.flags = kb32->i.lock.flags;
 		kb->i.lock.lkid = kb32->i.lock.lkid;
 		kb->i.lock.parent = kb32->i.lock.parent;
+		kb->i.lock.xid = kb32->i.lock.xid;
+		kb->i.lock.timeout = kb32->i.lock.timeout;
 		kb->i.lock.castparam = (void *)(long)kb32->i.lock.castparam;
 		kb->i.lock.castaddr = (void *)(long)kb32->i.lock.castaddr;
 		kb->i.lock.bastparam = (void *)(long)kb32->i.lock.bastparam;
@@ -111,8 +119,10 @@ static void compat_input(struct dlm_write_request *kb,
 static void compat_output(struct dlm_lock_result *res,
 			  struct dlm_lock_result32 *res32)
 {
-	res32->length = res->length - (sizeof(struct dlm_lock_result) -
-				       sizeof(struct dlm_lock_result32));
+	res32->version[0] = res->version[0];
+	res32->version[1] = res->version[1];
+	res32->version[2] = res->version[2];
+
 	res32->user_astaddr = (__u32)(long)res->user_astaddr;
 	res32->user_astparam = (__u32)(long)res->user_astparam;
 	res32->user_lksb = (__u32)(long)res->user_lksb;
@@ -128,35 +138,60 @@ static void compat_output(struct dlm_lock_result *res,
 }
 #endif
 
+/* Figure out if this lock is at the end of its life and no longer
+   available for the application to use.  The lkb still exists until
+   the final ast is read.  A lock becomes EOL in three situations:
+     1. a noqueue request fails with EAGAIN
+     2. an unlock completes with EUNLOCK
+     3. a cancel of a waiting request completes with ECANCEL/EDEADLK
+   An EOL lock needs to be removed from the process's list of locks.
+   And we can't allow any new operation on an EOL lock.  This is
+   not related to the lifetime of the lkb struct which is managed
+   entirely by refcount. */
+
+static int lkb_is_endoflife(struct dlm_lkb *lkb, int sb_status, int type)
+{
+	switch (sb_status) {
+	case -DLM_EUNLOCK:
+		return 1;
+	case -DLM_ECANCEL:
+	case -ETIMEDOUT:
+	case -EDEADLK:
+		if (lkb->lkb_grmode == DLM_LOCK_IV)
+			return 1;
+		break;
+	case -EAGAIN:
+		if (type == AST_COMP && lkb->lkb_grmode == DLM_LOCK_IV)
+			return 1;
+		break;
+	}
+	return 0;
+}
+
+/* we could possibly check if the cancel of an orphan has resulted in the lkb
+   being removed and then remove that lkb from the orphans list and free it */
 
 void dlm_user_add_ast(struct dlm_lkb *lkb, int type)
 {
 	struct dlm_ls *ls;
 	struct dlm_user_args *ua;
 	struct dlm_user_proc *proc;
-	int remove_ownqueue = 0;
+	int eol = 0, ast_type;
 
-	/* dlm_clear_proc_locks() sets ORPHAN/DEAD flag on each
-	   lkb before dealing with it.  We need to check this
-	   flag before taking ls_clear_proc_locks mutex because if
-	   it's set, dlm_clear_proc_locks() holds the mutex. */
-
-	if (lkb->lkb_flags & (DLM_IFL_ORPHAN | DLM_IFL_DEAD)) {
-		/* log_print("user_add_ast skip1 %x", lkb->lkb_flags); */
+	if (lkb->lkb_flags & (DLM_IFL_ORPHAN | DLM_IFL_DEAD))
 		return;
-	}
 
 	ls = lkb->lkb_resource->res_ls;
 	mutex_lock(&ls->ls_clear_proc_locks);
 
 	/* If ORPHAN/DEAD flag is set, it means the process is dead so an ast
 	   can't be delivered.  For ORPHAN's, dlm_clear_proc_locks() freed
-	   lkb->ua so we can't try to use it. */
+	   lkb->ua so we can't try to use it.  This second check is necessary
+	   for cases where a completion ast is received for an operation that
+	   began before clear_proc_locks did its cancel/unlock. */
 
-	if (lkb->lkb_flags & (DLM_IFL_ORPHAN | DLM_IFL_DEAD)) {
-		/* log_print("user_add_ast skip2 %x", lkb->lkb_flags); */
+	if (lkb->lkb_flags & (DLM_IFL_ORPHAN | DLM_IFL_DEAD))
 		goto out;
-	}
 
 	DLM_ASSERT(lkb->lkb_astparam, dlm_print_lkb(lkb););
 	ua = (struct dlm_user_args *)lkb->lkb_astparam;
@@ -166,28 +201,24 @@ void dlm_user_add_ast(struct dlm_lkb *lkb, int type)
 		goto out;
 
 	spin_lock(&proc->asts_spin);
-	if (!(lkb->lkb_ast_type & (AST_COMP | AST_BAST))) {
+
+	ast_type = lkb->lkb_ast_type;
+	lkb->lkb_ast_type |= type;
+
+	if (!ast_type) {
 		kref_get(&lkb->lkb_ref);
 		list_add_tail(&lkb->lkb_astqueue, &proc->asts);
-		lkb->lkb_ast_type |= type;
 		wake_up_interruptible(&proc->wait);
 	}
+	if (type == AST_COMP && (ast_type & AST_COMP))
+		log_debug(ls, "ast overlap %x status %x %x",
+			  lkb->lkb_id, ua->lksb.sb_status, lkb->lkb_flags);
 
-	/* noqueue requests that fail may need to be removed from the
-	   proc's locks list, there should be a better way of detecting
-	   this situation than checking all these things... */
-
-	if (type == AST_COMP && lkb->lkb_grmode == DLM_LOCK_IV &&
-	    ua->lksb.sb_status == -EAGAIN && !list_empty(&lkb->lkb_ownqueue))
-		remove_ownqueue = 1;
-
-	/* unlocks or cancels of waiting requests need to be removed from the
-	   proc's unlocking list, again there must be a better way...  */
-
-	if (ua->lksb.sb_status == -DLM_EUNLOCK ||
-	    (ua->lksb.sb_status == -DLM_ECANCEL &&
-	     lkb->lkb_grmode == DLM_LOCK_IV))
-		remove_ownqueue = 1;
+	eol = lkb_is_endoflife(lkb, ua->lksb.sb_status, type);
+	if (eol) {
+		lkb->lkb_ast_type &= ~AST_BAST;
+		lkb->lkb_flags |= DLM_IFL_ENDOFLIFE;
+	}
 
 	/* We want to copy the lvb to userspace when the completion
 	   ast is read if the status is 0, the lock has an lvb and
@@ -204,11 +235,13 @@ void dlm_user_add_ast(struct dlm_lkb *lkb, int type)
 
 	spin_unlock(&proc->asts_spin);
 
-	if (remove_ownqueue) {
+	if (eol) {
 		spin_lock(&ua->proc->locks_spin);
-		list_del_init(&lkb->lkb_ownqueue);
+		if (!list_empty(&lkb->lkb_ownqueue)) {
+			list_del_init(&lkb->lkb_ownqueue);
+			dlm_put_lkb(lkb);
+		}
 		spin_unlock(&ua->proc->locks_spin);
-		dlm_put_lkb(lkb);
 	}
  out:
 	mutex_unlock(&ls->ls_clear_proc_locks);
@@ -239,16 +272,18 @@ static int device_user_lock(struct dlm_user_proc *proc,
 	ua->castaddr = params->castaddr;
 	ua->bastparam = params->bastparam;
 	ua->bastaddr = params->bastaddr;
+	ua->xid = params->xid;
 
 	if (params->flags & DLM_LKF_CONVERT)
 		error = dlm_user_convert(ls, ua,
 				         params->mode, params->flags,
-				         params->lkid, params->lvb);
+				         params->lkid, params->lvb,
+					 (unsigned long) params->timeout);
 	else {
 		error = dlm_user_request(ls, ua,
 					 params->mode, params->flags,
 					 params->name, params->namelen,
-					 params->parent);
+					 (unsigned long) params->timeout);
 		if (!error)
 			error = ua->lksb.sb_lkid;
 	}
@@ -286,17 +321,72 @@ static int device_user_unlock(struct dlm_user_proc *proc,
 	return error;
 }
 
+static int device_user_deadlock(struct dlm_user_proc *proc,
+				struct dlm_lock_params *params)
+{
+	struct dlm_ls *ls;
+	int error;
+
+	ls = dlm_find_lockspace_local(proc->lockspace);
+	if (!ls)
+		return -ENOENT;
+
+	error = dlm_user_deadlock(ls, params->flags, params->lkid);
+
+	dlm_put_lockspace(ls);
+	return error;
+}
+
+static int create_misc_device(struct dlm_ls *ls, char *name)
+{
+	int error, len;
+
+	error = -ENOMEM;
+	len = strlen(name) + strlen(name_prefix) + 2;
+	ls->ls_device.name = kzalloc(len, GFP_KERNEL);
+	if (!ls->ls_device.name)
+		goto fail;
+
+	snprintf((char *)ls->ls_device.name, len, "%s_%s", name_prefix,
+		 name);
+	ls->ls_device.fops = &device_fops;
+	ls->ls_device.minor = MISC_DYNAMIC_MINOR;
+
+	error = misc_register(&ls->ls_device);
+	if (error) {
+		kfree(ls->ls_device.name);
+	}
+fail:
+	return error;
+}
+
+static int device_user_purge(struct dlm_user_proc *proc,
+			     struct dlm_purge_params *params)
+{
+	struct dlm_ls *ls;
+	int error;
+
+	ls = dlm_find_lockspace_local(proc->lockspace);
+	if (!ls)
+		return -ENOENT;
+
+	error = dlm_user_purge(ls, proc, params->nodeid, params->pid);
+
+	dlm_put_lockspace(ls);
+	return error;
+}
+
 static int device_create_lockspace(struct dlm_lspace_params *params)
 {
 	dlm_lockspace_t *lockspace;
 	struct dlm_ls *ls;
-	int error, len;
+	int error;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	error = dlm_new_lockspace(params->name, strlen(params->name),
-				  &lockspace, 0, DLM_USER_LVB_LEN);
+				  &lockspace, params->flags, DLM_USER_LVB_LEN);
 	if (error)
 		return error;
 
@@ -304,29 +394,14 @@ static int device_create_lockspace(struct dlm_lspace_params *params)
 	if (!ls)
 		return -ENOENT;
 
-	error = -ENOMEM;
-	len = strlen(params->name) + strlen(name_prefix) + 2;
-	ls->ls_device.name = kzalloc(len, GFP_KERNEL);
-	if (!ls->ls_device.name)
-		goto fail;
-	snprintf((char *)ls->ls_device.name, len, "%s_%s", name_prefix,
-		 params->name);
-	ls->ls_device.fops = &device_fops;
-	ls->ls_device.minor = MISC_DYNAMIC_MINOR;
-
-	error = misc_register(&ls->ls_device);
-	if (error) {
-		kfree(ls->ls_device.name);
-		goto fail;
-	}
-
-	error = ls->ls_device.minor;
+	error = create_misc_device(ls, params->name);
 	dlm_put_lockspace(ls);
-	return error;
 
- fail:
-	dlm_put_lockspace(ls);
-	dlm_release_lockspace(lockspace, 0);
+	if (error)
+		dlm_release_lockspace(lockspace, 0);
+	else
+		error = ls->ls_device.minor;
+
 	return error;
 }
 
@@ -343,6 +418,10 @@ static int device_remove_lockspace(struct dlm_lspace_params *params)
 	if (!ls)
 		return -ENOENT;
 
+	/* Deregister the misc device first, so we don't have
+	 * a device that's not attached to a lockspace. If
+	 * dlm_release_lockspace fails then we can recreate it
+	 */
 	error = misc_deregister(&ls->ls_device);
 	if (error) {
 		dlm_put_lockspace(ls);
@@ -361,6 +440,8 @@ static int device_remove_lockspace(struct dlm_lspace_params *params)
 
 	dlm_put_lockspace(ls);
 	error = dlm_release_lockspace(lockspace, force);
+	if (error)
+		create_misc_device(ls, ls->ls_name);
  out:
 	return error;
 }
@@ -375,7 +456,7 @@ static int check_version(struct dlm_write_request *req)
 		printk(KERN_DEBUG "dlm: process %s (%d) version mismatch "
 		       "user (%d.%d.%d) kernel (%d.%d.%d)\n",
 		       current->comm,
-		       current->pid,
+		       task_pid_nr(current),
 		       req->version[0],
 		       req->version[1],
 		       req->version[2],
@@ -481,6 +562,14 @@ static ssize_t device_write(struct file *file, const char __user *buf,
 		error = device_user_unlock(proc, &kbuf->i.lock);
 		break;
 
+	case DLM_USER_DEADLOCK:
+		if (!proc) {
+			log_print("no locking on control device");
+			goto out_sig;
+		}
+		error = device_user_deadlock(proc, &kbuf->i.lock);
+		break;
+
 	case DLM_USER_CREATE_LOCKSPACE:
 		if (proc) {
 			log_print("create/remove only on control device");
@@ -495,6 +584,14 @@ static ssize_t device_write(struct file *file, const char __user *buf,
 			goto out_sig;
 		}
 		error = device_remove_lockspace(&kbuf->i.lspace);
+		break;
+
+	case DLM_USER_PURGE:
+		if (!proc) {
+			log_print("no locking on control device");
+			goto out_sig;
+		}
+		error = device_user_purge(proc, &kbuf->i.purge);
 		break;
 
 	default:
@@ -590,6 +687,9 @@ static int copy_result_to_user(struct dlm_user_args *ua, int compat, int type,
 	int struct_len;
 
 	memset(&result, 0, sizeof(struct dlm_lock_result));
+	result.version[0] = DLM_DEVICE_VERSION_MAJOR;
+	result.version[1] = DLM_DEVICE_VERSION_MINOR;
+	result.version[2] = DLM_DEVICE_VERSION_PATCH;
 	memcpy(&result.lksb, &ua->lksb, sizeof(struct dlm_lksb));
 	result.user_lksb = ua->user_lksb;
 
@@ -648,6 +748,20 @@ static int copy_result_to_user(struct dlm_user_args *ua, int compat, int type,
 	return error;
 }
 
+static int copy_version_to_user(char __user *buf, size_t count)
+{
+	struct dlm_device_version ver;
+
+	memset(&ver, 0, sizeof(struct dlm_device_version));
+	ver.version[0] = DLM_DEVICE_VERSION_MAJOR;
+	ver.version[1] = DLM_DEVICE_VERSION_MINOR;
+	ver.version[2] = DLM_DEVICE_VERSION_PATCH;
+
+	if (copy_to_user(buf, &ver, sizeof(struct dlm_device_version)))
+		return -EFAULT;
+	return sizeof(struct dlm_device_version);
+}
+
 /* a read returns a single ast described in a struct dlm_lock_result */
 
 static ssize_t device_read(struct file *file, char __user *buf, size_t count,
@@ -658,6 +772,16 @@ static ssize_t device_read(struct file *file, char __user *buf, size_t count,
 	struct dlm_user_args *ua;
 	DECLARE_WAITQUEUE(wait, current);
 	int error, type=0, bmode=0, removed = 0;
+
+	if (count == sizeof(struct dlm_device_version)) {
+		error = copy_version_to_user(buf, count);
+		return error;
+	}
+
+	if (!proc) {
+		log_print("non-version read from control device %zu", count);
+		return -EINVAL;
+	}
 
 #ifdef CONFIG_COMPAT
 	if (count < sizeof(struct dlm_lock_result32))
@@ -694,11 +818,6 @@ static ssize_t device_read(struct file *file, char __user *buf, size_t count,
 			spin_unlock(&proc->asts_spin);
 			return -ERESTARTSYS;
 		}
-	}
-
-	if (list_empty(&proc->asts)) {
-		spin_unlock(&proc->asts_spin);
-		return -EAGAIN;
 	}
 
 	/* there may be both completion and blocking asts to return for
@@ -772,6 +891,7 @@ static const struct file_operations device_fops = {
 static const struct file_operations ctl_device_fops = {
 	.open    = ctl_device_open,
 	.release = ctl_device_close,
+	.read    = device_read,
 	.write   = device_write,
 	.owner   = THIS_MODULE,
 };

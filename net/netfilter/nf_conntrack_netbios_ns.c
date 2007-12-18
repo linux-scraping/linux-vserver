@@ -42,17 +42,17 @@ static unsigned int timeout __read_mostly = 3;
 module_param(timeout, uint, 0400);
 MODULE_PARM_DESC(timeout, "timeout for master connection/replies in seconds");
 
-static int help(struct sk_buff **pskb, unsigned int protoff,
+static int help(struct sk_buff *skb, unsigned int protoff,
 		struct nf_conn *ct, enum ip_conntrack_info ctinfo)
 {
 	struct nf_conntrack_expect *exp;
-	struct iphdr *iph = (*pskb)->nh.iph;
-	struct rtable *rt = (struct rtable *)(*pskb)->dst;
+	struct iphdr *iph = ip_hdr(skb);
+	struct rtable *rt = (struct rtable *)skb->dst;
 	struct in_device *in_dev;
 	__be32 mask = 0;
 
 	/* we're only interested in locally generated packets */
-	if ((*pskb)->sk == NULL)
+	if (skb->sk == NULL)
 		goto out;
 	if (rt == NULL || !(rt->rt_flags & RTCF_BROADCAST))
 		goto out;
@@ -74,7 +74,7 @@ static int help(struct sk_buff **pskb, unsigned int protoff,
 	if (mask == 0)
 		goto out;
 
-	exp = nf_conntrack_expect_alloc(ct);
+	exp = nf_ct_expect_alloc(ct);
 	if (exp == NULL)
 		goto out;
 
@@ -83,18 +83,15 @@ static int help(struct sk_buff **pskb, unsigned int protoff,
 
 	exp->mask.src.u3.ip       = mask;
 	exp->mask.src.u.udp.port  = htons(0xFFFF);
-	exp->mask.dst.u3.ip       = htonl(0xFFFFFFFF);
-	exp->mask.dst.u.udp.port  = htons(0xFFFF);
-	exp->mask.dst.protonum    = 0xFF;
 
 	exp->expectfn             = NULL;
 	exp->flags                = NF_CT_EXPECT_PERMANENT;
 	exp->helper               = NULL;
 
-	nf_conntrack_expect_related(exp);
-	nf_conntrack_expect_put(exp);
+	nf_ct_expect_related(exp);
+	nf_ct_expect_put(exp);
 
-	nf_ct_refresh(ct, *pskb, timeout * HZ);
+	nf_ct_refresh(ct, skb, timeout * HZ);
 out:
 	return NF_ACCEPT;
 }
@@ -104,9 +101,6 @@ static struct nf_conntrack_helper helper __read_mostly = {
 	.tuple.src.l3num	= AF_INET,
 	.tuple.src.u.udp.port	= __constant_htons(NMBD_PORT),
 	.tuple.dst.protonum	= IPPROTO_UDP,
-	.mask.src.l3num		= 0xFFFF,
-	.mask.src.u.udp.port	= __constant_htons(0xFFFF),
-	.mask.dst.protonum	= 0xFF,
 	.max_expected		= 1,
 	.me			= THIS_MODULE,
 	.help			= help,

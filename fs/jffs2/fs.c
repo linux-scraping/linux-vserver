@@ -1,13 +1,11 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2001-2003 Red Hat, Inc.
+ * Copyright © 2001-2007 Red Hat, Inc.
  *
  * Created by David Woodhouse <dwmw2@infradead.org>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
- *
- * $Id: fs.c,v 1.66 2005/09/27 13:17:29 dedekind Exp $
  *
  */
 
@@ -26,7 +24,7 @@
 
 static int jffs2_flash_setup(struct jffs2_sb_info *c);
 
-static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
+int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 {
 	struct jffs2_full_dnode *old_metadata, *new_metadata;
 	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
@@ -38,10 +36,8 @@ static int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	unsigned int ivalid;
 	uint32_t alloclen;
 	int ret;
+
 	D1(printk(KERN_DEBUG "jffs2_setattr(): ino #%lu\n", inode->i_ino));
-	ret = inode_change_ok(inode, iattr);
-	if (ret)
-		return ret;
 
 	/* Special cases - we don't want more than one data node
 	   for these types on the medium at any time. So setattr
@@ -185,9 +181,14 @@ int jffs2_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	int rc;
 
+	rc = inode_change_ok(dentry->d_inode, iattr);
+	if (rc)
+		return rc;
+
 	rc = jffs2_do_setattr(dentry->d_inode, iattr);
 	if (!rc && (iattr->ia_valid & ATTR_MODE))
 		rc = jffs2_acl_chmod(dentry->d_inode);
+
 	return rc;
 }
 
@@ -433,7 +434,15 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 	} else {
 		ri->gid = cpu_to_je16(current->fsgid);
 	}
-	ri->mode =  cpu_to_jemode(mode);
+
+	/* POSIX ACLs have to be processed now, at least partly.
+	   The umask is only applied if there's no default ACL */
+	ret = jffs2_init_acl_pre(dir_i, inode, &mode);
+	if (ret) {
+	    make_bad_inode(inode);
+	    iput(inode);
+	    return ERR_PTR(ret);
+	}
 	ret = jffs2_do_new_inode (c, f, mode, ri);
 	if (ret) {
 		make_bad_inode(inode);
@@ -629,7 +638,7 @@ unsigned char *jffs2_gc_fetch_page(struct jffs2_sb_info *c,
 	struct inode *inode = OFNI_EDONI_2SFFJ(f);
 	struct page *pg;
 
-	pg = read_cache_page(inode->i_mapping, offset >> PAGE_CACHE_SHIFT,
+	pg = read_cache_page_async(inode->i_mapping, offset >> PAGE_CACHE_SHIFT,
 			     (void *)jffs2_do_readpage_unlock, inode);
 	if (IS_ERR(pg))
 		return (void *)pg;
@@ -672,6 +681,13 @@ static int jffs2_flash_setup(struct jffs2_sb_info *c) {
 			return ret;
 	}
 
+	/* and an UBI volume */
+	if (jffs2_ubivol(c)) {
+		ret = jffs2_ubivol_setup(c);
+		if (ret)
+			return ret;
+	}
+
 	return ret;
 }
 
@@ -689,5 +705,10 @@ void jffs2_flash_cleanup(struct jffs2_sb_info *c) {
 	/* and Intel "Sibley" flash */
 	if (jffs2_nor_wbuf_flash(c)) {
 		jffs2_nor_wbuf_flash_cleanup(c);
+	}
+
+	/* and an UBI volume */
+	if (jffs2_ubivol(c)) {
+		jffs2_ubivol_cleanup(c);
 	}
 }

@@ -20,17 +20,19 @@
 #include <linux/ata.h>
 
 #define DRV_NAME	"pata_marvell"
-#define DRV_VERSION	"0.1.1"
+#define DRV_VERSION	"0.1.4"
 
 /**
  *	marvell_pre_reset	-	check for 40/80 pin
- *	@ap: Port
+ *	@link: link
+ *	@deadline: deadline jiffies for the operation
  *
  *	Perform the PATA port setup we need.
  */
 
-static int marvell_pre_reset(struct ata_port *ap)
+static int marvell_pre_reset(struct ata_link *link, unsigned long deadline)
 {
+	struct ata_port *ap = link->ap;
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
 	u32 devices;
 	void __iomem *barp;
@@ -43,31 +45,34 @@ static int marvell_pre_reset(struct ata_port *ap)
 		return -ENOMEM;
 	printk("BAR5:");
 	for(i = 0; i <= 0x0F; i++)
-		printk("%02X:%02X ", i, readb(barp + i));
+		printk("%02X:%02X ", i, ioread8(barp + i));
 	printk("\n");
 
-	devices = readl(barp + 0x0C);
+	devices = ioread32(barp + 0x0C);
 	pci_iounmap(pdev, barp);
 
 	if ((pdev->device == 0x6145) && (ap->port_no == 0) &&
 	    (!(devices & 0x10)))	/* PATA enable ? */
 		return -ENOENT;
 
+	return ata_std_prereset(link, deadline);
+}
+
+static int marvell_cable_detect(struct ata_port *ap)
+{
 	/* Cable type */
 	switch(ap->port_no)
 	{
 	case 0:
 		if (ioread8(ap->ioaddr.bmdma_addr + 1) & 1)
-			ap->cbl = ATA_CBL_PATA40;
-		else
-			ap->cbl = ATA_CBL_PATA80;
-		break;
-
+			return ATA_CBL_PATA40;
+		return ATA_CBL_PATA80;
 	case 1: /* Legacy SATA port */
-		ap->cbl = ATA_CBL_SATA;
-		break;
+		return ATA_CBL_SATA;
 	}
-	return ata_std_prereset(ap);
+
+	BUG();
+	return 0;	/* Our BUG macro needs the right markup */
 }
 
 /**
@@ -103,15 +108,9 @@ static struct scsi_host_template marvell_sht = {
 	.slave_destroy		= ata_scsi_slave_destroy,
 	/* Use standard CHS mapping rules */
 	.bios_param		= ata_std_bios_param,
-#ifdef CONFIG_PM
-	.resume			= ata_scsi_device_resume,
-	.suspend		= ata_scsi_device_suspend,
-#endif
 };
 
 static const struct ata_port_operations marvell_ops = {
-	.port_disable		= ata_port_disable,
-
 	/* Task file is PCI ATA format, use helpers */
 	.tf_load		= ata_tf_load,
 	.tf_read		= ata_tf_read,
@@ -123,6 +122,7 @@ static const struct ata_port_operations marvell_ops = {
 	.thaw			= ata_bmdma_thaw,
 	.error_handler		= marvell_error_handler,
 	.post_internal_cmd	= ata_bmdma_post_internal_cmd,
+	.cable_detect		= marvell_cable_detect,
 
 	/* BMDMA handling is PCI ATA format, use helpers */
 	.bmdma_setup		= ata_bmdma_setup,
@@ -137,10 +137,9 @@ static const struct ata_port_operations marvell_ops = {
 	.irq_handler		= ata_interrupt,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 
 	/* Generic PATA PCI ATA helpers */
-	.port_start		= ata_port_start,
+	.port_start		= ata_sff_port_start,
 };
 
 
@@ -160,38 +159,39 @@ static const struct ata_port_operations marvell_ops = {
 
 static int marvell_init_one (struct pci_dev *pdev, const struct pci_device_id *id)
 {
-	static struct ata_port_info info = {
+	static const struct ata_port_info info = {
 		.sht		= &marvell_sht,
-		.flags		= ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
+		.flags		= ATA_FLAG_SLAVE_POSS,
 
 		.pio_mask	= 0x1f,
 		.mwdma_mask	= 0x07,
-		.udma_mask 	= 0x3f,
+		.udma_mask 	= ATA_UDMA5,
 
 		.port_ops	= &marvell_ops,
 	};
-	static struct ata_port_info info_sata = {
+	static const struct ata_port_info info_sata = {
 		.sht		= &marvell_sht,
 		/* Slave possible as its magically mapped not real */
-		.flags		= ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST,
+		.flags		= ATA_FLAG_SLAVE_POSS,
 
 		.pio_mask	= 0x1f,
 		.mwdma_mask	= 0x07,
-		.udma_mask 	= 0x7f,
+		.udma_mask 	= ATA_UDMA6,
 
 		.port_ops	= &marvell_ops,
 	};
-	struct ata_port_info *port_info[2] = { &info, &info_sata };
-	int n_port = 2;
+	const struct ata_port_info *ppi[] = { &info, &info_sata };
 
 	if (pdev->device == 0x6101)
-		n_port = 1;
+		ppi[1] = &ata_dummy_port_info;
 
-	return ata_pci_init_one(pdev, port_info, n_port);
+	return ata_pci_init_one(pdev, ppi);
 }
 
 static const struct pci_device_id marvell_pci_tbl[] = {
 	{ PCI_DEVICE(0x11AB, 0x6101), },
+	{ PCI_DEVICE(0x11AB, 0x6121), },
+	{ PCI_DEVICE(0x11AB, 0x6123), },
 	{ PCI_DEVICE(0x11AB, 0x6145), },
 	{ }	/* terminate list */
 };

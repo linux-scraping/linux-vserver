@@ -34,11 +34,38 @@ extern const char linux_proc_banner[];
 
 #define ALIGN(x,a)		__ALIGN_MASK(x,(typeof(x))(a)-1)
 #define __ALIGN_MASK(x,mask)	(((x)+(mask))&~(mask))
+#define PTR_ALIGN(p, a)		((typeof(p))ALIGN((unsigned long)(p), (a)))
+#define IS_ALIGNED(x,a)		(((x) % ((typeof(x))(a))) == 0)
 
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]) + __must_be_array(arr))
+
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
 #define roundup(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
+
+#ifdef CONFIG_LBD
+# include <asm/div64.h>
+# define sector_div(a, b) do_div(a, b)
+#else
+# define sector_div(n, b)( \
+{ \
+	int _res; \
+	_res = (n) % (b); \
+	(n) /= (b); \
+	_res; \
+} \
+)
+#endif
+
+/**
+ * upper_32_bits - return bits 32-63 of a number
+ * @n: the number we're accessing
+ *
+ * A basic shift-right of a 64- or 32-bit quantity.  Use this to suppress
+ * the "right shift count >= width of type" warning when that quantity is
+ * 32-bits.
+ */
+#define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 
 #define	KERN_EMERG	"<0>"	/* system is unusable			*/
 #define	KERN_ALERT	"<1>"	/* action must be taken immediately	*/
@@ -48,6 +75,13 @@ extern const char linux_proc_banner[];
 #define	KERN_NOTICE	"<5>"	/* normal but significant condition	*/
 #define	KERN_INFO	"<6>"	/* informational			*/
 #define	KERN_DEBUG	"<7>"	/* debug-level messages			*/
+
+/*
+ * Annotation for a "continued" line of log printout (only done after a
+ * line that had no enclosing \n). Only to be used by core/arch code
+ * during early bootup (a continued line is not SMP-safe otherwise).
+ */
+#define	KERN_CONT	""
 
 extern int console_printk[];
 
@@ -95,7 +129,7 @@ extern int cond_resched(void);
 extern struct atomic_notifier_head panic_notifier_list;
 extern long (*panic_blink)(long time);
 NORET_TYPE void panic(const char * fmt, ...)
-	__attribute__ ((NORET_AND format (printf, 1, 2)));
+	__attribute__ ((NORET_AND format (printf, 1, 2))) __cold;
 extern void oops_enter(void);
 extern void oops_exit(void);
 extern int oops_may_print(void);
@@ -121,6 +155,7 @@ extern int vscnprintf(char *buf, size_t size, const char *fmt, va_list args)
 	__attribute__ ((format (printf, 3, 0)));
 extern char *kasprintf(gfp_t gfp, const char *fmt, ...)
 	__attribute__ ((format (printf, 2, 3)));
+extern char *kvasprintf(gfp_t gfp, const char *fmt, va_list args);
 
 extern int sscanf(const char *, const char *, ...)
 	__attribute__ ((format (scanf, 2, 3)));
@@ -143,14 +178,20 @@ extern void dump_thread(struct pt_regs *regs, struct user *dump);
 asmlinkage int vprintk(const char *fmt, va_list args)
 	__attribute__ ((format (printf, 1, 0)));
 asmlinkage int printk(const char * fmt, ...)
-	__attribute__ ((format (printf, 1, 2)));
+	__attribute__ ((format (printf, 1, 2))) __cold;
+extern int log_buf_get_len(void);
+extern int log_buf_read(int idx);
+extern int log_buf_copy(char *dest, int idx, int len);
 #else
 static inline int vprintk(const char *s, va_list args)
 	__attribute__ ((format (printf, 1, 0)));
 static inline int vprintk(const char *s, va_list args) { return 0; }
 static inline int printk(const char *s, ...)
 	__attribute__ ((format (printf, 1, 2)));
-static inline int printk(const char *s, ...) { return 0; }
+static inline int __cold printk(const char *s, ...) { return 0; }
+static inline int log_buf_get_len(void) { return 0; }
+static inline int log_buf_read(int idx) { return 0; }
+static inline int log_buf_copy(char *dest, int idx, int len) { return 0; }
 #endif
 
 unsigned long int_sqrt(unsigned long);
@@ -198,22 +239,50 @@ extern enum system_states {
 #define TAINT_MACHINE_CHECK		(1<<4)
 #define TAINT_BAD_PAGE			(1<<5)
 #define TAINT_USER			(1<<6)
+#define TAINT_DIE			(1<<7)
 
-extern void dump_stack(void);
+extern void dump_stack(void) __cold;
+
+enum {
+	DUMP_PREFIX_NONE,
+	DUMP_PREFIX_ADDRESS,
+	DUMP_PREFIX_OFFSET
+};
+extern void hex_dump_to_buffer(const void *buf, size_t len,
+				int rowsize, int groupsize,
+				char *linebuf, size_t linebuflen, bool ascii);
+extern void print_hex_dump(const char *level, const char *prefix_str,
+				int prefix_type, int rowsize, int groupsize,
+				const void *buf, size_t len, bool ascii);
+extern void print_hex_dump_bytes(const char *prefix_str, int prefix_type,
+			const void *buf, size_t len);
+#define hex_asc(x)	"0123456789abcdef"[x]
+
+#define pr_emerg(fmt, arg...) \
+	printk(KERN_EMERG fmt, ##arg)
+#define pr_alert(fmt, arg...) \
+	printk(KERN_ALERT fmt, ##arg)
+#define pr_crit(fmt, arg...) \
+	printk(KERN_CRIT fmt, ##arg)
+#define pr_err(fmt, arg...) \
+	printk(KERN_ERR fmt, ##arg)
+#define pr_warning(fmt, arg...) \
+	printk(KERN_WARNING fmt, ##arg)
+#define pr_notice(fmt, arg...) \
+	printk(KERN_NOTICE fmt, ##arg)
+#define pr_info(fmt, arg...) \
+	printk(KERN_INFO fmt, ##arg)
 
 #ifdef DEBUG
 /* If you are writing a driver, please use dev_dbg instead */
-#define pr_debug(fmt,arg...) \
-	printk(KERN_DEBUG fmt,##arg)
+#define pr_debug(fmt, arg...) \
+	printk(KERN_DEBUG fmt, ##arg)
 #else
 static inline int __attribute__ ((format (printf, 1, 2))) pr_debug(const char * fmt, ...)
 {
 	return 0;
 }
 #endif
-
-#define pr_info(fmt,arg...) \
-	printk(KERN_INFO fmt,##arg)
 
 /*
  *      Display an IP address in readable format.
@@ -287,8 +356,8 @@ static inline int __attribute__ ((format (printf, 1, 2))) pr_debug(const char * 
  *
  */
 #define container_of(ptr, type, member) ({			\
-        const typeof( ((type *)0)->member ) *__mptr = (ptr);	\
-        (type *)( (char *)__mptr - offsetof(type,member) );})
+	const typeof( ((type *)0)->member ) *__mptr = (ptr);	\
+	(type *)( (char *)__mptr - offsetof(type,member) );})
 
 /*
  * Check at compile time that something is of a particular type.

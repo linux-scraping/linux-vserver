@@ -118,7 +118,7 @@ static void mipsxx_reg_setup(struct op_counter_config *ctr)
 
 /* Program all of the registers in preparation for enabling profiling.  */
 
-static void mipsxx_cpu_setup (void *args)
+static void mipsxx_cpu_setup(void *args)
 {
 	unsigned int counters = op_model_mipsxx_ops.num_counters;
 
@@ -177,7 +177,10 @@ static int mipsxx_perfcount_handler(void)
 	unsigned int counters = op_model_mipsxx_ops.num_counters;
 	unsigned int control;
 	unsigned int counter;
-	int handled = 0;
+	int handled = IRQ_NONE;
+
+	if (cpu_has_mips_r2 && !(read_c0_cause() & (1 << 26)))
+		return handled;
 
 	switch (counters) {
 #define HANDLE_COUNTER(n)						\
@@ -188,7 +191,7 @@ static int mipsxx_perfcount_handler(void)
 		    (counter & M_COUNTER_OVERFLOW)) {			\
 			oprofile_add_sample(get_irq_regs(), n);		\
 			w_c0_perfcntr ## n(reg.counter[n]);		\
-			handled = 1;					\
+			handled = IRQ_HANDLED;				\
 		}
 	HANDLE_COUNTER(3)
 	HANDLE_COUNTER(2)
@@ -219,7 +222,7 @@ static inline int n_counters(void)
 {
 	int counters;
 
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_R10000:
 		counters = 2;
 		break;
@@ -271,7 +274,7 @@ static int __init mipsxx_init(void)
 #endif
 
 	op_model_mipsxx_ops.num_counters = counters;
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_20KC:
 		op_model_mipsxx_ops.cpu_type = "mips/20K";
 		break;

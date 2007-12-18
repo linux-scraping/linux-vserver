@@ -67,7 +67,11 @@ struct ip_vs_sync_conn_options {
 	struct ip_vs_seq        out_seq;        /* outgoing seq. struct */
 };
 
-#define IP_VS_SYNC_CONN_TIMEOUT (3*60*HZ)
+struct ip_vs_sync_thread_data {
+	struct completion *startup;
+	int state;
+};
+
 #define SIMPLE_CONN_SIZE  (sizeof(struct ip_vs_sync_conn))
 #define FULL_CONN_SIZE  \
 (sizeof(struct ip_vs_sync_conn) + sizeof(struct ip_vs_sync_conn_options))
@@ -279,6 +283,8 @@ static void ip_vs_process_message(const char *buffer, const size_t buflen)
 	struct ip_vs_sync_conn *s;
 	struct ip_vs_sync_conn_options *opt;
 	struct ip_vs_conn *cp;
+	struct ip_vs_protocol *pp;
+	struct ip_vs_dest *dest;
 	char *p;
 	int i;
 
@@ -312,20 +318,34 @@ static void ip_vs_process_message(const char *buffer, const size_t buflen)
 					       s->caddr, s->cport,
 					       s->vaddr, s->vport);
 		if (!cp) {
+			/*
+			 * Find the appropriate destination for the connection.
+			 * If it is not found the connection will remain unbound
+			 * but still handled.
+			 */
+			dest = ip_vs_find_dest(s->daddr, s->dport,
+					       s->vaddr, s->vport,
+					       s->protocol);
 			cp = ip_vs_conn_new(s->protocol,
 					    s->caddr, s->cport,
 					    s->vaddr, s->vport,
 					    s->daddr, s->dport,
-					    flags, NULL);
+					    flags, dest);
+			if (dest)
+				atomic_dec(&dest->refcnt);
 			if (!cp) {
 				IP_VS_ERR("ip_vs_conn_new failed\n");
 				return;
 			}
 			cp->state = ntohs(s->state);
 		} else if (!cp->dest) {
-			/* it is an entry created by the synchronization */
-			cp->state = ntohs(s->state);
-			cp->flags = flags | IP_VS_CONN_F_HASHED;
+			dest = ip_vs_try_bind_dest(cp);
+			if (!dest) {
+				/* it is an unbound entry created by
+				 * synchronization */
+				cp->flags = flags | IP_VS_CONN_F_HASHED;
+			} else
+				atomic_dec(&dest->refcnt);
 		}	/* Note that we don't touch its state and flags
 			   if it is a normal entry. */
 
@@ -337,7 +357,9 @@ static void ip_vs_process_message(const char *buffer, const size_t buflen)
 			p += SIMPLE_CONN_SIZE;
 
 		atomic_set(&cp->in_pkts, sysctl_ip_vs_sync_threshold[0]);
-		cp->timeout = IP_VS_SYNC_CONN_TIMEOUT;
+		cp->state = ntohs(s->state);
+		pp = ip_vs_proto_get(s->protocol);
+		cp->timeout = pp->timeout_table[cp->state];
 		ip_vs_conn_put(cp);
 
 		if (p > buffer+buflen) {
@@ -382,7 +404,7 @@ static int set_mcast_if(struct sock *sk, char *ifname)
 	struct net_device *dev;
 	struct inet_sock *inet = inet_sk(sk);
 
-	if ((dev = __dev_get_by_name(ifname)) == NULL)
+	if ((dev = __dev_get_by_name(&init_net, ifname)) == NULL)
 		return -ENODEV;
 
 	if (sk->sk_bound_dev_if && dev->ifindex != sk->sk_bound_dev_if)
@@ -407,7 +429,7 @@ static int set_sync_mesg_maxlen(int sync_state)
 	int num;
 
 	if (sync_state == IP_VS_STATE_MASTER) {
-		if ((dev = __dev_get_by_name(ip_vs_master_mcast_ifn)) == NULL)
+		if ((dev = __dev_get_by_name(&init_net, ip_vs_master_mcast_ifn)) == NULL)
 			return -ENODEV;
 
 		num = (dev->mtu - sizeof(struct iphdr) -
@@ -418,7 +440,7 @@ static int set_sync_mesg_maxlen(int sync_state)
 		IP_VS_DBG(7, "setting the maximum length of sync sending "
 			  "message %d.\n", sync_send_mesg_maxlen);
 	} else if (sync_state == IP_VS_STATE_BACKUP) {
-		if ((dev = __dev_get_by_name(ip_vs_backup_mcast_ifn)) == NULL)
+		if ((dev = __dev_get_by_name(&init_net, ip_vs_backup_mcast_ifn)) == NULL)
 			return -ENODEV;
 
 		sync_recv_mesg_maxlen = dev->mtu -
@@ -446,7 +468,7 @@ join_mcast_group(struct sock *sk, struct in_addr *addr, char *ifname)
 	memset(&mreq, 0, sizeof(mreq));
 	memcpy(&mreq.imr_multiaddr, addr, sizeof(struct in_addr));
 
-	if ((dev = __dev_get_by_name(ifname)) == NULL)
+	if ((dev = __dev_get_by_name(&init_net, ifname)) == NULL)
 		return -ENODEV;
 	if (sk->sk_bound_dev_if && dev->ifindex != sk->sk_bound_dev_if)
 		return -EINVAL;
@@ -467,7 +489,7 @@ static int bind_mcastif_addr(struct socket *sock, char *ifname)
 	__be32 addr;
 	struct sockaddr_in sin;
 
-	if ((dev = __dev_get_by_name(ifname)) == NULL)
+	if ((dev = __dev_get_by_name(&init_net, ifname)) == NULL)
 		return -ENODEV;
 
 	addr = inet_select_addr(dev, 0, RT_SCOPE_UNIVERSE);
@@ -751,6 +773,7 @@ static int sync_thread(void *startup)
 	mm_segment_t oldmm;
 	int state;
 	const char *name;
+	struct ip_vs_sync_thread_data *tinfo = startup;
 
 	/* increase the module use count */
 	ip_vs_use_count_inc();
@@ -788,8 +811,15 @@ static int sync_thread(void *startup)
 
 	add_wait_queue(&sync_wait, &wait);
 
-	set_sync_pid(state, current->pid);
-	complete((struct completion *)startup);
+	set_sync_pid(state, task_pid_nr(current));
+	complete(tinfo->startup);
+
+	/*
+	 * once we call the completion queue above, we should
+	 * null out that reference, since its allocated on the
+	 * stack of the creating kernel thread
+	 */
+	tinfo->startup = NULL;
 
 	/* processing master/backup loop here */
 	if (state == IP_VS_STATE_MASTER)
@@ -801,6 +831,14 @@ static int sync_thread(void *startup)
 	remove_wait_queue(&sync_wait, &wait);
 
 	/* thread exits */
+
+	/*
+	 * If we weren't explicitly stopped, then we
+	 * exited in error, and should undo our state
+	 */
+	if ((!stop_master_sync) && (!stop_backup_sync))
+		ip_vs_sync_state -= tinfo->state;
+
 	set_sync_pid(state, 0);
 	IP_VS_INFO("sync thread stopped!\n");
 
@@ -812,6 +850,11 @@ static int sync_thread(void *startup)
 	set_stop_sync(state, 0);
 	wake_up(&stop_sync_wait);
 
+	/*
+	 * we need to free the structure that was allocated
+	 * for us in start_sync_thread
+	 */
+	kfree(tinfo);
 	return 0;
 }
 
@@ -838,12 +881,20 @@ int start_sync_thread(int state, char *mcast_ifn, __u8 syncid)
 {
 	DECLARE_COMPLETION_ONSTACK(startup);
 	pid_t pid;
+	struct ip_vs_sync_thread_data *tinfo;
 
 	if ((state == IP_VS_STATE_MASTER && sync_master_pid) ||
 	    (state == IP_VS_STATE_BACKUP && sync_backup_pid))
 		return -EEXIST;
 
-	IP_VS_DBG(7, "%s: pid %d\n", __FUNCTION__, current->pid);
+	/*
+	 * Note that tinfo will be freed in sync_thread on exit
+	 */
+	tinfo = kmalloc(sizeof(struct ip_vs_sync_thread_data), GFP_KERNEL);
+	if (!tinfo)
+		return -ENOMEM;
+
+	IP_VS_DBG(7, "%s: pid %d\n", __FUNCTION__, task_pid_nr(current));
 	IP_VS_DBG(7, "Each ip_vs_sync_conn entry need %Zd bytes\n",
 		  sizeof(struct ip_vs_sync_conn));
 
@@ -858,8 +909,11 @@ int start_sync_thread(int state, char *mcast_ifn, __u8 syncid)
 		ip_vs_backup_syncid = syncid;
 	}
 
+	tinfo->state = state;
+	tinfo->startup = &startup;
+
   repeat:
-	if ((pid = kernel_thread(fork_sync_thread, &startup, 0)) < 0) {
+	if ((pid = kernel_thread(fork_sync_thread, tinfo, 0)) < 0) {
 		IP_VS_ERR("could not create fork_sync_thread due to %d... "
 			  "retrying.\n", pid);
 		msleep_interruptible(1000);
@@ -880,7 +934,7 @@ int stop_sync_thread(int state)
 	    (state == IP_VS_STATE_BACKUP && !sync_backup_pid))
 		return -ESRCH;
 
-	IP_VS_DBG(7, "%s: pid %d\n", __FUNCTION__, current->pid);
+	IP_VS_DBG(7, "%s: pid %d\n", __FUNCTION__, task_pid_nr(current));
 	IP_VS_INFO("stopping sync thread %d ...\n",
 		   (state == IP_VS_STATE_MASTER) ?
 		   sync_master_pid : sync_backup_pid);

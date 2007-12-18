@@ -1,13 +1,24 @@
+/*
+ * AVR power-management chip interface for the Buffalo Linkstation /
+ * Kurobox Platform.
+ *
+ * Author: 2006 (c) G. Liakhovetski
+ *	 g.liakhovetski@gmx.de
+ *
+ * This file is licensed under the terms of the GNU General Public License
+ * version 2.  This program is licensed "as is" without any warranty of
+ * any kind, whether express or implied.
+ */
 #include <linux/workqueue.h>
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/serial_reg.h>
 #include <linux/serial_8250.h>
 #include <asm/io.h>
-#include <asm/mpc10x.h>
-#include <asm/ppc_sys.h>
 #include <asm/prom.h>
 #include <asm/termbits.h>
+
+#include "mpc10x.h"
 
 static void __iomem *avr_addr;
 static unsigned long avr_clock;
@@ -106,12 +117,15 @@ static int __init ls_uarts_init(void)
 	phys_addr_t phys_addr;
 	int len;
 
+	if (!machine_is(linkstation))
+		return 0;
+
 	avr = of_find_node_by_path("/soc10x/serial@80004500");
 	if (!avr)
 		return -EINVAL;
 
-	avr_clock = *(u32*)get_property(avr, "clock-frequency", &len);
-	phys_addr = ((u32*)get_property(avr, "reg", &len))[0];
+	avr_clock = *(u32*)of_get_property(avr, "clock-frequency", &len);
+	phys_addr = ((u32*)of_get_property(avr, "reg", &len))[0];
 
 	if (!avr_clock || !phys_addr)
 		return -EINVAL;

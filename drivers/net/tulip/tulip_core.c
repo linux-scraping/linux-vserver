@@ -17,11 +17,11 @@
 
 #define DRV_NAME	"tulip"
 #ifdef CONFIG_TULIP_NAPI
-#define DRV_VERSION    "1.1.14-NAPI" /* Keep at least for test */
+#define DRV_VERSION    "1.1.15-NAPI" /* Keep at least for test */
 #else
-#define DRV_VERSION	"1.1.14"
+#define DRV_VERSION	"1.1.15"
 #endif
-#define DRV_RELDATE	"May 11, 2002"
+#define DRV_RELDATE	"Feb 27, 2007"
 
 
 #include <linux/module.h>
@@ -36,8 +36,8 @@
 #include <asm/unaligned.h>
 #include <asm/uaccess.h>
 
-#ifdef __sparc__
-#include <asm/pbm.h>
+#ifdef CONFIG_SPARC
+#include <asm/prom.h>
 #endif
 
 static char version[] __devinitdata =
@@ -67,7 +67,7 @@ const char * const medianame[32] = {
 
 /* Set the copy breakpoint for the copy-only-tiny-buffer Rx structure. */
 #if defined(__alpha__) || defined(__arm__) || defined(__hppa__) \
-	|| defined(__sparc__) || defined(__ia64__) \
+	|| defined(CONFIG_SPARC) || defined(__ia64__) \
 	|| defined(__sh__) || defined(__mips__)
 static int rx_copybreak = 1518;
 #else
@@ -91,7 +91,7 @@ static int rx_copybreak = 100;
 static int csr0 = 0x01A00000 | 0xE000;
 #elif defined(__i386__) || defined(__powerpc__) || defined(__x86_64__)
 static int csr0 = 0x01A00000 | 0x8000;
-#elif defined(__sparc__) || defined(__hppa__)
+#elif defined(CONFIG_SPARC) || defined(__hppa__)
 /* The UltraSparc PCI controllers will disconnect at every 64-byte
  * crossing anyways so it makes no sense to tell Tulip to burst
  * any more than that.
@@ -292,7 +292,12 @@ static void tulip_up(struct net_device *dev)
 	struct tulip_private *tp = netdev_priv(dev);
 	void __iomem *ioaddr = tp->base_addr;
 	int next_tick = 3*HZ;
+	u32 reg;
 	int i;
+
+#ifdef CONFIG_TULIP_NAPI
+	napi_enable(&tp->napi);
+#endif
 
 	/* Wake the chip from sleep/snooze mode. */
 	tulip_set_power_state (tp, 0, 0);
@@ -303,14 +308,14 @@ static void tulip_up(struct net_device *dev)
 
 	/* Reset the chip, holding bit 0 set at least 50 PCI cycles. */
 	iowrite32(0x00000001, ioaddr + CSR0);
-	pci_read_config_dword(tp->pdev, PCI_COMMAND, &i);  /* flush write */
+	pci_read_config_dword(tp->pdev, PCI_COMMAND, &reg);  /* flush write */
 	udelay(100);
 
 	/* Deassert reset.
 	   Wait the specified 50 PCI cycles after a reset by initializing
 	   Tx and Rx queues and the address filter list. */
 	iowrite32(tp->csr0, ioaddr + CSR0);
-	pci_read_config_dword(tp->pdev, PCI_COMMAND, &i);  /* flush write */
+	pci_read_config_dword(tp->pdev, PCI_COMMAND, &reg);  /* flush write */
 	udelay(100);
 
 	if (tulip_debug > 1)
@@ -322,8 +327,8 @@ static void tulip_up(struct net_device *dev)
 	tp->dirty_rx = tp->dirty_tx = 0;
 
 	if (tp->flags & MC_HASH_ONLY) {
-		u32 addr_low = le32_to_cpu(get_unaligned((u32 *)dev->dev_addr));
-		u32 addr_high = le16_to_cpu(get_unaligned((u16 *)(dev->dev_addr+4)));
+		u32 addr_low = le32_to_cpu(get_unaligned((__le32 *)dev->dev_addr));
+		u32 addr_high = le16_to_cpu(get_unaligned((__le16 *)(dev->dev_addr+4)));
 		if (tp->chip_id == AX88140) {
 			iowrite32(0, ioaddr + CSR13);
 			iowrite32(addr_low,  ioaddr + CSR14);
@@ -728,6 +733,10 @@ static void tulip_down (struct net_device *dev)
 
 	flush_scheduled_work();
 
+#ifdef CONFIG_TULIP_NAPI
+	napi_disable(&tp->napi);
+#endif
+
 	del_timer_sync (&tp->timer);
 #ifdef CONFIG_TULIP_NAPI
 	del_timer_sync (&tp->oom_timer);
@@ -1043,12 +1052,11 @@ static void set_rx_mode(struct net_device *dev)
 				filterbit &= 0x3f;
 				mc_filter[filterbit >> 5] |= 1 << (filterbit & 31);
 				if (tulip_debug > 2) {
-					printk(KERN_INFO "%s: Added filter for %2.2x:%2.2x:%2.2x:"
-						   "%2.2x:%2.2x:%2.2x  %8.8x bit %d.\n", dev->name,
-						   mclist->dmi_addr[0], mclist->dmi_addr[1],
-						   mclist->dmi_addr[2], mclist->dmi_addr[3],
-						   mclist->dmi_addr[4], mclist->dmi_addr[5],
-						   ether_crc(ETH_ALEN, mclist->dmi_addr), filterbit);
+					DECLARE_MAC_BUF(mac);
+					printk(KERN_INFO "%s: Added filter for %s"
+					       "  %8.8x bit %d.\n",
+					       dev->name, print_mac(mac, mclist->dmi_addr),
+					       ether_crc(ETH_ALEN, mclist->dmi_addr), filterbit);
 				}
 			}
 			if (mc_filter[0] == tp->mc_filter[0]  &&
@@ -1155,7 +1163,7 @@ static void __devinit tulip_mwi_config (struct pci_dev *pdev,
 	/* set or disable MWI in the standard PCI command bit.
 	 * Check for the case where  mwi is desired but not available
 	 */
-	if (csr0 & MWI)	pci_set_mwi(pdev);
+	if (csr0 & MWI)	pci_try_set_mwi(pdev);
 	else		pci_clear_mwi(pdev);
 
 	/* read result from hardware (in case bit refused to enable) */
@@ -1238,7 +1246,6 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	};
 	static int last_irq;
 	static int multiport_cnt;	/* For four-port boards w/one EEPROM */
-	u8 chip_rev;
 	int i, irq;
 	unsigned short sum;
 	unsigned char *ee_data;
@@ -1249,6 +1256,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	const char *chip_name = tulip_tbl[chip_idx].chip_name;
 	unsigned int eeprom_missing = 0;
 	unsigned int force_csr0 = 0;
+	DECLARE_MAC_BUF(mac);
 
 #ifndef MODULE
 	static int did_version;		/* Already printed version info. */
@@ -1274,10 +1282,8 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 
 	if (pdev->vendor == 0x1282 && pdev->device == 0x9100)
 	{
-		u32 dev_rev;
 		/* Read Chip revision */
-		pci_read_config_dword(pdev, PCI_REVISION_ID, &dev_rev);
-		if(dev_rev < 0x02000030)
+		if (pdev->revision < 0x30)
 		{
 			printk(KERN_ERR PFX "skipping early DM9100 with Crc bug (use dmfe)\n");
 			return -ENODEV;
@@ -1315,7 +1321,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	/* DM9102A has troubles with MRM & clear reserved bits 24:22, 20, 16, 7:1 */
 	if (tulip_uli_dm_quirk(pdev)) {
 		csr0 &= ~0x01f100ff;
-#if defined(__sparc__)
+#if defined(CONFIG_SPARC)
                 csr0 = (csr0 & ~0xff00) | 0xe000;
 #endif
 	}
@@ -1340,7 +1346,6 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 		return -ENOMEM;
 	}
 
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 	if (pci_resource_len (pdev, 0) < tulip_tbl[chip_idx].io_size) {
 		printk (KERN_ERR PFX "%s: I/O region (0x%llx@0x%llx) too small, "
@@ -1359,8 +1364,6 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 
 	if (!ioaddr)
 		goto err_out_free_res;
-
-	pci_read_config_byte (pdev, PCI_REVISION_ID, &chip_rev);
 
 	/*
 	 * initialize private data structure 'tp'
@@ -1382,7 +1385,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	tp->flags = tulip_tbl[chip_idx].flags;
 	tp->pdev = pdev;
 	tp->base_addr = ioaddr;
-	tp->revision = chip_rev;
+	tp->revision = pdev->revision;
 	tp->csr0 = csr0;
 	spin_lock_init(&tp->lock);
 	spin_lock_init(&tp->mii_lock);
@@ -1399,7 +1402,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 		tulip_mwi_config (pdev, dev);
 #else
 	/* MWI is broken for DC21143 rev 65... */
-	if (chip_idx == DC21143 && chip_rev == 65)
+	if (chip_idx == DC21143 && pdev->revision == 65)
 		tp->csr0 &= ~MWI;
 #endif
 
@@ -1441,13 +1444,13 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 			do
 				value = ioread32(ioaddr + CSR9);
 			while (value < 0  && --boguscnt > 0);
-			put_unaligned(le16_to_cpu(value), ((u16*)dev->dev_addr) + i);
+			put_unaligned(cpu_to_le16(value), ((__le16*)dev->dev_addr) + i);
 			sum += value & 0xffff;
 		}
 	} else if (chip_idx == COMET) {
 		/* No need to read the EEPROM. */
-		put_unaligned(cpu_to_le32(ioread32(ioaddr + 0xA4)), (u32 *)dev->dev_addr);
-		put_unaligned(cpu_to_le16(ioread32(ioaddr + 0xA8)), (u16 *)(dev->dev_addr + 4));
+		put_unaligned(cpu_to_le32(ioread32(ioaddr + 0xA4)), (__le32 *)dev->dev_addr);
+		put_unaligned(cpu_to_le16(ioread32(ioaddr + 0xA8)), (__le16 *)(dev->dev_addr + 4));
 		for (i = 0; i < 6; i ++)
 			sum += dev->dev_addr[i];
 	} else {
@@ -1476,14 +1479,6 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 			sa_offset = 2;		/* Grrr, damn Matrox boards. */
 			multiport_cnt = 4;
 		}
-#ifdef CONFIG_DDB5477
-               if ((pdev->bus->number == 0) && (PCI_SLOT(pdev->devfn) == 4)) {
-                       /* DDB5477 MAC address in first EEPROM locations. */
-                       sa_offset = 0;
-                       /* No media table either */
-                       tp->flags &= ~HAS_MEDIA_TABLE;
-               }
-#endif
 #ifdef CONFIG_MIPS_COBALT
                if ((pdev->bus->number == 0) &&
                    ((PCI_SLOT(pdev->devfn) == 7) ||
@@ -1535,23 +1530,19 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	   Many PCI BIOSes also incorrectly report the IRQ line, so we correct
 	   that here as well. */
 	if (sum == 0  || sum == 6*0xff) {
-#if defined(__sparc__)
-		struct pcidev_cookie *pcp = pdev->sysdata;
+#if defined(CONFIG_SPARC)
+		struct device_node *dp = pci_device_to_OF_node(pdev);
+		const unsigned char *addr;
+		int len;
 #endif
 		eeprom_missing = 1;
 		for (i = 0; i < 5; i++)
 			dev->dev_addr[i] = last_phys_addr[i];
 		dev->dev_addr[i] = last_phys_addr[i] + 1;
-#if defined(__sparc__)
-		if (pcp) {
-			unsigned char *addr;
-			int len;
-
-			addr = of_get_property(pcp->prom_node,
-					       "local-mac-address", &len);
-			if (addr && len == 6)
-				memcpy(dev->dev_addr, addr, 6);
-		}
+#if defined(CONFIG_SPARC)
+		addr = of_get_property(dp, "local-mac-address", &len);
+		if (addr && len == 6)
+			memcpy(dev->dev_addr, addr, 6);
 #endif
 #if defined(__i386__) || defined(__x86_64__)	/* Patch up x86 BIOS bug. */
 		if (last_irq)
@@ -1623,8 +1614,7 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 	dev->tx_timeout = tulip_tx_timeout;
 	dev->watchdog_timeo = TX_TIMEOUT;
 #ifdef CONFIG_TULIP_NAPI
-	dev->poll = tulip_poll;
-	dev->weight = 16;
+	netif_napi_add(dev, &tp->napi, tulip_poll, 16);
 #endif
 	dev->stop = tulip_close;
 	dev->get_stats = tulip_get_stats;
@@ -1644,14 +1634,13 @@ static int __devinit tulip_init_one (struct pci_dev *pdev,
 #else
 		"Port"
 #endif
-		" %#llx,", dev->name, chip_name, chip_rev,
+		" %#llx,", dev->name, chip_name, pdev->revision,
 		(unsigned long long) pci_resource_start(pdev, TULIP_BAR));
 	pci_set_drvdata(pdev, dev);
 
 	if (eeprom_missing)
 		printk(" EEPROM not present,");
-	for (i = 0; i < 6; i++)
-		printk("%c%2.2X", i ? ':' : ' ', dev->dev_addr[i]);
+	printk(" %s", print_mac(mac, dev->dev_addr));
 	printk(", IRQ %d.\n", irq);
 
         if (tp->chip_id == PNIC2)

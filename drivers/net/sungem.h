@@ -993,6 +993,7 @@ struct gem {
 	u32			msg_enable;
 	u32			status;
 
+	struct napi_struct	napi;
 	struct net_device_stats net_stats;
 
 	int			tx_fifo_sz;
@@ -1025,7 +1026,7 @@ struct gem {
 
 	struct pci_dev		*pdev;
 	struct net_device	*dev;
-#ifdef CONFIG_PPC_PMAC
+#if defined(CONFIG_PPC_PMAC) || defined(CONFIG_SPARC)
 	struct device_node	*of_node;
 #endif
 };

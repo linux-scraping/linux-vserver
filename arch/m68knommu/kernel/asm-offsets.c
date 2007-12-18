@@ -15,7 +15,6 @@
 #include <linux/hardirq.h>
 #include <asm/bootinfo.h>
 #include <asm/irq.h>
-#include <asm/irqnode.h>
 #include <asm/thread_info.h>
 
 #define DEFINE(sym, val) \
@@ -31,7 +30,7 @@ int main(void)
 	DEFINE(TASK_PTRACE, offsetof(struct task_struct, ptrace));
 	DEFINE(TASK_BLOCKED, offsetof(struct task_struct, blocked));
 	DEFINE(TASK_THREAD, offsetof(struct task_struct, thread));
-	DEFINE(TASK_THREAD_INFO, offsetof(struct task_struct, thread_info));
+	DEFINE(TASK_THREAD_INFO, offsetof(struct task_struct, stack));
 	DEFINE(TASK_MM, offsetof(struct task_struct, mm));
 	DEFINE(TASK_ACTIVE_MM, offsetof(struct task_struct, active_mm));
 
@@ -72,10 +71,6 @@ int main(void)
 #else
 	/* bitfields are a bit difficult */
 	DEFINE(PT_VECTOR, offsetof(struct pt_regs, pc) + 4);
-	/* offsets into the irq_handler struct */
-	DEFINE(IRQ_HANDLER, offsetof(struct irq_node, handler));
-	DEFINE(IRQ_DEVID, offsetof(struct irq_node, dev_id));
-	DEFINE(IRQ_NEXT, offsetof(struct irq_node, next));
 #endif
 
 	/* offsets into the kernel_stat struct */

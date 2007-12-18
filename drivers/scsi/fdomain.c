@@ -387,7 +387,9 @@ static void __iomem *    bios_mem;
 static int               bios_major;
 static int               bios_minor;
 static int               PCI_bus;
+#ifdef CONFIG_PCI
 static struct pci_dev	*PCI_dev;
+#endif
 static int               Quantum;	/* Quantum board variant */
 static int               interrupt_level;
 static volatile int      in_command;
@@ -410,6 +412,8 @@ static irqreturn_t       do_fdomain_16x0_intr( int irq, void *dev_id );
 static char * fdomain = NULL;
 module_param(fdomain, charp, 0);
 
+#ifndef PCMCIA
+
 static unsigned long addresses[] = {
    0xc8000,
    0xca000,
@@ -425,6 +429,8 @@ static unsigned short ports[] = { 0x140, 0x150, 0x160, 0x170 };
 #define PORT_COUNT ARRAY_SIZE(ports)
 
 static unsigned short ints[] = { 3, 5, 10, 11, 12, 14, 15, 0 };
+
+#endif /* !PCMCIA */
 
 /*
 
@@ -457,6 +463,8 @@ static unsigned short ints[] = { 3, 5, 10, 11, 12, 14, 15, 0 };
   you have a "8-bit" card, and should *NOT* use this driver.)
 
 */
+
+#ifndef PCMCIA
 
 static struct signature {
    const char *signature;
@@ -502,6 +510,8 @@ static struct signature {
 };
 
 #define SIGNATURE_COUNT ARRAY_SIZE(signatures)
+
+#endif /* !PCMCIA */
 
 static void print_banner( struct Scsi_Host *shpnt )
 {
@@ -633,6 +643,8 @@ static int fdomain_test_loopback( void )
    return 0;
 }
 
+#ifndef PCMCIA
+
 /* fdomain_get_irq assumes that we have a valid MCA ID for a
    TMC-1660/TMC-1680 Future Domain board.  Now, check to be sure the
    bios_base matches these ports.  If someone was unlucky enough to have
@@ -667,7 +679,6 @@ static int fdomain_get_irq( int base )
 
 static int fdomain_isa_detect( int *irq, int *iobase )
 {
-#ifndef PCMCIA
    int i, j;
    int base = 0xdeadbeef;
    int flag = 0;
@@ -786,10 +797,21 @@ found:
    *iobase = base;
 
    return 1;			/* success */
-#else
-   return 0;
-#endif
 }
+
+#else /* PCMCIA */
+
+static int fdomain_isa_detect( int *irq, int *iobase )
+{
+	if (irq)
+		*irq = 0;
+	if (iobase)
+		*iobase = 0;
+	return 0;
+}
+
+#endif /* !PCMCIA */
+
 
 /* PCI detection function: int fdomain_pci_bios_detect(int* irq, int*
    iobase) This function gets the Interrupt Level and I/O base address from
@@ -1299,7 +1321,7 @@ static irqreturn_t do_fdomain_16x0_intr(int irq, void *dev_id)
 	    if (current_SC->SCp.buffers_residual) {
 	       --current_SC->SCp.buffers_residual;
 	       ++current_SC->SCp.buffer;
-	       current_SC->SCp.ptr = page_address(current_SC->SCp.buffer->page) + current_SC->SCp.buffer->offset;
+	       current_SC->SCp.ptr = sg_virt(current_SC->SCp.buffer);
 	       current_SC->SCp.this_residual = current_SC->SCp.buffer->length;
 	    } else
 		  break;
@@ -1332,7 +1354,7 @@ static irqreturn_t do_fdomain_16x0_intr(int irq, void *dev_id)
 	     && current_SC->SCp.buffers_residual) {
 	    --current_SC->SCp.buffers_residual;
 	    ++current_SC->SCp.buffer;
-	    current_SC->SCp.ptr = page_address(current_SC->SCp.buffer->page) + current_SC->SCp.buffer->offset;
+	    current_SC->SCp.ptr = sg_virt(current_SC->SCp.buffer);
 	    current_SC->SCp.this_residual = current_SC->SCp.buffer->length;
 	 }
       }
@@ -1345,16 +1367,15 @@ static irqreturn_t do_fdomain_16x0_intr(int irq, void *dev_id)
 
 #if ERRORS_ONLY
       if (current_SC->cmnd[0] == REQUEST_SENSE && !current_SC->SCp.Status) {
-	 if ((unsigned char)(*((char *)current_SC->request_buffer+2)) & 0x0f) {
+	      char *buf = scsi_sglist(current_SC);
+	 if ((unsigned char)(*(buf + 2)) & 0x0f) {
 	    unsigned char key;
 	    unsigned char code;
 	    unsigned char qualifier;
 
-	    key = (unsigned char)(*((char *)current_SC->request_buffer + 2))
-		  & 0x0f;
-	    code = (unsigned char)(*((char *)current_SC->request_buffer + 12));
-	    qualifier = (unsigned char)(*((char *)current_SC->request_buffer
-					  + 13));
+	    key = (unsigned char)(*(buf + 2)) & 0x0f;
+	    code = (unsigned char)(*(buf + 12));
+	    qualifier = (unsigned char)(*(buf + 13));
 
 	    if (key != UNIT_ATTENTION
 		&& !(key == NOT_READY
@@ -1405,8 +1426,8 @@ static int fdomain_16x0_queue(struct scsi_cmnd *SCpnt,
    printk( "queue: target = %d cmnd = 0x%02x pieces = %d size = %u\n",
 	   SCpnt->target,
 	   *(unsigned char *)SCpnt->cmnd,
-	   SCpnt->use_sg,
-	   SCpnt->request_bufflen );
+	   scsi_sg_count(SCpnt),
+	   scsi_bufflen(SCpnt));
 #endif
 
    fdomain_make_bus_idle();
@@ -1416,20 +1437,18 @@ static int fdomain_16x0_queue(struct scsi_cmnd *SCpnt,
 
    /* Initialize static data */
 
-   if (current_SC->use_sg) {
-      current_SC->SCp.buffer =
-	    (struct scatterlist *)current_SC->request_buffer;
-      current_SC->SCp.ptr              = page_address(current_SC->SCp.buffer->page) + current_SC->SCp.buffer->offset;
-      current_SC->SCp.this_residual    = current_SC->SCp.buffer->length;
-      current_SC->SCp.buffers_residual = current_SC->use_sg - 1;
+   if (scsi_sg_count(current_SC)) {
+	   current_SC->SCp.buffer = scsi_sglist(current_SC);
+	   current_SC->SCp.ptr = sg_virt(current_SC->SCp.buffer);
+	   current_SC->SCp.this_residual    = current_SC->SCp.buffer->length;
+	   current_SC->SCp.buffers_residual = scsi_sg_count(current_SC) - 1;
    } else {
-      current_SC->SCp.ptr              = (char *)current_SC->request_buffer;
-      current_SC->SCp.this_residual    = current_SC->request_bufflen;
-      current_SC->SCp.buffer           = NULL;
-      current_SC->SCp.buffers_residual = 0;
+	   current_SC->SCp.ptr              = 0;
+	   current_SC->SCp.this_residual    = 0;
+	   current_SC->SCp.buffer           = NULL;
+	   current_SC->SCp.buffers_residual = 0;
    }
-	 
-   
+
    current_SC->SCp.Status              = 0;
    current_SC->SCp.Message             = 0;
    current_SC->SCp.have_data_in        = 0;
@@ -1472,8 +1491,8 @@ static void print_info(struct scsi_cmnd *SCpnt)
 	   SCpnt->SCp.phase,
 	   SCpnt->device->id,
 	   *(unsigned char *)SCpnt->cmnd,
-	   SCpnt->use_sg,
-	   SCpnt->request_bufflen );
+	   scsi_sg_count(SCpnt),
+	   scsi_bufflen(SCpnt));
    printk( "sent_command = %d, have_data_in = %d, timeout = %d\n",
 	   SCpnt->SCp.sent_command,
 	   SCpnt->SCp.have_data_in,
@@ -1746,6 +1765,7 @@ struct scsi_host_template fdomain_driver_template = {
 };
 
 #ifndef PCMCIA
+#ifdef CONFIG_PCI
 
 static struct pci_device_id fdomain_pci_tbl[] __devinitdata = {
 	{ PCI_VENDOR_ID_FD, PCI_DEVICE_ID_FD_36C70,
@@ -1753,7 +1773,7 @@ static struct pci_device_id fdomain_pci_tbl[] __devinitdata = {
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, fdomain_pci_tbl);
-
+#endif
 #define driver_template fdomain_driver_template
 #include "scsi_module.c"
 

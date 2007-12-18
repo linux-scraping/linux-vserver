@@ -37,7 +37,8 @@ struct svc_sock {
 
 	atomic_t    	    	sk_reserved;	/* space on outq that is reserved */
 
-	spinlock_t		sk_defer_lock;	/* protects sk_deferred */
+	spinlock_t		sk_lock;	/* protects sk_deferred and
+						 * sk_info_authunix */
 	struct list_head	sk_deferred;	/* deferred requests that need to
 						 * be revisted */
 	struct mutex		sk_mutex;	/* to serialize sending data */
@@ -58,6 +59,7 @@ struct svc_sock {
 	/* cache of various info for TCP sockets */
 	void			*sk_info_authunix;
 
+	struct sockaddr_storage	sk_local;	/* local address */
 	struct sockaddr_storage	sk_remote;	/* remote peer's address */
 	int			sk_remotelen;	/* length of address */
 };

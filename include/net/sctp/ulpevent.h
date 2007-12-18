@@ -89,6 +89,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_assoc_change(
 	__u16 error,
 	__u16 outbound,
 	__u16 inbound,
+	struct sctp_chunk *chunk,
 	gfp_t gfp);
 
 struct sctp_ulpevent *sctp_ulpevent_make_peer_addr_change(
@@ -126,6 +127,10 @@ struct sctp_ulpevent *sctp_ulpevent_make_adaptation_indication(
 struct sctp_ulpevent *sctp_ulpevent_make_rcvmsg(struct sctp_association *asoc,
 	struct sctp_chunk *chunk,
 	gfp_t gfp);
+
+struct sctp_ulpevent *sctp_ulpevent_make_authkey(
+	const struct sctp_association *asoc, __u16 key_id,
+	__u32 indication, gfp_t gfp);
 
 void sctp_ulpevent_read_sndrcvinfo(const struct sctp_ulpevent *event,
 	struct msghdr *);

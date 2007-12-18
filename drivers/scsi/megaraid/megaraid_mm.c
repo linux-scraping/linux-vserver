@@ -14,7 +14,7 @@
  *
  * Common management module
  */
-
+#include <linux/sched.h>
 #include "megaraid_mm.h"
 
 
@@ -60,7 +60,7 @@ EXPORT_SYMBOL(mraid_mm_unregister_adp);
 EXPORT_SYMBOL(mraid_mm_adapter_app_handle);
 
 static int majorno;
-static uint32_t drvr_ver	= 0x02200206;
+static uint32_t drvr_ver	= 0x02200207;
 
 static int adapters_count_g;
 static struct list_head adapters_list_g;
@@ -890,12 +890,11 @@ mraid_mm_register_adp(mraid_mmadp_t *lld_adp)
 	if (lld_adp->drvr_type != DRVRTYPE_MBOX)
 		return (-EINVAL);
 
-	adapter = kmalloc(sizeof(mraid_mmadp_t), GFP_KERNEL);
+	adapter = kzalloc(sizeof(mraid_mmadp_t), GFP_KERNEL);
 
 	if (!adapter)
 		return -ENOMEM;
 
-	memset(adapter, 0, sizeof(mraid_mmadp_t));
 
 	adapter->unique_id	= lld_adp->unique_id;
 	adapter->drvr_type	= lld_adp->drvr_type;

@@ -59,6 +59,10 @@ MODULE_SUPPORTED_DEVICE("{{ESS,Maestro3 PCI},"
 		"{ESS,Allegro PCI},"
 		"{ESS,Allegro-1 PCI},"
 	        "{ESS,Canyon3D-2/LE PCI}}");
+#ifndef CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL
+MODULE_FIRMWARE("ess/maestro3_assp_kernel.fw");
+MODULE_FIRMWARE("ess/maestro3_assp_minisrc.fw");
+#endif
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
@@ -1817,7 +1821,6 @@ snd_m3_playback_open(struct snd_pcm_substream *subs)
 		return err;
 
 	runtime->hw = snd_m3_playback;
-	snd_pcm_set_sync(subs);
 
 	return 0;
 }
@@ -1842,7 +1845,6 @@ snd_m3_capture_open(struct snd_pcm_substream *subs)
 		return err;
 
 	runtime->hw = snd_m3_capture;
-	snd_pcm_set_sync(subs);
 
 	return 0;
 }
@@ -2101,9 +2103,7 @@ static int __devinit snd_m3_mixer(struct snd_m3 *chip)
 }
 
 
-#define FIRMWARE_IN_THE_KERNEL
-
-#ifdef FIRMWARE_IN_THE_KERNEL
+#ifdef CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL
 
 /*
  * DSP Code images
@@ -2242,7 +2242,7 @@ static const struct firmware assp_minisrc = {
 	.size = sizeof assp_minisrc_image
 };
 
-#endif /* FIRMWARE_IN_THE_KERNEL */
+#else /* CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL */
 
 #ifdef __LITTLE_ENDIAN
 static inline void snd_m3_convert_from_le(const struct firmware *fw) { }
@@ -2256,6 +2256,8 @@ static void snd_m3_convert_from_le(const struct firmware *fw)
 		le16_to_cpus(&data[i]);
 }
 #endif
+
+#endif /* CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL */
 
 
 /*
@@ -2550,14 +2552,10 @@ static int snd_m3_free(struct snd_m3 *chip)
 	if (chip->iobase)
 		pci_release_regions(chip->pci);
 
-#ifdef FIRMWARE_IN_THE_KERNEL
-	if (chip->assp_kernel_image != &assp_kernel)
+#ifndef CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL
+	release_firmware(chip->assp_kernel_image);
+	release_firmware(chip->assp_minisrc_image);
 #endif
-		release_firmware(chip->assp_kernel_image);
-#ifdef FIRMWARE_IN_THE_KERNEL
-	if (chip->assp_minisrc_image != &assp_minisrc)
-#endif
-		release_firmware(chip->assp_minisrc_image);
 
 	pci_disable_device(chip->pci);
 	kfree(chip);
@@ -2747,29 +2745,29 @@ snd_m3_create(struct snd_card *card, struct pci_dev *pci,
 		return -ENOMEM;
 	}
 
+#ifdef CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL
+	chip->assp_kernel_image = &assp_kernel;
+#else
 	err = request_firmware(&chip->assp_kernel_image,
 			       "ess/maestro3_assp_kernel.fw", &pci->dev);
 	if (err < 0) {
-#ifdef FIRMWARE_IN_THE_KERNEL
-		chip->assp_kernel_image = &assp_kernel;
-#else
 		snd_m3_free(chip);
 		return err;
-#endif
 	} else
 		snd_m3_convert_from_le(chip->assp_kernel_image);
+#endif
 
+#ifdef CONFIG_SND_MAESTRO3_FIRMWARE_IN_KERNEL
+	chip->assp_minisrc_image = &assp_minisrc;
+#else
 	err = request_firmware(&chip->assp_minisrc_image,
 			       "ess/maestro3_assp_minisrc.fw", &pci->dev);
 	if (err < 0) {
-#ifdef FIRMWARE_IN_THE_KERNEL
-		chip->assp_minisrc_image = &assp_minisrc;
-#else
 		snd_m3_free(chip);
 		return err;
-#endif
 	} else
 		snd_m3_convert_from_le(chip->assp_minisrc_image);
+#endif
 
 	if ((err = pci_request_regions(pci, card->driver)) < 0) {
 		snd_m3_free(chip);

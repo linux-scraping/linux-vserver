@@ -61,7 +61,7 @@ static struct genl_family netlbl_unlabel_gnl_family = {
 };
 
 /* NetLabel Netlink attribute policy */
-static struct nla_policy netlbl_unlabel_genl_policy[NLBL_UNLABEL_A_MAX + 1] = {
+static const struct nla_policy netlbl_unlabel_genl_policy[NLBL_UNLABEL_A_MAX + 1] = {
 	[NLBL_UNLABEL_A_ACPTFLG] = { .type = NLA_U8 },
 };
 
@@ -84,12 +84,10 @@ static void netlbl_unlabel_acceptflg_set(u8 value,
 	struct audit_buffer *audit_buf;
 	u8 old_val;
 
-	rcu_read_lock();
-	old_val = netlabel_unlabel_acceptflg;
 	spin_lock(&netlabel_unlabel_acceptflg_lock);
+	old_val = netlabel_unlabel_acceptflg;
 	netlabel_unlabel_acceptflg = value;
 	spin_unlock(&netlabel_unlabel_acceptflg_lock);
-	rcu_read_unlock();
 
 	audit_buf = netlbl_audit_start_common(AUDIT_MAC_UNLBL_ALLOW,
 					      audit_info);

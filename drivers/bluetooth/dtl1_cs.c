@@ -298,10 +298,7 @@ static irqreturn_t dtl1_interrupt(int irq, void *dev_inst)
 	int boguscount = 0;
 	int iir, lsr;
 
-	if (!info || !info->hdev) {
-		BT_ERR("Call of irq %d for unknown device", irq);
-		return IRQ_NONE;
-	}
+	BUG_ON(!info->hdev);
 
 	iobase = info->p_dev->io.BasePort1;
 
@@ -425,7 +422,7 @@ static int dtl1_hci_send_frame(struct sk_buff *skb)
 		return -ENOMEM;
 
 	skb_reserve(s, NSHL);
-	memcpy(skb_put(s, skb->len), skb->data, skb->len);
+	skb_copy_from_linear_data(skb, skb_put(s, skb->len), skb->len);
 	if (skb->len & 0x0001)
 		*skb_put(s, 1) = 0;	/* PAD */
 

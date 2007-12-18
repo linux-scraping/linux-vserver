@@ -2,7 +2,7 @@
  * $Id: iforce.h,v 1.13 2002/07/07 10:22:50 jdeneux Exp $
  *
  *  Copyright (c) 2000-2002 Vojtech Pavlik <vojtech@ucw.cz>
- *  Copyright (c) 2001-2002 Johann Deneux <deneux@ifrance.com>
+ *  Copyright (c) 2001-2002, 2007 Johann Deneux <johann.deneux@gmail.com>
  *
  *  USB/RS232 I-Force joysticks and wheels.
  */
@@ -62,13 +62,13 @@
 #define FF_CORE_IS_PLAYED	3	/* Effect is currently being played */
 #define FF_CORE_SHOULD_PLAY	4	/* User wants the effect to be played */
 #define FF_CORE_UPDATE		5	/* Effect is being updated */
-#define FF_MODCORE_MAX		5
+#define FF_MODCORE_CNT		6
 
 struct iforce_core_effect {
 	/* Information about where modifiers are stored in the device's memory */
 	struct resource mod1_chunk;
 	struct resource mod2_chunk;
-	unsigned long flags[NBITS(FF_MODCORE_MAX)];
+	unsigned long flags[BITS_TO_LONGS(FF_MODCORE_CNT)];
 };
 
 #define FF_CMD_EFFECT		0x010e
@@ -124,7 +124,7 @@ struct iforce {
 	/* Buffer used for asynchronous sending of bytes to the device */
 	struct circ_buf xmit;
 	unsigned char xmit_data[XMIT_SIZE];
-	long xmit_flags[1];
+	unsigned long xmit_flags[1];
 
 					/* Force Feedback */
 	wait_queue_head_t wait;

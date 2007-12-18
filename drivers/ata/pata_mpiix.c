@@ -35,7 +35,7 @@
 #include <linux/libata.h>
 
 #define DRV_NAME "pata_mpiix"
-#define DRV_VERSION "0.7.5"
+#define DRV_VERSION "0.7.6"
 
 enum {
 	IDETIM = 0x6C,		/* IDE control register */
@@ -46,15 +46,16 @@ enum {
 	SECONDARY = (1 << 14)
 };
 
-static int mpiix_pre_reset(struct ata_port *ap)
+static int mpiix_pre_reset(struct ata_link *link, unsigned long deadline)
 {
+	struct ata_port *ap = link->ap;
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
 	static const struct pci_bits mpiix_enable_bits = { 0x6D, 1, 0x80, 0x80 };
 
 	if (!pci_test_config_bits(pdev, &mpiix_enable_bits))
 		return -ENOENT;
-	ap->cbl = ATA_CBL_PATA40;
-	return ata_std_prereset(ap);
+
+	return ata_std_prereset(link, deadline);
 }
 
 /**
@@ -128,7 +129,7 @@ static void mpiix_set_piomode(struct ata_port *ap, struct ata_device *adev)
  *
  *	Called when the libata layer is about to issue a command. We wrap
  *	this interface so that we can load the correct ATA timings if
- *	neccessary. Our logic also clears TIME0/TIME1 for the other device so
+ *	necessary. Our logic also clears TIME0/TIME1 for the other device so
  *	that, even if we get this wrong, cycles to the other device will
  *	be made PIO0.
  */
@@ -165,14 +166,9 @@ static struct scsi_host_template mpiix_sht = {
 	.slave_configure	= ata_scsi_slave_config,
 	.slave_destroy		= ata_scsi_slave_destroy,
 	.bios_param		= ata_std_bios_param,
-#ifdef CONFIG_PM
-	.resume			= ata_scsi_device_resume,
-	.suspend		= ata_scsi_device_suspend,
-#endif
 };
 
 static struct ata_port_operations mpiix_port_ops = {
-	.port_disable	= ata_port_disable,
 	.set_piomode	= mpiix_set_piomode,
 
 	.tf_load	= ata_tf_load,
@@ -185,30 +181,35 @@ static struct ata_port_operations mpiix_port_ops = {
 	.thaw		= ata_bmdma_thaw,
 	.error_handler	= mpiix_error_handler,
 	.post_internal_cmd = ata_bmdma_post_internal_cmd,
+	.cable_detect	= ata_cable_40wire,
 
 	.qc_prep 	= ata_qc_prep,
 	.qc_issue	= mpiix_qc_issue_prot,
 	.data_xfer	= ata_data_xfer,
 
-	.irq_handler	= ata_interrupt,
 	.irq_clear	= ata_bmdma_irq_clear,
 	.irq_on		= ata_irq_on,
-	.irq_ack	= ata_irq_ack,
 
-	.port_start	= ata_port_start,
+	.port_start	= ata_sff_port_start,
 };
 
 static int mpiix_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	/* Single threaded by the PCI probe logic */
-	static struct ata_probe_ent probe;
 	static int printed_version;
+	struct ata_host *host;
+	struct ata_port *ap;
 	void __iomem *cmd_addr, *ctl_addr;
 	u16 idetim;
-	int irq;
+	int cmd, ctl, irq;
 
 	if (!printed_version++)
 		dev_printk(KERN_DEBUG, &dev->dev, "version " DRV_VERSION "\n");
+
+	host = ata_host_alloc(&dev->dev, 1);
+	if (!host)
+		return -ENOMEM;
+	ap = host->ports[0];
 
 	/* MPIIX has many functions which can be turned on or off according
 	   to other devices present. Make sure IDE is enabled before we try
@@ -220,17 +221,21 @@ static int mpiix_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 
 	/* See if it's primary or secondary channel... */
 	if (!(idetim & SECONDARY)) {
+		cmd = 0x1F0;
+		ctl = 0x3F6;
 		irq = 14;
-		cmd_addr = devm_ioport_map(&dev->dev, 0x1F0, 8);
-		ctl_addr = devm_ioport_map(&dev->dev, 0x3F6, 1);
 	} else {
+		cmd = 0x170;
+		ctl = 0x376;
 		irq = 15;
-		cmd_addr = devm_ioport_map(&dev->dev, 0x170, 8);
-		ctl_addr = devm_ioport_map(&dev->dev, 0x376, 1);
 	}
 
+	cmd_addr = devm_ioport_map(&dev->dev, cmd, 8);
+	ctl_addr = devm_ioport_map(&dev->dev, ctl, 1);
 	if (!cmd_addr || !ctl_addr)
 		return -ENOMEM;
+
+	ata_port_desc(ap, "cmd 0x%x ctl 0x%x", cmd, ctl);
 
 	/* We do our own plumbing to avoid leaking special cases for whacko
 	   ancient hardware into the core code. There are two issues to
@@ -238,27 +243,20 @@ static int mpiix_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 	   without BARs set fools the setup.  #2 If you pci_disable_device
 	   the MPIIX your box goes castors up */
 
-	INIT_LIST_HEAD(&probe.node);
-	probe.dev = pci_dev_to_dev(dev);
-	probe.port_ops = &mpiix_port_ops;
-	probe.sht = &mpiix_sht;
-	probe.pio_mask = 0x1F;
-	probe.irq_flags = IRQF_SHARED;
-	probe.port_flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST;
-	probe.n_ports = 1;
+	ap->ops = &mpiix_port_ops;
+	ap->pio_mask = 0x1F;
+	ap->flags |= ATA_FLAG_SLAVE_POSS;
 
-	probe.irq = irq;
-	probe.port[0].cmd_addr = cmd_addr;
-	probe.port[0].ctl_addr = ctl_addr;
-	probe.port[0].altstatus_addr = ctl_addr;
+	ap->ioaddr.cmd_addr = cmd_addr;
+	ap->ioaddr.ctl_addr = ctl_addr;
+	ap->ioaddr.altstatus_addr = ctl_addr;
 
 	/* Let libata fill in the port details */
-	ata_std_ports(&probe.port[0]);
+	ata_std_ports(&ap->ioaddr);
 
-	/* Now add the port that is active */
-	if (ata_device_add(&probe))
-		return 0;
-	return -ENODEV;
+	/* activate host */
+	return ata_host_activate(host, irq, ata_interrupt, IRQF_SHARED,
+				 &mpiix_sht);
 }
 
 static const struct pci_device_id mpiix[] = {

@@ -36,6 +36,7 @@
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/stddef.h>
+#include <linux/kref.h>
 
 #include "sn9c102_config.h"
 #include "sn9c102_sensor.h"
@@ -78,8 +79,13 @@ enum sn9c102_stream_state {
 
 typedef char sn9c102_sof_header_t[62];
 
+struct sn9c102_sof_t {
+	sn9c102_sof_header_t header;
+	u16 bytesread;
+};
+
 struct sn9c102_sysfs_attr {
-	u8 reg, i2c_reg;
+	u16 reg, i2c_reg;
 	sn9c102_sof_header_t frame_header;
 };
 
@@ -89,7 +95,7 @@ struct sn9c102_module_param {
 };
 
 static DEFINE_MUTEX(sn9c102_sysfs_lock);
-static DECLARE_RWSEM(sn9c102_disconnect);
+static DECLARE_RWSEM(sn9c102_dev_lock);
 
 struct sn9c102_device {
 	struct video_device* v4ldev;
@@ -112,17 +118,19 @@ struct sn9c102_device {
 	struct v4l2_jpegcompression compression;
 
 	struct sn9c102_sysfs_attr sysfs;
-	sn9c102_sof_header_t sof_header;
+	struct sn9c102_sof_t sof;
 	u16 reg[384];
 
 	struct sn9c102_module_param module_param;
 
+	struct kref kref;
 	enum sn9c102_dev_state state;
 	u8 users;
 
-	struct mutex dev_mutex, fileop_mutex;
+	struct completion probe;
+	struct mutex open_mutex, fileop_mutex;
 	spinlock_t queue_lock;
-	wait_queue_head_t open, wait_frame, wait_stream;
+	wait_queue_head_t wait_open, wait_frame, wait_stream;
 };
 
 /*****************************************************************************/
@@ -136,7 +144,7 @@ sn9c102_match_id(struct sn9c102_device* cam, const struct usb_device_id *id)
 
 void
 sn9c102_attach_sensor(struct sn9c102_device* cam,
-		      struct sn9c102_sensor* sensor)
+		      const struct sn9c102_sensor* sensor)
 {
 	memcpy(&cam->sensor, sensor, sizeof(struct sn9c102_sensor));
 }
@@ -182,8 +190,8 @@ do {                                                                          \
 		if ((level) == 1 || (level) == 2)                             \
 			pr_info("sn9c102: " fmt "\n", ## args);               \
 		else if ((level) == 3)                                        \
-			pr_debug("sn9c102: [%s:%d] " fmt "\n", __FUNCTION__,  \
-				 __LINE__ , ## args);                         \
+			pr_debug("sn9c102: [%s:%d] " fmt "\n",                \
+				 __FUNCTION__, __LINE__ , ## args);           \
 	}                                                                     \
 } while (0)
 #else
@@ -194,8 +202,8 @@ do {                                                                          \
 
 #undef PDBG
 #define PDBG(fmt, args...)                                                    \
-dev_info(&cam->usbdev->dev, "[%s:%d] " fmt "\n",                              \
-	 __FUNCTION__, __LINE__ , ## args)
+dev_info(&cam->usbdev->dev, "[%s:%s:%d] " fmt "\n", __FILE__, __FUNCTION__,   \
+	 __LINE__ , ## args)
 
 #undef PDBGG
 #define PDBGG(fmt, args...) do {;} while(0) /* placeholder */

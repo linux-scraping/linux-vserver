@@ -1,6 +1,6 @@
 /*
  *  The driver for the Cirrus Logic's Sound Fusion CS46XX based soundcards
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -86,6 +86,9 @@ static inline unsigned int snd_cs46xx_peekBA0(struct snd_cs46xx *chip, unsigned 
 struct dsp_spos_instance *cs46xx_dsp_spos_create (struct snd_cs46xx * chip);
 void cs46xx_dsp_spos_destroy (struct snd_cs46xx * chip);
 int cs46xx_dsp_load_module (struct snd_cs46xx * chip, struct dsp_module_desc * module);
+#ifdef CONFIG_PM
+int cs46xx_dsp_resume(struct snd_cs46xx * chip);
+#endif
 struct dsp_symbol_entry *cs46xx_dsp_lookup_symbol (struct snd_cs46xx * chip, char * symbol_name,
 						   int symbol_type);
 #ifdef CONFIG_PROC_FS

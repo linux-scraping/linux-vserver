@@ -68,13 +68,19 @@ static int nfs4_stat_to_errno(int);
 #endif
 
 /* lock,open owner id: 
- * we currently use size 1 (u32) out of (NFS4_OPAQUE_LIMIT  >> 2)
+ * we currently use size 2 (u64) out of (NFS4_OPAQUE_LIMIT  >> 2)
  */
-#define owner_id_maxsz          (1 + 1)
+#define open_owner_id_maxsz	(1 + 4)
+#define lock_owner_id_maxsz	(1 + 4)
+#define decode_lockowner_maxsz	(1 + XDR_QUADLEN(IDMAP_NAMESZ))
 #define compound_encode_hdr_maxsz	(3 + (NFS4_MAXTAGLEN >> 2))
 #define compound_decode_hdr_maxsz	(3 + (NFS4_MAXTAGLEN >> 2))
 #define op_encode_hdr_maxsz	(1)
 #define op_decode_hdr_maxsz	(2)
+#define encode_stateid_maxsz	(XDR_QUADLEN(NFS4_STATEID_SIZE))
+#define decode_stateid_maxsz	(XDR_QUADLEN(NFS4_STATEID_SIZE))
+#define encode_verifier_maxsz	(XDR_QUADLEN(NFS4_VERIFIER_SIZE))
+#define decode_verifier_maxsz	(XDR_QUADLEN(NFS4_VERIFIER_SIZE))
 #define encode_putfh_maxsz	(op_encode_hdr_maxsz + 1 + \
 				(NFS4_FHSIZE >> 2))
 #define decode_putfh_maxsz	(op_decode_hdr_maxsz)
@@ -87,12 +93,19 @@ static int nfs4_stat_to_errno(int);
 #define encode_getattr_maxsz    (op_encode_hdr_maxsz + nfs4_fattr_bitmap_maxsz)
 #define nfs4_name_maxsz		(1 + ((3 + NFS4_MAXNAMLEN) >> 2))
 #define nfs4_path_maxsz		(1 + ((3 + NFS4_MAXPATHLEN) >> 2))
+#define nfs4_owner_maxsz	(1 + XDR_QUADLEN(IDMAP_NAMESZ))
+#define nfs4_group_maxsz	(1 + XDR_QUADLEN(IDMAP_NAMESZ))
 /* This is based on getfattr, which uses the most attributes: */
 #define nfs4_fattr_value_maxsz	(1 + (1 + 2 + 2 + 4 + 2 + 1 + 1 + 2 + 2 + \
-				3 + 3 + 3 + 2 * nfs4_name_maxsz))
+				3 + 3 + 3 + nfs4_owner_maxsz + nfs4_group_maxsz))
 #define nfs4_fattr_maxsz	(nfs4_fattr_bitmap_maxsz + \
 				nfs4_fattr_value_maxsz)
 #define decode_getattr_maxsz    (op_decode_hdr_maxsz + nfs4_fattr_maxsz)
+#define encode_attrs_maxsz	(nfs4_fattr_bitmap_maxsz + \
+				 1 + 2 + 1 + \
+				nfs4_owner_maxsz + \
+				nfs4_group_maxsz + \
+				4 + 4)
 #define encode_savefh_maxsz     (op_encode_hdr_maxsz)
 #define decode_savefh_maxsz     (op_decode_hdr_maxsz)
 #define encode_restorefh_maxsz  (op_encode_hdr_maxsz)
@@ -116,8 +129,65 @@ static int nfs4_stat_to_errno(int);
 				3 + (NFS4_VERIFIER_SIZE >> 2))
 #define decode_setclientid_confirm_maxsz \
 				(op_decode_hdr_maxsz)
-#define encode_lookup_maxsz	(op_encode_hdr_maxsz + \
-				1 + ((3 + NFS4_FHSIZE) >> 2))
+#define encode_lookup_maxsz	(op_encode_hdr_maxsz + nfs4_name_maxsz)
+#define decode_lookup_maxsz	(op_decode_hdr_maxsz)
+#define encode_share_access_maxsz \
+				(2)
+#define encode_createmode_maxsz	(1 + encode_attrs_maxsz)
+#define encode_opentype_maxsz	(1 + encode_createmode_maxsz)
+#define encode_claim_null_maxsz	(1 + nfs4_name_maxsz)
+#define encode_open_maxsz	(op_encode_hdr_maxsz + \
+				2 + encode_share_access_maxsz + 2 + \
+				open_owner_id_maxsz + \
+				encode_opentype_maxsz + \
+				encode_claim_null_maxsz)
+#define decode_ace_maxsz	(3 + nfs4_owner_maxsz)
+#define decode_delegation_maxsz	(1 + decode_stateid_maxsz + 1 + \
+				decode_ace_maxsz)
+#define decode_change_info_maxsz	(5)
+#define decode_open_maxsz	(op_decode_hdr_maxsz + \
+				decode_stateid_maxsz + \
+				decode_change_info_maxsz + 1 + \
+				nfs4_fattr_bitmap_maxsz + \
+				decode_delegation_maxsz)
+#define encode_open_confirm_maxsz \
+				(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + 1)
+#define decode_open_confirm_maxsz \
+				(op_decode_hdr_maxsz + \
+				 decode_stateid_maxsz)
+#define encode_open_downgrade_maxsz \
+				(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + 1 + \
+				 encode_share_access_maxsz)
+#define decode_open_downgrade_maxsz \
+				(op_decode_hdr_maxsz + \
+				 decode_stateid_maxsz)
+#define encode_close_maxsz	(op_encode_hdr_maxsz + \
+				 1 + encode_stateid_maxsz)
+#define decode_close_maxsz	(op_decode_hdr_maxsz + \
+				 decode_stateid_maxsz)
+#define encode_setattr_maxsz	(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + \
+				 encode_attrs_maxsz)
+#define decode_setattr_maxsz	(op_decode_hdr_maxsz + \
+				 nfs4_fattr_bitmap_maxsz)
+#define encode_read_maxsz	(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + 3)
+#define decode_read_maxsz	(op_decode_hdr_maxsz + 2)
+#define encode_readdir_maxsz	(op_encode_hdr_maxsz + \
+				 2 + encode_verifier_maxsz + 5)
+#define decode_readdir_maxsz	(op_decode_hdr_maxsz + \
+				 decode_verifier_maxsz)
+#define encode_readlink_maxsz	(op_encode_hdr_maxsz)
+#define decode_readlink_maxsz	(op_decode_hdr_maxsz + 1)
+#define encode_write_maxsz	(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + 4)
+#define decode_write_maxsz	(op_decode_hdr_maxsz + \
+				 2 + decode_verifier_maxsz)
+#define encode_commit_maxsz	(op_encode_hdr_maxsz + 3)
+#define decode_commit_maxsz	(op_decode_hdr_maxsz + \
+				 decode_verifier_maxsz)
 #define encode_remove_maxsz	(op_encode_hdr_maxsz + \
 				nfs4_name_maxsz)
 #define encode_rename_maxsz	(op_encode_hdr_maxsz + \
@@ -126,105 +196,142 @@ static int nfs4_stat_to_errno(int);
 #define encode_link_maxsz	(op_encode_hdr_maxsz + \
 				nfs4_name_maxsz)
 #define decode_link_maxsz	(op_decode_hdr_maxsz + 5)
+#define encode_lock_maxsz	(op_encode_hdr_maxsz + \
+				 7 + \
+				 1 + encode_stateid_maxsz + 8)
+#define decode_lock_denied_maxsz \
+				(8 + decode_lockowner_maxsz)
+#define decode_lock_maxsz	(op_decode_hdr_maxsz + \
+				 decode_lock_denied_maxsz)
+#define encode_lockt_maxsz	(op_encode_hdr_maxsz + 12)
+#define decode_lockt_maxsz	(op_decode_hdr_maxsz + \
+				 decode_lock_denied_maxsz)
+#define encode_locku_maxsz	(op_encode_hdr_maxsz + 3 + \
+				 encode_stateid_maxsz + \
+				 4)
+#define decode_locku_maxsz	(op_decode_hdr_maxsz + \
+				 decode_stateid_maxsz)
+#define encode_access_maxsz	(op_encode_hdr_maxsz + 1)
+#define decode_access_maxsz	(op_decode_hdr_maxsz + 2)
 #define encode_symlink_maxsz	(op_encode_hdr_maxsz + \
 				1 + nfs4_name_maxsz + \
 				1 + \
 				nfs4_fattr_maxsz)
 #define decode_symlink_maxsz	(op_decode_hdr_maxsz + 8)
 #define encode_create_maxsz	(op_encode_hdr_maxsz + \
-				2 + nfs4_name_maxsz + \
-				nfs4_fattr_maxsz)
-#define decode_create_maxsz	(op_decode_hdr_maxsz + 8)
+				1 + 2 + nfs4_name_maxsz + \
+				encode_attrs_maxsz)
+#define decode_create_maxsz	(op_decode_hdr_maxsz + \
+				decode_change_info_maxsz + \
+				nfs4_fattr_bitmap_maxsz)
+#define encode_statfs_maxsz	(encode_getattr_maxsz)
+#define decode_statfs_maxsz	(decode_getattr_maxsz)
 #define encode_delegreturn_maxsz (op_encode_hdr_maxsz + 4)
 #define decode_delegreturn_maxsz (op_decode_hdr_maxsz)
+#define encode_getacl_maxsz	(encode_getattr_maxsz)
+#define decode_getacl_maxsz	(op_decode_hdr_maxsz + \
+				 nfs4_fattr_bitmap_maxsz + 1)
+#define encode_setacl_maxsz	(op_encode_hdr_maxsz + \
+				 encode_stateid_maxsz + 3)
+#define decode_setacl_maxsz	(decode_setattr_maxsz)
+#define encode_fs_locations_maxsz \
+				(encode_getattr_maxsz)
+#define decode_fs_locations_maxsz \
+				(0)
 #define NFS4_enc_compound_sz	(1024)  /* XXX: large enough? */
 #define NFS4_dec_compound_sz	(1024)  /* XXX: large enough? */
 #define NFS4_enc_read_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 7)
+				encode_read_maxsz)
 #define NFS4_dec_read_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 2)
+				decode_read_maxsz)
 #define NFS4_enc_readlink_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz)
+				encode_readlink_maxsz)
 #define NFS4_dec_readlink_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz)
+				decode_readlink_maxsz)
 #define NFS4_enc_readdir_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 9)
+				encode_readdir_maxsz)
 #define NFS4_dec_readdir_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 2)
+				decode_readdir_maxsz)
 #define NFS4_enc_write_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 8 + \
+				encode_write_maxsz + \
 				encode_getattr_maxsz)
 #define NFS4_dec_write_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 4 + \
+				decode_write_maxsz + \
 				decode_getattr_maxsz)
 #define NFS4_enc_commit_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 3 + \
+				encode_commit_maxsz + \
 				encode_getattr_maxsz)
 #define NFS4_dec_commit_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 2 + \
+				decode_commit_maxsz + \
 				decode_getattr_maxsz)
 #define NFS4_enc_open_sz        (compound_encode_hdr_maxsz + \
-                                encode_putfh_maxsz + \
-                                op_encode_hdr_maxsz + \
-                                13 + 3 + 2 + 64 + \
-                                encode_getattr_maxsz + \
-                                encode_getfh_maxsz)
+				encode_putfh_maxsz + \
+				encode_savefh_maxsz + \
+				encode_open_maxsz + \
+				encode_getfh_maxsz + \
+				encode_getattr_maxsz + \
+				encode_restorefh_maxsz + \
+				encode_getattr_maxsz)
 #define NFS4_dec_open_sz        (compound_decode_hdr_maxsz + \
-                                decode_putfh_maxsz + \
-                                op_decode_hdr_maxsz + 4 + 5 + 2 + 3 + \
-                                decode_getattr_maxsz + \
-                                decode_getfh_maxsz)
-#define NFS4_enc_open_confirm_sz      \
-                                (compound_encode_hdr_maxsz + \
-                                encode_putfh_maxsz + \
-                                op_encode_hdr_maxsz + 5)
-#define NFS4_dec_open_confirm_sz        (compound_decode_hdr_maxsz + \
-                                        decode_putfh_maxsz + \
-                                        op_decode_hdr_maxsz + 4)
+				decode_putfh_maxsz + \
+				decode_savefh_maxsz + \
+				decode_open_maxsz + \
+				decode_getfh_maxsz + \
+				decode_getattr_maxsz + \
+				decode_restorefh_maxsz + \
+				decode_getattr_maxsz)
+#define NFS4_enc_open_confirm_sz \
+				(compound_encode_hdr_maxsz + \
+				 encode_putfh_maxsz + \
+				 encode_open_confirm_maxsz)
+#define NFS4_dec_open_confirm_sz \
+				(compound_decode_hdr_maxsz + \
+				 decode_putfh_maxsz + \
+				 decode_open_confirm_maxsz)
 #define NFS4_enc_open_noattr_sz	(compound_encode_hdr_maxsz + \
 					encode_putfh_maxsz + \
-					op_encode_hdr_maxsz + \
-					11)
+					encode_open_maxsz + \
+					encode_getattr_maxsz)
 #define NFS4_dec_open_noattr_sz	(compound_decode_hdr_maxsz + \
 					decode_putfh_maxsz + \
-					op_decode_hdr_maxsz + \
-					4 + 5 + 2 + 3)
+					decode_open_maxsz + \
+					decode_getattr_maxsz)
 #define NFS4_enc_open_downgrade_sz \
 				(compound_encode_hdr_maxsz + \
-                                encode_putfh_maxsz + \
-                                op_encode_hdr_maxsz + 7 + \
-				encode_getattr_maxsz)
+				 encode_putfh_maxsz + \
+				 encode_open_downgrade_maxsz + \
+				 encode_getattr_maxsz)
 #define NFS4_dec_open_downgrade_sz \
 				(compound_decode_hdr_maxsz + \
-                                decode_putfh_maxsz + \
-                                op_decode_hdr_maxsz + 4 + \
-				decode_getattr_maxsz)
-#define NFS4_enc_close_sz       (compound_encode_hdr_maxsz + \
-                                encode_putfh_maxsz + \
-                                op_encode_hdr_maxsz + 5 + \
-				encode_getattr_maxsz)
-#define NFS4_dec_close_sz       (compound_decode_hdr_maxsz + \
-                                decode_putfh_maxsz + \
-                                op_decode_hdr_maxsz + 4 + \
-				decode_getattr_maxsz)
-#define NFS4_enc_setattr_sz     (compound_encode_hdr_maxsz + \
-                                encode_putfh_maxsz + \
-                                op_encode_hdr_maxsz + 4 + \
-                                nfs4_fattr_maxsz + \
-                                encode_getattr_maxsz)
-#define NFS4_dec_setattr_sz     (compound_decode_hdr_maxsz + \
-                                decode_putfh_maxsz + \
-                                op_decode_hdr_maxsz + 3)
+				 decode_putfh_maxsz + \
+				 decode_open_downgrade_maxsz + \
+				 decode_getattr_maxsz)
+#define NFS4_enc_close_sz	(compound_encode_hdr_maxsz + \
+				 encode_putfh_maxsz + \
+				 encode_close_maxsz + \
+				 encode_getattr_maxsz)
+#define NFS4_dec_close_sz	(compound_decode_hdr_maxsz + \
+				 decode_putfh_maxsz + \
+				 decode_close_maxsz + \
+				 decode_getattr_maxsz)
+#define NFS4_enc_setattr_sz	(compound_encode_hdr_maxsz + \
+				 encode_putfh_maxsz + \
+				 encode_setattr_maxsz + \
+				 encode_getattr_maxsz)
+#define NFS4_dec_setattr_sz	(compound_decode_hdr_maxsz + \
+				 decode_putfh_maxsz + \
+				 decode_setattr_maxsz + \
+				 decode_getattr_maxsz)
 #define NFS4_enc_fsinfo_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
 				encode_fsinfo_maxsz)
@@ -251,39 +358,30 @@ static int nfs4_stat_to_errno(int);
 				decode_fsinfo_maxsz)
 #define NFS4_enc_lock_sz        (compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				encode_getattr_maxsz + \
-				op_encode_hdr_maxsz + \
-				1 + 1 + 2 + 2 + \
-				1 + 4 + 1 + 2 + \
-				owner_id_maxsz)
+				encode_lock_maxsz)
 #define NFS4_dec_lock_sz        (compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				decode_getattr_maxsz + \
-				op_decode_hdr_maxsz + \
-				2 + 2 + 1 + 2 + \
-				owner_id_maxsz)
+				decode_lock_maxsz)
 #define NFS4_enc_lockt_sz       (compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				encode_getattr_maxsz + \
-				op_encode_hdr_maxsz + \
-				1 + 2 + 2 + 2 + \
-				owner_id_maxsz)
-#define NFS4_dec_lockt_sz       (NFS4_dec_lock_sz)
+				encode_lockt_maxsz)
+#define NFS4_dec_lockt_sz       (compound_decode_hdr_maxsz + \
+				 decode_putfh_maxsz + \
+				 decode_lockt_maxsz)
 #define NFS4_enc_locku_sz       (compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				encode_getattr_maxsz + \
-				op_encode_hdr_maxsz + \
-				1 + 1 + 4 + 2 + 2)
+				encode_locku_maxsz)
 #define NFS4_dec_locku_sz       (compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				decode_getattr_maxsz + \
-				op_decode_hdr_maxsz + 4)
+				decode_locku_maxsz)
 #define NFS4_enc_access_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 1)
+				encode_access_maxsz + \
+				encode_getattr_maxsz)
 #define NFS4_dec_access_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 2)
+				decode_access_maxsz + \
+				decode_getattr_maxsz)
 #define NFS4_enc_getattr_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
 				encode_getattr_maxsz)
@@ -297,7 +395,7 @@ static int nfs4_stat_to_errno(int);
 				encode_getfh_maxsz)
 #define NFS4_dec_lookup_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + \
+				decode_lookup_maxsz + \
 				decode_getattr_maxsz + \
 				decode_getfh_maxsz)
 #define NFS4_enc_lookup_root_sz (compound_encode_hdr_maxsz + \
@@ -382,10 +480,10 @@ static int nfs4_stat_to_errno(int);
 				decode_getattr_maxsz)
 #define NFS4_enc_statfs_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				encode_getattr_maxsz)
+				encode_statfs_maxsz)
 #define NFS4_dec_statfs_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + 12)
+				decode_statfs_maxsz)
 #define NFS4_enc_server_caps_sz (compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
 				encode_getattr_maxsz)
@@ -401,27 +499,26 @@ static int nfs4_stat_to_errno(int);
 				decode_getattr_maxsz)
 #define NFS4_enc_getacl_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				encode_getattr_maxsz)
+				encode_getacl_maxsz)
 #define NFS4_dec_getacl_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + \
-				nfs4_fattr_bitmap_maxsz + 1)
+				decode_getacl_maxsz)
 #define NFS4_enc_setacl_sz	(compound_encode_hdr_maxsz + \
 				encode_putfh_maxsz + \
-				op_encode_hdr_maxsz + 4 + \
-				nfs4_fattr_bitmap_maxsz + 1)
+				encode_setacl_maxsz)
 #define NFS4_dec_setacl_sz	(compound_decode_hdr_maxsz + \
 				decode_putfh_maxsz + \
-				op_decode_hdr_maxsz + nfs4_fattr_bitmap_maxsz)
+				decode_setacl_maxsz)
 #define NFS4_enc_fs_locations_sz \
 				(compound_encode_hdr_maxsz + \
 				 encode_putfh_maxsz + \
-				 encode_getattr_maxsz)
+				 encode_lookup_maxsz + \
+				 encode_fs_locations_maxsz)
 #define NFS4_dec_fs_locations_sz \
 				(compound_decode_hdr_maxsz + \
 				 decode_putfh_maxsz + \
-				 op_decode_hdr_maxsz + \
-				 nfs4_fattr_bitmap_maxsz)
+				 decode_lookup_maxsz + \
+				 decode_fs_locations_maxsz)
 
 static struct {
 	unsigned int	mode;
@@ -467,7 +564,6 @@ struct compound_hdr {
 
 #define RESERVE_SPACE(nbytes)	do {				\
 	p = xdr_reserve_space(xdr, nbytes);			\
-	if (!p) printk("RESERVE_SPACE(%d) failed in function %s\n", (int) (nbytes), __FUNCTION__); \
 	BUG_ON(!p);						\
 } while (0)
 
@@ -533,8 +629,8 @@ static int encode_attrs(struct xdr_stream *xdr, const struct iattr *iap, const s
 	if (iap->ia_valid & ATTR_UID) {
 		owner_namelen = nfs_map_uid_to_name(server->nfs_client, iap->ia_uid, owner_name);
 		if (owner_namelen < 0) {
-			printk(KERN_WARNING "nfs: couldn't resolve uid %d to string\n",
-			       iap->ia_uid);
+			dprintk("nfs: couldn't resolve uid %d to string\n",
+					iap->ia_uid);
 			/* XXX */
 			strcpy(owner_name, "nobody");
 			owner_namelen = sizeof("nobody") - 1;
@@ -545,8 +641,8 @@ static int encode_attrs(struct xdr_stream *xdr, const struct iattr *iap, const s
 	if (iap->ia_valid & ATTR_GID) {
 		owner_grouplen = nfs_map_gid_to_group(server->nfs_client, iap->ia_gid, owner_group);
 		if (owner_grouplen < 0) {
-			printk(KERN_WARNING "nfs4: couldn't resolve gid %d to string\n",
-			       iap->ia_gid);
+			dprintk("nfs: couldn't resolve gid %d to string\n",
+					iap->ia_gid);
 			strcpy(owner_group, "nobody");
 			owner_grouplen = sizeof("nobody") - 1;
 			/* goto out; */
@@ -616,7 +712,7 @@ static int encode_attrs(struct xdr_stream *xdr, const struct iattr *iap, const s
 	 * Now we backfill the bitmap and the attribute buffer length.
 	 */
 	if (len != ((char *)p - (char *)q) + 4) {
-		printk ("encode_attr: Attr length calculation error! %u != %Zu\n",
+		printk(KERN_ERR "nfs: Attr length error, %u != %Zu\n",
 				len, ((char *)p - (char *)q) + 4);
 		BUG();
 	}
@@ -645,10 +741,10 @@ static int encode_close(struct xdr_stream *xdr, const struct nfs_closeargs *arg)
 {
 	__be32 *p;
 
-	RESERVE_SPACE(8+sizeof(arg->stateid->data));
+	RESERVE_SPACE(8+NFS4_STATEID_SIZE);
 	WRITE32(OP_CLOSE);
 	WRITE32(arg->seqid->sequence->counter);
-	WRITEMEM(arg->stateid->data, sizeof(arg->stateid->data));
+	WRITEMEM(arg->stateid->data, NFS4_STATEID_SIZE);
 	
 	return 0;
 }
@@ -792,17 +888,18 @@ static int encode_lock(struct xdr_stream *xdr, const struct nfs_lock_args *args)
 	WRITE64(nfs4_lock_length(args->fl));
 	WRITE32(args->new_lock_owner);
 	if (args->new_lock_owner){
-		RESERVE_SPACE(40);
+		RESERVE_SPACE(4+NFS4_STATEID_SIZE+32);
 		WRITE32(args->open_seqid->sequence->counter);
-		WRITEMEM(args->open_stateid->data, sizeof(args->open_stateid->data));
+		WRITEMEM(args->open_stateid->data, NFS4_STATEID_SIZE);
 		WRITE32(args->lock_seqid->sequence->counter);
 		WRITE64(args->lock_owner.clientid);
-		WRITE32(4);
-		WRITE32(args->lock_owner.id);
+		WRITE32(16);
+		WRITEMEM("lock id:", 8);
+		WRITE64(args->lock_owner.id);
 	}
 	else {
-		RESERVE_SPACE(20);
-		WRITEMEM(args->lock_stateid->data, sizeof(args->lock_stateid->data));
+		RESERVE_SPACE(NFS4_STATEID_SIZE+4);
+		WRITEMEM(args->lock_stateid->data, NFS4_STATEID_SIZE);
 		WRITE32(args->lock_seqid->sequence->counter);
 	}
 
@@ -813,14 +910,15 @@ static int encode_lockt(struct xdr_stream *xdr, const struct nfs_lockt_args *arg
 {
 	__be32 *p;
 
-	RESERVE_SPACE(40);
+	RESERVE_SPACE(52);
 	WRITE32(OP_LOCKT);
 	WRITE32(nfs4_lock_type(args->fl, 0));
 	WRITE64(args->fl->fl_start);
 	WRITE64(nfs4_lock_length(args->fl));
 	WRITE64(args->lock_owner.clientid);
-	WRITE32(4);
-	WRITE32(args->lock_owner.id);
+	WRITE32(16);
+	WRITEMEM("lock id:", 8);
+	WRITE64(args->lock_owner.id);
 
 	return 0;
 }
@@ -829,11 +927,11 @@ static int encode_locku(struct xdr_stream *xdr, const struct nfs_locku_args *arg
 {
 	__be32 *p;
 
-	RESERVE_SPACE(44);
+	RESERVE_SPACE(12+NFS4_STATEID_SIZE+16);
 	WRITE32(OP_LOCKU);
 	WRITE32(nfs4_lock_type(args->fl, 0));
 	WRITE32(args->seqid->sequence->counter);
-	WRITEMEM(args->stateid->data, sizeof(args->stateid->data));
+	WRITEMEM(args->stateid->data, NFS4_STATEID_SIZE);
 	WRITE64(args->fl->fl_start);
 	WRITE64(nfs4_lock_length(args->fl));
 
@@ -885,10 +983,11 @@ static inline void encode_openhdr(struct xdr_stream *xdr, const struct nfs_opena
 	WRITE32(OP_OPEN);
 	WRITE32(arg->seqid->sequence->counter);
 	encode_share_access(xdr, arg->open_flags);
-	RESERVE_SPACE(16);
+	RESERVE_SPACE(28);
 	WRITE64(arg->clientid);
-	WRITE32(4);
-	WRITE32(arg->id);
+	WRITE32(16);
+	WRITEMEM("open id:", 8);
+	WRITE64(arg->id);
 }
 
 static inline void encode_createmode(struct xdr_stream *xdr, const struct nfs_openargs *arg)
@@ -965,9 +1064,9 @@ static inline void encode_claim_delegate_cur(struct xdr_stream *xdr, const struc
 {
 	__be32 *p;
 
-	RESERVE_SPACE(4+sizeof(stateid->data));
+	RESERVE_SPACE(4+NFS4_STATEID_SIZE);
 	WRITE32(NFS4_OPEN_CLAIM_DELEGATE_CUR);
-	WRITEMEM(stateid->data, sizeof(stateid->data));
+	WRITEMEM(stateid->data, NFS4_STATEID_SIZE);
 	encode_string(xdr, name->len, name->name);
 }
 
@@ -995,9 +1094,9 @@ static int encode_open_confirm(struct xdr_stream *xdr, const struct nfs_open_con
 {
 	__be32 *p;
 
-	RESERVE_SPACE(8+sizeof(arg->stateid->data));
+	RESERVE_SPACE(4+NFS4_STATEID_SIZE+4);
 	WRITE32(OP_OPEN_CONFIRM);
-	WRITEMEM(arg->stateid->data, sizeof(arg->stateid->data));
+	WRITEMEM(arg->stateid->data, NFS4_STATEID_SIZE);
 	WRITE32(arg->seqid->sequence->counter);
 
 	return 0;
@@ -1007,9 +1106,9 @@ static int encode_open_downgrade(struct xdr_stream *xdr, const struct nfs_closea
 {
 	__be32 *p;
 
-	RESERVE_SPACE(8+sizeof(arg->stateid->data));
+	RESERVE_SPACE(4+NFS4_STATEID_SIZE+4);
 	WRITE32(OP_OPEN_DOWNGRADE);
-	WRITEMEM(arg->stateid->data, sizeof(arg->stateid->data));
+	WRITEMEM(arg->stateid->data, NFS4_STATEID_SIZE);
 	WRITE32(arg->seqid->sequence->counter);
 	encode_share_access(xdr, arg->open_flags);
 	return 0;
@@ -1044,12 +1143,12 @@ static void encode_stateid(struct xdr_stream *xdr, const struct nfs_open_context
 	nfs4_stateid stateid;
 	__be32 *p;
 
-	RESERVE_SPACE(16);
+	RESERVE_SPACE(NFS4_STATEID_SIZE);
 	if (ctx->state != NULL) {
 		nfs4_copy_stateid(&stateid, ctx->state, ctx->lockowner);
-		WRITEMEM(stateid.data, sizeof(stateid.data));
+		WRITEMEM(stateid.data, NFS4_STATEID_SIZE);
 	} else
-		WRITEMEM(zero_stateid.data, sizeof(zero_stateid.data));
+		WRITEMEM(zero_stateid.data, NFS4_STATEID_SIZE);
 }
 
 static int encode_read(struct xdr_stream *xdr, const struct nfs_readargs *args)
@@ -1070,18 +1169,16 @@ static int encode_read(struct xdr_stream *xdr, const struct nfs_readargs *args)
 
 static int encode_readdir(struct xdr_stream *xdr, const struct nfs4_readdir_arg *readdir, struct rpc_rqst *req)
 {
-	struct rpc_auth *auth = req->rq_task->tk_auth;
 	uint32_t attrs[2] = {
 		FATTR4_WORD0_RDATTR_ERROR|FATTR4_WORD0_FILEID,
 		FATTR4_WORD1_MOUNTED_ON_FILEID,
 	};
-	int replen;
 	__be32 *p;
 
-	RESERVE_SPACE(32+sizeof(nfs4_verifier));
+	RESERVE_SPACE(12+NFS4_VERIFIER_SIZE+20);
 	WRITE32(OP_READDIR);
 	WRITE64(readdir->cookie);
-	WRITEMEM(readdir->verifier.data, sizeof(readdir->verifier.data));
+	WRITEMEM(readdir->verifier.data, NFS4_VERIFIER_SIZE);
 	WRITE32(readdir->count >> 1);  /* We're not doing readdirplus */
 	WRITE32(readdir->count);
 	WRITE32(2);
@@ -1100,37 +1197,16 @@ static int encode_readdir(struct xdr_stream *xdr, const struct nfs4_readdir_arg 
 			attrs[0] & readdir->bitmask[0],
 			attrs[1] & readdir->bitmask[1]);
 
-	/* set up reply kvec
-	 *    toplevel_status + taglen + rescount + OP_PUTFH + status
-	 *      + OP_READDIR + status + verifer(2)  = 9
-	 */
-	replen = (RPC_REPHDRSIZE + auth->au_rslack + 9) << 2;
-	xdr_inline_pages(&req->rq_rcv_buf, replen, readdir->pages,
-			 readdir->pgbase, readdir->count);
-	dprintk("%s: inlined page args = (%u, %p, %u, %u)\n",
-			__FUNCTION__, replen, readdir->pages,
-			readdir->pgbase, readdir->count);
-
 	return 0;
 }
 
 static int encode_readlink(struct xdr_stream *xdr, const struct nfs4_readlink *readlink, struct rpc_rqst *req)
 {
-	struct rpc_auth *auth = req->rq_task->tk_auth;
-	unsigned int replen;
 	__be32 *p;
 
 	RESERVE_SPACE(4);
 	WRITE32(OP_READLINK);
 
-	/* set up reply kvec
-	 *    toplevel_status + taglen + rescount + OP_PUTFH + status
-	 *      + OP_READLINK + status + string length = 8
-	 */
-	replen = (RPC_REPHDRSIZE + auth->au_rslack + 8) << 2;
-	xdr_inline_pages(&req->rq_rcv_buf, replen, readlink->pages,
-			readlink->pgbase, readlink->pglen);
-	
 	return 0;
 }
 
@@ -1189,9 +1265,9 @@ encode_setacl(struct xdr_stream *xdr, struct nfs_setaclargs *arg)
 {
 	__be32 *p;
 
-	RESERVE_SPACE(4+sizeof(zero_stateid.data));
+	RESERVE_SPACE(4+NFS4_STATEID_SIZE);
 	WRITE32(OP_SETATTR);
-	WRITEMEM(zero_stateid.data, sizeof(zero_stateid.data));
+	WRITEMEM(zero_stateid.data, NFS4_STATEID_SIZE);
 	RESERVE_SPACE(2*4);
 	WRITE32(1);
 	WRITE32(FATTR4_WORD0_ACL);
@@ -1219,9 +1295,9 @@ static int encode_setattr(struct xdr_stream *xdr, const struct nfs_setattrargs *
 	int status;
 	__be32 *p;
 	
-        RESERVE_SPACE(4+sizeof(arg->stateid.data));
+        RESERVE_SPACE(4+NFS4_STATEID_SIZE);
         WRITE32(OP_SETATTR);
-	WRITEMEM(arg->stateid.data, sizeof(arg->stateid.data));
+	WRITEMEM(arg->stateid.data, NFS4_STATEID_SIZE);
 
         if ((status = encode_attrs(xdr, arg->iap, server)))
 		return status;
@@ -1233,9 +1309,9 @@ static int encode_setclientid(struct xdr_stream *xdr, const struct nfs4_setclien
 {
 	__be32 *p;
 
-	RESERVE_SPACE(4 + sizeof(setclientid->sc_verifier->data));
+	RESERVE_SPACE(4 + NFS4_VERIFIER_SIZE);
 	WRITE32(OP_SETCLIENTID);
-	WRITEMEM(setclientid->sc_verifier->data, sizeof(setclientid->sc_verifier->data));
+	WRITEMEM(setclientid->sc_verifier->data, NFS4_VERIFIER_SIZE);
 
 	encode_string(xdr, setclientid->sc_name_len, setclientid->sc_name);
 	RESERVE_SPACE(4);
@@ -1252,10 +1328,10 @@ static int encode_setclientid_confirm(struct xdr_stream *xdr, const struct nfs_c
 {
         __be32 *p;
 
-        RESERVE_SPACE(12 + sizeof(client_state->cl_confirm.data));
+        RESERVE_SPACE(12 + NFS4_VERIFIER_SIZE);
         WRITE32(OP_SETCLIENTID_CONFIRM);
         WRITE64(client_state->cl_clientid);
-        WRITEMEM(client_state->cl_confirm.data, sizeof(client_state->cl_confirm.data));
+        WRITEMEM(client_state->cl_confirm.data, NFS4_VERIFIER_SIZE);
 
         return 0;
 }
@@ -1283,10 +1359,10 @@ static int encode_delegreturn(struct xdr_stream *xdr, const nfs4_stateid *statei
 {
 	__be32 *p;
 
-	RESERVE_SPACE(20);
+	RESERVE_SPACE(4+NFS4_STATEID_SIZE);
 
 	WRITE32(OP_DELEGRETURN);
-	WRITEMEM(stateid->data, sizeof(stateid->data));
+	WRITEMEM(stateid->data, NFS4_STATEID_SIZE);
 	return 0;
 
 }
@@ -1301,14 +1377,20 @@ static int nfs4_xdr_enc_access(struct rpc_rqst *req, __be32 *p, const struct nfs
 {
 	struct xdr_stream xdr;
 	struct compound_hdr hdr = {
-		.nops = 2,
+		.nops = 3,
 	};
 	int status;
 
 	xdr_init_encode(&xdr, &req->rq_snd_buf, p);
 	encode_compound_hdr(&xdr, &hdr);
-	if ((status = encode_putfh(&xdr, args->fh)) == 0)
-		status = encode_access(&xdr, args->access);
+	status = encode_putfh(&xdr, args->fh);
+	if (status != 0)
+		goto out;
+	status = encode_access(&xdr, args->access);
+	if (status != 0)
+		goto out;
+	status = encode_getfattr(&xdr, args->bitmask);
+out:
 	return status;
 }
 
@@ -1360,7 +1442,7 @@ out:
 /*
  * Encode REMOVE request
  */
-static int nfs4_xdr_enc_remove(struct rpc_rqst *req, __be32 *p, const struct nfs4_remove_arg *args)
+static int nfs4_xdr_enc_remove(struct rpc_rqst *req, __be32 *p, const struct nfs_removeargs *args)
 {
 	struct xdr_stream xdr;
 	struct compound_hdr hdr = {
@@ -1372,7 +1454,7 @@ static int nfs4_xdr_enc_remove(struct rpc_rqst *req, __be32 *p, const struct nfs
 	encode_compound_hdr(&xdr, &hdr);
 	if ((status = encode_putfh(&xdr, args->fh)) != 0)
 		goto out;
-	if ((status = encode_remove(&xdr, args->name)) != 0)
+	if ((status = encode_remove(&xdr, &args->name)) != 0)
 		goto out;
 	status = encode_getfattr(&xdr, args->bitmask);
 out:
@@ -1696,6 +1778,8 @@ static int nfs4_xdr_enc_readlink(struct rpc_rqst *req, __be32 *p, const struct n
 	struct compound_hdr hdr = {
 		.nops = 2,
 	};
+	struct rpc_auth *auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
+	unsigned int replen;
 	int status;
 
 	xdr_init_encode(&xdr, &req->rq_snd_buf, p);
@@ -1704,6 +1788,15 @@ static int nfs4_xdr_enc_readlink(struct rpc_rqst *req, __be32 *p, const struct n
 	if(status)
 		goto out;
 	status = encode_readlink(&xdr, args, req);
+
+	/* set up reply kvec
+	 *    toplevel_status + taglen + rescount + OP_PUTFH + status
+	 *      + OP_READLINK + status + string length = 8
+	 */
+	replen = (RPC_REPHDRSIZE + auth->au_rslack + NFS4_dec_readlink_sz) << 2;
+	xdr_inline_pages(&req->rq_rcv_buf, replen, args->pages,
+			args->pgbase, args->pglen);
+
 out:
 	return status;
 }
@@ -1717,6 +1810,8 @@ static int nfs4_xdr_enc_readdir(struct rpc_rqst *req, __be32 *p, const struct nf
 	struct compound_hdr hdr = {
 		.nops = 2,
 	};
+	struct rpc_auth *auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
+	int replen;
 	int status;
 
 	xdr_init_encode(&xdr, &req->rq_snd_buf, p);
@@ -1725,6 +1820,18 @@ static int nfs4_xdr_enc_readdir(struct rpc_rqst *req, __be32 *p, const struct nf
 	if(status)
 		goto out;
 	status = encode_readdir(&xdr, args, req);
+
+	/* set up reply kvec
+	 *    toplevel_status + taglen + rescount + OP_PUTFH + status
+	 *      + OP_READDIR + status + verifer(2)  = 9
+	 */
+	replen = (RPC_REPHDRSIZE + auth->au_rslack + NFS4_dec_readdir_sz) << 2;
+	xdr_inline_pages(&req->rq_rcv_buf, replen, args->pages,
+			 args->pgbase, args->count);
+	dprintk("%s: inlined page args = (%u, %p, %u, %u)\n",
+			__FUNCTION__, replen, args->pages,
+			args->pgbase, args->count);
+
 out:
 	return status;
 }
@@ -1734,7 +1841,7 @@ out:
  */
 static int nfs4_xdr_enc_read(struct rpc_rqst *req, __be32 *p, struct nfs_readargs *args)
 {
-	struct rpc_auth	*auth = req->rq_task->tk_auth;
+	struct rpc_auth *auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	struct xdr_stream xdr;
 	struct compound_hdr hdr = {
 		.nops = 2,
@@ -1757,6 +1864,7 @@ static int nfs4_xdr_enc_read(struct rpc_rqst *req, __be32 *p, struct nfs_readarg
 	replen = (RPC_REPHDRSIZE + auth->au_rslack + NFS4_dec_read_sz) << 2;
 	xdr_inline_pages(&req->rq_rcv_buf, replen,
 			 args->pages, args->pgbase, args->count);
+	req->rq_rcv_buf.flags |= XDRBUF_READ;
 out:
 	return status;
 }
@@ -1794,7 +1902,7 @@ nfs4_xdr_enc_getacl(struct rpc_rqst *req, __be32 *p,
 		struct nfs_getaclargs *args)
 {
 	struct xdr_stream xdr;
-	struct rpc_auth *auth = req->rq_task->tk_auth;
+	struct rpc_auth *auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	struct compound_hdr hdr = {
 		.nops   = 2,
 	};
@@ -1833,6 +1941,7 @@ static int nfs4_xdr_enc_write(struct rpc_rqst *req, __be32 *p, struct nfs_writea
 	status = encode_write(&xdr, args);
 	if (status)
 		goto out;
+	req->rq_snd_buf.flags |= XDRBUF_WRITE;
 	status = encode_getfattr(&xdr, args->bitmask);
 out:
 	return status;
@@ -2029,7 +2138,7 @@ static int nfs4_xdr_enc_fs_locations(struct rpc_rqst *req, __be32 *p, struct nfs
 	struct compound_hdr hdr = {
 		.nops = 3,
 	};
-	struct rpc_auth *auth = req->rq_task->tk_auth;
+	struct rpc_auth *auth = req->rq_task->tk_msg.rpc_cred->cr_auth;
 	int replen;
 	int status;
 
@@ -2079,9 +2188,11 @@ out:
 
 #define READ_BUF(nbytes)  do { \
 	p = xdr_inline_decode(xdr, nbytes); \
-	if (!p) { \
-		printk(KERN_WARNING "%s: reply buffer overflowed in line %d.", \
-			       	__FUNCTION__, __LINE__); \
+	if (unlikely(!p)) { \
+		dprintk("nfs: %s: prematurely hit end of receive" \
+				" buffer\n", __FUNCTION__); \
+		dprintk("nfs: %s: xdr->p=%p, bytes=%u, xdr->end=%p\n", \
+				__FUNCTION__, xdr->p, nbytes, xdr->end); \
 		return -EIO; \
 	} \
 } while (0)
@@ -2121,9 +2232,8 @@ static int decode_op_hdr(struct xdr_stream *xdr, enum nfs_opnum4 expected)
 	READ_BUF(8);
 	READ32(opnum);
 	if (opnum != expected) {
-		printk(KERN_NOTICE
-				"nfs4_decode_op_hdr: Server returned operation"
-			       	" %d but we issued a request for %d\n",
+		dprintk("nfs: Server returned operation"
+			" %d but we issued a request for %d\n",
 				opnum, expected);
 		return -EIO;
 	}
@@ -2491,7 +2601,7 @@ static int decode_attr_fs_locations(struct xdr_stream *xdr, uint32_t *bitmap, st
 				int i;
 				dprintk("%s: using first %d of %d servers returned for location %d\n", __FUNCTION__, NFS4_FS_LOCATION_MAXSERVERS, m, res->nlocations);
 				for (i = loc->nservers; i < m; i++) {
-					int len;
+					unsigned int len;
 					char *data;
 					status = decode_opaque_inline(xdr, &len, &data);
 					if (unlikely(status != 0))
@@ -2639,7 +2749,7 @@ static int decode_attr_nlink(struct xdr_stream *xdr, uint32_t *bitmap, uint32_t 
 	return 0;
 }
 
-static int decode_attr_owner(struct xdr_stream *xdr, uint32_t *bitmap, struct nfs_client *clp, int32_t *uid)
+static int decode_attr_owner(struct xdr_stream *xdr, uint32_t *bitmap, struct nfs_client *clp, uint32_t *uid)
 {
 	uint32_t len;
 	__be32 *p;
@@ -2656,7 +2766,7 @@ static int decode_attr_owner(struct xdr_stream *xdr, uint32_t *bitmap, struct nf
 				dprintk("%s: nfs_map_name_to_uid failed!\n",
 						__FUNCTION__);
 		} else
-			printk(KERN_WARNING "%s: name too long (%u)!\n",
+			dprintk("%s: name too long (%u)!\n",
 					__FUNCTION__, len);
 		bitmap[1] &= ~FATTR4_WORD1_OWNER;
 	}
@@ -2664,7 +2774,7 @@ static int decode_attr_owner(struct xdr_stream *xdr, uint32_t *bitmap, struct nf
 	return 0;
 }
 
-static int decode_attr_group(struct xdr_stream *xdr, uint32_t *bitmap, struct nfs_client *clp, int32_t *gid)
+static int decode_attr_group(struct xdr_stream *xdr, uint32_t *bitmap, struct nfs_client *clp, uint32_t *gid)
 {
 	uint32_t len;
 	__be32 *p;
@@ -2681,7 +2791,7 @@ static int decode_attr_group(struct xdr_stream *xdr, uint32_t *bitmap, struct nf
 				dprintk("%s: nfs_map_group_to_gid failed!\n",
 						__FUNCTION__);
 		} else
-			printk(KERN_WARNING "%s: name too long (%u)!\n",
+			dprintk("%s: name too long (%u)!\n",
 					__FUNCTION__, len);
 		bitmap[1] &= ~FATTR4_WORD1_OWNER_GROUP;
 	}
@@ -2848,7 +2958,8 @@ static int verify_attr_len(struct xdr_stream *xdr, __be32 *savep, uint32_t attrl
 	unsigned int nwords = xdr->p - savep;
 
 	if (unlikely(attrwords != nwords)) {
-		printk(KERN_WARNING "%s: server returned incorrect attribute length: %u %c %u\n",
+		dprintk("%s: server returned incorrect attribute length: "
+			"%u %c %u\n",
 				__FUNCTION__,
 				attrwords << 2,
 				(attrwords < nwords) ? '<' : '>',
@@ -2894,8 +3005,8 @@ static int decode_close(struct xdr_stream *xdr, struct nfs_closeres *res)
 	status = decode_op_hdr(xdr, OP_CLOSE);
 	if (status)
 		return status;
-	READ_BUF(sizeof(res->stateid.data));
-	COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+	READ_BUF(NFS4_STATEID_SIZE);
+	COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
 	return 0;
 }
 
@@ -3121,11 +3232,12 @@ static int decode_getfh(struct xdr_stream *xdr, struct nfs_fh *fh)
 	uint32_t len;
 	int status;
 
+	/* Zero handle first to allow comparisons */
+	memset(fh, 0, sizeof(*fh));
+
 	status = decode_op_hdr(xdr, OP_GETFH);
 	if (status)
 		return status;
-	/* Zero handle first to allow comparisons */
-	memset(fh, 0, sizeof(*fh));
 
 	READ_BUF(4);
 	READ32(len);
@@ -3183,8 +3295,8 @@ static int decode_lock(struct xdr_stream *xdr, struct nfs_lock_res *res)
 
 	status = decode_op_hdr(xdr, OP_LOCK);
 	if (status == 0) {
-		READ_BUF(sizeof(res->stateid.data));
-		COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+		READ_BUF(NFS4_STATEID_SIZE);
+		COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
 	} else if (status == -NFS4ERR_DENIED)
 		return decode_lock_denied(xdr, NULL);
 	return status;
@@ -3206,8 +3318,8 @@ static int decode_locku(struct xdr_stream *xdr, struct nfs_locku_res *res)
 
 	status = decode_op_hdr(xdr, OP_LOCKU);
 	if (status == 0) {
-		READ_BUF(sizeof(res->stateid.data));
-		COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+		READ_BUF(NFS4_STATEID_SIZE);
+		COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
 	}
 	return status;
 }
@@ -3248,8 +3360,8 @@ static int decode_delegation(struct xdr_stream *xdr, struct nfs_openres *res)
 		res->delegation_type = 0;
 		return 0;
 	}
-	READ_BUF(20);
-	COPYMEM(res->delegation.data, sizeof(res->delegation.data));
+	READ_BUF(NFS4_STATEID_SIZE+4);
+	COPYMEM(res->delegation.data, NFS4_STATEID_SIZE);
 	READ32(res->do_recall);
 	switch (delegation_type) {
 		case NFS4_OPEN_DELEGATE_READ:
@@ -3266,14 +3378,14 @@ static int decode_delegation(struct xdr_stream *xdr, struct nfs_openres *res)
 static int decode_open(struct xdr_stream *xdr, struct nfs_openres *res)
 {
         __be32 *p;
-        uint32_t bmlen;
+	uint32_t savewords, bmlen, i;
         int status;
 
         status = decode_op_hdr(xdr, OP_OPEN);
         if (status)
                 return status;
-        READ_BUF(sizeof(res->stateid.data));
-        COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+        READ_BUF(NFS4_STATEID_SIZE);
+        COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
 
         decode_change_info(xdr, &res->cinfo);
 
@@ -3284,7 +3396,12 @@ static int decode_open(struct xdr_stream *xdr, struct nfs_openres *res)
                 goto xdr_error;
 
         READ_BUF(bmlen << 2);
-        p += bmlen;
+	savewords = min_t(uint32_t, bmlen, NFS4_BITMAP_SIZE);
+	for (i = 0; i < savewords; ++i)
+		READ32(res->attrset[i]);
+	for (; i < NFS4_BITMAP_SIZE; i++)
+		res->attrset[i] = 0;
+
 	return decode_delegation(xdr, res);
 xdr_error:
 	dprintk("%s: Bitmap too large! Length = %u\n", __FUNCTION__, bmlen);
@@ -3299,8 +3416,8 @@ static int decode_open_confirm(struct xdr_stream *xdr, struct nfs_open_confirmre
         status = decode_op_hdr(xdr, OP_OPEN_CONFIRM);
         if (status)
                 return status;
-        READ_BUF(sizeof(res->stateid.data));
-        COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+        READ_BUF(NFS4_STATEID_SIZE);
+        COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
         return 0;
 }
 
@@ -3312,8 +3429,8 @@ static int decode_open_downgrade(struct xdr_stream *xdr, struct nfs_closeres *re
 	status = decode_op_hdr(xdr, OP_OPEN_DOWNGRADE);
 	if (status)
 		return status;
-	READ_BUF(sizeof(res->stateid.data));
-	COPYMEM(res->stateid.data, sizeof(res->stateid.data));
+	READ_BUF(NFS4_STATEID_SIZE);
+	COPYMEM(res->stateid.data, NFS4_STATEID_SIZE);
 	return 0;
 }
 
@@ -3343,7 +3460,7 @@ static int decode_read(struct xdr_stream *xdr, struct rpc_rqst *req, struct nfs_
 	hdrlen = (u8 *) p - (u8 *) iov->iov_base;
 	recvd = req->rq_rcv_buf.len - hdrlen;
 	if (count > recvd) {
-		printk(KERN_WARNING "NFS: server cheating in read reply: "
+		dprintk("NFS: server cheating in read reply: "
 				"count %u > recvd %u\n", count, recvd);
 		count = recvd;
 		eof = 0;
@@ -3392,7 +3509,8 @@ static int decode_readdir(struct xdr_stream *xdr, struct rpc_rqst *req, struct n
 		p += 2;			/* cookie */
 		len = ntohl(*p++);	/* filename length */
 		if (len > NFS4_MAXNAMLEN) {
-			printk(KERN_WARNING "NFS: giant filename in readdir (len 0x%x)\n", len);
+			dprintk("NFS: giant filename in readdir (len 0x%x)\n",
+					len);
 			goto err_unmap;
 		}
 		xlen = XDR_QUADLEN(len);
@@ -3420,7 +3538,7 @@ short_pkt:
 	entry[0] = entry[1] = 0;
 	/* truncate listing ? */
 	if (!nr) {
-		printk(KERN_NOTICE "NFS: readdir reply truncated!\n");
+		dprintk("NFS: readdir reply truncated!\n");
 		entry[1] = 1;
 	}
 	goto out;
@@ -3446,13 +3564,13 @@ static int decode_readlink(struct xdr_stream *xdr, struct rpc_rqst *req)
 	READ_BUF(4);
 	READ32(len);
 	if (len >= rcvbuf->page_len || len <= 0) {
-		dprintk(KERN_WARNING "nfs: server returned giant symlink!\n");
+		dprintk("nfs: server returned giant symlink!\n");
 		return -ENAMETOOLONG;
 	}
 	hdrlen = (char *) xdr->p - (char *) iov->iov_base;
 	recvd = req->rq_rcv_buf.len - hdrlen;
 	if (recvd < len) {
-		printk(KERN_WARNING "NFS: server cheating in readlink reply: "
+		dprintk("NFS: server cheating in readlink reply: "
 				"count %u > recvd %u\n", len, recvd);
 		return -EIO;
 	}
@@ -3535,7 +3653,7 @@ static int decode_getacl(struct xdr_stream *xdr, struct rpc_rqst *req,
 		hdrlen = (u8 *)xdr->p - (u8 *)iov->iov_base;
 		recvd = req->rq_rcv_buf.len - hdrlen;
 		if (attrlen > recvd) {
-			printk(KERN_WARNING "NFS: server cheating in getattr"
+			dprintk("NFS: server cheating in getattr"
 					" acl reply: attrlen %u > recvd %u\n",
 					attrlen, recvd);
 			return -EINVAL;
@@ -3580,16 +3698,15 @@ static int decode_setclientid(struct xdr_stream *xdr, struct nfs_client *clp)
 	READ_BUF(8);
 	READ32(opnum);
 	if (opnum != OP_SETCLIENTID) {
-		printk(KERN_NOTICE
-				"nfs4_decode_setclientid: Server returned operation"
+		dprintk("nfs: decode_setclientid: Server returned operation"
 			       	" %d\n", opnum);
 		return -EIO;
 	}
 	READ32(nfserr);
 	if (nfserr == NFS_OK) {
-		READ_BUF(8 + sizeof(clp->cl_confirm.data));
+		READ_BUF(8 + NFS4_VERIFIER_SIZE);
 		READ64(clp->cl_clientid);
-		COPYMEM(clp->cl_confirm.data, sizeof(clp->cl_confirm.data));
+		COPYMEM(clp->cl_confirm.data, NFS4_VERIFIER_SIZE);
 	} else if (nfserr == NFSERR_CLID_INUSE) {
 		uint32_t len;
 
@@ -3675,8 +3792,13 @@ static int nfs4_xdr_dec_access(struct rpc_rqst *rqstp, __be32 *p, struct nfs4_ac
 	xdr_init_decode(&xdr, &rqstp->rq_rcv_buf, p);
 	if ((status = decode_compound_hdr(&xdr, &hdr)) != 0)
 		goto out;
-	if ((status = decode_putfh(&xdr)) == 0)
-		status = decode_access(&xdr, res);
+	status = decode_putfh(&xdr);
+	if (status != 0)
+		goto out;
+	status = decode_access(&xdr, res);
+	if (status != 0)
+		goto out;
+	decode_getfattr(&xdr, res->fattr, res->server);
 out:
 	return status;
 }
@@ -3727,7 +3849,7 @@ out:
 /*
  * Decode REMOVE response
  */
-static int nfs4_xdr_dec_remove(struct rpc_rqst *rqstp, __be32 *p, struct nfs4_remove_res *res)
+static int nfs4_xdr_dec_remove(struct rpc_rqst *rqstp, __be32 *p, struct nfs_removeres *res)
 {
 	struct xdr_stream xdr;
 	struct compound_hdr hdr;
@@ -3740,7 +3862,7 @@ static int nfs4_xdr_dec_remove(struct rpc_rqst *rqstp, __be32 *p, struct nfs4_re
 		goto out;
 	if ((status = decode_remove(&xdr, &res->cinfo)) != 0)
 		goto out;
-	decode_getfattr(&xdr, res->dir_attr, res->server);
+	decode_getfattr(&xdr, &res->dir_attr, res->server);
 out:
 	return status;
 }
@@ -3985,12 +4107,11 @@ static int nfs4_xdr_dec_open(struct rpc_rqst *rqstp, __be32 *p, struct nfs_openr
         status = decode_open(&xdr, res);
         if (status)
                 goto out;
-	status = decode_getfh(&xdr, &res->fh);
-        if (status)
+	if (decode_getfh(&xdr, &res->fh) != 0)
 		goto out;
 	if (decode_getfattr(&xdr, res->f_attr, res->server) != 0)
 		goto out;
-	if ((status = decode_restorefh(&xdr)) != 0)
+	if (decode_restorefh(&xdr) != 0)
 		goto out;
 	decode_getfattr(&xdr, res->dir_attr, res->server);
 out:
@@ -4546,16 +4667,13 @@ nfs4_stat_to_errno(int stat)
 	return stat;
 }
 
-#ifndef MAX
-# define MAX(a, b)	(((a) > (b))? (a) : (b))
-#endif
-
 #define PROC(proc, argtype, restype)				\
 [NFSPROC4_CLNT_##proc] = {					\
 	.p_proc   = NFSPROC4_COMPOUND,				\
 	.p_encode = (kxdrproc_t) nfs4_xdr_##argtype,		\
 	.p_decode = (kxdrproc_t) nfs4_xdr_##restype,		\
-	.p_bufsiz = MAX(NFS4_##argtype##_sz,NFS4_##restype##_sz) << 2,	\
+	.p_arglen = NFS4_##argtype##_sz,			\
+	.p_replen = NFS4_##restype##_sz,			\
 	.p_statidx = NFSPROC4_CLNT_##proc,			\
 	.p_name   = #proc,					\
     }

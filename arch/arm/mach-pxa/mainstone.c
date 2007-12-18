@@ -46,6 +46,7 @@
 #include <asm/arch/ohci.h>
 
 #include "generic.h"
+#include "devices.h"
 
 
 static unsigned long mainstone_irq_enabled;
@@ -89,7 +90,7 @@ static void __init mainstone_init_irq(void)
 {
 	int irq;
 
-	pxa_init_irq();
+	pxa27x_init_irq();
 
 	/* setup extra Mainstone irqs */
 	for(irq = MAINSTONE_IRQ(0); irq <= MAINSTONE_IRQ(15); irq++) {
@@ -266,7 +267,7 @@ static void mainstone_backlight_power(int on)
 {
 	if (on) {
 		pxa_gpio_mode(GPIO16_PWM0_MD);
-		pxa_set_cken(CKEN0_PWM0, 1);
+		pxa_set_cken(CKEN_PWM0, 1);
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x3ff;
 		PWM_PERVAL0 = 0x3ff;
@@ -274,7 +275,7 @@ static void mainstone_backlight_power(int on)
 		PWM_CTRL0 = 0;
 		PWM_PWDUTY0 = 0x0;
 		PWM_PERVAL0 = 0x3FF;
-		pxa_set_cken(CKEN0_PWM0, 0);
+		pxa_set_cken(CKEN_PWM0, 0);
 	}
 }
 
@@ -442,6 +443,25 @@ static void __init mainstone_init(void)
 	 * the audio daughter card
 	 */
 	pxa_gpio_mode(GPIO45_SYSCLK_AC97_MD);
+
+	GPSR(GPIO48_nPOE) =
+		GPIO_bit(GPIO48_nPOE) |
+		GPIO_bit(GPIO49_nPWE) |
+		GPIO_bit(GPIO50_nPIOR) |
+		GPIO_bit(GPIO51_nPIOW) |
+		GPIO_bit(GPIO85_nPCE_1) |
+		GPIO_bit(GPIO54_nPCE_2);
+
+	pxa_gpio_mode(GPIO48_nPOE_MD);
+	pxa_gpio_mode(GPIO49_nPWE_MD);
+	pxa_gpio_mode(GPIO50_nPIOR_MD);
+	pxa_gpio_mode(GPIO51_nPIOW_MD);
+	pxa_gpio_mode(GPIO85_nPCE_1_MD);
+	pxa_gpio_mode(GPIO54_nPCE_2_MD);
+	pxa_gpio_mode(GPIO79_pSKTSEL_MD);
+	pxa_gpio_mode(GPIO55_nPREG_MD);
+	pxa_gpio_mode(GPIO56_nPWAIT_MD);
+	pxa_gpio_mode(GPIO57_nIOIS16_MD);
 
 	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
 

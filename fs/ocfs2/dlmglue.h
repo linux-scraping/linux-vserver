@@ -29,12 +29,12 @@
 
 #include "dcache.h"
 
-#define OCFS2_LVB_VERSION 4
+#define OCFS2_LVB_VERSION 5
 
 struct ocfs2_meta_lvb {
 	__u8         lvb_version;
 	__u8         lvb_reserved0;
-	__be16       lvb_itag;
+	__be16       lvb_idynfeatures;
 	__be32       lvb_iclusters;
 	__be32       lvb_iuid;
 	__be32       lvb_igid;
@@ -46,7 +46,8 @@ struct ocfs2_meta_lvb {
 	__be16       lvb_inlink;
 	__be32       lvb_iattr;
 	__be32       lvb_igeneration;
-	__be32       lvb_reserved2;
+	__be16       lvb_itag;
+	__be16       lvb_reserved2;
 };
 
 /* ocfs2_meta_lock_full() and ocfs2_data_lock_full() 'arg_flags' flags */
@@ -80,6 +81,9 @@ void ocfs2_data_unlock(struct inode *inode,
 		       int write);
 int ocfs2_rw_lock(struct inode *inode, int write);
 void ocfs2_rw_unlock(struct inode *inode, int write);
+int ocfs2_open_lock(struct inode *inode);
+int ocfs2_try_open_lock(struct inode *inode, int write);
+void ocfs2_open_unlock(struct inode *inode);
 int ocfs2_meta_lock_atime(struct inode *inode,
 			  struct vfsmount *vfsmnt,
 			  int *level);
@@ -115,12 +119,5 @@ void ocfs2_process_blocked_lock(struct ocfs2_super *osb,
 
 struct ocfs2_dlm_debug *ocfs2_new_dlm_debug(void);
 void ocfs2_put_dlm_debug(struct ocfs2_dlm_debug *dlm_debug);
-
-/* aids in debugging and tracking lvbs */
-void ocfs2_dump_meta_lvb_info(u64 level,
-			      const char *function,
-			      unsigned int line,
-			      struct ocfs2_lock_res *lockres);
-#define mlog_meta_lvb(__level, __lockres) ocfs2_dump_meta_lvb_info(__level, __PRETTY_FUNCTION__, __LINE__, __lockres)
 
 #endif	/* DLMGLUE_H */

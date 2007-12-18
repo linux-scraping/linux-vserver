@@ -1,4 +1,4 @@
-/* linux/arch/arm/mach-s3c2410/s3c2410-sleep.S
+/* linux/arch/arm/mach-s3c2410/sleep.S
  *
  * Copyright (c) 2004 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
@@ -32,7 +32,7 @@
 #include <asm/arch/regs-gpio.h>
 #include <asm/arch/regs-clock.h>
 #include <asm/arch/regs-mem.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 
 	/* s3c2410_cpu_suspend
 	 *

@@ -19,17 +19,15 @@
 #include <linux/time.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
+#include <linux/log2.h>
 
 #define DM_MSG_PREFIX "raid1"
+#define DM_IO_PAGES 64
 
-static struct workqueue_struct *_kmirrord_wq;
-static struct work_struct _kmirrord_work;
+#define DM_RAID1_HANDLE_ERRORS 0x01
+#define errors_handled(p)	((p)->features & DM_RAID1_HANDLE_ERRORS)
+
 static DECLARE_WAIT_QUEUE_HEAD(_kmirrord_recovery_stopped);
-
-static inline void wake(void)
-{
-	queue_work(_kmirrord_wq, &_kmirrord_work);
-}
 
 /*-----------------------------------------------------------------
  * Region hash
@@ -89,6 +87,7 @@ struct region_hash {
 	struct list_head clean_regions;
 	struct list_head quiesced_regions;
 	struct list_head recovered_regions;
+	struct list_head failed_recovered_regions;
 };
 
 enum {
@@ -115,6 +114,7 @@ struct region {
  * Mirror set structures.
  *---------------------------------------------------------------*/
 struct mirror {
+	struct mirror_set *ms;
 	atomic_t error_count;
 	struct dm_dev *dev;
 	sector_t offset;
@@ -125,16 +125,23 @@ struct mirror_set {
 	struct list_head list;
 	struct region_hash rh;
 	struct kcopyd_client *kcopyd_client;
+	uint64_t features;
 
 	spinlock_t lock;	/* protects the next two lists */
 	struct bio_list reads;
 	struct bio_list writes;
 
+	struct dm_io_client *io_client;
+
 	/* recovery */
 	region_t nr_regions;
 	int in_sync;
+	int log_failure;
 
 	struct mirror *default_mirror;	/* Default mirror */
+
+	struct workqueue_struct *kmirrord_wq;
+	struct work_struct kmirrord_work;
 
 	unsigned int nr_mirrors;
 	struct mirror mirror[0];
@@ -151,6 +158,11 @@ static inline region_t bio_to_region(struct region_hash *rh, struct bio *bio)
 static inline sector_t region_to_sector(struct region_hash *rh, region_t region)
 {
 	return region << rh->region_shift;
+}
+
+static void wake(struct mirror_set *ms)
+{
+	queue_work(ms->kmirrord_wq, &ms->kmirrord_work);
 }
 
 /* FIXME move this */
@@ -197,6 +209,7 @@ static int rh_init(struct region_hash *rh, struct mirror_set *ms,
 	INIT_LIST_HEAD(&rh->clean_regions);
 	INIT_LIST_HEAD(&rh->quiesced_regions);
 	INIT_LIST_HEAD(&rh->recovered_regions);
+	INIT_LIST_HEAD(&rh->failed_recovered_regions);
 
 	rh->region_pool = mempool_create_kmalloc_pool(MIN_REGIONS,
 						      sizeof(struct region));
@@ -361,6 +374,7 @@ static void rh_update_states(struct region_hash *rh)
 
 	LIST_HEAD(clean);
 	LIST_HEAD(recovered);
+	LIST_HEAD(failed_recovered);
 
 	/*
 	 * Quickly grab the lists.
@@ -371,10 +385,8 @@ static void rh_update_states(struct region_hash *rh)
 		list_splice(&rh->clean_regions, &clean);
 		INIT_LIST_HEAD(&rh->clean_regions);
 
-		list_for_each_entry (reg, &clean, list) {
-			rh->log->type->clear_region(rh->log, reg->key);
+		list_for_each_entry(reg, &clean, list)
 			list_del(&reg->hash_list);
-		}
 	}
 
 	if (!list_empty(&rh->recovered_regions)) {
@@ -384,6 +396,15 @@ static void rh_update_states(struct region_hash *rh)
 		list_for_each_entry (reg, &recovered, list)
 			list_del(&reg->hash_list);
 	}
+
+	if (!list_empty(&rh->failed_recovered_regions)) {
+		list_splice(&rh->failed_recovered_regions, &failed_recovered);
+		INIT_LIST_HEAD(&rh->failed_recovered_regions);
+
+		list_for_each_entry(reg, &failed_recovered, list)
+			list_del(&reg->hash_list);
+	}
+
 	spin_unlock(&rh->region_lock);
 	write_unlock_irq(&rh->hash_lock);
 
@@ -398,11 +419,17 @@ static void rh_update_states(struct region_hash *rh)
 		mempool_free(reg, rh->region_pool);
 	}
 
-	if (!list_empty(&recovered))
-		rh->log->type->flush(rh->log);
-
-	list_for_each_entry_safe (reg, next, &clean, list)
+	list_for_each_entry_safe(reg, next, &failed_recovered, list) {
+		complete_resync_work(reg, errors_handled(rh->ms) ? 0 : 1);
 		mempool_free(reg, rh->region_pool);
+	}
+
+	list_for_each_entry_safe(reg, next, &clean, list) {
+		rh->log->type->clear_region(rh->log, reg->key);
+		mempool_free(reg, rh->region_pool);
+	}
+
+	rh->log->type->flush(rh->log);
 }
 
 static void rh_inc(struct region_hash *rh, region_t region)
@@ -471,7 +498,7 @@ static void rh_dec(struct region_hash *rh, region_t region)
 	spin_unlock_irqrestore(&rh->region_lock, flags);
 
 	if (should_wake)
-		wake();
+		wake(rh->ms);
 }
 
 /*
@@ -549,21 +576,25 @@ static struct region *rh_recovery_start(struct region_hash *rh)
 	return reg;
 }
 
-/* FIXME: success ignored for now */
 static void rh_recovery_end(struct region *reg, int success)
 {
 	struct region_hash *rh = reg->rh;
 
 	spin_lock_irq(&rh->region_lock);
-	list_add(&reg->list, &reg->rh->recovered_regions);
+	if (success)
+		list_add(&reg->list, &reg->rh->recovered_regions);
+	else {
+		reg->state = RH_NOSYNC;
+		list_add(&reg->list, &reg->rh->failed_recovered_regions);
+	}
 	spin_unlock_irq(&rh->region_lock);
 
-	wake();
+	wake(rh->ms);
 }
 
-static void rh_flush(struct region_hash *rh)
+static int rh_flush(struct region_hash *rh)
 {
-	rh->log->type->flush(rh->log);
+	return rh->log->type->flush(rh->log);
 }
 
 static void rh_delay(struct region_hash *rh, struct bio *bio)
@@ -592,7 +623,7 @@ static void rh_start_recovery(struct region_hash *rh)
 	for (i = 0; i < MAX_RECOVERY; i++)
 		up(&rh->recovery_count);
 
-	wake();
+	wake(rh->ms);
 }
 
 /*
@@ -627,7 +658,14 @@ static void recovery_complete(int read_err, unsigned int write_err,
 {
 	struct region *reg = (struct region *) context;
 
-	/* FIXME: better error handling */
+	if (read_err)
+		/* Read error means the failure of default mirror. */
+		DMERR_LIMIT("Unable to read primary mirror during recovery");
+
+	if (write_err)
+		DMERR_LIMIT("Write error during recovery (error = 0x%x)",
+			    write_err);
+
 	rh_recovery_end(reg, !(read_err || write_err));
 }
 
@@ -735,7 +773,7 @@ static void do_reads(struct mirror_set *ms, struct bio_list *reads)
 		/*
 		 * We can only read balance if the region is in sync.
 		 */
-		if (rh_in_sync(&ms->rh, region, 0))
+		if (rh_in_sync(&ms->rh, region, 1))
 			m = choose_mirror(ms, bio->bi_sector);
 		else
 			m = ms->default_mirror;
@@ -784,7 +822,7 @@ static void write_callback(unsigned long error, void *context)
 				break;
 			}
 	}
-	bio_endio(bio, bio->bi_size, 0);
+	bio_endio(bio, 0);
 }
 
 static void do_write(struct mirror_set *ms, struct bio *bio)
@@ -792,6 +830,14 @@ static void do_write(struct mirror_set *ms, struct bio *bio)
 	unsigned int i;
 	struct io_region io[KCOPYD_MAX_REGIONS+1];
 	struct mirror *m;
+	struct dm_io_request io_req = {
+		.bi_rw = WRITE,
+		.mem.type = DM_IO_BVEC,
+		.mem.ptr.bvec = bio->bi_io_vec + bio->bi_idx,
+		.notify.fn = write_callback,
+		.notify.context = bio,
+		.client = ms->io_client,
+	};
 
 	for (i = 0; i < ms->nr_mirrors; i++) {
 		m = ms->mirror + i;
@@ -802,9 +848,8 @@ static void do_write(struct mirror_set *ms, struct bio *bio)
 	}
 
 	bio_set_ms(bio, ms);
-	dm_io_async_bvec(ms->nr_mirrors, io, WRITE,
-			 bio->bi_io_vec + bio->bi_idx,
-			 write_callback, bio);
+
+	(void) dm_io(&io_req, ms->nr_mirrors, io, NULL);
 }
 
 static void do_writes(struct mirror_set *ms, struct bio_list *writes)
@@ -850,12 +895,15 @@ static void do_writes(struct mirror_set *ms, struct bio_list *writes)
 	 */
 	rh_inc_pending(&ms->rh, &sync);
 	rh_inc_pending(&ms->rh, &nosync);
-	rh_flush(&ms->rh);
+	ms->log_failure = rh_flush(&ms->rh) ? 1 : 0;
 
 	/*
 	 * Dispatch io.
 	 */
-	while ((bio = bio_list_pop(&sync)))
+	if (unlikely(ms->log_failure))
+		while ((bio = bio_list_pop(&sync)))
+			bio_endio(bio, -EIO);
+	else while ((bio = bio_list_pop(&sync)))
 		do_write(ms, bio);
 
 	while ((bio = bio_list_pop(&recover)))
@@ -870,11 +918,10 @@ static void do_writes(struct mirror_set *ms, struct bio_list *writes)
 /*-----------------------------------------------------------------
  * kmirrord
  *---------------------------------------------------------------*/
-static LIST_HEAD(_mirror_sets);
-static DECLARE_RWSEM(_mirror_sets_lock);
-
-static void do_mirror(struct mirror_set *ms)
+static void do_mirror(struct work_struct *work)
 {
+	struct mirror_set *ms =container_of(work, struct mirror_set,
+					    kmirrord_work);
 	struct bio_list reads, writes;
 
 	spin_lock(&ms->lock);
@@ -888,16 +935,6 @@ static void do_mirror(struct mirror_set *ms)
 	do_recovery(ms);
 	do_reads(ms, &reads);
 	do_writes(ms, &writes);
-}
-
-static void do_work(struct work_struct *ignored)
-{
-	struct mirror_set *ms;
-
-	down_read(&_mirror_sets_lock);
-	list_for_each_entry (ms, &_mirror_sets, list)
-		do_mirror(ms);
-	up_read(&_mirror_sets_lock);
 }
 
 /*-----------------------------------------------------------------
@@ -916,13 +953,12 @@ static struct mirror_set *alloc_context(unsigned int nr_mirrors,
 
 	len = sizeof(*ms) + (sizeof(ms->mirror[0]) * nr_mirrors);
 
-	ms = kmalloc(len, GFP_KERNEL);
+	ms = kzalloc(len, GFP_KERNEL);
 	if (!ms) {
 		ti->error = "Cannot allocate mirror context";
 		return NULL;
 	}
 
-	memset(ms, 0, len);
 	spin_lock_init(&ms->lock);
 
 	ms->ti = ti;
@@ -931,8 +967,16 @@ static struct mirror_set *alloc_context(unsigned int nr_mirrors,
 	ms->in_sync = 0;
 	ms->default_mirror = &ms->mirror[DEFAULT_MIRROR];
 
+	ms->io_client = dm_io_client_create(DM_IO_PAGES);
+	if (IS_ERR(ms->io_client)) {
+		ti->error = "Error creating dm_io client";
+		kfree(ms);
+ 		return NULL;
+	}
+
 	if (rh_init(&ms->rh, ms, dl, region_size, ms->nr_regions)) {
 		ti->error = "Error creating dirty region hash";
+		dm_io_client_destroy(ms->io_client);
 		kfree(ms);
 		return NULL;
 	}
@@ -946,13 +990,14 @@ static void free_context(struct mirror_set *ms, struct dm_target *ti,
 	while (m--)
 		dm_put_device(ti, ms->mirror[m].dev);
 
+	dm_io_client_destroy(ms->io_client);
 	rh_exit(&ms->rh);
 	kfree(ms);
 }
 
 static inline int _check_region_size(struct dm_target *ti, uint32_t size)
 {
-	return !(size % (PAGE_SIZE >> 9) || (size & (size - 1)) ||
+	return !(size % (PAGE_SIZE >> 9) || !is_power_of_2(size) ||
 		 size > ti->len);
 }
 
@@ -973,26 +1018,10 @@ static int get_mirror(struct mirror_set *ms, struct dm_target *ti,
 		return -ENXIO;
 	}
 
+	ms->mirror[mirror].ms = ms;
 	ms->mirror[mirror].offset = offset;
 
 	return 0;
-}
-
-static int add_mirror_set(struct mirror_set *ms)
-{
-	down_write(&_mirror_sets_lock);
-	list_add_tail(&ms->list, &_mirror_sets);
-	up_write(&_mirror_sets_lock);
-	wake();
-
-	return 0;
-}
-
-static void del_mirror_set(struct mirror_set *ms)
-{
-	down_write(&_mirror_sets_lock);
-	list_del(&ms->list);
-	up_write(&_mirror_sets_lock);
 }
 
 /*
@@ -1037,16 +1066,55 @@ static struct dirty_log *create_dirty_log(struct dm_target *ti,
 	return dl;
 }
 
+static int parse_features(struct mirror_set *ms, unsigned argc, char **argv,
+			  unsigned *args_used)
+{
+	unsigned num_features;
+	struct dm_target *ti = ms->ti;
+
+	*args_used = 0;
+
+	if (!argc)
+		return 0;
+
+	if (sscanf(argv[0], "%u", &num_features) != 1) {
+		ti->error = "Invalid number of features";
+		return -EINVAL;
+	}
+
+	argc--;
+	argv++;
+	(*args_used)++;
+
+	if (num_features > argc) {
+		ti->error = "Not enough arguments to support feature count";
+		return -EINVAL;
+	}
+
+	if (!strcmp("handle_errors", argv[0]))
+		ms->features |= DM_RAID1_HANDLE_ERRORS;
+	else {
+		ti->error = "Unrecognised feature requested";
+		return -EINVAL;
+	}
+
+	(*args_used)++;
+
+	return 0;
+}
+
 /*
  * Construct a mirror mapping:
  *
  * log_type #log_params <log_params>
  * #mirrors [mirror_path offset]{2,}
+ * [#features <features>]
  *
  * log_type is "core" or "disk"
  * #log_params is between 1 and 3
+ *
+ * If present, features must be "handle_errors".
  */
-#define DM_IO_PAGES 64
 static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r;
@@ -1070,8 +1138,8 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	argv++, argc--;
 
-	if (argc != nr_mirrors * 2) {
-		ti->error = "Wrong number of mirror arguments";
+	if (argc < nr_mirrors * 2) {
+		ti->error = "Too few mirror arguments";
 		dm_destroy_dirty_log(dl);
 		return -EINVAL;
 	}
@@ -1096,22 +1164,57 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->private = ms;
  	ti->split_io = ms->rh.region_size;
 
-	r = kcopyd_client_create(DM_IO_PAGES, &ms->kcopyd_client);
-	if (r) {
-		free_context(ms, ti, ms->nr_mirrors);
-		return r;
+	ms->kmirrord_wq = create_singlethread_workqueue("kmirrord");
+	if (!ms->kmirrord_wq) {
+		DMERR("couldn't start kmirrord");
+		r = -ENOMEM;
+		goto err_free_context;
+	}
+	INIT_WORK(&ms->kmirrord_work, do_mirror);
+
+	r = parse_features(ms, argc, argv, &args_used);
+	if (r)
+		goto err_destroy_wq;
+
+	argv += args_used;
+	argc -= args_used;
+
+	/*
+	 * Any read-balancing addition depends on the
+	 * DM_RAID1_HANDLE_ERRORS flag being present.
+	 * This is because the decision to balance depends
+	 * on the sync state of a region.  If the above
+	 * flag is not present, we ignore errors; and
+	 * the sync state may be inaccurate.
+	 */
+
+	if (argc) {
+		ti->error = "Too many mirror arguments";
+		r = -EINVAL;
+		goto err_destroy_wq;
 	}
 
-	add_mirror_set(ms);
+	r = kcopyd_client_create(DM_IO_PAGES, &ms->kcopyd_client);
+	if (r)
+		goto err_destroy_wq;
+
+	wake(ms);
 	return 0;
+
+err_destroy_wq:
+	destroy_workqueue(ms->kmirrord_wq);
+err_free_context:
+	free_context(ms, ti, ms->nr_mirrors);
+	return r;
 }
 
 static void mirror_dtr(struct dm_target *ti)
 {
 	struct mirror_set *ms = (struct mirror_set *) ti->private;
 
-	del_mirror_set(ms);
+	flush_workqueue(ms->kmirrord_wq);
 	kcopyd_client_destroy(ms->kcopyd_client);
+	destroy_workqueue(ms->kmirrord_wq);
 	free_context(ms, ti, ms->nr_mirrors);
 }
 
@@ -1127,7 +1230,7 @@ static void queue_bio(struct mirror_set *ms, struct bio *bio, int rw)
 	spin_unlock(&ms->lock);
 
 	if (should_wake)
-		wake();
+		wake(ms);
 }
 
 /*
@@ -1204,7 +1307,7 @@ static void mirror_postsuspend(struct dm_target *ti)
 	wait_event(_kmirrord_recovery_stopped,
 		   !atomic_read(&ms->rh.recovery_in_flight));
 
-	if (log->type->suspend && log->type->suspend(log))
+	if (log->type->postsuspend && log->type->postsuspend(log))
 		/* FIXME: need better error handling */
 		DMWARN("log suspend failed");
 }
@@ -1222,10 +1325,8 @@ static void mirror_resume(struct dm_target *ti)
 static int mirror_status(struct dm_target *ti, status_type_t type,
 			 char *result, unsigned int maxlen)
 {
-	unsigned int m, sz;
+	unsigned int m, sz = 0;
 	struct mirror_set *ms = (struct mirror_set *) ti->private;
-
-	sz = ms->rh.log->type->status(ms->rh.log, type, result, maxlen);
 
 	switch (type) {
 	case STATUSTYPE_INFO:
@@ -1233,17 +1334,25 @@ static int mirror_status(struct dm_target *ti, status_type_t type,
 		for (m = 0; m < ms->nr_mirrors; m++)
 			DMEMIT("%s ", ms->mirror[m].dev->name);
 
-		DMEMIT("%llu/%llu",
+		DMEMIT("%llu/%llu 0 ",
 			(unsigned long long)ms->rh.log->type->
 				get_sync_count(ms->rh.log),
 			(unsigned long long)ms->nr_regions);
+
+		sz += ms->rh.log->type->status(ms->rh.log, type, result+sz, maxlen-sz);
+
 		break;
 
 	case STATUSTYPE_TABLE:
+		sz = ms->rh.log->type->status(ms->rh.log, type, result, maxlen);
+
 		DMEMIT("%d", ms->nr_mirrors);
 		for (m = 0; m < ms->nr_mirrors; m++)
 			DMEMIT(" %s %llu", ms->mirror[m].dev->name,
 				(unsigned long long)ms->mirror[m].offset);
+
+		if (ms->features & DM_RAID1_HANDLE_ERRORS)
+			DMEMIT(" 1 handle_errors");
 	}
 
 	return 0;
@@ -1251,7 +1360,7 @@ static int mirror_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type mirror_target = {
 	.name	 = "mirror",
-	.version = {1, 0, 2},
+	.version = {1, 0, 3},
 	.module	 = THIS_MODULE,
 	.ctr	 = mirror_ctr,
 	.dtr	 = mirror_dtr,
@@ -1270,20 +1379,10 @@ static int __init dm_mirror_init(void)
 	if (r)
 		return r;
 
-	_kmirrord_wq = create_singlethread_workqueue("kmirrord");
-	if (!_kmirrord_wq) {
-		DMERR("couldn't start kmirrord");
-		dm_dirty_log_exit();
-		return r;
-	}
-	INIT_WORK(&_kmirrord_work, do_work);
-
 	r = dm_register_target(&mirror_target);
 	if (r < 0) {
-		DMERR("%s: Failed to register mirror target",
-		      mirror_target.name);
+		DMERR("Failed to register mirror target");
 		dm_dirty_log_exit();
-		destroy_workqueue(_kmirrord_wq);
 	}
 
 	return r;
@@ -1295,9 +1394,8 @@ static void __exit dm_mirror_exit(void)
 
 	r = dm_unregister_target(&mirror_target);
 	if (r < 0)
-		DMERR("%s: unregister failed %d", mirror_target.name, r);
+		DMERR("unregister failed %d", r);
 
-	destroy_workqueue(_kmirrord_wq);
 	dm_dirty_log_exit();
 }
 

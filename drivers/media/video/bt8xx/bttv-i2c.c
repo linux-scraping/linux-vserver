@@ -28,7 +28,6 @@
 */
 
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 
@@ -124,12 +123,6 @@ static struct i2c_adapter bttv_i2c_adap_sw_template = {
 
 /* ----------------------------------------------------------------------- */
 /* I2C functions - hardware i2c                                            */
-
-static int algo_control(struct i2c_adapter *adapter,
-			unsigned int cmd, unsigned long arg)
-{
-	return 0;
-}
 
 static u32 functionality(struct i2c_adapter *adap)
 {
@@ -279,7 +272,6 @@ static int bttv_i2c_xfer(struct i2c_adapter *i2c_adap, struct i2c_msg *msgs, int
 
 static struct i2c_algorithm bttv_algo = {
 	.master_xfer   = bttv_i2c_xfer,
-	.algo_control  = algo_control,
 	.functionality = functionality,
 };
 
@@ -412,7 +404,7 @@ static void do_i2c_scan(char *name, struct i2c_client *c)
 	unsigned char buf;
 	int i,rc;
 
-	for (i = 0; i < 128; i++) {
+	for (i = 0; i < ARRAY_SIZE(i2c_devs); i++) {
 		c->addr = i;
 		rc = i2c_master_recv(c,&buf,0);
 		if (rc < 0)

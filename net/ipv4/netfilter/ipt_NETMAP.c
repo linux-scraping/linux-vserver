@@ -16,84 +16,73 @@
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter/x_tables.h>
-#ifdef CONFIG_NF_NAT_NEEDED
 #include <net/netfilter/nf_nat_rule.h>
-#else
-#include <linux/netfilter_ipv4/ip_nat_rule.h>
-#endif
 
-#define MODULENAME "NETMAP"
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Svenning Soerensen <svenning@post5.tele.dk>");
 MODULE_DESCRIPTION("iptables 1:1 NAT mapping of IP networks target");
 
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
-
-static int
+static bool
 check(const char *tablename,
       const void *e,
       const struct xt_target *target,
       void *targinfo,
       unsigned int hook_mask)
 {
-	const struct ip_nat_multi_range_compat *mr = targinfo;
+	const struct nf_nat_multi_range_compat *mr = targinfo;
 
 	if (!(mr->range[0].flags & IP_NAT_RANGE_MAP_IPS)) {
-		DEBUGP(MODULENAME":check: bad MAP_IPS.\n");
-		return 0;
+		pr_debug("NETMAP:check: bad MAP_IPS.\n");
+		return false;
 	}
 	if (mr->rangesize != 1) {
-		DEBUGP(MODULENAME":check: bad rangesize %u.\n", mr->rangesize);
-		return 0;
+		pr_debug("NETMAP:check: bad rangesize %u.\n", mr->rangesize);
+		return false;
 	}
-	return 1;
+	return true;
 }
 
 static unsigned int
-target(struct sk_buff **pskb,
+target(struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
        unsigned int hooknum,
        const struct xt_target *target,
        const void *targinfo)
 {
-	struct ip_conntrack *ct;
+	struct nf_conn *ct;
 	enum ip_conntrack_info ctinfo;
 	__be32 new_ip, netmask;
-	const struct ip_nat_multi_range_compat *mr = targinfo;
-	struct ip_nat_range newrange;
+	const struct nf_nat_multi_range_compat *mr = targinfo;
+	struct nf_nat_range newrange;
 
-	IP_NF_ASSERT(hooknum == NF_IP_PRE_ROUTING
+	NF_CT_ASSERT(hooknum == NF_IP_PRE_ROUTING
 		     || hooknum == NF_IP_POST_ROUTING
 		     || hooknum == NF_IP_LOCAL_OUT);
-	ct = ip_conntrack_get(*pskb, &ctinfo);
+	ct = nf_ct_get(skb, &ctinfo);
 
 	netmask = ~(mr->range[0].min_ip ^ mr->range[0].max_ip);
 
 	if (hooknum == NF_IP_PRE_ROUTING || hooknum == NF_IP_LOCAL_OUT)
-		new_ip = (*pskb)->nh.iph->daddr & ~netmask;
+		new_ip = ip_hdr(skb)->daddr & ~netmask;
 	else
-		new_ip = (*pskb)->nh.iph->saddr & ~netmask;
+		new_ip = ip_hdr(skb)->saddr & ~netmask;
 	new_ip |= mr->range[0].min_ip & netmask;
 
-	newrange = ((struct ip_nat_range)
+	newrange = ((struct nf_nat_range)
 		{ mr->range[0].flags | IP_NAT_RANGE_MAP_IPS,
 		  new_ip, new_ip,
 		  mr->range[0].min, mr->range[0].max });
 
 	/* Hand modified range to generic setup. */
-	return ip_nat_setup_info(ct, &newrange, hooknum);
+	return nf_nat_setup_info(ct, &newrange, hooknum);
 }
 
-static struct xt_target target_module = {
-	.name 		= MODULENAME,
+static struct xt_target target_module __read_mostly = {
+	.name 		= "NETMAP",
 	.family		= AF_INET,
 	.target 	= target,
-	.targetsize	= sizeof(struct ip_nat_multi_range_compat),
+	.targetsize	= sizeof(struct nf_nat_multi_range_compat),
 	.table		= "nat",
 	.hooks		= (1 << NF_IP_PRE_ROUTING) | (1 << NF_IP_POST_ROUTING) |
 			  (1 << NF_IP_LOCAL_OUT),

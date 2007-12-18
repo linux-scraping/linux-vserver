@@ -7,6 +7,8 @@ choice
 
 config ARCH_AT91RM9200
 	bool "AT91RM9200"
+	select GENERIC_TIME
+	select GENERIC_CLOCKEVENTS
 
 config ARCH_AT91SAM9260
 	bool "AT91SAM9260 or AT91SAM9XE"
@@ -17,7 +19,17 @@ config ARCH_AT91SAM9261
 config ARCH_AT91SAM9263
 	bool "AT91SAM9263"
 
+config ARCH_AT91SAM9RL
+	bool "AT91SAM9RL"
+
+config ARCH_AT91X40
+	bool "AT91x40"
+
 endchoice
+
+config AT91_PMC_UNIT
+	bool
+	default !ARCH_AT91X40
 
 # ----------------------------------------------------------
 
@@ -81,6 +93,13 @@ config MACH_KB9200
 	  Select this if you are using KwikByte's KB920x board.
 	  <http://kwikbyte.com/KB9202_description_new.htm>
 
+config MACH_PICOTUX2XX
+	bool "picotux 200"
+	depends on ARCH_AT91RM9200
+	help
+	  Select this if you are using a picotux 200.
+	  <http://www.picotux.com/>
+
 config MACH_KAFA
 	bool "Sperry-Sun KAFA board"
 	depends on ARCH_AT91RM9200
@@ -100,7 +119,7 @@ config ARCH_AT91SAM9260_SAM9XE
 	depends on ARCH_AT91SAM9260
 	help
 	  Select this if you are using Atmel's AT91SAM9XE System-on-Chip.
-	  They are basicaly AT91SAM9260s with various sizes of embedded Flash.
+	  They are basically AT91SAM9260s with various sizes of embedded Flash.
 
 comment "AT91SAM9260 / AT91SAM9XE Board Type"
 
@@ -140,6 +159,36 @@ config MACH_AT91SAM9263EK
 	help
 	  Select this if you are using Atmel's AT91SAM9263-EK Evaluation Kit.
 	  <http://www.atmel.com/dyn/products/tools_card.asp?tool_id=4057>
+
+endif
+
+# ----------------------------------------------------------
+
+if ARCH_AT91SAM9RL
+
+comment "AT91SAM9RL Board Type"
+
+config MACH_AT91SAM9RLEK
+	bool "Atmel AT91SAM9RL-EK Evaluation Kit"
+	depends on ARCH_AT91SAM9RL
+	help
+	  Select this if you are using Atmel's AT91SAM9RL-EK Evaluation Kit.
+
+endif
+
+# ----------------------------------------------------------
+
+if ARCH_AT91X40
+
+comment "AT91X40 Board Type"
+
+config MACH_AT91EB01
+	bool "Atmel AT91EB01 Evaluation Kit"
+	help
+	  Select this if you are using Atmel's AT91EB01 Evaluation Kit.
+	  It is also a popular target for simulators such as GDB's
+	  ARM simulator (commonly known as the ARMulator) and the
+	  Skyeye simulator.
 
 endif
 

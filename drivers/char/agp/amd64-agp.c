@@ -14,6 +14,7 @@
 #include <linux/agp_backend.h>
 #include <linux/mmzone.h>
 #include <asm/page.h>		/* PAGE_SIZE */
+#include <asm/e820.h>
 #include <asm/k8.h>
 #include "agp.h"
 
@@ -259,7 +260,6 @@ static const struct agp_bridge_driver amd_8151_driver = {
 /* Some basic sanity checks for the aperture. */
 static int __devinit aperture_valid(u64 aper, u32 size)
 {
-	u32 pfn, c;
 	if (aper == 0) {
 		printk(KERN_ERR PFX "No aperture\n");
 		return 0;
@@ -268,18 +268,13 @@ static int __devinit aperture_valid(u64 aper, u32 size)
 		printk(KERN_ERR PFX "Aperture too small (%d MB)\n", size>>20);
 		return 0;
 	}
-	if (aper + size > 0xffffffff) {
+       if ((u64)aper + size > 0x100000000ULL) {
 		printk(KERN_ERR PFX "Aperture out of bounds\n");
 		return 0;
 	}
-	pfn = aper >> PAGE_SHIFT;
-	for (c = 0; c < size/PAGE_SIZE; c++) {
-		if (!pfn_valid(pfn + c))
-			break;
-		if (!PageReserved(pfn_to_page(pfn + c))) {
-			printk(KERN_ERR PFX "Aperture pointing to RAM\n");
-			return 0;
-		}
+	if (e820_any_mapped(aper, aper + size, E820_RAM)) {
+		printk(KERN_ERR PFX "Aperture pointing to RAM\n");
+		return 0;
 	}
 
 	/* Request the Aperture. This catches cases when someone else
@@ -372,10 +367,8 @@ static __devinit int cache_nbs (struct pci_dev *pdev, u32 cap_ptr)
 static void __devinit amd8151_init(struct pci_dev *pdev, struct agp_bridge_data *bridge)
 {
 	char *revstring;
-	u8 rev_id;
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &rev_id);
-	switch (rev_id) {
+	switch (pdev->revision) {
 	case 0x01: revstring="A0"; break;
 	case 0x02: revstring="A1"; break;
 	case 0x11: revstring="B0"; break;
@@ -391,7 +384,7 @@ static void __devinit amd8151_init(struct pci_dev *pdev, struct agp_bridge_data 
 	 * Work around errata.
 	 * Chips before B2 stepping incorrectly reporting v3.5
 	 */
-	if (rev_id < 0x13) {
+	if (pdev->revision < 0x13) {
 		printk (KERN_INFO PFX "Correcting AGP revision (reports 3.5, is really 3.0)\n");
 		bridge->major_version = 3;
 		bridge->minor_version = 0;
@@ -794,7 +787,7 @@ static void __exit agp_amd64_cleanup(void)
 
 /* On AMD64 the PCI driver needs to initialize this driver early
    for the IOMMU, so it has to be called via a backdoor. */
-#ifndef CONFIG_IOMMU
+#ifndef CONFIG_GART_IOMMU
 module_init(agp_amd64_init);
 module_exit(agp_amd64_cleanup);
 #endif

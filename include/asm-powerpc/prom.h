@@ -18,7 +18,15 @@
 #include <linux/types.h>
 #include <linux/proc_fs.h>
 #include <linux/platform_device.h>
+#include <asm/irq.h>
 #include <asm/atomic.h>
+
+#define OF_ROOT_NODE_ADDR_CELLS_DEFAULT	1
+#define OF_ROOT_NODE_SIZE_CELLS_DEFAULT	1
+
+#define of_compat_cmp(s1, s2, l)	strcasecmp((s1), (s2))
+#define of_prop_cmp(s1, s2)		strcmp((s1), (s2))
+#define of_node_cmp(s1, s2)		strcasecmp((s1), (s2))
 
 /* Definitions used by the flattened device tree */
 #define OF_DT_HEADER		0xd00dfeed	/* marker */
@@ -58,6 +66,8 @@ struct boot_param_header
 	u32	boot_cpuid_phys;	/* Physical CPU id we're booting on */
 	/* version 3 fields below */
 	u32	dt_strings_size;	/* size of the DT strings block */
+	/* version 17 fields below */
+	u32	dt_struct_size;		/* size of the DT structure block */
 };
 
 
@@ -68,7 +78,7 @@ typedef u32 ihandle;
 struct property {
 	char	*name;
 	int	length;
-	unsigned char *value;
+	void	*value;
 	struct property *next;
 };
 
@@ -94,11 +104,16 @@ struct device_node {
 
 extern struct device_node *of_chosen;
 
-/* flag descriptions */
-#define OF_DYNAMIC 1 /* node and properties were allocated via kmalloc */
+static inline int of_node_check_flag(struct device_node *n, unsigned long flag)
+{
+	return test_bit(flag, &n->_flags);
+}
 
-#define OF_IS_DYNAMIC(x) test_bit(OF_DYNAMIC, &x->_flags)
-#define OF_MARK_DYNAMIC(x) set_bit(OF_DYNAMIC, &x->_flags)
+static inline void of_node_set_flag(struct device_node *n, unsigned long flag)
+{
+	set_bit(flag, &n->_flags);
+}
+
 
 #define HAVE_ARCH_DEVTREE_FIXUPS
 
@@ -108,36 +123,7 @@ static inline void set_node_proc_entry(struct device_node *dn, struct proc_dir_e
 }
 
 
-/* OBSOLETE: Old style node lookup */
-extern struct device_node *find_devices(const char *name);
-extern struct device_node *find_type_devices(const char *type);
-extern struct device_node *find_path_device(const char *path);
-extern struct device_node *find_compatible_devices(const char *type,
-						   const char *compat);
-extern struct device_node *find_all_nodes(void);
-
-/* New style node lookup */
-extern struct device_node *of_find_node_by_name(struct device_node *from,
-	const char *name);
-#define for_each_node_by_name(dn, name) \
-	for (dn = of_find_node_by_name(NULL, name); dn; \
-	     dn = of_find_node_by_name(dn, name))
-extern struct device_node *of_find_node_by_type(struct device_node *from,
-	const char *type);
-#define for_each_node_by_type(dn, type) \
-	for (dn = of_find_node_by_type(NULL, type); dn; \
-	     dn = of_find_node_by_type(dn, type))
-extern struct device_node *of_find_compatible_node(struct device_node *from,
-	const char *type, const char *compat);
-extern struct device_node *of_find_node_by_path(const char *path);
-extern struct device_node *of_find_node_by_phandle(phandle handle);
 extern struct device_node *of_find_all_nodes(struct device_node *prev);
-extern struct device_node *of_get_parent(const struct device_node *node);
-extern struct device_node *of_get_next_child(const struct device_node *node,
-					     struct device_node *prev);
-extern struct property *of_find_property(const struct device_node *np,
-					 const char *name,
-					 int *lenp);
 extern struct device_node *of_node_get(struct device_node *node);
 extern void of_node_put(struct device_node *node);
 
@@ -153,21 +139,14 @@ extern unsigned long __init of_get_flat_dt_root(void);
 
 /* For updating the device tree at runtime */
 extern void of_attach_node(struct device_node *);
-extern void of_detach_node(const struct device_node *);
+extern void of_detach_node(struct device_node *);
 
 /* Other Prototypes */
 extern void finish_device_tree(void);
 extern void unflatten_device_tree(void);
 extern void early_init_devtree(void *);
-extern int device_is_compatible(const struct device_node *device,
-				const char *);
 extern int machine_is_compatible(const char *compat);
-extern const void *get_property(const struct device_node *node,
-				const char *name,
-				int *lenp);
 extern void print_properties(struct device_node *node);
-extern int prom_n_addr_cells(struct device_node* np);
-extern int prom_n_size_cells(struct device_node* np);
 extern int prom_n_intr_cells(struct device_node* np);
 extern void prom_get_irq_senses(unsigned char *senses, int off, int max);
 extern int prom_add_property(struct device_node* np, struct property* prop);
@@ -221,7 +200,6 @@ static inline unsigned long of_read_ulong(const u32 *cell, int size)
 
 /* Translate an OF address block into a CPU physical address
  */
-#define OF_BAD_ADDR	((u64)-1)
 extern u64 of_translate_address(struct device_node *np, const u32 *addr);
 
 /* Extract an address from a device, returns the region size and
@@ -336,20 +314,23 @@ extern int of_irq_map_one(struct device_node *device, int index,
 struct pci_dev;
 extern int of_irq_map_pci(struct pci_dev *pdev, struct of_irq *out_irq);
 
-static inline int of_irq_to_resource(struct device_node *dev, int index, struct resource *r)
-{
-	int irq = irq_of_parse_and_map(dev, index);
+extern int of_irq_to_resource(struct device_node *dev, int index,
+			struct resource *r);
 
-	/* Only dereference the resource if both the
-	 * resource and the irq are valid. */
-	if (r && irq != NO_IRQ) {
-		r->start = r->end = irq;
-		r->flags = IORESOURCE_IRQ;
-	}
+/**
+ * of_iomap - Maps the memory mapped IO for a given device_node
+ * @device:	the device whose io range will be mapped
+ * @index:	index of the io range
+ *
+ * Returns a pointer to the mapped memory
+ */
+extern void __iomem *of_iomap(struct device_node *device, int index);
 
-	return irq;
-}
-
+/*
+ * NB:  This is here while we transition from using asm/prom.h
+ * to linux/of.h
+ */
+#include <linux/of.h>
 
 #endif /* __KERNEL__ */
 #endif /* _POWERPC_PROM_H */

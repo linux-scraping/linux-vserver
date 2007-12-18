@@ -20,11 +20,6 @@
 #include "xfs_sysctl.h"
 
 /*
- * System memory size - used to scale certain data structures in XFS.
- */
-unsigned long xfs_physmem;
-
-/*
  * Tunable XFS parameters.  xfs_params is required even when CONFIG_SYSCTL=n,
  * other XFS code uses these values.  Times are measured in centisecs (i.e.
  * 100ths of a second).
@@ -46,6 +41,7 @@ xfs_param_t xfs_params = {
 	.inherit_nosym	= {	0,		0,		1	},
 	.rotorstep	= {	1,		1,		255	},
 	.inherit_nodfrg	= {	0,		1,		1	},
+	.fstrm_timer	= {	1,		30*100,		3600*100},
 };
 
 /*

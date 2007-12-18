@@ -59,9 +59,8 @@ struct x86_emulate_ops {
 	 *  @val:   [OUT] Value read from memory, zero-extended to 'u_long'.
 	 *  @bytes: [IN ] Number of bytes to read from memory.
 	 */
-	int (*read_std)(unsigned long addr,
-			unsigned long *val,
-			unsigned int bytes, struct x86_emulate_ctxt * ctxt);
+	int (*read_std)(unsigned long addr, void *val,
+			unsigned int bytes, struct kvm_vcpu *vcpu);
 
 	/*
 	 * write_std: Write bytes of standard (non-emulated/special) memory.
@@ -71,9 +70,8 @@ struct x86_emulate_ops {
 	 *                required).
 	 *  @bytes: [IN ] Number of bytes to write to memory.
 	 */
-	int (*write_std)(unsigned long addr,
-			 unsigned long val,
-			 unsigned int bytes, struct x86_emulate_ctxt * ctxt);
+	int (*write_std)(unsigned long addr, const void *val,
+			 unsigned int bytes, struct kvm_vcpu *vcpu);
 
 	/*
 	 * read_emulated: Read bytes from emulated/special memory area.
@@ -82,9 +80,9 @@ struct x86_emulate_ops {
 	 *  @bytes: [IN ] Number of bytes to read from memory.
 	 */
 	int (*read_emulated) (unsigned long addr,
-			      unsigned long *val,
+			      void *val,
 			      unsigned int bytes,
-			      struct x86_emulate_ctxt * ctxt);
+			      struct kvm_vcpu *vcpu);
 
 	/*
 	 * write_emulated: Read bytes from emulated/special memory area.
@@ -94,9 +92,9 @@ struct x86_emulate_ops {
 	 *  @bytes: [IN ] Number of bytes to write to memory.
 	 */
 	int (*write_emulated) (unsigned long addr,
-			       unsigned long val,
+			       const void *val,
 			       unsigned int bytes,
-			       struct x86_emulate_ctxt * ctxt);
+			       struct kvm_vcpu *vcpu);
 
 	/*
 	 * cmpxchg_emulated: Emulate an atomic (LOCKed) CMPXCHG operation on an
@@ -107,32 +105,12 @@ struct x86_emulate_ops {
 	 *  @bytes: [IN ] Number of bytes to access using CMPXCHG.
 	 */
 	int (*cmpxchg_emulated) (unsigned long addr,
-				 unsigned long old,
-				 unsigned long new,
+				 const void *old,
+				 const void *new,
 				 unsigned int bytes,
-				 struct x86_emulate_ctxt * ctxt);
+				 struct kvm_vcpu *vcpu);
 
-	/*
-	 * cmpxchg8b_emulated: Emulate an atomic (LOCKed) CMPXCHG8B operation on an
-	 *                     emulated/special memory area.
-	 *  @addr:  [IN ] Linear address to access.
-	 *  @old:   [IN ] Value expected to be current at @addr.
-	 *  @new:   [IN ] Value to write to @addr.
-	 * NOTES:
-	 *  1. This function is only ever called when emulating a real CMPXCHG8B.
-	 *  2. This function is *never* called on x86/64 systems.
-	 *  2. Not defining this function (i.e., specifying NULL) is equivalent
-	 *     to defining a function that always returns X86EMUL_UNHANDLEABLE.
-	 */
-	int (*cmpxchg8b_emulated) (unsigned long addr,
-				   unsigned long old_lo,
-				   unsigned long old_hi,
-				   unsigned long new_lo,
-				   unsigned long new_hi,
-				   struct x86_emulate_ctxt * ctxt);
 };
-
-struct cpu_user_regs;
 
 struct x86_emulate_ctxt {
 	/* Register state before/after emulation. */
@@ -173,13 +151,5 @@ struct x86_emulate_ctxt {
  */
 int x86_emulate_memop(struct x86_emulate_ctxt *ctxt,
 		      struct x86_emulate_ops *ops);
-
-/*
- * Given the 'reg' portion of a ModRM byte, and a register block, return a
- * pointer into the block that addresses the relevant register.
- * @highbyte_regs specifies whether to decode AH,CH,DH,BH.
- */
-void *decode_register(u8 modrm_reg, unsigned long *regs,
-		      int highbyte_regs);
 
 #endif				/* __X86_EMULATE_H__ */

@@ -41,8 +41,10 @@
 #include <asm/mipsregs.h>
 #include <asm/reboot.h>
 #include <asm/pgtable.h>
-#include <asm/mach-au1x00/au1000.h>
-#include <asm/mach-au1x00/au1xxx_dbdma.h>
+
+#include <au1000.h>
+#include <au1xxx_dbdma.h>
+#include <prom.h>
 
 #ifdef CONFIG_MIPS_PB1200
 #include <asm/mach-pb1x00/pb1200.h>
@@ -57,7 +59,7 @@
 extern void _board_init_irq(void);
 extern void (*board_init_irq)(void);
 
-void board_reset (void)
+void board_reset(void)
 {
 	bcsr->resets = 0;
 	bcsr->system = 0;
@@ -66,9 +68,11 @@ void board_reset (void)
 void __init board_setup(void)
 {
 	char *argptr = NULL;
-	u32 pin_func;
 
 #if 0
+	{
+	u32 pin_func;
+
 	/* Enable PSC1 SYNC for AC97.  Normaly done in audio driver,
 	 * but it is board specific code, so put it here.
 	 */
@@ -79,11 +83,13 @@ void __init board_setup(void)
 
 	au_writel(0, (u32)bcsr|0x10); /* turn off pcmcia power */
 	au_sync();
+	}
 #endif
 
 #if defined(CONFIG_I2C_AU1550)
 	{
 	u32 freq0, clksrc;
+	u32 pin_func;
 
 	/* Select SMBUS in CPLD */
 	bcsr->resets &= ~(BCSR_RESETS_PCS0MUX);
@@ -131,14 +137,7 @@ void __init board_setup(void)
 	/* The Pb1200 development board uses external MUX for PSC0 to
 	support SMB/SPI. bcsr->resets bit 12: 0=SMB 1=SPI
 	*/
-#if defined(CONFIG_AU1XXX_PSC_SPI) && defined(CONFIG_I2C_AU1550)
-	#error I2C and SPI are mutually exclusive. Both are physically connected to PSC0.\
-			Refer to Pb1200/Db1200 documentation.
-#elif defined( CONFIG_AU1XXX_PSC_SPI )
-	bcsr->resets |= BCSR_RESETS_PCS0MUX;
-	/*Hard Coding Value to enable Temp Sensors [bit 14] Value for SOC Au1200. Pls refer documentation*/
-	  bcsr->resets =0x900f;
-#elif defined( CONFIG_I2C_AU1550 )
+#ifdef CONFIG_I2C_AU1550
 	bcsr->resets &= (~BCSR_RESETS_PCS0MUX);
 #endif
 	au_sync();
@@ -155,7 +154,7 @@ void __init board_setup(void)
 }
 
 int
-board_au1200fb_panel (void)
+board_au1200fb_panel(void)
 {
 	BCSR *bcsr = (BCSR *)BCSR_KSEG1_ADDR;
 	int p;
@@ -167,7 +166,7 @@ board_au1200fb_panel (void)
 }
 
 int
-board_au1200fb_panel_init (void)
+board_au1200fb_panel_init(void)
 {
 	/* Apply power */
     BCSR *bcsr = (BCSR *)BCSR_KSEG1_ADDR;
@@ -177,7 +176,7 @@ board_au1200fb_panel_init (void)
 }
 
 int
-board_au1200fb_panel_shutdown (void)
+board_au1200fb_panel_shutdown(void)
 {
 	/* Remove power */
     BCSR *bcsr = (BCSR *)BCSR_KSEG1_ADDR;

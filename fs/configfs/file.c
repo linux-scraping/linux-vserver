@@ -27,19 +27,26 @@
 #include <linux/fs.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/mutex.h>
 #include <asm/uaccess.h>
-#include <asm/semaphore.h>
 
 #include <linux/configfs.h>
 #include "configfs_internal.h"
 
+/*
+ * A simple attribute can only be 4096 characters.  Why 4k?  Because the
+ * original code limited it to PAGE_SIZE.  That's a bad idea, though,
+ * because an attribute of 16k on ia64 won't work on x86.  So we limit to
+ * 4k, our minimum common page size.
+ */
+#define SIMPLE_ATTR_SIZE 4096
 
 struct configfs_buffer {
 	size_t			count;
 	loff_t			pos;
 	char			* page;
 	struct configfs_item_operations	* ops;
-	struct semaphore	sem;
+	struct mutex		mutex;
 	int			needs_read_fill;
 };
 
@@ -69,42 +76,12 @@ static int fill_read_buffer(struct dentry * dentry, struct configfs_buffer * buf
 
 	count = ops->show_attribute(item,attr,buffer->page);
 	buffer->needs_read_fill = 0;
-	BUG_ON(count > (ssize_t)PAGE_SIZE);
+	BUG_ON(count > (ssize_t)SIMPLE_ATTR_SIZE);
 	if (count >= 0)
 		buffer->count = count;
 	else
 		ret = count;
 	return ret;
-}
-
-
-/**
- *	flush_read_buffer - push buffer to userspace.
- *	@buffer:	data buffer for file.
- *	@userbuf:	user-passed buffer.
- *	@count:		number of bytes requested.
- *	@ppos:		file position.
- *
- *	Copy the buffer we filled in fill_read_buffer() to userspace.
- *	This is done at the reader's leisure, copying and advancing
- *	the amount they specify each time.
- *	This may be called continuously until the buffer is empty.
- */
-static int flush_read_buffer(struct configfs_buffer * buffer, char __user * buf,
-			     size_t count, loff_t * ppos)
-{
-	int error;
-
-	if (*ppos > buffer->count)
-		return 0;
-
-	if (count > (buffer->count - *ppos))
-		count = buffer->count - *ppos;
-
-	error = copy_to_user(buf,buffer->page + *ppos,count);
-	if (!error)
-		*ppos += count;
-	return error ? -EFAULT : count;
 }
 
 /**
@@ -132,16 +109,17 @@ configfs_read_file(struct file *file, char __user *buf, size_t count, loff_t *pp
 	struct configfs_buffer * buffer = file->private_data;
 	ssize_t retval = 0;
 
-	down(&buffer->sem);
+	mutex_lock(&buffer->mutex);
 	if (buffer->needs_read_fill) {
 		if ((retval = fill_read_buffer(file->f_path.dentry,buffer)))
 			goto out;
 	}
 	pr_debug("%s: count = %zd, ppos = %lld, buf = %s\n",
 		 __FUNCTION__, count, *ppos, buffer->page);
-	retval = flush_read_buffer(buffer,buf,count,ppos);
+	retval = simple_read_from_buffer(buf, count, ppos, buffer->page,
+					 buffer->count);
 out:
-	up(&buffer->sem);
+	mutex_unlock(&buffer->mutex);
 	return retval;
 }
 
@@ -166,8 +144,8 @@ fill_write_buffer(struct configfs_buffer * buffer, const char __user * buf, size
 	if (!buffer->page)
 		return -ENOMEM;
 
-	if (count >= PAGE_SIZE)
-		count = PAGE_SIZE - 1;
+	if (count >= SIMPLE_ATTR_SIZE)
+		count = SIMPLE_ATTR_SIZE - 1;
 	error = copy_from_user(buffer->page,buf,count);
 	buffer->needs_read_fill = 1;
 	/* if buf is assumed to contain a string, terminate it by \0,
@@ -222,13 +200,13 @@ configfs_write_file(struct file *file, const char __user *buf, size_t count, lof
 	struct configfs_buffer * buffer = file->private_data;
 	ssize_t len;
 
-	down(&buffer->sem);
+	mutex_lock(&buffer->mutex);
 	len = fill_write_buffer(buffer, buf, count);
 	if (len > 0)
 		len = flush_write_buffer(file->f_path.dentry, buffer, count);
 	if (len > 0)
 		*ppos += len;
-	up(&buffer->sem);
+	mutex_unlock(&buffer->mutex);
 	return len;
 }
 
@@ -282,7 +260,7 @@ static int check_perm(struct inode * inode, struct file * file)
 		error = -ENOMEM;
 		goto Enomem;
 	}
-	init_MUTEX(&buffer->sem);
+	mutex_init(&buffer->mutex);
 	buffer->needs_read_fill = 1;
 	buffer->ops = ops;
 	file->private_data = buffer;
@@ -321,6 +299,7 @@ static int configfs_release(struct inode * inode, struct file * filp)
 	if (buffer) {
 		if (buffer->page)
 			free_page((unsigned long)buffer->page);
+		mutex_destroy(&buffer->mutex);
 		kfree(buffer);
 	}
 	return 0;

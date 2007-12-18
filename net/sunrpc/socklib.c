@@ -34,6 +34,7 @@ size_t xdr_skb_read_bits(struct xdr_skb_reader *desc, void *to, size_t len)
 	desc->offset += len;
 	return len;
 }
+EXPORT_SYMBOL_GPL(xdr_skb_read_bits);
 
 /**
  * xdr_skb_read_and_csum_bits - copy and checksum from skb to buffer
@@ -137,6 +138,7 @@ copy_tail:
 out:
 	return copied;
 }
+EXPORT_SYMBOL_GPL(xdr_partial_copy_from_skb);
 
 /**
  * csum_partial_copy_to_xdr - checksum and copy data
@@ -154,7 +156,7 @@ int csum_partial_copy_to_xdr(struct xdr_buf *xdr, struct sk_buff *skb)
 	desc.offset = sizeof(struct udphdr);
 	desc.count = skb->len - desc.offset;
 
-	if (skb->ip_summed == CHECKSUM_UNNECESSARY)
+	if (skb_csum_unnecessary(skb))
 		goto no_checksum;
 
 	desc.csum = csum_partial(skb->data, desc.offset, skb->csum);
@@ -179,3 +181,4 @@ no_checksum:
 		return -1;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(csum_partial_copy_to_xdr);

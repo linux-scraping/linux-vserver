@@ -78,11 +78,12 @@ void sctp_ulpq_partial_delivery(struct sctp_ulpq *, struct sctp_chunk *, gfp_t);
 void sctp_ulpq_abort_pd(struct sctp_ulpq *, gfp_t);
 
 /* Clear the partial data delivery condition on this socket. */
-int sctp_clear_pd(struct sock *sk);
+int sctp_clear_pd(struct sock *sk, struct sctp_association *asoc);
 
 /* Skip over an SSN. */
 void sctp_ulpq_skip(struct sctp_ulpq *ulpq, __u16 sid, __u16 ssn);
 
+void sctp_ulpq_reasm_flushtsn(struct sctp_ulpq *, __u32);
 #endif /* __sctp_ulpqueue_h__ */
 
 

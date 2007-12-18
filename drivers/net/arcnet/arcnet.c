@@ -102,8 +102,8 @@ static int arcnet_close(struct net_device *dev);
 static int arcnet_send_packet(struct sk_buff *skb, struct net_device *dev);
 static void arcnet_timeout(struct net_device *dev);
 static int arcnet_header(struct sk_buff *skb, struct net_device *dev,
-			 unsigned short type, void *daddr, void *saddr,
-			 unsigned len);
+			 unsigned short type, const void *daddr,
+			 const void *saddr, unsigned len);
 static int arcnet_rebuild_header(struct sk_buff *skb);
 static struct net_device_stats *arcnet_get_stats(struct net_device *dev);
 static int go_tx(struct net_device *dev);
@@ -317,11 +317,17 @@ static int choose_mtu(void)
 	return mtu == 65535 ? XMTU : mtu;
 }
 
+static const struct header_ops arcnet_header_ops = {
+	.create = arcnet_header,
+	.rebuild = arcnet_rebuild_header,
+};
+
 
 /* Setup a struct device for ARCnet. */
 static void arcdev_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_ARCNET;
+	dev->header_ops = &arcnet_header_ops;
 	dev->hard_header_len = sizeof(struct archdr);
 	dev->mtu = choose_mtu();
 
@@ -342,8 +348,6 @@ static void arcdev_setup(struct net_device *dev)
 	dev->hard_start_xmit = arcnet_send_packet;
 	dev->tx_timeout = arcnet_timeout;
 	dev->get_stats = arcnet_get_stats;
-	dev->hard_header = arcnet_header;
-	dev->rebuild_header = arcnet_rebuild_header;
 }
 
 struct net_device *alloc_arcdev(char *name)
@@ -488,10 +492,10 @@ static int arcnet_close(struct net_device *dev)
 
 
 static int arcnet_header(struct sk_buff *skb, struct net_device *dev,
-			 unsigned short type, void *daddr, void *saddr,
-			 unsigned len)
+			 unsigned short type, const void *daddr,
+			 const void *saddr, unsigned len)
 {
-	struct arcnet_local *lp = dev->priv;
+	const struct arcnet_local *lp = netdev_priv(dev);
 	uint8_t _daddr, proto_num;
 	struct ArcProto *proto;
 
@@ -519,9 +523,12 @@ static int arcnet_header(struct sk_buff *skb, struct net_device *dev,
 		 * real header when we do rebuild_header.
 		 */
 		*(uint16_t *) skb_push(skb, 2) = type;
-		if (skb->nh.raw - skb->mac.raw != 2)
+		/*
+		 * XXX: Why not use skb->mac_len?
+		 */
+		if (skb->network_header - skb->mac_header != 2)
 			BUGMSG(D_NORMAL, "arcnet_header: Yikes!  diff (%d) is not 2!\n",
-			       (int)(skb->nh.raw - skb->mac.raw));
+			       (int)(skb->network_header - skb->mac_header));
 		return -2;	/* return error -- can't transmit yet! */
 	}
 	else {
@@ -554,11 +561,13 @@ static int arcnet_rebuild_header(struct sk_buff *skb)
 	unsigned short type;
 	uint8_t daddr=0;
 	struct ArcProto *proto;
-
-	if (skb->nh.raw - skb->mac.raw != 2) {
+	/*
+	 * XXX: Why not use skb->mac_len?
+	 */
+	if (skb->network_header - skb->mac_header != 2) {
 		BUGMSG(D_NORMAL,
-		     "rebuild_header: shouldn't be here! (hdrsize=%d)\n",
-		     (int)(skb->nh.raw - skb->mac.raw));
+		       "rebuild_header: shouldn't be here! (hdrsize=%d)\n",
+		       (int)(skb->network_header - skb->mac_header));
 		return 0;
 	}
 	type = *(uint16_t *) skb_pull(skb, 2);

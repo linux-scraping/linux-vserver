@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Routines for control of 16-bit SoundBlaster cards and clones
  *  Note: This is very ugly hardware which uses one 8-bit DMA channel and
  *        second 16-bit DMA channel. Unfortunately 8-bit DMA channel can't
@@ -45,7 +45,7 @@
 #include <sound/control.h>
 #include <sound/info.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Routines for control of 16-bit SoundBlaster cards and clones");
 MODULE_LICENSE("GPL");
 
@@ -563,6 +563,11 @@ static int snd_sb16_playback_open(struct snd_pcm_substream *substream)
       __open_ok:
 	if (chip->hardware == SB_HW_ALS100)
 		runtime->hw.rate_max = 48000;
+	if (chip->hardware == SB_HW_CS5530) {
+		runtime->hw.buffer_bytes_max = 32 * 1024;
+		runtime->hw.periods_min = 2;
+		runtime->hw.rate_min = 44100;
+	}
 	if (chip->mode & SB_RATE_LOCK)
 		runtime->hw.rate_min = runtime->hw.rate_max = chip->locked_rate;
 	chip->playback_substream = substream;
@@ -633,6 +638,11 @@ static int snd_sb16_capture_open(struct snd_pcm_substream *substream)
       __open_ok:
 	if (chip->hardware == SB_HW_ALS100)
 		runtime->hw.rate_max = 48000;
+	if (chip->hardware == SB_HW_CS5530) {
+		runtime->hw.buffer_bytes_max = 32 * 1024;
+		runtime->hw.periods_min = 2;
+		runtime->hw.rate_min = 44100;
+	}
 	if (chip->mode & SB_RATE_LOCK)
 		runtime->hw.rate_min = runtime->hw.rate_max = chip->locked_rate;
 	chip->capture_substream = substream;

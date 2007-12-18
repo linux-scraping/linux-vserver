@@ -62,8 +62,9 @@ struct at91_mmc_data {
 };
 extern void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data);
 
- /* Ethernet */
+ /* Ethernet (EMAC & MACB) */
 struct at91_eth_data {
+	u32		phy_mask;
 	u8		phy_irq_pin;	/* PHY IRQ */
 	u8		is_rmii;	/* using RMII interface? */
 };
@@ -114,9 +115,22 @@ struct atmel_uart_data {
 };
 extern void __init at91_add_device_serial(void);
 
+ /* LCD Controller */
+struct atmel_lcdfb_info;
+extern void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data);
+
+ /* AC97 */
+struct atmel_ac97_data {
+	u8		reset_pin;	/* reset */
+};
+extern void __init at91_add_device_ac97(struct atmel_ac97_data *data);
+
  /* LEDs */
 extern u8 at91_leds_cpu;
 extern u8 at91_leds_timer;
 extern void __init at91_init_leds(u8 cpu_led, u8 timer_led);
+
+/* FIXME: this needs a better location, but gets stuff building again */
+extern int at91_suspend_entering_slow_clock(void);
 
 #endif

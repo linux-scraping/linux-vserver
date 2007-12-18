@@ -55,6 +55,7 @@
 #include <linux/root_dev.h>
 #include <linux/delay.h>
 #include <linux/nfs_fs.h>
+#include <net/net_namespace.h>
 #include <net/arp.h>
 #include <net/ip.h>
 #include <net/ipconfig.h>
@@ -189,11 +190,15 @@ static int __init ic_open_devs(void)
 	rtnl_lock();
 
 	/* bring loopback device up first */
-	if (dev_change_flags(&loopback_dev, loopback_dev.flags | IFF_UP) < 0)
-		printk(KERN_ERR "IP-Config: Failed to open %s\n", loopback_dev.name);
+	for_each_netdev(&init_net, dev) {
+		if (!(dev->flags & IFF_LOOPBACK))
+			continue;
+		if (dev_change_flags(dev, dev->flags | IFF_UP) < 0)
+			printk(KERN_ERR "IP-Config: Failed to open %s\n", dev->name);
+	}
 
-	for (dev = dev_base; dev; dev = dev->next) {
-		if (dev == &loopback_dev)
+	for_each_netdev(&init_net, dev) {
+		if (dev->flags & IFF_LOOPBACK)
 			continue;
 		if (user_dev_name[0] ? !strcmp(dev->name, user_dev_name) :
 		    (!(dev->flags & IFF_LOOPBACK) &&
@@ -425,6 +430,9 @@ ic_rarp_recv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 	unsigned char *sha, *tha;		/* s for "source", t for "target" */
 	struct ic_device *d;
 
+	if (dev->nd_net != &init_net)
+		goto drop;
+
 	if ((skb = skb_share_check(skb, GFP_ATOMIC)) == NULL)
 		return NET_RX_DROP;
 
@@ -432,7 +440,7 @@ ic_rarp_recv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 		goto drop;
 
 	/* Basic sanity checks can be done without the lock.  */
-	rarp = (struct arphdr *)skb->h.raw;
+	rarp = (struct arphdr *)skb_transport_header(skb);
 
 	/* If this test doesn't pass, it's not IP, or we should
 	 * ignore it anyway.
@@ -455,7 +463,7 @@ ic_rarp_recv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 		goto drop;
 
 	/* OK, it is all there and looks valid, process... */
-	rarp = (struct arphdr *)skb->h.raw;
+	rarp = (struct arphdr *)skb_transport_header(skb);
 	rarp_ptr = (unsigned char *) (rarp + 1);
 
 	/* One reply at a time, please. */
@@ -702,7 +710,8 @@ static void __init ic_bootp_send_if(struct ic_device *d, unsigned long jiffies_d
 	memset(b, 0, sizeof(struct bootp_pkt));
 
 	/* Construct IP header */
-	skb->nh.iph = h = &b->iph;
+	skb_reset_network_header(skb);
+	h = ip_hdr(skb);
 	h->version = 4;
 	h->ihl = 5;
 	h->tot_len = htons(sizeof(struct bootp_pkt));
@@ -748,8 +757,8 @@ static void __init ic_bootp_send_if(struct ic_device *d, unsigned long jiffies_d
 	/* Chain packet down the line... */
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
-	if ((dev->hard_header &&
-	     dev->hard_header(skb, dev, ntohs(skb->protocol), dev->broadcast, dev->dev_addr, skb->len) < 0) ||
+	if (dev_hard_header(skb, dev, ntohs(skb->protocol),
+			    dev->broadcast, dev->dev_addr, skb->len) < 0 ||
 	    dev_queue_xmit(skb) < 0)
 		printk("E");
 }
@@ -782,7 +791,7 @@ static void __init ic_do_bootp_ext(u8 *ext)
 	u8 *c;
 
 	printk("DHCP/BOOTP: Got extension %d:",*ext);
-	for(c=ext+2; c<ext+2+ext[1]; c++)
+	for (c=ext+2; c<ext+2+ext[1]; c++)
 		printk(" %02x", *c);
 	printk("\n");
 #endif
@@ -833,6 +842,9 @@ static int __init ic_bootp_recv(struct sk_buff *skb, struct net_device *dev, str
 	struct ic_device *d;
 	int len, ext_len;
 
+	if (dev->nd_net != &init_net)
+		goto drop;
+
 	/* Perform verifications before taking the lock.  */
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
@@ -845,7 +857,7 @@ static int __init ic_bootp_recv(struct sk_buff *skb, struct net_device *dev, str
 			   sizeof(struct udphdr)))
 		goto drop;
 
-	b = (struct bootp_pkt *) skb->nh.iph;
+	b = (struct bootp_pkt *)skb_network_header(skb);
 	h = &b->iph;
 
 	if (h->ihl != 5 || h->version != 4 || h->protocol != IPPROTO_UDP)
@@ -883,7 +895,7 @@ static int __init ic_bootp_recv(struct sk_buff *skb, struct net_device *dev, str
 	if (!pskb_may_pull(skb, skb->len))
 		goto drop;
 
-	b = (struct bootp_pkt *) skb->nh.iph;
+	b = (struct bootp_pkt *)skb_network_header(skb);
 	h = &b->iph;
 
 	/* One reply at a time, please. */
@@ -938,7 +950,7 @@ static int __init ic_bootp_recv(struct sk_buff *skb, struct net_device *dev, str
 					if (opt[1] >= 4)
 						memcpy(&server_id, opt + 2, 4);
 					break;
-				};
+				}
 			}
 
 #ifdef IPCONFIG_DEBUG
@@ -983,7 +995,7 @@ static int __init ic_bootp_recv(struct sk_buff *skb, struct net_device *dev, str
 				ic_myaddr = NONE;
 				ic_servaddr = NONE;
 				goto drop_unlock;
-			};
+			}
 
 			ic_dhcp_msgtype = mt;
 
@@ -1094,7 +1106,7 @@ static int __init ic_dynamic(void)
 	retries = CONF_SEND_RETRIES;
 	get_random_bytes(&timeout, sizeof(timeout));
 	timeout = CONF_BASE_TIMEOUT + (timeout % (unsigned) CONF_TIMEOUT_RANDOM);
-	for(;;) {
+	for (;;) {
 #ifdef IPCONFIG_BOOTP
 		if (do_bootp && (d->able & IC_BOOTP))
 			ic_bootp_send_if(d, jiffies - start_jiffies);
@@ -1252,7 +1264,7 @@ static int __init ip_auto_config(void)
 	__be32 addr;
 
 #ifdef CONFIG_PROC_FS
-	proc_net_fops_create("pnp", S_IRUGO, &pnp_seq_fops);
+	proc_net_fops_create(&init_net, "pnp", S_IRUGO, &pnp_seq_fops);
 #endif /* CONFIG_PROC_FS */
 
 	if (!ic_enable)
@@ -1280,9 +1292,9 @@ static int __init ip_auto_config(void)
 	 */
 	if (ic_myaddr == NONE ||
 #ifdef CONFIG_ROOT_NFS
-	    (MAJOR(ROOT_DEV) == UNNAMED_MAJOR
-	     && root_server_addr == NONE
-	     && ic_servaddr == NONE) ||
+	    (root_server_addr == NONE
+	     && ic_servaddr == NONE
+	     && ROOT_DEV == Root_NFS) ||
 #endif
 	    ic_first_dev->next) {
 #ifdef IPCONFIG_DYNAMIC

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2002 Sistina Software (UK) Limited.
+ * Copyright (C) 2006 Red Hat GmbH
  *
  * This file is released under the GPL.
  *
@@ -28,7 +29,7 @@
 static struct workqueue_struct *_kcopyd_wq;
 static struct work_struct _kcopyd_work;
 
-static inline void wake(void)
+static void wake(void)
 {
 	queue_work(_kcopyd_wq, &_kcopyd_work);
 }
@@ -44,6 +45,8 @@ struct kcopyd_client {
 	struct page_list *pages;
 	unsigned int nr_pages;
 	unsigned int nr_free_pages;
+
+	struct dm_io_client *io_client;
 
 	wait_queue_head_t destroyq;
 	atomic_t nr_jobs;
@@ -195,7 +198,7 @@ struct kcopyd_job {
 	 * These fields are only used if the job has been split
 	 * into more manageable parts.
 	 */
-	struct semaphore lock;
+	struct mutex lock;
 	atomic_t sub_jobs;
 	sector_t progress;
 };
@@ -223,10 +226,7 @@ static LIST_HEAD(_pages_jobs);
 
 static int jobs_init(void)
 {
-	_job_cache = kmem_cache_create("kcopyd-jobs",
-				       sizeof(struct kcopyd_job),
-				       __alignof__(struct kcopyd_job),
-				       0, NULL, NULL);
+	_job_cache = KMEM_CACHE(kcopyd_job, 0);
 	if (!_job_cache)
 		return -ENOMEM;
 
@@ -255,7 +255,7 @@ static void jobs_exit(void)
  * Functions to push and pop a job onto the head of a given job
  * list.
  */
-static inline struct kcopyd_job *pop(struct list_head *jobs)
+static struct kcopyd_job *pop(struct list_head *jobs)
 {
 	struct kcopyd_job *job = NULL;
 	unsigned long flags;
@@ -271,7 +271,7 @@ static inline struct kcopyd_job *pop(struct list_head *jobs)
 	return job;
 }
 
-static inline void push(struct list_head *jobs, struct kcopyd_job *job)
+static void push(struct list_head *jobs, struct kcopyd_job *job)
 {
 	unsigned long flags;
 
@@ -342,16 +342,20 @@ static void complete_io(unsigned long error, void *context)
 static int run_io_job(struct kcopyd_job *job)
 {
 	int r;
+	struct dm_io_request io_req = {
+		.bi_rw = job->rw,
+		.mem.type = DM_IO_PAGE_LIST,
+		.mem.ptr.pl = job->pages,
+		.mem.offset = job->offset,
+		.notify.fn = complete_io,
+		.notify.context = job,
+		.client = job->kc->io_client,
+	};
 
 	if (job->rw == READ)
-		r = dm_io_async(1, &job->source, job->rw,
-				job->pages,
-				job->offset, complete_io, job);
-
+		r = dm_io(&io_req, 1, &job->source, NULL);
 	else
-		r = dm_io_async(job->num_dests, job->dests, job->rw,
-				job->pages,
-				job->offset, complete_io, job);
+		r = dm_io(&io_req, job->num_dests, job->dests, NULL);
 
 	return r;
 }
@@ -452,7 +456,7 @@ static void segment_complete(int read_err,
 	sector_t count = 0;
 	struct kcopyd_job *job = (struct kcopyd_job *) context;
 
-	down(&job->lock);
+	mutex_lock(&job->lock);
 
 	/* update the error */
 	if (read_err)
@@ -476,7 +480,7 @@ static void segment_complete(int read_err,
 			job->progress += count;
 		}
 	}
-	up(&job->lock);
+	mutex_unlock(&job->lock);
 
 	if (count) {
 		int i;
@@ -558,7 +562,7 @@ int kcopyd_copy(struct kcopyd_client *kc, struct io_region *from,
 		dispatch_job(job);
 
 	else {
-		init_MUTEX(&job->lock);
+		mutex_init(&job->lock);
 		job->progress = 0;
 		split_job(job);
 	}
@@ -670,8 +674,9 @@ int kcopyd_client_create(unsigned int nr_pages, struct kcopyd_client **result)
 		return r;
 	}
 
-	r = dm_io_get(nr_pages);
-	if (r) {
+	kc->io_client = dm_io_client_create(nr_pages);
+	if (IS_ERR(kc->io_client)) {
+		r = PTR_ERR(kc->io_client);
 		client_free_pages(kc);
 		kfree(kc);
 		kcopyd_exit();
@@ -691,7 +696,7 @@ void kcopyd_client_destroy(struct kcopyd_client *kc)
 	/* Wait for completion of all jobs submitted by this client. */
 	wait_event(kc->destroyq, !atomic_read(&kc->nr_jobs));
 
-	dm_io_put(kc->nr_pages);
+	dm_io_client_destroy(kc->io_client);
 	client_free_pages(kc);
 	client_del(kc);
 	kfree(kc);

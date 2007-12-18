@@ -5,7 +5,6 @@
  *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
  *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
  *    Copyright (C) 1996 Paul Mackerras
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *  PPC44x/36-bit changes by Matt Porter (mporter@mvista.com)
  *
  *  Derived from "arch/i386/mm/init.c"
@@ -31,6 +30,7 @@
 #include <linux/highmem.h>
 #include <linux/initrd.h>
 #include <linux/pagemap.h>
+#include <linux/suspend.h>
 
 #include <asm/pgalloc.h>
 #include <asm/prom.h>
@@ -42,7 +42,6 @@
 #include <asm/machdep.h>
 #include <asm/btext.h>
 #include <asm/tlb.h>
-#include <asm/prom.h>
 #include <asm/lmb.h>
 #include <asm/sections.h>
 #include <asm/vdso.h>
@@ -57,9 +56,6 @@
 int init_bootmem_done;
 int mem_init_done;
 unsigned long memory_limit;
-
-extern void hash_preload(struct mm_struct *mm, unsigned long ea,
-			 unsigned long access, unsigned long trap);
 
 int page_is_ram(unsigned long pfn)
 {
@@ -83,7 +79,6 @@ int page_is_ram(unsigned long pfn)
 	return 0;
 #endif
 }
-EXPORT_SYMBOL(page_is_ram);
 
 pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 			      unsigned long size, pgprot_t vma_prot)
@@ -132,55 +127,8 @@ int __devinit arch_add_memory(int nid, u64 start, u64 size)
 	zone = pgdata->node_zones;
 
 	return __add_pages(zone, start_pfn, nr_pages);
-
-	return 0;
 }
 
-/*
- * First pass at this code will check to determine if the remove
- * request is within the RMO.  Do not allow removal within the RMO.
- */
-int __devinit remove_memory(u64 start, u64 size)
-{
-	struct zone *zone;
-	unsigned long start_pfn, end_pfn, nr_pages;
-
-	start_pfn = start >> PAGE_SHIFT;
-	nr_pages = size >> PAGE_SHIFT;
-	end_pfn = start_pfn + nr_pages;
-
-	printk("%s(): Attempting to remove memoy in range "
-			"%lx to %lx\n", __func__, start, start+size);
-	/*
-	 * check for range within RMO
-	 */
-	zone = page_zone(pfn_to_page(start_pfn));
-
-	printk("%s(): memory will be removed from "
-			"the %s zone\n", __func__, zone->name);
-
-	/*
-	 * not handling removing memory ranges that
-	 * overlap multiple zones yet
-	 */
-	if (end_pfn > (zone->zone_start_pfn + zone->spanned_pages))
-		goto overlap;
-
-	/* make sure it is NOT in RMO */
-	if ((start < lmb.rmo_size) || ((start+size) < lmb.rmo_size)) {
-		printk("%s(): range to be removed must NOT be in RMO!\n",
-			__func__);
-		goto in_rmo;
-	}
-
-	return __remove_pages(zone, start_pfn, nr_pages);
-
-overlap:
-	printk("%s(): memory range to be removed overlaps "
-		"multiple zones!!!\n", __func__);
-in_rmo:
-	return -1;
-}
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 void show_mem(void)
@@ -280,6 +228,28 @@ void __init do_init_bootmem(void)
 	init_bootmem_done = 1;
 }
 
+/* mark pages that don't exist as nosave */
+static int __init mark_nonram_nosave(void)
+{
+	unsigned long lmb_next_region_start_pfn,
+		      lmb_region_max_pfn;
+	int i;
+
+	for (i = 0; i < lmb.memory.cnt - 1; i++) {
+		lmb_region_max_pfn =
+			(lmb.memory.region[i].base >> PAGE_SHIFT) +
+			(lmb.memory.region[i].size >> PAGE_SHIFT);
+		lmb_next_region_start_pfn =
+			lmb.memory.region[i+1].base >> PAGE_SHIFT;
+
+		if (lmb_region_max_pfn < lmb_next_region_start_pfn)
+			register_nosave_region(lmb_region_max_pfn,
+					       lmb_next_region_start_pfn);
+	}
+
+	return 0;
+}
+
 /*
  * paging_init() sets up the page tables - in fact we've already done this.
  */
@@ -291,11 +261,12 @@ void __init paging_init(void)
 
 #ifdef CONFIG_HIGHMEM
 	map_page(PKMAP_BASE, 0, 0);	/* XXX gross */
-	pkmap_page_table = pte_offset_kernel(pmd_offset(pgd_offset_k
-			(PKMAP_BASE), PKMAP_BASE), PKMAP_BASE);
+	pkmap_page_table = pte_offset_kernel(pmd_offset(pud_offset(pgd_offset_k
+			(PKMAP_BASE), PKMAP_BASE), PKMAP_BASE), PKMAP_BASE);
 	map_page(KMAP_FIX_BEGIN, 0, 0);	/* XXX gross */
-	kmap_pte = pte_offset_kernel(pmd_offset(pgd_offset_k
-			(KMAP_FIX_BEGIN), KMAP_FIX_BEGIN), KMAP_FIX_BEGIN);
+	kmap_pte = pte_offset_kernel(pmd_offset(pud_offset(pgd_offset_k
+			(KMAP_FIX_BEGIN), KMAP_FIX_BEGIN), KMAP_FIX_BEGIN),
+			 KMAP_FIX_BEGIN);
 	kmap_prot = PAGE_KERNEL;
 #endif /* CONFIG_HIGHMEM */
 
@@ -311,6 +282,8 @@ void __init paging_init(void)
 	max_zone_pfns[ZONE_DMA] = top_of_ram >> PAGE_SHIFT;
 #endif
 	free_area_init_nodes(max_zone_pfns);
+
+	mark_nonram_nosave();
 }
 #endif /* ! CONFIG_NEED_MULTIPLE_NODES */
 

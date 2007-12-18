@@ -203,6 +203,8 @@ static int pvr2_v4l2_do_ioctl(struct inode *inode, struct file *file,
 		struct v4l2_capability *cap = arg;
 
 		memcpy(cap, &pvr_capability, sizeof(struct v4l2_capability));
+		strlcpy(cap->bus_info,pvr2_hdw_get_bus_info(hdw),
+			sizeof(cap->bus_info));
 
 		ret = 0;
 		break;
@@ -1119,15 +1121,12 @@ static const struct file_operations vdev_fops = {
 };
 
 
-#define VID_HARDWARE_PVRUSB2    38  /* FIXME : need a good value */
-
 static struct video_device vdev_template = {
 	.owner      = THIS_MODULE,
 	.type       = VID_TYPE_CAPTURE | VID_TYPE_TUNER,
 	.type2      = (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VBI_CAPTURE
 		       | V4L2_CAP_TUNER | V4L2_CAP_AUDIO
 		       | V4L2_CAP_READWRITE),
-	.hardware   = VID_HARDWARE_PVRUSB2,
 	.fops       = &vdev_fops,
 };
 

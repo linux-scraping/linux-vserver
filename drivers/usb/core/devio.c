@@ -57,7 +57,6 @@
 
 #define USB_MAXBUS			64
 #define USB_DEVICE_MAX			USB_MAXBUS * 128
-static struct class *usb_device_class;
 
 /* Mutual exclusion for removal, open, and release */
 DEFINE_MUTEX(usbfs_mutex);
@@ -72,6 +71,7 @@ struct async {
 	void __user *userbuffer;
 	void __user *userurb;
 	struct urb *urb;
+	int status;
 	u32 secid;
 };
 
@@ -290,10 +290,8 @@ static void snoop_urb(struct urb *urb, void __user *userurb)
 	if (!usbfs_snoop)
 		return;
 
-	if (urb->pipe & USB_DIR_IN)
-		dev_info(&urb->dev->dev, "direction=IN\n");
-	else
-		dev_info(&urb->dev->dev, "direction=OUT\n");
+	dev_info(&urb->dev->dev, "direction=%s\n",
+			usb_urb_dir_in(urb) ? "IN" : "OUT");
 	dev_info(&urb->dev->dev, "userurb=%p\n", userurb);
 	dev_info(&urb->dev->dev, "transfer_buffer_length=%d\n",
 		 urb->transfer_buffer_length);
@@ -313,9 +311,10 @@ static void async_completed(struct urb *urb)
         spin_lock(&ps->lock);
         list_move_tail(&as->asynclist, &ps->async_completed);
         spin_unlock(&ps->lock);
+	as->status = urb->status;
 	if (as->signr) {
 		sinfo.si_signo = as->signr;
-		sinfo.si_errno = as->urb->status;
+		sinfo.si_errno = as->status;
 		sinfo.si_code = SI_ASYNCIO;
 		sinfo.si_addr = as->userurb;
 		kill_pid_info_as_uid(as->signr, &sinfo, as->pid, as->uid,
@@ -421,14 +420,11 @@ static int claimintf(struct dev_state *ps, unsigned int ifnum)
 	if (test_bit(ifnum, &ps->ifclaimed))
 		return 0;
 
-	/* lock against other changes to driver bindings */
-	down_write(&usb_bus_type.subsys.rwsem);
 	intf = usb_ifnum_to_if(dev, ifnum);
 	if (!intf)
 		err = -ENOENT;
 	else
 		err = usb_driver_claim_interface(&usbfs_driver, intf, ps);
-	up_write(&usb_bus_type.subsys.rwsem);
 	if (err == 0)
 		set_bit(ifnum, &ps->ifclaimed);
 	return err;
@@ -444,8 +440,6 @@ static int releaseintf(struct dev_state *ps, unsigned int ifnum)
 	if (ifnum >= 8*sizeof(ps->ifclaimed))
 		return err;
 	dev = ps->dev;
-	/* lock against other changes to driver bindings */
-	down_write(&usb_bus_type.subsys.rwsem);
 	intf = usb_ifnum_to_if(dev, ifnum);
 	if (!intf)
 		err = -ENOENT;
@@ -453,7 +447,6 @@ static int releaseintf(struct dev_state *ps, unsigned int ifnum)
 		usb_driver_release_interface(&usbfs_driver, intf);
 		err = 0;
 	}
-	up_write(&usb_bus_type.subsys.rwsem);
 	return err;
 }
 
@@ -467,7 +460,7 @@ static int checkintf(struct dev_state *ps, unsigned int ifnum)
 		return 0;
 	/* if not yet claimed, claim it for the driver */
 	dev_warn(&ps->dev->dev, "usbfs: process %d (%s) did not claim interface %u before use\n",
-	       current->pid, current->comm, ifnum);
+	       task_pid_nr(current), current->comm, ifnum);
 	return claimintf(ps, ifnum);
 }
 
@@ -520,22 +513,25 @@ static int check_ctrlrecip(struct dev_state *ps, unsigned int requesttype, unsig
 	return ret;
 }
 
-static struct usb_device *usbdev_lookup_minor(int minor)
+static int __match_minor(struct device *dev, void *data)
 {
-	struct device *device;
-	struct usb_device *udev = NULL;
+	int minor = *((int *)data);
 
-	down(&usb_device_class->sem);
-	list_for_each_entry(device, &usb_device_class->devices, node) {
-		if (device->devt == MKDEV(USB_DEVICE_MAJOR, minor)) {
-			udev = device->platform_data;
-			break;
-		}
-	}
-	up(&usb_device_class->sem);
+	if (dev->devt == MKDEV(USB_DEVICE_MAJOR, minor))
+		return 1;
+	return 0;
+}
 
-	return udev;
-};
+static struct usb_device *usbdev_lookup_by_minor(int minor)
+{
+	struct device *dev;
+
+	dev = bus_find_device(&usb_bus_type, NULL, &minor, __match_minor);
+	if (!dev)
+		return NULL;
+	put_device(dev);
+	return container_of(dev, struct usb_device, dev);
+}
 
 /*
  * file operations
@@ -554,11 +550,14 @@ static int usbdev_open(struct inode *inode, struct file *file)
 		goto out;
 
 	ret = -ENOENT;
-	/* check if we are called from a real node or usbfs */
+	/* usbdev device-node */
 	if (imajor(inode) == USB_DEVICE_MAJOR)
-		dev = usbdev_lookup_minor(iminor(inode));
+		dev = usbdev_lookup_by_minor(iminor(inode));
+#ifdef CONFIG_USB_DEVICEFS
+	/* procfs file */
 	if (!dev)
 		dev = inode->i_private;
+#endif
 	if (!dev)
 		goto out;
 	ret = usb_autoresume_device(dev);
@@ -581,7 +580,7 @@ static int usbdev_open(struct inode *inode, struct file *file)
 	ps->disccontext = NULL;
 	ps->ifclaimed = 0;
 	security_task_getsecid(current, &ps->secid);
-	wmb();
+	smp_wmb();
 	list_add_tail(&ps->list, &dev->filelist);
 	file->private_data = ps;
  out:
@@ -813,7 +812,6 @@ static int proc_getdriver(struct dev_state *ps, void __user *arg)
 
 	if (copy_from_user(&gd, arg, sizeof(gd)))
 		return -EFAULT;
-	down_read(&usb_bus_type.subsys.rwsem);
 	intf = usb_ifnum_to_if(ps->dev, gd.interface);
 	if (!intf || !intf->dev.driver)
 		ret = -ENODATA;
@@ -822,7 +820,6 @@ static int proc_getdriver(struct dev_state *ps, void __user *arg)
 				sizeof(gd.driver));
 		ret = (copy_to_user(arg, &gd, sizeof(gd)) ? -EFAULT : 0);
 	}
-	up_read(&usb_bus_type.subsys.rwsem);
 	return ret;
 }
 
@@ -913,6 +910,7 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 	struct usb_ctrlrequest *dr = NULL;
 	unsigned int u, totlen, isofrmlen;
 	int ret, ifnum = -1;
+	int is_in;
 
 	if (uurb->flags & ~(USBDEVFS_URB_ISO_ASAP|USBDEVFS_URB_SHORT_NOT_OK|
 			   URB_NO_FSBR|URB_ZERO_PACKET))
@@ -927,16 +925,18 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 		if ((ret = checkintf(ps, ifnum)))
 			return ret;
 	}
-	if ((uurb->endpoint & USB_ENDPOINT_DIR_MASK) != 0)
-		ep = ps->dev->ep_in [uurb->endpoint & USB_ENDPOINT_NUMBER_MASK];
-	else
-		ep = ps->dev->ep_out [uurb->endpoint & USB_ENDPOINT_NUMBER_MASK];
+	if ((uurb->endpoint & USB_ENDPOINT_DIR_MASK) != 0) {
+		is_in = 1;
+		ep = ps->dev->ep_in[uurb->endpoint & USB_ENDPOINT_NUMBER_MASK];
+	} else {
+		is_in = 0;
+		ep = ps->dev->ep_out[uurb->endpoint & USB_ENDPOINT_NUMBER_MASK];
+	}
 	if (!ep)
 		return -ENOENT;
 	switch(uurb->type) {
 	case USBDEVFS_URB_TYPE_CONTROL:
-		if ((ep->desc.bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-				!= USB_ENDPOINT_XFER_CONTROL)
+		if (!usb_endpoint_xfer_control(&ep->desc))
 			return -EINVAL;
 		/* min 8 byte setup packet, max 8 byte setup plus an arbitrary data stage */
 		if (uurb->buffer_length < 8 || uurb->buffer_length > (8 + MAX_USBFS_BUFFER_SIZE))
@@ -955,23 +955,32 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 			kfree(dr);
 			return ret;
 		}
-		uurb->endpoint = (uurb->endpoint & ~USB_ENDPOINT_DIR_MASK) | (dr->bRequestType & USB_ENDPOINT_DIR_MASK);
 		uurb->number_of_packets = 0;
 		uurb->buffer_length = le16_to_cpup(&dr->wLength);
 		uurb->buffer += 8;
-		if (!access_ok((uurb->endpoint & USB_DIR_IN) ?  VERIFY_WRITE : VERIFY_READ, uurb->buffer, uurb->buffer_length)) {
+		if ((dr->bRequestType & USB_DIR_IN) && uurb->buffer_length) {
+			is_in = 1;
+			uurb->endpoint |= USB_DIR_IN;
+		} else {
+			is_in = 0;
+			uurb->endpoint &= ~USB_DIR_IN;
+		}
+		if (!access_ok(is_in ? VERIFY_WRITE : VERIFY_READ,
+				uurb->buffer, uurb->buffer_length)) {
 			kfree(dr);
 			return -EFAULT;
 		}
 		snoop(&ps->dev->dev, "control urb: bRequest=%02x "
 			"bRrequestType=%02x wValue=%04x "
 			"wIndex=%04x wLength=%04x\n",
-			dr->bRequest, dr->bRequestType, dr->wValue,
-			dr->wIndex, dr->wLength);
+			dr->bRequest, dr->bRequestType,
+			__le16_to_cpup(&dr->wValue),
+			__le16_to_cpup(&dr->wIndex),
+			__le16_to_cpup(&dr->wLength));
 		break;
 
 	case USBDEVFS_URB_TYPE_BULK:
-		switch (ep->desc.bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) {
+		switch (usb_endpoint_type(&ep->desc)) {
 		case USB_ENDPOINT_XFER_CONTROL:
 		case USB_ENDPOINT_XFER_ISOC:
 			return -EINVAL;
@@ -980,7 +989,8 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 		uurb->number_of_packets = 0;
 		if (uurb->buffer_length > MAX_USBFS_BUFFER_SIZE)
 			return -EINVAL;
-		if (!access_ok((uurb->endpoint & USB_DIR_IN) ? VERIFY_WRITE : VERIFY_READ, uurb->buffer, uurb->buffer_length))
+		if (!access_ok(is_in ? VERIFY_WRITE : VERIFY_READ,
+				uurb->buffer, uurb->buffer_length))
 			return -EFAULT;
 		snoop(&ps->dev->dev, "bulk urb\n");
 		break;
@@ -989,8 +999,7 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 		/* arbitrary limit */
 		if (uurb->number_of_packets < 1 || uurb->number_of_packets > 128)
 			return -EINVAL;
-		if ((ep->desc.bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-				!= USB_ENDPOINT_XFER_ISOC)
+		if (!usb_endpoint_xfer_isoc(&ep->desc))
 			return -EINVAL;
 		isofrmlen = sizeof(struct usbdevfs_iso_packet_desc) * uurb->number_of_packets;
 		if (!(isopkt = kmalloc(isofrmlen, GFP_KERNEL)))
@@ -1017,12 +1026,12 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 
 	case USBDEVFS_URB_TYPE_INTERRUPT:
 		uurb->number_of_packets = 0;
-		if ((ep->desc.bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-				!= USB_ENDPOINT_XFER_INT)
+		if (!usb_endpoint_xfer_int(&ep->desc))
 			return -EINVAL;
 		if (uurb->buffer_length > MAX_USBFS_BUFFER_SIZE)
 			return -EINVAL;
-		if (!access_ok((uurb->endpoint & USB_DIR_IN) ? VERIFY_WRITE : VERIFY_READ, uurb->buffer, uurb->buffer_length))
+		if (!access_ok(is_in ? VERIFY_WRITE : VERIFY_READ,
+				uurb->buffer, uurb->buffer_length))
 			return -EFAULT;
 		snoop(&ps->dev->dev, "interrupt urb\n");
 		break;
@@ -1042,8 +1051,11 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 		return -ENOMEM;
 	}
         as->urb->dev = ps->dev;
-        as->urb->pipe = (uurb->type << 30) | __create_pipe(ps->dev, uurb->endpoint & 0xf) | (uurb->endpoint & USB_DIR_IN);
-        as->urb->transfer_flags = uurb->flags;
+        as->urb->pipe = (uurb->type << 30) |
+			__create_pipe(ps->dev, uurb->endpoint & 0xf) |
+			(uurb->endpoint & USB_DIR_IN);
+        as->urb->transfer_flags = uurb->flags |
+			(is_in ? URB_DIR_IN : URB_DIR_OUT);
 	as->urb->transfer_buffer_length = uurb->buffer_length;
 	as->urb->setup_packet = (unsigned char*)dr;
 	as->urb->start_frame = uurb->start_frame;
@@ -1073,13 +1085,13 @@ static int proc_do_submiturb(struct dev_state *ps, struct usbdevfs_urb *uurb,
 	as->uid = current->uid;
 	as->euid = current->euid;
 	security_task_getsecid(current, &as->secid);
-	if (!(uurb->endpoint & USB_DIR_IN)) {
-		if (copy_from_user(as->urb->transfer_buffer, uurb->buffer, as->urb->transfer_buffer_length)) {
+	if (!is_in) {
+		if (copy_from_user(as->urb->transfer_buffer, uurb->buffer,
+				as->urb->transfer_buffer_length)) {
 			free_async(as);
 			return -EFAULT;
 		}
 	}
-	snoop(&as->urb->dev->dev, "submit urb\n");
 	snoop_urb(as->urb, as->userurb);
         async_newpending(as);
         if ((ret = usb_submit_urb(as->urb, GFP_KERNEL))) {
@@ -1122,14 +1134,14 @@ static int processcompl(struct async *as, void __user * __user *arg)
 	if (as->userbuffer)
 		if (copy_to_user(as->userbuffer, urb->transfer_buffer, urb->transfer_buffer_length))
 			return -EFAULT;
-	if (put_user(urb->status, &userurb->status))
+	if (put_user(as->status, &userurb->status))
 		return -EFAULT;
 	if (put_user(urb->actual_length, &userurb->actual_length))
 		return -EFAULT;
 	if (put_user(urb->error_count, &userurb->error_count))
 		return -EFAULT;
 
-	if (usb_pipeisoc(urb->pipe)) {
+	if (usb_endpoint_xfer_isoc(&urb->ep->desc)) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (put_user(urb->iso_frame_desc[i].actual_length,
 				     &userurb->iso_frame_desc[i].actual_length))
@@ -1236,14 +1248,14 @@ static int processcompl_compat(struct async *as, void __user * __user *arg)
 	if (as->userbuffer)
 		if (copy_to_user(as->userbuffer, urb->transfer_buffer, urb->transfer_buffer_length))
 			return -EFAULT;
-	if (put_user(urb->status, &userurb->status))
+	if (put_user(as->status, &userurb->status))
 		return -EFAULT;
 	if (put_user(urb->actual_length, &userurb->actual_length))
 		return -EFAULT;
 	if (put_user(urb->error_count, &userurb->error_count))
 		return -EFAULT;
 
-	if (usb_pipeisoc(urb->pipe)) {
+	if (usb_endpoint_xfer_isoc(&urb->ep->desc)) {
 		for (i = 0; i < urb->number_of_packets; i++) {
 			if (put_user(urb->iso_frame_desc[i].actual_length,
 				     &userurb->iso_frame_desc[i].actual_length))
@@ -1351,15 +1363,12 @@ static int proc_ioctl(struct dev_state *ps, struct usbdevfs_ioctl *ctl)
 
 	/* disconnect kernel driver from interface */
 	case USBDEVFS_DISCONNECT:
-
-		down_write(&usb_bus_type.subsys.rwsem);
 		if (intf->dev.driver) {
 			driver = to_usb_driver(intf->dev.driver);
 			dev_dbg (&intf->dev, "disconnect by usbfs\n");
 			usb_driver_release_interface(driver, intf);
 		} else
 			retval = -ENODATA;
-		up_write(&usb_bus_type.subsys.rwsem);
 		break;
 
 	/* let kernel drivers try to (re)bind to the interface */
@@ -1371,7 +1380,6 @@ static int proc_ioctl(struct dev_state *ps, struct usbdevfs_ioctl *ctl)
 
 	/* talk directly to the interface's driver */
 	default:
-		down_read(&usb_bus_type.subsys.rwsem);
 		if (intf->dev.driver)
 			driver = to_usb_driver(intf->dev.driver);
 		if (driver == NULL || driver->ioctl == NULL) {
@@ -1381,7 +1389,6 @@ static int proc_ioctl(struct dev_state *ps, struct usbdevfs_ioctl *ctl)
 			if (retval == -ENOIOCTLCMD)
 				retval = -ENOTTY;
 		}
-		up_read(&usb_bus_type.subsys.rwsem);
 	}
 
 	/* cleanup and return */
@@ -1583,7 +1590,8 @@ static unsigned int usbdev_poll(struct file *file, struct poll_table_struct *wai
 	return mask;
 }
 
-const struct file_operations usbfs_device_file_operations = {
+const struct file_operations usbdev_file_operations = {
+	.owner = 	THIS_MODULE,
 	.llseek =	usbdev_lseek,
 	.read =		usbdev_read,
 	.poll =		usbdev_poll,
@@ -1592,50 +1600,50 @@ const struct file_operations usbfs_device_file_operations = {
 	.release =	usbdev_release,
 };
 
-static int usbdev_add(struct usb_device *dev)
+#ifdef CONFIG_USB_DEVICE_CLASS
+static struct class *usb_classdev_class;
+
+static int usb_classdev_add(struct usb_device *dev)
 {
 	int minor = ((dev->bus->busnum-1) * 128) + (dev->devnum-1);
 
-	dev->usbfs_dev = device_create(usb_device_class, &dev->dev,
+	dev->usb_classdev = device_create(usb_classdev_class, &dev->dev,
 				MKDEV(USB_DEVICE_MAJOR, minor),
 				"usbdev%d.%d", dev->bus->busnum, dev->devnum);
-	if (IS_ERR(dev->usbfs_dev))
-		return PTR_ERR(dev->usbfs_dev);
+	if (IS_ERR(dev->usb_classdev))
+		return PTR_ERR(dev->usb_classdev);
 
-	dev->usbfs_dev->platform_data = dev;
 	return 0;
 }
 
-static void usbdev_remove(struct usb_device *dev)
+static void usb_classdev_remove(struct usb_device *dev)
 {
-	device_unregister(dev->usbfs_dev);
+	device_unregister(dev->usb_classdev);
 }
 
-static int usbdev_notify(struct notifier_block *self, unsigned long action,
-			 void *dev)
+static int usb_classdev_notify(struct notifier_block *self,
+			       unsigned long action, void *dev)
 {
 	switch (action) {
 	case USB_DEVICE_ADD:
-		if (usbdev_add(dev))
+		if (usb_classdev_add(dev))
 			return NOTIFY_BAD;
 		break;
 	case USB_DEVICE_REMOVE:
-		usbdev_remove(dev);
+		usb_classdev_remove(dev);
 		break;
 	}
 	return NOTIFY_OK;
 }
 
 static struct notifier_block usbdev_nb = {
-	.notifier_call = 	usbdev_notify,
+	.notifier_call = 	usb_classdev_notify,
 };
+#endif
 
-static struct cdev usb_device_cdev = {
-	.kobj   = {.name = "usb_device", },
-	.owner  = THIS_MODULE,
-};
+static struct cdev usb_device_cdev;
 
-int __init usbdev_init(void)
+int __init usb_devio_init(void)
 {
 	int retval;
 
@@ -1645,38 +1653,38 @@ int __init usbdev_init(void)
 		err("unable to register minors for usb_device");
 		goto out;
 	}
-	cdev_init(&usb_device_cdev, &usbfs_device_file_operations);
+	cdev_init(&usb_device_cdev, &usbdev_file_operations);
 	retval = cdev_add(&usb_device_cdev, USB_DEVICE_DEV, USB_DEVICE_MAX);
 	if (retval) {
 		err("unable to get usb_device major %d", USB_DEVICE_MAJOR);
 		goto error_cdev;
 	}
-	usb_device_class = class_create(THIS_MODULE, "usb_device");
-	if (IS_ERR(usb_device_class)) {
+#ifdef CONFIG_USB_DEVICE_CLASS
+	usb_classdev_class = class_create(THIS_MODULE, "usb_device");
+	if (IS_ERR(usb_classdev_class)) {
 		err("unable to register usb_device class");
-		retval = PTR_ERR(usb_device_class);
-		goto error_class;
+		retval = PTR_ERR(usb_classdev_class);
+		cdev_del(&usb_device_cdev);
+		usb_classdev_class = NULL;
+		goto out;
 	}
 
 	usb_register_notify(&usbdev_nb);
-
+#endif
 out:
 	return retval;
-
-error_class:
-	usb_device_class = NULL;
-	cdev_del(&usb_device_cdev);
 
 error_cdev:
 	unregister_chrdev_region(USB_DEVICE_DEV, USB_DEVICE_MAX);
 	goto out;
 }
 
-void usbdev_cleanup(void)
+void usb_devio_cleanup(void)
 {
+#ifdef CONFIG_USB_DEVICE_CLASS
 	usb_unregister_notify(&usbdev_nb);
-	class_destroy(usb_device_class);
+	class_destroy(usb_classdev_class);
+#endif
 	cdev_del(&usb_device_cdev);
 	unregister_chrdev_region(USB_DEVICE_DEV, USB_DEVICE_MAX);
 }
-

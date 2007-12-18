@@ -11,8 +11,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/smp_lock.h>
-
+#include <linux/capability.h>
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
 #include "pci.h"
@@ -61,7 +60,7 @@ proc_bus_pci_read(struct file *file, char __user *buf, size_t nbytes, loff_t *pp
 	 */
 
 	if (capable(CAP_SYS_ADMIN))
-		size = dev->cfg_size;
+		size = dp->size;
 	else if (dev->hdr_type == PCI_HEADER_TYPE_CARDBUS)
 		size = 128;
 	else
@@ -130,11 +129,11 @@ proc_bus_pci_read(struct file *file, char __user *buf, size_t nbytes, loff_t *pp
 static ssize_t
 proc_bus_pci_write(struct file *file, const char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	const struct inode *ino = file->f_path.dentry->d_inode;
+	struct inode *ino = file->f_path.dentry->d_inode;
 	const struct proc_dir_entry *dp = PDE(ino);
 	struct pci_dev *dev = dp->data;
 	int pos = *ppos;
-	int size = dev->cfg_size;
+	int size = dp->size;
 	int cnt;
 
 	if (pos >= size)
@@ -194,6 +193,7 @@ proc_bus_pci_write(struct file *file, const char __user *buf, size_t nbytes, lof
 	}
 
 	*ppos = pos;
+	i_size_write(ino, dp->size);
 	return nbytes;
 }
 
@@ -481,7 +481,6 @@ static int __init pci_proc_init(void)
 __initcall(pci_proc_init);
 
 #ifdef CONFIG_HOTPLUG
-EXPORT_SYMBOL(pci_proc_attach_device);
 EXPORT_SYMBOL(pci_proc_detach_bus);
 #endif
 

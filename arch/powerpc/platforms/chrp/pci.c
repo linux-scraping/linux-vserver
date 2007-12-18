@@ -7,14 +7,12 @@
 #include <linux/delay.h>
 #include <linux/string.h>
 #include <linux/init.h>
-#include <linux/ide.h>
 
 #include <asm/io.h>
 #include <asm/pgtable.h>
 #include <asm/irq.h>
 #include <asm/hydra.h>
 #include <asm/prom.h>
-#include <asm/gg2.h>
 #include <asm/machdep.h>
 #include <asm/sections.h>
 #include <asm/pci-bridge.h>
@@ -22,6 +20,7 @@
 #include <asm/rtas.h>
 
 #include "chrp.h"
+#include "gg2.h"
 
 /* LongTrail */
 void __iomem *gg2_pci_config_base;
@@ -87,8 +86,8 @@ int gg2_write_config(struct pci_bus *bus, unsigned int devfn, int off,
 
 static struct pci_ops gg2_pci_ops =
 {
-	gg2_read_config,
-	gg2_write_config
+	.read = gg2_read_config,
+	.write = gg2_write_config,
 };
 
 /*
@@ -100,7 +99,7 @@ int rtas_read_config(struct pci_bus *bus, unsigned int devfn, int offset,
 	struct pci_controller *hose = bus->sysdata;
 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
 		| (((bus->number - hose->first_busno) & 0xff) << 16)
-		| (hose->index << 24);
+		| (hose->global_number << 24);
         int ret = -1;
 	int rval;
 
@@ -115,7 +114,7 @@ int rtas_write_config(struct pci_bus *bus, unsigned int devfn, int offset,
 	struct pci_controller *hose = bus->sysdata;
 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
 		| (((bus->number - hose->first_busno) & 0xff) << 16)
-		| (hose->index << 24);
+		| (hose->global_number << 24);
 	int rval;
 
 	rval = rtas_call(rtas_token("write-pci-config"), 3, 1, NULL,
@@ -125,8 +124,8 @@ int rtas_write_config(struct pci_bus *bus, unsigned int devfn, int offset,
 
 static struct pci_ops rtas_pci_ops =
 {
-	rtas_read_config,
-	rtas_write_config
+	.read = rtas_read_config,
+	.write = rtas_write_config,
 };
 
 volatile struct Hydra __iomem *Hydra = NULL;
@@ -137,9 +136,11 @@ hydra_init(void)
 	struct device_node *np;
 	struct resource r;
 
-	np = find_devices("mac-io");
-	if (np == NULL || of_address_to_resource(np, 0, &r))
+	np = of_find_node_by_name(NULL, "mac-io");
+	if (np == NULL || of_address_to_resource(np, 0, &r)) {
+		of_node_put(np);
 		return 0;
+	}
 	Hydra = ioremap(r.start, r.end-r.start);
 	printk("Hydra Mac I/O at %llx\n", (unsigned long long)r.start);
 	printk("Hydra Feature_Control was %x",
@@ -180,16 +181,15 @@ setup_python(struct pci_controller *hose, struct device_node *dev)
 	}
 	iounmap(reg);
 
-	setup_indirect_pci(hose, r.start + 0xf8000, r.start + 0xf8010);
+	setup_indirect_pci(hose, r.start + 0xf8000, r.start + 0xf8010, 0);
 }
 
 /* Marvell Discovery II based Pegasos 2 */
 static void __init setup_peg2(struct pci_controller *hose, struct device_node *dev)
 {
-	struct device_node *root = find_path_device("/");
+	struct device_node *root = of_find_node_by_path("/");
 	struct device_node *rtas;
 
-	of_node_get(root);
 	rtas = of_find_node_by_name (root, "rtas");
 	if (rtas) {
 		hose->ops = &rtas_pci_ops;
@@ -199,6 +199,7 @@ static void __init setup_peg2(struct pci_controller *hose, struct device_node *d
 			" your firmware\n");
 	}
 	pci_assign_all_buses = 1;
+	/* keep the reference to the root node */
 }
 
 void __init
@@ -211,14 +212,14 @@ chrp_find_bridges(void)
 	const unsigned int *dma;
 	const char *model, *machine;
 	int is_longtrail = 0, is_mot = 0, is_pegasos = 0;
-	struct device_node *root = find_path_device("/");
+	struct device_node *root = of_find_node_by_path("/");
 	struct resource r;
 	/*
 	 * The PCI host bridge nodes on some machines don't have
 	 * properties to adequately identify them, so we have to
 	 * look at what sort of machine this is as well.
 	 */
-	machine = get_property(root, "model", NULL);
+	machine = of_get_property(root, "model", NULL);
 	if (machine != NULL) {
 		is_longtrail = strncmp(machine, "IBM,LongTrail", 13) == 0;
 		is_mot = strncmp(machine, "MOT", 3) == 0;
@@ -237,7 +238,7 @@ chrp_find_bridges(void)
 			       dev->full_name);
 			continue;
 		}
-		bus_range = get_property(dev, "bus-range", &len);
+		bus_range = of_get_property(dev, "bus-range", &len);
 		if (bus_range == NULL || len < 2 * sizeof(int)) {
 			printk(KERN_WARNING "Can't get bus-range for %s\n",
 				dev->full_name);
@@ -253,20 +254,19 @@ chrp_find_bridges(void)
 			printk(" at %llx", (unsigned long long)r.start);
 		printk("\n");
 
-		hose = pcibios_alloc_controller();
+		hose = pcibios_alloc_controller(dev);
 		if (!hose) {
 			printk("Can't allocate PCI controller structure for %s\n",
 				dev->full_name);
 			continue;
 		}
-		hose->arch_data = dev;
 		hose->first_busno = bus_range[0];
 		hose->last_busno = bus_range[1];
 
-		model = get_property(dev, "model", NULL);
+		model = of_get_property(dev, "model", NULL);
 		if (model == NULL)
 			model = "<none>";
-		if (device_is_compatible(dev, "IBM,python")) {
+		if (of_device_is_compatible(dev, "IBM,python")) {
 			setup_python(hose, dev);
 		} else if (is_mot
 			   || strncmp(model, "Motorola, Grackle", 17) == 0) {
@@ -277,15 +277,17 @@ chrp_find_bridges(void)
 			hose->cfg_data = p;
 			gg2_pci_config_base = p;
 		} else if (is_pegasos == 1) {
-			setup_indirect_pci(hose, 0xfec00cf8, 0xfee00cfc);
+			setup_indirect_pci(hose, 0xfec00cf8, 0xfee00cfc, 0);
 		} else if (is_pegasos == 2) {
 			setup_peg2(hose, dev);
 		} else if (!strncmp(model, "IBM,CPC710", 10)) {
 			setup_indirect_pci(hose,
 					   r.start + 0x000f8000,
-					   r.start + 0x000f8010);
+					   r.start + 0x000f8010,
+					   0);
 			if (index == 0) {
-				dma = get_property(dev, "system-dma-base",&len);
+				dma = of_get_property(dev, "system-dma-base",
+							&len);
 				if (dma && len >= sizeof(*dma)) {
 					dma = (unsigned int *)
 						(((unsigned long)dma) +
@@ -303,12 +305,13 @@ chrp_find_bridges(void)
 
 		/* check the first bridge for a property that we can
 		   use to set pci_dram_offset */
-		dma = get_property(dev, "ibm,dma-ranges", &len);
+		dma = of_get_property(dev, "ibm,dma-ranges", &len);
 		if (index == 0 && dma != NULL && len >= 6 * sizeof(*dma)) {
 			pci_dram_offset = dma[2] - dma[3];
 			printk("pci_dram_offset = %lx\n", pci_dram_offset);
 		}
 	}
+	of_node_put(root);
 }
 
 /* SL82C105 IDE Control/Status Register */
@@ -335,3 +338,32 @@ void chrp_pci_fixup_winbond_ata(struct pci_dev *sl82c105)
 }
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_WINBOND, PCI_DEVICE_ID_WINBOND_82C105,
 		chrp_pci_fixup_winbond_ata);
+
+/* Pegasos2 firmware version 20040810 configures the built-in IDE controller
+ * in legacy mode, but sets the PCI registers to PCI native mode.
+ * The chip can only operate in legacy mode, so force the PCI class into legacy
+ * mode as well. The same fixup must be done to the class-code property in
+ * the IDE node /pci@80000000/ide@C,1
+ */
+static void chrp_pci_fixup_vt8231_ata(struct pci_dev *viaide)
+{
+	u8 progif;
+	struct pci_dev *viaisa;
+
+	if (!machine_is(chrp) || _chrp_type != _CHRP_Pegasos)
+		return;
+	if (viaide->irq != 14)
+		return;
+
+	viaisa = pci_get_device(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_8231, NULL);
+	if (!viaisa)
+		return;
+	printk("Fixing VIA IDE, force legacy mode on '%s'\n", viaide->dev.bus_id);
+
+	pci_read_config_byte(viaide, PCI_CLASS_PROG, &progif);
+	pci_write_config_byte(viaide, PCI_CLASS_PROG, progif & ~0x5);
+	viaide->class &= ~0x5;
+
+	pci_dev_put(viaisa);
+}
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_82C586_1, chrp_pci_fixup_vt8231_ata);

@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -109,7 +109,7 @@ int __init irttp_init(void)
  *    Called by module destruction/cleanup code
  *
  */
-void __exit irttp_cleanup(void)
+void irttp_cleanup(void)
 {
 	/* Check for main structure */
 	IRDA_ASSERT(irttp->magic == TTP_MAGIC, return;);
@@ -256,7 +256,7 @@ static struct sk_buff *irttp_reassemble_skb(struct tsap_cb *self)
 	 *  Copy all fragments to a new buffer
 	 */
 	while ((frag = skb_dequeue(&self->rx_fragments)) != NULL) {
-		memcpy(skb->data+n, frag->data, frag->len);
+		skb_copy_to_linear_data_offset(skb, n, frag->data, frag->len);
 		n += frag->len;
 
 		dev_kfree_skb(frag);
@@ -314,8 +314,8 @@ static inline void irttp_fragment_skb(struct tsap_cb *self,
 		skb_reserve(frag, self->max_header_size);
 
 		/* Copy data from the original skb into this fragment. */
-		memcpy(skb_put(frag, self->max_seg_size), skb->data,
-		       self->max_seg_size);
+		skb_copy_from_linear_data(skb, skb_put(frag, self->max_seg_size),
+			      self->max_seg_size);
 
 		/* Insert TTP header, with the more bit set */
 		frame = skb_push(frag, TTP_HEADER);
@@ -369,6 +369,20 @@ static int irttp_param_max_sdu_size(void *instance, irda_param_t *param,
 /* Everything is happily mixed up. Waiting for next clean up - Jean II */
 
 /*
+ * Initialization, that has to be done on new tsap
+ * instance allocation and on duplication
+ */
+static void irttp_init_tsap(struct tsap_cb *tsap)
+{
+	spin_lock_init(&tsap->lock);
+	init_timer(&tsap->todo_timer);
+
+	skb_queue_head_init(&tsap->rx_queue);
+	skb_queue_head_init(&tsap->tx_queue);
+	skb_queue_head_init(&tsap->rx_fragments);
+}
+
+/*
  * Function irttp_open_tsap (stsap, notify)
  *
  *    Create TSAP connection endpoint,
@@ -395,10 +409,11 @@ struct tsap_cb *irttp_open_tsap(__u8 stsap_sel, int credit, notify_t *notify)
 		IRDA_DEBUG(0, "%s(), unable to kmalloc!\n", __FUNCTION__);
 		return NULL;
 	}
-	spin_lock_init(&self->lock);
+
+	/* Initialize internal objects */
+	irttp_init_tsap(self);
 
 	/* Initialise todo timer */
-	init_timer(&self->todo_timer);
 	self->todo_timer.data     = (unsigned long) self;
 	self->todo_timer.function = &irttp_todo_expired;
 
@@ -418,9 +433,6 @@ struct tsap_cb *irttp_open_tsap(__u8 stsap_sel, int credit, notify_t *notify)
 	self->magic = TTP_TSAP_MAGIC;
 	self->connected = FALSE;
 
-	skb_queue_head_init(&self->rx_queue);
-	skb_queue_head_init(&self->tx_queue);
-	skb_queue_head_init(&self->rx_fragments);
 	/*
 	 *  Create LSAP at IrLMP layer
 	 */
@@ -551,7 +563,7 @@ int irttp_udata_request(struct tsap_cb *self, struct sk_buff *skb)
 	}
 
 	if (skb->len > self->max_seg_size) {
-		IRDA_DEBUG(1, "%s(), UData is to large for IrLAP!\n",
+		IRDA_DEBUG(1, "%s(), UData is too large for IrLAP!\n",
 			   __FUNCTION__);
 		goto err;
 	}
@@ -598,7 +610,7 @@ int irttp_data_request(struct tsap_cb *self, struct sk_buff *skb)
 	 *  inside an IrLAP frame
 	 */
 	if ((self->tx_max_sdu_size == 0) && (skb->len > self->max_seg_size)) {
-		IRDA_ERROR("%s: SAR disabled, and data is to large for IrLAP!\n",
+		IRDA_ERROR("%s: SAR disabled, and data is too large for IrLAP!\n",
 			   __FUNCTION__);
 		ret = -EMSGSIZE;
 		goto err;
@@ -1455,12 +1467,9 @@ struct tsap_cb *irttp_dup(struct tsap_cb *orig, void *instance)
 
 	/* Not everything should be copied */
 	new->notify.instance = instance;
-	spin_lock_init(&new->lock);
-	init_timer(&new->todo_timer);
 
-	skb_queue_head_init(&new->rx_queue);
-	skb_queue_head_init(&new->tx_queue);
-	skb_queue_head_init(&new->rx_fragments);
+	/* Initialize internal objects */
+	irttp_init_tsap(new);
 
 	/* This is locked */
 	hashbin_insert(irttp->tsaps, (irda_queue_t *) new, (long) new, NULL);
@@ -1866,7 +1875,7 @@ static int irttp_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irttp_seq_ops = {
+static const struct seq_operations irttp_seq_ops = {
 	.start  = irttp_seq_start,
 	.next   = irttp_seq_next,
 	.stop   = irttp_seq_stop,
@@ -1875,25 +1884,8 @@ static struct seq_operations irttp_seq_ops = {
 
 static int irttp_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct irttp_iter_state *s;
-
-	s = kzalloc(sizeof(*s), GFP_KERNEL);
-	if (!s)
-		goto out;
-
-	rc = seq_open(file, &irttp_seq_ops);
-	if (rc)
-		goto out_kfree;
-
-	seq	     = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &irttp_seq_ops,
+			sizeof(struct irttp_iter_state));
 }
 
 const struct file_operations irttp_seq_fops = {

@@ -1,27 +1,28 @@
-/* 
+/*
  * This file is part of the zfcp device driver for
  * FCP adapters for IBM System z9 and zSeries.
  *
  * (C) Copyright IBM Corp. 2002, 2006
- * 
- * This program is free software; you can redistribute it and/or modify 
- * it under the terms of the GNU General Public License as published by 
- * the Free Software Foundation; either version 2, or (at your option) 
- * any later version. 
- * 
- * This program is distributed in the hope that it will be useful, 
- * but WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
- * GNU General Public License for more details. 
- * 
- * You should have received a copy of the GNU General Public License 
- * along with this program; if not, write to the Free Software 
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA. 
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #define ZFCP_LOG_AREA			ZFCP_LOG_AREA_SCSI
 
 #include "zfcp_ext.h"
+#include <asm/atomic.h>
 
 static void zfcp_scsi_slave_destroy(struct scsi_device *sdp);
 static int zfcp_scsi_slave_alloc(struct scsi_device *sdp);
@@ -100,7 +101,7 @@ zfcp_get_fcp_dl_ptr(struct fcp_cmnd_iu * fcp_cmd)
 		((unsigned char *) fcp_cmd +
 		 sizeof (struct fcp_cmnd_iu) + additional_length);
 	/*
-	 * fcp_dl_addr = start address of fcp_cmnd structure + 
+	 * fcp_dl_addr = start address of fcp_cmnd structure +
 	 * size of fixed part + size of dynamically sized add_dcp_cdb field
 	 * SEE FCP-2 documentation
 	 */
@@ -179,18 +180,21 @@ static void zfcp_scsi_slave_destroy(struct scsi_device *sdpnt)
 	struct zfcp_unit *unit = (struct zfcp_unit *) sdpnt->hostdata;
 
 	if (unit) {
+		zfcp_erp_wait(unit->port->adapter);
+		wait_event(unit->scsi_scan_wq,
+			   atomic_test_mask(ZFCP_STATUS_UNIT_SCSI_WORK_PENDING,
+					    &unit->status) == 0);
 		atomic_clear_mask(ZFCP_STATUS_UNIT_REGISTERED, &unit->status);
 		sdpnt->hostdata = NULL;
 		unit->device = NULL;
 		zfcp_erp_unit_failed(unit);
 		zfcp_unit_put(unit);
-	} else {
+	} else
 		ZFCP_LOG_NORMAL("bug: no unit associated with SCSI device at "
 				"address %p\n", sdpnt);
-	}
 }
 
-/* 
+/*
  * called from scsi midlayer to allow finetuning of a device.
  */
 static int
@@ -356,12 +360,11 @@ zfcp_unit_lookup(struct zfcp_adapter *adapter, int channel, unsigned int id,
 	list_for_each_entry(port, &adapter->port_list_head, list) {
 		if (!port->rport || (id != port->rport->scsi_target_id))
 			continue;
-		list_for_each_entry(unit, &port->unit_list_head, list) {
+		list_for_each_entry(unit, &port->unit_list_head, list)
 			if (lun == unit->scsi_lun) {
 				retval = unit;
 				goto out;
 			}
-		}
 	}
  out:
 	return retval;
@@ -369,7 +372,7 @@ zfcp_unit_lookup(struct zfcp_adapter *adapter, int channel, unsigned int id,
 
 /**
  * zfcp_scsi_eh_abort_handler - abort the specified SCSI command
- * @scpnt: pointer to scsi_cmnd to be aborted 
+ * @scpnt: pointer to scsi_cmnd to be aborted
  * Return: SUCCESS - command has been aborted and cleaned up in internal
  *          bookkeeping, SCSI stack won't be called for aborted command
  *         FAILED - otherwise
@@ -402,8 +405,8 @@ static int zfcp_scsi_eh_abort_handler(struct scsi_cmnd *scpnt)
 
 	/* Check whether corresponding fsf_req is still pending */
 	spin_lock(&adapter->req_list_lock);
-	fsf_req = zfcp_reqlist_ismember(adapter, (unsigned long)
-					scpnt->host_scribble);
+	fsf_req = zfcp_reqlist_find(adapter,
+				    (unsigned long) scpnt->host_scribble);
 	spin_unlock(&adapter->req_list_lock);
 	if (!fsf_req) {
 		write_unlock_irqrestore(&adapter->abort_lock, flags);
@@ -563,6 +566,9 @@ zfcp_adapter_scsi_register(struct zfcp_adapter *adapter)
 {
 	int retval = 0;
 	static unsigned int unique_id = 0;
+
+	if (adapter->scsi_host)
+		goto out;
 
 	/* register adapter as SCSI host with mid layer of SCSI stack */
 	adapter->scsi_host = scsi_host_alloc(&zfcp_data.scsi_host_template,
@@ -725,7 +731,7 @@ zfcp_get_fc_host_stats(struct Scsi_Host *shost)
 	if (!data)
 		return NULL;
 
-	ret = zfcp_fsf_exchange_port_data(NULL, adapter, data);
+	ret = zfcp_fsf_exchange_port_data_sync(adapter, data);
 	if (ret) {
 		kfree(data);
 		return NULL; /* XXX return zeroed fc_stats? */
@@ -755,8 +761,10 @@ zfcp_reset_fc_host_stats(struct Scsi_Host *shost)
 	if (!data)
 		return;
 
-	ret = zfcp_fsf_exchange_port_data(NULL, adapter, data);
-	if (ret == 0) {
+	ret = zfcp_fsf_exchange_port_data_sync(adapter, data);
+	if (ret) {
+		kfree(data);
+	} else {
 		adapter->stats_reset = jiffies/HZ;
 		old_data = adapter->stats_reset_data;
 		adapter->stats_reset_data = data; /* finally freed in
@@ -792,6 +800,7 @@ struct fc_function_template zfcp_transport_functions = {
 	.show_host_port_type = 1,
 	.show_host_speed = 1,
 	.show_host_port_id = 1,
+	.disable_target_scan = 1,
 };
 
 /**

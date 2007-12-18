@@ -307,7 +307,9 @@ static void hci_uart_tty_close(struct tty_struct *tty)
 
 	if (hu) {
 		struct hci_dev *hdev = hu->hdev;
-		hci_uart_close(hdev);
+
+		if (hdev)
+			hci_uart_close(hdev);
 
 		if (test_and_clear_bit(HCI_UART_PROTO_SET, &hu->flags)) {
 			hu->proto->close(hu);
@@ -473,10 +475,16 @@ static int hci_uart_tty_ioctl(struct tty_struct *tty, struct file * file,
 			tty->low_latency = 1;
 		} else
 			return -EBUSY;
+		break;
 
 	case HCIUARTGETPROTO:
 		if (test_bit(HCI_UART_PROTO_SET, &hu->flags))
 			return hu->proto->id;
+		return -EUNATCH;
+
+	case HCIUARTGETDEVICE:
+		if (test_bit(HCI_UART_PROTO_SET, &hu->flags))
+			return hu->hdev->id;
 		return -EUNATCH;
 
 	default:
@@ -541,7 +549,10 @@ static int __init hci_uart_init(void)
 #ifdef CONFIG_BT_HCIUART_BCSP
 	bcsp_init();
 #endif
-	
+#ifdef CONFIG_BT_HCIUART_LL
+	ll_init();
+#endif
+
 	return 0;
 }
 
@@ -554,6 +565,9 @@ static void __exit hci_uart_exit(void)
 #endif
 #ifdef CONFIG_BT_HCIUART_BCSP
 	bcsp_deinit();
+#endif
+#ifdef CONFIG_BT_HCIUART_LL
+	ll_deinit();
 #endif
 
 	/* Release tty registration of line discipline */

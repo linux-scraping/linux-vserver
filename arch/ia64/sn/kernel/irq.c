@@ -5,7 +5,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (c) 2000-2006 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2000-2007 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 #include <linux/irq.h>
@@ -19,6 +19,7 @@
 #include <asm/sn/pcidev.h>
 #include <asm/sn/shub_mmr.h>
 #include <asm/sn/sn_sal.h>
+#include <asm/sn/sn_feature_sets.h>
 
 static void force_interrupt(int irq);
 static void register_intr_pda(struct sn_irq_info *sn_irq_info);
@@ -59,6 +60,22 @@ void sn_intr_free(nasid_t local_nasid, int local_widget,
 			(u64) sn_irq_info->irq_cookie, 0, 0);
 }
 
+u64 sn_intr_redirect(nasid_t local_nasid, int local_widget,
+		      struct sn_irq_info *sn_irq_info,
+		      nasid_t req_nasid, int req_slice)
+{
+	struct ia64_sal_retval ret_stuff;
+	ret_stuff.status = 0;
+	ret_stuff.v0 = 0;
+
+	SAL_CALL_NOLOCK(ret_stuff, (u64) SN_SAL_IOIF_INTERRUPT,
+			(u64) SAL_INTR_REDIRECT, (u64) local_nasid,
+			(u64) local_widget, __pa(sn_irq_info),
+			(u64) req_nasid, (u64) req_slice, 0);
+
+	return ret_stuff.status;
+}
+
 static unsigned int sn_startup_irq(unsigned int irq)
 {
 	return 0;
@@ -68,12 +85,18 @@ static void sn_shutdown_irq(unsigned int irq)
 {
 }
 
+extern void ia64_mca_register_cpev(int);
+
 static void sn_disable_irq(unsigned int irq)
 {
+	if (irq == local_vector_to_irq(IA64_CPE_VECTOR))
+		ia64_mca_register_cpev(0);
 }
 
 static void sn_enable_irq(unsigned int irq)
 {
+	if (irq == local_vector_to_irq(IA64_CPE_VECTOR))
+		ia64_mca_register_cpev(irq);
 }
 
 static void sn_ack_irq(unsigned int irq)
@@ -127,15 +150,8 @@ struct sn_irq_info *sn_retarget_vector(struct sn_irq_info *sn_irq_info,
 	struct sn_irq_info *new_irq_info;
 	struct sn_pcibus_provider *pci_provider;
 
-	new_irq_info = kmalloc(sizeof(struct sn_irq_info), GFP_ATOMIC);
-	if (new_irq_info == NULL)
-		return NULL;
-
-	memcpy(new_irq_info, sn_irq_info, sizeof(struct sn_irq_info));
-
-	bridge = (u64) new_irq_info->irq_bridge;
+	bridge = (u64) sn_irq_info->irq_bridge;
 	if (!bridge) {
-		kfree(new_irq_info);
 		return NULL; /* irq is not a device interrupt */
 	}
 
@@ -145,8 +161,25 @@ struct sn_irq_info *sn_retarget_vector(struct sn_irq_info *sn_irq_info,
 		local_widget = TIO_SWIN_WIDGETNUM(bridge);
 	else
 		local_widget = SWIN_WIDGETNUM(bridge);
-
 	vector = sn_irq_info->irq_irq;
+
+	/* Make use of SAL_INTR_REDIRECT if PROM supports it */
+	status = sn_intr_redirect(local_nasid, local_widget, sn_irq_info, nasid, slice);
+	if (!status) {
+		new_irq_info = sn_irq_info;
+		goto finish_up;
+	}
+
+	/*
+	 * PROM does not support SAL_INTR_REDIRECT, or it failed.
+	 * Revert to old method.
+	 */
+	new_irq_info = kmalloc(sizeof(struct sn_irq_info), GFP_ATOMIC);
+	if (new_irq_info == NULL)
+		return NULL;
+
+	memcpy(new_irq_info, sn_irq_info, sizeof(struct sn_irq_info));
+
 	/* Free the old PROM new_irq_info structure */
 	sn_intr_free(local_nasid, local_widget, new_irq_info);
 	unregister_intr_pda(new_irq_info);
@@ -162,11 +195,18 @@ struct sn_irq_info *sn_retarget_vector(struct sn_irq_info *sn_irq_info,
 		return NULL;
 	}
 
+	register_intr_pda(new_irq_info);
+	spin_lock(&sn_irq_info_lock);
+	list_replace_rcu(&sn_irq_info->list, &new_irq_info->list);
+	spin_unlock(&sn_irq_info_lock);
+	call_rcu(&sn_irq_info->rcu, sn_irq_info_free);
+
+
+finish_up:
 	/* Update kernels new_irq_info with new target info */
 	cpuid = nasid_slice_to_cpuid(new_irq_info->irq_nasid,
 				     new_irq_info->irq_slice);
 	new_irq_info->irq_cpuid = cpuid;
-	register_intr_pda(new_irq_info);
 
 	pci_provider = sn_pci_provider[new_irq_info->irq_bridge_type];
 
@@ -177,11 +217,6 @@ struct sn_irq_info *sn_retarget_vector(struct sn_irq_info *sn_irq_info,
 	if (new_irq_info->irq_int_bit >= 0 &&
 	    pci_provider && pci_provider->target_interrupt)
 		(pci_provider->target_interrupt)(new_irq_info);
-
-	spin_lock(&sn_irq_info_lock);
-	list_replace_rcu(&sn_irq_info->list, &new_irq_info->list);
-	spin_unlock(&sn_irq_info_lock);
-	call_rcu(&sn_irq_info->rcu, sn_irq_info_free);
 
 #ifdef CONFIG_SMP
 	cpuphys = cpu_physical_id(cpuid);
@@ -205,6 +240,20 @@ static void sn_set_affinity_irq(unsigned int irq, cpumask_t mask)
 		(void)sn_retarget_vector(sn_irq_info, nasid, slice);
 }
 
+#ifdef CONFIG_SMP
+void sn_set_err_irq_affinity(unsigned int irq)
+{
+        /*
+         * On systems which support CPU disabling (SHub2), all error interrupts
+         * are targetted at the boot CPU.
+         */
+        if (is_shub2() && sn_prom_feature_available(PRF_CPU_DISABLE_SUPPORT))
+                set_irq_affinity_info(irq, cpu_physical_id(0), 0);
+}
+#else
+void sn_set_err_irq_affinity(unsigned int irq) { }
+#endif
+
 static void
 sn_mask_irq(unsigned int irq)
 {
@@ -227,6 +276,13 @@ struct irq_chip irq_type_sn = {
 	.unmask		= sn_unmask_irq,
 	.set_affinity	= sn_set_affinity_irq
 };
+
+ia64_vector sn_irq_to_vector(int irq)
+{
+	if (irq >= IA64_NUM_VECTORS)
+		return 0;
+	return (ia64_vector)irq;
+}
 
 unsigned int sn_local_vector_to_irq(u8 vector)
 {
@@ -370,7 +426,10 @@ sn_call_force_intr_provider(struct sn_irq_info *sn_irq_info)
 	struct sn_pcibus_provider *pci_provider;
 
 	pci_provider = sn_pci_provider[sn_irq_info->irq_bridge_type];
-	if (pci_provider && pci_provider->force_interrupt)
+
+	/* Don't force an interrupt if the irq has been disabled */
+	if (!(irq_desc[sn_irq_info->irq_irq].status & IRQ_DISABLED) &&
+	    pci_provider && pci_provider->force_interrupt)
 		(*pci_provider->force_interrupt)(sn_irq_info);
 }
 

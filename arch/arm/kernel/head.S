@@ -29,6 +29,10 @@
 #define KERNEL_RAM_VADDR	(PAGE_OFFSET + TEXT_OFFSET)
 #define KERNEL_RAM_PADDR	(PHYS_OFFSET + TEXT_OFFSET)
 
+#define ATAG_CORE 0x54410001
+#define ATAG_CORE_SIZE ((2*4 + 3*4) >> 2)
+
+
 /*
  * swapper_pg_dir is the virtual address of the initial page table.
  * We place the page tables 16K below KERNEL_RAM_VADDR.  Therefore, we must
@@ -61,7 +65,7 @@
  *
  * This is normally called from the decompressor code.  The requirements
  * are: MMU = off, D-cache = off, I-cache = dont care, r0 = 0,
- * r1 = machine nr.
+ * r1 = machine nr, r2 = atags pointer.
  *
  * This code is mostly position independent, so if you link the kernel at
  * 0xc0008000, you call this at __pa(0xc0008000).
@@ -73,7 +77,7 @@
  * crap here - that's what the boot loader (or in extreme, well justified
  * circumstances, zImage) is for.
  */
-	__INIT
+	.section ".text.head", "ax"
 	.type	stext, %function
 ENTRY(stext)
 	msr	cpsr_c, #PSR_F_BIT | PSR_I_BIT | SVC_MODE @ ensure svc mode
@@ -85,6 +89,7 @@ ENTRY(stext)
 	bl	__lookup_machine_type		@ r5=machinfo
 	movs	r8, r5				@ invalid machine (r5=0)?
 	beq	__error_a			@ yes, error 'a'
+	bl	__vet_atags
 	bl	__create_page_tables
 
 	/*
@@ -257,7 +262,9 @@ __create_page_tables:
 	 * Map some ram to cover our .data and .bss areas.
 	 */
 	orr	r3, r7, #(KERNEL_RAM_PADDR & 0xff000000)
+	.if	(KERNEL_RAM_PADDR & 0x00f00000)
 	orr	r3, r3, #(KERNEL_RAM_PADDR & 0x00f00000)
+	.endif
 	add	r0, r4,  #(KERNEL_RAM_VADDR & 0xff000000) >> 18
 	str	r3, [r0, #(KERNEL_RAM_VADDR & 0x00f00000) >> 18]!
 	ldr	r6, =(_end - 1)
@@ -274,7 +281,9 @@ __create_page_tables:
 	 */
 	add	r0, r4, #PAGE_OFFSET >> 18
 	orr	r6, r7, #(PHYS_OFFSET & 0xff000000)
-	orr	r6, r6, #(PHYS_OFFSET & 0x00e00000)
+	.if	(PHYS_OFFSET & 0x00f00000)
+	orr	r6, r6, #(PHYS_OFFSET & 0x00f00000)
+	.endif
 	str	r6, [r0]
 
 #ifdef CONFIG_DEBUG_LL

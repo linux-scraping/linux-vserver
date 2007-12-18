@@ -58,6 +58,7 @@
 #include <linux/slab.h>
 #include <linux/idr.h>
 #include <linux/kref.h>
+#include <linux/net.h>
 #include <net/tcp.h>
 
 #include <asm/uaccess.h>
@@ -261,14 +262,12 @@ out:
 
 static void o2net_complete_nodes_nsw(struct o2net_node *nn)
 {
-	struct list_head *iter, *tmp;
+	struct o2net_status_wait *nsw, *tmp;
 	unsigned int num_kills = 0;
-	struct o2net_status_wait *nsw;
 
 	assert_spin_locked(&nn->nn_lock);
 
-	list_for_each_safe(iter, tmp, &nn->nn_status_list) {
-		nsw = list_entry(iter, struct o2net_status_wait, ns_node_item);
+	list_for_each_entry_safe(nsw, tmp, &nn->nn_status_list, ns_node_item) {
 		o2net_complete_nsw_locked(nn, nsw, O2NET_ERR_DIED, 0);
 		num_kills++;
 	}
@@ -618,8 +617,7 @@ static void o2net_shutdown_sc(struct work_struct *work)
 		del_timer_sync(&sc->sc_idle_timeout);
 		o2net_sc_cancel_delayed_work(sc, &sc->sc_keepalive_work);
 		sc_put(sc);
-		sc->sc_sock->ops->shutdown(sc->sc_sock,
-					   RCV_SHUTDOWN|SEND_SHUTDOWN);
+		kernel_sock_shutdown(sc->sc_sock, SHUT_RDWR);
 	}
 
 	/* not fatal so failed connects before the other guy has our
@@ -764,13 +762,10 @@ EXPORT_SYMBOL_GPL(o2net_register_handler);
 
 void o2net_unregister_handler_list(struct list_head *list)
 {
-	struct list_head *pos, *n;
-	struct o2net_msg_handler *nmh;
+	struct o2net_msg_handler *nmh, *n;
 
 	write_lock(&o2net_handler_lock);
-	list_for_each_safe(pos, n, list) {
-		nmh = list_entry(pos, struct o2net_msg_handler,
-				 nh_unregister_item);
+	list_for_each_entry_safe(nmh, n, list, nh_unregister_item) {
 		mlog(ML_TCP, "unregistering handler func %p type %u key %08x\n",
 		     nmh->nh_func, nmh->nh_msg_type, nmh->nh_key);
 		rb_erase(&nmh->nh_node, &o2net_handler_tree);
@@ -859,17 +854,25 @@ static void o2net_sendpage(struct o2net_sock_container *sc,
 	struct o2net_node *nn = o2net_nn_from_num(sc->sc_node->nd_num);
 	ssize_t ret;
 
-
-	mutex_lock(&sc->sc_send_lock);
-	ret = sc->sc_sock->ops->sendpage(sc->sc_sock,
-					 virt_to_page(kmalloced_virt),
-					 (long)kmalloced_virt & ~PAGE_MASK,
-					 size, MSG_DONTWAIT);
-	mutex_unlock(&sc->sc_send_lock);
-	if (ret != size) {
+	while (1) {
+		mutex_lock(&sc->sc_send_lock);
+		ret = sc->sc_sock->ops->sendpage(sc->sc_sock,
+						 virt_to_page(kmalloced_virt),
+						 (long)kmalloced_virt & ~PAGE_MASK,
+						 size, MSG_DONTWAIT);
+		mutex_unlock(&sc->sc_send_lock);
+		if (ret == size)
+			break;
+		if (ret == (ssize_t)-EAGAIN) {
+			mlog(0, "sendpage of size %zu to " SC_NODEF_FMT
+			     " returned EAGAIN\n", size, SC_NODEF_ARGS(sc));
+			cond_resched();
+			continue;
+		}
 		mlog(ML_ERROR, "sendpage of size %zu to " SC_NODEF_FMT 
 		     " failed with %zd\n", size, SC_NODEF_ARGS(sc), ret);
 		o2net_ensure_shutdown(nn, sc, 0);
+		break;
 	}
 }
 
@@ -1496,7 +1499,7 @@ static void o2net_start_connect(struct work_struct *work)
 	sock->sk->sk_allocation = GFP_ATOMIC;
 
 	myaddr.sin_family = AF_INET;
-	myaddr.sin_addr.s_addr = (__force u32)mynode->nd_ipv4_address;
+	myaddr.sin_addr.s_addr = mynode->nd_ipv4_address;
 	myaddr.sin_port = (__force u16)htons(0); /* any port */
 
 	ret = sock->ops->bind(sock, (struct sockaddr *)&myaddr,
@@ -1521,8 +1524,8 @@ static void o2net_start_connect(struct work_struct *work)
 	spin_unlock(&nn->nn_lock);
 
 	remoteaddr.sin_family = AF_INET;
-	remoteaddr.sin_addr.s_addr = (__force u32)node->nd_ipv4_address;
-	remoteaddr.sin_port = (__force u16)node->nd_ipv4_port;
+	remoteaddr.sin_addr.s_addr = node->nd_ipv4_address;
+	remoteaddr.sin_port = node->nd_ipv4_port;
 
 	ret = sc->sc_sock->ops->connect(sc->sc_sock,
 					(struct sockaddr *)&remoteaddr,
@@ -1638,8 +1641,8 @@ static void o2net_hb_node_up_cb(struct o2nm_node *node, int node_num,
 
 void o2net_unregister_hb_callbacks(void)
 {
-	o2hb_unregister_callback(&o2net_hb_up);
-	o2hb_unregister_callback(&o2net_hb_down);
+	o2hb_unregister_callback(NULL, &o2net_hb_up);
+	o2hb_unregister_callback(NULL, &o2net_hb_down);
 }
 
 int o2net_register_hb_callbacks(void)
@@ -1651,9 +1654,9 @@ int o2net_register_hb_callbacks(void)
 	o2hb_setup_callback(&o2net_hb_up, O2HB_NODE_UP_CB,
 			    o2net_hb_node_up_cb, NULL, O2NET_HB_PRI);
 
-	ret = o2hb_register_callback(&o2net_hb_up);
+	ret = o2hb_register_callback(NULL, &o2net_hb_up);
 	if (ret == 0)
-		ret = o2hb_register_callback(&o2net_hb_down);
+		ret = o2hb_register_callback(NULL, &o2net_hb_down);
 
 	if (ret)
 		o2net_unregister_hb_callbacks();
@@ -1810,8 +1813,8 @@ static int o2net_open_listening_sock(__be32 addr, __be16 port)
 	int ret;
 	struct sockaddr_in sin = {
 		.sin_family = PF_INET,
-		.sin_addr = { .s_addr = (__force u32)addr },
-		.sin_port = (__force u16)port,
+		.sin_addr = { .s_addr = addr },
+		.sin_port = port,
 	};
 
 	ret = sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);

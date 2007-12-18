@@ -65,14 +65,16 @@ static int proc_virtual_status(char *buffer)
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
-		"#NSProxy:\t%d\t%d %d %d %d\n",
+		"#NSProxy:\t%d\t%d %d %d %d %d %d\n",
 		atomic_read(&vx_global_ctotal),
 		atomic_read(&vx_global_cactive),
 		atomic_read(&vs_global_nsproxy),
 		atomic_read(&vs_global_fs),
 		atomic_read(&vs_global_mnt_ns),
 		atomic_read(&vs_global_uts_ns),
-		atomic_read(&vs_global_ipc_ns));
+		atomic_read(&vs_global_ipc_ns),
+		atomic_read(&vs_global_user_ns),
+		atomic_read(&vs_global_pid_ns));
 }
 
 
@@ -943,7 +945,7 @@ static struct file_operations proc_virtnet_dir_operations = {
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {
-	.getattr = 	proc_virtnet_getattr,
+	.getattr =	proc_virtnet_getattr,
 	.lookup =	proc_virtnet_lookup,
 };
 

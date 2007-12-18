@@ -1,4 +1,3 @@
-//kernel/linux-omap-fsample/arch/arm/mach-omap1/pm.c#3 - integrate change 4545 (text)
 /*
  * linux/arch/arm/mach-omap1/pm.c
  *
@@ -36,10 +35,9 @@
  * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/pm.h>
+#include <linux/suspend.h>
 #include <linux/sched.h>
 #include <linux/proc_fs.h>
-#include <linux/pm.h>
 #include <linux/interrupt.h>
 #include <linux/sysfs.h>
 #include <linux/module.h>
@@ -58,7 +56,6 @@
 #include <asm/arch/tc.h>
 #include <asm/arch/pm.h>
 #include <asm/arch/mux.h>
-#include <asm/arch/tps65010.h>
 #include <asm/arch/dma.h>
 #include <asm/arch/dsp_common.h>
 #include <asm/arch/dmtimer.h>
@@ -72,12 +69,12 @@ static unsigned int mpui1610_sleep_save[MPUI1610_SLEEP_SAVE_SIZE];
 
 static unsigned short enable_dyn_sleep = 1;
 
-static ssize_t omap_pm_sleep_while_idle_show(struct subsystem * subsys, char *buf)
+static ssize_t omap_pm_sleep_while_idle_show(struct kset *kset, char *buf)
 {
 	return sprintf(buf, "%hu\n", enable_dyn_sleep);
 }
 
-static ssize_t omap_pm_sleep_while_idle_store(struct subsystem * subsys,
+static ssize_t omap_pm_sleep_while_idle_store(struct kset *kset,
 					      const char * buf,
 					      size_t n)
 {
@@ -100,7 +97,7 @@ static struct subsys_attribute sleep_while_idle_attr = {
 	.store  = omap_pm_sleep_while_idle_store,
 };
 
-extern struct subsystem power_subsys;
+extern struct kset power_subsys;
 static void (*omap_sram_idle)(void) = NULL;
 static void (*omap_sram_suspend)(unsigned long r0, unsigned long r1) = NULL;
 
@@ -155,11 +152,8 @@ void omap_pm_idle(void)
 	use_idlect1 = omap_dm_timer_modify_idlect_mask(use_idlect1);
 #endif
 
-	if (omap_dma_running()) {
+	if (omap_dma_running())
 		use_idlect1 &= ~(1 << 6);
-		if (omap_lcd_dma_ext_running())
-			use_idlect1 &= ~(1 << 12);
-	}
 
 	/* We should be able to remove the do_sleep variable and multiple
 	 * tests above as soon as drivers, timer and DMA code have been fixed.
@@ -250,11 +244,6 @@ void omap_pm_suspend(void)
 	printk("PM: OMAP%x is trying to enter deep sleep...\n", system_rev);
 
 	omap_serial_wake_trigger(1);
-
-	if (machine_is_omap_osk()) {
-		/* Stop LED1 (D9) blink */
-		tps65010_set_led(LED1, OFF);
-	}
 
 	if (!cpu_is_omap15xx())
 		omap_writew(0xffff, ULPD_SOFT_DISABLE_REQ_REG);
@@ -377,7 +366,7 @@ void omap_pm_suspend(void)
 	 * Jump to assembly code. The processor will stay there
 	 * until wake up.
 	 */
-        omap_sram_suspend(arg0, arg1);
+	omap_sram_suspend(arg0, arg1);
 
 	/*
 	 * If we are here, processor is woken up!
@@ -439,7 +428,7 @@ void omap_pm_suspend(void)
 		omap_writew(0, ULPD_SOFT_DISABLE_REQ_REG);
 
 	/*
-	 * Reenable interrupts
+	 * Re-enable interrupts
 	 */
 
 	local_irq_enable();
@@ -448,11 +437,6 @@ void omap_pm_suspend(void)
 	omap_serial_wake_trigger(0);
 
 	printk("PM: OMAP%x is re-starting from deep sleep...\n", system_rev);
-
-	if (machine_is_omap_osk()) {
-		/* Let LED1 (D9) blink again */
-		tps65010_set_led(LED1, BLINK);
-	}
 }
 
 #if defined(DEBUG) && defined(CONFIG_PROC_FS)
@@ -615,31 +599,15 @@ static void (*saved_idle)(void) = NULL;
 
 /*
  *	omap_pm_prepare - Do preliminary suspend work.
- *	@state:		suspend state we're entering.
  *
  */
-static int omap_pm_prepare(suspend_state_t state)
+static int omap_pm_prepare(void)
 {
-	int error = 0;
-
 	/* We cannot sleep in idle until we have resumed */
 	saved_idle = pm_idle;
 	pm_idle = NULL;
 
-	switch (state)
-	{
-	case PM_SUSPEND_STANDBY:
-	case PM_SUSPEND_MEM:
-		break;
-
-	case PM_SUSPEND_DISK:
-		return -ENOTSUPP;
-
-	default:
-		return -EINVAL;
-	}
-
-	return error;
+	return 0;
 }
 
 
@@ -657,10 +625,6 @@ static int omap_pm_enter(suspend_state_t state)
 	case PM_SUSPEND_MEM:
 		omap_pm_suspend();
 		break;
-
-	case PM_SUSPEND_DISK:
-		return -ENOTSUPP;
-
 	default:
 		return -EINVAL;
 	}
@@ -671,16 +635,14 @@ static int omap_pm_enter(suspend_state_t state)
 
 /**
  *	omap_pm_finish - Finish up suspend sequence.
- *	@state:		State we're coming out of.
  *
  *	This is called after we wake back up (or if entering the sleep state
  *	failed).
  */
 
-static int omap_pm_finish(suspend_state_t state)
+static void omap_pm_finish(void)
 {
 	pm_idle = saved_idle;
-	return 0;
 }
 
 
@@ -697,11 +659,11 @@ static struct irqaction omap_wakeup_irq = {
 
 
 
-static struct pm_ops omap_pm_ops ={
-	.pm_disk_mode	= 0,
+static struct platform_suspend_ops omap_pm_ops ={
 	.prepare	= omap_pm_prepare,
 	.enter		= omap_pm_enter,
 	.finish		= omap_pm_finish,
+	.valid		= suspend_valid_only_mem,
 };
 
 static int __init omap_pm_init(void)
@@ -758,7 +720,7 @@ static int __init omap_pm_init(void)
 	else if (cpu_is_omap16xx())
 		omap_writel(OMAP1610_IDLECT3_VAL, OMAP1610_IDLECT3);
 
-	pm_set_ops(&omap_pm_ops);
+	suspend_set_ops(&omap_pm_ops);
 
 #if defined(DEBUG) && defined(CONFIG_PROC_FS)
 	omap_pm_init_proc();

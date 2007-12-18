@@ -61,10 +61,6 @@ MODULE_AUTHOR("Stefano Brivio");
 MODULE_AUTHOR("Michael Buesch");
 MODULE_LICENSE("GPL");
 
-#ifdef CONFIG_BCM947XX
-extern char *nvram_get(char *name);
-#endif
-
 #if defined(CONFIG_BCM43XX_DMA) && defined(CONFIG_BCM43XX_PIO)
 static int modparam_pio;
 module_param_named(pio, modparam_pio, int, 0444);
@@ -142,10 +138,6 @@ MODULE_PARM_DESC(fwpostfix, "Postfix for .fw files. Useful for using multiple fi
 	{ PCI_VENDOR_ID_BROADCOM, 0x4324, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	/* Broadcom 43XG 802.11b/g */
 	{ PCI_VENDOR_ID_BROADCOM, 0x4325, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
-#ifdef CONFIG_BCM947XX
-	/* SB bus on BCM947xx */
-	{ PCI_VENDOR_ID_BROADCOM, 0x0800, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
-#endif
 	{ 0 },
 };
 MODULE_DEVICE_TABLE(pci, bcm43xx_pci_tbl);
@@ -786,9 +778,6 @@ static int bcm43xx_sprom_extract(struct bcm43xx_private *bcm)
 {
 	u16 value;
 	u16 *sprom;
-#ifdef CONFIG_BCM947XX
-	char *c;
-#endif
 
 	sprom = kzalloc(BCM43xx_SPROM_SIZE * sizeof(u16),
 			GFP_KERNEL);
@@ -796,28 +785,7 @@ static int bcm43xx_sprom_extract(struct bcm43xx_private *bcm)
 		printk(KERN_ERR PFX "sprom_extract OOM\n");
 		return -ENOMEM;
 	}
-#ifdef CONFIG_BCM947XX
-	sprom[BCM43xx_SPROM_BOARDFLAGS2] = atoi(nvram_get("boardflags2"));
-	sprom[BCM43xx_SPROM_BOARDFLAGS] = atoi(nvram_get("boardflags"));
-
-	if ((c = nvram_get("il0macaddr")) != NULL)
-		e_aton(c, (char *) &(sprom[BCM43xx_SPROM_IL0MACADDR]));
-
-	if ((c = nvram_get("et1macaddr")) != NULL)
-		e_aton(c, (char *) &(sprom[BCM43xx_SPROM_ET1MACADDR]));
-
-	sprom[BCM43xx_SPROM_PA0B0] = atoi(nvram_get("pa0b0"));
-	sprom[BCM43xx_SPROM_PA0B1] = atoi(nvram_get("pa0b1"));
-	sprom[BCM43xx_SPROM_PA0B2] = atoi(nvram_get("pa0b2"));
-
-	sprom[BCM43xx_SPROM_PA1B0] = atoi(nvram_get("pa1b0"));
-	sprom[BCM43xx_SPROM_PA1B1] = atoi(nvram_get("pa1b1"));
-	sprom[BCM43xx_SPROM_PA1B2] = atoi(nvram_get("pa1b2"));
-
-	sprom[BCM43xx_SPROM_BOARDREV] = atoi(nvram_get("boardrev"));
-#else
 	bcm43xx_sprom_read(bcm, sprom);
-#endif
 
 	/* boardflags2 */
 	value = sprom[BCM43xx_SPROM_BOARDFLAGS2];
@@ -1225,12 +1193,6 @@ static int _switch_core(struct bcm43xx_private *bcm, int core)
 			goto error;
 		udelay(10);
 	}
-#ifdef CONFIG_BCM947XX
-	if (bcm->pci_dev->bus->number == 0)
-		bcm->current_core_offset = 0x1000 * core;
-	else
-		bcm->current_core_offset = 0;
-#endif
 
 	return 0;
 error:
@@ -1387,19 +1349,6 @@ void bcm43xx_wireless_core_reset(struct bcm43xx_private *bcm, int connect_phy)
 
 	if ((bcm43xx_core_enabled(bcm)) &&
 	    !bcm43xx_using_pio(bcm)) {
-//FIXME: Do we _really_ want #ifndef CONFIG_BCM947XX here?
-#if 0
-#ifndef CONFIG_BCM947XX
-		/* reset all used DMA controllers. */
-		bcm43xx_dmacontroller_tx_reset(bcm, BCM43xx_MMIO_DMA1_BASE);
-		bcm43xx_dmacontroller_tx_reset(bcm, BCM43xx_MMIO_DMA2_BASE);
-		bcm43xx_dmacontroller_tx_reset(bcm, BCM43xx_MMIO_DMA3_BASE);
-		bcm43xx_dmacontroller_tx_reset(bcm, BCM43xx_MMIO_DMA4_BASE);
-		bcm43xx_dmacontroller_rx_reset(bcm, BCM43xx_MMIO_DMA1_BASE);
-		if (bcm->current_core->rev < 5)
-			bcm43xx_dmacontroller_rx_reset(bcm, BCM43xx_MMIO_DMA4_BASE);
-#endif
-#endif
 	}
 	if (bcm43xx_status(bcm) == BCM43xx_STAT_SHUTTINGDOWN) {
 		bcm43xx_write32(bcm, BCM43xx_MMIO_STATUS_BITFIELD,
@@ -1407,7 +1356,7 @@ void bcm43xx_wireless_core_reset(struct bcm43xx_private *bcm, int connect_phy)
 				& ~(BCM43xx_SBF_MAC_ENABLED | 0x00000002));
 	} else {
 		if (connect_phy)
-			flags |= 0x20000000;
+			flags |= BCM43xx_SBTMSTATELOW_G_MODE_ENABLE;
 		bcm43xx_phy_connect(bcm, connect_phy);
 		bcm43xx_core_enable(bcm, flags);
 		bcm43xx_write16(bcm, 0x03E6, 0x0000);
@@ -2140,32 +2089,11 @@ out:
 	return err;
 }
 
-#ifdef CONFIG_BCM947XX
-static struct pci_device_id bcm43xx_47xx_ids[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, 0x4324) },
-	{ 0 }
-};
-#endif
-
 static int bcm43xx_initialize_irq(struct bcm43xx_private *bcm)
 {
 	int err;
 
 	bcm->irq = bcm->pci_dev->irq;
-#ifdef CONFIG_BCM947XX
-	if (bcm->pci_dev->bus->number == 0) {
-		struct pci_dev *d;
-		struct pci_device_id *id;
-		for (id = bcm43xx_47xx_ids; id->vendor; id++) {
-			d = pci_get_device(id->vendor, id->device, NULL);
-			if (d != NULL) {
-				bcm->irq = d->irq;
-				pci_dev_put(d);
-				break;
-			}
-		}
-	}
-#endif
 	err = request_irq(bcm->irq, bcm43xx_interrupt_handler,
 			  IRQF_SHARED, KBUILD_MODNAME, bcm);
 	if (err)
@@ -2452,7 +2380,7 @@ static int bcm43xx_chip_init(struct bcm43xx_private *bcm)
 		goto err_gpio_cleanup;
 	bcm43xx_radio_turn_on(bcm);
 	bcm->radio_hw_enable = bcm43xx_is_hw_radio_enabled(bcm);
-	dprintk(KERN_INFO PFX "Radio %s by hardware\n",
+	printk(KERN_INFO PFX "Radio %s by hardware\n",
 		(bcm->radio_hw_enable == 0) ? "disabled" : "enabled");
 
 	bcm43xx_write16(bcm, 0x03E6, 0x0000);
@@ -2645,10 +2573,6 @@ static int bcm43xx_probe_cores(struct bcm43xx_private *bcm)
 			chip_id_16 = 0x4610;
 		else if ((pci_device >= 0x4710) && (pci_device <= 0x4715))
 			chip_id_16 = 0x4710;
-#ifdef CONFIG_BCM947XX
-		else if ((pci_device >= 0x4320) && (pci_device <= 0x4325))
-			chip_id_16 = 0x4309;
-#endif
 		else {
 			printk(KERN_ERR PFX "Could not determine Chip ID\n");
 			return -ENODEV;
@@ -3205,7 +3129,7 @@ static void bcm43xx_periodic_every1sec(struct bcm43xx_private *bcm)
 	radio_hw_enable = bcm43xx_is_hw_radio_enabled(bcm);
 	if (unlikely(bcm->radio_hw_enable != radio_hw_enable)) {
 		bcm->radio_hw_enable = radio_hw_enable;
-		dprintk(KERN_INFO PFX "Radio hardware status changed to %s\n",
+		printk(KERN_INFO PFX "Radio hardware status changed to %s\n",
 		       (radio_hw_enable == 0) ? "disabled" : "enabled");
 		bcm43xx_leds_update(bcm, 0);
 	}
@@ -3259,6 +3183,9 @@ static void bcm43xx_periodic_work_handler(struct work_struct *work)
 	unsigned long orig_trans_start = 0;
 
 	mutex_lock(&bcm->mutex);
+	/* keep from doing and rearming periodic work if shutting down */
+	if (bcm43xx_status(bcm) == BCM43xx_STAT_UNINIT)
+		goto unlock_mutex;
 	if (unlikely(bcm->periodic_state % 60 == 0)) {
 		/* Periodic work will take a long time, so we want it to
 		 * be preemtible.
@@ -3304,12 +3231,8 @@ static void bcm43xx_periodic_work_handler(struct work_struct *work)
 	mmiowb();
 	bcm->periodic_state++;
 	spin_unlock_irqrestore(&bcm->irq_lock, flags);
+unlock_mutex:
 	mutex_unlock(&bcm->mutex);
-}
-
-void bcm43xx_periodic_tasks_delete(struct bcm43xx_private *bcm)
-{
-	cancel_rearming_delayed_work(&bcm->periodic_work);
 }
 
 void bcm43xx_periodic_tasks_setup(struct bcm43xx_private *bcm)
@@ -3361,6 +3284,14 @@ static int bcm43xx_rng_init(struct bcm43xx_private *bcm)
 	return err;
 }
 
+void bcm43xx_cancel_work(struct bcm43xx_private *bcm)
+{
+	/* The system must be unlocked when this routine is entered.
+	 * If not, the next 2 steps may deadlock */
+	cancel_work_sync(&bcm->restart_work);
+	cancel_delayed_work_sync(&bcm->periodic_work);
+}
+
 static int bcm43xx_shutdown_all_wireless_cores(struct bcm43xx_private *bcm)
 {
 	int ret = 0;
@@ -3397,7 +3328,12 @@ static void bcm43xx_free_board(struct bcm43xx_private *bcm)
 {
 	bcm43xx_rng_exit(bcm);
 	bcm43xx_sysfs_unregister(bcm);
-	bcm43xx_periodic_tasks_delete(bcm);
+
+	mutex_lock(&(bcm)->mutex);
+	bcm43xx_set_status(bcm, BCM43xx_STAT_UNINIT);
+	mutex_unlock(&(bcm)->mutex);
+
+	bcm43xx_cancel_work(bcm);
 
 	mutex_lock(&(bcm)->mutex);
 	bcm43xx_shutdown_all_wireless_cores(bcm);
@@ -3604,7 +3540,7 @@ int bcm43xx_select_wireless_core(struct bcm43xx_private *bcm,
 		u32 sbtmstatelow;
 
 		sbtmstatelow = bcm43xx_read32(bcm, BCM43xx_CIR_SBTMSTATELOW);
-		sbtmstatelow |= 0x20000000;
+		sbtmstatelow |= BCM43xx_SBTMSTATELOW_G_MODE_ENABLE;
 		bcm43xx_write32(bcm, BCM43xx_CIR_SBTMSTATELOW, sbtmstatelow);
 	}
 	err = wireless_core_up(bcm, 1);
@@ -3817,10 +3753,8 @@ static int bcm43xx_attach_board(struct bcm43xx_private *bcm)
 	                          &bcm->board_type);
 	if (err)
 		goto err_iounmap;
-	err = bcm43xx_pci_read_config16(bcm, PCI_REVISION_ID,
-	                          &bcm->board_revision);
-	if (err)
-		goto err_iounmap;
+
+	bcm->board_revision = bcm->pci_dev->revision;
 
 	err = bcm43xx_chipset_attach(bcm);
 	if (err)
@@ -4094,7 +4028,7 @@ static int bcm43xx_net_stop(struct net_device *net_dev)
 	err = bcm43xx_disable_interrupts_sync(bcm);
 	assert(!err);
 	bcm43xx_free_board(bcm);
-	flush_scheduled_work();
+	bcm43xx_cancel_work(bcm);
 
 	return 0;
 }
@@ -4144,11 +4078,6 @@ static int __devinit bcm43xx_init_one(struct pci_dev *pdev,
 	struct bcm43xx_private *bcm;
 	int err;
 
-#ifdef CONFIG_BCM947XX
-	if ((pdev->bus->number == 0) && (pdev->device != 0x0800))
-		return -ENODEV;
-#endif
-
 #ifdef DEBUG_SINGLE_DEVICE_ONLY
 	if (strcmp(pci_name(pdev), DEBUG_SINGLE_DEVICE_ONLY))
 		return -ENODEV;
@@ -4163,7 +4092,6 @@ static int __devinit bcm43xx_init_one(struct pci_dev *pdev,
 		goto out;
 	}
 	/* initialize the net_device struct */
-	SET_MODULE_OWNER(net_dev);
 	SET_NETDEV_DEV(net_dev, &pdev->dev);
 
 	net_dev->open = bcm43xx_net_open;
@@ -4231,9 +4159,9 @@ static void bcm43xx_chip_reset(struct work_struct *work)
 	struct bcm43xx_phyinfo *phy;
 	int err = -ENODEV;
 
+	bcm43xx_cancel_work(bcm);
 	mutex_lock(&(bcm)->mutex);
 	if (bcm43xx_status(bcm) == BCM43xx_STAT_INITIALIZED) {
-		bcm43xx_periodic_tasks_delete(bcm);
 		phy = bcm43xx_current_phy(bcm);
 		err = bcm43xx_select_wireless_core(bcm, phy->type);
 		if (!err)

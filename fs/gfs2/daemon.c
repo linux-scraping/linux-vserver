@@ -16,6 +16,7 @@
 #include <linux/delay.h>
 #include <linux/gfs2_ondisk.h>
 #include <linux/lm_interface.h>
+#include <linux/freezer.h>
 
 #include "gfs2.h"
 #include "incore.h"
@@ -32,28 +33,6 @@
    the user's unmount doesn't sit there forever.
 
    The kthread functions used to start these daemons block and flush signals. */
-
-/**
- * gfs2_scand - Look for cached glocks and inodes to toss from memory
- * @sdp: Pointer to GFS2 superblock
- *
- * One of these daemons runs, finding candidates to add to sd_reclaim_list.
- * See gfs2_glockd()
- */
-
-int gfs2_scand(void *data)
-{
-	struct gfs2_sbd *sdp = data;
-	unsigned long t;
-
-	while (!kthread_should_stop()) {
-		gfs2_scand_internal(sdp);
-		t = gfs2_tune_get(sdp, gt_scand_secs) * HZ;
-		schedule_timeout_interruptible(t);
-	}
-
-	return 0;
-}
 
 /**
  * gfs2_glockd - Reclaim unused glock structures
@@ -74,6 +53,8 @@ int gfs2_glockd(void *data)
 		wait_event_interruptible(sdp->sd_reclaim_wq,
 					 (atomic_read(&sdp->sd_reclaim_count) ||
 					 kthread_should_stop()));
+		if (freezing(current))
+			refrigerator();
 	}
 
 	return 0;
@@ -93,6 +74,8 @@ int gfs2_recoverd(void *data)
 	while (!kthread_should_stop()) {
 		gfs2_check_journals(sdp);
 		t = gfs2_tune_get(sdp,  gt_recoverd_secs) * HZ;
+		if (freezing(current))
+			refrigerator();
 		schedule_timeout_interruptible(t);
 	}
 
@@ -141,6 +124,8 @@ int gfs2_logd(void *data)
 		}
 
 		t = gfs2_tune_get(sdp, gt_logd_secs) * HZ;
+		if (freezing(current))
+			refrigerator();
 		schedule_timeout_interruptible(t);
 	}
 
@@ -191,6 +176,8 @@ int gfs2_quotad(void *data)
 		gfs2_quota_scan(sdp);
 
 		t = gfs2_tune_get(sdp, gt_quotad_secs) * HZ;
+		if (freezing(current))
+			refrigerator();
 		schedule_timeout_interruptible(t);
 	}
 

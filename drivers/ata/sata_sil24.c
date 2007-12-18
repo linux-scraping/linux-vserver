@@ -30,7 +30,7 @@
 #include <linux/libata.h>
 
 #define DRV_NAME	"sata_sil24"
-#define DRV_VERSION	"0.8"
+#define DRV_VERSION	"1.1"
 
 /*
  * Port request block (PRB) 32 bytes
@@ -168,7 +168,7 @@ enum {
 
 	DEF_PORT_IRQ		= PORT_IRQ_COMPLETE | PORT_IRQ_ERROR |
 				  PORT_IRQ_PHYRDY_CHG | PORT_IRQ_DEV_XCHG |
-				  PORT_IRQ_UNK_FIS,
+				  PORT_IRQ_UNK_FIS | PORT_IRQ_SDB_NOTIFY,
 
 	/* bits[27:16] are unmasked (raw) */
 	PORT_IRQ_RAW_SHIFT	= 16,
@@ -237,7 +237,9 @@ enum {
 	/* host flags */
 	SIL24_COMMON_FLAGS	= ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY |
 				  ATA_FLAG_MMIO | ATA_FLAG_PIO_DMA |
-				  ATA_FLAG_NCQ | ATA_FLAG_SKIP_D2H_BSY,
+				  ATA_FLAG_NCQ | ATA_FLAG_ACPI_SATA |
+				  ATA_FLAG_AN | ATA_FLAG_PMP,
+	SIL24_COMMON_LFLAGS	= ATA_LFLAG_SKIP_D2H_BSY,
 	SIL24_FLAG_PCIX_IRQ_WOC	= (1 << 24), /* IRQ loss errata on PCI-X */
 
 	IRQ_STAT_4PORTS		= 0xf,
@@ -263,11 +265,11 @@ static struct sil24_cerr_info {
 	unsigned int err_mask, action;
 	const char *desc;
 } sil24_cerr_db[] = {
-	[0]			= { AC_ERR_DEV, ATA_EH_REVALIDATE,
+	[0]			= { AC_ERR_DEV, 0,
 				    "device error" },
-	[PORT_CERR_DEV]		= { AC_ERR_DEV, ATA_EH_REVALIDATE,
+	[PORT_CERR_DEV]		= { AC_ERR_DEV, 0,
 				    "device error via D2H FIS" },
-	[PORT_CERR_SDB]		= { AC_ERR_DEV, ATA_EH_REVALIDATE,
+	[PORT_CERR_SDB]		= { AC_ERR_DEV, 0,
 				    "device error via SDB FIS" },
 	[PORT_CERR_DATA]	= { AC_ERR_ATA_BUS, ATA_EH_SOFTRESET,
 				    "error in data FIS" },
@@ -321,17 +323,20 @@ struct sil24_port_priv {
 	union sil24_cmd_block *cmd_block;	/* 32 cmd blocks */
 	dma_addr_t cmd_block_dma;		/* DMA base addr for them */
 	struct ata_taskfile tf;			/* Cached taskfile registers */
+	int do_port_rst;
 };
 
-static void sil24_dev_config(struct ata_port *ap, struct ata_device *dev);
+static void sil24_dev_config(struct ata_device *dev);
 static u8 sil24_check_status(struct ata_port *ap);
-static u32 sil24_scr_read(struct ata_port *ap, unsigned sc_reg);
-static void sil24_scr_write(struct ata_port *ap, unsigned sc_reg, u32 val);
+static int sil24_scr_read(struct ata_port *ap, unsigned sc_reg, u32 *val);
+static int sil24_scr_write(struct ata_port *ap, unsigned sc_reg, u32 val);
 static void sil24_tf_read(struct ata_port *ap, struct ata_taskfile *tf);
+static int sil24_qc_defer(struct ata_queued_cmd *qc);
 static void sil24_qc_prep(struct ata_queued_cmd *qc);
 static unsigned int sil24_qc_issue(struct ata_queued_cmd *qc);
 static void sil24_irq_clear(struct ata_port *ap);
-static irqreturn_t sil24_interrupt(int irq, void *dev_instance);
+static void sil24_pmp_attach(struct ata_port *ap);
+static void sil24_pmp_detach(struct ata_port *ap);
 static void sil24_freeze(struct ata_port *ap);
 static void sil24_thaw(struct ata_port *ap);
 static void sil24_error_handler(struct ata_port *ap);
@@ -340,6 +345,7 @@ static int sil24_port_start(struct ata_port *ap);
 static int sil24_init_one(struct pci_dev *pdev, const struct pci_device_id *ent);
 #ifdef CONFIG_PM
 static int sil24_pci_device_resume(struct pci_dev *pdev);
+static int sil24_port_resume(struct ata_port *ap);
 #endif
 
 static const struct pci_device_id sil24_pci_tbl[] = {
@@ -381,15 +387,9 @@ static struct scsi_host_template sil24_sht = {
 	.slave_configure	= ata_scsi_slave_config,
 	.slave_destroy		= ata_scsi_slave_destroy,
 	.bios_param		= ata_std_bios_param,
-#ifdef CONFIG_PM
-	.suspend		= ata_scsi_device_suspend,
-	.resume			= ata_scsi_device_resume,
-#endif
 };
 
 static const struct ata_port_operations sil24_ops = {
-	.port_disable		= ata_port_disable,
-
 	.dev_config		= sil24_dev_config,
 
 	.check_status		= sil24_check_status,
@@ -398,16 +398,17 @@ static const struct ata_port_operations sil24_ops = {
 
 	.tf_read		= sil24_tf_read,
 
+	.qc_defer		= sil24_qc_defer,
 	.qc_prep		= sil24_qc_prep,
 	.qc_issue		= sil24_qc_issue,
 
-	.irq_handler		= sil24_interrupt,
 	.irq_clear		= sil24_irq_clear,
-	.irq_on			= ata_dummy_irq_on,
-	.irq_ack		= ata_dummy_irq_ack,
 
 	.scr_read		= sil24_scr_read,
 	.scr_write		= sil24_scr_write,
+
+	.pmp_attach		= sil24_pmp_attach,
+	.pmp_detach		= sil24_pmp_detach,
 
 	.freeze			= sil24_freeze,
 	.thaw			= sil24_thaw,
@@ -415,6 +416,10 @@ static const struct ata_port_operations sil24_ops = {
 	.post_internal_cmd	= sil24_post_internal_cmd,
 
 	.port_start		= sil24_port_start,
+
+#ifdef CONFIG_PM
+	.port_resume		= sil24_port_resume,
+#endif
 };
 
 /*
@@ -424,33 +429,33 @@ static const struct ata_port_operations sil24_ops = {
 #define SIL24_NPORTS2FLAG(nports)	((((unsigned)(nports) - 1) & 0x3) << 30)
 #define SIL24_FLAG2NPORTS(flag)		((((flag) >> 30) & 0x3) + 1)
 
-static struct ata_port_info sil24_port_info[] = {
+static const struct ata_port_info sil24_port_info[] = {
 	/* sil_3124 */
 	{
-		.sht		= &sil24_sht,
 		.flags		= SIL24_COMMON_FLAGS | SIL24_NPORTS2FLAG(4) |
 				  SIL24_FLAG_PCIX_IRQ_WOC,
+		.link_flags	= SIL24_COMMON_LFLAGS,
 		.pio_mask	= 0x1f,			/* pio0-4 */
 		.mwdma_mask	= 0x07,			/* mwdma0-2 */
-		.udma_mask	= 0x3f,			/* udma0-5 */
+		.udma_mask	= ATA_UDMA5,		/* udma0-5 */
 		.port_ops	= &sil24_ops,
 	},
 	/* sil_3132 */
 	{
-		.sht		= &sil24_sht,
 		.flags		= SIL24_COMMON_FLAGS | SIL24_NPORTS2FLAG(2),
+		.link_flags	= SIL24_COMMON_LFLAGS,
 		.pio_mask	= 0x1f,			/* pio0-4 */
 		.mwdma_mask	= 0x07,			/* mwdma0-2 */
-		.udma_mask	= 0x3f,			/* udma0-5 */
+		.udma_mask	= ATA_UDMA5,		/* udma0-5 */
 		.port_ops	= &sil24_ops,
 	},
 	/* sil_3131/sil_3531 */
 	{
-		.sht		= &sil24_sht,
 		.flags		= SIL24_COMMON_FLAGS | SIL24_NPORTS2FLAG(1),
+		.link_flags	= SIL24_COMMON_LFLAGS,
 		.pio_mask	= 0x1f,			/* pio0-4 */
 		.mwdma_mask	= 0x07,			/* mwdma0-2 */
-		.udma_mask	= 0x3f,			/* udma0-5 */
+		.udma_mask	= ATA_UDMA5,		/* udma0-5 */
 		.port_ops	= &sil24_ops,
 	},
 };
@@ -462,9 +467,9 @@ static int sil24_tag(int tag)
 	return tag;
 }
 
-static void sil24_dev_config(struct ata_port *ap, struct ata_device *dev)
+static void sil24_dev_config(struct ata_device *dev)
 {
-	void __iomem *port = ap->ioaddr.cmd_addr;
+	void __iomem *port = dev->link->ap->ioaddr.cmd_addr;
 
 	if (dev->cdb_len == 16)
 		writel(PORT_CS_CDB16, port + PORT_CTRL_STAT);
@@ -472,15 +477,15 @@ static void sil24_dev_config(struct ata_port *ap, struct ata_device *dev)
 		writel(PORT_CS_CDB16, port + PORT_CTRL_CLR);
 }
 
-static inline void sil24_update_tf(struct ata_port *ap)
+static void sil24_read_tf(struct ata_port *ap, int tag, struct ata_taskfile *tf)
 {
-	struct sil24_port_priv *pp = ap->private_data;
 	void __iomem *port = ap->ioaddr.cmd_addr;
-	struct sil24_prb __iomem *prb = port;
+	struct sil24_prb __iomem *prb;
 	u8 fis[6 * 4];
 
-	memcpy_fromio(fis, prb->fis, 6 * 4);
-	ata_tf_from_fis(fis, &pp->tf);
+	prb = port + PORT_LRAM + sil24_tag(tag) * PORT_LRAM_SLOT_SZ;
+	memcpy_fromio(fis, prb->fis, sizeof(fis));
+	ata_tf_from_fis(fis, tf);
 }
 
 static u8 sil24_check_status(struct ata_port *ap)
@@ -496,25 +501,30 @@ static int sil24_scr_map[] = {
 	[SCR_ACTIVE]	= 3,
 };
 
-static u32 sil24_scr_read(struct ata_port *ap, unsigned sc_reg)
+static int sil24_scr_read(struct ata_port *ap, unsigned sc_reg, u32 *val)
 {
 	void __iomem *scr_addr = ap->ioaddr.scr_addr;
+
 	if (sc_reg < ARRAY_SIZE(sil24_scr_map)) {
 		void __iomem *addr;
 		addr = scr_addr + sil24_scr_map[sc_reg] * 4;
-		return readl(scr_addr + sil24_scr_map[sc_reg] * 4);
+		*val = readl(scr_addr + sil24_scr_map[sc_reg] * 4);
+		return 0;
 	}
-	return 0xffffffffU;
+	return -EINVAL;
 }
 
-static void sil24_scr_write(struct ata_port *ap, unsigned sc_reg, u32 val)
+static int sil24_scr_write(struct ata_port *ap, unsigned sc_reg, u32 val)
 {
 	void __iomem *scr_addr = ap->ioaddr.scr_addr;
+
 	if (sc_reg < ARRAY_SIZE(sil24_scr_map)) {
 		void __iomem *addr;
 		addr = scr_addr + sil24_scr_map[sc_reg] * 4;
 		writel(val, scr_addr + sil24_scr_map[sc_reg] * 4);
+		return 0;
 	}
+	return -EINVAL;
 }
 
 static void sil24_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
@@ -523,10 +533,65 @@ static void sil24_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 	*tf = pp->tf;
 }
 
+static void sil24_config_port(struct ata_port *ap)
+{
+	void __iomem *port = ap->ioaddr.cmd_addr;
+
+	/* configure IRQ WoC */
+	if (ap->flags & SIL24_FLAG_PCIX_IRQ_WOC)
+		writel(PORT_CS_IRQ_WOC, port + PORT_CTRL_STAT);
+	else
+		writel(PORT_CS_IRQ_WOC, port + PORT_CTRL_CLR);
+
+	/* zero error counters. */
+	writel(0x8000, port + PORT_DECODE_ERR_THRESH);
+	writel(0x8000, port + PORT_CRC_ERR_THRESH);
+	writel(0x8000, port + PORT_HSHK_ERR_THRESH);
+	writel(0x0000, port + PORT_DECODE_ERR_CNT);
+	writel(0x0000, port + PORT_CRC_ERR_CNT);
+	writel(0x0000, port + PORT_HSHK_ERR_CNT);
+
+	/* always use 64bit activation */
+	writel(PORT_CS_32BIT_ACTV, port + PORT_CTRL_CLR);
+
+	/* clear port multiplier enable and resume bits */
+	writel(PORT_CS_PMP_EN | PORT_CS_PMP_RESUME, port + PORT_CTRL_CLR);
+}
+
+static void sil24_config_pmp(struct ata_port *ap, int attached)
+{
+	void __iomem *port = ap->ioaddr.cmd_addr;
+
+	if (attached)
+		writel(PORT_CS_PMP_EN, port + PORT_CTRL_STAT);
+	else
+		writel(PORT_CS_PMP_EN, port + PORT_CTRL_CLR);
+}
+
+static void sil24_clear_pmp(struct ata_port *ap)
+{
+	void __iomem *port = ap->ioaddr.cmd_addr;
+	int i;
+
+	writel(PORT_CS_PMP_RESUME, port + PORT_CTRL_CLR);
+
+	for (i = 0; i < SATA_PMP_MAX_PORTS; i++) {
+		void __iomem *pmp_base = port + PORT_PMP + i * PORT_PMP_SIZE;
+
+		writel(0, pmp_base + PORT_PMP_STATUS);
+		writel(0, pmp_base + PORT_PMP_QACTIVE);
+	}
+}
+
 static int sil24_init_port(struct ata_port *ap)
 {
 	void __iomem *port = ap->ioaddr.cmd_addr;
+	struct sil24_port_priv *pp = ap->private_data;
 	u32 tmp;
+
+	/* clear PMP error status */
+	if (ap->nr_pmp_links)
+		sil24_clear_pmp(ap);
 
 	writel(PORT_CS_INIT, port + PORT_CTRL_STAT);
 	ata_wait_register(port + PORT_CTRL_STAT,
@@ -534,23 +599,74 @@ static int sil24_init_port(struct ata_port *ap)
 	tmp = ata_wait_register(port + PORT_CTRL_STAT,
 				PORT_CS_RDY, 0, 10, 100);
 
-	if ((tmp & (PORT_CS_INIT | PORT_CS_RDY)) != PORT_CS_RDY)
+	if ((tmp & (PORT_CS_INIT | PORT_CS_RDY)) != PORT_CS_RDY) {
+		pp->do_port_rst = 1;
+		ap->link.eh_context.i.action |= ATA_EH_HARDRESET;
 		return -EIO;
+	}
+
 	return 0;
 }
 
-static int sil24_softreset(struct ata_port *ap, unsigned int *class)
+static int sil24_exec_polled_cmd(struct ata_port *ap, int pmp,
+				 const struct ata_taskfile *tf,
+				 int is_cmd, u32 ctrl,
+				 unsigned long timeout_msec)
 {
 	void __iomem *port = ap->ioaddr.cmd_addr;
 	struct sil24_port_priv *pp = ap->private_data;
 	struct sil24_prb *prb = &pp->cmd_block[0].ata.prb;
 	dma_addr_t paddr = pp->cmd_block_dma;
-	u32 mask, irq_stat;
+	u32 irq_enabled, irq_mask, irq_stat;
+	int rc;
+
+	prb->ctrl = cpu_to_le16(ctrl);
+	ata_tf_to_fis(tf, pmp, is_cmd, prb->fis);
+
+	/* temporarily plug completion and error interrupts */
+	irq_enabled = readl(port + PORT_IRQ_ENABLE_SET);
+	writel(PORT_IRQ_COMPLETE | PORT_IRQ_ERROR, port + PORT_IRQ_ENABLE_CLR);
+
+	writel((u32)paddr, port + PORT_CMD_ACTIVATE);
+	writel((u64)paddr >> 32, port + PORT_CMD_ACTIVATE + 4);
+
+	irq_mask = (PORT_IRQ_COMPLETE | PORT_IRQ_ERROR) << PORT_IRQ_RAW_SHIFT;
+	irq_stat = ata_wait_register(port + PORT_IRQ_STAT, irq_mask, 0x0,
+				     10, timeout_msec);
+
+	writel(irq_mask, port + PORT_IRQ_STAT); /* clear IRQs */
+	irq_stat >>= PORT_IRQ_RAW_SHIFT;
+
+	if (irq_stat & PORT_IRQ_COMPLETE)
+		rc = 0;
+	else {
+		/* force port into known state */
+		sil24_init_port(ap);
+
+		if (irq_stat & PORT_IRQ_ERROR)
+			rc = -EIO;
+		else
+			rc = -EBUSY;
+	}
+
+	/* restore IRQ enabled */
+	writel(irq_enabled, port + PORT_IRQ_ENABLE_SET);
+
+	return rc;
+}
+
+static int sil24_do_softreset(struct ata_link *link, unsigned int *class,
+			      int pmp, unsigned long deadline)
+{
+	struct ata_port *ap = link->ap;
+	unsigned long timeout_msec = 0;
+	struct ata_taskfile tf;
 	const char *reason;
+	int rc;
 
 	DPRINTK("ENTER\n");
 
-	if (ata_port_offline(ap)) {
+	if (ata_link_offline(link)) {
 		DPRINTK("PHY reports no device\n");
 		*class = ATA_DEV_NONE;
 		goto out;
@@ -558,34 +674,27 @@ static int sil24_softreset(struct ata_port *ap, unsigned int *class)
 
 	/* put the port into known state */
 	if (sil24_init_port(ap)) {
-		reason ="port not ready";
+		reason = "port not ready";
 		goto err;
 	}
 
 	/* do SRST */
-	prb->ctrl = cpu_to_le16(PRB_CTRL_SRST);
-	prb->fis[1] = 0; /* no PMP yet */
+	if (time_after(deadline, jiffies))
+		timeout_msec = jiffies_to_msecs(deadline - jiffies);
 
-	writel((u32)paddr, port + PORT_CMD_ACTIVATE);
-	writel((u64)paddr >> 32, port + PORT_CMD_ACTIVATE + 4);
-
-	mask = (PORT_IRQ_COMPLETE | PORT_IRQ_ERROR) << PORT_IRQ_RAW_SHIFT;
-	irq_stat = ata_wait_register(port + PORT_IRQ_STAT, mask, 0x0,
-				     100, ATA_TMOUT_BOOT / HZ * 1000);
-
-	writel(irq_stat, port + PORT_IRQ_STAT); /* clear IRQs */
-	irq_stat >>= PORT_IRQ_RAW_SHIFT;
-
-	if (!(irq_stat & PORT_IRQ_COMPLETE)) {
-		if (irq_stat & PORT_IRQ_ERROR)
-			reason = "SRST command error";
-		else
-			reason = "timeout";
+	ata_tf_init(link->device, &tf);	/* doesn't really matter */
+	rc = sil24_exec_polled_cmd(ap, pmp, &tf, 0, PRB_CTRL_SRST,
+				   timeout_msec);
+	if (rc == -EBUSY) {
+		reason = "timeout";
+		goto err;
+	} else if (rc) {
+		reason = "SRST command error";
 		goto err;
 	}
 
-	sil24_update_tf(ap);
-	*class = ata_dev_classify(&pp->tf);
+	sil24_read_tf(ap, 0, &tf);
+	*class = ata_dev_classify(&tf);
 
 	if (*class == ATA_DEV_UNKNOWN)
 		*class = ATA_DEV_NONE;
@@ -595,39 +704,72 @@ static int sil24_softreset(struct ata_port *ap, unsigned int *class)
 	return 0;
 
  err:
-	ata_port_printk(ap, KERN_ERR, "softreset failed (%s)\n", reason);
+	ata_link_printk(link, KERN_ERR, "softreset failed (%s)\n", reason);
 	return -EIO;
 }
 
-static int sil24_hardreset(struct ata_port *ap, unsigned int *class)
+static int sil24_softreset(struct ata_link *link, unsigned int *class,
+			   unsigned long deadline)
 {
+	return sil24_do_softreset(link, class, SATA_PMP_CTRL_PORT, deadline);
+}
+
+static int sil24_hardreset(struct ata_link *link, unsigned int *class,
+			   unsigned long deadline)
+{
+	struct ata_port *ap = link->ap;
 	void __iomem *port = ap->ioaddr.cmd_addr;
+	struct sil24_port_priv *pp = ap->private_data;
+	int did_port_rst = 0;
 	const char *reason;
 	int tout_msec, rc;
 	u32 tmp;
 
+ retry:
+	/* Sometimes, DEV_RST is not enough to recover the controller.
+	 * This happens often after PM DMA CS errata.
+	 */
+	if (pp->do_port_rst) {
+		ata_port_printk(ap, KERN_WARNING, "controller in dubious "
+				"state, performing PORT_RST\n");
+
+		writel(PORT_CS_PORT_RST, port + PORT_CTRL_STAT);
+		msleep(10);
+		writel(PORT_CS_PORT_RST, port + PORT_CTRL_CLR);
+		ata_wait_register(port + PORT_CTRL_STAT, PORT_CS_RDY, 0,
+				  10, 5000);
+
+		/* restore port configuration */
+		sil24_config_port(ap);
+		sil24_config_pmp(ap, ap->nr_pmp_links);
+
+		pp->do_port_rst = 0;
+		did_port_rst = 1;
+	}
+
 	/* sil24 does the right thing(tm) without any protection */
-	sata_set_spd(ap);
+	sata_set_spd(link);
 
 	tout_msec = 100;
-	if (ata_port_online(ap))
+	if (ata_link_online(link))
 		tout_msec = 5000;
 
 	writel(PORT_CS_DEV_RST, port + PORT_CTRL_STAT);
 	tmp = ata_wait_register(port + PORT_CTRL_STAT,
-				PORT_CS_DEV_RST, PORT_CS_DEV_RST, 10, tout_msec);
+				PORT_CS_DEV_RST, PORT_CS_DEV_RST, 10,
+				tout_msec);
 
 	/* SStatus oscillates between zero and valid status after
 	 * DEV_RST, debounce it.
 	 */
-	rc = sata_phy_debounce(ap, sata_deb_timing_long);
+	rc = sata_link_debounce(link, sata_deb_timing_long, deadline);
 	if (rc) {
 		reason = "PHY debouncing failed";
 		goto err;
 	}
 
 	if (tmp & PORT_CS_DEV_RST) {
-		if (ata_port_offline(ap))
+		if (ata_link_offline(link))
 			return 0;
 		reason = "link not ready";
 		goto err;
@@ -642,7 +784,12 @@ static int sil24_hardreset(struct ata_port *ap, unsigned int *class)
 	return -EAGAIN;
 
  err:
-	ata_port_printk(ap, KERN_ERR, "hardreset failed (%s)\n", reason);
+	if (!did_port_rst) {
+		pp->do_port_rst = 1;
+		goto retry;
+	}
+
+	ata_link_printk(link, KERN_ERR, "hardreset failed (%s)\n", reason);
 	return -EIO;
 }
 
@@ -650,16 +797,51 @@ static inline void sil24_fill_sg(struct ata_queued_cmd *qc,
 				 struct sil24_sge *sge)
 {
 	struct scatterlist *sg;
+	struct sil24_sge *last_sge = NULL;
 
 	ata_for_each_sg(sg, qc) {
 		sge->addr = cpu_to_le64(sg_dma_address(sg));
 		sge->cnt = cpu_to_le32(sg_dma_len(sg));
-		if (ata_sg_is_last(sg, qc))
-			sge->flags = cpu_to_le32(SGE_TRM);
-		else
-			sge->flags = 0;
+		sge->flags = 0;
+
+		last_sge = sge;
 		sge++;
 	}
+
+	if (likely(last_sge))
+		last_sge->flags = cpu_to_le32(SGE_TRM);
+}
+
+static int sil24_qc_defer(struct ata_queued_cmd *qc)
+{
+	struct ata_link *link = qc->dev->link;
+	struct ata_port *ap = link->ap;
+	u8 prot = qc->tf.protocol;
+	int is_atapi = (prot == ATA_PROT_ATAPI ||
+			prot == ATA_PROT_ATAPI_NODATA ||
+			prot == ATA_PROT_ATAPI_DMA);
+
+	/* ATAPI commands completing with CHECK_SENSE cause various
+	 * weird problems if other commands are active.  PMP DMA CS
+	 * errata doesn't cover all and HSM violation occurs even with
+	 * only one other device active.  Always run an ATAPI command
+	 * by itself.
+	 */
+	if (unlikely(ap->excl_link)) {
+		if (link == ap->excl_link) {
+			if (ap->nr_active_links)
+				return ATA_DEFER_PORT;
+			qc->flags |= ATA_QCFLAG_CLEAR_EXCL;
+		} else
+			return ATA_DEFER_PORT;
+	} else if (unlikely(is_atapi)) {
+		ap->excl_link = link;
+		if (ap->nr_active_links)
+			return ATA_DEFER_PORT;
+		qc->flags |= ATA_QCFLAG_CLEAR_EXCL;
+	}
+
+	return ata_std_qc_defer(qc);
 }
 
 static void sil24_qc_prep(struct ata_queued_cmd *qc)
@@ -705,7 +887,7 @@ static void sil24_qc_prep(struct ata_queued_cmd *qc)
 	}
 
 	prb->ctrl = cpu_to_le16(ctrl);
-	ata_tf_to_fis(&qc->tf, prb->fis, 0);
+	ata_tf_to_fis(&qc->tf, qc->dev->link->pmp, 1, prb->fis);
 
 	if (qc->flags & ATA_QCFLAG_DMAMAP)
 		sil24_fill_sg(qc, sge);
@@ -734,6 +916,39 @@ static void sil24_irq_clear(struct ata_port *ap)
 	/* unused */
 }
 
+static void sil24_pmp_attach(struct ata_port *ap)
+{
+	sil24_config_pmp(ap, 1);
+	sil24_init_port(ap);
+}
+
+static void sil24_pmp_detach(struct ata_port *ap)
+{
+	sil24_init_port(ap);
+	sil24_config_pmp(ap, 0);
+}
+
+static int sil24_pmp_softreset(struct ata_link *link, unsigned int *class,
+			       unsigned long deadline)
+{
+	return sil24_do_softreset(link, class, link->pmp, deadline);
+}
+
+static int sil24_pmp_hardreset(struct ata_link *link, unsigned int *class,
+			       unsigned long deadline)
+{
+	int rc;
+
+	rc = sil24_init_port(link->ap);
+	if (rc) {
+		ata_link_printk(link, KERN_ERR,
+				"hardreset failed (port not ready)\n");
+		return rc;
+	}
+
+	return sata_pmp_std_hardreset(link, class, deadline);
+}
+
 static void sil24_freeze(struct ata_port *ap)
 {
 	void __iomem *port = ap->ioaddr.cmd_addr;
@@ -760,8 +975,11 @@ static void sil24_thaw(struct ata_port *ap)
 static void sil24_error_intr(struct ata_port *ap)
 {
 	void __iomem *port = ap->ioaddr.cmd_addr;
-	struct ata_eh_info *ehi = &ap->eh_info;
-	int freeze = 0;
+	struct sil24_port_priv *pp = ap->private_data;
+	struct ata_queued_cmd *qc = NULL;
+	struct ata_link *link;
+	struct ata_eh_info *ehi;
+	int abort = 0, freeze = 0;
 	u32 irq_stat;
 
 	/* on error, we need to clear IRQ explicitly */
@@ -769,22 +987,29 @@ static void sil24_error_intr(struct ata_port *ap)
 	writel(irq_stat, port + PORT_IRQ_STAT);
 
 	/* first, analyze and record host port events */
+	link = &ap->link;
+	ehi = &link->eh_info;
 	ata_ehi_clear_desc(ehi);
 
 	ata_ehi_push_desc(ehi, "irq_stat 0x%08x", irq_stat);
 
+	if (irq_stat & PORT_IRQ_SDB_NOTIFY) {
+		ata_ehi_push_desc(ehi, "SDB notify");
+		sata_async_notification(ap);
+	}
+
 	if (irq_stat & (PORT_IRQ_PHYRDY_CHG | PORT_IRQ_DEV_XCHG)) {
 		ata_ehi_hotplugged(ehi);
-		ata_ehi_push_desc(ehi, ", %s",
-			       irq_stat & PORT_IRQ_PHYRDY_CHG ?
-			       "PHY RDY changed" : "device exchanged");
+		ata_ehi_push_desc(ehi, "%s",
+				  irq_stat & PORT_IRQ_PHYRDY_CHG ?
+				  "PHY RDY changed" : "device exchanged");
 		freeze = 1;
 	}
 
 	if (irq_stat & PORT_IRQ_UNK_FIS) {
 		ehi->err_mask |= AC_ERR_HSM;
 		ehi->action |= ATA_EH_SOFTRESET;
-		ata_ehi_push_desc(ehi , ", unknown FIS");
+		ata_ehi_push_desc(ehi, "unknown FIS");
 		freeze = 1;
 	}
 
@@ -792,8 +1017,44 @@ static void sil24_error_intr(struct ata_port *ap)
 	if (irq_stat & PORT_IRQ_ERROR) {
 		struct sil24_cerr_info *ci = NULL;
 		unsigned int err_mask = 0, action = 0;
-		struct ata_queued_cmd *qc;
-		u32 cerr;
+		u32 context, cerr;
+		int pmp;
+
+		abort = 1;
+
+		/* DMA Context Switch Failure in Port Multiplier Mode
+		 * errata.  If we have active commands to 3 or more
+		 * devices, any error condition on active devices can
+		 * corrupt DMA context switching.
+		 */
+		if (ap->nr_active_links >= 3) {
+			ehi->err_mask |= AC_ERR_OTHER;
+			ehi->action |= ATA_EH_HARDRESET;
+			ata_ehi_push_desc(ehi, "PMP DMA CS errata");
+			pp->do_port_rst = 1;
+			freeze = 1;
+		}
+
+		/* find out the offending link and qc */
+		if (ap->nr_pmp_links) {
+			context = readl(port + PORT_CONTEXT);
+			pmp = (context >> 5) & 0xf;
+
+			if (pmp < ap->nr_pmp_links) {
+				link = &ap->pmp_link[pmp];
+				ehi = &link->eh_info;
+				qc = ata_qc_from_tag(ap, link->active_tag);
+
+				ata_ehi_clear_desc(ehi);
+				ata_ehi_push_desc(ehi, "irq_stat 0x%08x",
+						  irq_stat);
+			} else {
+				err_mask |= AC_ERR_HSM;
+				action |= ATA_EH_HARDRESET;
+				freeze = 1;
+			}
+		} else
+			qc = ata_qc_from_tag(ap, link->active_tag);
 
 		/* analyze CMD_ERR */
 		cerr = readl(port + PORT_CMD_ERR);
@@ -803,36 +1064,46 @@ static void sil24_error_intr(struct ata_port *ap)
 		if (ci && ci->desc) {
 			err_mask |= ci->err_mask;
 			action |= ci->action;
-			ata_ehi_push_desc(ehi, ", %s", ci->desc);
+			ata_ehi_push_desc(ehi, "%s", ci->desc);
 		} else {
 			err_mask |= AC_ERR_OTHER;
 			action |= ATA_EH_SOFTRESET;
-			ata_ehi_push_desc(ehi, ", unknown command error %d",
+			ata_ehi_push_desc(ehi, "unknown command error %d",
 					  cerr);
 		}
 
 		/* record error info */
-		qc = ata_qc_from_tag(ap, ap->active_tag);
 		if (qc) {
-			sil24_update_tf(ap);
+			sil24_read_tf(ap, qc->tag, &pp->tf);
 			qc->err_mask |= err_mask;
 		} else
 			ehi->err_mask |= err_mask;
 
 		ehi->action |= action;
+
+		/* if PMP, resume */
+		if (ap->nr_pmp_links)
+			writel(PORT_CS_PMP_RESUME, port + PORT_CTRL_STAT);
 	}
 
 	/* freeze or abort */
 	if (freeze)
 		ata_port_freeze(ap);
-	else
-		ata_port_abort(ap);
+	else if (abort) {
+		if (qc)
+			ata_link_abort(qc->dev->link);
+		else
+			ata_port_abort(ap);
+	}
 }
 
 static void sil24_finish_qc(struct ata_queued_cmd *qc)
 {
+	struct ata_port *ap = qc->ap;
+	struct sil24_port_priv *pp = ap->private_data;
+
 	if (qc->flags & ATA_QCFLAG_RESULT_TF)
-		sil24_update_tf(qc->ap);
+		sil24_read_tf(ap, qc->tag, &pp->tf);
 }
 
 static inline void sil24_host_intr(struct ata_port *ap)
@@ -841,6 +1112,16 @@ static inline void sil24_host_intr(struct ata_port *ap)
 	u32 slot_stat, qc_active;
 	int rc;
 
+	/* If PCIX_IRQ_WOC, there's an inherent race window between
+	 * clearing IRQ pending status and reading PORT_SLOT_STAT
+	 * which may cause spurious interrupts afterwards.  This is
+	 * unavoidable and much better than losing interrupts which
+	 * happens if IRQ pending is cleared after reading
+	 * PORT_SLOT_STAT.
+	 */
+	if (ap->flags & SIL24_FLAG_PCIX_IRQ_WOC)
+		writel(PORT_IRQ_COMPLETE, port + PORT_IRQ_STAT);
+
 	slot_stat = readl(port + PORT_SLOT_STAT);
 
 	if (unlikely(slot_stat & HOST_SSTAT_ATTN)) {
@@ -848,25 +1129,23 @@ static inline void sil24_host_intr(struct ata_port *ap)
 		return;
 	}
 
-	if (ap->flags & SIL24_FLAG_PCIX_IRQ_WOC)
-		writel(PORT_IRQ_COMPLETE, port + PORT_IRQ_STAT);
-
 	qc_active = slot_stat & ~HOST_SSTAT_ATTN;
 	rc = ata_qc_complete_multiple(ap, qc_active, sil24_finish_qc);
 	if (rc > 0)
 		return;
 	if (rc < 0) {
-		struct ata_eh_info *ehi = &ap->eh_info;
+		struct ata_eh_info *ehi = &ap->link.eh_info;
 		ehi->err_mask |= AC_ERR_HSM;
 		ehi->action |= ATA_EH_SOFTRESET;
 		ata_port_freeze(ap);
 		return;
 	}
 
-	if (ata_ratelimit())
+	/* spurious interrupts are expected if PCIX_IRQ_WOC */
+	if (!(ap->flags & SIL24_FLAG_PCIX_IRQ_WOC) && ata_ratelimit())
 		ata_port_printk(ap, KERN_INFO, "spurious interrupt "
 			"(slot_stat 0x%x active_tag %d sactive 0x%x)\n",
-			slot_stat, ap->active_tag, ap->sactive);
+			slot_stat, ap->link.active_tag, ap->link.sactive);
 }
 
 static irqreturn_t sil24_interrupt(int irq, void *dev_instance)
@@ -894,7 +1173,7 @@ static irqreturn_t sil24_interrupt(int irq, void *dev_instance)
 		if (status & (1 << i)) {
 			struct ata_port *ap = host->ports[i];
 			if (ap && !(ap->flags & ATA_FLAG_DISABLED)) {
-				sil24_host_intr(host->ports[i]);
+				sil24_host_intr(ap);
 				handled++;
 			} else
 				printk(KERN_ERR DRV_NAME
@@ -908,28 +1187,27 @@ static irqreturn_t sil24_interrupt(int irq, void *dev_instance)
 
 static void sil24_error_handler(struct ata_port *ap)
 {
-	struct ata_eh_context *ehc = &ap->eh_context;
+	struct sil24_port_priv *pp = ap->private_data;
 
-	if (sil24_init_port(ap)) {
+	if (sil24_init_port(ap))
 		ata_eh_freeze_port(ap);
-		ehc->i.action |= ATA_EH_HARDRESET;
-	}
 
 	/* perform recovery */
-	ata_do_eh(ap, ata_std_prereset, sil24_softreset, sil24_hardreset,
-		  ata_std_postreset);
+	sata_pmp_do_eh(ap, ata_std_prereset, sil24_softreset, sil24_hardreset,
+		       ata_std_postreset, sata_pmp_std_prereset,
+		       sil24_pmp_softreset, sil24_pmp_hardreset,
+		       sata_pmp_std_postreset);
+
+	pp->do_port_rst = 0;
 }
 
 static void sil24_post_internal_cmd(struct ata_queued_cmd *qc)
 {
 	struct ata_port *ap = qc->ap;
 
-	if (qc->flags & ATA_QCFLAG_FAILED)
-		qc->err_mask |= AC_ERR_OTHER;
-
 	/* make DMA engine forget about the failed command */
-	if (qc->err_mask)
-		sil24_init_port(ap);
+	if ((qc->flags & ATA_QCFLAG_FAILED) && sil24_init_port(ap))
+		ata_eh_freeze_port(ap);
 }
 
 static int sil24_port_start(struct ata_port *ap)
@@ -964,11 +1242,9 @@ static int sil24_port_start(struct ata_port *ap)
 	return 0;
 }
 
-static void sil24_init_controller(struct pci_dev *pdev, int n_ports,
-				  unsigned long port_flags,
-				  void __iomem *host_base,
-				  void __iomem *port_base)
+static void sil24_init_controller(struct ata_host *host)
 {
+	void __iomem *host_base = host->iomap[SIL24_HOST_BAR];
 	u32 tmp;
 	int i;
 
@@ -979,8 +1255,9 @@ static void sil24_init_controller(struct pci_dev *pdev, int n_ports,
 	writel(0, host_base + HOST_CTRL);
 
 	/* init ports */
-	for (i = 0; i < n_ports; i++) {
-		void __iomem *port = port_base + i * PORT_REGS_SIZE;
+	for (i = 0; i < host->n_ports; i++) {
+		struct ata_port *ap = host->ports[i];
+		void __iomem *port = ap->ioaddr.cmd_addr;
 
 		/* Initial PHY setting */
 		writel(0x20c, port + PORT_PHY_CFG);
@@ -993,30 +1270,12 @@ static void sil24_init_controller(struct pci_dev *pdev, int n_ports,
 						PORT_CS_PORT_RST,
 						PORT_CS_PORT_RST, 10, 100);
 			if (tmp & PORT_CS_PORT_RST)
-				dev_printk(KERN_ERR, &pdev->dev,
-				           "failed to clear port RST\n");
+				dev_printk(KERN_ERR, host->dev,
+					   "failed to clear port RST\n");
 		}
 
-		/* Configure IRQ WoC */
-		if (port_flags & SIL24_FLAG_PCIX_IRQ_WOC)
-			writel(PORT_CS_IRQ_WOC, port + PORT_CTRL_STAT);
-		else
-			writel(PORT_CS_IRQ_WOC, port + PORT_CTRL_CLR);
-
-		/* Zero error counters. */
-		writel(0x8000, port + PORT_DECODE_ERR_THRESH);
-		writel(0x8000, port + PORT_CRC_ERR_THRESH);
-		writel(0x8000, port + PORT_HSHK_ERR_THRESH);
-		writel(0x0000, port + PORT_DECODE_ERR_CNT);
-		writel(0x0000, port + PORT_CRC_ERR_CNT);
-		writel(0x0000, port + PORT_HSHK_ERR_CNT);
-
-		/* Always use 64bit activation */
-		writel(PORT_CS_32BIT_ACTV, port + PORT_CTRL_CLR);
-
-		/* Clear port multiplier enable and resume bits */
-		writel(PORT_CS_PMP_EN | PORT_CS_PMP_RESUME,
-		       port + PORT_CTRL_CLR);
+		/* configure port */
+		sil24_config_port(ap);
 	}
 
 	/* Turn on interrupts */
@@ -1025,19 +1284,18 @@ static void sil24_init_controller(struct pci_dev *pdev, int n_ports,
 
 static int sil24_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
-	static int printed_version = 0;
-	struct device *dev = &pdev->dev;
-	unsigned int board_id = (unsigned int)ent->driver_data;
-	struct ata_port_info *pinfo = &sil24_port_info[board_id];
-	struct ata_probe_ent *probe_ent;
-	void __iomem *host_base;
-	void __iomem *port_base;
+	static int printed_version;
+	struct ata_port_info pi = sil24_port_info[ent->driver_data];
+	const struct ata_port_info *ppi[] = { &pi, NULL };
+	void __iomem * const *iomap;
+	struct ata_host *host;
 	int i, rc;
 	u32 tmp;
 
 	if (!printed_version++)
 		dev_printk(KERN_DEBUG, &pdev->dev, "version " DRV_VERSION "\n");
 
+	/* acquire resources */
 	rc = pcim_enable_device(pdev);
 	if (rc)
 		return rc;
@@ -1047,33 +1305,39 @@ static int sil24_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 				DRV_NAME);
 	if (rc)
 		return rc;
+	iomap = pcim_iomap_table(pdev);
 
-	/* allocate & init probe_ent */
-	probe_ent = devm_kzalloc(dev, sizeof(*probe_ent), GFP_KERNEL);
-	if (!probe_ent)
+	/* apply workaround for completion IRQ loss on PCI-X errata */
+	if (pi.flags & SIL24_FLAG_PCIX_IRQ_WOC) {
+		tmp = readl(iomap[SIL24_HOST_BAR] + HOST_CTRL);
+		if (tmp & (HOST_CTRL_TRDY | HOST_CTRL_STOP | HOST_CTRL_DEVSEL))
+			dev_printk(KERN_INFO, &pdev->dev,
+				   "Applying completion IRQ loss on PCI-X "
+				   "errata fix\n");
+		else
+			pi.flags &= ~SIL24_FLAG_PCIX_IRQ_WOC;
+	}
+
+	/* allocate and fill host */
+	host = ata_host_alloc_pinfo(&pdev->dev, ppi,
+				    SIL24_FLAG2NPORTS(ppi[0]->flags));
+	if (!host)
 		return -ENOMEM;
+	host->iomap = iomap;
 
-	probe_ent->dev = pci_dev_to_dev(pdev);
-	INIT_LIST_HEAD(&probe_ent->node);
+	for (i = 0; i < host->n_ports; i++) {
+		struct ata_port *ap = host->ports[i];
+		size_t offset = ap->port_no * PORT_REGS_SIZE;
+		void __iomem *port = iomap[SIL24_PORT_BAR] + offset;
 
-	probe_ent->sht		= pinfo->sht;
-	probe_ent->port_flags	= pinfo->flags;
-	probe_ent->pio_mask	= pinfo->pio_mask;
-	probe_ent->mwdma_mask	= pinfo->mwdma_mask;
-	probe_ent->udma_mask	= pinfo->udma_mask;
-	probe_ent->port_ops	= pinfo->port_ops;
-	probe_ent->n_ports	= SIL24_FLAG2NPORTS(pinfo->flags);
+		host->ports[i]->ioaddr.cmd_addr = port;
+		host->ports[i]->ioaddr.scr_addr = port + PORT_SCONTROL;
 
-	probe_ent->irq = pdev->irq;
-	probe_ent->irq_flags = IRQF_SHARED;
-	probe_ent->iomap = pcim_iomap_table(pdev);
+		ata_port_pbar_desc(ap, SIL24_HOST_BAR, -1, "host");
+		ata_port_pbar_desc(ap, SIL24_PORT_BAR, offset, "port");
+	}
 
-	host_base = probe_ent->iomap[SIL24_HOST_BAR];
-	port_base = probe_ent->iomap[SIL24_PORT_BAR];
-
-	/*
-	 * Configure the device
-	 */
+	/* configure and activate the device */
 	if (!pci_set_dma_mask(pdev, DMA_64BIT_MASK)) {
 		rc = pci_set_consistent_dma_mask(pdev, DMA_64BIT_MASK);
 		if (rc) {
@@ -1099,36 +1363,11 @@ static int sil24_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		}
 	}
 
-	/* Apply workaround for completion IRQ loss on PCI-X errata */
-	if (probe_ent->port_flags & SIL24_FLAG_PCIX_IRQ_WOC) {
-		tmp = readl(host_base + HOST_CTRL);
-		if (tmp & (HOST_CTRL_TRDY | HOST_CTRL_STOP | HOST_CTRL_DEVSEL))
-			dev_printk(KERN_INFO, &pdev->dev,
-				   "Applying completion IRQ loss on PCI-X "
-				   "errata fix\n");
-		else
-			probe_ent->port_flags &= ~SIL24_FLAG_PCIX_IRQ_WOC;
-	}
-
-	for (i = 0; i < probe_ent->n_ports; i++) {
-		void __iomem *port = port_base + i * PORT_REGS_SIZE;
-
-		probe_ent->port[i].cmd_addr = port;
-		probe_ent->port[i].scr_addr = port + PORT_SCONTROL;
-
-		ata_std_ports(&probe_ent->port[i]);
-	}
-
-	sil24_init_controller(pdev, probe_ent->n_ports, probe_ent->port_flags,
-			      host_base, port_base);
+	sil24_init_controller(host);
 
 	pci_set_master(pdev);
-
-	if (!ata_device_add(probe_ent))
-		return -ENODEV;
-
-	devm_kfree(dev, probe_ent);
-	return 0;
+	return ata_host_activate(host, pdev->irq, sil24_interrupt, IRQF_SHARED,
+				 &sil24_sht);
 }
 
 #ifdef CONFIG_PM
@@ -1136,7 +1375,6 @@ static int sil24_pci_device_resume(struct pci_dev *pdev)
 {
 	struct ata_host *host = dev_get_drvdata(&pdev->dev);
 	void __iomem *host_base = host->iomap[SIL24_HOST_BAR];
-	void __iomem *port_base = host->iomap[SIL24_PORT_BAR];
 	int rc;
 
 	rc = ata_pci_device_do_resume(pdev);
@@ -1146,11 +1384,16 @@ static int sil24_pci_device_resume(struct pci_dev *pdev)
 	if (pdev->dev.power.power_state.event == PM_EVENT_SUSPEND)
 		writel(HOST_CTRL_GLOBAL_RST, host_base + HOST_CTRL);
 
-	sil24_init_controller(pdev, host->n_ports, host->ports[0]->flags,
-			      host_base, port_base);
+	sil24_init_controller(host);
 
 	ata_host_resume(host);
 
+	return 0;
+}
+
+static int sil24_port_resume(struct ata_port *ap)
+{
+	sil24_config_pmp(ap, ap->nr_pmp_links);
 	return 0;
 }
 #endif

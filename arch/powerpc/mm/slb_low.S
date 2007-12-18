@@ -57,7 +57,10 @@ _GLOBAL(slb_allocate_realmode)
 	 */
 _GLOBAL(slb_miss_kernel_load_linear)
 	li	r11,0
+BEGIN_FTR_SECTION
 	b	slb_finish_load
+END_FTR_SECTION_IFCLR(CPU_FTR_1T_SEGMENT)
+	b	slb_finish_load_1T
 
 1:	/* vmalloc/ioremap mapping encoding bits, the "li" instructions below
 	 * will be patched by the kernel at boot
@@ -68,13 +71,16 @@ BEGIN_FTR_SECTION
 	cmpldi	r11,(VMALLOC_SIZE >> 28) - 1
 	bgt	5f
 	lhz	r11,PACAVMALLOCSLLP(r13)
-	b	slb_finish_load
+	b	6f
 5:
 END_FTR_SECTION_IFCLR(CPU_FTR_CI_LARGE_PAGE)
 _GLOBAL(slb_miss_kernel_load_io)
 	li	r11,0
+6:
+BEGIN_FTR_SECTION
 	b	slb_finish_load
-
+END_FTR_SECTION_IFCLR(CPU_FTR_1T_SEGMENT)
+	b	slb_finish_load_1T
 
 0:	/* user address: proto-VSID = context << 15 | ESID. First check
 	 * if the address is within the boundaries of the user region
@@ -82,33 +88,53 @@ _GLOBAL(slb_miss_kernel_load_io)
 	srdi.	r9,r10,USER_ESID_BITS
 	bne-	8f			/* invalid ea bits set */
 
-	/* Figure out if the segment contains huge pages */
-#ifdef CONFIG_HUGETLB_PAGE
-BEGIN_FTR_SECTION
-	b	1f
-END_FTR_SECTION_IFCLR(CPU_FTR_16M_PAGE)
+
+	/* when using slices, we extract the psize off the slice bitmaps
+	 * and then we need to get the sllp encoding off the mmu_psize_defs
+	 * array.
+	 *
+	 * XXX This is a bit inefficient especially for the normal case,
+	 * so we should try to implement a fast path for the standard page
+	 * size using the old sllp value so we avoid the array. We cannot
+	 * really do dynamic patching unfortunately as processes might flip
+	 * between 4k and 64k standard page size
+	 */
+#ifdef CONFIG_PPC_MM_SLICES
 	cmpldi	r10,16
 
-	lhz	r9,PACALOWHTLBAREAS(r13)
-	mr	r11,r10
+	/* Get the slice index * 4 in r11 and matching slice size mask in r9 */
+	ld	r9,PACALOWSLICESPSIZE(r13)
+	sldi	r11,r10,2
 	blt	5f
+	ld	r9,PACAHIGHSLICEPSIZE(r13)
+	srdi	r11,r10,(SLICE_HIGH_SHIFT - SLICE_LOW_SHIFT - 2)
+	andi.	r11,r11,0x3c
 
-	lhz	r9,PACAHIGHHTLBAREAS(r13)
-	srdi	r11,r10,(HTLB_AREA_SHIFT-SID_SHIFT)
+5:	/* Extract the psize and multiply to get an array offset */
+	srd	r9,r9,r11
+	andi.	r9,r9,0xf
+	mulli	r9,r9,MMUPSIZEDEFSIZE
 
-5:	srd	r9,r9,r11
-	andi.	r9,r9,1
-	beq	1f
-_GLOBAL(slb_miss_user_load_huge)
-	li	r11,0
-	b	2f
-1:
-#endif /* CONFIG_HUGETLB_PAGE */
-
+	/* Now get to the array and obtain the sllp
+	 */
+	ld	r11,PACATOC(r13)
+	ld	r11,mmu_psize_defs@got(r11)
+	add	r11,r11,r9
+	ld	r11,MMUPSIZESLLP(r11)
+	ori	r11,r11,SLB_VSID_USER
+#else
+	/* paca context sllp already contains the SLB_VSID_USER bits */
 	lhz	r11,PACACONTEXTSLLP(r13)
-2:
+#endif /* CONFIG_PPC_MM_SLICES */
+
 	ld	r9,PACACONTEXTID(r13)
+BEGIN_FTR_SECTION
+	cmpldi	r10,0x1000
+END_FTR_SECTION_IFSET(CPU_FTR_1T_SEGMENT)
 	rldimi	r10,r9,USER_ESID_BITS,0
+BEGIN_FTR_SECTION
+	bge	slb_finish_load_1T
+END_FTR_SECTION_IFSET(CPU_FTR_1T_SEGMENT)
 	b	slb_finish_load
 
 8:	/* invalid EA */
@@ -174,7 +200,7 @@ _GLOBAL(slb_allocate_user)
  * r3 = EA, r10 = proto-VSID, r11 = flags, clobbers r9, cr7 = <> PAGE_OFFSET
  */
 slb_finish_load:
-	ASM_VSID_SCRAMBLE(r10,r9)
+	ASM_VSID_SCRAMBLE(r10,r9,256M)
 	rldimi	r11,r10,SLB_VSID_SHIFT,16	/* combine VSID and flags */
 
 	/* r3 = EA, r11 = VSID data */
@@ -199,7 +225,7 @@ BEGIN_FW_FTR_SECTION
 END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
 #endif /* CONFIG_PPC_ISERIES */
 
-	ld	r10,PACASTABRR(r13)
+7:	ld	r10,PACASTABRR(r13)
 	addi	r10,r10,1
 	/* use a cpu feature mask if we ever change our slb size */
 	cmpldi	r10,SLB_NUM_ENTRIES
@@ -244,4 +270,21 @@ END_FW_FTR_SECTION_IFSET(FW_FEATURE_ISERIES)
 	sth	r3,PACASLBCACHEPTR(r13)	/* paca->slb_cache_ptr = offset */
 	crclr	4*cr0+eq		/* set result to "success" */
 	blr
+
+/*
+ * Finish loading of a 1T SLB entry (for the kernel linear mapping) and return.
+ * We assume legacy iSeries will never have 1T segments.
+ *
+ * r3 = EA, r10 = proto-VSID, r11 = flags, clobbers r9
+ */
+slb_finish_load_1T:
+	srdi	r10,r10,40-28		/* get 1T ESID */
+	ASM_VSID_SCRAMBLE(r10,r9,1T)
+	rldimi	r11,r10,SLB_VSID_SHIFT_1T,16	/* combine VSID and flags */
+	li	r10,MMU_SEGSIZE_1T
+	rldimi	r11,r10,SLB_VSID_SSIZE_SHIFT,0	/* insert segment size */
+
+	/* r3 = EA, r11 = VSID data */
+	clrrdi	r3,r3,SID_SHIFT_1T	/* clear out non-ESID bits */
+	b	7b
 

@@ -32,7 +32,6 @@
 #include <asm/io.h>
 #include <asm/machdep.h>
 #include <asm/ipic.h>
-#include <asm/bootinfo.h>
 #include <asm/irq.h>
 #include <asm/prom.h>
 #include <asm/udbg.h>
@@ -41,18 +40,12 @@
 #include <asm/qe_ic.h>
 
 #include "mpc83xx.h"
-#include "mpc832x_mds.h"
 
 #undef DEBUG
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
 #else
 #define DBG(fmt...)
-#endif
-
-#ifndef CONFIG_PCI
-unsigned long isa_io_base = 0;
-unsigned long isa_mem_base = 0;
 #endif
 
 static u8 *bcsr_regs = NULL;
@@ -80,9 +73,8 @@ static void __init mpc832x_sys_setup_arch(void)
 	}
 
 #ifdef CONFIG_PCI
-	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
-		add_bridge(np);
-	ppc_md.pci_exclude_device = mpc83xx_exclude_device;
+	for_each_compatible_node(np, "pci", "fsl,mpc8349-pci")
+		mpc83xx_add_bridge(np);
 #endif
 
 #ifdef CONFIG_QUICC_ENGINE
@@ -148,7 +140,7 @@ static void __init mpc832x_sys_init_IRQ(void)
 	if (!np)
 		return;
 
-	qe_ic_init(np, 0);
+	qe_ic_init(np, 0, qe_ic_cascade_low_ipic, qe_ic_cascade_high_ipic);
 	of_node_put(np);
 #endif				/* CONFIG_QUICC_ENGINE */
 }

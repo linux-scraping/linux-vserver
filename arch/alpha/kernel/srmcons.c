@@ -164,9 +164,9 @@ srmcons_get_private_struct(struct srmcons_private **ps)
 	int retval = 0;
 
 	if (srmconsp == NULL) {
+		srmconsp = kmalloc(sizeof(*srmconsp), GFP_KERNEL);
 		spin_lock_irqsave(&srmconsp_lock, flags);
 
-		srmconsp = kmalloc(sizeof(*srmconsp), GFP_KERNEL);
 		if (srmconsp == NULL)
 			retval = -ENOMEM;
 		else {
@@ -289,7 +289,7 @@ srm_console_device(struct console *co, int *index)
 	return srmcons_driver;
 }
 
-static int __init
+static int
 srm_console_setup(struct console *co, char *options)
 {
 	return 0;
@@ -300,7 +300,7 @@ static struct console srmcons = {
 	.write		= srm_console_write,
 	.device		= srm_console_device,
 	.setup		= srm_console_setup,
-	.flags		= CON_PRINTBUFFER,
+	.flags		= CON_PRINTBUFFER | CON_BOOT,
 	.index		= -1,
 };
 

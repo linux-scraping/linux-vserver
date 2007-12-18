@@ -5,6 +5,7 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/svcauth.h>
+#include <linux/sunrpc/gss_api.h>
 #include <linux/err.h>
 #include <linux/seq_file.h>
 #include <linux/hash.h>
@@ -385,7 +386,7 @@ ip_map_cached_get(struct svc_rqst *rqstp)
 {
 	struct ip_map *ipm;
 	struct svc_sock *svsk = rqstp->rq_sock;
-	spin_lock_bh(&svsk->sk_defer_lock);
+	spin_lock(&svsk->sk_lock);
 	ipm = svsk->sk_info_authunix;
 	if (ipm != NULL) {
 		if (!cache_valid(&ipm->h)) {
@@ -395,13 +396,13 @@ ip_map_cached_get(struct svc_rqst *rqstp)
 			 * same IP address.
 			 */
 			svsk->sk_info_authunix = NULL;
-			spin_unlock_bh(&svsk->sk_defer_lock);
+			spin_unlock(&svsk->sk_lock);
 			cache_put(&ipm->h, &ip_map_cache);
 			return NULL;
 		}
 		cache_get(&ipm->h);
 	}
-	spin_unlock_bh(&svsk->sk_defer_lock);
+	spin_unlock(&svsk->sk_lock);
 	return ipm;
 }
 
@@ -410,14 +411,14 @@ ip_map_cached_put(struct svc_rqst *rqstp, struct ip_map *ipm)
 {
 	struct svc_sock *svsk = rqstp->rq_sock;
 
-	spin_lock_bh(&svsk->sk_defer_lock);
+	spin_lock(&svsk->sk_lock);
 	if (svsk->sk_sock->type == SOCK_STREAM &&
 	    svsk->sk_info_authunix == NULL) {
 		/* newly cached, keep the reference */
 		svsk->sk_info_authunix = ipm;
 		ipm = NULL;
 	}
-	spin_unlock_bh(&svsk->sk_defer_lock);
+	spin_unlock(&svsk->sk_lock);
 	if (ipm)
 		cache_put(&ipm->h, &ip_map_cache);
 }
@@ -637,7 +638,7 @@ static int unix_gid_find(uid_t uid, struct group_info **gip,
 	}
 }
 
-static int
+int
 svcauth_unix_set_client(struct svc_rqst *rqstp)
 {
 	struct sockaddr_in *sin = svc_addr_in(rqstp);
@@ -671,6 +672,8 @@ svcauth_unix_set_client(struct svc_rqst *rqstp)
 	}
 	return SVC_OK;
 }
+
+EXPORT_SYMBOL(svcauth_unix_set_client);
 
 static int
 svcauth_null_accept(struct svc_rqst *rqstp, __be32 *authp)
@@ -707,6 +710,7 @@ svcauth_null_accept(struct svc_rqst *rqstp, __be32 *authp)
 	svc_putnl(resv, RPC_AUTH_NULL);
 	svc_putnl(resv, 0);
 
+	rqstp->rq_flavor = RPC_AUTH_NULL;
 	return SVC_OK;
 }
 
@@ -784,6 +788,7 @@ svcauth_unix_accept(struct svc_rqst *rqstp, __be32 *authp)
 	svc_putnl(resv, RPC_AUTH_NULL);
 	svc_putnl(resv, 0);
 
+	rqstp->rq_flavor = RPC_AUTH_UNIX;
 	return SVC_OK;
 
 badcred:

@@ -30,61 +30,330 @@ char resume_file[256] = CONFIG_PM_STD_PARTITION;
 dev_t swsusp_resume_device;
 sector_t swsusp_resume_block;
 
+enum {
+	HIBERNATION_INVALID,
+	HIBERNATION_PLATFORM,
+	HIBERNATION_TEST,
+	HIBERNATION_TESTPROC,
+	HIBERNATION_SHUTDOWN,
+	HIBERNATION_REBOOT,
+	/* keep last */
+	__HIBERNATION_AFTER_LAST
+};
+#define HIBERNATION_MAX (__HIBERNATION_AFTER_LAST-1)
+#define HIBERNATION_FIRST (HIBERNATION_INVALID + 1)
+
+static int hibernation_mode = HIBERNATION_SHUTDOWN;
+
+static struct platform_hibernation_ops *hibernation_ops;
+
 /**
- *	platform_prepare - prepare the machine for hibernation using the
+ * hibernation_set_ops - set the global hibernate operations
+ * @ops: the hibernation operations to use in subsequent hibernation transitions
+ */
+
+void hibernation_set_ops(struct platform_hibernation_ops *ops)
+{
+	if (ops && !(ops->start && ops->pre_snapshot && ops->finish
+	    && ops->prepare && ops->enter && ops->pre_restore
+	    && ops->restore_cleanup)) {
+		WARN_ON(1);
+		return;
+	}
+	mutex_lock(&pm_mutex);
+	hibernation_ops = ops;
+	if (ops)
+		hibernation_mode = HIBERNATION_PLATFORM;
+	else if (hibernation_mode == HIBERNATION_PLATFORM)
+		hibernation_mode = HIBERNATION_SHUTDOWN;
+
+	mutex_unlock(&pm_mutex);
+}
+
+/**
+ *	platform_start - tell the platform driver that we're starting
+ *	hibernation
+ */
+
+static int platform_start(int platform_mode)
+{
+	return (platform_mode && hibernation_ops) ?
+		hibernation_ops->start() : 0;
+}
+
+/**
+ *	platform_pre_snapshot - prepare the machine for hibernation using the
  *	platform driver if so configured and return an error code if it fails
  */
 
-static inline int platform_prepare(void)
+static int platform_pre_snapshot(int platform_mode)
 {
-	int error = 0;
+	return (platform_mode && hibernation_ops) ?
+		hibernation_ops->pre_snapshot() : 0;
+}
 
-	if (pm_disk_mode == PM_DISK_PLATFORM) {
-		if (pm_ops && pm_ops->prepare)
-			error = pm_ops->prepare(PM_SUSPEND_DISK);
+/**
+ *	platform_leave - prepare the machine for switching to the normal mode
+ *	of operation using the platform driver (called with interrupts disabled)
+ */
+
+static void platform_leave(int platform_mode)
+{
+	if (platform_mode && hibernation_ops)
+		hibernation_ops->leave();
+}
+
+/**
+ *	platform_finish - switch the machine to the normal mode of operation
+ *	using the platform driver (must be called after platform_prepare())
+ */
+
+static void platform_finish(int platform_mode)
+{
+	if (platform_mode && hibernation_ops)
+		hibernation_ops->finish();
+}
+
+/**
+ *	platform_pre_restore - prepare the platform for the restoration from a
+ *	hibernation image.  If the restore fails after this function has been
+ *	called, platform_restore_cleanup() must be called.
+ */
+
+static int platform_pre_restore(int platform_mode)
+{
+	return (platform_mode && hibernation_ops) ?
+		hibernation_ops->pre_restore() : 0;
+}
+
+/**
+ *	platform_restore_cleanup - switch the platform to the normal mode of
+ *	operation after a failing restore.  If platform_pre_restore() has been
+ *	called before the failing restore, this function must be called too,
+ *	regardless of the result of platform_pre_restore().
+ */
+
+static void platform_restore_cleanup(int platform_mode)
+{
+	if (platform_mode && hibernation_ops)
+		hibernation_ops->restore_cleanup();
+}
+
+/**
+ *	create_image - freeze devices that need to be frozen with interrupts
+ *	off, create the hibernation image and thaw those devices.  Control
+ *	reappears in this routine after a restore.
+ */
+
+int create_image(int platform_mode)
+{
+	int error;
+
+	error = arch_prepare_suspend();
+	if (error)
+		return error;
+
+	local_irq_disable();
+	/* At this point, device_suspend() has been called, but *not*
+	 * device_power_down(). We *must* call device_power_down() now.
+	 * Otherwise, drivers for some devices (e.g. interrupt controllers)
+	 * become desynchronized with the actual state of the hardware
+	 * at resume time, and evil weirdness ensues.
+	 */
+	error = device_power_down(PMSG_FREEZE);
+	if (error) {
+		printk(KERN_ERR "Some devices failed to power down, "
+			KERN_ERR "aborting suspend\n");
+		goto Enable_irqs;
 	}
+
+	save_processor_state();
+	error = swsusp_arch_suspend();
+	if (error)
+		printk(KERN_ERR "Error %d while creating the image\n", error);
+	/* Restore control flow magically appears here */
+	restore_processor_state();
+	if (!in_suspend)
+		platform_leave(platform_mode);
+	/* NOTE:  device_power_up() is just a resume() for devices
+	 * that suspended with irqs off ... no overall powerup.
+	 */
+	device_power_up();
+ Enable_irqs:
+	local_irq_enable();
 	return error;
 }
 
 /**
- *	power_down - Shut machine down for hibernate.
- *	@mode:		Suspend-to-disk mode
+ *	hibernation_snapshot - quiesce devices and create the hibernation
+ *	snapshot image.
+ *	@platform_mode - if set, use the platform driver, if available, to
+ *			 prepare the platform frimware for the power transition.
  *
- *	Use the platform driver, if configured so, and return gracefully if it
- *	fails.
- *	Otherwise, try to power off and reboot. If they fail, halt the machine,
- *	there ain't no turning back.
+ *	Must be called with pm_mutex held
  */
 
-static void power_down(suspend_disk_method_t mode)
+int hibernation_snapshot(int platform_mode)
 {
-	switch(mode) {
-	case PM_DISK_PLATFORM:
-		if (pm_ops && pm_ops->enter) {
-			kernel_shutdown_prepare(SYSTEM_SUSPEND_DISK);
-			pm_ops->enter(PM_SUSPEND_DISK);
-			break;
+	int error;
+
+	/* Free memory before shutting down devices. */
+	error = swsusp_shrink_memory();
+	if (error)
+		return error;
+
+	error = platform_start(platform_mode);
+	if (error)
+		return error;
+
+	suspend_console();
+	error = device_suspend(PMSG_FREEZE);
+	if (error)
+		goto Resume_console;
+
+	error = platform_pre_snapshot(platform_mode);
+	if (error)
+		goto Resume_devices;
+
+	error = disable_nonboot_cpus();
+	if (!error) {
+		if (hibernation_mode != HIBERNATION_TEST) {
+			in_suspend = 1;
+			error = create_image(platform_mode);
+			/* Control returns here after successful restore */
+		} else {
+			printk("swsusp debug: Waiting for 5 seconds.\n");
+			mdelay(5000);
 		}
-	case PM_DISK_SHUTDOWN:
-		kernel_power_off();
+	}
+	enable_nonboot_cpus();
+ Resume_devices:
+	platform_finish(platform_mode);
+	device_resume();
+ Resume_console:
+	resume_console();
+	return error;
+}
+
+/**
+ *	hibernation_restore - quiesce devices and restore the hibernation
+ *	snapshot image.  If successful, control returns in hibernation_snaphot()
+ *	@platform_mode - if set, use the platform driver, if available, to
+ *			 prepare the platform frimware for the transition.
+ *
+ *	Must be called with pm_mutex held
+ */
+
+int hibernation_restore(int platform_mode)
+{
+	int error;
+
+	pm_prepare_console();
+	suspend_console();
+	error = device_suspend(PMSG_PRETHAW);
+	if (error)
+		goto Finish;
+
+	error = platform_pre_restore(platform_mode);
+	if (!error) {
+		error = disable_nonboot_cpus();
+		if (!error)
+			error = swsusp_resume();
+		enable_nonboot_cpus();
+	}
+	platform_restore_cleanup(platform_mode);
+	device_resume();
+ Finish:
+	resume_console();
+	pm_restore_console();
+	return error;
+}
+
+/**
+ *	hibernation_platform_enter - enter the hibernation state using the
+ *	platform driver (if available)
+ */
+
+int hibernation_platform_enter(void)
+{
+	int error;
+
+	if (!hibernation_ops)
+		return -ENOSYS;
+
+	/*
+	 * We have cancelled the power transition by running
+	 * hibernation_ops->finish() before saving the image, so we should let
+	 * the firmware know that we're going to enter the sleep state after all
+	 */
+	error = hibernation_ops->start();
+	if (error)
+		return error;
+
+	suspend_console();
+	error = device_suspend(PMSG_SUSPEND);
+	if (error)
+		goto Resume_console;
+
+	error = hibernation_ops->prepare();
+	if (error)
+		goto Resume_devices;
+
+	error = disable_nonboot_cpus();
+	if (error)
+		goto Finish;
+
+	local_irq_disable();
+	error = device_power_down(PMSG_SUSPEND);
+	if (!error) {
+		hibernation_ops->enter();
+		/* We should never get here */
+		while (1);
+	}
+	local_irq_enable();
+
+	/*
+	 * We don't need to reenable the nonboot CPUs or resume consoles, since
+	 * the system is going to be halted anyway.
+	 */
+ Finish:
+	hibernation_ops->finish();
+ Resume_devices:
+	device_resume();
+ Resume_console:
+	resume_console();
+	return error;
+}
+
+/**
+ *	power_down - Shut the machine down for hibernation.
+ *
+ *	Use the platform driver, if configured so; otherwise try
+ *	to power off or reboot.
+ */
+
+static void power_down(void)
+{
+	switch (hibernation_mode) {
+	case HIBERNATION_TEST:
+	case HIBERNATION_TESTPROC:
 		break;
-	case PM_DISK_REBOOT:
+	case HIBERNATION_REBOOT:
 		kernel_restart(NULL);
+		break;
+	case HIBERNATION_PLATFORM:
+		hibernation_platform_enter();
+	case HIBERNATION_SHUTDOWN:
+		kernel_power_off();
 		break;
 	}
 	kernel_halt();
-	/* Valid image is on the disk, if we continue we risk serious data corruption
-	   after resume. */
+	/*
+	 * Valid image is on the disk, if we continue we risk serious data
+	 * corruption after resume.
+	 */
 	printk(KERN_CRIT "Please power me down manually\n");
 	while(1);
-}
-
-static inline void platform_finish(void)
-{
-	if (pm_disk_mode == PM_DISK_PLATFORM) {
-		if (pm_ops && pm_ops->finish)
-			pm_ops->finish(PM_SUSPEND_DISK);
-	}
 }
 
 static void unprepare_processes(void)
@@ -106,84 +375,66 @@ static int prepare_processes(void)
 }
 
 /**
- *	pm_suspend_disk - The granpappy of hibernation power management.
- *
- *	If we're going through the firmware, then get it over with quickly.
- *
- *	If not, then call swsusp to do its thing, then figure out how
- *	to power down the system.
+ *	hibernate - The granpappy of the built-in hibernation management
  */
 
-int pm_suspend_disk(void)
+int hibernate(void)
 {
 	int error;
 
+	mutex_lock(&pm_mutex);
+	/* The snapshot device should not be opened while we're running */
+	if (!atomic_add_unless(&snapshot_device_available, -1, 0)) {
+		error = -EBUSY;
+		goto Unlock;
+	}
+
+	error = pm_notifier_call_chain(PM_HIBERNATION_PREPARE);
+	if (error)
+		goto Exit;
+
+	/* Allocate memory management structures */
+	error = create_basic_memory_bitmaps();
+	if (error)
+		goto Exit;
+
+	printk("Syncing filesystems ... ");
+	sys_sync();
+	printk("done.\n");
+
 	error = prepare_processes();
 	if (error)
-		return error;
+		goto Finish;
 
-	if (pm_disk_mode == PM_DISK_TESTPROC) {
+	if (hibernation_mode == HIBERNATION_TESTPROC) {
 		printk("swsusp debug: Waiting for 5 seconds.\n");
 		mdelay(5000);
 		goto Thaw;
 	}
-	/* Free memory before shutting down devices. */
-	error = swsusp_shrink_memory();
-	if (error)
-		goto Thaw;
+	error = hibernation_snapshot(hibernation_mode == HIBERNATION_PLATFORM);
+	if (in_suspend && !error) {
+		unsigned int flags = 0;
 
-	error = platform_prepare();
-	if (error)
-		goto Thaw;
-
-	suspend_console();
-	error = device_suspend(PMSG_FREEZE);
-	if (error) {
-		printk(KERN_ERR "PM: Some devices failed to suspend\n");
-		goto Resume_devices;
-	}
-	error = disable_nonboot_cpus();
-	if (error)
-		goto Enable_cpus;
-
-	if (pm_disk_mode == PM_DISK_TEST) {
-		printk("swsusp debug: Waiting for 5 seconds.\n");
-		mdelay(5000);
-		goto Enable_cpus;
-	}
-
-	pr_debug("PM: snapshotting memory.\n");
-	in_suspend = 1;
-	error = swsusp_suspend();
-	if (error)
-		goto Enable_cpus;
-
-	if (in_suspend) {
-		enable_nonboot_cpus();
-		platform_finish();
-		device_resume();
-		resume_console();
+		if (hibernation_mode == HIBERNATION_PLATFORM)
+			flags |= SF_PLATFORM_MODE;
 		pr_debug("PM: writing image.\n");
-		error = swsusp_write();
+		error = swsusp_write(flags);
+		swsusp_free();
 		if (!error)
-			power_down(pm_disk_mode);
-		else {
-			swsusp_free();
-			goto Thaw;
-		}
+			power_down();
 	} else {
 		pr_debug("PM: Image restored successfully.\n");
+		swsusp_free();
 	}
-
-	swsusp_free();
- Enable_cpus:
-	enable_nonboot_cpus();
- Resume_devices:
-	platform_finish();
-	device_resume();
-	resume_console();
  Thaw:
 	unprepare_processes();
+ Finish:
+	free_basic_memory_bitmaps();
+ Exit:
+	pm_notifier_call_chain(PM_POST_HIBERNATION);
+	atomic_inc(&snapshot_device_available);
+ Unlock:
+	mutex_unlock(&pm_mutex);
 	return error;
 }
 
@@ -194,7 +445,7 @@ int pm_suspend_disk(void)
  *	Called as a late_initcall (so all devices are discovered and
  *	initialized), we call swsusp to see if we have a saved image or not.
  *	If so, we quiesce devices, the restore the saved image. We will
- *	return above (in pm_suspend_disk() ) if everything goes well.
+ *	return above (in hibernate() ) if everything goes well.
  *	Otherwise, we fail gracefully and return to the normally
  *	scheduled program.
  *
@@ -203,8 +454,19 @@ int pm_suspend_disk(void)
 static int software_resume(void)
 {
 	int error;
+	unsigned int flags;
 
-	mutex_lock(&pm_mutex);
+	/*
+	 * name_to_dev_t() below takes a sysfs buffer mutex when sysfs
+	 * is configured into the kernel. Since the regular hibernate
+	 * trigger path is via sysfs which takes a buffer mutex before
+	 * calling hibernate functions (which take pm_mutex) this can
+	 * cause lockdep to complain about a possible ABBA deadlock
+	 * which cannot happen since we're in the boot code here and
+	 * sysfs can't be invoked yet. Therefore, we use a subclass
+	 * here to avoid lockdep complaining.
+	 */
+	mutex_lock_nested(&pm_mutex, SINGLE_DEPTH_NESTING);
 	if (!swsusp_resume_device) {
 		if (!strlen(resume_file)) {
 			mutex_unlock(&pm_mutex);
@@ -227,13 +489,21 @@ static int software_resume(void)
 	}
 
 	pr_debug("PM: Checking swsusp image.\n");
-
 	error = swsusp_check();
 	if (error)
-		goto Done;
+		goto Unlock;
+
+	/* The snapshot device should not be opened while we're running */
+	if (!atomic_add_unless(&snapshot_device_available, -1, 0)) {
+		error = -EBUSY;
+		goto Unlock;
+	}
+
+	error = create_basic_memory_bitmaps();
+	if (error)
+		goto Finish;
 
 	pr_debug("PM: Preparing processes for restore.\n");
-
 	error = prepare_processes();
 	if (error) {
 		swsusp_close();
@@ -242,131 +512,143 @@ static int software_resume(void)
 
 	pr_debug("PM: Reading swsusp image.\n");
 
-	error = swsusp_read();
-	if (error) {
-		swsusp_free();
-		goto Thaw;
-	}
-
-	pr_debug("PM: Preparing devices for restore.\n");
-
-	suspend_console();
-	error = device_suspend(PMSG_PRETHAW);
-	if (error)
-		goto Free;
-
-	error = disable_nonboot_cpus();
+	error = swsusp_read(&flags);
 	if (!error)
-		swsusp_resume();
+		hibernation_restore(flags & SF_PLATFORM_MODE);
 
-	enable_nonboot_cpus();
- Free:
-	swsusp_free();
-	device_resume();
-	resume_console();
- Thaw:
 	printk(KERN_ERR "PM: Restore failed, recovering.\n");
+	swsusp_free();
 	unprepare_processes();
  Done:
+	free_basic_memory_bitmaps();
+ Finish:
+	atomic_inc(&snapshot_device_available);
 	/* For success case, the suspend path will release the lock */
+ Unlock:
 	mutex_unlock(&pm_mutex);
 	pr_debug("PM: Resume from disk failed.\n");
-	return 0;
+	return error;
 }
 
 late_initcall(software_resume);
 
 
-static const char * const pm_disk_modes[] = {
-	[PM_DISK_FIRMWARE]	= "firmware",
-	[PM_DISK_PLATFORM]	= "platform",
-	[PM_DISK_SHUTDOWN]	= "shutdown",
-	[PM_DISK_REBOOT]	= "reboot",
-	[PM_DISK_TEST]		= "test",
-	[PM_DISK_TESTPROC]	= "testproc",
+static const char * const hibernation_modes[] = {
+	[HIBERNATION_PLATFORM]	= "platform",
+	[HIBERNATION_SHUTDOWN]	= "shutdown",
+	[HIBERNATION_REBOOT]	= "reboot",
+	[HIBERNATION_TEST]	= "test",
+	[HIBERNATION_TESTPROC]	= "testproc",
 };
 
 /**
- *	disk - Control suspend-to-disk mode
+ *	disk - Control hibernation mode
  *
- *	Suspend-to-disk can be handled in several ways. The greatest
- *	distinction is who writes memory to disk - the firmware or the OS.
- *	If the firmware does it, we assume that it also handles suspending
- *	the system.
- *	If the OS does it, then we have three options for putting the system
- *	to sleep - using the platform driver (e.g. ACPI or other PM registers),
- *	powering off the system or rebooting the system (for testing).
+ *	Suspend-to-disk can be handled in several ways. We have a few options
+ *	for putting the system to sleep - using the platform driver (e.g. ACPI
+ *	or other hibernation_ops), powering off the system or rebooting the
+ *	system (for testing) as well as the two test modes.
  *
- *	The system will support either 'firmware' or 'platform', and that is
- *	known a priori (and encoded in pm_ops). But, the user may choose
- *	'shutdown' or 'reboot' as alternatives.
+ *	The system can support 'platform', and that is known a priori (and
+ *	encoded by the presence of hibernation_ops). However, the user may
+ *	choose 'shutdown' or 'reboot' as alternatives, as well as one fo the
+ *	test modes, 'test' or 'testproc'.
  *
  *	show() will display what the mode is currently set to.
  *	store() will accept one of
  *
- *	'firmware'
  *	'platform'
  *	'shutdown'
  *	'reboot'
+ *	'test'
+ *	'testproc'
  *
- *	It will only change to 'firmware' or 'platform' if the system
- *	supports it (as determined from pm_ops->pm_disk_mode).
+ *	It will only change to 'platform' if the system
+ *	supports it (as determined by having hibernation_ops).
  */
 
-static ssize_t disk_show(struct subsystem * subsys, char * buf)
+static ssize_t disk_show(struct kset *kset, char *buf)
 {
-	return sprintf(buf, "%s\n", pm_disk_modes[pm_disk_mode]);
+	int i;
+	char *start = buf;
+
+	for (i = HIBERNATION_FIRST; i <= HIBERNATION_MAX; i++) {
+		if (!hibernation_modes[i])
+			continue;
+		switch (i) {
+		case HIBERNATION_SHUTDOWN:
+		case HIBERNATION_REBOOT:
+		case HIBERNATION_TEST:
+		case HIBERNATION_TESTPROC:
+			break;
+		case HIBERNATION_PLATFORM:
+			if (hibernation_ops)
+				break;
+			/* not a valid mode, continue with loop */
+			continue;
+		}
+		if (i == hibernation_mode)
+			buf += sprintf(buf, "[%s] ", hibernation_modes[i]);
+		else
+			buf += sprintf(buf, "%s ", hibernation_modes[i]);
+	}
+	buf += sprintf(buf, "\n");
+	return buf-start;
 }
 
 
-static ssize_t disk_store(struct subsystem * s, const char * buf, size_t n)
+static ssize_t disk_store(struct kset *kset, const char *buf, size_t n)
 {
 	int error = 0;
 	int i;
 	int len;
 	char *p;
-	suspend_disk_method_t mode = 0;
+	int mode = HIBERNATION_INVALID;
 
 	p = memchr(buf, '\n', n);
 	len = p ? p - buf : n;
 
 	mutex_lock(&pm_mutex);
-	for (i = PM_DISK_FIRMWARE; i < PM_DISK_MAX; i++) {
-		if (!strncmp(buf, pm_disk_modes[i], len)) {
+	for (i = HIBERNATION_FIRST; i <= HIBERNATION_MAX; i++) {
+		if (len == strlen(hibernation_modes[i])
+		    && !strncmp(buf, hibernation_modes[i], len)) {
 			mode = i;
 			break;
 		}
 	}
-	if (mode) {
-		if (mode == PM_DISK_SHUTDOWN || mode == PM_DISK_REBOOT ||
-		     mode == PM_DISK_TEST || mode == PM_DISK_TESTPROC) {
-			pm_disk_mode = mode;
-		} else {
-			if (pm_ops && pm_ops->enter &&
-			    (mode == pm_ops->pm_disk_mode))
-				pm_disk_mode = mode;
+	if (mode != HIBERNATION_INVALID) {
+		switch (mode) {
+		case HIBERNATION_SHUTDOWN:
+		case HIBERNATION_REBOOT:
+		case HIBERNATION_TEST:
+		case HIBERNATION_TESTPROC:
+			hibernation_mode = mode;
+			break;
+		case HIBERNATION_PLATFORM:
+			if (hibernation_ops)
+				hibernation_mode = mode;
 			else
 				error = -EINVAL;
 		}
-	} else {
+	} else
 		error = -EINVAL;
-	}
 
-	pr_debug("PM: suspend-to-disk mode set to '%s'\n",
-		 pm_disk_modes[mode]);
+	if (!error)
+		pr_debug("PM: suspend-to-disk mode set to '%s'\n",
+			 hibernation_modes[mode]);
 	mutex_unlock(&pm_mutex);
 	return error ? error : n;
 }
 
 power_attr(disk);
 
-static ssize_t resume_show(struct subsystem * subsys, char *buf)
+static ssize_t resume_show(struct kset *kset, char *buf)
 {
 	return sprintf(buf,"%d:%d\n", MAJOR(swsusp_resume_device),
 		       MINOR(swsusp_resume_device));
 }
 
-static ssize_t resume_store(struct subsystem *subsys, const char *buf, size_t n)
+static ssize_t resume_store(struct kset *kset, const char *buf, size_t n)
 {
 	unsigned int maj, min;
 	dev_t res;
@@ -392,12 +674,12 @@ static ssize_t resume_store(struct subsystem *subsys, const char *buf, size_t n)
 
 power_attr(resume);
 
-static ssize_t image_size_show(struct subsystem * subsys, char *buf)
+static ssize_t image_size_show(struct kset *kset, char *buf)
 {
 	return sprintf(buf, "%lu\n", image_size);
 }
 
-static ssize_t image_size_store(struct subsystem * subsys, const char * buf, size_t n)
+static ssize_t image_size_store(struct kset *kset, const char *buf, size_t n)
 {
 	unsigned long size;
 
@@ -426,7 +708,7 @@ static struct attribute_group attr_group = {
 
 static int __init pm_disk_init(void)
 {
-	return sysfs_create_group(&power_subsys.kset.kobj,&attr_group);
+	return sysfs_create_group(&power_subsys.kobj, &attr_group);
 }
 
 core_initcall(pm_disk_init);

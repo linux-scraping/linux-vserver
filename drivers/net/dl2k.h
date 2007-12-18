@@ -668,7 +668,6 @@ struct netdev_private {
 	unsigned int rx_flow:1;		/* Rx flow control enable */
 	unsigned int phy_media:1;	/* 1: fiber, 0: copper */
 	unsigned int link_status:1;	/* Current link status */
-	unsigned char pci_rev_id;	/* PCI revision ID */
 	struct netdev_desc *last_tx;	/* Last Tx descriptor used. */
 	unsigned long cur_rx, old_rx;	/* Producer/consumer ring indices */
 	unsigned long cur_tx, old_tx;
@@ -693,6 +692,7 @@ struct netdev_private {
 
 static const struct pci_device_id rio_pci_tbl[] = {
 	{0x1186, 0x4000, PCI_ANY_ID, PCI_ANY_ID, },
+	{0x13f0, 0x1021, PCI_ANY_ID, PCI_ANY_ID, },
 	{ }
 };
 MODULE_DEVICE_TABLE (pci, rio_pci_tbl);

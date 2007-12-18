@@ -146,7 +146,7 @@ out:
 
 static int sunkbd_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
-	struct sunkbd *sunkbd = dev->private;
+	struct sunkbd *sunkbd = input_get_drvdata(dev);
 
 	switch (type) {
 
@@ -271,13 +271,17 @@ static int sunkbd_connect(struct serio *serio, struct serio_driver *drv)
 	input_dev->id.vendor  = SERIO_SUNKBD;
 	input_dev->id.product = sunkbd->type;
 	input_dev->id.version = 0x0100;
-	input_dev->cdev.dev = &serio->dev;
-	input_dev->private = sunkbd;
+	input_dev->dev.parent = &serio->dev;
+
+	input_set_drvdata(input_dev, sunkbd);
+
 	input_dev->event = sunkbd_event;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_LED) | BIT(EV_SND) | BIT(EV_REP);
-	input_dev->ledbit[0] = BIT(LED_CAPSL) | BIT(LED_COMPOSE) | BIT(LED_SCROLLL) | BIT(LED_NUML);
-	input_dev->sndbit[0] = BIT(SND_CLICK) | BIT(SND_BELL);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) |
+		BIT_MASK(EV_SND) | BIT_MASK(EV_REP);
+	input_dev->ledbit[0] = BIT_MASK(LED_CAPSL) | BIT_MASK(LED_COMPOSE) |
+		BIT_MASK(LED_SCROLLL) | BIT_MASK(LED_NUML);
+	input_dev->sndbit[0] = BIT_MASK(SND_CLICK) | BIT_MASK(SND_BELL);
 
 	input_dev->keycode = sunkbd->keycode;
 	input_dev->keycodesize = sizeof(unsigned char);

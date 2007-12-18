@@ -59,7 +59,6 @@
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/mutex.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
@@ -212,7 +211,41 @@ static int acm_write_start(struct acm *acm)
 	}
 	return rc;
 }
+/*
+ * attributes exported through sysfs
+ */
+static ssize_t show_caps
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
 
+	return sprintf(buf, "%d", acm->ctrl_caps);
+}
+static DEVICE_ATTR(bmCapabilities, S_IRUGO, show_caps, NULL);
+
+static ssize_t show_country_codes
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+
+	memcpy(buf, acm->country_codes, acm->country_code_size);
+	return acm->country_code_size;
+}
+
+static DEVICE_ATTR(wCountryCodes, S_IRUGO, show_country_codes, NULL);
+
+static ssize_t show_country_rel_date
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+
+	return sprintf(buf, "%d", acm->country_rel_date);
+}
+
+static DEVICE_ATTR(iCountryCodeRelDate, S_IRUGO, show_country_rel_date, NULL);
 /*
  * Interrupt handlers for various ACM device responses
  */
@@ -224,9 +257,10 @@ static void acm_ctrl_irq(struct urb *urb)
 	struct usb_cdc_notification *dr = urb->transfer_buffer;
 	unsigned char *data;
 	int newctrl;
-	int status;
+	int retval;
+	int status = urb->status;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:
 		/* success */
 		break;
@@ -234,10 +268,10 @@ static void acm_ctrl_irq(struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dbg("%s - urb shutting down with status: %d", __FUNCTION__, urb->status);
+		dbg("%s - urb shutting down with status: %d", __FUNCTION__, status);
 		return;
 	default:
-		dbg("%s - nonzero urb status received: %d", __FUNCTION__, urb->status);
+		dbg("%s - nonzero urb status received: %d", __FUNCTION__, status);
 		goto exit;
 	}
 
@@ -278,10 +312,10 @@ static void acm_ctrl_irq(struct urb *urb)
 			break;
 	}
 exit:
-	status = usb_submit_urb (urb, GFP_ATOMIC);
-	if (status)
+	retval = usb_submit_urb (urb, GFP_ATOMIC);
+	if (retval)
 		err ("%s - usb_submit_urb failed with result %d",
-		     __FUNCTION__, status);
+		     __FUNCTION__, retval);
 }
 
 /* data interface returns incoming bytes, or we got unthrottled */
@@ -291,13 +325,14 @@ static void acm_read_bulk(struct urb *urb)
 	struct acm_ru *rcv = urb->context;
 	struct acm *acm = rcv->instance;
 	int status = urb->status;
-	dbg("Entering acm_read_bulk with status %d", urb->status);
+
+	dbg("Entering acm_read_bulk with status %d", status);
 
 	if (!ACM_READY(acm))
 		return;
 
 	if (status)
-		dev_dbg(&acm->data->dev, "bulk rx status %d", status);
+		dev_dbg(&acm->data->dev, "bulk rx status %d\n", status);
 
 	buf = rcv->buffer;
 	buf->size = urb->actual_length;
@@ -514,6 +549,7 @@ static void acm_tty_unregister(struct acm *acm)
 	usb_free_urb(acm->writeurb);
 	for (i = 0; i < nr; i++)
 		usb_free_urb(acm->ru[i].urb);
+	kfree(acm->country_codes);
 	kfree(acm);
 }
 
@@ -761,6 +797,7 @@ static int acm_probe (struct usb_interface *intf,
 		      const struct usb_device_id *id)
 {
 	struct usb_cdc_union_desc *union_header = NULL;
+	struct usb_cdc_country_functional_desc *cfd = NULL;
 	char *buffer = intf->altsetting->extra;
 	int buflen = intf->altsetting->extralen;
 	struct usb_interface *control_interface;
@@ -794,13 +831,13 @@ static int acm_probe (struct usb_interface *intf,
 	
 	/* normal probing*/
 	if (!buffer) {
-		err("Wierd descriptor references\n");
+		err("Weird descriptor references\n");
 		return -EINVAL;
 	}
 
 	if (!buflen) {
 		if (intf->cur_altsetting->endpoint->extralen && intf->cur_altsetting->endpoint->extra) {
-			dev_dbg(&intf->dev,"Seeking extra descriptors on endpoint");
+			dev_dbg(&intf->dev,"Seeking extra descriptors on endpoint\n");
 			buflen = intf->cur_altsetting->endpoint->extralen;
 			buffer = intf->cur_altsetting->endpoint->extra;
 		} else {
@@ -824,8 +861,9 @@ static int acm_probe (struct usb_interface *intf,
 				union_header = (struct usb_cdc_union_desc *)
 							buffer;
 				break;
-			case USB_CDC_COUNTRY_TYPE: /* maybe somehow export */
-				break; /* for now we ignore it */
+			case USB_CDC_COUNTRY_TYPE: /* export through sysfs*/
+				cfd = (struct usb_cdc_country_functional_desc *)buffer;
+				break;
 			case USB_CDC_HEADER_TYPE: /* maybe check version */ 
 				break; /* for now we ignore it */ 
 			case USB_CDC_ACM_TYPE:
@@ -849,24 +887,24 @@ next_desc:
 
 	if (!union_header) {
 		if (call_interface_num > 0) {
-			dev_dbg(&intf->dev,"No union descriptor, using call management descriptor");
+			dev_dbg(&intf->dev,"No union descriptor, using call management descriptor\n");
 			data_interface = usb_ifnum_to_if(usb_dev, (data_interface_num = call_interface_num));
 			control_interface = intf;
 		} else {
-			dev_dbg(&intf->dev,"No union descriptor, giving up");
+			dev_dbg(&intf->dev,"No union descriptor, giving up\n");
 			return -ENODEV;
 		}
 	} else {
 		control_interface = usb_ifnum_to_if(usb_dev, union_header->bMasterInterface0);
 		data_interface = usb_ifnum_to_if(usb_dev, (data_interface_num = union_header->bSlaveInterface0));
 		if (!control_interface || !data_interface) {
-			dev_dbg(&intf->dev,"no interfaces");
+			dev_dbg(&intf->dev,"no interfaces\n");
 			return -ENODEV;
 		}
 	}
 	
 	if (data_interface_num != call_interface_num)
-		dev_dbg(&intf->dev,"Seperate call control interface. That is not fully supported.");
+		dev_dbg(&intf->dev,"Seperate call control interface. That is not fully supported.\n");
 
 skip_normal_probe:
 
@@ -874,7 +912,7 @@ skip_normal_probe:
 	if (data_interface->cur_altsetting->desc.bInterfaceClass != CDC_DATA_INTERFACE_TYPE) {
 		if (control_interface->cur_altsetting->desc.bInterfaceClass == CDC_DATA_INTERFACE_TYPE) {
 			struct usb_interface *t;
-			dev_dbg(&intf->dev,"Your device has switched interfaces.");
+			dev_dbg(&intf->dev,"Your device has switched interfaces.\n");
 
 			t = control_interface;
 			control_interface = data_interface;
@@ -883,9 +921,13 @@ skip_normal_probe:
 			return -EINVAL;
 		}
 	}
+
+	/* Accept probe requests only for the control interface */
+	if (intf != control_interface)
+		return -ENODEV;
 	
 	if (usb_interface_claimed(data_interface)) { /* valid in this context */
-		dev_dbg(&intf->dev,"The data interface isn't available");
+		dev_dbg(&intf->dev,"The data interface isn't available\n");
 		return -EBUSY;
 	}
 
@@ -902,7 +944,7 @@ skip_normal_probe:
 	if (!usb_endpoint_dir_in(epread)) {
 		/* descriptors are swapped */
 		struct usb_endpoint_descriptor *t;
-		dev_dbg(&intf->dev,"The data interface has switched endpoints");
+		dev_dbg(&intf->dev,"The data interface has switched endpoints\n");
 		
 		t = epread;
 		epread = epwrite;
@@ -917,7 +959,7 @@ skip_normal_probe:
 	}
 
 	if (!(acm = kzalloc(sizeof(struct acm), GFP_KERNEL))) {
-		dev_dbg(&intf->dev, "out of memory (acm kzalloc)");
+		dev_dbg(&intf->dev, "out of memory (acm kzalloc)\n");
 		goto alloc_fail;
 	}
 
@@ -943,26 +985,26 @@ skip_normal_probe:
 
 	buf = usb_buffer_alloc(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
 	if (!buf) {
-		dev_dbg(&intf->dev, "out of memory (ctrl buffer alloc)");
+		dev_dbg(&intf->dev, "out of memory (ctrl buffer alloc)\n");
 		goto alloc_fail2;
 	}
 	acm->ctrl_buffer = buf;
 
 	if (acm_write_buffers_alloc(acm) < 0) {
-		dev_dbg(&intf->dev, "out of memory (write buffer alloc)");
+		dev_dbg(&intf->dev, "out of memory (write buffer alloc)\n");
 		goto alloc_fail4;
 	}
 
 	acm->ctrlurb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!acm->ctrlurb) {
-		dev_dbg(&intf->dev, "out of memory (ctrlurb kmalloc)");
+		dev_dbg(&intf->dev, "out of memory (ctrlurb kmalloc)\n");
 		goto alloc_fail5;
 	}
 	for (i = 0; i < num_rx_buf; i++) {
 		struct acm_ru *rcv = &(acm->ru[i]);
 
 		if (!(rcv->urb = usb_alloc_urb(0, GFP_KERNEL))) {
-			dev_dbg(&intf->dev, "out of memory (read urbs usb_alloc_urb)");
+			dev_dbg(&intf->dev, "out of memory (read urbs usb_alloc_urb)\n");
 			goto alloc_fail7;
 		}
 
@@ -973,16 +1015,44 @@ skip_normal_probe:
 		struct acm_rb *buf = &(acm->rb[i]);
 
 		if (!(buf->base = usb_buffer_alloc(acm->dev, readsize, GFP_KERNEL, &buf->dma))) {
-			dev_dbg(&intf->dev, "out of memory (read bufs usb_buffer_alloc)");
+			dev_dbg(&intf->dev, "out of memory (read bufs usb_buffer_alloc)\n");
 			goto alloc_fail7;
 		}
 	}
 	acm->writeurb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!acm->writeurb) {
-		dev_dbg(&intf->dev, "out of memory (writeurb kmalloc)");
+		dev_dbg(&intf->dev, "out of memory (writeurb kmalloc)\n");
 		goto alloc_fail7;
 	}
 
+	usb_set_intfdata (intf, acm);
+
+	i = device_create_file(&intf->dev, &dev_attr_bmCapabilities);
+	if (i < 0)
+		goto alloc_fail8;
+
+	if (cfd) { /* export the country data */
+		acm->country_codes = kmalloc(cfd->bLength - 4, GFP_KERNEL);
+		if (!acm->country_codes)
+			goto skip_countries;
+		acm->country_code_size = cfd->bLength - 4;
+		memcpy(acm->country_codes, (u8 *)&cfd->wCountyCode0, cfd->bLength - 4);
+		acm->country_rel_date = cfd->iCountryCodeRelDate;
+
+		i = device_create_file(&intf->dev, &dev_attr_wCountryCodes);
+		if (i < 0) {
+			kfree(acm->country_codes);
+			goto skip_countries;
+		}
+
+		i = device_create_file(&intf->dev, &dev_attr_iCountryCodeRelDate);
+		if (i < 0) {
+			kfree(acm->country_codes);
+			goto skip_countries;
+		}
+	}
+
+skip_countries:
 	usb_fill_int_urb(acm->ctrlurb, usb_dev, usb_rcvintpipe(usb_dev, epctrl->bEndpointAddress),
 			 acm->ctrl_buffer, ctrlsize, acm_ctrl_irq, acm, epctrl->bInterval);
 	acm->ctrlurb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
@@ -1006,9 +1076,10 @@ skip_normal_probe:
 	tty_register_device(acm_tty_driver, minor, &control_interface->dev);
 
 	acm_table[minor] = acm;
-	usb_set_intfdata (intf, acm);
-	return 0;
 
+	return 0;
+alloc_fail8:
+	usb_free_urb(acm->writeurb);
 alloc_fail7:
 	for (i = 0; i < num_rx_buf; i++)
 		usb_buffer_free(usb_dev, acm->readsize, acm->rb[i].base, acm->rb[i].dma);
@@ -1027,7 +1098,7 @@ alloc_fail:
 
 static void acm_disconnect(struct usb_interface *intf)
 {
-	struct acm *acm = usb_get_intfdata (intf);
+	struct acm *acm = usb_get_intfdata(intf);
 	struct usb_device *usb_dev = interface_to_usbdev(intf);
 	int i;
 
@@ -1041,6 +1112,13 @@ static void acm_disconnect(struct usb_interface *intf)
 		mutex_unlock(&open_mutex);
 		return;
 	}
+	if (acm->country_codes){
+		device_remove_file(&acm->control->dev,
+				&dev_attr_wCountryCodes);
+		device_remove_file(&acm->control->dev,
+				&dev_attr_iCountryCodeRelDate);
+	}
+	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
 	acm->dev = NULL;
 	usb_set_intfdata(acm->control, NULL);
 	usb_set_intfdata(acm->data, NULL);
@@ -1085,6 +1163,9 @@ static void acm_disconnect(struct usb_interface *intf)
 static struct usb_device_id acm_ids[] = {
 	/* quirky and broken devices */
 	{ USB_DEVICE(0x0870, 0x0001), /* Metricom GS Modem */
+	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
+	},
+	{ USB_DEVICE(0x0e8d, 0x0003), /* FIREFLY, MediaTek Inc; andrey.arapov@gmail.com */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
 	{ USB_DEVICE(0x0482, 0x0203), /* KYOCERA AH-K3001V */

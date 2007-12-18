@@ -41,7 +41,15 @@
  *   http://www.maxim-ic.com/quick_view2.cfm/qv_pk/2578
  * Note that there is no easy way to differentiate between the three
  * variants. The extra address and features of the MAX6659 are not
- * supported by this driver.
+ * supported by this driver. These chips lack the remote temperature
+ * offset feature.
+ *
+ * This driver also supports the MAX6680 and MAX6681, two other sensor
+ * chips made by Maxim. These are quite similar to the other Maxim
+ * chips. Complete datasheet can be obtained at:
+ *   http://www.maxim-ic.com/quick_view2.cfm/qv_pk/3370
+ * The MAX6680 and MAX6681 only differ in the pinout so they can be
+ * treated identically.
  *
  * This driver also supports the ADT7461 chip from Analog Devices but
  * only in its "compatability mode". If an ADT7461 chip is found but
@@ -84,20 +92,25 @@
 /*
  * Addresses to scan
  * Address is fully defined internally and cannot be changed except for
- * MAX6659.
+ * MAX6659, MAX6680 and MAX6681.
  * LM86, LM89, LM90, LM99, ADM1032, ADM1032-1, ADT7461, MAX6657 and MAX6658
  * have address 0x4c.
  * ADM1032-2, ADT7461-2, LM89-1, and LM99-1 have address 0x4d.
  * MAX6659 can have address 0x4c, 0x4d or 0x4e (unsupported).
+ * MAX6680 and MAX6681 can have address 0x18, 0x19, 0x1a, 0x29, 0x2a, 0x2b,
+ * 0x4c, 0x4d or 0x4e.
  */
 
-static unsigned short normal_i2c[] = { 0x4c, 0x4d, I2C_CLIENT_END };
+static unsigned short normal_i2c[] = { 0x18, 0x19, 0x1a,
+				       0x29, 0x2a, 0x2b,
+				       0x4c, 0x4d, 0x4e,
+				       I2C_CLIENT_END };
 
 /*
  * Insmod parameters
  */
 
-I2C_CLIENT_INSMOD_6(lm90, adm1032, lm99, lm86, max6657, adt7461);
+I2C_CLIENT_INSMOD_7(lm90, adm1032, lm99, lm86, max6657, adt7461, max6680);
 
 /*
  * The LM90 registers
@@ -202,7 +215,7 @@ static struct i2c_driver lm90_driver = {
 
 struct lm90_data {
 	struct i2c_client client;
-	struct class_device *class_dev;
+	struct device *hwmon_dev;
 	struct mutex update_lock;
 	char valid; /* zero until following fields are valid */
 	unsigned long last_updated; /* in jiffies */
@@ -214,9 +227,10 @@ struct lm90_data {
 			   2: local high limit
 			   3: local critical limit
 			   4: remote critical limit */
-	s16 temp11[3];	/* 0: remote input
+	s16 temp11[4];	/* 0: remote input
 			   1: remote low limit
-			   2: remote high limit */
+			   2: remote high limit
+			   3: remote offset (except max6657) */
 	u8 temp_hyst;
 	u8 alarms; /* bitvector */
 };
@@ -270,11 +284,13 @@ static ssize_t show_temp11(struct device *dev, struct device_attribute *devattr,
 static ssize_t set_temp11(struct device *dev, struct device_attribute *devattr,
 			  const char *buf, size_t count)
 {
-	static const u8 reg[4] = {
+	static const u8 reg[6] = {
 		LM90_REG_W_REMOTE_LOWH,
 		LM90_REG_W_REMOTE_LOWL,
 		LM90_REG_W_REMOTE_HIGHH,
 		LM90_REG_W_REMOTE_HIGHL,
+		LM90_REG_W_REMOTE_OFFSH,
+		LM90_REG_W_REMOTE_OFFSL,
 	};
 
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(devattr);
@@ -355,11 +371,13 @@ static SENSOR_DEVICE_ATTR(temp2_crit, S_IWUSR | S_IRUGO, show_temp8,
 static SENSOR_DEVICE_ATTR(temp1_crit_hyst, S_IWUSR | S_IRUGO, show_temphyst,
 	set_temphyst, 3);
 static SENSOR_DEVICE_ATTR(temp2_crit_hyst, S_IRUGO, show_temphyst, NULL, 4);
+static SENSOR_DEVICE_ATTR(temp2_offset, S_IWUSR | S_IRUGO, show_temp11,
+	set_temp11, 3);
 
 /* Individual alarm files */
 static SENSOR_DEVICE_ATTR(temp1_crit_alarm, S_IRUGO, show_alarm, NULL, 0);
 static SENSOR_DEVICE_ATTR(temp2_crit_alarm, S_IRUGO, show_alarm, NULL, 1);
-static SENSOR_DEVICE_ATTR(temp2_input_fault, S_IRUGO, show_alarm, NULL, 2);
+static SENSOR_DEVICE_ATTR(temp2_fault, S_IRUGO, show_alarm, NULL, 2);
 static SENSOR_DEVICE_ATTR(temp2_min_alarm, S_IRUGO, show_alarm, NULL, 3);
 static SENSOR_DEVICE_ATTR(temp2_max_alarm, S_IRUGO, show_alarm, NULL, 4);
 static SENSOR_DEVICE_ATTR(temp1_min_alarm, S_IRUGO, show_alarm, NULL, 5);
@@ -381,7 +399,7 @@ static struct attribute *lm90_attributes[] = {
 
 	&sensor_dev_attr_temp1_crit_alarm.dev_attr.attr,
 	&sensor_dev_attr_temp2_crit_alarm.dev_attr.attr,
-	&sensor_dev_attr_temp2_input_fault.dev_attr.attr,
+	&sensor_dev_attr_temp2_fault.dev_attr.attr,
 	&sensor_dev_attr_temp2_min_alarm.dev_attr.attr,
 	&sensor_dev_attr_temp2_max_alarm.dev_attr.attr,
 	&sensor_dev_attr_temp1_min_alarm.dev_attr.attr,
@@ -429,7 +447,7 @@ static DEVICE_ATTR(pec, S_IWUSR | S_IRUGO, show_pec, set_pec);
  */
 
 /* The ADM1032 supports PEC but not on write byte transactions, so we need
-   to explicitely ask for a transaction without PEC. */
+   to explicitly ask for a transaction without PEC. */
 static inline s32 adm1032_write_byte(struct i2c_client *client, u8 value)
 {
 	return i2c_smbus_xfer(client->adapter, client->addr,
@@ -525,7 +543,8 @@ static int lm90_detect(struct i2c_adapter *adapter, int address, int kind)
 		 		  &reg_convrate) < 0)
 			goto exit_free;
 		
-		if (man_id == 0x01) { /* National Semiconductor */
+		if ((address == 0x4C || address == 0x4D)
+		 && man_id == 0x01) { /* National Semiconductor */
 			u8 reg_config2;
 
 			if (lm90_read_reg(new_client, LM90_REG_R_CONFIG2,
@@ -548,7 +567,8 @@ static int lm90_detect(struct i2c_adapter *adapter, int address, int kind)
 				}
 			}
 		} else
-		if (man_id == 0x41) { /* Analog Devices */
+		if ((address == 0x4C || address == 0x4D)
+		 && man_id == 0x41) { /* Analog Devices */
 			if ((chip_id & 0xF0) == 0x40 /* ADM1032 */
 			 && (reg_config1 & 0x3F) == 0x00
 			 && reg_convrate <= 0x0A) {
@@ -562,18 +582,30 @@ static int lm90_detect(struct i2c_adapter *adapter, int address, int kind)
 		} else
 		if (man_id == 0x4D) { /* Maxim */
 			/*
-			 * The Maxim variants do NOT have a chip_id register.
-			 * Reading from that address will return the last read
-			 * value, which in our case is those of the man_id
-			 * register. Likewise, the config1 register seems to
-			 * lack a low nibble, so the value will be those of the
-			 * previous read, so in our case those of the man_id
-			 * register.
+			 * The MAX6657, MAX6658 and MAX6659 do NOT have a
+			 * chip_id register. Reading from that address will
+			 * return the last read value, which in our case is
+			 * those of the man_id register. Likewise, the config1
+			 * register seems to lack a low nibble, so the value
+			 * will be those of the previous read, so in our case
+			 * those of the man_id register.
 			 */
 			if (chip_id == man_id
+			 && (address == 0x4C || address == 0x4D)
 			 && (reg_config1 & 0x1F) == (man_id & 0x0F)
 			 && reg_convrate <= 0x09) {
 			 	kind = max6657;
+			} else
+			/* The chip_id register of the MAX6680 and MAX6681
+			 * holds the revision of the chip.
+			 * the lowest bit of the config1 register is unused
+			 * and should return zero when read, so should the
+			 * second to last bit of config1 (software reset)
+			 */
+			if (chip_id == 0x01
+			 && (reg_config1 & 0x03) == 0x00
+			 && reg_convrate <= 0x07) {
+			 	kind = max6680;
 			}
 		}
 
@@ -599,6 +631,8 @@ static int lm90_detect(struct i2c_adapter *adapter, int address, int kind)
 		name = "lm86";
 	} else if (kind == max6657) {
 		name = "max6657";
+	} else if (kind == max6680) {
+		name = "max6680";
 	} else if (kind == adt7461) {
 		name = "adt7461";
 	}
@@ -624,10 +658,15 @@ static int lm90_detect(struct i2c_adapter *adapter, int address, int kind)
 					      &dev_attr_pec)))
 			goto exit_remove_files;
 	}
+	if (data->kind != max6657) {
+		if ((err = device_create_file(&new_client->dev,
+				&sensor_dev_attr_temp2_offset.dev_attr)))
+			goto exit_remove_files;
+	}
 
-	data->class_dev = hwmon_device_register(&new_client->dev);
-	if (IS_ERR(data->class_dev)) {
-		err = PTR_ERR(data->class_dev);
+	data->hwmon_dev = hwmon_device_register(&new_client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
 		goto exit_remove_files;
 	}
 
@@ -646,7 +685,8 @@ exit:
 
 static void lm90_init_client(struct i2c_client *client)
 {
-	u8 config;
+	u8 config, config_orig;
+	struct lm90_data *data = i2c_get_clientdata(client);
 
 	/*
 	 * Start the conversions.
@@ -657,9 +697,20 @@ static void lm90_init_client(struct i2c_client *client)
 		dev_warn(&client->dev, "Initialization failed!\n");
 		return;
 	}
-	if (config & 0x40)
-		i2c_smbus_write_byte_data(client, LM90_REG_W_CONFIG1,
-					  config & 0xBF); /* run */
+	config_orig = config;
+
+	/*
+	 * Put MAX6680/MAX8881 into extended resolution (bit 0x10,
+	 * 0.125 degree resolution) and range (0x08, extend range
+	 * to -64 degree) mode for the remote temperature sensor.
+	 */
+	if (data->kind == max6680) {
+		config |= 0x18;
+	}
+
+	config &= 0xBF;	/* run */
+	if (config != config_orig) /* Only write if changed */
+		i2c_smbus_write_byte_data(client, LM90_REG_W_CONFIG1, config);
 }
 
 static int lm90_detach_client(struct i2c_client *client)
@@ -667,9 +718,12 @@ static int lm90_detach_client(struct i2c_client *client)
 	struct lm90_data *data = i2c_get_clientdata(client);
 	int err;
 
-	hwmon_device_unregister(data->class_dev);
+	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &lm90_group);
 	device_remove_file(&client->dev, &dev_attr_pec);
+	if (data->kind != max6657)
+		device_remove_file(&client->dev,
+				   &sensor_dev_attr_temp2_offset.dev_attr);
 
 	if ((err = i2c_detach_client(client)))
 		return err;
@@ -723,6 +777,13 @@ static struct lm90_data *lm90_update_device(struct device *dev)
 		if (lm90_read_reg(client, LM90_REG_R_REMOTE_HIGHH, &newh) == 0
 		 && lm90_read_reg(client, LM90_REG_R_REMOTE_HIGHL, &l) == 0)
 			data->temp11[2] = (newh << 8) | l;
+		if (data->kind != max6657) {
+			if (lm90_read_reg(client, LM90_REG_R_REMOTE_OFFSH,
+					  &newh) == 0
+			 && lm90_read_reg(client, LM90_REG_R_REMOTE_OFFSL,
+					  &l) == 0)
+				data->temp11[3] = (newh << 8) | l;
+		}
 		lm90_read_reg(client, LM90_REG_R_STATUS, &data->alarms);
 
 		data->last_updated = jiffies;

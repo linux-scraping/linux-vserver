@@ -14,6 +14,7 @@
 #include <linux/notifier.h>
 #include <linux/percpu.h>
 #include <linux/cpu.h>
+#include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/rcupdate.h>
 #include <linux/smp.h>
@@ -271,8 +272,6 @@ asmlinkage void do_softirq(void)
 	local_irq_restore(flags);
 }
 
-EXPORT_SYMBOL(do_softirq);
-
 #endif
 
 /*
@@ -331,8 +330,6 @@ inline fastcall void raise_softirq_irqoff(unsigned int nr)
 	if (!in_interrupt())
 		wakeup_softirqd();
 }
-
-EXPORT_SYMBOL(raise_softirq_irqoff);
 
 void fastcall raise_softirq(unsigned int nr)
 {
@@ -489,9 +486,6 @@ void __init softirq_init(void)
 
 static int ksoftirqd(void * __bind_cpu)
 {
-	set_user_nice(current, 19);
-	current->flags |= PF_NOFREEZE;
-
 	set_current_state(TASK_INTERRUPTIBLE);
 
 	while (!kthread_should_stop()) {
@@ -594,6 +588,7 @@ static int __cpuinit cpu_callback(struct notifier_block *nfb,
 
 	switch (action) {
 	case CPU_UP_PREPARE:
+	case CPU_UP_PREPARE_FROZEN:
 		p = kthread_create(ksoftirqd, hcpu, "ksoftirqd/%d", hotcpu);
 		if (IS_ERR(p)) {
 			printk("ksoftirqd for %i failed\n", hotcpu);
@@ -603,21 +598,28 @@ static int __cpuinit cpu_callback(struct notifier_block *nfb,
   		per_cpu(ksoftirqd, hotcpu) = p;
  		break;
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		wake_up_process(per_cpu(ksoftirqd, hotcpu));
 		break;
 #ifdef CONFIG_HOTPLUG_CPU
 	case CPU_UP_CANCELED:
+	case CPU_UP_CANCELED_FROZEN:
 		if (!per_cpu(ksoftirqd, hotcpu))
 			break;
 		/* Unbind so it can run.  Fall thru. */
 		kthread_bind(per_cpu(ksoftirqd, hotcpu),
 			     any_online_cpu(cpu_online_map));
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN: {
+		struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
+
 		p = per_cpu(ksoftirqd, hotcpu);
 		per_cpu(ksoftirqd, hotcpu) = NULL;
+		sched_setscheduler(p, SCHED_FIFO, &param);
 		kthread_stop(p);
 		takeover_tasklets(hotcpu);
 		break;
+	}
 #endif /* CONFIG_HOTPLUG_CPU */
  	}
 	return NOTIFY_OK;

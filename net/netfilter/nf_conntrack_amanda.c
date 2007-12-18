@@ -36,7 +36,7 @@ MODULE_PARM_DESC(master_timeout, "timeout for the master connection");
 module_param(ts_algo, charp, 0400);
 MODULE_PARM_DESC(ts_algo, "textsearch algorithm to use (default kmp)");
 
-unsigned int (*nf_nat_amanda_hook)(struct sk_buff **pskb,
+unsigned int (*nf_nat_amanda_hook)(struct sk_buff *skb,
 				   enum ip_conntrack_info ctinfo,
 				   unsigned int matchoff,
 				   unsigned int matchlen,
@@ -79,7 +79,7 @@ static struct {
 	},
 };
 
-static int amanda_help(struct sk_buff **pskb,
+static int amanda_help(struct sk_buff *skb,
 		       unsigned int protoff,
 		       struct nf_conn *ct,
 		       enum ip_conntrack_info ctinfo)
@@ -101,25 +101,25 @@ static int amanda_help(struct sk_buff **pskb,
 
 	/* increase the UDP timeout of the master connection as replies from
 	 * Amanda clients to the server can be quite delayed */
-	nf_ct_refresh(ct, *pskb, master_timeout * HZ);
+	nf_ct_refresh(ct, skb, master_timeout * HZ);
 
 	/* No data? */
 	dataoff = protoff + sizeof(struct udphdr);
-	if (dataoff >= (*pskb)->len) {
+	if (dataoff >= skb->len) {
 		if (net_ratelimit())
-			printk("amanda_help: skblen = %u\n", (*pskb)->len);
+			printk("amanda_help: skblen = %u\n", skb->len);
 		return NF_ACCEPT;
 	}
 
 	memset(&ts, 0, sizeof(ts));
-	start = skb_find_text(*pskb, dataoff, (*pskb)->len,
+	start = skb_find_text(skb, dataoff, skb->len,
 			      search[SEARCH_CONNECT].ts, &ts);
 	if (start == UINT_MAX)
 		goto out;
 	start += dataoff + search[SEARCH_CONNECT].len;
 
 	memset(&ts, 0, sizeof(ts));
-	stop = skb_find_text(*pskb, start, (*pskb)->len,
+	stop = skb_find_text(skb, start, skb->len,
 			     search[SEARCH_NEWLINE].ts, &ts);
 	if (stop == UINT_MAX)
 		goto out;
@@ -127,13 +127,13 @@ static int amanda_help(struct sk_buff **pskb,
 
 	for (i = SEARCH_DATA; i <= SEARCH_INDEX; i++) {
 		memset(&ts, 0, sizeof(ts));
-		off = skb_find_text(*pskb, start, stop, search[i].ts, &ts);
+		off = skb_find_text(skb, start, stop, search[i].ts, &ts);
 		if (off == UINT_MAX)
 			continue;
 		off += start + search[i].len;
 
 		len = min_t(unsigned int, sizeof(pbuf) - 1, stop - off);
-		if (skb_copy_bits(*pskb, off, pbuf, len))
+		if (skb_copy_bits(skb, off, pbuf, len))
 			break;
 		pbuf[len] = '\0';
 
@@ -142,23 +142,22 @@ static int amanda_help(struct sk_buff **pskb,
 		if (port == 0 || len > 5)
 			break;
 
-		exp = nf_conntrack_expect_alloc(ct);
+		exp = nf_ct_expect_alloc(ct);
 		if (exp == NULL) {
 			ret = NF_DROP;
 			goto out;
 		}
 		tuple = &ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple;
-		nf_conntrack_expect_init(exp, family,
-					 &tuple->src.u3, &tuple->dst.u3,
-					 IPPROTO_TCP, NULL, &port);
+		nf_ct_expect_init(exp, family, &tuple->src.u3, &tuple->dst.u3,
+				  IPPROTO_TCP, NULL, &port);
 
 		nf_nat_amanda = rcu_dereference(nf_nat_amanda_hook);
 		if (nf_nat_amanda && ct->status & IPS_NAT_MASK)
-			ret = nf_nat_amanda(pskb, ctinfo, off - dataoff,
+			ret = nf_nat_amanda(skb, ctinfo, off - dataoff,
 					    len, exp);
-		else if (nf_conntrack_expect_related(exp) != 0)
+		else if (nf_ct_expect_related(exp) != 0)
 			ret = NF_DROP;
-		nf_conntrack_expect_put(exp);
+		nf_ct_expect_put(exp);
 	}
 
 out:
@@ -175,9 +174,6 @@ static struct nf_conntrack_helper amanda_helper[2] __read_mostly = {
 		.tuple.src.l3num	= AF_INET,
 		.tuple.src.u.udp.port	= __constant_htons(10080),
 		.tuple.dst.protonum	= IPPROTO_UDP,
-		.mask.src.l3num		= 0xFFFF,
-		.mask.src.u.udp.port	= __constant_htons(0xFFFF),
-		.mask.dst.protonum	= 0xFF,
 	},
 	{
 		.name			= "amanda",
@@ -188,9 +184,6 @@ static struct nf_conntrack_helper amanda_helper[2] __read_mostly = {
 		.tuple.src.l3num	= AF_INET6,
 		.tuple.src.u.udp.port	= __constant_htons(10080),
 		.tuple.dst.protonum	= IPPROTO_UDP,
-		.mask.src.l3num		= 0xFFFF,
-		.mask.src.u.udp.port	= __constant_htons(0xFFFF),
-		.mask.dst.protonum	= 0xFF,
 	},
 };
 
@@ -208,13 +201,14 @@ static int __init nf_conntrack_amanda_init(void)
 {
 	int ret, i;
 
-	ret = -ENOMEM;
 	for (i = 0; i < ARRAY_SIZE(search); i++) {
 		search[i].ts = textsearch_prepare(ts_algo, search[i].string,
 						  search[i].len,
 						  GFP_KERNEL, TS_AUTOLOAD);
-		if (search[i].ts == NULL)
+		if (IS_ERR(search[i].ts)) {
+			ret = PTR_ERR(search[i].ts);
 			goto err1;
+		}
 	}
 	ret = nf_conntrack_helper_register(&amanda_helper[0]);
 	if (ret < 0)
@@ -227,10 +221,9 @@ static int __init nf_conntrack_amanda_init(void)
 err2:
 	nf_conntrack_helper_unregister(&amanda_helper[0]);
 err1:
-	for (; i >= 0; i--) {
-		if (search[i].ts)
-			textsearch_destroy(search[i].ts);
-	}
+	while (--i >= 0)
+		textsearch_destroy(search[i].ts);
+
 	return ret;
 }
 

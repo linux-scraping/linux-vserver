@@ -17,9 +17,11 @@
 #include <linux/ctype.h>
 #include <linux/swap.h>
 #include <linux/kthread.h>
+#include <linux/oom.h>
 
 #include <asm/pgalloc.h>
 #include <asm/uaccess.h>
+#include <asm/diag.h>
 
 static char *sender = "VMRMSVM";
 module_param(sender, charp, 0400);

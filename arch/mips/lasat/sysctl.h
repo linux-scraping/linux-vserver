@@ -7,7 +7,7 @@
 
 /* /proc/sys/lasat */
 enum {
-	LASAT_CPU_HZ=1,
+	LASAT_CPU_HZ = 1,
 	LASAT_BUS_HZ,
 	LASAT_MODEL,
 	LASAT_PRID,

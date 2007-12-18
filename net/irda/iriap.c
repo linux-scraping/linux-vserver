@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -153,7 +153,7 @@ int __init iriap_init(void)
  *    Initializes the IrIAP layer, called by the module cleanup code in
  *    irmod.c
  */
-void __exit iriap_cleanup(void)
+void iriap_cleanup(void)
 {
 	irlmp_unregister_service(service_handle);
 
@@ -1066,7 +1066,7 @@ static int irias_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irias_seq_ops = {
+static const struct seq_operations irias_seq_ops = {
 	.start  = irias_seq_start,
 	.next   = irias_seq_next,
 	.stop   = irias_seq_stop,

@@ -191,3 +191,37 @@ void udbg_init_pas_realmode(void)
 	udbg_getc_poll = NULL;
 }
 #endif /* CONFIG_PPC_MAPLE */
+
+#ifdef CONFIG_PPC_EARLY_DEBUG_44x
+#include <platforms/44x/44x.h>
+
+static void udbg_44x_as1_putc(char c)
+{
+	if (udbg_comport) {
+		while ((as1_readb(&udbg_comport->lsr) & LSR_THRE) == 0)
+			/* wait for idle */;
+		as1_writeb(c, &udbg_comport->thr); eieio();
+		if (c == '\n')
+			udbg_44x_as1_putc('\r');
+	}
+}
+
+static int udbg_44x_as1_getc(void)
+{
+	if (udbg_comport) {
+		while ((as1_readb(&udbg_comport->lsr) & LSR_DR) == 0)
+			; /* wait for char */
+		return as1_readb(&udbg_comport->rbr);
+	}
+	return -1;
+}
+
+void __init udbg_init_44x_as1(void)
+{
+	udbg_comport =
+		(volatile struct NS16550 __iomem *)PPC44x_EARLY_DEBUG_VIRTADDR;
+
+	udbg_putc = udbg_44x_as1_putc;
+	udbg_getc = udbg_44x_as1_getc;
+}
+#endif /* CONFIG_PPC_EARLY_DEBUG_44x */

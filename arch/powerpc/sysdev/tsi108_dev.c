@@ -48,7 +48,7 @@ phys_addr_t get_csrbase(void)
 	tsi = of_find_node_by_type(NULL, "tsi-bridge");
 	if (tsi) {
 		unsigned int size;
-		const void *prop = get_property(tsi, "reg", &size);
+		const void *prop = of_get_property(tsi, "reg", &size);
 		tsi108_csr_base = of_translate_address(tsi, prop);
 		of_node_put(tsi);
 	};
@@ -72,15 +72,14 @@ static int __init tsi108_eth_of_init(void)
 	int ret;
 
 	for (np = NULL, i = 0;
-	     (np = of_find_compatible_node(np, "network", "tsi-ethernet")) != NULL;
+	     (np = of_find_compatible_node(np, "network", "tsi108-ethernet")) != NULL;
 	     i++) {
 		struct resource r[2];
-		struct device_node *phy;
+		struct device_node *phy, *mdio;
 		hw_info tsi_eth_data;
-		unsigned int *id;
-		unsigned int *phy_id;
+		const unsigned int *phy_id;
 		const void *mac_addr;
-		phandle *ph;
+		const phandle *ph;
 
 		memset(r, 0, sizeof(r));
 		memset(&tsi_eth_data, 0, sizeof(tsi_eth_data));
@@ -107,10 +106,18 @@ static int __init tsi108_eth_of_init(void)
 			goto err;
 		}
 
-		mac_addr = get_property(np, "address", NULL);
-		memcpy(tsi_eth_data.mac_addr, mac_addr, 6);
+		mac_addr = of_get_mac_address(np);
+		if (mac_addr)
+			memcpy(tsi_eth_data.mac_addr, mac_addr, 6);
 
-		ph = (phandle *) get_property(np, "phy-handle", NULL);
+		ph = of_get_property(np, "mdio-handle", NULL);
+		mdio = of_find_node_by_phandle(*ph);
+		ret = of_address_to_resource(mdio, 0, &res);
+		of_node_put(mdio);
+		if (ret)
+			goto unreg;
+
+		ph = of_get_property(np, "phy-handle", NULL);
 		phy = of_find_node_by_phandle(*ph);
 
 		if (phy == NULL) {
@@ -118,18 +125,25 @@ static int __init tsi108_eth_of_init(void)
 			goto unreg;
 		}
 
-		id = (u32 *) get_property(phy, "reg", NULL);
-		phy_id = (u32 *) get_property(phy, "phy-id", NULL);
-		ret = of_address_to_resource(phy, 0, &res);
-		if (ret) {
-			of_node_put(phy);
-			goto unreg;
-		}
+		phy_id = of_get_property(phy, "reg", NULL);
+
 		tsi_eth_data.regs = r[0].start;
 		tsi_eth_data.phyregs = res.start;
 		tsi_eth_data.phy = *phy_id;
 		tsi_eth_data.irq_num = irq_of_parse_and_map(np, 0);
+
+		/* Some boards with the TSI108 bridge (e.g. Holly)
+		 * have a miswiring of the ethernet PHYs which
+		 * requires a workaround.  The special
+		 * "txc-rxc-delay-disable" property enables this
+		 * workaround.  FIXME: Need to port the tsi108_eth
+		 * driver itself to phylib and use a non-misleading
+		 * name for the workaround flag - it's not actually to
+		 * do with the model of PHY in use */
+		if (of_get_property(phy, "txc-rxc-delay-disable", NULL))
+			tsi_eth_data.phy_type = TSI108_PHY_BCM54XX;
 		of_node_put(phy);
+
 		ret =
 		    platform_device_add_data(tsi_eth_dev, &tsi_eth_data,
 					     sizeof(hw_info));

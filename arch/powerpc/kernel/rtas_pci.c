@@ -60,7 +60,7 @@ static int of_device_available(struct device_node * dn)
 {
         const char *status;
 
-        status = get_property(dn, "status", NULL);
+        status = of_get_property(dn, "status", NULL);
 
         if (!status)
                 return 1;
@@ -171,13 +171,13 @@ static int rtas_pci_write_config(struct pci_bus *bus,
 }
 
 struct pci_ops rtas_pci_ops = {
-	rtas_pci_read_config,
-	rtas_pci_write_config
+	.read = rtas_pci_read_config,
+	.write = rtas_pci_write_config,
 };
 
 int is_python(struct device_node *dev)
 {
-	const char *model = get_property(dev, "model", NULL);
+	const char *model = of_get_property(dev, "model", NULL);
 
 	if (model && strstr(model, "Python"))
 		return 1;
@@ -247,7 +247,7 @@ static int phb_set_bus_ranges(struct device_node *dev,
 	const int *bus_range;
 	unsigned int len;
 
-	bus_range = get_property(dev, "bus-range", &len);
+	bus_range = of_get_property(dev, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
 		return 1;
  	}
@@ -274,14 +274,12 @@ int __devinit rtas_setup_phb(struct pci_controller *phb)
 	return 0;
 }
 
-unsigned long __init find_and_init_phbs(void)
+void __init find_and_init_phbs(void)
 {
 	struct device_node *node;
 	struct pci_controller *phb;
-	unsigned int index;
 	struct device_node *root = of_find_node_by_path("/");
 
-	index = 0;
 	for (node = of_get_next_child(root, NULL);
 	     node != NULL;
 	     node = of_get_next_child(root, node)) {
@@ -295,8 +293,7 @@ unsigned long __init find_and_init_phbs(void)
 			continue;
 		rtas_setup_phb(phb);
 		pci_process_bridge_OF_ranges(phb, node, 0);
-		pci_setup_phb_io(phb, index == 0);
-		index++;
+		isa_bridge_find_early(phb);
 	}
 
 	of_node_put(root);
@@ -309,18 +306,16 @@ unsigned long __init find_and_init_phbs(void)
 	if (of_chosen) {
 		const int *prop;
 
-		prop = get_property(of_chosen,
+		prop = of_get_property(of_chosen,
 				"linux,pci-probe-only", NULL);
 		if (prop)
 			pci_probe_only = *prop;
 
-		prop = get_property(of_chosen,
+		prop = of_get_property(of_chosen,
 				"linux,pci-assign-all-buses", NULL);
 		if (prop)
 			pci_assign_all_buses = *prop;
 	}
-
-	return 0;
 }
 
 /* RPA-specific bits for removing PHBs */
@@ -337,7 +332,7 @@ int pcibios_remove_root_bus(struct pci_controller *phb)
 		return 1;
 	}
 
-	rc = unmap_bus_range(b);
+	rc = pcibios_unmap_io_space(b);
 	if (rc) {
 		printk(KERN_ERR "%s: failed to unmap IO on bus %s\n",
 			__FUNCTION__, b->name);

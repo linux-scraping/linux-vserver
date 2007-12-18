@@ -272,15 +272,7 @@ static struct snd_kcontrol_new volume_control = {
 	.put = tas_snd_vol_put,
 };
 
-static int tas_snd_mute_info(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define tas_snd_mute_info	snd_ctl_boolean_stereo_info
 
 static int tas_snd_mute_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -431,15 +423,7 @@ static struct snd_kcontrol_new drc_range_control = {
 	.put = tas_snd_drc_range_put,
 };
 
-static int tas_snd_drc_switch_info(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define tas_snd_drc_switch_info		snd_ctl_boolean_mono_info
 
 static int tas_snd_drc_switch_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -743,6 +727,7 @@ static int tas_switch_clock(struct codec_info_item *cii, enum clock_switch clock
 	return 0;
 }
 
+#ifdef CONFIG_PM
 /* we are controlled via i2c and assume that is always up
  * If that wasn't the case, we'd have to suspend once
  * our i2c device is suspended, and then take note of that! */
@@ -768,7 +753,6 @@ static int tas_resume(struct tas *tas)
 	return 0;
 }
 
-#ifdef CONFIG_PM
 static int _tas_suspend(struct codec_info_item *cii, pm_message_t state)
 {
 	return tas_suspend(cii->codec_data);
@@ -778,7 +762,10 @@ static int _tas_resume(struct codec_info_item *cii)
 {
 	return tas_resume(cii->codec_data);
 }
-#endif
+#else /* CONFIG_PM */
+#define _tas_suspend	NULL
+#define _tas_resume	NULL
+#endif /* CONFIG_PM */
 
 static struct codec_info tas_codec_info = {
 	.transfers = tas_transfers,
@@ -791,10 +778,8 @@ static struct codec_info tas_codec_info = {
 	.owner = THIS_MODULE,
 	.usable = tas_usable,
 	.switch_clock = tas_switch_clock,
-#ifdef CONFIG_PM
 	.suspend = _tas_suspend,
 	.resume = _tas_resume,
-#endif
 };
 
 static int tas_init_codec(struct aoa_codec *codec)
@@ -899,14 +884,14 @@ static int tas_create(struct i2c_adapter *adapter,
 	tas->i2c.addr = addr;
 	/* seems that half is a saner default */
 	tas->drc_range = TAS3004_DRC_MAX / 2;
-	strlcpy(tas->i2c.name, "tas audio codec", I2C_NAME_SIZE-1);
+	strlcpy(tas->i2c.name, "tas audio codec", I2C_NAME_SIZE);
 
 	if (i2c_attach_client(&tas->i2c)) {
 		printk(KERN_ERR PFX "failed to attach to i2c\n");
 		goto fail;
 	}
 
-	strlcpy(tas->codec.name, "tas", MAX_CODEC_NAME_LEN-1);
+	strlcpy(tas->codec.name, "tas", MAX_CODEC_NAME_LEN);
 	tas->codec.owner = THIS_MODULE;
 	tas->codec.init = tas_init_codec;
 	tas->codec.exit = tas_exit_codec;
@@ -938,10 +923,10 @@ static int tas_i2c_attach(struct i2c_adapter *adapter)
 	busnode = pmac_i2c_get_bus_node(bus);
 
 	while ((dev = of_get_next_child(busnode, dev)) != NULL) {
-		if (device_is_compatible(dev, "tas3004")) {
-			u32 *addr;
+		if (of_device_is_compatible(dev, "tas3004")) {
+			const u32 *addr;
 			printk(KERN_DEBUG PFX "found tas3004\n");
-			addr = (u32 *) get_property(dev, "reg", NULL);
+			addr = of_get_property(dev, "reg", NULL);
 			if (!addr)
 				continue;
 			return tas_create(adapter, dev, ((*addr) >> 1) & 0x7f);
@@ -950,9 +935,10 @@ static int tas_i2c_attach(struct i2c_adapter *adapter)
 		 * property that says 'tas3004', they just have a 'deq'
 		 * node without any such property... */
 		if (strcmp(dev->name, "deq") == 0) {
-			u32 *_addr, addr;
+			const u32 *_addr;
+			u32 addr;
 			printk(KERN_DEBUG PFX "found 'deq' node\n");
-			_addr = (u32 *) get_property(dev, "i2c-address", NULL);
+			_addr = of_get_property(dev, "i2c-address", NULL);
 			if (!_addr)
 				continue;
 			addr = ((*_addr) >> 1) & 0x7f;

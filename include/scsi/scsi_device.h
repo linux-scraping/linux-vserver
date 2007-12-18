@@ -5,6 +5,7 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/blkdev.h>
 #include <asm/atomic.h>
 
 struct request_queue;
@@ -43,6 +44,22 @@ enum scsi_device_state {
 	SDEV_BLOCK,		/* Device blocked by scsi lld.  No scsi 
 				 * commands from user or midlayer should be issued
 				 * to the scsi lld. */
+};
+
+enum scsi_device_event {
+	SDEV_EVT_MEDIA_CHANGE	= 1,	/* media has changed */
+
+	SDEV_EVT_LAST		= SDEV_EVT_MEDIA_CHANGE,
+	SDEV_EVT_MAXBITS	= SDEV_EVT_LAST + 1
+};
+
+struct scsi_event {
+	enum scsi_device_event	evt_type;
+	struct list_head	node;
+
+	/* put union of data structures, for non-simple event types,
+	 * here
+	 */
 };
 
 struct scsi_device {
@@ -119,11 +136,16 @@ struct scsi_device {
 	unsigned use_192_bytes_for_3f:1; /* ask for 192 bytes from page 0x3f */
 	unsigned no_start_on_add:1;	/* do not issue start on add */
 	unsigned allow_restart:1; /* issue START_UNIT in error handler */
+	unsigned manage_start_stop:1;	/* Let HLD (sd) manage start/stop */
 	unsigned no_uld_attach:1; /* disable connecting to upper level drivers */
 	unsigned select_no_atn:1;
 	unsigned fix_capacity:1;	/* READ_CAPACITY is too high by 1 */
 	unsigned guess_capacity:1;	/* READ_CAPACITY might be too high by 1 */
 	unsigned retry_hwerror:1;	/* Retry HARDWARE_ERROR */
+
+	DECLARE_BITMAP(supported_events, SDEV_EVT_MAXBITS); /* supported events */
+	struct list_head event_list;	/* asserted events */
+	struct work_struct event_work;
 
 	unsigned int device_blocked;	/* Device returned QUEUE_FULL. */
 
@@ -154,8 +176,11 @@ struct scsi_device {
 #define sdev_printk(prefix, sdev, fmt, a...)	\
 	dev_printk(prefix, &(sdev)->sdev_gendev, fmt, ##a)
 
-#define scmd_printk(prefix, scmd, fmt, a...)	\
-	dev_printk(prefix, &(scmd)->device->sdev_gendev, fmt, ##a)
+#define scmd_printk(prefix, scmd, fmt, a...)				\
+        (scmd)->request->rq_disk ?					\
+	sdev_printk(prefix, (scmd)->device, "[%s] " fmt,		\
+		    (scmd)->request->rq_disk->disk_name, ##a) :		\
+	sdev_printk(prefix, (scmd)->device, fmt, ##a)
 
 enum scsi_target_state {
 	STARGET_RUNNING = 1,
@@ -204,7 +229,6 @@ extern struct scsi_device *__scsi_add_device(struct Scsi_Host *,
 extern int scsi_add_device(struct Scsi_Host *host, uint channel,
 			   uint target, uint lun);
 extern void scsi_remove_device(struct scsi_device *);
-extern int scsi_device_cancel(struct scsi_device *, int);
 
 extern int scsi_device_get(struct scsi_device *);
 extern void scsi_device_put(struct scsi_device *);
@@ -271,6 +295,11 @@ extern int scsi_test_unit_ready(struct scsi_device *sdev, int timeout,
 				int retries);
 extern int scsi_device_set_state(struct scsi_device *sdev,
 				 enum scsi_device_state state);
+extern struct scsi_event *sdev_evt_alloc(enum scsi_device_event evt_type,
+					  gfp_t gfpflags);
+extern void sdev_evt_send(struct scsi_device *sdev, struct scsi_event *evt);
+extern void sdev_evt_send_simple(struct scsi_device *sdev,
+			  enum scsi_device_event evt_type, gfp_t gfpflags);
 extern int scsi_device_quiesce(struct scsi_device *sdev);
 extern void scsi_device_resume(struct scsi_device *sdev);
 extern void scsi_target_quiesce(struct scsi_target *);
@@ -282,6 +311,7 @@ extern void scsi_target_block(struct device *);
 extern void scsi_target_unblock(struct device *);
 extern void scsi_remove_target(struct device *);
 extern void int_to_scsilun(unsigned int, struct scsi_lun *);
+extern int scsilun_to_int(struct scsi_lun *);
 extern const char *scsi_device_state_name(enum scsi_device_state);
 extern int scsi_is_sdev_device(const struct device *);
 extern int scsi_is_target_device(const struct device *);
@@ -353,4 +383,9 @@ static inline int scsi_device_qas(struct scsi_device *sdev)
 		return 0;
 	return sdev->inquiry[56] & 0x02;
 }
+
+#define MODULE_ALIAS_SCSI_DEVICE(type) \
+	MODULE_ALIAS("scsi:t-" __stringify(type) "*")
+#define SCSI_DEVICE_MODALIAS_FMT "scsi:t-0x%02x"
+
 #endif /* _SCSI_SCSI_DEVICE_H */

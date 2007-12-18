@@ -1,5 +1,4 @@
-/* $Id: parport.h,v 1.11 2001/05/11 07:54:24 davem Exp $
- * parport.h: sparc64 specific parport initialization and dma.
+/* parport.h: sparc64 specific parport initialization and dma.
  *
  * Copyright (C) 1999  Eddie C. Dost  (ecd@skynet.be)
  */
@@ -8,8 +7,9 @@
 #define _ASM_SPARC64_PARPORT_H 1
 
 #include <asm/ebus.h>
-#include <asm/isa.h>
 #include <asm/ns87303.h>
+#include <asm/of_device.h>
+#include <asm/prom.h>
 
 #define PARPORT_PC_MAX_PORTS	PARPORT_MAX
 
@@ -35,9 +35,13 @@ static struct sparc_ebus_info {
 	unsigned int addr;
 	unsigned int count;
 	int lock;
+
+	struct parport *port;
 } sparc_ebus_dmas[PARPORT_PC_MAX_PORTS];
 
-static __inline__ int request_dma(unsigned int dmanr, const char *device_id)
+static DECLARE_BITMAP(dma_slot_map, PARPORT_PC_MAX_PORTS);
+
+static inline int request_dma(unsigned int dmanr, const char *device_id)
 {
 	if (dmanr >= PARPORT_PC_MAX_PORTS)
 		return -EINVAL;
@@ -46,7 +50,7 @@ static __inline__ int request_dma(unsigned int dmanr, const char *device_id)
 	return 0;
 }
 
-static __inline__ void free_dma(unsigned int dmanr)
+static inline void free_dma(unsigned int dmanr)
 {
 	if (dmanr >= PARPORT_PC_MAX_PORTS) {
 		printk(KERN_WARNING "Trying to free DMA%d\n", dmanr);
@@ -58,7 +62,7 @@ static __inline__ void free_dma(unsigned int dmanr)
 	}	
 }
 
-static __inline__ void enable_dma(unsigned int dmanr)
+static inline void enable_dma(unsigned int dmanr)
 {
 	ebus_dma_enable(&sparc_ebus_dmas[dmanr].info, 1);
 
@@ -68,146 +72,175 @@ static __inline__ void enable_dma(unsigned int dmanr)
 		BUG();
 }
 
-static __inline__ void disable_dma(unsigned int dmanr)
+static inline void disable_dma(unsigned int dmanr)
 {
 	ebus_dma_enable(&sparc_ebus_dmas[dmanr].info, 0);
 }
 
-static __inline__ void clear_dma_ff(unsigned int dmanr)
+static inline void clear_dma_ff(unsigned int dmanr)
 {
 	/* nothing */
 }
 
-static __inline__ void set_dma_mode(unsigned int dmanr, char mode)
+static inline void set_dma_mode(unsigned int dmanr, char mode)
 {
 	ebus_dma_prepare(&sparc_ebus_dmas[dmanr].info, (mode != DMA_MODE_WRITE));
 }
 
-static __inline__ void set_dma_addr(unsigned int dmanr, unsigned int addr)
+static inline void set_dma_addr(unsigned int dmanr, unsigned int addr)
 {
 	sparc_ebus_dmas[dmanr].addr = addr;
 }
 
-static __inline__ void set_dma_count(unsigned int dmanr, unsigned int count)
+static inline void set_dma_count(unsigned int dmanr, unsigned int count)
 {
 	sparc_ebus_dmas[dmanr].count = count;
 }
 
-static __inline__ unsigned int get_dma_residue(unsigned int dmanr)
+static inline unsigned int get_dma_residue(unsigned int dmanr)
 {
 	return ebus_dma_residue(&sparc_ebus_dmas[dmanr].info);
 }
 
-static int ebus_ecpp_p(struct linux_ebus_device *edev)
+static int __devinit ecpp_probe(struct of_device *op, const struct of_device_id *match)
 {
-	if (!strcmp(edev->prom_node->name, "ecpp"))
-		return 1;
-	if (!strcmp(edev->prom_node->name, "parallel")) {
-		char *compat;
+	unsigned long base = op->resource[0].start;
+	unsigned long config = op->resource[1].start;
+	unsigned long d_base = op->resource[2].start;
+	unsigned long d_len;
+	struct device_node *parent;
+	struct parport *p;
+	int slot, err;
 
-		compat = of_get_property(edev->prom_node,
-					 "compatible", NULL);
-		if (compat &&
-		    (!strcmp(compat, "ecpp") ||
-		     !strcmp(compat, "ns87317-ecpp") ||
-		     !strcmp(compat + 13, "ecpp")))
-			return 1;
+	parent = op->node->parent;
+	if (!strcmp(parent->name, "dma")) {
+		p = parport_pc_probe_port(base, base + 0x400,
+					  op->irqs[0], PARPORT_DMA_NOFIFO,
+					  op->dev.parent->parent);
+		if (!p)
+			return -ENOMEM;
+		dev_set_drvdata(&op->dev, p);
+		return 0;
 	}
+
+	for (slot = 0; slot < PARPORT_PC_MAX_PORTS; slot++) {
+		if (!test_and_set_bit(slot, dma_slot_map))
+			break;
+	}
+	err = -ENODEV;
+	if (slot >= PARPORT_PC_MAX_PORTS)
+		goto out_err;
+
+	spin_lock_init(&sparc_ebus_dmas[slot].info.lock);
+
+	d_len = (op->resource[2].end - d_base) + 1UL;
+	sparc_ebus_dmas[slot].info.regs =
+		of_ioremap(&op->resource[2], 0, d_len, "ECPP DMA");
+
+	if (!sparc_ebus_dmas[slot].info.regs)
+		goto out_clear_map;
+
+	sparc_ebus_dmas[slot].info.flags = 0;
+	sparc_ebus_dmas[slot].info.callback = NULL;
+	sparc_ebus_dmas[slot].info.client_cookie = NULL;
+	sparc_ebus_dmas[slot].info.irq = 0xdeadbeef;
+	strcpy(sparc_ebus_dmas[slot].info.name, "parport");
+	if (ebus_dma_register(&sparc_ebus_dmas[slot].info))
+		goto out_unmap_regs;
+
+	ebus_dma_irq_enable(&sparc_ebus_dmas[slot].info, 1);
+
+	/* Configure IRQ to Push Pull, Level Low */
+	/* Enable ECP, set bit 2 of the CTR first */
+	outb(0x04, base + 0x02);
+	ns87303_modify(config, PCR,
+		       PCR_EPP_ENABLE |
+		       PCR_IRQ_ODRAIN,
+		       PCR_ECP_ENABLE |
+		       PCR_ECP_CLK_ENA |
+		       PCR_IRQ_POLAR);
+
+	/* CTR bit 5 controls direction of port */
+	ns87303_modify(config, PTR,
+		       0, PTR_LPT_REG_DIR);
+
+	p = parport_pc_probe_port(base, base + 0x400,
+				  op->irqs[0],
+				  slot,
+				  op->dev.parent);
+	err = -ENOMEM;
+	if (!p)
+		goto out_disable_irq;
+
+	dev_set_drvdata(&op->dev, p);
+
+	return 0;
+
+out_disable_irq:
+	ebus_dma_irq_enable(&sparc_ebus_dmas[slot].info, 0);
+	ebus_dma_unregister(&sparc_ebus_dmas[slot].info);
+
+out_unmap_regs:
+	of_iounmap(&op->resource[2], sparc_ebus_dmas[slot].info.regs, d_len);
+
+out_clear_map:
+	clear_bit(slot, dma_slot_map);
+
+out_err:
+	return err;
+}
+
+static int __devexit ecpp_remove(struct of_device *op)
+{
+	struct parport *p = dev_get_drvdata(&op->dev);
+	int slot = p->dma;
+
+	parport_pc_unregister_port(p);
+
+	if (slot != PARPORT_DMA_NOFIFO) {
+		unsigned long d_base = op->resource[2].start;
+		unsigned long d_len;
+
+		d_len = (op->resource[2].end - d_base) + 1UL;
+
+		ebus_dma_irq_enable(&sparc_ebus_dmas[slot].info, 0);
+		ebus_dma_unregister(&sparc_ebus_dmas[slot].info);
+		of_iounmap(&op->resource[2],
+			   sparc_ebus_dmas[slot].info.regs,
+			   d_len);
+		clear_bit(slot, dma_slot_map);
+	}
+
 	return 0;
 }
 
-static int parport_isa_probe(int count)
+static struct of_device_id ecpp_match[] = {
+	{
+		.name = "ecpp",
+	},
+	{
+		.name = "parallel",
+		.compatible = "ecpp",
+	},
+	{
+		.name = "parallel",
+		.compatible = "ns87317-ecpp",
+	},
+	{},
+};
+
+static struct of_platform_driver ecpp_driver = {
+	.name			= "ecpp",
+	.match_table		= ecpp_match,
+	.probe			= ecpp_probe,
+	.remove			= __devexit_p(ecpp_remove),
+};
+
+static int parport_pc_find_nonpci_ports(int autoirq, int autodma)
 {
-	struct sparc_isa_bridge *isa_br;
-	struct sparc_isa_device *isa_dev;
+	of_register_driver(&ecpp_driver, &of_bus_type);
 
-	for_each_isa(isa_br) {
-		for_each_isadev(isa_dev, isa_br) {
-			struct sparc_isa_device *child;
-			unsigned long base;
-
-			if (strcmp(isa_dev->prom_node->name, "dma"))
-				continue;
-
-			child = isa_dev->child;
-			while (child) {
-				if (!strcmp(child->prom_node->name, "parallel"))
-					break;
-				child = child->next;
-			}
-			if (!child)
-				continue;
-
-			base = child->resource.start;
-
-			/* No DMA, see commentary in
-			 * asm-sparc64/floppy.h:isa_floppy_init()
-			 */
-			if (parport_pc_probe_port(base, base + 0x400,
-						  child->irq, PARPORT_DMA_NOFIFO,
-						  child->bus->self))
-				count++;
-		}
-	}
-
-	return count;
-}
-
-static int parport_pc_find_nonpci_ports (int autoirq, int autodma)
-{
-	struct linux_ebus *ebus;
-	struct linux_ebus_device *edev;
-	int count = 0;
-
-	for_each_ebus(ebus) {
-		for_each_ebusdev(edev, ebus) {
-			if (ebus_ecpp_p(edev)) {
-				unsigned long base = edev->resource[0].start;
-				unsigned long config = edev->resource[1].start;
-				unsigned long d_base = edev->resource[2].start;
-				unsigned long d_len;
-
-				spin_lock_init(&sparc_ebus_dmas[count].info.lock);
-				d_len = (edev->resource[2].end -
-					 d_base) + 1;
-				sparc_ebus_dmas[count].info.regs =
-					ioremap(d_base, d_len);
-				if (!sparc_ebus_dmas[count].info.regs)
-					continue;
-				sparc_ebus_dmas[count].info.flags = 0;
-				sparc_ebus_dmas[count].info.callback = NULL;
-				sparc_ebus_dmas[count].info.client_cookie = NULL;
-				sparc_ebus_dmas[count].info.irq = 0xdeadbeef;
-				strcpy(sparc_ebus_dmas[count].info.name, "parport");
-				if (ebus_dma_register(&sparc_ebus_dmas[count].info))
-					continue;
-				ebus_dma_irq_enable(&sparc_ebus_dmas[count].info, 1);
-
-				/* Configure IRQ to Push Pull, Level Low */
-				/* Enable ECP, set bit 2 of the CTR first */
-				outb(0x04, base + 0x02);
-				ns87303_modify(config, PCR,
-					       PCR_EPP_ENABLE |
-					       PCR_IRQ_ODRAIN,
-					       PCR_ECP_ENABLE |
-					       PCR_ECP_CLK_ENA |
-					       PCR_IRQ_POLAR);
-
-				/* CTR bit 5 controls direction of port */
-				ns87303_modify(config, PTR,
-					       0, PTR_LPT_REG_DIR);
-
-				if (parport_pc_probe_port(base, base + 0x400,
-							  edev->irqs[0],
-							  count, ebus->self))
-					count++;
-			}
-		}
-	}
-
-	count = parport_isa_probe(count);
-
-	return count;
+	return 0;
 }
 
 #endif /* !(_ASM_SPARC64_PARPORT_H */

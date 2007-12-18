@@ -31,6 +31,7 @@
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/delay.h>
+#include <linux/bitrev.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 
@@ -46,7 +47,7 @@
 /* #define ATR_CSUM */
 
 #ifdef PCMCIA_DEBUG
-#define reader_to_dev(x)	(&handle_to_dev(x->p_dev->handle))
+#define reader_to_dev(x)	(&handle_to_dev(x->p_dev))
 static int pc_debug = PCMCIA_DEBUG;
 module_param(pc_debug, int, 0600);
 #define DEBUGP(n, rdr, x, args...) do { 				\
@@ -194,41 +195,17 @@ static inline unsigned char xinb(unsigned short port)
 }
 #endif
 
-#define	b_0000	15
-#define	b_0001	14
-#define	b_0010	13
-#define	b_0011	12
-#define	b_0100	11
-#define	b_0101	10
-#define	b_0110	9
-#define	b_0111	8
-#define	b_1000	7
-#define	b_1001	6
-#define	b_1010	5
-#define	b_1011	4
-#define	b_1100	3
-#define	b_1101	2
-#define	b_1110	1
-#define	b_1111	0
-
-static unsigned char irtab[16] = {
-	b_0000, b_1000, b_0100, b_1100,
-	b_0010, b_1010, b_0110, b_1110,
-	b_0001, b_1001, b_0101, b_1101,
-	b_0011, b_1011, b_0111, b_1111
-};
+static inline unsigned char invert_revert(unsigned char ch)
+{
+	return bitrev8(~ch);
+}
 
 static void str_invert_revert(unsigned char *b, int len)
 {
 	int i;
 
 	for (i = 0; i < len; i++)
-		b[i] = (irtab[b[i] & 0x0f] << 4) | irtab[b[i] >> 4];
-}
-
-static unsigned char invert_revert(unsigned char ch)
-{
-	return (irtab[ch & 0x0f] << 4) | irtab[ch >> 4];
+		b[i] = invert_revert(b[i]);
 }
 
 #define	ATRLENCK(dev,pos) \
@@ -1114,7 +1091,7 @@ static ssize_t cmm_write(struct file *filp, const char __user *buf,
 	/*
 	 * wait for atr to become valid.
 	 * note: it is important to lock this code. if we dont, the monitor
-	 * could be run between test_bit and the the call the sleep on the
+	 * could be run between test_bit and the call to sleep on the
 	 * atr-queue.  if *then* the monitor detects atr valid, it will wake up
 	 * any process on the atr-queue, *but* since we have been interrupted,
 	 * we do not yet sleep on this queue. this would result in a missed
@@ -1652,7 +1629,7 @@ static int cmm_open(struct inode *inode, struct file *filp)
 {
 	struct cm4000_dev *dev;
 	struct pcmcia_device *link;
-	int rc, minor = iminor(inode);
+	int minor = iminor(inode);
 
 	if (minor >= CM4000_MAX_DEV)
 		return -ENODEV;
@@ -1691,7 +1668,6 @@ static int cmm_open(struct inode *inode, struct file *filp)
 	start_monitor(dev);
 
 	link->open = 1;		/* only one open per device */
-	rc = 0;
 
 	DEBUGP(2, dev, "<- cmm_open\n");
 	return nonseekable_open(inode, filp);
@@ -1847,7 +1823,7 @@ static int cm4000_resume(struct pcmcia_device *link)
 
 static void cm4000_release(struct pcmcia_device *link)
 {
-	cmm_cm4000_release(link->priv);	/* delay release until device closed */
+	cmm_cm4000_release(link);	/* delay release until device closed */
 	pcmcia_disable_device(link);
 }
 
@@ -1881,11 +1857,13 @@ static int cm4000_probe(struct pcmcia_device *link)
 	init_waitqueue_head(&dev->readq);
 
 	ret = cm4000_config(link, i);
-	if (ret)
+	if (ret) {
+		dev_table[i] = NULL;
+		kfree(dev);
 		return ret;
+	}
 
-	class_device_create(cmm_class, NULL, MKDEV(major, i), NULL,
-			    "cmm%d", i);
+	device_create(cmm_class, NULL, MKDEV(major, i), "cmm%d", i);
 
 	return 0;
 }
@@ -1907,9 +1885,9 @@ static void cm4000_detach(struct pcmcia_device *link)
 	cm4000_release(link);
 
 	dev_table[devno] = NULL;
- 	kfree(dev);
+	kfree(dev);
 
-	class_device_destroy(cmm_class, MKDEV(major, devno));
+	device_destroy(cmm_class, MKDEV(major, devno));
 
 	return;
 }
@@ -1956,12 +1934,14 @@ static int __init cmm_init(void)
 	if (major < 0) {
 		printk(KERN_WARNING MODULE_NAME
 			": could not get major number\n");
+		class_destroy(cmm_class);
 		return major;
 	}
 
 	rc = pcmcia_register_driver(&cm4000_driver);
 	if (rc < 0) {
 		unregister_chrdev(major, DEVICE_NAME);
+		class_destroy(cmm_class);
 		return rc;
 	}
 

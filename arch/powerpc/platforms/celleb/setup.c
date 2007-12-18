@@ -49,6 +49,7 @@
 #include <asm/machdep.h>
 #include <asm/cputable.h>
 #include <asm/irq.h>
+#include <asm/time.h>
 #include <asm/spu_priv1.h>
 #include <asm/firmware.h>
 #include <asm/of_platform.h>
@@ -67,20 +68,20 @@ static void celleb_show_cpuinfo(struct seq_file *m)
 
 	root = of_find_node_by_path("/");
 	if (root)
-		model = get_property(root, "model", NULL);
+		model = of_get_property(root, "model", NULL);
 	/* using "CHRP" is to trick anaconda into installing FCx into Celleb */
 	seq_printf(m, "machine\t\t: %s %s\n", celleb_machine_type, model);
 	of_node_put(root);
 }
 
-static int celleb_machine_type_hack(char *ptr)
+static int __init celleb_machine_type_hack(char *ptr)
 {
 	strncpy(celleb_machine_type, ptr, sizeof(celleb_machine_type));
 	celleb_machine_type[sizeof(celleb_machine_type)-1] = 0;
 	return 0;
 }
 
-__setup("celleb_machine_type_hack", celleb_machine_type_hack);
+__setup("celleb_machine_type_hack=", celleb_machine_type_hack);
 
 static void celleb_progress(char *s, unsigned short hex)
 {
@@ -101,19 +102,9 @@ static void __init celleb_setup_arch(void)
 	/* init to some ~sane value until calibrate_delay() runs */
 	loops_per_jiffy = 50000000;
 
-	if (ROOT_DEV == 0) {
-		printk("No ramdisk, default root is /dev/hda2\n");
-		ROOT_DEV = Root_HDA2;
-	}
-
 #ifdef CONFIG_DUMMY_CONSOLE
 	conswitchp = &dummy_con;
 #endif
-}
-
-static void beat_power_save(void)
-{
-	beat_pause(0);
 }
 
 static int __init celleb_probe(void)
@@ -124,27 +115,11 @@ static int __init celleb_probe(void)
 		return 0;
 
 	powerpc_firmware_features |= FW_FEATURE_CELLEB_POSSIBLE;
-	hpte_init_beat();
+	hpte_init_beat_v3();
 	return 1;
 }
 
-/*
- * Cell has no legacy IO; anything calling this function has to
- * fail or bad things will happen
- */
-static int celleb_check_legacy_ioport(unsigned int baseport)
-{
-	return -ENODEV;
-}
-
-#ifdef CONFIG_KEXEC
-static void celleb_kexec_cpu_down(int crash, int secondary)
-{
-	beatic_deinit_IRQ();
-}
-#endif
-
-static struct of_device_id celleb_bus_ids[] = {
+static struct of_device_id celleb_bus_ids[] __initdata = {
 	{ .type = "scc", },
 	{ .type = "ioif", },	/* old style */
 	{},
@@ -157,6 +132,8 @@ static int __init celleb_publish_devices(void)
 
 	/* Publish OF platform devices for southbridge IOs */
 	of_platform_bus_probe(NULL, celleb_bus_ids, NULL);
+
+	celleb_pci_workaround_init();
 
 	return 0;
 }
@@ -173,7 +150,6 @@ define_machine(celleb) {
 	.get_rtc_time		= beat_get_rtc_time,
 	.set_rtc_time		= beat_set_rtc_time,
 	.calibrate_decr		= generic_calibrate_decr,
-	.check_legacy_ioport	= celleb_check_legacy_ioport,
 	.progress		= celleb_progress,
 	.power_save		= beat_power_save,
 	.nvram_size		= beat_nvram_get_size,
@@ -185,7 +161,7 @@ define_machine(celleb) {
 	.pci_probe_mode 	= celleb_pci_probe_mode,
 	.pci_setup_phb		= celleb_setup_phb,
 #ifdef CONFIG_KEXEC
-	.kexec_cpu_down		= celleb_kexec_cpu_down,
+	.kexec_cpu_down		= beat_kexec_cpu_down,
 	.machine_kexec		= default_machine_kexec,
 	.machine_kexec_prepare	= default_machine_kexec_prepare,
 	.machine_crash_shutdown	= default_machine_crash_shutdown,

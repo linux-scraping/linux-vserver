@@ -286,7 +286,7 @@ static ssize_t rtas_flash_read(struct file *file, char __user *buf,
 }
 
 /* constructor for flash_block_cache */
-void rtas_block_ctor(void *ptr, struct kmem_cache *cache, unsigned long flags)
+void rtas_block_ctor(struct kmem_cache *cache, void *ptr)
 {
 	memset(ptr, 0, RTAS_BLK_SIZE);
 }
@@ -804,7 +804,7 @@ int __init rtas_flash_init(void)
 
 	flash_block_cache = kmem_cache_create("rtas_flash_cache",
 				RTAS_BLK_SIZE, RTAS_BLK_SIZE, 0,
-				rtas_block_ctor, NULL);
+				rtas_block_ctor);
 	if (!flash_block_cache) {
 		printk(KERN_ERR "%s: failed to create block cache\n",
 				__FUNCTION__);

@@ -27,8 +27,8 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
+#include <scsi/scsi_transport.h>
 #include <scsi/scsi_tgt.h>
-#include <../drivers/md/dm-bio-list.h>
 
 #include "scsi_tgt_priv.h"
 
@@ -42,16 +42,13 @@ static struct kmem_cache *scsi_tgt_cmd_cache;
 struct scsi_tgt_cmd {
 	/* TODO replace work with James b's code */
 	struct work_struct work;
-	/* TODO replace the lists with a large bio */
-	struct bio_list xfer_done_list;
-	struct bio_list xfer_list;
+	/* TODO fix limits of some drivers */
+	struct bio *bio;
 
 	struct list_head hash_list;
 	struct request *rq;
+	u64 itn_id;
 	u64 tag;
-
-	void *buffer;
-	unsigned bufflen;
 };
 
 #define TGT_HASH_ORDER	4
@@ -93,7 +90,12 @@ struct scsi_cmnd *scsi_host_get_command(struct Scsi_Host *shost,
 	if (!tcmd)
 		goto put_dev;
 
-	rq = blk_get_request(shost->uspace_req_q, write, gfp_mask);
+	/*
+	 * The blk helpers are used to the READ/WRITE requests
+	 * transfering data from a initiator point of view. Since
+	 * we are in target mode we want the opposite.
+	 */
+	rq = blk_get_request(shost->uspace_req_q, !write, gfp_mask);
 	if (!rq)
 		goto free_tcmd;
 
@@ -111,8 +113,6 @@ struct scsi_cmnd *scsi_host_get_command(struct Scsi_Host *shost,
 	rq->cmd_flags |= REQ_TYPE_BLOCK_PC;
 	rq->end_io_data = tcmd;
 
-	bio_list_init(&tcmd->xfer_list);
-	bio_list_init(&tcmd->xfer_done_list);
 	tcmd->rq = rq;
 
 	return cmd;
@@ -157,22 +157,6 @@ void scsi_host_put_command(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 }
 EXPORT_SYMBOL_GPL(scsi_host_put_command);
 
-static void scsi_unmap_user_pages(struct scsi_tgt_cmd *tcmd)
-{
-	struct bio *bio;
-
-	/* must call bio_endio in case bio was bounced */
-	while ((bio = bio_list_pop(&tcmd->xfer_done_list))) {
-		bio_endio(bio, bio->bi_size, 0);
-		bio_unmap_user(bio);
-	}
-
-	while ((bio = bio_list_pop(&tcmd->xfer_list))) {
-		bio_endio(bio, bio->bi_size, 0);
-		bio_unmap_user(bio);
-	}
-}
-
 static void cmd_hashlist_del(struct scsi_cmnd *cmd)
 {
 	struct request_queue *q = cmd->request->q;
@@ -185,6 +169,11 @@ static void cmd_hashlist_del(struct scsi_cmnd *cmd)
 	spin_unlock_irqrestore(&qdata->cmd_hash_lock, flags);
 }
 
+static void scsi_unmap_user_pages(struct scsi_tgt_cmd *tcmd)
+{
+	blk_rq_unmap_user(tcmd->bio);
+}
+
 static void scsi_tgt_cmd_destroy(struct work_struct *work)
 {
 	struct scsi_tgt_cmd *tcmd =
@@ -193,28 +182,20 @@ static void scsi_tgt_cmd_destroy(struct work_struct *work)
 
 	dprintk("cmd %p %d %lu\n", cmd, cmd->sc_data_direction,
 		rq_data_dir(cmd->request));
-	/*
-	 * We fix rq->cmd_flags here since when we told bio_map_user
-	 * to write vm for WRITE commands, blk_rq_bio_prep set
-	 * rq_data_dir the flags to READ.
-	 */
-	if (cmd->sc_data_direction == DMA_TO_DEVICE)
-		cmd->request->cmd_flags |= REQ_RW;
-	else
-		cmd->request->cmd_flags &= ~REQ_RW;
-
 	scsi_unmap_user_pages(tcmd);
 	scsi_host_put_command(scsi_tgt_cmd_to_host(cmd), cmd);
 }
 
 static void init_scsi_tgt_cmd(struct request *rq, struct scsi_tgt_cmd *tcmd,
-			      u64 tag)
+			      u64 itn_id, u64 tag)
 {
 	struct scsi_tgt_queuedata *qdata = rq->q->queuedata;
 	unsigned long flags;
 	struct list_head *head;
 
+	tcmd->itn_id = itn_id;
 	tcmd->tag = tag;
+	tcmd->bio = NULL;
 	INIT_WORK(&tcmd->work, scsi_tgt_cmd_destroy);
 	spin_lock_irqsave(&qdata->cmd_hash_lock, flags);
 	head = &qdata->cmd_hash[cmd_hashfn(tag)];
@@ -256,7 +237,7 @@ int scsi_tgt_alloc_queue(struct Scsi_Host *shost)
 	 * command as is recvd to userspace. uspace can then make
 	 * sure we do not overload the HBA
 	 */
-	q->nr_requests = shost->hostt->can_queue;
+	q->nr_requests = shost->can_queue;
 	/*
 	 * We currently only support software LLDs so this does
 	 * not matter for now. Do we need this for the cards we support?
@@ -323,14 +304,14 @@ EXPORT_SYMBOL_GPL(scsi_tgt_cmd_to_host);
  * @scsilun:	scsi lun
  * @tag:	unique value to identify this command for tmf
  */
-int scsi_tgt_queue_command(struct scsi_cmnd *cmd, struct scsi_lun *scsilun,
-			   u64 tag)
+int scsi_tgt_queue_command(struct scsi_cmnd *cmd, u64 itn_id,
+			   struct scsi_lun *scsilun, u64 tag)
 {
 	struct scsi_tgt_cmd *tcmd = cmd->request->end_io_data;
 	int err;
 
-	init_scsi_tgt_cmd(cmd->request, tcmd, tag);
-	err = scsi_tgt_uspace_send_cmd(cmd, scsilun, tag);
+	init_scsi_tgt_cmd(cmd->request, tcmd, itn_id, tag);
+	err = scsi_tgt_uspace_send_cmd(cmd, itn_id, scsilun, tag);
 	if (err)
 		cmd_hashlist_del(cmd);
 
@@ -348,11 +329,15 @@ static void scsi_tgt_cmd_done(struct scsi_cmnd *cmd)
 
 	dprintk("cmd %p %lu\n", cmd, rq_data_dir(cmd->request));
 
-	scsi_tgt_uspace_send_status(cmd, tcmd->tag);
+	scsi_tgt_uspace_send_status(cmd, tcmd->itn_id, tcmd->tag);
+
+	if (cmd->request_buffer)
+		scsi_free_sgtable(cmd);
+
 	queue_work(scsi_tgtd, &tcmd->work);
 }
 
-static int __scsi_tgt_transfer_response(struct scsi_cmnd *cmd)
+static int scsi_tgt_transfer_response(struct scsi_cmnd *cmd)
 {
 	struct Scsi_Host *shost = scsi_tgt_cmd_to_host(cmd);
 	int err;
@@ -365,30 +350,12 @@ static int __scsi_tgt_transfer_response(struct scsi_cmnd *cmd)
 	case SCSI_MLQUEUE_DEVICE_BUSY:
 		return -EAGAIN;
 	}
-
 	return 0;
-}
-
-static void scsi_tgt_transfer_response(struct scsi_cmnd *cmd)
-{
-	struct scsi_tgt_cmd *tcmd = cmd->request->end_io_data;
-	int err;
-
-	err = __scsi_tgt_transfer_response(cmd);
-	if (!err)
-		return;
-
-	cmd->result = DID_BUS_BUSY << 16;
-	err = scsi_tgt_uspace_send_status(cmd, tcmd->tag);
-	if (err <= 0)
-		/* the eh will have to pick this up */
-		printk(KERN_ERR "Could not send cmd %p status\n", cmd);
 }
 
 static int scsi_tgt_init_cmd(struct scsi_cmnd *cmd, gfp_t gfp_mask)
 {
 	struct request *rq = cmd->request;
-	struct scsi_tgt_cmd *tcmd = rq->end_io_data;
 	int count;
 
 	cmd->use_sg = rq->nr_phys_segments;
@@ -398,141 +365,52 @@ static int scsi_tgt_init_cmd(struct scsi_cmnd *cmd, gfp_t gfp_mask)
 
 	cmd->request_bufflen = rq->data_len;
 
-	dprintk("cmd %p addr %p cnt %d %lu\n", cmd, tcmd->buffer, cmd->use_sg,
-		rq_data_dir(rq));
+	dprintk("cmd %p cnt %d %lu\n", cmd, cmd->use_sg, rq_data_dir(rq));
 	count = blk_rq_map_sg(rq->q, rq, cmd->request_buffer);
 	if (likely(count <= cmd->use_sg)) {
 		cmd->use_sg = count;
 		return 0;
 	}
 
-	eprintk("cmd %p addr %p cnt %d\n", cmd, tcmd->buffer, cmd->use_sg);
-	scsi_free_sgtable(cmd->request_buffer, cmd->sglist_len);
+	eprintk("cmd %p cnt %d\n", cmd, cmd->use_sg);
+	scsi_free_sgtable(cmd);
 	return -EINVAL;
 }
 
 /* TODO: test this crap and replace bio_map_user with new interface maybe */
 static int scsi_map_user_pages(struct scsi_tgt_cmd *tcmd, struct scsi_cmnd *cmd,
-			       int rw)
+			       unsigned long uaddr, unsigned int len, int rw)
 {
 	struct request_queue *q = cmd->request->q;
 	struct request *rq = cmd->request;
-	void *uaddr = tcmd->buffer;
-	unsigned int len = tcmd->bufflen;
-	struct bio *bio;
 	int err;
 
-	while (len > 0) {
-		dprintk("%lx %u\n", (unsigned long) uaddr, len);
-		bio = bio_map_user(q, NULL, (unsigned long) uaddr, len, rw);
-		if (IS_ERR(bio)) {
-			err = PTR_ERR(bio);
-			dprintk("fail to map %lx %u %d %x\n",
-				(unsigned long) uaddr, len, err, cmd->cmnd[0]);
-			goto unmap_bios;
-		}
-
-		uaddr += bio->bi_size;
-		len -= bio->bi_size;
-
+	dprintk("%lx %u\n", uaddr, len);
+	err = blk_rq_map_user(q, rq, (void *)uaddr, len);
+	if (err) {
 		/*
-		 * The first bio is added and merged. We could probably
-		 * try to add others using scsi_merge_bio() but for now
-		 * we keep it simple. The first bio should be pretty large
-		 * (either hitting the 1 MB bio pages limit or a queue limit)
-		 * already but for really large IO we may want to try and
-		 * merge these.
+		 * TODO: need to fixup sg_tablesize, max_segment_size,
+		 * max_sectors, etc for modern HW and software drivers
+		 * where this value is bogus.
+		 *
+		 * TODO2: we can alloc a reserve buffer of max size
+		 * we can handle and do the slow copy path for really large
+		 * IO.
 		 */
-		if (!rq->bio) {
-			blk_rq_bio_prep(q, rq, bio);
-			rq->data_len = bio->bi_size;
-		} else
-			/* put list of bios to transfer in next go around */
-			bio_list_add(&tcmd->xfer_list, bio);
+		eprintk("Could not handle request of size %u.\n", len);
+		return err;
 	}
 
-	cmd->offset = 0;
+	tcmd->bio = rq->bio;
 	err = scsi_tgt_init_cmd(cmd, GFP_KERNEL);
 	if (err)
-		goto unmap_bios;
+		goto unmap_rq;
 
 	return 0;
 
-unmap_bios:
-	if (rq->bio) {
-		bio_unmap_user(rq->bio);
-		while ((bio = bio_list_pop(&tcmd->xfer_list)))
-			bio_unmap_user(bio);
-	}
-
+unmap_rq:
+	scsi_unmap_user_pages(tcmd);
 	return err;
-}
-
-static int scsi_tgt_transfer_data(struct scsi_cmnd *);
-
-static void scsi_tgt_data_transfer_done(struct scsi_cmnd *cmd)
-{
-	struct scsi_tgt_cmd *tcmd = cmd->request->end_io_data;
-	struct bio *bio;
-	int err;
-
-	/* should we free resources here on error ? */
-	if (cmd->result) {
-send_uspace_err:
-		err = scsi_tgt_uspace_send_status(cmd, tcmd->tag);
-		if (err <= 0)
-			/* the tgt uspace eh will have to pick this up */
-			printk(KERN_ERR "Could not send cmd %p status\n", cmd);
-		return;
-	}
-
-	dprintk("cmd %p request_bufflen %u bufflen %u\n",
-		cmd, cmd->request_bufflen, tcmd->bufflen);
-
-	scsi_free_sgtable(cmd->request_buffer, cmd->sglist_len);
-	bio_list_add(&tcmd->xfer_done_list, cmd->request->bio);
-
-	tcmd->buffer += cmd->request_bufflen;
-	cmd->offset += cmd->request_bufflen;
-
-	if (!tcmd->xfer_list.head) {
-		scsi_tgt_transfer_response(cmd);
-		return;
-	}
-
-	dprintk("cmd2 %p request_bufflen %u bufflen %u\n",
-		cmd, cmd->request_bufflen, tcmd->bufflen);
-
-	bio = bio_list_pop(&tcmd->xfer_list);
-	BUG_ON(!bio);
-
-	blk_rq_bio_prep(cmd->request->q, cmd->request, bio);
-	cmd->request->data_len = bio->bi_size;
-	err = scsi_tgt_init_cmd(cmd, GFP_ATOMIC);
-	if (err) {
-		cmd->result = DID_ERROR << 16;
-		goto send_uspace_err;
-	}
-
-	if (scsi_tgt_transfer_data(cmd)) {
-		cmd->result = DID_NO_CONNECT << 16;
-		goto send_uspace_err;
-	}
-}
-
-static int scsi_tgt_transfer_data(struct scsi_cmnd *cmd)
-{
-	int err;
-	struct Scsi_Host *host = scsi_tgt_cmd_to_host(cmd);
-
-	err = host->hostt->transfer_data(cmd, scsi_tgt_data_transfer_done);
-	switch (err) {
-		case SCSI_MLQUEUE_HOST_BUSY:
-		case SCSI_MLQUEUE_DEVICE_BUSY:
-			return -EAGAIN;
-	default:
-		return 0;
-	}
 }
 
 static int scsi_tgt_copy_sense(struct scsi_cmnd *cmd, unsigned long uaddr,
@@ -584,8 +462,9 @@ static struct request *tgt_cmd_hash_lookup(struct request_queue *q, u64 tag)
 	return rq;
 }
 
-int scsi_tgt_kspace_exec(int host_no, u64 tag, int result, u32 len,
-			 unsigned long uaddr, u8 rw)
+int scsi_tgt_kspace_exec(int host_no, u64 itn_id, int result, u64 tag,
+			 unsigned long uaddr, u32 len, unsigned long sense_uaddr,
+			 u32 sense_len, u8 rw)
 {
 	struct Scsi_Host *shost;
 	struct scsi_cmnd *cmd;
@@ -617,8 +496,9 @@ int scsi_tgt_kspace_exec(int host_no, u64 tag, int result, u32 len,
 	}
 	cmd = rq->special;
 
-	dprintk("cmd %p result %d len %d bufflen %u %lu %x\n", cmd,
-		result, len, cmd->request_bufflen, rq_data_dir(rq), cmd->cmnd[0]);
+	dprintk("cmd %p scb %x result %d len %d bufflen %u %lu %x\n",
+		cmd, cmd->cmnd[0], result, len, cmd->request_bufflen,
+		rq_data_dir(rq), cmd->cmnd[0]);
 
 	if (result == TASK_ABORTED) {
 		scsi_tgt_abort_cmd(shost, cmd);
@@ -629,56 +509,57 @@ int scsi_tgt_kspace_exec(int host_no, u64 tag, int result, u32 len,
 	 * in the request_* values
 	 */
 	tcmd = cmd->request->end_io_data;
-	tcmd->buffer = (void *)uaddr;
-	tcmd->bufflen = len;
 	cmd->result = result;
 
-	if (!tcmd->bufflen || cmd->request_buffer) {
-		err = __scsi_tgt_transfer_response(cmd);
-		goto done;
-	}
+	if (cmd->result == SAM_STAT_CHECK_CONDITION)
+		scsi_tgt_copy_sense(cmd, sense_uaddr, sense_len);
 
-	/*
-	 * TODO: Do we need to handle case where request does not
-	 * align with LLD.
-	 */
-	err = scsi_map_user_pages(rq->end_io_data, cmd, rw);
-	if (err) {
-		eprintk("%p %d\n", cmd, err);
-		err = -EAGAIN;
-		goto done;
-	}
+	if (len) {
+		err = scsi_map_user_pages(rq->end_io_data, cmd, uaddr, len, rw);
+		if (err) {
+			/*
+			 * user-space daemon bugs or OOM
+			 * TODO: we can do better for OOM.
+			 */
+			struct scsi_tgt_queuedata *qdata;
+			struct list_head *head;
+			unsigned long flags;
 
-	/* userspace failure */
-	if (cmd->result) {
-		if (status_byte(cmd->result) == CHECK_CONDITION)
-			scsi_tgt_copy_sense(cmd, uaddr, len);
-		err = __scsi_tgt_transfer_response(cmd);
-		goto done;
-	}
-	/* ask the target LLD to transfer the data to the buffer */
-	err = scsi_tgt_transfer_data(cmd);
+			eprintk("cmd %p ret %d uaddr %lx len %d rw %d\n",
+				cmd, err, uaddr, len, rw);
 
+			qdata = shost->uspace_req_q->queuedata;
+			head = &qdata->cmd_hash[cmd_hashfn(tcmd->tag)];
+
+			spin_lock_irqsave(&qdata->cmd_hash_lock, flags);
+			list_add(&tcmd->hash_list, head);
+			spin_unlock_irqrestore(&qdata->cmd_hash_lock, flags);
+
+			goto done;
+		}
+	}
+	err = scsi_tgt_transfer_response(cmd);
 done:
 	scsi_host_put(shost);
 	return err;
 }
 
-int scsi_tgt_tsk_mgmt_request(struct Scsi_Host *shost, int function, u64 tag,
-			      struct scsi_lun *scsilun, void *data)
+int scsi_tgt_tsk_mgmt_request(struct Scsi_Host *shost, u64 itn_id,
+			      int function, u64 tag, struct scsi_lun *scsilun,
+			      void *data)
 {
 	int err;
 
 	/* TODO: need to retry if this fails. */
-	err = scsi_tgt_uspace_send_tsk_mgmt(shost->host_no, function,
-					    tag, scsilun, data);
+	err = scsi_tgt_uspace_send_tsk_mgmt(shost->host_no, itn_id,
+					    function, tag, scsilun, data);
 	if (err < 0)
 		eprintk("The task management request lost!\n");
 	return err;
 }
 EXPORT_SYMBOL_GPL(scsi_tgt_tsk_mgmt_request);
 
-int scsi_tgt_kspace_tsk_mgmt(int host_no, u64 mid, int result)
+int scsi_tgt_kspace_tsk_mgmt(int host_no, u64 itn_id, u64 mid, int result)
 {
 	struct Scsi_Host *shost;
 	int err = -EINVAL;
@@ -696,7 +577,60 @@ int scsi_tgt_kspace_tsk_mgmt(int host_no, u64 mid, int result)
 		goto done;
 	}
 
-	err = shost->hostt->tsk_mgmt_response(mid, result);
+	err = shost->transportt->tsk_mgmt_response(shost, itn_id, mid, result);
+done:
+	scsi_host_put(shost);
+	return err;
+}
+
+int scsi_tgt_it_nexus_create(struct Scsi_Host *shost, u64 itn_id,
+			     char *initiator)
+{
+	int err;
+
+	/* TODO: need to retry if this fails. */
+	err = scsi_tgt_uspace_send_it_nexus_request(shost->host_no, itn_id, 0,
+						    initiator);
+	if (err < 0)
+		eprintk("The i_t_neuxs request lost, %d %llx!\n",
+			shost->host_no, (unsigned long long)itn_id);
+	return err;
+}
+EXPORT_SYMBOL_GPL(scsi_tgt_it_nexus_create);
+
+int scsi_tgt_it_nexus_destroy(struct Scsi_Host *shost, u64 itn_id)
+{
+	int err;
+
+	/* TODO: need to retry if this fails. */
+	err = scsi_tgt_uspace_send_it_nexus_request(shost->host_no,
+						    itn_id, 1, NULL);
+	if (err < 0)
+		eprintk("The i_t_neuxs request lost, %d %llx!\n",
+			shost->host_no, (unsigned long long)itn_id);
+	return err;
+}
+EXPORT_SYMBOL_GPL(scsi_tgt_it_nexus_destroy);
+
+int scsi_tgt_kspace_it_nexus_rsp(int host_no, u64 itn_id, int result)
+{
+	struct Scsi_Host *shost;
+	int err = -EINVAL;
+
+	dprintk("%d %d %llx\n", host_no, result, (unsigned long long) mid);
+
+	shost = scsi_host_lookup(host_no);
+	if (IS_ERR(shost)) {
+		printk(KERN_ERR "Could not find host no %d\n", host_no);
+		return err;
+	}
+
+	if (!shost->uspace_req_q) {
+		printk(KERN_ERR "Not target scsi host %d\n", host_no);
+		goto done;
+	}
+
+	err = shost->transportt->it_nexus_response(shost, itn_id, result);
 done:
 	scsi_host_put(shost);
 	return err;
@@ -708,7 +642,7 @@ static int __init scsi_tgt_init(void)
 
 	scsi_tgt_cmd_cache = kmem_cache_create("scsi_tgt_cmd",
 					       sizeof(struct scsi_tgt_cmd),
-					       0, 0, NULL, NULL);
+					       0, 0, NULL);
 	if (!scsi_tgt_cmd_cache)
 		return -ENOMEM;
 

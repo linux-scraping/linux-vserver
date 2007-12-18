@@ -95,9 +95,12 @@
  * 1.24- Add general-purpose packet for manipulating scratch registers (r300)
  * 1.25- Add support for r200 vertex programs (R200_EMIT_VAP_PVS_CNTL,
  *       new packet type)
+ * 1.26- Add support for variable size PCI(E) gart aperture
+ * 1.27- Add support for IGP GART
+ * 1.28- Add support for VBL on CRTC2
  */
 #define DRIVER_MAJOR		1
-#define DRIVER_MINOR		25
+#define DRIVER_MINOR		28
 #define DRIVER_PATCHLEVEL	0
 
 /*
@@ -143,6 +146,7 @@ enum radeon_chip_flags {
 	RADEON_IS_PCIE = 0x00200000UL,
 	RADEON_NEW_MEMMAP = 0x00400000UL,
 	RADEON_IS_PCI = 0x00800000UL,
+	RADEON_IS_IGPGART = 0x01000000UL,
 };
 
 #define GET_RING_HEAD(dev_priv)	(dev_priv->writeback_works ? \
@@ -151,7 +155,7 @@ enum radeon_chip_flags {
 
 typedef struct drm_radeon_freelist {
 	unsigned int age;
-	drm_buf_t *buf;
+	struct drm_buf *buf;
 	struct drm_radeon_freelist *next;
 	struct drm_radeon_freelist *prev;
 } drm_radeon_freelist_t;
@@ -184,7 +188,7 @@ struct mem_block {
 	struct mem_block *prev;
 	int start;
 	int size;
-	DRMFILE filp;		/* 0: free, -1: heap, other: real files */
+	struct drm_file *file_priv; /* NULL: free, -1: heap, other: real files */
 };
 
 struct radeon_surface {
@@ -199,7 +203,7 @@ struct radeon_virt_surface {
 	u32 lower;
 	u32 upper;
 	u32 flags;
-	DRMFILE filp;
+	struct drm_file *file_priv;
 };
 
 typedef struct drm_radeon_private {
@@ -240,7 +244,6 @@ typedef struct drm_radeon_private {
 
 	int do_boxes;
 	int page_flipping;
-	int current_page;
 
 	u32 color_fmt;
 	unsigned int front_offset;
@@ -275,17 +278,22 @@ typedef struct drm_radeon_private {
 	/* SW interrupt */
 	wait_queue_head_t swi_queue;
 	atomic_t swi_emitted;
+	int vblank_crtc;
+	uint32_t irq_enable_reg;
+	int irq_enabled;
 
 	struct radeon_surface surfaces[RADEON_MAX_SURFACES];
 	struct radeon_virt_surface virt_surfaces[2 * RADEON_MAX_SURFACES];
 
 	unsigned long pcigart_offset;
-	drm_ati_pcigart_info gart_info;
+	unsigned int pcigart_offset_set;
+	struct drm_ati_pcigart_info gart_info;
 
 	u32 scratch_ages[5];
 
 	/* starting from here on, data is preserved accross an open */
 	uint32_t flags;		/* see radeon_chip_flags */
+	unsigned long fb_aper_offset;
 } drm_radeon_private_t;
 
 typedef struct drm_radeon_buf_priv {
@@ -296,11 +304,11 @@ typedef struct drm_radeon_kcmd_buffer {
 	int bufsz;
 	char *buf;
 	int nbox;
-	drm_clip_rect_t __user *boxes;
+	struct drm_clip_rect __user *boxes;
 } drm_radeon_kcmd_buffer_t;
 
 extern int radeon_no_wb;
-extern drm_ioctl_desc_t radeon_ioctls[];
+extern struct drm_ioctl_desc radeon_ioctls[];
 extern int radeon_max_ioctl;
 
 /* Check whether the given hardware address is inside the framebuffer or the
@@ -319,18 +327,18 @@ static __inline__ int radeon_check_offset(drm_radeon_private_t *dev_priv,
 }
 
 				/* radeon_cp.c */
-extern int radeon_cp_init(DRM_IOCTL_ARGS);
-extern int radeon_cp_start(DRM_IOCTL_ARGS);
-extern int radeon_cp_stop(DRM_IOCTL_ARGS);
-extern int radeon_cp_reset(DRM_IOCTL_ARGS);
-extern int radeon_cp_idle(DRM_IOCTL_ARGS);
-extern int radeon_cp_resume(DRM_IOCTL_ARGS);
-extern int radeon_engine_reset(DRM_IOCTL_ARGS);
-extern int radeon_fullscreen(DRM_IOCTL_ARGS);
-extern int radeon_cp_buffers(DRM_IOCTL_ARGS);
+extern int radeon_cp_init(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_start(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_stop(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_reset(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_idle(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_resume(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_engine_reset(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_fullscreen(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_cp_buffers(struct drm_device *dev, void *data, struct drm_file *file_priv);
 
-extern void radeon_freelist_reset(drm_device_t * dev);
-extern drm_buf_t *radeon_freelist_get(drm_device_t * dev);
+extern void radeon_freelist_reset(struct drm_device * dev);
+extern struct drm_buf *radeon_freelist_get(struct drm_device * dev);
 
 extern int radeon_wait_ring(drm_radeon_private_t * dev_priv, int n);
 
@@ -340,39 +348,44 @@ extern int radeon_driver_preinit(struct drm_device *dev, unsigned long flags);
 extern int radeon_presetup(struct drm_device *dev);
 extern int radeon_driver_postcleanup(struct drm_device *dev);
 
-extern int radeon_mem_alloc(DRM_IOCTL_ARGS);
-extern int radeon_mem_free(DRM_IOCTL_ARGS);
-extern int radeon_mem_init_heap(DRM_IOCTL_ARGS);
+extern int radeon_mem_alloc(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_mem_free(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_mem_init_heap(struct drm_device *dev, void *data, struct drm_file *file_priv);
 extern void radeon_mem_takedown(struct mem_block **heap);
-extern void radeon_mem_release(DRMFILE filp, struct mem_block *heap);
+extern void radeon_mem_release(struct drm_file *file_priv,
+			       struct mem_block *heap);
 
 				/* radeon_irq.c */
-extern int radeon_irq_emit(DRM_IOCTL_ARGS);
-extern int radeon_irq_wait(DRM_IOCTL_ARGS);
+extern int radeon_irq_emit(struct drm_device *dev, void *data, struct drm_file *file_priv);
+extern int radeon_irq_wait(struct drm_device *dev, void *data, struct drm_file *file_priv);
 
-extern void radeon_do_release(drm_device_t * dev);
-extern int radeon_driver_vblank_wait(drm_device_t * dev,
+extern void radeon_do_release(struct drm_device * dev);
+extern int radeon_driver_vblank_wait(struct drm_device * dev,
 				     unsigned int *sequence);
+extern int radeon_driver_vblank_wait2(struct drm_device * dev,
+				      unsigned int *sequence);
 extern irqreturn_t radeon_driver_irq_handler(DRM_IRQ_ARGS);
-extern void radeon_driver_irq_preinstall(drm_device_t * dev);
-extern void radeon_driver_irq_postinstall(drm_device_t * dev);
-extern void radeon_driver_irq_uninstall(drm_device_t * dev);
+extern void radeon_driver_irq_preinstall(struct drm_device * dev);
+extern void radeon_driver_irq_postinstall(struct drm_device * dev);
+extern void radeon_driver_irq_uninstall(struct drm_device * dev);
+extern int radeon_vblank_crtc_get(struct drm_device *dev);
+extern int radeon_vblank_crtc_set(struct drm_device *dev, int64_t value);
 
 extern int radeon_driver_load(struct drm_device *dev, unsigned long flags);
 extern int radeon_driver_unload(struct drm_device *dev);
 extern int radeon_driver_firstopen(struct drm_device *dev);
-extern void radeon_driver_preclose(drm_device_t * dev, DRMFILE filp);
-extern void radeon_driver_postclose(drm_device_t * dev, drm_file_t * filp);
-extern void radeon_driver_lastclose(drm_device_t * dev);
-extern int radeon_driver_open(drm_device_t * dev, drm_file_t * filp_priv);
+extern void radeon_driver_preclose(struct drm_device * dev, struct drm_file *file_priv);
+extern void radeon_driver_postclose(struct drm_device * dev, struct drm_file * filp);
+extern void radeon_driver_lastclose(struct drm_device * dev);
+extern int radeon_driver_open(struct drm_device * dev, struct drm_file * filp_priv);
 extern long radeon_compat_ioctl(struct file *filp, unsigned int cmd,
 				unsigned long arg);
 
 /* r300_cmdbuf.c */
 extern void r300_init_reg_flags(void);
 
-extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
-			     drm_file_t * filp_priv,
+extern int r300_do_cp_cmdbuf(struct drm_device * dev,
+			     struct drm_file *file_priv,
 			     drm_radeon_kcmd_buffer_t * cmdbuf);
 
 /* Flags for stats.boxes
@@ -432,6 +445,15 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 #define RADEON_PCIE_TX_GART_END_LO	0x16
 #define RADEON_PCIE_TX_GART_END_HI	0x17
 
+#define RADEON_IGPGART_INDEX            0x168
+#define RADEON_IGPGART_DATA             0x16c
+#define RADEON_IGPGART_UNK_18           0x18
+#define RADEON_IGPGART_CTRL             0x2b
+#define RADEON_IGPGART_BASE_ADDR        0x2c
+#define RADEON_IGPGART_FLUSH            0x2e
+#define RADEON_IGPGART_ENABLE           0x38
+#define RADEON_IGPGART_UNK_39           0x39
+
 #define RADEON_MPP_TB_CONFIG		0x01c0
 #define RADEON_MEM_CNTL			0x0140
 #define RADEON_MEM_SDRAM_MODE_REG	0x0158
@@ -484,12 +506,15 @@ extern int r300_do_cp_cmdbuf(drm_device_t * dev, DRMFILE filp,
 
 #define RADEON_GEN_INT_CNTL		0x0040
 #	define RADEON_CRTC_VBLANK_MASK		(1 << 0)
+#	define RADEON_CRTC2_VBLANK_MASK		(1 << 9)
 #	define RADEON_GUI_IDLE_INT_ENABLE	(1 << 19)
 #	define RADEON_SW_INT_ENABLE		(1 << 25)
 
 #define RADEON_GEN_INT_STATUS		0x0044
 #	define RADEON_CRTC_VBLANK_STAT		(1 << 0)
 #	define RADEON_CRTC_VBLANK_STAT_ACK   	(1 << 0)
+#	define RADEON_CRTC2_VBLANK_STAT		(1 << 9)
+#	define RADEON_CRTC2_VBLANK_STAT_ACK   	(1 << 9)
 #	define RADEON_GUI_IDLE_INT_TEST_ACK     (1 << 19)
 #	define RADEON_SW_INT_TEST		(1 << 25)
 #	define RADEON_SW_INT_TEST_ACK   	(1 << 25)
@@ -962,6 +987,14 @@ do {									\
 	RADEON_WRITE8( RADEON_CLOCK_CNTL_INDEX,				\
 		       ((addr) & 0x1f) | RADEON_PLL_WR_EN );		\
 	RADEON_WRITE( RADEON_CLOCK_CNTL_DATA, (val) );			\
+} while (0)
+
+#define RADEON_WRITE_IGPGART( addr, val )				\
+do {									\
+	RADEON_WRITE( RADEON_IGPGART_INDEX,				\
+			((addr) & 0x7f) | (1 << 8));			\
+	RADEON_WRITE( RADEON_IGPGART_DATA, (val) );			\
+	RADEON_WRITE( RADEON_IGPGART_INDEX, 0x7f );			\
 } while (0)
 
 #define RADEON_WRITE_PCIE( addr, val )					\

@@ -22,7 +22,6 @@
 #include "hostap_wlan.h"
 
 
-static char *version = PRISM2_VERSION " (Jouni Malinen <jkmaline@cc.hut.fi>)";
 static dev_info_t dev_info = "hostap_cs";
 
 MODULE_AUTHOR("Jouni Malinen");
@@ -30,7 +29,6 @@ MODULE_DESCRIPTION("Support for Intersil Prism2-based 802.11 wireless LAN "
 		   "cards (PC Card).");
 MODULE_SUPPORTED_DEVICE("Intersil Prism2-based WLAN cards (PC Card)");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(PRISM2_VERSION);
 
 
 static int ignore_cis_vcc;
@@ -274,7 +272,7 @@ static int sandisk_enable_wireless(struct net_device *dev)
 {
 	int res, ret = 0;
 	conf_reg_t reg;
-	struct hostap_interface *iface = dev->priv;
+	struct hostap_interface *iface = netdev_priv(dev);
 	local_info_t *local = iface->local;
 	tuple_t tuple;
 	cisparse_t *parse = NULL;
@@ -824,6 +822,7 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x0101, 0x0777),
 	PCMCIA_DEVICE_MANF_CARD(0x0126, 0x8000),
 	PCMCIA_DEVICE_MANF_CARD(0x0138, 0x0002),
+	PCMCIA_DEVICE_MANF_CARD(0x01bf, 0x3301),
 	PCMCIA_DEVICE_MANF_CARD(0x0250, 0x0002),
 	PCMCIA_DEVICE_MANF_CARD(0x026f, 0x030b),
 	PCMCIA_DEVICE_MANF_CARD(0x0274, 0x1612),
@@ -838,6 +837,8 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(0xd601, 0x0005),
 	PCMCIA_DEVICE_MANF_CARD(0xd601, 0x0010),
 	PCMCIA_DEVICE_MANF_CARD(0x0126, 0x0002),
+	PCMCIA_DEVICE_MANF_CARD_PROD_ID1(0xd601, 0x0005, "ADLINK 345 CF",
+					 0x2d858104),
 	PCMCIA_DEVICE_MANF_CARD_PROD_ID1(0x0156, 0x0002, "INTERSIL",
 					 0x74c5e40d),
 	PCMCIA_DEVICE_MANF_CARD_PROD_ID1(0x0156, 0x0002, "Intersil",
@@ -848,6 +849,11 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 		"Intersil", "PRISM 2_5 PCMCIA ADAPTER",	"ISL37300P",
 		"Eval-RevA",
 		0x4b801a17, 0x6345a0bf, 0xc9049a39, 0xc23adc0e),
+	/* D-Link DWL-650 Rev. P1; manfid 0x000b, 0x7110 */
+	PCMCIA_DEVICE_PROD_ID1234(
+		"D-Link", "DWL-650 Wireless PC Card RevP", "ISL37101P-10",
+		"A3",
+		0x1a424a1c, 0x6ea57632, 0xdd97a26b, 0x56b21f52),
 	PCMCIA_DEVICE_PROD_ID123(
 		"Addtron", "AWP-100 Wireless PCMCIA", "Version 01.02",
 		0xe6ec52ce, 0x08649af2, 0x4b74baa0),
@@ -884,6 +890,10 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 	PCMCIA_DEVICE_PROD_ID123(
 		"corega", "WL PCCL-11", "ISL37300P",
 		0xa21501a, 0x59868926, 0xc9049a39),
+	PCMCIA_DEVICE_PROD_ID1234(
+		"The Linksys Group, Inc.", "Wireless Network CF Card", "ISL37300P",
+		"RevA",
+		0xa5f472c2, 0x9c05598d, 0xc9049a39, 0x57a66194),
 	PCMCIA_DEVICE_NULL
 };
 MODULE_DEVICE_TABLE(pcmcia, hostap_cs_ids);
@@ -903,14 +913,12 @@ static struct pcmcia_driver hostap_driver = {
 
 static int __init init_prism2_pccard(void)
 {
-	printk(KERN_INFO "%s: %s\n", dev_info, version);
 	return pcmcia_register_driver(&hostap_driver);
 }
 
 static void __exit exit_prism2_pccard(void)
 {
 	pcmcia_unregister_driver(&hostap_driver);
-	printk(KERN_INFO "%s: Driver unloaded\n", dev_info);
 }
 
 

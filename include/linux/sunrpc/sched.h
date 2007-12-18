@@ -98,7 +98,6 @@ struct rpc_task {
 	unsigned short		tk_pid;		/* debugging aid */
 #endif
 };
-#define tk_auth			tk_client->cl_auth
 #define tk_xprt			tk_client->cl_xprt
 
 /* support walking a list of tasks on a wait queue */
@@ -109,11 +108,6 @@ struct rpc_task {
 #define	task_for_first(task, head) \
 	if (!list_empty(head) &&  \
 	    ((task=list_entry((head)->next, struct rpc_task, u.tk_wait.list)),1))
-
-/* .. and walking list of all tasks */
-#define	alltask_for_each(task, pos, head) \
-	list_for_each(pos, head) \
-		if ((task=list_entry(pos, struct rpc_task, tk_task)),1)
 
 typedef void			(*rpc_action)(struct rpc_task *);
 
@@ -264,7 +258,7 @@ struct rpc_task *rpc_wake_up_next(struct rpc_wait_queue *);
 void		rpc_wake_up_status(struct rpc_wait_queue *, int);
 void		rpc_delay(struct rpc_task *, unsigned long);
 void *		rpc_malloc(struct rpc_task *, size_t);
-void		rpc_free(struct rpc_task *);
+void		rpc_free(void *);
 int		rpciod_up(void);
 void		rpciod_down(void);
 int		__rpc_wait_for_completion_task(struct rpc_task *task, int (*)(void *));

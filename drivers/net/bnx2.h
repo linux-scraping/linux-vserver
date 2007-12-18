@@ -1,6 +1,6 @@
 /* bnx2.h: Broadcom NX2 network driver.
  *
- * Copyright (c) 2004, 2005, 2006 Broadcom Corporation
+ * Copyright (c) 2004-2007 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,8 +24,11 @@ struct tx_bd {
 	u32 tx_bd_haddr_hi;
 	u32 tx_bd_haddr_lo;
 	u32 tx_bd_mss_nbytes;
+		#define TX_BD_TCP6_OFF2_SHL		(14)
 	u32 tx_bd_vlan_tag_flags;
 		#define TX_BD_FLAGS_CONN_FAULT		(1<<0)
+		#define TX_BD_FLAGS_TCP6_OFF0_MSK	(3<<1)
+		#define TX_BD_FLAGS_TCP6_OFF0_SHL	(1)
 		#define TX_BD_FLAGS_TCP_UDP_CKSUM	(1<<1)
 		#define TX_BD_FLAGS_IP_CKSUM		(1<<2)
 		#define TX_BD_FLAGS_VLAN_TAG		(1<<3)
@@ -34,6 +37,7 @@ struct tx_bd {
 		#define TX_BD_FLAGS_END			(1<<6)
 		#define TX_BD_FLAGS_START		(1<<7)
 		#define TX_BD_FLAGS_SW_OPTION_WORD	(0x1f<<8)
+		#define TX_BD_FLAGS_TCP6_OFF4_SHL	(12)
 		#define TX_BD_FLAGS_SW_FLAGS		(1<<13)
 		#define TX_BD_FLAGS_SW_SNAP		(1<<14)
 		#define TX_BD_FLAGS_SW_LSO		(1<<15)
@@ -1369,6 +1373,7 @@ struct l2_fhdr {
 #define BNX2_MISC_NEW_CORE_CTL				0x000008c8
 #define BNX2_MISC_NEW_CORE_CTL_LINK_HOLDOFF_SUCCESS	 (1L<<0)
 #define BNX2_MISC_NEW_CORE_CTL_LINK_HOLDOFF_REQ		 (1L<<1)
+#define BNX2_MISC_NEW_CORE_CTL_DMA_ENABLE		 (1L<<16)
 #define BNX2_MISC_NEW_CORE_CTL_RESERVED_CMN		 (0x3fffL<<2)
 #define BNX2_MISC_NEW_CORE_CTL_RESERVED_TC		 (0xffffL<<16)
 
@@ -6292,11 +6297,48 @@ struct l2_fhdr {
 #define MII_BNX2_DSP_ADDRESS			0x17
 #define MII_BNX2_DSP_EXPAND_REG			 0x0f00
 
+#define MII_BNX2_BLK_ADDR			0x1f
+#define MII_BNX2_BLK_ADDR_IEEE0			 0x0000
+#define MII_BNX2_BLK_ADDR_GP_STATUS		 0x8120
+#define MII_BNX2_GP_TOP_AN_STATUS1		  0x1b
+#define MII_BNX2_GP_TOP_AN_SPEED_MSK		   0x3f00
+#define MII_BNX2_GP_TOP_AN_SPEED_10		   0x0000
+#define MII_BNX2_GP_TOP_AN_SPEED_100		   0x0100
+#define MII_BNX2_GP_TOP_AN_SPEED_1G		   0x0200
+#define MII_BNX2_GP_TOP_AN_SPEED_2_5G		   0x0300
+#define MII_BNX2_GP_TOP_AN_SPEED_1GKV		   0x0d00
+#define MII_BNX2_GP_TOP_AN_FD			   0x8
+#define MII_BNX2_BLK_ADDR_SERDES_DIG		 0x8300
+#define MII_BNX2_SERDES_DIG_1000XCTL1		  0x10
+#define MII_BNX2_SD_1000XCTL1_FIBER		   0x01
+#define MII_BNX2_SD_1000XCTL1_AUTODET		   0x10
+#define MII_BNX2_SERDES_DIG_MISC1		  0x18
+#define MII_BNX2_SD_MISC1_FORCE_MSK		   0xf
+#define MII_BNX2_SD_MISC1_FORCE_2_5G		   0x0
+#define MII_BNX2_SD_MISC1_FORCE			   0x10
+#define MII_BNX2_BLK_ADDR_OVER1G		 0x8320
+#define MII_BNX2_OVER1G_UP1			  0x19
+#define MII_BNX2_BLK_ADDR_BAM_NXTPG		 0x8350
+#define MII_BNX2_BAM_NXTPG_CTL			  0x10
+#define MII_BNX2_NXTPG_CTL_BAM			   0x1
+#define MII_BNX2_NXTPG_CTL_T2			   0x2
+#define MII_BNX2_BLK_ADDR_CL73_USERB0		 0x8370
+#define MII_BNX2_CL73_BAM_CTL1			  0x12
+#define MII_BNX2_CL73_BAM_EN			   0x8000
+#define MII_BNX2_CL73_BAM_STA_MGR_EN		   0x4000
+#define MII_BNX2_CL73_BAM_NP_AFT_BP_EN		   0x2000
+#define MII_BNX2_BLK_ADDR_AER			 0xffd0
+#define MII_BNX2_AER_AER			  0x1e
+#define MII_BNX2_AER_AER_AN_MMD			   0x3800
+#define MII_BNX2_BLK_ADDR_COMBO_IEEEB0		 0xffe0
+
 #define MIN_ETHERNET_PACKET_SIZE	60
 #define MAX_ETHERNET_PACKET_SIZE	1514
 #define MAX_ETHERNET_JUMBO_PACKET_SIZE	9014
 
 #define RX_COPY_THRESH			92
+
+#define BNX2_MISC_ENABLE_DEFAULT	0x7ffffff
 
 #define DMA_READ_CHANS	5
 #define DMA_WRITE_CHANS	3
@@ -6391,6 +6433,11 @@ struct sw_bd {
 #define ST_MICRO_FLASH_PAGE_SIZE		256
 #define ST_MICRO_FLASH_BASE_TOTAL_SIZE		65536
 
+#define BCM5709_FLASH_PAGE_BITS			8
+#define BCM5709_FLASH_PHY_PAGE_SIZE		(1 << BCM5709_FLASH_PAGE_BITS)
+#define BCM5709_FLASH_BYTE_ADDR_MASK		(BCM5709_FLASH_PHY_PAGE_SIZE-1)
+#define BCM5709_FLASH_PAGE_SIZE			256
+
 #define NVRAM_TIMEOUT_COUNT			30000
 
 
@@ -6407,7 +6454,10 @@ struct flash_spec {
 	u32 config2;
 	u32 config3;
 	u32 write1;
-	u32 buffered;
+	u32 flags;
+#define BNX2_NV_BUFFERED	0x00000001
+#define BNX2_NV_TRANSLATE	0x00000002
+#define BNX2_NV_WREN		0x00000004
 	u32 page_bits;
 	u32 page_size;
 	u32 addr_mask;
@@ -6423,19 +6473,23 @@ struct bnx2 {
 	struct net_device	*dev;
 	struct pci_dev		*pdev;
 
+	struct napi_struct	napi;
+
 	atomic_t		intr_sem;
 
 	struct status_block	*status_blk;
 	u32 			last_status_idx;
 
 	u32			flags;
-#define PCIX_FLAG			1
-#define PCI_32BIT_FLAG			2
-#define ONE_TDMA_FLAG			4	/* no longer used */
-#define NO_WOL_FLAG			8
-#define USING_DAC_FLAG			0x10
-#define USING_MSI_FLAG			0x20
-#define ASF_ENABLE_FLAG			0x40
+#define PCIX_FLAG			0x00000001
+#define PCI_32BIT_FLAG			0x00000002
+#define ONE_TDMA_FLAG			0x00000004	/* no longer used */
+#define NO_WOL_FLAG			0x00000008
+#define USING_MSI_FLAG			0x00000020
+#define ASF_ENABLE_FLAG			0x00000040
+#define MSI_CAP_FLAG			0x00000080
+#define ONE_SHOT_MSI_FLAG		0x00000100
+#define PCIE_FLAG			0x00000200
 
 	/* Put tx producer and consumer fields in separate cache lines. */
 
@@ -6484,6 +6538,7 @@ struct bnx2 {
 
 	/* Used to synchronize phy accesses. */
 	spinlock_t		phy_lock;
+	spinlock_t		indirect_lock;
 
 	u32			phy_flags;
 #define PHY_SERDES_FLAG			1
@@ -6494,6 +6549,14 @@ struct bnx2 {
 #define PHY_INT_MODE_AUTO_POLLING_FLAG	0x100
 #define PHY_INT_MODE_LINK_READY_FLAG	0x200
 #define PHY_DIS_EARLY_DAC_FLAG		0x400
+#define REMOTE_PHY_CAP_FLAG		0x800
+
+	u32			mii_bmcr;
+	u32			mii_bmsr;
+	u32			mii_bmsr1;
+	u32			mii_adv;
+	u32			mii_lpa;
+	u32			mii_up1;
 
 	u32			chip_id;
 	/* chip num:16-31, rev:12-15, metal:4-11, bond_id:0-3 */
@@ -6575,6 +6638,7 @@ struct bnx2 {
 	u16			req_line_speed;
 	u8			req_duplex;
 
+	u8			phy_port;
 	u8			link_up;
 
 	u16			line_speed;
@@ -6606,7 +6670,7 @@ struct bnx2 {
 
 	u32			shmem_base;
 
-	u32			fw_ver;
+	char			fw_version[32];
 
 	int			pm_cap;
 	int			pcix_cap;
@@ -6617,9 +6681,6 @@ struct bnx2 {
 	u32			flash_size;
 
 	int			status_stats_size;
-
-	struct z_stream_s	*strm;
-	void			*gunzip_buf;
 };
 
 static u32 bnx2_reg_rd_ind(struct bnx2 *bp, u32 offset);
@@ -6691,13 +6752,11 @@ struct fw_info {
 	const u32 sbss_addr;
 	const u32 sbss_len;
 	const u32 sbss_index;
-	const u32 *sbss;
 
 	/* BSS section. */
 	const u32 bss_addr;
 	const u32 bss_len;
 	const u32 bss_index;
-	const u32 *bss;
 
 	/* Read-only section. */
 	const u32 rodata_addr;
@@ -6720,7 +6779,7 @@ struct fw_info {
  * the firmware has timed out, the driver will assume there is no firmware
  * running and there won't be any firmware-driver synchronization during a
  * driver reset. */
-#define FW_ACK_TIME_OUT_MS                  100
+#define FW_ACK_TIME_OUT_MS                  1000
 
 
 #define BNX2_DRV_RESET_SIGNATURE		0x00000000
@@ -6738,6 +6797,7 @@ struct fw_info {
 #define BNX2_DRV_MSG_CODE_DIAG			 0x07000000
 #define BNX2_DRV_MSG_CODE_SUSPEND_NO_WOL	 0x09000000
 #define BNX2_DRV_MSG_CODE_UNLOAD_LNK_DN		 0x0b000000
+#define BNX2_DRV_MSG_CODE_CMD_SET_LINK		 0x10000000
 
 #define BNX2_DRV_MSG_DATA			 0x00ff0000
 #define BNX2_DRV_MSG_DATA_WAIT0			 0x00010000
@@ -6786,6 +6846,7 @@ struct fw_info {
 #define BNX2_LINK_STATUS_SERDES_LINK		 (1<<20)
 #define BNX2_LINK_STATUS_PARTNER_AD_2500FULL	 (1<<21)
 #define BNX2_LINK_STATUS_PARTNER_AD_2500HALF	 (1<<22)
+#define BNX2_LINK_STATUS_HEART_BEAT_EXPIRED	 (1<<31)
 
 #define BNX2_DRV_PULSE_MB			0x00000010
 #define BNX2_DRV_PULSE_SEQ_MASK			 0x00007fff
@@ -6794,6 +6855,30 @@ struct fw_info {
  * OS absent when it is not getting driver pulse.
  * This is used for debugging. */
 #define BNX2_DRV_MSG_DATA_PULSE_CODE_ALWAYS_ALIVE	 0x00080000
+
+#define BNX2_DRV_MB_ARG0			0x00000014
+#define BNX2_NETLINK_SET_LINK_SPEED_10HALF	 (1<<0)
+#define BNX2_NETLINK_SET_LINK_SPEED_10FULL	 (1<<1)
+#define BNX2_NETLINK_SET_LINK_SPEED_10		 \
+	(BNX2_NETLINK_SET_LINK_SPEED_10HALF |	 \
+	 BNX2_NETLINK_SET_LINK_SPEED_10FULL)
+#define BNX2_NETLINK_SET_LINK_SPEED_100HALF	 (1<<2)
+#define BNX2_NETLINK_SET_LINK_SPEED_100FULL	 (1<<3)
+#define BNX2_NETLINK_SET_LINK_SPEED_100		 \
+	(BNX2_NETLINK_SET_LINK_SPEED_100HALF |	 \
+	 BNX2_NETLINK_SET_LINK_SPEED_100FULL)
+#define BNX2_NETLINK_SET_LINK_SPEED_1GHALF	 (1<<4)
+#define BNX2_NETLINK_SET_LINK_SPEED_1GFULL	 (1<<5)
+#define BNX2_NETLINK_SET_LINK_SPEED_2G5HALF	 (1<<6)
+#define BNX2_NETLINK_SET_LINK_SPEED_2G5FULL	 (1<<7)
+#define BNX2_NETLINK_SET_LINK_SPEED_10GHALF	 (1<<8)
+#define BNX2_NETLINK_SET_LINK_SPEED_10GFULL	 (1<<9)
+#define BNX2_NETLINK_SET_LINK_ENABLE_AUTONEG	 (1<<10)
+#define BNX2_NETLINK_SET_LINK_PHY_APP_REMOTE	 (1<<11)
+#define BNX2_NETLINK_SET_LINK_FC_SYM_PAUSE	 (1<<12)
+#define BNX2_NETLINK_SET_LINK_FC_ASYM_PAUSE	 (1<<13)
+#define BNX2_NETLINK_SET_LINK_ETH_AT_WIRESPEED	 (1<<14)
+#define BNX2_NETLINK_SET_LINK_PHY_RESET		 (1<<15)
 
 #define BNX2_DEV_INFO_SIGNATURE			0x00000020
 #define BNX2_DEV_INFO_SIGNATURE_MAGIC		 0x44564900
@@ -6823,6 +6908,7 @@ struct fw_info {
 #define BNX2_SHARED_HW_CFG_LED_MODE_MAC		 0
 #define BNX2_SHARED_HW_CFG_LED_MODE_GPHY1	 0x100
 #define BNX2_SHARED_HW_CFG_LED_MODE_GPHY2	 0x200
+#define BNX2_SHARED_HW_CFG_GIG_LINK_ON_VAUX	 0x8000
 
 #define BNX2_SHARED_HW_CFG_CONFIG2		0x00000040
 #define BNX2_SHARED_HW_CFG2_NVM_SIZE_MASK	 0x00fff000
@@ -6956,6 +7042,8 @@ struct fw_info {
 #define BNX2_PORT_FEATURE_MBA_VLAN_TAG_MASK	 0xffff
 #define BNX2_PORT_FEATURE_MBA_VLAN_ENABLE	 0x10000
 
+#define BNX2_MFW_VER_PTR			0x00000014c
+
 #define BNX2_BC_STATE_RESET_TYPE		0x000001c0
 #define BNX2_BC_STATE_RESET_TYPE_SIG		 0x00005254
 #define BNX2_BC_STATE_RESET_TYPE_SIG_MASK	 0x0000ffff
@@ -7009,11 +7097,41 @@ struct fw_info {
 #define BNX2_BC_STATE_ERR_NO_RXP		 (BNX2_BC_STATE_SIGN | 0x0600)
 #define BNX2_BC_STATE_ERR_TOO_MANY_RBUF		 (BNX2_BC_STATE_SIGN | 0x0700)
 
+#define BNX2_BC_STATE_CONDITION			0x000001c8
+#define BNX2_CONDITION_MFW_RUN_UNKNOWN		 0x00000000
+#define BNX2_CONDITION_MFW_RUN_IPMI		 0x00002000
+#define BNX2_CONDITION_MFW_RUN_UMP		 0x00004000
+#define BNX2_CONDITION_MFW_RUN_NCSI		 0x00006000
+#define BNX2_CONDITION_MFW_RUN_NONE		 0x0000e000
+#define BNX2_CONDITION_MFW_RUN_MASK		 0x0000e000
+
 #define BNX2_BC_STATE_DEBUG_CMD			0x1dc
 #define BNX2_BC_STATE_BC_DBG_CMD_SIGNATURE	 0x42440000
 #define BNX2_BC_STATE_BC_DBG_CMD_SIGNATURE_MASK	 0xffff0000
 #define BNX2_BC_STATE_BC_DBG_CMD_LOOP_CNT_MASK	 0xffff
 #define BNX2_BC_STATE_BC_DBG_CMD_LOOP_INFINITE	 0xffff
+
+#define BNX2_FW_EVT_CODE_MB			0x354
+#define BNX2_FW_EVT_CODE_SW_TIMER_EXPIRATION_EVENT 0x00000000
+#define BNX2_FW_EVT_CODE_LINK_EVENT		 0x00000001
+
+#define BNX2_DRV_ACK_CAP_MB			0x364
+#define BNX2_DRV_ACK_CAP_SIGNATURE		 0x35450000
+#define BNX2_CAPABILITY_SIGNATURE_MASK		 0xFFFF0000
+
+#define BNX2_FW_CAP_MB				0x368
+#define BNX2_FW_CAP_SIGNATURE			 0xaa550000
+#define BNX2_FW_ACK_DRV_SIGNATURE		 0x52500000
+#define BNX2_FW_CAP_SIGNATURE_MASK		 0xffff0000
+#define BNX2_FW_CAP_REMOTE_PHY_CAPABLE		 0x00000001
+#define BNX2_FW_CAP_REMOTE_PHY_PRESENT		 0x00000002
+
+#define BNX2_RPHY_SIGNATURE			0x36c
+#define BNX2_RPHY_LOAD_SIGNATURE		 0x5a5a5a5a
+
+#define BNX2_RPHY_FLAGS				0x370
+#define BNX2_RPHY_SERDES_LINK			0x374
+#define BNX2_RPHY_COPPER_LINK			0x378
 
 #define HOST_VIEW_SHMEM_BASE			0x167c00
 

@@ -11,6 +11,15 @@
 #ifndef _XTENSA_TYPES_H
 #define _XTENSA_TYPES_H
 
+
+#ifdef __ASSEMBLY__
+# define __XTENSA_UL(x)		(x)
+# define __XTENSA_UL_CONST(x)	x
+#else
+# define __XTENSA_UL(x)		((unsigned long)(x))
+# define __XTENSA_UL_CONST(x)	x##UL
+#endif
+
 #ifndef __ASSEMBLY__
 
 typedef unsigned short umode_t;
@@ -29,9 +38,9 @@ typedef unsigned short __u16;
 typedef __signed__ int __s32;
 typedef unsigned int __u32;
 
-#if defined(__GNUC__) && !defined(__STRICT_ANSI__)
-typedef __signed__ long long __s64;
-typedef unsigned long long __u64;
+#if defined(__GNUC__)
+__extension__ typedef __signed__ long long __s64;
+__extension__ typedef unsigned long long __u64;
 #endif
 
 /*

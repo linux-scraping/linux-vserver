@@ -40,8 +40,8 @@
 #include <linux/completion.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
-#include <linux/completion.h>
 #include <linux/timer.h>
+#include <linux/mutex.h>
 #include <asm/keylargo.h>
 #include <asm/uninorth.h>
 #include <asm/io.h>
@@ -84,7 +84,7 @@ struct pmac_i2c_bus
 	void			*hostdata;
 	int			channel;	/* some hosts have multiple */
 	int			mode;		/* current mode */
-	struct semaphore	sem;
+	struct mutex		mutex;
 	int			opened;
 	int			polled;		/* open mode */
 	struct platform_device	*platform_dev;
@@ -104,7 +104,7 @@ static LIST_HEAD(pmac_i2c_busses);
 
 struct pmac_i2c_host_kw
 {
-	struct semaphore	mutex;		/* Access mutex for use by
+	struct mutex		mutex;		/* Access mutex for use by
 						 * i2c-keywest */
 	void __iomem		*base;		/* register base address */
 	int			bsteps;		/* register stepping */
@@ -375,14 +375,14 @@ static void kw_i2c_timeout(unsigned long data)
 static int kw_i2c_open(struct pmac_i2c_bus *bus)
 {
 	struct pmac_i2c_host_kw *host = bus->hostdata;
-	down(&host->mutex);
+	mutex_lock(&host->mutex);
 	return 0;
 }
 
 static void kw_i2c_close(struct pmac_i2c_bus *bus)
 {
 	struct pmac_i2c_host_kw *host = bus->hostdata;
-	up(&host->mutex);
+	mutex_unlock(&host->mutex);
 }
 
 static int kw_i2c_xfer(struct pmac_i2c_bus *bus, u8 addrdir, int subsize,
@@ -491,27 +491,27 @@ static struct pmac_i2c_host_kw *__init kw_i2c_host_init(struct device_node *np)
 	 * on all i2c keywest nodes so far ... we would have to fallback
 	 * to macio parsing if that wasn't the case
 	 */
-	addrp = get_property(np, "AAPL,address", NULL);
+	addrp = of_get_property(np, "AAPL,address", NULL);
 	if (addrp == NULL) {
 		printk(KERN_ERR "low_i2c: Can't find address for %s\n",
 		       np->full_name);
 		kfree(host);
 		return NULL;
 	}
-	init_MUTEX(&host->mutex);
+	mutex_init(&host->mutex);
 	init_completion(&host->complete);
 	spin_lock_init(&host->lock);
 	init_timer(&host->timeout_timer);
 	host->timeout_timer.function = kw_i2c_timeout;
 	host->timeout_timer.data = (unsigned long)host;
 
-	psteps = get_property(np, "AAPL,address-step", NULL);
+	psteps = of_get_property(np, "AAPL,address-step", NULL);
 	steps = psteps ? (*psteps) : 0x10;
 	for (host->bsteps = 0; (steps & 0x01) == 0; host->bsteps++)
 		steps >>= 1;
 	/* Select interface rate */
 	host->speed = KW_I2C_MODE_25KHZ;
-	prate = get_property(np, "AAPL,i2c-rate", NULL);
+	prate = of_get_property(np, "AAPL,i2c-rate", NULL);
 	if (prate) switch(*prate) {
 	case 100:
 		host->speed = KW_I2C_MODE_100KHZ;
@@ -571,7 +571,7 @@ static void __init kw_i2c_add(struct pmac_i2c_host_kw *host,
 	bus->open = kw_i2c_open;
 	bus->close = kw_i2c_close;
 	bus->xfer = kw_i2c_xfer;
-	init_MUTEX(&bus->sem);
+	mutex_init(&bus->mutex);
 	if (controller == busnode)
 		bus->flags = pmac_i2c_multibus;
 	list_add(&bus->link, &pmac_i2c_busses);
@@ -619,7 +619,7 @@ static void __init kw_i2c_probe(void)
 		} else {
 			for (child = NULL;
 			     (child = of_get_next_child(np, child)) != NULL;) {
-				const u32 *reg = get_property(child,
+				const u32 *reg = of_get_property(child,
 						"reg", NULL);
 				if (reg == NULL)
 					continue;
@@ -798,7 +798,7 @@ static void __init pmu_i2c_probe(void)
 		bus->mode = pmac_i2c_mode_std;
 		bus->hostdata = bus + 1;
 		bus->xfer = pmu_i2c_xfer;
-		init_MUTEX(&bus->sem);
+		mutex_init(&bus->mutex);
 		bus->flags = pmac_i2c_multibus;
 		list_add(&bus->link, &pmac_i2c_busses);
 
@@ -905,7 +905,7 @@ static void __init smu_i2c_probe(void)
 		if (strcmp(busnode->type, "i2c") &&
 		    strcmp(busnode->type, "i2c-bus"))
 			continue;
-		reg = get_property(busnode, "reg", NULL);
+		reg = of_get_property(busnode, "reg", NULL);
 		if (reg == NULL)
 			continue;
 
@@ -921,7 +921,7 @@ static void __init smu_i2c_probe(void)
 		bus->mode = pmac_i2c_mode_std;
 		bus->hostdata = bus + 1;
 		bus->xfer = smu_i2c_xfer;
-		init_MUTEX(&bus->sem);
+		mutex_init(&bus->mutex);
 		bus->flags = 0;
 		list_add(&bus->link, &pmac_i2c_busses);
 
@@ -950,7 +950,8 @@ struct pmac_i2c_bus *pmac_i2c_find_bus(struct device_node *node)
 			if (p == bus->busnode) {
 				if (prev && bus->flags & pmac_i2c_multibus) {
 					const u32 *reg;
-					reg = get_property(prev, "reg", NULL);
+					reg = of_get_property(prev, "reg",
+								NULL);
 					if (!reg)
 						continue;
 					if (((*reg) >> 8) != bus->channel)
@@ -971,7 +972,7 @@ EXPORT_SYMBOL_GPL(pmac_i2c_find_bus);
 
 u8 pmac_i2c_get_dev_addr(struct device_node *device)
 {
-	const u32 *reg = get_property(device, "reg", NULL);
+	const u32 *reg = of_get_property(device, "reg", NULL);
 
 	if (reg == NULL)
 		return 0;
@@ -1092,13 +1093,13 @@ int pmac_i2c_open(struct pmac_i2c_bus *bus, int polled)
 {
 	int rc;
 
-	down(&bus->sem);
+	mutex_lock(&bus->mutex);
 	bus->polled = polled || pmac_i2c_force_poll;
 	bus->opened = 1;
 	bus->mode = pmac_i2c_mode_std;
 	if (bus->open && (rc = bus->open(bus)) != 0) {
 		bus->opened = 0;
-		up(&bus->sem);
+		mutex_unlock(&bus->mutex);
 		return rc;
 	}
 	return 0;
@@ -1111,7 +1112,7 @@ void pmac_i2c_close(struct pmac_i2c_bus *bus)
 	if (bus->close)
 		bus->close(bus);
 	bus->opened = 0;
-	up(&bus->sem);
+	mutex_unlock(&bus->mutex);
 }
 EXPORT_SYMBOL_GPL(pmac_i2c_close);
 
@@ -1206,7 +1207,7 @@ static void pmac_i2c_devscan(void (*callback)(struct device_node *dev,
 				if (strcmp(np->name, p->name))
 					continue;
 				if (p->compatible &&
-				    !device_is_compatible(np, p->compatible))
+				    !of_device_is_compatible(np, p->compatible))
 					continue;
 				if (p->quirks & pmac_i2c_quirk_skip)
 					break;

@@ -38,7 +38,7 @@
 #include <linux/moduleparam.h>
 #include <linux/platform_device.h>
 #include <linux/usb/ch9.h>
-#include <linux/usb_gadget.h>
+#include <linux/usb/gadget.h>
 #include <linux/usb/otg.h>
 #include <linux/dma-mapping.h>
 #include <linux/clk.h>
@@ -292,111 +292,6 @@ omap_free_request(struct usb_ep *ep, struct usb_request *_req)
 
 	if (_req)
 		kfree (req);
-}
-
-/*-------------------------------------------------------------------------*/
-
-/*
- * dma-coherent memory allocation (for dma-capable endpoints)
- *
- * NOTE: the dma_*_coherent() API calls suck.  Most implementations are
- * (a) page-oriented, so small buffers lose big; and (b) asymmetric with
- * respect to calls with irqs disabled:  alloc is safe, free is not.
- * We currently work around (b), but not (a).
- */
-
-static void *
-omap_alloc_buffer(
-	struct usb_ep	*_ep,
-	unsigned	bytes,
-	dma_addr_t	*dma,
-	gfp_t		gfp_flags
-)
-{
-	void		*retval;
-	struct omap_ep	*ep;
-
-	if (!_ep)
-		return NULL;
-
-	ep = container_of(_ep, struct omap_ep, ep);
-	if (use_dma && ep->has_dma) {
-		static int	warned;
-		if (!warned && bytes < PAGE_SIZE) {
-			dev_warn(ep->udc->gadget.dev.parent,
-				"using dma_alloc_coherent for "
-				"small allocations wastes memory\n");
-			warned++;
-		}
-		return dma_alloc_coherent(ep->udc->gadget.dev.parent,
-				bytes, dma, gfp_flags);
-	}
-
-	retval = kmalloc(bytes, gfp_flags);
-	if (retval)
-		*dma = virt_to_phys(retval);
-	return retval;
-}
-
-static DEFINE_SPINLOCK(buflock);
-static LIST_HEAD(buffers);
-
-struct free_record {
-	struct list_head	list;
-	struct device		*dev;
-	unsigned		bytes;
-	dma_addr_t		dma;
-};
-
-static void do_free(unsigned long ignored)
-{
-	spin_lock_irq(&buflock);
-	while (!list_empty(&buffers)) {
-		struct free_record	*buf;
-
-		buf = list_entry(buffers.next, struct free_record, list);
-		list_del(&buf->list);
-		spin_unlock_irq(&buflock);
-
-		dma_free_coherent(buf->dev, buf->bytes, buf, buf->dma);
-
-		spin_lock_irq(&buflock);
-	}
-	spin_unlock_irq(&buflock);
-}
-
-static DECLARE_TASKLET(deferred_free, do_free, 0);
-
-static void omap_free_buffer(
-	struct usb_ep	*_ep,
-	void		*buf,
-	dma_addr_t	dma,
-	unsigned	bytes
-)
-{
-	if (!_ep) {
-		WARN_ON(1);
-		return;
-	}
-
-	/* free memory into the right allocator */
-	if (dma != DMA_ADDR_INVALID) {
-		struct omap_ep		*ep;
-		struct free_record	*rec = buf;
-		unsigned long		flags;
-
-		ep = container_of(_ep, struct omap_ep, ep);
-
-		rec->dev = ep->udc->gadget.dev.parent;
-		rec->bytes = bytes;
-		rec->dma = dma;
-
-		spin_lock_irqsave(&buflock, flags);
-		list_add_tail(&rec->list, &buffers);
-		tasklet_schedule(&deferred_free);
-		spin_unlock_irqrestore(&buflock, flags);
-	} else
-		kfree(buf);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1271,9 +1166,6 @@ static struct usb_ep_ops omap_ep_ops = {
 	.alloc_request	= omap_alloc_request,
 	.free_request	= omap_free_request,
 
-	.alloc_buffer	= omap_alloc_buffer,
-	.free_buffer	= omap_free_buffer,
-
 	.queue		= omap_ep_queue,
 	.dequeue	= omap_ep_dequeue,
 
@@ -1349,19 +1241,15 @@ static void pullup_enable(struct omap_udc *udc)
 	udc->gadget.dev.parent->power.power_state = PMSG_ON;
 	udc->gadget.dev.power.power_state = PMSG_ON;
 	UDC_SYSCON1_REG |= UDC_PULLUP_EN;
-#ifndef CONFIG_USB_OTG
-	if (!cpu_is_omap15xx())
+	if (!gadget_is_otg(udc->gadget) && !cpu_is_omap15xx())
 		OTG_CTRL_REG |= OTG_BSESSVLD;
-#endif
 	UDC_IRQ_EN_REG = UDC_DS_CHG_IE;
 }
 
 static void pullup_disable(struct omap_udc *udc)
 {
-#ifndef CONFIG_USB_OTG
-	if (!cpu_is_omap15xx())
+	if (!gadget_is_otg(udc->gadget) && !cpu_is_omap15xx())
 		OTG_CTRL_REG &= ~OTG_BSESSVLD;
-#endif
 	UDC_IRQ_EN_REG = UDC_DS_CHG_IE;
 	UDC_SYSCON1_REG &= ~UDC_PULLUP_EN;
 }
@@ -1498,7 +1386,7 @@ static void update_otg(struct omap_udc *udc)
 {
 	u16	devstat;
 
-	if (!udc->gadget.is_otg)
+	if (!gadget_is_otg(udc->gadget))
 		return;
 
 	if (OTG_CTRL_REG & OTG_ID)
@@ -1651,9 +1539,9 @@ static void ep0_irq(struct omap_udc *udc, u16 irq_src)
 			UDC_EP_NUM_REG = 0;
 		} while (UDC_IRQ_SRC_REG & UDC_SETUP);
 
-#define	w_value		le16_to_cpup (&u.r.wValue)
-#define	w_index		le16_to_cpup (&u.r.wIndex)
-#define	w_length	le16_to_cpup (&u.r.wLength)
+#define	w_value		le16_to_cpu(u.r.wValue)
+#define	w_index		le16_to_cpu(u.r.wIndex)
+#define	w_length	le16_to_cpu(u.r.wLength)
 
 		/* Delegate almost all control requests to the gadget driver,
 		 * except for a handful of ch9 status/feature requests that

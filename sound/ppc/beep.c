@@ -118,7 +118,7 @@ static int snd_pmac_beep_event(struct input_dev *dev, unsigned int type,
 	default: return -1;
 	}
 
-	chip = dev->private;
+	chip = input_get_drvdata(dev);
 	if (! chip || (beep = chip->beep) == NULL)
 		return -1;
 
@@ -236,11 +236,11 @@ int __init snd_pmac_attach_beep(struct snd_pmac *chip)
 	input_dev->id.product = 0x0001;
 	input_dev->id.version = 0x0100;
 
-	input_dev->evbit[0] = BIT(EV_SND);
-	input_dev->sndbit[0] = BIT(SND_BELL) | BIT(SND_TONE);
+	input_dev->evbit[0] = BIT_MASK(EV_SND);
+	input_dev->sndbit[0] = BIT_MASK(SND_BELL) | BIT_MASK(SND_TONE);
 	input_dev->event = snd_pmac_beep_event;
-	input_dev->private = chip;
-	input_dev->cdev.dev = &chip->pdev->dev;
+	input_dev->dev.parent = &chip->pdev->dev;
+	input_set_drvdata(input_dev, chip);
 
 	beep->dev = input_dev;
 	beep->buf = dmabuf;
@@ -251,8 +251,8 @@ int __init snd_pmac_attach_beep(struct snd_pmac *chip)
 	err = snd_ctl_add(chip->card, beep_ctl);
 	if (err < 0)
 		goto fail1;
- 
- 	chip->beep = beep;
+
+	chip->beep = beep;
 
 	err = input_register_device(beep->dev);
 	if (err)

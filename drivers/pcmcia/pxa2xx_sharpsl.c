@@ -283,3 +283,4 @@ module_exit(sharpsl_pcmcia_exit);
 
 MODULE_DESCRIPTION("Sharp SL Series PCMCIA Support");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:pxa2xx-pcmcia");

@@ -1,7 +1,7 @@
 /*
  *  binfmt_misc.c
  *
- *  Copyright (C) 1997 Richard Günther
+ *  Copyright (C) 1997 Richard GÃ¼nther
  *
  *  binfmt_misc detects binaries via a magic or filename extension and invokes
  *  a specified wrapper. This should obsolete binfmt_java, binfmt_em86 and
@@ -18,7 +18,7 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
-
+#include <linux/sched.h>
 #include <linux/binfmts.h>
 #include <linux/slab.h>
 #include <linux/ctype.h>
@@ -126,7 +126,9 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 		goto _ret;
 
 	if (!(fmt->flags & MISC_FMT_PRESERVE_ARGV0)) {
-		remove_arg_zero(bprm);
+		retval = remove_arg_zero(bprm);
+		if (retval)
+			goto _ret;
 	}
 
 	if (fmt->flags & MISC_FMT_OPEN_BINARY) {
@@ -675,19 +677,8 @@ static ssize_t
 bm_status_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
 	char *s = enabled ? "enabled" : "disabled";
-	int len = strlen(s);
-	loff_t pos = *ppos;
 
-	if (pos < 0)
-		return -EINVAL;
-	if (pos >= len)
-		return 0;
-	if (len < pos + nbytes)
-		nbytes = len - pos;
-	if (copy_to_user(buf, s + pos, nbytes))
-		return -EFAULT;
-	*ppos = pos + nbytes;
-	return nbytes;
+	return simple_read_from_buffer(buf, nbytes, ppos, s, strlen(s));
 }
 
 static ssize_t bm_status_write(struct file * file, const char __user * buffer,
@@ -727,8 +718,8 @@ static const struct super_operations s_ops = {
 static int bm_fill_super(struct super_block * sb, void * data, int silent)
 {
 	static struct tree_descr bm_files[] = {
-		[1] = {"status", &bm_status_operations, S_IWUSR|S_IRUGO},
-		[2] = {"register", &bm_register_operations, S_IWUSR},
+		[2] = {"status", &bm_status_operations, S_IWUSR|S_IRUGO},
+		[3] = {"register", &bm_register_operations, S_IWUSR},
 		/* last one */ {""}
 	};
 	int err = simple_fill_super(sb, 0x42494e4d, bm_files);

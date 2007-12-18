@@ -4,11 +4,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- enable working with Layer 3 protocol independent connection tracking.
- *
- * Derived from net/ipv4/netfilter/ip_conntrack_proto_icmp.c
  */
 
 #include <linux/types.h>
@@ -25,12 +20,6 @@
 #include <net/netfilter/nf_conntrack_core.h>
 
 static unsigned long nf_ct_icmp_timeout __read_mostly = 30*HZ;
-
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
 
 static int icmp_pkt_to_tuple(const struct sk_buff *skb,
 			     unsigned int dataoff,
@@ -130,8 +119,8 @@ static int icmp_new(struct nf_conn *conntrack,
 	if (conntrack->tuplehash[0].tuple.dst.u.icmp.type >= sizeof(valid_new)
 	    || !valid_new[conntrack->tuplehash[0].tuple.dst.u.icmp.type]) {
 		/* Can't create a new ICMP `conn' with this. */
-		DEBUGP("icmp: can't create new conn with type %u\n",
-		       conntrack->tuplehash[0].tuple.dst.u.icmp.type);
+		pr_debug("icmp: can't create new conn with type %u\n",
+			 conntrack->tuplehash[0].tuple.dst.u.icmp.type);
 		NF_CT_DUMP_TUPLE(&conntrack->tuplehash[0].tuple);
 		return 0;
 	}
@@ -147,71 +136,41 @@ icmp_error_message(struct sk_buff *skb,
 		 unsigned int hooknum)
 {
 	struct nf_conntrack_tuple innertuple, origtuple;
-	struct {
-		struct icmphdr icmp;
-		struct iphdr ip;
-	} _in, *inside;
 	struct nf_conntrack_l4proto *innerproto;
 	struct nf_conntrack_tuple_hash *h;
-	int dataoff;
 
 	NF_CT_ASSERT(skb->nfct == NULL);
 
-	/* Not enough header? */
-	inside = skb_header_pointer(skb, skb->nh.iph->ihl*4, sizeof(_in), &_in);
-	if (inside == NULL)
-		return -NF_ACCEPT;
-
-	/* Ignore ICMP's containing fragments (shouldn't happen) */
-	if (inside->ip.frag_off & htons(IP_OFFSET)) {
-		DEBUGP("icmp_error_message: fragment of proto %u\n",
-		       inside->ip.protocol);
+	/* Are they talking about one of our connections? */
+	if (!nf_ct_get_tuplepr(skb,
+			       skb_network_offset(skb) + ip_hdrlen(skb)
+						       + sizeof(struct icmphdr),
+			       PF_INET, &origtuple)) {
+		pr_debug("icmp_error_message: failed to get tuple\n");
 		return -NF_ACCEPT;
 	}
 
 	/* rcu_read_lock()ed by nf_hook_slow */
-	innerproto = __nf_ct_l4proto_find(PF_INET, inside->ip.protocol);
-
-	dataoff = skb->nh.iph->ihl*4 + sizeof(inside->icmp);
-	/* Are they talking about one of our connections? */
-	if (!nf_ct_get_tuple(skb, dataoff, dataoff + inside->ip.ihl*4, PF_INET,
-			     inside->ip.protocol, &origtuple,
-			     &nf_conntrack_l3proto_ipv4, innerproto)) {
-		DEBUGP("icmp_error_message: ! get_tuple p=%u",
-		       inside->ip.protocol);
-		return -NF_ACCEPT;
-	}
+	innerproto = __nf_ct_l4proto_find(PF_INET, origtuple.dst.protonum);
 
 	/* Ordinarily, we'd expect the inverted tupleproto, but it's
 	   been preserved inside the ICMP. */
 	if (!nf_ct_invert_tuple(&innertuple, &origtuple,
 				&nf_conntrack_l3proto_ipv4, innerproto)) {
-		DEBUGP("icmp_error_message: no match\n");
+		pr_debug("icmp_error_message: no match\n");
 		return -NF_ACCEPT;
 	}
 
 	*ctinfo = IP_CT_RELATED;
 
-	h = nf_conntrack_find_get(&innertuple, NULL);
+	h = nf_conntrack_find_get(&innertuple);
 	if (!h) {
-		/* Locally generated ICMPs will match inverted if they
-		   haven't been SNAT'ed yet */
-		/* FIXME: NAT code has to handle half-done double NAT --RR */
-		if (hooknum == NF_IP_LOCAL_OUT)
-			h = nf_conntrack_find_get(&origtuple, NULL);
-
-		if (!h) {
-			DEBUGP("icmp_error_message: no match\n");
-			return -NF_ACCEPT;
-		}
-
-		/* Reverse direction from that found */
-		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
-			*ctinfo += IP_CT_IS_REPLY;
-	} else {
-		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
-			*ctinfo += IP_CT_IS_REPLY;
+		pr_debug("icmp_error_message: no match\n");
+		return -NF_ACCEPT;
 	}
+
+	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
+		*ctinfo += IP_CT_IS_REPLY;
 
 	/* Update skb to refer to this connection */
 	skb->nfct = &nf_ct_tuplehash_to_ctrack(h)->ct_general;
@@ -227,7 +186,7 @@ icmp_error(struct sk_buff *skb, unsigned int dataoff,
 	struct icmphdr _ih, *icmph;
 
 	/* Not enough header? */
-	icmph = skb_header_pointer(skb, skb->nh.iph->ihl*4, sizeof(_ih), &_ih);
+	icmph = skb_header_pointer(skb, ip_hdrlen(skb), sizeof(_ih), &_ih);
 	if (icmph == NULL) {
 		if (LOG_INVALID(IPPROTO_ICMP))
 			nf_log_packet(PF_INET, 0, skb, NULL, NULL, NULL,
@@ -273,45 +232,42 @@ icmp_error(struct sk_buff *skb, unsigned int dataoff,
 #include <linux/netfilter/nfnetlink.h>
 #include <linux/netfilter/nfnetlink_conntrack.h>
 
-static int icmp_tuple_to_nfattr(struct sk_buff *skb,
+static int icmp_tuple_to_nlattr(struct sk_buff *skb,
 				const struct nf_conntrack_tuple *t)
 {
-	NFA_PUT(skb, CTA_PROTO_ICMP_ID, sizeof(u_int16_t),
+	NLA_PUT(skb, CTA_PROTO_ICMP_ID, sizeof(u_int16_t),
 		&t->src.u.icmp.id);
-	NFA_PUT(skb, CTA_PROTO_ICMP_TYPE, sizeof(u_int8_t),
+	NLA_PUT(skb, CTA_PROTO_ICMP_TYPE, sizeof(u_int8_t),
 		&t->dst.u.icmp.type);
-	NFA_PUT(skb, CTA_PROTO_ICMP_CODE, sizeof(u_int8_t),
+	NLA_PUT(skb, CTA_PROTO_ICMP_CODE, sizeof(u_int8_t),
 		&t->dst.u.icmp.code);
 
 	return 0;
 
-nfattr_failure:
+nla_put_failure:
 	return -1;
 }
 
-static const size_t cta_min_proto[CTA_PROTO_MAX] = {
-	[CTA_PROTO_ICMP_TYPE-1] = sizeof(u_int8_t),
-	[CTA_PROTO_ICMP_CODE-1] = sizeof(u_int8_t),
-	[CTA_PROTO_ICMP_ID-1]   = sizeof(u_int16_t)
+static const struct nla_policy icmp_nla_policy[CTA_PROTO_MAX+1] = {
+	[CTA_PROTO_ICMP_TYPE]	= { .type = NLA_U8 },
+	[CTA_PROTO_ICMP_CODE]	= { .type = NLA_U8 },
+	[CTA_PROTO_ICMP_ID]	= { .type = NLA_U16 },
 };
 
-static int icmp_nfattr_to_tuple(struct nfattr *tb[],
+static int icmp_nlattr_to_tuple(struct nlattr *tb[],
 				struct nf_conntrack_tuple *tuple)
 {
-	if (!tb[CTA_PROTO_ICMP_TYPE-1]
-	    || !tb[CTA_PROTO_ICMP_CODE-1]
-	    || !tb[CTA_PROTO_ICMP_ID-1])
-		return -EINVAL;
-
-	if (nfattr_bad_size(tb, CTA_PROTO_MAX, cta_min_proto))
+	if (!tb[CTA_PROTO_ICMP_TYPE]
+	    || !tb[CTA_PROTO_ICMP_CODE]
+	    || !tb[CTA_PROTO_ICMP_ID])
 		return -EINVAL;
 
 	tuple->dst.u.icmp.type =
-			*(u_int8_t *)NFA_DATA(tb[CTA_PROTO_ICMP_TYPE-1]);
+			*(u_int8_t *)nla_data(tb[CTA_PROTO_ICMP_TYPE]);
 	tuple->dst.u.icmp.code =
-			*(u_int8_t *)NFA_DATA(tb[CTA_PROTO_ICMP_CODE-1]);
+			*(u_int8_t *)nla_data(tb[CTA_PROTO_ICMP_CODE]);
 	tuple->src.u.icmp.id =
-			*(__be16 *)NFA_DATA(tb[CTA_PROTO_ICMP_ID-1]);
+			*(__be16 *)nla_data(tb[CTA_PROTO_ICMP_ID]);
 
 	if (tuple->dst.u.icmp.type >= sizeof(invmap)
 	    || !invmap[tuple->dst.u.icmp.type])
@@ -325,7 +281,6 @@ static int icmp_nfattr_to_tuple(struct nfattr *tb[],
 static struct ctl_table_header *icmp_sysctl_header;
 static struct ctl_table icmp_sysctl_table[] = {
 	{
-		.ctl_name	= NET_NF_CONNTRACK_ICMP_TIMEOUT,
 		.procname	= "nf_conntrack_icmp_timeout",
 		.data		= &nf_ct_icmp_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -339,7 +294,6 @@ static struct ctl_table icmp_sysctl_table[] = {
 #ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
 static struct ctl_table icmp_compat_sysctl_table[] = {
 	{
-		.ctl_name	= NET_IPV4_NF_CONNTRACK_ICMP_TIMEOUT,
 		.procname	= "ip_conntrack_icmp_timeout",
 		.data		= &nf_ct_icmp_timeout,
 		.maxlen		= sizeof(unsigned int),
@@ -353,7 +307,7 @@ static struct ctl_table icmp_compat_sysctl_table[] = {
 #endif /* CONFIG_NF_CONNTRACK_PROC_COMPAT */
 #endif /* CONFIG_SYSCTL */
 
-struct nf_conntrack_l4proto nf_conntrack_l4proto_icmp =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_icmp __read_mostly =
 {
 	.l3proto		= PF_INET,
 	.l4proto		= IPPROTO_ICMP,
@@ -368,8 +322,9 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_icmp =
 	.destroy		= NULL,
 	.me			= NULL,
 #if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
-	.tuple_to_nfattr	= icmp_tuple_to_nfattr,
-	.nfattr_to_tuple	= icmp_nfattr_to_tuple,
+	.tuple_to_nlattr	= icmp_tuple_to_nlattr,
+	.nlattr_to_tuple	= icmp_nlattr_to_tuple,
+	.nla_policy		= icmp_nla_policy,
 #endif
 #ifdef CONFIG_SYSCTL
 	.ctl_table_header	= &icmp_sysctl_header,
@@ -379,4 +334,3 @@ struct nf_conntrack_l4proto nf_conntrack_l4proto_icmp =
 #endif
 #endif
 };
-EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_icmp);

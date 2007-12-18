@@ -91,7 +91,6 @@ static void planb_close(struct video_device *);
 static int planb_ioctl(struct video_device *, unsigned int, void *);
 static int planb_init_done(struct video_device *);
 static int planb_mmap(struct video_device *, const char *, unsigned long);
-static void planb_irq(int, void *);
 static void release_planb(void);
 int init_planbs(struct video_init *);
 
@@ -353,9 +352,8 @@ static int planb_prepare_open(struct planb *pb)
 		* PLANB_DUMMY)*sizeof(struct dbdma_cmd)
 		+(PLANB_MAXLINES*((PLANB_MAXPIXELS+7)& ~7))/8
 		+MAX_GBUFFERS*sizeof(unsigned int);
-	if ((pb->priv_space = kmalloc (size, GFP_KERNEL)) == 0)
+	if ((pb->priv_space = kzalloc (size, GFP_KERNEL)) == 0)
 		return -ENOMEM;
-	memset ((void *) pb->priv_space, 0, size);
 	pb->overlay_last1 = pb->ch1_cmd = (volatile struct dbdma_cmd *)
 						DBDMA_ALIGN (pb->priv_space);
 	pb->overlay_last2 = pb->ch2_cmd = pb->ch1_cmd + pb->tab_size;
@@ -845,21 +843,21 @@ cmd_tab_mask_end:
 /*********************************/
 
 static int palette2fmt[] = {
-       0,
-       PLANB_GRAY,
-       0,
-       0,
-       0,
-       PLANB_COLOUR32,
-       PLANB_COLOUR15,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
-       0,
+	0,
+	PLANB_GRAY,
+	0,
+	0,
+	0,
+	PLANB_COLOUR32,
+	PLANB_COLOUR15,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
 };
 
 #define PLANB_PALETTE_MAX 15
@@ -1316,7 +1314,7 @@ cmd_tab_data_end:
 	return c1;
 }
 
-static void planb_irq(int irq, void *dev_id)
+static irqreturn_t planb_irq(int irq, void *dev_id)
 {
 	unsigned int stat, astat;
 	struct planb *pb = (struct planb *)dev_id;
@@ -1359,13 +1357,14 @@ static void planb_irq(int irq, void *dev_id)
 		pb->frame_stat[fr] = GBUFFER_DONE;
 		pb->grabbing--;
 		wake_up_interruptible(&pb->capq);
-		return;
+		return IRQ_HANDLED;
 	}
 	/* incorrect interrupts? */
 	pb->intr_mask = PLANB_CLR_IRQ;
 	out_le32(&pb->planb_base->intr_stat, PLANB_CLR_IRQ);
 	printk(KERN_ERR "PlanB: IRQ lockup, cleared intrrupts"
 							" unconditionally\n");
+	return IRQ_HANDLED;
 }
 
 /*******************************
@@ -2014,7 +2013,6 @@ static struct video_device planb_template=
 	.owner		= THIS_MODULE,
 	.name		= PLANB_DEVICE_NAME,
 	.type		= VID_TYPE_OVERLAY,
-	.hardware	= VID_HARDWARE_PLANB,
 	.open		= planb_open,
 	.close		= planb_close,
 	.read		= planb_read,
@@ -2092,7 +2090,7 @@ static int init_planb(struct planb *pb)
 	/* clear interrupt mask */
 	pb->intr_mask = PLANB_CLR_IRQ;
 
-	result = request_irq(pb->irq, planb_irq, 0, "PlanB", (void *)pb);
+	result = request_irq(pb->irq, planb_irq, 0, "PlanB", pb);
 	if (result < 0) {
 		if (result==-EINVAL)
 			printk(KERN_ERR "PlanB: Bad irq number (%d) "
@@ -2160,7 +2158,7 @@ static int find_planb(void)
 	if (!machine_is(powermac))
 		return 0;
 
-	planb_devices = find_devices("planb");
+	planb_devices = of_find_node_by_name(NULL, "planb");
 	if (planb_devices == 0) {
 		planb_num=0;
 		printk(KERN_WARNING "PlanB: no device found!\n");
@@ -2175,12 +2173,14 @@ static int find_planb(void)
 	if (planb_devices->n_addrs != 1) {
 		printk (KERN_WARNING "PlanB: expecting 1 address for planb "
 			"(got %d)", planb_devices->n_addrs);
+		of_node_put(planb_devices);
 		return 0;
 	}
 
 	if (planb_devices->n_intrs == 0) {
 		printk(KERN_WARNING "PlanB: no intrs for device %s\n",
 		       planb_devices->full_name);
+		of_node_put(planb_devices);
 		return 0;
 	} else {
 		irq = planb_devices->intrs[0].line;
@@ -2202,12 +2202,13 @@ static int find_planb(void)
 	confreg = planb_devices->addrs[0].space & 0xff;
 	old_base = planb_devices->addrs[0].address;
 	new_base = 0xf1000000;
+	of_node_put(planb_devices);
 
 	DEBUG("PlanB: Found on bus %d, dev %d, func %d, "
 		"membase 0x%x (base reg. 0x%x)\n",
 		bus, PCI_SLOT(dev_fn), PCI_FUNC(dev_fn), old_base, confreg);
 
-	pdev = pci_find_slot (bus, dev_fn);
+	pdev = pci_get_bus_and_slot(bus, dev_fn);
 	if (!pdev) {
 		printk(KERN_ERR "planb: cannot find slot\n");
 		goto err_out;
@@ -2237,6 +2238,7 @@ static int find_planb(void)
 	pb->planb_base = planb_regs;
 	pb->planb_base_phys = (struct planb_registers *)new_base;
 	pb->irq	= irq;
+	pb->dev = pdev;
 
 	return planb_num;
 
@@ -2244,6 +2246,7 @@ err_out_disable:
 	pci_disable_device(pdev);
 err_out:
 	/* FIXME handle error */   /* comment moved from pci_find_slot, above */
+	pci_dev_put(pdev);
 	return 0;
 }
 
@@ -2270,6 +2273,8 @@ static void release_planb(void)
 
 		printk(KERN_INFO "PlanB: unregistering with v4l\n");
 		video_unregister_device(&pb->video_dev);
+
+		pci_dev_put(pb->dev);
 
 		/* note that iounmap() does nothing on the PPC right now */
 		iounmap ((void *)pb->planb_base);

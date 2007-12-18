@@ -855,13 +855,12 @@ static void bigmac_rx(struct bigmac *bp)
 				drops++;
 				goto drop_it;
 			}
-			copy_skb->dev = bp->dev;
 			skb_reserve(copy_skb, 2);
 			skb_put(copy_skb, len);
 			sbus_dma_sync_single_for_cpu(bp->bigmac_sdev,
 						     this->rx_addr, len,
 						     SBUS_DMA_FROMDEVICE);
-			eth_copy_and_sum(copy_skb, (unsigned char *)skb->data, len, 0);
+			skb_copy_to_linear_data(copy_skb, (unsigned char *)skb->data, len);
 			sbus_dma_sync_single_for_device(bp->bigmac_sdev,
 							this->rx_addr, len,
 							SBUS_DMA_FROMDEVICE);
@@ -1083,12 +1082,12 @@ static int __init bigmac_ether_init(struct sbus_dev *qec_sdev)
 	struct bigmac *bp;
 	u8 bsizes, bsizes_more;
 	int i;
+	DECLARE_MAC_BUF(mac);
 
 	/* Get a new device struct for this interface. */
 	dev = alloc_etherdev(sizeof(struct bigmac));
 	if (!dev)
 		return -ENOMEM;
-	SET_MODULE_OWNER(dev);
 
 	if (version_printed++ == 0)
 		printk(KERN_INFO "%s", version);
@@ -1228,11 +1227,8 @@ static int __init bigmac_ether_init(struct sbus_dev *qec_sdev)
 
 	dev_set_drvdata(&bp->bigmac_sdev->ofdev.dev, bp);
 
-	printk(KERN_INFO "%s: BigMAC 100baseT Ethernet ", dev->name);
-	for (i = 0; i < 6; i++)
-		printk("%2.2x%c", dev->dev_addr[i],
-		       i == 5 ? ' ' : ':');
-	printk("\n");
+	printk(KERN_INFO "%s: BigMAC 100baseT Ethernet %s\n",
+	       dev->name, print_mac(mac, dev->dev_addr));
 
 	return 0;
 

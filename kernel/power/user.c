@@ -33,25 +33,29 @@
 static struct snapshot_data {
 	struct snapshot_handle handle;
 	int swap;
-	struct bitmap_page *bitmap;
 	int mode;
 	char frozen;
 	char ready;
 	char platform_suspend;
 } snapshot_state;
 
-static atomic_t device_available = ATOMIC_INIT(1);
+atomic_t snapshot_device_available = ATOMIC_INIT(1);
 
 static int snapshot_open(struct inode *inode, struct file *filp)
 {
 	struct snapshot_data *data;
 
-	if (!atomic_add_unless(&device_available, -1, 0))
+	if (!atomic_add_unless(&snapshot_device_available, -1, 0))
 		return -EBUSY;
 
-	if ((filp->f_flags & O_ACCMODE) == O_RDWR)
+	if ((filp->f_flags & O_ACCMODE) == O_RDWR) {
+		atomic_inc(&snapshot_device_available);
 		return -ENOSYS;
-
+	}
+	if(create_basic_memory_bitmaps()) {
+		atomic_inc(&snapshot_device_available);
+		return -ENOMEM;
+	}
 	nonseekable_open(inode, filp);
 	data = &snapshot_state;
 	filp->private_data = data;
@@ -64,7 +68,6 @@ static int snapshot_open(struct inode *inode, struct file *filp)
 		data->swap = -1;
 		data->mode = O_WRONLY;
 	}
-	data->bitmap = NULL;
 	data->frozen = 0;
 	data->ready = 0;
 	data->platform_suspend = 0;
@@ -77,16 +80,15 @@ static int snapshot_release(struct inode *inode, struct file *filp)
 	struct snapshot_data *data;
 
 	swsusp_free();
+	free_basic_memory_bitmaps();
 	data = filp->private_data;
-	free_all_swap_pages(data->swap, data->bitmap);
-	free_bitmap(data->bitmap);
+	free_all_swap_pages(data->swap);
 	if (data->frozen) {
 		mutex_lock(&pm_mutex);
 		thaw_processes();
-		enable_nonboot_cpus();
 		mutex_unlock(&pm_mutex);
 	}
-	atomic_inc(&device_available);
+	atomic_inc(&snapshot_device_available);
 	return 0;
 }
 
@@ -97,6 +99,8 @@ static ssize_t snapshot_read(struct file *filp, char __user *buf,
 	ssize_t res;
 
 	data = filp->private_data;
+	if (!data->ready)
+		return -ENODATA;
 	res = snapshot_read_next(&data->handle, count);
 	if (res > 0) {
 		if (copy_to_user(buf, data_of(data->handle), res))
@@ -124,92 +128,6 @@ static ssize_t snapshot_write(struct file *filp, const char __user *buf,
 	return res;
 }
 
-static inline int platform_prepare(void)
-{
-	int error = 0;
-
-	if (pm_ops && pm_ops->prepare)
-		error = pm_ops->prepare(PM_SUSPEND_DISK);
-
-	return error;
-}
-
-static inline void platform_finish(void)
-{
-	if (pm_ops && pm_ops->finish)
-		pm_ops->finish(PM_SUSPEND_DISK);
-}
-
-static inline int snapshot_suspend(int platform_suspend)
-{
-	int error;
-
-	mutex_lock(&pm_mutex);
-	/* Free memory before shutting down devices. */
-	error = swsusp_shrink_memory();
-	if (error)
-		goto Finish;
-
-	if (platform_suspend) {
-		error = platform_prepare();
-		if (error)
-			goto Finish;
-	}
-	suspend_console();
-	error = device_suspend(PMSG_FREEZE);
-	if (error)
-		goto Resume_devices;
-
-	error = disable_nonboot_cpus();
-	if (!error) {
-		in_suspend = 1;
-		error = swsusp_suspend();
-	}
-	enable_nonboot_cpus();
- Resume_devices:
-	if (platform_suspend)
-		platform_finish();
-
-	device_resume();
-	resume_console();
- Finish:
-	mutex_unlock(&pm_mutex);
-	return error;
-}
-
-static inline int snapshot_restore(int platform_suspend)
-{
-	int error;
-
-	mutex_lock(&pm_mutex);
-	pm_prepare_console();
-	if (platform_suspend) {
-		error = platform_prepare();
-		if (error)
-			goto Finish;
-	}
-	suspend_console();
-	error = device_suspend(PMSG_PRETHAW);
-	if (error)
-		goto Resume_devices;
-
-	error = disable_nonboot_cpus();
-	if (!error)
-		error = swsusp_resume();
-
-	enable_nonboot_cpus();
- Resume_devices:
-	if (platform_suspend)
-		platform_finish();
-
-	device_resume();
-	resume_console();
- Finish:
-	pm_restore_console();
-	mutex_unlock(&pm_mutex);
-	return error;
-}
-
 static int snapshot_ioctl(struct inode *inode, struct file *filp,
                           unsigned int cmd, unsigned long arg)
 {
@@ -233,20 +151,29 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 		if (data->frozen)
 			break;
 		mutex_lock(&pm_mutex);
-		if (freeze_processes()) {
-			thaw_processes();
-			error = -EBUSY;
+		error = pm_notifier_call_chain(PM_HIBERNATION_PREPARE);
+		if (!error) {
+			printk("Syncing filesystems ... ");
+			sys_sync();
+			printk("done.\n");
+
+			error = freeze_processes();
+			if (error)
+				thaw_processes();
 		}
+		if (error)
+			pm_notifier_call_chain(PM_POST_HIBERNATION);
 		mutex_unlock(&pm_mutex);
 		if (!error)
 			data->frozen = 1;
 		break;
 
 	case SNAPSHOT_UNFREEZE:
-		if (!data->frozen)
+		if (!data->frozen || data->ready)
 			break;
 		mutex_lock(&pm_mutex);
 		thaw_processes();
+		pm_notifier_call_chain(PM_POST_HIBERNATION);
 		mutex_unlock(&pm_mutex);
 		data->frozen = 0;
 		break;
@@ -256,7 +183,7 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 			error = -EPERM;
 			break;
 		}
-		error = snapshot_suspend(data->platform_suspend);
+		error = hibernation_snapshot(data->platform_suspend);
 		if (!error)
 			error = put_user(in_suspend, (unsigned int __user *)arg);
 		if (!error)
@@ -270,7 +197,7 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 			error = -EPERM;
 			break;
 		}
-		error = snapshot_restore(data->platform_suspend);
+		error = hibernation_restore(data->platform_suspend);
 		break;
 
 	case SNAPSHOT_FREE:
@@ -294,14 +221,7 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 			error = -ENODEV;
 			break;
 		}
-		if (!data->bitmap) {
-			data->bitmap = alloc_bitmap(count_swap_pages(data->swap, 0));
-			if (!data->bitmap) {
-				error = -ENOMEM;
-				break;
-			}
-		}
-		offset = alloc_swapdev_block(data->swap, data->bitmap);
+		offset = alloc_swapdev_block(data->swap);
 		if (offset) {
 			offset <<= PAGE_SHIFT;
 			error = put_user(offset, (sector_t __user *)arg);
@@ -315,13 +235,11 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 			error = -ENODEV;
 			break;
 		}
-		free_all_swap_pages(data->swap, data->bitmap);
-		free_bitmap(data->bitmap);
-		data->bitmap = NULL;
+		free_all_swap_pages(data->swap);
 		break;
 
 	case SNAPSHOT_SET_SWAP_FILE:
-		if (!data->bitmap) {
+		if (!swsusp_swap_in_use()) {
 			/*
 			 * User space encodes device types as two-byte values,
 			 * so we need to recode them
@@ -341,47 +259,19 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 		break;
 
 	case SNAPSHOT_S2RAM:
-		if (!pm_ops) {
-			error = -ENOSYS;
-			break;
-		}
-
 		if (!data->frozen) {
 			error = -EPERM;
 			break;
 		}
-
 		if (!mutex_trylock(&pm_mutex)) {
 			error = -EBUSY;
 			break;
 		}
-
-		if (pm_ops->prepare) {
-			error = pm_ops->prepare(PM_SUSPEND_MEM);
-			if (error)
-				goto OutS3;
-		}
-
-		/* Put devices to sleep */
-		suspend_console();
-		error = device_suspend(PMSG_SUSPEND);
-		if (error) {
-			printk(KERN_ERR "Failed to suspend some devices.\n");
-		} else {
-			error = disable_nonboot_cpus();
-			if (!error) {
-				/* Enter S3, system is already frozen */
-				suspend_enter(PM_SUSPEND_MEM);
-				enable_nonboot_cpus();
-			}
-			/* Wake up devices */
-			device_resume();
-		}
-		resume_console();
-		if (pm_ops->finish)
-			pm_ops->finish(PM_SUSPEND_MEM);
-
- OutS3:
+		/*
+		 * Tasks are frozen and the notifiers have been called with
+		 * PM_HIBERNATION_PREPARE
+		 */
+		error = suspend_devices_and_enter(PM_SUSPEND_MEM);
 		mutex_unlock(&pm_mutex);
 		break;
 
@@ -391,20 +281,14 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 		switch (arg) {
 
 		case PMOPS_PREPARE:
-			if (pm_ops && pm_ops->enter) {
-				data->platform_suspend = 1;
-				error = 0;
-			} else {
-				error = -ENOSYS;
-			}
+			data->platform_suspend = 1;
+			error = 0;
 			break;
 
 		case PMOPS_ENTER:
-			if (data->platform_suspend) {
-				kernel_shutdown_prepare(SYSTEM_SUSPEND_DISK);
-				error = pm_ops->enter(PM_SUSPEND_DISK);
-				error = 0;
-			}
+			if (data->platform_suspend)
+				error = hibernation_platform_enter();
+
 			break;
 
 		case PMOPS_FINISH:
@@ -420,7 +304,7 @@ static int snapshot_ioctl(struct inode *inode, struct file *filp,
 		break;
 
 	case SNAPSHOT_SET_SWAP_AREA:
-		if (data->bitmap) {
+		if (swsusp_swap_in_use()) {
 			error = -EPERM;
 		} else {
 			struct resume_swap_area swap_area;

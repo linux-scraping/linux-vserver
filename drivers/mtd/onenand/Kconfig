@@ -2,20 +2,18 @@
 # linux/drivers/mtd/onenand/Kconfig
 #
 
-menu "OneNAND Flash Device Drivers"
-	depends on MTD != n
-
-config MTD_ONENAND
+menuconfig MTD_ONENAND
 	tristate "OneNAND Device Support"
 	depends on MTD
 	help
 	  This enables support for accessing all type of OneNAND flash
 	  devices. For further information see
-	  <http://www.samsung.com/Products/Semiconductor/Flash/OneNAND_TM/index.htm>.
+	  <http://www.samsung.com/Products/Semiconductor/OneNAND/index.htm>
+
+if MTD_ONENAND
 
 config MTD_ONENAND_VERIFY_WRITE
 	bool "Verify OneNAND page writes"
-	depends on MTD_ONENAND
 	help
 	  This adds an extra check when data is written to the flash. The
 	  OneNAND flash device internally checks only bits transitioning
@@ -25,13 +23,12 @@ config MTD_ONENAND_VERIFY_WRITE
 
 config MTD_ONENAND_GENERIC
 	tristate "OneNAND Flash device via platform device driver"
-	depends on MTD_ONENAND && ARM
+	depends on ARM
 	help
 	  Support for OneNAND flash via platform device driver.
 
 config MTD_ONENAND_OTP
 	bool "OneNAND OTP Support"
-	depends on MTD_ONENAND
 	help
 	  One Block of the NAND Flash Array memory is reserved as
 	  a One-Time Programmable Block memory area.
@@ -43,4 +40,27 @@ config MTD_ONENAND_OTP
 
 	  OTP block is fully-guaranteed to be a valid block.
 
-endmenu
+config MTD_ONENAND_2X_PROGRAM
+	bool "OneNAND 2X program support"
+	help
+	  The 2X Program is an extension of Program Operation.
+	  Since the device is equipped with two DataRAMs, and two-plane NAND
+	  Flash memory array, these two component enables simultaneous program
+	  of 4KiB. Plane1 has only even blocks such as block0, block2, block4
+	  while Plane2 has only odd blocks such as block1, block3, block5.
+	  So MTD regards it as 4KiB page size and 256KiB block size
+
+	  Now the following chips support it. (KFXXX16Q2M)
+	    Demux: KFG2G16Q2M, KFH4G16Q2M, KFW8G16Q2M,
+	    Mux:   KFM2G16Q2M, KFN4G16Q2M,
+
+	  And more recent chips
+
+config MTD_ONENAND_SIM
+	tristate "OneNAND simulator support"
+	depends on MTD_PARTITIONS
+	help
+	  The simulator may simulate various OneNAND flash chips for the
+	  OneNAND MTD layer.
+
+endif # MTD_ONENAND

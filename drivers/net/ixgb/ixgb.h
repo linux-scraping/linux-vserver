@@ -111,9 +111,6 @@ struct ixgb_adapter;
 /* How many Rx Buffers do we bundle into one write to the hardware ? */
 #define IXGB_RX_BUFFER_WRITE	8	/* Must be power of 2 */
 
-/* only works for sizes that are powers of 2 */
-#define IXGB_ROUNDUP(i, size) ((i) = (((i) + (size) - 1) & ~((size) - 1)))
-
 /* wrapper around a pointer to a socket buffer,
  * so a DMA handle can be stored along with the buffer */
 struct ixgb_buffer {
@@ -187,6 +184,7 @@ struct ixgb_adapter {
 	boolean_t rx_csum;
 
 	/* OS defined structs */
+	struct napi_struct napi;
 	struct net_device *netdev;
 	struct pci_dev *pdev;
 	struct net_device_stats net_stats;
@@ -196,8 +194,13 @@ struct ixgb_adapter {
 	u16 msg_enable;
 	struct ixgb_hw_stats stats;
 	uint32_t alloc_rx_buff_failed;
-#ifdef CONFIG_PCI_MSI
 	boolean_t have_msi;
-#endif
 };
+
+/* Exported from other modules */
+extern void ixgb_check_options(struct ixgb_adapter *adapter);
+extern void ixgb_set_ethtool_ops(struct net_device *netdev);
+extern char ixgb_driver_name[];
+extern const char ixgb_driver_version[];
+
 #endif /* _IXGB_H_ */

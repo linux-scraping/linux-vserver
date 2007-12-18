@@ -13,6 +13,7 @@
  */
 
 #include <linux/dccp.h>
+#include <linux/ktime.h>
 #include <net/snmp.h>
 #include <net/sock.h>
 #include <net/tcp.h>
@@ -31,13 +32,9 @@
 					      __stringify(cond));          \
 			     } while (0)
 
-#ifdef MODULE
 #define DCCP_PRINTK(enable, fmt, args...)	do { if (enable)	     \
 							printk(fmt, ##args); \
 						} while(0)
-#else
-#define DCCP_PRINTK(enable, fmt, args...)	printk(fmt, ##args)
-#endif
 #define DCCP_PR_DEBUG(enable, fmt, a...)	DCCP_PRINTK(enable, KERN_DEBUG \
 						  "%s: " fmt, __FUNCTION__, ##a)
 
@@ -75,10 +72,14 @@ extern void dccp_time_wait(struct sock *sk, int state, int timeo);
 /* RFC 1122, 4.2.3.1 initial RTO value */
 #define DCCP_TIMEOUT_INIT ((unsigned)(3 * HZ))
 
+#define DCCP_RTO_MAX ((unsigned)(120 * HZ)) /* FIXME: using TCP value */
+
+/* bounds for sampled RTT values from packet exchanges (in usec) */
+#define DCCP_SANE_RTT_MIN	100
+#define DCCP_SANE_RTT_MAX	(4 * USEC_PER_SEC)
+
 /* Maximal interval between probes for local resources.  */
 #define DCCP_RESOURCE_PROBE_INTERVAL ((unsigned)(HZ / 2U))
-
-#define DCCP_RTO_MAX ((unsigned)(120 * HZ)) /* FIXME: using TCP value */
 
 /* sysctl variables for DCCP */
 extern int  sysctl_dccp_request_retries;
@@ -91,18 +92,45 @@ extern int  sysctl_dccp_feat_ack_ratio;
 extern int  sysctl_dccp_feat_send_ack_vector;
 extern int  sysctl_dccp_feat_send_ndp_count;
 extern int  sysctl_dccp_tx_qlen;
+extern int  sysctl_dccp_sync_ratelimit;
+
+/*
+ *	48-bit sequence number arithmetic (signed and unsigned)
+ */
+#define INT48_MIN	  0x800000000000LL		/* 2^47	    */
+#define UINT48_MAX	  0xFFFFFFFFFFFFLL		/* 2^48 - 1 */
+#define COMPLEMENT48(x)	 (0x1000000000000LL - (x))	/* 2^48 - x */
+#define TO_SIGNED48(x)	 (((x) < INT48_MIN)? (x) : -COMPLEMENT48( (x)))
+#define TO_UNSIGNED48(x) (((x) >= 0)?	     (x) :  COMPLEMENT48(-(x)))
+#define ADD48(a, b)	 (((a) + (b)) & UINT48_MAX)
+#define SUB48(a, b)	 ADD48((a), COMPLEMENT48(b))
+
+static inline void dccp_set_seqno(u64 *seqno, u64 value)
+{
+	*seqno = value & UINT48_MAX;
+}
+
+static inline void dccp_inc_seqno(u64 *seqno)
+{
+	*seqno = ADD48(*seqno, 1);
+}
+
+/* signed mod-2^48 distance: pos. if seqno1 < seqno2, neg. if seqno1 > seqno2 */
+static inline s64 dccp_delta_seqno(const u64 seqno1, const u64 seqno2)
+{
+	u64 delta = SUB48(seqno2, seqno1);
+
+	return TO_SIGNED48(delta);
+}
 
 /* is seq1 < seq2 ? */
 static inline int before48(const u64 seq1, const u64 seq2)
 {
-	return (s64)((seq1 << 16) - (seq2 << 16)) < 0;
+	return (s64)((seq2 << 16) - (seq1 << 16)) > 0;
 }
 
 /* is seq1 > seq2 ? */
-static inline int after48(const u64 seq1, const u64 seq2)
-{
-	return (s64)((seq2 << 16) - (seq1 << 16)) < 0;
-}
+#define after48(seq1, seq2)	before48(seq2, seq1)
 
 /* is seq2 <= seq1 <= seq3 ? */
 static inline int between48(const u64 seq1, const u64 seq2, const u64 seq3)
@@ -118,9 +146,7 @@ static inline u64 max48(const u64 seq1, const u64 seq2)
 /* is seq1 next seqno after seq2 */
 static inline int follows48(const u64 seq1, const u64 seq2)
 {
-	int diff = (seq1 & 0xFFFF) - (seq2 & 0xFFFF);
-
-	return diff==1;
+	return dccp_delta_seqno(seq2, seq1) == 1;
 }
 
 enum {
@@ -160,7 +186,7 @@ DECLARE_SNMP_STAT(struct dccp_mib, dccp_statistics);
 /*
  * 	Checksumming routines
  */
-static inline int dccp_csum_coverage(const struct sk_buff *skb)
+static inline unsigned int dccp_csum_coverage(const struct sk_buff *skb)
 {
 	const struct dccp_hdr* dh = dccp_hdr(skb);
 
@@ -171,7 +197,7 @@ static inline int dccp_csum_coverage(const struct sk_buff *skb)
 
 static inline void dccp_csum_outgoing(struct sk_buff *skb)
 {
-	int cov = dccp_csum_coverage(skb);
+	unsigned int cov = dccp_csum_coverage(skb);
 
 	if (cov >= skb->len)
 		dccp_hdr(skb)->dccph_cscov = 0;
@@ -184,7 +210,6 @@ extern void dccp_v4_send_check(struct sock *sk, int len, struct sk_buff *skb);
 extern int  dccp_retransmit_skb(struct sock *sk, struct sk_buff *skb);
 
 extern void dccp_send_ack(struct sock *sk);
-extern void dccp_send_delayed_ack(struct sock *sk);
 extern void dccp_reqsk_send_ack(struct sk_buff *sk, struct request_sock *rsk);
 
 extern void dccp_send_sync(struct sock *sk, const u64 seq,
@@ -269,9 +294,12 @@ extern unsigned int dccp_poll(struct file *file, struct socket *sock,
 extern int	   dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr,
 				   int addr_len);
 
+extern struct sk_buff *dccp_ctl_make_reset(struct socket *ctl,
+					   struct sk_buff *skb);
 extern int	   dccp_send_reset(struct sock *sk, enum dccp_reset_codes code);
 extern void	   dccp_send_close(struct sock *sk, const int active);
 extern int	   dccp_invalid_packet(struct sk_buff *skb);
+extern u32	   dccp_sample_rtt(struct sock *sk, long delta);
 
 static inline int dccp_bad_service_code(const struct sock *sk,
 					const __be32 service)
@@ -283,10 +311,22 @@ static inline int dccp_bad_service_code(const struct sock *sk,
 	return !dccp_list_has_service(dp->dccps_service_list, service);
 }
 
+/**
+ * dccp_skb_cb  -  DCCP per-packet control information
+ * @dccpd_type: one of %dccp_pkt_type (or unknown)
+ * @dccpd_ccval: CCVal field (5.1), see e.g. RFC 4342, 8.1
+ * @dccpd_reset_code: one of %dccp_reset_codes
+ * @dccpd_reset_data: Data1..3 fields (depend on @dccpd_reset_code)
+ * @dccpd_opt_len: total length of all options (5.8) in the packet
+ * @dccpd_seq: sequence number
+ * @dccpd_ack_seq: acknowledgment number subheader field value
+ * This is used for transmission as well as for reception.
+ */
 struct dccp_skb_cb {
 	__u8  dccpd_type:4;
 	__u8  dccpd_ccval:4;
-	__u8  dccpd_reset_code;
+	__u8  dccpd_reset_code,
+	      dccpd_reset_data[3];
 	__u16 dccpd_opt_len;
 	__u64 dccpd_seq;
 	__u64 dccpd_ack_seq;
@@ -313,26 +353,7 @@ static inline int dccp_packet_without_ack(const struct sk_buff *skb)
 	return type == DCCP_PKT_DATA || type == DCCP_PKT_REQUEST;
 }
 
-#define DCCP_MAX_SEQNO ((((u64)1) << 48) - 1)
-#define DCCP_PKT_WITHOUT_ACK_SEQ (DCCP_MAX_SEQNO << 2)
-
-static inline void dccp_set_seqno(u64 *seqno, u64 value)
-{
-	if (value > DCCP_MAX_SEQNO)
-		value -= DCCP_MAX_SEQNO + 1;
-	*seqno = value;
-}
-
-static inline u64 dccp_delta_seqno(u64 seqno1, u64 seqno2)
-{
-	return ((seqno2 << 16) - (seqno1 << 16)) >> 16;
-}
-
-static inline void dccp_inc_seqno(u64 *seqno)
-{
-	if (++*seqno > DCCP_MAX_SEQNO)
-		*seqno = 0;
-}
+#define DCCP_PKT_WITHOUT_ACK_SEQ (UINT48_MAX << 2)
 
 static inline void dccp_hdr_set_seq(struct dccp_hdr *dh, const u64 gss)
 {
@@ -388,52 +409,13 @@ extern int dccp_insert_options(struct sock *sk, struct sk_buff *skb);
 extern int dccp_insert_option_elapsed_time(struct sock *sk,
 					    struct sk_buff *skb,
 					    u32 elapsed_time);
+extern u32 dccp_timestamp(void);
+extern void dccp_timestamping_init(void);
 extern int dccp_insert_option_timestamp(struct sock *sk,
 					 struct sk_buff *skb);
 extern int dccp_insert_option(struct sock *sk, struct sk_buff *skb,
 			       unsigned char option,
 			       const void *value, unsigned char len);
-
-extern void dccp_timestamp(const struct sock *sk, struct timeval *tv);
-
-static inline suseconds_t timeval_usecs(const struct timeval *tv)
-{
-	return tv->tv_sec * USEC_PER_SEC + tv->tv_usec;
-}
-
-static inline suseconds_t timeval_delta(const struct timeval *large,
-					const struct timeval *small)
-{
-	time_t	    secs  = large->tv_sec  - small->tv_sec;
-	suseconds_t usecs = large->tv_usec - small->tv_usec;
-
-	if (usecs < 0) {
-		secs--;
-		usecs += USEC_PER_SEC;
-	}
-	return secs * USEC_PER_SEC + usecs;
-}
-
-static inline void timeval_add_usecs(struct timeval *tv,
-				     const suseconds_t usecs)
-{
-	tv->tv_usec += usecs;
-	while (tv->tv_usec >= USEC_PER_SEC) {
-		tv->tv_sec++;
-		tv->tv_usec -= USEC_PER_SEC;
-	}
-}
-
-static inline void timeval_sub_usecs(struct timeval *tv,
-				     const suseconds_t usecs)
-{
-	tv->tv_usec -= usecs;
-	while (tv->tv_usec < 0) {
-		tv->tv_sec--;
-		tv->tv_usec += USEC_PER_SEC;
-	}
-	DCCP_BUG_ON(tv->tv_sec < 0);
-}
 
 #ifdef CONFIG_SYSCTL
 extern int dccp_sysctl_init(void);

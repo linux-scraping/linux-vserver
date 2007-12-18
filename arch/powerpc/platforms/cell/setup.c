@@ -52,9 +52,9 @@
 #include <asm/udbg.h>
 #include <asm/mpic.h>
 #include <asm/of_platform.h>
+#include <asm/cell-regs.h>
 
 #include "interrupt.h"
-#include "cbe_regs.h"
 #include "pervasive.h"
 #include "ras.h"
 
@@ -71,7 +71,7 @@ static void cell_show_cpuinfo(struct seq_file *m)
 
 	root = of_find_node_by_path("/");
 	if (root)
-		model = get_property(root, "model", NULL);
+		model = of_get_property(root, "model", NULL);
 	seq_printf(m, "machine\t\t: CHRP %s\n", model);
 	of_node_put(root);
 }
@@ -83,12 +83,22 @@ static void cell_progress(char *s, unsigned short hex)
 
 static int __init cell_publish_devices(void)
 {
+	int node;
+
 	if (!machine_is(cell))
 		return 0;
 
 	/* Publish OF platform devices for southbridge IOs */
 	of_platform_bus_probe(NULL, NULL, NULL);
 
+	/* There is no device for the MIC memory controller, thus we create
+	 * a platform device for it to attach the EDAC driver to.
+	 */
+	for_each_online_node(node) {
+		if (cbe_get_cpu_mic_tm_regs(cbe_node_to_cpu(node)) == NULL)
+			continue;
+		platform_device_register_simple("cbe-mic", node, NULL, 0);
+	}
 	return 0;
 }
 device_initcall(cell_publish_devices);
@@ -112,7 +122,7 @@ static void __init mpic_init_IRQ(void)
 
 	for (dn = NULL;
 	     (dn = of_find_node_by_name(dn, "interrupt-controller"));) {
-		if (!device_is_compatible(dn, "CBEA,platform-open-pic"))
+		if (!of_device_is_compatible(dn, "CBEA,platform-open-pic"))
 			continue;
 
 		/* The MPIC driver will get everything it needs from the
@@ -161,11 +171,6 @@ static void __init cell_setup_arch(void)
 	/* init to some ~sane value until calibrate_delay() runs */
 	loops_per_jiffy = 50000000;
 
-	if (ROOT_DEV == 0) {
-		printk("No ramdisk, default root is /dev/hda2\n");
-		ROOT_DEV = Root_HDA2;
-	}
-
 	/* Find and initialize PCI host bridges */
 	init_pci_config_tokens();
 	find_and_init_phbs();
@@ -190,15 +195,6 @@ static int __init cell_probe(void)
 	return 1;
 }
 
-/*
- * Cell has no legacy IO; anything calling this function has to
- * fail or bad things will happen
- */
-static int cell_check_legacy_ioport(unsigned int baseport)
-{
-	return -ENODEV;
-}
-
 define_machine(cell) {
 	.name			= "Cell",
 	.probe			= cell_probe,
@@ -211,7 +207,6 @@ define_machine(cell) {
 	.get_rtc_time		= rtas_get_rtc_time,
 	.set_rtc_time		= rtas_set_rtc_time,
 	.calibrate_decr		= generic_calibrate_decr,
-	.check_legacy_ioport	= cell_check_legacy_ioport,
 	.progress		= cell_progress,
 	.init_IRQ       	= cell_init_irq,
 	.pci_setup_phb		= rtas_setup_phb,

@@ -1,3 +1,5 @@
+#ifndef _ASM_POWERPC_PGTABLE_4K_H
+#define _ASM_POWERPC_PGTABLE_4K_H
 /*
  * Entries per page directory level.  The PTE level must use a 64b record
  * for each page table entry.  The PMD and PGD level use a 32b record for
@@ -8,10 +10,12 @@
 #define PUD_INDEX_SIZE  7
 #define PGD_INDEX_SIZE  9
 
+#ifndef __ASSEMBLY__
 #define PTE_TABLE_SIZE	(sizeof(pte_t) << PTE_INDEX_SIZE)
 #define PMD_TABLE_SIZE	(sizeof(pmd_t) << PMD_INDEX_SIZE)
 #define PUD_TABLE_SIZE	(sizeof(pud_t) << PUD_INDEX_SIZE)
 #define PGD_TABLE_SIZE	(sizeof(pgd_t) << PGD_INDEX_SIZE)
+#endif	/* __ASSEMBLY__ */
 
 #define PTRS_PER_PTE	(1 << PTE_INDEX_SIZE)
 #define PTRS_PER_PMD	(1 << PMD_INDEX_SIZE)
@@ -78,7 +82,11 @@
 
 #define pte_iterate_hashed_end() } while(0)
 
-#define pte_pagesize_index(pte)	MMU_PAGE_4K
+#ifdef CONFIG_PPC_HAS_HASH_64K
+#define pte_pagesize_index(mm, addr, pte)	get_slice_psize(mm, addr)
+#else
+#define pte_pagesize_index(mm, addr, pte)	MMU_PAGE_4K
+#endif
 
 /*
  * 4-level page tables related bits
@@ -97,3 +105,7 @@
 
 #define pud_ERROR(e) \
 	printk("%s:%d: bad pud %08lx.\n", __FILE__, __LINE__, pud_val(e))
+
+#define remap_4k_pfn(vma, addr, pfn, prot)	\
+	remap_pfn_range((vma), (addr), (pfn), PAGE_SIZE, (prot))
+#endif /* _ASM_POWERPC_PGTABLE_4K_H */

@@ -32,9 +32,9 @@ static struct {
 } purge;
 
 struct ia64_ctx ia64_ctx = {
-	.lock =		SPIN_LOCK_UNLOCKED,
-	.next =		1,
-	.max_ctx =	~0U
+	.lock =	__SPIN_LOCK_UNLOCKED(ia64_ctx.lock),
+	.next =	1,
+	.max_ctx = ~0U
 };
 
 DEFINE_PER_CPU(u8, ia64_need_tlb_flush);
@@ -175,7 +175,7 @@ EXPORT_SYMBOL(flush_tlb_range);
 void __devinit
 ia64_tlb_init (void)
 {
-	ia64_ptce_info_t ptce_info;
+	ia64_ptce_info_t uninitialized_var(ptce_info); /* GCC be quiet */
 	unsigned long tr_pgbits;
 	long status;
 

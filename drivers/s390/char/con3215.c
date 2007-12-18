@@ -667,6 +667,9 @@ raw3215_probe (struct ccw_device *cdev)
 	struct raw3215_info *raw;
 	int line;
 
+	/* Console is special. */
+	if (raw3215[0] && (cdev->dev.driver_data == raw3215[0]))
+		return 0;
 	raw = kmalloc(sizeof(struct raw3215_info) +
 		      RAW3215_INBUF_SIZE, GFP_KERNEL|GFP_DMA);
 	if (raw == NULL)
@@ -813,12 +816,6 @@ con3215_unblank(void)
 	spin_unlock_irqrestore(get_ccwdev_lock(raw->cdev), flags);
 }
 
-static int __init 
-con3215_consetup(struct console *co, char *options)
-{
-	return 0;
-}
-
 /*
  *  The console structure for the 3215 console
  */
@@ -827,7 +824,6 @@ static struct console con3215 = {
 	.write	 = con3215_write,
 	.device	 = con3215_device,
 	.unblank = con3215_unblank,
-	.setup	 = con3215_consetup,
 	.flags	 = CON_PRINTBUFFER,
 };
 

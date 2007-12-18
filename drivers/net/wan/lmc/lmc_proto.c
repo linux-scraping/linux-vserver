@@ -27,7 +27,6 @@
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/in.h>
 #include <linux/if_arp.h>
 #include <linux/netdevice.h>
@@ -112,7 +111,7 @@ void lmc_proto_attach(lmc_softc_t *sc) /*FOLD00*/
              * They set a few basics because they don't use sync_ppp
              */
             dev->flags |= IFF_POINTOPOINT;
-            dev->hard_header = NULL;
+
             dev->hard_header_len = 0;
             dev->addr_len = 0;
         }

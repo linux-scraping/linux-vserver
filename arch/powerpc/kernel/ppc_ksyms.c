@@ -12,15 +12,14 @@
 #include <linux/irq.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
-#include <linux/ide.h>
 #include <linux/bitops.h>
 
 #include <asm/page.h>
 #include <asm/semaphore.h>
 #include <asm/processor.h>
+#include <asm/cacheflush.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
-#include <asm/ide.h>
 #include <asm/atomic.h>
 #include <asm/checksum.h>
 #include <asm/pgtable.h>
@@ -67,9 +66,7 @@ EXPORT_SYMBOL(clear_pages);
 EXPORT_SYMBOL(ISA_DMA_THRESHOLD);
 EXPORT_SYMBOL(DMA_MODE_READ);
 EXPORT_SYMBOL(DMA_MODE_WRITE);
-EXPORT_SYMBOL(__div64_32);
 
-EXPORT_SYMBOL(do_signal);
 EXPORT_SYMBOL(transfer_to_handler);
 EXPORT_SYMBOL(do_IRQ);
 EXPORT_SYMBOL(machine_check_exception);
@@ -84,8 +81,6 @@ EXPORT_SYMBOL(strncpy);
 EXPORT_SYMBOL(strcat);
 EXPORT_SYMBOL(strlen);
 EXPORT_SYMBOL(strcmp);
-EXPORT_SYMBOL(strcasecmp);
-EXPORT_SYMBOL(strncasecmp);
 
 EXPORT_SYMBOL(csum_partial);
 EXPORT_SYMBOL(csum_partial_copy_generic);
@@ -100,20 +95,12 @@ EXPORT_SYMBOL(__strnlen_user);
 EXPORT_SYMBOL(copy_4K_page);
 #endif
 
-#if defined(CONFIG_PPC32) && (defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE))
-EXPORT_SYMBOL(ppc_ide_md);
-#endif
-
 #if defined(CONFIG_PCI) && defined(CONFIG_PPC32)
 EXPORT_SYMBOL(isa_io_base);
 EXPORT_SYMBOL(isa_mem_base);
 EXPORT_SYMBOL(pci_dram_offset);
 EXPORT_SYMBOL(pci_alloc_consistent);
 EXPORT_SYMBOL(pci_free_consistent);
-EXPORT_SYMBOL(pci_bus_io_base);
-EXPORT_SYMBOL(pci_bus_io_base_phys);
-EXPORT_SYMBOL(pci_bus_mem_base_phys);
-EXPORT_SYMBOL(pci_bus_to_hose);
 #endif /* CONFIG_PCI */
 
 EXPORT_SYMBOL(start_thread);
@@ -189,7 +176,7 @@ EXPORT_SYMBOL(cacheable_memcpy);
 EXPORT_SYMBOL(cpm_install_handler);
 EXPORT_SYMBOL(cpm_free_handler);
 #endif /* CONFIG_8xx */
-#if defined(CONFIG_8xx) || defined(CONFIG_40x)
+#if defined(CONFIG_8xx)
 EXPORT_SYMBOL(__res);
 #endif
 

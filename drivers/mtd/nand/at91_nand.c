@@ -82,6 +82,10 @@ static void at91_nand_disable(struct at91_nand_host *host)
 		at91_set_gpio_value(host->board->enable_pin, 1);
 }
 
+#ifdef CONFIG_MTD_PARTITIONS
+const char *part_probes[] = { "cmdlinepart", NULL };
+#endif
+
 /*
  * Probe for the NAND device.
  */
@@ -124,7 +128,10 @@ static int __init at91_nand_probe(struct platform_device *pdev)
 	nand_chip->IO_ADDR_R = host->io_base;
 	nand_chip->IO_ADDR_W = host->io_base;
 	nand_chip->cmd_ctrl = at91_nand_cmd_ctrl;
-	nand_chip->dev_ready = at91_nand_device_ready;
+
+	if (host->board->rdy_pin)
+		nand_chip->dev_ready = at91_nand_device_ready;
+
 	nand_chip->ecc.mode = NAND_ECC_SOFT;	/* enable ECC */
 	nand_chip->chip_delay = 20;		/* 20us command delay time */
 
@@ -151,6 +158,12 @@ static int __init at91_nand_probe(struct platform_device *pdev)
 #ifdef CONFIG_MTD_PARTITIONS
 	if (host->board->partition_info)
 		partitions = host->board->partition_info(mtd->size, &num_partitions);
+#ifdef CONFIG_MTD_CMDLINE_PARTS
+	else {
+		mtd->name = "at91_nand";
+		num_partitions = parse_mtd_partitions(mtd, part_probes, &partitions, 0);
+	}
+#endif
 
 	if ((!partitions) || (num_partitions == 0)) {
 		printk(KERN_ERR "at91_nand: No parititions defined, or unsupported device.\n");

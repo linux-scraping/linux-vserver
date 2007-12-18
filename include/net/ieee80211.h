@@ -6,8 +6,8 @@
  * LAN access point) driver for Intersil Prism2/2.5/3.
  *
  * Copyright (c) 2001-2002, SSH Communications Security Corp and Jouni Malinen
- * <jkmaline@cc.hut.fi>
- * Copyright (c) 2002-2003, Jouni Malinen <jkmaline@cc.hut.fi>
+ * <j@w1.fi>
+ * Copyright (c) 2002-2003, Jouni Malinen <j@w1.fi>
  *
  * Adaption to a generic IEEE 802.11 stack by James Ketrenos
  * <jketreno@linux.intel.com>
@@ -118,11 +118,6 @@ do { if (ieee80211_debug_level & (level)) \
 #else
 #define IEEE80211_DEBUG(level, fmt, args...) do {} while (0)
 #endif				/* CONFIG_IEEE80211_DEBUG */
-
-/* debug macros not dependent on CONFIG_IEEE80211_DEBUG */
-
-#define MAC_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
-#define MAC_ARG(x) ((u8*)(x))[0],((u8*)(x))[1],((u8*)(x))[2],((u8*)(x))[3],((u8*)(x))[4],((u8*)(x))[5]
 
 /* escape_essid() is intended to be used in debug (and possibly error)
  * messages. It should never be used for passing essid to user space. */
@@ -1291,6 +1286,8 @@ extern u8 ieee80211_get_channel_flags(struct ieee80211_device *ieee,
 extern const struct ieee80211_channel *ieee80211_get_channel(struct
 							     ieee80211_device
 							     *ieee, u8 channel);
+extern u32 ieee80211_channel_to_freq(struct ieee80211_device * ieee,
+				      u8 channel);
 
 /* ieee80211_wx.c */
 extern int ieee80211_wx_get_scan(struct ieee80211_device *ieee,

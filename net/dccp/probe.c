@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/kfifo.h>
 #include <linux/vmalloc.h>
+#include <net/net_namespace.h>
 
 #include "dccp.h"
 #include "ccid.h"
@@ -90,15 +91,18 @@ static int jdccp_sendmsg(struct kiocb *iocb, struct sock *sk,
 	if (port == 0 || ntohs(inet->dport) == port ||
 	    ntohs(inet->sport) == port) {
 		if (hctx)
-			printl("%d.%d.%d.%d:%u %d.%d.%d.%d:%u %d %d %d %d %d\n",
-			   NIPQUAD(inet->saddr), ntohs(inet->sport),
-			   NIPQUAD(inet->daddr), ntohs(inet->dport), size,
-			   hctx->ccid3hctx_s, hctx->ccid3hctx_rtt,
-			   hctx->ccid3hctx_p, hctx->ccid3hctx_t_ipi);
+			printl("%d.%d.%d.%d:%u %d.%d.%d.%d:%u %d %d %d %d %u "
+			       "%llu %llu %d\n",
+			       NIPQUAD(inet->saddr), ntohs(inet->sport),
+			       NIPQUAD(inet->daddr), ntohs(inet->dport), size,
+			       hctx->ccid3hctx_s, hctx->ccid3hctx_rtt,
+			       hctx->ccid3hctx_p, hctx->ccid3hctx_x_calc,
+			       hctx->ccid3hctx_x_recv >> 6,
+			       hctx->ccid3hctx_x >> 6, hctx->ccid3hctx_t_ipi);
 		else
 			printl("%d.%d.%d.%d:%u %d.%d.%d.%d:%u %d\n",
-			   NIPQUAD(inet->saddr), ntohs(inet->sport),
-			   NIPQUAD(inet->daddr), ntohs(inet->dport), size);
+			       NIPQUAD(inet->saddr), ntohs(inet->sport),
+			       NIPQUAD(inet->daddr), ntohs(inet->dport), size);
 	}
 
 	jprobe_return();
@@ -109,7 +113,7 @@ static struct jprobe dccp_send_probe = {
 	.kp	= {
 		.symbol_name = "dccp_sendmsg",
 	},
-	.entry	= JPROBE_ENTRY(jdccp_sendmsg),
+	.entry	= jdccp_sendmsg,
 };
 
 static int dccpprobe_open(struct inode *inode, struct file *file)
@@ -125,7 +129,7 @@ static ssize_t dccpprobe_read(struct file *file, char __user *buf,
 	int error = 0, cnt = 0;
 	unsigned char *tbuf;
 
-	if (!buf || len < 0)
+	if (!buf)
 		return -EINVAL;
 
 	if (len == 0)
@@ -165,7 +169,7 @@ static __init int dccpprobe_init(void)
 	if (IS_ERR(dccpw.fifo))
 		return PTR_ERR(dccpw.fifo);
 
-	if (!proc_net_fops_create(procname, S_IRUSR, &dccpprobe_fops))
+	if (!proc_net_fops_create(&init_net, procname, S_IRUSR, &dccpprobe_fops))
 		goto err0;
 
 	ret = register_jprobe(&dccp_send_probe);
@@ -175,7 +179,7 @@ static __init int dccpprobe_init(void)
 	pr_info("DCCP watch registered (port=%d)\n", port);
 	return 0;
 err1:
-	proc_net_remove(procname);
+	proc_net_remove(&init_net, procname);
 err0:
 	kfifo_free(dccpw.fifo);
 	return ret;
@@ -185,7 +189,7 @@ module_init(dccpprobe_init);
 static __exit void dccpprobe_exit(void)
 {
 	kfifo_free(dccpw.fifo);
-	proc_net_remove(procname);
+	proc_net_remove(&init_net, procname);
 	unregister_jprobe(&dccp_send_probe);
 
 }

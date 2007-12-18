@@ -211,6 +211,10 @@ struct qeth_perf_stats {
 	/* initial values when measuring starts */
 	unsigned long initial_rx_packets;
 	unsigned long initial_tx_packets;
+	/* inbound scatter gather data */
+	unsigned int sg_skbs_rx;
+	unsigned int sg_frags_rx;
+	unsigned int sg_alloc_page_rx;
 };
 
 /* Routing stuff */
@@ -288,6 +292,7 @@ qeth_is_ipa_enabled(struct qeth_ipa_info *ipa, enum qeth_ipa_funcs func)
  */
 #define IF_NAME_LEN	 	16
 #define QETH_TX_TIMEOUT		100 * HZ
+#define QETH_RCD_TIMEOUT	60 * HZ
 #define QETH_HEADER_SIZE	32
 #define MAX_PORTNO 		15
 #define QETH_FAKE_LL_LEN_ETH	ETH_HLEN
@@ -339,6 +344,9 @@ qeth_is_ipa_enabled(struct qeth_ipa_info *ipa, enum qeth_ipa_funcs func)
 #define QETH_WATERMARK_PACK_FUZZ 1
 
 #define QETH_IP_HEADER_SIZE 40
+
+/* large receive scatter gather copy break */
+#define QETH_RX_SG_CB (PAGE_SIZE >> 1)
 
 struct qeth_hdr_layer3 {
 	__u8  id;
@@ -582,6 +590,8 @@ enum qeth_channel_states {
 	CH_STATE_ACTIVATING,
 	CH_STATE_HALTED,
 	CH_STATE_STOPPED,
+	CH_STATE_RCD,
+	CH_STATE_RCD_DONE,
 };
 /**
  * card state machine
@@ -768,6 +778,7 @@ struct qeth_card_options {
 	int layer2;
 	enum qeth_large_send_types large_send;
 	int performance_stats;
+	int rx_sg_cb;
 };
 
 /*
@@ -822,9 +833,9 @@ struct qeth_card {
 	struct qeth_qdio_info qdio;
 	struct qeth_perf_stats perf_stats;
 	int use_hard_stop;
-	int (*orig_hard_header)(struct sk_buff *,struct net_device *,
-				unsigned short,void *,void *,unsigned);
+	const struct header_ops *orig_header_ops;
 	struct qeth_osn_info osn_info;
+	atomic_t force_alloc_skb;
 };
 
 struct qeth_card_list_struct {
@@ -1166,9 +1177,9 @@ qeth_ipaddr_to_string(enum qeth_prot_versions proto, const __u8 *addr,
 		      char *buf)
 {
 	if (proto == QETH_PROT_IPV4)
-		return qeth_ipaddr4_to_string(addr, buf);
+		qeth_ipaddr4_to_string(addr, buf);
 	else if (proto == QETH_PROT_IPV6)
-		return qeth_ipaddr6_to_string(addr, buf);
+		qeth_ipaddr6_to_string(addr, buf);
 }
 
 static inline int

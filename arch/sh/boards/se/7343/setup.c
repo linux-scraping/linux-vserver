@@ -33,7 +33,7 @@ static struct platform_device smc91x_device = {
 static struct resource heartbeat_resources[] = {
 	[0] = {
 		.start	= PA_LED,
-		.end	= PA_LED + 8 - 1,
+		.end	= PA_LED,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -64,7 +64,7 @@ static void __init sh7343se_setup(char **cmdline_p)
 /*
  * The Machine Vector
  */
-struct sh_machine_vector mv_7343se __initmv = {
+static struct sh_machine_vector mv_7343se __initmv = {
 	.mv_name = "SolutionEngine 7343",
 	.mv_setup = sh7343se_setup,
 	.mv_nr_irqs = 108,
@@ -92,4 +92,3 @@ struct sh_machine_vector mv_7343se __initmv = {
 	.mv_init_irq = init_7343se_IRQ,
 	.mv_irq_demux = shmse_irq_demux,
 };
-ALIAS_MV(7343se)

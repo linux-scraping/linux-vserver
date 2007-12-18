@@ -1,20 +1,9 @@
-/* This file contains all the functions required for the standalone
-   nf_conntrack module.
-
-   These are not required by the compatibility layer.
-*/
-
 /* (C) 1999-2001 Paul `Rusty' Russell
  * (C) 2002-2004 Netfilter Core Team <coreteam@netfilter.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- generalize L3 protocol dependent part.
- *
- * Derived from net/ipv4/netfilter/ip_conntrack_standalone.c
  */
 
 #include <linux/types.h>
@@ -25,6 +14,7 @@
 #include <linux/seq_file.h>
 #include <linux/percpu.h>
 #include <linux/netdevice.h>
+#include <net/net_namespace.h>
 #ifdef CONFIG_SYSCTL
 #include <linux/sysctl.h>
 #endif
@@ -35,12 +25,6 @@
 #include <net/netfilter/nf_conntrack_l4proto.h>
 #include <net/netfilter/nf_conntrack_expect.h>
 #include <net/netfilter/nf_conntrack_helper.h>
-
-#if 0
-#define DEBUGP printk
-#else
-#define DEBUGP(format, args...)
-#endif
 
 MODULE_LICENSE("GPL");
 
@@ -71,35 +55,36 @@ struct ct_iter_state {
 	unsigned int bucket;
 };
 
-static struct list_head *ct_get_first(struct seq_file *seq)
+static struct hlist_node *ct_get_first(struct seq_file *seq)
 {
 	struct ct_iter_state *st = seq->private;
 
 	for (st->bucket = 0;
 	     st->bucket < nf_conntrack_htable_size;
 	     st->bucket++) {
-		if (!list_empty(&nf_conntrack_hash[st->bucket]))
-			return nf_conntrack_hash[st->bucket].next;
+		if (!hlist_empty(&nf_conntrack_hash[st->bucket]))
+			return nf_conntrack_hash[st->bucket].first;
 	}
 	return NULL;
 }
 
-static struct list_head *ct_get_next(struct seq_file *seq, struct list_head *head)
+static struct hlist_node *ct_get_next(struct seq_file *seq,
+				      struct hlist_node *head)
 {
 	struct ct_iter_state *st = seq->private;
 
 	head = head->next;
-	while (head == &nf_conntrack_hash[st->bucket]) {
+	while (head == NULL) {
 		if (++st->bucket >= nf_conntrack_htable_size)
 			return NULL;
-		head = nf_conntrack_hash[st->bucket].next;
+		head = nf_conntrack_hash[st->bucket].first;
 	}
 	return head;
 }
 
-static struct list_head *ct_get_idx(struct seq_file *seq, loff_t pos)
+static struct hlist_node *ct_get_idx(struct seq_file *seq, loff_t pos)
 {
-	struct list_head *head = ct_get_first(seq);
+	struct hlist_node *head = ct_get_first(seq);
 
 	if (head)
 		while (pos && (head = ct_get_next(seq, head)))
@@ -197,11 +182,11 @@ static int ct_seq_show(struct seq_file *s, void *v)
 
 	if (seq_printf(s, "use=%u\n", atomic_read(&conntrack->ct_general.use)))
 		return -ENOSPC;
-	
+
 	return 0;
 }
 
-static struct seq_operations ct_seq_ops = {
+static const struct seq_operations ct_seq_ops = {
 	.start = ct_seq_start,
 	.next  = ct_seq_next,
 	.stop  = ct_seq_stop,
@@ -210,23 +195,8 @@ static struct seq_operations ct_seq_ops = {
 
 static int ct_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	struct ct_iter_state *st;
-	int ret;
-
-	st = kmalloc(sizeof(struct ct_iter_state), GFP_KERNEL);
-	if (st == NULL)
-		return -ENOMEM;
-	ret = seq_open(file, &ct_seq_ops);
-	if (ret)
-		goto out_free;
-	seq          = file->private_data;
-	seq->private = st;
-	memset(st, 0, sizeof(struct ct_iter_state));
-	return ret;
-out_free:
-	kfree(st);
-	return ret;
+	return seq_open_private(file, &ct_seq_ops,
+			sizeof(struct ct_iter_state));
 }
 
 static const struct file_operations ct_file_ops = {
@@ -305,7 +275,7 @@ static int ct_cpu_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations ct_cpu_seq_ops = {
+static const struct seq_operations ct_cpu_seq_ops = {
 	.start	= ct_cpu_seq_start,
 	.next	= ct_cpu_seq_next,
 	.stop	= ct_cpu_seq_stop,
@@ -382,7 +352,14 @@ static ctl_table nf_ct_sysctl_table[] = {
 		.extra1		= &log_invalid_proto_min,
 		.extra2		= &log_invalid_proto_max,
 	},
-
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "nf_conntrack_expect_max",
+		.data		= &nf_ct_expect_max,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
 	{ .ctl_name = 0 }
 };
 
@@ -421,7 +398,7 @@ EXPORT_SYMBOL_GPL(nf_ct_log_invalid);
 static int __init nf_conntrack_standalone_init(void)
 {
 #ifdef CONFIG_PROC_FS
-	struct proc_dir_entry *proc, *proc_exp, *proc_stat;
+	struct proc_dir_entry *proc, *proc_stat;
 #endif
 	int ret = 0;
 
@@ -430,16 +407,12 @@ static int __init nf_conntrack_standalone_init(void)
 		return ret;
 
 #ifdef CONFIG_PROC_FS
-	proc = proc_net_fops_create("nf_conntrack", 0440, &ct_file_ops);
+	proc = proc_net_fops_create(&init_net, "nf_conntrack", 0440, &ct_file_ops);
 	if (!proc) goto cleanup_init;
 
-	proc_exp = proc_net_fops_create("nf_conntrack_expect", 0440,
-					&exp_file_ops);
-	if (!proc_exp) goto cleanup_proc;
-
-	proc_stat = create_proc_entry("nf_conntrack", S_IRUGO, proc_net_stat);
+	proc_stat = create_proc_entry("nf_conntrack", S_IRUGO, init_net.proc_net_stat);
 	if (!proc_stat)
-		goto cleanup_proc_exp;
+		goto cleanup_proc;
 
 	proc_stat->proc_fops = &ct_cpu_seq_fops;
 	proc_stat->owner = THIS_MODULE;
@@ -458,11 +431,9 @@ static int __init nf_conntrack_standalone_init(void)
  cleanup_proc_stat:
 #endif
 #ifdef CONFIG_PROC_FS
-	remove_proc_entry("nf_conntrack", proc_net_stat);
- cleanup_proc_exp:
-	proc_net_remove("nf_conntrack_expect");
+	remove_proc_entry("nf_conntrack", init_net. proc_net_stat);
  cleanup_proc:
-	proc_net_remove("nf_conntrack");
+	proc_net_remove(&init_net, "nf_conntrack");
  cleanup_init:
 #endif /* CNFIG_PROC_FS */
 	nf_conntrack_cleanup();
@@ -475,9 +446,8 @@ static void __exit nf_conntrack_standalone_fini(void)
 	unregister_sysctl_table(nf_ct_sysctl_header);
 #endif
 #ifdef CONFIG_PROC_FS
-	remove_proc_entry("nf_conntrack", proc_net_stat);
-	proc_net_remove("nf_conntrack_expect");
-	proc_net_remove("nf_conntrack");
+	remove_proc_entry("nf_conntrack", init_net.proc_net_stat);
+	proc_net_remove(&init_net, "nf_conntrack");
 #endif /* CNFIG_PROC_FS */
 	nf_conntrack_cleanup();
 }

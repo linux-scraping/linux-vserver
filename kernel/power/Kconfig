@@ -33,24 +33,20 @@ config PM_DEBUG
 	bool "Power Management Debug Support"
 	depends on PM
 	---help---
-	This option enables verbose debugging support in the Power Management
-	code. This is helpful when debugging and reporting various PM bugs, 
-	like suspend support.
+	This option enables various debugging support in the Power Management
+	code. This is helpful when debugging and reporting PM bugs, like
+	suspend support.
 
-config DISABLE_CONSOLE_SUSPEND
-	bool "Keep console(s) enabled during suspend/resume (DANGEROUS)"
-	depends on PM && PM_DEBUG
+config PM_VERBOSE
+	bool "Verbose Power Management debugging"
+	depends on PM_DEBUG
 	default n
 	---help---
-	This option turns off the console suspend mechanism that prevents
-	debug messages from reaching the console during the suspend/resume
-	operations.  This may be helpful when debugging device drivers'
-	suspend/resume routines, but may itself lead to problems, for example
-	if netconsole is used.
+	This option enables verbose messages from the Power Management code.
 
 config PM_TRACE
 	bool "Suspend/resume event tracing"
-	depends on PM && PM_DEBUG && X86_32 && EXPERIMENTAL
+	depends on PM_DEBUG && X86 && PM_SLEEP && EXPERIMENTAL
 	default n
 	---help---
 	This enables some cheesy code to save the last PM event point in the
@@ -65,30 +61,72 @@ config PM_TRACE
 	CAUTION: this option will cause your machine's real-time clock to be
 	set to an invalid time after a resume.
 
-config PM_SYSFS_DEPRECATED
-	bool "Driver model /sys/devices/.../power/state files (DEPRECATED)"
-	depends on PM && SYSFS
-	default n
-	help
-	  The driver model started out with a sysfs file intended to provide
-	  a userspace hook for device power management.  This feature has never
-	  worked very well, except for limited testing purposes, and so it will
-	  be removed.   It's not clear that a generic mechanism could really
-	  handle the wide variability of device power states; any replacements
-	  are likely to be bus or driver specific.
+config PM_SLEEP_SMP
+	bool
+	depends on SUSPEND_SMP_POSSIBLE || HIBERNATION_SMP_POSSIBLE
+	depends on PM_SLEEP
+	select HOTPLUG_CPU
+	default y
 
-config SOFTWARE_SUSPEND
-	bool "Software Suspend"
-	depends on PM && SWAP && ((X86 && (!SMP || SUSPEND_SMP)) || ((FRV || PPC32) && !SMP))
+config PM_SLEEP
+	bool
+	depends on SUSPEND || HIBERNATION
+	default y
+
+config SUSPEND_UP_POSSIBLE
+	bool
+	depends on (X86 && !X86_VOYAGER) || PPC || ARM || BLACKFIN || MIPS \
+		   || SUPERH || FRV
+	depends on !SMP
+	default y
+
+config SUSPEND_SMP_POSSIBLE
+	bool
+	depends on (X86 && !X86_VOYAGER) \
+		   || (PPC && (PPC_PSERIES || PPC_PMAC)) || ARM
+	depends on SMP
+	default y
+
+config SUSPEND
+	bool "Suspend to RAM and standby"
+	depends on PM
+	depends on SUSPEND_UP_POSSIBLE || SUSPEND_SMP_POSSIBLE
+	default y
 	---help---
-	  Enable the suspend to disk (STD) functionality.
+	  Allow the system to enter sleep states in which main memory is
+	  powered and thus its contents are preserved, such as the
+	  suspend-to-RAM state (i.e. the ACPI S3 state).
+
+config HIBERNATION_UP_POSSIBLE
+	bool
+	depends on X86 || PPC64_SWSUSP || PPC32
+	depends on !SMP
+	default y
+
+config HIBERNATION_SMP_POSSIBLE
+	bool
+	depends on (X86 && !X86_VOYAGER) || PPC64_SWSUSP
+	depends on SMP
+	default y
+
+config HIBERNATION
+	bool "Hibernation (aka 'suspend to disk')"
+	depends on PM && SWAP
+	depends on HIBERNATION_UP_POSSIBLE || HIBERNATION_SMP_POSSIBLE
+	---help---
+	  Enable the suspend to disk (STD) functionality, which is usually
+	  called "hibernation" in user interfaces.  STD checkpoints the
+	  system and powers it off; and restores that checkpoint on reboot.
 
 	  You can suspend your machine with 'echo disk > /sys/power/state'.
 	  Alternatively, you can use the additional userland tools available
 	  from <http://suspend.sf.net>.
 
 	  In principle it does not require ACPI or APM, although for example
-	  ACPI will be used if available.
+	  ACPI will be used for the final steps when it is available.  One
+	  of the reasons to use software suspend is that the firmware hooks
+	  for suspend states like suspend-to-RAM (STR) often don't work very
+	  well with Linux.
 
 	  It creates an image which is saved in your active swap. Upon the next
 	  boot, pass the 'resume=/dev/swappartition' argument to the kernel to
@@ -112,7 +150,7 @@ config SOFTWARE_SUSPEND
 
 config PM_STD_PARTITION
 	string "Default resume partition"
-	depends on SOFTWARE_SUSPEND
+	depends on HIBERNATION
 	default ""
 	---help---
 	  The default resume partition is the partition that the suspend-
@@ -131,11 +169,6 @@ config PM_STD_PARTITION
 	  Note there is currently not a way to specify which device to save the
 	  suspended image to. It will simply pick the first available swap 
 	  device.
-
-config SUSPEND_SMP
-	bool
-	depends on HOTPLUG_CPU && X86 && PM
-	default y
 
 config APM_EMULATION
 	tristate "Advanced Power Management Emulation"

@@ -46,7 +46,9 @@
 
 #ifdef CONFIG_INET
 
-int ax25_hard_header(struct sk_buff *skb, struct net_device *dev, unsigned short type, void *daddr, void *saddr, unsigned len)
+int ax25_hard_header(struct sk_buff *skb, struct net_device *dev,
+		     unsigned short type, const void *daddr,
+		     const void *saddr, unsigned len)
 {
 	unsigned char *buff;
 
@@ -121,7 +123,7 @@ int ax25_rebuild_header(struct sk_buff *skb)
 		digipeat = route->digipeat;
 		dev = route->dev;
 		ip_mode = route->ip_mode;
-	};
+	}
 
 	if (dev == NULL)
 		dev = skb->dev;
@@ -171,7 +173,7 @@ int ax25_rebuild_header(struct sk_buff *skb)
 			src_c = *(ax25_address *)(bp + 8);
 
 			skb_pull(ourskb, AX25_HEADER_LEN - 1);	/* Keep PID */
-			ourskb->nh.raw = ourskb->data;
+			skb_reset_network_header(ourskb);
 
 			ax25=ax25_send_frame(
 			    ourskb,
@@ -215,7 +217,9 @@ put:
 
 #else	/* INET */
 
-int ax25_hard_header(struct sk_buff *skb, struct net_device *dev, unsigned short type, void *daddr, void *saddr, unsigned len)
+int ax25_hard_header(struct sk_buff *skb, struct net_device *dev,
+		     unsigned short type, const void *daddr,
+		     const void *saddr, unsigned len)
 {
 	return -AX25_HEADER_LEN;
 }
@@ -227,5 +231,12 @@ int ax25_rebuild_header(struct sk_buff *skb)
 
 #endif
 
+const struct header_ops ax25_header_ops = {
+	.create = ax25_hard_header,
+	.rebuild = ax25_rebuild_header,
+};
+
 EXPORT_SYMBOL(ax25_hard_header);
 EXPORT_SYMBOL(ax25_rebuild_header);
+EXPORT_SYMBOL(ax25_header_ops);
+

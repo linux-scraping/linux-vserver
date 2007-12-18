@@ -77,7 +77,7 @@ static int iseries_lparcfg_data(struct seq_file *m, void *v)
 	int processors, max_processors;
 	unsigned long purr = get_purr();
 
-	shared = (int)(get_lppaca()->shared_proc);
+	shared = (int)(local_paca->lppaca_ptr->shared_proc);
 
 	seq_printf(m, "system_active_processors=%d\n",
 		   (int)HvLpConfig_getSystemPhysicalProcessors());
@@ -130,30 +130,31 @@ static int iseries_lparcfg_data(struct seq_file *m, void *v)
 /*
  * Methods used to fetch LPAR data when running on a pSeries platform.
  */
-/* find a better place for this function... */
 static void log_plpar_hcall_return(unsigned long rc, char *tag)
 {
-	if (rc == 0)		/* success, return */
+	switch(rc) {
+	case 0:
 		return;
-/* check for null tag ? */
-	if (rc == H_HARDWARE)
-		printk(KERN_INFO
-		       "plpar-hcall (%s) failed with hardware fault\n", tag);
-	else if (rc == H_FUNCTION)
-		printk(KERN_INFO
-		       "plpar-hcall (%s) failed; function not allowed\n", tag);
-	else if (rc == H_AUTHORITY)
-		printk(KERN_INFO
-		       "plpar-hcall (%s) failed; not authorized to this"
-		       " function\n", tag);
-	else if (rc == H_PARAMETER)
-		printk(KERN_INFO "plpar-hcall (%s) failed; Bad parameter(s)\n",
-		       tag);
-	else
-		printk(KERN_INFO
-		       "plpar-hcall (%s) failed with unexpected rc(0x%lx)\n",
-		       tag, rc);
-
+	case H_HARDWARE:
+		printk(KERN_INFO "plpar-hcall (%s) "
+				"Hardware fault\n", tag);
+		return;
+	case H_FUNCTION:
+		printk(KERN_INFO "plpar-hcall (%s) "
+				"Function not allowed\n", tag);
+		return;
+	case H_AUTHORITY:
+		printk(KERN_INFO "plpar-hcall (%s) "
+				"Not authorized to this function\n", tag);
+		return;
+	case H_PARAMETER:
+		printk(KERN_INFO "plpar-hcall (%s) "
+				"Bad parameter(s)\n",tag);
+		return;
+	default:
+		printk(KERN_INFO "plpar-hcall (%s) "
+				"Unexpected rc(0x%lx)\n", tag, rc);
+	}
 }
 
 /*
@@ -247,7 +248,7 @@ static void parse_system_parameter_string(struct seq_file *m)
 	} else {
 		int splpar_strlen;
 		int idx, w_idx;
-		char *workbuffer = kmalloc(SPLPAR_MAXLENGTH, GFP_KERNEL);
+		char *workbuffer = kzalloc(SPLPAR_MAXLENGTH, GFP_KERNEL);
 		if (!workbuffer) {
 			printk(KERN_ERR "%s %s kmalloc failure at line %d \n",
 			       __FILE__, __FUNCTION__, __LINE__);
@@ -260,7 +261,6 @@ static void parse_system_parameter_string(struct seq_file *m)
 		splpar_strlen = local_buffer[0] * 256 + local_buffer[1];
 		local_buffer += 2;	/* step over strlen value */
 
-		memset(workbuffer, 0, SPLPAR_MAXLENGTH);
 		w_idx = 0;
 		idx = 0;
 		while ((*local_buffer) && (idx < splpar_strlen)) {
@@ -321,15 +321,16 @@ static int pseries_lparcfg_data(struct seq_file *m, void *v)
 	struct device_node *rtas_node;
 	const int *lrdrp = NULL;
 
-	rtas_node = find_path_device("/rtas");
+	rtas_node = of_find_node_by_path("/rtas");
 	if (rtas_node)
-		lrdrp = get_property(rtas_node, "ibm,lrdr-capacity", NULL);
+		lrdrp = of_get_property(rtas_node, "ibm,lrdr-capacity", NULL);
 
 	if (lrdrp == NULL) {
 		partition_potential_processors = vdso_data->processorCount;
 	} else {
 		partition_potential_processors = *(lrdrp + 4);
 	}
+	of_node_put(rtas_node);
 
 	partition_active_processors = lparcfg_count_active_processors();
 
@@ -537,25 +538,27 @@ static int lparcfg_data(struct seq_file *m, void *v)
 
 	seq_printf(m, "%s %s \n", MODULE_NAME, MODULE_VERS);
 
-	rootdn = find_path_device("/");
+	rootdn = of_find_node_by_path("/");
 	if (rootdn) {
-		tmp = get_property(rootdn, "model", NULL);
+		tmp = of_get_property(rootdn, "model", NULL);
 		if (tmp) {
 			model = tmp;
 			/* Skip "IBM," - see platforms/iseries/dt.c */
 			if (firmware_has_feature(FW_FEATURE_ISERIES))
 				model += 4;
 		}
-		tmp = get_property(rootdn, "system-id", NULL);
+		tmp = of_get_property(rootdn, "system-id", NULL);
 		if (tmp) {
 			system_id = tmp;
 			/* Skip "IBM," - see platforms/iseries/dt.c */
 			if (firmware_has_feature(FW_FEATURE_ISERIES))
 				system_id += 4;
 		}
-		lp_index_ptr = get_property(rootdn, "ibm,partition-no", NULL);
+		lp_index_ptr = of_get_property(rootdn, "ibm,partition-no",
+					NULL);
 		if (lp_index_ptr)
 			lp_index = *lp_index_ptr;
+		of_node_put(rootdn);
 	}
 	seq_printf(m, "serial_number=%s\n", system_id);
 	seq_printf(m, "system_type=%s\n", model);

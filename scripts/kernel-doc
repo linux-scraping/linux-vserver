@@ -5,6 +5,7 @@ use strict;
 ## Copyright (c) 1998 Michael Zucchi, All Rights Reserved        ##
 ## Copyright (C) 2000, 1  Tim Waugh <twaugh@redhat.com>          ##
 ## Copyright (C) 2001  Simon Huggins                             ##
+## Copyright (C) 2005-2007  Randy Dunlap                         ##
 ## 								 ##
 ## #define enhancements by Armin Kuster <akuster@mvista.com>	 ##
 ## Copyright (c) 2000 MontaVista Software, Inc.			 ##
@@ -154,12 +155,14 @@ use strict;
 
 my $errors = 0;
 my $warnings = 0;
+my $anon_struct_union = 0;
 
 # match expressions used to find embedded type information
 my $type_constant = '\%([-_\w]+)';
 my $type_func = '(\w+)\(\)';
 my $type_param = '\@(\w+)';
-my $type_struct = '\&((struct\s*)?[_\w]+)';
+my $type_struct = '\&((struct\s*)*[_\w]+)';
+my $type_struct_xml = '\\&amp;((struct\s*)*[_\w]+)';
 my $type_env = '(\$\w+)';
 
 # Output conversion substitutions.
@@ -168,9 +171,12 @@ my $type_env = '(\$\w+)';
 # these work fairly well
 my %highlights_html = ( $type_constant, "<i>\$1</i>",
 			$type_func, "<b>\$1</b>",
-			$type_struct, "<i>\$1</i>",
+			$type_struct_xml, "<i>\$1</i>",
+			$type_env, "<b><i>\$1</i></b>",
 			$type_param, "<tt><b>\$1</b></tt>" );
-my $blankline_html = "<p>";
+my $local_lt = "\\\\\\\\lt:";
+my $local_gt = "\\\\\\\\gt:";
+my $blankline_html = $local_lt . "p" . $local_gt;	# was "<p>"
 
 # XML, docbook format
 my %highlights_xml = ( "([^=])\\\"([^\\\"<]+)\\\"", "\$1<quote>\$2</quote>",
@@ -326,12 +332,22 @@ while ($ARGV[0] =~ m/^-(.*)/) {
     }
 }
 
+# get kernel version from env
+sub get_kernel_version() {
+    my $version;
+
+    if (defined($ENV{'KERNELVERSION'})) {
+	$version = $ENV{'KERNELVERSION'};
+    }
+    return $version;
+}
+my $kernelversion = get_kernel_version();
 
 # generate a sequence of code that will splice in highlighting information
 # using the s// operator.
 my $dohighlight = "";
 foreach my $pattern (keys %highlights) {
-#    print "scanning pattern $pattern ($highlights{$pattern})\n";
+#   print STDERR "scanning pattern:$pattern, highlight:($highlights{$pattern})\n";
     $dohighlight .=  "\$contents =~ s:$pattern:$highlights{$pattern}:gs;\n";
 }
 
@@ -378,14 +394,26 @@ sub output_highlight {
 #	confess "output_highlight got called with no args?\n";
 #   }
 
+    if ($output_mode eq "html") {
+	$contents = local_unescape($contents);
+	# convert data read & converted thru xml_escape() into &xyz; format:
+	$contents =~ s/\\\\\\/&/g;
+    }
+#   print STDERR "contents b4:$contents\n";
     eval $dohighlight;
     die $@ if $@;
+#   print STDERR "contents af:$contents\n";
+
     foreach $line (split "\n", $contents) {
-      if ($line eq ""){
-	    print $lineprefix, $blankline;
+	if ($line eq ""){
+	    print $lineprefix, local_unescape($blankline);
 	} else {
-            $line =~ s/\\\\\\/\&/g;
-	    print $lineprefix, $line;
+	    $line =~ s/\\\\\\/\&/g;
+	    if ($output_mode eq "man" && substr($line, 0, 1) eq ".") {
+		print "\\&$line";
+	    } else {
+		print $lineprefix, $line;
+	    }
 	}
 	print "\n";
     }
@@ -414,7 +442,7 @@ sub output_enum_html(%) {
     print "<b>enum ".$args{'enum'}."</b> {<br>\n";
     $count = 0;
     foreach $parameter (@{$args{'parameterlist'}}) {
-        print " <b>".$parameter."</b>";
+	print " <b>".$parameter."</b>";
 	if ($count != $#{$args{'parameterlist'}}) {
 	    $count++;
 	    print ",\n";
@@ -462,15 +490,16 @@ sub output_struct_html(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	$type = $args{'parametertypes'}{$parameter};
 	if ($type =~ m/([^\(]*\(\*)\s*\)\s*\(([^\)]*)\)/) {
 	    # pointer-to-function
-	    print " <i>$1</i><b>$parameter</b>) <i>($2)</i>;<br>\n";
+	    print "&nbsp; &nbsp; <i>$1</i><b>$parameter</b>) <i>($2)</i>;<br>\n";
 	} elsif ($type =~ m/^(.*?)\s*(:.*)/) {
-	    print " <i>$1</i> <b>$parameter</b>$2;<br>\n";
+	    # bitfield
+	    print "&nbsp; &nbsp; <i>$1</i> <b>$parameter</b>$2;<br>\n";
 	} else {
-	    print " <i>$type</i> <b>$parameter</b>;<br>\n";
+	    print "&nbsp; &nbsp; <i>$type</i> <b>$parameter</b>;<br>\n";
 	}
     }
     print "};<br>\n";
@@ -483,7 +512,7 @@ sub output_struct_html(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	print "<dt><b>".$parameter."</b>\n";
 	print "<dd>";
 	output_highlight($args{'parameterdescs'}{$parameter_name});
@@ -525,7 +554,7 @@ sub output_function_html(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	print "<dt><b>".$parameter."</b>\n";
 	print "<dd>";
 	output_highlight($args{'parameterdescs'}{$parameter_name});
@@ -592,6 +621,7 @@ sub output_function_xml(%) {
     print "<refmeta>\n";
     print " <refentrytitle><phrase>".$args{'function'}."</phrase></refentrytitle>\n";
     print " <manvolnum>9</manvolnum>\n";
+    print " <refmiscinfo class=\"version\">" . $kernelversion . "</refmiscinfo>\n";
     print "</refmeta>\n";
     print "<refnamediv>\n";
     print " <refname>".$args{'function'}."</refname>\n";
@@ -668,6 +698,7 @@ sub output_struct_xml(%) {
     print "<refmeta>\n";
     print " <refentrytitle><phrase>".$args{'type'}." ".$args{'struct'}."</phrase></refentrytitle>\n";
     print " <manvolnum>9</manvolnum>\n";
+    print " <refmiscinfo class=\"version\">" . $kernelversion . "</refmiscinfo>\n";
     print "</refmeta>\n";
     print "<refnamediv>\n";
     print " <refname>".$args{'type'}." ".$args{'struct'}."</refname>\n";
@@ -691,12 +722,13 @@ sub output_struct_xml(%) {
 	$parameter_name =~ s/\[.*//;
 
 	defined($args{'parameterdescs'}{$parameter_name}) || next;
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	$type = $args{'parametertypes'}{$parameter};
 	if ($type =~ m/([^\(]*\(\*)\s*\)\s*\(([^\)]*)\)/) {
 	    # pointer-to-function
 	    print "  $1 $parameter) ($2);\n";
 	} elsif ($type =~ m/^(.*?)\s*(:.*)/) {
+	    # bitfield
 	    print "  $1 $parameter$2;\n";
 	} else {
 	    print "  ".$type." ".$parameter.";\n";
@@ -752,6 +784,7 @@ sub output_enum_xml(%) {
     print "<refmeta>\n";
     print " <refentrytitle><phrase>enum ".$args{'enum'}."</phrase></refentrytitle>\n";
     print " <manvolnum>9</manvolnum>\n";
+    print " <refmiscinfo class=\"version\">" . $kernelversion . "</refmiscinfo>\n";
     print "</refmeta>\n";
     print "<refnamediv>\n";
     print " <refname>enum ".$args{'enum'}."</refname>\n";
@@ -767,11 +800,11 @@ sub output_enum_xml(%) {
     print "enum ".$args{'enum'}." {\n";
     $count = 0;
     foreach $parameter (@{$args{'parameterlist'}}) {
-        print "  $parameter";
-        if ($count != $#{$args{'parameterlist'}}) {
+	print "  $parameter";
+	if ($count != $#{$args{'parameterlist'}}) {
 	    $count++;
 	    print ",";
-        }
+	}
 	print "\n";
     }
     print "};";
@@ -1007,7 +1040,7 @@ sub output_enum_man(%) {
     print "enum ".$args{'enum'}." {\n";
     $count = 0;
     foreach my $parameter (@{$args{'parameterlist'}}) {
-        print ".br\n.BI \"    $parameter\"\n";
+	print ".br\n.BI \"    $parameter\"\n";
 	if ($count == $#{$args{'parameterlist'}}) {
 	    print "\n};\n";
 	    last;
@@ -1054,7 +1087,7 @@ sub output_struct_man(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	$type = $args{'parametertypes'}{$parameter};
 	if ($type =~ m/([^\(]*\(\*)\s*\)\s*\(([^\)]*)\)/) {
 	    # pointer-to-function
@@ -1077,7 +1110,7 @@ sub output_struct_man(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	print ".IP \"".$parameter."\" 12\n";
 	output_highlight($args{'parameterdescs'}{$parameter_name});
     }
@@ -1187,7 +1220,7 @@ sub output_enum_text(%) {
     print "enum ".$args{'enum'}." {\n";
     $count = 0;
     foreach $parameter (@{$args{'parameterlist'}}) {
-        print "\t$parameter";
+	print "\t$parameter";
 	if ($count != $#{$args{'parameterlist'}}) {
 	    $count++;
 	    print ",";
@@ -1232,12 +1265,13 @@ sub output_struct_text(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	$type = $args{'parametertypes'}{$parameter};
 	if ($type =~ m/([^\(]*\(\*)\s*\)\s*\(([^\)]*)\)/) {
 	    # pointer-to-function
 	    print "\t$1 $parameter) ($2);\n";
 	} elsif ($type =~ m/^(.*?)\s*(:.*)/) {
+	    # bitfield
 	    print "\t$1 $parameter$2;\n";
 	} else {
 	    print "\t".$type." ".$parameter.";\n";
@@ -1252,7 +1286,7 @@ sub output_struct_text(%) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 
-        ($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
+	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	print "$parameter\n\t";
 	print $args{'parameterdescs'}{$parameter_name}."\n";
     }
@@ -1284,7 +1318,7 @@ sub output_declaration {
 	( $function_only == 1 && defined($function_table{$name})) ||
 	( $function_only == 2 && !defined($function_table{$name})))
     {
-        &$func(@_);
+	&$func(@_);
 	$section_counter++;
     }
 }
@@ -1317,8 +1351,8 @@ sub dump_struct($$) {
     my $file = shift;
 
     if ($x =~/(struct|union)\s+(\w+)\s*{(.*)}/) {
-        $declaration_name = $2;
-        my $members = $3;
+	$declaration_name = $2;
+	my $members = $3;
 
 	# ignore embedded structs or unions
 	$members =~ s/{.*?}//g;
@@ -1345,7 +1379,7 @@ sub dump_struct($$) {
 			   });
     }
     else {
-        print STDERR "Error(${file}:$.): Cannot parse struct or union!\n";
+	print STDERR "Error(${file}:$.): Cannot parse struct or union!\n";
 	++$errors;
     }
 }
@@ -1356,15 +1390,15 @@ sub dump_enum($$) {
 
     $x =~ s@/\*.*?\*/@@gos;	# strip comments.
     if ($x =~ /enum\s+(\w+)\s*{(.*)}/) {
-        $declaration_name = $1;
-        my $members = $2;
+	$declaration_name = $1;
+	my $members = $2;
 
 	foreach my $arg (split ',', $members) {
 	    $arg =~ s/^\s*(\w+).*/$1/;
 	    push @parameterlist, $arg;
 	    if (!$parameterdescs{$arg}) {
-	        $parameterdescs{$arg} = $undescribed;
-	        print STDERR "Warning(${file}:$.): Enum value '$arg' ".
+		$parameterdescs{$arg} = $undescribed;
+		print STDERR "Warning(${file}:$.): Enum value '$arg' ".
 		    "not described in enum '$declaration_name'\n";
 	    }
 
@@ -1382,7 +1416,7 @@ sub dump_enum($$) {
 			   });
     }
     else {
-        print STDERR "Error(${file}:$.): Cannot parse enum!\n";
+	print STDERR "Error(${file}:$.): Cannot parse enum!\n";
 	++$errors;
     }
 }
@@ -1393,12 +1427,12 @@ sub dump_typedef($$) {
 
     $x =~ s@/\*.*?\*/@@gos;	# strip comments.
     while (($x =~ /\(*.\)\s*;$/) || ($x =~ /\[*.\]\s*;$/)) {
-        $x =~ s/\(*.\)\s*;$/;/;
+	$x =~ s/\(*.\)\s*;$/;/;
 	$x =~ s/\[*.\]\s*;$/;/;
     }
 
     if ($x =~ /typedef.*\s+(\w+)\s*;/) {
-        $declaration_name = $1;
+	$declaration_name = $1;
 
 	output_declaration($declaration_name,
 			   'typedef',
@@ -1410,7 +1444,7 @@ sub dump_typedef($$) {
 			   });
     }
     else {
-        print STDERR "Error(${file}:$.): Cannot parse typedef!\n";
+	print STDERR "Error(${file}:$.): Cannot parse typedef!\n";
 	++$errors;
     }
 }
@@ -1424,14 +1458,14 @@ sub create_parameterlist($$$) {
 
     # temporarily replace commas inside function pointer definition
     while ($args =~ /(\([^\),]+),/) {
-        $args =~ s/(\([^\),]+),/$1#/g;
+	$args =~ s/(\([^\),]+),/$1#/g;
     }
 
     foreach my $arg (split($splitter, $args)) {
 	# strip comments
 	$arg =~ s/\/\*.*\*\///;
-        # strip leading/trailing spaces
-        $arg =~ s/^\s*//;
+	# strip leading/trailing spaces
+	$arg =~ s/^\s*//;
 	$arg =~ s/\s*$//;
 	$arg =~ s/\s+/ /;
 
@@ -1456,7 +1490,16 @@ sub create_parameterlist($$$) {
 	    if ($args[0] =~ m/\*/) {
 		$args[0] =~ s/(\*+)\s*/ $1/;
 	    }
-	    my @first_arg = split('\s+', shift @args);
+
+	    my @first_arg;
+	    if ($args[0] =~ /^(.*\s+)(.*?\[.*\].*)$/) {
+		    shift @args;
+		    push(@first_arg, split('\s+', $1));
+		    push(@first_arg, $2);
+	    } else {
+		    @first_arg = split('\s+', shift @args);
+	    }
+
 	    unshift(@args, pop @first_arg);
 	    $type = join " ", @first_arg;
 
@@ -1479,8 +1522,13 @@ sub push_parameter($$$) {
 	my $param = shift;
 	my $type = shift;
 	my $file = shift;
-	my $anon = 0;
 
+	if (($anon_struct_union == 1) && ($type eq "") &&
+	    ($param eq "}")) {
+		return;		# ignore the ending }; from anon. struct/union
+	}
+
+	$anon_struct_union = 0;
 	my $param_name = $param;
 	$param_name =~ s/\[.*//;
 
@@ -1499,30 +1547,30 @@ sub push_parameter($$$) {
 	# handle unnamed (anonymous) union or struct:
 	{
 		$type = $param;
-		$param = "{unnamed_" . $param. "}";
+		$param = "{unnamed_" . $param . "}";
 		$parameterdescs{$param} = "anonymous\n";
-		$anon = 1;
+		$anon_struct_union = 1;
 	}
 
 	# warn if parameter has no description
 	# (but ignore ones starting with # as these are not parameters
 	# but inline preprocessor statements);
 	# also ignore unnamed structs/unions;
-	if (!$anon) {
+	if (!$anon_struct_union) {
 	if (!defined $parameterdescs{$param_name} && $param_name !~ /^#/) {
 
 	    $parameterdescs{$param_name} = $undescribed;
 
 	    if (($type eq 'function') || ($type eq 'enum')) {
-	        print STDERR "Warning(${file}:$.): Function parameter ".
+		print STDERR "Warning(${file}:$.): Function parameter ".
 		    "or member '$param' not " .
 		    "described in '$declaration_name'\n";
 	    }
 	    print STDERR "Warning(${file}:$.):".
-	                 " No description found for parameter '$param'\n";
+			 " No description found for parameter '$param'\n";
 	    ++$warnings;
-        }
-        }
+	}
+	}
 
 	push @parameterlist, $param;
 	$parametertypes{$param} = $type;
@@ -1660,14 +1708,16 @@ sub process_state3_function($$) {
     my $x = shift;
     my $file = shift;
 
+    $x =~ s@\/\/.*$@@gos; # strip C99-style comments to end of line
+
     if ($x =~ m#\s*/\*\s+MACDOC\s*#io || ($x =~ /^#/ && $x !~ /^#define/)) {
 	# do nothing
     }
     elsif ($x =~ /([^\{]*)/) {
-        $prototype .= $1;
+	$prototype .= $1;
     }
     if (($x =~ /\{/) || ($x =~ /\#define/) || ($x =~ /;/)) {
-        $prototype =~ s@/\*.*?\*/@@gos;	# strip comments.
+	$prototype =~ s@/\*.*?\*/@@gos;	# strip comments.
 	$prototype =~ s@[\r\n]+@ @gos; # strip newlines/cr's.
 	$prototype =~ s@^\s+@@gos; # strip leading spaces
 	dump_function($prototype,$file);
@@ -1682,30 +1732,38 @@ sub process_state3_type($$) {
     $x =~ s@[\r\n]+@ @gos; # strip newlines/cr's.
     $x =~ s@^\s+@@gos; # strip leading spaces
     $x =~ s@\s+$@@gos; # strip trailing spaces
+    $x =~ s@\/\/.*$@@gos; # strip C99-style comments to end of line
+
     if ($x =~ /^#/) {
 	# To distinguish preprocessor directive from regular declaration later.
 	$x .= ";";
     }
 
     while (1) {
-        if ( $x =~ /([^{};]*)([{};])(.*)/ ) {
+	if ( $x =~ /([^{};]*)([{};])(.*)/ ) {
 	    $prototype .= $1 . $2;
 	    ($2 eq '{') && $brcount++;
 	    ($2 eq '}') && $brcount--;
 	    if (($2 eq ';') && ($brcount == 0)) {
-	        dump_declaration($prototype,$file);
+		dump_declaration($prototype,$file);
 		reset_state();
-	        last;
+		last;
 	    }
 	    $x = $3;
-        } else {
+	} else {
 	    $prototype .= $x;
 	    last;
 	}
     }
 }
 
-# replace <, >, and &
+# xml_escape: replace <, >, and & in the text stream;
+#
+# however, formatting controls that are generated internally/locally in the
+# kernel-doc script are not escaped here; instead, they begin life like
+# $blankline_html (4 of '\' followed by a mnemonic + ':'), then these strings
+# are converted to their mnemonic-expected output, without the 4 * '\' & ':',
+# just before actual output; (this is done by local_unescape())
 sub xml_escape($) {
 	my $text = shift;
 	if (($output_mode eq "text") || ($output_mode eq "man")) {
@@ -1714,6 +1772,18 @@ sub xml_escape($) {
 	$text =~ s/\&/\\\\\\amp;/g;
 	$text =~ s/\</\\\\\\lt;/g;
 	$text =~ s/\>/\\\\\\gt;/g;
+	return $text;
+}
+
+# convert local escape strings to html
+# local escape strings look like:  '\\\\menmonic:' (that's 4 backslashes)
+sub local_unescape($) {
+	my $text = shift;
+	if (($output_mode eq "text") || ($output_mode eq "man")) {
+		return $text;
+	}
+	$text =~ s/\\\\\\\\lt:/</g;
+	$text =~ s/\\\\\\\\gt:/>/g;
 	return $text;
 }
 
@@ -1756,7 +1826,7 @@ sub process_file($) {
 		} else {
 			$section = $1;
 		}
-            }
+	    }
 	    elsif (/$doc_decl/o) {
 		$identifier = $1;
 		if (/\s*([\w\s]+?)\s*-/) {
@@ -1765,7 +1835,7 @@ sub process_file($) {
 
 		$state = 2;
 		if (/-(.*)/) {
-		    # strip leading/trailing/multiple spaces #RDD:T:
+		    # strip leading/trailing/multiple spaces
 		    $descr= $1;
 		    $descr =~ s/^\s*//;
 		    $descr =~ s/\s*$//;
@@ -1849,14 +1919,14 @@ sub process_file($) {
 	    }
 	} elsif ($state == 3) {	# scanning for function '{' (end of prototype)
 	    if ($decl_type eq 'function') {
-	        process_state3_function($_, $file);
+		process_state3_function($_, $file);
 	    } else {
-	        process_state3_type($_, $file);
+		process_state3_type($_, $file);
 	    }
 	} elsif ($state == 4) {
 		# Documentation block
-	        if (/$doc_block/) {
-			dump_section($section, $contents);
+		if (/$doc_block/) {
+			dump_section($section, xml_escape($contents));
 			output_intro({'sectionlist' => \@sectionlist,
 				      'sections' => \%sections });
 			$contents = "";
@@ -1873,10 +1943,10 @@ sub process_file($) {
 			} else {
 				$section = $1;
 			}
-                }
+		}
 		elsif (/$doc_end/)
 		{
-			dump_section($section, $contents);
+			dump_section($section, xml_escape($contents));
 			output_intro({'sectionlist' => \@sectionlist,
 				      'sections' => \%sections });
 			$contents = "";
@@ -1900,8 +1970,8 @@ sub process_file($) {
 			{
 				$contents .= $1 . "\n";
 			}
-        	}
-          }
+		}
+	}
     }
     if ($initial_section_counter == $section_counter) {
 	print STDERR "Warning(${file}): no structured comments found\n";

@@ -31,7 +31,7 @@
 #define TS_32		0x00000030
 #define TS_64		0x00000000
 
-#define CHCR_TS_MASK	0x30
+#define CHCR_TS_MASK	0x70
 #define CHCR_TS_SHIFT	4
 
 #define DMAOR_COD	0x00000008
@@ -53,7 +53,7 @@ enum {
 /*
  * The DMA count is defined as the number of bytes to transfer.
  */
-static unsigned int ts_shift[] __attribute__ ((used)) = {
+static unsigned int ts_shift[] __maybe_unused = {
 	[XMIT_SZ_64BIT]		= 3,
 	[XMIT_SZ_8BIT]		= 0,
 	[XMIT_SZ_16BIT]		= 1,

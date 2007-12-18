@@ -147,16 +147,27 @@ static ssize_t show_stp_state(struct device *d,
 	return sprintf(buf, "%d\n", br->stp_enabled);
 }
 
-static void set_stp_state(struct net_bridge *br, unsigned long val)
-{
-	br->stp_enabled = val;
-}
 
 static ssize_t store_stp_state(struct device *d,
 			       struct device_attribute *attr, const char *buf,
 			       size_t len)
 {
-	return store_bridge_parm(d, buf, len, set_stp_state);
+	struct net_bridge *br = to_bridge(d);
+	char *endp;
+	unsigned long val;
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	val = simple_strtoul(buf, &endp, 0);
+	if (endp == buf)
+		return -EINVAL;
+
+	rtnl_lock();
+	br_stp_set_enabled(br, val);
+	rtnl_unlock();
+
+	return len;
 }
 static DEVICE_ATTR(stp_state, S_IRUGO | S_IWUSR, show_stp_state,
 		   store_stp_state);
@@ -309,6 +320,19 @@ static ssize_t store_group_addr(struct device *d,
 static DEVICE_ATTR(group_addr, S_IRUGO | S_IWUSR,
 		   show_group_addr, store_group_addr);
 
+static ssize_t store_flush(struct device *d,
+			   struct device_attribute *attr,
+			   const char *buf, size_t len)
+{
+	struct net_bridge *br = to_bridge(d);
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	br_fdb_flush(br);
+	return len;
+}
+static DEVICE_ATTR(flush, S_IWUSR, NULL, store_flush);
 
 static struct attribute *bridge_attrs[] = {
 	&dev_attr_forward_delay.attr,
@@ -328,6 +352,7 @@ static struct attribute *bridge_attrs[] = {
 	&dev_attr_topology_change_timer.attr,
 	&dev_attr_gc_timer.attr,
 	&dev_attr_group_addr.attr,
+	&dev_attr_flush.attr,
 	NULL
 };
 
@@ -342,8 +367,9 @@ static struct attribute_group bridge_group = {
  *
  * Returns the number of bytes read.
  */
-static ssize_t brforward_read(struct kobject *kobj, char *buf,
-			   loff_t off, size_t count)
+static ssize_t brforward_read(struct kobject *kobj,
+			      struct bin_attribute *bin_attr,
+			      char *buf, loff_t off, size_t count)
 {
 	struct device *dev = to_dev(kobj);
 	struct net_bridge *br = to_bridge(dev);
@@ -365,8 +391,7 @@ static ssize_t brforward_read(struct kobject *kobj, char *buf,
 
 static struct bin_attribute bridge_forward = {
 	.attr = { .name = SYSFS_BRIDGE_FDB,
-		  .mode = S_IRUGO,
-		  .owner = THIS_MODULE, },
+		  .mode = S_IRUGO, },
 	.read = brforward_read,
 };
 
@@ -410,7 +435,7 @@ int br_sysfs_addbr(struct net_device *dev)
 	err = kobject_register(&br->ifobj);
 	if (err) {
 		pr_info("%s: can't add kobject (directory) %s/%s\n",
-			__FUNCTION__, dev->name, br->ifobj.name);
+			__FUNCTION__, dev->name, kobject_name(&br->ifobj));
 		goto out3;
 	}
 	return 0;

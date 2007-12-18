@@ -1,13 +1,14 @@
 /*
  * JFFS2 -- Journalling Flash File System, Version 2.
  *
- * Copyright (C) 2006  NEC Corporation
+ * Copyright © 2006  NEC Corporation
  *
  * Created by KaiGai Kohei <kaigai@ak.jp.nec.com>
  *
  * For licensing information, see the file 'LICENCE' in this directory.
  *
  */
+
 #ifndef _JFFS2_FS_XATTR_H_
 #define _JFFS2_FS_XATTR_H_
 
@@ -74,7 +75,7 @@ extern void jffs2_build_xattr_subsystem(struct jffs2_sb_info *c);
 extern void jffs2_clear_xattr_subsystem(struct jffs2_sb_info *c);
 
 extern struct jffs2_xattr_datum *jffs2_setup_xattr_datum(struct jffs2_sb_info *c,
-                                                  uint32_t xid, uint32_t version);
+							 uint32_t xid, uint32_t version);
 
 extern void jffs2_xattr_delete_inode(struct jffs2_sb_info *c, struct jffs2_inode_cache *ic);
 extern void jffs2_xattr_free_inode(struct jffs2_sb_info *c, struct jffs2_inode_cache *ic);

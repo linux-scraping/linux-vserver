@@ -372,17 +372,17 @@ static int __init spitzkbd_probe(struct platform_device *dev)
 
 	spitzkbd->input = input_dev;
 
-	input_dev->private = spitzkbd;
 	input_dev->name = "Spitz Keyboard";
 	input_dev->phys = spitzkbd->phys;
-	input_dev->cdev.dev = &dev->dev;
+	input_dev->dev.parent = &dev->dev;
 
 	input_dev->id.bustype = BUS_HOST;
 	input_dev->id.vendor = 0x0001;
 	input_dev->id.product = 0x0001;
 	input_dev->id.version = 0x0100;
 
-	input_dev->evbit[0] = BIT(EV_KEY) | BIT(EV_REP) | BIT(EV_PWR) | BIT(EV_SW);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REP) |
+		BIT_MASK(EV_PWR) | BIT_MASK(EV_SW);
 	input_dev->keycode = spitzkbd->keycode;
 	input_dev->keycodesize = sizeof(unsigned char);
 	input_dev->keycodemax = ARRAY_SIZE(spitzkbd_keycode);

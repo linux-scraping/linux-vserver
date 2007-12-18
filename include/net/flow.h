@@ -67,20 +67,16 @@ struct flowi {
 
 		__be32		spi;
 
-#ifdef CONFIG_IPV6_MIP6
 		struct {
 			__u8	type;
 		} mht;
-#endif
 	} uli_u;
 #define fl_ip_sport	uli_u.ports.sport
 #define fl_ip_dport	uli_u.ports.dport
 #define fl_icmp_type	uli_u.icmpt.type
 #define fl_icmp_code	uli_u.icmpt.code
 #define fl_ipsec_spi	uli_u.spi
-#ifdef CONFIG_IPV6_MIP6
 #define fl_mh_type	uli_u.mht.type
-#endif
 	__u32           secid;	/* used by xfrm; see secid.txt */
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
@@ -96,5 +92,11 @@ extern void *flow_cache_lookup(struct flowi *key, u16 family, u8 dir,
 	 		       flow_resolve_t resolver);
 extern void flow_cache_flush(void);
 extern atomic_t flow_cache_genid;
+
+static inline int flow_cache_uli_match(struct flowi *fl1, struct flowi *fl2)
+{
+	return (fl1->proto == fl2->proto &&
+		!memcmp(&fl1->uli_u, &fl2->uli_u, sizeof(fl1->uli_u)));
+}
 
 #endif

@@ -31,6 +31,12 @@ struct tick_device tick_broadcast_device;
 static cpumask_t tick_broadcast_mask;
 static DEFINE_SPINLOCK(tick_broadcast_lock);
 
+#ifdef CONFIG_TICK_ONESHOT
+static void tick_broadcast_clear_oneshot(int cpu);
+#else
+static inline void tick_broadcast_clear_oneshot(int cpu) { }
+#endif
+
 /*
  * Debugging: see timer_list.c
  */
@@ -49,7 +55,7 @@ cpumask_t *tick_get_broadcast_mask(void)
  */
 static void tick_broadcast_start_periodic(struct clock_event_device *bc)
 {
-	if (bc && bc->mode == CLOCK_EVT_MODE_SHUTDOWN)
+	if (bc)
 		tick_setup_periodic(bc, 1);
 }
 
@@ -58,8 +64,9 @@ static void tick_broadcast_start_periodic(struct clock_event_device *bc)
  */
 int tick_check_broadcast_device(struct clock_event_device *dev)
 {
-	if (tick_broadcast_device.evtdev ||
-	    (dev->features & CLOCK_EVT_FEAT_C3STOP))
+	if ((tick_broadcast_device.evtdev &&
+	     tick_broadcast_device.evtdev->rating >= dev->rating) ||
+	     (dev->features & CLOCK_EVT_FEAT_C3STOP))
 		return 0;
 
 	clockevents_exchange_device(NULL, dev);
@@ -99,8 +106,19 @@ int tick_device_uses_broadcast(struct clock_event_device *dev, int cpu)
 		cpu_set(cpu, tick_broadcast_mask);
 		tick_broadcast_start_periodic(tick_broadcast_device.evtdev);
 		ret = 1;
-	}
+	} else {
+		/*
+		 * When the new device is not affected by the stop
+		 * feature and the cpu is marked in the broadcast mask
+		 * then clear the broadcast bit.
+		 */
+		if (!(dev->features & CLOCK_EVT_FEAT_C3STOP)) {
+			int cpu = smp_processor_id();
 
+			cpu_clear(cpu, tick_broadcast_mask);
+			tick_broadcast_clear_oneshot(cpu);
+		}
+	}
 	spin_unlock_irqrestore(&tick_broadcast_lock, flags);
 	return ret;
 }
@@ -159,8 +177,6 @@ static void tick_do_periodic_broadcast(void)
  */
 static void tick_handle_periodic_broadcast(struct clock_event_device *dev)
 {
-	dev->next_event.tv64 = KTIME_MAX;
-
 	tick_do_periodic_broadcast();
 
 	/*
@@ -201,26 +217,33 @@ static void tick_do_broadcast_on_off(void *why)
 	bc = tick_broadcast_device.evtdev;
 
 	/*
-	 * Is the device in broadcast mode forever or is it not
-	 * affected by the powerstate ?
+	 * Is the device not affected by the powerstate ?
 	 */
-	if (!dev || !tick_device_is_functional(dev) ||
-	    !(dev->features & CLOCK_EVT_FEAT_C3STOP))
+	if (!dev || !(dev->features & CLOCK_EVT_FEAT_C3STOP))
 		goto out;
 
-	if (*reason == CLOCK_EVT_NOTIFY_BROADCAST_ON) {
+	if (!tick_device_is_functional(dev))
+		goto out;
+
+	switch (*reason) {
+	case CLOCK_EVT_NOTIFY_BROADCAST_ON:
+	case CLOCK_EVT_NOTIFY_BROADCAST_FORCE:
 		if (!cpu_isset(cpu, tick_broadcast_mask)) {
 			cpu_set(cpu, tick_broadcast_mask);
 			if (td->mode == TICKDEV_MODE_PERIODIC)
 				clockevents_set_mode(dev,
 						     CLOCK_EVT_MODE_SHUTDOWN);
 		}
-	} else {
+		if (*reason == CLOCK_EVT_NOTIFY_BROADCAST_FORCE)
+			dev->features |= CLOCK_EVT_FEAT_DUMMY;
+		break;
+	case CLOCK_EVT_NOTIFY_BROADCAST_OFF:
 		if (cpu_isset(cpu, tick_broadcast_mask)) {
 			cpu_clear(cpu, tick_broadcast_mask);
 			if (td->mode == TICKDEV_MODE_PERIODIC)
 				tick_setup_periodic(dev, 0);
 		}
+		break;
 	}
 
 	if (cpus_empty(tick_broadcast_mask))
@@ -241,21 +264,12 @@ out:
  */
 void tick_broadcast_on_off(unsigned long reason, int *oncpu)
 {
-	int cpu = get_cpu();
-
-	if (!cpu_isset(*oncpu, cpu_online_map)) {
+	if (!cpu_isset(*oncpu, cpu_online_map))
 		printk(KERN_ERR "tick-braodcast: ignoring broadcast for "
 		       "offline CPU #%d\n", *oncpu);
-	} else {
-
-		if (cpu == *oncpu)
-			tick_do_broadcast_on_off(&reason);
-		else
-			smp_call_function_single(*oncpu,
-						 tick_do_broadcast_on_off,
-						 &reason, 1, 1);
-	}
-	put_cpu();
+	else
+		smp_call_function_single(*oncpu, tick_do_broadcast_on_off,
+					 &reason, 1, 1);
 }
 
 /*
@@ -299,7 +313,7 @@ void tick_suspend_broadcast(void)
 	spin_lock_irqsave(&tick_broadcast_lock, flags);
 
 	bc = tick_broadcast_device.evtdev;
-	if (bc && tick_broadcast_device.mode == TICKDEV_MODE_PERIODIC)
+	if (bc)
 		clockevents_set_mode(bc, CLOCK_EVT_MODE_SHUTDOWN);
 
 	spin_unlock_irqrestore(&tick_broadcast_lock, flags);
@@ -316,6 +330,8 @@ int tick_resume_broadcast(void)
 	bc = tick_broadcast_device.evtdev;
 
 	if (bc) {
+		clockevents_set_mode(bc, CLOCK_EVT_MODE_RESUME);
+
 		switch (tick_broadcast_device.mode) {
 		case TICKDEV_MODE_PERIODIC:
 			if(!cpus_empty(tick_broadcast_mask))
@@ -364,11 +380,7 @@ static int tick_broadcast_set_event(ktime_t expires, int force)
 int tick_resume_broadcast_oneshot(struct clock_event_device *bc)
 {
 	clockevents_set_mode(bc, CLOCK_EVT_MODE_ONESHOT);
-
-	if(!cpus_empty(tick_broadcast_oneshot_mask))
-		tick_broadcast_set_event(ktime_get(), 1);
-
-	return cpu_isset(smp_processor_id(), tick_broadcast_oneshot_mask);
+	return 0;
 }
 
 /*
@@ -485,16 +497,24 @@ out:
 	spin_unlock_irqrestore(&tick_broadcast_lock, flags);
 }
 
+/*
+ * Reset the one shot broadcast for a cpu
+ *
+ * Called with tick_broadcast_lock held
+ */
+static void tick_broadcast_clear_oneshot(int cpu)
+{
+	cpu_clear(cpu, tick_broadcast_oneshot_mask);
+}
+
 /**
- * tick_broadcast_setup_highres - setup the broadcast device for highres
+ * tick_broadcast_setup_oneshot - setup the broadcast device
  */
 void tick_broadcast_setup_oneshot(struct clock_event_device *bc)
 {
-	if (bc->mode != CLOCK_EVT_MODE_ONESHOT) {
-		bc->event_handler = tick_handle_oneshot_broadcast;
-		clockevents_set_mode(bc, CLOCK_EVT_MODE_ONESHOT);
-		bc->next_event.tv64 = KTIME_MAX;
-	}
+	bc->event_handler = tick_handle_oneshot_broadcast;
+	clockevents_set_mode(bc, CLOCK_EVT_MODE_ONESHOT);
+	bc->next_event.tv64 = KTIME_MAX;
 }
 
 /*
@@ -520,19 +540,16 @@ void tick_broadcast_switch_to_oneshot(void)
  */
 void tick_shutdown_broadcast_oneshot(unsigned int *cpup)
 {
-	struct clock_event_device *bc;
 	unsigned long flags;
 	unsigned int cpu = *cpup;
 
 	spin_lock_irqsave(&tick_broadcast_lock, flags);
 
-	bc = tick_broadcast_device.evtdev;
+	/*
+	 * Clear the broadcast mask flag for the dead cpu, but do not
+	 * stop the broadcast device!
+	 */
 	cpu_clear(cpu, tick_broadcast_oneshot_mask);
-
-	if (tick_broadcast_device.mode == TICKDEV_MODE_ONESHOT) {
-		if (bc && cpus_empty(tick_broadcast_oneshot_mask))
-			clockevents_set_mode(bc, CLOCK_EVT_MODE_SHUTDOWN);
-	}
 
 	spin_unlock_irqrestore(&tick_broadcast_lock, flags);
 }

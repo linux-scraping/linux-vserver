@@ -17,6 +17,7 @@ void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 {
 	struct ieee80211_hdr_4addr *hdr;
 	u16 fc;
+	DECLARE_MAC_BUF(mac);
 
 	hdr = (struct ieee80211_hdr_4addr *) skb->data;
 
@@ -40,10 +41,11 @@ void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 	printk(" dur=0x%04x seq=0x%04x\n", le16_to_cpu(hdr->duration_id),
 	       le16_to_cpu(hdr->seq_ctl));
 
-	printk(KERN_DEBUG "   A1=" MACSTR " A2=" MACSTR " A3=" MACSTR,
-	       MAC2STR(hdr->addr1), MAC2STR(hdr->addr2), MAC2STR(hdr->addr3));
+	printk(KERN_DEBUG "   A1=%s", print_mac(mac, hdr->addr1));
+	printk(" A2=%s", print_mac(mac, hdr->addr2));
+	printk(" A3=%s", print_mac(mac, hdr->addr3));
 	if (skb->len >= 30)
-		printk(" A4=" MACSTR, MAC2STR(hdr->addr4));
+		printk(" A4=%s", print_mac(mac, hdr->addr4));
 	printk("\n");
 }
 
@@ -146,7 +148,8 @@ int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			fc |= IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS;
 			/* From&To DS: Addr1 = RA, Addr2 = TA, Addr3 = DA,
 			 * Addr4 = SA */
-			memcpy(&hdr.addr4, skb->data + ETH_ALEN, ETH_ALEN);
+			skb_copy_from_linear_data_offset(skb, ETH_ALEN,
+							 &hdr.addr4, ETH_ALEN);
 			hdr_len += ETH_ALEN;
 		} else {
 			/* bogus 4-addr format to workaround Prism2 station
@@ -159,7 +162,8 @@ int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			/* SA from skb->data + ETH_ALEN will be added after
 			 * frame payload; use hdr.addr4 as a temporary buffer
 			 */
-			memcpy(&hdr.addr4, skb->data + ETH_ALEN, ETH_ALEN);
+			skb_copy_from_linear_data_offset(skb, ETH_ALEN,
+							 &hdr.addr4, ETH_ALEN);
 			need_tailroom += ETH_ALEN;
 		}
 
@@ -174,24 +178,27 @@ int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		else
 			memcpy(&hdr.addr1, local->bssid, ETH_ALEN);
 		memcpy(&hdr.addr2, dev->dev_addr, ETH_ALEN);
-		memcpy(&hdr.addr3, skb->data, ETH_ALEN);
+		skb_copy_from_linear_data(skb, &hdr.addr3, ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_MASTER && !to_assoc_ap) {
 		fc |= IEEE80211_FCTL_FROMDS;
 		/* From DS: Addr1 = DA, Addr2 = BSSID, Addr3 = SA */
-		memcpy(&hdr.addr1, skb->data, ETH_ALEN);
+		skb_copy_from_linear_data(skb, &hdr.addr1, ETH_ALEN);
 		memcpy(&hdr.addr2, dev->dev_addr, ETH_ALEN);
-		memcpy(&hdr.addr3, skb->data + ETH_ALEN, ETH_ALEN);
+		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr3,
+						 ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_INFRA || to_assoc_ap) {
 		fc |= IEEE80211_FCTL_TODS;
 		/* To DS: Addr1 = BSSID, Addr2 = SA, Addr3 = DA */
 		memcpy(&hdr.addr1, to_assoc_ap ?
 		       local->assoc_ap_addr : local->bssid, ETH_ALEN);
-		memcpy(&hdr.addr2, skb->data + ETH_ALEN, ETH_ALEN);
-		memcpy(&hdr.addr3, skb->data, ETH_ALEN);
+		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr2,
+						 ETH_ALEN);
+		skb_copy_from_linear_data(skb, &hdr.addr3, ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_ADHOC) {
 		/* not From/To DS: Addr1 = DA, Addr2 = SA, Addr3 = BSSID */
-		memcpy(&hdr.addr1, skb->data, ETH_ALEN);
-		memcpy(&hdr.addr2, skb->data + ETH_ALEN, ETH_ALEN);
+		skb_copy_from_linear_data(skb, &hdr.addr1, ETH_ALEN);
+		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr2,
+						 ETH_ALEN);
 		memcpy(&hdr.addr3, local->bssid, ETH_ALEN);
 	}
 
@@ -237,7 +244,7 @@ int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	iface->stats.tx_packets++;
 	iface->stats.tx_bytes += skb->len;
 
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	meta = (struct hostap_skb_tx_data *) skb->cb;
 	memset(meta, 0, sizeof(*meta));
 	meta->magic = HOSTAP_SKB_TX_DATA_MAGIC;
@@ -306,7 +313,8 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	local_info_t *local;
 	struct ieee80211_hdr_4addr *hdr;
 	u16 fc;
-	int hdr_len, res;
+	int prefix_len, postfix_len, hdr_len, res;
+	DECLARE_MAC_BUF(mac);
 
 	iface = netdev_priv(skb->dev);
 	local = iface->local;
@@ -321,8 +329,8 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 		hdr = (struct ieee80211_hdr_4addr *) skb->data;
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "%s: TKIP countermeasures: dropped "
-			       "TX packet to " MACSTR "\n",
-			       local->dev->name, MAC2STR(hdr->addr1));
+			       "TX packet to %s\n",
+			       local->dev->name, print_mac(mac, hdr->addr1));
 		}
 		kfree_skb(skb);
 		return NULL;
@@ -332,10 +340,13 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	if (skb == NULL)
 		return NULL;
 
-	if ((skb_headroom(skb) < crypt->ops->extra_mpdu_prefix_len ||
-	     skb_tailroom(skb) < crypt->ops->extra_mpdu_postfix_len) &&
-	    pskb_expand_head(skb, crypt->ops->extra_mpdu_prefix_len,
-			     crypt->ops->extra_mpdu_postfix_len, GFP_ATOMIC)) {
+	prefix_len = crypt->ops->extra_mpdu_prefix_len +
+		crypt->ops->extra_msdu_prefix_len;
+	postfix_len = crypt->ops->extra_mpdu_postfix_len +
+		crypt->ops->extra_msdu_postfix_len;
+	if ((skb_headroom(skb) < prefix_len ||
+	     skb_tailroom(skb) < postfix_len) &&
+	    pskb_expand_head(skb, prefix_len, postfix_len, GFP_ATOMIC)) {
 		kfree_skb(skb);
 		return NULL;
 	}

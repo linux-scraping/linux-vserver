@@ -89,7 +89,9 @@ load_kernel(unsigned long load_addr, int num_words, unsigned long cksum, bd_t *b
 	 * initialize the serial console port.
 	 */
 	embed_config(&bp);
-#if defined(CONFIG_SERIAL_CPM_CONSOLE) || defined(CONFIG_SERIAL_8250_CONSOLE)
+#if defined(CONFIG_SERIAL_CPM_CONSOLE) || \
+    defined(CONFIG_SERIAL_8250_CONSOLE) || \
+    defined(CONFIG_SERIAL_UARTLITE_CONSOLE)
 	com_port = serial_init(0, bp);
 #endif
 
@@ -136,7 +138,7 @@ load_kernel(unsigned long load_addr, int num_words, unsigned long cksum, bd_t *b
 
 	/*
 	 * We link ourself to an arbitrary low address.  When we run, we
-	 * relocate outself to that address.  __image_being points to
+	 * relocate ourself to that address.  __image_being points to
 	 * the part of the image where the zImage is. -- Tom
 	 */
 	zimage_start = (char *)(unsigned long)(&__image_begin);

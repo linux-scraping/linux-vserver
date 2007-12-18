@@ -5,10 +5,10 @@
 #include <linux/types.h>
 #include <linux/rcupdate.h>
 #include <linux/module.h>
-#include <linux/rtnetlink.h>
 #include <linux/pkt_sched.h>
 #include <linux/pkt_cls.h>
 #include <net/gen_stats.h>
+#include <net/rtnetlink.h>
 
 struct Qdisc_ops;
 struct qdisc_walker;
@@ -177,14 +177,8 @@ extern void qdisc_tree_decrease_qlen(struct Qdisc *qdisc, unsigned int n);
 extern struct Qdisc *qdisc_alloc(struct net_device *dev, struct Qdisc_ops *ops);
 extern struct Qdisc *qdisc_create_dflt(struct net_device *dev,
 				       struct Qdisc_ops *ops, u32 parentid);
-
-static inline void
-tcf_destroy(struct tcf_proto *tp)
-{
-	tp->ops->destroy(tp);
-	module_put(tp->ops->owner);
-	kfree(tp);
-}
+extern void tcf_destroy(struct tcf_proto *tp);
+extern void tcf_destroy_chain(struct tcf_proto *fl);
 
 static inline int __qdisc_enqueue_tail(struct sk_buff *skb, struct Qdisc *sch,
 				       struct sk_buff_head *list)
@@ -296,7 +290,7 @@ static inline int qdisc_reshape_fail(struct sk_buff *skb, struct Qdisc *sch)
 {
 	sch->qstats.drops++;
 
-#ifdef CONFIG_NET_CLS_POLICE
+#ifdef CONFIG_NET_CLS_ACT
 	if (sch->reshape_fail == NULL || sch->reshape_fail(skb, sch))
 		goto drop;
 
@@ -307,5 +301,34 @@ drop:
 	kfree_skb(skb);
 	return NET_XMIT_DROP;
 }
+
+/* Length to Time (L2T) lookup in a qdisc_rate_table, to determine how
+   long it will take to send a packet given its size.
+ */
+static inline u32 qdisc_l2t(struct qdisc_rate_table* rtab, unsigned int pktlen)
+{
+	int slot = pktlen + rtab->rate.cell_align + rtab->rate.overhead;
+	if (slot < 0)
+		slot = 0;
+	slot >>= rtab->rate.cell_log;
+	if (slot > 255)
+		return (rtab->data[255]*(slot >> 8) + rtab->data[slot & 0xFF]);
+	return rtab->data[slot];
+}
+
+#ifdef CONFIG_NET_CLS_ACT
+static inline struct sk_buff *skb_act_clone(struct sk_buff *skb, gfp_t gfp_mask)
+{
+	struct sk_buff *n = skb_clone(skb, gfp_mask);
+
+	if (n) {
+		n->tc_verd = SET_TC_VERD(n->tc_verd, 0);
+		n->tc_verd = CLR_TC_OK2MUNGE(n->tc_verd);
+		n->tc_verd = CLR_TC_MUNGED(n->tc_verd);
+		n->iif = skb->iif;
+	}
+	return n;
+}
+#endif
 
 #endif

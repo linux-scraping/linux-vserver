@@ -44,8 +44,6 @@
 typedef __kernel_uid32_t qid_t; /* Type in which we store ids in memory */
 typedef __u64 qsize_t;          /* Type in which we store sizes */
 
-extern spinlock_t dq_data_lock;
-
 /* Size of blocks in which are counted size limits */
 #define QUOTABLOCK_BITS 10
 #define QUOTABLOCK_SIZE (1 << QUOTABLOCK_BITS)
@@ -130,6 +128,37 @@ struct if_dqinfo {
 	__u32 dqi_valid;
 };
 
+/*
+ * Definitions for quota netlink interface
+ */
+#define QUOTA_NL_NOWARN 0
+#define QUOTA_NL_IHARDWARN 1		/* Inode hardlimit reached */
+#define QUOTA_NL_ISOFTLONGWARN 2 	/* Inode grace time expired */
+#define QUOTA_NL_ISOFTWARN 3		/* Inode softlimit reached */
+#define QUOTA_NL_BHARDWARN 4		/* Block hardlimit reached */
+#define QUOTA_NL_BSOFTLONGWARN 5	/* Block grace time expired */
+#define QUOTA_NL_BSOFTWARN 6		/* Block softlimit reached */
+
+enum {
+	QUOTA_NL_C_UNSPEC,
+	QUOTA_NL_C_WARNING,
+	__QUOTA_NL_C_MAX,
+};
+#define QUOTA_NL_C_MAX (__QUOTA_NL_C_MAX - 1)
+
+enum {
+	QUOTA_NL_A_UNSPEC,
+	QUOTA_NL_A_QTYPE,
+	QUOTA_NL_A_EXCESS_ID,
+	QUOTA_NL_A_WARNING,
+	QUOTA_NL_A_DEV_MAJOR,
+	QUOTA_NL_A_DEV_MINOR,
+	QUOTA_NL_A_CAUSED_ID,
+	__QUOTA_NL_A_MAX,
+};
+#define QUOTA_NL_A_MAX (__QUOTA_NL_A_MAX - 1)
+
+
 #ifdef __KERNEL__
 #include <linux/spinlock.h>
 #include <linux/rwsem.h>
@@ -138,6 +167,8 @@ struct if_dqinfo {
 #include <linux/dqblk_xfs.h>
 #include <linux/dqblk_v1.h>
 #include <linux/dqblk_v2.h>
+
+extern spinlock_t dq_data_lock;
 
 /* Maximal numbers of writes for quota operation (insert/delete/update)
  * (over VFS all formats) */

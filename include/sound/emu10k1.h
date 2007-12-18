@@ -2,7 +2,7 @@
 #define __SOUND_EMU10K1_H
 
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>,
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>,
  *		     Creative Labs, Inc.
  *  Definitions for EMU10K1 (SB Live!) chips
  *
@@ -1120,6 +1120,16 @@
 /************************************************************************************************/
 /* EMU1010m HANA Destinations									*/
 /************************************************************************************************/
+/* 32-bit destinations of signal in the Hana FPGA. Destinations are either
+ * physical outputs of Hana, or outputs going to Alice2 (audigy) for capture
+ * - 16 x EMU_DST_ALICE2_EMU32_X.
+ */
+/* EMU32 = 32-bit serial channel between Alice2 (audigy) and Hana (FPGA) */
+/* EMU_DST_ALICE2_EMU32_X - data channels from Hana to Alice2 used for capture.
+ * Which data is fed into a EMU_DST_ALICE2_EMU32_X channel in Hana depends on
+ * setup of mixer control for each destination - see emumixer.c -
+ * snd_emu1010_output_enum_ctls[], snd_emu1010_input_enum_ctls[]
+ */
 #define EMU_DST_ALICE2_EMU32_0	0x000f	/* 16 EMU32 channels to Alice2 +0 to +0xf */
 #define EMU_DST_ALICE2_EMU32_1	0x0000	/* 16 EMU32 channels to Alice2 +0 to +0xf */
 #define EMU_DST_ALICE2_EMU32_2	0x0001	/* 16 EMU32 channels to Alice2 +0 to +0xf */
@@ -1199,6 +1209,12 @@
 /************************************************************************************************/
 /* EMU1010m HANA Sources									*/
 /************************************************************************************************/
+/* 32-bit sources of signal in the Hana FPGA. The sources are routed to
+ * destinations using mixer control for each destination - see emumixer.c
+ * Sources are either physical inputs of FPGA,
+ * or outputs from Alice (audigy) - 16 x EMU_SRC_ALICE_EMU32A +
+ * 16 x EMU_SRC_ALICE_EMU32B
+ */
 #define EMU_SRC_SILENCE		0x0000	/* Silence */
 #define EMU_SRC_DOCK_MIC_A1	0x0100	/* Audio Dock Mic A, 1st or 48kHz only */
 #define EMU_SRC_DOCK_MIC_A2	0x0101	/* Audio Dock Mic A, 2nd or 96kHz */
@@ -1392,8 +1408,6 @@ struct snd_emu10k1_fx8010 {
 	struct snd_emu10k1_fx8010_irq *irq_handlers;
 };
 
-#define emu10k1_gpr_ctl(n) list_entry(n, struct snd_emu10k1_fx8010_ctl, list)
-
 struct snd_emu10k1_midi {
 	struct snd_emu10k1 *emu;
 	struct snd_rawmidi *rmidi;
@@ -1440,6 +1454,9 @@ struct snd_emu1010 {
 	unsigned int adc_pads; /* bit mask */
 	unsigned int dac_pads; /* bit mask */
 	unsigned int internal_clock; /* 44100 or 48000 */
+	unsigned int optical_in; /* 0:SPDIF, 1:ADAT */
+	unsigned int optical_out; /* 0:SPDIF, 1:ADAT */
+	struct task_struct *firmware_thread;
 };
 
 struct snd_emu10k1 {
@@ -1583,9 +1600,9 @@ unsigned int snd_emu10k1_ptr20_read(struct snd_emu10k1 * emu, unsigned int reg, 
 void snd_emu10k1_ptr20_write(struct snd_emu10k1 *emu, unsigned int reg, unsigned int chn, unsigned int data);
 int snd_emu10k1_spi_write(struct snd_emu10k1 * emu, unsigned int data);
 int snd_emu10k1_i2c_write(struct snd_emu10k1 *emu, u32 reg, u32 value);
-int snd_emu1010_fpga_write(struct snd_emu10k1 * emu, int reg, int value);
-int snd_emu1010_fpga_read(struct snd_emu10k1 * emu, int reg, int *value);
-int snd_emu1010_fpga_link_dst_src_write(struct snd_emu10k1 * emu, int dst, int src);
+int snd_emu1010_fpga_write(struct snd_emu10k1 * emu, u32 reg, u32 value);
+int snd_emu1010_fpga_read(struct snd_emu10k1 * emu, u32 reg, u32 *value);
+int snd_emu1010_fpga_link_dst_src_write(struct snd_emu10k1 * emu, u32 dst, u32 src);
 unsigned int snd_emu10k1_efx_read(struct snd_emu10k1 *emu, unsigned int pc);
 void snd_emu10k1_intr_enable(struct snd_emu10k1 *emu, unsigned int intrenb);
 void snd_emu10k1_intr_disable(struct snd_emu10k1 *emu, unsigned int intrenb);
@@ -1730,6 +1747,8 @@ int snd_emu10k1_fx8010_unregister_irq_handler(struct snd_emu10k1 *emu,
 #define A_FXBUS2(x)	(0x80 + (x))	/* x = 0x00 - 0x1f extra outs used for EFX capture -> A_FXWC2 */
 #define A_EMU32OUTH(x)	(0xa0 + (x))	/* x = 0x00 - 0x0f "EMU32_OUT_10 - _1F" - ??? */
 #define A_EMU32OUTL(x)	(0xb0 + (x))	/* x = 0x00 - 0x0f "EMU32_OUT_1 - _F" - ??? */
+#define A3_EMU32IN(x)	(0x160 + (x))	/* x = 0x00 - 0x3f "EMU32_IN_00 - _3F" - Only when .device = 0x0008 */
+#define A3_EMU32OUT(x)	(0x1E0 + (x))	/* x = 0x00 - 0x0f "EMU32_OUT_00 - _3F" - Only when .device = 0x0008 */
 #define A_GPR(x)	(A_FXGPREGBASE + (x))
 
 /* cc_reg constants */

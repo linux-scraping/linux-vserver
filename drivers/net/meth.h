@@ -28,9 +28,6 @@
 #define RX_BUFFER_OFFSET (sizeof(rx_status_vector)+2) /* staus vector + 2 bytes of padding */
 #define RX_BUCKET_SIZE 256
 
-#undef BIT
-#define BIT(x)	(1UL << (x))
-
 /* For more detailed explanations of what each field menas,
    see Nick's great comments to #defines below (or docs, if
    you are lucky enough toget hold of them :)*/
@@ -126,7 +123,7 @@ typedef struct rx_packet {
 				       /*   Note: when loopback is set this bit becomes collision control.  Setting this bit will */
 				       /*         cause a collision to be reported. */
 
-				       /* Bits 5 and 6 are used to determine the the Destination address filter mode */
+				       /* Bits 5 and 6 are used to determine the Destination address filter mode */
 #define METH_ACCEPT_MY 0			/* 00: Accept PHY address only */
 #define METH_ACCEPT_MCAST 0x20	/* 01: Accept physical, broadcast, and multicast filter matches only */
 #define METH_ACCEPT_AMCAST 0x40	/* 10: Accept physical, broadcast, and all multicast packets */

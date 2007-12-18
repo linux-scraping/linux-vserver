@@ -12,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/seq_file.h>
 
 #include "internal.h"
@@ -20,6 +21,42 @@ static unsigned int crypto_hash_ctxsize(struct crypto_alg *alg, u32 type,
 					u32 mask)
 {
 	return alg->cra_ctxsize;
+}
+
+static int hash_setkey_unaligned(struct crypto_hash *crt, const u8 *key,
+		                 unsigned int keylen)
+{
+	struct crypto_tfm *tfm = crypto_hash_tfm(crt);
+	struct hash_alg *alg = &tfm->__crt_alg->cra_hash;
+	unsigned long alignmask = crypto_hash_alignmask(crt);
+	int ret;
+	u8 *buffer, *alignbuffer;
+	unsigned long absize;
+
+	absize = keylen + alignmask;
+	buffer = kmalloc(absize, GFP_ATOMIC);
+	if (!buffer)
+		return -ENOMEM;
+
+	alignbuffer = (u8 *)ALIGN((unsigned long)buffer, alignmask + 1);
+	memcpy(alignbuffer, key, keylen);
+	ret = alg->setkey(crt, alignbuffer, keylen);
+	memset(alignbuffer, 0, keylen);
+	kfree(buffer);
+	return ret;
+}
+
+static int hash_setkey(struct crypto_hash *crt, const u8 *key,
+		       unsigned int keylen)
+{
+	struct crypto_tfm *tfm = crypto_hash_tfm(crt);
+	struct hash_alg *alg = &tfm->__crt_alg->cra_hash;
+	unsigned long alignmask = crypto_hash_alignmask(crt);
+
+	if ((unsigned long)key & alignmask)
+		return hash_setkey_unaligned(crt, key, keylen);
+
+	return alg->setkey(crt, key, keylen);
 }
 
 static int crypto_init_hash_ops(struct crypto_tfm *tfm, u32 type, u32 mask)
@@ -34,14 +71,14 @@ static int crypto_init_hash_ops(struct crypto_tfm *tfm, u32 type, u32 mask)
 	crt->update = alg->update;
 	crt->final = alg->final;
 	crt->digest = alg->digest;
-	crt->setkey = alg->setkey;
+	crt->setkey = hash_setkey;
 	crt->digestsize = alg->digestsize;
 
 	return 0;
 }
 
 static void crypto_hash_show(struct seq_file *m, struct crypto_alg *alg)
-	__attribute_used__;
+	__attribute__ ((unused));
 static void crypto_hash_show(struct seq_file *m, struct crypto_alg *alg)
 {
 	seq_printf(m, "type         : hash\n");

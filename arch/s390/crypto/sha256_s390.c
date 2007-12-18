@@ -7,7 +7,7 @@
  *   Copyright IBM Corp. 2005,2007
  *   Author(s): Jan Glauber (jang@de.ibm.com)
  *
- * Derived from "crypto/sha256.c"
+ * Derived from "crypto/sha256_generic.c"
  * and "arch/s390/crypto/sha1_s390.c"
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -19,14 +19,12 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/crypto.h>
+#include <crypto/sha.h>
 
 #include "crypt_s390.h"
 
-#define SHA256_DIGEST_SIZE	32
-#define SHA256_BLOCK_SIZE	64
-
 struct s390_sha256_ctx {
-	u64 count;
+	u64 count;		/* message length */
 	u32 state[8];
 	u8 buf[2 * SHA256_BLOCK_SIZE];
 };
@@ -35,14 +33,14 @@ static void sha256_init(struct crypto_tfm *tfm)
 {
 	struct s390_sha256_ctx *sctx = crypto_tfm_ctx(tfm);
 
-	sctx->state[0] = 0x6a09e667;
-	sctx->state[1] = 0xbb67ae85;
-	sctx->state[2] = 0x3c6ef372;
-	sctx->state[3] = 0xa54ff53a;
-	sctx->state[4] = 0x510e527f;
-	sctx->state[5] = 0x9b05688c;
-	sctx->state[6] = 0x1f83d9ab;
-	sctx->state[7] = 0x5be0cd19;
+	sctx->state[0] = SHA256_H0;
+	sctx->state[1] = SHA256_H1;
+	sctx->state[2] = SHA256_H2;
+	sctx->state[3] = SHA256_H3;
+	sctx->state[4] = SHA256_H4;
+	sctx->state[5] = SHA256_H5;
+	sctx->state[6] = SHA256_H6;
+	sctx->state[7] = SHA256_H7;
 	sctx->count = 0;
 }
 
@@ -54,10 +52,9 @@ static void sha256_update(struct crypto_tfm *tfm, const u8 *data,
 	int ret;
 
 	/* how much is already in the buffer? */
-	index = sctx->count / 8 & 0x3f;
+	index = sctx->count & 0x3f;
 
-	/* update message bit length */
-	sctx->count += len * 8;
+	sctx->count += len;
 
 	if ((index + len) < SHA256_BLOCK_SIZE)
 		goto store;
@@ -87,12 +84,17 @@ store:
 		memcpy(sctx->buf + index , data, len);
 }
 
-static void pad_message(struct s390_sha256_ctx* sctx)
+/* Add padding and return the message digest */
+static void sha256_final(struct crypto_tfm *tfm, u8 *out)
 {
-	int index, end;
+	struct s390_sha256_ctx *sctx = crypto_tfm_ctx(tfm);
+	u64 bits;
+	unsigned int index, end;
+	int ret;
 
-	index = sctx->count / 8 & 0x3f;
-	end = index < 56 ? SHA256_BLOCK_SIZE : 2 * SHA256_BLOCK_SIZE;
+	/* must perform manual padding */
+	index = sctx->count & 0x3f;
+	end = (index < 56) ? SHA256_BLOCK_SIZE : (2 * SHA256_BLOCK_SIZE);
 
 	/* start pad with 1 */
 	sctx->buf[index] = 0x80;
@@ -102,21 +104,11 @@ static void pad_message(struct s390_sha256_ctx* sctx)
 	memset(sctx->buf + index, 0x00, end - index - 8);
 
 	/* append message length */
-	memcpy(sctx->buf + end - 8, &sctx->count, sizeof sctx->count);
+	bits = sctx->count * 8;
+	memcpy(sctx->buf + end - 8, &bits, sizeof(bits));
 
-	sctx->count = end * 8;
-}
-
-/* Add padding and return the message digest */
-static void sha256_final(struct crypto_tfm *tfm, u8 *out)
-{
-	struct s390_sha256_ctx *sctx = crypto_tfm_ctx(tfm);
-
-	/* must perform manual padding */
-	pad_message(sctx);
-
-	crypt_s390_kimd(KIMD_SHA_256, sctx->state, sctx->buf,
-			sctx->count / 8);
+	ret = crypt_s390_kimd(KIMD_SHA_256, sctx->state, sctx->buf, end);
+	BUG_ON(ret != end);
 
 	/* copy digest to out */
 	memcpy(out, sctx->state, SHA256_DIGEST_SIZE);

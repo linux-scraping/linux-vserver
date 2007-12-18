@@ -3,7 +3,7 @@
  *
  * This file is part of the SCTP kernel reference Implementation
  *
- * This file contains the code relating the the chunk abstraction.
+ * This file contains the code relating the chunk abstraction.
  *
  * The SCTP reference implementation is free software;
  * you can redistribute it and/or modify it under the terms of
@@ -193,6 +193,18 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 	}
 
 	max = asoc->frag_point;
+
+	/* If the the peer requested that we authenticate DATA chunks
+	 * we need to accound for bundling of the AUTH chunks along with
+	 * DATA.
+	 */
+	if (sctp_auth_send_cid(SCTP_CID_DATA, asoc)) {
+		struct sctp_hmac *hmac_desc = sctp_auth_asoc_get_hmac(asoc);
+
+		if (hmac_desc)
+			max -= WORD_ROUND(sizeof(sctp_auth_chunk_t) +
+					    hmac_desc->hmac_len);
+	}
 
 	whole = 0;
 	first_len = max;

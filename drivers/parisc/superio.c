@@ -73,6 +73,7 @@
 #include <linux/termios.h>
 #include <linux/tty.h>
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 #include <linux/delay.h>
 
 #include <asm/io.h>
@@ -154,6 +155,7 @@ superio_init(struct pci_dev *pcidev)
 	struct superio_device *sio = &sio_dev;
 	struct pci_dev *pdev = sio->lio_pdev;
 	u16 word;
+	int ret;
 
 	if (sio->suckyio_irq_enabled)
 		return;
@@ -199,7 +201,8 @@ superio_init(struct pci_dev *pcidev)
 	pci_write_config_word (pdev, PCI_COMMAND, word);
 
 	pci_set_master (pdev);
-	pci_enable_device(pdev);
+	ret = pci_enable_device(pdev);
+	BUG_ON(ret < 0);	/* not too much we can do about this... */
 
 	/*
 	 * Next project is programming the onboard interrupt controllers.
@@ -389,7 +392,7 @@ int superio_fixup_irq(struct pci_dev *pcidev)
 	return local_irq;
 }
 
-static void __devinit superio_serial_init(void)
+static void __init superio_serial_init(void)
 {
 #ifdef CONFIG_SERIAL_8250
 	int retval;
@@ -423,7 +426,7 @@ static void __devinit superio_serial_init(void)
 }
 
 
-static void __devinit superio_parport_init(void)
+static void __init superio_parport_init(void)
 {
 #ifdef CONFIG_PARPORT_PC
 	if (!parport_pc_probe_port(sio_dev.pp_base,
@@ -450,7 +453,7 @@ static void superio_fixup_pci(struct pci_dev *pdev)
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87415, superio_fixup_pci);
 
 
-static int __devinit
+static int __init
 superio_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	struct superio_device *sio = &sio_dev;
@@ -485,7 +488,7 @@ superio_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	return -ENODEV;
 }
 
-static struct pci_device_id superio_tbl[] = {
+static const struct pci_device_id superio_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87560_LIO) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87560_USB) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_DEVICE_ID_NS_87415) },

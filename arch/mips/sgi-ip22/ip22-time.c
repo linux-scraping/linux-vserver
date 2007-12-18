@@ -20,6 +20,7 @@
 
 #include <asm/cpu.h>
 #include <asm/mipsregs.h>
+#include <asm/i8253.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/time.h>
@@ -29,10 +30,10 @@
 #include <asm/sgi/ip22.h>
 
 /*
- * note that mktime uses month from 1 to 12 while to_tm
+ * Note that mktime uses month from 1 to 12 while rtc_time_to_tm
  * uses 0 to 11.
  */
-static unsigned long indy_rtc_get_time(void)
+unsigned long read_persistent_clock(void)
 {
 	unsigned int yrs, mon, day, hrs, min, sec;
 	unsigned int save_control;
@@ -60,16 +61,16 @@ static unsigned long indy_rtc_get_time(void)
 	return mktime(yrs + 1900, mon, day, hrs, min, sec);
 }
 
-static int indy_rtc_set_time(unsigned long tim)
+int rtc_mips_set_time(unsigned long tim)
 {
 	struct rtc_time tm;
 	unsigned int save_control;
 	unsigned long flags;
 
-	to_tm(tim, &tm);
+	rtc_time_to_tm(tim, &tm);
 
 	tm.tm_mon += 1;		/* tm_mon starts at zero */
-	tm.tm_year -= 1940;
+	tm.tm_year -= 40;
 	if (tm.tm_year >= 100)
 		tm.tm_year -= 100;
 
@@ -94,7 +95,7 @@ static int indy_rtc_set_time(unsigned long tim)
 static unsigned long dosample(void)
 {
 	u32 ct0, ct1;
-	volatile u8 msb, lsb;
+	u8 msb, lsb;
 
 	/* Start the counter. */
 	sgint->tcword = (SGINT_TCWORD_CNT2 | SGINT_TCWORD_CALL |
@@ -107,28 +108,28 @@ static unsigned long dosample(void)
 
 	/* Latch and spin until top byte of counter2 is zero */
 	do {
-		sgint->tcword = SGINT_TCWORD_CNT2 | SGINT_TCWORD_CLAT;
-		lsb = sgint->tcnt2;
-		msb = sgint->tcnt2;
+		writeb(SGINT_TCWORD_CNT2 | SGINT_TCWORD_CLAT, &sgint->tcword);
+		lsb = readb(&sgint->tcnt2);
+		msb = readb(&sgint->tcnt2);
 		ct1 = read_c0_count();
 	} while (msb);
 
 	/* Stop the counter. */
-	sgint->tcword = (SGINT_TCWORD_CNT2 | SGINT_TCWORD_CALL |
-			 SGINT_TCWORD_MSWST);
+	writeb(SGINT_TCWORD_CNT2 | SGINT_TCWORD_CALL | SGINT_TCWORD_MSWST,
+	       &sgint->tcword);
 	/*
 	 * Return the difference, this is how far the r4k counter increments
 	 * for every 1/HZ seconds. We round off the nearest 1 MHz of master
 	 * clock (= 1000000 / HZ / 2).
 	 */
-	/*return (ct1 - ct0 + (500000/HZ/2)) / (500000/HZ) * (500000/HZ);*/
+
 	return (ct1 - ct0) / (500000/HZ) * (500000/HZ);
 }
 
 /*
  * Here we need to calibrate the cycle counter to at least be close.
  */
-static __init void indy_time_init(void)
+__init void plat_time_init(void)
 {
 	unsigned long r4k_ticks[3];
 	unsigned long r4k_tick;
@@ -172,6 +173,9 @@ static __init void indy_time_init(void)
 		(int) (r4k_tick % (500000 / HZ)));
 
 	mips_hpt_frequency = r4k_tick * HZ;
+
+	if (ip22_is_fullhouse())
+		setup_pit_timer();
 }
 
 /* Generic SGI handler for (spurious) 8254 interrupts */
@@ -187,32 +191,4 @@ void indy_8254timer_irq(void)
 	ArcRead(0, &c, 1, &cnt);
 	ArcEnterInteractiveMode();
 	irq_exit();
-}
-
-void indy_r4k_timer_interrupt(void)
-{
-	int irq = SGI_TIMER_IRQ;
-
-	irq_enter();
-	kstat_this_cpu.irqs[irq]++;
-	timer_interrupt(irq, NULL);
-	irq_exit();
-}
-
-void __init plat_timer_setup(struct irqaction *irq)
-{
-	/* over-write the handler, we use our own way */
-	irq->handler = no_action;
-
-	/* setup irqaction */
-	setup_irq(SGI_TIMER_IRQ, irq);
-}
-
-void __init ip22_time_init(void)
-{
-	/* setup hookup functions */
-	rtc_mips_get_time = indy_rtc_get_time;
-	rtc_mips_set_time = indy_rtc_set_time;
-
-	board_time_init = indy_time_init;
 }

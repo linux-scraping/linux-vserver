@@ -1,5 +1,5 @@
 /*
- * linux/drivers/video/softcursor.c
+ * linux/drivers/video/console/softcursor.c
  *
  * Generic software cursor for frame buffer devices
  *
@@ -15,7 +15,6 @@
 #include <linux/fb.h>
 #include <linux/slab.h>
 
-#include <asm/uaccess.h>
 #include <asm/io.h>
 
 #include "fbcon.h"

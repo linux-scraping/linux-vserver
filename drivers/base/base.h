@@ -16,10 +16,8 @@ extern int cpu_dev_init(void);
 extern int attribute_container_init(void);
 
 extern int bus_add_device(struct device * dev);
-extern int bus_attach_device(struct device * dev);
+extern void bus_attach_device(struct device * dev);
 extern void bus_remove_device(struct device * dev);
-extern struct bus_type *get_bus(struct bus_type * bus);
-extern void put_bus(struct bus_type * bus);
 
 extern int bus_add_driver(struct device_driver *);
 extern void bus_remove_driver(struct device_driver *);
@@ -44,4 +42,6 @@ struct class_device_attribute *to_class_dev_attr(struct attribute *_attr)
 
 extern char *make_class_name(const char *name, struct kobject *kobj);
 
-extern void devres_release_all(struct device *dev);
+extern int devres_release_all(struct device *dev);
+
+extern struct kset devices_subsys;

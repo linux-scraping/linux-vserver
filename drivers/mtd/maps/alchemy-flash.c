@@ -1,10 +1,7 @@
 /*
  * Flash memory access on AMD Alchemy evaluation boards
  *
- * $Id: alchemy-flash.c,v 1.2 2005/11/07 11:14:26 gleixner Exp $
- *
  * (C) 2003, 2004 Pete Popov <ppopov@embeddedalley.com>
- *
  */
 
 #include <linux/init.h>
@@ -17,12 +14,6 @@
 #include <linux/mtd/partitions.h>
 
 #include <asm/io.h>
-
-#ifdef 	DEBUG_RW
-#define	DBG(x...)	printk(x)
-#else
-#define	DBG(x...)
-#endif
 
 #ifdef CONFIG_MIPS_PB1000
 #define BOARD_MAP_NAME "Pb1000 Flash"
@@ -84,13 +75,6 @@
 #define BOARD_FLASH_WIDTH 2 /* 16-bits */
 #endif
 
-#ifdef CONFIG_MIPS_HYDROGEN3
-#define BOARD_MAP_NAME "Hydrogen3 Flash"
-#define BOARD_FLASH_SIZE 0x02000000 /* 32MB */
-#define BOARD_FLASH_WIDTH 4 /* 32-bits */
-#define USE_LOCAL_ACCESSORS /* why? */
-#endif
-
 #ifdef CONFIG_MIPS_BOSPORUS
 #define BOARD_MAP_NAME "Bosporus Flash"
 #define BOARD_FLASH_SIZE 0x01000000 /* 16MB */
@@ -139,13 +123,6 @@ int __init alchemy_mtd_init(void)
 
 	window_addr = 0x20000000 - BOARD_FLASH_SIZE;
 	window_size = BOARD_FLASH_SIZE;
-#ifdef CONFIG_MIPS_MIRAGE_WHY
-	/* Boot ROM flash bank only; no user bank */
-	window_addr = 0x1C000000;
-	window_size = 0x04000000;
-	/* USERFS from 0x1C00 0000 to 0x1FC00000 */
-	alchemy_partitions[0].size = 0x03C00000;
-#endif
 
 	/*
 	 * Static partition definition selection

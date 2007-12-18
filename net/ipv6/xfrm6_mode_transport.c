@@ -18,12 +18,6 @@
  *
  * The IP header and mutable extension headers will be moved forward to make
  * space for the encapsulation header.
- *
- * On exit, skb->h will be set to the start of the encapsulation header to be
- * filled in by x->type->output and skb->nh will be set to the nextheader field
- * of the extension header directly preceding the encapsulation header, or in
- * its absence, that of the top IP header.  The value of skb->data will always
- * point to the top IP header.
  */
 static int xfrm6_transport_output(struct xfrm_state *x, struct sk_buff *skb)
 {
@@ -31,13 +25,14 @@ static int xfrm6_transport_output(struct xfrm_state *x, struct sk_buff *skb)
 	u8 *prevhdr;
 	int hdr_len;
 
-	skb_push(skb, x->props.header_len);
-	iph = skb->nh.ipv6h;
+	iph = ipv6_hdr(skb);
 
 	hdr_len = x->type->hdr_offset(x, skb, &prevhdr);
-	skb->nh.raw = prevhdr - x->props.header_len;
-	skb->h.raw = skb->data + hdr_len;
-	memmove(skb->data, iph, hdr_len);
+	skb_set_mac_header(skb, (prevhdr - x->props.header_len) - skb->data);
+	skb_set_network_header(skb, -x->props.header_len);
+	skb->transport_header = skb->network_header + hdr_len;
+	__skb_pull(skb, hdr_len);
+	memmove(ipv6_hdr(skb), iph, hdr_len);
 	return 0;
 }
 
@@ -51,13 +46,16 @@ static int xfrm6_transport_output(struct xfrm_state *x, struct sk_buff *skb)
  */
 static int xfrm6_transport_input(struct xfrm_state *x, struct sk_buff *skb)
 {
-	int ihl = skb->data - skb->h.raw;
+	int ihl = skb->data - skb_transport_header(skb);
 
-	if (skb->h.raw != skb->nh.raw)
-		skb->nh.raw = memmove(skb->h.raw, skb->nh.raw, ihl);
-	skb->nh.ipv6h->payload_len = htons(skb->len + ihl -
+	if (skb->transport_header != skb->network_header) {
+		memmove(skb_transport_header(skb),
+			skb_network_header(skb), ihl);
+		skb->network_header = skb->transport_header;
+	}
+	ipv6_hdr(skb)->payload_len = htons(skb->len + ihl -
 					   sizeof(struct ipv6hdr));
-	skb->h.raw = skb->data;
+	skb_reset_transport_header(skb);
 	return 0;
 }
 

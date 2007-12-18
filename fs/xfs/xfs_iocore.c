@@ -52,16 +52,16 @@ STATIC xfs_fsize_t
 xfs_size_fn(
 	xfs_inode_t		*ip)
 {
-	return (ip->i_d.di_size);
+	return XFS_ISIZE(ip);
 }
 
 STATIC int
 xfs_ioinit(
-	struct bhv_vfs		*vfsp,
+	struct xfs_mount	*mp,
 	struct xfs_mount_args	*mntargs,
 	int			flags)
 {
-	return xfs_mountfs(vfsp, XFS_VFSTOM(vfsp), flags);
+	return xfs_mountfs(mp, flags);
 }
 
 xfs_ioops_t	xfs_iocore_xfs = {

@@ -245,7 +245,7 @@ static int imx_set_target(struct cpufreq_policy *policy,
 	if(mpctl0) {
 		CSCR |= CSCR_MPLL_RESTART;
 
-		/* Wait until MPLL is stablized */
+		/* Wait until MPLL is stabilized */
 		while( CSCR & CSCR_MPLL_RESTART );
 
 		imx_set_async_mode();
@@ -269,7 +269,6 @@ static int __init imx_cpufreq_driver_init(struct cpufreq_policy *policy)
 		return -EINVAL;
 
 	policy->cur = policy->min = policy->max = imx_get_speed(0);
-	policy->governor = CPUFREQ_DEFAULT_GOVERNOR;
 	policy->cpuinfo.min_freq = 8000;
 	policy->cpuinfo.max_freq = 200000;
 	 /* Manual states, that PLL stabilizes in two CLK32 periods */

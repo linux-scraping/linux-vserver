@@ -3,7 +3,11 @@
  * multifunction chip.  Currently works with the Omnivision OV7670
  * sensor.
  *
+ * The data sheet for this device can be found at:
+ *    http://www.marvell.com/products/pcconn/88ALP01.jsp
+ *
  * Copyright 2006 One Laptop Per Child Association, Inc.
+ * Copyright 2006-7 Jonathan Corbet <corbet@lwn.net>
  *
  * Written by Jonathan Corbet, corbet@lwn.net.
  *
@@ -13,7 +17,6 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/pci.h>
@@ -22,6 +25,7 @@
 #include <linux/spinlock.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-common.h>
+#include <media/v4l2-chip-ident.h>
 #include <linux/device.h>
 #include <linux/wait.h>
 #include <linux/list.h>
@@ -36,7 +40,7 @@
 
 #include "cafe_ccic-regs.h"
 
-#define CAFE_VERSION 0x000001
+#define CAFE_VERSION 0x000002
 
 
 /*
@@ -61,13 +65,13 @@ MODULE_SUPPORTED_DEVICE("Video");
  */
 
 #define MAX_DMA_BUFS 3
-static int alloc_bufs_at_load = 0;
-module_param(alloc_bufs_at_load, bool, 0444);
-MODULE_PARM_DESC(alloc_bufs_at_load,
-		"Non-zero value causes DMA buffers to be allocated at module "
-		"load time.  This increases the chances of successfully getting "
-		"those buffers, but at the cost of nailing down the memory from "
-		"the outset.");
+static int alloc_bufs_at_read = 0;
+module_param(alloc_bufs_at_read, bool, 0444);
+MODULE_PARM_DESC(alloc_bufs_at_read,
+		"Non-zero value causes DMA buffers to be allocated when the "
+		"video capture device is read, rather than at module load "
+		"time.  This saves memory, but decreases the chances of "
+		"successfully getting those buffers.");
 
 static int n_dma_bufs = 3;
 module_param(n_dma_bufs, uint, 0644);
@@ -164,7 +168,7 @@ struct cafe_camera
 	struct tasklet_struct s_tasklet;
 
 	/* Current operating parameters */
-	enum v4l2_chip_ident sensor_type;		/* Currently ov7670 only */
+	u32 sensor_type;		/* Currently ov7670 only */
 	struct v4l2_pix_format pix_format;
 
 	/* Locks */
@@ -354,6 +358,7 @@ static int cafe_smbus_write_data(struct cafe_camera *cam,
 {
 	unsigned int rval;
 	unsigned long flags;
+	DEFINE_WAIT(the_wait);
 
 	spin_lock_irqsave(&cam->dev_lock, flags);
 	rval = TWSIC0_EN | ((addr << TWSIC0_SID_SHIFT) & TWSIC0_SID);
@@ -367,10 +372,29 @@ static int cafe_smbus_write_data(struct cafe_camera *cam,
 	rval = value | ((command << TWSIC1_ADDR_SHIFT) & TWSIC1_ADDR);
 	cafe_reg_write(cam, REG_TWSIC1, rval);
 	spin_unlock_irqrestore(&cam->dev_lock, flags);
-	msleep(2); /* Required or things flake */
 
+	/*
+	 * Time to wait for the write to complete.  THIS IS A RACY
+	 * WAY TO DO IT, but the sad fact is that reading the TWSIC1
+	 * register too quickly after starting the operation sends
+	 * the device into a place that may be kinder and better, but
+	 * which is absolutely useless for controlling the sensor.  In
+	 * practice we have plenty of time to get into our sleep state
+	 * before the interrupt hits, and the worst case is that we
+	 * time out and then see that things completed, so this seems
+	 * the best way for now.
+	 */
+	do {
+		prepare_to_wait(&cam->smbus_wait, &the_wait,
+				TASK_UNINTERRUPTIBLE);
+		schedule_timeout(1); /* even 1 jiffy is too long */
+		finish_wait(&cam->smbus_wait, &the_wait);
+	} while (!cafe_smbus_write_done(cam));
+
+#ifdef IF_THE_CAFE_HARDWARE_WORKED_RIGHT
 	wait_event_timeout(cam->smbus_wait, cafe_smbus_write_done(cam),
 			CAFE_SMBUS_TIMEOUT);
+#endif
 	spin_lock_irqsave(&cam->dev_lock, flags);
 	rval = cafe_reg_read(cam, REG_TWSIC1);
 	spin_unlock_irqrestore(&cam->dev_lock, flags);
@@ -704,7 +728,13 @@ static void cafe_ctlr_init(struct cafe_camera *cam)
 	cafe_reg_write(cam, REG_GL_CSR, GCSR_SRS|GCSR_MRS); /* Needed? */
 	cafe_reg_write(cam, REG_GL_CSR, GCSR_SRC|GCSR_MRC);
 	cafe_reg_write(cam, REG_GL_CSR, GCSR_SRC|GCSR_MRS);
-	mdelay(5);	/* FIXME revisit this */
+	/*
+	 * Here we must wait a bit for the controller to come around.
+	 */
+	spin_unlock_irqrestore(&cam->dev_lock, flags);
+	msleep(5);
+	spin_lock_irqsave(&cam->dev_lock, flags);
+
 	cafe_reg_write(cam, REG_GL_CSR, GCSR_CCIC_EN|GCSR_SRC|GCSR_MRC);
 	cafe_reg_set_bit(cam, REG_GL_IMASK, GIMSK_CCIC_EN);
 	/*
@@ -767,15 +797,22 @@ static void cafe_ctlr_power_up(struct cafe_camera *cam)
 	spin_lock_irqsave(&cam->dev_lock, flags);
 	cafe_reg_clear_bit(cam, REG_CTRL1, C1_PWRDWN);
 	/*
+	 * Part one of the sensor dance: turn the global
+	 * GPIO signal on.
+	 */
+	cafe_reg_write(cam, REG_GL_FCR, GFCR_GPIO_ON);
+	cafe_reg_write(cam, REG_GL_GPIOR, GGPIO_OUT|GGPIO_VAL);
+	/*
 	 * Put the sensor into operational mode (assumes OLPC-style
 	 * wiring).  Control 0 is reset - set to 1 to operate.
 	 * Control 1 is power down, set to 0 to operate.
 	 */
 	cafe_reg_write(cam, REG_GPR, GPR_C1EN|GPR_C0EN); /* pwr up, reset */
-	mdelay(1); /* Marvell says 1ms will do it */
+//	mdelay(1); /* Marvell says 1ms will do it */
 	cafe_reg_write(cam, REG_GPR, GPR_C1EN|GPR_C0EN|GPR_C0);
-	mdelay(1); /* Enough? */
+//	mdelay(1); /* Enough? */
 	spin_unlock_irqrestore(&cam->dev_lock, flags);
+	msleep(5); /* Just to be sure */
 }
 
 static void cafe_ctlr_power_down(struct cafe_camera *cam)
@@ -784,6 +821,8 @@ static void cafe_ctlr_power_down(struct cafe_camera *cam)
 
 	spin_lock_irqsave(&cam->dev_lock, flags);
 	cafe_reg_write(cam, REG_GPR, GPR_C1EN|GPR_C0EN|GPR_C1);
+	cafe_reg_write(cam, REG_GL_FCR, GFCR_GPIO_ON);
+	cafe_reg_write(cam, REG_GL_GPIOR, GGPIO_OUT);
 	cafe_reg_set_bit(cam, REG_CTRL1, C1_PWRDWN);
 	spin_unlock_irqrestore(&cam->dev_lock, flags);
 }
@@ -818,6 +857,7 @@ static int __cafe_cam_reset(struct cafe_camera *cam)
  */
 static int cafe_cam_init(struct cafe_camera *cam)
 {
+	struct v4l2_chip_ident chip = { V4L2_CHIP_MATCH_I2C_ADDR, 0, 0, 0 };
 	int ret;
 
 	mutex_lock(&cam->s_mutex);
@@ -827,9 +867,11 @@ static int cafe_cam_init(struct cafe_camera *cam)
 	ret = __cafe_cam_reset(cam);
 	if (ret)
 		goto out;
-	ret = __cafe_cam_cmd(cam, VIDIOC_INT_G_CHIP_IDENT, &cam->sensor_type);
+	chip.match_chip = cam->sensor->addr;
+	ret = __cafe_cam_cmd(cam, VIDIOC_G_CHIP_IDENT, &chip);
 	if (ret)
 		goto out;
+	cam->sensor_type = chip.ident;
 //	if (cam->sensor->addr != OV7xx0_SID) {
 	if (cam->sensor_type != V4L2_IDENT_OV7670) {
 		cam_err(cam, "Unsupported sensor type %d", cam->sensor->addr);
@@ -840,6 +882,7 @@ static int cafe_cam_init(struct cafe_camera *cam)
 	ret = 0;
 	cam->state = S_IDLE;
   out:
+	cafe_ctlr_power_down(cam);
 	mutex_unlock(&cam->s_mutex);
 	return ret;
 }
@@ -1157,7 +1200,7 @@ static int cafe_setup_siobuf(struct cafe_camera *cam, int index)
 	buf->v4lbuf.field = V4L2_FIELD_NONE;
 	buf->v4lbuf.memory = V4L2_MEMORY_MMAP;
 	/*
-	 * Offset: must be 32-bit even on a 64-bit system.  video-buf
+	 * Offset: must be 32-bit even on a 64-bit system.  videobuf-dma-sg
 	 * just uses the length times the index, but the spec warns
 	 * against doing just that - vma merging problems.  So we
 	 * leave a gap between each pair of buffers.
@@ -1462,7 +1505,7 @@ static int cafe_v4l_release(struct inode *inode, struct file *filp)
 	}
 	if (cam->users == 0) {
 		cafe_ctlr_power_down(cam);
-		if (! alloc_bufs_at_load)
+		if (alloc_bufs_at_read)
 			cafe_free_dma_bufs(cam);
 	}
 	mutex_unlock(&cam->s_mutex);
@@ -1792,18 +1835,19 @@ static void cafe_frame_tasklet(unsigned long data)
 		if (list_empty(&cam->sb_avail))
 			break;  /* Leave it valid, hope for better later */
 		clear_bit(bufno, &cam->flags);
-		/*
-		 * We could perhaps drop the spinlock during this
-		 * big copy.  Something to consider.
-		 */
 		sbuf = list_entry(cam->sb_avail.next,
 				struct cafe_sio_buffer, list);
+		/*
+		 * Drop the lock during the big copy.  This *should* be safe...
+		 */
+		spin_unlock_irqrestore(&cam->dev_lock, flags);
 		memcpy(sbuf->buffer, cam->dma_bufs[bufno],
 				cam->pix_format.sizeimage);
 		sbuf->v4lbuf.bytesused = cam->pix_format.sizeimage;
 		sbuf->v4lbuf.sequence = cam->buf_seq[bufno];
 		sbuf->v4lbuf.flags &= ~V4L2_BUF_FLAG_QUEUED;
 		sbuf->v4lbuf.flags |= V4L2_BUF_FLAG_DONE;
+		spin_lock_irqsave(&cam->dev_lock, flags);
 		list_move_tail(&sbuf->list, &cam->sb_full);
 	}
 	if (! list_empty(&cam->sb_full))
@@ -2091,10 +2135,16 @@ static int cafe_pci_probe(struct pci_dev *pdev,
 	ret = request_irq(pdev->irq, cafe_irq, IRQF_SHARED, "cafe-ccic", cam);
 	if (ret)
 		goto out_iounmap;
+	/*
+	 * Initialize the controller and leave it powered up.  It will
+	 * stay that way until the sensor driver shows up.
+	 */
 	cafe_ctlr_init(cam);
 	cafe_ctlr_power_up(cam);
 	/*
-	 * Set up I2C/SMBUS communications
+	 * Set up I2C/SMBUS communications.  We have to drop the mutex here
+	 * because the sensor could attach in this call chain, leading to
+	 * unsightly deadlocks.
 	 */
 	mutex_unlock(&cam->s_mutex);  /* attach can deadlock */
 	ret = cafe_smbus_setup(cam);
@@ -2107,13 +2157,14 @@ static int cafe_pci_probe(struct pci_dev *pdev,
 	cam->v4ldev = cafe_v4l_template;
 	cam->v4ldev.debug = 0;
 //	cam->v4ldev.debug = V4L2_DEBUG_IOCTL_ARG;
+	cam->v4ldev.dev = &pdev->dev;
 	ret = video_register_device(&cam->v4ldev, VFL_TYPE_GRABBER, -1);
 	if (ret)
 		goto out_smbus;
 	/*
 	 * If so requested, try to get our DMA buffers now.
 	 */
-	if (alloc_bufs_at_load) {
+	if (!alloc_bufs_at_read) {
 		if (cafe_alloc_dma_bufs(cam, 1))
 			cam_warn(cam, "Unable to alloc DMA buffers at load"
 					" will try again later.");
@@ -2176,10 +2227,64 @@ static void cafe_pci_remove(struct pci_dev *pdev)
 }
 
 
+#ifdef CONFIG_PM
+/*
+ * Basic power management.
+ */
+static int cafe_pci_suspend(struct pci_dev *pdev, pm_message_t state)
+{
+	struct cafe_camera *cam = cafe_find_by_pdev(pdev);
+	int ret;
+	enum cafe_state cstate;
+
+	ret = pci_save_state(pdev);
+	if (ret)
+		return ret;
+	cstate = cam->state; /* HACK - stop_dma sets to idle */
+	cafe_ctlr_stop_dma(cam);
+	cafe_ctlr_power_down(cam);
+	pci_disable_device(pdev);
+	cam->state = cstate;
+	return 0;
+}
+
+
+static int cafe_pci_resume(struct pci_dev *pdev)
+{
+	struct cafe_camera *cam = cafe_find_by_pdev(pdev);
+	int ret = 0;
+
+	ret = pci_restore_state(pdev);
+	if (ret)
+		return ret;
+	ret = pci_enable_device(pdev);
+
+	if (ret) {
+		cam_warn(cam, "Unable to re-enable device on resume!\n");
+		return ret;
+	}
+	cafe_ctlr_init(cam);
+	cafe_ctlr_power_down(cam);
+
+	mutex_lock(&cam->s_mutex);
+	if (cam->users > 0) {
+		cafe_ctlr_power_up(cam);
+		__cafe_cam_reset(cam);
+	}
+	mutex_unlock(&cam->s_mutex);
+
+	set_bit(CF_CONFIG_NEEDED, &cam->flags);
+	if (cam->state == S_SPECREAD)
+		cam->state = S_IDLE;  /* Don't bother restarting */
+	else if (cam->state == S_SINGLEREAD || cam->state == S_STREAMING)
+		ret = cafe_read_setup(cam, cam->state);
+	return ret;
+}
+
+#endif  /* CONFIG_PM */
 
 
 static struct pci_device_id cafe_ids[] = {
-	{ PCI_DEVICE(0x1148, 0x4340) }, /* Temporary ID on devel board */
 	{ PCI_DEVICE(0x11ab, 0x4100) }, /* Eventual real ID */
 	{ PCI_DEVICE(0x11ab, 0x4102) }, /* Really eventual real ID */
 	{ 0, }
@@ -2192,6 +2297,10 @@ static struct pci_driver cafe_pci_driver = {
 	.id_table = cafe_ids,
 	.probe = cafe_pci_probe,
 	.remove = cafe_pci_remove,
+#ifdef CONFIG_PM
+	.suspend = cafe_pci_suspend,
+	.resume = cafe_pci_resume,
+#endif
 };
 
 

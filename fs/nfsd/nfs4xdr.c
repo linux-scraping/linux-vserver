@@ -44,7 +44,6 @@
 
 #include <linux/param.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/vfs.h>
@@ -57,6 +56,8 @@
 #include <linux/nfsd_idmap.h>
 #include <linux/nfs4.h>
 #include <linux/nfs4_acl.h>
+#include <linux/sunrpc/gss_api.h>
+#include <linux/sunrpc/svcauth_gss.h>
 #include <linux/vs_tag.h>
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
@@ -102,7 +103,8 @@ check_filename(char *str, int len, __be32 err)
 out:						\
 	return status;				\
 xdr_error:					\
-	printk(KERN_NOTICE "xdr error! (%s:%d)\n", __FILE__, __LINE__);	\
+	dprintk("NFSD: xdr error (%s:%d)\n",	\
+			__FILE__, __LINE__);	\
 	status = nfserr_bad_xdr;		\
 	goto out
 
@@ -124,7 +126,8 @@ xdr_error:					\
 	if (!(x = (p==argp->tmp || p == argp->tmpp) ? \
  		savemem(argp, p, nbytes) :	\
  		(char *)p)) {			\
-		printk(KERN_NOTICE "xdr error! (%s:%d)\n", __FILE__, __LINE__); \
+		dprintk("NFSD: xdr error (%s:%d)\n", \
+				__FILE__, __LINE__); \
 		goto xdr_error;			\
 		}				\
 	p += XDR_QUADLEN(nbytes);		\
@@ -140,7 +143,8 @@ xdr_error:					\
 		p = argp->p;			\
 		argp->p += XDR_QUADLEN(nbytes);	\
 	} else if (!(p = read_buf(argp, nbytes))) { \
-		printk(KERN_NOTICE "xdr error! (%s:%d)\n", __FILE__, __LINE__); \
+		dprintk("NFSD: xdr error (%s:%d)\n", \
+				__FILE__, __LINE__); \
 		goto xdr_error;			\
 	}					\
 } while (0)
@@ -821,6 +825,23 @@ nfsd4_decode_renew(struct nfsd4_compoundargs *argp, clientid_t *clientid)
 }
 
 static __be32
+nfsd4_decode_secinfo(struct nfsd4_compoundargs *argp,
+		     struct nfsd4_secinfo *secinfo)
+{
+	DECODE_HEAD;
+
+	READ_BUF(4);
+	READ32(secinfo->si_namelen);
+	READ_BUF(secinfo->si_namelen);
+	SAVEMEM(secinfo->si_name, secinfo->si_namelen);
+	status = check_filename(secinfo->si_name, secinfo->si_namelen,
+								nfserr_noent);
+	if (status)
+		return status;
+	DECODE_TAIL;
+}
+
+static __be32
 nfsd4_decode_setattr(struct nfsd4_compoundargs *argp, struct nfsd4_setattr *setattr)
 {
 	DECODE_HEAD;
@@ -931,7 +952,8 @@ nfsd4_decode_write(struct nfsd4_compoundargs *argp, struct nfsd4_write *write)
 	 */
 	avail = (char*)argp->end - (char*)argp->p;
 	if (avail + argp->pagelen < write->wr_buflen) {
-		printk(KERN_NOTICE "xdr error! (%s:%d)\n", __FILE__, __LINE__); 
+		dprintk("NFSD: xdr error (%s:%d)\n",
+				__FILE__, __LINE__);
 		goto xdr_error;
 	}
 	argp->rqstp->rq_vec[0].iov_base = p;
@@ -1002,7 +1024,7 @@ nfsd4_decode_compound(struct nfsd4_compoundargs *argp)
 		argp->ops = kmalloc(argp->opcnt * sizeof(*argp->ops), GFP_KERNEL);
 		if (!argp->ops) {
 			argp->ops = argp->iops;
-			printk(KERN_INFO "nfsd: couldn't allocate room for COMPOUND\n");
+			dprintk("nfsd: couldn't allocate room for COMPOUND\n");
 			goto xdr_error;
 		}
 	}
@@ -1132,6 +1154,9 @@ nfsd4_decode_compound(struct nfsd4_compoundargs *argp)
 			break;
 		case OP_SAVEFH:
 			op->status = nfs_ok;
+			break;
+		case OP_SECINFO:
+			op->status = nfsd4_decode_secinfo(argp, &op->u.secinfo);
 			break;
 		case OP_SETATTR:
 			op->status = nfsd4_decode_setattr(argp, &op->u.setattr);
@@ -1298,7 +1323,7 @@ static char *nfsd4_path(struct svc_rqst *rqstp, struct svc_export *exp, __be32 *
 	char *path, *rootpath;
 
 	fh_init(&tmp_fh, NFS4_FHSIZE);
-	*stat = exp_pseudoroot(rqstp->rq_client, &tmp_fh, &rqstp->rq_chandle);
+	*stat = exp_pseudoroot(rqstp, &tmp_fh);
 	if (*stat)
 		return NULL;
 	rootpath = tmp_fh.fh_export->ex_path;
@@ -1306,7 +1331,7 @@ static char *nfsd4_path(struct svc_rqst *rqstp, struct svc_export *exp, __be32 *
 	path = exp->ex_path;
 
 	if (strncmp(path, rootpath, strlen(rootpath))) {
-		printk("nfsd: fs_locations failed;"
+		dprintk("nfsd: fs_locations failed;"
 			"%s is not contained in %s\n", path, rootpath);
 		*stat = nfserr_notsupp;
 		return NULL;
@@ -1455,7 +1480,8 @@ nfsd4_encode_fattr(struct svc_fh *fhp, struct svc_export *exp,
 	err = vfs_getattr(exp->ex_mnt, dentry, &stat);
 	if (err)
 		goto out_nfserr;
-	if ((bmval0 & (FATTR4_WORD0_FILES_FREE | FATTR4_WORD0_FILES_TOTAL)) ||
+	if ((bmval0 & (FATTR4_WORD0_FILES_FREE | FATTR4_WORD0_FILES_TOTAL |
+			FATTR4_WORD0_MAXNAME)) ||
 	    (bmval1 & (FATTR4_WORD1_SPACE_AVAIL | FATTR4_WORD1_SPACE_FREE |
 		       FATTR4_WORD1_SPACE_TOTAL))) {
 		err = vfs_statfs(dentry, &statfs);
@@ -1659,7 +1685,7 @@ out_acl:
 	if (bmval0 & FATTR4_WORD0_FILEID) {
 		if ((buflen -= 8) < 0)
 			goto out_resource;
-		WRITE64((u64) stat.ino);
+		WRITE64(stat.ino);
 	}
 	if (bmval0 & FATTR4_WORD0_FILES_AVAIL) {
 		if ((buflen -= 8) < 0)
@@ -1701,7 +1727,7 @@ out_acl:
 	if (bmval0 & FATTR4_WORD0_MAXNAME) {
 		if ((buflen -= 4) < 0)
 			goto out_resource;
-		WRITE32(~(u32) 0);
+		WRITE32(statfs.f_namelen);
 	}
 	if (bmval0 & FATTR4_WORD0_MAXREAD) {
 		if ((buflen -= 8) < 0)
@@ -1805,16 +1831,15 @@ out_acl:
 		WRITE32(stat.mtime.tv_nsec);
 	}
 	if (bmval1 & FATTR4_WORD1_MOUNTED_ON_FILEID) {
-		struct dentry *mnt_pnt, *mnt_root;
-
 		if ((buflen -= 8) < 0)
                 	goto out_resource;
-		mnt_root = exp->ex_mnt->mnt_root;
-		if (mnt_root->d_inode == dentry->d_inode) {
-			mnt_pnt = exp->ex_mnt->mnt_mountpoint;
-			WRITE64((u64) mnt_pnt->d_inode->i_ino);
-		} else
-                	WRITE64((u64) stat.ino);
+		if (exp->ex_mnt->mnt_root->d_inode == dentry->d_inode) {
+			err = vfs_getattr(exp->ex_mnt->mnt_parent,
+				exp->ex_mnt->mnt_mountpoint, &stat);
+			if (err)
+				goto out_nfserr;
+		}
+		WRITE64(stat.ino);
 	}
 	*attrlenp = htonl((char *)p - (char *)attrlenp - 4);
 	*countp = p - buffer;
@@ -1853,11 +1878,19 @@ nfsd4_encode_dirent_fattr(struct nfsd4_readdir *cd,
 	if (d_mountpoint(dentry)) {
 		int err;
 
+		/*
+		 * Why the heck aren't we just using nfsd_lookup??
+		 * Different "."/".." handling?  Something else?
+		 * At least, add a comment here to explain....
+		 */
 		err = nfsd_cross_mnt(cd->rd_rqstp, &dentry, &exp);
 		if (err) {
 			nfserr = nfserrno(err);
 			goto out_put;
 		}
+		nfserr = check_nfsd_access(exp, cd->rd_rqstp);
+		if (nfserr)
+			goto out_put;
 
 	}
 	nfserr = nfsd4_encode_fattr(NULL, exp, dentry, p, buflen, cd->rd_bmval,
@@ -2425,6 +2458,72 @@ nfsd4_encode_rename(struct nfsd4_compoundres *resp, __be32 nfserr, struct nfsd4_
 	}
 }
 
+static void
+nfsd4_encode_secinfo(struct nfsd4_compoundres *resp, __be32 nfserr,
+		     struct nfsd4_secinfo *secinfo)
+{
+	int i = 0;
+	struct svc_export *exp = secinfo->si_exp;
+	u32 nflavs;
+	struct exp_flavor_info *flavs;
+	struct exp_flavor_info def_flavs[2];
+	ENCODE_HEAD;
+
+	if (nfserr)
+		goto out;
+	if (exp->ex_nflavors) {
+		flavs = exp->ex_flavors;
+		nflavs = exp->ex_nflavors;
+	} else { /* Handling of some defaults in absence of real secinfo: */
+		flavs = def_flavs;
+		if (exp->ex_client->flavour->flavour == RPC_AUTH_UNIX) {
+			nflavs = 2;
+			flavs[0].pseudoflavor = RPC_AUTH_UNIX;
+			flavs[1].pseudoflavor = RPC_AUTH_NULL;
+		} else if (exp->ex_client->flavour->flavour == RPC_AUTH_GSS) {
+			nflavs = 1;
+			flavs[0].pseudoflavor
+					= svcauth_gss_flavor(exp->ex_client);
+		} else {
+			nflavs = 1;
+			flavs[0].pseudoflavor
+					= exp->ex_client->flavour->flavour;
+		}
+	}
+
+	RESERVE_SPACE(4);
+	WRITE32(nflavs);
+	ADJUST_ARGS();
+	for (i = 0; i < nflavs; i++) {
+		u32 flav = flavs[i].pseudoflavor;
+		struct gss_api_mech *gm = gss_mech_get_by_pseudoflavor(flav);
+
+		if (gm) {
+			RESERVE_SPACE(4);
+			WRITE32(RPC_AUTH_GSS);
+			ADJUST_ARGS();
+			RESERVE_SPACE(4 + gm->gm_oid.len);
+			WRITE32(gm->gm_oid.len);
+			WRITEMEM(gm->gm_oid.data, gm->gm_oid.len);
+			ADJUST_ARGS();
+			RESERVE_SPACE(4);
+			WRITE32(0); /* qop */
+			ADJUST_ARGS();
+			RESERVE_SPACE(4);
+			WRITE32(gss_pseudoflavor_to_service(gm, flav));
+			ADJUST_ARGS();
+			gss_mech_put(gm);
+		} else {
+			RESERVE_SPACE(4);
+			WRITE32(flav);
+			ADJUST_ARGS();
+		}
+	}
+out:
+	if (exp)
+		exp_put(exp);
+}
+
 /*
  * The SETATTR encode routine is special -- it always encodes a bitmap,
  * regardless of the error status.
@@ -2564,6 +2663,9 @@ nfsd4_encode_operation(struct nfsd4_compoundres *resp, struct nfsd4_op *op)
 	case OP_RESTOREFH:
 		break;
 	case OP_SAVEFH:
+		break;
+	case OP_SECINFO:
+		nfsd4_encode_secinfo(resp, op->status, &op->u.secinfo);
 		break;
 	case OP_SETATTR:
 		nfsd4_encode_setattr(resp, op->status, &op->u.setattr);

@@ -18,7 +18,6 @@
 #include <linux/errno.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/syscalls.h>
 #include <linux/sem.h>
 #include <linux/msg.h>
@@ -31,7 +30,6 @@
 #include <linux/file.h>
 
 #include <asm/uaccess.h>
-#include <asm/ipc.h>
 #include <asm/semaphore.h>
 #include <asm/unistd.h>
 

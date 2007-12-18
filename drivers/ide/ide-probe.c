@@ -47,6 +47,7 @@
 #include <linux/spinlock.h>
 #include <linux/kmod.h>
 #include <linux/pci.h>
+#include <linux/scatterlist.h>
 
 #include <asm/byteorder.h>
 #include <asm/irq.h>
@@ -144,7 +145,7 @@ static inline void do_identify (ide_drive_t *drive, u8 cmd)
 	local_irq_enable();
 	ide_fix_driveid(id);
 
-#if defined (CONFIG_SCSI_EATA_DMA) || defined (CONFIG_SCSI_EATA_PIO) || defined (CONFIG_SCSI_EATA)
+#if defined (CONFIG_SCSI_EATA_PIO) || defined (CONFIG_SCSI_EATA)
 	/*
 	 * EATA SCSI controllers do a hardware ATA emulation:
 	 * Ignore them if there is a driver for them available.
@@ -154,7 +155,7 @@ static inline void do_identify (ide_drive_t *drive, u8 cmd)
 		printk("%s: EATA SCSI HBA %.10s\n", drive->name, id->model);
 		goto err_misc;
 	}
-#endif /* CONFIG_SCSI_EATA_DMA || CONFIG_SCSI_EATA_PIO */
+#endif /* CONFIG_SCSI_EATA || CONFIG_SCSI_EATA_PIO */
 
 	/*
 	 *  WIN_IDENTIFY returns little-endian info,
@@ -171,11 +172,12 @@ static inline void do_identify (ide_drive_t *drive, u8 cmd)
 	ide_fixstring(id->fw_rev,    sizeof(id->fw_rev),    bswap);
 	ide_fixstring(id->serial_no, sizeof(id->serial_no), bswap);
 
+	/* we depend on this a lot! */
+	id->model[sizeof(id->model)-1] = '\0';
+
 	if (strstr(id->model, "E X A B Y T E N E S T"))
 		goto err_misc;
 
-	/* we depend on this a lot! */
-	id->model[sizeof(id->model)-1] = '\0';
 	printk("%s: %s, ", drive->name, id->model);
 	drive->present = 1;
 	drive->dead = 0;
@@ -574,11 +576,11 @@ static inline u8 probe_for_drive (ide_drive_t *drive)
 			/* look for ATAPI device */
 			(void) do_probe(drive, WIN_PIDENTIFY);
 		}
-		if (strstr(drive->id->model, "E X A B Y T E N E S T"))
-			enable_nest(drive);
 		if (!drive->present)
 			/* drive not found */
 			return 0;
+		if (strstr(drive->id->model, "E X A B Y T E N E S T"))
+			enable_nest(drive);
 	
 		/* identification failed? */
 		if (!drive->id_read) {
@@ -719,9 +721,9 @@ EXPORT_SYMBOL_GPL(ide_undecoded_slave);
  */
 static void probe_hwif(ide_hwif_t *hwif)
 {
-	unsigned int unit;
 	unsigned long flags;
 	unsigned int irqd;
+	int unit;
 
 	if (hwif->noprobe)
 		return;
@@ -777,10 +779,9 @@ static void probe_hwif(ide_hwif_t *hwif)
 		printk(KERN_DEBUG "%s: Wait for ready failed before probe !\n", hwif->name);
 
 	/*
-	 * Second drive should only exist if first drive was found,
-	 * but a lot of cdrom drives are configured as single slaves.
+	 * Need to probe slave device first to make it release PDIAG-.
 	 */
-	for (unit = 0; unit < MAX_DRIVES; ++unit) {
+	for (unit = MAX_DRIVES - 1; unit >= 0; unit--) {
 		ide_drive_t *drive = &hwif->drives[unit];
 		drive->dn = (hwif->channel ? 2 : 0) + unit;
 		(void) probe_for_drive(drive);
@@ -820,14 +821,15 @@ static void probe_hwif(ide_hwif_t *hwif)
 		return;
 	}
 
+	if (hwif->fixup)
+		hwif->fixup(hwif);
+
 	for (unit = 0; unit < MAX_DRIVES; ++unit) {
 		ide_drive_t *drive = &hwif->drives[unit];
 
 		if (drive->present) {
-			if (hwif->tuneproc != NULL && 
-				drive->autotune == IDE_TUNE_AUTO)
-				/* auto-tune PIO mode */
-				hwif->tuneproc(drive, 255);
+			if (drive->autotune == IDE_TUNE_AUTO)
+				ide_set_max_pio(drive);
 
 			if (drive->autotune != IDE_TUNE_DEFAULT &&
 			    drive->autotune != IDE_TUNE_AUTO)
@@ -835,16 +837,7 @@ static void probe_hwif(ide_hwif_t *hwif)
 
 			drive->nice1 = 1;
 
-			/*
-			 * MAJOR HACK BARF :-/
-			 *
-			 * FIXME: chipsets own this cruft!
-			 */
-			/*
-			 * Move here to prevent module loading clashing.
-			 */
-	//		drive->autodma = hwif->autodma;
-			if (hwif->ide_dma_check) {
+			if (hwif->ide_dma_on) {
 				/*
 				 * Force DMAing for the beginning of the check.
 				 * Some chipsets appear to do interesting
@@ -852,10 +845,7 @@ static void probe_hwif(ide_hwif_t *hwif)
 				 *   PARANOIA!!!
 				 */
 				hwif->dma_off_quietly(drive);
-#ifdef CONFIG_IDEDMA_ONLYDISK
-				if (drive->media == ide_disk)
-#endif
-					ide_set_dma(drive);
+				ide_set_dma(drive);
 			}
 		}
 	}
@@ -871,13 +861,11 @@ static void probe_hwif(ide_hwif_t *hwif)
 }
 
 static int hwif_init(ide_hwif_t *hwif);
+static void hwif_register_devices(ide_hwif_t *hwif);
 
-int probe_hwif_init_with_fixup(ide_hwif_t *hwif, void (*fixup)(ide_hwif_t *hwif))
+static int probe_hwif_init(ide_hwif_t *hwif)
 {
 	probe_hwif(hwif);
-
-	if (fixup)
-		fixup(hwif);
 
 	if (!hwif_init(hwif)) {
 		printk(KERN_INFO "%s: failed to initialize IDE interface\n",
@@ -885,33 +873,11 @@ int probe_hwif_init_with_fixup(ide_hwif_t *hwif, void (*fixup)(ide_hwif_t *hwif)
 		return -1;
 	}
 
-	if (hwif->present) {
-		u16 unit = 0;
-		int ret;
+	if (hwif->present)
+		hwif_register_devices(hwif);
 
-		for (unit = 0; unit < MAX_DRIVES; ++unit) {
-			ide_drive_t *drive = &hwif->drives[unit];
-			/* For now don't attach absent drives, we may
-			   want them on default or a new "empty" class
-			   for hotplug reprobing ? */
-			if (drive->present) {
-				ret = device_register(&drive->gendev);
-				if (ret < 0)
-					printk(KERN_WARNING "IDE: %s: "
-						"device_register error: %d\n",
-						__FUNCTION__, ret);
-			}
-		}
-	}
 	return 0;
 }
-
-int probe_hwif_init(ide_hwif_t *hwif)
-{
-	return probe_hwif_init_with_fixup(hwif, NULL);
-}
-
-EXPORT_SYMBOL(probe_hwif_init);
 
 #if MAX_HWIFS > 1
 /*
@@ -945,7 +911,7 @@ static void save_match(ide_hwif_t *hwif, ide_hwif_t *new, ide_hwif_t **match)
  */
 static int ide_init_queue(ide_drive_t *drive)
 {
-	request_queue_t *q;
+	struct request_queue *q;
 	ide_hwif_t *hwif = HWIF(drive);
 	int max_sectors = 256;
 	int max_sg_entries = PRD_ENTRIES;
@@ -966,7 +932,8 @@ static int ide_init_queue(ide_drive_t *drive)
 	blk_queue_segment_boundary(q, 0xffff);
 
 	if (!hwif->rqsize) {
-		if (hwif->no_lba48 || hwif->no_lba48_dma)
+		if ((hwif->host_flags & IDE_HFLAG_NO_LBA48) ||
+		    (hwif->host_flags & IDE_HFLAG_NO_LBA48_DMA))
 			hwif->rqsize = 256;
 		else
 			hwif->rqsize = 65536;
@@ -1025,7 +992,7 @@ static int init_irq (ide_hwif_t *hwif)
 	BUG_ON(irqs_disabled());	
 	BUG_ON(hwif == NULL);
 
-	down(&ide_cfg_sem);
+	mutex_lock(&ide_cfg_mtx);
 	hwif->hwgroup = NULL;
 #if MAX_HWIFS > 1
 	/*
@@ -1073,14 +1040,14 @@ static int init_irq (ide_hwif_t *hwif)
 		hwgroup->hwif->next = hwif;
 		spin_unlock_irq(&ide_lock);
 	} else {
-		hwgroup = kmalloc_node(sizeof(ide_hwgroup_t), GFP_KERNEL,
+		hwgroup = kmalloc_node(sizeof(ide_hwgroup_t),
+					GFP_KERNEL | __GFP_ZERO,
 					hwif_to_node(hwif->drives[0].hwif));
 		if (!hwgroup)
 	       		goto out_up;
 
 		hwif->hwgroup = hwgroup;
 
-		memset(hwgroup, 0, sizeof(ide_hwgroup_t));
 		hwgroup->hwif     = hwif->next = hwif;
 		hwgroup->rq       = NULL;
 		hwgroup->handler  = NULL;
@@ -1154,7 +1121,7 @@ static int init_irq (ide_hwif_t *hwif)
 		printk(" (%sed with %s)",
 			hwif->sharing_irq ? "shar" : "serializ", match->name);
 	printk("\n");
-	up(&ide_cfg_sem);
+	mutex_unlock(&ide_cfg_mtx);
 	return 0;
 out_unlink:
 	spin_lock_irq(&ide_lock);
@@ -1177,7 +1144,7 @@ out_unlink:
 	}
 	spin_unlock_irq(&ide_lock);
 out_up:
-	up(&ide_cfg_sem);
+	mutex_unlock(&ide_cfg_mtx);
 	return 1;
 }
 
@@ -1358,6 +1325,8 @@ static int hwif_init(ide_hwif_t *hwif)
 		printk(KERN_ERR "%s: unable to allocate SG table.\n", hwif->name);
 		goto out;
 	}
+
+	sg_init_table(hwif->sg_table, hwif->sg_max_nents);
 	
 	if (init_irq(hwif) == 0)
 		goto done;
@@ -1393,6 +1362,24 @@ out:
 	return 0;
 }
 
+static void hwif_register_devices(ide_hwif_t *hwif)
+{
+	unsigned int i;
+
+	for (i = 0; i < MAX_DRIVES; i++) {
+		ide_drive_t *drive = &hwif->drives[i];
+
+		if (drive->present) {
+			int ret = device_register(&drive->gendev);
+
+			if (ret < 0)
+				printk(KERN_WARNING "IDE: %s: "
+					"device_register error: %d\n",
+					__FUNCTION__, ret);
+		}
+	}
+}
+
 int ideprobe_init (void)
 {
 	unsigned int index;
@@ -1411,23 +1398,36 @@ int ideprobe_init (void)
 	for (index = 0; index < MAX_HWIFS; ++index) {
 		if (probe[index]) {
 			ide_hwif_t *hwif = &ide_hwifs[index];
-			int unit;
 			if (!hwif->present)
 				continue;
 			if (hwif->chipset == ide_unknown || hwif->chipset == ide_forced)
 				hwif->chipset = ide_generic;
-			for (unit = 0; unit < MAX_DRIVES; ++unit)
-				if (hwif->drives[unit].present) {
-					int ret = device_register(
-						&hwif->drives[unit].gendev);
-					if (ret < 0)
-						printk(KERN_WARNING "IDE: %s: "
-							"device_register error: %d\n",
-							__FUNCTION__, ret);
-				}
+			hwif_register_devices(hwif);
 		}
 	}
+	for (index = 0; index < MAX_HWIFS; ++index)
+		if (probe[index])
+			ide_proc_register_port(&ide_hwifs[index]);
 	return 0;
 }
 
 EXPORT_SYMBOL_GPL(ideprobe_init);
+
+int ide_device_add(u8 idx[4])
+{
+	int i, rc = 0;
+
+	for (i = 0; i < 4; i++) {
+		if (idx[i] != 0xff)
+			rc |= probe_hwif_init(&ide_hwifs[idx[i]]);
+	}
+
+	for (i = 0; i < 4; i++) {
+		if (idx[i] != 0xff)
+			ide_proc_register_port(&ide_hwifs[idx[i]]);
+	}
+
+	return rc;
+}
+
+EXPORT_SYMBOL_GPL(ide_device_add);

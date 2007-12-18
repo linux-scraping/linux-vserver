@@ -33,7 +33,7 @@
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/arch/map.h>
-#include <asm/arch/regs-timer.h>
+#include <asm/plat-s3c/regs-timer.h>
 #include <asm/arch/regs-irq.h>
 #include <asm/mach/time.h>
 
@@ -138,7 +138,7 @@ s3c2410_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction s3c2410_timer_irq = {
 	.name		= "S3C2410 Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= s3c2410_timer_interrupt,
 };
 

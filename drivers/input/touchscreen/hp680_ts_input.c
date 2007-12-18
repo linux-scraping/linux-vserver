@@ -1,7 +1,6 @@
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-
 #include <linux/interrupt.h>
 #include <asm/io.h>
 #include <asm/delay.h>
@@ -18,12 +17,12 @@
 #define	PHDR	0xa400012e
 #define SCPDR	0xa4000136
 
-static void do_softint(void *data);
+static void do_softint(struct work_struct *work);
 
 static struct input_dev *hp680_ts_dev;
-static DECLARE_WORK(work, do_softint, 0);
+static DECLARE_DELAYED_WORK(work, do_softint);
 
-static void do_softint(void *data)
+static void do_softint(struct work_struct *work)
 {
 	int absx = 0, absy = 0;
 	u8 scpdr;
@@ -82,8 +81,8 @@ static int __init hp680_ts_init(void)
 	if (!hp680_ts_dev)
 		return -ENOMEM;
 
-	hp680_ts_dev->evbit[0] = BIT(EV_ABS) | BIT(EV_KEY);
-	hp680_ts_dev->keybit[LONG(BTN_TOUCH)] = BIT(BTN_TOUCH);
+	hp680_ts_dev->evbit[0] = BIT_MASK(EV_ABS) | BIT_MASK(EV_KEY);
+	hp680_ts_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
 
 	input_set_abs_params(hp680_ts_dev, ABS_X,
 		HP680_TS_ABS_X_MIN, HP680_TS_ABS_X_MAX, 0, 0);

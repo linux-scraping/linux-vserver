@@ -9,6 +9,7 @@
 #define __ASM_SH_CACHE_H
 #ifdef __KERNEL__
 
+#include <linux/init.h>
 #include <asm/cpu/cache.h>
 
 #define SH_CACHE_VALID		1
@@ -17,9 +18,8 @@
 #define SH_CACHE_ASSOC		8
 
 #define L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
-#define SMP_CACHE_BYTES		L1_CACHE_BYTES
 
-#define L1_CACHE_ALIGN(x)	(((x)+(L1_CACHE_BYTES-1))&~(L1_CACHE_BYTES-1))
+#define __read_mostly __attribute__((__section__(".data.read_mostly")))
 
 #ifndef __ASSEMBLY__
 struct cache_info {
@@ -48,6 +48,9 @@ struct cache_info {
 
 	unsigned long flags;
 };
+
+int __init detect_cpu_and_cache_system(void);
+
 #endif /* __ASSEMBLY__ */
 #endif /* __KERNEL__ */
 #endif /* __ASM_SH_CACHE_H */

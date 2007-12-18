@@ -27,9 +27,6 @@
 #include <linux/mtd/physmap.h>
 #include <linux/mv643xx.h>
 #include <linux/platform_device.h>
-#ifdef CONFIG_BOOTIMG
-#include <linux/bootimg.h>
-#endif
 #include <asm/io.h>
 #include <asm/unistd.h>
 #include <asm/page.h>
@@ -880,7 +877,7 @@ platform_init(unsigned long r3, unsigned long r4, unsigned long r5,
 	 * are non-zero, then we should use the board info from the bd_t
 	 * structure and the cmdline pointed to by r6 instead of the
 	 * information from birecs, if any.  Otherwise, use the information
-	 * from birecs as discovered by the preceeding call to
+	 * from birecs as discovered by the preceding call to
 	 * parse_bootinfo().  This rule should work with both PPCBoot, which
 	 * uses a bd_t board info structure, and the kernel boot wrapper,
 	 * which uses birecs.

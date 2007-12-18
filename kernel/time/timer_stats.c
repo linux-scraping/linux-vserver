@@ -68,6 +68,7 @@ struct entry {
 	 * Number of timeout events:
 	 */
 	unsigned long		count;
+	unsigned int		timer_flag;
 
 	/*
 	 * We save the command-line string to preserve
@@ -231,7 +232,8 @@ static struct entry *tstat_lookup(struct entry *entry, char *comm)
  * incremented. Otherwise the timer is registered in a free slot.
  */
 void timer_stats_update_stats(void *timer, pid_t pid, void *startf,
-			      void *timerf, char * comm)
+			      void *timerf, char *comm,
+			      unsigned int timer_flag)
 {
 	/*
 	 * It doesnt matter which lock we take:
@@ -249,6 +251,7 @@ void timer_stats_update_stats(void *timer, pid_t pid, void *startf,
 	input.start_func = startf;
 	input.expire_func = timerf;
 	input.pid = pid;
+	input.timer_flag = timer_flag;
 
 	spin_lock_irqsave(lock, flags);
 	if (!active)
@@ -266,16 +269,12 @@ void timer_stats_update_stats(void *timer, pid_t pid, void *startf,
 
 static void print_name_offset(struct seq_file *m, unsigned long addr)
 {
-	char namebuf[KSYM_NAME_LEN+1];
-	unsigned long size, offset;
-	const char *sym_name;
-	char *modname;
+	char symname[KSYM_NAME_LEN];
 
-	sym_name = kallsyms_lookup(addr, &size, &offset, &modname, namebuf);
-	if (sym_name)
-		seq_printf(m, "%s", sym_name);
-	else
+	if (lookup_symbol_name(addr, symname) < 0)
 		seq_printf(m, "<%p>", (void *)addr);
+	else
+		seq_printf(m, "%s", symname);
 }
 
 static int tstats_show(struct seq_file *m, void *v)
@@ -299,7 +298,7 @@ static int tstats_show(struct seq_file *m, void *v)
 	period = ktime_to_timespec(time);
 	ms = period.tv_nsec / 1000000;
 
-	seq_puts(m, "Timer Stats Version: v0.1\n");
+	seq_puts(m, "Timer Stats Version: v0.2\n");
 	seq_printf(m, "Sample period: %ld.%03ld s\n", period.tv_sec, ms);
 	if (atomic_read(&overflow_count))
 		seq_printf(m, "Overflow: %d entries\n",
@@ -307,8 +306,13 @@ static int tstats_show(struct seq_file *m, void *v)
 
 	for (i = 0; i < nr_entries; i++) {
 		entry = entries + i;
-		seq_printf(m, "%4lu, %5d %-16s ",
+ 		if (entry->timer_flag & TIMER_STATS_FLAG_DEFERRABLE) {
+			seq_printf(m, "%4luD, %5d %-16s ",
 				entry->count, entry->pid, entry->comm);
+		} else {
+			seq_printf(m, " %4lu, %5d %-16s ",
+				entry->count, entry->pid, entry->comm);
+		}
 
 		print_name_offset(m, (unsigned long)entry->start_func);
 		seq_puts(m, " (");
@@ -323,8 +327,9 @@ static int tstats_show(struct seq_file *m, void *v)
 		ms = 1;
 
 	if (events && period.tv_sec)
-		seq_printf(m, "%ld total events, %ld.%ld events/sec\n", events,
-			   events / period.tv_sec, events * 1000 / ms);
+		seq_printf(m, "%ld total events, %ld.%03ld events/sec\n",
+			   events, events * 1000 / ms,
+			   (events * 1000000 / ms) % 1000);
 	else
 		seq_printf(m, "%ld total events\n", events);
 
@@ -395,7 +400,7 @@ static struct file_operations tstats_fops = {
 	.read		= seq_read,
 	.write		= tstats_write,
 	.llseek		= seq_lseek,
-	.release	= seq_release,
+	.release	= single_release,
 };
 
 void __init init_timer_stats(void)

@@ -20,7 +20,7 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS("ipt_length");
 MODULE_ALIAS("ip6t_length");
 
-static int
+static bool
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
@@ -28,15 +28,15 @@ match(const struct sk_buff *skb,
       const void *matchinfo,
       int offset,
       unsigned int protoff,
-      int *hotdrop)
+      bool *hotdrop)
 {
 	const struct xt_length_info *info = matchinfo;
-	u_int16_t pktlen = ntohs(skb->nh.iph->tot_len);
+	u_int16_t pktlen = ntohs(ip_hdr(skb)->tot_len);
 
 	return (pktlen >= info->min && pktlen <= info->max) ^ info->invert;
 }
 
-static int
+static bool
 match6(const struct sk_buff *skb,
        const struct net_device *in,
        const struct net_device *out,
@@ -44,15 +44,16 @@ match6(const struct sk_buff *skb,
        const void *matchinfo,
        int offset,
        unsigned int protoff,
-       int *hotdrop)
+       bool *hotdrop)
 {
 	const struct xt_length_info *info = matchinfo;
-	u_int16_t pktlen = ntohs(skb->nh.ipv6h->payload_len) + sizeof(struct ipv6hdr);
+	const u_int16_t pktlen = ntohs(ipv6_hdr(skb)->payload_len) +
+				 sizeof(struct ipv6hdr);
 
 	return (pktlen >= info->min && pktlen <= info->max) ^ info->invert;
 }
 
-static struct xt_match xt_length_match[] = {
+static struct xt_match xt_length_match[] __read_mostly = {
 	{
 		.name		= "length",
 		.family		= AF_INET,

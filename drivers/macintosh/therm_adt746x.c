@@ -19,7 +19,6 @@
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <linux/smp_lock.h>
 #include <linux/wait.h>
 #include <linux/suspend.h>
 #include <linux/kthread.h>
@@ -336,6 +335,7 @@ static int monitor_task(void *arg)
 {
 	struct thermostat* th = arg;
 
+	set_freezable();
 	while(!kthread_should_stop()) {
 		try_to_freeze();
 		msleep_interruptible(2000);
@@ -379,13 +379,10 @@ static int attach_one_thermostat(struct i2c_adapter *adapter, int addr,
 	if (thermostat)
 		return 0;
 
-	th = (struct thermostat *)
-		kmalloc(sizeof(struct thermostat), GFP_KERNEL);
-
+	th = kzalloc(sizeof(struct thermostat), GFP_KERNEL);
 	if (!th)
 		return -ENOMEM;
 
-	memset(th, 0, sizeof(*th));
 	th->clt.addr = addr;
 	th->clt.adapter = adapter;
 	th->clt.driver = &thermostat_driver;
@@ -560,20 +557,20 @@ thermostat_init(void)
 	np = of_find_node_by_name(NULL, "fan");
 	if (!np)
 		return -ENODEV;
-	if (device_is_compatible(np, "adt7460"))
+	if (of_device_is_compatible(np, "adt7460"))
 		therm_type = ADT7460;
-	else if (device_is_compatible(np, "adt7467"))
+	else if (of_device_is_compatible(np, "adt7467"))
 		therm_type = ADT7467;
 	else
 		return -ENODEV;
 
-	prop = get_property(np, "hwsensor-params-version", NULL);
+	prop = of_get_property(np, "hwsensor-params-version", NULL);
 	printk(KERN_INFO "adt746x: version %d (%ssupported)\n", *prop,
 			 (*prop == 1)?"":"un");
 	if (*prop != 1)
 		return -ENODEV;
 
-	prop = get_property(np, "reg", NULL);
+	prop = of_get_property(np, "reg", NULL);
 	if (!prop)
 		return -ENODEV;
 
@@ -591,9 +588,9 @@ thermostat_init(void)
 			 "limit_adjust: %d, fan_speed: %d\n",
 			 therm_bus, therm_address, limit_adjust, fan_speed);
 
-	if (get_property(np, "hwsensor-location", NULL)) {
+	if (of_get_property(np, "hwsensor-location", NULL)) {
 		for (i = 0; i < 3; i++) {
-			sensor_location[i] = get_property(np,
+			sensor_location[i] = of_get_property(np,
 					"hwsensor-location", NULL) + offset;
 
 			if (sensor_location[i] == NULL)

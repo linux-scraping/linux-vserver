@@ -8,7 +8,6 @@
  *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
  *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
  *    Copyright (C) 1996 Paul Mackerras
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  *  Derived from "arch/i386/mm/init.c"
  *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
@@ -37,7 +36,6 @@
 unsigned long ioremap_base;
 unsigned long ioremap_bot;
 EXPORT_SYMBOL(ioremap_bot);	/* aka VMALLOC_END */
-int io_bat_index;
 
 #if defined(CONFIG_6xx) || defined(CONFIG_POWER3)
 #define HAVE_BATS	1
@@ -93,7 +91,7 @@ void pgd_free(pgd_t *pgd)
 	free_pages((unsigned long)pgd, PGDIR_ORDER);
 }
 
-pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long address)
+__init_refok pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long address)
 {
 	pte_t *pte;
 	extern int mem_init_done;
@@ -183,8 +181,8 @@ __ioremap(phys_addr_t addr, unsigned long size, unsigned long flags)
 	 * mem_init() sets high_memory so only do the check after that.
 	 */
 	if (mem_init_done && (p < virt_to_phys(high_memory))) {
-		printk("__ioremap(): phys addr "PHYS_FMT" is RAM lr %p\n", p,
-		       __builtin_return_address(0));
+		printk("__ioremap(): phys addr 0x%llx is RAM lr %p\n",
+		       (unsigned long long)p, __builtin_return_address(0));
 		return NULL;
 	}
 
@@ -261,14 +259,17 @@ int map_page(unsigned long va, phys_addr_t pa, int flags)
 	int err = -ENOMEM;
 
 	/* Use upper 10 bits of VA to index the first level map */
-	pd = pmd_offset(pgd_offset_k(va), va);
+	pd = pmd_offset(pud_offset(pgd_offset_k(va), va), va);
 	/* Use middle 10 bits of VA to index the second-level map */
 	pg = pte_alloc_kernel(pd, va);
 	if (pg != 0) {
 		err = 0;
-		set_pte_at(&init_mm, va, pg, pfn_pte(pa >> PAGE_SHIFT, __pgprot(flags)));
-		if (mem_init_done)
-			flush_HPTE(0, va, pmd_val(*pd));
+		/* The PTE should never be already set nor present in the
+		 * hash table
+		 */
+		BUG_ON(pte_val(*pg) & (_PAGE_PRESENT | _PAGE_HASHPTE));
+		set_pte_at(&init_mm, va, pg, pfn_pte(pa >> PAGE_SHIFT,
+						     __pgprot(flags)));
 	}
 	return err;
 }
@@ -279,64 +280,22 @@ int map_page(unsigned long va, phys_addr_t pa, int flags)
 void __init mapin_ram(void)
 {
 	unsigned long v, p, s, f;
+	int ktext;
 
 	s = mmu_mapin_ram();
 	v = KERNELBASE + s;
 	p = PPC_MEMSTART + s;
 	for (; s < total_lowmem; s += PAGE_SIZE) {
-		if ((char *) v >= _stext && (char *) v < etext)
-			f = _PAGE_RAM_TEXT;
-		else
-			f = _PAGE_RAM;
+		ktext = ((char *) v >= _stext && (char *) v < etext);
+		f = ktext ?_PAGE_RAM_TEXT : _PAGE_RAM;
 		map_page(v, p, f);
+#ifdef CONFIG_PPC_STD_MMU_32
+		if (ktext)
+			hash_preload(&init_mm, v, 0, 0x300);
+#endif
 		v += PAGE_SIZE;
 		p += PAGE_SIZE;
 	}
-}
-
-/* is x a power of 4? */
-#define is_power_of_4(x)	is_power_of_2(x) && (ffs(x) & 1)
-
-/*
- * Set up a mapping for a block of I/O.
- * virt, phys, size must all be page-aligned.
- * This should only be called before ioremap is called.
- */
-void __init io_block_mapping(unsigned long virt, phys_addr_t phys,
-			     unsigned int size, int flags)
-{
-	int i;
-
-	if (virt > KERNELBASE && virt < ioremap_bot)
-		ioremap_bot = ioremap_base = virt;
-
-#ifdef HAVE_BATS
-	/*
-	 * Use a BAT for this if possible...
-	 */
-	if (io_bat_index < 2 && is_power_of_2(size)
-	    && (virt & (size - 1)) == 0 && (phys & (size - 1)) == 0) {
-		setbat(io_bat_index, virt, phys, size, flags);
-		++io_bat_index;
-		return;
-	}
-#endif /* HAVE_BATS */
-
-#ifdef HAVE_TLBCAM
-	/*
-	 * Use a CAM for this if possible...
-	 */
-	if (tlbcam_index < num_tlbcam_entries && is_power_of_4(size)
-	    && (virt & (size - 1)) == 0 && (phys & (size - 1)) == 0) {
-		settlbcam(tlbcam_index, virt, phys, size, flags, 0);
-		++tlbcam_index;
-		return;
-	}
-#endif /* HAVE_TLBCAM */
-
-	/* No BATs available, put it in the page tables. */
-	for (i = 0; i < size; i += PAGE_SIZE)
-		map_page(virt + i, phys + i, flags);
 }
 
 /* Scan the real Linux page tables and return a PTE pointer for
@@ -348,100 +307,80 @@ int
 get_pteptr(struct mm_struct *mm, unsigned long addr, pte_t **ptep, pmd_t **pmdp)
 {
         pgd_t	*pgd;
+	pud_t	*pud;
         pmd_t	*pmd;
         pte_t	*pte;
         int     retval = 0;
 
         pgd = pgd_offset(mm, addr & PAGE_MASK);
         if (pgd) {
-                pmd = pmd_offset(pgd, addr & PAGE_MASK);
-                if (pmd_present(*pmd)) {
-                        pte = pte_offset_map(pmd, addr & PAGE_MASK);
-                        if (pte) {
-				retval = 1;
-				*ptep = pte;
-				if (pmdp)
-					*pmdp = pmd;
-				/* XXX caller needs to do pte_unmap, yuck */
-                        }
-                }
+		pud = pud_offset(pgd, addr & PAGE_MASK);
+		if (pud && pud_present(*pud)) {
+			pmd = pmd_offset(pud, addr & PAGE_MASK);
+			if (pmd_present(*pmd)) {
+				pte = pte_offset_map(pmd, addr & PAGE_MASK);
+				if (pte) {
+					retval = 1;
+					*ptep = pte;
+					if (pmdp)
+						*pmdp = pmd;
+					/* XXX caller needs to do pte_unmap, yuck */
+				}
+			}
+		}
         }
         return(retval);
 }
 
-/* Find physical address for this virtual address.  Normally used by
- * I/O functions, but anyone can call it.
- */
-unsigned long iopa(unsigned long addr)
+#ifdef CONFIG_DEBUG_PAGEALLOC
+
+static int __change_page_attr(struct page *page, pgprot_t prot)
 {
-	unsigned long pa;
+	pte_t *kpte;
+	pmd_t *kpmd;
+	unsigned long address;
 
-	/* I don't know why this won't work on PMacs or CHRP.  It
-	 * appears there is some bug, or there is some implicit
-	 * mapping done not properly represented by BATs or in page
-	 * tables.......I am actively working on resolving this, but
-	 * can't hold up other stuff.  -- Dan
-	 */
-	pte_t *pte;
-	struct mm_struct *mm;
+	BUG_ON(PageHighMem(page));
+	address = (unsigned long)page_address(page);
 
-	/* Check the BATs */
-	pa = v_mapped_by_bats(addr);
-	if (pa)
-		return pa;
+	if (v_mapped_by_bats(address) || v_mapped_by_tlbcam(address))
+		return 0;
+	if (!get_pteptr(&init_mm, address, &kpte, &kpmd))
+		return -EINVAL;
+	set_pte_at(&init_mm, address, kpte, mk_pte(page, prot));
+	wmb();
+	flush_HPTE(0, address, pmd_val(*kpmd));
+	pte_unmap(kpte);
 
-	/* Allow mapping of user addresses (within the thread)
-	 * for DMA if necessary.
-	 */
-	if (addr < TASK_SIZE)
-		mm = current->mm;
-	else
-		mm = &init_mm;
-
-	pa = 0;
-	if (get_pteptr(mm, addr, &pte, NULL)) {
-		pa = (pte_val(*pte) & PAGE_MASK) | (addr & ~PAGE_MASK);
-		pte_unmap(pte);
-	}
-
-	return(pa);
+	return 0;
 }
 
-/* This is will find the virtual address for a physical one....
- * Swiped from APUS, could be dangerous :-).
- * This is only a placeholder until I really find a way to make this
- * work.  -- Dan
+/*
+ * Change the page attributes of an page in the linear mapping.
+ *
+ * THIS CONFLICTS WITH BAT MAPPINGS, DEBUG USE ONLY
  */
-unsigned long
-mm_ptov (unsigned long paddr)
+static int change_page_attr(struct page *page, int numpages, pgprot_t prot)
 {
-	unsigned long ret;
-#if 0
-	if (paddr < 16*1024*1024)
-		ret = ZTWO_VADDR(paddr);
-	else {
-		int i;
+	int i, err = 0;
+	unsigned long flags;
 
-		for (i = 0; i < kmap_chunk_count;){
-			unsigned long phys = kmap_chunks[i++];
-			unsigned long size = kmap_chunks[i++];
-			unsigned long virt = kmap_chunks[i++];
-			if (paddr >= phys
-			    && paddr < (phys + size)){
-				ret = virt + paddr - phys;
-				goto exit;
-			}
-		}
-	
-		ret = (unsigned long) __va(paddr);
+	local_irq_save(flags);
+	for (i = 0; i < numpages; i++, page++) {
+		err = __change_page_attr(page, prot);
+		if (err)
+			break;
 	}
-exit:
-#ifdef DEBUGPV
-	printk ("PTOV(%lx)=%lx\n", paddr, ret);
-#endif
-#else
-	ret = (unsigned long)paddr + KERNELBASE;
-#endif
-	return ret;
+	local_irq_restore(flags);
+	return err;
 }
 
+
+void kernel_map_pages(struct page *page, int numpages, int enable)
+{
+	if (PageHighMem(page))
+		return;
+
+	change_page_attr(page, numpages, enable ? PAGE_KERNEL : __pgprot(0));
+}
+#endif /* CONFIG_DEBUG_PAGEALLOC */

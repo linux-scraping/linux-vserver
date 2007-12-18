@@ -7,12 +7,14 @@
 #include <linux/spinlock.h>
 #include <linux/list.h>
 #include <linux/wait.h>
+#include <linux/bitops.h>
 #include <linux/cache.h>
 #include <linux/threads.h>
 #include <linux/numa.h>
 #include <linux/init.h>
 #include <linux/seqlock.h>
 #include <linux/nodemask.h>
+#include <linux/pageblock-flags.h>
 #include <asm/atomic.h>
 #include <asm/page.h>
 
@@ -24,8 +26,37 @@
 #endif
 #define MAX_ORDER_NR_PAGES (1 << (MAX_ORDER - 1))
 
+/*
+ * PAGE_ALLOC_COSTLY_ORDER is the order at which allocations are deemed
+ * costly to service.  That is between allocation orders which should
+ * coelesce naturally under reasonable reclaim pressure and those which
+ * will not.
+ */
+#define PAGE_ALLOC_COSTLY_ORDER 3
+
+#define MIGRATE_UNMOVABLE     0
+#define MIGRATE_RECLAIMABLE   1
+#define MIGRATE_MOVABLE       2
+#define MIGRATE_RESERVE       3
+#define MIGRATE_ISOLATE       4 /* can't allocate from here */
+#define MIGRATE_TYPES         5
+
+#define for_each_migratetype_order(order, type) \
+	for (order = 0; order < MAX_ORDER; order++) \
+		for (type = 0; type < MIGRATE_TYPES; type++)
+
+extern int page_group_by_mobility_disabled;
+
+static inline int get_pageblock_migratetype(struct page *page)
+{
+	if (unlikely(page_group_by_mobility_disabled))
+		return MIGRATE_UNMOVABLE;
+
+	return get_pageblock_flags_group(page, PB_migrate, PB_migrate_end);
+}
+
 struct free_area {
-	struct list_head	free_list;
+	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
 };
 
@@ -83,6 +114,9 @@ struct per_cpu_pages {
 
 struct per_cpu_pageset {
 	struct per_cpu_pages pcp[2];	/* 0: hot.  1: cold */
+#ifdef CONFIG_NUMA
+	s8 expire;
+#endif
 #ifdef CONFIG_SMP
 	s8 stat_threshold;
 	s8 vm_stat_diff[NR_VM_ZONE_STAT_ITEMS];
@@ -109,7 +143,6 @@ enum zone_type {
 	 * ---------------------------
 	 * parisc, ia64, sparc	<4G
 	 * s390			<2G
-	 * arm26		<48M
 	 * arm			Various
 	 * alpha		Unlimited or 0-16MB.
 	 *
@@ -143,6 +176,7 @@ enum zone_type {
 	 */
 	ZONE_HIGHMEM,
 #endif
+	ZONE_MOVABLE,
 	MAX_NR_ZONES
 };
 
@@ -164,6 +198,7 @@ enum zone_type {
 	+ defined(CONFIG_ZONE_DMA32)	\
 	+ 1				\
 	+ defined(CONFIG_HIGHMEM)	\
+	+ 1				\
 )
 #if __ZONE_COUNT < 2
 #define ZONES_SHIFT 0
@@ -210,6 +245,14 @@ struct zone {
 #endif
 	struct free_area	free_area[MAX_ORDER];
 
+#ifndef CONFIG_SPARSEMEM
+	/*
+	 * Flags for a pageblock_nr_pages block. See pageblock-flags.h.
+	 * In SPARSEMEM, this map is stored in struct mem_section
+	 */
+	unsigned long		*pageblock_flags;
+#endif /* CONFIG_SPARSEMEM */
+
 
 	ZONE_PADDING(_pad1_)
 
@@ -220,10 +263,7 @@ struct zone {
 	unsigned long		nr_scan_active;
 	unsigned long		nr_scan_inactive;
 	unsigned long		pages_scanned;	   /* since last reclaim */
-	int			all_unreclaimable; /* All pages pinned */
-
-	/* A count of how many reclaimers are scanning this zone */
-	atomic_t		reclaim_in_progress;
+	unsigned long		flags;		   /* zone flags, see below */
 
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
@@ -301,6 +341,42 @@ struct zone {
 	const char		*name;
 } ____cacheline_internodealigned_in_smp;
 
+typedef enum {
+	ZONE_ALL_UNRECLAIMABLE,		/* all pages pinned */
+	ZONE_RECLAIM_LOCKED,		/* prevents concurrent reclaim */
+	ZONE_OOM_LOCKED,		/* zone is in OOM killer zonelist */
+} zone_flags_t;
+
+static inline void zone_set_flag(struct zone *zone, zone_flags_t flag)
+{
+	set_bit(flag, &zone->flags);
+}
+
+static inline int zone_test_and_set_flag(struct zone *zone, zone_flags_t flag)
+{
+	return test_and_set_bit(flag, &zone->flags);
+}
+
+static inline void zone_clear_flag(struct zone *zone, zone_flags_t flag)
+{
+	clear_bit(flag, &zone->flags);
+}
+
+static inline int zone_is_all_unreclaimable(const struct zone *zone)
+{
+	return test_bit(ZONE_ALL_UNRECLAIMABLE, &zone->flags);
+}
+
+static inline int zone_is_reclaim_locked(const struct zone *zone)
+{
+	return test_bit(ZONE_RECLAIM_LOCKED, &zone->flags);
+}
+
+static inline int zone_is_oom_locked(const struct zone *zone)
+{
+	return test_bit(ZONE_OOM_LOCKED, &zone->flags);
+}
+
 /*
  * The "priority" of VM scanning is how much of the queues we will scan in one
  * go. A value of 12 for DEF_PRIORITY implies that we will scan 1/4096th of the
@@ -312,6 +388,17 @@ struct zone {
 #define MAX_ZONES_PER_ZONELIST (MAX_NUMNODES * MAX_NR_ZONES)
 
 #ifdef CONFIG_NUMA
+
+/*
+ * The NUMA zonelists are doubled becausse we need zonelists that restrict the
+ * allocations to a single node for GFP_THISNODE.
+ *
+ * [0 .. MAX_NR_ZONES -1] 		: Zonelists with fallback
+ * [MAZ_NR_ZONES ... MAZ_ZONELISTS -1]  : No fallback (GFP_THISNODE)
+ */
+#define MAX_ZONELISTS (2 * MAX_NR_ZONES)
+
+
 /*
  * We cache key information from each zonelist for smaller cache
  * footprint when scanning for free pages in get_page_from_freelist().
@@ -377,6 +464,7 @@ struct zonelist_cache {
 	unsigned long last_full_zap;		/* when last zap'd (jiffies) */
 };
 #else
+#define MAX_ZONELISTS MAX_NR_ZONES
 struct zonelist_cache;
 #endif
 
@@ -397,6 +485,24 @@ struct zonelist {
 	struct zonelist_cache zlcache;			     // optional ...
 #endif
 };
+
+#ifdef CONFIG_NUMA
+/*
+ * Only custom zonelists like MPOL_BIND need to be filtered as part of
+ * policies. As described in the comment for struct zonelist_cache, these
+ * zonelists will not have a zlcache so zlcache_ptr will not be set. Use
+ * that to determine if the zonelists needs to be filtered or not.
+ */
+static inline int alloc_should_filter_zonelist(struct zonelist *zonelist)
+{
+	return !zonelist->zlcache_ptr;
+}
+#else
+static inline int alloc_should_filter_zonelist(struct zonelist *zonelist)
+{
+	return 0;
+}
+#endif /* CONFIG_NUMA */
 
 #ifdef CONFIG_ARCH_POPULATES_NODE_MAP
 struct node_active_region {
@@ -425,7 +531,7 @@ extern struct page *mem_map;
 struct bootmem_data;
 typedef struct pglist_data {
 	struct zone node_zones[MAX_NR_ZONES];
-	struct zonelist node_zonelists[MAX_NR_ZONES];
+	struct zonelist node_zonelists[MAX_ZONELISTS];
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP
 	struct page *node_mem_map;
@@ -496,10 +602,22 @@ static inline int populated_zone(struct zone *zone)
 	return (!!zone->present_pages);
 }
 
+extern int movable_zone;
+
+static inline int zone_movable_is_highmem(void)
+{
+#if defined(CONFIG_HIGHMEM) && defined(CONFIG_ARCH_POPULATES_NODE_MAP)
+	return movable_zone == ZONE_HIGHMEM;
+#else
+	return 0;
+#endif
+}
+
 static inline int is_highmem_idx(enum zone_type idx)
 {
 #ifdef CONFIG_HIGHMEM
-	return (idx == ZONE_HIGHMEM);
+	return (idx == ZONE_HIGHMEM ||
+		(idx == ZONE_MOVABLE && zone_movable_is_highmem()));
 #else
 	return 0;
 #endif
@@ -519,7 +637,9 @@ static inline int is_normal_idx(enum zone_type idx)
 static inline int is_highmem(struct zone *zone)
 {
 #ifdef CONFIG_HIGHMEM
-	return zone == zone->zone_pgdat->node_zones + ZONE_HIGHMEM;
+	int zone_idx = zone - zone->zone_pgdat->node_zones;
+	return zone_idx == ZONE_HIGHMEM ||
+		(zone_idx == ZONE_MOVABLE && zone_movable_is_highmem());
 #else
 	return 0;
 #endif
@@ -562,6 +682,11 @@ int sysctl_min_unmapped_ratio_sysctl_handler(struct ctl_table *, int,
 			struct file *, void __user *, size_t *, loff_t *);
 int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *, int,
 			struct file *, void __user *, size_t *, loff_t *);
+
+extern int numa_zonelist_order_handler(struct ctl_table *, int,
+			struct file *, void __user *, size_t *, loff_t *);
+extern char numa_zonelist_order[];
+#define NUMA_ZONELIST_ORDER_LEN 16	/* string buffer size */
 
 #include <linux/topology.h>
 /* Returns the number of the current Node. */
@@ -659,6 +784,9 @@ extern struct zone *next_zone(struct zone *zone);
 #define PAGES_PER_SECTION       (1UL << PFN_SECTION_SHIFT)
 #define PAGE_SECTION_MASK	(~(PAGES_PER_SECTION-1))
 
+#define SECTION_BLOCKFLAGS_BITS \
+	((1UL << (PFN_SECTION_SHIFT - pageblock_order)) * NR_PAGEBLOCK_BITS)
+
 #if (MAX_ORDER - 1 + PAGE_SHIFT) > SECTION_SIZE_BITS
 #error Allocator MAX_ORDER exceeds SECTION_SIZE
 #endif
@@ -678,6 +806,9 @@ struct mem_section {
 	 * before using it wrong.
 	 */
 	unsigned long section_mem_map;
+
+	/* See declaration of similar field in struct zone */
+	unsigned long *pageblock_flags;
 };
 
 #ifdef CONFIG_SPARSEMEM_EXTREME
@@ -722,12 +853,17 @@ static inline struct page *__section_mem_map_addr(struct mem_section *section)
 	return (struct page *)map;
 }
 
-static inline int valid_section(struct mem_section *section)
+static inline int present_section(struct mem_section *section)
 {
 	return (section && (section->section_mem_map & SECTION_MARKED_PRESENT));
 }
 
-static inline int section_has_mem_map(struct mem_section *section)
+static inline int present_section_nr(unsigned long nr)
+{
+	return present_section(__nr_to_section(nr));
+}
+
+static inline int valid_section(struct mem_section *section)
 {
 	return (section && (section->section_mem_map & SECTION_HAS_MEM_MAP));
 }
@@ -747,6 +883,13 @@ static inline int pfn_valid(unsigned long pfn)
 	if (pfn_to_section_nr(pfn) >= NR_MEM_SECTIONS)
 		return 0;
 	return valid_section(__nr_to_section(pfn_to_section_nr(pfn)));
+}
+
+static inline int pfn_present(unsigned long pfn)
+{
+	if (pfn_to_section_nr(pfn) >= NR_MEM_SECTIONS)
+		return 0;
+	return present_section(__nr_to_section(pfn_to_section_nr(pfn)));
 }
 
 /*
@@ -783,6 +926,18 @@ void sparse_init(void);
 
 void memory_present(int nid, unsigned long start, unsigned long end);
 unsigned long __init node_memmap_size_bytes(int, unsigned long, unsigned long);
+
+/*
+ * If it is possible to have holes within a MAX_ORDER_NR_PAGES, then we
+ * need to check pfn validility within that MAX_ORDER_NR_PAGES block.
+ * pfn_valid_within() should be used in this case; we optimise this away
+ * when we have no holes within a MAX_ORDER_NR_PAGES block.
+ */
+#ifdef CONFIG_HOLES_IN_ZONE
+#define pfn_valid_within(pfn) pfn_valid(pfn)
+#else
+#define pfn_valid_within(pfn) (1)
+#endif
 
 #endif /* !__ASSEMBLY__ */
 #endif /* __KERNEL__ */

@@ -1,5 +1,6 @@
 #undef __s390x__
 #include <asm/unistd.h>
+#include "audit.h"
 
 unsigned s390_dir_class[] = {
 #include <asm-generic/audit_dir_write.h>
@@ -18,6 +19,11 @@ unsigned s390_write_class[] = {
 
 unsigned s390_read_class[] = {
 #include <asm-generic/audit_read.h>
+~0U
+};
+
+unsigned s390_signal_class[] = {
+#include <asm-generic/audit_signal.h>
 ~0U
 };
 

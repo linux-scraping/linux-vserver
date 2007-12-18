@@ -6,7 +6,6 @@
  * Rewritten by Richard Henderson <rth@tamu.edu> Dec 1996
  * Rewritten again by Rusty Russell, 2002
  */
-#include <linux/spinlock.h>
 #include <linux/list.h>
 #include <linux/stat.h>
 #include <linux/compiler.h>
@@ -16,6 +15,7 @@
 #include <linux/stringify.h>
 #include <linux/kobject.h>
 #include <linux/moduleparam.h>
+#include <linux/marker.h>
 #include <asm/local.h>
 
 #include <asm/module.h>
@@ -124,7 +124,7 @@ extern struct module __this_module;
  */
 #define MODULE_LICENSE(_license) MODULE_INFO(license, _license)
 
-/* Author, ideally of form NAME <EMAIL>[, NAME <EMAIL>]*[ and NAME <EMAIL>] */
+/* Author, ideally of form NAME[, NAME]*[ and NAME] */
 #define MODULE_AUTHOR(_author) MODULE_INFO(author, _author)
   
 /* What your module does. */
@@ -313,9 +313,6 @@ struct module
 	/* Arch-specific module values */
 	struct mod_arch_specific arch;
 
-	/* Am I unsafe to unload? */
-	int unsafe;
-
 	unsigned int taints;	/* same bits as kernel:tainted */
 
 #ifdef CONFIG_GENERIC_BUG
@@ -347,6 +344,9 @@ struct module
 
 	/* Section attributes */
 	struct module_sect_attrs *sect_attrs;
+
+	/* Notes attributes */
+	struct module_notes_attrs *notes_attrs;
 #endif
 
 	/* Per-cpu data. */
@@ -355,7 +355,14 @@ struct module
 	/* The command line arguments (may be mangled).  People like
 	   keeping pointers to this stuff */
 	char *args;
+#ifdef CONFIG_MARKERS
+	struct marker *markers;
+	unsigned int num_markers;
+#endif
 };
+#ifndef MODULE_ARCH_INIT
+#define MODULE_ARCH_INIT {}
+#endif
 
 /* FIXME: It'd be nice to isolate modules during init, too, so they
    aren't used before they (may) fail.  But presently too much code
@@ -370,15 +377,13 @@ struct module *module_text_address(unsigned long addr);
 struct module *__module_text_address(unsigned long addr);
 int is_module_address(unsigned long addr);
 
-/* Returns module and fills in value, defined and namebuf, or NULL if
+/* Returns 0 and fills in value, defined and namebuf, or -ERANGE if
    symnum out of range. */
-struct module *module_get_kallsym(unsigned int symnum, unsigned long *value,
-				char *type, char *name, size_t namelen);
+int module_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
+			char *name, char *module_name, int *exported);
 
 /* Look for this name: can be of form module:name. */
 unsigned long module_kallsyms_lookup_name(const char *name);
-
-int is_exported(const char *name, const struct module *mod);
 
 extern void __module_put_and_exit(struct module *mod, long code)
 	__attribute__((noreturn));
@@ -441,21 +446,13 @@ static inline void __module_get(struct module *module)
 	__mod ? __mod->name : "kernel";		\
 })
 
-#define __unsafe(mod)							     \
-do {									     \
-	if (mod && !(mod)->unsafe) {					     \
-		printk(KERN_WARNING					     \
-		       "Module %s cannot be unloaded due to unsafe usage in" \
-		       " %s:%u\n", (mod)->name, __FILE__, __LINE__);	     \
-		(mod)->unsafe = 1;					     \
-	}								     \
-} while(0)
-
 /* For kallsyms to ask for address resolution.  NULL means not found. */
 const char *module_address_lookup(unsigned long addr,
 				  unsigned long *symbolsize,
 				  unsigned long *offset,
 				  char **modname);
+int lookup_module_symbol_name(unsigned long addr, char *symname);
+int lookup_module_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name);
 
 /* For extable.c to search modules' exception tables. */
 const struct exception_table_entry *search_module_extables(unsigned long addr);
@@ -464,6 +461,8 @@ int register_module_notifier(struct notifier_block * nb);
 int unregister_module_notifier(struct notifier_block * nb);
 
 extern void print_modules(void);
+
+extern void module_update_markers(struct module *probe_module, int *refcount);
 
 #else /* !CONFIG_MODULES... */
 #define EXPORT_SYMBOL(sym)
@@ -516,8 +515,6 @@ static inline void module_put(struct module *module)
 
 #define module_name(mod) "kernel"
 
-#define __unsafe(mod)
-
 /* For kallsyms to ask for address resolution.  NULL means not found. */
 static inline const char *module_address_lookup(unsigned long addr,
 						unsigned long *symbolsize,
@@ -527,20 +524,24 @@ static inline const char *module_address_lookup(unsigned long addr,
 	return NULL;
 }
 
-static inline struct module *module_get_kallsym(unsigned int symnum,
-						unsigned long *value,
-						char *type, char *name,
-						size_t namelen)
+static inline int lookup_module_symbol_name(unsigned long addr, char *symname)
 {
-	return NULL;
+	return -ERANGE;
+}
+
+static inline int lookup_module_symbol_attrs(unsigned long addr, unsigned long *size, unsigned long *offset, char *modname, char *name)
+{
+	return -ERANGE;
+}
+
+static inline int module_get_kallsym(unsigned int symnum, unsigned long *value,
+					char *type, char *name,
+					char *module_name, int *exported)
+{
+	return -ERANGE;
 }
 
 static inline unsigned long module_kallsyms_lookup_name(const char *name)
-{
-	return 0;
-}
-
-static inline int is_exported(const char *name, const struct module *mod)
 {
 	return 0;
 }
@@ -562,13 +563,18 @@ static inline void print_modules(void)
 {
 }
 
+static inline void module_update_markers(struct module *probe_module,
+		int *refcount)
+{
+}
+
 #endif /* CONFIG_MODULES */
 
 struct device_driver;
 #ifdef CONFIG_SYSFS
 struct module;
 
-extern struct subsystem module_subsys;
+extern struct kset module_subsys;
 
 int mod_sysfs_init(struct module *mod);
 int mod_sysfs_setup(struct module *mod,

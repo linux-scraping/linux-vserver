@@ -22,10 +22,6 @@
 #include <asm/pgtable.h>
 #include <asm/tlb.h>
 
-#ifdef CONFIG_BLK_DEV_INITRD
-#include <linux/blk.h>
-#endif
-
 DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
 
 /*
@@ -84,7 +80,7 @@ void show_mem(void)
 	printk("%d reserved pages\n",reserved);
 	printk("%d pages shared\n",shared);
 	printk("%d pages swap cached\n",cached);
-	printk("%ld pages in page table cache\n",pgtable_cache_size);
+	printk("%ld pages in page table cache\n", quicklist_total_size());
 }
 
 /*

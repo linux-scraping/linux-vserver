@@ -7,11 +7,10 @@
 #include <linux/fs.h>
 #include <linux/reiserfs_fs.h>
 #include <linux/stat.h>
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include <asm/uaccess.h>
 
-extern struct reiserfs_key MIN_KEY;
+extern const struct reiserfs_key MIN_KEY;
 
 static int reiserfs_readdir(struct file *, void *, filldir_t);
 static int reiserfs_dir_fsync(struct file *filp, struct dentry *dentry,
@@ -122,6 +121,16 @@ static int reiserfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 					continue;
 				d_reclen = entry_length(bh, ih, entry_num);
 				d_name = B_I_DEH_ENTRY_FILE_NAME(bh, ih, deh);
+
+				if (d_reclen <= 0 ||
+				    d_name + d_reclen > bh->b_data + bh->b_size) {
+					/* There is corrupted data in entry,
+					 * We'd better stop here */
+					pathrelse(&path_to_entry);
+					ret = -EIO;
+					goto out;
+				}
+
 				if (!d_name[d_reclen - 1])
 					d_reclen = strlen(d_name);
 

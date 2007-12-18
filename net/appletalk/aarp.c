@@ -118,7 +118,9 @@ static void __aarp_send_query(struct aarp_entry *a)
 
 	/* Set up the buffer */
 	skb_reserve(skb, dev->hard_header_len + aarp_dl->header_length);
-	skb->nh.raw      = skb->h.raw = skb_put(skb, sizeof(*eah));
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+	skb_put(skb, sizeof(*eah));
 	skb->protocol    = htons(ETH_P_ATALK);
 	skb->dev	 = dev;
 	eah		 = aarp_hdr(skb);
@@ -163,7 +165,9 @@ static void aarp_send_reply(struct net_device *dev, struct atalk_addr *us,
 
 	/* Set up the buffer */
 	skb_reserve(skb, dev->hard_header_len + aarp_dl->header_length);
-	skb->nh.raw      = skb->h.raw = skb_put(skb, sizeof(*eah));
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+	skb_put(skb, sizeof(*eah));
 	skb->protocol    = htons(ETH_P_ATALK);
 	skb->dev	 = dev;
 	eah		 = aarp_hdr(skb);
@@ -212,7 +216,9 @@ static void aarp_send_probe(struct net_device *dev, struct atalk_addr *us)
 
 	/* Set up the buffer */
 	skb_reserve(skb, dev->hard_header_len + aarp_dl->header_length);
-	skb->nh.raw      = skb->h.raw = skb_put(skb, sizeof(*eah));
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+	skb_put(skb, sizeof(*eah));
 	skb->protocol    = htons(ETH_P_ATALK);
 	skb->dev	 = dev;
 	eah		 = aarp_hdr(skb);
@@ -324,15 +330,19 @@ static void aarp_expire_timeout(unsigned long unused)
 static int aarp_device_event(struct notifier_block *this, unsigned long event,
 			     void *ptr)
 {
+	struct net_device *dev = ptr;
 	int ct;
+
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
 
 	if (event == NETDEV_DOWN) {
 		write_lock_bh(&aarp_lock);
 
 		for (ct = 0; ct < AARP_HASH_SIZE; ct++) {
-			__aarp_expire_device(&resolved[ct], ptr);
-			__aarp_expire_device(&unresolved[ct], ptr);
-			__aarp_expire_device(&proxies[ct], ptr);
+			__aarp_expire_device(&resolved[ct], dev);
+			__aarp_expire_device(&unresolved[ct], dev);
+			__aarp_expire_device(&proxies[ct], dev);
 		}
 
 		write_unlock_bh(&aarp_lock);
@@ -539,7 +549,7 @@ int aarp_send_ddp(struct net_device *dev, struct sk_buff *skb,
 	int hash;
 	struct aarp_entry *a;
 
-	skb->nh.raw = skb->data;
+	skb_reset_network_header(skb);
 
 	/* Check for LocalTalk first */
 	if (dev->type == ARPHRD_LOCALTLK) {
@@ -706,6 +716,9 @@ static int aarp_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct atalk_addr sa, *ma, da;
 	struct atalk_iface *ifa;
 
+	if (dev->nd_net != &init_net)
+		goto out0;
+
 	/* We only do Ethernet SNAP AARP. */
 	if (dev->type != ARPHRD_ETHER)
 		goto out0;
@@ -809,8 +822,6 @@ static int aarp_rcv(struct sk_buff *skb, struct net_device *dev,
 				 * address. So as a precaution flush any
 				 * entries we have for this address.
 				 */
-				struct aarp_entry *a;
-
 				a = __aarp_find_entry(resolved[sa.s_node %
 							  (AARP_HASH_SIZE - 1)],
 						      skb->dev, &sa);
@@ -984,6 +995,7 @@ static int aarp_seq_show(struct seq_file *seq, void *v)
 	struct aarp_iter_state *iter = seq->private;
 	struct aarp_entry *entry = v;
 	unsigned long now = jiffies;
+	DECLARE_MAC_BUF(mac);
 
 	if (v == SEQ_START_TOKEN)
 		seq_puts(seq,
@@ -994,13 +1006,7 @@ static int aarp_seq_show(struct seq_file *seq, void *v)
 			   ntohs(entry->target_addr.s_net),
 			   (unsigned int) entry->target_addr.s_node,
 			   entry->dev ? entry->dev->name : "????");
-		seq_printf(seq, "%02X:%02X:%02X:%02X:%02X:%02X",
-			   entry->hwaddr[0] & 0xFF,
-			   entry->hwaddr[1] & 0xFF,
-			   entry->hwaddr[2] & 0xFF,
-			   entry->hwaddr[3] & 0xFF,
-			   entry->hwaddr[4] & 0xFF,
-			   entry->hwaddr[5] & 0xFF);
+		seq_printf(seq, "%s", print_mac(mac, entry->hwaddr));
 		seq_printf(seq, " %8s",
 			   dt2str((long)entry->expires_at - (long)now));
 		if (iter->table == unresolved)
@@ -1018,7 +1024,7 @@ static int aarp_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations aarp_seq_ops = {
+static const struct seq_operations aarp_seq_ops = {
 	.start  = aarp_seq_start,
 	.next   = aarp_seq_next,
 	.stop   = aarp_seq_stop,

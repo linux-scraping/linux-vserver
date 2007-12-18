@@ -565,7 +565,7 @@ typedef struct os_dat_s {
  *	The following parameter is used to select the point in the internal
  *	tape fifo in which we will start to refill the buffer. Decreasing
  *	the following parameter will improve the system's latency and
- *	interactive response, while using a high value might improve sytem
+ *	interactive response, while using a high value might improve system
  *	throughput.
  */
 #define IDETAPE_FIFO_THRESHOLD 		2
@@ -621,7 +621,6 @@ typedef struct os_dat_s {
  */
 #define USE_IOTRACE	0
 #if USE_IOTRACE
-#include <linux/io_trace.h>
 #define IO_IDETAPE_FIFO	500
 #endif
 
@@ -640,7 +639,7 @@ typedef enum {
 } idetape_chrdev_direction_t;
 
 struct idetape_bh {
-	unsigned short b_size;
+	u32 b_size;
 	atomic_t b_count;
 	struct idetape_bh *b_reqnext;
 	char *b_data;
@@ -4561,28 +4560,33 @@ static void idetape_get_blocksize_from_block_descriptor(ide_drive_t *drive)
 	printk(KERN_INFO "ide-tape: Adjusted block size - %d\n", tape->tape_block_size);
 #endif /* IDETAPE_DEBUG_INFO */
 }
+
+#ifdef CONFIG_IDE_PROC_FS
 static void idetape_add_settings (ide_drive_t *drive)
 {
 	idetape_tape_t *tape = drive->driver_data;
 
 /*
- *			drive	setting name	read/write	ioctl	ioctl		data type	min			max			mul_factor			div_factor			data pointer				set function
+ *			drive	setting name		read/write	data type	min			max			mul_factor			div_factor	data pointer				set function
  */
-	ide_add_setting(drive,	"buffer",	SETTING_READ,	-1,	-1,		TYPE_SHORT,	0,			0xffff,			1,				2,				&tape->capabilities.buffer_size,	NULL);
-	ide_add_setting(drive,	"pipeline_min",	SETTING_RW,	-1,	-1,		TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,				&tape->min_pipeline,			NULL);
-	ide_add_setting(drive,	"pipeline",	SETTING_RW,	-1,	-1,		TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,				&tape->max_stages,			NULL);
-	ide_add_setting(drive,	"pipeline_max",	SETTING_RW,	-1,	-1,		TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,				&tape->max_pipeline,			NULL);
-	ide_add_setting(drive,	"pipeline_used",SETTING_READ,	-1,	-1,		TYPE_INT,	0,			0xffff,			tape->stage_size / 1024,	1,				&tape->nr_stages,			NULL);
-	ide_add_setting(drive,	"pipeline_pending",SETTING_READ,-1,	-1,		TYPE_INT,	0,			0xffff,			tape->stage_size / 1024,	1,				&tape->nr_pending_stages,		NULL);
-	ide_add_setting(drive,	"speed",	SETTING_READ,	-1,	-1,		TYPE_SHORT,	0,			0xffff,			1,				1,				&tape->capabilities.speed,		NULL);
-	ide_add_setting(drive,	"stage",	SETTING_READ,	-1,	-1,		TYPE_INT,	0,			0xffff,			1,				1024,				&tape->stage_size,			NULL);
-	ide_add_setting(drive,	"tdsc",		SETTING_RW,	-1,	-1,		TYPE_INT,	IDETAPE_DSC_RW_MIN,	IDETAPE_DSC_RW_MAX,	1000,				HZ,				&tape->best_dsc_rw_frequency,		NULL);
-	ide_add_setting(drive,	"dsc_overlap",	SETTING_RW,	-1,	-1,		TYPE_BYTE,	0,			1,			1,				1,				&drive->dsc_overlap,			NULL);
-	ide_add_setting(drive,	"pipeline_head_speed_c",SETTING_READ,	-1,	-1,	TYPE_INT,	0,			0xffff,			1,				1,				&tape->controlled_pipeline_head_speed,	NULL);
-	ide_add_setting(drive,	"pipeline_head_speed_u",SETTING_READ,	-1,	-1,	TYPE_INT,	0,			0xffff,			1,				1,				&tape->uncontrolled_pipeline_head_speed,	NULL);
-	ide_add_setting(drive,	"avg_speed",	SETTING_READ,	-1,	-1,		TYPE_INT,	0,			0xffff,			1,				1,				&tape->avg_speed,		NULL);
-	ide_add_setting(drive,	"debug_level",SETTING_RW,	-1,	-1,		TYPE_INT,	0,			0xffff,			1,				1,				&tape->debug_level,		NULL);
+	ide_add_setting(drive,	"buffer",		SETTING_READ,	TYPE_SHORT,	0,			0xffff,			1,				2,		&tape->capabilities.buffer_size,	NULL);
+	ide_add_setting(drive,	"pipeline_min",		SETTING_RW,	TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,		&tape->min_pipeline,			NULL);
+	ide_add_setting(drive,	"pipeline",		SETTING_RW,	TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,		&tape->max_stages,			NULL);
+	ide_add_setting(drive,	"pipeline_max",		SETTING_RW,	TYPE_INT,	1,			0xffff,			tape->stage_size / 1024,	1,		&tape->max_pipeline,			NULL);
+	ide_add_setting(drive,	"pipeline_used",	SETTING_READ,	TYPE_INT,	0,			0xffff,			tape->stage_size / 1024,	1,		&tape->nr_stages,			NULL);
+	ide_add_setting(drive,	"pipeline_pending",	SETTING_READ,	TYPE_INT,	0,			0xffff,			tape->stage_size / 1024,	1,		&tape->nr_pending_stages,		NULL);
+	ide_add_setting(drive,	"speed",		SETTING_READ,	TYPE_SHORT,	0,			0xffff,			1,				1,		&tape->capabilities.speed,		NULL);
+	ide_add_setting(drive,	"stage",		SETTING_READ,	TYPE_INT,	0,			0xffff,			1,				1024,		&tape->stage_size,			NULL);
+	ide_add_setting(drive,	"tdsc",			SETTING_RW,	TYPE_INT,	IDETAPE_DSC_RW_MIN,	IDETAPE_DSC_RW_MAX,	1000,				HZ,		&tape->best_dsc_rw_frequency,		NULL);
+	ide_add_setting(drive,	"dsc_overlap",		SETTING_RW,	TYPE_BYTE,	0,			1,			1,				1,		&drive->dsc_overlap,			NULL);
+	ide_add_setting(drive,	"pipeline_head_speed_c",SETTING_READ,	TYPE_INT,	0,			0xffff,			1,				1,		&tape->controlled_pipeline_head_speed,	NULL);
+	ide_add_setting(drive,	"pipeline_head_speed_u",SETTING_READ,	TYPE_INT,	0,			0xffff,			1,				1,		&tape->uncontrolled_pipeline_head_speed,NULL);
+	ide_add_setting(drive,	"avg_speed",		SETTING_READ,	TYPE_INT,	0,			0xffff,			1,				1,		&tape->avg_speed,			NULL);
+	ide_add_setting(drive,	"debug_level",		SETTING_RW,	TYPE_INT,	0,			0xffff,			1,				1,		&tape->debug_level,			NULL);
 }
+#else
+static inline void idetape_add_settings(ide_drive_t *drive) { ; }
+#endif
 
 /*
  *	ide_setup is called to:
@@ -4703,7 +4707,7 @@ static void ide_tape_remove(ide_drive_t *drive)
 {
 	idetape_tape_t *tape = drive->driver_data;
 
-	ide_unregister_subdriver(drive, tape->driver);
+	ide_proc_unregister_driver(drive, tape->driver);
 
 	ide_unregister_region(tape->disk);
 
@@ -4730,8 +4734,7 @@ static void ide_tape_release(struct kref *kref)
 	kfree(tape);
 }
 
-#ifdef CONFIG_PROC_FS
-
+#ifdef CONFIG_IDE_PROC_FS
 static int proc_idetape_read_name
 	(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
@@ -4749,11 +4752,6 @@ static ide_proc_entry_t idetape_proc[] = {
 	{ "name",	S_IFREG|S_IRUGO,	proc_idetape_read_name,	NULL },
 	{ NULL, 0, NULL, NULL }
 };
-
-#else
-
-#define	idetape_proc	NULL
-
 #endif
 
 static int ide_tape_probe(ide_drive_t *);
@@ -4773,7 +4771,9 @@ static ide_driver_t idetape_driver = {
 	.end_request		= idetape_end_request,
 	.error			= __ide_error,
 	.abort			= __ide_abort,
+#ifdef CONFIG_IDE_PROC_FS
 	.proc			= idetape_proc,
+#endif
 };
 
 /*
@@ -4864,7 +4864,7 @@ static int ide_tape_probe(ide_drive_t *drive)
 
 	ide_init_disk(g, drive);
 
-	ide_register_subdriver(drive, &idetape_driver);
+	ide_proc_register_driver(drive, &idetape_driver);
 
 	kref_init(&tape->kref);
 

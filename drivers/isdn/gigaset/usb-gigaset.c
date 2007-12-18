@@ -138,8 +138,6 @@ struct usb_cardstate {
 	char			bchars[6];		/* for request 0x19 */
 };
 
-struct usb_bc_state {};
-
 static inline unsigned tiocm_to_gigaset(unsigned state)
 {
 	return ((state & TIOCM_DTR) ? 1 : 0) | ((state & TIOCM_RTS) ? 2 : 0);
@@ -312,7 +310,6 @@ static void gigaset_modem_fill(unsigned long data)
 	struct cardstate *cs = (struct cardstate *) data;
 	struct bc_state *bcs = &cs->bcs[0]; /* only one channel */
 	struct cmdbuf_t *cb;
-	unsigned long flags;
 	int again;
 
 	gig_dbg(DEBUG_OUTPUT, "modem_fill");
@@ -325,9 +322,7 @@ static void gigaset_modem_fill(unsigned long data)
 	do {
 		again = 0;
 		if (!bcs->tx_skb) { /* no skb is being sent */
-			spin_lock_irqsave(&cs->cmdlock, flags);
 			cb = cs->cmdbuf;
-			spin_unlock_irqrestore(&cs->cmdlock, flags);
 			if (cb) { /* commands to send? */
 				gig_dbg(DEBUG_OUTPUT, "modem_fill: cb");
 				if (send_cb(cs, cb) < 0) {
@@ -548,13 +543,9 @@ static int gigaset_write_cmd(struct cardstate *cs, const unsigned char *buf,
 
 static int gigaset_write_room(struct cardstate *cs)
 {
-	unsigned long flags;
 	unsigned bytes;
 
-	spin_lock_irqsave(&cs->cmdlock, flags);
 	bytes = cs->cmdbytes;
-	spin_unlock_irqrestore(&cs->cmdlock, flags);
-
 	return bytes < IF_WRITEBUF ? IF_WRITEBUF - bytes : 0;
 }
 
@@ -579,25 +570,21 @@ static int gigaset_brkchars(struct cardstate *cs, const unsigned char buf[6])
 
 static int gigaset_freebcshw(struct bc_state *bcs)
 {
-	if (!bcs->hw.usb)
-		return 0;
-	//FIXME
-	kfree(bcs->hw.usb);
+	/* unused */
 	return 1;
 }
 
 /* Initialize the b-channel structure */
 static int gigaset_initbcshw(struct bc_state *bcs)
 {
-	bcs->hw.usb = kmalloc(sizeof(struct usb_bc_state), GFP_KERNEL);
-	if (!bcs->hw.usb)
-		return 0;
-
+	/* unused */
+	bcs->hw.usb = NULL;
 	return 1;
 }
 
 static void gigaset_reinitbcshw(struct bc_state *bcs)
 {
+	/* nothing to do for M10x */
 }
 
 static void gigaset_freecshw(struct cardstate *cs)
@@ -652,7 +639,7 @@ static int write_modem(struct cardstate *cs)
 	 * transmit data
 	 */
 	count = min(bcs->tx_skb->len, (unsigned) ucs->bulk_out_size);
-	memcpy(ucs->bulk_out_buffer, bcs->tx_skb->data, count);
+	skb_copy_from_linear_data(bcs->tx_skb, ucs->bulk_out_buffer, count);
 	skb_pull(bcs->tx_skb, count);
 	atomic_set(&ucs->busy, 1);
 	gig_dbg(DEBUG_OUTPUT, "write_modem: send %d bytes", count);

@@ -1562,10 +1562,10 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 	pTxd->pMBuf     = pMessage;
 
 	if (pMessage->ip_summed == CHECKSUM_PARTIAL) {
-		u16 hdrlen = pMessage->h.raw - pMessage->data;
+		u16 hdrlen = skb_transport_offset(pMessage);
 		u16 offset = hdrlen + pMessage->csum_offset;
 
-		if ((pMessage->h.ipiph->protocol == IPPROTO_UDP ) &&
+		if ((ipip_hdr(pMessage)->protocol == IPPROTO_UDP) &&
 			(pAC->GIni.GIChipRev == 0) &&
 			(pAC->GIni.GIChipId == CHIP_ID_YUKON)) {
 			pTxd->TBControl = BMU_TCP_CHECK;
@@ -1681,7 +1681,7 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 	** Does the HW need to evaluate checksum for TCP or UDP packets? 
 	*/
 	if (pMessage->ip_summed == CHECKSUM_PARTIAL) {
-		u16 hdrlen = pMessage->h.raw - pMessage->data;
+		u16 hdrlen = skb_transport_offset(pMessage);
 		u16 offset = hdrlen + pMessage->csum_offset;
 
 		Control = BMU_STFWD;
@@ -1691,7 +1691,7 @@ struct sk_buff	*pMessage)	/* pointer to send-message              */
 		** opcode for udp is not working in the hardware yet 
 		** (Revision 2.0)
 		*/
-		if ((pMessage->h.ipiph->protocol == IPPROTO_UDP ) &&
+		if ((ipip_hdr(pMessage)->protocol == IPPROTO_UDP) &&
 			(pAC->GIni.GIChipRev == 0) &&
 			(pAC->GIni.GIChipId == CHIP_ID_YUKON)) {
 			Control |= BMU_TCP_CHECK;
@@ -2127,7 +2127,7 @@ rx_start:
 						    (dma_addr_t) PhysAddr,
 						    FrameLength,
 						    PCI_DMA_FROMDEVICE);
-			memcpy(pNewMsg->data, pMsg, FrameLength);
+			skb_copy_to_linear_data(pNewMsg, pMsg, FrameLength);
 
 			pci_dma_sync_single_for_device(pAC->PciDev,
 						       (dma_addr_t) PhysAddr,
@@ -2193,7 +2193,6 @@ rx_start:
 				SK_PNMI_CNT_RX_OCTETS_DELIVERED(pAC,
 					FrameLength, pRxPort->PortIndex);
 
-				pMsg->dev = pAC->dev[pRxPort->PortIndex];
 				pMsg->protocol = eth_type_trans(pMsg,
 					pAC->dev[pRxPort->PortIndex]);
 				netif_rx(pMsg);
@@ -2246,7 +2245,6 @@ rx_start:
 				(IFF_PROMISC | IFF_ALLMULTI)) != 0 ||
 				(ForRlmt & SK_RLMT_RX_PROTOCOL) ==
 				SK_RLMT_RX_PROTOCOL) {
-				pMsg->dev = pAC->dev[pRxPort->PortIndex];
 				pMsg->protocol = eth_type_trans(pMsg,
 					pAC->dev[pRxPort->PortIndex]);
 				netif_rx(pMsg);
@@ -4879,7 +4877,6 @@ static int __devinit skge_probe_one(struct pci_dev *pdev,
 		goto out_free_netdev;
 	}
 
-	SET_MODULE_OWNER(dev);
 	dev->open =		&SkGeOpen;
 	dev->stop =		&SkGeClose;
 	dev->hard_start_xmit =	&SkGeXmit;
@@ -5125,7 +5122,12 @@ static int skge_resume(struct pci_dev *pdev)
 
 	pci_set_power_state(pdev, PCI_D0);
 	pci_restore_state(pdev);
-	pci_enable_device(pdev);
+	ret = pci_enable_device(pdev);
+	if (ret) {
+		printk(KERN_WARNING "sk98lin: unable to enable device %s "
+				"in resume\n", dev->name);
+		goto err_out;
+	}
 	pci_set_master(pdev);
 	if (pAC->GIni.GIMacsFound == 2)
 		ret = request_irq(dev->irq, SkGeIsr, IRQF_SHARED, "sk98lin", dev);
@@ -5133,10 +5135,8 @@ static int skge_resume(struct pci_dev *pdev)
 		ret = request_irq(dev->irq, SkGeIsrOnePort, IRQF_SHARED, "sk98lin", dev);
 	if (ret) {
 		printk(KERN_WARNING "sk98lin: unable to acquire IRQ %d\n", dev->irq);
-		pAC->AllocFlag &= ~SK_ALLOC_IRQ;
-		dev->irq = 0;
-		pci_disable_device(pdev);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto err_out_disable_pdev;
 	}
 
 	netif_device_attach(dev);
@@ -5153,6 +5153,13 @@ static int skge_resume(struct pci_dev *pdev)
 	}
 
 	return 0;
+
+err_out_disable_pdev:
+	pci_disable_device(pdev);
+err_out:
+	pAC->AllocFlag &= ~SK_ALLOC_IRQ;
+	dev->irq = 0;
+	return ret;
 }
 #else
 #define skge_suspend NULL
@@ -5160,10 +5167,17 @@ static int skge_resume(struct pci_dev *pdev)
 #endif
 
 static struct pci_device_id skge_pci_tbl[] = {
+#ifdef SK98LIN_ALL_DEVICES
 	{ PCI_VENDOR_ID_3COM, 0x1700, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ PCI_VENDOR_ID_3COM, 0x80eb, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+#endif
+#ifdef GENESIS
+	/* Generic SysKonnect SK-98xx Gigabit Ethernet Server Adapter */	
 	{ PCI_VENDOR_ID_SYSKONNECT, 0x4300, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+#endif
+	/* Generic SysKonnect SK-98xx V2.0 Gigabit Ethernet Adapter */	
 	{ PCI_VENDOR_ID_SYSKONNECT, 0x4320, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+#ifdef SK98LIN_ALL_DEVICES
 /* DLink card does not have valid VPD so this driver gags
  *	{ PCI_VENDOR_ID_DLINK, 0x4c00, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
  */
@@ -5172,6 +5186,7 @@ static struct pci_device_id skge_pci_tbl[] = {
 	{ PCI_VENDOR_ID_CNET, 0x434e, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ PCI_VENDOR_ID_LINKSYS, 0x1032, PCI_ANY_ID, 0x0015, },
 	{ PCI_VENDOR_ID_LINKSYS, 0x1064, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+#endif
 	{ 0 }
 };
 

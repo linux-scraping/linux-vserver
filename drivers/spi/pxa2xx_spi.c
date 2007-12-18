@@ -26,7 +26,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/spi/spi.h>
 #include <linux/workqueue.h>
-#include <linux/errno.h>
 #include <linux/delay.h>
 
 #include <asm/io.h>
@@ -1067,6 +1066,9 @@ static int transfer(struct spi_device *spi, struct spi_message *msg)
 	return 0;
 }
 
+/* the spi->mode bits understood by this driver: */
+#define MODEBITS (SPI_CPOL | SPI_CPHA)
+
 static int setup(struct spi_device *spi)
 {
 	struct pxa2xx_spi_chip *chip_info = NULL;
@@ -1090,6 +1092,12 @@ static int setup(struct spi_device *spi)
 		dev_err(&spi->dev, "failed setup: ssp_type=%d, bits/wrd=%d "
 				"b/w not 4-16 for type PXA25x_SSP\n",
 				drv_data->ssp_type, spi->bits_per_word);
+		return -EINVAL;
+	}
+
+	if (spi->mode & ~MODEBITS) {
+		dev_dbg(&spi->dev, "setup: unsupported mode bits %x\n",
+			spi->mode & ~MODEBITS);
 		return -EINVAL;
 	}
 
@@ -1221,7 +1229,7 @@ static void cleanup(struct spi_device *spi)
 	kfree(chip);
 }
 
-static int init_queue(struct driver_data *drv_data)
+static int __init init_queue(struct driver_data *drv_data)
 {
 	INIT_LIST_HEAD(&drv_data->queue);
 	spin_lock_init(&drv_data->lock);
@@ -1234,7 +1242,7 @@ static int init_queue(struct driver_data *drv_data)
 
 	INIT_WORK(&drv_data->pump_messages, pump_messages);
 	drv_data->workqueue = create_singlethread_workqueue(
-					drv_data->master->cdev.dev->bus_id);
+					drv_data->master->dev.parent->bus_id);
 	if (drv_data->workqueue == NULL)
 		return -EBUSY;
 
@@ -1309,7 +1317,7 @@ static int destroy_queue(struct driver_data *drv_data)
 	return 0;
 }
 
-static int pxa2xx_spi_probe(struct platform_device *pdev)
+static int __init pxa2xx_spi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct pxa2xx_spi_master *platform_info;
@@ -1613,8 +1621,7 @@ static struct platform_driver driver = {
 		.bus = &platform_bus_type,
 		.owner = THIS_MODULE,
 	},
-	.probe = pxa2xx_spi_probe,
-	.remove = __devexit_p(pxa2xx_spi_remove),
+	.remove = pxa2xx_spi_remove,
 	.shutdown = pxa2xx_spi_shutdown,
 	.suspend = pxa2xx_spi_suspend,
 	.resume = pxa2xx_spi_resume,
@@ -1622,9 +1629,7 @@ static struct platform_driver driver = {
 
 static int __init pxa2xx_spi_init(void)
 {
-	platform_driver_register(&driver);
-
-	return 0;
+	return platform_driver_probe(&driver, pxa2xx_spi_probe);
 }
 module_init(pxa2xx_spi_init);
 

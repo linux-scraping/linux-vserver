@@ -74,7 +74,7 @@ struct vmlogrdr_priv_t {
 	int dev_in_use; /* 1: already opened, 0: not opened*/
 	spinlock_t priv_lock;
 	struct device  *device;
-	struct class_device  *class_device;
+	struct device  *class_device;
 	int autorecording;
 	int autopurge;
 };
@@ -125,7 +125,7 @@ static struct vmlogrdr_priv_t sys_ser[] = {
 	  .recording_name = "EREP",
 	  .minor_num      = 0,
 	  .buffer_free    = 1,
-	  .priv_lock      = SPIN_LOCK_UNLOCKED,
+	  .priv_lock	  = __SPIN_LOCK_UNLOCKED(sys_ser[0].priv_lock),
 	  .autorecording  = 1,
 	  .autopurge      = 1,
 	},
@@ -134,7 +134,7 @@ static struct vmlogrdr_priv_t sys_ser[] = {
 	  .recording_name = "ACCOUNT",
 	  .minor_num      = 1,
 	  .buffer_free    = 1,
-	  .priv_lock      = SPIN_LOCK_UNLOCKED,
+	  .priv_lock	  = __SPIN_LOCK_UNLOCKED(sys_ser[1].priv_lock),
 	  .autorecording  = 1,
 	  .autopurge      = 1,
 	},
@@ -143,7 +143,7 @@ static struct vmlogrdr_priv_t sys_ser[] = {
 	  .recording_name = "SYMPTOM",
 	  .minor_num      = 2,
 	  .buffer_free    = 1,
-	  .priv_lock      = SPIN_LOCK_UNLOCKED,
+	  .priv_lock	  = __SPIN_LOCK_UNLOCKED(sys_ser[2].priv_lock),
 	  .autorecording  = 1,
 	  .autopurge      = 1,
 	}
@@ -385,6 +385,9 @@ static int vmlogrdr_release (struct inode *inode, struct file *filp)
 
 	struct vmlogrdr_priv_t * logptr = filp->private_data;
 
+	iucv_path_sever(logptr->path, NULL);
+	kfree(logptr->path);
+	logptr->path = NULL;
 	if (logptr->autorecording) {
 		ret = vmlogrdr_recording(logptr,0,logptr->autopurge);
 		if (ret)
@@ -759,12 +762,10 @@ static int vmlogrdr_register_device(struct vmlogrdr_priv_t *priv)
 		device_unregister(dev);
 		return ret;
 	}
-	priv->class_device = class_device_create(
-				vmlogrdr_class,
-				NULL,
-				MKDEV(vmlogrdr_major, priv->minor_num),
-				dev,
-				"%s", dev->bus_id );
+	priv->class_device = device_create(vmlogrdr_class, dev,
+					   MKDEV(vmlogrdr_major,
+						 priv->minor_num),
+					   "%s", dev->bus_id);
 	if (IS_ERR(priv->class_device)) {
 		ret = PTR_ERR(priv->class_device);
 		priv->class_device=NULL;
@@ -780,8 +781,7 @@ static int vmlogrdr_register_device(struct vmlogrdr_priv_t *priv)
 
 static int vmlogrdr_unregister_device(struct vmlogrdr_priv_t *priv)
 {
-	class_device_destroy(vmlogrdr_class,
-			     MKDEV(vmlogrdr_major, priv->minor_num));
+	device_destroy(vmlogrdr_class, MKDEV(vmlogrdr_major, priv->minor_num));
 	if (priv->device != NULL) {
 		sysfs_remove_group(&priv->device->kobj, &vmlogrdr_attr_group);
 		device_unregister(priv->device);
@@ -832,7 +832,7 @@ static void vmlogrdr_cleanup(void)
 }
 
 
-static int vmlogrdr_init(void)
+static int __init vmlogrdr_init(void)
 {
 	int rc;
 	int i;
@@ -882,7 +882,7 @@ cleanup:
 }
 
 
-static void vmlogrdr_exit(void)
+static void __exit vmlogrdr_exit(void)
 {
 	vmlogrdr_cleanup();
 	printk (KERN_INFO "vmlogrdr: driver unloaded\n");

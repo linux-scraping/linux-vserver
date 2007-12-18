@@ -80,7 +80,7 @@ static int blkpg_ioctl(struct block_device *bdev, struct blkpg_ioctl_arg __user 
 			}
 			/* all seems OK */
 			fsync_bdev(bdevp);
-			invalidate_bdev(bdevp, 0);
+			invalidate_bdev(bdevp);
 
 			mutex_lock_nested(&bdev->bd_mutex, 1);
 			delete_partition(disk, part);
@@ -217,6 +217,10 @@ int blkdev_driver_ioctl(struct inode *inode, struct file *file,
 }
 EXPORT_SYMBOL_GPL(blkdev_driver_ioctl);
 
+/*
+ * always keep this in sync with compat_blkdev_ioctl() and
+ * compat_blkdev_locked_ioctl()
+ */
 int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 			unsigned long arg)
 {
@@ -236,7 +240,7 @@ int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 
 		lock_kernel();
 		fsync_bdev(bdev);
-		invalidate_bdev(bdev, 0);
+		invalidate_bdev(bdev);
 		unlock_kernel();
 		return 0;
 
@@ -284,21 +288,4 @@ int blkdev_ioctl(struct inode *inode, struct file *file, unsigned cmd,
 
 	return blkdev_driver_ioctl(inode, file, disk, cmd, arg);
 }
-
-/* Most of the generic ioctls are handled in the normal fallback path.
-   This assumes the blkdev's low level compat_ioctl always returns
-   ENOIOCTLCMD for unknown ioctls. */
-long compat_blkdev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
-{
-	struct block_device *bdev = file->f_path.dentry->d_inode->i_bdev;
-	struct gendisk *disk = bdev->bd_disk;
-	int ret = -ENOIOCTLCMD;
-	if (disk->fops->compat_ioctl) {
-		lock_kernel();
-		ret = disk->fops->compat_ioctl(file, cmd, arg);
-		unlock_kernel();
-	}
-	return ret;
-}
-
 EXPORT_SYMBOL_GPL(blkdev_ioctl);

@@ -116,6 +116,7 @@ static int soc_ac97_dev_register(struct snd_soc_codec *codec)
 static inline const char* get_dai_name(int type)
 {
 	switch(type) {
+	case SND_SOC_DAI_AC97_BUS:
 	case SND_SOC_DAI_AC97:
 		return "AC97";
 	case SND_SOC_DAI_I2S:
@@ -263,7 +264,7 @@ out:
 }
 
 /*
- * Power down the audio subsytem pmdown_time msecs after close is called.
+ * Power down the audio subsystem pmdown_time msecs after close is called.
  * This is to ensure there are no pops or clicks in between any music tracks
  * due to DAPM power cycling.
  */
@@ -1099,7 +1100,8 @@ int snd_soc_register_card(struct snd_soc_device *socdev)
 				continue;
 			}
 		}
-		if (socdev->machine->dai_link[i].cpu_dai->type == SND_SOC_DAI_AC97)
+		if (socdev->machine->dai_link[i].codec_dai->type == 
+			SND_SOC_DAI_AC97_BUS)
 			ac97 = 1;
 	}
 	snprintf(codec->card->shortname, sizeof(codec->card->shortname),
@@ -1148,11 +1150,21 @@ EXPORT_SYMBOL_GPL(snd_soc_register_card);
 void snd_soc_free_pcms(struct snd_soc_device *socdev)
 {
 	struct snd_soc_codec *codec = socdev->codec;
+#ifdef CONFIG_SND_SOC_AC97_BUS
+	struct snd_soc_codec_dai *codec_dai;
+	int i;
+#endif
 
 	mutex_lock(&codec->mutex);
 #ifdef CONFIG_SND_SOC_AC97_BUS
-	if (codec->ac97)
-		soc_ac97_dev_unregister(codec);
+	for(i = 0; i < codec->num_dai; i++) {
+		codec_dai = &codec->dai[i];
+		if (codec_dai->type == SND_SOC_DAI_AC97_BUS && codec->ac97) {
+			soc_ac97_dev_unregister(codec);
+			goto free_card;
+		}
+	}
+free_card:
 #endif
 
 	if (codec->card)
@@ -1348,26 +1360,6 @@ int snd_soc_info_volsw_ext(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(snd_soc_info_volsw_ext);
-
-/**
- * snd_soc_info_bool_ext - external single boolean mixer info callback
- * @kcontrol: mixer control
- * @uinfo: control element information
- *
- * Callback to provide information about a single boolean external mixer control.
- *
- * Returns 0 for success.
- */
-int snd_soc_info_bool_ext(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(snd_soc_info_bool_ext);
 
 /**
  * snd_soc_info_volsw - single mixer info callback

@@ -43,8 +43,6 @@
 #include "xfs_dir2_trace.h"
 #include "xfs_error.h"
 
-static int	xfs_dir2_put_dirent64_direct(xfs_dir2_put_args_t *pa);
-static int	xfs_dir2_put_dirent64_uio(xfs_dir2_put_args_t *pa);
 
 void
 xfs_dir_mount(
@@ -55,9 +53,9 @@ xfs_dir_mount(
 	       XFS_MAX_BLOCKSIZE);
 	mp->m_dirblksize = 1 << (mp->m_sb.sb_blocklog + mp->m_sb.sb_dirblklog);
 	mp->m_dirblkfsbs = 1 << mp->m_sb.sb_dirblklog;
-	mp->m_dirdatablk = XFS_DIR2_DB_TO_DA(mp, XFS_DIR2_DATA_FIRSTDB(mp));
-	mp->m_dirleafblk = XFS_DIR2_DB_TO_DA(mp, XFS_DIR2_LEAF_FIRSTDB(mp));
-	mp->m_dirfreeblk = XFS_DIR2_DB_TO_DA(mp, XFS_DIR2_FREE_FIRSTDB(mp));
+	mp->m_dirdatablk = xfs_dir2_db_to_da(mp, XFS_DIR2_DATA_FIRSTDB(mp));
+	mp->m_dirleafblk = xfs_dir2_db_to_da(mp, XFS_DIR2_LEAF_FIRSTDB(mp));
+	mp->m_dirfreeblk = xfs_dir2_db_to_da(mp, XFS_DIR2_FREE_FIRSTDB(mp));
 	mp->m_attr_node_ents =
 		(mp->m_sb.sb_blocksize - (uint)sizeof(xfs_da_node_hdr_t)) /
 		(uint)sizeof(xfs_da_node_entry_t);
@@ -293,47 +291,33 @@ xfs_dir_removename(
  * Read a directory.
  */
 int
-xfs_dir_getdents(
-	xfs_trans_t	*tp,
+xfs_readdir(
 	xfs_inode_t	*dp,
-	uio_t		*uio,		/* caller's buffer control */
-	int		*eofp)		/* out: eof reached */
+	void		*dirent,
+	size_t		bufsize,
+	xfs_off_t	*offset,
+	filldir_t	filldir)
 {
-	int		alignment;	/* alignment required for ABI */
-	xfs_dirent_t	*dbp;		/* malloc'ed buffer */
-	xfs_dir2_put_t	put;		/* entry formatting routine */
 	int		rval;		/* return value */
 	int		v;		/* type-checking value */
 
+	vn_trace_entry(dp, __FUNCTION__, (inst_t *)__return_address);
+
+	if (XFS_FORCED_SHUTDOWN(dp->i_mount))
+		return XFS_ERROR(EIO);
+
 	ASSERT((dp->i_d.di_mode & S_IFMT) == S_IFDIR);
 	XFS_STATS_INC(xs_dir_getdents);
-	/*
-	 * If our caller has given us a single contiguous aligned memory buffer,
-	 * just work directly within that buffer.  If it's in user memory,
-	 * lock it down first.
-	 */
-	alignment = sizeof(xfs_off_t) - 1;
-	if ((uio->uio_iovcnt == 1) &&
-	    (((__psint_t)uio->uio_iov[0].iov_base & alignment) == 0) &&
-	    ((uio->uio_iov[0].iov_len & alignment) == 0)) {
-		dbp = NULL;
-		put = xfs_dir2_put_dirent64_direct;
-	} else {
-		dbp = kmem_alloc(sizeof(*dbp) + MAXNAMELEN, KM_SLEEP);
-		put = xfs_dir2_put_dirent64_uio;
-	}
 
-	*eofp = 0;
 	if (dp->i_d.di_format == XFS_DINODE_FMT_LOCAL)
-		rval = xfs_dir2_sf_getdents(dp, uio, eofp, dbp, put);
-	else if ((rval = xfs_dir2_isblock(tp, dp, &v)))
+		rval = xfs_dir2_sf_getdents(dp, dirent, offset, filldir);
+	else if ((rval = xfs_dir2_isblock(NULL, dp, &v)))
 		;
 	else if (v)
-		rval = xfs_dir2_block_getdents(tp, dp, uio, eofp, dbp, put);
+		rval = xfs_dir2_block_getdents(dp, dirent, offset, filldir);
 	else
-		rval = xfs_dir2_leaf_getdents(tp, dp, uio, eofp, dbp, put);
-	if (dbp != NULL)
-		kmem_free(dbp, sizeof(*dbp) + MAXNAMELEN);
+		rval = xfs_dir2_leaf_getdents(dp, dirent, bufsize, offset,
+					      filldir);
 	return rval;
 }
 
@@ -554,7 +538,7 @@ xfs_dir2_grow_inode(
 	 */
 	if (mapp != &map)
 		kmem_free(mapp, sizeof(*mapp) * count);
-	*dbp = XFS_DIR2_DA_TO_DB(mp, (xfs_dablk_t)bno);
+	*dbp = xfs_dir2_da_to_db(mp, (xfs_dablk_t)bno);
 	/*
 	 * Update file's size if this is the data space and it grew.
 	 */
@@ -613,77 +597,6 @@ xfs_dir2_isleaf(
 }
 
 /*
- * Getdents put routine for 64-bit ABI, direct form.
- */
-static int
-xfs_dir2_put_dirent64_direct(
-	xfs_dir2_put_args_t	*pa)
-{
-	xfs_dirent_t		*idbp;		/* dirent pointer */
-	iovec_t			*iovp;		/* io vector */
-	int			namelen;	/* entry name length */
-	int			reclen;		/* entry total length */
-	uio_t			*uio;		/* I/O control */
-
-	namelen = pa->namelen;
-	reclen = DIRENTSIZE(namelen);
-	uio = pa->uio;
-	/*
-	 * Won't fit in the remaining space.
-	 */
-	if (reclen > uio->uio_resid) {
-		pa->done = 0;
-		return 0;
-	}
-	iovp = uio->uio_iov;
-	idbp = (xfs_dirent_t *)iovp->iov_base;
-	iovp->iov_base = (char *)idbp + reclen;
-	iovp->iov_len -= reclen;
-	uio->uio_resid -= reclen;
-	idbp->d_reclen = reclen;
-	idbp->d_ino = pa->ino;
-	idbp->d_off = pa->cook;
-	idbp->d_name[namelen] = '\0';
-	pa->done = 1;
-	memcpy(idbp->d_name, pa->name, namelen);
-	return 0;
-}
-
-/*
- * Getdents put routine for 64-bit ABI, uio form.
- */
-static int
-xfs_dir2_put_dirent64_uio(
-	xfs_dir2_put_args_t	*pa)
-{
-	xfs_dirent_t		*idbp;		/* dirent pointer */
-	int			namelen;	/* entry name length */
-	int			reclen;		/* entry total length */
-	int			rval;		/* return value */
-	uio_t			*uio;		/* I/O control */
-
-	namelen = pa->namelen;
-	reclen = DIRENTSIZE(namelen);
-	uio = pa->uio;
-	/*
-	 * Won't fit in the remaining space.
-	 */
-	if (reclen > uio->uio_resid) {
-		pa->done = 0;
-		return 0;
-	}
-	idbp = pa->dbp;
-	idbp->d_reclen = reclen;
-	idbp->d_ino = pa->ino;
-	idbp->d_off = pa->cook;
-	idbp->d_name[namelen] = '\0';
-	memcpy(idbp->d_name, pa->name, namelen);
-	rval = xfs_uio_read((caddr_t)idbp, reclen, uio);
-	pa->done = (rval == 0);
-	return rval;
-}
-
-/*
  * Remove the given block from the directory.
  * This routine is used for data and free blocks, leaf/node are done
  * by xfs_da_shrink_inode.
@@ -706,7 +619,7 @@ xfs_dir2_shrink_inode(
 	dp = args->dp;
 	mp = dp->i_mount;
 	tp = args->trans;
-	da = XFS_DIR2_DB_TO_DA(mp, db);
+	da = xfs_dir2_db_to_da(mp, db);
 	/*
 	 * Unmap the fsblock(s).
 	 */
@@ -742,7 +655,7 @@ xfs_dir2_shrink_inode(
 	/*
 	 * If the block isn't the last one in the directory, we're done.
 	 */
-	if (dp->i_d.di_size > XFS_DIR2_DB_OFF_TO_BYTE(mp, db + 1, 0))
+	if (dp->i_d.di_size > xfs_dir2_db_off_to_byte(mp, db + 1, 0))
 		return 0;
 	bno = da;
 	if ((error = xfs_bmap_last_before(tp, dp, &bno, XFS_DATA_FORK))) {

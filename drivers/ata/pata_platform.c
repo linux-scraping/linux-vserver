@@ -1,7 +1,7 @@
 /*
  * Generic platform device PATA driver
  *
- * Copyright (C) 2006  Paul Mundt
+ * Copyright (C) 2006 - 2007  Paul Mundt
  *
  * Based on pata_pcmcia:
  *
@@ -22,7 +22,7 @@
 #include <linux/pata_platform.h>
 
 #define DRV_NAME "pata_platform"
-#define DRV_VERSION "0.1.2"
+#define DRV_VERSION "1.2"
 
 static int pio_mask = 1;
 
@@ -30,13 +30,11 @@ static int pio_mask = 1;
  * Provide our own set_mode() as we don't want to change anything that has
  * already been configured..
  */
-static int pata_platform_set_mode(struct ata_port *ap, struct ata_device **unused)
+static int pata_platform_set_mode(struct ata_link *link, struct ata_device **unused)
 {
-	int i;
+	struct ata_device *dev;
 
-	for (i = 0; i < ATA_MAX_DEVICES; i++) {
-		struct ata_device *dev = &ap->device[i];
-
+	ata_link_for_each_dev(dev, link) {
 		if (ata_dev_enabled(dev)) {
 			/* We don't really care */
 			dev->pio_mode = dev->xfer_mode = XFER_PIO_0;
@@ -47,6 +45,8 @@ static int pata_platform_set_mode(struct ata_port *ap, struct ata_device **unuse
 	}
 	return 0;
 }
+
+static int ata_dummy_ret0(struct ata_port *ap)	{ return 0; }
 
 static struct scsi_host_template pata_platform_sht = {
 	.module			= THIS_MODULE,
@@ -69,7 +69,6 @@ static struct scsi_host_template pata_platform_sht = {
 static struct ata_port_operations pata_platform_port_ops = {
 	.set_mode		= pata_platform_set_mode,
 
-	.port_disable		= ata_port_disable,
 	.tf_load		= ata_tf_load,
 	.tf_read		= ata_tf_read,
 	.check_status		= ata_check_status,
@@ -80,18 +79,17 @@ static struct ata_port_operations pata_platform_port_ops = {
 	.thaw			= ata_bmdma_thaw,
 	.error_handler		= ata_bmdma_error_handler,
 	.post_internal_cmd	= ata_bmdma_post_internal_cmd,
+	.cable_detect		= ata_cable_unknown,
 
 	.qc_prep		= ata_qc_prep,
 	.qc_issue		= ata_qc_issue_prot,
 
 	.data_xfer		= ata_data_xfer_noirq,
 
-	.irq_handler		= ata_interrupt,
 	.irq_clear		= ata_bmdma_irq_clear,
 	.irq_on			= ata_irq_on,
-	.irq_ack		= ata_irq_ack,
 
-	.port_start		= ata_port_start,
+	.port_start		= ata_dummy_ret0,
 };
 
 static void pata_platform_setup_port(struct ata_ioports *ioaddr,
@@ -122,26 +120,34 @@ static void pata_platform_setup_port(struct ata_ioports *ioaddr,
  *	Register a platform bus IDE interface. Such interfaces are PIO and we
  *	assume do not support IRQ sharing.
  *
- *	Platform devices are expected to contain 3 resources per port:
+ *	Platform devices are expected to contain at least 2 resources per port:
  *
  *		- I/O Base (IORESOURCE_IO or IORESOURCE_MEM)
  *		- CTL Base (IORESOURCE_IO or IORESOURCE_MEM)
+ *
+ *	and optionally:
+ *
  *		- IRQ	   (IORESOURCE_IRQ)
  *
  *	If the base resources are both mem types, the ioremap() is handled
  *	here. For IORESOURCE_IO, it's assumed that there's no remapping
  *	necessary.
+ *
+ *	If no IRQ resource is present, PIO polling mode is used instead.
  */
 static int __devinit pata_platform_probe(struct platform_device *pdev)
 {
 	struct resource *io_res, *ctl_res;
-	struct ata_probe_ent ae;
+	struct ata_host *host;
+	struct ata_port *ap;
+	struct pata_platform_info *pp_info;
 	unsigned int mmio;
+	int irq;
 
 	/*
 	 * Simple resource validation ..
 	 */
-	if (unlikely(pdev->num_resources != 3)) {
+	if ((pdev->num_resources != 3) && (pdev->num_resources != 2)) {
 		dev_err(&pdev->dev, "invalid number of resources\n");
 		return -EINVAL;
 	}
@@ -173,46 +179,64 @@ static int __devinit pata_platform_probe(struct platform_device *pdev)
 		(ctl_res->flags == IORESOURCE_MEM));
 
 	/*
+	 * And the IRQ
+	 */
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0)
+		irq = 0;	/* no irq */
+
+	/*
 	 * Now that that's out of the way, wire up the port..
 	 */
-	memset(&ae, 0, sizeof(struct ata_probe_ent));
-	INIT_LIST_HEAD(&ae.node);
-	ae.dev = &pdev->dev;
-	ae.port_ops = &pata_platform_port_ops;
-	ae.sht = &pata_platform_sht;
-	ae.n_ports = 1;
-	ae.pio_mask = pio_mask;
-	ae.irq = platform_get_irq(pdev, 0);
-	ae.irq_flags = 0;
-	ae.port_flags = ATA_FLAG_SLAVE_POSS | ATA_FLAG_SRST;
+	host = ata_host_alloc(&pdev->dev, 1);
+	if (!host)
+		return -ENOMEM;
+	ap = host->ports[0];
+
+	ap->ops = &pata_platform_port_ops;
+	ap->pio_mask = pio_mask;
+	ap->flags |= ATA_FLAG_SLAVE_POSS;
+
+	/*
+	 * Use polling mode if there's no IRQ
+	 */
+	if (!irq) {
+		ap->flags |= ATA_FLAG_PIO_POLLING;
+		ata_port_desc(ap, "no IRQ, using PIO polling");
+	}
 
 	/*
 	 * Handle the MMIO case
 	 */
 	if (mmio) {
-		ae.port[0].cmd_addr = devm_ioremap(&pdev->dev, io_res->start,
+		ap->ioaddr.cmd_addr = devm_ioremap(&pdev->dev, io_res->start,
 				io_res->end - io_res->start + 1);
-		ae.port[0].ctl_addr = devm_ioremap(&pdev->dev, ctl_res->start,
+		ap->ioaddr.ctl_addr = devm_ioremap(&pdev->dev, ctl_res->start,
 				ctl_res->end - ctl_res->start + 1);
 	} else {
-		ae.port[0].cmd_addr = devm_ioport_map(&pdev->dev, io_res->start,
+		ap->ioaddr.cmd_addr = devm_ioport_map(&pdev->dev, io_res->start,
 				io_res->end - io_res->start + 1);
-		ae.port[0].ctl_addr = devm_ioport_map(&pdev->dev, ctl_res->start,
+		ap->ioaddr.ctl_addr = devm_ioport_map(&pdev->dev, ctl_res->start,
 				ctl_res->end - ctl_res->start + 1);
 	}
-	if (!ae.port[0].cmd_addr || !ae.port[0].ctl_addr) {
+	if (!ap->ioaddr.cmd_addr || !ap->ioaddr.ctl_addr) {
 		dev_err(&pdev->dev, "failed to map IO/CTL base\n");
 		return -ENOMEM;
 	}
 
-	ae.port[0].altstatus_addr = ae.port[0].ctl_addr;
+	ap->ioaddr.altstatus_addr = ap->ioaddr.ctl_addr;
 
-	pata_platform_setup_port(&ae.port[0], pdev->dev.platform_data);
+	pp_info = pdev->dev.platform_data;
+	pata_platform_setup_port(&ap->ioaddr, pp_info);
 
-	if (unlikely(ata_device_add(&ae) == 0))
-		return -ENODEV;
+	ata_port_desc(ap, "%s cmd 0x%llx ctl 0x%llx", mmio ? "mmio" : "ioport",
+		      (unsigned long long)io_res->start,
+		      (unsigned long long)ctl_res->start);
 
-	return 0;
+	/* activate */
+	return ata_host_activate(host, irq, irq ? ata_interrupt : NULL,
+				 pp_info ? pp_info->irq_flags : 0,
+				 &pata_platform_sht);
 }
 
 /**

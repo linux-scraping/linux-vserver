@@ -34,7 +34,7 @@ extern unsigned long sub_reloc_offset(unsigned long);
  */
 #define machine_is_compatible(x)		0
 #define of_find_compatible_node(f, t, c)	NULL
-#define get_property(p, n, l)			NULL
+#define of_get_property(p, n, l)		NULL
 
 #endif /* _PPC_PROM_H */
 #endif /* __KERNEL__ */

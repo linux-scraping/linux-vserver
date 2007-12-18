@@ -70,7 +70,7 @@
 #define VQ
 #endif
 
-#define IPW2200_VERSION "1.2.0" VK VD VM VP VR VQ
+#define IPW2200_VERSION "1.2.2" VK VD VM VP VR VQ
 #define DRV_DESCRIPTION	"Intel(R) PRO/Wireless 2200/2915 Network Driver"
 #define DRV_COPYRIGHT	"Copyright(c) 2003-2006 Intel Corporation"
 #define DRV_VERSION     IPW2200_VERSION
@@ -1740,8 +1740,10 @@ static int ipw_radio_kill_sw(struct ipw_priv *priv, int disable_radio)
 	if (disable_radio) {
 		priv->status |= STATUS_RF_KILL_SW;
 
-		if (priv->workqueue)
+		if (priv->workqueue) {
 			cancel_delayed_work(&priv->request_scan);
+			cancel_delayed_work(&priv->scan_event);
+		}
 		queue_work(priv->workqueue, &priv->down);
 	} else {
 		priv->status &= ~STATUS_RF_KILL_SW;
@@ -1751,7 +1753,7 @@ static int ipw_radio_kill_sw(struct ipw_priv *priv, int disable_radio)
 			/* Make sure the RF_KILL check timer is running */
 			cancel_delayed_work(&priv->rf_kill);
 			queue_delayed_work(priv->workqueue, &priv->rf_kill,
-					   2 * HZ);
+					   round_jiffies_relative(2 * HZ));
 		} else
 			queue_work(priv->workqueue, &priv->up);
 	}
@@ -1846,6 +1848,52 @@ static ssize_t store_net_stats(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(net_stats, S_IWUSR | S_IRUGO,
 		   show_net_stats, store_net_stats);
+
+static ssize_t show_channels(struct device *d,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	struct ipw_priv *priv = dev_get_drvdata(d);
+	const struct ieee80211_geo *geo = ieee80211_get_geo(priv->ieee);
+	int len = 0, i;
+
+	len = sprintf(&buf[len],
+		      "Displaying %d channels in 2.4Ghz band "
+		      "(802.11bg):\n", geo->bg_channels);
+
+	for (i = 0; i < geo->bg_channels; i++) {
+		len += sprintf(&buf[len], "%d: BSS%s%s, %s, Band %s.\n",
+			       geo->bg[i].channel,
+			       geo->bg[i].flags & IEEE80211_CH_RADAR_DETECT ?
+			       " (radar spectrum)" : "",
+			       ((geo->bg[i].flags & IEEE80211_CH_NO_IBSS) ||
+				(geo->bg[i].flags & IEEE80211_CH_RADAR_DETECT))
+			       ? "" : ", IBSS",
+			       geo->bg[i].flags & IEEE80211_CH_PASSIVE_ONLY ?
+			       "passive only" : "active/passive",
+			       geo->bg[i].flags & IEEE80211_CH_B_ONLY ?
+			       "B" : "B/G");
+	}
+
+	len += sprintf(&buf[len],
+		       "Displaying %d channels in 5.2Ghz band "
+		       "(802.11a):\n", geo->a_channels);
+	for (i = 0; i < geo->a_channels; i++) {
+		len += sprintf(&buf[len], "%d: BSS%s%s, %s.\n",
+			       geo->a[i].channel,
+			       geo->a[i].flags & IEEE80211_CH_RADAR_DETECT ?
+			       " (radar spectrum)" : "",
+			       ((geo->a[i].flags & IEEE80211_CH_NO_IBSS) ||
+				(geo->a[i].flags & IEEE80211_CH_RADAR_DETECT))
+			       ? "" : ", IBSS",
+			       geo->a[i].flags & IEEE80211_CH_PASSIVE_ONLY ?
+			       "passive only" : "active/passive");
+	}
+
+	return len;
+}
+
+static DEVICE_ATTR(channels, S_IRUSR, show_channels, NULL);
 
 static void notify_wx_assoc_event(struct ipw_priv *priv)
 {
@@ -1946,6 +1994,7 @@ static void ipw_irq_tasklet(struct ipw_priv *priv)
 		wake_up_interruptible(&priv->wait_command_queue);
 		priv->status &= ~(STATUS_ASSOCIATED | STATUS_ASSOCIATING);
 		cancel_delayed_work(&priv->request_scan);
+		cancel_delayed_work(&priv->scan_event);
 		schedule_work(&priv->link_down);
 		queue_delayed_work(priv->workqueue, &priv->rf_kill, 2 * HZ);
 		handled |= IPW_INTA_BIT_RF_KILL_DONE;
@@ -2201,8 +2250,8 @@ static int ipw_send_adapter_address(struct ipw_priv *priv, u8 * mac)
 		return -1;
 	}
 
-	IPW_DEBUG_INFO("%s: Setting MAC to " MAC_FMT "\n",
-		       priv->net_dev->name, MAC_ARG(mac));
+	IPW_DEBUG_INFO("%s: Setting MAC to %s\n",
+		       priv->net_dev->name, print_mac(mac, mac));
 
 	return ipw_send_cmd_pdu(priv, IPW_CMD_ADAPTER_ADDRESS, ETH_ALEN, mac);
 }
@@ -2460,7 +2509,7 @@ static int ipw_send_power_mode(struct ipw_priv *priv, u32 mode)
 		break;
 	}
 
-	param = cpu_to_le32(mode);
+	param = cpu_to_le32(param);
 	return ipw_send_cmd_pdu(priv, IPW_CMD_POWER_MODE, sizeof(param),
 				&param);
 }
@@ -3750,6 +3799,7 @@ static u8 ipw_add_station(struct ipw_priv *priv, u8 * bssid)
 {
 	struct ipw_station_entry entry;
 	int i;
+	DECLARE_MAC_BUF(mac);
 
 	for (i = 0; i < priv->num_stations; i++) {
 		if (!memcmp(priv->stations[i], bssid, ETH_ALEN)) {
@@ -3766,7 +3816,7 @@ static u8 ipw_add_station(struct ipw_priv *priv, u8 * bssid)
 	if (i == MAX_STATIONS)
 		return IPW_INVALID_STATION;
 
-	IPW_DEBUG_SCAN("Adding AdHoc station: " MAC_FMT "\n", MAC_ARG(bssid));
+	IPW_DEBUG_SCAN("Adding AdHoc station: %s\n", print_mac(mac, bssid));
 
 	entry.reserved = 0;
 	entry.support_mode = 0;
@@ -3793,6 +3843,7 @@ static u8 ipw_find_station(struct ipw_priv *priv, u8 * bssid)
 static void ipw_send_disassociate(struct ipw_priv *priv, int quiet)
 {
 	int err;
+	DECLARE_MAC_BUF(mac);
 
 	if (priv->status & STATUS_ASSOCIATING) {
 		IPW_DEBUG_ASSOC("Disassociating while associating.\n");
@@ -3805,9 +3856,9 @@ static void ipw_send_disassociate(struct ipw_priv *priv, int quiet)
 		return;
 	}
 
-	IPW_DEBUG_ASSOC("Disassocation attempt from " MAC_FMT " "
+	IPW_DEBUG_ASSOC("Disassocation attempt from %s "
 			"on channel %d.\n",
-			MAC_ARG(priv->assoc_request.bssid),
+			print_mac(mac, priv->assoc_request.bssid),
 			priv->assoc_request.channel);
 
 	priv->status &= ~(STATUS_ASSOCIATING | STATUS_ASSOCIATED);
@@ -4295,6 +4346,37 @@ static void ipw_handle_missed_beacon(struct ipw_priv *priv,
 	IPW_DEBUG_NOTIF("Missed beacon: %d\n", missed_count);
 }
 
+static void ipw_scan_event(struct work_struct *work)
+{
+	union iwreq_data wrqu;
+
+	struct ipw_priv *priv =
+		container_of(work, struct ipw_priv, scan_event.work);
+
+	wrqu.data.length = 0;
+	wrqu.data.flags = 0;
+	wireless_send_event(priv->net_dev, SIOCGIWSCAN, &wrqu, NULL);
+}
+
+static void handle_scan_event(struct ipw_priv *priv)
+{
+	/* Only userspace-requested scan completion events go out immediately */
+	if (!priv->user_requested_scan) {
+		if (!delayed_work_pending(&priv->scan_event))
+			queue_delayed_work(priv->workqueue, &priv->scan_event,
+					 round_jiffies_relative(msecs_to_jiffies(4000)));
+	} else {
+		union iwreq_data wrqu;
+
+		priv->user_requested_scan = 0;
+		cancel_delayed_work(&priv->scan_event);
+
+		wrqu.data.length = 0;
+		wrqu.data.flags = 0;
+		wireless_send_event(priv->net_dev, SIOCGIWSCAN, &wrqu, NULL);
+	}
+}
+
 /**
  * Handle host notification packet.
  * Called from interrupt routine
@@ -4302,6 +4384,7 @@ static void ipw_handle_missed_beacon(struct ipw_priv *priv,
 static void ipw_rx_notification(struct ipw_priv *priv,
 				       struct ipw_rx_notification *notif)
 {
+	DECLARE_MAC_BUF(mac);
 	notif->size = le16_to_cpu(notif->size);
 
 	IPW_DEBUG_NOTIF("type = %i (%d bytes)\n", notif->subtype, notif->size);
@@ -4314,11 +4397,11 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 			case CMAS_ASSOCIATED:{
 					IPW_DEBUG(IPW_DL_NOTIF | IPW_DL_STATE |
 						  IPW_DL_ASSOC,
-						  "associated: '%s' " MAC_FMT
+						  "associated: '%s' %s"
 						  " \n",
 						  escape_essid(priv->essid,
 							       priv->essid_len),
-						  MAC_ARG(priv->bssid));
+						  print_mac(mac, priv->bssid));
 
 					switch (priv->ieee->iw_mode) {
 					case IW_MODE_INFRA:
@@ -4398,13 +4481,13 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 							  IPW_DL_STATE |
 							  IPW_DL_ASSOC,
 							  "deauthenticated: '%s' "
-							  MAC_FMT
+							  "%s"
 							  ": (0x%04X) - %s \n",
 							  escape_essid(priv->
 								       essid,
 								       priv->
 								       essid_len),
-							  MAC_ARG(priv->bssid),
+							  print_mac(mac, priv->bssid),
 							  ntohs(auth->status),
 							  ipw_get_status_code
 							  (ntohs
@@ -4421,11 +4504,11 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 
 					IPW_DEBUG(IPW_DL_NOTIF | IPW_DL_STATE |
 						  IPW_DL_ASSOC,
-						  "authenticated: '%s' " MAC_FMT
+						  "authenticated: '%s' %s"
 						  "\n",
 						  escape_essid(priv->essid,
 							       priv->essid_len),
-						  MAC_ARG(priv->bssid));
+						  print_mac(mac, priv->bssid));
 					break;
 				}
 
@@ -4450,11 +4533,11 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 
 					IPW_DEBUG(IPW_DL_NOTIF | IPW_DL_STATE |
 						  IPW_DL_ASSOC,
-						  "disassociated: '%s' " MAC_FMT
+						  "disassociated: '%s' %s"
 						  " \n",
 						  escape_essid(priv->essid,
 							       priv->essid_len),
-						  MAC_ARG(priv->bssid));
+						  print_mac(mac, priv->bssid));
 
 					priv->status &=
 					    ~(STATUS_DISASSOCIATING |
@@ -4489,10 +4572,10 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 			switch (auth->state) {
 			case CMAS_AUTHENTICATED:
 				IPW_DEBUG(IPW_DL_NOTIF | IPW_DL_STATE,
-					  "authenticated: '%s' " MAC_FMT " \n",
+					  "authenticated: '%s' %s \n",
 					  escape_essid(priv->essid,
 						       priv->essid_len),
-					  MAC_ARG(priv->bssid));
+					  print_mac(mac, priv->bssid));
 				priv->status |= STATUS_AUTH;
 				break;
 
@@ -4508,10 +4591,10 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 				}
 				IPW_DEBUG(IPW_DL_NOTIF | IPW_DL_STATE |
 					  IPW_DL_ASSOC,
-					  "deauthenticated: '%s' " MAC_FMT "\n",
+					  "deauthenticated: '%s' %s\n",
 					  escape_essid(priv->essid,
 						       priv->essid_len),
-					  MAC_ARG(priv->bssid));
+					  print_mac(mac, priv->bssid));
 
 				priv->status &= ~(STATUS_ASSOCIATING |
 						  STATUS_AUTH |
@@ -4644,7 +4727,8 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 			else if (priv->config & CFG_BACKGROUND_SCAN
 				 && priv->status & STATUS_ASSOCIATED)
 				queue_delayed_work(priv->workqueue,
-						   &priv->request_scan, HZ);
+						   &priv->request_scan,
+						   round_jiffies_relative(HZ));
 
 			/* Send an empty event to user space.
 			 * We don't send the received data on the event because
@@ -4655,14 +4739,8 @@ static void ipw_rx_notification(struct ipw_priv *priv,
 			 * on how the scan was initiated. User space can just
 			 * sync on periodic scan to get fresh data...
 			 * Jean II */
-			if (x->status == SCAN_COMPLETED_STATUS_COMPLETE) {
-				union iwreq_data wrqu;
-
-				wrqu.data.length = 0;
-				wrqu.data.flags = 0;
-				wireless_send_event(priv->net_dev, SIOCGIWSCAN,
-						    &wrqu, NULL);
-			}
+			if (x->status == SCAN_COMPLETED_STATUS_COMPLETE)
+				handle_scan_event(priv);
 			break;
 		}
 
@@ -5336,25 +5414,27 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 				  int roaming)
 {
 	struct ipw_supported_rates rates;
+	DECLARE_MAC_BUF(mac);
+	DECLARE_MAC_BUF(mac2);
 
 	/* Verify that this network's capability is compatible with the
 	 * current mode (AdHoc or Infrastructure) */
 	if ((priv->ieee->iw_mode == IW_MODE_ADHOC &&
 	     !(network->capability & WLAN_CAPABILITY_IBSS))) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded due to "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded due to "
 				"capability mismatch.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	/* If we do not have an ESSID for this AP, we can not associate with
 	 * it */
 	if (network->flags & NETWORK_EMPTY_ESSID) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of hidden ESSID.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
@@ -5364,11 +5444,11 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 		if ((network->ssid_len != match->network->ssid_len) ||
 		    memcmp(network->ssid, match->network->ssid,
 			   network->ssid_len)) {
-			IPW_DEBUG_MERGE("Netowrk '%s (" MAC_FMT ")' excluded "
+			IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 					"because of non-network ESSID.\n",
 					escape_essid(network->ssid,
 						     network->ssid_len),
-					MAC_ARG(network->bssid));
+					print_mac(mac, network->bssid));
 			return 0;
 		}
 	} else {
@@ -5383,9 +5463,9 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 			strncpy(escaped,
 				escape_essid(network->ssid, network->ssid_len),
 				sizeof(escaped));
-			IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+			IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 					"because of ESSID mismatch: '%s'.\n",
-					escaped, MAC_ARG(network->bssid),
+					escaped, print_mac(mac, network->bssid),
 					escape_essid(priv->essid,
 						     priv->essid_len));
 			return 0;
@@ -5412,10 +5492,10 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 	/* Now go through and see if the requested network is valid... */
 	if (priv->ieee->scan_age != 0 &&
 	    time_after(jiffies, network->last_scanned + priv->ieee->scan_age)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of age: %ums.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				jiffies_to_msecs(jiffies -
 						 network->last_scanned));
 		return 0;
@@ -5423,10 +5503,10 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 
 	if ((priv->config & CFG_STATIC_CHANNEL) &&
 	    (network->channel != priv->channel)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of channel mismatch: %d != %d.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				network->channel, priv->channel);
 		return 0;
 	}
@@ -5434,10 +5514,10 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 	/* Verify privacy compatability */
 	if (((priv->capability & CAP_PRIVACY_ON) ? 1 : 0) !=
 	    ((network->capability & WLAN_CAPABILITY_PRIVACY) ? 1 : 0)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of privacy mismatch: %s != %s.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				priv->
 				capability & CAP_PRIVACY_ON ? "on" : "off",
 				network->
@@ -5447,40 +5527,41 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 	}
 
 	if (!memcmp(network->bssid, priv->bssid, ETH_ALEN)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
-				"because of the same BSSID match: " MAC_FMT
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
+				"because of the same BSSID match: %s"
 				".\n", escape_essid(network->ssid,
 						    network->ssid_len),
-				MAC_ARG(network->bssid), MAC_ARG(priv->bssid));
+				print_mac(mac, network->bssid),
+				print_mac(mac2, priv->bssid));
 		return 0;
 	}
 
 	/* Filter out any incompatible freq / mode combinations */
 	if (!ieee80211_is_valid_mode(priv->ieee, network->mode)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of invalid frequency/mode "
 				"combination.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	/* Ensure that the rates supported by the driver are compatible with
 	 * this AP, including verification of basic rates (mandatory) */
 	if (!ipw_compatible_rates(priv, network, &rates)) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because configured rate mask excludes "
 				"AP mandatory rate.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	if (rates.num_rates == 0) {
-		IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_MERGE("Network '%s (%s)' excluded "
 				"because of no compatible rates.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
@@ -5491,9 +5572,9 @@ static int ipw_find_adhoc_network(struct ipw_priv *priv,
 	/* Set up 'new' AP to this network */
 	ipw_copy_rates(&match->rates, &rates);
 	match->network = network;
-	IPW_DEBUG_MERGE("Network '%s (" MAC_FMT ")' is a viable match.\n",
+	IPW_DEBUG_MERGE("Network '%s (%s)' is a viable match.\n",
 			escape_essid(network->ssid, network->ssid_len),
-			MAC_ARG(network->bssid));
+			print_mac(mac, network->bssid));
 
 	return 1;
 }
@@ -5547,6 +5628,7 @@ static int ipw_best_network(struct ipw_priv *priv,
 			    struct ieee80211_network *network, int roaming)
 {
 	struct ipw_supported_rates rates;
+	DECLARE_MAC_BUF(mac);
 
 	/* Verify that this network's capability is compatible with the
 	 * current mode (AdHoc or Infrastructure) */
@@ -5554,20 +5636,20 @@ static int ipw_best_network(struct ipw_priv *priv,
 	     !(network->capability & WLAN_CAPABILITY_ESS)) ||
 	    (priv->ieee->iw_mode == IW_MODE_ADHOC &&
 	     !(network->capability & WLAN_CAPABILITY_IBSS))) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded due to "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded due to "
 				"capability mismatch.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	/* If we do not have an ESSID for this AP, we can not associate with
 	 * it */
 	if (network->flags & NETWORK_EMPTY_ESSID) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of hidden ESSID.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
@@ -5577,11 +5659,11 @@ static int ipw_best_network(struct ipw_priv *priv,
 		if ((network->ssid_len != match->network->ssid_len) ||
 		    memcmp(network->ssid, match->network->ssid,
 			   network->ssid_len)) {
-			IPW_DEBUG_ASSOC("Netowrk '%s (" MAC_FMT ")' excluded "
+			IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 					"because of non-network ESSID.\n",
 					escape_essid(network->ssid,
 						     network->ssid_len),
-					MAC_ARG(network->bssid));
+					print_mac(mac, network->bssid));
 			return 0;
 		}
 	} else {
@@ -5595,9 +5677,9 @@ static int ipw_best_network(struct ipw_priv *priv,
 			strncpy(escaped,
 				escape_essid(network->ssid, network->ssid_len),
 				sizeof(escaped));
-			IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+			IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 					"because of ESSID mismatch: '%s'.\n",
-					escaped, MAC_ARG(network->bssid),
+					escaped, print_mac(mac, network->bssid),
 					escape_essid(priv->essid,
 						     priv->essid_len));
 			return 0;
@@ -5611,12 +5693,12 @@ static int ipw_best_network(struct ipw_priv *priv,
 		strncpy(escaped,
 			escape_essid(network->ssid, network->ssid_len),
 			sizeof(escaped));
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded because "
-				"'%s (" MAC_FMT ")' has a stronger signal.\n",
-				escaped, MAC_ARG(network->bssid),
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded because "
+				"'%s (%s)' has a stronger signal.\n",
+				escaped, print_mac(mac, network->bssid),
 				escape_essid(match->network->ssid,
 					     match->network->ssid_len),
-				MAC_ARG(match->network->bssid));
+				print_mac(mac, match->network->bssid));
 		return 0;
 	}
 
@@ -5624,11 +5706,11 @@ static int ipw_best_network(struct ipw_priv *priv,
 	 * last 3 seconds, do not try and associate again... */
 	if (network->last_associate &&
 	    time_after(network->last_associate + (HZ * 3UL), jiffies)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of storming (%ums since last "
 				"assoc attempt).\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				jiffies_to_msecs(jiffies -
 						 network->last_associate));
 		return 0;
@@ -5637,10 +5719,10 @@ static int ipw_best_network(struct ipw_priv *priv,
 	/* Now go through and see if the requested network is valid... */
 	if (priv->ieee->scan_age != 0 &&
 	    time_after(jiffies, network->last_scanned + priv->ieee->scan_age)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of age: %ums.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				jiffies_to_msecs(jiffies -
 						 network->last_scanned));
 		return 0;
@@ -5648,10 +5730,10 @@ static int ipw_best_network(struct ipw_priv *priv,
 
 	if ((priv->config & CFG_STATIC_CHANNEL) &&
 	    (network->channel != priv->channel)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of channel mismatch: %d != %d.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				network->channel, priv->channel);
 		return 0;
 	}
@@ -5659,10 +5741,10 @@ static int ipw_best_network(struct ipw_priv *priv,
 	/* Verify privacy compatability */
 	if (((priv->capability & CAP_PRIVACY_ON) ? 1 : 0) !=
 	    ((network->capability & WLAN_CAPABILITY_PRIVACY) ? 1 : 0)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of privacy mismatch: %s != %s.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid),
+				print_mac(mac, network->bssid),
 				priv->capability & CAP_PRIVACY_ON ? "on" :
 				"off",
 				network->capability &
@@ -5672,48 +5754,48 @@ static int ipw_best_network(struct ipw_priv *priv,
 
 	if ((priv->config & CFG_STATIC_BSSID) &&
 	    memcmp(network->bssid, priv->bssid, ETH_ALEN)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
-				"because of BSSID mismatch: " MAC_FMT ".\n",
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
+				"because of BSSID mismatch: %s.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid), MAC_ARG(priv->bssid));
+				print_mac(mac, network->bssid), print_mac(mac, priv->bssid));
 		return 0;
 	}
 
 	/* Filter out any incompatible freq / mode combinations */
 	if (!ieee80211_is_valid_mode(priv->ieee, network->mode)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of invalid frequency/mode "
 				"combination.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	/* Filter out invalid channel in current GEO */
 	if (!ieee80211_is_valid_channel(priv->ieee, network->channel)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of invalid channel in current GEO\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	/* Ensure that the rates supported by the driver are compatible with
 	 * this AP, including verification of basic rates (mandatory) */
 	if (!ipw_compatible_rates(priv, network, &rates)) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because configured rate mask excludes "
 				"AP mandatory rate.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
 	if (rates.num_rates == 0) {
-		IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' excluded "
+		IPW_DEBUG_ASSOC("Network '%s (%s)' excluded "
 				"because of no compatible rates.\n",
 				escape_essid(network->ssid, network->ssid_len),
-				MAC_ARG(network->bssid));
+				print_mac(mac, network->bssid));
 		return 0;
 	}
 
@@ -5725,9 +5807,9 @@ static int ipw_best_network(struct ipw_priv *priv,
 	ipw_copy_rates(&match->rates, &rates);
 	match->network = network;
 
-	IPW_DEBUG_ASSOC("Network '%s (" MAC_FMT ")' is a viable match.\n",
+	IPW_DEBUG_ASSOC("Network '%s (%s)' is a viable match.\n",
 			escape_essid(network->ssid, network->ssid_len),
-			MAC_ARG(network->bssid));
+			print_mac(mac, network->bssid));
 
 	return 1;
 }
@@ -5969,6 +6051,7 @@ static void ipw_bg_adhoc_check(struct work_struct *work)
 
 static void ipw_debug_config(struct ipw_priv *priv)
 {
+	DECLARE_MAC_BUF(mac);
 	IPW_DEBUG_INFO("Scan completed, no valid APs matched "
 		       "[CFG 0x%08X]\n", priv->config);
 	if (priv->config & CFG_STATIC_CHANNEL)
@@ -5981,8 +6064,8 @@ static void ipw_debug_config(struct ipw_priv *priv)
 	else
 		IPW_DEBUG_INFO("ESSID unlocked.\n");
 	if (priv->config & CFG_STATIC_BSSID)
-		IPW_DEBUG_INFO("BSSID locked to " MAC_FMT "\n",
-			       MAC_ARG(priv->bssid));
+		IPW_DEBUG_INFO("BSSID locked to %s\n",
+			       print_mac(mac, priv->bssid));
 	else
 		IPW_DEBUG_INFO("BSSID unlocked.\n");
 	if (priv->capability & CAP_PRIVACY_ON)
@@ -7174,6 +7257,7 @@ static int ipw_associate_network(struct ipw_priv *priv,
 				 struct ipw_supported_rates *rates, int roaming)
 {
 	int err;
+	DECLARE_MAC_BUF(mac);
 
 	if (priv->config & CFG_FIXED_RATE)
 		ipw_set_fixed_rate(priv, network->mode);
@@ -7341,9 +7425,9 @@ static int ipw_associate_network(struct ipw_priv *priv,
 		return err;
 	}
 
-	IPW_DEBUG(IPW_DL_STATE, "associating: '%s' " MAC_FMT " \n",
+	IPW_DEBUG(IPW_DL_STATE, "associating: '%s' %s \n",
 		  escape_essid(priv->essid, priv->essid_len),
-		  MAC_ARG(priv->bssid));
+		  print_mac(mac, priv->bssid));
 
 	return 0;
 }
@@ -8133,7 +8217,7 @@ static void ipw_handle_mgmt_packet(struct ipw_priv *priv,
 		skb->dev = priv->ieee->dev;
 
 		/* Point raw at the ieee80211_stats */
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 
 		skb->pkt_type = PACKET_OTHERHOST;
 		skb->protocol = __constant_htons(ETH_P_80211_STATS);
@@ -8155,6 +8239,9 @@ static void ipw_rx(struct ipw_priv *priv)
 	struct ieee80211_hdr_4addr *header;
 	u32 r, w, i;
 	u8 network_packet;
+	DECLARE_MAC_BUF(mac);
+	DECLARE_MAC_BUF(mac2);
+	DECLARE_MAC_BUF(mac3);
 
 	r = ipw_read32(priv, IPW_RX_READ_INDEX);
 	w = ipw_read32(priv, IPW_RX_WRITE_INDEX);
@@ -8281,14 +8368,17 @@ static void ipw_rx(struct ipw_priv *priv)
 									 header)))
 					{
 						IPW_DEBUG_DROP("Dropping: "
-							       MAC_FMT ", "
-							       MAC_FMT ", "
-							       MAC_FMT "\n",
-							       MAC_ARG(header->
+							       "%s, "
+							       "%s, "
+							       "%s\n",
+							       print_mac(mac,
+									 header->
 								       addr1),
-							       MAC_ARG(header->
+							       print_mac(mac2,
+									 header->
 								       addr2),
-							       MAC_ARG(header->
+							       print_mac(mac3,
+									 header->
 								       addr3));
 						break;
 					}
@@ -8820,6 +8910,7 @@ static int ipw_wx_set_wap(struct net_device *dev,
 			  union iwreq_data *wrqu, char *extra)
 {
 	struct ipw_priv *priv = ieee80211_priv(dev);
+	DECLARE_MAC_BUF(mac);
 
 	static const unsigned char any[] = {
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff
@@ -8850,8 +8941,8 @@ static int ipw_wx_set_wap(struct net_device *dev,
 		return 0;
 	}
 
-	IPW_DEBUG_WX("Setting mandatory BSSID to " MAC_FMT "\n",
-		     MAC_ARG(wrqu->ap_addr.sa_data));
+	IPW_DEBUG_WX("Setting mandatory BSSID to %s\n",
+		     print_mac(mac, wrqu->ap_addr.sa_data));
 
 	memcpy(priv->bssid, wrqu->ap_addr.sa_data, ETH_ALEN);
 
@@ -8869,6 +8960,8 @@ static int ipw_wx_get_wap(struct net_device *dev,
 			  union iwreq_data *wrqu, char *extra)
 {
 	struct ipw_priv *priv = ieee80211_priv(dev);
+	DECLARE_MAC_BUF(mac);
+
 	/* If we are associated, trying to associate, or have a statically
 	 * configured BSSID then return that; otherwise return ANY */
 	mutex_lock(&priv->mutex);
@@ -8879,8 +8972,8 @@ static int ipw_wx_get_wap(struct net_device *dev,
 	} else
 		memset(wrqu->ap_addr.sa_data, 0, ETH_ALEN);
 
-	IPW_DEBUG_WX("Getting WAP BSSID: " MAC_FMT "\n",
-		     MAC_ARG(wrqu->ap_addr.sa_data));
+	IPW_DEBUG_WX("Getting WAP BSSID: %s\n",
+		     print_mac(mac, wrqu->ap_addr.sa_data));
 	mutex_unlock(&priv->mutex);
 	return 0;
 }
@@ -9425,6 +9518,10 @@ static int ipw_wx_set_scan(struct net_device *dev,
 	struct ipw_priv *priv = ieee80211_priv(dev);
 	struct iw_scan_req *req = (struct iw_scan_req *)extra;
 
+	mutex_lock(&priv->mutex);
+	priv->user_requested_scan = 1;
+	mutex_unlock(&priv->mutex);
+
 	if (wrqu->data.length == sizeof(struct iw_scan_req)) {
 		if (wrqu->data.flags & IW_SCAN_THIS_ESSID) {
 			ipw_request_direct_scan(priv, req->essid,
@@ -9506,7 +9603,7 @@ static int ipw_wx_set_power(struct net_device *dev,
 	switch (wrqu->power.flags & IW_POWER_MODE) {
 	case IW_POWER_ON:	/* If not specified */
 	case IW_POWER_MODE:	/* If set all mask */
-	case IW_POWER_ALL_R:	/* If explicitely state all */
+	case IW_POWER_ALL_R:	/* If explicitly state all */
 		break;
 	default:		/* Otherwise we don't support it */
 		IPW_DEBUG_WX("SET PM Mode: %X not supported.\n",
@@ -9521,6 +9618,7 @@ static int ipw_wx_set_power(struct net_device *dev,
 		priv->power_mode = IPW_POWER_ENABLED | IPW_POWER_BATTERY;
 	else
 		priv->power_mode = IPW_POWER_ENABLED | priv->power_mode;
+
 	err = ipw_send_power_mode(priv, IPW_POWER_LEVEL(priv->power_mode));
 	if (err) {
 		IPW_DEBUG_WX("failed setting power mode.\n");
@@ -9557,22 +9655,19 @@ static int ipw_wx_set_powermode(struct net_device *dev,
 	struct ipw_priv *priv = ieee80211_priv(dev);
 	int mode = *(int *)extra;
 	int err;
+
 	mutex_lock(&priv->mutex);
-	if ((mode < 1) || (mode > IPW_POWER_LIMIT)) {
+	if ((mode < 1) || (mode > IPW_POWER_LIMIT))
 		mode = IPW_POWER_AC;
-		priv->power_mode = mode;
-	} else {
-		priv->power_mode = IPW_POWER_ENABLED | mode;
-	}
 
-	if (priv->power_mode != mode) {
+	if (IPW_POWER_LEVEL(priv->power_mode) != mode) {
 		err = ipw_send_power_mode(priv, mode);
-
 		if (err) {
 			IPW_DEBUG_WX("failed setting power mode.\n");
 			mutex_unlock(&priv->mutex);
 			return err;
 		}
+		priv->power_mode = IPW_POWER_ENABLED | mode;
 	}
 	mutex_unlock(&priv->mutex);
 	return 0;
@@ -10088,6 +10183,7 @@ static int ipw_tx_skb(struct ipw_priv *priv, struct ieee80211_txb *txb,
 	u8 id, hdr_len, unicast;
 	u16 remaining_bytes;
 	int fc;
+	DECLARE_MAC_BUF(mac);
 
 	hdr_len = ieee80211_get_hdrlen(le16_to_cpu(hdr->frame_ctl));
 	switch (priv->ieee->iw_mode) {
@@ -10098,8 +10194,8 @@ static int ipw_tx_skb(struct ipw_priv *priv, struct ieee80211_txb *txb,
 			id = ipw_add_station(priv, hdr->addr1);
 			if (id == IPW_INVALID_STATION) {
 				IPW_WARNING("Attempt to send data to "
-					    "invalid cell: " MAC_FMT "\n",
-					    MAC_ARG(hdr->addr1));
+					    "invalid cell: %s\n",
+					    print_mac(mac, hdr->addr1));
 				goto drop;
 			}
 		}
@@ -10355,7 +10451,7 @@ static void ipw_handle_promiscuous_tx(struct ipw_priv *priv,
 
 		rt_hdr->it_len = dst->len;
 
-		memcpy(skb_put(dst, len), src->data, len);
+		skb_copy_from_linear_data(src, skb_put(dst, len), len);
 
 		if (!ieee80211_rx(priv->prom_priv->ieee, dst, &dummystats))
 			dev_kfree_skb_any(dst);
@@ -10415,13 +10511,15 @@ static int ipw_net_set_mac_address(struct net_device *dev, void *p)
 {
 	struct ipw_priv *priv = ieee80211_priv(dev);
 	struct sockaddr *addr = p;
+	DECLARE_MAC_BUF(mac);
+
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 	mutex_lock(&priv->mutex);
 	priv->config |= CFG_CUSTOM_MAC;
 	memcpy(priv->mac_addr, addr->sa_data, ETH_ALEN);
-	printk(KERN_INFO "%s: Setting MAC to " MAC_FMT "\n",
-	       priv->net_dev->name, MAC_ARG(priv->mac_addr));
+	printk(KERN_INFO "%s: Setting MAC to %s\n",
+	       priv->net_dev->name, print_mac(mac, priv->mac_addr));
 	queue_work(priv->workqueue, &priv->adapter_restart);
 	mutex_unlock(&priv->mutex);
 	return 0;
@@ -10508,7 +10606,7 @@ static irqreturn_t ipw_isr(int irq, void *data)
 	spin_lock(&priv->irq_lock);
 
 	if (!(priv->status & STATUS_INT_ENABLED)) {
-		/* Shared IRQ */
+		/* IRQ is disabled */
 		goto none;
 	}
 
@@ -10602,6 +10700,7 @@ static void ipw_link_up(struct ipw_priv *priv)
 	}
 
 	cancel_delayed_work(&priv->request_scan);
+	cancel_delayed_work(&priv->scan_event);
 	ipw_reset_stats(priv);
 	/* Ensure the rate is updated immediately */
 	priv->last_rate = ipw_get_current_rate(priv);
@@ -10639,7 +10738,8 @@ static void ipw_link_down(struct ipw_priv *priv)
 	if (!(priv->status & STATUS_EXIT_PENDING)) {
 		/* Queue up another scan... */
 		queue_delayed_work(priv->workqueue, &priv->request_scan, 0);
-	}
+	} else
+		cancel_delayed_work(&priv->scan_event);
 }
 
 static void ipw_bg_link_down(struct work_struct *work)
@@ -10669,6 +10769,7 @@ static int ipw_setup_deferred_work(struct ipw_priv *priv)
 	INIT_WORK(&priv->up, ipw_bg_up);
 	INIT_WORK(&priv->down, ipw_bg_down);
 	INIT_DELAYED_WORK(&priv->request_scan, ipw_request_scan);
+	INIT_DELAYED_WORK(&priv->scan_event, ipw_scan_event);
 	INIT_WORK(&priv->request_passive_scan, ipw_request_passive_scan);
 	INIT_DELAYED_WORK(&priv->gather_stats, ipw_bg_gather_stats);
 	INIT_WORK(&priv->abort_scan, ipw_bg_abort_scan);
@@ -11383,6 +11484,7 @@ static struct attribute *ipw_sysfs_entries[] = {
 	&dev_attr_led.attr,
 	&dev_attr_speed_scan.attr,
 	&dev_attr_net_stats.attr,
+	&dev_attr_channels.attr,
 #ifdef CONFIG_IPW2200_PROMISCUOUS
 	&dev_attr_rtap_iface.attr,
 	&dev_attr_rtap_filter.attr,
@@ -11579,7 +11681,6 @@ static int ipw_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_destroy_workqueue;
 	}
 
-	SET_MODULE_OWNER(net_dev);
 	SET_NETDEV_DEV(net_dev, &pdev->dev);
 
 	mutex_lock(&priv->mutex);
@@ -11700,6 +11801,7 @@ static void ipw_pci_remove(struct pci_dev *pdev)
 	cancel_delayed_work(&priv->adhoc_check);
 	cancel_delayed_work(&priv->gather_stats);
 	cancel_delayed_work(&priv->request_scan);
+	cancel_delayed_work(&priv->scan_event);
 	cancel_delayed_work(&priv->rf_kill);
 	cancel_delayed_work(&priv->scan_check);
 	destroy_workqueue(priv->workqueue);

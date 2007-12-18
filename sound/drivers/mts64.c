@@ -440,15 +440,7 @@ static void mts64_write_midi(struct mts64 *mts, u8 c,
  *********************************************************************/
 
 /* SMPTE Switch */
-static int snd_mts64_ctl_smpte_switch_info(struct snd_kcontrol *kctl,
-					   struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_mts64_ctl_smpte_switch_info		snd_ctl_boolean_mono_info
 
 static int snd_mts64_ctl_smpte_switch_get(struct snd_kcontrol* kctl,
 					  struct snd_ctl_elem_value *uctl)
@@ -838,7 +830,7 @@ static int __devinit snd_mts64_rawmidi_create(struct snd_card *card)
 /*********************************************************************
  * parport stuff
  *********************************************************************/
-static void snd_mts64_interrupt(int irq, void *private)
+static void snd_mts64_interrupt(void *private)
 {
 	struct mts64 *mts = ((struct snd_card*)private)->private_data;
 	u16 ret;
@@ -892,13 +884,13 @@ static void __devinit snd_mts64_attach(struct parport *p)
 	struct platform_device *device;
 
 	device = platform_device_alloc(PLATFORM_DRIVER, device_count);
-	if (!device) 
+	if (!device)
 		return;
 
 	/* Temporary assignment to forward the parport */
 	platform_set_drvdata(device, p);
 
-	if (platform_device_register(device) < 0) {
+	if (platform_device_add(device) < 0) {
 		platform_device_put(device);
 		return;
 	}
@@ -1048,7 +1040,7 @@ static struct platform_driver snd_mts64_driver = {
 /*********************************************************************
  * module init stuff
  *********************************************************************/
-static void __init_or_module snd_mts64_unregister_all(void)
+static void snd_mts64_unregister_all(void)
 {
 	int i;
 

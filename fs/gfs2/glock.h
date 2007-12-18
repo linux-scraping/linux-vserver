@@ -10,6 +10,7 @@
 #ifndef __GLOCK_DOT_H__
 #define __GLOCK_DOT_H__
 
+#include <linux/sched.h>
 #include "incore.h"
 
 /* Flags for lock requests; used in gfs2_holder gh_flag field.
@@ -25,6 +26,7 @@
 #define GL_SKIP			0x00000100
 #define GL_ATIME		0x00000200
 #define GL_NOCACHE		0x00000400
+#define GL_FLOCK		0x00000800
 #define GL_NOCANCEL		0x00001000
 
 #define GLR_TRYFAILED		13
@@ -38,7 +40,7 @@ static inline int gfs2_glock_is_locked_by_me(struct gfs2_glock *gl)
 	/* Look in glock's list of holders for one with current task as owner */
 	spin_lock(&gl->gl_spin);
 	list_for_each_entry(gh, &gl->gl_holders, gh_list) {
-		if (gh->gh_owner == current) {
+		if (gh->gh_owner_pid == current->pid) {
 			locked = 1;
 			break;
 		}
@@ -67,7 +69,7 @@ static inline int gfs2_glock_is_blocking(struct gfs2_glock *gl)
 {
 	int ret;
 	spin_lock(&gl->gl_spin);
-	ret = !list_empty(&gl->gl_waiters2) || !list_empty(&gl->gl_waiters3);
+	ret = test_bit(GLF_DEMOTE, &gl->gl_flags) || !list_empty(&gl->gl_waiters3);
 	spin_unlock(&gl->gl_spin);
 	return ret;
 }
@@ -86,6 +88,7 @@ int gfs2_glock_nq(struct gfs2_holder *gh);
 int gfs2_glock_poll(struct gfs2_holder *gh);
 int gfs2_glock_wait(struct gfs2_holder *gh);
 void gfs2_glock_dq(struct gfs2_holder *gh);
+void gfs2_glock_dq_wait(struct gfs2_holder *gh);
 
 void gfs2_glock_dq_uninit(struct gfs2_holder *gh);
 int gfs2_glock_nq_num(struct gfs2_sbd *sdp,
@@ -130,10 +133,14 @@ void gfs2_glock_cb(void *cb_data, unsigned int type, void *data);
 
 void gfs2_glock_schedule_for_reclaim(struct gfs2_glock *gl);
 void gfs2_reclaim_glock(struct gfs2_sbd *sdp);
-
-void gfs2_scand_internal(struct gfs2_sbd *sdp);
 void gfs2_gl_hash_clear(struct gfs2_sbd *sdp, int wait);
 
 int __init gfs2_glock_init(void);
+void gfs2_glock_exit(void);
+
+int gfs2_create_debugfs_file(struct gfs2_sbd *sdp);
+void gfs2_delete_debugfs_file(struct gfs2_sbd *sdp);
+int gfs2_register_debugfs(void);
+void gfs2_unregister_debugfs(void);
 
 #endif /* __GLOCK_DOT_H__ */

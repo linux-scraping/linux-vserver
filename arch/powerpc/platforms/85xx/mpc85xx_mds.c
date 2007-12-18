@@ -38,30 +38,22 @@
 #include <asm/time.h>
 #include <asm/io.h>
 #include <asm/machdep.h>
-#include <asm/bootinfo.h>
 #include <asm/pci-bridge.h>
-#include <asm/mpc85xx.h>
 #include <asm/irq.h>
 #include <mm/mmu_decl.h>
 #include <asm/prom.h>
 #include <asm/udbg.h>
 #include <sysdev/fsl_soc.h>
+#include <sysdev/fsl_pci.h>
 #include <asm/qe.h>
 #include <asm/qe_ic.h>
 #include <asm/mpic.h>
-
-#include "mpc85xx.h"
 
 #undef DEBUG
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
 #else
 #define DBG(fmt...)
-#endif
-
-#ifndef CONFIG_PCI
-unsigned long isa_io_base = 0;
-unsigned long isa_mem_base = 0;
 #endif
 
 /* ************************************************************************
@@ -77,17 +69,6 @@ static void __init mpc85xx_mds_setup_arch(void)
 	if (ppc_md.progress)
 		ppc_md.progress("mpc85xx_mds_setup_arch()", 0);
 
-	np = of_find_node_by_type(NULL, "cpu");
-	if (np != NULL) {
-		const unsigned int *fp =
-		    get_property(np, "clock-frequency", NULL);
-		if (fp != NULL)
-			loops_per_jiffy = *fp / HZ;
-		else
-			loops_per_jiffy = 50000000 / HZ;
-		of_node_put(np);
-	}
-
 	/* Map BCSR area */
 	np = of_find_node_by_name(NULL, "bcsr");
 	if (np != NULL) {
@@ -99,10 +80,17 @@ static void __init mpc85xx_mds_setup_arch(void)
 	}
 
 #ifdef CONFIG_PCI
-	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;) {
-		add_bridge(np);
+	for_each_node_by_type(np, "pci") {
+		if (of_device_is_compatible(np, "fsl,mpc8540-pci") ||
+		    of_device_is_compatible(np, "fsl,mpc8548-pcie")) {
+			struct resource rsrc;
+			of_address_to_resource(np, 0, &rsrc);
+			if ((rsrc.start & 0xfffff) == 0x8000)
+				fsl_add_bridge(np, 1);
+			else
+				fsl_add_bridge(np, 0);
+		}
 	}
-	of_node_put(np);
 #endif
 
 #ifdef CONFIG_QUICC_ENGINE
@@ -124,18 +112,22 @@ static void __init mpc85xx_mds_setup_arch(void)
 	}
 
 	if (bcsr_regs) {
-		u8 bcsr_phy;
+#define BCSR_UCC1_GETH_EN	(0x1 << 7)
+#define BCSR_UCC2_GETH_EN	(0x1 << 7)
+#define BCSR_UCC1_MODE_MSK	(0x3 << 4)
+#define BCSR_UCC2_MODE_MSK	(0x3 << 0)
 
-		/* Reset the Ethernet PHY */
-		bcsr_phy = in_be8(&bcsr_regs[9]);
-		bcsr_phy &= ~0x20;
-		out_be8(&bcsr_regs[9], bcsr_phy);
+		/* Turn off UCC1 & UCC2 */
+		clrbits8(&bcsr_regs[8], BCSR_UCC1_GETH_EN);
+		clrbits8(&bcsr_regs[9], BCSR_UCC2_GETH_EN);
 
-		udelay(1000);
+		/* Mode is RGMII, all bits clear */
+		clrbits8(&bcsr_regs[11], BCSR_UCC1_MODE_MSK |
+					 BCSR_UCC2_MODE_MSK);
 
-		bcsr_phy = in_be8(&bcsr_regs[9]);
-		bcsr_phy |= 0x20;
-		out_be8(&bcsr_regs[9], bcsr_phy);
+		/* Turn UCC1 & UCC2 on */
+		setbits8(&bcsr_regs[8], BCSR_UCC1_GETH_EN);
+		setbits8(&bcsr_regs[9], BCSR_UCC2_GETH_EN);
 
 		iounmap(bcsr_regs);
 	}
@@ -180,28 +172,9 @@ static void __init mpc85xx_mds_pic_init(void)
 
 	mpic = mpic_alloc(np, r.start,
 			MPIC_PRIMARY | MPIC_WANTS_RESET | MPIC_BIG_ENDIAN,
-			4, 0, " OpenPIC  ");
+			0, 256, " OpenPIC  ");
 	BUG_ON(mpic == NULL);
 	of_node_put(np);
-
-	/* Internal Interrupts */
-	mpic_assign_isu(mpic, 0, r.start + 0x10200);
-	mpic_assign_isu(mpic, 1, r.start + 0x10280);
-	mpic_assign_isu(mpic, 2, r.start + 0x10300);
-	mpic_assign_isu(mpic, 3, r.start + 0x10380);
-	mpic_assign_isu(mpic, 4, r.start + 0x10400);
-	mpic_assign_isu(mpic, 5, r.start + 0x10480);
-	mpic_assign_isu(mpic, 6, r.start + 0x10500);
-	mpic_assign_isu(mpic, 7, r.start + 0x10580);
-	mpic_assign_isu(mpic, 8, r.start + 0x10600);
-	mpic_assign_isu(mpic, 9, r.start + 0x10680);
-	mpic_assign_isu(mpic, 10, r.start + 0x10700);
-	mpic_assign_isu(mpic, 11, r.start + 0x10780);
-
-	/* External Interrupts */
-	mpic_assign_isu(mpic, 12, r.start + 0x10000);
-	mpic_assign_isu(mpic, 13, r.start + 0x10080);
-	mpic_assign_isu(mpic, 14, r.start + 0x10100);
 
 	mpic_init(mpic);
 
@@ -210,7 +183,7 @@ static void __init mpc85xx_mds_pic_init(void)
 	if (!np)
 		return;
 
-	qe_ic_init(np, 0);
+	qe_ic_init(np, 0, qe_ic_cascade_muxed_mpic, NULL);
 	of_node_put(np);
 #endif				/* CONFIG_QUICC_ENGINE */
 }
@@ -228,7 +201,10 @@ define_machine(mpc85xx_mds) {
 	.setup_arch	= mpc85xx_mds_setup_arch,
 	.init_IRQ	= mpc85xx_mds_pic_init,
 	.get_irq	= mpic_get_irq,
-	.restart	= mpc85xx_restart,
+	.restart	= fsl_rstcr_restart,
 	.calibrate_decr	= generic_calibrate_decr,
 	.progress	= udbg_progress,
+#ifdef CONFIG_PCI
+	.pcibios_fixup_bus	= fsl_pcibios_fixup_bus,
+#endif
 };

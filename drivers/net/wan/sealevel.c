@@ -61,7 +61,7 @@ static void sealevel_input(struct z8530_channel *c, struct sk_buff *skb)
 	/* Drop the CRC - it's not a good idea to try and negotiate it ;) */
 	skb_trim(skb, skb->len-2);
 	skb->protocol=htons(ETH_P_WAN_PPP);
-	skb->mac.raw=skb->data;
+	skb_reset_mac_header(skb);
 	skb->dev=c->netdevice;
 	/*
 	 *	Send it to the PPP layer. We don't have time to process
@@ -270,11 +270,10 @@ static __init struct slvl_board *slvl_init(int iobase, int irq,
 		return NULL;
 	}
 	
-	b = kmalloc(sizeof(struct slvl_board), GFP_KERNEL);
+	b = kzalloc(sizeof(struct slvl_board), GFP_KERNEL);
 	if(!b)
 		goto fail3;
 
-	memset(b, 0, sizeof(*b));
 	if (!(b->dev[0]= slvl_alloc(iobase, irq)))
 		goto fail2;
 

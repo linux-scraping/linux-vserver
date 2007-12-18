@@ -84,7 +84,7 @@
  *   nla_next(nla)-----------------------------'
  *
  * Data Structures:
- *   struct nlattr			netlink attribtue header
+ *   struct nlattr			netlink attribute header
  *
  * Attribute Construction:
  *   nla_reserve(skb, type, len)	reserve room for an attribute
@@ -118,6 +118,9 @@
  * Nested Attributes Construction:
  *   nla_nest_start(skb, type)		start a nested attribute
  *   nla_nest_end(skb, nla)		finalize a nested attribute
+ *   nla_nest_compat_start(skb, type,	start a nested compat attribute
+ *			   len, data)
+ *   nla_nest_compat_end(skb, type)	finalize a nested compat attribute
  *   nla_nest_cancel(skb, nla)		cancel nested attribute construction
  *
  * Attribute Length Calculations:
@@ -152,6 +155,7 @@
  *   nla_find_nested()			find attribute in nested attributes
  *   nla_parse()			parse and validate stream of attrs
  *   nla_parse_nested()			parse nested attribuets
+ *   nla_parse_nested_compat()		parse nested compat attributes
  *   nla_for_each_attr()		loop over all attributes
  *   nla_for_each_nested()		loop over the nested attributes
  *=========================================================================
@@ -170,7 +174,9 @@ enum {
 	NLA_FLAG,
 	NLA_MSECS,
 	NLA_NESTED,
+	NLA_NESTED_COMPAT,
 	NLA_NUL_STRING,
+	NLA_BINARY,
 	__NLA_TYPE_MAX,
 };
 
@@ -188,12 +194,14 @@ enum {
  *    NLA_STRING           Maximum length of string
  *    NLA_NUL_STRING       Maximum length of string (excluding NUL)
  *    NLA_FLAG             Unused
+ *    NLA_BINARY           Maximum length of attribute payload
+ *    NLA_NESTED_COMPAT    Exact length of structure payload
  *    All other            Exact length of attribute payload
  *
  * Example:
  * static struct nla_policy my_policy[ATTR_MAX+1] __read_mostly = {
  * 	[ATTR_FOO] = { .type = NLA_U16 },
- *	[ATTR_BAR] = { .type = NLA_STRING, len = BARSIZ },
+ *	[ATTR_BAR] = { .type = NLA_STRING, .len = BARSIZ },
  *	[ATTR_BAZ] = { .len = sizeof(struct mystruct) },
  * };
  */
@@ -212,20 +220,18 @@ struct nl_info {
 	u32			pid;
 };
 
-extern void		netlink_run_queue(struct sock *sk, unsigned int *qlen,
-					  int (*cb)(struct sk_buff *,
-						    struct nlmsghdr *, int *));
-extern void		netlink_queue_skip(struct nlmsghdr *nlh,
-					   struct sk_buff *skb);
+extern int		netlink_rcv_skb(struct sk_buff *skb,
+					int (*cb)(struct sk_buff *,
+						  struct nlmsghdr *));
 extern int		nlmsg_notify(struct sock *sk, struct sk_buff *skb,
 				     u32 pid, unsigned int group, int report,
 				     gfp_t flags);
 
 extern int		nla_validate(struct nlattr *head, int len, int maxtype,
-				     struct nla_policy *policy);
+				     const struct nla_policy *policy);
 extern int		nla_parse(struct nlattr *tb[], int maxtype,
 				  struct nlattr *head, int len,
-				  struct nla_policy *policy);
+				  const struct nla_policy *policy);
 extern struct nlattr *	nla_find(struct nlattr *head, int len, int attrtype);
 extern size_t		nla_strlcpy(char *dst, const struct nlattr *nla,
 				    size_t dstsize);
@@ -360,7 +366,7 @@ static inline struct nlmsghdr *nlmsg_next(struct nlmsghdr *nlh, int *remaining)
  */
 static inline int nlmsg_parse(struct nlmsghdr *nlh, int hdrlen,
 			      struct nlattr *tb[], int maxtype,
-			      struct nla_policy *policy)
+			      const struct nla_policy *policy)
 {
 	if (nlh->nlmsg_len < nlmsg_msg_size(hdrlen))
 		return -EINVAL;
@@ -392,7 +398,7 @@ static inline struct nlattr *nlmsg_find_attr(struct nlmsghdr *nlh,
  * @policy: validation policy
  */
 static inline int nlmsg_validate(struct nlmsghdr *nlh, int hdrlen, int maxtype,
-				 struct nla_policy *policy)
+				 const struct nla_policy *policy)
 {
 	if (nlh->nlmsg_len < nlmsg_msg_size(hdrlen))
 		return -EINVAL;
@@ -525,7 +531,7 @@ static inline struct sk_buff *nlmsg_new(size_t payload, gfp_t flags)
  */
 static inline int nlmsg_end(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
-	nlh->nlmsg_len = skb->tail - (unsigned char *) nlh;
+	nlh->nlmsg_len = skb_tail_pointer(skb) - (unsigned char *)nlh;
 
 	return skb->len;
 }
@@ -538,7 +544,7 @@ static inline int nlmsg_end(struct sk_buff *skb, struct nlmsghdr *nlh)
  */
 static inline void *nlmsg_get_pos(struct sk_buff *skb)
 {
-	return skb->tail;
+	return skb_tail_pointer(skb);
 }
 
 /**
@@ -548,7 +554,7 @@ static inline void *nlmsg_get_pos(struct sk_buff *skb)
  *
  * Trims the message to the provided mark. Returns -1.
  */
-static inline int nlmsg_trim(struct sk_buff *skb, void *mark)
+static inline int nlmsg_trim(struct sk_buff *skb, const void *mark)
 {
 	if (mark)
 		skb_trim(skb, (unsigned char *) mark - skb->data);
@@ -661,6 +667,15 @@ static inline int nla_padlen(int payload)
 }
 
 /**
+ * nla_type - attribute type
+ * @nla: netlink attribute
+ */
+static inline int nla_type(const struct nlattr *nla)
+{
+	return nla->nla_type & NLA_TYPE_MASK;
+}
+
+/**
  * nla_data - head of payload
  * @nla: netlink attribute
  */
@@ -691,7 +706,7 @@ static inline int nla_ok(const struct nlattr *nla, int remaining)
 }
 
 /**
- * nla_next - next netlink attribte in attribute stream
+ * nla_next - next netlink attribute in attribute stream
  * @nla: netlink attribute
  * @remaining: number of bytes remaining in attribute stream
  *
@@ -729,12 +744,45 @@ static inline struct nlattr *nla_find_nested(struct nlattr *nla, int attrtype)
  */
 static inline int nla_parse_nested(struct nlattr *tb[], int maxtype,
 				   struct nlattr *nla,
-				   struct nla_policy *policy)
+				   const struct nla_policy *policy)
 {
 	return nla_parse(tb, maxtype, nla_data(nla), nla_len(nla), policy);
 }
+
 /**
- * nla_put_u8 - Add a u16 netlink attribute to a socket buffer
+ * nla_parse_nested_compat - parse nested compat attributes
+ * @tb: destination array with maxtype+1 elements
+ * @maxtype: maximum attribute type to be expected
+ * @nla: attribute containing the nested attributes
+ * @data: pointer to point to contained structure
+ * @len: length of contained structure
+ * @policy: validation policy
+ *
+ * Parse a nested compat attribute. The compat attribute contains a structure
+ * and optionally a set of nested attributes. On success the data pointer
+ * points to the nested data and tb contains the parsed attributes
+ * (see nla_parse).
+ */
+static inline int __nla_parse_nested_compat(struct nlattr *tb[], int maxtype,
+					    struct nlattr *nla,
+					    const struct nla_policy *policy,
+					    int len)
+{
+	if (nla_len(nla) < len)
+		return -1;
+	if (nla_len(nla) >= NLA_ALIGN(len) + sizeof(struct nlattr))
+		return nla_parse_nested(tb, maxtype,
+					nla_data(nla) + NLA_ALIGN(len),
+					policy);
+	memset(tb, 0, sizeof(struct nlattr *) * (maxtype + 1));
+	return 0;
+}
+
+#define nla_parse_nested_compat(tb, maxtype, nla, policy, data, len) \
+({	data = nla_len(nla) >= len ? nla_data(nla) : NULL; \
+	__nla_parse_nested_compat(tb, maxtype, nla, policy, len); })
+/**
+ * nla_put_u8 - Add a u8 netlink attribute to a socket buffer
  * @skb: socket buffer to add attribute to
  * @attrtype: attribute type
  * @value: numeric value
@@ -940,7 +988,7 @@ static inline unsigned long nla_get_msecs(struct nlattr *nla)
  */
 static inline struct nlattr *nla_nest_start(struct sk_buff *skb, int attrtype)
 {
-	struct nlattr *start = (struct nlattr *) skb->tail;
+	struct nlattr *start = (struct nlattr *)skb_tail_pointer(skb);
 
 	if (nla_put(skb, attrtype, 0, NULL) < 0)
 		return NULL;
@@ -950,7 +998,7 @@ static inline struct nlattr *nla_nest_start(struct sk_buff *skb, int attrtype)
 
 /**
  * nla_nest_end - Finalize nesting of attributes
- * @skb: socket buffer the attribtues are stored in
+ * @skb: socket buffer the attributes are stored in
  * @start: container attribute
  *
  * Corrects the container attribute header to include the all
@@ -960,8 +1008,53 @@ static inline struct nlattr *nla_nest_start(struct sk_buff *skb, int attrtype)
  */
 static inline int nla_nest_end(struct sk_buff *skb, struct nlattr *start)
 {
-	start->nla_len = skb->tail - (unsigned char *) start;
+	start->nla_len = skb_tail_pointer(skb) - (unsigned char *)start;
 	return skb->len;
+}
+
+/**
+ * nla_nest_compat_start - Start a new level of nested compat attributes
+ * @skb: socket buffer to add attributes to
+ * @attrtype: attribute type of container
+ * @attrlen: length of structure
+ * @data: pointer to structure
+ *
+ * Start a nested compat attribute that contains both a structure and
+ * a set of nested attributes.
+ *
+ * Returns the container attribute
+ */
+static inline struct nlattr *nla_nest_compat_start(struct sk_buff *skb,
+						   int attrtype, int attrlen,
+						   const void *data)
+{
+	struct nlattr *start = (struct nlattr *)skb_tail_pointer(skb);
+
+	if (nla_put(skb, attrtype, attrlen, data) < 0)
+		return NULL;
+	if (nla_nest_start(skb, attrtype) == NULL) {
+		nlmsg_trim(skb, start);
+		return NULL;
+	}
+	return start;
+}
+
+/**
+ * nla_nest_compat_end - Finalize nesting of compat attributes
+ * @skb: socket buffer the attributes are stored in
+ * @start: container attribute
+ *
+ * Corrects the container attribute header to include the all
+ * appeneded attributes.
+ *
+ * Returns the total data length of the skb.
+ */
+static inline int nla_nest_compat_end(struct sk_buff *skb, struct nlattr *start)
+{
+	struct nlattr *nest = (void *)start + NLMSG_ALIGN(start->nla_len);
+
+	start->nla_len = skb_tail_pointer(skb) - (unsigned char *)start;
+	return nla_nest_end(skb, nest);
 }
 
 /**
@@ -990,7 +1083,7 @@ static inline int nla_nest_cancel(struct sk_buff *skb, struct nlattr *start)
  * Returns 0 on success or a negative error code.
  */
 static inline int nla_validate_nested(struct nlattr *start, int maxtype,
-				      struct nla_policy *policy)
+				      const struct nla_policy *policy)
 {
 	return nla_validate(nla_data(start), nla_len(start), maxtype, policy);
 }

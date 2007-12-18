@@ -124,6 +124,9 @@ struct usb_device *pvr2_hdw_get_dev(struct pvr2_hdw *);
 /* Retrieve serial number of device */
 unsigned long pvr2_hdw_get_sn(struct pvr2_hdw *);
 
+/* Retrieve bus location info of device */
+const char *pvr2_hdw_get_bus_info(struct pvr2_hdw *);
+
 /* Called when hardware has been unplugged */
 void pvr2_hdw_disconnect(struct pvr2_hdw *);
 
@@ -194,11 +197,13 @@ void pvr2_hdw_subsys_stream_bit_chg(struct pvr2_hdw *hdw,
 unsigned long pvr2_hdw_subsys_stream_get(struct pvr2_hdw *);
 
 
-/* Enable / disable retrieval of CPU firmware.  This must be enabled before
-   pvr2_hdw_cpufw_get() will function.  Note that doing this may prevent
-   the device from running (and leaving this mode may imply a device
-   reset). */
-void pvr2_hdw_cpufw_set_enabled(struct pvr2_hdw *, int enable_flag);
+/* Enable / disable retrieval of CPU firmware or prom contents.  This must
+   be enabled before pvr2_hdw_cpufw_get() will function.  Note that doing
+   this may prevent the device from running (and leaving this mode may
+   imply a device reset). */
+void pvr2_hdw_cpufw_set_enabled(struct pvr2_hdw *,
+				int prom_flag,
+				int enable_flag);
 
 /* Return true if we're in a mode for retrieval CPU firmware */
 int pvr2_hdw_cpufw_get_enabled(struct pvr2_hdw *);

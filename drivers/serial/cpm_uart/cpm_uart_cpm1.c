@@ -49,9 +49,20 @@
 
 /**************************************************************/
 
-void cpm_line_cr_cmd(int line, int cmd)
+#ifdef CONFIG_PPC_CPM_NEW_BINDING
+void cpm_line_cr_cmd(struct uart_cpm_port *port, int cmd)
+{
+	u16 __iomem *cpcr = &cpmp->cp_cpcr;
+
+	out_be16(cpcr, port->command | (cmd << 8) | CPM_CR_FLG);
+	while (in_be16(cpcr) & CPM_CR_FLG)
+		;
+}
+#else
+void cpm_line_cr_cmd(struct uart_cpm_port *port, int cmd)
 {
 	ushort val;
+	int line = port - cpm_uart_ports;
 	volatile cpm8xx_t *cp = cpmp;
 
 	switch (line) {
@@ -114,6 +125,7 @@ void scc4_lineif(struct uart_cpm_port *pinfo)
 	/* XXX SCC4: insert port configuration here */
 	pinfo->brg = 4;
 }
+#endif
 
 /*
  * Allocate DP-Ram and memory buffers. We need to allocate a transmit and
@@ -125,7 +137,7 @@ int cpm_uart_allocbuf(struct uart_cpm_port *pinfo, unsigned int is_con)
 {
 	int dpmemsz, memsz;
 	u8 *dp_mem;
-	uint dp_offset;
+	unsigned long dp_offset;
 	u8 *mem_addr;
 	dma_addr_t dma_addr = 0;
 
@@ -133,7 +145,7 @@ int cpm_uart_allocbuf(struct uart_cpm_port *pinfo, unsigned int is_con)
 
 	dpmemsz = sizeof(cbd_t) * (pinfo->rx_nrfifos + pinfo->tx_nrfifos);
 	dp_offset = cpm_dpalloc(dpmemsz, 8);
-	if (IS_DPERR(dp_offset)) {
+	if (IS_ERR_VALUE(dp_offset)) {
 		printk(KERN_ERR
 		       "cpm_uart_cpm1.c: could not allocate buffer descriptors\n");
 		return -ENOMEM;
@@ -167,7 +179,7 @@ int cpm_uart_allocbuf(struct uart_cpm_port *pinfo, unsigned int is_con)
 	pinfo->tx_buf = pinfo->rx_buf + L1_CACHE_ALIGN(pinfo->rx_nrfifos
 						       * pinfo->rx_fifosize);
 
-	pinfo->rx_bd_base = (volatile cbd_t *)dp_mem;
+	pinfo->rx_bd_base = (cbd_t __iomem __force *)dp_mem;
 	pinfo->tx_bd_base = pinfo->rx_bd_base + pinfo->rx_nrfifos;
 
 	return 0;
@@ -184,8 +196,9 @@ void cpm_uart_freebuf(struct uart_cpm_port *pinfo)
 	cpm_dpfree(pinfo->dp_addr);
 }
 
+#ifndef CONFIG_PPC_CPM_NEW_BINDING
 /* Setup any dynamic params in the uart desc */
-int __init cpm_uart_init_portdesc(void)
+int cpm_uart_init_portdesc(void)
 {
 	pr_debug("CPM uart[-]:init portdesc\n");
 
@@ -279,3 +292,4 @@ int __init cpm_uart_init_portdesc(void)
 #endif
 	return 0;
 }
+#endif

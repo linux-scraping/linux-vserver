@@ -83,7 +83,7 @@ enum {
 	MTHCA_QP_CONTEXT_SIZE = 0x200,
 	MTHCA_RDB_ENTRY_SIZE  =  0x20,
 	MTHCA_AV_SIZE         =  0x20,
-	MTHCA_MGM_ENTRY_SIZE  =  0x40,
+	MTHCA_MGM_ENTRY_SIZE  = 0x100,
 
 	/* Arbel FW gives us these, but we need them for Tavor */
 	MTHCA_MPT_ENTRY_SIZE  =  0x40,
@@ -495,8 +495,8 @@ void mthca_unmap_eq_icm(struct mthca_dev *dev);
 
 int mthca_poll_cq(struct ib_cq *ibcq, int num_entries,
 		  struct ib_wc *entry);
-int mthca_tavor_arm_cq(struct ib_cq *cq, enum ib_cq_notify notify);
-int mthca_arbel_arm_cq(struct ib_cq *cq, enum ib_cq_notify notify);
+int mthca_tavor_arm_cq(struct ib_cq *cq, enum ib_cq_notify_flags flags);
+int mthca_arbel_arm_cq(struct ib_cq *cq, enum ib_cq_notify_flags flags);
 int mthca_init_cq(struct mthca_dev *dev, int nent,
 		  struct mthca_ucontext *ctx, u32 pdn,
 		  struct mthca_cq *cq);

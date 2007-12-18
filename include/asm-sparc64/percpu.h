@@ -3,19 +3,12 @@
 
 #include <linux/compiler.h>
 
+register unsigned long __local_per_cpu_offset asm("g5");
+
 #ifdef CONFIG_SMP
 
-#ifdef CONFIG_MODULES
-# define PERCPU_MODULE_RESERVE 8192
-#else
-# define PERCPU_MODULE_RESERVE 0
-#endif
-
-#define PERCPU_ENOUGH_ROOM \
-	(ALIGN(__per_cpu_end - __per_cpu_start, SMP_CACHE_BYTES) + \
-	 PERCPU_MODULE_RESERVE)
-
-extern void setup_per_cpu_areas(void);
+#define setup_per_cpu_areas()			do { } while (0)
+extern void real_setup_per_cpu_areas(void);
 
 extern unsigned long __per_cpu_base;
 extern unsigned long __per_cpu_shift;
@@ -27,7 +20,10 @@ extern unsigned long __per_cpu_shift;
 #define DEFINE_PER_CPU(type, name) \
     __attribute__((__section__(".data.percpu"))) __typeof__(type) per_cpu__##name
 
-register unsigned long __local_per_cpu_offset asm("g5");
+#define DEFINE_PER_CPU_SHARED_ALIGNED(type, name)		\
+    __attribute__((__section__(".data.percpu.shared_aligned"))) \
+    __typeof__(type) per_cpu__##name				\
+    ____cacheline_aligned_in_smp
 
 /* var is in discarded region: offset to particular copy we want */
 #define per_cpu(var, cpu) (*RELOC_HIDE(&per_cpu__##var, __per_cpu_offset(cpu)))
@@ -44,8 +40,11 @@ do {								\
 } while (0)
 #else /* ! SMP */
 
+#define real_setup_per_cpu_areas()		do { } while (0)
 #define DEFINE_PER_CPU(type, name) \
     __typeof__(type) per_cpu__##name
+#define DEFINE_PER_CPU_SHARED_ALIGNED(type, name)	\
+    DEFINE_PER_CPU(type, name)
 
 #define per_cpu(var, cpu)			(*((void)cpu, &per_cpu__##var))
 #define __get_cpu_var(var)			per_cpu__##var

@@ -501,8 +501,6 @@ static struct net_device *corkscrew_scan(int unit)
 		netdev_boot_setup_check(dev);
 	}
 
-	SET_MODULE_OWNER(dev);
-
 #ifdef __ISAPNP__
 	if(nopnp == 1)
 		goto no_pnp;
@@ -571,6 +569,7 @@ static int corkscrew_setup(struct net_device *dev, int ioaddr,
 	unsigned int eeprom[0x40], checksum = 0;	/* EEPROM contents */
 	int i;
 	int irq;
+	DECLARE_MAC_BUF(mac);
 
 	if (idev) {
 		irq = pnp_irq(idev, 0);
@@ -632,8 +631,7 @@ static int corkscrew_setup(struct net_device *dev, int ioaddr,
 	checksum = (checksum ^ (checksum >> 8)) & 0xff;
 	if (checksum != 0x00)
 		printk(" ***INVALID CHECKSUM %4.4x*** ", checksum);
-	for (i = 0; i < 6; i++)
-		printk("%c%2.2x", i ? ':' : ' ', dev->dev_addr[i]);
+	printk(" %s", print_mac(mac, dev->dev_addr));
 	if (eeprom[16] == 0x11c7) {	/* Corkscrew */
 		if (request_dma(dev->dma, "3c515")) {
 			printk(", DMA %d allocation failed", dev->dma);
@@ -1292,7 +1290,6 @@ static int corkscrew_rx(struct net_device *dev)
 				printk("Receiving packet size %d status %4.4x.\n",
 				     pkt_len, rx_status);
 			if (skb != NULL) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
 				/* 'skb_put()' points to the start of sk_buff data area. */
 				insl(ioaddr + RX_FIFO,
@@ -1363,7 +1360,6 @@ static int boomerang_rx(struct net_device *dev)
 			   copying to a properly sized skbuff. */
 			if (pkt_len < rx_copybreak
 			    && (skb = dev_alloc_skb(pkt_len + 4)) != 0) {
-				skb->dev = dev;
 				skb_reserve(skb, 2);	/* Align IP on 16 byte boundaries */
 				/* 'skb_put()' points to the start of sk_buff data area. */
 				memcpy(skb_put(skb, pkt_len),
