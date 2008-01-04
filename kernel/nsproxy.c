@@ -146,6 +146,10 @@ struct nsproxy *copy_nsproxy(struct nsproxy *orig)
 			get_ipc_ns(ns->ipc_ns);
 		if (ns->pid_ns)
 			get_pid_ns(ns->pid_ns);
+		if (ns->user_ns)
+			get_user_ns(ns->user_ns);
+		if (ns->net_ns)
+			get_net(ns->net_ns);
 	}
 	return ns;
 }

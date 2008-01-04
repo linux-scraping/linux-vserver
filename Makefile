@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 24
-EXTRAVERSION = -rc3-vs2.2.0.5.0.2
+EXTRAVERSION = -rc6-vs2.2.0.5.0.3
 NAME = Arr Matey! A Hairy Bilge Rat!
 
 # *DOCUMENTATION*
@@ -108,6 +108,9 @@ endif
 PHONY := _all
 _all:
 
+# Cancel implicit rules on top Makefile
+$(CURDIR)/Makefile Makefile: ;
+
 ifneq ($(KBUILD_OUTPUT),)
 # Invoke a second make in the output directory, passing relevant variables
 # check that the output directory actually exists
@@ -115,13 +118,10 @@ saved-output := $(KBUILD_OUTPUT)
 KBUILD_OUTPUT := $(shell cd $(KBUILD_OUTPUT) && /bin/pwd)
 $(if $(KBUILD_OUTPUT),, \
      $(error output directory "$(saved-output)" does not exist))
-# Check that OUTPUT directory is not the same as where we have kernel src
-$(if $(filter-out $(KBUILD_OUTPUT),$(shell /bin/pwd)),, \
-     $(error Output directory (O=...) specifies kernel src dir))
 
 PHONY += $(MAKECMDGOALS) sub-make
 
-$(filter-out _all sub-make,$(MAKECMDGOALS)) _all: sub-make
+$(filter-out _all sub-make $(CURDIR)/Makefile, $(MAKECMDGOALS)) _all: sub-make
 	$(Q)@:
 
 sub-make: FORCE
@@ -200,11 +200,9 @@ SRCARCH 	:= $(ARCH)
 # Additional ARCH settings for x86
 ifeq ($(ARCH),i386)
         SRCARCH := x86
-        K64BIT  := n
 endif
 ifeq ($(ARCH),x86_64)
         SRCARCH := x86
-        K64BIT  := y
 endif
 
 KCONFIG_CONFIG	?= .config
@@ -293,7 +291,8 @@ export quiet Q KBUILD_VERBOSE
 # Look for make include files relative to root of kernel src
 MAKEFLAGS += --include-dir=$(srctree)
 
-# We need some generic definitions.
+# We need some generic definitions (do not try to remake the file).
+$(srctree)/scripts/Kbuild.include: ;
 include $(srctree)/scripts/Kbuild.include
 
 # Make variables (CC, etc...)
@@ -341,7 +340,7 @@ KERNELRELEASE = $(shell cat include/config/kernel.release 2> /dev/null)
 KERNELVERSION = $(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)
 
 export VERSION PATCHLEVEL SUBLEVEL KERNELRELEASE KERNELVERSION
-export ARCH SRCARCH K64BIT CONFIG_SHELL HOSTCC HOSTCFLAGS CROSS_COMPILE AS LD CC
+export ARCH SRCARCH CONFIG_SHELL HOSTCC HOSTCFLAGS CROSS_COMPILE AS LD CC
 export CPP AR NM STRIP OBJCOPY OBJDUMP MAKE AWK GENKSYMS PERL UTS_MACHINE
 export HOSTCXX HOSTCXXFLAGS LDFLAGS_MODULE CHECK CHECKFLAGS
 
@@ -1334,12 +1333,7 @@ else
 ALLINCLUDE_ARCHS := $(ALLSOURCE_ARCHS)
 endif
 
-# Take care of arch/x86
-ifeq ($(ARCH), $(SRCARCH))
-ALLSOURCE_ARCHS := $(ARCH)
-else
-ALLSOURCE_ARCHS := $(ARCH) $(SRCARCH)
-endif
+ALLSOURCE_ARCHS := $(SRCARCH)
 
 define find-sources
         ( for arch in $(ALLSOURCE_ARCHS) ; do \
@@ -1566,9 +1560,6 @@ endif	# skip-makefile
 
 PHONY += FORCE
 FORCE:
-
-# Cancel implicit rules on top Makefile, `-rR' will apply to sub-makes.
-Makefile: ;
 
 # Declare the contents of the .PHONY variable as phony.  We keep that
 # information in a variable se we can use it in if_changed and friends.

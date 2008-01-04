@@ -30,6 +30,14 @@
  *  Hardware documentation available from http://www.t13.org/ and
  *  http://www.sata-io.org/
  *
+ *  Standards documents from:
+ *	http://www.t13.org (ATA standards, PCI DMA IDE spec)
+ *	http://www.t10.org (SCSI MMC - for ATAPI MMC)
+ *	http://www.sata-io.org (SATA)
+ *	http://www.compactflash.org (CF)
+ *	http://www.qic.org (QIC157 - Tape and DSC)
+ *	http://www.ce-ata.org (CE-ATA: not supported)
+ *
  */
 
 #include <linux/kernel.h>
@@ -56,6 +64,7 @@
 #include <linux/libata.h>
 #include <asm/semaphore.h>
 #include <asm/byteorder.h>
+#include <linux/cdrom.h>
 
 #include "libata.h"
 
@@ -614,6 +623,7 @@ void ata_dev_disable(struct ata_device *dev)
 	if (ata_dev_enabled(dev)) {
 		if (ata_msg_drv(dev->link->ap))
 			ata_dev_printk(dev, KERN_WARNING, "disabled\n");
+		ata_acpi_on_disable(dev);
 		ata_down_xfermask_limit(dev, ATA_DNXFER_FORCE_PIO0 |
 					     ATA_DNXFER_QUIET);
 		dev->class++;
@@ -2307,8 +2317,10 @@ int ata_dev_configure(struct ata_device *dev)
 	}
 
 	if ((dev->class == ATA_DEV_ATAPI) &&
-	    (atapi_command_packet_set(id) == TYPE_TAPE))
+	    (atapi_command_packet_set(id) == TYPE_TAPE)) {
 		dev->max_sectors = ATA_MAX_SECTORS_TAPE;
+		dev->horkage |= ATA_HORKAGE_STUCK_ERR;
+	}
 
 	if (dev->horkage & ATA_HORKAGE_MAX_SEC_128)
 		dev->max_sectors = min_t(unsigned int, ATA_MAX_SECTORS_128,
@@ -2578,81 +2590,6 @@ void sata_print_link_status(struct ata_link *link)
 				"SATA link down (SStatus %X SControl %X)\n",
 				sstatus, scontrol);
 	}
-}
-
-/**
- *	__sata_phy_reset - Wake/reset a low-level SATA PHY
- *	@ap: SATA port associated with target SATA PHY.
- *
- *	This function issues commands to standard SATA Sxxx
- *	PHY registers, to wake up the phy (and device), and
- *	clear any reset condition.
- *
- *	LOCKING:
- *	PCI/etc. bus probe sem.
- *
- */
-void __sata_phy_reset(struct ata_port *ap)
-{
-	struct ata_link *link = &ap->link;
-	unsigned long timeout = jiffies + (HZ * 5);
-	u32 sstatus;
-
-	if (ap->flags & ATA_FLAG_SATA_RESET) {
-		/* issue phy wake/reset */
-		sata_scr_write_flush(link, SCR_CONTROL, 0x301);
-		/* Couldn't find anything in SATA I/II specs, but
-		 * AHCI-1.1 10.4.2 says at least 1 ms. */
-		mdelay(1);
-	}
-	/* phy wake/clear reset */
-	sata_scr_write_flush(link, SCR_CONTROL, 0x300);
-
-	/* wait for phy to become ready, if necessary */
-	do {
-		msleep(200);
-		sata_scr_read(link, SCR_STATUS, &sstatus);
-		if ((sstatus & 0xf) != 1)
-			break;
-	} while (time_before(jiffies, timeout));
-
-	/* print link status */
-	sata_print_link_status(link);
-
-	/* TODO: phy layer with polling, timeouts, etc. */
-	if (!ata_link_offline(link))
-		ata_port_probe(ap);
-	else
-		ata_port_disable(ap);
-
-	if (ap->flags & ATA_FLAG_DISABLED)
-		return;
-
-	if (ata_busy_sleep(ap, ATA_TMOUT_BOOT_QUICK, ATA_TMOUT_BOOT)) {
-		ata_port_disable(ap);
-		return;
-	}
-
-	ap->cbl = ATA_CBL_SATA;
-}
-
-/**
- *	sata_phy_reset - Reset SATA bus.
- *	@ap: SATA port associated with target SATA PHY.
- *
- *	This function resets the SATA bus, and then probes
- *	the bus for devices.
- *
- *	LOCKING:
- *	PCI/etc. bus probe sem.
- *
- */
-void sata_phy_reset(struct ata_port *ap)
-{
-	__sata_phy_reset(ap);
-	if (ap->flags & ATA_FLAG_DISABLED)
-		return;
-	ata_bus_reset(ap);
 }
 
 /**
@@ -3988,6 +3925,7 @@ void ata_std_postreset(struct ata_link *link, unsigned int *classes)
 	/* clear SError */
 	if (sata_scr_read(link, SCR_ERROR, &serror) == 0)
 		sata_scr_write(link, SCR_ERROR, serror);
+	link->eh_info.serror = 0;
 
 	/* is double-select really necessary? */
 	if (classes[0] != ATA_DEV_NONE)
@@ -4205,6 +4143,7 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	/* Devices where NCQ should be avoided */
 	/* NCQ is slow */
 	{ "WDC WD740ADFD-00",	NULL,		ATA_HORKAGE_NONCQ },
+	{ "WDC WD740ADFD-00NLR1", NULL,		ATA_HORKAGE_NONCQ, },
 	/* http://thread.gmane.org/gmane.linux.ide/14907 */
 	{ "FUJITSU MHT2060BH",	NULL,		ATA_HORKAGE_NONCQ },
 	/* NCQ is broken */
@@ -4213,29 +4152,13 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	{ "HITACHI HDS7250SASUN500G*", NULL,    ATA_HORKAGE_NONCQ },
 	{ "HITACHI HDS7225SBSUN250G*", NULL,    ATA_HORKAGE_NONCQ },
 	{ "ST380817AS",		"3.42",		ATA_HORKAGE_NONCQ },
+	{ "ST3160023AS",	"3.42",		ATA_HORKAGE_NONCQ },
 
 	/* Blacklist entries taken from Silicon Image 3124/3132
 	   Windows driver .inf file - also several Linux problem reports */
 	{ "HTS541060G9SA00",    "MB3OC60D",     ATA_HORKAGE_NONCQ, },
 	{ "HTS541080G9SA00",    "MB4OC60D",     ATA_HORKAGE_NONCQ, },
 	{ "HTS541010G9SA00",    "MBZOC60D",     ATA_HORKAGE_NONCQ, },
-	/* Drives which do spurious command completion */
-	{ "HTS541680J9SA00",	"SB2IC7EP",	ATA_HORKAGE_NONCQ, },
-	{ "HTS541612J9SA00",	"SBDIC7JP",	ATA_HORKAGE_NONCQ, },
-	{ "HDT722516DLA380",	"V43OA96A",	ATA_HORKAGE_NONCQ, },
-	{ "Hitachi HTS541616J9SA00", "SB4OC70P", ATA_HORKAGE_NONCQ, },
-	{ "Hitachi HTS542525K9SA00", "BBFOC31P", ATA_HORKAGE_NONCQ, },
-	{ "WDC WD740ADFD-00NLR1", NULL,		ATA_HORKAGE_NONCQ, },
-	{ "WDC WD3200AAJS-00RYA0", "12.01B01",	ATA_HORKAGE_NONCQ, },
-	{ "FUJITSU MHV2080BH",	"00840028",	ATA_HORKAGE_NONCQ, },
-	{ "ST9120822AS",	"3.CLF",	ATA_HORKAGE_NONCQ, },
-	{ "ST9160821AS",	"3.CLF",	ATA_HORKAGE_NONCQ, },
-	{ "ST9160821AS",	"3.ALD",	ATA_HORKAGE_NONCQ, },
-	{ "ST9160821AS",	"3.CCD",	ATA_HORKAGE_NONCQ, },
-	{ "ST3160812AS",	"3.ADJ",	ATA_HORKAGE_NONCQ, },
-	{ "ST980813AS",		"3.ADB",	ATA_HORKAGE_NONCQ, },
-	{ "SAMSUNG HD401LJ",	"ZZ100-15",	ATA_HORKAGE_NONCQ, },
-	{ "Maxtor 7V300F0",	"VA111900",	ATA_HORKAGE_NONCQ, },
 
 	/* devices which puke on READ_NATIVE_MAX */
 	{ "HDS724040KLSA80",	"KFAOA20N",	ATA_HORKAGE_BROKEN_HPA, },
@@ -4250,6 +4173,9 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	/* Devices which get the IVB wrong */
 	{ "QUANTUM FIREBALLlct10 05", "A03.0900", ATA_HORKAGE_IVB, },
 	{ "TSSTcorp CDDVDW SH-S202J", "SB00",	  ATA_HORKAGE_IVB, },
+	{ "TSSTcorp CDDVDW SH-S202J", "SB01",	  ATA_HORKAGE_IVB, },
+	{ "TSSTcorp CDDVDW SH-S202N", "SB00",	  ATA_HORKAGE_IVB, },
+	{ "TSSTcorp CDDVDW SH-S202N", "SB01",	  ATA_HORKAGE_IVB, },
 
 	/* End Marker */
 	{ }
@@ -4724,6 +4650,43 @@ int ata_check_atapi_dma(struct ata_queued_cmd *qc)
 		return ap->ops->check_atapi_dma(qc);
 
 	return 0;
+}
+
+/**
+ *	atapi_qc_may_overflow - Check whether data transfer may overflow
+ *	@qc: ATA command in question
+ *
+ *	ATAPI commands which transfer variable length data to host
+ *	might overflow due to application error or hardare bug.  This
+ *	function checks whether overflow should be drained and ignored
+ *	for @qc.
+ *
+ *	LOCKING:
+ *	None.
+ *
+ *	RETURNS:
+ *	1 if @qc may overflow; otherwise, 0.
+ */
+static int atapi_qc_may_overflow(struct ata_queued_cmd *qc)
+{
+	if (qc->tf.protocol != ATA_PROT_ATAPI &&
+	    qc->tf.protocol != ATA_PROT_ATAPI_DMA)
+		return 0;
+
+	if (qc->tf.flags & ATA_TFLAG_WRITE)
+		return 0;
+
+	switch (qc->cdb[0]) {
+	case READ_10:
+	case READ_12:
+	case WRITE_10:
+	case WRITE_12:
+	case GPCMD_READ_CD:
+	case GPCMD_READ_CD_MSF:
+		return 0;
+	}
+
+	return 1;
 }
 
 /**
@@ -5214,23 +5177,19 @@ static void atapi_send_cdb(struct ata_port *ap, struct ata_queued_cmd *qc)
  *	Inherited from caller.
  *
  */
-
-static void __atapi_pio_bytes(struct ata_queued_cmd *qc, unsigned int bytes)
+static int __atapi_pio_bytes(struct ata_queued_cmd *qc, unsigned int bytes)
 {
 	int do_write = (qc->tf.flags & ATA_TFLAG_WRITE);
-	struct scatterlist *sg = qc->__sg;
-	struct scatterlist *lsg = sg_last(qc->__sg, qc->n_elem);
 	struct ata_port *ap = qc->ap;
+	struct ata_eh_info *ehi = &qc->dev->link->eh_info;
+	struct scatterlist *sg;
 	struct page *page;
 	unsigned char *buf;
 	unsigned int offset, count;
-	int no_more_sg = 0;
-
-	if (qc->curbytes + bytes >= qc->nbytes)
-		ap->hsm_task_state = HSM_ST_LAST;
 
 next_sg:
-	if (unlikely(no_more_sg)) {
+	sg = qc->cursg;
+	if (unlikely(!sg)) {
 		/*
 		 * The end of qc->sg is reached and the device expects
 		 * more data to transfer. In order not to overrun qc->sg
@@ -5239,21 +5198,28 @@ next_sg:
 		 *    - for write case, padding zero data to the device
 		 */
 		u16 pad_buf[1] = { 0 };
-		unsigned int words = bytes >> 1;
 		unsigned int i;
 
-		if (words) /* warning if bytes > 1 */
-			ata_dev_printk(qc->dev, KERN_WARNING,
-				       "%u bytes trailing data\n", bytes);
+		if (bytes > qc->curbytes - qc->nbytes + ATAPI_MAX_DRAIN) {
+			ata_ehi_push_desc(ehi, "too much trailing data "
+					  "buf=%u cur=%u bytes=%u",
+					  qc->nbytes, qc->curbytes, bytes);
+			return -1;
+		}
 
-		for (i = 0; i < words; i++)
+		 /* overflow is exptected for misc ATAPI commands */
+		if (bytes && !atapi_qc_may_overflow(qc))
+			ata_dev_printk(qc->dev, KERN_WARNING, "ATAPI %u bytes "
+				       "trailing data (cdb=%02x nbytes=%u)\n",
+				       bytes, qc->cdb[0], qc->nbytes);
+
+		for (i = 0; i < (bytes + 1) / 2; i++)
 			ap->ops->data_xfer(qc->dev, (unsigned char *)pad_buf, 2, do_write);
 
-		ap->hsm_task_state = HSM_ST_LAST;
-		return;
-	}
+		qc->curbytes += bytes;
 
-	sg = qc->cursg;
+		return 0;
+	}
 
 	page = sg_page(sg);
 	offset = sg->offset + qc->cursg_ofs;
@@ -5288,19 +5254,20 @@ next_sg:
 	}
 
 	bytes -= count;
+	if ((count & 1) && bytes)
+		bytes--;
 	qc->curbytes += count;
 	qc->cursg_ofs += count;
 
 	if (qc->cursg_ofs == sg->length) {
-		if (qc->cursg == lsg)
-			no_more_sg = 1;
-
 		qc->cursg = sg_next(qc->cursg);
 		qc->cursg_ofs = 0;
 	}
 
 	if (bytes)
 		goto next_sg;
+
+	return 0;
 }
 
 /**
@@ -5343,7 +5310,8 @@ static void atapi_pio_bytes(struct ata_queued_cmd *qc)
 
 	VPRINTK("ata%u: xfering %d bytes\n", ap->print_id, bytes);
 
-	__atapi_pio_bytes(qc, bytes);
+	if (__atapi_pio_bytes(qc, bytes))
+		goto err_out;
 	ata_altstatus(ap); /* flush */
 
 	return;
@@ -5490,11 +5458,19 @@ fsm_start:
 		 * let the EH abort the command or reset the device.
 		 */
 		if (unlikely(status & (ATA_ERR | ATA_DF))) {
-			ata_port_printk(ap, KERN_WARNING, "DRQ=1 with device "
-					"error, dev_stat 0x%X\n", status);
-			qc->err_mask |= AC_ERR_HSM;
-			ap->hsm_task_state = HSM_ST_ERR;
-			goto fsm_start;
+			/* Some ATAPI tape drives forget to clear the ERR bit
+			 * when doing the next command (mostly request sense).
+			 * We ignore ERR here to workaround and proceed sending
+			 * the CDB.
+			 */
+			if (!(qc->dev->horkage & ATA_HORKAGE_STUCK_ERR)) {
+				ata_port_printk(ap, KERN_WARNING,
+						"DRQ=1 with device error, "
+						"dev_stat 0x%X\n", status);
+				qc->err_mask |= AC_ERR_HSM;
+				ap->hsm_task_state = HSM_ST_ERR;
+				goto fsm_start;
+			}
 		}
 
 		/* Send the CDB (atapi) or the first data block (ata pio out).
@@ -7021,12 +6997,11 @@ int ata_host_start(struct ata_host *host)
 		if (ap->ops->port_start) {
 			rc = ap->ops->port_start(ap);
 			if (rc) {
-				ata_port_printk(ap, KERN_ERR, "failed to "
-						"start port (errno=%d)\n", rc);
+				if (rc != -ENODEV)
+					dev_printk(KERN_ERR, host->dev, "failed to start port %d (errno=%d)\n", i, rc);
 				goto err_out;
 			}
 		}
-
 		ata_eh_freeze_port(ap);
 	}
 
@@ -7279,17 +7254,13 @@ static void ata_port_detach(struct ata_port *ap)
 
 	ata_port_wait_eh(ap);
 
-	/* EH is now guaranteed to see UNLOADING, so no new device
-	 * will be attached.  Disable all existing devices.
+	/* EH is now guaranteed to see UNLOADING - EH context belongs
+	 * to us.  Disable all existing devices.
 	 */
-	spin_lock_irqsave(ap->lock, flags);
-
 	ata_port_for_each_link(link, ap) {
 		ata_link_for_each_dev(dev, link)
 			ata_dev_disable(dev);
 	}
-
-	spin_unlock_irqrestore(ap->lock, flags);
 
 	/* Final freeze & EH.  All in-flight commands are aborted.  EH
 	 * will be skipped and retrials will be terminated with bad
@@ -7322,6 +7293,9 @@ void ata_host_detach(struct ata_host *host)
 
 	for (i = 0; i < host->n_ports; i++)
 		ata_port_detach(host->ports[i]);
+
+	/* the host is dead now, dissociate ACPI */
+	ata_acpi_dissociate(host);
 }
 
 /**
@@ -7653,8 +7627,6 @@ EXPORT_SYMBOL_GPL(ata_dev_disable);
 EXPORT_SYMBOL_GPL(sata_set_spd);
 EXPORT_SYMBOL_GPL(sata_link_debounce);
 EXPORT_SYMBOL_GPL(sata_link_resume);
-EXPORT_SYMBOL_GPL(sata_phy_reset);
-EXPORT_SYMBOL_GPL(__sata_phy_reset);
 EXPORT_SYMBOL_GPL(ata_bus_reset);
 EXPORT_SYMBOL_GPL(ata_std_prereset);
 EXPORT_SYMBOL_GPL(ata_std_softreset);
@@ -7725,7 +7697,6 @@ EXPORT_SYMBOL_GPL(ata_port_desc);
 #ifdef CONFIG_PCI
 EXPORT_SYMBOL_GPL(ata_port_pbar_desc);
 #endif /* CONFIG_PCI */
-EXPORT_SYMBOL_GPL(ata_eng_timeout);
 EXPORT_SYMBOL_GPL(ata_port_schedule_eh);
 EXPORT_SYMBOL_GPL(ata_link_abort);
 EXPORT_SYMBOL_GPL(ata_port_abort);

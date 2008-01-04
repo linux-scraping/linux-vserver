@@ -13,22 +13,8 @@
  *
  * This is the IDE probe module, as evolved from hd.c and ide.c.
  *
- * Version 1.00		move drive probing code from ide.c to ide-probe.c
- * Version 1.01		fix compilation problem for m68k
- * Version 1.02		increase WAIT_PIDENTIFY to avoid CD-ROM locking at boot
- *			 by Andrea Arcangeli
- * Version 1.03		fix for (hwif->chipset == ide_4drives)
- * Version 1.04		fixed buggy treatments of known flash memory cards
- *
- * Version 1.05		fix for (hwif->chipset == ide_pdc4030)
- *			added ide6/7/8/9
- *			allowed for secondary flash card to be detectable
- *			 with new flag : drive->ata_flash : 1;
- * Version 1.06		stream line request queue and prep for cascade project.
- * Version 1.07		max_sect <= 255; slower disks would get behind and
- * 			then fall over when they get to 256.	Paul G.
- * Version 1.10		Update set for new IDE. drive->id is now always
- *			valid after probe time even with noprobe
+ * -- increase WAIT_PIDENTIFY to avoid CD-ROM locking at boot
+ *	 by Andrea Arcangeli
  */
 
 #include <linux/module.h>
@@ -644,7 +630,7 @@ static void hwif_register (ide_hwif_t *hwif)
 
 static int wait_hwif_ready(ide_hwif_t *hwif)
 {
-	int rc;
+	int unit, rc;
 
 	printk(KERN_DEBUG "Probing IDE interface %s...\n", hwif->name);
 
@@ -661,20 +647,27 @@ static int wait_hwif_ready(ide_hwif_t *hwif)
 		return rc;
 
 	/* Now make sure both master & slave are ready */
-	SELECT_DRIVE(&hwif->drives[0]);
-	hwif->OUTB(8, hwif->io_ports[IDE_CONTROL_OFFSET]);
-	mdelay(2);
-	rc = ide_wait_not_busy(hwif, 35000);
-	if (rc)
-		return rc;
-	SELECT_DRIVE(&hwif->drives[1]);
-	hwif->OUTB(8, hwif->io_ports[IDE_CONTROL_OFFSET]);
-	mdelay(2);
-	rc = ide_wait_not_busy(hwif, 35000);
+	for (unit = 0; unit < MAX_DRIVES; unit++) {
+		ide_drive_t *drive = &hwif->drives[unit];
 
+		/* Ignore disks that we will not probe for later. */
+		if (!drive->noprobe || drive->present) {
+			SELECT_DRIVE(drive);
+			if (IDE_CONTROL_REG)
+				hwif->OUTB(drive->ctl, IDE_CONTROL_REG);
+			mdelay(2);
+			rc = ide_wait_not_busy(hwif, 35000);
+			if (rc)
+				goto out;
+		} else
+			printk(KERN_DEBUG "%s: ide_wait_not_busy() skipped\n",
+					  drive->name);
+	}
+out:
 	/* Exit function with master reselected (let's be sane) */
-	SELECT_DRIVE(&hwif->drives[0]);
-	
+	if (unit)
+		SELECT_DRIVE(&hwif->drives[0]);
+
 	return rc;
 }
 

@@ -1161,7 +1161,7 @@ static struct dst_entry *ipv4_negative_advice(struct dst_entry *dst)
 			unsigned hash = rt_hash(rt->fl.fl4_dst, rt->fl.fl4_src,
 						rt->fl.oif);
 #if RT_CACHE_DEBUG >= 1
-			printk(KERN_DEBUG "ip_rt_advice: redirect to "
+			printk(KERN_DEBUG "ipv4_negative_advice: redirect to "
 					  "%u.%u.%u.%u/%02x dropped\n",
 				NIPQUAD(rt->rt_dst), rt->fl.fl4_tos);
 #endif
@@ -1252,6 +1252,7 @@ static int ip_error(struct sk_buff *skb)
 			break;
 		case ENETUNREACH:
 			code = ICMP_NET_UNREACH;
+			IP_INC_STATS_BH(IPSTATS_MIB_INNOROUTES);
 			break;
 		case EACCES:
 			code = ICMP_PKT_FILTERED;
@@ -1881,6 +1882,8 @@ no_route:
 	RT_CACHE_STAT_INC(in_no_route);
 	spec_dst = inet_select_addr(dev, 0, RT_SCOPE_UNIVERSE);
 	res.type = RTN_UNREACHABLE;
+	if (err == -ESRCH)
+		err = -ENETUNREACH;
 	goto local_input;
 
 	/*
@@ -2888,18 +2891,14 @@ static int ip_rt_acct_read(char *buffer, char **start, off_t offset,
 	offset /= sizeof(u32);
 
 	if (length > 0) {
-		u32 *src = ((u32 *) IP_RT_ACCT_CPU(0)) + offset;
 		u32 *dst = (u32 *) buffer;
 
-		/* Copy first cpu. */
 		*start = buffer;
-		memcpy(dst, src, length);
+		memset(dst, 0, length);
 
-		/* Add the other cpus in, one int at a time */
 		for_each_possible_cpu(i) {
 			unsigned int j;
-
-			src = ((u32 *) IP_RT_ACCT_CPU(i)) + offset;
+			u32 *src = ((u32 *) IP_RT_ACCT_CPU(i)) + offset;
 
 			for (j = 0; j < length/4; j++)
 				dst[j] += src[j];

@@ -51,8 +51,8 @@
 #define L1GPU_DISPLAY_SYNC_HSYNC		1
 #define L1GPU_DISPLAY_SYNC_VSYNC		2
 
-#define DDR_SIZE				(0)	/* used no ddr */
-#define GPU_CMD_BUF_SIZE			(64 * 1024)
+#define GPU_CMD_BUF_SIZE			(2 * 1024 * 1024)
+#define GPU_FB_START				(64 * 1024)
 #define GPU_IOIF				(0x0d000000UL)
 #define GPU_ALIGN_UP(x)				_ALIGN_UP((x), 64)
 #define GPU_MAX_LINE_LENGTH			(65536 - 64)
@@ -407,6 +407,7 @@ static void ps3fb_sync_image(struct device *dev, u64 frame_offset,
 	if (src_line_length != dst_line_length)
 		line_length |= (u64)src_line_length << 32;
 
+	src_offset += GPU_FB_START;
 	status = lv1_gpu_context_attribute(ps3fb.context_handle,
 					   L1GPU_CONTEXT_ATTRIBUTE_FB_BLIT,
 					   dst_offset, GPU_IOIF + src_offset,
@@ -977,9 +978,8 @@ static int ps3fb_xdr_settings(u64 xdr_lpar, struct device *dev)
 
 	status = lv1_gpu_context_attribute(ps3fb.context_handle,
 					   L1GPU_CONTEXT_ATTRIBUTE_FB_SETUP,
-					   xdr_lpar + ps3fb.xdr_size,
-					   GPU_CMD_BUF_SIZE,
-					   GPU_IOIF + ps3fb.xdr_size, 0);
+					   xdr_lpar, GPU_CMD_BUF_SIZE,
+					   GPU_IOIF, 0);
 	if (status) {
 		dev_err(dev,
 			"%s: lv1_gpu_context_attribute FB_SETUP failed: %d\n",
@@ -1060,6 +1060,12 @@ static int __devinit ps3fb_probe(struct ps3_system_bus_device *dev)
 	u64 xdr_lpar;
 	int status, res_index;
 	struct task_struct *task;
+	unsigned long max_ps3fb_size;
+
+	if (ps3fb_videomemory.size < GPU_CMD_BUF_SIZE) {
+		dev_err(&dev->core, "%s: Not enough video memory\n", __func__);
+		return -ENOMEM;
+	}
 
 	status = ps3_open_hv_device(dev);
 	if (status) {
@@ -1085,8 +1091,15 @@ static int __devinit ps3fb_probe(struct ps3_system_bus_device *dev)
 
 	ps3fb_set_sync(&dev->core);
 
+	max_ps3fb_size = _ALIGN_UP(GPU_IOIF, 256*1024*1024) - GPU_IOIF;
+	if (ps3fb_videomemory.size > max_ps3fb_size) {
+		dev_info(&dev->core, "Limiting ps3fb mem size to %lu bytes\n",
+			 max_ps3fb_size);
+		ps3fb_videomemory.size = max_ps3fb_size;
+	}
+
 	/* get gpu context handle */
-	status = lv1_gpu_memory_allocate(DDR_SIZE, 0, 0, 0, 0,
+	status = lv1_gpu_memory_allocate(ps3fb_videomemory.size, 0, 0, 0, 0,
 					 &ps3fb.memory_handle, &ddr_lpar);
 	if (status) {
 		dev_err(&dev->core, "%s: lv1_gpu_memory_allocate failed: %d\n",
@@ -1124,8 +1137,14 @@ static int __devinit ps3fb_probe(struct ps3_system_bus_device *dev)
 	/* Clear memory to prevent kernel info leakage into userspace */
 	memset(ps3fb.xdr_ea, 0, ps3fb_videomemory.size);
 
-	/* The GPU command buffer is at the end of video memory */
-	ps3fb.xdr_size = ps3fb_videomemory.size - GPU_CMD_BUF_SIZE;
+	/*
+	 * The GPU command buffer is at the start of video memory
+	 * As we don't use the full command buffer, we can put the actual
+	 * frame buffer at offset GPU_FB_START and save some precious XDR
+	 * memory
+	 */
+	ps3fb.xdr_ea += GPU_FB_START;
+	ps3fb.xdr_size = ps3fb_videomemory.size - GPU_FB_START;
 
 	retval = ps3fb_xdr_settings(xdr_lpar, &dev->core);
 	if (retval)
@@ -1193,7 +1212,7 @@ err_fb_dealloc:
 err_framebuffer_release:
 	framebuffer_release(info);
 err_free_irq:
-	free_irq(ps3fb.irq_no, dev);
+	free_irq(ps3fb.irq_no, &dev->core);
 	ps3_irq_plug_destroy(ps3fb.irq_no);
 err_iounmap_dinfo:
 	iounmap((u8 __iomem *)ps3fb.dinfo);
@@ -1228,7 +1247,7 @@ static int ps3fb_shutdown(struct ps3_system_bus_device *dev)
 		kthread_stop(task);
 	}
 	if (ps3fb.irq_no) {
-		free_irq(ps3fb.irq_no, dev);
+		free_irq(ps3fb.irq_no, &dev->core);
 		ps3_irq_plug_destroy(ps3fb.irq_no);
 	}
 	iounmap((u8 __iomem *)ps3fb.dinfo);

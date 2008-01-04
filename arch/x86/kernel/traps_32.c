@@ -283,6 +283,11 @@ void dump_stack(void)
 {
 	unsigned long stack;
 
+	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+		current->pid, current->comm, print_tainted(),
+		init_utsname()->release,
+		(int)strcspn(init_utsname()->version, " "),
+		init_utsname()->version);
 	show_trace(current, NULL, &stack);
 }
 
@@ -368,14 +373,13 @@ void die(const char * str, struct pt_regs * regs, long err)
 
 	if (die.lock_owner != raw_smp_processor_id()) {
 		console_verbose();
+		raw_local_irq_save(flags);
 		__raw_spin_lock(&die.lock);
-		raw_local_save_flags(flags);
 		die.lock_owner = smp_processor_id();
 		die.lock_owner_depth = 0;
 		bust_spinlocks(1);
-	}
-	else
-		raw_local_save_flags(flags);
+	} else
+		raw_local_irq_save(flags);
 
 	if (++die.lock_owner_depth < 3) {
 		unsigned long esp;
@@ -827,6 +831,8 @@ fastcall void __kprobes do_debug(struct pt_regs * regs, long error_code)
 {
 	unsigned int condition;
 	struct task_struct *tsk = current;
+
+	trace_hardirqs_fixup();
 
 	get_debugreg(condition, 6);
 
