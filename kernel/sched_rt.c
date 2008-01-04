@@ -23,6 +23,7 @@ static void update_curr_rt(struct rq *rq)
 
 	curr->se.sum_exec_runtime += delta_exec;
 	curr->se.exec_start = rq->clock;
+	cpuacct_charge(curr, delta_exec);
 }
 
 static void enqueue_task_rt(struct rq *rq, struct task_struct *p, int wakeup)
@@ -207,6 +208,8 @@ move_one_task_rt(struct rq *this_rq, int this_cpu, struct rq *busiest,
 
 static void task_tick_rt(struct rq *rq, struct task_struct *p)
 {
+	update_curr_rt(rq);
+
 	/*
 	 * RR tasks need a special form of timeslice management.
 	 * FIFO tasks have no timeslices.

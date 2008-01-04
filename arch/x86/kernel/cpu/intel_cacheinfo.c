@@ -49,6 +49,7 @@ static struct _cache_table cache_table[] __cpuinitdata =
 	{ 0x3c, LVL_2,      256 },	/* 4-way set assoc, sectored cache, 64 byte line size */
 	{ 0x3d, LVL_2,      384 },	/* 6-way set assoc, sectored cache, 64 byte line size */
 	{ 0x3e, LVL_2,      512 },	/* 4-way set assoc, sectored cache, 64 byte line size */
+	{ 0x3f, LVL_2,      256 },	/* 2-way set assoc, 64 byte line size */
 	{ 0x41, LVL_2,      128 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x42, LVL_2,      256 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x43, LVL_2,      512 },	/* 4-way set assoc, 32 byte line size */
@@ -497,7 +498,7 @@ static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu, int index) {}
 static void __cpuinit cache_remove_shared_cpu_map(unsigned int cpu, int index) {}
 #endif
 
-static void free_cache_attributes(unsigned int cpu)
+static void __cpuinit free_cache_attributes(unsigned int cpu)
 {
 	int i;
 

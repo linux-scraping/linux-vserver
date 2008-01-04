@@ -184,9 +184,11 @@ encode_fattr3(struct svc_rqst *rqstp, __be32 *p, struct svc_fh *fhp,
 	*p++ = htonl((u32) stat->mode);
 	*p++ = htonl((u32) stat->nlink);
 	*p++ = htonl((u32) nfsd_ruid(rqstp,
-		TAGINO_UID(DX_TAG(dentry->d_inode), stat->uid, stat->tag)));
+		TAGINO_UID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
+		stat->uid, stat->tag)));
 	*p++ = htonl((u32) nfsd_rgid(rqstp,
-		TAGINO_GID(DX_TAG(dentry->d_inode), stat->gid, stat->tag)));
+		TAGINO_GID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
+		stat->gid, stat->tag)));
 	if (S_ISLNK(stat->mode) && stat->size > NFS3_MAXPATHLEN) {
 		p = xdr_encode_hyper(p, (u64) NFS3_MAXPATHLEN);
 	} else {

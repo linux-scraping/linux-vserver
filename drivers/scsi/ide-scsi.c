@@ -242,14 +242,9 @@ static void idescsi_output_buffers (ide_drive_t *drive, idescsi_pc_t *pc, unsign
 	}
 }
 
-static void hexdump(u8 *x, int len)
+static void ide_scsi_hex_dump(u8 *data, int len)
 {
-	int i;
-
-	printk("[ ");
-	for (i = 0; i < len; i++)
-		printk("%x ", x[i]);
-	printk("]\n");
+	print_hex_dump(KERN_CONT, "", DUMP_PREFIX_NONE, 16, 1, data, len, 0);
 }
 
 static int idescsi_check_condition(ide_drive_t *drive, struct request *failed_command)
@@ -282,7 +277,7 @@ static int idescsi_check_condition(ide_drive_t *drive, struct request *failed_co
 	pc->scsi_cmd = ((idescsi_pc_t *) failed_command->special)->scsi_cmd;
 	if (test_bit(IDESCSI_LOG_CMD, &scsi->log)) {
 		printk ("ide-scsi: %s: queue cmd = ", drive->name);
-		hexdump(pc->c, 6);
+		ide_scsi_hex_dump(pc->c, 6);
 	}
 	rq->rq_disk = scsi->disk;
 	return ide_do_drive_cmd(drive, rq, ide_preempt);
@@ -337,7 +332,7 @@ static int idescsi_end_request (ide_drive_t *drive, int uptodate, int nrsecs)
 		idescsi_pc_t *opc = (idescsi_pc_t *) rq->buffer;
 		if (log) {
 			printk ("ide-scsi: %s: wrap up check %lu, rst = ", drive->name, opc->scsi_cmd->serial_number);
-			hexdump(pc->buffer,16);
+			ide_scsi_hex_dump(pc->buffer, 16);
 		}
 		memcpy((void *) opc->scsi_cmd->sense_buffer, pc->buffer, SCSI_SENSE_BUFFERSIZE);
 		kfree(pc->buffer);
@@ -816,10 +811,10 @@ static int idescsi_queue (struct scsi_cmnd *cmd,
 
 	if (test_bit(IDESCSI_LOG_CMD, &scsi->log)) {
 		printk ("ide-scsi: %s: que %lu, cmd = ", drive->name, cmd->serial_number);
-		hexdump(cmd->cmnd, cmd->cmd_len);
+		ide_scsi_hex_dump(cmd->cmnd, cmd->cmd_len);
 		if (memcmp(pc->c, cmd->cmnd, cmd->cmd_len)) {
 			printk ("ide-scsi: %s: que %lu, tsl = ", drive->name, cmd->serial_number);
-			hexdump(pc->c, 12);
+			ide_scsi_hex_dump(pc->c, 12);
 		}
 	}
 

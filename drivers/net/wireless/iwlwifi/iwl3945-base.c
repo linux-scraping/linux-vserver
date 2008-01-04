@@ -2915,6 +2915,10 @@ static void iwl_set_rate(struct iwl_priv *priv)
 	int i;
 
 	hw = iwl_get_hw_mode(priv, priv->phymode);
+	if (!hw) {
+		IWL_ERROR("Failed to set rate: unable to get hw mode\n");
+		return;
+	}
 
 	priv->active_rate = 0;
 	priv->active_rate_basic = 0;
@@ -4739,8 +4743,10 @@ static void iwl_irq_tasklet(struct iwl_priv *priv)
 		 *   when we loaded driver, and is now set to "enable".
 		 * After we're Alive, RF_KILL gets handled by
 		 *   iwl_rx_card_state_notif() */
-		if (!hw_rf_kill && !test_bit(STATUS_ALIVE, &priv->status))
+		if (!hw_rf_kill && !test_bit(STATUS_ALIVE, &priv->status)) {
+			clear_bit(STATUS_RF_KILL_HW, &priv->status);
 			queue_work(priv->workqueue, &priv->restart);
+		}
 
 		handled |= CSR_INT_BIT_RF_KILL;
 	}
@@ -6167,6 +6173,7 @@ static void iwl_alive_start(struct iwl_priv *priv)
 		mutex_lock(&priv->mutex);
 
 		if (rc) {
+			iwl_rate_control_unregister(priv->hw);
 			IWL_ERROR("Failed to register network "
 				  "device (error %d)\n", rc);
 			return;
@@ -6936,13 +6943,10 @@ static int iwl_mac_add_interface(struct ieee80211_hw *hw,
 	DECLARE_MAC_BUF(mac);
 
 	IWL_DEBUG_MAC80211("enter: id %d, type %d\n", conf->if_id, conf->type);
-	if (conf->mac_addr)
-		IWL_DEBUG_MAC80211("enter: MAC %s\n",
-				   print_mac(mac, conf->mac_addr));
 
 	if (priv->interface_id) {
 		IWL_DEBUG_MAC80211("leave - interface_id != 0\n");
-		return 0;
+		return -EOPNOTSUPP;
 	}
 
 	spin_lock_irqsave(&priv->lock, flags);
@@ -6951,6 +6955,12 @@ static int iwl_mac_add_interface(struct ieee80211_hw *hw,
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	mutex_lock(&priv->mutex);
+
+	if (conf->mac_addr) {
+		IWL_DEBUG_MAC80211("Set: %s\n", print_mac(mac, conf->mac_addr));
+		memcpy(priv->mac_addr, conf->mac_addr, ETH_ALEN);
+	}
+
 	iwl_set_mode(priv, conf->type);
 
 	IWL_DEBUG_MAC80211("leave\n");
@@ -8270,6 +8280,7 @@ static void iwl_cancel_deferred_work(struct iwl_priv *priv)
 {
 	iwl_hw_cancel_deferred_work(priv);
 
+	cancel_delayed_work_sync(&priv->init_alive_start);
 	cancel_delayed_work(&priv->scan_check);
 	cancel_delayed_work(&priv->alive_start);
 	cancel_delayed_work(&priv->post_associate);

@@ -317,6 +317,8 @@ xfs_bulkstat_use_dinode(
 	return 1;
 }
 
+#define XFS_BULKSTAT_UBLEFT(ubleft)	((ubleft) >= statstruct_size)
+
 /*
  * Return stat information in bulk (by-inode) for the filesystem.
  */
@@ -354,7 +356,7 @@ xfs_bulkstat(
 	xfs_inobt_rec_incore_t	*irbp;	/* current irec buffer pointer */
 	xfs_inobt_rec_incore_t	*irbuf;	/* start of irec buffer */
 	xfs_inobt_rec_incore_t	*irbufend; /* end of good irec buffer entries */
-	xfs_ino_t		lastino=0; /* last inode number returned */
+	xfs_ino_t		lastino; /* last inode number returned */
 	int			nbcluster; /* # of blocks in a cluster */
 	int			nicluster; /* # of inodes in a cluster */
 	int			nimask;	/* mask for inode clusters */
@@ -374,6 +376,7 @@ xfs_bulkstat(
 	 * Get the last inode value, see if there's nothing to do.
 	 */
 	ino = (xfs_ino_t)*lastinop;
+	lastino = ino;
 	dip = NULL;
 	agno = XFS_INO_TO_AGNO(mp, ino);
 	agino = XFS_INO_TO_AGINO(mp, ino);
@@ -382,6 +385,9 @@ xfs_bulkstat(
 		*done = 1;
 		*ubcountp = 0;
 		return 0;
+	}
+	if (!ubcountp || *ubcountp <= 0) {
+		return EINVAL;
 	}
 	ubcount = *ubcountp; /* statstruct's */
 	ubleft = ubcount * statstruct_size; /* bytes */
@@ -403,7 +409,8 @@ xfs_bulkstat(
 	 * inode returned; 0 means start of the allocation group.
 	 */
 	rval = 0;
-	while (ubleft >= statstruct_size && agno < mp->m_sb.sb_agcount) {
+	while (XFS_BULKSTAT_UBLEFT(ubleft) && agno < mp->m_sb.sb_agcount) {
+		cond_resched();
 		bp = NULL;
 		down_read(&mp->m_peraglock);
 		error = xfs_ialloc_read_agi(mp, NULL, agno, &agbp);
@@ -500,6 +507,7 @@ xfs_bulkstat(
 					break;
 				error = xfs_inobt_lookup_ge(cur, agino, 0, 0,
 							    &tmp);
+				cond_resched();
 			}
 			/*
 			 * If ran off the end of the ag either with an error,
@@ -543,6 +551,7 @@ xfs_bulkstat(
 			 */
 			agino = gino + XFS_INODES_PER_CHUNK;
 			error = xfs_inobt_increment(cur, 0, &tmp);
+			cond_resched();
 		}
 		/*
 		 * Drop the btree buffers and the agi buffer.
@@ -556,12 +565,12 @@ xfs_bulkstat(
 		 */
 		irbufend = irbp;
 		for (irbp = irbuf;
-		     irbp < irbufend && ubleft >= statstruct_size; irbp++) {
+		     irbp < irbufend && XFS_BULKSTAT_UBLEFT(ubleft); irbp++) {
 			/*
 			 * Now process this chunk of inodes.
 			 */
 			for (agino = irbp->ir_startino, chunkidx = clustidx = 0;
-			     ubleft > 0 &&
+			     XFS_BULKSTAT_UBLEFT(ubleft) &&
 				irbp->ir_freecount < XFS_INODES_PER_CHUNK;
 			     chunkidx++, clustidx++, agino++) {
 				ASSERT(chunkidx < XFS_INODES_PER_CHUNK);
@@ -664,15 +673,13 @@ xfs_bulkstat(
 						ubleft, private_data,
 						bno, &ubused, dip, &fmterror);
 				if (fmterror == BULKSTAT_RV_NOTHING) {
-                                        if (error == EFAULT) {
-                                                ubleft = 0;
-                                                rval = error;
-                                                break;
-                                        }
-					else if (error == ENOMEM)
+					if (error && error != ENOENT &&
+						error != EINVAL) {
 						ubleft = 0;
-					else
-						lastino = ino;
+						rval = error;
+						break;
+					}
+					lastino = ino;
 					continue;
 				}
 				if (fmterror == BULKSTAT_RV_GIVEUP) {
@@ -687,6 +694,8 @@ xfs_bulkstat(
 				ubelem++;
 				lastino = ino;
 			}
+
+			cond_resched();
 		}
 
 		if (bp)
@@ -695,11 +704,12 @@ xfs_bulkstat(
 		/*
 		 * Set up for the next loop iteration.
 		 */
-		if (ubleft > 0) {
+		if (XFS_BULKSTAT_UBLEFT(ubleft)) {
 			if (end_of_ag) {
 				agno++;
 				agino = 0;
-			}
+			} else
+				agino = XFS_INO_TO_AGINO(mp, lastino);
 		} else
 			break;
 	}
@@ -708,6 +718,11 @@ xfs_bulkstat(
 	 */
 	kmem_free(irbuf, irbsize);
 	*ubcountp = ubelem;
+	/*
+	 * Found some inodes, return them now and return the error next time.
+	 */
+	if (ubelem)
+		rval = 0;
 	if (agno >= mp->m_sb.sb_agcount) {
 		/*
 		 * If we ran out of filesystem, mark lastino as off
