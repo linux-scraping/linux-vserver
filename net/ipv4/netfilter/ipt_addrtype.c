@@ -13,6 +13,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/ip.h>
+#include <net/inet_sock.h>
 #include <net/route.h>
 
 #include <linux/netfilter_ipv4/ipt_addrtype.h>
