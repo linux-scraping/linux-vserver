@@ -1056,10 +1056,11 @@ static int nfs_validate_mount_data(void *options,
 {
 	struct nfs_mount_data *data = (struct nfs_mount_data *)options;
 
+	memset(args, 0, sizeof(*args));
+
 	if (data == NULL)
 		goto out_no_data;
 
-	memset(args, 0, sizeof(*args));
 	args->flags		= (NFS_MOUNT_VER3 | NFS_MOUNT_TCP);
 	args->rsize		= NFS_MAX_FILE_IO_SIZE;
 	args->wsize		= NFS_MAX_FILE_IO_SIZE;
@@ -1476,6 +1477,11 @@ static int nfs_xdev_get_sb(struct file_system_type *fs_type, int flags,
 		error = PTR_ERR(mntroot);
 		goto error_splat_super;
 	}
+	if (mntroot->d_inode->i_op != server->nfs_client->rpc_ops->dir_inode_ops) {
+		dput(mntroot);
+		error = -ESTALE;
+		goto error_splat_super;
+	}
 
 	s->s_flags |= MS_ACTIVE;
 	mnt->mnt_sb = s;
@@ -1533,10 +1539,11 @@ static int nfs4_validate_mount_data(void *options,
 	struct nfs4_mount_data *data = (struct nfs4_mount_data *)options;
 	char *c;
 
+	memset(args, 0, sizeof(*args));
+
 	if (data == NULL)
 		goto out_no_data;
 
-	memset(args, 0, sizeof(*args));
 	args->rsize		= NFS_MAX_FILE_IO_SIZE;
 	args->wsize		= NFS_MAX_FILE_IO_SIZE;
 	args->timeo		= 600;

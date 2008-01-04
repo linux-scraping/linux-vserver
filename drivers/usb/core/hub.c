@@ -335,7 +335,7 @@ static void kick_khubd(struct usb_hub *hub)
 	to_usb_interface(hub->intfdev)->pm_usage_cnt = 1;
 
 	spin_lock_irqsave(&hub_event_lock, flags);
-	if (!hub->disconnected & list_empty(&hub->event_list)) {
+	if (!hub->disconnected && list_empty(&hub->event_list)) {
 		list_add_tail(&hub->event_list, &hub_event_list);
 		wake_up(&khubd_wait);
 	}
@@ -522,9 +522,9 @@ static void hub_quiesce(struct usb_hub *hub)
 	/* (blocking) stop khubd and related activity */
 	usb_kill_urb(hub->urb);
 	if (hub->has_indicators)
-		cancel_delayed_work(&hub->leds);
-	if (hub->has_indicators || hub->tt.hub)
-		flush_scheduled_work();
+		cancel_delayed_work_sync(&hub->leds);
+	if (hub->tt.hub)
+		cancel_work_sync(&hub->tt.kevent);
 }
 
 static void hub_activate(struct usb_hub *hub)

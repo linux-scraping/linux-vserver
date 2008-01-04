@@ -257,8 +257,7 @@ void vroot_exit(void)
 		del_gendisk(disks[i]);
 		put_disk(disks[i]);
 	}
-	if (unregister_blkdev(VROOT_MAJOR, "vroot"))
-		printk(KERN_WARNING "vroot: cannot unregister blkdev\n");
+	unregister_blkdev(VROOT_MAJOR, "vroot");
 
 	kfree(disks);
 	kfree(vroot_dev);

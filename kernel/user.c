@@ -162,7 +162,7 @@ static void user_attr_init(struct subsys_attribute *sa, char *name, int mode)
 /* Create "/sys/kernel/uids/<uid>" directory and
  *  "/sys/kernel/uids/<uid>/cpu_share" file for this user.
  */
-static int user_kobject_create(struct user_struct *up)
+static int user_kobject_create(struct user_namespace *ns, struct user_struct *up)
 {
 	struct kset *kset = &up->kset;
 	struct kobject *kobj = &kset->kobj;
@@ -170,7 +170,7 @@ static int user_kobject_create(struct user_struct *up)
 
 	memset(kset, 0, sizeof(struct kset));
 	kobj->parent = &uids_kobject;	/* create under /sys/kernel/uids dir */
-	kobject_set_name(kobj, "%d", up->uid);
+	kobject_set_name(kobj, "%p:%d", ns, up->uid);
 	kset_init(kset);
 	user_attr_init(&up->user_attr, "cpu_share", 0644);
 
@@ -205,7 +205,7 @@ int __init uids_kobject_init(void)
 
 	error = kobject_add(&uids_kobject);
 	if (!error)
-		error = user_kobject_create(&root_user);
+		error = user_kobject_create(&init_user_ns, &root_user);
 
 	return error;
 }
@@ -267,7 +267,8 @@ static inline void free_user(struct user_struct *up, unsigned long flags)
 
 #else	/* CONFIG_FAIR_USER_SCHED && CONFIG_SYSFS */
 
-static inline int user_kobject_create(struct user_struct *up) { return 0; }
+static inline int user_kobject_create(struct user_namespace *ns,
+				      struct user_struct *up) { return 0; }
 static inline void uids_mutex_lock(void) { }
 static inline void uids_mutex_unlock(void) { }
 
@@ -337,8 +338,11 @@ struct user_struct * alloc_uid(struct user_namespace *ns, uid_t uid)
 		struct user_struct *new;
 
 		new = kmem_cache_alloc(uid_cachep, GFP_KERNEL);
-		if (!new)
+		if (!new) {
+			uids_mutex_unlock();
 			return NULL;
+		}
+
 		new->uid = uid;
 		atomic_set(&new->__count, 1);
 		atomic_set(&new->processes, 0);
@@ -355,6 +359,7 @@ struct user_struct * alloc_uid(struct user_namespace *ns, uid_t uid)
 
 		if (alloc_uid_keyring(new, current) < 0) {
 			kmem_cache_free(uid_cachep, new);
+			uids_mutex_unlock();
 			return NULL;
 		}
 
@@ -362,10 +367,11 @@ struct user_struct * alloc_uid(struct user_namespace *ns, uid_t uid)
 			key_put(new->uid_keyring);
 			key_put(new->session_keyring);
 			kmem_cache_free(uid_cachep, new);
+			uids_mutex_unlock();
 			return NULL;
 		}
 
-		if (user_kobject_create(new)) {
+		if (user_kobject_create(ns, new)) {
 			sched_destroy_user(new);
 			key_put(new->uid_keyring);
 			key_put(new->session_keyring);

@@ -546,7 +546,7 @@ int IO_APIC_get_PCI_irq_vector(int bus, int slot, int pin)
 #define default_PCI_trigger(idx)	(1)
 #define default_PCI_polarity(idx)	(1)
 
-static int __init MPBIOS_polarity(int idx)
+static int MPBIOS_polarity(int idx)
 {
 	int bus = mp_irqs[idx].mpc_srcbus;
 	int polarity;
@@ -1281,10 +1281,13 @@ void disable_IO_APIC(void)
 static int __init timer_irq_works(void)
 {
 	unsigned long t1 = jiffies;
+	unsigned long flags;
 
+	local_save_flags(flags);
 	local_irq_enable();
 	/* Let ten ticks pass... */
 	mdelay((10 * 1000) / HZ);
+	local_irq_restore(flags);
 
 	/*
 	 * Expect a few ticks at least, to be sure some possible
@@ -1655,6 +1658,9 @@ static inline void check_timer(void)
 {
 	struct irq_cfg *cfg = irq_cfg + 0;
 	int apic1, pin1, apic2, pin2;
+	unsigned long flags;
+
+	local_irq_save(flags);
 
 	/*
 	 * get/set the timer IRQ vector:
@@ -1696,7 +1702,7 @@ static inline void check_timer(void)
 			}
 			if (disable_timer_pin_1 > 0)
 				clear_IO_APIC_pin(0, pin1);
-			return;
+			goto out;
 		}
 		clear_IO_APIC_pin(apic1, pin1);
 		apic_printk(APIC_QUIET,KERN_ERR "..MP-BIOS bug: 8254 timer not "
@@ -1718,7 +1724,7 @@ static inline void check_timer(void)
 			if (nmi_watchdog == NMI_IO_APIC) {
 				setup_nmi();
 			}
-			return;
+			goto out;
 		}
 		/*
 		 * Cleanup, just in case ...
@@ -1741,7 +1747,7 @@ static inline void check_timer(void)
 
 	if (timer_irq_works()) {
 		apic_printk(APIC_VERBOSE," works.\n");
-		return;
+		goto out;
 	}
 	apic_write(APIC_LVT0, APIC_LVT_MASKED | APIC_DM_FIXED | cfg->vector);
 	apic_printk(APIC_VERBOSE," failed.\n");
@@ -1756,10 +1762,12 @@ static inline void check_timer(void)
 
 	if (timer_irq_works()) {
 		apic_printk(APIC_VERBOSE," works.\n");
-		return;
+		goto out;
 	}
 	apic_printk(APIC_VERBOSE," failed :(.\n");
 	panic("IO-APIC + timer doesn't work! Try using the 'noapic' kernel parameter\n");
+out:
+	local_irq_restore(flags);
 }
 
 static int __init notimercheck(char *s)
@@ -2222,8 +2230,27 @@ int io_apic_set_pci_routing (int ioapic, int pin, int irq, int triggering, int p
 	return 0;
 }
 
-#endif /* CONFIG_ACPI */
 
+int acpi_get_override_irq(int bus_irq, int *trigger, int *polarity)
+{
+	int i;
+
+	if (skip_ioapic_setup)
+		return -1;
+
+	for (i = 0; i < mp_irq_entries; i++)
+		if (mp_irqs[i].mpc_irqtype == mp_INT &&
+		    mp_irqs[i].mpc_srcbusirq == bus_irq)
+			break;
+	if (i >= mp_irq_entries)
+		return -1;
+
+	*trigger = irq_trigger(i);
+	*polarity = irq_polarity(i);
+	return 0;
+}
+
+#endif /* CONFIG_ACPI */
 
 /*
  * This function currently is only a helper for the i386 smp boot process where
@@ -2260,3 +2287,4 @@ void __init setup_ioapic_dest(void)
 	}
 }
 #endif
+
