@@ -226,7 +226,9 @@ typedef struct xfs_icdinode {
 	__uint32_t	di_gid;		/* owner's group id */
 	__uint32_t	di_nlink;	/* number of links to file */
 	__uint16_t	di_projid;	/* owner's project id */
-	__uint8_t	di_pad[8];	/* unused, zeroed space */
+	__uint16_t	di_tag;		/* context tagging */
+	__uint16_t	di_vflags;	/* vserver specific flags */
+	__uint8_t	di_pad[4];	/* unused, zeroed space */
 	__uint16_t	di_flushiter;	/* incremented on flush */
 	xfs_ictimestamp_t di_atime;	/* time last accessed */
 	xfs_ictimestamp_t di_mtime;	/* time last modified */

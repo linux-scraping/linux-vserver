@@ -788,15 +788,12 @@ xfs_setattr(
 		}
 		if (mask & XFS_AT_XFLAGS) {
 			uint	di_flags;
+			uint	di_vflags = 0;
 
 			/* can't set PREALLOC this way, just preserve it */
 			di_flags = (ip->i_d.di_flags & XFS_DIFLAG_PREALLOC);
 			if (vap->va_xflags & XFS_XFLAG_IMMUTABLE)
 				di_flags |= XFS_DIFLAG_IMMUTABLE;
-			if (vap->va_xflags & XFS_XFLAG_IUNLINK)
-				di_flags |= XFS_DIFLAG_IUNLINK;
-			if (vap->va_xflags & XFS_XFLAG_BARRIER)
-				di_flags |= XFS_DIFLAG_BARRIER;
 			if (vap->va_xflags & XFS_XFLAG_APPEND)
 				di_flags |= XFS_DIFLAG_APPEND;
 			if (vap->va_xflags & XFS_XFLAG_SYNC)
@@ -829,6 +826,11 @@ xfs_setattr(
 					di_flags |= XFS_DIFLAG_EXTSIZE;
 			}
 			ip->i_d.di_flags = di_flags;
+			if (vap->va_xflags & XFS_XFLAG_IUNLINK)
+				di_vflags |= XFS_DIVFLAG_IUNLINK;
+			if (vap->va_xflags & XFS_XFLAG_BARRIER)
+				di_vflags |= XFS_DIVFLAG_BARRIER;
+			ip->i_d.di_vflags = di_vflags;
 		}
 		xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
 		timeflags |= XFS_ICHGTIME_CHG;

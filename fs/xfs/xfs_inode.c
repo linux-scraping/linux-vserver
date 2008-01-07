@@ -782,7 +782,8 @@ xfs_dinode_to_disk(
 
 STATIC uint
 _xfs_dic2xflags(
-	__uint16_t		di_flags)
+	__uint16_t		di_flags,
+	__uint16_t		di_vflags)
 {
 	uint			flags = 0;
 
@@ -793,10 +794,6 @@ _xfs_dic2xflags(
 			flags |= XFS_XFLAG_PREALLOC;
 		if (di_flags & XFS_DIFLAG_IMMUTABLE)
 			flags |= XFS_XFLAG_IMMUTABLE;
-		if (di_flags & XFS_DIFLAG_IUNLINK)
-			flags |= XFS_XFLAG_IUNLINK;
-		if (di_flags & XFS_DIFLAG_BARRIER)
-			flags |= XFS_XFLAG_BARRIER;
 		if (di_flags & XFS_DIFLAG_APPEND)
 			flags |= XFS_XFLAG_APPEND;
 		if (di_flags & XFS_DIFLAG_SYNC)
@@ -820,7 +817,10 @@ _xfs_dic2xflags(
 		if (di_flags & XFS_DIFLAG_FILESTREAM)
 			flags |= XFS_XFLAG_FILESTREAM;
 	}
-
+	if (di_vflags & XFS_DIVFLAG_IUNLINK)
+		flags |= XFS_XFLAG_IUNLINK;
+	if (di_vflags & XFS_DIVFLAG_BARRIER)
+		flags |= XFS_XFLAG_BARRIER;
 	return flags;
 }
 
@@ -830,7 +830,7 @@ xfs_ip2xflags(
 {
 	xfs_icdinode_t		*dic = &ip->i_d;
 
-	return _xfs_dic2xflags(dic->di_flags) |
+	return _xfs_dic2xflags(dic->di_flags, dic->di_vflags) |
 				(XFS_CFORK_Q(dic) ? XFS_XFLAG_HASATTR : 0);
 }
 
@@ -838,7 +838,7 @@ uint
 xfs_dic2xflags(
 	xfs_dinode_core_t	*dic)
 {
-	return _xfs_dic2xflags(be16_to_cpu(dic->di_flags)) |
+	return _xfs_dic2xflags(be16_to_cpu(dic->di_flags), be16_to_cpu(dic->di_vflags)) |
 				(XFS_CFORK_Q_DISK(dic) ? XFS_XFLAG_HASATTR : 0);
 }
 

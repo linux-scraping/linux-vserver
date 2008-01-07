@@ -418,7 +418,8 @@ xfs_finish_flags(
 	}
 
 	if (ap->flags2 & XFSMNT2_TAGGED)
-		vfs->vfs_super->s_flags |= MS_TAGGED;
+		mp->m_flags |= MS_TAGGED;
+		/* vfs->vfs_super->s_flags |= */
 	return 0;
 }
 

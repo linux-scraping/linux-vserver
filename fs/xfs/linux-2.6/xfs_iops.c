@@ -669,7 +669,7 @@ xfs_vn_sync_flags(struct inode *inode)
 	memset(&vattr, 0, sizeof vattr);
 
 	vattr.va_mask = XFS_AT_XFLAGS;
-	error = bhv_vop_getattr(vp, &vattr, 0, NULL);
+	error = xfs_getattr(XFS_I(inode), &vattr, 0);
 
 	if (error)
 		return error;
@@ -687,7 +687,7 @@ xfs_vn_sync_flags(struct inode *inode)
 	if (oldflags ^ newflags) {
 		vattr.va_xflags = newflags;
 		vattr.va_mask |= XFS_AT_XFLAGS;
-		error = bhv_vop_setattr(vp, &vattr, flags, NULL);
+		error = xfs_setattr(XFS_I(inode), &vattr, flags, NULL);
 	}
 	vn_revalidate(vp);
 	return error;
