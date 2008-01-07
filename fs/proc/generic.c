@@ -397,13 +397,13 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 		for (de = de->subdir; de ; de = de->next) {
 			if (de->namelen != dentry->d_name.len)
 				continue;
-			if (!vx_hide_check(0, de->vx_flags))
-				continue;
 			if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 				unsigned int ino;
 
 				if (de->shadow_proc)
 					de = de->shadow_proc(current, de);
+				if (!vx_hide_check(0, de->vx_flags))
+					continue;
 				ino = de->low_ino;
 				de_get(de);
 				spin_unlock(&proc_subdir_lock);

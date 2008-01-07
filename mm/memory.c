@@ -2163,8 +2163,8 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	/* Allocate our own private page. */
 	pte_unmap(page_table);
 
-		if (!vx_rss_avail(mm, 1))
-			goto oom;
+	if (!vx_rss_avail(mm, 1))
+		goto oom;
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
 	page = alloc_zeroed_user_highpage_movable(vma, address);
@@ -2472,7 +2472,7 @@ static inline int handle_pte_fault(struct mm_struct *mm,
 {
 	pte_t entry;
 	spinlock_t *ptl;
-	int ret, type = VXPT_UNKNOWN;
+	int ret = 0, type = VXPT_UNKNOWN;
 
 	entry = *pte;
 	if (!pte_present(entry)) {

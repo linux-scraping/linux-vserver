@@ -53,7 +53,9 @@ typedef struct xfs_dinode_core {
 	__be32		di_gid;		/* owner's group id */
 	__be32		di_nlink;	/* number of links to file */
 	__be16		di_projid;	/* owner's project id */
-	__u8		di_pad[8];	/* unused, zeroed space */
+	__be16		di_tag;		/* context tagging */
+	__be16		di_vflags;	/* vserver specific flags */
+	__u8		di_pad[4];	/* unused, zeroed space */
 	__be16		di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */
 	xfs_timestamp_t	di_mtime;	/* time last modified */
@@ -257,6 +259,7 @@ typedef enum xfs_dinode_fmt
 #define XFS_DIFLAG_EXTSZINHERIT_BIT 12	/* inherit inode extent size */
 #define XFS_DIFLAG_NODEFRAG_BIT     13	/* do not reorganize/defragment */
 #define XFS_DIFLAG_FILESTREAM_BIT   14  /* use filestream allocator */
+
 #define XFS_DIFLAG_REALTIME      (1 << XFS_DIFLAG_REALTIME_BIT)
 #define XFS_DIFLAG_PREALLOC      (1 << XFS_DIFLAG_PREALLOC_BIT)
 #define XFS_DIFLAG_NEWRTBM       (1 << XFS_DIFLAG_NEWRTBM_BIT)
@@ -279,5 +282,8 @@ typedef enum xfs_dinode_fmt
 	 XFS_DIFLAG_NOATIME | XFS_DIFLAG_NODUMP | XFS_DIFLAG_RTINHERIT | \
 	 XFS_DIFLAG_PROJINHERIT | XFS_DIFLAG_NOSYMLINKS | XFS_DIFLAG_EXTSIZE | \
 	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_FILESTREAM)
+
+#define	XFS_DIVFLAG_BARRIER	0x01
+#define	XFS_DIVFLAG_IUNLINK	0x02
 
 #endif	/* __XFS_DINODE_H__ */
