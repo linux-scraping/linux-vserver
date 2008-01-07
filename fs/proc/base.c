@@ -2246,6 +2246,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_TASK_IO_ACCOUNTING
 	INF("io",	S_IRUGO, pid_io_accounting),
 #endif
+	INF("nsproxy",	S_IRUGO, pid_nsproxy),
 };
 
 static int proc_tgid_base_readdir(struct file * filp,

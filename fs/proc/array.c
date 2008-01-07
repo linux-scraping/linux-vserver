@@ -318,6 +318,33 @@ static inline char *task_context_switch_counts(struct task_struct *p,
 			    p->nivcsw);
 }
 
+int proc_pid_nsproxy(struct task_struct *task, char *buffer)
+{
+	return sprintf(buffer, "Proxy:\t%p(%c)\n"
+			"Count:\t%u\n"
+			"uts:\t%p(%c)\n"
+			"ipc:\t%p(%c)\n"
+			"mnt:\t%p(%c)\n"
+			"pid:\t%p(%c)\n"
+			"user:\t%p(%c)\n"
+			"net:\t%p(%c)\n",
+			task->nsproxy,
+			(task->nsproxy == init_task.nsproxy ? 'I' : '-'),
+			atomic_read(&task->nsproxy->count),
+			task->nsproxy->uts_ns,
+			(task->nsproxy->uts_ns == init_task.nsproxy->uts_ns ? 'I' : '-'),
+			task->nsproxy->ipc_ns,
+			(task->nsproxy->ipc_ns == init_task.nsproxy->ipc_ns ? 'I' : '-'),
+			task->nsproxy->mnt_ns,
+			(task->nsproxy->mnt_ns == init_task.nsproxy->mnt_ns ? 'I' : '-'),
+			task->nsproxy->pid_ns,
+			(task->nsproxy->pid_ns == init_task.nsproxy->pid_ns ? 'I' : '-'),
+			task->nsproxy->user_ns,
+			(task->nsproxy->user_ns == init_task.nsproxy->user_ns ? 'I' : '-'),
+			task->nsproxy->net_ns,
+			(task->nsproxy->net_ns == init_task.nsproxy->net_ns ? 'I' : '-'));
+}
+
 int proc_pid_status(struct task_struct *task, char *buffer)
 {
 	char *orig = buffer;
@@ -453,7 +480,7 @@ static int do_task_stat(struct task_struct *task, char *buffer, int whole)
 	sigset_t sigign, sigcatch;
 	char state;
 	int res;
-	pid_t pid = 0, ppid = 0, pgid = -1, sid = -1;
+	pid_t ppid = 0, pgid = -1, sid = -1;
 	int num_threads = 0;
 	struct mm_struct *mm;
 	unsigned long long start_time;

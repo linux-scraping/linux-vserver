@@ -1148,16 +1148,13 @@ xfs_merge_ioc_xflags(
 
 STATIC unsigned int
 xfs_di2lxflags(
-	__uint16_t	di_flags)
+	__uint16_t	di_flags,
+	__uint16_t	di_vflags)
 {
 	unsigned int	flags = 0;
 
 	if (di_flags & XFS_DIFLAG_IMMUTABLE)
 		flags |= FS_IMMUTABLE_FL;
-	if (di_flags & XFS_DIFLAG_IUNLINK)
-		flags |= FS_IUNLINK_FL;
-	if (di_flags & XFS_DIFLAG_BARRIER)
-		flags |= FS_BARRIER_FL;
 	if (di_flags & XFS_DIFLAG_APPEND)
 		flags |= FS_APPEND_FL;
 	if (di_flags & XFS_DIFLAG_SYNC)
@@ -1166,6 +1163,11 @@ xfs_di2lxflags(
 		flags |= FS_NOATIME_FL;
 	if (di_flags & XFS_DIFLAG_NODUMP)
 		flags |= FS_NODUMP_FL;
+
+	if (di_vflags & XFS_DIVFLAG_IUNLINK)
+		flags |= FS_IUNLINK_FL;
+	if (di_vflags & XFS_DIVFLAG_BARRIER)
+		flags |= FS_BARRIER_FL;
 	return flags;
 }
 
@@ -1247,7 +1249,7 @@ xfs_ioc_xattr(
 	}
 
 	case XFS_IOC_GETXFLAGS: {
-		flags = xfs_di2lxflags(ip->i_d.di_flags);
+		flags = xfs_di2lxflags(ip->i_d.di_flags, ip->i_d.di_vflags);
 		if (copy_to_user(arg, &flags, sizeof(flags)))
 			error = -EFAULT;
 		break;

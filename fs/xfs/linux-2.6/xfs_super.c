@@ -183,18 +183,11 @@ xfs_revalidate_inode(
 	inode->i_mtime.tv_nsec	= ip->i_d.di_mtime.t_nsec;
 	inode->i_ctime.tv_sec	= ip->i_d.di_ctime.t_sec;
 	inode->i_ctime.tv_nsec	= ip->i_d.di_ctime.t_nsec;
+
 	if (ip->i_d.di_flags & XFS_DIFLAG_IMMUTABLE)
 		inode->i_flags |= S_IMMUTABLE;
 	else
 		inode->i_flags &= ~S_IMMUTABLE;
-	if (ip->i_d.di_flags & XFS_DIFLAG_IUNLINK)
-		inode->i_flags |= S_IUNLINK;
-	else
-		inode->i_flags &= ~S_IUNLINK;
-	if (ip->i_d.di_flags & XFS_DIFLAG_BARRIER)
-		inode->i_flags |= S_BARRIER;
-	else
-		inode->i_flags &= ~S_BARRIER;
 	if (ip->i_d.di_flags & XFS_DIFLAG_APPEND)
 		inode->i_flags |= S_APPEND;
 	else
@@ -207,6 +200,15 @@ xfs_revalidate_inode(
 		inode->i_flags |= S_NOATIME;
 	else
 		inode->i_flags &= ~S_NOATIME;
+
+	if (ip->i_d.di_vflags & XFS_DIVFLAG_IUNLINK)
+		inode->i_flags |= S_IUNLINK;
+	else
+		inode->i_flags &= ~S_IUNLINK;
+	if (ip->i_d.di_vflags & XFS_DIVFLAG_BARRIER)
+		inode->i_flags |= S_BARRIER;
+	else
+		inode->i_flags &= ~S_BARRIER;
 	xfs_iflags_clear(ip, XFS_IMODIFIED);
 }
 
