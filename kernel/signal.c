@@ -1168,7 +1168,9 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 
 		read_lock(&tasklist_lock);
 		for_each_process(p) {
-			if (p->pid > 1 && !same_thread_group(p, current)) {
+			if (vx_check(vx_task_xid(p), VS_ADMIN|VS_IDENT) &&
+				p->pid > 1 && !same_thread_group(p, current) &&
+				!vx_current_initpid(p->pid)) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;
 				if (err != -EPERM)
