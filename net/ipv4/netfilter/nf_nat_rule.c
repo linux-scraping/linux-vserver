@@ -16,7 +16,6 @@
 #include <linux/skbuff.h>
 #include <linux/proc_fs.h>
 #include <net/checksum.h>
-#include <net/inet_sock.h>
 #include <net/route.h>
 #include <linux/bitops.h>
 
