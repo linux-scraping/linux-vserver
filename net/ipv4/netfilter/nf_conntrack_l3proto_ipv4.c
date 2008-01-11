@@ -13,7 +13,6 @@
 #include <linux/skbuff.h>
 #include <linux/icmp.h>
 #include <linux/sysctl.h>
-#include <net/inet_sock.h>
 #include <net/route.h>
 #include <net/ip.h>
 
@@ -419,6 +418,9 @@ struct nf_conntrack_l3proto nf_conntrack_l3proto_ipv4 __read_mostly = {
 #endif
 	.me		 = THIS_MODULE,
 };
+
+module_param_call(hashsize, nf_conntrack_set_hashsize, param_get_uint,
+		  &nf_conntrack_htable_size, 0600);
 
 MODULE_ALIAS("nf_conntrack-" __stringify(AF_INET));
 MODULE_ALIAS("ip_conntrack");

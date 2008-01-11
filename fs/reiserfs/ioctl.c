@@ -78,6 +78,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 					return result;
 			}
 
+			oldflags = REISERFS_I(inode)->i_attrs;
 			flags = flags & REISERFS_FL_USER_MODIFIABLE;
 			flags |= oldflags & ~REISERFS_FL_USER_MODIFIABLE;
 			sd_attrs_to_i_attrs(flags, inode);
