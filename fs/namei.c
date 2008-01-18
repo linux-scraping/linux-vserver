@@ -1595,11 +1595,11 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISLNK(inode->i_mode))
 		return -ELOOP;
 	
-	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
+	if (S_ISDIR(inode->i_mode) && (acc_mode & MAY_WRITE))
 		return -EISDIR;
 
 #ifdef	CONFIG_VSERVER_COWBL
-	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
+	if (IS_COW(inode) && (acc_mode & MAY_WRITE)) {
 		if (IS_COW_LINK(inode))
 			return -EMLINK;
 		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
@@ -1623,7 +1623,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 
 		flag &= ~O_TRUNC;
 	} else if ((IS_RDONLY(inode) || MNT_IS_RDONLY(nd->mnt))
-		&& (flag & FMODE_WRITE))
+		&& (acc_mode & MAY_WRITE))
 		return -EROFS;
 	/*
 	 * An append-only file must be opened in append mode for writing.

@@ -994,6 +994,9 @@ tcp_sacktag_write_queue(struct sock *sk, struct sk_buff *ack_skb, u32 prior_snd_
 	if (before(TCP_SKB_CB(ack_skb)->ack_seq, prior_snd_una - tp->max_window))
 		return 0;
 
+	if (!tp->packets_out)
+		goto out;
+
 	/* SACK fastpath:
 	 * if the only SACK change is the increase of the end_seq of
 	 * the first block then only apply that SACK block
@@ -1261,6 +1264,8 @@ tcp_sacktag_write_queue(struct sock *sk, struct sk_buff *ack_skb, u32 prior_snd_
 	if ((reord < tp->fackets_out) && icsk->icsk_ca_state != TCP_CA_Loss &&
 	    (!tp->frto_highmark || after(tp->snd_una, tp->frto_highmark)))
 		tcp_update_reordering(sk, ((tp->fackets_out + 1) - reord), 0);
+
+out:
 
 #if FASTRETRANS_DEBUG > 0
 	BUG_TRAP((int)tp->sacked_out >= 0);
@@ -2403,6 +2408,9 @@ static int tcp_tso_acked(struct sock *sk, struct sk_buff *skb,
 			__u32 dval = min(tp->fackets_out, packets_acked);
 			tp->fackets_out -= dval;
 		}
+		/* hint's skb might be NULL but we don't need to care */
+		tp->fastpath_cnt_hint -= min_t(u32, packets_acked,
+					       tp->fastpath_cnt_hint);
 		tp->packets_out -= packets_acked;
 
 		BUG_ON(tcp_skb_pcount(skb) == 0);
