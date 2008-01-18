@@ -4,7 +4,8 @@
 
 config AF_RXRPC
 	tristate "RxRPC session sockets"
-	depends on INET && EXPERIMENTAL
+	depends on INET && EXPERIMENTAL && !VSERVER_SECURITY
+	select CRYPTO
 	select KEYS
 	help
 	  Say Y or M here to include support for RxRPC session sockets (just
