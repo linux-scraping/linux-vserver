@@ -1136,7 +1136,8 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 		read_lock(&tasklist_lock);
 		for_each_process(p) {
 			if (vx_check(vx_task_xid(p), VS_ADMIN_P|VS_IDENT) &&
-				p->pid > 1 && p->tgid != current->tgid) {
+				p->pid > 1 && p->tgid != current->tgid &&
+				!vx_current_initpid(p->pid)) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;
 				if (err != -EPERM)
@@ -1146,9 +1147,9 @@ static int kill_something_info(int sig, struct siginfo *info, int pid)
 		read_unlock(&tasklist_lock);
 		ret = count ? retval : -ESRCH;
 	} else if (pid < 0) {
-		ret = kill_pgrp_info(sig, info, find_pid(-pid));
+		ret = kill_pgrp_info(sig, info, find_pid(vx_rmap_pid(-pid)));
 	} else {
-		ret = kill_pid_info(sig, info, find_pid(pid));
+		ret = kill_pid_info(sig, info, find_pid(vx_rmap_pid(pid)));
 	}
 	rcu_read_unlock();
 	return ret;

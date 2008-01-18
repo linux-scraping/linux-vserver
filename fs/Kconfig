@@ -2026,7 +2026,7 @@ config CODA_FS_OLD_API
 
 config AFS_FS
 	tristate "Andrew File System support (AFS) (EXPERIMENTAL)"
-	depends on INET && EXPERIMENTAL
+	depends on INET && EXPERIMENTAL && !VSERVER_SECURITY
 	select AF_RXRPC
 	help
 	  If you say Y here, you will get an experimental Andrew File System
