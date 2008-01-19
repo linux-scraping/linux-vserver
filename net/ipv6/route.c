@@ -2182,7 +2182,7 @@ static int rt6_fill_node(struct sk_buff *skb, struct rt6_info *rt,
 		NLA_PUT_U32(skb, RTA_IIF, iif);
 	else if (dst) {
 		struct in6_addr saddr_buf;
-		if (ipv6_get_saddr(&rt->u.dst, dst, &saddr_buf, skb->sk->sk_nx_info) == 0)
+		if (ipv6_get_saddr(&rt->u.dst, dst, &saddr_buf, (skb->sk ? skb->sk->sk_nx_info : NULL)) == 0)
 			NLA_PUT(skb, RTA_PREFSRC, 16, &saddr_buf);
 	}
 
