@@ -115,8 +115,6 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
 
-	new->vx_nsproxy = copy_nsproxy(current->nsproxy);
-
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
 	vxh_alloc_vx_info(new);

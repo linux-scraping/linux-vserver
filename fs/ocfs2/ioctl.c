@@ -39,6 +39,7 @@ static int ocfs2_get_inode_attr(struct inode *inode, unsigned *flags)
 	return status;
 }
 
+/* Called with inode->i_mutex locked */
 int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 				unsigned mask)
 {
@@ -48,8 +49,6 @@ int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 	struct buffer_head *bh = NULL;
 	unsigned oldflags;
 	int status;
-
-	mutex_lock(&inode->i_mutex);
 
 	status = ocfs2_meta_lock(inode, &bh, 1);
 	if (status < 0) {
@@ -101,13 +100,21 @@ int ocfs2_set_inode_attr(struct inode *inode, unsigned flags,
 bail_unlock:
 	ocfs2_meta_unlock(inode, 1);
 bail:
-	mutex_unlock(&inode->i_mutex);
-
 	if (bh)
 		brelse(bh);
 
 	mlog_exit(status);
 	return status;
+}
+
+static inline int ocfs2_set_inode_attr_lock(struct inode *inode,
+	unsigned flags, unsigned mask)
+{
+	int ret;
+	mutex_lock(&inode->i_mutex);
+	ret = ocfs2_set_inode_attr(inode, flags, mask);
+	mutex_unlock(&inode->i_mutex);
+	return ret;
 }
 
 int ocfs2_ioctl(struct inode * inode, struct file * filp,
@@ -128,7 +135,7 @@ int ocfs2_ioctl(struct inode * inode, struct file * filp,
 		if (get_user(flags, (int __user *) arg))
 			return -EFAULT;
 
-		return ocfs2_set_inode_attr(inode, flags,
+		return ocfs2_set_inode_attr_lock(inode, flags,
 			OCFS2_FL_MODIFIABLE);
 	default:
 		return -ENOTTY;
