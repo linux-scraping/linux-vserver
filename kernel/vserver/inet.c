@@ -212,7 +212,8 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 			fl->fl4_dst = nxi->v4_lback.s_addr;
 		if (LOOPBACK(fl->fl4_src))
 			fl->fl4_src = nxi->v4_lback.s_addr;
-	} else if (LOOPBACK(fl->fl4_dst))
+	} else if (LOOPBACK(fl->fl4_dst) &&
+		!nx_info_flags(nxi, NXF_LBACK_ALLOW, 0))
 		return -EPERM;
 
 	return 0;
