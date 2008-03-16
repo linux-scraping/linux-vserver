@@ -44,6 +44,8 @@ static inline uint64_t __nxf_init_set(void) {
 
 /* network caps */
 
+#define NXC_TUN_CREATE		0x00000001
+
 #define NXC_RAW_ICMP		0x00000100
 
 
