@@ -353,7 +353,7 @@ static inline int __mapping_mode(dev_t device, dev_t target,
 	else if (target)
 		*mode = target_mode & S_IFMT;
 	else
-		*mode = 0;
+		return -EINVAL;
 
 	/* if both given, device and target mode have to match */
 	if (device && target &&
