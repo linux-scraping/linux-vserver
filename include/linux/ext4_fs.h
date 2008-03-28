@@ -183,16 +183,8 @@ struct ext4_group_desc
 #define EXT4_IUNLINK_FL			0x08000000 /* Immutable unlink */
 #define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define EXT4_FL_USER_VISIBLE		0x080BDFFF /* User visible flags */
-#define EXT4_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
-#else
 #define EXT4_FL_USER_VISIBLE		0x000BDFFF /* User visible flags */
 #define EXT4_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-#define EXT4_IOC_SETTAG			FIOC_SETTAGJ
-#endif
 
 /*
  * Inode dynamic state flags

@@ -6,14 +6,17 @@
 
 #define MAX_N_CONTEXT	65535	/* Arbitrary limit */
 
-#define NX_DYNAMIC_ID	((uint32_t)-1)		/* id for dynamic context */
-
-#define NB_IPV4ROOT	16
-
 
 /* network flags */
 
 #define NXF_INFO_PRIVATE	0x00000008
+
+#define NXF_SINGLE_IP		0x00000100
+#define NXF_LBACK_REMAP		0x00000200
+#define NXF_LBACK_ALLOW		0x00000400
+
+#define NXF_HIDE_NETIF		0x02000000
+#define NXF_HIDE_LBACK		0x04000000
 
 #define NXF_STATE_SETUP		(1ULL << 32)
 #define NXF_STATE_ADMIN		(1ULL << 34)
@@ -23,26 +26,76 @@
 
 #define NXF_ONE_TIME		(0x0005ULL << 32)
 
-#define NXF_INIT_SET		(NXF_STATE_ADMIN)
+
+#define	NXF_INIT_SET		(__nxf_init_set())
+
+static inline uint64_t __nxf_init_set(void) {
+	return	  NXF_STATE_ADMIN
+#ifdef	CONFIG_VSERVER_AUTO_LBACK
+		| NXF_LBACK_REMAP
+		| NXF_HIDE_LBACK
+#endif
+#ifdef	CONFIG_VSERVER_AUTO_SINGLE
+		| NXF_SINGLE_IP
+#endif
+		| NXF_HIDE_NETIF;
+}
+
+
+/* network caps */
+
+#define NXC_TUN_CREATE		0x00000001
+
+#define NXC_RAW_ICMP		0x00000100
 
 
 /* address types */
 
-#define NXA_TYPE_IPV4		1
-#define NXA_TYPE_IPV6		2
+#define NXA_TYPE_IPV4		0x0001
+#define NXA_TYPE_IPV6		0x0002
 
-#define NXA_MOD_BCAST		(1 << 8)
+#define NXA_TYPE_NONE		0x0000
+#define NXA_TYPE_ANY		0x00FF
 
-#define NXA_TYPE_ANY		((uint16_t)-1)
+#define NXA_TYPE_ADDR		0x0010
+#define NXA_TYPE_MASK		0x0020
+#define NXA_TYPE_RANGE		0x0040
 
+#define NXA_MASK_ALL		(NXA_TYPE_ADDR | NXA_TYPE_MASK | NXA_TYPE_RANGE)
+
+#define NXA_MOD_BCAST		0x0100
+#define NXA_MOD_LBACK		0x0200
+
+#define NXA_LOOPBACK		0x1000
+
+#define NXA_MASK_BIND		(NXA_MASK_ALL | NXA_MOD_BCAST | NXA_MOD_LBACK)
+#define NXA_MASK_SHOW		(NXA_MASK_ALL | NXA_LOOPBACK)
 
 #ifdef	__KERNEL__
 
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/rcupdate.h>
+#include <linux/in.h>
+#include <linux/in6.h>
 #include <asm/atomic.h>
 
+struct nx_addr_v4 {
+	struct nx_addr_v4 *next;
+	struct in_addr ip[2];
+	struct in_addr mask;
+	uint16_t type;
+	uint16_t flags;
+};
+
+struct nx_addr_v6 {
+	struct nx_addr_v6 *next;
+	struct in6_addr ip;
+	struct in6_addr mask;
+	uint32_t prefix;
+	uint16_t type;
+	uint16_t flags;
+};
 
 struct nx_info {
 	struct hlist_node nx_hlist;	/* linked list of nxinfos */
@@ -54,16 +107,12 @@ struct nx_info {
 	uint64_t nx_flags;		/* network flag word */
 	uint64_t nx_ncaps;		/* network capabilities */
 
-	int nbipv4;
-	__u32 ipv4[NB_IPV4ROOT];	/* Process can only bind to these IPs */
-					/* The first one is used to connect */
-					/* and for bind any service */
-					/* The other must be used explicity */
-	__u32 mask[NB_IPV4ROOT];	/* Netmask for each ipv4 */
-					/* Used to select the proper source */
-					/* address for sockets */
-	__u32 v4_bcast;			/* Broadcast address to receive UDP  */
-
+	struct in_addr v4_lback;	/* Loopback address */
+	struct in_addr v4_bcast;	/* Broadcast address */
+	struct nx_addr_v4 v4;		/* First/Single ipv4 address */
+#ifdef	CONFIG_IPV6
+	struct nx_addr_v6 v6;		/* First/Single ipv6 address */
+#endif
 	char nx_name[65];		/* network context name */
 };
 
@@ -74,26 +123,6 @@ struct nx_info {
 #define NXS_SHUTDOWN    0x0100
 #define NXS_RELEASED    0x8000
 
-/* check conditions */
-
-#define NX_ADMIN	0x0001
-#define NX_WATCH	0x0002
-#define NX_BLEND	0x0004
-#define NX_HOSTID	0x0008
-
-#define NX_IDENT	0x0010
-#define NX_EQUIV	0x0020
-#define NX_PARENT	0x0040
-#define NX_CHILD	0x0080
-
-#define NX_ARG_MASK	0x00F0
-
-#define NX_DYNAMIC	0x0100
-#define NX_STATIC	0x0200
-
-#define NX_ATR_MASK	0x0F00
-
-
 extern struct nx_info *lookup_nx_info(int);
 
 extern int get_nid_list(int, unsigned int *, int);
@@ -103,40 +132,15 @@ extern int nx_migrate_task(struct task_struct *, struct nx_info *);
 
 extern long vs_net_change(struct nx_info *, unsigned int);
 
-struct in_ifaddr;
-struct net_device;
-
-#ifdef CONFIG_INET
-int ifa_in_nx_info(struct in_ifaddr *, struct nx_info *);
-int dev_in_nx_info(struct net_device *, struct nx_info *);
-
-#else /* CONFIG_INET */
-static inline
-int ifa_in_nx_info(struct in_ifaddr *a, struct nx_info *n)
-{
-	return 1;
-}
-
-static inline
-int dev_in_nx_info(struct net_device *d, struct nx_info *n)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
-
 struct sock;
 
-#ifdef CONFIG_INET
-int nx_addr_conflict(struct nx_info *, uint32_t, const struct sock *);
-#else /* CONFIG_INET */
-static inline
-int nx_addr_conflict(struct nx_info *n, uint32_t a, const struct sock *s)
-{
-	return 1;
-}
-#endif /* CONFIG_INET */
+
+#define NX_IPV4(n)	((n)->v4.type != NXA_TYPE_NONE)
+#ifdef  CONFIG_IPV6
+#define NX_IPV6(n)	((n)->v6.type != NXA_TYPE_NONE)
+#else
+#define NX_IPV6(n)	(0)
+#endif
 
 #endif	/* __KERNEL__ */
-#else	/* _VX_NETWORK_H */
-#warning duplicate inclusion
 #endif	/* _VX_NETWORK_H */

@@ -312,7 +312,8 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if ((protocol == IPPROTO_ICMP) && vx_ccaps(VXC_RAW_ICMP))
+	if ((protocol == IPPROTO_ICMP) &&
+		nx_capable(answer->capability, NXC_RAW_ICMP))
 		goto override;
 	if (answer->capability > 0 && !capable(answer->capability))
 		goto out_rcu_unlock;
@@ -430,13 +431,10 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sockaddr_in *addr = (struct sockaddr_in *)uaddr;
 	struct sock *sk = sock->sk;
 	struct inet_sock *inet = inet_sk(sk);
+	struct nx_v4_sock_addr nsa;
 	unsigned short snum;
 	int chk_addr_ret;
 	int err;
-	__u32 s_addr;	/* Address used for validation */
-	__u32 s_addr1;	/* Address used for socket */
-	__u32 s_addr2;	/* Broadcast address for the socket */
-	struct nx_info *nxi = sk->sk_nx_info;
 
 	/* If the socket has its own bind function then use it. (RAW) */
 	if (sk->sk_prot->bind) {
@@ -447,40 +445,11 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (addr_len < sizeof(struct sockaddr_in))
 		goto out;
 
-	s_addr = addr->sin_addr.s_addr;
-	s_addr1 = s_addr;
-	s_addr2 = 0xffffffffl;
+	err = v4_map_sock_addr(inet, addr, &nsa);
+	if (err)
+		goto out;
 
-	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p)* %p,%p;%lx " NIPQUAD_FMT,
-		sk, sk->sk_nx_info, sk->sk_socket,
-		(sk->sk_socket?sk->sk_socket->flags:0),
-		NIPQUAD(s_addr));
-	if (nxi) {
-		__u32 v4_bcast = nxi->v4_bcast;
-		__u32 ipv4root = nxi->ipv4[0];
-		int nbipv4 = nxi->nbipv4;
-
-		if (s_addr == 0) {
-			/* bind to any for 1-n */
-			s_addr = ipv4root;
-			s_addr1 = (nbipv4 > 1) ? 0 : s_addr;
-			s_addr2 = v4_bcast;
-		} else if (s_addr == IPI_LOOPBACK) {
-			/* rewrite localhost to ipv4root */
-			s_addr = ipv4root;
-			s_addr1 = ipv4root;
-		} else if (s_addr != v4_bcast) {
-			/* normal address bind */
-			if (!addr_in_nx_info(nxi, s_addr))
-				return -EADDRNOTAVAIL;
-		}
-	}
-	chk_addr_ret = inet_addr_type(s_addr);
-
-	vxdprintk(VXD_CBIT(net, 3),
-		"inet_bind(%p) " NIPQUAD_FMT ", " NIPQUAD_FMT ", " NIPQUAD_FMT,
-		sk, NIPQUAD(s_addr), NIPQUAD(s_addr1), NIPQUAD(s_addr2));
+	chk_addr_ret = inet_addr_type(nsa.saddr);
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
@@ -492,7 +461,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	err = -EADDRNOTAVAIL;
 	if (!sysctl_ip_nonlocal_bind &&
 	    !inet->freebind &&
-	    s_addr != INADDR_ANY &&
+	    nsa.saddr != INADDR_ANY &&
 	    chk_addr_ret != RTN_LOCAL &&
 	    chk_addr_ret != RTN_MULTICAST &&
 	    chk_addr_ret != RTN_BROADCAST)
@@ -517,8 +486,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (sk->sk_state != TCP_CLOSE || inet->num)
 		goto out_release_sock;
 
-	inet->rcv_saddr = inet->saddr = s_addr1;
-	inet->rcv_saddr2 = s_addr2;
+	v4_set_sock_addr(inet, &nsa);
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->saddr = 0;  /* Use device */
 
@@ -711,11 +679,13 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		     peer == 1))
 			return -ENOTCONN;
 		sin->sin_port = inet->dport;
-		sin->sin_addr.s_addr = inet->daddr;
+		sin->sin_addr.s_addr =
+			nx_map_sock_lback(sk->sk_nx_info, inet->daddr);
 	} else {
 		__be32 addr = inet->rcv_saddr;
 		if (!addr)
 			addr = inet->saddr;
+		addr = nx_map_sock_lback(sk->sk_nx_info, addr);
 		sin->sin_port = inet->sport;
 		sin->sin_addr.s_addr = addr;
 	}

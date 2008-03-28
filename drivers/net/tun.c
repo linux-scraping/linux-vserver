@@ -62,6 +62,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_tun.h>
 #include <linux/crc32.h>
+#include <linux/vs_network.h>
 #include <net/net_namespace.h>
 
 #include <asm/system.h>
@@ -440,6 +441,7 @@ static void tun_setup(struct net_device *dev)
 
 	tun->owner = -1;
 	tun->group = -1;
+	tun->nid = current->nid;
 
 	dev->open = tun_net_open;
 	dev->hard_start_xmit = tun_net_xmit;
@@ -469,6 +471,9 @@ static int tun_set_iff(struct file *file, struct ifreq *ifr)
 
 	tun = tun_get_by_name(ifr->ifr_name);
 	if (tun) {
+		if (!nx_check(tun->nid, VS_IDENT | VS_HOSTID | VS_ADMIN_P))
+			return -EPERM;
+
 		if (tun->attached)
 			return -EBUSY;
 
@@ -477,7 +482,7 @@ static int tun_set_iff(struct file *file, struct ifreq *ifr)
 		      current->euid != tun->owner) ||
 		     (tun->group != -1 &&
 		      current->egid != tun->group)) &&
-		     !capable(CAP_NET_ADMIN))
+		     !cap_raised(current->cap_effective, CAP_NET_ADMIN))
 			return -EPERM;
 	}
 	else if (__dev_get_by_name(&init_net, ifr->ifr_name))
@@ -488,7 +493,7 @@ static int tun_set_iff(struct file *file, struct ifreq *ifr)
 
 		err = -EINVAL;
 
-		if (!capable(CAP_NET_ADMIN))
+		if (!nx_capable(CAP_NET_ADMIN, NXC_TUN_CREATE))
 			return -EPERM;
 
 		/* Set dev type */
@@ -625,6 +630,16 @@ static int tun_chr_ioctl(struct inode *inode, struct file *file,
 		tun->group= (gid_t) arg;
 
 		DBG(KERN_INFO "%s: group set to %d\n", tun->dev->name, tun->group);
+		break;
+
+	case TUNSETNID:
+		if (!capable(CAP_CONTEXT))
+			return -EPERM;
+
+		/* Set nid owner of the device */
+		tun->nid = (nid_t) arg;
+
+		DBG(KERN_INFO "%s: nid owner set to %u\n", tun->dev->name, tun->nid);
 		break;
 
 	case TUNSETLINK:

@@ -34,7 +34,6 @@
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/init.h>
-#include <linux/vs_context.h>
 
 #include <net/net_namespace.h>
 #include <net/ip.h>
@@ -435,16 +434,43 @@ static int fn_hash_insert(struct fib_table *tb, struct fib_config *cfg)
 
 	if (fa && fa->fa_tos == tos &&
 	    fa->fa_info->fib_priority == fi->fib_priority) {
-		struct fib_alias *fa_orig;
+		struct fib_alias *fa_first, *fa_match;
 
 		err = -EEXIST;
 		if (cfg->fc_nlflags & NLM_F_EXCL)
 			goto out;
 
+		/* We have 2 goals:
+		 * 1. Find exact match for type, scope, fib_info to avoid
+		 * duplicate routes
+		 * 2. Find next 'fa' (or head), NLM_F_APPEND inserts before it
+		 */
+		fa_match = NULL;
+		fa_first = fa;
+		fa = list_entry(fa->fa_list.prev, struct fib_alias, fa_list);
+		list_for_each_entry_continue(fa, &f->fn_alias, fa_list) {
+			if (fa->fa_tos != tos)
+				break;
+			if (fa->fa_info->fib_priority != fi->fib_priority)
+				break;
+			if (fa->fa_type == cfg->fc_type &&
+			    fa->fa_scope == cfg->fc_scope &&
+			    fa->fa_info == fi) {
+				fa_match = fa;
+				break;
+			}
+		}
+
 		if (cfg->fc_nlflags & NLM_F_REPLACE) {
 			struct fib_info *fi_drop;
 			u8 state;
 
+			fa = fa_first;
+			if (fa_match) {
+				if (fa == fa_match)
+					err = 0;
+				goto out;
+			}
 			write_lock_bh(&fib_hash_lock);
 			fi_drop = fa->fa_info;
 			fa->fa_info = fi;
@@ -467,20 +493,11 @@ static int fn_hash_insert(struct fib_table *tb, struct fib_config *cfg)
 		 * uses the same scope, type, and nexthop
 		 * information.
 		 */
-		fa_orig = fa;
-		fa = list_entry(fa->fa_list.prev, struct fib_alias, fa_list);
-		list_for_each_entry_continue(fa, &f->fn_alias, fa_list) {
-			if (fa->fa_tos != tos)
-				break;
-			if (fa->fa_info->fib_priority != fi->fib_priority)
-				break;
-			if (fa->fa_type == cfg->fc_type &&
-			    fa->fa_scope == cfg->fc_scope &&
-			    fa->fa_info == fi)
-				goto out;
-		}
+		if (fa_match)
+			goto out;
+
 		if (!(cfg->fc_nlflags & NLM_F_APPEND))
-			fa = fa_orig;
+			fa = fa_first;
 	}
 
 	err = -ENOENT;
@@ -719,19 +736,18 @@ fn_hash_dump_zone(struct sk_buff *skb, struct netlink_callback *cb,
 {
 	int h, s_h;
 
+	if (fz->fz_hash == NULL)
+		return skb->len;
 	s_h = cb->args[3];
-	for (h=0; h < fz->fz_divisor; h++) {
-		if (h < s_h) continue;
-		if (h > s_h)
-			memset(&cb->args[4], 0,
-			       sizeof(cb->args) - 4*sizeof(cb->args[0]));
-		if (fz->fz_hash == NULL ||
-		    hlist_empty(&fz->fz_hash[h]))
+	for (h = s_h; h < fz->fz_divisor; h++) {
+		if (hlist_empty(&fz->fz_hash[h]))
 			continue;
-		if (fn_hash_dump_bucket(skb, cb, tb, fz, &fz->fz_hash[h])<0) {
+		if (fn_hash_dump_bucket(skb, cb, tb, fz, &fz->fz_hash[h]) < 0) {
 			cb->args[3] = h;
 			return -1;
 		}
+		memset(&cb->args[4], 0,
+		       sizeof(cb->args) - 4*sizeof(cb->args[0]));
 	}
 	cb->args[3] = h;
 	return skb->len;
@@ -747,14 +763,13 @@ static int fn_hash_dump(struct fib_table *tb, struct sk_buff *skb, struct netlin
 	read_lock(&fib_hash_lock);
 	for (fz = table->fn_zone_list, m=0; fz; fz = fz->fz_next, m++) {
 		if (m < s_m) continue;
-		if (m > s_m)
-			memset(&cb->args[3], 0,
-			       sizeof(cb->args) - 3*sizeof(cb->args[0]));
 		if (fn_hash_dump_zone(skb, cb, tb, fz) < 0) {
 			cb->args[2] = m;
 			read_unlock(&fib_hash_lock);
 			return -1;
 		}
+		memset(&cb->args[3], 0,
+		       sizeof(cb->args) - 3*sizeof(cb->args[0]));
 	}
 	read_unlock(&fib_hash_lock);
 	cb->args[2] = m;
@@ -984,8 +999,6 @@ static unsigned fib_flag_trans(int type, __be32 mask, struct fib_info *fi)
 	return flags;
 }
 
-extern int dev_in_nx_info(struct net_device *, struct nx_info *);
-
 /*
  *	This outputs /proc/net/route.
  *
@@ -1016,8 +1029,7 @@ static int fib_seq_show(struct seq_file *seq, void *v)
 	prefix	= f->fn_key;
 	mask	= FZ_MASK(iter->zone);
 	flags	= fib_flag_trans(fa->fa_type, mask, fi);
-	if (fi && (!vx_flags(VXF_HIDE_NETIF, 0) ||
-		dev_in_nx_info(fi->fib_dev, current->nx_info)))
+	if (fi && nx_dev_visible(current->nx_info, fi->fib_dev))
 		snprintf(bf, sizeof(bf),
 			 "%s\t%08X\t%08X\t%04X\t%d\t%u\t%d\t%08X\t%d\t%u\t%u",
 			 fi->fib_dev ? fi->fib_dev->name : "*", prefix,

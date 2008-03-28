@@ -87,6 +87,8 @@
 
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/vs_network.h>
+#include <linux/vs_inet6.h>
 
 /* Set to 3 to get tracing... */
 #define ACONF_DEBUG 2
@@ -906,7 +908,8 @@ static inline int ipv6_saddr_label(const struct in6_addr *addr, int type)
 }
 
 int ipv6_dev_get_saddr(struct net_device *daddr_dev,
-		       struct in6_addr *daddr, struct in6_addr *saddr)
+		       struct in6_addr *daddr, struct in6_addr *saddr,
+		       struct nx_info *nxi)
 {
 	struct ipv6_saddr_score hiscore;
 	struct inet6_ifaddr *ifa_result = NULL;
@@ -950,6 +953,10 @@ int ipv6_dev_get_saddr(struct net_device *daddr_dev,
 			struct ipv6_saddr_score score;
 
 			score.addr_type = __ipv6_addr_type(&ifa->addr);
+
+			/* Use only addresses assigned to the context */
+			if (!v6_ifa_in_nx_info(ifa, nxi))
+				continue;
 
 			/* Rule 0:
 			 * - Tentative Address (RFC2462 section 5.4)
@@ -1164,9 +1171,10 @@ record_it:
 
 
 int ipv6_get_saddr(struct dst_entry *dst,
-		   struct in6_addr *daddr, struct in6_addr *saddr)
+		   struct in6_addr *daddr, struct in6_addr *saddr,
+		   struct nx_info *nxi)
 {
-	return ipv6_dev_get_saddr(dst ? ip6_dst_idev(dst)->dev : NULL, daddr, saddr);
+	return ipv6_dev_get_saddr(dst ? ip6_dst_idev(dst)->dev : NULL, daddr, saddr, nxi);
 }
 
 EXPORT_SYMBOL(ipv6_get_saddr);
@@ -1262,35 +1270,46 @@ struct inet6_ifaddr * ipv6_get_ifaddr(struct in6_addr *addr, struct net_device *
 	return ifp;
 }
 
+extern int ipv4_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2);
+
 int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
 {
 	const struct in6_addr *sk_rcv_saddr6 = &inet6_sk(sk)->rcv_saddr;
 	const struct in6_addr *sk2_rcv_saddr6 = inet6_rcv_saddr(sk2);
-	__be32 sk_rcv_saddr = inet_sk(sk)->rcv_saddr;
 	__be32 sk2_rcv_saddr = inet_rcv_saddr(sk2);
 	int sk_ipv6only = ipv6_only_sock(sk);
 	int sk2_ipv6only = inet_v6_ipv6only(sk2);
 	int addr_type = ipv6_addr_type(sk_rcv_saddr6);
 	int addr_type2 = sk2_rcv_saddr6 ? ipv6_addr_type(sk2_rcv_saddr6) : IPV6_ADDR_MAPPED;
 
-	if (!sk2_rcv_saddr && !sk_ipv6only)
+	/* FIXME: needs handling for v4 ANY */
+	if (!sk2_rcv_saddr && !sk_ipv6only && !sk2->sk_nx_info)
 		return 1;
 
 	if (addr_type2 == IPV6_ADDR_ANY &&
-	    !(sk2_ipv6only && addr_type == IPV6_ADDR_MAPPED))
+	    !(sk2_ipv6only && addr_type == IPV6_ADDR_MAPPED) &&
+	    v6_addr_in_nx_info(sk2->sk_nx_info, sk_rcv_saddr6, -1))
 		return 1;
 
 	if (addr_type == IPV6_ADDR_ANY &&
-	    !(sk_ipv6only && addr_type2 == IPV6_ADDR_MAPPED))
+	    !(sk_ipv6only && addr_type2 == IPV6_ADDR_MAPPED) &&
+	    (sk2_rcv_saddr6 && v6_addr_in_nx_info(sk->sk_nx_info, sk2_rcv_saddr6, -1)))
+		return 1;
+
+	if (addr_type == IPV6_ADDR_ANY &&
+	    addr_type2 == IPV6_ADDR_ANY &&
+	    nx_v6_addr_conflict(sk->sk_nx_info, sk2->sk_nx_info))
 		return 1;
 
 	if (sk2_rcv_saddr6 &&
+	    addr_type != IPV6_ADDR_ANY &&
+	    addr_type != IPV6_ADDR_ANY &&
 	    ipv6_addr_equal(sk_rcv_saddr6, sk2_rcv_saddr6))
 		return 1;
 
 	if (addr_type == IPV6_ADDR_MAPPED &&
 	    !sk2_ipv6only &&
-	    (!sk2_rcv_saddr || !sk_rcv_saddr || sk_rcv_saddr == sk2_rcv_saddr))
+	    ipv4_rcv_saddr_equal(sk, sk2))
 		return 1;
 
 	return 0;
@@ -2797,8 +2816,8 @@ static int if6_seq_show(struct seq_file *seq, void *v)
 {
 	struct inet6_ifaddr *ifp = (struct inet6_ifaddr *)v;
 
-	/* no ipv6 inside a vserver for now */
-	if (nx_check(0, VS_ADMIN|VS_WATCH))
+	if (nx_check(0, VS_ADMIN|VS_WATCH) ||
+	    v6_addr_in_nx_info(current_nx_info(), &ifp->addr, -1))
 		seq_printf(seq,
 		   NIP6_SEQFMT " %02x %02x %02x %02x %8s\n",
 		   NIP6(ifp->addr),
@@ -3265,9 +3284,10 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 	struct inet6_ifaddr *ifa;
 	struct ifmcaddr6 *ifmca;
 	struct ifacaddr6 *ifaca;
+	struct nx_info *nxi = skb->sk ? skb->sk->sk_nx_info : NULL;
 
-	/* no ipv6 inside a vserver for now */
-	if (skb->sk && skb->sk->sk_vx_info)
+	/* disable ipv6 on non v6 guests */
+	if (nxi && !nx_info_has_v6(nxi))
 		return skb->len;
 
 	s_idx = cb->args[0];
@@ -3290,6 +3310,8 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 			     ifa = ifa->if_next, ip_idx++) {
 				if (ip_idx < s_ip_idx)
 					continue;
+				if (!v6_addr_in_nx_info(nxi, &ifa->addr, -1))
+					continue;
 				if ((err = inet6_fill_ifaddr(skb, ifa,
 				    NETLINK_CB(cb->skb).pid,
 				    cb->nlh->nlmsg_seq, RTM_NEWADDR,
@@ -3303,6 +3325,8 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 			     ifmca = ifmca->next, ip_idx++) {
 				if (ip_idx < s_ip_idx)
 					continue;
+				if (!v6_addr_in_nx_info(nxi, &ifmca->mca_addr, -1))
+					continue;
 				if ((err = inet6_fill_ifmcaddr(skb, ifmca,
 				    NETLINK_CB(cb->skb).pid,
 				    cb->nlh->nlmsg_seq, RTM_GETMULTICAST,
@@ -3315,6 +3339,8 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 			for (ifaca = idev->ac_list; ifaca;
 			     ifaca = ifaca->aca_next, ip_idx++) {
 				if (ip_idx < s_ip_idx)
+					continue;
+				if (!v6_addr_in_nx_info(nxi, &ifaca->aca_addr, -1))
 					continue;
 				if ((err = inet6_fill_ifacaddr(skb, ifaca,
 				    NETLINK_CB(cb->skb).pid,
@@ -3592,15 +3618,18 @@ static int inet6_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	int s_idx = cb->args[0];
 	struct net_device *dev;
 	struct inet6_dev *idev;
+	struct nx_info *nxi = skb->sk ? skb->sk->sk_nx_info : NULL;
 
-	/* no ipv6 inside a vserver for now */
+	/* FIXME: maybe disable ipv6 on non v6 guests?
 	if (skb->sk && skb->sk->sk_vx_info)
-		return skb->len;
+		return skb->len; */
 
 	read_lock(&dev_base_lock);
 	idx = 0;
 	for_each_netdev(&init_net, dev) {
 		if (idx < s_idx)
+			goto cont;
+		if (!v6_dev_in_nx_info(dev, nxi))
 			goto cont;
 		if ((idev = in6_dev_get(dev)) == NULL)
 			goto cont;

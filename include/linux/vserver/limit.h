@@ -1,7 +1,6 @@
 #ifndef _VX_LIMIT_H
 #define _VX_LIMIT_H
 
-
 #define VLIMIT_NSOCK	16
 #define VLIMIT_OPENFD	17
 #define VLIMIT_ANON	18
@@ -19,6 +18,9 @@
 /*	keep in sync with CRLIM_INFINITY */
 
 #define	VLIM_INFINITY	(~0ULL)
+
+#include <asm/atomic.h>
+#include <asm/resource.h>
 
 #ifndef RLIM_INFINITY
 #warning RLIM_INFINITY is undefined

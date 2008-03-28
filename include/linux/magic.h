@@ -3,7 +3,7 @@
 
 #define ADFS_SUPER_MAGIC	0xadf5
 #define AFFS_SUPER_MAGIC	0xadff
-#define AFS_SUPER_MAGIC                0x5346414F
+#define AFS_SUPER_MAGIC		0x5346414F
 #define AUTOFS_SUPER_MAGIC	0x0187
 #define CODA_SUPER_MAGIC	0x73757245
 #define EFS_SUPER_MAGIC		0x414A53
@@ -26,6 +26,7 @@
 #define NFS_SUPER_MAGIC		0x6969
 #define OPENPROM_SUPER_MAGIC	0x9fa1
 #define PROC_SUPER_MAGIC	0x9fa0
+#define DEVPTS_SUPER_MAGIC	0x1cd1
 #define QNX4_SUPER_MAGIC	0x002f		/* qnx4 fs detection */
 
 #define REISERFS_SUPER_MAGIC	0x52654973	/* used by gcc */

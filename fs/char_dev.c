@@ -21,6 +21,7 @@
 #include <linux/cdev.h>
 #include <linux/mutex.h>
 #include <linux/backing-dev.h>
+#include <linux/vs_device.h>
 
 #ifdef CONFIG_KMOD
 #include <linux/kmod.h>
@@ -362,14 +363,21 @@ int chrdev_open(struct inode * inode, struct file * filp)
 	struct cdev *p;
 	struct cdev *new = NULL;
 	int ret = 0;
+	dev_t mdev;
+
+	if (!vs_map_chrdev(inode->i_rdev, &mdev, DATTR_OPEN))
+		return -EPERM;
+	inode->i_mdev = mdev;
 
 	spin_lock(&cdev_lock);
 	p = inode->i_cdev;
 	if (!p) {
 		struct kobject *kobj;
 		int idx;
+
 		spin_unlock(&cdev_lock);
-		kobj = kobj_lookup(cdev_map, inode->i_rdev, &idx);
+
+		kobj = kobj_lookup(cdev_map, mdev, &idx);
 		if (!kobj)
 			return -ENXIO;
 		new = container_of(kobj, struct cdev, kobj);

@@ -20,6 +20,7 @@
 #include <linux/cryptohash.h>
 #include <linux/kernel.h>
 #include <net/tcp.h>
+#include <net/route.h>
 
 extern int sysctl_tcp_syncookies;
 

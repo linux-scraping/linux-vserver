@@ -19,19 +19,19 @@
 	 |STATS  |DESTROY|ALTER  |CHANGE |LIMIT  |TEST   | |       |       |
 	 |INFO   |SETUP  |       |MOVE   |       |       | |       |       |
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
-  SYSTEM |VERSION|VSETUP |VHOST  |       |       |       | |DEVICES|       |
+  SYSTEM |VERSION|VSETUP |VHOST  |       |       |       | |DEVICE |       |
   HOST   |     00|     01|     02|     03|     04|     05| |     06|     07|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
   CPU    |       |VPROC  |PROCALT|PROCMIG|PROCTRL|       | |SCHED. |       |
   PROCESS|     08|     09|     10|     11|     12|     13| |     14|     15|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
-  MEMORY |       |       |       |       |       |       | |SWAP   |       |
+  MEMORY |       |       |       |       |MEMCTRL|       | |SWAP   |       |
 	 |     16|     17|     18|     19|     20|     21| |     22|     23|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
   NETWORK|       |VNET   |NETALT |NETMIG |NETCTL |       | |SERIAL |       |
 	 |     24|     25|     26|     27|     28|     29| |     30|     31|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
-  DISK   |       |       |       |       |DLIMIT |       | |INODE  |       |
+  DISK   |       |       |       |TAGMIG |DLIMIT |       | |INODE  |       |
   VFS    |     32|     33|     34|     35|     36|     37| |     38|     39|
   -------+-------+-------+-------+-------+-------+-------+ +-------+-------+
   OTHER  |VSTAT  |       |       |       |       |       | |VINFO  |       |
@@ -51,18 +51,22 @@
 #define VC_CAT_VSETUP		1
 #define VC_CAT_VHOST		2
 
+#define VC_CAT_DEVICE		6
+
 #define VC_CAT_VPROC		9
 #define VC_CAT_PROCALT		10
 #define VC_CAT_PROCMIG		11
 #define VC_CAT_PROCTRL		12
 
 #define VC_CAT_SCHED		14
+#define VC_CAT_MEMCTRL		20
 
 #define VC_CAT_VNET		25
 #define VC_CAT_NETALT		26
 #define VC_CAT_NETMIG		27
 #define VC_CAT_NETCTRL		28
 
+#define VC_CAT_TAGMIG		35
 #define VC_CAT_DLIMIT		36
 #define VC_CAT_INODE		38
 

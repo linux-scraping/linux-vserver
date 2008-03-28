@@ -56,7 +56,6 @@
 #include <linux/sysctl.h>
 #endif
 #include <linux/kmod.h>
-#include <linux/vs_context.h>
 
 #include <net/arp.h>
 #include <net/ip.h>
@@ -426,6 +425,7 @@ struct in_device *inetdev_by_index(int ifindex)
 	return in_dev;
 }
 
+
 /* Called only from RTNL semaphored context. No locks. */
 
 struct in_ifaddr *inet_ifa_byprefix(struct in_device *in_dev, __be32 prefix,
@@ -675,7 +675,6 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 
 	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
 		struct nx_info *nxi = current->nx_info;
-		int hide_netif = vx_flags(VXF_HIDE_NETIF, 0);
 
 		if (tryaddrmatch) {
 			/* Matthias Andree */
@@ -685,7 +684,7 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 			   This is checked above. */
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 			     ifap = &ifa->ifa_next) {
-				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+				if (!nx_v4_ifa_visible(nxi, ifa))
 					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label) &&
 				    sin_orig.sin_addr.s_addr ==
@@ -700,7 +699,7 @@ int devinet_ioctl(unsigned int cmd, void __user *arg)
 		if (!ifa) {
 			for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 			     ifap = &ifa->ifa_next) {
-				if (hide_netif && !ifa_in_nx_info(ifa, nxi))
+				if (!nx_v4_ifa_visible(nxi, ifa))
 					continue;
 				if (!strcmp(ifr.ifr_name, ifa->ifa_label))
 					break;
@@ -855,8 +854,7 @@ static int inet_gifconf(struct net_device *dev, char __user *buf, int len)
 		goto out;
 
 	for (; ifa; ifa = ifa->ifa_next) {
-		if (vx_flags(VXF_HIDE_NETIF, 0) &&
-			!ifa_in_nx_info(ifa, current->nx_info))
+		if (!nx_v4_ifa_visible(current->nx_info, ifa))
 			continue;
 		if (!buf) {
 			done += sizeof(ifr);
@@ -1205,8 +1203,7 @@ static int inet_dump_ifaddr(struct sk_buff *skb, struct netlink_callback *cb)
 
 		for (ifa = in_dev->ifa_list, ip_idx = 0; ifa;
 		     ifa = ifa->ifa_next, ip_idx++) {
-			if (sk && vx_info_flags(sk->sk_vx_info, VXF_HIDE_NETIF, 0) &&
-				!ifa_in_nx_info(ifa, sk->sk_nx_info))
+			if (sk && !nx_v4_ifa_visible(sk->sk_nx_info, ifa))
 				continue;
 			if (ip_idx < s_ip_idx)
 				continue;

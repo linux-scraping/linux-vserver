@@ -263,39 +263,6 @@ flags_err:
 		return err;
 	}
 
-#if defined(CONFIG_VSERVER_LEGACY) && !defined(CONFIG_TAGGING_NONE)
-	case EXT4_IOC_SETTAG: {
-		handle_t *handle;
-		struct ext4_iloc iloc;
-		int tag;
-		int err;
-
-		/* fixme: if stealth, return -ENOTTY */
-		if (!capable(CAP_CONTEXT))
-			return -EPERM;
-		if (IS_RDONLY(inode))
-			return -EROFS;
-		if (!(inode->i_sb->s_flags & MS_TAGGED))
-			return -ENOSYS;
-		if (get_user(tag, (int __user *) arg))
-			return -EFAULT;
-
-		handle = ext4_journal_start(inode, 1);
-		if (IS_ERR(handle))
-			return PTR_ERR(handle);
-		err = ext4_reserve_inode_write(handle, inode, &iloc);
-		if (err)
-			return err;
-
-		inode->i_tag = (tag & 0xFFFF);
-		inode->i_ctime = CURRENT_TIME;
-
-		err = ext4_mark_iloc_dirty(handle, inode, &iloc);
-		ext4_journal_stop(handle);
-		return err;
-	}
-#endif
-
 	default:
 		return -ENOTTY;
 	}

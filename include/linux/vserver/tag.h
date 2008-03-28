@@ -1,6 +1,8 @@
 #ifndef _DX_TAG_H
 #define _DX_TAG_H
 
+#include <linux/types.h>
+
 
 #define DX_TAG(in)	(IS_TAGGED(in))
 
@@ -118,16 +120,17 @@ static inline gid_t dx_map_gid(gid_t gid)
 	return (gid & MAX_GID);
 }
 
+struct peer_tag {
+	int32_t xid;
+	int32_t nid;
+};
 
-#ifdef	CONFIG_VSERVER_LEGACY
-#define FIOC_GETTAG	_IOR('x', 1, long)
-#define FIOC_SETTAG	_IOW('x', 2, long)
-#define FIOC_SETTAGJ	_IOW('x', 3, long)
-#endif
-
-#ifdef	CONFIG_PROPAGATE
+#define dx_notagcheck(nd) \
+	((nd) && (nd)->mnt && ((nd)->mnt->mnt_flags & MNT_NOTAGCHECK))
 
 int dx_parse_tag(char *string, tag_t *tag, int remove);
+
+#ifdef	CONFIG_PROPAGATE
 
 void __dx_propagate_tag(struct nameidata *nd, struct inode *inode);
 

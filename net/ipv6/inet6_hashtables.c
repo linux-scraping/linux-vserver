@@ -16,6 +16,7 @@
 
 #include <linux/module.h>
 #include <linux/random.h>
+#include <linux/vs_inet6.h>
 
 #include <net/inet_connection_sock.h>
 #include <net/inet_hashtables.h>
@@ -121,6 +122,9 @@ struct sock *inet6_lookup_listener(struct inet_hashinfo *hashinfo,
 				if (!ipv6_addr_equal(&np->rcv_saddr, daddr))
 					continue;
 				score++;
+			} else {
+				if (!v6_addr_in_nx_info(sk->sk_nx_info, daddr, -1))
+					continue;
 			}
 			if (sk->sk_bound_dev_if) {
 				if (sk->sk_bound_dev_if != dif)
@@ -193,7 +197,7 @@ static int __inet6_check_established(struct inet_timewait_death_row *death_row,
 		   sk2->sk_family	       == PF_INET6	 &&
 		   ipv6_addr_equal(&tw6->tw_v6_daddr, saddr)	 &&
 		   ipv6_addr_equal(&tw6->tw_v6_rcv_saddr, daddr) &&
-		   sk2->sk_bound_dev_if == sk->sk_bound_dev_if) {
+		   (!sk2->sk_bound_dev_if || sk2->sk_bound_dev_if == dif)) {
 			if (twsk_unique(sk, sk2, twp))
 				goto unique;
 			else

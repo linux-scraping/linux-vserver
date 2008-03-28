@@ -611,7 +611,7 @@ static int loop_thread(void *data)
 static int loop_switch(struct loop_device *lo, struct file *file)
 {
 	struct switch_request w;
-	struct bio *bio = bio_alloc(GFP_KERNEL, 1);
+	struct bio *bio = bio_alloc(GFP_KERNEL, 0);
 	if (!bio)
 		return -ENOMEM;
 	init_completion(&w.wait);
@@ -1322,7 +1322,7 @@ static int lo_open(struct inode *inode, struct file *file)
 {
 	struct loop_device *lo = inode->i_bdev->bd_disk->private_data;
 
-	if (!vx_check(lo->lo_xid, VS_IDENT|VS_HOSTID))
+	if (!vx_check(lo->lo_xid, VS_IDENT|VS_HOSTID|VS_ADMIN_P))
 		return -EACCES;
 
 	mutex_lock(&lo->lo_ctl_mutex);
