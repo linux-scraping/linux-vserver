@@ -11,6 +11,7 @@
 #define DLIM_INFINITY		(~0ULL)
 
 #include <linux/spinlock.h>
+#include <linux/rcupdate.h>
 
 struct super_block;
 

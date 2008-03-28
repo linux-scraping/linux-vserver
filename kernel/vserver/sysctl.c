@@ -9,16 +9,11 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/module.h>
-#include <linux/types.h>
 #include <linux/ctype.h>
 #include <linux/sysctl.h>
 #include <linux/parser.h>
-#include <linux/fs.h>
-
 #include <asm/uaccess.h>
-#include <asm/unistd.h>
 
 
 enum {

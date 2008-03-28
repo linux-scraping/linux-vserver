@@ -22,6 +22,7 @@
 #include <linux/mtd/super.h>
 #include <linux/ctype.h>
 #include <linux/namei.h>
+#include <linux/parser.h>
 #include "compr.h"
 #include "nodelist.h"
 
@@ -75,6 +76,49 @@ static const struct super_operations jffs2_super_operations =
 	.sync_fs =	jffs2_sync_fs,
 };
 
+enum {
+	Opt_tag, Opt_notag, Opt_ignore, Opt_err
+};
+
+static match_table_t tokens = {
+	{Opt_tag, "tag"},
+	{Opt_notag, "notag"},
+	{Opt_err, NULL}
+};
+
+static int parse_options (char * options,
+			  struct jffs2_sb_info *sbi)
+{
+	char * p;
+	substring_t args[MAX_OPT_ARGS];
+
+	if (!options)
+		return 1;
+
+	while ((p = strsep (&options, ",")) != NULL) {
+		int token;
+		if (!*p)
+			continue;
+
+		token = match_token(p, tokens, args);
+		switch (token) {
+#ifndef CONFIG_TAGGING_NONE
+		case Opt_tag:
+			set_opt (sbi->s_mount_opt, TAGGED);
+			break;
+		case Opt_notag:
+			clear_opt (sbi->s_mount_opt, TAGGED);
+			break;
+#endif
+		case Opt_ignore:
+			break;
+		default:
+			return 0;
+		}
+	}
+	return 1;
+}
+
 /*
  * fill in the superblock
  */
@@ -109,6 +153,12 @@ static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 #ifdef CONFIG_JFFS2_FS_POSIX_ACL
 	sb->s_flags |= MS_POSIXACL;
 #endif
+	if (!parse_options ((char *) data, c))
+		return -EINVAL;
+
+	if (c->s_mount_opt & JFFS2_MOUNT_TAGGED)
+		sb->s_flags |= MS_TAGGED;
+
 	return jffs2_do_fill_super(sb, data, silent);
 }
 

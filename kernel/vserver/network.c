@@ -15,19 +15,100 @@
  *
  */
 
+#include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
-#include <net/tcp.h>
 
-#include <asm/errno.h>
-#include <linux/vserver/base.h>
-#include <linux/vserver/network_cmd.h>
+#include <linux/vs_network.h>
 #include <linux/vs_pid.h>
+#include <linux/vserver/network_cmd.h>
 
 
 atomic_t nx_global_ctotal	= ATOMIC_INIT(0);
 atomic_t nx_global_cactive	= ATOMIC_INIT(0);
 
+static struct kmem_cache *nx_addr_v4_cachep = NULL;
+static struct kmem_cache *nx_addr_v6_cachep = NULL;
+
+
+static int __init init_network(void)
+{
+	nx_addr_v4_cachep = kmem_cache_create("nx_v4_addr_cache",
+		sizeof(struct nx_addr_v4), 0,
+		SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
+	nx_addr_v6_cachep = kmem_cache_create("nx_v6_addr_cache",
+		sizeof(struct nx_addr_v6), 0,
+		SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
+	return 0;
+}
+
+
+/*	__alloc_nx_addr_v4()					*/
+
+static inline struct nx_addr_v4 *__alloc_nx_addr_v4(void)
+{
+	struct nx_addr_v4 *nxa = kmem_cache_alloc(
+		nx_addr_v4_cachep, GFP_KERNEL);
+
+	if (!IS_ERR(nxa))
+		memset(nxa, 0, sizeof(*nxa));
+	return nxa;
+}
+
+/*	__dealloc_nx_addr_v4()					*/
+
+static inline void __dealloc_nx_addr_v4(struct nx_addr_v4 *nxa)
+{
+	kmem_cache_free(nx_addr_v4_cachep, nxa);
+}
+
+/*	__dealloc_nx_addr_v4_all()				*/
+
+static inline void __dealloc_nx_addr_v4_all(struct nx_addr_v4 *nxa)
+{
+	while (nxa) {
+		struct nx_addr_v4 *next = nxa->next;
+
+		__dealloc_nx_addr_v4(nxa);
+		nxa = next;
+	}
+}
+
+
+#ifdef CONFIG_IPV6
+
+/*	__alloc_nx_addr_v6()					*/
+
+static inline struct nx_addr_v6 *__alloc_nx_addr_v6(void)
+{
+	struct nx_addr_v6 *nxa = kmem_cache_alloc(
+		nx_addr_v6_cachep, GFP_KERNEL);
+
+	if (!IS_ERR(nxa))
+		memset(nxa, 0, sizeof(*nxa));
+	return nxa;
+}
+
+/*	__dealloc_nx_addr_v6()					*/
+
+static inline void __dealloc_nx_addr_v6(struct nx_addr_v6 *nxa)
+{
+	kmem_cache_free(nx_addr_v6_cachep, nxa);
+}
+
+/*	__dealloc_nx_addr_v6_all()				*/
+
+static inline void __dealloc_nx_addr_v6_all(struct nx_addr_v6 *nxa)
+{
+	while (nxa) {
+		struct nx_addr_v6 *next = nxa->next;
+
+		__dealloc_nx_addr_v6(nxa);
+		nxa = next;
+	}
+}
+
+#endif	/* CONFIG_IPV6 */
 
 /*	__alloc_nx_info()
 
@@ -56,6 +137,9 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 
 	/* rest of init goes here */
 
+	new->v4_lback.s_addr = htonl(INADDR_LOOPBACK);
+	new->v4_bcast.s_addr = htonl(INADDR_BROADCAST);
+
 	vxdprintk(VXD_CBIT(nid, 0),
 		"alloc_nx_info(%d) = %p", nid, new);
 	atomic_inc(&nx_global_ctotal);
@@ -76,6 +160,8 @@ static void __dealloc_nx_info(struct nx_info *nxi)
 
 	BUG_ON(atomic_read(&nxi->nx_usecnt));
 	BUG_ON(atomic_read(&nxi->nx_tasks));
+
+	__dealloc_nx_addr_v4_all(nxi->v4.next);
 
 	nxi->nx_state |= NXS_RELEASED;
 	kfree(nxi);
@@ -103,6 +189,18 @@ void free_nx_info(struct nx_info *nxi)
 
 	__dealloc_nx_info(nxi);
 }
+
+
+void __nx_set_lback(struct nx_info *nxi)
+{
+	int nid = nxi->nx_id;
+	__be32 lback = htonl(INADDR_LOOPBACK ^ ((nid & 0xFFFF) << 8));
+
+	nxi->v4_lback.s_addr = lback;
+}
+
+extern int __nx_inet_add_lback(__be32 addr);
+extern int __nx_inet_del_lback(__be32 addr);
 
 
 /*	hash table for nx_info hash */
@@ -193,29 +291,6 @@ found:
 }
 
 
-/*	__nx_dynamic_id()
-
-	* find unused dynamic nid
-	* requires the hash_lock to be held			*/
-
-static inline nid_t __nx_dynamic_id(void)
-{
-	static nid_t seq = MAX_N_CONTEXT;
-	nid_t barrier = seq;
-
-	vxd_assert_lock(&nx_info_hash_lock);
-	do {
-		if (++seq > MAX_N_CONTEXT)
-			seq = MIN_D_CONTEXT;
-		if (!__lookup_nx_info(seq)) {
-			vxdprintk(VXD_CBIT(nid, 4),
-				"__nx_dynamic_id: [#%d]", seq);
-			return seq;
-		}
-	} while (barrier != seq);
-	return 0;
-}
-
 /*	__create_nx_info()
 
 	* create the requested context
@@ -233,24 +308,8 @@ static struct nx_info *__create_nx_info(int id)
 	/* required to make dynamic xids unique */
 	spin_lock(&nx_info_hash_lock);
 
-	/* dynamic context requested */
-	if (id == NX_DYNAMIC_ID) {
-#ifdef	CONFIG_VSERVER_DYNAMIC_IDS
-		id = __nx_dynamic_id();
-		if (!id) {
-			printk(KERN_ERR "no dynamic context available.\n");
-			nxi = ERR_PTR(-EAGAIN);
-			goto out_unlock;
-		}
-		new->nx_id = id;
-#else
-		printk(KERN_ERR "dynamic contexts disabled.\n");
-		nxi = ERR_PTR(-EINVAL);
-		goto out_unlock;
-#endif
-	}
 	/* static context requested */
-	else if ((nxi = __lookup_nx_info(id))) {
+	if ((nxi = __lookup_nx_info(id))) {
 		vxdprintk(VXD_CBIT(nid, 0),
 			"create_nx_info(%d) = %p (already there)", id, nxi);
 		if (nx_info_flags(nxi, NXF_STATE_SETUP, 0))
@@ -259,18 +318,11 @@ static struct nx_info *__create_nx_info(int id)
 			nxi = ERR_PTR(-EEXIST);
 		goto out_unlock;
 	}
-	/* dynamic nid creation blocker */
-	else if (id >= MIN_D_CONTEXT) {
-		vxdprintk(VXD_CBIT(nid, 0),
-			"create_nx_info(%d) (dynamic rejected)", id);
-		nxi = ERR_PTR(-EINVAL);
-		goto out_unlock;
-	}
-
 	/* new context */
 	vxdprintk(VXD_CBIT(nid, 0),
 		"create_nx_info(%d) = %p (new)", id, new);
 	claim_nx_info(new, NULL);
+	__nx_set_lback(new);
 	__hash_nx_info(get_nx_info(new));
 	nxi = new, new = NULL;
 
@@ -293,15 +345,6 @@ void unhash_nx_info(struct nx_info *nxi)
 	__unhash_nx_info(nxi);
 	spin_unlock(&nx_info_hash_lock);
 }
-
-#ifdef  CONFIG_VSERVER_LEGACYNET
-
-struct nx_info *create_nx_info(void)
-{
-	return __create_nx_info(NX_DYNAMIC_ID);
-}
-
-#endif
 
 /*	lookup_nx_info()
 
@@ -435,102 +478,6 @@ out:
 }
 
 
-#ifdef CONFIG_INET
-
-#include <linux/netdevice.h>
-#include <linux/inetdevice.h>
-
-int ifa_in_nx_info(struct in_ifaddr *ifa, struct nx_info *nxi)
-{
-	if (!nxi)
-		return 1;
-	if (!ifa)
-		return 0;
-	return addr_in_nx_info(nxi, ifa->ifa_local);
-}
-
-int dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
-{
-	struct in_device *in_dev;
-	struct in_ifaddr **ifap;
-	struct in_ifaddr *ifa;
-	int ret = 0;
-
-	if (!nxi)
-		return 1;
-
-	if (!dev)
-		goto out;
-	in_dev = in_dev_get(dev);
-	if (!in_dev)
-		goto out;
-
-	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
-		ifap = &ifa->ifa_next) {
-		if (addr_in_nx_info(nxi, ifa->ifa_local)) {
-			ret = 1;
-			break;
-		}
-	}
-	in_dev_put(in_dev);
-out:
-	return ret;
-}
-
-/*
- *	check if address is covered by socket
- *
- *	sk:	the socket to check against
- *	addr:	the address in question (must be != 0)
- */
-static inline int __addr_in_socket(const struct sock *sk, uint32_t addr)
-{
-	struct nx_info *nxi = sk->sk_nx_info;
-	uint32_t saddr = inet_rcv_saddr(sk);
-
-	vxdprintk(VXD_CBIT(net, 5),
-		"__addr_in_socket(%p," NIPQUAD_FMT ") %p:" NIPQUAD_FMT " %p;%lx",
-		sk, NIPQUAD(addr), nxi, NIPQUAD(saddr), sk->sk_socket,
-		(sk->sk_socket ? sk->sk_socket->flags : 0));
-
-	if (saddr) {
-		/* direct address match */
-		return (saddr == addr);
-	} else if (nxi) {
-		/* match against nx_info */
-		return addr_in_nx_info(nxi, addr);
-	} else {
-		/* unrestricted any socket */
-		return 1;
-	}
-}
-
-
-int nx_addr_conflict(struct nx_info *nxi, uint32_t addr, const struct sock *sk)
-{
-	vxdprintk(VXD_CBIT(net, 2),
-		"nx_addr_conflict(%p,%p) " NIPQUAD_FMT,
-		nxi, sk, NIPQUAD(addr));
-
-	if (addr) {
-		/* check real address */
-		return __addr_in_socket(sk, addr);
-	} else if (nxi) {
-		/* check against nx_info */
-		int i, n = nxi->nbipv4;
-
-		for (i = 0; i < n; i++)
-			if (__addr_in_socket(sk, nxi->ipv4[i]))
-				return 1;
-		return 0;
-	} else {
-		/* check against any */
-		return 1;
-	}
-}
-
-#endif /* CONFIG_INET */
-
 void nx_set_persistent(struct nx_info *nxi)
 {
 	vxdprintk(VXD_CBIT(nid, 6),
@@ -564,15 +511,12 @@ void nx_update_persistent(struct nx_info *nxi)
 #include <asm/uaccess.h>
 
 
-int vc_task_nid(uint32_t id, void __user *data)
+int vc_task_nid(uint32_t id)
 {
 	nid_t nid;
 
 	if (id) {
 		struct task_struct *tsk;
-
-		if (!nx_check(0, VS_ADMIN | VS_WATCH))
-			return -EPERM;
 
 		read_lock(&tasklist_lock);
 		tsk = find_task_by_real_pid(id);
@@ -607,9 +551,7 @@ int vc_net_create(uint32_t nid, void __user *data)
 	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	if ((nid > MAX_S_CONTEXT) && (nid != NX_DYNAMIC_ID))
-		return -EINVAL;
-	if (nid < 2)
+	if ((nid > MAX_S_CONTEXT) || (nid < 2))
 		return -EINVAL;
 
 	new_nxi = __create_nx_info(nid);
@@ -645,10 +587,40 @@ int vc_net_migrate(struct nx_info *nxi, void __user *data)
 	return nx_migrate_task(current, nxi);
 }
 
+
+
+int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
+	uint16_t type, uint16_t flags)
+{
+	struct nx_addr_v4 *nxa = &nxi->v4;
+
+	if (NX_IPV4(nxi)) {
+		/* locate last entry */
+		for (; nxa->next; nxa = nxa->next);
+		nxa->next = __alloc_nx_addr_v4();
+		nxa = nxa->next;
+
+		if (IS_ERR(nxa))
+			return PTR_ERR(nxa);
+	}
+
+	if (nxi->v4.next)
+		/* remove single ip for ip list */
+		nxi->nx_flags &= ~NXF_SINGLE_IP;
+
+	nxa->ip[0].s_addr = ip;
+	nxa->ip[1].s_addr = ip2;
+	nxa->mask.s_addr = mask;
+	nxa->type = type;
+	nxa->flags = flags;
+	return 0;
+}
+
+
 int vc_net_add(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_v0 vc_data;
-	int index, pos, ret = 0;
+	int index, ret = 0;
 
 	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
@@ -657,27 +629,25 @@ int vc_net_add(struct nx_info *nxi, void __user *data)
 	case NXA_TYPE_IPV4:
 		if ((vc_data.count < 1) || (vc_data.count > 4))
 			return -EINVAL;
-		break;
 
-	default:
-		break;
-	}
-
-	switch (vc_data.type) {
-	case NXA_TYPE_IPV4:
 		index = 0;
-		while ((index < vc_data.count) &&
-			((pos = nxi->nbipv4) < NB_IPV4ROOT)) {
-			nxi->ipv4[pos] = vc_data.ip[index];
-			nxi->mask[pos] = vc_data.mask[index];
+		while (index < vc_data.count) {
+			ret = do_add_v4_addr(nxi, vc_data.ip[index].s_addr, 0,
+				vc_data.mask[index].s_addr, NXA_TYPE_ADDR, 0);
+			if (ret)
+				return ret;
 			index++;
-			nxi->nbipv4++;
 		}
 		ret = index;
 		break;
 
 	case NXA_TYPE_IPV4|NXA_MOD_BCAST:
 		nxi->v4_bcast = vc_data.ip[0];
+		ret = 1;
+		break;
+
+	case NXA_TYPE_IPV4|NXA_MOD_LBACK:
+		nxi->v4_lback = vc_data.ip[0];
 		ret = 1;
 		break;
 
@@ -697,7 +667,8 @@ int vc_net_remove(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
-		nxi->nbipv4 = 0;
+		__dealloc_nx_addr_v4_all(xchg(&nxi->v4.next, NULL));
+		memset(&nxi->v4, 0, sizeof(nxi->v4));
 		break;
 
 	default:
@@ -705,6 +676,125 @@ int vc_net_remove(struct nx_info *nxi, void __user *data)
 	}
 	return 0;
 }
+
+
+int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv4_v1 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_ADDR:
+	case NXA_TYPE_RANGE:
+	case NXA_TYPE_MASK:
+		return do_add_v4_addr(nxi, vc_data.ip.s_addr, 0,
+			vc_data.mask.s_addr, vc_data.type, vc_data.flags);
+
+	case NXA_TYPE_ADDR | NXA_MOD_BCAST:
+		nxi->v4_bcast = vc_data.ip;
+		break;
+
+	case NXA_TYPE_ADDR | NXA_MOD_LBACK:
+		nxi->v4_lback = vc_data.ip;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int vc_net_remove_ipv4(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv4_v1 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	switch (vc_data.type) {
+/*	case NXA_TYPE_ADDR:
+		break;		*/
+
+	case NXA_TYPE_ANY:
+		__dealloc_nx_addr_v4_all(xchg(&nxi->v4.next, NULL));
+		memset(&nxi->v4, 0, sizeof(nxi->v4));
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+
+#ifdef CONFIG_IPV6
+
+int do_add_v6_addr(struct nx_info *nxi,
+	struct in6_addr *ip, struct in6_addr *mask,
+	uint32_t prefix, uint16_t type, uint16_t flags)
+{
+	struct nx_addr_v6 *nxa = &nxi->v6;
+
+	if (NX_IPV6(nxi)) {
+		/* locate last entry */
+		for (; nxa->next; nxa = nxa->next);
+		nxa->next = __alloc_nx_addr_v6();
+		nxa = nxa->next;
+
+		if (IS_ERR(nxa))
+			return PTR_ERR(nxa);
+	}
+
+	nxa->ip = *ip;
+	nxa->mask = *mask;
+	nxa->prefix = prefix;
+	nxa->type = type;
+	nxa->flags = flags;
+	return 0;
+}
+
+
+int vc_net_add_ipv6(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv6_v1 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_ADDR:
+	case NXA_TYPE_MASK:
+		return do_add_v6_addr(nxi, &vc_data.ip, &vc_data.mask,
+			vc_data.prefix, vc_data.type, vc_data.flags);
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+int vc_net_remove_ipv6(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv6_v1 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	switch (vc_data.type) {
+	case NXA_TYPE_ANY:
+		__dealloc_nx_addr_v6_all(xchg(&nxi->v6.next, NULL));
+		memset(&nxi->v6, 0, sizeof(nxi->v6));
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+#endif	/* CONFIG_IPV6 */
+
 
 int vc_get_nflags(struct nx_info *nxi, void __user *data)
 {
@@ -766,6 +856,8 @@ int vc_set_ncaps(struct nx_info *nxi, void __user *data)
 
 
 #include <linux/module.h>
+
+module_init(init_network);
 
 EXPORT_SYMBOL_GPL(free_nx_info);
 EXPORT_SYMBOL_GPL(unhash_nx_info);

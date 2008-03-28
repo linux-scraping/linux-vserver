@@ -69,10 +69,12 @@ extern struct inet6_ifaddr *	ipv6_get_ifaddr(struct in6_addr *addr,
 						int strict);
 extern int			ipv6_get_saddr(struct dst_entry *dst, 
 					       struct in6_addr *daddr,
-					       struct in6_addr *saddr);
+					       struct in6_addr *saddr,
+					       struct nx_info *nxi);
 extern int			ipv6_dev_get_saddr(struct net_device *dev, 
 					       struct in6_addr *daddr,
-					       struct in6_addr *saddr);
+					       struct in6_addr *saddr,
+					       struct nx_info *nxi);
 extern int			ipv6_get_lladdr(struct net_device *dev,
 						struct in6_addr *addr,
 						unsigned char banned_flags);

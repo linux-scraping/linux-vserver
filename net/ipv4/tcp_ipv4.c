@@ -2304,9 +2304,9 @@ static void get_openreq4(struct sock *sk, struct request_sock *req,
 	sprintf(tmpbuf, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %u %d %p",
 		i,
-		ireq->loc_addr,
+		nx_map_sock_lback(current_nx_info(), ireq->loc_addr),
 		ntohs(inet_sk(sk)->sport),
-		ireq->rmt_addr,
+		nx_map_sock_lback(current_nx_info(), ireq->rmt_addr),
 		ntohs(ireq->rmt_port),
 		TCP_SYN_RECV,
 		0, 0, /* could print option size, but that is af dependent. */
@@ -2348,7 +2348,10 @@ static void get_tcp4_sock(struct sock *sk, char *tmpbuf, int i)
 
 	sprintf(tmpbuf, "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08lX "
 			"%08X %5d %8d %lu %d %p %u %u %u %u %d",
-		i, src, srcp, dest, destp, sk->sk_state,
+		i,
+		nx_map_sock_lback(current_nx_info(), src), srcp,
+		nx_map_sock_lback(current_nx_info(), dest), destp,
+		sk->sk_state,
 		tp->write_seq - tp->snd_una,
 		sk->sk_state == TCP_LISTEN ? sk->sk_ack_backlog :
 					     (tp->rcv_nxt - tp->copied_seq),
@@ -2383,7 +2386,10 @@ static void get_timewait4_sock(struct inet_timewait_sock *tw,
 
 	sprintf(tmpbuf, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %d %d %p",
-		i, src, srcp, dest, destp, tw->tw_substate, 0, 0,
+		i,
+		nx_map_sock_lback(current_nx_info(), src), srcp,
+		nx_map_sock_lback(current_nx_info(), dest), destp,
+		tw->tw_substate, 0, 0,
 		3, jiffies_to_clock_t(ttd), 0, 0, 0, 0,
 		atomic_read(&tw->tw_refcnt), tw);
 }

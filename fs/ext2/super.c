@@ -421,7 +421,6 @@ static match_table_t tokens = {
 	{Opt_tag, "tag"},
 	{Opt_notag, "notag"},
 	{Opt_tagid, "tagid=%u"},
-	{Opt_tag, "tagxid"},
 	{Opt_grpquota, "grpquota"},
 	{Opt_ignore, "noquota"},
 	{Opt_quota, "quota"},

@@ -4,54 +4,26 @@
 
 menu "Linux VServer"
 
-config	VSERVER_LEGACY
-	bool	"Enable Legacy Kernel API"
+config	VSERVER_AUTO_LBACK
+	bool    "Automatically Assign Loopback IP"
+	default y
+	help
+	  Automatically assign a guest specific loopback
+	  IP and add it to the kernel network stack on
+	  startup.
+
+config	VSERVER_AUTO_SINGLE
+	bool	"Automatic Single IP Special Casing"
 	depends on EXPERIMENTAL
-	default n
+	default y
 	help
-	  This enables the legacy API used in vs1.xx, maintaining
-	  compatibility with older vserver tools, and guest images
-	  that are configured using the legacy method.
+	  This allows network contexts with a single IP to
+	  automatically remap 0.0.0.0 bindings to that IP,
+	  avoiding further network checks and improving
+	  performance.
 
-config	VSERVER_LEGACY_VERSION
-	bool	"Show a Legacy Version ID"
-	depends on VSERVER_LEGACY
-	default n
-	help
-	  This shows a special legacy version to very old tools
-	  which do not handle the current version correctly.
-
-	  Warning: recent tools are not able to utilize the
-	  newer APIs when this is enabled, so some features will
-	  not be available. Better avoid it, unless you really,
-	  really need it for backwards compatibility.
-
-config	VSERVER_DYNAMIC_IDS
-	bool	"Enable dynamic context IDs"
-	depends on EXPERIMENTAL && VSERVER_LEGACY
-	default n
-	help
-	  This enables support of in kernel dynamic context IDs,
-	  which is deprecated and will probably be removed in the
-	  next release.
-
-config	VSERVER_LEGACYNET
-	bool	"Enable Legacy Networking Kernel API"
-	depends on EXPERIMENTAL
-	default n
-	help
-	  This enables the legacy networking API which is used
-	  by older tools (pre 0.30.210) to set up the network
-	  context (chbind).
-
-config	VSERVER_REMAP_SADDR
-	bool	"Remap Source IP Address"
-	depends on EXPERIMENTAL
-	default n
-	help
-	  This allows to remap the source IP address of 'local'
-	  connections from 127.0.0.1 to the first assigned
-	  guest IP.
+	  (note: such guests do not allow to change the ip
+	   on the fly and do not show loopback addresses)
 
 config	VSERVER_COWBL
 	bool	"Enable COW Immutable Link Breaking"
@@ -71,6 +43,13 @@ config	VSERVER_VTIME
 	  adjusting the system clock individually per guest.
 	  this adds some overhead to the time functions and
 	  therefore should not be enabled without good reason.
+
+config	VSERVER_DEVICE
+	bool	"Enable Guest Device Mapping"
+	depends on EXPERIMENTAL
+	default n
+	help
+	  This enables generic device remapping.
 
 config	VSERVER_PROC_SECURE
 	bool	"Enable Proc Security"
@@ -169,18 +148,9 @@ config	TAG_NFSD
 	  Server to use the tagging specified above.
 	  (will require patched clients too)
 
-config	PROPAGATE
-	bool	"Enable Inode Tag Propagation"
-	default n
-	depends on EXPERIMENTAL
-	help
-	  This allows for the tagid= mount option to specify
-	  a tagid which is to be used for the entire mount
-	  tree.
-
 config	VSERVER_PRIVACY
 	bool	"Honor Privacy Aspects of Guests"
-	default y
+	default n
 	help
 	  When enabled, most context checks will disallow
 	  access to structures assigned to a specific context,
@@ -275,9 +245,4 @@ config	VSERVER_SECURITY
 	depends on SECURITY
 	default y
 	select SECURITY_CAPABILITIES
-
-config	VSERVER_NGNET
-	bool
-	depends on EXPERIMENTAL && !VSERVER_LEGACYNET
-	default y
 

@@ -1485,15 +1485,13 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (data_page)
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
-#ifdef	CONFIG_PROPAGATE
 	retval = dx_parse_tag(data_page, &tag, 1);
 	if (retval) {
-		mnt_flags |= MNT_TAGID;
-		/* bind and re-mounts get the tag flag */
+		mnt_flags |= retval;
+		/* FIXME: bind and re-mounts get the tag flag? */
 		if (flags & (MS_BIND|MS_REMOUNT))
 			flags |= MS_TAGID;
 	}
-#endif
 
 	/* Separate the per-mountpoint flags */
 	if (flags & MS_RDONLY)

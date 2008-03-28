@@ -4,8 +4,8 @@
 
 #   IPv6 as module will cause a CRASH if you try to unload it
 config IPV6
-	tristate "The IPv6 protocol"
-	default m
+	bool "The IPv6 protocol"
+	default n
 	---help---
 	  This is complemental support for the IP version 6.
 	  You will still be able to do traditional IPv4 networking as well.

@@ -1389,10 +1389,6 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 	/* Must NOT use netdev_priv macro here. */
 	adapter = poll_dev->priv;
 
-	/* Keep link state information with original netdev */
-	if (!netif_carrier_ok(poll_dev))
-		goto quit_polling;
-
 	/* e1000_clean is called per-cpu.  This lock protects
 	 * tx_ring from being cleaned by multiple cpus
 	 * simultaneously.  A failure obtaining the lock means
@@ -1404,10 +1400,11 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 
 	adapter->clean_rx(adapter, &work_done, budget);
 
-	/* If no Tx and not enough Rx work done, exit the polling mode */
-	if ((!tx_cleaned && (work_done < budget)) ||
-	   !netif_running(poll_dev)) {
-quit_polling:
+	if (tx_cleaned)
+		work_done = budget;
+
+	/* If budget not fully consumed, exit the polling mode */
+	if (work_done < budget) {
 		if (adapter->itr_setting & 3)
 			e1000_set_itr(adapter);
 		netif_rx_complete(poll_dev, napi);
@@ -1689,6 +1686,9 @@ static void e1000_setup_rctl(struct e1000_adapter *adapter)
 	else
 		rctl |= E1000_RCTL_LPE;
 
+	/* Enable hardware CRC frame stripping */
+	rctl |= E1000_RCTL_SECRC;
+
 	/* Setup buffer sizes */
 	rctl &= ~E1000_RCTL_SZ_4096;
 	rctl |= E1000_RCTL_BSEX;
@@ -1754,9 +1754,6 @@ static void e1000_setup_rctl(struct e1000_adapter *adapter)
 
 		/* Enable Packet split descriptors */
 		rctl |= E1000_RCTL_DTYP_PS;
-		
-		/* Enable hardware CRC frame stripping */
-		rctl |= E1000_RCTL_SECRC;
 
 		psrctl |= adapter->rx_ps_bsize0 >>
 			E1000_PSRCTL_BSIZE0_SHIFT;
@@ -2186,6 +2183,7 @@ void e1000e_down(struct e1000_adapter *adapter)
 	msleep(10);
 
 	napi_disable(&adapter->napi);
+	atomic_set(&adapter->irq_sem, 0);
 	e1000_irq_disable(adapter);
 
 	del_timer_sync(&adapter->watchdog_timer);

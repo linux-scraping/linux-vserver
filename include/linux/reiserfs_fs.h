@@ -850,13 +850,8 @@ struct stat_data_v1 {
 				REISERFS_COMPR_FL |	\
 				REISERFS_NOTAIL_FL )
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define REISERFS_FL_USER_VISIBLE	(REISERFS_IUNLINK_FL|0x80FF)
-#define REISERFS_FL_USER_MODIFIABLE	(REISERFS_IUNLINK_FL|0x80FF)
-#else
 #define REISERFS_FL_USER_VISIBLE	0x80FF
 #define REISERFS_FL_USER_MODIFIABLE	0x80FF
-#endif
 
 /* Stat Data on disk (reiserfs version of UFS disk inode minus the
    address blocks) */

@@ -37,6 +37,7 @@ struct tun_struct {
 	int			attached;
 	uid_t			owner;
 	gid_t			group;
+	nid_t			nid;
 
 	wait_queue_head_t	read_wait;
 	struct sk_buff_head	readq;
@@ -79,6 +80,7 @@ struct tun_struct {
 #define TUNSETOWNER   _IOW('T', 204, int)
 #define TUNSETLINK    _IOW('T', 205, int)
 #define TUNSETGROUP   _IOW('T', 206, int)
+#define TUNSETNID     _IOW('T', 215, int)
 
 /* TUNSETIFF ifr flags */
 #define IFF_TUN		0x0001

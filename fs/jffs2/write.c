@@ -44,6 +44,7 @@ int jffs2_do_new_inode(struct jffs2_sb_info *c, struct jffs2_inode_info *f, uint
 	ri->totlen = cpu_to_je32(PAD(sizeof(*ri)));
 	ri->hdr_crc = cpu_to_je32(crc32(0, ri, sizeof(struct jffs2_unknown_node)-4));
 	ri->mode = cpu_to_jemode(mode);
+	ri->flags = cpu_to_je16(0);
 
 	f->highest_version = 1;
 	ri->version = cpu_to_je32(f->highest_version);

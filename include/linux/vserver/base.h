@@ -68,12 +68,12 @@ enum {
 
 /* network flags */
 
-#define __nx_flags(v)	((v) ? (v)->nx_flags : 0)
+#define __nx_flags(n)	((n) ? (n)->nx_flags : 0)
 
 #define nx_current_flags()	__nx_flags(current->nx_info)
 
-#define nx_info_flags(v, m, f) \
-	vs_check_flags(__nx_flags(v), m, f)
+#define nx_info_flags(n, m, f) \
+	vs_check_flags(__nx_flags(n), m, f)
 
 #define task_nx_flags(t, m, f) \
 	((t) && nx_info_flags((t)->nx_info, m, f))
@@ -83,11 +83,11 @@ enum {
 
 /* network caps */
 
-#define __nx_ncaps(v)	((v) ? (v)->nx_ncaps : 0)
+#define __nx_ncaps(n)	((n) ? (n)->nx_ncaps : 0)
 
 #define nx_current_ncaps()	__nx_ncaps(current->nx_info)
 
-#define nx_info_ncaps(v, c)	(__nx_ncaps(v) & (c))
+#define nx_info_ncaps(n, c)	(__nx_ncaps(n) & (c))
 
 #define nx_ncaps(c)	nx_info_ncaps(current->nx_info, c)
 
@@ -133,6 +133,8 @@ enum {
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))
 
+#define nx_capable(b, c) (capable(b) || \
+	(cap_raised(current->cap_effective, b) && nx_ncaps(c)))
 
 #define vx_current_initpid(n) \
 	(current->vx_info && \
@@ -144,8 +146,8 @@ enum {
 #define vx_info_state(v, m)	(__vx_state(v) & (m))
 
 
-#define __nx_state(v)	((v) ? ((v)->nx_state) : 0)
+#define __nx_state(n)	((n) ? ((n)->nx_state) : 0)
 
-#define nx_info_state(v, m)	(__nx_state(v) & (m))
+#define nx_info_state(n, m)	(__nx_state(n) & (m))
 
 #endif

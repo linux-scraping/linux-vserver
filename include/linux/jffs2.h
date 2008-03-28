@@ -83,12 +83,36 @@
 //#define JFFS2_NODETYPE_OPTIONS (JFFS2_FEATURE_RWCOMPAT_COPY | JFFS2_NODE_ACCURATE | 4)
 
 
-#define JFFS2_INO_FLAG_PREREAD	  1	/* Do read_inode() for this one at
+#define JFFS2_INO_FLAG_PREREAD	  0x01	/* Do read_inode() for this one at
 					   mount time, don't wait for it to
 					   happen later */
-#define JFFS2_INO_FLAG_USERCOMPR  2	/* User has requested a specific
+#define JFFS2_INO_FLAG_USERCOMPR 0x02	/* User has requested a specific
 					   compression type */
 
+#define JFFS2_INO_FLAG_IMMUTABLE 0x10	/* immutable node */
+#define JFFS2_INO_FLAG_IUNLINK	  0x20	/* immutable unlink */
+#define JFFS2_INO_FLAG_BARRIER	  0x40	/* barrier */
+
+#define JFFS2_USER_VISIBLE	  0x10
+#define JFFS2_USER_MODIFIABLE	  0x10
+
+/*
+ * Mount flags
+ */
+#define JFFS2_MOUNT_TAGGED	(1<<24)	  /* Enable Context Tags */
+
+#define clear_opt(o, opt)	o &= ~JFFS2_MOUNT_##opt
+#define set_opt(o, opt)		o |= JFFS2_MOUNT_##opt
+
+/*
+ * Maximal mount counts between two filesystem checks
+ */
+#define EXT2_DFL_MAX_MNT_COUNT		20	/* Allow 20 mounts */
+#define EXT2_DFL_CHECKINTERVAL		0	/* Don't use interval check */
+
+/*
+ * Behaviour when detecting errors
+ */
 
 /* These can go once we've made sure we've caught all uses without
    byteswapping */
@@ -98,7 +122,7 @@ typedef struct {
 } __attribute__((packed)) jint32_t;
 
 typedef struct {
-	uint32_t m;
+	uint16_t m;
 } __attribute__((packed)) jmode_t;
 
 typedef struct {
@@ -146,7 +170,8 @@ struct jffs2_raw_inode
 	jint32_t hdr_crc;
 	jint32_t ino;        /* Inode number.  */
 	jint32_t version;    /* Version number.  */
-	jmode_t mode;       /* The file's type or mode.  */
+	jmode_t mode;        /* The file's type or mode.  */
+	jint16_t tag;	     /* context tagging */
 	jint16_t uid;        /* The file's owner.  */
 	jint16_t gid;        /* The file's group.  */
 	jint32_t isize;      /* Total resultant size of this inode (used for truncations)  */

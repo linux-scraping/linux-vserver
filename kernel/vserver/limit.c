@@ -10,14 +10,12 @@
  *
  */
 
+#include <linux/sched.h>
 #include <linux/module.h>
-#include <linux/vs_context.h>
 #include <linux/vs_limit.h>
 #include <linux/vserver/limit.h>
-#include <linux/vserver/switch.h>
 #include <linux/vserver/limit_cmd.h>
 
-#include <asm/errno.h>
 #include <asm/uaccess.h>
 
 
@@ -310,9 +308,11 @@ unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm)
 	if (!vxi)
 		return 0;
 
+	points = vxi->vx_badness_bias;
+
 	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
 	w = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	points = (v > w) ? (v - w) : 0;
+	points += (v > w) ? (v - w) : 0;
 
 	return points;
 }
