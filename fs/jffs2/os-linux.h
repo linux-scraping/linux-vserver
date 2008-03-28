@@ -29,6 +29,7 @@ struct kvec;
 #define JFFS2_F_I_MODE(f) (OFNI_EDONI_2SFFJ(f)->i_mode)
 #define JFFS2_F_I_UID(f) (OFNI_EDONI_2SFFJ(f)->i_uid)
 #define JFFS2_F_I_GID(f) (OFNI_EDONI_2SFFJ(f)->i_gid)
+#define JFFS2_F_I_TAG(f) (OFNI_EDONI_2SFFJ(f)->i_tag)
 #define JFFS2_F_I_RDEV(f) (OFNI_EDONI_2SFFJ(f)->i_rdev)
 
 #define ITIME(sec) ((struct timespec){sec, 0})
@@ -204,6 +205,9 @@ int jffs2_flash_direct_writev(struct jffs2_sb_info *c, const struct kvec *vecs,
 		       unsigned long count, loff_t to, size_t *retlen);
 int jffs2_flash_direct_write(struct jffs2_sb_info *c, loff_t ofs, size_t len,
 			size_t *retlen, const u_char *buf);
+
+#define JFFS2_IOC_GETFLAGS		FS_IOC_GETFLAGS
+#define JFFS2_IOC_SETFLAGS		FS_IOC_SETFLAGS
 
 #endif /* __JFFS2_OS_LINUX_H__ */
 

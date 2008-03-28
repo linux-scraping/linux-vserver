@@ -11,16 +11,12 @@
  *
  */
 
-#include <linux/sched.h>
-#include <linux/sysctl.h>
 #include <linux/types.h>
 #include <linux/utsname.h>
-#include <linux/vs_context.h>
 #include <linux/vs_cvirt.h>
 #include <linux/vserver/switch.h>
 #include <linux/vserver/cvirt_cmd.h>
 
-#include <asm/errno.h>
 #include <asm/uaccess.h>
 
 

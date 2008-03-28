@@ -155,25 +155,6 @@ static __inline__ struct nx_info *__task_get_nx_info(struct task_struct *p,
 }
 
 
-
-
-static inline int addr_in_nx_info(struct nx_info *nxi, uint32_t addr)
-{
-	int n, i;
-
-	if (!nxi)
-		return 1;
-
-	n = nxi->nbipv4;
-	if (n && (nxi->ipv4[0] == 0))
-		return 1;
-	for (i = 0; i < n; i++) {
-		if (nxi->ipv4[i] == addr)
-			return 1;
-	}
-	return 0;
-}
-
 static inline void exit_nx_info(struct task_struct *p)
 {
 	if (p->nx_info)

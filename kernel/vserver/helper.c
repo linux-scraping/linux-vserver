@@ -9,16 +9,11 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/kmod.h>
-#include <linux/sched.h>
 #include <linux/reboot.h>
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
 #include <linux/vserver/signal.h>
-
-#include <asm/uaccess.h>
-#include <asm/unistd.h>
 
 
 char vshelper_path[255] = "/sbin/vshelper";
@@ -95,11 +90,7 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 		return 0;
 	}
 
-#ifndef CONFIG_VSERVER_LEGACY
-	ret = do_vshelper(vshelper_path, argv, envp, 1);
-#else
 	ret = do_vshelper(vshelper_path, argv, envp, 0);
-#endif
 	vxi->vx_state &= ~VXS_HELPER;
 	__wakeup_vx_info(vxi);
 	return (ret) ? -EPERM : 0;

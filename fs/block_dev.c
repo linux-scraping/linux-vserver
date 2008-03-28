@@ -23,6 +23,7 @@
 #include <linux/uio.h>
 #include <linux/namei.h>
 #include <linux/log2.h>
+#include <linux/vs_device.h>
 #include <asm/uaccess.h>
 #include "internal.h"
 
@@ -584,6 +585,7 @@ struct block_device *bdget(dev_t dev)
 		bdev->bd_invalidated = 0;
 		inode->i_mode = S_IFBLK;
 		inode->i_rdev = dev;
+		inode->i_mdev = dev;
 		inode->i_bdev = bdev;
 		inode->i_data.a_ops = &def_blk_aops;
 		mapping_set_gfp_mask(&inode->i_data, GFP_USER);
@@ -620,6 +622,11 @@ EXPORT_SYMBOL(bdput);
 static struct block_device *bd_acquire(struct inode *inode)
 {
 	struct block_device *bdev;
+	dev_t mdev;
+
+	if (!vs_map_blkdev(inode->i_rdev, &mdev, DATTR_OPEN))
+		return NULL;
+	inode->i_mdev = mdev;
 
 	spin_lock(&bdev_lock);
 	bdev = inode->i_bdev;
@@ -630,7 +637,7 @@ static struct block_device *bd_acquire(struct inode *inode)
 	}
 	spin_unlock(&bdev_lock);
 
-	bdev = bdget(inode->i_rdev);
+	bdev = bdget(mdev);
 	if (bdev) {
 		spin_lock(&bdev_lock);
 		if (!inode->i_bdev) {

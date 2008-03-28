@@ -13,20 +13,13 @@
  */
 
 #include <linux/utsname.h>
-#include <linux/sched.h>
+#include <linux/nsproxy.h>
+#include <linux/err.h>
+#include <asm/uaccess.h>
+
 #include <linux/vs_context.h>
 #include <linux/vserver/space.h>
 #include <linux/vserver/space_cmd.h>
-#include <linux/dcache.h>
-#include <linux/mount.h>
-#include <linux/nsproxy.h>
-#include <linux/user_namespace.h>
-#include <linux/pid_namespace.h>
-#include <linux/fs.h>
-
-#include <asm/errno.h>
-#include <asm/uaccess.h>
-
 
 atomic_t vs_global_nsproxy	= ATOMIC_INIT(0);
 atomic_t vs_global_fs		= ATOMIC_INIT(0);
@@ -40,6 +33,8 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 /* namespace functions */
 
 #include <linux/mnt_namespace.h>
+#include <linux/user_namespace.h>
+#include <linux/pid_namespace.h>
 
 const struct vcmd_space_mask space_mask = {
 	.mask = CLONE_NEWNS |

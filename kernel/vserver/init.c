@@ -9,9 +9,7 @@
  *
  */
 
-#include <linux/errno.h>
 #include <linux/init.h>
-#include <linux/module.h>
 
 int	vserver_register_sysctl(void);
 void	vserver_unregister_sysctl(void);

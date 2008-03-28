@@ -35,6 +35,7 @@
 #include <linux/vs_base.h>
 #include <linux/vs_tag.h>
 #include <linux/vs_cowbl.h>
+#include <linux/vs_device.h>
 #include <linux/vs_context.h>
 #include <asm/namei.h>
 #include <asm/uaccess.h>
@@ -244,9 +245,8 @@ static inline int dx_permission(struct inode *inode, int mask, struct nameidata 
 {
 	if (dx_barrier(inode))
 		return -EACCES;
-	if (inode->i_tag == 0)
-		return 0;
-	if (dx_check(inode->i_tag, DX_ADMIN|DX_WATCH|DX_IDENT))
+	if (dx_notagcheck(nd) ||
+	    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
 		return 0;
 
 	vxwprintk_task(1, "denied access to %p[#%d,%lu] »%s«.",
@@ -290,8 +290,11 @@ int permission(struct inode *inode, int mask, struct nameidata *nd)
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
 	submask = mask & ~MAY_APPEND;
-	if ((retval = dx_permission(inode, mask, nd)))
+	if ((inode->i_sb->s_magic != DEVPTS_SUPER_MAGIC) &&
+		(inode->i_sb->s_magic != PROC_SUPER_MAGIC) &&
+		(retval = dx_permission(inode, mask, nd)))
 		return retval;
+
 	if (inode->i_op && inode->i_op->permission) {
 		retval = inode->i_op->permission(inode, submask, nd);
 		if (!retval) {
@@ -829,14 +832,20 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 	inode = dentry->d_inode;
 	if (!inode)
 		goto done;
+
 	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
 		struct proc_dir_entry *de = PDE(inode);
 
 		if (de && !vx_hide_check(0, de->vx_flags))
 			goto hidden;
+	} else if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
+		if (!vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
+			goto hidden;
+	} else {
+		if (!dx_notagcheck(nd) && !dx_check(inode->i_tag,
+			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
+			goto hidden;
 	}
-	if (!dx_check(inode->i_tag, DX_WATCH|DX_ADMIN|DX_HOSTID|DX_IDENT))
-		goto hidden;
 done:
 	path->mnt = mnt;
 	path->dentry = dentry;
@@ -1657,7 +1666,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (S_ISLNK(inode->i_mode))
 		return -ELOOP;
 	
-	if (S_ISDIR(inode->i_mode) && (flag & FMODE_WRITE))
+	if (S_ISDIR(inode->i_mode) && (acc_mode & MAY_WRITE))
 		return -EISDIR;
 
 	/*
@@ -1672,7 +1681,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 			return -EACCES;
 
 		flag &= ~O_TRUNC;
-	} else if (IS_RDONLY(inode) && (flag & FMODE_WRITE))
+	} else if (IS_RDONLY(inode) && (acc_mode & MAY_WRITE))
 		return -EROFS;
 
 #ifdef	CONFIG_VSERVER_COWBL
@@ -2007,9 +2016,17 @@ int vfs_mknod(struct inode *dir, struct dentry *dentry,
 	if (error)
 		return error;
 
-	if ((S_ISCHR(mode) || S_ISBLK(mode)) && !capable(CAP_MKNOD))
+	if (!(S_ISCHR(mode) || S_ISBLK(mode)))
+		goto okay;
+
+	if (!capable(CAP_MKNOD))
 		return -EPERM;
 
+	if (S_ISCHR(mode) && !vs_chrdev_perm(dev, DATTR_CREATE))
+		return -EPERM;
+	if (S_ISBLK(mode) && !vs_blkdev_perm(dev, DATTR_CREATE))
+		return -EPERM;
+okay:
 	if (!dir->i_op || !dir->i_op->mknod)
 		return -EPERM;
 
@@ -2828,7 +2845,7 @@ struct dentry *cow_break_link(const char *pathname)
 	struct file *old_file;
 	struct file *new_file;
 	char *to, *path, pad='\251';
-	loff_t ppos, size;
+	loff_t size;
 
 	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
@@ -2921,7 +2938,6 @@ retry:
 		goto out_fput_old;
 
 	size = i_size_read(old_file->f_dentry->d_inode);
-	ppos = 0;
 	ret = do_cow_splice(old_file, new_file, size);
 	vxdprintk(VXD_CBIT(misc, 2), "do_splice_direct: %d", ret);
 	if (ret < 0) {

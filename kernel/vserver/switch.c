@@ -13,13 +13,11 @@
  *  V0.06  added compat32 layer
  *  V0.07  vcmd args and perms
  *  V0.08  added status commands
+ *  V0.09  added tag commands
+ *  V0.10  added oom bias
+ *  V0.11  added device commands
  *
  */
-
-#include <linux/linkage.h>
-#include <linux/sched.h>
-#include <linux/compat.h>
-#include <asm/errno.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_network.h>
@@ -27,13 +25,10 @@
 
 #include "vci_config.h"
 
+
 static inline
 int vc_get_version(uint32_t id)
 {
-#ifdef	CONFIG_VSERVER_LEGACY_VERSION
-	if (id == 63)
-		return VCI_LEGACY_VERSION;
-#endif
 	return VCI_VERSION;
 }
 
@@ -54,8 +49,9 @@ int vc_get_vci(uint32_t id)
 #include <linux/vserver/dlimit_cmd.h>
 #include <linux/vserver/signal_cmd.h>
 #include <linux/vserver/space_cmd.h>
+#include <linux/vserver/tag_cmd.h>
+#include <linux/vserver/device_cmd.h>
 
-#include <linux/vserver/legacy.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/dlimit.h>
 
@@ -86,16 +82,18 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_get_vci(id);
 
 	case VCMD_task_xid:
-		return vc_task_xid(id, data);
+		return vc_task_xid(id);
 	case VCMD_vx_info:
 		return vc_vx_info(vxi, data);
 
 	case VCMD_task_nid:
-		return vc_task_nid(id, data);
+		return vc_task_nid(id);
 	case VCMD_nx_info:
 		return vc_nx_info(nxi, data);
 
-	case VCMD_set_space_v0:
+	case VCMD_task_tag:
+		return vc_task_tag(id);
+
 	/* this is version 1 */
 	case VCMD_set_space:
 		return vc_set_space(vxi, data);
@@ -138,13 +136,9 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_cflags:
 		return vc_get_cflags(vxi, data);
 
-	case VCMD_set_ccaps_v0:
-		return vc_set_ccaps_v0(vxi, data);
 	/* this is version 1 */
 	case VCMD_set_ccaps:
 		return vc_set_ccaps(vxi, data);
-	case VCMD_get_ccaps_v0:
-		return vc_get_ccaps_v0(vxi, data);
 	/* this is version 1 */
 	case VCMD_get_ccaps:
 		return vc_get_ccaps(vxi, data);
@@ -152,6 +146,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_set_bcaps(vxi, data);
 	case VCMD_get_bcaps:
 		return vc_get_bcaps(vxi, data);
+
+	case VCMD_set_badness:
+		return vc_set_badness(vxi, data);
+	case VCMD_get_badness:
+		return vc_get_badness(vxi, data);
 
 	case VCMD_set_nflags:
 		return vc_set_nflags(nxi, data);
@@ -163,12 +162,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_ncaps:
 		return vc_get_ncaps(nxi, data);
 
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_set_sched_v2:
-		return vc_set_sched_v2(vxi, data);
-#endif
-	case VCMD_set_sched_v3:
-		return vc_set_sched_v3(vxi, data);
 	case VCMD_set_sched_v4:
 		return vc_set_sched_v4(vxi, data);
 	/* this is version 5 */
@@ -193,11 +186,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 
 	case VCMD_wait_exit:
 		return vc_wait_exit(vxi, data);
-
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_create_context:
-		return vc_ctx_create(id, NULL);
-#endif
 
 	case VCMD_get_iattr:
 		return __COMPAT_NO_ID(vc_get_iattr, data, compat);
@@ -230,11 +218,42 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_net_create(id, data);
 	case VCMD_net_migrate:
 		return vc_net_migrate(nxi, data);
+
+	case VCMD_tag_migrate:
+		return vc_tag_migrate(id);
+
 	case VCMD_net_add:
 		return vc_net_add(nxi, data);
 	case VCMD_net_remove:
 		return vc_net_remove(nxi, data);
 
+	case VCMD_net_add_ipv4:
+		return vc_net_add_ipv4(nxi, data);
+	case VCMD_net_remove_ipv4:
+		return vc_net_remove_ipv4(nxi, data);
+#ifdef	CONFIG_IPV6
+	case VCMD_net_add_ipv6:
+		return vc_net_add_ipv6(nxi, data);
+	case VCMD_net_remove_ipv6:
+		return vc_net_remove_ipv6(nxi, data);
+#endif
+/*	case VCMD_add_match_ipv4:
+		return vc_add_match_ipv4(nxi, data);
+	case VCMD_get_match_ipv4:
+		return vc_get_match_ipv4(nxi, data);
+#ifdef	CONFIG_IPV6
+	case VCMD_add_match_ipv6:
+		return vc_add_match_ipv6(nxi, data);
+	case VCMD_get_match_ipv6:
+		return vc_get_match_ipv6(nxi, data);
+#endif	*/
+
+#ifdef	CONFIG_VSERVER_DEVICE
+	case VCMD_set_mapping:
+		return __COMPAT(vc_set_mapping, vxi, data, compat);
+	case VCMD_unset_mapping:
+		return __COMPAT(vc_unset_mapping, vxi, data, compat);
+#endif
 #ifdef	CONFIG_VSERVER_HISTORY
 	case VCMD_dump_history:
 		return vc_dump_history(id);
@@ -244,14 +263,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #ifdef	CONFIG_VSERVER_MONITOR
 	case VCMD_read_monitor:
 		return __COMPAT(vc_read_monitor, id, data, compat);
-#endif
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_new_s_context:
-		return vc_new_s_context(id, data);
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	case VCMD_set_ipv4root:
-		return vc_set_ipv4root(id, data);
 #endif
 	default:
 		vxwprintk_task(1, "unimplemented VCMD_%02d_%d[%d]",
@@ -300,9 +311,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(reset_minmax,	 2, VCA_VXI,	0);
 	__VCMD(vx_info,		 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_bcaps,	 3, VCA_VXI,	VCF_INFO);
-	__VCMD(get_ccaps_v0,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_ccaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_cflags,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(get_badness,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
 
@@ -315,6 +326,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(nx_info,		 3, VCA_NXI,	VCF_INFO);
 	__VCMD(get_ncaps,	 3, VCA_NXI,	VCF_INFO);
 	__VCMD(get_nflags,	 3, VCA_NXI,	VCF_INFO);
+
+	__VCMD(task_tag,	 2, VCA_NONE,	0);
 
 	__VCMD(get_iattr,	 2, VCA_NONE,	0);
 	__VCMD(fget_iattr,	 2, VCA_NONE,	0);
@@ -335,34 +348,42 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(net_create,	 5, VCA_NONE,	0);
 	__VCMD(net_migrate,	 5, VCA_NXI,	VCF_ADMIN);
 
+	__VCMD(tag_migrate,	 5, VCA_NONE,	VCF_ADMIN);
+
 	/* higher admin commands */
 	__VCMD(ctx_kill,	 6, VCA_VXI,	VCF_ARES);
-	__VCMD(set_space_v0,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_space,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
-	__VCMD(set_ccaps_v0,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_ccaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_bcaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_cflags,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(set_badness,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_vhi_name,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_rlimit,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_sched,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
-	__VCMD(set_sched_v2,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
-	__VCMD(set_sched_v3,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_sched_v4,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_ncaps,	 7, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_nflags,	 7, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_add,		 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_remove,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
-
+	__VCMD(net_add_ipv4,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(net_remove_ipv4,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+#ifdef	CONFIG_IPV6
+	__VCMD(net_add_ipv6,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(net_remove_ipv6,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+#endif
 	__VCMD(set_iattr,	 7, VCA_NONE,	0);
 	__VCMD(fset_iattr,	 7, VCA_NONE,	0);
 	__VCMD(set_dlimit,	 7, VCA_NONE,	VCF_ARES);
 	__VCMD(add_dlimit,	 8, VCA_NONE,	VCF_ARES);
 	__VCMD(rem_dlimit,	 8, VCA_NONE,	VCF_ARES);
 
+#ifdef	CONFIG_VSERVER_DEVICE
+	__VCMD(set_mapping,	 8, VCA_VXI,    VCF_ARES|VCF_ZIDOK);
+	__VCMD(unset_mapping,	 8, VCA_VXI,	VCF_ARES|VCF_ZIDOK);
+#endif
 	/* debug level admin commands */
 #ifdef	CONFIG_VSERVER_HISTORY
 	__VCMD(dump_history,	 9, VCA_NONE,	0);
@@ -372,14 +393,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(read_monitor,	 9, VCA_NONE,	0);
 #endif
 
-	/* legacy commands */
-#ifdef	CONFIG_VSERVER_LEGACY
-	__VCMD(new_s_context,	 1, VCA_NONE,	0);
-	__VCMD(create_context,	 5, VCA_NONE,	0);
-#endif
-#ifdef	CONFIG_VSERVER_LEGACYNET
-	__VCMD(set_ipv4root,	 5, VCA_NONE,	0);
-#endif
 	default:
 		perm = -1;
 	}
@@ -395,15 +408,8 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 		goto out;
 
 	state = 1;
-#ifdef	CONFIG_VSERVER_LEGACY
-	if (!capable(CAP_CONTEXT) &&
-		/* dirty hack for capremove */
-		!(cmd == VCMD_new_s_context && id == -2))
-		goto out;
-#else
 	if (!capable(CAP_CONTEXT))
 		goto out;
-#endif
 
 	state = 2;
 	/* moved here from the individual commands */
@@ -420,16 +426,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	state = 4;
 	/* various legacy exceptions */
 	switch (cmd) {
-#ifdef	CONFIG_VSERVER_LEGACY
-	case VCMD_set_cflags:
-	case VCMD_set_ccaps_v0:
-		ret = 0;
-		if (vx_check(0, VS_WATCH))
-			goto out;
-		break;
-
-	case VCMD_ctx_create_v0:
-#endif
 	/* will go away when spectator is a cap */
 	case VCMD_ctx_migrate_v0:
 	case VCMD_ctx_migrate:
@@ -447,11 +443,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 			ret = 1;
 			goto out;
 		}
-		break;
-
-	/* legacy special casing */
-	case VCMD_set_space_v0:
-		id = -1;
 		break;
 	}
 

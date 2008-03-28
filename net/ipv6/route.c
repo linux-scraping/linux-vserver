@@ -329,7 +329,7 @@ static inline int rt6_check_dev(struct rt6_info *rt, int oif)
 static inline int rt6_check_neigh(struct rt6_info *rt)
 {
 	struct neighbour *neigh = rt->rt6i_nexthop;
-	int m = 0;
+	int m;
 	if (rt->rt6i_flags & RTF_NONEXTHOP ||
 	    !(rt->rt6i_flags & RTF_GATEWAY))
 		m = 1;
@@ -337,10 +337,15 @@ static inline int rt6_check_neigh(struct rt6_info *rt)
 		read_lock_bh(&neigh->lock);
 		if (neigh->nud_state & NUD_VALID)
 			m = 2;
-		else if (!(neigh->nud_state & NUD_FAILED))
+#ifdef CONFIG_IPV6_ROUTER_PREF
+		else if (neigh->nud_state & NUD_FAILED)
+			m = 0;
+#endif
+		else
 			m = 1;
 		read_unlock_bh(&neigh->lock);
-	}
+	} else
+		m = 0;
 	return m;
 }
 
@@ -2114,7 +2119,7 @@ static int rt6_fill_node(struct sk_buff *skb, struct rt6_info *rt,
 		NLA_PUT_U32(skb, RTA_IIF, iif);
 	else if (dst) {
 		struct in6_addr saddr_buf;
-		if (ipv6_get_saddr(&rt->u.dst, dst, &saddr_buf) == 0)
+		if (ipv6_get_saddr(&rt->u.dst, dst, &saddr_buf, (skb->sk ? skb->sk->sk_nx_info : NULL)) == 0)
 			NLA_PUT(skb, RTA_PREFSRC, 16, &saddr_buf);
 	}
 

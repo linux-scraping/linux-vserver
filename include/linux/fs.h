@@ -277,13 +277,8 @@ extern int dir_notify_enable;
 #define FS_IUNLINK_FL			0x08000000 /* Immutable unlink */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
-#ifdef CONFIG_VSERVER_LEGACY
-#define FS_FL_USER_VISIBLE		0x0803DFFF /* User visible flags */
-#define FS_FL_USER_MODIFIABLE		0x080380FF /* User modifiable flags */
-#else
 #define FS_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
 #define FS_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
-#endif
 
 #define SYNC_FILE_RANGE_WAIT_BEFORE	1
 #define SYNC_FILE_RANGE_WRITE		2
@@ -627,6 +622,7 @@ struct inode {
 	gid_t			i_gid;
 	tag_t			i_tag;
 	dev_t			i_rdev;
+	dev_t			i_mdev;
 	unsigned long		i_version;
 	loff_t			i_size;
 #ifdef __NEED_I_SIZE_ORDERED
@@ -761,12 +757,12 @@ static inline void i_size_write(struct inode *inode, loff_t i_size)
 
 static inline unsigned iminor(const struct inode *inode)
 {
-	return MINOR(inode->i_rdev);
+	return MINOR(inode->i_mdev);
 }
 
 static inline unsigned imajor(const struct inode *inode)
 {
-	return MAJOR(inode->i_rdev);
+	return MAJOR(inode->i_mdev);
 }
 
 extern struct block_device *I_BDEV(struct inode *inode);

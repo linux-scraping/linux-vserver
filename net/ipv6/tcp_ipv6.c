@@ -68,6 +68,7 @@
 
 #include <linux/crypto.h>
 #include <linux/scatterlist.h>
+#include <linux/vs_inet6.h>
 
 /* Socket used for sending RSTs and ACKs */
 static struct socket *tcp6_socket;
@@ -160,8 +161,15 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	 *	connect() to INADDR_ANY means loopback (BSD'ism).
 	 */
 
-	if(ipv6_addr_any(&usin->sin6_addr))
-		usin->sin6_addr.s6_addr[15] = 0x1;
+	if(ipv6_addr_any(&usin->sin6_addr)) {
+		struct nx_info *nxi =  sk->sk_nx_info;
+
+		if (nxi && nx_info_has_v6(nxi))
+			/* FIXME: remap lback? */
+			usin->sin6_addr = nxi->v6.ip;
+		else
+			usin->sin6_addr.s6_addr[15] = 0x1;
+	}
 
 	addr_type = ipv6_addr_type(&usin->sin6_addr);
 

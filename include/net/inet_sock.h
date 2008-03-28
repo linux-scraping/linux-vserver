@@ -24,7 +24,7 @@
 #include <net/flow.h>
 #include <net/sock.h>
 #include <net/request_sock.h>
-#include <net/route.h>
+// #include <net/route.h>
 
 /** struct ip_options - IP Options
  *
@@ -114,7 +114,6 @@ struct inet_sock {
 	/* Socket demultiplex comparisons on incoming packets. */
 	__be32			daddr;
 	__be32			rcv_saddr;
-	__be32			rcv_saddr2;	/* Second bound ipv4 addr, for ipv4root */
 	__be16			dport;
 	__u16			num;
 	__be32			saddr;
@@ -176,7 +175,8 @@ extern void build_ehash_secret(void);
 static inline unsigned int inet_ehashfn(const __be32 laddr, const __u16 lport,
 					const __be32 faddr, const __be16 fport)
 {
-	return jhash_2words((__force __u32) laddr ^ (__force __u32) faddr,
+	return jhash_3words((__force __u32) laddr,
+			    (__force __u32) faddr,
 			    ((__u32) lport) << 16 | (__force __u32)fport,
 			    inet_ehash_secret);
 }
@@ -192,12 +192,5 @@ static inline int inet_sk_ehashfn(const struct sock *sk)
 	return inet_ehashfn(laddr, lport, faddr, fport);
 }
 
-
-static inline int inet_iif(const struct sk_buff *skb)
-{
-	struct rtable *rt = (struct rtable *)skb->dst;
-
-	return rt->rt_iif;
-}
 
 #endif	/* _INET_SOCK_H */

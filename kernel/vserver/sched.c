@@ -8,16 +8,16 @@
  *  V0.01  adapted Sam Vilains version to 2.6.3
  *  V0.02  removed legacy interface
  *  V0.03  changed vcmds to vxi arg
+ *  V0.04  removed older and legacy interfaces
  *
  */
 
-#include <linux/sched.h>
 #include <linux/vs_context.h>
 #include <linux/vs_sched.h>
 #include <linux/vserver/sched_cmd.h>
 
-#include <asm/errno.h>
 #include <asm/uaccess.h>
+
 
 #define vxd_check_range(val, min, max) do {		\
 	vxlprintk((val < min) || (val > max),		\
@@ -263,6 +263,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 	update_mask = vxi->sched.update_mask & VXSM_SET_MASK;
 	update_mask |= (set_mask & (VXSM_SET_MASK | VXSM_IDLE_TIME));
 	vxi->sched.update_mask = update_mask;
+
 #ifdef	CONFIG_SMP
 	rmb();
 	if (set_mask & VXSM_CPU_ID) {
@@ -289,6 +290,7 @@ static int do_set_sched(struct vx_info *vxi, struct vcmd_sched_v5 *data)
 	return 0;
 }
 
+
 #define COPY_IDS(C) C(cpu_id); C(bucket_id)
 #define COPY_PRI(C) C(prio_bias)
 #define COPY_TOK(C) C(tokens); C(tokens_min); C(tokens_max)
@@ -308,50 +310,6 @@ static int do_set_sched_v4(struct vx_info *vxi, struct vcmd_set_sched_v4 *data)
 	vc_data.fill_rate[0] = vc_data.fill_rate[1] = data->fill_rate;
 	vc_data.interval[0] = vc_data.interval[1] = data->interval;
 	return do_set_sched(vxi, &vc_data);
-}
-
-#ifdef	CONFIG_VSERVER_LEGACY
-
-#define COPY_MASK_V2(name, mask)			\
-	if (vc_data.name != SCHED_KEEP) {		\
-		vc_data_v4.name = vc_data.name;		\
-		vc_data_v4.set_mask |= mask;		\
-	}
-
-int vc_set_sched_v2(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_set_sched_v2 vc_data;
-	struct vcmd_set_sched_v4 vc_data_v4 = { .set_mask = 0 };
-
-	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	COPY_MASK_V2(fill_rate,	 VXSM_FILL_RATE);
-	COPY_MASK_V2(interval,	 VXSM_INTERVAL);
-	COPY_MASK_V2(tokens,	 VXSM_TOKENS);
-	COPY_MASK_V2(tokens_min, VXSM_TOKENS_MIN);
-	COPY_MASK_V2(tokens_max, VXSM_TOKENS_MAX);
-	vc_data_v4.bucket_id = 0;
-
-	do_set_sched_v4(vxi, &vc_data_v4);
-	return 0;
-}
-#endif
-
-int vc_set_sched_v3(struct vx_info *vxi, void __user *data)
-{
-	struct vcmd_set_sched_v3 vc_data;
-	struct vcmd_set_sched_v4 vc_data_v4;
-
-	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
-		return -EFAULT;
-
-	/* structures are binary compatible */
-	memcpy(&vc_data_v4, &vc_data, sizeof(vc_data));
-	vc_data_v4.set_mask &= VXSM_V3_MASK;
-	vc_data_v4.bucket_id = 0;
-
-	return do_set_sched_v4(vxi, &vc_data_v4);
 }
 
 int vc_set_sched_v4(struct vx_info *vxi, void __user *data)
@@ -375,6 +333,14 @@ int vc_set_sched(struct vx_info *vxi, void __user *data)
 
 	return do_set_sched(vxi, &vc_data);
 }
+
+
+#define COPY_PRI(C) C(prio_bias)
+#define COPY_TOK(C) C(tokens); C(tokens_min); C(tokens_max)
+#define COPY_FRI(C) C(fill_rate[0]); C(interval[0]);    \
+		    C(fill_rate[1]); C(interval[1]);
+
+#define COPY_VALUE(name) vc_data.name = data->name
 
 
 int vc_get_sched(struct vx_info *vxi, void __user *data)

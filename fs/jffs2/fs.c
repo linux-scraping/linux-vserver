@@ -20,6 +20,7 @@
 #include <linux/vmalloc.h>
 #include <linux/vfs.h>
 #include <linux/crc32.h>
+#include <linux/vs_tag.h>
 #include "nodelist.h"
 
 static int jffs2_flash_setup(struct jffs2_sb_info *c);
@@ -95,6 +96,7 @@ int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 
 	ri->uid = cpu_to_je16((ivalid & ATTR_UID)?iattr->ia_uid:inode->i_uid);
 	ri->gid = cpu_to_je16((ivalid & ATTR_GID)?iattr->ia_gid:inode->i_gid);
+	ri->tag = cpu_to_je16((ivalid & ATTR_TAG)?iattr->ia_tag:inode->i_tag);
 
 	if (ivalid & ATTR_MODE)
 		if (iattr->ia_mode & S_ISGID &&
@@ -114,6 +116,8 @@ int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	ri->offset = cpu_to_je32(0);
 	ri->csize = ri->dsize = cpu_to_je32(mdatalen);
 	ri->compr = JFFS2_COMPR_NONE;
+	ri->flags = cpu_to_je16(f->flags);
+
 	if (ivalid & ATTR_SIZE && inode->i_size < iattr->ia_size) {
 		/* It's an extension. Make it a hole node */
 		ri->compr = JFFS2_COMPR_ZERO;
@@ -143,6 +147,7 @@ int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	inode->i_mode = jemode_to_cpu(ri->mode);
 	inode->i_uid = je16_to_cpu(ri->uid);
 	inode->i_gid = je16_to_cpu(ri->gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0, je16_to_cpu(ri->tag));
 
 
 	old_metadata = f->metadata;
@@ -174,6 +179,48 @@ int jffs2_do_setattr (struct inode *inode, struct iattr *iattr)
 	if (ivalid & ATTR_SIZE && inode->i_size > iattr->ia_size)
 		vmtruncate(inode, iattr->ia_size);
 
+	return 0;
+}
+
+void jffs2_set_inode_flags(struct inode *inode)
+{
+	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
+	unsigned int flags = f->flags;
+
+	inode->i_flags &= ~(JFFS2_INO_FLAG_IMMUTABLE |
+		JFFS2_INO_FLAG_IUNLINK | JFFS2_INO_FLAG_BARRIER);
+
+	if (flags & JFFS2_INO_FLAG_IMMUTABLE)
+		inode->i_flags |= S_IMMUTABLE;
+	if (flags & JFFS2_INO_FLAG_IUNLINK)
+		inode->i_flags |= S_IUNLINK;
+	if (flags & JFFS2_INO_FLAG_BARRIER)
+		inode->i_flags |= S_BARRIER;
+}
+
+int jffs2_sync_flags(struct inode *inode)
+{
+	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
+	unsigned int oldflags, newflags;
+
+	oldflags = f->flags;
+	newflags = oldflags & ~(JFFS2_INO_FLAG_IMMUTABLE |
+		JFFS2_INO_FLAG_IUNLINK | JFFS2_INO_FLAG_BARRIER);
+
+	if (IS_IMMUTABLE(inode))
+		newflags |= JFFS2_INO_FLAG_IMMUTABLE;
+	if (IS_IUNLINK(inode))
+		newflags |= JFFS2_INO_FLAG_IUNLINK;
+	if (IS_BARRIER(inode))
+		newflags |= JFFS2_INO_FLAG_BARRIER;
+
+	if (oldflags ^ newflags) {
+		f->flags = newflags;
+		inode->i_ctime = CURRENT_TIME;
+		/* strange requirement, see jffs2_dirty_inode() */
+		inode->i_state |= I_DIRTY_DATASYNC;
+		mark_inode_dirty(inode);
+	}
 	return 0;
 }
 
@@ -257,6 +304,8 @@ void jffs2_read_inode (struct inode *inode)
 	inode->i_mode = jemode_to_cpu(latest_node.mode);
 	inode->i_uid = je16_to_cpu(latest_node.uid);
 	inode->i_gid = je16_to_cpu(latest_node.gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0,
+		je16_to_cpu(latest_node.tag));
 	inode->i_size = je32_to_cpu(latest_node.isize);
 	inode->i_atime = ITIME(je32_to_cpu(latest_node.atime));
 	inode->i_mtime = ITIME(je32_to_cpu(latest_node.mtime));
@@ -288,6 +337,7 @@ void jffs2_read_inode (struct inode *inode)
 
 		inode->i_op = &jffs2_dir_inode_operations;
 		inode->i_fop = &jffs2_dir_operations;
+		f->flags = je16_to_cpu(latest_node.flags);
 		break;
 	}
 	case S_IFREG:
@@ -295,6 +345,7 @@ void jffs2_read_inode (struct inode *inode)
 		inode->i_fop = &jffs2_file_operations;
 		inode->i_mapping->a_ops = &jffs2_file_address_operations;
 		inode->i_mapping->nrpages = 0;
+		f->flags = je16_to_cpu(latest_node.flags);
 		break;
 
 	case S_IFBLK:
@@ -331,7 +382,7 @@ void jffs2_read_inode (struct inode *inode)
 	default:
 		printk(KERN_WARNING "jffs2_read_inode(): Bogus imode %o for ino %lu\n", inode->i_mode, (unsigned long)inode->i_ino);
 	}
-
+	jffs2_set_inode_flags(inode);
 	up(&f->sem);
 
 	D1(printk(KERN_DEBUG "jffs2_read_inode() returning\n"));
@@ -348,10 +399,11 @@ void jffs2_dirty_inode(struct inode *inode)
 
 	D1(printk(KERN_DEBUG "jffs2_dirty_inode() calling setattr() for ino #%lu\n", inode->i_ino));
 
-	iattr.ia_valid = ATTR_MODE|ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_MTIME|ATTR_CTIME;
+	iattr.ia_valid = ATTR_MODE|ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_MTIME|ATTR_CTIME|ATTR_TAG;
 	iattr.ia_mode = inode->i_mode;
 	iattr.ia_uid = inode->i_uid;
 	iattr.ia_gid = inode->i_gid;
+	iattr.ia_tag = inode->i_tag;
 	iattr.ia_atime = inode->i_atime;
 	iattr.ia_mtime = inode->i_mtime;
 	iattr.ia_ctime = inode->i_ctime;
@@ -425,6 +477,7 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 
 	memset(ri, 0, sizeof(*ri));
 	/* Set OS-specific defaults for new inodes */
+	ri->tag = cpu_to_je16(dx_current_tag());
 	ri->uid = cpu_to_je16(current->fsuid);
 
 	if (dir_i->i_mode & S_ISGID) {
@@ -454,14 +507,16 @@ struct inode *jffs2_new_inode (struct inode *dir_i, int mode, struct jffs2_raw_i
 	inode->i_mode = jemode_to_cpu(ri->mode);
 	inode->i_gid = je16_to_cpu(ri->gid);
 	inode->i_uid = je16_to_cpu(ri->uid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), 0, 0, je16_to_cpu(ri->tag));
 	inode->i_atime = inode->i_ctime = inode->i_mtime = CURRENT_TIME_SEC;
 	ri->atime = ri->mtime = ri->ctime = cpu_to_je32(I_SEC(inode->i_mtime));
 
 	inode->i_blocks = 0;
 	inode->i_size = 0;
 
+	f->flags = je16_to_cpu(ri->flags);
+	jffs2_set_inode_flags(inode);
 	insert_inode_hash(inode);
-
 	return inode;
 }
 

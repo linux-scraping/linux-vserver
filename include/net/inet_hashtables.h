@@ -323,26 +323,6 @@ out:
 		wake_up(&hashinfo->lhash_wait);
 }
 
-/*
- *      Check if a given address matches for an inet socket
- *
- *      nxi:	the socket's nx_info if any
- *      addr:	to be verified address
- *      saddr:	socket addresses
- */
-static inline int inet_addr_match (
-	struct nx_info *nxi,
-	uint32_t addr,
-	uint32_t saddr)
-{
-	if (addr && (saddr == addr))
-		return 1;
-	if (!saddr)
-		return addr_in_nx_info(nxi, addr);
-	return 0;
-}
-
-
 extern struct sock *__inet_lookup_listener(struct inet_hashinfo *hashinfo,
 					   const __be32 daddr,
 					   const unsigned short hnum,

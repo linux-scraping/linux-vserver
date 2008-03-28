@@ -49,7 +49,7 @@ static int xfrm6_get_saddr(xfrm_address_t *saddr, xfrm_address_t *daddr)
 
 	if (!xfrm6_dst_lookup((struct xfrm_dst **)&rt, &fl_tunnel)) {
 		ipv6_get_saddr(&rt->u.dst, (struct in6_addr *)&daddr->a6,
-			       (struct in6_addr *)&saddr->a6);
+			       (struct in6_addr *)&saddr->a6, NULL);
 		dst_release(&rt->u.dst);
 		return 0;
 	}

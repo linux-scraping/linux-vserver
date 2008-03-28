@@ -36,7 +36,6 @@
 #include <linux/mutex.h>
 #include <linux/if_addr.h>
 #include <linux/nsproxy.h>
-#include <linux/vs_context.h> /* remove with NXF_HIDE_NETIF */
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -309,9 +308,12 @@ void __rtnl_link_unregister(struct rtnl_link_ops *ops)
 	struct net *net;
 
 	for_each_net(net) {
+restart:
 		for_each_netdev_safe(net, dev, n) {
-			if (dev->rtnl_link_ops == ops)
+			if (dev->rtnl_link_ops == ops) {
 				ops->dellink(dev);
+				goto restart;
+			}
 		}
 	}
 	list_del(&ops->list);
@@ -703,8 +705,7 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 
 	idx = 0;
 	for_each_netdev(net, dev) {
-		if (vx_info_flags(skb->sk->sk_vx_info, VXF_HIDE_NETIF, 0) &&
-			!dev_in_nx_info(dev, skb->sk->sk_nx_info))
+		if (!nx_dev_visible(skb->sk->sk_nx_info, dev))
 			continue;
 		if (idx < s_idx)
 			goto cont;
@@ -1222,6 +1223,9 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change)
 {
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
+
+	if (!nx_dev_visible(current->nx_info, dev))
+		return;
 
 	skb = nlmsg_new(if_nlmsg_size(dev), GFP_KERNEL);
 	if (skb == NULL)

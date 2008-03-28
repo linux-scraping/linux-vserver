@@ -14,7 +14,7 @@
 #define DX_ARG_MASK	0x0010
 
 
-#define dx_task_tag(t)	((t)->xid)
+#define dx_task_tag(t)	((t)->tag)
 
 #define dx_current_tag() dx_task_tag(current)
 
