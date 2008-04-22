@@ -35,6 +35,7 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 #include <linux/mnt_namespace.h>
 #include <linux/user_namespace.h>
 #include <linux/pid_namespace.h>
+#include <linux/ipc_namespace.h>
 
 const struct vcmd_space_mask space_mask = {
 	.mask = CLONE_NEWNS |

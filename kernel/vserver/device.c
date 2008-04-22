@@ -337,11 +337,11 @@ static inline int __user_device(const char __user *name, dev_t *dev,
 	ret = user_path_walk_link(name, &nd);
 	if (ret)
 		return ret;
-	if (nd.dentry->d_inode) {
-		*dev = nd.dentry->d_inode->i_rdev;
-		*mode = nd.dentry->d_inode->i_mode;
+	if (nd.path.dentry->d_inode) {
+		*dev = nd.path.dentry->d_inode->i_rdev;
+		*mode = nd.path.dentry->d_inode->i_mode;
 	}
-	path_release(&nd);
+	path_put(&nd.path);
 	return 0;
 }
 

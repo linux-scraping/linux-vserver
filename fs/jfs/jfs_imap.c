@@ -382,7 +382,7 @@ int diRead(struct inode *ip)
 
 	/* read the page of disk inode */
 	mp = read_metapage(ipimap, pageno << sbi->l2nbperpage, PSIZE, 1);
-	if (mp == 0) {
+	if (!mp) {
 		jfs_err("diRead: read_metapage failed");
 		return -EIO;
 	}
@@ -655,7 +655,7 @@ int diWrite(tid_t tid, struct inode *ip)
 	/* read the page of disk inode */
       retry:
 	mp = read_metapage(ipimap, pageno << sbi->l2nbperpage, PSIZE, 1);
-	if (mp == 0)
+	if (!mp)
 		return -EIO;
 
 	/* get the pointer to the disk inode */

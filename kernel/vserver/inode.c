@@ -81,9 +81,9 @@ int vc_get_iattr(void __user *data)
 
 	ret = user_path_walk_link(vc_data.name, &nd);
 	if (!ret) {
-		ret = __vc_get_iattr(nd.dentry->d_inode,
+		ret = __vc_get_iattr(nd.path.dentry->d_inode,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 	if (ret)
 		return ret;
@@ -106,9 +106,9 @@ int vc_get_iattr_x32(void __user *data)
 
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
 	if (!ret) {
-		ret = __vc_get_iattr(nd.dentry->d_inode,
+		ret = __vc_get_iattr(nd.path.dentry->d_inode,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 	if (ret)
 		return ret;
@@ -234,9 +234,9 @@ int vc_set_iattr(void __user *data)
 
 	ret = user_path_walk_link(vc_data.name, &nd);
 	if (!ret) {
-		ret = __vc_set_iattr(nd.dentry,
+		ret = __vc_set_iattr(nd.path.dentry,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
@@ -259,9 +259,9 @@ int vc_set_iattr_x32(void __user *data)
 
 	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
 	if (!ret) {
-		ret = __vc_set_iattr(nd.dentry,
+		ret = __vc_set_iattr(nd.path.dentry,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
@@ -384,7 +384,7 @@ void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 
 	if (!nd)
 		return;
-	mnt = nd->mnt;
+	mnt = nd->path.mnt;
 	if (!mnt)
 		return;
 

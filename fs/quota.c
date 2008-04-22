@@ -382,11 +382,11 @@ static inline struct super_block *quotactl_block(const char __user *special)
 	char *tmp = getname(special);
 
 	if (IS_ERR(tmp))
-		return ERR_PTR(PTR_ERR(tmp));
+		return ERR_CAST(tmp);
 	bdev = lookup_bdev(tmp);
 	putname(tmp);
 	if (IS_ERR(bdev))
-		return ERR_PTR(PTR_ERR(bdev));
+		return ERR_CAST(bdev);
 #if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
 	if (bdev && bdev->bd_inode &&
 			imajor(bdev->bd_inode) == VROOT_MAJOR) {

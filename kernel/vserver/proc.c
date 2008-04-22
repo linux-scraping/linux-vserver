@@ -36,6 +36,19 @@
 #include "sched_proc.h"
 #include "vci_config.h"
 
+
+static inline char *print_cap_t(char *buffer, kernel_cap_t *c)
+{
+	unsigned __capi;
+
+	CAP_FOR_EACH_U32(__capi) {
+		buffer += sprintf(buffer, "%08x",
+			c->cap[(_LINUX_CAPABILITY_U32S-1) - __capi]);
+	}
+	return buffer;
+}
+
+
 static struct proc_dir_entry *proc_virtual;
 
 static struct proc_dir_entry *proc_virtnet;
@@ -97,22 +110,26 @@ int proc_vxi_info(struct vx_info *vxi, char *buffer)
 
 int proc_vxi_status(struct vx_info *vxi, char *buffer)
 {
-	int length;
+	char *orig = buffer;
 
-	length = sprintf(buffer,
+	buffer += sprintf(buffer,
 		"UseCnt:\t%d\n"
 		"Tasks:\t%d\n"
-		"Flags:\t%016llx\n"
-		"BCaps:\t%016llx\n"
-		"CCaps:\t%016llx\n"
-		"Spaces:\t%08lx\n",
+		"Flags:\t%016llx\n",
 		atomic_read(&vxi->vx_usecnt),
 		atomic_read(&vxi->vx_tasks),
-		(unsigned long long)vxi->vx_flags,
-		(unsigned long long)vxi->vx_bcaps,
+		(unsigned long long)vxi->vx_flags);
+
+	buffer += sprintf(buffer, "BCaps:\t");
+	buffer = print_cap_t(buffer, &vxi->vx_bcaps);
+	buffer += sprintf(buffer, "\n");
+
+	buffer += sprintf(buffer,
+		"CCaps:\t%016llx\n"
+		"Spaces:\t%08lx\n",
 		(unsigned long long)vxi->vx_ccaps,
 		vxi->vx_nsmask);
-	return length;
+	return buffer - orig;
 }
 
 int proc_vxi_limit(struct vx_info *vxi, char *buffer)
@@ -798,8 +815,6 @@ out:
 }
 
 
-
-#define PROC_NUMBUF 10
 #define PROC_MAXVIDS 32
 
 int proc_virtual_readdir(struct file *filp,
@@ -1008,8 +1023,9 @@ int proc_pid_vx_info(struct task_struct *p, char *buffer)
 	if (!vxi)
 		goto out;
 
-	buffer += sprintf(buffer, "BCaps:\t%016llx\n",
-		(unsigned long long)vxi->vx_bcaps);
+	buffer += sprintf(buffer, "BCaps:\t");
+	buffer = print_cap_t(buffer, &vxi->vx_bcaps);
+	buffer += sprintf(buffer, "\n");
 	buffer += sprintf(buffer, "CCaps:\t%016llx\n",
 		(unsigned long long)vxi->vx_ccaps);
 	buffer += sprintf(buffer, "CFlags:\t%016llx\n",

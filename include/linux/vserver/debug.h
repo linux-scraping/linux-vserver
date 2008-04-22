@@ -14,12 +14,12 @@
 #define __FUNC__	__func__
 
 
-#define vxd_path(d, m)						\
+#define vxd_path(p)						\
 	({ static char _buffer[PATH_MAX];			\
-	   d_path(d, m, _buffer, sizeof(_buffer)); })
+	   d_path(p, _buffer, sizeof(_buffer)); })
 
 #define vxd_cond_path(n)					\
-	((n) ? vxd_path((n)->dentry, (n)->mnt) : "<null>" )
+	((n) ? vxd_path(&(n)->path) : "<null>" )
 
 
 #ifdef	CONFIG_VSERVER_DEBUG

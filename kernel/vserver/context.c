@@ -110,9 +110,9 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	}
 
 	new->vx_flags = VXF_INIT_SET;
-	new->vx_bcaps = CAP_INIT_EFF_SET;
+	cap_set_init_eff(new->vx_bcaps);
 	new->vx_ccaps = 0;
-	new->vx_cap_bset = cap_bset;
+	// new->vx_cap_bset = current->cap_bset;
 
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
@@ -483,12 +483,20 @@ int vx_migrate_user(struct task_struct *p, struct vx_info *vxi)
 }
 #endif
 
+#if 0
 void vx_mask_cap_bset(struct vx_info *vxi, struct task_struct *p)
 {
-	p->cap_effective &= vxi->vx_cap_bset;
-	p->cap_inheritable &= vxi->vx_cap_bset;
-	p->cap_permitted &= vxi->vx_cap_bset;
+	// p->cap_effective &= vxi->vx_cap_bset;
+	p->cap_effective =
+		cap_intersect(p->cap_effective, vxi->cap_bset);
+	// p->cap_inheritable &= vxi->vx_cap_bset;
+	p->cap_inheritable =
+		cap_intersect(p->cap_inheritable, vxi->cap_bset);
+	// p->cap_permitted &= vxi->vx_cap_bset;
+	p->cap_permitted =
+		cap_intersect(p->cap_permitted, vxi->cap_bset);
 }
+#endif
 
 
 #include <linux/file.h>
@@ -549,6 +557,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 		goto out;
 
 //	if (!(ret = vx_migrate_user(p, vxi))) {
+	{
 		int openfd;
 
 		task_lock(p);
@@ -583,7 +592,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 			"moved task %p into vxi:%p[#%d]",
 			p, vxi, vxi->vx_id);
 
-		vx_mask_cap_bset(vxi, p);
+		// vx_mask_cap_bset(vxi, p);
 		task_unlock(p);
 
 		/* hack for *spaces to provide compatibility */
@@ -600,7 +609,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER);
 			put_nsproxy(old_nsp);
 		}
-//	}
+	}
 out:
 	put_vx_info(old_vxi);
 	return ret;
@@ -848,8 +857,8 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
 	if (vxi == current->vx_info) {
-		if (trigger & VXF_STATE_SETUP)
-			vx_mask_cap_bset(vxi, current);
+		/* if (trigger & VXF_STATE_SETUP)
+			vx_mask_cap_bset(vxi, current); */
 		if (trigger & VXF_STATE_INIT) {
 			int ret;
 
@@ -870,10 +879,28 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 	return 0;
 }
 
+
+static inline uint64_t caps_from_cap_t(kernel_cap_t c)
+{
+	uint64_t v = c.cap[0] | ((uint64_t)c.cap[1] << 32);
+
+	return v;
+}
+
+static inline kernel_cap_t cap_t_from_caps(uint64_t v)
+{
+	kernel_cap_t c = __cap_empty_set;
+
+	c.cap[0] = v & 0xFFFF;
+	c.cap[1] = (v >> 32) & 0xFFFF;
+	return c;
+}
+
+
 static int do_get_caps(struct vx_info *vxi, uint64_t *bcaps, uint64_t *ccaps)
 {
 	if (bcaps)
-		*bcaps = vxi->vx_bcaps;
+		*bcaps = caps_from_cap_t(vxi->vx_bcaps);
 	if (ccaps)
 		*ccaps = vxi->vx_ccaps;
 
@@ -898,7 +925,8 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 static int do_set_caps(struct vx_info *vxi,
 	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
-	vxi->vx_bcaps = vs_mask_flags(vxi->vx_bcaps, bcaps, bmask);
+	vxi->vx_bcaps = cap_t_from_caps(
+		vs_mask_flags(caps_from_cap_t(vxi->vx_bcaps), bcaps, bmask));
 	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;

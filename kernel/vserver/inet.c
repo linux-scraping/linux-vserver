@@ -137,7 +137,8 @@ out:
 	return ret;
 }
 
-int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
+int ip_v4_find_src(struct net *net, struct nx_info *nxi,
+	struct rtable **rp, struct flowi *fl)
 {
 	if (!nxi)
 		return 0;
@@ -158,10 +159,10 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 
 	if (fl->fl4_src == INADDR_ANY) {
 		struct nx_addr_v4 *ptr;
-		__be32 found;
+		__be32 found = 0;
 		int err;
 
-		err = __ip_route_output_key(rp, fl);
+		err = __ip_route_output_key(net, rp, fl);
 		if (!err) {
 			found = (*rp)->rt_src;
 			ip_rt_put(*rp);
@@ -175,17 +176,17 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 		for (ptr = &nxi->v4; ptr; ptr = ptr->next) {
 			__be32 primary = ptr->ip[0].s_addr;
 			__be32 mask = ptr->mask.s_addr;
-			__be32 net = primary & mask;
+			__be32 neta = primary & mask;
 
 			vxdprintk(VXD_CBIT(net, 4), "ip_v4_find_src(%p[#%u]) chk: "
 				NIPQUAD_FMT "/" NIPQUAD_FMT "/" NIPQUAD_FMT,
 				nxi, nxi ? nxi->nx_id : 0, NIPQUAD(primary),
-				NIPQUAD(mask), NIPQUAD(net));
-			if ((found & mask) != net)
+				NIPQUAD(mask), NIPQUAD(neta));
+			if ((found & mask) != neta)
 				continue;
 
 			fl->fl4_src = primary;
-			err = __ip_route_output_key(rp, fl);
+			err = __ip_route_output_key(net, rp, fl);
 			vxdprintk(VXD_CBIT(net, 4),
 				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
 				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(primary));
@@ -197,7 +198,7 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 			}
 		}
 		/* still no source ip? */
-		found = LOOPBACK(fl->fl4_dst)
+		found = IN_LOOPBACK(fl->fl4_dst)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found:
 		/* assign src ip to flow */
@@ -209,11 +210,11 @@ int ip_v4_find_src(struct nx_info *nxi, struct rtable **rp, struct flowi *fl)
 	}
 
 	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
-		if (LOOPBACK(fl->fl4_dst))
+		if (IN_LOOPBACK(fl->fl4_dst))
 			fl->fl4_dst = nxi->v4_lback.s_addr;
-		if (LOOPBACK(fl->fl4_src))
+		if (IN_LOOPBACK(fl->fl4_src))
 			fl->fl4_src = nxi->v4_lback.s_addr;
-	} else if (LOOPBACK(fl->fl4_dst) &&
+	} else if (IN_LOOPBACK(fl->fl4_dst) &&
 		!nx_info_flags(nxi, NXF_LBACK_ALLOW, 0))
 		return -EPERM;
 
