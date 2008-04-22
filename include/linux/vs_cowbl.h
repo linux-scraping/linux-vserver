@@ -9,24 +9,24 @@ extern struct dentry *cow_break_link(const char *pathname);
 
 static inline int cow_check_and_break(struct nameidata *nd)
 {
-	struct inode *inode = nd->dentry->d_inode;
+	struct inode *inode = nd->path.dentry->d_inode;
 	int error = 0;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd->mnt))
+	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd->path.mnt))
 		return -EROFS;
 	if (IS_COW(inode)) {
 		if (IS_COW_LINK(inode)) {
-			struct dentry *new_dentry, *old_dentry = nd->dentry;
+			struct dentry *new_dentry, *old_dentry = nd->path.dentry;
 			char *path, *buf;
 
 			buf = kmalloc(PATH_MAX, GFP_KERNEL);
 			if (!buf) {
 				return -ENOMEM;
 			}
-			path = d_path(nd->dentry, nd->mnt, buf, PATH_MAX);
+			path = d_path(&nd->path, buf, PATH_MAX);
 			new_dentry = cow_break_link(path);
 			kfree(buf);
 			if (!IS_ERR(new_dentry)) {
-				nd->dentry = new_dentry;
+				nd->path.dentry = new_dentry;
 				dput(old_dentry);
 			} else
 				error = PTR_ERR(new_dentry);

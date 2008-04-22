@@ -186,9 +186,9 @@ static int do_addrem_dlimit(uint32_t id, const char __user *name,
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.dentry->d_inode)
+		if (!nd.path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.dentry->d_inode->i_sb))
+		if (!(sb = nd.path.dentry->d_inode->i_sb))
 			goto out_release;
 
 		if (add) {
@@ -215,7 +215,7 @@ static int do_addrem_dlimit(uint32_t id, const char __user *name,
 		if (add && dli)
 			__dealloc_dl_info(dli);
 	out_release:
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 	return ret;
 }
@@ -282,9 +282,9 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.dentry->d_inode)
+		if (!nd.path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.dentry->d_inode->i_sb))
+		if (!(sb = nd.path.dentry->d_inode->i_sb))
 			goto out_release;
 		if ((reserved != CDLIM_KEEP &&
 			reserved > 100) ||
@@ -324,7 +324,7 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 		ret = 0;
 
 	out_release:
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 	return ret;
 }
@@ -375,9 +375,9 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.dentry->d_inode)
+		if (!nd.path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.dentry->d_inode->i_sb))
+		if (!(sb = nd.path.dentry->d_inode->i_sb))
 			goto out_release;
 
 		ret = -ESRCH;
@@ -402,7 +402,7 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 
 		ret = 0;
 	out_release:
-		path_release(&nd);
+		path_put(&nd.path);
 	}
 	return ret;
 }

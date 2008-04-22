@@ -55,11 +55,13 @@
 #define SO_TIMESTAMPNS		35
 #define SCM_TIMESTAMPNS		SO_TIMESTAMPNS
 
-#define SO_PEERTAG		36
-
 /* Security levels - as per NRL IPv6 - don't actually do anything */
 #define SO_SECURITY_AUTHENTICATION		19
 #define SO_SECURITY_ENCRYPTION_TRANSPORT	20
 #define SO_SECURITY_ENCRYPTION_NETWORK		21
+
+#define SO_MARK			36
+#define SO_PEERTAG		37
+
 
 #endif /* _ASM_SOCKET_H */

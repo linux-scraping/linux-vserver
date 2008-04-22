@@ -23,6 +23,7 @@
 #include <linux/vserver/global.h>
 #include <linux/vserver/debug.h>
 #include <net/net_namespace.h>
+#include <linux/ipc_namespace.h>
 
 static struct kmem_cache *nsproxy_cachep;
 

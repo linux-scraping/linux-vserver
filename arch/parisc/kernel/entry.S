@@ -740,7 +740,6 @@ END(fault_vector_11)
 
 #define CLONE_VM 0x100	/* Must agree with <linux/sched.h> */
 #define CLONE_UNTRACED 0x00800000
-#define CLONE_KTHREAD 0x10000000
 
 	.import do_fork
 ENTRY(__kernel_thread)

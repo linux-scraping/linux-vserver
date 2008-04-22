@@ -12,16 +12,12 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <asm/arch/hwregs/reg_rdwr.h>
-#include <asm/arch/hwregs/reg_map.h>
-#include <asm/arch/hwregs/timer_defs.h>
-#include <asm/arch/hwregs/intr_vect_defs.h>
+#include <hwregs/reg_rdwr.h>
+#include <hwregs/reg_map.h>
+#include <hwregs/timer_defs.h>
+#include <hwregs/intr_vect_defs.h>
 
 extern void stop_watchdog(void);
-
-#ifdef CONFIG_ETRAX_GPIO
-extern void etrax_gpio_wake_up_check(void); /* Defined in drivers/gpio.c. */
-#endif
 
 extern int cris_hlt_counter;
 
@@ -82,7 +78,7 @@ hard_reset_now(void)
 	wd_ctrl.cmd = regk_timer_start;
 
         arch_enable_nmi();
-	REG_WR(timer, regi_timer, rw_wd_ctrl, wd_ctrl);
+	REG_WR(timer, regi_timer0, rw_wd_ctrl, wd_ctrl);
 }
 #endif
 
@@ -120,8 +116,7 @@ kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.ccs = 1 << (I_CCS_BITNR + CCS_SHIFT);
 
 	/* Create the new process. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
-		0, &regs, 0, NULL, NULL);
+        return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
 }
 
 /*

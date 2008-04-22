@@ -13,8 +13,6 @@
 #include <asm/unistd.h>
 
 #define CLONE_VM	0x00000100	/* set if VM shared between processes */
-#define CLONE_KTHREAD	0x10000000	/* kernel thread */
-#define CLONE_KT	(CLONE_VM | CLONE_KTHREAD)	/* kernel thread flags */
 #define	KERN_ERR	"<3>"
 
 	.section .rodata

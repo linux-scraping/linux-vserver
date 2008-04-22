@@ -285,11 +285,11 @@ static struct dir_table_slot *find_index(struct inode *ip, u32 index,
 			release_metapage(*mp);
 			*mp = NULL;
 		}
-		if (*mp == 0) {
+		if (!(*mp)) {
 			*lblock = blkno;
 			*mp = read_index_page(ip, blkno);
 		}
-		if (*mp == 0) {
+		if (!(*mp)) {
 			jfs_err("free_index: error reading directory table");
 			return NULL;
 		}
@@ -414,7 +414,8 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		}
 		ip->i_size = PSIZE;
 
-		if ((mp = get_index_page(ip, 0)) == 0) {
+		mp = get_index_page(ip, 0);
+		if (!mp) {
 			jfs_err("add_index: get_metapage failed!");
 			xtTruncate(tid, ip, 0, COMMIT_PWMAP);
 			memcpy(&jfs_ip->i_dirtable, temp_table,
@@ -462,7 +463,7 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 	} else
 		mp = read_index_page(ip, blkno);
 
-	if (mp == 0) {
+	if (!mp) {
 		jfs_err("add_index: get/read_metapage failed!");
 		goto clean_up;
 	}
@@ -506,7 +507,7 @@ static void free_index(tid_t tid, struct inode *ip, u32 index, u32 next)
 
 	dirtab_slot = find_index(ip, index, &mp, &lblock);
 
-	if (dirtab_slot == 0)
+	if (!dirtab_slot)
 		return;
 
 	dirtab_slot->flag = DIR_INDEX_FREE;
@@ -533,7 +534,7 @@ static void modify_index(tid_t tid, struct inode *ip, u32 index, s64 bn,
 
 	dirtab_slot = find_index(ip, index, mp, lblock);
 
-	if (dirtab_slot == 0)
+	if (!dirtab_slot)
 		return;
 
 	DTSaddress(dirtab_slot, bn);
@@ -559,7 +560,7 @@ static int read_index(struct inode *ip, u32 index,
 	struct dir_table_slot *slot;
 
 	slot = find_index(ip, index, &mp, &lblock);
-	if (slot == 0) {
+	if (!slot) {
 		return -EIO;
 	}
 
@@ -599,10 +600,8 @@ int dtSearch(struct inode *ip, struct component_name * key, ino_t * data,
 	struct component_name ciKey;
 	struct super_block *sb = ip->i_sb;
 
-	ciKey.name =
-	    (wchar_t *) kmalloc((JFS_NAME_MAX + 1) * sizeof(wchar_t),
-				GFP_NOFS);
-	if (ciKey.name == 0) {
+	ciKey.name = kmalloc((JFS_NAME_MAX + 1) * sizeof(wchar_t), GFP_NOFS);
+	if (!ciKey.name) {
 		rc = -ENOMEM;
 		goto dtSearch_Exit2;
 	}
@@ -965,10 +964,8 @@ static int dtSplitUp(tid_t tid,
 	smp = split->mp;
 	sp = DT_PAGE(ip, smp);
 
-	key.name =
-	    (wchar_t *) kmalloc((JFS_NAME_MAX + 2) * sizeof(wchar_t),
-				GFP_NOFS);
-	if (key.name == 0) {
+	key.name = kmalloc((JFS_NAME_MAX + 2) * sizeof(wchar_t), GFP_NOFS);
+	if (!key.name) {
 		DT_PUTPAGE(smp);
 		rc = -ENOMEM;
 		goto dtSplitUp_Exit;

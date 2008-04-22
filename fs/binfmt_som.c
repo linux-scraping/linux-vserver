@@ -30,7 +30,6 @@
 #include <linux/init.h>
 #include <linux/vs_memory.h>
 
-#include <asm/a.out.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 

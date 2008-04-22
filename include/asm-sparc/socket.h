@@ -52,7 +52,8 @@
 #define SO_TIMESTAMPNS		0x0021
 #define SCM_TIMESTAMPNS		SO_TIMESTAMPNS
 
-#define SO_PEERTAG		36
+#define SO_MARK			0x0022
+#define SO_PEERTAG		0x0023
 
 /* Security levels - as per NRL IPv6 - don't actually do anything */
 #define SO_SECURITY_AUTHENTICATION		0x5001

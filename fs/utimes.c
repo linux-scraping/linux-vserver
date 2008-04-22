@@ -6,6 +6,7 @@
 #include <linux/sched.h>
 #include <linux/stat.h>
 #include <linux/utime.h>
+#include <linux/syscalls.h>
 #include <linux/mount.h>
 #include <linux/vs_cowbl.h>
 #include <asm/uaccess.h>
@@ -88,10 +89,11 @@ long do_utimes(int dfd, char __user *filename, struct timespec *times, int flags
 		error = cow_check_and_break(&nd);
 		if (error)
 			goto dput_and_out;
-		dentry = nd.dentry;
+		dentry = nd.path.dentry;
 	}
 
 	inode = dentry->d_inode;
+
 	error = -EROFS;
 	if (IS_RDONLY(inode))
 		goto dput_and_out;
@@ -141,7 +143,7 @@ dput_and_out:
 	if (f)
 		fput(f);
 	else
-		path_release(&nd);
+		path_put(&nd.path);
 out:
 	return error;
 }

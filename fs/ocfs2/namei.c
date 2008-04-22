@@ -61,7 +61,6 @@
 #include "symlink.h"
 #include "sysfile.h"
 #include "uptodate.h"
-#include "vote.h"
 
 #include "buffer_head_io.h"
 
@@ -117,7 +116,7 @@ static struct dentry *ocfs2_lookup(struct inode *dir, struct dentry *dentry,
 	mlog(0, "find name %.*s in directory %llu\n", dentry->d_name.len,
 	     dentry->d_name.name, (unsigned long long)OCFS2_I(dir)->ip_blkno);
 
-	status = ocfs2_meta_lock(dir, NULL, 0);
+	status = ocfs2_inode_lock(dir, NULL, 0);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -130,7 +129,7 @@ static struct dentry *ocfs2_lookup(struct inode *dir, struct dentry *dentry,
 	if (status < 0)
 		goto bail_add;
 
-	inode = ocfs2_iget(OCFS2_SB(dir->i_sb), blkno, 0);
+	inode = ocfs2_iget(OCFS2_SB(dir->i_sb), blkno, 0, 0);
 	if (IS_ERR(inode)) {
 		ret = ERR_PTR(-EACCES);
 		goto bail_unlock;
@@ -177,8 +176,8 @@ bail_unlock:
 	/* Don't drop the cluster lock until *after* the d_add --
 	 * unlink on another node will message us to remove that
 	 * dentry under this lock so otherwise we can race this with
-	 * the vote thread and have a stale dentry. */
-	ocfs2_meta_unlock(dir, 0);
+	 * the downconvert thread and have a stale dentry. */
+	ocfs2_inode_unlock(dir, 0);
 
 bail:
 
@@ -210,7 +209,7 @@ static int ocfs2_mknod(struct inode *dir,
 	/* get our super block */
 	osb = OCFS2_SB(dir->i_sb);
 
-	status = ocfs2_meta_lock(dir, &parent_fe_bh, 1);
+	status = ocfs2_inode_lock(dir, &parent_fe_bh, 1);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -324,7 +323,7 @@ leave:
 	if (handle)
 		ocfs2_commit_trans(osb, handle);
 
-	ocfs2_meta_unlock(dir, 1);
+	ocfs2_inode_unlock(dir, 1);
 
 	if (status == -ENOSPC)
 		mlog(0, "Disk is full\n");
@@ -563,7 +562,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 	if (S_ISDIR(inode->i_mode))
 		return -EPERM;
 
-	err = ocfs2_meta_lock(dir, &parent_fe_bh, 1);
+	err = ocfs2_inode_lock(dir, &parent_fe_bh, 1);
 	if (err < 0) {
 		if (err != -ENOENT)
 			mlog_errno(err);
@@ -588,7 +587,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 		goto out;
 	}
 
-	err = ocfs2_meta_lock(inode, &fe_bh, 1);
+	err = ocfs2_inode_lock(inode, &fe_bh, 1);
 	if (err < 0) {
 		if (err != -ENOENT)
 			mlog_errno(err);
@@ -653,10 +652,10 @@ static int ocfs2_link(struct dentry *old_dentry,
 out_commit:
 	ocfs2_commit_trans(osb, handle);
 out_unlock_inode:
-	ocfs2_meta_unlock(inode, 1);
+	ocfs2_inode_unlock(inode, 1);
 
 out:
-	ocfs2_meta_unlock(dir, 1);
+	ocfs2_inode_unlock(dir, 1);
 
 	if (de_bh)
 		brelse(de_bh);
@@ -730,7 +729,7 @@ static int ocfs2_unlink(struct inode *dir,
 		return -EPERM;
 	}
 
-	status = ocfs2_meta_lock(dir, &parent_node_bh, 1);
+	status = ocfs2_inode_lock(dir, &parent_node_bh, 1);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -755,7 +754,7 @@ static int ocfs2_unlink(struct inode *dir,
 		goto leave;
 	}
 
-	status = ocfs2_meta_lock(inode, &fe_bh, 1);
+	status = ocfs2_inode_lock(inode, &fe_bh, 1);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -775,7 +774,7 @@ static int ocfs2_unlink(struct inode *dir,
 
 	status = ocfs2_remote_dentry_delete(dentry);
 	if (status < 0) {
-		/* This vote should succeed under all normal
+		/* This remote delete should succeed under all normal
 		 * circumstances. */
 		mlog_errno(status);
 		goto leave;
@@ -851,13 +850,13 @@ leave:
 		ocfs2_commit_trans(osb, handle);
 
 	if (child_locked)
-		ocfs2_meta_unlock(inode, 1);
+		ocfs2_inode_unlock(inode, 1);
 
-	ocfs2_meta_unlock(dir, 1);
+	ocfs2_inode_unlock(dir, 1);
 
 	if (orphan_dir) {
 		/* This was locked for us in ocfs2_prepare_orphan_dir() */
-		ocfs2_meta_unlock(orphan_dir, 1);
+		ocfs2_inode_unlock(orphan_dir, 1);
 		mutex_unlock(&orphan_dir->i_mutex);
 		iput(orphan_dir);
 	}
@@ -918,7 +917,7 @@ static int ocfs2_double_lock(struct ocfs2_super *osb,
 			inode1 = tmpinode;
 		}
 		/* lock id2 */
-		status = ocfs2_meta_lock(inode2, bh2, 1);
+		status = ocfs2_inode_lock(inode2, bh2, 1);
 		if (status < 0) {
 			if (status != -ENOENT)
 				mlog_errno(status);
@@ -927,14 +926,14 @@ static int ocfs2_double_lock(struct ocfs2_super *osb,
 	}
 
 	/* lock id1 */
-	status = ocfs2_meta_lock(inode1, bh1, 1);
+	status = ocfs2_inode_lock(inode1, bh1, 1);
 	if (status < 0) {
 		/*
 		 * An error return must mean that no cluster locks
 		 * were held on function exit.
 		 */
 		if (oi1->ip_blkno != oi2->ip_blkno)
-			ocfs2_meta_unlock(inode2, 1);
+			ocfs2_inode_unlock(inode2, 1);
 
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -947,10 +946,10 @@ bail:
 
 static void ocfs2_double_unlock(struct inode *inode1, struct inode *inode2)
 {
-	ocfs2_meta_unlock(inode1, 1);
+	ocfs2_inode_unlock(inode1, 1);
 
 	if (inode1 != inode2)
-		ocfs2_meta_unlock(inode2, 1);
+		ocfs2_inode_unlock(inode2, 1);
 }
 
 static int ocfs2_rename(struct inode *old_dir,
@@ -1041,10 +1040,11 @@ static int ocfs2_rename(struct inode *old_dir,
 
 	/*
 	 * Aside from allowing a meta data update, the locking here
-	 * also ensures that the vote thread on other nodes won't have
-	 * to concurrently downconvert the inode and the dentry locks.
+	 * also ensures that the downconvert thread on other nodes
+	 * won't have to concurrently downconvert the inode and the
+	 * dentry locks.
 	 */
-	status = ocfs2_meta_lock(old_inode, &old_inode_bh, 1);
+	status = ocfs2_inode_lock(old_inode, &old_inode_bh, 1);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -1153,7 +1153,7 @@ static int ocfs2_rename(struct inode *old_dir,
 			goto bail;
 		}
 
-		status = ocfs2_meta_lock(new_inode, &newfe_bh, 1);
+		status = ocfs2_inode_lock(new_inode, &newfe_bh, 1);
 		if (status < 0) {
 			if (status != -ENOENT)
 				mlog_errno(status);
@@ -1365,14 +1365,14 @@ bail:
 		ocfs2_double_unlock(old_dir, new_dir);
 
 	if (old_child_locked)
-		ocfs2_meta_unlock(old_inode, 1);
+		ocfs2_inode_unlock(old_inode, 1);
 
 	if (new_child_locked)
-		ocfs2_meta_unlock(new_inode, 1);
+		ocfs2_inode_unlock(new_inode, 1);
 
 	if (orphan_dir) {
 		/* This was locked for us in ocfs2_prepare_orphan_dir() */
-		ocfs2_meta_unlock(orphan_dir, 1);
+		ocfs2_inode_unlock(orphan_dir, 1);
 		mutex_unlock(&orphan_dir->i_mutex);
 		iput(orphan_dir);
 	}
@@ -1540,7 +1540,7 @@ static int ocfs2_symlink(struct inode *dir,
 	credits = ocfs2_calc_symlink_credits(sb);
 
 	/* lock the parent directory */
-	status = ocfs2_meta_lock(dir, &parent_fe_bh, 1);
+	status = ocfs2_inode_lock(dir, &parent_fe_bh, 1);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -1667,7 +1667,7 @@ bail:
 	if (handle)
 		ocfs2_commit_trans(osb, handle);
 
-	ocfs2_meta_unlock(dir, 1);
+	ocfs2_inode_unlock(dir, 1);
 
 	if (new_fe_bh)
 		brelse(new_fe_bh);
@@ -1745,7 +1745,7 @@ static int ocfs2_prepare_orphan_dir(struct ocfs2_super *osb,
 
 	mutex_lock(&orphan_dir_inode->i_mutex);
 
-	status = ocfs2_meta_lock(orphan_dir_inode, &orphan_dir_bh, 1);
+	status = ocfs2_inode_lock(orphan_dir_inode, &orphan_dir_bh, 1);
 	if (status < 0) {
 		mlog_errno(status);
 		goto leave;
@@ -1755,7 +1755,7 @@ static int ocfs2_prepare_orphan_dir(struct ocfs2_super *osb,
 					      orphan_dir_bh, name,
 					      OCFS2_ORPHAN_NAMELEN, de_bh);
 	if (status < 0) {
-		ocfs2_meta_unlock(orphan_dir_inode, 1);
+		ocfs2_inode_unlock(orphan_dir_inode, 1);
 
 		mlog_errno(status);
 		goto leave;
