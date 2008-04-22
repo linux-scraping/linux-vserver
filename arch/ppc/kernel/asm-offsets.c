@@ -54,12 +54,6 @@ main(void)
 	DEFINE(THREAD_VSCR, offsetof(struct thread_struct, vscr));
 	DEFINE(THREAD_USED_VR, offsetof(struct thread_struct, used_vr));
 #endif /* CONFIG_ALTIVEC */
-#ifdef CONFIG_SPE
-	DEFINE(THREAD_EVR0, offsetof(struct thread_struct, evr[0]));
-	DEFINE(THREAD_ACC, offsetof(struct thread_struct, acc));
-	DEFINE(THREAD_SPEFSCR, offsetof(struct thread_struct, spefscr));
-	DEFINE(THREAD_USED_SPE, offsetof(struct thread_struct, used_spe));
-#endif /* CONFIG_SPE */
 	/* Interrupt register frame */
 	DEFINE(STACK_FRAME_OVERHEAD, STACK_FRAME_OVERHEAD);
 	DEFINE(INT_FRAME_SIZE, STACK_FRAME_OVERHEAD + sizeof(struct pt_regs));
@@ -120,7 +114,6 @@ main(void)
 	DEFINE(TRAP, STACK_FRAME_OVERHEAD+offsetof(struct pt_regs, trap));
 	DEFINE(CLONE_VM, CLONE_VM);
 	DEFINE(CLONE_UNTRACED, CLONE_UNTRACED);
-	DEFINE(CLONE_KTHREAD, CLONE_KTHREAD);
 	DEFINE(MM_PGD, offsetof(struct mm_struct, pgd));
 
 	/* About the CPU features table */

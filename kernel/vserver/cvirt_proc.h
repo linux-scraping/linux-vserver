@@ -3,6 +3,7 @@
 
 #include <linux/nsproxy.h>
 #include <linux/mnt_namespace.h>
+#include <linux/ipc_namespace.h>
 #include <linux/utsname.h>
 #include <linux/ipc.h>
 
@@ -13,8 +14,8 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	struct mnt_namespace *ns;
 	struct uts_namespace *uts;
 	struct ipc_namespace *ipc;
-	struct vfsmount *mnt;
-	char *path, *root;
+	struct path path;
+	char *pstr, *root;
 	int length = 0;
 
 	if (!nsproxy)
@@ -29,18 +30,19 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	if (!ns)
 		goto skip_ns;
 
-	path = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!path)
+	pstr = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!pstr)
 		goto skip_ns;
 
-	mnt = ns->root;
-	root = d_path(mnt->mnt_root, mnt->mnt_parent, path, PATH_MAX - 2);
+	path.mnt = ns->root;
+	path.dentry = ns->root->mnt_root;
+	root = d_path(&path, pstr, PATH_MAX - 2);
 	length += sprintf(buffer + length,
 		"Namespace:\t%p [#%u]\n"
 		"RootPath:\t%s\n",
 		ns, atomic_read(&ns->count),
 		root);
-	kfree(path);
+	kfree(pstr);
 skip_ns:
 
 	uts = nsproxy->uts_ns;

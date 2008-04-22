@@ -11,17 +11,6 @@
 #include <linux/user_namespace.h>
 #include <linux/vserver/global.h>
 
-struct user_namespace init_user_ns = {
-	.kref = {
-		.refcount	= ATOMIC_INIT(2),
-	},
-	.root_user = &root_user,
-};
-
-EXPORT_SYMBOL_GPL(init_user_ns);
-
-#ifdef CONFIG_USER_NS
-
 /*
  * Clone a new ns copying an original user ns, setting refcount to 1
  * @old_ns: namespace to clone
@@ -87,5 +76,3 @@ void free_user_ns(struct kref *kref)
 	atomic_dec(&vs_global_user_ns);
 	kfree(ns);
 }
-
-#endif /* CONFIG_USER_NS */

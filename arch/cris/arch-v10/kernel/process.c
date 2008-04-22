@@ -1,5 +1,4 @@
-/* $Id: process.c,v 1.12 2004/12/27 11:18:32 starvik Exp $
- * 
+/*
  *  linux/arch/cris/kernel/process.c
  *
  *  Copyright (C) 1995  Linus Torvalds
@@ -103,8 +102,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	regs.dccr = 1 << I_DCCR_BITNR;
 
 	/* Ok, create the new process.. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED | CLONE_KTHREAD,
-		0, &regs, 0, NULL, NULL);
+        return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
 }
 
 /* setup the child's kernel stack with a pt_regs and switch_stack on it.

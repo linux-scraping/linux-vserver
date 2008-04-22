@@ -26,12 +26,6 @@
 
 #include "internal.h"
 
-static ssize_t proc_file_read(struct file *file, char __user *buf,
-			      size_t nbytes, loff_t *ppos);
-static ssize_t proc_file_write(struct file *file, const char __user *buffer,
-			       size_t count, loff_t *ppos);
-static loff_t proc_file_lseek(struct file *, loff_t, int);
-
 DEFINE_SPINLOCK(proc_subdir_lock);
 
 static int proc_match(int len, const char *name, struct proc_dir_entry *de)
@@ -40,12 +34,6 @@ static int proc_match(int len, const char *name, struct proc_dir_entry *de)
 		return 0;
 	return !memcmp(name, de->name, len);
 }
-
-static const struct file_operations proc_file_operations = {
-	.llseek		= proc_file_lseek,
-	.read		= proc_file_read,
-	.write		= proc_file_write,
-};
 
 /* buffer size is one page but our output routines use some slack for overruns */
 #define PROC_BLOCK_SIZE	(PAGE_SIZE - 1024)
@@ -234,6 +222,12 @@ proc_file_lseek(struct file *file, loff_t offset, int orig)
 	return retval;
 }
 
+static const struct file_operations proc_file_operations = {
+	.llseek		= proc_file_lseek,
+	.read		= proc_file_read,
+	.write		= proc_file_write,
+};
+
 static int proc_notify_change(struct dentry *dentry, struct iattr *iattr)
 {
 	struct inode *inode = dentry->d_inode;
@@ -384,26 +378,23 @@ static struct dentry_operations proc_dentry_operations =
  * Don't create negative dentries here, return -ENOENT by hand
  * instead.
  */
-struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nameidata *nd)
+struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
+		struct dentry *dentry)
 {
 	struct inode *inode = NULL;
-	struct proc_dir_entry * de;
 	int error = -ENOENT;
 
 	lock_kernel();
 	spin_lock(&proc_subdir_lock);
-	de = PDE(dir);
 	if (de) {
 		for (de = de->subdir; de ; de = de->next) {
 			if (de->namelen != dentry->d_name.len)
 				continue;
+			if (!vx_hide_check(0, de->vx_flags))
+				continue;
 			if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 				unsigned int ino;
 
-				if (de->shadow_proc)
-					de = de->shadow_proc(current, de);
-				if (!vx_hide_check(0, de->vx_flags))
-					continue;
 				ino = de->low_ino;
 				de_get(de);
 				spin_unlock(&proc_subdir_lock);
@@ -411,12 +402,12 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 				inode = proc_get_inode(dir->i_sb, ino, de);
 				/* generic proc entries belong to the host */
 				inode->i_tag = 0;
-				spin_lock(&proc_subdir_lock);
-				break;
+				goto out_unlock;
 			}
 		}
 	}
 	spin_unlock(&proc_subdir_lock);
+out_unlock:
 	unlock_kernel();
 
 	if (inode) {
@@ -428,6 +419,12 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 	return ERR_PTR(error);
 }
 
+struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
+		struct nameidata *nd)
+{
+	return proc_lookup_de(PDE(dir), dir, dentry);
+}
+
 /*
  * This returns non-zero if at EOF, so that the /proc
  * root directory can use this and check if it should
@@ -437,10 +434,9 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
  * value of the readdir() call, as long as it's non-negative
  * for success..
  */
-int proc_readdir(struct file * filp,
-	void * dirent, filldir_t filldir)
+int proc_readdir_de(struct proc_dir_entry *de, struct file *filp, void *dirent,
+		filldir_t filldir)
 {
-	struct proc_dir_entry * de;
 	unsigned int ino;
 	int i;
 	struct inode *inode = filp->f_path.dentry->d_inode;
@@ -449,7 +445,6 @@ int proc_readdir(struct file * filp,
 	lock_kernel();
 
 	ino = inode->i_ino;
-	de = PDE(inode);
 	if (!de) {
 		ret = -EINVAL;
 		goto out;
@@ -513,6 +508,13 @@ out:	unlock_kernel();
 	return ret;	
 }
 
+int proc_readdir(struct file *filp, void *dirent, filldir_t filldir)
+{
+	struct inode *inode = filp->f_path.dentry->d_inode;
+
+	return proc_readdir_de(PDE(inode), filp, dirent, filldir);
+}
+
 /*
  * These are the generic /proc directory operations. They
  * use the in-memory "struct proc_dir_entry" tree to parse
@@ -535,6 +537,7 @@ static const struct inode_operations proc_dir_inode_operations = {
 static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp)
 {
 	unsigned int i;
+	struct proc_dir_entry *tmp;
 	
 	i = get_inode_number();
 	if (i == 0)
@@ -558,6 +561,15 @@ static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp
 	}
 
 	spin_lock(&proc_subdir_lock);
+
+	for (tmp = dir->subdir; tmp; tmp = tmp->next)
+		if (strcmp(tmp->name, dp->name) == 0) {
+			printk(KERN_WARNING "proc_dir_entry '%s' already "
+					"registered\n", dp->name);
+			dump_stack();
+			break;
+		}
+
 	dp->next = dir->subdir;
 	dp->parent = dir;
 	dir->subdir = dp;
@@ -566,7 +578,7 @@ static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp
 	return 0;
 }
 
-static struct proc_dir_entry *proc_create(struct proc_dir_entry **parent,
+static struct proc_dir_entry *__proc_create(struct proc_dir_entry **parent,
 					  const char *name,
 					  mode_t mode,
 					  nlink_t nlink)
@@ -610,7 +622,7 @@ struct proc_dir_entry *proc_symlink(const char *name,
 {
 	struct proc_dir_entry *ent;
 
-	ent = proc_create(&parent,name,
+	ent = __proc_create(&parent, name,
 			  (S_IFLNK | S_IRUGO | S_IWUGO | S_IXUGO),1);
 
 	if (ent) {
@@ -636,7 +648,7 @@ struct proc_dir_entry *proc_mkdir_mode(const char *name, mode_t mode,
 {
 	struct proc_dir_entry *ent;
 
-	ent = proc_create(&parent, name, S_IFDIR | mode, 2);
+	ent = __proc_create(&parent, name, S_IFDIR | mode, 2);
 	if (ent) {
 		if (proc_register(parent, ent) < 0) {
 			kfree(ent);
@@ -670,7 +682,7 @@ struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
 		nlink = 1;
 	}
 
-	ent = proc_create(&parent,name,mode,nlink);
+	ent = __proc_create(&parent, name, mode, nlink);
 	if (ent) {
 		if (proc_register(parent, ent) < 0) {
 			kfree(ent);
@@ -678,6 +690,38 @@ struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
 		}
 	}
 	return ent;
+}
+
+struct proc_dir_entry *proc_create(const char *name, mode_t mode,
+				   struct proc_dir_entry *parent,
+				   const struct file_operations *proc_fops)
+{
+	struct proc_dir_entry *pde;
+	nlink_t nlink;
+
+	if (S_ISDIR(mode)) {
+		if ((mode & S_IALLUGO) == 0)
+			mode |= S_IRUGO | S_IXUGO;
+		nlink = 2;
+	} else {
+		if ((mode & S_IFMT) == 0)
+			mode |= S_IFREG;
+		if ((mode & S_IALLUGO) == 0)
+			mode |= S_IRUGO;
+		nlink = 1;
+	}
+
+	pde = __proc_create(&parent, name, mode, nlink);
+	if (!pde)
+		goto out;
+	pde->proc_fops = proc_fops;
+	if (proc_register(parent, pde) < 0)
+		goto out_free;
+	return pde;
+out_free:
+	kfree(pde);
+out:
+	return NULL;
 }
 
 void free_proc_entry(struct proc_dir_entry *de)
@@ -689,7 +733,7 @@ void free_proc_entry(struct proc_dir_entry *de)
 
 	release_inode_number(ino);
 
-	if (S_ISLNK(de->mode) && de->data)
+	if (S_ISLNK(de->mode))
 		kfree(de->data);
 	kfree(de);
 }

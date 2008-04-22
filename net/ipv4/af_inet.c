@@ -127,6 +127,10 @@ extern void ip_mc_drop_socket(struct sock *sk);
 static struct list_head inetsw[SOCK_MAX];
 static DEFINE_SPINLOCK(inetsw_lock);
 
+struct ipv4_config ipv4_config;
+
+EXPORT_SYMBOL(ipv4_config);
+
 /* New destruction routine */
 
 void inet_sock_destruct(struct sock *sk)
@@ -135,6 +139,8 @@ void inet_sock_destruct(struct sock *sk)
 
 	__skb_queue_purge(&sk->sk_receive_queue);
 	__skb_queue_purge(&sk->sk_error_queue);
+
+	sk_mem_reclaim(sk);
 
 	if (sk->sk_type == SOCK_STREAM && sk->sk_state != TCP_CLOSE) {
 		printk("Attempt to release TCP socket in state %d %p\n",
@@ -449,7 +455,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (err)
 		goto out;
 
-	chk_addr_ret = inet_addr_type(nsa.saddr);
+	chk_addr_ret = inet_addr_type(&init_net, nsa.saddr);
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
@@ -461,7 +467,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	err = -EADDRNOTAVAIL;
 	if (!sysctl_ip_nonlocal_bind &&
 	    !inet->freebind &&
-	    nsa.saddr != INADDR_ANY &&
+	    nsa.saddr != htonl(INADDR_ANY) &&
 	    chk_addr_ret != RTN_LOCAL &&
 	    chk_addr_ret != RTN_MULTICAST &&
 	    chk_addr_ret != RTN_BROADCAST)
@@ -800,12 +806,12 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		case SIOCADDRT:
 		case SIOCDELRT:
 		case SIOCRTMSG:
-			err = ip_rt_ioctl(cmd, (void __user *)arg);
+			err = ip_rt_ioctl(sk->sk_net, cmd, (void __user *)arg);
 			break;
 		case SIOCDARP:
 		case SIOCGARP:
 		case SIOCSARP:
-			err = arp_ioctl(cmd, (void __user *)arg);
+			err = arp_ioctl(sk->sk_net, cmd, (void __user *)arg);
 			break;
 		case SIOCGIFADDR:
 		case SIOCSIFADDR:
@@ -849,6 +855,7 @@ const struct proto_ops inet_stream_ops = {
 	.recvmsg	   = sock_common_recvmsg,
 	.mmap		   = sock_no_mmap,
 	.sendpage	   = tcp_sendpage,
+	.splice_read	   = tcp_splice_read,
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_sock_common_setsockopt,
 	.compat_getsockopt = compat_sock_common_getsockopt,
@@ -1117,7 +1124,7 @@ int inet_sk_rebuild_header(struct sock *sk)
 	};
 
 	security_sk_classify_flow(sk, &fl);
-	err = ip_route_output_flow(&rt, &fl, sk, 0);
+	err = ip_route_output_flow(&init_net, &rt, &fl, sk, 0);
 }
 	if (!err)
 		sk_setup_caps(sk, &rt->u.dst);
@@ -1248,7 +1255,7 @@ unsigned long snmp_fold_field(void *mib[], int offt)
 }
 EXPORT_SYMBOL_GPL(snmp_fold_field);
 
-int snmp_mib_init(void *ptr[2], size_t mibsize, size_t mibalign)
+int snmp_mib_init(void *ptr[2], size_t mibsize)
 {
 	BUG_ON(ptr == NULL);
 	ptr[0] = __alloc_percpu(mibsize);
@@ -1297,37 +1304,31 @@ static struct net_protocol udp_protocol = {
 
 static struct net_protocol icmp_protocol = {
 	.handler =	icmp_rcv,
+	.no_policy =	1,
 };
 
 static int __init init_ipv4_mibs(void)
 {
 	if (snmp_mib_init((void **)net_statistics,
-			  sizeof(struct linux_mib),
-			  __alignof__(struct linux_mib)) < 0)
+			  sizeof(struct linux_mib)) < 0)
 		goto err_net_mib;
 	if (snmp_mib_init((void **)ip_statistics,
-			  sizeof(struct ipstats_mib),
-			  __alignof__(struct ipstats_mib)) < 0)
+			  sizeof(struct ipstats_mib)) < 0)
 		goto err_ip_mib;
 	if (snmp_mib_init((void **)icmp_statistics,
-			  sizeof(struct icmp_mib),
-			  __alignof__(struct icmp_mib)) < 0)
+			  sizeof(struct icmp_mib)) < 0)
 		goto err_icmp_mib;
 	if (snmp_mib_init((void **)icmpmsg_statistics,
-			  sizeof(struct icmpmsg_mib),
-			  __alignof__(struct icmpmsg_mib)) < 0)
+			  sizeof(struct icmpmsg_mib)) < 0)
 		goto err_icmpmsg_mib;
 	if (snmp_mib_init((void **)tcp_statistics,
-			  sizeof(struct tcp_mib),
-			  __alignof__(struct tcp_mib)) < 0)
+			  sizeof(struct tcp_mib)) < 0)
 		goto err_tcp_mib;
 	if (snmp_mib_init((void **)udp_statistics,
-			  sizeof(struct udp_mib),
-			  __alignof__(struct udp_mib)) < 0)
+			  sizeof(struct udp_mib)) < 0)
 		goto err_udp_mib;
 	if (snmp_mib_init((void **)udplite_statistics,
-			  sizeof(struct udp_mib),
-			  __alignof__(struct udp_mib)) < 0)
+			  sizeof(struct udp_mib)) < 0)
 		goto err_udplite_mib;
 
 	tcp_mib_init();
@@ -1429,6 +1430,9 @@ static int __init inet_init(void)
 	/* Setup TCP slab cache for open requests. */
 	tcp_init();
 
+	/* Setup UDP memory threshold */
+	udp_init();
+
 	/* Add UDP-Lite (RFC 3828) */
 	udplite4_register();
 
@@ -1482,15 +1486,11 @@ static int __init ipv4_proc_init(void)
 		goto out_tcp;
 	if (udp4_proc_init())
 		goto out_udp;
-	if (fib_proc_init())
-		goto out_fib;
 	if (ip_misc_proc_init())
 		goto out_misc;
 out:
 	return rc;
 out_misc:
-	fib_proc_exit();
-out_fib:
 	udp4_proc_exit();
 out_udp:
 	tcp4_proc_exit();
