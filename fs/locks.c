@@ -1453,7 +1453,7 @@ int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
 
 	locks_copy_lock(new_fl, lease);
 	locks_insert_lock(before, new_fl);
-	vx_locks_inc(fl);
+	vx_locks_inc(new_fl);
 
 	*flp = new_fl;
 	return 0;
