@@ -3016,7 +3016,7 @@ out_redo:
 
 	new_path.dentry = old_nd.path.dentry;
 	vxdprintk(VXD_CBIT(misc, 2),
-		"path_lookup(redo): %p [»%.*s«:%d]", new_dentry,
+		"path_lookup(redo): %p [»%.*s«:%d]", new_path.dentry,
 		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
 		new_path.dentry->d_name.len);
 	dget(new_path.dentry);
