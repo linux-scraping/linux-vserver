@@ -237,6 +237,10 @@ endmenu
 config	VSERVER
 	bool
 	default y
+	select NAMESPACES
+	select UTS_NS
+	select IPC_NS
+	select PID_NS
 	select USER_NS
 	select SYSVIPC
 

@@ -851,9 +851,6 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		v.val = sk->sk_mark;
 		break;
 
-	case SO_PEERTAG:
-		return vx_socket_peer_tag(sock, level, optval, optlen, len);
-
 	default:
 		return -ENOPROTOOPT;
 	}

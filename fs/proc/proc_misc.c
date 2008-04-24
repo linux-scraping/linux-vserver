@@ -85,7 +85,8 @@ static int proc_calc_metrics(char *page, char **start, off_t off,
 static int loadavg_read_proc(char *page, char **start, off_t off,
 				 int count, int *eof, void *data)
 {
-	unsigned int running, threads;
+	unsigned long running;
+	unsigned int threads;
 	int a, b, c;
 	int len;
 	unsigned long seq;

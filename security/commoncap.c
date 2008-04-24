@@ -33,7 +33,7 @@ EXPORT_SYMBOL(securebits);
 
 int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 {
-	NETLINK_CB(skb).eff_cap = vx_mbcap(cap_effective);
+	NETLINK_CB(skb).eff_cap = vx_mbcaps(current->cap_effective);
 	return 0;
 }
 
@@ -54,9 +54,24 @@ EXPORT_SYMBOL(cap_netlink_recv);
  */
 int cap_capable (struct task_struct *tsk, int cap)
 {
-	/* Derived from include/linux/sched.h:capable. */
-       if (vx_cap_raised(tsk->vx_info, tsk->cap_effective, cap))
+	struct vx_info *vxi = tsk->vx_info;
+
+#if 0
+	printk("cap_capable() VXF_STATE_SETUP = %llx, raised = %x, eff = %08x:%08x\n",
+		vx_info_flags(vxi, VXF_STATE_SETUP, 0),
+		cap_raised(tsk->cap_effective, cap),
+		tsk->cap_effective.cap[1], tsk->cap_effective.cap[0]);
+#endif
+
+	/* special case SETUP */
+	if (vx_info_flags(vxi, VXF_STATE_SETUP, 0) &&
+		cap_raised(tsk->cap_effective, cap))
 		return 0;
+
+	/* Derived from include/linux/sched.h:capable. */
+	if (vx_cap_raised(vxi, tsk->cap_effective, cap))
+		return 0;
+
 	return -EPERM;
 }
 
@@ -331,7 +346,7 @@ void cap_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 	kernel_cap_t new_permitted, working;
 
 	new_permitted = cap_intersect(bprm->cap_permitted,
-				 vx_current_cap_bset());
+				 current->cap_bset);
 	working = cap_intersect(bprm->cap_inheritable,
 				 current->cap_inheritable);
 	new_permitted = cap_combine(new_permitted, working);
