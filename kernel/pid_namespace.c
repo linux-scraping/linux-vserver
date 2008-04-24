@@ -12,6 +12,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/syscalls.h>
 #include <linux/err.h>
+#include <linux/vserver/global.h>
 
 #define BITS_PER_PAGE		(PAGE_SIZE*8)
 

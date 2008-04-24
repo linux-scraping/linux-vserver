@@ -884,6 +884,7 @@ static inline uint64_t caps_from_cap_t(kernel_cap_t c)
 {
 	uint64_t v = c.cap[0] | ((uint64_t)c.cap[1] << 32);
 
+	// printk("caps_from_cap_t(%08x:%08x) = %016llx\n", c.cap[1], c.cap[0], v);
 	return v;
 }
 
@@ -891,8 +892,10 @@ static inline kernel_cap_t cap_t_from_caps(uint64_t v)
 {
 	kernel_cap_t c = __cap_empty_set;
 
-	c.cap[0] = v & 0xFFFF;
-	c.cap[1] = (v >> 32) & 0xFFFF;
+	c.cap[0] = v & 0xFFFFFFFF;
+	c.cap[1] = (v >> 32) & 0xFFFFFFFF;
+
+	// printk("cap_t_from_caps(%016llx) = %08x:%08x\n", v, c.cap[1], c.cap[0]);
 	return c;
 }
 
@@ -925,8 +928,14 @@ int vc_get_ccaps(struct vx_info *vxi, void __user *data)
 static int do_set_caps(struct vx_info *vxi,
 	uint64_t bcaps, uint64_t bmask, uint64_t ccaps, uint64_t cmask)
 {
+	uint64_t bcold = caps_from_cap_t(vxi->vx_bcaps);
+
+#if 0
+	printk("do_set_caps(%16llx, %16llx, %16llx, %16llx)\n",
+		bcaps, bmask, ccaps, cmask);
+#endif
 	vxi->vx_bcaps = cap_t_from_caps(
-		vs_mask_flags(caps_from_cap_t(vxi->vx_bcaps), bcaps, bmask));
+		vs_mask_flags(bcold, bcaps, bmask));
 	vxi->vx_ccaps = vs_mask_flags(vxi->vx_ccaps, ccaps, cmask);
 
 	return 0;

@@ -60,6 +60,5 @@
 #define SCM_TIMESTAMPNS		SO_TIMESTAMPNS
 
 #define SO_MARK			36
-#define SO_PEERTAG		37
 
 #endif	/* _ASM_POWERPC_SOCKET_H */
