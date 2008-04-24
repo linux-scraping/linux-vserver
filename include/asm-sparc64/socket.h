@@ -58,6 +58,4 @@
 #define SO_SECURITY_ENCRYPTION_NETWORK		0x5004
 
 #define SO_MARK			0x0022
-#define SO_PEERTAG		0x0023
-
 #endif /* _ASM_SOCKET_H */

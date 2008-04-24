@@ -53,6 +53,5 @@
 #define SO_PASSSEC		0x401e
 
 #define SO_MARK			0x401f
-#define SO_PEERTAG		0x4020
 
 #endif /* _ASM_SOCKET_H */

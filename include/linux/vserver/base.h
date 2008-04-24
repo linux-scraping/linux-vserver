@@ -103,21 +103,25 @@ enum {
 
 /* context bcap mask */
 
-#define __vx_bcaps(v)	((v) ? (v)->vx_bcaps : __cap_full_set)
+#define __vx_bcaps(v)		((v)->vx_bcaps)
 
 #define vx_current_bcaps()	__vx_bcaps(current->vx_info)
 
-#define vx_info_bcaps(v, c)	cap_intersect(__vx_bcaps(v), c)
 
-#define vx_bcaps(c)	vx_info_bcaps(current->vx_info, c)
+/* mask given bcaps */
+
+#define vx_info_mbcaps(v, c)	((v) ? cap_intersect(__vx_bcaps(v), c) : c)
+
+#define vx_mbcaps(c)		vx_info_mbcaps(current->vx_info, c)
 
 
-#define vx_info_cap_bset(v) \
-	((v) ? vx_info_bcaps(v, current->cap_bset) : current->cap_bset)
+/* masked cap_bset */
+
+#define vx_info_cap_bset(v)	vx_info_mbcaps(v, current->cap_bset)
 
 #define vx_current_cap_bset()	vx_info_cap_bset(current->vx_info)
 
-
+#if 0
 #define vx_info_mbcap(v, b) \
 	(!vx_info_flags(v, VXF_STATE_SETUP, 0) ? \
 	vx_info_bcaps(v, b) : (b))
@@ -126,8 +130,9 @@ enum {
 	vx_info_mbcap((t)->vx_info, (t)->b)
 
 #define vx_mbcap(b)	task_vx_mbcap(current, b)
+#endif
 
-#define vx_cap_raised(v, c, f)	(cap_raised(vx_info_mbcap(v, c), f))
+#define vx_cap_raised(v, c, f)	cap_raised(vx_info_mbcaps(v, c), f)
 
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))

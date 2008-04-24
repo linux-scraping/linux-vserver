@@ -395,7 +395,7 @@ static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 		goto out;
 	}
 
-	if ((parsed_options & OCFS2_MOUNT_TAGGED) &&
+	if ((parsed_options.mount_opt & OCFS2_MOUNT_TAGGED) &&
 		!(sb->s_flags & MS_TAGGED)) {
 		ret = -EINVAL;
 		mlog(ML_ERROR, "Cannot change tagging on remount\n");
@@ -880,16 +880,16 @@ static int ocfs2_parse_options(struct super_block *sb,
 			break;
 #ifndef CONFIG_TAGGING_NONE
 		case Opt_tag:
-			*mount_opt |= OCFS2_MOUNT_TAGGED;
+			mopt->mount_opt |= OCFS2_MOUNT_TAGGED;
 			break;
 		case Opt_notag:
-			*mount_opt &= ~OCFS2_MOUNT_TAGGED;
+			mopt->mount_opt &= ~OCFS2_MOUNT_TAGGED;
 			break;
 #endif
 #ifdef CONFIG_PROPAGATE
 		case Opt_tagid:
 			/* use args[0] */
-			*mount_opt |= OCFS2_MOUNT_TAGGED;
+			mopt->mount_opt |= OCFS2_MOUNT_TAGGED;
 			break;
 #endif
 		default:

@@ -62,19 +62,6 @@ static inline void __vx_acc_sock(struct vx_info *vxi,
 	(s)->sk_nx_info = NULL;		\
 	} while (0)
 
-static inline
-int vx_socket_peer_tag(struct socket *sock, int level,
-	char __user *optval, int __user *optlen, int len)
-{
-	struct peer_tag tag;
-
-	tag.xid = sock->sk->sk_xid;
-	tag.nid = sock->sk->sk_nid;
-	if (copy_to_user(optval, &tag, sizeof(tag)))
-		return -EFAULT;
-	return 0;
-}
-
 #else
 #warning duplicate inclusion
 #endif
