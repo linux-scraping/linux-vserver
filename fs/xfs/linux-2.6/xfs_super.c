@@ -1369,6 +1369,9 @@ xfs_fs_fill_super(
 	if (error)
 		goto fail_vfsop;
 
+	if (mp->m_flags & XFS_MOUNT_TAGGED)
+		sb->s_flags |= MS_TAGGED;
+
 	sb->s_dirt = 1;
 	sb->s_magic = XFS_SB_MAGIC;
 	sb->s_blocksize = mp->m_sb.sb_blocksize;
