@@ -21,6 +21,7 @@
 #include <linux/cdev.h>
 #include <linux/mutex.h>
 #include <linux/backing-dev.h>
+#include <linux/vs_context.h>
 #include <linux/vs_device.h>
 
 #ifdef CONFIG_KMOD

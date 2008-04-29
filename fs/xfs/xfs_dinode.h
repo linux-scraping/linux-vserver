@@ -138,7 +138,9 @@ typedef struct xfs_dinode
 #define	XFS_DI_NEXT_UNLINKED	0x1000000
 #define	XFS_DI_U		0x2000000
 #define	XFS_DI_A		0x4000000
-#define	XFS_DI_NUM_BITS		27
+#define	XFS_DI_VFLAGS		0x8000000
+#define	XFS_DI_TAG		0x10000000
+#define	XFS_DI_NUM_BITS		29
 #define	XFS_DI_ALL_BITS		((1 << XFS_DI_NUM_BITS) - 1)
 #define	XFS_DI_CORE_BITS	(XFS_DI_ALL_BITS & ~(XFS_DI_U|XFS_DI_A))
 

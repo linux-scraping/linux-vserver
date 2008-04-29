@@ -7,6 +7,8 @@
 #include "vserver/check.h"
 #include "vserver/debug.h"
 
+#include <linux/sched.h>
+
 
 #define get_nx_info(i) __get_nx_info(i, __FILE__, __LINE__)
 

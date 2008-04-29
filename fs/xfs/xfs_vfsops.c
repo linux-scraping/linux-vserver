@@ -404,10 +404,6 @@ xfs_finish_flags(
 		if (ap->flags & XFSMNT_PQUOTAENF)
 			mp->m_qflags |= XFS_OQUOTA_ENFD;
 	}
-
-	if (ap->flags2 & XFSMNT2_TAGGED)
-		mp->m_flags |= MS_TAGGED;
-		/* vfs->vfs_super->s_flags |= */
 	return 0;
 }
 

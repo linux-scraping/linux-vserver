@@ -2564,7 +2564,7 @@ retry:
 	iter.task = NULL;
 	pid = find_ge_pid(iter.tgid, ns);
 	if (pid) {
-		iter.tgid = pid_nr_ns(pid, ns);
+		iter.tgid = pid_unmapped_nr_ns(pid, ns);
 		iter.task = pid_task(pid, PIDTYPE_PID);
 		/* What we to know is if the pid we have find is the
 		 * pid of a thread_group_leader.  Testing for task
@@ -2594,7 +2594,7 @@ static int proc_pid_fill_cache(struct file *filp, void *dirent, filldir_t filldi
 	struct tgid_iter iter)
 {
 	char name[PROC_NUMBUF];
-	int len = snprintf(name, sizeof(name), "%d", iter.tgid);
+	int len = snprintf(name, sizeof(name), "%d", vx_map_tgid(iter.tgid));
 	return proc_fill_cache(filp, dirent, filldir, name, len,
 				proc_pid_instantiate, iter.task, NULL);
 }
