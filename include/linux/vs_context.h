@@ -7,6 +7,8 @@
 #include "vserver/history.h"
 #include "vserver/debug.h"
 
+#include <linux/sched.h>
+
 
 #define get_vx_info(i) __get_vx_info(i, __FILE__, __LINE__, __HERE__)
 

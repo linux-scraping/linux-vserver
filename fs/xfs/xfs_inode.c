@@ -717,13 +717,21 @@ xfs_dinode_from_disk(
 	xfs_icdinode_t		*to,
 	xfs_dinode_core_t	*from)
 {
+	uint32_t uid, gid;
+
 	to->di_magic = be16_to_cpu(from->di_magic);
 	to->di_mode = be16_to_cpu(from->di_mode);
 	to->di_version = from ->di_version;
 	to->di_format = from->di_format;
 	to->di_onlink = be16_to_cpu(from->di_onlink);
-	to->di_uid = be32_to_cpu(from->di_uid);
-	to->di_gid = be32_to_cpu(from->di_gid);
+
+	uid = be32_to_cpu(from->di_uid);
+	gid = be32_to_cpu(from->di_gid);
+
+	to->di_uid = INOTAG_UID(1, uid, gid);
+	to->di_gid = INOTAG_GID(1, uid, gid);
+	to->di_tag = INOTAG_TAG(1, uid, gid, 0);
+
 	to->di_nlink = be32_to_cpu(from->di_nlink);
 	to->di_projid = be16_to_cpu(from->di_projid);
 	memcpy(to->di_pad, from->di_pad, sizeof(to->di_pad));
@@ -757,8 +765,10 @@ xfs_dinode_to_disk(
 	to->di_version = from ->di_version;
 	to->di_format = from->di_format;
 	to->di_onlink = cpu_to_be16(from->di_onlink);
-	to->di_uid = cpu_to_be32(from->di_uid);
-	to->di_gid = cpu_to_be32(from->di_gid);
+
+	to->di_uid = cpu_to_be32(TAGINO_UID(1, from->di_uid, from->di_tag));
+	to->di_gid = cpu_to_be32(TAGINO_GID(1, from->di_gid, from->di_tag));
+
 	to->di_nlink = cpu_to_be32(from->di_nlink);
 	to->di_projid = cpu_to_be16(from->di_projid);
 	memcpy(to->di_pad, from->di_pad, sizeof(to->di_pad));

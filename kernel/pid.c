@@ -435,7 +435,7 @@ struct pid *find_get_pid(pid_t nr)
 	return pid;
 }
 
-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
+pid_t pid_unmapped_nr_ns(struct pid *pid, struct pid_namespace *ns)
 {
 	struct upid *upid;
 	pid_t nr = 0;
@@ -445,7 +445,12 @@ pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
 		if (upid->ns == ns)
 			nr = upid->nr;
 	}
-	return vx_map_pid(nr);
+	return nr;
+}
+
+pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
+{
+	return vx_map_pid(pid_unmapped_nr_ns(pid, ns));
 }
 
 pid_t pid_vnr(struct pid *pid)
