@@ -896,8 +896,8 @@ static struct sock *raw_get_next(struct seq_file *seq, struct sock *sk)
 		sk = sk_next(sk);
 try_again:
 		;
-	} while ((sk && sk->sk_net != state->p.net) ||
-		!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT));
+	} while (sk && ((sk->sk_net != state->p.net) ||
+		!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT)));
 
 	if (!sk && ++state->bucket < RAW_HTABLE_SIZE) {
 		sk = sk_head(&state->h->ht[state->bucket]);
