@@ -36,6 +36,7 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 #include <linux/user_namespace.h>
 #include <linux/pid_namespace.h>
 #include <linux/ipc_namespace.h>
+#include <net/net_namespace.h>
 
 const struct vcmd_space_mask space_mask = {
 	.mask = CLONE_NEWNS |
@@ -61,6 +62,7 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct ipc_namespace *old_ipc;
 	struct pid_namespace *old_pid;
 	struct user_namespace *old_user;
+	struct net *old_net;
 	struct nsproxy *nsproxy;
 
 	nsproxy = copy_nsproxy(old_nsproxy);
@@ -107,6 +109,14 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	} else
 		old_pid = NULL;
 
+	if (mask & CLONE_NEWNET) {
+		old_net = nsproxy->net_ns;
+		nsproxy->net_ns = new_nsproxy->net_ns;
+		if (nsproxy->net_ns)
+			get_net(nsproxy->net_ns);
+	} else
+		old_net = NULL;
+
 	if (old_ns)
 		put_mnt_ns(old_ns);
 	if (old_uts)
@@ -117,6 +127,8 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 		put_pid_ns(old_pid);
 	if (old_user)
 		put_user_ns(old_user);
+	if (old_net)
+		put_net(old_net);
 out:
 	return nsproxy;
 }

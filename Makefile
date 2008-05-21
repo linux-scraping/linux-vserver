@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 25
-EXTRAVERSION = -vs2.3.x-vs2.3.0.34.9
+EXTRAVERSION = .4-vs2.3.x-vs2.3.0.34.10
 NAME = Funky Weasel is Jiggy wit it
 
 # *DOCUMENTATION*
