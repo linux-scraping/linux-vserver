@@ -292,11 +292,11 @@ static int genregs64_set(struct task_struct *target,
 					 32 * sizeof(u64),
 					 33 * sizeof(u64));
 		if (!ret) {
-			/* Only the condition codes can be modified
-			 * in the %tstate register.
+			/* Only the condition codes and the "in syscall"
+			 * state can be modified in the %tstate register.
 			 */
-			tstate &= (TSTATE_ICC | TSTATE_XCC);
-			regs->tstate &= ~(TSTATE_ICC | TSTATE_XCC);
+			tstate &= (TSTATE_ICC | TSTATE_XCC | TSTATE_SYSCALL);
+			regs->tstate &= ~(TSTATE_ICC | TSTATE_XCC | TSTATE_SYSCALL);
 			regs->tstate |= tstate;
 		}
 	}
@@ -662,8 +662,10 @@ static int genregs32_set(struct task_struct *target,
 		switch (pos) {
 		case 32: /* PSR */
 			tstate = regs->tstate;
-			tstate &= ~(TSTATE_ICC | TSTATE_XCC);
+			tstate &= ~(TSTATE_ICC | TSTATE_XCC | TSTATE_SYSCALL);
 			tstate |= psr_to_tstate_icc(reg);
+			if (reg & PSR_SYSCALL)
+				tstate |= TSTATE_SYSCALL;
 			regs->tstate = tstate;
 			break;
 		case 33: /* PC */
@@ -949,6 +951,8 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		break;
 
 	default:
+		if (request == PTRACE_SPARC_DETACH)
+			request = PTRACE_DETACH;
 		ret = compat_ptrace_request(child, request, addr, data);
 		break;
 	}
@@ -1041,6 +1045,8 @@ long arch_ptrace(struct task_struct *child, long request, long addr, long data)
 		break;
 
 	default:
+		if (request == PTRACE_SPARC_DETACH)
+			request = PTRACE_DETACH;
 		ret = ptrace_request(child, request, addr, data);
 		break;
 	}

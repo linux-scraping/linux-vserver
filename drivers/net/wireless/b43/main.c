@@ -78,6 +78,11 @@ static int modparam_nohwcrypt;
 module_param_named(nohwcrypt, modparam_nohwcrypt, int, 0444);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption.");
 
+static int modparam_btcoex = 1;
+module_param_named(btcoex, modparam_btcoex, int, 0444);
+MODULE_PARM_DESC(btcoex, "Enable Bluetooth coexistance (default on)");
+
+
 static const struct ssb_device_id b43_ssb_tbl[] = {
 	SSB_DEVICE(SSB_VENDOR_BROADCOM, SSB_DEV_80211, 5),
 	SSB_DEVICE(SSB_VENDOR_BROADCOM, SSB_DEV_80211, 6),
@@ -617,6 +622,7 @@ static void b43_synchronize_irq(struct b43_wldev *dev)
  */
 void b43_dummy_transmission(struct b43_wldev *dev)
 {
+	struct b43_wl *wl = dev->wl;
 	struct b43_phy *phy = &dev->phy;
 	unsigned int i, max_loop;
 	u16 value;
@@ -642,6 +648,9 @@ void b43_dummy_transmission(struct b43_wldev *dev)
 		B43_WARN_ON(1);
 		return;
 	}
+
+	spin_lock_irq(&wl->irq_lock);
+	write_lock(&wl->tx_lock);
 
 	for (i = 0; i < 5; i++)
 		b43_ram_write(dev, i * 4, buffer[i]);
@@ -683,6 +692,9 @@ void b43_dummy_transmission(struct b43_wldev *dev)
 	}
 	if (phy->radio_ver == 0x2050 && phy->radio_rev <= 0x5)
 		b43_radio_write16(dev, 0x0051, 0x0037);
+
+	write_unlock(&wl->tx_lock);
+	spin_unlock_irq(&wl->irq_lock);
 }
 
 static void key_write(struct b43_wldev *dev,
@@ -2587,15 +2599,21 @@ static int b43_op_tx(struct ieee80211_hw *hw,
 {
 	struct b43_wl *wl = hw_to_b43_wl(hw);
 	struct b43_wldev *dev = wl->current_dev;
-	int err = -ENODEV;
+	unsigned long flags;
+	int err;
 
 	if (unlikely(!dev))
-		goto out;
-	if (unlikely(b43_status(dev) < B43_STAT_STARTED))
-		goto out;
-	/* DMA-TX is done without a global lock. */
-	err = b43_dma_tx(dev, skb, ctl);
-out:
+		return NETDEV_TX_BUSY;
+
+	/* Transmissions on seperate queues can run concurrently. */
+	read_lock_irqsave(&wl->tx_lock, flags);
+
+	err = -ENODEV;
+	if (likely(b43_status(dev) >= B43_STAT_STARTED))
+		err = b43_dma_tx(dev, skb, ctl);
+
+	read_unlock_irqrestore(&wl->tx_lock, flags);
+
 	if (unlikely(err))
 		return NETDEV_TX_BUSY;
 	return NETDEV_TX_OK;
@@ -3104,15 +3122,15 @@ static void b43_wireless_core_stop(struct b43_wldev *dev)
 	spin_unlock_irqrestore(&wl->irq_lock, flags);
 	b43_synchronize_irq(dev);
 
+	write_lock_irqsave(&wl->tx_lock, flags);
 	b43_set_status(dev, B43_STAT_INITIALIZED);
+	write_unlock_irqrestore(&wl->tx_lock, flags);
 
 	mutex_unlock(&wl->mutex);
 	/* Must unlock as it would otherwise deadlock. No races here.
 	 * Cancel the possibly running self-rearming periodic work. */
 	cancel_delayed_work_sync(&dev->periodic_work);
 	mutex_lock(&wl->mutex);
-
-	ieee80211_stop_queues(wl->hw);	//FIXME this could cause a deadlock, as mac80211 seems buggy.
 
 	b43_mac_suspend(dev);
 	free_irq(dev->dev->irq, dev);
@@ -3339,6 +3357,8 @@ static void b43_bluetooth_coext_enable(struct b43_wldev *dev)
 	struct ssb_sprom *sprom = &dev->dev->bus->sprom;
 	u32 hf;
 
+	if (!modparam_btcoex)
+		return;
 	if (!(sprom->boardflags_lo & B43_BFL_BTCOEXIST))
 		return;
 	if (dev->phy.type != B43_PHYTYPE_B && !dev->phy.gmode)
@@ -3350,11 +3370,13 @@ static void b43_bluetooth_coext_enable(struct b43_wldev *dev)
 	else
 		hf |= B43_HF_BTCOEX;
 	b43_hf_write(dev, hf);
-	//TODO
 }
 
 static void b43_bluetooth_coext_disable(struct b43_wldev *dev)
-{				//TODO
+{
+	if (!modparam_btcoex)
+		return;
+	//TODO
 }
 
 static void b43_imcfglo_timeouts_workaround(struct b43_wldev *dev)
@@ -3903,6 +3925,14 @@ static int b43_wireless_core_attach(struct b43_wldev *dev)
 		err = -EOPNOTSUPP;
 		goto err_powerdown;
 	}
+	if (1 /* disable A-PHY */) {
+		/* FIXME: For now we disable the A-PHY on multi-PHY devices. */
+		if (dev->phy.type != B43_PHYTYPE_N) {
+			have_2ghz_phy = 1;
+			have_5ghz_phy = 0;
+		}
+	}
+
 	dev->phy.gmode = have_2ghz_phy;
 	tmp = dev->phy.gmode ? B43_TMSLOW_GMODE : 0;
 	b43_wireless_core_reset(dev, tmp);
@@ -4000,8 +4030,16 @@ static int b43_one_core_attach(struct ssb_device *dev, struct b43_wl *wl)
 	return err;
 }
 
+#define IS_PDEV(pdev, _vendor, _device, _subvendor, _subdevice)		( \
+	(pdev->vendor == PCI_VENDOR_ID_##_vendor) &&			\
+	(pdev->device == _device) &&					\
+	(pdev->subsystem_vendor == PCI_VENDOR_ID_##_subvendor) &&	\
+	(pdev->subsystem_device == _subdevice)				)
+
 static void b43_sprom_fixup(struct ssb_bus *bus)
 {
+	struct pci_dev *pdev;
+
 	/* boardflags workarounds */
 	if (bus->boardinfo.vendor == SSB_BOARDVENDOR_DELL &&
 	    bus->chip_id == 0x4301 && bus->boardinfo.rev == 0x74)
@@ -4009,6 +4047,13 @@ static void b43_sprom_fixup(struct ssb_bus *bus)
 	if (bus->boardinfo.vendor == PCI_VENDOR_ID_APPLE &&
 	    bus->boardinfo.type == 0x4E && bus->boardinfo.rev > 0x40)
 		bus->sprom.boardflags_lo |= B43_BFL_PACTRL;
+	if (bus->bustype == SSB_BUSTYPE_PCI) {
+		pdev = bus->host_pci;
+		if (IS_PDEV(pdev, BROADCOM, 0x4318, ASUSTEK, 0x100F) ||
+		    IS_PDEV(pdev, BROADCOM, 0x4320, LINKSYS, 0x0015) ||
+		    IS_PDEV(pdev, BROADCOM, 0x4320, LINKSYS, 0x0013))
+			bus->sprom.boardflags_lo &= ~B43_BFL_BTCOEXIST;
+	}
 }
 
 static void b43_wireless_exit(struct ssb_device *dev, struct b43_wl *wl)
@@ -4052,6 +4097,7 @@ static int b43_wireless_init(struct ssb_device *dev)
 	memset(wl, 0, sizeof(*wl));
 	wl->hw = hw;
 	spin_lock_init(&wl->irq_lock);
+	rwlock_init(&wl->tx_lock);
 	spin_lock_init(&wl->leds_lock);
 	spin_lock_init(&wl->shm_lock);
 	mutex_init(&wl->mutex);

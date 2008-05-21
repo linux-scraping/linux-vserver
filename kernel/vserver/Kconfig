@@ -206,7 +206,7 @@ config	VSERVER_HISTORY_SIZE
 
 config	VSERVER_MONITOR
 	bool	"VServer Scheduling Monitor"
-	depends on VSERVER_DEBUG
+	depends on VSERVER_DISABLED
 	default n
 	help
 	  Set this to yes if you want to record the scheduling
