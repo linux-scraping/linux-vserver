@@ -553,6 +553,10 @@ static int check_kill_permission(int sig, struct siginfo *info,
 		return error;
 	}
 
+	error = -EPERM;
+	if (t->pid == 1 && current->xid)
+		return error;
+
 	error = -ESRCH;
 	if (!vx_check(vx_task_xid(t), VS_WATCH_P | VS_IDENT)) {
 		vxdprintk(current->xid || VXD_CBIT(misc, 7),
