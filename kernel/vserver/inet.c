@@ -198,7 +198,7 @@ int ip_v4_find_src(struct net *net, struct nx_info *nxi,
 			}
 		}
 		/* still no source ip? */
-		found = IN_LOOPBACK(fl->fl4_dst)
+		found = ipv4_is_loopback(fl->fl4_dst)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found:
 		/* assign src ip to flow */
@@ -210,11 +210,11 @@ int ip_v4_find_src(struct net *net, struct nx_info *nxi,
 	}
 
 	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
-		if (IN_LOOPBACK(fl->fl4_dst))
+		if (ipv4_is_loopback(fl->fl4_dst))
 			fl->fl4_dst = nxi->v4_lback.s_addr;
-		if (IN_LOOPBACK(fl->fl4_src))
+		if (ipv4_is_loopback(fl->fl4_src))
 			fl->fl4_src = nxi->v4_lback.s_addr;
-	} else if (IN_LOOPBACK(fl->fl4_dst) &&
+	} else if (ipv4_is_loopback(fl->fl4_dst) &&
 		!nx_info_flags(nxi, NXF_LBACK_ALLOW, 0))
 		return -EPERM;
 
