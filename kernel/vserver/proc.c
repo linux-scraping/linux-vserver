@@ -43,7 +43,7 @@ static inline char *print_cap_t(char *buffer, kernel_cap_t *c)
 
 	CAP_FOR_EACH_U32(__capi) {
 		buffer += sprintf(buffer, "%08x",
-			c->cap[(_LINUX_CAPABILITY_U32S-1) - __capi]);
+			c->cap[(_KERNEL_CAPABILITY_U32S-1) - __capi]);
 	}
 	return buffer;
 }
