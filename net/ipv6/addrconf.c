@@ -3400,7 +3400,7 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 			     ifmca = ifmca->next, ip_idx++) {
 				if (ip_idx < s_ip_idx)
 					continue;
-				if (!v6_addr_in_nx_info(nxi, &ifa->addr, -1))
+				if (!v6_addr_in_nx_info(nxi, &ifmca->mca_addr, -1))
 					continue;
 				err = inet6_fill_ifmcaddr(skb, ifmca,
 							  NETLINK_CB(cb->skb).pid,
@@ -3415,7 +3415,7 @@ static int inet6_dump_addr(struct sk_buff *skb, struct netlink_callback *cb,
 			     ifaca = ifaca->aca_next, ip_idx++) {
 				if (ip_idx < s_ip_idx)
 					continue;
-				if (!v6_addr_in_nx_info(nxi, &ifa->addr, -1))
+				if (!v6_addr_in_nx_info(nxi, &ifaca->aca_addr, -1))
 					continue;
 				err = inet6_fill_ifacaddr(skb, ifaca,
 							  NETLINK_CB(cb->skb).pid,

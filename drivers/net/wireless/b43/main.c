@@ -1027,7 +1027,6 @@ static void b43_generate_noise_sample(struct b43_wldev *dev)
 	b43_jssi_write(dev, 0x7F7F7F7F);
 	b43_write32(dev, B43_MMIO_MACCMD,
 		    b43_read32(dev, B43_MMIO_MACCMD) | B43_MACCMD_BGNOISE);
-	B43_WARN_ON(dev->noisecalc.channel_at_start != dev->phy.channel);
 }
 
 static void b43_calculate_link_quality(struct b43_wldev *dev)
@@ -1036,7 +1035,6 @@ static void b43_calculate_link_quality(struct b43_wldev *dev)
 
 	if (dev->noisecalc.calculation_running)
 		return;
-	dev->noisecalc.channel_at_start = dev->phy.channel;
 	dev->noisecalc.calculation_running = 1;
 	dev->noisecalc.nr_samples = 0;
 
@@ -1053,9 +1051,16 @@ static void handle_irq_noise(struct b43_wldev *dev)
 
 	/* Bottom half of Link Quality calculation. */
 
+	/* Possible race condition: It might be possible that the user
+	 * changed to a different channel in the meantime since we
+	 * started the calculation. We ignore that fact, since it's
+	 * not really that much of a problem. The background noise is
+	 * an estimation only anyway. Slightly wrong results will get damped
+	 * by the averaging of the 8 sample rounds. Additionally the
+	 * value is shortlived. So it will be replaced by the next noise
+	 * calculation round soon. */
+
 	B43_WARN_ON(!dev->noisecalc.calculation_running);
-	if (dev->noisecalc.channel_at_start != phy->channel)
-		goto drop_calculation;
 	*((__le32 *)noise) = cpu_to_le32(b43_jssi_read(dev));
 	if (noise[0] == 0x7F || noise[1] == 0x7F ||
 	    noise[2] == 0x7F || noise[3] == 0x7F)
@@ -1096,11 +1101,10 @@ static void handle_irq_noise(struct b43_wldev *dev)
 			average -= 48;
 
 		dev->stats.link_noise = average;
-	      drop_calculation:
 		dev->noisecalc.calculation_running = 0;
 		return;
 	}
-      generate_new:
+generate_new:
 	b43_generate_noise_sample(dev);
 }
 
@@ -3818,7 +3822,9 @@ static void b43_chip_reset(struct work_struct *work)
 			goto out;
 		}
 	}
-      out:
+out:
+	if (err)
+		wl->current_dev = NULL; /* Failed to init the dev. */
 	mutex_unlock(&wl->mutex);
 	if (err)
 		b43err(wl, "Controller restart FAILED\n");
@@ -3967,9 +3973,11 @@ static void b43_one_core_detach(struct ssb_device *dev)
 	struct b43_wldev *wldev;
 	struct b43_wl *wl;
 
+	/* Do not cancel ieee80211-workqueue based work here.
+	 * See comment in b43_remove(). */
+
 	wldev = ssb_get_drvdata(dev);
 	wl = wldev->wl;
-	cancel_work_sync(&wldev->restart_work);
 	b43_debugfs_remove_device(wldev);
 	b43_wireless_core_detach(wldev);
 	list_del(&wldev->list);
@@ -4151,6 +4159,10 @@ static void b43_remove(struct ssb_device *dev)
 {
 	struct b43_wl *wl = ssb_get_devtypedata(dev);
 	struct b43_wldev *wldev = ssb_get_drvdata(dev);
+
+	/* We must cancel any work here before unregistering from ieee80211,
+	 * as the ieee80211 unreg will destroy the workqueue. */
+	cancel_work_sync(&wldev->restart_work);
 
 	B43_WARN_ON(!wl);
 	if (wl->current_dev == wldev)
