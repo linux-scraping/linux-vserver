@@ -231,12 +231,14 @@ struct ext4_group_desc
 #define EXT4_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
 #define EXT4_HUGE_FILE_FL               0x00040000 /* Set to each huge file */
 #define EXT4_EXTENTS_FL			0x00080000 /* Inode uses extents */
-#define EXT4_BARRIER_FL			0x04000000 /* Barrier for chroot() */
-#define EXT4_IUNLINK_FL			0x08000000 /* Immutable unlink */
+#define EXT4_IXUNLINK_FL		0x01000000 /* Immutable invert on unlink */
 #define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 
-#define EXT4_FL_USER_VISIBLE		0x000BDFFF /* User visible flags */
-#define EXT4_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
+#define EXT4_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define EXT4_COW_FL			0x20000000 /* Copy on Write marker */
+
+#define EXT4_FL_USER_VISIBLE		0x010BDFFF /* User visible flags */
+#define EXT4_FL_USER_MODIFIABLE		0x010380FF /* User modifiable flags */
 
 /*
  * Inode dynamic state flags

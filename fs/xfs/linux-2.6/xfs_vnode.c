@@ -116,14 +116,10 @@ vn_revalidate(
 		inode->i_flags |= S_IMMUTABLE;
 	else
 		inode->i_flags &= ~S_IMMUTABLE;
-	if (xflags & XFS_XFLAG_IUNLINK)
-		inode->i_flags |= S_IUNLINK;
+	if (xflags & XFS_XFLAG_IXUNLINK)
+		inode->i_flags |= S_IXUNLINK;
 	else
-		inode->i_flags &= ~S_IUNLINK;
-	if (xflags & XFS_XFLAG_BARRIER)
-		inode->i_flags |= S_BARRIER;
-	else
-		inode->i_flags &= ~S_BARRIER;
+		inode->i_flags &= ~S_IXUNLINK;
 	if (xflags & XFS_XFLAG_APPEND)
 		inode->i_flags |= S_APPEND;
 	else
@@ -136,6 +132,15 @@ vn_revalidate(
 		inode->i_flags |= S_NOATIME;
 	else
 		inode->i_flags &= ~S_NOATIME;
+
+	if (xflags & XFS_XFLAG_BARRIER)
+		inode->i_vflags |= V_BARRIER;
+	else
+		inode->i_vflags &= ~V_BARRIER;
+	if (xflags & XFS_XFLAG_COW)
+		inode->i_vflags |= V_COW;
+	else
+		inode->i_vflags &= ~V_COW;
 	xfs_iunlock(ip, XFS_ILOCK_SHARED);
 
 	xfs_iflags_clear(ip, XFS_IMODIFIED);
