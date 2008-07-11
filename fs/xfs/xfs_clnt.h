@@ -100,6 +100,6 @@ struct xfs_mount_args {
 						 * I/O size in stat(2) */
 #define XFSMNT2_FILESTREAMS	0x00000002	/* enable the filestreams
 						 * allocator */
-#define XFSMNT2_TAGGED		0x80000000	/* context tagging */
+#define XFSMNT2_TAGGED		0x10000000	/* context tagging */
 
 #endif	/* __XFS_CLNT_H__ */

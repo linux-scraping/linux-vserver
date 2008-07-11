@@ -1150,15 +1150,14 @@ void ext2_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = EXT2_I(inode)->i_flags;
 
-	inode->i_flags &= ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER |
+	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
 		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+
 
 	if (flags & EXT2_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
-	if (flags & EXT2_IUNLINK_FL)
-		inode->i_flags |= S_IUNLINK;
-	if (flags & EXT2_BARRIER_FL)
-		inode->i_flags |= S_BARRIER;
+	if (flags & EXT2_IXUNLINK_FL)
+		inode->i_flags |= S_IXUNLINK;
 
 	if (flags & EXT2_SYNC_FL)
 		inode->i_flags |= S_SYNC;
@@ -1168,47 +1167,51 @@ void ext2_set_inode_flags(struct inode *inode)
 		inode->i_flags |= S_NOATIME;
 	if (flags & EXT2_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
+
+	inode->i_vflags &= ~(V_BARRIER | V_COW);
+
+	if (flags & EXT2_BARRIER_FL)
+		inode->i_vflags |= V_BARRIER;
+	if (flags & EXT2_COW_FL)
+		inode->i_vflags |= V_COW;
 }
 
 /* Propagate flags from i_flags to EXT2_I(inode)->i_flags */
 void ext2_get_inode_flags(struct ext2_inode_info *ei)
 {
 	unsigned int flags = ei->vfs_inode.i_flags;
+	unsigned int vflags = ei->vfs_inode.i_vflags;
 
-	ei->i_flags &= ~(EXT2_SYNC_FL|EXT2_APPEND_FL|
-			EXT2_IMMUTABLE_FL|EXT2_NOATIME_FL|EXT2_DIRSYNC_FL);
+	ei->i_flags &= ~(EXT2_SYNC_FL | EXT2_APPEND_FL |
+			EXT2_IMMUTABLE_FL | EXT2_IXUNLINK_FL |
+			EXT2_NOATIME_FL | EXT2_DIRSYNC_FL |
+			EXT2_BARRIER_FL | EXT2_COW_FL);
+
+	if (flags & S_IMMUTABLE)
+		ei->i_flags |= EXT2_IMMUTABLE_FL;
+	if (flags & S_IXUNLINK)
+		ei->i_flags |= EXT2_IXUNLINK_FL;
+
 	if (flags & S_SYNC)
 		ei->i_flags |= EXT2_SYNC_FL;
 	if (flags & S_APPEND)
 		ei->i_flags |= EXT2_APPEND_FL;
-	if (flags & S_IMMUTABLE)
-		ei->i_flags |= EXT2_IMMUTABLE_FL;
 	if (flags & S_NOATIME)
 		ei->i_flags |= EXT2_NOATIME_FL;
 	if (flags & S_DIRSYNC)
 		ei->i_flags |= EXT2_DIRSYNC_FL;
+
+	if (vflags & V_BARRIER)
+		ei->i_flags |= EXT2_BARRIER_FL;
+	if (vflags & V_COW)
+		ei->i_flags |= EXT2_COW_FL;
 }
 
 int ext2_sync_flags(struct inode *inode)
 {
-	unsigned int oldflags, newflags;
-
-	oldflags = EXT2_I(inode)->i_flags;
-	newflags = oldflags & ~(EXT2_IMMUTABLE_FL |
-		EXT2_IUNLINK_FL | EXT2_BARRIER_FL);
-
-	if (IS_IMMUTABLE(inode))
-		newflags |= EXT2_IMMUTABLE_FL;
-	if (IS_IUNLINK(inode))
-		newflags |= EXT2_IUNLINK_FL;
-	if (IS_BARRIER(inode))
-		newflags |= EXT2_BARRIER_FL;
-
-	if (oldflags ^ newflags) {
-		EXT2_I(inode)->i_flags = newflags;
-		inode->i_ctime = CURRENT_TIME;
-		mark_inode_dirty(inode);
-	}
+	ext2_get_inode_flags(EXT2_I(inode));
+	inode->i_ctime = CURRENT_TIME;
+	mark_inode_dirty(inode);
 	return 0;
 }
 

@@ -1070,7 +1070,7 @@ int kill_pid_info(int sig, struct siginfo *info, struct pid *pid)
 
 retry:
 	p = pid_task(pid, PIDTYPE_PID);
-	if (p) {
+	if (p && vx_check(vx_task_xid(p), VS_WATCH | VS_IDENT)) {
 		error = group_send_sig_info(sig, info, p);
 		if (unlikely(error == -ESRCH))
 			/*

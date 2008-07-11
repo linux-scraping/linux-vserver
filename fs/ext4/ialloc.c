@@ -717,7 +717,7 @@ got:
 	 * specified
 	 */
 	ei->i_flags = EXT4_I(dir)->i_flags &
-		~(EXT4_INDEX_FL|EXT4_EXTENTS_FL|EXT4_IUNLINK_FL|EXT4_BARRIER_FL);
+		~(EXT4_INDEX_FL|EXT4_EXTENTS_FL|EXT4_IXUNLINK_FL|EXT4_BARRIER_FL);
 	if (S_ISLNK(mode))
 		ei->i_flags &= ~(EXT4_IMMUTABLE_FL|EXT4_APPEND_FL);
 	/* dirsync only applies to directories */

@@ -838,8 +838,9 @@ struct stat_data_v1 {
 #define REISERFS_NOTAIL_FL    FS_NOTAIL_FL
 
 /* unfortunately reiserfs sdattr is only 16 bit */
+#define REISERFS_IXUNLINK_FL  (FS_IXUNLINK_FL >> 16)
 #define REISERFS_BARRIER_FL   (FS_BARRIER_FL >> 16)
-#define REISERFS_IUNLINK_FL   (FS_IUNLINK_FL >> 16)
+#define REISERFS_COW_FL       (FS_COW_FL >> 16)
 
 /* persistent flags that file inherits from the parent directory */
 #define REISERFS_INHERIT_MASK ( REISERFS_IMMUTABLE_FL |	\

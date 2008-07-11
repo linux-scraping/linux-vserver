@@ -153,8 +153,14 @@ extern int dir_notify_enable;
 #define S_NOCMTIME	128	/* Do not update file c/mtime */
 #define S_SWAPFILE	256	/* Do not truncate: swapon got its bmaps */
 #define S_PRIVATE	512	/* Inode is fs-internal */
-#define S_BARRIER	1024	/* Barrier for chroot() */
-#define S_IUNLINK	2048	/* Immutable unlink */
+#define S_IXUNLINK	1024	/* Immutable Invert on unlink */
+
+/* Linux-VServer related Inode flags */
+
+#define V_VALID		1
+#define V_XATTR		2
+#define V_BARRIER	4	/* Barrier for chroot() */
+#define V_COW		8	/* Copy on Write */
 
 /*
  * Note that nosuid etc flags are inode-specific: setting some file-system
@@ -184,18 +190,19 @@ extern int dir_notify_enable;
 #define IS_NOQUOTA(inode)	((inode)->i_flags & S_NOQUOTA)
 #define IS_APPEND(inode)	((inode)->i_flags & S_APPEND)
 #define IS_IMMUTABLE(inode)	((inode)->i_flags & S_IMMUTABLE)
-#define IS_IUNLINK(inode)	((inode)->i_flags & S_IUNLINK)
-#define IS_IXORUNLINK(inode)	((IS_IUNLINK(inode) ? S_IMMUTABLE : 0) ^ IS_IMMUTABLE(inode))
+#define IS_IXUNLINK(inode)	((inode)->i_flags & S_IXUNLINK)
+#define IS_IXORUNLINK(inode)	((IS_IXUNLINK(inode) ? S_IMMUTABLE : 0) ^ IS_IMMUTABLE(inode))
 #define IS_POSIXACL(inode)	__IS_FLG(inode, MS_POSIXACL)
 
-#define IS_BARRIER(inode)	(S_ISDIR((inode)->i_mode) && ((inode)->i_flags & S_BARRIER))
 #define IS_DEADDIR(inode)	((inode)->i_flags & S_DEAD)
 #define IS_NOCMTIME(inode)	((inode)->i_flags & S_NOCMTIME)
 #define IS_SWAPFILE(inode)	((inode)->i_flags & S_SWAPFILE)
 #define IS_PRIVATE(inode)	((inode)->i_flags & S_PRIVATE)
 
+#define IS_BARRIER(inode)	(S_ISDIR((inode)->i_mode) && ((inode)->i_vflags & V_BARRIER))
+
 #ifdef CONFIG_VSERVER_COWBL
-#  define IS_COW(inode)		(IS_IUNLINK(inode) && IS_IMMUTABLE(inode))
+#  define IS_COW(inode)		(IS_IXUNLINK(inode) && IS_IMMUTABLE(inode))
 #  define IS_COW_LINK(inode)	(S_ISREG((inode)->i_mode) && ((inode)->i_nlink > 1))
 #else
 #  define IS_COW(inode)		(0)
@@ -275,12 +282,14 @@ extern int dir_notify_enable;
 #define FS_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
 #define FS_EXTENT_FL			0x00080000 /* Extents */
 #define FS_DIRECTIO_FL			0x00100000 /* Use direct i/o */
-#define FS_BARRIER_FL			0x04000000 /* Barrier for chroot() */
-#define FS_IUNLINK_FL			0x08000000 /* Immutable unlink */
+#define FS_IXUNLINK_FL			0x01000000 /* Immutable invert on unlink */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
-#define FS_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
-#define FS_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
+#define FS_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define FS_COW_FL			0x20000000 /* Copy on Write marker */
+
+#define FS_FL_USER_VISIBLE		0x0103DFFF /* User visible flags */
+#define FS_FL_USER_MODIFIABLE		0x010380FF /* User modifiable flags */
 
 #define SYNC_FILE_RANGE_WAIT_BEFORE	1
 #define SYNC_FILE_RANGE_WRITE		2
@@ -382,7 +391,7 @@ struct iattr {
 };
 
 #define ATTR_FLAG_BARRIER	512	/* Barrier for chroot() */
-#define ATTR_FLAG_IUNLINK	1024	/* Immutable unlink */
+#define ATTR_FLAG_IXUNLINK	1024	/* Immutable invert on unlink */
 
 /*
  * Includes for diskquotas.
@@ -672,7 +681,8 @@ struct inode {
 	unsigned long		i_state;
 	unsigned long		dirtied_when;	/* jiffies of first dirtying */
 
-	unsigned int		i_flags;
+	unsigned short		i_flags;
+	unsigned short		i_vflags;
 
 	atomic_t		i_writecount;
 #ifdef CONFIG_SECURITY

@@ -569,7 +569,7 @@ got:
 	ei->i_disksize = 0;
 
 	ei->i_flags = EXT3_I(dir)->i_flags &
-		~(EXT3_INDEX_FL|EXT3_IUNLINK_FL|EXT3_BARRIER_FL);
+		~(EXT3_INDEX_FL|EXT3_IXUNLINK_FL|EXT3_BARRIER_FL);
 	if (S_ISLNK(mode))
 		ei->i_flags &= ~(EXT3_IMMUTABLE_FL|EXT3_APPEND_FL);
 	/* dirsync only applies to directories */

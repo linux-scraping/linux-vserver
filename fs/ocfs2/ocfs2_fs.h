@@ -187,13 +187,14 @@
 #define OCFS2_NODUMP_FL		(0x00000040)	/* do not dump file */
 #define OCFS2_NOATIME_FL	(0x00000080)	/* do not update atime */
 #define OCFS2_DIRSYNC_FL	(0x00010000)	/* dirsync behaviour (directories only) */
+#define OCFS2_IXUNLINK_FL	(0x00020000)	/* Immutable invert on unlink */
 
-#define OCFS2_BARRIER_FL	(0x04000000)	/* Barrier for chroot() */
-#define OCFS2_IUNLINK_FL	(0x08000000)	/* Immutable unlink */
+#define OCFS2_BARRIER_FL	(0x01000000)	/* Barrier for chroot() */
+#define OCFS2_COW_FL		(0x02000000)	/* Copy on Write marker */
 
-#define OCFS2_FL_VISIBLE	(0x000100FF)	/* User visible flags */
-#define OCFS2_FL_MODIFIABLE	(0x000100FF)	/* User modifiable flags */
-#define OCFS2_FL_MASK		(0x0F0100FF)
+#define OCFS2_FL_VISIBLE	(0x000300FF)	/* User visible flags */
+#define OCFS2_FL_MODIFIABLE	(0x000300FF)	/* User modifiable flags */
+#define OCFS2_FL_MASK		(0x030300FF)
 
 /*
  * Extent record flags (e_node.leaf.flags)

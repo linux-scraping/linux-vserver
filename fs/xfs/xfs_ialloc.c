@@ -66,8 +66,6 @@ xfs_ialloc_log_di(
 		offsetof(xfs_dinode_core_t, di_gid),
 		offsetof(xfs_dinode_core_t, di_nlink),
 		offsetof(xfs_dinode_core_t, di_projid),
-		offsetof(xfs_dinode_core_t, di_tag),
-		offsetof(xfs_dinode_core_t, di_vflags),
 		offsetof(xfs_dinode_core_t, di_pad),
 		offsetof(xfs_dinode_core_t, di_atime),
 		offsetof(xfs_dinode_core_t, di_mtime),
@@ -86,6 +84,8 @@ xfs_ialloc_log_di(
 		offsetof(xfs_dinode_t, di_next_unlinked),
 		offsetof(xfs_dinode_t, di_u),
 		offsetof(xfs_dinode_t, di_a),
+		offsetof(xfs_dinode_core_t, di_tag),
+		offsetof(xfs_dinode_core_t, di_vflags),
 		sizeof(xfs_dinode_t)
 	};
 
