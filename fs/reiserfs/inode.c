@@ -2860,22 +2860,19 @@ int reiserfs_commit_write(struct file *f, struct page *page,
 void sd_attrs_to_i_attrs(__u16 sd_attrs, struct inode *inode)
 {
 	if (reiserfs_attrs(inode->i_sb)) {
-		if (sd_attrs & REISERFS_SYNC_FL)
-			inode->i_flags |= S_SYNC;
-		else
-			inode->i_flags &= ~S_SYNC;
 		if (sd_attrs & REISERFS_IMMUTABLE_FL)
 			inode->i_flags |= S_IMMUTABLE;
 		else
 			inode->i_flags &= ~S_IMMUTABLE;
-		if (sd_attrs & REISERFS_IUNLINK_FL)
-			inode->i_flags |= S_IUNLINK;
+		if (sd_attrs & REISERFS_IXUNLINK_FL)
+			inode->i_flags |= S_IXUNLINK;
 		else
-			inode->i_flags &= ~S_IUNLINK;
-		if (sd_attrs & REISERFS_BARRIER_FL)
-			inode->i_flags |= S_BARRIER;
+			inode->i_flags &= ~S_IXUNLINK;
+
+		if (sd_attrs & REISERFS_SYNC_FL)
+			inode->i_flags |= S_SYNC;
 		else
-			inode->i_flags &= ~S_BARRIER;
+			inode->i_flags &= ~S_SYNC;
 		if (sd_attrs & REISERFS_APPEND_FL)
 			inode->i_flags |= S_APPEND;
 		else
@@ -2888,6 +2885,15 @@ void sd_attrs_to_i_attrs(__u16 sd_attrs, struct inode *inode)
 			REISERFS_I(inode)->i_flags |= i_nopack_mask;
 		else
 			REISERFS_I(inode)->i_flags &= ~i_nopack_mask;
+
+		if (sd_attrs & REISERFS_BARRIER_FL)
+			inode->i_vflags |= V_BARRIER;
+		else
+			inode->i_vflags &= ~V_BARRIER;
+		if (sd_attrs & REISERFS_COW_FL)
+			inode->i_vflags |= V_COW;
+		else
+			inode->i_vflags &= ~V_COW;
 	}
 }
 
@@ -2898,14 +2904,11 @@ void i_attrs_to_sd_attrs(struct inode *inode, __u16 * sd_attrs)
 			*sd_attrs |= REISERFS_IMMUTABLE_FL;
 		else
 			*sd_attrs &= ~REISERFS_IMMUTABLE_FL;
-		if (inode->i_flags & S_IUNLINK)
-			*sd_attrs |= REISERFS_IUNLINK_FL;
+		if (inode->i_flags & S_IXUNLINK)
+			*sd_attrs |= REISERFS_IXUNLINK_FL;
 		else
-			*sd_attrs &= ~REISERFS_IUNLINK_FL;
-		if (inode->i_flags & S_BARRIER)
-			*sd_attrs |= REISERFS_BARRIER_FL;
-		else
-			*sd_attrs &= ~REISERFS_BARRIER_FL;
+			*sd_attrs &= ~REISERFS_IXUNLINK_FL;
+
 		if (inode->i_flags & S_SYNC)
 			*sd_attrs |= REISERFS_SYNC_FL;
 		else
@@ -2918,6 +2921,15 @@ void i_attrs_to_sd_attrs(struct inode *inode, __u16 * sd_attrs)
 			*sd_attrs |= REISERFS_NOTAIL_FL;
 		else
 			*sd_attrs &= ~REISERFS_NOTAIL_FL;
+
+		if (inode->i_vflags & V_BARRIER)
+			*sd_attrs |= REISERFS_BARRIER_FL;
+		else
+			*sd_attrs &= ~REISERFS_BARRIER_FL;
+		if (inode->i_vflags & V_COW)
+			*sd_attrs |= REISERFS_COW_FL;
+		else
+			*sd_attrs &= ~REISERFS_COW_FL;
 	}
 }
 

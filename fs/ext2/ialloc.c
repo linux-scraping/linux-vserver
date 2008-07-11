@@ -578,7 +578,7 @@ got:
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME_SEC;
 	memset(ei->i_data, 0, sizeof(ei->i_data));
 	ei->i_flags = EXT2_I(dir)->i_flags &
-		~(EXT2_BTREE_FL|EXT2_IUNLINK_FL|EXT2_BARRIER_FL);
+		~(EXT2_BTREE_FL|EXT2_IXUNLINK_FL|EXT2_BARRIER_FL);
 	if (S_ISLNK(mode))
 		ei->i_flags &= ~(EXT2_IMMUTABLE_FL|EXT2_APPEND_FL);
 	/* dirsync is only applied to directories */

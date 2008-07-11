@@ -560,7 +560,7 @@ xfs_setattr(
 		 */
 		if ((mask & XFS_AT_XFLAGS) &&
 		    (ip->i_d.di_flags &
-				(XFS_DIFLAG_IMMUTABLE|XFS_DIFLAG_APPEND) ||
+				(XFS_DIFLAG_IMMUTABLE | XFS_DIFLAG_APPEND) ||
 		     (vap->va_xflags &
 				(XFS_XFLAG_IMMUTABLE | XFS_XFLAG_APPEND))) &&
 		    !capable(CAP_LINUX_IMMUTABLE)) {
@@ -794,6 +794,8 @@ xfs_setattr(
 			di_flags = (ip->i_d.di_flags & XFS_DIFLAG_PREALLOC);
 			if (vap->va_xflags & XFS_XFLAG_IMMUTABLE)
 				di_flags |= XFS_DIFLAG_IMMUTABLE;
+			if (vap->va_xflags & XFS_XFLAG_IXUNLINK)
+				di_flags |= XFS_DIFLAG_IXUNLINK;
 			if (vap->va_xflags & XFS_XFLAG_APPEND)
 				di_flags |= XFS_DIFLAG_APPEND;
 			if (vap->va_xflags & XFS_XFLAG_SYNC)
@@ -822,10 +824,10 @@ xfs_setattr(
 					di_flags |= XFS_DIFLAG_EXTSIZE;
 			}
 			ip->i_d.di_flags = di_flags;
-			if (vap->va_xflags & XFS_XFLAG_IUNLINK)
-				di_vflags |= XFS_DIVFLAG_IUNLINK;
 			if (vap->va_xflags & XFS_XFLAG_BARRIER)
 				di_vflags |= XFS_DIVFLAG_BARRIER;
+			if (vap->va_xflags & XFS_XFLAG_COW)
+				di_vflags |= XFS_DIVFLAG_COW;
 			ip->i_d.di_vflags = di_vflags;
 		}
 		xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);

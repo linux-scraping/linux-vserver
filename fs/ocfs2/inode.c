@@ -76,15 +76,13 @@ void ocfs2_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = OCFS2_I(inode)->ip_attr;
 
-	inode->i_flags &= ~(S_IMMUTABLE |
+	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
 		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
 
 	if (flags & OCFS2_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
-	if (flags & OCFS2_IUNLINK_FL)
-		inode->i_flags |= S_IUNLINK;
-	if (flags & OCFS2_BARRIER_FL)
-		inode->i_flags |= S_BARRIER;
+	if (flags & OCFS2_IXUNLINK_FL)
+		inode->i_flags |= S_IXUNLINK;
 
 	if (flags & OCFS2_SYNC_FL)
 		inode->i_flags |= S_SYNC;
@@ -94,46 +92,89 @@ void ocfs2_set_inode_flags(struct inode *inode)
 		inode->i_flags |= S_NOATIME;
 	if (flags & OCFS2_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
+
+	inode->i_vflags &= ~(V_BARRIER | V_COW);
+
+	if (flags & OCFS2_BARRIER_FL)
+		inode->i_vflags |= V_BARRIER;
+	if (flags & OCFS2_COW_FL)
+		inode->i_vflags |= V_COW;
 }
 
 /* Propagate flags from i_flags to OCFS2_I(inode)->ip_attr */
 void ocfs2_get_inode_flags(struct ocfs2_inode_info *oi)
 {
 	unsigned int flags = oi->vfs_inode.i_flags;
+	unsigned int vflags = oi->vfs_inode.i_vflags;
 
-	oi->ip_attr &= ~(OCFS2_SYNC_FL|OCFS2_APPEND_FL|
-			OCFS2_IMMUTABLE_FL|OCFS2_NOATIME_FL|OCFS2_DIRSYNC_FL);
+	oi->ip_attr &= ~(OCFS2_SYNC_FL | OCFS2_APPEND_FL |
+			OCFS2_IMMUTABLE_FL | OCFS2_IXUNLINK_FL |
+			OCFS2_NOATIME_FL | OCFS2_DIRSYNC_FL
+			OCFS2_BARRIER_FL | OCFS2_COW_FL);
+
+	if (flags & S_IMMUTABLE)
+		oi->ip_attr |= OCFS2_IMMUTABLE_FL;
+	if (flags & S_IXUNLINK)
+		oi->ip_attr |= OCFS2_IXUNLINK_FL;
+
 	if (flags & S_SYNC)
 		oi->ip_attr |= OCFS2_SYNC_FL;
 	if (flags & S_APPEND)
 		oi->ip_attr |= OCFS2_APPEND_FL;
-	if (flags & S_IMMUTABLE)
-		oi->ip_attr |= OCFS2_IMMUTABLE_FL;
 	if (flags & S_NOATIME)
 		oi->ip_attr |= OCFS2_NOATIME_FL;
 	if (flags & S_DIRSYNC)
 		oi->ip_attr |= OCFS2_DIRSYNC_FL;
+
+	if (vflags & V_BARRIER)
+		oi->ip_attr |= OCFS2_BARRIER_FL;
+	if (vflags & V_COW)
+		oi->ip_attr |= OCFS2_COW_FL;
 }
 
 int ocfs2_sync_flags(struct inode *inode)
 {
-	unsigned int oldflags, newflags;
+	struct ocfs2_inode_info *ocfs2_inode = OCFS2_I(inode);
+	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
+	handle_t *handle = NULL;
+	struct buffer_head *bh = NULL;
+	int status;
 
-	oldflags = OCFS2_I(inode)->ip_flags;
-	newflags = oldflags & ~(OCFS2_IMMUTABLE_FL |
-		OCFS2_IUNLINK_FL | OCFS2_BARRIER_FL);
+	mutex_lock(&inode->i_mutex);
 
-	if (IS_IMMUTABLE(inode))
-		newflags |= OCFS2_IMMUTABLE_FL;
-	if (IS_IUNLINK(inode))
-		newflags |= OCFS2_IUNLINK_FL;
-	if (IS_BARRIER(inode))
-		newflags |= OCFS2_BARRIER_FL;
+	status = ocfs2_inode_lock(inode, &bh, 1);
+	if (status < 0) {
+		mlog_errno(status);
+		goto bail;
+	}
 
-	if (oldflags ^ newflags)
-		return ocfs2_set_inode_attr(inode,
-			newflags, OCFS2_FL_MASK);
-	return 0;
+	status = -EROFS;
+	if (IS_RDONLY(inode))
+		goto bail_unlock;
+
+	handle = ocfs2_start_trans(osb, OCFS2_INODE_UPDATE_CREDITS);
+	if (IS_ERR(handle)) {
+		status = PTR_ERR(handle);
+		mlog_errno(status);
+		goto bail_unlock;
+	}
+
+	ocfs2_set_inode_flags(inode);
+	status = ocfs2_mark_inode_dirty(handle, inode, bh);
+	if (status < 0)
+		mlog_errno(status);
+
+	ocfs2_commit_trans(osb, handle);
+bail_unlock:
+	ocfs2_inode_unlock(inode, 1);
+bail:
+	mutex_unlock(&inode->i_mutex);
+
+	if (bh)
+		brelse(bh);
+
+	mlog_exit(status);
+	return status;
 }
 
 struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 blkno, unsigned flags,

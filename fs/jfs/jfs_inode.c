@@ -32,15 +32,13 @@ void jfs_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = JFS_IP(inode)->mode2;
 
-	inode->i_flags &= ~(S_IMMUTABLE | S_IUNLINK | S_BARRIER |
+	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
 		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
 
 	if (flags & JFS_IMMUTABLE_FL)
 		inode->i_flags |= S_IMMUTABLE;
-	if (flags & JFS_IUNLINK_FL)
-		inode->i_flags |= S_IUNLINK;
-	if (flags & JFS_BARRIER_FL)
-		inode->i_flags |= S_BARRIER;
+	if (flags & JFS_IXUNLINK_FL)
+		inode->i_flags |= S_IXUNLINK;
 
 	if (flags & JFS_SYNC_FL)
 		inode->i_flags |= S_SYNC;
@@ -50,39 +48,30 @@ void jfs_set_inode_flags(struct inode *inode)
 		inode->i_flags |= S_NOATIME;
 	if (flags & JFS_DIRSYNC_FL)
 		inode->i_flags |= S_DIRSYNC;
-}
 
-int jfs_sync_flags(struct inode *inode)
-{
-	unsigned int oldflags, newflags;
+	inode->i_vflags &= ~(V_BARRIER | V_COW);
 
-	oldflags = JFS_IP(inode)->mode2;
-	newflags = oldflags & ~(JFS_IMMUTABLE_FL |
-		JFS_IUNLINK_FL | JFS_BARRIER_FL);
-
-	if (IS_IMMUTABLE(inode))
-		newflags |= JFS_IMMUTABLE_FL;
-	if (IS_IUNLINK(inode))
-		newflags |= JFS_IUNLINK_FL;
-	if (IS_BARRIER(inode))
-		newflags |= JFS_BARRIER_FL;
-
-	if (oldflags ^ newflags) {
-		JFS_IP(inode)->mode2 = newflags;
-		inode->i_ctime = CURRENT_TIME;
-		mark_inode_dirty(inode);
-	}
-	return 0;
+	if (flags & JFS_BARRIER_FL)
+		inode->i_vflags |= V_BARRIER;
+	if (flags & JFS_COW_FL)
+		inode->i_vflags |= V_COW;
 }
 
 void jfs_get_inode_flags(struct jfs_inode_info *jfs_ip)
 {
 	unsigned int flags = jfs_ip->vfs_inode.i_flags;
+	unsigned int vflags = jfs_ip->vfs_inode.i_vflags;
 
-	jfs_ip->mode2 &= ~(JFS_IMMUTABLE_FL | JFS_APPEND_FL | JFS_NOATIME_FL |
-			   JFS_DIRSYNC_FL | JFS_SYNC_FL);
+	jfs_ip->mode2 &= ~(JFS_IMMUTABLE_FL | JFS_IXUNLINK_FL |
+			   JFS_APPEND_FL | JFS_NOATIME_FL |
+			   JFS_DIRSYNC_FL | JFS_SYNC_FL |
+			   JFS_BARRIER_FL | JFS_COW_FL);
+
 	if (flags & S_IMMUTABLE)
 		jfs_ip->mode2 |= JFS_IMMUTABLE_FL;
+	if (flags & S_IXUNLINK)
+		jfs_ip->mode2 |= JFS_IXUNLINK_FL;
+
 	if (flags & S_APPEND)
 		jfs_ip->mode2 |= JFS_APPEND_FL;
 	if (flags & S_NOATIME)
@@ -91,6 +80,19 @@ void jfs_get_inode_flags(struct jfs_inode_info *jfs_ip)
 		jfs_ip->mode2 |= JFS_DIRSYNC_FL;
 	if (flags & S_SYNC)
 		jfs_ip->mode2 |= JFS_SYNC_FL;
+
+	if (vflags & V_BARRIER)
+		jfs_ip->mode2 |= JFS_BARRIER_FL;
+	if (vflags & V_COW)
+		jfs_ip->mode2 |= JFS_COW_FL;
+}
+
+int jfs_sync_flags(struct inode *inode)
+{
+	jfs_get_inode_flags(JFS_IP(inode));
+	inode->i_ctime = CURRENT_TIME;
+	mark_inode_dirty(inode);
+	return 0;
 }
 
 /*

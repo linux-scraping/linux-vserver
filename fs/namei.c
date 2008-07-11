@@ -1691,7 +1691,7 @@ int may_open(struct nameidata *nd, int acc_mode, int flag)
 	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
 		if (IS_COW_LINK(inode))
 			return -EMLINK;
-		inode->i_flags &= ~(S_IUNLINK|S_IMMUTABLE);
+		inode->i_flags &= ~(S_IXUNLINK|S_IMMUTABLE);
 		mark_inode_dirty(inode);
 	}
 #endif

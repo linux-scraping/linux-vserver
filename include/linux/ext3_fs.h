@@ -173,12 +173,14 @@ struct ext3_group_desc
 #define EXT3_NOTAIL_FL			0x00008000 /* file tail should not be merged */
 #define EXT3_DIRSYNC_FL			0x00010000 /* dirsync behaviour (directories only) */
 #define EXT3_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
-#define EXT3_BARRIER_FL			0x04000000 /* Barrier for chroot() */
-#define EXT3_IUNLINK_FL			0x08000000 /* Immutable unlink */
+#define EXT3_IXUNLINK_FL		0x01000000 /* Immutable invert on unlink */
 #define EXT3_RESERVED_FL		0x80000000 /* reserved for ext3 lib */
 
-#define EXT3_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
-#define EXT3_FL_USER_MODIFIABLE		0x000380FF /* User modifiable flags */
+#define EXT3_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define EXT3_COW_FL			0x20000000 /* Copy on Write marker */
+
+#define EXT3_FL_USER_VISIBLE		0x0103DFFF /* User visible flags */
+#define EXT3_FL_USER_MODIFIABLE		0x010380FF /* User modifiable flags */
 
 /*
  * Inode dynamic state flags

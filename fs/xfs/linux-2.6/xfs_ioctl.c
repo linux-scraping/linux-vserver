@@ -770,9 +770,13 @@ xfs_ioctl(
 		return xfs_ioc_fsgetxattr(ip, 0, arg);
 	case XFS_IOC_FSGETXATTRA:
 		return xfs_ioc_fsgetxattr(ip, 1, arg);
-	case XFS_IOC_GETXFLAGS:
 	case XFS_IOC_SETXFLAGS:
 	case XFS_IOC_FSSETXATTR:
+		if (IS_BARRIER(inode)) {
+			vxwprintk_task(1, "messing with the barrier.");
+			return -XFS_ERROR(EACCES);
+		}
+	case XFS_IOC_GETXFLAGS:
 		return xfs_ioc_xattr(ip, filp, cmd, arg);
 
 	case XFS_IOC_FSSETDM: {
@@ -1132,6 +1136,9 @@ xfs_di2lxflags(
 
 	if (di_flags & XFS_DIFLAG_IMMUTABLE)
 		flags |= FS_IMMUTABLE_FL;
+	if (di_flags & XFS_DIFLAG_IXUNLINK)
+		flags |= FS_IXUNLINK_FL;
+
 	if (di_flags & XFS_DIFLAG_APPEND)
 		flags |= FS_APPEND_FL;
 	if (di_flags & XFS_DIFLAG_SYNC)
@@ -1141,10 +1148,10 @@ xfs_di2lxflags(
 	if (di_flags & XFS_DIFLAG_NODUMP)
 		flags |= FS_NODUMP_FL;
 
-	if (di_vflags & XFS_DIVFLAG_IUNLINK)
-		flags |= FS_IUNLINK_FL;
 	if (di_vflags & XFS_DIVFLAG_BARRIER)
 		flags |= FS_BARRIER_FL;
+	if (di_vflags & XFS_DIVFLAG_COW)
+		flags |= FS_COW_FL;
 	return flags;
 }
 

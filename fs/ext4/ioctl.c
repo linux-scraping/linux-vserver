@@ -53,6 +53,11 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		if (!S_ISDIR(inode->i_mode))
 			flags &= ~EXT4_DIRSYNC_FL;
 
+		if (IS_BARRIER(inode)) {
+			vxwprintk_task(1, "messing with the barrier.");
+			return -EACCES;
+		}
+
 		mutex_lock(&inode->i_mutex);
 		/* Is it quota file? Do not allow user to mess with it */
 		if (IS_NOQUOTA(inode)) {
@@ -72,7 +77,7 @@ int ext4_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		 */
 		if ((oldflags & EXT4_IMMUTABLE_FL) ||
 			((flags ^ oldflags) & (EXT4_APPEND_FL |
-			EXT4_IMMUTABLE_FL | EXT4_IUNLINK_FL))) {
+			EXT4_IMMUTABLE_FL | EXT4_IXUNLINK_FL))) {
 			if (!capable(CAP_LINUX_IMMUTABLE)) {
 				mutex_unlock(&inode->i_mutex);
 				return -EPERM;

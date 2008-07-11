@@ -58,6 +58,11 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 			if (get_user(flags, (int __user *)arg))
 				return -EFAULT;
 
+			if (IS_BARRIER(inode)) {
+				vxwprintk_task(1, "messing with the barrier.");
+				return -EACCES;
+			}
+
 			/* Is it quota file? Do not allow user to mess with it. */
 			if (IS_NOQUOTA(inode))
 				return -EPERM;
