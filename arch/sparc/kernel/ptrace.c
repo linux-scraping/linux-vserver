@@ -271,10 +271,6 @@ static int fpregs32_set(struct task_struct *target,
 					 33 * sizeof(u32),
 					 34 * sizeof(u32));
 	}
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT)) {
-		pt_error_return(regs, ESRCH);
-		goto out_tsk;
-	}
 
 	if (!ret)
 		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
