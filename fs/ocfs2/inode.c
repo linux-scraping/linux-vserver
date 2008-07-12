@@ -109,7 +109,7 @@ void ocfs2_get_inode_flags(struct ocfs2_inode_info *oi)
 
 	oi->ip_attr &= ~(OCFS2_SYNC_FL | OCFS2_APPEND_FL |
 			OCFS2_IMMUTABLE_FL | OCFS2_IXUNLINK_FL |
-			OCFS2_NOATIME_FL | OCFS2_DIRSYNC_FL
+			OCFS2_NOATIME_FL | OCFS2_DIRSYNC_FL |
 			OCFS2_BARRIER_FL | OCFS2_COW_FL);
 
 	if (flags & S_IMMUTABLE)

@@ -223,10 +223,6 @@ static int genregs64_get(struct task_struct *target,
 					  16 * sizeof(u64),
 					  32 * sizeof(u64));
 	}
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT)) {
-		pt_error_return(regs, ESRCH);
-		goto out_tsk;
-	}
 
 	if (!ret) {
 		/* TSTATE, TPC, TNPC */
