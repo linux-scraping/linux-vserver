@@ -135,14 +135,15 @@ error:
 
 static void __dealloc_vx_info(struct vx_info *vxi)
 {
+	struct vx_info_save vxis;
 	int cpu;
 
 	vxdprintk(VXD_CBIT(xid, 0),
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
 
-	vxi->vx_id = -1;
-
+#ifdef	CONFIG_VSERVER_WARN
+	enter_vx_info(vxi, &vxis);
 	vx_info_exit_limit(&vxi->limit);
 	vx_info_exit_sched(&vxi->sched);
 	vx_info_exit_cvirt(&vxi->cvirt);
@@ -154,7 +155,10 @@ static void __dealloc_vx_info(struct vx_info *vxi)
 		vx_info_exit_cvirt_pc(
 			&vx_per_cpu(vxi, cvirt_pc, cpu), cpu);
 	}
+	leave_vx_info(&vxis);
+#endif
 
+	vxi->vx_id = -1;
 	vxi->vx_state |= VXS_RELEASED;
 
 #ifdef CONFIG_SMP
