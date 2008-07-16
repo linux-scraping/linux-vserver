@@ -2028,6 +2028,8 @@ static struct sock *unix_seq_idx(struct unix_iter_state *iter, loff_t pos)
 	for (s = first_unix_socket(&iter->i); s; s = next_unix_socket(&iter->i, s)) {
 		if (s->sk_net != iter->p.net)
 			continue;
+		if (!nx_check(s->sk_nid, VS_WATCH_P | VS_IDENT))
+			continue;
 		if (off == pos)
 			return s;
 		++off;
@@ -2054,7 +2056,8 @@ static void *unix_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 		sk = first_unix_socket(&iter->i);
 	else
 		sk = next_unix_socket(&iter->i, sk);
-	while (sk && (sk->sk_net != iter->p.net))
+	while (sk && (sk->sk_net != iter->p.net ||
+		!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT)))
 		sk = next_unix_socket(&iter->i, sk);
 	return sk;
 }

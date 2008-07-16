@@ -98,8 +98,14 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_set_space:
 		return vc_set_space(vxi, data);
 
+	case VCMD_get_space_mask_v0:
+		return vc_get_space_mask(data, 0);
+	/* this is version 1 */
 	case VCMD_get_space_mask:
-		return vc_get_space_mask(vxi, data);
+		return vc_get_space_mask(data, 1);
+
+	case VCMD_get_space_default:
+		return vc_get_space_mask(data, -1);
 
 #ifdef	CONFIG_IA32_EMULATION
 	case VCMD_get_rlimit:
@@ -304,7 +310,9 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_version,	 0, VCA_NONE,	0);
 	__VCMD(get_vci,		 0, VCA_NONE,	0);
 	__VCMD(get_rlimit_mask,	 0, VCA_NONE,	0);
+	__VCMD(get_space_mask_v0,0, VCA_NONE,   0);
 	__VCMD(get_space_mask,	 0, VCA_NONE,   0);
+	__VCMD(get_space_default,0, VCA_NONE,   0);
 
 	/* info commands */
 	__VCMD(task_xid,	 2, VCA_NONE,	0);

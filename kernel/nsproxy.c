@@ -216,7 +216,8 @@ void free_nsproxy(struct nsproxy *ns)
 		put_pid_ns(ns->pid_ns);
 	if (ns->user_ns)
 		put_user_ns(ns->user_ns);
-	put_net(ns->net_ns);
+	if (ns->net_ns)
+		put_net(ns->net_ns);
 	atomic_dec(&vs_global_nsproxy);
 	kmem_cache_free(nsproxy_cachep, ns);
 }

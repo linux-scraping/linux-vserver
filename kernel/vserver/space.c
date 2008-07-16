@@ -38,14 +38,42 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 #include <linux/ipc_namespace.h>
 #include <net/net_namespace.h>
 
-const struct vcmd_space_mask space_mask = {
-	.mask = CLONE_NEWNS |
+
+static const struct vcmd_space_mask space_mask_v0 = {
+	.mask = CLONE_FS |
+		CLONE_NEWNS |
 		CLONE_NEWUTS |
 		CLONE_NEWIPC |
 		CLONE_NEWUSER |
-		CLONE_FS
+		0
 };
 
+static const struct vcmd_space_mask space_mask = {
+	.mask = CLONE_FS |
+		CLONE_NEWNS |
+		CLONE_NEWUTS |
+		CLONE_NEWIPC |
+		CLONE_NEWUSER |
+#ifdef	CONFIG_PID_NS
+		CLONE_NEWPID |
+#endif
+#ifdef	CONFIG_NET_NS
+		CLONE_NEWNET |
+#endif
+		0
+};
+
+static const struct vcmd_space_mask default_space_mask = {
+	.mask = CLONE_FS |
+		CLONE_NEWNS |
+		CLONE_NEWUTS |
+		CLONE_NEWIPC |
+		CLONE_NEWUSER |
+#ifdef	CONFIG_PID_NS
+//		CLONE_NEWPID |
+#endif
+		0
+};
 
 /*
  *	build a new nsproxy mix
@@ -60,9 +88,13 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct mnt_namespace *old_ns;
 	struct uts_namespace *old_uts;
 	struct ipc_namespace *old_ipc;
-	struct pid_namespace *old_pid;
 	struct user_namespace *old_user;
+#ifdef	CONFIG_PID_NS
+	struct pid_namespace *old_pid;
+#endif
+#ifdef	CONFIG_NET_NS
 	struct net *old_net;
+#endif
 	struct nsproxy *nsproxy;
 
 	nsproxy = copy_nsproxy(old_nsproxy);
@@ -101,6 +133,7 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	} else
 		old_user = NULL;
 
+#ifdef	CONFIG_PID_NS
 	if (mask & CLONE_NEWPID) {
 		old_pid = nsproxy->pid_ns;
 		nsproxy->pid_ns = new_nsproxy->pid_ns;
@@ -108,7 +141,8 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 			get_pid_ns(nsproxy->pid_ns);
 	} else
 		old_pid = NULL;
-
+#endif
+#ifdef	CONFIG_NET_NS
 	if (mask & CLONE_NEWNET) {
 		old_net = nsproxy->net_ns;
 		nsproxy->net_ns = new_nsproxy->net_ns;
@@ -116,19 +150,23 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 			get_net(nsproxy->net_ns);
 	} else
 		old_net = NULL;
-
+#endif
 	if (old_ns)
 		put_mnt_ns(old_ns);
 	if (old_uts)
 		put_uts_ns(old_uts);
 	if (old_ipc)
 		put_ipc_ns(old_ipc);
-	if (old_pid)
-		put_pid_ns(old_pid);
 	if (old_user)
 		put_user_ns(old_user);
+#ifdef	CONFIG_PID_NS
+	if (old_pid)
+		put_pid_ns(old_pid);
+#endif
+#ifdef	CONFIG_NET_NS
 	if (old_net)
 		put_net(old_net);
+#endif
 out:
 	return nsproxy;
 }
@@ -185,6 +223,9 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask)
 	struct fs_struct *fs, *fs_cur, *fs_new;
 	int ret;
 
+	vxdprintk(VXD_CBIT(space, 8), "vx_enter_space(%p[#%u],0x%08lx)",
+		vxi, vxi->vx_id, mask);
+
 	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
@@ -240,9 +281,12 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask)
 	struct fs_struct *fs_vxi, *fs_cur, *fs_new;
 	int ret;
 
+	vxdprintk(VXD_CBIT(space, 8), "vx_set_space(%p[#%u],0x%08lx)",
+		vxi, vxi->vx_id, mask);
+#if 0
 	if (!mask)
-		mask = space_mask.mask;
-
+		mask = default_space_mask.mask;
+#endif
 	if ((mask & space_mask.mask) != mask)
 		return -EINVAL;
 
@@ -307,9 +351,21 @@ int vc_set_space(struct vx_info *vxi, void __user *data)
 	return vx_set_space(vxi, vc_data.mask);
 }
 
-int vc_get_space_mask(struct vx_info *vxi, void __user *data)
+int vc_get_space_mask(void __user *data, int type)
 {
-	if (copy_to_user(data, &space_mask, sizeof(space_mask)))
+	const struct vcmd_space_mask *mask;
+
+	if (type == 0)
+		mask = &space_mask_v0;
+	else if (type == 1)
+		mask = &space_mask;
+	else
+		mask = &default_space_mask;
+
+	vxdprintk(VXD_CBIT(space, 10),
+		"vc_get_space_mask(%d) = %08llx", type, mask->mask);
+
+	if (copy_to_user(data, mask, sizeof(struct vcmd_space_mask)))
 		return -EFAULT;
 	return 0;
 }
