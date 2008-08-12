@@ -25,7 +25,7 @@ visible:
 	return 1;
 }
 
-#define find_task_by_real_pid find_task_by_pid
+#define find_task_by_real_pid(pid) find_task_by_pid(pid, &init_pid_ns)
 
 #if 0
 

@@ -46,6 +46,7 @@
 #include <linux/scatterlist.h>
 #include <linux/crypto.h>
 #include <linux/sched.h>
+#include <linux/mount.h>
 
 #define NFSDDBG_FACILITY                NFSDDBG_PROC
 
@@ -154,7 +155,11 @@ nfsd4_create_clid_dir(struct nfs4_client *clp)
 		dprintk("NFSD: nfsd4_create_clid_dir: DIRECTORY EXISTS\n");
 		goto out_put;
 	}
-	status = vfs_mkdir(rec_dir.path.dentry->d_inode, dentry, S_IRWXU, NULL);
+	status = mnt_want_write(rec_dir.path.mnt);
+	if (status)
+		goto out_put;
+	status = vfs_mkdir(rec_dir.path.dentry->d_inode, dentry, S_IRWXU);
+	mnt_drop_write(rec_dir.path.mnt);
 out_put:
 	dput(dentry);
 out_unlock:
@@ -258,7 +263,7 @@ nfsd4_remove_clid_file(struct dentry *dir, struct dentry *dentry)
 		return -EINVAL;
 	}
 	mutex_lock_nested(&dir->d_inode->i_mutex, I_MUTEX_PARENT);
-	status = vfs_unlink(dir->d_inode, dentry, NULL);
+	status = vfs_unlink(dir->d_inode, dentry);
 	mutex_unlock(&dir->d_inode->i_mutex);
 	return status;
 }
@@ -273,7 +278,7 @@ nfsd4_clear_clid_dir(struct dentry *dir, struct dentry *dentry)
 	 * a kernel from the future.... */
 	nfsd4_list_rec_dir(dentry, nfsd4_remove_clid_file);
 	mutex_lock_nested(&dir->d_inode->i_mutex, I_MUTEX_PARENT);
-	status = vfs_rmdir(dir->d_inode, dentry, NULL);
+	status = vfs_rmdir(dir->d_inode, dentry);
 	mutex_unlock(&dir->d_inode->i_mutex);
 	return status;
 }
@@ -313,12 +318,17 @@ nfsd4_remove_clid_dir(struct nfs4_client *clp)
 	if (!rec_dir_init || !clp->cl_firststate)
 		return;
 
+	status = mnt_want_write(rec_dir.path.mnt);
+	if (status)
+		goto out;
 	clp->cl_firststate = 0;
 	nfs4_save_user(&uid, &gid);
 	status = nfsd4_unlink_clid_dir(clp->cl_recdir, HEXDIR_LEN-1);
 	nfs4_reset_user(uid, gid);
 	if (status == 0)
 		nfsd4_sync_rec_dir();
+	mnt_drop_write(rec_dir.path.mnt);
+out:
 	if (status)
 		printk("NFSD: Failed to remove expired client state directory"
 				" %.*s\n", HEXDIR_LEN, clp->cl_recdir);
@@ -347,13 +357,17 @@ nfsd4_recdir_purge_old(void) {
 
 	if (!rec_dir_init)
 		return;
+	status = mnt_want_write(rec_dir.path.mnt);
+	if (status)
+		goto out;
 	status = nfsd4_list_rec_dir(rec_dir.path.dentry, purge_old);
 	if (status == 0)
 		nfsd4_sync_rec_dir();
+	mnt_drop_write(rec_dir.path.mnt);
+out:
 	if (status)
 		printk("nfsd4: failed to purge old clients from recovery"
 			" directory %s\n", rec_dir.path.dentry->d_name.name);
-	return;
 }
 
 static int

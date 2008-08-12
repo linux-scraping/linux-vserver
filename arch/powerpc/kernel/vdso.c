@@ -21,6 +21,7 @@
 #include <linux/elf.h>
 #include <linux/security.h>
 #include <linux/bootmem.h>
+#include <linux/lmb.h>
 #include <linux/vs_memory.h>
 
 #include <asm/pgtable.h>
@@ -28,7 +29,7 @@
 #include <asm/processor.h>
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
-#include <asm/lmb.h>
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/cputable.h>
 #include <asm/sections.h>

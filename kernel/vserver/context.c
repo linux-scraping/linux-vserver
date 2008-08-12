@@ -504,6 +504,7 @@ void vx_mask_cap_bset(struct vx_info *vxi, struct task_struct *p)
 
 
 #include <linux/file.h>
+#include <linux/fdtable.h>
 
 static int vx_openfd_task(struct task_struct *tsk)
 {

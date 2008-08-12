@@ -11,8 +11,11 @@ static inline int cow_check_and_break(struct nameidata *nd)
 {
 	struct inode *inode = nd->path.dentry->d_inode;
 	int error = 0;
-	if (IS_RDONLY(inode) || MNT_IS_RDONLY(nd->path.mnt))
+
+	/* do we need this check? */
+	if (IS_RDONLY(inode))
 		return -EROFS;
+
 	if (IS_COW(inode)) {
 		if (IS_COW_LINK(inode)) {
 			struct dentry *new_dentry, *old_dentry = nd->path.dentry;

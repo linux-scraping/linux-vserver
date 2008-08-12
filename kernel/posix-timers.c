@@ -37,7 +37,6 @@
 #include <linux/mutex.h>
 
 #include <asm/uaccess.h>
-#include <asm/semaphore.h>
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/compiler.h>
@@ -319,8 +318,8 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 	if (timr->it_sigev_notify & SIGEV_THREAD_ID) {
 		struct task_struct *leader;
 
-		ret = send_sigqueue(timr->it_sigev_signo, timr->sigq,
-				    timr->it_process);
+		ret = send_sigqueue(timr->sigq, timr->it_process, 0);
+
 		if (likely(ret >= 0))
 			goto out;
 
@@ -330,8 +329,7 @@ int posix_timer_event(struct k_itimer *timr,int si_private)
 		timr->it_process = leader;
 	}
 
-	ret = send_group_sigqueue(timr->it_sigev_signo, timr->sigq,
-				   timr->it_process);
+	ret = send_sigqueue(timr->sigq, timr->it_process, 1);
 out:
 	leave_vx_info(&vxis);
 	put_vx_info(vxi);

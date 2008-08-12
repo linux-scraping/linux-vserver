@@ -45,7 +45,6 @@
 #include <net/checksum.h>
 #include <linux/smp_lock.h>
 #include <linux/stat.h>
-#include <asm/semaphore.h>
 
 #define FL_READONLY 128
 #define FL_DIR_SEM_HELD 256
@@ -748,7 +747,7 @@ int reiserfs_delete_xattrs(struct inode *inode)
 	if (dir->d_inode->i_nlink <= 2) {
 		root = get_xa_root(inode->i_sb, XATTR_REPLACE);
 		reiserfs_write_lock_xattrs(inode->i_sb);
-		err = vfs_rmdir(root->d_inode, dir, NULL);
+		err = vfs_rmdir(root->d_inode, dir);
 		reiserfs_write_unlock_xattrs(inode->i_sb);
 		dput(root);
 	} else {
