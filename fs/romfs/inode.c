@@ -418,8 +418,7 @@ static int
 romfs_readpage(struct file *file, struct page * page)
 {
 	struct inode *inode = page->mapping->host;
-	loff_t offset, size;
-	unsigned long filled;
+	loff_t offset, avail, readlen;
 	void *buf;
 	int result = -EIO;
 
@@ -431,29 +430,21 @@ romfs_readpage(struct file *file, struct page * page)
 
 	/* 32 bit warning -- but not for us :) */
 	offset = page_offset(page);
-	size = i_size_read(inode);
-	filled = 0;
-	result = 0;
-	if (offset < size) {
-		unsigned long readlen;
-
-		size -= offset;
-		readlen = size > PAGE_SIZE ? PAGE_SIZE : size;
-
-		filled = romfs_copyfrom(inode, buf, ROMFS_I(inode)->i_dataoffset+offset, readlen);
-
-		if (filled != readlen) {
-			SetPageError(page);
-			filled = 0;
-			result = -EIO;
+	if (offset < i_size_read(inode)) {
+		avail = inode->i_size-offset;
+		readlen = min_t(unsigned long, avail, PAGE_SIZE);
+		if (romfs_copyfrom(inode, buf, ROMFS_I(inode)->i_dataoffset+offset, readlen) == readlen) {
+			if (readlen < PAGE_SIZE) {
+				memset(buf + readlen,0,PAGE_SIZE-readlen);
+			}
+			SetPageUptodate(page);
+			result = 0;
 		}
 	}
-
-	if (filled < PAGE_SIZE)
-		memset(buf + filled, 0, PAGE_SIZE-filled);
-
-	if (!result)
-		SetPageUptodate(page);
+	if (result) {
+		memset(buf, 0, PAGE_SIZE);
+		SetPageError(page);
+	}
 	flush_dcache_page(page);
 
 	unlock_page(page);

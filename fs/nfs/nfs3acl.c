@@ -5,8 +5,6 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/nfsacl.h>
 
-#include "internal.h"
-
 #define NFSDBG_FACILITY	NFSDBG_PROC
 
 ssize_t nfs3_listxattr(struct dentry *dentry, char *buffer, size_t size)
@@ -207,8 +205,6 @@ struct posix_acl *nfs3_proc_getacl(struct inode *inode, int type)
 	status = nfs_revalidate_inode(server, inode);
 	if (status < 0)
 		return ERR_PTR(status);
-	if (NFS_I(inode)->cache_validity & NFS_INO_INVALID_ACL)
-		nfs_zap_acl_cache(inode);
 	acl = nfs3_get_cached_acl(inode, type);
 	if (acl != ERR_PTR(-EAGAIN))
 		return acl;
@@ -323,8 +319,9 @@ static int nfs3_proc_setacls(struct inode *inode, struct posix_acl *acl,
 	dprintk("NFS call setacl\n");
 	msg.rpc_proc = &server->client_acl->cl_procinfo[ACLPROC3_SETACL];
 	status = rpc_call_sync(server->client_acl, &msg, 0);
-	nfs_access_zap_cache(inode);
-	nfs_zap_acl_cache(inode);
+	spin_lock(&inode->i_lock);
+	NFS_I(inode)->cache_validity |= NFS_INO_INVALID_ACCESS;
+	spin_unlock(&inode->i_lock);
 	dprintk("NFS reply setacl: %d\n", status);
 
 	/* pages may have been allocated at the xdr layer. */

@@ -64,13 +64,7 @@ static DEFINE_MUTEX(performance_mutex);
  * policy is adjusted accordingly.
  */
 
-/* ignore_ppc:
- * -1 -> cpufreq low level drivers not initialized -> _PSS, etc. not called yet
- *       ignore _PPC
- *  0 -> cpufreq low level drivers initialized -> consider _PPC values
- *  1 -> ignore _PPC totally -> forced by user through boot param
- */
-static unsigned int ignore_ppc = -1;
+static unsigned int ignore_ppc = 0;
 module_param(ignore_ppc, uint, 0644);
 MODULE_PARM_DESC(ignore_ppc, "If the frequency of your machine gets wrongly" \
 		 "limited by BIOS, this should help");
@@ -78,7 +72,7 @@ MODULE_PARM_DESC(ignore_ppc, "If the frequency of your machine gets wrongly" \
 #define PPC_REGISTERED   1
 #define PPC_IN_USE       2
 
-static int acpi_processor_ppc_status;
+static int acpi_processor_ppc_status = 0;
 
 static int acpi_processor_ppc_notifier(struct notifier_block *nb,
 				       unsigned long event, void *data)
@@ -86,11 +80,6 @@ static int acpi_processor_ppc_notifier(struct notifier_block *nb,
 	struct cpufreq_policy *policy = data;
 	struct acpi_processor *pr;
 	unsigned int ppc = 0;
-
-	if (event == CPUFREQ_START && ignore_ppc <= 0) {
-		ignore_ppc = 0;
-		return 0;
-	}
 
 	if (ignore_ppc)
 		return 0;
@@ -422,6 +411,7 @@ EXPORT_SYMBOL(acpi_processor_notify_smm);
 
 static int acpi_processor_perf_open_fs(struct inode *inode, struct file *file);
 static struct file_operations acpi_processor_perf_fops = {
+	.owner = THIS_MODULE,
 	.open = acpi_processor_perf_open_fs,
 	.read = seq_read,
 	.llseek = seq_lseek,
@@ -467,7 +457,6 @@ static int acpi_processor_perf_open_fs(struct inode *inode, struct file *file)
 
 static void acpi_cpufreq_add_file(struct acpi_processor *pr)
 {
-	struct proc_dir_entry *entry = NULL;
 	struct acpi_device *device = NULL;
 
 
@@ -475,14 +464,9 @@ static void acpi_cpufreq_add_file(struct acpi_processor *pr)
 		return;
 
 	/* add file 'performance' [R/W] */
-	entry = create_proc_entry(ACPI_PROCESSOR_FILE_PERFORMANCE,
-				  S_IFREG | S_IRUGO,
-				  acpi_device_dir(device));
-	if (entry){
-		entry->proc_fops = &acpi_processor_perf_fops;
-		entry->data = acpi_driver_data(device);
-		entry->owner = THIS_MODULE;
-	}
+	proc_create_data(ACPI_PROCESSOR_FILE_PERFORMANCE, S_IFREG | S_IRUGO,
+			 acpi_device_dir(device),
+			 &acpi_processor_perf_fops, acpi_driver_data(device));
 	return;
 }
 

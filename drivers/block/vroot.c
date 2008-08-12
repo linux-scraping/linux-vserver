@@ -209,6 +209,9 @@ int __init vroot_init(void)
 		disks[i] = alloc_disk(1);
 		if (!disks[i])
 			goto out_mem3;
+		disks[i]->queue = blk_alloc_queue(GFP_KERNEL);
+		if (!disks[i]->queue)
+			goto out_mem3;
 	}
 
 	for (i = 0; i < max_vroot; i++) {

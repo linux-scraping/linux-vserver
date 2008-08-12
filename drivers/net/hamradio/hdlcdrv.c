@@ -88,7 +88,6 @@
 static inline void append_crc_ccitt(unsigned char *buffer, int len)
 {
  	unsigned int crc = crc_ccitt(0xffff, buffer, len) ^ 0xffff;
-	buffer += len;
 	*buffer++ = crc;
 	*buffer++ = crc >> 8;
 }

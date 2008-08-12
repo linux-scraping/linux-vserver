@@ -1590,10 +1590,7 @@ static int snd_trident_trigger(struct snd_pcm_substream *substream,
 	if (spdif_flag) {
 		if (trident->device != TRIDENT_DEVICE_ID_SI7018) {
 			outl(trident->spdif_pcm_bits, TRID_REG(trident, NX_SPCSTATUS));
-			val = trident->spdif_pcm_ctrl;
-			if (!go)
-				val &= ~(0x28);
-			outb(val, TRID_REG(trident, NX_SPCTRL_SPCSO + 3));
+			outb(trident->spdif_pcm_ctrl, TRID_REG(trident, NX_SPCTRL_SPCSO + 3));
 		} else {
 			outl(trident->spdif_pcm_bits, TRID_REG(trident, SI_SPDIF_CS));
 			val = inl(TRID_REG(trident, SI_SERIAL_INTF_CTRL)) | SPDIF_EN;
@@ -3679,6 +3676,8 @@ static int snd_trident_free(struct snd_trident *trident)
 	else if (trident->device == TRIDENT_DEVICE_ID_SI7018) {
 		outl(0, TRID_REG(trident, SI_SERIAL_INTF_CTRL));
 	}
+	if (trident->irq >= 0)
+		free_irq(trident->irq, trident);
 	if (trident->tlb.buffer.area) {
 		outl(0, TRID_REG(trident, NX_TLBC));
 		if (trident->tlb.memhdr)
@@ -3688,8 +3687,6 @@ static int snd_trident_free(struct snd_trident *trident)
 		vfree(trident->tlb.shadow_entries);
 		snd_dma_free_pages(&trident->tlb.buffer);
 	}
-	if (trident->irq >= 0)
-		free_irq(trident->irq, trident);
 	pci_release_regions(trident->pci);
 	pci_disable_device(trident->pci);
 	kfree(trident);

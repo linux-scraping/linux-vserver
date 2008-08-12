@@ -23,12 +23,13 @@
 #include <linux/rcupdate.h>
 #include <linux/marker.h>
 #include <linux/err.h>
+#include <linux/slab.h>
 
 extern struct marker __start___markers[];
 extern struct marker __stop___markers[];
 
 /* Set to 1 to enable marker debug output */
-const int marker_debug;
+static const int marker_debug;
 
 /*
  * markers_mutex nests inside module_mutex. Markers mutex protects the builtin
@@ -126,11 +127,6 @@ void marker_probe_cb(const struct marker *mdata, void *call_private,
 		struct marker_probe_closure *multi;
 		int i;
 		/*
-		 * Read mdata->ptype before mdata->multi.
-		 */
-		smp_rmb();
-		multi = mdata->multi;
-		/*
 		 * multi points to an array, therefore accessing the array
 		 * depends on reading multi. However, even in this case,
 		 * we must insure that the pointer is read _before_ the array
@@ -138,6 +134,7 @@ void marker_probe_cb(const struct marker *mdata, void *call_private,
 		 * in the fast path, so put the explicit barrier here.
 		 */
 		smp_read_barrier_depends();
+		multi = mdata->multi;
 		for (i = 0; multi[i].func; i++) {
 			va_start(args, fmt);
 			multi[i].func(multi[i].probe_private, call_private, fmt,
@@ -180,11 +177,6 @@ void marker_probe_cb_noarg(const struct marker *mdata,
 		struct marker_probe_closure *multi;
 		int i;
 		/*
-		 * Read mdata->ptype before mdata->multi.
-		 */
-		smp_rmb();
-		multi = mdata->multi;
-		/*
 		 * multi points to an array, therefore accessing the array
 		 * depends on reading multi. However, even in this case,
 		 * we must insure that the pointer is read _before_ the array
@@ -192,6 +184,7 @@ void marker_probe_cb_noarg(const struct marker *mdata,
 		 * in the fast path, so put the explicit barrier here.
 		 */
 		smp_read_barrier_depends();
+		multi = mdata->multi;
 		for (i = 0; multi[i].func; i++)
 			multi[i].func(multi[i].probe_private, call_private, fmt,
 				&args);

@@ -621,9 +621,8 @@ unsigned int sun4v_build_irq(u32 devhandle, unsigned int devino)
 unsigned int sun4v_build_virq(u32 devhandle, unsigned int devino)
 {
 	struct irq_handler_data *data;
-	unsigned long hv_err, cookie;
 	struct ino_bucket *bucket;
-	struct irq_desc *desc;
+	unsigned long hv_err, cookie;
 	unsigned int virt_irq;
 
 	bucket = kzalloc(sizeof(struct ino_bucket), GFP_ATOMIC);
@@ -643,13 +642,6 @@ unsigned int sun4v_build_virq(u32 devhandle, unsigned int devino)
 	data = kzalloc(sizeof(struct irq_handler_data), GFP_ATOMIC);
 	if (unlikely(!data))
 		return 0;
-
-	/* In order to make the LDC channel startup sequence easier,
-	 * especially wrt. locking, we do not let request_irq() enable
-	 * the interrupt.
-	 */
-	desc = irq_desc + virt_irq;
-	desc->status |= IRQ_NOAUTOEN;
 
 	set_irq_chip_data(virt_irq, data);
 

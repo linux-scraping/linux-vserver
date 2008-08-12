@@ -1,6 +1,6 @@
 /* ldc.c: Logical Domain Channel link-layer protocol driver.
  *
- * Copyright (C) 2007, 2008 David S. Miller <davem@davemloft.net>
+ * Copyright (C) 2007 David S. Miller <davem@davemloft.net>
  */
 
 #include <linux/kernel.h>
@@ -23,8 +23,8 @@
 
 #define DRV_MODULE_NAME		"ldc"
 #define PFX DRV_MODULE_NAME	": "
-#define DRV_MODULE_VERSION	"1.1"
-#define DRV_MODULE_RELDATE	"July 22, 2008"
+#define DRV_MODULE_VERSION	"1.0"
+#define DRV_MODULE_RELDATE	"June 25, 2007"
 
 static char version[] __devinitdata =
 	DRV_MODULE_NAME ".c:v" DRV_MODULE_VERSION " (" DRV_MODULE_RELDATE ")\n";
@@ -1235,9 +1235,13 @@ int ldc_bind(struct ldc_channel *lp, const char *name)
 	unsigned long hv_err, flags;
 	int err = -EINVAL;
 
-	if (!name ||
-	    (lp->state != LDC_STATE_INIT))
-		return -EINVAL;
+	spin_lock_irqsave(&lp->lock, flags);
+
+	if (!name)
+		goto out_err;
+
+	if (lp->state != LDC_STATE_INIT)
+		goto out_err;
 
 	snprintf(lp->rx_irq_name, LDC_IRQ_NAME_MAX, "%s RX", name);
 	snprintf(lp->tx_irq_name, LDC_IRQ_NAME_MAX, "%s TX", name);
@@ -1246,32 +1250,25 @@ int ldc_bind(struct ldc_channel *lp, const char *name)
 			  IRQF_SAMPLE_RANDOM | IRQF_SHARED,
 			  lp->rx_irq_name, lp);
 	if (err)
-		return err;
+		goto out_err;
 
 	err = request_irq(lp->cfg.tx_irq, ldc_tx,
 			  IRQF_SAMPLE_RANDOM | IRQF_SHARED,
 			  lp->tx_irq_name, lp);
-	if (err) {
-		free_irq(lp->cfg.rx_irq, lp);
-		return err;
-	}
+	if (err)
+		goto out_free_rx_irq;
 
-
-	spin_lock_irqsave(&lp->lock, flags);
-
-	enable_irq(lp->cfg.rx_irq);
-	enable_irq(lp->cfg.tx_irq);
 
 	lp->flags |= LDC_FLAG_REGISTERED_IRQS;
 
 	err = -ENODEV;
 	hv_err = sun4v_ldc_tx_qconf(lp->id, 0, 0);
 	if (hv_err)
-		goto out_free_irqs;
+		goto out_free_tx_irq;
 
 	hv_err = sun4v_ldc_tx_qconf(lp->id, lp->tx_ra, lp->tx_num_entries);
 	if (hv_err)
-		goto out_free_irqs;
+		goto out_free_tx_irq;
 
 	hv_err = sun4v_ldc_rx_qconf(lp->id, 0, 0);
 	if (hv_err)
@@ -1307,11 +1304,14 @@ out_unmap_rx:
 out_unmap_tx:
 	sun4v_ldc_tx_qconf(lp->id, 0, 0);
 
-out_free_irqs:
+out_free_tx_irq:
 	lp->flags &= ~LDC_FLAG_REGISTERED_IRQS;
 	free_irq(lp->cfg.tx_irq, lp);
+
+out_free_rx_irq:
 	free_irq(lp->cfg.rx_irq, lp);
 
+out_err:
 	spin_unlock_irqrestore(&lp->lock, flags);
 
 	return err;
