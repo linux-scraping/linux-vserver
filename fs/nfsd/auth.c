@@ -11,6 +11,7 @@
 #include <linux/nfsd/nfsd.h>
 #include <linux/nfsd/export.h>
 #include <linux/vs_tag.h>
+#include "auth.h"
 
 int nfsexp_flags(struct svc_rqst *rqstp, struct svc_export *exp)
 {

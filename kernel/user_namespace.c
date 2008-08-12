@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/nsproxy.h>
+#include <linux/slab.h>
 #include <linux/user_namespace.h>
 #include <linux/vserver/global.h>
 
@@ -76,3 +77,4 @@ void free_user_ns(struct kref *kref)
 	atomic_dec(&vs_global_user_ns);
 	kfree(ns);
 }
+EXPORT_SYMBOL(free_user_ns);

@@ -28,13 +28,13 @@
 #include <net/inetpeer.h>
 #include <net/flow.h>
 #include <net/sock.h>
+// #include <linux/in.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/route.h>
 #include <linux/ip.h>
 #include <linux/cache.h>
 #include <linux/security.h>
-#include <linux/in.h>
 
 #ifndef __KERNEL__
 #warning This file is not supposed to be used outside of kernel.
@@ -88,7 +88,7 @@ struct ip_rt_acct
 
 static inline int inet_iif(const struct sk_buff *skb)
 {
-	return ((struct rtable *)skb->dst)->rt_iif;
+	return skb->rtable->rt_iif;
 }
 
 struct rt_cache_stat 
@@ -122,7 +122,7 @@ extern int		__ip_route_output_key(struct net *, struct rtable **, const struct f
 extern int		ip_route_output_key(struct net *, struct rtable **, struct flowi *flp);
 extern int		ip_route_output_flow(struct net *, struct rtable **rp, struct flowi *flp, struct sock *sk, int flags);
 extern int		ip_route_input(struct sk_buff*, __be32 dst, __be32 src, u8 tos, struct net_device *devin);
-extern unsigned short	ip_rt_frag_needed(struct net *net, struct iphdr *iph, unsigned short new_mtu);
+extern unsigned short	ip_rt_frag_needed(struct net *net, struct iphdr *iph, unsigned short new_mtu, struct net_device *dev);
 extern void		ip_rt_send_redirect(struct sk_buff *skb);
 
 extern unsigned		inet_addr_type(struct net *net, __be32 addr);
@@ -172,7 +172,7 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 					 .dport = dport } } };
 
 	int err;
-	struct net *net = sk->sk_net;
+	struct net *net = sock_net(sk);
 	struct nx_info *nx_info = current->nx_info;
 
 	if (sk)
@@ -214,7 +214,7 @@ static inline int ip_route_newports(struct rtable **rp, u8 protocol,
 		ip_rt_put(*rp);
 		*rp = NULL;
 		security_sk_classify_flow(sk, &fl);
-		return ip_route_output_flow(sk->sk_net, rp, &fl, sk, 0);
+		return ip_route_output_flow(sock_net(sk), rp, &fl, sk, 0);
 	}
 	return 0;
 }
