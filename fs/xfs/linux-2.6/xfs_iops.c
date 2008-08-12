@@ -771,8 +771,6 @@ xfs_vn_sync_flags(struct inode *inode)
 {
 	xfs_inode_t *ip = XFS_I(inode);
 	struct bhv_vattr *vattr;
-	unsigned int flags;
-	unsigned int vflags;
 	int error;
 
 	vattr = kmalloc(sizeof(*vattr), GFP_KERNEL);
@@ -783,7 +781,6 @@ xfs_vn_sync_flags(struct inode *inode)
 
 	vattr->va_mask = XFS_AT_XFLAGS;
 	vattr->va_xflags = xfs_ip2xflags(ip);
-	printk("i_vflags= %08x xflags = %08lx\n", inode->i_vflags, vattr->va_xflags);
 
 	error = -xfs_setattr(ip, vattr, 0, NULL);
 	if (likely(!error))
