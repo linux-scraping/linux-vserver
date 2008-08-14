@@ -553,6 +553,7 @@ static void __put_fs_struct(struct fs_struct *fs)
 		path_put(&fs->pwd);
 		if (fs->altroot.dentry)
 			path_put(&fs->altroot);
+		atomic_dec(&vs_global_fs);
 		kmem_cache_free(fs_cachep, fs);
 	}
 }
