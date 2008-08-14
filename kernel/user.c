@@ -222,12 +222,14 @@ static struct kobj_type uids_ktype = {
 static int uids_user_create(struct user_namespace *ns, struct user_struct *up)
 {
 	struct kobject *kobj = &up->kobj;
-	int error;
+	int error = 0;
 
 	memset(kobj, 0, sizeof(struct kobject));
+	if (ns != &init_user_ns)
+		goto done;
+
 	kobj->kset = uids_kset;
-	error = kobject_init_and_add(kobj, &uids_ktype, NULL,
-		"%p:%d", ns, up->uid);
+	error = kobject_init_and_add(kobj, &uids_ktype, NULL, "%d", up->uid);
 	if (error) {
 		kobject_put(kobj);
 		goto done;
@@ -279,9 +281,11 @@ static void remove_user_sysfs_dir(struct work_struct *w)
 	if (!remove_user)
 		goto done;
 
-	kobject_uevent(&up->kobj, KOBJ_REMOVE);
-	kobject_del(&up->kobj);
-	kobject_put(&up->kobj);
+	if (up->kobj.name) {
+		kobject_uevent(&up->kobj, KOBJ_REMOVE);
+		kobject_del(&up->kobj);
+		kobject_put(&up->kobj);
+	}
 
 	sched_destroy_user(up);
 	key_put(up->uid_keyring);
