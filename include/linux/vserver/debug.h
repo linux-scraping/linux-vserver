@@ -11,9 +11,6 @@
 #define VXF_DEV		"%p[%lu,%d:%d]"
 
 
-#define __FUNC__	__func__
-
-
 #define vxd_path(p)						\
 	({ static char _buffer[PATH_MAX];			\
 	   d_path(p, _buffer, sizeof(_buffer)); })

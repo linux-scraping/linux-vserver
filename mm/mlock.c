@@ -79,8 +79,6 @@ success:
 
 	vx_vmlocked_sub(mm, pages);
 out:
-	if (ret == -ENOMEM)
-		ret = -EAGAIN;
 	return ret;
 }
 
