@@ -27,6 +27,7 @@
 #include <asm/pgalloc.h>
 #include <asm/smp.h>
 #include <asm/tlbflush.h>
+#include <linux/vs_memory.h>
 
 #ifndef CONFIG_SMP
 #define TLB_NR_PTRS	1
