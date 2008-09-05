@@ -1972,15 +1972,18 @@ ok:
 		dentry = cow_break_link(pathname);
 		if (IS_ERR(dentry)) {
 			error = PTR_ERR(dentry);
-			goto exit;
+			goto exit_cow;
 		}
 		dput(dentry);
+		if (will_write)
+			mnt_drop_write(nd.path.mnt);
 		release_open_intent(&nd);
 		path_put(&nd.path);
 		flag = rflag;
 		mode = rmode;
 		goto restart;
 	}
+exit_cow:
 #endif
 	if (error) {
 		if (will_write)
