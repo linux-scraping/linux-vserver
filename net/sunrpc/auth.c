@@ -355,7 +355,6 @@ rpcauth_lookupcred(struct rpc_auth *auth, int flags)
 		.uid = current->fsuid,
 		.gid = current->fsgid,
 		.tag = dx_current_tag(),
-		.tag = dx_current_tag(),
 		.group_info = current->group_info,
 	};
 	struct rpc_cred *ret;
@@ -401,6 +400,7 @@ rpcauth_bind_root_cred(struct rpc_task *task)
 	struct auth_cred acred = {
 		.uid = 0,
 		.gid = 0,
+		.tag = dx_current_tag(),
 	};
 	struct rpc_cred *ret;
 
