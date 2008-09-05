@@ -195,23 +195,23 @@
 #define OCFS2_INDEXED_DIR_FL	(0x0008)
 
 /* Inode attributes, keep in sync with EXT2 */
-#define OCFS2_SECRM_FL		(0x00000001)	/* Secure deletion */
-#define OCFS2_UNRM_FL		(0x00000002)	/* Undelete */
-#define OCFS2_COMPR_FL		(0x00000004)	/* Compress file */
-#define OCFS2_SYNC_FL		(0x00000008)	/* Synchronous updates */
-#define OCFS2_IMMUTABLE_FL	(0x00000010)	/* Immutable file */
-#define OCFS2_APPEND_FL		(0x00000020)	/* writes to file may only append */
-#define OCFS2_NODUMP_FL		(0x00000040)	/* do not dump file */
-#define OCFS2_NOATIME_FL	(0x00000080)	/* do not update atime */
-#define OCFS2_DIRSYNC_FL	(0x00010000)	/* dirsync behaviour (directories only) */
-#define OCFS2_IXUNLINK_FL	(0x00020000)	/* Immutable invert on unlink */
+#define OCFS2_SECRM_FL		FS_SECRM_FL	/* Secure deletion */
+#define OCFS2_UNRM_FL		FS_UNRM_FL	/* Undelete */
+#define OCFS2_COMPR_FL		FS_COMPR_FL	/* Compress file */
+#define OCFS2_SYNC_FL		FS_SYNC_FL	/* Synchronous updates */
+#define OCFS2_IMMUTABLE_FL	FS_IMMUTABLE_FL	/* Immutable file */
+#define OCFS2_APPEND_FL		FS_APPEND_FL	/* writes to file may only append */
+#define OCFS2_NODUMP_FL		FS_NODUMP_FL	/* do not dump file */
+#define OCFS2_NOATIME_FL	FS_NOATIME_FL	/* do not update atime */
 
-#define OCFS2_BARRIER_FL	(0x01000000)	/* Barrier for chroot() */
-#define OCFS2_COW_FL		(0x02000000)	/* Copy on Write marker */
+#define OCFS2_DIRSYNC_FL	FS_DIRSYNC_FL	/* dirsync behaviour (directories only) */
+#define OCFS2_IXUNLINK_FL	FS_IXUNLINK_FL	/* Immutable invert on unlink */
 
-#define OCFS2_FL_VISIBLE	(0x000300FF)	/* User visible flags */
-#define OCFS2_FL_MODIFIABLE	(0x000300FF)	/* User modifiable flags */
-#define OCFS2_FL_MASK		(0x030300FF)
+#define OCFS2_BARRIER_FL	FS_BARRIER_FL	/* Barrier for chroot() */
+#define OCFS2_COW_FL		FS_COW_FL	/* Copy on Write marker */
+
+#define OCFS2_FL_VISIBLE	(0x010300FF)	/* User visible flags */
+#define OCFS2_FL_MODIFIABLE	(0x010300FF)	/* User modifiable flags */
 
 /*
  * Extent record flags (e_node.leaf.flags)

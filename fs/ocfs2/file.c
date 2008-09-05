@@ -2229,13 +2229,13 @@ const struct inode_operations ocfs2_file_iops = {
 	.setattr	= ocfs2_setattr,
 	.getattr	= ocfs2_getattr,
 	.permission	= ocfs2_permission,
+	.sync_flags     = ocfs2_sync_flags,
 	.fallocate	= ocfs2_fallocate,
 };
 
 const struct inode_operations ocfs2_special_file_iops = {
 	.setattr	= ocfs2_setattr,
 	.getattr	= ocfs2_getattr,
-	.sync_flags     = ocfs2_sync_flags,
 	.permission	= ocfs2_permission,
 };
 
