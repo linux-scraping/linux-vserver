@@ -140,8 +140,6 @@ int ocfs2_sync_flags(struct inode *inode)
 	struct buffer_head *bh = NULL;
 	int status;
 
-	mutex_lock(&inode->i_mutex);
-
 	status = ocfs2_inode_lock(inode, &bh, 1);
 	if (status < 0) {
 		mlog_errno(status);
@@ -159,7 +157,7 @@ int ocfs2_sync_flags(struct inode *inode)
 		goto bail_unlock;
 	}
 
-	ocfs2_set_inode_flags(inode);
+	ocfs2_get_inode_flags(ocfs2_inode);
 	status = ocfs2_mark_inode_dirty(handle, inode, bh);
 	if (status < 0)
 		mlog_errno(status);
@@ -168,8 +166,6 @@ int ocfs2_sync_flags(struct inode *inode)
 bail_unlock:
 	ocfs2_inode_unlock(inode, 1);
 bail:
-	mutex_unlock(&inode->i_mutex);
-
 	if (bh)
 		brelse(bh);
 
