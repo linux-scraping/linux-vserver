@@ -832,10 +832,20 @@ static int show_vfsmnt(struct seq_file *m, void *v)
 	int err = 0;
 	struct path mnt_path = { .dentry = mnt->mnt_root, .mnt = mnt };
 
-	mangle(m, mnt->mnt_devname ? mnt->mnt_devname : "none");
-	seq_putc(m, ' ');
-	seq_path(m, &mnt_path, " \t\n\\");
-	seq_putc(m, ' ');
+	if (vx_flags(VXF_HIDE_MOUNT, 0))
+		return SEQ_SKIP;
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VS_WATCH_P))
+		return SEQ_SKIP;
+
+	if (!vx_check(0, VS_ADMIN|VS_WATCH) &&
+		mnt == current->fs->root.mnt) {
+		seq_puts(m, "/dev/root / ");
+	} else {
+		mangle(m, mnt->mnt_devname ? mnt->mnt_devname : "none");
+		seq_putc(m, ' ');
+		seq_path(m, &mnt_path, " \t\n\\");
+		seq_putc(m, ' ');
+	}
 	show_type(m, mnt->mnt_sb);
 	seq_puts(m, __mnt_is_readonly(mnt) ? " ro" : " rw");
 	show_sb_opts(m, mnt->mnt_sb);
@@ -861,6 +871,11 @@ static int show_mountinfo(struct seq_file *m, void *v)
 	struct path mnt_path = { .dentry = mnt->mnt_root, .mnt = mnt };
 	struct path root = p->root;
 	int err = 0;
+
+	if (vx_flags(VXF_HIDE_MOUNT, 0))
+		return SEQ_SKIP;
+	if (!mnt_is_reachable(mnt) && !vx_check(0, VS_WATCH_P))
+		return SEQ_SKIP;
 
 	seq_printf(m, "%i %i %u:%u ", mnt->mnt_id, mnt->mnt_parent->mnt_id,
 		   MAJOR(sb->s_dev), MINOR(sb->s_dev));
@@ -918,9 +933,9 @@ static int show_vfsstat(struct seq_file *m, void *v)
 	int err = 0;
 
 	if (vx_flags(VXF_HIDE_MOUNT, 0))
-		return 0;
+		return SEQ_SKIP;
 	if (!mnt_is_reachable(mnt) && !vx_check(0, VS_WATCH_P))
-		return 0;
+		return SEQ_SKIP;
 
 	if (!vx_check(0, VS_ADMIN|VS_WATCH) &&
 		mnt == current->fs->root.mnt) {
