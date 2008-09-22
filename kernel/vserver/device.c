@@ -334,7 +334,7 @@ static inline int __user_device(const char __user *name, dev_t *dev,
 		*dev = 0;
 		return 0;
 	}
-	ret = user_path_walk_link(name, &nd);
+	ret = user_lpath(name, &nd.path);
 	if (ret)
 		return ret;
 	if (nd.path.dentry->d_inode) {

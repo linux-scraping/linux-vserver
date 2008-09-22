@@ -272,7 +272,7 @@ static void bdev_destroy_inode(struct inode *inode)
 	kmem_cache_free(bdev_cachep, bdi);
 }
 
-static void init_once(struct kmem_cache * cachep, void *foo)
+static void init_once(void *foo)
 {
 	struct bdev_inode *ei = (struct bdev_inode *) foo;
 	struct block_device *bdev = &ei->bdev;
@@ -948,8 +948,10 @@ static int do_open(struct block_device *bdev, struct file *file, int for_part)
 	 * hooks: /n/, see "layering violations".
 	 */
 	ret = devcgroup_inode_permission(bdev->bd_inode, perm);
-	if (ret != 0)
+	if (ret != 0) {
+		bdput(bdev);
 		return ret;
+	}
 
 	ret = -ENXIO;
 	file->f_mapping = bdev->bd_inode->i_mapping;
@@ -1241,6 +1243,7 @@ fail:
 	bdev = ERR_PTR(error);
 	goto out;
 }
+EXPORT_SYMBOL(lookup_bdev);
 
 /**
  * open_bdev_excl  -  open a block device by name and set it up for use

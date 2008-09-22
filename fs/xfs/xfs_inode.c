@@ -581,8 +581,8 @@ xfs_iformat_extents(
 		xfs_validate_extents(ifp, nex, XFS_EXTFMT_INODE(ip));
 		for (i = 0; i < nex; i++, dp++) {
 			xfs_bmbt_rec_host_t *ep = xfs_iext_get_ext(ifp, i);
-			ep->l0 = be64_to_cpu(get_unaligned(&dp->l0));
-			ep->l1 = be64_to_cpu(get_unaligned(&dp->l1));
+			ep->l0 = get_unaligned_be64(&dp->l0);
+			ep->l1 = get_unaligned_be64(&dp->l1);
 		}
 		XFS_BMAP_TRACE_EXLIST(ip, nex, whichfork);
 		if (whichfork != XFS_DATA_FORK ||
@@ -858,22 +858,22 @@ xfs_iread(
 	 * Do this before xfs_iformat in case it adds entries.
 	 */
 #ifdef	XFS_INODE_TRACE
-	ip->i_trace = ktrace_alloc(INODE_TRACE_SIZE, KM_SLEEP);
+	ip->i_trace = ktrace_alloc(INODE_TRACE_SIZE, KM_NOFS);
 #endif
 #ifdef XFS_BMAP_TRACE
-	ip->i_xtrace = ktrace_alloc(XFS_BMAP_KTRACE_SIZE, KM_SLEEP);
+	ip->i_xtrace = ktrace_alloc(XFS_BMAP_KTRACE_SIZE, KM_NOFS);
 #endif
 #ifdef XFS_BMBT_TRACE
-	ip->i_btrace = ktrace_alloc(XFS_BMBT_KTRACE_SIZE, KM_SLEEP);
+	ip->i_btrace = ktrace_alloc(XFS_BMBT_KTRACE_SIZE, KM_NOFS);
 #endif
 #ifdef XFS_RW_TRACE
-	ip->i_rwtrace = ktrace_alloc(XFS_RW_KTRACE_SIZE, KM_SLEEP);
+	ip->i_rwtrace = ktrace_alloc(XFS_RW_KTRACE_SIZE, KM_NOFS);
 #endif
 #ifdef XFS_ILOCK_TRACE
-	ip->i_lock_trace = ktrace_alloc(XFS_ILOCK_KTRACE_SIZE, KM_SLEEP);
+	ip->i_lock_trace = ktrace_alloc(XFS_ILOCK_KTRACE_SIZE, KM_NOFS);
 #endif
 #ifdef XFS_DIR2_TRACE
-	ip->i_dir_trace = ktrace_alloc(XFS_DIR2_KTRACE_SIZE, KM_SLEEP);
+	ip->i_dir_trace = ktrace_alloc(XFS_DIR2_KTRACE_SIZE, KM_NOFS);
 #endif
 
 	/*
@@ -1070,9 +1070,9 @@ xfs_ialloc(
 {
 	xfs_ino_t	ino;
 	xfs_inode_t	*ip;
-	bhv_vnode_t	*vp;
 	uint		flags;
 	int		error;
+	timespec_t	tv;
 
 	/*
 	 * Call the space management code to pick
@@ -1101,13 +1101,12 @@ xfs_ialloc(
 	}
 	ASSERT(ip != NULL);
 
-	vp = XFS_ITOV(ip);
 	ip->i_d.di_mode = (__uint16_t)mode;
 	ip->i_d.di_onlink = 0;
 	ip->i_d.di_nlink = nlink;
 	ASSERT(ip->i_d.di_nlink == nlink);
-	ip->i_d.di_uid = current_fsuid(cr);
-	ip->i_d.di_gid = current_fsgid(cr);
+	ip->i_d.di_uid = current_fsuid();
+	ip->i_d.di_gid = current_fsgid();
 	ip->i_d.di_tag = current_fstag(cr, vp);
 	ip->i_d.di_projid = prid;
 	memset(&(ip->i_d.di_pad[0]), 0, sizeof(ip->i_d.di_pad));
@@ -1155,7 +1154,13 @@ xfs_ialloc(
 	ip->i_size = 0;
 	ip->i_d.di_nextents = 0;
 	ASSERT(ip->i_d.di_nblocks == 0);
-	xfs_ichgtime(ip, XFS_ICHGTIME_CHG|XFS_ICHGTIME_ACC|XFS_ICHGTIME_MOD);
+
+	nanotime(&tv);
+	ip->i_d.di_mtime.t_sec = (__int32_t)tv.tv_sec;
+	ip->i_d.di_mtime.t_nsec = (__int32_t)tv.tv_nsec;
+	ip->i_d.di_atime = ip->i_d.di_mtime;
+	ip->i_d.di_ctime = ip->i_d.di_mtime;
+
 	/*
 	 * di_gen will have been taken care of in xfs_iread.
 	 */
@@ -1246,7 +1251,7 @@ xfs_ialloc(
 	xfs_trans_log_inode(tp, ip, flags);
 
 	/* now that we have an i_mode we can setup inode ops and unlock */
-	xfs_initialize_vnode(tp->t_mountp, vp, ip);
+	xfs_setup_inode(ip);
 
 	*ipp = ip;
 	return 0;
@@ -1425,7 +1430,6 @@ xfs_itruncate_start(
 	xfs_fsize_t	last_byte;
 	xfs_off_t	toss_start;
 	xfs_mount_t	*mp;
-	bhv_vnode_t	*vp;
 	int		error = 0;
 
 	ASSERT(xfs_isilocked(ip, XFS_IOLOCK_EXCL));
@@ -1434,7 +1438,6 @@ xfs_itruncate_start(
 	       (flags == XFS_ITRUNC_MAYBE));
 
 	mp = ip->i_mount;
-	vp = XFS_ITOV(ip);
 
 	/* wait for the completion of any pending DIOs */
 	if (new_size < ip->i_size)
@@ -1483,7 +1486,7 @@ xfs_itruncate_start(
 
 #ifdef DEBUG
 	if (new_size == 0) {
-		ASSERT(VN_CACHED(vp) == 0);
+		ASSERT(VN_CACHED(VFS_I(ip)) == 0);
 	}
 #endif
 	return error;
@@ -1788,67 +1791,6 @@ xfs_itruncate_finish(
 	xfs_itrunc_trace(XFS_ITRUNC_FINISH2, ip, 0, new_size, 0, 0);
 	return 0;
 }
-
-
-/*
- * xfs_igrow_start
- *
- * Do the first part of growing a file: zero any data in the last
- * block that is beyond the old EOF.  We need to do this before
- * the inode is joined to the transaction to modify the i_size.
- * That way we can drop the inode lock and call into the buffer
- * cache to get the buffer mapping the EOF.
- */
-int
-xfs_igrow_start(
-	xfs_inode_t	*ip,
-	xfs_fsize_t	new_size,
-	cred_t		*credp)
-{
-	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL|XFS_IOLOCK_EXCL));
-	ASSERT(new_size > ip->i_size);
-
-	/*
-	 * Zero any pages that may have been created by
-	 * xfs_write_file() beyond the end of the file
-	 * and any blocks between the old and new file sizes.
-	 */
-	return xfs_zero_eof(ip, new_size, ip->i_size);
-}
-
-/*
- * xfs_igrow_finish
- *
- * This routine is called to extend the size of a file.
- * The inode must have both the iolock and the ilock locked
- * for update and it must be a part of the current transaction.
- * The xfs_igrow_start() function must have been called previously.
- * If the change_flag is not zero, the inode change timestamp will
- * be updated.
- */
-void
-xfs_igrow_finish(
-	xfs_trans_t	*tp,
-	xfs_inode_t	*ip,
-	xfs_fsize_t	new_size,
-	int		change_flag)
-{
-	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL|XFS_IOLOCK_EXCL));
-	ASSERT(ip->i_transp == tp);
-	ASSERT(new_size > ip->i_size);
-
-	/*
-	 * Update the file size.  Update the inode change timestamp
-	 * if change_flag set.
-	 */
-	ip->i_d.di_size = new_size;
-	ip->i_size = new_size;
-	if (change_flag)
-		xfs_ichgtime(ip, XFS_ICHGTIME_CHG);
-	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
-
-}
-
 
 /*
  * This is called when the inode's link count goes to 0.
@@ -2284,7 +2226,7 @@ xfs_ifree_cluster(
 		xfs_trans_binval(tp, bp);
 	}
 
-	kmem_free(ip_found, ninodes * sizeof(xfs_inode_t *));
+	kmem_free(ip_found);
 	xfs_put_perag(mp, pag);
 }
 
@@ -2497,7 +2439,7 @@ xfs_iroot_realloc(
 						     (int)new_size);
 		memcpy(np, op, new_max * (uint)sizeof(xfs_dfsbno_t));
 	}
-	kmem_free(ifp->if_broot, ifp->if_broot_bytes);
+	kmem_free(ifp->if_broot);
 	ifp->if_broot = new_broot;
 	ifp->if_broot_bytes = (int)new_size;
 	ASSERT(ifp->if_broot_bytes <=
@@ -2541,7 +2483,7 @@ xfs_idata_realloc(
 
 	if (new_size == 0) {
 		if (ifp->if_u1.if_data != ifp->if_u2.if_inline_data) {
-			kmem_free(ifp->if_u1.if_data, ifp->if_real_bytes);
+			kmem_free(ifp->if_u1.if_data);
 		}
 		ifp->if_u1.if_data = NULL;
 		real_size = 0;
@@ -2556,7 +2498,7 @@ xfs_idata_realloc(
 			ASSERT(ifp->if_real_bytes != 0);
 			memcpy(ifp->if_u2.if_inline_data, ifp->if_u1.if_data,
 			      new_size);
-			kmem_free(ifp->if_u1.if_data, ifp->if_real_bytes);
+			kmem_free(ifp->if_u1.if_data);
 			ifp->if_u1.if_data = ifp->if_u2.if_inline_data;
 		}
 		real_size = 0;
@@ -2663,7 +2605,7 @@ xfs_idestroy_fork(
 
 	ifp = XFS_IFORK_PTR(ip, whichfork);
 	if (ifp->if_broot != NULL) {
-		kmem_free(ifp->if_broot, ifp->if_broot_bytes);
+		kmem_free(ifp->if_broot);
 		ifp->if_broot = NULL;
 	}
 
@@ -2677,7 +2619,7 @@ xfs_idestroy_fork(
 		if ((ifp->if_u1.if_data != ifp->if_u2.if_inline_data) &&
 		    (ifp->if_u1.if_data != NULL)) {
 			ASSERT(ifp->if_real_bytes != 0);
-			kmem_free(ifp->if_u1.if_data, ifp->if_real_bytes);
+			kmem_free(ifp->if_u1.if_data);
 			ifp->if_u1.if_data = NULL;
 			ifp->if_real_bytes = 0;
 		}
@@ -2718,7 +2660,6 @@ xfs_idestroy(
 		xfs_idestroy_fork(ip, XFS_ATTR_FORK);
 	mrfree(&ip->i_lock);
 	mrfree(&ip->i_iolock);
-	freesema(&ip->i_flock);
 
 #ifdef XFS_INODE_TRACE
 	ktrace_free(ip->i_trace);
@@ -3085,7 +3026,7 @@ xfs_iflush_cluster(
 
 out_free:
 	read_unlock(&pag->pag_ici_lock);
-	kmem_free(ilist, ilist_size);
+	kmem_free(ilist);
 	return 0;
 
 
@@ -3129,17 +3070,17 @@ cluster_corrupt_out:
 	 * Unlocks the flush lock
 	 */
 	xfs_iflush_abort(iq);
-	kmem_free(ilist, ilist_size);
+	kmem_free(ilist);
 	return XFS_ERROR(EFSCORRUPTED);
 }
 
 /*
  * xfs_iflush() will write a modified inode's changes out to the
  * inode's on disk home.  The caller must have the inode lock held
- * in at least shared mode and the inode flush semaphore must be
- * held as well.  The inode lock will still be held upon return from
+ * in at least shared mode and the inode flush completion must be
+ * active as well.  The inode lock will still be held upon return from
  * the call and the caller is free to unlock it.
- * The inode flush lock will be unlocked when the inode reaches the disk.
+ * The inode flush will be completed when the inode reaches the disk.
  * The flags indicate how the inode's buffer should be written out.
  */
 int
@@ -3158,7 +3099,7 @@ xfs_iflush(
 	XFS_STATS_INC(xs_iflush_count);
 
 	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL|XFS_ILOCK_SHARED));
-	ASSERT(issemalocked(&(ip->i_flock)));
+	ASSERT(!completion_done(&ip->i_flush));
 	ASSERT(ip->i_d.di_format != XFS_DINODE_FMT_BTREE ||
 	       ip->i_d.di_nextents > ip->i_df.if_ext_max);
 
@@ -3170,8 +3111,6 @@ xfs_iflush(
 	 * flush lock and do nothing.
 	 */
 	if (xfs_inode_clean(ip)) {
-		ASSERT((iip != NULL) ?
-			 !(iip->ili_item.li_flags & XFS_LI_IN_AIL) : 1);
 		xfs_ifunlock(ip);
 		return 0;
 	}
@@ -3323,7 +3262,7 @@ xfs_iflush_int(
 #endif
 
 	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL|XFS_ILOCK_SHARED));
-	ASSERT(issemalocked(&(ip->i_flock)));
+	ASSERT(!completion_done(&ip->i_flush));
 	ASSERT(ip->i_d.di_format != XFS_DINODE_FMT_BTREE ||
 	       ip->i_d.di_nextents > ip->i_df.if_ext_max);
 
@@ -3556,7 +3495,6 @@ xfs_iflush_all(
 	xfs_mount_t	*mp)
 {
 	xfs_inode_t	*ip;
-	bhv_vnode_t	*vp;
 
  again:
 	XFS_MOUNT_ILOCK(mp);
@@ -3571,14 +3509,13 @@ xfs_iflush_all(
 			continue;
 		}
 
-		vp = XFS_ITOV_NULL(ip);
-		if (!vp) {
+		if (!VFS_I(ip)) {
 			XFS_MOUNT_IUNLOCK(mp);
 			xfs_finish_reclaim(ip, 0, XFS_IFLUSH_ASYNC);
 			goto again;
 		}
 
-		ASSERT(vn_count(vp) == 0);
+		ASSERT(vn_count(VFS_I(ip)) == 0);
 
 		ip = ip->i_mnext;
 	} while (ip != mp->m_inodes);
@@ -3798,7 +3735,7 @@ xfs_iext_add_indirect_multi(
 	 * (all extents past */
 	if (nex2) {
 		byte_diff = nex2 * sizeof(xfs_bmbt_rec_t);
-		nex2_ep = (xfs_bmbt_rec_t *) kmem_alloc(byte_diff, KM_SLEEP);
+		nex2_ep = (xfs_bmbt_rec_t *) kmem_alloc(byte_diff, KM_NOFS);
 		memmove(nex2_ep, &erp->er_extbuf[idx], byte_diff);
 		erp->er_extcount -= nex2;
 		xfs_iext_irec_update_extoffs(ifp, erp_idx + 1, -nex2);
@@ -3864,7 +3801,7 @@ xfs_iext_add_indirect_multi(
 			erp = xfs_iext_irec_new(ifp, erp_idx);
 		}
 		memmove(&erp->er_extbuf[i], nex2_ep, byte_diff);
-		kmem_free(nex2_ep, byte_diff);
+		kmem_free(nex2_ep);
 		erp->er_extcount += nex2;
 		xfs_iext_irec_update_extoffs(ifp, erp_idx + 1, nex2);
 	}
@@ -4098,8 +4035,7 @@ xfs_iext_realloc_direct(
 			ifp->if_u1.if_extents =
 				kmem_realloc(ifp->if_u1.if_extents,
 						rnew_size,
-						ifp->if_real_bytes,
-						KM_SLEEP);
+						ifp->if_real_bytes, KM_NOFS);
 		}
 		if (rnew_size > ifp->if_real_bytes) {
 			memset(&ifp->if_u1.if_extents[ifp->if_bytes /
@@ -4140,7 +4076,7 @@ xfs_iext_direct_to_inline(
 	 */
 	memcpy(ifp->if_u2.if_inline_ext, ifp->if_u1.if_extents,
 		nextents * sizeof(xfs_bmbt_rec_t));
-	kmem_free(ifp->if_u1.if_extents, ifp->if_real_bytes);
+	kmem_free(ifp->if_u1.if_extents);
 	ifp->if_u1.if_extents = ifp->if_u2.if_inline_ext;
 	ifp->if_real_bytes = 0;
 }
@@ -4158,7 +4094,7 @@ xfs_iext_inline_to_direct(
 	xfs_ifork_t	*ifp,		/* inode fork pointer */
 	int		new_size)	/* number of extents in file */
 {
-	ifp->if_u1.if_extents = kmem_alloc(new_size, KM_SLEEP);
+	ifp->if_u1.if_extents = kmem_alloc(new_size, KM_NOFS);
 	memset(ifp->if_u1.if_extents, 0, new_size);
 	if (ifp->if_bytes) {
 		memcpy(ifp->if_u1.if_extents, ifp->if_u2.if_inline_ext,
@@ -4190,7 +4126,7 @@ xfs_iext_realloc_indirect(
 	} else {
 		ifp->if_u1.if_ext_irec = (xfs_ext_irec_t *)
 			kmem_realloc(ifp->if_u1.if_ext_irec,
-				new_size, size, KM_SLEEP);
+				new_size, size, KM_NOFS);
 	}
 }
 
@@ -4214,7 +4150,7 @@ xfs_iext_indirect_to_direct(
 	ASSERT(ifp->if_real_bytes == XFS_IEXT_BUFSZ);
 
 	ep = ifp->if_u1.if_ext_irec->er_extbuf;
-	kmem_free(ifp->if_u1.if_ext_irec, sizeof(xfs_ext_irec_t));
+	kmem_free(ifp->if_u1.if_ext_irec);
 	ifp->if_flags &= ~XFS_IFEXTIREC;
 	ifp->if_u1.if_extents = ep;
 	ifp->if_bytes = size;
@@ -4240,7 +4176,7 @@ xfs_iext_destroy(
 		}
 		ifp->if_flags &= ~XFS_IFEXTIREC;
 	} else if (ifp->if_real_bytes) {
-		kmem_free(ifp->if_u1.if_extents, ifp->if_real_bytes);
+		kmem_free(ifp->if_u1.if_extents);
 	} else if (ifp->if_bytes) {
 		memset(ifp->if_u2.if_inline_ext, 0, XFS_INLINE_EXTS *
 			sizeof(xfs_bmbt_rec_t));
@@ -4432,11 +4368,10 @@ xfs_iext_irec_init(
 	nextents = ifp->if_bytes / (uint)sizeof(xfs_bmbt_rec_t);
 	ASSERT(nextents <= XFS_LINEAR_EXTS);
 
-	erp = (xfs_ext_irec_t *)
-		kmem_alloc(sizeof(xfs_ext_irec_t), KM_SLEEP);
+	erp = kmem_alloc(sizeof(xfs_ext_irec_t), KM_NOFS);
 
 	if (nextents == 0) {
-		ifp->if_u1.if_extents = kmem_alloc(XFS_IEXT_BUFSZ, KM_SLEEP);
+		ifp->if_u1.if_extents = kmem_alloc(XFS_IEXT_BUFSZ, KM_NOFS);
 	} else if (!ifp->if_real_bytes) {
 		xfs_iext_inline_to_direct(ifp, XFS_IEXT_BUFSZ);
 	} else if (ifp->if_real_bytes < XFS_IEXT_BUFSZ) {
@@ -4484,7 +4419,7 @@ xfs_iext_irec_new(
 
 	/* Initialize new extent record */
 	erp = ifp->if_u1.if_ext_irec;
-	erp[erp_idx].er_extbuf = kmem_alloc(XFS_IEXT_BUFSZ, KM_SLEEP);
+	erp[erp_idx].er_extbuf = kmem_alloc(XFS_IEXT_BUFSZ, KM_NOFS);
 	ifp->if_real_bytes = nlists * XFS_IEXT_BUFSZ;
 	memset(erp[erp_idx].er_extbuf, 0, XFS_IEXT_BUFSZ);
 	erp[erp_idx].er_extcount = 0;
@@ -4511,7 +4446,7 @@ xfs_iext_irec_remove(
 	if (erp->er_extbuf) {
 		xfs_iext_irec_update_extoffs(ifp, erp_idx + 1,
 			-erp->er_extcount);
-		kmem_free(erp->er_extbuf, XFS_IEXT_BUFSZ);
+		kmem_free(erp->er_extbuf);
 	}
 	/* Compact extent records */
 	erp = ifp->if_u1.if_ext_irec;
@@ -4529,8 +4464,7 @@ xfs_iext_irec_remove(
 		xfs_iext_realloc_indirect(ifp,
 			nlists * sizeof(xfs_ext_irec_t));
 	} else {
-		kmem_free(ifp->if_u1.if_ext_irec,
-			sizeof(xfs_ext_irec_t));
+		kmem_free(ifp->if_u1.if_ext_irec);
 	}
 	ifp->if_real_bytes = nlists * XFS_IEXT_BUFSZ;
 }
@@ -4599,7 +4533,7 @@ xfs_iext_irec_compact_pages(
 			 * so er_extoffs don't get modified in
 			 * xfs_iext_irec_remove.
 			 */
-			kmem_free(erp_next->er_extbuf, XFS_IEXT_BUFSZ);
+			kmem_free(erp_next->er_extbuf);
 			erp_next->er_extbuf = NULL;
 			xfs_iext_irec_remove(ifp, erp_idx + 1);
 			nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
@@ -4624,40 +4558,63 @@ xfs_iext_irec_compact_full(
 	int		nlists;			/* number of irec's (ex lists) */
 
 	ASSERT(ifp->if_flags & XFS_IFEXTIREC);
+
 	nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
 	erp = ifp->if_u1.if_ext_irec;
 	ep = &erp->er_extbuf[erp->er_extcount];
 	erp_next = erp + 1;
 	ep_next = erp_next->er_extbuf;
+
 	while (erp_idx < nlists - 1) {
+		/*
+		 * Check how many extent records are available in this irec.
+		 * If there is none skip the whole exercise.
+		 */
 		ext_avail = XFS_LINEAR_EXTS - erp->er_extcount;
-		ext_diff = MIN(ext_avail, erp_next->er_extcount);
-		memcpy(ep, ep_next, ext_diff * sizeof(xfs_bmbt_rec_t));
-		erp->er_extcount += ext_diff;
-		erp_next->er_extcount -= ext_diff;
-		/* Remove next page */
-		if (erp_next->er_extcount == 0) {
+		if (ext_avail) {
+
 			/*
-			 * Free page before removing extent record
-			 * so er_extoffs don't get modified in
-			 * xfs_iext_irec_remove.
+			 * Copy over as many as possible extent records into
+			 * the previous page.
 			 */
-			kmem_free(erp_next->er_extbuf,
-				erp_next->er_extcount * sizeof(xfs_bmbt_rec_t));
-			erp_next->er_extbuf = NULL;
-			xfs_iext_irec_remove(ifp, erp_idx + 1);
-			erp = &ifp->if_u1.if_ext_irec[erp_idx];
-			nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
-		/* Update next page */
-		} else {
-			/* Move rest of page up to become next new page */
-			memmove(erp_next->er_extbuf, ep_next,
-				erp_next->er_extcount * sizeof(xfs_bmbt_rec_t));
-			ep_next = erp_next->er_extbuf;
-			memset(&ep_next[erp_next->er_extcount], 0,
-				(XFS_LINEAR_EXTS - erp_next->er_extcount) *
-				sizeof(xfs_bmbt_rec_t));
+			ext_diff = MIN(ext_avail, erp_next->er_extcount);
+			memcpy(ep, ep_next, ext_diff * sizeof(xfs_bmbt_rec_t));
+			erp->er_extcount += ext_diff;
+			erp_next->er_extcount -= ext_diff;
+
+			/*
+			 * If the next irec is empty now we can simply
+			 * remove it.
+			 */
+			if (erp_next->er_extcount == 0) {
+				/*
+				 * Free page before removing extent record
+				 * so er_extoffs don't get modified in
+				 * xfs_iext_irec_remove.
+				 */
+				kmem_free(erp_next->er_extbuf);
+				erp_next->er_extbuf = NULL;
+				xfs_iext_irec_remove(ifp, erp_idx + 1);
+				erp = &ifp->if_u1.if_ext_irec[erp_idx];
+				nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
+
+			/*
+			 * If the next irec is not empty move up the content
+			 * that has not been copied to the previous page to
+			 * the beggining of this one.
+			 */
+			} else {
+				memmove(erp_next->er_extbuf, &ep_next[ext_diff],
+					erp_next->er_extcount *
+					sizeof(xfs_bmbt_rec_t));
+				ep_next = erp_next->er_extbuf;
+				memset(&ep_next[erp_next->er_extcount], 0,
+					(XFS_LINEAR_EXTS -
+						erp_next->er_extcount) *
+					sizeof(xfs_bmbt_rec_t));
+			}
 		}
+
 		if (erp->er_extcount == XFS_LINEAR_EXTS) {
 			erp_idx++;
 			if (erp_idx < nlists)

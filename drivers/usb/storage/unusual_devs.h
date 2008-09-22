@@ -1,8 +1,6 @@
 /* Driver for USB Mass Storage compliant devices
  * Unusual Devices File
  *
- * $Id: unusual_devs.h,v 1.32 2002/02/25 02:41:24 mdharm Exp $
- *
  * Current development and maintenance by:
  *   (c) 2000-2002 Matthew Dharm (mdharm-usb@one-eyed-alien.net)
  *
@@ -226,6 +224,13 @@ UNUSUAL_DEV(  0x0421, 0x0495, 0x0370, 0x0370,
 		"6234",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_MAX_SECTORS_64 ),
+
+/* Reported by Cedric Godin <cedric@belbone.be> */
+UNUSUAL_DEV(  0x0421, 0x04b9, 0x0551, 0x0551,
+		"Nokia",
+		"5300",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_FIX_CAPACITY ),
 
 /* Reported by Olaf Hering <olh@suse.de> from novell bug #105878 */
 UNUSUAL_DEV(  0x0424, 0x0fdc, 0x0210, 0x0210,
@@ -1241,6 +1246,17 @@ UNUSUAL_DEV(  0x0851, 0x1543, 0x0200, 0x0200,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_NOT_LOCKABLE),
 
+/* Andrew Lunn <andrew@lunn.ch>
+ * PanDigital Digital Picture Frame. Does not like ALLOW_MEDIUM_REMOVAL
+ * on LUN 4.
+ * Note: Vend:Prod clash with "Ltd Maxell WS30 Slim Digital Camera"
+*/
+UNUSUAL_DEV(  0x0851, 0x1543, 0x0200, 0x0200,
+		"PanDigital",
+		"Photo Frame",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_NOT_LOCKABLE),
+
 /* Submitted by Jan De Luyck <lkml@kcore.org> */
 UNUSUAL_DEV(  0x08bd, 0x1100, 0x0000, 0x0000,
 		"CITIZEN",
@@ -1560,6 +1576,7 @@ UNUSUAL_DEV(  0x10d6, 0x2200, 0x0100, 0x0100,
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		0),
 
+#ifdef CONFIG_USB_STORAGE_SIERRA
 /* Reported by Kevin Lloyd <linux@sierrawireless.com>
  * Entry is needed for the initializer function override,
  * which instructs the device to load as a modem
@@ -1568,8 +1585,9 @@ UNUSUAL_DEV(  0x10d6, 0x2200, 0x0100, 0x0100,
 UNUSUAL_DEV(  0x1199, 0x0fff, 0x0000, 0x9999,
 		"Sierra Wireless",
 		"USB MMC Storage",
-		US_SC_DEVICE, US_PR_DEVICE, NULL,
-		US_FL_IGNORE_DEVICE),
+		US_SC_DEVICE, US_PR_DEVICE, sierra_ms_init,
+		0),
+#endif
 
 /* Reported by Jaco Kroon <jaco@kroon.co.za>
  * The usb-storage module found on the Digitech GNX4 (and supposedly other
@@ -1737,6 +1755,15 @@ UNUSUAL_DEV(  0x22b8, 0x3010, 0x0001, 0x0001,
 UNUSUAL_DEV(  0x22b8, 0x4810, 0x0001, 0x0002,
 		"Motorola",
 		"RAZR V3i/ROKR W5",
+		US_SC_DEVICE, US_PR_DEVICE, NULL,
+		US_FL_FIX_CAPACITY),
+
+/*
+ * Patch by Jost Diederichs <jost@qdusa.com>
+ */
+UNUSUAL_DEV(0x22b8, 0x6410, 0x0001, 0x9999,
+		"Motorola Inc.",
+		"Motorola Phone (RAZRV3xx)",
 		US_SC_DEVICE, US_PR_DEVICE, NULL,
 		US_FL_FIX_CAPACITY),
 
