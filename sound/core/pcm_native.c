@@ -22,6 +22,7 @@
 #include <linux/mm.h>
 #include <linux/file.h>
 #include <linux/slab.h>
+#include <linux/smp_lock.h>
 #include <linux/time.h>
 #include <linux/pm_qos_params.h>
 #include <linux/uio.h>
@@ -1545,9 +1546,15 @@ static int snd_pcm_drop(struct snd_pcm_substream *substream)
 	card = substream->pcm->card;
 
 	if (runtime->status->state == SNDRV_PCM_STATE_OPEN ||
-	    runtime->status->state == SNDRV_PCM_STATE_DISCONNECTED ||
-	    runtime->status->state == SNDRV_PCM_STATE_SUSPENDED)
+	    runtime->status->state == SNDRV_PCM_STATE_DISCONNECTED)
 		return -EBADFD;
+
+	snd_power_lock(card);
+	if (runtime->status->state == SNDRV_PCM_STATE_SUSPENDED) {
+		result = snd_power_wait(card, SNDRV_CTL_POWER_D0);
+		if (result < 0)
+			goto _unlock;
+	}
 
 	snd_pcm_stream_lock_irq(substream);
 	/* resume pause */
@@ -1557,7 +1564,8 @@ static int snd_pcm_drop(struct snd_pcm_substream *substream)
 	snd_pcm_stop(substream, SNDRV_PCM_STATE_SETUP);
 	/* runtime->control->appl_ptr = runtime->status->hw_ptr; */
 	snd_pcm_stream_unlock_irq(substream);
-
+ _unlock:
+	snd_power_unlock(card);
 	return result;
 }
 
@@ -3242,14 +3250,17 @@ static int snd_pcm_fasync(int fd, struct file * file, int on)
 	struct snd_pcm_file * pcm_file;
 	struct snd_pcm_substream *substream;
 	struct snd_pcm_runtime *runtime;
-	int err;
+	int err = -ENXIO;
 
+	lock_kernel();
 	pcm_file = file->private_data;
 	substream = pcm_file->substream;
-	snd_assert(substream != NULL, return -ENXIO);
+	snd_assert(substream != NULL, goto out);
 	runtime = substream->runtime;
 
 	err = fasync_helper(fd, file, on, &runtime->fasync);
+out:
+	unlock_kernel();
 	if (err < 0)
 		return err;
 	return 0;

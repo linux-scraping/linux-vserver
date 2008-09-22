@@ -26,6 +26,7 @@
 #include <linux/module.h>
 #include <linux/notifier.h>
 #include <linux/memcontrol.h>
+#include <linux/security.h>
 #include <linux/vs_memory.h>
 
 int sysctl_panic_on_oom;
@@ -135,7 +136,8 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * Superuser processes are usually more important, so we make it
 	 * less likely that we kill those.
 	 */
-	if (__capable(p, CAP_SYS_ADMIN) || __capable(p, CAP_SYS_RESOURCE))
+	if (has_capability(p, CAP_SYS_ADMIN) ||
+	    has_capability(p, CAP_SYS_RESOURCE))
 		points /= 4;
 
 	/*
@@ -144,7 +146,7 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * tend to only have this flag set on applications they think
 	 * of as important.
 	 */
-	if (__capable(p, CAP_SYS_RAWIO))
+	if (has_capability(p, CAP_SYS_RAWIO))
 		points /= 4;
 
 	/*

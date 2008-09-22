@@ -781,7 +781,7 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 		return -ENODEV;
 
 	card = pcm->card;
-	read_lock(&card->ctl_files_rwlock);
+	down_read(&card->controls_rwsem);
 	list_for_each_entry(kctl, &card->ctl_files, list) {
 		if (kctl->pid == current->pid) {
 			prefer_subdevice = kctl->prefer_pcm_subdevice;
@@ -789,7 +789,7 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 				break;
 		}
 	}
-	read_unlock(&card->ctl_files_rwlock);
+	up_read(&card->controls_rwsem);
 
 	switch (stream) {
 	case SNDRV_PCM_STREAM_PLAYBACK:
