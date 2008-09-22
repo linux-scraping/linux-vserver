@@ -17,6 +17,7 @@
 #include <linux/file.h>
 #include <linux/mount.h>
 #include <linux/parser.h>
+#include <linux/namei.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vs_base.h>
@@ -72,18 +73,18 @@ static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint
 
 int vc_get_iattr(void __user *data)
 {
-	struct nameidata nd;
+	struct path path;
 	struct vcmd_ctx_iattr_v1 vc_data = { .tag = -1 };
 	int ret;
 
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(vc_data.name, &nd);
+	ret = user_lpath(vc_data.name, &path);
 	if (!ret) {
-		ret = __vc_get_iattr(nd.path.dentry->d_inode,
+		ret = __vc_get_iattr(path.dentry->d_inode,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_put(&nd.path);
+		path_put(&path);
 	}
 	if (ret)
 		return ret;
@@ -97,18 +98,18 @@ int vc_get_iattr(void __user *data)
 
 int vc_get_iattr_x32(void __user *data)
 {
-	struct nameidata nd;
+	struct path path;
 	struct vcmd_ctx_iattr_v1_x32 vc_data = { .tag = -1 };
 	int ret;
 
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
+	ret = user_lpath(compat_ptr(vc_data.name_ptr), &path);
 	if (!ret) {
-		ret = __vc_get_iattr(nd.path.dentry->d_inode,
+		ret = __vc_get_iattr(path.dentry->d_inode,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_put(&nd.path);
+		path_put(&path);
 	}
 	if (ret)
 		return ret;
@@ -223,7 +224,7 @@ out:
 
 int vc_set_iattr(void __user *data)
 {
-	struct nameidata nd;
+	struct path path;
 	struct vcmd_ctx_iattr_v1 vc_data;
 	int ret;
 
@@ -232,11 +233,11 @@ int vc_set_iattr(void __user *data)
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(vc_data.name, &nd);
+	ret = user_lpath(vc_data.name, &path);
 	if (!ret) {
-		ret = __vc_set_iattr(nd.path.dentry,
+		ret = __vc_set_iattr(path.dentry,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_put(&nd.path);
+		path_put(&path);
 	}
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
@@ -248,7 +249,7 @@ int vc_set_iattr(void __user *data)
 
 int vc_set_iattr_x32(void __user *data)
 {
-	struct nameidata nd;
+	struct path path;
 	struct vcmd_ctx_iattr_v1_x32 vc_data;
 	int ret;
 
@@ -257,11 +258,11 @@ int vc_set_iattr_x32(void __user *data)
 	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
-	ret = user_path_walk_link(compat_ptr(vc_data.name_ptr), &nd);
+	ret = user_lpath(compat_ptr(vc_data.name_ptr), &path);
 	if (!ret) {
-		ret = __vc_set_iattr(nd.path.dentry,
+		ret = __vc_set_iattr(path.dentry,
 			&vc_data.tag, &vc_data.flags, &vc_data.mask);
-		path_put(&nd.path);
+		path_put(&path);
 	}
 
 	if (copy_to_user(data, &vc_data, sizeof(vc_data)))

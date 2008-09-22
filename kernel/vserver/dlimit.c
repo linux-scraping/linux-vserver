@@ -12,6 +12,7 @@
 
 #include <linux/statfs.h>
 #include <linux/sched.h>
+#include <linux/namei.h>
 #include <linux/vs_tag.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/dlimit_cmd.h>
@@ -177,18 +178,18 @@ void rcu_free_dl_info(struct rcu_head *head)
 static int do_addrem_dlimit(uint32_t id, const char __user *name,
 	uint32_t flags, int add)
 {
-	struct nameidata nd;
+	struct path path;
 	int ret;
 
-	ret = user_path_walk_link(name, &nd);
+	ret = user_lpath(name, &path);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.path.dentry->d_inode)
+		if (!path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.path.dentry->d_inode->i_sb))
+		if (!(sb = path.dentry->d_inode->i_sb))
 			goto out_release;
 
 		if (add) {
@@ -215,7 +216,7 @@ static int do_addrem_dlimit(uint32_t id, const char __user *name,
 		if (add && dli)
 			__dealloc_dl_info(dli);
 	out_release:
-		path_put(&nd.path);
+		path_put(&path);
 	}
 	return ret;
 }
@@ -273,18 +274,18 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 	uint32_t inodes_used, uint32_t inodes_total,
 	uint32_t reserved, uint32_t flags)
 {
-	struct nameidata nd;
+	struct path path;
 	int ret;
 
-	ret = user_path_walk_link(name, &nd);
+	ret = user_lpath(name, &path);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.path.dentry->d_inode)
+		if (!path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.path.dentry->d_inode->i_sb))
+		if (!(sb = path.dentry->d_inode->i_sb))
 			goto out_release;
 		if ((reserved != CDLIM_KEEP &&
 			reserved > 100) ||
@@ -324,7 +325,7 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 		ret = 0;
 
 	out_release:
-		path_put(&nd.path);
+		path_put(&path);
 	}
 	return ret;
 }
@@ -366,18 +367,18 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 	uint32_t *inodes_used, uint32_t *inodes_total,
 	uint32_t *reserved, uint32_t *flags)
 {
-	struct nameidata nd;
+	struct path path;
 	int ret;
 
-	ret = user_path_walk_link(name, &nd);
+	ret = user_lpath(name, &path);
 	if (!ret) {
 		struct super_block *sb;
 		struct dl_info *dli;
 
 		ret = -EINVAL;
-		if (!nd.path.dentry->d_inode)
+		if (!path.dentry->d_inode)
 			goto out_release;
-		if (!(sb = nd.path.dentry->d_inode->i_sb))
+		if (!(sb = path.dentry->d_inode->i_sb))
 			goto out_release;
 
 		ret = -ESRCH;
@@ -402,7 +403,7 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 
 		ret = 0;
 	out_release:
-		path_put(&nd.path);
+		path_put(&path);
 	}
 	return ret;
 }

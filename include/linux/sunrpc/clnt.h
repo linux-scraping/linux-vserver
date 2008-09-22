@@ -43,6 +43,7 @@ struct rpc_clnt {
 	unsigned int		cl_softrtry : 1,/* soft timeouts */
 				cl_discrtry : 1,/* disconnect before retry */
 				cl_autobind : 1,/* use getport() */
+				cl_chatty   : 1,/* be verbose */
 				cl_tag      : 1;/* context tagging */
 
 	struct rpc_rtt *	cl_rtt;		/* RTO estimator data */
@@ -115,6 +116,7 @@ struct rpc_create_args {
 #define RPC_CLNT_CREATE_NONPRIVPORT	(1UL << 3)
 #define RPC_CLNT_CREATE_NOPING		(1UL << 4)
 #define RPC_CLNT_CREATE_DISCRTRY	(1UL << 5)
+#define RPC_CLNT_CREATE_QUIET		(1UL << 6)
 
 struct rpc_clnt *rpc_create(struct rpc_create_args *args);
 struct rpc_clnt	*rpc_bind_new_program(struct rpc_clnt *,
@@ -124,6 +126,9 @@ void		rpc_shutdown_client(struct rpc_clnt *);
 void		rpc_release_client(struct rpc_clnt *);
 
 int		rpcb_register(u32, u32, int, unsigned short, int *);
+int		rpcb_v4_register(const u32 program, const u32 version,
+				 const struct sockaddr *address,
+				 const char *netid, int *result);
 int		rpcb_getport_sync(struct sockaddr_in *, u32, u32, int);
 void		rpcb_getport_async(struct rpc_task *);
 

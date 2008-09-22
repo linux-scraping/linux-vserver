@@ -16,7 +16,7 @@
 #include <asm/machvec.h>
 #include <asm/uaccess.h>
 #include <asm/thread_info.h>
-#include <asm/cpu/mmu_context.h>
+#include <cpu/mmu_context.h>
 
 atomic_t irq_err_count;
 
