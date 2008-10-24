@@ -39,7 +39,6 @@ struct mnt_namespace;
 
 #define MNT_TAGID	0x10000
 #define MNT_NOTAG	0x20000
-#define MNT_NOTAGCHECK	0x40000
 
 struct vfsmount {
 	struct list_head mnt_hash;

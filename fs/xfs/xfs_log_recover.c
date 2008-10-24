@@ -2417,8 +2417,7 @@ xlog_recover_do_inode_trans(
 
 	/* The core is in in-core format */
 	xfs_dinode_to_disk(&dip->di_core,
-		(xfs_icdinode_t *)item->ri_buf[1].i_addr,
-		mp->m_flags & XFS_MOUNT_TAGGED);
+		(xfs_icdinode_t *)item->ri_buf[1].i_addr);
 
 	/* the rest is in on-disk format */
 	if (item->ri_buf[1].i_len > sizeof(xfs_dinode_core_t)) {

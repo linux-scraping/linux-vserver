@@ -135,10 +135,9 @@ asmlinkage long sys_dup(unsigned int fildes)
 
 	if (file) {
 		ret = get_unused_fd();
-		if (ret >= 0) {
+		if (ret >= 0)
 			fd_install(ret, file);
-			vx_openfd_inc(ret);
-		} else
+		else
 			fput(file);
 	}
 	return ret;

@@ -53,7 +53,6 @@
 #include <linux/namei.h>
 #include <linux/security.h>
 #include <linux/falloc.h>
-#include <linux/vs_tag.h>
 
 /*
  * Bring the atime in the XFS inode uptodate.
@@ -380,7 +379,6 @@ xfs_vn_link(
 		iput(inode);
 		return -error;
 	}
-	dx_propagate_tag(nd, vn_to_inode(cvp));
 
 	xfs_iflags_set(XFS_I(dir), XFS_IMODIFIED);
 	d_instantiate(dentry, inode);
@@ -560,7 +558,6 @@ xfs_vn_getattr(
 	stat->nlink = ip->i_d.di_nlink;
 	stat->uid = ip->i_d.di_uid;
 	stat->gid = ip->i_d.di_gid;
-	stat->tag = ip->i_d.di_tag;
 	stat->ino = ip->i_ino;
 #if XFS_BIG_INUMS
 	stat->ino += mp->m_inoadd;
@@ -597,57 +594,6 @@ xfs_vn_getattr(
 	}
 
 	return 0;
-}
-
-/* Propagate flags from i_flags to XFS_I(inode)->di_flags */
-STATIC void
-xfs_get_inode_flags(struct inode *inode)
-{
-	xfs_inode_t *ip = XFS_I(inode);
-	unsigned int flags = inode->i_flags;
-	unsigned int vflags = inode->i_vflags;
-
-	if (flags & S_IMMUTABLE)
-		ip->i_d.di_flags |= XFS_DIFLAG_IMMUTABLE;
-	else
-		ip->i_d.di_flags &= ~XFS_DIFLAG_IMMUTABLE;
-	if (flags & S_IXUNLINK)
-		ip->i_d.di_flags |= XFS_DIFLAG_IXUNLINK;
-	else
-		ip->i_d.di_flags &= ~XFS_DIFLAG_IXUNLINK;
-
-	if (vflags & V_BARRIER)
-		ip->i_d.di_vflags |= XFS_DIVFLAG_BARRIER;
-	else
-		ip->i_d.di_vflags &= ~XFS_DIVFLAG_BARRIER;
-	if (vflags & V_COW)
-		ip->i_d.di_vflags |= XFS_DIVFLAG_COW;
-	else
-		ip->i_d.di_vflags &= ~XFS_DIVFLAG_COW;
-}
-
-STATIC int
-xfs_vn_sync_flags(struct inode *inode)
-{
-	xfs_inode_t *ip = XFS_I(inode);
-	struct bhv_vattr *vattr;
-	int error;
-
-	vattr = kmalloc(sizeof(*vattr), GFP_KERNEL);
-	if (unlikely(!vattr))
-		return -ENOMEM;
-
-	xfs_get_inode_flags(inode);
-
-	vattr->va_mask = XFS_AT_XFLAGS;
-	vattr->va_xflags = xfs_ip2xflags(ip);
-
-	error = -xfs_setattr(ip, vattr, 0, NULL);
-	if (likely(!error))
-		vn_revalidate(XFS_ITOV(ip));	/* update flags */
-
-	kfree(vattr);
-	return error;
 }
 
 STATIC int
@@ -725,7 +671,6 @@ static const struct inode_operations xfs_inode_operations = {
 	.removexattr		= generic_removexattr,
 	.listxattr		= xfs_vn_listxattr,
 	.fallocate		= xfs_vn_fallocate,
-	.sync_flags		= xfs_vn_sync_flags,
 };
 
 static const struct inode_operations xfs_dir_inode_operations = {
@@ -800,10 +745,6 @@ xfs_diflags_to_iflags(
 		inode->i_flags |= S_IMMUTABLE;
 	else
 		inode->i_flags &= ~S_IMMUTABLE;
-	if (ip->i_d.di_flags & XFS_DIFLAG_IXUNLINK)
-		inode->i_flags |= S_IXUNLINK;
-	else
-		inode->i_flags &= ~S_IXUNLINK;
 	if (ip->i_d.di_flags & XFS_DIFLAG_APPEND)
 		inode->i_flags |= S_APPEND;
 	else
@@ -816,15 +757,6 @@ xfs_diflags_to_iflags(
 		inode->i_flags |= S_NOATIME;
 	else
 		inode->i_flags &= ~S_NOATIME;
-
-	if (ip->i_d.di_vflags & XFS_DIVFLAG_BARRIER)
-		inode->i_vflags |= V_BARRIER;
-	else
-		inode->i_vflags &= ~V_BARRIER;
-	if (ip->i_d.di_vflags & XFS_DIVFLAG_COW)
-		inode->i_vflags |= V_COW;
-	else
-		inode->i_vflags &= ~V_COW;
 }
 
 /*
@@ -845,7 +777,6 @@ xfs_setup_inode(
 	inode->i_nlink	= ip->i_d.di_nlink;
 	inode->i_uid	= ip->i_d.di_uid;
 	inode->i_gid	= ip->i_d.di_gid;
-	inode->i_tag    = ip->i_d.di_tag;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFBLK:

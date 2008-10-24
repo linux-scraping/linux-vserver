@@ -147,9 +147,6 @@ xfs_args_allocate(
 #define MNTOPT_DMAPI	"dmapi"		/* DMI enabled (DMAPI / XDSM) */
 #define MNTOPT_XDSM	"xdsm"		/* DMI enabled (DMAPI / XDSM) */
 #define MNTOPT_DMI	"dmi"		/* DMI enabled (DMAPI / XDSM) */
-#define MNTOPT_TAGXID	"tagxid"	/* context tagging for inodes */
-#define MNTOPT_TAGGED	"tag"		/* context tagging for inodes */
-#define MNTOPT_NOTAGTAG	"notag"		/* do not use context tagging */
 
 /*
  * Table driven mount option parser.
@@ -386,19 +383,6 @@ xfs_parseargs(
 		} else if (!strcmp(this_char, "irixsgid")) {
 			cmn_err(CE_WARN,
 	"XFS: irixsgid is now a sysctl(2) variable, option is deprecated.");
-#ifndef CONFIG_TAGGING_NONE
-		} else if (!strcmp(this_char, MNTOPT_TAGGED)) {
-			args->flags2 |= XFSMNT2_TAGGED;
-		} else if (!strcmp(this_char, MNTOPT_NOTAGTAG)) {
-			args->flags2 &= ~XFSMNT2_TAGGED;
-		} else if (!strcmp(this_char, MNTOPT_TAGXID)) {
-			args->flags2 |= XFSMNT2_TAGGED;
-#endif
-#ifdef CONFIG_PROPAGATE
-		} else if (!strcmp(this_char, MNTOPT_TAGGED)) {
-			/* use value */
-			args->flags2 |= XFSMNT2_TAGGED;
-#endif
 		} else {
 			cmn_err(CE_WARN,
 				"XFS: unknown mount option [%s].", this_char);
@@ -1317,14 +1301,6 @@ xfs_fs_remount(
 		case Opt_nobarrier:
 			mp->m_flags &= ~XFS_MOUNT_BARRIER;
 			break;
-		case Opt_tag:
-		case Opt_notag:
-			/*
-			 * !(sb->s_flags & MS_TAGGED)) {
-			 *      printk("XFS: %s: tagging not permitted on remount.\n",
-			 *          sb->s_id);
-			 *  error = EINVAL; */
-			break;
 		default:
 			/*
 			 * Logically we would return an error here to prevent
@@ -1347,7 +1323,7 @@ xfs_fs_remount(
 	"XFS: mount option \"%s\" not supported for remount\n", p);
 			return -EINVAL;
 #else
-			return 0;
+			break;
 #endif
 		}
 	}
@@ -1579,9 +1555,6 @@ xfs_start_flags(
 
 	if (ap->flags & XFSMNT_DMAPI)
 		mp->m_flags |= XFS_MOUNT_DMAPI;
-
-	if (ap->flags2 & XFSMNT2_TAGGED)
-		mp->m_flags |= XFS_MOUNT_TAGGED;
 	return 0;
 
 
@@ -1775,9 +1748,6 @@ xfs_fs_fill_super(
 		goto out_filestream_unmount;
 
 	XFS_SEND_MOUNT(mp, DM_RIGHT_NULL, args->mtpt, args->fsname);
-
-	if (mp->m_flags & XFS_MOUNT_TAGGED)
-		sb->s_flags |= MS_TAGGED;
 
 	sb->s_dirt = 1;
 	sb->s_magic = XFS_SB_MAGIC;
