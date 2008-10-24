@@ -38,6 +38,7 @@
 #include <linux/vs_cowbl.h>
 #include <linux/vs_device.h>
 #include <linux/vs_context.h>
+#include <linux/pid_namespace.h>
 #include <asm/uaccess.h>
 
 #define ACC_MODE(x) ("\000\004\002\006"[(x)&O_ACCMODE])
@@ -176,23 +177,54 @@ EXPORT_SYMBOL(putname);
 
 static inline int dx_barrier(struct inode *inode)
 {
-	if (IS_BARRIER(inode) && !vx_check(0, VS_ADMIN)) {
+	if (IS_BARRIER(inode) && !vx_check(0, VS_ADMIN | VS_WATCH)) {
 		vxwprintk_task(1, "did hit the barrier.");
 		return 1;
 	}
 	return 0;
 }
 
-static inline int dx_permission(struct inode *inode, int mask, struct nameidata *nd)
+int dx_permission(struct inode *inode, int mask)
 {
-	if (dx_barrier(inode))
-		return -EACCES;
-	if (dx_notagcheck(nd) ||
-	    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
+	if (vx_check(0, VS_ADMIN | VS_WATCH))
 		return 0;
 
-	vxwprintk_task(1, "denied access to %p[#%d,%lu] »%s«.",
-		inode, inode->i_tag, inode->i_ino, vxd_cond_path(nd));
+	if (dx_barrier(inode))
+		return -EACCES;
+
+	if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
+		/* devpts is xid tagged */
+		if (S_ISDIR(inode->i_mode) ||
+		    vx_check((xid_t)inode->i_tag, VS_IDENT))
+			return 0;
+	}
+	else if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
+		struct pid *pid = PROC_I(inode)->pid;
+		struct task_struct *tsk;
+		if ((mask & (MAY_WRITE | MAY_APPEND))) {
+			if (!pid)
+				goto out;
+
+			tsk = pid_task(pid, PIDTYPE_PID);
+			vxdprintk(VXD_CBIT(tag, 0), "accessing %p[#%u]",
+				       tsk, (tsk ? vx_task_xid(tsk) : 0));
+			if (tsk && vx_check(vx_task_xid(tsk), VS_IDENT))
+				return 0;
+		}
+		else {
+			/* FIXME: Should we block some entries here? */
+			return 0;
+		}
+	}
+	else {
+		if (dx_notagcheck(inode->i_sb) ||
+		    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
+			return 0;
+	}
+
+out:
+	vxwprintk_task(1, "denied access to %s:%p[#%d,%lu].",
+		inode->i_sb->s_id, inode, inode->i_tag, inode->i_ino);
 	return -EACCES;
 }
 
@@ -277,9 +309,8 @@ int inode_permission(struct inode *inode, int mask)
 			return -EACCES;
 	}
 
-	if ((inode->i_sb->s_magic != DEVPTS_SUPER_MAGIC) &&
-		(inode->i_sb->s_magic != PROC_SUPER_MAGIC) &&
-		(retval = dx_permission(inode, mask, NULL)))
+	retval = dx_permission(inode, mask);
+	if (retval)
 		return retval;
 
 	/* Ordinary permission routines do not understand MAY_APPEND. */
@@ -866,7 +897,7 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 		if (!vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
 			goto hidden;
 	} else {
-		if (!dx_notagcheck(nd) && !dx_check(inode->i_tag,
+		if (!dx_notagcheck(inode->i_sb) && !dx_check(inode->i_tag,
 			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
 			goto hidden;
 	}
@@ -877,7 +908,7 @@ done:
 	return 0;
 hidden:
 	vxwprintk_task(1, "did lookup hidden %p[#%d,%lu] »%s«.",
-		inode, inode->i_tag, inode->i_ino, vxd_path(path));
+		inode, inode->i_tag, inode->i_ino, vxd_path(&nd->path));
 	dput(dentry);
 	return -ENOENT;
 

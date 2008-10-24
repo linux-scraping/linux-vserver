@@ -126,7 +126,7 @@
 
 #define current_cpu()		(raw_smp_processor_id())
 #define current_pid()		(current->pid)
-#define current_fstag(cred,vp)	(dx_current_fstag(vn_to_inode(vp)->i_sb))
+#define current_fstag(cred,vp)	(dx_current_fstag(vp->i_sb))
 #define current_test_flags(f)	(current->flags & (f))
 #define current_set_flags_nested(sp, f)		\
 		(*(sp) = current->flags, current->flags |= (f))

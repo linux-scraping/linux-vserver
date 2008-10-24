@@ -91,7 +91,6 @@ xfs_setattr(
 	uint			commit_flags=0;
 	uid_t			uid=0, iuid=0;
 	gid_t			gid=0, igid=0;
-	tag_t			tag=0, itag=0;
 	int			timeflags = 0;
 	struct xfs_dquot	*udqp, *gdqp, *olddquot1, *olddquot2;
 	int			file_owner;
@@ -248,10 +247,8 @@ xfs_setattr(
 		 */
 		iuid = ip->i_d.di_uid;
 		igid = ip->i_d.di_gid;
-		itag = ip->i_d.di_tag;
 		gid = (mask & ATTR_GID) ? iattr->ia_gid : igid;
 		uid = (mask & ATTR_UID) ? iattr->ia_uid : iuid;
-		tag = (mask & ATTR_TAG) ? iattr->ia_tag : itag;
 
 		/*
 		 * CAP_CHOWN overrides the following restrictions:
@@ -276,7 +273,6 @@ xfs_setattr(
 		 */
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
 		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
-			/* TODO: handle tagging? */
 			ASSERT(tp);
 			code = XFS_QM_DQVOPCHOWNRESV(mp, tp, ip, udqp, gdqp,
 						capable(CAP_FOWNER) ?
@@ -481,9 +477,6 @@ xfs_setattr(
 		 * Change the ownerships and register quota modifications
 		 * in the transaction.
 		 */
-		if (itag != tag) {
-			ip->i_d.di_tag = tag;
-		}
 		if (iuid != uid) {
 			if (XFS_IS_UQUOTA_ON(mp)) {
 				ASSERT(mask & ATTR_UID);

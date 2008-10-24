@@ -242,7 +242,7 @@ struct flex_groups {
 #define EXT4_HUGE_FILE_FL               0x00040000 /* Set to each huge file */
 #define EXT4_EXTENTS_FL			0x00080000 /* Inode uses extents */
 #define EXT4_EXT_MIGRATE		0x00100000 /* Inode is migrating */
-#define EXT4_IXUNLINK_FL		0x01000000 /* Immutable invert on unlink */
+#define EXT4_IXUNLINK_FL		0x08000000 /* Immutable invert on unlink */
 #define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 
 #define EXT4_BARRIER_FL			0x10000000 /* Barrier for chroot() */

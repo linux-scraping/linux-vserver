@@ -130,13 +130,14 @@ extern int dir_notify_enable;
 #define MS_I_VERSION	(1<<23) /* Update inode I_version field */
 #define MS_TAGGED	(1<<24) /* use generic inode tagging */
 #define MS_TAGID	(1<<25) /* use specific tag for this mount */
+#define MS_NOTAGCHECK	(1<<26) /* don't check tags */
 #define MS_ACTIVE	(1<<30)
 #define MS_NOUSER	(1<<31)
 
 /*
  * Superblock flags that can be altered by MS_REMOUNT
  */
-#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK)
+#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK|MS_NOTAGCHECK)
 
 /*
  * Old magic mount flag and mask
@@ -285,7 +286,7 @@ extern int dir_notify_enable;
 #define FS_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
 #define FS_EXTENT_FL			0x00080000 /* Extents */
 #define FS_DIRECTIO_FL			0x00100000 /* Use direct i/o */
-#define FS_IXUNLINK_FL			0x01000000 /* Immutable invert on unlink */
+#define FS_IXUNLINK_FL			0x08000000 /* Immutable invert on unlink */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
 #define FS_BARRIER_FL			0x10000000 /* Barrier for chroot() */

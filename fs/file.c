@@ -478,6 +478,7 @@ repeat:
 	else
 		FD_CLR(fd, fdt->close_on_exec);
 	error = fd;
+	vx_openfd_inc(fd);
 #if 1
 	/* Sanity check */
 	if (rcu_dereference(fdt->fd[fd]) != NULL) {

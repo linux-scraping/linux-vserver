@@ -206,8 +206,6 @@ static int ath_key_config(struct ath_softc *sc,
 	if (!ret)
 		return -EIO;
 
-	if (mac)
-		sc->sc_keytype = hk.kv_type;
 	return 0;
 }
 
@@ -778,7 +776,6 @@ static int ath9k_set_key(struct ieee80211_hw *hw,
 	case DISABLE_KEY:
 		ath_key_delete(sc, key);
 		clear_bit(key->keyidx, sc->sc_keymap);
-		sc->sc_keytype = ATH9K_CIPHER_CLR;
 		break;
 	default:
 		ret = -EINVAL;
@@ -1010,6 +1007,11 @@ static int ath9k_ampdu_action(struct ieee80211_hw *hw,
 	return ret;
 }
 
+static int ath9k_no_fragmentation(struct ieee80211_hw *hw, u32 value)
+{
+	return -EOPNOTSUPP;
+}
+
 static struct ieee80211_ops ath9k_ops = {
 	.tx 		    = ath9k_tx,
 	.start 		    = ath9k_start,
@@ -1034,7 +1036,8 @@ static struct ieee80211_ops ath9k_ops = {
 	.get_tsf 	    = ath9k_get_tsf,
 	.reset_tsf 	    = ath9k_reset_tsf,
 	.tx_last_beacon     = NULL,
-	.ampdu_action       = ath9k_ampdu_action
+	.ampdu_action       = ath9k_ampdu_action,
+	.set_frag_threshold = ath9k_no_fragmentation,
 };
 
 void ath_get_beaconconfig(struct ath_softc *sc,
@@ -1414,10 +1417,17 @@ static void ath_pci_remove(struct pci_dev *pdev)
 {
 	struct ieee80211_hw *hw = pci_get_drvdata(pdev);
 	struct ath_softc *sc = hw->priv;
+	enum ath9k_int status;
 
-	if (pdev->irq)
+	if (pdev->irq) {
+		ath9k_hw_set_interrupts(sc->sc_ah, 0);
+		/* clear the ISR */
+		ath9k_hw_getisr(sc->sc_ah, &status);
+		sc->sc_invalid = 1;
 		free_irq(pdev->irq, sc);
+	}
 	ath_detach(sc);
+
 	pci_iounmap(pdev, sc->mem);
 	pci_release_region(pdev, 0);
 	pci_disable_device(pdev);

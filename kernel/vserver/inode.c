@@ -326,53 +326,65 @@ static void __dx_parse_remove(char *string, char *opt)
 	}
 }
 
-static inline
-int __dx_parse_tag(char *string, tag_t *tag, int remove)
+int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
+		 unsigned long *flags)
 {
+	int set = 0;
 	substring_t args[MAX_OPT_ARGS];
 	int token, option = 0;
+	char *s, *p, *opts;
 
 	if (!string)
 		return 0;
+	s = kstrdup(string, GFP_KERNEL | GFP_ATOMIC);
+	if (!s)
+		return 0;
 
-	token = match_token(string, tokens, args);
+	opts = s;
+	while ((p = strsep(&opts, ",")) != NULL) {
+		token = match_token(p, tokens, args);
 
-	vxdprintk(VXD_CBIT(tag, 7),
-		"dx_parse_tag(»%s«): %d:#%d",
-		string, token, option);
+		vxdprintk(VXD_CBIT(tag, 7),
+			"dx_parse_tag(»%s«): %d:#%d",
+			p, token, option);
 
-	switch (token) {
-	case Opt_tag:
-		if (tag)
-			*tag = 0;
-		if (remove)
-			__dx_parse_remove(string, "tag");
-		return MNT_TAGID;
-	case Opt_notag:
-		if (remove)
-			__dx_parse_remove(string, "notag");
-		return MNT_NOTAG;
-	case Opt_notagcheck:
-		if (remove)
-			__dx_parse_remove(string, "notagcheck");
-		return MNT_NOTAGCHECK;
-	case Opt_tagid:
-		if (tag && !match_int(args, &option))
-			*tag = option;
-		if (remove)
-			__dx_parse_remove(string, "tagid");
-		return MNT_TAGID;
+		switch (token) {
+#ifdef CONFIG_PROPAGATE
+		case Opt_tag:
+			if (tag)
+				*tag = 0;
+			if (remove)
+				__dx_parse_remove(s, "tag");
+			*mnt_flags |= MNT_TAGID;
+			set |= MNT_TAGID;
+			break;
+		case Opt_notag:
+			if (remove)
+				__dx_parse_remove(s, "notag");
+			*mnt_flags |= MNT_NOTAG;
+			set |= MNT_NOTAG;
+			break;
+		case Opt_tagid:
+			if (tag && !match_int(args, &option))
+				*tag = option;
+			if (remove)
+				__dx_parse_remove(s, "tagid");
+			*mnt_flags |= MNT_TAGID;
+			set |= MNT_TAGID;
+			break;
+#endif
+		case Opt_notagcheck:
+			if (remove)
+				__dx_parse_remove(s, "notagcheck");
+			*flags |= MS_NOTAGCHECK;
+			set |= MS_NOTAGCHECK;
+			break;
+		}
 	}
-	return 0;
-}
-
-int dx_parse_tag(char *string, tag_t *tag, int remove)
-{
-	int retval, flags = 0;
-
-	while ((retval = __dx_parse_tag(string, tag, remove)))
-		flags |= retval;
-	return flags;
+	if (set)
+		strcpy(string, s);
+	kfree(s);
+	return set;
 }
 
 #ifdef	CONFIG_PROPAGATE

@@ -249,7 +249,6 @@ xfs_inotobp(
 	return 0;
 }
 
-#include <linux/vs_tag.h>
 
 /*
  * This routine is called to map an inode to the buffer containing
@@ -661,25 +660,15 @@ xfs_iformat_btree(
 void
 xfs_dinode_from_disk(
 	xfs_icdinode_t		*to,
-	xfs_dinode_core_t	*from,
-	int tagged)
+	xfs_dinode_core_t	*from)
 {
-	uint32_t uid, gid, tag;
-
 	to->di_magic = be16_to_cpu(from->di_magic);
 	to->di_mode = be16_to_cpu(from->di_mode);
 	to->di_version = from ->di_version;
 	to->di_format = from->di_format;
 	to->di_onlink = be16_to_cpu(from->di_onlink);
-
-	uid = be32_to_cpu(from->di_uid);
-	gid = be32_to_cpu(from->di_gid);
-	tag = be16_to_cpu(from->di_tag);
-
-	to->di_uid = INOTAG_UID(tagged, uid, gid);
-	to->di_gid = INOTAG_GID(tagged, uid, gid);
-	to->di_tag = INOTAG_TAG(tagged, uid, gid, tag);
-
+	to->di_uid = be32_to_cpu(from->di_uid);
+	to->di_gid = be32_to_cpu(from->di_gid);
 	to->di_nlink = be32_to_cpu(from->di_nlink);
 	to->di_projid = be16_to_cpu(from->di_projid);
 	memcpy(to->di_pad, from->di_pad, sizeof(to->di_pad));
@@ -700,26 +689,21 @@ xfs_dinode_from_disk(
 	to->di_dmevmask	= be32_to_cpu(from->di_dmevmask);
 	to->di_dmstate	= be16_to_cpu(from->di_dmstate);
 	to->di_flags	= be16_to_cpu(from->di_flags);
-	to->di_vflags	= be16_to_cpu(from->di_vflags);
 	to->di_gen	= be32_to_cpu(from->di_gen);
 }
 
 void
 xfs_dinode_to_disk(
 	xfs_dinode_core_t	*to,
-	xfs_icdinode_t		*from,
-	int tagged)
+	xfs_icdinode_t		*from)
 {
 	to->di_magic = cpu_to_be16(from->di_magic);
 	to->di_mode = cpu_to_be16(from->di_mode);
 	to->di_version = from ->di_version;
 	to->di_format = from->di_format;
 	to->di_onlink = cpu_to_be16(from->di_onlink);
-
-	to->di_uid = cpu_to_be32(TAGINO_UID(tagged, from->di_uid, from->di_tag));
-	to->di_gid = cpu_to_be32(TAGINO_GID(tagged, from->di_gid, from->di_tag));
-	to->di_tag = cpu_to_be16(TAGINO_TAG(tagged, from->di_tag));
-
+	to->di_uid = cpu_to_be32(from->di_uid);
+	to->di_gid = cpu_to_be32(from->di_gid);
 	to->di_nlink = cpu_to_be32(from->di_nlink);
 	to->di_projid = cpu_to_be16(from->di_projid);
 	memcpy(to->di_pad, from->di_pad, sizeof(to->di_pad));
@@ -740,14 +724,12 @@ xfs_dinode_to_disk(
 	to->di_dmevmask = cpu_to_be32(from->di_dmevmask);
 	to->di_dmstate = cpu_to_be16(from->di_dmstate);
 	to->di_flags = cpu_to_be16(from->di_flags);
-	to->di_vflags = cpu_to_be16(from->di_vflags);
 	to->di_gen = cpu_to_be32(from->di_gen);
 }
 
 STATIC uint
 _xfs_dic2xflags(
-	__uint16_t		di_flags,
-	__uint16_t		di_vflags)
+	__uint16_t		di_flags)
 {
 	uint			flags = 0;
 
@@ -758,8 +740,6 @@ _xfs_dic2xflags(
 			flags |= XFS_XFLAG_PREALLOC;
 		if (di_flags & XFS_DIFLAG_IMMUTABLE)
 			flags |= XFS_XFLAG_IMMUTABLE;
-		if (di_flags & XFS_DIFLAG_IXUNLINK)
-			flags |= XFS_XFLAG_IXUNLINK;
 		if (di_flags & XFS_DIFLAG_APPEND)
 			flags |= XFS_XFLAG_APPEND;
 		if (di_flags & XFS_DIFLAG_SYNC)
@@ -783,10 +763,7 @@ _xfs_dic2xflags(
 		if (di_flags & XFS_DIFLAG_FILESTREAM)
 			flags |= XFS_XFLAG_FILESTREAM;
 	}
-	if (di_vflags & XFS_DIVFLAG_BARRIER)
-		flags |= XFS_XFLAG_BARRIER;
-	if (di_vflags & XFS_DIVFLAG_COW)
-		flags |= XFS_XFLAG_COW;
+
 	return flags;
 }
 
@@ -796,7 +773,7 @@ xfs_ip2xflags(
 {
 	xfs_icdinode_t		*dic = &ip->i_d;
 
-	return _xfs_dic2xflags(dic->di_flags, dic->di_vflags) |
+	return _xfs_dic2xflags(dic->di_flags) |
 				(XFS_IFORK_Q(ip) ? XFS_XFLAG_HASATTR : 0);
 }
 
@@ -806,7 +783,7 @@ xfs_dic2xflags(
 {
 	xfs_dinode_core_t	*dic = &dip->di_core;
 
-	return _xfs_dic2xflags(be16_to_cpu(dic->di_flags), be16_to_cpu(dic->di_vflags)) |
+	return _xfs_dic2xflags(be16_to_cpu(dic->di_flags)) |
 				(XFS_DFORK_Q(dip) ? XFS_XFLAG_HASATTR : 0);
 }
 
@@ -901,8 +878,7 @@ xfs_iread(
 	 * Otherwise, just get the truly permanent information.
 	 */
 	if (dip->di_core.di_mode) {
-		xfs_dinode_from_disk(&ip->i_d, &dip->di_core,
-			mp->m_flags & XFS_MOUNT_TAGGED);
+		xfs_dinode_from_disk(&ip->i_d, &dip->di_core);
 		error = xfs_iformat(ip, dip);
 		if (error)  {
 			kmem_zone_free(xfs_inode_zone, ip);
@@ -1107,7 +1083,6 @@ xfs_ialloc(
 	ASSERT(ip->i_d.di_nlink == nlink);
 	ip->i_d.di_uid = current_fsuid();
 	ip->i_d.di_gid = current_fsgid();
-	ip->i_d.di_tag = current_fstag(cr, vp);
 	ip->i_d.di_projid = prid;
 	memset(&(ip->i_d.di_pad[0]), 0, sizeof(ip->i_d.di_pad));
 
@@ -1168,7 +1143,6 @@ xfs_ialloc(
 	ip->i_d.di_dmevmask = 0;
 	ip->i_d.di_dmstate = 0;
 	ip->i_d.di_flags = 0;
-	ip->i_d.di_vflags = 0;
 	flags = XFS_ILOG_CORE;
 	switch (mode & S_IFMT) {
 	case S_IFIFO:
@@ -1840,8 +1814,8 @@ xfs_iunlink(
 	agi_ok =
 		be32_to_cpu(agi->agi_magicnum) == XFS_AGI_MAGIC &&
 		XFS_AGI_GOOD_VERSION(be32_to_cpu(agi->agi_versionnum));
-	if (unlikely(XFS_TEST_ERROR(!agi_ok, mp, XFS_ERRTAG_IXUNLINK,
-			XFS_RANDOM_IXUNLINK))) {
+	if (unlikely(XFS_TEST_ERROR(!agi_ok, mp, XFS_ERRTAG_IUNLINK,
+			XFS_RANDOM_IUNLINK))) {
 		XFS_CORRUPTION_ERROR("xfs_iunlink", XFS_ERRLEVEL_LOW, mp, agi);
 		xfs_trans_brelse(tp, agibp);
 		return XFS_ERROR(EFSCORRUPTED);
@@ -1942,8 +1916,8 @@ xfs_iunlink_remove(
 	agi_ok =
 		be32_to_cpu(agi->agi_magicnum) == XFS_AGI_MAGIC &&
 		XFS_AGI_GOOD_VERSION(be32_to_cpu(agi->agi_versionnum));
-	if (unlikely(XFS_TEST_ERROR(!agi_ok, mp, XFS_ERRTAG_IXUNLINK_REMOVE,
-			XFS_RANDOM_IXUNLINK_REMOVE))) {
+	if (unlikely(XFS_TEST_ERROR(!agi_ok, mp, XFS_ERRTAG_IUNLINK_REMOVE,
+			XFS_RANDOM_IUNLINK_REMOVE))) {
 		XFS_CORRUPTION_ERROR("xfs_iunlink_remove", XFS_ERRLEVEL_LOW,
 				     mp, agi);
 		xfs_trans_brelse(tp, agibp);
@@ -2275,7 +2249,6 @@ xfs_ifree(
 	}
 	ip->i_d.di_mode = 0;		/* mark incore inode as free */
 	ip->i_d.di_flags = 0;
-	ip->i_d.di_vflags = 0;
 	ip->i_d.di_dmevmask = 0;
 	ip->i_d.di_forkoff = 0;		/* mark the attr fork not in use */
 	ip->i_df.if_ext_max =
@@ -3369,8 +3342,7 @@ xfs_iflush_int(
 	 * because if the inode is dirty at all the core must
 	 * be.
 	 */
-	xfs_dinode_to_disk(&dip->di_core, &ip->i_d,
-		mp->m_flags & XFS_MOUNT_TAGGED);
+	xfs_dinode_to_disk(&dip->di_core, &ip->i_d);
 
 	/* Wrap, we never let the log put out DI_MAX_FLUSH */
 	if (ip->i_d.di_flushiter == DI_MAX_FLUSH)
@@ -4146,7 +4118,7 @@ xfs_iext_indirect_to_direct(
 	ASSERT(nextents <= XFS_LINEAR_EXTS);
 	size = nextents * sizeof(xfs_bmbt_rec_t);
 
-	xfs_iext_irec_compact_full(ifp);
+	xfs_iext_irec_compact_pages(ifp);
 	ASSERT(ifp->if_real_bytes == XFS_IEXT_BUFSZ);
 
 	ep = ifp->if_u1.if_ext_irec->er_extbuf;
@@ -4477,8 +4449,7 @@ xfs_iext_irec_remove(
  * compaction policy is as follows:
  *
  *    Full Compaction: Extents fit into a single page (or inline buffer)
- *    Full Compaction: Extents occupy less than 10% of allocated space
- * Partial Compaction: Extents occupy > 10% and < 50% of allocated space
+ * Partial Compaction: Extents occupy less than 50% of allocated space
  *      No Compaction: Extents occupy at least 50% of allocated space
  */
 void
@@ -4499,8 +4470,6 @@ xfs_iext_irec_compact(
 		xfs_iext_direct_to_inline(ifp, nextents);
 	} else if (nextents <= XFS_LINEAR_EXTS) {
 		xfs_iext_indirect_to_direct(ifp);
-	} else if (nextents < (nlists * XFS_LINEAR_EXTS) >> 3) {
-		xfs_iext_irec_compact_full(ifp);
 	} else if (nextents < (nlists * XFS_LINEAR_EXTS) >> 1) {
 		xfs_iext_irec_compact_pages(ifp);
 	}
@@ -4524,7 +4493,7 @@ xfs_iext_irec_compact_pages(
 		erp_next = erp + 1;
 		if (erp_next->er_extcount <=
 		    (XFS_LINEAR_EXTS - erp->er_extcount)) {
-			memmove(&erp->er_extbuf[erp->er_extcount],
+			memcpy(&erp->er_extbuf[erp->er_extcount],
 				erp_next->er_extbuf, erp_next->er_extcount *
 				sizeof(xfs_bmbt_rec_t));
 			erp->er_extcount += erp_next->er_extcount;
@@ -4540,91 +4509,6 @@ xfs_iext_irec_compact_pages(
 		} else {
 			erp_idx++;
 		}
-	}
-}
-
-/*
- * Fully compact the extent records managed by the indirection array.
- */
-void
-xfs_iext_irec_compact_full(
-	xfs_ifork_t	*ifp)			/* inode fork pointer */
-{
-	xfs_bmbt_rec_host_t *ep, *ep_next;	/* extent record pointers */
-	xfs_ext_irec_t	*erp, *erp_next;	/* extent irec pointers */
-	int		erp_idx = 0;		/* extent irec index */
-	int		ext_avail;		/* empty entries in ex list */
-	int		ext_diff;		/* number of exts to add */
-	int		nlists;			/* number of irec's (ex lists) */
-
-	ASSERT(ifp->if_flags & XFS_IFEXTIREC);
-
-	nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
-	erp = ifp->if_u1.if_ext_irec;
-	ep = &erp->er_extbuf[erp->er_extcount];
-	erp_next = erp + 1;
-	ep_next = erp_next->er_extbuf;
-
-	while (erp_idx < nlists - 1) {
-		/*
-		 * Check how many extent records are available in this irec.
-		 * If there is none skip the whole exercise.
-		 */
-		ext_avail = XFS_LINEAR_EXTS - erp->er_extcount;
-		if (ext_avail) {
-
-			/*
-			 * Copy over as many as possible extent records into
-			 * the previous page.
-			 */
-			ext_diff = MIN(ext_avail, erp_next->er_extcount);
-			memcpy(ep, ep_next, ext_diff * sizeof(xfs_bmbt_rec_t));
-			erp->er_extcount += ext_diff;
-			erp_next->er_extcount -= ext_diff;
-
-			/*
-			 * If the next irec is empty now we can simply
-			 * remove it.
-			 */
-			if (erp_next->er_extcount == 0) {
-				/*
-				 * Free page before removing extent record
-				 * so er_extoffs don't get modified in
-				 * xfs_iext_irec_remove.
-				 */
-				kmem_free(erp_next->er_extbuf);
-				erp_next->er_extbuf = NULL;
-				xfs_iext_irec_remove(ifp, erp_idx + 1);
-				erp = &ifp->if_u1.if_ext_irec[erp_idx];
-				nlists = ifp->if_real_bytes / XFS_IEXT_BUFSZ;
-
-			/*
-			 * If the next irec is not empty move up the content
-			 * that has not been copied to the previous page to
-			 * the beggining of this one.
-			 */
-			} else {
-				memmove(erp_next->er_extbuf, &ep_next[ext_diff],
-					erp_next->er_extcount *
-					sizeof(xfs_bmbt_rec_t));
-				ep_next = erp_next->er_extbuf;
-				memset(&ep_next[erp_next->er_extcount], 0,
-					(XFS_LINEAR_EXTS -
-						erp_next->er_extcount) *
-					sizeof(xfs_bmbt_rec_t));
-			}
-		}
-
-		if (erp->er_extcount == XFS_LINEAR_EXTS) {
-			erp_idx++;
-			if (erp_idx < nlists)
-				erp = &ifp->if_u1.if_ext_irec[erp_idx];
-			else
-				break;
-		}
-		ep = &erp->er_extbuf[erp->er_extcount];
-		erp_next = erp + 1;
-		ep_next = erp_next->er_extbuf;
 	}
 }
 
