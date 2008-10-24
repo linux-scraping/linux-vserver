@@ -214,7 +214,6 @@ void dput(struct dentry *dentry)
 	if (!dentry)
 		return;
 
-	vx_dentry_dec(dentry);
 repeat:
 	if (atomic_read(&dentry->d_count) == 1)
 		might_sleep();
@@ -1404,6 +1403,10 @@ struct dentry * __d_lookup(struct dentry * parent, struct qstr * name)
 		if (dentry->d_parent != parent)
 			goto next;
 
+		/* non-existing due to RCU? */
+		if (d_unhashed(dentry))
+			goto next;
+
 		/*
 		 * It is safe to compare names since d_move() cannot
 		 * change the qstr (protected by d_lock).
@@ -1419,11 +1422,9 @@ struct dentry * __d_lookup(struct dentry * parent, struct qstr * name)
 				goto next;
 		}
 
-		if (!d_unhashed(dentry)) {
-			atomic_inc(&dentry->d_count);
-			vx_dentry_inc(dentry);
-			found = dentry;
-		}
+		atomic_inc(&dentry->d_count);
+		vx_dentry_inc(dentry);
+		found = dentry;
 		spin_unlock(&dentry->d_lock);
 		break;
 next:

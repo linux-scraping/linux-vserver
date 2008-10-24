@@ -7,7 +7,7 @@
 #define DX_TAG(in)	(IS_TAGGED(in))
 
 
-#ifdef CONFIG_DX_TAG_NFSD
+#ifdef CONFIG_TAG_NFSD
 #define DX_TAG_NFSD	1
 #else
 #define DX_TAG_NFSD	0
@@ -125,10 +125,10 @@ struct peer_tag {
 	int32_t nid;
 };
 
-#define dx_notagcheck(nd) ((nd) && (nd)->path.mnt && \
-	((nd)->path.mnt->mnt_flags & MNT_NOTAGCHECK))
+#define dx_notagcheck(sb) ((sb) && ((sb)->s_flags & MS_NOTAGCHECK))
 
-int dx_parse_tag(char *string, tag_t *tag, int remove);
+int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
+		 unsigned long *flags);
 
 #ifdef	CONFIG_PROPAGATE
 

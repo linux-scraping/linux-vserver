@@ -806,10 +806,6 @@ xfs_merge_ioc_xflags(
 		xflags |= XFS_XFLAG_IMMUTABLE;
 	else
 		xflags &= ~XFS_XFLAG_IMMUTABLE;
-	if (flags & FS_IXUNLINK_FL)
-		xflags |= XFS_XFLAG_IXUNLINK;
-	else
-		xflags &= ~XFS_XFLAG_IXUNLINK;
 	if (flags & FS_APPEND_FL)
 		xflags |= XFS_XFLAG_APPEND;
 	else
@@ -832,16 +828,12 @@ xfs_merge_ioc_xflags(
 
 STATIC unsigned int
 xfs_di2lxflags(
-	__uint16_t	di_flags,
-	__uint16_t	di_vflags)
+	__uint16_t	di_flags)
 {
 	unsigned int	flags = 0;
 
 	if (di_flags & XFS_DIFLAG_IMMUTABLE)
 		flags |= FS_IMMUTABLE_FL;
-	if (di_flags & XFS_DIFLAG_IXUNLINK)
-		flags |= FS_IXUNLINK_FL;
-
 	if (di_flags & XFS_DIFLAG_APPEND)
 		flags |= FS_APPEND_FL;
 	if (di_flags & XFS_DIFLAG_SYNC)
@@ -850,11 +842,6 @@ xfs_di2lxflags(
 		flags |= FS_NOATIME_FL;
 	if (di_flags & XFS_DIFLAG_NODUMP)
 		flags |= FS_NODUMP_FL;
-
-	if (di_vflags & XFS_DIVFLAG_BARRIER)
-		flags |= FS_BARRIER_FL;
-	if (di_vflags & XFS_DIVFLAG_COW)
-		flags |= FS_COW_FL;
 	return flags;
 }
 
@@ -905,8 +892,6 @@ xfs_set_diflags(
 	di_flags = (ip->i_d.di_flags & XFS_DIFLAG_PREALLOC);
 	if (xflags & XFS_XFLAG_IMMUTABLE)
 		di_flags |= XFS_DIFLAG_IMMUTABLE;
-	if (xflags & XFS_XFLAG_IXUNLINK)
-		di_flags |= XFS_DIFLAG_IXUNLINK;
 	if (xflags & XFS_XFLAG_APPEND)
 		di_flags |= XFS_DIFLAG_APPEND;
 	if (xflags & XFS_XFLAG_SYNC)
@@ -935,10 +920,6 @@ xfs_set_diflags(
 			di_flags |= XFS_DIFLAG_EXTSIZE;
 	}
 
-	if (xflags & XFS_XFLAG_BARRIER)
-		di_flags |= XFS_DIFLAG_BARRIER;
-	if (xflags & XFS_XFLAG_COW)
-		di_flags |= XFS_DIFLAG_COW;
 	ip->i_d.di_flags = di_flags;
 }
 
@@ -953,10 +934,6 @@ xfs_diflags_to_linux(
 		inode->i_flags |= S_IMMUTABLE;
 	else
 		inode->i_flags &= ~S_IMMUTABLE;
-	if (xflags & XFS_XFLAG_IXUNLINK)
-		inode->i_flags |= S_IXUNLINK;
-	else
-		inode->i_flags &= ~S_IXUNLINK;
 	if (xflags & XFS_XFLAG_APPEND)
 		inode->i_flags |= S_APPEND;
 	else
@@ -969,15 +946,6 @@ xfs_diflags_to_linux(
 		inode->i_flags |= S_NOATIME;
 	else
 		inode->i_flags &= ~S_NOATIME;
-
-	if (xflags & XFS_XFLAG_BARRIER)
-		inode->i_vflags |= V_BARRIER;
-	else
-		inode->i_vflags &= ~V_BARRIER;
-	if (xflags & XFS_XFLAG_COW)
-		inode->i_vflags |= V_COW;
-	else
-		inode->i_vflags &= ~V_COW;
 }
 
 #define FSX_PROJID	1
@@ -1255,8 +1223,7 @@ xfs_ioc_getxflags(
 {
 	unsigned int		flags;
 
-	flags = xfs_di2lxflags(ip->i_d.di_flags, ip->i_d.di_vflags);
-	flags &= ~(XFS_XFLAG_BARRIER | XFS_XFLAG_COW);
+	flags = xfs_di2lxflags(ip->i_d.di_flags);
 	if (copy_to_user(arg, &flags, sizeof(flags)))
 		return -EFAULT;
 	return 0;
@@ -1425,18 +1392,10 @@ xfs_ioctl(
 	case XFS_IOC_FSGETXATTRA:
 		return xfs_ioc_fsgetxattr(ip, 1, arg);
 	case XFS_IOC_FSSETXATTR:
-		if (IS_BARRIER(inode)) {
-			vxwprintk_task(1, "messing with the barrier.");
-			return -XFS_ERROR(EACCES);
-		}
 		return xfs_ioc_fssetxattr(ip, filp, arg);
 	case XFS_IOC_GETXFLAGS:
 		return xfs_ioc_getxflags(ip, arg);
 	case XFS_IOC_SETXFLAGS:
-		if (IS_BARRIER(inode)) {
-			vxwprintk_task(1, "messing with the barrier.");
-			return -XFS_ERROR(EACCES);
-		}
 		return xfs_ioc_setxflags(ip, filp, arg);
 
 	case XFS_IOC_FSSETDM: {

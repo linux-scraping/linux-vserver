@@ -1,8 +1,8 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 27
-EXTRAVERSION = -rc7-vs2.3.0.35.6pre
-NAME = Rotary Wombat
+EXTRAVERSION = .3-vs2.3.0.35.7
+NAME = Trembling Tortoise
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

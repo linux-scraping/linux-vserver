@@ -17,7 +17,6 @@
  */
 
 #include <linux/capability.h>
-#include <linux/vs_context.h>
 
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -206,7 +205,7 @@ xfs_qm_scall_quotaoff(
 	xfs_qoff_logitem_t	*qoffstart;
 	int			nculprits;
 
-	if (!force && !vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
+	if (!force && !capable(CAP_SYS_ADMIN))
 		return XFS_ERROR(EPERM);
 	/*
 	 * No file system can have quotas enabled on disk but not in core.
@@ -384,7 +383,7 @@ xfs_qm_scall_trunc_qfiles(
 	int		error = 0, error2 = 0;
 	xfs_inode_t	*qip;
 
-	if (!vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
+	if (!capable(CAP_SYS_ADMIN))
 		return XFS_ERROR(EPERM);
 	if (!xfs_sb_version_hasquota(&mp->m_sb) || flags == 0) {
 		qdprintk("qtrunc flags=%x m_qflags=%x\n", flags, mp->m_qflags);
@@ -596,7 +595,7 @@ xfs_qm_scall_setqlim(
 	int			error;
 	xfs_qcnt_t		hard, soft;
 
-	if (!vx_capable(CAP_SYS_ADMIN, VXC_QUOTA_CTL))
+	if (!capable(CAP_SYS_ADMIN))
 		return XFS_ERROR(EPERM);
 
 	if ((newlim->d_fieldmask &
