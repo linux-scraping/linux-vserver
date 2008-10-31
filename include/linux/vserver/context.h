@@ -86,6 +86,8 @@
 #include "cacct_def.h"
 #include "device_def.h"
 
+#define VX_SPACES	2
+
 struct _vx_info_pc {
 	struct _vx_sched_pc sched_pc;
 	struct _vx_cvirt_pc cvirt_pc;
@@ -99,9 +101,9 @@ struct vx_info {
 	struct vx_info *vx_parent;		/* parent context */
 	int vx_state;				/* context state */
 
-	unsigned long vx_nsmask;		/* assignment mask */
-	struct nsproxy *vx_nsproxy;		/* private namespace */
-	struct fs_struct *vx_fs;		/* private namespace fs */
+	unsigned long vx_nsmask[VX_SPACES];	/* assignment mask */
+	struct nsproxy *vx_nsproxy[VX_SPACES];	/* private namespaces */
+	struct fs_struct *vx_fs[VX_SPACES];	/* private namespace fs */
 
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_ccaps;			/* context caps (vserver) */

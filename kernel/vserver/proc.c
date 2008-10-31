@@ -126,9 +126,9 @@ int proc_vxi_status(struct vx_info *vxi, char *buffer)
 
 	buffer += sprintf(buffer,
 		"CCaps:\t%016llx\n"
-		"Spaces:\t%08lx\n",
+		"Spaces:\t%08lx %08lx\n",
 		(unsigned long long)vxi->vx_ccaps,
-		vxi->vx_nsmask);
+		vxi->vx_nsmask[0], vxi->vx_nsmask[1]);
 	return buffer - orig;
 }
 
@@ -150,9 +150,14 @@ int proc_vxi_sched(struct vx_info *vxi, char *buffer)
 	return length;
 }
 
-int proc_vxi_nsproxy(struct vx_info *vxi, char *buffer)
+int proc_vxi_nsproxy0(struct vx_info *vxi, char *buffer)
 {
-	return vx_info_proc_nsproxy(vxi->vx_nsproxy, buffer);
+	return vx_info_proc_nsproxy(vxi->vx_nsproxy[0], buffer);
+}
+
+int proc_vxi_nsproxy1(struct vx_info *vxi, char *buffer)
+{
+	return vx_info_proc_nsproxy(vxi->vx_nsproxy[1], buffer);
 }
 
 int proc_vxi_cvirt(struct vx_info *vxi, char *buffer)
@@ -544,7 +549,8 @@ static struct vs_entry vx_base_stuff[] = {
 	VINF("status",	S_IRUGO, vxi_status),
 	VINF("limit",	S_IRUGO, vxi_limit),
 	VINF("sched",	S_IRUGO, vxi_sched),
-	VINF("nsproxy",	S_IRUGO, vxi_nsproxy),
+	VINF("nsproxy",	S_IRUGO, vxi_nsproxy0),
+	VINF("nsproxy1",S_IRUGO, vxi_nsproxy1),
 	VINF("cvirt",	S_IRUGO, vxi_cvirt),
 	VINF("cacct",	S_IRUGO, vxi_cacct),
 	{}

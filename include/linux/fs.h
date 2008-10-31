@@ -137,7 +137,7 @@ extern int dir_notify_enable;
 /*
  * Superblock flags that can be altered by MS_REMOUNT
  */
-#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK|MS_NOTAGCHECK)
+#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK)
 
 /*
  * Old magic mount flag and mask
@@ -289,7 +289,7 @@ extern int dir_notify_enable;
 #define FS_IXUNLINK_FL			0x08000000 /* Immutable invert on unlink */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
-#define FS_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define FS_BARRIER_FL			0x04000000 /* Barrier for chroot() */
 #define FS_COW_FL			0x20000000 /* Copy on Write marker */
 
 #define FS_FL_USER_VISIBLE		0x0103DFFF /* User visible flags */

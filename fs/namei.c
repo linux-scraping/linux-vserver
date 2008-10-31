@@ -184,31 +184,38 @@ static inline int dx_barrier(struct inode *inode)
 	return 0;
 }
 
-int dx_permission(struct inode *inode, int mask)
+static int __dx_permission(struct inode *inode, int mask)
 {
-	if (vx_check(0, VS_ADMIN | VS_WATCH))
-		return 0;
-
 	if (dx_barrier(inode))
 		return -EACCES;
 
 	if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
 		/* devpts is xid tagged */
 		if (S_ISDIR(inode->i_mode) ||
-		    vx_check((xid_t)inode->i_tag, VS_IDENT))
+		    vx_check((xid_t)inode->i_tag, VS_IDENT | VS_WATCH_P))
 			return 0;
 	}
 	else if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
-		struct pid *pid = PROC_I(inode)->pid;
-		struct task_struct *tsk;
+		struct proc_dir_entry *de = PDE(inode);
+
+		if (de && !vx_hide_check(0, de->vx_flags))
+			goto out;
+
 		if ((mask & (MAY_WRITE | MAY_APPEND))) {
+			struct pid *pid;
+			struct task_struct *tsk;
+
+			if (vx_check(0, VS_ADMIN | VS_WATCH_P))
+				return 0;
+
+			pid = PROC_I(inode)->pid;
 			if (!pid)
 				goto out;
 
 			tsk = pid_task(pid, PIDTYPE_PID);
 			vxdprintk(VXD_CBIT(tag, 0), "accessing %p[#%u]",
-				       tsk, (tsk ? vx_task_xid(tsk) : 0));
-			if (tsk && vx_check(vx_task_xid(tsk), VS_IDENT))
+				  tsk, (tsk ? vx_task_xid(tsk) : 0));
+			if (tsk && vx_check(vx_task_xid(tsk), VS_IDENT | VS_WATCH_P))
 				return 0;
 		}
 		else {
@@ -218,14 +225,24 @@ int dx_permission(struct inode *inode, int mask)
 	}
 	else {
 		if (dx_notagcheck(inode->i_sb) ||
-		    dx_check(inode->i_tag, DX_HOSTID|DX_ADMIN|DX_WATCH|DX_IDENT))
+		    dx_check(inode->i_tag, DX_HOSTID | DX_ADMIN | DX_WATCH |
+			     DX_IDENT))
 			return 0;
 	}
 
 out:
-	vxwprintk_task(1, "denied access to %s:%p[#%d,%lu].",
-		inode->i_sb->s_id, inode, inode->i_tag, inode->i_ino);
 	return -EACCES;
+}
+
+int dx_permission(struct inode *inode, int mask)
+{
+	int ret = __dx_permission(inode, mask);
+	if (unlikely(ret)) {
+		vxwprintk_task(1, "denied %x access to %s:%p[#%d,%lu]",
+			mask, inode->i_sb->s_id, inode, inode->i_tag,
+			inode->i_ino);
+	}
+	return ret;
 }
 
 
@@ -888,27 +905,18 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 	if (!inode)
 		goto done;
 
-	if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
-		struct proc_dir_entry *de = PDE(inode);
+	if (__dx_permission(inode, MAY_ACCESS))
+		goto hidden;
 
-		if (de && !vx_hide_check(0, de->vx_flags))
-			goto hidden;
-	} else if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
-		if (!vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
-			goto hidden;
-	} else {
-		if (!dx_notagcheck(inode->i_sb) && !dx_check(inode->i_tag,
-			DX_WATCH | DX_ADMIN | DX_HOSTID | DX_IDENT))
-			goto hidden;
-	}
 done:
 	path->mnt = mnt;
 	path->dentry = dentry;
 	__follow_mount(path);
 	return 0;
 hidden:
-	vxwprintk_task(1, "did lookup hidden %p[#%d,%lu] »%s«.",
-		inode, inode->i_tag, inode->i_ino, vxd_path(&nd->path));
+	vxwprintk_task(1, "did lookup hidden %s:%p[#%d,%lu] »%s«.",
+		inode->i_sb->s_id, inode, inode->i_tag, inode->i_ino,
+		vxd_path(&nd->path));
 	dput(dentry);
 	return -ENOENT;
 
