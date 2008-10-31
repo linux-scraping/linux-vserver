@@ -176,7 +176,7 @@ struct ext3_group_desc
 #define EXT3_IXUNLINK_FL		0x08000000 /* Immutable invert on unlink */
 #define EXT3_RESERVED_FL		0x80000000 /* reserved for ext3 lib */
 
-#define EXT3_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define EXT3_BARRIER_FL			0x04000000 /* Barrier for chroot() */
 #define EXT3_COW_FL			0x20000000 /* Copy on Write marker */
 
 #define EXT3_FL_USER_VISIBLE		0x0103DFFF /* User visible flags */

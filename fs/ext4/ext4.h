@@ -245,7 +245,7 @@ struct flex_groups {
 #define EXT4_IXUNLINK_FL		0x08000000 /* Immutable invert on unlink */
 #define EXT4_RESERVED_FL		0x80000000 /* reserved for ext4 lib */
 
-#define EXT4_BARRIER_FL			0x10000000 /* Barrier for chroot() */
+#define EXT4_BARRIER_FL			0x04000000 /* Barrier for chroot() */
 #define EXT4_COW_FL			0x20000000 /* Copy on Write marker */
 
 #define EXT4_FL_USER_VISIBLE		0x000BDFFF /* User visible flags */

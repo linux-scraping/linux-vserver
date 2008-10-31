@@ -1,7 +1,7 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020303
+#define VCI_VERSION		0x00020304
 
 
 enum {
