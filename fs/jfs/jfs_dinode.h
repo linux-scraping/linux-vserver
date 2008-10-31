@@ -163,7 +163,7 @@ struct dinode {
 #define JFS_IMMUTABLE_FL	0x02000000 /* Immutable file */
 #define JFS_IXUNLINK_FL		0x08000000 /* Immutable invert on unlink */
 
-#define JFS_BARRIER_FL		0x10000000 /* Barrier for chroot() */
+#define JFS_BARRIER_FL		0x04000000 /* Barrier for chroot() */
 #define JFS_COW_FL		0x20000000 /* Copy on Write marker */
 
 #define JFS_FL_USER_VISIBLE	0x07F80000

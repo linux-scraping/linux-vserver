@@ -94,7 +94,9 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_task_tag:
 		return vc_task_tag(id);
 
-	/* this is version 1 */
+	case VCMD_set_space_v1:
+		return vc_set_space_v1(vxi, data);
+	/* this is version 2 */
 	case VCMD_set_space:
 		return vc_set_space(vxi, data);
 
@@ -204,8 +206,10 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 		return vc_fset_iattr(id, data);
 
 	case VCMD_enter_space_v0:
-		return vc_enter_space(vxi, NULL);
-	/* this is version 1 */
+		return vc_enter_space_v1(vxi, NULL);
+	case VCMD_enter_space_v1:
+		return vc_enter_space_v1(vxi, data);
+	/* this is version 2 */
 	case VCMD_enter_space:
 		return vc_enter_space(vxi, data);
 
@@ -350,6 +354,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(ctx_migrate_v0,	 5, VCA_VXI,	VCF_ADMIN);
 	__VCMD(ctx_migrate,	 5, VCA_VXI,	VCF_ADMIN);
 	__VCMD(enter_space_v0,	 5, VCA_VXI,	VCF_ADMIN);
+	__VCMD(enter_space_v1,	 5, VCA_VXI,	VCF_ADMIN);
 	__VCMD(enter_space,	 5, VCA_VXI,	VCF_ADMIN);
 
 	__VCMD(net_create_v0,	 5, VCA_NONE,	0);
@@ -360,6 +365,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* higher admin commands */
 	__VCMD(ctx_kill,	 6, VCA_VXI,	VCF_ARES);
+	__VCMD(set_space_v1,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_space,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_ccaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);

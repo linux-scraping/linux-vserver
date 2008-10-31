@@ -166,11 +166,10 @@ static char *vx_vhi_name(struct vx_info *vxi, int id)
 	struct nsproxy *nsproxy;
 	struct uts_namespace *uts;
 
-
 	if (id == VHIN_CONTEXT)
 		return vxi->vx_name;
 
-	nsproxy = vxi->vx_nsproxy;
+	nsproxy = vxi->vx_nsproxy[0];
 	if (!nsproxy)
 		return NULL;
 

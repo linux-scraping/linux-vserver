@@ -172,19 +172,22 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 {
 	struct nsproxy *nsproxy;
 	struct fs_struct *fs;
+	int index;
 
 	might_sleep();
 
 	vxi->vx_state |= VXS_SHUTDOWN;
 	vs_state_change(vxi, VSC_SHUTDOWN);
 
-	nsproxy = xchg(&vxi->vx_nsproxy, NULL);
-	fs = xchg(&vxi->vx_fs, NULL);
+	for (index = 0; index < VX_SPACES; index++) {
+		nsproxy = xchg(&vxi->vx_nsproxy[index], NULL);
+		if (nsproxy)
+			put_nsproxy(nsproxy);
 
-	if (nsproxy)
-		put_nsproxy(nsproxy);
-	if (fs)
-		put_fs_struct(fs);
+		fs = xchg(&vxi->vx_fs[index], NULL);
+		if (fs)
+			put_fs_struct(fs);
+	}
 }
 
 /* exported stuff */
@@ -192,6 +195,7 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 void free_vx_info(struct vx_info *vxi)
 {
 	unsigned long flags;
+	unsigned index;
 
 	/* check for reference counts first */
 	BUG_ON(atomic_read(&vxi->vx_usecnt));
@@ -203,8 +207,11 @@ void free_vx_info(struct vx_info *vxi)
 	/* context shutdown is mandatory */
 	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
 
-	BUG_ON(vxi->vx_nsproxy);
-	BUG_ON(vxi->vx_fs);
+	/* nsproxy and fs check */
+	for (index = 0; index < VX_SPACES; index++) {
+		BUG_ON(vxi->vx_nsproxy[index]);
+		BUG_ON(vxi->vx_fs[index]);
+	}
 
 	spin_lock_irqsave(&vx_info_inactive_lock, flags);
 	hlist_del(&vxi->vx_hlist);
@@ -611,7 +618,8 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 				goto out;
 
 			old_nsp = xchg(&p->nsproxy, new_nsp);
-			vx_set_space(vxi, CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER);
+			vx_set_space(vxi,
+				CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER, 0);
 			put_nsproxy(old_nsp);
 		}
 	}
