@@ -84,6 +84,8 @@ xfs_ialloc_log_di(
 		offsetof(xfs_dinode_t, di_next_unlinked),
 		offsetof(xfs_dinode_t, di_u),
 		offsetof(xfs_dinode_t, di_a),
+		offsetof(xfs_dinode_core_t, di_tag),
+		offsetof(xfs_dinode_core_t, di_vflags),
 		sizeof(xfs_dinode_t)
 	};
 

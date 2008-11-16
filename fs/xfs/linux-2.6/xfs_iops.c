@@ -53,6 +53,7 @@
 #include <linux/namei.h>
 #include <linux/security.h>
 #include <linux/falloc.h>
+#include <linux/vs_tag.h>
 
 /*
  * Bring the atime in the XFS inode uptodate.
@@ -558,6 +559,7 @@ xfs_vn_getattr(
 	stat->nlink = ip->i_d.di_nlink;
 	stat->uid = ip->i_d.di_uid;
 	stat->gid = ip->i_d.di_gid;
+	stat->tag = ip->i_d.di_tag;
 	stat->ino = ip->i_ino;
 #if XFS_BIG_INUMS
 	stat->ino += mp->m_inoadd;
@@ -594,6 +596,12 @@ xfs_vn_getattr(
 	}
 
 	return 0;
+}
+
+STATIC int
+xfs_vn_sync_xflags(struct inode *inode)
+{
+	return -xfs_sync_xflags(XFS_I(inode));
 }
 
 STATIC int
@@ -671,6 +679,7 @@ static const struct inode_operations xfs_inode_operations = {
 	.removexattr		= generic_removexattr,
 	.listxattr		= xfs_vn_listxattr,
 	.fallocate		= xfs_vn_fallocate,
+	.sync_flags		= xfs_vn_sync_xflags,
 };
 
 static const struct inode_operations xfs_dir_inode_operations = {
@@ -696,6 +705,7 @@ static const struct inode_operations xfs_dir_inode_operations = {
 	.getxattr		= generic_getxattr,
 	.removexattr		= generic_removexattr,
 	.listxattr		= xfs_vn_listxattr,
+	.sync_flags		= xfs_vn_sync_xflags,
 };
 
 static const struct inode_operations xfs_dir_ci_inode_operations = {
@@ -745,6 +755,10 @@ xfs_diflags_to_iflags(
 		inode->i_flags |= S_IMMUTABLE;
 	else
 		inode->i_flags &= ~S_IMMUTABLE;
+	if (ip->i_d.di_flags & XFS_DIFLAG_IXUNLINK)
+		inode->i_flags |= S_IXUNLINK;
+	else
+		inode->i_flags &= ~S_IXUNLINK;
 	if (ip->i_d.di_flags & XFS_DIFLAG_APPEND)
 		inode->i_flags |= S_APPEND;
 	else
@@ -757,6 +771,15 @@ xfs_diflags_to_iflags(
 		inode->i_flags |= S_NOATIME;
 	else
 		inode->i_flags &= ~S_NOATIME;
+
+	if (ip->i_d.di_vflags & XFS_DIVFLAG_BARRIER)
+		inode->i_vflags |= V_BARRIER;
+	else
+		inode->i_vflags &= ~V_BARRIER;
+	if (ip->i_d.di_vflags & XFS_DIVFLAG_COW)
+		inode->i_vflags |= V_COW;
+	else
+		inode->i_vflags &= ~V_COW;
 }
 
 /*
@@ -777,6 +800,7 @@ xfs_setup_inode(
 	inode->i_nlink	= ip->i_d.di_nlink;
 	inode->i_uid	= ip->i_d.di_uid;
 	inode->i_gid	= ip->i_d.di_gid;
+	inode->i_tag    = ip->i_d.di_tag;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFBLK:
