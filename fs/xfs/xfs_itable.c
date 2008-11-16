@@ -82,6 +82,7 @@ xfs_bulkstat_one_iget(
 	buf->bs_mode = dic->di_mode;
 	buf->bs_uid = dic->di_uid;
 	buf->bs_gid = dic->di_gid;
+	buf->bs_tag = dic->di_tag;
 	buf->bs_size = dic->di_size;
 	vn_atime_to_bstime(VFS_I(ip), &buf->bs_atime);
 	buf->bs_mtime.tv_sec = dic->di_mtime.t_sec;

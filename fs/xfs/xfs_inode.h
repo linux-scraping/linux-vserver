@@ -173,7 +173,9 @@ typedef struct xfs_icdinode {
 	__uint32_t	di_gid;		/* owner's group id */
 	__uint32_t	di_nlink;	/* number of links to file */
 	__uint16_t	di_projid;	/* owner's project id */
-	__uint8_t	di_pad[8];	/* unused, zeroed space */
+	__uint16_t	di_tag;		/* context tagging */
+	__uint16_t	di_vflags;	/* vserver specific flags */
+	__uint8_t	di_pad[4];	/* unused, zeroed space */
 	__uint16_t	di_flushiter;	/* incremented on flush */
 	xfs_ictimestamp_t di_atime;	/* time last accessed */
 	xfs_ictimestamp_t di_mtime;	/* time last modified */
@@ -500,9 +502,9 @@ int		xfs_ialloc(struct xfs_trans *, xfs_inode_t *, mode_t,
 			   xfs_nlink_t, xfs_dev_t, struct cred *, xfs_prid_t,
 			   int, struct xfs_buf **, boolean_t *, xfs_inode_t **);
 void		xfs_dinode_from_disk(struct xfs_icdinode *,
-				     struct xfs_dinode_core *);
+				     struct xfs_dinode_core *, int tagged);
 void		xfs_dinode_to_disk(struct xfs_dinode_core *,
-				   struct xfs_icdinode *);
+				   struct xfs_icdinode *, int tagged);
 
 uint		xfs_ip2xflags(struct xfs_inode *);
 uint		xfs_dic2xflags(struct xfs_dinode *);

@@ -205,7 +205,8 @@ static int __dx_permission(struct inode *inode, int mask)
 			struct pid *pid;
 			struct task_struct *tsk;
 
-			if (vx_check(0, VS_ADMIN | VS_WATCH_P))
+			if (vx_check(0, VS_ADMIN | VS_WATCH_P) ||
+			    vx_flags(VXF_STATE_SETUP, 0))
 				return 0;
 
 			pid = PROC_I(inode)->pid;
@@ -2958,14 +2959,17 @@ retry:
 
 	/* this puppy downs the inode mutex */
 	new_path.dentry = lookup_create(&dir_nd, 0);
+	if (!new_path.dentry || IS_ERR(new_path.dentry)) {
+		vxdprintk(VXD_CBIT(misc, 2),
+			"lookup_create(new): %p", new_path.dentry);
+		mutex_unlock(&dir_nd.path.dentry->d_inode->i_mutex);
+		path_put(&dir_nd.path);
+		goto retry;
+	}
 	vxdprintk(VXD_CBIT(misc, 2),
 		"lookup_create(new): %p [»%.*s«:%d]", new_path.dentry,
 		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
 		new_path.dentry->d_name.len);
-	if (!new_path.dentry || IS_ERR(new_path.dentry)) {
-		path_put(&dir_nd.path);
-		goto retry;
-	}
 	dir = dir_nd.path.dentry;
 
 	ret = vfs_create(dir_nd.path.dentry->d_inode, new_path.dentry, mode, &dir_nd);

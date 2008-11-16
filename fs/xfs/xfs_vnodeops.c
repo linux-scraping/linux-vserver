@@ -75,6 +75,89 @@ xfs_open(
 	return 0;
 }
 
+STATIC void
+xfs_get_inode_flags(
+	xfs_inode_t	*ip)
+{
+	struct inode 	*inode = VFS_I(ip);
+	unsigned int 	flags = inode->i_flags;
+	unsigned int 	vflags = inode->i_vflags;
+
+	if (flags & S_IMMUTABLE)
+		ip->i_d.di_flags |= XFS_DIFLAG_IMMUTABLE;
+	else
+		ip->i_d.di_flags &= ~XFS_DIFLAG_IMMUTABLE;
+	if (flags & S_IXUNLINK)
+		ip->i_d.di_flags |= XFS_DIFLAG_IXUNLINK;
+	else
+		ip->i_d.di_flags &= ~XFS_DIFLAG_IXUNLINK;
+
+	if (vflags & V_BARRIER)
+		ip->i_d.di_vflags |= XFS_DIVFLAG_BARRIER;
+	else
+		ip->i_d.di_vflags &= ~XFS_DIVFLAG_BARRIER;
+	if (vflags & V_COW)
+		ip->i_d.di_vflags |= XFS_DIVFLAG_COW;
+	else
+		ip->i_d.di_vflags &= ~XFS_DIVFLAG_COW;
+}
+
+int
+xfs_sync_xflags(
+	xfs_inode_t		*ip)
+{
+	struct xfs_mount	*mp = ip->i_mount;
+	struct xfs_trans	*tp;
+	unsigned int		lock_flags = 0;
+	int			code;
+
+	xfs_itrace_entry(ip);
+
+	if (mp->m_flags & XFS_MOUNT_RDONLY)
+		return XFS_ERROR(EROFS);
+
+	/*
+	 * we acquire the inode lock and do an error checking pass.
+	 */
+	tp = xfs_trans_alloc(mp, XFS_TRANS_SETATTR_NOT_SIZE);
+	code = xfs_trans_reserve(tp, 0, XFS_ICHANGE_LOG_RES(mp), 0, 0, 0);
+	if (code)
+		goto error_return;
+
+	lock_flags = XFS_ILOCK_EXCL;
+	xfs_ilock(ip, lock_flags);
+
+	xfs_trans_ijoin(tp, ip, lock_flags);
+	xfs_trans_ihold(tp, ip);
+
+	xfs_get_inode_flags(ip);
+	// xfs_diflags_to_linux(ip);
+
+	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
+	xfs_ichgtime(ip, XFS_ICHGTIME_CHG);
+
+	XFS_STATS_INC(xs_ig_attrchg);
+
+	/*
+	 * If this is a synchronous mount, make sure that the
+	 * transaction goes to disk before returning to the user.
+	 */
+	if (mp->m_flags & XFS_MOUNT_WSYNC)
+		xfs_trans_set_sync(tp);
+	code = xfs_trans_commit(tp, 0);
+	xfs_iunlock(ip, lock_flags);
+
+	if (code)
+		return code;
+	return 0;
+
+ error_return:
+	xfs_trans_cancel(tp, 0);
+	if (lock_flags)
+		xfs_iunlock(ip, lock_flags);
+	return code;
+}
+
 int
 xfs_setattr(
 	struct xfs_inode	*ip,
@@ -91,6 +174,7 @@ xfs_setattr(
 	uint			commit_flags=0;
 	uid_t			uid=0, iuid=0;
 	gid_t			gid=0, igid=0;
+	tag_t			tag=0, itag=0;
 	int			timeflags = 0;
 	struct xfs_dquot	*udqp, *gdqp, *olddquot1, *olddquot2;
 	int			file_owner;
@@ -238,7 +322,7 @@ xfs_setattr(
 	 * and can change the group id only to a group of which he
 	 * or she is a member.
 	 */
-	if (mask & (ATTR_UID|ATTR_GID)) {
+	if (mask & (ATTR_UID|ATTR_GID|ATTR_TAG)) {
 		/*
 		 * These IDs could have changed since we last looked at them.
 		 * But, we're assured that if the ownership did change
@@ -247,8 +331,10 @@ xfs_setattr(
 		 */
 		iuid = ip->i_d.di_uid;
 		igid = ip->i_d.di_gid;
+		itag = ip->i_d.di_tag;
 		gid = (mask & ATTR_GID) ? iattr->ia_gid : igid;
 		uid = (mask & ATTR_UID) ? iattr->ia_uid : iuid;
+		tag = (mask & ATTR_TAG) ? iattr->ia_tag : itag;
 
 		/*
 		 * CAP_CHOWN overrides the following restrictions:
@@ -272,7 +358,9 @@ xfs_setattr(
 		 * going to change.
 		 */
 		if ((XFS_IS_UQUOTA_ON(mp) && iuid != uid) ||
-		    (XFS_IS_GQUOTA_ON(mp) && igid != gid)) {
+		    (XFS_IS_GQUOTA_ON(mp) && igid != gid) ||
+		    (XFS_IS_GQUOTA_ON(mp) && itag != tag)) {
+			/* TODO: handle tagging? */
 			ASSERT(tp);
 			code = XFS_QM_DQVOPCHOWNRESV(mp, tp, ip, udqp, gdqp,
 						capable(CAP_FOWNER) ?
@@ -461,7 +549,7 @@ xfs_setattr(
 	 * and can change the group id only to a group of which he
 	 * or she is a member.
 	 */
-	if (mask & (ATTR_UID|ATTR_GID)) {
+	if (mask & (ATTR_UID|ATTR_GID|ATTR_TAG)) {
 		/*
 		 * CAP_FSETID overrides the following restrictions:
 		 *
@@ -477,6 +565,10 @@ xfs_setattr(
 		 * Change the ownerships and register quota modifications
 		 * in the transaction.
 		 */
+		if (itag != tag) {
+			ip->i_d.di_tag = tag;
+			inode->i_tag = tag;
+		}
 		if (iuid != uid) {
 			if (XFS_IS_UQUOTA_ON(mp)) {
 				ASSERT(mask & ATTR_UID);
