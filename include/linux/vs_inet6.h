@@ -17,16 +17,23 @@ static inline
 int v6_addr_match(struct nx_addr_v6 *nxa,
 	const struct in6_addr *addr, uint16_t mask)
 {
+	int ret = 0;
+
 	switch (nxa->type & mask) {
 	case NXA_TYPE_MASK:
-		return ipv6_masked_addr_cmp(&nxa->ip, &nxa->mask, addr);
+		ret = ipv6_masked_addr_cmp(&nxa->ip, &nxa->mask, addr);
+		break;
 	case NXA_TYPE_ADDR:
-		return ipv6_addr_equal(&nxa->ip, addr);
+		ret = ipv6_addr_equal(&nxa->ip, addr);
+		break;
 	case NXA_TYPE_ANY:
-		return 1;
-	default:
-		return 0;
+		ret = 1;
+		break;
 	}
+	vxdprintk(VXD_CBIT(net, 0),
+		"v6_addr_match(%p" NXAV6_FMT ", " NIP6_FMT ", %04x) = %d",
+		nxa, NXAV6(nxa), NIP6(*addr), mask, ret);
+	return ret;
 }
 
 static inline
@@ -34,13 +41,19 @@ int v6_addr_in_nx_info(struct nx_info *nxi,
 	const struct in6_addr *addr, uint16_t mask)
 {
 	struct nx_addr_v6 *nxa;
+	int ret = 1;
 
 	if (!nxi)
-		return 1;
+		goto out;
 	for (nxa = &nxi->v6; nxa; nxa = nxa->next)
 		if (v6_addr_match(nxa, addr, mask))
-			return 1;
-	return 0;
+			goto out;
+	ret = 0;
+out:
+	vxdprintk(VXD_CBIT(net, 0),
+		"v6_addr_in_nx_info(%p[#%u]," NIP6_FMT ",%04x) = %d",
+		nxi, nxi ? nxi->nx_id : 0, NIP6(*addr), mask, ret);
+	return ret;
 }
 
 static inline
@@ -145,6 +158,10 @@ int v6_ifa_in_nx_info(struct inet6_ifaddr *ifa, struct nx_info *nxi)
 static inline
 int nx_v6_ifa_visible(struct nx_info *nxi, struct inet6_ifaddr *ifa)
 {
+	vxdprintk(VXD_CBIT(net, 1), "nx_v6_ifa_visible(%p[#%u],%p) %d",
+		nxi, nxi ? nxi->nx_id : 0, ifa,
+		nxi ? v6_ifa_in_nx_info(ifa, nxi) : 0);
+
 	if (!nx_info_flags(nxi, NXF_HIDE_NETIF, 0))
 		return 1;
 	if (v6_ifa_in_nx_info(ifa, nxi))
