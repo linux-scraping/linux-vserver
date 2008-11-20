@@ -215,7 +215,7 @@ struct proc_dir_entry proc_root = {
 	.proc_iops	= &proc_root_inode_operations, 
 	.proc_fops	= &proc_root_operations,
 	.parent		= &proc_root,
-	.vx_flags	= IATTR_PROC_DEFAULT,
+	.vx_flags	= IATTR_ADMIN | IATTR_WATCH,
 };
 
 int pid_ns_prepare_proc(struct pid_namespace *ns)
