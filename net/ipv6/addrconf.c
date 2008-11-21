@@ -1183,6 +1183,8 @@ int ipv6_dev_get_saddr(struct net *net, struct net_device *dst_dev,
 					       dev->name);
 				continue;
 			}
+			if (!v6_addr_in_nx_info(nxi, &score->ifa->addr, -1))
+				continue;
 
 			score->rule = -1;
 			bitmap_zero(score->scorebits, IPV6_SADDR_RULE_MAX);
