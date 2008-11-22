@@ -92,9 +92,7 @@
 
 #include <linux/errno.h>
 
-
-#else	/* __KERNEL__ */
-#define __user
 #endif	/* __KERNEL__ */
 
 #endif	/* _VX_SWITCH_H */
+
