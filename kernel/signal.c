@@ -1073,7 +1073,7 @@ int kill_pid_info(int sig, struct siginfo *info, struct pid *pid)
 	rcu_read_lock();
 retry:
 	p = pid_task(pid, PIDTYPE_PID);
-	if (p && vx_check(vx_task_xid(p), VS_WATCH | VS_IDENT)) {
+	if (p && vx_check(vx_task_xid(p), VS_ADMIN | VS_IDENT)) {
 		error = group_send_sig_info(sig, info, p);
 		if (unlikely(error == -ESRCH))
 			/*
