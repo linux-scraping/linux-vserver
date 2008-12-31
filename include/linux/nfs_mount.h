@@ -66,4 +66,8 @@ struct nfs_mount_data {
 #define NFS_MOUNT_TAGGED	0x10000	/* context tagging */
 #define NFS_MOUNT_FLAGMASK	0x1FFFF
 
+/* The following are for internal use only */
+#define NFS_MOUNT_LOOKUP_CACHE_NONEG	0x10000
+#define NFS_MOUNT_LOOKUP_CACHE_NONE	0x20000
+
 #endif

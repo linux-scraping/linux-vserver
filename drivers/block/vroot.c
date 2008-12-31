@@ -30,7 +30,6 @@ static struct gendisk **disks;
 
 static int vroot_set_dev(
 	struct vroot_device *vr,
-	struct file *vr_file,
 	struct block_device *bdev,
 	unsigned int arg)
 {
@@ -74,7 +73,6 @@ static int vroot_set_dev(
 
 static int vroot_clr_dev(
 	struct vroot_device *vr,
-	struct file *vr_file,
 	struct block_device *bdev)
 {
 	struct block_device *real_bdev;
@@ -97,19 +95,19 @@ static int vroot_clr_dev(
 }
 
 
-static int vr_ioctl(struct inode *inode, struct file *file,
+static int vr_ioctl(struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg)
 {
-	struct vroot_device *vr = inode->i_bdev->bd_disk->private_data;
+	struct vroot_device *vr = bdev->bd_disk->private_data;
 	int err;
 
 	down(&vr->vr_ctl_mutex);
 	switch (cmd) {
 	case VROOT_SET_DEV:
-		err = vroot_set_dev(vr, file, inode->i_bdev, arg);
+		err = vroot_set_dev(vr, bdev, arg);
 		break;
 	case VROOT_CLR_DEV:
-		err = vroot_clr_dev(vr, file, inode->i_bdev);
+		err = vroot_clr_dev(vr, bdev);
 		break;
 	default:
 		err = -EINVAL;
@@ -119,9 +117,9 @@ static int vr_ioctl(struct inode *inode, struct file *file,
 	return err;
 }
 
-static int vr_open(struct inode *inode, struct file *file)
+static int vr_open(struct block_device *bdev, fmode_t mode)
 {
-	struct vroot_device *vr = inode->i_bdev->bd_disk->private_data;
+	struct vroot_device *vr = bdev->bd_disk->private_data;
 
 	down(&vr->vr_ctl_mutex);
 	vr->vr_refcnt++;
@@ -129,9 +127,9 @@ static int vr_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int vr_release(struct inode *inode, struct file *file)
+static int vr_release(struct gendisk *disk, fmode_t mode)
 {
-	struct vroot_device *vr = inode->i_bdev->bd_disk->private_data;
+	struct vroot_device *vr = disk->private_data;
 
 	down(&vr->vr_ctl_mutex);
 	--vr->vr_refcnt;

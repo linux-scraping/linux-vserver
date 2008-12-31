@@ -171,4 +171,6 @@
 
 #define VIOTAPE_MAJOR		230
 
+#define BLOCK_EXT_MAJOR		259
+
 #endif

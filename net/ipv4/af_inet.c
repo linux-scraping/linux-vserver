@@ -478,7 +478,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	 */
 	err = -EADDRNOTAVAIL;
 	if (!sysctl_ip_nonlocal_bind &&
-	    !inet->freebind &&
+	    !(inet->freebind || inet->transparent) &&
 	    nsa.saddr != htonl(INADDR_ANY) &&
 	    chk_addr_ret != RTN_LOCAL &&
 	    chk_addr_ret != RTN_MULTICAST &&
@@ -1128,6 +1128,7 @@ int inet_sk_rebuild_header(struct sock *sk)
 			},
 		},
 		.proto = sk->sk_protocol,
+		.flags = inet_sk_flowi_flags(sk),
 		.uli_u = {
 			.ports = {
 				.sport = inet->sport,
