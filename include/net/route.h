@@ -27,8 +27,7 @@
 #include <net/dst.h>
 #include <net/inetpeer.h>
 #include <net/flow.h>
-#include <net/sock.h>
-// #include <linux/in.h>
+#include <net/inet_sock.h>
 #include <linux/in_route.h>
 #include <linux/rtnetlink.h>
 #include <linux/route.h>
@@ -85,11 +84,6 @@ struct ip_rt_acct
 	__u32 	i_bytes;
 	__u32 	i_packets;
 };
-
-static inline int inet_iif(const struct sk_buff *skb)
-{
-	return skb->rtable->rt_iif;
-}
 
 struct rt_cache_stat 
 {
@@ -175,6 +169,9 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 	struct net *net = sock_net(sk);
 	struct nx_info *nx_info = current->nx_info;
 
+	if (inet_sk(sk)->transparent)
+		fl.flags |= FLOWI_FLAG_ANYSRC;
+
 	if (sk)
 		nx_info = sk->sk_nx_info;
 
@@ -228,6 +225,11 @@ static inline struct inet_peer *rt_get_peer(struct rtable *rt)
 
 	rt_bind_peer(rt, 0);
 	return rt->peer;
+}
+
+static inline int inet_iif(const struct sk_buff *skb)
+{
+	return skb->rtable->rt_iif;
 }
 
 #endif	/* _ROUTE_H */

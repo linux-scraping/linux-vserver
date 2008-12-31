@@ -86,5 +86,6 @@ const struct inode_operations ext2_file_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.permission	= ext2_permission,
+	.fiemap		= ext2_fiemap,
 	.sync_flags	= ext2_sync_flags,
 };

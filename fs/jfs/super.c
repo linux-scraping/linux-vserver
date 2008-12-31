@@ -200,7 +200,7 @@ enum {
 	Opt_tag, Opt_notag, Opt_tagid
 };
 
-static match_table_t tokens = {
+static const match_table_t tokens = {
 	{Opt_integrity, "integrity"},
 	{Opt_nointegrity, "nointegrity"},
 	{Opt_iocharset, "iocharset=%s"},
