@@ -535,7 +535,7 @@ __SYSCALL(__NR_tgkill, sys_tgkill)
 #define __NR_utimes				235
 __SYSCALL(__NR_utimes, sys_utimes)
 #define __NR_vserver				236
-__SYSCALL(__NR_vserver, sys_ni_syscall)
+__SYSCALL(__NR_vserver, sys_vserver)
 #define __NR_mbind				237
 __SYSCALL(__NR_mbind, sys_mbind)
 #define __NR_set_mempolicy			238
