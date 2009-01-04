@@ -45,7 +45,7 @@ struct	vcmd_ctx_rlimit_v0_x32 {
 	uint64_t minimum;
 	uint64_t softlimit;
 	uint64_t maximum;
-} __attribute__ ((aligned (4)));
+} __attribute__ ((packed));
 
 #endif	/* CONFIG_IA32_EMULATION */
 
