@@ -51,7 +51,7 @@ static int get_close_on_exec(unsigned int fd)
 	return res;
 }
 
-asmlinkage long sys_dup3(unsigned int oldfd, unsigned int newfd, int flags)
+SYSCALL_DEFINE3(dup3, unsigned int, oldfd, unsigned int, newfd, int, flags)
 {
 	int err = -EBADF;
 	struct file * file, *tofree;
@@ -116,7 +116,7 @@ out_unlock:
 	return err;
 }
 
-asmlinkage long sys_dup2(unsigned int oldfd, unsigned int newfd)
+SYSCALL_DEFINE2(dup2, unsigned int, oldfd, unsigned int, newfd)
 {
 	if (unlikely(newfd == oldfd)) { /* corner case */
 		struct files_struct *files = current->files;
@@ -129,7 +129,7 @@ asmlinkage long sys_dup2(unsigned int oldfd, unsigned int newfd)
 	return sys_dup3(oldfd, newfd, 0);
 }
 
-asmlinkage long sys_dup(unsigned int fildes)
+SYSCALL_DEFINE1(dup, unsigned int, fildes)
 {
 	int ret = -EBADF;
 	struct file *file = fget(fildes);
@@ -337,7 +337,7 @@ static long do_fcntl(int fd, unsigned int cmd, unsigned long arg,
 	return err;
 }
 
-asmlinkage long sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg)
+SYSCALL_DEFINE3(fcntl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
 {	
 	struct file *filp;
 	long err = -EBADF;
@@ -362,7 +362,8 @@ out:
 }
 
 #if BITS_PER_LONG == 32
-asmlinkage long sys_fcntl64(unsigned int fd, unsigned int cmd, unsigned long arg)
+SYSCALL_DEFINE3(fcntl64, unsigned int, fd, unsigned int, cmd,
+		unsigned long, arg)
 {	
 	struct file * filp;
 	long err;
