@@ -378,7 +378,7 @@ out:
 	return error;
 }
 
-asmlinkage long sys_syslog(int type, char __user *buf, int len)
+SYSCALL_DEFINE3(syslog, int, type, char __user *, buf, int, len)
 {
 	return do_syslog(type, buf, len);
 }
@@ -737,11 +737,6 @@ EXPORT_SYMBOL(printk);
 EXPORT_SYMBOL(vprintk);
 
 #else
-
-asmlinkage long sys_syslog(int type, char __user *buf, int len)
-{
-	return -ENOSYS;
-}
 
 static void call_console_drivers(unsigned start, unsigned end)
 {
