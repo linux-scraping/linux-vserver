@@ -2,6 +2,7 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/time.h>
+#include <linux/vserver/cvirt.h>
 #include <asm/cputime.h>
 
 static int proc_calc_metrics(char *page, char **start, off_t off,
@@ -29,6 +30,10 @@ static int uptime_read_proc(char *page, char **start, off_t off, int count,
 	do_posix_clock_monotonic_gettime(&uptime);
 	monotonic_to_bootbased(&uptime);
 	cputime_to_timespec(idletime, &idle);
+
+	if (vx_flags(VXF_VIRT_UPTIME, 0))
+		vx_vsi_uptime(&uptime, &idle);
+
 	len = sprintf(page, "%lu.%02lu %lu.%02lu\n",
 			(unsigned long) uptime.tv_sec,
 			(uptime.tv_nsec / (NSEC_PER_SEC / 100)),
