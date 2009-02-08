@@ -1037,6 +1037,25 @@ void account_process_tick(struct task_struct *p, int user_tick)
 }
 #endif
 
+static inline
+void __vx_consume_token(struct _vx_sched_pc *sched_pc)
+{
+	sched_pc->tokens--;
+}
+
+static inline
+void vx_hard_tick(struct task_struct *p, int cpu)
+{
+	struct vx_info *vxi = p->vx_info;
+
+	if (vx_info_flags(vxi, VXF_SCHED_HARD|VXF_SCHED_PRIO, 0)) {
+		struct _vx_sched_pc *sched_pc =
+			&vx_per_cpu(vxi, sched_pc, cpu);
+
+		__vx_consume_token(sched_pc);
+	}
+}
+
 /*
  * Called from the timer interrupt handler to charge one tick to the current
  * process.  user_tick is 1 if the tick is user time, 0 for system.
@@ -1053,6 +1072,7 @@ void update_process_times(int user_tick)
 		rcu_check_callbacks(cpu, user_tick);
 	printk_tick();
 	scheduler_tick();
+	vx_hard_tick(p, cpu);
 	run_posix_cpu_timers(p);
 }
 

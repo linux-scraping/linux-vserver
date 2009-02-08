@@ -504,16 +504,6 @@ struct root_domain {
 static struct root_domain def_root_domain;
 
 #endif
-	unsigned long norm_time;
-	unsigned long idle_time;
-#ifdef CONFIG_VSERVER_IDLETIME
-	int idle_skip;
-#endif
-#ifdef CONFIG_VSERVER_HARDCPU
-	struct list_head hold_queue;
-	unsigned long nr_onhold;
-	int idle_tokens;
-#endif
 
 /*
  * This is the main, per-CPU runqueue data structure.
@@ -593,6 +583,16 @@ struct rq {
 	struct call_single_data hrtick_csd;
 #endif
 	struct hrtimer hrtick_timer;
+#endif
+	unsigned long norm_time;
+	unsigned long idle_time;
+#ifdef CONFIG_VSERVER_IDLETIME
+	int idle_skip;
+#endif
+#ifdef CONFIG_VSERVER_HARDCPU
+	struct list_head hold_queue;
+	unsigned long nr_onhold;
+	int idle_tokens;
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
@@ -4462,6 +4462,8 @@ pick_next_task(struct rq *rq, struct task_struct *prev)
 	}
 }
 
+#include "sched_hard.h"
+
 /*
  * schedule() is the main scheduler function.
  */
@@ -4509,6 +4511,11 @@ need_resched_nonpreemptible:
 		idle_balance(cpu, rq);
 
 	prev->sched_class->put_prev_task(rq, prev);
+
+	vx_set_rq_time(rq, jiffies);	/* update time */
+	vx_schedule(prev, rq, cpu);	/* hold if over limit */
+	vx_try_unhold(rq, cpu);		/* unhold if refilled */
+
 	next = pick_next_task(rq, prev);
 
 	if (likely(prev != next)) {
@@ -8297,7 +8304,10 @@ void __init sched_init(void)
 
 #endif
 #endif /* CONFIG_FAIR_GROUP_SCHED */
-
+#ifdef CONFIG_VSERVER_HARDCPU
+		INIT_LIST_HEAD(&rq->hold_queue);
+		rq->nr_onhold = 0;
+#endif
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
 #ifdef CONFIG_RT_GROUP_SCHED
 		INIT_LIST_HEAD(&rq->leaf_rt_rq_list);

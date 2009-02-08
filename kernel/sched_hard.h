@@ -90,12 +90,17 @@ void __vx_save_max_idle(int ret, int *min, int val)
 static inline
 void vx_hold_task(struct task_struct *p, struct rq *rq)
 {
-	__deactivate_task(p, rq);
+	// printk("@ hold_task(%p)\n", p);
+	if (likely(p->se.on_rq))
+		dequeue_task(rq, p, 0);
+	else
+		printk("@ wrong assumption on rq (%p)\n", p);
 	p->state |= TASK_ONHOLD;
 	/* a new one on hold */
 	rq->nr_onhold++;
 	vxm_hold_task(p, rq);
-	list_add_tail(&p->run_list, &rq->hold_queue);
+	list_add_tail(&p->hq, &rq->hold_queue);
+	// list_add_tail(&p->run_list, &rq->hold_queue);
 }
 
 /*
@@ -104,16 +109,15 @@ void vx_hold_task(struct task_struct *p, struct rq *rq)
 static inline
 void vx_unhold_task(struct task_struct *p, struct rq *rq)
 {
-	list_del(&p->run_list);
+	// printk("@ unhold_task(%p)\n", p);
+	list_del_init(&p->hq);
+	// list_del(&p->run_list);
 	/* one less waiting */
 	rq->nr_onhold--;
 	p->state &= ~TASK_ONHOLD;
-	enqueue_task(p, rq->expired);
-	inc_nr_running(p, rq);
+	enqueue_task(rq, p, 0);
+	// ? inc_nr_running(p, rq);
 	vxm_unhold_task(p, rq);
-
-	if (p->static_prio < rq->best_expired_prio)
-		rq->best_expired_prio = p->static_prio;
 }
 
 unsigned long nr_onhold(void)
@@ -187,7 +191,7 @@ void vx_try_unhold(struct rq *rq, int cpu)
 		struct _vx_sched_pc *sched_pc;
 		struct task_struct *p;
 
-		p = list_entry(l, struct task_struct, run_list);
+		p = list_entry(l, struct task_struct, hq);
 		/* don't bother with same context */
 		if (vxi == p->vx_info)
 			continue;
