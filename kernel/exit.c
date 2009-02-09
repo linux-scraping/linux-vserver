@@ -1137,6 +1137,7 @@ NORET_TYPE void do_exit(long code)
 	tsk->state = TASK_DEAD;
 
 	schedule();
+	printk("bad task: %p [%lx]\n", current, current->state);
 	BUG();
 	/* Avoid "noreturn function does return".  */
 	for (;;)

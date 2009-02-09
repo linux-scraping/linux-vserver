@@ -2229,6 +2229,8 @@ static int sched_balance_self(int cpu, int flag)
 
 #endif /* CONFIG_SMP */
 
+#include "sched_hard.h"
+
 /***
  * try_to_wake_up - wake up a thread
  * @p: the to-be-woken-up thread
@@ -2272,6 +2274,13 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	smp_wmb();
 	rq = task_rq_lock(p, &flags);
 	old_state = p->state;
+
+	/* we need to unhold suspended tasks */
+	if (old_state & TASK_ONHOLD) {
+		vx_unhold_task(p, rq);
+		old_state = p->state;
+	}
+
 	if (!(old_state & state))
 		goto out;
 
@@ -4461,8 +4470,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev)
 		class = class->next;
 	}
 }
-
-#include "sched_hard.h"
 
 /*
  * schedule() is the main scheduler function.
