@@ -90,11 +90,22 @@ void __vx_save_max_idle(int ret, int *min, int val)
 static inline
 void vx_hold_task(struct task_struct *p, struct rq *rq)
 {
-	// printk("@ hold_task(%p)\n", p);
+	// printk("@ hold_task(%p[%lx])\n", p, p->state);
+
+	/* ignore dead/killed tasks */
+	if (unlikely(p->state & (TASK_DEAD | TASK_WAKEKILL)))
+		return;
+
+	/* ignore sleeping tasks */
+	if (unlikely(p->state & TASK_NORMAL))
+		return;
+
+	/* remove task from runqueue */
 	if (likely(p->se.on_rq))
 		dequeue_task(rq, p, 0);
 	else
-		printk("@ wrong assumption on rq (%p)\n", p);
+		printk("@ woops, task %p not on runqueue?\n", p);
+
 	p->state |= TASK_ONHOLD;
 	/* a new one on hold */
 	rq->nr_onhold++;
@@ -109,7 +120,7 @@ void vx_hold_task(struct task_struct *p, struct rq *rq)
 static inline
 void vx_unhold_task(struct task_struct *p, struct rq *rq)
 {
-	// printk("@ unhold_task(%p)\n", p);
+	// printk("@ unhold_task(%p[%lx])\n", p, p->state);
 	list_del_init(&p->hq);
 	// list_del(&p->run_list);
 	/* one less waiting */
@@ -118,6 +129,20 @@ void vx_unhold_task(struct task_struct *p, struct rq *rq)
 	enqueue_task(rq, p, 0);
 	// ? inc_nr_running(p, rq);
 	vxm_unhold_task(p, rq);
+}
+
+/*
+ * vx_remove_hold - remove a task from the hold queue
+ */
+static inline
+void vx_remove_hold(struct task_struct *p, struct rq *rq)
+{
+	printk("@ remove_hold(%p[%lx])\n", p, p->state);
+	list_del_init(&p->hq);
+	// list_del(&p->run_list);
+	/* one less waiting */
+	rq->nr_onhold--;
+	p->state &= ~TASK_ONHOLD;
 }
 
 unsigned long nr_onhold(void)
