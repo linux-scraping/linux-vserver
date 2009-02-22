@@ -1810,6 +1810,8 @@ static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 		p->sched_class->prio_changed(rq, p, oldprio, running);
 }
 
+#include "sched_mon.h"
+
 #ifdef CONFIG_SMP
 
 /* Used instead of source_load when we know the type == 0 */
@@ -1885,9 +1887,6 @@ struct migration_req {
 
 	struct completion done;
 };
-
-#include "sched_mon.h"
-
 
 /*
  * The task's runqueue lock must be held.
@@ -4628,8 +4627,8 @@ EXPORT_SYMBOL(default_wake_function);
  * started to run but is not in state TASK_RUNNING. try_to_wake_up() returns
  * zero in this (rare) case, and we handle it by continuing to scan the queue.
  */
-static void __wake_up_common(wait_queue_head_t *q, unsigned int mode,
-			     int nr_exclusive, int sync, void *key)
+void __wake_up_common(wait_queue_head_t *q, unsigned int mode,
+			int nr_exclusive, int sync, void *key)
 {
 	wait_queue_t *curr, *next;
 
