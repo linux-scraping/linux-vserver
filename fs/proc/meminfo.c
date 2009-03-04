@@ -41,7 +41,7 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 
 	cached = global_page_state(NR_FILE_PAGES) -
 			total_swapcache_pages - i.bufferram;
-	if (cached < 0)
+	if (cached < 0 || vx_flags(VXF_VIRT_MEM, 0))
 		cached = 0;
 
 	get_vmalloc_info(&vmi);
