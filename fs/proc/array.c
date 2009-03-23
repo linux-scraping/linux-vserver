@@ -162,24 +162,20 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	struct group_info *group_info;
 	int g;
 	struct fdtable *fdt = NULL;
-/* +	pid_t pid, ptgid, tppid, tgid; */
 	pid_t ppid, tpid;
 
 	rcu_read_lock();
 	ppid = pid_alive(p) ?
 		task_tgid_nr_ns(rcu_dereference(p->real_parent), ns) : 0;
+	if (unlikely(vx_current_initpid(p->pid)))
+		ppid = 0;
+
 	tpid = 0;
 	if (pid_alive(p)) {
 		struct task_struct *tracer = tracehook_tracer_task(p);
 		if (tracer)
 			tpid = task_pid_nr_ns(tracer, ns);
 	}
-/* 	tgid = vx_map_tgid(p->tgid);
-	pid = vx_map_pid(p->pid);
-	ptgid = vx_map_pid(pid_alive(p) ?
-		rcu_dereference(p->real_parent)->tgid : 0);
-	tppid = vx_map_pid(pid_alive(p) && p->ptrace ?
-		rcu_dereference(p->parent)->pid : 0); */
 	seq_printf(m,
 		"State:\t%s\n"
 		"Tgid:\t%d\n"
