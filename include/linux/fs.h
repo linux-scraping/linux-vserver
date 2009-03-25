@@ -63,18 +63,23 @@ extern int dir_notify_enable;
 #define MAY_ACCESS 16
 #define MAY_OPEN 32
 
-#define FMODE_READ 1
-#define FMODE_WRITE 2
+/*
+ * flags in file.f_mode.  Note that FMODE_READ and FMODE_WRITE must correspond
+ * to O_WRONLY and O_RDWR via the strange trick in __dentry_open()
+ */
 
-/* Internal kernel extensions */
-#define FMODE_LSEEK	4
-#define FMODE_PREAD	8
-#define FMODE_PWRITE	FMODE_PREAD	/* These go hand in hand */
-
-/* File is being opened for execution. Primary users of this flag are
-   distributed filesystems that can use it to achieve correct ETXTBUSY
-   behavior for cross-node execution/opening_for_writing of files */
-#define FMODE_EXEC	16
+/* file is open for reading */
+#define FMODE_READ		(1)
+/* file is open for writing */
+#define FMODE_WRITE		(2)
+/* file is seekable */
+#define FMODE_LSEEK		(4)
+/* file can be accessed using pread */
+#define FMODE_PREAD		(8)
+/* file can be accessed using pwrite */
+#define FMODE_PWRITE		(16)
+/* File is opened for execution with sys_execve / sys_uselib */
+#define FMODE_EXEC		(32)
 
 #define RW_MASK		1
 #define RWA_MASK	2

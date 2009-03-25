@@ -77,6 +77,7 @@ int vx_tokens_recalc(struct _vx_sched_pc *sched_pc,
 
 	/* how much time did pass? */
 	delta = *norm_time - sched_pc->norm_time;
+	// printk("@ %ld, %ld, %ld\n", *norm_time, sched_pc->norm_time, jiffies);
 	vxd_check_range(delta, 0, INT_MAX);
 
 	if (delta >= sched_pc->interval[0]) {
@@ -155,7 +156,7 @@ skip_idle:
 on_hold:
 	tokens = sched_pc->tokens_min - tokens;
 	sched_pc->flags = flags;
-	BUG_ON(tokens < 0);
+	// BUG_ON(tokens < 0); probably doesn't hold anymore
 
 #ifdef	CONFIG_VSERVER_HARDCPU
 	/* next interval? */

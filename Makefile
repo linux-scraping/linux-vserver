@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 27
-EXTRAVERSION = .19-vs2.3.0.36.4
+EXTRAVERSION = .21-vs2.3.0.36.4
 NAME = Trembling Tortoise
 
 # *DOCUMENTATION*
@@ -554,6 +554,9 @@ KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
 
 # disable pointer signed / unsigned warnings in gcc 4.0
 KBUILD_CFLAGS += $(call cc-option,-Wno-pointer-sign,)
+
+# disable invalid "can't wrap" optimzations for signed / pointers
+KBUILD_CFLAGS	+= $(call cc-option,-fwrapv)
 
 # Add user supplied CPPFLAGS, AFLAGS and CFLAGS as the last assignments
 # But warn user when we do so

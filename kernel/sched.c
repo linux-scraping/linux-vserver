@@ -499,16 +499,6 @@ struct root_domain {
 static struct root_domain def_root_domain;
 
 #endif
-	unsigned long norm_time;
-	unsigned long idle_time;
-#ifdef CONFIG_VSERVER_IDLETIME
-	int idle_skip;
-#endif
-#ifdef CONFIG_VSERVER_HARDCPU
-	struct list_head hold_queue;
-	unsigned long nr_onhold;
-	int idle_tokens;
-#endif
 
 /*
  * This is the main, per-CPU runqueue data structure.
@@ -588,6 +578,16 @@ struct rq {
 	struct call_single_data hrtick_csd;
 #endif
 	struct hrtimer hrtick_timer;
+#endif
+	unsigned long norm_time;
+	unsigned long idle_time;
+#ifdef CONFIG_VSERVER_IDLETIME
+	int idle_skip;
+#endif
+#ifdef CONFIG_VSERVER_HARDCPU
+	struct list_head hold_queue;
+	unsigned long nr_onhold;
+	int idle_tokens;
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
@@ -1776,6 +1776,8 @@ static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 		p->sched_class->prio_changed(rq, p, oldprio, running);
 }
 
+#include "sched_mon.h"
+
 #ifdef CONFIG_SMP
 
 /* Used instead of source_load when we know the type == 0 */
@@ -1849,9 +1851,6 @@ struct migration_req {
 
 	struct completion done;
 };
-
-#include "sched_mon.h"
-
 
 /*
  * The task's runqueue lock must be held.
@@ -2195,6 +2194,8 @@ static int sched_balance_self(int cpu, int flag)
 
 #endif /* CONFIG_SMP */
 
+#include "sched_hard.h"
+
 /***
  * try_to_wake_up - wake up a thread
  * @p: the to-be-woken-up thread
@@ -2238,6 +2239,13 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	smp_wmb();
 	rq = task_rq_lock(p, &flags);
 	old_state = p->state;
+
+	/* we need to unhold suspended tasks */
+	if (old_state & TASK_ONHOLD) {
+		vx_unhold_task(p, rq);
+		old_state = p->state;
+	}
+
 	if (!(old_state & state))
 		goto out;
 
@@ -4479,6 +4487,11 @@ need_resched_nonpreemptible:
 		idle_balance(cpu, rq);
 
 	prev->sched_class->put_prev_task(rq, prev);
+
+	vx_set_rq_time(rq, jiffies);	/* update time */
+	vx_schedule(prev, rq, cpu);	/* hold if over limit */
+	vx_try_unhold(rq, cpu);		/* unhold if refilled */
+
 	next = pick_next_task(rq, prev);
 
 	if (likely(prev != next)) {
@@ -8201,7 +8214,10 @@ void __init sched_init(void)
 
 #endif
 #endif /* CONFIG_FAIR_GROUP_SCHED */
-
+#ifdef CONFIG_VSERVER_HARDCPU
+		INIT_LIST_HEAD(&rq->hold_queue);
+		rq->nr_onhold = 0;
+#endif
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
 #ifdef CONFIG_RT_GROUP_SCHED
 		INIT_LIST_HEAD(&rq->leaf_rt_rq_list);
