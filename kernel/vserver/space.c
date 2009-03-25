@@ -88,7 +88,6 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	struct mnt_namespace *old_ns;
 	struct uts_namespace *old_uts;
 	struct ipc_namespace *old_ipc;
-	struct user_namespace *old_user;
 #ifdef	CONFIG_PID_NS
 	struct pid_namespace *old_pid;
 #endif
@@ -125,14 +124,6 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 	} else
 		old_ipc = NULL;
 
-	if (mask & CLONE_NEWUSER) {
-		old_user = nsproxy->user_ns;
-		nsproxy->user_ns = new_nsproxy->user_ns;
-		if (nsproxy->user_ns)
-			get_user_ns(nsproxy->user_ns);
-	} else
-		old_user = NULL;
-
 #ifdef	CONFIG_PID_NS
 	if (mask & CLONE_NEWPID) {
 		old_pid = nsproxy->pid_ns;
@@ -157,8 +148,6 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 		put_uts_ns(old_uts);
 	if (old_ipc)
 		put_ipc_ns(old_ipc);
-	if (old_user)
-		put_user_ns(old_user);
 #ifdef	CONFIG_PID_NS
 	if (old_pid)
 		put_pid_ns(old_pid);

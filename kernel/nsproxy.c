@@ -89,11 +89,12 @@ static struct nsproxy *unshare_namespaces(unsigned long flags,
 		goto out_pid;
 	}
 
+	/* disabled now?
 	new_nsp->user_ns = copy_user_ns(flags, orig->user_ns);
 	if (IS_ERR(new_nsp->user_ns)) {
 		err = PTR_ERR(new_nsp->user_ns);
 		goto out_user;
-	}
+	} */
 
 	new_nsp->net_ns = copy_net_ns(flags, orig->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
@@ -104,9 +105,6 @@ static struct nsproxy *unshare_namespaces(unsigned long flags,
 	return new_nsp;
 
 out_net:
-	if (new_nsp->user_ns)
-		put_user_ns(new_nsp->user_ns);
-out_user:
 	if (new_nsp->pid_ns)
 		put_pid_ns(new_nsp->pid_ns);
 out_pid:
@@ -146,8 +144,6 @@ struct nsproxy *copy_nsproxy(struct nsproxy *orig)
 			get_ipc_ns(ns->ipc_ns);
 		if (ns->pid_ns)
 			get_pid_ns(ns->pid_ns);
-		if (ns->user_ns)
-			get_user_ns(ns->user_ns);
 		if (ns->net_ns)
 			get_net(ns->net_ns);
 	}
@@ -173,7 +169,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 	get_nsproxy(old_ns);
 
 	if (!(flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-				CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET)))
+				CLONE_NEWPID | CLONE_NEWNET)))
 		return 0;
 
 	if (!capable(CAP_SYS_ADMIN)) {
@@ -219,8 +215,6 @@ void free_nsproxy(struct nsproxy *ns)
 		put_ipc_ns(ns->ipc_ns);
 	if (ns->pid_ns)
 		put_pid_ns(ns->pid_ns);
-	if (ns->user_ns)
-		put_user_ns(ns->user_ns);
 	if (ns->net_ns)
 		put_net(ns->net_ns);
 	atomic_dec(&vs_global_nsproxy);
@@ -241,7 +235,7 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 		unshare_flags, current->nsproxy);
 
 	if (!(unshare_flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-			       CLONE_NEWUSER | CLONE_NEWNET)))
+			       CLONE_NEWNET)))
 		return 0;
 
 	if (!capable(CAP_SYS_ADMIN))

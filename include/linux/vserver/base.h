@@ -135,10 +135,10 @@ enum {
 #define vx_cap_raised(v, c, f)	cap_raised(vx_info_mbcaps(v, c), f)
 
 #define vx_capable(b, c) (capable(b) || \
-	(cap_raised(current->cap_effective, b) && vx_ccaps(c)))
+	(cap_raised(current_cap(), b) && vx_ccaps(c)))
 
 #define nx_capable(b, c) (capable(b) || \
-	(cap_raised(current->cap_effective, b) && nx_ncaps(c)))
+	(cap_raised(current_cap(), b) && nx_ncaps(c)))
 
 #define vx_current_initpid(n) \
 	(current->vx_info && \

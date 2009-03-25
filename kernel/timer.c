@@ -1022,21 +1022,6 @@ unsigned long get_next_timer_interrupt(unsigned long now)
 }
 #endif
 
-#ifndef CONFIG_VIRT_CPU_ACCOUNTING
-void account_process_tick(struct task_struct *p, int user_tick)
-{
-	cputime_t one_jiffy = jiffies_to_cputime(1);
-
-	if (user_tick) {
-		account_user_time(p, one_jiffy);
-		account_user_time_scaled(p, cputime_to_scaled(one_jiffy));
-	} else {
-		account_system_time(p, HARDIRQ_OFFSET, one_jiffy);
-		account_system_time_scaled(p, cputime_to_scaled(one_jiffy));
-	}
-}
-#endif
-
 static inline
 void __vx_consume_token(struct _vx_sched_pc *sched_pc)
 {
@@ -1223,25 +1208,25 @@ asmlinkage long do_getxpid(long *ppid)
 SYSCALL_DEFINE0(getuid)
 {
 	/* Only we change this so SMP safe */
-	return current->uid;
+	return current_uid();
 }
 
 SYSCALL_DEFINE0(geteuid)
 {
 	/* Only we change this so SMP safe */
-	return current->euid;
+	return current_euid();
 }
 
 SYSCALL_DEFINE0(getgid)
 {
 	/* Only we change this so SMP safe */
-	return current->gid;
+	return current_gid();
 }
 
 SYSCALL_DEFINE0(getegid)
 {
 	/* Only we change this so SMP safe */
-	return  current->egid;
+	return  current_egid();
 }
 
 #endif

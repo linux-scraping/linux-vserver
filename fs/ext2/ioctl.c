@@ -51,8 +51,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			goto setflags_out;
 		}
 
-		if (!S_ISDIR(inode->i_mode))
-			flags &= ~EXT2_DIRSYNC_FL;
+		flags = ext2_mask_flags(inode->i_mode, flags);
 
 		if (IS_BARRIER(inode)) {
 			vxwprintk_task(1, "messing with the barrier.");

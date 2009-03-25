@@ -14,7 +14,6 @@
 #include <linux/stat.h>
 #include <linux/module.h>
 #include <linux/mount.h>
-#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/idr.h>
 #include <linux/namei.h>
@@ -380,7 +379,6 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 	struct inode *inode = NULL;
 	int error = -ENOENT;
 
-	lock_kernel();
 	spin_lock(&proc_subdir_lock);
 	for (de = de->subdir; de ; de = de->next) {
 		if (de->namelen != dentry->d_name.len)
@@ -402,7 +400,6 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 	}
 	spin_unlock(&proc_subdir_lock);
 out_unlock:
-	unlock_kernel();
 
 	if (inode) {
 		dentry->d_op = &proc_dentry_operations;
@@ -436,8 +433,6 @@ int proc_readdir_de(struct proc_dir_entry *de, struct file *filp, void *dirent,
 	int i;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 	int ret = 0;
-
-	lock_kernel();
 
 	ino = inode->i_ino;
 	i = filp->f_pos;
@@ -495,7 +490,7 @@ int proc_readdir_de(struct proc_dir_entry *de, struct file *filp, void *dirent,
 			spin_unlock(&proc_subdir_lock);
 	}
 	ret = 1;
-out:	unlock_kernel();
+out:
 	return ret;	
 }
 
@@ -512,6 +507,7 @@ int proc_readdir(struct file *filp, void *dirent, filldir_t filldir)
  * the /proc directory.
  */
 static const struct file_operations proc_dir_operations = {
+	.llseek			= generic_file_llseek,
 	.read			= generic_read_dir,
 	.readdir		= proc_readdir,
 };
