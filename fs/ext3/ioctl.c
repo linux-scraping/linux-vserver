@@ -55,8 +55,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			goto flags_out;
 		}
 
-		if (!S_ISDIR(inode->i_mode))
-			flags &= ~EXT3_DIRSYNC_FL;
+		flags = ext3_mask_flags(inode->i_mode, flags);
 
 		if (IS_BARRIER(inode)) {
 			vxwprintk_task(1, "messing with the barrier.");

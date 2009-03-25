@@ -7,8 +7,8 @@
 
 #include <net/ipv6.h>
 
-#define NXAV6(a)	NIP6((a)->ip), NIP6((a)->mask), (a)->prefix, (a)->type
-#define NXAV6_FMT	"[" NIP6_FMT "/" NIP6_FMT "/%d:%04x]"
+#define NXAV6(a)	&(a)->ip, &(a)->mask, (a)->prefix, (a)->type
+#define NXAV6_FMT	"[%pI6/%pI6/%d:%04x]"
 
 
 #ifdef	CONFIG_IPV6
@@ -31,8 +31,8 @@ int v6_addr_match(struct nx_addr_v6 *nxa,
 		break;
 	}
 	vxdprintk(VXD_CBIT(net, 0),
-		"v6_addr_match(%p" NXAV6_FMT ", " NIP6_FMT ", %04x) = %d",
-		nxa, NXAV6(nxa), NIP6(*addr), mask, ret);
+		"v6_addr_match(%p" NXAV6_FMT ",%pI6,%04x) = %d",
+		nxa, NXAV6(nxa), addr, mask, ret);
 	return ret;
 }
 
@@ -51,8 +51,8 @@ int v6_addr_in_nx_info(struct nx_info *nxi,
 	ret = 0;
 out:
 	vxdprintk(VXD_CBIT(net, 0),
-		"v6_addr_in_nx_info(%p[#%u]," NIP6_FMT ",%04x) = %d",
-		nxi, nxi ? nxi->nx_id : 0, NIP6(*addr), mask, ret);
+		"v6_addr_in_nx_info(%p[#%u],%pI6,%04x) = %d",
+		nxi, nxi ? nxi->nx_id : 0, addr, mask, ret);
 	return ret;
 }
 
@@ -112,8 +112,8 @@ int __v6_addr_match_socket(const struct sock *sk, struct nx_addr_v6 *nxa)
 	struct in6_addr *saddr = inet6_rcv_saddr(sk);
 
 	vxdprintk(VXD_CBIT(net, 5),
-		"__v6_addr_in_socket(%p," NXAV6_FMT ") %p:" NIP6_FMT " %p;%lx",
-		sk, NXAV6(nxa), nxi, NIP6(*saddr), sk->sk_socket,
+		"__v6_addr_in_socket(%p," NXAV6_FMT ") %p:%pI6 %p;%lx",
+		sk, NXAV6(nxa), nxi, saddr, sk->sk_socket,
 		(sk->sk_socket?sk->sk_socket->flags:0));
 
 	if (!ipv6_addr_any(saddr)) {	/* direct address match */

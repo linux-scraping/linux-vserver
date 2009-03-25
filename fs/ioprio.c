@@ -28,14 +28,20 @@
 #include <linux/pid_namespace.h>
 #include <linux/vs_base.h>
 
-static int set_task_ioprio(struct task_struct *task, int ioprio)
+int set_task_ioprio(struct task_struct *task, int ioprio)
 {
 	int err;
 	struct io_context *ioc;
+	const struct cred *cred = current_cred(), *tcred;
 
-	if (task->uid != current->euid &&
-	    task->uid != current->uid && !capable(CAP_SYS_NICE))
+	rcu_read_lock();
+	tcred = __task_cred(task);
+	if (tcred->uid != cred->euid &&
+	    tcred->uid != cred->uid && !capable(CAP_SYS_NICE)) {
+		rcu_read_unlock();
 		return -EPERM;
+	}
+	rcu_read_unlock();
 
 	err = security_task_setioprio(task, ioprio);
 	if (err)
@@ -65,6 +71,7 @@ static int set_task_ioprio(struct task_struct *task, int ioprio)
 	task_unlock(task);
 	return err;
 }
+EXPORT_SYMBOL_GPL(set_task_ioprio);
 
 SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 {
@@ -126,7 +133,7 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 			break;
 		case IOPRIO_WHO_USER:
 			if (!who)
-				user = current->user;
+				user = current_user();
 			else
 				user = find_user(who);
 
@@ -134,7 +141,7 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 				break;
 
 			do_each_thread(g, p) {
-				if (p->uid != who)
+				if (__task_cred(p)->uid != who)
 					continue;
 				ret = set_task_ioprio(p, ioprio);
 				if (ret)
@@ -221,7 +228,7 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
 			break;
 		case IOPRIO_WHO_USER:
 			if (!who)
-				user = current->user;
+				user = current_user();
 			else
 				user = find_user(who);
 
@@ -229,7 +236,7 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
 				break;
 
 			do_each_thread(g, p) {
-				if (p->uid != user->uid)
+				if (__task_cred(p)->uid != user->uid)
 					continue;
 				tmpio = get_task_ioprio(p);
 				if (tmpio < 0)

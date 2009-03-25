@@ -1113,6 +1113,7 @@ SYSCALL_DEFINE4(migrate_pages, pid_t, pid, unsigned long, maxnode,
 		const unsigned long __user *, old_nodes,
 		const unsigned long __user *, new_nodes)
 {
+	const struct cred *cred = current_cred(), *tcred;
 	struct mm_struct *mm;
 	struct task_struct *task;
 	nodemask_t old;
@@ -1147,12 +1148,16 @@ SYSCALL_DEFINE4(migrate_pages, pid_t, pid, unsigned long, maxnode,
 	 * capabilities, superuser privileges or the same
 	 * userid as the target process.
 	 */
-	if ((current->euid != task->suid) && (current->euid != task->uid) &&
-	    (current->uid != task->suid) && (current->uid != task->uid) &&
+	rcu_read_lock();
+	tcred = __task_cred(task);
+	if (cred->euid != tcred->suid && cred->euid != tcred->uid &&
+	    cred->uid  != tcred->suid && cred->uid  != tcred->uid &&
 	    !capable(CAP_SYS_NICE)) {
+		rcu_read_unlock();
 		err = -EPERM;
 		goto out;
 	}
+	rcu_read_unlock();
 
 	task_nodes = cpuset_mems_allowed(task);
 	/* Is the user allowed to access the target nodes? */

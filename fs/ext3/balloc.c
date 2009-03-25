@@ -1436,14 +1436,14 @@ static int ext3_has_free_blocks(struct super_block *sb)
 
 	cond = (free_blocks < root_blocks + 1 &&
 		!capable(CAP_SYS_RESOURCE) &&
-		sbi->s_resuid != current->fsuid &&
+		sbi->s_resuid != current_fsuid() &&
 		(sbi->s_resgid == 0 || !in_group_p (sbi->s_resgid)));
 
 	vxdprintk(VXD_CBIT(dlim, 3),
 		"ext3_has_free_blocks(%p): %llu<%llu+1, %c, %u!=%u r=%d",
 		sb, free_blocks, root_blocks,
 		!capable(CAP_SYS_RESOURCE)?'1':'0',
-		sbi->s_resuid, current->fsuid, cond?0:1);
+		sbi->s_resuid, current_fsuid(), cond?0:1);
 
 	return (cond ? 0 : 1);
 }
