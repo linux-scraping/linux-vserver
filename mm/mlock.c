@@ -658,8 +658,10 @@ void *alloc_locked_buffer(size_t size)
 	if (!buffer)
 		goto out;
 
-	current->mm->total_vm  += pgsz;
-	current->mm->locked_vm += pgsz;
+	// current->mm->total_vm  += pgsz;
+	vx_vmpages_add(current->mm, pgsz);
+	// current->mm->locked_vm += pgsz;
+	vx_vmlocked_add(current->mm, pgsz);
 
  out:
 	up_write(&current->mm->mmap_sem);
@@ -672,8 +674,10 @@ void release_locked_buffer(void *buffer, size_t size)
 
 	down_write(&current->mm->mmap_sem);
 
-	current->mm->total_vm  -= pgsz;
-	current->mm->locked_vm -= pgsz;
+	// current->mm->total_vm  -= pgsz;
+	vx_vmpages_sub(current->mm, pgsz);
+	// current->mm->locked_vm -= pgsz;
+	vx_vmlocked_sub(current->mm, pgsz);
 
 	up_write(&current->mm->mmap_sem);
 }
