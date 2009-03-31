@@ -552,6 +552,9 @@ static void freeary(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp)
 	sem_unlock(sma);
 
 	ns->used_sems -= sma->sem_nsems;
+	/* FIXME: obsoleted? */
+	vx_nsems_sub(sma, sma->sem_nsems);
+	vx_semary_dec(sma);
 	security_sem_free(sma);
 	ipc_rcu_putref(sma);
 }
