@@ -612,14 +612,14 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 			struct nsproxy *old_nsp, *new_nsp;
 
 			ret = unshare_nsproxy_namespaces(
-				CLONE_NEWUTS | CLONE_NEWIPC,
+				CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER,
 				&new_nsp, NULL);
 			if (ret)
 				goto out;
 
 			old_nsp = xchg(&p->nsproxy, new_nsp);
 			vx_set_space(vxi,
-				CLONE_NEWUTS | CLONE_NEWIPC, 0);
+				CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER, 0);
 			put_nsproxy(old_nsp);
 		}
 	}

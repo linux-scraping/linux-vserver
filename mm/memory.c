@@ -55,6 +55,7 @@
 #include <linux/kallsyms.h>
 #include <linux/swapops.h>
 #include <linux/elf.h>
+// #include <linux/vs_memory.h>
 
 #include <asm/pgalloc.h>
 #include <asm/uaccess.h>

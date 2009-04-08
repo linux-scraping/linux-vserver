@@ -44,7 +44,7 @@ static const struct vcmd_space_mask_v1 space_mask_v0 = {
 		CLONE_NEWNS |
 		CLONE_NEWUTS |
 		CLONE_NEWIPC |
-		/* CLONE_NEWUSER | */
+		CLONE_NEWUSER |
 		0
 };
 
@@ -53,7 +53,7 @@ static const struct vcmd_space_mask_v1 space_mask = {
 		CLONE_NEWNS |
 		CLONE_NEWUTS |
 		CLONE_NEWIPC |
-		/* CLONE_NEWUSER | */
+		CLONE_NEWUSER |
 #ifdef	CONFIG_PID_NS
 		CLONE_NEWPID |
 #endif
@@ -68,7 +68,7 @@ static const struct vcmd_space_mask_v1 default_space_mask = {
 		CLONE_NEWNS |
 		CLONE_NEWUTS |
 		CLONE_NEWIPC |
-		/* CLONE_NEWUSER | */
+		CLONE_NEWUSER |
 #ifdef	CONFIG_PID_NS
 //		CLONE_NEWPID |
 #endif
