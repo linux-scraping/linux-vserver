@@ -335,7 +335,7 @@
 #define __NR_timer_getoverrun	264
 #define __NR_timer_delete	265
 #define __NR_timer_create	266
-/* #define __NR_vserver		267 Reserved for VSERVER */
+#define __NR_vserver		267
 #define __NR_io_setup		268
 #define __NR_io_destroy		269
 #define __NR_io_submit		270
