@@ -2278,9 +2278,10 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 	down_write(&namespace_sem);
 	mutex_lock(&old.dentry->d_inode->i_mutex);
 	error = -EINVAL;
-	if (IS_MNT_SHARED(old.mnt) ||
+	if ((IS_MNT_SHARED(old.mnt) ||
 		IS_MNT_SHARED(new.mnt->mnt_parent) ||
-		IS_MNT_SHARED(root.mnt->mnt_parent))
+		IS_MNT_SHARED(root.mnt->mnt_parent)) &&
+		!vx_flags(VXF_STATE_SETUP, 0))
 		goto out2;
 	if (!check_mnt(root.mnt))
 		goto out2;
