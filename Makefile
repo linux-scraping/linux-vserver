@@ -1,7 +1,7 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 29
-EXTRAVERSION = -vs2.3.0.36.9-pre5
+EXTRAVERSION = .1-vs2.3.0.36.9-pre5
 NAME = Temporary Tasmanian Devil
 
 # *DOCUMENTATION*
