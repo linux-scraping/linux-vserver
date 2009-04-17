@@ -126,6 +126,11 @@ static inline int compute_score(struct sock *sk, struct net *net,
 			if (rcv_saddr != daddr)
 				return -1;
 			score += 2;
+		} else {
+			/* block non nx_info ips */
+			if (!v4_addr_in_nx_info(sk->sk_nx_info,
+				daddr, NXA_MASK_BIND))
+				return -1;
 		}
 		if (sk->sk_bound_dev_if) {
 			if (sk->sk_bound_dev_if != dif)
