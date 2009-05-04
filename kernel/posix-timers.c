@@ -322,12 +322,7 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 {
 	struct task_struct *task;
 	int shared, ret = -1;
-	struct vx_info_save vxis;
-	struct vx_info *vxi;
 
-	/* FIXME: move that down where we have the task */
-	vxi = task_get_vx_info(timr->it_process);
-	enter_vx_info(vxi, &vxis);
 	/*
 	 * FIXME: if ->sigq is queued we can race with
 	 * dequeue_signal()->do_schedule_next_timer().
@@ -344,13 +339,18 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 	rcu_read_lock();
 	task = pid_task(timr->it_pid, PIDTYPE_PID);
 	if (task) {
+		struct vx_info_save vxis;
+		struct vx_info *vxi;
+
+		vxi = task_get_vx_info(timr->it_process);
+		enter_vx_info(vxi, &vxis);
 		shared = !(timr->it_sigev_notify & SIGEV_THREAD_ID);
 		ret = send_sigqueue(timr->sigq, task, shared);
+		leave_vx_info(&vxis);
+		put_vx_info(vxi);
 	}
 	rcu_read_unlock();
 
-	leave_vx_info(&vxis);
-	put_vx_info(vxi);
 	/* If we failed to send the signal the timer stops. */
 	return ret > 0;
 }
