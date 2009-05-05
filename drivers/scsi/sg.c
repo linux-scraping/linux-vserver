@@ -2109,7 +2109,7 @@ __sg_remove_sfp(Sg_device * sdp, Sg_fd * sfp)
 		}
 	}
 	if (sfp->reserve.bufflen > 0) {
-		SCSI_LOG_TIMEOUT(6, 
+		SCSI_LOG_TIMEOUT(6,
 			printk("__sg_remove_sfp:    bufflen=%d, k_use_sg=%d\n",
 			(int) sfp->reserve.bufflen, (int) sfp->reserve.k_use_sg));
 		sg_remove_scat(&sfp->reserve);
@@ -2150,7 +2150,7 @@ sg_remove_sfp(Sg_device * sdp, Sg_fd * sfp)
 		/* MOD_INC's to inhibit unloading sg and associated adapter driver */
 		/* only bump the access_count if we actually succeeded in
 		 * throwing another counter on the host module */
-		scsi_device_get(sdp->device);	/* XXX: retval ignored? */	
+		scsi_device_get(sdp->device);	/* XXX: retval ignored? */
 		sfp->closed = 1;	/* flag dirty state on this fd */
 		SCSI_LOG_TIMEOUT(1, printk("sg_remove_sfp: worrisome, %d writes pending\n",
 				  dirty));
@@ -2580,7 +2580,7 @@ static int sg_proc_seq_show_debug(struct seq_file *s, void *v)
 		struct scsi_device *scsidp = sdp->device;
 
 		if (NULL == scsidp) {
-			seq_printf(s, "device %d detached ??\n", 
+			seq_printf(s, "device %d detached ??\n",
 				   (int)it->index);
 			return 0;
 		}

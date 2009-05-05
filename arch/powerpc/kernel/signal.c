@@ -31,7 +31,7 @@ void __user * get_sigframe(struct k_sigaction *ka, struct pt_regs *regs,
         unsigned long oldsp, newsp;
 
         /* Default to using normal stack */
-        oldsp = regs->gpr[1];
+	oldsp = regs->gpr[1];
 
 	/* Check for alt stack */
 	if ((ka->sa.sa_flags & SA_ONSTACK) &&
