@@ -36,6 +36,7 @@
 #include <linux/vserver/limit.h>
 #include <linux/vserver/limit_int.h>
 #include <linux/vserver/space.h>
+#include <linux/init_task.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
@@ -67,7 +68,7 @@ static spinlock_t vx_info_inactive_lock = SPIN_LOCK_UNLOCKED;
 static struct vx_info *__alloc_vx_info(xid_t xid)
 {
 	struct vx_info *new = NULL;
-	int cpu;
+	int cpu, index;
 
 	vxdprintk(VXD_CBIT(xid, 0), "alloc_vx_info(%d)*", xid);
 
@@ -116,6 +117,14 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
+
+	// preconfig fs entries
+	for (index = 0; index < VX_SPACES; index++) {
+		write_lock(&init_fs.lock);
+		init_fs.users++;
+		write_unlock(&init_fs.lock);
+		new->vx_fs[index] = &init_fs;
+	}
 
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
@@ -172,7 +181,7 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 {
 	struct nsproxy *nsproxy;
 	struct fs_struct *fs;
-	int index;
+	int index, kill;
 
 	might_sleep();
 
@@ -185,8 +194,11 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 			put_nsproxy(nsproxy);
 
 		fs = xchg(&vxi->vx_fs[index], NULL);
-		if (fs)
-			put_fs_struct(fs);
+		write_lock(&fs->lock);
+		kill = !--fs->users;
+		write_unlock(&fs->lock);
+		if (kill)
+			free_fs_struct(fs);
 	}
 }
 

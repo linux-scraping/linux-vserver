@@ -37,7 +37,6 @@
 #include <linux/init_task.h>
 #include <linux/syscalls.h>
 #include <linux/vs_pid.h>
-#include <linux/vserver/global.h>
 
 #define pid_hashfn(nr, ns)	\
 	hash_long((unsigned long)nr + (unsigned long)ns, pidhash_shift)

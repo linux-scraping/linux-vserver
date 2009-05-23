@@ -184,33 +184,12 @@ struct nsproxy *__vs_merge_nsproxy(struct nsproxy *old,
 	return proxy;
 }
 
-/*
- *	merge two fs structs into a new one.
- *	will take a reference on the result.
- */
-
-static inline
-struct fs_struct *__vs_merge_fs(struct fs_struct *old,
-	struct fs_struct *fs, unsigned long mask)
-{
-	if (!(mask & CLONE_FS)) {
-		if (old)
-			atomic_inc(&old->count);
-		return old;
-	}
-
-	if (!fs)
-		return NULL;
-
-	return copy_fs_struct(fs);
-}
-
 
 int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy, *proxy_cur, *proxy_new;
-	struct fs_struct *fs, *fs_cur, *fs_new;
-	int ret;
+	struct fs_struct *fs, *fs_cur;
+	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_enter_space(%p[#%u],0x%08lx,%d)",
 		vxi, vxi->vx_id, mask, index);
@@ -229,37 +208,39 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	task_lock(current);
 	fs_cur = current->fs;
-	atomic_inc(&fs_cur->count);
+
+	if (mask & CLONE_FS) {
+		write_lock(&fs->lock);
+		fs->users++;
+		write_unlock(&fs->lock);
+
+		write_lock(&fs_cur->lock);
+		current->fs = fs;
+		kill = !--fs_cur->users;
+		write_unlock(&fs_cur->lock);
+	}
+
 	proxy_cur = current->nsproxy;
 	get_nsproxy(proxy_cur);
 	task_unlock(current);
 
-	fs_new = __vs_merge_fs(fs_cur, fs, mask);
-	if (IS_ERR(fs_new)) {
-		ret = PTR_ERR(fs_new);
-		goto out_put;
-	}
+	if (kill)
+		free_fs_struct(fs_cur);
 
 	proxy_new = __vs_merge_nsproxy(proxy_cur, proxy, mask);
 	if (IS_ERR(proxy_new)) {
 		ret = PTR_ERR(proxy_new);
-		goto out_put_fs;
+		goto out_put;
 	}
 
-	fs_new = xchg(&current->fs, fs_new);
 	proxy_new = xchg(&current->nsproxy, proxy_new);
 	ret = 0;
 
 	if (proxy_new)
 		put_nsproxy(proxy_new);
-out_put_fs:
-	if (fs_new)
-		put_fs_struct(fs_new);
 out_put:
 	if (proxy_cur)
 		put_nsproxy(proxy_cur);
-	if (fs_cur)
-		put_fs_struct(fs_cur);
 	return ret;
 }
 
@@ -267,8 +248,8 @@ out_put:
 int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy_vxi, *proxy_cur, *proxy_new;
-	struct fs_struct *fs_vxi, *fs_cur, *fs_new;
-	int ret;
+	struct fs_struct *fs_vxi, *fs_cur;
+	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_set_space(%p[#%u],0x%08lx,%d)",
 		vxi, vxi->vx_id, mask, index);
@@ -284,38 +265,40 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	task_lock(current);
 	fs_cur = current->fs;
-	atomic_inc(&fs_cur->count);
+
+	if ((mask & CLONE_FS) && (fs_cur != fs_vxi)) {
+		write_lock(&fs_cur->lock);
+		fs_cur->users++;
+		write_unlock(&fs_cur->lock);
+
+		write_lock(&fs_vxi->lock);
+		vxi->vx_fs[index] = fs_cur;
+		kill = !--fs_vxi->users;
+		write_unlock(&fs_vxi->lock);
+	}
+
 	proxy_cur = current->nsproxy;
 	get_nsproxy(proxy_cur);
 	task_unlock(current);
 
-	fs_new = __vs_merge_fs(fs_vxi, fs_cur, mask);
-	if (IS_ERR(fs_new)) {
-		ret = PTR_ERR(fs_new);
-		goto out_put;
-	}
+	if (kill)
+		free_fs_struct(fs_vxi);
 
 	proxy_new = __vs_merge_nsproxy(proxy_vxi, proxy_cur, mask);
 	if (IS_ERR(proxy_new)) {
 		ret = PTR_ERR(proxy_new);
-		goto out_put_fs;
+		goto out_put;
 	}
 
-	fs_new = xchg(&vxi->vx_fs[index], fs_new);
 	proxy_new = xchg(&vxi->vx_nsproxy[index], proxy_new);
 	vxi->vx_nsmask[index] |= mask;
 	ret = 0;
 
 	if (proxy_new)
 		put_nsproxy(proxy_new);
-out_put_fs:
-	if (fs_new)
-		put_fs_struct(fs_new);
 out_put:
 	if (proxy_cur)
 		put_nsproxy(proxy_cur);
-	if (fs_cur)
-		put_fs_struct(fs_cur);
 	return ret;
 }
 

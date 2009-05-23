@@ -79,7 +79,8 @@ static int proc_virtual_status(char *buffer)
 	return sprintf(buffer,
 		"#CTotal:\t%d\n"
 		"#CActive:\t%d\n"
-		"#NSProxy:\t%d\t%d %d %d %d %d %d\n",
+		"#NSProxy:\t%d\t%d %d %d %d %d %d\n"
+		"#InitTask:\t%d\t%d %d\n",
 		atomic_read(&vx_global_ctotal),
 		atomic_read(&vx_global_cactive),
 		atomic_read(&vs_global_nsproxy),
@@ -88,7 +89,10 @@ static int proc_virtual_status(char *buffer)
 		atomic_read(&vs_global_uts_ns),
 		atomic_read(&vs_global_ipc_ns),
 		atomic_read(&vs_global_user_ns),
-		atomic_read(&vs_global_pid_ns));
+		atomic_read(&vs_global_pid_ns),
+		atomic_read(&init_task.usage),
+		atomic_read(&init_task.nsproxy->count),
+		init_task.fs->users);
 }
 
 

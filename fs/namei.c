@@ -891,9 +891,9 @@ done:
 	__follow_mount(path);
 	return 0;
 hidden:
-	vxwprintk_task(1, "did lookup hidden %s:%p[#%d,%lu] »%s«.",
+	vxwprintk_task(1, "did lookup hidden %s:%p[#%d,%lu] »%s/%.*s«.",
 		inode->i_sb->s_id, inode, inode->i_tag, inode->i_ino,
-		vxd_path(&nd->path));
+		vxd_path(&nd->path), name->len, name->name);
 	dput(dentry);
 	return -ENOENT;
 
@@ -3244,10 +3244,3 @@ EXPORT_SYMBOL(vfs_symlink);
 EXPORT_SYMBOL(vfs_unlink);
 EXPORT_SYMBOL(dentry_unhash);
 EXPORT_SYMBOL(generic_readlink);
-
-/* to be mentioned only in INIT_TASK */
-struct fs_struct init_fs = {
-	.count		= ATOMIC_INIT(1),
-	.lock		= __RW_LOCK_UNLOCKED(init_fs.lock),
-	.umask		= 0022,
-};
