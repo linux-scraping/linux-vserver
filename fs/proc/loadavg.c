@@ -12,21 +12,37 @@
 
 static int loadavg_proc_show(struct seq_file *m, void *v)
 {
+	unsigned long running;
+	unsigned int threads;
 	int a, b, c;
 	unsigned long seq;
 
 	do {
 		seq = read_seqbegin(&xtime_lock);
-		a = avenrun[0] + (FIXED_1/200);
-		b = avenrun[1] + (FIXED_1/200);
-		c = avenrun[2] + (FIXED_1/200);
+		if (vx_flags(VXF_VIRT_LOAD, 0)) {
+			struct vx_info *vxi = current->vx_info;
+
+			a = vxi->cvirt.load[0] + (FIXED_1/200);
+			b = vxi->cvirt.load[1] + (FIXED_1/200);
+			c = vxi->cvirt.load[2] + (FIXED_1/200);
+
+			running = atomic_read(&vxi->cvirt.nr_running);
+			threads = atomic_read(&vxi->cvirt.nr_threads);
+		} else {
+			a = avenrun[0] + (FIXED_1/200);
+			b = avenrun[1] + (FIXED_1/200);
+			c = avenrun[2] + (FIXED_1/200);
+
+			running = nr_running();
+			threads = nr_threads;
+		}
 	} while (read_seqretry(&xtime_lock, seq));
 
 	seq_printf(m, "%d.%02d %d.%02d %d.%02d %ld/%d %d\n",
 		LOAD_INT(a), LOAD_FRAC(a),
 		LOAD_INT(b), LOAD_FRAC(b),
 		LOAD_INT(c), LOAD_FRAC(c),
-		nr_running(), nr_threads,
+		running, threads,
 		task_active_pid_ns(current)->last_pid);
 	return 0;
 }
