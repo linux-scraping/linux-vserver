@@ -188,7 +188,7 @@ struct nsproxy *__vs_merge_nsproxy(struct nsproxy *old,
 int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy, *proxy_cur, *proxy_new;
-	struct fs_struct *fs, *fs_cur;
+	struct fs_struct *fs_cur, *fs = NULL;
 	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_enter_space(%p[#%u],0x%08lx,%d)",
@@ -203,17 +203,21 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	if ((mask & vxi->vx_nsmask[index]) != mask)
 		return -EINVAL;
 
+	if (mask & CLONE_FS) {
+		fs = copy_fs_struct(vxi->vx_fs[index]);
+		if (!fs)
+			return -ENOMEM;
+	}
 	proxy = vxi->vx_nsproxy[index];
-	fs = vxi->vx_fs[index];
+
+	vxdprintk(VXD_CBIT(space, 9),
+		"vx_enter_space(%p[#%u],0x%08lx,%d) -> (%p,%p)",
+		vxi, vxi->vx_id, mask, index, proxy, fs);
 
 	task_lock(current);
 	fs_cur = current->fs;
 
 	if (mask & CLONE_FS) {
-		write_lock(&fs->lock);
-		fs->users++;
-		write_unlock(&fs->lock);
-
 		write_lock(&fs_cur->lock);
 		current->fs = fs;
 		kill = !--fs_cur->users;
@@ -248,7 +252,7 @@ out_put:
 int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy_vxi, *proxy_cur, *proxy_new;
-	struct fs_struct *fs_vxi, *fs_cur;
+	struct fs_struct *fs_vxi, *fs;
 	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_set_space(%p[#%u],0x%08lx,%d)",
@@ -263,16 +267,17 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	proxy_vxi = vxi->vx_nsproxy[index];
 	fs_vxi = vxi->vx_fs[index];
 
+	if (mask & CLONE_FS) {
+		fs = copy_fs_struct(current->fs);
+		if (!fs)
+			return -ENOMEM;
+	}
+
 	task_lock(current);
-	fs_cur = current->fs;
 
-	if ((mask & CLONE_FS) && (fs_cur != fs_vxi)) {
-		write_lock(&fs_cur->lock);
-		fs_cur->users++;
-		write_unlock(&fs_cur->lock);
-
+	if (mask & CLONE_FS) {
 		write_lock(&fs_vxi->lock);
-		vxi->vx_fs[index] = fs_cur;
+		vxi->vx_fs[index] = fs;
 		kill = !--fs_vxi->users;
 		write_unlock(&fs_vxi->lock);
 	}
