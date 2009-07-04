@@ -23,8 +23,6 @@
 #include <linux/buffer_head.h>
 #include <linux/random.h>
 #include <linux/bitops.h>
-#include <linux/vs_dlimit.h>
-#include <linux/vs_tag.h>
 
 #include <asm/byteorder.h>
 
@@ -125,11 +123,10 @@ void ext3_free_inode (handle_t *handle, struct inode * inode)
 	 * Note: we must free any quota before locking the superblock,
 	 * as writing the quota to disk may need the lock as well.
 	 */
-	DQUOT_INIT(inode);
+	vfs_dq_init(inode);
 	ext3_xattr_delete_inode(handle, inode);
-	DQUOT_FREE_INODE(inode);
-	DQUOT_DROP(inode);
-	DLIMIT_FREE_INODE(inode);
+	vfs_dq_free_inode(inode);
+	vfs_dq_drop(inode);
 
 	is_directory = S_ISDIR(inode->i_mode);
 
@@ -443,12 +440,6 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 	inode = new_inode(sb);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
-
-	inode->i_tag = dx_current_fstag(sb);
-	if (DLIMIT_ALLOC_INODE(inode)) {
-		err = -ENOSPC;
-		goto out_dlimit;
-	}
 	ei = EXT3_I(inode);
 
 	sbi = EXT3_SB(sb);
@@ -598,7 +589,7 @@ got:
 		sizeof(struct ext3_inode) - EXT3_GOOD_OLD_INODE_SIZE : 0;
 
 	ret = inode;
-	if(DQUOT_ALLOC_INODE(inode)) {
+	if (vfs_dq_alloc_inode(inode)) {
 		err = -EDQUOT;
 		goto fail_drop;
 	}
@@ -622,8 +613,6 @@ got:
 fail:
 	ext3_std_error(sb, err);
 out:
-	DLIMIT_FREE_INODE(inode);
-out_dlimit:
 	iput(inode);
 	ret = ERR_PTR(err);
 really_out:
@@ -631,11 +620,10 @@ really_out:
 	return ret;
 
 fail_free_drop:
-	DQUOT_FREE_INODE(inode);
+	vfs_dq_free_inode(inode);
 
 fail_drop:
-	DQUOT_DROP(inode);
-	DLIMIT_FREE_INODE(inode);
+	vfs_dq_drop(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	unlock_new_inode(inode);

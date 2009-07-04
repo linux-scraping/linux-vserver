@@ -19,8 +19,6 @@
 #include <linux/ext3_jbd.h>
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
-#include <linux/vs_dlimit.h>
-#include <linux/vs_tag.h>
 
 /*
  * balloc.c contains the blocks allocation and deallocation routines
@@ -677,10 +675,8 @@ void ext3_free_blocks(handle_t *handle, struct inode *inode,
 		return;
 	}
 	ext3_free_blocks_sb(handle, sb, block, count, &dquot_freed_blocks);
-	if (dquot_freed_blocks) {
-		DLIMIT_FREE_BLOCK(inode, dquot_freed_blocks);
-		DQUOT_FREE_BLOCK(inode, dquot_freed_blocks);
-	}
+	if (dquot_freed_blocks)
+		vfs_dq_free_block(inode, dquot_freed_blocks);
 	return;
 }
 
@@ -1419,33 +1415,18 @@ out:
  *
  * Check if filesystem has at least 1 free block available for allocation.
  */
-static int ext3_has_free_blocks(struct super_block *sb)
+static int ext3_has_free_blocks(struct ext3_sb_info *sbi)
 {
-	struct ext3_sb_info *sbi = EXT3_SB(sb);
-	unsigned long long free_blocks, root_blocks;
-	int cond;
+	ext3_fsblk_t free_blocks, root_blocks;
 
 	free_blocks = percpu_counter_read_positive(&sbi->s_freeblocks_counter);
 	root_blocks = le32_to_cpu(sbi->s_es->s_r_blocks_count);
-
-	vxdprintk(VXD_CBIT(dlim, 3),
-		"ext3_has_free_blocks(%p): free=%llu, root=%llu",
-		sb, free_blocks, root_blocks);
-
-	DLIMIT_ADJUST_BLOCK(sb, dx_current_tag(), &free_blocks, &root_blocks);
-
-	cond = (free_blocks < root_blocks + 1 &&
-		!capable(CAP_SYS_RESOURCE) &&
+	if (free_blocks < root_blocks + 1 && !capable(CAP_SYS_RESOURCE) &&
 		sbi->s_resuid != current_fsuid() &&
-		(sbi->s_resgid == 0 || !in_group_p (sbi->s_resgid)));
-
-	vxdprintk(VXD_CBIT(dlim, 3),
-		"ext3_has_free_blocks(%p): %llu<%llu+1, %c, %u!=%u r=%d",
-		sb, free_blocks, root_blocks,
-		!capable(CAP_SYS_RESOURCE)?'1':'0',
-		sbi->s_resuid, current_fsuid(), cond?0:1);
-
-	return (cond ? 0 : 1);
+		(sbi->s_resgid == 0 || !in_group_p (sbi->s_resgid))) {
+		return 0;
+	}
+	return 1;
 }
 
 /**
@@ -1521,12 +1502,10 @@ ext3_fsblk_t ext3_new_blocks(handle_t *handle, struct inode *inode,
 	/*
 	 * Check quota for allocation of this block.
 	 */
-	if (DQUOT_ALLOC_BLOCK(inode, num)) {
+	if (vfs_dq_alloc_block(inode, num)) {
 		*errp = -EDQUOT;
 		return 0;
 	}
-	if (DLIMIT_ALLOC_BLOCK(inode, num))
-	    goto out_dlimit;
 
 	sbi = EXT3_SB(sb);
 	es = EXT3_SB(sb)->s_es;
@@ -1735,17 +1714,13 @@ allocated:
 
 	*errp = 0;
 	brelse(bitmap_bh);
-	DQUOT_FREE_BLOCK(inode, *count-num);
-	DLIMIT_FREE_BLOCK(inode, *count-num);
+	vfs_dq_free_block(inode, *count-num);
 	*count = num;
 	return ret_block;
 
 io_error:
 	*errp = -EIO;
 out:
-	if (!performed_allocation)
-		DLIMIT_FREE_BLOCK(inode, *count);
-out_dlimit:
 	if (fatal) {
 		*errp = fatal;
 		ext3_std_error(sb, fatal);
@@ -1754,7 +1729,7 @@ out_dlimit:
 	 * Undo the block allocation
 	 */
 	if (!performed_allocation)
-		DQUOT_FREE_BLOCK(inode, *count);
+		vfs_dq_free_block(inode, *count);
 	brelse(bitmap_bh);
 	return 0;
 }

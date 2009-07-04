@@ -23,7 +23,6 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/quotaops.h>
 #include <linux/security.h>
-#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_dmap.h"
@@ -261,21 +260,14 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 	nblocks = (size + (sb->s_blocksize - 1)) >> sb->s_blocksize_bits;
 
 	/* Allocate new blocks to quota. */
-	if (DQUOT_ALLOC_BLOCK(ip, nblocks)) {
+	if (vfs_dq_alloc_block(ip, nblocks)) {
 		return -EDQUOT;
-	}
-	/* Allocate new blocks to dlimit. */
-	if (DLIMIT_ALLOC_BLOCK(ip, nblocks)) {
-		DQUOT_FREE_BLOCK(ip, nblocks);
-		return -ENOSPC;
 	}
 
 	rc = dbAlloc(ip, INOHINT(ip), nblocks, &blkno);
 	if (rc) {
-		/*Rollback dlimit allocation. */
-		DLIMIT_FREE_BLOCK(ip, nblocks);
 		/*Rollback quota allocation. */
-		DQUOT_FREE_BLOCK(ip, nblocks);
+		vfs_dq_free_block(ip, nblocks);
 		return rc;
 	}
 
@@ -340,9 +332,7 @@ static int ea_write(struct inode *ip, struct jfs_ea_list *ealist, int size,
 
       failed:
 	/* Rollback quota allocation. */
-	DLIMIT_FREE_BLOCK(ip, nblocks);
-	/* Rollback quota allocation. */
-	DQUOT_FREE_BLOCK(ip, nblocks);
+	vfs_dq_free_block(ip, nblocks);
 
 	dbFree(ip, blkno, nblocks);
 	return rc;
@@ -478,7 +468,6 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	s64 blkno;
 	int rc;
 	int quota_allocation = 0;
-	int dlimit_allocation = 0;
 
 	/* When fsck.jfs clears a bad ea, it doesn't clear the size */
 	if (ji->ea.flag == 0)
@@ -549,16 +538,10 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 
 	if (blocks_needed > current_blocks) {
 		/* Allocate new blocks to quota. */
-		if (DQUOT_ALLOC_BLOCK(inode, blocks_needed))
+		if (vfs_dq_alloc_block(inode, blocks_needed))
 			return -EDQUOT;
 
 		quota_allocation = blocks_needed;
-
-		/* Allocate new blocks to dlimit. */
-		rc = -ENOSPC;
-		if (DLIMIT_ALLOC_BLOCK(inode, blocks_needed))
-			goto clean_up;
-		dlimit_allocation = blocks_needed;
 
 		rc = dbAlloc(inode, INOHINT(inode), (s64) blocks_needed,
 			     &blkno);
@@ -617,12 +600,9 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	return ea_size;
 
       clean_up:
-	/* Rollback dlimit allocation */
-	if (dlimit_allocation)
-		DLIMIT_FREE_BLOCK(inode, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (quota_allocation)
-		DQUOT_FREE_BLOCK(inode, quota_allocation);
+		vfs_dq_free_block(inode, quota_allocation);
 
 	return (rc);
 }
@@ -696,10 +676,8 @@ static int ea_put(tid_t tid, struct inode *inode, struct ea_buffer *ea_buf,
 	}
 
 	/* If old blocks exist, they must be removed from quota allocation. */
-	if (old_blocks) {
-		DLIMIT_FREE_BLOCK(inode, old_blocks);
-		DQUOT_FREE_BLOCK(inode, old_blocks);
-	}
+	if (old_blocks)
+		vfs_dq_free_block(inode, old_blocks);
 
 	inode->i_ctime = CURRENT_TIME;
 

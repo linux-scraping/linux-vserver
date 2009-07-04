@@ -248,6 +248,8 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 
 	oops_in_progress = 1;
 
+	oops_enter();
+
 	/* Amuse the user in a SPARC fashion */
 	if (err) printk(
 KERN_CRIT "      _______________________________ \n"
@@ -294,6 +296,7 @@ KERN_CRIT "                     ||     ||\n");
 		panic("Fatal exception");
 	}
 
+	oops_exit();
 	do_exit(SIGSEGV);
 }
 
@@ -495,7 +498,7 @@ void parisc_terminate(char *msg, struct pt_regs *regs, int code, unsigned long o
 	panic(msg);
 }
 
-void handle_interruption(int code, struct pt_regs *regs)
+void notrace handle_interruption(int code, struct pt_regs *regs)
 {
 	unsigned long fault_address = 0;
 	unsigned long fault_space = 0;

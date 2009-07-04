@@ -15,6 +15,7 @@
 #include <linux/utsname.h>
 #include <linux/nsproxy.h>
 #include <linux/err.h>
+#include <linux/fs_struct.h>
 #include <asm/uaccess.h>
 
 #include <linux/vs_context.h>

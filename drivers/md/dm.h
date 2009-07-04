@@ -52,7 +52,6 @@ int dm_table_any_congested(struct dm_table *t, int bdi_bits);
  * To check the return value from dm_table_find_target().
  */
 #define dm_target_is_valid(t) ((t)->table)
-int dm_table_barrier_ok(struct dm_table *t);
 
 xid_t dm_get_xid(struct mapped_device *md);
 
@@ -62,7 +61,7 @@ xid_t dm_get_xid(struct mapped_device *md);
 int dm_target_init(void);
 void dm_target_exit(void);
 struct target_type *dm_get_target_type(const char *name);
-void dm_put_target_type(struct target_type *t);
+void dm_put_target_type(struct target_type *tt);
 int dm_target_iterate(void (*iter_func)(struct target_type *tt,
 					void *param), void *param);
 

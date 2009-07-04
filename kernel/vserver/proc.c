@@ -17,6 +17,7 @@
  */
 
 #include <linux/proc_fs.h>
+#include <linux/fs_struct.h>
 #include <asm/unistd.h>
 
 #include <linux/vs_context.h>

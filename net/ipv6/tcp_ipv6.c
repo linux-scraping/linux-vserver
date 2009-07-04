@@ -541,8 +541,7 @@ static inline void syn_flood_warning(struct sk_buff *skb)
 
 static void tcp_v6_reqsk_destructor(struct request_sock *req)
 {
-	if (inet6_rsk(req)->pktopts)
-		kfree_skb(inet6_rsk(req)->pktopts);
+	kfree_skb(inet6_rsk(req)->pktopts);
 }
 
 #ifdef CONFIG_TCP_MD5SIG
@@ -956,7 +955,7 @@ struct sk_buff **tcp6_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 
 	switch (skb->ip_summed) {
 	case CHECKSUM_COMPLETE:
-		if (!tcp_v6_check(skb->len, &iph->saddr, &iph->daddr,
+		if (!tcp_v6_check(skb_gro_len(skb), &iph->saddr, &iph->daddr,
 				  skb->csum)) {
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 			break;
@@ -1619,8 +1618,7 @@ ipv6_pktoptions:
 		}
 	}
 
-	if (opt_skb)
-		kfree_skb(opt_skb);
+	kfree_skb(opt_skb);
 	return 0;
 }
 

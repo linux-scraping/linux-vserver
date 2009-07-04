@@ -37,6 +37,7 @@
 #include <linux/vserver/limit_int.h>
 #include <linux/vserver/space.h>
 #include <linux/init_task.h>
+#include <linux/fs_struct.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
