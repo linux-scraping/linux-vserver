@@ -88,7 +88,7 @@ static int proc_virtual_status(char *buffer)
 		atomic_read(&vs_global_fs),
 		atomic_read(&vs_global_mnt_ns),
 		atomic_read(&vs_global_uts_ns),
-		atomic_read(&vs_global_ipc_ns),
+		atomic_read(&nr_ipc_ns),
 		atomic_read(&vs_global_user_ns),
 		atomic_read(&vs_global_pid_ns),
 		atomic_read(&init_task.usage),

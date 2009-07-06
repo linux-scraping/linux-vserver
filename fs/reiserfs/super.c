@@ -1220,7 +1220,8 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 
 	if ((mount_options & (1 << REISERFS_TAGGED)) &&
 		!(s->s_flags & MS_TAGGED)) {
-		reiserfs_warning(s, "reiserfs: tagging not permitted on remount.");
+		reiserfs_warning(s, "super-vs01",
+			"reiserfs: tagging not permitted on remount.");
 		return -EINVAL;
 	}
 

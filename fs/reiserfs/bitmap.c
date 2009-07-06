@@ -1039,7 +1039,6 @@ static inline int blocknrs_and_prealloc_arrays_from_search_start
 	b_blocknr_t finish = SB_BLOCK_COUNT(s) - 1;
 	int passno = 0;
 	int nr_allocated = 0;
-	int blocks;
 
 	determine_prealloc_size(hint);
 	if (!hint->formatted_node) {

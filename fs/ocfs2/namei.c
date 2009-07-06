@@ -479,6 +479,7 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	u64 fe_blkno = 0;
 	u16 suballoc_bit;
 	u16 feat;
+	tag_t tag;
 
 	mlog_entry("(0x%p, 0x%p, %d, %lu, '%.*s')\n", dir, dentry,
 		   inode->i_mode, (unsigned long)dev, dentry->d_name.len,
