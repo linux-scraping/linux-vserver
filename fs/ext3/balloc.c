@@ -1443,7 +1443,7 @@ static int ext3_has_free_blocks(struct ext3_sb_info *sbi)
  */
 int ext3_should_retry_alloc(struct super_block *sb, int *retries)
 {
-	if (!ext3_has_free_blocks(sb) || (*retries)++ > 3)
+	if (!ext3_has_free_blocks(EXT3_SB(sb)) || (*retries)++ > 3)
 		return 0;
 
 	jbd_debug(1, "%s: retrying operation after ENOSPC\n", sb->s_id);
@@ -1522,7 +1522,7 @@ ext3_fsblk_t ext3_new_blocks(handle_t *handle, struct inode *inode,
 	if (block_i && ((windowsz = block_i->rsv_window_node.rsv_goal_size) > 0))
 		my_rsv = &block_i->rsv_window_node;
 
-	if (!ext3_has_free_blocks(sb)) {
+	if (!ext3_has_free_blocks(sbi)) {
 		*errp = -ENOSPC;
 		goto out;
 	}
