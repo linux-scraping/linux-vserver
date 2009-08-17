@@ -7,6 +7,7 @@
 #define VCMD_get_rlimit		VC_CMD(RLIMIT, 1, 0)
 #define VCMD_set_rlimit		VC_CMD(RLIMIT, 2, 0)
 #define VCMD_get_rlimit_mask	VC_CMD(RLIMIT, 3, 0)
+#define VCMD_reset_hits		VC_CMD(RLIMIT, 7, 0)
 #define VCMD_reset_minmax	VC_CMD(RLIMIT, 9, 0)
 
 struct	vcmd_ctx_rlimit_v0 {
@@ -54,6 +55,7 @@ struct	vcmd_ctx_rlimit_v0_x32 {
 extern int vc_get_rlimit_mask(uint32_t, void __user *);
 extern int vc_get_rlimit(struct vx_info *, void __user *);
 extern int vc_set_rlimit(struct vx_info *, void __user *);
+extern int vc_reset_hits(struct vx_info *, void __user *);
 extern int vc_reset_minmax(struct vx_info *, void __user *);
 
 extern int vc_rlimit_stat(struct vx_info *, void __user *);

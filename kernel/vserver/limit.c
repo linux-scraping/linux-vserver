@@ -203,6 +203,21 @@ int vc_get_rlimit_mask(uint32_t id, void __user *data)
 }
 
 
+static inline void vx_reset_hits(struct _vx_limit *limit)
+{
+	int lim;
+
+	for (lim = 0; lim < NUM_LIMITS; lim++) {
+		atomic_set(&__rlim_lhit(limit, lim), 0);
+	}
+}
+
+int vc_reset_hits(struct vx_info *vxi, void __user *data)
+{
+	vx_reset_hits(&vxi->limit);
+	return 0;
+}
+
 static inline void vx_reset_minmax(struct _vx_limit *limit)
 {
 	rlim_t value;
@@ -214,7 +229,6 @@ static inline void vx_reset_minmax(struct _vx_limit *limit)
 		__rlim_rmin(limit, lim) = value;
 	}
 }
-
 
 int vc_reset_minmax(struct vx_info *vxi, void __user *data)
 {
