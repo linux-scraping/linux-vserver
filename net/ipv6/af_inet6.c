@@ -51,7 +51,6 @@
 #include <net/tcp.h>
 #include <net/ipip.h>
 #include <net/protocol.h>
-#include <net/route.h>
 #include <net/inet_common.h>
 #include <net/route.h>
 #include <net/transp_v6.h>
@@ -301,12 +300,16 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		/* Reproduce AF_INET checks to make the bindings consitant */
 		v4addr = addr->sin6_addr.s6_addr32[3];
 		chk_addr_ret = inet_addr_type(net, v4addr);
+
+		err = -EADDRNOTAVAIL;
 		if (!sysctl_ip_nonlocal_bind &&
 		    !(inet->freebind || inet->transparent) &&
 		    v4addr != htonl(INADDR_ANY) &&
 		    chk_addr_ret != RTN_LOCAL &&
 		    chk_addr_ret != RTN_MULTICAST &&
 		    chk_addr_ret != RTN_BROADCAST)
+			goto out;
+		if (!v4_addr_in_nx_info(sk->sk_nx_info, v4addr, NXA_MASK_BIND))
 			goto out;
 	} else {
 		if (addr_type != IPV6_ADDR_ANY) {
