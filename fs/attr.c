@@ -183,7 +183,8 @@ int notify_change(struct dentry * dentry, struct iattr * attr)
 			if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
 			    (ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
 			    (ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag))
-				error = DQUOT_TRANSFER(inode, attr) ? -EDQUOT : 0;
+				error = vfs_dq_transfer(inode, attr) ?
+					-EDQUOT : 0;
 			if (!error)
 				error = inode_setattr(inode, attr);
 		}

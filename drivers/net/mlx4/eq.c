@@ -163,6 +163,7 @@ static int mlx4_eq_int(struct mlx4_dev *dev, struct mlx4_eq *eq)
 	int cqn;
 	int eqes_found = 0;
 	int set_ci = 0;
+	int port;
 
 	while ((eqe = next_eqe_sw(eq))) {
 		/*
@@ -203,11 +204,16 @@ static int mlx4_eq_int(struct mlx4_dev *dev, struct mlx4_eq *eq)
 			break;
 
 		case MLX4_EVENT_TYPE_PORT_CHANGE:
-			mlx4_dispatch_event(dev,
-					    eqe->subtype == MLX4_PORT_CHANGE_SUBTYPE_ACTIVE ?
-					    MLX4_DEV_EVENT_PORT_UP :
-					    MLX4_DEV_EVENT_PORT_DOWN,
-					    be32_to_cpu(eqe->event.port_change.port) >> 28);
+			port = be32_to_cpu(eqe->event.port_change.port) >> 28;
+			if (eqe->subtype == MLX4_PORT_CHANGE_SUBTYPE_DOWN) {
+				mlx4_dispatch_event(dev, MLX4_DEV_EVENT_PORT_DOWN,
+						    port);
+				mlx4_priv(dev)->sense.do_sense_port[port] = 1;
+			} else {
+				mlx4_dispatch_event(dev, MLX4_DEV_EVENT_PORT_UP,
+						    port);
+				mlx4_priv(dev)->sense.do_sense_port[port] = 0;
+			}
 			break;
 
 		case MLX4_EVENT_TYPE_CQ_ERROR:
@@ -491,8 +497,10 @@ static void mlx4_free_irqs(struct mlx4_dev *dev)
 	if (eq_table->have_irq)
 		free_irq(dev->pdev->irq, dev);
 	for (i = 0; i < dev->caps.num_comp_vectors + 1; ++i)
-		if (eq_table->eq[i].have_irq)
+		if (eq_table->eq[i].have_irq) {
 			free_irq(eq_table->eq[i].irq, eq_table->eq + i);
+			eq_table->eq[i].have_irq = 0;
+		}
 
 	kfree(eq_table->irq_names);
 }
@@ -617,8 +625,10 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
 		err = mlx4_create_eq(dev, dev->caps.num_cqs + MLX4_NUM_SPARE_EQE,
 				     (dev->flags & MLX4_FLAG_MSI_X) ? i : 0,
 				     &priv->eq_table.eq[i]);
-		if (err)
+		if (err) {
+			--i;
 			goto err_out_unmap;
+		}
 	}
 
 	err = mlx4_create_eq(dev, MLX4_NUM_ASYNC_EQE + MLX4_NUM_SPARE_EQE,

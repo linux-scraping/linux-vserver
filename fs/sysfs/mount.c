@@ -17,6 +17,7 @@
 #include <linux/pagemap.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/magic.h>
 
 #include "sysfs.h"
 
@@ -28,6 +29,7 @@ struct kmem_cache *sysfs_dir_cachep;
 static const struct super_operations sysfs_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= generic_delete_inode,
+	.delete_inode	= sysfs_delete_inode,
 };
 
 struct sysfs_dirent sysfs_root = {
@@ -51,7 +53,9 @@ static int sysfs_fill_super(struct super_block *sb, void *data, int silent)
 	sysfs_sb = sb;
 
 	/* get root inode, initialize and unlock it */
+	mutex_lock(&sysfs_mutex);
 	inode = sysfs_get_inode(&sysfs_root);
+	mutex_unlock(&sysfs_mutex);
 	if (!inode) {
 		pr_debug("sysfs: could not get root inode\n");
 		return -ENOMEM;

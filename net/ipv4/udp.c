@@ -334,7 +334,7 @@ static inline struct sock *__udp4_lib_lookup_skb(struct sk_buff *skb,
 	if (unlikely(sk = skb_steal_sock(skb)))
 		return sk;
 	else
-		return __udp4_lib_lookup(dev_net(skb->dst->dev), iph->saddr, sport,
+		return __udp4_lib_lookup(dev_net(skb_dst(skb)->dev), iph->saddr, sport,
 					 iph->daddr, dport, inet_iif(skb),
 					 udptable);
 }
@@ -602,6 +602,7 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		return -EOPNOTSUPP;
 
 	ipc.opt = NULL;
+	ipc.shtx.flags = 0;
 
 	if (up->pending) {
 		/*
@@ -649,6 +650,9 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	ipc.addr = inet->saddr;
 
 	ipc.oif = sk->sk_bound_dev_if;
+	err = sock_tx_timestamp(msg, sk, &ipc.shtx);
+	if (err)
+		return err;
 	if (msg->msg_controllen) {
 		err = ip_cmsg_send(sock_net(sk), msg, &ipc);
 		if (err)
@@ -847,7 +851,8 @@ int udp_ioctl(struct sock *sk, int cmd, unsigned long arg)
 	switch (cmd) {
 	case SIOCOUTQ:
 	{
-		int amount = atomic_read(&sk->sk_wmem_alloc);
+		int amount = sk_wmem_alloc_get(sk);
+
 		return put_user(amount, (int __user *)arg);
 	}
 
@@ -1192,7 +1197,7 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 			sk = sknext;
 		} while (sknext);
 	} else
-		kfree_skb(skb);
+		consume_skb(skb);
 	spin_unlock(&hslot->lock);
 	return 0;
 }
@@ -1245,7 +1250,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	struct sock *sk;
 	struct udphdr *uh;
 	unsigned short ulen;
-	struct rtable *rt = (struct rtable*)skb->dst;
+	struct rtable *rt = skb_rtable(skb);
 	__be32 saddr, daddr;
 	struct net *net = dev_net(skb->dev);
 
@@ -1736,8 +1741,8 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
 		nx_map_sock_lback(current_nx_info(), src), srcp,
 		nx_map_sock_lback(current_nx_info(), dest), destp,
 		sp->sk_state,
-		atomic_read(&sp->sk_wmem_alloc),
-		atomic_read(&sp->sk_rmem_alloc),
+		sk_wmem_alloc_get(sp),
+		sk_rmem_alloc_get(sp),
 		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),
 		atomic_read(&sp->sk_refcnt), sp,
 		atomic_read(&sp->sk_drops), len);

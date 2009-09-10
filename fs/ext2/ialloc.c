@@ -17,8 +17,6 @@
 #include <linux/backing-dev.h>
 #include <linux/buffer_head.h>
 #include <linux/random.h>
-#include <linux/vs_dlimit.h>
-#include <linux/vs_tag.h>
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"
@@ -123,9 +121,8 @@ void ext2_free_inode (struct inode * inode)
 	if (!is_bad_inode(inode)) {
 		/* Quota is already initialized in iput() */
 		ext2_xattr_delete_inode(inode);
-	    	DQUOT_FREE_INODE(inode);
-		DQUOT_DROP(inode);
-		DLIMIT_FREE_INODE(inode);
+		vfs_dq_free_inode(inode);
+		vfs_dq_drop(inode);
 	}
 
 	es = EXT2_SB(sb)->s_es;
@@ -457,11 +454,6 @@ struct inode *ext2_new_inode(struct inode *dir, int mode)
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	inode->i_tag = dx_current_fstag(sb);
-	if (DLIMIT_ALLOC_INODE(inode)) {
-		err = -ENOSPC;
-		goto fail_dlim;
-	}
 	ei = EXT2_I(inode);
 	sbi = EXT2_SB(sb);
 	es = sbi->s_es;
@@ -594,7 +586,7 @@ got:
 		goto fail_drop;
 	}
 
-	if (DQUOT_ALLOC_INODE(inode)) {
+	if (vfs_dq_alloc_inode(inode)) {
 		err = -EDQUOT;
 		goto fail_drop;
 	}
@@ -613,11 +605,10 @@ got:
 	return inode;
 
 fail_free_drop:
-	DQUOT_FREE_INODE(inode);
+	vfs_dq_free_inode(inode);
 
 fail_drop:
-	DQUOT_DROP(inode);
-	DLIMIT_FREE_INODE(inode);
+	vfs_dq_drop(inode);
 	inode->i_flags |= S_NOQUOTA;
 	inode->i_nlink = 0;
 	unlock_new_inode(inode);
@@ -625,8 +616,6 @@ fail_drop:
 	return ERR_PTR(err);
 
 fail:
-	DLIMIT_FREE_INODE(inode);
-fail_dlim:
 	make_bad_inode(inode);
 	iput(inode);
 	return ERR_PTR(err);

@@ -54,6 +54,7 @@
 #include <linux/capability.h>
 #include <linux/module.h>
 #include <linux/if_arp.h>
+#include <linux/smp_lock.h>
 #include <linux/termios.h>	/* For TIOCOUTQ/INQ */
 #include <net/datalink.h>
 #include <net/psnap.h>
@@ -162,8 +163,7 @@ static void atalk_destroy_timer(unsigned long data)
 {
 	struct sock *sk = (struct sock *)data;
 
-	if (atomic_read(&sk->sk_wmem_alloc) ||
-	    atomic_read(&sk->sk_rmem_alloc)) {
+	if (sk_has_allocations(sk)) {
 		sk->sk_timer.expires = jiffies + SOCK_DESTROY_TIME;
 		add_timer(&sk->sk_timer);
 	} else
@@ -175,8 +175,7 @@ static inline void atalk_destroy_socket(struct sock *sk)
 	atalk_remove_socket(sk);
 	skb_queue_purge(&sk->sk_receive_queue);
 
-	if (atomic_read(&sk->sk_wmem_alloc) ||
-	    atomic_read(&sk->sk_rmem_alloc)) {
+	if (sk_has_allocations(sk)) {
 		setup_timer(&sk->sk_timer, atalk_destroy_timer,
 				(unsigned long)sk);
 		sk->sk_timer.expires	= jiffies + SOCK_DESTROY_TIME;
@@ -939,6 +938,7 @@ static unsigned long atalk_sum_skb(const struct sk_buff *skb, int offset,
 				   int len, unsigned long sum)
 {
 	int start = skb_headlen(skb);
+	struct sk_buff *frag_iter;
 	int i, copy;
 
 	/* checksum stuff in header space */
@@ -977,26 +977,22 @@ static unsigned long atalk_sum_skb(const struct sk_buff *skb, int offset,
 		start = end;
 	}
 
-	if (skb_shinfo(skb)->frag_list) {
-		struct sk_buff *list = skb_shinfo(skb)->frag_list;
+	skb_walk_frags(skb, frag_iter) {
+		int end;
 
-		for (; list; list = list->next) {
-			int end;
+		WARN_ON(start > offset + len);
 
-			WARN_ON(start > offset + len);
-
-			end = start + list->len;
-			if ((copy = end - offset) > 0) {
-				if (copy > len)
-					copy = len;
-				sum = atalk_sum_skb(list, offset - start,
-						    copy, sum);
-				if ((len -= copy) == 0)
-					return sum;
-				offset += copy;
-			}
-			start = end;
+		end = start + frag_iter->len;
+		if ((copy = end - offset) > 0) {
+			if (copy > len)
+				copy = len;
+			sum = atalk_sum_skb(frag_iter, offset - start,
+					    copy, sum);
+			if ((len -= copy) == 0)
+				return sum;
+			offset += copy;
 		}
+		start = end;
 	}
 
 	BUG_ON(len > 0);
@@ -1242,6 +1238,7 @@ static int atalk_getname(struct socket *sock, struct sockaddr *uaddr,
 			return -ENOBUFS;
 
 	*uaddr_len = sizeof(struct sockaddr_at);
+	memset(&sat.sat_zero, 0, sizeof(sat.sat_zero));
 
 	if (peer) {
 		if (sk->sk_state != TCP_ESTABLISHED)
@@ -1571,14 +1568,10 @@ static int atalk_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr 
 		    usat->sat_family != AF_APPLETALK)
 			return -EINVAL;
 
-		/* netatalk doesn't implement this check */
+		/* netatalk didn't implement this check */
 		if (usat->sat_addr.s_node == ATADDR_BCAST &&
 		    !sock_flag(sk, SOCK_BROADCAST)) {
-			printk(KERN_INFO "SO_BROADCAST: Fix your netatalk as "
-					 "it will break before 2.2\n");
-#if 0
 			return -EPERM;
-#endif
 		}
 	} else {
 		if (sk->sk_state != TCP_ESTABLISHED)
@@ -1757,8 +1750,7 @@ static int atalk_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 		/* Protocol layer */
 		case TIOCOUTQ: {
-			long amount = sk->sk_sndbuf -
-				      atomic_read(&sk->sk_wmem_alloc);
+			long amount = sk->sk_sndbuf - sk_wmem_alloc_get(sk);
 
 			if (amount < 0)
 				amount = 0;
@@ -1860,13 +1852,13 @@ static struct notifier_block ddp_notifier = {
 	.notifier_call	= ddp_device_event,
 };
 
-static struct packet_type ltalk_packet_type = {
-	.type		= __constant_htons(ETH_P_LOCALTALK),
+static struct packet_type ltalk_packet_type __read_mostly = {
+	.type		= cpu_to_be16(ETH_P_LOCALTALK),
 	.func		= ltalk_rcv,
 };
 
-static struct packet_type ppptalk_packet_type = {
-	.type		= __constant_htons(ETH_P_PPPTALK),
+static struct packet_type ppptalk_packet_type __read_mostly = {
+	.type		= cpu_to_be16(ETH_P_PPPTALK),
 	.func		= atalk_rcv,
 };
 
@@ -1877,7 +1869,7 @@ EXPORT_SYMBOL(aarp_send_ddp);
 EXPORT_SYMBOL(atrtr_get_dev);
 EXPORT_SYMBOL(atalk_find_dev_addr);
 
-static char atalk_err_snap[] __initdata =
+static const char atalk_err_snap[] __initconst =
 	KERN_CRIT "Unable to register DDP with SNAP.\n";
 
 /* Called by proto.c on kernel start up */

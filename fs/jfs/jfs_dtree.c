@@ -102,7 +102,6 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
-#include <linux/vs_dlimit.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_filsys.h"
@@ -382,12 +381,12 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 		 * It's time to move the inline table to an external
 		 * page and begin to build the xtree
 		 */
-		if (DQUOT_ALLOC_BLOCK(ip, sbi->nbperpage))
+		if (vfs_dq_alloc_block(ip, sbi->nbperpage))
 			goto clean_up;
-		if (DLIMIT_ALLOC_BLOCK(ip, sbi->nbperpage))
-			goto clean_up_dquot;
-		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr))
-			goto clean_up_dlimit;
+		if (dbAlloc(ip, 0, sbi->nbperpage, &xaddr)) {
+			vfs_dq_free_block(ip, sbi->nbperpage);
+			goto clean_up;
+		}
 
 		/*
 		 * Save the table, we're going to overwrite it with the
@@ -409,7 +408,7 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 			memcpy(&jfs_ip->i_dirtable, temp_table,
 			       sizeof (temp_table));
 			dbFree(ip, xaddr, sbi->nbperpage);
-			DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
+			vfs_dq_free_block(ip, sbi->nbperpage);
 			goto clean_up;
 		}
 		ip->i_size = PSIZE;
@@ -480,12 +479,6 @@ static u32 add_index(tid_t tid, struct inode *ip, s64 bn, int slot)
 	release_metapage(mp);
 
 	return index;
-
-      clean_up_dlimit:
-	DLIMIT_FREE_BLOCK(ip, sbi->nbperpage);
-
-      clean_up_dquot:
-	DQUOT_FREE_BLOCK(ip, sbi->nbperpage);
 
       clean_up:
 
@@ -958,7 +951,6 @@ static int dtSplitUp(tid_t tid,
 	struct tlock *tlck;
 	struct lv *lv;
 	int quota_allocation = 0;
-	int dlimit_allocation = 0;
 
 	/* get split page */
 	smp = split->mp;
@@ -1035,17 +1027,11 @@ static int dtSplitUp(tid_t tid,
 			n = xlen;
 
 		/* Allocate blocks to quota. */
-		if (DQUOT_ALLOC_BLOCK(ip, n)) {
+		if (vfs_dq_alloc_block(ip, n)) {
 			rc = -EDQUOT;
 			goto extendOut;
 		}
 		quota_allocation += n;
-
-		if (DLIMIT_ALLOC_BLOCK(ip, n)) {
-			rc = -ENOSPC;
-			goto extendOut;
-		}
-		dlimit_allocation += n;
 
 		if ((rc = dbReAlloc(sbi->ipbmap, xaddr, (s64) xlen,
 				    (s64) n, &nxaddr)))
@@ -1320,12 +1306,9 @@ static int dtSplitUp(tid_t tid,
       freeKeyName:
 	kfree(key.name);
 
-	/* Rollback dlimit allocation */
-	if (rc && dlimit_allocation)
-		DLIMIT_FREE_BLOCK(ip, dlimit_allocation);
 	/* Rollback quota allocation */
 	if (rc && quota_allocation)
-		DQUOT_FREE_BLOCK(ip, quota_allocation);
+		vfs_dq_free_block(ip, quota_allocation);
 
       dtSplitUp_Exit:
 
@@ -1386,15 +1369,9 @@ static int dtSplitPage(tid_t tid, struct inode *ip, struct dtsplit * split,
 		return -EIO;
 
 	/* Allocate blocks to quota. */
-	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+	if (vfs_dq_alloc_block(ip, lengthPXD(pxd))) {
 		release_metapage(rmp);
 		return -EDQUOT;
-	}
-	/* Allocate blocks to dlimit. */
-	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
-		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
-		release_metapage(rmp);
-		return -ENOSPC;
 	}
 
 	jfs_info("dtSplitPage: ip:0x%p smp:0x%p rmp:0x%p", ip, smp, rmp);
@@ -1939,15 +1916,9 @@ static int dtSplitRoot(tid_t tid,
 	rp = rmp->data;
 
 	/* Allocate blocks to quota. */
-	if (DQUOT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
+	if (vfs_dq_alloc_block(ip, lengthPXD(pxd))) {
 		release_metapage(rmp);
 		return -EDQUOT;
-	}
-	/* Allocate blocks to dlimit. */
-	if (DLIMIT_ALLOC_BLOCK(ip, lengthPXD(pxd))) {
-		DQUOT_FREE_BLOCK(ip, lengthPXD(pxd));
-		release_metapage(rmp);
-		return -ENOSPC;
 	}
 
 	BT_MARK_DIRTY(rmp, ip);
@@ -2315,10 +2286,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 	xlen = lengthPXD(&fp->header.self);
 
-	/* Free dlimit allocation. */
-	DLIMIT_FREE_BLOCK(ip, xlen);
 	/* Free quota allocation. */
-	DQUOT_FREE_BLOCK(ip, xlen);
+	vfs_dq_free_block(ip, xlen);
 
 	/* free/invalidate its buffer page */
 	discard_metapage(fmp);
@@ -2393,10 +2362,8 @@ static int dtDeleteUp(tid_t tid, struct inode *ip,
 
 				xlen = lengthPXD(&p->header.self);
 
-				/* Free dlimit allocation */
-				DLIMIT_FREE_BLOCK(ip, xlen);
 				/* Free quota allocation */
-				DQUOT_FREE_BLOCK(ip, xlen);
+				vfs_dq_free_block(ip, xlen);
 
 				/* free/invalidate its buffer page */
 				discard_metapage(mp);
