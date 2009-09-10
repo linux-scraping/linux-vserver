@@ -28,22 +28,17 @@ static struct kmem_cache *nsproxy_cachep;
 
 struct nsproxy init_nsproxy = INIT_NSPROXY(init_nsproxy);
 
-/*
- * creates a copy of "orig" with refcount 1.
- */
-static inline struct nsproxy *clone_nsproxy(struct nsproxy *orig)
+static inline struct nsproxy *create_nsproxy(void)
 {
-	struct nsproxy *ns;
+	struct nsproxy *nsproxy;
 
-	ns = kmem_cache_alloc(nsproxy_cachep, GFP_KERNEL);
-	if (ns) {
-		memcpy(ns, orig, sizeof(struct nsproxy));
-		atomic_set(&ns->count, 1);
-		vxdprintk(VXD_CBIT(space, 2), "clone_nsproxy(%p[%u] = %p[1]",
-			orig, atomic_read(&orig->count), ns);
+	nsproxy = kmem_cache_alloc(nsproxy_cachep, GFP_KERNEL);
+	if (nsproxy) {
+		atomic_set(&nsproxy->count, 1);
 		atomic_inc(&vs_global_nsproxy);
 	}
-	return ns;
+	vxdprintk(VXD_CBIT(space, 2), "create_nsproxy = %p[1]", nsproxy);
+	return nsproxy;
 }
 
 /*
@@ -61,7 +56,7 @@ static struct nsproxy *unshare_namespaces(unsigned long flags,
 		"unshare_namespaces(0x%08lx,%p,%p)",
 		flags, orig, new_fs);
 
-	new_nsp = clone_nsproxy(orig);
+	new_nsp = create_nsproxy();
 	if (!new_nsp)
 		return ERR_PTR(-ENOMEM);
 
@@ -133,9 +128,12 @@ static struct nsproxy *create_new_namespaces(int flags, struct task_struct *tsk,
  */
 struct nsproxy *copy_nsproxy(struct nsproxy *orig)
 {
-	struct nsproxy *ns = clone_nsproxy(orig);
+	struct nsproxy *ns = create_nsproxy();
 
 	if (ns) {
+		memcpy(ns, orig, sizeof(struct nsproxy));
+		atomic_set(&ns->count, 1);
+
 		if (ns->mnt_ns)
 			get_mnt_ns(ns->mnt_ns);
 		if (ns->uts_ns)
@@ -172,7 +170,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 				CLONE_NEWPID | CLONE_NEWNET)))
 		return 0;
 
-	if (!capable(CAP_SYS_ADMIN)) {
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE)) {
 		err = -EPERM;
 		goto out;
 	}
@@ -238,7 +236,7 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 			       CLONE_NEWNET)))
 		return 0;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE))
 		return -EPERM;
 
 	*new_nsp = create_new_namespaces(unshare_flags, current,

@@ -18,8 +18,6 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
-#include <linux/vs_dlimit.h>
-#include <linux/vs_tag.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -145,16 +143,10 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	jfs_inode->saved_uid = inode->i_uid;
 	jfs_inode->saved_gid = inode->i_gid;
 
-	inode->i_tag = dx_current_fstag(sb);
-	if (DLIMIT_ALLOC_INODE(inode)) {
-		rc = -ENOSPC;
-		goto fail_drop2;
-	}
-
 	/*
 	 * Allocate inode to quota.
 	 */
-	if (DQUOT_ALLOC_INODE(inode)) {
+	if (vfs_dq_alloc_inode(inode)) {
 		rc = -EDQUOT;
 		goto fail_drop;
 	}
@@ -200,9 +192,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 	return inode;
 
 fail_drop:
-	DLIMIT_FREE_INODE(inode);
-fail_drop2:
-	DQUOT_DROP(inode);
+	vfs_dq_drop(inode);
 	inode->i_flags |= S_NOQUOTA;
 fail_unlock:
 	inode->i_nlink = 0;

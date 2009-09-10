@@ -29,7 +29,6 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_mount.h>
 #include <linux/pagemap.h>
-#include <linux/smp_lock.h>
 #include <linux/pagevec.h>
 #include <linux/namei.h>
 #include <linux/mount.h>
@@ -900,7 +899,7 @@ static void nfs_dentry_iput(struct dentry *dentry, struct inode *inode)
 	iput(inode);
 }
 
-struct dentry_operations nfs_dentry_operations = {
+const struct dentry_operations nfs_dentry_operations = {
 	.d_revalidate	= nfs_lookup_revalidate,
 	.d_delete	= nfs_dentry_delete,
 	.d_iput		= nfs_dentry_iput,
@@ -969,7 +968,7 @@ out:
 #ifdef CONFIG_NFS_V4
 static int nfs_open_revalidate(struct dentry *, struct nameidata *);
 
-struct dentry_operations nfs4_dentry_operations = {
+const struct dentry_operations nfs4_dentry_operations = {
 	.d_revalidate	= nfs_open_revalidate,
 	.d_delete	= nfs_dentry_delete,
 	.d_iput		= nfs_dentry_iput,
@@ -1028,12 +1027,12 @@ static struct dentry *nfs_atomic_lookup(struct inode *dir, struct dentry *dentry
 				res = NULL;
 				goto out;
 			/* This turned out not to be a regular file */
-			case -EISDIR:
 			case -ENOTDIR:
 				goto no_open;
 			case -ELOOP:
 				if (!(nd->intent.open.flags & O_NOFOLLOW))
 					goto no_open;
+			/* case -EISDIR: */
 			/* case -EINVAL: */
 			default:
 				goto out;

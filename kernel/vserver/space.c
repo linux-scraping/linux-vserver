@@ -15,6 +15,7 @@
 #include <linux/utsname.h>
 #include <linux/nsproxy.h>
 #include <linux/err.h>
+#include <linux/fs_struct.h>
 #include <asm/uaccess.h>
 
 #include <linux/vs_context.h>
@@ -25,7 +26,6 @@ atomic_t vs_global_nsproxy	= ATOMIC_INIT(0);
 atomic_t vs_global_fs		= ATOMIC_INIT(0);
 atomic_t vs_global_mnt_ns	= ATOMIC_INIT(0);
 atomic_t vs_global_uts_ns	= ATOMIC_INIT(0);
-atomic_t vs_global_ipc_ns	= ATOMIC_INIT(0);
 atomic_t vs_global_user_ns	= ATOMIC_INIT(0);
 atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 

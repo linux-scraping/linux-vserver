@@ -122,6 +122,8 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 #endif
 	case VCMD_get_rlimit_mask:
 		return vc_get_rlimit_mask(id, data);
+	case VCMD_reset_hits:
+		return vc_reset_hits(vxi, data);
 	case VCMD_reset_minmax:
 		return vc_reset_minmax(vxi, data);
 
@@ -320,6 +322,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	/* info commands */
 	__VCMD(task_xid,	 2, VCA_NONE,	0);
+	__VCMD(reset_hits,	 2, VCA_VXI,	0);
 	__VCMD(reset_minmax,	 2, VCA_VXI,	0);
 	__VCMD(vx_info,		 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_bcaps,	 3, VCA_VXI,	VCF_INFO);

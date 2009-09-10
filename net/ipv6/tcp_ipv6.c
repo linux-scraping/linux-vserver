@@ -325,7 +325,7 @@ failure:
 }
 
 static void tcp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
-		int type, int code, int offset, __be32 info)
+		u8 type, u8 code, int offset, __be32 info)
 {
 	struct ipv6hdr *hdr = (struct ipv6hdr*)skb->data;
 	const struct tcphdr *th = (struct tcphdr *)(skb->data+offset);
@@ -541,8 +541,7 @@ static inline void syn_flood_warning(struct sk_buff *skb)
 
 static void tcp_v6_reqsk_destructor(struct request_sock *req)
 {
-	if (inet6_rsk(req)->pktopts)
-		kfree_skb(inet6_rsk(req)->pktopts);
+	kfree_skb(inet6_rsk(req)->pktopts);
 }
 
 #ifdef CONFIG_TCP_MD5SIG
@@ -905,6 +904,7 @@ struct request_sock_ops tcp6_request_sock_ops __read_mostly = {
 #ifdef CONFIG_TCP_MD5SIG
 static struct tcp_request_sock_ops tcp_request_sock_ipv6_ops = {
 	.md5_lookup	=	tcp_v6_reqsk_md5_lookup,
+	.calc_md5_hash	=	tcp_v6_md5_hash_skb,
 };
 #endif
 
@@ -950,13 +950,14 @@ static int tcp_v6_gso_send_check(struct sk_buff *skb)
 	return 0;
 }
 
-struct sk_buff **tcp6_gro_receive(struct sk_buff **head, struct sk_buff *skb)
+static struct sk_buff **tcp6_gro_receive(struct sk_buff **head,
+					 struct sk_buff *skb)
 {
-	struct ipv6hdr *iph = ipv6_hdr(skb);
+	struct ipv6hdr *iph = skb_gro_network_header(skb);
 
 	switch (skb->ip_summed) {
 	case CHECKSUM_COMPLETE:
-		if (!tcp_v6_check(skb->len, &iph->saddr, &iph->daddr,
+		if (!tcp_v6_check(skb_gro_len(skb), &iph->saddr, &iph->daddr,
 				  skb->csum)) {
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 			break;
@@ -970,9 +971,8 @@ struct sk_buff **tcp6_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 
 	return tcp_gro_receive(head, skb);
 }
-EXPORT_SYMBOL(tcp6_gro_receive);
 
-int tcp6_gro_complete(struct sk_buff *skb)
+static int tcp6_gro_complete(struct sk_buff *skb)
 {
 	struct ipv6hdr *iph = ipv6_hdr(skb);
 	struct tcphdr *th = tcp_hdr(skb);
@@ -983,7 +983,6 @@ int tcp6_gro_complete(struct sk_buff *skb)
 
 	return tcp_gro_complete(skb);
 }
-EXPORT_SYMBOL(tcp6_gro_complete);
 
 static void tcp_v6_send_response(struct sk_buff *skb, u32 seq, u32 ack, u32 win,
 				 u32 ts, struct tcp_md5sig_key *key, int rst)
@@ -991,9 +990,10 @@ static void tcp_v6_send_response(struct sk_buff *skb, u32 seq, u32 ack, u32 win,
 	struct tcphdr *th = tcp_hdr(skb), *t1;
 	struct sk_buff *buff;
 	struct flowi fl;
-	struct net *net = dev_net(skb->dst->dev);
+	struct net *net = dev_net(skb_dst(skb)->dev);
 	struct sock *ctl_sk = net->ipv6.tcp_sk;
 	unsigned int tot_len = sizeof(struct tcphdr);
+	struct dst_entry *dst;
 	__be32 *topt;
 
 	if (ts)
@@ -1062,8 +1062,9 @@ static void tcp_v6_send_response(struct sk_buff *skb, u32 seq, u32 ack, u32 win,
 	 * Underlying function will use this to retrieve the network
 	 * namespace
 	 */
-	if (!ip6_dst_lookup(ctl_sk, &buff->dst, &fl)) {
-		if (xfrm_lookup(net, &buff->dst, &fl, NULL, 0) >= 0) {
+	if (!ip6_dst_lookup(ctl_sk, &dst, &fl)) {
+		if (xfrm_lookup(net, &dst, &fl, NULL, 0) >= 0) {
+			skb_dst_set(buff, dst);
 			ip6_xmit(ctl_sk, buff, &fl, NULL, 0);
 			TCP_INC_STATS_BH(net, TCP_MIB_OUTSEGS);
 			if (rst)
@@ -1449,7 +1450,7 @@ static struct sock * tcp_v6_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 		 */
 		char *newkey = kmemdup(key->key, key->keylen, GFP_ATOMIC);
 		if (newkey != NULL)
-			tcp_v6_md5_do_add(newsk, &inet6_sk(sk)->daddr,
+			tcp_v6_md5_do_add(newsk, &newnp->daddr,
 					  newkey, key->keylen);
 	}
 #endif
@@ -1619,8 +1620,7 @@ ipv6_pktoptions:
 		}
 	}
 
-	if (opt_skb)
-		kfree_skb(opt_skb);
+	kfree_skb(opt_skb);
 	return 0;
 }
 

@@ -740,8 +740,7 @@ ecryptfs_write_tag_70_packet(char *dest, size_t *remaining_bytes,
 out_release_free_unlock:
 	crypto_free_hash(s->hash_desc.tfm);
 out_free_unlock:
-	memset(s->block_aligned_filename, 0, s->block_aligned_filename_size);
-	kfree(s->block_aligned_filename);
+	kzfree(s->block_aligned_filename);
 out_unlock:
 	mutex_unlock(s->tfm_mutex);
 out:
@@ -1304,6 +1303,13 @@ parse_tag_3_packet(struct ecryptfs_crypt_stat *crypt_stat,
 	}
 	(*new_auth_tok)->session_key.encrypted_key_size =
 		(body_size - (ECRYPTFS_SALT_SIZE + 5));
+	if ((*new_auth_tok)->session_key.encrypted_key_size
+	    > ECRYPTFS_MAX_ENCRYPTED_KEY_BYTES) {
+		printk(KERN_WARNING "Tag 3 packet contains key larger "
+		       "than ECRYPTFS_MAX_ENCRYPTED_KEY_BYTES\n");
+		rc = -EINVAL;
+		goto out_free;
+	}
 	if (unlikely(data[(*packet_size)++] != 0x04)) {
 		printk(KERN_WARNING "Unknown version number [%d]\n",
 		       data[(*packet_size) - 1]);
@@ -1447,6 +1453,12 @@ parse_tag_11_packet(unsigned char *data, unsigned char *contents,
 	(*tag_11_contents_size) = (body_size - 14);
 	if (unlikely((*packet_size) + body_size + 1 > max_packet_size)) {
 		printk(KERN_ERR "Packet size exceeds max\n");
+		rc = -EINVAL;
+		goto out;
+	}
+	if (unlikely((*tag_11_contents_size) > max_contents_bytes)) {
+		printk(KERN_ERR "Literal data section in tag 11 packet exceeds "
+		       "expected size\n");
 		rc = -EINVAL;
 		goto out;
 	}
