@@ -396,7 +396,8 @@ struct ext4_inode {
 			__le16	l_i_file_acl_high;
 			__le16	l_i_uid_high;	/* these 2 fields */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
-			__u32	l_i_reserved2;
+			__le16	l_i_tag;	/* Context Tag */
+			__u16	l_i_reserved2;
 		} linux2;
 		struct {
 			__le16	h_i_reserved1;	/* Obsoleted fragment number/size which are removed in ext4 */
@@ -502,6 +503,7 @@ do {									       \
 #define i_gid_low	i_gid
 #define i_uid_high	osd2.linux2.l_i_uid_high
 #define i_gid_high	osd2.linux2.l_i_gid_high
+#define i_raw_tag	osd2.linux2.l_i_tag
 #define i_reserved2	osd2.linux2.l_i_reserved2
 
 #elif defined(__GNU__)

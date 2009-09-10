@@ -1507,7 +1507,7 @@ static int do_change_type(struct path *path, int flag)
 	int type = flag & ~MS_REC;
 	int err = 0;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE))
 		return -EPERM;
 
 	if (path->dentry != path->mnt->mnt_root)

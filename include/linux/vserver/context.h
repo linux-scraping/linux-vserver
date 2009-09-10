@@ -73,6 +73,7 @@
 #define VXC_ADMIN_CLOOP		0x00400000
 
 #define VXC_KTHREAD		0x01000000
+#define VXC_NAMESPACE		0x02000000
 
 
 #ifdef	__KERNEL__

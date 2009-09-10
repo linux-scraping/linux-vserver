@@ -172,7 +172,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 				CLONE_NEWPID | CLONE_NEWNET)))
 		return 0;
 
-	if (!capable(CAP_SYS_ADMIN)) {
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE)) {
 		err = -EPERM;
 		goto out;
 	}
@@ -238,7 +238,7 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 			       CLONE_NEWNET)))
 		return 0;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE))
 		return -EPERM;
 
 	*new_nsp = create_new_namespaces(unshare_flags, current,
