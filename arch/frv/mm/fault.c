@@ -257,7 +257,8 @@ asmlinkage void do_page_fault(int datammu, unsigned long esr0, unsigned long ear
  */
  out_of_memory:
 	up_read(&mm->mmap_sem);
-	printk("VM: killing process %s\n", current->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		current->comm, task_pid_nr(current), current->xid);
 	if (user_mode(__frame))
 		do_group_exit(SIGKILL);
 	goto no_context;

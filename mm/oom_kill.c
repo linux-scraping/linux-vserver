@@ -337,8 +337,8 @@ static void __oom_kill_task(struct task_struct *p, int verbose)
 	}
 
 	if (verbose)
-		printk(KERN_ERR "Killed process %d:#%u (%s)\n",
-				task_pid_nr(p), p->xid, p->comm);
+		printk(KERN_ERR "Killed process %s(%d:#%u)\n",
+			p->comm, task_pid_nr(p), p->xid);
 
 	/*
 	 * We give our sacrificial lamb high priority and access to
@@ -422,8 +422,8 @@ static int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		return 0;
 	}
 
-	printk(KERN_ERR "%s: kill process %d:#%u (%s) score %li or a child\n",
-				message, task_pid_nr(p), p->xid, p->comm, points);
+	printk(KERN_ERR "%s: kill process %s(%d:#%u) score %li or a child\n",
+		message, p->comm, task_pid_nr(p), p->xid, points);
 
 	/* Try to kill a child first */
 	list_for_each_entry(c, &p->children, sibling) {

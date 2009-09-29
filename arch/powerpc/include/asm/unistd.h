@@ -275,7 +275,7 @@
 #endif
 #define __NR_rtas		255
 #define __NR_sys_debug_setcontext 256
-/* Number 257 is reserved for vserver */
+#define __NR_vserver		258
 #define __NR_migrate_pages	258
 #define __NR_mbind		259
 #define __NR_get_mempolicy	260

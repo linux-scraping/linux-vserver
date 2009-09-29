@@ -1034,7 +1034,8 @@ static ssize_t oom_adjust_write(struct file *file, const char __user *buf,
 	task = get_proc_task(file->f_path.dentry->d_inode);
 	if (!task)
 		return -ESRCH;
-	if (oom_adjust < task->oomkilladj && !capable(CAP_SYS_RESOURCE)) {
+	if (oom_adjust < task->oomkilladj &&
+		!vx_capable(CAP_SYS_RESOURCE, VXC_OOMADJUST)) {
 		put_task_struct(task);
 		return -EACCES;
 	}

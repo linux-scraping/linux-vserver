@@ -3130,13 +3130,13 @@ out_unlock:
 out_fput_both:
 	vxdprintk(VXD_CBIT(misc, 3),
 		"fput(new_file=%p[#%ld])", new_file,
-		atomic_read(&new_file->f_count));
+		atomic_long_read(&new_file->f_count));
 	fput(new_file);
 
 out_fput_old:
 	vxdprintk(VXD_CBIT(misc, 3),
 		"fput(old_file=%p[#%ld])", old_file,
-		atomic_read(&old_file->f_count));
+		atomic_long_read(&old_file->f_count));
 	fput(old_file);
 
 out_unlock_new:

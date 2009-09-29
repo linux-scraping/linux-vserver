@@ -282,7 +282,8 @@ ia64_do_page_fault (unsigned long address, unsigned long isr, struct pt_regs *re
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk(KERN_CRIT "VM: killing process %s\n", current->comm);
+	printk(KERN_CRIT "VM: killing process %s(%d:#%u)\n",
+		current->comm, task_pid_nr(current), current->xid);
 	if (user_mode(regs))
 		do_group_exit(SIGKILL);
 	goto no_context;

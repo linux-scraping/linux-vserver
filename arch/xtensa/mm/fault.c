@@ -151,7 +151,8 @@ out_of_memory:
 		down_read(&mm->mmap_sem);
 		goto survive;
 	}
-	printk("VM: killing process %s\n", current->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		current->comm, task_pid_nr(current), current->xid);
 	if (user_mode(regs))
 		do_group_exit(SIGKILL);
 	bad_page_fault(regs, address, SIGKILL);

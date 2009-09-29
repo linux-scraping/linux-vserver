@@ -245,7 +245,8 @@ do_page_fault(unsigned long address, struct pt_regs *regs,
 
  out_of_memory:
 	up_read(&mm->mmap_sem);
-	printk("VM: killing process %s\n", tsk->comm);
+	printk("VM: killing process %s(%d:#%u)\n",
+		tsk->comm, task_pid_nr(tsk), tsk->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	goto no_context;
