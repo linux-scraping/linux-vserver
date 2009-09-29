@@ -3015,8 +3015,8 @@ void get_avenrun(unsigned long *loads, unsigned long offset, int shift)
 		struct vx_info *vxi = current->vx_info;
 
 		loads[0] = (vxi->cvirt.load[0] + offset) << shift;
-		loads[0] = (vxi->cvirt.load[1] + offset) << shift;
-		loads[0] = (vxi->cvirt.load[2] + offset) << shift;
+		loads[1] = (vxi->cvirt.load[1] + offset) << shift;
+		loads[2] = (vxi->cvirt.load[2] + offset) << shift;
 	} else {
 		loads[0] = (avenrun[0] + offset) << shift;
 		loads[1] = (avenrun[1] + offset) << shift;

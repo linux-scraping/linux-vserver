@@ -542,6 +542,7 @@
 #define CAPABILITY__SETFCAP                       0x80000000UL
 #define CAPABILITY2__MAC_OVERRIDE                 0x00000001UL
 #define CAPABILITY2__MAC_ADMIN                    0x00000002UL
+#define CAPABILITY2__CONTEXT                      0x00000004UL
 #define NETLINK_ROUTE_SOCKET__IOCTL               0x00000001UL
 #define NETLINK_ROUTE_SOCKET__READ                0x00000002UL
 #define NETLINK_ROUTE_SOCKET__WRITE               0x00000004UL

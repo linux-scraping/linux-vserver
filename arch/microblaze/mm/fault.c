@@ -279,7 +279,8 @@ out_of_memory:
 		goto survive;
 	}
 	up_read(&mm->mmap_sem);
-	printk(KERN_WARNING "VM: killing process %s\n", current->comm);
+	printk(KERN_WARNING "VM: killing process %s(%d:#%u)\n",
+		current->comm, task_pid_nr(current), current->xid);
 	if (user_mode(regs))
 		do_exit(SIGKILL);
 	bad_page_fault(regs, address, SIGKILL);
