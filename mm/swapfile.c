@@ -1681,6 +1681,8 @@ static void *swap_next(struct seq_file *swap, void *v, loff_t *pos)
 	if (v == SEQ_START_TOKEN)
 		ptr = swap_info;
 	else {
+		if (vx_flags(VXF_VIRT_MEM, 0))
+			return NULL;
 		ptr = v;
 		ptr++;
 	}
@@ -1708,6 +1710,16 @@ static int swap_show(struct seq_file *swap, void *v)
 
 	if (ptr == SEQ_START_TOKEN) {
 		seq_puts(swap,"Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n");
+		if (vx_flags(VXF_VIRT_MEM, 0)) {
+			struct sysinfo si;
+
+			vx_vsi_swapinfo(&si);
+			if (si.totalswap < (1 << 10))
+				return 0;
+			seq_printf(swap, "%s\t\t\t\t\t%s\t%lu\t%lu\t%d\n",
+				"hdv0", "partition", si.totalswap >> 10,
+				(si.totalswap - si.freeswap) >> 10, -1);
+		}
 		return 0;
 	}
 

@@ -1035,10 +1035,13 @@ static ssize_t oom_adjust_write(struct file *file, const char __user *buf,
 	if (!task)
 		return -ESRCH;
 	if (oom_adjust < task->oomkilladj &&
-		!vx_capable(CAP_SYS_RESOURCE, VXC_OOMADJUST)) {
+		!vx_capable(CAP_SYS_RESOURCE, VXC_OOM_ADJUST)) {
 		put_task_struct(task);
 		return -EACCES;
 	}
+	/* prevent guest processes from circumventing the oom killer */
+	if (vx_current_xid() && (oom_adjust == OOM_DISABLE))
+		oom_adjust = OOM_ADJUST_MIN;
 	task->oomkilladj = oom_adjust;
 	put_task_struct(task);
 	if (end - buffer == 0)
@@ -1077,7 +1080,7 @@ static ssize_t proc_loginuid_write(struct file * file, const char __user * buf,
 	ssize_t length;
 	uid_t loginuid;
 
-	if (!capable(CAP_AUDIT_CONTROL))
+	if (!vx_capable(CAP_AUDIT_CONTROL, VXC_AUDIT_CONTROL))
 		return -EPERM;
 
 	if (current != pid_task(proc_pid(inode), PIDTYPE_PID))
