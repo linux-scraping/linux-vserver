@@ -218,6 +218,21 @@ static inline void __leave_vx_admin(struct vx_info_save *vxis)
 	(void)xchg(&current->vx_info, vxis->vxi);
 }
 
+#define task_is_init(p) \
+	__task_is_init(p, __FILE__, __LINE__, __HERE__)
+
+static inline int __task_is_init(struct task_struct *p,
+	const char *_file, int _line, void *_here)
+{
+	int is_init = is_global_init(p);
+
+	task_lock(p);
+	if (p->vx_info)
+		is_init = p->vx_info->vx_initpid == p->pid;
+	task_unlock(p);
+	return is_init;
+}
+
 extern void exit_vx_info(struct task_struct *, int);
 extern void exit_vx_info_early(struct task_struct *, int);
 

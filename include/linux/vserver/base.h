@@ -140,9 +140,11 @@ enum {
 #define nx_capable(b, c) (capable(b) || \
 	(cap_raised(current_cap(), b) && nx_ncaps(c)))
 
-#define vx_current_initpid(n) \
-	(current->vx_info && \
-	(current->vx_info->vx_initpid == (n)))
+#define vx_task_initpid(t, n) \
+	((t)->vx_info && \
+	((t)->vx_info->vx_initpid == (n)))
+
+#define vx_current_initpid(n)	vx_task_initpid(current, n)
 
 
 #define __vx_state(v)	((v) ? ((v)->vx_state) : 0)

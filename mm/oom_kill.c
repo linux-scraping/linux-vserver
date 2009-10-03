@@ -28,6 +28,7 @@
 #include <linux/memcontrol.h>
 #include <linux/security.h>
 #include <linux/vs_memory.h>
+#include <linux/vs_context.h>
 
 int sysctl_panic_on_oom;
 int sysctl_oom_kill_allocating_task;
@@ -71,12 +72,6 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	 * The memory size of the process is the basis for the badness.
 	 */
 	points = mm->total_vm;
-
-	/*
-	 * add points for context badness
-	 */
-
-	points += vx_badness(p, mm);
 
 	/*
 	 * After this unlock we can no longer dereference local variable `mm'
@@ -166,6 +161,12 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 			points >>= -(p->oomkilladj);
 	}
 
+	/*
+	 * add points for context badness
+	 */
+
+	points += vx_badness(p, mm);
+
 #ifdef DEBUG
 	printk(KERN_DEBUG "OOMkill: task %d:#%u (%s) got %d points\n",
 		task_pid_nr(p), p->xid, p->comm, points);
@@ -210,6 +211,7 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 	struct task_struct *g, *p;
 	struct task_struct *chosen = NULL;
 	struct timespec uptime;
+	xid_t xid = vx_current_xid();
 	*ppoints = 0;
 
 	do_posix_clock_monotonic_gettime(&uptime);
@@ -222,10 +224,13 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 		 */
 		if (!p->mm)
 			continue;
-		/* skip the init task */
-		if (is_global_init(p))
+		/* skip the init task, global and per guest */
+		if (task_is_init(p))
 			continue;
 		if (mem && !task_in_mem_cgroup(p, mem))
+			continue;
+		/* skip other guest and host processes if oom in guest */
+		if (xid && p->xid != xid)
 			continue;
 
 		/*

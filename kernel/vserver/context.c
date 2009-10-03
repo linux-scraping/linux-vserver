@@ -673,7 +673,8 @@ int vx_set_init(struct vx_info *vxi, struct task_struct *p)
 		vxi, vxi->vx_id, p, p->xid, p->pid, p->tgid);
 
 	vxi->vx_flags &= ~VXF_STATE_INIT;
-	vxi->vx_initpid = p->tgid;
+	// vxi->vx_initpid = p->tgid;
+	vxi->vx_initpid = p->pid;
 	return 0;
 }
 
@@ -735,7 +736,7 @@ void	exit_vx_info_early(struct task_struct *p, int code)
 	struct vx_info *vxi = p->vx_info;
 
 	if (vxi) {
-		if (vxi->vx_initpid == p->tgid)
+		if (vxi->vx_initpid == p->pid)
 			vx_exit_init(vxi, p, code);
 		if (vxi->vx_reaper == p)
 			vx_set_reaper(vxi, init_pid_ns.child_reaper);
