@@ -492,6 +492,19 @@ config CGROUP_SCHED
 
 endchoice
 
+config CFS_HARD_LIMITS
+	bool "Hard Limits for CFS Group Scheduler"
+	depends on EXPERIMENTAL
+	depends on FAIR_GROUP_SCHED && CGROUP_SCHED
+	default n
+	help
+	  This option enables hard limiting of CPU time obtained by
+	  a fair task group. Use this if you want to throttle a group of tasks
+	  based on its CPU usage. For more details refer to
+	  Documentation/scheduler/sched-cfs-hard-limits.txt
+
+	  Say N if unsure.
+
 menuconfig CGROUPS
 	boolean "Control Group support"
 	help
