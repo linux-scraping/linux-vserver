@@ -80,6 +80,11 @@ static void print_cfs_group_stats(struct seq_file *m, int cpu,
 	PN(se->wait_max);
 	PN(se->wait_sum);
 	P(se->wait_count);
+#ifdef CONFIG_CFS_HARD_LIMITS
+	PN(se->throttle_max);
+	PN(se->throttle_sum);
+	P(se->throttle_count);
+#endif
 #endif
 	P(se->load.weight);
 #undef PN
@@ -214,6 +219,18 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #ifdef CONFIG_SMP
 	SEQ_printf(m, "  .%-30s: %lu\n", "shares", cfs_rq->shares);
 #endif
+	SEQ_printf(m, "  .%-30s: %ld\n", "nr_tasks_running",
+			cfs_rq->nr_tasks_running);
+#ifdef CONFIG_CFS_HARD_LIMITS
+	spin_lock_irqsave(&rq->lock, flags);
+	SEQ_printf(m, "  .%-30s: %d\n", "cfs_throttled",
+			cfs_rq->cfs_throttled);
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "cfs_time",
+			SPLIT_NS(cfs_rq->cfs_time));
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "cfs_runtime",
+			SPLIT_NS(cfs_rq->cfs_runtime));
+	spin_unlock_irqrestore(&rq->lock, flags);
+#endif
 	print_cfs_group_stats(m, cpu, cfs_rq->tg);
 #endif
 }
@@ -310,7 +327,7 @@ static int sched_debug_show(struct seq_file *m, void *v)
 	u64 now = ktime_to_ns(ktime_get());
 	int cpu;
 
-	SEQ_printf(m, "Sched Debug Version: v0.09, %s %.*s\n",
+	SEQ_printf(m, "Sched Debug Version: v0.10, %s %.*s\n",
 		init_utsname()->release,
 		(int)strcspn(init_utsname()->version, " "),
 		init_utsname()->version);
@@ -415,6 +432,7 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	P(se.nr_failed_migrations_affine);
 	P(se.nr_failed_migrations_running);
 	P(se.nr_failed_migrations_hot);
+	P(se.nr_failed_migrations_throttled);
 	P(se.nr_forced_migrations);
 	P(se.nr_forced2_migrations);
 	P(se.nr_wakeups);
@@ -489,6 +507,7 @@ void proc_sched_set_task(struct task_struct *p)
 	p->se.nr_failed_migrations_affine	= 0;
 	p->se.nr_failed_migrations_running	= 0;
 	p->se.nr_failed_migrations_hot		= 0;
+	p->se.nr_failed_migrations_throttled	= 0;
 	p->se.nr_forced_migrations		= 0;
 	p->se.nr_forced2_migrations		= 0;
 	p->se.nr_wakeups			= 0;

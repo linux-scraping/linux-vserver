@@ -264,6 +264,15 @@ static DEFINE_MUTEX(sched_domains_mutex);
 
 #include <linux/cgroup.h>
 
+#if defined(CONFIG_FAIR_GROUP_SCHED) && defined(CONFIG_CFS_HARD_LIMITS)
+struct cfs_bandwidth {
+	spinlock_t		cfs_runtime_lock;
+	ktime_t			cfs_period;
+	u64			cfs_runtime;
+	struct hrtimer		cfs_period_timer;
+};
+#endif
+
 struct cfs_rq;
 
 static LIST_HEAD(task_groups);
@@ -284,6 +293,11 @@ struct task_group {
 	/* runqueue "owned" by this group on each cpu */
 	struct cfs_rq **cfs_rq;
 	unsigned long shares;
+#ifdef CONFIG_CFS_HARD_LIMITS
+	struct cfs_bandwidth cfs_bandwidth;
+	/* If set, throttle when the group exceeds its bandwidth */
+	int hard_limit_enabled;
+#endif
 #endif
 
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -479,6 +493,20 @@ struct cfs_rq {
 	unsigned long rq_weight;
 #endif
 #endif
+#ifdef CONFIG_CFS_HARD_LIMITS
+	/* set when the group is throttled  on this cpu */
+	int cfs_throttled;
+
+	/* runtime currently consumed by the group on this rq */
+	u64 cfs_time;
+
+	/* runtime available to the group on this rq */
+	u64 cfs_runtime;
+#endif
+	/*
+	 * Number of tasks at this heirarchy.
+	 */
+	unsigned long nr_tasks_running;
 };
 
 /* Real-Time classes' related field in a runqueue: */
@@ -641,16 +669,6 @@ struct rq {
 #endif
 	struct hrtimer hrtick_timer;
 #endif
-	unsigned long norm_time;
-	unsigned long idle_time;
-#ifdef CONFIG_VSERVER_IDLETIME
-	int idle_skip;
-#endif
-#ifdef CONFIG_VSERVER_HARDCPU
-	struct list_head hold_queue;
-	unsigned long nr_onhold;
-	int idle_tokens;
-#endif
 
 #ifdef CONFIG_SCHEDSTATS
 	/* latency stats */
@@ -673,6 +691,11 @@ struct rq {
 	/* BKL stats */
 	unsigned int bkl_count;
 #endif
+	/*
+	 * Protects the cfs runtime related fields of all cfs_rqs under
+	 * this rq
+	 */
+	spinlock_t runtime_lock;
 };
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
@@ -1564,6 +1587,7 @@ update_group_shares_cpu(struct task_group *tg, int cpu,
 	}
 }
 
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq);
 /*
  * Re-compute the task group their per cpu shares over the given domain.
  * This needs to be done in a bottom-up fashion because the rq weight of a
@@ -1581,9 +1605,11 @@ static int tg_shares_up(struct task_group *tg, void *data)
 		 * If there are currently no tasks on the cpu pretend there
 		 * is one of average load so that when a new task gets to
 		 * run here it will not get delayed by group starvation.
+		 * Also if the group is throttled on this cpu, pretend that
+		 * it has no tasks.
 		 */
 		weight = tg->cfs_rq[i]->load.weight;
-		if (!weight)
+		if (!weight || cfs_rq_throttled(tg->cfs_rq[i]))
 			weight = NICE_0_LOAD;
 
 		tg->cfs_rq[i]->rq_weight = weight;
@@ -1607,6 +1633,7 @@ static int tg_shares_up(struct task_group *tg, void *data)
  * Compute the cpu's hierarchical load factor for each task group.
  * This needs to be done in a top-down fashion because the load of a child
  * group is a fraction of its parents load.
+ * A throttled group's h_load is set to 0.
  */
 static int tg_load_down(struct task_group *tg, void *data)
 {
@@ -1615,6 +1642,8 @@ static int tg_load_down(struct task_group *tg, void *data)
 
 	if (!tg->parent) {
 		load = cpu_rq(cpu)->load.weight;
+	} else if (cfs_rq_throttled(tg->cfs_rq[cpu])) {
+		load = 0;
 	} else {
 		load = tg->parent->cfs_rq[cpu]->h_load;
 		load *= tg->cfs_rq[cpu]->shares;
@@ -1744,6 +1773,187 @@ static void cfs_rq_set_shares(struct cfs_rq *cfs_rq, unsigned long shares)
 
 static void calc_load_account_active(struct rq *this_rq);
 
+
+#if defined(CONFIG_RT_GROUP_SCHED) || defined(CONFIG_FAIR_GROUP_SCHED)
+
+#ifdef CONFIG_SMP
+static inline const struct cpumask *sched_bw_period_mask(void)
+{
+	return cpu_rq(smp_processor_id())->rd->span;
+}
+#else /* !CONFIG_SMP */
+static inline const struct cpumask *sched_bw_period_mask(void)
+{
+	return cpu_online_mask;
+}
+#endif /* CONFIG_SMP */
+
+#else
+static inline const struct cpumask *sched_bw_period_mask(void)
+{
+	return cpu_online_mask;
+}
+
+#endif
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+#ifdef CONFIG_CFS_HARD_LIMITS
+
+/*
+ * Runtime allowed for a cfs group before it is hard limited.
+ * default: Infinite which means no hard limiting.
+ */
+u64 sched_cfs_runtime = RUNTIME_INF;
+
+/*
+ * period over which we hard limit the cfs group's bandwidth.
+ * default: 0.5s
+ */
+u64 sched_cfs_period = 500000;
+
+static inline u64 global_cfs_period(void)
+{
+	return sched_cfs_period * NSEC_PER_USEC;
+}
+
+static inline u64 global_cfs_runtime(void)
+{
+	return RUNTIME_INF;
+}
+
+int task_group_throttled(struct task_group *tg, int cpu);
+void do_sched_cfs_period_timer(struct cfs_bandwidth *cfs_b);
+
+static inline int cfs_bandwidth_enabled(struct task_group *tg)
+{
+	return tg->hard_limit_enabled;
+}
+
+static inline void rq_runtime_lock(struct rq *rq)
+{
+	spin_lock(&rq->runtime_lock);
+}
+
+static inline void rq_runtime_unlock(struct rq *rq)
+{
+	spin_unlock(&rq->runtime_lock);
+}
+
+/*
+ * Refresh the runtimes of the throttled groups.
+ * But nothing much to do now, will populate this in later patches.
+ */
+static enum hrtimer_restart sched_cfs_period_timer(struct hrtimer *timer)
+{
+	struct cfs_bandwidth *cfs_b =
+		container_of(timer, struct cfs_bandwidth, cfs_period_timer);
+
+	do_sched_cfs_period_timer(cfs_b);
+	hrtimer_add_expires_ns(timer, ktime_to_ns(cfs_b->cfs_period));
+	return HRTIMER_RESTART;
+}
+
+/*
+ * TODO: Check if this kind of timer setup is sufficient for cfs or
+ * should we do what rt is doing.
+ */
+static void start_cfs_bandwidth(struct task_group *tg)
+{
+	struct cfs_bandwidth *cfs_b = &tg->cfs_bandwidth;
+
+	/*
+	 * Timer isn't setup for groups with infinite runtime or for groups
+	 * for which hard limiting isn't enabled.
+	 */
+	if (!cfs_bandwidth_enabled(tg) || (cfs_b->cfs_runtime == RUNTIME_INF))
+		return;
+
+	if (hrtimer_active(&cfs_b->cfs_period_timer))
+		return;
+
+	hrtimer_start_range_ns(&cfs_b->cfs_period_timer, cfs_b->cfs_period,
+			0, HRTIMER_MODE_REL);
+}
+
+static void init_cfs_bandwidth(struct task_group *tg)
+{
+	struct cfs_bandwidth *cfs_b = &tg->cfs_bandwidth;
+
+	cfs_b->cfs_period = ns_to_ktime(global_cfs_period());
+	cfs_b->cfs_runtime = global_cfs_runtime();
+
+	spin_lock_init(&cfs_b->cfs_runtime_lock);
+
+	hrtimer_init(&cfs_b->cfs_period_timer,
+			CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	cfs_b->cfs_period_timer.function = &sched_cfs_period_timer;
+}
+
+static inline void destroy_cfs_bandwidth(struct task_group *tg)
+{
+	hrtimer_cancel(&tg->cfs_bandwidth.cfs_period_timer);
+}
+
+static void init_cfs_hard_limits(struct cfs_rq *cfs_rq, struct task_group *tg)
+{
+	cfs_rq->cfs_time = 0;
+	cfs_rq->cfs_throttled = 0;
+	cfs_rq->cfs_runtime = tg->cfs_bandwidth.cfs_runtime;
+	tg->hard_limit_enabled = 0;
+}
+
+#else /* !CONFIG_CFS_HARD_LIMITS */
+
+static void init_cfs_bandwidth(struct task_group *tg)
+{
+	return;
+}
+
+static inline void destroy_cfs_bandwidth(struct task_group *tg)
+{
+	return;
+}
+
+static void init_cfs_hard_limits(struct cfs_rq *cfs_rq, struct task_group *tg)
+{
+	return;
+}
+
+static inline void rq_runtime_lock(struct rq *rq)
+{
+	return;
+}
+
+static inline void rq_runtime_unlock(struct rq *rq)
+{
+	return;
+}
+
+#endif /* CONFIG_CFS_HARD_LIMITS */
+#else /* !CONFIG_FAIR_GROUP_SCHED */
+
+static inline void rq_runtime_lock(struct rq *rq)
+{
+	return;
+}
+
+static inline void rq_runtime_unlock(struct rq *rq)
+{
+	return;
+}
+
+int task_group_throttled(struct task_group *tg, int cpu)
+{
+	return 0;
+}
+
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq)
+{
+	return 0;
+}
+
+#endif /* CONFIG_FAIR_GROUP_SCHED */
+
 #include "sched_stats.h"
 #include "sched_idletask.c"
 #include "sched_fair.c"
@@ -1793,14 +2003,17 @@ static void update_avg(u64 *avg, u64 sample)
 	*avg += diff >> 3;
 }
 
-static void enqueue_task(struct rq *rq, struct task_struct *p, int wakeup)
+static int enqueue_task(struct rq *rq, struct task_struct *p, int wakeup)
 {
+	int ret;
+
 	if (wakeup)
 		p->se.start_runtime = p->se.sum_exec_runtime;
 
 	sched_info_queued(p);
-	p->sched_class->enqueue_task(rq, p, wakeup);
+	ret = p->sched_class->enqueue_task(rq, p, wakeup);
 	p->se.on_rq = 1;
+	return ret;
 }
 
 static void dequeue_task(struct rq *rq, struct task_struct *p, int sleep)
@@ -1875,8 +2088,15 @@ static void activate_task(struct rq *rq, struct task_struct *p, int wakeup)
 	if (task_contributes_to_load(p))
 		rq->nr_uninterruptible--;
 
-	enqueue_task(rq, p, wakeup);
-	inc_nr_running(rq);
+	/*
+	 * Increment rq->nr_running only if enqueue_task() succeeds.
+	 * enqueue_task() can fail when the task being activated belongs
+	 * to a throttled group. In this case, the task gets enqueued to
+	 * throttled group and the group will be enqueued later when it
+	 * gets unthrottled. rq->nr_running gets incremented at that time.
+	 */
+	if (!enqueue_task(rq, p, wakeup))
+		inc_nr_running(rq);
 }
 
 /*
@@ -1925,8 +2145,6 @@ static inline void check_class_changed(struct rq *rq, struct task_struct *p,
 	} else
 		p->sched_class->prio_changed(rq, p, oldprio, running);
 }
-
-#include "sched_mon.h"
 
 #ifdef CONFIG_SMP
 
@@ -2020,7 +2238,6 @@ migrate_task(struct task_struct *p, int dest_cpu, struct migration_req *req)
 {
 	struct rq *rq = task_rq(p);
 
-	vxm_migrate_task(p, rq, dest_cpu);
 	/*
 	 * If the task is not on a runqueue (and not running), then
 	 * it is sufficient to simply update the task's cpu field.
@@ -2413,8 +2630,6 @@ void task_oncpu_function_call(struct task_struct *p,
 	preempt_enable();
 }
 
-#include "sched_hard.h"
-
 /***
  * try_to_wake_up - wake up a thread
  * @p: the to-be-woken-up thread
@@ -2459,13 +2674,6 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 	rq = task_rq_lock(p, &flags);
 	update_rq_clock(rq);
 	old_state = p->state;
-
-	/* we need to unhold suspended tasks */
-	if (old_state & TASK_ONHOLD) {
-		vx_unhold_task(p, rq);
-		old_state = p->state;
-	}
-
 	if (!(old_state & state))
 		goto out;
 
@@ -2487,12 +2695,6 @@ static int try_to_wake_up(struct task_struct *p, unsigned int state, int sync)
 		/* might preempt at this point */
 		rq = task_rq_lock(p, &flags);
 		old_state = p->state;
-
-	/* we need to unhold suspended tasks
-	if (old_state & TASK_ONHOLD) {
-		vx_unhold_task(p, rq);
-		old_state = p->state;
-	} */
 		if (!(old_state & state))
 			goto out;
 		if (p->se.on_rq)
@@ -3239,6 +3441,7 @@ int can_migrate_task(struct task_struct *p, struct rq *rq, int this_cpu,
 	 * 1) running (obviously), or
 	 * 2) cannot be migrated to this CPU due to cpus_allowed, or
 	 * 3) are cache-hot on their current CPU.
+	 * 4) end up in throttled task groups on this CPU.
 	 */
 	if (!cpumask_test_cpu(this_cpu, &p->cpus_allowed)) {
 		schedstat_inc(p, se.nr_failed_migrations_affine);
@@ -3248,6 +3451,18 @@ int can_migrate_task(struct task_struct *p, struct rq *rq, int this_cpu,
 
 	if (task_running(rq, p)) {
 		schedstat_inc(p, se.nr_failed_migrations_running);
+		return 0;
+	}
+
+	/*
+	 * Don't migrate the task if it belongs to a
+	 * - throttled group on its current cpu
+	 * - throttled group on this_cpu
+	 * - group whose hierarchy is throttled on this_cpu
+	 */
+	if (cfs_rq_throttled(cfs_rq_of(&p->se)) ||
+		task_group_throttled(task_group(p), this_cpu)) {
+		schedstat_inc(p, se.nr_failed_migrations_throttled);
 		return 0;
 	}
 
@@ -5401,11 +5616,6 @@ need_resched_nonpreemptible:
 		idle_balance(cpu, rq);
 
 	put_prev_task(rq, prev);
-
-	vx_set_rq_time(rq, jiffies);	/* update time */
-	vx_schedule(prev, rq, cpu);	/* hold if over limit */
-	vx_try_unhold(rq, cpu);		/* unhold if refilled */
-
 	next = pick_next_task(rq);
 
 	if (likely(prev != next)) {
@@ -5944,8 +6154,10 @@ void rt_mutex_setprio(struct task_struct *p, int prio)
 	oldprio = p->prio;
 	on_rq = p->se.on_rq;
 	running = task_current(rq, p);
-	if (on_rq)
+	if (on_rq) {
 		dequeue_task(rq, p, 0);
+		dec_nr_running(rq);
+	}
 	if (running)
 		p->sched_class->put_prev_task(rq, p);
 
@@ -5959,7 +6171,8 @@ void rt_mutex_setprio(struct task_struct *p, int prio)
 	if (running)
 		p->sched_class->set_curr_task(rq);
 	if (on_rq) {
-		enqueue_task(rq, p, 0);
+		if (!enqueue_task(rq, p, 0))
+			inc_nr_running(rq);
 
 		check_class_changed(rq, p, prev_class, oldprio, running);
 	}
@@ -5993,8 +6206,10 @@ void set_user_nice(struct task_struct *p, long nice)
 		goto out_unlock;
 	}
 	on_rq = p->se.on_rq;
-	if (on_rq)
+	if (on_rq) {
 		dequeue_task(rq, p, 0);
+		dec_nr_running(rq);
+	}
 
 	p->static_prio = NICE_TO_PRIO(nice);
 	set_load_weight(p);
@@ -6003,7 +6218,8 @@ void set_user_nice(struct task_struct *p, long nice)
 	delta = p->prio - old_prio;
 
 	if (on_rq) {
-		enqueue_task(rq, p, 0);
+		if (!enqueue_task(rq, p, 0))
+			inc_nr_running(rq);
 		/*
 		 * If the task increased its priority or is running and
 		 * lowered its priority, then reschedule its CPU:
@@ -9167,6 +9383,7 @@ static void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	struct rq *rq = cpu_rq(cpu);
 	tg->cfs_rq[cpu] = cfs_rq;
 	init_cfs_rq(cfs_rq, rq);
+	init_cfs_hard_limits(cfs_rq, tg);
 	cfs_rq->tg = tg;
 	if (add)
 		list_add(&cfs_rq->leaf_cfs_rq_list, &rq->leaf_cfs_rq_list);
@@ -9296,6 +9513,10 @@ void __init sched_init(void)
 #endif /* CONFIG_USER_SCHED */
 #endif /* CONFIG_RT_GROUP_SCHED */
 
+#ifdef CONFIG_FAIR_GROUP_SCHED
+	init_cfs_bandwidth(&init_task_group);
+#endif
+
 #ifdef CONFIG_GROUP_SCHED
 	list_add(&init_task_group.list, &task_groups);
 	INIT_LIST_HEAD(&init_task_group.children);
@@ -9312,6 +9533,7 @@ void __init sched_init(void)
 
 		rq = cpu_rq(i);
 		spin_lock_init(&rq->lock);
+		spin_lock_init(&rq->runtime_lock);
 		rq->nr_running = 0;
 		rq->calc_load_active = 0;
 		rq->calc_load_update = jiffies + LOAD_FREQ;
@@ -9362,10 +9584,7 @@ void __init sched_init(void)
 
 #endif
 #endif /* CONFIG_FAIR_GROUP_SCHED */
-#ifdef CONFIG_VSERVER_HARDCPU
-		INIT_LIST_HEAD(&rq->hold_queue);
-		rq->nr_onhold = 0;
-#endif
+
 		rq->rt.rt_runtime = def_rt_bandwidth.rt_runtime;
 #ifdef CONFIG_RT_GROUP_SCHED
 		INIT_LIST_HEAD(&rq->leaf_rt_rq_list);
@@ -9588,6 +9807,7 @@ static void free_fair_sched_group(struct task_group *tg)
 {
 	int i;
 
+	destroy_cfs_bandwidth(tg);
 	for_each_possible_cpu(i) {
 		if (tg->cfs_rq)
 			kfree(tg->cfs_rq[i]);
@@ -9614,6 +9834,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 	if (!tg->se)
 		goto err;
 
+	init_cfs_bandwidth(tg);
 	tg->shares = NICE_0_LOAD;
 
 	for_each_possible_cpu(i) {
@@ -9846,8 +10067,10 @@ void sched_move_task(struct task_struct *tsk)
 	running = task_current(rq, tsk);
 	on_rq = tsk->se.on_rq;
 
-	if (on_rq)
+	if (on_rq) {
 		dequeue_task(rq, tsk, 0);
+		dec_nr_running(rq);
+	}
 	if (unlikely(running))
 		tsk->sched_class->put_prev_task(rq, tsk);
 
@@ -9861,7 +10084,8 @@ void sched_move_task(struct task_struct *tsk)
 	if (unlikely(running))
 		tsk->sched_class->set_curr_task(rq);
 	if (on_rq)
-		enqueue_task(rq, tsk, 0);
+		if (!enqueue_task(rq, tsk, 0))
+			inc_nr_running(rq);
 
 	task_rq_unlock(rq, &flags);
 }
@@ -10308,6 +10532,134 @@ static u64 cpu_shares_read_u64(struct cgroup *cgrp, struct cftype *cft)
 
 	return (u64) tg->shares;
 }
+
+#ifdef CONFIG_CFS_HARD_LIMITS
+
+static int tg_set_cfs_bandwidth(struct task_group *tg,
+		u64 cfs_period, u64 cfs_runtime)
+{
+	int i, err = 0;
+
+	spin_lock_irq(&tg->cfs_bandwidth.cfs_runtime_lock);
+	tg->cfs_bandwidth.cfs_period = ns_to_ktime(cfs_period);
+	tg->cfs_bandwidth.cfs_runtime = cfs_runtime;
+
+	for_each_possible_cpu(i) {
+		struct cfs_rq *cfs_rq = tg->cfs_rq[i];
+
+		rq_runtime_lock(rq_of(cfs_rq));
+		cfs_rq->cfs_runtime = cfs_runtime;
+		rq_runtime_unlock(rq_of(cfs_rq));
+	}
+
+	start_cfs_bandwidth(tg);
+	spin_unlock_irq(&tg->cfs_bandwidth.cfs_runtime_lock);
+	return err;
+}
+
+int tg_set_cfs_runtime(struct task_group *tg, long cfs_runtime_us)
+{
+	u64 cfs_runtime, cfs_period;
+
+	cfs_period = ktime_to_ns(tg->cfs_bandwidth.cfs_period);
+	cfs_runtime = (u64)cfs_runtime_us * NSEC_PER_USEC;
+	if (cfs_runtime_us < 0)
+		cfs_runtime = RUNTIME_INF;
+
+	return tg_set_cfs_bandwidth(tg, cfs_period, cfs_runtime);
+}
+
+long tg_get_cfs_runtime(struct task_group *tg)
+{
+	u64 cfs_runtime_us;
+
+	if (tg->cfs_bandwidth.cfs_runtime == RUNTIME_INF)
+		return -1;
+
+	cfs_runtime_us = tg->cfs_bandwidth.cfs_runtime;
+	do_div(cfs_runtime_us, NSEC_PER_USEC);
+	return cfs_runtime_us;
+}
+
+int tg_set_cfs_period(struct task_group *tg, long cfs_period_us)
+{
+	u64 cfs_runtime, cfs_period;
+
+	cfs_period = (u64)cfs_period_us * NSEC_PER_USEC;
+	cfs_runtime = tg->cfs_bandwidth.cfs_runtime;
+
+	if (cfs_period == 0)
+		return -EINVAL;
+
+	return tg_set_cfs_bandwidth(tg, cfs_period, cfs_runtime);
+}
+
+long tg_get_cfs_period(struct task_group *tg)
+{
+	u64 cfs_period_us;
+
+	cfs_period_us = ktime_to_ns(tg->cfs_bandwidth.cfs_period);
+	do_div(cfs_period_us, NSEC_PER_USEC);
+	return cfs_period_us;
+}
+
+int tg_set_hard_limit_enabled(struct task_group *tg, u64 val)
+{
+	local_irq_disable();
+	spin_lock(&tg->cfs_bandwidth.cfs_runtime_lock);
+	if (val > 0) {
+		tg->hard_limit_enabled = 1;
+		start_cfs_bandwidth(tg);
+		spin_unlock(&tg->cfs_bandwidth.cfs_runtime_lock);
+	} else {
+		destroy_cfs_bandwidth(tg);
+		tg->hard_limit_enabled = 0;
+		spin_unlock(&tg->cfs_bandwidth.cfs_runtime_lock);
+		/*
+		 * Hard limiting is being disabled for this group.
+		 * Refresh runtimes and put the throttled entities
+		 * of the group back onto runqueue.
+		 */
+		do_sched_cfs_period_timer(&tg->cfs_bandwidth);
+	}
+	local_irq_enable();
+	return 0;
+}
+
+static s64 cpu_cfs_runtime_read_s64(struct cgroup *cgrp, struct cftype *cft)
+{
+	return tg_get_cfs_runtime(cgroup_tg(cgrp));
+}
+
+static int cpu_cfs_runtime_write_s64(struct cgroup *cgrp, struct cftype *cftype,
+				s64 cfs_runtime_us)
+{
+	return tg_set_cfs_runtime(cgroup_tg(cgrp), cfs_runtime_us);
+}
+
+static u64 cpu_cfs_period_read_u64(struct cgroup *cgrp, struct cftype *cft)
+{
+	return tg_get_cfs_period(cgroup_tg(cgrp));
+}
+
+static int cpu_cfs_period_write_u64(struct cgroup *cgrp, struct cftype *cftype,
+				u64 cfs_period_us)
+{
+	return tg_set_cfs_period(cgroup_tg(cgrp), cfs_period_us);
+}
+
+static u64 cpu_cfs_hard_limit_read_u64(struct cgroup *cgrp, struct cftype *cft)
+{
+	return cfs_bandwidth_enabled(cgroup_tg(cgrp));
+}
+
+static int cpu_cfs_hard_limit_write_u64(struct cgroup *cgrp,
+		struct cftype *cftype, u64 val)
+{
+	return tg_set_hard_limit_enabled(cgroup_tg(cgrp), val);
+}
+
+#endif /* CONFIG_CFS_HARD_LIMITS */
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
 #ifdef CONFIG_RT_GROUP_SCHED
@@ -10341,6 +10693,23 @@ static struct cftype cpu_files[] = {
 		.read_u64 = cpu_shares_read_u64,
 		.write_u64 = cpu_shares_write_u64,
 	},
+#ifdef CONFIG_CFS_HARD_LIMITS
+	{
+		.name = "cfs_runtime_us",
+		.read_s64 = cpu_cfs_runtime_read_s64,
+		.write_s64 = cpu_cfs_runtime_write_s64,
+	},
+	{
+		.name = "cfs_period_us",
+		.read_u64 = cpu_cfs_period_read_u64,
+		.write_u64 = cpu_cfs_period_write_u64,
+	},
+	{
+		.name = "cfs_hard_limit",
+		.read_u64 = cpu_cfs_hard_limit_read_u64,
+		.write_u64 = cpu_cfs_hard_limit_write_u64,
+	},
+#endif /* CONFIG_CFS_HARD_LIMITS */
 #endif
 #ifdef CONFIG_RT_GROUP_SCHED
 	{

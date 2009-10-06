@@ -1,0 +1,52 @@
+CPU HARD LIMITS FOR CFS GROUPS
+==============================
+
+1. Overview
+2. Interface
+3. Examples
+
+1. Overview
+-----------
+
+CFS is a proportional share scheduler which tries to divide the CPU time
+proportionately between tasks or groups of tasks (task group/cgroup) depending
+on the priority/weight of the task or shares assigned to groups of tasks.
+In CFS, a task/task group can get more than its share of CPU if there are
+enough idle CPU cycles available in the system, due to the work conserving
+nature of the scheduler. However in certain scenarios (like pay-per-use),
+it is desirable not to provide extra time to a group even in the presence
+of idle CPU cycles. This is where hard limiting can be of use.
+
+Hard limits for task groups can be set by specifying how much CPU runtime a
+group can consume within a given period. If the group consumes more CPU time
+than the runtime in a given period, it gets throttled. None of the tasks of
+the throttled group gets to run until the runtime of the group gets refreshed
+at the beginning of the next period.
+
+2. Interface
+------------
+
+Hard limit feature adds 3 cgroup files for CFS group scheduler:
+
+cfs_runtime_us: Hard limit for the group in microseconds.
+
+cfs_period_us: Time period in microseconds within which hard limits is
+enforced.
+
+cfs_hard_limit: The control file to enable or disable hard limiting for the
+group.
+
+A group gets created with default values for runtime and period and with
+hard limit disabled. Each group can set its own values for runtime and period
+independent of other groups in the system.
+
+3. Examples
+-----------
+
+# mount -t cgroup -ocpu none /cgroups/
+# cd /cgroups
+# mkdir 1
+# cd 1/
+# echo 250000 > cfs_runtime_us /* set a 250ms runtime or limit */
+# echo 500000 > cfs_period_us /* set a 500ms period */
+# echo 1 > cfs_hard_limit /* enable hard limiting for group 1/ */

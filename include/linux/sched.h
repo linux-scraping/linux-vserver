@@ -71,6 +71,7 @@ struct sched_param {
 #include <linux/path.h>
 #include <linux/compiler.h>
 #include <linux/completion.h>
+#include <linux/pid.h>
 #include <linux/percpu.h>
 #include <linux/topology.h>
 #include <linux/proportions.h>
@@ -88,7 +89,6 @@ struct sched_param {
 #include <linux/kobject.h>
 #include <linux/latencytop.h>
 #include <linux/cred.h>
-#include <linux/pid.h>
 
 #include <asm/processor.h>
 
@@ -182,13 +182,12 @@ extern unsigned long long time_sync_thresh;
 #define TASK_UNINTERRUPTIBLE	2
 #define __TASK_STOPPED		4
 #define __TASK_TRACED		8
-#define TASK_ONHOLD		16
 /* in tsk->exit_state */
-#define EXIT_ZOMBIE		32
-#define EXIT_DEAD		64
+#define EXIT_ZOMBIE		16
+#define EXIT_DEAD		32
 /* in tsk->state again */
-#define TASK_DEAD		128
-#define TASK_WAKEKILL		256
+#define TASK_DEAD		64
+#define TASK_WAKEKILL		128
 
 /* Convenience macros for the sake of set_task_state */
 #define TASK_KILLABLE		(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
@@ -1028,7 +1027,7 @@ struct sched_domain;
 struct sched_class {
 	const struct sched_class *next;
 
-	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int wakeup);
+	int (*enqueue_task) (struct rq *rq, struct task_struct *p, int wakeup);
 	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int sleep);
 	void (*yield_task) (struct rq *rq);
 
@@ -1128,6 +1127,7 @@ struct sched_entity {
 	u64			nr_failed_migrations_affine;
 	u64			nr_failed_migrations_running;
 	u64			nr_failed_migrations_hot;
+	u64			nr_failed_migrations_throttled;
 	u64			nr_forced_migrations;
 	u64			nr_forced2_migrations;
 
@@ -1140,6 +1140,12 @@ struct sched_entity {
 	u64			nr_wakeups_affine_attempts;
 	u64			nr_wakeups_passive;
 	u64			nr_wakeups_idle;
+#ifdef CONFIG_CFS_HARD_LIMITS
+	u64			throttle_start;
+	u64			throttle_max;
+	u64			throttle_count;
+	u64			throttle_sum;
+#endif
 #endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -1187,9 +1193,7 @@ struct task_struct {
 	const struct sched_class *sched_class;
 	struct sched_entity se;
 	struct sched_rt_entity rt;
-#ifdef CONFIG_VSERVER_HARDCPU
-	struct list_head hq;
-#endif
+
 #ifdef CONFIG_PREEMPT_NOTIFIERS
 	/* list of struct preempt_notifier: */
 	struct hlist_head preempt_notifiers;
