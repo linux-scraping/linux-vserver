@@ -5217,7 +5217,9 @@ static struct inode_operations btrfs_dir_inode_operations = {
 	.getxattr	= btrfs_getxattr,
 	.listxattr	= btrfs_listxattr,
 	.removexattr	= btrfs_removexattr,
+	.sync_flags	= btrfs_sync_flags,
 	.permission	= btrfs_permission,
+	.sync_flags	= btrfs_sync_flags,
 };
 static struct inode_operations btrfs_dir_ro_inode_operations = {
 	.lookup		= btrfs_lookup,
@@ -5289,6 +5291,7 @@ static struct inode_operations btrfs_file_inode_operations = {
 	.permission	= btrfs_permission,
 	.fallocate	= btrfs_fallocate,
 	.fiemap		= btrfs_fiemap,
+	.sync_flags	= btrfs_sync_flags,
 };
 static struct inode_operations btrfs_special_inode_operations = {
 	.getattr	= btrfs_getattr,

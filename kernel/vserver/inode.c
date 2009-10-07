@@ -182,26 +182,35 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 	}
 
 	if (*mask & (IATTR_BARRIER | IATTR_IXUNLINK | IATTR_IMMUTABLE)) {
+		int iflags = in->i_flags;
+		int vflags = in->i_vflags;
+
 		if (*mask & IATTR_IMMUTABLE) {
 			if (*flags & IATTR_IMMUTABLE)
-				in->i_flags |= S_IMMUTABLE;
+				iflags |= S_IMMUTABLE;
 			else
-				in->i_flags &= ~S_IMMUTABLE;
+				iflags &= ~S_IMMUTABLE;
 		}
 		if (*mask & IATTR_IXUNLINK) {
 			if (*flags & IATTR_IXUNLINK)
-				in->i_flags |= S_IXUNLINK;
+				iflags |= S_IXUNLINK;
 			else
-				in->i_flags &= ~S_IXUNLINK;
+				iflags &= ~S_IXUNLINK;
+		}
+		if (S_ISREG(in->i_mode) && (*mask & IATTR_COW)) {
+			if (*flags & IATTR_COW)
+				vflags |= V_COW;
+			else
+				vflags &= ~V_COW;
 		}
 		if (S_ISDIR(in->i_mode) && (*mask & IATTR_BARRIER)) {
 			if (*flags & IATTR_BARRIER)
-				in->i_vflags |= V_BARRIER;
+				vflags |= V_BARRIER;
 			else
-				in->i_vflags &= ~V_BARRIER;
+				vflags &= ~V_BARRIER;
 		}
 		if (in->i_op && in->i_op->sync_flags) {
-			error = in->i_op->sync_flags(in);
+			error = in->i_op->sync_flags(in, iflags, vflags);
 			if (error)
 				goto out;
 		}

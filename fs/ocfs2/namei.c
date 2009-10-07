@@ -2045,7 +2045,6 @@ const struct inode_operations ocfs2_dir_iops = {
 	.rename		= ocfs2_rename,
 	.setattr	= ocfs2_setattr,
 	.getattr	= ocfs2_getattr,
-	.sync_flags     = ocfs2_sync_flags,
 	.permission	= ocfs2_permission,
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,

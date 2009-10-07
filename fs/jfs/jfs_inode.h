@@ -39,7 +39,7 @@ extern struct dentry *jfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 extern struct dentry *jfs_fh_to_parent(struct super_block *sb, struct fid *fid,
 	int fh_len, int fh_type);
 extern void jfs_set_inode_flags(struct inode *);
-extern int jfs_sync_flags(struct inode *);
+extern int jfs_sync_flags(struct inode *, int, int);
 extern int jfs_get_block(struct inode *, sector_t, struct buffer_head *, int);
 
 extern const struct address_space_operations jfs_aops;

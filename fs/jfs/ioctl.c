@@ -53,6 +53,16 @@ static long jfs_map_ext2(unsigned long flags, int from)
 }
 
 
+int jfs_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	jfs_get_inode_flags(JFS_IP(inode));
+	inode->i_ctime = CURRENT_TIME_SEC;
+	mark_inode_dirty(inode);
+	return 0;
+}
+
 long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct inode *inode = filp->f_dentry->d_inode;
@@ -117,7 +127,7 @@ long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			}
 		}
 
-		flags = flags & JFS_FL_USER_MODIFIABLE;
+		flags &= JFS_FL_USER_MODIFIABLE;
 		flags |= oldflags & ~JFS_FL_USER_MODIFIABLE;
 		jfs_inode->mode2 = flags;
 

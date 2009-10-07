@@ -16,8 +16,35 @@
 #include <linux/mount.h>
 #include <linux/time.h>
 #include <linux/compat.h>
-#include <linux/vs_tag.h>
 #include <asm/uaccess.h>
+
+
+int ext3_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	handle_t *handle = NULL;
+	struct ext3_iloc iloc;
+	int err;
+
+	handle = ext3_journal_start(inode, 1);
+	if (IS_ERR(handle))
+		return PTR_ERR(handle);
+
+	if (IS_SYNC(inode))
+		handle->h_sync = 1;
+	err = ext3_reserve_inode_write(handle, inode, &iloc);
+	if (err)
+		goto flags_err;
+
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	ext3_get_inode_flags(EXT3_I(inode));
+	inode->i_ctime = CURRENT_TIME_SEC;
+
+	err = ext3_mark_iloc_dirty(handle, inode, &iloc);
+flags_err:
+	ext3_journal_stop(handle);
+	return err;
+}
 
 long ext3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
@@ -102,7 +129,7 @@ long ext3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (err)
 			goto flags_err;
 
-		flags = flags & EXT3_FL_USER_MODIFIABLE;
+		flags &= EXT3_FL_USER_MODIFIABLE;
 		flags |= oldflags & ~EXT3_FL_USER_MODIFIABLE;
 		ei->i_flags = flags;
 

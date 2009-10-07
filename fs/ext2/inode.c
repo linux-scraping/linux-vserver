@@ -1234,15 +1234,6 @@ void ext2_get_inode_flags(struct ext2_inode_info *ei)
 		ei->i_flags |= EXT2_COW_FL;
 }
 
-int ext2_sync_flags(struct inode *inode)
-{
-	ext2_get_inode_flags(EXT2_I(inode));
-	inode->i_ctime = CURRENT_TIME;
-	mark_inode_dirty(inode);
-	return 0;
-}
-
-
 struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 {
 	struct ext2_inode_info *ei;

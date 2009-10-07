@@ -13,6 +13,22 @@
 #include <linux/smp_lock.h>
 #include <linux/compat.h>
 
+
+int reiserfs_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	__u16 sd_attrs = 0;
+
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+
+	i_attrs_to_sd_attrs(inode, &sd_attrs);
+	REISERFS_I(inode)->i_attrs = sd_attrs;
+	printk("reiserfs_sync_flags(%p,%x,%x) -> %x\n", inode, flags, vflags, sd_attrs);
+	inode->i_ctime = CURRENT_TIME_SEC;
+	mark_inode_dirty(inode);
+	return 0;
+}
+
 /*
 ** reiserfs_ioctl - handler for ioctl for inode
 ** supported commands:
@@ -25,6 +41,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 		   unsigned long arg)
 {
 	unsigned int flags, oldflags;
+	__u16 sd_attrs;
 	int err = 0;
 
 	switch (cmd) {
@@ -44,6 +61,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 
 		flags = REISERFS_I(inode)->i_attrs;
 		i_attrs_to_sd_attrs(inode, (__u16 *) & flags);
+		printk("GETFLAGS(%p,%x,%x) -> %x\n", inode, inode->i_flags, inode->i_vflags, flags);
 		flags &= REISERFS_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *)arg);
 	case REISERFS_IOC_SETFLAGS:{
@@ -92,7 +110,7 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 			}
 
 			oldflags = REISERFS_I(inode)->i_attrs;
-			flags = flags & REISERFS_FL_USER_MODIFIABLE;
+			flags &= REISERFS_FL_USER_MODIFIABLE;
 			flags |= oldflags & ~REISERFS_FL_USER_MODIFIABLE;
 			sd_attrs_to_i_attrs(flags, inode);
 			REISERFS_I(inode)->i_attrs = flags;

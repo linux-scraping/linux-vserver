@@ -3466,7 +3466,8 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		!(sb->s_flags & MS_TAGGED)) {
 		printk("EXT4-fs: %s: tagging not permitted on remount.\n",
 			sb->s_id);
-		return -EINVAL;
+		err = -EINVAL;
+		goto restore_opts;
 	}
 
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |

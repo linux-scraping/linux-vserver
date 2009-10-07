@@ -67,10 +67,13 @@ static unsigned int btrfs_flags_to_ioctl(unsigned int flags)
 {
 	unsigned int iflags = 0;
 
-	if (flags & BTRFS_INODE_SYNC)
-		iflags |= FS_SYNC_FL;
 	if (flags & BTRFS_INODE_IMMUTABLE)
 		iflags |= FS_IMMUTABLE_FL;
+	if (flags & BTRFS_INODE_IXUNLINK)
+		iflags |= FS_IXUNLINK_FL;
+
+	if (flags & BTRFS_INODE_SYNC)
+		iflags |= FS_SYNC_FL;
 	if (flags & BTRFS_INODE_APPEND)
 		iflags |= FS_APPEND_FL;
 	if (flags & BTRFS_INODE_NODUMP)
@@ -80,28 +83,78 @@ static unsigned int btrfs_flags_to_ioctl(unsigned int flags)
 	if (flags & BTRFS_INODE_DIRSYNC)
 		iflags |= FS_DIRSYNC_FL;
 
+	if (flags & BTRFS_INODE_BARRIER)
+		iflags |= FS_BARRIER_FL;
+	if (flags & BTRFS_INODE_COW)
+		iflags |= FS_COW_FL;
 	return iflags;
 }
 
 /*
- * Update inode->i_flags based on the btrfs internal flags.
+ * Update inode->i_(v)flags based on the btrfs internal flags.
  */
 void btrfs_update_iflags(struct inode *inode)
 {
 	struct btrfs_inode *ip = BTRFS_I(inode);
 
-	inode->i_flags &= ~(S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC);
+	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
+		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+
+	if (ip->flags & BTRFS_INODE_IMMUTABLE)
+		inode->i_flags |= S_IMMUTABLE;
+	if (ip->flags & BTRFS_INODE_IXUNLINK)
+		inode->i_flags |= S_IXUNLINK;
 
 	if (ip->flags & BTRFS_INODE_SYNC)
 		inode->i_flags |= S_SYNC;
-	if (ip->flags & BTRFS_INODE_IMMUTABLE)
-		inode->i_flags |= S_IMMUTABLE;
 	if (ip->flags & BTRFS_INODE_APPEND)
 		inode->i_flags |= S_APPEND;
 	if (ip->flags & BTRFS_INODE_NOATIME)
 		inode->i_flags |= S_NOATIME;
 	if (ip->flags & BTRFS_INODE_DIRSYNC)
 		inode->i_flags |= S_DIRSYNC;
+
+	inode->i_vflags &= ~(V_BARRIER | V_COW);
+
+	if (ip->flags & BTRFS_INODE_BARRIER)
+		inode->i_vflags |= V_BARRIER;
+	if (ip->flags & BTRFS_INODE_COW)
+		inode->i_vflags |= V_COW;
+}
+
+/*
+ * Update btrfs internal flags from inode->i_(v)flags.
+ */
+void btrfs_update_flags(struct inode *inode)
+{
+	struct btrfs_inode *ip = BTRFS_I(inode);
+
+	unsigned int flags = inode->i_flags;
+	unsigned int vflags = inode->i_vflags;
+
+	ip->flags &= ~(BTRFS_INODE_SYNC | BTRFS_INODE_APPEND |
+			BTRFS_INODE_IMMUTABLE | BTRFS_INODE_IXUNLINK |
+			BTRFS_INODE_NOATIME | BTRFS_INODE_DIRSYNC |
+			BTRFS_INODE_BARRIER | BTRFS_INODE_COW);
+
+	if (flags & S_IMMUTABLE)
+		ip->flags |= BTRFS_INODE_IMMUTABLE;
+	if (flags & S_IXUNLINK)
+		ip->flags |= BTRFS_INODE_IXUNLINK;
+
+	if (flags & S_SYNC)
+		ip->flags |= BTRFS_INODE_SYNC;
+	if (flags & S_APPEND)
+		ip->flags |= BTRFS_INODE_APPEND;
+	if (flags & S_NOATIME)
+		ip->flags |= BTRFS_INODE_NOATIME;
+	if (flags & S_DIRSYNC)
+		ip->flags |= BTRFS_INODE_DIRSYNC;
+
+	if (vflags & V_BARRIER)
+		ip->flags |= BTRFS_INODE_BARRIER;
+	if (vflags & V_COW)
+		ip->flags |= BTRFS_INODE_COW;
 }
 
 /*
@@ -119,12 +172,34 @@ void btrfs_inherit_iflags(struct inode *inode, struct inode *dir)
 	flags = BTRFS_I(dir)->flags;
 
 	if (S_ISREG(inode->i_mode))
-		flags &= ~BTRFS_INODE_DIRSYNC;
+		flags &= ~(BTRFS_INODE_DIRSYNC | BTRFS_INODE_BARRIER);
 	else if (!S_ISDIR(inode->i_mode))
 		flags &= (BTRFS_INODE_NODUMP | BTRFS_INODE_NOATIME);
 
 	BTRFS_I(inode)->flags = flags;
 	btrfs_update_iflags(inode);
+}
+
+int btrfs_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	struct btrfs_inode *ip = BTRFS_I(inode);
+	struct btrfs_root *root = ip->root;
+	struct btrfs_trans_handle *trans;
+	int ret;
+
+	trans = btrfs_join_transaction(root, 1);
+	BUG_ON(!trans);
+
+	ret = btrfs_update_inode(trans, root, inode);
+	BUG_ON(ret);
+
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	btrfs_update_flags(inode);
+	inode->i_ctime = CURRENT_TIME;
+	btrfs_end_transaction(trans, root);
+
+	return 0;
 }
 
 static int btrfs_ioctl_getflags(struct file *file, void __user *arg)
@@ -149,6 +224,7 @@ static int btrfs_ioctl_setflags(struct file *file, void __user *arg)
 	if (copy_from_user(&flags, arg, sizeof(flags)))
 		return -EFAULT;
 
+	/* maybe add FS_IXUNLINK_FL ? */
 	if (flags & ~(FS_IMMUTABLE_FL | FS_APPEND_FL | \
 		      FS_NOATIME_FL | FS_NODUMP_FL | \
 		      FS_SYNC_FL | FS_DIRSYNC_FL))
@@ -161,7 +237,8 @@ static int btrfs_ioctl_setflags(struct file *file, void __user *arg)
 
 	flags = btrfs_mask_flags(inode->i_mode, flags);
 	oldflags = btrfs_flags_to_ioctl(ip->flags);
-	if ((flags ^ oldflags) & (FS_APPEND_FL | FS_IMMUTABLE_FL)) {
+	if ((flags ^ oldflags) & (FS_APPEND_FL |
+		FS_IMMUTABLE_FL | FS_IXUNLINK_FL)) {
 		if (!capable(CAP_LINUX_IMMUTABLE)) {
 			ret = -EPERM;
 			goto out_unlock;
@@ -172,14 +249,19 @@ static int btrfs_ioctl_setflags(struct file *file, void __user *arg)
 	if (ret)
 		goto out_unlock;
 
-	if (flags & FS_SYNC_FL)
-		ip->flags |= BTRFS_INODE_SYNC;
-	else
-		ip->flags &= ~BTRFS_INODE_SYNC;
 	if (flags & FS_IMMUTABLE_FL)
 		ip->flags |= BTRFS_INODE_IMMUTABLE;
 	else
 		ip->flags &= ~BTRFS_INODE_IMMUTABLE;
+	if (flags & FS_IXUNLINK_FL)
+		ip->flags |= BTRFS_INODE_IXUNLINK;
+	else
+		ip->flags &= ~BTRFS_INODE_IXUNLINK;
+
+	if (flags & FS_SYNC_FL)
+		ip->flags |= BTRFS_INODE_SYNC;
+	else
+		ip->flags &= ~BTRFS_INODE_SYNC;
 	if (flags & FS_APPEND_FL)
 		ip->flags |= BTRFS_INODE_APPEND;
 	else
