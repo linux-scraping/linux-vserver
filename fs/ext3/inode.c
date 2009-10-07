@@ -2754,30 +2754,6 @@ void ext3_get_inode_flags(struct ext3_inode_info *ei)
 		ei->i_flags |= EXT3_COW_FL;
 }
 
-int ext3_sync_flags(struct inode *inode)
-{
-	struct ext3_iloc iloc;
-	handle_t *handle;
-	int err;
-
-	handle = ext3_journal_start(inode, 1);
-	if (IS_ERR(handle))
-		return PTR_ERR(handle);
-	if (IS_SYNC(inode))
-		handle->h_sync = 1;
-	err = ext3_reserve_inode_write(handle, inode, &iloc);
-	if (err)
-		goto flags_err;
-
-	ext3_get_inode_flags(EXT3_I(inode));
-	inode->i_ctime = CURRENT_TIME;
-
-	err = ext3_mark_iloc_dirty(handle, inode, &iloc);
-flags_err:
-	ext3_journal_stop(handle);
-	return err;
-}
-
 struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 {
 	struct ext3_iloc iloc;

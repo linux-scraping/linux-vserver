@@ -46,7 +46,6 @@
 #include "file.h"
 #include "heartbeat.h"
 #include "inode.h"
-#include "ioctl.h"
 #include "journal.h"
 #include "namei.h"
 #include "suballoc.h"
@@ -134,47 +133,6 @@ void ocfs2_get_inode_flags(struct ocfs2_inode_info *oi)
 		oi->ip_attr |= OCFS2_BARRIER_FL;
 	if (vflags & V_COW)
 		oi->ip_attr |= OCFS2_COW_FL;
-}
-
-int ocfs2_sync_flags(struct inode *inode)
-{
-	struct ocfs2_inode_info *ocfs2_inode = OCFS2_I(inode);
-	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
-	handle_t *handle = NULL;
-	struct buffer_head *bh = NULL;
-	int status;
-
-	status = ocfs2_inode_lock(inode, &bh, 1);
-	if (status < 0) {
-		mlog_errno(status);
-		goto bail;
-	}
-
-	status = -EROFS;
-	if (IS_RDONLY(inode))
-		goto bail_unlock;
-
-	handle = ocfs2_start_trans(osb, OCFS2_INODE_UPDATE_CREDITS);
-	if (IS_ERR(handle)) {
-		status = PTR_ERR(handle);
-		mlog_errno(status);
-		goto bail_unlock;
-	}
-
-	ocfs2_get_inode_flags(ocfs2_inode);
-	status = ocfs2_mark_inode_dirty(handle, inode, bh);
-	if (status < 0)
-		mlog_errno(status);
-
-	ocfs2_commit_trans(osb, handle);
-bail_unlock:
-	ocfs2_inode_unlock(inode, 1);
-bail:
-	if (bh)
-		brelse(bh);
-
-	mlog_exit(status);
-	return status;
 }
 
 struct inode *ocfs2_ilookup(struct super_block *sb, u64 blkno)

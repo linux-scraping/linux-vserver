@@ -415,5 +415,4 @@ const struct inode_operations ext2_special_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.permission	= ext2_permission,
-	.sync_flags	= ext2_sync_flags,
 };

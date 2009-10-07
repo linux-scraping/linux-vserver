@@ -36,6 +36,7 @@
 #include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
 #include "xfs_inode.h"
+#include "xfs_ioctl.h"
 #include "xfs_bmap.h"
 #include "xfs_btree.h"
 #include "xfs_ialloc.h"
@@ -551,12 +552,6 @@ xfs_vn_getattr(
 }
 
 STATIC int
-xfs_vn_sync_xflags(struct inode *inode)
-{
-	return -xfs_sync_xflags(XFS_I(inode));
-}
-
-STATIC int
 xfs_vn_setattr(
 	struct dentry	*dentry,
 	struct iattr	*iattr)
@@ -714,7 +709,7 @@ static const struct inode_operations xfs_inode_operations = {
 	.listxattr		= xfs_vn_listxattr,
 	.fallocate		= xfs_vn_fallocate,
 	.fiemap			= xfs_vn_fiemap,
-	.sync_flags		= xfs_vn_sync_xflags,
+	.sync_flags		= xfs_sync_flags,
 };
 
 static const struct inode_operations xfs_dir_inode_operations = {
@@ -740,7 +735,7 @@ static const struct inode_operations xfs_dir_inode_operations = {
 	.getxattr		= generic_getxattr,
 	.removexattr		= generic_removexattr,
 	.listxattr		= xfs_vn_listxattr,
-	.sync_flags		= xfs_vn_sync_xflags,
+	.sync_flags		= xfs_sync_flags,
 };
 
 static const struct inode_operations xfs_dir_ci_inode_operations = {

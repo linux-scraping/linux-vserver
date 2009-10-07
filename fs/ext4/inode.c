@@ -4310,30 +4310,6 @@ void ext4_get_inode_flags(struct ext4_inode_info *ei)
 		ei->i_flags |= EXT4_COW_FL;
 }
 
-int ext4_sync_flags(struct inode *inode)
-{
-	struct ext4_iloc iloc;
-	handle_t *handle;
-	int err;
-
-	handle = ext4_journal_start(inode, 1);
-	if (IS_ERR(handle))
-		return PTR_ERR(handle);
-	if (IS_SYNC(inode))
-		handle->h_sync = 1;
-	err = ext4_reserve_inode_write(handle, inode, &iloc);
-	if (err)
-		goto flags_err;
-
-	ext4_get_inode_flags(EXT4_I(inode));
-	inode->i_ctime = CURRENT_TIME;
-
-	err = ext4_mark_iloc_dirty(handle, inode, &iloc);
-flags_err:
-	ext4_journal_stop(handle);
-	return err;
-}
-
 static blkcnt_t ext4_inode_blocks(struct ext4_inode *raw_inode,
 				  struct ext4_inode_info *ei)
 {

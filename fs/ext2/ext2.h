@@ -131,6 +131,7 @@ extern int ext2_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 int __ext2_write_begin(struct file *file, struct address_space *mapping,
 		loff_t pos, unsigned len, unsigned flags,
 		struct page **pagep, void **fsdata);
+extern int ext2_sync_flags(struct inode *, int, int);
 
 /* ioctl.c */
 extern long ext2_ioctl(struct file *, unsigned int, unsigned long);
@@ -163,7 +164,6 @@ extern const struct file_operations ext2_xip_file_operations;
 extern const struct address_space_operations ext2_aops;
 extern const struct address_space_operations ext2_aops_xip;
 extern const struct address_space_operations ext2_nobh_aops;
-extern int ext2_sync_flags(struct inode *inode);
 
 /* namei.c */
 extern const struct inode_operations ext2_dir_inode_operations;

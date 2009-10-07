@@ -19,6 +19,34 @@
 #include "ext4_jbd2.h"
 #include "ext4.h"
 
+
+int ext4_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	handle_t *handle = NULL;
+	struct ext4_iloc iloc;
+	int err;
+
+	handle = ext4_journal_start(inode, 1);
+	if (IS_ERR(handle))
+		return PTR_ERR(handle);
+
+	if (IS_SYNC(inode))
+		ext4_handle_sync(handle);
+	err = ext4_reserve_inode_write(handle, inode, &iloc);
+	if (err)
+		goto flags_err;
+
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	ext4_get_inode_flags(EXT4_I(inode));
+	inode->i_ctime = ext4_current_time(inode);
+
+	err = ext4_mark_iloc_dirty(handle, inode, &iloc);
+flags_err:
+	ext4_journal_stop(handle);
+	return err;
+}
+
 long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct inode *inode = filp->f_dentry->d_inode;

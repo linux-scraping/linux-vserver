@@ -2143,7 +2143,6 @@ const struct inode_operations ocfs2_file_iops = {
 	.removexattr	= generic_removexattr,
 	.fallocate	= ocfs2_fallocate,
 	.fiemap		= ocfs2_fiemap,
-	.sync_flags     = ocfs2_sync_flags,
 };
 
 const struct inode_operations ocfs2_special_file_iops = {

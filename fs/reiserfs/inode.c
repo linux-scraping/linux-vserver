@@ -3076,22 +3076,6 @@ static ssize_t reiserfs_direct_IO(int rw, struct kiocb *iocb,
 				  reiserfs_get_blocks_direct_io, NULL);
 }
 
-int reiserfs_sync_flags(struct inode *inode)
-{
-	u16 oldflags, newflags;
-
-	oldflags = REISERFS_I(inode)->i_attrs;
-	newflags = oldflags;
-	i_attrs_to_sd_attrs(inode, &newflags);
-
-	if (oldflags ^ newflags) {
-		REISERFS_I(inode)->i_attrs = newflags;
-		inode->i_ctime = CURRENT_TIME_SEC;
-		mark_inode_dirty(inode);
-	}
-	return 0;
-}
-
 int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;

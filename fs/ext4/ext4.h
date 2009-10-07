@@ -1361,7 +1361,6 @@ struct buffer_head *ext4_bread(handle_t *, struct inode *,
 						ext4_lblk_t, int, int *);
 int ext4_get_block(struct inode *inode, sector_t iblock,
 				struct buffer_head *bh_result, int create);
-extern int ext4_sync_flags(struct inode *inode);
 
 extern struct inode *ext4_iget(struct super_block *, unsigned long);
 extern int  ext4_write_inode(struct inode *, int);
@@ -1663,6 +1662,7 @@ extern int ext4_get_blocks(handle_t *handle, struct inode *inode,
 			   struct buffer_head *bh, int flags);
 extern int ext4_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			__u64 start, __u64 len);
+extern int ext4_sync_flags(struct inode *, int, int);
 /* move_extent.c */
 extern int ext4_move_extents(struct file *o_filp, struct file *d_filp,
 			     __u64 start_orig, __u64 start_donor,

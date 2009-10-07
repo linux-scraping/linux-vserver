@@ -17,6 +17,16 @@
 #include <asm/uaccess.h>
 
 
+int ext2_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	ext2_get_inode_flags(EXT2_I(inode));
+	inode->i_ctime = CURRENT_TIME_SEC;
+	mark_inode_dirty(inode);
+	return 0;
+}
+
 long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct inode *inode = filp->f_dentry->d_inode;
@@ -81,7 +91,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			}
 		}
 
-		flags = flags & EXT2_FL_USER_MODIFIABLE;
+		flags &= EXT2_FL_USER_MODIFIABLE;
 		flags |= oldflags & ~EXT2_FL_USER_MODIFIABLE;
 		ei->i_flags = flags;
 		mutex_unlock(&inode->i_mutex);

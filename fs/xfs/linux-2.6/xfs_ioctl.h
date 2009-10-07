@@ -70,6 +70,12 @@ xfs_handle_to_dentry(
 	void __user		*uhandle,
 	u32			hlen);
 
+extern int
+xfs_sync_flags(
+	struct inode		*inode,
+	int			flags,
+	int			vflags);
+
 extern long
 xfs_file_ioctl(
 	struct file		*filp,

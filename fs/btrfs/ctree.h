@@ -1138,6 +1138,10 @@ struct btrfs_root {
 #define BTRFS_INODE_NOATIME		(1 << 9)
 #define BTRFS_INODE_DIRSYNC		(1 << 10)
 
+#define BTRFS_INODE_IXUNLINK		(1 << 24)
+#define BTRFS_INODE_BARRIER		(1 << 25)
+#define BTRFS_INODE_COW			(1 << 26)
+
 
 /* some macros to generate set/get funcs for the struct fields.  This
  * assumes there is a lefoo_to_cpu for every type, so lets make a simple
@@ -2280,6 +2284,7 @@ int btrfs_cont_expand(struct inode *inode, loff_t size);
 long btrfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 void btrfs_update_iflags(struct inode *inode);
 void btrfs_inherit_iflags(struct inode *inode, struct inode *dir);
+int btrfs_sync_flags(struct inode *inode, int, int);
 
 /* file.c */
 int btrfs_sync_file(struct file *file, struct dentry *dentry, int datasync);

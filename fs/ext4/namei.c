@@ -2540,6 +2540,7 @@ const struct inode_operations ext4_dir_inode_operations = {
 #endif
 	.permission	= ext4_permission,
 	.fiemap         = ext4_fiemap,
+	.sync_flags	= ext4_sync_flags,
 };
 
 const struct inode_operations ext4_special_inode_operations = {
@@ -2551,6 +2552,4 @@ const struct inode_operations ext4_special_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.permission	= ext4_permission,
-	.sync_flags	= ext4_sync_flags,
-	.sync_flags	= ext4_sync_flags,
 };

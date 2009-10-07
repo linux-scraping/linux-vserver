@@ -85,14 +85,6 @@ void jfs_get_inode_flags(struct jfs_inode_info *jfs_ip)
 		jfs_ip->mode2 |= JFS_COW_FL;
 }
 
-int jfs_sync_flags(struct inode *inode)
-{
-	jfs_get_inode_flags(JFS_IP(inode));
-	inode->i_ctime = CURRENT_TIME;
-	mark_inode_dirty(inode);
-	return 0;
-}
-
 /*
  * NAME:	ialloc()
  *

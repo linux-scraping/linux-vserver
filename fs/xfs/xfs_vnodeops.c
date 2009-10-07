@@ -83,26 +83,21 @@ xfs_get_inode_flags(
 }
 
 int
-xfs_sync_xflags(
-	xfs_inode_t		*ip)
+xfs_sync_flags(
+	struct inode		*inode,
+	int			flags,
+	int			vflags)
 {
+	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
-	struct xfs_trans	*tp;
+	struct xfs_trans        *tp;
 	unsigned int		lock_flags = 0;
 	int			code;
 
-	xfs_itrace_entry(ip);
-
-	if (mp->m_flags & XFS_MOUNT_RDONLY)
-		return XFS_ERROR(EROFS);
-
-	/*
-	 * we acquire the inode lock and do an error checking pass.
-	 */
 	tp = xfs_trans_alloc(mp, XFS_TRANS_SETATTR_NOT_SIZE);
 	code = xfs_trans_reserve(tp, 0, XFS_ICHANGE_LOG_RES(mp), 0, 0, 0);
 	if (code)
-		goto error_return;
+		goto error_out;
 
 	lock_flags = XFS_ILOCK_EXCL;
 	xfs_ilock(ip, lock_flags);
@@ -110,33 +105,28 @@ xfs_sync_xflags(
 	xfs_trans_ijoin(tp, ip, lock_flags);
 	xfs_trans_ihold(tp, ip);
 
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
 	xfs_get_inode_flags(ip);
-	// xfs_diflags_to_linux(ip);
 
 	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
 	xfs_ichgtime(ip, XFS_ICHGTIME_CHG);
 
 	XFS_STATS_INC(xs_ig_attrchg);
 
-	/*
-	 * If this is a synchronous mount, make sure that the
-	 * transaction goes to disk before returning to the user.
-	 */
 	if (mp->m_flags & XFS_MOUNT_WSYNC)
 		xfs_trans_set_sync(tp);
 	code = xfs_trans_commit(tp, 0);
 	xfs_iunlock(ip, lock_flags);
+	return code;
 
-	if (code)
-		return code;
-	return 0;
-
- error_return:
+error_out:
 	xfs_trans_cancel(tp, 0);
 	if (lock_flags)
 		xfs_iunlock(ip, lock_flags);
 	return code;
 }
+
 
 int
 xfs_setattr(
