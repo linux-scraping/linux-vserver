@@ -540,11 +540,14 @@ struct btrfs_inode_item {
 	/* modification sequence number for NFS */
 	__le64 sequence;
 
+	__le16 tag;
 	/*
 	 * a little future expansion, for more than this we can
 	 * just grow the inode item and version it
 	 */
-	__le64 reserved[4];
+	__le16 reserved16;
+	__le32 reserved32;
+	__le64 reserved[3];
 	struct btrfs_timespec atime;
 	struct btrfs_timespec ctime;
 	struct btrfs_timespec mtime;
@@ -1119,6 +1122,8 @@ struct btrfs_root {
 #define BTRFS_MOUNT_SSD_SPREAD		(1 << 8)
 #define BTRFS_MOUNT_NOSSD		(1 << 9)
 
+#define BTRFS_MOUNT_TAGGED		(1 << 24)
+
 #define btrfs_clear_opt(o, opt)		((o) &= ~BTRFS_MOUNT_##opt)
 #define btrfs_set_opt(o, opt)		((o) |= BTRFS_MOUNT_##opt)
 #define btrfs_test_opt(root, opt)	((root)->fs_info->mount_opt & \
@@ -1344,6 +1349,7 @@ BTRFS_SETGET_FUNCS(inode_block_group, struct btrfs_inode_item, block_group, 64);
 BTRFS_SETGET_FUNCS(inode_nlink, struct btrfs_inode_item, nlink, 32);
 BTRFS_SETGET_FUNCS(inode_uid, struct btrfs_inode_item, uid, 32);
 BTRFS_SETGET_FUNCS(inode_gid, struct btrfs_inode_item, gid, 32);
+BTRFS_SETGET_FUNCS(inode_tag, struct btrfs_inode_item, tag, 16);
 BTRFS_SETGET_FUNCS(inode_mode, struct btrfs_inode_item, mode, 32);
 BTRFS_SETGET_FUNCS(inode_rdev, struct btrfs_inode_item, rdev, 64);
 BTRFS_SETGET_FUNCS(inode_flags, struct btrfs_inode_item, flags, 64);

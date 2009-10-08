@@ -1409,6 +1409,7 @@ const struct inode_operations gfs2_file_iops = {
 	.listxattr = gfs2_listxattr,
 	.removexattr = gfs2_removexattr,
 	.fiemap = gfs2_fiemap,
+	.sync_flags = gfs2_sync_flags,
 };
 
 const struct inode_operations gfs2_dir_iops = {
@@ -1429,6 +1430,7 @@ const struct inode_operations gfs2_dir_iops = {
 	.listxattr = gfs2_listxattr,
 	.removexattr = gfs2_removexattr,
 	.fiemap = gfs2_fiemap,
+	.sync_flags = gfs2_sync_flags,
 };
 
 const struct inode_operations gfs2_symlink_iops = {

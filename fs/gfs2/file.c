@@ -133,6 +133,9 @@ static const u32 fsflags_to_gfs2[32] = {
 	[7] = GFS2_DIF_NOATIME,
 	[12] = GFS2_DIF_EXHASH,
 	[14] = GFS2_DIF_INHERIT_JDATA,
+	[27] = GFS2_DIF_IXUNLINK,
+	[26] = GFS2_DIF_BARRIER,
+	[29] = GFS2_DIF_COW,
 };
 
 static const u32 gfs2_to_fsflags[32] = {
@@ -142,6 +145,9 @@ static const u32 gfs2_to_fsflags[32] = {
 	[gfs2fl_NoAtime] = FS_NOATIME_FL,
 	[gfs2fl_ExHash] = FS_INDEX_FL,
 	[gfs2fl_InheritJdata] = FS_JOURNAL_DATA_FL,
+	[gfs2fl_IXUnlink] = FS_IXUNLINK_FL,
+	[gfs2fl_Barrier] = FS_BARRIER_FL,
+	[gfs2fl_Cow] = FS_COW_FL,
 };
 
 static int gfs2_get_flags(struct file *filp, u32 __user *ptr)
@@ -172,10 +178,16 @@ void gfs2_set_inode_flags(struct inode *inode)
 {
 	struct gfs2_inode *ip = GFS2_I(inode);
 	unsigned int flags = inode->i_flags;
+	unsigned int vflags = inode->i_vflags;
 
-	flags &= ~(S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC);
+	flags &= ~(S_IMMUTABLE | S_IXUNLINK |
+		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+
 	if (ip->i_diskflags & GFS2_DIF_IMMUTABLE)
 		flags |= S_IMMUTABLE;
+	if (ip->i_diskflags & GFS2_DIF_IXUNLINK)
+		flags |= S_IXUNLINK;
+
 	if (ip->i_diskflags & GFS2_DIF_APPENDONLY)
 		flags |= S_APPEND;
 	if (ip->i_diskflags & GFS2_DIF_NOATIME)
@@ -183,6 +195,43 @@ void gfs2_set_inode_flags(struct inode *inode)
 	if (ip->i_diskflags & GFS2_DIF_SYNC)
 		flags |= S_SYNC;
 	inode->i_flags = flags;
+
+	vflags &= ~(V_BARRIER | V_COW);
+
+	if (ip->i_diskflags & GFS2_DIF_BARRIER)
+		vflags |= V_BARRIER;
+	if (ip->i_diskflags & GFS2_DIF_COW)
+		vflags |= V_COW;
+	inode->i_vflags = vflags;
+}
+
+void gfs2_get_inode_flags(struct inode *inode)
+{
+	struct gfs2_inode *ip = GFS2_I(inode);
+	unsigned int flags = inode->i_flags;
+	unsigned int vflags = inode->i_vflags;
+
+	ip->i_diskflags &= ~(GFS2_DIF_APPENDONLY |
+			GFS2_DIF_NOATIME | GFS2_DIF_SYNC |
+			GFS2_DIF_IMMUTABLE | GFS2_DIF_IXUNLINK |
+			GFS2_DIF_BARRIER | GFS2_DIF_COW);
+
+	if (flags & S_IMMUTABLE)
+		ip->i_diskflags |= GFS2_DIF_IMMUTABLE;
+	if (flags & S_IXUNLINK)
+		ip->i_diskflags |= GFS2_DIF_IXUNLINK;
+
+	if (flags & S_APPEND)
+		ip->i_diskflags |= GFS2_DIF_APPENDONLY;
+	if (flags & S_NOATIME)
+		ip->i_diskflags |= GFS2_DIF_NOATIME;
+	if (flags & S_SYNC)
+		ip->i_diskflags |= GFS2_DIF_SYNC;
+
+	if (vflags & V_BARRIER)
+		ip->i_diskflags |= GFS2_DIF_BARRIER;
+	if (vflags & V_COW)
+		ip->i_diskflags |= GFS2_DIF_COW;
 }
 
 /* Flags that can be set by user space */
@@ -285,6 +334,37 @@ static int gfs2_set_flags(struct file *filp, u32 __user *ptr)
 		return do_gfs2_set_flags(filp, gfsflags, ~0);
 	}
 	return do_gfs2_set_flags(filp, gfsflags, ~GFS2_DIF_JDATA);
+}
+
+int gfs2_sync_flags(struct inode *inode, int flags, int vflags)
+{
+	struct gfs2_inode *ip = GFS2_I(inode);
+	struct gfs2_sbd *sdp = GFS2_SB(inode);
+	struct buffer_head *bh;
+	struct gfs2_holder gh;
+	int error;
+
+	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &gh);
+	if (error)
+		return error;
+	error = gfs2_trans_begin(sdp, RES_DINODE, 0);
+	if (error)
+		goto out;
+	error = gfs2_meta_inode_buffer(ip, &bh);
+	if (error)
+		goto out_trans_end;
+	gfs2_trans_add_bh(ip->i_gl, bh, 1);
+	inode->i_flags = flags;
+	inode->i_vflags = vflags;
+	gfs2_get_inode_flags(inode);
+	gfs2_dinode_out(ip, bh->b_data);
+	brelse(bh);
+	gfs2_set_aops(inode);
+out_trans_end:
+	gfs2_trans_end(sdp);
+out:
+	gfs2_glock_dq_uninit(&gh);
+	return error;
 }
 
 static long gfs2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
