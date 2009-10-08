@@ -235,6 +235,9 @@ enum {
 	gfs2fl_NoAtime		= 7,
 	gfs2fl_Sync		= 8,
 	gfs2fl_System		= 9,
+	gfs2fl_IXUnlink		= 16,
+	gfs2fl_Barrier		= 17,
+	gfs2fl_Cow		= 18,
 	gfs2fl_TruncInProg	= 29,
 	gfs2fl_InheritDirectio	= 30,
 	gfs2fl_InheritJdata	= 31,
@@ -251,6 +254,9 @@ enum {
 #define GFS2_DIF_NOATIME		0x00000080
 #define GFS2_DIF_SYNC			0x00000100
 #define GFS2_DIF_SYSTEM			0x00000200 /* New in gfs2 */
+#define GFS2_DIF_IXUNLINK		0x00010000
+#define GFS2_DIF_BARRIER		0x00020000
+#define GFS2_DIF_COW			0x00040000
 #define GFS2_DIF_TRUNC_IN_PROG		0x20000000 /* New in gfs2 */
 #define GFS2_DIF_INHERIT_DIRECTIO	0x40000000
 #define GFS2_DIF_INHERIT_JDATA		0x80000000

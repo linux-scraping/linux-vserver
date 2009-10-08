@@ -190,12 +190,14 @@ int btrfs_sync_flags(struct inode *inode, int flags, int vflags)
 	trans = btrfs_join_transaction(root, 1);
 	BUG_ON(!trans);
 
-	ret = btrfs_update_inode(trans, root, inode);
-	BUG_ON(ret);
-
 	inode->i_flags = flags;
 	inode->i_vflags = vflags;
 	btrfs_update_flags(inode);
+
+	ret = btrfs_update_inode(trans, root, inode);
+	BUG_ON(ret);
+
+	btrfs_update_iflags(inode);
 	inode->i_ctime = CURRENT_TIME;
 	btrfs_end_transaction(trans, root);
 

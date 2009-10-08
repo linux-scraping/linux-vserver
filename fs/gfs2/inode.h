@@ -109,6 +109,7 @@ extern const struct file_operations gfs2_file_fops_nolock;
 extern const struct file_operations gfs2_dir_fops_nolock;
 
 extern void gfs2_set_inode_flags(struct inode *inode);
+extern int gfs2_sync_flags(struct inode *inode, int flags, int vflags);
  
 #ifdef CONFIG_GFS2_FS_LOCKING_DLM
 extern const struct file_operations gfs2_file_fops;

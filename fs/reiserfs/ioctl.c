@@ -23,7 +23,6 @@ int reiserfs_sync_flags(struct inode *inode, int flags, int vflags)
 
 	i_attrs_to_sd_attrs(inode, &sd_attrs);
 	REISERFS_I(inode)->i_attrs = sd_attrs;
-	printk("reiserfs_sync_flags(%p,%x,%x) -> %x\n", inode, flags, vflags, sd_attrs);
 	inode->i_ctime = CURRENT_TIME_SEC;
 	mark_inode_dirty(inode);
 	return 0;
@@ -61,7 +60,6 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 
 		flags = REISERFS_I(inode)->i_attrs;
 		i_attrs_to_sd_attrs(inode, (__u16 *) & flags);
-		printk("GETFLAGS(%p,%x,%x) -> %x\n", inode, inode->i_flags, inode->i_vflags, flags);
 		flags &= REISERFS_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *)arg);
 	case REISERFS_IOC_SETFLAGS:{
