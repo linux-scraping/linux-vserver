@@ -18,6 +18,7 @@
 
 #include <linux/fs.h>
 #include <linux/quotaops.h>
+#include <linux/vs_tag.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
 #include "jfs_filsys.h"
@@ -127,6 +128,7 @@ struct inode *ialloc(struct inode *parent, umode_t mode)
 			mode |= S_ISGID;
 	} else
 		inode->i_gid = current_fsgid();
+	inode->i_tag = dx_current_fstag(sb);
 
 	/*
 	 * New inodes need to save sane values on disk when
