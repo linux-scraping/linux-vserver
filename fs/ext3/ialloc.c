@@ -23,6 +23,7 @@
 #include <linux/buffer_head.h>
 #include <linux/random.h>
 #include <linux/bitops.h>
+#include <linux/vs_tag.h>
 
 #include <asm/byteorder.h>
 
@@ -548,6 +549,7 @@ got:
 	} else
 		inode->i_gid = current_fsgid();
 	inode->i_mode = mode;
+	inode->i_tag = dx_current_fstag(sb);
 
 	inode->i_ino = ino;
 	/* This is the optimal IO size (for stat), not the fs block size */

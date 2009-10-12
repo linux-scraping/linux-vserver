@@ -40,7 +40,6 @@ int reiserfs_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 		   unsigned long arg)
 {
 	unsigned int flags, oldflags;
-	__u16 sd_attrs;
 	int err = 0;
 
 	switch (cmd) {

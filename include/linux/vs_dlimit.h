@@ -176,33 +176,38 @@ static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
 	put_dl_info(dli);
 }
 
-#define DLIMIT_ALLOC_SPACE(in, bytes) \
+#define dl_prealloc_space(in, bytes) \
 	__dl_alloc_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
-#define DLIMIT_FREE_SPACE(in, bytes) \
+#define dl_alloc_space(in, bytes) \
+	__dl_alloc_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
+		__FILE__, __LINE__ )
+
+#define dl_reserve_space(in, bytes) \
+	__dl_alloc_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
+		__FILE__, __LINE__ )
+
+#define dl_claim_space(in, bytes) (0)
+
+#define dl_release_space(in, bytes) \
 	__dl_free_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
-#define DLIMIT_ALLOC_BLOCK(in, nr) \
-	__dl_alloc_space((in)->i_sb, (in)->i_tag, \
-		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
-		__FILE__, __LINE__ )
-
-#define DLIMIT_FREE_BLOCK(in, nr) \
-	__dl_free_space((in)->i_sb, (in)->i_tag, \
-		((dlsize_t)(nr)) << (in)->i_sb->s_blocksize_bits, \
+#define dl_free_space(in, bytes) \
+	__dl_free_space((in)->i_sb, (in)->i_tag, (dlsize_t)(bytes), \
 		__FILE__, __LINE__ )
 
 
-#define DLIMIT_ALLOC_INODE(in) \
+
+#define dl_alloc_inode(in) \
 	__dl_alloc_inode((in)->i_sb, (in)->i_tag, __FILE__, __LINE__ )
 
-#define DLIMIT_FREE_INODE(in) \
+#define dl_free_inode(in) \
 	__dl_free_inode((in)->i_sb, (in)->i_tag, __FILE__, __LINE__ )
 
 
-#define DLIMIT_ADJUST_BLOCK(sb, tag, fb, rb) \
+#define dl_adjust_block(sb, tag, fb, rb) \
 	__dl_adjust_block(sb, tag, fb, rb, __FILE__, __LINE__ )
 
 

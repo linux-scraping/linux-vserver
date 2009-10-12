@@ -34,10 +34,11 @@ static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint
 		return -ESRCH;
 
 	*flags = IATTR_TAG
-		| (IS_BARRIER(in) ? IATTR_BARRIER : 0)
+		| (IS_IMMUTABLE(in) ? IATTR_IMMUTABLE : 0)
 		| (IS_IXUNLINK(in) ? IATTR_IXUNLINK : 0)
-		| (IS_IMMUTABLE(in) ? IATTR_IMMUTABLE : 0);
-	*mask = IATTR_IXUNLINK | IATTR_IMMUTABLE;
+		| (IS_BARRIER(in) ? IATTR_BARRIER : 0)
+		| (IS_COW(in) ? IATTR_COW : 0);
+	*mask = IATTR_IXUNLINK | IATTR_IMMUTABLE | IATTR_COW;
 
 	if (S_ISDIR(in->i_mode))
 		*mask |= IATTR_BARRIER;
@@ -181,7 +182,8 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 			entry->vx_flags = iflags;
 	}
 
-	if (*mask & (IATTR_BARRIER | IATTR_IXUNLINK | IATTR_IMMUTABLE)) {
+	if (*mask & (IATTR_IMMUTABLE | IATTR_IXUNLINK |
+		IATTR_BARRIER | IATTR_COW)) {
 		int iflags = in->i_flags;
 		int vflags = in->i_vflags;
 
@@ -197,17 +199,17 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 			else
 				iflags &= ~S_IXUNLINK;
 		}
-		if (S_ISREG(in->i_mode) && (*mask & IATTR_COW)) {
-			if (*flags & IATTR_COW)
-				vflags |= V_COW;
-			else
-				vflags &= ~V_COW;
-		}
 		if (S_ISDIR(in->i_mode) && (*mask & IATTR_BARRIER)) {
 			if (*flags & IATTR_BARRIER)
 				vflags |= V_BARRIER;
 			else
 				vflags &= ~V_BARRIER;
+		}
+		if (S_ISREG(in->i_mode) && (*mask & IATTR_COW)) {
+			if (*flags & IATTR_COW)
+				vflags |= V_COW;
+			else
+				vflags &= ~V_COW;
 		}
 		if (in->i_op && in->i_op->sync_flags) {
 			error = in->i_op->sync_flags(in, iflags, vflags);
