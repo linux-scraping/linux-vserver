@@ -32,7 +32,6 @@
 #include <linux/fs_struct.h>
 #include <linux/vs_base.h>
 #include <linux/vs_limit.h>
-#include <linux/vs_dlimit.h>
 #include <linux/vs_tag.h>
 #include <linux/vs_cowbl.h>
 
