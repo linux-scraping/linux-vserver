@@ -303,7 +303,7 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 	struct vx_info *vxi;
 	int ret;
 
-	vxi = task_get_vx_info(timr->it_process);
+	vxi = get_vx_info(timr->it_process->vx_info);
 	enter_vx_info(vxi, &vxis);
 	/*
 	 * FIXME: if ->sigq is queued we can race with

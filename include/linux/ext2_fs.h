@@ -251,10 +251,11 @@ struct ext2_inode {
 		struct {
 			__u8	l_i_frag;	/* Fragment number */
 			__u8	l_i_fsize;	/* Fragment size */
-			__u16	l_i_tag;	/* Context Tag */
+			__u16	i_pad1;
 			__le16	l_i_uid_high;	/* these 2 fields    */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
-			__u32	l_i_reserved2;
+			__le16	l_i_tag;	/* Context Tag */
+			__u16	l_i_reserved2;
 		} linux2;
 		struct {
 			__u8	h_i_frag;	/* Fragment number */
