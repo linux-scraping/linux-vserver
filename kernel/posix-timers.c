@@ -349,7 +349,7 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 		struct vx_info_save vxis;
 		struct vx_info *vxi;
 
-		vxi = task_get_vx_info(task);
+		vxi = get_vx_info(task->vx_info);
 		enter_vx_info(vxi, &vxis);
 		shared = !(timr->it_sigev_notify & SIGEV_THREAD_ID);
 		ret = send_sigqueue(timr->sigq, task, shared);
