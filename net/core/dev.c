@@ -687,10 +687,13 @@ struct net_device *dev_getbyhwaddr(struct net *net, unsigned short type, char *h
 
 	ASSERT_RTNL();
 
-	for_each_netdev(net, dev)
+	for_each_netdev(net, dev) {
+		if (!nx_dev_visible(current_nx_info(), dev))
+			continue;
 		if (dev->type == type &&
 		    !memcmp(dev->dev_addr, ha, dev->addr_len))
 			return dev;
+	}
 
 	return NULL;
 }
@@ -702,9 +705,12 @@ struct net_device *__dev_getfirstbyhwtype(struct net *net, unsigned short type)
 	struct net_device *dev;
 
 	ASSERT_RTNL();
-	for_each_netdev(net, dev)
+	for_each_netdev(net, dev) {
+		if (!nx_dev_visible(current_nx_info(), dev))
+			continue;
 		if (dev->type == type)
 			return dev;
+	}
 
 	return NULL;
 }
@@ -818,6 +824,8 @@ static int __dev_alloc_name(struct net *net, const char *name, char *buf)
 			return -ENOMEM;
 
 		for_each_netdev(net, d) {
+			if (!nx_dev_visible(current_nx_info(), d))
+				continue;
 			if (!sscanf(d->name, name, &i))
 				continue;
 			if (i < 0 || i >= max_netdevices)
@@ -2942,7 +2950,7 @@ static int dev_ifconf(struct net *net, char __user *arg)
 
 	total = 0;
 	for_each_netdev(net, dev) {
-		if (!nx_dev_visible(current->nx_info, dev))
+		if (!nx_dev_visible(current_nx_info(), dev))
 			continue;
 		for (i = 0; i < NPROTO; i++) {
 			if (gifconf_list[i]) {
@@ -3012,7 +3020,7 @@ static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
 {
 	const struct net_device_stats *stats = dev_get_stats(dev);
 
-	if (!nx_dev_visible(current->nx_info, dev))
+	if (!nx_dev_visible(current_nx_info(), dev))
 		return;
 
 	seq_printf(seq, "%6s:%8lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "

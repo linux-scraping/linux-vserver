@@ -13,7 +13,7 @@
 	__vx_acc_cres(v, r, d, p, __FILE__, __LINE__)
 
 #define vx_acc_cres_cond(x, d, p, r) \
-	__vx_acc_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
+	__vx_acc_cres(((x) == vx_current_xid()) ? current_vx_info() : 0, \
 	r, d, p, __FILE__, __LINE__)
 
 
@@ -22,7 +22,7 @@
 #define vx_sub_cres(v, a, p, r)		vx_add_cres(v, -(a), p, r)
 
 #define vx_add_cres_cond(x, a, p, r) \
-	__vx_add_cres(((x) == vx_current_xid()) ? current->vx_info : 0, \
+	__vx_add_cres(((x) == vx_current_xid()) ? current_vx_info() : 0, \
 	r, a, p, __FILE__, __LINE__)
 #define vx_sub_cres_cond(x, a, p, r)	vx_add_cres_cond(x, -(a), p, r)
 
@@ -48,10 +48,10 @@
 	vx_acc_cres_cond((l)->fl_xid,-1, l, RLIMIT_LOCKS)
 
 #define vx_openfd_inc(f) \
-	vx_acc_cres(current->vx_info, 1, (void *)(long)(f), VLIMIT_OPENFD)
+	vx_acc_cres(current_vx_info(), 1, (void *)(long)(f), VLIMIT_OPENFD)
 
 #define vx_openfd_dec(f) \
-	vx_acc_cres(current->vx_info,-1, (void *)(long)(f), VLIMIT_OPENFD)
+	vx_acc_cres(current_vx_info(),-1, (void *)(long)(f), VLIMIT_OPENFD)
 
 
 #define vx_cres_avail(v, n, r) \
@@ -59,32 +59,32 @@
 
 
 #define vx_nproc_avail(n) \
-	vx_cres_avail(current->vx_info, n, RLIMIT_NPROC)
+	vx_cres_avail(current_vx_info(), n, RLIMIT_NPROC)
 
 #define vx_files_avail(n) \
-	vx_cres_avail(current->vx_info, n, RLIMIT_NOFILE)
+	vx_cres_avail(current_vx_info(), n, RLIMIT_NOFILE)
 
 #define vx_locks_avail(n) \
-	vx_cres_avail(current->vx_info, n, RLIMIT_LOCKS)
+	vx_cres_avail(current_vx_info(), n, RLIMIT_LOCKS)
 
 #define vx_openfd_avail(n) \
-	vx_cres_avail(current->vx_info, n, VLIMIT_OPENFD)
+	vx_cres_avail(current_vx_info(), n, VLIMIT_OPENFD)
 
 
 /* dentry limits */
 
 #define vx_dentry_inc(d) do {						\
 	if (atomic_read(&d->d_count) == 1)				\
-		vx_acc_cres(current->vx_info, 1, d, VLIMIT_DENTRY);	\
+		vx_acc_cres(current_vx_info(), 1, d, VLIMIT_DENTRY);	\
 	} while (0)
 
 #define vx_dentry_dec(d) do {						\
 	if (atomic_read(&d->d_count) == 0)				\
-		vx_acc_cres(current->vx_info,-1, d, VLIMIT_DENTRY);	\
+		vx_acc_cres(current_vx_info(),-1, d, VLIMIT_DENTRY);	\
 	} while (0)
 
 #define vx_dentry_avail(n) \
-	vx_cres_avail(current->vx_info, n, VLIMIT_DENTRY)
+	vx_cres_avail(current_vx_info(), n, VLIMIT_DENTRY)
 
 
 /* socket limits */
@@ -96,7 +96,7 @@
 	vx_acc_cres((s)->sk_vx_info,-1, s, VLIMIT_NSOCK)
 
 #define vx_sock_avail(n) \
-	vx_cres_avail(current->vx_info, n, VLIMIT_NSOCK)
+	vx_cres_avail(current_vx_info(), n, VLIMIT_NSOCK)
 
 
 /* ipc resource limits */
@@ -122,17 +122,17 @@
 
 
 #define vx_semary_inc(a) \
-	vx_acc_cres(current->vx_info, 1, a, VLIMIT_SEMARY)
+	vx_acc_cres(current_vx_info(), 1, a, VLIMIT_SEMARY)
 
 #define vx_semary_dec(a) \
-	vx_acc_cres(current->vx_info, -1, a, VLIMIT_SEMARY)
+	vx_acc_cres(current_vx_info(), -1, a, VLIMIT_SEMARY)
 
 
 #define vx_nsems_add(a,n) \
-	vx_add_cres(current->vx_info, n, a, VLIMIT_NSEMS)
+	vx_add_cres(current_vx_info(), n, a, VLIMIT_NSEMS)
 
 #define vx_nsems_sub(a,n) \
-	vx_sub_cres(current->vx_info, n, a, VLIMIT_NSEMS)
+	vx_sub_cres(current_vx_info(), n, a, VLIMIT_NSEMS)
 
 
 #else

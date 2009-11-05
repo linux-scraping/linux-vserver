@@ -1891,10 +1891,10 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 
 	sk->sk_stamp = ktime_set(-1L, 0);
 
-	set_vx_info(&sk->sk_vx_info, current->vx_info);
+	set_vx_info(&sk->sk_vx_info, current_vx_info());
 	sk->sk_xid = vx_current_xid();
 	vx_sock_inc(sk);
-	set_nx_info(&sk->sk_nx_info, current->nx_info);
+	set_nx_info(&sk->sk_nx_info, current_nx_info());
 	sk->sk_nid = nx_current_nid();
 
 	/*

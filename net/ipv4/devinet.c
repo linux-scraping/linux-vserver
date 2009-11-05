@@ -654,7 +654,7 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		*colon = ':';
 
 	if ((in_dev = __in_dev_get_rtnl(dev)) != NULL) {
-		struct nx_info *nxi = current->nx_info;
+		struct nx_info *nxi = current_nx_info();
 
 		if (tryaddrmatch) {
 			/* Matthias Andree */
@@ -834,7 +834,7 @@ static int inet_gifconf(struct net_device *dev, char __user *buf, int len)
 		goto out;
 
 	for (; ifa; ifa = ifa->ifa_next) {
-		if (!nx_v4_ifa_visible(current->nx_info, ifa))
+		if (!nx_v4_ifa_visible(current_nx_info(), ifa))
 			continue;
 		if (!buf) {
 			done += sizeof(ifr);

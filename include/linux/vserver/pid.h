@@ -6,7 +6,7 @@
 #define vx_info_map_pid(v, p) \
 	__vx_info_map_pid((v), (p), __func__, __FILE__, __LINE__)
 #define vx_info_map_tgid(v,p)  vx_info_map_pid(v,p)
-#define vx_map_pid(p) vx_info_map_pid(current->vx_info, p)
+#define vx_map_pid(p) vx_info_map_pid(current_vx_info(), p)
 #define vx_map_tgid(p) vx_map_pid(p)
 
 static inline int __vx_info_map_pid(struct vx_info *vxi, int pid,
@@ -28,7 +28,7 @@ static inline int __vx_info_map_pid(struct vx_info *vxi, int pid,
 
 #define vx_info_rmap_pid(v, p) \
 	__vx_info_rmap_pid((v), (p), __func__, __FILE__, __LINE__)
-#define vx_rmap_pid(p) vx_info_rmap_pid(current->vx_info, p)
+#define vx_rmap_pid(p) vx_info_rmap_pid(current_vx_info(), p)
 #define vx_rmap_tgid(p) vx_rmap_pid(p)
 
 static inline int __vx_info_rmap_pid(struct vx_info *vxi, int pid,

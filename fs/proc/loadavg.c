@@ -19,7 +19,7 @@ static int loadavg_proc_show(struct seq_file *m, void *v)
 	get_avenrun(avnrun, FIXED_1/200, 0);
 
 	if (vx_flags(VXF_VIRT_LOAD, 0)) {
-		struct vx_info *vxi = current->vx_info;
+		struct vx_info *vxi = current_vx_info();
 
 		running = atomic_read(&vxi->cvirt.nr_running);
 		threads = atomic_read(&vxi->cvirt.nr_threads);

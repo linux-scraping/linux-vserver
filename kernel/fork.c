@@ -996,8 +996,8 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
-	init_vx_info(&p->vx_info, current->vx_info);
-	init_nx_info(&p->nx_info, current->nx_info);
+	init_vx_info(&p->vx_info, current_vx_info());
+	init_nx_info(&p->nx_info, current_nx_info());
 
 	/* check vserver memory */
 	if (p->mm && !(clone_flags & CLONE_VM)) {

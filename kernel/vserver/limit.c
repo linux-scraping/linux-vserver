@@ -264,7 +264,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-	struct vx_info *vxi = current->vx_info;
+	struct vx_info *vxi = current_vx_info();
 	unsigned long totalram, freeram;
 	rlim_t v;
 
@@ -286,7 +286,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-	struct vx_info *vxi = current->vx_info;
+	struct vx_info *vxi = current_vx_info();
 	unsigned long totalswap, freeswap;
 	rlim_t v, w;
 

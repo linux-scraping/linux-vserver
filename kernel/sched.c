@@ -3214,7 +3214,7 @@ EXPORT_SYMBOL(avenrun);
 void get_avenrun(unsigned long *loads, unsigned long offset, int shift)
 {
 	if (vx_flags(VXF_VIRT_LOAD, 0)) {
-		struct vx_info *vxi = current->vx_info;
+		struct vx_info *vxi = current_vx_info();
 
 		loads[0] = (vxi->cvirt.load[0] + offset) << shift;
 		loads[1] = (vxi->cvirt.load[1] + offset) << shift;
