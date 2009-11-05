@@ -356,7 +356,7 @@ struct nx_info *lookup_nx_info(int id)
 	struct nx_info *nxi = NULL;
 
 	if (id < 0) {
-		nxi = get_nx_info(current->nx_info);
+		nxi = get_nx_info(current_nx_info());
 	} else if (id > 1) {
 		spin_lock(&nx_info_hash_lock);
 		nxi = get_nx_info(__lookup_nx_info(id));

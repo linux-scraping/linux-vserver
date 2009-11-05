@@ -1021,7 +1021,7 @@ static int fib_seq_show(struct seq_file *seq, void *v)
 	prefix	= f->fn_key;
 	mask	= FZ_MASK(iter->zone);
 	flags	= fib_flag_trans(fa->fa_type, mask, fi);
-	if (fi && nx_dev_visible(current->nx_info, fi->fib_dev))
+	if (fi && nx_dev_visible(current_nx_info(), fi->fib_dev))
 		seq_printf(seq,
 			 "%s\t%08X\t%08X\t%04X\t%d\t%u\t%d\t%08X\t%d\t%u\t%u%n",
 			 fi->fib_dev ? fi->fib_dev->name : "*", prefix,

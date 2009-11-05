@@ -397,7 +397,7 @@ struct vx_info *lookup_vx_info(int id)
 	struct vx_info *vxi = NULL;
 
 	if (id < 0) {
-		vxi = get_vx_info(current->vx_info);
+		vxi = get_vx_info(current_vx_info());
 	} else if (id > 1) {
 		spin_lock(&vx_info_hash_lock);
 		vxi = get_vx_info(__lookup_vx_info(id));
@@ -883,7 +883,7 @@ int vc_set_cflags(struct vx_info *vxi, void __user *data)
 	mask = vs_mask_mask(vc_data.mask, vxi->vx_flags, VXF_ONE_TIME);
 	trigger = (mask & vxi->vx_flags) ^ (mask & vc_data.flagword);
 
-	if (vxi == current->vx_info) {
+	if (vxi == current_vx_info()) {
 		/* if (trigger & VXF_STATE_SETUP)
 			vx_mask_cap_bset(vxi, current); */
 		if (trigger & VXF_STATE_INIT) {

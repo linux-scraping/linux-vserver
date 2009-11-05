@@ -1237,7 +1237,7 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned change)
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 
-	if (!nx_dev_visible(current->nx_info, dev))
+	if (!nx_dev_visible(current_nx_info(), dev))
 		return;
 
 	skb = nlmsg_new(if_nlmsg_size(dev), GFP_KERNEL);

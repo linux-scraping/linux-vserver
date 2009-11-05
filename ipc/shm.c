@@ -357,7 +357,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	if (ns->shm_tot + numpages > ns->shm_ctlall)
 		return -ENOSPC;
 
-	if (!vx_ipcshm_avail(current->vx_info, numpages))
+	if (!vx_ipcshm_avail(current_vx_info(), numpages))
 		return -ENOSPC;
 
 	shp = ipc_rcu_alloc(sizeof(*shp));
@@ -419,7 +419,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	ns->shm_tot += numpages;
 	error = shp->shm_perm.id;
 	shm_unlock(shp);
-	vx_ipcshm_add(current->vx_info, key, numpages);
+	vx_ipcshm_add(current_vx_info(), key, numpages);
 	return error;
 
 no_id:

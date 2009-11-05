@@ -22,7 +22,7 @@
 
 void vx_vsi_uptime(struct timespec *uptime, struct timespec *idle)
 {
-	struct vx_info *vxi = current->vx_info;
+	struct vx_info *vxi = current_vx_info();
 
 	set_normalized_timespec(uptime,
 		uptime->tv_sec - vxi->cvirt.bias_uptime.tv_sec,
@@ -114,7 +114,7 @@ int vx_do_syslog(int type, char __user *buf, int len)
 {
 	int error = 0;
 	int do_clear = 0;
-	struct vx_info *vxi = current->vx_info;
+	struct vx_info *vxi = current_vx_info();
 	struct _vx_syslog *log;
 
 	if (!vxi)
@@ -265,12 +265,15 @@ int vc_virt_stat(struct vx_info *vxi, void __user *data)
 
 void vx_gettimeofday(struct timeval *tv)
 {
+	struct vx_info *vxi;
+
 	do_gettimeofday(tv);
 	if (!vx_flags(VXF_VIRT_TIME, 0))
 		return;
 
-	tv->tv_sec += current->vx_info->cvirt.bias_tv.tv_sec;
-	tv->tv_usec += current->vx_info->cvirt.bias_tv.tv_usec;
+	vxi = current_vx_info();
+	tv->tv_sec += vxi->cvirt.bias_tv.tv_sec;
+	tv->tv_usec += vxi->cvirt.bias_tv.tv_usec;
 
 	if (tv->tv_usec >= USEC_PER_SEC) {
 		tv->tv_sec++;
@@ -284,14 +287,15 @@ void vx_gettimeofday(struct timeval *tv)
 int vx_settimeofday(struct timespec *ts)
 {
 	struct timeval tv;
+	struct vx_info *vxi;
 
 	if (!vx_flags(VXF_VIRT_TIME, 0))
 		return do_settimeofday(ts);
 
 	do_gettimeofday(&tv);
-	current->vx_info->cvirt.bias_tv.tv_sec =
-		ts->tv_sec - tv.tv_sec;
-	current->vx_info->cvirt.bias_tv.tv_usec =
+	vxi = current_vx_info();
+	vxi->cvirt.bias_tv.tv_sec = ts->tv_sec - tv.tv_sec;
+	vxi->cvirt.bias_tv.tv_usec =
 		(ts->tv_nsec/NSEC_PER_USEC) - tv.tv_usec;
 	return 0;
 }

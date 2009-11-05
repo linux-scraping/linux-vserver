@@ -167,7 +167,7 @@ static inline int ip_route_connect(struct rtable **rp, __be32 dst,
 
 	int err;
 	struct net *net = sock_net(sk);
-	struct nx_info *nx_info = current->nx_info;
+	struct nx_info *nx_info = current_nx_info();
 
 	if (inet_sk(sk)->transparent)
 		fl.flags |= FLOWI_FLAG_ANYSRC;

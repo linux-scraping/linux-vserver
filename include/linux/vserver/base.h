@@ -43,7 +43,7 @@ enum {
 
 #define __vx_flags(v)	((v) ? (v)->vx_flags : 0)
 
-#define vx_current_flags()	__vx_flags(current->vx_info)
+#define vx_current_flags()	__vx_flags(current_vx_info())
 
 #define vx_info_flags(v, m, f) \
 	vs_check_flags(__vx_flags(v), m, f)
@@ -51,18 +51,18 @@ enum {
 #define task_vx_flags(t, m, f) \
 	((t) && vx_info_flags((t)->vx_info, m, f))
 
-#define vx_flags(m, f)	vx_info_flags(current->vx_info, m, f)
+#define vx_flags(m, f)	vx_info_flags(current_vx_info(), m, f)
 
 
 /* context caps */
 
 #define __vx_ccaps(v)	((v) ? (v)->vx_ccaps : 0)
 
-#define vx_current_ccaps()	__vx_ccaps(current->vx_info)
+#define vx_current_ccaps()	__vx_ccaps(current_vx_info())
 
 #define vx_info_ccaps(v, c)	(__vx_ccaps(v) & (c))
 
-#define vx_ccaps(c)	vx_info_ccaps(current->vx_info, (c))
+#define vx_ccaps(c)	vx_info_ccaps(current_vx_info(), (c))
 
 
 
@@ -70,7 +70,7 @@ enum {
 
 #define __nx_flags(n)	((n) ? (n)->nx_flags : 0)
 
-#define nx_current_flags()	__nx_flags(current->nx_info)
+#define nx_current_flags()	__nx_flags(current_nx_info())
 
 #define nx_info_flags(n, m, f) \
 	vs_check_flags(__nx_flags(n), m, f)
@@ -78,18 +78,18 @@ enum {
 #define task_nx_flags(t, m, f) \
 	((t) && nx_info_flags((t)->nx_info, m, f))
 
-#define nx_flags(m, f)	nx_info_flags(current->nx_info, m, f)
+#define nx_flags(m, f)	nx_info_flags(current_nx_info(), m, f)
 
 
 /* network caps */
 
 #define __nx_ncaps(n)	((n) ? (n)->nx_ncaps : 0)
 
-#define nx_current_ncaps()	__nx_ncaps(current->nx_info)
+#define nx_current_ncaps()	__nx_ncaps(current_nx_info())
 
 #define nx_info_ncaps(n, c)	(__nx_ncaps(n) & (c))
 
-#define nx_ncaps(c)	nx_info_ncaps(current->nx_info, c)
+#define nx_ncaps(c)	nx_info_ncaps(current_nx_info(), c)
 
 
 /* context mask capabilities */
@@ -98,28 +98,28 @@ enum {
 
 #define vx_info_mcaps(v, c)	(__vx_mcaps(v) & (c))
 
-#define vx_mcaps(c)	vx_info_mcaps(current->vx_info, c)
+#define vx_mcaps(c)	vx_info_mcaps(current_vx_info(), c)
 
 
 /* context bcap mask */
 
 #define __vx_bcaps(v)		((v)->vx_bcaps)
 
-#define vx_current_bcaps()	__vx_bcaps(current->vx_info)
+#define vx_current_bcaps()	__vx_bcaps(current_vx_info())
 
 
 /* mask given bcaps */
 
 #define vx_info_mbcaps(v, c)	((v) ? cap_intersect(__vx_bcaps(v), c) : c)
 
-#define vx_mbcaps(c)		vx_info_mbcaps(current->vx_info, c)
+#define vx_mbcaps(c)		vx_info_mbcaps(current_vx_info(), c)
 
 
 /* masked cap_bset */
 
 #define vx_info_cap_bset(v)	vx_info_mbcaps(v, current->cap_bset)
 
-#define vx_current_cap_bset()	vx_info_cap_bset(current->vx_info)
+#define vx_current_cap_bset()	vx_info_cap_bset(current_vx_info())
 
 #if 0
 #define vx_info_mbcap(v, b) \
