@@ -587,7 +587,8 @@ struct net_device *__dev_get_by_name(struct net *net, const char *name)
 	hlist_for_each(p, dev_name_hash(net, name)) {
 		struct net_device *dev
 			= hlist_entry(p, struct net_device, name_hlist);
-		if (!strncmp(dev->name, name, IFNAMSIZ))
+		if (!strncmp(dev->name, name, IFNAMSIZ) &&
+		    nx_dev_visible(current_nx_info(), dev))
 			return dev;
 	}
 	return NULL;
@@ -636,7 +637,8 @@ struct net_device *__dev_get_by_index(struct net *net, int ifindex)
 	hlist_for_each(p, dev_index_hash(net, ifindex)) {
 		struct net_device *dev
 			= hlist_entry(p, struct net_device, index_hlist);
-		if (dev->ifindex == ifindex)
+		if ((dev->ifindex == ifindex) &&
+		    nx_dev_visible(current_nx_info(), dev))
 			return dev;
 	}
 	return NULL;
@@ -688,10 +690,9 @@ struct net_device *dev_getbyhwaddr(struct net *net, unsigned short type, char *h
 	ASSERT_RTNL();
 
 	for_each_netdev(net, dev) {
-		if (!nx_dev_visible(current_nx_info(), dev))
-			continue;
 		if (dev->type == type &&
-		    !memcmp(dev->dev_addr, ha, dev->addr_len))
+		    !memcmp(dev->dev_addr, ha, dev->addr_len) &&
+		    nx_dev_visible(current_nx_info(), dev))
 			return dev;
 	}
 
@@ -706,9 +707,8 @@ struct net_device *__dev_getfirstbyhwtype(struct net *net, unsigned short type)
 
 	ASSERT_RTNL();
 	for_each_netdev(net, dev) {
-		if (!nx_dev_visible(current_nx_info(), dev))
-			continue;
-		if (dev->type == type)
+		if ((dev->type == type) &&
+		    nx_dev_visible(current_nx_info(), dev))
 			return dev;
 	}
 
@@ -824,11 +824,11 @@ static int __dev_alloc_name(struct net *net, const char *name, char *buf)
 			return -ENOMEM;
 
 		for_each_netdev(net, d) {
-			if (!nx_dev_visible(current_nx_info(), d))
-				continue;
 			if (!sscanf(d->name, name, &i))
 				continue;
 			if (i < 0 || i >= max_netdevices)
+				continue;
+			if (!nx_dev_visible(current_nx_info(), d))
 				continue;
 
 			/*  avoid cases where sscanf is not exact inverse of printf */
