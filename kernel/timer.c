@@ -1001,6 +1001,7 @@ void update_process_times(int user_tick)
 	run_local_timers();
 	if (rcu_pending(cpu))
 		rcu_check_callbacks(cpu, user_tick);
+	printk_tick();
 	scheduler_tick();
 	vx_hard_tick(p, cpu);
 	run_posix_cpu_timers(p);
