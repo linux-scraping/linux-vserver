@@ -162,10 +162,16 @@ unsigned long badness(struct task_struct *p, unsigned long uptime)
 	}
 
 	/*
-	 * add points for context badness
+	 * add points for context badness and
+	 * reduce badness for processes belonging to
+	 * a different context
 	 */
 
 	points += vx_badness(p, mm);
+
+	if ((vx_current_xid() > 1) &&
+		vx_current_xid() != vx_task_xid(p))
+		points /= 16;
 
 #ifdef DEBUG
 	printk(KERN_DEBUG "OOMkill: task %d:#%u (%s) got %d points\n",
@@ -211,7 +217,6 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 	struct task_struct *g, *p;
 	struct task_struct *chosen = NULL;
 	struct timespec uptime;
-	xid_t xid = vx_current_xid();
 	*ppoints = 0;
 
 	do_posix_clock_monotonic_gettime(&uptime);
@@ -228,9 +233,6 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 		if (task_is_init(p))
 			continue;
 		if (mem && !task_in_mem_cgroup(p, mem))
-			continue;
-		/* skip other guest and host processes if oom in guest */
-		if (xid && p->xid != xid)
 			continue;
 
 		/*
