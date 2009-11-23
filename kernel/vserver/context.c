@@ -114,7 +114,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_flags = VXF_INIT_SET;
 	cap_set_init_eff(new->vx_bcaps);
 	new->vx_ccaps = 0;
-	// new->vx_cap_bset = current->cap_bset;
+	new->vx_umask = 0;
 
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
@@ -1001,6 +1001,31 @@ int vc_set_bcaps(struct vx_info *vxi, void __user *data)
 		return -EFAULT;
 
 	return do_set_caps(vxi, vc_data.bcaps, vc_data.bmask, 0, 0);
+}
+
+
+int vc_get_umask(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_umask vc_data;
+
+	vc_data.umask = vxi->vx_umask;
+	vc_data.mask = ~0ULL;
+
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+int vc_set_umask(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_umask vc_data;
+
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	vxi->vx_umask = vs_mask_flags(vxi->vx_umask,
+		vc_data.umask, vc_data.mask);
+	return 0;
 }
 
 

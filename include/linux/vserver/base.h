@@ -147,6 +147,17 @@ enum {
 #define vx_current_initpid(n)	vx_task_initpid(current, n)
 
 
+/* context unshare mask */
+
+#define __vx_umask(v)		((v)->vx_umask)
+
+#define vx_current_umask()	__vx_umask(current_vx_info())
+
+#define vx_can_unshare(b, f) (capable(b) || \
+	(cap_raised(current_cap(), b) && \
+	!((f) & ~vx_current_umask())))
+
+
 #define __vx_state(v)	((v) ? ((v)->vx_state) : 0)
 
 #define vx_info_state(v, m)	(__vx_state(v) & (m))

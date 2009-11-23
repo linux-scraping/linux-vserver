@@ -219,8 +219,6 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 #ifdef CONFIG_SMP
 	SEQ_printf(m, "  .%-30s: %lu\n", "shares", cfs_rq->shares);
 #endif
-	SEQ_printf(m, "  .%-30s: %ld\n", "nr_tasks_running",
-			cfs_rq->nr_tasks_running);
 #ifdef CONFIG_CFS_HARD_LIMITS
 	spin_lock_irqsave(&rq->lock, flags);
 	SEQ_printf(m, "  .%-30s: %d\n", "cfs_throttled",
@@ -230,7 +228,7 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "cfs_runtime",
 			SPLIT_NS(cfs_rq->cfs_runtime));
 	spin_unlock_irqrestore(&rq->lock, flags);
-#endif
+#endif /* CONFIG_CFS_HARD_LIMITS */
 	print_cfs_group_stats(m, cpu, cfs_rq->tg);
 #endif
 }
@@ -412,6 +410,7 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	PN(se.sum_exec_runtime);
 	PN(se.avg_overlap);
 	PN(se.avg_wakeup);
+	PN(se.avg_running);
 
 	nr_switches = p->nvcsw + p->nivcsw;
 
@@ -426,13 +425,14 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	PN(se.wait_max);
 	PN(se.wait_sum);
 	P(se.wait_count);
+	PN(se.iowait_sum);
+	P(se.iowait_count);
 	P(sched_info.bkl_count);
 	P(se.nr_migrations);
 	P(se.nr_migrations_cold);
 	P(se.nr_failed_migrations_affine);
 	P(se.nr_failed_migrations_running);
 	P(se.nr_failed_migrations_hot);
-	P(se.nr_failed_migrations_throttled);
 	P(se.nr_forced_migrations);
 	P(se.nr_forced2_migrations);
 	P(se.nr_wakeups);
@@ -497,6 +497,8 @@ void proc_sched_set_task(struct task_struct *p)
 	p->se.wait_max				= 0;
 	p->se.wait_sum				= 0;
 	p->se.wait_count			= 0;
+	p->se.iowait_sum			= 0;
+	p->se.iowait_count			= 0;
 	p->se.sleep_max				= 0;
 	p->se.sum_sleep_runtime			= 0;
 	p->se.block_max				= 0;
@@ -507,7 +509,6 @@ void proc_sched_set_task(struct task_struct *p)
 	p->se.nr_failed_migrations_affine	= 0;
 	p->se.nr_failed_migrations_running	= 0;
 	p->se.nr_failed_migrations_hot		= 0;
-	p->se.nr_failed_migrations_throttled	= 0;
 	p->se.nr_forced_migrations		= 0;
 	p->se.nr_forced2_migrations		= 0;
 	p->se.nr_wakeups			= 0;

@@ -111,6 +111,23 @@ extern int vc_set_bcaps(struct vx_info *, void __user *);
 #endif	/* __KERNEL__ */
 
 
+/* umask commands */
+
+#define VCMD_get_umask		VC_CMD(FLAGS, 13, 0)
+#define VCMD_set_umask		VC_CMD(FLAGS, 14, 0)
+
+struct	vcmd_umask {
+	uint64_t umask;
+	uint64_t mask;
+};
+
+#ifdef	__KERNEL__
+extern int vc_get_umask(struct vx_info *, void __user *);
+extern int vc_set_umask(struct vx_info *, void __user *);
+
+#endif	/* __KERNEL__ */
+
+
 /* OOM badness */
 
 #define VCMD_get_badness	VC_CMD(MEMCTRL, 5, 0)

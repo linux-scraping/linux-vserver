@@ -23,6 +23,7 @@ void tty_port_init(struct tty_port *port)
 	memset(port, 0, sizeof(*port));
 	init_waitqueue_head(&port->open_wait);
 	init_waitqueue_head(&port->close_wait);
+	init_waitqueue_head(&port->delta_msr_wait);
 	mutex_init(&port->mutex);
 	spin_lock_init(&port->lock);
 	port->close_delay = (50 * HZ) / 100;
@@ -124,6 +125,7 @@ void tty_port_hangup(struct tty_port *port)
 	port->tty = NULL;
 	spin_unlock_irqrestore(&port->lock, flags);
 	wake_up_interruptible(&port->open_wait);
+	wake_up_interruptible(&port->delta_msr_wait);
 	tty_port_shutdown(port);
 }
 EXPORT_SYMBOL(tty_port_hangup);
@@ -219,6 +221,9 @@ int tty_port_block_til_ready(struct tty_port *port,
 	   the port has just hung up or is in another error state */
 	if ((filp->f_flags & O_NONBLOCK) ||
 			(tty->flags & (1 << TTY_IO_ERROR))) {
+		/* Indicate we are open */
+		if (tty->termios->c_cflag & CBAUD)
+			tty_port_raise_dtr_rts(port);
 		port->flags |= ASYNC_NORMAL_ACTIVE;
 		return 0;
 	}

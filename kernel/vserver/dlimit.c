@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Disk Limits
  *
- *  Copyright (C) 2004-2007  Herbert Pötzl
+ *  Copyright (C) 2004-2009  Herbert Pötzl
  *
  *  V0.01  initial version
  *  V0.02  compat32 splitup
+ *  V0.03  extended interface
  *
  */
 
@@ -287,6 +288,8 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 			goto out_release;
 		if (!(sb = path.dentry->d_inode->i_sb))
 			goto out_release;
+
+		/* sanity checks */
 		if ((reserved != CDLIM_KEEP &&
 			reserved > 100) ||
 			(inodes_used != CDLIM_KEEP &&
@@ -306,16 +309,16 @@ int do_set_dlimit(uint32_t id, const char __user *name,
 			dli->dl_inodes_used = inodes_used;
 		if (inodes_total != CDLIM_KEEP)
 			dli->dl_inodes_total = inodes_total;
-		if (space_used != CDLIM_KEEP) {
-			dli->dl_space_used = space_used;
-			dli->dl_space_used <<= 10;
-		}
+		if (space_used != CDLIM_KEEP)
+			dli->dl_space_used = dlimit_space_32to64(
+				space_used, flags, DLIMS_USED);
+
 		if (space_total == CDLIM_INFINITY)
 			dli->dl_space_total = DLIM_INFINITY;
-		else if (space_total != CDLIM_KEEP) {
-			dli->dl_space_total = space_total;
-			dli->dl_space_total <<= 10;
-		}
+		else if (space_total != CDLIM_KEEP)
+			dli->dl_space_total = dlimit_space_32to64(
+				space_total, flags, DLIMS_TOTAL);
+
 		if (reserved != CDLIM_KEEP)
 			dli->dl_nrlmult = (1 << 10) * (100 - reserved) / 100;
 
@@ -389,11 +392,15 @@ int do_get_dlimit(uint32_t id, const char __user *name,
 		spin_lock(&dli->dl_lock);
 		*inodes_used = dli->dl_inodes_used;
 		*inodes_total = dli->dl_inodes_total;
-		*space_used = dli->dl_space_used >> 10;
+
+		*space_used = dlimit_space_64to32(
+			dli->dl_space_used, flags, DLIMS_USED);
+
 		if (dli->dl_space_total == DLIM_INFINITY)
 			*space_total = CDLIM_INFINITY;
 		else
-			*space_total = dli->dl_space_total >> 10;
+			*space_total = dlimit_space_64to32(
+				dli->dl_space_total, flags, DLIMS_TOTAL);
 
 		*reserved = 100 - ((dli->dl_nrlmult * 100 + 512) >> 10);
 		spin_unlock(&dli->dl_lock);

@@ -158,7 +158,7 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
 		return -EACCES;
 
-	return security_ptrace_may_access(task, mode);
+	return security_ptrace_access_check(task, mode);
 }
 
 bool ptrace_may_access(struct task_struct *task, unsigned int mode)
@@ -272,9 +272,10 @@ static int ignoring_children(struct sighand_struct *sigh)
  * or self-reaping.  Do notification now if it would have happened earlier.
  * If it should reap itself, return true.
  *
- * If it's our own child, there is no notification to do.
- * But if our normal children self-reap, then this child
- * was prevented by ptrace and we must reap it now.
+ * If it's our own child, there is no notification to do. But if our normal
+ * children self-reap, then this child was prevented by ptrace and we must
+ * reap it now, in that case we must also wake up sub-threads sleeping in
+ * do_wait().
  */
 static bool __ptrace_detach(struct task_struct *tracer, struct task_struct *p)
 {
@@ -284,8 +285,10 @@ static bool __ptrace_detach(struct task_struct *tracer, struct task_struct *p)
 		if (!task_detached(p) && thread_group_empty(p)) {
 			if (!same_thread_group(p->real_parent, tracer))
 				do_notify_parent(p, p->exit_signal);
-			else if (ignoring_children(tracer->sighand))
+			else if (ignoring_children(tracer->sighand)) {
+				__wake_up_parent(p, tracer);
 				p->exit_signal = -1;
+			}
 		}
 		if (task_detached(p)) {
 			/* Mark it as in the process of being reaped. */

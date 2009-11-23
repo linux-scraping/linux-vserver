@@ -18,8 +18,8 @@
 #include <linux/mount.h>
 #include <linux/tty.h>
 #include <linux/mutex.h>
-#include <linux/idr.h>
 #include <linux/magic.h>
+#include <linux/idr.h>
 #include <linux/devpts_fs.h>
 #include <linux/parser.h>
 #include <linux/fsnotify.h>

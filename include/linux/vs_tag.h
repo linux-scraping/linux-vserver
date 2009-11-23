@@ -39,7 +39,7 @@ static inline int __dx_check(tag_t cid, tag_t id, unsigned int mode)
 }
 
 struct inode;
-int dx_permission(struct inode *inode, int mask);
+int dx_permission(const struct inode *inode, int mask);
 
 
 #else
