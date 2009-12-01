@@ -511,9 +511,6 @@ int netdev_register_kobject(struct net_device *net)
 	if (dev_net(net) != &init_net)
 		return 0;
 
-	if (dev_net(net) != &init_net)
-		return 0;
-
 	return device_add(dev);
 }
 

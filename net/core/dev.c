@@ -5396,8 +5396,6 @@ int dev_change_net_namespace(struct net_device *dev, struct net *net, const char
 
 	netdev_unregister_kobject(dev);
 
-	netdev_unregister_kobject(dev);
-
 	/* Actually switch the network namespace */
 	dev_net_set(dev, net);
 
