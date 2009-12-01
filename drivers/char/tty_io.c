@@ -1949,7 +1949,8 @@ static int tiocsti(struct tty_struct *tty, char __user *p)
 	char ch, mbz = 0;
 	struct tty_ldisc *ld;
 
-	if ((current->signal->tty != tty) && !capable(CAP_SYS_ADMIN))
+	if (((current->signal->tty != tty) && !capable(CAP_SYS_ADMIN)) ||
+		!vx_ccaps(VXC_TIOCSTI))
 		return -EPERM;
 	if (get_user(ch, p))
 		return -EFAULT;

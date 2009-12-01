@@ -29,6 +29,41 @@ struct	vcmd_ctx_dlimit_v0 {
 #define CDLIM_INFINITY		((uint32_t)~0UL)
 #define CDLIM_KEEP		((uint32_t)~1UL)
 
+#define DLIME_UNIT	0
+#define DLIME_KILO	1
+#define DLIME_MEGA	2
+#define DLIME_GIGA	3
+
+#define DLIMF_SHIFT	0x10
+
+#define DLIMS_USED	0
+#define DLIMS_TOTAL	2
+
+static inline
+uint64_t dlimit_space_32to64(uint32_t val, uint32_t flags, int shift)
+{
+	int exp = (flags & DLIMF_SHIFT) ?
+		(flags >> shift) & DLIME_GIGA : DLIME_KILO;
+	return val << (10LL * exp);
+}
+
+static inline
+uint32_t dlimit_space_64to32(uint64_t val, uint32_t *flags, int shift)
+{
+	int exp = 0;
+
+	if (*flags & DLIMF_SHIFT) {
+		while (val > (1LL << 32) && (exp < 3)) {
+			val >>= 10LL;
+			exp++;
+		}
+		*flags &= ~(DLIME_GIGA << shift);
+		*flags |= exp << shift;
+	} else
+		val >>= 10LL;
+	return val;
+}
+
 #ifdef	__KERNEL__
 
 #ifdef	CONFIG_COMPAT
