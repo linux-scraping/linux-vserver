@@ -27,6 +27,7 @@
 #include <linux/notifier.h>
 #include <linux/memcontrol.h>
 #include <linux/security.h>
+#include <linux/reboot.h>
 #include <linux/vs_memory.h>
 #include <linux/vs_context.h>
 
@@ -244,6 +245,7 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 	struct task_struct *p;
 	struct task_struct *chosen = NULL;
 	struct timespec uptime;
+	unsigned xid = vx_current_xid();
 	*ppoints = 0;
 
 	do_posix_clock_monotonic_gettime(&uptime);
@@ -260,6 +262,9 @@ static struct task_struct *select_bad_process(unsigned long *ppoints,
 		if (task_is_init(p))
 			continue;
 		if (mem && !task_in_mem_cgroup(p, mem))
+			continue;
+		/* skip other guest and host processes if oom in guest */
+		if (xid && vx_task_xid(p) != xid)
 			continue;
 
 		/*
@@ -533,6 +538,8 @@ void clear_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_mask)
 	spin_unlock(&zone_scan_lock);
 }
 
+long vs_oom_action(unsigned int);
+
 /*
  * Must be called with tasklist_lock held for read.
  */
@@ -558,7 +565,11 @@ retry:
 	/* Found nothing?!?! Either we hang forever, or we panic. */
 	if (!p) {
 		read_unlock(&tasklist_lock);
-		panic("Out of memory and no killable processes...\n");
+		/* avoid panic for guest OOM */
+		if (current->xid)
+			vs_oom_action(LINUX_REBOOT_CMD_OOM);
+		else
+			panic("Out of memory and no killable processes...\n");
 	}
 
 	if (oom_kill_process(p, gfp_mask, order, points, NULL,

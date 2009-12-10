@@ -85,6 +85,10 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 		argv[1] = "swsusp";
 		break;
 
+	case LINUX_REBOOT_CMD_OOM:
+		argv[1] = "oom";
+		break;
+
 	default:
 		vxi->vx_state &= ~VXS_HELPER;
 		return 0;
@@ -103,7 +107,7 @@ long vs_reboot(unsigned int cmd, void __user *arg)
 	long ret = 0;
 
 	vxdprintk(VXD_CBIT(misc, 5),
-		"vs_reboot(%p[#%d],%d)",
+		"vs_reboot(%p[#%d],%u)",
 		vxi, vxi ? vxi->vx_id : 0, cmd);
 
 	ret = vs_reboot_helper(vxi, cmd, arg);
@@ -125,6 +129,26 @@ long vs_reboot(unsigned int cmd, void __user *arg)
 	return 0;
 }
 
+long vs_oom_action(unsigned int cmd)
+{
+	struct vx_info *vxi = current_vx_info();
+	long ret = 0;
+
+	vxdprintk(VXD_CBIT(misc, 5),
+		"vs_oom_action(%p[#%d],%u)",
+		vxi, vxi ? vxi->vx_id : 0, cmd);
+
+	ret = vs_reboot_helper(vxi, cmd, NULL);
+	if (ret)
+		return ret;
+
+	vxi->reboot_cmd = cmd;
+	if (vx_info_flags(vxi, VXF_REBOOT_KILL, 0)) {
+		vx_info_kill(vxi, 0, SIGKILL);
+		vx_info_kill(vxi, 1, SIGKILL);
+	}
+	return 0;
+}
 
 /*
  *      argv [0] = vshelper_path;
