@@ -44,7 +44,7 @@ uint64_t dlimit_space_32to64(uint32_t val, uint32_t flags, int shift)
 {
 	int exp = (flags & DLIMF_SHIFT) ?
 		(flags >> shift) & DLIME_GIGA : DLIME_KILO;
-	return val << (10LL * exp);
+	return ((uint64_t)val) << (10 * exp);
 }
 
 static inline
@@ -54,13 +54,13 @@ uint32_t dlimit_space_64to32(uint64_t val, uint32_t *flags, int shift)
 
 	if (*flags & DLIMF_SHIFT) {
 		while (val > (1LL << 32) && (exp < 3)) {
-			val >>= 10LL;
+			val >>= 10;
 			exp++;
 		}
 		*flags &= ~(DLIME_GIGA << shift);
 		*flags |= exp << shift;
 	} else
-		val >>= 10LL;
+		val >>= 10;
 	return val;
 }
 

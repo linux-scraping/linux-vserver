@@ -60,6 +60,27 @@
 #include <linux/blkdev.h> /* sector_div */
 #include <linux/pid_namespace.h>
 
+
+static inline
+struct bsd_acct_struct *vx_current_bacct(struct pid_namespace *ns)
+{
+	struct vx_info *vxi = current_vx_info();
+
+	return vxi ? vxi->bacct : ns->bacct;
+}
+
+static inline
+void vx_set_current_bacct(struct pid_namespace *ns, struct bsd_acct_struct *acct)
+{
+	struct vx_info *vxi = current_vx_info();
+
+	if (vxi)
+		vxi->bacct = acct;
+	else
+		ns->bacct = acct;
+}
+
+
 /*
  * These constants control the amount of freespace that suspend and
  * resume the process accounting system, and the time delay between
@@ -236,7 +257,7 @@ static int acct_on(char *name)
 	}
 
 	ns = task_active_pid_ns(current);
-	if (ns->bacct == NULL) {
+	if (vx_current_bacct(ns) == NULL) {
 		acct = kzalloc(sizeof(struct bsd_acct_struct), GFP_KERNEL);
 		if (acct == NULL) {
 			filp_close(file, NULL);
@@ -252,14 +273,14 @@ static int acct_on(char *name)
 	}
 
 	spin_lock(&acct_lock);
-	if (ns->bacct == NULL) {
-		ns->bacct = acct;
+	if (vx_current_bacct(ns) == NULL) {
+		vx_set_current_bacct(ns, acct);
 		acct = NULL;
 	}
 
 	mnt = file->f_path.mnt;
 	mnt_pin(mnt);
-	acct_file_reopen(ns->bacct, file, ns);
+	acct_file_reopen(vx_current_bacct(ns), file, ns);
 	spin_unlock(&acct_lock);
 
 	mntput(mnt); /* it's pinned, now give up active reference */
@@ -356,7 +377,7 @@ void acct_exit_ns(struct pid_namespace *ns)
 	struct bsd_acct_struct *acct;
 
 	spin_lock(&acct_lock);
-	acct = ns->bacct;
+	acct = vx_current_bacct(ns);
 	if (acct != NULL) {
 		if (acct->file != NULL)
 			acct_file_reopen(acct, NULL, NULL);
@@ -643,7 +664,7 @@ static void acct_process_in_ns(struct pid_namespace *ns)
 	struct file *file = NULL;
 	struct bsd_acct_struct *acct;
 
-	acct = ns->bacct;
+	acct = vx_current_bacct(ns);
 	/*
 	 * accelerate the common fastpath:
 	 */

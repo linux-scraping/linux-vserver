@@ -131,7 +131,9 @@ struct vx_info {
 #else
 	struct _vx_info_pc *ptr_pc;		/* per cpu array */
 #endif
-
+#ifdef CONFIG_BSD_PROCESS_ACCT
+	struct bsd_acct_struct *bacct;		/* bsd process accounting */
+#endif
 	wait_queue_head_t vx_wait;		/* context exit waitqueue */
 	int reboot_cmd;				/* last sys_reboot() cmd */
 	int exit_code;				/* last process exit code */
