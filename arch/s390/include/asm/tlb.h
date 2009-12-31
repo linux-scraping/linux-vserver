@@ -23,6 +23,8 @@
 
 #include <linux/mm.h>
 #include <linux/swap.h>
+#include <linux/vs_memory.h>
+
 #include <asm/processor.h>
 #include <asm/pgalloc.h>
 #include <asm/smp.h>
