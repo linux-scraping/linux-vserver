@@ -1083,7 +1083,7 @@ static void enqueue_entity_locked(struct cfs_rq *cfs_rq,
 	/*
 	 * Update run-time statistics of the 'current'.
 	 */
-	update_curr_locked(cfs_rq);
+	// update_curr_locked(cfs_rq);
 	enqueue_entity_common(cfs_rq, se, wakeup);
 }
 
