@@ -842,21 +842,6 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	}
 }
 
-static void update_curr_locked(struct cfs_rq *cfs_rq)
-{
-	struct sched_entity *curr = cfs_rq->curr;
-	struct rq *rq = rq_of(cfs_rq);
-	unsigned long delta_exec;
-
-	if (update_curr_common(cfs_rq, &delta_exec))
-		return ;
-
-	if (entity_is_task(curr))
-		update_curr_task(curr, delta_exec);
-	else
-		update_curr_group(curr, delta_exec, rq->curr);
-}
-
 static inline void
 update_stats_wait_start(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
@@ -1794,6 +1779,9 @@ static int select_task_rq_fair(struct task_struct *p, int sd_flag, int wake_flag
 
 	rcu_read_lock();
 	for_each_domain(cpu, tmp) {
+		if (!(tmp->flags & SD_LOAD_BALANCE))
+			continue;
+
 		/*
 		 * If power savings logic is enabled for a domain, see if we
 		 * are not overloaded, if so, don't balance wider.

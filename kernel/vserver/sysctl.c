@@ -69,7 +69,7 @@ void vserver_unregister_sysctl(void)
 
 
 static int proc_dodebug(ctl_table *table, int write,
-	struct file *filp, void __user *buffer, size_t *lenp, loff_t *ppos)
+	void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	char		tmpbuf[20], *p, c;
 	unsigned int	value;
@@ -137,6 +137,7 @@ static int zero;
 		.proc_handler	= &proc_dodebug,	\
 		.strategy	= &sysctl_intvec,	\
 		.extra1		= &zero,		\
+		.extra2		= &zero,		\
 	}
 
 static ctl_table vserver_debug_table[] = {

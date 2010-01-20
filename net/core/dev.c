@@ -5331,16 +5331,6 @@ int dev_change_net_namespace(struct net_device *dev, struct net *net, const char
 	if (dev->dev.parent)
 		goto out;
 #endif
-
-#ifdef CONFIG_SYSFS
-	/* Don't allow real devices to be moved when sysfs
-	 * is enabled.
-	 */
-	err = -EINVAL;
-	if (dev->dev.parent)
-		goto out;
-#endif
-
 	/* Ensure the device has been registrered */
 	err = -EINVAL;
 	if (dev->reg_state != NETREG_REGISTERED)
