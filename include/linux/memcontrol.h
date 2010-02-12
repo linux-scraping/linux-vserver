@@ -70,6 +70,13 @@ int task_in_mem_cgroup(struct task_struct *task, const struct mem_cgroup *mem);
 
 extern struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p);
 
+extern u64 mem_cgroup_res_read_u64(struct mem_cgroup *mem, int member);
+extern u64 mem_cgroup_memsw_read_u64(struct mem_cgroup *mem, int member);
+
+extern s64 mem_cgroup_stat_read_cache(struct mem_cgroup *mem);
+extern s64 mem_cgroup_stat_read_anon(struct mem_cgroup *mem);
+extern s64 mem_cgroup_stat_read_mapped(struct mem_cgroup *mem);
+
 static inline
 int mm_match_cgroup(const struct mm_struct *mm, const struct mem_cgroup *cgroup)
 {

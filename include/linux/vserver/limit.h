@@ -63,6 +63,7 @@ struct sysinfo;
 
 void vx_vsi_meminfo(struct sysinfo *);
 void vx_vsi_swapinfo(struct sysinfo *);
+long vx_vsi_cached(struct sysinfo *);
 
 #define NUM_LIMITS	24
 
