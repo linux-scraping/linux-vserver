@@ -3,10 +3,11 @@
  *
  *  Virtual Server: Context Limits
  *
- *  Copyright (C) 2004-2007  Herbert Pötzl
+ *  Copyright (C) 2004-2010  Herbert Pötzl
  *
  *  V0.01  broken out from vcontext V0.05
  *  V0.02  changed vcmds to vxi arg
+ *  V0.03  added memory cgroup support
  *
  */
 
@@ -266,7 +267,21 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-#if 0
+#ifdef	CGROUP_MEM_RES_CTLR
+	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
+	u64 res_limit, res_usage;
+
+	if (!mcg)
+		return;
+
+	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
+	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
+
+	if (res_limit != RESOURCE_MAX)
+		val->totalram = (res_limit >> PAGE_SHIFT);
+	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
+	val->bufferram = 0;
+#else
 	struct vx_info *vxi = current_vx_info();
 	unsigned long totalram, freeram;
 	rlim_t v;
@@ -281,20 +296,6 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 	val->totalram = totalram;
 	val->freeram = freeram;
-#else
-	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
-	u64 res_limit, res_usage;
-
-	if (!mcg)
-		return;
-
-	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
-
-	if (res_limit != RESOURCE_MAX)
-		val->totalram = (res_limit >> PAGE_SHIFT);
-	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
-	val->bufferram = 0;
 #endif
 	val->totalhigh = 0;
 	val->freehigh = 0;
@@ -303,7 +304,30 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-#if 0
+#ifdef	CGROUP_MEM_RES_CTLR_SWAP
+	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
+	u64 res_limit, res_usage, memsw_limit, memsw_usage;
+	s64 swap_limit, swap_usage;
+
+	if (!mcg)
+		return;
+
+	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
+	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
+	memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
+	memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
+
+	if (res_limit == RESOURCE_MAX)
+		return;
+
+	swap_limit = memsw_limit - res_limit;
+	if (memsw_limit != RESOURCE_MAX)
+		val->totalswap = swap_limit >> PAGE_SHIFT;
+
+	swap_usage = memsw_usage - res_usage;
+	val->freeswap = (swap_usage < swap_limit) ?
+		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
+#else
 	struct vx_info *vxi = current_vx_info();
 	unsigned long totalswap, freeswap;
 	rlim_t v, w;
@@ -327,38 +351,19 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 
 	val->totalswap = totalswap;
 	val->freeswap = freeswap;
-#else
-	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
-	u64 res_limit, res_usage, memsw_limit, memsw_usage;
-	s64 swap_limit, swap_usage;
-
-	if (!mcg)
-		return;
-
-	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
-	memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
-	memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
-
-	if (res_limit == RESOURCE_MAX)
-		return;
-
-	swap_limit = memsw_limit - res_limit;
-	if (memsw_limit != RESOURCE_MAX)
-		val->totalswap = swap_limit >> PAGE_SHIFT;
-
-	swap_usage = memsw_usage - res_usage;
-	val->freeswap = (swap_usage < swap_limit) ?
-		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
 #endif
 	return;
 }
 
 long vx_vsi_cached(struct sysinfo *val)
 {
+#ifdef	CGROUP_MEM_RES_CTLR
 	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
 
 	return mem_cgroup_stat_read_cache(mcg);
+#else
+	return 0;
+#endif
 }
 
 
