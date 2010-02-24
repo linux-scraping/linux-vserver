@@ -27,6 +27,7 @@
 
 #else /* !CONFIG_MMU */
 
+#include <linux/vs_memory.h>
 #include <asm/pgalloc.h>
 
 /*
