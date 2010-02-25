@@ -182,8 +182,8 @@ static int rds_ib_conn_info_visitor(struct rds_connection *conn,
 		ic = conn->c_transport_data;
 		dev_addr = &ic->i_cm_id->route.addr.dev_addr;
 
-		ib_addr_get_sgid(dev_addr, (union ib_gid *) &iinfo->src_gid);
-		ib_addr_get_dgid(dev_addr, (union ib_gid *) &iinfo->dst_gid);
+		rdma_addr_get_sgid(dev_addr, (union ib_gid *) &iinfo->src_gid);
+		rdma_addr_get_dgid(dev_addr, (union ib_gid *) &iinfo->dst_gid);
 
 		rds_ibdev = ib_get_client_data(ic->i_cm_id->device, &rds_ib_client);
 		iinfo->max_send_wr = ic->i_send_ring.w_nr;
@@ -235,8 +235,7 @@ static int rds_ib_laddr_check(__be32 addr)
 	ret = rdma_bind_addr(cm_id, (struct sockaddr *)&sin);
 	/* due to this, we will claim to support iWARP devices unless we
 	   check node_type. */
-	if (ret || !cm_id->device ||
-	    cm_id->device->node_type != RDMA_NODE_IB_CA)
+	if (ret || cm_id->device->node_type != RDMA_NODE_IB_CA)
 		ret = -EADDRNOTAVAIL;
 
 	rdsdebug("addr %pI4 ret %d node type %d\n",

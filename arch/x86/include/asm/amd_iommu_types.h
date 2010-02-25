@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2008 Advanced Micro Devices, Inc.
+ * Copyright (C) 2007-2009 Advanced Micro Devices, Inc.
  * Author: Joerg Roedel <joerg.roedel@amd.com>
  *         Leo Duran <leo.duran@amd.com>
  *
@@ -23,6 +23,11 @@
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
+
+/*
+ * Maximum number of IOMMUs supported
+ */
+#define MAX_IOMMUS	32
 
 /*
  * some size calculation constants
@@ -206,6 +211,9 @@ extern bool amd_iommu_dump;
 			printk(KERN_INFO "AMD-Vi: " format, ## arg);	\
 	} while(0);
 
+/* global flag if IOMMUs cache non-present entries */
+extern bool amd_iommu_np_cache;
+
 /*
  * Make iterating over all IOMMUs easier
  */
@@ -226,6 +234,8 @@ extern bool amd_iommu_dump;
  * independent of their use.
  */
 struct protection_domain {
+	struct list_head list;  /* for list of all protection domains */
+	struct list_head dev_list; /* List of all devices in this domain */
 	spinlock_t lock;	/* mostly used to lock the page table*/
 	u16 id;			/* the domain id written to the device table */
 	int mode;		/* paging mode (0-6 levels) */
@@ -233,7 +243,20 @@ struct protection_domain {
 	unsigned long flags;	/* flags to find out type of domain */
 	bool updated;		/* complete domain flush required */
 	unsigned dev_cnt;	/* devices assigned to this domain */
+	unsigned dev_iommu[MAX_IOMMUS]; /* per-IOMMU reference count */
 	void *priv;		/* private data */
+
+};
+
+/*
+ * This struct contains device specific data for the IOMMU
+ */
+struct iommu_dev_data {
+	struct list_head list;		  /* For domain->dev_list */
+	struct device *dev;		  /* Device this data belong to */
+	struct device *alias;		  /* The Alias Device */
+	struct protection_domain *domain; /* Domain the device is bound to */
+	atomic_t bind;			  /* Domain attach reverent count */
 };
 
 /*
@@ -291,6 +314,9 @@ struct dma_ops_domain {
 struct amd_iommu {
 	struct list_head list;
 
+	/* Index within the IOMMU array */
+	int index;
+
 	/* locks the accesses to the hardware */
 	spinlock_t lock;
 
@@ -304,9 +330,6 @@ struct amd_iommu {
 
 	/* capabilities of that IOMMU read from ACPI */
 	u32 cap;
-
-	/* flags read from acpi table */
-	u8 acpi_flags;
 
 	/*
 	 * Capability pointer. There could be more than one IOMMU per PCI
@@ -351,15 +374,6 @@ struct amd_iommu {
 
 	/* default dma_ops domain for that IOMMU */
 	struct dma_ops_domain *default_dom;
-
-	/*
-	 * This array is required to work around a potential BIOS bug.
-	 * The BIOS may miss to restore parts of the PCI configuration
-	 * space when the system resumes from S3. The result is that the
-	 * IOMMU does not execute commands anymore which leads to system
-	 * failure.
-	 */
-	u32 cache_cfg[4];
 };
 
 /*
@@ -367,6 +381,21 @@ struct amd_iommu {
  * only written and read at driver initialization or suspend time
  */
 extern struct list_head amd_iommu_list;
+
+/*
+ * Array with pointers to each IOMMU struct
+ * The indices are referenced in the protection domains
+ */
+extern struct amd_iommu *amd_iommus[MAX_IOMMUS];
+
+/* Number of IOMMUs present in the system */
+extern int amd_iommus_present;
+
+/*
+ * Declarations for the global list of all protection domains
+ */
+extern spinlock_t amd_iommu_pd_lock;
+extern struct list_head amd_iommu_pd_list;
 
 /*
  * Structure defining one entry in the device table
@@ -428,14 +457,8 @@ extern unsigned amd_iommu_aperture_order;
 /* largest PCI device id we expect translation requests for */
 extern u16 amd_iommu_last_bdf;
 
-/* data structures for protection domain handling */
-extern struct protection_domain **amd_iommu_pd_table;
-
 /* allocation bitmap for domain ids */
 extern unsigned long *amd_iommu_pd_alloc_bitmap;
-
-/* will be 1 if device isolation is enabled */
-extern bool amd_iommu_isolate;
 
 /*
  * If true, the addresses will be flushed on unmap time, not when
@@ -474,17 +497,6 @@ struct __iommu_counter {
 #define ADD_STATS_COUNTER(name, x)
 #define SUB_STATS_COUNTER(name, x)
 
-static inline void amd_iommu_stats_init(void) { }
-
 #endif /* CONFIG_AMD_IOMMU_STATS */
-
-/* some function prototypes */
-extern void amd_iommu_reset_cmd_buffer(struct amd_iommu *iommu);
-
-static inline bool is_rd890_iommu(struct pci_dev *pdev)
-{
-	return (pdev->vendor == PCI_VENDOR_ID_ATI) &&
-	       (pdev->device == PCI_DEVICE_ID_RD890_IOMMU);
-}
 
 #endif /* _ASM_X86_AMD_IOMMU_TYPES_H */

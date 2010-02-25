@@ -280,13 +280,13 @@ static void __ieee80211_wake_queue(struct ieee80211_hw *hw, int queue,
 		/* someone still has this queue stopped */
 		return;
 
-	if (skb_queue_empty(&local->pending[queue])) {
-		rcu_read_lock();
-		list_for_each_entry_rcu(sdata, &local->interfaces, list)
-			netif_tx_wake_queue(netdev_get_tx_queue(sdata->dev, queue));
-		rcu_read_unlock();
-	} else
+	if (!skb_queue_empty(&local->pending[queue]))
 		tasklet_schedule(&local->tx_pending_tasklet);
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(sdata, &local->interfaces, list)
+		netif_tx_wake_queue(netdev_get_tx_queue(sdata->dev, queue));
+	rcu_read_unlock();
 }
 
 void ieee80211_wake_queue_by_reason(struct ieee80211_hw *hw, int queue,
@@ -678,8 +678,8 @@ u32 ieee802_11_parse_elems_crc(u8 *start, size_t len,
 			elems->mesh_id_len = elen;
 			break;
 		case WLAN_EID_MESH_CONFIG:
-			elems->mesh_config = pos;
-			elems->mesh_config_len = elen;
+			if (elen >= sizeof(struct ieee80211_meshconf_ie))
+				elems->mesh_config = (void *)pos;
 			break;
 		case WLAN_EID_PEER_LINK:
 			elems->peer_link = pos;
@@ -696,6 +696,10 @@ u32 ieee802_11_parse_elems_crc(u8 *start, size_t len,
 		case WLAN_EID_PERR:
 			elems->perr = pos;
 			elems->perr_len = elen;
+			break;
+		case WLAN_EID_RANN:
+			if (elen >= sizeof(struct ieee80211_rann_ie))
+				elems->rann = (void *)pos;
 			break;
 		case WLAN_EID_CHANNEL_SWITCH:
 			elems->ch_switch_elem = pos;
@@ -880,17 +884,19 @@ void ieee80211_send_auth(struct ieee80211_sub_if_data *sdata,
 		WARN_ON(err);
 	}
 
-	ieee80211_tx_skb(sdata, skb, 0);
+	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_INTFL_DONT_ENCRYPT;
+	ieee80211_tx_skb(sdata, skb);
 }
 
 int ieee80211_build_preq_ies(struct ieee80211_local *local, u8 *buffer,
-			     const u8 *ie, size_t ie_len)
+			     const u8 *ie, size_t ie_len,
+			     enum ieee80211_band band)
 {
 	struct ieee80211_supported_band *sband;
 	u8 *pos, *supp_rates_len, *esupp_rates_len = NULL;
 	int i;
 
-	sband = local->hw.wiphy->bands[local->hw.conf.channel->band];
+	sband = local->hw.wiphy->bands[band];
 
 	pos = buffer;
 
@@ -978,9 +984,11 @@ void ieee80211_send_probe_req(struct ieee80211_sub_if_data *sdata, u8 *dst,
 	memcpy(pos, ssid, ssid_len);
 	pos += ssid_len;
 
-	skb_put(skb, ieee80211_build_preq_ies(local, pos, ie, ie_len));
+	skb_put(skb, ieee80211_build_preq_ies(local, pos, ie, ie_len,
+					      local->hw.conf.channel->band));
 
-	ieee80211_tx_skb(sdata, skb, 0);
+	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_INTFL_DONT_ENCRYPT;
+	ieee80211_tx_skb(sdata, skb);
 }
 
 u32 ieee80211_sta_get_rates(struct ieee80211_local *local,
@@ -1136,14 +1144,6 @@ int ieee80211_reconfig(struct ieee80211_local *local)
 			break;
 		}
 	}
-
-	rcu_read_lock();
-	if (hw->flags & IEEE80211_HW_AMPDU_AGGREGATION) {
-		list_for_each_entry_rcu(sta, &local->sta_list, list) {
-			ieee80211_sta_tear_down_BA_sessions(sta);
-		}
-	}
-	rcu_read_unlock();
 
 	/* add back keys */
 	list_for_each_entry(sdata, &local->interfaces, list)

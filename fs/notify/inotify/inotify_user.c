@@ -69,36 +69,30 @@ static int zero;
 
 ctl_table inotify_table[] = {
 	{
-		.ctl_name	= INOTIFY_MAX_USER_INSTANCES,
 		.procname	= "max_user_instances",
 		.data		= &inotify_max_user_instances,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.strategy	= &sysctl_intvec,
+		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 	},
 	{
-		.ctl_name	= INOTIFY_MAX_USER_WATCHES,
 		.procname	= "max_user_watches",
 		.data		= &inotify_max_user_watches,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.strategy	= &sysctl_intvec,
+		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
 	},
 	{
-		.ctl_name	= INOTIFY_MAX_QUEUED_EVENTS,
 		.procname	= "max_queued_events",
 		.data		= &inotify_max_queued_events,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.strategy	= &sysctl_intvec,
+		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 #endif /* CONFIG_SYSCTL */
 
@@ -106,11 +100,8 @@ static inline __u32 inotify_arg_to_mask(u32 arg)
 {
 	__u32 mask;
 
-	/*
-	 * everything should accept their own ignored, cares about children,
-	 * and should receive events when the inode is unmounted
-	 */
-	mask = (FS_IN_IGNORED | FS_EVENT_ON_CHILD | FS_UNMOUNT);
+	/* everything should accept their own ignored and cares about children */
+	mask = (FS_IN_IGNORED | FS_EVENT_ON_CHILD);
 
 	/* mask off the flags used to open the fd */
 	mask |= (arg & (IN_ALL_EVENTS | IN_ONESHOT));
@@ -559,23 +550,20 @@ retry:
 	if (unlikely(!idr_pre_get(&group->inotify_data.idr, GFP_KERNEL)))
 		goto out_err;
 
-	/* we are putting the mark on the idr, take a reference */
-	fsnotify_get_mark(&tmp_ientry->fsn_entry);
-
 	spin_lock(&group->inotify_data.idr_lock);
 	ret = idr_get_new_above(&group->inotify_data.idr, &tmp_ientry->fsn_entry,
 				group->inotify_data.last_wd+1,
 				&tmp_ientry->wd);
 	spin_unlock(&group->inotify_data.idr_lock);
 	if (ret) {
-		/* we didn't get on the idr, drop the idr reference */
-		fsnotify_put_mark(&tmp_ientry->fsn_entry);
-
 		/* idr was out of memory allocate and try again */
 		if (ret == -EAGAIN)
 			goto retry;
 		goto out_err;
 	}
+
+	/* we put the mark on the idr, take a reference */
+	fsnotify_get_mark(&tmp_ientry->fsn_entry);
 
 	/* we are on the idr, now get on the inode */
 	ret = fsnotify_add_mark(&tmp_ientry->fsn_entry, group, inode);
@@ -658,6 +646,7 @@ SYSCALL_DEFINE1(inotify_init1, int, flags)
 	struct fsnotify_group *group;
 	struct user_struct *user;
 	struct file *filp;
+	struct path path;
 	int fd, ret;
 
 	/* Check the IN_* constants for consistency.  */
@@ -670,12 +659,6 @@ SYSCALL_DEFINE1(inotify_init1, int, flags)
 	fd = get_unused_fd_flags(flags & O_CLOEXEC);
 	if (fd < 0)
 		return fd;
-
-	filp = get_empty_filp();
-	if (!filp) {
-		ret = -ENFILE;
-		goto out_put_fd;
-	}
 
 	user = get_current_user();
 	if (unlikely(atomic_read(&user->inotify_devs) >=
@@ -691,24 +674,28 @@ SYSCALL_DEFINE1(inotify_init1, int, flags)
 		goto out_free_uid;
 	}
 
-	filp->f_op = &inotify_fops;
-	filp->f_path.mnt = mntget(inotify_mnt);
-	filp->f_path.dentry = dget(inotify_mnt->mnt_root);
-	filp->f_mapping = filp->f_path.dentry->d_inode->i_mapping;
-	filp->f_mode = FMODE_READ;
+	atomic_inc(&user->inotify_devs);
+
+	path.mnt = inotify_mnt;
+	path.dentry = inotify_mnt->mnt_root;
+	path_get(&path);
+	filp = alloc_file(&path, FMODE_READ, &inotify_fops);
+	if (!filp)
+		goto Enfile;
+
 	filp->f_flags = O_RDONLY | (flags & O_NONBLOCK);
 	filp->private_data = group;
-
-	atomic_inc(&user->inotify_devs);
 
 	fd_install(fd, filp);
 
 	return fd;
 
+Enfile:
+	ret = -ENFILE;
+	path_put(&path);
+	atomic_dec(&user->inotify_devs);
 out_free_uid:
 	free_uid(user);
-	put_filp(filp);
-out_put_fd:
 	put_unused_fd(fd);
 	return ret;
 }
@@ -753,10 +740,6 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
-	if (unlikely(ret))
-		goto path_put_and_out;
-
-path_put_and_out:
 	path_put(&path);
 fput_and_out:
 	fput_light(filp, fput_needed);

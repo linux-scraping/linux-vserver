@@ -43,8 +43,6 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 	int tcphoff, needs_ack;
 	const struct ipv6hdr *oip6h = ipv6_hdr(oldskb);
 	struct ipv6hdr *ip6h;
-#define DEFAULT_TOS_VALUE	0x0U
-	const __u8 tclass = DEFAULT_TOS_VALUE;
 	struct dst_entry *dst = NULL;
 	u8 proto;
 	struct flowi fl;
@@ -97,11 +95,9 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 	fl.fl_ip_dport = otcph.source;
 	security_skb_classify_flow(oldskb, &fl);
 	dst = ip6_route_output(net, NULL, &fl);
-	if (dst == NULL || dst->error) {
-		dst_release(dst);
+	if (dst == NULL)
 		return;
-	}
-	if (xfrm_lookup(net, &dst, &fl, NULL, 0))
+	if (dst->error || xfrm_lookup(net, &dst, &fl, NULL, 0))
 		return;
 
 	hh_len = (dst->dev->hard_header_len + 15)&~15;
@@ -123,7 +119,7 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 	skb_put(nskb, sizeof(struct ipv6hdr));
 	skb_reset_network_header(nskb);
 	ip6h = ipv6_hdr(nskb);
-	*(__be32 *)ip6h =  htonl(0x60000000 | (tclass << 20));
+	ip6h->version = 6;
 	ip6h->hop_limit = dst_metric(dst, RTAX_HOPLIMIT);
 	ip6h->nexthdr = IPPROTO_TCP;
 	ipv6_addr_copy(&ip6h->saddr, &oip6h->daddr);
@@ -227,8 +223,8 @@ static bool reject_tg6_check(const struct xt_tgchk_param *par)
 		return false;
 	} else if (rejinfo->with == IP6T_TCP_RESET) {
 		/* Must specify that it's a TCP packet */
-		if (e->ipv6.proto != IPPROTO_TCP
-		    || (e->ipv6.invflags & XT_INV_PROTO)) {
+		if (e->ipv6.proto != IPPROTO_TCP ||
+		    (e->ipv6.invflags & XT_INV_PROTO)) {
 			printk("ip6t_REJECT: TCP_RESET illegal for non-tcp\n");
 			return false;
 		}

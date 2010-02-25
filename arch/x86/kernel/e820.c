@@ -724,7 +724,7 @@ core_initcall(e820_mark_nvs_memory);
 /*
  * Early reserved memory areas.
  */
-#define MAX_EARLY_RES 20
+#define MAX_EARLY_RES 32
 
 struct early_res {
 	u64 start, end;
@@ -732,7 +732,16 @@ struct early_res {
 	char overlap_ok;
 };
 static struct early_res early_res[MAX_EARLY_RES] __initdata = {
-	{ 0, PAGE_SIZE, "BIOS data page" },	/* BIOS data page */
+	{ 0, PAGE_SIZE, "BIOS data page", 1 },	/* BIOS data page */
+#if defined(CONFIG_X86_32) && defined(CONFIG_X86_TRAMPOLINE)
+	/*
+	 * But first pinch a few for the stack/trampoline stuff
+	 * FIXME: Don't need the extra page at 4K, but need to fix
+	 * trampoline before removing it. (see the GDT stuff)
+	 */
+	{ PAGE_SIZE, PAGE_SIZE + PAGE_SIZE, "EX TRAMPOLINE", 1 },
+#endif
+
 	{}
 };
 
@@ -1236,21 +1245,15 @@ static int __init parse_memopt(char *p)
 	if (!p)
 		return -EINVAL;
 
-	if (!strcmp(p, "nopentium")) {
 #ifdef CONFIG_X86_32
+	if (!strcmp(p, "nopentium")) {
 		setup_clear_cpu_cap(X86_FEATURE_PSE);
 		return 0;
-#else
-		printk(KERN_WARNING "mem=nopentium ignored! (only supported on x86_32)\n");
-		return -EINVAL;
-#endif
 	}
+#endif
 
 	userdef = 1;
 	mem_size = memparse(p, &p);
-	/* don't remove all of memory when handling "mem={invalid}" param */
-	if (mem_size == 0)
-		return -EINVAL;
 	e820_remove_range(mem_size, ULLONG_MAX - mem_size, E820_RAM, 1);
 
 	return 0;

@@ -47,6 +47,7 @@
 #include <linux/hdreg.h>
 #include <linux/uaccess.h>
 #include <linux/suspend.h>
+#include <asm/unaligned.h>
 
 #include "libata.h"
 
@@ -154,8 +155,7 @@ static ssize_t ata_scsi_lpm_put(struct device *dev,
 	 */
 	for (i = 1; i < ARRAY_SIZE(link_pm_policy); i++) {
 		const int len = strlen(link_pm_policy[i].name);
-		if (strncmp(link_pm_policy[i].name, buf, len) == 0 &&
-		   buf[len] == '\n') {
+		if (strncmp(link_pm_policy[i].name, buf, len) == 0) {
 			policy = link_pm_policy[i].value;
 			break;
 		}
@@ -338,8 +338,7 @@ ata_scsi_activity_show(struct device *dev, struct device_attribute *attr,
 	struct ata_port *ap = ata_shost_to_port(sdev->host);
 	struct ata_device *atadev = ata_scsi_find_dev(ap, sdev);
 
-	if (atadev && ap->ops->sw_activity_show &&
-	    (ap->flags & ATA_FLAG_SW_ACTIVITY))
+	if (ap->ops->sw_activity_show && (ap->flags & ATA_FLAG_SW_ACTIVITY))
 		return ap->ops->sw_activity_show(atadev, buf);
 	return -EINVAL;
 }
@@ -354,8 +353,7 @@ ata_scsi_activity_store(struct device *dev, struct device_attribute *attr,
 	enum sw_activity val;
 	int rc;
 
-	if (atadev && ap->ops->sw_activity_store &&
-	    (ap->flags & ATA_FLAG_SW_ACTIVITY)) {
+	if (ap->ops->sw_activity_store && (ap->flags & ATA_FLAG_SW_ACTIVITY)) {
 		val = simple_strtoul(buf, NULL, 0);
 		switch (val) {
 		case OFF: case BLINK_ON: case BLINK_OFF:
@@ -1101,13 +1099,13 @@ static int ata_scsi_dev_config(struct scsi_device *sdev,
 	/* configure max sectors */
 	blk_queue_max_sectors(sdev->request_queue, dev->max_sectors);
 
-	sdev->sector_size = ATA_SECT_SIZE;
-
 	if (dev->class == ATA_DEV_ATAPI) {
 		struct request_queue *q = sdev->request_queue;
 		void *buf;
 
-		/* set DMA padding */
+		/* set the min alignment and padding */
+		blk_queue_update_dma_alignment(sdev->request_queue,
+					       ATA_DMA_PAD_SZ - 1);
 		blk_queue_update_dma_pad(sdev->request_queue,
 					 ATA_DMA_PAD_SZ - 1);
 
@@ -1121,23 +1119,11 @@ static int ata_scsi_dev_config(struct scsi_device *sdev,
 
 		blk_queue_dma_drain(q, atapi_drain_needed, buf, ATAPI_MAX_DRAIN);
 	} else {
+		/* ATA devices must be sector aligned */
+		blk_queue_update_dma_alignment(sdev->request_queue,
+					       ATA_SECT_SIZE - 1);
 		sdev->manage_start_stop = 1;
 	}
-
-	/*
-	 * ata_pio_sectors() expects buffer for each sector to not cross
-	 * page boundary.  Enforce it by requiring buffers to be sector
-	 * aligned, which works iff sector_size is not larger than
-	 * PAGE_SIZE.  ATAPI devices also need the alignment as
-	 * IDENTIFY_PACKET is executed as ATA_PROT_PIO.
-	 */
-	if (sdev->sector_size > PAGE_SIZE)
-		ata_dev_printk(dev, KERN_WARNING,
-			"sector_size=%u > PAGE_SIZE, PIO may malfunction\n",
-			sdev->sector_size);
-
-	blk_queue_update_dma_alignment(sdev->request_queue,
-				       sdev->sector_size - 1);
 
 	if (dev->flags & ATA_DFLAG_AN)
 		set_bit(SDEV_EVT_MEDIA_CHANGE, sdev->supported_events);
@@ -1222,6 +1208,7 @@ void ata_scsi_slave_destroy(struct scsi_device *sdev)
  *	ata_scsi_change_queue_depth - SCSI callback for queue depth config
  *	@sdev: SCSI device to configure queue depth for
  *	@queue_depth: new queue depth
+ *	@reason: calling context
  *
  *	This is libata standard hostt->change_queue_depth callback.
  *	SCSI will call into this callback when user tries to set queue
@@ -1233,11 +1220,15 @@ void ata_scsi_slave_destroy(struct scsi_device *sdev)
  *	RETURNS:
  *	Newly configured queue depth.
  */
-int ata_scsi_change_queue_depth(struct scsi_device *sdev, int queue_depth)
+int ata_scsi_change_queue_depth(struct scsi_device *sdev, int queue_depth,
+				int reason)
 {
 	struct ata_port *ap = ata_shost_to_port(sdev->host);
 	struct ata_device *dev;
 	unsigned long flags;
+
+	if (reason != SCSI_QDEPTH_DEFAULT)
+		return -EOPNOTSUPP;
 
 	if (queue_depth < 1 || queue_depth == sdev->queue_depth)
 		return sdev->queue_depth;
@@ -1978,6 +1969,7 @@ static unsigned int ata_scsiop_inq_00(struct ata_scsi_args *args, u8 *rbuf)
 		0x80,	/* page 0x80, unit serial no page */
 		0x83,	/* page 0x83, device ident page */
 		0x89,	/* page 0x89, ata info page */
+		0xb0,	/* page 0xb0, block limits page */
 		0xb1,	/* page 0xb1, block device characteristics page */
 	};
 
@@ -2096,6 +2088,43 @@ static unsigned int ata_scsiop_inq_89(struct ata_scsi_args *args, u8 *rbuf)
 	rbuf[56] = ATA_CMD_ID_ATA;
 
 	memcpy(&rbuf[60], &args->id[0], 512);
+	return 0;
+}
+
+static unsigned int ata_scsiop_inq_b0(struct ata_scsi_args *args, u8 *rbuf)
+{
+	u32 min_io_sectors;
+
+	rbuf[1] = 0xb0;
+	rbuf[3] = 0x3c;		/* required VPD size with unmap support */
+
+	/*
+	 * Optimal transfer length granularity.
+	 *
+	 * This is always one physical block, but for disks with a smaller
+	 * logical than physical sector size we need to figure out what the
+	 * latter is.
+	 */
+	if (ata_id_has_large_logical_sectors(args->id))
+		min_io_sectors = ata_id_logical_per_physical_sectors(args->id);
+	else
+		min_io_sectors = 1;
+	put_unaligned_be16(min_io_sectors, &rbuf[6]);
+
+	/*
+	 * Optimal unmap granularity.
+	 *
+	 * The ATA spec doesn't even know about a granularity or alignment
+	 * for the TRIM command.  We can leave away most of the unmap related
+	 * VPD page entries, but we have specifify a granularity to signal
+	 * that we support some form of unmap - in thise case via WRITE SAME
+	 * with the unmap bit set.
+	 */
+	if (ata_id_has_trim(args->id)) {
+		put_unaligned_be32(65535 * 512 / 8, &rbuf[20]);
+		put_unaligned_be32(1, &rbuf[28]);
+	}
+
 	return 0;
 }
 
@@ -2388,6 +2417,13 @@ static unsigned int ata_scsiop_read_cap(struct ata_scsi_args *args, u8 *rbuf)
 		rbuf[13] = log_per_phys;
 		rbuf[14] = (lowest_aligned >> 8) & 0x3f;
 		rbuf[15] = lowest_aligned;
+
+		if (ata_id_has_trim(args->id)) {
+			rbuf[14] |= 0x80; /* TPE */
+
+			if (ata_id_has_zero_after_trim(args->id))
+				rbuf[14] |= 0x40; /* TPRZ */
+		}
 	}
 
 	return 0;
@@ -2511,11 +2547,8 @@ static void atapi_qc_complete(struct ata_queued_cmd *qc)
 		 *
 		 * If door lock fails, always clear sdev->locked to
 		 * avoid this infinite loop.
-		 *
-		 * This may happen before SCSI scan is complete.  Make
-		 * sure qc->dev->sdev isn't NULL before dereferencing.
 		 */
-		if (qc->cdb[0] == ALLOW_MEDIUM_REMOVAL && qc->dev->sdev)
+		if (qc->cdb[0] == ALLOW_MEDIUM_REMOVAL)
 			qc->dev->sdev->locked = 0;
 
 		qc->scsicmd->result = SAM_STAT_CHECK_CONDITION;
@@ -2913,6 +2946,58 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 	return 1;
 }
 
+static unsigned int ata_scsi_write_same_xlat(struct ata_queued_cmd *qc)
+{
+	struct ata_taskfile *tf = &qc->tf;
+	struct scsi_cmnd *scmd = qc->scsicmd;
+	struct ata_device *dev = qc->dev;
+	const u8 *cdb = scmd->cmnd;
+	u64 block;
+	u32 n_block;
+	u32 size;
+	void *buf;
+
+	/* we may not issue DMA commands if no DMA mode is set */
+	if (unlikely(!dev->dma_mode))
+		goto invalid_fld;
+
+	if (unlikely(scmd->cmd_len < 16))
+		goto invalid_fld;
+	scsi_16_lba_len(cdb, &block, &n_block);
+
+	/* for now we only support WRITE SAME with the unmap bit set */
+	if (unlikely(!(cdb[1] & 0x8)))
+		goto invalid_fld;
+
+	/*
+	 * WRITE SAME always has a sector sized buffer as payload, this
+	 * should never be a multiple entry S/G list.
+	 */
+	if (!scsi_sg_count(scmd))
+		goto invalid_fld;
+
+	buf = page_address(sg_page(scsi_sglist(scmd)));
+	size = ata_set_lba_range_entries(buf, 512, block, n_block);
+
+	tf->protocol = ATA_PROT_DMA;
+	tf->hob_feature = 0;
+	tf->feature = ATA_DSM_TRIM;
+	tf->hob_nsect = (size / 512) >> 8;
+	tf->nsect = size / 512;
+	tf->command = ATA_CMD_DSM;
+	tf->flags |= ATA_TFLAG_ISADDR | ATA_TFLAG_DEVICE | ATA_TFLAG_LBA48 |
+		     ATA_TFLAG_WRITE;
+
+	ata_qc_set_pc_nbytes(qc);
+
+	return 0;
+
+ invalid_fld:
+	ata_scsi_set_sense(scmd, ILLEGAL_REQUEST, 0x24, 0x00);
+	/* "Invalid field in cdb" */
+	return 1;
+}
+
 /**
  *	ata_get_xlat_func - check if SCSI to ATA translation is possible
  *	@dev: ATA device
@@ -2936,6 +3021,9 @@ static inline ata_xlat_func_t ata_get_xlat_func(struct ata_device *dev, u8 cmd)
 	case WRITE_10:
 	case WRITE_16:
 		return ata_scsi_rw_xlat;
+
+	case WRITE_SAME_16:
+		return ata_scsi_write_same_xlat;
 
 	case SYNCHRONIZE_CACHE:
 		if (ata_try_flush_cache(dev))
@@ -3125,6 +3213,9 @@ void ata_scsi_simulate(struct ata_device *dev, struct scsi_cmnd *cmd,
 			break;
 		case 0x89:
 			ata_scsi_rbuf_fill(&args, ata_scsiop_inq_89);
+			break;
+		case 0xb0:
+			ata_scsi_rbuf_fill(&args, ata_scsiop_inq_b0);
 			break;
 		case 0xb1:
 			ata_scsi_rbuf_fill(&args, ata_scsiop_inq_b1);

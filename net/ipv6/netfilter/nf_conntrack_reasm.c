@@ -84,7 +84,6 @@ struct ctl_table nf_ct_ipv6_sysctl_table[] = {
 		.proc_handler	= proc_dointvec_jiffies,
 	},
 	{
-		.ctl_name	= NET_NF_CONNTRACK_FRAG6_LOW_THRESH,
 		.procname	= "nf_conntrack_frag6_low_thresh",
 		.data		= &nf_init_frags.low_thresh,
 		.maxlen		= sizeof(unsigned int),
@@ -92,14 +91,13 @@ struct ctl_table nf_ct_ipv6_sysctl_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
-		.ctl_name	= NET_NF_CONNTRACK_FRAG6_HIGH_THRESH,
 		.procname	= "nf_conntrack_frag6_high_thresh",
 		.data		= &nf_init_frags.high_thresh,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 #endif
 
@@ -474,7 +472,7 @@ nf_ct_frag6_reasm(struct nf_ct_frag6_queue *fq, struct net_device *dev)
 
 	/* all original skbs are linked into the NFCT_FRAG6_CB(head).orig */
 	fp = skb_shinfo(head)->frag_list;
-	if (fp && NFCT_FRAG6_CB(fp)->orig == NULL)
+	if (NFCT_FRAG6_CB(fp)->orig == NULL)
 		/* at above code, head skb is divided into two skbs. */
 		fp = fp->next;
 
@@ -599,6 +597,12 @@ struct sk_buff *nf_ct_frag6_gather(struct sk_buff *skb, u32 user)
 	skb_set_transport_header(clone, fhoff);
 	hdr = ipv6_hdr(clone);
 	fhdr = (struct frag_hdr *)skb_transport_header(clone);
+
+	if (!(fhdr->frag_off & htons(0xFFF9))) {
+		pr_debug("Invalid fragment offset\n");
+		/* It is not a fragmented frame */
+		goto ret_orig;
+	}
 
 	if (atomic_read(&nf_init_frags.mem) > nf_init_frags.high_thresh)
 		nf_ct_frag6_evictor();

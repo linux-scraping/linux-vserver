@@ -105,7 +105,6 @@ void bdi_start_writeback(struct backing_dev_info *bdi, struct super_block *sb,
 				long nr_pages);
 int bdi_writeback_task(struct bdi_writeback *wb);
 int bdi_has_dirty_io(struct backing_dev_info *bdi);
-void bdi_arm_supers_timer(void);
 
 extern spinlock_t bdi_lock;
 extern struct list_head bdi_list;
@@ -330,6 +329,19 @@ static inline int bdi_sched_wait(void *word)
 {
 	schedule();
 	return 0;
+}
+
+static inline void blk_run_backing_dev(struct backing_dev_info *bdi,
+				       struct page *page)
+{
+	if (bdi && bdi->unplug_io_fn)
+		bdi->unplug_io_fn(bdi, page);
+}
+
+static inline void blk_run_address_space(struct address_space *mapping)
+{
+	if (mapping)
+		blk_run_backing_dev(mapping->backing_dev_info, NULL);
 }
 
 #endif		/* _LINUX_BACKING_DEV_H */

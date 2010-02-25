@@ -35,7 +35,7 @@
 
 #include <asm/mach-types.h>
 #include <mach/hardware.h>
-#include <mach/mux.h>
+#include <plat/mux.h>
 
 #include "musb_core.h"
 #include "omap2430.h"
@@ -309,14 +309,13 @@ static int musb_platform_resume(struct musb *musb)
 
 int musb_platform_exit(struct musb *musb)
 {
-	del_timer_sync(&musb_idle_timer);
 
 	omap_vbus_power(musb, 0 /*off*/, 1);
 
 	musb_platform_suspend(musb);
 
 	clk_put(musb->clock);
-	musb->clock = 0;
+	musb->clock = NULL;
 
 	return 0;
 }

@@ -56,12 +56,6 @@ SendTxCommandPacket(
 
 	//Get TCB and local buffer from common pool. (It is shared by CmdQ, MgntQ, and USB coalesce DataQ)
 	skb  = dev_alloc_skb(USB_HWDESC_HEADER_LEN + DataLen + 4);
-	if (skb == NULL) {
-		RT_TRACE(COMP_ERR, "(%s): unable to alloc skb buffer\n",
-								__func__);
-		rtStatus = false;
-		return rtStatus;
-	}
 	memcpy((unsigned char *)(skb->cb),&dev,sizeof(dev));
 	tcb_desc = (cb_desc*)(skb->cb + MAX_DEV_ADDR_SIZE);
 	tcb_desc->queue_index = TXCMD_QUEUE;
@@ -703,7 +697,7 @@ cmpk_message_handle_rx(
 
 			default:
 
-			        RT_TRACE(COMP_ERR, "---->cmpk_message_handle_rx():unknow CMD Element\n");
+			        RT_TRACE(COMP_ERR, "---->cmpk_message_handle_rx():unknown CMD Element\n");
 				return 1;	/* This is a command packet. */
 		}
 		// 2007/01/22 MH Display received rx command packet info.

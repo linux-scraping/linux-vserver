@@ -140,14 +140,17 @@ static struct proto llc_proto = {
 
 /**
  *	llc_ui_create - alloc and init a new llc_ui socket
+ *	@net: network namespace (must be default network)
  *	@sock: Socket to initialize and attach allocated sk to.
  *	@protocol: Unused.
+ *	@kern: on behalf of kernel or userspace
  *
  *	Allocate and initialize a new llc_ui socket, validate the user wants a
  *	socket type we have available.
  *	Returns 0 upon success, negative upon failure.
  */
-static int llc_ui_create(struct net *net, struct socket *sock, int protocol)
+static int llc_ui_create(struct net *net, struct socket *sock, int protocol,
+			 int kern)
 {
 	struct sock *sk;
 	int rc = -ESOCKTNOSUPPORT;
@@ -155,7 +158,7 @@ static int llc_ui_create(struct net *net, struct socket *sock, int protocol)
 	if (!capable(CAP_NET_RAW))
 		return -EPERM;
 
-	if (net != &init_net)
+	if (!net_eq(net, &init_net))
 		return -EAFNOSUPPORT;
 
 	if (likely(sock->type == SOCK_DGRAM || sock->type == SOCK_STREAM)) {
@@ -669,7 +672,7 @@ static int llc_ui_recvmsg(struct kiocb *iocb, struct socket *sock,
 	struct llc_sock *llc = llc_sk(sk);
 	size_t copied = 0;
 	u32 peek_seq = 0;
-	u32 *seq, skb_len;
+	u32 *seq;
 	unsigned long used;
 	int target;	/* Read at least this many bytes */
 	long timeo;
@@ -767,7 +770,6 @@ static int llc_ui_recvmsg(struct kiocb *iocb, struct socket *sock,
 		}
 		continue;
 	found_ok_skb:
-		skb_len = skb->len;
 		/* Ok so how much can we use? */
 		used = skb->len - offset;
 		if (len < used)
@@ -798,7 +800,7 @@ static int llc_ui_recvmsg(struct kiocb *iocb, struct socket *sock,
 			goto copy_uaddr;
 
 		/* Partial read */
-		if (used + offset < skb_len)
+		if (used + offset < skb->len)
 			continue;
 	} while (len > 0);
 
@@ -913,13 +915,14 @@ static int llc_ui_getname(struct socket *sock, struct sockaddr *uaddr,
 	struct sockaddr_llc sllc;
 	struct sock *sk = sock->sk;
 	struct llc_sock *llc = llc_sk(sk);
-	int rc = -EBADF;
+	int rc = 0;
 
 	memset(&sllc, 0, sizeof(sllc));
 	lock_sock(sk);
 	if (sock_flag(sk, SOCK_ZAPPED))
 		goto out;
 	*uaddrlen = sizeof(sllc);
+	memset(uaddr, 0, *uaddrlen);
 	if (peer) {
 		rc = -ENOTCONN;
 		if (sk->sk_state != TCP_ESTABLISHED)
@@ -977,8 +980,7 @@ static int llc_ui_setsockopt(struct socket *sock, int level, int optname,
 {
 	struct sock *sk = sock->sk;
 	struct llc_sock *llc = llc_sk(sk);
-	unsigned int opt;
-	int rc = -EINVAL;
+	int rc = -EINVAL, opt;
 
 	lock_sock(sk);
 	if (unlikely(level != SOL_LLC || optlen != sizeof(int)))
@@ -1093,7 +1095,7 @@ out:
 	return rc;
 }
 
-static struct net_proto_family llc_ui_family_ops = {
+static const struct net_proto_family llc_ui_family_ops = {
 	.family = PF_LLC,
 	.create = llc_ui_create,
 	.owner	= THIS_MODULE,

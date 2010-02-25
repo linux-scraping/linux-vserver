@@ -101,6 +101,7 @@ struct menu_device {
 
 	unsigned int	expected_us;
 	u64		predicted_us;
+	unsigned int	measured_us;
 	unsigned int	exit_us;
 	unsigned int	bucket;
 	u64		correction_factor[BUCKETS];
@@ -185,24 +186,22 @@ static int menu_select(struct cpuidle_device *dev)
 	int latency_req = pm_qos_requirement(PM_QOS_CPU_DMA_LATENCY);
 	int i;
 	int multiplier;
-	struct timespec t;
+
+	data->last_state_idx = 0;
+	data->exit_us = 0;
 
 	if (data->needs_update) {
 		menu_update(dev);
 		data->needs_update = 0;
 	}
 
-	data->last_state_idx = 0;
-	data->exit_us = 0;
-
 	/* Special case when user has set very strict latency requirement */
 	if (unlikely(latency_req == 0))
 		return 0;
 
 	/* determine the expected residency time, round up */
-	t = ktime_to_timespec(tick_nohz_get_sleep_length());
 	data->expected_us =
-		t.tv_sec * USEC_PER_SEC + t.tv_nsec / NSEC_PER_USEC;
+	    DIV_ROUND_UP((u32)ktime_to_ns(tick_nohz_get_sleep_length()), 1000);
 
 
 	data->bucket = which_bucket(data->expected_us);
@@ -295,7 +294,7 @@ static void menu_update(struct cpuidle_device *dev)
 	new_factor = data->correction_factor[data->bucket]
 			* (DECAY - 1) / DECAY;
 
-	if (data->expected_us > 0 && measured_us < MAX_INTERESTING)
+	if (data->expected_us > 0 && data->measured_us < MAX_INTERESTING)
 		new_factor += RESOLUTION * measured_us / data->expected_us;
 	else
 		/*

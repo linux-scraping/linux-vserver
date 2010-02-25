@@ -415,7 +415,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name		= "NTSC-M",
 		.clock		= 108000,
-		.refresh	= 59940,
+		.refresh	= 29970,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 		/* 525 Lines, 60 Fields, 15.734KHz line, Sub-Carrier 3.580MHz */
@@ -458,7 +458,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name		= "NTSC-443",
 		.clock		= 108000,
-		.refresh	= 59940,
+		.refresh	= 29970,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 		/* 525 Lines, 60 Fields, 15.734KHz line, Sub-Carrier 4.43MHz */
@@ -500,7 +500,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name		= "NTSC-J",
 		.clock		= 108000,
-		.refresh	= 59940,
+		.refresh	= 29970,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 
@@ -543,7 +543,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name		= "PAL-M",
 		.clock		= 108000,
-		.refresh	= 59940,
+		.refresh	= 29970,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 
@@ -587,7 +587,7 @@ static const struct tv_mode tv_modes[] = {
 		/* 625 Lines, 50 Fields, 15.625KHz line, Sub-Carrier 4.434MHz */
 		.name	    = "PAL-N",
 		.clock		= 108000,
-		.refresh	= 50000,
+		.refresh	= 25000,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 
@@ -632,7 +632,7 @@ static const struct tv_mode tv_modes[] = {
 		/* 625 Lines, 50 Fields, 15.625KHz line, Sub-Carrier 4.434MHz */
 		.name	    = "PAL",
 		.clock		= 108000,
-		.refresh	= 50000,
+		.refresh	= 25000,
 		.oversample	= TV_OVERSAMPLE_8X,
 		.component_only = 0,
 
@@ -819,7 +819,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name       = "1080i@50Hz",
 		.clock		= 148800,
-		.refresh	= 50000,
+		.refresh	= 25000,
 		.oversample     = TV_OVERSAMPLE_2X,
 		.component_only = 1,
 
@@ -845,7 +845,7 @@ static const struct tv_mode tv_modes[] = {
 	{
 		.name       = "1080i@60Hz",
 		.clock		= 148800,
-		.refresh	= 60000,
+		.refresh	= 30000,
 		.oversample     = TV_OVERSAMPLE_2X,
 		.component_only = 1,
 
@@ -1413,16 +1413,16 @@ intel_tv_detect_type (struct drm_crtc *crtc, struct intel_output *intel_output)
 	 *  0 0 0 Component
 	 */
 	if ((tv_dac & TVDAC_SENSE_MASK) == (TVDAC_B_SENSE | TVDAC_C_SENSE)) {
-		DRM_DEBUG("Detected Composite TV connection\n");
+		DRM_DEBUG_KMS("Detected Composite TV connection\n");
 		type = DRM_MODE_CONNECTOR_Composite;
 	} else if ((tv_dac & (TVDAC_A_SENSE|TVDAC_B_SENSE)) == TVDAC_A_SENSE) {
-		DRM_DEBUG("Detected S-Video TV connection\n");
+		DRM_DEBUG_KMS("Detected S-Video TV connection\n");
 		type = DRM_MODE_CONNECTOR_SVIDEO;
 	} else if ((tv_dac & TVDAC_SENSE_MASK) == 0) {
-		DRM_DEBUG("Detected Component TV connection\n");
+		DRM_DEBUG_KMS("Detected Component TV connection\n");
 		type = DRM_MODE_CONNECTOR_Component;
 	} else {
-		DRM_DEBUG("No TV connection detected\n");
+		DRM_DEBUG_KMS("No TV connection detected\n");
 		type = -1;
 	}
 
@@ -1699,6 +1699,41 @@ static const struct drm_encoder_funcs intel_tv_enc_funcs = {
 	.destroy = intel_tv_enc_destroy,
 };
 
+/*
+ * Enumerate the child dev array parsed from VBT to check whether
+ * the integrated TV is present.
+ * If it is present, return 1.
+ * If it is not present, return false.
+ * If no child dev is parsed from VBT, it assumes that the TV is present.
+ */
+static int tv_is_present_in_vbt(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct child_device_config *p_child;
+	int i, ret;
+
+	if (!dev_priv->child_dev_num)
+		return 1;
+
+	ret = 0;
+	for (i = 0; i < dev_priv->child_dev_num; i++) {
+		p_child = dev_priv->child_dev + i;
+		/*
+		 * If the device type is not TV, continue.
+		 */
+		if (p_child->device_type != DEVICE_TYPE_INT_TV &&
+			p_child->device_type != DEVICE_TYPE_TV)
+			continue;
+		/* Only when the addin_offset is non-zero, it is regarded
+		 * as present.
+		 */
+		if (p_child->addin_offset) {
+			ret = 1;
+			break;
+		}
+	}
+	return ret;
+}
 
 void
 intel_tv_init(struct drm_device *dev)
@@ -1714,6 +1749,10 @@ intel_tv_init(struct drm_device *dev)
 	if ((I915_READ(TV_CTL) & TV_FUSE_STATE_MASK) == TV_FUSE_STATE_DISABLED)
 		return;
 
+	if (!tv_is_present_in_vbt(dev)) {
+		DRM_DEBUG_KMS("Integrated TV is not present.\n");
+		return;
+	}
 	/* Even if we have an encoder we may not have a connector */
 	if (!dev_priv->int_tv_support)
 		return;

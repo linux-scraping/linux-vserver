@@ -308,35 +308,37 @@ static int find_resource(struct resource *root, struct resource *new,
 			 void *alignf_data)
 {
 	struct resource *this = root->child;
+	struct resource tmp = *new;
 
-	new->start = root->start;
+	tmp.start = root->start;
 	/*
 	 * Skip past an allocated resource that starts at 0, since the assignment
-	 * of this->start - 1 to new->end below would cause an underflow.
+	 * of this->start - 1 to tmp->end below would cause an underflow.
 	 */
 	if (this && this->start == 0) {
-		new->start = this->end + 1;
+		tmp.start = this->end + 1;
 		this = this->sibling;
 	}
 	for(;;) {
 		if (this)
-			new->end = this->start - 1;
+			tmp.end = this->start - 1;
 		else
-			new->end = root->end;
-		if (new->start < min)
-			new->start = min;
-		if (new->end > max)
-			new->end = max;
-		new->start = ALIGN(new->start, align);
+			tmp.end = root->end;
+		if (tmp.start < min)
+			tmp.start = min;
+		if (tmp.end > max)
+			tmp.end = max;
+		tmp.start = ALIGN(tmp.start, align);
 		if (alignf)
-			alignf(alignf_data, new, size, align);
-		if (new->start < new->end && new->end - new->start >= size - 1) {
-			new->end = new->start + size - 1;
+			alignf(alignf_data, &tmp, size, align);
+		if (tmp.start < tmp.end && tmp.end - tmp.start >= size - 1) {
+			new->start = tmp.start;
+			new->end = tmp.start + size - 1;
 			return 0;
 		}
 		if (!this)
 			break;
-		new->start = this->end + 1;
+		tmp.start = this->end + 1;
 		this = this->sibling;
 	}
 	return -EBUSY;
@@ -533,7 +535,6 @@ static void __init __reserve_region_with_split(struct resource *root,
 	struct resource *parent = root;
 	struct resource *conflict;
 	struct resource *res = kzalloc(sizeof(*res), GFP_ATOMIC);
-	struct resource *next_res = NULL;
 
 	if (!res)
 		return;
@@ -543,46 +544,21 @@ static void __init __reserve_region_with_split(struct resource *root,
 	res->end = end;
 	res->flags = IORESOURCE_BUSY;
 
-	while (1) {
+	conflict = __request_resource(parent, res);
+	if (!conflict)
+		return;
 
-		conflict = __request_resource(parent, res);
-		if (!conflict) {
-			if (!next_res)
-				break;
-			res = next_res;
-			next_res = NULL;
-			continue;
-		}
+	/* failed, split and try again */
+	kfree(res);
 
-		/* conflict covered whole area */
-		if (conflict->start <= res->start &&
-				conflict->end >= res->end) {
-			kfree(res);
-			WARN_ON(next_res);
-			break;
-		}
+	/* conflict covered whole area */
+	if (conflict->start <= start && conflict->end >= end)
+		return;
 
-		/* failed, split and try again */
-		if (conflict->start > res->start) {
-			end = res->end;
-			res->end = conflict->start - 1;
-			if (conflict->end < end) {
-				next_res = kzalloc(sizeof(*next_res),
-						GFP_ATOMIC);
-				if (!next_res) {
-					kfree(res);
-					break;
-				}
-				next_res->name = name;
-				next_res->start = conflict->end + 1;
-				next_res->end = end;
-				next_res->flags = IORESOURCE_BUSY;
-			}
-		} else {
-			res->start = conflict->end + 1;
-		}
-	}
-
+	if (conflict->start > start)
+		__reserve_region_with_split(root, start, conflict->start-1, name);
+	if (conflict->end < end)
+		__reserve_region_with_split(root, conflict->end+1, end, name);
 }
 
 void __init reserve_region_with_split(struct resource *root,

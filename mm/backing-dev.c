@@ -41,6 +41,7 @@ static struct timer_list sync_supers_timer;
 
 static int bdi_sync_supers(void *);
 static void sync_supers_timer_fn(unsigned long);
+static void arm_supers_timer(void);
 
 static void bdi_add_default_flusher_task(struct backing_dev_info *bdi);
 
@@ -241,7 +242,7 @@ static int __init default_bdi_init(void)
 
 	init_timer(&sync_supers_timer);
 	setup_timer(&sync_supers_timer, sync_supers_timer_fn, 0);
-	bdi_arm_supers_timer();
+	arm_supers_timer();
 
 	err = bdi_init(&default_backing_dev_info);
 	if (!err)
@@ -363,12 +364,9 @@ static int bdi_sync_supers(void *unused)
 	return 0;
 }
 
-void bdi_arm_supers_timer(void)
+static void arm_supers_timer(void)
 {
 	unsigned long next;
-
-	if (!dirty_writeback_interval)
-		return;
 
 	next = msecs_to_jiffies(dirty_writeback_interval * 10) + jiffies;
 	mod_timer(&sync_supers_timer, round_jiffies_up(next));
@@ -377,7 +375,7 @@ void bdi_arm_supers_timer(void)
 static void sync_supers_timer_fn(unsigned long unused)
 {
 	wake_up_process(sync_supers_tsk);
-	bdi_arm_supers_timer();
+	arm_supers_timer();
 }
 
 static int bdi_forker_task(void *ptr)
@@ -420,10 +418,7 @@ static int bdi_forker_task(void *ptr)
 
 			spin_unlock_bh(&bdi_lock);
 			wait = msecs_to_jiffies(dirty_writeback_interval * 10);
-			if (wait)
-				schedule_timeout(wait);
-			else
-				schedule();
+			schedule_timeout(wait);
 			try_to_freeze();
 			continue;
 		}
@@ -614,7 +609,7 @@ static void bdi_wb_shutdown(struct backing_dev_info *bdi)
 	 * it would never exet if it is currently stuck in the refrigerator.
 	 */
 	list_for_each_entry(wb, &bdi->wb_list, list) {
-		wb->task->flags &= ~PF_FROZEN;
+		thaw_process(wb->task);
 		kthread_stop(wb->task);
 	}
 }

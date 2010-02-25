@@ -33,8 +33,7 @@
 
 struct sock;
 
-struct inet_skb_parm
-{
+struct inet_skb_parm {
 	struct ip_options	opt;		/* Compiled IP options		*/
 	unsigned char		flags;
 
@@ -50,18 +49,16 @@ static inline unsigned int ip_hdrlen(const struct sk_buff *skb)
 	return ip_hdr(skb)->ihl * 4;
 }
 
-struct ipcm_cookie
-{
+struct ipcm_cookie {
 	__be32			addr;
 	int			oif;
-	struct ip_options_rcu	*opt;
+	struct ip_options	*opt;
 	union skb_shared_tx	shtx;
 };
 
 #define IPCB(skb) ((struct inet_skb_parm*)((skb)->cb))
 
-struct ip_ra_chain
-{
+struct ip_ra_chain {
 	struct ip_ra_chain	*next;
 	struct sock		*sk;
 	void			(*destructor)(struct sock *);
@@ -92,7 +89,7 @@ extern int		igmp_mc_proc_init(void);
 
 extern int		ip_build_and_send_pkt(struct sk_buff *skb, struct sock *sk,
 					      __be32 saddr, __be32 daddr,
-					      struct ip_options_rcu *opt);
+					      struct ip_options *opt);
 extern int		ip_rcv(struct sk_buff *skb, struct net_device *dev,
 			       struct packet_type *pt, struct net_device *orig_dev);
 extern int		ip_local_deliver(struct sk_buff *skb);
@@ -159,8 +156,7 @@ static inline __u8 ip_reply_arg_flowi_flags(const struct ip_reply_arg *arg)
 void ip_send_reply(struct sock *sk, struct sk_buff *skb, struct ip_reply_arg *arg,
 		   unsigned int len); 
 
-struct ipv4_config
-{
+struct ipv4_config {
 	int	log_martians;
 	int	no_pmtu_disc;
 };
@@ -240,8 +236,8 @@ static inline void ip_select_ident(struct iphdr *iph, struct dst_entry *dst, str
 		 * does not change, they drop every other packet in
 		 * a TCP stream using header compression.
 		 */
-		iph->id = (sk && inet_sk(sk)->daddr) ?
-					htons(inet_sk(sk)->id++) : 0;
+		iph->id = (sk && inet_sk(sk)->inet_daddr) ?
+					htons(inet_sk(sk)->inet_id++) : 0;
 	} else
 		__ip_select_ident(iph, dst, 0);
 }
@@ -249,9 +245,9 @@ static inline void ip_select_ident(struct iphdr *iph, struct dst_entry *dst, str
 static inline void ip_select_ident_more(struct iphdr *iph, struct dst_entry *dst, struct sock *sk, int more)
 {
 	if (iph->frag_off & htons(IP_DF)) {
-		if (sk && inet_sk(sk)->daddr) {
-			iph->id = htons(inet_sk(sk)->id);
-			inet_sk(sk)->id += 1 + more;
+		if (sk && inet_sk(sk)->inet_daddr) {
+			iph->id = htons(inet_sk(sk)->inet_id);
+			inet_sk(sk)->inet_id += 1 + more;
 		} else
 			iph->id = 0;
 	} else
@@ -317,7 +313,7 @@ static inline void ip_ib_mc_map(__be32 naddr, const unsigned char *broadcast, ch
 
 static __inline__ void inet_reset_saddr(struct sock *sk)
 {
-	inet_sk(sk)->rcv_saddr = inet_sk(sk)->saddr = 0;
+	inet_sk(sk)->inet_rcv_saddr = inet_sk(sk)->inet_saddr = 0;
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	if (sk->sk_family == PF_INET6) {
 		struct ipv6_pinfo *np = inet6_sk(sk);
@@ -330,14 +326,29 @@ static __inline__ void inet_reset_saddr(struct sock *sk)
 
 #endif
 
+static inline int sk_mc_loop(struct sock *sk)
+{
+	if (!sk)
+		return 1;
+	switch (sk->sk_family) {
+	case AF_INET:
+		return inet_sk(sk)->mc_loop;
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+	case AF_INET6:
+		return inet6_sk(sk)->mc_loop;
+#endif
+	}
+	WARN_ON(1);
+	return 1;
+}
+
 extern int	ip_call_ra_chain(struct sk_buff *skb);
 
 /*
  *	Functions provided by ip_fragment.c
  */
 
-enum ip_defrag_users
-{
+enum ip_defrag_users {
 	IP_DEFRAG_LOCAL_DELIVER,
 	IP_DEFRAG_CALL_RA_CHAIN,
 	IP_DEFRAG_CONNTRACK_IN,
@@ -362,15 +373,14 @@ extern int ip_forward(struct sk_buff *skb);
  *	Functions provided by ip_options.c
  */
  
-extern void ip_options_build(struct sk_buff *skb, struct ip_options *opt,
-			     __be32 daddr, struct rtable *rt, int is_frag);
+extern void ip_options_build(struct sk_buff *skb, struct ip_options *opt, __be32 daddr, struct rtable *rt, int is_frag);
 extern int ip_options_echo(struct ip_options *dopt, struct sk_buff *skb);
 extern void ip_options_fragment(struct sk_buff *skb);
 extern int ip_options_compile(struct net *net,
 			      struct ip_options *opt, struct sk_buff *skb);
-extern int ip_options_get(struct net *net, struct ip_options_rcu **optp,
+extern int ip_options_get(struct net *net, struct ip_options **optp,
 			  unsigned char *data, int optlen);
-extern int ip_options_get_from_user(struct net *net, struct ip_options_rcu **optp,
+extern int ip_options_get_from_user(struct net *net, struct ip_options **optp,
 				    unsigned char __user *data, int optlen);
 extern void ip_options_undo(struct ip_options * opt);
 extern void ip_forward_options(struct sk_buff *skb);
@@ -391,7 +401,7 @@ extern int	compat_ip_getsockopt(struct sock *sk, int level,
 			int optname, char __user *optval, int __user *optlen);
 extern int	ip_ra_control(struct sock *sk, unsigned char on, void (*destructor)(struct sock *));
 
-extern int 	ip_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len);
+extern int 	ip_recv_error(struct sock *sk, struct msghdr *msg, int len);
 extern void	ip_icmp_error(struct sock *sk, struct sk_buff *skb, int err, 
 			      __be16 port, u32 info, u8 *payload);
 extern void	ip_local_error(struct sock *sk, int err, __be32 daddr, __be16 dport,

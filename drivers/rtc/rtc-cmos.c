@@ -36,7 +36,6 @@
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
 #include <linux/log2.h>
-#include <linux/pm.h>
 
 /* this is for "generic access to PC-style RTC" using CMOS_READ/CMOS_WRITE */
 #include <asm-generic/rtc.h>
@@ -421,49 +420,43 @@ static int cmos_irq_set_state(struct device *dev, int enabled)
 	return 0;
 }
 
-#if defined(CONFIG_RTC_INTF_DEV) || defined(CONFIG_RTC_INTF_DEV_MODULE)
-
-static int
-cmos_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
+static int cmos_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
 	struct cmos_rtc	*cmos = dev_get_drvdata(dev);
 	unsigned long	flags;
 
-	switch (cmd) {
-	case RTC_AIE_OFF:
-	case RTC_AIE_ON:
-	case RTC_UIE_OFF:
-	case RTC_UIE_ON:
-		if (!is_valid_irq(cmos->irq))
-			return -EINVAL;
-		break;
-	/* PIE ON/OFF is handled by cmos_irq_set_state() */
-	default:
-		return -ENOIOCTLCMD;
-	}
+	if (!is_valid_irq(cmos->irq))
+		return -EINVAL;
 
 	spin_lock_irqsave(&rtc_lock, flags);
-	switch (cmd) {
-	case RTC_AIE_OFF:	/* alarm off */
-		cmos_irq_disable(cmos, RTC_AIE);
-		break;
-	case RTC_AIE_ON:	/* alarm on */
+
+	if (enabled)
 		cmos_irq_enable(cmos, RTC_AIE);
-		break;
-	case RTC_UIE_OFF:	/* update off */
-		cmos_irq_disable(cmos, RTC_UIE);
-		break;
-	case RTC_UIE_ON:	/* update on */
-		cmos_irq_enable(cmos, RTC_UIE);
-		break;
-	}
+	else
+		cmos_irq_disable(cmos, RTC_AIE);
+
 	spin_unlock_irqrestore(&rtc_lock, flags);
 	return 0;
 }
 
-#else
-#define	cmos_rtc_ioctl	NULL
-#endif
+static int cmos_update_irq_enable(struct device *dev, unsigned int enabled)
+{
+	struct cmos_rtc	*cmos = dev_get_drvdata(dev);
+	unsigned long	flags;
+
+	if (!is_valid_irq(cmos->irq))
+		return -EINVAL;
+
+	spin_lock_irqsave(&rtc_lock, flags);
+
+	if (enabled)
+		cmos_irq_enable(cmos, RTC_UIE);
+	else
+		cmos_irq_disable(cmos, RTC_UIE);
+
+	spin_unlock_irqrestore(&rtc_lock, flags);
+	return 0;
+}
 
 #if defined(CONFIG_RTC_INTF_PROC) || defined(CONFIG_RTC_INTF_PROC_MODULE)
 
@@ -504,14 +497,15 @@ static int cmos_procfs(struct device *dev, struct seq_file *seq)
 #endif
 
 static const struct rtc_class_ops cmos_rtc_ops = {
-	.ioctl		= cmos_rtc_ioctl,
-	.read_time	= cmos_read_time,
-	.set_time	= cmos_set_time,
-	.read_alarm	= cmos_read_alarm,
-	.set_alarm	= cmos_set_alarm,
-	.proc		= cmos_procfs,
-	.irq_set_freq	= cmos_irq_set_freq,
-	.irq_set_state	= cmos_irq_set_state,
+	.read_time		= cmos_read_time,
+	.set_time		= cmos_set_time,
+	.read_alarm		= cmos_read_alarm,
+	.set_alarm		= cmos_set_alarm,
+	.proc			= cmos_procfs,
+	.irq_set_freq		= cmos_irq_set_freq,
+	.irq_set_state		= cmos_irq_set_state,
+	.alarm_irq_enable	= cmos_alarm_irq_enable,
+	.update_irq_enable	= cmos_update_irq_enable,
 };
 
 /*----------------------------------------------------------------*/
@@ -692,7 +686,8 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 	 */
 #if	defined(CONFIG_ATARI)
 	address_space = 64;
-#elif defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__sparc__)
+#elif defined(__i386__) || defined(__x86_64__) || defined(__arm__) \
+			|| defined(__sparc__) || defined(__mips__)
 	address_space = 128;
 #else
 #warning Assuming 128 bytes of RTC+NVRAM address space, not 64 bytes.
@@ -724,9 +719,6 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 		}
 	}
 
-	cmos_rtc.dev = dev;
-	dev_set_drvdata(dev, &cmos_rtc);
-
 	cmos_rtc.rtc = rtc_device_register(driver_name, dev,
 				&cmos_rtc_ops, THIS_MODULE);
 	if (IS_ERR(cmos_rtc.rtc)) {
@@ -734,6 +726,8 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 		goto cleanup0;
 	}
 
+	cmos_rtc.dev = dev;
+	dev_set_drvdata(dev, &cmos_rtc);
 	rename_region(ports, dev_name(&cmos_rtc.rtc->dev));
 
 	spin_lock_irq(&rtc_lock);
@@ -856,7 +850,7 @@ static void __exit cmos_do_remove(struct device *dev)
 
 #ifdef	CONFIG_PM
 
-static int cmos_suspend(struct device *dev)
+static int cmos_suspend(struct device *dev, pm_message_t mesg)
 {
 	struct cmos_rtc	*cmos = dev_get_drvdata(dev);
 	unsigned char	tmp;
@@ -873,8 +867,9 @@ static int cmos_suspend(struct device *dev)
 			mask = RTC_IRQMASK;
 		tmp &= ~mask;
 		CMOS_WRITE(tmp, RTC_CONTROL);
-		hpet_mask_rtc_irq_bit(mask);
 
+		/* shut down hpet emulation - we don't need it for alarm */
+		hpet_mask_rtc_irq_bit(RTC_PIE|RTC_AIE|RTC_UIE);
 		cmos_checkintr(cmos, tmp);
 	}
 	spin_unlock_irq(&rtc_lock);
@@ -903,7 +898,7 @@ static int cmos_suspend(struct device *dev)
  */
 static inline int cmos_poweroff(struct device *dev)
 {
-	return cmos_suspend(dev);
+	return cmos_suspend(dev, PMSG_HIBERNATE);
 }
 
 static int cmos_resume(struct device *dev)
@@ -950,9 +945,9 @@ static int cmos_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(cmos_pm_ops, cmos_suspend, cmos_resume);
-
 #else
+#define	cmos_suspend	NULL
+#define	cmos_resume	NULL
 
 static inline int cmos_poweroff(struct device *dev)
 {
@@ -1088,7 +1083,7 @@ static void __exit cmos_pnp_remove(struct pnp_dev *pnp)
 
 static int cmos_pnp_suspend(struct pnp_dev *pnp, pm_message_t mesg)
 {
-	return cmos_suspend(&pnp->dev);
+	return cmos_suspend(&pnp->dev, mesg);
 }
 
 static int cmos_pnp_resume(struct pnp_dev *pnp)
@@ -1168,9 +1163,8 @@ static struct platform_driver cmos_platform_driver = {
 	.shutdown	= cmos_platform_shutdown,
 	.driver = {
 		.name		= (char *) driver_name,
-#ifdef CONFIG_PM
-		.pm		= &cmos_pm_ops,
-#endif
+		.suspend	= cmos_suspend,
+		.resume		= cmos_resume,
 	}
 };
 

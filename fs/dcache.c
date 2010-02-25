@@ -986,6 +986,7 @@ struct dentry *d_alloc_name(struct dentry *parent, const char *name)
 	q.hash = full_name_hash(q.name, q.len);
 	return d_alloc(parent, &q);
 }
+EXPORT_SYMBOL(d_alloc_name);
 
 /* the caller must hold dcache_lock */
 static void __d_instantiate(struct dentry *dentry, struct inode *inode)
@@ -1183,12 +1184,9 @@ struct dentry *d_obtain_alias(struct inode *inode)
 	spin_unlock(&tmp->d_lock);
 
 	spin_unlock(&dcache_lock);
-	security_d_instantiate(tmp, inode);
 	return tmp;
 
  out_iput:
-	if (res && !IS_ERR(res))
-		security_d_instantiate(res, inode);
 	iput(inode);
 	return res;
 }

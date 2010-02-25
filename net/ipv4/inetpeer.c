@@ -19,7 +19,6 @@
 #include <linux/net.h>
 #include <net/ip.h>
 #include <net/inetpeer.h>
-#include <net/secure_seq.h>
 
 /*
  *  Theory of operations.
@@ -67,9 +66,6 @@
  *		v4daddr: unchangeable
  *		ip_id_count: idlock
  */
-
-/* Exported for inet_getid inline function.  */
-DEFINE_SPINLOCK(inet_peer_idlock);
 
 static struct kmem_cache *peer_cachep __read_mostly;
 
@@ -391,7 +387,7 @@ struct inet_peer *inet_getpeer(__be32 daddr, int create)
 	n->v4daddr = daddr;
 	atomic_set(&n->refcnt, 1);
 	atomic_set(&n->rid, 0);
-	n->ip_id_count = secure_ip_id(daddr);
+	atomic_set(&n->ip_id_count, secure_ip_id(daddr));
 	n->tcp_ts_stamp = 0;
 
 	write_lock_bh(&peer_pool_lock);

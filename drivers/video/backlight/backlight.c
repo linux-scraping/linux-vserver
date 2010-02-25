@@ -196,12 +196,12 @@ static int backlight_suspend(struct device *dev, pm_message_t state)
 {
 	struct backlight_device *bd = to_backlight_device(dev);
 
-	mutex_lock(&bd->ops_lock);
-	if (bd->ops && bd->ops->options & BL_CORE_SUSPENDRESUME) {
+	if (bd->ops->options & BL_CORE_SUSPENDRESUME) {
+		mutex_lock(&bd->ops_lock);
 		bd->props.state |= BL_CORE_SUSPENDED;
 		backlight_update_status(bd);
+		mutex_unlock(&bd->ops_lock);
 	}
-	mutex_unlock(&bd->ops_lock);
 
 	return 0;
 }
@@ -210,12 +210,12 @@ static int backlight_resume(struct device *dev)
 {
 	struct backlight_device *bd = to_backlight_device(dev);
 
-	mutex_lock(&bd->ops_lock);
-	if (bd->ops && bd->ops->options & BL_CORE_SUSPENDRESUME) {
+	if (bd->ops->options & BL_CORE_SUSPENDRESUME) {
+		mutex_lock(&bd->ops_lock);
 		bd->props.state &= ~BL_CORE_SUSPENDED;
 		backlight_update_status(bd);
+		mutex_unlock(&bd->ops_lock);
 	}
-	mutex_unlock(&bd->ops_lock);
 
 	return 0;
 }
@@ -269,7 +269,7 @@ EXPORT_SYMBOL(backlight_force_update);
  * ERR_PTR() or a pointer to the newly allocated device.
  */
 struct backlight_device *backlight_device_register(const char *name,
-		struct device *parent, void *devdata, struct backlight_ops *ops)
+		struct device *parent, void *devdata, const struct backlight_ops *ops)
 {
 	struct backlight_device *new_bd;
 	int rc;

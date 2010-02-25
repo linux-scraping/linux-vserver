@@ -312,13 +312,17 @@ struct queue_limits {
 	unsigned int		io_min;
 	unsigned int		io_opt;
 	unsigned int		max_discard_sectors;
+	unsigned int		discard_granularity;
+	unsigned int		discard_alignment;
 
 	unsigned short		logical_block_size;
 	unsigned short		max_hw_segments;
 	unsigned short		max_phys_segments;
 
 	unsigned char		misaligned;
-	unsigned char		cluster;
+	unsigned char		discard_misaligned;
+	unsigned char		no_cluster;
+	signed char		discard_zeroes_data;
 };
 
 struct request_queue
@@ -440,6 +444,7 @@ struct request_queue
 #endif
 };
 
+#define QUEUE_FLAG_CLUSTER	0	/* cluster several segments into 1 */
 #define QUEUE_FLAG_QUEUED	1	/* uses generic tag queueing */
 #define QUEUE_FLAG_STOPPED	2	/* queue is stopped */
 #define	QUEUE_FLAG_SYNCFULL	3	/* read queue has been filled */
@@ -459,6 +464,7 @@ struct request_queue
 #define QUEUE_FLAG_DISCARD     16	/* supports DISCARD */
 
 #define QUEUE_FLAG_DEFAULT	((1 << QUEUE_FLAG_IO_STAT) |		\
+				 (1 << QUEUE_FLAG_CLUSTER) |		\
 				 (1 << QUEUE_FLAG_STACKABLE)	|	\
 				 (1 << QUEUE_FLAG_SAME_COMP))
 
@@ -623,11 +629,6 @@ enum {
 
 #define rq_data_dir(rq)		((rq)->cmd_flags & 1)
 
-static inline unsigned int blk_queue_cluster(struct request_queue *q)
-{
-	return q->limits.cluster;
-}
-
 /*
  * We regard a request as sync, if either a read or a sync write
  */
@@ -750,6 +751,17 @@ struct req_iterator {
 #define rq_iter_last(rq, _iter)					\
 		(_iter.bio->bi_next == NULL && _iter.i == _iter.bio->bi_vcnt-1)
 
+#ifndef ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE
+# error	"You should define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE for your platform"
+#endif
+#if ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE
+extern void rq_flush_dcache_pages(struct request *rq);
+#else
+static inline void rq_flush_dcache_pages(struct request *rq)
+{
+}
+#endif
+
 extern int blk_register_queue(struct gendisk *disk);
 extern void blk_unregister_queue(struct gendisk *disk);
 extern void register_disk(struct gendisk *dev);
@@ -775,9 +787,6 @@ extern void blk_plug_device(struct request_queue *);
 extern void blk_plug_device_unlocked(struct request_queue *);
 extern int blk_remove_plug(struct request_queue *);
 extern void blk_recount_segments(struct request_queue *, struct bio *);
-extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
-extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
-			      unsigned int, void __user *);
 extern int scsi_cmd_ioctl(struct request_queue *, struct gendisk *, fmode_t,
 			  unsigned int, void __user *);
 extern int sg_scsi_ioctl(struct request_queue *, struct gendisk *, fmode_t,
@@ -827,19 +836,6 @@ static inline struct request_queue *bdev_get_queue(struct block_device *bdev)
 	return bdev->bd_disk->queue;
 }
 
-static inline void blk_run_backing_dev(struct backing_dev_info *bdi,
-				       struct page *page)
-{
-	if (bdi && bdi->unplug_io_fn)
-		bdi->unplug_io_fn(bdi, page);
-}
-
-static inline void blk_run_address_space(struct address_space *mapping)
-{
-	if (mapping)
-		blk_run_backing_dev(mapping->backing_dev_info, NULL);
-}
-
 /*
  * blk_rq_pos()			: the current sector
  * blk_rq_bytes()		: bytes left in the entire request
@@ -847,7 +843,6 @@ static inline void blk_run_address_space(struct address_space *mapping)
  * blk_rq_err_bytes()		: bytes left till the next error boundary
  * blk_rq_sectors()		: sectors left in the entire request
  * blk_rq_cur_sectors()		: sectors left in the current segment
- * blk_rq_err_sectors()		: sectors left till the next error boundary
  */
 static inline sector_t blk_rq_pos(const struct request *rq)
 {
@@ -874,11 +869,6 @@ static inline unsigned int blk_rq_sectors(const struct request *rq)
 static inline unsigned int blk_rq_cur_sectors(const struct request *rq)
 {
 	return blk_rq_cur_bytes(rq) >> 9;
-}
-
-static inline unsigned int blk_rq_err_sectors(const struct request *rq)
-{
-	return blk_rq_err_bytes(rq) >> 9;
 }
 
 /*
@@ -936,7 +926,7 @@ extern void blk_queue_max_segment_size(struct request_queue *, unsigned int);
 extern void blk_queue_max_discard_sectors(struct request_queue *q,
 		unsigned int max_discard_sectors);
 extern void blk_queue_logical_block_size(struct request_queue *, unsigned short);
-extern void blk_queue_physical_block_size(struct request_queue *, unsigned int);
+extern void blk_queue_physical_block_size(struct request_queue *, unsigned short);
 extern void blk_queue_alignment_offset(struct request_queue *q,
 				       unsigned int alignment);
 extern void blk_limits_io_min(struct queue_limits *limits, unsigned int min);
@@ -1087,7 +1077,7 @@ static inline unsigned int queue_physical_block_size(struct request_queue *q)
 	return q->limits.physical_block_size;
 }
 
-static inline unsigned int bdev_physical_block_size(struct block_device *bdev)
+static inline int bdev_physical_block_size(struct block_device *bdev)
 {
 	return queue_physical_block_size(bdev_get_queue(bdev));
 }
@@ -1145,6 +1135,37 @@ static inline int bdev_alignment_offset(struct block_device *bdev)
 		return bdev->bd_part->alignment_offset;
 
 	return q->limits.alignment_offset;
+}
+
+static inline int queue_discard_alignment(struct request_queue *q)
+{
+	if (q->limits.discard_misaligned)
+		return -1;
+
+	return q->limits.discard_alignment;
+}
+
+static inline int queue_sector_discard_alignment(struct request_queue *q,
+						 sector_t sector)
+{
+	struct queue_limits *lim = &q->limits;
+	unsigned int alignment = (sector << 9) & (lim->discard_granularity - 1);
+
+	return (lim->discard_granularity + lim->discard_alignment - alignment)
+		& (lim->discard_granularity - 1);
+}
+
+static inline unsigned int queue_discard_zeroes_data(struct request_queue *q)
+{
+	if (q->limits.discard_zeroes_data == 1)
+		return 1;
+
+	return 0;
+}
+
+static inline unsigned int bdev_discard_zeroes_data(struct block_device *bdev)
+{
+	return queue_discard_zeroes_data(bdev_get_queue(bdev));
 }
 
 static inline int queue_dma_alignment(struct request_queue *q)

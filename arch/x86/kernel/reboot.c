@@ -23,7 +23,7 @@
 # include <linux/ctype.h>
 # include <linux/mc146818rtc.h>
 #else
-# include <asm/iommu.h>
+# include <asm/x86_init.h>
 #endif
 
 /*
@@ -461,22 +461,6 @@ static struct dmi_system_id __initdata pci_reboot_dmi_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Macmini3,1"),
 		},
 	},
-	{	/* Handle problems with rebooting on the iMac9,1. */
-		.callback = set_pci_reboot,
-		.ident = "Apple iMac9,1",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "iMac9,1"),
-		},
-	},
-	{	/* Handle problems with rebooting on the Latitude E5420. */
-		.callback = set_pci_reboot,
-		.ident = "Dell Latitude E5420",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E5420"),
-		},
-	},
 	{ }
 };
 
@@ -641,7 +625,7 @@ void native_machine_shutdown(void)
 	/* O.K Now that I'm on the appropriate processor,
 	 * stop all of the others.
 	 */
-	stop_other_cpus();
+	smp_send_stop();
 #endif
 
 	lapic_shutdown();
@@ -655,7 +639,7 @@ void native_machine_shutdown(void)
 #endif
 
 #ifdef CONFIG_X86_64
-	pci_iommu_shutdown();
+	x86_platform.iommu_shutdown();
 #endif
 }
 

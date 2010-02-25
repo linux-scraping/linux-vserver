@@ -42,6 +42,7 @@
 #include <linux/module.h>
 #include <linux/scatterlist.h>
 
+#include <xen/xen.h>
 #include <xen/xenbus.h>
 #include <xen/grant_table.h>
 #include <xen/events.h>
@@ -889,7 +890,7 @@ static void blkfront_connect(struct blkfront_info *info)
 	}
 
 	err = xenbus_gather(XBT_NIL, info->xbdev->otherend,
-			    "feature-barrier", "%d", &info->feature_barrier,
+			    "feature-barrier", "%lu", &info->feature_barrier,
 			    NULL);
 	if (err)
 		info->feature_barrier = 0;
@@ -942,10 +943,10 @@ static void blkfront_closing(struct xenbus_device *dev)
 	/* Flush gnttab callback work. Must be done with no locks held. */
 	flush_scheduled_work();
 
-	del_gendisk(info->gd);
-
 	blk_cleanup_queue(info->rq);
 	info->rq = NULL;
+
+	del_gendisk(info->gd);
 
  out:
 	xenbus_frontend_closed(dev);

@@ -83,8 +83,6 @@ EXPORT_SYMBOL(nf_log_unregister);
 
 int nf_log_bind_pf(u_int8_t pf, const struct nf_logger *logger)
 {
-	if (pf >= ARRAY_SIZE(nf_loggers))
-		return -EINVAL;
 	mutex_lock(&nf_log_mutex);
 	if (__find_logger(pf, logger->name) == NULL) {
 		mutex_unlock(&nf_log_mutex);
@@ -98,8 +96,6 @@ EXPORT_SYMBOL(nf_log_bind_pf);
 
 void nf_log_unbind_pf(u_int8_t pf)
 {
-	if (pf >= ARRAY_SIZE(nf_loggers))
-		return;
 	mutex_lock(&nf_log_mutex);
 	rcu_assign_pointer(nf_loggers[pf], NULL);
 	mutex_unlock(&nf_log_mutex);
@@ -212,9 +208,9 @@ static const struct file_operations nflog_file_ops = {
 
 #ifdef CONFIG_SYSCTL
 static struct ctl_path nf_log_sysctl_path[] = {
-	{ .procname = "net", .ctl_name = CTL_NET, },
-	{ .procname = "netfilter", .ctl_name = NET_NETFILTER, },
-	{ .procname = "nf_log", .ctl_name = CTL_UNNUMBERED, },
+	{ .procname = "net", },
+	{ .procname = "netfilter", },
+	{ .procname = "nf_log", },
 	{ }
 };
 
@@ -269,7 +265,6 @@ static __init int netfilter_log_sysctl_init(void)
 
 	for (i = NFPROTO_UNSPEC; i < NFPROTO_NUMPROTO; i++) {
 		snprintf(nf_log_sysctl_fnames[i-NFPROTO_UNSPEC], 3, "%d", i);
-		nf_log_sysctl_table[i].ctl_name	= CTL_UNNUMBERED;
 		nf_log_sysctl_table[i].procname	=
 			nf_log_sysctl_fnames[i-NFPROTO_UNSPEC];
 		nf_log_sysctl_table[i].data = NULL;

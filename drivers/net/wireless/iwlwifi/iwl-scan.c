@@ -27,7 +27,6 @@
  *****************************************************************************/
 #include <linux/types.h>
 #include <linux/etherdevice.h>
-#include <net/lib80211.h>
 #include <net/mac80211.h>
 
 #include "iwl-eeprom.h"
@@ -112,7 +111,7 @@ EXPORT_SYMBOL(iwl_scan_cancel_timeout);
 static int iwl_send_scan_abort(struct iwl_priv *priv)
 {
 	int ret = 0;
-	struct iwl_rx_packet *res;
+	struct iwl_rx_packet *pkt;
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_SCAN_ABORT_CMD,
 		.flags = CMD_WANT_SKB,
@@ -132,21 +131,20 @@ static int iwl_send_scan_abort(struct iwl_priv *priv)
 		return ret;
 	}
 
-	res = (struct iwl_rx_packet *)cmd.reply_skb->data;
-	if (res->u.status != CAN_ABORT_STATUS) {
+	pkt = (struct iwl_rx_packet *)cmd.reply_page;
+	if (pkt->u.status != CAN_ABORT_STATUS) {
 		/* The scan abort will return 1 for success or
 		 * 2 for "failure".  A failure condition can be
 		 * due to simply not being in an active scan which
 		 * can occur if we send the scan abort before we
 		 * the microcode has notified us that a scan is
 		 * completed. */
-		IWL_DEBUG_INFO(priv, "SCAN_ABORT returned %d.\n", res->u.status);
+		IWL_DEBUG_INFO(priv, "SCAN_ABORT returned %d.\n", pkt->u.status);
 		clear_bit(STATUS_SCAN_ABORTING, &priv->status);
 		clear_bit(STATUS_SCAN_HW, &priv->status);
 	}
 
-	priv->alloc_rxb_skb--;
-	dev_kfree_skb_any(cmd.reply_skb);
+	iwl_free_pages(priv, cmd.reply_page);
 
 	return ret;
 }
@@ -156,7 +154,7 @@ static void iwl_rx_reply_scan(struct iwl_priv *priv,
 			      struct iwl_rx_mem_buffer *rxb)
 {
 #ifdef CONFIG_IWLWIFI_DEBUG
-	struct iwl_rx_packet *pkt = (struct iwl_rx_packet *)rxb->skb->data;
+	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 	struct iwl_scanreq_notification *notif =
 	    (struct iwl_scanreq_notification *)pkt->u.raw;
 
@@ -168,7 +166,7 @@ static void iwl_rx_reply_scan(struct iwl_priv *priv,
 static void iwl_rx_scan_start_notif(struct iwl_priv *priv,
 				    struct iwl_rx_mem_buffer *rxb)
 {
-	struct iwl_rx_packet *pkt = (struct iwl_rx_packet *)rxb->skb->data;
+	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 	struct iwl_scanstart_notification *notif =
 	    (struct iwl_scanstart_notification *)pkt->u.raw;
 	priv->scan_start_tsf = le32_to_cpu(notif->tsf_low);
@@ -187,7 +185,7 @@ static void iwl_rx_scan_results_notif(struct iwl_priv *priv,
 				      struct iwl_rx_mem_buffer *rxb)
 {
 #ifdef CONFIG_IWLWIFI_DEBUG
-	struct iwl_rx_packet *pkt = (struct iwl_rx_packet *)rxb->skb->data;
+	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 	struct iwl_scanresults_notification *notif =
 	    (struct iwl_scanresults_notification *)pkt->u.raw;
 
@@ -214,7 +212,7 @@ static void iwl_rx_scan_complete_notif(struct iwl_priv *priv,
 				       struct iwl_rx_mem_buffer *rxb)
 {
 #ifdef CONFIG_IWLWIFI_DEBUG
-	struct iwl_rx_packet *pkt = (struct iwl_rx_packet *)rxb->skb->data;
+	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 	struct iwl_scancomplete_notification *scan_notif = (void *)pkt->u.raw;
 
 	IWL_DEBUG_SCAN(priv, "Scan complete: %d channels (TSF 0x%08X:%08X) - %d\n",
@@ -402,9 +400,25 @@ void iwl_init_scan_params(struct iwl_priv *priv)
 	if (!priv->scan_tx_ant[IEEE80211_BAND_2GHZ])
 		priv->scan_tx_ant[IEEE80211_BAND_2GHZ] = ant_idx;
 }
+EXPORT_SYMBOL(iwl_init_scan_params);
 
 static int iwl_scan_initiate(struct iwl_priv *priv)
 {
+	if (!iwl_is_ready_rf(priv)) {
+		IWL_DEBUG_SCAN(priv, "Aborting scan due to not ready.\n");
+		return -EIO;
+	}
+
+	if (test_bit(STATUS_SCANNING, &priv->status)) {
+		IWL_DEBUG_SCAN(priv, "Scan already in progress.\n");
+		return -EAGAIN;
+	}
+
+	if (test_bit(STATUS_SCAN_ABORTING, &priv->status)) {
+		IWL_DEBUG_SCAN(priv, "Scan request while abort pending\n");
+		return -EAGAIN;
+	}
+
 	IWL_DEBUG_INFO(priv, "Starting scan...\n");
 	set_bit(STATUS_SCANNING, &priv->status);
 	priv->scan_start = jiffies;
@@ -432,18 +446,6 @@ int iwl_mac_hw_scan(struct ieee80211_hw *hw,
 	if (!iwl_is_ready_rf(priv)) {
 		ret = -EIO;
 		IWL_DEBUG_MAC80211(priv, "leave - not ready or exit pending\n");
-		goto out_unlock;
-	}
-
-	if (test_bit(STATUS_SCANNING, &priv->status)) {
-		IWL_DEBUG_SCAN(priv, "Scan already in progress.\n");
-		ret = -EAGAIN;
-		goto out_unlock;
-	}
-
-	if (test_bit(STATUS_SCAN_ABORTING, &priv->status)) {
-		IWL_DEBUG_SCAN(priv, "Scan request while abort pending\n");
-		ret = -EAGAIN;
 		goto out_unlock;
 	}
 
@@ -497,10 +499,11 @@ void iwl_bg_scan_check(struct work_struct *data)
 		return;
 
 	mutex_lock(&priv->mutex);
-	if (test_bit(STATUS_SCANNING, &priv->status) &&
-	    !test_bit(STATUS_SCAN_ABORTING, &priv->status)) {
-		IWL_DEBUG_SCAN(priv, "Scan completion watchdog (%dms)\n",
-			       jiffies_to_msecs(IWL_SCAN_CHECK_WATCHDOG));
+	if (test_bit(STATUS_SCANNING, &priv->status) ||
+	    test_bit(STATUS_SCAN_ABORTING, &priv->status)) {
+		IWL_DEBUG_SCAN(priv, "Scan completion watchdog resetting "
+			"adapter (%dms)\n",
+			jiffies_to_msecs(IWL_SCAN_CHECK_WATCHDOG));
 
 		if (!test_bit(STATUS_EXIT_PENDING, &priv->status))
 			iwl_send_scan_abort(priv);
@@ -577,6 +580,7 @@ static void iwl_bg_request_scan(struct work_struct *data)
 	u8 rate;
 	bool is_active = false;
 	int  chan_mod;
+	u8 active_chains;
 
 	conf = ieee80211_get_hw_conf(priv->hw);
 
@@ -730,9 +734,22 @@ static void iwl_bg_request_scan(struct work_struct *data)
 	rate_flags |= iwl_ant_idx_to_flags(priv->scan_tx_ant[band]);
 	scan->tx_cmd.rate_n_flags = iwl_hw_set_rate_n_flags(rate, rate_flags);
 
+	/* In power save mode use one chain, otherwise use all chains */
+	if (test_bit(STATUS_POWER_PMI, &priv->status)) {
+		/* rx_ant has been set to all valid chains previously */
+		active_chains = rx_ant &
+				((u8)(priv->chain_noise_data.active_chains));
+		if (!active_chains)
+			active_chains = rx_ant;
+
+		IWL_DEBUG_SCAN(priv, "chain_noise_data.active_chains: %u\n",
+				priv->chain_noise_data.active_chains);
+
+		rx_ant = first_antenna(active_chains);
+	}
 	/* MIMO is not used here, but value is required */
-	rx_chain |= ANT_ABC << RXON_RX_CHAIN_VALID_POS;
-	rx_chain |= ANT_ABC << RXON_RX_CHAIN_FORCE_MIMO_SEL_POS;
+	rx_chain |= priv->hw_params.valid_rx_ant << RXON_RX_CHAIN_VALID_POS;
+	rx_chain |= rx_ant << RXON_RX_CHAIN_FORCE_MIMO_SEL_POS;
 	rx_chain |= rx_ant << RXON_RX_CHAIN_FORCE_SEL_POS;
 	rx_chain |= 0x1 << RXON_RX_CHAIN_DRIVER_FORCE_POS;
 	scan->rx_chain = cpu_to_le16(rx_chain);
@@ -796,11 +813,11 @@ void iwl_bg_abort_scan(struct work_struct *work)
 	    !test_bit(STATUS_GEO_CONFIGURED, &priv->status))
 		return;
 
-	cancel_delayed_work(&priv->scan_check);
-
 	mutex_lock(&priv->mutex);
-	if (test_bit(STATUS_SCAN_ABORTING, &priv->status))
-		iwl_send_scan_abort(priv);
+
+	set_bit(STATUS_SCAN_ABORTING, &priv->status);
+	iwl_send_scan_abort(priv);
+
 	mutex_unlock(&priv->mutex);
 }
 EXPORT_SYMBOL(iwl_bg_abort_scan);

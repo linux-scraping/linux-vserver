@@ -238,7 +238,7 @@ static ctl_table kernel_table2[] = {
 };
 
 static ctl_table kernel_root_table2[] = {
-	{ .ctl_name = CTL_KERN, .procname = "kernel", .mode = 0555,
+	{ .procname = "kernel", .mode = 0555,
 	  .child = kernel_table2 },
 	{}
 };

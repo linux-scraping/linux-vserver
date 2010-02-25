@@ -1164,6 +1164,7 @@ struct btrfs_root {
 #define BTRFS_MOUNT_SSD_SPREAD		(1 << 8)
 #define BTRFS_MOUNT_NOSSD		(1 << 9)
 #define BTRFS_MOUNT_DISCARD		(1 << 10)
+#define BTRFS_MOUNT_FORCE_COMPRESS      (1 << 11)
 
 #define BTRFS_MOUNT_TAGGED		(1 << 24)
 
@@ -1190,8 +1191,6 @@ struct btrfs_root {
 #define BTRFS_INODE_BARRIER		(1 << 25)
 #define BTRFS_INODE_COW			(1 << 26)
 
-
-#define BTRFS_INODE_ROOT_ITEM_INIT	(1 << 31)
 
 /* some macros to generate set/get funcs for the struct fields.  This
  * assumes there is a lefoo_to_cpu for every type, so lets make a simple
@@ -2195,8 +2194,6 @@ int btrfs_find_dead_roots(struct btrfs_root *root, u64 objectid);
 int btrfs_find_orphan_roots(struct btrfs_root *tree_root);
 int btrfs_set_root_node(struct btrfs_root_item *item,
 			struct extent_buffer *node);
-void btrfs_check_and_init_root_item(struct btrfs_root_item *item);
-
 /* dir-item.c */
 int btrfs_insert_dir_item(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root, const char *name,

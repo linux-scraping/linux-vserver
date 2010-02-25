@@ -4,7 +4,6 @@
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/time.h>
-#include <linux/kernel_stat.h>
 #include <linux/vserver/cvirt.h>
 #include <asm/cputime.h>
 
@@ -12,20 +11,11 @@ static int uptime_proc_show(struct seq_file *m, void *v)
 {
 	struct timespec uptime;
 	struct timespec idle;
-	cputime64_t idletime;
-	u64 nsec;
-	u32 rem;
-	int i;
-
-	idletime = 0;
-	for_each_possible_cpu(i)
-		idletime = cputime64_add(idletime, kstat_cpu(i).cpustat.idle);
+	cputime_t idletime = cputime_add(init_task.utime, init_task.stime);
 
 	do_posix_clock_monotonic_gettime(&uptime);
 	monotonic_to_bootbased(&uptime);
-	nsec = cputime64_to_jiffies64(idletime) * TICK_NSEC;
-	idle.tv_sec = div_u64_rem(nsec, NSEC_PER_SEC, &rem);
-	idle.tv_nsec = rem;
+	cputime_to_timespec(idletime, &idle);
 
 	if (vx_flags(VXF_VIRT_UPTIME, 0))
 		vx_vsi_uptime(&uptime, &idle);

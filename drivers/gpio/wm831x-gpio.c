@@ -22,8 +22,7 @@
 #include <linux/mfd/wm831x/core.h>
 #include <linux/mfd/wm831x/pdata.h>
 #include <linux/mfd/wm831x/gpio.h>
-
-#define WM831X_GPIO_MAX 16
+#include <linux/mfd/wm831x/irq.h>
 
 struct wm831x_gpio {
 	struct wm831x *wm831x;
@@ -61,6 +60,16 @@ static int wm831x_gpio_get(struct gpio_chip *chip, unsigned offset)
 		return 0;
 }
 
+static int wm831x_gpio_direction_out(struct gpio_chip *chip,
+				     unsigned offset, int value)
+{
+	struct wm831x_gpio *wm831x_gpio = to_wm831x_gpio(chip);
+	struct wm831x *wm831x = wm831x_gpio->wm831x;
+
+	return wm831x_set_bits(wm831x, WM831X_GPIO1_CONTROL + offset,
+			       WM831X_GPN_DIR | WM831X_GPN_TRI, 0);
+}
+
 static void wm831x_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
 	struct wm831x_gpio *wm831x_gpio = to_wm831x_gpio(chip);
@@ -70,22 +79,15 @@ static void wm831x_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 			value << offset);
 }
 
-static int wm831x_gpio_direction_out(struct gpio_chip *chip,
-				     unsigned offset, int value)
+static int wm831x_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 {
 	struct wm831x_gpio *wm831x_gpio = to_wm831x_gpio(chip);
 	struct wm831x *wm831x = wm831x_gpio->wm831x;
-	int ret;
 
-	ret = wm831x_set_bits(wm831x, WM831X_GPIO1_CONTROL + offset,
-			      WM831X_GPN_DIR | WM831X_GPN_TRI, 0);
-	if (ret < 0)
-		return ret;
+	if (!wm831x->irq_base)
+		return -EINVAL;
 
-	/* Can only set GPIO state once it's in output mode */
-	wm831x_gpio_set(chip, offset, value);
-
-	return 0;
+	return wm831x->irq_base + WM831X_IRQ_GPIO_1 + offset;
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -183,6 +185,7 @@ static struct gpio_chip template_chip = {
 	.get			= wm831x_gpio_get,
 	.direction_output	= wm831x_gpio_direction_out,
 	.set			= wm831x_gpio_set,
+	.to_irq			= wm831x_gpio_to_irq,
 	.dbg_show		= wm831x_gpio_dbg_show,
 	.can_sleep		= 1,
 };
@@ -200,7 +203,7 @@ static int __devinit wm831x_gpio_probe(struct platform_device *pdev)
 
 	wm831x_gpio->wm831x = wm831x;
 	wm831x_gpio->gpio_chip = template_chip;
-	wm831x_gpio->gpio_chip.ngpio = WM831X_GPIO_MAX;
+	wm831x_gpio->gpio_chip.ngpio = wm831x->num_gpio;
 	wm831x_gpio->gpio_chip.dev = &pdev->dev;
 	if (pdata && pdata->gpio_base)
 		wm831x_gpio->gpio_chip.base = pdata->gpio_base;

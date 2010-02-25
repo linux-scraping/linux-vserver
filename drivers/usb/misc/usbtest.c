@@ -213,8 +213,9 @@ static struct urb *simple_alloc_urb (
 }
 
 static unsigned pattern = 0;
-module_param (pattern, uint, S_IRUGO);
-MODULE_PARM_DESC(pattern, "i/o pattern (0 == zeroes)");
+static unsigned mod_pattern;
+module_param_named(pattern, mod_pattern, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(mod_pattern, "i/o pattern (0 == zeroes)");
 
 static inline void simple_fill_buf (struct urb *urb)
 {
@@ -1382,6 +1383,7 @@ static void iso_callback (struct urb *urb)
 			break;
 		}
 	}
+	simple_free_urb (urb);
 
 	ctx->pending--;
 	if (ctx->pending == 0) {
@@ -1498,7 +1500,6 @@ test_iso_queue (struct usbtest_dev *dev, struct usbtest_param *param,
 			}
 
 			simple_free_urb (urbs [i]);
-			urbs[i] = NULL;
 			context.pending--;
 			context.submit_error = 1;
 			break;
@@ -1508,10 +1509,6 @@ test_iso_queue (struct usbtest_dev *dev, struct usbtest_param *param,
 
 	wait_for_completion (&context.done);
 
-	for (i = 0; i < param->sglen; i++) {
-		if (urbs[i])
-			simple_free_urb(urbs[i]);
-	}
 	/*
 	 * Isochronous transfers are expected to fail sometimes.  As an
 	 * arbitrary limit, we will report an error if any submissions
@@ -1570,6 +1567,8 @@ usbtest_ioctl (struct usb_interface *intf, unsigned int code, void *buf)
 	unsigned		i;
 
 	// FIXME USBDEVFS_CONNECTINFO doesn't say how fast the device is.
+
+	pattern = mod_pattern;
 
 	if (code != USBTEST_REQUEST)
 		return -EOPNOTSUPP;

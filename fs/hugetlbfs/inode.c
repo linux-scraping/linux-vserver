@@ -30,7 +30,6 @@
 #include <linux/dnotify.h>
 #include <linux/statfs.h>
 #include <linux/security.h>
-#include <linux/ima.h>
 #include <linux/magic.h>
 
 #include <asm/uaccess.h>
@@ -601,15 +600,9 @@ static int hugetlbfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		spin_lock(&sbinfo->stat_lock);
 		/* If no limits set, just report 0 for max/free/used
 		 * blocks, like simple_statfs() */
-		if (sbinfo->spool) {
-			long free_pages;
-
-			spin_lock(&sbinfo->spool->lock);
-			buf->f_blocks = sbinfo->spool->max_hpages;
-			free_pages = sbinfo->spool->max_hpages
-				- sbinfo->spool->used_hpages;
-			buf->f_bavail = buf->f_bfree = free_pages;
-			spin_unlock(&sbinfo->spool->lock);
+		if (sbinfo->max_blocks >= 0) {
+			buf->f_blocks = sbinfo->max_blocks;
+			buf->f_bavail = buf->f_bfree = sbinfo->free_blocks;
 			buf->f_files = sbinfo->max_inodes;
 			buf->f_ffree = sbinfo->free_inodes;
 		}
@@ -625,10 +618,6 @@ static void hugetlbfs_put_super(struct super_block *sb)
 
 	if (sbi) {
 		sb->s_fs_info = NULL;
-
-		if (sbi->spool)
-			hugepage_put_subpool(sbi->spool);
-
 		kfree(sbi);
 	}
 }
@@ -852,14 +841,10 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_fs_info = sbinfo;
 	sbinfo->hstate = config.hstate;
 	spin_lock_init(&sbinfo->stat_lock);
+	sbinfo->max_blocks = config.nr_blocks;
+	sbinfo->free_blocks = config.nr_blocks;
 	sbinfo->max_inodes = config.nr_inodes;
 	sbinfo->free_inodes = config.nr_inodes;
-	sbinfo->spool = NULL;
-	if (config.nr_blocks != -1) {
-		sbinfo->spool = hugepage_new_subpool(config.nr_blocks);
-		if (!sbinfo->spool)
-			goto out_free;
-	}
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_blocksize = huge_page_size(config.hstate);
 	sb->s_blocksize_bits = huge_page_shift(config.hstate);
@@ -879,10 +864,36 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_root = root;
 	return 0;
 out_free:
-	if (sbinfo->spool)
-		kfree(sbinfo->spool);
 	kfree(sbinfo);
 	return -ENOMEM;
+}
+
+int hugetlb_get_quota(struct address_space *mapping, long delta)
+{
+	int ret = 0;
+	struct hugetlbfs_sb_info *sbinfo = HUGETLBFS_SB(mapping->host->i_sb);
+
+	if (sbinfo->free_blocks > -1) {
+		spin_lock(&sbinfo->stat_lock);
+		if (sbinfo->free_blocks - delta >= 0)
+			sbinfo->free_blocks -= delta;
+		else
+			ret = -ENOMEM;
+		spin_unlock(&sbinfo->stat_lock);
+	}
+
+	return ret;
+}
+
+void hugetlb_put_quota(struct address_space *mapping, long delta)
+{
+	struct hugetlbfs_sb_info *sbinfo = HUGETLBFS_SB(mapping->host->i_sb);
+
+	if (sbinfo->free_blocks > -1) {
+		spin_lock(&sbinfo->stat_lock);
+		sbinfo->free_blocks += delta;
+		spin_unlock(&sbinfo->stat_lock);
+	}
 }
 
 static int hugetlbfs_get_sb(struct file_system_type *fs_type,
@@ -910,7 +921,8 @@ struct file *hugetlb_file_setup(const char *name, size_t size, int acctflag,
 	int error = -ENOMEM;
 	struct file *file;
 	struct inode *inode;
-	struct dentry *dentry, *root;
+	struct path path;
+	struct dentry *root;
 	struct qstr quick_string;
 
 	*user = NULL;
@@ -932,10 +944,11 @@ struct file *hugetlb_file_setup(const char *name, size_t size, int acctflag,
 	quick_string.name = name;
 	quick_string.len = strlen(quick_string.name);
 	quick_string.hash = 0;
-	dentry = d_alloc(root, &quick_string);
-	if (!dentry)
+	path.dentry = d_alloc(root, &quick_string);
+	if (!path.dentry)
 		goto out_shm_unlock;
 
+	path.mnt = mntget(hugetlbfs_vfsmount);
 	error = -ENOSPC;
 	inode = hugetlbfs_get_inode(root->d_sb, current_fsuid(),
 				current_fsgid(), S_IFREG | S_IRWXUGO, 0);
@@ -948,24 +961,22 @@ struct file *hugetlb_file_setup(const char *name, size_t size, int acctflag,
 			acctflag))
 		goto out_inode;
 
-	d_instantiate(dentry, inode);
+	d_instantiate(path.dentry, inode);
 	inode->i_size = size;
 	inode->i_nlink = 0;
 
 	error = -ENFILE;
-	file = alloc_file(hugetlbfs_vfsmount, dentry,
-			FMODE_WRITE | FMODE_READ,
+	file = alloc_file(&path, FMODE_WRITE | FMODE_READ,
 			&hugetlbfs_file_operations);
 	if (!file)
 		goto out_dentry; /* inode is already attached */
-	ima_counts_get(file);
 
 	return file;
 
 out_inode:
 	iput(inode);
 out_dentry:
-	dput(dentry);
+	path_put(&path);
 out_shm_unlock:
 	if (*user) {
 		user_shm_unlock(size, *user);

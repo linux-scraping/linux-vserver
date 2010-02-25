@@ -226,8 +226,6 @@ compose_mount_options_out:
 compose_mount_options_err:
 	kfree(mountdata);
 	mountdata = ERR_PTR(rc);
-	kfree(*devname);
-	*devname = NULL;
 	goto compose_mount_options_out;
 }
 
@@ -271,7 +269,7 @@ static int add_mount_helper(struct vfsmount *newmnt, struct nameidata *nd,
 	int err;
 
 	mntget(newmnt);
-	err = do_add_mount(newmnt, &nd->path, nd->path.mnt->mnt_flags, mntlist);
+	err = do_add_mount(newmnt, &nd->path, nd->path.mnt->mnt_flags | MNT_SHRINKABLE, mntlist);
 	switch (err) {
 	case 0:
 		path_put(&nd->path);
@@ -373,7 +371,6 @@ cifs_dfs_follow_mountpoint(struct dentry *dentry, struct nameidata *nd)
 	if (IS_ERR(mnt))
 		goto out_err;
 
-	nd->path.mnt->mnt_flags |= MNT_SHRINKABLE;
 	rc = add_mount_helper(mnt, nd, &cifs_dfs_automount_list);
 
 out:

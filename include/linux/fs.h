@@ -87,9 +87,6 @@ struct inodes_stat_t {
  */
 #define FMODE_NOCMTIME		((__force fmode_t)2048)
 
-/* Expect random access pattern */
-#define FMODE_RANDOM		((__force fmode_t)4096)
-
 /*
  * The below are the various read and write types that we support. Some of
  * them include behavioral modifiers that send information down to the
@@ -132,7 +129,7 @@ struct inodes_stat_t {
  * WRITE_SYNC		Like WRITE_SYNC_PLUG, but also unplugs the device
  *			immediately after submission. The write equivalent
  *			of READ_SYNC.
- * WRITE_ODIRECT	Special case write for O_DIRECT only.
+ * WRITE_ODIRECT_PLUG	Special case write for O_DIRECT only.
  * SWRITE_SYNC
  * SWRITE_SYNC_PLUG	Like WRITE_SYNC/WRITE_SYNC_PLUG, but locks the buffer.
  *			See SWRITE.
@@ -145,16 +142,17 @@ struct inodes_stat_t {
  *
  */
 #define RW_MASK		1
-#define RWA_MASK		16
+#define RWA_MASK	2
 #define READ 0
 #define WRITE 1
-#define READA			16 /* readahead - don't block if no resources */
-#define SWRITE			17 /* for ll_rw_block(), wait for buffer lock */
+#define READA 2		/* read-ahead  - don't block if no resources */
+#define SWRITE 3	/* for ll_rw_block() - wait for buffer lock */
 #define READ_SYNC	(READ | (1 << BIO_RW_SYNCIO) | (1 << BIO_RW_UNPLUG))
 #define READ_META	(READ | (1 << BIO_RW_META))
 #define WRITE_SYNC_PLUG	(WRITE | (1 << BIO_RW_SYNCIO) | (1 << BIO_RW_NOIDLE))
 #define WRITE_SYNC	(WRITE_SYNC_PLUG | (1 << BIO_RW_UNPLUG))
-#define WRITE_ODIRECT	(WRITE | (1 << BIO_RW_SYNCIO) | (1 << BIO_RW_UNPLUG))
+#define WRITE_ODIRECT_PLUG	(WRITE | (1 << BIO_RW_SYNCIO))
+#define WRITE_META	(WRITE | (1 << BIO_RW_META))
 #define SWRITE_SYNC_PLUG	\
 			(SWRITE | (1 << BIO_RW_SYNCIO) | (1 << BIO_RW_NOIDLE))
 #define SWRITE_SYNC	(SWRITE_SYNC_PLUG | (1 << BIO_RW_UNPLUG))
@@ -331,6 +329,7 @@ struct inodes_stat_t {
 #define BLKIOOPT _IO(0x12,121)
 #define BLKALIGNOFF _IO(0x12,122)
 #define BLKPBSZGET _IO(0x12,123)
+#define BLKDISCARDZEROES _IO(0x12,124)
 
 #define BMAP_IOCTL 1		/* obsolete - kept for compatibility */
 #define FIBMAP	   _IO(0x00,1)	/* bmap access */
@@ -667,7 +666,6 @@ struct address_space {
 	spinlock_t		private_lock;	/* for use by the address_space */
 	struct list_head	private_list;	/* ditto */
 	struct address_space	*assoc_mapping;	/* ditto */
-	struct mutex		unmap_mutex;    /* to protect unmapping */
 } __attribute__((aligned(sizeof(long))));
 	/*
 	 * On most architectures that alignment is already the case; but
@@ -765,6 +763,7 @@ struct inode {
 	tag_t			i_tag;
 	dev_t			i_rdev;
 	dev_t			i_mdev;
+	unsigned int		i_blkbits;
 	u64			i_version;
 	loff_t			i_size;
 #ifdef __NEED_I_SIZE_ORDERED
@@ -774,7 +773,6 @@ struct inode {
 	struct timespec		i_mtime;
 	struct timespec		i_ctime;
 	blkcnt_t		i_blocks;
-	unsigned int		i_blkbits;
 	unsigned short          i_bytes;
 	umode_t			i_mode;
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
@@ -977,7 +975,6 @@ struct file {
 #ifdef CONFIG_EPOLL
 	/* Used by fs/eventpoll.c to link all the hooks to this file */
 	struct list_head	f_ep_links;
-	struct list_head	f_tfile_llink;
 #endif /* #ifdef CONFIG_EPOLL */
 	struct address_space	*f_mapping;
 #ifdef CONFIG_DEBUG_WRITECOUNT
@@ -1134,10 +1131,6 @@ struct file_lock {
 #include <linux/fcntl.h>
 
 extern void send_sigio(struct fown_struct *fown, int fd, int band);
-
-/* fs/sync.c */
-extern int do_sync_mapping_range(struct address_space *mapping, loff_t offset,
-			loff_t endbyte, unsigned int flags);
 
 #ifdef CONFIG_FILE_LOCKING
 extern int fcntl_getlk(struct file *, struct flock __user *);
@@ -1349,8 +1342,6 @@ extern int send_sigurg(struct fown_struct *fown);
 #define MNT_FORCE	0x00000001	/* Attempt to forcibily umount */
 #define MNT_DETACH	0x00000002	/* Just detach from the tree */
 #define MNT_EXPIRE	0x00000004	/* Mark for expiry */
-#define UMOUNT_NOFOLLOW	0x00000008	/* Don't follow symlink on umount */
-#define UMOUNT_UNUSED	0x80000000	/* Flag guaranteed to be unused */
 
 extern struct list_head super_blocks;
 extern spinlock_t sb_lock;
@@ -1635,7 +1626,7 @@ struct super_operations {
  * until that flag is cleared.  I_WILL_FREE, I_FREEING and I_CLEAR are set at
  * various stages of removing an inode.
  *
- * Two bits are used for locking and completion notification, I_LOCK and I_SYNC.
+ * Two bits are used for locking and completion notification, I_NEW and I_SYNC.
  *
  * I_DIRTY_SYNC		Inode is dirty, but doesn't have to be written on
  *			fdatasync().  i_atime is the usual cause.
@@ -1644,8 +1635,14 @@ struct super_operations {
  *			don't have to write inode on fdatasync() when only
  *			mtime has changed in it.
  * I_DIRTY_PAGES	Inode has dirty pages.  Inode itself may be clean.
- * I_NEW		get_new_inode() sets i_state to I_LOCK|I_NEW.  Both
- *			are cleared by unlock_new_inode(), called from iget().
+ * I_NEW		Serves as both a mutex and completion notification.
+ *			New inodes set I_NEW.  If two processes both create
+ *			the same inode, one of them will release its inode and
+ *			wait for I_NEW to be released before returning.
+ *			Inodes in I_WILL_FREE, I_FREEING or I_CLEAR state can
+ *			also cause waiting on I_NEW, without I_NEW actually
+ *			being set.  find_inode() uses this to prevent returning
+ *			nearly-dead inodes.
  * I_WILL_FREE		Must be set when calling write_inode_now() if i_count
  *			is zero.  I_FREEING must be set when I_WILL_FREE is
  *			cleared.
@@ -1659,35 +1656,23 @@ struct super_operations {
  *			prohibited for many purposes.  iget() must wait for
  *			the inode to be completely released, then create it
  *			anew.  Other functions will just ignore such inodes,
- *			if appropriate.  I_LOCK is used for waiting.
+ *			if appropriate.  I_NEW is used for waiting.
  *
- * I_LOCK		Serves as both a mutex and completion notification.
- *			New inodes set I_LOCK.  If two processes both create
- *			the same inode, one of them will release its inode and
- *			wait for I_LOCK to be released before returning.
- *			Inodes in I_WILL_FREE, I_FREEING or I_CLEAR state can
- *			also cause waiting on I_LOCK, without I_LOCK actually
- *			being set.  find_inode() uses this to prevent returning
- *			nearly-dead inodes.
- * I_SYNC		Similar to I_LOCK, but limited in scope to writeback
- *			of inode dirty data.  Having a separate lock for this
- *			purpose reduces latency and prevents some filesystem-
- *			specific deadlocks.
+ * I_SYNC		Synchonized write of dirty inode data.  The bits is
+ *			set during data writeback, and cleared with a wakeup
+ *			on the bit address once it is done.
  *
  * Q: What is the difference between I_WILL_FREE and I_FREEING?
- * Q: igrab() only checks on (I_FREEING|I_WILL_FREE).  Should it also check on
- *    I_CLEAR?  If not, why?
  */
 #define I_DIRTY_SYNC		1
 #define I_DIRTY_DATASYNC	2
 #define I_DIRTY_PAGES		4
-#define I_NEW			8
+#define __I_NEW			3
+#define I_NEW			(1 << __I_NEW)
 #define I_WILL_FREE		16
 #define I_FREEING		32
 #define I_CLEAR			64
-#define __I_LOCK		7
-#define I_LOCK			(1 << __I_LOCK)
-#define __I_SYNC		8
+#define __I_SYNC		7
 #define I_SYNC			(1 << __I_SYNC)
 
 #define I_DIRTY (I_DIRTY_SYNC | I_DIRTY_DATASYNC | I_DIRTY_PAGES)
@@ -2136,8 +2121,6 @@ extern int filemap_fdatawait_range(struct address_space *, loff_t lstart,
 extern int filemap_write_and_wait(struct address_space *mapping);
 extern int filemap_write_and_wait_range(struct address_space *mapping,
 				        loff_t lstart, loff_t lend);
-extern int wait_on_page_writeback_range(struct address_space *mapping,
-				pgoff_t start, pgoff_t end);
 extern int __filemap_fdatawrite_range(struct address_space *mapping,
 				loff_t start, loff_t end, int sync_mode);
 extern int filemap_fdatawrite_range(struct address_space *mapping,
@@ -2199,7 +2182,6 @@ extern loff_t vfs_llseek(struct file *file, loff_t offset, int origin);
 
 extern int inode_init_always(struct super_block *, struct inode *);
 extern void inode_init_once(struct inode *);
-extern void address_space_init_once(struct address_space *mapping);
 extern void inode_add_to_lists(struct super_block *, struct inode *);
 extern void iput(struct inode *);
 extern struct inode * igrab(struct inode *);
@@ -2237,7 +2219,6 @@ static inline void insert_inode_hash(struct inode *inode) {
 	__insert_inode_hash(inode, inode->i_ino);
 }
 
-extern struct file * get_empty_filp(void);
 extern void file_move(struct file *f, struct list_head *list);
 extern void file_kill(struct file *f);
 #ifdef CONFIG_BLOCK
@@ -2269,7 +2250,6 @@ extern int generic_segment_checks(const struct iovec *iov,
 /* fs/block_dev.c */
 extern ssize_t blkdev_aio_write(struct kiocb *iocb, const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos);
-extern int block_fsync(struct file *filp, struct dentry *dentry, int datasync);
 
 /* fs/splice.c */
 extern ssize_t generic_file_splice_read(struct file *, loff_t *,
@@ -2313,9 +2293,11 @@ ssize_t __blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 	int lock_type);
 
 enum {
-	DIO_LOCKING = 1, /* need locking between buffered and direct access */
-	DIO_NO_LOCKING,  /* bdev; no locking at all between buffered/direct */
-	DIO_OWN_LOCKING, /* filesystem locks buffered and direct internally */
+	/* need locking between buffered and direct access */
+	DIO_LOCKING	= 0x01,
+
+	/* filesystem does not support filling holes */
+	DIO_SKIP_HOLES	= 0x02,
 };
 
 static inline ssize_t blockdev_direct_IO(int rw, struct kiocb *iocb,
@@ -2324,7 +2306,8 @@ static inline ssize_t blockdev_direct_IO(int rw, struct kiocb *iocb,
 	dio_iodone_t end_io)
 {
 	return __blockdev_direct_IO(rw, iocb, inode, bdev, iov, offset,
-				nr_segs, get_block, end_io, DIO_LOCKING);
+				    nr_segs, get_block, end_io,
+				    DIO_LOCKING | DIO_SKIP_HOLES);
 }
 
 static inline ssize_t blockdev_direct_IO_no_locking(int rw, struct kiocb *iocb,
@@ -2333,16 +2316,7 @@ static inline ssize_t blockdev_direct_IO_no_locking(int rw, struct kiocb *iocb,
 	dio_iodone_t end_io)
 {
 	return __blockdev_direct_IO(rw, iocb, inode, bdev, iov, offset,
-				nr_segs, get_block, end_io, DIO_NO_LOCKING);
-}
-
-static inline ssize_t blockdev_direct_IO_own_locking(int rw, struct kiocb *iocb,
-	struct inode *inode, struct block_device *bdev, const struct iovec *iov,
-	loff_t offset, unsigned long nr_segs, get_block_t get_block,
-	dio_iodone_t end_io)
-{
-	return __blockdev_direct_IO(rw, iocb, inode, bdev, iov, offset,
-				nr_segs, get_block, end_io, DIO_OWN_LOCKING);
+				nr_segs, get_block, end_io, 0);
 }
 #endif
 
@@ -2421,7 +2395,7 @@ extern const struct file_operations simple_dir_operations;
 extern const struct inode_operations simple_dir_inode_operations;
 struct tree_descr { char *name; const struct file_operations *ops; int mode; };
 struct dentry *d_alloc_name(struct dentry *, const char *);
-extern int simple_fill_super(struct super_block *, unsigned long, struct tree_descr *);
+extern int simple_fill_super(struct super_block *, int, struct tree_descr *);
 extern int simple_pin_fs(struct file_system_type *, struct vfsmount **mount, int *count);
 extern void simple_release_fs(struct vfsmount **mount, int *count);
 
@@ -2528,6 +2502,9 @@ int proc_nr_files(struct ctl_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos);
 
 int __init get_filesystem_list(char *buf);
+
+#define ACC_MODE(x) ("\004\002\006\006"[(x)&O_ACCMODE])
+#define OPEN_FMODE(flag) ((__force fmode_t)((flag + 1) & O_ACCMODE))
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_FS_H */

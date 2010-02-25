@@ -697,7 +697,7 @@ static void igmp_gq_timer_expire(unsigned long data)
 
 	in_dev->mr_gq_running = 0;
 	igmpv3_send_report(in_dev, NULL);
-	in_dev_put(in_dev);
+	__in_dev_put(in_dev);
 }
 
 static void igmp_ifc_timer_expire(unsigned long data)
@@ -709,7 +709,7 @@ static void igmp_ifc_timer_expire(unsigned long data)
 		in_dev->mr_ifc_count--;
 		igmp_ifc_start_timer(in_dev, IGMP_Unsolicited_Report_Interval);
 	}
-	in_dev_put(in_dev);
+	__in_dev_put(in_dev);
 }
 
 static void igmp_ifc_event(struct in_device *in_dev)
@@ -1841,10 +1841,6 @@ int ip_mc_leave_group(struct sock *sk, struct ip_mreqn *imr)
 
 	rtnl_lock();
 	in_dev = ip_mc_find_dev(net, imr);
-	if (!in_dev) {
-		ret = -ENODEV;
-		goto out;
-	}
 	ifindex = imr->imr_ifindex;
 	for (imlp = &inet->mc_list; (iml = *imlp) != NULL; imlp = &iml->next) {
 		if (iml->multi.imr_multiaddr.s_addr != group)
@@ -1860,12 +1856,14 @@ int ip_mc_leave_group(struct sock *sk, struct ip_mreqn *imr)
 
 		*imlp = iml->next;
 
-		ip_mc_dec_group(in_dev, group);
+		if (in_dev)
+			ip_mc_dec_group(in_dev, group);
 		rtnl_unlock();
 		sock_kfree_s(sk, iml, sizeof(*iml));
 		return 0;
 	}
- out:
+	if (!in_dev)
+		ret = -ENODEV;
 	rtnl_unlock();
 	return ret;
 }
@@ -1901,8 +1899,9 @@ int ip_mc_source(int add, int omode, struct sock *sk, struct
 	err = -EADDRNOTAVAIL;
 
 	for (pmc=inet->mc_list; pmc; pmc=pmc->next) {
-		if (pmc->multi.imr_multiaddr.s_addr == imr.imr_multiaddr.s_addr
-		    && pmc->multi.imr_ifindex == imr.imr_ifindex)
+		if ((pmc->multi.imr_multiaddr.s_addr ==
+		     imr.imr_multiaddr.s_addr) &&
+		    (pmc->multi.imr_ifindex == imr.imr_ifindex))
 			break;
 	}
 	if (!pmc) {		/* must have a prior join */
@@ -2313,9 +2312,10 @@ static inline struct ip_mc_list *igmp_mc_get_first(struct seq_file *seq)
 	struct igmp_mc_iter_state *state = igmp_mc_seq_private(seq);
 
 	state->in_dev = NULL;
-	for_each_netdev(net, state->dev) {
+	for_each_netdev_rcu(net, state->dev) {
 		struct in_device *in_dev;
-		in_dev = in_dev_get(state->dev);
+
+		in_dev = __in_dev_get_rcu(state->dev);
 		if (!in_dev)
 			continue;
 		read_lock(&in_dev->mc_list_lock);
@@ -2325,7 +2325,6 @@ static inline struct ip_mc_list *igmp_mc_get_first(struct seq_file *seq)
 			break;
 		}
 		read_unlock(&in_dev->mc_list_lock);
-		in_dev_put(in_dev);
 	}
 	return im;
 }
@@ -2335,16 +2334,15 @@ static struct ip_mc_list *igmp_mc_get_next(struct seq_file *seq, struct ip_mc_li
 	struct igmp_mc_iter_state *state = igmp_mc_seq_private(seq);
 	im = im->next;
 	while (!im) {
-		if (likely(state->in_dev != NULL)) {
+		if (likely(state->in_dev != NULL))
 			read_unlock(&state->in_dev->mc_list_lock);
-			in_dev_put(state->in_dev);
-		}
-		state->dev = next_net_device(state->dev);
+
+		state->dev = next_net_device_rcu(state->dev);
 		if (!state->dev) {
 			state->in_dev = NULL;
 			break;
 		}
-		state->in_dev = in_dev_get(state->dev);
+		state->in_dev = __in_dev_get_rcu(state->dev);
 		if (!state->in_dev)
 			continue;
 		read_lock(&state->in_dev->mc_list_lock);
@@ -2363,9 +2361,9 @@ static struct ip_mc_list *igmp_mc_get_idx(struct seq_file *seq, loff_t pos)
 }
 
 static void *igmp_mc_seq_start(struct seq_file *seq, loff_t *pos)
-	__acquires(dev_base_lock)
+	__acquires(rcu)
 {
-	read_lock(&dev_base_lock);
+	rcu_read_lock();
 	return *pos ? igmp_mc_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
 }
 
@@ -2381,16 +2379,15 @@ static void *igmp_mc_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static void igmp_mc_seq_stop(struct seq_file *seq, void *v)
-	__releases(dev_base_lock)
+	__releases(rcu)
 {
 	struct igmp_mc_iter_state *state = igmp_mc_seq_private(seq);
 	if (likely(state->in_dev != NULL)) {
 		read_unlock(&state->in_dev->mc_list_lock);
-		in_dev_put(state->in_dev);
 		state->in_dev = NULL;
 	}
 	state->dev = NULL;
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 }
 
 static int igmp_mc_seq_show(struct seq_file *seq, void *v)
@@ -2464,9 +2461,9 @@ static inline struct ip_sf_list *igmp_mcf_get_first(struct seq_file *seq)
 
 	state->idev = NULL;
 	state->im = NULL;
-	for_each_netdev(net, state->dev) {
+	for_each_netdev_rcu(net, state->dev) {
 		struct in_device *idev;
-		idev = in_dev_get(state->dev);
+		idev = __in_dev_get_rcu(state->dev);
 		if (unlikely(idev == NULL))
 			continue;
 		read_lock(&idev->mc_list_lock);
@@ -2482,7 +2479,6 @@ static inline struct ip_sf_list *igmp_mcf_get_first(struct seq_file *seq)
 			spin_unlock_bh(&im->lock);
 		}
 		read_unlock(&idev->mc_list_lock);
-		in_dev_put(idev);
 	}
 	return psf;
 }
@@ -2496,16 +2492,15 @@ static struct ip_sf_list *igmp_mcf_get_next(struct seq_file *seq, struct ip_sf_l
 		spin_unlock_bh(&state->im->lock);
 		state->im = state->im->next;
 		while (!state->im) {
-			if (likely(state->idev != NULL)) {
+			if (likely(state->idev != NULL))
 				read_unlock(&state->idev->mc_list_lock);
-				in_dev_put(state->idev);
-			}
-			state->dev = next_net_device(state->dev);
+
+			state->dev = next_net_device_rcu(state->dev);
 			if (!state->dev) {
 				state->idev = NULL;
 				goto out;
 			}
-			state->idev = in_dev_get(state->dev);
+			state->idev = __in_dev_get_rcu(state->dev);
 			if (!state->idev)
 				continue;
 			read_lock(&state->idev->mc_list_lock);
@@ -2530,8 +2525,9 @@ static struct ip_sf_list *igmp_mcf_get_idx(struct seq_file *seq, loff_t pos)
 }
 
 static void *igmp_mcf_seq_start(struct seq_file *seq, loff_t *pos)
+	__acquires(rcu)
 {
-	read_lock(&dev_base_lock);
+	rcu_read_lock();
 	return *pos ? igmp_mcf_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
 }
 
@@ -2547,6 +2543,7 @@ static void *igmp_mcf_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static void igmp_mcf_seq_stop(struct seq_file *seq, void *v)
+	__releases(rcu)
 {
 	struct igmp_mcf_iter_state *state = igmp_mcf_seq_private(seq);
 	if (likely(state->im != NULL)) {
@@ -2555,11 +2552,10 @@ static void igmp_mcf_seq_stop(struct seq_file *seq, void *v)
 	}
 	if (likely(state->idev != NULL)) {
 		read_unlock(&state->idev->mc_list_lock);
-		in_dev_put(state->idev);
 		state->idev = NULL;
 	}
 	state->dev = NULL;
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 }
 
 static int igmp_mcf_seq_show(struct seq_file *seq, void *v)

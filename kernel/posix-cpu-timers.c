@@ -384,7 +384,8 @@ int posix_cpu_clock_get(const clockid_t which_clock, struct timespec *tp)
 
 /*
  * Validate the clockid_t for a new CPU-clock timer, and initialize the timer.
- * This is called from sys_timer_create with the new timer already locked.
+ * This is called from sys_timer_create() and do_cpu_nanosleep() with the
+ * new timer already all-zeros initialized.
  */
 int posix_cpu_timer_create(struct k_itimer *new_timer)
 {
@@ -396,8 +397,6 @@ int posix_cpu_timer_create(struct k_itimer *new_timer)
 		return -EINVAL;
 
 	INIT_LIST_HEAD(&new_timer->it.cpu.entry);
-	new_timer->it.cpu.incr.sched = 0;
-	new_timer->it.cpu.expires.sched = 0;
 
 	read_lock(&tasklist_lock);
 	if (CPUCLOCK_PERTHREAD(new_timer->it_clock)) {
@@ -1537,10 +1536,8 @@ static int do_cpu_nanosleep(const clockid_t which_clock, int flags,
 		while (!signal_pending(current)) {
 			if (timer.it.cpu.expires.sched == 0) {
 				/*
-				 * Our timer fired and was reset, below
-				 * deletion can not fail.
+				 * Our timer fired and was reset.
 				 */
-				posix_cpu_timer_del(&timer);
 				spin_unlock_irq(&timer.it_lock);
 				return 0;
 			}
@@ -1558,25 +1555,8 @@ static int do_cpu_nanosleep(const clockid_t which_clock, int flags,
 		 * We were interrupted by a signal.
 		 */
 		sample_to_timespec(which_clock, timer.it.cpu.expires, rqtp);
-		error = posix_cpu_timer_set(&timer, 0, &zero_it, it);
-		if (!error) {
-			/*
-			 * Timer is now unarmed, deletion can not fail.
-			 */
-			posix_cpu_timer_del(&timer);
-		}
+		posix_cpu_timer_set(&timer, 0, &zero_it, it);
 		spin_unlock_irq(&timer.it_lock);
-
-		while (error == TIMER_RETRY) {
-			/*
-			 * We need to handle case when timer was or is in the
-			 * middle of firing. In other cases we already freed
-			 * resources.
-			 */
-			spin_lock_irq(&timer.it_lock);
-			error = posix_cpu_timer_del(&timer);
-			spin_unlock_irq(&timer.it_lock);
-		}
 
 		if ((it->it_value.tv_sec | it->it_value.tv_nsec) == 0) {
 			/*

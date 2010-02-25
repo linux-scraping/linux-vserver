@@ -196,7 +196,7 @@ void v6_set_sock_addr(struct inet_sock *inet, struct nx_v6_sock_addr *nsa)
 	// struct in6_addr *saddr = inet6_rcv_saddr(sk);
 
 	// *saddr = nsa->baddr;
-	// inet->saddr = nsa->baddr;
+	// inet->inet_saddr = nsa->baddr;
 }
 
 static inline

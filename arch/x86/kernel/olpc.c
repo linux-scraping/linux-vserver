@@ -115,7 +115,6 @@ int olpc_ec_cmd(unsigned char cmd, unsigned char *inbuf, size_t inlen,
 	unsigned long flags;
 	int ret = -EIO;
 	int i;
-	int restarts = 0;
 
 	spin_lock_irqsave(&ec_lock, flags);
 
@@ -172,9 +171,7 @@ restart:
 			if (wait_on_obf(0x6c, 1)) {
 				printk(KERN_ERR "olpc-ec:  timeout waiting for"
 						" EC to provide data!\n");
-				if (restarts++ < 10)
-					goto restart;
-				goto err;
+				goto restart;
 			}
 			outbuf[i] = inb(0x68);
 			printk(KERN_DEBUG "olpc-ec:  received 0x%x\n",
@@ -215,7 +212,7 @@ static int __init olpc_init(void)
 	unsigned char *romsig;
 
 	/* The ioremap check is dangerous; limit what we run it on */
-	if (!is_geode() || geode_has_vsa2())
+	if (!is_geode() || cs5535_has_vsa2())
 		return 0;
 
 	spin_lock_init(&ec_lock);
@@ -247,7 +244,7 @@ static int __init olpc_init(void)
 			(unsigned char *) &olpc_platform_info.ecver, 1);
 
 	/* check to see if the VSA exists */
-	if (geode_has_vsa2())
+	if (cs5535_has_vsa2())
 		olpc_platform_info.flags |= OLPC_F_VSA;
 
 	printk(KERN_INFO "OLPC board revision %s%X (EC=%x)\n",

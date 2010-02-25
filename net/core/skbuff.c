@@ -93,7 +93,7 @@ static int sock_pipe_buf_steal(struct pipe_inode_info *pipe,
 
 
 /* Pipe buffer operations for a socket. */
-static struct pipe_buf_operations sock_pipe_buf_ops = {
+static const struct pipe_buf_operations sock_pipe_buf_ops = {
 	.can_merge = 0,
 	.map = generic_pipe_buf_map,
 	.unmap = generic_pipe_buf_unmap,
@@ -493,6 +493,9 @@ int skb_recycle_check(struct sk_buff *skb, int skb_size)
 {
 	struct skb_shared_info *shinfo;
 
+	if (irqs_disabled())
+		return 0;
+
 	if (skb_is_nonlinear(skb) || skb->fclone != SKB_FCLONE_UNAVAILABLE)
 		return 0;
 
@@ -546,7 +549,7 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 #endif
 	new->protocol		= old->protocol;
 	new->mark		= old->mark;
-	new->iif		= old->iif;
+	new->skb_iif		= old->skb_iif;
 	__nf_copy(new, old);
 #if defined(CONFIG_NETFILTER_XT_TARGET_TRACE) || \
     defined(CONFIG_NETFILTER_XT_TARGET_TRACE_MODULE)
@@ -2573,16 +2576,12 @@ struct sk_buff *skb_segment(struct sk_buff *skb, int features)
 		tail = nskb;
 
 		__copy_skb_header(nskb, skb);
-
-		/* nskb and skb might have different headroom */
-		if (nskb->ip_summed == CHECKSUM_PARTIAL)
-			nskb->csum_start += skb_headroom(nskb) - headroom;
+		nskb->mac_len = skb->mac_len;
 
 		skb_reset_mac_header(nskb);
 		skb_set_network_header(nskb, skb->mac_len);
 		nskb->transport_header = (nskb->network_header +
 					  skb_network_header_len(skb));
-		nskb->mac_len = nskb->network_header - nskb->mac_header;
 		skb_copy_from_linear_data(skb, nskb->data, doffset);
 
 		if (fskb != skb_shinfo(skb)->frag_list)
@@ -2709,7 +2708,7 @@ int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 		return -E2BIG;
 
 	headroom = skb_headroom(p);
-	nskb = alloc_skb(headroom + skb_gro_offset(p), GFP_ATOMIC);
+	nskb = netdev_alloc_skb(p->dev, headroom + skb_gro_offset(p));
 	if (unlikely(!nskb))
 		return -ENOMEM;
 
@@ -2730,7 +2729,6 @@ int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 	*NAPI_GRO_CB(nskb) = *NAPI_GRO_CB(p);
 	skb_shinfo(nskb)->frag_list = p;
 	skb_shinfo(nskb)->gso_size = pinfo->gso_size;
-	pinfo->gso_size = 0;
 	skb_header_release(p);
 	nskb->prev = p;
 
@@ -2746,12 +2744,8 @@ int skb_gro_receive(struct sk_buff **head, struct sk_buff *skb)
 
 merge:
 	if (offset > headlen) {
-		unsigned int eat = offset - headlen;
-
-		skbinfo->frags[0].page_offset += eat;
-		skbinfo->frags[0].size -= eat;
-		skb->data_len -= eat;
-		skb->len -= eat;
+		skbinfo->frags[0].page_offset += offset - headlen;
+		skbinfo->frags[0].size -= offset - headlen;
 		offset = headlen;
 	}
 
@@ -2977,36 +2971,6 @@ int skb_cow_data(struct sk_buff *skb, int tailbits, struct sk_buff **trailer)
 }
 EXPORT_SYMBOL_GPL(skb_cow_data);
 
-static void sock_rmem_free(struct sk_buff *skb)
-{
-	struct sock *sk = skb->sk;
-
-	atomic_sub(skb->truesize, &sk->sk_rmem_alloc);
-}
-
-/*
- * Note: We dont mem charge error packets (no sk_forward_alloc changes)
- */
-int sock_queue_err_skb(struct sock *sk, struct sk_buff *skb)
-{
-	int len = skb->len;
-
-	if (atomic_read(&sk->sk_rmem_alloc) + skb->truesize >=
-	    (unsigned)sk->sk_rcvbuf)
-		return -ENOMEM;
-
-	skb_orphan(skb);
-	skb->sk = sk;
-	skb->destructor = sock_rmem_free;
-	atomic_add(skb->truesize, &sk->sk_rmem_alloc);
-
-	skb_queue_tail(&sk->sk_error_queue, skb);
-	if (!sock_flag(sk, SOCK_DEAD))
-		sk->sk_data_ready(sk, len);
-	return 0;
-}
-EXPORT_SYMBOL(sock_queue_err_skb);
-
 void skb_tstamp_tx(struct sk_buff *orig_skb,
 		struct skb_shared_hwtstamps *hwtstamps)
 {
@@ -3038,9 +3002,7 @@ void skb_tstamp_tx(struct sk_buff *orig_skb,
 	memset(serr, 0, sizeof(*serr));
 	serr->ee.ee_errno = ENOMSG;
 	serr->ee.ee_origin = SO_EE_ORIGIN_TIMESTAMPING;
-
 	err = sock_queue_err_skb(sk, skb);
-
 	if (err)
 		kfree_skb(skb);
 }

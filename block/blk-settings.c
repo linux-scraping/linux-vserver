@@ -8,7 +8,7 @@
 #include <linux/blkdev.h>
 #include <linux/bootmem.h>	/* for max_pfn/max_low_pfn */
 #include <linux/gcd.h>
-#include <linux/lcm.h>
+#include <linux/jiffies.h>
 
 #include "blk.h"
 
@@ -97,13 +97,17 @@ void blk_set_default_limits(struct queue_limits *lim)
 	lim->max_segment_size = MAX_SEGMENT_SIZE;
 	lim->max_sectors = BLK_DEF_MAX_SECTORS;
 	lim->max_hw_sectors = INT_MAX;
-	lim->max_discard_sectors = SAFE_MAX_SECTORS;
+	lim->max_discard_sectors = 0;
+	lim->discard_granularity = 0;
+	lim->discard_alignment = 0;
+	lim->discard_misaligned = 0;
+	lim->discard_zeroes_data = -1;
 	lim->logical_block_size = lim->physical_block_size = lim->io_min = 512;
 	lim->bounce_pfn = (unsigned long)(BLK_BOUNCE_ANY >> PAGE_SHIFT);
 	lim->alignment_offset = 0;
 	lim->io_opt = 0;
 	lim->misaligned = 0;
-	lim->cluster = 1;
+	lim->no_cluster = 0;
 }
 EXPORT_SYMBOL(blk_set_default_limits);
 
@@ -142,7 +146,7 @@ void blk_queue_make_request(struct request_queue *q, make_request_fn *mfn)
 	q->nr_batching = BLK_BATCH_REQ;
 
 	q->unplug_thresh = 4;		/* hmm */
-	q->unplug_delay = (3 * HZ) / 1000;	/* 3 milliseconds */
+	q->unplug_delay = msecs_to_jiffies(3);	/* 3 milliseconds */
 	if (q->unplug_delay == 0)
 		q->unplug_delay = 1;
 
@@ -352,7 +356,7 @@ EXPORT_SYMBOL(blk_queue_logical_block_size);
  *   hardware can operate on without reverting to read-modify-write
  *   operations.
  */
-void blk_queue_physical_block_size(struct request_queue *q, unsigned int size)
+void blk_queue_physical_block_size(struct request_queue *q, unsigned short size)
 {
 	q->limits.physical_block_size = size;
 
@@ -477,8 +481,27 @@ EXPORT_SYMBOL(blk_queue_io_opt);
 void blk_queue_stack_limits(struct request_queue *t, struct request_queue *b)
 {
 	blk_stack_limits(&t->limits, &b->limits, 0);
+
+	if (!t->queue_lock)
+		WARN_ON_ONCE(1);
+	else if (!test_bit(QUEUE_FLAG_CLUSTER, &b->queue_flags)) {
+		unsigned long flags;
+		spin_lock_irqsave(t->queue_lock, flags);
+		queue_flag_clear(QUEUE_FLAG_CLUSTER, t);
+		spin_unlock_irqrestore(t->queue_lock, flags);
+	}
 }
 EXPORT_SYMBOL(blk_queue_stack_limits);
+
+static unsigned int lcm(unsigned int a, unsigned int b)
+{
+	if (a && b)
+		return (a * b) / gcd(a, b);
+	else if (b)
+		return b;
+
+	return a;
+}
 
 /**
  * blk_stack_limits - adjust queue_limits for stacked devices
@@ -552,7 +575,8 @@ int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 	t->io_min = max(t->io_min, b->io_min);
 	t->io_opt = lcm(t->io_opt, b->io_opt);
 
-	t->cluster &= b->cluster;
+	t->no_cluster |= b->no_cluster;
+	t->discard_zeroes_data &= b->discard_zeroes_data;
 
 	/* Physical block size a multiple of the logical block size? */
 	if (t->physical_block_size & (t->logical_block_size - 1)) {
@@ -585,9 +609,31 @@ int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 		ret = -1;
 	}
 
-	/* Discard */
-	t->max_discard_sectors = min_not_zero(t->max_discard_sectors,
-					      b->max_discard_sectors);
+	/* Discard alignment and granularity */
+	if (b->discard_granularity) {
+		unsigned int granularity = b->discard_granularity;
+		offset &= granularity - 1;
+
+		alignment = (granularity + b->discard_alignment - offset)
+			& (granularity - 1);
+
+		if (t->discard_granularity != 0 &&
+		    t->discard_alignment != alignment) {
+			top = t->discard_granularity + t->discard_alignment;
+			bottom = b->discard_granularity + alignment;
+
+			/* Verify that top and bottom intervals line up */
+			if (max(top, bottom) & (min(top, bottom) - 1))
+				t->discard_misaligned = 1;
+		}
+
+		t->max_discard_sectors = min_not_zero(t->max_discard_sectors,
+						      b->max_discard_sectors);
+		t->discard_granularity = max(t->discard_granularity,
+					     b->discard_granularity);
+		t->discard_alignment = lcm(t->discard_alignment, alignment) &
+			(t->discard_granularity - 1);
+	}
 
 	return ret;
 }
@@ -642,6 +688,17 @@ void disk_stack_limits(struct gendisk *disk, struct block_device *bdev,
 
 		printk(KERN_NOTICE "%s: Warning: Device %s is misaligned\n",
 		       top, bottom);
+	}
+
+	if (!t->queue_lock)
+		WARN_ON_ONCE(1);
+	else if (!test_bit(QUEUE_FLAG_CLUSTER, &b->queue_flags)) {
+		unsigned long flags;
+
+		spin_lock_irqsave(t->queue_lock, flags);
+		if (!test_bit(QUEUE_FLAG_CLUSTER, &b->queue_flags))
+			queue_flag_clear(QUEUE_FLAG_CLUSTER, t);
+		spin_unlock_irqrestore(t->queue_lock, flags);
 	}
 }
 EXPORT_SYMBOL(disk_stack_limits);

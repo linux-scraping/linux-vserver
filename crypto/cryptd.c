@@ -99,7 +99,7 @@ static int cryptd_enqueue_request(struct cryptd_queue *queue,
 	struct cryptd_cpu_queue *cpu_queue;
 
 	cpu = get_cpu();
-	cpu_queue = per_cpu_ptr(queue->cpu_queue, cpu);
+	cpu_queue = this_cpu_ptr(queue->cpu_queue);
 	err = crypto_enqueue_request(&cpu_queue->queue, request);
 	queue_work_on(cpu, kcrypto_wq, &cpu_queue->work);
 	put_cpu();
@@ -116,18 +116,13 @@ static void cryptd_queue_worker(struct work_struct *work)
 	struct crypto_async_request *req, *backlog;
 
 	cpu_queue = container_of(work, struct cryptd_cpu_queue, work);
-	/*
-	 * Only handle one request at a time to avoid hogging crypto workqueue.
-	 * preempt_disable/enable is used to prevent being preempted by
-	 * cryptd_enqueue_request(). local_bh_disable/enable is used to prevent
-	 * cryptd_enqueue_request() being accessed from software interrupts.
-	 */
-	local_bh_disable();
+	/* Only handle one request at a time to avoid hogging crypto
+	 * workqueue. preempt_disable/enable is used to prevent
+	 * being preempted by cryptd_enqueue_request() */
 	preempt_disable();
 	backlog = crypto_get_backlog(&cpu_queue->queue);
 	req = crypto_dequeue_request(&cpu_queue->queue);
 	preempt_enable();
-	local_bh_enable();
 
 	if (!req)
 		return;
@@ -715,6 +710,13 @@ struct crypto_shash *cryptd_ahash_child(struct cryptd_ahash *tfm)
 	return ctx->child;
 }
 EXPORT_SYMBOL_GPL(cryptd_ahash_child);
+
+struct shash_desc *cryptd_shash_desc(struct ahash_request *req)
+{
+	struct cryptd_hash_request_ctx *rctx = ahash_request_ctx(req);
+	return &rctx->desc;
+}
+EXPORT_SYMBOL_GPL(cryptd_shash_desc);
 
 void cryptd_free_ahash(struct cryptd_ahash *tfm)
 {

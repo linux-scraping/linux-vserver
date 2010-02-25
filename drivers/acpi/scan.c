@@ -1026,6 +1026,12 @@ static void acpi_device_set_id(struct acpi_device *device)
 		if (ACPI_IS_ROOT_DEVICE(device)) {
 			acpi_add_id(device, ACPI_SYSTEM_HID);
 			break;
+		} else if (ACPI_IS_ROOT_DEVICE(device->parent)) {
+			/* \_SB_, the only root-level namespace device */
+			acpi_add_id(device, ACPI_BUS_HID);
+			strcpy(device->pnp.device_name, ACPI_BUS_DEVICE_NAME);
+			strcpy(device->pnp.device_class, ACPI_BUS_CLASS);
+			break;
 		}
 
 		status = acpi_get_object_info(device->handle, &info);
@@ -1058,12 +1064,6 @@ static void acpi_device_set_id(struct acpi_device *device)
 			acpi_add_id(device, ACPI_BAY_HID);
 		else if (ACPI_SUCCESS(acpi_dock_match(device)))
 			acpi_add_id(device, ACPI_DOCK_HID);
-		else if (!acpi_device_hid(device) &&
-			 ACPI_IS_ROOT_DEVICE(device->parent)) {
-			acpi_add_id(device, ACPI_BUS_HID); /* \_SB, LNXSYBUS */
-			strcpy(device->pnp.device_name, ACPI_BUS_DEVICE_NAME);
-			strcpy(device->pnp.device_class, ACPI_BUS_CLASS);
-		}
 
 		break;
 	case ACPI_BUS_TYPE_POWER:
@@ -1332,12 +1332,28 @@ static int acpi_bus_scan(acpi_handle handle, struct acpi_bus_ops *ops,
 	status = acpi_bus_check_add(handle, 0, ops, &device);
 	if (ACPI_SUCCESS(status))
 		acpi_walk_namespace(ACPI_TYPE_ANY, handle, ACPI_UINT32_MAX,
-				    acpi_bus_check_add, ops, &device);
+				    acpi_bus_check_add, NULL, ops, &device);
 
 	if (child)
 		*child = device;
-	return 0;
+
+	if (device)
+		return 0;
+	else
+		return -ENODEV;
 }
+
+/*
+ * acpi_bus_add and acpi_bus_start
+ *
+ * scan a given ACPI tree and (probably recently hot-plugged)
+ * create and add or starts found devices.
+ *
+ * If no devices were found -ENODEV is returned which does not
+ * mean that this is a real error, there just have been no suitable
+ * ACPI objects in the table trunk from which the kernel could create
+ * a device and add/start an appropriate driver.
+ */
 
 int
 acpi_bus_add(struct acpi_device **child,
@@ -1348,8 +1364,7 @@ acpi_bus_add(struct acpi_device **child,
 	memset(&ops, 0, sizeof(ops));
 	ops.acpi_op_add = 1;
 
-	acpi_bus_scan(handle, &ops, child);
-	return 0;
+	return acpi_bus_scan(handle, &ops, child);
 }
 EXPORT_SYMBOL(acpi_bus_add);
 
@@ -1363,8 +1378,7 @@ int acpi_bus_start(struct acpi_device *device)
 	memset(&ops, 0, sizeof(ops));
 	ops.acpi_op_start = 1;
 
-	acpi_bus_scan(device->handle, &ops, NULL);
-	return 0;
+	return acpi_bus_scan(device->handle, &ops, NULL);
 }
 EXPORT_SYMBOL(acpi_bus_start);
 

@@ -98,7 +98,7 @@ struct smb_vol {
 	bool nostrictsync:1; /* do not force expensive SMBflush on every sync */
 	unsigned int rsize;
 	unsigned int wsize;
-	unsigned int sockopt;
+	bool sockopt_tcp_nodelay:1;
 	unsigned short int port;
 	char *prepath;
 };
@@ -799,7 +799,8 @@ static int
 cifs_parse_mount_options(char *options, const char *devname,
 			 struct smb_vol *vol)
 {
-	char *value, *data, *end;
+	char *value;
+	char *data;
 	unsigned int  temp_len, i, j;
 	char separator[2];
 	short int override_uid = -1;
@@ -842,7 +843,6 @@ cifs_parse_mount_options(char *options, const char *devname,
 	if (!options)
 		return 1;
 
-	end = options + strlen(options);
 	if (strncmp(options, "sep=", 4) == 0) {
 		if (options[4] != 0) {
 			separator[0] = options[4];
@@ -907,7 +907,6 @@ cifs_parse_mount_options(char *options, const char *devname,
 			the only illegal character in a password is null */
 
 			if ((value[temp_len] == 0) &&
-			    (value + temp_len < end) &&
 			    (value[temp_len+1] == separator[0])) {
 				/* reinsert comma */
 				value[temp_len] = separator[0];
@@ -1143,9 +1142,11 @@ cifs_parse_mount_options(char *options, const char *devname,
 					simple_strtoul(value, &value, 0);
 			}
 		} else if (strnicmp(data, "sockopt", 5) == 0) {
-			if (value && *value) {
-				vol->sockopt =
-					simple_strtoul(value, &value, 0);
+			if (!value || !*value) {
+				cERROR(1, ("no socket option specified"));
+				continue;
+			} else if (strnicmp(value, "TCP_NODELAY", 11) == 0) {
+				vol->sockopt_tcp_nodelay = 1;
 			}
 		} else if (strnicmp(data, "netbiosname", 4) == 0) {
 			if (!value || !*value || (*value == ' ')) {
@@ -1515,6 +1516,7 @@ cifs_get_tcp_session(struct smb_vol *volume_info)
 
 	tcp_ses->noblocksnd = volume_info->noblocksnd;
 	tcp_ses->noautotune = volume_info->noautotune;
+	tcp_ses->tcp_nodelay = volume_info->sockopt_tcp_nodelay;
 	atomic_set(&tcp_ses->inFlight, 0);
 	init_waitqueue_head(&tcp_ses->response_q);
 	init_waitqueue_head(&tcp_ses->request_q);
@@ -1588,29 +1590,17 @@ out_err:
 }
 
 static struct cifsSesInfo *
-cifs_find_smb_ses(struct TCP_Server_Info *server, struct smb_vol *vol)
+cifs_find_smb_ses(struct TCP_Server_Info *server, char *username)
 {
+	struct list_head *tmp;
 	struct cifsSesInfo *ses;
 
 	write_lock(&cifs_tcp_ses_lock);
-	list_for_each_entry(ses, &server->smb_ses_list, smb_ses_list) {
-		switch (server->secType) {
-		case Kerberos:
-			if (vol->linux_uid != ses->linux_uid)
-				continue;
-			break;
-		default:
-			/* anything else takes username/password */
-			if (strncmp(ses->userName, vol->username,
-				    MAX_USERNAME_SIZE))
-				continue;
-			if (strlen(vol->username) != 0 &&
-			    ses->password != NULL &&
-			    strncmp(ses->password,
-				    vol->password ? vol->password : "",
-				    MAX_PASSWORD_SIZE))
-				continue;
-		}
+	list_for_each(tmp, &server->smb_ses_list) {
+		ses = list_entry(tmp, struct cifsSesInfo, smb_ses_list);
+		if (strncmp(ses->userName, username, MAX_USERNAME_SIZE))
+			continue;
+
 		++ses->ses_count;
 		write_unlock(&cifs_tcp_ses_lock);
 		return ses;
@@ -1777,6 +1767,7 @@ static int
 ipv4_connect(struct TCP_Server_Info *server)
 {
 	int rc = 0;
+	int val;
 	bool connected = false;
 	__be16 orig_port = 0;
 	struct socket *socket = server->ssocket;
@@ -1858,6 +1849,14 @@ ipv4_connect(struct TCP_Server_Info *server)
 			socket->sk->sk_rcvbuf = 140 * 1024;
 	}
 
+	if (server->tcp_nodelay) {
+		val = 1;
+		rc = kernel_setsockopt(socket, SOL_TCP, TCP_NODELAY,
+				(char *)&val, sizeof(val));
+		if (rc)
+			cFYI(1, ("set TCP_NODELAY socket option error %d", rc));
+	}
+
 	 cFYI(1, ("sndbuf %d rcvbuf %d rcvtimeo 0x%lx",
 		 socket->sk->sk_sndbuf,
 		 socket->sk->sk_rcvbuf, socket->sk->sk_rcvtimeo));
@@ -1929,6 +1928,7 @@ static int
 ipv6_connect(struct TCP_Server_Info *server)
 {
 	int rc = 0;
+	int val;
 	bool connected = false;
 	__be16 orig_port = 0;
 	struct socket *socket = server->ssocket;
@@ -2000,6 +2000,15 @@ ipv6_connect(struct TCP_Server_Info *server)
 	 */
 	socket->sk->sk_rcvtimeo = 7 * HZ;
 	socket->sk->sk_sndtimeo = 5 * HZ;
+
+	if (server->tcp_nodelay) {
+		val = 1;
+		rc = kernel_setsockopt(socket, SOL_TCP, TCP_NODELAY,
+				(char *)&val, sizeof(val));
+		if (rc)
+			cFYI(1, ("set TCP_NODELAY socket option error %d", rc));
+	}
+
 	server->ssocket = socket;
 
 	return rc;
@@ -2243,11 +2252,6 @@ is_path_accessible(int xid, struct cifsTconInfo *tcon,
 			      0 /* not legacy */, cifs_sb->local_nls,
 			      cifs_sb->mnt_cifs_flags &
 				CIFS_MOUNT_MAP_SPECIAL_CHR);
-
-	if (rc == -EOPNOTSUPP || rc == -EINVAL)
-		rc = SMBQueryInformation(xid, tcon, full_path, pfile_info,
-				cifs_sb->local_nls, cifs_sb->mnt_cifs_flags &
-				  CIFS_MOUNT_MAP_SPECIAL_CHR);
 	kfree(pfile_info);
 	return rc;
 }
@@ -2374,7 +2378,7 @@ try_mount_again:
 		goto out;
 	}
 
-	pSesInfo = cifs_find_smb_ses(srvTcp, volume_info);
+	pSesInfo = cifs_find_smb_ses(srvTcp, volume_info->username);
 	if (pSesInfo) {
 		cFYI(1, ("Existing smb sess found (status=%d)",
 			pSesInfo->status));
@@ -2550,7 +2554,7 @@ try_mount_again:
 
 remote_path_check:
 	/* check if a whole path (including prepath) is not remote */
-	if (!rc && tcon) {
+	if (!rc && cifs_sb->prepathlen && tcon) {
 		/* build_path_to_root works only when we have a valid tcon */
 		full_path = cifs_build_path_to_root(cifs_sb);
 		if (full_path == NULL) {

@@ -310,7 +310,6 @@ void blk_unplug_timeout(unsigned long data)
 	trace_block_unplug_timer(q);
 	kblockd_schedule_work(q, &q->unplug_work);
 }
-EXPORT_SYMBOL(blk_put_queue);
 
 void blk_unplug(struct request_queue *q)
 {
@@ -613,7 +612,6 @@ int blk_get_queue(struct request_queue *q)
 
 	return 1;
 }
-EXPORT_SYMBOL(blk_get_queue);
 
 static inline void blk_free_request(struct request_queue *q, struct request *rq)
 {
@@ -864,9 +862,6 @@ static struct request *get_request_wait(struct request_queue *q, int rw_flags,
 struct request *blk_get_request(struct request_queue *q, int rw, gfp_t gfp_mask)
 {
 	struct request *rq;
-
-	if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags)))
-		return NULL;
 
 	BUG_ON(rw != READ && rw != WRITE);
 
@@ -1651,10 +1646,6 @@ int blk_insert_cloned_request(struct request_queue *q, struct request *rq)
 #endif
 
 	spin_lock_irqsave(q->queue_lock, flags);
-	if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags))) {
-		spin_unlock_irqrestore(q->queue_lock, flags);
-		return -ENODEV;
-	}
 
 	/*
 	 * Submitting request must be dequeued before calling this function
@@ -2359,6 +2350,25 @@ void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
 	if (bio->bi_bdev)
 		rq->rq_disk = bio->bi_bdev->bd_disk;
 }
+
+#if ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE
+/**
+ * rq_flush_dcache_pages - Helper function to flush all pages in a request
+ * @rq: the request to be flushed
+ *
+ * Description:
+ *     Flush all pages in @rq.
+ */
+void rq_flush_dcache_pages(struct request *rq)
+{
+	struct req_iterator iter;
+	struct bio_vec *bvec;
+
+	rq_for_each_segment(bvec, rq, iter)
+		flush_dcache_page(bvec->bv_page);
+}
+EXPORT_SYMBOL_GPL(rq_flush_dcache_pages);
+#endif
 
 /**
  * blk_lld_busy - Check if underlying low-level drivers of a device are busy

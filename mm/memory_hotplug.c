@@ -27,6 +27,7 @@
 #include <linux/page-isolation.h>
 #include <linux/pfn.h>
 #include <linux/suspend.h>
+#include <linux/mm_inline.h>
 
 #include <asm/tlbflush.h>
 
@@ -71,7 +72,9 @@ static void get_page_bootmem(unsigned long info,  struct page *page, int type)
 	atomic_inc(&page->_count);
 }
 
-void put_page_bootmem(struct page *page)
+/* reference to __meminit __free_pages_bootmem is valid
+ * so use __ref to tell modpost not to generate a warning */
+void __ref put_page_bootmem(struct page *page)
 {
 	int type;
 
@@ -551,19 +554,19 @@ static inline int pageblock_free(struct page *page)
 /* Return the start of the next active pageblock after a given page */
 static struct page *next_active_pageblock(struct page *page)
 {
+	int pageblocks_stride;
+
 	/* Ensure the starting page is pageblock-aligned */
 	BUG_ON(page_to_pfn(page) & (pageblock_nr_pages - 1));
 
-	/* If the entire pageblock is free, move to the end of free page */
-	if (pageblock_free(page)) {
-		int order;
-		/* be careful. we don't have locks, page_order can be changed.*/
-		order = page_order(page);
-		if ((order < MAX_ORDER) && (order >= pageblock_order))
-			return page + (1 << order);
-	}
+	/* Move forward by at least 1 * pageblock_nr_pages */
+	pageblocks_stride = 1;
 
-	return page + pageblock_nr_pages;
+	/* If the entire pageblock is free, move to the end of free page */
+	if (pageblock_free(page))
+		pageblocks_stride += page_order(page) - pageblock_order;
+
+	return page + (pageblocks_stride * pageblock_nr_pages);
 }
 
 /* Checks if this range of memory is likely to be hot-removable. */
@@ -626,7 +629,7 @@ static int test_pages_in_a_zone(unsigned long start_pfn, unsigned long end_pfn)
  * Scanning pfn is much easier than scanning lru list.
  * Scan pfn from start to end and Find LRU page.
  */
-unsigned long scan_lru_pages(unsigned long start, unsigned long end)
+int scan_lru_pages(unsigned long start, unsigned long end)
 {
 	unsigned long pfn;
 	struct page *page;
@@ -672,6 +675,9 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 		if (!ret) { /* Success */
 			list_add_tail(&page->lru, &source);
 			move_pages--;
+			inc_zone_page_state(page, NR_ISOLATED_ANON +
+					    page_is_file_cache(page));
+
 		} else {
 			/* Becasue we don't have big zone->lock. we should
 			   check this again here. */
@@ -694,7 +700,7 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 	if (list_empty(&source))
 		goto out;
 	/* this function returns # of failed pages */
-	ret = migrate_pages(&source, hotremove_migrate_alloc, 0);
+	ret = migrate_pages(&source, hotremove_migrate_alloc, 0, 1);
 
 out:
 	return ret;
@@ -747,7 +753,7 @@ check_pages_isolated(unsigned long start_pfn, unsigned long end_pfn)
 	return offlined;
 }
 
-int offline_pages(unsigned long start_pfn,
+static int offline_pages(unsigned long start_pfn,
 		  unsigned long end_pfn, unsigned long timeout)
 {
 	unsigned long pfn, nr_pages, expire;
@@ -849,6 +855,10 @@ repeat:
 
 	setup_per_zone_wmarks();
 	calculate_zone_inactive_ratio(zone);
+	if (!node_present_pages(node)) {
+		node_clear_state(node, N_HIGH_MEMORY);
+		kswapd_stop(node);
+	}
 
 	vm_total_pages = nr_free_pagecache_pages();
 	writeback_set_ratelimit();

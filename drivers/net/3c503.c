@@ -214,8 +214,8 @@ el2_probe1(struct net_device *dev, int ioaddr)
     iobase_reg = inb(ioaddr+0x403);
     membase_reg = inb(ioaddr+0x404);
     /* ASIC location registers should be 0 or have only a single bit set. */
-    if (   (iobase_reg  & (iobase_reg - 1))
-	|| (membase_reg & (membase_reg - 1))) {
+    if ((iobase_reg  & (iobase_reg - 1)) ||
+	(membase_reg & (membase_reg - 1))) {
 	retval = -ENODEV;
 	goto out1;
     }
@@ -291,8 +291,8 @@ el2_probe1(struct net_device *dev, int ioaddr)
 	    writel(0xba5eba5e, mem_base);
 	    for (i = sizeof(test_val); i < EL2_MEMSIZE; i+=sizeof(test_val)) {
 		writel(test_val, mem_base + i);
-		if (readl(mem_base) != 0xba5eba5e
-		    || readl(mem_base + i) != test_val) {
+		if (readl(mem_base) != 0xba5eba5e ||
+		    readl(mem_base + i) != test_val) {
 		    pr_warning("3c503: memory failure or memory address conflict.\n");
 		    dev->mem_start = 0;
 		    ei_status.name = "3c503-PIO";
@@ -380,12 +380,6 @@ out:
     return retval;
 }
 
-static irqreturn_t el2_probe_interrupt(int irq, void *seen)
-{
-	*(bool *)seen = true;
-	return IRQ_HANDLED;
-}
-
 static int
 el2_open(struct net_device *dev)
 {
@@ -397,35 +391,23 @@ el2_open(struct net_device *dev)
 
 	outb(EGACFR_NORM, E33G_GACFR);	/* Enable RAM and interrupts. */
 	do {
-		bool seen;
-
-		retval = request_irq(*irqp, el2_probe_interrupt, 0,
-				     dev->name, &seen);
-		if (retval == -EBUSY)
-			continue;
-		if (retval < 0)
-			goto err_disable;
-
+	    retval = request_irq(*irqp, NULL, 0, "bogus", dev);
+	    if (retval >= 0) {
 		/* Twinkle the interrupt, and check if it's seen. */
-		seen = false;
-		smp_wmb();
+		unsigned long cookie = probe_irq_on();
 		outb_p(0x04 << ((*irqp == 9) ? 2 : *irqp), E33G_IDCFR);
 		outb_p(0x00, E33G_IDCFR);
-		msleep(1);
-		free_irq(*irqp, el2_probe_interrupt);
-		if (!seen)
-			continue;
-
-		retval = request_irq(dev->irq = *irqp, eip_interrupt, 0,
-				     dev->name, dev);
-		if (retval == -EBUSY)
-			continue;
-		if (retval < 0)
-			goto err_disable;
+		if (*irqp == probe_irq_off(cookie) &&	/* It's a good IRQ line! */
+		    ((retval = request_irq(dev->irq = *irqp,
+					   eip_interrupt, 0,
+					   dev->name, dev)) == 0))
+		    break;
+	    } else {
+		    if (retval != -EBUSY)
+			    return retval;
+	    }
 	} while (*++irqp);
-
 	if (*irqp == 0) {
-	err_disable:
 	    outb(EGACFR_IRQOFF, E33G_GACFR);	/* disable interrupts. */
 	    return -EAGAIN;
 	}

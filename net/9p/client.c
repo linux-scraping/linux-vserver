@@ -69,7 +69,7 @@ p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...);
 
 static int parse_opts(char *opts, struct p9_client *clnt)
 {
-	char *options;
+	char *options, *tmp_options;
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
 	int option;
@@ -81,12 +81,13 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 	if (!opts)
 		return 0;
 
-	options = kstrdup(opts, GFP_KERNEL);
-	if (!options) {
+	tmp_options = kstrdup(opts, GFP_KERNEL);
+	if (!tmp_options) {
 		P9_DPRINTK(P9_DEBUG_ERROR,
 				"failed to allocate copy of option string\n");
 		return -ENOMEM;
 	}
+	options = tmp_options;
 
 	while ((p = strsep(&options, ",")) != NULL) {
 		int token;
@@ -108,6 +109,13 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 			break;
 		case Opt_trans:
 			clnt->trans_mod = v9fs_get_trans_by_name(&args[0]);
+			if(clnt->trans_mod == NULL) {
+				P9_DPRINTK(P9_DEBUG_ERROR,
+				   "Could not find request transport: %s\n",
+				   (char *) &args[0]);
+				ret = -EINVAL;
+				goto free_and_return;
+			}
 			break;
 		case Opt_legacy:
 			clnt->dotu = 0;
@@ -117,7 +125,8 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 		}
 	}
 
-	kfree(options);
+free_and_return:
+	kfree(tmp_options);
 	return ret;
 }
 
@@ -221,8 +230,7 @@ struct p9_req_t *p9_tag_lookup(struct p9_client *c, u16 tag)
 	 * buffer to read the data into */
 	tag++;
 
-	if(tag >= c->max_tag)
-		return NULL;
+	BUG_ON(tag >= c->max_tag);
 
 	row = tag / P9_ROW_MAXTAG;
 	col = tag % P9_ROW_MAXTAG;
@@ -668,18 +676,12 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 	clnt->trans = NULL;
 	spin_lock_init(&clnt->lock);
 	INIT_LIST_HEAD(&clnt->fidlist);
-	clnt->fidpool = p9_idpool_create();
-	if (IS_ERR(clnt->fidpool)) {
-		err = PTR_ERR(clnt->fidpool);
-		clnt->fidpool = NULL;
-		goto error;
-	}
 
 	p9_tag_init(clnt);
 
 	err = parse_opts(options, clnt);
 	if (err < 0)
-		goto error;
+		goto free_client;
 
 	if (!clnt->trans_mod)
 		clnt->trans_mod = v9fs_get_default_trans();
@@ -688,7 +690,14 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 		err = -EPROTONOSUPPORT;
 		P9_DPRINTK(P9_DEBUG_ERROR,
 				"No transport defined or default transport\n");
-		goto error;
+		goto free_client;
+	}
+
+	clnt->fidpool = p9_idpool_create();
+	if (IS_ERR(clnt->fidpool)) {
+		err = PTR_ERR(clnt->fidpool);
+		clnt->fidpool = NULL;
+		goto put_trans;
 	}
 
 	P9_DPRINTK(P9_DEBUG_MUX, "clnt %p trans %p msize %d dotu %d\n",
@@ -696,19 +705,25 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 
 	err = clnt->trans_mod->create(clnt, dev_name, options);
 	if (err)
-		goto error;
+		goto destroy_fidpool;
 
-	if (clnt->msize > clnt->trans_mod->maxsize)
-		clnt->msize = clnt->trans_mod->maxsize;
+	if ((clnt->msize+P9_IOHDRSZ) > clnt->trans_mod->maxsize)
+		clnt->msize = clnt->trans_mod->maxsize-P9_IOHDRSZ;
 
 	err = p9_client_version(clnt);
 	if (err)
-		goto error;
+		goto close_trans;
 
 	return clnt;
 
-error:
-	p9_client_destroy(clnt);
+close_trans:
+	clnt->trans_mod->close(clnt);
+destroy_fidpool:
+	p9_idpool_destroy(clnt->fidpool);
+put_trans:
+	v9fs_put_trans(clnt->trans_mod);
+free_client:
+	kfree(clnt);
 	return ERR_PTR(err);
 }
 EXPORT_SYMBOL(p9_client_create);
@@ -1022,11 +1037,9 @@ int p9_client_clunk(struct p9_fid *fid)
 	P9_DPRINTK(P9_DEBUG_9P, "<<< RCLUNK fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
-error:
-	/*
-	 * Fid is not valid even after a failed clunk
-	 */
 	p9_fid_destroy(fid);
+
+error:
 	return err;
 }
 EXPORT_SYMBOL(p9_client_clunk);
@@ -1217,10 +1230,11 @@ static int p9_client_statsize(struct p9_wstat *wst, int optional)
 {
 	int ret;
 
+	/* NOTE: size shouldn't include its own length */
 	/* size[2] type[2] dev[4] qid[13] */
 	/* mode[4] atime[4] mtime[4] length[8]*/
 	/* name[s] uid[s] gid[s] muid[s] */
-	ret = 2+2+4+13+4+4+4+8+2+2+2+2;
+	ret = 2+4+13+4+4+4+8+2+2+2+2;
 
 	if (wst->name)
 		ret += strlen(wst->name);
@@ -1261,7 +1275,7 @@ int p9_client_wstat(struct p9_fid *fid, struct p9_wstat *wst)
 		wst->name, wst->uid, wst->gid, wst->muid, wst->extension,
 		wst->n_uid, wst->n_gid, wst->n_muid);
 
-	req = p9_client_rpc(clnt, P9_TWSTAT, "dwS", fid->fid, wst->size, wst);
+	req = p9_client_rpc(clnt, P9_TWSTAT, "dwS", fid->fid, wst->size+2, wst);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
 		goto error;

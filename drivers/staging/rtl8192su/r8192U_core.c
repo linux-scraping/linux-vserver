@@ -25,7 +25,6 @@
  */
 
 #include <linux/vmalloc.h>
-#include <linux/notifier.h>
 
 #undef LOOP_TEST
 #undef DUMP_RX
@@ -112,30 +111,25 @@ u32 rt_global_debug_component = \
 #define CAM_CONTENT_COUNT 8
 
 static struct usb_device_id rtl8192_usb_id_tbl[] = {
-	{USB_DEVICE(0x0bda, 0x8171)}, /* Realtek */
-	{USB_DEVICE(0x0bda, 0x8172)},
-	{USB_DEVICE(0x0bda, 0x8173)},
-	{USB_DEVICE(0x0bda, 0x8174)},
-	{USB_DEVICE(0x0bda, 0x8712)},
-	{USB_DEVICE(0x0bda, 0x8713)},
-	{USB_DEVICE(0x07aa, 0x0047)},
-	{USB_DEVICE(0x07d1, 0x3303)},
-	{USB_DEVICE(0x07d1, 0x3302)},
-	{USB_DEVICE(0x07d1, 0x3300)},
-	{USB_DEVICE(0x1740, 0x9603)},
-	{USB_DEVICE(0x1740, 0x9605)},
-	{USB_DEVICE(0x050d, 0x815F)},
+	/* Realtek */
+	{USB_DEVICE(0x0bda, 0x8192)},
+	{USB_DEVICE(0x0bda, 0x8709)},
+	/* Corega */
+	{USB_DEVICE(0x07aa, 0x0043)},
+	/* Belkin */
+	{USB_DEVICE(0x050d, 0x805E)},
+	/* Sitecom */
+	{USB_DEVICE(0x0df6, 0x0031)},
+	/* EnGenius */
+	{USB_DEVICE(0x1740, 0x9201)},
+	/* Dlink */
+	{USB_DEVICE(0x2001, 0x3301)},
+	/* Zinwell */
+	{USB_DEVICE(0x5a57, 0x0290)},
+	/* Guillemot */
 	{USB_DEVICE(0x06f8, 0xe031)},
-	{USB_DEVICE(0x7392, 0x7611)},
-	{USB_DEVICE(0x7392, 0x7612)},
-	{USB_DEVICE(0x7392, 0x7622)},
-	{USB_DEVICE(0x0DF6, 0x0045)},
-	{USB_DEVICE(0x0E66, 0x0015)},
-	{USB_DEVICE(0x0E66, 0x0016)},
-	{USB_DEVICE(0x0b05, 0x1786)},
-	/* these are not in the official list */
-	{USB_DEVICE(0x050d, 0x815F)}, /* Belkin F5D8053 v6 */
-	{USB_DEVICE(0x0df6, 0x004b)}, /* WL-349 */
+	//92SU
+	{USB_DEVICE(0x0bda, 0x8172)},
 	{}
 };
 
@@ -163,8 +157,6 @@ MODULE_PARM_DESC(channels," Channel bitmask for specific locales. NYI");
 static int __devinit rtl8192_usb_probe(struct usb_interface *intf,
 			 const struct usb_device_id *id);
 static void __devexit rtl8192_usb_disconnect(struct usb_interface *intf);
-static const struct net_device_ops rtl8192_netdev_ops;
-static struct notifier_block proc_netdev_notifier;
 
 static struct usb_driver rtl8192_usb_driver = {
 	.name		= RTL819xU_MODULE_NAME,	          /* Driver name   */
@@ -964,24 +956,15 @@ static int proc_get_stats_rx(char *page, char **start,
 	return len;
 }
 
-int rtl8192_proc_module_init(void)
+void rtl8192_proc_module_init(void)
 {
-	int ret;
-
 	RT_TRACE(COMP_INIT, "Initializing proc filesystem");
 	rtl8192_proc=create_proc_entry(RTL819xU_MODULE_NAME, S_IFDIR, init_net.proc_net);
-	if (!rtl8192_proc)
-		return -ENOMEM;
-	ret = register_netdevice_notifier(&proc_netdev_notifier);
-	if (ret)
-		remove_proc_entry(RTL819xU_MODULE_NAME, init_net.proc_net);
-	return ret;
 }
 
 
 void rtl8192_proc_module_remove(void)
 {
-	unregister_netdevice_notifier(&proc_netdev_notifier);
 	remove_proc_entry(RTL819xU_MODULE_NAME, init_net.proc_net);
 }
 
@@ -1009,7 +992,8 @@ void rtl8192_proc_remove_one(struct net_device *dev)
 		remove_proc_entry("registers-e", priv->dir_dev);
 	//	remove_proc_entry("cck-registers",priv->dir_dev);
 	//	remove_proc_entry("ofdm-registers",priv->dir_dev);
-		remove_proc_entry(priv->dir_dev->name, rtl8192_proc);
+		//remove_proc_entry(dev->name, rtl8192_proc);
+		remove_proc_entry("wlan0", rtl8192_proc);
 		priv->dir_dev = NULL;
 	}
 }
@@ -1126,25 +1110,6 @@ void rtl8192_proc_init_one(struct net_device *dev)
 		      dev->name);
 	}
 }
-
-static int proc_netdev_event(struct notifier_block *this,
-			     unsigned long event, void *ptr)
-{
-	struct net_device *net_dev = ptr;
-
-	if (net_dev->netdev_ops == &rtl8192_netdev_ops &&
-	    event == NETDEV_CHANGENAME) {
-		rtl8192_proc_remove_one(net_dev);
-		rtl8192_proc_init_one(net_dev);
-	}
-
-	return NOTIFY_DONE;
-}
-
-static struct notifier_block proc_netdev_notifier = {
-	.notifier_call = proc_netdev_event,
-};
-
 /****************************************************************************
    -----------------------------MISC STUFF-------------------------
 *****************************************************************************/
@@ -1538,7 +1503,7 @@ static void rtl8192_rx_isr(struct urb *urb)
         urb->context = skb;
         skb_queue_tail(&priv->rx_queue, skb);
         err = usb_submit_urb(urb, GFP_ATOMIC);
-	if(err && err != EPERM)
+	if(err && err != -EPERM)
 		printk("can not submit rxurb, err is %x,URB status is %x\n",err,urb->status);
 }
 
@@ -7192,7 +7157,7 @@ void rtl8192SU_rx_nomal(struct sk_buff* skb)
 			unicast_packet = true;
 		}
 
-		if(!ieee80211_rx(priv->ieee80211,skb, &stats)) {
+		if(!ieee80211_rtl_rx(priv->ieee80211,skb, &stats)) {
 			dev_kfree_skb_any(skb);
 		} else {
 		//	priv->stats.rxoktotal++;  //YJ,test,090108
@@ -7463,7 +7428,7 @@ static const struct net_device_ops rtl8192_netdev_ops = {
 	.ndo_set_mac_address	= r8192_set_mac_adr,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_change_mtu		= eth_change_mtu,
-	.ndo_start_xmit		= rtl8192_ieee80211_xmit,
+	.ndo_start_xmit		= rtl8192_ieee80211_rtl_xmit,
 };
 
 static int __devinit rtl8192_usb_probe(struct usb_interface *intf,
@@ -7596,63 +7561,35 @@ static int __init rtl8192_usb_module_init(void)
 	ret = ieee80211_crypto_init();
 	if (ret) {
 		printk(KERN_ERR "ieee80211_crypto_init() failed %d\n", ret);
-		goto fail_crypto;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_tkip_init();
 	if (ret) {
 		printk(KERN_ERR "ieee80211_crypto_tkip_init() failed %d\n",
 			ret);
-		goto fail_crypto_tkip;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_ccmp_init();
 	if (ret) {
 		printk(KERN_ERR "ieee80211_crypto_ccmp_init() failed %d\n",
 			ret);
-		goto fail_crypto_ccmp;
+		return ret;
 	}
 
 	ret = ieee80211_crypto_wep_init();
 	if (ret) {
 		printk(KERN_ERR "ieee80211_crypto_wep_init() failed %d\n", ret);
-		goto fail_crypto_wep;
+		return ret;
 	}
 
 	printk(KERN_INFO "\nLinux kernel driver for RTL8192 based WLAN cards\n");
 	printk(KERN_INFO "Copyright (c) 2007-2008, Realsil Wlan\n");
 	RT_TRACE(COMP_INIT, "Initializing module");
 	RT_TRACE(COMP_INIT, "Wireless extensions version %d", WIRELESS_EXT);
-
-	ret = rtl8192_proc_module_init();
-	if (ret) {
-		pr_err("rtl8192_proc_module_init() failed %d\n", ret);
-		goto fail_proc;
-	}
-
-	ret = usb_register(&rtl8192_usb_driver);
-	if (ret) {
-		pr_err("usb_register() failed %d\n", ret);
-		goto fail_usb;
-	}
-
-	return 0;
-
-fail_usb:
-	rtl8192_proc_module_remove();
-fail_proc:
-	ieee80211_crypto_wep_exit();
-fail_crypto_wep:
-	ieee80211_crypto_ccmp_exit();
-fail_crypto_ccmp:
-	ieee80211_crypto_tkip_exit();
-fail_crypto_tkip:
-	ieee80211_crypto_deinit();
-fail_crypto:
-#ifdef CONFIG_IEEE80211_DEBUG
-	ieee80211_debug_exit();
-#endif
-	return ret;
+	rtl8192_proc_module_init();
+	return usb_register(&rtl8192_usb_driver);
 }
 
 
@@ -7684,7 +7621,7 @@ void rtl8192_try_wake_queue(struct net_device *dev, int pri)
         spin_unlock_irqrestore(&priv->tx_lock,flags);
 
 	if(enough_desc)
-		ieee80211_wake_queue(priv->ieee80211);
+		ieee80211_rtl_wake_queue(priv->ieee80211);
 }
 
 void EnableHWSecurityConfig8192(struct net_device *dev)

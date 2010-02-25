@@ -205,7 +205,7 @@ struct fw_ohci {
 	dma_addr_t config_rom_bus;
 	__be32 *next_config_rom;
 	dma_addr_t next_config_rom_bus;
-	u32 next_header;
+	__be32 next_header;
 
 	struct ar_context ar_request_ctx;
 	struct ar_context ar_response_ctx;
@@ -628,7 +628,7 @@ static void ar_context_tasklet(unsigned long data)
 	d = &ab->descriptor;
 
 	if (d->res_count == 0) {
-		size_t size, size2, rest, pktsize, size3, offset;
+		size_t size, rest, offset;
 		dma_addr_t start_bus;
 		void *start;
 
@@ -639,61 +639,25 @@ static void ar_context_tasklet(unsigned long data)
 		 */
 
 		offset = offsetof(struct ar_buffer, data);
-		start = ab;
+		start = buffer = ab;
 		start_bus = le32_to_cpu(ab->descriptor.data_address) - offset;
-		buffer = ab->data;
 
 		ab = ab->next;
 		d = &ab->descriptor;
-		size = start + PAGE_SIZE - ctx->pointer;
-		/* valid buffer data in the next page */
+		size = buffer + PAGE_SIZE - ctx->pointer;
 		rest = le16_to_cpu(d->req_count) - le16_to_cpu(d->res_count);
-		/* what actually fits in this page */
-		size2 = min(rest, (size_t)PAGE_SIZE - offset - size);
 		memmove(buffer, ctx->pointer, size);
-		memcpy(buffer + size, ab->data, size2);
+		memcpy(buffer + size, ab->data, rest);
+		ctx->current_buffer = ab;
+		ctx->pointer = (void *) ab->data + rest;
+		end = buffer + size + rest;
 
-		while (size > 0) {
-			void *next = handle_ar_packet(ctx, buffer);
-			pktsize = next - buffer;
-			if (pktsize >= size) {
-				/*
-				 * We have handled all the data that was
-				 * originally in this page, so we can now
-				 * continue in the next page.
-				 */
-				buffer = next;
-				break;
-			}
-			/* move the next packet to the start of the buffer */
-			memmove(buffer, next, size + size2 - pktsize);
-			size -= pktsize;
-			/* fill up this page again */
-			size3 = min(rest - size2,
-				    (size_t)PAGE_SIZE - offset - size - size2);
-			memcpy(buffer + size + size2,
-			       (void *) ab->data + size2, size3);
-			size2 += size3;
-		}
+		while (buffer < end)
+			buffer = handle_ar_packet(ctx, buffer);
 
-		if (rest > 0) {
-			/* handle the packets that are fully in the next page */
-			buffer = (void *) ab->data +
-					(buffer - (start + offset + size));
-			end = (void *) ab->data + rest;
-
-			while (buffer < end)
-				buffer = handle_ar_packet(ctx, buffer);
-
-			ctx->current_buffer = ab;
-			ctx->pointer = end;
-
-			dma_free_coherent(ohci->card.device, PAGE_SIZE,
-					  start, start_bus);
-			ar_context_add_page(ctx);
-		} else {
-			ctx->pointer = start + PAGE_SIZE;
-		}
+		dma_free_coherent(ohci->card.device, PAGE_SIZE,
+				  start, start_bus);
+		ar_context_add_page(ctx);
 	} else {
 		buffer = ctx->pointer;
 		ctx->pointer = end =
@@ -1033,7 +997,8 @@ static int at_context_queue_packet(struct context *ctx,
 			packet->ack = RCODE_SEND_ERROR;
 			return -1;
 		}
-		packet->payload_bus = payload_bus;
+		packet->payload_bus	= payload_bus;
+		packet->payload_mapped	= true;
 
 		d[2].req_count    = cpu_to_le16(packet->payload_length);
 		d[2].data_address = cpu_to_le32(payload_bus);
@@ -1061,7 +1026,7 @@ static int at_context_queue_packet(struct context *ctx,
 	 */
 	if (ohci->generation != packet->generation ||
 	    reg_read(ohci, OHCI1394_IntEventSet) & OHCI1394_busReset) {
-		if (packet->payload_length > 0)
+		if (packet->payload_mapped)
 			dma_unmap_single(ohci->card.device, payload_bus,
 					 packet->payload_length, DMA_TO_DEVICE);
 		packet->ack = RCODE_GENERATION;
@@ -1097,7 +1062,7 @@ static int handle_at_packet(struct context *context,
 		/* This packet was cancelled, just continue. */
 		return 1;
 
-	if (packet->payload_bus)
+	if (packet->payload_mapped)
 		dma_unmap_single(ohci->card.device, packet->payload_bus,
 				 packet->payload_length, DMA_TO_DEVICE);
 
@@ -1393,8 +1358,9 @@ static void bus_reset_tasklet(unsigned long data)
 		 */
 		reg_write(ohci, OHCI1394_BusOptions,
 			  be32_to_cpu(ohci->config_rom[2]));
-		ohci->config_rom[0] = cpu_to_be32(ohci->next_header);
-		reg_write(ohci, OHCI1394_ConfigROMhdr, ohci->next_header);
+		ohci->config_rom[0] = ohci->next_header;
+		reg_write(ohci, OHCI1394_ConfigROMhdr,
+			  be32_to_cpu(ohci->next_header));
 	}
 
 #ifdef CONFIG_FIREWIRE_OHCI_REMOTE_DMA
@@ -1513,7 +1479,17 @@ static int software_reset(struct fw_ohci *ohci)
 	return -EBUSY;
 }
 
-static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
+static void copy_config_rom(__be32 *dest, const __be32 *src, size_t length)
+{
+	size_t size = length * 4;
+
+	memcpy(dest, src, size);
+	if (size < CONFIG_ROM_SIZE)
+		memset(&dest[length], 0, CONFIG_ROM_SIZE - size);
+}
+
+static int ohci_enable(struct fw_card *card,
+		       const __be32 *config_rom, size_t length)
 {
 	struct fw_ohci *ohci = fw_ohci(card);
 	struct pci_dev *dev = to_pci_dev(card->device);
@@ -1615,8 +1591,7 @@ static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
 		if (ohci->next_config_rom == NULL)
 			return -ENOMEM;
 
-		memset(ohci->next_config_rom, 0, CONFIG_ROM_SIZE);
-		fw_memcpy_to_be32(ohci->next_config_rom, config_rom, length * 4);
+		copy_config_rom(ohci->next_config_rom, config_rom, length);
 	} else {
 		/*
 		 * In the suspend case, config_rom is NULL, which
@@ -1626,7 +1601,7 @@ static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
 		ohci->next_config_rom_bus = ohci->config_rom_bus;
 	}
 
-	ohci->next_header = be32_to_cpu(ohci->next_config_rom[0]);
+	ohci->next_header = ohci->next_config_rom[0];
 	ohci->next_config_rom[0] = 0;
 	reg_write(ohci, OHCI1394_ConfigROMhdr, 0);
 	reg_write(ohci, OHCI1394_BusOptions,
@@ -1660,7 +1635,7 @@ static int ohci_enable(struct fw_card *card, u32 *config_rom, size_t length)
 }
 
 static int ohci_set_config_rom(struct fw_card *card,
-			       u32 *config_rom, size_t length)
+			       const __be32 *config_rom, size_t length)
 {
 	struct fw_ohci *ohci;
 	unsigned long flags;
@@ -1709,9 +1684,7 @@ static int ohci_set_config_rom(struct fw_card *card,
 		ohci->next_config_rom = next_config_rom;
 		ohci->next_config_rom_bus = next_config_rom_bus;
 
-		memset(ohci->next_config_rom, 0, CONFIG_ROM_SIZE);
-		fw_memcpy_to_be32(ohci->next_config_rom, config_rom,
-				  length * 4);
+		copy_config_rom(ohci->next_config_rom, config_rom, length);
 
 		ohci->next_header = config_rom[0];
 		ohci->next_config_rom[0] = 0;
@@ -1765,7 +1738,7 @@ static int ohci_cancel_packet(struct fw_card *card, struct fw_packet *packet)
 	if (packet->ack != 0)
 		goto out;
 
-	if (packet->payload_bus)
+	if (packet->payload_mapped)
 		dma_unmap_single(ohci->card.device, packet->payload_bus,
 				 packet->payload_length, DMA_TO_DEVICE);
 
@@ -2128,11 +2101,6 @@ static int ohci_queue_iso_transmit(struct fw_iso_context *base,
 	u32 payload_index, payload_end_index, next_page_index;
 	int page, end_page, i, length, offset;
 
-	/*
-	 * FIXME: Cycle lost behavior should be configurable: lose
-	 * packet, retransmit or terminate..
-	 */
-
 	p = packet;
 	payload_index = payload;
 
@@ -2162,6 +2130,14 @@ static int ohci_queue_iso_transmit(struct fw_iso_context *base,
 	if (!p->skip) {
 		d[0].control   = cpu_to_le16(DESCRIPTOR_KEY_IMMEDIATE);
 		d[0].req_count = cpu_to_le16(8);
+		/*
+		 * Link the skip address to this descriptor itself.  This causes
+		 * a context to skip a cycle whenever lost cycles or FIFO
+		 * overruns occur, without dropping the data.  The application
+		 * should then decide whether this is an error condition or not.
+		 * FIXME:  Make the context's cycle-lost behaviour configurable?
+		 */
+		d[0].branch_address = cpu_to_le32(d_bus | z);
 
 		header = (__le32 *) &d[1];
 		header[0] = cpu_to_le32(IT_HEADER_SY(p->sy) |
@@ -2253,7 +2229,6 @@ static int ohci_queue_iso_receive_dualbuffer(struct fw_iso_context *base,
 	if (rest == 0)
 		return -EINVAL;
 
-	/* FIXME: make packet-per-buffer/dual-buffer a context option */
 	while (rest > 0) {
 		d = context_get_descriptors(&ctx->context,
 					    z + header_z, &d_bus);
@@ -2498,7 +2473,10 @@ static int __devinit pci_probe(struct pci_dev *dev,
 	}
 
 	version = reg_read(ohci, OHCI1394_Version) & 0x00ff00ff;
+#if 0
+	/* FIXME: make it a context option or remove dual-buffer mode */
 	ohci->use_dualbuffer = version >= OHCI_VERSION_1_1;
+#endif
 
 	/* dual-buffer mode is broken if more than one IR context is active */
 	if (dev->vendor == PCI_VENDOR_ID_AGERE &&

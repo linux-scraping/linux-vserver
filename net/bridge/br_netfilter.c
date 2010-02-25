@@ -600,9 +600,6 @@ static unsigned int br_nf_pre_routing(unsigned int hook, struct sk_buff *skb,
 
 	pskb_trim_rcsum(skb, len);
 
-	/* BUG: Should really parse the IP options here. */
-	memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
-
 	nf_bridge_put(skb->nf_bridge);
 	if (!nf_bridge_alloc(skb))
 		return NF_DROP;
@@ -800,11 +797,9 @@ static int br_nf_dev_queue_xmit(struct sk_buff *skb)
 	if (skb->nfct != NULL &&
 	    (skb->protocol == htons(ETH_P_IP) || IS_VLAN_IP(skb)) &&
 	    skb->len > skb->dev->mtu &&
-	    !skb_is_gso(skb)) {
-		/* BUG: Should really parse the IP options here. */
-		memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
+	    !skb_is_gso(skb))
 		return ip_fragment(skb, br_dev_queue_push_xmit);
-	} else
+	else
 		return br_dev_queue_push_xmit(skb);
 }
 #else
@@ -1018,12 +1013,12 @@ static ctl_table brnf_table[] = {
 		.mode		= 0644,
 		.proc_handler	= brnf_sysctl_call_tables,
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 
 static struct ctl_path brnf_path[] = {
-	{ .procname = "net", .ctl_name = CTL_NET, },
-	{ .procname = "bridge", .ctl_name = NET_BRIDGE, },
+	{ .procname = "net", },
+	{ .procname = "bridge", },
 	{ }
 };
 #endif

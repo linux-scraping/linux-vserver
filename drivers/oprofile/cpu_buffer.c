@@ -30,8 +30,24 @@
 
 #define OP_BUFFER_FLAGS	0
 
-static struct ring_buffer *op_ring_buffer;
-DEFINE_PER_CPU(struct oprofile_cpu_buffer, cpu_buffer);
+/*
+ * Read and write access is using spin locking. Thus, writing to the
+ * buffer by NMI handler (x86) could occur also during critical
+ * sections when reading the buffer. To avoid this, there are 2
+ * buffers for independent read and write access. Read access is in
+ * process context only, write access only in the NMI handler. If the
+ * read buffer runs empty, both buffers are swapped atomically. There
+ * is potentially a small window during swapping where the buffers are
+ * disabled and samples could be lost.
+ *
+ * Using 2 buffers is a little bit overhead, but the solution is clear
+ * and does not require changes in the ring buffer implementation. It
+ * can be changed to a single buffer solution when the ring buffer
+ * access is implemented as non-locking atomic code.
+ */
+static struct ring_buffer *op_ring_buffer_read;
+static struct ring_buffer *op_ring_buffer_write;
+DEFINE_PER_CPU(struct oprofile_cpu_buffer, op_cpu_buffer);
 
 static void wq_sync_buffer(struct work_struct *work);
 
@@ -45,17 +61,19 @@ unsigned long oprofile_get_cpu_buffer_size(void)
 
 void oprofile_cpu_buffer_inc_smpl_lost(void)
 {
-	struct oprofile_cpu_buffer *cpu_buf
-		= &__get_cpu_var(cpu_buffer);
+	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(op_cpu_buffer);
 
 	cpu_buf->sample_lost_overflow++;
 }
 
 void free_cpu_buffers(void)
 {
-	if (op_ring_buffer)
-		ring_buffer_free(op_ring_buffer);
-	op_ring_buffer = NULL;
+	if (op_ring_buffer_read)
+		ring_buffer_free(op_ring_buffer_read);
+	op_ring_buffer_read = NULL;
+	if (op_ring_buffer_write)
+		ring_buffer_free(op_ring_buffer_write);
+	op_ring_buffer_write = NULL;
 }
 
 #define RB_EVENT_HDR_SIZE 4
@@ -68,12 +86,15 @@ int alloc_cpu_buffers(void)
 	unsigned long byte_size = buffer_size * (sizeof(struct op_sample) +
 						 RB_EVENT_HDR_SIZE);
 
-	op_ring_buffer = ring_buffer_alloc(byte_size, OP_BUFFER_FLAGS);
-	if (!op_ring_buffer)
+	op_ring_buffer_read = ring_buffer_alloc(byte_size, OP_BUFFER_FLAGS);
+	if (!op_ring_buffer_read)
+		goto fail;
+	op_ring_buffer_write = ring_buffer_alloc(byte_size, OP_BUFFER_FLAGS);
+	if (!op_ring_buffer_write)
 		goto fail;
 
 	for_each_possible_cpu(i) {
-		struct oprofile_cpu_buffer *b = &per_cpu(cpu_buffer, i);
+		struct oprofile_cpu_buffer *b = &per_cpu(op_cpu_buffer, i);
 
 		b->last_task = NULL;
 		b->last_is_kernel = -1;
@@ -100,7 +121,7 @@ void start_cpu_work(void)
 	work_enabled = 1;
 
 	for_each_online_cpu(i) {
-		struct oprofile_cpu_buffer *b = &per_cpu(cpu_buffer, i);
+		struct oprofile_cpu_buffer *b = &per_cpu(op_cpu_buffer, i);
 
 		/*
 		 * Spread the work by 1 jiffy per cpu so they dont all
@@ -117,10 +138,12 @@ void end_cpu_work(void)
 	work_enabled = 0;
 
 	for_each_online_cpu(i) {
-		struct oprofile_cpu_buffer *b = &per_cpu(cpu_buffer, i);
+		struct oprofile_cpu_buffer *b = &per_cpu(op_cpu_buffer, i);
 
 		cancel_delayed_work(&b->work);
 	}
+
+	flush_scheduled_work();
 }
 
 /*
@@ -139,11 +162,16 @@ struct op_sample
 *op_cpu_buffer_write_reserve(struct op_entry *entry, unsigned long size)
 {
 	entry->event = ring_buffer_lock_reserve
-		(op_ring_buffer, sizeof(struct op_sample) +
+		(op_ring_buffer_write, sizeof(struct op_sample) +
 		 size * sizeof(entry->sample->data[0]));
-	if (!entry->event)
+	if (entry->event)
+		entry->sample = ring_buffer_event_data(entry->event);
+	else
+		entry->sample = NULL;
+
+	if (!entry->sample)
 		return NULL;
-	entry->sample = ring_buffer_event_data(entry->event);
+
 	entry->size = size;
 	entry->data = entry->sample->data;
 
@@ -152,16 +180,25 @@ struct op_sample
 
 int op_cpu_buffer_write_commit(struct op_entry *entry)
 {
-	return ring_buffer_unlock_commit(op_ring_buffer, entry->event);
+	return ring_buffer_unlock_commit(op_ring_buffer_write, entry->event);
 }
 
 struct op_sample *op_cpu_buffer_read_entry(struct op_entry *entry, int cpu)
 {
 	struct ring_buffer_event *e;
-	e = ring_buffer_consume(op_ring_buffer, cpu, NULL);
-	if (!e)
+	e = ring_buffer_consume(op_ring_buffer_read, cpu, NULL);
+	if (e)
+		goto event;
+	if (ring_buffer_swap_cpu(op_ring_buffer_read,
+				 op_ring_buffer_write,
+				 cpu))
 		return NULL;
+	e = ring_buffer_consume(op_ring_buffer_read, cpu, NULL);
+	if (e)
+		goto event;
+	return NULL;
 
+event:
 	entry->event = e;
 	entry->sample = ring_buffer_event_data(e);
 	entry->size = (ring_buffer_event_length(e) - sizeof(struct op_sample))
@@ -172,7 +209,8 @@ struct op_sample *op_cpu_buffer_read_entry(struct op_entry *entry, int cpu)
 
 unsigned long op_cpu_buffer_entries(int cpu)
 {
-	return ring_buffer_entries_cpu(op_ring_buffer, cpu);
+	return ring_buffer_entries_cpu(op_ring_buffer_read, cpu)
+		+ ring_buffer_entries_cpu(op_ring_buffer_write, cpu);
 }
 
 static int
@@ -291,7 +329,7 @@ static inline void
 __oprofile_add_ext_sample(unsigned long pc, struct pt_regs * const regs,
 			  unsigned long event, int is_kernel)
 {
-	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(cpu_buffer);
+	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(op_cpu_buffer);
 	unsigned long backtrace = oprofile_backtrace_depth;
 
 	/*
@@ -336,7 +374,7 @@ oprofile_write_reserve(struct op_entry *entry, struct pt_regs * const regs,
 {
 	struct op_sample *sample;
 	int is_kernel = !user_mode(regs);
-	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(cpu_buffer);
+	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(op_cpu_buffer);
 
 	cpu_buf->sample_received++;
 
@@ -391,13 +429,13 @@ int oprofile_write_commit(struct op_entry *entry)
 
 void oprofile_add_pc(unsigned long pc, int is_kernel, unsigned long event)
 {
-	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(cpu_buffer);
+	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(op_cpu_buffer);
 	log_sample(cpu_buf, pc, 0, is_kernel, event);
 }
 
 void oprofile_add_trace(unsigned long pc)
 {
-	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(cpu_buffer);
+	struct oprofile_cpu_buffer *cpu_buf = &__get_cpu_var(op_cpu_buffer);
 
 	if (!cpu_buf->tracing)
 		return;

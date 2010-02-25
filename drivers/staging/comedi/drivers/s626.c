@@ -1926,7 +1926,7 @@ static int s626_ai_cmdtest(struct comedi_device *dev,
 	/* step 2: make sure trigger sources are unique and mutually
 	   compatible */
 
-	/* note that mutual compatiblity is not an issue here */
+	/* note that mutual compatibility is not an issue here */
 	if (cmd->scan_begin_src != TRIG_TIMER &&
 	    cmd->scan_begin_src != TRIG_EXT
 	    && cmd->scan_begin_src != TRIG_FOLLOW)
@@ -2330,7 +2330,7 @@ static int s626_enc_insn_config(struct comedi_device *dev,
 	/*   (data==NULL) ? (Preloadvalue=0) : (Preloadvalue=data[0]); */
 
 	k->SetMode(dev, k, Setup, TRUE);
-	Preload(dev, k, data[0]);
+	Preload(dev, k, *(insn->data));
 	k->PulseIndex(dev, k);
 	SetLatchSource(dev, k, valueSrclatch);
 	k->SetEnable(dev, k, (uint16_t) (enab != 0));

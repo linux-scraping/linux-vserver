@@ -227,8 +227,7 @@ DECLARE_SNMP_STAT(struct sctp_mib, sctp_statistics);
 #endif /* !TEST_FRAME */
 
 /* sctp mib definitions */
-enum
-{
+enum {
 	SCTP_MIB_NUM = 0,
 	SCTP_MIB_CURRESTAB,			/* CurrEstab */
 	SCTP_MIB_ACTIVEESTABS,			/* ActiveEstabs */
@@ -507,11 +506,6 @@ static inline void sctp_assoc_pending_pmtu(struct sctp_association *asoc)
 
 	sctp_assoc_sync_pmtu(asoc);
 	asoc->pmtu_pending = 0;
-}
-
-static inline bool sctp_chunk_pending(const struct sctp_chunk *chunk)
-{
-	return !list_empty(&chunk->list);
 }
 
 /* Walk through a list of TLV parameters.  Don't trust the

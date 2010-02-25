@@ -512,12 +512,13 @@ static struct proto rose_proto = {
 	.obj_size = sizeof(struct rose_sock),
 };
 
-static int rose_create(struct net *net, struct socket *sock, int protocol)
+static int rose_create(struct net *net, struct socket *sock, int protocol,
+		       int kern)
 {
 	struct sock *sk;
 	struct rose_sock *rose;
 
-	if (net != &init_net)
+	if (!net_eq(net, &init_net))
 		return -EAFNOSUPPORT;
 
 	if (sock->type != SOCK_SEQPACKET || protocol != 0)
@@ -677,7 +678,7 @@ static int rose_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (addr_len == sizeof(struct sockaddr_rose) && addr->srose_ndigis > 1)
 		return -EINVAL;
 
-	if ((unsigned int) addr->srose_ndigis > ROSE_MAX_DIGIS)
+	if (addr->srose_ndigis > ROSE_MAX_DIGIS)
 		return -EINVAL;
 
 	if ((dev = rose_dev_get(&addr->srose_addr)) == NULL) {
@@ -737,7 +738,7 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 	if (addr_len == sizeof(struct sockaddr_rose) && addr->srose_ndigis > 1)
 		return -EINVAL;
 
-	if ((unsigned int) addr->srose_ndigis > ROSE_MAX_DIGIS)
+	if (addr->srose_ndigis > ROSE_MAX_DIGIS)
 		return -EINVAL;
 
 	/* Source + Destination digis should not exceed ROSE_MAX_DIGIS */
@@ -983,7 +984,7 @@ int rose_rx_call_request(struct sk_buff *skb, struct net_device *dev, struct ros
 	struct sock *make;
 	struct rose_sock *make_rose;
 	struct rose_facilities_struct facilities;
-	int n;
+	int n, len;
 
 	skb->sk = NULL;		/* Initially we don't know who it's for */
 
@@ -992,9 +993,9 @@ int rose_rx_call_request(struct sk_buff *skb, struct net_device *dev, struct ros
 	 */
 	memset(&facilities, 0x00, sizeof(struct rose_facilities_struct));
 
-	if (!rose_parse_facilities(skb->data + ROSE_CALL_REQ_FACILITIES_OFF,
-				   skb->len - ROSE_CALL_REQ_FACILITIES_OFF,
-				   &facilities)) {
+	len  = (((skb->data[3] >> 4) & 0x0F) + 1) >> 1;
+	len += (((skb->data[3] >> 0) & 0x0F) + 1) >> 1;
+	if (!rose_parse_facilities(skb->data + len + 4, &facilities)) {
 		rose_transmit_clear_request(neigh, lci, ROSE_INVALID_FACILITY, 76);
 		return 0;
 	}
@@ -1238,6 +1239,7 @@ static int rose_recvmsg(struct kiocb *iocb, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct rose_sock *rose = rose_sk(sk);
+	struct sockaddr_rose *srose = (struct sockaddr_rose *)msg->msg_name;
 	size_t copied;
 	unsigned char *asmptr;
 	struct sk_buff *skb;
@@ -1273,19 +1275,23 @@ static int rose_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
 
-	if (msg->msg_name) {
-		struct sockaddr_rose *srose;
-		struct full_sockaddr_rose *full_srose = msg->msg_name;
-
-		memset(msg->msg_name, 0, sizeof(struct full_sockaddr_rose));
-		srose = msg->msg_name;
+	if (srose != NULL) {
 		srose->srose_family = AF_ROSE;
 		srose->srose_addr   = rose->dest_addr;
 		srose->srose_call   = rose->dest_call;
 		srose->srose_ndigis = rose->dest_ndigis;
-		for (n = 0 ; n < rose->dest_ndigis ; n++)
-			full_srose->srose_digis[n] = rose->dest_digis[n];
-		msg->msg_namelen = sizeof(struct full_sockaddr_rose);
+		if (msg->msg_namelen >= sizeof(struct full_sockaddr_rose)) {
+			struct full_sockaddr_rose *full_srose = (struct full_sockaddr_rose *)msg->msg_name;
+			for (n = 0 ; n < rose->dest_ndigis ; n++)
+				full_srose->srose_digis[n] = rose->dest_digis[n];
+			msg->msg_namelen = sizeof(struct full_sockaddr_rose);
+		} else {
+			if (rose->dest_ndigis >= 1) {
+				srose->srose_ndigis = 1;
+				srose->srose_digi = rose->dest_digis[0];
+			}
+			msg->msg_namelen = sizeof(struct sockaddr_rose);
+		}
 	}
 
 	skb_free_datagram(sk, skb);
@@ -1504,7 +1510,7 @@ static const struct file_operations rose_info_fops = {
 };
 #endif	/* CONFIG_PROC_FS */
 
-static struct net_proto_family rose_family_ops = {
+static const struct net_proto_family rose_family_ops = {
 	.family		=	PF_ROSE,
 	.create		=	rose_create,
 	.owner		=	THIS_MODULE,

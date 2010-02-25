@@ -591,7 +591,7 @@ static void ab3100_setup_debugfs(struct ab3100 *ab3100)
 	ab3100_get_priv.ab3100 = ab3100;
 	ab3100_get_priv.mode = false;
 	ab3100_get_reg_file = debugfs_create_file("get_reg",
-				S_IWUSR, ab3100_dir, &ab3100_get_priv,
+				S_IWUGO, ab3100_dir, &ab3100_get_priv,
 				&ab3100_get_set_reg_fops);
 	if (!ab3100_get_reg_file) {
 		err = -ENOMEM;
@@ -601,7 +601,7 @@ static void ab3100_setup_debugfs(struct ab3100 *ab3100)
 	ab3100_set_priv.ab3100 = ab3100;
 	ab3100_set_priv.mode = true;
 	ab3100_set_reg_file = debugfs_create_file("set_reg",
-				S_IWUSR, ab3100_dir, &ab3100_set_priv,
+				S_IWUGO, ab3100_dir, &ab3100_set_priv,
 				&ab3100_get_set_reg_fops);
 	if (!ab3100_set_reg_file) {
 		err = -ENOMEM;
@@ -899,9 +899,6 @@ static int __init ab3100_probe(struct i2c_client *client,
 		err = -ENOMEM;
 		goto exit_no_testreg_client;
 	}
-
-	strlcpy(ab3100->testreg_client->name, id->name,
-		sizeof(ab3100->testreg_client->name));
 
 	err = ab3100_setup(ab3100);
 	if (err)

@@ -19,7 +19,6 @@
 #include <linux/parser.h>
 #include <linux/bitops.h>
 #include <linux/magic.h>
-#include <linux/compat.h>
 #include "autofs_i.h"
 #include <linux/module.h>
 
@@ -50,6 +49,8 @@ struct autofs_info *autofs4_init_ino(struct autofs_info *ino,
 		ino->dentry = NULL;
 		ino->size = 0;
 		INIT_LIST_HEAD(&ino->active);
+		INIT_LIST_HEAD(&ino->rehash_list);
+		ino->active_count = 0;
 		INIT_LIST_HEAD(&ino->expiring);
 		atomic_set(&ino->count, 0);
 	}
@@ -342,7 +343,6 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	set_autofs_type_indirect(&sbi->type);
 	sbi->min_proto = 0;
 	sbi->max_proto = 0;
-	sbi->compat_daemon = is_compat_task();
 	mutex_init(&sbi->wq_mutex);
 	spin_lock_init(&sbi->fs_lock);
 	sbi->queues = NULL;

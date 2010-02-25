@@ -1344,8 +1344,8 @@ static u32 atl1_check_link(struct atl1_adapter *adapter)
 
 	/* link result is our setting */
 	if (!reconfig) {
-		if (adapter->link_speed != speed
-		    || adapter->link_duplex != duplex) {
+		if (adapter->link_speed != speed ||
+		    adapter->link_duplex != duplex) {
 			adapter->link_speed = speed;
 			adapter->link_duplex = duplex;
 			atl1_setup_mac_ctrl(adapter);
@@ -1864,20 +1864,13 @@ static u16 atl1_alloc_rx_buffers(struct atl1_adapter *adapter)
 
 		rfd_desc = ATL1_RFD_DESC(rfd_ring, rfd_next_to_use);
 
-		skb = netdev_alloc_skb(adapter->netdev,
-				       adapter->rx_buffer_len + NET_IP_ALIGN);
+		skb = netdev_alloc_skb_ip_align(adapter->netdev,
+						adapter->rx_buffer_len);
 		if (unlikely(!skb)) {
 			/* Better luck next round */
 			adapter->netdev->stats.rx_dropped++;
 			break;
 		}
-
-		/*
-		 * Make buffer alignment 2 beyond a 16 byte boundary
-		 * this will result in a 16 byte aligned IP header after
-		 * the 14 byte MAC header is removed
-		 */
-		skb_reserve(skb, NET_IP_ALIGN);
 
 		buffer_info->alloced = 1;
 		buffer_info->skb = skb;
@@ -2094,8 +2087,8 @@ static void atl1_intr_tx(struct atl1_adapter *adapter)
 	}
 	atomic_set(&tpd_ring->next_to_clean, sw_tpd_next_to_clean);
 
-	if (netif_queue_stopped(adapter->netdev)
-	    && netif_carrier_ok(adapter->netdev))
+	if (netif_queue_stopped(adapter->netdev) &&
+	    netif_carrier_ok(adapter->netdev))
 		netif_wake_queue(adapter->netdev);
 }
 
@@ -2478,7 +2471,7 @@ static irqreturn_t atl1_intr(int irq, void *data)
 					"pcie phy link down %x\n", status);
 			if (netif_running(adapter->netdev)) {	/* reset MAC */
 				iowrite32(0, adapter->hw.hw_addr + REG_IMR);
-				schedule_work(&adapter->reset_dev_task);
+				schedule_work(&adapter->pcie_dma_to_rst_task);
 				return IRQ_HANDLED;
 			}
 		}
@@ -2490,7 +2483,7 @@ static irqreturn_t atl1_intr(int irq, void *data)
 					"pcie DMA r/w error (status = 0x%x)\n",
 					status);
 			iowrite32(0, adapter->hw.hw_addr + REG_IMR);
-			schedule_work(&adapter->reset_dev_task);
+			schedule_work(&adapter->pcie_dma_to_rst_task);
 			return IRQ_HANDLED;
 		}
 
@@ -2596,7 +2589,7 @@ static s32 atl1_up(struct atl1_adapter *adapter)
 		irq_flags |= IRQF_SHARED;
 	}
 
-	err = request_irq(adapter->pdev->irq, &atl1_intr, irq_flags,
+	err = request_irq(adapter->pdev->irq, atl1_intr, irq_flags,
 			netdev->name, netdev);
 	if (unlikely(err))
 		goto err_up;
@@ -2635,10 +2628,10 @@ static void atl1_down(struct atl1_adapter *adapter)
 	atl1_clean_rx_ring(adapter);
 }
 
-static void atl1_reset_dev_task(struct work_struct *work)
+static void atl1_tx_timeout_task(struct work_struct *work)
 {
 	struct atl1_adapter *adapter =
-		container_of(work, struct atl1_adapter, reset_dev_task);
+		container_of(work, struct atl1_adapter, tx_timeout_task);
 	struct net_device *netdev = adapter->netdev;
 
 	netif_device_detach(netdev);
@@ -2856,11 +2849,10 @@ static int atl1_resume(struct pci_dev *pdev)
 	pci_enable_wake(pdev, PCI_D3cold, 0);
 
 	atl1_reset_hw(&adapter->hw);
+	adapter->cmb.cmb->int_stats = 0;
 
-	if (netif_running(netdev)) {
-		adapter->cmb.cmb->int_stats = 0;
+	if (netif_running(netdev))
 		atl1_up(adapter);
-	}
 	netif_device_attach(netdev);
 
 	return 0;
@@ -3050,9 +3042,11 @@ static int __devinit atl1_probe(struct pci_dev *pdev,
 		    (unsigned long)adapter);
 	adapter->phy_timer_pending = false;
 
-	INIT_WORK(&adapter->reset_dev_task, atl1_reset_dev_task);
+	INIT_WORK(&adapter->tx_timeout_task, atl1_tx_timeout_task);
 
 	INIT_WORK(&adapter->link_chg_task, atlx_link_chg_task);
+
+	INIT_WORK(&adapter->pcie_dma_to_rst_task, atl1_tx_timeout_task);
 
 	err = register_netdev(netdev);
 	if (err)

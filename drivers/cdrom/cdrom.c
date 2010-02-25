@@ -2057,6 +2057,11 @@ static int cdrom_read_cdda_old(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 	if (!nr)
 		return -ENOMEM;
 
+	if (!access_ok(VERIFY_WRITE, ubuf, nframes * CD_FRAMESIZE_RAW)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
 	cgc.data_direction = CGC_DATA_READ;
 	while (nframes > 0) {
 		if (nr > nframes)
@@ -2065,7 +2070,7 @@ static int cdrom_read_cdda_old(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 		ret = cdrom_read_block(cdi, &cgc, lba, nr, 1, CD_FRAMESIZE_RAW);
 		if (ret)
 			break;
-		if (copy_to_user(ubuf, cgc.buffer, CD_FRAMESIZE_RAW * nr)) {
+		if (__copy_to_user(ubuf, cgc.buffer, CD_FRAMESIZE_RAW * nr)) {
 			ret = -EFAULT;
 			break;
 		}
@@ -2073,6 +2078,7 @@ static int cdrom_read_cdda_old(struct cdrom_device_info *cdi, __u8 __user *ubuf,
 		nframes -= nr;
 		lba += nr;
 	}
+out:
 	kfree(cgc.buffer);
 	return ret;
 }
@@ -2678,11 +2684,12 @@ int cdrom_ioctl(struct cdrom_device_info *cdi, struct block_device *bdev,
 {
 	void __user *argp = (void __user *)arg;
 	int ret;
+	struct gendisk *disk = bdev->bd_disk;
 
 	/*
 	 * Try the generic SCSI command ioctl's first.
 	 */
-	ret = scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
+	ret = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, argp);
 	if (ret != -ENOTTY)
 		return ret;
 
@@ -2822,7 +2829,7 @@ static noinline int mmc_ioctl_cdrom_read_data(struct cdrom_device_info *cdi,
 	if (lba < 0)
 		return -EINVAL;
 
-	cgc->buffer = kzalloc(blocksize, GFP_KERNEL);
+	cgc->buffer = kmalloc(blocksize, GFP_KERNEL);
 	if (cgc->buffer == NULL)
 		return -ENOMEM;
 
@@ -3550,67 +3557,65 @@ static ctl_table cdrom_table[] = {
 		.data		= &cdrom_sysctl_settings.info, 
 		.maxlen		= CDROM_STR_SIZE,
 		.mode		= 0444,
-		.proc_handler	= &cdrom_sysctl_info,
+		.proc_handler	= cdrom_sysctl_info,
 	},
 	{
 		.procname	= "autoclose",
 		.data		= &cdrom_sysctl_settings.autoclose,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &cdrom_sysctl_handler,
+		.proc_handler	= cdrom_sysctl_handler,
 	},
 	{
 		.procname	= "autoeject",
 		.data		= &cdrom_sysctl_settings.autoeject,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &cdrom_sysctl_handler,
+		.proc_handler	= cdrom_sysctl_handler,
 	},
 	{
 		.procname	= "debug",
 		.data		= &cdrom_sysctl_settings.debug,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &cdrom_sysctl_handler,
+		.proc_handler	= cdrom_sysctl_handler,
 	},
 	{
 		.procname	= "lock",
 		.data		= &cdrom_sysctl_settings.lock,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &cdrom_sysctl_handler,
+		.proc_handler	= cdrom_sysctl_handler,
 	},
 	{
 		.procname	= "check_media",
 		.data		= &cdrom_sysctl_settings.check,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= &cdrom_sysctl_handler
+		.proc_handler	= cdrom_sysctl_handler
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 
 static ctl_table cdrom_cdrom_table[] = {
 	{
-		.ctl_name	= DEV_CDROM,
 		.procname	= "cdrom",
 		.maxlen		= 0,
 		.mode		= 0555,
 		.child		= cdrom_table,
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 
 /* Make sure that /proc/sys/dev is there */
 static ctl_table cdrom_root_table[] = {
 	{
-		.ctl_name	= CTL_DEV,
 		.procname	= "dev",
 		.maxlen		= 0,
 		.mode		= 0555,
 		.child		= cdrom_cdrom_table,
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 static struct ctl_table_header *cdrom_sysctl_header;
 

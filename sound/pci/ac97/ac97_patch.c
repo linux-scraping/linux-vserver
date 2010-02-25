@@ -800,12 +800,12 @@ AC97_SINGLE("Mono Switch", AC97_MASTER_TONE, 7, 1, 1),
 AC97_SINGLE("Mono ZC Switch", AC97_MASTER_TONE, 6, 1, 0),
 AC97_SINGLE("Mono Volume", AC97_MASTER_TONE, 0, 31, 1),
 
-AC97_SINGLE("PC Beep to Headphone Switch", AC97_AUX, 15, 1, 1),
-AC97_SINGLE("PC Beep to Headphone Volume", AC97_AUX, 12, 7, 1),
-AC97_SINGLE("PC Beep to Master Switch", AC97_AUX, 11, 1, 1),
-AC97_SINGLE("PC Beep to Master Volume", AC97_AUX, 8, 7, 1),
-AC97_SINGLE("PC Beep to Mono Switch", AC97_AUX, 7, 1, 1),
-AC97_SINGLE("PC Beep to Mono Volume", AC97_AUX, 4, 7, 1),
+AC97_SINGLE("Beep to Headphone Switch", AC97_AUX, 15, 1, 1),
+AC97_SINGLE("Beep to Headphone Volume", AC97_AUX, 12, 7, 1),
+AC97_SINGLE("Beep to Master Switch", AC97_AUX, 11, 1, 1),
+AC97_SINGLE("Beep to Master Volume", AC97_AUX, 8, 7, 1),
+AC97_SINGLE("Beep to Mono Switch", AC97_AUX, 7, 1, 1),
+AC97_SINGLE("Beep to Mono Volume", AC97_AUX, 4, 7, 1),
 
 AC97_SINGLE("Voice to Headphone Switch", AC97_PCM, 15, 1, 1),
 AC97_SINGLE("Voice to Headphone Volume", AC97_PCM, 12, 7, 1),
@@ -1867,14 +1867,12 @@ static unsigned int ad1981_jacks_blacklist[] = {
 	0x10140523, /* Thinkpad R40 */
 	0x10140534, /* Thinkpad X31 */
 	0x10140537, /* Thinkpad T41p */
-	0x1014053e, /* Thinkpad R40e */
 	0x10140554, /* Thinkpad T42p/R50p */
 	0x10140567, /* Thinkpad T43p 2668-G7U */
 	0x10140581, /* Thinkpad X41-2527 */
 	0x10280160, /* Dell Dimension 2400 */
 	0x104380b0, /* Asus A7V8X-MX */
 	0x11790241, /* Toshiba Satellite A-15 S127 */
-	0x1179ff10, /* Toshiba P500 */
 	0x144dc01a, /* Samsung NP-X20C004/SEG */
 	0 /* end */
 };
@@ -1915,7 +1913,6 @@ static unsigned int ad1981_jacks_whitelist[] = {
 	0x103c0944, /* HP nc6220 */
 	0x103c0934, /* HP nc8220 */
 	0x103c006d, /* HP nx9105 */
-	0x103c300d, /* HP Compaq dc5100 SFF(PT003AW) */
 	0x17340088, /* FSC Scenic-W */
 	0 /* end */
 };

@@ -15,7 +15,6 @@
 #include <linux/parser.h>
 #include <asm/uaccess.h>
 
-
 enum {
 	CTL_DEBUG_ERROR		= 0,
 	CTL_DEBUG_SWITCH	= 1,
@@ -129,13 +128,11 @@ static int zero;
 
 #define	CTL_ENTRY(ctl, name)				\
 	{						\
-		.ctl_name	= ctl,			\
 		.procname	= #name,		\
 		.data		= &vx_ ## name,		\
 		.maxlen		= sizeof(int),		\
 		.mode		= 0644,			\
 		.proc_handler	= &proc_dodebug,	\
-		.strategy	= &sysctl_intvec,	\
 		.extra1		= &zero,		\
 		.extra2		= &zero,		\
 	}
@@ -153,17 +150,16 @@ static ctl_table vserver_debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_CVIRT,	debug_cvirt),
 	CTL_ENTRY(CTL_DEBUG_SPACE,	debug_space),
 	CTL_ENTRY(CTL_DEBUG_MISC,	debug_misc),
-	{ .ctl_name = 0 }
+	{ 0 }
 };
 
 static ctl_table vserver_root_table[] = {
 	{
-		.ctl_name	= CTL_VSERVER,
 		.procname	= "vserver",
 		.mode		= 0555,
 		.child		= vserver_debug_table
 	},
-	{ .ctl_name = 0 }
+	{ 0 }
 };
 
 

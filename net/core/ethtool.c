@@ -198,13 +198,6 @@ static int ethtool_get_drvinfo(struct net_device *dev, void __user *useraddr)
 		rc = ops->get_sset_count(dev, ETH_SS_PRIV_FLAGS);
 		if (rc >= 0)
 			info.n_priv_flags = rc;
-	} else {
-		/* code path for obsolete hooks */
-
-		if (ops->self_test_count)
-			info.testinfo_len = ops->self_test_count(dev);
-		if (ops->get_stats_count)
-			info.n_stats = ops->get_stats_count(dev);
 	}
 	if (ops->get_regs_len)
 		info.regdump_len = ops->get_regs_len(dev);
@@ -216,34 +209,22 @@ static int ethtool_get_drvinfo(struct net_device *dev, void __user *useraddr)
 	return 0;
 }
 
-static int ethtool_set_rxnfc(struct net_device *dev,
-			     u32 cmd, void __user *useraddr)
+static int ethtool_set_rxnfc(struct net_device *dev, void __user *useraddr)
 {
-	struct ethtool_rxnfc info;
-	size_t info_size = sizeof(info);
+	struct ethtool_rxnfc cmd;
 
 	if (!dev->ethtool_ops->set_rxnfc)
 		return -EOPNOTSUPP;
 
-	/* struct ethtool_rxnfc was originally defined for
-	 * ETHTOOL_{G,S}RXFH with only the cmd, flow_type and data
-	 * members.  User-space might still be using that
-	 * definition. */
-	if (cmd == ETHTOOL_SRXFH)
-		info_size = (offsetof(struct ethtool_rxnfc, data) +
-			     sizeof(info.data));
-
-	if (copy_from_user(&info, useraddr, info_size))
+	if (copy_from_user(&cmd, useraddr, sizeof(cmd)))
 		return -EFAULT;
 
-	return dev->ethtool_ops->set_rxnfc(dev, &info);
+	return dev->ethtool_ops->set_rxnfc(dev, &cmd);
 }
 
-static int ethtool_get_rxnfc(struct net_device *dev,
-			     u32 cmd, void __user *useraddr)
+static int ethtool_get_rxnfc(struct net_device *dev, void __user *useraddr)
 {
 	struct ethtool_rxnfc info;
-	size_t info_size = sizeof(info);
 	const struct ethtool_ops *ops = dev->ethtool_ops;
 	int ret;
 	void *rule_buf = NULL;
@@ -251,22 +232,13 @@ static int ethtool_get_rxnfc(struct net_device *dev,
 	if (!ops->get_rxnfc)
 		return -EOPNOTSUPP;
 
-	/* struct ethtool_rxnfc was originally defined for
-	 * ETHTOOL_{G,S}RXFH with only the cmd, flow_type and data
-	 * members.  User-space might still be using that
-	 * definition. */
-	if (cmd == ETHTOOL_GRXFH)
-		info_size = (offsetof(struct ethtool_rxnfc, data) +
-			     sizeof(info.data));
-
-	if (copy_from_user(&info, useraddr, info_size))
+	if (copy_from_user(&info, useraddr, sizeof(info)))
 		return -EFAULT;
 
 	if (info.cmd == ETHTOOL_GRXCLSRLALL) {
 		if (info.rule_cnt > 0) {
-			if (info.rule_cnt <= KMALLOC_MAX_SIZE / sizeof(u32))
-				rule_buf = kzalloc(info.rule_cnt * sizeof(u32),
-						   GFP_USER);
+			rule_buf = kmalloc(info.rule_cnt * sizeof(u32),
+					   GFP_USER);
 			if (!rule_buf)
 				return -ENOMEM;
 		}
@@ -277,7 +249,7 @@ static int ethtool_get_rxnfc(struct net_device *dev,
 		goto err_out;
 
 	ret = -EFAULT;
-	if (copy_to_user(useraddr, &info, info_size))
+	if (copy_to_user(useraddr, &info, sizeof(info)))
 		goto err_out;
 
 	if (rule_buf) {
@@ -311,7 +283,7 @@ static int ethtool_get_regs(struct net_device *dev, char __user *useraddr)
 	if (regs.len > reglen)
 		regs.len = reglen;
 
-	regbuf = kzalloc(reglen, GFP_USER);
+	regbuf = kmalloc(reglen, GFP_USER);
 	if (!regbuf)
 		return -ENOMEM;
 
@@ -328,6 +300,26 @@ static int ethtool_get_regs(struct net_device *dev, char __user *useraddr)
  out:
 	kfree(regbuf);
 	return ret;
+}
+
+static int ethtool_reset(struct net_device *dev, char __user *useraddr)
+{
+	struct ethtool_value reset;
+	int ret;
+
+	if (!dev->ethtool_ops->reset)
+		return -EOPNOTSUPP;
+
+	if (copy_from_user(&reset, useraddr, sizeof(reset)))
+		return -EFAULT;
+
+	ret = dev->ethtool_ops->reset(dev, &reset.data);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(useraddr, &reset, sizeof(reset)))
+		return -EFAULT;
+	return 0;
 }
 
 static int ethtool_get_wol(struct net_device *dev, char __user *useraddr)
@@ -363,20 +355,6 @@ static int ethtool_nway_reset(struct net_device *dev)
 		return -EOPNOTSUPP;
 
 	return dev->ethtool_ops->nway_reset(dev);
-}
-
-static int ethtool_get_link(struct net_device *dev, char __user *useraddr)
-{
-	struct ethtool_value edata = { .cmd = ETHTOOL_GLINK };
-
-	if (!dev->ethtool_ops->get_link)
-		return -EOPNOTSUPP;
-
-	edata.data = netif_running(dev) && dev->ethtool_ops->get_link(dev);
-
-	if (copy_to_user(useraddr, &edata, sizeof(edata)))
-		return -EFAULT;
-	return 0;
 }
 
 static int ethtool_get_eeprom(struct net_device *dev, void __user *useraddr)
@@ -719,16 +697,10 @@ static int ethtool_self_test(struct net_device *dev, char __user *useraddr)
 	u64 *data;
 	int ret, test_len;
 
-	if (!ops->self_test)
-		return -EOPNOTSUPP;
-	if (!ops->get_sset_count && !ops->self_test_count)
+	if (!ops->self_test || !ops->get_sset_count)
 		return -EOPNOTSUPP;
 
-	if (ops->get_sset_count)
-		test_len = ops->get_sset_count(dev, ETH_SS_TEST);
-	else
-		/* code path for obsolete hook */
-		test_len = ops->self_test_count(dev);
+	test_len = ops->get_sset_count(dev, ETH_SS_TEST);
 	if (test_len < 0)
 		return test_len;
 	WARN_ON(test_len == 0);
@@ -763,36 +735,17 @@ static int ethtool_get_strings(struct net_device *dev, void __user *useraddr)
 	u8 *data;
 	int ret;
 
-	if (!ops->get_strings)
+	if (!ops->get_strings || !ops->get_sset_count)
 		return -EOPNOTSUPP;
 
 	if (copy_from_user(&gstrings, useraddr, sizeof(gstrings)))
 		return -EFAULT;
 
-	if (ops->get_sset_count) {
-		ret = ops->get_sset_count(dev, gstrings.string_set);
-		if (ret < 0)
-			return ret;
+	ret = ops->get_sset_count(dev, gstrings.string_set);
+	if (ret < 0)
+		return ret;
 
-		gstrings.len = ret;
-	} else {
-		/* code path for obsolete hooks */
-
-		switch (gstrings.string_set) {
-		case ETH_SS_TEST:
-			if (!ops->self_test_count)
-				return -EOPNOTSUPP;
-			gstrings.len = ops->self_test_count(dev);
-			break;
-		case ETH_SS_STATS:
-			if (!ops->get_stats_count)
-				return -EOPNOTSUPP;
-			gstrings.len = ops->get_stats_count(dev);
-			break;
-		default:
-			return -EINVAL;
-		}
-	}
+	gstrings.len = ret;
 
 	data = kmalloc(gstrings.len * ETH_GSTRING_LEN, GFP_USER);
 	if (!data)
@@ -833,16 +786,10 @@ static int ethtool_get_stats(struct net_device *dev, void __user *useraddr)
 	u64 *data;
 	int ret, n_stats;
 
-	if (!ops->get_ethtool_stats)
-		return -EOPNOTSUPP;
-	if (!ops->get_sset_count && !ops->get_stats_count)
+	if (!ops->get_ethtool_stats || !ops->get_sset_count)
 		return -EOPNOTSUPP;
 
-	if (ops->get_sset_count)
-		n_stats = ops->get_sset_count(dev, ETH_SS_STATS);
-	else
-		/* code path for obsolete hook */
-		n_stats = ops->get_stats_count(dev);
+	n_stats = ops->get_sset_count(dev, ETH_SS_STATS);
 	if (n_stats < 0)
 		return n_stats;
 	WARN_ON(n_stats == 0);
@@ -980,6 +927,7 @@ int dev_ethtool(struct net *net, struct ifreq *ifr)
 	case ETHTOOL_GPERMADDR:
 	case ETHTOOL_GUFO:
 	case ETHTOOL_GGSO:
+	case ETHTOOL_GGRO:
 	case ETHTOOL_GFLAGS:
 	case ETHTOOL_GPFLAGS:
 	case ETHTOOL_GRXFH:
@@ -1030,7 +978,8 @@ int dev_ethtool(struct net *net, struct ifreq *ifr)
 		rc = ethtool_nway_reset(dev);
 		break;
 	case ETHTOOL_GLINK:
-		rc = ethtool_get_link(dev, useraddr);
+		rc = ethtool_get_value(dev, useraddr, ethcmd,
+				       dev->ethtool_ops->get_link);
 		break;
 	case ETHTOOL_GEEPROM:
 		rc = ethtool_get_eeprom(dev, useraddr);
@@ -1145,12 +1094,12 @@ int dev_ethtool(struct net *net, struct ifreq *ifr)
 	case ETHTOOL_GRXCLSRLCNT:
 	case ETHTOOL_GRXCLSRULE:
 	case ETHTOOL_GRXCLSRLALL:
-		rc = ethtool_get_rxnfc(dev, ethcmd, useraddr);
+		rc = ethtool_get_rxnfc(dev, useraddr);
 		break;
 	case ETHTOOL_SRXFH:
 	case ETHTOOL_SRXCLSRLDEL:
 	case ETHTOOL_SRXCLSRLINS:
-		rc = ethtool_set_rxnfc(dev, ethcmd, useraddr);
+		rc = ethtool_set_rxnfc(dev, useraddr);
 		break;
 	case ETHTOOL_GGRO:
 		rc = ethtool_get_gro(dev, useraddr);
@@ -1160,6 +1109,9 @@ int dev_ethtool(struct net *net, struct ifreq *ifr)
 		break;
 	case ETHTOOL_FLASHDEV:
 		rc = ethtool_flash_device(dev, useraddr);
+		break;
+	case ETHTOOL_RESET:
+		rc = ethtool_reset(dev, useraddr);
 		break;
 	default:
 		rc = -EOPNOTSUPP;

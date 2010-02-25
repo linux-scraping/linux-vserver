@@ -210,6 +210,7 @@ void rpc_init_priority_wait_queue(struct rpc_wait_queue *queue, const char *qnam
 {
 	__rpc_init_priority_wait_queue(queue, qname, RPC_NR_PRIORITY);
 }
+EXPORT_SYMBOL_GPL(rpc_init_priority_wait_queue);
 
 void rpc_init_wait_queue(struct rpc_wait_queue *queue, const char *qname)
 {
@@ -385,6 +386,20 @@ static void rpc_wake_up_task_queue_locked(struct rpc_wait_queue *queue, struct r
 }
 
 /*
+ * Tests whether rpc queue is empty
+ */
+int rpc_queue_empty(struct rpc_wait_queue *queue)
+{
+	int res;
+
+	spin_lock_bh(&queue->lock);
+	res = queue->qlen;
+	spin_unlock_bh(&queue->lock);
+	return (res == 0);
+}
+EXPORT_SYMBOL_GPL(rpc_queue_empty);
+
+/*
  * Wake up a task on a specific queue
  */
 void rpc_wake_up_queued_task(struct rpc_wait_queue *queue, struct rpc_task *task)
@@ -485,18 +500,14 @@ EXPORT_SYMBOL_GPL(rpc_wake_up_next);
  */
 void rpc_wake_up(struct rpc_wait_queue *queue)
 {
+	struct rpc_task *task, *next;
 	struct list_head *head;
 
 	spin_lock_bh(&queue->lock);
 	head = &queue->tasks[queue->maxpriority];
 	for (;;) {
-		while (!list_empty(head)) {
-			struct rpc_task *task;
-			task = list_first_entry(head,
-					struct rpc_task,
-					u.tk_wait.list);
+		list_for_each_entry_safe(task, next, head, u.tk_wait.list)
 			rpc_wake_up_task_queue_locked(queue, task);
-		}
 		if (head == &queue->tasks[0])
 			break;
 		head--;
@@ -514,16 +525,13 @@ EXPORT_SYMBOL_GPL(rpc_wake_up);
  */
 void rpc_wake_up_status(struct rpc_wait_queue *queue, int status)
 {
+	struct rpc_task *task, *next;
 	struct list_head *head;
 
 	spin_lock_bh(&queue->lock);
 	head = &queue->tasks[queue->maxpriority];
 	for (;;) {
-		while (!list_empty(head)) {
-			struct rpc_task *task;
-			task = list_first_entry(head,
-					struct rpc_task,
-					u.tk_wait.list);
+		list_for_each_entry_safe(task, next, head, u.tk_wait.list) {
 			task->tk_status = status;
 			rpc_wake_up_task_queue_locked(queue, task);
 		}
@@ -620,25 +628,32 @@ static void __rpc_execute(struct rpc_task *task)
 	BUG_ON(RPC_IS_QUEUED(task));
 
 	for (;;) {
-		void (*do_action)(struct rpc_task *);
 
 		/*
-		 * Execute any pending callback first.
+		 * Execute any pending callback.
 		 */
-		do_action = task->tk_callback;
-		task->tk_callback = NULL;
-		if (do_action == NULL) {
+		if (task->tk_callback) {
+			void (*save_callback)(struct rpc_task *);
+
 			/*
-			 * Perform the next FSM step.
-			 * tk_action may be NULL if the task has been killed.
-			 * In particular, note that rpc_killall_tasks may
-			 * do this at any time, so beware when dereferencing.
+			 * We set tk_callback to NULL before calling it,
+			 * in case it sets the tk_callback field itself:
 			 */
-			do_action = task->tk_action;
-			if (do_action == NULL)
-				break;
+			save_callback = task->tk_callback;
+			task->tk_callback = NULL;
+			save_callback(task);
 		}
-		do_action(task);
+
+		/*
+		 * Perform the next FSM step.
+		 * tk_action may be NULL when the task has been killed
+		 * by someone else.
+		 */
+		if (!RPC_IS_QUEUED(task)) {
+			if (task->tk_action == NULL)
+				break;
+			task->tk_action(task);
+		}
 
 		/*
 		 * Lockless check for whether task is sleeping or not.
@@ -791,7 +806,6 @@ static void rpc_init_task(struct rpc_task *task, const struct rpc_task_setup *ta
 	/* Initialize retry counters */
 	task->tk_garb_retry = 2;
 	task->tk_cred_retry = 2;
-	task->tk_rebind_retry = 2;
 
 	task->tk_priority = task_setup_data->priority - RPC_PRIORITY_LOW;
 	task->tk_owner = current->tgid;

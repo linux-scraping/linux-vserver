@@ -2,7 +2,7 @@
  *
  * Driver core for Samsung SoC onboard UARTs.
  *
- * Ben Dooks, Copyright (c) 2003-2005,2008 Simtec Electronics
+ * Ben Dooks, Copyright (c) 2003-2008 Simtec Electronics
  *	http://armlinux.simtec.co.uk/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -443,15 +443,11 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
 			      unsigned int old)
 {
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
-	int timeout = 10000;
 
 	ourport->pm_level = level;
 
 	switch (level) {
 	case 3:
-		while (--timeout && !s3c24xx_serial_txempty_nofifo(port))
-			udelay(100);
-
 		if (!IS_ERR(ourport->baudclk) && ourport->baudclk != NULL)
 			clk_disable(ourport->baudclk);
 

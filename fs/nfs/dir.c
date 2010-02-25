@@ -838,8 +838,6 @@ out_zap_parent:
 		/* If we have submounts, don't unhash ! */
 		if (have_submounts(dentry))
 			goto out_valid;
-		if (dentry->d_flags & DCACHE_DISCONNECTED)
-			goto out_valid;
 		shrink_dcache_parent(dentry);
 	}
 	d_drop(dentry);
@@ -1029,12 +1027,12 @@ static struct dentry *nfs_atomic_lookup(struct inode *dir, struct dentry *dentry
 				res = NULL;
 				goto out;
 			/* This turned out not to be a regular file */
-			case -EISDIR:
 			case -ENOTDIR:
 				goto no_open;
 			case -ELOOP:
 				if (!(nd->intent.open.flags & O_NOFOLLOW))
 					goto no_open;
+			/* case -EISDIR: */
 			/* case -EINVAL: */
 			default:
 				goto out;
@@ -1583,55 +1581,47 @@ static int nfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct dentry *dentry = NULL, *rehash = NULL;
 	int error = -EBUSY;
 
-	/*
-	 * To prevent any new references to the target during the rename,
-	 * we unhash the dentry and free the inode in advance.
-	 */
-	if (!d_unhashed(new_dentry)) {
-		d_drop(new_dentry);
-		rehash = new_dentry;
-	}
-
 	dfprintk(VFS, "NFS: rename(%s/%s -> %s/%s, ct=%d)\n",
 		 old_dentry->d_parent->d_name.name, old_dentry->d_name.name,
 		 new_dentry->d_parent->d_name.name, new_dentry->d_name.name,
 		 atomic_read(&new_dentry->d_count));
 
 	/*
-	 * First check whether the target is busy ... we can't
-	 * safely do _any_ rename if the target is in use.
-	 *
-	 * For files, make a copy of the dentry and then do a 
-	 * silly-rename. If the silly-rename succeeds, the
-	 * copied dentry is hashed and becomes the new target.
+	 * For non-directories, check whether the target is busy and if so,
+	 * make a copy of the dentry and then do a silly-rename. If the
+	 * silly-rename succeeds, the copied dentry is hashed and becomes
+	 * the new target.
 	 */
-	if (!new_inode)
-		goto go_ahead;
-	if (S_ISDIR(new_inode->i_mode)) {
-		error = -EISDIR;
-		if (!S_ISDIR(old_inode->i_mode))
-			goto out;
-	} else if (atomic_read(&new_dentry->d_count) > 2) {
-		int err;
-		/* copy the target dentry's name */
-		dentry = d_alloc(new_dentry->d_parent,
-				 &new_dentry->d_name);
-		if (!dentry)
-			goto out;
+	if (new_inode && !S_ISDIR(new_inode->i_mode)) {
+		/*
+		 * To prevent any new references to the target during the
+		 * rename, we unhash the dentry in advance.
+		 */
+		if (!d_unhashed(new_dentry)) {
+			d_drop(new_dentry);
+			rehash = new_dentry;
+		}
 
-		/* silly-rename the existing target ... */
-		err = nfs_sillyrename(new_dir, new_dentry);
-		if (!err) {
-			new_dentry = rehash = dentry;
+		if (atomic_read(&new_dentry->d_count) > 2) {
+			int err;
+
+			/* copy the target dentry's name */
+			dentry = d_alloc(new_dentry->d_parent,
+					 &new_dentry->d_name);
+			if (!dentry)
+				goto out;
+
+			/* silly-rename the existing target ... */
+			err = nfs_sillyrename(new_dir, new_dentry);
+			if (err)
+				goto out;
+
+			new_dentry = dentry;
+			rehash = NULL;
 			new_inode = NULL;
-			/* instantiate the replacement target */
-			d_instantiate(new_dentry, NULL);
-		} else if (atomic_read(&new_dentry->d_count) > 1)
-			/* dentry still busy? */
-			goto out;
+		}
 	}
 
-go_ahead:
 	/*
 	 * ... prune child dentries and writebacks if needed.
 	 */
@@ -1801,7 +1791,7 @@ static int nfs_access_get_cached(struct inode *inode, struct rpc_cred *cred, str
 	cache = nfs_access_search_rbtree(inode, cred);
 	if (cache == NULL)
 		goto out;
-	if (!nfs_have_delegated_attributes(inode) &&
+	if (!nfs_have_delegation(inode, FMODE_READ) &&
 	    !time_in_range_open(jiffies, cache->jiffies, cache->jiffies + nfsi->attrtimeo))
 		goto out_stale;
 	res->jiffies = cache->jiffies;

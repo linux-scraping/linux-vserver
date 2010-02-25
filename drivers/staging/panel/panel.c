@@ -55,7 +55,7 @@
 #include <linux/list.h>
 #include <linux/notifier.h>
 #include <linux/reboot.h>
-#include <linux/utsrelease.h>
+#include <generated/utsrelease.h>
 
 #include <linux/io.h>
 #include <asm/uaccess.h>
@@ -378,7 +378,7 @@ static unsigned char lcd_bits[LCD_PORTS][LCD_BITS][BIT_STATES];
 
 #ifdef CONFIG_PANEL_LCD_CHARSET
 #undef DEFAULT_LCD_CHARSET
-#define DEFAULT_LCD_CHARSET
+#define DEFAULT_LCD_CHARSET CONFIG_PANEL_LCD_CHARSET
 #endif
 
 #endif /* DEFAULT_PROFILE == 0 */
@@ -2181,7 +2181,6 @@ int panel_init(void)
 		if (pprt) {
 			parport_release(pprt);
 			parport_unregister_device(pprt);
-			pprt = NULL;
 		}
 		parport_unregister_driver(&panel_driver);
 		printk(KERN_ERR "Panel driver version " PANEL_VERSION
@@ -2231,7 +2230,6 @@ static void __exit panel_cleanup_module(void)
 		/* TODO: free all input signals */
 		parport_release(pprt);
 		parport_unregister_device(pprt);
-		pprt = NULL;
 	}
 	parport_unregister_driver(&panel_driver);
 }

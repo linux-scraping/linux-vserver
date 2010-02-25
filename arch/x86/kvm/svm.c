@@ -27,7 +27,6 @@
 #include <linux/sched.h>
 #include <linux/ftrace_event.h>
 
-#include <asm/tlbflush.h>
 #include <asm/desc.h>
 
 #include <asm/virtext.h>
@@ -47,23 +46,13 @@ MODULE_LICENSE("GPL");
 #define SVM_FEATURE_NPT  (1 << 0)
 #define SVM_FEATURE_LBRV (1 << 1)
 #define SVM_FEATURE_SVML (1 << 2)
+#define SVM_FEATURE_PAUSE_FILTER (1 << 10)
 
 #define NESTED_EXIT_HOST	0	/* Exit handled on host level */
 #define NESTED_EXIT_DONE	1	/* Exit caused nested vmexit  */
 #define NESTED_EXIT_CONTINUE	2	/* Further checks needed      */
 
 #define DEBUGCTL_RESERVED_BITS (~(0x3fULL))
-
-/* Turn on to get debugging output*/
-/* #define NESTED_DEBUG */
-
-#ifdef NESTED_DEBUG
-#define nsvm_printk(fmt, args...) printk(KERN_INFO fmt, ## args)
-#else
-#define nsvm_printk(fmt, args...) do {} while(0)
-#endif
-
-static bool erratum_383_found __read_mostly;
 
 static const u32 host_save_user_msrs[] = {
 #ifdef CONFIG_X86_64
@@ -87,6 +76,9 @@ struct nested_state {
 
 	/* gpa pointers to the real vectors */
 	u64 vmcb_msrpm;
+
+	/* A VMEXIT is required but not yet emulated */
+	bool exit_required;
 
 	/* cache for intercepts of the guest */
 	u16 intercept_cr_read;
@@ -115,6 +107,8 @@ struct vcpu_svm {
 	u32 *msrpm;
 
 	struct nested_state nested;
+
+	bool nmi_singlestep;
 };
 
 /* enable NPT for AMD64 and X86 with PAE */
@@ -289,7 +283,7 @@ static void skip_emulated_instruction(struct kvm_vcpu *vcpu)
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 	if (!svm->next_rip) {
-		if (emulate_instruction(vcpu, vcpu->run, 0, 0, EMULTYPE_SKIP) !=
+		if (emulate_instruction(vcpu, 0, 0, EMULTYPE_SKIP) !=
 				EMULATE_DONE)
 			printk(KERN_DEBUG "%s: NOP\n", __func__);
 		return;
@@ -300,31 +294,6 @@ static void skip_emulated_instruction(struct kvm_vcpu *vcpu)
 
 	kvm_rip_write(vcpu, svm->next_rip);
 	svm_set_interrupt_shadow(vcpu, 0);
-}
-
-static void svm_init_erratum_383(void)
-{
-	u32 low, high;
-	int err;
-	u64 val;
-
-	/* Only Fam10h is affected */
-	if (boot_cpu_data.x86 != 0x10)
-		return;
-
-	/* Use _safe variants to not break nested virtualization */
-	val = native_read_msr_safe(MSR_AMD64_DC_CFG, &err);
-	if (err)
-		return;
-
-	val |= (1ULL << 47);
-
-	low  = lower_32_bits(val);
-	high = upper_32_bits(val);
-
-	native_write_msr_safe(MSR_AMD64_DC_CFG, low, high);
-
-	erratum_383_found = true;
 }
 
 static int has_svm(void)
@@ -344,78 +313,79 @@ static void svm_hardware_disable(void *garbage)
 	cpu_svm_disable();
 }
 
-static void svm_hardware_enable(void *garbage)
+static int svm_hardware_enable(void *garbage)
 {
-	struct svm_cpu_data *svm_data;
+
+	struct svm_cpu_data *sd;
 	uint64_t efer;
 	struct descriptor_table gdt_descr;
 	struct desc_struct *gdt;
 	int me = raw_smp_processor_id();
 
+	rdmsrl(MSR_EFER, efer);
+	if (efer & EFER_SVME)
+		return -EBUSY;
+
 	if (!has_svm()) {
-		printk(KERN_ERR "svm_cpu_init: err EOPNOTSUPP on %d\n", me);
-		return;
-	}
-	svm_data = per_cpu(svm_data, me);
-
-	if (!svm_data) {
-		printk(KERN_ERR "svm_cpu_init: svm_data is NULL on %d\n",
+		printk(KERN_ERR "svm_hardware_enable: err EOPNOTSUPP on %d\n",
 		       me);
-		return;
+		return -EINVAL;
+	}
+	sd = per_cpu(svm_data, me);
+
+	if (!sd) {
+		printk(KERN_ERR "svm_hardware_enable: svm_data is NULL on %d\n",
+		       me);
+		return -EINVAL;
 	}
 
-	svm_data->asid_generation = 1;
-	svm_data->max_asid = cpuid_ebx(SVM_CPUID_FUNC) - 1;
-	svm_data->next_asid = svm_data->max_asid + 1;
+	sd->asid_generation = 1;
+	sd->max_asid = cpuid_ebx(SVM_CPUID_FUNC) - 1;
+	sd->next_asid = sd->max_asid + 1;
 
 	kvm_get_gdt(&gdt_descr);
 	gdt = (struct desc_struct *)gdt_descr.base;
-	svm_data->tss_desc = (struct kvm_ldttss_desc *)(gdt + GDT_ENTRY_TSS);
+	sd->tss_desc = (struct kvm_ldttss_desc *)(gdt + GDT_ENTRY_TSS);
 
-	rdmsrl(MSR_EFER, efer);
 	wrmsrl(MSR_EFER, efer | EFER_SVME);
 
-	wrmsrl(MSR_VM_HSAVE_PA,
-	       page_to_pfn(svm_data->save_area) << PAGE_SHIFT);
+	wrmsrl(MSR_VM_HSAVE_PA, page_to_pfn(sd->save_area) << PAGE_SHIFT);
 
-	svm_init_erratum_383();
-
-	return;
+	return 0;
 }
 
 static void svm_cpu_uninit(int cpu)
 {
-	struct svm_cpu_data *svm_data
-		= per_cpu(svm_data, raw_smp_processor_id());
+	struct svm_cpu_data *sd = per_cpu(svm_data, raw_smp_processor_id());
 
-	if (!svm_data)
+	if (!sd)
 		return;
 
 	per_cpu(svm_data, raw_smp_processor_id()) = NULL;
-	__free_page(svm_data->save_area);
-	kfree(svm_data);
+	__free_page(sd->save_area);
+	kfree(sd);
 }
 
 static int svm_cpu_init(int cpu)
 {
-	struct svm_cpu_data *svm_data;
+	struct svm_cpu_data *sd;
 	int r;
 
-	svm_data = kzalloc(sizeof(struct svm_cpu_data), GFP_KERNEL);
-	if (!svm_data)
+	sd = kzalloc(sizeof(struct svm_cpu_data), GFP_KERNEL);
+	if (!sd)
 		return -ENOMEM;
-	svm_data->cpu = cpu;
-	svm_data->save_area = alloc_page(GFP_KERNEL);
+	sd->cpu = cpu;
+	sd->save_area = alloc_page(GFP_KERNEL);
 	r = -ENOMEM;
-	if (!svm_data->save_area)
+	if (!sd->save_area)
 		goto err_1;
 
-	per_cpu(svm_data, cpu) = svm_data;
+	per_cpu(svm_data, cpu) = sd;
 
 	return 0;
 
 err_1:
-	kfree(svm_data);
+	kfree(sd);
 	return r;
 
 }
@@ -507,7 +477,7 @@ static __init int svm_hardware_setup(void)
 		kvm_enable_efer_bits(EFER_SVME);
 	}
 
-	for_each_online_cpu(cpu) {
+	for_each_possible_cpu(cpu) {
 		r = svm_cpu_init(cpu);
 		if (r)
 			goto err;
@@ -541,7 +511,7 @@ static __exit void svm_hardware_unsetup(void)
 {
 	int cpu;
 
-	for_each_online_cpu(cpu)
+	for_each_possible_cpu(cpu)
 		svm_cpu_uninit(cpu);
 
 	__free_pages(pfn_to_page(iopm_base >> PAGE_SHIFT), IOPM_ALLOC_ORDER);
@@ -621,6 +591,7 @@ static void init_vmcb(struct vcpu_svm *svm)
 
 	control->iopm_base_pa = iopm_base;
 	control->msrpm_base_pa = __pa(svm->msrpm);
+	control->tsc_offset = 0;
 	control->int_ctl = V_INTR_MASKING_MASK;
 
 	init_seg(&save->es);
@@ -675,8 +646,6 @@ static void init_vmcb(struct vcpu_svm *svm)
 		control->intercept_cr_write &= ~(INTERCEPT_CR0_MASK|
 						 INTERCEPT_CR3_MASK);
 		save->g_pat = 0x0007040600070406ULL;
-		/* enable caching because the QEMU Bios doesn't enable it */
-		save->cr0 = X86_CR0_ET;
 		save->cr3 = 0;
 		save->cr4 = 0;
 	}
@@ -684,6 +653,11 @@ static void init_vmcb(struct vcpu_svm *svm)
 
 	svm->nested.vmcb = 0;
 	svm->vcpu.arch.hflags = 0;
+
+	if (svm_has(SVM_FEATURE_PAUSE_FILTER)) {
+		control->pause_filter_count = 3000;
+		control->intercept |= (1ULL << INTERCEPT_PAUSE);
+	}
 
 	enable_gif(svm);
 }
@@ -724,27 +698,28 @@ static struct kvm_vcpu *svm_create_vcpu(struct kvm *kvm, unsigned int id)
 	if (err)
 		goto free_svm;
 
-	err = -ENOMEM;
 	page = alloc_page(GFP_KERNEL);
-	if (!page)
+	if (!page) {
+		err = -ENOMEM;
 		goto uninit;
+	}
 
+	err = -ENOMEM;
 	msrpm_pages = alloc_pages(GFP_KERNEL, MSRPM_ALLOC_ORDER);
 	if (!msrpm_pages)
-		goto free_page1;
+		goto uninit;
 
 	nested_msrpm_pages = alloc_pages(GFP_KERNEL, MSRPM_ALLOC_ORDER);
 	if (!nested_msrpm_pages)
-		goto free_page2;
-
-	hsave_page = alloc_page(GFP_KERNEL);
-	if (!hsave_page)
-		goto free_page3;
-
-	svm->nested.hsave = page_address(hsave_page);
+		goto uninit;
 
 	svm->msrpm = page_address(msrpm_pages);
 	svm_vcpu_init_msrpm(svm->msrpm);
+
+	hsave_page = alloc_page(GFP_KERNEL);
+	if (!hsave_page)
+		goto uninit;
+	svm->nested.hsave = page_address(hsave_page);
 
 	svm->nested.msrpm = page_address(nested_msrpm_pages);
 
@@ -753,7 +728,6 @@ static struct kvm_vcpu *svm_create_vcpu(struct kvm *kvm, unsigned int id)
 	svm->vmcb_pa = page_to_pfn(page) << PAGE_SHIFT;
 	svm->asid_generation = 0;
 	init_vmcb(svm);
-	svm->vmcb->control.tsc_offset = 0-native_read_tsc();
 
 	fx_init(&svm->vcpu);
 	svm->vcpu.fpu_active = 1;
@@ -763,12 +737,6 @@ static struct kvm_vcpu *svm_create_vcpu(struct kvm *kvm, unsigned int id)
 
 	return &svm->vcpu;
 
-free_page3:
-	__free_pages(nested_msrpm_pages, MSRPM_ALLOC_ORDER);
-free_page2:
-	__free_pages(msrpm_pages, MSRPM_ALLOC_ORDER);
-free_page1:
-	__free_page(page);
 uninit:
 	kvm_vcpu_uninit(&svm->vcpu);
 free_svm:
@@ -797,16 +765,14 @@ static void svm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 	if (unlikely(cpu != vcpu->cpu)) {
 		u64 delta;
 
-		if (check_tsc_unstable()) {
-			/*
-			 * Make sure that the guest sees a monotonically
-			 * increasing TSC.
-			 */
-			delta = vcpu->arch.host_tsc - native_read_tsc();
-			svm->vmcb->control.tsc_offset += delta;
-			if (is_nested(svm))
-				svm->nested.hsave->control.tsc_offset += delta;
-		}
+		/*
+		 * Make sure that the guest sees a monotonically
+		 * increasing TSC.
+		 */
+		delta = vcpu->arch.host_tsc - native_read_tsc();
+		svm->vmcb->control.tsc_offset += delta;
+		if (is_nested(svm))
+			svm->nested.hsave->control.tsc_offset += delta;
 		vcpu->cpu = cpu;
 		kvm_migrate_timers(vcpu);
 		svm->asid_generation = 0;
@@ -825,7 +791,7 @@ static void svm_vcpu_put(struct kvm_vcpu *vcpu)
 	for (i = 0; i < NR_HOST_SAVE_USER_MSRS; i++)
 		wrmsrl(host_save_user_msrs[i], svm->host_user_msrs[i]);
 
-	rdtscll(vcpu->arch.host_tsc);
+	vcpu->arch.host_tsc = native_read_tsc();
 }
 
 static unsigned long svm_get_rflags(struct kvm_vcpu *vcpu)
@@ -1083,7 +1049,7 @@ static void update_db_intercept(struct kvm_vcpu *vcpu)
 	svm->vmcb->control.intercept_exceptions &=
 		~((1 << DB_VECTOR) | (1 << BP_VECTOR));
 
-	if (vcpu->arch.singlestep)
+	if (svm->nmi_singlestep)
 		svm->vmcb->control.intercept_exceptions |= (1 << DB_VECTOR);
 
 	if (vcpu->guest_debug & KVM_GUESTDBG_ENABLE) {
@@ -1098,26 +1064,16 @@ static void update_db_intercept(struct kvm_vcpu *vcpu)
 		vcpu->guest_debug = 0;
 }
 
-static int svm_guest_debug(struct kvm_vcpu *vcpu, struct kvm_guest_debug *dbg)
+static void svm_guest_debug(struct kvm_vcpu *vcpu, struct kvm_guest_debug *dbg)
 {
-	int old_debug = vcpu->guest_debug;
 	struct vcpu_svm *svm = to_svm(vcpu);
-
-	vcpu->guest_debug = dbg->control;
-
-	update_db_intercept(vcpu);
 
 	if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP)
 		svm->vmcb->save.dr7 = dbg->arch.debugreg[7];
 	else
 		svm->vmcb->save.dr7 = vcpu->arch.dr7;
 
-	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP)
-		svm->vmcb->save.rflags |= X86_EFLAGS_TF | X86_EFLAGS_RF;
-	else if (old_debug & KVM_GUESTDBG_SINGLESTEP)
-		svm->vmcb->save.rflags &= ~(X86_EFLAGS_TF | X86_EFLAGS_RF);
-
-	return 0;
+	update_db_intercept(vcpu);
 }
 
 static void load_host_msrs(struct kvm_vcpu *vcpu)
@@ -1134,16 +1090,16 @@ static void save_host_msrs(struct kvm_vcpu *vcpu)
 #endif
 }
 
-static void new_asid(struct vcpu_svm *svm, struct svm_cpu_data *svm_data)
+static void new_asid(struct vcpu_svm *svm, struct svm_cpu_data *sd)
 {
-	if (svm_data->next_asid > svm_data->max_asid) {
-		++svm_data->asid_generation;
-		svm_data->next_asid = 1;
+	if (sd->next_asid > sd->max_asid) {
+		++sd->asid_generation;
+		sd->next_asid = 1;
 		svm->vmcb->control.tlb_ctl = TLB_CONTROL_FLUSH_ALL_ASID;
 	}
 
-	svm->asid_generation = svm_data->asid_generation;
-	svm->vmcb->control.asid = svm_data->next_asid++;
+	svm->asid_generation = sd->asid_generation;
+	svm->vmcb->control.asid = sd->next_asid++;
 }
 
 static unsigned long svm_get_dr(struct kvm_vcpu *vcpu, int dr)
@@ -1218,7 +1174,7 @@ static void svm_set_dr(struct kvm_vcpu *vcpu, int dr, unsigned long value,
 	}
 }
 
-static int pf_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int pf_interception(struct vcpu_svm *svm)
 {
 	u64 fault_address;
 	u32 error_code;
@@ -1232,17 +1188,19 @@ static int pf_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return kvm_mmu_page_fault(&svm->vcpu, fault_address, error_code);
 }
 
-static int db_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int db_interception(struct vcpu_svm *svm)
 {
+	struct kvm_run *kvm_run = svm->vcpu.run;
+
 	if (!(svm->vcpu.guest_debug &
 	      (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) &&
-		!svm->vcpu.arch.singlestep) {
+		!svm->nmi_singlestep) {
 		kvm_queue_exception(&svm->vcpu, DB_VECTOR);
 		return 1;
 	}
 
-	if (svm->vcpu.arch.singlestep) {
-		svm->vcpu.arch.singlestep = false;
+	if (svm->nmi_singlestep) {
+		svm->nmi_singlestep = false;
 		if (!(svm->vcpu.guest_debug & KVM_GUESTDBG_SINGLESTEP))
 			svm->vmcb->save.rflags &=
 				~(X86_EFLAGS_TF | X86_EFLAGS_RF);
@@ -1261,25 +1219,27 @@ static int db_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int bp_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int bp_interception(struct vcpu_svm *svm)
 {
+	struct kvm_run *kvm_run = svm->vcpu.run;
+
 	kvm_run->exit_reason = KVM_EXIT_DEBUG;
 	kvm_run->debug.arch.pc = svm->vmcb->save.cs.base + svm->vmcb->save.rip;
 	kvm_run->debug.arch.exception = BP_VECTOR;
 	return 0;
 }
 
-static int ud_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int ud_interception(struct vcpu_svm *svm)
 {
 	int er;
 
-	er = emulate_instruction(&svm->vcpu, kvm_run, 0, 0, EMULTYPE_TRAP_UD);
+	er = emulate_instruction(&svm->vcpu, 0, 0, EMULTYPE_TRAP_UD);
 	if (er != EMULATE_DONE)
 		kvm_queue_exception(&svm->vcpu, UD_VECTOR);
 	return 1;
 }
 
-static int nm_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int nm_interception(struct vcpu_svm *svm)
 {
 	svm->vmcb->control.intercept_exceptions &= ~(1 << NM_VECTOR);
 	if (!(svm->vcpu.arch.cr0 & X86_CR0_TS))
@@ -1289,59 +1249,8 @@ static int nm_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static bool is_erratum_383(void)
+static int mc_interception(struct vcpu_svm *svm)
 {
-	int err, i;
-	u64 value;
-
-	if (!erratum_383_found)
-		return false;
-
-	value = native_read_msr_safe(MSR_IA32_MC0_STATUS, &err);
-	if (err)
-		return false;
-
-	/* Bit 62 may or may not be set for this mce */
-	value &= ~(1ULL << 62);
-
-	if (value != 0xb600000000010015ULL)
-		return false;
-
-	/* Clear MCi_STATUS registers */
-	for (i = 0; i < 6; ++i)
-		native_write_msr_safe(MSR_IA32_MCx_STATUS(i), 0, 0);
-
-	value = native_read_msr_safe(MSR_IA32_MCG_STATUS, &err);
-	if (!err) {
-		u32 low, high;
-
-		value &= ~(1ULL << 2);
-		low    = lower_32_bits(value);
-		high   = upper_32_bits(value);
-
-		native_write_msr_safe(MSR_IA32_MCG_STATUS, low, high);
-	}
-
-	/* Flush tlb to evict multi-match entries */
-	__flush_tlb_all();
-
-	return true;
-}
-
-static void svm_handle_mce(struct vcpu_svm *svm)
-{
-	if (is_erratum_383()) {
-		/*
-		 * Erratum 383 triggered. Guest state is corrupt so kill the
-		 * guest.
-		 */
-		pr_err("KVM: Guest triggered AMD Erratum 383\n");
-
-		set_bit(KVM_REQ_TRIPLE_FAULT, &svm->vcpu.requests);
-
-		return;
-	}
-
 	/*
 	 * On an #MC intercept the MCE handler is not called automatically in
 	 * the host. So do it by hand here.
@@ -1350,16 +1259,13 @@ static void svm_handle_mce(struct vcpu_svm *svm)
 		"int $0x12\n");
 	/* not sure if we ever come back to this point */
 
-	return;
-}
-
-static int mc_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
-{
 	return 1;
 }
 
-static int shutdown_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int shutdown_interception(struct vcpu_svm *svm)
 {
+	struct kvm_run *kvm_run = svm->vcpu.run;
+
 	/*
 	 * VMCB is undefined after a SHUTDOWN intercept
 	 * so reinitialize it.
@@ -1371,7 +1277,7 @@ static int shutdown_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 0;
 }
 
-static int io_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int io_interception(struct vcpu_svm *svm)
 {
 	u32 io_info = svm->vmcb->control.exit_info_1; /* address size bug? */
 	int size, in, string;
@@ -1385,7 +1291,7 @@ static int io_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 
 	if (string) {
 		if (emulate_instruction(&svm->vcpu,
-					kvm_run, 0, 0, 0) == EMULATE_DO_MMIO)
+					0, 0, 0) == EMULATE_DO_MMIO)
 			return 0;
 		return 1;
 	}
@@ -1395,33 +1301,33 @@ static int io_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	size = (io_info & SVM_IOIO_SIZE_MASK) >> SVM_IOIO_SIZE_SHIFT;
 
 	skip_emulated_instruction(&svm->vcpu);
-	return kvm_emulate_pio(&svm->vcpu, kvm_run, in, size, port);
+	return kvm_emulate_pio(&svm->vcpu, in, size, port);
 }
 
-static int nmi_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int nmi_interception(struct vcpu_svm *svm)
 {
 	return 1;
 }
 
-static int intr_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int intr_interception(struct vcpu_svm *svm)
 {
 	++svm->vcpu.stat.irq_exits;
 	return 1;
 }
 
-static int nop_on_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int nop_on_interception(struct vcpu_svm *svm)
 {
 	return 1;
 }
 
-static int halt_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int halt_interception(struct vcpu_svm *svm)
 {
 	svm->next_rip = kvm_rip_read(&svm->vcpu) + 1;
 	skip_emulated_instruction(&svm->vcpu);
 	return kvm_emulate_halt(&svm->vcpu);
 }
 
-static int vmmcall_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int vmmcall_interception(struct vcpu_svm *svm)
 {
 	svm->next_rip = kvm_rip_read(&svm->vcpu) + 3;
 	skip_emulated_instruction(&svm->vcpu);
@@ -1472,8 +1378,15 @@ static inline int nested_svm_intr(struct vcpu_svm *svm)
 
 	svm->vmcb->control.exit_code = SVM_EXIT_INTR;
 
-	if (nested_svm_exit_handled(svm)) {
-		nsvm_printk("VMexit -> INTR\n");
+	if (svm->nested.intercept & 1ULL) {
+		/*
+		 * The #vmexit can't be emulated here directly because this
+		 * code path runs with irqs and preemtion disabled. A
+		 * #vmexit emulation might sleep. Only signal request for
+		 * the #vmexit here.
+		 */
+		svm->nested.exit_required = true;
+		trace_kvm_nested_intr_vmexit(svm->vmcb->save.rip);
 		return 1;
 	}
 
@@ -1484,10 +1397,7 @@ static void *nested_svm_map(struct vcpu_svm *svm, u64 gpa, enum km_type idx)
 {
 	struct page *page;
 
-	down_read(&current->mm->mmap_sem);
 	page = gfn_to_page(svm->vcpu.kvm, gpa >> PAGE_SHIFT);
-	up_read(&current->mm->mmap_sem);
-
 	if (is_error_page(page))
 		goto error;
 
@@ -1626,14 +1536,12 @@ static int nested_svm_exit_handled(struct vcpu_svm *svm)
 	}
 	default: {
 		u64 exit_bits = 1ULL << (exit_code - SVM_EXIT_INTR);
-		nsvm_printk("exit code: 0x%x\n", exit_code);
 		if (svm->nested.intercept & exit_bits)
 			vmexit = NESTED_EXIT_DONE;
 	}
 	}
 
 	if (vmexit == NESTED_EXIT_DONE) {
-		nsvm_printk("#VMEXIT reason=%04x\n", exit_code);
 		nested_svm_vmexit(svm);
 	}
 
@@ -1678,6 +1586,12 @@ static int nested_svm_vmexit(struct vcpu_svm *svm)
 	struct vmcb *hsave = svm->nested.hsave;
 	struct vmcb *vmcb = svm->vmcb;
 
+	trace_kvm_nested_vmexit_inject(vmcb->control.exit_code,
+				       vmcb->control.exit_info_1,
+				       vmcb->control.exit_info_2,
+				       vmcb->control.exit_int_info,
+				       vmcb->control.exit_int_info_err);
+
 	nested_vmcb = nested_svm_map(svm, svm->nested.vmcb, KM_USER0);
 	if (!nested_vmcb)
 		return 1;
@@ -1711,6 +1625,22 @@ static int nested_svm_vmexit(struct vcpu_svm *svm)
 	nested_vmcb->control.exit_info_2       = vmcb->control.exit_info_2;
 	nested_vmcb->control.exit_int_info     = vmcb->control.exit_int_info;
 	nested_vmcb->control.exit_int_info_err = vmcb->control.exit_int_info_err;
+
+	/*
+	 * If we emulate a VMRUN/#VMEXIT in the same host #vmexit cycle we have
+	 * to make sure that we do not lose injected events. So check event_inj
+	 * here and copy it to exit_int_info if it is valid.
+	 * Exit_int_info and event_inj can't be both valid because the case
+	 * below only happens on a VMRUN instruction intercept which has
+	 * no valid exit_int_info set.
+	 */
+	if (vmcb->control.event_inj & SVM_EVTINJ_VALID) {
+		struct vmcb_control_area *nc = &nested_vmcb->control;
+
+		nc->exit_int_info     = vmcb->control.event_inj;
+		nc->exit_int_info_err = vmcb->control.event_inj_err;
+	}
+
 	nested_vmcb->control.tlb_ctl           = 0;
 	nested_vmcb->control.event_inj         = 0;
 	nested_vmcb->control.event_inj_err     = 0;
@@ -1721,10 +1651,6 @@ static int nested_svm_vmexit(struct vcpu_svm *svm)
 
 	/* Restore the original control entries */
 	copy_vmcb_control_area(vmcb, hsave);
-
-	/* Kill any pending exceptions */
-	if (svm->vcpu.arch.exception.pending == true)
-		nsvm_printk("WARNING: Pending Exception\n");
 
 	kvm_clear_exception_queue(&svm->vcpu);
 	kvm_clear_interrupt_queue(&svm->vcpu);
@@ -1795,6 +1721,12 @@ static bool nested_svm_vmrun(struct vcpu_svm *svm)
 
 	/* nested_vmcb is our indicator if nested SVM is activated */
 	svm->nested.vmcb = svm->vmcb->save.rax;
+
+	trace_kvm_nested_vmrun(svm->vmcb->save.rip - 3, svm->nested.vmcb,
+			       nested_vmcb->save.rip,
+			       nested_vmcb->control.int_ctl,
+			       nested_vmcb->control.event_inj,
+			       nested_vmcb->control.nested_ctl);
 
 	/* Clear internal status */
 	kvm_clear_exception_queue(&svm->vcpu);
@@ -1883,28 +1815,15 @@ static bool nested_svm_vmrun(struct vcpu_svm *svm)
 	svm->nested.intercept            = nested_vmcb->control.intercept;
 
 	force_new_asid(&svm->vcpu);
-	svm->vmcb->control.exit_int_info = nested_vmcb->control.exit_int_info;
-	svm->vmcb->control.exit_int_info_err = nested_vmcb->control.exit_int_info_err;
 	svm->vmcb->control.int_ctl = nested_vmcb->control.int_ctl | V_INTR_MASKING_MASK;
-	if (nested_vmcb->control.int_ctl & V_IRQ_MASK) {
-		nsvm_printk("nSVM Injecting Interrupt: 0x%x\n",
-				nested_vmcb->control.int_ctl);
-	}
 	if (nested_vmcb->control.int_ctl & V_INTR_MASKING_MASK)
 		svm->vcpu.arch.hflags |= HF_VINTR_MASK;
 	else
 		svm->vcpu.arch.hflags &= ~HF_VINTR_MASK;
 
-	nsvm_printk("nSVM exit_int_info: 0x%x | int_state: 0x%x\n",
-			nested_vmcb->control.exit_int_info,
-			nested_vmcb->control.int_state);
-
 	svm->vmcb->control.int_vector = nested_vmcb->control.int_vector;
 	svm->vmcb->control.int_state = nested_vmcb->control.int_state;
 	svm->vmcb->control.tsc_offset += nested_vmcb->control.tsc_offset;
-	if (nested_vmcb->control.event_inj & SVM_EVTINJ_VALID)
-		nsvm_printk("Injecting Event: 0x%x\n",
-				nested_vmcb->control.event_inj);
 	svm->vmcb->control.event_inj = nested_vmcb->control.event_inj;
 	svm->vmcb->control.event_inj_err = nested_vmcb->control.event_inj_err;
 
@@ -1931,7 +1850,7 @@ static void nested_svm_vmloadsave(struct vmcb *from_vmcb, struct vmcb *to_vmcb)
 	to_vmcb->save.sysenter_eip = from_vmcb->save.sysenter_eip;
 }
 
-static int vmload_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int vmload_interception(struct vcpu_svm *svm)
 {
 	struct vmcb *nested_vmcb;
 
@@ -1951,7 +1870,7 @@ static int vmload_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int vmsave_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int vmsave_interception(struct vcpu_svm *svm)
 {
 	struct vmcb *nested_vmcb;
 
@@ -1971,10 +1890,8 @@ static int vmsave_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int vmrun_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int vmrun_interception(struct vcpu_svm *svm)
 {
-	nsvm_printk("VMrun\n");
-
 	if (nested_svm_check_permissions(svm))
 		return 1;
 
@@ -2001,7 +1918,7 @@ failed:
 	return 1;
 }
 
-static int stgi_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int stgi_interception(struct vcpu_svm *svm)
 {
 	if (nested_svm_check_permissions(svm))
 		return 1;
@@ -2014,7 +1931,7 @@ static int stgi_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int clgi_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int clgi_interception(struct vcpu_svm *svm)
 {
 	if (nested_svm_check_permissions(svm))
 		return 1;
@@ -2031,10 +1948,12 @@ static int clgi_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int invlpga_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int invlpga_interception(struct vcpu_svm *svm)
 {
 	struct kvm_vcpu *vcpu = &svm->vcpu;
-	nsvm_printk("INVLPGA\n");
+
+	trace_kvm_invlpga(svm->vmcb->save.rip, vcpu->arch.regs[VCPU_REGS_RCX],
+			  vcpu->arch.regs[VCPU_REGS_RAX]);
 
 	/* Let's treat INVLPGA the same as INVLPG (can be optimized!) */
 	kvm_mmu_invlpg(vcpu, vcpu->arch.regs[VCPU_REGS_RAX]);
@@ -2044,15 +1963,21 @@ static int invlpga_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int invalid_op_interception(struct vcpu_svm *svm,
-				   struct kvm_run *kvm_run)
+static int skinit_interception(struct vcpu_svm *svm)
+{
+	trace_kvm_skinit(svm->vmcb->save.rip, svm->vcpu.arch.regs[VCPU_REGS_RAX]);
+
+	kvm_queue_exception(&svm->vcpu, UD_VECTOR);
+	return 1;
+}
+
+static int invalid_op_interception(struct vcpu_svm *svm)
 {
 	kvm_queue_exception(&svm->vcpu, UD_VECTOR);
 	return 1;
 }
 
-static int task_switch_interception(struct vcpu_svm *svm,
-				    struct kvm_run *kvm_run)
+static int task_switch_interception(struct vcpu_svm *svm)
 {
 	u16 tss_selector;
 	int reason;
@@ -2102,41 +2027,42 @@ static int task_switch_interception(struct vcpu_svm *svm,
 	return kvm_task_switch(&svm->vcpu, tss_selector, reason);
 }
 
-static int cpuid_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int cpuid_interception(struct vcpu_svm *svm)
 {
 	svm->next_rip = kvm_rip_read(&svm->vcpu) + 2;
 	kvm_emulate_cpuid(&svm->vcpu);
 	return 1;
 }
 
-static int iret_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int iret_interception(struct vcpu_svm *svm)
 {
 	++svm->vcpu.stat.nmi_window_exits;
-	svm->vmcb->control.intercept &= ~(1ULL << INTERCEPT_IRET);
+	svm->vmcb->control.intercept &= ~(1UL << INTERCEPT_IRET);
 	svm->vcpu.arch.hflags |= HF_IRET_MASK;
 	return 1;
 }
 
-static int invlpg_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int invlpg_interception(struct vcpu_svm *svm)
 {
-	if (emulate_instruction(&svm->vcpu, kvm_run, 0, 0, 0) != EMULATE_DONE)
+	if (emulate_instruction(&svm->vcpu, 0, 0, 0) != EMULATE_DONE)
 		pr_unimpl(&svm->vcpu, "%s: failed\n", __func__);
 	return 1;
 }
 
-static int emulate_on_interception(struct vcpu_svm *svm,
-				   struct kvm_run *kvm_run)
+static int emulate_on_interception(struct vcpu_svm *svm)
 {
-	if (emulate_instruction(&svm->vcpu, NULL, 0, 0, 0) != EMULATE_DONE)
+	if (emulate_instruction(&svm->vcpu, 0, 0, 0) != EMULATE_DONE)
 		pr_unimpl(&svm->vcpu, "%s: failed\n", __func__);
 	return 1;
 }
 
-static int cr8_write_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int cr8_write_interception(struct vcpu_svm *svm)
 {
+	struct kvm_run *kvm_run = svm->vcpu.run;
+
 	u8 cr8_prev = kvm_get_cr8(&svm->vcpu);
 	/* instruction emulation calls kvm_set_cr8() */
-	emulate_instruction(&svm->vcpu, NULL, 0, 0, 0);
+	emulate_instruction(&svm->vcpu, 0, 0, 0);
 	if (irqchip_in_kernel(svm->vcpu.kvm)) {
 		svm->vmcb->control.intercept_cr_write &= ~INTERCEPT_CR8_MASK;
 		return 1;
@@ -2222,7 +2148,7 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, unsigned ecx, u64 *data)
 	return 0;
 }
 
-static int rdmsr_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int rdmsr_interception(struct vcpu_svm *svm)
 {
 	u32 ecx = svm->vcpu.arch.regs[VCPU_REGS_RCX];
 	u64 data;
@@ -2256,7 +2182,6 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, unsigned ecx, u64 data)
 		}
 
 		svm->vmcb->control.tsc_offset = tsc_offset + g_tsc_offset;
-		vcpu->arch.hv_clock.tsc_timestamp = 0;
 
 		break;
 	}
@@ -2316,7 +2241,7 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, unsigned ecx, u64 data)
 	return 0;
 }
 
-static int wrmsr_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int wrmsr_interception(struct vcpu_svm *svm)
 {
 	u32 ecx = svm->vcpu.arch.regs[VCPU_REGS_RCX];
 	u64 data = (svm->vcpu.arch.regs[VCPU_REGS_RAX] & -1u)
@@ -2332,17 +2257,18 @@ static int wrmsr_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
 	return 1;
 }
 
-static int msr_interception(struct vcpu_svm *svm, struct kvm_run *kvm_run)
+static int msr_interception(struct vcpu_svm *svm)
 {
 	if (svm->vmcb->control.exit_info_1)
-		return wrmsr_interception(svm, kvm_run);
+		return wrmsr_interception(svm);
 	else
-		return rdmsr_interception(svm, kvm_run);
+		return rdmsr_interception(svm);
 }
 
-static int interrupt_window_interception(struct vcpu_svm *svm,
-				   struct kvm_run *kvm_run)
+static int interrupt_window_interception(struct vcpu_svm *svm)
 {
+	struct kvm_run *kvm_run = svm->vcpu.run;
+
 	svm_clear_vintr(svm);
 	svm->vmcb->control.int_ctl &= ~V_IRQ_MASK;
 	/*
@@ -2360,8 +2286,13 @@ static int interrupt_window_interception(struct vcpu_svm *svm,
 	return 1;
 }
 
-static int (*svm_exit_handlers[])(struct vcpu_svm *svm,
-				      struct kvm_run *kvm_run) = {
+static int pause_interception(struct vcpu_svm *svm)
+{
+	kvm_vcpu_on_spin(&(svm->vcpu));
+	return 1;
+}
+
+static int (*svm_exit_handlers[])(struct vcpu_svm *svm) = {
 	[SVM_EXIT_READ_CR0]           		= emulate_on_interception,
 	[SVM_EXIT_READ_CR3]           		= emulate_on_interception,
 	[SVM_EXIT_READ_CR4]           		= emulate_on_interception,
@@ -2396,6 +2327,7 @@ static int (*svm_exit_handlers[])(struct vcpu_svm *svm,
 	[SVM_EXIT_CPUID]			= cpuid_interception,
 	[SVM_EXIT_IRET]                         = iret_interception,
 	[SVM_EXIT_INVD]                         = emulate_on_interception,
+	[SVM_EXIT_PAUSE]			= pause_interception,
 	[SVM_EXIT_HLT]				= halt_interception,
 	[SVM_EXIT_INVLPG]			= invlpg_interception,
 	[SVM_EXIT_INVLPGA]			= invlpga_interception,
@@ -2409,26 +2341,36 @@ static int (*svm_exit_handlers[])(struct vcpu_svm *svm,
 	[SVM_EXIT_VMSAVE]			= vmsave_interception,
 	[SVM_EXIT_STGI]				= stgi_interception,
 	[SVM_EXIT_CLGI]				= clgi_interception,
-	[SVM_EXIT_SKINIT]			= invalid_op_interception,
+	[SVM_EXIT_SKINIT]			= skinit_interception,
 	[SVM_EXIT_WBINVD]                       = emulate_on_interception,
 	[SVM_EXIT_MONITOR]			= invalid_op_interception,
 	[SVM_EXIT_MWAIT]			= invalid_op_interception,
 	[SVM_EXIT_NPF]				= pf_interception,
 };
 
-static int handle_exit(struct kvm_run *kvm_run, struct kvm_vcpu *vcpu)
+static int handle_exit(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
+	struct kvm_run *kvm_run = vcpu->run;
 	u32 exit_code = svm->vmcb->control.exit_code;
 
 	trace_kvm_exit(exit_code, svm->vmcb->save.rip);
 
+	if (unlikely(svm->nested.exit_required)) {
+		nested_svm_vmexit(svm);
+		svm->nested.exit_required = false;
+
+		return 1;
+	}
+
 	if (is_nested(svm)) {
 		int vmexit;
 
-		nsvm_printk("nested handle_exit: 0x%x | 0x%lx | 0x%lx | 0x%lx\n",
-			    exit_code, svm->vmcb->control.exit_info_1,
-			    svm->vmcb->control.exit_info_2, svm->vmcb->save.rip);
+		trace_kvm_nested_vmexit(svm->vmcb->save.rip, exit_code,
+					svm->vmcb->control.exit_info_1,
+					svm->vmcb->control.exit_info_2,
+					svm->vmcb->control.exit_int_info,
+					svm->vmcb->control.exit_int_info_err);
 
 		vmexit = nested_svm_exit_special(svm);
 
@@ -2478,15 +2420,15 @@ static int handle_exit(struct kvm_run *kvm_run, struct kvm_vcpu *vcpu)
 		return 0;
 	}
 
-	return svm_exit_handlers[exit_code](svm, kvm_run);
+	return svm_exit_handlers[exit_code](svm);
 }
 
 static void reload_tss(struct kvm_vcpu *vcpu)
 {
 	int cpu = raw_smp_processor_id();
 
-	struct svm_cpu_data *svm_data = per_cpu(svm_data, cpu);
-	svm_data->tss_desc->type = 9; /* available 32/64-bit TSS */
+	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
+	sd->tss_desc->type = 9; /* available 32/64-bit TSS */
 	load_TR_desc();
 }
 
@@ -2494,12 +2436,12 @@ static void pre_svm_run(struct vcpu_svm *svm)
 {
 	int cpu = raw_smp_processor_id();
 
-	struct svm_cpu_data *svm_data = per_cpu(svm_data, cpu);
+	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
 
 	svm->vmcb->control.tlb_ctl = TLB_CONTROL_DO_NOTHING;
 	/* FIXME: handle wraparound of asid_generation */
-	if (svm->asid_generation != svm_data->asid_generation)
-		new_asid(svm, svm_data);
+	if (svm->asid_generation != sd->asid_generation)
+		new_asid(svm, sd);
 }
 
 static void svm_inject_nmi(struct kvm_vcpu *vcpu)
@@ -2508,7 +2450,7 @@ static void svm_inject_nmi(struct kvm_vcpu *vcpu)
 
 	svm->vmcb->control.event_inj = SVM_EVTINJ_VALID | SVM_EVTINJ_TYPE_NMI;
 	vcpu->arch.hflags |= HF_NMI_MASK;
-	svm->vmcb->control.intercept |= (1ULL << INTERCEPT_IRET);
+	svm->vmcb->control.intercept |= (1UL << INTERCEPT_IRET);
 	++vcpu->stat.nmi_injections;
 }
 
@@ -2555,20 +2497,47 @@ static int svm_nmi_allowed(struct kvm_vcpu *vcpu)
 		!(svm->vcpu.arch.hflags & HF_NMI_MASK);
 }
 
+static bool svm_get_nmi_mask(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	return !!(svm->vcpu.arch.hflags & HF_NMI_MASK);
+}
+
+static void svm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	if (masked) {
+		svm->vcpu.arch.hflags |= HF_NMI_MASK;
+		svm->vmcb->control.intercept |= (1UL << INTERCEPT_IRET);
+	} else {
+		svm->vcpu.arch.hflags &= ~HF_NMI_MASK;
+		svm->vmcb->control.intercept &= ~(1UL << INTERCEPT_IRET);
+	}
+}
+
 static int svm_interrupt_allowed(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	struct vmcb *vmcb = svm->vmcb;
-	return (vmcb->save.rflags & X86_EFLAGS_IF) &&
-		!(vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK) &&
-		gif_set(svm) &&
-		!(is_nested(svm) && (svm->vcpu.arch.hflags & HF_VINTR_MASK));
+	int ret;
+
+	if (!gif_set(svm) ||
+	     (vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK))
+		return 0;
+
+	ret = !!(vmcb->save.rflags & X86_EFLAGS_IF);
+
+	if (is_nested(svm))
+		return ret && !(svm->vcpu.arch.hflags & HF_VINTR_MASK);
+
+	return ret;
 }
 
 static void enable_irq_window(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
-	nsvm_printk("Trying to open IRQ window\n");
 
 	nested_svm_intr(svm);
 
@@ -2593,7 +2562,7 @@ static void enable_nmi_window(struct kvm_vcpu *vcpu)
 	/* Something prevents NMI from been injected. Single step over
 	   possible problem (IRET or exception injection or interrupt
 	   shadow) */
-	vcpu->arch.singlestep = true;
+	svm->nmi_singlestep = true;
 	svm->vmcb->save.rflags |= (X86_EFLAGS_TF | X86_EFLAGS_RF);
 	update_db_intercept(vcpu);
 }
@@ -2683,12 +2652,19 @@ static void svm_complete_interrupts(struct vcpu_svm *svm)
 #define R "e"
 #endif
 
-static void svm_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 	u16 fs_selector;
 	u16 gs_selector;
 	u16 ldt_selector;
+
+	/*
+	 * A vmexit emulation is required before the vcpu can be executed
+	 * again.
+	 */
+	if (unlikely(svm->nested.exit_required))
+		return;
 
 	svm->vmcb->save.rax = vcpu->arch.regs[VCPU_REGS_RAX];
 	svm->vmcb->save.rsp = vcpu->arch.regs[VCPU_REGS_RSP];
@@ -2699,8 +2675,8 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	sync_lapic_to_cr8(vcpu);
 
 	save_host_msrs(vcpu);
-	savesegment(fs, fs_selector);
-	savesegment(gs, gs_selector);
+	fs_selector = kvm_read_fs();
+	gs_selector = kvm_read_gs();
 	ldt_selector = kvm_read_ldt();
 	svm->vmcb->save.cr2 = vcpu->arch.cr2;
 	/* required for live migration with NPT */
@@ -2787,15 +2763,10 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	vcpu->arch.regs[VCPU_REGS_RSP] = svm->vmcb->save.rsp;
 	vcpu->arch.regs[VCPU_REGS_RIP] = svm->vmcb->save.rip;
 
-	load_host_msrs(vcpu);
-	loadsegment(fs, fs_selector);
-#ifdef CONFIG_X86_64
-	load_gs_index(gs_selector);
-	wrmsrl(MSR_KERNEL_GS_BASE, current->thread.gs);
-#else
-	loadsegment(gs, gs_selector);
-#endif
+	kvm_load_fs(fs_selector);
+	kvm_load_gs(gs_selector);
 	kvm_load_ldt(ldt_selector);
+	load_host_msrs(vcpu);
 
 	reload_tss(vcpu);
 
@@ -2811,14 +2782,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 		vcpu->arch.regs_avail &= ~(1 << VCPU_EXREG_PDPTR);
 		vcpu->arch.regs_dirty &= ~(1 << VCPU_EXREG_PDPTR);
 	}
-
-	/*
-	 * We need to handle MC intercepts here before the vcpu has a chance to
-	 * change the physical cpu
-	 */
-	if (unlikely(svm->vmcb->control.exit_code ==
-		     SVM_EXIT_EXCP_BASE + MC_VECTOR))
-		svm_handle_mce(svm);
 }
 
 #undef R
@@ -3001,6 +2964,8 @@ static struct kvm_x86_ops svm_x86_ops = {
 	.queue_exception = svm_queue_exception,
 	.interrupt_allowed = svm_interrupt_allowed,
 	.nmi_allowed = svm_nmi_allowed,
+	.get_nmi_mask = svm_get_nmi_mask,
+	.set_nmi_mask = svm_set_nmi_mask,
 	.enable_nmi_window = enable_nmi_window,
 	.enable_irq_window = enable_irq_window,
 	.update_cr8_intercept = update_cr8_intercept,

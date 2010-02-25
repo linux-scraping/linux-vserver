@@ -124,7 +124,7 @@ long ia64_pal_vp_create(u64 *vpd, u64 *host_iva, u64 *opt_handler)
 
 static  DEFINE_SPINLOCK(vp_lock);
 
-void kvm_arch_hardware_enable(void *garbage)
+int kvm_arch_hardware_enable(void *garbage)
 {
 	long  status;
 	long  tmp_base;
@@ -137,7 +137,7 @@ void kvm_arch_hardware_enable(void *garbage)
 	slot = ia64_itr_entry(0x3, KVM_VMM_BASE, pte, KVM_VMM_SHIFT);
 	local_irq_restore(saved_psr);
 	if (slot < 0)
-		return;
+		return -EINVAL;
 
 	spin_lock(&vp_lock);
 	status = ia64_pal_vp_init_env(kvm_vsa_base ?
@@ -145,7 +145,7 @@ void kvm_arch_hardware_enable(void *garbage)
 			__pa(kvm_vm_buffer), KVM_VM_BUFFER_BASE, &tmp_base);
 	if (status != 0) {
 		printk(KERN_WARNING"kvm: Failed to Enable VT Support!!!!\n");
-		return ;
+		return -EINVAL;
 	}
 
 	if (!kvm_vsa_base) {
@@ -154,6 +154,8 @@ void kvm_arch_hardware_enable(void *garbage)
 	}
 	spin_unlock(&vp_lock);
 	ia64_ptr_entry(0x3, slot);
+
+	return 0;
 }
 
 void kvm_arch_hardware_disable(void *garbage)
@@ -851,8 +853,7 @@ static int kvm_vm_ioctl_get_irqchip(struct kvm *kvm,
 	r = 0;
 	switch (chip->chip_id) {
 	case KVM_IRQCHIP_IOAPIC:
-		memcpy(&chip->chip.ioapic, ioapic_irqchip(kvm),
-				sizeof(struct kvm_ioapic_state));
+		r = kvm_get_ioapic(kvm, &chip->chip.ioapic);
 		break;
 	default:
 		r = -EINVAL;
@@ -868,9 +869,7 @@ static int kvm_vm_ioctl_set_irqchip(struct kvm *kvm, struct kvm_irqchip *chip)
 	r = 0;
 	switch (chip->chip_id) {
 	case KVM_IRQCHIP_IOAPIC:
-		memcpy(ioapic_irqchip(kvm),
-				&chip->chip.ioapic,
-				sizeof(struct kvm_ioapic_state));
+		r = kvm_set_ioapic(kvm, &chip->chip.ioapic);
 		break;
 	default:
 		r = -EINVAL;
@@ -944,7 +943,7 @@ long kvm_arch_vm_ioctl(struct file *filp,
 {
 	struct kvm *kvm = filp->private_data;
 	void __user *argp = (void __user *)arg;
-	int r = -EINVAL;
+	int r = -ENOTTY;
 
 	switch (ioctl) {
 	case KVM_SET_MEMORY_REGION: {
@@ -985,10 +984,8 @@ long kvm_arch_vm_ioctl(struct file *filp,
 			goto out;
 		if (irqchip_in_kernel(kvm)) {
 			__s32 status;
-			mutex_lock(&kvm->irq_lock);
 			status = kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID,
 				    irq_event.irq, irq_event.level);
-			mutex_unlock(&kvm->irq_lock);
 			if (ioctl == KVM_IRQ_LINE_STATUS) {
 				irq_event.status = status;
 				if (copy_to_user(argp, &irq_event,
@@ -1184,11 +1181,6 @@ out:
 }
 
 #define PALE_RESET_ENTRY    0x80000000ffffffb0UL
-
-bool kvm_vcpu_compatible(struct kvm_vcpu *vcpu)
-{
-	return irqchip_in_kernel(vcpu->kvm) == (vcpu->arch.apic != NULL);
-}
 
 int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 {
@@ -1802,8 +1794,7 @@ static int kvm_ia64_sync_dirty_log(struct kvm *kvm,
 {
 	struct kvm_memory_slot *memslot;
 	int r, i;
-	long base;
-	unsigned long n;
+	long n, base;
 	unsigned long *dirty_bitmap = (unsigned long *)(kvm->arch.vm_base +
 			offsetof(struct kvm_vm_data, kvm_mem_dirty_log));
 
@@ -1816,7 +1807,7 @@ static int kvm_ia64_sync_dirty_log(struct kvm *kvm,
 	if (!memslot->dirty_bitmap)
 		goto out;
 
-	n = kvm_dirty_bitmap_bytes(memslot);
+	n = ALIGN(memslot->npages, BITS_PER_LONG) / 8;
 	base = memslot->base_gfn / BITS_PER_LONG;
 
 	for (i = 0; i < n/sizeof(long); ++i) {
@@ -1832,7 +1823,7 @@ int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm,
 		struct kvm_dirty_log *log)
 {
 	int r;
-	unsigned long n;
+	int n;
 	struct kvm_memory_slot *memslot;
 	int is_dirty = 0;
 
@@ -1850,7 +1841,7 @@ int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm,
 	if (is_dirty) {
 		kvm_flush_remote_tlbs(kvm);
 		memslot = &kvm->memslots[log->slot];
-		n = kvm_dirty_bitmap_bytes(memslot);
+		n = ALIGN(memslot->npages, BITS_PER_LONG) / 8;
 		memset(memslot->dirty_bitmap, 0, n);
 	}
 	r = 0;

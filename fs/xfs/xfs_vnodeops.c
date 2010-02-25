@@ -53,6 +53,7 @@
 #include "xfs_log_priv.h"
 #include "xfs_filestream.h"
 #include "xfs_vnodeops.h"
+#include "xfs_trace.h"
 
 
 STATIC void
@@ -605,9 +606,8 @@ xfs_readlink_bmap(
 		d = XFS_FSB_TO_DADDR(mp, mval[n].br_startblock);
 		byte_cnt = XFS_FSB_TO_B(mp, mval[n].br_blockcount);
 
-		bp = xfs_buf_read_flags(mp->m_ddev_targp, d, BTOBB(byte_cnt),
-					XBF_LOCK | XBF_MAPPED |
-					XBF_DONT_BLOCK);
+		bp = xfs_buf_read(mp->m_ddev_targp, d, BTOBB(byte_cnt),
+				  XBF_LOCK | XBF_MAPPED | XBF_DONT_BLOCK);
 		error = XFS_BUF_GETERROR(bp);
 		if (error) {
 			xfs_ioerror_alert("xfs_readlink",
@@ -636,7 +636,7 @@ xfs_readlink(
 	char		*link)
 {
 	xfs_mount_t	*mp = ip->i_mount;
-	xfs_fsize_t	pathlen;
+	int		pathlen;
 	int		error = 0;
 
 	xfs_itrace_entry(ip);
@@ -646,20 +646,12 @@ xfs_readlink(
 
 	xfs_ilock(ip, XFS_ILOCK_SHARED);
 
+	ASSERT((ip->i_d.di_mode & S_IFMT) == S_IFLNK);
+	ASSERT(ip->i_d.di_size <= MAXPATHLEN);
+
 	pathlen = ip->i_d.di_size;
 	if (!pathlen)
 		goto out;
-
-	if (pathlen < 0 || pathlen > MAXPATHLEN) {
-		xfs_fs_cmn_err(CE_ALERT, mp,
-			 "%s: inode (%llu) bad symlink length (%lld)",
-			 __func__, (unsigned long long) ip->i_ino,
-			 (long long) pathlen);
-		ASSERT(0);
-		error = XFS_ERROR(EFSCORRUPTED);
-		goto out;
-	}
-
 
 	if (ip->i_df.if_flags & XFS_IFINLINE) {
 		memcpy(link, ip->i_df.if_u1.if_data, pathlen);
@@ -687,7 +679,7 @@ xfs_fsync(
 {
 	xfs_trans_t	*tp;
 	int		error = 0;
-	int		log_flushed = 0;
+	int		log_flushed = 0, changed = 1;
 
 	xfs_itrace_entry(ip);
 
@@ -717,11 +709,19 @@ xfs_fsync(
 		 * disk yet, the inode will be still be pinned.  If it is,
 		 * force the log.
 		 */
+
 		xfs_iunlock(ip, XFS_ILOCK_SHARED);
+
 		if (xfs_ipincount(ip)) {
 			error = _xfs_log_force(ip->i_mount, (xfs_lsn_t)0,
 				      XFS_LOG_FORCE | XFS_LOG_SYNC,
 				      &log_flushed);
+		} else {
+			/*
+			 * If the inode is not pinned and nothing has changed
+			 * we don't need to flush the cache.
+			 */
+			changed = 0;
 		}
 	} else	{
 		/*
@@ -756,7 +756,7 @@ xfs_fsync(
 		xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	}
 
-	if (ip->i_mount->m_flags & XFS_MOUNT_BARRIER) {
+	if ((ip->i_mount->m_flags & XFS_MOUNT_BARRIER) && changed) {
 		/*
 		 * If the log write didn't issue an ordered tag we need
 		 * to flush the disk cache for the data device now.
@@ -1461,11 +1461,10 @@ xfs_lookup(
 	if (error)
 		goto out;
 
-	error = xfs_iget(dp->i_mount, NULL, inum, 0, 0, ipp);
+	error = xfs_iget(dp->i_mount, NULL, inum, 0, 0, ipp, 0);
 	if (error)
 		goto out_free_name;
 
-	xfs_itrace_ref(*ipp);
 	return 0;
 
 out_free_name:
@@ -1611,7 +1610,6 @@ xfs_create(
 	 * At this point, we've gotten a newly allocated inode.
 	 * It is locked (and joined to the transaction).
 	 */
-	xfs_itrace_ref(ip);
 	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL));
 
 	/*
@@ -2071,9 +2069,6 @@ xfs_remove(
 	if (!is_dir && link_zero && xfs_inode_is_filestream(ip))
 		xfs_filestream_deassociate(ip);
 
-	xfs_itrace_exit(ip);
-	xfs_itrace_exit(dp);
-
  std_return:
 	if (DM_EVENT_ENABLED(dp, DM_EVENT_POSTREMOVE)) {
 		XFS_SEND_NAMESP(mp, DM_EVENT_POSTREMOVE, dp, DM_RIGHT_NULL,
@@ -2370,7 +2365,6 @@ xfs_symlink(
 			goto error_return;
 		goto error1;
 	}
-	xfs_itrace_ref(ip);
 
 	/*
 	 * An error after we've joined dp to the transaction will result in the
@@ -2913,7 +2907,6 @@ xfs_free_file_space(
 	ioffset = offset & ~(rounding - 1);
 
 	if (VN_CACHED(VFS_I(ip)) != 0) {
-		xfs_inval_cached_trace(ip, ioffset, -1, ioffset, -1);
 		error = xfs_flushinval_pages(ip, ioffset, -1, FI_REMAPF_LOCKED);
 		if (error)
 			goto out_unlock_iolock;

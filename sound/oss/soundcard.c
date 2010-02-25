@@ -56,7 +56,7 @@
 /*
  * Table for permanently allocated memory (used when unloading the module)
  */
-void *          sound_mem_blocks[1024];
+void *          sound_mem_blocks[MAX_MEM_BLOCKS];
 int             sound_nblocks = 0;
 
 /* Persistent DMA buffers */
@@ -87,7 +87,7 @@ int *load_mixer_volumes(char *name, int *levels, int present)
 	int             i, n;
 
 	for (i = 0; i < num_mixer_volumes; i++) {
-		if (strncmp(name, mixer_vols[i].name, 32) == 0) {
+		if (strcmp(name, mixer_vols[i].name) == 0) {
 			if (present)
 				mixer_vols[i].num = i;
 			return mixer_vols[i].levels;
@@ -99,7 +99,7 @@ int *load_mixer_volumes(char *name, int *levels, int present)
 	}
 	n = num_mixer_volumes++;
 
-	strncpy(mixer_vols[n].name, name, 32);
+	strcpy(mixer_vols[n].name, name);
 
 	if (present)
 		mixer_vols[n].num = n;
@@ -574,7 +574,7 @@ static int __init oss_init(void)
 				      NULL, "%s%d", dev_list[i].name, j);
 	}
 
-	if (sound_nblocks >= 1024)
+	if (sound_nblocks >= MAX_MEM_BLOCKS - 1)
 		printk(KERN_ERR "Sound warning: Deallocation table was too small.\n");
 	
 	return 0;

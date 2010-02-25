@@ -60,7 +60,8 @@ static int vlan_validate(struct nlattr *tb[], struct nlattr *data[])
 	if (data[IFLA_VLAN_FLAGS]) {
 		flags = nla_data(data[IFLA_VLAN_FLAGS]);
 		if ((flags->flags & flags->mask) &
-		    ~(VLAN_FLAG_REORDER_HDR | VLAN_FLAG_GVRP))
+		    ~(VLAN_FLAG_REORDER_HDR | VLAN_FLAG_GVRP |
+		      VLAN_FLAG_LOOSE_BINDING))
 			return -EINVAL;
 	}
 
@@ -119,7 +120,7 @@ static int vlan_get_tx_queues(struct net *net,
 	return 0;
 }
 
-static int vlan_newlink(struct net_device *dev,
+static int vlan_newlink(struct net *src_net, struct net_device *dev,
 			struct nlattr *tb[], struct nlattr *data[])
 {
 	struct vlan_dev_info *vlan = vlan_dev_info(dev);
@@ -131,7 +132,7 @@ static int vlan_newlink(struct net_device *dev,
 
 	if (!tb[IFLA_LINK])
 		return -EINVAL;
-	real_dev = __dev_get_by_index(dev_net(dev), nla_get_u32(tb[IFLA_LINK]));
+	real_dev = __dev_get_by_index(src_net, nla_get_u32(tb[IFLA_LINK]));
 	if (!real_dev)
 		return -ENODEV;
 
@@ -169,7 +170,7 @@ static size_t vlan_get_size(const struct net_device *dev)
 	struct vlan_dev_info *vlan = vlan_dev_info(dev);
 
 	return nla_total_size(2) +	/* IFLA_VLAN_ID */
-	       nla_total_size(sizeof(struct ifla_vlan_flags)) + /* IFLA_VLAN_FLAGS */
+	       sizeof(struct ifla_vlan_flags) + /* IFLA_VLAN_FLAGS */
 	       vlan_qos_map_size(vlan->nr_ingress_mappings) +
 	       vlan_qos_map_size(vlan->nr_egress_mappings);
 }

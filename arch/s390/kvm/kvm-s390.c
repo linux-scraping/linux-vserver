@@ -74,9 +74,10 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 static unsigned long long *facilities;
 
 /* Section: not file related */
-void kvm_arch_hardware_enable(void *garbage)
+int kvm_arch_hardware_enable(void *garbage)
 {
 	/* every s390 is virtualization enabled ;-) */
+	return 0;
 }
 
 void kvm_arch_hardware_disable(void *garbage)
@@ -156,7 +157,7 @@ long kvm_arch_vm_ioctl(struct file *filp,
 		break;
 	}
 	default:
-		r = -EINVAL;
+		r = -ENOTTY;
 	}
 
 	return r;
@@ -308,17 +309,11 @@ int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
 struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
 				      unsigned int id)
 {
-	struct kvm_vcpu *vcpu;
-	int rc = -EINVAL;
+	struct kvm_vcpu *vcpu = kzalloc(sizeof(struct kvm_vcpu), GFP_KERNEL);
+	int rc = -ENOMEM;
 
-	if (id >= KVM_MAX_VCPUS)
-		goto out;
-
-	rc = -ENOMEM;
-
-	vcpu = kzalloc(sizeof(struct kvm_vcpu), GFP_KERNEL);
 	if (!vcpu)
-		goto out;
+		goto out_nomem;
 
 	vcpu->arch.sie_block = (struct kvm_s390_sie_block *)
 					get_zeroed_page(GFP_KERNEL);
@@ -344,16 +339,14 @@ struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
 
 	rc = kvm_vcpu_init(vcpu, kvm, id);
 	if (rc)
-		goto out_free_sie_block;
+		goto out_free_cpu;
 	VM_EVENT(kvm, 3, "create cpu %d at %p, sie block at %p", id, vcpu,
 		 vcpu->arch.sie_block);
 
 	return vcpu;
-out_free_sie_block:
-	free_page((unsigned long)(vcpu->arch.sie_block));
 out_free_cpu:
 	kfree(vcpu);
-out:
+out_nomem:
 	return ERR_PTR(rc);
 }
 

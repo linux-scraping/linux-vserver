@@ -35,9 +35,6 @@
 #include "i915_drm.h"
 #include "i915_drv.h"
 #include "intel_sdvo_regs.h"
-#include <linux/dmi.h>
-
-#undef SDVO_DEBUG
 
 static char *tv_format_names[] = {
 	"NTSC_M"   , "NTSC_J"  , "NTSC_443",
@@ -357,7 +354,6 @@ static const struct _sdvo_cmd_name {
 #define SDVO_NAME(dev_priv) ((dev_priv)->output_device == SDVOB ? "SDVOB" : "SDVOC")
 #define SDVO_PRIV(output)   ((struct intel_sdvo_priv *) (output)->dev_priv)
 
-#ifdef SDVO_DEBUG
 static void intel_sdvo_debug_write(struct intel_output *intel_output, u8 cmd,
 				   void *args, int args_len)
 {
@@ -380,9 +376,6 @@ static void intel_sdvo_debug_write(struct intel_output *intel_output, u8 cmd,
 		DRM_LOG_KMS("(%02X)", cmd);
 	DRM_LOG_KMS("\n");
 }
-#else
-#define intel_sdvo_debug_write(o, c, a, l)
-#endif
 
 static void intel_sdvo_write_cmd(struct intel_output *intel_output, u8 cmd,
 				 void *args, int args_len)
@@ -399,7 +392,6 @@ static void intel_sdvo_write_cmd(struct intel_output *intel_output, u8 cmd,
 	intel_sdvo_write_byte(intel_output, SDVO_I2C_OPCODE, cmd);
 }
 
-#ifdef SDVO_DEBUG
 static const char *cmd_status_names[] = {
 	"Power on",
 	"Success",
@@ -428,9 +420,6 @@ static void intel_sdvo_debug_response(struct intel_output *intel_output,
 		DRM_LOG_KMS("(??? %d)", status);
 	DRM_LOG_KMS("\n");
 }
-#else
-#define intel_sdvo_debug_response(o, r, l, s)
-#endif
 
 static u8 intel_sdvo_read_response(struct intel_output *intel_output,
 				   void *response, int response_len)
@@ -1703,6 +1692,10 @@ static enum drm_connector_status intel_sdvo_detect(struct drm_connector *connect
 
 	intel_sdvo_write_cmd(intel_output,
 			     SDVO_CMD_GET_ATTACHED_DISPLAYS, NULL, 0);
+	if (sdvo_priv->is_tv) {
+		/* add 30ms delay when the output type is SDVO-TV */
+		mdelay(30);
+	}
 	status = intel_sdvo_read_response(intel_output, &response, 2);
 
 	DRM_DEBUG_KMS("SDVO response %d %d\n", response & 0xff, response >> 8);
@@ -2290,25 +2283,6 @@ intel_sdvo_get_slave_addr(struct drm_device *dev, int output_device)
 		return 0x72;
 }
 
-static int intel_sdvo_bad_tv_callback(const struct dmi_system_id *id)
-{
-	DRM_DEBUG_KMS("Ignoring bad SDVO TV connector for %s\n", id->ident);
-	return 1;
-}
-
-static struct dmi_system_id intel_sdvo_bad_tv[] = {
-	{
-		.callback = intel_sdvo_bad_tv_callback,
-		.ident = "IntelG45/ICH10R/DME1737",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "IBM CORPORATION"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "4800784"),
-		},
-	},
-
-	{ }	/* terminating entry */
-};
-
 static bool
 intel_sdvo_output_setup(struct intel_output *intel_output, uint16_t flags)
 {
@@ -2349,8 +2323,7 @@ intel_sdvo_output_setup(struct intel_output *intel_output, uint16_t flags)
 					(1 << INTEL_SDVO_NON_TV_CLONE_BIT) |
 					(1 << INTEL_ANALOG_CLONE_BIT);
 		}
-	} else if ((flags & SDVO_OUTPUT_SVID0) &&
-		   !dmi_check_system(intel_sdvo_bad_tv)) {
+	} else if (flags & SDVO_OUTPUT_SVID0) {
 
 		sdvo_priv->controlled_output = SDVO_OUTPUT_SVID0;
 		encoder->encoder_type = DRM_MODE_ENCODER_TVDAC;
@@ -2372,6 +2345,14 @@ intel_sdvo_output_setup(struct intel_output *intel_output, uint16_t flags)
 		connector->connector_type = DRM_MODE_CONNECTOR_VGA;
 		intel_output->clone_mask = (1 << INTEL_SDVO_NON_TV_CLONE_BIT) |
 					(1 << INTEL_ANALOG_CLONE_BIT);
+	} else if (flags & SDVO_OUTPUT_CVBS0) {
+
+		sdvo_priv->controlled_output = SDVO_OUTPUT_CVBS0;
+		encoder->encoder_type = DRM_MODE_ENCODER_TVDAC;
+		connector->connector_type = DRM_MODE_CONNECTOR_SVIDEO;
+		sdvo_priv->is_tv = true;
+		intel_output->needs_tv_clock = true;
+		intel_output->clone_mask = 1 << INTEL_SDVO_TV_CLONE_BIT;
 	} else if (flags & SDVO_OUTPUT_LVDS0) {
 
 		sdvo_priv->controlled_output = SDVO_OUTPUT_LVDS0;
@@ -2825,7 +2806,7 @@ bool intel_sdvo_init(struct drm_device *dev, int output_device)
 	/* Wrap with our custom algo which switches to DDC mode */
 	intel_output->ddc_bus->algo = &intel_sdvo_i2c_bit_algo;
 
-	/* In defaut case sdvo lvds is false */
+	/* In default case sdvo lvds is false */
 	intel_sdvo_get_capabilities(intel_output, &sdvo_priv->caps);
 
 	if (intel_sdvo_output_setup(intel_output,

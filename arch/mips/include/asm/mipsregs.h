@@ -135,12 +135,6 @@
 #define FPU_CSR_COND7   0x80000000      /* $fcc7 */
 
 /*
- * Bits 18 - 20 of the FPU Status Register will be read as 0,
- * and should be written as zero.
- */
-#define FPU_CSR_RSVD	0x001c0000
-
-/*
  * X the exception cause indicator
  * E the exception enable
  * S the sticky/flag bit
@@ -167,8 +161,7 @@
 #define FPU_CSR_UDF_S   0x00000008
 #define FPU_CSR_INE_S   0x00000004
 
-/* Bits 0 and 1 of FPU Status Register specify the rounding mode */
-#define FPU_CSR_RM	0x00000003
+/* rounding mode */
 #define FPU_CSR_RN      0x0     /* nearest */
 #define FPU_CSR_RZ      0x1     /* towards zero */
 #define FPU_CSR_RU      0x2     /* towards +Infinity */
@@ -413,6 +406,16 @@
 #define ST0_XX			0x80000000	/* MIPS IV naming */
 
 /*
+ * Bitfields and bit numbers in the coprocessor 0 IntCtl register. (MIPSR2)
+ *
+ * Refer to your MIPS R4xx0 manual, chapter 5 for explanation.
+ */
+#define INTCTLB_IPPCI		26
+#define INTCTLF_IPPCI		(_ULCAST_(7) << INTCTLB_IPPCI)
+#define INTCTLB_IPTI		29
+#define INTCTLF_IPTI		(_ULCAST_(7) << INTCTLB_IPTI)
+
+/*
  * Bitfields and bit numbers in the coprocessor 0 cause register.
  *
  * Refer to your MIPS R4xx0 manual, chapter 5 for explanation.
@@ -441,6 +444,8 @@
 #define  CAUSEF_IV		(_ULCAST_(1)   << 23)
 #define  CAUSEB_CE		28
 #define  CAUSEF_CE		(_ULCAST_(3)   << 28)
+#define  CAUSEB_TI		30
+#define  CAUSEF_TI		(_ULCAST_(1)   << 30)
 #define  CAUSEB_BD		31
 #define  CAUSEF_BD		(_ULCAST_(1)   << 31)
 

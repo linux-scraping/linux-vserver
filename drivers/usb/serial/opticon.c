@@ -99,8 +99,8 @@ static void opticon_bulk_callback(struct urb *urb)
 				available_room = tty_buffer_request_room(tty,
 								data_length);
 				if (available_room) {
-					tty_insert_flip_string(tty, data + 2,
-							       data_length);
+					tty_insert_flip_string(tty, data,
+							       available_room);
 					tty_flip_buffer_push(tty);
 				}
 				tty_kref_put(tty);
@@ -134,7 +134,7 @@ exit:
 						  priv->bulk_address),
 				  priv->bulk_in_buffer, priv->buffer_size,
 				  opticon_bulk_callback, priv);
-		result = usb_submit_urb(priv->bulk_read_urb, GFP_ATOMIC);
+		result = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 		if (result)
 			dev_err(&port->dev,
 			    "%s - failed resubmitting read urb, error %d\n",
@@ -501,12 +501,13 @@ static int opticon_resume(struct usb_interface *intf)
 	struct usb_serial_port *port = serial->port[0];
 	int result;
 
-	mutex_lock(&port->mutex);
-	if (port->port.count)
+	mutex_lock(&port->port.mutex);
+	/* This is protected by the port mutex against close/open */
+	if (test_bit(ASYNCB_INITIALIZED, &port->port.flags))
 		result = usb_submit_urb(priv->bulk_read_urb, GFP_NOIO);
 	else
 		result = 0;
-	mutex_unlock(&port->mutex);
+	mutex_unlock(&port->port.mutex);
 	return result;
 }
 

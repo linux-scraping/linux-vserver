@@ -46,6 +46,7 @@
 #include "xfs_quota.h"
 #include "xfs_rw.h"
 #include "xfs_utils.h"
+#include "xfs_trace.h"
 
 STATIC int	xlog_find_zeroed(xlog_t *, xfs_daddr_t *);
 STATIC int	xlog_clear_stale_blocks(xlog_t *, xfs_lsn_t);
@@ -225,16 +226,10 @@ xlog_header_check_dump(
 	xfs_mount_t		*mp,
 	xlog_rec_header_t	*head)
 {
-	int			b;
-
-	cmn_err(CE_DEBUG, "%s:  SB : uuid = ", __func__);
-	for (b = 0; b < 16; b++)
-		cmn_err(CE_DEBUG, "%02x", ((__uint8_t *)&mp->m_sb.sb_uuid)[b]);
-	cmn_err(CE_DEBUG, ", fmt = %d\n", XLOG_FMT);
-	cmn_err(CE_DEBUG, "    log : uuid = ");
-	for (b = 0; b < 16; b++)
-		cmn_err(CE_DEBUG, "%02x", ((__uint8_t *)&head->h_fs_uuid)[b]);
-	cmn_err(CE_DEBUG, ", fmt = %d\n", be32_to_cpu(head->h_fmt));
+	cmn_err(CE_DEBUG, "%s:  SB : uuid = %pU, fmt = %d\n",
+		__func__, &mp->m_sb.sb_uuid, XLOG_FMT);
+	cmn_err(CE_DEBUG, "    log : uuid = %pU, fmt = %d\n",
+		&head->h_fs_uuid, be32_to_cpu(head->h_fmt));
 }
 #else
 #define xlog_header_check_dump(mp, head)
@@ -2206,6 +2201,7 @@ xlog_recover_do_buffer_trans(
 	xfs_daddr_t		blkno;
 	int			len;
 	ushort			flags;
+	uint			buf_flags;
 
 	buf_f = (xfs_buf_log_format_t *)item->ri_buf[0].i_addr;
 
@@ -2246,12 +2242,11 @@ xlog_recover_do_buffer_trans(
 	}
 
 	mp = log->l_mp;
-	if (flags & XFS_BLI_INODE_BUF) {
-		bp = xfs_buf_read_flags(mp->m_ddev_targp, blkno, len,
-								XFS_BUF_LOCK);
-	} else {
-		bp = xfs_buf_read(mp->m_ddev_targp, blkno, len, 0);
-	}
+	buf_flags = XFS_BUF_LOCK;
+	if (!(flags & XFS_BLI_INODE_BUF))
+		buf_flags |= XFS_BUF_MAPPED;
+
+	bp = xfs_buf_read(mp->m_ddev_targp, blkno, len, buf_flags);
 	if (XFS_BUF_ISERROR(bp)) {
 		xfs_ioerror_alert("xlog_recover_do..(read#1)", log->l_mp,
 				  bp, blkno);
@@ -2350,8 +2345,8 @@ xlog_recover_do_inode_trans(
 		goto error;
 	}
 
-	bp = xfs_buf_read_flags(mp->m_ddev_targp, in_f->ilf_blkno,
-				in_f->ilf_len, XFS_BUF_LOCK);
+	bp = xfs_buf_read(mp->m_ddev_targp, in_f->ilf_blkno, in_f->ilf_len,
+			  XFS_BUF_LOCK);
 	if (XFS_BUF_ISERROR(bp)) {
 		xfs_ioerror_alert("xlog_recover_do..(read#2)", mp,
 				  bp, in_f->ilf_blkno);
@@ -3210,7 +3205,7 @@ xlog_recover_process_one_iunlink(
 	int				error;
 
 	ino = XFS_AGINO_TO_INO(mp, agno, agino);
-	error = xfs_iget(mp, NULL, ino, 0, 0, &ip);
+	error = xfs_iget(mp, NULL, ino, 0, 0, &ip, 0);
 	if (error)
 		goto fail;
 
@@ -3299,26 +3294,37 @@ xlog_recover_process_iunlinks(
 			 */
 			continue;
 		}
-		/*
-		 * Unlock the buffer so that it can be acquired in the normal
-		 * course of the transaction to truncate and free each inode.
-		 * Because we are not racing with anyone else here for the AGI
-		 * buffer, we don't even need to hold it locked to read the
-		 * initial unlinked bucket entries out of the buffer. We keep
-		 * buffer reference though, so that it stays pinned in memory
-		 * while we need the buffer.
-		 */
 		agi = XFS_BUF_TO_AGI(agibp);
-		xfs_buf_unlock(agibp);
 
 		for (bucket = 0; bucket < XFS_AGI_UNLINKED_BUCKETS; bucket++) {
 			agino = be32_to_cpu(agi->agi_unlinked[bucket]);
 			while (agino != NULLAGINO) {
+				/*
+				 * Release the agi buffer so that it can
+				 * be acquired in the normal course of the
+				 * transaction to truncate and free the inode.
+				 */
+				xfs_buf_relse(agibp);
+
 				agino = xlog_recover_process_one_iunlink(mp,
 							agno, agino, bucket);
+
+				/*
+				 * Reacquire the agibuffer and continue around
+				 * the loop. This should never fail as we know
+				 * the buffer was good earlier on.
+				 */
+				error = xfs_read_agi(mp, NULL, agno, &agibp);
+				ASSERT(error == 0);
+				agi = XFS_BUF_TO_AGI(agibp);
 			}
 		}
-		xfs_buf_rele(agibp);
+
+		/*
+		 * Release the buffer for the current agi so we can
+		 * go on to the next one.
+		 */
+		xfs_buf_relse(agibp);
 	}
 
 	mp->m_dmevmask = mp_dmevmask;

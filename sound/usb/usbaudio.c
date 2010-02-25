@@ -2893,7 +2893,9 @@ static int snd_usb_create_streams(struct snd_usb_audio *chip, int ctrlif)
 		if ((altsd->bInterfaceClass == USB_CLASS_AUDIO ||
 		     altsd->bInterfaceClass == USB_CLASS_VENDOR_SPEC) &&
 		    altsd->bInterfaceSubClass == USB_SUBCLASS_MIDI_STREAMING) {
-			if (snd_usb_create_midi_interface(chip, iface, NULL) < 0) {
+			int err = snd_usbmidi_create(chip->card, iface,
+						     &chip->midi_list, NULL);
+			if (err < 0) {
 				snd_printk(KERN_ERR "%d:%u:%d: cannot create sequencer device\n", dev->devnum, ctrlif, j);
 				continue;
 			}
@@ -3038,12 +3040,11 @@ static int create_uaxx_quirk(struct snd_usb_audio *chip,
 			.type = QUIRK_MIDI_FIXED_ENDPOINT,
 			.data = &uaxx_ep
 		};
-		if (chip->usb_id == USB_ID(0x0582, 0x002b))
-			return snd_usb_create_midi_interface(chip, iface,
-							     &ua700_quirk);
-		else
-			return snd_usb_create_midi_interface(chip, iface,
-							     &uaxx_quirk);
+		const struct snd_usb_audio_quirk *quirk =
+			chip->usb_id == USB_ID(0x0582, 0x002b)
+			? &ua700_quirk : &uaxx_quirk;
+		return snd_usbmidi_create(chip->card, iface,
+					  &chip->midi_list, quirk);
 	}
 
 	if (altsd->bNumEndpoints != 1)
@@ -3326,32 +3327,6 @@ static int snd_usb_cm6206_boot_quirk(struct usb_device *dev)
 }
 
 /*
- * This call will put the synth in "USB send" mode, i.e it will send MIDI
- * messages through USB (this is disabled at startup). The synth will
- * acknowledge by sending a sysex on endpoint 0x85 and by displaying a USB
- * sign on its LCD. Values here are chosen based on sniffing USB traffic
- * under Windows.
- */
-static int snd_usb_accessmusic_boot_quirk(struct usb_device *dev)
-{
-	int err, actual_length;
-
-	/* "midi send" enable */
-	static const u8 seq[] = { 0x4e, 0x73, 0x52, 0x01 };
-
-	void *buf = kmemdup(seq, ARRAY_SIZE(seq), GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-	err = usb_interrupt_msg(dev, usb_sndintpipe(dev, 0x05), buf,
-			ARRAY_SIZE(seq), &actual_length, 1000);
-	kfree(buf);
-	if (err < 0)
-		return err;
-
-	return 0;
-}
-
-/*
  * Setup quirks
  */
 #define AUDIOPHILE_SET			0x01 /* if set, parse device_setup */
@@ -3396,6 +3371,13 @@ static int audiophile_skip_setting_quirk(struct snd_usb_audio *chip,
 	return 0; /* keep this altsetting */
 }
 
+static int create_any_midi_quirk(struct snd_usb_audio *chip,
+				 struct usb_interface *intf,
+				 const struct snd_usb_audio_quirk *quirk)
+{
+	return snd_usbmidi_create(chip->card, intf, &chip->midi_list, quirk);
+}
+
 /*
  * audio-interface quirks
  *
@@ -3413,14 +3395,14 @@ static int snd_usb_create_quirk(struct snd_usb_audio *chip,
 	static const quirk_func_t quirk_funcs[] = {
 		[QUIRK_IGNORE_INTERFACE] = ignore_interface_quirk,
 		[QUIRK_COMPOSITE] = create_composite_quirk,
-		[QUIRK_MIDI_STANDARD_INTERFACE] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_FIXED_ENDPOINT] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_YAMAHA] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_MIDIMAN] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_NOVATION] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_FASTLANE] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_EMAGIC] = snd_usb_create_midi_interface,
-		[QUIRK_MIDI_CME] = snd_usb_create_midi_interface,
+		[QUIRK_MIDI_STANDARD_INTERFACE] = create_any_midi_quirk,
+		[QUIRK_MIDI_FIXED_ENDPOINT] = create_any_midi_quirk,
+		[QUIRK_MIDI_YAMAHA] = create_any_midi_quirk,
+		[QUIRK_MIDI_MIDIMAN] = create_any_midi_quirk,
+		[QUIRK_MIDI_NOVATION] = create_any_midi_quirk,
+		[QUIRK_MIDI_FASTLANE] = create_any_midi_quirk,
+		[QUIRK_MIDI_EMAGIC] = create_any_midi_quirk,
+		[QUIRK_MIDI_CME] = create_any_midi_quirk,
 		[QUIRK_AUDIO_STANDARD_INTERFACE] = create_standard_audio_quirk,
 		[QUIRK_AUDIO_FIXED_ENDPOINT] = create_fixed_stream_quirk,
 		[QUIRK_AUDIO_EDIROL_UA1000] = create_ua1000_quirk,
@@ -3639,12 +3621,6 @@ static void *snd_usb_audio_probe(struct usb_device *dev,
 	/* C-Media CM6206 / CM106-Like Sound Device */
 	if (id == USB_ID(0x0d8c, 0x0102)) {
 		if (snd_usb_cm6206_boot_quirk(dev) < 0)
-			goto __err_val;
-	}
-
-	/* Access Music VirusTI Desktop */
-	if (id == USB_ID(0x133e, 0x0815)) {
-		if (snd_usb_accessmusic_boot_quirk(dev) < 0)
 			goto __err_val;
 	}
 

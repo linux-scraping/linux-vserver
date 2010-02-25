@@ -205,14 +205,14 @@ static void sctp_get_local_addr_list(void)
 	struct list_head *pos;
 	struct sctp_af *af;
 
-	read_lock(&dev_base_lock);
-	for_each_netdev(&init_net, dev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, dev) {
 		__list_for_each(pos, &sctp_address_families) {
 			af = list_entry(pos, struct sctp_af, list);
 			af->copy_addrlist(&sctp_local_addr_list, dev);
 		}
 	}
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 }
 
 /* Free the existing local addresses.  */
@@ -296,19 +296,19 @@ static void sctp_v4_from_sk(union sctp_addr *addr, struct sock *sk)
 {
 	addr->v4.sin_family = AF_INET;
 	addr->v4.sin_port = 0;
-	addr->v4.sin_addr.s_addr = inet_sk(sk)->rcv_saddr;
+	addr->v4.sin_addr.s_addr = inet_sk(sk)->inet_rcv_saddr;
 }
 
 /* Initialize sk->sk_rcv_saddr from sctp_addr. */
 static void sctp_v4_to_sk_saddr(union sctp_addr *addr, struct sock *sk)
 {
-	inet_sk(sk)->rcv_saddr = addr->v4.sin_addr.s_addr;
+	inet_sk(sk)->inet_rcv_saddr = addr->v4.sin_addr.s_addr;
 }
 
 /* Initialize sk->sk_daddr from sctp_addr. */
 static void sctp_v4_to_sk_daddr(union sctp_addr *addr, struct sock *sk)
 {
-	inet_sk(sk)->daddr = addr->v4.sin_addr.s_addr;
+	inet_sk(sk)->inet_daddr = addr->v4.sin_addr.s_addr;
 }
 
 /* Initialize a sctp_addr from an address parameter. */
@@ -598,7 +598,7 @@ static struct sock *sctp_v4_create_accept_sk(struct sock *sk,
 
 	newinet = inet_sk(newsk);
 
-	newinet->daddr = asoc->peer.primary_addr.v4.sin_addr.s_addr;
+	newinet->inet_daddr = asoc->peer.primary_addr.v4.sin_addr.s_addr;
 
 	sk_refcnt_debug_inc(newsk);
 
@@ -909,7 +909,6 @@ static struct inet_protosw sctp_seqpacket_protosw = {
 	.protocol   = IPPROTO_SCTP,
 	.prot       = &sctp_prot,
 	.ops        = &inet_seqpacket_ops,
-	.capability = -1,
 	.no_check   = 0,
 	.flags      = SCTP_PROTOSW_FLAG
 };
@@ -918,7 +917,6 @@ static struct inet_protosw sctp_stream_protosw = {
 	.protocol   = IPPROTO_SCTP,
 	.prot       = &sctp_prot,
 	.ops        = &inet_seqpacket_ops,
-	.capability = -1,
 	.no_check   = 0,
 	.flags      = SCTP_PROTOSW_FLAG
 };
@@ -1157,8 +1155,7 @@ SCTP_STATIC __init int sctp_init(void)
 
 	/* Set the pressure threshold to be a fraction of global memory that
 	 * is up to 1/2 at 256 MB, decreasing toward zero with the amount of
-	 * memory, with a floor of 128 pages, and a ceiling that prevents an
-	 * integer overflow.
+	 * memory, with a floor of 128 pages.
 	 * Note this initalizes the data in sctpv6_prot too
 	 * Unabashedly stolen from tcp_init
 	 */
@@ -1166,7 +1163,6 @@ SCTP_STATIC __init int sctp_init(void)
 	limit = min(nr_pages, 1UL<<(28-PAGE_SHIFT)) >> (20-PAGE_SHIFT);
 	limit = (limit * (nr_pages >> (20-PAGE_SHIFT))) >> (PAGE_SHIFT-11);
 	limit = max(limit, 128UL);
-	limit = min(limit, INT_MAX * 4UL / 3 / 2);
 	sysctl_sctp_mem[0] = limit / 4 * 3;
 	sysctl_sctp_mem[1] = limit;
 	sysctl_sctp_mem[2] = sysctl_sctp_mem[0] * 2;
@@ -1261,6 +1257,9 @@ SCTP_STATIC __init int sctp_init(void)
 
 	/* Set SCOPE policy to enabled */
 	sctp_scope_policy = SCTP_SCOPE_POLICY_ENABLE;
+
+	/* Set the default rwnd update threshold */
+	sctp_rwnd_upd_shift		= SCTP_DEFAULT_RWND_SHIFT;
 
 	sctp_sysctl_register();
 

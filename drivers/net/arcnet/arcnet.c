@@ -301,8 +301,8 @@ static int choose_mtu(void)
 
 	/* choose the smallest MTU of all available encaps */
 	for (count = 0; count < 256; count++) {
-		if (arc_proto_map[count] != &arc_proto_null
-		    && arc_proto_map[count]->mtu < mtu) {
+		if (arc_proto_map[count] != &arc_proto_null &&
+		    arc_proto_map[count]->mtu < mtu) {
 			mtu = arc_proto_map[count]->mtu;
 		}
 	}
@@ -953,13 +953,13 @@ irqreturn_t arcnet_interrupt(int irq, void *dev_id)
 				 *    > RECON_THRESHOLD/min;
 				 * then print a warning message.
 				 */
-				if (!lp->network_down
-				    && (lp->last_recon - lp->first_recon) <= HZ * 60
-				  && lp->num_recons >= RECON_THRESHOLD) {
+				if (!lp->network_down &&
+				    (lp->last_recon - lp->first_recon) <= HZ * 60 &&
+				    lp->num_recons >= RECON_THRESHOLD) {
 					lp->network_down = 1;
 					BUGMSG(D_NORMAL, "many reconfigurations detected: cabling problem?\n");
-				} else if (!lp->network_down
-					   && lp->last_recon - lp->first_recon > HZ * 60) {
+				} else if (!lp->network_down &&
+					   lp->last_recon - lp->first_recon > HZ * 60) {
 					/* reset counters if we've gone for over a minute. */
 					lp->first_recon = lp->last_recon;
 					lp->num_recons = 1;
@@ -1008,7 +1008,7 @@ static void arcnet_rx(struct net_device *dev, int bufnum)
 
 	soft = &pkt.soft.rfc1201;
 
-	lp->hw.copy_from_card(dev, bufnum, 0, &pkt, ARC_HDR_SIZE);
+	lp->hw.copy_from_card(dev, bufnum, 0, &pkt, sizeof(ARC_HDR_SIZE));
 	if (pkt.hard.offset[0]) {
 		ofs = pkt.hard.offset[0];
 		length = 256 - ofs;

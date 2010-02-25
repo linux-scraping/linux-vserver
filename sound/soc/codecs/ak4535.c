@@ -40,11 +40,11 @@ struct ak4535_priv {
 /*
  * ak4535 register cache
  */
-static const u8 ak4535_reg[AK4535_CACHEREGNUM] = {
-	0x00, 0x80, 0x00, 0x03,
-	0x02, 0x00, 0x11, 0x01,
-	0x00, 0x40, 0x36, 0x10,
-	0x00, 0x00, 0x57, 0x00,
+static const u16 ak4535_reg[AK4535_CACHEREGNUM] = {
+    0x0000, 0x0080, 0x0000, 0x0003,
+    0x0002, 0x0000, 0x0011, 0x0001,
+    0x0000, 0x0040, 0x0036, 0x0010,
+    0x0000, 0x0000, 0x0057, 0x0000,
 };
 
 /*
@@ -294,7 +294,6 @@ static int ak4535_add_widgets(struct snd_soc_codec *codec)
 
 	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
 
-	snd_soc_dapm_new_widgets(codec);
 	return 0;
 }
 
@@ -485,17 +484,9 @@ static int ak4535_init(struct snd_soc_device *socdev)
 	snd_soc_add_controls(codec, ak4535_snd_controls,
 				ARRAY_SIZE(ak4535_snd_controls));
 	ak4535_add_widgets(codec);
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		printk(KERN_ERR "ak4535: failed to register card\n");
-		goto card_err;
-	}
 
 	return ret;
 
-card_err:
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
 pcm_err:
 	kfree(codec->reg_cache);
 

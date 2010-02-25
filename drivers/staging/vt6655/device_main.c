@@ -661,7 +661,7 @@ else
    if(zonetype!=pDevice->abyEEPROM[EEP_OFS_ZONETYPE])
       printk("zonetype in file[%02x] mismatch with in EEPROM[%02x]\n",zonetype,pDevice->abyEEPROM[EEP_OFS_ZONETYPE]);
    else
-      printk("Read Zonetype file sucess,use default zonetype setting[%02x]\n",zonetype);
+      printk("Read Zonetype file success,use default zonetype setting[%02x]\n",zonetype);
  }
  	}
   else
@@ -1089,13 +1089,11 @@ device_found1(struct pci_dev *pcid, const struct pci_device_id *ent)
     }
 //2008-07-21-01<Add>by MikeLiu
 //register wpadev
-#if 0
    if(wpa_set_wpadev(pDevice, 1)!=0) {
      printk("Fail to Register WPADEV?\n");
         unregister_netdev(pDevice->dev);
         free_netdev(dev);
    }
-#endif
     device_print_info(pDevice);
     pci_set_drvdata(pcid, pDevice);
     return 0;

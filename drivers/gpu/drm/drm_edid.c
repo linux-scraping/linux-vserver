@@ -85,8 +85,6 @@ static struct edid_quirk {
 
 	/* Envision Peripherals, Inc. EN-7100e */
 	{ "EPI", 59264, EDID_QUIRK_135_CLOCK_TOO_HIGH },
-	/* Envision EN2028 */
-	{ "EPI", 8232, EDID_QUIRK_PREFER_LARGE_60 },
 
 	/* Funai Electronics PM36B */
 	{ "FCM", 13600, EDID_QUIRK_PREFER_LARGE_75 |
@@ -125,18 +123,20 @@ static const u8 edid_header[] = {
  */
 static bool edid_is_valid(struct edid *edid)
 {
-	int i;
+	int i, score = 0;
 	u8 csum = 0;
 	u8 *raw_edid = (u8 *)edid;
 
-	if (memcmp(edid->header, edid_header, sizeof(edid_header)))
+	for (i = 0; i < sizeof(edid_header); i++)
+		if (raw_edid[i] == edid_header[i])
+			score++;
+
+	if (score == 8) ;
+	else if (score >= 6) {
+		DRM_DEBUG("Fixing EDID header, your hardware may be failing\n");
+		memcpy(raw_edid, edid_header, sizeof(edid_header));
+	} else
 		goto bad;
-	if (edid->version != 1) {
-		DRM_ERROR("EDID has major version %d, instead of 1\n", edid->version);
-		goto bad;
-	}
-	if (edid->revision > 4)
-		DRM_DEBUG("EDID minor > 4, assuming backward compatibility\n");
 
 	for (i = 0; i < EDID_LENGTH; i++)
 		csum += raw_edid[i];
@@ -144,6 +144,14 @@ static bool edid_is_valid(struct edid *edid)
 		DRM_ERROR("EDID checksum is invalid, remainder is %d\n", csum);
 		goto bad;
 	}
+
+	if (edid->version != 1) {
+		DRM_ERROR("EDID has major version %d, instead of 1\n", edid->version);
+		goto bad;
+	}
+
+	if (edid->revision > 4)
+		DRM_DEBUG("EDID minor > 4, assuming backward compatibility\n");
 
 	return 1;
 
@@ -324,7 +332,7 @@ static struct drm_display_mode drm_dmt_modes[] = {
 		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
 	/* 1024x768@85Hz */
 	{ DRM_MODE("1024x768", DRM_MODE_TYPE_DRIVER, 94500, 1024, 1072,
-		   1168, 1376, 0, 768, 769, 772, 808, 0,
+		   1072, 1376, 0, 768, 769, 772, 808, 0,
 		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC) },
 	/* 1152x864@75Hz */
 	{ DRM_MODE("1152x864", DRM_MODE_TYPE_DRIVER, 108000, 1152, 1216,
@@ -483,16 +491,17 @@ static struct drm_display_mode drm_dmt_modes[] = {
 		   3048, 3536, 0, 1600, 1603, 1609, 1682, 0,
 		   DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_PVSYNC) },
 };
+static const int drm_num_dmt_modes =
+	sizeof(drm_dmt_modes) / sizeof(struct drm_display_mode);
 
 static struct drm_display_mode *drm_find_dmt(struct drm_device *dev,
 			int hsize, int vsize, int fresh)
 {
-	int i, count;
+	int i;
 	struct drm_display_mode *ptr, *mode;
 
-	count = sizeof(drm_dmt_modes) / sizeof(struct drm_display_mode);
 	mode = NULL;
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < drm_num_dmt_modes; i++) {
 		ptr = &drm_dmt_modes[i];
 		if (hsize == ptr->hdisplay &&
 			vsize == ptr->vdisplay &&
@@ -565,8 +574,8 @@ struct drm_display_mode *drm_mode_std(struct drm_device *dev,
 		mode = drm_cvt_mode(dev, hsize, vsize, vrefresh_rate, 0, 0,
 				    false);
 		mode->hdisplay = 1366;
-		mode->hsync_start = mode->hsync_start - 1;
-		mode->hsync_end = mode->hsync_end - 1;
+		mode->vsync_start = mode->vsync_start - 1;
+		mode->vsync_end = mode->vsync_end - 1;
 		return mode;
 	}
 	mode = NULL;
@@ -587,6 +596,50 @@ struct drm_display_mode *drm_mode_std(struct drm_device *dev,
 		break;
 	}
 	return mode;
+}
+
+/*
+ * EDID is delightfully ambiguous about how interlaced modes are to be
+ * encoded.  Our internal representation is of frame height, but some
+ * HDTV detailed timings are encoded as field height.
+ *
+ * The format list here is from CEA, in frame size.  Technically we
+ * should be checking refresh rate too.  Whatever.
+ */
+static void
+drm_mode_do_interlace_quirk(struct drm_display_mode *mode,
+			    struct detailed_pixel_timing *pt)
+{
+	int i;
+	static const struct {
+		int w, h;
+	} cea_interlaced[] = {
+		{ 1920, 1080 },
+		{  720,  480 },
+		{ 1440,  480 },
+		{ 2880,  480 },
+		{  720,  576 },
+		{ 1440,  576 },
+		{ 2880,  576 },
+	};
+	static const int n_sizes =
+		sizeof(cea_interlaced)/sizeof(cea_interlaced[0]);
+
+	if (!(pt->misc & DRM_EDID_PT_INTERLACED))
+		return;
+
+	for (i = 0; i < n_sizes; i++) {
+		if ((mode->hdisplay == cea_interlaced[i].w) &&
+		    (mode->vdisplay == cea_interlaced[i].h / 2)) {
+			mode->vdisplay *= 2;
+			mode->vsync_start *= 2;
+			mode->vsync_end *= 2;
+			mode->vtotal *= 2;
+			mode->vtotal |= 1;
+		}
+	}
+
+	mode->flags |= DRM_MODE_FLAG_INTERLACE;
 }
 
 /**
@@ -624,8 +677,7 @@ static struct drm_display_mode *drm_mode_detailed(struct drm_device *dev,
 		return NULL;
 	}
 	if (!(pt->misc & DRM_EDID_PT_SEPARATE_SYNC)) {
-		printk(KERN_WARNING "integrated sync not supported\n");
-		return NULL;
+		printk(KERN_WARNING "composite sync not supported\n");
 	}
 
 	/* it is incorrect if hsync/vsync width is zero */
@@ -655,6 +707,15 @@ static struct drm_display_mode *drm_mode_detailed(struct drm_device *dev,
 	mode->vsync_end = mode->vsync_start + vsync_pulse_width;
 	mode->vtotal = mode->vdisplay + vblank;
 
+	/* perform the basic check for the detailed timing */
+	if (mode->hsync_end > mode->htotal ||
+		mode->vsync_end > mode->vtotal) {
+		drm_mode_destroy(dev, mode);
+		DRM_DEBUG_KMS("Incorrect detailed timing. "
+				"Sync is beyond the blank.\n");
+		return NULL;
+	}
+
 	/* Some EDIDs have bogus h/vtotal values */
 	if (mode->hsync_end > mode->htotal)
 		mode->htotal = mode->hsync_end + 1;
@@ -663,8 +724,7 @@ static struct drm_display_mode *drm_mode_detailed(struct drm_device *dev,
 
 	drm_mode_set_name(mode);
 
-	if (pt->misc & DRM_EDID_PT_INTERLACED)
-		mode->flags |= DRM_MODE_FLAG_INTERLACE;
+	drm_mode_do_interlace_quirk(mode, pt);
 
 	if (quirks & EDID_QUIRK_DETAILED_SYNC_PP) {
 		pt->misc |= DRM_EDID_PT_HSYNC_POSITIVE | DRM_EDID_PT_VSYNC_POSITIVE;
@@ -827,6 +887,113 @@ static int add_standard_modes(struct drm_connector *connector, struct edid *edid
 	return modes;
 }
 
+/*
+ * XXX fix this for:
+ * - GTF secondary curve formula
+ * - EDID 1.4 range offsets
+ * - CVT extended bits
+ */
+static bool
+mode_in_range(struct drm_display_mode *mode, struct detailed_timing *timing)
+{
+	struct detailed_data_monitor_range *range;
+	int hsync, vrefresh;
+
+	range = &timing->data.other_data.data.range;
+
+	hsync = drm_mode_hsync(mode);
+	vrefresh = drm_mode_vrefresh(mode);
+
+	if (hsync < range->min_hfreq_khz || hsync > range->max_hfreq_khz)
+		return false;
+
+	if (vrefresh < range->min_vfreq || vrefresh > range->max_vfreq)
+		return false;
+
+	if (range->pixel_clock_mhz && range->pixel_clock_mhz != 0xff) {
+		/* be forgiving since it's in units of 10MHz */
+		int max_clock = range->pixel_clock_mhz * 10 + 9;
+		max_clock *= 1000;
+		if (mode->clock > max_clock)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * XXX If drm_dmt_modes ever regrows the CVT-R modes (and it will) this will
+ * need to account for them.
+ */
+static int drm_gtf_modes_for_range(struct drm_connector *connector,
+				   struct detailed_timing *timing)
+{
+	int i, modes = 0;
+	struct drm_display_mode *newmode;
+	struct drm_device *dev = connector->dev;
+
+	for (i = 0; i < drm_num_dmt_modes; i++) {
+		if (mode_in_range(drm_dmt_modes + i, timing)) {
+			newmode = drm_mode_duplicate(dev, &drm_dmt_modes[i]);
+			if (newmode) {
+				drm_mode_probed_add(connector, newmode);
+				modes++;
+			}
+		}
+	}
+
+	return modes;
+}
+
+static int drm_cvt_modes(struct drm_connector *connector,
+			 struct detailed_timing *timing)
+{
+	int i, j, modes = 0;
+	struct drm_display_mode *newmode;
+	struct drm_device *dev = connector->dev;
+	struct cvt_timing *cvt;
+	const int rates[] = { 60, 85, 75, 60, 50 };
+	const u8 empty[3] = { 0, 0, 0 };
+
+	for (i = 0; i < 4; i++) {
+		int uninitialized_var(width), height;
+		cvt = &(timing->data.other_data.data.cvt[i]);
+
+		if (!memcmp(cvt->code, empty, 3))
+			continue;
+
+		height = (cvt->code[0] + ((cvt->code[1] & 0xf0) << 4) + 1) * 2;
+		switch (cvt->code[1] & 0x0c) {
+		case 0x00:
+			width = height * 4 / 3;
+			break;
+		case 0x04:
+			width = height * 16 / 9;
+			break;
+		case 0x08:
+			width = height * 16 / 10;
+			break;
+		case 0x0c:
+			width = height * 15 / 9;
+			break;
+		}
+
+		for (j = 1; j < 5; j++) {
+			if (cvt->code[2] & (1 << j)) {
+				newmode = drm_cvt_mode(dev, width, height,
+						       rates[j], j == 0,
+						       false, false);
+				if (newmode) {
+					drm_mode_probed_add(connector, newmode);
+					modes++;
+				}
+			}
+		}
+	}
+
+	return modes;
+}
+
 static int add_detailed_modes(struct drm_connector *connector,
 			      struct detailed_timing *timing,
 			      struct edid *edid, u32 quirks, int preferred)
@@ -834,6 +1001,7 @@ static int add_detailed_modes(struct drm_connector *connector,
 	int i, modes = 0;
 	struct detailed_non_pixel *data = &timing->data.other_data;
 	int timing_level = standard_timing_level(edid);
+	int gtf = (edid->features & DRM_EDID_FEATURE_DEFAULT_GTF);
 	struct drm_display_mode *newmode;
 	struct drm_device *dev = connector->dev;
 
@@ -852,7 +1020,8 @@ static int add_detailed_modes(struct drm_connector *connector,
 	/* other timing types */
 	switch (data->type) {
 	case EDID_DETAIL_MONITOR_RANGE:
-		/* Get monitor range data */
+		if (gtf)
+			modes += drm_gtf_modes_for_range(connector, timing);
 		break;
 	case EDID_DETAIL_STD_MODES:
 		/* Six modes per detailed section */
@@ -868,6 +1037,9 @@ static int add_detailed_modes(struct drm_connector *connector,
 				modes++;
 			}
 		}
+		break;
+	case EDID_DETAIL_CVT_3BYTE:
+		modes += drm_cvt_modes(connector, timing);
 		break;
 	default:
 		break;
@@ -1018,19 +1190,19 @@ static int drm_ddc_read_edid(struct drm_connector *connector,
 			     struct i2c_adapter *adapter,
 			     char *buf, int len)
 {
-	int ret;
+	int i;
 
-	ret = drm_do_probe_ddc_edid(adapter, buf, len);
-	if (ret != 0) {
-		goto end;
+	for (i = 0; i < 4; i++) {
+		if (drm_do_probe_ddc_edid(adapter, buf, len))
+			return -1;
+		if (edid_is_valid((struct edid *)buf))
+			return 0;
 	}
-	if (!edid_is_valid((struct edid *)buf)) {
-		dev_warn(&connector->dev->pdev->dev, "%s: EDID invalid.\n",
-			 drm_get_connector_name(connector));
-		ret = -1;
-	}
-end:
-	return ret;
+
+	/* repeated checksum failures; warn, but carry on */
+	dev_warn(&connector->dev->pdev->dev, "%s: EDID invalid.\n",
+		 drm_get_connector_name(connector));
+	return -1;
 }
 
 /**
@@ -1248,6 +1420,8 @@ int drm_add_modes_noedid(struct drm_connector *connector,
 					ptr->vdisplay > vdisplay)
 				continue;
 		}
+		if (drm_mode_vrefresh(ptr) > 61)
+			continue;
 		mode = drm_mode_duplicate(dev, ptr);
 		if (mode) {
 			drm_mode_probed_add(connector, mode);

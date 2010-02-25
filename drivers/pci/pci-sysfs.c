@@ -74,7 +74,12 @@ static ssize_t local_cpus_show(struct device *dev,
 	const struct cpumask *mask;
 	int len;
 
+#ifdef CONFIG_NUMA
+	mask = (dev_to_node(dev) == -1) ? cpu_online_mask :
+					  cpumask_of_node(dev_to_node(dev));
+#else
 	mask = cpumask_of_pcibus(to_pci_dev(dev)->bus);
+#endif
 	len = cpumask_scnprintf(buf, PAGE_SIZE-2, mask);
 	buf[len++] = '\n';
 	buf[len] = '\0';
@@ -88,7 +93,12 @@ static ssize_t local_cpulist_show(struct device *dev,
 	const struct cpumask *mask;
 	int len;
 
+#ifdef CONFIG_NUMA
+	mask = (dev_to_node(dev) == -1) ? cpu_online_mask :
+					  cpumask_of_node(dev_to_node(dev));
+#else
 	mask = cpumask_of_pcibus(to_pci_dev(dev)->bus);
+#endif
 	len = cpulist_scnprintf(buf, PAGE_SIZE-2, mask);
 	buf[len++] = '\n';
 	buf[len] = '\0';
@@ -174,6 +184,21 @@ numa_node_show(struct device *dev, struct device_attribute *attr, char *buf)
 	return sprintf (buf, "%d\n", dev->numa_node);
 }
 #endif
+
+static ssize_t
+dma_mask_bits_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+
+	return sprintf (buf, "%d\n", fls64(pdev->dma_mask));
+}
+
+static ssize_t
+consistent_dma_mask_bits_show(struct device *dev, struct device_attribute *attr,
+				 char *buf)
+{
+	return sprintf (buf, "%d\n", fls64(dev->coherent_dma_mask));
+}
 
 static ssize_t
 msi_bus_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -306,6 +331,8 @@ struct device_attribute pci_dev_attrs[] = {
 #ifdef CONFIG_NUMA
 	__ATTR_RO(numa_node),
 #endif
+	__ATTR_RO(dma_mask_bits),
+	__ATTR_RO(consistent_dma_mask_bits),
 	__ATTR(enable, 0600, is_enabled_show, is_enabled_store),
 	__ATTR(broken_parity_status,(S_IRUGO|S_IWUSR),
 		broken_parity_status_show,broken_parity_status_store),
@@ -662,21 +689,17 @@ void pci_remove_legacy_files(struct pci_bus *b)
 
 #ifdef HAVE_PCI_MMAP
 
-int pci_mmap_fits(struct pci_dev *pdev, int resno, struct vm_area_struct *vma,
-		  enum pci_mmap_api mmap_api)
+int pci_mmap_fits(struct pci_dev *pdev, int resno, struct vm_area_struct *vma)
 {
-	unsigned long nr, start, size, pci_start;
+	unsigned long nr, start, size;
 
-	if (pci_resource_len(pdev, resno) == 0)
-		return 0;
 	nr = (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
 	start = vma->vm_pgoff;
 	size = ((pci_resource_len(pdev, resno) - 1) >> PAGE_SHIFT) + 1;
-	pci_start = (mmap_api == PCI_MMAP_PROCFS) ?
-			pci_resource_start(pdev, resno) >> PAGE_SHIFT : 0;
-	if (start >= pci_start && start < pci_start + size &&
-			start + nr <= pci_start + size)
+	if (start < size && size - start >= nr)
 		return 1;
+	WARN(1, "process \"%s\" tried to map 0x%08lx-0x%08lx on %s BAR %d (size 0x%08lx)\n",
+		current->comm, start, start+nr, pci_name(pdev), resno, size);
 	return 0;
 }
 
@@ -706,14 +729,8 @@ pci_mmap_resource(struct kobject *kobj, struct bin_attribute *attr,
 	if (i >= PCI_ROM_RESOURCE)
 		return -ENODEV;
 
-	if (!pci_mmap_fits(pdev, i, vma, PCI_MMAP_SYSFS)) {
-		WARN(1, "process \"%s\" tried to map 0x%08lx bytes "
-			"at page 0x%08lx on %s BAR %d (start 0x%16Lx, size 0x%16Lx)\n",
-			current->comm, vma->vm_end-vma->vm_start, vma->vm_pgoff,
-			pci_name(pdev), i,
-			pci_resource_start(pdev, i), pci_resource_len(pdev, i));
+	if (!pci_mmap_fits(pdev, i, vma))
 		return -EINVAL;
-	}
 
 	/* pci_mmap_page_range() expects the same kind of entry as coming
 	 * from /proc/bus/pci/ which is a "user visible" value. If this is
@@ -939,12 +956,7 @@ static ssize_t reset_store(struct device *dev,
 
 	if (val != 1)
 		return -EINVAL;
-
-	result = pci_reset_function(pdev);
-	if (result < 0)
-		return result;
-
-	return count;
+	return pci_reset_function(pdev);
 }
 
 static struct device_attribute reset_attr = __ATTR(reset, 0200, NULL, reset_store);
@@ -967,7 +979,7 @@ static int pci_create_capabilities_sysfs(struct pci_dev *dev)
 		attr->write = write_vpd_attr;
 		retval = sysfs_create_bin_file(&dev->dev.kobj, attr);
 		if (retval) {
-			kfree(attr);
+			kfree(dev->vpd->attr);
 			return retval;
 		}
 		dev->vpd->attr = attr;

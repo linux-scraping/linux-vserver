@@ -252,7 +252,7 @@ out_put:
 int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy_vxi, *proxy_cur, *proxy_new;
-	struct fs_struct *fs_vxi, *fs = NULL;
+	struct fs_struct *fs_vxi, *fs;
 	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_set_space(%p[#%u],0x%08lx,%d)",

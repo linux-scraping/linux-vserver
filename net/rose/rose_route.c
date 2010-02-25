@@ -77,8 +77,9 @@ static int __must_check rose_add_node(struct rose_route_struct *rose_route,
 
 	rose_neigh = rose_neigh_list;
 	while (rose_neigh != NULL) {
-		if (ax25cmp(&rose_route->neighbour, &rose_neigh->callsign) == 0
-		    && rose_neigh->dev == dev)
+		if (ax25cmp(&rose_route->neighbour,
+			    &rose_neigh->callsign) == 0 &&
+		    rose_neigh->dev == dev)
 			break;
 		rose_neigh = rose_neigh->next;
 	}
@@ -315,8 +316,9 @@ static int rose_del_node(struct rose_route_struct *rose_route,
 
 	rose_neigh = rose_neigh_list;
 	while (rose_neigh != NULL) {
-		if (ax25cmp(&rose_route->neighbour, &rose_neigh->callsign) == 0
-		    && rose_neigh->dev == dev)
+		if (ax25cmp(&rose_route->neighbour,
+			    &rose_neigh->callsign) == 0 &&
+		    rose_neigh->dev == dev)
 			break;
 		rose_neigh = rose_neigh->next;
 	}
@@ -604,13 +606,13 @@ struct net_device *rose_dev_first(void)
 {
 	struct net_device *dev, *first = NULL;
 
-	read_lock(&dev_base_lock);
-	for_each_netdev(&init_net, dev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, dev) {
 		if ((dev->flags & IFF_UP) && dev->type == ARPHRD_ROSE)
 			if (first == NULL || strncmp(dev->name, first->name, 3) < 0)
 				first = dev;
 	}
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 
 	return first;
 }
@@ -622,8 +624,8 @@ struct net_device *rose_dev_get(rose_address *addr)
 {
 	struct net_device *dev;
 
-	read_lock(&dev_base_lock);
-	for_each_netdev(&init_net, dev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, dev) {
 		if ((dev->flags & IFF_UP) && dev->type == ARPHRD_ROSE && rosecmp(addr, (rose_address *)dev->dev_addr) == 0) {
 			dev_hold(dev);
 			goto out;
@@ -631,7 +633,7 @@ struct net_device *rose_dev_get(rose_address *addr)
 	}
 	dev = NULL;
 out:
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 	return dev;
 }
 
@@ -639,14 +641,14 @@ static int rose_dev_exists(rose_address *addr)
 {
 	struct net_device *dev;
 
-	read_lock(&dev_base_lock);
-	for_each_netdev(&init_net, dev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, dev) {
 		if ((dev->flags & IFF_UP) && dev->type == ARPHRD_ROSE && rosecmp(addr, (rose_address *)dev->dev_addr) == 0)
 			goto out;
 	}
 	dev = NULL;
 out:
-	read_unlock(&dev_base_lock);
+	rcu_read_unlock();
 	return dev != NULL;
 }
 
@@ -852,7 +854,7 @@ int rose_route_frame(struct sk_buff *skb, ax25_cb *ax25)
 	unsigned int lci, new_lci;
 	unsigned char cause, diagnostic;
 	struct net_device *dev;
-	int res = 0;
+	int len, res = 0;
 	char buf[11];
 
 #if 0
@@ -860,17 +862,10 @@ int rose_route_frame(struct sk_buff *skb, ax25_cb *ax25)
 		return res;
 #endif
 
-	if (skb->len < ROSE_MIN_LEN)
-		return res;
 	frametype = skb->data[2];
 	lci = ((skb->data[0] << 8) & 0xF00) + ((skb->data[1] << 0) & 0x0FF);
-	if (frametype == ROSE_CALL_REQUEST &&
-	    (skb->len <= ROSE_CALL_REQ_FACILITIES_OFF ||
-	     skb->data[ROSE_CALL_REQ_ADDR_LEN_OFF] !=
-	     ROSE_CALL_REQ_ADDR_LEN_VAL))
-		return res;
-	src_addr  = (rose_address *)(skb->data + ROSE_CALL_REQ_SRC_ADDR_OFF);
-	dest_addr = (rose_address *)(skb->data + ROSE_CALL_REQ_DEST_ADDR_OFF);
+	src_addr  = (rose_address *)(skb->data + 9);
+	dest_addr = (rose_address *)(skb->data + 4);
 
 	spin_lock_bh(&rose_neigh_list_lock);
 	spin_lock_bh(&rose_route_list_lock);
@@ -1008,11 +1003,12 @@ int rose_route_frame(struct sk_buff *skb, ax25_cb *ax25)
 		goto out;
 	}
 
+	len  = (((skb->data[3] >> 4) & 0x0F) + 1) >> 1;
+	len += (((skb->data[3] >> 0) & 0x0F) + 1) >> 1;
+
 	memset(&facilities, 0x00, sizeof(struct rose_facilities_struct));
 
-	if (!rose_parse_facilities(skb->data + ROSE_CALL_REQ_FACILITIES_OFF,
-				   skb->len - ROSE_CALL_REQ_FACILITIES_OFF,
-				   &facilities)) {
+	if (!rose_parse_facilities(skb->data + len + 4, &facilities)) {
 		rose_transmit_clear_request(rose_neigh, lci, ROSE_INVALID_FACILITY, 76);
 		goto out;
 	}

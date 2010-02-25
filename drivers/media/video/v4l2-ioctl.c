@@ -284,6 +284,12 @@ static const char *v4l2_ioctls[] = {
 	[_IOC_NR(VIDIOC_DBG_G_CHIP_IDENT)] = "VIDIOC_DBG_G_CHIP_IDENT",
 	[_IOC_NR(VIDIOC_S_HW_FREQ_SEEK)]   = "VIDIOC_S_HW_FREQ_SEEK",
 #endif
+	[_IOC_NR(VIDIOC_ENUM_DV_PRESETS)]  = "VIDIOC_ENUM_DV_PRESETS",
+	[_IOC_NR(VIDIOC_S_DV_PRESET)]	   = "VIDIOC_S_DV_PRESET",
+	[_IOC_NR(VIDIOC_G_DV_PRESET)]	   = "VIDIOC_G_DV_PRESET",
+	[_IOC_NR(VIDIOC_QUERY_DV_PRESET)]  = "VIDIOC_QUERY_DV_PRESET",
+	[_IOC_NR(VIDIOC_S_DV_TIMINGS)]     = "VIDIOC_S_DV_TIMINGS",
+	[_IOC_NR(VIDIOC_G_DV_TIMINGS)]     = "VIDIOC_G_DV_TIMINGS",
 };
 #define V4L2_IOCTLS ARRAY_SIZE(v4l2_ioctls)
 
@@ -414,9 +420,6 @@ video_usercopy(struct file *file, unsigned int cmd, unsigned long arg,
 		p->error_idx = p->count;
 		user_ptr = (void __user *)p->controls;
 		if (p->count) {
-			err = -EINVAL;
-			if (p->count > V4L2_CID_MAX_CTRLS)
-				goto out_ext_ctrl;
 			ctrls_size = sizeof(struct v4l2_ext_control) * p->count;
 			/* Note: v4l2_ext_controls fits in sbuf[] so mbuf is still NULL. */
 			mbuf = kmalloc(ctrls_size, GFP_KERNEL);
@@ -1138,6 +1141,19 @@ static long __video_do_ioctl(struct file *file,
 	{
 		struct v4l2_input *p = arg;
 
+		/*
+		 * We set the flags for CAP_PRESETS, CAP_CUSTOM_TIMINGS &
+		 * CAP_STD here based on ioctl handler provided by the
+		 * driver. If the driver doesn't support these
+		 * for a specific input, it must override these flags.
+		 */
+		if (ops->vidioc_s_std)
+			p->capabilities |= V4L2_IN_CAP_STD;
+		if (ops->vidioc_s_dv_preset)
+			p->capabilities |= V4L2_IN_CAP_PRESETS;
+		if (ops->vidioc_s_dv_timings)
+			p->capabilities |= V4L2_IN_CAP_CUSTOM_TIMINGS;
+
 		if (!ops->vidioc_enum_input)
 			break;
 
@@ -1181,6 +1197,19 @@ static long __video_do_ioctl(struct file *file,
 
 		if (!ops->vidioc_enum_output)
 			break;
+
+		/*
+		 * We set the flags for CAP_PRESETS, CAP_CUSTOM_TIMINGS &
+		 * CAP_STD here based on ioctl handler provided by the
+		 * driver. If the driver doesn't support these
+		 * for a specific output, it must override these flags.
+		 */
+		if (ops->vidioc_s_std)
+			p->capabilities |= V4L2_OUT_CAP_STD;
+		if (ops->vidioc_s_dv_preset)
+			p->capabilities |= V4L2_OUT_CAP_PRESETS;
+		if (ops->vidioc_s_dv_timings)
+			p->capabilities |= V4L2_OUT_CAP_CUSTOM_TIMINGS;
 
 		ret = ops->vidioc_enum_output(file, fh, p);
 		if (!ret)
@@ -1603,8 +1632,6 @@ static long __video_do_ioctl(struct file *file,
 		if (!ops->vidioc_g_tuner)
 			break;
 
-		p->type = (vfd->vfl_type == VFL_TYPE_RADIO) ?
-			V4L2_TUNER_RADIO : V4L2_TUNER_ANALOG_TV;
 		ret = ops->vidioc_g_tuner(file, fh, p);
 		if (!ret)
 			dbgarg(cmd, "index=%d, name=%s, type=%d, "
@@ -1623,8 +1650,6 @@ static long __video_do_ioctl(struct file *file,
 
 		if (!ops->vidioc_s_tuner)
 			break;
-		p->type = (vfd->vfl_type == VFL_TYPE_RADIO) ?
-			V4L2_TUNER_RADIO : V4L2_TUNER_ANALOG_TV;
 		dbgarg(cmd, "index=%d, name=%s, type=%d, "
 				"capability=0x%x, rangelow=%d, "
 				"rangehigh=%d, signal=%d, afc=%d, "
@@ -1643,8 +1668,6 @@ static long __video_do_ioctl(struct file *file,
 		if (!ops->vidioc_g_frequency)
 			break;
 
-		p->type = (vfd->vfl_type == VFL_TYPE_RADIO) ?
-			V4L2_TUNER_RADIO : V4L2_TUNER_ANALOG_TV;
 		ret = ops->vidioc_g_frequency(file, fh, p);
 		if (!ret)
 			dbgarg(cmd, "tuner=%d, type=%d, frequency=%d\n",
@@ -1803,6 +1826,121 @@ static long __video_do_ioctl(struct file *file,
 		}
 		break;
 	}
+	case VIDIOC_ENUM_DV_PRESETS:
+	{
+		struct v4l2_dv_enum_preset *p = arg;
+
+		if (!ops->vidioc_enum_dv_presets)
+			break;
+
+		ret = ops->vidioc_enum_dv_presets(file, fh, p);
+		if (!ret)
+			dbgarg(cmd,
+				"index=%d, preset=%d, name=%s, width=%d,"
+				" height=%d ",
+				p->index, p->preset, p->name, p->width,
+				p->height);
+		break;
+	}
+	case VIDIOC_S_DV_PRESET:
+	{
+		struct v4l2_dv_preset *p = arg;
+
+		if (!ops->vidioc_s_dv_preset)
+			break;
+
+		dbgarg(cmd, "preset=%d\n", p->preset);
+		ret = ops->vidioc_s_dv_preset(file, fh, p);
+		break;
+	}
+	case VIDIOC_G_DV_PRESET:
+	{
+		struct v4l2_dv_preset *p = arg;
+
+		if (!ops->vidioc_g_dv_preset)
+			break;
+
+		ret = ops->vidioc_g_dv_preset(file, fh, p);
+		if (!ret)
+			dbgarg(cmd, "preset=%d\n", p->preset);
+		break;
+	}
+	case VIDIOC_QUERY_DV_PRESET:
+	{
+		struct v4l2_dv_preset *p = arg;
+
+		if (!ops->vidioc_query_dv_preset)
+			break;
+
+		ret = ops->vidioc_query_dv_preset(file, fh, p);
+		if (!ret)
+			dbgarg(cmd, "preset=%d\n", p->preset);
+		break;
+	}
+	case VIDIOC_S_DV_TIMINGS:
+	{
+		struct v4l2_dv_timings *p = arg;
+
+		if (!ops->vidioc_s_dv_timings)
+			break;
+
+		switch (p->type) {
+		case V4L2_DV_BT_656_1120:
+			dbgarg2("bt-656/1120:interlaced=%d, pixelclock=%lld,"
+				" width=%d, height=%d, polarities=%x,"
+				" hfrontporch=%d, hsync=%d, hbackporch=%d,"
+				" vfrontporch=%d, vsync=%d, vbackporch=%d,"
+				" il_vfrontporch=%d, il_vsync=%d,"
+				" il_vbackporch=%d\n",
+				p->bt.interlaced, p->bt.pixelclock,
+				p->bt.width, p->bt.height, p->bt.polarities,
+				p->bt.hfrontporch, p->bt.hsync,
+				p->bt.hbackporch, p->bt.vfrontporch,
+				p->bt.vsync, p->bt.vbackporch,
+				p->bt.il_vfrontporch, p->bt.il_vsync,
+				p->bt.il_vbackporch);
+			ret = ops->vidioc_s_dv_timings(file, fh, p);
+			break;
+		default:
+			dbgarg2("Unknown type %d!\n", p->type);
+			break;
+		}
+		break;
+	}
+	case VIDIOC_G_DV_TIMINGS:
+	{
+		struct v4l2_dv_timings *p = arg;
+
+		if (!ops->vidioc_g_dv_timings)
+			break;
+
+		ret = ops->vidioc_g_dv_timings(file, fh, p);
+		if (!ret) {
+			switch (p->type) {
+			case V4L2_DV_BT_656_1120:
+				dbgarg2("bt-656/1120:interlaced=%d,"
+					" pixelclock=%lld,"
+					" width=%d, height=%d, polarities=%x,"
+					" hfrontporch=%d, hsync=%d,"
+					" hbackporch=%d, vfrontporch=%d,"
+					" vsync=%d, vbackporch=%d,"
+					" il_vfrontporch=%d, il_vsync=%d,"
+					" il_vbackporch=%d\n",
+					p->bt.interlaced, p->bt.pixelclock,
+					p->bt.width, p->bt.height,
+					p->bt.polarities, p->bt.hfrontporch,
+					p->bt.hsync, p->bt.hbackporch,
+					p->bt.vfrontporch, p->bt.vsync,
+					p->bt.vbackporch, p->bt.il_vfrontporch,
+					p->bt.il_vsync, p->bt.il_vbackporch);
+				break;
+			default:
+				dbgarg2("Unknown type %d!\n", p->type);
+				break;
+			}
+		}
+		break;
+	}
 
 	default:
 	{
@@ -1915,9 +2053,6 @@ long video_ioctl2(struct file *file,
 		p->error_idx = p->count;
 		user_ptr = (void __user *)p->controls;
 		if (p->count) {
-			err = -EINVAL;
-			if (p->count > V4L2_CID_MAX_CTRLS)
-				goto out_ext_ctrl;
 			ctrls_size = sizeof(struct v4l2_ext_control) * p->count;
 			/* Note: v4l2_ext_controls fits in sbuf[] so mbuf is still NULL. */
 			mbuf = kmalloc(ctrls_size, GFP_KERNEL);

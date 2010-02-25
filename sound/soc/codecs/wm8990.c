@@ -110,21 +110,21 @@ static const u16 wm8990_reg[] = {
 
 #define wm8990_reset(c) snd_soc_write(c, WM8990_RESET, 0)
 
-static const DECLARE_TLV_DB_SCALE(rec_mix_tlv, -1500, 600, 0);
+static const DECLARE_TLV_DB_LINEAR(rec_mix_tlv, -1500, 600);
 
-static const DECLARE_TLV_DB_SCALE(in_pga_tlv, -1650, 3000, 0);
+static const DECLARE_TLV_DB_LINEAR(in_pga_tlv, -1650, 3000);
 
-static const DECLARE_TLV_DB_SCALE(out_mix_tlv, 0, -2100, 0);
+static const DECLARE_TLV_DB_LINEAR(out_mix_tlv, 0, -2100);
 
-static const DECLARE_TLV_DB_SCALE(out_pga_tlv, -7300, 600, 0);
+static const DECLARE_TLV_DB_LINEAR(out_pga_tlv, -7300, 600);
 
-static const DECLARE_TLV_DB_SCALE(out_omix_tlv, -600, 0, 0);
+static const DECLARE_TLV_DB_LINEAR(out_omix_tlv, -600, 0);
 
-static const DECLARE_TLV_DB_SCALE(out_dac_tlv, -7163, 0, 0);
+static const DECLARE_TLV_DB_LINEAR(out_dac_tlv, -7163, 0);
 
-static const DECLARE_TLV_DB_SCALE(in_adc_tlv, -7163, 1763, 0);
+static const DECLARE_TLV_DB_LINEAR(in_adc_tlv, -7163, 1763);
 
-static const DECLARE_TLV_DB_SCALE(out_sidetone_tlv, -3600, 0, 0);
+static const DECLARE_TLV_DB_LINEAR(out_sidetone_tlv, -3600, 0);
 
 static int wm899x_outpga_put_volsw_vu(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
@@ -450,7 +450,7 @@ static int outmixer_event(struct snd_soc_dapm_widget *w,
 /* INMIX dB values */
 static const unsigned int in_mix_tlv[] = {
 	TLV_DB_RANGE_HEAD(1),
-	0, 7, TLV_DB_SCALE_ITEM(-1200, 600, 0),
+	0, 7, TLV_DB_LINEAR_ITEM(-1200, 600),
 };
 
 /* Left In PGA Connections */
@@ -920,7 +920,6 @@ static int wm8990_add_widgets(struct snd_soc_codec *codec)
 	/* set up the WM8990 audio map */
 	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
 
-	snd_soc_dapm_new_widgets(codec);
 	return 0;
 }
 
@@ -972,8 +971,8 @@ static void pll_factors(struct _pll_div *pll_div, unsigned int target,
 	pll_div->k = K;
 }
 
-static int wm8990_set_dai_pll(struct snd_soc_dai *codec_dai,
-		int pll_id, unsigned int freq_in, unsigned int freq_out)
+static int wm8990_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
+		int source, unsigned int freq_in, unsigned int freq_out)
 {
 	u16 reg;
 	struct snd_soc_codec *codec = codec_dai->codec;
@@ -1185,7 +1184,7 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 				     WM8990_VMIDTOG);
 
 			/* Delay to allow output caps to discharge */
-			msleep(300);
+			msleep(msecs_to_jiffies(300));
 
 			/* Disable VMIDTOG */
 			snd_soc_write(codec, WM8990_ANTIPOP2, WM8990_SOFTST |
@@ -1197,17 +1196,17 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 			/* Enable outputs */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1b00);
 
-			msleep(50);
+			msleep(msecs_to_jiffies(50));
 
 			/* Enable VMID at 2x50k */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f02);
 
-			msleep(100);
+			msleep(msecs_to_jiffies(100));
 
 			/* Enable VREF */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f03);
 
-			msleep(600);
+			msleep(msecs_to_jiffies(600));
 
 			/* Enable BUFIOEN */
 			snd_soc_write(codec, WM8990_ANTIPOP2, WM8990_SOFTST |
@@ -1252,7 +1251,7 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 		/* Disable VMID */
 		snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f01);
 
-		msleep(300);
+		msleep(msecs_to_jiffies(300));
 
 		/* Enable all output discharge bits */
 		snd_soc_write(codec, WM8990_ANTIPOP1, WM8990_DIS_LLINE |
@@ -1409,16 +1408,9 @@ static int wm8990_init(struct snd_soc_device *socdev)
 	snd_soc_add_controls(codec, wm8990_snd_controls,
 				ARRAY_SIZE(wm8990_snd_controls));
 	wm8990_add_widgets(codec);
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		printk(KERN_ERR "wm8990: failed to register card\n");
-		goto card_err;
-	}
+
 	return ret;
 
-card_err:
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
 pcm_err:
 	kfree(codec->reg_cache);
 	return ret;

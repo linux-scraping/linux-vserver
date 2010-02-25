@@ -119,32 +119,26 @@ int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	spin_unlock(root_lock);
 
 	HARD_TX_LOCK(dev, txq, smp_processor_id());
-	if (!netif_tx_queue_stopped(txq) &&
-	    !netif_tx_queue_frozen(txq))
+	if (!netif_tx_queue_stopped(txq) && !netif_tx_queue_frozen(txq))
 		ret = dev_hard_start_xmit(skb, dev, txq);
+
 	HARD_TX_UNLOCK(dev, txq);
 
 	spin_lock(root_lock);
 
-	switch (ret) {
-	case NETDEV_TX_OK:
-		/* Driver sent out skb successfully */
+	if (dev_xmit_complete(ret)) {
+		/* Driver sent out skb successfully or skb was consumed */
 		ret = qdisc_qlen(q);
-		break;
-
-	case NETDEV_TX_LOCKED:
+	} else if (ret == NETDEV_TX_LOCKED) {
 		/* Driver try lock failed */
 		ret = handle_dev_cpu_collision(skb, txq, q);
-		break;
-
-	default:
+	} else {
 		/* Driver returned NETDEV_TX_BUSY - requeue skb */
 		if (unlikely (ret != NETDEV_TX_BUSY && net_ratelimit()))
 			printk(KERN_WARNING "BUG %s code %d qlen %d\n",
 			       dev->name, ret, q->q.qlen);
 
 		ret = dev_requeue_skb(skb, q);
-		break;
 	}
 
 	if (ret && (netif_tx_queue_stopped(txq) ||
@@ -329,24 +323,6 @@ void netif_carrier_off(struct net_device *dev)
 	}
 }
 EXPORT_SYMBOL(netif_carrier_off);
-
-/**
- * 	netif_notify_peers - notify network peers about existence of @dev
- * 	@dev: network device
- *
- * Generate traffic such that interested network peers are aware of
- * @dev, such as by generating a gratuitous ARP. This may be used when
- * a device wants to inform the rest of the network about some sort of
- * reconfiguration such as a failover event or virtual machine
- * migration.
- */
-void netif_notify_peers(struct net_device *dev)
-{
-	rtnl_lock();
-	call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, dev);
-	rtnl_unlock();
-}
-EXPORT_SYMBOL(netif_notify_peers);
 
 /* "NOOP" scheduler: the best scheduler, recommended for all interfaces
    under all circumstances. It is difficult to invent anything faster or

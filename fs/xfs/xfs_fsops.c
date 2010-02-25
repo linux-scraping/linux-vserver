@@ -45,6 +45,7 @@
 #include "xfs_rtalloc.h"
 #include "xfs_rw.h"
 #include "xfs_filestream.h"
+#include "xfs_trace.h"
 
 /*
  * File system operations
@@ -56,9 +57,6 @@ xfs_fs_geometry(
 	xfs_fsop_geom_t		*geo,
 	int			new_version)
 {
-
-	memset(geo, 0, sizeof(*geo));
-
 	geo->blocksize = mp->m_sb.sb_blocksize;
 	geo->rtextsize = mp->m_sb.sb_rextsize;
 	geo->agblocks = mp->m_sb.sb_agblocks;
@@ -204,8 +202,8 @@ xfs_growfs_data_private(
 		 * AG freelist header block
 		 */
 		bp = xfs_buf_get(mp->m_ddev_targp,
-				  XFS_AG_DADDR(mp, agno, XFS_AGF_DADDR(mp)),
-				  XFS_FSS_TO_BB(mp, 1), 0);
+				 XFS_AG_DADDR(mp, agno, XFS_AGF_DADDR(mp)),
+				 XFS_FSS_TO_BB(mp, 1), XBF_LOCK | XBF_MAPPED);
 		agf = XFS_BUF_TO_AGF(bp);
 		memset(agf, 0, mp->m_sb.sb_sectsize);
 		agf->agf_magicnum = cpu_to_be32(XFS_AGF_MAGIC);
@@ -236,8 +234,8 @@ xfs_growfs_data_private(
 		 * AG inode header block
 		 */
 		bp = xfs_buf_get(mp->m_ddev_targp,
-				  XFS_AG_DADDR(mp, agno, XFS_AGI_DADDR(mp)),
-				  XFS_FSS_TO_BB(mp, 1), 0);
+				 XFS_AG_DADDR(mp, agno, XFS_AGI_DADDR(mp)),
+				 XFS_FSS_TO_BB(mp, 1), XBF_LOCK | XBF_MAPPED);
 		agi = XFS_BUF_TO_AGI(bp);
 		memset(agi, 0, mp->m_sb.sb_sectsize);
 		agi->agi_magicnum = cpu_to_be32(XFS_AGI_MAGIC);
@@ -260,8 +258,9 @@ xfs_growfs_data_private(
 		 * BNO btree root block
 		 */
 		bp = xfs_buf_get(mp->m_ddev_targp,
-			XFS_AGB_TO_DADDR(mp, agno, XFS_BNO_BLOCK(mp)),
-			BTOBB(mp->m_sb.sb_blocksize), 0);
+				 XFS_AGB_TO_DADDR(mp, agno, XFS_BNO_BLOCK(mp)),
+				 BTOBB(mp->m_sb.sb_blocksize),
+				 XBF_LOCK | XBF_MAPPED);
 		block = XFS_BUF_TO_BLOCK(bp);
 		memset(block, 0, mp->m_sb.sb_blocksize);
 		block->bb_magic = cpu_to_be32(XFS_ABTB_MAGIC);
@@ -281,8 +280,9 @@ xfs_growfs_data_private(
 		 * CNT btree root block
 		 */
 		bp = xfs_buf_get(mp->m_ddev_targp,
-			XFS_AGB_TO_DADDR(mp, agno, XFS_CNT_BLOCK(mp)),
-			BTOBB(mp->m_sb.sb_blocksize), 0);
+				 XFS_AGB_TO_DADDR(mp, agno, XFS_CNT_BLOCK(mp)),
+				 BTOBB(mp->m_sb.sb_blocksize),
+				 XBF_LOCK | XBF_MAPPED);
 		block = XFS_BUF_TO_BLOCK(bp);
 		memset(block, 0, mp->m_sb.sb_blocksize);
 		block->bb_magic = cpu_to_be32(XFS_ABTC_MAGIC);
@@ -303,8 +303,9 @@ xfs_growfs_data_private(
 		 * INO btree root block
 		 */
 		bp = xfs_buf_get(mp->m_ddev_targp,
-			XFS_AGB_TO_DADDR(mp, agno, XFS_IBT_BLOCK(mp)),
-			BTOBB(mp->m_sb.sb_blocksize), 0);
+				 XFS_AGB_TO_DADDR(mp, agno, XFS_IBT_BLOCK(mp)),
+				 BTOBB(mp->m_sb.sb_blocksize),
+				 XBF_LOCK | XBF_MAPPED);
 		block = XFS_BUF_TO_BLOCK(bp);
 		memset(block, 0, mp->m_sb.sb_blocksize);
 		block->bb_magic = cpu_to_be32(XFS_IBT_MAGIC);
@@ -347,6 +348,7 @@ xfs_growfs_data_private(
 		be32_add_cpu(&agf->agf_length, new);
 		ASSERT(be32_to_cpu(agf->agf_length) ==
 		       be32_to_cpu(agi->agi_length));
+
 		xfs_alloc_log_agf(tp, bp, XFS_AGF_LENGTH);
 		/*
 		 * Free the new space.

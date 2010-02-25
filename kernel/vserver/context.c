@@ -145,10 +145,9 @@ error:
 
 static void __dealloc_vx_info(struct vx_info *vxi)
 {
-#ifdef	CONFIG_VSERVER_WARN
 	struct vx_info_save vxis;
 	int cpu;
-#endif
+
 	vxdprintk(VXD_CBIT(xid, 0),
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
@@ -380,10 +379,10 @@ out_unlock:
 
 void unhash_vx_info(struct vx_info *vxi)
 {
+	__shutdown_vx_info(vxi);
 	spin_lock(&vx_info_hash_lock);
 	__unhash_vx_info(vxi);
 	spin_unlock(&vx_info_hash_lock);
-	__shutdown_vx_info(vxi);
 	__wakeup_vx_info(vxi);
 }
 

@@ -134,7 +134,7 @@ static int temac_dma_bd_init(struct net_device *ndev)
 	struct sk_buff *skb;
 	int i;
 
-	lp->rx_skb = kzalloc(sizeof(struct sk_buff)*RX_BD_NUM, GFP_KERNEL);
+	lp->rx_skb = kzalloc(sizeof(*lp->rx_skb) * RX_BD_NUM, GFP_KERNEL);
 	/* allocate the tx and rx ring buffer descriptors. */
 	/* returns a virtual addres and a physical address. */
 	lp->tx_bd_v = dma_alloc_coherent(ndev->dev.parent,
@@ -190,12 +190,6 @@ static int temac_dma_bd_init(struct net_device *ndev)
 		       lp->rx_bd_p + (sizeof(*lp->rx_bd_v) * (RX_BD_NUM - 1)));
 	temac_dma_out32(lp, TX_CURDESC_PTR, lp->tx_bd_p);
 
-	/* Init descriptor indexes */
-	lp->tx_bd_ci = 0;
-	lp->tx_bd_next = 0;
-	lp->tx_bd_tail = 0;
-	lp->rx_bd_ci = 0;
-
 	return 0;
 }
 
@@ -237,8 +231,8 @@ static void temac_set_multicast_list(struct net_device *ndev)
 	int i;
 
 	mutex_lock(&lp->indirect_mutex);
-	if (ndev->flags & (IFF_ALLMULTI | IFF_PROMISC)
-			|| ndev->mc_count > MULTICAST_CAM_TABLE_NUM) {
+	if (ndev->flags & (IFF_ALLMULTI | IFF_PROMISC) ||
+	    ndev->mc_count > MULTICAST_CAM_TABLE_NUM) {
 		/*
 		 *	We must make the kernel realise we had to move
 		 *	into promisc mode or we start all out war on

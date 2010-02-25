@@ -18,9 +18,9 @@
 #include <linux/mtd/partitions.h>
 #include <linux/io.h>
 
-#include <mach/dma.h>
-#include <mach/gpmc.h>
-#include <mach/nand.h>
+#include <plat/dma.h>
+#include <plat/gpmc.h>
+#include <plat/nand.h>
 
 #define GPMC_IRQ_STATUS		0x18
 #define GPMC_ECC_CONFIG		0x1F4
@@ -1099,6 +1099,6 @@ static void __exit omap_nand_exit(void)
 module_init(omap_nand_init);
 module_exit(omap_nand_exit);
 
-MODULE_ALIAS("platform:" DRIVER_NAME);
+MODULE_ALIAS(DRIVER_NAME);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Glue layer for NAND flash on TI OMAP boards");

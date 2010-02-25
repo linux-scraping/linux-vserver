@@ -95,12 +95,12 @@ err_out:
  * ima_must_measure - measure decision based on policy.
  * @inode: pointer to inode to measure
  * @mask: contains the permission mask (MAY_READ, MAY_WRITE, MAY_EXECUTE)
- * @function: calling function (PATH_CHECK, BPRM_CHECK, FILE_MMAP)
+ * @function: calling function (FILE_CHECK, BPRM_CHECK, FILE_MMAP)
  *
  * The policy is defined in terms of keypairs:
  * 		subj=, obj=, type=, func=, mask=, fsmagic=
  *	subj,obj, and type: are LSM specific.
- * 	func: PATH_CHECK | BPRM_CHECK | FILE_MMAP
+ * 	func: FILE_CHECK | BPRM_CHECK | FILE_MMAP
  * 	mask: contains the permission mask
  *	fsmagic: hex value
  *
@@ -183,8 +183,8 @@ void ima_store_measurement(struct ima_iint_cache *iint, struct file *file,
 	strncpy(entry->template.file_name, filename, IMA_EVENT_NAME_LEN_MAX);
 
 	result = ima_store_template(entry, violation, inode);
-	if (!result || result == -EEXIST)
+	if (!result)
 		iint->flags |= IMA_MEASURED;
-	if (result < 0)
+	else
 		kfree(entry);
 }

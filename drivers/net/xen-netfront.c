@@ -42,6 +42,7 @@
 #include <linux/mm.h>
 #include <net/ip.h>
 
+#include <xen/xen.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
 #include <xen/page.h>
@@ -1619,7 +1620,6 @@ static void backend_changed(struct xenbus_device *dev,
 		if (xennet_connect(netdev) != 0)
 			break;
 		xenbus_switch_state(dev, XenbusStateConnected);
-		netif_notify_peers(netdev);
 		break;
 
 	case XenbusStateClosing:

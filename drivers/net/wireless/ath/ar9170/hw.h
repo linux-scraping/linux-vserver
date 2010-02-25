@@ -152,14 +152,14 @@ enum ar9170_cmd {
 #define		AR9170_MAC_REG_FTF_BIT14		BIT(14)
 #define		AR9170_MAC_REG_FTF_BIT15		BIT(15)
 #define		AR9170_MAC_REG_FTF_BAR			BIT(24)
-#define		AR9170_MAC_REG_FTF_BIT25		BIT(25)
+#define		AR9170_MAC_REG_FTF_BA			BIT(25)
 #define		AR9170_MAC_REG_FTF_PSPOLL		BIT(26)
 #define		AR9170_MAC_REG_FTF_RTS			BIT(27)
 #define		AR9170_MAC_REG_FTF_CTS			BIT(28)
 #define		AR9170_MAC_REG_FTF_ACK			BIT(29)
 #define		AR9170_MAC_REG_FTF_CFE			BIT(30)
 #define		AR9170_MAC_REG_FTF_CFE_ACK		BIT(31)
-#define		AR9170_MAC_REG_FTF_DEFAULTS		0x0500ffff
+#define		AR9170_MAC_REG_FTF_DEFAULTS		0x0700ffff
 #define		AR9170_MAC_REG_FTF_MONITOR		0xfd00ffff
 
 #define AR9170_MAC_REG_RX_TOTAL			(AR9170_MAC_REG_BASE + 0x6A0)
@@ -311,6 +311,8 @@ struct ar9170_tx_control {
 
 #define AR9170_TX_PHY_SHORT_GI			0x80000000
 
+#define AR5416_MAX_RATE_POWER                   63
+
 struct ar9170_rx_head {
 	u8 plcp[12];
 } __packed;
@@ -422,6 +424,5 @@ enum ar9170_txq {
 
 #define AR9170_TXQ_DEPTH	32
 #define AR9170_TX_MAX_PENDING	128
-#define AR9170_RX_STREAM_MAX_SIZE 65535
 
 #endif /* __AR9170_HW_H */

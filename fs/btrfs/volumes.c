@@ -21,7 +21,6 @@
 #include <linux/blkdev.h>
 #include <linux/random.h>
 #include <linux/iocontext.h>
-#include <linux/capability.h>
 #include <asm/div64.h>
 #include "compat.h"
 #include "ctree.h"
@@ -557,12 +556,6 @@ int btrfs_close_devices(struct btrfs_fs_devices *fs_devices)
 		__btrfs_close_devices(fs_devices);
 		free_fs_devices(fs_devices);
 	}
-	/*
-	 * Wait for rcu kworkers under __btrfs_close_devices
-	 * to finish all blkdev_puts so device is really
-	 * free when umount is done.
-	 */
-	rcu_barrier();
 	return ret;
 }
 
@@ -1906,9 +1899,6 @@ int btrfs_balance(struct btrfs_root *dev_root)
 
 	if (dev_root->fs_info->sb->s_flags & MS_RDONLY)
 		return -EROFS;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 
 	mutex_lock(&dev_root->fs_info->volume_mutex);
 	dev_root = dev_root->fs_info->dev_root;

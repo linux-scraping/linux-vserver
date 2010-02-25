@@ -903,14 +903,6 @@ static const struct icmp6_err {
 		.err	= ECONNREFUSED,
 		.fatal	= 1,
 	},
-	{	/* POLICY_FAIL */
-		.err	= EACCES,
-		.fatal	= 1,
-	},
-	{	/* REJECT_ROUTE	*/
-		.err	= EACCES,
-		.fatal	= 1,
-	},
 };
 
 int icmpv6_err_convert(u8 type, u8 code, int *err)
@@ -922,7 +914,7 @@ int icmpv6_err_convert(u8 type, u8 code, int *err)
 	switch (type) {
 	case ICMPV6_DEST_UNREACH:
 		fatal = 1;
-		if (code < ARRAY_SIZE(tab_unreach)) {
+		if (code <= ICMPV6_PORT_UNREACH) {
 			*err  = tab_unreach[code].err;
 			fatal = tab_unreach[code].fatal;
 		}
@@ -950,15 +942,13 @@ EXPORT_SYMBOL(icmpv6_err_convert);
 #ifdef CONFIG_SYSCTL
 ctl_table ipv6_icmp_table_template[] = {
 	{
-		.ctl_name	= NET_IPV6_ICMP_RATELIMIT,
 		.procname	= "ratelimit",
 		.data		= &init_net.ipv6.sysctl.icmpv6_time,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_ms_jiffies,
-		.strategy	= sysctl_ms_jiffies
 	},
-	{ .ctl_name = 0 },
+	{ },
 };
 
 struct ctl_table *ipv6_icmp_sysctl_init(struct net *net)

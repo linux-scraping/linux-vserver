@@ -107,8 +107,9 @@ static inline int __dl_alloc_inode(struct super_block *sb,
 		goto out;
 
 	spin_lock(&dli->dl_lock);
-	dli->dl_inodes_used++;
-	ret = (dli->dl_inodes_used > dli->dl_inodes_total);
+	ret = (dli->dl_inodes_used >= dli->dl_inodes_total);
+	if (!ret)
+		dli->dl_inodes_used++;
 	spin_unlock(&dli->dl_lock);
 	put_dl_info(dli);
 out:

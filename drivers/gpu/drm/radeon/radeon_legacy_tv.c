@@ -57,10 +57,6 @@
 #define NTSC_TV_PLL_N_14 693
 #define NTSC_TV_PLL_P_14 7
 
-#define PAL_TV_PLL_M_14 19
-#define PAL_TV_PLL_N_14 353
-#define PAL_TV_PLL_P_14 5
-
 #define VERT_LEAD_IN_LINES 2
 #define FRAC_BITS 0xe
 #define FRAC_MASK 0x3fff
@@ -81,7 +77,7 @@ struct radeon_tv_mode_constants {
 	unsigned pix_to_tv;
 };
 
-static const uint16_t hor_timing_NTSC[] = {
+static const uint16_t hor_timing_NTSC[MAX_H_CODE_TIMING_LEN] = {
 	0x0007,
 	0x003f,
 	0x0263,
@@ -102,7 +98,7 @@ static const uint16_t hor_timing_NTSC[] = {
 	0
 };
 
-static const uint16_t vert_timing_NTSC[] = {
+static const uint16_t vert_timing_NTSC[MAX_V_CODE_TIMING_LEN] = {
 	0x2001,
 	0x200d,
 	0x1006,
@@ -119,7 +115,7 @@ static const uint16_t vert_timing_NTSC[] = {
 	0
 };
 
-static const uint16_t hor_timing_PAL[] = {
+static const uint16_t hor_timing_PAL[MAX_H_CODE_TIMING_LEN] = {
 	0x0007,
 	0x0058,
 	0x027c,
@@ -140,7 +136,7 @@ static const uint16_t hor_timing_PAL[] = {
 	0
 };
 
-static const uint16_t vert_timing_PAL[] = 	{
+static const uint16_t vert_timing_PAL[MAX_V_CODE_TIMING_LEN] = {
 	0x2001,
 	0x200c,
 	0x1005,
@@ -209,23 +205,8 @@ static const struct radeon_tv_mode_constants available_tv_modes[] = {
 		630627,             /* defRestart */
 		347,                /* crtcPLL_N */
 		14,                 /* crtcPLL_M */
-		8,                  /* crtcPLL_postDiv */
+			8,                  /* crtcPLL_postDiv */
 		1022,               /* pixToTV */
-	},
-	{ /* PAL timing for 14 Mhz ref clk */
-		800,                /* horResolution */
-		600,                /* verResolution */
-		TV_STD_PAL,         /* standard */
-		1131,               /* horTotal */
-		742,                /* verTotal */
-		813,                /* horStart */
-		840,                /* horSyncStart */
-		633,                /* verSyncStart */
-		708369,             /* defRestart */
-		211,                /* crtcPLL_N */
-		9,                  /* crtcPLL_M */
-		8,                  /* crtcPLL_postDiv */
-		759,                /* pixToTV */
 	},
 };
 
@@ -261,7 +242,7 @@ static const struct radeon_tv_mode_constants *radeon_legacy_tv_get_std_mode(stru
 		if (pll->reference_freq == 2700)
 			const_ptr = &available_tv_modes[1];
 		else
-			const_ptr = &available_tv_modes[3];
+			const_ptr = &available_tv_modes[1]; /* FIX ME */
 	}
 	return const_ptr;
 }
@@ -642,9 +623,9 @@ void radeon_legacy_tv_mode_set(struct drm_encoder *encoder,
 	}
 	flicker_removal = (tmp + 500) / 1000;
 
-	if (flicker_removal < 3)
-		flicker_removal = 3;
-	for (i = 0; i < 6; ++i) {
+	if (flicker_removal < 2)
+		flicker_removal = 2;
+	for (i = 0; i < ARRAY_SIZE(SLOPE_limit); ++i) {
 		if (flicker_removal == SLOPE_limit[i])
 			break;
 	}
@@ -704,9 +685,9 @@ void radeon_legacy_tv_mode_set(struct drm_encoder *encoder,
 			n = PAL_TV_PLL_N_27;
 			p = PAL_TV_PLL_P_27;
 		} else {
-			m = PAL_TV_PLL_M_14;
-			n = PAL_TV_PLL_N_14;
-			p = PAL_TV_PLL_P_14;
+			m = PAL_TV_PLL_M_27;
+			n = PAL_TV_PLL_N_27;
+			p = PAL_TV_PLL_P_27;
 		}
 	}
 

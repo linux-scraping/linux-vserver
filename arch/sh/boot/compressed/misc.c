@@ -131,8 +131,8 @@ void decompress_kernel(void)
 #ifdef CONFIG_SUPERH64
 	output_addr = (CONFIG_MEMORY_START + 0x2000);
 #else
-	output_addr = PHYSADDR((unsigned long)&_text+PAGE_SIZE);
-#if defined(CONFIG_29BIT) || defined(CONFIG_PMB_FIXED)
+	output_addr = __pa((unsigned long)&_text+PAGE_SIZE);
+#ifdef CONFIG_29BIT
 	output_addr |= P2SEG;
 #endif
 #endif

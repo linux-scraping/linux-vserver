@@ -53,7 +53,6 @@
 #include <asm/paravirt.h>
 #include <asm/ftrace.h>
 #include <asm/percpu.h>
-#include <asm/pgtable_types.h>
 
 /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
 #include <linux/elf-em.h>
@@ -156,11 +155,11 @@ GLOBAL(return_to_handler)
 
 	call ftrace_return_to_handler
 
-	movq %rax, 16(%rsp)
+	movq %rax, %rdi
 	movq 8(%rsp), %rdx
 	movq (%rsp), %rax
-	addq $16, %rsp
-	retq
+	addq $24, %rsp
+	jmp *%rdi
 #endif
 
 
@@ -413,14 +412,11 @@ ENTRY(ret_from_fork)
 	testl $3, CS-ARGOFFSET(%rsp)		# from kernel_thread?
 	je   int_ret_from_sys_call
 
-	/*
-	 * By the time we get here, we have no idea whether our pt_regs,
-	 * ti flags, and ti status came from the 64-bit SYSCALL fast path,
-	 * the slow path, or one of the ia32entry paths.
-	 * Use int_ret_from_sys_call to return, since it can safely handle
-	 * all of the above.
-	 */
-	jmp  int_ret_from_sys_call
+	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
+	jnz  int_ret_from_sys_call
+
+	RESTORE_TOP_OF_STACK %rdi, -ARGOFFSET
+	jmp ret_from_sys_call			# go to the SYSRET fastpath
 
 	CFI_ENDPROC
 END(ret_from_fork)
@@ -807,6 +803,10 @@ END(interrupt)
 	call \func
 	.endm
 
+/*
+ * Interrupt entry/exit should be protected against kprobes
+ */
+	.pushsection .kprobes.text, "ax"
 	/*
 	 * The interrupt stubs push (~vector+0x80) onto the stack and
 	 * then jump to common_interrupt.
@@ -864,51 +864,37 @@ restore_args:
 irq_return:
 	INTERRUPT_RETURN
 
-ENTRY(native_iret)
-	/*
-	 * Are we returning to a stack segment from the LDT?  Note: in
-	 * 64-bit mode SS:RSP on the exception stack is always valid.
-	 */
-#ifdef CONFIG_X86_ESPFIX64
-	testb $4,(SS-RIP)(%rsp)
-	jnz native_irq_return_ldt
-#endif
+	.section __ex_table, "a"
+	.quad irq_return, bad_iret
+	.previous
 
-.global native_irq_return_iret
-native_irq_return_iret:
-	/*
-	 * This may fault.  Non-paranoid faults on return to userspace are
-	 * handled by fixup_bad_iret.  These include #SS, #GP, and #NP.
-	 * Double-faults due to espfix64 are handled in do_double_fault.
-	 * Other faults here are fatal.
-	 */
+#ifdef CONFIG_PARAVIRT
+ENTRY(native_iret)
 	iretq
 
-#ifdef CONFIG_X86_ESPFIX64
-native_irq_return_ldt:
-	pushq_cfi %rax
-	pushq_cfi %rdi
-	SWAPGS
-	movq PER_CPU_VAR(espfix_waddr),%rdi
-	movq %rax,(0*8)(%rdi)	/* RAX */
-	movq (2*8)(%rsp),%rax	/* RIP */
-	movq %rax,(1*8)(%rdi)
-	movq (3*8)(%rsp),%rax	/* CS */
-	movq %rax,(2*8)(%rdi)
-	movq (4*8)(%rsp),%rax	/* RFLAGS */
-	movq %rax,(3*8)(%rdi)
-	movq (6*8)(%rsp),%rax	/* SS */
-	movq %rax,(5*8)(%rdi)
-	movq (5*8)(%rsp),%rax	/* RSP */
-	movq %rax,(4*8)(%rdi)
-	andl $0xffff0000,%eax
-	popq_cfi %rdi
-	orq PER_CPU_VAR(espfix_stack),%rax
-	SWAPGS
-	movq %rax,%rsp
-	popq_cfi %rax
-	jmp native_irq_return_iret
+	.section __ex_table,"a"
+	.quad native_iret, bad_iret
+	.previous
 #endif
+
+	.section .fixup,"ax"
+bad_iret:
+	/*
+	 * The iret traps when the %cs or %ss being restored is bogus.
+	 * We've lost the original trap vector and error code.
+	 * #GPF is the most likely one to get for an invalid selector.
+	 * So pretend we completed the iret and took the #GPF in user mode.
+	 *
+	 * We are now running with the kernel GS after exception recovery.
+	 * But error_entry expects us to have user GS to match the user %cs,
+	 * so swap back.
+	 */
+	pushq $0
+
+	SWAPGS
+	jmp general_protection
+
+	.previous
 
 	/* edi: workmask, edx: work */
 retint_careful:
@@ -956,8 +942,13 @@ ENTRY(retint_kernel)
 	call preempt_schedule_irq
 	jmp exit_intr
 #endif
+
 	CFI_ENDPROC
 END(common_interrupt)
+/*
+ * End of kprobes section
+ */
+       .popsection
 
 /*
  * APIC interrupts.
@@ -986,8 +977,8 @@ apicinterrupt UV_BAU_MESSAGE \
 #endif
 apicinterrupt LOCAL_TIMER_VECTOR \
 	apic_timer_interrupt smp_apic_timer_interrupt
-apicinterrupt GENERIC_INTERRUPT_VECTOR \
-	generic_interrupt smp_generic_interrupt
+apicinterrupt X86_PLATFORM_IPI_VECTOR \
+	x86_platform_ipi smp_x86_platform_ipi
 
 #ifdef CONFIG_SMP
 apicinterrupt INVALIDATE_TLB_VECTOR_START+0 \
@@ -1085,10 +1076,10 @@ ENTRY(\sym)
 	TRACE_IRQS_OFF
 	movq %rsp,%rdi		/* pt_regs pointer */
 	xorl %esi,%esi		/* no error code */
-	PER_CPU(init_tss, %rbp)
-	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
+	PER_CPU(init_tss, %r12)
+	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
 	call \do_sym
-	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
+	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
 	jmp paranoid_exit	/* %ebx: no swapgs flag */
 	CFI_ENDPROC
 END(\sym)
@@ -1175,63 +1166,20 @@ bad_gs:
 	jmp  2b
 	.previous
 
-/*
- * Create a kernel thread.
- *
- * C extern interface:
- *	extern long kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
- *
- * asm input arguments:
- *	rdi: fn, rsi: arg, rdx: flags
- */
-ENTRY(kernel_thread)
-	CFI_STARTPROC
-	FAKE_STACK_FRAME $child_rip
-	SAVE_ALL
-
-	# rdi: flags, rsi: usp, rdx: will be &pt_regs
-	movq %rdx,%rdi
-	orq  kernel_thread_flags(%rip),%rdi
-	movq $-1, %rsi
-	movq %rsp, %rdx
-
-	xorl %r8d,%r8d
-	xorl %r9d,%r9d
-
-	# clone now
-	call do_fork
-	movq %rax,RAX(%rsp)
-	xorl %edi,%edi
-
-	/*
-	 * It isn't worth to check for reschedule here,
-	 * so internally to the x86_64 port you can rely on kernel_thread()
-	 * not to reschedule the child before returning, this avoids the need
-	 * of hacks for example to fork off the per-CPU idle tasks.
-	 * [Hopefully no generic code relies on the reschedule -AK]
-	 */
-	RESTORE_ALL
-	UNFAKE_STACK_FRAME
-	ret
-	CFI_ENDPROC
-END(kernel_thread)
-
-ENTRY(child_rip)
+ENTRY(kernel_thread_helper)
 	pushq $0		# fake return address
 	CFI_STARTPROC
 	/*
 	 * Here we are in the child and the registers are set as they were
 	 * at kernel_thread() invocation in the parent.
 	 */
-	movq %rdi, %rax
-	movq %rsi, %rdi
-	call *%rax
+	call *%rsi
 	# exit
 	mov %eax, %edi
 	call do_exit
 	ud2			# padding for call trace
 	CFI_ENDPROC
-END(child_rip)
+END(kernel_thread_helper)
 
 /*
  * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
@@ -1320,7 +1268,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
 	decl PER_CPU_VAR(irq_count)
 	jmp  error_exit
 	CFI_ENDPROC
-END(xen_do_hypervisor_callback)
+END(do_hypervisor_callback)
 
 /*
  * Hypervisor uses this for application faults while it executes.
@@ -1390,7 +1338,7 @@ END(xen_failsafe_callback)
 
 paranoidzeroentry_ist debug do_debug DEBUG_STACK
 paranoidzeroentry_ist int3 do_int3 DEBUG_STACK
-errorentry stack_segment do_stack_segment
+paranoiderrorentry stack_segment do_stack_segment
 #ifdef CONFIG_XEN
 zeroentry xen_debug do_debug
 zeroentry xen_int3 do_int3
@@ -1417,7 +1365,7 @@ paranoidzeroentry machine_check *machine_check_vector(%rip)
 
 	/* ebx:	no swapgs flag */
 ENTRY(paranoid_exit)
-	DEFAULT_FRAME
+	INTR_FRAME
 	DISABLE_INTERRUPTS(CLBR_NONE)
 	TRACE_IRQS_OFF
 	testl %ebx,%ebx				/* swapgs needed? */
@@ -1498,15 +1446,16 @@ error_sti:
 
 /*
  * There are two places in the kernel that can potentially fault with
- * usergs. Handle them here.  B stepping K8s sometimes report a
- * truncated RIP for IRET exceptions returning to compat mode. Check
- * for these here too.
+ * usergs. Handle them here. The exception handlers after iret run with
+ * kernel gs again, so don't set the user space flag. B stepping K8s
+ * sometimes report an truncated RIP for IRET exceptions returning to
+ * compat mode. Check for these here too.
  */
 error_kernelspace:
 	incl %ebx
-	leaq native_irq_return_iret(%rip),%rcx
+	leaq irq_return(%rip),%rcx
 	cmpq %rcx,RIP+8(%rsp)
-	je error_bad_iret
+	je error_swapgs
 	movl %ecx,%eax	/* zero extend */
 	cmpq %rax,RIP+8(%rsp)
 	je bstep_iret
@@ -1517,15 +1466,7 @@ error_kernelspace:
 bstep_iret:
 	/* Fix truncated RIP */
 	movq %rcx,RIP+8(%rsp)
-	/* fall through */
-
-error_bad_iret:
-	SWAPGS
-	mov %rsp,%rdi
-	call fixup_bad_iret
-	mov %rax,%rsp
-	decl %ebx	/* Return to usergs */
-	jmp error_sti
+	jmp error_swapgs
 END(error_entry)
 
 

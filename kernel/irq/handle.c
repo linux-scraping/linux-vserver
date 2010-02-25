@@ -80,7 +80,7 @@ static struct irq_desc irq_desc_init = {
 	.chip	    = &no_irq_chip,
 	.handle_irq = handle_bad_irq,
 	.depth      = 1,
-	.lock       = __SPIN_LOCK_UNLOCKED(irq_desc_init.lock),
+	.lock       = __RAW_SPIN_LOCK_UNLOCKED(irq_desc_init.lock),
 };
 
 void __ref init_kstat_irqs(struct irq_desc *desc, int node, int nr)
@@ -108,7 +108,7 @@ static void init_one_irq_desc(int irq, struct irq_desc *desc, int node)
 {
 	memcpy(desc, &irq_desc_init, sizeof(struct irq_desc));
 
-	spin_lock_init(&desc->lock);
+	raw_spin_lock_init(&desc->lock);
 	desc->irq = irq;
 #ifdef CONFIG_SMP
 	desc->node = node;
@@ -130,7 +130,7 @@ static void init_one_irq_desc(int irq, struct irq_desc *desc, int node)
 /*
  * Protect the sparse_irqs:
  */
-DEFINE_SPINLOCK(sparse_irq_lock);
+DEFINE_RAW_SPINLOCK(sparse_irq_lock);
 
 struct irq_desc **irq_desc_ptrs __read_mostly;
 
@@ -141,7 +141,7 @@ static struct irq_desc irq_desc_legacy[NR_IRQS_LEGACY] __cacheline_aligned_in_sm
 		.chip	    = &no_irq_chip,
 		.handle_irq = handle_bad_irq,
 		.depth	    = 1,
-		.lock	    = __SPIN_LOCK_UNLOCKED(irq_desc_init.lock),
+		.lock	    = __RAW_SPIN_LOCK_UNLOCKED(irq_desc_init.lock),
 	}
 };
 
@@ -212,7 +212,7 @@ struct irq_desc * __ref irq_to_desc_alloc_node(unsigned int irq, int node)
 	if (desc)
 		return desc;
 
-	spin_lock_irqsave(&sparse_irq_lock, flags);
+	raw_spin_lock_irqsave(&sparse_irq_lock, flags);
 
 	/* We have to check it to avoid races with another CPU */
 	desc = irq_desc_ptrs[irq];
@@ -234,7 +234,7 @@ struct irq_desc * __ref irq_to_desc_alloc_node(unsigned int irq, int node)
 	irq_desc_ptrs[irq] = desc;
 
 out_unlock:
-	spin_unlock_irqrestore(&sparse_irq_lock, flags);
+	raw_spin_unlock_irqrestore(&sparse_irq_lock, flags);
 
 	return desc;
 }
@@ -247,7 +247,7 @@ struct irq_desc irq_desc[NR_IRQS] __cacheline_aligned_in_smp = {
 		.chip = &no_irq_chip,
 		.handle_irq = handle_bad_irq,
 		.depth = 1,
-		.lock = __SPIN_LOCK_UNLOCKED(irq_desc->lock),
+		.lock = __RAW_SPIN_LOCK_UNLOCKED(irq_desc->lock),
 	}
 };
 
@@ -370,7 +370,7 @@ static void warn_no_thread(unsigned int irq, struct irqaction *action)
 irqreturn_t handle_IRQ_event(unsigned int irq, struct irqaction *action)
 {
 	irqreturn_t ret, retval = IRQ_NONE;
-	unsigned int flags = 0;
+	unsigned int status = 0;
 
 	if (!(action->flags & IRQF_DISABLED))
 		local_irq_enable_in_hardirq();
@@ -413,7 +413,7 @@ irqreturn_t handle_IRQ_event(unsigned int irq, struct irqaction *action)
 
 			/* Fall through to add to randomness */
 		case IRQ_HANDLED:
-			flags |= action->flags;
+			status |= action->flags;
 			break;
 
 		default:
@@ -424,7 +424,8 @@ irqreturn_t handle_IRQ_event(unsigned int irq, struct irqaction *action)
 		action = action->next;
 	} while (action);
 
-	add_interrupt_randomness(irq, flags);
+	if (status & IRQF_SAMPLE_RANDOM)
+		add_interrupt_randomness(irq);
 	local_irq_disable();
 
 	return retval;
@@ -472,7 +473,7 @@ unsigned int __do_IRQ(unsigned int irq)
 		return 1;
 	}
 
-	spin_lock(&desc->lock);
+	raw_spin_lock(&desc->lock);
 	if (desc->chip->ack)
 		desc->chip->ack(irq);
 	/*
@@ -516,13 +517,13 @@ unsigned int __do_IRQ(unsigned int irq)
 	for (;;) {
 		irqreturn_t action_ret;
 
-		spin_unlock(&desc->lock);
+		raw_spin_unlock(&desc->lock);
 
 		action_ret = handle_IRQ_event(irq, action);
 		if (!noirqdebug)
 			note_interrupt(irq, desc, action_ret);
 
-		spin_lock(&desc->lock);
+		raw_spin_lock(&desc->lock);
 		if (likely(!(desc->status & IRQ_PENDING)))
 			break;
 		desc->status &= ~IRQ_PENDING;
@@ -535,7 +536,7 @@ out:
 	 * disabled while the handler was running.
 	 */
 	desc->chip->end(irq);
-	spin_unlock(&desc->lock);
+	raw_spin_unlock(&desc->lock);
 
 	return 1;
 }

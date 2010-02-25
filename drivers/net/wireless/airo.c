@@ -4806,7 +4806,7 @@ static int airo_config_commit(struct net_device *dev,
 
 static inline int sniffing_mode(struct airo_info *ai)
 {
-	return le16_to_cpu(ai->config.rmode & RXMODE_MASK) >=
+	return (le16_to_cpu(ai->config.rmode) & le16_to_cpu(RXMODE_MASK)) >=
 		le16_to_cpu(RXMODE_RFMON);
 }
 
@@ -5254,7 +5254,11 @@ static int set_wep_key(struct airo_info *ai, u16 index, const char *key,
 	WepKeyRid wkr;
 	int rc;
 
-	WARN_ON(keylen == 0);
+	if (keylen == 0) {
+		airo_print_err(ai->dev->name, "%s: key length to set was zero",
+			       __func__);
+		return -1;
+	}
 
 	memset(&wkr, 0, sizeof(wkr));
 	wkr.len = cpu_to_le16(sizeof(wkr));
@@ -5655,7 +5659,8 @@ static int airo_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 
 	pci_enable_wake(pdev, pci_choose_state(pdev, state), 1);
 	pci_save_state(pdev);
-	return pci_set_power_state(pdev, pci_choose_state(pdev, state));
+	pci_set_power_state(pdev, pci_choose_state(pdev, state));
+	return 0;
 }
 
 static int airo_pci_resume(struct pci_dev *pdev)
@@ -6400,7 +6405,11 @@ static int airo_set_encode(struct net_device *dev,
 		if (dwrq->length > MIN_KEY_SIZE)
 			key.len = MAX_KEY_SIZE;
 		else
-			key.len = MIN_KEY_SIZE;
+			if (dwrq->length > 0)
+				key.len = MIN_KEY_SIZE;
+			else
+				/* Disable the key */
+				key.len = 0;
 		/* Check if the key is not marked as invalid */
 		if(!(dwrq->flags & IW_ENCODE_NOKEY)) {
 			/* Cleanup */
@@ -6581,22 +6590,12 @@ static int airo_set_encodeext(struct net_device *dev,
 		default:
 			return -EINVAL;
 		}
-		if (key.len == 0) {
-			rc = set_wep_tx_idx(local, idx, perm, 1);
-			if (rc < 0) {
-				airo_print_err(local->dev->name,
-					       "failed to set WEP transmit index to %d: %d.",
-					       idx, rc);
-				return rc;
-			}
-		} else {
-			rc = set_wep_key(local, idx, key.key, key.len, perm, 1);
-			if (rc < 0) {
-				airo_print_err(local->dev->name,
-					       "failed to set WEP key at index %d: %d.",
-					       idx, rc);
-				return rc;
-			}
+		/* Send the key to the card */
+		rc = set_wep_key(local, idx, key.key, key.len, perm, 1);
+		if (rc < 0) {
+			airo_print_err(local->dev->name, "failed to set WEP key"
+			               " at index %d: %d.", idx, rc);
+			return rc;
 		}
 	}
 

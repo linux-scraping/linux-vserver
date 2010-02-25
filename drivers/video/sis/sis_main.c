@@ -1701,9 +1701,6 @@ static int	sisfb_ioctl(struct fb_info *info, unsigned int cmd,
 		break;
 
 	   case FBIOGET_VBLANK:
-
-		memset(&sisvbblank, 0, sizeof(struct fb_vblank));
-
 		sisvbblank.count = 0;
 		sisvbblank.flags = sisfb_setupvbblankflags(ivideo, &sisvbblank.vcount, &sisvbblank.hcount);
 
@@ -2118,7 +2115,7 @@ sisfb_detect_VB_connect(struct sis_video_info *ivideo)
 	   if( (!(ivideo->vbflags2 & VB2_SISBRIDGE)) &&
 	       (!((ivideo->sisvga_engine == SIS_315_VGA) &&
 			(ivideo->vbflags2 & VB2_CHRONTEL))) ) {
-	      if(ivideo->sisfb_tvstd & (TV_PALN | TV_PALN | TV_NTSCJ)) {
+	      if(ivideo->sisfb_tvstd & (TV_PALM | TV_PALN | TV_NTSCJ)) {
 		 ivideo->sisfb_tvstd = -1;
 		 printk(KERN_ERR "sisfb: PALM/PALN/NTSCJ not supported\n");
 	      }

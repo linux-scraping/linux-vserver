@@ -34,8 +34,6 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
-#include <linux/mmc/sdio.h>
-#include <linux/mmc/host.h>
 
 #include "host.h"
 #include "decl.h"
@@ -101,6 +99,12 @@ static struct if_sdio_model if_sdio_models[] = {
 		.firmware = "sd8688.bin",
 	},
 };
+MODULE_FIRMWARE("sd8385_helper.bin");
+MODULE_FIRMWARE("sd8385.bin");
+MODULE_FIRMWARE("sd8686_helper.bin");
+MODULE_FIRMWARE("sd8686.bin");
+MODULE_FIRMWARE("sd8688_helper.bin");
+MODULE_FIRMWARE("sd8688.bin");
 
 struct if_sdio_packet {
 	struct if_sdio_packet	*next;
@@ -833,6 +837,58 @@ out:
 	return ret;
 }
 
+static int if_sdio_enter_deep_sleep(struct lbs_private *priv)
+{
+	int ret = -1;
+	struct cmd_header cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	lbs_deb_sdio("send DEEP_SLEEP command\n");
+	ret = __lbs_cmd(priv, CMD_802_11_DEEP_SLEEP, &cmd, sizeof(cmd),
+			lbs_cmd_copyback, (unsigned long) &cmd);
+	if (ret)
+		lbs_pr_err("DEEP_SLEEP cmd failed\n");
+
+	mdelay(200);
+	return ret;
+}
+
+static int if_sdio_exit_deep_sleep(struct lbs_private *priv)
+{
+	struct if_sdio_card *card = priv->card;
+	int ret = -1;
+
+	lbs_deb_enter(LBS_DEB_SDIO);
+	sdio_claim_host(card->func);
+
+	sdio_writeb(card->func, HOST_POWER_UP, CONFIGURATION_REG, &ret);
+	if (ret)
+		lbs_pr_err("sdio_writeb failed!\n");
+
+	sdio_release_host(card->func);
+	lbs_deb_leave_args(LBS_DEB_SDIO, "ret %d", ret);
+	return ret;
+}
+
+static int if_sdio_reset_deep_sleep_wakeup(struct lbs_private *priv)
+{
+	struct if_sdio_card *card = priv->card;
+	int ret = -1;
+
+	lbs_deb_enter(LBS_DEB_SDIO);
+	sdio_claim_host(card->func);
+
+	sdio_writeb(card->func, 0, CONFIGURATION_REG, &ret);
+	if (ret)
+		lbs_pr_err("sdio_writeb failed!\n");
+
+	sdio_release_host(card->func);
+	lbs_deb_leave_args(LBS_DEB_SDIO, "ret %d", ret);
+	return ret;
+
+}
+
 /*******************************************************************/
 /* SDIO callbacks                                                  */
 /*******************************************************************/
@@ -861,6 +917,7 @@ static void if_sdio_interrupt(struct sdio_func *func)
 	 * Ignore the define name, this really means the card has
 	 * successfully received the command.
 	 */
+	card->priv->is_activity_detected = 1;
 	if (cause & IF_SDIO_H_INT_DNLD)
 		lbs_host_to_card_done(card->priv);
 
@@ -885,7 +942,6 @@ static int if_sdio_probe(struct sdio_func *func,
 	int ret, i;
 	unsigned int model;
 	struct if_sdio_packet *packet;
-	struct mmc_host *host = func->card->host;
 
 	lbs_deb_enter(LBS_DEB_SDIO);
 
@@ -937,7 +993,7 @@ static int if_sdio_probe(struct sdio_func *func,
 	}
 
 	if (i == ARRAY_SIZE(if_sdio_models)) {
-		lbs_pr_err("unkown card model 0x%x\n", card->model);
+		lbs_pr_err("unknown card model 0x%x\n", card->model);
 		ret = -ENODEV;
 		goto free;
 	}
@@ -965,25 +1021,6 @@ static int if_sdio_probe(struct sdio_func *func,
 	ret = sdio_claim_irq(func, if_sdio_interrupt);
 	if (ret)
 		goto disable;
-
-	/* For 1-bit transfers to the 8686 model, we need to enable the
-	 * interrupt flag in the CCCR register. Set the MMC_QUIRK_LENIENT_FN0
-	 * bit to allow access to non-vendor registers. */
-	if ((card->model == IF_SDIO_MODEL_8686) &&
-	    (host->caps & MMC_CAP_SDIO_IRQ) &&
-	    (host->ios.bus_width == MMC_BUS_WIDTH_1)) {
-		u8 reg;
-
-		func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
-		reg = sdio_f0_readb(func, SDIO_CCCR_IF, &ret);
-		if (ret)
-			goto release_int;
-
-		reg |= SDIO_BUS_ECSI;
-		sdio_f0_writeb(func, reg, SDIO_CCCR_IF, &ret);
-		if (ret)
-			goto release_int;
-	}
 
 	card->ioport = sdio_readb(func, IF_SDIO_IOPORT, &ret);
 	if (ret)
@@ -1020,6 +1057,9 @@ static int if_sdio_probe(struct sdio_func *func,
 
 	priv->card = card;
 	priv->hw_host_to_card = if_sdio_host_to_card;
+	priv->enter_deep_sleep = if_sdio_enter_deep_sleep;
+	priv->exit_deep_sleep = if_sdio_exit_deep_sleep;
+	priv->reset_deep_sleep_wakeup = if_sdio_reset_deep_sleep_wakeup;
 
 	priv->fw_ready = 1;
 

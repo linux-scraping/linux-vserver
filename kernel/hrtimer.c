@@ -127,11 +127,11 @@ struct hrtimer_clock_base *lock_hrtimer_base(const struct hrtimer *timer,
 	for (;;) {
 		base = timer->base;
 		if (likely(base != NULL)) {
-			spin_lock_irqsave(&base->cpu_base->lock, *flags);
+			raw_spin_lock_irqsave(&base->cpu_base->lock, *flags);
 			if (likely(base == timer->base))
 				return base;
 			/* The timer has migrated to another CPU: */
-			spin_unlock_irqrestore(&base->cpu_base->lock, *flags);
+			raw_spin_unlock_irqrestore(&base->cpu_base->lock, *flags);
 		}
 		cpu_relax();
 	}
@@ -208,13 +208,13 @@ again:
 
 		/* See the comment in lock_timer_base() */
 		timer->base = NULL;
-		spin_unlock(&base->cpu_base->lock);
-		spin_lock(&new_base->cpu_base->lock);
+		raw_spin_unlock(&base->cpu_base->lock);
+		raw_spin_lock(&new_base->cpu_base->lock);
 
 		if (cpu != this_cpu && hrtimer_check_target(timer, new_base)) {
 			cpu = this_cpu;
-			spin_unlock(&new_base->cpu_base->lock);
-			spin_lock(&base->cpu_base->lock);
+			raw_spin_unlock(&new_base->cpu_base->lock);
+			raw_spin_lock(&base->cpu_base->lock);
 			timer->base = base;
 			goto again;
 		}
@@ -230,7 +230,7 @@ lock_hrtimer_base(const struct hrtimer *timer, unsigned long *flags)
 {
 	struct hrtimer_clock_base *base = timer->base;
 
-	spin_lock_irqsave(&base->cpu_base->lock, *flags);
+	raw_spin_lock_irqsave(&base->cpu_base->lock, *flags);
 
 	return base;
 }
@@ -603,12 +603,6 @@ static int hrtimer_reprogram(struct hrtimer *timer,
 	return res;
 }
 
-static inline ktime_t hrtimer_update_base(struct hrtimer_cpu_base *base)
-{
-	ktime_t *offs_real = &base->clock_base[CLOCK_REALTIME].offset;
-
-	return ktime_get_update_offsets(offs_real);
-}
 
 /*
  * Retrigger next event is called after clock was set
@@ -618,17 +612,28 @@ static inline ktime_t hrtimer_update_base(struct hrtimer_cpu_base *base)
 static void retrigger_next_event(void *arg)
 {
 	struct hrtimer_cpu_base *base;
+	struct timespec realtime_offset;
+	unsigned long seq;
 
 	if (!hrtimer_hres_active())
 		return;
 
+	do {
+		seq = read_seqbegin(&xtime_lock);
+		set_normalized_timespec(&realtime_offset,
+					-wall_to_monotonic.tv_sec,
+					-wall_to_monotonic.tv_nsec);
+	} while (read_seqretry(&xtime_lock, seq));
+
 	base = &__get_cpu_var(hrtimer_bases);
 
 	/* Adjust CLOCK_REALTIME offset */
-	spin_lock(&base->lock);
-	hrtimer_update_base(base);
+	raw_spin_lock(&base->lock);
+	base->clock_base[CLOCK_REALTIME].offset =
+		timespec_to_ktime(realtime_offset);
+
 	hrtimer_force_reprogram(base, 0);
-	spin_unlock(&base->lock);
+	raw_spin_unlock(&base->lock);
 }
 
 /*
@@ -689,9 +694,9 @@ static inline int hrtimer_enqueue_reprogram(struct hrtimer *timer,
 {
 	if (base->cpu_base->hres_active && hrtimer_reprogram(timer, base)) {
 		if (wakeup) {
-			spin_unlock(&base->cpu_base->lock);
+			raw_spin_unlock(&base->cpu_base->lock);
 			raise_softirq_irqoff(HRTIMER_SOFTIRQ);
-			spin_lock(&base->cpu_base->lock);
+			raw_spin_lock(&base->cpu_base->lock);
 		} else
 			__raise_softirq_irqoff(HRTIMER_SOFTIRQ);
 
@@ -726,23 +731,11 @@ static int hrtimer_switch_to_hres(void)
 	base->clock_base[CLOCK_MONOTONIC].resolution = KTIME_HIGH_RES;
 
 	tick_setup_sched_timer();
+
 	/* "Retrigger" the interrupt to get things going */
 	retrigger_next_event(NULL);
 	local_irq_restore(flags);
 	return 1;
-}
-
-/*
- * Called from timekeeping code to reprogramm the hrtimer interrupt
- * device. If called from the timer interrupt context we defer it to
- * softirq context.
- */
-void clock_was_set_delayed(void)
-{
-	struct hrtimer_cpu_base *cpu_base = &__get_cpu_var(hrtimer_bases);
-
-	cpu_base->clock_was_set = 1;
-	__raise_softirq_irqoff(HRTIMER_SOFTIRQ);
 }
 
 #else
@@ -763,17 +756,33 @@ static inline void hrtimer_init_timer_hres(struct hrtimer *timer) { }
 
 #endif /* CONFIG_HIGH_RES_TIMERS */
 
-#ifdef CONFIG_TIMER_STATS
-void __timer_stats_hrtimer_set_start_info(struct hrtimer *timer, void *addr)
+static inline void timer_stats_hrtimer_set_start_info(struct hrtimer *timer)
 {
+#ifdef CONFIG_TIMER_STATS
 	if (timer->start_site)
 		return;
-
-	timer->start_site = addr;
+	timer->start_site = __builtin_return_address(0);
 	memcpy(timer->start_comm, current->comm, TASK_COMM_LEN);
 	timer->start_pid = current->pid;
-}
 #endif
+}
+
+static inline void timer_stats_hrtimer_clear_start_info(struct hrtimer *timer)
+{
+#ifdef CONFIG_TIMER_STATS
+	timer->start_site = NULL;
+#endif
+}
+
+static inline void timer_stats_account_hrtimer(struct hrtimer *timer)
+{
+#ifdef CONFIG_TIMER_STATS
+	if (likely(!timer_stats_active))
+		return;
+	timer_stats_update_stats(timer, timer->start_pid, timer->start_site,
+				 timer->function, timer->start_comm, 0);
+#endif
+}
 
 /*
  * Counterpart to lock_hrtimer_base above:
@@ -781,7 +790,7 @@ void __timer_stats_hrtimer_set_start_info(struct hrtimer *timer, void *addr)
 static inline
 void unlock_hrtimer_base(const struct hrtimer *timer, unsigned long *flags)
 {
-	spin_unlock_irqrestore(&timer->base->cpu_base->lock, *flags);
+	raw_spin_unlock_irqrestore(&timer->base->cpu_base->lock, *flags);
 }
 
 /**
@@ -927,7 +936,6 @@ static inline int
 remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base)
 {
 	if (hrtimer_is_queued(timer)) {
-		unsigned long state;
 		int reprogram;
 
 		/*
@@ -941,13 +949,8 @@ remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base)
 		debug_deactivate(timer);
 		timer_stats_hrtimer_clear_start_info(timer);
 		reprogram = base->cpu_base == &__get_cpu_var(hrtimer_bases);
-		/*
-		 * We must preserve the CALLBACK state flag here,
-		 * otherwise we could move the timer base in
-		 * switch_hrtimer_base.
-		 */
-		state = timer->state & HRTIMER_STATE_CALLBACK;
-		__remove_hrtimer(timer, base, state, reprogram);
+		__remove_hrtimer(timer, base, HRTIMER_STATE_INACTIVE,
+				 reprogram);
 		return 1;
 	}
 	return 0;
@@ -1120,7 +1123,7 @@ ktime_t hrtimer_get_next_event(void)
 	unsigned long flags;
 	int i;
 
-	spin_lock_irqsave(&cpu_base->lock, flags);
+	raw_spin_lock_irqsave(&cpu_base->lock, flags);
 
 	if (!hrtimer_hres_active()) {
 		for (i = 0; i < HRTIMER_MAX_CLOCK_BASES; i++, base++) {
@@ -1137,7 +1140,7 @@ ktime_t hrtimer_get_next_event(void)
 		}
 	}
 
-	spin_unlock_irqrestore(&cpu_base->lock, flags);
+	raw_spin_unlock_irqrestore(&cpu_base->lock, flags);
 
 	if (mindelta.tv64 < 0)
 		mindelta.tv64 = 0;
@@ -1219,11 +1222,11 @@ static void __run_hrtimer(struct hrtimer *timer, ktime_t *now)
 	 * they get migrated to another cpu, therefore its safe to unlock
 	 * the timer base.
 	 */
-	spin_unlock(&cpu_base->lock);
+	raw_spin_unlock(&cpu_base->lock);
 	trace_hrtimer_expire_entry(timer, now);
 	restart = fn(timer);
 	trace_hrtimer_expire_exit(timer);
-	spin_lock(&cpu_base->lock);
+	raw_spin_lock(&cpu_base->lock);
 
 	/*
 	 * Note: We clear the CALLBACK bit after enqueue_hrtimer and
@@ -1234,9 +1237,6 @@ static void __run_hrtimer(struct hrtimer *timer, ktime_t *now)
 		BUG_ON(timer->state != HRTIMER_STATE_CALLBACK);
 		enqueue_hrtimer(timer, base);
 	}
-
-	WARN_ON_ONCE(!(timer->state & HRTIMER_STATE_CALLBACK));
-
 	timer->state &= ~HRTIMER_STATE_CALLBACK;
 }
 
@@ -1257,10 +1257,11 @@ void hrtimer_interrupt(struct clock_event_device *dev)
 	cpu_base->nr_events++;
 	dev->next_event.tv64 = KTIME_MAX;
 
-	spin_lock(&cpu_base->lock);
-	entry_time = now = hrtimer_update_base(cpu_base);
+	entry_time = now = ktime_get();
 retry:
 	expires_next.tv64 = KTIME_MAX;
+
+	raw_spin_lock(&cpu_base->lock);
 	/*
 	 * We set expires_next to KTIME_MAX here with cpu_base->lock
 	 * held to prevent that a timer is enqueued in our queue via
@@ -1316,7 +1317,7 @@ retry:
 	 * against it.
 	 */
 	cpu_base->expires_next = expires_next;
-	spin_unlock(&cpu_base->lock);
+	raw_spin_unlock(&cpu_base->lock);
 
 	/* Reprogramming necessary ? */
 	if (expires_next.tv64 == KTIME_MAX ||
@@ -1334,12 +1335,8 @@ retry:
 	 * We need to prevent that we loop forever in the hrtimer
 	 * interrupt routine. We give it 3 attempts to avoid
 	 * overreacting on some spurious event.
-	 *
-	 * Acquire base lock for updating the offsets and retrieving
-	 * the current time.
 	 */
-	spin_lock(&cpu_base->lock);
-	now = hrtimer_update_base(cpu_base);
+	now = ktime_get();
 	cpu_base->nr_retries++;
 	if (++retries < 3)
 		goto retry;
@@ -1351,7 +1348,6 @@ retry:
 	 */
 	cpu_base->nr_hangs++;
 	cpu_base->hang_detected = 1;
-	spin_unlock(&cpu_base->lock);
 	delta = ktime_sub(now, entry_time);
 	if (delta.tv64 > cpu_base->max_hang_time.tv64)
 		cpu_base->max_hang_time = delta;
@@ -1404,13 +1400,6 @@ void hrtimer_peek_ahead_timers(void)
 
 static void run_hrtimer_softirq(struct softirq_action *h)
 {
-	struct hrtimer_cpu_base *cpu_base = &__get_cpu_var(hrtimer_bases);
-
-	if (cpu_base->clock_was_set) {
-		cpu_base->clock_was_set = 0;
-		clock_was_set();
-	}
-
 	hrtimer_peek_ahead_timers();
 }
 
@@ -1468,7 +1457,7 @@ void hrtimer_run_queues(void)
 			gettime = 0;
 		}
 
-		spin_lock(&cpu_base->lock);
+		raw_spin_lock(&cpu_base->lock);
 
 		while ((node = base->first)) {
 			struct hrtimer *timer;
@@ -1480,7 +1469,7 @@ void hrtimer_run_queues(void)
 
 			__run_hrtimer(timer, &base->softirq_time);
 		}
-		spin_unlock(&cpu_base->lock);
+		raw_spin_unlock(&cpu_base->lock);
 	}
 }
 
@@ -1636,7 +1625,7 @@ static void __cpuinit init_hrtimers_cpu(int cpu)
 	struct hrtimer_cpu_base *cpu_base = &per_cpu(hrtimer_bases, cpu);
 	int i;
 
-	spin_lock_init(&cpu_base->lock);
+	raw_spin_lock_init(&cpu_base->lock);
 
 	for (i = 0; i < HRTIMER_MAX_CLOCK_BASES; i++)
 		cpu_base->clock_base[i].cpu_base = cpu_base;
@@ -1694,16 +1683,16 @@ static void migrate_hrtimers(int scpu)
 	 * The caller is globally serialized and nobody else
 	 * takes two locks at once, deadlock is not possible.
 	 */
-	spin_lock(&new_base->lock);
-	spin_lock_nested(&old_base->lock, SINGLE_DEPTH_NESTING);
+	raw_spin_lock(&new_base->lock);
+	raw_spin_lock_nested(&old_base->lock, SINGLE_DEPTH_NESTING);
 
 	for (i = 0; i < HRTIMER_MAX_CLOCK_BASES; i++) {
 		migrate_hrtimer_list(&old_base->clock_base[i],
 				     &new_base->clock_base[i]);
 	}
 
-	spin_unlock(&old_base->lock);
-	spin_unlock(&new_base->lock);
+	raw_spin_unlock(&old_base->lock);
+	raw_spin_unlock(&new_base->lock);
 
 	/* Check, if we got expired work to do */
 	__hrtimer_peek_ahead_timers();

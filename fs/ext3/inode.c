@@ -971,7 +971,7 @@ static int ext3_get_block(struct inode *inode, sector_t iblock,
 		if (max_blocks > DIO_MAX_BLOCKS)
 			max_blocks = DIO_MAX_BLOCKS;
 		handle = ext3_journal_start(inode, DIO_CREDITS +
-				2 * EXT3_QUOTA_TRANS_BLOCKS(inode->i_sb));
+				EXT3_MAXQUOTAS_TRANS_BLOCKS(inode->i_sb));
 		if (IS_ERR(handle)) {
 			ret = PTR_ERR(handle);
 			goto out;
@@ -2044,7 +2044,7 @@ static Indirect *ext3_find_shared(struct inode *inode, int depth,
 	int k, err;
 
 	*top = 0;
-	/* Make k index the deepest non-null offest + 1 */
+	/* Make k index the deepest non-null offset + 1 */
 	for (k = depth; k > 1 && !offsets[k-1]; k--)
 		;
 	partial = ext3_get_branch(inode, k, offsets, chain, &err);
@@ -2982,8 +2982,6 @@ static int ext3_do_update_inode(handle_t *handle,
 	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
 	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
 	int err = 0, rc, block;
-	int need_datasync = 0;
-	__le32 disksize;
 
 again:
 	/* we can't allow multiple procs in here at once, its a bit racey */
@@ -3024,11 +3022,7 @@ again:
 	raw_inode->i_raw_tag = cpu_to_le16(inode->i_tag);
 #endif
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
-	disksize = cpu_to_le32(ei->i_disksize);
-	if (disksize != raw_inode->i_size) {
-		need_datasync = 1;
-		raw_inode->i_size = disksize;
-	}
+	raw_inode->i_size = cpu_to_le32(ei->i_disksize);
 	raw_inode->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
 	raw_inode->i_ctime = cpu_to_le32(inode->i_ctime.tv_sec);
 	raw_inode->i_mtime = cpu_to_le32(inode->i_mtime.tv_sec);
@@ -3044,11 +3038,8 @@ again:
 	if (!S_ISREG(inode->i_mode)) {
 		raw_inode->i_dir_acl = cpu_to_le32(ei->i_dir_acl);
 	} else {
-		disksize = cpu_to_le32(ei->i_disksize >> 32);
-		if (disksize != raw_inode->i_size_high) {
-			raw_inode->i_size_high = disksize;
-			need_datasync = 1;
-		}
+		raw_inode->i_size_high =
+			cpu_to_le32(ei->i_disksize >> 32);
 		if (ei->i_disksize > 0x7fffffffULL) {
 			struct super_block *sb = inode->i_sb;
 			if (!EXT3_HAS_RO_COMPAT_FEATURE(sb,
@@ -3101,8 +3092,6 @@ again:
 	ei->i_state &= ~EXT3_STATE_NEW;
 
 	atomic_set(&ei->i_sync_tid, handle->h_transaction->t_tid);
-	if (need_datasync)
-		atomic_set(&ei->i_datasync_tid, handle->h_transaction->t_tid);
 out_brelse:
 	brelse (bh);
 	ext3_std_error(inode->i_sb, err);
@@ -3195,8 +3184,8 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 
 		/* (user+group)*(old+new) structure, inode write (sb,
 		 * inode block, ? - but truncate inode update has it) */
-		handle = ext3_journal_start(inode, 2*(EXT3_QUOTA_INIT_BLOCKS(inode->i_sb)+
-					EXT3_QUOTA_DEL_BLOCKS(inode->i_sb))+3);
+		handle = ext3_journal_start(inode, EXT3_MAXQUOTAS_INIT_BLOCKS(inode->i_sb)+
+					EXT3_MAXQUOTAS_DEL_BLOCKS(inode->i_sb)+3);
 		if (IS_ERR(handle)) {
 			error = PTR_ERR(handle);
 			goto err_out;
@@ -3290,7 +3279,7 @@ static int ext3_writepage_trans_blocks(struct inode *inode)
 #ifdef CONFIG_QUOTA
 	/* We know that structure was already allocated during vfs_dq_init so
 	 * we will be updating only the data blocks + inodes */
-	ret += 2*EXT3_QUOTA_TRANS_BLOCKS(inode->i_sb);
+	ret += EXT3_MAXQUOTAS_TRANS_BLOCKS(inode->i_sb);
 #endif
 
 	return ret;

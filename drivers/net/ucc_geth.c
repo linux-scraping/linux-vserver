@@ -1306,8 +1306,8 @@ static int init_max_rx_buff_len(u16 max_rx_buf_len,
 				u16 __iomem *mrblr_register)
 {
 	/* max_rx_buf_len value must be a multiple of 128 */
-	if ((max_rx_buf_len == 0)
-	    || (max_rx_buf_len % UCC_GETH_MRBLR_ALIGNMENT))
+	if ((max_rx_buf_len == 0) ||
+	    (max_rx_buf_len % UCC_GETH_MRBLR_ALIGNMENT))
 		return -EINVAL;
 
 	out_be16(mrblr_register, max_rx_buf_len);
@@ -1651,24 +1651,27 @@ static void adjust_link(struct net_device *dev)
 			ugeth->oldspeed = phydev->speed;
 		}
 
-		/*
-		 * To change the MAC configuration we need to disable the
-		 * controller. To do so, we have to either grab ugeth->lock,
-		 * which is a bad idea since 'graceful stop' commands might
-		 * take quite a while, or we can quiesce driver's activity.
-		 */
-		ugeth_quiesce(ugeth);
-		ugeth_disable(ugeth, COMM_DIR_RX_AND_TX);
-
-		out_be32(&ug_regs->maccfg2, tempval);
-		out_be32(&uf_regs->upsmr, upsmr);
-
-		ugeth_enable(ugeth, COMM_DIR_RX_AND_TX);
-		ugeth_activate(ugeth);
-
 		if (!ugeth->oldlink) {
 			new_state = 1;
 			ugeth->oldlink = 1;
+		}
+
+		if (new_state) {
+			/*
+			 * To change the MAC configuration we need to disable
+			 * the controller. To do so, we have to either grab
+			 * ugeth->lock, which is a bad idea since 'graceful
+			 * stop' commands might take quite a while, or we can
+			 * quiesce driver's activity.
+			 */
+			ugeth_quiesce(ugeth);
+			ugeth_disable(ugeth, COMM_DIR_RX_AND_TX);
+
+			out_be32(&ug_regs->maccfg2, tempval);
+			out_be32(&uf_regs->upsmr, upsmr);
+
+			ugeth_enable(ugeth, COMM_DIR_RX_AND_TX);
+			ugeth_activate(ugeth);
 		}
 	} else if (ugeth->oldlink) {
 			new_state = 1;
@@ -2162,8 +2165,8 @@ static int ucc_struct_init(struct ucc_geth_private *ugeth)
 	}
 
 	if ((ug_info->numStationAddresses !=
-	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1)
-	    && ug_info->rxExtendedFiltering) {
+	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1) &&
+	    ug_info->rxExtendedFiltering) {
 		if (netif_msg_probe(ugeth))
 			ugeth_err("%s: Number of station addresses greater than 1 "
 				  "not allowed in extended parsing mode.",
@@ -2287,9 +2290,9 @@ static int ucc_geth_startup(struct ucc_geth_private *ugeth)
 	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1);
 
 	ugeth->rx_extended_features = ugeth->rx_non_dynamic_extended_features ||
-	    (ug_info->vlanOperationTagged != UCC_GETH_VLAN_OPERATION_TAGGED_NOP)
-	    || (ug_info->vlanOperationNonTagged !=
-		UCC_GETH_VLAN_OPERATION_NON_TAGGED_NOP);
+		(ug_info->vlanOperationTagged != UCC_GETH_VLAN_OPERATION_TAGGED_NOP) ||
+		(ug_info->vlanOperationNonTagged !=
+		 UCC_GETH_VLAN_OPERATION_NON_TAGGED_NOP);
 
 	init_default_reg_vals(&uf_regs->upsmr,
 			      &ug_regs->maccfg1, &ug_regs->maccfg2);
@@ -2990,11 +2993,11 @@ static int ucc_geth_startup(struct ucc_geth_private *ugeth)
 	ugeth->p_init_enet_param_shadow->rgftgfrxglobal |=
 	    ugeth->rx_glbl_pram_offset | ug_info->riscRx;
 	if ((ug_info->largestexternallookupkeysize !=
-	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_NONE)
-	    && (ug_info->largestexternallookupkeysize !=
-		QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_8_BYTES)
-	    && (ug_info->largestexternallookupkeysize !=
-		QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_16_BYTES)) {
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_NONE) &&
+	    (ug_info->largestexternallookupkeysize !=
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_8_BYTES) &&
+	    (ug_info->largestexternallookupkeysize !=
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_16_BYTES)) {
 		if (netif_msg_ifup(ugeth))
 			ugeth_err("%s: Invalid largest External Lookup Key Size.",
 				  __func__);
@@ -3603,6 +3606,7 @@ static int ucc_geth_suspend(struct of_device *ofdev, pm_message_t state)
 	if (!netif_running(ndev))
 		return 0;
 
+	netif_device_detach(ndev);
 	napi_disable(&ugeth->napi);
 
 	/*
@@ -3661,7 +3665,7 @@ static int ucc_geth_resume(struct of_device *ofdev)
 	phy_start(ugeth->phydev);
 
 	napi_enable(&ugeth->napi);
-	netif_start_queue(ndev);
+	netif_device_attach(ndev);
 
 	return 0;
 }
@@ -3800,7 +3804,7 @@ static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *ma
 		prop = of_get_property(np, "tx-clock", NULL);
 		if (!prop) {
 			printk(KERN_ERR
-				"ucc_geth: mising tx-clock-name property\n");
+				"ucc_geth: missing tx-clock-name property\n");
 			return -EINVAL;
 		}
 		if ((*prop < QE_CLK_NONE) || (*prop > QE_CLK24)) {

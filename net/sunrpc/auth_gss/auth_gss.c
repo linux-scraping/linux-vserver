@@ -304,7 +304,7 @@ __gss_find_upcall(struct rpc_inode *rpci, uid_t uid)
  * to that upcall instead of adding the new upcall.
  */
 static inline struct gss_upcall_msg *
-gss_add_msg(struct gss_auth *gss_auth, struct gss_upcall_msg *gss_msg)
+gss_add_msg(struct gss_upcall_msg *gss_msg)
 {
 	struct rpc_inode *rpci = gss_msg->inode;
 	struct inode *inode = &rpci->vfs_inode;
@@ -445,7 +445,7 @@ gss_setup_upcall(struct rpc_clnt *clnt, struct gss_auth *gss_auth, struct rpc_cr
 	gss_new = gss_alloc_msg(gss_auth, uid, clnt, gss_cred->gc_machine_cred);
 	if (IS_ERR(gss_new))
 		return gss_new;
-	gss_msg = gss_add_msg(gss_auth, gss_new);
+	gss_msg = gss_add_msg(gss_new);
 	if (gss_msg == gss_new) {
 		struct inode *inode = &gss_new->inode->vfs_inode;
 		int res = rpc_queue_upcall(inode, &gss_new->msg);
@@ -548,13 +548,13 @@ retry:
 	}
 	inode = &gss_msg->inode->vfs_inode;
 	for (;;) {
-		prepare_to_wait(&gss_msg->waitqueue, &wait, TASK_KILLABLE);
+		prepare_to_wait(&gss_msg->waitqueue, &wait, TASK_INTERRUPTIBLE);
 		spin_lock(&inode->i_lock);
 		if (gss_msg->ctx != NULL || gss_msg->msg.errno < 0) {
 			break;
 		}
 		spin_unlock(&inode->i_lock);
-		if (fatal_signal_pending(current)) {
+		if (signalled()) {
 			err = -ERESTARTSYS;
 			goto out_intr;
 		}
@@ -657,7 +657,7 @@ gss_pipe_downcall(struct file *filp, const char __user *src, size_t mlen)
 			break;
 		default:
 			printk(KERN_CRIT "%s: bad return from "
-				"gss_fill_context: %ld\n", __func__, err);
+				"gss_fill_context: %zd\n", __func__, err);
 			BUG();
 		}
 		goto err_release_msg;
@@ -717,18 +717,17 @@ gss_pipe_release(struct inode *inode)
 	struct rpc_inode *rpci = RPC_I(inode);
 	struct gss_upcall_msg *gss_msg;
 
-restart:
 	spin_lock(&inode->i_lock);
-	list_for_each_entry(gss_msg, &rpci->in_downcall, list) {
+	while (!list_empty(&rpci->in_downcall)) {
 
-		if (!list_empty(&gss_msg->msg.list))
-			continue;
+		gss_msg = list_entry(rpci->in_downcall.next,
+				struct gss_upcall_msg, list);
 		gss_msg->msg.errno = -EPIPE;
 		atomic_inc(&gss_msg->count);
 		__gss_unhash_msg(gss_msg);
 		spin_unlock(&inode->i_lock);
 		gss_release_msg(gss_msg);
-		goto restart;
+		spin_lock(&inode->i_lock);
 	}
 	spin_unlock(&inode->i_lock);
 
@@ -1274,8 +1273,9 @@ alloc_enc_pages(struct rpc_rqst *rqstp)
 	rqstp->rq_release_snd_buf = priv_release_snd_buf;
 	return 0;
 out_free:
-	rqstp->rq_enc_pages_num = i;
-	priv_release_snd_buf(rqstp);
+	for (i--; i >= 0; i--) {
+		__free_page(rqstp->rq_enc_pages[i]);
+	}
 out:
 	return -EAGAIN;
 }

@@ -68,19 +68,19 @@ struct cx231xx_board cx231xx_boards[] = {
 				.type = CX231XX_VMUX_TELEVISION,
 				.vmux = CX231XX_VIN_3_1,
 				.amux = CX231XX_AMUX_VIDEO,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_COMPOSITE1,
 				.vmux = CX231XX_VIN_2_1,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_SVIDEO,
 				.vmux = CX231XX_VIN_1_1 |
 					(CX231XX_VIN_1_2 << 8) |
 					CX25840_SVIDEO_ON,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}
 		},
 	},
@@ -107,19 +107,19 @@ struct cx231xx_board cx231xx_boards[] = {
 				.type = CX231XX_VMUX_TELEVISION,
 				.vmux = CX231XX_VIN_3_1,
 				.amux = CX231XX_AMUX_VIDEO,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_COMPOSITE1,
 				.vmux = CX231XX_VIN_2_1,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_SVIDEO,
 				.vmux = CX231XX_VIN_1_1 |
 					(CX231XX_VIN_1_2 << 8) |
 					CX25840_SVIDEO_ON,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}
 		},
 	},
@@ -147,19 +147,19 @@ struct cx231xx_board cx231xx_boards[] = {
 				.type = CX231XX_VMUX_TELEVISION,
 				.vmux = CX231XX_VIN_3_1,
 				.amux = CX231XX_AMUX_VIDEO,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_COMPOSITE1,
 				.vmux = CX231XX_VIN_2_1,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}, {
 				.type = CX231XX_VMUX_SVIDEO,
 				.vmux = CX231XX_VIN_1_1 |
 					(CX231XX_VIN_1_2 << 8) |
 					CX25840_SVIDEO_ON,
 				.amux = CX231XX_AMUX_LINE_IN,
-				.gpio = 0,
+				.gpio = NULL,
 			}
 		},
 	},
@@ -225,16 +225,14 @@ void cx231xx_pre_card_setup(struct cx231xx *dev)
 		     dev->board.name, dev->model);
 
 	/* set the direction for GPIO pins */
-	if (dev->board.tuner_gpio) {
-		cx231xx_set_gpio_direction(dev, dev->board.tuner_gpio->bit, 1);
-		cx231xx_set_gpio_value(dev, dev->board.tuner_gpio->bit, 1);
-		cx231xx_set_gpio_direction(dev, dev->board.tuner_sif_gpio, 1);
+	cx231xx_set_gpio_direction(dev, dev->board.tuner_gpio->bit, 1);
+	cx231xx_set_gpio_value(dev, dev->board.tuner_gpio->bit, 1);
+	cx231xx_set_gpio_direction(dev, dev->board.tuner_sif_gpio, 1);
 
-		/* request some modules if any required */
+	/* request some modules if any required */
 
-		/* reset the Tuner */
-		cx231xx_gpio_set(dev, dev->board.tuner_gpio);
-	}
+	/* reset the Tuner */
+	cx231xx_gpio_set(dev, dev->board.tuner_gpio);
 
 	/* set the mode to Analog mode initially */
 	cx231xx_set_mode(dev, CX231XX_ANALOG_MODE);
@@ -858,8 +856,9 @@ static void cx231xx_usb_disconnect(struct usb_interface *interface)
 
 	if (dev->users) {
 		cx231xx_warn
-		    ("device /dev/video%d is open! Deregistration and memory "
-		     "deallocation are deferred on close.\n", dev->vdev->num);
+		    ("device %s is open! Deregistration and memory "
+		     "deallocation are deferred on close.\n",
+		     video_device_node_name(dev->vdev));
 
 		dev->state |= DEV_MISCONFIGURED;
 		cx231xx_uninit_isoc(dev);

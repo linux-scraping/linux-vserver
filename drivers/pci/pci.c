@@ -29,7 +29,17 @@ const char *pci_power_names[] = {
 };
 EXPORT_SYMBOL_GPL(pci_power_names);
 
-unsigned int pci_pm_d3_delay = PCI_PM_D3_WAIT;
+unsigned int pci_pm_d3_delay;
+
+static void pci_dev_d3_sleep(struct pci_dev *dev)
+{
+	unsigned int delay = dev->d3_delay;
+
+	if (delay < pci_pm_d3_delay)
+		delay = pci_pm_d3_delay;
+
+	msleep(delay);
+}
 
 #ifdef CONFIG_PCI_DOMAINS
 int pci_domains_supported = 1;
@@ -46,6 +56,15 @@ unsigned long pci_cardbus_mem_size = DEFAULT_CARDBUS_MEM_SIZE;
 /* pci=hpmemsize=nnM,hpiosize=nn can override this */
 unsigned long pci_hotplug_io_size  = DEFAULT_HOTPLUG_IO_SIZE;
 unsigned long pci_hotplug_mem_size = DEFAULT_HOTPLUG_MEM_SIZE;
+
+/*
+ * The default CLS is used if arch didn't set CLS explicitly and not
+ * all pci devices agree on the same value.  Arch can override either
+ * the dfl or actual value as it sees fit.  Don't forget this is
+ * measured in 32-bit words, not bytes.
+ */
+u8 pci_dfl_cache_line_size __devinitdata = L1_CACHE_BYTES >> 2;
+u8 pci_cache_line_size;
 
 /**
  * pci_bus_max_busnr - returns maximum PCI bus number of given bus' children
@@ -513,7 +532,7 @@ static int pci_raw_set_power_state(struct pci_dev *dev, pci_power_t state)
 	/* Mandatory power management transition delays */
 	/* see PCI PM 1.1 5.6.1 table 18 */
 	if (state == PCI_D3hot || dev->current_state == PCI_D3hot)
-		msleep(pci_pm_d3_delay);
+		pci_dev_d3_sleep(dev);
 	else if (state == PCI_D2 || dev->current_state == PCI_D2)
 		udelay(PCI_PM_D2_DELAY);
 
@@ -605,7 +624,7 @@ static void __pci_start_power_transition(struct pci_dev *dev, pci_power_t state)
  */
 int __pci_complete_power_transition(struct pci_dev *dev, pci_power_t state)
 {
-	return state >= PCI_D0 ?
+	return state > PCI_D0 ?
 			pci_platform_power_transition(dev, state) : -EINVAL;
 }
 EXPORT_SYMBOL_GPL(__pci_complete_power_transition);
@@ -640,6 +659,10 @@ int pci_set_power_state(struct pci_dev *dev, pci_power_t state)
 		 * ignore the request if we're doing anything other than putting
 		 * it into D0 (which would only happen on boot).
 		 */
+		return 0;
+
+	/* Check if we're already there */
+	if (dev->current_state == state)
 		return 0;
 
 	__pci_start_power_transition(dev, state);
@@ -728,8 +751,8 @@ static int pci_save_pcie_state(struct pci_dev *dev)
 	u16 *cap;
 	u16 flags;
 
-	pos = pci_find_capability(dev, PCI_CAP_ID_EXP);
-	if (pos <= 0)
+	pos = pci_pcie_cap(dev);
+	if (!pos)
 		return 0;
 
 	save_state = pci_find_saved_cap(dev, PCI_CAP_ID_EXP);
@@ -837,7 +860,7 @@ pci_save_state(struct pci_dev *dev)
 	int i;
 	/* XXX: 100% dword access ok here? */
 	for (i = 0; i < 16; i++)
-		pci_read_config_dword(dev, i * 4,&dev->saved_config_space[i]);
+		pci_read_config_dword(dev, i * 4, &dev->saved_config_space[i]);
 	dev->state_saved = true;
 	if ((i = pci_save_pcie_state(dev)) != 0)
 		return i;
@@ -1140,11 +1163,11 @@ pci_disable_device(struct pci_dev *dev)
 
 /**
  * pcibios_set_pcie_reset_state - set reset state for device dev
- * @dev: the PCI-E device reset
+ * @dev: the PCIe device reset
  * @state: Reset state to enter into
  *
  *
- * Sets the PCI-E reset state for the device. This is the default
+ * Sets the PCIe reset state for the device. This is the default
  * implementation. Architecture implementations can override this.
  */
 int __attribute__ ((weak)) pcibios_set_pcie_reset_state(struct pci_dev *dev,
@@ -1155,7 +1178,7 @@ int __attribute__ ((weak)) pcibios_set_pcie_reset_state(struct pci_dev *dev,
 
 /**
  * pci_set_pcie_reset_state - set reset state for device dev
- * @dev: the PCI-E device reset
+ * @dev: the PCIe device reset
  * @state: Reset state to enter into
  *
  *
@@ -1202,7 +1225,7 @@ void pci_pme_active(struct pci_dev *dev, bool enable)
 
 	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, pmcsr);
 
-	dev_printk(KERN_INFO, &dev->dev, "PME# %s\n",
+	dev_printk(KERN_DEBUG, &dev->dev, "PME# %s\n",
 			enable ? "enabled" : "disabled");
 }
 
@@ -1396,6 +1419,7 @@ void pci_pm_init(struct pci_dev *dev)
 	}
 
 	dev->pm_cap = pm;
+	dev->d3_delay = PCI_PM_D3_WAIT;
 
 	dev->d1_support = false;
 	dev->d2_support = false;
@@ -1413,7 +1437,8 @@ void pci_pm_init(struct pci_dev *dev)
 
 	pmc &= PCI_PM_CAP_PME_MASK;
 	if (pmc) {
-		dev_info(&dev->dev, "PME# supported from%s%s%s%s%s\n",
+		dev_printk(KERN_DEBUG, &dev->dev,
+			 "PME# supported from%s%s%s%s%s\n",
 			 (pmc & PCI_PM_CAP_PME_D0) ? " D0" : "",
 			 (pmc & PCI_PM_CAP_PME_D1) ? " D1" : "",
 			 (pmc & PCI_PM_CAP_PME_D2) ? " D2" : "",
@@ -1507,10 +1532,10 @@ void pci_enable_ari(struct pci_dev *dev)
 {
 	int pos;
 	u32 cap;
-	u16 flags, ctrl;
+	u16 ctrl;
 	struct pci_dev *bridge;
 
-	if (!dev->is_pcie || dev->devfn)
+	if (!pci_is_pcie(dev) || dev->devfn)
 		return;
 
 	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ARI);
@@ -1518,16 +1543,11 @@ void pci_enable_ari(struct pci_dev *dev)
 		return;
 
 	bridge = dev->bus->self;
-	if (!bridge || !bridge->is_pcie)
+	if (!bridge || !pci_is_pcie(bridge))
 		return;
 
-	pos = pci_find_capability(bridge, PCI_CAP_ID_EXP);
+	pos = pci_pcie_cap(bridge);
 	if (!pos)
-		return;
-
-	/* ARI is a PCIe v2 feature */
-	pci_read_config_word(bridge, pos + PCI_EXP_FLAGS, &flags);
-	if ((flags & PCI_EXP_FLAGS_VERS) < 2)
 		return;
 
 	pci_read_config_dword(bridge, pos + PCI_EXP_DEVCAP2, &cap);
@@ -1539,6 +1559,54 @@ void pci_enable_ari(struct pci_dev *dev)
 	pci_write_config_word(bridge, pos + PCI_EXP_DEVCTL2, ctrl);
 
 	bridge->ari_enabled = 1;
+}
+
+static int pci_acs_enable;
+
+/**
+ * pci_request_acs - ask for ACS to be enabled if supported
+ */
+void pci_request_acs(void)
+{
+	pci_acs_enable = 1;
+}
+
+/**
+ * pci_enable_acs - enable ACS if hardware support it
+ * @dev: the PCI device
+ */
+void pci_enable_acs(struct pci_dev *dev)
+{
+	int pos;
+	u16 cap;
+	u16 ctrl;
+
+	if (!pci_acs_enable)
+		return;
+
+	if (!pci_is_pcie(dev))
+		return;
+
+	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
+	if (!pos)
+		return;
+
+	pci_read_config_word(dev, pos + PCI_ACS_CAP, &cap);
+	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
+
+	/* Source Validation */
+	ctrl |= (cap & PCI_ACS_SV);
+
+	/* P2P Request Redirect */
+	ctrl |= (cap & PCI_ACS_RR);
+
+	/* P2P Completion Redirect */
+	ctrl |= (cap & PCI_ACS_CR);
+
+	/* Upstream Forwarding */
+	ctrl |= (cap & PCI_ACS_UF);
+
+	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
 }
 
 /**
@@ -1674,9 +1742,7 @@ static int __pci_request_region(struct pci_dev *pdev, int bar, const char *res_n
 	return 0;
 
 err_out:
-	dev_warn(&pdev->dev, "BAR %d: can't reserve %s region %pR\n",
-		 bar,
-		 pci_resource_flags(pdev, bar) & IORESOURCE_IO ? "I/O" : "mem",
+	dev_warn(&pdev->dev, "BAR %d: can't reserve %pR\n", bar,
 		 &pdev->resource[bar]);
 	return -EBUSY;
 }
@@ -1871,31 +1937,6 @@ void pci_clear_master(struct pci_dev *dev)
 	__pci_set_master(dev, false);
 }
 
-#ifdef PCI_DISABLE_MWI
-int pci_set_mwi(struct pci_dev *dev)
-{
-	return 0;
-}
-
-int pci_try_set_mwi(struct pci_dev *dev)
-{
-	return 0;
-}
-
-void pci_clear_mwi(struct pci_dev *dev)
-{
-}
-
-#else
-
-#ifndef PCI_CACHE_LINE_BYTES
-#define PCI_CACHE_LINE_BYTES L1_CACHE_BYTES
-#endif
-
-/* This can be overridden by arch code. */
-/* Don't forget this is measured in 32-bit words, not bytes */
-u8 pci_cache_line_size = PCI_CACHE_LINE_BYTES / 4;
-
 /**
  * pci_set_cacheline_size - ensure the CACHE_LINE_SIZE register is programmed
  * @dev: the PCI device for which MWI is to be enabled
@@ -1906,13 +1947,12 @@ u8 pci_cache_line_size = PCI_CACHE_LINE_BYTES / 4;
  *
  * RETURNS: An appropriate -ERRNO error value on error, or zero for success.
  */
-static int
-pci_set_cacheline_size(struct pci_dev *dev)
+int pci_set_cacheline_size(struct pci_dev *dev)
 {
 	u8 cacheline_size;
 
 	if (!pci_cache_line_size)
-		return -EINVAL;		/* The system doesn't support MWI. */
+		return -EINVAL;
 
 	/* Validate current setting: the PCI_CACHE_LINE_SIZE must be
 	   equal to or multiple of the right value. */
@@ -1933,6 +1973,24 @@ pci_set_cacheline_size(struct pci_dev *dev)
 
 	return -EINVAL;
 }
+EXPORT_SYMBOL_GPL(pci_set_cacheline_size);
+
+#ifdef PCI_DISABLE_MWI
+int pci_set_mwi(struct pci_dev *dev)
+{
+	return 0;
+}
+
+int pci_try_set_mwi(struct pci_dev *dev)
+{
+	return 0;
+}
+
+void pci_clear_mwi(struct pci_dev *dev)
+{
+}
+
+#else
 
 /**
  * pci_set_mwi - enables memory-write-invalidate PCI transaction
@@ -2055,7 +2113,6 @@ void pci_msi_off(struct pci_dev *dev)
 		pci_write_config_word(dev, pos + PCI_MSIX_FLAGS, control);
 	}
 }
-EXPORT_SYMBOL_GPL(pci_msi_off);
 
 #ifndef HAVE_ARCH_PCI_SET_DMA_MASK
 /*
@@ -2068,6 +2125,7 @@ pci_set_dma_mask(struct pci_dev *dev, u64 mask)
 		return -EIO;
 
 	dev->dma_mask = mask;
+	dev_dbg(&dev->dev, "using %dbit DMA mask\n", fls64(mask));
 
 	return 0;
 }
@@ -2079,6 +2137,7 @@ pci_set_consistent_dma_mask(struct pci_dev *dev, u64 mask)
 		return -EIO;
 
 	dev->dev.coherent_dma_mask = mask;
+	dev_dbg(&dev->dev, "using %dbit consistent DMA mask\n", fls64(mask));
 
 	return 0;
 }
@@ -2105,9 +2164,9 @@ static int pcie_flr(struct pci_dev *dev, int probe)
 	int i;
 	int pos;
 	u32 cap;
-	u16 status;
+	u16 status, control;
 
-	pos = pci_find_capability(dev, PCI_CAP_ID_EXP);
+	pos = pci_pcie_cap(dev);
 	if (!pos)
 		return -ENOTTY;
 
@@ -2132,8 +2191,10 @@ static int pcie_flr(struct pci_dev *dev, int probe)
 			"proceeding with reset anyway\n");
 
 clear:
-	pci_write_config_word(dev, pos + PCI_EXP_DEVCTL,
-				PCI_EXP_DEVCTL_BCR_FLR);
+	pci_read_config_word(dev, pos + PCI_EXP_DEVCTL, &control);
+	control |= PCI_EXP_DEVCTL_BCR_FLR;
+	pci_write_config_word(dev, pos + PCI_EXP_DEVCTL, control);
+
 	msleep(100);
 
 	return 0;
@@ -2197,12 +2258,12 @@ static int pci_pm_reset(struct pci_dev *dev, int probe)
 	csr &= ~PCI_PM_CTRL_STATE_MASK;
 	csr |= PCI_D3hot;
 	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, csr);
-	msleep(pci_pm_d3_delay);
+	pci_dev_d3_sleep(dev);
 
 	csr &= ~PCI_PM_CTRL_STATE_MASK;
 	csr |= PCI_D0;
 	pci_write_config_word(dev, dev->pm_cap + PCI_PM_CTRL, csr);
-	msleep(pci_pm_d3_delay);
+	pci_dev_d3_sleep(dev);
 
 	return 0;
 }
@@ -2245,6 +2306,10 @@ static int pci_dev_reset(struct pci_dev *dev, int probe)
 		/* block PM suspend, driver probe, etc. */
 		down(&dev->dev.sem);
 	}
+
+	rc = pci_dev_specific_reset(dev, probe);
+	if (rc != -ENOTTY)
+		goto done;
 
 	rc = pcie_flr(dev, probe);
 	if (rc != -ENOTTY)
@@ -2356,17 +2421,18 @@ EXPORT_SYMBOL_GPL(pci_reset_function);
  */
 int pcix_get_max_mmrbc(struct pci_dev *dev)
 {
-	int cap;
+	int err, cap;
 	u32 stat;
 
 	cap = pci_find_capability(dev, PCI_CAP_ID_PCIX);
 	if (!cap)
 		return -EINVAL;
 
-	if (pci_read_config_dword(dev, cap + PCI_X_STATUS, &stat))
+	err = pci_read_config_dword(dev, cap + PCI_X_STATUS, &stat);
+	if (err)
 		return -EINVAL;
 
-	return 512 << ((stat & PCI_X_STATUS_MAX_READ) >> 21);
+	return (stat & PCI_X_STATUS_MAX_READ) >> 12;
 }
 EXPORT_SYMBOL(pcix_get_max_mmrbc);
 
@@ -2379,17 +2445,18 @@ EXPORT_SYMBOL(pcix_get_max_mmrbc);
  */
 int pcix_get_mmrbc(struct pci_dev *dev)
 {
-	int cap;
-	u16 cmd;
+	int ret, cap;
+	u32 cmd;
 
 	cap = pci_find_capability(dev, PCI_CAP_ID_PCIX);
 	if (!cap)
 		return -EINVAL;
 
-	if (pci_read_config_word(dev, cap + PCI_X_CMD, &cmd))
-		return -EINVAL;
+	ret = pci_read_config_dword(dev, cap + PCI_X_CMD, &cmd);
+	if (!ret)
+		ret = 512 << ((cmd & PCI_X_CMD_MAX_READ) >> 2);
 
-	return 512 << ((cmd & PCI_X_CMD_MAX_READ) >> 2);
+	return ret;
 }
 EXPORT_SYMBOL(pcix_get_mmrbc);
 
@@ -2404,27 +2471,28 @@ EXPORT_SYMBOL(pcix_get_mmrbc);
  */
 int pcix_set_mmrbc(struct pci_dev *dev, int mmrbc)
 {
-	int cap;
-	u32 stat, v, o;
-	u16 cmd;
+	int cap, err = -EINVAL;
+	u32 stat, cmd, v, o;
 
 	if (mmrbc < 512 || mmrbc > 4096 || !is_power_of_2(mmrbc))
-		return -EINVAL;
+		goto out;
 
 	v = ffs(mmrbc) - 10;
 
 	cap = pci_find_capability(dev, PCI_CAP_ID_PCIX);
 	if (!cap)
-		return -EINVAL;
+		goto out;
 
-	if (pci_read_config_dword(dev, cap + PCI_X_STATUS, &stat))
-		return -EINVAL;
+	err = pci_read_config_dword(dev, cap + PCI_X_STATUS, &stat);
+	if (err)
+		goto out;
 
 	if (v > (stat & PCI_X_STATUS_MAX_READ) >> 21)
 		return -E2BIG;
 
-	if (pci_read_config_word(dev, cap + PCI_X_CMD, &cmd))
-		return -EINVAL;
+	err = pci_read_config_dword(dev, cap + PCI_X_CMD, &cmd);
+	if (err)
+		goto out;
 
 	o = (cmd & PCI_X_CMD_MAX_READ) >> 2;
 	if (o != v) {
@@ -2434,10 +2502,10 @@ int pcix_set_mmrbc(struct pci_dev *dev, int mmrbc)
 
 		cmd &= ~PCI_X_CMD_MAX_READ;
 		cmd |= v << 2;
-		if (pci_write_config_word(dev, cap + PCI_X_CMD, cmd))
-			return -EIO;
+		err = pci_write_config_dword(dev, cap + PCI_X_CMD, cmd);
 	}
-	return 0;
+out:
+	return err;
 }
 EXPORT_SYMBOL(pcix_set_mmrbc);
 
@@ -2453,7 +2521,7 @@ int pcie_get_readrq(struct pci_dev *dev)
 	int ret, cap;
 	u16 ctl;
 
-	cap = pci_find_capability(dev, PCI_CAP_ID_EXP);
+	cap = pci_pcie_cap(dev);
 	if (!cap)
 		return -EINVAL;
 
@@ -2483,7 +2551,7 @@ int pcie_set_readrq(struct pci_dev *dev, int rq)
 
 	v = (ffs(rq) - 8) << 12;
 
-	cap = pci_find_capability(dev, PCI_CAP_ID_EXP);
+	cap = pci_pcie_cap(dev);
 	if (!cap)
 		goto out;
 
@@ -2543,24 +2611,7 @@ int pci_resource_bar(struct pci_dev *dev, int resno, enum pci_bar_type *type)
 			return reg;
 	}
 
-	dev_err(&dev->dev, "BAR: invalid resource #%d\n", resno);
-	return 0;
-}
-
-/* Some architectures require additional programming to enable VGA */
-static arch_set_vga_state_t arch_set_vga_state;
-
-void __init pci_register_set_vga_state(arch_set_vga_state_t func)
-{
-	arch_set_vga_state = func;	/* NULL disables */
-}
-
-static int pci_set_vga_state_arch(struct pci_dev *dev, bool decode,
-		      unsigned int command_bits, bool change_bridge)
-{
-	if (arch_set_vga_state)
-		return arch_set_vga_state(dev, decode, command_bits,
-						change_bridge);
+	dev_err(&dev->dev, "BAR %d: invalid resource\n", resno);
 	return 0;
 }
 
@@ -2577,14 +2628,8 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 	struct pci_bus *bus;
 	struct pci_dev *bridge;
 	u16 cmd;
-	int rc;
 
 	WARN_ON(command_bits & ~(PCI_COMMAND_IO|PCI_COMMAND_MEMORY));
-
-	/* ARCH specific VGA enables */
-	rc = pci_set_vga_state_arch(dev, decode, command_bits, change_bridge);
-	if (rc)
-		return rc;
 
 	pci_read_config_word(dev, PCI_COMMAND, &cmd);
 	if (decode == true)
@@ -2616,7 +2661,7 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 
 #define RESOURCE_ALIGNMENT_PARAM_SIZE COMMAND_LINE_SIZE
 static char resource_alignment_param[RESOURCE_ALIGNMENT_PARAM_SIZE] = {0};
-spinlock_t resource_alignment_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(resource_alignment_lock);
 
 /**
  * pci_specified_resource_alignment - get resource alignment specified by user.
@@ -2832,3 +2877,4 @@ EXPORT_SYMBOL(pci_target_state);
 EXPORT_SYMBOL(pci_prepare_to_sleep);
 EXPORT_SYMBOL(pci_back_from_sleep);
 EXPORT_SYMBOL_GPL(pci_set_pcie_reset_state);
+

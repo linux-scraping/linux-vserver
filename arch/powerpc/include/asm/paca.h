@@ -56,7 +56,7 @@ struct paca_struct {
 	struct lppaca *lppaca_ptr;	/* Pointer to LpPaca for PLIC */
 #endif /* CONFIG_PPC_BOOK3S */
 	/*
-	 * MAGIC: the spinlock functions in arch/powerpc/lib/locks.c
+	 * MAGIC: the spinlock functions in arch/powerpc/lib/locks.c 
 	 * load lock_token and paca_index with a single lwz
 	 * instruction.  They must travel together and be properly
 	 * aligned.
@@ -76,7 +76,6 @@ struct paca_struct {
 	s16 hw_cpu_id;			/* Physical processor number */
 	u8 cpu_start;			/* At startup, processor spins until */
 					/* this becomes non-zero. */
-	u8 kexec_state;         /* set when kexec down has irqs off */
 #ifdef CONFIG_PPC_STD_MMU_64
 	struct slb_shadow *slb_shadow_ptr;
 
@@ -130,6 +129,15 @@ struct paca_struct {
 	u64 system_time;		/* accumulated system TB ticks */
 	u64 startpurr;			/* PURR/TB value snapshot */
 	u64 startspurr;			/* SPURR value snapshot */
+
+#ifdef CONFIG_KVM_BOOK3S_64_HANDLER
+	struct  {
+		u64     esid;
+		u64     vsid;
+	} kvm_slb[64];			/* guest SLB */
+	u8 kvm_slb_max;			/* highest used guest slb entry */
+	u8 kvm_in_guest;		/* are we inside the guest? */
+#endif
 };
 
 extern struct paca_struct paca[];

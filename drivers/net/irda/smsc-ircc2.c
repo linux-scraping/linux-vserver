@@ -115,7 +115,7 @@ struct smsc_ircc_subsystem_configuration {
 	unsigned short vendor; /* PCI vendor ID */
 	unsigned short device; /* PCI vendor ID */
 	unsigned short subvendor; /* PCI subsystem vendor ID */
-	unsigned short subdevice; /* PCI sybsystem device ID */
+	unsigned short subdevice; /* PCI subsystem device ID */
 	unsigned short sir_io; /* I/O port for SIR */
 	unsigned short fir_io; /* I/O port for FIR */
 	unsigned char  fir_irq; /* FIR IRQ */
@@ -515,7 +515,7 @@ static const struct net_device_ops smsc_ircc_netdev_ops = {
  *    Try to open driver instance
  *
  */
-static int __devinit smsc_ircc_open(unsigned int fir_base, unsigned int sir_base, u8 dma, u8 irq)
+static int __init smsc_ircc_open(unsigned int fir_base, unsigned int sir_base, u8 dma, u8 irq)
 {
 	struct smsc_ircc_cb *self;
 	struct net_device *dev;

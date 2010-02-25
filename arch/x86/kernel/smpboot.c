@@ -70,6 +70,7 @@
 
 #ifdef CONFIG_X86_32
 u8 apicid_2_node[MAX_APICID];
+static int low_mappings;
 #endif
 
 /* State of each CPU */
@@ -87,25 +88,6 @@ DEFINE_PER_CPU(int, cpu_state) = { 0 };
 static DEFINE_PER_CPU(struct task_struct *, idle_thread_array);
 #define get_idle_for_cpu(x)      (per_cpu(idle_thread_array, x))
 #define set_idle_for_cpu(x, p)   (per_cpu(idle_thread_array, x) = (p))
-
-/*
- * We need this for trampoline_base protection from concurrent accesses when
- * off- and onlining cores wildly.
- */
-static DEFINE_MUTEX(x86_cpu_hotplug_driver_mutex);
-
-void cpu_hotplug_driver_lock()
-{
-        mutex_lock(&x86_cpu_hotplug_driver_mutex);
-}
-
-void cpu_hotplug_driver_unlock()
-{
-        mutex_unlock(&x86_cpu_hotplug_driver_mutex);
-}
-
-ssize_t arch_cpu_probe(const char *buf, size_t count) { return -1; }
-ssize_t arch_cpu_release(const char *buf, size_t count) { return -1; }
 #else
 static struct task_struct *idle_thread_array[NR_CPUS] __cpuinitdata ;
 #define get_idle_for_cpu(x)      (idle_thread_array[(x)])
@@ -291,18 +273,6 @@ notrace static void __cpuinit start_secondary(void *unused)
 	 * fragile that we want to limit the things done here to the
 	 * most necessary things.
 	 */
-
-#ifdef CONFIG_X86_32
-	/*
-	 * Switch away from the trampoline page-table
-	 *
-	 * Do this before cpu_init() because it needs to access per-cpu
-	 * data which may not be mapped in the trampoline page-table.
-	 */
-	load_cr3(swapper_pg_dir);
-	__flush_tlb_all();
-#endif
-
 	vmi_bringup();
 	cpu_init();
 	preempt_disable();
@@ -321,16 +291,15 @@ notrace static void __cpuinit start_secondary(void *unused)
 		enable_8259A_irq(0);
 	}
 
+#ifdef CONFIG_X86_32
+	while (low_mappings)
+		cpu_relax();
+	__flush_tlb_all();
+#endif
+
 	/* This must be done before setting cpu_online_mask */
 	set_cpu_sibling_map(raw_smp_processor_id());
 	wmb();
-
-	/*
-	 * Enable the espfix hack for this CPU
-	 */
-#ifdef CONFIG_X86_ESPFIX64
-	init_espfix_ap();
-#endif
 
 	/*
 	 * We need to hold call_lock, so there is no inconsistency
@@ -702,6 +671,26 @@ static void __cpuinit do_fork_idle(struct work_struct *work)
 	complete(&c_idle->done);
 }
 
+/* reduce the number of lines printed when booting a large cpu count system */
+static void __cpuinit announce_cpu(int cpu, int apicid)
+{
+	static int current_node = -1;
+	int node = cpu_to_node(cpu);
+
+	if (system_state == SYSTEM_BOOTING) {
+		if (node != current_node) {
+			if (current_node > (-1))
+				pr_cont(" Ok.\n");
+			current_node = node;
+			pr_info("Booting Node %3d, Processors ", node);
+		}
+		pr_cont(" #%d%s", cpu, cpu == (nr_cpu_ids - 1) ? " Ok.\n" : "");
+		return;
+	} else
+		pr_info("Booting Node %d Processor %d APIC 0x%x\n",
+			node, cpu, apicid);
+}
+
 /*
  * NOTE - on most systems this is a PHYSICAL apic ID, but on multiquad
  * (ie clustered apic addressing mode), this is a LOGICAL apic ID.
@@ -718,7 +707,7 @@ static int __cpuinit do_boot_cpu(int apicid, int cpu)
 		.done	= COMPLETION_INITIALIZER_ONSTACK(c_idle.done),
 	};
 
-	INIT_WORK(&c_idle.work, do_fork_idle);
+	INIT_WORK_ON_STACK(&c_idle.work, do_fork_idle);
 
 	alternatives_smp_switch(1);
 
@@ -744,6 +733,7 @@ static int __cpuinit do_boot_cpu(int apicid, int cpu)
 
 	if (IS_ERR(c_idle.idle)) {
 		printk("failed fork for CPU %d\n", cpu);
+		destroy_work_on_stack(&c_idle.work);
 		return PTR_ERR(c_idle.idle);
 	}
 
@@ -753,7 +743,6 @@ do_rest:
 #ifdef CONFIG_X86_32
 	/* Stack for startup_32 can be just as for start_secondary onwards */
 	irq_ctx_init(cpu);
-	initial_page_table = __pa(&trampoline_pg_dir);
 #else
 	clear_tsk_thread_flag(c_idle.idle, TIF_FORK);
 	initial_gs = per_cpu_offset(cpu);
@@ -768,9 +757,8 @@ do_rest:
 	/* start_ip had better be page-aligned! */
 	start_ip = setup_trampoline();
 
-	/* So we see what's up   */
-	printk(KERN_INFO "Booting processor %d APIC 0x%x ip 0x%lx\n",
-			  cpu, apicid, start_ip);
+	/* So we see what's up */
+	announce_cpu(cpu, apicid);
 
 	/*
 	 * This grunge runs the startup process for
@@ -819,21 +807,17 @@ do_rest:
 			udelay(100);
 		}
 
-		if (cpumask_test_cpu(cpu, cpu_callin_mask)) {
-			/* number CPUs logically, starting from 1 (BSP is 0) */
-			pr_debug("OK.\n");
-			printk(KERN_INFO "CPU%d: ", cpu);
-			print_cpu_info(&cpu_data(cpu));
-			pr_debug("CPU has booted.\n");
-		} else {
+		if (cpumask_test_cpu(cpu, cpu_callin_mask))
+			pr_debug("CPU%d: has booted.\n", cpu);
+		else {
 			boot_error = 1;
 			if (*((volatile unsigned char *)trampoline_base)
 					== 0xA5)
 				/* trampoline started but...? */
-				printk(KERN_ERR "Stuck ??\n");
+				pr_err("CPU%d: Stuck ??\n", cpu);
 			else
 				/* trampoline code not run */
-				printk(KERN_ERR "Not responding.\n");
+				pr_err("CPU%d: Not responding.\n", cpu);
 			if (apic->inquire_remote_apic)
 				apic->inquire_remote_apic(apicid);
 		}
@@ -863,6 +847,7 @@ do_rest:
 		smpboot_restore_warm_reset_vector();
 	}
 
+	destroy_work_on_stack(&c_idle.work);
 	return boot_error;
 }
 
@@ -898,8 +883,20 @@ int __cpuinit native_cpu_up(unsigned int cpu)
 
 	per_cpu(cpu_state, cpu) = CPU_UP_PREPARE;
 
+#ifdef CONFIG_X86_32
+	/* init low mem mapping */
+	clone_pgd_range(swapper_pg_dir, swapper_pg_dir + KERNEL_PGD_BOUNDARY,
+		min_t(unsigned long, KERNEL_PGD_PTRS, KERNEL_PGD_BOUNDARY));
+	flush_tlb_all();
+	low_mappings = 1;
+
 	err = do_boot_cpu(apicid, cpu);
 
+	zap_low_mappings(false);
+	low_mappings = 0;
+#else
+	err = do_boot_cpu(apicid, cpu);
+#endif
 	if (err) {
 		pr_debug("do_boot_cpu failed %d\n", err);
 		return -EIO;
@@ -1268,16 +1265,7 @@ static void __ref remove_cpu_from_maps(int cpu)
 void cpu_disable_common(void)
 {
 	int cpu = smp_processor_id();
-	/*
-	 * HACK:
-	 * Allow any queued timer interrupts to get serviced
-	 * This is only a temporary solution until we cleanup
-	 * fixup_irqs as we do for IA64.
-	 */
-	local_irq_enable();
-	mdelay(1);
 
-	local_irq_disable();
 	remove_siblinginfo(cpu);
 
 	/* It's now safe to remove this processor from the online map */
@@ -1318,14 +1306,16 @@ void native_cpu_die(unsigned int cpu)
 	for (i = 0; i < 10; i++) {
 		/* They ack this in play_dead by setting CPU_DEAD */
 		if (per_cpu(cpu_state, cpu) == CPU_DEAD) {
-			printk(KERN_INFO "CPU %d is now offline\n", cpu);
+			if (system_state == SYSTEM_RUNNING)
+				pr_info("CPU %u is now offline\n", cpu);
+
 			if (1 == num_online_cpus())
 				alternatives_smp_switch(0);
 			return;
 		}
 		msleep(100);
 	}
-	printk(KERN_ERR "CPU %u didn't die...\n", cpu);
+	pr_err("CPU %u didn't die...\n", cpu);
 }
 
 void play_dead_common(void)

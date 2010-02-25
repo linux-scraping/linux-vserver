@@ -837,10 +837,6 @@ static void sym53c8xx_slave_destroy(struct scsi_device *sdev)
 	struct sym_lcb *lp = sym_lp(tp, sdev->lun);
 	unsigned long flags;
 
-	/* if slave_alloc returned before allocating a sym_lcb, return */
-	if (!lp)
-		return;
-
 	spin_lock_irqsave(np->s.host->host_lock, flags);
 
 	if (lp->busy_itlq || lp->busy_itl) {
@@ -988,7 +984,7 @@ static void sym_exec_user_command (struct sym_hcb *np, struct sym_usrcmd *uc)
 	}
 }
 
-static int skip_spaces(char *ptr, int len)
+static int sym_skip_spaces(char *ptr, int len)
 {
 	int cnt, c;
 
@@ -1016,7 +1012,7 @@ static int is_keyword(char *ptr, int len, char *verb)
 }
 
 #define SKIP_SPACES(ptr, len)						\
-	if ((arg_len = skip_spaces(ptr, len)) < 1)			\
+	if ((arg_len = sym_skip_spaces(ptr, len)) < 1)			\
 		return -EINVAL;						\
 	ptr += arg_len; len -= arg_len;
 
@@ -1868,7 +1864,7 @@ static pci_ers_result_t sym2_io_slot_dump(struct pci_dev *pdev)
  *
  * This routine is similar to sym_set_workarounds(), except
  * that, at this point, we already know that the device was
- * succesfully intialized at least once before, and so most
+ * successfully intialized at least once before, and so most
  * of the steps taken there are un-needed here.
  */
 static void sym2_reset_workarounds(struct pci_dev *pdev)

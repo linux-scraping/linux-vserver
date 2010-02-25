@@ -84,20 +84,6 @@ static struct can_bittiming_const sja1000_bittiming_const = {
 	.brp_inc = 1,
 };
 
-static void sja1000_write_cmdreg(struct sja1000_priv *priv, u8 val)
-{
-	unsigned long flags;
-
-	/*
-	 * The command register needs some locking and time to settle
-	 * the write_reg() operation - especially on SMP systems.
-	 */
-	spin_lock_irqsave(&priv->cmdreg_lock, flags);
-	priv->write_reg(priv, REG_CMR, val);
-	priv->read_reg(priv, REG_SR);
-	spin_unlock_irqrestore(&priv->cmdreg_lock, flags);
-}
-
 static int sja1000_probe_chip(struct net_device *dev)
 {
 	struct sja1000_priv *priv = netdev_priv(dev);
@@ -293,7 +279,7 @@ static netdev_tx_t sja1000_start_xmit(struct sk_buff *skb,
 
 	can_put_echo_skb(skb, dev, 0);
 
-	sja1000_write_cmdreg(priv, CMD_TR);
+	priv->write_reg(priv, REG_CMR, CMD_TR);
 
 	return NETDEV_TX_OK;
 }
@@ -307,17 +293,14 @@ static void sja1000_rx(struct net_device *dev)
 	uint8_t fi;
 	uint8_t dreg;
 	canid_t id;
-	uint8_t dlc;
 	int i;
 
-	skb = dev_alloc_skb(sizeof(struct can_frame));
+	/* create zero'ed CAN frame buffer */
+	skb = alloc_can_skb(dev, &cf);
 	if (skb == NULL)
 		return;
-	skb->dev = dev;
-	skb->protocol = htons(ETH_P_CAN);
 
 	fi = priv->read_reg(priv, REG_FI);
-	dlc = fi & 0x0F;
 
 	if (fi & FI_FF) {
 		/* extended frame format (EFF) */
@@ -334,26 +317,23 @@ static void sja1000_rx(struct net_device *dev)
 		    | (priv->read_reg(priv, REG_ID2) >> 5);
 	}
 
-	if (fi & FI_RTR)
+	if (fi & FI_RTR) {
 		id |= CAN_RTR_FLAG;
+	} else {
+		cf->can_dlc = get_can_dlc(fi & 0x0F);
+		for (i = 0; i < cf->can_dlc; i++)
+			cf->data[i] = priv->read_reg(priv, dreg++);
+	}
 
-	cf = (struct can_frame *)skb_put(skb, sizeof(struct can_frame));
-	memset(cf, 0, sizeof(struct can_frame));
 	cf->can_id = id;
-	cf->can_dlc = dlc;
-	for (i = 0; i < dlc; i++)
-		cf->data[i] = priv->read_reg(priv, dreg++);
-
-	while (i < 8)
-		cf->data[i++] = 0;
 
 	/* release receive buffer */
-	sja1000_write_cmdreg(priv, CMD_RRB);
+	priv->write_reg(priv, REG_CMR, CMD_RRB);
 
 	netif_rx(skb);
 
 	stats->rx_packets++;
-	stats->rx_bytes += dlc;
+	stats->rx_bytes += cf->can_dlc;
 }
 
 static int sja1000_err(struct net_device *dev, uint8_t isrc, uint8_t status)
@@ -365,15 +345,9 @@ static int sja1000_err(struct net_device *dev, uint8_t isrc, uint8_t status)
 	enum can_state state = priv->can.state;
 	uint8_t ecc, alc;
 
-	skb = dev_alloc_skb(sizeof(struct can_frame));
+	skb = alloc_can_err_skb(dev, &cf);
 	if (skb == NULL)
 		return -ENOMEM;
-	skb->dev = dev;
-	skb->protocol = htons(ETH_P_CAN);
-	cf = (struct can_frame *)skb_put(skb, sizeof(struct can_frame));
-	memset(cf, 0, sizeof(struct can_frame));
-	cf->can_id = CAN_ERR_FLAG;
-	cf->can_dlc = CAN_ERR_DLC;
 
 	if (isrc & IRQ_DOI) {
 		/* data overrun interrupt */
@@ -382,7 +356,7 @@ static int sja1000_err(struct net_device *dev, uint8_t isrc, uint8_t status)
 		cf->data[1] = CAN_ERR_CRTL_RX_OVERFLOW;
 		stats->rx_over_errors++;
 		stats->rx_errors++;
-		sja1000_write_cmdreg(priv, CMD_CDO);	/* clear bit */
+		priv->write_reg(priv, REG_CMR, CMD_CDO);	/* clear bit */
 	}
 
 	if (isrc & IRQ_EI) {
@@ -540,7 +514,7 @@ static int sja1000_open(struct net_device *dev)
 
 	/* register interrupt handler, if not done by the device driver */
 	if (!(priv->flags & SJA1000_CUSTOM_IRQ_HANDLER)) {
-		err = request_irq(dev->irq, &sja1000_interrupt, priv->irq_flags,
+		err = request_irq(dev->irq, sja1000_interrupt, priv->irq_flags,
 				  dev->name, (void *)dev);
 		if (err) {
 			close_candev(dev);
@@ -579,7 +553,8 @@ struct net_device *alloc_sja1000dev(int sizeof_priv)
 	struct net_device *dev;
 	struct sja1000_priv *priv;
 
-	dev = alloc_candev(sizeof(struct sja1000_priv) + sizeof_priv);
+	dev = alloc_candev(sizeof(struct sja1000_priv) + sizeof_priv,
+		SJA1000_ECHO_SKB_MAX);
 	if (!dev)
 		return NULL;
 

@@ -93,7 +93,6 @@ static int pvc_getname(struct socket *sock,struct sockaddr *sockaddr,
 	if (!vcc->dev || !test_bit(ATM_VF_ADDR,&vcc->flags)) return -ENOTCONN;
 	*sockaddr_len = sizeof(struct sockaddr_atmpvc);
 	addr = (struct sockaddr_atmpvc *) sockaddr;
-	memset(addr, 0, sizeof(*addr));
 	addr->sap_family = AF_ATMPVC;
 	addr->sap_addr.itf = vcc->dev->number;
 	addr->sap_addr.vpi = vcc->vpi;
@@ -128,7 +127,8 @@ static const struct proto_ops pvc_proto_ops = {
 };
 
 
-static int pvc_create(struct net *net, struct socket *sock,int protocol)
+static int pvc_create(struct net *net, struct socket *sock, int protocol,
+		      int kern)
 {
 	if (net != &init_net)
 		return -EAFNOSUPPORT;
@@ -138,7 +138,7 @@ static int pvc_create(struct net *net, struct socket *sock,int protocol)
 }
 
 
-static struct net_proto_family pvc_family_ops = {
+static const struct net_proto_family pvc_family_ops = {
 	.family = PF_ATMPVC,
 	.create = pvc_create,
 	.owner = THIS_MODULE,

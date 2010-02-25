@@ -570,17 +570,6 @@ static const struct pci_device_id ahci_pci_tbl[] = {
 	{ PCI_VDEVICE(INTEL, 0x3b2b), board_ahci }, /* PCH RAID */
 	{ PCI_VDEVICE(INTEL, 0x3b2c), board_ahci }, /* PCH RAID */
 	{ PCI_VDEVICE(INTEL, 0x3b2f), board_ahci }, /* PCH AHCI */
-	{ PCI_VDEVICE(INTEL, 0x1c02), board_ahci }, /* CPT AHCI */
-	{ PCI_VDEVICE(INTEL, 0x1c03), board_ahci }, /* CPT AHCI */
-	{ PCI_VDEVICE(INTEL, 0x1c04), board_ahci }, /* CPT RAID */
-	{ PCI_VDEVICE(INTEL, 0x1c05), board_ahci }, /* CPT RAID */
-	{ PCI_VDEVICE(INTEL, 0x1c06), board_ahci }, /* CPT RAID */
-	{ PCI_VDEVICE(INTEL, 0x1c07), board_ahci }, /* CPT RAID */
-	{ PCI_VDEVICE(INTEL, 0x1d02), board_ahci }, /* PBG AHCI */
-	{ PCI_VDEVICE(INTEL, 0x1d04), board_ahci }, /* PBG RAID */
-	{ PCI_VDEVICE(INTEL, 0x1d06), board_ahci }, /* PBG RAID */
-	{ PCI_VDEVICE(INTEL, 0x2826), board_ahci }, /* PBG RAID */
-	{ PCI_VDEVICE(INTEL, 0x2323), board_ahci }, /* DH89xxCC AHCI */
 
 	/* JMicron 360/1/3/5/6, match class to avoid IDE function */
 	{ PCI_VENDOR_ID_JMICRON, PCI_ANY_ID, PCI_ANY_ID, PCI_ANY_ID,
@@ -2769,18 +2758,6 @@ static bool ahci_sb600_enable_64bit(struct pci_dev *pdev)
 				DMI_MATCH(DMI_BOARD_NAME, "MS-7376"),
 			},
 		},
-		/*
-		 * All BIOS versions for the Asus M3A support 64bit DMA.
-		 * (all release versions from 0301 to 1206 were tested)
-		 */
-		{
-			.ident = "ASUS M3A",
-			.matches = {
-				DMI_MATCH(DMI_BOARD_VENDOR,
-					  "ASUSTeK Computer INC."),
-				DMI_MATCH(DMI_BOARD_NAME, "M3A"),
-			},
-		},
 		{ }
 	};
 	const struct dmi_system_id *match;
@@ -2854,14 +2831,6 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 		 * On HP dv[4-6] and HDX18 with earlier BIOSen, link
 		 * to the harddisk doesn't become online after
 		 * resuming from STR.  Warn and fail suspend.
-		 *
-		 * http://bugzilla.kernel.org/show_bug.cgi?id=12276
-		 *
-		 * Use dates instead of versions to match as HP is
-		 * apparently recycling both product and version
-		 * strings.
-		 *
-		 * http://bugzilla.kernel.org/show_bug.cgi?id=15462
 		 */
 		{
 			.ident = "dv4",
@@ -2870,7 +2839,7 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 				DMI_MATCH(DMI_PRODUCT_NAME,
 					  "HP Pavilion dv4 Notebook PC"),
 			},
-			.driver_data = "20090105",	/* F.30 */
+			.driver_data = "F.30", /* cutoff BIOS version */
 		},
 		{
 			.ident = "dv5",
@@ -2879,7 +2848,7 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 				DMI_MATCH(DMI_PRODUCT_NAME,
 					  "HP Pavilion dv5 Notebook PC"),
 			},
-			.driver_data = "20090506",	/* F.16 */
+			.driver_data = "F.16", /* cutoff BIOS version */
 		},
 		{
 			.ident = "dv6",
@@ -2888,7 +2857,7 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 				DMI_MATCH(DMI_PRODUCT_NAME,
 					  "HP Pavilion dv6 Notebook PC"),
 			},
-			.driver_data = "20090423",	/* F.21 */
+			.driver_data = "F.21",	/* cutoff BIOS version */
 		},
 		{
 			.ident = "HDX18",
@@ -2897,7 +2866,7 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 				DMI_MATCH(DMI_PRODUCT_NAME,
 					  "HP HDX18 Notebook PC"),
 			},
-			.driver_data = "20090430",	/* F.23 */
+			.driver_data = "F.23",	/* cutoff BIOS version */
 		},
 		/*
 		 * Acer eMachines G725 has the same problem.  BIOS
@@ -2905,8 +2874,6 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 		 * work.  Inbetween, there are V1.06, V2.06 and V3.03
 		 * that we don't have much idea about.  For now,
 		 * blacklist anything older than V3.04.
-		 *
-		 * http://bugzilla.kernel.org/show_bug.cgi?id=15104
 		 */
 		{
 			.ident = "G725",
@@ -2914,21 +2881,19 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 				DMI_MATCH(DMI_SYS_VENDOR, "eMachines"),
 				DMI_MATCH(DMI_PRODUCT_NAME, "eMachines G725"),
 			},
-			.driver_data = "20091216",	/* V3.04 */
+			.driver_data = "V3.04",	/* cutoff BIOS version */
 		},
 		{ }	/* terminate list */
 	};
 	const struct dmi_system_id *dmi = dmi_first_match(sysids);
-	int year, month, date;
-	char buf[9];
+	const char *ver;
 
 	if (!dmi || pdev->bus->number || pdev->devfn != PCI_DEVFN(0x1f, 2))
 		return false;
 
-	dmi_get_date(DMI_BIOS_DATE, &year, &month, &date);
-	snprintf(buf, sizeof(buf), "%04d%02d%02d", year, month, date);
+	ver = dmi_get_system_info(DMI_BIOS_VERSION);
 
-	return strcmp(buf, dmi->driver_data) < 0;
+	return !ver || strcmp(ver, dmi->driver_data) < 0;
 }
 
 static bool ahci_broken_online(struct pci_dev *pdev)
@@ -3054,15 +3019,13 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (pdev->vendor == PCI_VENDOR_ID_MARVELL && !marvell_enable)
 		return -ENODEV;
 
-	/*
-	 * For some reason, MCP89 on MacBook 7,1 doesn't work with
-	 * ahci, use ata_generic instead.
+	/* Promise's PDC42819 is a SAS/SATA controller that has an AHCI mode.
+	 * At the moment, we can only use the AHCI mode. Let the users know
+	 * that for SAS drives they're out of luck.
 	 */
-	if (pdev->vendor == PCI_VENDOR_ID_NVIDIA &&
-	    pdev->device == PCI_DEVICE_ID_NVIDIA_NFORCE_MCP89_SATA &&
-	    pdev->subsystem_vendor == PCI_VENDOR_ID_APPLE &&
-	    pdev->subsystem_device == 0xcb89)
-		return -ENODEV;
+	if (pdev->vendor == PCI_VENDOR_ID_PROMISE)
+		dev_printk(KERN_INFO, &pdev->dev, "PDC42819 "
+			   "can only drive SATA devices with this driver\n");
 
 	/* acquire resources */
 	rc = pcim_enable_device(pdev);
@@ -3119,16 +3082,8 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	ahci_save_initial_config(pdev, hpriv);
 
 	/* prepare host */
-	if (hpriv->cap & HOST_CAP_NCQ) {
-		pi.flags |= ATA_FLAG_NCQ;
-		/* Auto-activate optimization is supposed to be supported on
-		   all AHCI controllers indicating NCQ support, but it seems
-		   to be broken at least on some NVIDIA MCP79 chipsets.
-		   Until we get info on which NVIDIA chipsets don't have this
-		   issue, if any, disable AA on all NVIDIA AHCIs. */
-		if (pdev->vendor != PCI_VENDOR_ID_NVIDIA)
-			pi.flags |= ATA_FLAG_FPDMA_AA;
-	}
+	if (hpriv->cap & HOST_CAP_NCQ)
+		pi.flags |= ATA_FLAG_NCQ | ATA_FLAG_FPDMA_AA;
 
 	if (hpriv->cap & HOST_CAP_PMP)
 		pi.flags |= ATA_FLAG_PMP;

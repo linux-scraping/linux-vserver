@@ -418,7 +418,7 @@ static u8 alloc_usb_address(struct r8a66597 *r8a66597, struct urb *urb)
 
 /* this function must be called with interrupt disabled */
 static void free_usb_address(struct r8a66597 *r8a66597,
-			     struct r8a66597_device *dev, int reset)
+			     struct r8a66597_device *dev)
 {
 	int port;
 
@@ -430,13 +430,7 @@ static void free_usb_address(struct r8a66597 *r8a66597,
 	dev->state = USB_STATE_DEFAULT;
 	r8a66597->address_map &= ~(1 << dev->address);
 	dev->address = 0;
-	/*
-	 * Only when resetting USB, it is necessary to erase drvdata. When
-	 * a usb device with usb hub is disconnect, "dev->udev" is already
-	 * freed on usb_desconnect(). So we cannot access the data.
-	 */
-	if (reset)
-		dev_set_drvdata(&dev->udev->dev, NULL);
+	dev_set_drvdata(&dev->udev->dev, NULL);
 	list_del(&dev->device_list);
 	kfree(dev);
 
@@ -859,8 +853,6 @@ static void force_dequeue(struct r8a66597 *r8a66597, u16 pipenum, u16 address)
 		return;
 
 	list_for_each_entry_safe(td, next, list, queue) {
-		if (!td)
-			continue;
 		if (td->address != address)
 			continue;
 
@@ -1030,6 +1022,8 @@ static void start_root_hub_sampling(struct r8a66597 *r8a66597, int port,
 /* this function must be called with interrupt disabled */
 static void r8a66597_check_syssts(struct r8a66597 *r8a66597, int port,
 					u16 syssts)
+__releases(r8a66597->lock)
+__acquires(r8a66597->lock)
 {
 	if (syssts == SE0) {
 		r8a66597_write(r8a66597, ~ATTCH, get_intsts_reg(port));
@@ -1047,7 +1041,9 @@ static void r8a66597_check_syssts(struct r8a66597 *r8a66597, int port,
 			usb_hcd_resume_root_hub(r8a66597_to_hcd(r8a66597));
 	}
 
+	spin_unlock(&r8a66597->lock);
 	usb_hcd_poll_rh_status(r8a66597_to_hcd(r8a66597));
+	spin_lock(&r8a66597->lock);
 }
 
 /* this function must be called with interrupt disabled */
@@ -1073,7 +1069,7 @@ static void r8a66597_usb_disconnect(struct r8a66597 *r8a66597, int port)
 	struct r8a66597_device *dev = r8a66597->root_hub[port].dev;
 
 	disable_r8a66597_pipe_all(r8a66597, dev);
-	free_usb_address(r8a66597, dev, 0);
+	free_usb_address(r8a66597, dev);
 
 	start_root_hub_sampling(r8a66597, port, 0);
 }
@@ -2053,8 +2049,6 @@ static struct r8a66597_device *get_r8a66597_device(struct r8a66597 *r8a66597,
 	struct list_head *list = &r8a66597->child_device;
 
 	list_for_each_entry(dev, list, device_list) {
-		if (!dev)
-			continue;
 		if (dev->usb_address != addr)
 			continue;
 
@@ -2091,7 +2085,7 @@ static void update_usb_address_map(struct r8a66597 *r8a66597,
 				spin_lock_irqsave(&r8a66597->lock, flags);
 				dev = get_r8a66597_device(r8a66597, addr);
 				disable_r8a66597_pipe_all(r8a66597, dev);
-				free_usb_address(r8a66597, dev, 0);
+				free_usb_address(r8a66597, dev);
 				put_child_connect_map(r8a66597, addr);
 				spin_unlock_irqrestore(&r8a66597->lock, flags);
 			}
@@ -2234,7 +2228,7 @@ static int r8a66597_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			rh->port |= (1 << USB_PORT_FEAT_RESET);
 
 			disable_r8a66597_pipe_all(r8a66597, dev);
-			free_usb_address(r8a66597, dev, 1);
+			free_usb_address(r8a66597, dev);
 
 			r8a66597_mdfy(r8a66597, USBRST, USBRST | UACT,
 				      get_dvstctr_reg(port));
@@ -2385,7 +2379,7 @@ static int r8a66597_resume(struct device *dev)
 	return 0;
 }
 
-static struct dev_pm_ops r8a66597_dev_pm_ops = {
+static const struct dev_pm_ops r8a66597_dev_pm_ops = {
 	.suspend = r8a66597_suspend,
 	.resume = r8a66597_resume,
 	.poweroff = r8a66597_suspend,

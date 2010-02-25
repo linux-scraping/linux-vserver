@@ -267,7 +267,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+#ifdef	CGROUP_MEM_RES_CTLR
 	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
 	u64 res_limit, res_usage;
 
@@ -281,7 +281,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 		val->totalram = (res_limit >> PAGE_SHIFT);
 	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
 	val->bufferram = 0;
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR */
+#else
 	struct vx_info *vxi = current_vx_info();
 	unsigned long totalram, freeram;
 	rlim_t v;
@@ -296,7 +296,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 	val->totalram = totalram;
 	val->freeram = freeram;
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
+#endif
 	val->totalhigh = 0;
 	val->freehigh = 0;
 	return;
@@ -304,8 +304,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR_SWAP
+#ifdef	CGROUP_MEM_RES_CTLR_SWAP
 	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
 	u64 res_limit, res_usage, memsw_limit, memsw_usage;
 	s64 swap_limit, swap_usage;
@@ -328,11 +327,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	swap_usage = memsw_usage - res_usage;
 	val->freeswap = (swap_usage < swap_limit) ?
 		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
-	val->totalswap = 0;
-	val->freeswap = 0;
-#endif	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR */
+#else
 	struct vx_info *vxi = current_vx_info();
 	unsigned long totalswap, freeswap;
 	rlim_t v, w;
@@ -356,13 +351,13 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 
 	val->totalswap = totalswap;
 	val->freeswap = freeswap;
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
+#endif
 	return;
 }
 
 long vx_vsi_cached(struct sysinfo *val)
 {
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+#ifdef	CGROUP_MEM_RES_CTLR
 	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
 
 	return mem_cgroup_stat_read_cache(mcg);

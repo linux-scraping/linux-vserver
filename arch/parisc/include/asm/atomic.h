@@ -27,19 +27,19 @@
 #  define ATOMIC_HASH_SIZE 4
 #  define ATOMIC_HASH(a) (&(__atomic_hash[ (((unsigned long) (a))/L1_CACHE_BYTES) & (ATOMIC_HASH_SIZE-1) ]))
 
-extern raw_spinlock_t __atomic_hash[ATOMIC_HASH_SIZE] __lock_aligned;
+extern arch_spinlock_t __atomic_hash[ATOMIC_HASH_SIZE] __lock_aligned;
 
 /* Can't use raw_spin_lock_irq because of #include problems, so
  * this is the substitute */
 #define _atomic_spin_lock_irqsave(l,f) do {	\
-	raw_spinlock_t *s = ATOMIC_HASH(l);		\
+	arch_spinlock_t *s = ATOMIC_HASH(l);		\
 	local_irq_save(f);			\
-	__raw_spin_lock(s);			\
+	arch_spin_lock(s);			\
 } while(0)
 
 #define _atomic_spin_unlock_irqrestore(l,f) do {	\
-	raw_spinlock_t *s = ATOMIC_HASH(l);			\
-	__raw_spin_unlock(s);				\
+	arch_spinlock_t *s = ATOMIC_HASH(l);			\
+	arch_spin_unlock(s);				\
 	local_irq_restore(f);				\
 } while(0)
 
@@ -248,7 +248,7 @@ static __inline__ int atomic_add_unless(atomic_t *v, int a, int u)
 
 #define atomic_sub_and_test(i,v)	(atomic_sub_return((i),(v)) == 0)
 
-#define ATOMIC_INIT(i)	{ (i) }
+#define ATOMIC_INIT(i)	((atomic_t) { (i) })
 
 #define smp_mb__before_atomic_dec()	smp_mb()
 #define smp_mb__after_atomic_dec()	smp_mb()
@@ -257,7 +257,7 @@ static __inline__ int atomic_add_unless(atomic_t *v, int a, int u)
 
 #ifdef CONFIG_64BIT
 
-#define ATOMIC64_INIT(i) { (i) }
+#define ATOMIC64_INIT(i) ((atomic64_t) { (i) })
 
 static __inline__ int
 __atomic64_add_return(s64 i, atomic64_t *v)

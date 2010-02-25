@@ -46,6 +46,7 @@ static unsigned int input_abs_bypass_init_data[] __initdata = {
 	ABS_MT_TOOL_TYPE,
 	ABS_MT_BLOB_ID,
 	ABS_MT_TRACKING_ID,
+	ABS_MT_PRESSURE,
 	0
 };
 static unsigned long input_abs_bypass[BITS_TO_LONGS(ABS_CNT)];
@@ -297,9 +298,15 @@ static void input_handle_event(struct input_dev *dev,
  * @value: value of the event
  *
  * This function should be used by drivers implementing various input
- * devices. See also input_inject_event().
+ * devices to report input events. See also input_inject_event().
+ *
+ * NOTE: input_event() may be safely used right after input device was
+ * allocated with input_allocate_device(), even before it is registered
+ * with input_register_device(), but the event will not reach any of the
+ * input handlers. Such early invocation of input_event() may be used
+ * to 'seed' initial state of a switch or initial position of absolute
+ * axis, etc.
  */
-
 void input_event(struct input_dev *dev,
 		 unsigned int type, unsigned int code, int value)
 {
@@ -1714,6 +1721,38 @@ void input_unregister_handler(struct input_handler *handler)
 EXPORT_SYMBOL(input_unregister_handler);
 
 /**
+ * input_handler_for_each_handle - handle iterator
+ * @handler: input handler to iterate
+ * @data: data for the callback
+ * @fn: function to be called for each handle
+ *
+ * Iterate over @bus's list of devices, and call @fn for each, passing
+ * it @data and stop when @fn returns a non-zero value. The function is
+ * using RCU to traverse the list and therefore may be usind in atonic
+ * contexts. The @fn callback is invoked from RCU critical section and
+ * thus must not sleep.
+ */
+int input_handler_for_each_handle(struct input_handler *handler, void *data,
+				  int (*fn)(struct input_handle *, void *))
+{
+	struct input_handle *handle;
+	int retval = 0;
+
+	rcu_read_lock();
+
+	list_for_each_entry_rcu(handle, &handler->h_list, h_node) {
+		retval = fn(handle, data);
+		if (retval)
+			break;
+	}
+
+	rcu_read_unlock();
+
+	return retval;
+}
+EXPORT_SYMBOL(input_handler_for_each_handle);
+
+/**
  * input_register_handle - register a new input handle
  * @handle: handle to register
  *
@@ -1746,7 +1785,7 @@ int input_register_handle(struct input_handle *handle)
 	 * we can't be racing with input_unregister_handle()
 	 * and so separate lock is not needed here.
 	 */
-	list_add_tail(&handle->h_node, &handler->h_list);
+	list_add_tail_rcu(&handle->h_node, &handler->h_list);
 
 	if (handler->start)
 		handler->start(handle);
@@ -1769,7 +1808,7 @@ void input_unregister_handle(struct input_handle *handle)
 {
 	struct input_dev *dev = handle->dev;
 
-	list_del_init(&handle->h_node);
+	list_del_rcu(&handle->h_node);
 
 	/*
 	 * Take dev->mutex to prevent race with input_release_device().
@@ -1777,6 +1816,7 @@ void input_unregister_handle(struct input_handle *handle)
 	mutex_lock(&dev->mutex);
 	list_del_rcu(&handle->d_node);
 	mutex_unlock(&dev->mutex);
+
 	synchronize_rcu();
 }
 EXPORT_SYMBOL(input_unregister_handle);

@@ -245,7 +245,7 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 {
 	struct ip_ra_chain *ra, *new_ra, **rap;
 
-	if (sk->sk_type != SOCK_RAW || inet_sk(sk)->num == IPPROTO_RAW)
+	if (sk->sk_type != SOCK_RAW || inet_sk(sk)->inet_num == IPPROTO_RAW)
 		return -EINVAL;
 
 	new_ra = on ? kmalloc(sizeof(*new_ra), GFP_KERNEL) : NULL;
@@ -356,7 +356,7 @@ void ip_local_error(struct sock *sk, int err, __be32 daddr, __be16 port, u32 inf
 /*
  *	Handle MSG_ERRQUEUE
  */
-int ip_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len)
+int ip_recv_error(struct sock *sk, struct msghdr *msg, int len)
 {
 	struct sock_exterr_skb *serr;
 	struct sk_buff *skb, *skb2;
@@ -393,7 +393,6 @@ int ip_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len)
 						   serr->addr_offset);
 		sin->sin_port = serr->port;
 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
-		*addr_len = sizeof(*sin);
 	}
 
 	memcpy(&errhdr.ee, &serr->ee, sizeof(struct sock_extended_err));
@@ -434,11 +433,6 @@ out:
 	return err;
 }
 
-
-static void opt_kfree_rcu(struct rcu_head *head)
-{
-	kfree(container_of(head, struct ip_options_rcu, rcu));
-}
 
 /*
  *	Socket option code for IP. This is the end of the line after any
@@ -485,35 +479,32 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 	switch (optname) {
 	case IP_OPTIONS:
 	{
-		struct ip_options_rcu *old, *opt = NULL;
-
-		if (optlen > 40 || optlen < 0)
+		struct ip_options *opt = NULL;
+		if (optlen > 40)
 			goto e_inval;
 		err = ip_options_get_from_user(sock_net(sk), &opt,
 					       optval, optlen);
 		if (err)
 			break;
-		old = inet->inet_opt;
 		if (inet->is_icsk) {
 			struct inet_connection_sock *icsk = inet_csk(sk);
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 			if (sk->sk_family == PF_INET ||
 			    (!((1 << sk->sk_state) &
 			       (TCPF_LISTEN | TCPF_CLOSE)) &&
-			     inet->daddr != LOOPBACK4_IPV6)) {
+			     inet->inet_daddr != LOOPBACK4_IPV6)) {
 #endif
-				if (old)
-					icsk->icsk_ext_hdr_len -= old->opt.optlen;
+				if (inet->opt)
+					icsk->icsk_ext_hdr_len -= inet->opt->optlen;
 				if (opt)
-					icsk->icsk_ext_hdr_len += opt->opt.optlen;
+					icsk->icsk_ext_hdr_len += opt->optlen;
 				icsk->icsk_sync_mss(sk, icsk->icsk_pmtu_cookie);
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 			}
 #endif
 		}
-		rcu_assign_pointer(inet->inet_opt, opt);
-		if (old)
-			call_rcu(&old->rcu, opt_kfree_rcu);
+		opt = xchg(&inet->opt, opt);
+		kfree(opt);
 		break;
 	}
 	case IP_PKTINFO:
@@ -572,7 +563,7 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 	case IP_TTL:
 		if (optlen < 1)
 			goto e_inval;
-		if (val != -1 && (val < 1 || val > 255))
+		if (val != -1 && (val < 0 || val > 255))
 			goto e_inval;
 		inet->uc_ttl = val;
 		break;
@@ -584,7 +575,7 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 		inet->hdrincl = val ? 1 : 0;
 		break;
 	case IP_MTU_DISCOVER:
-		if (val < 0 || val > 3)
+		if (val < IP_PMTUDISC_DONT || val > IP_PMTUDISC_PROBE)
 			goto e_inval;
 		inet->pmtudisc = val;
 		break;
@@ -1041,15 +1032,12 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
 	case IP_OPTIONS:
 	{
 		unsigned char optbuf[sizeof(struct ip_options)+40];
-		struct ip_options *opt = (struct ip_options *)optbuf;
-		struct ip_options_rcu *inet_opt;
-
-		inet_opt = inet->inet_opt;
+		struct ip_options * opt = (struct ip_options *)optbuf;
 		opt->optlen = 0;
-		if (inet_opt)
-			memcpy(optbuf, &inet_opt->opt,
-			       sizeof(struct ip_options) +
-			       inet_opt->opt.optlen);
+		if (inet->opt)
+			memcpy(optbuf, inet->opt,
+			       sizeof(struct ip_options)+
+			       inet->opt->optlen);
 		release_sock(sk);
 
 		if (opt->optlen == 0)
@@ -1192,8 +1180,8 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
 		if (inet->cmsg_flags & IP_CMSG_PKTINFO) {
 			struct in_pktinfo info;
 
-			info.ipi_addr.s_addr = inet->rcv_saddr;
-			info.ipi_spec_dst.s_addr = inet->rcv_saddr;
+			info.ipi_addr.s_addr = inet->inet_rcv_saddr;
+			info.ipi_spec_dst.s_addr = inet->inet_rcv_saddr;
 			info.ipi_ifindex = inet->mc_index;
 			put_cmsg(&msg, SOL_IP, IP_PKTINFO, sizeof(info), &info);
 		}

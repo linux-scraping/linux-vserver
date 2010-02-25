@@ -238,7 +238,7 @@ static int dm_write_shared_word(struct usbnet *dev, int phy, u8 reg, __le16 valu
 		goto out;
 
 	dm_write_reg(dev, DM_SHARED_ADDR, phy ? (reg | 0x40) : reg);
-	dm_write_reg(dev, DM_SHARED_CTRL, phy ? 0x1a : 0x12);
+	dm_write_reg(dev, DM_SHARED_CTRL, phy ? 0x1c : 0x14);
 
 	for (i = 0; i < DM_TIMEOUT; i++) {
 		u8 tmp;
@@ -382,7 +382,7 @@ static void dm9601_set_multicast(struct net_device *net)
 	if (net->flags & IFF_PROMISC) {
 		rx_ctl |= 0x02;
 	} else if (net->flags & IFF_ALLMULTI || net->mc_count > DM_MAX_MCAST) {
-		rx_ctl |= 0x08;
+		rx_ctl |= 0x04;
 	} else if (net->mc_count) {
 		struct dev_mc_list *mc_list = net->mc_list;
 		int i;
@@ -611,7 +611,7 @@ static int dm9601_link_reset(struct usbnet *dev)
 
 static const struct driver_info dm9601_info = {
 	.description	= "Davicom DM9601 USB Ethernet",
-	.flags		= FLAG_ETHER,
+	.flags		= FLAG_ETHER | FLAG_LINK_INTR,
 	.bind		= dm9601_bind,
 	.rx_fixup	= dm9601_rx_fixup,
 	.tx_fixup	= dm9601_tx_fixup,

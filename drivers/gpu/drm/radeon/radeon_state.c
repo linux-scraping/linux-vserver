@@ -101,7 +101,6 @@ static __inline__ int radeon_check_and_fixup_packets(drm_radeon_private_t *
 			DRM_ERROR("Invalid depth buffer offset\n");
 			return -EINVAL;
 		}
-		dev_priv->have_z_offset = 1;
 		break;
 
 	case RADEON_EMIT_PP_CNTL:
@@ -876,12 +875,6 @@ static void radeon_cp_dispatch_clear(struct drm_device * dev,
 			flags |= RADEON_BACK;
 		if (tmp & RADEON_BACK)
 			flags |= RADEON_FRONT;
-	}
-	if (flags & (RADEON_DEPTH|RADEON_STENCIL)) {
-		if (!dev_priv->have_z_offset) {
-			printk_once(KERN_ERR "radeon: illegal depth clear request. Buggy mesa detected - please update.\n");
-			flags &= ~(RADEON_DEPTH | RADEON_STENCIL);
-		}
 	}
 
 	if (flags & (RADEON_FRONT | RADEON_BACK)) {
@@ -1957,7 +1950,7 @@ static void radeon_apply_surface_regs(int surf_index,
  * Note that refcount can be at most 2, since during a free refcount=3
  * might mean we have to allocate a new surface which might not always
  * be available.
- * For example : we allocate three contigous surfaces ABC. If B is
+ * For example : we allocate three contiguous surfaces ABC. If B is
  * freed, we suddenly need two surfaces to store A and C, which might
  * not always be available.
  */

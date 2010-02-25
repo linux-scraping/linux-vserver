@@ -67,7 +67,7 @@ static struct ima_measure_rule_entry default_rules[] = {
 	 .flags = IMA_FUNC | IMA_MASK},
 	{.action = MEASURE,.func = BPRM_CHECK,.mask = MAY_EXEC,
 	 .flags = IMA_FUNC | IMA_MASK},
-	{.action = MEASURE,.func = PATH_CHECK,.mask = MAY_READ,.uid = 0,
+	{.action = MEASURE,.func = FILE_CHECK,.mask = MAY_READ,.uid = 0,
 	 .flags = IMA_FUNC | IMA_MASK | IMA_UID},
 };
 
@@ -249,8 +249,6 @@ static int ima_lsm_rule_init(struct ima_measure_rule_entry *entry,
 	result = security_filter_rule_init(entry->lsm[lsm_rule].type,
 					   Audit_equal, args,
 					   &entry->lsm[lsm_rule].rule);
-	if (!entry->lsm[lsm_rule].rule)
-		return -EINVAL;
 	return result;
 }
 
@@ -284,8 +282,11 @@ static int ima_parse_rule(char *rule, struct ima_measure_rule_entry *entry)
 			break;
 		case Opt_func:
 			audit_log_format(ab, "func=%s ", args[0].from);
-			if (strcmp(args[0].from, "PATH_CHECK") == 0)
-				entry->func = PATH_CHECK;
+			if (strcmp(args[0].from, "FILE_CHECK") == 0)
+				entry->func = FILE_CHECK;
+			/* PATH_CHECK is for backwards compat */
+			else if (strcmp(args[0].from, "PATH_CHECK") == 0)
+				entry->func = FILE_CHECK;
 			else if (strcmp(args[0].from, "FILE_MMAP") == 0)
 				entry->func = FILE_MMAP;
 			else if (strcmp(args[0].from, "BPRM_CHECK") == 0)

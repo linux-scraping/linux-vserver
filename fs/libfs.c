@@ -430,8 +430,7 @@ int simple_write_end(struct file *file, struct address_space *mapping,
  * unique inode values later for this filesystem, then you must take care
  * to pass it an appropriate max_reserved value to avoid collisions.
  */
-int simple_fill_super(struct super_block *s, unsigned long magic,
-		      struct tree_descr *files)
+int simple_fill_super(struct super_block *s, int magic, struct tree_descr *files)
 {
 	struct inode *inode;
 	struct dentry *root;
@@ -865,7 +864,6 @@ EXPORT_SYMBOL(simple_write_end);
 EXPORT_SYMBOL(simple_dir_inode_operations);
 EXPORT_SYMBOL(simple_dir_operations);
 EXPORT_SYMBOL(simple_empty);
-EXPORT_SYMBOL(d_alloc_name);
 EXPORT_SYMBOL(simple_fill_super);
 EXPORT_SYMBOL(simple_getattr);
 EXPORT_SYMBOL(simple_link);

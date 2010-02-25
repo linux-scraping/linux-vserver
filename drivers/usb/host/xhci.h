@@ -232,7 +232,7 @@ struct xhci_op_regs {
  * notification type that matches a bit set in this bit field.
  */
 #define	DEV_NOTE_MASK		(0xffff)
-#define ENABLE_DEV_NOTE(x)	(1 << (x))
+#define ENABLE_DEV_NOTE(x)	(1 << x)
 /* Most of the device notification types should only be used for debug.
  * SW does need to pay attention to function wake notifications.
  */
@@ -579,11 +579,11 @@ struct xhci_ep_ctx {
 #define EP_STATE_STOPPED	3
 #define EP_STATE_ERROR		4
 /* Mult - Max number of burtst within an interval, in EP companion desc. */
-#define EP_MULT(p)		(((p) & 0x3) << 8)
+#define EP_MULT(p)		((p & 0x3) << 8)
 /* bits 10:14 are Max Primary Streams */
 /* bit 15 is Linear Stream Array */
 /* Interval - period between requests to an endpoint - 125u increments. */
-#define EP_INTERVAL(p)		(((p) & 0xff) << 16)
+#define EP_INTERVAL(p)		((p & 0xff) << 16)
 #define EP_INTERVAL_TO_UFRAMES(p)		(1 << (((p) >> 16) & 0xff))
 
 /* ep_info2 bitmasks */
@@ -608,10 +608,6 @@ struct xhci_ep_ctx {
 #define MAX_PACKET(p)	(((p)&0xffff) << 16)
 #define MAX_PACKET_MASK		(0xffff << 16)
 #define MAX_PACKET_DECODED(p)	(((p) >> 16) & 0xffff)
-
-/* tx_info bitmasks */
-#define AVG_TRB_LENGTH_FOR_EP(p)	((p) & 0xffff)
-#define MAX_ESIT_PAYLOAD_FOR_EP(p)	(((p) & 0xffff) << 16)
 
 
 /**
@@ -656,13 +652,17 @@ struct xhci_virt_ep {
 	struct xhci_ring		*new_ring;
 	unsigned int			ep_state;
 #define SET_DEQ_PENDING		(1 << 0)
-#define EP_HALTED		(1 << 1)
+#define EP_HALTED		(1 << 1)	/* For stall handling */
+#define EP_HALT_PENDING		(1 << 2)	/* For URB cancellation */
 	/* ----  Related to URB cancellation ---- */
 	struct list_head	cancelled_td_list;
-	unsigned int		cancels_pending;
 	/* The TRB that was last reported in a stopped endpoint ring */
 	union xhci_trb		*stopped_trb;
 	struct xhci_td		*stopped_td;
+	/* Watchdog timer for stop endpoint command to cancel URBs */
+	struct timer_list	stop_cmd_timer;
+	int			stop_cmds_pending;
+	struct xhci_hcd		*xhci;
 };
 
 struct xhci_virt_device {
@@ -677,6 +677,10 @@ struct xhci_virt_device {
 	struct xhci_container_ctx       *out_ctx;
 	/* Used for addressing devices and configuration changes */
 	struct xhci_container_ctx       *in_ctx;
+	/* Rings saved to ensure old alt settings can be re-instated */
+	struct xhci_ring		**ring_cache;
+	int				num_rings_cached;
+#define	XHCI_MAX_RINGS_CACHED	31
 	struct xhci_virt_ep		eps[31];
 	struct completion		cmd_completion;
 	/* Status of the last command issued for this device */
@@ -828,9 +832,6 @@ struct xhci_event_cmd {
 /* Normal TRB fields */
 /* transfer_len bitmasks - bits 0:16 */
 #define	TRB_LEN(p)		((p) & 0x1ffff)
-/* TD size - number of bytes remaining in the TD (including this TRB):
- * bits 17 - 21.  Shift the number of bytes by 10. */
-#define TD_REMAINDER(p)		((((p) >> 10) & 0x1f) << 17)
 /* Interrupter Target - which MSI-X vector to target the completion event at */
 #define TRB_INTR_TARGET(p)	(((p) & 0x3ff) << 22)
 #define GET_INTR_TARGET(p)	(((p) >> 22) & 0x3ff)
@@ -1026,6 +1027,8 @@ struct xhci_scratchpad {
 #define	ERST_ENTRIES	1
 /* Poll every 60 seconds */
 #define	POLL_TIMEOUT	60
+/* Stop endpoint command timeout (secs) for URB cancellation watchdog timer */
+#define XHCI_STOP_EP_CMD_TIMEOUT	5
 /* XXX: Make these module parameters */
 
 
@@ -1087,6 +1090,21 @@ struct xhci_hcd {
 	struct timer_list	event_ring_timer;
 	int			zombie;
 #endif
+	/* Host controller watchdog timer structures */
+	unsigned int		xhc_state;
+/* Host controller is dying - not responding to commands. "I'm not dead yet!"
+ *
+ * xHC interrupts have been disabled and a watchdog timer will (or has already)
+ * halt the xHCI host, and complete all URBs with an -ESHUTDOWN code.  Any code
+ * that sees this status (other than the timer that set it) should stop touching
+ * hardware immediately.  Interrupt handlers should return immediately when
+ * they see this status (any time they drop and re-acquire xhci->lock).
+ * xhci_urb_dequeue() should call usb_hcd_check_unlink_urb() and return without
+ * putting the TD on the canceled list, etc.
+ *
+ * There are no reports of xHCI host controllers that display this issue.
+ */
+#define XHCI_STATE_DYING	(1 << 0)
 	/* Statistics */
 	int			noops_submitted;
 	int			noops_handled;
@@ -1227,6 +1245,7 @@ void xhci_unregister_pci(void);
 #endif
 
 /* xHCI host controller glue */
+void xhci_quiesce(struct xhci_hcd *xhci);
 int xhci_halt(struct xhci_hcd *xhci);
 int xhci_reset(struct xhci_hcd *xhci);
 int xhci_init(struct usb_hcd *hcd);
@@ -1250,6 +1269,9 @@ void xhci_reset_bandwidth(struct usb_hcd *hcd, struct usb_device *udev);
 
 /* xHCI ring, segment, TRB, and TD functions */
 dma_addr_t xhci_trb_virt_to_dma(struct xhci_segment *seg, union xhci_trb *trb);
+struct xhci_segment *trb_in_td(struct xhci_segment *start_seg,
+		union xhci_trb *start_trb, union xhci_trb *end_trb,
+		dma_addr_t suspect_dma);
 void xhci_ring_cmd_db(struct xhci_hcd *xhci);
 void *xhci_setup_one_noop(struct xhci_hcd *xhci);
 void xhci_handle_event(struct xhci_hcd *xhci);
@@ -1282,6 +1304,7 @@ void xhci_cleanup_stalled_ring(struct xhci_hcd *xhci,
 void xhci_queue_config_ep_quirk(struct xhci_hcd *xhci,
 		unsigned int slot_id, unsigned int ep_index,
 		struct xhci_dequeue_state *deq_state);
+void xhci_stop_endpoint_command_watchdog(unsigned long arg);
 
 /* xHCI roothub code */
 int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue, u16 wIndex,

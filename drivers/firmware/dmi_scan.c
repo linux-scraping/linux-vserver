@@ -6,7 +6,6 @@
 #include <linux/efi.h>
 #include <linux/bootmem.h>
 #include <linux/slab.h>
-#include <linux/random.h>
 #include <asm/dmi.h>
 
 /*
@@ -112,8 +111,6 @@ static int __init dmi_walk_early(void (*decode)(const struct dmi_header *,
 
 	dmi_table(buf, dmi_len, dmi_num, decode, NULL);
 
-	add_device_randomness(buf, dmi_len);
-
 	dmi_iounmap(buf, dmi_len);
 	return 0;
 }
@@ -172,10 +169,7 @@ static void __init dmi_save_uuid(const struct dmi_header *dm, int slot, int inde
 	if (!s)
 		return;
 
-	sprintf(s,
-		"%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
-		d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
-		d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+	sprintf(s, "%pUB", d);
 
         dmi_ident[slot] = s;
 }

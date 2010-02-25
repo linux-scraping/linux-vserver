@@ -51,6 +51,7 @@
 static int disable_cfc = 0;
 static int channel_mtu = -1;
 static unsigned int l2cap_mtu = RFCOMM_MAX_L2CAP_MTU;
+static int l2cap_ertm = 0;
 
 static struct task_struct *rfcomm_thread;
 
@@ -701,6 +702,8 @@ static struct rfcomm_session *rfcomm_session_create(bdaddr_t *src, bdaddr_t *dst
 	sk = sock->sk;
 	lock_sock(sk);
 	l2cap_pi(sk)->imtu = l2cap_mtu;
+	if (l2cap_ertm)
+		l2cap_pi(sk)->mode = L2CAP_MODE_ERTM;
 	release_sock(sk);
 
 	s = rfcomm_session_add(sock, BT_BOUND);
@@ -1147,7 +1150,11 @@ static int rfcomm_recv_ua(struct rfcomm_session *s, u8 dlci)
 			break;
 
 		case BT_DISCONN:
-			rfcomm_session_put(s);
+			/* When socket is closed and we are not RFCOMM
+			 * initiator rfcomm_process_rx already calls
+			 * rfcomm_session_put() */
+			if (s->sock->sk->sk_state != BT_CLOSED)
+				rfcomm_session_put(s);
 			break;
 		}
 	}
@@ -2096,7 +2103,6 @@ static ssize_t rfcomm_dlc_sysfs_show(struct class *dev, char *buf)
 	struct rfcomm_session *s;
 	struct list_head *pp, *p;
 	char *str = buf;
-	int size = PAGE_SIZE;
 
 	rfcomm_lock();
 
@@ -2105,21 +2111,11 @@ static ssize_t rfcomm_dlc_sysfs_show(struct class *dev, char *buf)
 		list_for_each(pp, &s->dlcs) {
 			struct sock *sk = s->sock->sk;
 			struct rfcomm_dlc *d = list_entry(pp, struct rfcomm_dlc, list);
-			int len;
 
-			len = snprintf(str, size, "%s %s %ld %d %d %d %d\n",
+			str += sprintf(str, "%s %s %ld %d %d %d %d\n",
 					batostr(&bt_sk(sk)->src), batostr(&bt_sk(sk)->dst),
 					d->state, d->dlci, d->mtu, d->rx_credits, d->tx_credits);
-
-			size -= len;
-			if (size <= 0)
-				break;
-
-			str += len;
 		}
-
-		if (size <= 0)
-			break;
 	}
 
 	rfcomm_unlock();
@@ -2195,6 +2191,9 @@ MODULE_PARM_DESC(channel_mtu, "Default MTU for the RFCOMM channel");
 
 module_param(l2cap_mtu, uint, 0644);
 MODULE_PARM_DESC(l2cap_mtu, "Default MTU for the L2CAP connection");
+
+module_param(l2cap_ertm, bool, 0644);
+MODULE_PARM_DESC(l2cap_ertm, "Use L2CAP ERTM mode for connection");
 
 MODULE_AUTHOR("Marcel Holtmann <marcel@holtmann.org>");
 MODULE_DESCRIPTION("Bluetooth RFCOMM ver " VERSION);

@@ -263,8 +263,17 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 		if (0 == i)
 			frag |= SCTP_DATA_FIRST_FRAG;
 
-		if ((i == (whole - 1)) && !over)
+		if ((i == (whole - 1)) && !over) {
 			frag |= SCTP_DATA_LAST_FRAG;
+
+			/* The application requests to set the I-bit of the
+			 * last DATA chunk of a user message when providing
+			 * the user message to the SCTP implementation.
+			 */
+			if ((sinfo->sinfo_flags & SCTP_EOF) ||
+			    (sinfo->sinfo_flags & SCTP_SACK_IMMEDIATELY))
+				frag |= SCTP_DATA_SACK_IMM;
+		}
 
 		chunk = sctp_make_datafrag_empty(asoc, sinfo, len, frag, 0);
 
@@ -272,7 +281,7 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 			goto errout;
 		err = sctp_user_addto_chunk(chunk, offset, len, msgh->msg_iov);
 		if (err < 0)
-			goto errout_chunk_free;
+			goto errout;
 
 		offset += len;
 
@@ -297,6 +306,10 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 		else
 			frag = SCTP_DATA_LAST_FRAG;
 
+		if ((sinfo->sinfo_flags & SCTP_EOF) ||
+		    (sinfo->sinfo_flags & SCTP_SACK_IMMEDIATELY))
+			frag |= SCTP_DATA_SACK_IMM;
+
 		chunk = sctp_make_datafrag_empty(asoc, sinfo, over, frag, 0);
 
 		if (!chunk)
@@ -308,16 +321,13 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
 		__skb_pull(chunk->skb, (__u8 *)chunk->chunk_hdr
 			   - (__u8 *)chunk->skb->data);
 		if (err < 0)
-			goto errout_chunk_free;
+			goto errout;
 
 		sctp_datamsg_assign(msg, chunk);
 		list_add_tail(&chunk->frag_list, &msg->chunks);
 	}
 
 	return msg;
-
-errout_chunk_free:
-	sctp_chunk_free(chunk);
 
 errout:
 	list_for_each_safe(pos, temp, &msg->chunks) {

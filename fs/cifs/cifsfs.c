@@ -758,7 +758,7 @@ const struct file_operations cifs_file_ops = {
 };
 
 const struct file_operations cifs_file_direct_ops = {
-	/* no mmap, no aio, no readv -
+	/* no aio, no readv -
 	   BB reevaluate whether they can be done with directio, no cache */
 	.read = cifs_user_read,
 	.write = cifs_user_write,
@@ -767,6 +767,7 @@ const struct file_operations cifs_file_direct_ops = {
 	.lock = cifs_lock,
 	.fsync = cifs_fsync,
 	.flush = cifs_flush,
+	.mmap = cifs_file_mmap,
 	.splice_read = generic_file_splice_read,
 #ifdef CONFIG_CIFS_POSIX
 	.unlocked_ioctl  = cifs_ioctl,
@@ -1033,7 +1034,7 @@ init_cifs(void)
 		goto out_unregister_filesystem;
 #endif
 #ifdef CONFIG_CIFS_DFS_UPCALL
-	rc = cifs_init_dns_resolver();
+	rc = register_key_type(&key_type_dns_resolver);
 	if (rc)
 		goto out_unregister_key_type;
 #endif
@@ -1045,7 +1046,7 @@ init_cifs(void)
 
  out_unregister_resolver_key:
 #ifdef CONFIG_CIFS_DFS_UPCALL
-	cifs_exit_dns_resolver();
+	unregister_key_type(&key_type_dns_resolver);
  out_unregister_key_type:
 #endif
 #ifdef CONFIG_CIFS_UPCALL
@@ -1071,7 +1072,7 @@ exit_cifs(void)
 	cifs_proc_clean();
 #ifdef CONFIG_CIFS_DFS_UPCALL
 	cifs_dfs_release_automount_timer();
-	cifs_exit_dns_resolver();
+	unregister_key_type(&key_type_dns_resolver);
 #endif
 #ifdef CONFIG_CIFS_UPCALL
 	unregister_key_type(&cifs_spnego_key_type);

@@ -174,7 +174,7 @@ static int r600_cs_packet_next_reloc_nomm(struct radeon_cs_parser *p,
 			  idx, relocs_chunk->length_dw);
 		return -EINVAL;
 	}
-	*cs_reloc = &p->relocs[0];
+	*cs_reloc = p->relocs;
 	(*cs_reloc)->lobj.gpu_offset = (u64)relocs_chunk->kdata[idx + 3] << 32;
 	(*cs_reloc)->lobj.gpu_offset |= relocs_chunk->kdata[idx + 0];
 	return 0;
@@ -562,7 +562,7 @@ static int r600_packet3_check(struct radeon_cs_parser *p,
 						return -EINVAL;
 					}
 					ib[idx+1+i] = track->cb_color0_base_last;
-					printk_once(KERN_WARNING "You have old & broken userspace "
+					printk_once(KERN_WARNING "radeon: You have old & broken userspace "
 						"please consider updating mesa & xf86-video-ati\n");
 				} else {
 					r = r600_cs_packet_next_reloc(p, &reloc);
@@ -799,7 +799,7 @@ static int r600_cs_parser_relocs_legacy(struct radeon_cs_parser *p)
 	if (p->chunk_relocs_idx == -1) {
 		return 0;
 	}
-	p->relocs = kcalloc(1, sizeof(struct radeon_cs_reloc), GFP_KERNEL);
+	p->relocs = kzalloc(sizeof(struct radeon_cs_reloc), GFP_KERNEL);
 	if (p->relocs == NULL) {
 		return -ENOMEM;
 	}

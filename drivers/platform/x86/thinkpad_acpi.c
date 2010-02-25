@@ -21,8 +21,8 @@
  *  02110-1301, USA.
  */
 
-#define TPACPI_VERSION "0.23"
-#define TPACPI_SYSFS_VERSION 0x020600
+#define TPACPI_VERSION "0.24"
+#define TPACPI_SYSFS_VERSION 0x020700
 
 /*
  *  Changelog:
@@ -77,6 +77,10 @@
 #include <linux/jiffies.h>
 #include <linux/workqueue.h>
 
+#include <sound/core.h>
+#include <sound/control.h>
+#include <sound/initval.h>
+
 #include <acpi/acpi_drivers.h>
 
 #include <linux/pci_ids.h>
@@ -118,9 +122,7 @@ enum {
 };
 
 /* ACPI HIDs */
-#define TPACPI_ACPI_IBM_HKEY_HID	"IBM0068"
-#define TPACPI_ACPI_LENOVO_HKEY_HID	"LEN0068"
-#define TPACPI_ACPI_EC_HID		"PNP0C09"
+#define TPACPI_ACPI_HKEY_HID		"IBM0068"
 
 /* Input IDs */
 #define TPACPI_HKEY_INPUT_PRODUCT	0x5054 /* "TP" */
@@ -234,6 +236,7 @@ enum tpacpi_hkey_event_t {
 #define TPACPI_DBG_HKEY		0x0008
 #define TPACPI_DBG_FAN		0x0010
 #define TPACPI_DBG_BRGHT	0x0020
+#define TPACPI_DBG_MIXER	0x0040
 
 #define onoff(status, bit) ((status) & (1 << (bit)) ? "on" : "off")
 #define enabled(status, bit) ((status) & (1 << (bit)) ? "enabled" : "disabled")
@@ -283,7 +286,6 @@ struct ibm_init_struct {
 	char param[32];
 
 	int (*init) (struct ibm_init_struct *);
-	mode_t base_procfs_mode;
 	struct ibm_struct *data;
 };
 
@@ -302,6 +304,7 @@ static struct {
 	u32 fan_ctrl_status_undef:1;
 	u32 second_fan:1;
 	u32 beep_needs_two_args:1;
+	u32 mixer_no_level_control:1;
 	u32 input_device_registered:1;
 	u32 platform_drv_registered:1;
 	u32 platform_drv_attrs_registered:1;
@@ -313,6 +316,7 @@ static struct {
 
 static struct {
 	u16 hotkey_mask_ff:1;
+	u16 volume_ctrl_forbidden:1;
 } tp_warned;
 
 struct thinkpad_id_data {
@@ -427,6 +431,12 @@ static void tpacpi_log_usertask(const char * const what)
 	{ .vendor = PCI_VENDOR_ID_LENOVO,	\
 	  .bios = TPID(__id1, __id2),		\
 	  .ec = TPACPI_MATCH_ANY,		\
+	  .quirks = (__quirk) }
+
+#define TPACPI_QEC_LNV(__id1, __id2, __quirk)	\
+	{ .vendor = PCI_VENDOR_ID_LENOVO,	\
+	  .bios = TPACPI_MATCH_ANY,		\
+	  .ec = TPID(__id1, __id2),		\
 	  .quirks = (__quirk) }
 
 struct tpacpi_quirk {
@@ -1008,11 +1018,8 @@ static int parse_strtoul(const char *buf,
 {
 	char *endp;
 
-	while (*buf && isspace(*buf))
-		buf++;
-	*value = simple_strtoul(buf, &endp, 0);
-	while (*endp && isspace(*endp))
-		endp++;
+	*value = simple_strtoul(skip_spaces(buf), &endp, 0);
+	endp = skip_spaces(endp);
 	if (*endp || *value > max)
 		return -EINVAL;
 
@@ -1089,7 +1096,7 @@ static int __init tpacpi_check_std_acpi_brightness_support(void)
 	 */
 
 	status = acpi_walk_namespace(ACPI_TYPE_METHOD, vid_handle, 3,
-				     tpacpi_acpi_walk_find_bcl, NULL,
+				     tpacpi_acpi_walk_find_bcl, NULL, NULL,
 				     &bcl_ptr);
 
 	if (ACPI_SUCCESS(status) && bcl_levels > 2) {
@@ -1390,8 +1397,7 @@ static ssize_t tpacpi_rfk_sysfs_enable_store(const enum tpacpi_rfk_id id,
 }
 
 /* procfs -------------------------------------------------------------- */
-static int tpacpi_rfk_procfs_read(const enum tpacpi_rfk_id id,
-				  struct seq_file *m)
+static int tpacpi_rfk_procfs_read(const enum tpacpi_rfk_id id, struct seq_file *m)
 {
 	if (id >= TPACPI_RFK_SW_MAX)
 		seq_printf(m, "status:\t\tnot supported\n");
@@ -2076,7 +2082,6 @@ static struct attribute_set *hotkey_dev_attributes;
 
 static void tpacpi_driver_event(const unsigned int hkey_event);
 static void hotkey_driver_event(const unsigned int scancode);
-static void hotkey_poll_setup(const bool may_warn);
 
 /* HKEY.MHKG() return bits */
 #define TP_HOTKEY_TABLET_MASK (1 << 3)
@@ -2259,8 +2264,6 @@ static int tpacpi_hotkey_driver_mask_set(const u32 mask)
 
 	rc = hotkey_mask_set((hotkey_acpi_mask | hotkey_driver_mask) &
 							~hotkey_source_mask);
-	hotkey_poll_setup(true);
-
 	mutex_unlock(&hotkey_mutex);
 
 	return rc;
@@ -2545,7 +2548,7 @@ static void hotkey_poll_stop_sync(void)
 }
 
 /* call with hotkey_mutex held */
-static void hotkey_poll_setup(const bool may_warn)
+static void hotkey_poll_setup(bool may_warn)
 {
 	const u32 poll_driver_mask = hotkey_driver_mask & hotkey_source_mask;
 	const u32 poll_user_mask = hotkey_user_mask & hotkey_source_mask;
@@ -2576,7 +2579,7 @@ static void hotkey_poll_setup(const bool may_warn)
 	}
 }
 
-static void hotkey_poll_setup_safe(const bool may_warn)
+static void hotkey_poll_setup_safe(bool may_warn)
 {
 	mutex_lock(&hotkey_mutex);
 	hotkey_poll_setup(may_warn);
@@ -2594,11 +2597,7 @@ static void hotkey_poll_set_freq(unsigned int freq)
 
 #else /* CONFIG_THINKPAD_ACPI_HOTKEY_POLL */
 
-static void hotkey_poll_setup(const bool __unused)
-{
-}
-
-static void hotkey_poll_setup_safe(const bool __unused)
+static void hotkey_poll_setup_safe(bool __unused)
 {
 }
 
@@ -2608,11 +2607,16 @@ static int hotkey_inputdev_open(struct input_dev *dev)
 {
 	switch (tpacpi_lifecycle) {
 	case TPACPI_LIFE_INIT:
-	case TPACPI_LIFE_RUNNING:
-		hotkey_poll_setup_safe(false);
+		/*
+		 * hotkey_init will call hotkey_poll_setup_safe
+		 * at the appropriate moment
+		 */
 		return 0;
 	case TPACPI_LIFE_EXITING:
 		return -EBUSY;
+	case TPACPI_LIFE_RUNNING:
+		hotkey_poll_setup_safe(false);
+		return 0;
 	}
 
 	/* Should only happen if tpacpi_lifecycle is corrupt */
@@ -2623,7 +2627,7 @@ static int hotkey_inputdev_open(struct input_dev *dev)
 static void hotkey_inputdev_close(struct input_dev *dev)
 {
 	/* disable hotkey polling when possible */
-	if (tpacpi_lifecycle != TPACPI_LIFE_EXITING &&
+	if (tpacpi_lifecycle == TPACPI_LIFE_RUNNING &&
 	    !(hotkey_source_mask & hotkey_driver_mask))
 		hotkey_poll_setup_safe(false);
 }
@@ -3651,19 +3655,13 @@ static void hotkey_notify(struct ibm_struct *ibm, u32 event)
 			break;
 		case 3:
 			/* 0x3000-0x3FFF: bay-related wakeups */
-			switch (hkey) {
-			case TP_HKEY_EV_BAYEJ_ACK:
+			if (hkey == TP_HKEY_EV_BAYEJ_ACK) {
 				hotkey_autosleep_ack = 1;
 				printk(TPACPI_INFO
 				       "bay ejected\n");
 				hotkey_wakeup_hotunplug_complete_notify_change();
 				known_ev = true;
-				break;
-			case TP_HKEY_EV_OPTDRV_EJ:
-				/* FIXME: kick libata if SATA link offline */
-				known_ev = true;
-				break;
-			default:
+			} else {
 				known_ev = false;
 			}
 			break;
@@ -3842,8 +3840,7 @@ errexit:
 }
 
 static const struct acpi_device_id ibm_htk_device_ids[] = {
-	{TPACPI_ACPI_IBM_HKEY_HID, 0},
-	{TPACPI_ACPI_LENOVO_HKEY_HID, 0},
+	{TPACPI_ACPI_HKEY_HID, 0},
 	{"", 0},
 };
 
@@ -3873,7 +3870,7 @@ enum {
 	TP_ACPI_BLUETOOTH_HWPRESENT	= 0x01,	/* Bluetooth hw available */
 	TP_ACPI_BLUETOOTH_RADIOSSW	= 0x02,	/* Bluetooth radio enabled */
 	TP_ACPI_BLUETOOTH_RESUMECTRL	= 0x04,	/* Bluetooth state at resume:
-						   0 = disable, 1 = enable */
+						   off / last state */
 };
 
 enum {
@@ -3919,11 +3916,10 @@ static int bluetooth_set_status(enum tpacpi_rfkill_state state)
 	}
 #endif
 
+	/* We make sure to keep TP_ACPI_BLUETOOTH_RESUMECTRL off */
+	status = TP_ACPI_BLUETOOTH_RESUMECTRL;
 	if (state == TPACPI_RFK_RADIO_ON)
-		status = TP_ACPI_BLUETOOTH_RADIOSSW
-			  | TP_ACPI_BLUETOOTH_RESUMECTRL;
-	else
-		status = 0;
+		status |= TP_ACPI_BLUETOOTH_RADIOSSW;
 
 	if (!acpi_evalf(hkey_handle, NULL, "SBDC", "vd", status))
 		return -EIO;
@@ -4074,7 +4070,7 @@ enum {
 	TP_ACPI_WANCARD_HWPRESENT	= 0x01,	/* Wan hw available */
 	TP_ACPI_WANCARD_RADIOSSW	= 0x02,	/* Wan radio enabled */
 	TP_ACPI_WANCARD_RESUMECTRL	= 0x04,	/* Wan state at resume:
-						   0 = disable, 1 = enable */
+						   off / last state */
 };
 
 #define TPACPI_RFK_WWAN_SW_NAME		"tpacpi_wwan_sw"
@@ -4111,11 +4107,10 @@ static int wan_set_status(enum tpacpi_rfkill_state state)
 	}
 #endif
 
+	/* We make sure to set TP_ACPI_WANCARD_RESUMECTRL */
+	status = TP_ACPI_WANCARD_RESUMECTRL;
 	if (state == TPACPI_RFK_RADIO_ON)
-		status = TP_ACPI_WANCARD_RADIOSSW
-			 | TP_ACPI_WANCARD_RESUMECTRL;
-	else
-		status = 0;
+		status |= TP_ACPI_WANCARD_RADIOSSW;
 
 	if (!acpi_evalf(hkey_handle, NULL, "SWAN", "vd", status))
 		return -EIO;
@@ -4624,10 +4619,6 @@ static int video_read(struct seq_file *m)
 		return 0;
 	}
 
-	/* Even reads can crash X.org, so... */
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	status = video_outputsw_get();
 	if (status < 0)
 		return status;
@@ -4660,10 +4651,6 @@ static int video_write(char *buf)
 
 	if (video_supported == TPACPI_VIDEO_NONE)
 		return -ENODEV;
-
-	/* Even reads can crash X.org, let alone writes... */
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 
 	enable = 0;
 	disable = 0;
@@ -6146,13 +6133,13 @@ static const struct tpacpi_quirk brightness_quirk_table[] __initconst = {
 	TPACPI_Q_IBM('1', 'Y', TPACPI_BRGHT_Q_EC),	/* T43/p ATI */
 
 	/* Models with ATI GPUs that can use ECNVRAM */
-	TPACPI_Q_IBM('1', 'R', TPACPI_BRGHT_Q_EC),	/* R50,51 T40-42 */
+	TPACPI_Q_IBM('1', 'R', TPACPI_BRGHT_Q_EC),
 	TPACPI_Q_IBM('1', 'Q', TPACPI_BRGHT_Q_ASK|TPACPI_BRGHT_Q_EC),
-	TPACPI_Q_IBM('7', '6', TPACPI_BRGHT_Q_EC),	/* R52 */
+	TPACPI_Q_IBM('7', '6', TPACPI_BRGHT_Q_ASK|TPACPI_BRGHT_Q_EC),
 	TPACPI_Q_IBM('7', '8', TPACPI_BRGHT_Q_ASK|TPACPI_BRGHT_Q_EC),
 
 	/* Models with Intel Extreme Graphics 2 */
-	TPACPI_Q_IBM('1', 'U', TPACPI_BRGHT_Q_NOEC),	/* X40 */
+	TPACPI_Q_IBM('1', 'U', TPACPI_BRGHT_Q_NOEC),
 	TPACPI_Q_IBM('1', 'V', TPACPI_BRGHT_Q_ASK|TPACPI_BRGHT_Q_EC),
 	TPACPI_Q_IBM('1', 'W', TPACPI_BRGHT_Q_ASK|TPACPI_BRGHT_Q_EC),
 
@@ -6379,20 +6366,573 @@ static struct ibm_struct brightness_driver_data = {
  * Volume subdriver
  */
 
-static int volume_offset = 0x30;
+/*
+ * IBM ThinkPads have a simple volume controller with MUTE gating.
+ * Very early Lenovo ThinkPads follow the IBM ThinkPad spec.
+ *
+ * Since the *61 series (and probably also the later *60 series), Lenovo
+ * ThinkPads only implement the MUTE gate.
+ *
+ * EC register 0x30
+ *   Bit 6: MUTE (1 mutes sound)
+ *   Bit 3-0: Volume
+ *   Other bits should be zero as far as we know.
+ *
+ * This is also stored in CMOS NVRAM, byte 0x60, bit 6 (MUTE), and
+ * bits 3-0 (volume).  Other bits in NVRAM may have other functions,
+ * such as bit 7 which is used to detect repeated presses of MUTE,
+ * and we leave them unchanged.
+ */
+
+#ifdef CONFIG_THINKPAD_ACPI_ALSA_SUPPORT
+
+#define TPACPI_ALSA_DRVNAME  "ThinkPad EC"
+#define TPACPI_ALSA_SHRTNAME "ThinkPad Console Audio Control"
+#define TPACPI_ALSA_MIXERNAME TPACPI_ALSA_SHRTNAME
+
+static int alsa_index = ~((1 << (SNDRV_CARDS - 3)) - 1); /* last three slots */
+static char *alsa_id = "ThinkPadEC";
+static int alsa_enable = SNDRV_DEFAULT_ENABLE1;
+
+struct tpacpi_alsa_data {
+	struct snd_card *card;
+	struct snd_ctl_elem_id *ctl_mute_id;
+	struct snd_ctl_elem_id *ctl_vol_id;
+};
+
+static struct snd_card *alsa_card;
+
+enum {
+	TP_EC_AUDIO = 0x30,
+
+	/* TP_EC_AUDIO bits */
+	TP_EC_AUDIO_MUTESW = 6,
+
+	/* TP_EC_AUDIO bitmasks */
+	TP_EC_AUDIO_LVL_MSK = 0x0F,
+	TP_EC_AUDIO_MUTESW_MSK = (1 << TP_EC_AUDIO_MUTESW),
+
+	/* Maximum volume */
+	TP_EC_VOLUME_MAX = 14,
+};
+
+enum tpacpi_volume_access_mode {
+	TPACPI_VOL_MODE_AUTO = 0,	/* Not implemented yet */
+	TPACPI_VOL_MODE_EC,		/* Pure EC control */
+	TPACPI_VOL_MODE_UCMS_STEP,	/* UCMS step-based control: N/A */
+	TPACPI_VOL_MODE_ECNVRAM,	/* EC control w/ NVRAM store */
+	TPACPI_VOL_MODE_MAX
+};
+
+enum tpacpi_volume_capabilities {
+	TPACPI_VOL_CAP_AUTO = 0,	/* Use white/blacklist */
+	TPACPI_VOL_CAP_VOLMUTE,		/* Output vol and mute */
+	TPACPI_VOL_CAP_MUTEONLY,	/* Output mute only */
+	TPACPI_VOL_CAP_MAX
+};
+
+static enum tpacpi_volume_access_mode volume_mode =
+	TPACPI_VOL_MODE_MAX;
+
+static enum tpacpi_volume_capabilities volume_capabilities;
+static int volume_control_allowed;
+
+/*
+ * Used to syncronize writers to TP_EC_AUDIO and
+ * TP_NVRAM_ADDR_MIXER, as we need to do read-modify-write
+ */
+static struct mutex volume_mutex;
+
+static void tpacpi_volume_checkpoint_nvram(void)
+{
+	u8 lec = 0;
+	u8 b_nvram;
+	u8 ec_mask;
+
+	if (volume_mode != TPACPI_VOL_MODE_ECNVRAM)
+		return;
+	if (!volume_control_allowed)
+		return;
+
+	vdbg_printk(TPACPI_DBG_MIXER,
+		"trying to checkpoint mixer state to NVRAM...\n");
+
+	if (tp_features.mixer_no_level_control)
+		ec_mask = TP_EC_AUDIO_MUTESW_MSK;
+	else
+		ec_mask = TP_EC_AUDIO_MUTESW_MSK | TP_EC_AUDIO_LVL_MSK;
+
+	if (mutex_lock_killable(&volume_mutex) < 0)
+		return;
+
+	if (unlikely(!acpi_ec_read(TP_EC_AUDIO, &lec)))
+		goto unlock;
+	lec &= ec_mask;
+	b_nvram = nvram_read_byte(TP_NVRAM_ADDR_MIXER);
+
+	if (lec != (b_nvram & ec_mask)) {
+		/* NVRAM needs update */
+		b_nvram &= ~ec_mask;
+		b_nvram |= lec;
+		nvram_write_byte(b_nvram, TP_NVRAM_ADDR_MIXER);
+		dbg_printk(TPACPI_DBG_MIXER,
+			   "updated NVRAM mixer status to 0x%02x (0x%02x)\n",
+			   (unsigned int) lec, (unsigned int) b_nvram);
+	} else {
+		vdbg_printk(TPACPI_DBG_MIXER,
+			   "NVRAM mixer status already is 0x%02x (0x%02x)\n",
+			   (unsigned int) lec, (unsigned int) b_nvram);
+	}
+
+unlock:
+	mutex_unlock(&volume_mutex);
+}
+
+static int volume_get_status_ec(u8 *status)
+{
+	u8 s;
+
+	if (!acpi_ec_read(TP_EC_AUDIO, &s))
+		return -EIO;
+
+	*status = s;
+
+	dbg_printk(TPACPI_DBG_MIXER, "status 0x%02x\n", s);
+
+	return 0;
+}
+
+static int volume_get_status(u8 *status)
+{
+	return volume_get_status_ec(status);
+}
+
+static int volume_set_status_ec(const u8 status)
+{
+	if (!acpi_ec_write(TP_EC_AUDIO, status))
+		return -EIO;
+
+	dbg_printk(TPACPI_DBG_MIXER, "set EC mixer to 0x%02x\n", status);
+
+	return 0;
+}
+
+static int volume_set_status(const u8 status)
+{
+	return volume_set_status_ec(status);
+}
+
+static int volume_set_mute_ec(const bool mute)
+{
+	int rc;
+	u8 s, n;
+
+	if (mutex_lock_killable(&volume_mutex) < 0)
+		return -EINTR;
+
+	rc = volume_get_status_ec(&s);
+	if (rc)
+		goto unlock;
+
+	n = (mute) ? s | TP_EC_AUDIO_MUTESW_MSK :
+		     s & ~TP_EC_AUDIO_MUTESW_MSK;
+
+	if (n != s)
+		rc = volume_set_status_ec(n);
+
+unlock:
+	mutex_unlock(&volume_mutex);
+	return rc;
+}
+
+static int volume_set_mute(const bool mute)
+{
+	dbg_printk(TPACPI_DBG_MIXER, "trying to %smute\n",
+		   (mute) ? "" : "un");
+	return volume_set_mute_ec(mute);
+}
+
+static int volume_set_volume_ec(const u8 vol)
+{
+	int rc;
+	u8 s, n;
+
+	if (vol > TP_EC_VOLUME_MAX)
+		return -EINVAL;
+
+	if (mutex_lock_killable(&volume_mutex) < 0)
+		return -EINTR;
+
+	rc = volume_get_status_ec(&s);
+	if (rc)
+		goto unlock;
+
+	n = (s & ~TP_EC_AUDIO_LVL_MSK) | vol;
+
+	if (n != s)
+		rc = volume_set_status_ec(n);
+
+unlock:
+	mutex_unlock(&volume_mutex);
+	return rc;
+}
+
+static int volume_set_volume(const u8 vol)
+{
+	dbg_printk(TPACPI_DBG_MIXER,
+		   "trying to set volume level to %hu\n", vol);
+	return volume_set_volume_ec(vol);
+}
+
+static void volume_alsa_notify_change(void)
+{
+	struct tpacpi_alsa_data *d;
+
+	if (alsa_card && alsa_card->private_data) {
+		d = alsa_card->private_data;
+		if (d->ctl_mute_id)
+			snd_ctl_notify(alsa_card,
+					SNDRV_CTL_EVENT_MASK_VALUE,
+					d->ctl_mute_id);
+		if (d->ctl_vol_id)
+			snd_ctl_notify(alsa_card,
+					SNDRV_CTL_EVENT_MASK_VALUE,
+					d->ctl_vol_id);
+	}
+}
+
+static int volume_alsa_vol_info(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = TP_EC_VOLUME_MAX;
+	return 0;
+}
+
+static int volume_alsa_vol_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	u8 s;
+	int rc;
+
+	rc = volume_get_status(&s);
+	if (rc < 0)
+		return rc;
+
+	ucontrol->value.integer.value[0] = s & TP_EC_AUDIO_LVL_MSK;
+	return 0;
+}
+
+static int volume_alsa_vol_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	return volume_set_volume(ucontrol->value.integer.value[0]);
+}
+
+#define volume_alsa_mute_info snd_ctl_boolean_mono_info
+
+static int volume_alsa_mute_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	u8 s;
+	int rc;
+
+	rc = volume_get_status(&s);
+	if (rc < 0)
+		return rc;
+
+	ucontrol->value.integer.value[0] =
+				(s & TP_EC_AUDIO_MUTESW_MSK) ? 0 : 1;
+	return 0;
+}
+
+static int volume_alsa_mute_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	return volume_set_mute(!ucontrol->value.integer.value[0]);
+}
+
+static struct snd_kcontrol_new volume_alsa_control_vol __devinitdata = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "Console Playback Volume",
+	.index = 0,
+	.access = SNDRV_CTL_ELEM_ACCESS_READ,
+	.info = volume_alsa_vol_info,
+	.get = volume_alsa_vol_get,
+};
+
+static struct snd_kcontrol_new volume_alsa_control_mute __devinitdata = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "Console Playback Switch",
+	.index = 0,
+	.access = SNDRV_CTL_ELEM_ACCESS_READ,
+	.info = volume_alsa_mute_info,
+	.get = volume_alsa_mute_get,
+};
+
+static void volume_suspend(pm_message_t state)
+{
+	tpacpi_volume_checkpoint_nvram();
+}
+
+static void volume_resume(void)
+{
+	volume_alsa_notify_change();
+}
+
+static void volume_shutdown(void)
+{
+	tpacpi_volume_checkpoint_nvram();
+}
+
+static void volume_exit(void)
+{
+	if (alsa_card) {
+		snd_card_free(alsa_card);
+		alsa_card = NULL;
+	}
+
+	tpacpi_volume_checkpoint_nvram();
+}
+
+static int __init volume_create_alsa_mixer(void)
+{
+	struct snd_card *card;
+	struct tpacpi_alsa_data *data;
+	struct snd_kcontrol *ctl_vol;
+	struct snd_kcontrol *ctl_mute;
+	int rc;
+
+	rc = snd_card_create(alsa_index, alsa_id, THIS_MODULE,
+			    sizeof(struct tpacpi_alsa_data), &card);
+	if (rc < 0 || !card) {
+		printk(TPACPI_ERR
+			"Failed to create ALSA card structures: %d\n", rc);
+		return 1;
+	}
+
+	BUG_ON(!card->private_data);
+	data = card->private_data;
+	data->card = card;
+
+	strlcpy(card->driver, TPACPI_ALSA_DRVNAME,
+		sizeof(card->driver));
+	strlcpy(card->shortname, TPACPI_ALSA_SHRTNAME,
+		sizeof(card->shortname));
+	snprintf(card->mixername, sizeof(card->mixername), "ThinkPad EC %s",
+		 (thinkpad_id.ec_version_str) ?
+			thinkpad_id.ec_version_str : "(unknown)");
+	snprintf(card->longname, sizeof(card->longname),
+		 "%s at EC reg 0x%02x, fw %s", card->shortname, TP_EC_AUDIO,
+		 (thinkpad_id.ec_version_str) ?
+			thinkpad_id.ec_version_str : "unknown");
+
+	if (volume_control_allowed) {
+		volume_alsa_control_vol.put = volume_alsa_vol_put;
+		volume_alsa_control_vol.access =
+				SNDRV_CTL_ELEM_ACCESS_READWRITE;
+
+		volume_alsa_control_mute.put = volume_alsa_mute_put;
+		volume_alsa_control_mute.access =
+				SNDRV_CTL_ELEM_ACCESS_READWRITE;
+	}
+
+	if (!tp_features.mixer_no_level_control) {
+		ctl_vol = snd_ctl_new1(&volume_alsa_control_vol, NULL);
+		rc = snd_ctl_add(card, ctl_vol);
+		if (rc < 0) {
+			printk(TPACPI_ERR
+				"Failed to create ALSA volume control: %d\n",
+				rc);
+			goto err_exit;
+		}
+		data->ctl_vol_id = &ctl_vol->id;
+	}
+
+	ctl_mute = snd_ctl_new1(&volume_alsa_control_mute, NULL);
+	rc = snd_ctl_add(card, ctl_mute);
+	if (rc < 0) {
+		printk(TPACPI_ERR "Failed to create ALSA mute control: %d\n",
+			rc);
+		goto err_exit;
+	}
+	data->ctl_mute_id = &ctl_mute->id;
+
+	snd_card_set_dev(card, &tpacpi_pdev->dev);
+	rc = snd_card_register(card);
+	if (rc < 0) {
+		printk(TPACPI_ERR "Failed to register ALSA card: %d\n", rc);
+		goto err_exit;
+	}
+
+	alsa_card = card;
+	return 0;
+
+err_exit:
+	snd_card_free(card);
+	return 1;
+}
+
+#define TPACPI_VOL_Q_MUTEONLY	0x0001	/* Mute-only control available */
+#define TPACPI_VOL_Q_LEVEL	0x0002  /* Volume control available */
+
+static const struct tpacpi_quirk volume_quirk_table[] __initconst = {
+	/* Whitelist volume level on all IBM by default */
+	{ .vendor = PCI_VENDOR_ID_IBM,
+	  .bios   = TPACPI_MATCH_ANY,
+	  .ec     = TPACPI_MATCH_ANY,
+	  .quirks = TPACPI_VOL_Q_LEVEL },
+
+	/* Lenovo models with volume control (needs confirmation) */
+	TPACPI_QEC_LNV('7', 'C', TPACPI_VOL_Q_LEVEL), /* R60/i */
+	TPACPI_QEC_LNV('7', 'E', TPACPI_VOL_Q_LEVEL), /* R60e/i */
+	TPACPI_QEC_LNV('7', '9', TPACPI_VOL_Q_LEVEL), /* T60/p */
+	TPACPI_QEC_LNV('7', 'B', TPACPI_VOL_Q_LEVEL), /* X60/s */
+	TPACPI_QEC_LNV('7', 'J', TPACPI_VOL_Q_LEVEL), /* X60t */
+	TPACPI_QEC_LNV('7', '7', TPACPI_VOL_Q_LEVEL), /* Z60 */
+	TPACPI_QEC_LNV('7', 'F', TPACPI_VOL_Q_LEVEL), /* Z61 */
+
+	/* Whitelist mute-only on all Lenovo by default */
+	{ .vendor = PCI_VENDOR_ID_LENOVO,
+	  .bios   = TPACPI_MATCH_ANY,
+	  .ec	  = TPACPI_MATCH_ANY,
+	  .quirks = TPACPI_VOL_Q_MUTEONLY }
+};
+
+static int __init volume_init(struct ibm_init_struct *iibm)
+{
+	unsigned long quirks;
+	int rc;
+
+	vdbg_printk(TPACPI_DBG_INIT, "initializing volume subdriver\n");
+
+	mutex_init(&volume_mutex);
+
+	/*
+	 * Check for module parameter bogosity, note that we
+	 * init volume_mode to TPACPI_VOL_MODE_MAX in order to be
+	 * able to detect "unspecified"
+	 */
+	if (volume_mode > TPACPI_VOL_MODE_MAX)
+		return -EINVAL;
+
+	if (volume_mode == TPACPI_VOL_MODE_UCMS_STEP) {
+		printk(TPACPI_ERR
+			"UCMS step volume mode not implemented, "
+			"please contact %s\n", TPACPI_MAIL);
+		return 1;
+	}
+
+	if (volume_capabilities >= TPACPI_VOL_CAP_MAX)
+		return -EINVAL;
+
+	/*
+	 * The ALSA mixer is our primary interface.
+	 * When disabled, don't install the subdriver at all
+	 */
+	if (!alsa_enable) {
+		vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+			    "ALSA mixer disabled by parameter, "
+			    "not loading volume subdriver...\n");
+		return 1;
+	}
+
+	quirks = tpacpi_check_quirks(volume_quirk_table,
+				     ARRAY_SIZE(volume_quirk_table));
+
+	switch (volume_capabilities) {
+	case TPACPI_VOL_CAP_AUTO:
+		if (quirks & TPACPI_VOL_Q_MUTEONLY)
+			tp_features.mixer_no_level_control = 1;
+		else if (quirks & TPACPI_VOL_Q_LEVEL)
+			tp_features.mixer_no_level_control = 0;
+		else
+			return 1; /* no mixer */
+		break;
+	case TPACPI_VOL_CAP_VOLMUTE:
+		tp_features.mixer_no_level_control = 0;
+		break;
+	case TPACPI_VOL_CAP_MUTEONLY:
+		tp_features.mixer_no_level_control = 1;
+		break;
+	default:
+		return 1;
+	}
+
+	if (volume_capabilities != TPACPI_VOL_CAP_AUTO)
+		dbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+				"using user-supplied volume_capabilities=%d\n",
+				volume_capabilities);
+
+	if (volume_mode == TPACPI_VOL_MODE_AUTO ||
+	    volume_mode == TPACPI_VOL_MODE_MAX) {
+		volume_mode = TPACPI_VOL_MODE_ECNVRAM;
+
+		dbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+				"driver auto-selected volume_mode=%d\n",
+				volume_mode);
+	} else {
+		dbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+				"using user-supplied volume_mode=%d\n",
+				volume_mode);
+	}
+
+	vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+			"mute is supported, volume control is %s\n",
+			str_supported(!tp_features.mixer_no_level_control));
+
+	rc = volume_create_alsa_mixer();
+	if (rc) {
+		printk(TPACPI_ERR
+			"Could not create the ALSA mixer interface\n");
+		return rc;
+	}
+
+	printk(TPACPI_INFO
+		"Console audio control enabled, mode: %s\n",
+		(volume_control_allowed) ?
+			"override (read/write)" :
+			"monitor (read only)");
+
+	vdbg_printk(TPACPI_DBG_INIT | TPACPI_DBG_MIXER,
+		"registering volume hotkeys as change notification\n");
+	tpacpi_hotkey_driver_mask_set(hotkey_driver_mask
+			| TP_ACPI_HKEY_VOLUP_MASK
+			| TP_ACPI_HKEY_VOLDWN_MASK
+			| TP_ACPI_HKEY_MUTE_MASK);
+
+	return 0;
+}
 
 static int volume_read(struct seq_file *m)
 {
-	u8 level;
+	u8 status;
 
-	if (!acpi_ec_read(volume_offset, &level)) {
+	if (volume_get_status(&status) < 0) {
 		seq_printf(m, "level:\t\tunreadable\n");
 	} else {
-		seq_printf(m, "level:\t\t%d\n", level & 0xf);
-		seq_printf(m, "mute:\t\t%s\n", onoff(level, 6));
-		seq_printf(m, "commands:\tup, down, mute\n");
-		seq_printf(m, "commands:\tlevel <level>"
-			       " (<level> is 0-15)\n");
+		if (tp_features.mixer_no_level_control)
+			seq_printf(m, "level:\t\tunsupported\n");
+		else
+			seq_printf(m, "level:\t\t%d\n",
+					status & TP_EC_AUDIO_LVL_MSK);
+
+		seq_printf(m, "mute:\t\t%s\n",
+				onoff(status, TP_EC_AUDIO_MUTESW));
+
+		if (volume_control_allowed) {
+			seq_printf(m, "commands:\tunmute, mute\n");
+			if (!tp_features.mixer_no_level_control) {
+				seq_printf(m,
+					       "commands:\tup, down\n");
+				seq_printf(m,
+					       "commands:\tlevel <level>"
+					       " (<level> is 0-%d)\n",
+					       TP_EC_VOLUME_MAX);
+			}
+		}
 	}
 
 	return 0;
@@ -6400,78 +6940,110 @@ static int volume_read(struct seq_file *m)
 
 static int volume_write(char *buf)
 {
-	int cmos_cmd, inc, i;
-	u8 level, mute;
-	int new_level, new_mute;
+	u8 s;
+	u8 new_level, new_mute;
+	int l;
 	char *cmd;
+	int rc;
 
-	while ((cmd = next_cmd(&buf))) {
-		if (!acpi_ec_read(volume_offset, &level))
-			return -EIO;
-		new_mute = mute = level & 0x40;
-		new_level = level = level & 0xf;
-
-		if (strlencmp(cmd, "up") == 0) {
-			if (mute)
-				new_mute = 0;
-			else
-				new_level = level == 15 ? 15 : level + 1;
-		} else if (strlencmp(cmd, "down") == 0) {
-			if (mute)
-				new_mute = 0;
-			else
-				new_level = level == 0 ? 0 : level - 1;
-		} else if (sscanf(cmd, "level %d", &new_level) == 1 &&
-			   new_level >= 0 && new_level <= 15) {
-			/* new_level set */
-		} else if (strlencmp(cmd, "mute") == 0) {
-			new_mute = 0x40;
-		} else
-			return -EINVAL;
-
-		if (new_level != level) {
-			/* mute doesn't change */
-
-			cmos_cmd = (new_level > level) ?
-					TP_CMOS_VOLUME_UP : TP_CMOS_VOLUME_DOWN;
-			inc = new_level > level ? 1 : -1;
-
-			if (mute && (issue_thinkpad_cmos_command(cmos_cmd) ||
-				     !acpi_ec_write(volume_offset, level)))
-				return -EIO;
-
-			for (i = level; i != new_level; i += inc)
-				if (issue_thinkpad_cmos_command(cmos_cmd) ||
-				    !acpi_ec_write(volume_offset, i + inc))
-					return -EIO;
-
-			if (mute &&
-			    (issue_thinkpad_cmos_command(TP_CMOS_VOLUME_MUTE) ||
-			     !acpi_ec_write(volume_offset, new_level + mute))) {
-				return -EIO;
-			}
+	/*
+	 * We do allow volume control at driver startup, so that the
+	 * user can set initial state through the volume=... parameter hack.
+	 */
+	if (!volume_control_allowed && tpacpi_lifecycle != TPACPI_LIFE_INIT) {
+		if (unlikely(!tp_warned.volume_ctrl_forbidden)) {
+			tp_warned.volume_ctrl_forbidden = 1;
+			printk(TPACPI_NOTICE
+				"Console audio control in monitor mode, "
+				"changes are not allowed.\n");
+			printk(TPACPI_NOTICE
+				"Use the volume_control=1 module parameter "
+				"to enable volume control\n");
 		}
-
-		if (new_mute != mute) {
-			/* level doesn't change */
-
-			cmos_cmd = (new_mute) ?
-				   TP_CMOS_VOLUME_MUTE : TP_CMOS_VOLUME_UP;
-
-			if (issue_thinkpad_cmos_command(cmos_cmd) ||
-			    !acpi_ec_write(volume_offset, level + new_mute))
-				return -EIO;
-		}
+		return -EPERM;
 	}
 
-	return 0;
+	rc = volume_get_status(&s);
+	if (rc < 0)
+		return rc;
+
+	new_level = s & TP_EC_AUDIO_LVL_MSK;
+	new_mute  = s & TP_EC_AUDIO_MUTESW_MSK;
+
+	while ((cmd = next_cmd(&buf))) {
+		if (!tp_features.mixer_no_level_control) {
+			if (strlencmp(cmd, "up") == 0) {
+				if (new_mute)
+					new_mute = 0;
+				else if (new_level < TP_EC_VOLUME_MAX)
+					new_level++;
+				continue;
+			} else if (strlencmp(cmd, "down") == 0) {
+				if (new_mute)
+					new_mute = 0;
+				else if (new_level > 0)
+					new_level--;
+				continue;
+			} else if (sscanf(cmd, "level %u", &l) == 1 &&
+				   l >= 0 && l <= TP_EC_VOLUME_MAX) {
+					new_level = l;
+				continue;
+			}
+		}
+		if (strlencmp(cmd, "mute") == 0)
+			new_mute = TP_EC_AUDIO_MUTESW_MSK;
+		else if (strlencmp(cmd, "unmute") == 0)
+			new_mute = 0;
+		else
+			return -EINVAL;
+	}
+
+	if (tp_features.mixer_no_level_control) {
+		tpacpi_disclose_usertask("procfs volume", "%smute\n",
+					new_mute ? "" : "un");
+		rc = volume_set_mute(!!new_mute);
+	} else {
+		tpacpi_disclose_usertask("procfs volume",
+					"%smute and set level to %d\n",
+					new_mute ? "" : "un", new_level);
+		rc = volume_set_status(new_mute | new_level);
+	}
+	volume_alsa_notify_change();
+
+	return (rc == -EINTR) ? -ERESTARTSYS : rc;
 }
 
 static struct ibm_struct volume_driver_data = {
 	.name = "volume",
 	.read = volume_read,
 	.write = volume_write,
+	.exit = volume_exit,
+	.suspend = volume_suspend,
+	.resume = volume_resume,
+	.shutdown = volume_shutdown,
 };
+
+#else /* !CONFIG_THINKPAD_ACPI_ALSA_SUPPORT */
+
+#define alsa_card NULL
+
+static void inline volume_alsa_notify_change(void)
+{
+}
+
+static int __init volume_init(struct ibm_init_struct *iibm)
+{
+	printk(TPACPI_INFO
+		"volume: disabled as there is no ALSA support in this kernel\n");
+
+	return 1;
+}
+
+static struct ibm_struct volume_driver_data = {
+	.name = "volume",
+};
+
+#endif /* CONFIG_THINKPAD_ACPI_ALSA_SUPPORT */
 
 /*************************************************************************
  * Fan subdriver
@@ -6582,7 +7154,7 @@ static struct ibm_struct volume_driver_data = {
  * 	The speeds are stored on handles
  * 	(FANA:FAN9), (FANC:FANB), (FANE:FAND).
  *
- * 	There are three default speed sets, acessible as handles:
+ * 	There are three default speed sets, accessible as handles:
  * 	FS1L,FS1M,FS1H; FS2L,FS2M,FS2H; FS3L,FS3M,FS3H
  *
  * 	ACPI DSDT switches which set is in use depending on various
@@ -7767,9 +8339,15 @@ static void tpacpi_driver_event(const unsigned int hkey_event)
 			tpacpi_brightness_notify_change();
 		}
 	}
+	if (alsa_card) {
+		switch (hkey_event) {
+		case TP_HKEY_EV_VOL_UP:
+		case TP_HKEY_EV_VOL_DOWN:
+		case TP_HKEY_EV_VOL_MUTE:
+			volume_alsa_notify_change();
+		}
+	}
 }
-
-
 
 static void hotkey_driver_event(const unsigned int scancode)
 {
@@ -7899,10 +8477,9 @@ static int __init ibm_init(struct ibm_init_struct *iibm)
 		"%s installed\n", ibm->name);
 
 	if (ibm->read) {
-		mode_t mode = iibm->base_procfs_mode;
+		mode_t mode;
 
-		if (!mode)
-			mode = S_IRUGO;
+		mode = S_IRUGO;
 		if (ibm->write)
 			mode |= S_IWUSR;
 		entry = proc_create_data(ibm->name, mode, proc_dir,
@@ -8093,7 +8670,6 @@ static struct ibm_init_struct ibms_init[] __initdata = {
 #ifdef CONFIG_THINKPAD_ACPI_VIDEO
 	{
 		.init = video_init,
-		.base_procfs_mode = S_IRUSR,
 		.data = &video_driver_data,
 	},
 #endif
@@ -8125,6 +8701,7 @@ static struct ibm_init_struct ibms_init[] __initdata = {
 		.data = &brightness_driver_data,
 	},
 	{
+		.init = volume_init,
 		.data = &volume_driver_data,
 	},
 	{
@@ -8189,6 +8766,31 @@ module_param(hotkey_report_mode, uint, 0444);
 MODULE_PARM_DESC(hotkey_report_mode,
 		 "used for backwards compatibility with userspace, "
 		 "see documentation");
+
+#ifdef CONFIG_THINKPAD_ACPI_ALSA_SUPPORT
+module_param_named(volume_mode, volume_mode, uint, 0444);
+MODULE_PARM_DESC(volume_mode,
+		 "Selects volume control strategy: "
+		 "0=auto, 1=EC, 2=N/A, 3=EC+NVRAM");
+
+module_param_named(volume_capabilities, volume_capabilities, uint, 0444);
+MODULE_PARM_DESC(volume_capabilities,
+		 "Selects the mixer capabilites: "
+		 "0=auto, 1=volume and mute, 2=mute only");
+
+module_param_named(volume_control, volume_control_allowed, bool, 0444);
+MODULE_PARM_DESC(volume_control,
+		 "Enables software override for the console audio "
+		 "control when true");
+
+/* ALSA module API parameters */
+module_param_named(index, alsa_index, int, 0444);
+MODULE_PARM_DESC(index, "ALSA index for the ACPI EC Mixer");
+module_param_named(id, alsa_id, charp, 0444);
+MODULE_PARM_DESC(id, "ALSA id for the ACPI EC Mixer");
+module_param_named(enable, alsa_enable, bool, 0444);
+MODULE_PARM_DESC(enable, "Enable the ALSA interface for the ACPI EC Mixer");
+#endif /* CONFIG_THINKPAD_ACPI_ALSA_SUPPORT */
 
 #define TPACPI_PARAM(feature) \
 	module_param_call(feature, set_ibm_param, NULL, NULL, 0); \
@@ -8430,9 +9032,6 @@ static int __init thinkpad_acpi_module_init(void)
 			return ret;
 		}
 	}
-
-	tpacpi_lifecycle = TPACPI_LIFE_RUNNING;
-
 	ret = input_register_device(tpacpi_inputdev);
 	if (ret < 0) {
 		printk(TPACPI_ERR "unable to register input device\n");
@@ -8442,6 +9041,7 @@ static int __init thinkpad_acpi_module_init(void)
 		tp_features.input_device_registered = 1;
 	}
 
+	tpacpi_lifecycle = TPACPI_LIFE_RUNNING;
 	return 0;
 }
 

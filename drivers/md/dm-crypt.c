@@ -158,6 +158,9 @@ static void kcryptd_queue_crypt(struct dm_crypt_io *io);
  * plain: the initial vector is the 32-bit little-endian version of the sector
  *        number, padded with zeros if necessary.
  *
+ * plain64: the initial vector is the 64-bit little-endian version of the sector
+ *        number, padded with zeros if necessary.
+ *
  * essiv: "encrypted sector|salt initial vector", the sector number is
  *        encrypted with the bulk cipher using a salt as key. The salt
  *        should be derived from the bulk cipher's key via hashing.
@@ -176,6 +179,15 @@ static int crypt_iv_plain_gen(struct crypt_config *cc, u8 *iv, sector_t sector)
 {
 	memset(iv, 0, cc->iv_size);
 	*(u32 *)iv = cpu_to_le32(sector & 0xffffffff);
+
+	return 0;
+}
+
+static int crypt_iv_plain64_gen(struct crypt_config *cc, u8 *iv,
+				sector_t sector)
+{
+	memset(iv, 0, cc->iv_size);
+	*(u64 *)iv = cpu_to_le64(sector);
 
 	return 0;
 }
@@ -340,6 +352,10 @@ static int crypt_iv_null_gen(struct crypt_config *cc, u8 *iv, sector_t sector)
 
 static struct crypt_iv_operations crypt_iv_plain_ops = {
 	.generator = crypt_iv_plain_gen
+};
+
+static struct crypt_iv_operations crypt_iv_plain64_ops = {
+	.generator = crypt_iv_plain64_gen
 };
 
 static struct crypt_iv_operations crypt_iv_essiv_ops = {
@@ -973,14 +989,14 @@ static int crypt_set_key(struct crypt_config *cc, char *key)
 
 	set_bit(DM_CRYPT_KEY_VALID, &cc->flags);
 
-	return 0;
+	return crypto_ablkcipher_setkey(cc->tfm, cc->key, cc->key_size);
 }
 
 static int crypt_wipe_key(struct crypt_config *cc)
 {
 	clear_bit(DM_CRYPT_KEY_VALID, &cc->flags);
 	memset(&cc->key, 0, cc->key_size * sizeof(u8));
-	return 0;
+	return crypto_ablkcipher_setkey(cc->tfm, cc->key, cc->key_size);
 }
 
 /*
@@ -998,7 +1014,6 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	char *ivopts;
 	unsigned int key_size;
 	unsigned long long tmpll;
-	size_t iv_size_padding;
 
 	if (argc != 5) {
 		ti->error = "Not enough arguments";
@@ -1023,12 +1038,7 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return -ENOMEM;
 	}
 
- 	if (crypt_set_key(cc, argv[1])) {
-		ti->error = "Error decoding key";
-		goto bad_cipher;
-	}
-
-	/* Compatiblity mode for old dm-crypt cipher strings */
+	/* Compatibility mode for old dm-crypt cipher strings */
 	if (!chainmode || (strcmp(chainmode, "plain") == 0 && !ivmode)) {
 		chainmode = "cbc";
 		ivmode = "plain";
@@ -1055,6 +1065,11 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	strcpy(cc->chainmode, chainmode);
 	cc->tfm = tfm;
 
+	if (crypt_set_key(cc, argv[1]) < 0) {
+		ti->error = "Error decoding and setting key";
+		goto bad_ivmode;
+	}
+
 	/*
 	 * Choose ivmode. Valid modes: "plain", "essiv:<esshash>", "benbi".
 	 * See comments at iv code
@@ -1064,6 +1079,8 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		cc->iv_gen_ops = NULL;
 	else if (strcmp(ivmode, "plain") == 0)
 		cc->iv_gen_ops = &crypt_iv_plain_ops;
+	else if (strcmp(ivmode, "plain64") == 0)
+		cc->iv_gen_ops = &crypt_iv_plain64_ops;
 	else if (strcmp(ivmode, "essiv") == 0)
 		cc->iv_gen_ops = &crypt_iv_essiv_ops;
 	else if (strcmp(ivmode, "benbi") == 0)
@@ -1107,23 +1124,12 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	cc->dmreq_start = sizeof(struct ablkcipher_request);
 	cc->dmreq_start += crypto_ablkcipher_reqsize(tfm);
-	cc->dmreq_start = ALIGN(cc->dmreq_start, __alignof__(struct dm_crypt_request));
-
-	if (crypto_ablkcipher_alignmask(tfm) < CRYPTO_MINALIGN) {
-		/* Allocate the padding exactly */
-		iv_size_padding = -(cc->dmreq_start + sizeof(struct dm_crypt_request))
-				& crypto_ablkcipher_alignmask(tfm);
-	} else {
-		/*
-		 * If the cipher requires greater alignment than kmalloc
-		 * alignment, we don't know the exact position of the
-		 * initialization vector. We must assume worst case.
-		 */
-		iv_size_padding = crypto_ablkcipher_alignmask(tfm);
-	}
+	cc->dmreq_start = ALIGN(cc->dmreq_start, crypto_tfm_ctx_alignment());
+	cc->dmreq_start += crypto_ablkcipher_alignmask(tfm) &
+			   ~(crypto_tfm_ctx_alignment() - 1);
 
 	cc->req_pool = mempool_create_kmalloc_pool(MIN_IOS, cc->dmreq_start +
-			sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size);
+			sizeof(struct dm_crypt_request) + cc->iv_size);
 	if (!cc->req_pool) {
 		ti->error = "Cannot allocate crypt request mempool";
 		goto bad_req_pool;
@@ -1140,11 +1146,6 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	if (!cc->bs) {
 		ti->error = "Cannot allocate crypt bioset";
 		goto bad_bs;
-	}
-
-	if (crypto_ablkcipher_setkey(tfm, cc->key, key_size) < 0) {
-		ti->error = "Error setting key";
-		goto bad_device;
 	}
 
 	if (sscanf(argv[2], "%llu", &tmpll) != 1) {

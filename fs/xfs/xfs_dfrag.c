@@ -43,6 +43,7 @@
 #include "xfs_error.h"
 #include "xfs_rw.h"
 #include "xfs_vnodeops.h"
+#include "xfs_trace.h"
 
 /*
  * Syssgi interface for swapext
@@ -62,9 +63,7 @@ xfs_swapext(
 		goto out;
 	}
 
-	if (!(file->f_mode & FMODE_WRITE) ||
-	    !(file->f_mode & FMODE_READ) ||
-	    (file->f_flags & O_APPEND)) {
+	if (!(file->f_mode & FMODE_WRITE) || (file->f_flags & O_APPEND)) {
 		error = XFS_ERROR(EBADF);
 		goto out_put_file;
 	}
@@ -76,7 +75,6 @@ xfs_swapext(
 	}
 
 	if (!(target_file->f_mode & FMODE_WRITE) ||
-	    !(target_file->f_mode & FMODE_READ) ||
 	    (target_file->f_flags & O_APPEND)) {
 		error = XFS_ERROR(EBADF);
 		goto out_put_target_file;
@@ -236,7 +234,6 @@ xfs_swap_extents(
 	}
 
 	if (VN_CACHED(VFS_I(tip)) != 0) {
-		xfs_inval_cached_trace(tip, 0, -1, 0, -1);
 		error = xfs_flushinval_pages(tip, 0, -1,
 				FI_REMAPF_LOCKED);
 		if (error)

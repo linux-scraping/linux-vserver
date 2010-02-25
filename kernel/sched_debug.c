@@ -178,13 +178,18 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	task_group_path(tg, path, sizeof(path));
 
 	SEQ_printf(m, "\ncfs_rq[%d]:%s\n", cpu, path);
+#elif defined(CONFIG_USER_SCHED) && defined(CONFIG_FAIR_GROUP_SCHED)
+	{
+		uid_t uid = cfs_rq->tg->uid;
+		SEQ_printf(m, "\ncfs_rq[%d] for UID: %u\n", cpu, uid);
+	}
 #else
 	SEQ_printf(m, "\ncfs_rq[%d]:\n", cpu);
 #endif
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "exec_clock",
 			SPLIT_NS(cfs_rq->exec_clock));
 
-	spin_lock_irqsave(&rq->lock, flags);
+	raw_spin_lock_irqsave(&rq->lock, flags);
 	if (cfs_rq->rb_leftmost)
 		MIN_vruntime = (__pick_next_entity(cfs_rq))->vruntime;
 	last = __pick_last_entity(cfs_rq);
@@ -192,7 +197,7 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 		max_vruntime = last->vruntime;
 	min_vruntime = cfs_rq->min_vruntime;
 	rq0_min_vruntime = cpu_rq(0)->cfs.min_vruntime;
-	spin_unlock_irqrestore(&rq->lock, flags);
+	raw_spin_unlock_irqrestore(&rq->lock, flags);
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "MIN_vruntime",
 			SPLIT_NS(MIN_vruntime));
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "min_vruntime",
@@ -319,6 +324,12 @@ static void print_cpu(struct seq_file *m, int cpu)
 	print_rq(m, rq, cpu);
 }
 
+static const char *sched_tunable_scaling_names[] = {
+	"none",
+	"logaritmic",
+	"linear"
+};
+
 static int sched_debug_show(struct seq_file *m, void *v)
 {
 	u64 now = ktime_to_ns(ktime_get());
@@ -343,6 +354,10 @@ static int sched_debug_show(struct seq_file *m, void *v)
 	P(sysctl_sched_features);
 #undef PN
 #undef P
+
+	SEQ_printf(m, "  .%-40s: %d (%s)\n", "sysctl_sched_tunable_scaling",
+		sysctl_sched_tunable_scaling,
+		sched_tunable_scaling_names[sysctl_sched_tunable_scaling]);
 
 	for_each_online_cpu(cpu)
 		print_cpu(m, cpu);
@@ -409,7 +424,6 @@ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
 	PN(se.sum_exec_runtime);
 	PN(se.avg_overlap);
 	PN(se.avg_wakeup);
-	PN(se.avg_running);
 
 	nr_switches = p->nvcsw + p->nivcsw;
 

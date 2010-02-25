@@ -12,15 +12,6 @@ struct user_struct;
 #include <linux/shm.h>
 #include <asm/tlbflush.h>
 
-struct hugepage_subpool {
-	spinlock_t lock;
-	long count;
-	long max_hpages, used_hpages;
-};
-
-struct hugepage_subpool *hugepage_new_subpool(long nr_blocks);
-void hugepage_put_subpool(struct hugepage_subpool *spool);
-
 int PageHuge(struct page *page);
 
 static inline int is_vm_hugetlb_page(struct vm_area_struct *vma)
@@ -32,6 +23,12 @@ void reset_vma_resv_huge_pages(struct vm_area_struct *vma);
 int hugetlb_sysctl_handler(struct ctl_table *, int, void __user *, size_t *, loff_t *);
 int hugetlb_overcommit_handler(struct ctl_table *, int, void __user *, size_t *, loff_t *);
 int hugetlb_treat_movable_handler(struct ctl_table *, int, void __user *, size_t *, loff_t *);
+
+#ifdef CONFIG_NUMA
+int hugetlb_mempolicy_sysctl_handler(struct ctl_table *, int,
+					void __user *, size_t *, loff_t *);
+#endif
+
 int copy_hugetlb_page_range(struct mm_struct *, struct mm_struct *, struct vm_area_struct *);
 int follow_hugetlb_page(struct mm_struct *, struct vm_area_struct *,
 			struct page **, struct vm_area_struct **,
@@ -147,11 +144,12 @@ struct hugetlbfs_config {
 };
 
 struct hugetlbfs_sb_info {
+	long	max_blocks;   /* blocks allowed */
+	long	free_blocks;  /* blocks free */
 	long	max_inodes;   /* inodes allowed */
 	long	free_inodes;  /* inodes free */
 	spinlock_t	stat_lock;
 	struct hstate *hstate;
-	struct hugepage_subpool *spool;
 };
 
 
@@ -174,6 +172,8 @@ extern const struct file_operations hugetlbfs_file_operations;
 extern const struct vm_operations_struct hugetlb_vm_ops;
 struct file *hugetlb_file_setup(const char *name, size_t size, int acct,
 				struct user_struct **user, int creat_flags);
+int hugetlb_get_quota(struct address_space *mapping, long delta);
+void hugetlb_put_quota(struct address_space *mapping, long delta);
 
 static inline int is_file_hugepages(struct file *file)
 {

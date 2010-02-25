@@ -282,13 +282,12 @@ static bool try_fill_recv_maxbufs(struct virtnet_info *vi, gfp_t gfp)
 	do {
 		struct skb_vnet_hdr *hdr;
 
-		skb = netdev_alloc_skb(vi->dev, MAX_PACKET_LEN + NET_IP_ALIGN);
+		skb = netdev_alloc_skb_ip_align(vi->dev, MAX_PACKET_LEN);
 		if (unlikely(!skb)) {
 			oom = true;
 			break;
 		}
 
-		skb_reserve(skb, NET_IP_ALIGN);
 		skb_put(skb, MAX_PACKET_LEN);
 
 		hdr = skb_vnet_hdr(skb);
@@ -343,13 +342,11 @@ static bool try_fill_recv(struct virtnet_info *vi, gfp_t gfp)
 	do {
 		skb_frag_t *f;
 
-		skb = netdev_alloc_skb(vi->dev, GOOD_COPY_LEN + NET_IP_ALIGN);
+		skb = netdev_alloc_skb_ip_align(vi->dev, GOOD_COPY_LEN);
 		if (unlikely(!skb)) {
 			oom = true;
 			break;
 		}
-
-		skb_reserve(skb, NET_IP_ALIGN);
 
 		f = &skb_shinfo(skb)->frags[0];
 		f->page = get_a_page(vi, gfp);
@@ -391,20 +388,6 @@ static void skb_recv_done(struct virtqueue *rvq)
 	}
 }
 
-static void virtnet_napi_enable(struct virtnet_info *vi)
-{
-	napi_enable(&vi->napi);
-
-	/* If all buffers were filled by other side before we napi_enabled, we
-	 * won't get another interrupt, so process any outstanding packets
-	 * now.  virtnet_poll wants re-enable the queue, so we disable here.
-	 * We synchronize against interrupts via NAPI_STATE_SCHED */
-	if (napi_schedule_prep(&vi->napi)) {
-		vi->rvq->vq_ops->disable_cb(vi->rvq);
-		__napi_schedule(&vi->napi);
-	}
-}
-
 static void refill_work(struct work_struct *work)
 {
 	struct virtnet_info *vi;
@@ -413,7 +396,7 @@ static void refill_work(struct work_struct *work)
 	vi = container_of(work, struct virtnet_info, refill.work);
 	napi_disable(&vi->napi);
 	still_empty = !try_fill_recv(vi, GFP_KERNEL);
-	virtnet_napi_enable(vi);
+	napi_enable(&vi->napi);
 
 	/* In theory, this can happen: if we don't get any buffers in
 	 * we will *never* try to fill again. */
@@ -444,8 +427,8 @@ again:
 	/* Out of packets? */
 	if (received < budget) {
 		napi_complete(napi);
-		if (unlikely(!vi->rvq->vq_ops->enable_cb(vi->rvq))
-		    && napi_schedule_prep(napi)) {
+		if (unlikely(!vi->rvq->vq_ops->enable_cb(vi->rvq)) &&
+		    napi_schedule_prep(napi)) {
 			vi->rvq->vq_ops->disable_cb(vi->rvq);
 			__napi_schedule(napi);
 			goto again;
@@ -525,6 +508,7 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct virtnet_info *vi = netdev_priv(dev);
 	int capacity;
 
+again:
 	/* Free up any pending old buffers before queueing new ones. */
 	free_old_xmit_skbs(vi);
 
@@ -533,20 +517,14 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	/* This can happen with OOM and indirect buffers. */
 	if (unlikely(capacity < 0)) {
-		if (net_ratelimit()) {
-			if (likely(capacity == -ENOMEM)) {
-				dev_warn(&dev->dev,
-					 "TX queue failure: out of memory\n");
-			} else {
-				dev->stats.tx_fifo_errors++;
-				dev_warn(&dev->dev,
-					 "Unexpected TX queue failure: %d\n",
-					 capacity);
-			}
+		netif_stop_queue(dev);
+		dev_warn(&dev->dev, "Unexpected full queue\n");
+		if (unlikely(!vi->svq->vq_ops->enable_cb(vi->svq))) {
+			vi->svq->vq_ops->disable_cb(vi->svq);
+			netif_start_queue(dev);
+			goto again;
 		}
-		dev->stats.tx_dropped++;
-		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return NETDEV_TX_BUSY;
 	}
 	vi->svq->vq_ops->kick(vi->svq);
 
@@ -610,7 +588,16 @@ static int virtnet_open(struct net_device *dev)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
 
-	virtnet_napi_enable(vi);
+	napi_enable(&vi->napi);
+
+	/* If all buffers were filled by other side before we napi_enabled, we
+	 * won't get another interrupt, so process any outstanding packets
+	 * now.  virtnet_poll wants re-enable the queue, so we disable here.
+	 * We synchronize against interrupts via NAPI_STATE_SCHED */
+	if (napi_schedule_prep(&vi->napi)) {
+		vi->rvq->vq_ops->disable_cb(vi->rvq);
+		__napi_schedule(&vi->napi);
+	}
 	return 0;
 }
 
@@ -902,10 +889,9 @@ static int virtnet_probe(struct virtio_device *vdev)
 	INIT_DELAYED_WORK(&vi->refill, refill_work);
 
 	/* If we can receive ANY GSO packets, we must allocate large ones. */
-	if (virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO4)
-	    || virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO6)
-	    || virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_ECN)
-	    || virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_UFO))
+	if (virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO4) ||
+	    virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_TSO6) ||
+	    virtio_has_feature(vdev, VIRTIO_NET_F_GUEST_ECN))
 		vi->big_packets = true;
 
 	if (virtio_has_feature(vdev, VIRTIO_NET_F_MRG_RXBUF))

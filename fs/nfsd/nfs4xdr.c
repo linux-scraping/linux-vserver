@@ -40,24 +40,16 @@
  * at the end of nfs4svc_decode_compoundargs.
  */
 
-#include <linux/param.h>
-#include <linux/smp.h>
-#include <linux/fs.h>
 #include <linux/namei.h>
-#include <linux/vfs.h>
+#include <linux/statfs.h>
 #include <linux/utsname.h>
-#include <linux/sunrpc/xdr.h>
-#include <linux/sunrpc/svc.h>
-#include <linux/sunrpc/clnt.h>
-#include <linux/nfsd/nfsd.h>
-#include <linux/nfsd/state.h>
-#include <linux/nfsd/xdr4.h>
 #include <linux/nfsd_idmap.h>
-#include <linux/nfs4.h>
 #include <linux/nfs4_acl.h>
-#include <linux/sunrpc/gss_api.h>
 #include <linux/sunrpc/svcauth_gss.h>
 #include <linux/vs_tag.h>
+
+#include "xdr4.h"
+#include "vfs.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_XDR
 
@@ -169,10 +161,10 @@ static __be32 *read_buf(struct nfsd4_compoundargs *argp, u32 nbytes)
 	argp->p = page_address(argp->pagelist[0]);
 	argp->pagelist++;
 	if (argp->pagelen < PAGE_SIZE) {
-		argp->end = argp->p + (argp->pagelen>>2);
+		argp->end = p + (argp->pagelen>>2);
 		argp->pagelen = 0;
 	} else {
-		argp->end = argp->p + (PAGE_SIZE>>2);
+		argp->end = p + (PAGE_SIZE>>2);
 		argp->pagelen -= PAGE_SIZE;
 	}
 	memcpy(((char*)p)+avail, argp->p, (nbytes - avail));
@@ -1188,6 +1180,8 @@ nfsd4_decode_create_session(struct nfsd4_compoundargs *argp,
 			READ_BUF(4);
 			READ32(dummy);
 			READ_BUF(dummy * 4);
+			for (i = 0; i < dummy; ++i)
+				READ32(dummy);
 			break;
 		case RPC_AUTH_GSS:
 			dprintk("RPC_AUTH_GSS callback secflavor "
@@ -1203,6 +1197,7 @@ nfsd4_decode_create_session(struct nfsd4_compoundargs *argp,
 			READ_BUF(4);
 			READ32(dummy);
 			READ_BUF(dummy);
+			p += XDR_QUADLEN(dummy);
 			break;
 		default:
 			dprintk("Illegal callback secflavor\n");
@@ -1431,10 +1426,10 @@ nfsd4_decode_compound(struct nfsd4_compoundargs *argp)
 			argp->p = page_address(argp->pagelist[0]);
 			argp->pagelist++;
 			if (argp->pagelen < PAGE_SIZE) {
-				argp->end = argp->p + (argp->pagelen>>2);
+				argp->end = p + (argp->pagelen>>2);
 				argp->pagelen = 0;
 			} else {
-				argp->end = argp->p + (PAGE_SIZE>>2);
+				argp->end = p + (PAGE_SIZE>>2);
 				argp->pagelen -= PAGE_SIZE;
 			}
 		}
@@ -1956,7 +1951,7 @@ out_acl:
 	if (bmval0 & FATTR4_WORD0_CASE_INSENSITIVE) {
 		if ((buflen -= 4) < 0)
 			goto out_resource;
-		WRITE32(0);
+		WRITE32(1);
 	}
 	if (bmval0 & FATTR4_WORD0_CASE_PRESERVING) {
 		if ((buflen -= 4) < 0)
@@ -2131,15 +2126,9 @@ out_acl:
 		 * and this is the root of a cross-mounted filesystem.
 		 */
 		if (ignore_crossmnt == 0 &&
-		    dentry == exp->ex_path.mnt->mnt_root) {
-			struct path path = exp->ex_path;
-			path_get(&path);
-			while (follow_up(&path)) {
-				if (path.dentry != path.mnt->mnt_root)
-					break;
-			}
-			err = vfs_getattr(path.mnt, path.dentry, &stat);
-			path_put(&path);
+		    exp->ex_path.mnt->mnt_root->d_inode == dentry->d_inode) {
+			err = vfs_getattr(exp->ex_path.mnt->mnt_parent,
+				exp->ex_path.mnt->mnt_mountpoint, &stat);
 			if (err)
 				goto out_nfserr;
 		}
@@ -2212,11 +2201,14 @@ nfsd4_encode_dirent_fattr(struct nfsd4_readdir *cd,
 	 * we will not follow the cross mount and will fill the attribtutes
 	 * directly from the mountpoint dentry.
 	 */
-	if (d_mountpoint(dentry) && !attributes_need_mount(cd->rd_bmval))
-		ignore_crossmnt = 1;
-	else if (d_mountpoint(dentry)) {
+	if (nfsd_mountpoint(dentry, exp)) {
 		int err;
 
+		if (!(exp->ex_flags & NFSEXP_V4ROOT)
+				&& !attributes_need_mount(cd->rd_bmval)) {
+			ignore_crossmnt = 1;
+			goto out_encode;
+		}
 		/*
 		 * Why the heck aren't we just using nfsd_lookup??
 		 * Different "."/".." handling?  Something else?
@@ -2232,6 +2224,7 @@ nfsd4_encode_dirent_fattr(struct nfsd4_readdir *cd,
 			goto out_put;
 
 	}
+out_encode:
 	nfserr = nfsd4_encode_fattr(NULL, exp, dentry, p, buflen, cd->rd_bmval,
 					cd->rd_rqstp, ignore_crossmnt);
 out_put:
@@ -2615,16 +2608,11 @@ nfsd4_encode_read(struct nfsd4_compoundres *resp, __be32 nfserr,
 	len = maxcount;
 	v = 0;
 	while (len > 0) {
-		pn = resp->rqstp->rq_resused;
-		if (!resp->rqstp->rq_respages[pn]) { /* ran out of pages */
-			maxcount -= len;
-			break;
-		}
+		pn = resp->rqstp->rq_resused++;
 		resp->rqstp->rq_vec[v].iov_base =
 			page_address(resp->rqstp->rq_respages[pn]);
 		resp->rqstp->rq_vec[v].iov_len =
 			len < PAGE_SIZE ? len : PAGE_SIZE;
-		resp->rqstp->rq_resused++;
 		v++;
 		len -= PAGE_SIZE;
 	}
@@ -2671,8 +2659,6 @@ nfsd4_encode_readlink(struct nfsd4_compoundres *resp, __be32 nfserr, struct nfsd
 	if (nfserr)
 		return nfserr;
 	if (resp->xbuf->page_len)
-		return nfserr_resource;
-	if (!resp->rqstp->rq_respages[resp->rqstp->rq_resused])
 		return nfserr_resource;
 
 	page = page_address(resp->rqstp->rq_respages[resp->rqstp->rq_resused++]);
@@ -2722,8 +2708,6 @@ nfsd4_encode_readdir(struct nfsd4_compoundres *resp, __be32 nfserr, struct nfsd4
 	if (nfserr)
 		return nfserr;
 	if (resp->xbuf->page_len)
-		return nfserr_resource;
-	if (!resp->rqstp->rq_respages[resp->rqstp->rq_resused])
 		return nfserr_resource;
 
 	RESERVE_SPACE(8);  /* verifier */

@@ -66,28 +66,18 @@ static struct usb_device_id ar9170_usb_ids[] = {
 	{ USB_DEVICE(0x0cf3, 0x1001) },
 	/* TP-Link TL-WN821N v2 */
 	{ USB_DEVICE(0x0cf3, 0x1002) },
-	/* 3Com Dual Band 802.11n USB Adapter */
-	{ USB_DEVICE(0x0cf3, 0x1010) },
-	/* H3C Dual Band 802.11n USB Adapter */
-	{ USB_DEVICE(0x0cf3, 0x1011) },
 	/* Cace Airpcap NX */
 	{ USB_DEVICE(0xcace, 0x0300) },
 	/* D-Link DWA 160 A1 */
 	{ USB_DEVICE(0x07d1, 0x3c10) },
 	/* D-Link DWA 160 A2 */
 	{ USB_DEVICE(0x07d1, 0x3a09) },
-	/* Netgear WNA1000 */
-	{ USB_DEVICE(0x0846, 0x9040) },
 	/* Netgear WNDA3100 */
 	{ USB_DEVICE(0x0846, 0x9010) },
 	/* Netgear WN111 v2 */
 	{ USB_DEVICE(0x0846, 0x9001) },
 	/* Zydas ZD1221 */
 	{ USB_DEVICE(0x0ace, 0x1221) },
-	/* Proxim ORiNOCO 802.11n USB */
-	{ USB_DEVICE(0x1435, 0x0804) },
-	/* WNC Generic 11n USB Dongle */
-	{ USB_DEVICE(0x1435, 0x0326) },
 	/* ZyXEL NWD271N */
 	{ USB_DEVICE(0x0586, 0x3417) },
 	/* Z-Com UB81 BG */
@@ -120,15 +110,15 @@ static void ar9170_usb_submit_urb(struct ar9170_usb *aru)
 		return ;
 
 	spin_lock_irqsave(&aru->tx_urb_lock, flags);
-	if (aru->tx_submitted_urbs >= AR9170_NUM_TX_URBS) {
+	if (atomic_read(&aru->tx_submitted_urbs) >= AR9170_NUM_TX_URBS) {
 		spin_unlock_irqrestore(&aru->tx_urb_lock, flags);
 		return ;
 	}
-	aru->tx_submitted_urbs++;
+	atomic_inc(&aru->tx_submitted_urbs);
 
 	urb = usb_get_from_anchor(&aru->tx_pending);
 	if (!urb) {
-		aru->tx_submitted_urbs--;
+		atomic_dec(&aru->tx_submitted_urbs);
 		spin_unlock_irqrestore(&aru->tx_urb_lock, flags);
 
 		return ;
@@ -145,7 +135,7 @@ static void ar9170_usb_submit_urb(struct ar9170_usb *aru)
 				err);
 
 		usb_unanchor_urb(urb);
-		aru->tx_submitted_urbs--;
+		atomic_dec(&aru->tx_submitted_urbs);
 		ar9170_tx_callback(&aru->common, urb->context);
 	}
 
@@ -163,7 +153,7 @@ static void ar9170_usb_tx_urb_complete_frame(struct urb *urb)
 		return ;
 	}
 
-	aru->tx_submitted_urbs--;
+	atomic_dec(&aru->tx_submitted_urbs);
 
 	ar9170_tx_callback(&aru->common, skb);
 
@@ -424,7 +414,7 @@ static int ar9170_usb_exec_cmd(struct ar9170 *ar, enum ar9170_cmd cmd,
 	spin_unlock_irqrestore(&aru->common.cmdlock, flags);
 
 	usb_fill_int_urb(urb, aru->udev,
-			 usb_sndintpipe(aru->udev, AR9170_EP_CMD),
+			 usb_sndbulkpipe(aru->udev, AR9170_EP_CMD),
 			 aru->common.cmdbuf, plen + 4,
 			 ar9170_usb_tx_urb_complete, NULL, 1);
 
@@ -806,7 +796,7 @@ static int ar9170_usb_probe(struct usb_interface *intf,
 	spin_lock_init(&aru->tx_urb_lock);
 
 	aru->tx_pending_urbs = 0;
-	aru->tx_submitted_urbs = 0;
+	atomic_set(&aru->tx_submitted_urbs, 0);
 
 	aru->common.stop = ar9170_usb_stop;
 	aru->common.flush = ar9170_usb_flush;

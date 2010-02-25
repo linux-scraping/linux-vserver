@@ -160,8 +160,7 @@ extern struct ctl_path net_ipv6_ctl_path[];
 #define ICMP6MSGIN_INC_STATS_BH(net, idev, field)	\
 	_DEVINC(net, icmpv6msg, _BH, idev, field)
 
-struct ip6_ra_chain
-{
+struct ip6_ra_chain {
 	struct ip6_ra_chain	*next;
 	struct sock		*sk;
 	int			sel;
@@ -176,8 +175,7 @@ extern rwlock_t ip6_ra_lock;
    ancillary data and passed to IPv6.
  */
 
-struct ipv6_txoptions
-{
+struct ipv6_txoptions {
 	/* Length of this structure */
 	int			tot_len;
 
@@ -194,8 +192,7 @@ struct ipv6_txoptions
 	/* Option buffer, as read by IPV6_PKTOPTIONS, starts here. */
 };
 
-struct ip6_flowlabel
-{
+struct ip6_flowlabel {
 	struct ip6_flowlabel	*next;
 	__be32			label;
 	atomic_t		users;
@@ -212,8 +209,7 @@ struct ip6_flowlabel
 #define IPV6_FLOWINFO_MASK	cpu_to_be32(0x0FFFFFFF)
 #define IPV6_FLOWLABEL_MASK	cpu_to_be32(0x000FFFFF)
 
-struct ipv6_fl_socklist
-{
+struct ipv6_fl_socklist {
 	struct ipv6_fl_socklist	*next;
 	struct ip6_flowlabel	*fl;
 };
@@ -449,7 +445,17 @@ static inline int ipv6_addr_diff(const struct in6_addr *a1, const struct in6_add
 	return __ipv6_addr_diff(a1, a2, sizeof(struct in6_addr));
 }
 
-extern void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt);
+static __inline__ void ipv6_select_ident(struct frag_hdr *fhdr)
+{
+	static u32 ipv6_fragmentation_id = 1;
+	static DEFINE_SPINLOCK(ip6_id_lock);
+
+	spin_lock_bh(&ip6_id_lock);
+	fhdr->identification = htonl(ipv6_fragmentation_id);
+	if (++ipv6_fragmentation_id == 0)
+		ipv6_fragmentation_id = 1;
+	spin_unlock_bh(&ip6_id_lock);
+}
 
 /*
  *	Prototypes exported by ipv6
@@ -567,8 +573,7 @@ extern int			compat_ipv6_getsockopt(struct sock *sk,
 extern int			ip6_datagram_connect(struct sock *sk, 
 						     struct sockaddr *addr, int addr_len);
 
-extern int 			ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len,
-						int *addr_len);
+extern int 			ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len);
 extern void			ipv6_icmp_error(struct sock *sk, struct sk_buff *skb, int err, __be16 port,
 						u32 info, u8 *payload);
 extern void			ipv6_local_error(struct sock *sk, int err, struct flowi *fl, u32 info);

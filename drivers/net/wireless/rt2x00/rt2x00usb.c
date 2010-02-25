@@ -1,5 +1,5 @@
 /*
-	Copyright (C) 2004 - 2009 rt2x00 SourceForge Project
+	Copyright (C) 2004 - 2009 Ivo van Doorn <IvDoorn@gmail.com>
 	<http://rt2x00.serialmonkey.com>
 
 	This program is free software; you can redistribute it and/or modify
@@ -160,7 +160,7 @@ EXPORT_SYMBOL_GPL(rt2x00usb_vendor_request_large_buff);
 
 int rt2x00usb_regbusy_read(struct rt2x00_dev *rt2x00dev,
 			   const unsigned int offset,
-			   struct rt2x00_field32 field,
+			   const struct rt2x00_field32 field,
 			   u32 *reg)
 {
 	unsigned int i;
@@ -653,6 +653,8 @@ int rt2x00usb_probe(struct usb_interface *usb_intf,
 	rt2x00dev->ops = ops;
 	rt2x00dev->hw = hw;
 
+	rt2x00_set_chip_intf(rt2x00dev, RT2X00_CHIP_INTF_USB);
+
 	retval = rt2x00usb_alloc_reg(rt2x00dev);
 	if (retval)
 		goto exit_free_device;
@@ -703,8 +705,18 @@ int rt2x00usb_suspend(struct usb_interface *usb_intf, pm_message_t state)
 {
 	struct ieee80211_hw *hw = usb_get_intfdata(usb_intf);
 	struct rt2x00_dev *rt2x00dev = hw->priv;
+	int retval;
 
-	return rt2x00lib_suspend(rt2x00dev, state);
+	retval = rt2x00lib_suspend(rt2x00dev, state);
+	if (retval)
+		return retval;
+
+	/*
+	 * Decrease usbdev refcount.
+	 */
+	usb_put_dev(interface_to_usbdev(usb_intf));
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(rt2x00usb_suspend);
 
@@ -712,6 +724,8 @@ int rt2x00usb_resume(struct usb_interface *usb_intf)
 {
 	struct ieee80211_hw *hw = usb_get_intfdata(usb_intf);
 	struct rt2x00_dev *rt2x00dev = hw->priv;
+
+	usb_get_dev(interface_to_usbdev(usb_intf));
 
 	return rt2x00lib_resume(rt2x00dev);
 }

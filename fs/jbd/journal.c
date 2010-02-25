@@ -435,12 +435,9 @@ int __log_space_left(journal_t *journal)
 int __log_start_commit(journal_t *journal, tid_t target)
 {
 	/*
-	 * The only transaction we can possibly wait upon is the
-	 * currently running transaction (if it exists).  Otherwise,
-	 * the target tid must be an old one.
+	 * Are we already doing a recent enough commit?
 	 */
-	if (journal->j_running_transaction &&
-	    journal->j_running_transaction->t_tid == target) {
+	if (!tid_geq(journal->j_commit_request, target)) {
 		/*
 		 * We want a new commit: OK, mark the request and wakup the
 		 * commit thread.  We do _not_ do the commit ourselves.
@@ -452,14 +449,7 @@ int __log_start_commit(journal_t *journal, tid_t target)
 			  journal->j_commit_sequence);
 		wake_up(&journal->j_wait_commit);
 		return 1;
-	} else if (!tid_geq(journal->j_commit_request, target))
-		/* This should never happen, but if it does, preserve
-		   the evidence before kjournald goes into a loop and
-		   increments j_commit_sequence beyond all recognition. */
-		WARN_ONCE(1, "jbd: bad log_start_commit: %u %u %u %u\n",
-		    journal->j_commit_request, journal->j_commit_sequence,
-		    target, journal->j_running_transaction ?
-		    journal->j_running_transaction->t_tid : 0);
+	}
 	return 0;
 }
 
@@ -1067,14 +1057,6 @@ static int journal_get_superblock(journal_t *journal)
 		journal->j_maxlen = be32_to_cpu(sb->s_maxlen);
 	else if (be32_to_cpu(sb->s_maxlen) > journal->j_maxlen) {
 		printk (KERN_WARNING "JBD: journal file too short\n");
-		goto out;
-	}
-
-	if (be32_to_cpu(sb->s_first) == 0 ||
-	    be32_to_cpu(sb->s_first) >= journal->j_maxlen) {
-		printk(KERN_WARNING
-			"JBD: Invalid start block of journal: %u\n",
-			be32_to_cpu(sb->s_first));
 		goto out;
 	}
 

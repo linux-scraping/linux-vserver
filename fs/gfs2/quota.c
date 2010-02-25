@@ -47,6 +47,8 @@
 #include <linux/gfs2_ondisk.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
+#include <linux/quota.h>
+#include <linux/dqblk_xfs.h>
 
 #include "gfs2.h"
 #include "incore.h"
@@ -157,7 +159,7 @@ fail:
 	return error;
 }
 
-static int qd_get(struct gfs2_sbd *sdp, int user, u32 id, int create,
+static int qd_get(struct gfs2_sbd *sdp, int user, u32 id,
 		  struct gfs2_quota_data **qdp)
 {
 	struct gfs2_quota_data *qd = NULL, *new_qd = NULL;
@@ -195,7 +197,7 @@ static int qd_get(struct gfs2_sbd *sdp, int user, u32 id, int create,
 
 		spin_unlock(&qd_lru_lock);
 
-		if (qd || !create) {
+		if (qd) {
 			if (new_qd) {
 				gfs2_glock_put(new_qd->qd_gl);
 				kmem_cache_free(gfs2_quotad_cachep, new_qd);
@@ -454,12 +456,12 @@ static void qd_unlock(struct gfs2_quota_data *qd)
 	qd_put(qd);
 }
 
-static int qdsb_get(struct gfs2_sbd *sdp, int user, u32 id, int create,
+static int qdsb_get(struct gfs2_sbd *sdp, int user, u32 id,
 		    struct gfs2_quota_data **qdp)
 {
 	int error;
 
-	error = qd_get(sdp, user, id, create, qdp);
+	error = qd_get(sdp, user, id, qdp);
 	if (error)
 		return error;
 
@@ -501,20 +503,20 @@ int gfs2_quota_hold(struct gfs2_inode *ip, u32 uid, u32 gid)
 	if (sdp->sd_args.ar_quota == GFS2_QUOTA_OFF)
 		return 0;
 
-	error = qdsb_get(sdp, QUOTA_USER, ip->i_inode.i_uid, CREATE, qd);
+	error = qdsb_get(sdp, QUOTA_USER, ip->i_inode.i_uid, qd);
 	if (error)
 		goto out;
 	al->al_qd_num++;
 	qd++;
 
-	error = qdsb_get(sdp, QUOTA_GROUP, ip->i_inode.i_gid, CREATE, qd);
+	error = qdsb_get(sdp, QUOTA_GROUP, ip->i_inode.i_gid, qd);
 	if (error)
 		goto out;
 	al->al_qd_num++;
 	qd++;
 
 	if (uid != NO_QUOTA_CHANGE && uid != ip->i_inode.i_uid) {
-		error = qdsb_get(sdp, QUOTA_USER, uid, CREATE, qd);
+		error = qdsb_get(sdp, QUOTA_USER, uid, qd);
 		if (error)
 			goto out;
 		al->al_qd_num++;
@@ -522,7 +524,7 @@ int gfs2_quota_hold(struct gfs2_inode *ip, u32 uid, u32 gid)
 	}
 
 	if (gid != NO_QUOTA_CHANGE && gid != ip->i_inode.i_gid) {
-		error = qdsb_get(sdp, QUOTA_GROUP, gid, CREATE, qd);
+		error = qdsb_get(sdp, QUOTA_GROUP, gid, qd);
 		if (error)
 			goto out;
 		al->al_qd_num++;
@@ -614,8 +616,9 @@ static void do_qc(struct gfs2_quota_data *qd, s64 change)
  * gfs2_adjust_quota - adjust record of current block usage
  * @ip: The quota inode
  * @loc: Offset of the entry in the quota file
- * @change: The amount of change to record
+ * @change: The amount of usage change to record
  * @qd: The quota data
+ * @fdq: The updated limits to record
  *
  * This function was mostly borrowed from gfs2_block_truncate_page which was
  * in turn mostly borrowed from ext3
@@ -624,38 +627,25 @@ static void do_qc(struct gfs2_quota_data *qd, s64 change)
  */
 
 static int gfs2_adjust_quota(struct gfs2_inode *ip, loff_t loc,
-			     s64 change, struct gfs2_quota_data *qd)
+			     s64 change, struct gfs2_quota_data *qd,
+			     struct fs_disk_quota *fdq)
 {
 	struct inode *inode = &ip->i_inode;
 	struct address_space *mapping = inode->i_mapping;
 	unsigned long index = loc >> PAGE_CACHE_SHIFT;
 	unsigned offset = loc & (PAGE_CACHE_SIZE - 1);
 	unsigned blocksize, iblock, pos;
-	struct buffer_head *bh;
+	struct buffer_head *bh, *dibh;
 	struct page *page;
-	void *kaddr, *ptr;
-	struct gfs2_quota q, *qp;
-	int err, nbytes;
+	void *kaddr;
+	struct gfs2_quota *qp;
+	s64 value;
+	int err = -EIO;
+	u64 size;
 
 	if (gfs2_is_stuffed(ip))
 		gfs2_unstuff_dinode(ip, NULL);
-
-	memset(&q, 0, sizeof(struct gfs2_quota));
-	err = gfs2_internal_read(ip, NULL, (char *)&q, &loc, sizeof(q));
-	if (err < 0)
-		return err;
-
-	err = -EIO;
-	qp = &q;
-	qp->qu_value = be64_to_cpu(qp->qu_value);
-	qp->qu_value += change;
-	qp->qu_value = cpu_to_be64(qp->qu_value);
-	qd->qd_qb.qb_value = qp->qu_value;
-
-	/* Write the quota into the quota file on disk */
-	ptr = qp;
-	nbytes = sizeof(struct gfs2_quota);
-get_a_page:
+	
 	page = grab_cache_page(mapping, index);
 	if (!page)
 		return -ENOMEM;
@@ -677,10 +667,7 @@ get_a_page:
 	if (!buffer_mapped(bh)) {
 		gfs2_block_map(inode, iblock, bh, 1);
 		if (!buffer_mapped(bh))
-			goto unlock_out;
-		/* If it's a newly allocated disk block for quota, zero it */
-		if (buffer_new(bh))
-			zero_user(page, pos - blocksize, bh->b_size);
+			goto unlock;
 	}
 
 	if (PageUptodate(page))
@@ -690,32 +677,45 @@ get_a_page:
 		ll_rw_block(READ_META, 1, &bh);
 		wait_on_buffer(bh);
 		if (!buffer_uptodate(bh))
-			goto unlock_out;
+			goto unlock;
 	}
 
 	gfs2_trans_add_bh(ip->i_gl, bh, 0);
 
 	kaddr = kmap_atomic(page, KM_USER0);
-	if (offset + sizeof(struct gfs2_quota) > PAGE_CACHE_SIZE)
-		nbytes = PAGE_CACHE_SIZE - offset;
-	memcpy(kaddr + offset, ptr, nbytes);
+	qp = kaddr + offset;
+	value = (s64)be64_to_cpu(qp->qu_value) + change;
+	qp->qu_value = cpu_to_be64(value);
+	qd->qd_qb.qb_value = qp->qu_value;
+	if (fdq) {
+		if (fdq->d_fieldmask & FS_DQ_BSOFT) {
+			qp->qu_warn = cpu_to_be64(fdq->d_blk_softlimit);
+			qd->qd_qb.qb_warn = qp->qu_warn;
+		}
+		if (fdq->d_fieldmask & FS_DQ_BHARD) {
+			qp->qu_limit = cpu_to_be64(fdq->d_blk_hardlimit);
+			qd->qd_qb.qb_limit = qp->qu_limit;
+		}
+	}
 	flush_dcache_page(page);
 	kunmap_atomic(kaddr, KM_USER0);
-	unlock_page(page);
-	page_cache_release(page);
 
-	/* If quota straddles page boundary, we need to update the rest of the
-	 * quota at the beginning of the next page */
-	if ((offset + sizeof(struct gfs2_quota)) > PAGE_CACHE_SIZE) {
-		ptr = ptr + nbytes;
-		nbytes = sizeof(struct gfs2_quota) - nbytes;
-		offset = 0;
-		index++;
-		goto get_a_page;
+	err = gfs2_meta_inode_buffer(ip, &dibh);
+	if (err)
+		goto unlock;
+
+	size = loc + sizeof(struct gfs2_quota);
+	if (size > inode->i_size) {
+		ip->i_disksize = size;
+		i_size_write(inode, size);
 	}
-	err = 0;
-	return err;
-unlock_out:
+	inode->i_mtime = inode->i_atime = CURRENT_TIME;
+	gfs2_trans_add_bh(ip->i_gl, dibh, 1);
+	gfs2_dinode_out(ip, dibh->b_data);
+	brelse(dibh);
+	mark_inode_dirty(inode);
+
+unlock:
 	unlock_page(page);
 	page_cache_release(page);
 	return err;
@@ -742,6 +742,7 @@ static int do_sync(unsigned int num_qd, struct gfs2_quota_data **qda)
 		return -ENOMEM;
 
 	sort(qda, num_qd, sizeof(struct gfs2_quota_data *), sort_qd, NULL);
+	mutex_lock_nested(&ip->i_inode.i_mutex, I_MUTEX_QUOTA);
 	for (qx = 0; qx < num_qd; qx++) {
 		error = gfs2_glock_nq_init(qda[qx]->qd_gl, LM_ST_EXCLUSIVE,
 					   GL_NOCACHE, &ghs[qx]);
@@ -778,10 +779,8 @@ static int do_sync(unsigned int num_qd, struct gfs2_quota_data **qda)
 	 * rgrp since it won't be allocated during the transaction
 	 */
 	al->al_requested = 1;
-	/* +3 in the end for unstuffing block, inode size update block
-	 * and another block in case quota straddles page boundary and
-	 * two blocks need to be updated instead of 1 */
-	blocks = num_qd * data_blocks + RES_DINODE + num_qd + 3;
+	/* +1 in the end for block requested above for unstuffing */
+	blocks = num_qd * data_blocks + RES_DINODE + num_qd + 1;
 
 	if (nalloc)
 		al->al_requested += nalloc * (data_blocks + ind_blocks);		
@@ -799,8 +798,7 @@ static int do_sync(unsigned int num_qd, struct gfs2_quota_data **qda)
 	for (x = 0; x < num_qd; x++) {
 		qd = qda[x];
 		offset = qd2offset(qd);
-		error = gfs2_adjust_quota(ip, offset, qd->qd_change_sync,
-					  (struct gfs2_quota_data *)qd);
+		error = gfs2_adjust_quota(ip, offset, qd->qd_change_sync, qd, NULL);
 		if (error)
 			goto out_end_trans;
 
@@ -820,9 +818,35 @@ out_gunlock:
 out:
 	while (qx--)
 		gfs2_glock_dq_uninit(&ghs[qx]);
+	mutex_unlock(&ip->i_inode.i_mutex);
 	kfree(ghs);
 	gfs2_log_flush(ip->i_gl->gl_sbd, ip->i_gl);
 	return error;
+}
+
+static int update_qd(struct gfs2_sbd *sdp, struct gfs2_quota_data *qd)
+{
+	struct gfs2_inode *ip = GFS2_I(sdp->sd_quota_inode);
+	struct gfs2_quota q;
+	struct gfs2_quota_lvb *qlvb;
+	loff_t pos;
+	int error;
+
+	memset(&q, 0, sizeof(struct gfs2_quota));
+	pos = qd2offset(qd);
+	error = gfs2_internal_read(ip, NULL, (char *)&q, &pos, sizeof(q));
+	if (error < 0)
+		return error;
+
+	qlvb = (struct gfs2_quota_lvb *)qd->qd_gl->gl_lvb;
+	qlvb->qb_magic = cpu_to_be32(GFS2_MAGIC);
+	qlvb->__pad = 0;
+	qlvb->qb_limit = q.qu_limit;
+	qlvb->qb_warn = q.qu_warn;
+	qlvb->qb_value = q.qu_value;
+	qd->qd_qb = *qlvb;
+
+	return 0;
 }
 
 static int do_glock(struct gfs2_quota_data *qd, int force_refresh,
@@ -831,9 +855,7 @@ static int do_glock(struct gfs2_quota_data *qd, int force_refresh,
 	struct gfs2_sbd *sdp = qd->qd_gl->gl_sbd;
 	struct gfs2_inode *ip = GFS2_I(sdp->sd_quota_inode);
 	struct gfs2_holder i_gh;
-	struct gfs2_quota q;
 	int error;
-	struct gfs2_quota_lvb *qlvb;
 
 restart:
 	error = gfs2_glock_nq_init(qd->qd_gl, LM_ST_SHARED, 0, q_gh);
@@ -843,11 +865,9 @@ restart:
 	qd->qd_qb = *(struct gfs2_quota_lvb *)qd->qd_gl->gl_lvb;
 
 	if (force_refresh || qd->qd_qb.qb_magic != cpu_to_be32(GFS2_MAGIC)) {
-		loff_t pos;
 		gfs2_glock_dq_uninit(q_gh);
-		error = gfs2_glock_nq_init(qd->qd_gl,
-					   LM_ST_EXCLUSIVE, GL_NOCACHE,
-					   q_gh);
+		error = gfs2_glock_nq_init(qd->qd_gl, LM_ST_EXCLUSIVE,
+					   GL_NOCACHE, q_gh);
 		if (error)
 			return error;
 
@@ -855,30 +875,14 @@ restart:
 		if (error)
 			goto fail;
 
-		memset(&q, 0, sizeof(struct gfs2_quota));
-		pos = qd2offset(qd);
-		error = gfs2_internal_read(ip, NULL, (char *)&q, &pos, sizeof(q));
-		if (error < 0)
+		error = update_qd(sdp, qd);
+		if (error)
 			goto fail_gunlock;
-		if ((error < sizeof(q)) && force_refresh) {
-			error = -ENOENT;
-			goto fail_gunlock;
-		}
+
 		gfs2_glock_dq_uninit(&i_gh);
-
-		qlvb = (struct gfs2_quota_lvb *)qd->qd_gl->gl_lvb;
-		qlvb->qb_magic = cpu_to_be32(GFS2_MAGIC);
-		qlvb->__pad = 0;
-		qlvb->qb_limit = q.qu_limit;
-		qlvb->qb_warn = q.qu_warn;
-		qlvb->qb_value = q.qu_value;
-		qd->qd_qb = *qlvb;
-
-		if (gfs2_glock_is_blocking(qd->qd_gl)) {
-			gfs2_glock_dq_uninit(q_gh);
-			force_refresh = 0;
-			goto restart;
-		}
+		gfs2_glock_dq_uninit(q_gh);
+		force_refresh = 0;
+		goto restart;
 	}
 
 	return 0;
@@ -998,7 +1002,7 @@ static int print_message(struct gfs2_quota_data *qd, char *type)
 {
 	struct gfs2_sbd *sdp = qd->qd_gl->gl_sbd;
 
-	printk(KERN_INFO "GFS2: fsid=%s: quota %s for %s %u\r\n",
+	printk(KERN_INFO "GFS2: fsid=%s: quota %s for %s %u\n",
 	       sdp->sd_fsname, type,
 	       (test_bit(QDF_USER, &qd->qd_flags)) ? "user" : "group",
 	       qd->qd_id);
@@ -1035,6 +1039,10 @@ int gfs2_quota_check(struct gfs2_inode *ip, u32 uid, u32 gid)
 
 		if (be64_to_cpu(qd->qd_qb.qb_limit) && (s64)be64_to_cpu(qd->qd_qb.qb_limit) < value) {
 			print_message(qd, "exceeded");
+			quota_send_warning(test_bit(QDF_USER, &qd->qd_flags) ?
+					   USRQUOTA : GRPQUOTA, qd->qd_id,
+					   sdp->sd_vfs->s_dev, QUOTA_NL_BHARDWARN);
+
 			error = -EDQUOT;
 			break;
 		} else if (be64_to_cpu(qd->qd_qb.qb_warn) &&
@@ -1042,6 +1050,9 @@ int gfs2_quota_check(struct gfs2_inode *ip, u32 uid, u32 gid)
 			   time_after_eq(jiffies, qd->qd_last_warn +
 					 gfs2_tune_get(sdp,
 						gt_quota_warn_period) * HZ)) {
+			quota_send_warning(test_bit(QDF_USER, &qd->qd_flags) ?
+					   USRQUOTA : GRPQUOTA, qd->qd_id,
+					   sdp->sd_vfs->s_dev, QUOTA_NL_BSOFTWARN);
 			error = print_message(qd, "warning");
 			qd->qd_last_warn = jiffies;
 		}
@@ -1072,8 +1083,9 @@ void gfs2_quota_change(struct gfs2_inode *ip, s64 change,
 	}
 }
 
-int gfs2_quota_sync(struct gfs2_sbd *sdp)
+int gfs2_quota_sync(struct super_block *sb, int type)
 {
+	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_quota_data **qda;
 	unsigned int max_qd = gfs2_tune_get(sdp, gt_quota_simul_sync);
 	unsigned int num_qd;
@@ -1121,7 +1133,7 @@ int gfs2_quota_refresh(struct gfs2_sbd *sdp, int user, u32 id)
 	struct gfs2_holder q_gh;
 	int error;
 
-	error = qd_get(sdp, user, id, CREATE, &qd);
+	error = qd_get(sdp, user, id, &qd);
 	if (error)
 		return error;
 
@@ -1300,12 +1312,12 @@ static void quotad_error(struct gfs2_sbd *sdp, const char *msg, int error)
 }
 
 static void quotad_check_timeo(struct gfs2_sbd *sdp, const char *msg,
-			       int (*fxn)(struct gfs2_sbd *sdp),
+			       int (*fxn)(struct super_block *sb, int type),
 			       unsigned long t, unsigned long *timeo,
 			       unsigned int *new_timeo)
 {
 	if (t >= *timeo) {
-		int error = fxn(sdp);
+		int error = fxn(sdp->sd_vfs, 0);
 		quotad_error(sdp, msg, error);
 		*timeo = gfs2_tune_get_i(&sdp->sd_tune, new_timeo) * HZ;
 	} else {
@@ -1332,6 +1344,14 @@ static void quotad_check_trunc_list(struct gfs2_sbd *sdp)
 	}
 }
 
+void gfs2_wake_up_statfs(struct gfs2_sbd *sdp) {
+	if (!sdp->sd_statfs_force_sync) {
+		sdp->sd_statfs_force_sync = 1;
+		wake_up(&sdp->sd_quota_wait);
+	}
+}
+
+
 /**
  * gfs2_quotad - Write cached quota changes into the quota file
  * @sdp: Pointer to GFS2 superblock
@@ -1351,8 +1371,15 @@ int gfs2_quotad(void *data)
 	while (!kthread_should_stop()) {
 
 		/* Update the master statfs file */
-		quotad_check_timeo(sdp, "statfs", gfs2_statfs_sync, t,
-				   &statfs_timeo, &tune->gt_statfs_quantum);
+		if (sdp->sd_statfs_force_sync) {
+			int error = gfs2_statfs_sync(sdp->sd_vfs, 0);
+			quotad_error(sdp, "statfs", error);
+			statfs_timeo = gfs2_tune_get(sdp, gt_statfs_quantum) * HZ;
+		}
+		else
+			quotad_check_timeo(sdp, "statfs", gfs2_statfs_sync, t,
+				   	   &statfs_timeo,
+					   &tune->gt_statfs_quantum);
 
 		/* Update quota file */
 		quotad_check_timeo(sdp, "sync", gfs2_quota_sync, t,
@@ -1369,7 +1396,7 @@ int gfs2_quotad(void *data)
 		spin_lock(&sdp->sd_trunc_lock);
 		empty = list_empty(&sdp->sd_trunc_list);
 		spin_unlock(&sdp->sd_trunc_lock);
-		if (empty)
+		if (empty && !sdp->sd_statfs_force_sync)
 			t -= schedule_timeout(t);
 		else
 			t = 0;
@@ -1378,4 +1405,182 @@ int gfs2_quotad(void *data)
 
 	return 0;
 }
+
+static int gfs2_quota_get_xstate(struct super_block *sb,
+				 struct fs_quota_stat *fqs)
+{
+	struct gfs2_sbd *sdp = sb->s_fs_info;
+
+	memset(fqs, 0, sizeof(struct fs_quota_stat));
+	fqs->qs_version = FS_QSTAT_VERSION;
+	if (sdp->sd_args.ar_quota == GFS2_QUOTA_ON)
+		fqs->qs_flags = (XFS_QUOTA_UDQ_ENFD | XFS_QUOTA_GDQ_ENFD);
+	else if (sdp->sd_args.ar_quota == GFS2_QUOTA_ACCOUNT)
+		fqs->qs_flags = (XFS_QUOTA_UDQ_ACCT | XFS_QUOTA_GDQ_ACCT);
+	if (sdp->sd_quota_inode) {
+		fqs->qs_uquota.qfs_ino = GFS2_I(sdp->sd_quota_inode)->i_no_addr;
+		fqs->qs_uquota.qfs_nblks = sdp->sd_quota_inode->i_blocks;
+	}
+	fqs->qs_uquota.qfs_nextents = 1; /* unsupported */
+	fqs->qs_gquota = fqs->qs_uquota; /* its the same inode in both cases */
+	fqs->qs_incoredqs = atomic_read(&qd_lru_count);
+	return 0;
+}
+
+static int gfs2_xquota_get(struct super_block *sb, int type, qid_t id,
+			   struct fs_disk_quota *fdq)
+{
+	struct gfs2_sbd *sdp = sb->s_fs_info;
+	struct gfs2_quota_lvb *qlvb;
+	struct gfs2_quota_data *qd;
+	struct gfs2_holder q_gh;
+	int error;
+
+	memset(fdq, 0, sizeof(struct fs_disk_quota));
+
+	if (sdp->sd_args.ar_quota == GFS2_QUOTA_OFF)
+		return -ESRCH; /* Crazy XFS error code */
+
+	if (type == USRQUOTA)
+		type = QUOTA_USER;
+	else if (type == GRPQUOTA)
+		type = QUOTA_GROUP;
+	else
+		return -EINVAL;
+
+	error = qd_get(sdp, type, id, &qd);
+	if (error)
+		return error;
+	error = do_glock(qd, FORCE, &q_gh);
+	if (error)
+		goto out;
+
+	qlvb = (struct gfs2_quota_lvb *)qd->qd_gl->gl_lvb;
+	fdq->d_version = FS_DQUOT_VERSION;
+	fdq->d_flags = (type == QUOTA_USER) ? XFS_USER_QUOTA : XFS_GROUP_QUOTA;
+	fdq->d_id = id;
+	fdq->d_blk_hardlimit = be64_to_cpu(qlvb->qb_limit);
+	fdq->d_blk_softlimit = be64_to_cpu(qlvb->qb_warn);
+	fdq->d_bcount = be64_to_cpu(qlvb->qb_value);
+
+	gfs2_glock_dq_uninit(&q_gh);
+out:
+	qd_put(qd);
+	return error;
+}
+
+/* GFS2 only supports a subset of the XFS fields */
+#define GFS2_FIELDMASK (FS_DQ_BSOFT|FS_DQ_BHARD)
+
+static int gfs2_xquota_set(struct super_block *sb, int type, qid_t id,
+			   struct fs_disk_quota *fdq)
+{
+	struct gfs2_sbd *sdp = sb->s_fs_info;
+	struct gfs2_inode *ip = GFS2_I(sdp->sd_quota_inode);
+	struct gfs2_quota_data *qd;
+	struct gfs2_holder q_gh, i_gh;
+	unsigned int data_blocks, ind_blocks;
+	unsigned int blocks = 0;
+	int alloc_required;
+	struct gfs2_alloc *al;
+	loff_t offset;
+	int error;
+
+	if (sdp->sd_args.ar_quota == GFS2_QUOTA_OFF)
+		return -ESRCH; /* Crazy XFS error code */
+
+	switch(type) {
+	case USRQUOTA:
+		type = QUOTA_USER;
+		if (fdq->d_flags != XFS_USER_QUOTA)
+			return -EINVAL;
+		break;
+	case GRPQUOTA:
+		type = QUOTA_GROUP;
+		if (fdq->d_flags != XFS_GROUP_QUOTA)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (fdq->d_fieldmask & ~GFS2_FIELDMASK)
+		return -EINVAL;
+	if (fdq->d_id != id)
+		return -EINVAL;
+
+	error = qd_get(sdp, type, id, &qd);
+	if (error)
+		return error;
+
+	mutex_lock(&ip->i_inode.i_mutex);
+	error = gfs2_glock_nq_init(qd->qd_gl, LM_ST_EXCLUSIVE, 0, &q_gh);
+	if (error)
+		goto out_put;
+	error = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, &i_gh);
+	if (error)
+		goto out_q;
+
+	/* Check for existing entry, if none then alloc new blocks */
+	error = update_qd(sdp, qd);
+	if (error)
+		goto out_i;
+
+	/* If nothing has changed, this is a no-op */
+	if ((fdq->d_fieldmask & FS_DQ_BSOFT) &&
+	    (fdq->d_blk_softlimit == be64_to_cpu(qd->qd_qb.qb_warn)))
+		fdq->d_fieldmask ^= FS_DQ_BSOFT;
+	if ((fdq->d_fieldmask & FS_DQ_BHARD) &&
+	    (fdq->d_blk_hardlimit == be64_to_cpu(qd->qd_qb.qb_limit)))
+		fdq->d_fieldmask ^= FS_DQ_BHARD;
+	if (fdq->d_fieldmask == 0)
+		goto out_i;
+
+	offset = qd2offset(qd);
+	error = gfs2_write_alloc_required(ip, offset, sizeof(struct gfs2_quota),
+					  &alloc_required);
+	if (error)
+		goto out_i;
+	if (alloc_required) {
+		al = gfs2_alloc_get(ip);
+		if (al == NULL)
+			goto out_i;
+		gfs2_write_calc_reserv(ip, sizeof(struct gfs2_quota),
+				       &data_blocks, &ind_blocks);
+		blocks = al->al_requested = 1 + data_blocks + ind_blocks;
+		error = gfs2_inplace_reserve(ip);
+		if (error)
+			goto out_alloc;
+	}
+
+	error = gfs2_trans_begin(sdp, blocks + RES_DINODE + 1, 0);
+	if (error)
+		goto out_release;
+
+	/* Apply changes */
+	error = gfs2_adjust_quota(ip, offset, 0, qd, fdq);
+
+	gfs2_trans_end(sdp);
+out_release:
+	if (alloc_required) {
+		gfs2_inplace_release(ip);
+out_alloc:
+		gfs2_alloc_put(ip);
+	}
+out_i:
+	gfs2_glock_dq_uninit(&i_gh);
+out_q:
+	gfs2_glock_dq_uninit(&q_gh);
+out_put:
+	mutex_unlock(&ip->i_inode.i_mutex);
+	qd_put(qd);
+	return error;
+}
+
+const struct quotactl_ops gfs2_quotactl_ops = {
+	.quota_sync     = gfs2_quota_sync,
+	.get_xstate     = gfs2_quota_get_xstate,
+	.get_xquota	= gfs2_xquota_get,
+	.set_xquota	= gfs2_xquota_set,
+};
 

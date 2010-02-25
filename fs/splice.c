@@ -30,7 +30,6 @@
 #include <linux/syscalls.h>
 #include <linux/uio.h>
 #include <linux/security.h>
-#include <linux/socket.h>
 
 /*
  * Attempt to steal a page from a pipe buffer. This should perhaps go into
@@ -366,7 +365,17 @@ __generic_file_splice_read(struct file *in, loff_t *ppos,
 		 * If the page isn't uptodate, we may need to start io on it
 		 */
 		if (!PageUptodate(page)) {
-			lock_page(page);
+			/*
+			 * If in nonblock mode then dont block on waiting
+			 * for an in-flight io page
+			 */
+			if (flags & SPLICE_F_NONBLOCK) {
+				if (!trylock_page(page)) {
+					error = -EAGAIN;
+					break;
+				}
+			} else
+				lock_page(page);
 
 			/*
 			 * Page was truncated, or invalidated by the
@@ -638,11 +647,7 @@ static int pipe_to_sendpage(struct pipe_inode_info *pipe,
 
 	ret = buf->ops->confirm(pipe, buf);
 	if (!ret) {
-		more = (sd->flags & SPLICE_F_MORE) ? MSG_MORE : 0;
-
-		if (sd->len < sd->total_len && pipe->nrbufs > 1)
-			more |= MSG_SENDPAGE_NOTLAST;
-
+		more = (sd->flags & SPLICE_F_MORE) || sd->len < sd->total_len;
 		if (file->f_op && file->f_op->sendpage)
 			ret = file->f_op->sendpage(file, buf->page, buf->offset,
 						   sd->len, &pos, more);
@@ -945,16 +950,12 @@ generic_file_splice_write(struct pipe_inode_info *pipe, struct file *out,
 	struct address_space *mapping = out->f_mapping;
 	struct inode *inode = mapping->host;
 	struct splice_desc sd = {
+		.total_len = len,
 		.flags = flags,
+		.pos = *ppos,
 		.u.file = out,
 	};
 	ssize_t ret;
-
-	ret = generic_write_checks(out, ppos, &len, S_ISBLK(inode->i_mode));
-	if (ret)
-		return ret;
-	sd.total_len = len;
-	sd.pos = *ppos;
 
 	pipe_lock(pipe);
 
@@ -1230,8 +1231,7 @@ static int direct_splice_actor(struct pipe_inode_info *pipe,
 {
 	struct file *file = sd->u.file;
 
-	return do_splice_from(pipe, file, &file->f_pos, sd->total_len,
-			      sd->flags);
+	return do_splice_from(pipe, file, &sd->pos, sd->total_len, sd->flags);
 }
 
 /**

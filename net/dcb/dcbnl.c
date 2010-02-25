@@ -307,7 +307,6 @@ static int dcbnl_getperm_hwaddr(struct net_device *netdev, struct nlattr **tb,
 	dcb->dcb_family = AF_UNSPEC;
 	dcb->cmd = DCB_CMD_GPERM_HWADDR;
 
-	memset(perm_addr, 0, sizeof(perm_addr));
 	netdev->dcbnl_ops->getpermhwaddr(netdev, perm_addr);
 
 	ret = nla_put(dcbnl_skb, DCB_ATTR_PERM_HWADDR, sizeof(perm_addr),
@@ -1086,8 +1085,8 @@ static int dcbnl_bcn_setcfg(struct net_device *netdev, struct nlattr **tb,
 	u8 value_byte;
 	u32 value_int;
 
-	if (!tb[DCB_ATTR_BCN] || !netdev->dcbnl_ops->setbcncfg
-	    || !netdev->dcbnl_ops->setbcnrp)
+	if (!tb[DCB_ATTR_BCN] || !netdev->dcbnl_ops->setbcncfg ||
+	    !netdev->dcbnl_ops->setbcnrp)
 		return ret;
 
 	ret = nla_parse_nested(data, DCB_BCN_ATTR_MAX,
@@ -1127,7 +1126,7 @@ static int dcb_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 	u32 pid = skb ? NETLINK_CB(skb).pid : 0;
 	int ret = -EINVAL;
 
-	if (net != &init_net)
+	if (!net_eq(net, &init_net))
 		return -EINVAL;
 
 	ret = nlmsg_parse(nlh, sizeof(*dcb), tb, DCB_ATTR_MAX,

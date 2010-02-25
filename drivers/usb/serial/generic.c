@@ -276,7 +276,7 @@ static int usb_serial_generic_write_start(struct usb_serial_port *port)
 	if (port->write_urb_busy)
 		start_io = false;
 	else {
-		start_io = (__kfifo_len(port->write_fifo) != 0);
+		start_io = (kfifo_len(&port->write_fifo) != 0);
 		port->write_urb_busy = start_io;
 	}
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -285,7 +285,7 @@ static int usb_serial_generic_write_start(struct usb_serial_port *port)
 		return 0;
 
 	data = port->write_urb->transfer_buffer;
-	count = kfifo_get(port->write_fifo, data, port->bulk_out_size);
+	count = kfifo_out_locked(&port->write_fifo, data, port->bulk_out_size, &port->lock);
 	usb_serial_debug_data(debug, &port->dev, __func__, count, data);
 
 	/* set up our urb */
@@ -345,7 +345,7 @@ int usb_serial_generic_write(struct tty_struct *tty,
 		return usb_serial_multi_urb_write(tty, port,
 						  buf, count);
 
-	count = kfifo_put(port->write_fifo, buf, count);
+	count = kfifo_in_locked(&port->write_fifo, buf, count, &port->lock);
 	result = usb_serial_generic_write_start(port);
 
 	if (result >= 0)
@@ -370,7 +370,7 @@ int usb_serial_generic_write_room(struct tty_struct *tty)
 				(serial->type->max_in_flight_urbs -
 				 port->urbs_in_flight);
 	} else if (serial->num_bulk_out)
-		room = port->write_fifo->size - __kfifo_len(port->write_fifo);
+		room = kfifo_avail(&port->write_fifo);
 	spin_unlock_irqrestore(&port->lock, flags);
 
 	dbg("%s - returns %d", __func__, room);
@@ -386,12 +386,12 @@ int usb_serial_generic_chars_in_buffer(struct tty_struct *tty)
 
 	dbg("%s - port %d", __func__, port->number);
 
-	if (serial->type->max_in_flight_urbs) {
-		spin_lock_irqsave(&port->lock, flags);
+	spin_lock_irqsave(&port->lock, flags);
+	if (serial->type->max_in_flight_urbs)
 		chars = port->tx_bytes_flight;
-		spin_unlock_irqrestore(&port->lock, flags);
-	} else if (serial->num_bulk_out)
-		chars = kfifo_len(port->write_fifo);
+	else if (serial->num_bulk_out)
+		chars = kfifo_len(&port->write_fifo);
+	spin_unlock_irqrestore(&port->lock, flags);
 
 	dbg("%s - returns %d", __func__, chars);
 	return chars;
@@ -509,7 +509,7 @@ void usb_serial_generic_write_bulk_callback(struct urb *urb)
 		if (status) {
 			dbg("%s - nonzero multi-urb write bulk status "
 				"received: %d", __func__, status);
-			kfifo_reset(port->write_fifo);
+			kfifo_reset_out(&port->write_fifo);
 		} else
 			usb_serial_generic_write_start(port);
 	}
@@ -577,26 +577,6 @@ int usb_serial_handle_break(struct usb_serial_port *port)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_serial_handle_break);
-
-/**
- *	usb_serial_handle_dcd_change - handle a change of carrier detect state
- *	@port: usb_serial_port structure for the open port
- *	@tty: tty_struct structure for the port
- *	@status: new carrier detect status, nonzero if active
- */
-void usb_serial_handle_dcd_change(struct usb_serial_port *usb_port,
-				struct tty_struct *tty, unsigned int status)
-{
-	struct tty_port *port = &usb_port->port;
-
-	dbg("%s - port %d, status %d", __func__, usb_port->number, status);
-
-	if (status)
-		wake_up_interruptible(&port->open_wait);
-	else if (tty && !C_CLOCAL(tty))
-		tty_hangup(tty);
-}
-EXPORT_SYMBOL_GPL(usb_serial_handle_dcd_change);
 
 int usb_serial_generic_resume(struct usb_serial *serial)
 {

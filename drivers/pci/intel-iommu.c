@@ -71,49 +71,6 @@
 #define DMA_32BIT_PFN		IOVA_PFN(DMA_BIT_MASK(32))
 #define DMA_64BIT_PFN		IOVA_PFN(DMA_BIT_MASK(64))
 
-/* page table handling */
-#define LEVEL_STRIDE		(9)
-#define LEVEL_MASK		(((u64)1 << LEVEL_STRIDE) - 1)
-
-static inline int agaw_to_level(int agaw)
-{
-	return agaw + 2;
-}
-
-static inline int agaw_to_width(int agaw)
-{
-	return 30 + agaw * LEVEL_STRIDE;
-}
-
-static inline int width_to_agaw(int width)
-{
-	return (width - 30) / LEVEL_STRIDE;
-}
-
-static inline unsigned int level_to_offset_bits(int level)
-{
-	return (level - 1) * LEVEL_STRIDE;
-}
-
-static inline int pfn_level_offset(unsigned long pfn, int level)
-{
-	return (pfn >> level_to_offset_bits(level)) & LEVEL_MASK;
-}
-
-static inline unsigned long level_mask(int level)
-{
-	return -1UL << level_to_offset_bits(level);
-}
-
-static inline unsigned long level_size(int level)
-{
-	return 1UL << level_to_offset_bits(level);
-}
-
-static inline unsigned long align_to_level(unsigned long pfn, int level)
-{
-	return (pfn + level_size(level) - 1) & level_mask(level);
-}
 
 /* VT-d pages must always be _smaller_ than MM pages. Otherwise things
    are never going to work. */
@@ -320,6 +277,7 @@ static int hw_pass_through = 1;
 
 struct dmar_domain {
 	int	id;			/* domain id */
+	int	nid;			/* node id */
 	unsigned long iommu_bmp;	/* bitmap of iommus this domain uses*/
 
 	struct list_head devices; 	/* all devices' list */
@@ -347,7 +305,7 @@ struct device_domain_info {
 	int segment;		/* PCI domain */
 	u8 bus;			/* PCI bus number */
 	u8 devfn;		/* PCI devfn number */
-	struct pci_dev *dev; /* it's NULL for PCIE-to-PCI bridge */
+	struct pci_dev *dev; /* it's NULL for PCIe-to-PCI bridge */
 	struct intel_iommu *iommu; /* IOMMU used by this device */
 	struct dmar_domain *domain; /* pointer to domain */
 };
@@ -382,7 +340,7 @@ int dmar_disabled = 0;
 int dmar_disabled = 1;
 #endif /*CONFIG_DMAR_DEFAULT_ON*/
 
-static int dmar_map_gfx = 1;
+static int __initdata dmar_map_gfx = 1;
 static int dmar_forcedac;
 static int intel_iommu_strict;
 
@@ -429,30 +387,14 @@ static struct kmem_cache *iommu_domain_cache;
 static struct kmem_cache *iommu_devinfo_cache;
 static struct kmem_cache *iommu_iova_cache;
 
-static inline void *iommu_kmem_cache_alloc(struct kmem_cache *cachep)
+static inline void *alloc_pgtable_page(int node)
 {
-	unsigned int flags;
-	void *vaddr;
+	struct page *page;
+	void *vaddr = NULL;
 
-	/* trying to avoid low memory issues */
-	flags = current->flags & PF_MEMALLOC;
-	current->flags |= PF_MEMALLOC;
-	vaddr = kmem_cache_alloc(cachep, GFP_ATOMIC);
-	current->flags &= (~PF_MEMALLOC | flags);
-	return vaddr;
-}
-
-
-static inline void *alloc_pgtable_page(void)
-{
-	unsigned int flags;
-	void *vaddr;
-
-	/* trying to avoid low memory issues */
-	flags = current->flags & PF_MEMALLOC;
-	current->flags |= PF_MEMALLOC;
-	vaddr = (void *)get_zeroed_page(GFP_ATOMIC);
-	current->flags &= (~PF_MEMALLOC | flags);
+	page = alloc_pages_node(node, GFP_ATOMIC | __GFP_ZERO, 0);
+	if (page)
+		vaddr = page_address(page);
 	return vaddr;
 }
 
@@ -463,7 +405,7 @@ static inline void free_pgtable_page(void *vaddr)
 
 static inline void *alloc_domain_mem(void)
 {
-	return iommu_kmem_cache_alloc(iommu_domain_cache);
+	return kmem_cache_alloc(iommu_domain_cache, GFP_ATOMIC);
 }
 
 static void free_domain_mem(void *vaddr)
@@ -473,7 +415,7 @@ static void free_domain_mem(void *vaddr)
 
 static inline void * alloc_devinfo_mem(void)
 {
-	return iommu_kmem_cache_alloc(iommu_devinfo_cache);
+	return kmem_cache_alloc(iommu_devinfo_cache, GFP_ATOMIC);
 }
 
 static inline void free_devinfo_mem(void *vaddr)
@@ -483,7 +425,7 @@ static inline void free_devinfo_mem(void *vaddr)
 
 struct iova *alloc_iova_mem(void)
 {
-	return iommu_kmem_cache_alloc(iommu_iova_cache);
+	return kmem_cache_alloc(iommu_iova_cache, GFP_ATOMIC);
 }
 
 void free_iova_mem(struct iova *iova)
@@ -491,6 +433,8 @@ void free_iova_mem(struct iova *iova)
 	kmem_cache_free(iommu_iova_cache, iova);
 }
 
+
+static inline int width_to_agaw(int width);
 
 static int __iommu_calculate_agaw(struct intel_iommu *iommu, int max_gaw)
 {
@@ -630,7 +574,8 @@ static struct context_entry * device_to_context_entry(struct intel_iommu *iommu,
 	root = &iommu->root_entry[bus];
 	context = get_context_addr_from_root(root);
 	if (!context) {
-		context = (struct context_entry *)alloc_pgtable_page();
+		context = (struct context_entry *)
+				alloc_pgtable_page(iommu->node);
 		if (!context) {
 			spin_unlock_irqrestore(&iommu->lock, flags);
 			return NULL;
@@ -705,6 +650,51 @@ out:
 	spin_unlock_irqrestore(&iommu->lock, flags);
 }
 
+/* page table handling */
+#define LEVEL_STRIDE		(9)
+#define LEVEL_MASK		(((u64)1 << LEVEL_STRIDE) - 1)
+
+static inline int agaw_to_level(int agaw)
+{
+	return agaw + 2;
+}
+
+static inline int agaw_to_width(int agaw)
+{
+	return 30 + agaw * LEVEL_STRIDE;
+
+}
+
+static inline int width_to_agaw(int width)
+{
+	return (width - 30) / LEVEL_STRIDE;
+}
+
+static inline unsigned int level_to_offset_bits(int level)
+{
+	return (level - 1) * LEVEL_STRIDE;
+}
+
+static inline int pfn_level_offset(unsigned long pfn, int level)
+{
+	return (pfn >> level_to_offset_bits(level)) & LEVEL_MASK;
+}
+
+static inline unsigned long level_mask(int level)
+{
+	return -1UL << level_to_offset_bits(level);
+}
+
+static inline unsigned long level_size(int level)
+{
+	return 1UL << level_to_offset_bits(level);
+}
+
+static inline unsigned long align_to_level(unsigned long pfn, int level)
+{
+	return (pfn + level_size(level) - 1) & level_mask(level);
+}
+
 static struct dma_pte *pfn_to_dma_pte(struct dmar_domain *domain,
 				      unsigned long pfn)
 {
@@ -728,7 +718,7 @@ static struct dma_pte *pfn_to_dma_pte(struct dmar_domain *domain,
 		if (!dma_pte_present(pte)) {
 			uint64_t pteval;
 
-			tmp_page = alloc_pgtable_page();
+			tmp_page = alloc_pgtable_page(domain->nid);
 
 			if (!tmp_page)
 				return NULL;
@@ -864,7 +854,7 @@ static int iommu_alloc_root_entry(struct intel_iommu *iommu)
 	struct root_entry *root;
 	unsigned long flags;
 
-	root = (struct root_entry *)alloc_pgtable_page();
+	root = (struct root_entry *)alloc_pgtable_page(iommu->node);
 	if (!root)
 		return -ENOMEM;
 
@@ -1259,6 +1249,7 @@ static struct dmar_domain *alloc_domain(void)
 	if (!domain)
 		return NULL;
 
+	domain->nid = -1;
 	memset(&domain->iommu_bmp, 0, sizeof(unsigned long));
 	domain->flags = 0;
 
@@ -1416,9 +1407,10 @@ static int domain_init(struct dmar_domain *domain, int guest_width)
 		domain->iommu_snooping = 0;
 
 	domain->iommu_count = 1;
+	domain->nid = iommu->node;
 
 	/* always allocate the top pgd */
-	domain->pgd = (struct dma_pte *)alloc_pgtable_page();
+	domain->pgd = (struct dma_pte *)alloc_pgtable_page(domain->nid);
 	if (!domain->pgd)
 		return -ENOMEM;
 	__iommu_flush_cache(iommu, domain->pgd, PAGE_SIZE);
@@ -1433,10 +1425,6 @@ static void domain_exit(struct dmar_domain *domain)
 	/* Domain 0 is reserved, so dont process it */
 	if (!domain)
 		return;
-
-	/* Flush any lazy unmaps that may reference this domain */
-	if (!intel_iommu_strict)
-		flush_unmaps_timeout(0);
 
 	domain_remove_dev_info(domain);
 	/* destroy iovas */
@@ -1580,6 +1568,8 @@ static int domain_context_mapping_one(struct dmar_domain *domain, int segment,
 	spin_lock_irqsave(&domain->iommu_lock, flags);
 	if (!test_and_set_bit(iommu->seq_id, &domain->iommu_bmp)) {
 		domain->iommu_count++;
+		if (domain->iommu_count == 1)
+			domain->nid = iommu->node;
 		domain_update_iommu_cap(domain);
 	}
 	spin_unlock_irqrestore(&domain->iommu_lock, flags);
@@ -1614,7 +1604,7 @@ domain_context_mapping(struct dmar_domain *domain, struct pci_dev *pdev,
 			return ret;
 		parent = parent->bus->self;
 	}
-	if (tmp->is_pcie) /* this is a PCIE-to-PCI bridge */
+	if (pci_is_pcie(tmp)) /* this is a PCIe-to-PCI bridge */
 		return domain_context_mapping_one(domain,
 					pci_domain_nr(tmp->subordinate),
 					tmp->subordinate->number, 0,
@@ -1654,7 +1644,7 @@ static int domain_context_mapped(struct pci_dev *pdev)
 			return ret;
 		parent = parent->bus->self;
 	}
-	if (tmp->is_pcie)
+	if (pci_is_pcie(tmp))
 		return device_context_mapped(iommu, tmp->subordinate->number,
 					     0);
 	else
@@ -1824,7 +1814,7 @@ static struct dmar_domain *get_domain_for_dev(struct pci_dev *pdev, int gaw)
 
 	dev_tmp = pci_find_upstream_pcie_bridge(pdev);
 	if (dev_tmp) {
-		if (dev_tmp->is_pcie) {
+		if (pci_is_pcie(dev_tmp)) {
 			bus = dev_tmp->subordinate->number;
 			devfn = 0;
 		} else {
@@ -1862,7 +1852,7 @@ static struct dmar_domain *get_domain_for_dev(struct pci_dev *pdev, int gaw)
 
 	ret = iommu_attach_domain(domain, iommu);
 	if (ret) {
-		free_domain_mem(domain);
+		domain_exit(domain);
 		goto error;
 	}
 
@@ -2195,7 +2185,7 @@ static int iommu_should_identity_map(struct pci_dev *pdev, int startup)
 	 * the 1:1 domain, just in _case_ one of their siblings turns out
 	 * not to be able to map all of memory.
 	 */
-	if (!pdev->is_pcie) {
+	if (!pci_is_pcie(pdev)) {
 		if (!pci_is_root_bus(pdev->bus))
 			return 0;
 		if (pdev->class >> 8 == PCI_CLASS_BRIDGE_PCI)
@@ -3248,14 +3238,8 @@ static int device_notifier(struct notifier_block *nb,
 	if (!domain)
 		return 0;
 
-	if (action == BUS_NOTIFY_UNBOUND_DRIVER && !iommu_pass_through) {
+	if (action == BUS_NOTIFY_UNBOUND_DRIVER && !iommu_pass_through)
 		domain_remove_one_dev_info(domain, pdev);
-
-		if (!(domain->flags & DOMAIN_FLAG_VIRTUAL_MACHINE) &&
-		    !(domain->flags & DOMAIN_FLAG_STATIC_IDENTITY) &&
-		    list_empty(&domain->devices))
-			domain_exit(domain);
-	}
 
 	return 0;
 }
@@ -3288,7 +3272,7 @@ int __init intel_iommu_init(void)
 	 * Check the need for DMA-remapping initialization now.
 	 * Above initialization will also be used by Interrupt-remapping.
 	 */
-	if (no_iommu || swiotlb || dmar_disabled)
+	if (no_iommu || dmar_disabled)
 		return -ENODEV;
 
 	iommu_init_mempool();
@@ -3309,7 +3293,9 @@ int __init intel_iommu_init(void)
 	"PCI-DMA: Intel(R) Virtualization Technology for Directed I/O\n");
 
 	init_timer(&unmap_timer);
-	force_iommu = 1;
+#ifdef CONFIG_SWIOTLB
+	swiotlb = 0;
+#endif
 	dma_ops = &intel_dma_ops;
 
 	init_iommu_sysfs();
@@ -3339,7 +3325,7 @@ static void iommu_detach_dependent_devices(struct intel_iommu *iommu,
 					 parent->devfn);
 			parent = parent->bus->self;
 		}
-		if (tmp->is_pcie) /* this is a PCIE-to-PCI bridge */
+		if (pci_is_pcie(tmp)) /* this is a PCIe-to-PCI bridge */
 			iommu_detach_dev(iommu,
 				tmp->subordinate->number, 0);
 		else /* this is a legacy PCI bridge */
@@ -3403,11 +3389,6 @@ static void domain_remove_one_dev_info(struct dmar_domain *domain,
 		domain->iommu_count--;
 		domain_update_iommu_cap(domain);
 		spin_unlock_irqrestore(&domain->iommu_lock, tmp_flags);
-
-		spin_lock_irqsave(&iommu->lock, tmp_flags);
-		clear_bit(domain->id, iommu->domain_ids);
-		iommu->domains[domain->id] = NULL;
-		spin_unlock_irqrestore(&iommu->lock, tmp_flags);
 	}
 
 	spin_unlock_irqrestore(&device_domain_lock, flags);
@@ -3480,6 +3461,7 @@ static struct dmar_domain *iommu_alloc_vm_domain(void)
 		return NULL;
 
 	domain->id = vm_domid++;
+	domain->nid = -1;
 	memset(&domain->iommu_bmp, 0, sizeof(unsigned long));
 	domain->flags = DOMAIN_FLAG_VIRTUAL_MACHINE;
 
@@ -3506,9 +3488,10 @@ static int md_domain_init(struct dmar_domain *domain, int guest_width)
 	domain->iommu_coherency = 0;
 	domain->iommu_snooping = 0;
 	domain->max_addr = 0;
+	domain->nid = -1;
 
 	/* always allocate the top pgd */
-	domain->pgd = (struct dma_pte *)alloc_pgtable_page();
+	domain->pgd = (struct dma_pte *)alloc_pgtable_page(domain->nid);
 	if (!domain->pgd)
 		return -ENOMEM;
 	domain_flush_cache(domain, domain->pgd, PAGE_SIZE);
@@ -3745,12 +3728,6 @@ static void __devinit quirk_iommu_rwbf(struct pci_dev *dev)
 	 */
 	printk(KERN_INFO "DMAR: Forcing write-buffer flush capability\n");
 	rwbf_quirk = 1;
-
-	/* https://bugzilla.redhat.com/show_bug.cgi?id=538163 */
-	if (dev->revision == 0x07) {
-		printk(KERN_INFO "DMAR: Disabling IOMMU for graphics on this chipset\n");
-		dmar_map_gfx = 0;
-	}
 }
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, 0x2a40, quirk_iommu_rwbf);

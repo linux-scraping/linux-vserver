@@ -159,7 +159,6 @@ struct hrtimer_clock_base {
  *			and timers
  * @clock_base:		array of clock bases for this cpu
  * @curr_timer:		the timer which is executing a callback right now
- * @clock_was_set:	Indicates that clock was set from irq context.
  * @expires_next:	absolute time of the next event which was scheduled
  *			via clock_set_next_event()
  * @hres_active:	State of high resolution mode
@@ -170,9 +169,8 @@ struct hrtimer_clock_base {
  * @max_hang_time:	Maximum time spent in hrtimer_interrupt
  */
 struct hrtimer_cpu_base {
-	spinlock_t			lock;
+	raw_spinlock_t			lock;
 	struct hrtimer_clock_base	clock_base[HRTIMER_MAX_CLOCK_BASES];
-	unsigned int			clock_was_set;
 #ifdef CONFIG_HIGH_RES_TIMERS
 	ktime_t				expires_next;
 	int				hres_active;
@@ -282,8 +280,6 @@ extern void hrtimer_peek_ahead_timers(void);
 # define MONOTONIC_RES_NSEC	HIGH_RES_NSEC
 # define KTIME_MONOTONIC_RES	KTIME_HIGH_RES
 
-extern void clock_was_set_delayed(void);
-
 #else
 
 # define MONOTONIC_RES_NSEC	LOW_RES_NSEC
@@ -312,14 +308,11 @@ static inline int hrtimer_is_hres_active(struct hrtimer *timer)
 {
 	return 0;
 }
-
-static inline void clock_was_set_delayed(void) { }
-
 #endif
 
 extern ktime_t ktime_get(void);
 extern ktime_t ktime_get_real(void);
-extern ktime_t ktime_get_update_offsets(ktime_t *offs_real);
+
 
 DECLARE_PER_CPU(struct tick_device, tick_cpu_device);
 
@@ -446,48 +439,5 @@ extern u64 ktime_divns(const ktime_t kt, s64 div);
 
 /* Show pending timers: */
 extern void sysrq_timer_list_show(void);
-
-/*
- * Timer-statistics info:
- */
-#ifdef CONFIG_TIMER_STATS
-
-extern void timer_stats_update_stats(void *timer, pid_t pid, void *startf,
-				     void *timerf, char *comm,
-				     unsigned int timer_flag);
-
-static inline void timer_stats_account_hrtimer(struct hrtimer *timer)
-{
-	if (likely(!timer_stats_active))
-		return;
-	timer_stats_update_stats(timer, timer->start_pid, timer->start_site,
-				 timer->function, timer->start_comm, 0);
-}
-
-extern void __timer_stats_hrtimer_set_start_info(struct hrtimer *timer,
-						 void *addr);
-
-static inline void timer_stats_hrtimer_set_start_info(struct hrtimer *timer)
-{
-	__timer_stats_hrtimer_set_start_info(timer, __builtin_return_address(0));
-}
-
-static inline void timer_stats_hrtimer_clear_start_info(struct hrtimer *timer)
-{
-	timer->start_site = NULL;
-}
-#else
-static inline void timer_stats_account_hrtimer(struct hrtimer *timer)
-{
-}
-
-static inline void timer_stats_hrtimer_set_start_info(struct hrtimer *timer)
-{
-}
-
-static inline void timer_stats_hrtimer_clear_start_info(struct hrtimer *timer)
-{
-}
-#endif
 
 #endif

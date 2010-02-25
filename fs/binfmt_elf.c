@@ -45,8 +45,8 @@ static unsigned long elf_map(struct file *, unsigned long, struct elf_phdr *,
  * If we don't support core dumping, then supply a NULL so we
  * don't even try.
  */
-#if defined(USE_ELF_CORE_DUMP) && defined(CONFIG_ELF_CORE)
-static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, unsigned long limit);
+#ifdef CONFIG_ELF_CORE
+static int elf_core_dump(struct coredump_params *cprm);
 #else
 #define elf_core_dump	NULL
 #endif
@@ -547,12 +547,11 @@ out:
 
 static unsigned long randomize_stack_top(unsigned long stack_top)
 {
-	unsigned long random_variable = 0;
+	unsigned int random_variable = 0;
 
 	if ((current->flags & PF_RANDOMIZE) &&
 		!(current->personality & ADDR_NO_RANDOMIZE)) {
-		random_variable = (unsigned long) get_random_int();
-		random_variable &= STACK_RND_MASK;
+		random_variable = get_random_int() & STACK_RND_MASK;
 		random_variable <<= PAGE_SHIFT;
 	}
 #ifdef CONFIG_STACK_GROWSUP
@@ -746,7 +745,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 	
 	current->mm->start_stack = bprm->p;
 
-	/* Now we do a little grungy work by mmaping the ELF image into
+	/* Now we do a little grungy work by mmapping the ELF image into
 	   the correct location in memory. */
 	for(i = 0, elf_ppnt = elf_phdata;
 	    i < loc->elf_ex.e_phnum; i++, elf_ppnt++) {
@@ -1080,12 +1079,7 @@ out:
 	return error;
 }
 
-/*
- * Note that some platforms still use traditional core dumps and not
- * the ELF core dump.  Each platform can select it as appropriate.
- */
-#if defined(USE_ELF_CORE_DUMP) && defined(CONFIG_ELF_CORE)
-
+#ifdef CONFIG_ELF_CORE
 /*
  * ELF core dumper
  *
@@ -1256,8 +1250,9 @@ static int writenote(struct memelfnote *men, struct file *file,
 }
 #undef DUMP_WRITE
 
-#define DUMP_WRITE(addr, nr)	\
-	if ((size += (nr)) > limit || !dump_write(file, (addr), (nr))) \
+#define DUMP_WRITE(addr, nr)				\
+	if ((size += (nr)) > cprm->limit ||		\
+	    !dump_write(cprm->file, (addr), (nr)))	\
 		goto end_coredump;
 
 static void fill_elf_header(struct elfhdr *elf, int segs,
@@ -1454,7 +1449,7 @@ static int fill_thread_core_info(struct elf_thread_core_info *t,
 	for (i = 1; i < view->n; ++i) {
 		const struct user_regset *regset = &view->regsets[i];
 		do_thread_regset_writeback(t->task, regset);
-		if (regset->core_note_type && regset->get &&
+		if (regset->core_note_type &&
 		    (!regset->active || regset->active(t->task, regset))) {
 			int ret;
 			size_t size = regset->n * regset->size;
@@ -1701,19 +1696,30 @@ static int elf_note_info_init(struct elf_note_info *info)
 		return 0;
 	info->psinfo = kmalloc(sizeof(*info->psinfo), GFP_KERNEL);
 	if (!info->psinfo)
-		return 0;
+		goto notes_free;
 	info->prstatus = kmalloc(sizeof(*info->prstatus), GFP_KERNEL);
 	if (!info->prstatus)
-		return 0;
+		goto psinfo_free;
 	info->fpu = kmalloc(sizeof(*info->fpu), GFP_KERNEL);
 	if (!info->fpu)
-		return 0;
+		goto prstatus_free;
 #ifdef ELF_CORE_COPY_XFPREGS
 	info->xfpu = kmalloc(sizeof(*info->xfpu), GFP_KERNEL);
 	if (!info->xfpu)
-		return 0;
+		goto fpu_free;
 #endif
 	return 1;
+#ifdef ELF_CORE_COPY_XFPREGS
+ fpu_free:
+	kfree(info->fpu);
+#endif
+ prstatus_free:
+	kfree(info->prstatus);
+ psinfo_free:
+	kfree(info->psinfo);
+ notes_free:
+	kfree(info->notes);
+	return 0;
 }
 
 static int fill_note_info(struct elfhdr *elf, int phdrs,
@@ -1874,7 +1880,7 @@ static struct vm_area_struct *next_vma(struct vm_area_struct *this_vma,
  * and then they are actually written out.  If we run out of core limit
  * we just truncate.
  */
-static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, unsigned long limit)
+static int elf_core_dump(struct coredump_params *cprm)
 {
 	int has_dumped = 0;
 	mm_segment_t fs;
@@ -1920,7 +1926,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
 	 * notes.  This also sets up the file header.
 	 */
 	if (!fill_note_info(elf, segs + 1, /* including notes section */
-			    &info, signr, regs))
+			    &info, cprm->signr, cprm->regs))
 		goto cleanup;
 
 	has_dumped = 1;
@@ -1982,14 +1988,14 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
 #endif
 
  	/* write out the notes section */
-	if (!write_note_info(&info, file, &foffset))
+	if (!write_note_info(&info, cprm->file, &foffset))
 		goto end_coredump;
 
-	if (elf_coredump_extra_notes_write(file, &foffset))
+	if (elf_coredump_extra_notes_write(cprm->file, &foffset))
 		goto end_coredump;
 
 	/* Align to page */
-	if (!dump_seek(file, dataoff - foffset))
+	if (!dump_seek(cprm->file, dataoff - foffset))
 		goto end_coredump;
 
 	for (vma = first_vma(current, gate_vma); vma != NULL;
@@ -2006,12 +2012,13 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
 			page = get_dump_page(addr);
 			if (page) {
 				void *kaddr = kmap(page);
-				stop = ((size += PAGE_SIZE) > limit) ||
-					!dump_write(file, kaddr, PAGE_SIZE);
+				stop = ((size += PAGE_SIZE) > cprm->limit) ||
+					!dump_write(cprm->file, kaddr,
+						    PAGE_SIZE);
 				kunmap(page);
 				page_cache_release(page);
 			} else
-				stop = !dump_seek(file, PAGE_SIZE);
+				stop = !dump_seek(cprm->file, PAGE_SIZE);
 			if (stop)
 				goto end_coredump;
 		}
@@ -2031,7 +2038,7 @@ out:
 	return has_dumped;
 }
 
-#endif		/* USE_ELF_CORE_DUMP */
+#endif		/* CONFIG_ELF_CORE */
 
 static int __init init_elf_binfmt(void)
 {

@@ -401,9 +401,8 @@ static int cache_clean(void)
 		for (; ch; cp= & ch->next, ch= *cp) {
 			if (current_detail->nextcheck > ch->expiry_time)
 				current_detail->nextcheck = ch->expiry_time+1;
-			if (ch->expiry_time >= get_seconds()
-			    && ch->last_refresh >= current_detail->flush_time
-				)
+			if (ch->expiry_time >= get_seconds() &&
+			    ch->last_refresh >= current_detail->flush_time)
 				continue;
 			if (test_and_clear_bit(CACHE_PENDING, &ch->flags))
 				cache_dequeue(current_detail, ch);
@@ -719,8 +718,6 @@ static ssize_t cache_do_downcall(char *kaddr, const char __user *buf,
 {
 	ssize_t ret;
 
-	if (count == 0)
-		return -EINVAL;
 	if (copy_from_user(kaddr, buf, count))
 		return -EFAULT;
 	kaddr[count] = '\0';
@@ -1236,10 +1233,8 @@ static int content_open(struct inode *inode, struct file *file,
 	if (!cd || !try_module_get(cd->owner))
 		return -EACCES;
 	han = __seq_open_private(file, &cache_content_op, sizeof(*han));
-	if (han == NULL) {
-		module_put(cd->owner);
+	if (han == NULL)
 		return -ENOMEM;
-	}
 
 	han->cd = cd;
 	return 0;

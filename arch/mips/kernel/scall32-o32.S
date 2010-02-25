@@ -52,7 +52,7 @@ NESTED(handle_sys, PT_SIZE, sp)
 
 stack_done:
 	lw	t0, TI_FLAGS($28)	# syscall tracing enabled?
-	li	t1, _TIF_WORK_SYSCALL_ENTRY
+	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
 	and	t0, t1
 	bnez	t0, syscall_trace_entry	# -> yes
 
@@ -583,6 +583,7 @@ einval:	li	v0, -ENOSYS
 	sys	sys_rt_tgsigqueueinfo	4
 	sys	sys_perf_event_open	5
 	sys	sys_accept4		4
+	sys     sys_recvmmsg            5
 	.endm
 
 	/* We pre-compute the number of _instruction_ bytes needed to

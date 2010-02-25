@@ -56,7 +56,7 @@ static void intel_lvds_set_backlight(struct drm_device *dev, int level)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	u32 blc_pwm_ctl, reg;
 
-	if (IS_IGDNG(dev))
+	if (IS_IRONLAKE(dev))
 		reg = BLC_PWM_CPU_CTL;
 	else
 		reg = BLC_PWM_CTL;
@@ -74,7 +74,7 @@ static u32 intel_lvds_get_max_backlight(struct drm_device *dev)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	u32 reg;
 
-	if (IS_IGDNG(dev))
+	if (IS_IRONLAKE(dev))
 		reg = BLC_PWM_PCH_CTL2;
 	else
 		reg = BLC_PWM_CTL;
@@ -91,7 +91,7 @@ static void intel_lvds_set_power(struct drm_device *dev, bool on)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	u32 pp_status, ctl_reg, status_reg;
 
-	if (IS_IGDNG(dev)) {
+	if (IS_IRONLAKE(dev)) {
 		ctl_reg = PCH_PP_CONTROL;
 		status_reg = PCH_PP_STATUS;
 	} else {
@@ -137,7 +137,7 @@ static void intel_lvds_save(struct drm_connector *connector)
 	u32 pp_on_reg, pp_off_reg, pp_ctl_reg, pp_div_reg;
 	u32 pwm_ctl_reg;
 
-	if (IS_IGDNG(dev)) {
+	if (IS_IRONLAKE(dev)) {
 		pp_on_reg = PCH_PP_ON_DELAYS;
 		pp_off_reg = PCH_PP_OFF_DELAYS;
 		pp_ctl_reg = PCH_PP_CONTROL;
@@ -174,7 +174,7 @@ static void intel_lvds_restore(struct drm_connector *connector)
 	u32 pp_on_reg, pp_off_reg, pp_ctl_reg, pp_div_reg;
 	u32 pwm_ctl_reg;
 
-	if (IS_IGDNG(dev)) {
+	if (IS_IRONLAKE(dev)) {
 		pp_on_reg = PCH_PP_ON_DELAYS;
 		pp_off_reg = PCH_PP_OFF_DELAYS;
 		pp_ctl_reg = PCH_PP_CONTROL;
@@ -297,7 +297,7 @@ static bool intel_lvds_mode_fixup(struct drm_encoder *encoder,
 	}
 
 	/* full screen scale for now */
-	if (IS_IGDNG(dev))
+	if (IS_IRONLAKE(dev))
 		goto out;
 
 	/* 965+ wants fuzzy fitting */
@@ -327,7 +327,7 @@ static bool intel_lvds_mode_fixup(struct drm_encoder *encoder,
 	 * to register description and PRM.
 	 * Change the value here to see the borders for debugging
 	 */
-	if (!IS_IGDNG(dev)) {
+	if (!IS_IRONLAKE(dev)) {
 		I915_WRITE(BCLRPAT_A, 0);
 		I915_WRITE(BCLRPAT_B, 0);
 	}
@@ -548,7 +548,7 @@ static void intel_lvds_prepare(struct drm_encoder *encoder)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	u32 reg;
 
-	if (IS_IGDNG(dev))
+	if (IS_IRONLAKE(dev))
 		reg = BLC_PWM_CPU_CTL;
 	else
 		reg = BLC_PWM_CTL;
@@ -587,7 +587,7 @@ static void intel_lvds_mode_set(struct drm_encoder *encoder,
 	 * settings.
 	 */
 
-	if (IS_IGDNG(dev))
+	if (IS_IRONLAKE(dev))
 		return;
 
 	/*
@@ -623,6 +623,13 @@ static const struct dmi_system_id bad_lid_status[] = {
 		},
 	},
 	{
+		.ident = "Aspire 1810T",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Aspire 1810T"),
+		},
+	},
+	{
 		.ident = "PC-81005",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "MALATA"),
@@ -648,13 +655,9 @@ static const struct dmi_system_id bad_lid_status[] = {
  */
 static enum drm_connector_status intel_lvds_detect(struct drm_connector *connector)
 {
-	struct drm_device *dev = connector->dev;
 	enum drm_connector_status status = connector_status_connected;
 
-	if (IS_I8XX(dev))
-		return connector_status_connected;
-
-	if (!acpi_lid_open() && !dmi_check_system(bad_lid_status))
+	if (!dmi_check_system(bad_lid_status) && !acpi_lid_open())
 		status = connector_status_disconnected;
 
 	return status;
@@ -884,46 +887,70 @@ static const struct dmi_system_id intel_no_lvds[] = {
 	},
 	{
 		.callback = intel_no_lvds_dmi_callback,
-		.ident = "AOpen i915GMm-HFS",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_VENDOR, "AOpen"),
-			DMI_MATCH(DMI_BOARD_NAME, "i915GMm-HFS"),
-		},
-	},
-	{
-		.callback = intel_no_lvds_dmi_callback,
-                .ident = "AOpen i45GMx-I",
-                .matches = {
-                        DMI_MATCH(DMI_BOARD_VENDOR, "AOpen"),
-                        DMI_MATCH(DMI_BOARD_NAME, "i45GMx-I"),
-                },
-        },
-	{
-		.callback = intel_no_lvds_dmi_callback,
 		.ident = "Aopen i945GTt-VFA",
 		.matches = {
 			DMI_MATCH(DMI_PRODUCT_VERSION, "AO00001JW"),
 		},
 	},
-	{
-		.callback = intel_no_lvds_dmi_callback,
-		.ident = "Clientron U800",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Clientron"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "U800"),
-		},
-	},
-	{
-		.callback = intel_no_lvds_dmi_callback,
-		.ident = "Asus EeeBox PC EB1007",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK Computer INC."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "EB1007"),
-		},
-	},
 
 	{ }	/* terminating entry */
 };
+
+/**
+ * intel_find_lvds_downclock - find the reduced downclock for LVDS in EDID
+ * @dev: drm device
+ * @connector: LVDS connector
+ *
+ * Find the reduced downclock for LVDS in EDID.
+ */
+static void intel_find_lvds_downclock(struct drm_device *dev,
+				struct drm_connector *connector)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	struct drm_display_mode *scan, *panel_fixed_mode;
+	int temp_downclock;
+
+	panel_fixed_mode = dev_priv->panel_fixed_mode;
+	temp_downclock = panel_fixed_mode->clock;
+
+	mutex_lock(&dev->mode_config.mutex);
+	list_for_each_entry(scan, &connector->probed_modes, head) {
+		/*
+		 * If one mode has the same resolution with the fixed_panel
+		 * mode while they have the different refresh rate, it means
+		 * that the reduced downclock is found for the LVDS. In such
+		 * case we can set the different FPx0/1 to dynamically select
+		 * between low and high frequency.
+		 */
+		if (scan->hdisplay == panel_fixed_mode->hdisplay &&
+			scan->hsync_start == panel_fixed_mode->hsync_start &&
+			scan->hsync_end == panel_fixed_mode->hsync_end &&
+			scan->htotal == panel_fixed_mode->htotal &&
+			scan->vdisplay == panel_fixed_mode->vdisplay &&
+			scan->vsync_start == panel_fixed_mode->vsync_start &&
+			scan->vsync_end == panel_fixed_mode->vsync_end &&
+			scan->vtotal == panel_fixed_mode->vtotal) {
+			if (scan->clock < temp_downclock) {
+				/*
+				 * The downclock is already found. But we
+				 * expect to find the lower downclock.
+				 */
+				temp_downclock = scan->clock;
+			}
+		}
+	}
+	mutex_unlock(&dev->mode_config.mutex);
+	if (temp_downclock < panel_fixed_mode->clock &&
+	    i915_lvds_downclock) {
+		/* We found the downclock for LVDS. */
+		dev_priv->lvds_downclock_avail = 1;
+		dev_priv->lvds_downclock = temp_downclock;
+		DRM_DEBUG_KMS("LVDS downclock is found in EDID. "
+				"Normal clock %dKhz, downclock %dKhz\n",
+				panel_fixed_mode->clock, temp_downclock);
+	}
+	return;
+}
 
 /*
  * Enumerate the child dev array parsed from VBT to check whether
@@ -993,11 +1020,11 @@ void intel_lvds_init(struct drm_device *dev)
 		return;
 	}
 
-	if (IS_IGDNG(dev)) {
+	if (IS_IRONLAKE(dev)) {
 		if ((I915_READ(PCH_LVDS) & LVDS_DETECTED) == 0)
 			return;
 		if (dev_priv->edp_support) {
-			DRM_DEBUG("disable LVDS for eDP support\n");
+			DRM_DEBUG_KMS("disable LVDS for eDP support\n");
 			return;
 		}
 		gpio = PCH_GPIOC;
@@ -1070,6 +1097,7 @@ void intel_lvds_init(struct drm_device *dev)
 			dev_priv->panel_fixed_mode =
 				drm_mode_duplicate(dev, scan);
 			mutex_unlock(&dev->mode_config.mutex);
+			intel_find_lvds_downclock(dev, connector);
 			goto out;
 		}
 		mutex_unlock(&dev->mode_config.mutex);
@@ -1094,8 +1122,8 @@ void intel_lvds_init(struct drm_device *dev)
 	 * correct mode.
 	 */
 
-	/* IGDNG: FIXME if still fail, not try pipe mode now */
-	if (IS_IGDNG(dev))
+	/* Ironlake: FIXME if still fail, not try pipe mode now */
+	if (IS_IRONLAKE(dev))
 		goto failed;
 
 	lvds = I915_READ(LVDS);
@@ -1116,7 +1144,7 @@ void intel_lvds_init(struct drm_device *dev)
 		goto failed;
 
 out:
-	if (IS_IGDNG(dev)) {
+	if (IS_IRONLAKE(dev)) {
 		u32 pwm;
 		/* make sure PWM is enabled */
 		pwm = I915_READ(BLC_PWM_CPU_CTL2);
@@ -1129,7 +1157,7 @@ out:
 	}
 	dev_priv->lid_notifier.notifier_call = intel_lid_notify;
 	if (acpi_lid_notifier_register(&dev_priv->lid_notifier)) {
-		DRM_DEBUG("lid notifier registration failed\n");
+		DRM_DEBUG_KMS("lid notifier registration failed\n");
 		dev_priv->lid_notifier.notifier_call = NULL;
 	}
 	/* keep the LVDS connector */
@@ -1142,5 +1170,6 @@ failed:
 	if (intel_output->ddc_bus)
 		intel_i2c_destroy(intel_output->ddc_bus);
 	drm_connector_cleanup(connector);
+	drm_encoder_cleanup(encoder);
 	kfree(intel_output);
 }

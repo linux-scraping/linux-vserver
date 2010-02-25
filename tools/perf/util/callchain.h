@@ -48,10 +48,6 @@ static inline void callchain_init(struct callchain_node *node)
 	INIT_LIST_HEAD(&node->brothers);
 	INIT_LIST_HEAD(&node->children);
 	INIT_LIST_HEAD(&node->val);
-
-	node->children_hit = 0;
-	node->parent = NULL;
-	node->hit = 0;
 }
 
 static inline u64 cumul_hits(struct callchain_node *node)
@@ -62,4 +58,4 @@ static inline u64 cumul_hits(struct callchain_node *node)
 int register_callchain_param(struct callchain_param *param);
 void append_chain(struct callchain_node *root, struct ip_callchain *chain,
 		  struct symbol **syms);
-#endif
+#endif	/* __PERF_CALLCHAIN_H */

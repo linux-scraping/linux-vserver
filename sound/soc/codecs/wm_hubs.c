@@ -438,11 +438,11 @@ static const struct snd_soc_dapm_widget analogue_dapm_widgets[] = {
 SND_SOC_DAPM_INPUT("IN1LN"),
 SND_SOC_DAPM_INPUT("IN1LP"),
 SND_SOC_DAPM_INPUT("IN2LN"),
-SND_SOC_DAPM_INPUT("IN2LP/VXRN"),
+SND_SOC_DAPM_INPUT("IN2LP:VXRN"),
 SND_SOC_DAPM_INPUT("IN1RN"),
 SND_SOC_DAPM_INPUT("IN1RP"),
 SND_SOC_DAPM_INPUT("IN2RN"),
-SND_SOC_DAPM_INPUT("IN2RP/VXRP"),
+SND_SOC_DAPM_INPUT("IN2RP:VXRP"),
 
 SND_SOC_DAPM_MICBIAS("MICBIAS2", WM8993_POWER_MANAGEMENT_1, 5, 0),
 SND_SOC_DAPM_MICBIAS("MICBIAS1", WM8993_POWER_MANAGEMENT_1, 4, 0),
@@ -537,14 +537,14 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 	{ "IN1R PGA", "IN1RP Switch", "IN1RP" },
 	{ "IN1R PGA", "IN1RN Switch", "IN1RN" },
 
-	{ "IN2L PGA", "IN2LP Switch", "IN2LP/VXRN" },
+	{ "IN2L PGA", "IN2LP Switch", "IN2LP:VXRN" },
 	{ "IN2L PGA", "IN2LN Switch", "IN2LN" },
 
-	{ "IN2R PGA", "IN2RP Switch", "IN2RP/VXRP" },
+	{ "IN2R PGA", "IN2RP Switch", "IN2RP:VXRP" },
 	{ "IN2R PGA", "IN2RN Switch", "IN2RN" },
 
-	{ "Direct Voice", NULL, "IN2LP/VXRN" },
-	{ "Direct Voice", NULL, "IN2RP/VXRP" },
+	{ "Direct Voice", NULL, "IN2LP:VXRN" },
+	{ "Direct Voice", NULL, "IN2RP:VXRP" },
 
 	{ "MIXINL", "IN1L Switch", "IN1L PGA" },
 	{ "MIXINL", "IN2L Switch", "IN2L PGA" },
@@ -565,7 +565,7 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 	{ "Left Output Mixer", "Right Input Switch", "MIXINR" },
 	{ "Left Output Mixer", "IN2RN Switch", "IN2RN" },
 	{ "Left Output Mixer", "IN2LN Switch", "IN2LN" },
-	{ "Left Output Mixer", "IN2LP Switch", "IN2LP/VXRN" },
+	{ "Left Output Mixer", "IN2LP Switch", "IN2LP:VXRN" },
 	{ "Left Output Mixer", "IN1L Switch", "IN1L PGA" },
 	{ "Left Output Mixer", "IN1R Switch", "IN1R PGA" },
 
@@ -573,7 +573,7 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 	{ "Right Output Mixer", "Right Input Switch", "MIXINR" },
 	{ "Right Output Mixer", "IN2LN Switch", "IN2LN" },
 	{ "Right Output Mixer", "IN2RN Switch", "IN2RN" },
-	{ "Right Output Mixer", "IN2RP Switch", "IN2RP/VXRP" },
+	{ "Right Output Mixer", "IN2RP Switch", "IN2RP:VXRP" },
 	{ "Right Output Mixer", "IN1L Switch", "IN1L PGA" },
 	{ "Right Output Mixer", "IN1R Switch", "IN1R PGA" },
 
@@ -593,12 +593,12 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 
 	{ "SPKL", "Input Switch", "MIXINL" },
 	{ "SPKL", "IN1LP Switch", "IN1LP" },
-	{ "SPKL", "Output Switch", "Left Output PGA" },
+	{ "SPKL", "Output Switch", "Left Output Mixer" },
 	{ "SPKL", NULL, "TOCLK" },
 
 	{ "SPKR", "Input Switch", "MIXINR" },
 	{ "SPKR", "IN1RP Switch", "IN1RP" },
-	{ "SPKR", "Output Switch", "Right Output PGA" },
+	{ "SPKR", "Output Switch", "Right Output Mixer" },
 	{ "SPKR", NULL, "TOCLK" },
 
 	{ "SPKL Boost", "Direct Voice Switch", "Direct Voice" },
@@ -620,8 +620,8 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 	{ "SPKOUTRP", NULL, "SPKR Driver" },
 	{ "SPKOUTRN", NULL, "SPKR Driver" },
 
-	{ "Left Headphone Mux", "Mixer", "Left Output PGA" },
-	{ "Right Headphone Mux", "Mixer", "Right Output PGA" },
+	{ "Left Headphone Mux", "Mixer", "Left Output Mixer" },
+	{ "Right Headphone Mux", "Mixer", "Right Output Mixer" },
 
 	{ "Headphone PGA", NULL, "Left Headphone Mux" },
 	{ "Headphone PGA", NULL, "Right Headphone Mux" },
@@ -639,17 +639,17 @@ static const struct snd_soc_dapm_route analogue_routes[] = {
 static const struct snd_soc_dapm_route lineout1_diff_routes[] = {
 	{ "LINEOUT1 Mixer", "IN1L Switch", "IN1L PGA" },
 	{ "LINEOUT1 Mixer", "IN1R Switch", "IN1R PGA" },
-	{ "LINEOUT1 Mixer", "Output Switch", "Left Output PGA" },
+	{ "LINEOUT1 Mixer", "Output Switch", "Left Output Mixer" },
 
 	{ "LINEOUT1N Driver", NULL, "LINEOUT1 Mixer" },
 	{ "LINEOUT1P Driver", NULL, "LINEOUT1 Mixer" },
 };
 
 static const struct snd_soc_dapm_route lineout1_se_routes[] = {
-	{ "LINEOUT1N Mixer", "Left Output Switch", "Left Output PGA" },
-	{ "LINEOUT1N Mixer", "Right Output Switch", "Right Output PGA" },
+	{ "LINEOUT1N Mixer", "Left Output Switch", "Left Output Mixer" },
+	{ "LINEOUT1N Mixer", "Right Output Switch", "Left Output Mixer" },
 
-	{ "LINEOUT1P Mixer", "Left Output Switch", "Left Output PGA" },
+	{ "LINEOUT1P Mixer", "Left Output Switch", "Left Output Mixer" },
 
 	{ "LINEOUT1N Driver", NULL, "LINEOUT1N Mixer" },
 	{ "LINEOUT1P Driver", NULL, "LINEOUT1P Mixer" },
@@ -658,17 +658,17 @@ static const struct snd_soc_dapm_route lineout1_se_routes[] = {
 static const struct snd_soc_dapm_route lineout2_diff_routes[] = {
 	{ "LINEOUT2 Mixer", "IN2L Switch", "IN2L PGA" },
 	{ "LINEOUT2 Mixer", "IN2R Switch", "IN2R PGA" },
-	{ "LINEOUT2 Mixer", "Output Switch", "Right Output PGA" },
+	{ "LINEOUT2 Mixer", "Output Switch", "Right Output Mixer" },
 
 	{ "LINEOUT2N Driver", NULL, "LINEOUT2 Mixer" },
 	{ "LINEOUT2P Driver", NULL, "LINEOUT2 Mixer" },
 };
 
 static const struct snd_soc_dapm_route lineout2_se_routes[] = {
-	{ "LINEOUT2N Mixer", "Left Output Switch", "Left Output PGA" },
-	{ "LINEOUT2N Mixer", "Right Output Switch", "Right Output PGA" },
+	{ "LINEOUT2N Mixer", "Left Output Switch", "Left Output Mixer" },
+	{ "LINEOUT2N Mixer", "Right Output Switch", "Left Output Mixer" },
 
-	{ "LINEOUT2P Mixer", "Right Output Switch", "Right Output PGA" },
+	{ "LINEOUT2P Mixer", "Right Output Switch", "Right Output Mixer" },
 
 	{ "LINEOUT2N Driver", NULL, "LINEOUT2N Mixer" },
 	{ "LINEOUT2P Driver", NULL, "LINEOUT2P Mixer" },
@@ -686,21 +686,17 @@ int wm_hubs_add_analogue_controls(struct snd_soc_codec *codec)
 	snd_soc_update_bits(codec, WM8993_RIGHT_LINE_INPUT_3_4_VOLUME,
 			    WM8993_IN2_VU, WM8993_IN2_VU);
 
-	snd_soc_update_bits(codec, WM8993_SPEAKER_VOLUME_LEFT,
-			    WM8993_SPKOUT_VU, WM8993_SPKOUT_VU);
 	snd_soc_update_bits(codec, WM8993_SPEAKER_VOLUME_RIGHT,
 			    WM8993_SPKOUT_VU, WM8993_SPKOUT_VU);
 
 	snd_soc_update_bits(codec, WM8993_LEFT_OUTPUT_VOLUME,
-			    WM8993_HPOUT1_VU | WM8993_HPOUT1L_ZC,
-			    WM8993_HPOUT1_VU | WM8993_HPOUT1L_ZC);
+			    WM8993_HPOUT1L_ZC, WM8993_HPOUT1L_ZC);
 	snd_soc_update_bits(codec, WM8993_RIGHT_OUTPUT_VOLUME,
 			    WM8993_HPOUT1_VU | WM8993_HPOUT1R_ZC,
 			    WM8993_HPOUT1_VU | WM8993_HPOUT1R_ZC);
 
 	snd_soc_update_bits(codec, WM8993_LEFT_OPGA_VOLUME,
-			    WM8993_MIXOUTL_ZC | WM8993_MIXOUT_VU,
-			    WM8993_MIXOUTL_ZC | WM8993_MIXOUT_VU);
+			    WM8993_MIXOUTL_ZC, WM8993_MIXOUTL_ZC);
 	snd_soc_update_bits(codec, WM8993_RIGHT_OPGA_VOLUME,
 			    WM8993_MIXOUTR_ZC | WM8993_MIXOUT_VU,
 			    WM8993_MIXOUTR_ZC | WM8993_MIXOUT_VU);
@@ -741,6 +737,41 @@ int wm_hubs_add_analogue_routes(struct snd_soc_codec *codec,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(wm_hubs_add_analogue_routes);
+
+int wm_hubs_handle_analogue_pdata(struct snd_soc_codec *codec,
+				  int lineout1_diff, int lineout2_diff,
+				  int lineout1fb, int lineout2fb,
+				  int jd_scthr, int jd_thr, int micbias1_lvl,
+				  int micbias2_lvl)
+{
+	if (!lineout1_diff)
+		snd_soc_update_bits(codec, WM8993_LINE_MIXER1,
+				    WM8993_LINEOUT1_MODE,
+				    WM8993_LINEOUT1_MODE);
+	if (!lineout2_diff)
+		snd_soc_update_bits(codec, WM8993_LINE_MIXER2,
+				    WM8993_LINEOUT2_MODE,
+				    WM8993_LINEOUT2_MODE);
+
+	if (lineout1fb)
+		snd_soc_update_bits(codec, WM8993_ADDITIONAL_CONTROL,
+				    WM8993_LINEOUT1_FB, WM8993_LINEOUT1_FB);
+
+	if (lineout2fb)
+		snd_soc_update_bits(codec, WM8993_ADDITIONAL_CONTROL,
+				    WM8993_LINEOUT2_FB, WM8993_LINEOUT2_FB);
+
+	snd_soc_update_bits(codec, WM8993_MICBIAS,
+			    WM8993_JD_SCTHR_MASK | WM8993_JD_THR_MASK |
+			    WM8993_MICB1_LVL | WM8993_MICB2_LVL,
+			    jd_scthr << WM8993_JD_SCTHR_SHIFT |
+			    jd_thr << WM8993_JD_THR_SHIFT |
+			    micbias1_lvl |
+			    micbias2_lvl << WM8993_MICB2_LVL_SHIFT);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(wm_hubs_handle_analogue_pdata);
 
 MODULE_DESCRIPTION("Shared support for Wolfson hubs products");
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");
