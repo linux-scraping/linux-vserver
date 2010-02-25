@@ -140,7 +140,7 @@ again:
 					hashinfo->bhash_size)];
 			spin_lock(&head->lock);
 			inet_bind_bucket_for_each(tb, node, &head->chain)
-				if (ib_net(tb) == net && tb->port == rover) {
+				if (net_eq(ib_net(tb), net) && tb->port == rover) {
 					if (tb->fastreuse > 0 &&
 					    sk->sk_reuse &&
 					    sk->sk_state != TCP_LISTEN &&
@@ -186,7 +186,7 @@ have_snum:
 				hashinfo->bhash_size)];
 		spin_lock(&head->lock);
 		inet_bind_bucket_for_each(tb, node, &head->chain)
-			if (ib_net(tb) == net && tb->port == snum)
+			if (net_eq(ib_net(tb), net) && tb->port == snum)
 				goto tb_found;
 	}
 	tb = NULL;
@@ -386,6 +386,7 @@ struct dst_entry *inet_csk_route_req(struct sock *sk,
 	const struct inet_request_sock *ireq = inet_rsk(req);
 	struct ip_options *opt = inet_rsk(req)->opt;
 	struct flowi fl = { .oif = sk->sk_bound_dev_if,
+			    .mark = sk->sk_mark,
 			    .nl_u = { .ip4_u =
 				      { .daddr = ((opt && opt->srr) ?
 						  opt->faddr :
@@ -395,7 +396,7 @@ struct dst_entry *inet_csk_route_req(struct sock *sk,
 			    .proto = sk->sk_protocol,
 			    .flags = inet_sk_flowi_flags(sk),
 			    .uli_u = { .ports =
-				       { .sport = inet_sk(sk)->sport,
+				       { .sport = inet_sk(sk)->inet_sport,
 					 .dport = ireq->rmt_port } } };
 	struct net *net = sock_net(sk);
 
@@ -558,7 +559,7 @@ void inet_csk_reqsk_queue_prune(struct sock *parent,
 					       &expire, &resend);
 				if (!expire &&
 				    (!resend ||
-				     !req->rsk_ops->rtx_syn_ack(parent, req) ||
+				     !req->rsk_ops->rtx_syn_ack(parent, req, NULL) ||
 				     inet_rsk(req)->acked)) {
 					unsigned long timeo;
 
@@ -602,9 +603,9 @@ struct sock *inet_csk_clone(struct sock *sk, const struct request_sock *req,
 		newsk->sk_state = TCP_SYN_RECV;
 		newicsk->icsk_bind_hash = NULL;
 
-		inet_sk(newsk)->dport = inet_rsk(req)->rmt_port;
-		inet_sk(newsk)->num = ntohs(inet_rsk(req)->loc_port);
-		inet_sk(newsk)->sport = inet_rsk(req)->loc_port;
+		inet_sk(newsk)->inet_dport = inet_rsk(req)->rmt_port;
+		inet_sk(newsk)->inet_num = ntohs(inet_rsk(req)->loc_port);
+		inet_sk(newsk)->inet_sport = inet_rsk(req)->loc_port;
 		newsk->sk_write_space = sk_stream_write_space;
 
 		newicsk->icsk_retransmits = 0;
@@ -635,8 +636,8 @@ void inet_csk_destroy_sock(struct sock *sk)
 	/* It cannot be in hash table! */
 	WARN_ON(!sk_unhashed(sk));
 
-	/* If it has not 0 inet_sk(sk)->num, it must be bound */
-	WARN_ON(inet_sk(sk)->num && !inet_csk(sk)->icsk_bind_hash);
+	/* If it has not 0 inet_sk(sk)->inet_num, it must be bound */
+	WARN_ON(inet_sk(sk)->inet_num && !inet_csk(sk)->icsk_bind_hash);
 
 	sk->sk_prot->destroy(sk);
 
@@ -671,8 +672,8 @@ int inet_csk_listen_start(struct sock *sk, const int nr_table_entries)
 	 * after validation is complete.
 	 */
 	sk->sk_state = TCP_LISTEN;
-	if (!sk->sk_prot->get_port(sk, inet->num)) {
-		inet->sport = htons(inet->num);
+	if (!sk->sk_prot->get_port(sk, inet->inet_num)) {
+		inet->inet_sport = htons(inet->inet_num);
 
 		sk_dst_reset(sk);
 		sk->sk_prot->hash(sk);
@@ -748,8 +749,8 @@ void inet_csk_addr2sockaddr(struct sock *sk, struct sockaddr *uaddr)
 	const struct inet_sock *inet = inet_sk(sk);
 
 	sin->sin_family		= AF_INET;
-	sin->sin_addr.s_addr	= inet->daddr;
-	sin->sin_port		= inet->dport;
+	sin->sin_addr.s_addr	= inet->inet_daddr;
+	sin->sin_port		= inet->inet_dport;
 }
 
 EXPORT_SYMBOL_GPL(inet_csk_addr2sockaddr);

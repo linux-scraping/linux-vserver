@@ -175,12 +175,12 @@ static int inet_autobind(struct sock *sk)
 	/* We may need to bind the socket. */
 	lock_sock(sk);
 	inet = inet_sk(sk);
-	if (!inet->num) {
+	if (!inet->inet_num) {
 		if (sk->sk_prot->get_port(sk, 0)) {
 			release_sock(sk);
 			return -EAGAIN;
 		}
-		inet->sport = htons(inet->num);
+		inet->inet_sport = htons(inet->inet_num);
 	}
 	release_sock(sk);
 	return 0;
@@ -263,7 +263,8 @@ static inline int inet_netns_ok(struct net *net, int protocol)
  *	Create an inet socket.
  */
 
-static int inet_create(struct net *net, struct socket *sock, int protocol)
+static int inet_create(struct net *net, struct socket *sock, int protocol,
+		       int kern)
 {
 	struct sock *sk;
 	struct inet_protosw *answer;
@@ -327,9 +328,10 @@ lookup_protocol:
 
 	err = -EPERM;
 	if ((protocol == IPPROTO_ICMP) &&
-		nx_capable(answer->capability, NXC_RAW_ICMP))
+		nx_capable(CAP_NET_RAW, NXC_RAW_ICMP))
 		goto override;
-	if (answer->capability > 0 && !capable(answer->capability))
+
+	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
 		goto out_rcu_unlock;
 override:
 	err = -EAFNOSUPPORT;
@@ -358,7 +360,7 @@ override:
 	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
 
 	if (SOCK_RAW == sock->type) {
-		inet->num = protocol;
+		inet->inet_num = protocol;
 		if (IPPROTO_RAW == protocol)
 			inet->hdrincl = 1;
 	}
@@ -368,7 +370,7 @@ override:
 	else
 		inet->pmtudisc = IP_PMTUDISC_WANT;
 
-	inet->id = 0;
+	inet->inet_id = 0;
 
 	sock_init_data(sock, sk);
 
@@ -385,13 +387,13 @@ override:
 
 	sk_refcnt_debug_inc(sk);
 
-	if (inet->num) {
+	if (inet->inet_num) {
 		/* It assumes that any protocol which allows
 		 * the user to assign a number at socket
 		 * creation time automatically
 		 * shares.
 		 */
-		inet->sport = htons(inet->num);
+		inet->inet_sport = htons(inet->inet_num);
 		/* Add to protocol hash chains. */
 		sk->sk_prot->hash(sk);
 	}
@@ -503,27 +505,27 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	/* Check these errors (active socket, double bind). */
 	err = -EINVAL;
-	if (sk->sk_state != TCP_CLOSE || inet->num)
+	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
 
 	v4_set_sock_addr(inet, &nsa);
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
-		inet->saddr = 0;  /* Use device */
+		inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
 	if (sk->sk_prot->get_port(sk, snum)) {
-		inet->saddr = inet->rcv_saddr = 0;
+		inet->inet_saddr = inet->inet_rcv_saddr = 0;
 		err = -EADDRINUSE;
 		goto out_release_sock;
 	}
 
-	if (inet->rcv_saddr)
+	if (inet->inet_rcv_saddr)
 		sk->sk_userlocks |= SOCK_BINDADDR_LOCK;
 	if (snum)
 		sk->sk_userlocks |= SOCK_BINDPORT_LOCK;
-	inet->sport = htons(inet->num);
-	inet->daddr = 0;
-	inet->dport = 0;
+	inet->inet_sport = htons(inet->inet_num);
+	inet->inet_daddr = 0;
+	inet->inet_dport = 0;
 	sk_dst_reset(sk);
 	err = 0;
 out_release_sock:
@@ -541,7 +543,7 @@ int inet_dgram_connect(struct socket *sock, struct sockaddr * uaddr,
 	if (uaddr->sa_family == AF_UNSPEC)
 		return sk->sk_prot->disconnect(sk, flags);
 
-	if (!inet_sk(sk)->num && inet_autobind(sk))
+	if (!inet_sk(sk)->inet_num && inet_autobind(sk))
 		return -EAGAIN;
 	return sk->sk_prot->connect(sk, (struct sockaddr *)uaddr, addr_len);
 }
@@ -694,23 +696,23 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 {
 	struct sock *sk		= sock->sk;
 	struct inet_sock *inet	= inet_sk(sk);
-	struct sockaddr_in *sin	= (struct sockaddr_in *)uaddr;
+	DECLARE_SOCKADDR(struct sockaddr_in *, sin, uaddr);
 
 	sin->sin_family = AF_INET;
 	if (peer) {
-		if (!inet->dport ||
+		if (!inet->inet_dport ||
 		    (((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_SYN_SENT)) &&
 		     peer == 1))
 			return -ENOTCONN;
-		sin->sin_port = inet->dport;
+		sin->sin_port = inet->inet_dport;
 		sin->sin_addr.s_addr =
-			nx_map_sock_lback(sk->sk_nx_info, inet->daddr);
+			nx_map_sock_lback(sk->sk_nx_info, inet->inet_daddr);
 	} else {
-		__be32 addr = inet->rcv_saddr;
+		__be32 addr = inet->inet_rcv_saddr;
 		if (!addr)
-			addr = inet->saddr;
+			addr = inet->inet_saddr;
 		addr = nx_map_sock_lback(sk->sk_nx_info, addr);
-		sin->sin_port = inet->sport;
+		sin->sin_port = inet->inet_sport;
 		sin->sin_addr.s_addr = addr;
 	}
 	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
@@ -725,7 +727,7 @@ int inet_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
 	struct sock *sk = sock->sk;
 
 	/* We may need to bind the socket. */
-	if (!inet_sk(sk)->num && inet_autobind(sk))
+	if (!inet_sk(sk)->inet_num && inet_autobind(sk))
 		return -EAGAIN;
 
 	return sk->sk_prot->sendmsg(iocb, sk, msg, size);
@@ -739,7 +741,7 @@ static ssize_t inet_sendpage(struct socket *sock, struct page *page, int offset,
 	struct sock *sk = sock->sk;
 
 	/* We may need to bind the socket. */
-	if (!inet_sk(sk)->num && inet_autobind(sk))
+	if (!inet_sk(sk)->inet_num && inet_autobind(sk))
 		return -EAGAIN;
 
 	if (sk->sk_prot->sendpage)
@@ -942,7 +944,7 @@ static const struct proto_ops inet_sockraw_ops = {
 #endif
 };
 
-static struct net_proto_family inet_family_ops = {
+static const struct net_proto_family inet_family_ops = {
 	.family = PF_INET,
 	.create = inet_create,
 	.owner	= THIS_MODULE,
@@ -958,7 +960,6 @@ static struct inet_protosw inetsw_array[] =
 		.protocol =   IPPROTO_TCP,
 		.prot =       &tcp_prot,
 		.ops =        &inet_stream_ops,
-		.capability = -1,
 		.no_check =   0,
 		.flags =      INET_PROTOSW_PERMANENT |
 			      INET_PROTOSW_ICSK,
@@ -969,7 +970,6 @@ static struct inet_protosw inetsw_array[] =
 		.protocol =   IPPROTO_UDP,
 		.prot =       &udp_prot,
 		.ops =        &inet_dgram_ops,
-		.capability = -1,
 		.no_check =   UDP_CSUM_DEFAULT,
 		.flags =      INET_PROTOSW_PERMANENT,
        },
@@ -980,7 +980,6 @@ static struct inet_protosw inetsw_array[] =
 	       .protocol =   IPPROTO_IP,	/* wild card */
 	       .prot =       &raw_prot,
 	       .ops =        &inet_sockraw_ops,
-	       .capability = CAP_NET_RAW,
 	       .no_check =   UDP_CSUM_DEFAULT,
 	       .flags =      INET_PROTOSW_REUSE,
        }
@@ -1070,9 +1069,9 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 	struct inet_sock *inet = inet_sk(sk);
 	int err;
 	struct rtable *rt;
-	__be32 old_saddr = inet->saddr;
+	__be32 old_saddr = inet->inet_saddr;
 	__be32 new_saddr;
-	__be32 daddr = inet->daddr;
+	__be32 daddr = inet->inet_daddr;
 
 	if (inet->opt && inet->opt->srr)
 		daddr = inet->opt->faddr;
@@ -1082,7 +1081,7 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 			       RT_CONN_FLAGS(sk),
 			       sk->sk_bound_dev_if,
 			       sk->sk_protocol,
-			       inet->sport, inet->dport, sk, 0);
+			       inet->inet_sport, inet->inet_dport, sk, 0);
 	if (err)
 		return err;
 
@@ -1098,7 +1097,7 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 		       __func__, &old_saddr, &new_saddr);
 	}
 
-	inet->saddr = inet->rcv_saddr = new_saddr;
+	inet->inet_saddr = inet->inet_rcv_saddr = new_saddr;
 
 	/*
 	 * XXX The only one ugly spot where we need to
@@ -1124,7 +1123,7 @@ int inet_sk_rebuild_header(struct sock *sk)
 		return 0;
 
 	/* Reroute. */
-	daddr = inet->daddr;
+	daddr = inet->inet_daddr;
 	if (inet->opt && inet->opt->srr)
 		daddr = inet->opt->faddr;
 {
@@ -1134,7 +1133,7 @@ int inet_sk_rebuild_header(struct sock *sk)
 		.nl_u = {
 			.ip4_u = {
 				.daddr	= daddr,
-				.saddr	= inet->saddr,
+				.saddr	= inet->inet_saddr,
 				.tos	= RT_CONN_FLAGS(sk),
 			},
 		},
@@ -1142,8 +1141,8 @@ int inet_sk_rebuild_header(struct sock *sk)
 		.flags = inet_sk_flowi_flags(sk),
 		.uli_u = {
 			.ports = {
-				.sport = inet->sport,
-				.dport = inet->dport,
+				.sport = inet->inet_sport,
+				.dport = inet->inet_dport,
 			},
 		},
 	};

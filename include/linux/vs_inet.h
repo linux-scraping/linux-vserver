@@ -117,7 +117,7 @@ int v4_sock_addr_match (
 	struct inet_sock *inet,
 	__be32 addr)
 {
-	__be32 saddr = inet->rcv_saddr;
+	__be32 saddr = inet->inet_rcv_saddr;
 	__be32 bcast = nxi ? nxi->v4_bcast.s_addr : INADDR_BROADCAST;
 
 	if (addr && (saddr == addr || bcast == addr))
@@ -262,8 +262,8 @@ int v4_map_sock_addr(struct inet_sock *inet, struct sockaddr_in *addr,
 static inline
 void v4_set_sock_addr(struct inet_sock *inet, struct nx_v4_sock_addr *nsa)
 {
-	inet->saddr = nsa->baddr;
-	inet->rcv_saddr = nsa->baddr;
+	inet->inet_saddr = nsa->baddr;
+	inet->inet_rcv_saddr = nsa->baddr;
 }
 
 
