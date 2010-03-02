@@ -251,7 +251,7 @@ static int addr6_resolve(struct sockaddr_in6 *src_in,
 
 	if (ipv6_addr_any(&fl.fl6_src)) {
 		ret = ipv6_dev_get_saddr(&init_net, ip6_dst_idev(dst)->dev,
-					 &fl.fl6_dst, 0, &fl.fl6_src);
+					 &fl.fl6_dst, 0, &fl.fl6_src, NULL);
 		if (ret)
 			goto put;
 

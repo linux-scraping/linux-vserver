@@ -220,14 +220,14 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	SEQ_printf(m, "  .%-30s: %lu\n", "shares", cfs_rq->shares);
 #endif
 #ifdef CONFIG_CFS_HARD_LIMITS
-	spin_lock_irqsave(&rq->lock, flags);
-	SEQ_printf(m, "  .%-30s: %d\n", "cfs_throttled",
-			cfs_rq->cfs_throttled);
-	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "cfs_time",
-			SPLIT_NS(cfs_rq->cfs_time));
-	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "cfs_runtime",
-			SPLIT_NS(cfs_rq->cfs_runtime));
-	spin_unlock_irqrestore(&rq->lock, flags);
+	raw_spin_lock_irqsave(&rq->lock, flags);
+	SEQ_printf(m, "  .%-30s: %d\n", "rq_bandwidth.throttled",
+			cfs_rq->rq_bandwidth.throttled);
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "rq_bandwidth.time",
+			SPLIT_NS(cfs_rq->rq_bandwidth.time));
+	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", "rq_bandwidth.runtime",
+			SPLIT_NS(cfs_rq->rq_bandwidth.runtime));
+	raw_spin_unlock_irqrestore(&rq->lock, flags);
 #endif /* CONFIG_CFS_HARD_LIMITS */
 	print_cfs_group_stats(m, cpu, cfs_rq->tg);
 #endif
@@ -253,9 +253,9 @@ void print_rt_rq(struct seq_file *m, int cpu, struct rt_rq *rt_rq)
 	SEQ_printf(m, "  .%-30s: %Ld.%06ld\n", #x, SPLIT_NS(rt_rq->x))
 
 	P(rt_nr_running);
-	P(rt_throttled);
-	PN(rt_time);
-	PN(rt_runtime);
+	P(rq_bandwidth.throttled);
+	PN(rq_bandwidth.time);
+	PN(rq_bandwidth.runtime);
 
 #undef PN
 #undef P

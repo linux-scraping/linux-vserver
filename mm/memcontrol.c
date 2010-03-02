@@ -577,7 +577,7 @@ s64 mem_cgroup_stat_read_anon(struct mem_cgroup *mem)
 
 s64 mem_cgroup_stat_read_mapped(struct mem_cgroup *mem)
 {
-	return mem_cgroup_read_stat(&mem->stat, MEM_CGROUP_STAT_MAPPED_FILE);
+	return mem_cgroup_read_stat(&mem->stat, MEM_CGROUP_STAT_FILE_MAPPED);
 }
 
 static struct mem_cgroup *try_get_mem_cgroup_from_mm(struct mm_struct *mm)

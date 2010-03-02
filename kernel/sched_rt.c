@@ -175,12 +175,12 @@ static inline u64 sched_rt_runtime(struct rt_rq *rt_rq)
 	if (!rt_rq->tg)
 		return RUNTIME_INF;
 
-	return rt_rq->rt_runtime;
+	return rt_rq->rq_bandwidth.runtime;
 }
 
 static inline u64 sched_rt_period(struct rt_rq *rt_rq)
 {
-	return ktime_to_ns(rt_rq->tg->rt_bandwidth.rt_period);
+	return ktime_to_ns(rt_rq->tg->rt_bandwidth.period);
 }
 
 #define for_each_leaf_rt_rq(rt_rq, rq) \
@@ -220,7 +220,7 @@ static void sched_rt_rq_dequeue(struct rt_rq *rt_rq)
 
 static inline int rt_rq_throttled(struct rt_rq *rt_rq)
 {
-	return rt_rq->rt_throttled && !rt_rq->rt_nr_boosted;
+	return rt_rq->rq_bandwidth.throttled && !rt_rq->rt_nr_boosted;
 }
 
 static int rt_se_boosted(struct sched_rt_entity *rt_se)
@@ -235,25 +235,7 @@ static int rt_se_boosted(struct sched_rt_entity *rt_se)
 	return p->prio != p->normal_prio;
 }
 
-#ifdef CONFIG_SMP
-static inline const struct cpumask *sched_rt_period_mask(void)
-{
-	return cpu_rq(smp_processor_id())->rd->span;
-}
-#else
-static inline const struct cpumask *sched_rt_period_mask(void)
-{
-	return cpu_online_mask;
-}
-#endif
-
-static inline
-struct rt_rq *sched_rt_period_rt_rq(struct rt_bandwidth *rt_b, int cpu)
-{
-	return container_of(rt_b, struct task_group, rt_bandwidth)->rt_rq[cpu];
-}
-
-static inline struct rt_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
+static inline struct sched_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
 {
 	return &rt_rq->tg->rt_bandwidth;
 }
@@ -262,12 +244,12 @@ static inline struct rt_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
 
 static inline u64 sched_rt_runtime(struct rt_rq *rt_rq)
 {
-	return rt_rq->rt_runtime;
+	return rt_rq->rq_bandwidth.runtime;
 }
 
 static inline u64 sched_rt_period(struct rt_rq *rt_rq)
 {
-	return ktime_to_ns(def_rt_bandwidth.rt_period);
+	return ktime_to_ns(def_rt_bandwidth.period);
 }
 
 #define for_each_leaf_rt_rq(rt_rq, rq) \
@@ -293,21 +275,10 @@ static inline void sched_rt_rq_dequeue(struct rt_rq *rt_rq)
 
 static inline int rt_rq_throttled(struct rt_rq *rt_rq)
 {
-	return rt_rq->rt_throttled;
+	return rt_rq->rq_bandwidth.throttled;
 }
 
-static inline const struct cpumask *sched_rt_period_mask(void)
-{
-	return cpu_online_mask;
-}
-
-static inline
-struct rt_rq *sched_rt_period_rt_rq(struct rt_bandwidth *rt_b, int cpu)
-{
-	return &cpu_rq(cpu)->rt;
-}
-
-static inline struct rt_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
+static inline struct sched_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
 {
 	return &def_rt_bandwidth;
 }
@@ -315,151 +286,24 @@ static inline struct rt_bandwidth *sched_rt_bandwidth(struct rt_rq *rt_rq)
 #endif /* CONFIG_RT_GROUP_SCHED */
 
 #ifdef CONFIG_SMP
-/*
- * We ran out of runtime, see if we can borrow some from our neighbours.
- */
-static int do_balance_runtime(struct rt_rq *rt_rq)
-{
-	struct rt_bandwidth *rt_b = sched_rt_bandwidth(rt_rq);
-	struct root_domain *rd = cpu_rq(smp_processor_id())->rd;
-	int i, weight, more = 0;
-	u64 rt_period;
-
-	weight = cpumask_weight(rd->span);
-
-	raw_spin_lock(&rt_b->rt_runtime_lock);
-	rt_period = ktime_to_ns(rt_b->rt_period);
-	for_each_cpu(i, rd->span) {
-		struct rt_rq *iter = sched_rt_period_rt_rq(rt_b, i);
-		s64 diff;
-
-		if (iter == rt_rq)
-			continue;
-
-		raw_spin_lock(&iter->rt_runtime_lock);
-		/*
-		 * Either all rqs have inf runtime and there's nothing to steal
-		 * or __disable_runtime() below sets a specific rq to inf to
-		 * indicate its been disabled and disalow stealing.
-		 */
-		if (iter->rt_runtime == RUNTIME_INF)
-			goto next;
-
-		/*
-		 * From runqueues with spare time, take 1/n part of their
-		 * spare time, but no more than our period.
-		 */
-		diff = iter->rt_runtime - iter->rt_time;
-		if (diff > 0) {
-			diff = div_u64((u64)diff, weight);
-			if (rt_rq->rt_runtime + diff > rt_period)
-				diff = rt_period - rt_rq->rt_runtime;
-			iter->rt_runtime -= diff;
-			rt_rq->rt_runtime += diff;
-			more = 1;
-			if (rt_rq->rt_runtime == rt_period) {
-				raw_spin_unlock(&iter->rt_runtime_lock);
-				break;
-			}
-		}
-next:
-		raw_spin_unlock(&iter->rt_runtime_lock);
-	}
-	raw_spin_unlock(&rt_b->rt_runtime_lock);
-
-	return more;
-}
 
 /*
  * Ensure this RQ takes back all the runtime it lend to its neighbours.
  */
-static void __disable_runtime(struct rq *rq)
+void disable_runtime_rt(struct rq *rq)
 {
-	struct root_domain *rd = rq->rd;
 	struct rt_rq *rt_rq;
 
 	if (unlikely(!scheduler_running))
 		return;
 
 	for_each_leaf_rt_rq(rt_rq, rq) {
-		struct rt_bandwidth *rt_b = sched_rt_bandwidth(rt_rq);
-		s64 want;
-		int i;
-
-		raw_spin_lock(&rt_b->rt_runtime_lock);
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-		/*
-		 * Either we're all inf and nobody needs to borrow, or we're
-		 * already disabled and thus have nothing to do, or we have
-		 * exactly the right amount of runtime to take out.
-		 */
-		if (rt_rq->rt_runtime == RUNTIME_INF ||
-				rt_rq->rt_runtime == rt_b->rt_runtime)
-			goto balanced;
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-
-		/*
-		 * Calculate the difference between what we started out with
-		 * and what we current have, that's the amount of runtime
-		 * we lend and now have to reclaim.
-		 */
-		want = rt_b->rt_runtime - rt_rq->rt_runtime;
-
-		/*
-		 * Greedy reclaim, take back as much as we can.
-		 */
-		for_each_cpu(i, rd->span) {
-			struct rt_rq *iter = sched_rt_period_rt_rq(rt_b, i);
-			s64 diff;
-
-			/*
-			 * Can't reclaim from ourselves or disabled runqueues.
-			 */
-			if (iter == rt_rq || iter->rt_runtime == RUNTIME_INF)
-				continue;
-
-			raw_spin_lock(&iter->rt_runtime_lock);
-			if (want > 0) {
-				diff = min_t(s64, iter->rt_runtime, want);
-				iter->rt_runtime -= diff;
-				want -= diff;
-			} else {
-				iter->rt_runtime -= want;
-				want -= want;
-			}
-			raw_spin_unlock(&iter->rt_runtime_lock);
-
-			if (!want)
-				break;
-		}
-
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-		/*
-		 * We cannot be left wanting - that would mean some runtime
-		 * leaked out of the system.
-		 */
-		BUG_ON(want);
-balanced:
-		/*
-		 * Disable all the borrow logic by pretending we have inf
-		 * runtime - in which case borrowing doesn't make sense.
-		 */
-		rt_rq->rt_runtime = RUNTIME_INF;
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-		raw_spin_unlock(&rt_b->rt_runtime_lock);
+		struct sched_bandwidth *sched_b = sched_rt_bandwidth(rt_rq);
+		__disable_runtime(rq, sched_b, &rt_rq->rq_bandwidth, 1);
 	}
 }
 
-static void disable_runtime(struct rq *rq)
-{
-	unsigned long flags;
-
-	raw_spin_lock_irqsave(&rq->lock, flags);
-	__disable_runtime(rq);
-	raw_spin_unlock_irqrestore(&rq->lock, flags);
-}
-
-static void __enable_runtime(struct rq *rq)
+void enable_runtime_rt(struct rq *rq)
 {
 	struct rt_rq *rt_rq;
 
@@ -470,76 +314,44 @@ static void __enable_runtime(struct rq *rq)
 	 * Reset each runqueue's bandwidth settings
 	 */
 	for_each_leaf_rt_rq(rt_rq, rq) {
-		struct rt_bandwidth *rt_b = sched_rt_bandwidth(rt_rq);
-
-		raw_spin_lock(&rt_b->rt_runtime_lock);
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-		rt_rq->rt_runtime = rt_b->rt_runtime;
-		rt_rq->rt_time = 0;
-		rt_rq->rt_throttled = 0;
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-		raw_spin_unlock(&rt_b->rt_runtime_lock);
+		struct sched_bandwidth *sched_b = sched_rt_bandwidth(rt_rq);
+		__enable_runtime(sched_b, &rt_rq->rq_bandwidth);
 	}
 }
 
-static void enable_runtime(struct rq *rq)
-{
-	unsigned long flags;
+#endif
 
-	raw_spin_lock_irqsave(&rq->lock, flags);
-	__enable_runtime(rq);
-	raw_spin_unlock_irqrestore(&rq->lock, flags);
-}
-
-static int balance_runtime(struct rt_rq *rt_rq)
-{
-	int more = 0;
-
-	if (rt_rq->rt_time > rt_rq->rt_runtime) {
-		raw_spin_unlock(&rt_rq->rt_runtime_lock);
-		more = do_balance_runtime(rt_rq);
-		raw_spin_lock(&rt_rq->rt_runtime_lock);
-	}
-
-	return more;
-}
-#else /* !CONFIG_SMP */
-static inline int balance_runtime(struct rt_rq *rt_rq)
-{
-	return 0;
-}
-#endif /* CONFIG_SMP */
-
-static int do_sched_rt_period_timer(struct rt_bandwidth *rt_b, int overrun)
+static int do_sched_rt_period_timer(struct sched_bandwidth *rt_b, int overrun)
 {
 	int i, idle = 1;
 	const struct cpumask *span;
 
-	if (!rt_bandwidth_enabled() || rt_b->rt_runtime == RUNTIME_INF)
+	if (!rt_bandwidth_enabled() || rt_b->runtime == RUNTIME_INF)
 		return 1;
 
-	span = sched_rt_period_mask();
+	span = sched_bw_period_mask();
 	for_each_cpu(i, span) {
 		int enqueue = 0;
 		struct rt_rq *rt_rq = sched_rt_period_rt_rq(rt_b, i);
 		struct rq *rq = rq_of_rt_rq(rt_rq);
 
 		raw_spin_lock(&rq->lock);
-		if (rt_rq->rt_time) {
+		if (rt_rq->rq_bandwidth.time) {
 			u64 runtime;
 
-			raw_spin_lock(&rt_rq->rt_runtime_lock);
-			if (rt_rq->rt_throttled)
-				balance_runtime(rt_rq);
-			runtime = rt_rq->rt_runtime;
-			rt_rq->rt_time -= min(rt_rq->rt_time, overrun*runtime);
-			if (rt_rq->rt_throttled && rt_rq->rt_time < runtime) {
-				rt_rq->rt_throttled = 0;
+			raw_spin_lock(&rt_rq->rq_bandwidth.runtime_lock);
+			if (rt_rq->rq_bandwidth.throttled)
+				balance_runtime(&rt_rq->rq_bandwidth,
+					sched_rt_bandwidth(rt_rq), 1);
+			runtime = rt_rq->rq_bandwidth.runtime;
+			rt_rq->rq_bandwidth.time -= min(rt_rq->rq_bandwidth.time, overrun*runtime);
+			if (rt_rq->rq_bandwidth.throttled && rt_rq->rq_bandwidth.time < runtime) {
+				rt_rq->rq_bandwidth.throttled = 0;
 				enqueue = 1;
 			}
-			if (rt_rq->rt_time || rt_rq->rt_nr_running)
+			if (rt_rq->rq_bandwidth.time || rt_rq->rt_nr_running)
 				idle = 0;
-			raw_spin_unlock(&rt_rq->rt_runtime_lock);
+			raw_spin_unlock(&rt_rq->rq_bandwidth.runtime_lock);
 		} else if (rt_rq->rt_nr_running)
 			idle = 0;
 
@@ -567,19 +379,19 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 {
 	u64 runtime = sched_rt_runtime(rt_rq);
 
-	if (rt_rq->rt_throttled)
+	if (rt_rq->rq_bandwidth.throttled)
 		return rt_rq_throttled(rt_rq);
 
 	if (sched_rt_runtime(rt_rq) >= sched_rt_period(rt_rq))
 		return 0;
 
-	balance_runtime(rt_rq);
+	balance_runtime(&rt_rq->rq_bandwidth, sched_rt_bandwidth(rt_rq), 1);
 	runtime = sched_rt_runtime(rt_rq);
 	if (runtime == RUNTIME_INF)
 		return 0;
 
-	if (rt_rq->rt_time > runtime) {
-		rt_rq->rt_throttled = 1;
+	if (rt_rq->rq_bandwidth.time > runtime) {
+		rt_rq->rq_bandwidth.throttled = 1;
 		if (rt_rq_throttled(rt_rq)) {
 			sched_rt_rq_dequeue(rt_rq);
 			return 1;
@@ -624,11 +436,11 @@ static void update_curr_rt(struct rq *rq)
 		rt_rq = rt_rq_of_se(rt_se);
 
 		if (sched_rt_runtime(rt_rq) != RUNTIME_INF) {
-			raw_spin_lock(&rt_rq->rt_runtime_lock);
-			rt_rq->rt_time += delta_exec;
+			raw_spin_lock(&rt_rq->rq_bandwidth.runtime_lock);
+			rt_rq->rq_bandwidth.time += delta_exec;
 			if (sched_rt_runtime_exceeded(rt_rq))
 				resched_task(curr);
-			raw_spin_unlock(&rt_rq->rt_runtime_lock);
+			raw_spin_unlock(&rt_rq->rq_bandwidth.runtime_lock);
 		}
 	}
 }
@@ -753,7 +565,7 @@ inc_rt_group(struct sched_rt_entity *rt_se, struct rt_rq *rt_rq)
 		rt_rq->rt_nr_boosted++;
 
 	if (rt_rq->tg)
-		start_rt_bandwidth(&rt_rq->tg->rt_bandwidth);
+		start_sched_bandwidth(&rt_rq->tg->rt_bandwidth, 1);
 }
 
 static void
@@ -770,7 +582,7 @@ dec_rt_group(struct sched_rt_entity *rt_se, struct rt_rq *rt_rq)
 static void
 inc_rt_group(struct sched_rt_entity *rt_se, struct rt_rq *rt_rq)
 {
-	start_rt_bandwidth(&def_rt_bandwidth);
+	start_sched_bandwidth(&def_rt_bandwidth, 1);
 }
 
 static inline
@@ -1551,7 +1363,7 @@ static void rq_online_rt(struct rq *rq)
 	if (rq->rt.overloaded)
 		rt_set_overload(rq);
 
-	__enable_runtime(rq);
+	enable_runtime_rt(rq);
 
 	cpupri_set(&rq->rd->cpupri, rq->cpu, rq->rt.highest_prio.curr);
 }
@@ -1562,7 +1374,7 @@ static void rq_offline_rt(struct rq *rq)
 	if (rq->rt.overloaded)
 		rt_clear_overload(rq);
 
-	__disable_runtime(rq);
+	disable_runtime_rt(rq);
 
 	cpupri_set(&rq->rd->cpupri, rq->cpu, CPUPRI_INVALID);
 }

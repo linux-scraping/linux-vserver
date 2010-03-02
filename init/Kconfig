@@ -500,7 +500,7 @@ config CFS_HARD_LIMITS
 	bool "Hard Limits for CFS Group Scheduler"
 	depends on EXPERIMENTAL
 	depends on FAIR_GROUP_SCHED && CGROUP_SCHED
-	default n
+	default y
 	help
 	  This option enables hard limiting of CPU time obtained by
 	  a fair task group. Use this if you want to throttle a group of tasks
@@ -511,6 +511,7 @@ config CFS_HARD_LIMITS
 
 menuconfig CGROUPS
 	boolean "Control Group support"
+	default y
 	help
 	  This option adds support for grouping sets of processes together, for
 	  use with process control subsystems such as Cpusets, CFS, memory
@@ -538,6 +539,7 @@ config CGROUP_DEBUG
 config CGROUP_NS
 	bool "Namespace cgroup subsystem"
 	depends on CGROUPS
+	default n
 	help
 	  Provides a simple namespace cgroup subsystem to
 	  provide hierarchical naming of sets of namespaces,
