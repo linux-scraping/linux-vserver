@@ -205,7 +205,205 @@ find_matching_se(struct sched_entity **se, struct sched_entity **pse)
 	}
 }
 
-#else	/* !CONFIG_FAIR_GROUP_SCHED */
+static inline struct sched_bandwidth *sched_cfs_bandwidth(struct cfs_rq *cfs_rq)
+{
+	return &cfs_rq->tg->cfs_bandwidth;
+}
+
+static inline void start_cfs_bandwidth(struct cfs_rq *cfs_rq)
+{
+	if (cfs_rq->tg)
+		start_sched_bandwidth(sched_cfs_bandwidth(cfs_rq), 0);
+	return;
+}
+
+#ifdef CONFIG_CFS_HARD_LIMITS
+
+static inline void update_stats_throttle_start(struct cfs_rq *cfs_rq,
+			struct sched_entity *se)
+{
+	schedstat_set(se->throttle_start, rq_of(cfs_rq)->clock);
+}
+
+static inline void update_stats_throttle_end(struct cfs_rq *cfs_rq,
+			struct sched_entity *se)
+{
+	schedstat_set(se->throttle_max, max(se->throttle_max,
+			rq_of(cfs_rq)->clock - se->throttle_start));
+	schedstat_set(se->throttle_count, se->throttle_count + 1);
+	schedstat_set(se->throttle_sum, se->throttle_sum +
+			rq_of(cfs_rq)->clock - se->throttle_start);
+	schedstat_set(se->throttle_start, 0);
+}
+
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq)
+{
+	return cfs_rq->rq_bandwidth.throttled;
+}
+
+#ifdef CONFIG_SMP
+/*
+ * Ensure this RQ takes back all the runtime it lend to its neighbours.
+ */
+void disable_runtime_cfs(struct rq *rq)
+{
+	struct cfs_rq *cfs_rq;
+
+	if (unlikely(!scheduler_running))
+		return;
+
+	for_each_leaf_cfs_rq(rq, cfs_rq) {
+		struct sched_bandwidth *sched_b = sched_cfs_bandwidth(cfs_rq);
+		__disable_runtime(rq, sched_b, &cfs_rq->rq_bandwidth, 0);
+	}
+}
+
+void enable_runtime_cfs(struct rq *rq)
+{
+	struct cfs_rq *cfs_rq;
+
+	if (unlikely(!scheduler_running))
+		return;
+
+	/*
+	 * Reset each runqueue's bandwidth settings
+	 */
+	for_each_leaf_cfs_rq(rq, cfs_rq) {
+		struct sched_bandwidth *sched_b = sched_cfs_bandwidth(cfs_rq);
+		__enable_runtime(sched_b, &cfs_rq->rq_bandwidth);
+	}
+}
+
+#endif /* CONFIG_SMP */
+
+/*
+ * Check if group entity exceeded its runtime. If so, mark the cfs_rq as
+ * throttled mark the current task for reschedling.
+ */
+static void sched_cfs_runtime_exceeded(struct sched_entity *se,
+	struct task_struct *tsk_curr, unsigned long delta_exec)
+{
+	struct cfs_rq *cfs_rq;
+
+	cfs_rq = group_cfs_rq(se);
+
+	if (cfs_rq->rq_bandwidth.runtime == RUNTIME_INF)
+		return;
+
+	cfs_rq->rq_bandwidth.time += delta_exec;
+
+	if (cfs_rq_throttled(cfs_rq))
+		return;
+
+	if (cfs_rq->rq_bandwidth.time > cfs_rq->rq_bandwidth.runtime)
+		balance_runtime(&cfs_rq->rq_bandwidth,
+					sched_cfs_bandwidth(cfs_rq), 0);
+
+	if (cfs_rq->rq_bandwidth.time > cfs_rq->rq_bandwidth.runtime) {
+		cfs_rq->rq_bandwidth.throttled = 1;
+		update_stats_throttle_start(cfs_rq, se);
+		resched_task(tsk_curr);
+	}
+}
+
+static inline void update_curr_group(struct sched_entity *curr,
+		unsigned long delta_exec, struct task_struct *tsk_curr)
+{
+	sched_cfs_runtime_exceeded(curr, tsk_curr, delta_exec);
+}
+
+static void enqueue_entity(struct cfs_rq *cfs_rq,
+		struct sched_entity *se, int wakeup);
+
+static void enqueue_throttled_entity(struct rq *rq, struct sched_entity *se)
+{
+	for_each_sched_entity(se) {
+		struct cfs_rq *gcfs_rq = group_cfs_rq(se);
+
+		if (se->on_rq || cfs_rq_throttled(gcfs_rq) ||
+				!gcfs_rq->nr_running)
+			break;
+		enqueue_entity(cfs_rq_of(se), se, 0);
+	}
+}
+
+/*
+ * Refresh runtimes of all cfs_rqs in this group, i,e.,
+ * refresh runtimes of the representative cfs_rq of this
+ * tg on all cpus. Enqueue any throttled entity back.
+ */
+static int do_sched_cfs_period_timer(struct sched_bandwidth *cfs_b, int overrun)
+{
+	int i, idle = 1;
+	const struct cpumask *span;
+
+	if (cfs_b->runtime == RUNTIME_INF)
+		return 1;
+
+	span = sched_bw_period_mask();
+	for_each_cpu(i, span) {
+		int enqueue = 0;
+		struct rq *rq = cpu_rq(i);
+		struct cfs_rq *cfs_rq = sched_cfs_period_cfs_rq(cfs_b, i);
+		struct sched_entity *se = cfs_rq->tg->se[i];
+
+		raw_spin_lock(&rq->lock);
+		if (cfs_rq->rq_bandwidth.time) {
+			u64 runtime;
+
+			raw_spin_lock(&cfs_rq->rq_bandwidth.runtime_lock);
+			if (cfs_rq_throttled(cfs_rq))
+				balance_runtime(&cfs_rq->rq_bandwidth,
+					sched_cfs_bandwidth(cfs_rq), 0);
+			runtime = cfs_rq->rq_bandwidth.runtime;
+			cfs_rq->rq_bandwidth.time -= min(cfs_rq->rq_bandwidth.time, overrun*runtime);
+			if (cfs_rq_throttled(cfs_rq) &&
+					cfs_rq->rq_bandwidth.time < runtime) {
+				cfs_rq->rq_bandwidth.throttled = 0;
+				update_rq_clock(rq);
+				update_stats_throttle_end(cfs_rq, se);
+				enqueue = 1;
+			}
+			if (cfs_rq->rq_bandwidth.time || cfs_rq->nr_running)
+				idle = 0;
+			raw_spin_unlock(&cfs_rq->rq_bandwidth.runtime_lock);
+		} else if (cfs_rq->nr_running)
+			idle = 0;
+
+		if (enqueue)
+			enqueue_throttled_entity(rq, se);
+		raw_spin_unlock(&rq->lock);
+	}
+	return idle;
+}
+
+#else
+
+static inline void update_curr_group(struct sched_entity *curr,
+		unsigned long delta_exec, struct task_struct *tsk_curr)
+{
+	return;
+}
+
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq)
+{
+	return 0;
+}
+
+static int do_sched_cfs_period_timer(struct sched_bandwidth *cfs_b, int overrun)
+{
+	return 0;
+}
+
+#endif /* CONFIG_CFS_HARD_LIMITS */
+
+#else	/* CONFIG_FAIR_GROUP_SCHED */
+
+static inline void update_curr_group(struct sched_entity *curr,
+		unsigned long delta_exec, struct task_struct *tsk_curr)
+{
+	return;
+}
 
 static inline struct task_struct *task_of(struct sched_entity *se)
 {
@@ -265,8 +463,22 @@ find_matching_se(struct sched_entity **se, struct sched_entity **pse)
 {
 }
 
-#endif	/* CONFIG_FAIR_GROUP_SCHED */
+static inline void start_cfs_bandwidth(struct cfs_rq *cfs_rq)
+{
+	return;
+}
 
+static inline int cfs_rq_throttled(struct cfs_rq *cfs_rq)
+{
+	return 0;
+}
+
+static int do_sched_cfs_period_timer(struct sched_bandwidth *cfs_b, int overrun)
+{
+	return 0;
+}
+
+#endif	/* CONFIG_FAIR_GROUP_SCHED */
 
 /**************************************************************
  * Scheduling class tree data structure manipulation methods:
@@ -360,6 +572,7 @@ static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 	rb_link_node(&se->run_node, parent, link);
 	rb_insert_color(&se->run_node, &cfs_rq->tasks_timeline);
+	start_cfs_bandwidth(cfs_rq);
 }
 
 static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
@@ -515,14 +728,25 @@ __update_curr(struct cfs_rq *cfs_rq, struct sched_entity *curr,
 	update_min_vruntime(cfs_rq);
 }
 
-static void update_curr(struct cfs_rq *cfs_rq)
+static void update_curr_task(struct sched_entity *curr,
+		unsigned long delta_exec)
+{
+	struct task_struct *curtask = task_of(curr);
+
+	trace_sched_stat_runtime(curtask, delta_exec, curr->vruntime);
+	cpuacct_charge(curtask, delta_exec);
+	account_group_exec_runtime(curtask, delta_exec);
+}
+
+static int update_curr_common(struct cfs_rq *cfs_rq, unsigned long *delta)
 {
 	struct sched_entity *curr = cfs_rq->curr;
-	u64 now = rq_of(cfs_rq)->clock;
+	struct rq *rq = rq_of(cfs_rq);
+	u64 now = rq->clock;
 	unsigned long delta_exec;
 
 	if (unlikely(!curr))
-		return;
+		return 1;
 
 	/*
 	 * Get the amount of time the current task was running
@@ -531,17 +755,31 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	 */
 	delta_exec = (unsigned long)(now - curr->exec_start);
 	if (!delta_exec)
-		return;
+		return 1;
 
 	__update_curr(cfs_rq, curr, delta_exec);
 	curr->exec_start = now;
+	*delta = delta_exec;
+	return 0;
+}
 
-	if (entity_is_task(curr)) {
-		struct task_struct *curtask = task_of(curr);
+static void update_curr(struct cfs_rq *cfs_rq)
+{
+	struct sched_entity *curr = cfs_rq->curr;
+	struct rq *rq = rq_of(cfs_rq);
+	unsigned long delta_exec;
+	struct rq_bandwidth *rq_b;
 
-		trace_sched_stat_runtime(curtask, delta_exec, curr->vruntime);
-		cpuacct_charge(curtask, delta_exec);
-		account_group_exec_runtime(curtask, delta_exec);
+	if (update_curr_common(cfs_rq, &delta_exec))
+		return ;
+
+	if (entity_is_task(curr))
+		update_curr_task(curr, delta_exec);
+	else {
+		rq_b = &group_cfs_rq(curr)->rq_bandwidth;
+		raw_spin_lock(&rq_b->runtime_lock);
+		update_curr_group(curr, delta_exec, rq->curr);
+		raw_spin_unlock(&rq_b->runtime_lock);
 	}
 }
 
@@ -769,6 +1007,22 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 #define ENQUEUE_WAKEUP	1
 #define ENQUEUE_MIGRATE 2
 
+static void enqueue_entity_common(struct cfs_rq *cfs_rq,
+		struct sched_entity *se, int flags)
+{
+	account_entity_enqueue(cfs_rq, se);
+
+	if (flags & ENQUEUE_WAKEUP) {
+		place_entity(cfs_rq, se, 0);
+		enqueue_sleeper(cfs_rq, se);
+	}
+
+	update_stats_enqueue(cfs_rq, se);
+	check_spread(cfs_rq, se);
+	if (se != cfs_rq->curr)
+		__enqueue_entity(cfs_rq, se);
+}
+
 static void
 enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 {
@@ -783,17 +1037,7 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * Update run-time statistics of the 'current'.
 	 */
 	update_curr(cfs_rq);
-	account_entity_enqueue(cfs_rq, se);
-
-	if (flags & ENQUEUE_WAKEUP) {
-		place_entity(cfs_rq, se, 0);
-		enqueue_sleeper(cfs_rq, se);
-	}
-
-	update_stats_enqueue(cfs_rq, se);
-	check_spread(cfs_rq, se);
-	if (se != cfs_rq->curr)
-		__enqueue_entity(cfs_rq, se);
+	enqueue_entity_common(cfs_rq, se, flags);
 
 	if (entity_is_task(se))
 		vx_activate_task(task_of(se));
@@ -946,6 +1190,28 @@ static struct sched_entity *pick_next_entity(struct cfs_rq *cfs_rq)
 	return se;
 }
 
+/*
+ * Called from put_prev_entity()
+ * If a group entity (@se) is found to be throttled, it will not be put back
+ * on @cfs_rq, which is equivalent to dequeing it.
+ */
+static int dequeue_throttled_entity(struct cfs_rq *cfs_rq,
+		struct sched_entity *se)
+{
+	struct cfs_rq *gcfs_rq = group_cfs_rq(se);
+
+	if (entity_is_task(se))
+		return 0;
+
+	if (!cfs_rq_throttled(gcfs_rq) && gcfs_rq->nr_running)
+		return 0;
+
+	__clear_buddies(cfs_rq, se);
+	account_entity_dequeue(cfs_rq, se);
+	cfs_rq->curr = NULL;
+	return 1;
+}
+
 static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 {
 	/*
@@ -957,6 +1223,8 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 
 	check_spread(cfs_rq, prev);
 	if (prev->on_rq) {
+		if (dequeue_throttled_entity(cfs_rq, prev))
+			return;
 		update_stats_wait_start(cfs_rq, prev);
 		/* Put 'current' back into the tree. */
 		__enqueue_entity(cfs_rq, prev);
@@ -1053,10 +1321,26 @@ static inline void hrtick_update(struct rq *rq)
 }
 #endif
 
+static int enqueue_group_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
+		 int flags)
+{
+	struct cfs_rq *gcfs_rq = group_cfs_rq(se);
+	int ret = 0;
+
+	if (cfs_rq_throttled(gcfs_rq)) {
+		ret = 1;
+		goto out;
+	}
+	enqueue_entity(cfs_rq, se, flags);
+out:
+	return ret;
+}
+
 /*
  * The enqueue_task method is called before nr_running is
  * increased. Here we update the fair scheduling stats and
  * then put the task into the rbtree:
+ * Don't enqueue a throttled entity further into the hierarchy.
  */
 static void enqueue_task_fair(struct rq *rq, struct task_struct *p, int wakeup)
 {
@@ -1072,11 +1356,15 @@ static void enqueue_task_fair(struct rq *rq, struct task_struct *p, int wakeup)
 	for_each_sched_entity(se) {
 		if (se->on_rq)
 			break;
+
 		cfs_rq = cfs_rq_of(se);
-		enqueue_entity(cfs_rq, se, flags);
+		if (entity_is_task(se))
+			enqueue_entity(cfs_rq, se, flags);
+		else
+			if (enqueue_group_entity(cfs_rq, se, flags))
+				break;
 		flags = ENQUEUE_WAKEUP;
 	}
-
 	hrtick_update(rq);
 }
 
@@ -1095,6 +1383,13 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int sleep)
 		dequeue_entity(cfs_rq, se, sleep);
 		/* Don't dequeue parent if it has other entities besides us */
 		if (cfs_rq->load.weight)
+			break;
+
+		/*
+		 * If this cfs_rq is throttled, then it is already
+		 * dequeued.
+		 */
+		if (cfs_rq_throttled(cfs_rq))
 			break;
 		sleep = 1;
 	}
@@ -1894,9 +2189,10 @@ load_balance_fair(struct rq *this_rq, int this_cpu, struct rq *busiest,
 		u64 rem_load, moved_load;
 
 		/*
-		 * empty group
+		 * empty group or throttled group
 		 */
-		if (!busiest_cfs_rq->task_weight)
+		if (!busiest_cfs_rq->task_weight ||
+				cfs_rq_throttled(busiest_cfs_rq))
 			continue;
 
 		rem_load = (u64)rem_load_move * busiest_weight;
@@ -1944,6 +2240,12 @@ move_one_task_fair(struct rq *this_rq, int this_cpu, struct rq *busiest,
 	cfs_rq_iterator.next = load_balance_next_fair;
 
 	for_each_leaf_cfs_rq(busiest, busy_cfs_rq) {
+		/*
+		 * Don't move task from a throttled cfs_rq
+		 */
+		if (cfs_rq_throttled(busy_cfs_rq))
+			continue;
+
 		/*
 		 * pass busy_cfs_rq argument into
 		 * load_balance_[start|next]_fair iterators
