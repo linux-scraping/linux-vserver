@@ -50,7 +50,7 @@ xattr_permission(struct inode *inode, const char *name, int mask)
 	 * The trusted.* namespace can only be accessed by a privileged user.
 	 */
 	if (!strncmp(name, XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN))
-		return (capable(CAP_SYS_ADMIN) ? 0 : -EPERM);
+		return (vx_capable(CAP_SYS_ADMIN, VXC_FS_TRUSTED) ? 0 : -EPERM);
 
 	/* In user.* namespace, only regular files and directories can have
 	 * extended attributes. For sticky directories, only the owner and
