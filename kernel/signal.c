@@ -683,7 +683,7 @@ static int check_kill_permission(int sig, struct siginfo *info,
 			sig, info, t, vx_task_xid(t), t->pid, current->xid);
 		return error;
 	}
-skip:
+/* skip: */
 	return security_task_kill(t, info, sig, 0);
 }
 

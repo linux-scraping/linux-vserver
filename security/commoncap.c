@@ -587,7 +587,7 @@ int cap_inode_setxattr(struct dentry *dentry, const char *name,
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
 		     sizeof(XATTR_SECURITY_PREFIX) - 1)  &&
-	    !capable(CAP_SYS_ADMIN))
+		!vx_capable(CAP_SYS_ADMIN, VXC_FS_SECURITY))
 		return -EPERM;
 	return 0;
 }

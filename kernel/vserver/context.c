@@ -145,9 +145,10 @@ error:
 
 static void __dealloc_vx_info(struct vx_info *vxi)
 {
+#ifdef	CONFIG_VSERVER_WARN
 	struct vx_info_save vxis;
 	int cpu;
-
+#endif
 	vxdprintk(VXD_CBIT(xid, 0),
 		"dealloc_vx_info(%p)", vxi);
 	vxh_dealloc_vx_info(vxi);
