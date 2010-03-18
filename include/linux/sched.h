@@ -881,7 +881,10 @@ static inline int sd_balance_for_mc_power(void)
 	if (sched_smt_power_savings)
 		return SD_POWERSAVINGS_BALANCE;
 
-	return SD_PREFER_SIBLING;
+	if (!sched_mc_power_savings)
+		return SD_PREFER_SIBLING;
+
+	return 0;
 }
 
 static inline int sd_balance_for_package_power(void)
@@ -1203,12 +1206,6 @@ struct sched_entity {
 	u64			nr_wakeups_affine_attempts;
 	u64			nr_wakeups_passive;
 	u64			nr_wakeups_idle;
-#ifdef CONFIG_CFS_HARD_LIMITS
-	u64			throttle_start;
-	u64			throttle_max;
-	u64			throttle_count;
-	u64			throttle_sum;
-#endif
 #endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
