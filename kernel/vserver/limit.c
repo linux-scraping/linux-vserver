@@ -304,6 +304,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
+#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
 #ifdef	CONFIG_CGROUP_MEM_RES_CTLR_SWAP
 	struct mem_cgroup *mcg = mem_cgroup_from_task(current);
 	u64 res_limit, res_usage, memsw_limit, memsw_usage;
@@ -328,6 +329,10 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->freeswap = (swap_usage < swap_limit) ?
 		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
 #else	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
+	val->totalswap = 0;
+	val->freeswap = 0;
+#endif	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
+#else	/* !CONFIG_CGROUP_MEM_RES_CTLR */
 	struct vx_info *vxi = current_vx_info();
 	unsigned long totalswap, freeswap;
 	rlim_t v, w;
@@ -351,7 +356,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 
 	val->totalswap = totalswap;
 	val->freeswap = freeswap;
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
+#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
 	return;
 }
 
