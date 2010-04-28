@@ -198,6 +198,19 @@ static void __queue_exception(struct kvm_vcpu *vcpu)
 }
 
 /*
+ * Checks if cpl <= required_cpl; if true, return true.  Otherwise queue
+ * a #GP and return false.
+ */
+bool kvm_require_cpl(struct kvm_vcpu *vcpu, int required_cpl)
+{
+	if (kvm_x86_ops->get_cpl(vcpu) <= required_cpl)
+		return true;
+	kvm_queue_exception_e(vcpu, GP_VECTOR, 0);
+	return false;
+}
+EXPORT_SYMBOL_GPL(kvm_require_cpl);
+
+/*
  * Load the pae pdptrs.  Return true is they are all valid.
  */
 int load_pdptrs(struct kvm_vcpu *vcpu, unsigned long cr3)
@@ -3645,7 +3658,13 @@ int kvm_arch_vcpu_ioctl_set_sregs(struct kvm_vcpu *vcpu,
 
 	vcpu->arch.cr2 = sregs->cr2;
 	mmu_reset_needed |= vcpu->arch.cr3 != sregs->cr3;
-	vcpu->arch.cr3 = sregs->cr3;
+
+	down_read(&vcpu->kvm->slots_lock);
+	if (gfn_to_memslot(vcpu->kvm, sregs->cr3 >> PAGE_SHIFT))
+		vcpu->arch.cr3 = sregs->cr3;
+	else
+		set_bit(KVM_REQ_TRIPLE_FAULT, &vcpu->requests);
+	up_read(&vcpu->kvm->slots_lock);
 
 	kvm_set_cr8(vcpu, sregs->cr8);
 
