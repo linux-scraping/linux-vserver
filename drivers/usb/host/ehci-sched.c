@@ -510,6 +510,8 @@ static int disable_periodic (struct ehci_hcd *ehci)
 	ehci_writel(ehci, cmd, &ehci->regs->command);
 	/* posted write ... */
 
+	free_cached_lists(ehci);
+
 	ehci->next_uframe = -1;
 	return 0;
 }
@@ -2137,13 +2139,27 @@ sitd_complete (
 			(stream->bEndpointAddress & USB_DIR_IN) ? "in" : "out");
 	}
 	iso_stream_put (ehci, stream);
-	/* OK to recycle this SITD now that its completion callback ran. */
+
 done:
 	sitd->urb = NULL;
-	sitd->stream = NULL;
-	list_move(&sitd->sitd_list, &stream->free_list);
-	iso_stream_put(ehci, stream);
-
+	if (ehci->clock_frame != sitd->frame) {
+		/* OK to recycle this SITD now. */
+		sitd->stream = NULL;
+		list_move(&sitd->sitd_list, &stream->free_list);
+		iso_stream_put(ehci, stream);
+	} else {
+		/* HW might remember this SITD, so we can't recycle it yet.
+		 * Move it to a safe place until a new frame starts.
+		 */
+		list_move(&sitd->sitd_list, &ehci->cached_sitd_list);
+		if (stream->refcount == 2) {
+			/* If iso_stream_put() were called here, stream
+			 * would be freed.  Instead, just prevent reuse.
+			 */
+			stream->ep->hcpriv = NULL;
+			stream->ep = NULL;
+		}
+	}
 	return retval;
 }
 
@@ -2209,14 +2225,22 @@ done:
 
 /*-------------------------------------------------------------------------*/
 
-static void free_cached_itd_list(struct ehci_hcd *ehci)
+static void free_cached_lists(struct ehci_hcd *ehci)
 {
 	struct ehci_itd *itd, *n;
+	struct ehci_sitd *sitd, *sn;
 
 	list_for_each_entry_safe(itd, n, &ehci->cached_itd_list, itd_list) {
 		struct ehci_iso_stream	*stream = itd->stream;
 		itd->stream = NULL;
 		list_move(&itd->itd_list, &stream->free_list);
+		iso_stream_put(ehci, stream);
+	}
+
+	list_for_each_entry_safe(sitd, sn, &ehci->cached_sitd_list, sitd_list) {
+		struct ehci_iso_stream	*stream = sitd->stream;
+		sitd->stream = NULL;
+		list_move(&sitd->sitd_list, &stream->free_list);
 		iso_stream_put(ehci, stream);
 	}
 }
@@ -2245,7 +2269,7 @@ scan_periodic (struct ehci_hcd *ehci)
 		clock_frame = -1;
 	}
 	if (ehci->clock_frame != clock_frame) {
-		free_cached_itd_list(ehci);
+		free_cached_lists(ehci);
 		ehci->clock_frame = clock_frame;
 	}
 	clock %= mod;
@@ -2336,9 +2360,13 @@ restart:
 				 * No need to check for activity unless the
 				 * frame is current.
 				 */
-				if (frame == clock_frame && live &&
-						(q.sitd->hw_results &
-							SITD_ACTIVE(ehci))) {
+				if (((frame == clock_frame) ||
+				     (((frame + 1) % ehci->periodic_size)
+				      == clock_frame))
+				    && live
+				    && (q.sitd->hw_results &
+					SITD_ACTIVE(ehci))) {
+
 					incomplete = true;
 					q_p = &q.sitd->sitd_next;
 					hw_p = &q.sitd->hw_next;
@@ -2408,7 +2436,7 @@ restart:
 			clock = now;
 			clock_frame = clock >> 3;
 			if (ehci->clock_frame != clock_frame) {
-				free_cached_itd_list(ehci);
+				free_cached_lists(ehci);
 				ehci->clock_frame = clock_frame;
 			}
 		} else {

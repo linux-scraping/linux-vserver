@@ -38,6 +38,7 @@
 #include <linux/workqueue.h>
 #include <linux/hrtimer.h>
 #include <linux/oom.h>
+#include <linux/slab.h>
 #include <linux/vserver/debug.h>
 
 #include <asm/ptrace.h>

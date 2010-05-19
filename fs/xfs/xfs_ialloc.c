@@ -204,7 +204,7 @@ xfs_ialloc_inode_init(
 		d = XFS_AGB_TO_DADDR(mp, agno, agbno + (j * blks_per_cluster));
 		fbuf = xfs_trans_get_buf(tp, mp->m_ddev_targp, d,
 					 mp->m_bsize * blks_per_cluster,
-					 XFS_BUF_LOCK);
+					 XBF_LOCK);
 		ASSERT(fbuf);
 		ASSERT(!XFS_BUF_GETERROR(fbuf));
 
@@ -252,6 +252,7 @@ xfs_ialloc_ag_alloc(
 	xfs_agino_t	thisino;	/* current inode number, for loop */
 	int		isaligned = 0;	/* inode allocation at stripe unit */
 					/* boundary */
+	struct xfs_perag *pag;
 
 	args.tp = tp;
 	args.mp = tp->t_mountp;
@@ -381,9 +382,9 @@ xfs_ialloc_ag_alloc(
 	newino = XFS_OFFBNO_TO_AGINO(args.mp, args.agbno, 0);
 	be32_add_cpu(&agi->agi_count, newlen);
 	be32_add_cpu(&agi->agi_freecount, newlen);
-	down_read(&args.mp->m_peraglock);
-	args.mp->m_perag[agno].pagi_freecount += newlen;
-	up_read(&args.mp->m_peraglock);
+	pag = xfs_perag_get(args.mp, agno);
+	pag->pagi_freecount += newlen;
+	xfs_perag_put(pag);
 	agi->agi_newino = cpu_to_be32(newino);
 
 	/*
@@ -485,9 +486,8 @@ xfs_ialloc_ag_select(
 	 */
 	agno = pagno;
 	flags = XFS_ALLOC_FLAG_TRYLOCK;
-	down_read(&mp->m_peraglock);
 	for (;;) {
-		pag = &mp->m_perag[agno];
+		pag = xfs_perag_get(mp, agno);
 		if (!pag->pagi_init) {
 			if (xfs_ialloc_read_agi(mp, tp, agno, &agbp)) {
 				agbp = NULL;
@@ -526,7 +526,7 @@ xfs_ialloc_ag_select(
 					agbp = NULL;
 					goto nextag;
 				}
-				up_read(&mp->m_peraglock);
+				xfs_perag_put(pag);
 				return agbp;
 			}
 		}
@@ -534,22 +534,19 @@ unlock_nextag:
 		if (agbp)
 			xfs_trans_brelse(tp, agbp);
 nextag:
+		xfs_perag_put(pag);
 		/*
 		 * No point in iterating over the rest, if we're shutting
 		 * down.
 		 */
-		if (XFS_FORCED_SHUTDOWN(mp)) {
-			up_read(&mp->m_peraglock);
+		if (XFS_FORCED_SHUTDOWN(mp))
 			return NULL;
-		}
 		agno++;
 		if (agno >= agcount)
 			agno = 0;
 		if (agno == pagno) {
-			if (flags == 0) {
-				up_read(&mp->m_peraglock);
+			if (flags == 0)
 				return NULL;
-			}
 			flags = 0;
 		}
 	}
@@ -671,6 +668,7 @@ xfs_dialloc(
 	xfs_agnumber_t	tagno;		/* testing allocation group number */
 	xfs_btree_cur_t	*tcur;		/* temp cursor */
 	xfs_inobt_rec_incore_t trec;	/* temp inode allocation record */
+	struct xfs_perag *pag;
 
 
 	if (*IO_agbp == NULL) {
@@ -770,13 +768,13 @@ nextag:
 			*inop = NULLFSINO;
 			return noroom ? ENOSPC : 0;
 		}
-		down_read(&mp->m_peraglock);
-		if (mp->m_perag[tagno].pagi_inodeok == 0) {
-			up_read(&mp->m_peraglock);
+		pag = xfs_perag_get(mp, tagno);
+		if (pag->pagi_inodeok == 0) {
+			xfs_perag_put(pag);
 			goto nextag;
 		}
 		error = xfs_ialloc_read_agi(mp, tp, tagno, &agbp);
-		up_read(&mp->m_peraglock);
+		xfs_perag_put(pag);
 		if (error)
 			goto nextag;
 		agi = XFS_BUF_TO_AGI(agbp);
@@ -789,6 +787,7 @@ nextag:
 	 */
 	agno = tagno;
 	*IO_agbp = NULL;
+	pag = xfs_perag_get(mp, agno);
 
  restart_pagno:
 	cur = xfs_inobt_init_cursor(mp, tp, agbp, be32_to_cpu(agi->agi_seqno));
@@ -807,7 +806,6 @@ nextag:
 	 * If in the same AG as the parent, try to get near the parent.
 	 */
 	if (pagno == agno) {
-		xfs_perag_t	*pag = &mp->m_perag[agno];
 		int		doneleft;	/* done, to the left */
 		int		doneright;	/* done, to the right */
 		int		searchdistance = 10;
@@ -1005,9 +1003,7 @@ alloc_inode:
 		goto error0;
 	be32_add_cpu(&agi->agi_freecount, -1);
 	xfs_ialloc_log_agi(tp, agbp, XFS_AGI_FREECOUNT);
-	down_read(&mp->m_peraglock);
-	mp->m_perag[tagno].pagi_freecount--;
-	up_read(&mp->m_peraglock);
+	pag->pagi_freecount--;
 
 	error = xfs_check_agi_freecount(cur, agi);
 	if (error)
@@ -1015,12 +1011,14 @@ alloc_inode:
 
 	xfs_btree_del_cursor(cur, XFS_BTREE_NOERROR);
 	xfs_trans_mod_sb(tp, XFS_TRANS_SB_IFREE, -1);
+	xfs_perag_put(pag);
 	*inop = ino;
 	return 0;
 error1:
 	xfs_btree_del_cursor(tcur, XFS_BTREE_ERROR);
 error0:
 	xfs_btree_del_cursor(cur, XFS_BTREE_ERROR);
+	xfs_perag_put(pag);
 	return error;
 }
 
@@ -1051,6 +1049,7 @@ xfs_difree(
 	xfs_mount_t	*mp;	/* mount structure for filesystem */
 	int		off;	/* offset of inode in inode chunk */
 	xfs_inobt_rec_incore_t rec;	/* btree record */
+	struct xfs_perag *pag;
 
 	mp = tp->t_mountp;
 
@@ -1087,9 +1086,7 @@ xfs_difree(
 	/*
 	 * Get the allocation group header.
 	 */
-	down_read(&mp->m_peraglock);
 	error = xfs_ialloc_read_agi(mp, tp, agno, &agbp);
-	up_read(&mp->m_peraglock);
 	if (error) {
 		cmn_err(CE_WARN,
 			"xfs_difree: xfs_ialloc_read_agi() returned an error %d on %s.  Returning error.",
@@ -1156,9 +1153,9 @@ xfs_difree(
 		be32_add_cpu(&agi->agi_count, -ilen);
 		be32_add_cpu(&agi->agi_freecount, -(ilen - 1));
 		xfs_ialloc_log_agi(tp, agbp, XFS_AGI_COUNT | XFS_AGI_FREECOUNT);
-		down_read(&mp->m_peraglock);
-		mp->m_perag[agno].pagi_freecount -= ilen - 1;
-		up_read(&mp->m_peraglock);
+		pag = xfs_perag_get(mp, agno);
+		pag->pagi_freecount -= ilen - 1;
+		xfs_perag_put(pag);
 		xfs_trans_mod_sb(tp, XFS_TRANS_SB_ICOUNT, -ilen);
 		xfs_trans_mod_sb(tp, XFS_TRANS_SB_IFREE, -(ilen - 1));
 
@@ -1187,9 +1184,9 @@ xfs_difree(
 		 */
 		be32_add_cpu(&agi->agi_freecount, 1);
 		xfs_ialloc_log_agi(tp, agbp, XFS_AGI_FREECOUNT);
-		down_read(&mp->m_peraglock);
-		mp->m_perag[agno].pagi_freecount++;
-		up_read(&mp->m_peraglock);
+		pag = xfs_perag_get(mp, agno);
+		pag->pagi_freecount++;
+		xfs_perag_put(pag);
 		xfs_trans_mod_sb(tp, XFS_TRANS_SB_IFREE, 1);
 	}
 
@@ -1311,9 +1308,7 @@ xfs_imap(
 		xfs_buf_t	*agbp;	/* agi buffer */
 		int		i;	/* temp state */
 
-		down_read(&mp->m_peraglock);
 		error = xfs_ialloc_read_agi(mp, tp, agno, &agbp);
-		up_read(&mp->m_peraglock);
 		if (error) {
 			xfs_fs_cmn_err(CE_ALERT, mp, "xfs_imap: "
 					"xfs_ialloc_read_agi() returned "
@@ -1378,7 +1373,6 @@ xfs_imap(
 			XFS_FSB_TO_BB(mp, mp->m_sb.sb_dblocks));
 		return XFS_ERROR(EINVAL);
 	}
-
 	return 0;
 }
 
@@ -1522,8 +1516,7 @@ xfs_ialloc_read_agi(
 		return error;
 
 	agi = XFS_BUF_TO_AGI(*bpp);
-	pag = &mp->m_perag[agno];
-
+	pag = xfs_perag_get(mp, agno);
 	if (!pag->pagi_init) {
 		pag->pagi_freecount = be32_to_cpu(agi->agi_freecount);
 		pag->pagi_count = be32_to_cpu(agi->agi_count);
@@ -1536,6 +1529,7 @@ xfs_ialloc_read_agi(
 	 */
 	ASSERT(pag->pagi_freecount == be32_to_cpu(agi->agi_freecount) ||
 		XFS_FORCED_SHUTDOWN(mp));
+	xfs_perag_put(pag);
 	return 0;
 }
 
