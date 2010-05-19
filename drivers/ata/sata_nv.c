@@ -38,6 +38,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/gfp.h>
 #include <linux/pci.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
@@ -772,7 +773,7 @@ static int nv_adma_slave_config(struct scsi_device *sdev)
 	}
 
 	blk_queue_segment_boundary(sdev->request_queue, segment_boundary);
-	blk_queue_max_hw_segments(sdev->request_queue, sg_tablesize);
+	blk_queue_max_segments(sdev->request_queue, sg_tablesize);
 	ata_port_printk(ap, KERN_INFO,
 		"DMA mask 0x%llX, segment boundary 0x%lX, hw segs %hu\n",
 		(unsigned long long)*ap->host->dev->dma_mask,
@@ -1673,6 +1674,7 @@ static void nv_mcp55_freeze(struct ata_port *ap)
 	mask = readl(mmio_base + NV_INT_ENABLE_MCP55);
 	mask &= ~(NV_INT_ALL_MCP55 << shift);
 	writel(mask, mmio_base + NV_INT_ENABLE_MCP55);
+	ata_sff_freeze(ap);
 }
 
 static void nv_mcp55_thaw(struct ata_port *ap)
@@ -1686,6 +1688,7 @@ static void nv_mcp55_thaw(struct ata_port *ap)
 	mask = readl(mmio_base + NV_INT_ENABLE_MCP55);
 	mask |= (NV_INT_MASK_MCP55 << shift);
 	writel(mask, mmio_base + NV_INT_ENABLE_MCP55);
+	ata_sff_thaw(ap);
 }
 
 static void nv_adma_error_handler(struct ata_port *ap)
@@ -2476,7 +2479,8 @@ static int nv_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	pci_set_master(pdev);
-	return ata_pci_sff_activate_host(host, ipriv->irq_handler, ipriv->sht);
+	return ata_host_activate(host, pdev->irq, ipriv->irq_handler,
+				 IRQF_SHARED, ipriv->sht);
 }
 
 #ifdef CONFIG_PM

@@ -150,7 +150,27 @@ struct drm_i915_error_state {
 	u32 instps;
 	u32 instdone1;
 	u32 seqno;
+	u64 bbaddr;
 	struct timeval time;
+	struct drm_i915_error_object {
+		int page_count;
+		u32 gtt_offset;
+		u32 *pages[0];
+	} *ringbuffer, *batchbuffer[2];
+	struct drm_i915_error_buffer {
+		size_t size;
+		u32 name;
+		u32 seqno;
+		u32 gtt_offset;
+		u32 read_domains;
+		u32 write_domain;
+		u32 fence_reg;
+		s32 pinned:2;
+		u32 tiling:2;
+		u32 dirty:1;
+		u32 purgeable:1;
+	} *active_bo;
+	u32 active_bo_count;
 };
 
 struct drm_i915_display_funcs {
@@ -186,11 +206,20 @@ struct intel_device_info {
 	u8 is_g4x : 1;
 	u8 is_pineview : 1;
 	u8 is_ironlake : 1;
+	u8 is_gen6 : 1;
 	u8 has_fbc : 1;
 	u8 has_rc6 : 1;
 	u8 has_pipe_cxsr : 1;
 	u8 has_hotplug : 1;
 	u8 cursor_needs_physical : 1;
+};
+
+enum no_fbc_reason {
+	FBC_STOLEN_TOO_SMALL, /* not enough space to hold compressed buffers */
+	FBC_UNSUPPORTED_MODE, /* interlace or doublescanned mode */
+	FBC_MODE_TOO_LARGE, /* mode too large for compression */
+	FBC_BAD_PLANE, /* fbc not supported on plane */
+	FBC_NOT_TILED, /* buffer not tiled */
 };
 
 typedef struct drm_i915_private {
@@ -456,6 +485,7 @@ typedef struct drm_i915_private {
 	u32 savePIPEB_DATA_N1;
 	u32 savePIPEB_LINK_M1;
 	u32 savePIPEB_LINK_N1;
+	u32 saveMCHBAR_RENDER_STANDBY;
 
 	struct {
 		struct drm_mm gtt_space;
@@ -585,6 +615,8 @@ typedef struct drm_i915_private {
 	/* Reclocking support */
 	bool render_reclock_avail;
 	bool lvds_downclock_avail;
+	/* indicate whether the LVDS EDID is OK */
+	bool lvds_edid_good;
 	/* indicates the reduced downclock for LVDS*/
 	int lvds_downclock;
 	struct work_struct idle_work;
@@ -594,6 +626,17 @@ typedef struct drm_i915_private {
 	int child_dev_num;
 	struct child_device_config *child_dev;
 	struct drm_connector *int_lvds_connector;
+
+	bool mchbar_need_disable;
+
+	u8 cur_delay;
+	u8 min_delay;
+	u8 max_delay;
+
+	enum no_fbc_reason no_fbc_reason;
+
+	struct drm_mm_node *compressed_fb;
+	struct drm_mm_node *compressed_llb;
 } drm_i915_private_t;
 
 /** driver private structure attached to each drm_gem_object */
@@ -697,6 +740,8 @@ struct drm_i915_gem_object {
 	atomic_t pending_flip;
 };
 
+#define to_intel_bo(x) ((struct drm_i915_gem_object *) (x)->driver_private)
+
 /**
  * Request queue structure.
  *
@@ -740,6 +785,8 @@ extern unsigned int i915_fbpercrtc;
 extern unsigned int i915_powersave;
 extern unsigned int i915_lvds_downclock;
 
+extern int i915_suspend(struct drm_device *dev, pm_message_t state);
+extern int i915_resume(struct drm_device *dev);
 extern void i915_save_display(struct drm_device *dev);
 extern void i915_restore_display(struct drm_device *dev);
 extern int i915_master_create(struct drm_device *dev, struct drm_master *master);
@@ -765,6 +812,7 @@ extern int i965_reset(struct drm_device *dev, u8 flags);
 
 /* i915_irq.c */
 void i915_hangcheck_elapsed(unsigned long data);
+void i915_destroy_error_state(struct drm_device *dev);
 extern int i915_irq_emit(struct drm_device *dev, void *data,
 			 struct drm_file *file_priv);
 extern int i915_irq_wait(struct drm_device *dev, void *data,
@@ -901,7 +949,8 @@ void i915_gem_object_do_bit_17_swizzle(struct drm_gem_object *obj);
 void i915_gem_object_save_bit_17_swizzle(struct drm_gem_object *obj);
 bool i915_tiling_ok(struct drm_device *dev, int stride, int size,
 		    int tiling_mode);
-bool i915_obj_fenceable(struct drm_device *dev, struct drm_gem_object *obj);
+bool i915_gem_object_fence_offset_ok(struct drm_gem_object *obj,
+				     int tiling_mode);
 
 /* i915_gem_debug.c */
 void i915_gem_dump_object(struct drm_gem_object *obj, int len,
@@ -1047,6 +1096,7 @@ extern int i915_wait_ring(struct drm_device * dev, int n, const char *caller);
 #define IS_IRONLAKE_M(dev)	((dev)->pci_device == 0x0046)
 #define IS_IRONLAKE(dev)	(INTEL_INFO(dev)->is_ironlake)
 #define IS_I9XX(dev)		(INTEL_INFO(dev)->is_i9xx)
+#define IS_GEN6(dev)		(INTEL_INFO(dev)->is_gen6)
 #define IS_MOBILE(dev)		(INTEL_INFO(dev)->is_mobile)
 
 #define IS_GEN3(dev)	(IS_I915G(dev) ||			\
@@ -1069,8 +1119,6 @@ extern int i915_wait_ring(struct drm_device * dev, int n, const char *caller);
 			 (dev)->pci_device == 0x2E42)
 
 #define I915_NEED_GFX_HWS(dev)	(INTEL_INFO(dev)->need_gfx_hws)
-
-#define IS_GEN6(dev)	((dev)->pci_device == 0x0102)
 
 /* With the 945 and later, Y tiling got adjusted so that it was 32 128-byte
  * rows, which changed the alignment requirements and fence programming.

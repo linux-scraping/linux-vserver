@@ -15,6 +15,7 @@
  *	Harald Welte		Add neighbour cache statistics like rtstat
  */
 
+#include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -771,6 +772,8 @@ static __inline__ int neigh_max_probes(struct neighbour *n)
 }
 
 static void neigh_invalidate(struct neighbour *neigh)
+	__releases(neigh->lock)
+	__acquires(neigh->lock)
 {
 	struct sk_buff *skb;
 
@@ -945,10 +948,7 @@ static void neigh_update_hhs(struct neighbour *neigh)
 {
 	struct hh_cache *hh;
 	void (*update)(struct hh_cache*, const struct net_device*, const unsigned char *)
-		= NULL;
-
-	if (neigh->dev->header_ops)
-		update = neigh->dev->header_ops->cache_update;
+		= neigh->dev->header_ops->cache_update;
 
 	if (update) {
 		for (hh = neigh->hh; hh; hh = hh->hh_next) {
@@ -2420,8 +2420,7 @@ EXPORT_SYMBOL(neigh_seq_stop);
 
 static void *neigh_stat_seq_start(struct seq_file *seq, loff_t *pos)
 {
-	struct proc_dir_entry *pde = seq->private;
-	struct neigh_table *tbl = pde->data;
+	struct neigh_table *tbl = seq->private;
 	int cpu;
 
 	if (*pos == 0)
@@ -2438,8 +2437,7 @@ static void *neigh_stat_seq_start(struct seq_file *seq, loff_t *pos)
 
 static void *neigh_stat_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
-	struct proc_dir_entry *pde = seq->private;
-	struct neigh_table *tbl = pde->data;
+	struct neigh_table *tbl = seq->private;
 	int cpu;
 
 	for (cpu = *pos; cpu < nr_cpu_ids; ++cpu) {
@@ -2458,8 +2456,7 @@ static void neigh_stat_seq_stop(struct seq_file *seq, void *v)
 
 static int neigh_stat_seq_show(struct seq_file *seq, void *v)
 {
-	struct proc_dir_entry *pde = seq->private;
-	struct neigh_table *tbl = pde->data;
+	struct neigh_table *tbl = seq->private;
 	struct neigh_statistics *st = v;
 
 	if (v == SEQ_START_TOKEN) {
@@ -2504,7 +2501,7 @@ static int neigh_stat_seq_open(struct inode *inode, struct file *file)
 
 	if (!ret) {
 		struct seq_file *sf = file->private_data;
-		sf->private = PDE(inode);
+		sf->private = PDE(inode)->data;
 	}
 	return ret;
 };
@@ -2562,9 +2559,11 @@ EXPORT_SYMBOL(neigh_app_ns);
 
 #ifdef CONFIG_SYSCTL
 
+#define NEIGH_VARS_MAX 19
+
 static struct neigh_sysctl_table {
 	struct ctl_table_header *sysctl_header;
-	struct ctl_table neigh_vars[__NET_NEIGH_MAX];
+	struct ctl_table neigh_vars[NEIGH_VARS_MAX];
 	char *dev_name;
 } neigh_sysctl_template __read_mostly = {
 	.neigh_vars = {
@@ -2681,8 +2680,7 @@ static struct neigh_sysctl_table {
 };
 
 int neigh_sysctl_register(struct net_device *dev, struct neigh_parms *p,
-			  int p_id, int pdev_id, char *p_name,
-			  proc_handler *handler)
+			  char *p_name, proc_handler *handler)
 {
 	struct neigh_sysctl_table *t;
 	const char *dev_name_source = NULL;

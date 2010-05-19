@@ -295,8 +295,9 @@ typedef struct xfs_bstat {
 	__s32		bs_extents;	/* number of extents		*/
 	__u32		bs_gen;		/* generation count		*/
 	__u16		bs_projid;	/* project id			*/
+	__u16		bs_forkoff;	/* inode fork offset in bytes	*/
 	__u16		bs_tag;		/* context tagging		*/
-	unsigned char	bs_pad[12];	/* pad space, unused		*/
+	unsigned char	bs_pad[10];	/* pad space, unused		*/
 	__u32		bs_dmevmask;	/* DMIG event mask		*/
 	__u16		bs_dmstate;	/* DMIG state info		*/
 	__u16		bs_aextents;	/* attribute number of extents	*/

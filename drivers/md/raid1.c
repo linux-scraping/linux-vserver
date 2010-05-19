@@ -31,6 +31,7 @@
  * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/blkdev.h>
 #include <linux/seq_file.h>
@@ -417,7 +418,7 @@ static void raid1_end_write_request(struct bio *bio, int error)
  */
 static int read_balance(conf_t *conf, r1bio_t *r1_bio)
 {
-	const sector_t this_sector = r1_bio->sector;
+	const unsigned long this_sector = r1_bio->sector;
 	int new_disk = conf->last_used, disk = new_disk;
 	int wonly_disk = -1;
 	const int sectors = r1_bio->sectors;
@@ -433,7 +434,7 @@ static int read_balance(conf_t *conf, r1bio_t *r1_bio)
  retry:
 	if (conf->mddev->recovery_cp < MaxSector &&
 	    (this_sector + sectors >= conf->next_resync)) {
-		/* Choose the first operational device, for consistancy */
+		/* Choose the first operation device, for consistancy */
 		new_disk = 0;
 
 		for (rdev = rcu_dereference(conf->mirrors[new_disk].rdev);
@@ -911,10 +912,9 @@ static int make_request(struct request_queue *q, struct bio * bio)
 			if (test_bit(Faulty, &rdev->flags)) {
 				rdev_dec_pending(rdev, mddev);
 				r1_bio->bios[i] = NULL;
-			} else {
+			} else
 				r1_bio->bios[i] = bio;
-				targets++;
-			}
+			targets++;
 		} else
 			r1_bio->bios[i] = NULL;
 	}
@@ -1153,13 +1153,17 @@ static int raid1_add_disk(mddev_t *mddev, mdk_rdev_t *rdev)
 
 			disk_stack_limits(mddev->gendisk, rdev->bdev,
 					  rdev->data_offset << 9);
-			/* as we don't honour merge_bvec_fn, we must never risk
-			 * violating it, so limit ->max_sector to one PAGE, as
-			 * a one page request is never in violation.
+			/* as we don't honour merge_bvec_fn, we must
+			 * never risk violating it, so limit
+			 * ->max_segments to one lying with a single
+			 * page, as a one page request is never in
+			 * violation.
 			 */
-			if (rdev->bdev->bd_disk->queue->merge_bvec_fn &&
-			    queue_max_sectors(mddev->queue) > (PAGE_SIZE>>9))
-				blk_queue_max_sectors(mddev->queue, PAGE_SIZE>>9);
+			if (rdev->bdev->bd_disk->queue->merge_bvec_fn) {
+				blk_queue_max_segments(mddev->queue, 1);
+				blk_queue_segment_boundary(mddev->queue,
+							   PAGE_CACHE_SIZE - 1);
+			}
 
 			p->head_position = 0;
 			rdev->raid_disk = mirror;
@@ -2099,12 +2103,14 @@ static int run(mddev_t *mddev)
 		disk_stack_limits(mddev->gendisk, rdev->bdev,
 				  rdev->data_offset << 9);
 		/* as we don't honour merge_bvec_fn, we must never risk
-		 * violating it, so limit ->max_sector to one PAGE, as
-		 * a one page request is never in violation.
+		 * violating it, so limit ->max_segments to 1 lying within
+		 * a single page, as a one page request is never in violation.
 		 */
-		if (rdev->bdev->bd_disk->queue->merge_bvec_fn &&
-		    queue_max_sectors(mddev->queue) > (PAGE_SIZE>>9))
-			blk_queue_max_sectors(mddev->queue, PAGE_SIZE>>9);
+		if (rdev->bdev->bd_disk->queue->merge_bvec_fn) {
+			blk_queue_max_segments(mddev->queue, 1);
+			blk_queue_segment_boundary(mddev->queue,
+						   PAGE_CACHE_SIZE - 1);
+		}
 	}
 
 	mddev->degraded = 0;

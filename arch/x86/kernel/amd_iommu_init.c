@@ -19,8 +19,8 @@
 
 #include <linux/pci.h>
 #include <linux/acpi.h>
-#include <linux/gfp.h>
 #include <linux/list.h>
+#include <linux/slab.h>
 #include <linux/sysdev.h>
 #include <linux/interrupt.h>
 #include <linux/msi.h>
@@ -138,9 +138,9 @@ int amd_iommus_present;
 bool amd_iommu_np_cache __read_mostly;
 
 /*
- * Set to true if ACPI table parsing and hardware intialization went properly
+ * The ACPI table parsing functions set this variable on an error
  */
-static bool amd_iommu_initialized;
+static int __initdata amd_iommu_init_err;
 
 /*
  * List of protection domains - used during resume
@@ -286,12 +286,8 @@ static u8 * __init iommu_map_mmio_space(u64 address)
 {
 	u8 *ret;
 
-	if (!request_mem_region(address, MMIO_REGION_LENGTH, "amd_iommu")) {
-		pr_err("AMD-Vi: Can not reserve memory region %llx for mmio\n",
-			address);
-		pr_err("AMD-Vi: This is a BIOS bug. Please contact your hardware vendor\n");
+	if (!request_mem_region(address, MMIO_REGION_LENGTH, "amd_iommu"))
 		return NULL;
-	}
 
 	ret = ioremap_nocache(address, MMIO_REGION_LENGTH);
 	if (ret != NULL)
@@ -395,9 +391,11 @@ static int __init find_last_devid_acpi(struct acpi_table_header *table)
 	 */
 	for (i = 0; i < table->length; ++i)
 		checksum += p[i];
-	if (checksum != 0)
+	if (checksum != 0) {
 		/* ACPI table corrupt */
-		return -ENODEV;
+		amd_iommu_init_err = -ENODEV;
+		return 0;
+	}
 
 	p += IVRS_HEADER_LENGTH;
 
@@ -440,7 +438,7 @@ static u8 * __init alloc_command_buffer(struct amd_iommu *iommu)
 	if (cmd_buf == NULL)
 		return NULL;
 
-	iommu->cmd_buf_size = CMD_BUFFER_SIZE;
+	iommu->cmd_buf_size = CMD_BUFFER_SIZE | CMD_BUFFER_UNINITIALIZED;
 
 	return cmd_buf;
 }
@@ -476,12 +474,13 @@ static void iommu_enable_command_buffer(struct amd_iommu *iommu)
 		    &entry, sizeof(entry));
 
 	amd_iommu_reset_cmd_buffer(iommu);
+	iommu->cmd_buf_size &= ~(CMD_BUFFER_UNINITIALIZED);
 }
 
 static void __init free_command_buffer(struct amd_iommu *iommu)
 {
 	free_pages((unsigned long)iommu->cmd_buf,
-		   get_order(iommu->cmd_buf_size));
+		   get_order(iommu->cmd_buf_size & ~(CMD_BUFFER_UNINITIALIZED)));
 }
 
 /* allocates the memory where the IOMMU will log its events to */
@@ -924,11 +923,16 @@ static int __init init_iommu_all(struct acpi_table_header *table)
 				    h->mmio_phys);
 
 			iommu = kzalloc(sizeof(struct amd_iommu), GFP_KERNEL);
-			if (iommu == NULL)
-				return -ENOMEM;
+			if (iommu == NULL) {
+				amd_iommu_init_err = -ENOMEM;
+				return 0;
+			}
+
 			ret = init_iommu_one(iommu, h);
-			if (ret)
-				return ret;
+			if (ret) {
+				amd_iommu_init_err = ret;
+				return 0;
+			}
 			break;
 		default:
 			break;
@@ -937,8 +941,6 @@ static int __init init_iommu_all(struct acpi_table_header *table)
 
 	}
 	WARN_ON(p != end);
-
-	amd_iommu_initialized = true;
 
 	return 0;
 }
@@ -1215,6 +1217,10 @@ static int __init amd_iommu_init(void)
 	if (acpi_table_parse("IVRS", find_last_devid_acpi) != 0)
 		return -ENODEV;
 
+	ret = amd_iommu_init_err;
+	if (ret)
+		goto out;
+
 	dev_table_size     = tbl_size(DEV_TABLE_ENTRY_SIZE);
 	alias_table_size   = tbl_size(ALIAS_TABLE_ENTRY_SIZE);
 	rlookup_table_size = tbl_size(RLOOKUP_TABLE_ENTRY_SIZE);
@@ -1274,11 +1280,18 @@ static int __init amd_iommu_init(void)
 	if (acpi_table_parse("IVRS", init_iommu_all) != 0)
 		goto free;
 
-	if (!amd_iommu_initialized)
+	if (amd_iommu_init_err) {
+		ret = amd_iommu_init_err;
 		goto free;
+	}
 
 	if (acpi_table_parse("IVRS", init_memory_definitions) != 0)
 		goto free;
+
+	if (amd_iommu_init_err) {
+		ret = amd_iommu_init_err;
+		goto free;
+	}
 
 	ret = sysdev_class_register(&amd_iommu_sysdev_class);
 	if (ret)
@@ -1300,7 +1313,7 @@ static int __init amd_iommu_init(void)
 		ret = amd_iommu_init_dma_ops();
 
 	if (ret)
-		goto free_disable;
+		goto free;
 
 	amd_iommu_init_api();
 
@@ -1318,10 +1331,9 @@ static int __init amd_iommu_init(void)
 out:
 	return ret;
 
-free_disable:
+free:
 	disable_iommus();
 
-free:
 	amd_iommu_uninit_devices();
 
 	free_pages((unsigned long)amd_iommu_pd_alloc_bitmap,
@@ -1339,15 +1351,6 @@ free:
 	free_iommu_all();
 
 	free_unity_maps();
-
-#ifdef CONFIG_GART_IOMMU
-	/*
-	 * We failed to initialize the AMD IOMMU - try fallback to GART
-	 * if possible.
-	 */
-	gart_iommu_init();
-
-#endif
 
 	goto out;
 }

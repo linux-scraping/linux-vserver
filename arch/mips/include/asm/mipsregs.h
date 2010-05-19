@@ -258,6 +258,14 @@
 #define PL_256M		28
 
 /*
+ * PageGrain bits
+ */
+#define PG_RIE		(_ULCAST_(1) <<  31)
+#define PG_XIE		(_ULCAST_(1) <<  30)
+#define PG_ELPA		(_ULCAST_(1) <<  29)
+#define PG_ESP		(_ULCAST_(1) <<  28)
+
+/*
  * R4x00 interrupt enable / cause bits
  */
 #define IE_SW0          (_ULCAST_(1) <<  8)
@@ -583,6 +591,10 @@
 #define MIPS_CONF3_DSP		(_ULCAST_(1) << 10)
 #define MIPS_CONF3_ULRI		(_ULCAST_(1) << 13)
 
+#define MIPS_CONF4_MMUSIZEEXT	(_ULCAST_(255) << 0)
+#define MIPS_CONF4_MMUEXTDEF	(_ULCAST_(3) << 14)
+#define MIPS_CONF4_MMUEXTDEF_MMUSIZEEXT (_ULCAST_(1) << 14)
+
 #define MIPS_CONF7_WII		(_ULCAST_(1) << 31)
 
 #define MIPS_CONF7_RPS		(_ULCAST_(1) << 2)
@@ -832,6 +844,9 @@ do {									\
 
 #define read_c0_pagemask()	__read_32bit_c0_register($5, 0)
 #define write_c0_pagemask(val)	__write_32bit_c0_register($5, 0, val)
+
+#define read_c0_pagegrain()	__read_32bit_c0_register($5, 1)
+#define write_c0_pagegrain(val)	__write_32bit_c0_register($5, 1, val)
 
 #define read_c0_wired()		__read_32bit_c0_register($6, 0)
 #define write_c0_wired(val)	__write_32bit_c0_register($6, 0, val)

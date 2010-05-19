@@ -84,20 +84,6 @@ static struct can_bittiming_const sja1000_bittiming_const = {
 	.brp_inc = 1,
 };
 
-static void sja1000_write_cmdreg(struct sja1000_priv *priv, u8 val)
-{
-	unsigned long flags;
-
-	/*
-	 * The command register needs some locking and time to settle
-	 * the write_reg() operation - especially on SMP systems.
-	 */
-	spin_lock_irqsave(&priv->cmdreg_lock, flags);
-	priv->write_reg(priv, REG_CMR, val);
-	priv->read_reg(priv, REG_SR);
-	spin_unlock_irqrestore(&priv->cmdreg_lock, flags);
-}
-
 static int sja1000_probe_chip(struct net_device *dev)
 {
 	struct sja1000_priv *priv = netdev_priv(dev);
@@ -144,8 +130,12 @@ static void set_normal_mode(struct net_device *dev)
 		/* check reset bit */
 		if ((status & MOD_RM) == 0) {
 			priv->can.state = CAN_STATE_ERROR_ACTIVE;
-			/* enable all interrupts */
-			priv->write_reg(priv, REG_IER, IRQ_ALL);
+			/* enable interrupts */
+			if (priv->can.ctrlmode & CAN_CTRLMODE_BERR_REPORTING)
+				priv->write_reg(priv, REG_IER, IRQ_ALL);
+			else
+				priv->write_reg(priv, REG_IER,
+						IRQ_ALL & ~IRQ_BEI);
 			return;
 		}
 
@@ -217,6 +207,17 @@ static int sja1000_set_bittiming(struct net_device *dev)
 	return 0;
 }
 
+static int sja1000_get_berr_counter(const struct net_device *dev,
+				    struct can_berr_counter *bec)
+{
+	struct sja1000_priv *priv = netdev_priv(dev);
+
+	bec->txerr = priv->read_reg(priv, REG_TXERR);
+	bec->rxerr = priv->read_reg(priv, REG_RXERR);
+
+	return 0;
+}
+
 /*
  * initialize SJA1000 chip:
  *   - reset chip
@@ -263,6 +264,9 @@ static netdev_tx_t sja1000_start_xmit(struct sk_buff *skb,
 	uint8_t dreg;
 	int i;
 
+	if (can_dropped_invalid_skb(dev, skb))
+		return NETDEV_TX_OK;
+
 	netif_stop_queue(dev);
 
 	fi = dlc = cf->can_dlc;
@@ -293,7 +297,7 @@ static netdev_tx_t sja1000_start_xmit(struct sk_buff *skb,
 
 	can_put_echo_skb(skb, dev, 0);
 
-	sja1000_write_cmdreg(priv, CMD_TR);
+	priv->write_reg(priv, REG_CMR, CMD_TR);
 
 	return NETDEV_TX_OK;
 }
@@ -342,7 +346,7 @@ static void sja1000_rx(struct net_device *dev)
 	cf->can_id = id;
 
 	/* release receive buffer */
-	sja1000_write_cmdreg(priv, CMD_RRB);
+	priv->write_reg(priv, REG_CMR, CMD_RRB);
 
 	netif_rx(skb);
 
@@ -370,7 +374,7 @@ static int sja1000_err(struct net_device *dev, uint8_t isrc, uint8_t status)
 		cf->data[1] = CAN_ERR_CRTL_RX_OVERFLOW;
 		stats->rx_over_errors++;
 		stats->rx_errors++;
-		sja1000_write_cmdreg(priv, CMD_CDO);	/* clear bit */
+		priv->write_reg(priv, REG_CMR, CMD_CDO);	/* clear bit */
 	}
 
 	if (isrc & IRQ_EI) {
@@ -448,6 +452,8 @@ static int sja1000_err(struct net_device *dev, uint8_t isrc, uint8_t status)
 				CAN_ERR_CRTL_TX_PASSIVE :
 				CAN_ERR_CRTL_RX_PASSIVE;
 		}
+		cf->data[6] = txerr;
+		cf->data[7] = rxerr;
 	}
 
 	priv->can.state = state;
@@ -578,6 +584,9 @@ struct net_device *alloc_sja1000dev(int sizeof_priv)
 	priv->can.bittiming_const = &sja1000_bittiming_const;
 	priv->can.do_set_bittiming = sja1000_set_bittiming;
 	priv->can.do_set_mode = sja1000_set_mode;
+	priv->can.do_get_berr_counter = sja1000_get_berr_counter;
+	priv->can.ctrlmode_supported = CAN_CTRLMODE_3_SAMPLES |
+		CAN_CTRLMODE_BERR_REPORTING;
 
 	if (sizeof_priv)
 		priv->priv = (void *)priv + sizeof(struct sja1000_priv);

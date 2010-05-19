@@ -22,6 +22,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/pnp.h>
+#include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/wait.h>
 #include "tpm.h"
@@ -622,14 +623,7 @@ static int tpm_tis_pnp_suspend(struct pnp_dev *dev, pm_message_t msg)
 
 static int tpm_tis_pnp_resume(struct pnp_dev *dev)
 {
-	struct tpm_chip *chip = pnp_get_drvdata(dev);
-	int ret;
-
-	ret = tpm_pm_resume(&dev->dev);
-	if (!ret)
-		tpm_continue_selftest(chip);
-
-	return ret;
+	return tpm_pm_resume(&dev->dev);
 }
 
 static struct pnp_device_id tpm_pnp_tbl[] __devinitdata = {

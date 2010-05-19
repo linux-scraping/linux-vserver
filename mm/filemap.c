@@ -10,13 +10,13 @@
  * the NFS filesystem used to do this differently, for example)
  */
 #include <linux/module.h>
-#include <linux/slab.h>
 #include <linux/compiler.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/aio.h>
 #include <linux/capability.h>
 #include <linux/kernel_stat.h>
+#include <linux/gfp.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/mman.h>
@@ -441,7 +441,7 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 	/*
 	 * Splice_read and readahead add shmem/tmpfs pages into the page cache
 	 * before shmem_readpage has a chance to mark them as SwapBacked: they
-	 * need to go on the anon lru below, and mem_cgroup_cache_charge
+	 * need to go on the active_anon lru below, and mem_cgroup_cache_charge
 	 * (called in add_to_page_cache) needs to know where they're going too.
 	 */
 	if (mapping_cap_swap_backed(mapping))
@@ -452,7 +452,7 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 		if (page_is_file_cache(page))
 			lru_cache_add_file(page);
 		else
-			lru_cache_add_anon(page);
+			lru_cache_add_active_anon(page);
 	}
 	return ret;
 }
@@ -1099,12 +1099,6 @@ page_not_up_to_date_locked:
 		}
 
 readpage:
-		/*
-		 * A previous I/O error may have been due to temporary
-		 * failures, eg. multipath errors.
-		 * PG_error will be set again if readpage fails.
-		 */
-		ClearPageError(page);
 		/* Start the actual read. The read will unlock the page. */
 		error = mapping->a_ops->readpage(filp, page);
 
@@ -1123,7 +1117,7 @@ readpage:
 			if (!PageUptodate(page)) {
 				if (page->mapping == NULL) {
 					/*
-					 * invalidate_inode_pages got it
+					 * invalidate_mapping_pages got it
 					 */
 					unlock_page(page);
 					page_cache_release(page);
@@ -1992,7 +1986,7 @@ EXPORT_SYMBOL(iov_iter_single_seg_count);
 inline int generic_write_checks(struct file *file, loff_t *pos, size_t *count, int isblk)
 {
 	struct inode *inode = file->f_mapping->host;
-	unsigned long limit = current->signal->rlim[RLIMIT_FSIZE].rlim_cur;
+	unsigned long limit = rlimit(RLIMIT_FSIZE);
 
         if (unlikely(*pos < 0))
                 return -EINVAL;

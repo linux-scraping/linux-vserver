@@ -33,10 +33,10 @@
 #include <linux/kdebug.h>
 #include <linux/string.h>
 #include <linux/rwsem.h>
+#include <linux/slab.h>
 #include <linux/ctype.h>
 #include <linux/init.h>
 #include <linux/poll.h>
-#include <linux/gfp.h>
 #include <linux/fs.h>
 
 #include "trace.h"
@@ -92,12 +92,12 @@ DEFINE_PER_CPU(int, ftrace_cpu_disabled);
 static inline void ftrace_disable_cpu(void)
 {
 	preempt_disable();
-	__this_cpu_inc(per_cpu_var(ftrace_cpu_disabled));
+	__this_cpu_inc(ftrace_cpu_disabled);
 }
 
 static inline void ftrace_enable_cpu(void)
 {
-	__this_cpu_dec(per_cpu_var(ftrace_cpu_disabled));
+	__this_cpu_dec(ftrace_cpu_disabled);
 	preempt_enable();
 }
 
@@ -374,6 +374,21 @@ static int __init set_buf_size(char *str)
 }
 __setup("trace_buf_size=", set_buf_size);
 
+static int __init set_tracing_thresh(char *str)
+{
+	unsigned long threshhold;
+	int ret;
+
+	if (!str)
+		return 0;
+	ret = strict_strtoul(str, 0, &threshhold);
+	if (ret < 0)
+		return 0;
+	tracing_thresh = threshhold * 1000;
+	return 1;
+}
+__setup("tracing_thresh=", set_tracing_thresh);
+
 unsigned long nsecs_to_usecs(unsigned long nsecs)
 {
 	return nsecs / 1000;
@@ -579,9 +594,10 @@ static ssize_t trace_seq_to_buffer(struct trace_seq *s, void *buf, size_t cnt)
 static arch_spinlock_t ftrace_max_lock =
 	(arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;
 
+unsigned long __read_mostly	tracing_thresh;
+
 #ifdef CONFIG_TRACER_MAX_TRACE
 unsigned long __read_mostly	tracing_max_latency;
-unsigned long __read_mostly	tracing_thresh;
 
 /*
  * Copy the new maximum trace into the separate maximum-trace
@@ -592,7 +608,7 @@ static void
 __update_max_tr(struct trace_array *tr, struct task_struct *tsk, int cpu)
 {
 	struct trace_array_cpu *data = tr->data[cpu];
-	struct trace_array_cpu *max_data = tr->data[cpu];
+	struct trace_array_cpu *max_data;
 
 	max_tr.cpu = cpu;
 	max_tr.time_start = data->preempt_timestamp;
@@ -602,7 +618,7 @@ __update_max_tr(struct trace_array *tr, struct task_struct *tsk, int cpu)
 	max_data->critical_start = data->critical_start;
 	max_data->critical_end = data->critical_end;
 
-	memcpy(data->comm, tsk->comm, TASK_COMM_LEN);
+	memcpy(max_data->comm, tsk->comm, TASK_COMM_LEN);
 	max_data->pid = tsk->pid;
 	max_data->uid = task_uid(tsk);
 	max_data->nice = tsk->static_prio - 20 - MAX_RT_PRIO;
@@ -1175,7 +1191,7 @@ trace_function(struct trace_array *tr,
 	struct ftrace_entry *entry;
 
 	/* If we are reading the ring buffer, don't trace */
-	if (unlikely(__this_cpu_read(per_cpu_var(ftrace_cpu_disabled))))
+	if (unlikely(__this_cpu_read(ftrace_cpu_disabled)))
 		return;
 
 	event = trace_buffer_lock_reserve(buffer, TRACE_FN, sizeof(*entry),
@@ -1413,8 +1429,10 @@ int trace_vbprintk(unsigned long ip, const char *fmt, va_list args)
 	entry->fmt			= fmt;
 
 	memcpy(entry->buf, trace_buf, sizeof(u32) * len);
-	if (!filter_check_discard(call, entry, buffer, event))
+	if (!filter_check_discard(call, entry, buffer, event)) {
 		ring_buffer_unlock_commit(buffer, event);
+		ftrace_trace_stack(buffer, flags, 6, pc);
+	}
 
 out_unlock:
 	arch_spin_unlock(&trace_buf_lock);
@@ -1487,8 +1505,10 @@ int trace_array_vprintk(struct trace_array *tr,
 
 	memcpy(&entry->buf, trace_buf, len);
 	entry->buf[len] = '\0';
-	if (!filter_check_discard(call, entry, buffer, event))
+	if (!filter_check_discard(call, entry, buffer, event)) {
 		ring_buffer_unlock_commit(buffer, event);
+		ftrace_trace_stack(buffer, irq_flags, 6, pc);
+	}
 
  out_unlock:
 	arch_spin_unlock(&trace_buf_lock);
@@ -4261,10 +4281,10 @@ static __init int tracer_init_debugfs(void)
 #ifdef CONFIG_TRACER_MAX_TRACE
 	trace_create_file("tracing_max_latency", 0644, d_tracer,
 			&tracing_max_latency, &tracing_max_lat_fops);
+#endif
 
 	trace_create_file("tracing_thresh", 0644, d_tracer,
 			&tracing_thresh, &tracing_max_lat_fops);
-#endif
 
 	trace_create_file("README", 0444, d_tracer,
 			NULL, &tracing_readme_fops);

@@ -15,6 +15,7 @@
  * 2 of the License, or (at your option) any later version.
  */
 
+#include <linux/gfp.h>
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/icmpv6.h>
@@ -95,11 +96,9 @@ static void send_reset(struct net *net, struct sk_buff *oldskb)
 	fl.fl_ip_dport = otcph.source;
 	security_skb_classify_flow(oldskb, &fl);
 	dst = ip6_route_output(net, NULL, &fl);
-	if (dst == NULL || dst->error) {
-		dst_release(dst);
+	if (dst == NULL)
 		return;
-	}
-	if (xfrm_lookup(net, &dst, &fl, NULL, 0))
+	if (dst->error || xfrm_lookup(net, &dst, &fl, NULL, 0))
 		return;
 
 	hh_len = (dst->dev->hard_header_len + 15)&~15;
@@ -171,7 +170,7 @@ send_unreach(struct net *net, struct sk_buff *skb_in, unsigned char code,
 	if (hooknum == NF_INET_LOCAL_OUT && skb_in->dev == NULL)
 		skb_in->dev = net->loopback_dev;
 
-	icmpv6_send(skb_in, ICMPV6_DEST_UNREACH, code, 0, NULL);
+	icmpv6_send(skb_in, ICMPV6_DEST_UNREACH, code, 0);
 }
 
 static unsigned int

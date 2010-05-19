@@ -48,6 +48,7 @@
 #include <linux/vfs.h>
 #include <linux/inet.h>
 #include <linux/in6.h>
+#include <linux/slab.h>
 #include <net/ipv6.h>
 #include <linux/netdevice.h>
 #include <linux/nfs_xdr.h>
@@ -566,22 +567,6 @@ static void nfs_show_mountd_options(struct seq_file *m, struct nfs_server *nfss,
 	nfs_show_mountd_netid(m, nfss, showdefaults);
 }
 
-#ifdef CONFIG_NFS_V4
-static void nfs_show_nfsv4_options(struct seq_file *m, struct nfs_server *nfss,
-				    int showdefaults)
-{
-	struct nfs_client *clp = nfss->nfs_client;
-
-	seq_printf(m, ",clientaddr=%s", clp->cl_ipaddr);
-	seq_printf(m, ",minorversion=%u", clp->cl_minorversion);
-}
-#else
-static void nfs_show_nfsv4_options(struct seq_file *m, struct nfs_server *nfss,
-				    int showdefaults)
-{
-}
-#endif
-
 /*
  * Describe the mount options in force on this server representation
  */
@@ -644,9 +629,11 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss,
 
 	if (version != 4)
 		nfs_show_mountd_options(m, nfss, showdefaults);
-	else
-		nfs_show_nfsv4_options(m, nfss, showdefaults);
 
+#ifdef CONFIG_NFS_V4
+	if (clp->rpc_ops->version == 4)
+		seq_printf(m, ",clientaddr=%s", clp->cl_ipaddr);
+#endif
 	if (nfss->options & NFS_OPTION_FSCACHE)
 		seq_printf(m, ",fsc");
 }
@@ -2202,6 +2189,7 @@ static int nfs_get_sb(struct file_system_type *fs_type,
 	if (data->version == 4) {
 		error = nfs4_try_mount(flags, dev_name, data, mnt);
 		kfree(data->client_address);
+		kfree(data->nfs_server.export_path);
 		goto out;
 	}
 #endif	/* CONFIG_NFS_V4 */
@@ -2230,7 +2218,7 @@ static int nfs_get_sb(struct file_system_type *fs_type,
 	} else {
 		error = nfs_bdi_register(server);
 		if (error)
-			goto error_splat_super;
+			goto error_splat_bdi;
 	}
 
 	if (!s->s_root) {
@@ -2272,6 +2260,9 @@ out_err_nosb:
 error_splat_root:
 	dput(mntroot);
 error_splat_super:
+	if (server && !s->s_root)
+		bdi_unregister(&server->backing_dev_info);
+error_splat_bdi:
 	deactivate_locked_super(s);
 	goto out;
 }
@@ -2342,7 +2333,7 @@ static int nfs_xdev_get_sb(struct file_system_type *fs_type, int flags,
 	} else {
 		error = nfs_bdi_register(server);
 		if (error)
-			goto error_splat_super;
+			goto error_splat_bdi;
 	}
 
 	if (!s->s_root) {
@@ -2379,6 +2370,9 @@ out_err_noserver:
 	return error;
 
 error_splat_super:
+	if (server && !s->s_root)
+		bdi_unregister(&server->backing_dev_info);
+error_splat_bdi:
 	deactivate_locked_super(s);
 	dprintk("<-- nfs_xdev_get_sb() = %d [splat]\n", error);
 	return error;
@@ -2594,7 +2588,7 @@ static int nfs4_remote_get_sb(struct file_system_type *fs_type,
 	} else {
 		error = nfs_bdi_register(server);
 		if (error)
-			goto error_splat_super;
+			goto error_splat_bdi;
 	}
 
 	if (!s->s_root) {
@@ -2632,6 +2626,9 @@ out_free:
 error_splat_root:
 	dput(mntroot);
 error_splat_super:
+	if (server && !s->s_root)
+		bdi_unregister(&server->backing_dev_info);
+error_splat_bdi:
 	deactivate_locked_super(s);
 	goto out;
 }
@@ -2663,7 +2660,7 @@ static void nfs_fix_devname(const struct path *path, struct vfsmount *mnt)
 	devname = nfs_path(path->mnt->mnt_devname,
 			path->mnt->mnt_root, path->dentry,
 			page, PAGE_SIZE);
-	if (devname == NULL)
+	if (IS_ERR(devname))
 		goto out_freepage;
 	tmp = kstrdup(devname, GFP_KERNEL);
 	if (tmp == NULL)
@@ -2827,7 +2824,7 @@ static int nfs4_xdev_get_sb(struct file_system_type *fs_type, int flags,
 	} else {
 		error = nfs_bdi_register(server);
 		if (error)
-			goto error_splat_super;
+			goto error_splat_bdi;
 	}
 
 	if (!s->s_root) {
@@ -2863,6 +2860,9 @@ out_err_noserver:
 	return error;
 
 error_splat_super:
+	if (server && !s->s_root)
+		bdi_unregister(&server->backing_dev_info);
+error_splat_bdi:
 	deactivate_locked_super(s);
 	dprintk("<-- nfs4_xdev_get_sb() = %d [splat]\n", error);
 	return error;
@@ -2909,7 +2909,7 @@ static int nfs4_remote_referral_get_sb(struct file_system_type *fs_type,
 	} else {
 		error = nfs_bdi_register(server);
 		if (error)
-			goto error_splat_super;
+			goto error_splat_bdi;
 	}
 
 	if (!s->s_root) {
@@ -2945,6 +2945,9 @@ out_err_noserver:
 	return error;
 
 error_splat_super:
+	if (server && !s->s_root)
+		bdi_unregister(&server->backing_dev_info);
+error_splat_bdi:
 	deactivate_locked_super(s);
 	dprintk("<-- nfs4_referral_get_sb() = %d [splat]\n", error);
 	return error;

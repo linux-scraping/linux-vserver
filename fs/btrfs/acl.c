@@ -22,6 +22,7 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 
 #include "ctree.h"
 #include "btrfs_inode.h"
@@ -158,9 +159,6 @@ static int btrfs_xattr_acl_set(struct dentry *dentry, const char *name,
 {
 	int ret;
 	struct posix_acl *acl = NULL;
-
-	if (!is_owner_or_cap(dentry->d_inode))
-		return -EPERM;
 
 	if (value) {
 		acl = posix_acl_from_xattr(value, size);

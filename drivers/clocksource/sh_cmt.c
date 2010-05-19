@@ -29,6 +29,7 @@
 #include <linux/clocksource.h>
 #include <linux/clockchips.h>
 #include <linux/sh_timer.h>
+#include <linux/slab.h>
 
 struct sh_cmt_priv {
 	void __iomem *mapbase;
@@ -40,7 +41,6 @@ struct sh_cmt_priv {
 	struct platform_device *pdev;
 
 	unsigned long flags;
-	unsigned long flags_suspend;
 	unsigned long match_value;
 	unsigned long next_match_value;
 	unsigned long max_match_value;
@@ -413,15 +413,28 @@ static cycle_t sh_cmt_clocksource_read(struct clocksource *cs)
 static int sh_cmt_clocksource_enable(struct clocksource *cs)
 {
 	struct sh_cmt_priv *p = cs_to_sh_cmt(cs);
+	int ret;
 
 	p->total_cycles = 0;
 
-	return sh_cmt_start(p, FLAG_CLOCKSOURCE);
+	ret = sh_cmt_start(p, FLAG_CLOCKSOURCE);
+	if (ret)
+		return ret;
+
+	/* TODO: calculate good shift from rate and counter bit width */
+	cs->shift = 0;
+	cs->mult = clocksource_hz2mult(p->rate, cs->shift);
+	return 0;
 }
 
 static void sh_cmt_clocksource_disable(struct clocksource *cs)
 {
 	sh_cmt_stop(cs_to_sh_cmt(cs), FLAG_CLOCKSOURCE);
+}
+
+static void sh_cmt_clocksource_resume(struct clocksource *cs)
+{
+	sh_cmt_start(cs_to_sh_cmt(cs), FLAG_CLOCKSOURCE);
 }
 
 static int sh_cmt_register_clocksource(struct sh_cmt_priv *p,
@@ -434,20 +447,11 @@ static int sh_cmt_register_clocksource(struct sh_cmt_priv *p,
 	cs->read = sh_cmt_clocksource_read;
 	cs->enable = sh_cmt_clocksource_enable;
 	cs->disable = sh_cmt_clocksource_disable;
+	cs->suspend = sh_cmt_clocksource_disable;
+	cs->resume = sh_cmt_clocksource_resume;
 	cs->mask = CLOCKSOURCE_MASK(sizeof(unsigned long) * 8);
 	cs->flags = CLOCK_SOURCE_IS_CONTINUOUS;
-
-	/* clk_get_rate() needs an enabled clock */
-	clk_enable(p->clk);
-	p->rate = clk_get_rate(p->clk) / (p->width == 16) ? 512 : 8;
-	clk_disable(p->clk);
-
-	/* TODO: calculate good shift from rate and counter bit width */
-	cs->shift = 10;
-	cs->mult = clocksource_hz2mult(p->rate, cs->shift);
-
 	pr_info("sh_cmt: %s used as clock source\n", cs->name);
-
 	clocksource_register(cs);
 	return 0;
 }
@@ -677,38 +681,11 @@ static int __devexit sh_cmt_remove(struct platform_device *pdev)
 	return -EBUSY; /* cannot unregister clockevent and clocksource */
 }
 
-static int sh_cmt_suspend(struct device *dev)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct sh_cmt_priv *p = platform_get_drvdata(pdev);
-
-	/* save flag state and stop CMT channel */
-	p->flags_suspend = p->flags;
-	sh_cmt_stop(p, p->flags);
-	return 0;
-}
-
-static int sh_cmt_resume(struct device *dev)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-	struct sh_cmt_priv *p = platform_get_drvdata(pdev);
-
-	/* start CMT channel from saved state */
-	sh_cmt_start(p, p->flags_suspend);
-	return 0;
-}
-
-static struct dev_pm_ops sh_cmt_dev_pm_ops = {
-	.suspend = sh_cmt_suspend,
-	.resume = sh_cmt_resume,
-};
-
 static struct platform_driver sh_cmt_device_driver = {
 	.probe		= sh_cmt_probe,
 	.remove		= __devexit_p(sh_cmt_remove),
 	.driver		= {
 		.name	= "sh_cmt",
-		.pm	= &sh_cmt_dev_pm_ops,
 	}
 };
 

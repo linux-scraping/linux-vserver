@@ -224,8 +224,7 @@ struct sock_xprt {
 	 * State of TCP reply receive
 	 */
 	__be32			tcp_fraghdr,
-				tcp_xid,
-				tcp_calldir;
+				tcp_xid;
 
 	u32			tcp_offset,
 				tcp_reclen;
@@ -298,12 +297,11 @@ static void xs_format_common_peer_addresses(struct rpc_xprt *xprt)
 	switch (sap->sa_family) {
 	case AF_INET:
 		sin = xs_addr_in(xprt);
-		(void)snprintf(buf, sizeof(buf), "%02x%02x%02x%02x",
-					NIPQUAD(sin->sin_addr.s_addr));
+		snprintf(buf, sizeof(buf), "%08x", ntohl(sin->sin_addr.s_addr));
 		break;
 	case AF_INET6:
 		sin6 = xs_addr_in6(xprt);
-		(void)snprintf(buf, sizeof(buf), "%pi6", &sin6->sin6_addr);
+		snprintf(buf, sizeof(buf), "%pi6", &sin6->sin6_addr);
 		break;
 	default:
 		BUG();
@@ -316,10 +314,10 @@ static void xs_format_common_peer_ports(struct rpc_xprt *xprt)
 	struct sockaddr *sap = xs_addr(xprt);
 	char buf[128];
 
-	(void)snprintf(buf, sizeof(buf), "%u", rpc_get_port(sap));
+	snprintf(buf, sizeof(buf), "%u", rpc_get_port(sap));
 	xprt->address_strings[RPC_DISPLAY_PORT] = kstrdup(buf, GFP_KERNEL);
 
-	(void)snprintf(buf, sizeof(buf), "%4hx", rpc_get_port(sap));
+	snprintf(buf, sizeof(buf), "%4hx", rpc_get_port(sap));
 	xprt->address_strings[RPC_DISPLAY_HEX_PORT] = kstrdup(buf, GFP_KERNEL);
 }
 
@@ -550,8 +548,6 @@ static int xs_udp_send_request(struct rpc_task *task)
 		/* Still some bytes left; set up for a retry later. */
 		status = -EAGAIN;
 	}
-	if (!transport->sock)
-		goto out;
 
 	switch (status) {
 	case -ENOTSOCK:
@@ -571,7 +567,7 @@ static int xs_udp_send_request(struct rpc_task *task)
 		 * prompts ECONNREFUSED. */
 		clear_bit(SOCK_ASYNC_NOSPACE, &transport->sock->flags);
 	}
-out:
+
 	return status;
 }
 
@@ -653,8 +649,6 @@ static int xs_tcp_send_request(struct rpc_task *task)
 		status = -EAGAIN;
 		break;
 	}
-	if (!transport->sock)
-		goto out;
 
 	switch (status) {
 	case -ENOTSOCK:
@@ -674,7 +668,7 @@ static int xs_tcp_send_request(struct rpc_task *task)
 	case -ENOTCONN:
 		clear_bit(SOCK_ASYNC_NOSPACE, &transport->sock->flags);
 	}
-out:
+
 	return status;
 }
 
@@ -948,7 +942,7 @@ static inline void xs_tcp_read_calldir(struct sock_xprt *transport,
 {
 	size_t len, used;
 	u32 offset;
-	char *p;
+	__be32	calldir;
 
 	/*
 	 * We want transport->tcp_offset to be 8 at the end of this routine
@@ -957,33 +951,26 @@ static inline void xs_tcp_read_calldir(struct sock_xprt *transport,
 	 * transport->tcp_offset is 4 (after having already read the xid).
 	 */
 	offset = transport->tcp_offset - sizeof(transport->tcp_xid);
-	len = sizeof(transport->tcp_calldir) - offset;
+	len = sizeof(calldir) - offset;
 	dprintk("RPC:       reading CALL/REPLY flag (%Zu bytes)\n", len);
-	p = ((char *) &transport->tcp_calldir) + offset;
-	used = xdr_skb_read_bits(desc, p, len);
+	used = xdr_skb_read_bits(desc, &calldir, len);
 	transport->tcp_offset += used;
 	if (used != len)
 		return;
 	transport->tcp_flags &= ~TCP_RCV_READ_CALLDIR;
+	transport->tcp_flags |= TCP_RCV_COPY_CALLDIR;
+	transport->tcp_flags |= TCP_RCV_COPY_DATA;
 	/*
 	 * We don't yet have the XDR buffer, so we will write the calldir
 	 * out after we get the buffer from the 'struct rpc_rqst'
 	 */
-	switch (ntohl(transport->tcp_calldir)) {
-	case RPC_REPLY:
-		transport->tcp_flags |= TCP_RCV_COPY_CALLDIR;
-		transport->tcp_flags |= TCP_RCV_COPY_DATA;
+	if (ntohl(calldir) == RPC_REPLY)
 		transport->tcp_flags |= TCP_RPC_REPLY;
-		break;
-	case RPC_CALL:
-		transport->tcp_flags |= TCP_RCV_COPY_CALLDIR;
-		transport->tcp_flags |= TCP_RCV_COPY_DATA;
+	else
 		transport->tcp_flags &= ~TCP_RPC_REPLY;
-		break;
-	default:
-		dprintk("RPC:       invalid request message type\n");
-		xprt_force_disconnect(&transport->xprt);
-	}
+	dprintk("RPC:       reading %s CALL/REPLY flag %08x\n",
+			(transport->tcp_flags & TCP_RPC_REPLY) ?
+				"reply for" : "request with", calldir);
 	xs_tcp_check_fraghdr(transport);
 }
 
@@ -1003,10 +990,12 @@ static inline void xs_tcp_read_common(struct rpc_xprt *xprt,
 		/*
 		 * Save the RPC direction in the XDR buffer
 		 */
+		__be32	calldir = transport->tcp_flags & TCP_RPC_REPLY ?
+					htonl(RPC_REPLY) : 0;
+
 		memcpy(rcvbuf->head[0].iov_base + transport->tcp_copied,
-			&transport->tcp_calldir,
-			sizeof(transport->tcp_calldir));
-		transport->tcp_copied += sizeof(transport->tcp_calldir);
+			&calldir, sizeof(calldir));
+		transport->tcp_copied += sizeof(calldir);
 		transport->tcp_flags &= ~TCP_RCV_COPY_CALLDIR;
 	}
 
@@ -2111,7 +2100,7 @@ static void xs_tcp_print_stats(struct rpc_xprt *xprt, struct seq_file *seq)
  * we allocate pages instead doing a kmalloc like rpc_malloc is because we want
  * to use the server side send routines.
  */
-void *bc_malloc(struct rpc_task *task, size_t size)
+static void *bc_malloc(struct rpc_task *task, size_t size)
 {
 	struct page *page;
 	struct rpc_buffer *buf;
@@ -2131,7 +2120,7 @@ void *bc_malloc(struct rpc_task *task, size_t size)
 /*
  * Free the space allocated in the bc_alloc routine
  */
-void bc_free(void *buffer)
+static void bc_free(void *buffer)
 {
 	struct rpc_buffer *buf;
 
@@ -2262,9 +2251,6 @@ static struct rpc_xprt_ops xs_tcp_ops = {
 	.buf_free		= rpc_free,
 	.send_request		= xs_tcp_send_request,
 	.set_retrans_timeout	= xprt_set_retrans_timeout_def,
-#if defined(CONFIG_NFS_V4_1)
-	.release_request	= bc_release_request,
-#endif /* CONFIG_NFS_V4_1 */
 	.close			= xs_tcp_close,
 	.destroy		= xs_destroy,
 	.print_stats		= xs_tcp_print_stats,

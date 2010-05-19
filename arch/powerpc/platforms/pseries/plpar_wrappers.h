@@ -4,14 +4,6 @@
 #include <asm/hvcall.h>
 #include <asm/page.h>
 
-/* Get state of physical CPU from query_cpu_stopped */
-int smp_query_cpu_stopped(unsigned int pcpu);
-#define QCSS_STOPPED 0
-#define QCSS_STOPPING 1
-#define QCSS_NOT_STOPPED 2
-#define QCSS_HARDWARE_ERROR -1
-#define QCSS_HARDWARE_BUSY -2
-
 static inline long poll_pending(void)
 {
 	return plpar_hcall_norets(H_POLL_PENDING);
@@ -267,12 +259,12 @@ static inline long plpar_ipi(unsigned long servernum, unsigned long mfrr)
 	return plpar_hcall_norets(H_IPI, servernum, mfrr);
 }
 
-static inline long plpar_xirr(unsigned long *xirr_ret)
+static inline long plpar_xirr(unsigned long *xirr_ret, unsigned char cppr)
 {
 	long rc;
 	unsigned long retbuf[PLPAR_HCALL_BUFSIZE];
 
-	rc = plpar_hcall(H_XIRR, retbuf);
+	rc = plpar_hcall(H_XIRR, retbuf, cppr);
 
 	*xirr_ret = retbuf[0];
 

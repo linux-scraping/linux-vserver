@@ -13,6 +13,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/platform_device.h>
@@ -423,8 +424,8 @@ static const struct soc_enum wm8350_enum[] = {
 	SOC_ENUM_SINGLE(WM8350_INPUT_MIXER_VOLUME, 15, 2, wm8350_lr),
 };
 
-static DECLARE_TLV_DB_SCALE(pre_amp_tlv, -1200, 3525, 0);
-static DECLARE_TLV_DB_SCALE(out_pga_tlv, -5700, 600, 0);
+static DECLARE_TLV_DB_LINEAR(pre_amp_tlv, -1200, 3525);
+static DECLARE_TLV_DB_LINEAR(out_pga_tlv, -5700, 600);
 static DECLARE_TLV_DB_SCALE(dac_pcm_tlv, -7163, 36, 1);
 static DECLARE_TLV_DB_SCALE(adc_pcm_tlv, -12700, 50, 1);
 static DECLARE_TLV_DB_SCALE(out_mix_tlv, -1500, 300, 1);
@@ -1349,7 +1350,7 @@ static irqreturn_t wm8350_hp_jack_handler(int irq, void *data)
 	int mask;
 	struct wm8350_jack_data *jack = NULL;
 
-	switch (irq) {
+	switch (irq - wm8350->irq_base) {
 	case WM8350_IRQ_CODEC_JCK_DET_L:
 		jack = &priv->hpl;
 		mask = WM8350_JACK_L_LVL;
@@ -1424,7 +1425,7 @@ int wm8350_hp_jack_detect(struct snd_soc_codec *codec, enum wm8350_jack which,
 	wm8350_set_bits(wm8350, WM8350_JACK_DETECT, ena);
 
 	/* Sync status */
-	wm8350_hp_jack_handler(irq, priv);
+	wm8350_hp_jack_handler(irq + wm8350->irq_base, priv);
 
 	return 0;
 }
@@ -1521,8 +1522,8 @@ static int wm8350_remove(struct platform_device *pdev)
 			  WM8350_JDL_ENA | WM8350_JDR_ENA);
 	wm8350_clear_bits(wm8350, WM8350_POWER_MGMT_4, WM8350_TOCLK_ENA);
 
-	wm8350_free_irq(wm8350, WM8350_IRQ_CODEC_JCK_DET_L);
-	wm8350_free_irq(wm8350, WM8350_IRQ_CODEC_JCK_DET_R);
+	wm8350_free_irq(wm8350, WM8350_IRQ_CODEC_JCK_DET_L, priv);
+	wm8350_free_irq(wm8350, WM8350_IRQ_CODEC_JCK_DET_R, priv);
 
 	priv->hpl.jack = NULL;
 	priv->hpr.jack = NULL;

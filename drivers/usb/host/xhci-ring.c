@@ -65,6 +65,7 @@
  */
 
 #include <linux/scatterlist.h>
+#include <linux/slab.h>
 #include "xhci.h"
 
 /*
@@ -241,27 +242,10 @@ static int room_on_ring(struct xhci_hcd *xhci, struct xhci_ring *ring,
 	int i;
 	union xhci_trb *enq = ring->enqueue;
 	struct xhci_segment *enq_seg = ring->enq_seg;
-	struct xhci_segment *cur_seg;
-	unsigned int left_on_ring;
 
 	/* Check if ring is empty */
-	if (enq == ring->dequeue) {
-		/* Can't use link trbs */
-		left_on_ring = TRBS_PER_SEGMENT - 1;
-		for (cur_seg = enq_seg->next; cur_seg != enq_seg;
-				cur_seg = cur_seg->next)
-			left_on_ring += TRBS_PER_SEGMENT - 1;
-
-		/* Always need one TRB free in the ring. */
-		left_on_ring -= 1;
-		if (num_trbs > left_on_ring) {
-			xhci_warn(xhci, "Not enough room on ring; "
-					"need %u TRBs, %u TRBs left\n",
-					num_trbs, left_on_ring);
-			return 0;
-		}
+	if (enq == ring->dequeue)
 		return 1;
-	}
 	/* Make sure there's an extra empty TRB available */
 	for (i = 0; i <= num_trbs; ++i) {
 		if (enq == ring->dequeue)
@@ -350,8 +334,7 @@ static struct xhci_segment *find_trb_seg(
 	while (cur_seg->trbs > trb ||
 			&cur_seg->trbs[TRBS_PER_SEGMENT - 1] < trb) {
 		generic_trb = &cur_seg->trbs[TRBS_PER_SEGMENT - 1].generic;
-		if ((generic_trb->field[3] & TRB_TYPE_BITMASK) ==
-				TRB_TYPE(TRB_LINK) &&
+		if (TRB_TYPE(generic_trb->field[3]) == TRB_LINK &&
 				(generic_trb->field[3] & LINK_TOGGLE))
 			*cycle_state = ~(*cycle_state) & 0x1;
 		cur_seg = cur_seg->next;
@@ -407,7 +390,7 @@ void xhci_find_new_dequeue_state(struct xhci_hcd *xhci,
 		BUG();
 
 	trb = &state->new_deq_ptr->generic;
-	if ((trb->field[3] & TRB_TYPE_BITMASK) == TRB_TYPE(TRB_LINK) &&
+	if (TRB_TYPE(trb->field[3]) == TRB_LINK &&
 				(trb->field[3] & LINK_TOGGLE))
 		state->new_cycle_state = ~(state->new_cycle_state) & 0x1;
 	next_trb(xhci, ep_ring, &state->new_deq_seg, &state->new_deq_ptr);
@@ -595,8 +578,6 @@ static void handle_stopped_endpoint(struct xhci_hcd *xhci,
 		/* Otherwise just ring the doorbell to restart the ring */
 		ring_ep_doorbell(xhci, slot_id, ep_index);
 	}
-	ep->stopped_td = NULL;
-	ep->stopped_trb = NULL;
 
 	/*
 	 * Drop the lock and complete the URBs in the cancelled TD list.
@@ -973,6 +954,17 @@ bandwidth_change:
 	case TRB_TYPE(TRB_RESET_EP):
 		handle_reset_ep_completion(xhci, event, xhci->cmd_ring->dequeue);
 		break;
+	case TRB_TYPE(TRB_RESET_DEV):
+		xhci_dbg(xhci, "Completed reset device command.\n");
+		slot_id = TRB_TO_SLOT_ID(
+				xhci->cmd_ring->dequeue->generic.field[3]);
+		virt_dev = xhci->devs[slot_id];
+		if (virt_dev)
+			handle_cmd_in_cmd_wait_list(xhci, virt_dev, event);
+		else
+			xhci_warn(xhci, "Reset device command completion "
+					"for disabled slot %u\n", slot_id);
+		break;
 	default:
 		/* Skip over unknown commands on the event ring */
 		xhci->error_bitmask |= 1 << 6;
@@ -1069,13 +1061,8 @@ static void xhci_cleanup_halted_endpoint(struct xhci_hcd *xhci,
 	ep->ep_state |= EP_HALTED;
 	ep->stopped_td = td;
 	ep->stopped_trb = event_trb;
-
 	xhci_queue_reset_ep(xhci, slot_id, ep_index);
 	xhci_cleanup_stalled_ring(xhci, td->urb->dev, ep_index);
-
-	ep->stopped_td = NULL;
-	ep->stopped_trb = NULL;
-
 	xhci_ring_cmd_db(xhci);
 }
 
@@ -1102,6 +1089,20 @@ static int xhci_requires_manual_halt_cleanup(struct xhci_hcd *xhci,
 		if ((ep_ctx->ep_info & EP_STATE_MASK) == EP_STATE_HALTED)
 			return 1;
 
+	return 0;
+}
+
+int xhci_is_vendor_info_code(struct xhci_hcd *xhci, unsigned int trb_comp_code)
+{
+	if (trb_comp_code >= 224 && trb_comp_code <= 255) {
+		/* Vendor defined "informational" completion code,
+		 * treat as not-an-error.
+		 */
+		xhci_dbg(xhci, "Vendor defined info completion code %u\n",
+				trb_comp_code);
+		xhci_dbg(xhci, "Treating code as success.\n");
+		return 1;
+	}
 	return 0;
 }
 
@@ -1221,13 +1222,7 @@ static int handle_tx_event(struct xhci_hcd *xhci,
 		status = -ENOSR;
 		break;
 	default:
-		if (trb_comp_code >= 224 && trb_comp_code <= 255) {
-			/* Vendor defined "informational" completion code,
-			 * treat as not-an-error.
-			 */
-			xhci_dbg(xhci, "Vendor defined info completion code %u\n",
-					trb_comp_code);
-			xhci_dbg(xhci, "Treating code as success.\n");
+		if (xhci_is_vendor_info_code(xhci, trb_comp_code)) {
 			status = 0;
 			break;
 		}
@@ -1395,10 +1390,8 @@ static int handle_tx_event(struct xhci_hcd *xhci,
 			for (cur_trb = ep_ring->dequeue, cur_seg = ep_ring->deq_seg;
 					cur_trb != event_trb;
 					next_trb(xhci, ep_ring, &cur_seg, &cur_trb)) {
-				if ((cur_trb->generic.field[3] &
-				 TRB_TYPE_BITMASK) != TRB_TYPE(TRB_TR_NOOP) &&
-				    (cur_trb->generic.field[3] &
-				 TRB_TYPE_BITMASK) != TRB_TYPE(TRB_LINK))
+				if (TRB_TYPE(cur_trb->generic.field[3]) != TRB_TR_NOOP &&
+						TRB_TYPE(cur_trb->generic.field[3]) != TRB_LINK)
 					td->urb->actual_length +=
 						TRB_LEN(cur_trb->generic.field[2]);
 			}
@@ -2205,6 +2198,14 @@ int xhci_queue_address_device(struct xhci_hcd *xhci, dma_addr_t in_ctx_ptr,
 	return queue_command(xhci, lower_32_bits(in_ctx_ptr),
 			upper_32_bits(in_ctx_ptr), 0,
 			TRB_TYPE(TRB_ADDR_DEV) | SLOT_ID_FOR_TRB(slot_id),
+			false);
+}
+
+/* Queue a reset device command TRB */
+int xhci_queue_reset_device(struct xhci_hcd *xhci, u32 slot_id)
+{
+	return queue_command(xhci, 0, 0, 0,
+			TRB_TYPE(TRB_RESET_DEV) | SLOT_ID_FOR_TRB(slot_id),
 			false);
 }
 
