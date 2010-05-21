@@ -231,6 +231,15 @@ config	VSERVER_MONITOR_SYNC
 	  This allows you to specify the interval in ticks
 	  when a time sync entry is inserted.
 
+config	VSERVER_LEGACY_MEM
+	bool	"Legacy Memory Limits"
+	default n
+	help
+	  This provides fake memory limits to keep
+	  older tools happy in the face of memory
+	  cgroups
+
+
 endmenu
 
 

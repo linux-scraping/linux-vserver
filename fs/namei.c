@@ -1666,7 +1666,8 @@ static int open_will_truncate(int flag, struct inode *inode)
 }
 
 static struct file *finish_open(struct nameidata *nd,
-				int open_flag, int acc_mode)
+				int open_flag, int acc_mode,
+				const char *pathname)
 {
 	struct file *filp;
 	int will_truncate;
@@ -1689,12 +1690,10 @@ static struct file *finish_open(struct nameidata *nd,
 		}
 		dput(dentry);
 		if (will_truncate)
-			mnt_drop_write(nd.path.mnt);
-		release_open_intent(&nd);
-		path_put(&nd.path);
-		flag = rflag;
-		mode = rmode;
-		goto restart;
+			mnt_drop_write(nd->path.mnt);
+		release_open_intent(nd);
+		path_put(&nd->path);
+		return ERR_PTR(-EMLINK);
 	}
 exit_cow:
 #endif
@@ -1866,7 +1865,7 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
 	if (S_ISDIR(path->dentry->d_inode->i_mode))
 		goto exit;
 ok:
-	filp = finish_open(nd, open_flag, acc_mode);
+	filp = finish_open(nd, open_flag, acc_mode, pathname);
 	return filp;
 
 exit_mutex_unlock:
@@ -1965,6 +1964,13 @@ reval:
 	if (!(open_flag & O_NOFOLLOW))
 		nd.flags |= LOOKUP_FOLLOW;
 	filp = do_last(&nd, &path, open_flag, acc_mode, mode, pathname);
+#ifdef	CONFIG_VSERVER_COWBL
+	if (unlikely(IS_ERR(filp) && PTR_ERR(filp) == -EMLINK)) {
+		flag = rflag;
+		mode = rmode;
+		goto restart;
+	}
+#endif
 	while (unlikely(!filp)) { /* trailing symlink */
 		struct path holder;
 		struct inode *inode = path.dentry->d_inode;
@@ -2003,6 +2009,13 @@ reval:
 		holder = path;
 		nd.flags &= ~LOOKUP_PARENT;
 		filp = do_last(&nd, &path, open_flag, acc_mode, mode, pathname);
+#ifdef	CONFIG_VSERVER_COWBL
+		if (unlikely(IS_ERR(filp) && PTR_ERR(filp) == -EMLINK)) {
+			flag = rflag;
+			mode = rmode;
+			goto restart;
+		}
+#endif
 		if (inode->i_op->put_link)
 			inode->i_op->put_link(holder.dentry, &nd, cookie);
 		path_put(&holder);

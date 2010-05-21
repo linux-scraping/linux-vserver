@@ -1020,6 +1020,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
+	init_vx_info(&p->vx_info, current_vx_info());
+	init_nx_info(&p->nx_info, current_nx_info());
+
 	retval = -EAGAIN;
 	if (!vx_nproc_avail(1))
 		goto bad_fork_free;
