@@ -23,6 +23,10 @@
 
 
 const char *vlimit_name[NUM_LIMITS] = {
+#ifdef	CONFIG_VSERVER_LEGACY_MEM
+	[RLIMIT_RSS]		= "RSS",
+	[RLIMIT_AS]		= "VM",
+#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	[RLIMIT_CPU]		= "CPU",
 	[RLIMIT_NPROC]		= "NPROC",
 	[RLIMIT_NOFILE]		= "NOFILE",
@@ -44,8 +48,15 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 		/* minimum */
 	0
 	,	/* softlimit */
+#ifdef	CONFIG_VSERVER_LEGACY_MEM
+	MASK_ENTRY( RLIMIT_RSS		) |
+#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	0
 	,       /* maximum */
+#ifdef	CONFIG_VSERVER_LEGACY_MEM
+	MASK_ENTRY( RLIMIT_RSS		) |
+	MASK_ENTRY( RLIMIT_AS		) |
+#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	MASK_ENTRY( RLIMIT_NPROC	) |
 	MASK_ENTRY( RLIMIT_NOFILE	) |
 	MASK_ENTRY( RLIMIT_LOCKS	) |
@@ -271,24 +282,9 @@ void vx_vsi_meminfo(struct sysinfo *val)
 		val->totalram = (res_limit >> PAGE_SHIFT);
 	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
 	val->bufferram = 0;
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR */
-	struct vx_info *vxi = current_vx_info();
-	unsigned long totalram, freeram;
-	rlim_t v;
-
-	/* we blindly accept the max */
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	totalram = (v != RLIM_INFINITY) ? v : val->totalram;
-
-	/* total minus used equals free */
-	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
-	freeram = (v < totalram) ? totalram - v : 0;
-
-	val->totalram = totalram;
-	val->freeram = freeram;
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
 	val->totalhigh = 0;
 	val->freehigh = 0;
+#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
 	return;
 }
 
@@ -322,30 +318,6 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->totalswap = 0;
 	val->freeswap = 0;
 #endif	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR */
-	struct vx_info *vxi = current_vx_info();
-	unsigned long totalswap, freeswap;
-	rlim_t v, w;
-
-	v = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	if (v == RLIM_INFINITY) {
-		val->freeswap = val->totalswap;
-		return;
-	}
-
-	/* we blindly accept the max */
-	w = __rlim_hard(&vxi->limit, RLIMIT_RSS);
-	totalswap = (w != RLIM_INFINITY) ? (w - v) : val->totalswap;
-
-	/* currently 'used' swap */
-	w = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
-	w -= (w > v) ? v : w;
-
-	/* total minus used equals free */
-	freeswap = (w < totalswap) ? totalswap - w : 0;
-
-	val->totalswap = totalswap;
-	val->freeswap = freeswap;
 #endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
 	return;
 }
