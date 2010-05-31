@@ -924,6 +924,10 @@ static void print_warning(struct dquot *dquot, const int warntype)
 		case QUOTA_NL_BSOFTWARN:
 			msg = " block quota exceeded.\r\n";
 			break;
+		default:
+			printk("unknown warntype 0x%x\n", warntype);
+			msg = " unknown warntype.\r\n";
+			break;
 	}
 	tty_write_message(tty, msg);
 out_lock:
