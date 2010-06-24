@@ -17,6 +17,7 @@
 #include <linux/file.h>
 #include <linux/major.h>
 #include <linux/blkdev.h>
+#include <linux/slab.h>
 
 #include <linux/vroot.h>
 #include <linux/vs_context.h>
