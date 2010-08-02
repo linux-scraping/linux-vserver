@@ -21,6 +21,7 @@
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/usb.h>
+#include <linux/usb/hcd.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -33,7 +34,6 @@
 #endif
 
 #include "usb.h"
-#include "hcd.h"
 
 
 /* PCI-based HCs are common, but plenty of non-PCI HCs are used too */
@@ -317,10 +317,8 @@ void usb_hcd_pci_shutdown(struct pci_dev *dev)
 	if (!hcd)
 		return;
 
-	if (hcd->driver->shutdown) {
+	if (hcd->driver->shutdown)
 		hcd->driver->shutdown(hcd);
-		pci_disable_device(dev);
-	}
 }
 EXPORT_SYMBOL_GPL(usb_hcd_pci_shutdown);
 

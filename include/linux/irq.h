@@ -174,6 +174,7 @@ struct irq_2_iommu;
  */
 struct irq_desc {
 	unsigned int		irq;
+	struct timer_rand_state *timer_rand_state;
 	unsigned int            *kstat_irqs;
 #ifdef CONFIG_INTR_REMAP
 	struct irq_2_iommu      *irq_2_iommu;
@@ -194,6 +195,7 @@ struct irq_desc {
 	raw_spinlock_t		lock;
 #ifdef CONFIG_SMP
 	cpumask_var_t		affinity;
+	const struct cpumask	*affinity_hint;
 	unsigned int		node;
 #ifdef CONFIG_GENERIC_PENDING_IRQ
 	cpumask_var_t		pending_mask;

@@ -40,18 +40,33 @@ struct rand_pool_info {
 	__u32	buf[0];
 };
 
+struct rnd_state {
+	__u32 s1, s2, s3;
+};
+
 /* Exported functions */
 
 #ifdef __KERNEL__
 
-extern void add_device_randomness(const void *, unsigned int);
+extern void rand_initialize_irq(int irq);
+
 extern void add_input_randomness(unsigned int type, unsigned int code,
 				 unsigned int value);
-extern void add_interrupt_randomness(int irq, int irq_flags);
+extern void add_interrupt_randomness(int irq);
 
 extern void get_random_bytes(void *buf, int nbytes);
-extern void get_random_bytes_arch(void *buf, int nbytes);
 void generate_random_uuid(unsigned char uuid_out[16]);
+
+extern __u32 secure_ip_id(__be32 daddr);
+extern u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport);
+extern u32 secure_ipv6_port_ephemeral(const __be32 *saddr, const __be32 *daddr,
+				      __be16 dport);
+extern __u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
+					__be16 sport, __be16 dport);
+extern __u32 secure_tcpv6_sequence_number(__be32 *saddr, __be32 *daddr,
+					  __be16 sport, __be16 dport);
+extern u64 secure_dccp_sequence_number(__be32 saddr, __be32 daddr,
+				       __be16 sport, __be16 dport);
 
 #ifndef MODULE
 extern const struct file_operations random_fops, urandom_fops;
@@ -63,18 +78,29 @@ unsigned long randomize_range(unsigned long start, unsigned long end, unsigned l
 u32 random32(void);
 void srandom32(u32 seed);
 
-#ifdef CONFIG_ARCH_RANDOM
-# include <asm/archrandom.h>
-#else
-static inline int arch_get_random_long(unsigned long *v)
+u32 prandom32(struct rnd_state *);
+
+/*
+ * Handle minimum values for seeds
+ */
+static inline u32 __seed(u32 x, u32 m)
 {
-	return 0;
+	return (x < m) ? x + m : x;
 }
-static inline int arch_get_random_int(unsigned int *v)
+
+/**
+ * prandom32_seed - set seed for prandom32().
+ * @state: pointer to state structure to receive the seed.
+ * @seed: arbitrary 64-bit value to use as a seed.
+ */
+static inline void prandom32_seed(struct rnd_state *state, u64 seed)
 {
-	return 0;
+	u32 i = (seed >> 32) ^ (seed << 10) ^ seed;
+
+	state->s1 = __seed(i, 1);
+	state->s2 = __seed(i, 7);
+	state->s3 = __seed(i, 15);
 }
-#endif
 
 #endif /* __KERNEL___ */
 

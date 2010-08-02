@@ -159,7 +159,6 @@ struct hrtimer_clock_base {
  *			and timers
  * @clock_base:		array of clock bases for this cpu
  * @curr_timer:		the timer which is executing a callback right now
- * @clock_was_set:	Indicates that clock was set from irq context.
  * @expires_next:	absolute time of the next event which was scheduled
  *			via clock_set_next_event()
  * @hres_active:	State of high resolution mode
@@ -172,7 +171,6 @@ struct hrtimer_clock_base {
 struct hrtimer_cpu_base {
 	raw_spinlock_t			lock;
 	struct hrtimer_clock_base	clock_base[HRTIMER_MAX_CLOCK_BASES];
-	unsigned int			clock_was_set;
 #ifdef CONFIG_HIGH_RES_TIMERS
 	ktime_t				expires_next;
 	int				hres_active;
@@ -282,8 +280,6 @@ extern void hrtimer_peek_ahead_timers(void);
 # define MONOTONIC_RES_NSEC	HIGH_RES_NSEC
 # define KTIME_MONOTONIC_RES	KTIME_HIGH_RES
 
-extern void clock_was_set_delayed(void);
-
 #else
 
 # define MONOTONIC_RES_NSEC	LOW_RES_NSEC
@@ -312,14 +308,11 @@ static inline int hrtimer_is_hres_active(struct hrtimer *timer)
 {
 	return 0;
 }
-
-static inline void clock_was_set_delayed(void) { }
-
 #endif
 
 extern ktime_t ktime_get(void);
 extern ktime_t ktime_get_real(void);
-extern ktime_t ktime_get_update_offsets(ktime_t *offs_real);
+
 
 DECLARE_PER_CPU(struct tick_device, tick_cpu_device);
 
@@ -429,6 +422,8 @@ extern void hrtimer_init_sleeper(struct hrtimer_sleeper *sl,
 
 extern int schedule_hrtimeout_range(ktime_t *expires, unsigned long delta,
 						const enum hrtimer_mode mode);
+extern int schedule_hrtimeout_range_clock(ktime_t *expires,
+		unsigned long delta, const enum hrtimer_mode mode, int clock);
 extern int schedule_hrtimeout(ktime_t *expires, const enum hrtimer_mode mode);
 
 /* Soft interrupt function to run the hrtimer queues: */

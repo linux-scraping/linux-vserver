@@ -24,7 +24,7 @@
 #include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/types.h>
-#include <linux/lmb.h>
+#include <linux/memblock.h>
 
 #include <asm/processor.h>
 #include <asm/machdep.h>
@@ -163,7 +163,7 @@ static void crash_kexec_prepare_cpus(int cpu)
 }
 
 /* wait for all the CPUs to hit real mode but timeout if they don't come in */
-#if defined(CONFIG_PPC_STD_MMU_64) && defined(CONFIG_SMP)
+#ifdef CONFIG_PPC_STD_MMU_64
 static void crash_kexec_wait_realmode(int cpu)
 {
 	unsigned int msecs;
@@ -176,8 +176,12 @@ static void crash_kexec_wait_realmode(int cpu)
 
 		while (paca[i].kexec_state < KEXEC_STATE_REAL_MODE) {
 			barrier();
-			if (!cpu_possible(i) || !cpu_online(i) || (msecs <= 0))
+			if (!cpu_possible(i)) {
 				break;
+			}
+			if (!cpu_online(i)) {
+				break;
+			}
 			msecs--;
 			mdelay(1);
 		}

@@ -669,19 +669,10 @@ static void sctp_cmd_transport_on(sctp_cmd_seq_t *cmds,
 	/* 8.3 Upon the receipt of the HEARTBEAT ACK, the sender of the
 	 * HEARTBEAT should clear the error counter of the destination
 	 * transport address to which the HEARTBEAT was sent.
+	 * The association's overall error count is also cleared.
 	 */
 	t->error_count = 0;
-
-	/*
-	 * Although RFC4960 specifies that the overall error count must
-	 * be cleared when a HEARTBEAT ACK is received, we make an
-	 * exception while in SHUTDOWN PENDING. If the peer keeps its
-	 * window shut forever, we may never be able to transmit our
-	 * outstanding data and rely on the retransmission limit be reached
-	 * to shutdown the association.
-	 */
-	if (t->asoc->state != SCTP_STATE_SHUTDOWN_PENDING)
-		t->asoc->overall_error_count = 0;
+	t->asoc->overall_error_count = 0;
 
 	/* Clear the hb_sent flag to signal that we had a good
 	 * acknowledgement.
@@ -741,11 +732,15 @@ static void sctp_cmd_setup_t2(sctp_cmd_seq_t *cmds,
 {
 	struct sctp_transport *t;
 
-	t = sctp_assoc_choose_alter_transport(asoc,
+	if (chunk->transport)
+		t = chunk->transport;
+	else {
+		t = sctp_assoc_choose_alter_transport(asoc,
 					      asoc->shutdown_last_sent_to);
+		chunk->transport = t;
+	}
 	asoc->shutdown_last_sent_to = t;
 	asoc->timeouts[SCTP_EVENT_TIMEOUT_T2_SHUTDOWN] = t->rto;
-	chunk->transport = t;
 }
 
 /* Helper function to change the state of an association. */
@@ -897,8 +892,6 @@ static void sctp_cmd_process_fwdtsn(struct sctp_ulpq *ulpq,
 	sctp_walk_fwdtsn(skip, chunk) {
 		sctp_ulpq_skip(ulpq, ntohs(skip->stream), ntohs(skip->ssn));
 	}
-
-	return;
 }
 
 /* Helper function to remove the association non-primary peer
@@ -917,8 +910,6 @@ static void sctp_cmd_del_non_primary(struct sctp_association *asoc)
 			sctp_assoc_del_peer(asoc, &t->ipaddr);
 		}
 	}
-
-	return;
 }
 
 /* Helper function to set sk_err on a 1-1 style socket. */
@@ -1453,13 +1444,6 @@ static int sctp_cmd_interpreter(sctp_event_t event_type,
 		case SCTP_CMD_SETUP_T2:
 			sctp_cmd_setup_t2(commands, asoc, cmd->obj.ptr);
 			break;
-
-		case SCTP_CMD_TIMER_START_ONCE:
-			timer = &asoc->timers[cmd->obj.to];
-
-			if (timer_pending(timer))
-				break;
-			/* fall through */
 
 		case SCTP_CMD_TIMER_START:
 			timer = &asoc->timers[cmd->obj.to];

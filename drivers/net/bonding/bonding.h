@@ -202,7 +202,7 @@ struct bonding {
 	char     proc_file_name[IFNAMSIZ];
 #endif /* CONFIG_PROC_FS */
 	struct   list_head bond_list;
-	struct   dev_mc_list *mc_list;
+	struct   netdev_hw_addr_list mc_list;
 	int      (*xmit_hash_policy)(struct sk_buff *, int);
 	__be32   master_ip;
 	u16      flags;
@@ -235,11 +235,11 @@ static inline struct slave *bond_get_slave_by_dev(struct bonding *bond, struct n
 
 	bond_for_each_slave(bond, slave, i) {
 		if (slave->dev == slave_dev) {
-			return slave;
+			break;
 		}
 	}
 
-	return 0;
+	return slave;
 }
 
 static inline struct bonding *bond_get_bond_by_slave(struct slave *slave)

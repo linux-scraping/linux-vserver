@@ -872,7 +872,7 @@ static void __init prom_send_capabilities(void)
 				    "ibm_architecture_vec structure inconsistent: 0x%x !\n",
 				    *cores);
 		} else {
-			*cores = NR_CPUS / prom_count_smt_threads();
+			*cores = DIV_ROUND_UP(NR_CPUS, prom_count_smt_threads());
 			prom_printf("Max number of cores passed to firmware: 0x%x\n",
 				    (unsigned long)*cores);
 		}
@@ -968,7 +968,7 @@ static unsigned long __init alloc_up(unsigned long size, unsigned long align)
 	}
 	if (addr == 0)
 		return 0;
-	RELOC(alloc_bottom) = addr + size;
+	RELOC(alloc_bottom) = addr;
 
 	prom_debug(" -> %x\n", addr);
 	prom_debug("  alloc_bottom : %x\n", RELOC(alloc_bottom));
@@ -1782,7 +1782,7 @@ static void __init *make_room(unsigned long *mem_start, unsigned long *mem_end,
 		chunk = alloc_up(room, 0);
 		if (chunk == 0)
 			prom_panic("No memory for flatten_device_tree (claim failed)");
-		*mem_end = chunk + room;
+		*mem_end = RELOC(alloc_top);
 	}
 
 	ret = (void *)*mem_start;
@@ -2001,7 +2001,7 @@ static void __init flatten_device_tree(void)
 	mem_start = (unsigned long)alloc_up(room, PAGE_SIZE);
 	if (mem_start == 0)
 		prom_panic("Can't allocate initial device-tree chunk\n");
-	mem_end = mem_start + room;
+	mem_end = RELOC(alloc_top);
 
 	/* Get root of tree */
 	root = call_prom("peer", 1, 1, (phandle)0);

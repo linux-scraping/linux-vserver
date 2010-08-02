@@ -512,7 +512,7 @@ static inline void really_put_req(struct kioctx *ctx, struct kiocb *req)
 	ctx->reqs_active--;
 
 	if (unlikely(!ctx->reqs_active && ctx->dead))
-		wake_up_all(&ctx->wait);
+		wake_up(&ctx->wait);
 }
 
 static void aio_fput_routine(struct work_struct *data)
@@ -527,7 +527,7 @@ static void aio_fput_routine(struct work_struct *data)
 
 		/* Complete the fput(s) */
 		if (req->ki_filp != NULL)
-			__fput(req->ki_filp);
+			fput(req->ki_filp);
 
 		/* Link the iocb into the context's free list */
 		spin_lock_irq(&ctx->ctx_lock);
@@ -560,11 +560,11 @@ static int __aio_put_req(struct kioctx *ctx, struct kiocb *req)
 
 	/*
 	 * Try to optimize the aio and eventfd file* puts, by avoiding to
-	 * schedule work in case it is not __fput() time. In normal cases,
+	 * schedule work in case it is not final fput() time. In normal cases,
 	 * we would not be holding the last reference to the file*, so
 	 * this function will be executed w/out any aio kthread wakeup.
 	 */
-	if (unlikely(atomic_long_dec_and_test(&req->ki_filp->f_count))) {
+	if (unlikely(!fput_atomic(req->ki_filp))) {
 		get_ioctx(ctx);
 		spin_lock(&fput_lock);
 		list_add(&req->ki_list, &fput_head);
@@ -1225,7 +1225,7 @@ static void io_destroy(struct kioctx *ioctx)
 	 * by other CPUs at this point.  Right now, we rely on the
 	 * locking done by the above calls to ensure this consistency.
 	 */
-	wake_up_all(&ioctx->wait);
+	wake_up(&ioctx->wait);
 	put_ioctx(ioctx);	/* once for the lookup */
 }
 
@@ -1658,9 +1658,6 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 
 	if (unlikely(nr < 0))
 		return -EINVAL;
-
-	if (unlikely(nr > LONG_MAX/sizeof(*iocbpp)))
-		nr = LONG_MAX/sizeof(*iocbpp);
 
 	if (unlikely(!access_ok(VERIFY_READ, iocbpp, (nr*sizeof(*iocbpp)))))
 		return -EFAULT;

@@ -296,8 +296,7 @@ static struct sock *x25_find_listener(struct x25_address *addr,
 			 * Found a listening socket, now check the incoming
 			 * call user data vs this sockets call user data
 			 */
-			if (x25_sk(s)->cudmatchlength > 0 &&
-				skb->len >= x25_sk(s)->cudmatchlength) {
+			if(skb->len > 0 && x25_sk(s)->cudmatchlength > 0) {
 				if((memcmp(x25_sk(s)->calluserdata.cuddata,
 					skb->data,
 					x25_sk(s)->cudmatchlength)) == 0) {
@@ -454,7 +453,6 @@ static int x25_setsockopt(struct socket *sock, int level, int optname,
 	struct sock *sk = sock->sk;
 	int rc = -ENOPROTOOPT;
 
-	lock_kernel();
 	if (level != SOL_X25 || optname != X25_QBITINCL)
 		goto out;
 
@@ -466,10 +464,12 @@ static int x25_setsockopt(struct socket *sock, int level, int optname,
 	if (get_user(opt, (int __user *)optval))
 		goto out;
 
-	x25_sk(sk)->qbitincl = !!opt;
+	if (opt)
+		set_bit(X25_Q_BIT_FLAG, &x25_sk(sk)->flags);
+	else
+		clear_bit(X25_Q_BIT_FLAG, &x25_sk(sk)->flags);
 	rc = 0;
 out:
-	unlock_kernel();
 	return rc;
 }
 
@@ -479,7 +479,6 @@ static int x25_getsockopt(struct socket *sock, int level, int optname,
 	struct sock *sk = sock->sk;
 	int val, len, rc = -ENOPROTOOPT;
 
-	lock_kernel();
 	if (level != SOL_X25 || optname != X25_QBITINCL)
 		goto out;
 
@@ -497,10 +496,9 @@ static int x25_getsockopt(struct socket *sock, int level, int optname,
 	if (put_user(len, optlen))
 		goto out;
 
-	val = x25_sk(sk)->qbitincl;
+	val = test_bit(X25_Q_BIT_FLAG, &x25_sk(sk)->flags);
 	rc = copy_to_user(optval, &val, len) ? -EFAULT : 0;
 out:
-	unlock_kernel();
 	return rc;
 }
 
@@ -570,7 +568,10 @@ static int x25_create(struct net *net, struct socket *sock, int protocol,
 
 	x25 = x25_sk(sk);
 
-	sock_init_data(sock, sk);
+	sk->sk_socket = sock;
+	sk->sk_type = sock->type;
+	sk->sk_sleep = &sock->wait;
+	sock->sk = sk;
 
 	x25_init_timers(sk);
 
@@ -584,7 +585,7 @@ static int x25_create(struct net *net, struct socket *sock, int protocol,
 	x25->t2    = sysctl_x25_ack_holdback_timeout;
 	x25->state = X25_STATE_0;
 	x25->cudmatchlength = 0;
-	x25->accptapprv = X25_DENY_ACCPT_APPRV;		/* normally no cud  */
+	set_bit(X25_ACCPT_APPRV_FLAG, &x25->flags);	/* normally no cud  */
 							/* on call accept   */
 
 	x25->facilities.winsize_in  = X25_DEFAULT_WINDOW_SIZE;
@@ -633,12 +634,12 @@ static struct sock *x25_make_new(struct sock *osk)
 	x25->t22        = ox25->t22;
 	x25->t23        = ox25->t23;
 	x25->t2         = ox25->t2;
+	x25->flags	= ox25->flags;
 	x25->facilities = ox25->facilities;
-	x25->qbitincl   = ox25->qbitincl;
 	x25->dte_facilities = ox25->dte_facilities;
 	x25->cudmatchlength = ox25->cudmatchlength;
-	x25->accptapprv = ox25->accptapprv;
 
+	clear_bit(X25_INTERRUPT_FLAG, &x25->flags);
 	x25_init_timers(sk);
 out:
 	return sk;
@@ -720,7 +721,7 @@ static int x25_wait_for_connection_establishment(struct sock *sk)
 	DECLARE_WAITQUEUE(wait, current);
 	int rc;
 
-	add_wait_queue_exclusive(sk->sk_sleep, &wait);
+	add_wait_queue_exclusive(sk_sleep(sk), &wait);
 	for (;;) {
 		__set_current_state(TASK_INTERRUPTIBLE);
 		rc = -ERESTARTSYS;
@@ -740,7 +741,7 @@ static int x25_wait_for_connection_establishment(struct sock *sk)
 			break;
 	}
 	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(sk->sk_sleep, &wait);
+	remove_wait_queue(sk_sleep(sk), &wait);
 	return rc;
 }
 
@@ -840,7 +841,7 @@ static int x25_wait_for_data(struct sock *sk, long timeout)
 	DECLARE_WAITQUEUE(wait, current);
 	int rc = 0;
 
-	add_wait_queue_exclusive(sk->sk_sleep, &wait);
+	add_wait_queue_exclusive(sk_sleep(sk), &wait);
 	for (;;) {
 		__set_current_state(TASK_INTERRUPTIBLE);
 		if (sk->sk_shutdown & RCV_SHUTDOWN)
@@ -860,7 +861,7 @@ static int x25_wait_for_data(struct sock *sk, long timeout)
 			break;
 	}
 	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(sk->sk_sleep, &wait);
+	remove_wait_queue(sk_sleep(sk), &wait);
 	return rc;
 }
 
@@ -1054,8 +1055,8 @@ int x25_rx_call_request(struct sk_buff *skb, struct x25_neigh *nb,
 	makex25->vc_facil_mask &= ~X25_MASK_CALLING_AE;
 	makex25->cudmatchlength = x25_sk(sk)->cudmatchlength;
 
-	/* Normally all calls are accepted immediatly */
-	if(makex25->accptapprv & X25_DENY_ACCPT_APPRV) {
+	/* Normally all calls are accepted immediately */
+	if (test_bit(X25_ACCPT_APPRV_FLAG, &makex25->flags)) {
 		x25_write_internal(make, X25_CALL_ACCEPTED);
 		makex25->state = X25_STATE_3;
 	}
@@ -1187,7 +1188,7 @@ static int x25_sendmsg(struct kiocb *iocb, struct socket *sock,
 	 *	If the Q BIT Include socket option is in force, the first
 	 *	byte of the user data is the logical value of the Q Bit.
 	 */
-	if (x25->qbitincl) {
+	if (test_bit(X25_Q_BIT_FLAG, &x25->flags)) {
 		qbit = skb->data[0];
 		skb_pull(skb, 1);
 	}
@@ -1243,7 +1244,7 @@ static int x25_sendmsg(struct kiocb *iocb, struct socket *sock,
 		len = rc;
 		if (rc < 0)
 			kfree_skb(skb);
-		else if (x25->qbitincl)
+		else if (test_bit(X25_Q_BIT_FLAG, &x25->flags))
 			len++;
 	}
 
@@ -1308,7 +1309,7 @@ static int x25_recvmsg(struct kiocb *iocb, struct socket *sock,
 		/*
 		 *	No Q bit information on Interrupt data.
 		 */
-		if (x25->qbitincl) {
+		if (test_bit(X25_Q_BIT_FLAG, &x25->flags)) {
 			asmptr  = skb_push(skb, 1);
 			*asmptr = 0x00;
 		}
@@ -1326,7 +1327,7 @@ static int x25_recvmsg(struct kiocb *iocb, struct socket *sock,
 		skb_pull(skb, x25->neighbour->extended ?
 				X25_EXT_MIN_LEN : X25_STD_MIN_LEN);
 
-		if (x25->qbitincl) {
+		if (test_bit(X25_Q_BIT_FLAG, &x25->flags)) {
 			asmptr  = skb_push(skb, 1);
 			*asmptr = qbit;
 		}
@@ -1577,7 +1578,7 @@ static int x25_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 			rc = -EINVAL;
 			if (sk->sk_state != TCP_CLOSE)
 				break;
-			x25->accptapprv = X25_ALLOW_ACCPT_APPRV;
+			clear_bit(X25_ACCPT_APPRV_FLAG, &x25->flags);
 			rc = 0;
 			break;
 		}
@@ -1586,7 +1587,8 @@ static int x25_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 			rc = -EINVAL;
 			if (sk->sk_state != TCP_ESTABLISHED)
 				break;
-			if (x25->accptapprv)	/* must call accptapprv above */
+			/* must call accptapprv above */
+			if (test_bit(X25_ACCPT_APPRV_FLAG, &x25->flags))
 				break;
 			x25_write_internal(sk, X25_CALL_ACCEPTED);
 			x25->state = X25_STATE_3;

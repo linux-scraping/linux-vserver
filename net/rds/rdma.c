@@ -439,8 +439,10 @@ void rds_rdma_free_op(struct rds_rdma_op *ro)
 		/* Mark page dirty if it was possibly modified, which
 		 * is the case for a RDMA_READ which copies from remote
 		 * to local memory */
-		if (!ro->r_write)
+		if (!ro->r_write) {
+			BUG_ON(in_interrupt());
 			set_page_dirty(page);
+		}
 		put_page(page);
 	}
 
@@ -472,7 +474,7 @@ static struct rds_rdma_op *rds_rdma_prepare(struct rds_sock *rs,
 		goto out;
 	}
 
-	if (args->nr_local > UIO_MAXIOV) {
+	if (args->nr_local > (u64)UINT_MAX) {
 		ret = -EMSGSIZE;
 		goto out;
 	}
@@ -498,15 +500,6 @@ static struct rds_rdma_op *rds_rdma_prepare(struct rds_sock *rs,
 
 		max_pages = max(nr, max_pages);
 		nr_pages += nr;
-
-		/*
-		 * nr for one entry is limited to (UINT_MAX>>PAGE_SHIFT)+1,
-		 * so nr_pages cannot overflow without first going negative.
-		 */
-		if ((int)nr_pages < 0) {
-			ret = -EINVAL;
-			goto out;
-		}
 	}
 
 	pages = kcalloc(max_pages, sizeof(struct page *), GFP_KERNEL);

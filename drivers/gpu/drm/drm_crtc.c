@@ -34,6 +34,7 @@
 #include "drm.h"
 #include "drmP.h"
 #include "drm_crtc.h"
+#include "drm_edid.h"
 
 struct drm_prop_enum_list {
 	int type;
@@ -154,12 +155,12 @@ static struct drm_conn_prop_enum_list drm_connector_enum_list[] =
 	{ DRM_MODE_CONNECTOR_SVIDEO, "SVIDEO", 0 },
 	{ DRM_MODE_CONNECTOR_LVDS, "LVDS", 0 },
 	{ DRM_MODE_CONNECTOR_Component, "Component", 0 },
-	{ DRM_MODE_CONNECTOR_9PinDIN, "DIN", 0 },
-	{ DRM_MODE_CONNECTOR_DisplayPort, "DP", 0 },
-	{ DRM_MODE_CONNECTOR_HDMIA, "HDMI-A", 0 },
-	{ DRM_MODE_CONNECTOR_HDMIB, "HDMI-B", 0 },
+	{ DRM_MODE_CONNECTOR_9PinDIN, "9-pin DIN", 0 },
+	{ DRM_MODE_CONNECTOR_DisplayPort, "DisplayPort", 0 },
+	{ DRM_MODE_CONNECTOR_HDMIA, "HDMI Type A", 0 },
+	{ DRM_MODE_CONNECTOR_HDMIB, "HDMI Type B", 0 },
 	{ DRM_MODE_CONNECTOR_TV, "TV", 0 },
-	{ DRM_MODE_CONNECTOR_eDP, "eDP", 0 },
+	{ DRM_MODE_CONNECTOR_eDP, "Embedded DisplayPort", 0 },
 };
 
 static struct drm_prop_enum_list drm_encoder_enum_list[] =
@@ -494,7 +495,6 @@ void drm_connector_cleanup(struct drm_connector *connector)
 	list_for_each_entry_safe(mode, t, &connector->user_modes, head)
 		drm_mode_remove(connector, mode);
 
-	kfree(connector->fb_helper_private);
 	mutex_lock(&dev->mode_config.mutex);
 	drm_mode_object_put(dev, &connector->base);
 	list_del(&connector->head);
@@ -858,7 +858,6 @@ void drm_mode_config_init(struct drm_device *dev)
 	mutex_init(&dev->mode_config.mutex);
 	mutex_init(&dev->mode_config.idr_mutex);
 	INIT_LIST_HEAD(&dev->mode_config.fb_list);
-	INIT_LIST_HEAD(&dev->mode_config.fb_kernel_list);
 	INIT_LIST_HEAD(&dev->mode_config.crtc_list);
 	INIT_LIST_HEAD(&dev->mode_config.connector_list);
 	INIT_LIST_HEAD(&dev->mode_config.encoder_list);
@@ -1833,10 +1832,6 @@ int drm_mode_dirtyfb_ioctl(struct drm_device *dev,
 	}
 
 	if (num_clips && clips_ptr) {
-		if (num_clips < 0 || num_clips > DRM_MODE_FB_DIRTY_MAX_CLIPS) {
-			ret = -EINVAL;
-			goto out_err1;
-		}
 		clips = kzalloc(num_clips * sizeof(*clips), GFP_KERNEL);
 		if (!clips) {
 			ret = -ENOMEM;
@@ -1845,8 +1840,10 @@ int drm_mode_dirtyfb_ioctl(struct drm_device *dev,
 
 		ret = copy_from_user(clips, clips_ptr,
 				     num_clips * sizeof(*clips));
-		if (ret)
+		if (ret) {
+			ret = -EFAULT;
 			goto out_err2;
+		}
 	}
 
 	if (fb->funcs->dirty) {
@@ -2354,7 +2351,7 @@ int drm_mode_connector_update_edid_property(struct drm_connector *connector,
 					    struct edid *edid)
 {
 	struct drm_device *dev = connector->dev;
-	int ret = 0;
+	int ret = 0, size;
 
 	if (connector->edid_blob_ptr)
 		drm_property_destroy_blob(dev, connector->edid_blob_ptr);
@@ -2366,7 +2363,9 @@ int drm_mode_connector_update_edid_property(struct drm_connector *connector,
 		return ret;
 	}
 
-	connector->edid_blob_ptr = drm_property_create_blob(connector->dev, 128, edid);
+	size = EDID_LENGTH * (1 + edid->extensions);
+	connector->edid_blob_ptr = drm_property_create_blob(connector->dev,
+							    size, edid);
 
 	ret = drm_connector_property_set_value(connector,
 					       dev->mode_config.edid_property,

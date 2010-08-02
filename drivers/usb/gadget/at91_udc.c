@@ -366,6 +366,13 @@ rescan:
 	if (is_done)
 		done(ep, req, 0);
 	else if (ep->is_pingpong) {
+		/*
+		 * One dummy read to delay the code because of a HW glitch:
+		 * CSR returns bad RXCOUNT when read too soon after updating
+		 * RX_DATA_BK flags.
+		 */
+		csr = __raw_readl(creg);
+
 		bufferspace -= count;
 		buf += count;
 		goto rescan;
@@ -1694,7 +1701,7 @@ static int __init at91udc_probe(struct platform_device *pdev)
 	}
 
 	/* newer chips have more FIFO memory than rm9200 */
-	if (cpu_is_at91sam9260() || cpu_is_at91sam9g20()) {
+	if (cpu_is_at91sam9260()) {
 		udc->ep[0].maxpacket = 64;
 		udc->ep[3].maxpacket = 64;
 		udc->ep[4].maxpacket = 512;

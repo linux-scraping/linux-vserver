@@ -75,10 +75,8 @@ DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 	/*
 	 * Undefined/reserved opcodes, conditional jump, Opcode Extension
 	 * Groups, and some special opcodes can not boost.
-	 * This is non-const to keep gcc from statically optimizing it out, as
-	 * variable_test_bit makes gcc think only *(unsigned long*) is used.
 	 */
-static u32 twobyte_is_boostable[256 / 32] = {
+static const u32 twobyte_is_boostable[256 / 32] = {
 	/*      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f          */
 	/*      ----------------------------------------------          */
 	W(0x00, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0) | /* 00 */
@@ -424,14 +422,22 @@ static void __kprobes set_current_kprobe(struct kprobe *p, struct pt_regs *regs,
 
 static void __kprobes clear_btf(void)
 {
-	if (test_thread_flag(TIF_DEBUGCTLMSR))
-		update_debugctlmsr(0);
+	if (test_thread_flag(TIF_BLOCKSTEP)) {
+		unsigned long debugctl = get_debugctlmsr();
+
+		debugctl &= ~DEBUGCTLMSR_BTF;
+		update_debugctlmsr(debugctl);
+	}
 }
 
 static void __kprobes restore_btf(void)
 {
-	if (test_thread_flag(TIF_DEBUGCTLMSR))
-		update_debugctlmsr(current->thread.debugctlmsr);
+	if (test_thread_flag(TIF_BLOCKSTEP)) {
+		unsigned long debugctl = get_debugctlmsr();
+
+		debugctl |= DEBUGCTLMSR_BTF;
+		update_debugctlmsr(debugctl);
+	}
 }
 
 void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,

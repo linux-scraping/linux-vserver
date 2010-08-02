@@ -458,7 +458,7 @@ static void sl_tx_timeout(struct net_device *dev)
 		 *      14 Oct 1994 Dmitry Gorodchanin.
 		 */
 #ifdef SL_CHECK_TRANSMIT
-		if (time_before(jiffies, dev->trans_start + 20 * HZ))  {
+		if (time_before(jiffies, dev_trans_start(dev) + 20 * HZ))  {
 			/* 20 sec timeout not reached */
 			goto out;
 		}
@@ -852,9 +852,7 @@ static int slip_open(struct tty_struct *tty)
 	/* Done.  We have linked the TTY line to a channel. */
 	rtnl_unlock();
 	tty->receive_room = 65536;	/* We don't flow control */
-
-	/* TTY layer expects 0 on success */
-	return 0;
+	return sl->dev->base_addr;
 
 err_free_bufs:
 	sl_free_bufs(sl);
@@ -1271,7 +1269,7 @@ static int sl_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 
 	case SIOCGLEASE:
 		*p = sl->leased;
-	};
+	}
 	spin_unlock_bh(&sl->lock);
 	return 0;
 }

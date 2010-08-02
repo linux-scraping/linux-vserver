@@ -844,6 +844,10 @@ static int rfcomm_tty_ioctl(struct tty_struct *tty, struct file *filp, unsigned 
 		BT_DBG("TIOCMIWAIT");
 		break;
 
+	case TIOCGICOUNT:
+		BT_DBG("TIOCGICOUNT");
+		break;
+
 	case TIOCGSERIAL:
 		BT_ERR("TIOCGSERIAL is not supported");
 		return -ENOIOCTLCMD;
@@ -1010,8 +1014,6 @@ static void rfcomm_tty_set_termios(struct tty_struct *tty, struct ktermios *old)
 		rfcomm_send_rpn(dev->dlc->session, 1, dev->dlc->dlci, baud,
 				data_bits, stop_bits, parity,
 				RFCOMM_RPN_FLOW_NONE, x_on, x_off, changes);
-
-	return;
 }
 
 static void rfcomm_tty_throttle(struct tty_struct *tty)

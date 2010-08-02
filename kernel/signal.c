@@ -639,7 +639,7 @@ static inline bool si_fromuser(const struct siginfo *info)
 
 /*
  * Bad permissions for sending the signal
- * - the caller must hold the RCU read lock
+ * - the caller must hold at least the RCU read lock
  */
 static int check_kill_permission(int sig, struct siginfo *info,
 				 struct task_struct *t)
@@ -1110,23 +1110,24 @@ force_sig_info(int sig, struct siginfo *info, struct task_struct *t)
 /*
  * Nuke all other threads in the group.
  */
-void zap_other_threads(struct task_struct *p)
+int zap_other_threads(struct task_struct *p)
 {
-	struct task_struct *t;
+	struct task_struct *t = p;
+	int count = 0;
 
 	p->signal->group_stop_count = 0;
 
-	for (t = next_thread(p); t != p; t = next_thread(t)) {
-		/*
-		 * Don't bother with already dead threads
-		 */
+	while_each_thread(p, t) {
+		count++;
+
+		/* Don't bother with already dead threads */
 		if (t->exit_state)
 			continue;
-
-		/* SIGKILL will be handled before any pending SIGSTOP */
 		sigaddset(&t->pending.signal, SIGKILL);
 		signal_wake_up(t, 1);
 	}
+
+	return count;
 }
 
 struct sighand_struct *lock_task_sighand(struct task_struct *tsk, unsigned long *flags)
@@ -1151,14 +1152,11 @@ struct sighand_struct *lock_task_sighand(struct task_struct *tsk, unsigned long 
 
 /*
  * send signal info to all the members of a group
+ * - the caller must hold the RCU read lock at least
  */
 int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p)
 {
-	int ret;
-
-	rcu_read_lock();
-	ret = check_kill_permission(sig, info, p);
-	rcu_read_unlock();
+	int ret = check_kill_permission(sig, info, p);
 
 	if (!ret && sig)
 		ret = do_send_sig_info(sig, info, p, true);
@@ -2441,13 +2439,9 @@ SYSCALL_DEFINE3(rt_sigqueueinfo, pid_t, pid, int, sig,
 		return -EFAULT;
 
 	/* Not even root can pretend to send signals from the kernel.
-	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
-	 */
-	if (info.si_code >= 0 || info.si_code == SI_TKILL) {
-		/* We used to allow any < 0 si_code */
-		WARN_ON_ONCE(info.si_code < 0);
+	   Nor can they impersonate a kill(), which adds source info.  */
+	if (info.si_code >= 0)
 		return -EPERM;
-	}
 	info.si_signo = sig;
 
 	/* POSIX.1b doesn't mention process groups.  */
@@ -2461,13 +2455,9 @@ long do_rt_tgsigqueueinfo(pid_t tgid, pid_t pid, int sig, siginfo_t *info)
 		return -EINVAL;
 
 	/* Not even root can pretend to send signals from the kernel.
-	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
-	 */
-	if (info->si_code >= 0 || info->si_code == SI_TKILL) {
-		/* We used to allow any < 0 si_code */
-		WARN_ON_ONCE(info->si_code < 0);
+	   Nor can they impersonate a kill(), which adds source info.  */
+	if (info->si_code >= 0)
 		return -EPERM;
-	}
 	info->si_signo = sig;
 
 	return do_send_specific(tgid, pid, sig, info);
@@ -2780,3 +2770,43 @@ void __init signals_init(void)
 {
 	sigqueue_cachep = KMEM_CACHE(sigqueue, SLAB_PANIC);
 }
+
+#ifdef CONFIG_KGDB_KDB
+#include <linux/kdb.h>
+/*
+ * kdb_send_sig_info - Allows kdb to send signals without exposing
+ * signal internals.  This function checks if the required locks are
+ * available before calling the main signal code, to avoid kdb
+ * deadlocks.
+ */
+void
+kdb_send_sig_info(struct task_struct *t, struct siginfo *info)
+{
+	static struct task_struct *kdb_prev_t;
+	int sig, new_t;
+	if (!spin_trylock(&t->sighand->siglock)) {
+		kdb_printf("Can't do kill command now.\n"
+			   "The sigmask lock is held somewhere else in "
+			   "kernel, try again later\n");
+		return;
+	}
+	spin_unlock(&t->sighand->siglock);
+	new_t = kdb_prev_t != t;
+	kdb_prev_t = t;
+	if (t->state != TASK_RUNNING && new_t) {
+		kdb_printf("Process is not RUNNING, sending a signal from "
+			   "kdb risks deadlock\n"
+			   "on the run queue locks. "
+			   "The signal has _not_ been sent.\n"
+			   "Reissue the kill command if you want to risk "
+			   "the deadlock.\n");
+		return;
+	}
+	sig = info->si_signo;
+	if (send_sig_info(sig, info, t))
+		kdb_printf("Fail to deliver Signal %d to process %d.\n",
+			   sig, t->pid);
+	else
+		kdb_printf("Signal %d is sent to process %d.\n", sig, t->pid);
+}
+#endif	/* CONFIG_KGDB_KDB */

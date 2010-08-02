@@ -609,9 +609,10 @@ static void path_put_conditional(struct path *path, struct nameidata *nd)
 static inline void path_to_nameidata(struct path *path, struct nameidata *nd)
 {
 	dput(nd->path.dentry);
-	if (nd->path.mnt != path->mnt)
+	if (nd->path.mnt != path->mnt) {
 		mntput(nd->path.mnt);
-	nd->path.mnt = path->mnt;
+		nd->path.mnt = path->mnt;
+	}
 	nd->path.dentry = path->dentry;
 }
 
@@ -1550,6 +1551,8 @@ int may_open(struct path *path, int acc_mode, int flag)
 	}
 
 #ifdef	CONFIG_VSERVER_COWBL
+	if (IS_COW(inode))
+		printk("cow inode: %p, flag=%x\n", inode, flag);
 	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
 		if (IS_COW_LINK(inode))
 			return -EMLINK;

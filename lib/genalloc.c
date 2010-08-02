@@ -54,7 +54,7 @@ int gen_pool_add(struct gen_pool *pool, unsigned long addr, size_t size,
 	struct gen_pool_chunk *chunk;
 	int nbits = size >> pool->min_alloc_order;
 	int nbytes = sizeof(struct gen_pool_chunk) +
-				BITS_TO_LONGS(nbits) * sizeof(long);
+				(nbits + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
 
 	chunk = kmalloc_node(nbytes, GFP_KERNEL | __GFP_ZERO, nid);
 	if (unlikely(chunk == NULL))
@@ -128,7 +128,6 @@ unsigned long gen_pool_alloc(struct gen_pool *pool, size_t size)
 		chunk = list_entry(_chunk, struct gen_pool_chunk, next_chunk);
 
 		end_bit = (chunk->end_addr - chunk->start_addr) >> order;
-		end_bit -= nbits + 1;
 
 		spin_lock_irqsave(&chunk->lock, flags);
 		start_bit = bitmap_find_next_zero_area(chunk->bits, end_bit, 0,

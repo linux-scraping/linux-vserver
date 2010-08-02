@@ -363,7 +363,7 @@ static struct pxa3xx_nand_flash *builtin_flash_types[] = {
 #define tAR_NDTR1(r)	(((r) >> 0) & 0xf)
 
 /* convert nano-seconds to nand flash controller clock cycles */
-#define ns2cycle(ns, clk)	(int)((ns) * (clk / 1000000) / 1000)
+#define ns2cycle(ns, clk)	(int)(((ns) * (clk / 1000000) / 1000) - 1)
 
 /* convert nand flash controller clock cycles to nano-seconds */
 #define cycle2ns(c, clk)	((((c) + 1) * 1000000 + clk / 500) / (clk / 1000))
@@ -1318,6 +1318,17 @@ static int pxa3xx_nand_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to scan nand\n");
 		ret = -ENXIO;
 		goto fail_free_irq;
+	}
+
+	if (mtd_has_cmdlinepart()) {
+		static const char *probes[] = { "cmdlinepart", NULL };
+		struct mtd_partition *parts;
+		int nr_parts;
+
+		nr_parts = parse_mtd_partitions(mtd, probes, &parts, 0);
+
+		if (nr_parts)
+			return add_mtd_partitions(mtd, parts, nr_parts);
 	}
 
 	return add_mtd_partitions(mtd, pdata->parts, pdata->nr_parts);

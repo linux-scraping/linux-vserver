@@ -1053,19 +1053,9 @@ void sctp_ulpevent_free(struct sctp_ulpevent *event)
 }
 
 /* Purge the skb lists holding ulpevents. */
-unsigned int sctp_queue_purge_ulpevents(struct sk_buff_head *list)
+void sctp_queue_purge_ulpevents(struct sk_buff_head *list)
 {
 	struct sk_buff *skb;
-	unsigned int data_unread = 0;
-
-	while ((skb = skb_dequeue(list)) != NULL) {
-		struct sctp_ulpevent *event = sctp_skb2event(skb);
-
-		if (!sctp_ulpevent_is_notification(event))
-			data_unread += skb->len;
-
-		sctp_ulpevent_free(event);
-	}
-
-	return data_unread;
+	while ((skb = skb_dequeue(list)) != NULL)
+		sctp_ulpevent_free(sctp_skb2event(skb));
 }

@@ -108,7 +108,7 @@ ppc44x_enable_bmt(struct device_node *dn)
 static int __devinit
 ehci_hcd_ppc_of_probe(struct of_device *op, const struct of_device_id *match)
 {
-	struct device_node *dn = op->node;
+	struct device_node *dn = op->dev.of_node;
 	struct usb_hcd *hcd;
 	struct ehci_hcd	*ehci = NULL;
 	struct resource res;
@@ -192,19 +192,17 @@ ehci_hcd_ppc_of_probe(struct of_device *op, const struct of_device_id *match)
 	}
 
 	rv = usb_add_hcd(hcd, irq, 0);
-	if (rv)
-		goto err_ehci;
+	if (rv == 0)
+		return 0;
 
-	return 0;
-
-err_ehci:
-	if (ehci->has_amcc_usb23)
-		iounmap(ehci->ohci_hcctrl_reg);
 	iounmap(hcd->regs);
 err_ioremap:
 	irq_dispose_mapping(irq);
 err_irq:
 	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
+
+	if (ehci->has_amcc_usb23)
+		iounmap(ehci->ohci_hcctrl_reg);
 err_rmr:
 	usb_put_hcd(hcd);
 
@@ -276,13 +274,12 @@ MODULE_DEVICE_TABLE(of, ehci_hcd_ppc_of_match);
 
 
 static struct of_platform_driver ehci_hcd_ppc_of_driver = {
-	.name		= "ppc-of-ehci",
-	.match_table	= ehci_hcd_ppc_of_match,
 	.probe		= ehci_hcd_ppc_of_probe,
 	.remove		= ehci_hcd_ppc_of_remove,
 	.shutdown	= ehci_hcd_ppc_of_shutdown,
-	.driver		= {
-		.name	= "ppc-of-ehci",
-		.owner	= THIS_MODULE,
+	.driver = {
+		.name = "ppc-of-ehci",
+		.owner = THIS_MODULE,
+		.of_match_table = ehci_hcd_ppc_of_match,
 	},
 };

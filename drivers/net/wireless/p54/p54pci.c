@@ -134,7 +134,7 @@ static int p54p_upload_firmware(struct ieee80211_hw *dev)
 
 static void p54p_refill_rx_ring(struct ieee80211_hw *dev,
 	int ring_index, struct p54p_desc *ring, u32 ring_limit,
-	struct sk_buff **rx_buf)
+	struct sk_buff **rx_buf, u32 index)
 {
 	struct p54p_priv *priv = dev->priv;
 	struct p54p_ring_control *ring_control = priv->ring_control;
@@ -142,7 +142,7 @@ static void p54p_refill_rx_ring(struct ieee80211_hw *dev,
 
 	idx = le32_to_cpu(ring_control->host_idx[ring_index]);
 	limit = idx;
-	limit -= le32_to_cpu(ring_control->device_idx[ring_index]);
+	limit -= index;
 	limit = ring_limit - limit;
 
 	i = idx % ring_limit;
@@ -199,7 +199,6 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 	while (i != idx) {
 		u16 len;
 		struct sk_buff *skb;
-		dma_addr_t dma_addr;
 		desc = &ring[i];
 		len = le16_to_cpu(desc->len);
 		skb = rx_buf[i];
@@ -217,20 +216,17 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 
 			len = priv->common.rx_mtu;
 		}
-		dma_addr = le32_to_cpu(desc->host_addr);
-		pci_dma_sync_single_for_cpu(priv->pdev, dma_addr,
-			priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
 		skb_put(skb, len);
 
 		if (p54_rx(dev, skb)) {
-			pci_unmap_single(priv->pdev, dma_addr,
-				priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
+			pci_unmap_single(priv->pdev,
+					 le32_to_cpu(desc->host_addr),
+					 priv->common.rx_mtu + 32,
+					 PCI_DMA_FROMDEVICE);
 			rx_buf[i] = NULL;
-			desc->host_addr = cpu_to_le32(0);
+			desc->host_addr = 0;
 		} else {
 			skb_trim(skb, 0);
-			pci_dma_sync_single_for_device(priv->pdev, dma_addr,
-				priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
 			desc->len = cpu_to_le16(priv->common.rx_mtu + 32);
 		}
 
@@ -238,7 +234,7 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 		i %= ring_limit;
 	}
 
-	p54p_refill_rx_ring(dev, ring_index, ring, ring_limit, rx_buf);
+	p54p_refill_rx_ring(dev, ring_index, ring, ring_limit, rx_buf, *index);
 }
 
 static void p54p_check_tx_ring(struct ieee80211_hw *dev, u32 *index,
@@ -451,10 +447,10 @@ static int p54p_open(struct ieee80211_hw *dev)
 	priv->rx_idx_mgmt = priv->tx_idx_mgmt = 0;
 
 	p54p_refill_rx_ring(dev, 0, priv->ring_control->rx_data,
-		ARRAY_SIZE(priv->ring_control->rx_data), priv->rx_buf_data);
+		ARRAY_SIZE(priv->ring_control->rx_data), priv->rx_buf_data, 0);
 
 	p54p_refill_rx_ring(dev, 2, priv->ring_control->rx_mgmt,
-		ARRAY_SIZE(priv->ring_control->rx_mgmt), priv->rx_buf_mgmt);
+		ARRAY_SIZE(priv->ring_control->rx_mgmt), priv->rx_buf_mgmt, 0);
 
 	P54P_WRITE(ring_control_base, cpu_to_le32(priv->ring_control_dma));
 	P54P_READ(ring_control_base);

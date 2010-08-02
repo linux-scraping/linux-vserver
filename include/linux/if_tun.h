@@ -51,7 +51,9 @@
 #define TUNSETSNDBUF   _IOW('T', 212, int)
 #define TUNATTACHFILTER _IOW('T', 213, struct sock_fprog)
 #define TUNDETACHFILTER _IOW('T', 214, struct sock_fprog)
-#define TUNSETNID     _IOW('T', 215, int)
+#define TUNGETVNETHDRSZ _IOR('T', 215, int)
+#define TUNSETVNETHDRSZ _IOW('T', 216, int)
+#define TUNSETNID     _IOW('T', 217, int)
 
 /* TUNSETIFF ifr flags */
 #define IFF_TUN		0x0001

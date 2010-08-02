@@ -22,7 +22,6 @@
 #include <net/inet_connection_sock.h>
 #include <net/inet_hashtables.h>
 #include <net/route.h>
-#include <net/secure_seq.h>
 #include <net/ip.h>
 
 /*
@@ -463,6 +462,8 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		local_bh_disable();
 		for (i = 1; i <= remaining; i++) {
 			port = low + (i + offset) % remaining;
+			if (inet_is_reserved_local_port(port))
+				continue;
 			head = &hinfo->bhash[inet_bhashfn(net, port,
 					hinfo->bhash_size)];
 			spin_lock(&head->lock);

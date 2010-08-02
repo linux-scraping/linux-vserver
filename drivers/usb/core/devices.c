@@ -1,7 +1,8 @@
 /*
  * devices.c
  * (C) Copyright 1999 Randy Dunlap.
- * (C) Copyright 1999,2000 Thomas Sailer <sailer@ife.ee.ethz.ch>. (proc file per device)
+ * (C) Copyright 1999,2000 Thomas Sailer <sailer@ife.ee.ethz.ch>.
+ *     (proc file per device)
  * (C) Copyright 1999 Deti Fliegl (new USB architecture)
  *
  * This program is free software; you can redistribute it and/or modify
@@ -55,18 +56,18 @@
 #include <linux/usb.h>
 #include <linux/smp_lock.h>
 #include <linux/usbdevice_fs.h>
+#include <linux/usb/hcd.h>
 #include <linux/mutex.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include "usb.h"
-#include "hcd.h"
 
 /* Define ALLOW_SERIAL_NUMBER if you want to see the serial number of devices */
 #define ALLOW_SERIAL_NUMBER
 
 static const char *format_topo =
-/* T:  Bus=dd Lev=dd Prnt=dd Port=dd Cnt=dd Dev#=ddd Spd=dddd MxCh=dd */
-"\nT:  Bus=%2.2d Lev=%2.2d Prnt=%2.2d Port=%2.2d Cnt=%2.2d Dev#=%3d Spd=%-4s MxCh=%2d\n";
+/* T:  Bus=dd Lev=dd Prnt=dd Port=dd Cnt=dd Dev#=ddd Spd=ddd MxCh=dd */
+"\nT:  Bus=%2.2d Lev=%2.2d Prnt=%2.2d Port=%2.2d Cnt=%2.2d Dev#=%3d Spd=%3s MxCh=%2d\n";
 
 static const char *format_string_manufacturer =
 /* S:  Manufacturer=xxxx */
@@ -138,8 +139,8 @@ struct class_info {
 	char *class_name;
 };
 
-static const struct class_info clas_info[] =
-{					/* max. 5 chars. per name string */
+static const struct class_info clas_info[] = {
+	/* max. 5 chars. per name string */
 	{USB_CLASS_PER_INTERFACE,	">ifc"},
 	{USB_CLASS_AUDIO,		"audio"},
 	{USB_CLASS_COMM,		"comm."},
@@ -191,8 +192,10 @@ static char *usb_dump_endpoint_descriptor(int speed, char *start, char *end,
 
 	if (speed == USB_SPEED_HIGH) {
 		switch (le16_to_cpu(desc->wMaxPacketSize) & (0x03 << 11)) {
-		case 1 << 11:	bandwidth = 2; break;
-		case 2 << 11:	bandwidth = 3; break;
+		case 1 << 11:
+			bandwidth = 2; break;
+		case 2 << 11:
+			bandwidth = 3; break;
 		}
 	}
 
@@ -200,7 +203,7 @@ static char *usb_dump_endpoint_descriptor(int speed, char *start, char *end,
 	switch (usb_endpoint_type(desc)) {
 	case USB_ENDPOINT_XFER_CONTROL:
 		type = "Ctrl";
-		if (speed == USB_SPEED_HIGH) 	/* uframes per NAK */
+		if (speed == USB_SPEED_HIGH)	/* uframes per NAK */
 			interval = desc->bInterval;
 		else
 			interval = 0;
@@ -219,7 +222,7 @@ static char *usb_dump_endpoint_descriptor(int speed, char *start, char *end,
 		break;
 	case USB_ENDPOINT_XFER_INT:
 		type = "Int.";
-		if (speed == USB_SPEED_HIGH || speed == USB_SPEED_SUPER)
+		if (speed == USB_SPEED_HIGH)
 			interval = 1 << (desc->bInterval - 1);
 		else
 			interval = desc->bInterval;
@@ -227,8 +230,7 @@ static char *usb_dump_endpoint_descriptor(int speed, char *start, char *end,
 	default:	/* "can't happen" */
 		return start;
 	}
-	interval *= (speed == USB_SPEED_HIGH ||
-		     speed == USB_SPEED_SUPER) ? 125 : 1000;
+	interval *= (speed == USB_SPEED_HIGH) ? 125 : 1000;
 	if (interval % 1000)
 		unit = 'u';
 	else {
@@ -518,14 +520,11 @@ static ssize_t usb_device_dump(char __user **buffer, size_t *nbytes,
 		speed = "1.5"; break;
 	case USB_SPEED_UNKNOWN:		/* usb 1.1 root hub code */
 	case USB_SPEED_FULL:
-		speed = "12"; break;
-	case USB_SPEED_WIRELESS:	/* Wireless has no real fixed speed */
+		speed = "12 "; break;
 	case USB_SPEED_HIGH:
 		speed = "480"; break;
-	case USB_SPEED_SUPER:
-		speed = "5000"; break;
 	default:
-		speed = "??";
+		speed = "?? ";
 	}
 	data_end = pages_start + sprintf(pages_start, format_topo,
 			bus->busnum, level, parent_devnum,
@@ -541,9 +540,8 @@ static ssize_t usb_device_dump(char __user **buffer, size_t *nbytes,
 	if (level == 0) {
 		int	max;
 
-		/* super/high speed reserves 80%, full/low reserves 90% */
-		if (usbdev->speed == USB_SPEED_HIGH ||
-		    usbdev->speed == USB_SPEED_SUPER)
+		/* high speed reserves 80%, full/low reserves 90% */
+		if (usbdev->speed == USB_SPEED_HIGH)
 			max = 800;
 		else
 			max = FRAME_TIME_MAX_USECS_ALLOC;

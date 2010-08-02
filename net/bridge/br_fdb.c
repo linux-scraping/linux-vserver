@@ -214,7 +214,7 @@ void br_fdb_delete_by_port(struct net_bridge *br,
 	spin_unlock_bh(&br->hash_lock);
 }
 
-/* No locking or refcounting, assumes caller has rcu_read_lock */
+/* No locking or refcounting, assumes caller has no preempt (rcu_read_lock) */
 struct net_bridge_fdb_entry *__br_fdb_get(struct net_bridge *br,
 					  const unsigned char *addr)
 {
@@ -351,8 +351,7 @@ static int fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 		 */
 		if (fdb->is_local)
 			return 0;
-
-		printk(KERN_WARNING "%s adding interface with same address "
+		br_warn(br, "adding interface %s with same address "
 		       "as a received packet\n",
 		       source->dev->name);
 		fdb_delete(fdb);
@@ -395,9 +394,9 @@ void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 		/* attempt to update an entry for a local interface */
 		if (unlikely(fdb->is_local)) {
 			if (net_ratelimit())
-				printk(KERN_WARNING "%s: received packet with "
-				       "own address as source address\n",
-				       source->dev->name);
+				br_warn(br, "received packet on %s with "
+					"own address as source address\n",
+					source->dev->name);
 		} else {
 			/* fastpath: update of existing entry */
 			fdb->dst = source;

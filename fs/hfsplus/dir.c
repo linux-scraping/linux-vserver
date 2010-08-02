@@ -138,11 +138,6 @@ static int hfsplus_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		filp->f_pos++;
 		/* fall through */
 	case 1:
-		if (fd.entrylength > sizeof(entry) || fd.entrylength < 0) {
-			err = -EIO;
-			goto out;
-		}
-
 		hfs_bnode_read(fd.bnode, &entry, fd.entryoffset, fd.entrylength);
 		if (be16_to_cpu(entry.type) != HFSPLUS_FOLDER_THREAD) {
 			printk(KERN_ERR "hfs: bad catalog folder thread\n");
@@ -173,12 +168,6 @@ static int hfsplus_readdir(struct file *filp, void *dirent, filldir_t filldir)
 			err = -EIO;
 			goto out;
 		}
-
-		if (fd.entrylength > sizeof(entry) || fd.entrylength < 0) {
-			err = -EIO;
-			goto out;
-		}
-
 		hfs_bnode_read(fd.bnode, &entry, fd.entryoffset, fd.entrylength);
 		type = be16_to_cpu(entry.type);
 		len = HFSPLUS_MAX_STRLEN;
@@ -505,7 +494,7 @@ const struct inode_operations hfsplus_dir_inode_operations = {
 const struct file_operations hfsplus_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= hfsplus_readdir,
-	.ioctl          = hfsplus_ioctl,
+	.unlocked_ioctl = hfsplus_ioctl,
 	.llseek		= generic_file_llseek,
 	.release	= hfsplus_dir_release,
 };

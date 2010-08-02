@@ -165,8 +165,6 @@ int uvc_free_buffers(struct uvc_video_queue *queue)
 	}
 
 	if (queue->count) {
-		uvc_queue_cancel(queue, 0);
-		INIT_LIST_HEAD(&queue->mainqueue);
 		vfree(queue->mem);
 		queue->count = 0;
 	}
@@ -390,8 +388,12 @@ unsigned int uvc_queue_poll(struct uvc_video_queue *queue, struct file *file,
 
 	poll_wait(file, &buf->wait, wait);
 	if (buf->state == UVC_BUF_STATE_DONE ||
-	    buf->state == UVC_BUF_STATE_ERROR)
-		mask |= POLLIN | POLLRDNORM;
+	    buf->state == UVC_BUF_STATE_ERROR) {
+		if (queue->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
+			mask |= POLLIN | POLLRDNORM;
+		else
+			mask |= POLLOUT | POLLWRNORM;
+	}
 
 done:
 	mutex_unlock(&queue->mutex);

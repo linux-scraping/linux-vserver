@@ -57,7 +57,6 @@
 #include <linux/seq_file.h>
 #include <linux/bitmap.h>
 #include <linux/crc-itu-t.h>
-#include <linux/log2.h>
 #include <asm/byteorder.h>
 
 #include "udf_sb.h"
@@ -558,6 +557,7 @@ static int udf_remount_fs(struct super_block *sb, int *flags, char *options)
 {
 	struct udf_options uopt;
 	struct udf_sb_info *sbi = UDF_SB(sb);
+	int error = 0;
 
 	uopt.flags = sbi->s_flags;
 	uopt.uid   = sbi->s_uid;
@@ -583,17 +583,17 @@ static int udf_remount_fs(struct super_block *sb, int *flags, char *options)
 			*flags |= MS_RDONLY;
 	}
 
-	if ((*flags & MS_RDONLY) == (sb->s_flags & MS_RDONLY)) {
-		unlock_kernel();
-		return 0;
-	}
+	if ((*flags & MS_RDONLY) == (sb->s_flags & MS_RDONLY))
+		goto out_unlock;
+
 	if (*flags & MS_RDONLY)
 		udf_close_lvid(sb);
 	else
 		udf_open_lvid(sb);
 
+out_unlock:
 	unlock_kernel();
-	return 0;
+	return error;
 }
 
 /* Check Volume Structure Descriptors (ECMA 167 2/9.1) */
@@ -1240,65 +1240,16 @@ out_bh:
 	return ret;
 }
 
-static int udf_load_sparable_map(struct super_block *sb,
-				 struct udf_part_map *map,
-				 struct sparablePartitionMap *spm)
-{
-	uint32_t loc;
-	uint16_t ident;
-	struct sparingTable *st;
-	struct udf_sparing_data *sdata = &map->s_type_specific.s_sparing;
-	int i;
-	struct buffer_head *bh;
-
-	map->s_partition_type = UDF_SPARABLE_MAP15;
-	sdata->s_packet_len = le16_to_cpu(spm->packetLength);
-	if (!is_power_of_2(sdata->s_packet_len)) {
-		udf_error(sb, "error loading logical volume descriptor: "
-			  "Invalid packet length %u\n",
-			  (unsigned)sdata->s_packet_len);
-		return -EIO;
-	}
-	if (spm->numSparingTables > 4) {
-		udf_error(sb, "error loading logical volume descriptor: "
-			  "Too many sparing tables (%d)\n",
-			  (int)spm->numSparingTables);
-		return -EIO;
-	}
-
-	for (i = 0; i < spm->numSparingTables; i++) {
-		loc = le32_to_cpu(spm->locSparingTable[i]);
-		bh = udf_read_tagged(sb, loc, loc, &ident);
-		if (!bh)
-			continue;
-
-		st = (struct sparingTable *)bh->b_data;
-		if (ident != 0 ||
-		    strncmp(st->sparingIdent.ident, UDF_ID_SPARING,
-			    strlen(UDF_ID_SPARING)) ||
-		    sizeof(*st) + le16_to_cpu(st->reallocationTableLen) >
-							sb->s_blocksize) {
-			brelse(bh);
-			continue;
-		}
-
-		sdata->s_spar_map[i] = bh;
-	}
-	map->s_partition_func = udf_get_pblock_spar15;
-	return 0;
-}
-
 static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 			       struct kernel_lb_addr *fileset)
 {
 	struct logicalVolDesc *lvd;
-	int i, offset;
+	int i, j, offset;
 	uint8_t type;
 	struct udf_sb_info *sbi = UDF_SB(sb);
 	struct genericPartitionMap *gpm;
 	uint16_t ident;
 	struct buffer_head *bh;
-	unsigned int table_len;
 	int ret = 0;
 
 	bh = udf_read_tagged(sb, block, block, &ident);
@@ -1306,13 +1257,6 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 		return 1;
 	BUG_ON(ident != TAG_IDENT_LVD);
 	lvd = (struct logicalVolDesc *)bh->b_data;
-	table_len = le32_to_cpu(lvd->mapTableLength);
-	if (table_len > sb->s_blocksize - sizeof(*lvd)) {
-		udf_error(sb, "error loading logical volume descriptor: "
-			  "Partition table too long (%u > %lu)\n", table_len,
-			  sb->s_blocksize - sizeof(*lvd));
-		goto out_bh;
-	}
 
 	i = udf_sb_alloc_partition_maps(sb, le32_to_cpu(lvd->numPartitionMaps));
 	if (i != 0) {
@@ -1321,7 +1265,7 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 	}
 
 	for (i = 0, offset = 0;
-	     i < sbi->s_partitions && offset < table_len;
+	     i < sbi->s_partitions && offset < le32_to_cpu(lvd->mapTableLength);
 	     i++, offset += gpm->partitionMapLength) {
 		struct udf_part_map *map = &sbi->s_partmaps[i];
 		gpm = (struct genericPartitionMap *)
@@ -1356,9 +1300,38 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 			} else if (!strncmp(upm2->partIdent.ident,
 						UDF_ID_SPARABLE,
 						strlen(UDF_ID_SPARABLE))) {
-				if (udf_load_sparable_map(sb, map,
-				    (struct sparablePartitionMap *)gpm) < 0)
-					goto out_bh;
+				uint32_t loc;
+				struct sparingTable *st;
+				struct sparablePartitionMap *spm =
+					(struct sparablePartitionMap *)gpm;
+
+				map->s_partition_type = UDF_SPARABLE_MAP15;
+				map->s_type_specific.s_sparing.s_packet_len =
+						le16_to_cpu(spm->packetLength);
+				for (j = 0; j < spm->numSparingTables; j++) {
+					struct buffer_head *bh2;
+
+					loc = le32_to_cpu(
+						spm->locSparingTable[j]);
+					bh2 = udf_read_tagged(sb, loc, loc,
+							     &ident);
+					map->s_type_specific.s_sparing.
+							s_spar_map[j] = bh2;
+
+					if (bh2 == NULL)
+						continue;
+
+					st = (struct sparingTable *)bh2->b_data;
+					if (ident != 0 || strncmp(
+						st->sparingIdent.ident,
+						UDF_ID_SPARING,
+						strlen(UDF_ID_SPARING))) {
+						brelse(bh2);
+						map->s_type_specific.s_sparing.
+							s_spar_map[j] = NULL;
+					}
+				}
+				map->s_partition_func = udf_get_pblock_spar15;
 			} else if (!strncmp(upm2->partIdent.ident,
 						UDF_ID_METADATA,
 						strlen(UDF_ID_METADATA))) {
@@ -1967,7 +1940,7 @@ static int udf_fill_super(struct super_block *sb, void *options, int silent)
 	/* Fill in the rest of the superblock */
 	sb->s_op = &udf_sb_ops;
 	sb->s_export_op = &udf_export_ops;
-	sb->dq_op = NULL;
+
 	sb->s_dirt = 0;
 	sb->s_magic = UDF_SUPER_MAGIC;
 	sb->s_time_gran = 1000;

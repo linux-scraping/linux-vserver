@@ -80,17 +80,14 @@ static struct davinci_nand_pdata davinci_nand_data = {
 	.options		= 0,
 };
 
-#define DAVINCI_ASYNC_EMIF_CONTROL_BASE		0x20008000
-#define DAVINCI_ASYNC_EMIF_DATA_CE0_BASE	0x42000000
-
 static struct resource davinci_nand_resources[] = {
 	{
-		.start		= DAVINCI_ASYNC_EMIF_DATA_CE0_BASE,
-		.end		= DAVINCI_ASYNC_EMIF_DATA_CE0_BASE + SZ_32M - 1,
+		.start		= DM646X_ASYNC_EMIF_CS2_SPACE_BASE,
+		.end		= DM646X_ASYNC_EMIF_CS2_SPACE_BASE + SZ_32M - 1,
 		.flags		= IORESOURCE_MEM,
 	}, {
-		.start		= DAVINCI_ASYNC_EMIF_CONTROL_BASE,
-		.end		= DAVINCI_ASYNC_EMIF_CONTROL_BASE + SZ_4K - 1,
+		.start		= DM646X_ASYNC_EMIF_CONTROL_BASE,
+		.end		= DM646X_ASYNC_EMIF_CONTROL_BASE + SZ_4K - 1,
 		.flags		= IORESOURCE_MEM,
 	},
 };
@@ -555,7 +552,7 @@ static int setup_vpif_input_channel_mode(int mux_mode)
 	int val;
 	u32 value;
 
-	if (!vpif_vidclkctl_reg || !cpld_client)
+	if (!vpif_vsclkdis_reg || !cpld_client)
 		return -ENXIO;
 
 	val = i2c_smbus_read_byte(cpld_client);
@@ -563,7 +560,7 @@ static int setup_vpif_input_channel_mode(int mux_mode)
 		return val;
 
 	spin_lock_irqsave(&vpif_reg_lock, flags);
-	value = __raw_readl(vpif_vidclkctl_reg);
+	value = __raw_readl(vpif_vsclkdis_reg);
 	if (mux_mode) {
 		val &= VPIF_INPUT_TWO_CHANNEL;
 		value |= VIDCH1CLK;
@@ -571,7 +568,7 @@ static int setup_vpif_input_channel_mode(int mux_mode)
 		val |= VPIF_INPUT_ONE_CHANNEL;
 		value &= ~VIDCH1CLK;
 	}
-	__raw_writel(value, vpif_vidclkctl_reg);
+	__raw_writel(value, vpif_vsclkdis_reg);
 	spin_unlock_irqrestore(&vpif_reg_lock, flags);
 
 	err = i2c_smbus_write_byte(cpld_client, val);
@@ -736,15 +733,10 @@ static __init void evm_init(void)
 	platform_device_register(&davinci_nand_device);
 
 	if (HAS_ATA)
-		dm646x_init_ide();
+		davinci_init_ide();
 
 	soc_info->emac_pdata->phy_mask = DM646X_EVM_PHY_MASK;
 	soc_info->emac_pdata->mdio_max_freq = DM646X_EVM_MDIO_FREQUENCY;
-}
-
-static __init void davinci_dm646x_evm_irq_init(void)
-{
-	davinci_irq_init();
 }
 
 #define DM646X_EVM_REF_FREQ		27000000
@@ -763,7 +755,7 @@ MACHINE_START(DAVINCI_DM6467_EVM, "DaVinci DM646x EVM")
 	.io_pg_offst  = (__IO_ADDRESS(IO_PHYS) >> 18) & 0xfffc,
 	.boot_params  = (0x80000100),
 	.map_io       = davinci_map_io,
-	.init_irq     = davinci_dm646x_evm_irq_init,
+	.init_irq     = davinci_irq_init,
 	.timer        = &davinci_timer,
 	.init_machine = evm_init,
 MACHINE_END
@@ -773,7 +765,7 @@ MACHINE_START(DAVINCI_DM6467TEVM, "DaVinci DM6467T EVM")
 	.io_pg_offst  = (__IO_ADDRESS(IO_PHYS) >> 18) & 0xfffc,
 	.boot_params  = (0x80000100),
 	.map_io       = davinci_map_io,
-	.init_irq     = davinci_dm646x_evm_irq_init,
+	.init_irq     = davinci_irq_init,
 	.timer        = &davinci_timer,
 	.init_machine = evm_init,
 MACHINE_END

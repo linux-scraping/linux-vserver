@@ -42,34 +42,13 @@
 #include <linux/bitops.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
+#include "usb-wwan.h"
 
 /* Function prototypes */
 static int  option_probe(struct usb_serial *serial,
 			const struct usb_device_id *id);
-static int  option_open(struct tty_struct *tty, struct usb_serial_port *port);
-static void option_close(struct usb_serial_port *port);
-static void option_dtr_rts(struct usb_serial_port *port, int on);
-
-static int  option_startup(struct usb_serial *serial);
-static void option_disconnect(struct usb_serial *serial);
-static void option_release(struct usb_serial *serial);
-static int  option_write_room(struct tty_struct *tty);
-
+static int option_send_setup(struct usb_serial_port *port);
 static void option_instat_callback(struct urb *urb);
-
-static int option_write(struct tty_struct *tty, struct usb_serial_port *port,
-			const unsigned char *buf, int count);
-static int  option_chars_in_buffer(struct tty_struct *tty);
-static void option_set_termios(struct tty_struct *tty,
-			struct usb_serial_port *port, struct ktermios *old);
-static int  option_tiocmget(struct tty_struct *tty, struct file *file);
-static int  option_tiocmset(struct tty_struct *tty, struct file *file,
-				unsigned int set, unsigned int clear);
-static int  option_send_setup(struct usb_serial_port *port);
-#ifdef CONFIG_PM
-static int  option_suspend(struct usb_serial *serial, pm_message_t message);
-static int  option_resume(struct usb_serial *serial);
-#endif
 
 /* Vendor and product IDs */
 #define OPTION_VENDOR_ID			0x0AF0
@@ -166,10 +145,7 @@ static int  option_resume(struct usb_serial *serial);
 #define HUAWEI_PRODUCT_E143D			0x143D
 #define HUAWEI_PRODUCT_E143E			0x143E
 #define HUAWEI_PRODUCT_E143F			0x143F
-#define HUAWEI_PRODUCT_K4505			0x1464
-#define HUAWEI_PRODUCT_K3765			0x1465
 #define HUAWEI_PRODUCT_E14AC			0x14AC
-#define HUAWEI_PRODUCT_ETS1220			0x1803
 
 #define QUANTA_VENDOR_ID			0x0408
 #define QUANTA_PRODUCT_Q101			0xEA02
@@ -383,34 +359,11 @@ static int  option_resume(struct usb_serial *serial);
 #define HAIER_VENDOR_ID				0x201e
 #define HAIER_PRODUCT_CE100			0x2009
 
-/* Cinterion (formerly Siemens) products */
-#define SIEMENS_VENDOR_ID				0x0681
-#define CINTERION_VENDOR_ID				0x1e2d
-#define CINTERION_PRODUCT_HC25_MDM		0x0047
-#define CINTERION_PRODUCT_HC25_MDMNET	0x0040
-#define CINTERION_PRODUCT_HC28_MDM		0x004C
-#define CINTERION_PRODUCT_HC28_MDMNET	0x004A /* same for HC28J */
-#define CINTERION_PRODUCT_EU3_E			0x0051
-#define CINTERION_PRODUCT_EU3_P			0x0052
-#define CINTERION_PRODUCT_PH8			0x0053
+#define CINTERION_VENDOR_ID			0x0681
 
 /* Olivetti products */
 #define OLIVETTI_VENDOR_ID			0x0b3c
 #define OLIVETTI_PRODUCT_OLICARD100		0xc000
-
-/* Celot products */
-#define CELOT_VENDOR_ID				0x211f
-#define CELOT_PRODUCT_CT680M			0x6801
-
-/* ONDA Communication vendor id */
-#define ONDA_VENDOR_ID       0x1ee8
-
-/* ONDA MT825UP HSDPA 14.2 modem */
-#define ONDA_MT825UP         0x000b
-
-/* Samsung products */
-#define SAMSUNG_VENDOR_ID                       0x04e8
-#define SAMSUNG_PRODUCT_GT_B3730                0x6889
 
 /* some devices interfaces need special handling due to a number of reasons */
 enum option_blacklist_reason {
@@ -529,10 +482,7 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E143D, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E143E, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E143F, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_K4505, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_K3765, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_ETS1220, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E14AC, 0xff, 0xff, 0xff) },
+	{ USB_DEVICE(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E14AC) },
 	{ USB_DEVICE(AMOI_VENDOR_ID, AMOI_PRODUCT_9508) },
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, NOVATELWIRELESS_PRODUCT_V640) }, /* Novatel Merlin V640/XV620 */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, NOVATELWIRELESS_PRODUCT_V620) }, /* Novatel Merlin V620/S620 */
@@ -612,7 +562,6 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(KYOCERA_VENDOR_ID, KYOCERA_PRODUCT_KPC680) },
 	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x6000)}, /* ZTE AC8700 */
 	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x6613)}, /* Onda H600/ZTE MF330 */
-	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x9000)}, /* SIMCom SIM5218 */
 	{ USB_DEVICE(CMOTECH_VENDOR_ID, CMOTECH_PRODUCT_6280) }, /* BP3-USB & BP3-EXT HSDPA */
 	{ USB_DEVICE(CMOTECH_VENDOR_ID, CMOTECH_PRODUCT_6008) },
 	{ USB_DEVICE(TELIT_VENDOR_ID, TELIT_PRODUCT_UC864E) },
@@ -636,7 +585,6 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0011, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0012, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0013, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0014, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_MF628, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0016, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0017, 0xff, 0xff, 0xff) },
@@ -648,52 +596,38 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0023, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0024, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0025, 0xff, 0xff, 0xff) },
-	/* { USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0026, 0xff, 0xff, 0xff) }, */
+	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0026, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0028, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0029, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0030, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_MF626, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0032, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0033, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0034, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0037, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0038, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0039, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0040, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0042, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0043, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0044, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0048, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0049, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0050, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0051, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0052, 0xff, 0xff, 0xff) },
-	/* { USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0053, 0xff, 0xff, 0xff) }, */
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0054, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0055, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0056, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0057, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0058, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0059, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0061, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0062, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0063, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0064, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0065, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0066, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0067, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0069, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0070, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0076, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0077, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0078, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0079, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0082, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0083, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0086, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0087, 0xff, 0xff, 0xff) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2002, 0xff, 0xff, 0xff) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2003, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0104, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0105, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0106, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0108, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0113, 0xff, 0xff, 0xff) },
@@ -909,8 +843,6 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0073, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0130, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x0141, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2002, 0xff, 0xff, 0xff) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0x2003, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_CDMA_TECH, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC8710, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_AC2726, 0xff, 0xff, 0xff) },
@@ -953,21 +885,10 @@ static const struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(PIRELLI_VENDOR_ID, PIRELLI_PRODUCT_100F) },
 	{ USB_DEVICE(PIRELLI_VENDOR_ID, PIRELLI_PRODUCT_1011)},
 	{ USB_DEVICE(PIRELLI_VENDOR_ID, PIRELLI_PRODUCT_1012)},
-	/* Cinterion */
-	{ USB_DEVICE(CINTERION_VENDOR_ID, CINTERION_PRODUCT_EU3_E) },
-	{ USB_DEVICE(CINTERION_VENDOR_ID, CINTERION_PRODUCT_EU3_P) },
-	{ USB_DEVICE(CINTERION_VENDOR_ID, CINTERION_PRODUCT_PH8) },
-	{ USB_DEVICE(CINTERION_VENDOR_ID, CINTERION_PRODUCT_HC28_MDM) },
-	{ USB_DEVICE(CINTERION_VENDOR_ID, CINTERION_PRODUCT_HC28_MDMNET) },
-	{ USB_DEVICE(SIEMENS_VENDOR_ID, CINTERION_PRODUCT_HC25_MDM) },
-	{ USB_DEVICE(SIEMENS_VENDOR_ID, CINTERION_PRODUCT_HC25_MDMNET) },
-	{ USB_DEVICE(SIEMENS_VENDOR_ID, CINTERION_PRODUCT_HC28_MDM) }, /* HC28 enumerates with Siemens or Cinterion VID depending on FW revision */
-	{ USB_DEVICE(SIEMENS_VENDOR_ID, CINTERION_PRODUCT_HC28_MDMNET) },
+
+	{ USB_DEVICE(CINTERION_VENDOR_ID, 0x0047) },
 
 	{ USB_DEVICE(OLIVETTI_VENDOR_ID, OLIVETTI_PRODUCT_OLICARD100) },
-	{ USB_DEVICE(CELOT_VENDOR_ID, CELOT_PRODUCT_CT680M) }, /* CT-650 CDMA 450 1xEVDO modem */
-	{ USB_DEVICE(ONDA_VENDOR_ID, ONDA_MT825UP) }, /* ONDA MT825UP modem */
-	{ USB_DEVICE_AND_INTERFACE_INFO(SAMSUNG_VENDOR_ID, SAMSUNG_PRODUCT_GT_B3730, USB_CLASS_CDC_DATA, 0x00, 0x00) }, /* Samsung GT-B3730/GT-B3710 LTE USB modem.*/
 	{ } /* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, option_ids);
@@ -999,22 +920,22 @@ static struct usb_serial_driver option_1port_device = {
 	.id_table          = option_ids,
 	.num_ports         = 1,
 	.probe             = option_probe,
-	.open              = option_open,
-	.close             = option_close,
-	.dtr_rts	   = option_dtr_rts,
-	.write             = option_write,
-	.write_room        = option_write_room,
-	.chars_in_buffer   = option_chars_in_buffer,
-	.set_termios       = option_set_termios,
-	.tiocmget          = option_tiocmget,
-	.tiocmset          = option_tiocmset,
-	.attach            = option_startup,
-	.disconnect        = option_disconnect,
-	.release           = option_release,
+	.open              = usb_wwan_open,
+	.close             = usb_wwan_close,
+	.dtr_rts	   = usb_wwan_dtr_rts,
+	.write             = usb_wwan_write,
+	.write_room        = usb_wwan_write_room,
+	.chars_in_buffer   = usb_wwan_chars_in_buffer,
+	.set_termios       = usb_wwan_set_termios,
+	.tiocmget          = usb_wwan_tiocmget,
+	.tiocmset          = usb_wwan_tiocmset,
+	.attach            = usb_wwan_startup,
+	.disconnect        = usb_wwan_disconnect,
+	.release           = usb_wwan_release,
 	.read_int_callback = option_instat_callback,
 #ifdef CONFIG_PM
-	.suspend           = option_suspend,
-	.resume            = option_resume,
+	.suspend           = usb_wwan_suspend,
+	.resume            = usb_wwan_resume,
 #endif
 };
 
@@ -1026,13 +947,6 @@ static int debug;
 #define N_OUT_URB 4
 #define IN_BUFLEN 4096
 #define OUT_BUFLEN 4096
-
-struct option_intf_private {
-	spinlock_t susp_lock;
-	unsigned int suspended:1;
-	int in_flight;
-	struct option_blacklist_info *blacklist_info;
-};
 
 struct option_port_private {
 	/* Input endpoints and buffer for this port */
@@ -1090,8 +1004,7 @@ module_exit(option_exit);
 static int option_probe(struct usb_serial *serial,
 			const struct usb_device_id *id)
 {
-	struct option_intf_private *data;
-
+	struct usb_wwan_intf_private *data;
 	/* D-Link DWM 652 still exposes CD-Rom emulation interface in modem mode */
 	if (serial->dev->descriptor.idVendor == DLINK_VENDOR_ID &&
 		serial->dev->descriptor.idProduct == DLINK_PRODUCT_DWM_652 &&
@@ -1104,18 +1017,13 @@ static int option_probe(struct usb_serial *serial,
 		serial->interface->cur_altsetting->desc.bInterfaceClass != 0xff)
 		return -ENODEV;
 
-	/* Don't bind network interfaces on Huawei K3765 & K4505 */
-	if (serial->dev->descriptor.idVendor == HUAWEI_VENDOR_ID &&
-		(serial->dev->descriptor.idProduct == HUAWEI_PRODUCT_K3765 ||
-			serial->dev->descriptor.idProduct == HUAWEI_PRODUCT_K4505) &&
-		serial->interface->cur_altsetting->desc.bInterfaceNumber == 1)
-		return -ENODEV;
+	data = serial->private = kzalloc(sizeof(struct usb_wwan_intf_private), GFP_KERNEL);
 
-	data = serial->private = kzalloc(sizeof(struct option_intf_private), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
+	data->send_setup = option_send_setup;
 	spin_lock_init(&data->susp_lock);
-	data->blacklist_info = (struct option_blacklist_info*) id->driver_info;
+	data->private = (void *)id->driver_info;
 	return 0;
 }
 
@@ -1134,194 +1042,6 @@ static enum option_blacklist_reason is_blacklisted(const u8 ifnum,
 		}
 	}
 	return OPTION_BLACKLIST_NONE;
-}
-
-static void option_set_termios(struct tty_struct *tty,
-		struct usb_serial_port *port, struct ktermios *old_termios)
-{
-	dbg("%s", __func__);
-	/* Doesn't support option setting */
-	tty_termios_copy_hw(tty->termios, old_termios);
-	option_send_setup(port);
-}
-
-static int option_tiocmget(struct tty_struct *tty, struct file *file)
-{
-	struct usb_serial_port *port = tty->driver_data;
-	unsigned int value;
-	struct option_port_private *portdata;
-
-	portdata = usb_get_serial_port_data(port);
-
-	value = ((portdata->rts_state) ? TIOCM_RTS : 0) |
-		((portdata->dtr_state) ? TIOCM_DTR : 0) |
-		((portdata->cts_state) ? TIOCM_CTS : 0) |
-		((portdata->dsr_state) ? TIOCM_DSR : 0) |
-		((portdata->dcd_state) ? TIOCM_CAR : 0) |
-		((portdata->ri_state) ? TIOCM_RNG : 0);
-
-	return value;
-}
-
-static int option_tiocmset(struct tty_struct *tty, struct file *file,
-			unsigned int set, unsigned int clear)
-{
-	struct usb_serial_port *port = tty->driver_data;
-	struct option_port_private *portdata;
-
-	portdata = usb_get_serial_port_data(port);
-
-	/* FIXME: what locks portdata fields ? */
-	if (set & TIOCM_RTS)
-		portdata->rts_state = 1;
-	if (set & TIOCM_DTR)
-		portdata->dtr_state = 1;
-
-	if (clear & TIOCM_RTS)
-		portdata->rts_state = 0;
-	if (clear & TIOCM_DTR)
-		portdata->dtr_state = 0;
-	return option_send_setup(port);
-}
-
-/* Write */
-static int option_write(struct tty_struct *tty, struct usb_serial_port *port,
-			const unsigned char *buf, int count)
-{
-	struct option_port_private *portdata;
-	struct option_intf_private *intfdata;
-	int i;
-	int left, todo;
-	struct urb *this_urb = NULL; /* spurious */
-	int err;
-	unsigned long flags;
-
-	portdata = usb_get_serial_port_data(port);
-	intfdata = port->serial->private;
-
-	dbg("%s: write (%d chars)", __func__, count);
-
-	i = 0;
-	left = count;
-	for (i = 0; left > 0 && i < N_OUT_URB; i++) {
-		todo = left;
-		if (todo > OUT_BUFLEN)
-			todo = OUT_BUFLEN;
-
-		this_urb = portdata->out_urbs[i];
-		if (test_and_set_bit(i, &portdata->out_busy)) {
-			if (time_before(jiffies,
-					portdata->tx_start_time[i] + 10 * HZ))
-				continue;
-			usb_unlink_urb(this_urb);
-			continue;
-		}
-		dbg("%s: endpoint %d buf %d", __func__,
-			usb_pipeendpoint(this_urb->pipe), i);
-
-		err = usb_autopm_get_interface_async(port->serial->interface);
-		if (err < 0)
-			break;
-
-		/* send the data */
-		memcpy(this_urb->transfer_buffer, buf, todo);
-		this_urb->transfer_buffer_length = todo;
-
-		spin_lock_irqsave(&intfdata->susp_lock, flags);
-		if (intfdata->suspended) {
-			usb_anchor_urb(this_urb, &portdata->delayed);
-			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
-		} else {
-			intfdata->in_flight++;
-			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
-			err = usb_submit_urb(this_urb, GFP_ATOMIC);
-			if (err) {
-				dbg("usb_submit_urb %p (write bulk) failed "
-					"(%d)", this_urb, err);
-				clear_bit(i, &portdata->out_busy);
-				spin_lock_irqsave(&intfdata->susp_lock, flags);
-				intfdata->in_flight--;
-				spin_unlock_irqrestore(&intfdata->susp_lock, flags);
-				continue;
-			}
-		}
-
-		portdata->tx_start_time[i] = jiffies;
-		buf += todo;
-		left -= todo;
-	}
-
-	count -= left;
-	dbg("%s: wrote (did %d)", __func__, count);
-	return count;
-}
-
-static void option_indat_callback(struct urb *urb)
-{
-	int err;
-	int endpoint;
-	struct usb_serial_port *port;
-	struct tty_struct *tty;
-	unsigned char *data = urb->transfer_buffer;
-	int status = urb->status;
-
-	dbg("%s: %p", __func__, urb);
-
-	endpoint = usb_pipeendpoint(urb->pipe);
-	port =  urb->context;
-
-	if (status) {
-		dbg("%s: nonzero status: %d on endpoint %02x.",
-		    __func__, status, endpoint);
-	} else {
-		tty = tty_port_tty_get(&port->port);
-		if (urb->actual_length) {
-			tty_insert_flip_string(tty, data, urb->actual_length);
-			tty_flip_buffer_push(tty);
-		} else 
-			dbg("%s: empty read urb received", __func__);
-		tty_kref_put(tty);
-
-		/* Resubmit urb so we continue receiving */
-		if (status != -ESHUTDOWN) {
-			err = usb_submit_urb(urb, GFP_ATOMIC);
-			if (err && err != -EPERM)
-				printk(KERN_ERR "%s: resubmit read urb failed. "
-					"(%d)", __func__, err);
-			else
-				usb_mark_last_busy(port->serial->dev);
-		}
-
-	}
-	return;
-}
-
-static void option_outdat_callback(struct urb *urb)
-{
-	struct usb_serial_port *port;
-	struct option_port_private *portdata;
-	struct option_intf_private *intfdata;
-	int i;
-
-	dbg("%s", __func__);
-
-	port =  urb->context;
-	intfdata = port->serial->private;
-
-	usb_serial_port_softint(port);
-	usb_autopm_put_interface_async(port->serial->interface);
-	portdata = usb_get_serial_port_data(port);
-	spin_lock(&intfdata->susp_lock);
-	intfdata->in_flight--;
-	spin_unlock(&intfdata->susp_lock);
-
-	for (i = 0; i < N_OUT_URB; ++i) {
-		if (portdata->out_urbs[i] == urb) {
-			smp_mb__before_clear_bit();
-			clear_bit(i, &portdata->out_busy);
-			break;
-		}
-	}
 }
 
 static void option_instat_callback(struct urb *urb)
@@ -1380,183 +1100,6 @@ static void option_instat_callback(struct urb *urb)
 	}
 }
 
-static int option_write_room(struct tty_struct *tty)
-{
-	struct usb_serial_port *port = tty->driver_data;
-	struct option_port_private *portdata;
-	int i;
-	int data_len = 0;
-	struct urb *this_urb;
-
-	portdata = usb_get_serial_port_data(port);
-
-	for (i = 0; i < N_OUT_URB; i++) {
-		this_urb = portdata->out_urbs[i];
-		if (this_urb && !test_bit(i, &portdata->out_busy))
-			data_len += OUT_BUFLEN;
-	}
-
-	dbg("%s: %d", __func__, data_len);
-	return data_len;
-}
-
-static int option_chars_in_buffer(struct tty_struct *tty)
-{
-	struct usb_serial_port *port = tty->driver_data;
-	struct option_port_private *portdata;
-	int i;
-	int data_len = 0;
-	struct urb *this_urb;
-
-	portdata = usb_get_serial_port_data(port);
-
-	for (i = 0; i < N_OUT_URB; i++) {
-		this_urb = portdata->out_urbs[i];
-		/* FIXME: This locking is insufficient as this_urb may
-		   go unused during the test */
-		if (this_urb && test_bit(i, &portdata->out_busy))
-			data_len += this_urb->transfer_buffer_length;
-	}
-	dbg("%s: %d", __func__, data_len);
-	return data_len;
-}
-
-static int option_open(struct tty_struct *tty, struct usb_serial_port *port)
-{
-	struct option_port_private *portdata;
-	struct option_intf_private *intfdata;
-	struct usb_serial *serial = port->serial;
-	int i, err;
-	struct urb *urb;
-
-	portdata = usb_get_serial_port_data(port);
-	intfdata = serial->private;
-
-	dbg("%s", __func__);
-
-	/* Start reading from the IN endpoint */
-	for (i = 0; i < N_IN_URB; i++) {
-		urb = portdata->in_urbs[i];
-		if (!urb)
-			continue;
-		err = usb_submit_urb(urb, GFP_KERNEL);
-		if (err) {
-			dbg("%s: submit urb %d failed (%d) %d",
-				__func__, i, err,
-				urb->transfer_buffer_length);
-		}
-	}
-
-	option_send_setup(port);
-
-	serial->interface->needs_remote_wakeup = 1;
-	spin_lock_irq(&intfdata->susp_lock);
-	portdata->opened = 1;
-	spin_unlock_irq(&intfdata->susp_lock);
-	usb_autopm_put_interface(serial->interface);
-
-	return 0;
-}
-
-static void option_dtr_rts(struct usb_serial_port *port, int on)
-{
-	struct usb_serial *serial = port->serial;
-	struct option_port_private *portdata;
-
-	dbg("%s", __func__);
-	portdata = usb_get_serial_port_data(port);
-	mutex_lock(&serial->disc_mutex);
-	portdata->rts_state = on;
-	portdata->dtr_state = on;
-	if (serial->dev)
-		option_send_setup(port);
-	mutex_unlock(&serial->disc_mutex);
-}
-
-
-static void option_close(struct usb_serial_port *port)
-{
-	int i;
-	struct usb_serial *serial = port->serial;
-	struct option_port_private *portdata;
-	struct option_intf_private *intfdata = port->serial->private;
-
-	dbg("%s", __func__);
-	portdata = usb_get_serial_port_data(port);
-
-	if (serial->dev) {
-		/* Stop reading/writing urbs */
-		spin_lock_irq(&intfdata->susp_lock);
-		portdata->opened = 0;
-		spin_unlock_irq(&intfdata->susp_lock);
-
-		for (i = 0; i < N_IN_URB; i++)
-			usb_kill_urb(portdata->in_urbs[i]);
-		for (i = 0; i < N_OUT_URB; i++)
-			usb_kill_urb(portdata->out_urbs[i]);
-		usb_autopm_get_interface(serial->interface);
-		serial->interface->needs_remote_wakeup = 0;
-	}
-}
-
-/* Helper functions used by option_setup_urbs */
-static struct urb *option_setup_urb(struct usb_serial *serial, int endpoint,
-		int dir, void *ctx, char *buf, int len,
-		void (*callback)(struct urb *))
-{
-	struct urb *urb;
-
-	if (endpoint == -1)
-		return NULL;		/* endpoint not needed */
-
-	urb = usb_alloc_urb(0, GFP_KERNEL);		/* No ISO */
-	if (urb == NULL) {
-		dbg("%s: alloc for endpoint %d failed.", __func__, endpoint);
-		return NULL;
-	}
-
-		/* Fill URB using supplied data. */
-	usb_fill_bulk_urb(urb, serial->dev,
-		      usb_sndbulkpipe(serial->dev, endpoint) | dir,
-		      buf, len, callback, ctx);
-
-	return urb;
-}
-
-/* Setup urbs */
-static void option_setup_urbs(struct usb_serial *serial)
-{
-	int i, j;
-	struct usb_serial_port *port;
-	struct option_port_private *portdata;
-
-	dbg("%s", __func__);
-
-	for (i = 0; i < serial->num_ports; i++) {
-		port = serial->port[i];
-		portdata = usb_get_serial_port_data(port);
-
-		/* Do indat endpoints first */
-		for (j = 0; j < N_IN_URB; ++j) {
-			portdata->in_urbs[j] = option_setup_urb(serial,
-					port->bulk_in_endpointAddress,
-					USB_DIR_IN, port,
-					portdata->in_buffer[j],
-					IN_BUFLEN, option_indat_callback);
-		}
-
-		/* outdat endpoints */
-		for (j = 0; j < N_OUT_URB; ++j) {
-			portdata->out_urbs[j] = option_setup_urb(serial,
-					port->bulk_out_endpointAddress,
-					USB_DIR_OUT, port,
-					portdata->out_buffer[j],
-					OUT_BUFLEN, option_outdat_callback);
-		}
-	}
-}
-
-
 /** send RTS/DTR state to the port.
  *
  * This is exactly the same as SET_CONTROL_LINE_STATE from the PSTN
@@ -1565,15 +1108,16 @@ static void option_setup_urbs(struct usb_serial *serial)
 static int option_send_setup(struct usb_serial_port *port)
 {
 	struct usb_serial *serial = port->serial;
-	struct option_intf_private *intfdata =
-		(struct option_intf_private *) serial->private;
+	struct usb_wwan_intf_private *intfdata =
+		(struct usb_wwan_intf_private *) serial->private;
 	struct option_port_private *portdata;
 	int ifNum = serial->interface->cur_altsetting->desc.bInterfaceNumber;
 	int val = 0;
 	dbg("%s", __func__);
 
-	if (is_blacklisted(ifNum, intfdata->blacklist_info) ==
-						OPTION_BLACKLIST_SENDSETUP) {
+	if (is_blacklisted(ifNum,
+			   (struct option_blacklist_info *) intfdata->private)
+	    == OPTION_BLACKLIST_SENDSETUP) {
 		dbg("No send_setup on blacklisted interface #%d\n", ifNum);
 		return -EIO;
 	}
@@ -1589,224 +1133,6 @@ static int option_send_setup(struct usb_serial_port *port)
 		usb_rcvctrlpipe(serial->dev, 0),
 		0x22, 0x21, val, ifNum, NULL, 0, USB_CTRL_SET_TIMEOUT);
 }
-
-static int option_startup(struct usb_serial *serial)
-{
-	int i, j, err;
-	struct usb_serial_port *port;
-	struct option_port_private *portdata;
-	u8 *buffer;
-
-	dbg("%s", __func__);
-
-	/* Now setup per port private data */
-	for (i = 0; i < serial->num_ports; i++) {
-		port = serial->port[i];
-		portdata = kzalloc(sizeof(*portdata), GFP_KERNEL);
-		if (!portdata) {
-			dbg("%s: kmalloc for option_port_private (%d) failed!.",
-					__func__, i);
-			return 1;
-		}
-		init_usb_anchor(&portdata->delayed);
-
-		for (j = 0; j < N_IN_URB; j++) {
-			buffer = (u8 *)__get_free_page(GFP_KERNEL);
-			if (!buffer)
-				goto bail_out_error;
-			portdata->in_buffer[j] = buffer;
-		}
-
-		for (j = 0; j < N_OUT_URB; j++) {
-			buffer = kmalloc(OUT_BUFLEN, GFP_KERNEL);
-			if (!buffer)
-				goto bail_out_error2;
-			portdata->out_buffer[j] = buffer;
-		}
-
-		usb_set_serial_port_data(port, portdata);
-
-		if (!port->interrupt_in_urb)
-			continue;
-		err = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
-		if (err)
-			dbg("%s: submit irq_in urb failed %d",
-				__func__, err);
-	}
-	option_setup_urbs(serial);
-	return 0;
-
-bail_out_error2:
-	for (j = 0; j < N_OUT_URB; j++)
-		kfree(portdata->out_buffer[j]);
-bail_out_error:
-	for (j = 0; j < N_IN_URB; j++)
-		if (portdata->in_buffer[j])
-			free_page((unsigned long)portdata->in_buffer[j]);
-	kfree(portdata);
-	return 1;
-}
-
-static void stop_read_write_urbs(struct usb_serial *serial)
-{
-	int i, j;
-	struct usb_serial_port *port;
-	struct option_port_private *portdata;
-
-	/* Stop reading/writing urbs */
-	for (i = 0; i < serial->num_ports; ++i) {
-		port = serial->port[i];
-		portdata = usb_get_serial_port_data(port);
-		for (j = 0; j < N_IN_URB; j++)
-			usb_kill_urb(portdata->in_urbs[j]);
-		for (j = 0; j < N_OUT_URB; j++)
-			usb_kill_urb(portdata->out_urbs[j]);
-	}
-}
-
-static void option_disconnect(struct usb_serial *serial)
-{
-	dbg("%s", __func__);
-
-	stop_read_write_urbs(serial);
-}
-
-static void option_release(struct usb_serial *serial)
-{
-	int i, j;
-	struct usb_serial_port *port;
-	struct option_port_private *portdata;
-
-	dbg("%s", __func__);
-
-	/* Now free them */
-	for (i = 0; i < serial->num_ports; ++i) {
-		port = serial->port[i];
-		portdata = usb_get_serial_port_data(port);
-
-		for (j = 0; j < N_IN_URB; j++) {
-			if (portdata->in_urbs[j]) {
-				usb_free_urb(portdata->in_urbs[j]);
-				free_page((unsigned long)
-					portdata->in_buffer[j]);
-				portdata->in_urbs[j] = NULL;
-			}
-		}
-		for (j = 0; j < N_OUT_URB; j++) {
-			if (portdata->out_urbs[j]) {
-				usb_free_urb(portdata->out_urbs[j]);
-				kfree(portdata->out_buffer[j]);
-				portdata->out_urbs[j] = NULL;
-			}
-		}
-	}
-
-	/* Now free per port private data */
-	for (i = 0; i < serial->num_ports; i++) {
-		port = serial->port[i];
-		kfree(usb_get_serial_port_data(port));
-	}
-}
-
-#ifdef CONFIG_PM
-static int option_suspend(struct usb_serial *serial, pm_message_t message)
-{
-	struct option_intf_private *intfdata = serial->private;
-	int b;
-
-	dbg("%s entered", __func__);
-
-	if (message.event & PM_EVENT_AUTO) {
-		spin_lock_irq(&intfdata->susp_lock);
-		b = intfdata->in_flight;
-		spin_unlock_irq(&intfdata->susp_lock);
-
-		if (b)
-			return -EBUSY;
-	}
-
-	spin_lock_irq(&intfdata->susp_lock);
-	intfdata->suspended = 1;
-	spin_unlock_irq(&intfdata->susp_lock);
-	stop_read_write_urbs(serial);
-
-	return 0;
-}
-
-static void play_delayed(struct usb_serial_port *port)
-{
-	struct option_intf_private *data;
-	struct option_port_private *portdata;
-	struct urb *urb;
-	int err;
-
-	portdata = usb_get_serial_port_data(port);
-	data = port->serial->private;
-	while ((urb = usb_get_from_anchor(&portdata->delayed))) {
-		err = usb_submit_urb(urb, GFP_ATOMIC);
-		if (!err)
-			data->in_flight++;
-	}
-}
-
-static int option_resume(struct usb_serial *serial)
-{
-	int i, j;
-	struct usb_serial_port *port;
-	struct option_intf_private *intfdata = serial->private;
-	struct option_port_private *portdata;
-	struct urb *urb;
-	int err = 0;
-
-	dbg("%s entered", __func__);
-	/* get the interrupt URBs resubmitted unconditionally */
-	for (i = 0; i < serial->num_ports; i++) {
-		port = serial->port[i];
-		if (!port->interrupt_in_urb) {
-			dbg("%s: No interrupt URB for port %d", __func__, i);
-			continue;
-		}
-		err = usb_submit_urb(port->interrupt_in_urb, GFP_NOIO);
-		dbg("Submitted interrupt URB for port %d (result %d)", i, err);
-		if (err < 0) {
-			err("%s: Error %d for interrupt URB of port%d",
-				 __func__, err, i);
-			goto err_out;
-		}
-	}
-
-	for (i = 0; i < serial->num_ports; i++) {
-		/* walk all ports */
-		port = serial->port[i];
-		portdata = usb_get_serial_port_data(port);
-
-		/* skip closed ports */
-		spin_lock_irq(&intfdata->susp_lock);
-		if (!portdata->opened) {
-			spin_unlock_irq(&intfdata->susp_lock);
-			continue;
-		}
-
-		for (j = 0; j < N_IN_URB; j++) {
-			urb = portdata->in_urbs[j];
-			err = usb_submit_urb(urb, GFP_ATOMIC);
-			if (err < 0) {
-				err("%s: Error %d for bulk URB %d",
-					 __func__, err, i);
-				spin_unlock_irq(&intfdata->susp_lock);
-				goto err_out;
-			}
-		}
-		play_delayed(port);
-		spin_unlock_irq(&intfdata->susp_lock);
-	}
-	spin_lock_irq(&intfdata->susp_lock);
-	intfdata->suspended = 0;
-	spin_unlock_irq(&intfdata->susp_lock);
-err_out:
-	return err;
-}
-#endif
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

@@ -27,6 +27,7 @@
 #include <linux/workqueue.h>
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/cache.h>
+#include <linux/smp_lock.h>
 
 static struct vfsmount *rpc_mount __read_mostly;
 static int rpc_mount_count;
@@ -47,7 +48,7 @@ static void rpc_purge_list(struct rpc_inode *rpci, struct list_head *head,
 		return;
 	do {
 		msg = list_entry(head->next, struct rpc_pipe_msg, list);
-		list_del_init(&msg->list);
+		list_del(&msg->list);
 		msg->errno = err;
 		destroy_msg(msg);
 	} while (!list_empty(head));
@@ -207,7 +208,7 @@ rpc_pipe_release(struct inode *inode, struct file *filp)
 	if (msg != NULL) {
 		spin_lock(&inode->i_lock);
 		msg->errno = -EAGAIN;
-		list_del_init(&msg->list);
+		list_del(&msg->list);
 		spin_unlock(&inode->i_lock);
 		rpci->ops->destroy_msg(msg);
 	}
@@ -267,7 +268,7 @@ rpc_pipe_read(struct file *filp, char __user *buf, size_t len, loff_t *offset)
 	if (res < 0 || msg->len == msg->copied) {
 		filp->private_data = NULL;
 		spin_lock(&inode->i_lock);
-		list_del_init(&msg->list);
+		list_del(&msg->list);
 		spin_unlock(&inode->i_lock);
 		rpci->ops->destroy_msg(msg);
 	}
@@ -309,8 +310,7 @@ rpc_pipe_poll(struct file *filp, struct poll_table_struct *wait)
 }
 
 static int
-rpc_pipe_ioctl(struct inode *ino, struct file *filp,
-		unsigned int cmd, unsigned long arg)
+rpc_pipe_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct rpc_inode *rpci = RPC_I(filp->f_path.dentry->d_inode);
 	int len;
@@ -331,13 +331,25 @@ rpc_pipe_ioctl(struct inode *ino, struct file *filp,
 	}
 }
 
+static long
+rpc_pipe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	long ret;
+
+	lock_kernel();
+	ret = rpc_pipe_ioctl_unlocked(filp, cmd, arg);
+	unlock_kernel();
+
+	return ret;
+}
+
 static const struct file_operations rpc_pipe_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.read		= rpc_pipe_read,
 	.write		= rpc_pipe_write,
 	.poll		= rpc_pipe_poll,
-	.ioctl		= rpc_pipe_ioctl,
+	.unlocked_ioctl	= rpc_pipe_ioctl,
 	.open		= rpc_pipe_open,
 	.release	= rpc_pipe_release,
 };

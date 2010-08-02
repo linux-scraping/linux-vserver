@@ -58,7 +58,14 @@ static void gfs2_init_gl_aspace_once(void *foo)
 	struct address_space *mapping = (struct address_space *)(gl + 1);
 
 	gfs2_init_glock_once(gl);
-	address_space_init_once(mapping);
+	memset(mapping, 0, sizeof(*mapping));
+	INIT_RADIX_TREE(&mapping->page_tree, GFP_ATOMIC);
+	spin_lock_init(&mapping->tree_lock);
+	spin_lock_init(&mapping->i_mmap_lock);
+	INIT_LIST_HEAD(&mapping->private_list);
+	spin_lock_init(&mapping->private_lock);
+	INIT_RAW_PRIO_TREE_ROOT(&mapping->i_mmap);
+	INIT_LIST_HEAD(&mapping->i_mmap_nonlinear);
 }
 
 /**
@@ -87,7 +94,7 @@ static int __init init_gfs2_fs(void)
 	if (!gfs2_glock_cachep)
 		goto fail;
 
-	gfs2_glock_aspace_cachep = kmem_cache_create("gfs2_glock (aspace)",
+	gfs2_glock_aspace_cachep = kmem_cache_create("gfs2_glock(aspace)",
 					sizeof(struct gfs2_glock) +
 					sizeof(struct address_space),
 					0, 0, gfs2_init_gl_aspace_once);

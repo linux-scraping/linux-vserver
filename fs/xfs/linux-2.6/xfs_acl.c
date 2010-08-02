@@ -39,11 +39,9 @@ xfs_acl_from_disk(struct xfs_acl *aclp)
 	struct posix_acl_entry *acl_e;
 	struct posix_acl *acl;
 	struct xfs_acl_entry *ace;
-	unsigned int count, i;
+	int count, i;
 
 	count = be32_to_cpu(aclp->acl_cnt);
-	if (count > XFS_ACL_MAX_ENTRIES)
-		return ERR_PTR(-EFSCORRUPTED);
 
 	acl = posix_acl_alloc(count, GFP_KERNEL);
 	if (!acl)
@@ -442,14 +440,14 @@ xfs_xattr_acl_set(struct dentry *dentry, const char *name,
 	return error;
 }
 
-struct xattr_handler xfs_xattr_acl_access_handler = {
+const struct xattr_handler xfs_xattr_acl_access_handler = {
 	.prefix	= POSIX_ACL_XATTR_ACCESS,
 	.flags	= ACL_TYPE_ACCESS,
 	.get	= xfs_xattr_acl_get,
 	.set	= xfs_xattr_acl_set,
 };
 
-struct xattr_handler xfs_xattr_acl_default_handler = {
+const struct xattr_handler xfs_xattr_acl_default_handler = {
 	.prefix	= POSIX_ACL_XATTR_DEFAULT,
 	.flags	= ACL_TYPE_DEFAULT,
 	.get	= xfs_xattr_acl_get,

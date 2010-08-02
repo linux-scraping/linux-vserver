@@ -19,7 +19,6 @@ static irqreturn_t line_interrupt(int irq, void *data)
 {
 	struct chan *chan = data;
 	struct line *line = chan->line;
-	struct tty_struct *tty;
 
 	if (line)
 		chan_interrupt(&line->chan_list, &line->task, line->tty, irq);
@@ -728,9 +727,6 @@ struct winch {
 
 static void free_winch(struct winch *winch, int free_irq_ok)
 {
-	if (free_irq_ok)
-		free_irq(WINCH_IRQ, winch);
-
 	list_del(&winch->list);
 
 	if (winch->pid != -1)
@@ -739,6 +735,8 @@ static void free_winch(struct winch *winch, int free_irq_ok)
 		os_close_file(winch->fd);
 	if (winch->stack != 0)
 		free_stack(winch->stack, 0);
+	if (free_irq_ok)
+		free_irq(WINCH_IRQ, winch);
 	kfree(winch);
 }
 

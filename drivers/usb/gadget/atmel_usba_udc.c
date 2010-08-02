@@ -48,10 +48,9 @@ static int queue_dbg_open(struct inode *inode, struct file *file)
 
 	spin_lock_irq(&ep->udc->lock);
 	list_for_each_entry(req, &ep->queue, queue) {
-		req_copy = kmalloc(sizeof(*req_copy), GFP_ATOMIC);
+		req_copy = kmemdup(req, sizeof(*req_copy), GFP_ATOMIC);
 		if (!req_copy)
 			goto fail;
-		memcpy(req_copy, req, sizeof(*req_copy));
 		list_add_tail(&req_copy->queue, queue_data);
 	}
 	spin_unlock_irq(&ep->udc->lock);
@@ -2015,9 +2014,6 @@ static int __init usba_udc_probe(struct platform_device *pdev)
 			} else {
 				disable_irq(gpio_to_irq(udc->vbus_pin));
 			}
-		} else {
-			/* gpio_request fail so use -EINVAL for gpio_is_valid */
-			udc->vbus_pin = -EINVAL;
 		}
 	}
 

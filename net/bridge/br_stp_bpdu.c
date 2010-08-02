@@ -50,7 +50,7 @@ static void br_send_bpdu(struct net_bridge_port *p,
 
 	llc_mac_hdr_init(skb, p->dev->dev_addr, p->br->group_addr);
 
-	NF_HOOK(PF_BRIDGE, NF_BR_LOCAL_OUT, skb, NULL, skb->dev,
+	NF_HOOK(NFPROTO_BRIDGE, NF_BR_LOCAL_OUT, skb, NULL, skb->dev,
 		dev_queue_xmit);
 }
 
@@ -131,7 +131,7 @@ void br_send_tcn_bpdu(struct net_bridge_port *p)
 /*
  * Called from llc.
  *
- * NO locks, but rcu_read_lock
+ * NO locks, but rcu_read_lock (preempt_disabled)
  */
 void br_stp_rcv(const struct stp_proto *proto, struct sk_buff *skb,
 		struct net_device *dev)

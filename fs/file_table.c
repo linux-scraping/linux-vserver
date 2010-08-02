@@ -125,13 +125,13 @@ struct file *get_empty_filp(void)
 		goto fail;
 
 	percpu_counter_inc(&nr_files);
-	f->f_cred = get_cred(cred);
 	if (security_file_alloc(f))
 		goto fail_sec;
 
 	INIT_LIST_HEAD(&f->f_u.fu_list);
 	atomic_long_set(&f->f_count, 1);
 	rwlock_init(&f->f_owner.lock);
+	f->f_cred = get_cred(cred);
 	spin_lock_init(&f->f_lock);
 	eventpoll_init_file(f);
 	/* f->f_version: 0 */
@@ -198,14 +198,6 @@ struct file *alloc_file(struct path *path, fmode_t mode,
 }
 EXPORT_SYMBOL(alloc_file);
 
-void fput(struct file *file)
-{
-	if (atomic_long_dec_and_test(&file->f_count))
-		__fput(file);
-}
-
-EXPORT_SYMBOL(fput);
-
 /**
  * drop_file_write_access - give up ability to write to a file
  * @file: the file to which we will stop writing
@@ -231,10 +223,9 @@ void drop_file_write_access(struct file *file)
 }
 EXPORT_SYMBOL_GPL(drop_file_write_access);
 
-/* __fput is called from task context when aio completion releases the last
- * last use of a struct file *.  Do not use otherwise.
+/* the real guts of fput() - releasing the last reference to file
  */
-void __fput(struct file *file)
+static void __fput(struct file *file)
 {
 	struct dentry *dentry = file->f_path.dentry;
 	struct vfsmount *mnt = file->f_path.mnt;
@@ -273,6 +264,14 @@ void __fput(struct file *file)
 	dput(dentry);
 	mntput(mnt);
 }
+
+void fput(struct file *file)
+{
+	if (atomic_long_dec_and_test(&file->f_count))
+		__fput(file);
+}
+
+EXPORT_SYMBOL(fput);
 
 struct file *fget(unsigned int fd)
 {

@@ -311,7 +311,7 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 	u32			temp;
 	u32			power_okay;
 	int			i;
-	unsigned long		resume_needed = 0;
+	u8			resume_needed = 0;
 
 	if (time_before (jiffies, ehci->next_statechange))
 		msleep(5);
@@ -384,7 +384,7 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 		if (test_bit(i, &ehci->bus_suspended) &&
 				(temp & PORT_SUSPEND)) {
 			temp |= PORT_RESUME;
-			set_bit(i, &resume_needed);
+			resume_needed = 1;
 		}
 		ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
 	}
@@ -399,7 +399,8 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 	i = HCS_N_PORTS (ehci->hcs_params);
 	while (i--) {
 		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
-		if (test_bit(i, &resume_needed)) {
+		if (test_bit(i, &ehci->bus_suspended) &&
+				(temp & PORT_SUSPEND)) {
 			temp &= ~(PORT_RWC_BITS | PORT_RESUME);
 			ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
 			ehci_vdbg (ehci, "resumed port %d\n", i + 1);
@@ -743,7 +744,7 @@ static int ehci_hub_control (
 		 * Even if OWNER is set, so the port is owned by the
 		 * companion controller, khubd needs to be able to clear
 		 * the port-change status bits (especially
-		 * USB_PORT_FEAT_C_CONNECTION).
+		 * USB_PORT_STAT_C_CONNECTION).
 		 */
 
 		switch (wValue) {
@@ -822,12 +823,12 @@ static int ehci_hub_control (
 
 		// wPortChange bits
 		if (temp & PORT_CSC)
-			status |= 1 << USB_PORT_FEAT_C_CONNECTION;
+			status |= USB_PORT_STAT_C_CONNECTION << 16;
 		if (temp & PORT_PEC)
-			status |= 1 << USB_PORT_FEAT_C_ENABLE;
+			status |= USB_PORT_STAT_C_ENABLE << 16;
 
 		if ((temp & PORT_OCC) && !ignore_oc){
-			status |= 1 << USB_PORT_FEAT_C_OVER_CURRENT;
+			status |= USB_PORT_STAT_C_OVERCURRENT << 16;
 
 			/*
 			 * Hubs should disable port power on over-current.
@@ -836,11 +837,10 @@ static int ehci_hub_control (
 			 * power switching; they're allowed to just limit the
 			 * current.  khubd will turn the power back on.
 			 */
-			if ((temp & PORT_OC) && HCS_PPC(ehci->hcs_params)) {
+			if (HCS_PPC (ehci->hcs_params)){
 				ehci_writel(ehci,
 					temp & ~(PORT_RWC_BITS | PORT_POWER),
 					status_reg);
-				temp = ehci_readl(ehci, status_reg);
 			}
 		}
 
@@ -885,7 +885,7 @@ static int ehci_hub_control (
 		if ((temp & PORT_RESET)
 				&& time_after_eq(jiffies,
 					ehci->reset_done[wIndex])) {
-			status |= 1 << USB_PORT_FEAT_C_RESET;
+			status |= USB_PORT_STAT_C_RESET << 16;
 			ehci->reset_done [wIndex] = 0;
 
 			/* force reset to complete */
@@ -927,7 +927,7 @@ static int ehci_hub_control (
 		 */
 
 		if (temp & PORT_CONNECT) {
-			status |= 1 << USB_PORT_FEAT_CONNECTION;
+			status |= USB_PORT_STAT_CONNECTION;
 			// status may be from integrated TT
 			if (ehci->has_hostpc) {
 				temp1 = ehci_readl(ehci, hostpc_reg);
@@ -936,11 +936,11 @@ static int ehci_hub_control (
 				status |= ehci_port_speed(ehci, temp);
 		}
 		if (temp & PORT_PE)
-			status |= 1 << USB_PORT_FEAT_ENABLE;
+			status |= USB_PORT_STAT_ENABLE;
 
 		/* maybe the port was unsuspended without our knowledge */
 		if (temp & (PORT_SUSPEND|PORT_RESUME)) {
-			status |= 1 << USB_PORT_FEAT_SUSPEND;
+			status |= USB_PORT_STAT_SUSPEND;
 		} else if (test_bit(wIndex, &ehci->suspended_ports)) {
 			clear_bit(wIndex, &ehci->suspended_ports);
 			ehci->reset_done[wIndex] = 0;
@@ -949,13 +949,13 @@ static int ehci_hub_control (
 		}
 
 		if (temp & PORT_OC)
-			status |= 1 << USB_PORT_FEAT_OVER_CURRENT;
+			status |= USB_PORT_STAT_OVERCURRENT;
 		if (temp & PORT_RESET)
-			status |= 1 << USB_PORT_FEAT_RESET;
+			status |= USB_PORT_STAT_RESET;
 		if (temp & PORT_POWER)
-			status |= 1 << USB_PORT_FEAT_POWER;
+			status |= USB_PORT_STAT_POWER;
 		if (test_bit(wIndex, &ehci->port_c_suspend))
-			status |= 1 << USB_PORT_FEAT_C_SUSPEND;
+			status |= USB_PORT_STAT_C_SUSPEND << 16;
 
 #ifndef	VERBOSE_DEBUG
 	if (status & ~0xffff)	/* only if wPortChange is interesting */

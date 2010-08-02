@@ -224,7 +224,7 @@ extern int sysctl_tcp_fack;
 extern int sysctl_tcp_reordering;
 extern int sysctl_tcp_ecn;
 extern int sysctl_tcp_dsack;
-extern long sysctl_tcp_mem[3];
+extern int sysctl_tcp_mem[3];
 extern int sysctl_tcp_wmem[3];
 extern int sysctl_tcp_rmem[3];
 extern int sysctl_tcp_app_win;
@@ -247,7 +247,7 @@ extern int sysctl_tcp_cookie_size;
 extern int sysctl_tcp_thin_linear_timeouts;
 extern int sysctl_tcp_thin_dupack;
 
-extern atomic_long_t tcp_memory_allocated;
+extern atomic_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern int tcp_memory_pressure;
 
@@ -268,21 +268,11 @@ static inline int between(__u32 seq1, __u32 seq2, __u32 seq3)
 	return seq3 - seq2 >= seq1 - seq2;
 }
 
-static inline bool tcp_too_many_orphans(struct sock *sk, int shift)
+static inline int tcp_too_many_orphans(struct sock *sk, int num)
 {
-	struct percpu_counter *ocp = sk->sk_prot->orphan_count;
-	int orphans = percpu_counter_read_positive(ocp);
-
-	if (orphans << shift > sysctl_tcp_max_orphans) {
-		orphans = percpu_counter_sum_positive(ocp);
-		if (orphans << shift > sysctl_tcp_max_orphans)
-			return true;
-	}
-
-	if (sk->sk_wmem_queued > SOCK_MIN_SNDBUF &&
-	    atomic_long_read(&tcp_memory_allocated) > sysctl_tcp_mem[2])
-		return true;
-	return false;
+	return (num > sysctl_tcp_max_orphans) ||
+		(sk->sk_wmem_queued > SOCK_MIN_SNDBUF &&
+		 atomic_read(&tcp_memory_allocated) > sysctl_tcp_mem[2]);
 }
 
 /* syncookies: remember time of last synqueue overflow */
@@ -304,6 +294,7 @@ extern struct proto tcp_prot;
 #define TCP_INC_STATS_BH(net, field)	SNMP_INC_STATS_BH((net)->mib.tcp_statistics, field)
 #define TCP_DEC_STATS(net, field)	SNMP_DEC_STATS((net)->mib.tcp_statistics, field)
 #define TCP_ADD_STATS_USER(net, field, val) SNMP_ADD_STATS_USER((net)->mib.tcp_statistics, field, val)
+#define TCP_ADD_STATS(net, field, val)	SNMP_ADD_STATS((net)->mib.tcp_statistics, field, val)
 
 extern void			tcp_v4_err(struct sk_buff *skb, u32);
 
@@ -433,7 +424,7 @@ extern u8			*tcp_parse_md5sig_option(struct tcphdr *th);
  *	TCP v4 functions exported for the inet6 API
  */
 
-extern void		       	tcp_v4_send_check(struct sock *sk, int len,
+extern void		       	tcp_v4_send_check(struct sock *sk,
 						  struct sk_buff *skb);
 
 extern int			tcp_v4_conn_request(struct sock *sk,
@@ -518,22 +509,8 @@ extern unsigned int tcp_current_mss(struct sock *sk);
 /* Bound MSS / TSO packet size with the half of the window */
 static inline int tcp_bound_to_half_wnd(struct tcp_sock *tp, int pktsize)
 {
-	int cutoff;
-
-	/* When peer uses tiny windows, there is no use in packetizing
-	 * to sub-MSS pieces for the sake of SWS or making sure there
-	 * are enough packets in the pipe for fast recovery.
-	 *
-	 * On the other hand, for extremely large MSS devices, handling
-	 * smaller than MSS windows in this way does make sense.
-	 */
-	if (tp->max_window >= 512)
-		cutoff = (tp->max_window >> 1);
-	else
-		cutoff = tp->max_window;
-
-	if (cutoff && pktsize > cutoff)
-		return max_t(int, cutoff, 68U - tp->tcp_header_len);
+	if (tp->max_window && pktsize > (tp->max_window >> 1))
+		return max(tp->max_window >> 1, 68U - tp->tcp_header_len);
 	else
 		return pktsize;
 }
@@ -963,7 +940,7 @@ static inline int tcp_prequeue(struct sock *sk, struct sk_buff *skb)
 
 		tp->ucopy.memory = 0;
 	} else if (skb_queue_len(&tp->ucopy.prequeue) == 1) {
-		wake_up_interruptible_sync_poll(sk->sk_sleep,
+		wake_up_interruptible_sync_poll(sk_sleep(sk),
 					   POLLIN | POLLRDNORM | POLLRDBAND);
 		if (!inet_csk_ack_scheduled(sk))
 			inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK,
@@ -1054,6 +1031,14 @@ static inline int keepalive_time_when(const struct tcp_sock *tp)
 static inline int keepalive_probes(const struct tcp_sock *tp)
 {
 	return tp->keepalive_probes ? : sysctl_tcp_keepalive_probes;
+}
+
+static inline u32 keepalive_time_elapsed(const struct tcp_sock *tp)
+{
+	const struct inet_connection_sock *icsk = &tp->inet_conn;
+
+	return min_t(u32, tcp_time_stamp - icsk->icsk_ack.lrcvtime,
+			  tcp_time_stamp - tp->rcv_tstamp);
 }
 
 static inline int tcp_fin_time(const struct sock *sk)

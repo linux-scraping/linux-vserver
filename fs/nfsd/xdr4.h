@@ -381,6 +381,10 @@ struct nfsd4_destroy_session {
 	struct nfs4_sessionid	sessionid;
 };
 
+struct nfsd4_reclaim_complete {
+	u32 rca_one_fs;
+};
+
 struct nfsd4_op {
 	int					opnum;
 	__be32					status;
@@ -421,6 +425,7 @@ struct nfsd4_op {
 		struct nfsd4_create_session	create_session;
 		struct nfsd4_destroy_session	destroy_session;
 		struct nfsd4_sequence		sequence;
+		struct nfsd4_reclaim_complete	reclaim_complete;
 	} u;
 	struct nfs4_replay *			replay;
 };
@@ -479,17 +484,18 @@ static inline bool nfsd4_not_cached(struct nfsd4_compoundres *resp)
 static inline void
 set_change_info(struct nfsd4_change_info *cinfo, struct svc_fh *fhp)
 {
-	BUG_ON(!fhp->fh_pre_saved);
-	cinfo->atomic = fhp->fh_post_saved;
+	BUG_ON(!fhp->fh_pre_saved || !fhp->fh_post_saved);
+	cinfo->atomic = 1;
 	cinfo->change_supported = IS_I_VERSION(fhp->fh_dentry->d_inode);
-
-	cinfo->before_change = fhp->fh_pre_change;
-	cinfo->after_change = fhp->fh_post_change;
-	cinfo->before_ctime_sec = fhp->fh_pre_ctime.tv_sec;
-	cinfo->before_ctime_nsec = fhp->fh_pre_ctime.tv_nsec;
-	cinfo->after_ctime_sec = fhp->fh_post_attr.ctime.tv_sec;
-	cinfo->after_ctime_nsec = fhp->fh_post_attr.ctime.tv_nsec;
-
+	if (cinfo->change_supported) {
+		cinfo->before_change = fhp->fh_pre_change;
+		cinfo->after_change = fhp->fh_post_change;
+	} else {
+		cinfo->before_ctime_sec = fhp->fh_pre_ctime.tv_sec;
+		cinfo->before_ctime_nsec = fhp->fh_pre_ctime.tv_nsec;
+		cinfo->after_ctime_sec = fhp->fh_post_attr.ctime.tv_sec;
+		cinfo->after_ctime_nsec = fhp->fh_post_attr.ctime.tv_nsec;
+	}
 }
 
 int nfs4svc_encode_voidres(struct svc_rqst *, __be32 *, void *);
@@ -512,9 +518,8 @@ extern void nfsd4_store_cache_entry(struct nfsd4_compoundres *resp);
 extern __be32 nfsd4_replay_cache_entry(struct nfsd4_compoundres *resp,
 		struct nfsd4_sequence *seq);
 extern __be32 nfsd4_exchange_id(struct svc_rqst *rqstp,
-		struct nfsd4_compound_state *,
-struct nfsd4_exchange_id *);
-		extern __be32 nfsd4_create_session(struct svc_rqst *,
+		struct nfsd4_compound_state *, struct nfsd4_exchange_id *);
+extern __be32 nfsd4_create_session(struct svc_rqst *,
 		struct nfsd4_compound_state *,
 		struct nfsd4_create_session *);
 extern __be32 nfsd4_sequence(struct svc_rqst *,
@@ -523,6 +528,7 @@ extern __be32 nfsd4_sequence(struct svc_rqst *,
 extern __be32 nfsd4_destroy_session(struct svc_rqst *,
 		struct nfsd4_compound_state *,
 		struct nfsd4_destroy_session *);
+__be32 nfsd4_reclaim_complete(struct svc_rqst *, struct nfsd4_compound_state *, struct nfsd4_reclaim_complete *);
 extern __be32 nfsd4_process_open1(struct nfsd4_compound_state *,
 		struct nfsd4_open *open);
 extern __be32 nfsd4_process_open2(struct svc_rqst *rqstp,

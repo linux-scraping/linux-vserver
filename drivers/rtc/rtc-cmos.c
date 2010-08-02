@@ -36,7 +36,6 @@
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
 #include <linux/log2.h>
-#include <linux/pm.h>
 
 /* this is for "generic access to PC-style RTC" using CMOS_READ/CMOS_WRITE */
 #include <asm-generic/rtc.h>
@@ -239,31 +238,32 @@ static int cmos_read_alarm(struct device *dev, struct rtc_wkalrm *t)
 	rtc_control = CMOS_READ(RTC_CONTROL);
 	spin_unlock_irq(&rtc_lock);
 
-	/* REVISIT this assumes PC style usage:  always BCD */
-
-	if (((unsigned)t->time.tm_sec) < 0x60)
-		t->time.tm_sec = bcd2bin(t->time.tm_sec);
-	else
-		t->time.tm_sec = -1;
-	if (((unsigned)t->time.tm_min) < 0x60)
-		t->time.tm_min = bcd2bin(t->time.tm_min);
-	else
-		t->time.tm_min = -1;
-	if (((unsigned)t->time.tm_hour) < 0x24)
-		t->time.tm_hour = bcd2bin(t->time.tm_hour);
-	else
-		t->time.tm_hour = -1;
-
-	if (cmos->day_alrm) {
-		if (((unsigned)t->time.tm_mday) <= 0x31)
-			t->time.tm_mday = bcd2bin(t->time.tm_mday);
+	if (!(rtc_control & RTC_DM_BINARY) || RTC_ALWAYS_BCD) {
+		if (((unsigned)t->time.tm_sec) < 0x60)
+			t->time.tm_sec = bcd2bin(t->time.tm_sec);
 		else
-			t->time.tm_mday = -1;
-		if (cmos->mon_alrm) {
-			if (((unsigned)t->time.tm_mon) <= 0x12)
-				t->time.tm_mon = bcd2bin(t->time.tm_mon) - 1;
+			t->time.tm_sec = -1;
+		if (((unsigned)t->time.tm_min) < 0x60)
+			t->time.tm_min = bcd2bin(t->time.tm_min);
+		else
+			t->time.tm_min = -1;
+		if (((unsigned)t->time.tm_hour) < 0x24)
+			t->time.tm_hour = bcd2bin(t->time.tm_hour);
+		else
+			t->time.tm_hour = -1;
+
+		if (cmos->day_alrm) {
+			if (((unsigned)t->time.tm_mday) <= 0x31)
+				t->time.tm_mday = bcd2bin(t->time.tm_mday);
 			else
-				t->time.tm_mon = -1;
+				t->time.tm_mday = -1;
+
+			if (cmos->mon_alrm) {
+				if (((unsigned)t->time.tm_mon) <= 0x12)
+					t->time.tm_mon = bcd2bin(t->time.tm_mon)-1;
+				else
+					t->time.tm_mon = -1;
+			}
 		}
 	}
 	t->time.tm_year = -1;
@@ -323,29 +323,26 @@ static void cmos_irq_disable(struct cmos_rtc *cmos, unsigned char mask)
 static int cmos_set_alarm(struct device *dev, struct rtc_wkalrm *t)
 {
 	struct cmos_rtc	*cmos = dev_get_drvdata(dev);
-	unsigned char	mon, mday, hrs, min, sec;
+       unsigned char   mon, mday, hrs, min, sec, rtc_control;
 
 	if (!is_valid_irq(cmos->irq))
 		return -EIO;
 
-	/* REVISIT this assumes PC style usage:  always BCD */
-
-	/* Writing 0xff means "don't care" or "match all".  */
-
 	mon = t->time.tm_mon + 1;
-	mon = (mon <= 12) ? bin2bcd(mon) : 0xff;
-
 	mday = t->time.tm_mday;
-	mday = (mday >= 1 && mday <= 31) ? bin2bcd(mday) : 0xff;
-
 	hrs = t->time.tm_hour;
-	hrs = (hrs < 24) ? bin2bcd(hrs) : 0xff;
-
 	min = t->time.tm_min;
-	min = (min < 60) ? bin2bcd(min) : 0xff;
-
 	sec = t->time.tm_sec;
-	sec = (sec < 60) ? bin2bcd(sec) : 0xff;
+
+	rtc_control = CMOS_READ(RTC_CONTROL);
+	if (!(rtc_control & RTC_DM_BINARY) || RTC_ALWAYS_BCD) {
+		/* Writing 0xff means "don't care" or "match all".  */
+		mon = (mon <= 12) ? bin2bcd(mon) : 0xff;
+		mday = (mday >= 1 && mday <= 31) ? bin2bcd(mday) : 0xff;
+		hrs = (hrs < 24) ? bin2bcd(hrs) : 0xff;
+		min = (min < 60) ? bin2bcd(min) : 0xff;
+		sec = (sec < 60) ? bin2bcd(sec) : 0xff;
+	}
 
 	spin_lock_irq(&rtc_lock);
 
@@ -479,7 +476,7 @@ static int cmos_procfs(struct device *dev, struct seq_file *seq)
 			"update_IRQ\t: %s\n"
 			"HPET_emulated\t: %s\n"
 			// "square_wave\t: %s\n"
-			// "BCD\t\t: %s\n"
+			"BCD\t\t: %s\n"
 			"DST_enable\t: %s\n"
 			"periodic_freq\t: %d\n"
 			"batt_status\t: %s\n",
@@ -487,7 +484,7 @@ static int cmos_procfs(struct device *dev, struct seq_file *seq)
 			(rtc_control & RTC_UIE) ? "yes" : "no",
 			is_hpet_enabled() ? "yes" : "no",
 			// (rtc_control & RTC_SQWE) ? "yes" : "no",
-			// (rtc_control & RTC_DM_BINARY) ? "no" : "yes",
+			(rtc_control & RTC_DM_BINARY) ? "no" : "yes",
 			(rtc_control & RTC_DST_EN) ? "yes" : "no",
 			cmos->rtc->irq_freq,
 			(valid & RTC_VRT) ? "okay" : "dead");
@@ -520,7 +517,8 @@ static const struct rtc_class_ops cmos_rtc_ops = {
 #define NVRAM_OFFSET	(RTC_REG_D + 1)
 
 static ssize_t
-cmos_nvram_read(struct kobject *kobj, struct bin_attribute *attr,
+cmos_nvram_read(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *attr,
 		char *buf, loff_t off, size_t count)
 {
 	int	retval;
@@ -548,7 +546,8 @@ cmos_nvram_read(struct kobject *kobj, struct bin_attribute *attr,
 }
 
 static ssize_t
-cmos_nvram_write(struct kobject *kobj, struct bin_attribute *attr,
+cmos_nvram_write(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *attr,
 		char *buf, loff_t off, size_t count)
 {
 	struct cmos_rtc	*cmos;
@@ -751,12 +750,11 @@ cmos_do_probe(struct device *dev, struct resource *ports, int rtc_irq)
 
 	spin_unlock_irq(&rtc_lock);
 
-	/* FIXME teach the alarm code how to handle binary mode;
+	/* FIXME:
 	 * <asm-generic/rtc.h> doesn't know 12-hour mode either.
 	 */
-	if (is_valid_irq(rtc_irq) &&
-	    (!(rtc_control & RTC_24H) || (rtc_control & (RTC_DM_BINARY)))) {
-		dev_dbg(dev, "only 24-hr BCD mode supported\n");
+       if (is_valid_irq(rtc_irq) && !(rtc_control & RTC_24H)) {
+		dev_warn(dev, "only 24-hr supported\n");
 		retval = -ENXIO;
 		goto cleanup1;
 	}
@@ -852,7 +850,7 @@ static void __exit cmos_do_remove(struct device *dev)
 
 #ifdef	CONFIG_PM
 
-static int cmos_suspend(struct device *dev)
+static int cmos_suspend(struct device *dev, pm_message_t mesg)
 {
 	struct cmos_rtc	*cmos = dev_get_drvdata(dev);
 	unsigned char	tmp;
@@ -900,7 +898,7 @@ static int cmos_suspend(struct device *dev)
  */
 static inline int cmos_poweroff(struct device *dev)
 {
-	return cmos_suspend(dev);
+	return cmos_suspend(dev, PMSG_HIBERNATE);
 }
 
 static int cmos_resume(struct device *dev)
@@ -947,9 +945,9 @@ static int cmos_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(cmos_pm_ops, cmos_suspend, cmos_resume);
-
 #else
+#define	cmos_suspend	NULL
+#define	cmos_resume	NULL
 
 static inline int cmos_poweroff(struct device *dev)
 {
@@ -1085,7 +1083,7 @@ static void __exit cmos_pnp_remove(struct pnp_dev *pnp)
 
 static int cmos_pnp_suspend(struct pnp_dev *pnp, pm_message_t mesg)
 {
-	return cmos_suspend(&pnp->dev);
+	return cmos_suspend(&pnp->dev, mesg);
 }
 
 static int cmos_pnp_resume(struct pnp_dev *pnp)
@@ -1165,9 +1163,8 @@ static struct platform_driver cmos_platform_driver = {
 	.shutdown	= cmos_platform_shutdown,
 	.driver = {
 		.name		= (char *) driver_name,
-#ifdef CONFIG_PM
-		.pm		= &cmos_pm_ops,
-#endif
+		.suspend	= cmos_suspend,
+		.resume		= cmos_resume,
 	}
 };
 

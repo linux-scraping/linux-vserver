@@ -19,18 +19,16 @@
 #include <linux/ioctl.h>
 #include <linux/usb.h>
 #include <linux/usbdevice_fs.h>
+#include <linux/usb/hcd.h>
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/freezer.h>
 #include <linux/pm_runtime.h>
-#include <linux/random.h>
 
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
 
 #include "usb.h"
-#include "hcd.h"
-#include "hub.h"
 
 /* if we are in debug mode, always announce new devices */
 #ifdef DEBUG
@@ -155,11 +153,11 @@ static int usb_reset_and_verify_device(struct usb_device *udev);
 
 static inline char *portspeed(int portstatus)
 {
-	if (portstatus & (1 << USB_PORT_FEAT_HIGHSPEED))
+	if (portstatus & USB_PORT_STAT_HIGH_SPEED)
     		return "480 Mb/s";
-	else if (portstatus & (1 << USB_PORT_FEAT_LOWSPEED))
+	else if (portstatus & USB_PORT_STAT_LOW_SPEED)
 		return "1.5 Mb/s";
-	else if (portstatus & (1 << USB_PORT_FEAT_SUPERSPEED))
+	else if (portstatus & USB_PORT_STAT_SUPER_SPEED)
 		return "5.0 Gb/s";
 	else
 		return "12 Mb/s";
@@ -328,8 +326,7 @@ static int get_hub_status(struct usb_device *hdev,
 {
 	int i, status = -ETIMEDOUT;
 
-	for (i = 0; i < USB_STS_RETRIES &&
-			(status == -ETIMEDOUT || status == -EPIPE); i++) {
+	for (i = 0; i < USB_STS_RETRIES && status == -ETIMEDOUT; i++) {
 		status = usb_control_msg(hdev, usb_rcvctrlpipe(hdev, 0),
 			USB_REQ_GET_STATUS, USB_DIR_IN | USB_RT_HUB, 0, 0,
 			data, sizeof(*data), USB_STS_TIMEOUT);
@@ -345,8 +342,7 @@ static int get_port_status(struct usb_device *hdev, int port1,
 {
 	int i, status = -ETIMEDOUT;
 
-	for (i = 0; i < USB_STS_RETRIES &&
-			(status == -ETIMEDOUT || status == -EPIPE); i++) {
+	for (i = 0; i < USB_STS_RETRIES && status == -ETIMEDOUT; i++) {
 		status = usb_control_msg(hdev, usb_rcvctrlpipe(hdev, 0),
 			USB_REQ_GET_STATUS, USB_DIR_IN | USB_RT_PORT, 0, port1,
 			data, sizeof(*data), USB_STS_TIMEOUT);
@@ -680,8 +676,6 @@ static void hub_init_func3(struct work_struct *ws);
 static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 {
 	struct usb_device *hdev = hub->hdev;
-	struct usb_hcd *hcd;
-	int ret;
 	int port1;
 	int status;
 	bool need_debounce_delay = false;
@@ -720,25 +714,6 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 			usb_autopm_get_interface_no_resume(
 					to_usb_interface(hub->intfdev));
 			return;		/* Continues at init2: below */
-		} else if (type == HUB_RESET_RESUME) {
-			/* The internal host controller state for the hub device
-			 * may be gone after a host power loss on system resume.
-			 * Update the device's info so the HW knows it's a hub.
-			 */
-			hcd = bus_to_hcd(hdev->bus);
-			if (hcd->driver->update_hub_device) {
-				ret = hcd->driver->update_hub_device(hcd, hdev,
-						&hub->tt, GFP_NOIO);
-				if (ret < 0) {
-					dev_err(hub->intfdev, "Host not "
-							"accepting hub info "
-							"update.\n");
-					dev_err(hub->intfdev, "LS/FS devices "
-							"and hubs may not work "
-							"under this hub\n.");
-				}
-			}
-			hub_power_on(hub, true);
 		} else {
 			hub_power_on(hub, true);
 		}
@@ -769,8 +744,20 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 				!(portstatus & USB_PORT_STAT_CONNECTION) ||
 				!udev ||
 				udev->state == USB_STATE_NOTATTACHED)) {
-			clear_port_feature(hdev, port1, USB_PORT_FEAT_ENABLE);
-			portstatus &= ~USB_PORT_STAT_ENABLE;
+			/*
+			 * USB3 protocol ports will automatically transition
+			 * to Enabled state when detect an USB3.0 device attach.
+			 * Do not disable USB3 protocol ports.
+			 * FIXME: USB3 root hub and external hubs are treated
+			 * differently here.
+			 */
+			if (hdev->descriptor.bDeviceProtocol != 3 ||
+			    (!hdev->parent &&
+			     !(portstatus & USB_PORT_STAT_SUPER_SPEED))) {
+				clear_port_feature(hdev, port1,
+						   USB_PORT_FEAT_ENABLE);
+				portstatus &= ~USB_PORT_STAT_ENABLE;
+			}
 		}
 
 		/* Clear status-change flags; we'll debounce later */
@@ -1828,14 +1815,6 @@ int usb_new_device(struct usb_device *udev)
 	/* Tell the world! */
 	announce_device(udev);
 
-	if (udev->serial)
-		add_device_randomness(udev->serial, strlen(udev->serial));
-	if (udev->product)
-		add_device_randomness(udev->product, strlen(udev->product));
-	if (udev->manufacturer)
-		add_device_randomness(udev->manufacturer,
-				      strlen(udev->manufacturer));
-
 	device_enable_async_suspend(&udev->dev);
 	/* Register the device.  The device driver is responsible
 	 * for configuring the device and invoking the add-device
@@ -2003,7 +1982,7 @@ static int hub_port_wait_reset(struct usb_hub *hub, int port1,
 		    (portstatus & USB_PORT_STAT_ENABLE)) {
 			if (hub_is_wusb(hub))
 				udev->speed = USB_SPEED_WIRELESS;
-			else if (portstatus & (1 << USB_PORT_FEAT_SUPERSPEED))
+			else if (portstatus & USB_PORT_STAT_SUPER_SPEED)
 				udev->speed = USB_SPEED_SUPER;
 			else if (portstatus & USB_PORT_STAT_HIGH_SPEED)
 				udev->speed = USB_SPEED_HIGH;
@@ -2231,10 +2210,6 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 				USB_DEVICE_REMOTE_WAKEUP, 0,
 				NULL, 0,
 				USB_CTRL_SET_TIMEOUT);
-
-		/* System sleep transitions should never fail */
-		if (!(msg.event & PM_EVENT_AUTO))
-			status = 0;
 	} else {
 		/* device has up to 10 msec to fully suspend */
 		dev_dbg(&udev->dev, "usb %ssuspend\n",
@@ -2472,15 +2447,16 @@ static int hub_suspend(struct usb_interface *intf, pm_message_t msg)
 	struct usb_device	*hdev = hub->hdev;
 	unsigned		port1;
 
-	/* Warn if children aren't already suspended */
+	/* fail if children aren't already suspended */
 	for (port1 = 1; port1 <= hdev->maxchild; port1++) {
 		struct usb_device	*udev;
 
 		udev = hdev->children [port1-1];
 		if (udev && udev->can_submit) {
-			dev_warn(&intf->dev, "port %d nyet suspended\n", port1);
-			if (msg.event & PM_EVENT_AUTO)
-				return -EBUSY;
+			if (!(msg.event & PM_EVENT_AUTO))
+				dev_dbg(&intf->dev, "port %d nyet suspended\n",
+						port1);
+			return -EBUSY;
 		}
 	}
 
@@ -2745,11 +2721,6 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 		udev->ttport = hdev->ttport;
 	} else if (udev->speed != USB_SPEED_HIGH
 			&& hdev->speed == USB_SPEED_HIGH) {
-		if (!hub->tt.hub) {
-			dev_err(&udev->dev, "parent hub has no TT\n");
-			retval = -EINVAL;
-			goto fail;
-		}
 		udev->tt = &hub->tt;
 		udev->ttport = port1;
 	}
@@ -2888,16 +2859,13 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 	else
 		i = udev->descriptor.bMaxPacketSize0;
 	if (le16_to_cpu(udev->ep0.desc.wMaxPacketSize) != i) {
-		if (udev->speed == USB_SPEED_LOW ||
+		if (udev->speed != USB_SPEED_FULL ||
 				!(i == 8 || i == 16 || i == 32 || i == 64)) {
-			dev_err(&udev->dev, "Invalid ep0 maxpacket: %d\n", i);
+			dev_err(&udev->dev, "ep0 maxpacket = %d\n", i);
 			retval = -EMSGSIZE;
 			goto fail;
 		}
-		if (udev->speed == USB_SPEED_FULL)
-			dev_dbg(&udev->dev, "ep0 maxpacket = %d\n", i);
-		else
-			dev_warn(&udev->dev, "Using ep0 maxpacket: %d\n", i);
+		dev_dbg(&udev->dev, "ep0 maxpacket = %d\n", i);
 		udev->ep0.desc.wMaxPacketSize = cpu_to_le16(i);
 		usb_ep0_reinit(udev);
 	}
@@ -3082,7 +3050,7 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 
 		/* maybe switch power back on (e.g. root hub was reset) */
 		if ((wHubCharacteristics & HUB_CHAR_LPSM) < 2
-				&& !(portstatus & (1 << USB_PORT_FEAT_POWER)))
+				&& !(portstatus & USB_PORT_STAT_POWER))
 			set_port_feature(hdev, port1, USB_PORT_FEAT_POWER);
 
 		if (portstatus & USB_PORT_STAT_ENABLE)
@@ -3120,7 +3088,7 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 		if (!(hcd->driver->flags & HCD_USB3))
 			udev->speed = USB_SPEED_UNKNOWN;
 		else if ((hdev->parent == NULL) &&
-				(portstatus & (1 << USB_PORT_FEAT_SUPERSPEED)))
+				(portstatus & USB_PORT_STAT_SUPER_SPEED))
 			udev->speed = USB_SPEED_SUPER;
 		else
 			udev->speed = USB_SPEED_UNKNOWN;

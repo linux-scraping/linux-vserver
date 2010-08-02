@@ -110,7 +110,7 @@ static struct kmem_cache *flash_block_cache = NULL;
  * For convenience as we build the list we use virtual addrs,
  * we do not fill in the version number, and the length field
  * is treated as the number of entries currently in the block
- * (i.e. not a byte count).  This is all fixed when calling
+ * (i.e. not a byte count).  This is all fixed when calling 
  * the flash routine.
  */
 

@@ -77,7 +77,7 @@ static LIST_HEAD(qd_lru_list);
 static atomic_t qd_lru_count = ATOMIC_INIT(0);
 static DEFINE_SPINLOCK(qd_lru_lock);
 
-int gfs2_shrink_qd_memory(int nr, gfp_t gfp_mask)
+int gfs2_shrink_qd_memory(struct shrinker *shrink, int nr, gfp_t gfp_mask)
 {
 	struct gfs2_quota_data *qd;
 	struct gfs2_sbd *sdp;
@@ -812,7 +812,7 @@ static int do_sync(unsigned int num_qd, struct gfs2_quota_data **qda)
 	 */
 	al->al_requested = 1;
 	/* +3 in the end for unstuffing block, inode size update block
-	 * and another block in case quota straddles page boundary and
+	 * and another block in case quota straddles page boundary and 
 	 * two blocks need to be updated instead of 1 */
 	blocks = num_qd * data_blocks + RES_DINODE + num_qd + 3;
 
@@ -1452,10 +1452,18 @@ static int gfs2_quota_get_xstate(struct super_block *sb,
 
 	memset(fqs, 0, sizeof(struct fs_quota_stat));
 	fqs->qs_version = FS_QSTAT_VERSION;
-	if (sdp->sd_args.ar_quota == GFS2_QUOTA_ON)
-		fqs->qs_flags = (XFS_QUOTA_UDQ_ENFD | XFS_QUOTA_GDQ_ENFD);
-	else if (sdp->sd_args.ar_quota == GFS2_QUOTA_ACCOUNT)
-		fqs->qs_flags = (XFS_QUOTA_UDQ_ACCT | XFS_QUOTA_GDQ_ACCT);
+
+	switch (sdp->sd_args.ar_quota) {
+	case GFS2_QUOTA_ON:
+		fqs->qs_flags |= (XFS_QUOTA_UDQ_ENFD | XFS_QUOTA_GDQ_ENFD);
+		/*FALLTHRU*/
+	case GFS2_QUOTA_ACCOUNT:
+		fqs->qs_flags |= (XFS_QUOTA_UDQ_ACCT | XFS_QUOTA_GDQ_ACCT);
+		break;
+	case GFS2_QUOTA_OFF:
+		break;
+	}
+
 	if (sdp->sd_quota_inode) {
 		fqs->qs_uquota.qfs_ino = GFS2_I(sdp->sd_quota_inode)->i_no_addr;
 		fqs->qs_uquota.qfs_nblks = sdp->sd_quota_inode->i_blocks;
@@ -1466,8 +1474,8 @@ static int gfs2_quota_get_xstate(struct super_block *sb,
 	return 0;
 }
 
-static int gfs2_xquota_get(struct super_block *sb, int type, qid_t id,
-			   struct fs_disk_quota *fdq)
+static int gfs2_get_dqblk(struct super_block *sb, int type, qid_t id,
+			  struct fs_disk_quota *fdq)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_quota_lvb *qlvb;
@@ -1511,8 +1519,8 @@ out:
 /* GFS2 only supports a subset of the XFS fields */
 #define GFS2_FIELDMASK (FS_DQ_BSOFT|FS_DQ_BHARD)
 
-static int gfs2_xquota_set(struct super_block *sb, int type, qid_t id,
-			   struct fs_disk_quota *fdq)
+static int gfs2_set_dqblk(struct super_block *sb, int type, qid_t id,
+			  struct fs_disk_quota *fdq)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_inode *ip = GFS2_I(sdp->sd_quota_inode);
@@ -1619,7 +1627,7 @@ out_put:
 const struct quotactl_ops gfs2_quotactl_ops = {
 	.quota_sync     = gfs2_quota_sync,
 	.get_xstate     = gfs2_quota_get_xstate,
-	.get_xquota	= gfs2_xquota_get,
-	.set_xquota	= gfs2_xquota_set,
+	.get_dqblk	= gfs2_get_dqblk,
+	.set_dqblk	= gfs2_set_dqblk,
 };
 

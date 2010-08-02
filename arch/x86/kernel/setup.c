@@ -736,6 +736,7 @@ void __init setup_arch(char **cmdline_p)
 	/* VMI may relocate the fixmap; do this before touching ioremap area */
 	vmi_init();
 
+	early_trap_init();
 	early_cpu_init();
 	early_ioremap_init();
 
@@ -1006,8 +1007,6 @@ void __init setup_arch(char **cmdline_p)
 	x86_init.paging.pagetable_setup_start(swapper_pg_dir);
 	paging_init();
 	x86_init.paging.pagetable_setup_done(swapper_pg_dir);
-
-	setup_trampoline_page_table();
 
 	tboot_probe();
 

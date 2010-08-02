@@ -311,17 +311,11 @@ int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
 struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
 				      unsigned int id)
 {
-	struct kvm_vcpu *vcpu;
-	int rc = -EINVAL;
+	struct kvm_vcpu *vcpu = kzalloc(sizeof(struct kvm_vcpu), GFP_KERNEL);
+	int rc = -ENOMEM;
 
-	if (id >= KVM_MAX_VCPUS)
-		goto out;
-
-	rc = -ENOMEM;
-
-	vcpu = kzalloc(sizeof(struct kvm_vcpu), GFP_KERNEL);
 	if (!vcpu)
-		goto out;
+		goto out_nomem;
 
 	vcpu->arch.sie_block = (struct kvm_s390_sie_block *)
 					get_zeroed_page(GFP_KERNEL);
@@ -356,7 +350,7 @@ out_free_sie_block:
 	free_page((unsigned long)(vcpu->arch.sie_block));
 out_free_cpu:
 	kfree(vcpu);
-out:
+out_nomem:
 	return ERR_PTR(rc);
 }
 
@@ -758,7 +752,7 @@ gfn_t unalias_gfn(struct kvm *kvm, gfn_t gfn)
 static int __init kvm_s390_init(void)
 {
 	int ret;
-	ret = kvm_init(NULL, sizeof(struct kvm_vcpu), THIS_MODULE);
+	ret = kvm_init(NULL, sizeof(struct kvm_vcpu), 0, THIS_MODULE);
 	if (ret)
 		return ret;
 
@@ -767,7 +761,7 @@ static int __init kvm_s390_init(void)
 	 * to hold the maximum amount of facilites. On the other hand, we
 	 * only set facilities that are known to work in KVM.
 	 */
-	facilities = (unsigned long long *) get_zeroed_page(GFP_DMA);
+	facilities = (unsigned long long *) get_zeroed_page(GFP_KERNEL|GFP_DMA);
 	if (!facilities) {
 		kvm_exit();
 		return -ENOMEM;

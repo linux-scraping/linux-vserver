@@ -29,7 +29,6 @@
 #include <net/transp_v6.h>
 #include <net/ip6_checksum.h>
 #include <net/xfrm.h>
-#include <net/secure_seq.h>
 
 #include "dccp.h"
 #include "ipv6.h"
@@ -61,8 +60,7 @@ static inline __sum16 dccp_v6_csum_finish(struct sk_buff *skb,
 	return csum_ipv6_magic(saddr, daddr, skb->len, IPPROTO_DCCP, skb->csum);
 }
 
-static inline void dccp_v6_send_check(struct sock *sk, int unused_value,
-				      struct sk_buff *skb)
+static inline void dccp_v6_send_check(struct sock *sk, struct sk_buff *skb)
 {
 	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct dccp_hdr *dh = dccp_hdr(skb);
@@ -71,7 +69,13 @@ static inline void dccp_v6_send_check(struct sock *sk, int unused_value,
 	dh->dccph_checksum = dccp_v6_csum_finish(skb, &np->saddr, &np->daddr);
 }
 
-static inline __u64 dccp_v6_init_sequence(struct sk_buff *skb)
+static inline __u32 secure_dccpv6_sequence_number(__be32 *saddr, __be32 *daddr,
+						  __be16 sport, __be16 dport   )
+{
+	return secure_tcpv6_sequence_number(saddr, daddr, sport, dport);
+}
+
+static inline __u32 dccp_v6_init_sequence(struct sk_buff *skb)
 {
 	return secure_dccpv6_sequence_number(ipv6_hdr(skb)->daddr.s6_addr32,
 					     ipv6_hdr(skb)->saddr.s6_addr32,
@@ -288,7 +292,7 @@ static int dccp_v6_send_response(struct sock *sk, struct request_sock *req,
 							 &ireq6->loc_addr,
 							 &ireq6->rmt_addr);
 		ipv6_addr_copy(&fl.fl6_dst, &ireq6->rmt_addr);
-		err = ip6_xmit(sk, skb, &fl, opt, 0);
+		err = ip6_xmit(sk, skb, &fl, opt);
 		err = net_xmit_eval(err);
 	}
 
@@ -343,7 +347,7 @@ static void dccp_v6_ctl_send_reset(struct sock *sk, struct sk_buff *rxskb)
 	if (!ip6_dst_lookup(ctl_sk, &dst, &fl)) {
 		if (xfrm_lookup(net, &dst, &fl, NULL, 0) >= 0) {
 			skb_dst_set(skb, dst);
-			ip6_xmit(ctl_sk, skb, &fl, NULL, 0);
+			ip6_xmit(ctl_sk, skb, &fl, NULL);
 			DCCP_INC_STATS_BH(DCCP_MIB_OUTSEGS);
 			DCCP_INC_STATS_BH(DCCP_MIB_OUTRSTS);
 			return;

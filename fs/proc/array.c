@@ -272,7 +272,7 @@ static inline void task_sig(struct seq_file *m, struct task_struct *p)
 		shpending = p->signal->shared_pending.signal;
 		blocked = p->blocked;
 		collect_sigign_sigcatch(p, &ignored, &caught);
-		num_threads = atomic_read(&p->signal->count);
+		num_threads = get_nr_threads(p);
 		rcu_read_lock();  /* FIXME: is this correct? */
 		qsize = atomic_read(&__task_cred(p)->user->sigpending);
 		rcu_read_unlock();
@@ -396,6 +396,9 @@ int proc_pid_status(struct seq_file *m, struct pid_namespace *ns,
 	task_cpus_allowed(m, task);
 	cpuset_task_status_allowed(m, task);
 	task_vs_id(m, task);
+#if defined(CONFIG_S390)
+	task_show_regs(m, task);
+#endif
 	task_context_switch_counts(m, task);
 	return 0;
 }
@@ -450,7 +453,7 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 			tty_nr = new_encode_dev(tty_devnum(sig->tty));
 		}
 
-		num_threads = atomic_read(&sig->count);
+		num_threads = get_nr_threads(task);
 		collect_sigign_sigcatch(task, &sigign, &sigcatch);
 
 		cmin_flt = sig->cmin_flt;
@@ -543,8 +546,8 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 		vsize,
 		mm ? get_mm_rss(mm) : 0,
 		rsslim,
-		mm ? (permitted ? mm->start_code : 1) : 0,
-		mm ? (permitted ? mm->end_code : 1) : 0,
+		mm ? mm->start_code : 0,
+		mm ? mm->end_code : 0,
 		(permitted && mm) ? mm->start_stack : 0,
 		esp,
 		eip,

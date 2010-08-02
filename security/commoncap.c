@@ -28,7 +28,6 @@
 #include <linux/prctl.h>
 #include <linux/securebits.h>
 #include <linux/syslog.h>
-#include <linux/personality.h>
 #include <linux/vs_context.h>
 
 /*
@@ -483,11 +482,6 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
 	}
 skip:
 
-	/* if we have fs caps, clear dangerous personality flags */
-	if (!cap_issubset(new->cap_permitted, old->cap_permitted))
-		bprm->per_clear |= PER_CLEAR_ON_SETID;
-
-
 	/* Don't let someone trace a set[ug]id/setpcap binary with the revised
 	 * credentials unless they have the appropriate permit
 	 */
@@ -593,7 +587,7 @@ int cap_inode_setxattr(struct dentry *dentry, const char *name,
 	}
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
-		     sizeof(XATTR_SECURITY_PREFIX) - 1)  &&
+		     sizeof(XATTR_SECURITY_PREFIX) - 1) &&
 		!vx_capable(CAP_SYS_ADMIN, VXC_FS_SECURITY))
 		return -EPERM;
 	return 0;
@@ -619,7 +613,7 @@ int cap_inode_removexattr(struct dentry *dentry, const char *name)
 	}
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
-		     sizeof(XATTR_SECURITY_PREFIX) - 1)  &&
+		     sizeof(XATTR_SECURITY_PREFIX) - 1) &&
 		!vx_capable(CAP_SYS_ADMIN, VXC_FS_SECURITY))
 		return -EPERM;
 	return 0;
@@ -955,7 +949,7 @@ int cap_vm_enough_memory(struct mm_struct *mm, long pages)
  * @addr: address attempting to be mapped
  * @addr_only: unused
  *
- * If the process is attempting to map memory below mmap_min_addr they need
+ * If the process is attempting to map memory below dac_mmap_min_addr they need
  * CAP_SYS_RAWIO.  The other parameters to this function are unused by the
  * capability security module.  Returns 0 if this mapping should be allowed
  * -EPERM if not.

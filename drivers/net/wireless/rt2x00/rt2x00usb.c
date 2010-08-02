@@ -216,12 +216,12 @@ static void rt2x00usb_interrupt_txdone(struct urb *urb)
 	rt2x00lib_txdone(entry, &txdesc);
 }
 
-int rt2x00usb_write_tx_data(struct queue_entry *entry)
+int rt2x00usb_write_tx_data(struct queue_entry *entry,
+			    struct txentry_desc *txdesc)
 {
 	struct rt2x00_dev *rt2x00dev = entry->queue->rt2x00dev;
 	struct usb_device *usb_dev = to_usb_device_intf(rt2x00dev->dev);
 	struct queue_entry_priv_usb *entry_priv = entry->priv_data;
-	struct skb_frame_desc *skbdesc;
 	u32 length;
 
 	/*
@@ -229,13 +229,6 @@ int rt2x00usb_write_tx_data(struct queue_entry *entry)
 	 */
 	skb_push(entry->skb, entry->queue->desc_size);
 	memset(entry->skb->data, 0, entry->queue->desc_size);
-
-	/*
-	 * Fill in skb descriptor
-	 */
-	skbdesc = get_skb_frame_desc(entry->skb);
-	skbdesc->desc = entry->skb->data;
-	skbdesc->desc_len = entry->queue->desc_size;
 
 	/*
 	 * USB devices cannot blindly pass the skb->len as the
@@ -706,8 +699,18 @@ int rt2x00usb_suspend(struct usb_interface *usb_intf, pm_message_t state)
 {
 	struct ieee80211_hw *hw = usb_get_intfdata(usb_intf);
 	struct rt2x00_dev *rt2x00dev = hw->priv;
+	int retval;
 
-	return rt2x00lib_suspend(rt2x00dev, state);
+	retval = rt2x00lib_suspend(rt2x00dev, state);
+	if (retval)
+		return retval;
+
+	/*
+	 * Decrease usbdev refcount.
+	 */
+	usb_put_dev(interface_to_usbdev(usb_intf));
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(rt2x00usb_suspend);
 
@@ -715,6 +718,8 @@ int rt2x00usb_resume(struct usb_interface *usb_intf)
 {
 	struct ieee80211_hw *hw = usb_get_intfdata(usb_intf);
 	struct rt2x00_dev *rt2x00dev = hw->priv;
+
+	usb_get_dev(interface_to_usbdev(usb_intf));
 
 	return rt2x00lib_resume(rt2x00dev);
 }

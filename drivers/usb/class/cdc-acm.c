@@ -297,8 +297,6 @@ static void acm_ctrl_irq(struct urb *urb)
 	if (!ACM_READY(acm))
 		goto exit;
 
-	usb_mark_last_busy(acm->dev);
-
 	data = (unsigned char *)(dr + 1);
 	switch (dr->bNotificationType) {
 	case USB_CDC_NOTIFY_NETWORK_CONNECTION:
@@ -338,6 +336,7 @@ static void acm_ctrl_irq(struct urb *urb)
 		break;
 	}
 exit:
+	usb_mark_last_busy(acm->dev);
 	retval = usb_submit_urb(urb, GFP_ATOMIC);
 	if (retval)
 		dev_err(&urb->dev->dev, "%s - usb_submit_urb failed with "
@@ -534,8 +533,6 @@ static void acm_softint(struct work_struct *work)
 	if (!ACM_READY(acm))
 		return;
 	tty = tty_port_tty_get(&acm->port);
-	if (!tty)
-		return;
 	tty_wakeup(tty);
 	tty_kref_put(tty);
 }
@@ -655,10 +652,8 @@ static void acm_port_down(struct acm *acm, int drain)
 		usb_kill_urb(acm->ctrlurb);
 		for (i = 0; i < ACM_NW; i++)
 			usb_kill_urb(acm->wb[i].urb);
-		tasklet_disable(&acm->urb_task);
 		for (i = 0; i < nr; i++)
 			usb_kill_urb(acm->ru[i].urb);
-		tasklet_enable(&acm->urb_task);
 		acm->control->needs_remote_wakeup = 0;
 		usb_autopm_put_interface(acm->control);
 	}
@@ -897,7 +892,7 @@ static void acm_write_buffers_free(struct acm *acm)
 	struct usb_device *usb_dev = interface_to_usbdev(acm->control);
 
 	for (wb = &acm->wb[0], i = 0; i < ACM_NW; i++, wb++)
-		usb_buffer_free(usb_dev, acm->writesize, wb->buf, wb->dmah);
+		usb_free_coherent(usb_dev, acm->writesize, wb->buf, wb->dmah);
 }
 
 static void acm_read_buffers_free(struct acm *acm)
@@ -906,8 +901,8 @@ static void acm_read_buffers_free(struct acm *acm)
 	int i, n = acm->rx_buflimit;
 
 	for (i = 0; i < n; i++)
-		usb_buffer_free(usb_dev, acm->readsize,
-					acm->rb[i].base, acm->rb[i].dma);
+		usb_free_coherent(usb_dev, acm->readsize,
+				  acm->rb[i].base, acm->rb[i].dma);
 }
 
 /* Little helper: write buffers allocate */
@@ -917,13 +912,13 @@ static int acm_write_buffers_alloc(struct acm *acm)
 	struct acm_wb *wb;
 
 	for (wb = &acm->wb[0], i = 0; i < ACM_NW; i++, wb++) {
-		wb->buf = usb_buffer_alloc(acm->dev, acm->writesize, GFP_KERNEL,
+		wb->buf = usb_alloc_coherent(acm->dev, acm->writesize, GFP_KERNEL,
 		    &wb->dmah);
 		if (!wb->buf) {
 			while (i != 0) {
 				--i;
 				--wb;
-				usb_buffer_free(acm->dev, acm->writesize,
+				usb_free_coherent(acm->dev, acm->writesize,
 				    wb->buf, wb->dmah);
 			}
 			return -ENOMEM;
@@ -976,8 +971,7 @@ static int acm_probe(struct usb_interface *intf,
 	}
 
 	if (!buflen) {
-		if (intf->cur_altsetting->endpoint &&
-				intf->cur_altsetting->endpoint->extralen &&
+		if (intf->cur_altsetting->endpoint->extralen &&
 				intf->cur_altsetting->endpoint->extra) {
 			dev_dbg(&intf->dev,
 				"Seeking extra descriptors on endpoint\n");
@@ -1183,7 +1177,7 @@ made_compressed_probe:
 	tty_port_init(&acm->port);
 	acm->port.ops = &acm_port_ops;
 
-	buf = usb_buffer_alloc(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
+	buf = usb_alloc_coherent(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
 	if (!buf) {
 		dev_dbg(&intf->dev, "out of memory (ctrl buffer alloc)\n");
 		goto alloc_fail2;
@@ -1216,11 +1210,11 @@ made_compressed_probe:
 	for (i = 0; i < num_rx_buf; i++) {
 		struct acm_rb *rb = &(acm->rb[i]);
 
-		rb->base = usb_buffer_alloc(acm->dev, readsize,
+		rb->base = usb_alloc_coherent(acm->dev, readsize,
 				GFP_KERNEL, &rb->dma);
 		if (!rb->base) {
 			dev_dbg(&intf->dev,
-				"out of memory (read bufs usb_buffer_alloc)\n");
+				"out of memory (read bufs usb_alloc_coherent)\n");
 			goto alloc_fail7;
 		}
 	}
@@ -1314,7 +1308,7 @@ alloc_fail6:
 alloc_fail5:
 	acm_write_buffers_free(acm);
 alloc_fail4:
-	usb_buffer_free(usb_dev, ctrlsize, acm->ctrl_buffer, acm->ctrl_dma);
+	usb_free_coherent(usb_dev, ctrlsize, acm->ctrl_buffer, acm->ctrl_dma);
 alloc_fail2:
 	kfree(acm);
 alloc_fail:
@@ -1364,8 +1358,8 @@ static void acm_disconnect(struct usb_interface *intf)
 	stop_data_traffic(acm);
 
 	acm_write_buffers_free(acm);
-	usb_buffer_free(usb_dev, acm->ctrlsize, acm->ctrl_buffer,
-								acm->ctrl_dma);
+	usb_free_coherent(usb_dev, acm->ctrlsize, acm->ctrl_buffer,
+			  acm->ctrl_dma);
 	acm_read_buffers_free(acm);
 
 	if (!acm->combined_interfaces)
@@ -1493,11 +1487,6 @@ static int acm_reset_resume(struct usb_interface *intf)
 		USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM, \
 		USB_CDC_ACM_PROTO_VENDOR)
 
-#define SAMSUNG_PCSUITE_ACM_INFO(x) \
-		USB_DEVICE_AND_INTERFACE_INFO(0x04e7, x, \
-		USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM, \
-		USB_CDC_ACM_PROTO_VENDOR)
-
 /*
  * USB driver structure.
  */
@@ -1545,16 +1534,6 @@ static const struct usb_device_id acm_ids[] = {
 	},
 	{ USB_DEVICE(0x22b8, 0x6425), /* Motorola MOTOMAGX phones */
 	},
-	/* Motorola H24 HSPA module: */
-	{ USB_DEVICE(0x22b8, 0x2d91) }, /* modem                                */
-	{ USB_DEVICE(0x22b8, 0x2d92) }, /* modem           + diagnostics        */
-	{ USB_DEVICE(0x22b8, 0x2d93) }, /* modem + AT port                      */
-	{ USB_DEVICE(0x22b8, 0x2d95) }, /* modem + AT port + diagnostics        */
-	{ USB_DEVICE(0x22b8, 0x2d96) }, /* modem                         + NMEA */
-	{ USB_DEVICE(0x22b8, 0x2d97) }, /* modem           + diagnostics + NMEA */
-	{ USB_DEVICE(0x22b8, 0x2d99) }, /* modem + AT port               + NMEA */
-	{ USB_DEVICE(0x22b8, 0x2d9a) }, /* modem + AT port + diagnostics + NMEA */
-
 	{ USB_DEVICE(0x0572, 0x1329), /* Hummingbird huc56s (Conexant) */
 	.driver_info = NO_UNION_NORMAL, /* union descriptor misplaced on
 					   data interface instead of
@@ -1618,23 +1597,6 @@ static const struct usb_device_id acm_ids[] = {
 	{ NOKIA_PCSUITE_ACM_INFO(0x0108), }, /* Nokia 5320 XpressMusic 2G */
 	{ NOKIA_PCSUITE_ACM_INFO(0x01f5), }, /* Nokia N97, RM-505 */
 	{ NOKIA_PCSUITE_ACM_INFO(0x02e3), }, /* Nokia 5230, RM-588 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0178), }, /* Nokia E63 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x010e), }, /* Nokia E75 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x02d9), }, /* Nokia 6760 Slide */
-	{ NOKIA_PCSUITE_ACM_INFO(0x01d0), }, /* Nokia E52 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0223), }, /* Nokia E72 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0275), }, /* Nokia X6 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x026c), }, /* Nokia N97 Mini */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0154), }, /* Nokia 5800 XpressMusic */
-	{ NOKIA_PCSUITE_ACM_INFO(0x04ce), }, /* Nokia E90 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x01d4), }, /* Nokia E55 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0302), }, /* Nokia N8 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0335), }, /* Nokia E7 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x03cd), }, /* Nokia C7 */
-	{ SAMSUNG_PCSUITE_ACM_INFO(0x6651), }, /* Samsung GTi8510 (INNOV8) */
-
-	/* Support for Owen devices */
-	{ USB_DEVICE(0x03eb, 0x0030), }, /* Owen SI30 */
 
 	/* NOTE: non-Nokia COMM/ACM/0xff is likely MSFT RNDIS... NOT a modem! */
 
@@ -1642,10 +1604,6 @@ static const struct usb_device_id acm_ids[] = {
 	{ USB_DEVICE(0x0694, 0xff00),
 	.driver_info = NOT_A_MODEM,
        	},
-
-	/* control interfaces without any protocol set */
-	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,
-		USB_CDC_PROTO_NONE) },
 
 	/* control interfaces with various AT-command sets */
 	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,

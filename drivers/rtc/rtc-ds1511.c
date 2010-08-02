@@ -423,8 +423,9 @@ static const struct rtc_class_ops ds1511_rtc_ops = {
 };
 
  static ssize_t
-ds1511_nvram_read(struct kobject *kobj, struct bin_attribute *ba,
-				char *buf, loff_t pos, size_t size)
+ds1511_nvram_read(struct file *filp, struct kobject *kobj,
+		  struct bin_attribute *ba,
+		  char *buf, loff_t pos, size_t size)
 {
 	ssize_t count;
 
@@ -452,8 +453,9 @@ ds1511_nvram_read(struct kobject *kobj, struct bin_attribute *ba,
 }
 
  static ssize_t
-ds1511_nvram_write(struct kobject *kobj, struct bin_attribute *bin_attr,
-				char *buf, loff_t pos, size_t size)
+ds1511_nvram_write(struct file *filp, struct kobject *kobj,
+		   struct bin_attribute *bin_attr,
+		   char *buf, loff_t pos, size_t size)
 {
 	ssize_t count;
 
@@ -483,7 +485,7 @@ ds1511_nvram_write(struct kobject *kobj, struct bin_attribute *bin_attr,
 static struct bin_attribute ds1511_nvram_attr = {
 	.attr = {
 		.name = "nvram",
-		.mode = S_IRUGO | S_IWUSR,
+		.mode = S_IRUGO | S_IWUGO,
 	},
 	.size = DS1511_RAM_MAX,
 	.read = ds1511_nvram_read,

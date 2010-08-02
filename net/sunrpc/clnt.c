@@ -560,26 +560,16 @@ static const struct rpc_call_ops rpc_default_ops = {
  */
 struct rpc_task *rpc_run_task(const struct rpc_task_setup *task_setup_data)
 {
-	struct rpc_task *task, *ret;
+	struct rpc_task *task;
 
 	task = rpc_new_task(task_setup_data);
-	if (task == NULL) {
-		rpc_release_calldata(task_setup_data->callback_ops,
-				task_setup_data->callback_data);
-		ret = ERR_PTR(-ENOMEM);
+	if (IS_ERR(task))
 		goto out;
-	}
 
-	if (task->tk_status != 0) {
-		ret = ERR_PTR(task->tk_status);
-		rpc_put_task(task);
-		goto out;
-	}
 	atomic_inc(&task->tk_count);
 	rpc_execute(task);
-	ret = task;
 out:
-	return ret;
+	return task;
 }
 EXPORT_SYMBOL_GPL(rpc_run_task);
 
@@ -661,9 +651,8 @@ struct rpc_task *rpc_run_bc_task(struct rpc_rqst *req,
 	 * Create an rpc_task to send the data
 	 */
 	task = rpc_new_task(&task_setup_data);
-	if (!task) {
+	if (IS_ERR(task)) {
 		xprt_free_bc_request(req);
-		task = ERR_PTR(-ENOMEM);
 		goto out;
 	}
 	task->tk_rqstp = req;
@@ -943,7 +932,7 @@ call_allocate(struct rpc_task *task)
 
 	dprintk("RPC: %5u rpc_buffer allocation failed\n", task->tk_pid);
 
-	if (RPC_IS_ASYNC(task) || !fatal_signal_pending(current)) {
+	if (RPC_IS_ASYNC(task) || !signalled()) {
 		task->tk_action = call_allocate;
 		rpc_delay(task, HZ>>4);
 		return;
@@ -1057,9 +1046,6 @@ call_bind_status(struct rpc_task *task)
 			status = -EOPNOTSUPP;
 			break;
 		}
-		if (task->tk_rebind_retry == 0)
-			break;
-		task->tk_rebind_retry--;
 		rpc_delay(task, 3*HZ);
 		goto retry_timeout;
 	case -ETIMEDOUT:
@@ -1525,7 +1511,6 @@ call_refreshresult(struct rpc_task *task)
 	task->tk_action = call_refresh;
 	if (status != -ETIMEDOUT)
 		rpc_delay(task, 3*HZ);
-	return;
 }
 
 static __be32 *

@@ -1302,7 +1302,6 @@ static void handle_channel(struct wiphy *wiphy, enum ieee80211_band band,
 		return;
 	}
 
-	chan->beacon_found = false;
 	chan->flags = flags | bw_flags | map_regdom_flags(reg_rule->flags);
 	chan->max_antenna_gain = min(chan->orig_mag,
 		(int) MBI_TO_DBI(power_rule->max_antenna_gain));
@@ -2357,10 +2356,10 @@ static void print_regdomain(const struct ieee80211_regdomain *rd)
 					rdev->country_ie_alpha2[1]);
 			} else
 				printk(KERN_INFO "cfg80211: Current regulatory "
-					"domain intersected: \n");
+					"domain intersected:\n");
 		} else
-				printk(KERN_INFO "cfg80211: Current regulatory "
-					"domain intersected: \n");
+			printk(KERN_INFO "cfg80211: Current regulatory "
+				"domain intersected:\n");
 	} else if (is_world_regdom(rd->alpha2))
 		printk(KERN_INFO "cfg80211: World regulatory "
 			"domain updated:\n");

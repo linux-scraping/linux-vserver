@@ -220,7 +220,6 @@ typedef struct _mgslpc_info {
 
 	/* PCMCIA support */
 	struct pcmcia_device	*p_dev;
-	dev_node_t	      node;
 	int		      stop;
 
 	/* SPPP/Cisco HDLC device parts */
@@ -552,10 +551,6 @@ static int mgslpc_probe(struct pcmcia_device *link)
 
     /* Initialize the struct pcmcia_device structure */
 
-    /* Interrupt setup */
-    link->irq.Attributes = IRQ_TYPE_DYNAMIC_SHARING;
-    link->irq.Handler = NULL;
-
     link->conf.Attributes = 0;
     link->conf.IntType = INT_MEMORY_AND_IO;
 
@@ -608,9 +603,7 @@ static int mgslpc_config(struct pcmcia_device *link)
     link->conf.ConfigIndex = 8;
     link->conf.Present = PRESENT_OPTION;
 
-    link->irq.Handler     = mgslpc_isr;
-
-    ret = pcmcia_request_irq(link, &link->irq);
+    ret = pcmcia_request_irq(link, mgslpc_isr);
     if (ret)
 	    goto failed;
     ret = pcmcia_request_configuration(link, &link->conf);
@@ -618,17 +611,12 @@ static int mgslpc_config(struct pcmcia_device *link)
 	    goto failed;
 
     info->io_base = link->io.BasePort1;
-    info->irq_level = link->irq.AssignedIRQ;
+    info->irq_level = link->irq;
 
-    /* add to linked list of devices */
-    sprintf(info->node.dev_name, "mgslpc0");
-    info->node.major = info->node.minor = 0;
-    link->dev_node = &info->node;
-
-    printk(KERN_INFO "%s: index 0x%02x:",
-	   info->node.dev_name, link->conf.ConfigIndex);
+    dev_info(&link->dev, "index 0x%02x:",
+	    link->conf.ConfigIndex);
     if (link->conf.Attributes & CONF_ENABLE_IRQ)
-	    printk(", irq %d", link->irq.AssignedIRQ);
+	    printk(", irq %d", link->irq);
     if (link->io.NumPorts1)
 	    printk(", io 0x%04x-0x%04x", link->io.BasePort1,
 		   link->io.BasePort1+link->io.NumPorts1-1);
@@ -2232,32 +2220,6 @@ static int mgslpc_break(struct tty_struct *tty, int break_state)
 	return 0;
 }
 
-static int mgslpc_get_icount(struct tty_struct *tty,
-				struct serial_icounter_struct *icount)
-{
-	MGSLPC_INFO * info = (MGSLPC_INFO *)tty->driver_data;
-	struct mgsl_icount cnow;	/* kernel counter temps */
-	unsigned long flags;
-
-	spin_lock_irqsave(&info->lock,flags);
-	cnow = info->icount;
-	spin_unlock_irqrestore(&info->lock,flags);
-
-	icount->cts = cnow.cts;
-	icount->dsr = cnow.dsr;
-	icount->rng = cnow.rng;
-	icount->dcd = cnow.dcd;
-	icount->rx = cnow.rx;
-	icount->tx = cnow.tx;
-	icount->frame = cnow.frame;
-	icount->overrun = cnow.overrun;
-	icount->parity = cnow.parity;
-	icount->brk = cnow.brk;
-	icount->buf_overrun = cnow.buf_overrun;
-
-	return 0;
-}
-
 /* Service an IOCTL request
  *
  * Arguments:
@@ -2273,7 +2235,11 @@ static int mgslpc_ioctl(struct tty_struct *tty, struct file * file,
 			unsigned int cmd, unsigned long arg)
 {
 	MGSLPC_INFO * info = (MGSLPC_INFO *)tty->driver_data;
+	int error;
+	struct mgsl_icount cnow;	/* kernel counter temps */
+	struct serial_icounter_struct __user *p_cuser;	/* user space */
 	void __user *argp = (void __user *)arg;
+	unsigned long flags;
 
 	if (debug_level >= DEBUG_LEVEL_INFO)
 		printk("%s(%d):mgslpc_ioctl %s cmd=%08X\n", __FILE__,__LINE__,
@@ -2283,7 +2249,7 @@ static int mgslpc_ioctl(struct tty_struct *tty, struct file * file,
 		return -ENODEV;
 
 	if ((cmd != TIOCGSERIAL) && (cmd != TIOCSSERIAL) &&
-	    (cmd != TIOCMIWAIT)) {
+	    (cmd != TIOCMIWAIT) && (cmd != TIOCGICOUNT)) {
 		if (tty->flags & (1 << TTY_IO_ERROR))
 		    return -EIO;
 	}
@@ -2313,6 +2279,34 @@ static int mgslpc_ioctl(struct tty_struct *tty, struct file * file,
 		return wait_events(info, argp);
 	case TIOCMIWAIT:
 		return modem_input_wait(info,(int)arg);
+	case TIOCGICOUNT:
+		spin_lock_irqsave(&info->lock,flags);
+		cnow = info->icount;
+		spin_unlock_irqrestore(&info->lock,flags);
+		p_cuser = argp;
+		PUT_USER(error,cnow.cts, &p_cuser->cts);
+		if (error) return error;
+		PUT_USER(error,cnow.dsr, &p_cuser->dsr);
+		if (error) return error;
+		PUT_USER(error,cnow.rng, &p_cuser->rng);
+		if (error) return error;
+		PUT_USER(error,cnow.dcd, &p_cuser->dcd);
+		if (error) return error;
+		PUT_USER(error,cnow.rx, &p_cuser->rx);
+		if (error) return error;
+		PUT_USER(error,cnow.tx, &p_cuser->tx);
+		if (error) return error;
+		PUT_USER(error,cnow.frame, &p_cuser->frame);
+		if (error) return error;
+		PUT_USER(error,cnow.overrun, &p_cuser->overrun);
+		if (error) return error;
+		PUT_USER(error,cnow.parity, &p_cuser->parity);
+		if (error) return error;
+		PUT_USER(error,cnow.brk, &p_cuser->brk);
+		if (error) return error;
+		PUT_USER(error,cnow.buf_overrun, &p_cuser->buf_overrun);
+		if (error) return error;
+		return 0;
 	default:
 		return -ENOIOCTLCMD;
 	}
@@ -2839,7 +2833,6 @@ static const struct tty_operations mgslpc_ops = {
 	.hangup = mgslpc_hangup,
 	.tiocmget = tiocmget,
 	.tiocmset = tiocmset,
-	.get_icount = mgslpc_get_icount,
 	.proc_fops = &mgslpc_proc_fops,
 };
 
@@ -4138,8 +4131,6 @@ static int hdlcdev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 	if (cmd != SIOCWANDEV)
 		return hdlc_ioctl(dev, ifr, cmd);
-
-	memset(&new_line, 0, size);
 
 	switch(ifr->ifr_settings.type) {
 	case IF_GET_IFACE: /* return current sync_serial_settings */

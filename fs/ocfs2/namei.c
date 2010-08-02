@@ -205,14 +205,7 @@ static struct inode *ocfs2_get_init_inode(struct inode *dir, int mode)
 		inode->i_nlink = 2;
 	else
 		inode->i_nlink = 1;
-	inode->i_uid = current_fsuid();
-	if (dir->i_mode & S_ISGID) {
-		inode->i_gid = dir->i_gid;
-		if (S_ISDIR(mode))
-			mode |= S_ISGID;
-	} else
-		inode->i_gid = current_fsgid();
-	inode->i_mode = mode;
+	inode_init_owner(inode, dir, mode);
 	dquot_initialize(inode);
 	return inode;
 }
@@ -240,6 +233,8 @@ static int ocfs2_mknod(struct inode *dir,
 	};
 	int did_quota_inode = 0;
 	struct ocfs2_dir_lookup_result lookup = { NULL, };
+	sigset_t oldset;
+	int did_block_signals = 0;
 
 	mlog_entry("(0x%p, 0x%p, %d, %lu, '%.*s')\n", dir, dentry, mode,
 		   (unsigned long)dev, dentry->d_name.len,
@@ -351,6 +346,10 @@ static int ocfs2_mknod(struct inode *dir,
 		goto leave;
 	}
 
+	/* Starting to change things, restart is no longer possible. */
+	ocfs2_block_signals(&oldset);
+	did_block_signals = 1;
+
 	status = dquot_alloc_inode(inode);
 	if (status)
 		goto leave;
@@ -385,11 +384,7 @@ static int ocfs2_mknod(struct inode *dir,
 			goto leave;
 		}
 		ocfs2_add_links_count(dirfe, 1);
-		status = ocfs2_journal_dirty(handle, parent_fe_bh);
-		if (status < 0) {
-			mlog_errno(status);
-			goto leave;
-		}
+		ocfs2_journal_dirty(handle, parent_fe_bh);
 		inc_nlink(dir);
 	}
 
@@ -440,6 +435,8 @@ leave:
 		ocfs2_commit_trans(osb, handle);
 
 	ocfs2_inode_unlock(dir, 1);
+	if (did_block_signals)
+		ocfs2_unblock_signals(&oldset);
 
 	if (status == -ENOSPC)
 		mlog(0, "Disk is full\n");
@@ -488,15 +485,16 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	int status = 0;
 	struct ocfs2_dinode *fe = NULL;
 	struct ocfs2_extent_list *fel;
-	u64 fe_blkno = 0;
+	u64 suballoc_loc, fe_blkno = 0;
 	u16 suballoc_bit;
 	u16 feat;
 	tag_t tag;
 
 	*new_fe_bh = NULL;
 
-	status = ocfs2_claim_new_inode(osb, handle, dir, parent_fe_bh,
-				       inode_ac, &suballoc_bit, &fe_blkno);
+	status = ocfs2_claim_new_inode(handle, dir, parent_fe_bh,
+				       inode_ac, &suballoc_loc,
+				       &suballoc_bit, &fe_blkno);
 	if (status < 0) {
 		mlog_errno(status);
 		goto leave;
@@ -533,6 +531,7 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 	fe->i_generation = cpu_to_le32(inode->i_generation);
 	fe->i_fs_generation = cpu_to_le32(osb->fs_generation);
 	fe->i_blkno = cpu_to_le64(fe_blkno);
+	fe->i_suballoc_loc = cpu_to_le64(suballoc_loc);
 	fe->i_suballoc_bit = cpu_to_le16(suballoc_bit);
 	fe->i_suballoc_slot = cpu_to_le16(inode_ac->ac_alloc_slot);
 
@@ -572,11 +571,7 @@ static int ocfs2_mknod_locked(struct ocfs2_super *osb,
 		fel->l_count = cpu_to_le16(ocfs2_extent_recs_per_inode(osb->sb));
 	}
 
-	status = ocfs2_journal_dirty(handle, *new_fe_bh);
-	if (status < 0) {
-		mlog_errno(status);
-		goto leave;
-	}
+	ocfs2_journal_dirty(handle, *new_fe_bh);
 
 	ocfs2_populate_inode(inode, fe, 1);
 	ocfs2_ci_set_new(osb, INODE_CACHE(inode));
@@ -642,6 +637,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 	struct ocfs2_dinode *fe = NULL;
 	struct ocfs2_super *osb = OCFS2_SB(dir->i_sb);
 	struct ocfs2_dir_lookup_result lookup = { NULL, };
+	sigset_t oldset;
 
 	mlog_entry("(inode=%lu, old='%.*s' new='%.*s')\n", inode->i_ino,
 		   old_dentry->d_name.len, old_dentry->d_name.name,
@@ -698,6 +694,9 @@ static int ocfs2_link(struct dentry *old_dentry,
 		goto out_unlock_inode;
 	}
 
+	/* Starting to change things, restart is no longer possible. */
+	ocfs2_block_signals(&oldset);
+
 	err = ocfs2_journal_access_di(handle, INODE_CACHE(inode), fe_bh,
 				      OCFS2_JOURNAL_ACCESS_WRITE);
 	if (err < 0) {
@@ -710,14 +709,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 	ocfs2_set_links_count(fe, inode->i_nlink);
 	fe->i_ctime = cpu_to_le64(inode->i_ctime.tv_sec);
 	fe->i_ctime_nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
-
-	err = ocfs2_journal_dirty(handle, fe_bh);
-	if (err < 0) {
-		ocfs2_add_links_count(fe, -1);
-		drop_nlink(inode);
-		mlog_errno(err);
-		goto out_commit;
-	}
+	ocfs2_journal_dirty(handle, fe_bh);
 
 	err = ocfs2_add_entry(handle, dentry, inode,
 			      OCFS2_I(inode)->ip_blkno,
@@ -741,6 +733,7 @@ static int ocfs2_link(struct dentry *old_dentry,
 
 out_commit:
 	ocfs2_commit_trans(osb, handle);
+	ocfs2_unblock_signals(&oldset);
 out_unlock_inode:
 	ocfs2_inode_unlock(inode, 1);
 
@@ -914,12 +907,7 @@ static int ocfs2_unlink(struct inode *dir,
 		drop_nlink(inode);
 	drop_nlink(inode);
 	ocfs2_set_links_count(fe, inode->i_nlink);
-
-	status = ocfs2_journal_dirty(handle, fe_bh);
-	if (status < 0) {
-		mlog_errno(status);
-		goto leave;
-	}
+	ocfs2_journal_dirty(handle, fe_bh);
 
 	dir->i_ctime = dir->i_mtime = CURRENT_TIME;
 	if (S_ISDIR(inode->i_mode))
@@ -1337,12 +1325,7 @@ static int ocfs2_rename(struct inode *old_dir,
 			ocfs2_set_links_count(newfe, 0);
 		else
 			ocfs2_add_links_count(newfe, -1);
-
-		status = ocfs2_journal_dirty(handle, newfe_bh);
-		if (status < 0) {
-			mlog_errno(status);
-			goto bail;
-		}
+		ocfs2_journal_dirty(handle, newfe_bh);
 	} else {
 		/* if the name was not found in new_dir, add it now */
 		status = ocfs2_add_entry(handle, new_dentry, old_inode,
@@ -1361,10 +1344,7 @@ static int ocfs2_rename(struct inode *old_dir,
 
 		old_di->i_ctime = cpu_to_le64(old_inode->i_ctime.tv_sec);
 		old_di->i_ctime_nsec = cpu_to_le32(old_inode->i_ctime.tv_nsec);
-
-		status = ocfs2_journal_dirty(handle, old_inode_bh);
-		if (status < 0)
-			mlog_errno(status);
+		ocfs2_journal_dirty(handle, old_inode_bh);
 	} else
 		mlog_errno(status);
 
@@ -1436,7 +1416,7 @@ static int ocfs2_rename(struct inode *old_dir,
 							 OCFS2_JOURNAL_ACCESS_WRITE);
 			fe = (struct ocfs2_dinode *) old_dir_bh->b_data;
 			ocfs2_set_links_count(fe, old_dir->i_nlink);
-			status = ocfs2_journal_dirty(handle, old_dir_bh);
+			ocfs2_journal_dirty(handle, old_dir_bh);
 		}
 	}
 	ocfs2_dentry_move(old_dentry, new_dentry, old_dir, new_dir);
@@ -1568,11 +1548,7 @@ static int ocfs2_create_symlink_data(struct ocfs2_super *osb,
 		       (bytes_left > sb->s_blocksize) ? sb->s_blocksize :
 		       bytes_left);
 
-		status = ocfs2_journal_dirty(handle, bhs[virtual]);
-		if (status < 0) {
-			mlog_errno(status);
-			goto bail;
-		}
+		ocfs2_journal_dirty(handle, bhs[virtual]);
 
 		virtual++;
 		p_blkno++;
@@ -1616,6 +1592,8 @@ static int ocfs2_symlink(struct inode *dir,
 	};
 	int did_quota = 0, did_quota_inode = 0;
 	struct ocfs2_dir_lookup_result lookup = { NULL, };
+	sigset_t oldset;
+	int did_block_signals = 0;
 
 	mlog_entry("(0x%p, 0x%p, symname='%s' actual='%.*s')\n", dir,
 		   dentry, symname, dentry->d_name.len, dentry->d_name.name);
@@ -1710,6 +1688,10 @@ static int ocfs2_symlink(struct inode *dir,
 		mlog_errno(status);
 		goto bail;
 	}
+
+	/* Starting to change things, restart is no longer possible. */
+	ocfs2_block_signals(&oldset);
+	did_block_signals = 1;
 
 	status = dquot_alloc_inode(inode);
 	if (status)
@@ -1819,6 +1801,8 @@ bail:
 		ocfs2_commit_trans(osb, handle);
 
 	ocfs2_inode_unlock(dir, 1);
+	if (did_block_signals)
+		ocfs2_unblock_signals(&oldset);
 
 	brelse(new_fe_bh);
 	brelse(parent_fe_bh);
@@ -1966,12 +1950,7 @@ static int ocfs2_orphan_add(struct ocfs2_super *osb,
 	if (S_ISDIR(inode->i_mode))
 		ocfs2_add_links_count(orphan_fe, 1);
 	orphan_dir_inode->i_nlink = ocfs2_read_links_count(orphan_fe);
-
-	status = ocfs2_journal_dirty(handle, orphan_dir_bh);
-	if (status < 0) {
-		mlog_errno(status);
-		goto leave;
-	}
+	ocfs2_journal_dirty(handle, orphan_dir_bh);
 
 	status = __ocfs2_add_entry(handle, orphan_dir_inode, name,
 				   OCFS2_ORPHAN_NAMELEN, inode,
@@ -2070,12 +2049,7 @@ int ocfs2_orphan_del(struct ocfs2_super *osb,
 	if (S_ISDIR(inode->i_mode))
 		ocfs2_add_links_count(orphan_fe, -1);
 	orphan_dir_inode->i_nlink = ocfs2_read_links_count(orphan_fe);
-
-	status = ocfs2_journal_dirty(handle, orphan_dir_bh);
-	if (status < 0) {
-		mlog_errno(status);
-		goto leave;
-	}
+	ocfs2_journal_dirty(handle, orphan_dir_bh);
 
 leave:
 	ocfs2_free_dir_lookup_result(&lookup);

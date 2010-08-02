@@ -18,6 +18,7 @@
 #include <asm/apic.h>
 #include <asm/iommu.h>
 #include <asm/gart.h>
+#include <asm/hpet.h>
 
 static void __init fix_hypertransport_config(int num, int slot, int func)
 {
@@ -145,10 +146,15 @@ static void __init ati_bugs(int num, int slot, int func)
 
 static u32 __init ati_sbx00_rev(int num, int slot, int func)
 {
-	u32 d;
+	u32 old, d;
 
+	d = read_pci_config(num, slot, func, 0x70);
+	old = d;
+	d &= ~(1<<8);
+	write_pci_config(num, slot, func, 0x70, d);
 	d = read_pci_config(num, slot, func, 0x8);
 	d &= 0xff;
+	write_pci_config(num, slot, func, 0x70, old);
 
 	return d;
 }
@@ -157,19 +163,11 @@ static void __init ati_bugs_contd(int num, int slot, int func)
 {
 	u32 d, rev;
 
-	rev = ati_sbx00_rev(num, slot, func);
-	if (rev >= 0x40)
-		acpi_fix_pin2_polarity = 1;
-
-	/*
-	 * SB600: revisions 0x11, 0x12, 0x13, 0x14, ...
-	 * SB700: revisions 0x39, 0x3a, ...
-	 * SB800: revisions 0x40, 0x41, ...
-	 */
-	if (rev >= 0x39)
+	if (acpi_use_timer_override)
 		return;
 
-	if (acpi_use_timer_override)
+	rev = ati_sbx00_rev(num, slot, func);
+	if (rev > 0x13)
 		return;
 
 	/* check for IRQ0 interrupt swap */
@@ -193,6 +191,21 @@ static void __init ati_bugs_contd(int num, int slot, int func)
 {
 }
 #endif
+
+/*
+ * Force the read back of the CMP register in hpet_next_event()
+ * to work around the problem that the CMP register write seems to be
+ * delayed. See hpet_next_event() for details.
+ *
+ * We do this on all SMBUS incarnations for now until we have more
+ * information about the affected chipsets.
+ */
+static void __init ati_hpet_bugs(int num, int slot, int func)
+{
+#ifdef CONFIG_HPET_TIMER
+	hpet_readback_cmp = 1;
+#endif
+}
 
 #define QFLAG_APPLY_ONCE 	0x1
 #define QFLAG_APPLIED		0x2
@@ -223,6 +236,8 @@ static struct chipset early_qrk[] __initdata = {
 	  PCI_CLASS_SERIAL_SMBUS, PCI_ANY_ID, 0, ati_bugs },
 	{ PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_SBX00_SMBUS,
 	  PCI_CLASS_SERIAL_SMBUS, PCI_ANY_ID, 0, ati_bugs_contd },
+	{ PCI_VENDOR_ID_ATI, PCI_ANY_ID,
+	  PCI_CLASS_SERIAL_SMBUS, PCI_ANY_ID, 0, ati_hpet_bugs },
 	{}
 };
 

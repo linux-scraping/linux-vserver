@@ -119,8 +119,6 @@ static int x25_state1_machine(struct sock *sk, struct sk_buff *skb, int frametyp
 						&x25->vc_facil_mask);
 			if (len > 0)
 				skb_pull(skb, len);
-			else
-				return -1;
 			/*
 			 *	Copy any Call User Data.
 			 */
@@ -275,7 +273,7 @@ static int x25_state3_machine(struct sock *sk, struct sk_buff *skb, int frametyp
 			break;
 
 		case X25_INTERRUPT_CONFIRMATION:
-			x25->intflag = 0;
+			clear_bit(X25_INTERRUPT_FLAG, &x25->flags);
 			break;
 
 		case X25_INTERRUPT:

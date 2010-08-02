@@ -25,6 +25,7 @@
 #include <linux/mount.h>
 #include <linux/async.h>
 #include <linux/posix_acl.h>
+#include <linux/vs_tag.h>
 
 /*
  * This is needed for the following functions:
@@ -249,20 +250,6 @@ void destroy_inode(struct inode *inode)
 		kmem_cache_free(inode_cachep, (inode));
 }
 
-void address_space_init_once(struct address_space *mapping)
-{
-	memset(mapping, 0, sizeof(*mapping));
-	INIT_RADIX_TREE(&mapping->page_tree, GFP_ATOMIC);
-	spin_lock_init(&mapping->tree_lock);
-	spin_lock_init(&mapping->i_mmap_lock);
-	INIT_LIST_HEAD(&mapping->private_list);
-	spin_lock_init(&mapping->private_lock);
-	INIT_RAW_PRIO_TREE_ROOT(&mapping->i_mmap);
-	INIT_LIST_HEAD(&mapping->i_mmap_nonlinear);
-	mutex_init(&mapping->unmap_mutex);
-}
-EXPORT_SYMBOL(address_space_init_once);
-
 /*
  * These are initializations that only need to be done
  * once, because the fields are idempotent across use
@@ -274,7 +261,13 @@ void inode_init_once(struct inode *inode)
 	INIT_HLIST_NODE(&inode->i_hash);
 	INIT_LIST_HEAD(&inode->i_dentry);
 	INIT_LIST_HEAD(&inode->i_devices);
-	address_space_init_once(&inode->i_data);
+	INIT_RADIX_TREE(&inode->i_data.page_tree, GFP_ATOMIC);
+	spin_lock_init(&inode->i_data.tree_lock);
+	spin_lock_init(&inode->i_data.i_mmap_lock);
+	INIT_LIST_HEAD(&inode->i_data.private_list);
+	spin_lock_init(&inode->i_data.private_lock);
+	INIT_RAW_PRIO_TREE_ROOT(&inode->i_data.i_mmap);
+	INIT_LIST_HEAD(&inode->i_data.i_mmap_nonlinear);
 	i_size_ordered_init(inode);
 #ifdef CONFIG_INOTIFY
 	INIT_LIST_HEAD(&inode->inotify_watches);
@@ -298,11 +291,9 @@ static void init_once(void *foo)
  */
 void __iget(struct inode *inode)
 {
-	if (atomic_read(&inode->i_count)) {
-		atomic_inc(&inode->i_count);
+	if (atomic_inc_return(&inode->i_count) != 1)
 		return;
-	}
-	atomic_inc(&inode->i_count);
+
 	if (!(inode->i_state & (I_DIRTY|I_SYNC)))
 		list_move(&inode->i_list, &inode_in_use);
 	inodes_stat.nr_unused--;
@@ -528,7 +519,7 @@ static void prune_icache(int nr_to_scan)
  * This function is passed the number of inodes to scan, and it returns the
  * total number of remaining possibly-reclaimable inodes.
  */
-static int shrink_icache_memory(int nr, gfp_t gfp_mask)
+static int shrink_icache_memory(struct shrinker *shrink, int nr, gfp_t gfp_mask)
 {
 	if (nr) {
 		/*
@@ -1219,8 +1210,6 @@ void generic_delete_inode(struct inode *inode)
 	inodes_stat.nr_inodes--;
 	spin_unlock(&inode_lock);
 
-	security_inode_delete(inode);
-
 	if (op->delete_inode) {
 		void (*delete)(struct inode *) = op->delete_inode;
 		/* Filesystems implementing their own
@@ -1626,3 +1615,24 @@ void init_special_inode(struct inode *inode, umode_t mode, dev_t rdev)
 				  inode->i_ino);
 }
 EXPORT_SYMBOL(init_special_inode);
+
+/**
+ * Init uid,gid,mode for new inode according to posix standards
+ * @inode: New inode
+ * @dir: Directory inode
+ * @mode: mode of the new inode
+ */
+void inode_init_owner(struct inode *inode, const struct inode *dir,
+			mode_t mode)
+{
+	inode->i_uid = current_fsuid();
+	if (dir && dir->i_mode & S_ISGID) {
+		inode->i_gid = dir->i_gid;
+		if (S_ISDIR(mode))
+			mode |= S_ISGID;
+	} else
+		inode->i_gid = current_fsgid();
+	inode->i_mode = mode;
+	inode->i_tag = dx_current_fstag(inode->i_sb);
+}
+EXPORT_SYMBOL(inode_init_owner);

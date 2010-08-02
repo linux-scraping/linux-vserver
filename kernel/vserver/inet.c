@@ -92,7 +92,6 @@ out:
 int v6_dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 {
 	struct inet6_dev *in_dev;
-	struct inet6_ifaddr **ifap;
 	struct inet6_ifaddr *ifa;
 	int ret = 0;
 
@@ -102,8 +101,8 @@ int v6_dev_in_nx_info(struct net_device *dev, struct nx_info *nxi)
 	if (!in_dev)
 		goto out;
 
-	for (ifap = &in_dev->addr_list; (ifa = *ifap) != NULL;
-		ifap = &ifa->if_next) {
+	// for (ifap = &in_dev->addr_list; (ifa = *ifap) != NULL;
+	list_for_each_entry(ifa, &in_dev->addr_list, if_list) {
 		if (v6_addr_in_nx_info(nxi, &ifa->addr, -1)) {
 			ret = 1;
 			break;

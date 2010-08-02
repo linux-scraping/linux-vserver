@@ -170,17 +170,6 @@ static inline void ignore_cstruct_param(struct cardstate *cs, _cstruct param,
 }
 
 /*
- * convert hex to binary
- */
-static inline u8 hex2bin(char c)
-{
-	int result = c & 0x0f;
-	if (c & 0x40)
-		result += 9;
-	return result;
-}
-
-/*
  * convert an IE from Gigaset hex string to ETSI binary representation
  * including length byte
  * return value: result length, -1 on error
@@ -191,7 +180,7 @@ static int encode_ie(char *in, u8 *out, int maxlen)
 	while (*in) {
 		if (!isxdigit(in[0]) || !isxdigit(in[1]) || l >= maxlen)
 			return -1;
-		out[++l] = (hex2bin(in[0]) << 4) + hex2bin(in[1]);
+		out[++l] = (hex_to_bin(in[0]) << 4) + hex_to_bin(in[1]);
 		in += 2;
 	}
 	out[0] = l;
@@ -389,13 +378,13 @@ void gigaset_skb_sent(struct bc_state *bcs, struct sk_buff *dskb)
 	++bcs->trans_up;
 
 	if (!ap) {
-		gig_dbg(DEBUG_MCMD, "%s: application gone", __func__);
+		dev_err(cs->dev, "%s: no application\n", __func__);
 		return;
 	}
 
 	/* don't send further B3 messages if disconnected */
 	if (bcs->apconnstate < APCONN_ACTIVE) {
-		gig_dbg(DEBUG_MCMD, "%s: disconnected", __func__);
+		gig_dbg(DEBUG_LLDATA, "disconnected, discarding ack");
 		return;
 	}
 
@@ -433,14 +422,13 @@ void gigaset_skb_rcvd(struct bc_state *bcs, struct sk_buff *skb)
 	bcs->trans_down++;
 
 	if (!ap) {
-		gig_dbg(DEBUG_MCMD, "%s: application gone", __func__);
-		dev_kfree_skb_any(skb);
+		dev_err(cs->dev, "%s: no application\n", __func__);
 		return;
 	}
 
 	/* don't send further B3 messages if disconnected */
 	if (bcs->apconnstate < APCONN_ACTIVE) {
-		gig_dbg(DEBUG_MCMD, "%s: disconnected", __func__);
+		gig_dbg(DEBUG_LLDATA, "disconnected, discarding data");
 		dev_kfree_skb_any(skb);
 		return;
 	}
@@ -759,7 +747,7 @@ void gigaset_isdn_connD(struct bc_state *bcs)
 	ap = bcs->ap;
 	if (!ap) {
 		spin_unlock_irqrestore(&bcs->aplock, flags);
-		gig_dbg(DEBUG_CMD, "%s: application gone", __func__);
+		dev_err(cs->dev, "%s: no application\n", __func__);
 		return;
 	}
 	if (bcs->apconnstate == APCONN_NONE) {
@@ -855,7 +843,7 @@ void gigaset_isdn_connB(struct bc_state *bcs)
 	ap = bcs->ap;
 	if (!ap) {
 		spin_unlock_irqrestore(&bcs->aplock, flags);
-		gig_dbg(DEBUG_CMD, "%s: application gone", __func__);
+		dev_err(cs->dev, "%s: no application\n", __func__);
 		return;
 	}
 	if (!bcs->apconnstate) {
@@ -913,12 +901,13 @@ void gigaset_isdn_connB(struct bc_state *bcs)
  */
 void gigaset_isdn_hupB(struct bc_state *bcs)
 {
+	struct cardstate *cs = bcs->cs;
 	struct gigaset_capi_appl *ap = bcs->ap;
 
 	/* ToDo: assure order of DISCONNECT_B3_IND and DISCONNECT_IND ? */
 
 	if (!ap) {
-		gig_dbg(DEBUG_CMD, "%s: application gone", __func__);
+		dev_err(cs->dev, "%s: no application\n", __func__);
 		return;
 	}
 
@@ -1055,7 +1044,6 @@ static inline void remove_appl_from_channel(struct bc_state *bcs,
 	do {
 		if (bcap->bcnext == ap) {
 			bcap->bcnext = bcap->bcnext->bcnext;
-			spin_unlock_irqrestore(&bcs->aplock, flags);
 			return;
 		}
 		bcap = bcap->bcnext;

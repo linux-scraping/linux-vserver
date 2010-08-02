@@ -20,10 +20,10 @@ config X86_32
 	select HAVE_AOUT
 
 config RWSEM_XCHGADD_ALGORITHM
-	def_bool X86_XADD && 64BIT
+	def_bool X86_XADD
 
 config RWSEM_GENERIC_SPINLOCK
-	def_bool !RWSEM_XCHGADD_ALGORITHM
+	def_bool !X86_XADD
 
 config 3_LEVEL_PGTABLES
 	bool "Three-level pagetables (EXPERIMENTAL)" if !64BIT

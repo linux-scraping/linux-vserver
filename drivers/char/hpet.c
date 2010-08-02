@@ -431,14 +431,18 @@ static int hpet_release(struct inode *inode, struct file *file)
 
 static int hpet_ioctl_common(struct hpet_dev *, int, unsigned long, int);
 
-static int
-hpet_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
-	   unsigned long arg)
+static long hpet_ioctl(struct file *file, unsigned int cmd,
+			unsigned long arg)
 {
 	struct hpet_dev *devp;
+	int ret;
 
 	devp = file->private_data;
-	return hpet_ioctl_common(devp, cmd, arg, 0);
+	lock_kernel();
+	ret = hpet_ioctl_common(devp, cmd, arg, 0);
+	unlock_kernel();
+
+	return ret;
 }
 
 static int hpet_ioctl_ieon(struct hpet_dev *devp)
@@ -474,21 +478,6 @@ static int hpet_ioctl_ieon(struct hpet_dev *devp)
 
 	if (irq) {
 		unsigned long irq_flags;
-
-		if (devp->hd_flags & HPET_SHARED_IRQ) {
-			/*
-			 * To prevent the interrupt handler from seeing an
-			 * unwanted interrupt status bit, program the timer
-			 * so that it will not fire in the near future ...
-			 */
-			writel(readl(&timer->hpet_config) & ~Tn_TYPE_CNF_MASK,
-			       &timer->hpet_config);
-			write_counter(read_counter(&hpet->hpet_mc),
-				      &timer->hpet_compare);
-			/* ... and clear any left-over status. */
-			isr = 1 << (devp - devp->hd_hpets->hp_dev);
-			writel(isr, &hpet->hpet_isr);
-		}
 
 		sprintf(devp->hd_name, "hpet%d", (int)(devp - hpetp->hp_dev));
 		irq_flags = devp->hd_flags & HPET_SHARED_IRQ
@@ -669,7 +658,7 @@ static const struct file_operations hpet_fops = {
 	.llseek = no_llseek,
 	.read = hpet_read,
 	.poll = hpet_poll,
-	.ioctl = hpet_ioctl,
+	.unlocked_ioctl = hpet_ioctl,
 	.open = hpet_open,
 	.release = hpet_release,
 	.fasync = hpet_fasync,
@@ -981,8 +970,6 @@ static int hpet_acpi_add(struct acpi_device *device)
 		return -ENODEV;
 
 	if (!data.hd_address || !data.hd_nirqs) {
-		if (data.hd_address)
-			iounmap(data.hd_address);
 		printk("%s: no address or irqs in _CRS\n", __func__);
 		return -ENODEV;
 	}
