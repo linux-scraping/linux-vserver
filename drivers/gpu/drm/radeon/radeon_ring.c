@@ -26,6 +26,7 @@
  *          Jerome Glisse
  */
 #include <linux/seq_file.h>
+#include <linux/slab.h>
 #include "drmP.h"
 #include "radeon_drm.h"
 #include "radeon_reg.h"
@@ -33,6 +34,36 @@
 #include "atom.h"
 
 int radeon_debugfs_ib_init(struct radeon_device *rdev);
+
+void radeon_ib_bogus_cleanup(struct radeon_device *rdev)
+{
+	struct radeon_ib *ib, *n;
+
+	list_for_each_entry_safe(ib, n, &rdev->ib_pool.bogus_ib, list) {
+		list_del(&ib->list);
+		vfree(ib->ptr);
+		kfree(ib);
+	}
+}
+
+void radeon_ib_bogus_add(struct radeon_device *rdev, struct radeon_ib *ib)
+{
+	struct radeon_ib *bib;
+
+	bib = kmalloc(sizeof(*bib), GFP_KERNEL);
+	if (bib == NULL)
+		return;
+	bib->ptr = vmalloc(ib->length_dw * 4);
+	if (bib->ptr == NULL) {
+		kfree(bib);
+		return;
+	}
+	memcpy(bib->ptr, ib->ptr, ib->length_dw * 4);
+	bib->length_dw = ib->length_dw;
+	mutex_lock(&rdev->ib_pool.mutex);
+	list_add_tail(&bib->list, &rdev->ib_pool.bogus_ib);
+	mutex_unlock(&rdev->ib_pool.mutex);
+}
 
 /*
  * IB.
@@ -142,6 +173,7 @@ int radeon_ib_pool_init(struct radeon_device *rdev)
 
 	if (rdev->ib_pool.robj)
 		return 0;
+	INIT_LIST_HEAD(&rdev->ib_pool.bogus_ib);
 	/* Allocate 1M object buffer */
 	r = radeon_bo_create(rdev, NULL,  RADEON_IB_POOL_SIZE*64*1024,
 				true, RADEON_GEM_DOMAIN_GTT,
@@ -187,22 +219,26 @@ int radeon_ib_pool_init(struct radeon_device *rdev)
 void radeon_ib_pool_fini(struct radeon_device *rdev)
 {
 	int r;
+	struct radeon_bo *robj;
 
 	if (!rdev->ib_pool.ready) {
 		return;
 	}
 	mutex_lock(&rdev->ib_pool.mutex);
-	if (rdev->ib_pool.robj) {
-		r = radeon_bo_reserve(rdev->ib_pool.robj, false);
-		if (likely(r == 0)) {
-			radeon_bo_kunmap(rdev->ib_pool.robj);
-			radeon_bo_unpin(rdev->ib_pool.robj);
-			radeon_bo_unreserve(rdev->ib_pool.robj);
-		}
-		radeon_bo_unref(&rdev->ib_pool.robj);
-		rdev->ib_pool.robj = NULL;
-	}
+	radeon_ib_bogus_cleanup(rdev);
+	robj = rdev->ib_pool.robj;
+	rdev->ib_pool.robj = NULL;
 	mutex_unlock(&rdev->ib_pool.mutex);
+
+	if (robj) {
+		r = radeon_bo_reserve(robj, false);
+		if (likely(r == 0)) {
+			radeon_bo_kunmap(robj);
+			radeon_bo_unpin(robj);
+			radeon_bo_unreserve(robj);
+		}
+		radeon_bo_unref(&robj);
+	}
 }
 
 
@@ -224,31 +260,41 @@ void radeon_ring_free_size(struct radeon_device *rdev)
 	}
 }
 
-int radeon_ring_lock(struct radeon_device *rdev, unsigned ndw)
+int radeon_ring_alloc(struct radeon_device *rdev, unsigned ndw)
 {
 	int r;
 
 	/* Align requested size with padding so unlock_commit can
 	 * pad safely */
 	ndw = (ndw + rdev->cp.align_mask) & ~rdev->cp.align_mask;
-	mutex_lock(&rdev->cp.mutex);
 	while (ndw > (rdev->cp.ring_free_dw - 1)) {
 		radeon_ring_free_size(rdev);
 		if (ndw < rdev->cp.ring_free_dw) {
 			break;
 		}
 		r = radeon_fence_wait_next(rdev);
-		if (r) {
-			mutex_unlock(&rdev->cp.mutex);
+		if (r)
 			return r;
-		}
 	}
 	rdev->cp.count_dw = ndw;
 	rdev->cp.wptr_old = rdev->cp.wptr;
 	return 0;
 }
 
-void radeon_ring_unlock_commit(struct radeon_device *rdev)
+int radeon_ring_lock(struct radeon_device *rdev, unsigned ndw)
+{
+	int r;
+
+	mutex_lock(&rdev->cp.mutex);
+	r = radeon_ring_alloc(rdev, ndw);
+	if (r) {
+		mutex_unlock(&rdev->cp.mutex);
+		return r;
+	}
+	return 0;
+}
+
+void radeon_ring_commit(struct radeon_device *rdev)
 {
 	unsigned count_dw_pad;
 	unsigned i;
@@ -261,6 +307,11 @@ void radeon_ring_unlock_commit(struct radeon_device *rdev)
 	}
 	DRM_MEMORYBARRIER();
 	radeon_cp_commit(rdev);
+}
+
+void radeon_ring_unlock_commit(struct radeon_device *rdev)
+{
+	radeon_ring_commit(rdev);
 	mutex_unlock(&rdev->cp.mutex);
 }
 
@@ -310,20 +361,23 @@ int radeon_ring_init(struct radeon_device *rdev, unsigned ring_size)
 void radeon_ring_fini(struct radeon_device *rdev)
 {
 	int r;
+	struct radeon_bo *ring_obj;
 
 	mutex_lock(&rdev->cp.mutex);
-	if (rdev->cp.ring_obj) {
-		r = radeon_bo_reserve(rdev->cp.ring_obj, false);
-		if (likely(r == 0)) {
-			radeon_bo_kunmap(rdev->cp.ring_obj);
-			radeon_bo_unpin(rdev->cp.ring_obj);
-			radeon_bo_unreserve(rdev->cp.ring_obj);
-		}
-		radeon_bo_unref(&rdev->cp.ring_obj);
-		rdev->cp.ring = NULL;
-		rdev->cp.ring_obj = NULL;
-	}
+	ring_obj = rdev->cp.ring_obj;
+	rdev->cp.ring = NULL;
+	rdev->cp.ring_obj = NULL;
 	mutex_unlock(&rdev->cp.mutex);
+
+	if (ring_obj) {
+		r = radeon_bo_reserve(ring_obj, false);
+		if (likely(r == 0)) {
+			radeon_bo_kunmap(ring_obj);
+			radeon_bo_unpin(ring_obj);
+			radeon_bo_unreserve(ring_obj);
+		}
+		radeon_bo_unref(&ring_obj);
+	}
 }
 
 
@@ -349,15 +403,49 @@ static int radeon_debugfs_ib_info(struct seq_file *m, void *data)
 	return 0;
 }
 
+static int radeon_debugfs_ib_bogus_info(struct seq_file *m, void *data)
+{
+	struct drm_info_node *node = (struct drm_info_node *) m->private;
+	struct radeon_device *rdev = node->info_ent->data;
+	struct radeon_ib *ib;
+	unsigned i;
+
+	mutex_lock(&rdev->ib_pool.mutex);
+	if (list_empty(&rdev->ib_pool.bogus_ib)) {
+		mutex_unlock(&rdev->ib_pool.mutex);
+		seq_printf(m, "no bogus IB recorded\n");
+		return 0;
+	}
+	ib = list_first_entry(&rdev->ib_pool.bogus_ib, struct radeon_ib, list);
+	list_del_init(&ib->list);
+	mutex_unlock(&rdev->ib_pool.mutex);
+	seq_printf(m, "IB size %05u dwords\n", ib->length_dw);
+	for (i = 0; i < ib->length_dw; i++) {
+		seq_printf(m, "[%05u]=0x%08X\n", i, ib->ptr[i]);
+	}
+	vfree(ib->ptr);
+	kfree(ib);
+	return 0;
+}
+
 static struct drm_info_list radeon_debugfs_ib_list[RADEON_IB_POOL_SIZE];
 static char radeon_debugfs_ib_names[RADEON_IB_POOL_SIZE][32];
+
+static struct drm_info_list radeon_debugfs_ib_bogus_info_list[] = {
+	{"radeon_ib_bogus", radeon_debugfs_ib_bogus_info, 0, NULL},
+};
 #endif
 
 int radeon_debugfs_ib_init(struct radeon_device *rdev)
 {
 #if defined(CONFIG_DEBUG_FS)
 	unsigned i;
+	int r;
 
+	radeon_debugfs_ib_bogus_info_list[0].data = rdev;
+	r = radeon_debugfs_add_files(rdev, radeon_debugfs_ib_bogus_info_list, 1);
+	if (r)
+		return r;
 	for (i = 0; i < RADEON_IB_POOL_SIZE; i++) {
 		sprintf(radeon_debugfs_ib_names[i], "radeon_ib_%04u", i);
 		radeon_debugfs_ib_list[i].name = radeon_debugfs_ib_names[i];

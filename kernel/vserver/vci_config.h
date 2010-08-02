@@ -1,7 +1,7 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020305
+#define VCI_VERSION		0x00020306
 
 
 enum {
@@ -16,6 +16,7 @@ enum {
 	VCI_KCBIT_FULLCOWBL = 9,
 	VCI_KCBIT_SPACES = 10,
 	VCI_KCBIT_NETV2 = 11,
+	VCI_KCBIT_MEMCG = 12,
 
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
@@ -50,6 +51,9 @@ static inline uint32_t vci_kernel_config(void)
 #endif
 	(1 << VCI_KCBIT_SPACES) |
 	(1 << VCI_KCBIT_NETV2) |
+#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+	(1 << VCI_KCBIT_MEMCG) |
+#endif
 
 	/* debug options */
 #ifdef	CONFIG_VSERVER_DEBUG

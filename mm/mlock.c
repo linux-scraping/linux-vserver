@@ -26,7 +26,7 @@ int can_do_mlock(void)
 {
 	if (capable(CAP_IPC_LOCK))
 		return 1;
-	if (current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur != 0)
+	if (rlimit(RLIMIT_MEMLOCK) != 0)
 		return 1;
 	return 0;
 }
@@ -399,7 +399,7 @@ success:
 	nr_pages = (end - start) >> PAGE_SHIFT;
 	if (!lock)
 		nr_pages = -nr_pages;
-	vx_vmlocked_add(mm, nr_pages);
+	mm->locked_vm += nr_pages;
 
 	/*
 	 * vm_flags is protected by the mmap_sem held in write mode.
@@ -485,12 +485,10 @@ SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 	len = PAGE_ALIGN(len + (start & ~PAGE_MASK));
 	start &= PAGE_MASK;
 
-	grow = len >> PAGE_SHIFT;
-	if (!vx_vmlocked_avail(current->mm, grow))
-		goto out;
-	locked = current->mm->locked_vm + grow;
+	locked = len >> PAGE_SHIFT;
+	locked += current->mm->locked_vm;
 
-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
+	lock_limit = rlimit(RLIMIT_MEMLOCK);
 	lock_limit >>= PAGE_SHIFT;
 
 	/* check against resource limits */
@@ -554,12 +552,10 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 
 	down_write(&current->mm->mmap_sem);
 
-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
+	lock_limit = rlimit(RLIMIT_MEMLOCK);
 	lock_limit >>= PAGE_SHIFT;
 
 	ret = -ENOMEM;
-	if (!vx_vmlocked_avail(current->mm, current->mm->total_vm))
-		goto out;
 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
 	    capable(CAP_IPC_LOCK))
 		ret = do_mlockall(flags);
@@ -590,7 +586,7 @@ int user_shm_lock(size_t size, struct user_struct *user)
 	int allowed = 0;
 
 	locked = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
+	lock_limit = rlimit(RLIMIT_MEMLOCK);
 	if (lock_limit == RLIM_INFINITY)
 		allowed = 1;
 	lock_limit >>= PAGE_SHIFT;
@@ -612,49 +608,4 @@ void user_shm_unlock(size_t size, struct user_struct *user)
 	user->locked_shm -= (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	spin_unlock(&shmlock_user_lock);
 	free_uid(user);
-}
-
-int account_locked_memory(struct mm_struct *mm, struct rlimit *rlim,
-			  size_t size)
-{
-	unsigned long lim, vm, pgsz;
-	int error = -ENOMEM;
-
-	pgsz = PAGE_ALIGN(size) >> PAGE_SHIFT;
-
-	down_write(&mm->mmap_sem);
-
-	lim = rlim[RLIMIT_AS].rlim_cur >> PAGE_SHIFT;
-	vm   = mm->total_vm + pgsz;
-	if (lim < vm)
-		goto out;
-
-	lim = rlim[RLIMIT_MEMLOCK].rlim_cur >> PAGE_SHIFT;
-	vm   = mm->locked_vm + pgsz;
-	if (lim < vm)
-		goto out;
-
-	// mm->total_vm  += pgsz;
-	vx_vmpages_add(mm, pgsz);
-	// mm->locked_vm += pgsz;
-	vx_vmlocked_add(mm, pgsz);
-
-	error = 0;
- out:
-	up_write(&mm->mmap_sem);
-	return error;
-}
-
-void refund_locked_memory(struct mm_struct *mm, size_t size)
-{
-	unsigned long pgsz = PAGE_ALIGN(size) >> PAGE_SHIFT;
-
-	down_write(&mm->mmap_sem);
-
-	// mm->total_vm  -= pgsz;
-	vx_vmpages_sub(mm, pgsz);
-	// mm->locked_vm -= pgsz;
-	vx_vmlocked_sub(mm, pgsz);
-
-	up_write(&mm->mmap_sem);
 }

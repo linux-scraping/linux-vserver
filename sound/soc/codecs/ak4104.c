@@ -10,6 +10,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/initval.h>
@@ -183,9 +184,7 @@ struct snd_soc_dai ak4104_dai = {
 		.stream_name = "Playback",
 		.channels_min = 2,
 		.channels_max = 2,
-		.rates = SNDRV_PCM_RATE_44100 |
-			 SNDRV_PCM_RATE_48000 |
-			 SNDRV_PCM_RATE_32000,
+		.rates = SNDRV_PCM_RATE_8000_192000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE  |
 			   SNDRV_PCM_FMTBIT_S24_3LE |
 			   SNDRV_PCM_FMTBIT_S24_LE
@@ -223,7 +222,7 @@ static int ak4104_spi_probe(struct spi_device *spi)
 	codec->owner = THIS_MODULE;
 	codec->dai = &ak4104_dai;
 	codec->num_dai = 1;
-	codec->private_data = ak4104;
+	snd_soc_codec_set_drvdata(codec, ak4104);
 	codec->control_data = spi;
 	codec->reg_cache = ak4104->reg_cache;
 	codec->reg_cache_size = AK4104_NUM_REGS;

@@ -71,7 +71,6 @@
 #include <linux/buffer_head.h>		/* for invalidate_bdev() */
 #include <linux/completion.h>
 #include <linux/highmem.h>
-#include <linux/gfp.h>
 #include <linux/kthread.h>
 #include <linux/splice.h>
 #include <linux/vs_context.h>
@@ -238,6 +237,8 @@ static int do_lo_send_aops(struct loop_device *lo, struct bio_vec *bvec,
 							&page, &fsdata);
 		if (ret)
 			goto fail;
+
+		file_update_time(file);
 
 		transfer_result = lo_do_transfer(lo, WRITE, page, offset,
 				bvec->bv_page, bv_offs, size, IV);
@@ -485,7 +486,7 @@ static int do_bio_filebacked(struct loop_device *lo, struct bio *bio)
 				goto out;
 			}
 
-			ret = vfs_fsync(file, file->f_path.dentry, 0);
+			ret = vfs_fsync(file, 0);
 			if (unlikely(ret)) {
 				ret = -EIO;
 				goto out;
@@ -495,7 +496,7 @@ static int do_bio_filebacked(struct loop_device *lo, struct bio *bio)
 		ret = lo_send(lo, bio, pos);
 
 		if (barrier && !ret) {
-			ret = vfs_fsync(file, file->f_path.dentry, 0);
+			ret = vfs_fsync(file, 0);
 			if (unlikely(ret))
 				ret = -EIO;
 		}
@@ -836,6 +837,8 @@ static int loop_set_fd(struct loop_device *lo, fmode_t mode,
 
 	set_capacity(lo->lo_disk, size);
 	bd_set_size(bdev, size << 9);
+	/* let user-space know about the new size */
+	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 
 	set_blocksize(bdev, lo_blocksize);
 
@@ -859,6 +862,7 @@ out_clr:
 	set_capacity(lo->lo_disk, 0);
 	invalidate_bdev(bdev);
 	bd_set_size(bdev, 0);
+	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 	mapping_set_gfp_mask(mapping, lo->old_gfp_mask);
 	lo->lo_state = Lo_unbound;
  out_putf:
@@ -946,8 +950,11 @@ static int loop_clr_fd(struct loop_device *lo, struct block_device *bdev)
 	if (bdev)
 		invalidate_bdev(bdev);
 	set_capacity(lo->lo_disk, 0);
-	if (bdev)
+	if (bdev) {
 		bd_set_size(bdev, 0);
+		/* let user-space know about this change */
+		kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
+	}
 	mapping_set_gfp_mask(filp->f_mapping, gfp);
 	lo->lo_state = Lo_unbound;
 	/* This is safe: open() is still holding a reference. */
@@ -1192,6 +1199,8 @@ static int loop_set_capacity(struct loop_device *lo, struct block_device *bdev)
 	sz <<= 9;
 	mutex_lock(&bdev->bd_mutex);
 	bd_set_size(bdev, sz);
+	/* let user-space know about the new size */
+	kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 	mutex_unlock(&bdev->bd_mutex);
 
  out:

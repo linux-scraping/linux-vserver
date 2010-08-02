@@ -4,6 +4,7 @@
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/namei.h>
+#include <linux/slab.h>
 
 extern struct dentry *cow_break_link(const char *pathname);
 

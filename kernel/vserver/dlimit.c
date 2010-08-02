@@ -17,6 +17,8 @@
 #include <linux/vs_tag.h>
 #include <linux/vs_dlimit.h>
 #include <linux/vserver/dlimit_cmd.h>
+#include <linux/slab.h>
+// #include <linux/gfp.h>
 
 #include <asm/uaccess.h>
 

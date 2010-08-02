@@ -16,7 +16,10 @@
 #include "gigaset.h"
 #include <linux/isdnif.h>
 
+#define SBUFSIZE	4096	/* sk_buff payload size */
+#define TRANSBUFSIZE	768	/* bytes per skb for transparent receive */
 #define HW_HDR_LEN	2	/* Header size used to store ack info */
+#define MAX_BUF_SIZE	(SBUFSIZE - HW_HDR_LEN)	/* max data packet from LL */
 
 /* == Handling of I4L IO =====================================================*/
 
@@ -216,7 +219,7 @@ static int command_from_LL(isdn_ctrl *cntrl)
 		return -EINVAL;
 
 	case ISDN_CMD_DIAL:
-		gig_dbg(DEBUG_ANY,
+		gig_dbg(DEBUG_CMD,
 			"ISDN_CMD_DIAL (phone: %s, msn: %s, si1: %d, si2: %d)",
 			cntrl->parm.setup.phone, cntrl->parm.setup.eazmsn,
 			cntrl->parm.setup.si1, cntrl->parm.setup.si2);
@@ -231,6 +234,15 @@ static int command_from_LL(isdn_ctrl *cntrl)
 			dev_err(cs->dev, "ISDN_CMD_DIAL: channel not free\n");
 			return -EBUSY;
 		}
+		switch (bcs->proto2) {
+		case L2_HDLC:
+			bcs->rx_bufsize = SBUFSIZE;
+			break;
+		default:			/* assume transparent */
+			bcs->rx_bufsize = TRANSBUFSIZE;
+		}
+		dev_kfree_skb(bcs->rx_skb);
+		gigaset_new_rx_skb(bcs);
 
 		commands = kzalloc(AT_NUM*(sizeof *commands), GFP_ATOMIC);
 		if (!commands) {
@@ -304,28 +316,33 @@ static int command_from_LL(isdn_ctrl *cntrl)
 			gigaset_free_channel(bcs);
 			return -ENOMEM;
 		}
-
-		gig_dbg(DEBUG_CMD, "scheduling DIAL");
 		gigaset_schedule_event(cs);
 		break;
 	case ISDN_CMD_ACCEPTD:
+		gig_dbg(DEBUG_CMD, "ISDN_CMD_ACCEPTD");
 		if (ch >= cs->channels) {
 			dev_err(cs->dev,
 				"ISDN_CMD_ACCEPTD: invalid channel (%d)\n", ch);
 			return -EINVAL;
 		}
 		bcs = cs->bcs + ch;
+		switch (bcs->proto2) {
+		case L2_HDLC:
+			bcs->rx_bufsize = SBUFSIZE;
+			break;
+		default:			/* assume transparent */
+			bcs->rx_bufsize = TRANSBUFSIZE;
+		}
+		dev_kfree_skb(bcs->rx_skb);
+		gigaset_new_rx_skb(bcs);
 		if (!gigaset_add_event(cs, &bcs->at_state,
 				       EV_ACCEPT, NULL, 0, NULL))
 			return -ENOMEM;
-
-		gig_dbg(DEBUG_CMD, "scheduling ACCEPT");
 		gigaset_schedule_event(cs);
 
 		break;
-	case ISDN_CMD_ACCEPTB:
-		break;
 	case ISDN_CMD_HANGUP:
+		gig_dbg(DEBUG_CMD, "ISDN_CMD_HANGUP");
 		if (ch >= cs->channels) {
 			dev_err(cs->dev,
 				"ISDN_CMD_HANGUP: invalid channel (%d)\n", ch);
@@ -335,8 +352,6 @@ static int command_from_LL(isdn_ctrl *cntrl)
 		if (!gigaset_add_event(cs, &bcs->at_state,
 				       EV_HUP, NULL, 0, NULL))
 			return -ENOMEM;
-
-		gig_dbg(DEBUG_CMD, "scheduling HUP");
 		gigaset_schedule_event(cs);
 
 		break;
@@ -376,6 +391,7 @@ static int command_from_LL(isdn_ctrl *cntrl)
 		}
 		break;
 	case ISDN_CMD_SETL3: /* Set L3 to given protocol */
+		gig_dbg(DEBUG_CMD, "ISDN_CMD_SETL3");
 		if (ch >= cs->channels) {
 			dev_err(cs->dev,
 				"ISDN_CMD_SETL3: invalid channel (%d)\n", ch);
@@ -390,44 +406,9 @@ static int command_from_LL(isdn_ctrl *cntrl)
 		}
 
 		break;
-	case ISDN_CMD_PROCEED:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_PROCEED");
-		break;
-	case ISDN_CMD_ALERT:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_ALERT");
-		if (cntrl->arg >= cs->channels) {
-			dev_err(cs->dev,
-				"ISDN_CMD_ALERT: invalid channel (%d)\n",
-				(int) cntrl->arg);
-			return -EINVAL;
-		}
-		break;
-	case ISDN_CMD_REDIR:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_REDIR");
-		break;
-	case ISDN_CMD_PROT_IO:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_PROT_IO");
-		break;
-	case ISDN_CMD_FAXCMD:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_FAXCMD");
-		break;
-	case ISDN_CMD_GETL2:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_GETL2");
-		break;
-	case ISDN_CMD_GETL3:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_GETL3");
-		break;
-	case ISDN_CMD_GETEAZ:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_GETEAZ");
-		break;
-	case ISDN_CMD_SETSIL:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_SETSIL");
-		break;
-	case ISDN_CMD_GETSIL:
-		gig_dbg(DEBUG_ANY, "ISDN_CMD_GETSIL");
-		break;
+
 	default:
-		dev_err(cs->dev, "unknown command %d from LL\n",
+		gig_dbg(DEBUG_CMD, "unknown command %d from LL",
 			cntrl->command);
 		return -EINVAL;
 	}

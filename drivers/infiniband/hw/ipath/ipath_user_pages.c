@@ -33,6 +33,7 @@
 
 #include <linux/mm.h>
 #include <linux/device.h>
+#include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/vs_memory.h>
 
@@ -60,11 +61,9 @@ static int __get_user_pages(unsigned long start_page, size_t num_pages,
 	size_t got;
 	int ret;
 
-	lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur >>
-		PAGE_SHIFT;
+	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 
-	if (num_pages > lock_limit ||
-		!vx_vmlocked_avail(current->mm, num_pages)) {
+	if (num_pages > lock_limit) {
 		ret = -ENOMEM;
 		goto bail;
 	}
@@ -81,7 +80,7 @@ static int __get_user_pages(unsigned long start_page, size_t num_pages,
 			goto bail_release;
 	}
 
-	vx_vmlocked_add(current->mm, num_pages);
+	current->mm->locked_vm += num_pages;
 
 	ret = 0;
 	goto bail;
@@ -180,7 +179,7 @@ void ipath_release_user_pages(struct page **p, size_t num_pages)
 
 	__ipath_release_user_pages(p, num_pages, 1);
 
-	vx_vmlocked_sub(current->mm, num_pages);
+	current->mm->locked_vm -= num_pages;
 
 	up_write(&current->mm->mmap_sem);
 }
@@ -197,7 +196,7 @@ static void user_pages_account(struct work_struct *_work)
 		container_of(_work, struct ipath_user_pages_work, work);
 
 	down_write(&work->mm->mmap_sem);
-	vx_vmlocked_sub(work->mm, work->num_pages);
+	work->mm->locked_vm -= work->num_pages;
 	up_write(&work->mm->mmap_sem);
 	mmput(work->mm);
 	kfree(work);

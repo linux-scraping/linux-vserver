@@ -195,11 +195,8 @@ static void radeon_cs_parser_fini(struct radeon_cs_parser *parser, int error)
 	radeon_bo_list_unreserve(&parser->validated);
 	if (parser->relocs != NULL) {
 		for (i = 0; i < parser->nrelocs; i++) {
-			if (parser->relocs[i].gobj) {
-				mutex_lock(&parser->rdev->ddev->struct_mutex);
-				drm_gem_object_unreference(parser->relocs[i].gobj);
-				mutex_unlock(&parser->rdev->ddev->struct_mutex);
-			}
+			if (parser->relocs[i].gobj)
+				drm_gem_object_unreference_unlocked(parser->relocs[i].gobj);
 		}
 	}
 	kfree(parser->track);
@@ -223,10 +220,6 @@ int radeon_cs_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 	int r;
 
 	mutex_lock(&rdev->cs_mutex);
-	if (rdev->gpu_lockup) {
-		mutex_unlock(&rdev->cs_mutex);
-		return -EINVAL;
-	}
 	/* initialize parser */
 	memset(&parser, 0, sizeof(struct radeon_cs_parser));
 	parser.filp = filp;

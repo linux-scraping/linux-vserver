@@ -60,7 +60,6 @@
 #include <net/net_namespace.h>
 #include <net/dst.h>
 #include <net/sock.h>
-#include <linux/gfp.h>
 #include <linux/ip.h>
 #include <linux/net.h>
 #include <net/ip.h>
@@ -291,7 +290,7 @@ static int raw_rcv_skb(struct sock * sk, struct sk_buff * skb)
 {
 	/* Charge it to the socket. */
 
-	if (sock_queue_rcv_skb(sk, skb) < 0) {
+	if (ip_queue_rcv_skb(sk, skb) < 0) {
 		kfree_skb(skb);
 		return NET_RX_DROP;
 	}
@@ -388,8 +387,8 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 		!v4_addr_in_nx_info(sk->sk_nx_info, iph->saddr, NXA_MASK_BIND))
 		goto error_free;
 
-	err = NF_HOOK(PF_INET, NF_INET_LOCAL_OUT, skb, NULL, rt->u.dst.dev,
-		      dst_output);
+	err = NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_OUT, skb, NULL,
+		      rt->u.dst.dev, dst_output);
 	if (err > 0)
 		err = net_xmit_errno(err);
 	if (err)

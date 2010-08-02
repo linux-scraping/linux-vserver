@@ -68,7 +68,7 @@ out:
 		"ALLOC (%p,#%d)%c %lld bytes (%d)",
 		sb, tag, __dlimit_char(dli), (long long)nr,
 		ret, file, line);
-	return ret;
+	return ret ? -ENOSPC : 0;
 }
 
 static inline void __dl_free_space(struct super_block *sb,
@@ -115,7 +115,7 @@ out:
 	vxlprintk(VXD_CBIT(dlim, 0),
 		"ALLOC (%p,#%d)%c inode (%d)",
 		sb, tag, __dlimit_char(dli), ret, _file, _line);
-	return ret;
+	return ret ? -ENOSPC : 0;
 }
 
 static inline void __dl_free_inode(struct super_block *sb,
