@@ -1551,8 +1551,6 @@ int may_open(struct path *path, int acc_mode, int flag)
 	}
 
 #ifdef	CONFIG_VSERVER_COWBL
-	if (IS_COW(inode))
-		printk("cow inode: %p, flag=%x\n", inode, flag);
 	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
 		if (IS_COW_LINK(inode))
 			return -EMLINK;
