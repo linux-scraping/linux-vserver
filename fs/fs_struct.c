@@ -108,12 +108,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
 		fs->in_exec = 0;
 		rwlock_init(&fs->lock);
 		fs->umask = old->umask;
-		read_lock(&old->lock);
-		fs->root = old->root;
-		path_get(&old->root);
-		fs->pwd = old->pwd;
-		path_get(&old->pwd);
-		read_unlock(&old->lock);
+		get_fs_root_and_pwd(old, &fs->root, &fs->pwd);
 		atomic_inc(&vs_global_fs);
 	}
 	return fs;

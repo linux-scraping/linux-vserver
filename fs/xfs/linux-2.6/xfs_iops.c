@@ -24,22 +24,14 @@
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_dir2.h"
 #include "xfs_alloc.h"
-#include "xfs_dmapi.h"
 #include "xfs_quota.h"
 #include "xfs_mount.h"
 #include "xfs_bmap_btree.h"
-#include "xfs_alloc_btree.h"
-#include "xfs_ialloc_btree.h"
-#include "xfs_dir2_sf.h"
-#include "xfs_attr_sf.h"
 #include "xfs_dinode.h"
 #include "xfs_inode.h"
 #include "xfs_ioctl.h"
 #include "xfs_bmap.h"
-#include "xfs_btree.h"
-#include "xfs_ialloc.h"
 #include "xfs_rtalloc.h"
 #include "xfs_error.h"
 #include "xfs_itable.h"
@@ -90,7 +82,7 @@ xfs_mark_inode_dirty_sync(
 {
 	struct inode	*inode = VFS_I(ip);
 
-	if (!(inode->i_state & (I_WILL_FREE|I_FREEING|I_CLEAR)))
+	if (!(inode->i_state & (I_WILL_FREE|I_FREEING)))
 		mark_inode_dirty_sync(inode);
 }
 
@@ -100,7 +92,7 @@ xfs_mark_inode_dirty(
 {
 	struct inode	*inode = VFS_I(ip);
 
-	if (!(inode->i_state & (I_WILL_FREE|I_FREEING|I_CLEAR)))
+	if (!(inode->i_state & (I_WILL_FREE|I_FREEING)))
 		mark_inode_dirty(inode);
 }
 
@@ -498,7 +490,7 @@ xfs_vn_getattr(
 	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
 
-	xfs_itrace_entry(ip);
+	trace_xfs_getattr(ip);
 
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return XFS_ERROR(EIO);
@@ -549,21 +541,6 @@ xfs_vn_setattr(
 	struct iattr	*iattr)
 {
 	return -xfs_setattr(XFS_I(dentry->d_inode), iattr, 0);
-}
-
-/*
- * block_truncate_page can return an error, but we can't propagate it
- * at all here. Leave a complaint + stack trace in the syslog because
- * this could be bad. If it is bad, we need to propagate the error further.
- */
-STATIC void
-xfs_vn_truncate(
-	struct inode	*inode)
-{
-	int	error;
-	error = block_truncate_page(inode->i_mapping, inode->i_size,
-							xfs_get_blocks);
-	WARN_ON(error);
 }
 
 STATIC long
@@ -705,7 +682,6 @@ xfs_vn_fiemap(
 
 static const struct inode_operations xfs_inode_operations = {
 	.check_acl		= xfs_check_acl,
-	.truncate		= xfs_vn_truncate,
 	.getattr		= xfs_vn_getattr,
 	.setattr		= xfs_vn_setattr,
 	.setxattr		= generic_setxattr,

@@ -44,16 +44,17 @@
 #include <linux/times.h>
 #include <linux/limits.h>
 #include <linux/dcache.h>
+#include <linux/dnotify.h>
 #include <linux/syscalls.h>
 #include <linux/vmstat.h>
 #include <linux/nfs_fs.h>
 #include <linux/acpi.h>
 #include <linux/reboot.h>
 #include <linux/ftrace.h>
-#include <linux/slow-work.h>
 #include <linux/perf_event.h>
 #include <linux/kprobes.h>
 #include <linux/pipe_fs_i.h>
+#include <linux/oom.h>
 
 #include <asm/uaccess.h>
 #include <asm/processor.h>
@@ -77,15 +78,16 @@ extern char vshelper_path[];
 #include <scsi/sg.h>
 #endif
 
+#ifdef CONFIG_LOCKUP_DETECTOR
+#include <linux/nmi.h>
+#endif
+
 
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
 extern int sysctl_overcommit_memory;
 extern int sysctl_overcommit_ratio;
-extern int sysctl_panic_on_oom;
-extern int sysctl_oom_kill_allocating_task;
-extern int sysctl_oom_dump_tasks;
 extern int max_threads;
 extern int core_uses_pid;
 extern int suid_dumpable;
@@ -107,7 +109,7 @@ extern int blk_iopoll_enabled;
 #endif
 
 /* Constants used for minimum and  maximum */
-#ifdef CONFIG_DETECT_SOFTLOCKUP
+#ifdef CONFIG_LOCKUP_DETECTOR
 static int sixty = 60;
 static int neg_one = -1;
 #endif
@@ -131,6 +133,9 @@ static int min_percpu_pagelist_fract = 8;
 
 static int ngroups_max = NGROUPS_MAX;
 
+#ifdef CONFIG_INOTIFY_USER
+#include <linux/inotify.h>
+#endif
 #ifdef CONFIG_SPARC
 #include <asm/system.h>
 #endif
@@ -207,9 +212,6 @@ static struct ctl_table fs_table[];
 static struct ctl_table debug_table[];
 static struct ctl_table dev_table[];
 extern struct ctl_table random_table[];
-#ifdef CONFIG_INOTIFY_USER
-extern struct ctl_table inotify_table[];
-#endif
 #ifdef CONFIG_EPOLL
 extern struct ctl_table epoll_table[];
 #endif
@@ -563,7 +565,7 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &one,
 	},
 #endif
-#if defined(CONFIG_HOTPLUG) && defined(CONFIG_NET)
+#ifdef CONFIG_HOTPLUG
 	{
 		.procname	= "hotplug",
 		.data		= &uevent_helper,
@@ -718,7 +720,34 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0444,
 		.proc_handler	= proc_dointvec,
 	},
-#if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_X86)
+#if defined(CONFIG_LOCKUP_DETECTOR)
+	{
+		.procname       = "watchdog",
+		.data           = &watchdog_enabled,
+		.maxlen         = sizeof (int),
+		.mode           = 0644,
+		.proc_handler   = proc_dowatchdog_enabled,
+	},
+	{
+		.procname	= "watchdog_thresh",
+		.data		= &softlockup_thresh,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dowatchdog_thresh,
+		.extra1		= &neg_one,
+		.extra2		= &sixty,
+	},
+	{
+		.procname	= "softlockup_panic",
+		.data		= &softlockup_panic,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif
+#if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_X86) && !defined(CONFIG_LOCKUP_DETECTOR)
 	{
 		.procname       = "unknown_nmi_panic",
 		.data           = &unknown_nmi_panic,
@@ -821,26 +850,6 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
-#ifdef CONFIG_DETECT_SOFTLOCKUP
-	{
-		.procname	= "softlockup_panic",
-		.data		= &softlockup_panic,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "softlockup_thresh",
-		.data		= &softlockup_thresh,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dosoftlockup_thresh,
-		.extra1		= &neg_one,
-		.extra2		= &sixty,
-	},
-#endif
 #ifdef CONFIG_DETECT_HUNG_TASK
 	{
 		.procname	= "hung_task_panic",
@@ -912,13 +921,6 @@ static struct ctl_table kern_table[] = {
 		.maxlen         = sizeof(int),
 		.mode           = 0644,
 		.proc_handler	= proc_dointvec,
-	},
-#endif
-#ifdef CONFIG_SLOW_WORK
-	{
-		.procname	= "slow-work",
-		.mode		= 0555,
-		.child		= slow_work_sysctls,
 	},
 #endif
 #ifdef CONFIG_PERF_EVENTS

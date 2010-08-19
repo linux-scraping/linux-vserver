@@ -51,7 +51,7 @@ void __vx_page_fault(struct mm_struct *mm,
 #endif
 
 
-extern unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm);
+extern unsigned long vx_badness(struct task_struct *task);
 
 #else
 #warning duplicate inclusion

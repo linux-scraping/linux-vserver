@@ -29,6 +29,7 @@
 #include <linux/log2.h>
 #include <linux/idr.h>
 #include <linux/fs_struct.h>
+#include <linux/fsnotify.h>
 #include <linux/vs_base.h>
 #include <linux/vs_context.h>
 #include <linux/vs_tag.h>
@@ -155,6 +156,9 @@ struct vfsmount *alloc_vfsmnt(const char *name)
 		INIT_LIST_HEAD(&mnt->mnt_share);
 		INIT_LIST_HEAD(&mnt->mnt_slave_list);
 		INIT_LIST_HEAD(&mnt->mnt_slave);
+#ifdef CONFIG_FSNOTIFY
+		INIT_HLIST_HEAD(&mnt->mnt_fsnotify_marks);
+#endif
 #ifdef CONFIG_SMP
 		mnt->mnt_writers = alloc_percpu(int);
 		if (!mnt->mnt_writers)
@@ -616,6 +620,7 @@ static inline void __mntput(struct vfsmount *mnt)
 	 * provides barriers, so count_mnt_writers() below is safe.  AV
 	 */
 	WARN_ON(count_mnt_writers(mnt));
+	fsnotify_vfsmount_delete(mnt);
 	dput(mnt->mnt_root);
 	free_vfsmnt(mnt);
 	deactivate_super(sb);
@@ -816,7 +821,6 @@ static void show_mnt_opts(struct seq_file *m, struct vfsmount *mnt)
 		{ MNT_NOATIME, ",noatime" },
 		{ MNT_NODIRATIME, ",nodiratime" },
 		{ MNT_RELATIME, ",relatime" },
-		{ MNT_STRICTATIME, ",strictatime" },
 		{ 0, NULL }
 	};
 	const struct proc_fs_info *fs_infop;
@@ -2279,10 +2283,7 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 		goto out1;
 	}
 
-	read_lock(&current->fs->lock);
-	root = current->fs->root;
-	path_get(&current->fs->root);
-	read_unlock(&current->fs->lock);
+	get_fs_root(current->fs, &root);
 	down_write(&namespace_sem);
 	mutex_lock(&old.dentry->d_inode->i_mutex);
 	error = -EINVAL;

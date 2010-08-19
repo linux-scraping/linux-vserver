@@ -67,6 +67,7 @@
 #include <linux/compat.h>
 #include <linux/suspend.h>
 #include <linux/freezer.h>
+#include <linux/smp_lock.h>
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>		/* for invalidate_bdev() */
 #include <linux/completion.h>
@@ -477,7 +478,7 @@ static int do_bio_filebacked(struct loop_device *lo, struct bio *bio)
 	pos = ((loff_t) bio->bi_sector << 9) + lo->lo_offset;
 
 	if (bio_rw(bio) == WRITE) {
-		bool barrier = bio_rw_flagged(bio, BIO_RW_BARRIER);
+		bool barrier = (bio->bi_rw & REQ_HARDBARRIER);
 		struct file *file = lo->lo_backing_file;
 
 		if (barrier) {
@@ -833,7 +834,7 @@ static int loop_set_fd(struct loop_device *lo, fmode_t mode,
 	lo->lo_queue->unplug_fn = loop_unplug;
 
 	if (!(lo_flags & LO_FLAGS_READ_ONLY) && file->f_op->fsync)
-		blk_queue_ordered(lo->lo_queue, QUEUE_ORDERED_DRAIN, NULL);
+		blk_queue_ordered(lo->lo_queue, QUEUE_ORDERED_DRAIN);
 
 	set_capacity(lo->lo_disk, size);
 	bd_set_size(bdev, size << 9);
@@ -1415,9 +1416,11 @@ static int lo_open(struct block_device *bdev, fmode_t mode)
 	if (!vx_check(lo->lo_xid, VS_IDENT|VS_HOSTID|VS_ADMIN_P))
 		return -EACCES;
 
+	lock_kernel();
 	mutex_lock(&lo->lo_ctl_mutex);
 	lo->lo_refcnt++;
 	mutex_unlock(&lo->lo_ctl_mutex);
+	unlock_kernel();
 
 	return 0;
 }
@@ -1427,6 +1430,7 @@ static int lo_release(struct gendisk *disk, fmode_t mode)
 	struct loop_device *lo = disk->private_data;
 	int err;
 
+	lock_kernel();
 	mutex_lock(&lo->lo_ctl_mutex);
 
 	if (--lo->lo_refcnt)
@@ -1451,6 +1455,7 @@ static int lo_release(struct gendisk *disk, fmode_t mode)
 out:
 	mutex_unlock(&lo->lo_ctl_mutex);
 out_unlocked:
+	lock_kernel();
 	return 0;
 }
 
