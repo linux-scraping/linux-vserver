@@ -3,7 +3,7 @@
  *
  * This file provides system snapshot/restore functionality for swsusp.
  *
- * Copyright (C) 1998-2005 Pavel Machek <pavel@suse.cz>
+ * Copyright (C) 1998-2005 Pavel Machek <pavel@ucw.cz>
  * Copyright (C) 2006 Rafael J. Wysocki <rjw@sisk.pl>
  *
  * This file is released under the GPLv2.
@@ -1086,6 +1086,7 @@ void swsusp_free(void)
 	buffer = NULL;
 	alloc_normal = 0;
 	alloc_highmem = 0;
+	hibernation_thaw_swap();
 }
 
 /* Helper functions used for the shrinking of memory. */
@@ -1121,19 +1122,9 @@ static unsigned long preallocate_image_pages(unsigned long nr_pages, gfp_t mask)
 	return nr_alloc;
 }
 
-static unsigned long preallocate_image_memory(unsigned long nr_pages,
-					      unsigned long avail_normal)
+static unsigned long preallocate_image_memory(unsigned long nr_pages)
 {
-	unsigned long alloc;
-
-	if (avail_normal <= alloc_normal)
-		return 0;
-
-	alloc = avail_normal - alloc_normal;
-	if (nr_pages < alloc)
-		alloc = nr_pages;
-
-	return preallocate_image_pages(alloc, GFP_IMAGE);
+	return preallocate_image_pages(nr_pages, GFP_IMAGE);
 }
 
 #ifdef CONFIG_HIGHMEM
@@ -1179,22 +1170,15 @@ static inline unsigned long preallocate_highmem_fraction(unsigned long nr_pages,
  */
 static void free_unnecessary_pages(void)
 {
-	unsigned long save, to_free_normal, to_free_highmem;
+	unsigned long save_highmem, to_free_normal, to_free_highmem;
 
-	save = count_data_pages();
-	if (alloc_normal >= save) {
-		to_free_normal = alloc_normal - save;
-		save = 0;
-	} else {
-		to_free_normal = 0;
-		save -= alloc_normal;
-	}
-	save += count_highmem_pages();
-	if (alloc_highmem >= save) {
-		to_free_highmem = alloc_highmem - save;
+	to_free_normal = alloc_normal - count_data_pages();
+	save_highmem = count_highmem_pages();
+	if (alloc_highmem > save_highmem) {
+		to_free_highmem = alloc_highmem - save_highmem;
 	} else {
 		to_free_highmem = 0;
-		to_free_normal -= save - alloc_highmem;
+		to_free_normal -= save_highmem - alloc_highmem;
 	}
 
 	memory_bm_position_reset(&copy_bm);
@@ -1275,7 +1259,7 @@ int hibernate_preallocate_memory(void)
 {
 	struct zone *zone;
 	unsigned long saveable, size, max_size, count, highmem, pages = 0;
-	unsigned long alloc, save_highmem, pages_highmem, avail_normal;
+	unsigned long alloc, save_highmem, pages_highmem;
 	struct timeval start, stop;
 	int error;
 
@@ -1312,7 +1296,6 @@ int hibernate_preallocate_memory(void)
 		else
 			count += zone_page_state(zone, NR_FREE_PAGES);
 	}
-	avail_normal = count;
 	count += highmem;
 	count -= totalreserve_pages;
 
@@ -1327,21 +1310,12 @@ int hibernate_preallocate_memory(void)
 	 */
 	if (size >= saveable) {
 		pages = preallocate_image_highmem(save_highmem);
-		pages += preallocate_image_memory(saveable - pages, avail_normal);
+		pages += preallocate_image_memory(saveable - pages);
 		goto out;
 	}
 
 	/* Estimate the minimum size of the image. */
 	pages = minimum_image_size(saveable);
-	/*
-	 * To avoid excessive pressure on the normal zone, leave room in it to
-	 * accommodate an image of the minimum size (unless it's already too
-	 * small, in which case don't preallocate pages from it at all).
-	 */
-	if (avail_normal > pages)
-		avail_normal -= pages;
-	else
-		avail_normal = 0;
 	if (size < pages)
 		size = min_t(unsigned long, pages, max_size);
 
@@ -1362,34 +1336,16 @@ int hibernate_preallocate_memory(void)
 	 */
 	pages_highmem = preallocate_image_highmem(highmem / 2);
 	alloc = (count - max_size) - pages_highmem;
-	pages = preallocate_image_memory(alloc, avail_normal);
-	if (pages < alloc) {
-		/* We have exhausted non-highmem pages, try highmem. */
-		alloc -= pages;
-		pages += pages_highmem;
-		pages_highmem = preallocate_image_highmem(alloc);
-		if (pages_highmem < alloc)
-			goto err_out;
-		pages += pages_highmem;
-		/*
-		 * size is the desired number of saveable pages to leave in
-		 * memory, so try to preallocate (all memory - size) pages.
-		 */
-		alloc = (count - pages) - size;
-		pages += preallocate_image_highmem(alloc);
-	} else {
-		/*
-		 * There are approximately max_size saveable pages at this point
-		 * and we want to reduce this number down to size.
-		 */
-		alloc = max_size - size;
-		size = preallocate_highmem_fraction(alloc, highmem, count);
-		pages_highmem += size;
-		alloc -= size;
-		size = preallocate_image_memory(alloc, avail_normal);
-		pages_highmem += preallocate_image_highmem(alloc - size);
-		pages += pages_highmem + size;
-	}
+	pages = preallocate_image_memory(alloc);
+	if (pages < alloc)
+		goto err_out;
+	size = max_size - size;
+	alloc = size;
+	size = preallocate_highmem_fraction(size, highmem, count);
+	pages_highmem += size;
+	alloc -= size;
+	pages += preallocate_image_memory(alloc);
+	pages += pages_highmem;
 
 	/*
 	 * We only need as many page frames for the image as there are saveable

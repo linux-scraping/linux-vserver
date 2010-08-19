@@ -11,6 +11,14 @@
 			NIPQUAD((a)->mask), (a)->type
 #define NXAV4_FMT	"[" NIPQUAD_FMT "-" NIPQUAD_FMT "/" NIPQUAD_FMT ":%04x]"
 
+#define NIPQUAD(addr) \
+	((unsigned char *)&addr)[0], \
+	((unsigned char *)&addr)[1], \
+	((unsigned char *)&addr)[2], \
+	((unsigned char *)&addr)[3]
+
+#define NIPQUAD_FMT "%u.%u.%u.%u"
+
 
 static inline
 int v4_addr_match(struct nx_addr_v4 *nxa, __be32 addr, uint16_t tmask)

@@ -108,7 +108,7 @@ static int intel_agp_map_memory(struct agp_memory *mem)
 	DBG("try mapping %lu pages\n", (unsigned long)mem->page_count);
 
 	if (sg_alloc_table(&st, mem->page_count, GFP_KERNEL))
-		return -ENOMEM;
+		goto err;
 
 	mem->sg_list = sg = st.sgl;
 
@@ -117,11 +117,14 @@ static int intel_agp_map_memory(struct agp_memory *mem)
 
 	mem->num_sg = pci_map_sg(intel_private.pcidev, mem->sg_list,
 				 mem->page_count, PCI_DMA_BIDIRECTIONAL);
-	if (unlikely(!mem->num_sg)) {
-		intel_agp_free_sglist(mem);
-		return -ENOMEM;
-	}
+	if (unlikely(!mem->num_sg))
+		goto err;
+
 	return 0;
+
+err:
+	sg_free_table(&st);
+	return -ENOMEM;
 }
 
 static void intel_agp_unmap_memory(struct agp_memory *mem)
@@ -180,7 +183,7 @@ static void intel_agp_insert_sg_entries(struct agp_memory *mem,
 	if (agp_bridge->dev->device == PCI_DEVICE_ID_INTEL_SANDYBRIDGE_HB ||
 	    agp_bridge->dev->device == PCI_DEVICE_ID_INTEL_SANDYBRIDGE_M_HB)
 	{
-		cache_bits = I830_PTE_SYSTEM_CACHED;
+		cache_bits = GEN6_PTE_LLC_MLC;
 	}
 
 	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
@@ -585,7 +588,8 @@ static void intel_i830_init_gtt_entries(void)
 			gtt_entries = 0;
 			break;
 		}
-	} else if (IS_SNB) {
+	} else if (agp_bridge->dev->device == PCI_DEVICE_ID_INTEL_SANDYBRIDGE_HB ||
+		   agp_bridge->dev->device == PCI_DEVICE_ID_INTEL_SANDYBRIDGE_M_HB) {
 		/*
 		 * SandyBridge has new memory control reg at 0x50.w
 		 */
@@ -805,6 +809,10 @@ static int intel_i830_create_gatt_table(struct agp_bridge_data *bridge)
 
 	/* we have to call this as early as possible after the MMIO base address is known */
 	intel_i830_init_gtt_entries();
+	if (intel_private.gtt_entries == 0) {
+		iounmap(intel_private.registers);
+		return -ENOMEM;
+	}
 
 	agp_bridge->gatt_table = NULL;
 
@@ -1060,11 +1068,11 @@ static void intel_i9xx_setup_flush(void)
 		intel_i915_setup_chipset_flush();
 	}
 
-	if (intel_private.ifp_resource.start)
+	if (intel_private.ifp_resource.start) {
 		intel_private.i9xx_flush_page = ioremap_nocache(intel_private.ifp_resource.start, PAGE_SIZE);
-	if (!intel_private.i9xx_flush_page)
-		dev_err(&intel_private.pcidev->dev,
-			"can't ioremap flush page - no chipset flushing\n");
+		if (!intel_private.i9xx_flush_page)
+			dev_info(&intel_private.pcidev->dev, "can't ioremap flush page - no chipset flushing");
+	}
 }
 
 static int intel_i9xx_configure(void)
@@ -1290,6 +1298,11 @@ static int intel_i915_create_gatt_table(struct agp_bridge_data *bridge)
 
 	/* we have to call this as early as possible after the MMIO base address is known */
 	intel_i830_init_gtt_entries();
+	if (intel_private.gtt_entries == 0) {
+		iounmap(intel_private.gtt);
+		iounmap(intel_private.registers);
+		return -ENOMEM;
+	}
 
 	agp_bridge->gatt_table = NULL;
 
@@ -1320,8 +1333,8 @@ static unsigned long intel_i965_mask_memory(struct agp_bridge_data *bridge,
 static unsigned long intel_gen6_mask_memory(struct agp_bridge_data *bridge,
 					    dma_addr_t addr, int type)
 {
-	/* gen6 has bit11-4 for physical addr bit39-32 */
-	addr |= (addr >> 28) & 0xff0;
+	/* Shift high bits down */
+	addr |= (addr >> 28) & 0xff;
 
 	/* Type checking must be done elsewhere */
 	return addr | bridge->driver->masks[type].mask;
@@ -1346,7 +1359,6 @@ static void intel_i965_get_gtt_range(int *gtt_offset, int *gtt_size)
 		break;
 	case PCI_DEVICE_ID_INTEL_SANDYBRIDGE_HB:
 	case PCI_DEVICE_ID_INTEL_SANDYBRIDGE_M_HB:
-	case PCI_DEVICE_ID_INTEL_SANDYBRIDGE_S_HB:
 		*gtt_offset = MB(2);
 
 		pci_read_config_word(intel_private.pcidev, SNB_GMCH_CTRL, &snb_gmch_ctl);
@@ -1409,6 +1421,11 @@ static int intel_i965_create_gatt_table(struct agp_bridge_data *bridge)
 
 	/* we have to call this as early as possible after the MMIO base address is known */
 	intel_i830_init_gtt_entries();
+	if (intel_private.gtt_entries == 0) {
+		iounmap(intel_private.gtt);
+		iounmap(intel_private.registers);
+		return -ENOMEM;
+	}
 
 	agp_bridge->gatt_table = NULL;
 

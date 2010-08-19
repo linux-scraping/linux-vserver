@@ -596,10 +596,6 @@ static ssize_t port_fops_write(struct file *filp, const char __user *ubuf,
 	ssize_t ret;
 	bool nonblock;
 
-	/* Userspace could be out to fool us */
-	if (!count)
-		return 0;
-
 	port = filp->private_data;
 
 	nonblock = filp->f_flags & O_NONBLOCK;
@@ -646,7 +642,7 @@ static unsigned int port_fops_poll(struct file *filp, poll_table *wait)
 	poll_wait(filp, &port->waitqueue, wait);
 
 	ret = 0;
-	if (!will_read_block(port))
+	if (port->inbuf)
 		ret |= POLLIN | POLLRDNORM;
 	if (!will_write_block(port))
 		ret |= POLLOUT;

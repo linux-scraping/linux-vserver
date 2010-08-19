@@ -365,8 +365,7 @@ int inode_permission(struct inode *inode, int mask)
 	if (retval)
 		return retval;
 
-	return security_inode_permission(inode,
-			mask & (MAY_READ|MAY_WRITE|MAY_EXEC|MAY_APPEND));
+	return security_inode_permission(inode, mask);
 }
 
 /**
@@ -570,13 +569,8 @@ ok:
 
 static __always_inline void set_root(struct nameidata *nd)
 {
-	if (!nd->root.mnt) {
-		struct fs_struct *fs = current->fs;
-		read_lock(&fs->lock);
-		nd->root = fs->root;
-		path_get(&nd->root);
-		read_unlock(&fs->lock);
-	}
+	if (!nd->root.mnt)
+		get_fs_root(current->fs, &nd->root);
 }
 
 static int link_path_walk(const char *, struct nameidata *);
@@ -1117,11 +1111,7 @@ static int path_init(int dfd, const char *name, unsigned int flags, struct namei
 		nd->path = nd->root;
 		path_get(&nd->root);
 	} else if (dfd == AT_FDCWD) {
-		struct fs_struct *fs = current->fs;
-		read_lock(&fs->lock);
-		nd->path = fs->pwd;
-		path_get(&fs->pwd);
-		read_unlock(&fs->lock);
+		get_fs_pwd(current->fs, &nd->path);
 	} else {
 		struct dentry *dentry;
 
@@ -1593,8 +1583,7 @@ static int handle_truncate(struct path *path)
 	 */
 	error = locks_verify_locked(inode);
 	if (!error)
-		error = security_path_truncate(path, 0,
-				       ATTR_MTIME|ATTR_CTIME|ATTR_OPEN);
+		error = security_path_truncate(path);
 	if (!error) {
 		error = do_truncate(path->dentry, 0,
 				    ATTR_MTIME|ATTR_CTIME|ATTR_OPEN,
@@ -2788,7 +2777,7 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 {
 	int error;
 	int is_dir = S_ISDIR(old_dentry->d_inode->i_mode);
-	const char *old_name;
+	const unsigned char *old_name;
 
 	if (old_dentry->d_inode == new_dentry->d_inode)
  		return 0;
@@ -3099,9 +3088,8 @@ retry:
 			.ia_valid = ATTR_UID | ATTR_GID
 			};
 
-		ret = inode_setattr(new_inode, &attr);
-		if (ret)
-			goto out_fput_both;
+		setattr_copy(new_inode, &attr);
+		mark_inode_dirty(new_inode);
 	}
 
 	mutex_lock(&old_path.dentry->d_inode->i_sb->s_vfs_rename_mutex);

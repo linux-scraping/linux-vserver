@@ -381,19 +381,12 @@ static int function_stat_show(struct seq_file *m, void *v)
 {
 	struct ftrace_profile *rec = v;
 	char str[KSYM_SYMBOL_LEN];
-	int ret = 0;
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
+	static DEFINE_MUTEX(mutex);
 	static struct trace_seq s;
 	unsigned long long avg;
 	unsigned long long stddev;
 #endif
-	mutex_lock(&ftrace_profile_lock);
-
-	/* we raced with function_profile_reset() */
-	if (unlikely(rec->counter == 0)) {
-		ret = -EBUSY;
-		goto out;
-	}
 
 	kallsyms_lookup(rec->ip, NULL, NULL, NULL, str);
 	seq_printf(m, "  %-30.30s  %10lu", str, rec->counter);
@@ -415,6 +408,7 @@ static int function_stat_show(struct seq_file *m, void *v)
 		do_div(stddev, (rec->counter - 1) * 1000);
 	}
 
+	mutex_lock(&mutex);
 	trace_seq_init(&s);
 	trace_print_graph_duration(rec->time, &s);
 	trace_seq_puts(&s, "    ");
@@ -422,12 +416,11 @@ static int function_stat_show(struct seq_file *m, void *v)
 	trace_seq_puts(&s, "    ");
 	trace_print_graph_duration(stddev, &s);
 	trace_print_seq(m, &s);
+	mutex_unlock(&mutex);
 #endif
 	seq_putc(m, '\n');
-out:
-	mutex_unlock(&ftrace_profile_lock);
 
-	return ret;
+	return 0;
 }
 
 static void ftrace_profile_reset(struct ftrace_profile_stat *stat)
@@ -1510,8 +1503,6 @@ static void *t_start(struct seq_file *m, loff_t *pos)
 		if (*pos > 0)
 			return t_hash_start(m, pos);
 		iter->flags |= FTRACE_ITER_PRINTALL;
-		/* reset in case of seek/pread */
-		iter->flags &= ~FTRACE_ITER_HASH;
 		return iter;
 	}
 
@@ -1892,7 +1883,6 @@ function_trace_probe_call(unsigned long ip, unsigned long parent_ip)
 	struct hlist_head *hhd;
 	struct hlist_node *n;
 	unsigned long key;
-	int resched;
 
 	key = hash_long(ip, FTRACE_HASH_BITS);
 
@@ -1906,12 +1896,12 @@ function_trace_probe_call(unsigned long ip, unsigned long parent_ip)
 	 * period. This syncs the hash iteration and freeing of items
 	 * on the hash. rcu_read_lock is too dangerous here.
 	 */
-	resched = ftrace_preempt_disable();
+	preempt_disable_notrace();
 	hlist_for_each_entry_rcu(entry, n, hhd, node) {
 		if (entry->ip == ip)
 			entry->ops->func(ip, parent_ip, &entry->data);
 	}
-	ftrace_preempt_enable(resched);
+	preempt_enable_notrace();
 }
 
 static struct ftrace_ops trace_probe_ops __read_mostly =
@@ -2419,7 +2409,7 @@ static const struct file_operations ftrace_filter_fops = {
 	.open = ftrace_filter_open,
 	.read = seq_read,
 	.write = ftrace_filter_write,
-	.llseek = no_llseek,
+	.llseek = ftrace_regex_lseek,
 	.release = ftrace_filter_release,
 };
 
