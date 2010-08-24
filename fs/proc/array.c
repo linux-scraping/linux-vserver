@@ -140,9 +140,8 @@ static const char *task_state_array[] = {
 	"D (disk sleep)",	/*  2 */
 	"T (stopped)",		/*  4 */
 	"T (tracing stop)",	/*  8 */
-	"H (on hold)",		/* 16 */
-	"Z (zombie)",		/* 32 */
-	"X (dead)",		/* 64 */
+	"Z (zombie)",		/* 16 */
+	"X (dead)"		/* 32 */
 };
 
 static inline const char *get_task_state(struct task_struct *tsk)
@@ -450,7 +449,6 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 
 		/* add up live thread stats at the group level */
 		if (whole) {
-			struct task_cputime cputime;
 			struct task_struct *t = task;
 			do {
 				min_flt += t->min_flt;
@@ -461,9 +459,7 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 
 			min_flt += sig->min_flt;
 			maj_flt += sig->maj_flt;
-			thread_group_cputime(task, &cputime);
-			utime = cputime.utime;
-			stime = cputime.stime;
+			thread_group_times(task, &utime, &stime);
 			gtime = cputime_add(gtime, sig->gtime);
 		}
 
