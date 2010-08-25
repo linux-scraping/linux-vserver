@@ -121,9 +121,9 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 
 	// preconfig fs entries
 	for (index = 0; index < VX_SPACES; index++) {
-		write_lock(&init_fs.lock);
+		spin_lock(&init_fs.lock);
 		init_fs.users++;
-		write_unlock(&init_fs.lock);
+		spin_unlock(&init_fs.lock);
 		new->vx_fs[index] = &init_fs;
 	}
 
@@ -196,9 +196,9 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 			put_nsproxy(nsproxy);
 
 		fs = xchg(&vxi->vx_fs[index], NULL);
-		write_lock(&fs->lock);
+		spin_lock(&fs->lock);
 		kill = !--fs->users;
-		write_unlock(&fs->lock);
+		spin_unlock(&fs->lock);
 		if (kill)
 			free_fs_struct(fs);
 	}

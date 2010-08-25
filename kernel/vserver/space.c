@@ -218,10 +218,10 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	fs_cur = current->fs;
 
 	if (mask & CLONE_FS) {
-		write_lock(&fs_cur->lock);
+		spin_lock(&fs_cur->lock);
 		current->fs = fs;
 		kill = !--fs_cur->users;
-		write_unlock(&fs_cur->lock);
+		spin_unlock(&fs_cur->lock);
 	}
 
 	proxy_cur = current->nsproxy;
@@ -276,10 +276,10 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	task_lock(current);
 
 	if (mask & CLONE_FS) {
-		write_lock(&fs_vxi->lock);
+		spin_lock(&fs_vxi->lock);
 		vxi->vx_fs[index] = fs;
 		kill = !--fs_vxi->users;
-		write_unlock(&fs_vxi->lock);
+		spin_unlock(&fs_vxi->lock);
 	}
 
 	proxy_cur = current->nsproxy;
