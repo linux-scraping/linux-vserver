@@ -394,7 +394,7 @@ static void dump_tasks(const struct mem_cgroup *mem)
 		}
 
 		pr_info("[%5d] %5d %5d %8lu %8lu %3u     %3d         %5d %s\n",
-			task->pid, __task_cred(task)->uid, task->tgid,
+			task->pid, task_uid(task), task->tgid,
 			task->mm->total_vm, get_mm_rss(task->mm),
 			task_cpu(task), task->signal->oom_adj,
 			task->signal->oom_score_adj, task->comm);
@@ -423,10 +423,9 @@ static void dump_header(struct task_struct *p, gfp_t gfp_mask, int order,
 static int oom_kill_task(struct task_struct *p, struct mem_cgroup *mem)
 {
 	p = find_lock_task_mm(p);
-	if (!p) {
-		task_unlock(p);
+	if (!p)
 		return 1;
-	}
+
 	pr_err("Killed process %d:#%u (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB\n",
 		task_pid_nr(p), p->xid, p->comm, K(p->mm->total_vm),
 		K(get_mm_counter(p->mm, MM_ANONPAGES)),
@@ -671,6 +670,7 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 	unsigned long freed = 0;
 	unsigned int points;
 	enum oom_constraint constraint = CONSTRAINT_NONE;
+	int killed = 0;
 
 	blocking_notifier_call_chain(&oom_notify_list, 0, &freed);
 	if (freed > 0)
@@ -708,7 +708,7 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 		if (!oom_kill_process(current, gfp_mask, order, 0, totalpages,
 				NULL, nodemask,
 				"Out of memory (oom_kill_allocating_task)"))
-			return;
+			goto out;
 	}
 
 retry:
@@ -716,7 +716,7 @@ retry:
 			constraint == CONSTRAINT_MEMORY_POLICY ? nodemask :
 								 NULL);
 	if (PTR_ERR(p) == -1UL)
-		return;
+		goto out;
 
 	/* Found nothing?!?! Either we hang forever, or we panic. */
 	if (!p) {
@@ -734,13 +734,15 @@ retry:
 	if (oom_kill_process(p, gfp_mask, order, points, totalpages, NULL,
 				nodemask, "Out of memory"))
 		goto retry;
+	killed = 1;
+out:
 	read_unlock(&tasklist_lock);
 
 	/*
 	 * Give "p" a good chance of killing itself before we
 	 * retry to allocate memory unless "p" is current
 	 */
-	if (!test_thread_flag(TIF_MEMDIE))
+	if (killed && !test_thread_flag(TIF_MEMDIE))
 		schedule_timeout_uninterruptible(1);
 }
 
