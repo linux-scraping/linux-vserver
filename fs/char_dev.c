@@ -20,6 +20,7 @@
 #include <linux/cdev.h>
 #include <linux/mutex.h>
 #include <linux/backing-dev.h>
+#include <linux/tty.h>
 #include <linux/vs_context.h>
 #include <linux/vs_device.h>
 

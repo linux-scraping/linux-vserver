@@ -1993,8 +1993,8 @@ static int tiocsti(struct tty_struct *tty, char __user *p)
 	char ch, mbz = 0;
 	struct tty_ldisc *ld;
 
-	if (((current->signal->tty != tty) && !capable(CAP_SYS_ADMIN)) ||
-		!vx_ccaps(VXC_TIOCSTI))
+	if (((current->signal->tty != tty) &&
+		!vx_capable(CAP_SYS_ADMIN, VXC_TIOCSTI)))
 		return -EPERM;
 	if (get_user(ch, p))
 		return -EFAULT;
@@ -3131,7 +3131,7 @@ static struct cdev tty_cdev, console_cdev;
  * Ok, now we can initialize the rest of the tty devices and can count
  * on memory allocations, interrupts etc..
  */
-static int __init tty_init(void)
+int __init tty_init(void)
 {
 	cdev_init(&tty_cdev, &tty_fops);
 	if (cdev_add(&tty_cdev, MKDEV(TTYAUX_MAJOR, 0), 1) ||
@@ -3152,4 +3152,4 @@ static int __init tty_init(void)
 #endif
 	return 0;
 }
-module_init(tty_init);
+
