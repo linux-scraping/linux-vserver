@@ -100,12 +100,12 @@ static DEFINE_MUTEX(x86_cpu_hotplug_driver_mutex);
 
 void cpu_hotplug_driver_lock()
 {
-	mutex_lock(&x86_cpu_hotplug_driver_mutex);
+        mutex_lock(&x86_cpu_hotplug_driver_mutex);
 }
 
 void cpu_hotplug_driver_unlock()
 {
-	mutex_unlock(&x86_cpu_hotplug_driver_mutex);
+        mutex_unlock(&x86_cpu_hotplug_driver_mutex);
 }
 
 ssize_t arch_cpu_probe(const char *buf, size_t count) { return -1; }
