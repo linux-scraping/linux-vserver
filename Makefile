@@ -1,8 +1,8 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 35
-EXTRAVERSION = .5-vs2.3.0.36.32
-NAME = Sheep on Meth
+EXTRAVERSION = .7-vs2.3.0.36.32
+NAME = Yokohama
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
