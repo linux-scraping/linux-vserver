@@ -229,6 +229,10 @@ struct mem_cgroup {
 	/* OOM-Killer disable */
 	int		oom_kill_disable;
 
+	/* number of OOM kill events */
+	unsigned long long oom_cnt;
+	unsigned long long oom_kill;
+
 	/* set when res.limit == memsw.limit */
 	bool		memsw_is_minimum;
 
@@ -3812,6 +3816,52 @@ static int mem_cgroup_oom_control_write(struct cgroup *cgrp,
 	return 0;
 }
 
+void mem_cgroup_oom_cnt(struct mem_cgroup *memcg)
+{
+	memcg->oom_cnt++;
+}
+
+static u64 mem_cgroup_oom_cnt_read(struct cgroup *cont, struct cftype *cft)
+{
+	struct mem_cgroup *mem = mem_cgroup_from_cont(cont);
+	u64 val;
+
+	val = mem->oom_cnt;
+	return val;
+}
+
+static int mem_cgroup_oom_cnt_reset(struct cgroup *cont, unsigned int event)
+{
+	struct mem_cgroup *mem;
+
+	mem = mem_cgroup_from_cont(cont);
+	mem->oom_cnt = 0;
+	return 0;
+}
+
+void mem_cgroup_oom_kill(struct mem_cgroup *memcg)
+{
+	memcg->oom_kill++;
+}
+
+static u64 mem_cgroup_oom_kill_read(struct cgroup *cont, struct cftype *cft)
+{
+	struct mem_cgroup *mem = mem_cgroup_from_cont(cont);
+	u64 val;
+
+	val = mem->oom_kill;
+	return val;
+}
+
+static int mem_cgroup_oom_kill_reset(struct cgroup *cont, unsigned int event)
+{
+	struct mem_cgroup *mem;
+
+	mem = mem_cgroup_from_cont(cont);
+	mem->oom_kill = 0;
+	return 0;
+}
+
 static struct cftype mem_cgroup_files[] = {
 	{
 		.name = "usage_in_bytes",
@@ -3874,6 +3924,16 @@ static struct cftype mem_cgroup_files[] = {
 		.register_event = mem_cgroup_oom_register_event,
 		.unregister_event = mem_cgroup_oom_unregister_event,
 		.private = MEMFILE_PRIVATE(_OOM_TYPE, OOM_CONTROL),
+	},
+	{
+		.name = "oom_cnt",
+		.read_u64 = mem_cgroup_oom_cnt_read,
+		.trigger = mem_cgroup_oom_cnt_reset,
+	},
+	{
+		.name = "oom_kill",
+		.read_u64 = mem_cgroup_oom_kill_read,
+		.trigger = mem_cgroup_oom_kill_reset,
 	},
 };
 
@@ -4113,6 +4173,7 @@ mem_cgroup_create(struct cgroup_subsys *ss, struct cgroup *cont)
 		parent = mem_cgroup_from_cont(cont->parent);
 		mem->use_hierarchy = parent->use_hierarchy;
 		mem->oom_kill_disable = parent->oom_kill_disable;
+		mem->oom_cnt = 0;
 	}
 
 	if (parent && parent->use_hierarchy) {

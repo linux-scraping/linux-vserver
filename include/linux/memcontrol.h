@@ -121,6 +121,8 @@ struct zone_reclaim_stat*
 mem_cgroup_get_reclaim_stat_from_page(struct page *page);
 extern void mem_cgroup_print_oom_info(struct mem_cgroup *memcg,
 					struct task_struct *p);
+extern void mem_cgroup_oom_cnt(struct mem_cgroup *memcg);
+extern void mem_cgroup_oom_kill(struct mem_cgroup *memcg);
 
 #ifdef CONFIG_CGROUP_MEM_RES_CTLR_SWAP
 extern int do_swap_account;
@@ -301,6 +303,16 @@ mem_cgroup_get_reclaim_stat_from_page(struct page *page)
 
 static inline void
 mem_cgroup_print_oom_info(struct mem_cgroup *memcg, struct task_struct *p)
+{
+}
+
+static inline void
+mem_cgroup_oom_cnt(struct mem_cgroup *memcg);
+{
+}
+
+static inline void
+mem_cgroup_oom_kill(struct mem_cgroup *memcg);
 {
 }
 

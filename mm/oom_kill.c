@@ -459,6 +459,7 @@ static int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 			    const char *message)
 {
 	struct task_struct *c;
+	int res;
 
 	if (printk_ratelimit())
 		dump_header(p, gfp_mask, order, mem);
@@ -481,10 +482,18 @@ static int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 			continue;
 		if (mem && !task_in_mem_cgroup(c, mem))
 			continue;
-		if (!oom_kill_task(c))
-			return 0;
+		if (oom_kill_task(c))
+			continue;
+
+		mem_cgroup_oom_kill(mem);
+		return 0;
 	}
-	return oom_kill_task(p);
+
+	res = oom_kill_task(p);
+	if (!res)
+		mem_cgroup_oom_kill(mem);
+
+	return res;
 }
 
 #ifdef CONFIG_CGROUP_MEM_RES_CTLR
@@ -500,6 +509,9 @@ retry:
 	p = select_bad_process(&points, mem);
 	if (!p || PTR_ERR(p) == -1UL)
 		goto out;
+
+	/* increment oom stats */
+	mem_cgroup_oom_cnt(mem);
 
 	if (oom_kill_process(p, gfp_mask, 0, points, mem,
 				"Memory cgroup out of memory"))
