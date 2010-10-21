@@ -334,9 +334,8 @@ long vx_vsi_cached(struct sysinfo *val)
 }
 
 
-unsigned long vx_badness(struct task_struct *task)
+unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm)
 {
-	struct mm_struct *mm = task->mm;
 	struct vx_info *vxi = mm->mm_vx_info;
 	unsigned long points;
 	rlim_t v, w;

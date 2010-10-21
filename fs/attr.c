@@ -76,9 +76,9 @@ int inode_change_ok(const struct inode *inode, struct iattr *attr)
 			return -EPERM;
 	}
 
-	/* check for tag permissions */
+	/* check for inode tag permission */
 	if (dx_permission(inode, MAY_WRITE))
-		return -EPERM;
+		return -EACCES;
 
 	return 0;
 }

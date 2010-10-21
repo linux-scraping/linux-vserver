@@ -463,17 +463,15 @@ int vc_get_dlimit_x32(uint32_t id, void __user *data)
 #endif	/* CONFIG_COMPAT */
 
 
-int vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf, int retval)
+void vx_vsi_statfs(struct super_block *sb, struct kstatfs *buf)
 {
 	struct dl_info *dli;
 	__u64 blimit, bfree, bavail;
 	__u32 ifree;
 
-	/* FIXME: check for retval? */
-
 	dli = locate_dl_info(sb, dx_current_tag());
 	if (!dli)
-		return retval;
+		return;
 
 	spin_lock(&dli->dl_lock);
 	if (dli->dl_inodes_total == (unsigned long)DLIM_INFINITY)
@@ -523,7 +521,7 @@ no_blim:
 	spin_unlock(&dli->dl_lock);
 	put_dl_info(dli);
 
-	return retval;
+	return;
 }
 
 #include <linux/module.h>

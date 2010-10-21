@@ -6,11 +6,11 @@
 
 #ifdef CONFIG_VSERVER_VTIME
 
-extern void vx_gettimeofday(struct timeval *tv);
+extern void vx_adjust_timespec(struct timespec *ts);
 extern int vx_settimeofday(struct timespec *ts);
 
 #else
-#define	vx_gettimeofday(t)	do_gettimeofday(t)
+#define	vx_adjust_timespec(t)	do { } while (0)
 #define	vx_settimeofday(t)	do_settimeofday(t)
 #endif
 

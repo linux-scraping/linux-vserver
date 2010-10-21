@@ -62,7 +62,6 @@ EXPORT_SYMBOL(sys_tz);
 SYSCALL_DEFINE1(time, time_t __user *, tloc)
 {
 	time_t i = get_seconds();
-/*	FIXME: do_gettimeofday(&tv) -> vx_gettimeofday(&tv) */
 
 	if (tloc) {
 		if (put_user(i,tloc))
@@ -104,7 +103,7 @@ SYSCALL_DEFINE2(gettimeofday, struct timeval __user *, tv,
 {
 	if (likely(tv != NULL)) {
 		struct timeval ktv;
-		vx_gettimeofday(&ktv);
+		do_gettimeofday(&ktv);
 		if (copy_to_user(tv, &ktv, sizeof(ktv)))
 			return -EFAULT;
 	}

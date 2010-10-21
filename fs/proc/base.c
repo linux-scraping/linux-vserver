@@ -1134,15 +1134,11 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 		return -ESRCH;
 	}
 	if (oom_score_adj < task->signal->oom_score_adj &&
-		!vx_capable(CAP_SYS_RESOURCE, VXC_OOM_ADJUST)) {
+			!capable(CAP_SYS_RESOURCE)) {
 		unlock_task_sighand(task, &flags);
 		put_task_struct(task);
 		return -EACCES;
 	}
-
-	/* prevent guest processes from circumventing the oom killer */
-	if (vx_current_xid() && (oom_score_adj == OOM_SCORE_ADJ_MIN))
-		oom_score_adj += 1;
 
 	task->signal->oom_score_adj = oom_score_adj;
 	/*
@@ -2698,7 +2694,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 	INF("auxv",       S_IRUSR, proc_pid_auxv),
 	ONE("status",     S_IRUGO, proc_pid_status),
 	ONE("personality", S_IRUSR, proc_pid_personality),
-	INF("limits",	  S_IRUSR, proc_pid_limits),
+	INF("limits",	  S_IRUGO, proc_pid_limits),
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
 #endif
@@ -3039,7 +3035,7 @@ static const struct pid_entry tid_base_stuff[] = {
 	INF("auxv",      S_IRUSR, proc_pid_auxv),
 	ONE("status",    S_IRUGO, proc_pid_status),
 	ONE("personality", S_IRUSR, proc_pid_personality),
-	INF("limits",	 S_IRUSR, proc_pid_limits),
+	INF("limits",	 S_IRUGO, proc_pid_limits),
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
 #endif
