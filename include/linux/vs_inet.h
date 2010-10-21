@@ -188,7 +188,8 @@ int __v4_addr_match_socket(const struct sock *sk, struct nx_addr_v4 *nxa)
 static inline
 int nx_dev_visible(struct nx_info *nxi, struct net_device *dev)
 {
-	vxdprintk(VXD_CBIT(net, 1), "nx_dev_visible(%p[#%u],%p »%s«) %d",
+	vxdprintk(VXD_CBIT(net, 1),
+		"nx_dev_visible(%p[#%u],%p " VS_Q("%s") ") %d",
 		nxi, nxi ? nxi->nx_id : 0, dev, dev->name,
 		nxi ? dev_in_nx_info(dev, nxi) : 0);
 

@@ -272,10 +272,6 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_read_history:
 		return __COMPAT(vc_read_history, id, data, compat);
 #endif
-#ifdef	CONFIG_VSERVER_MONITOR
-	case VCMD_read_monitor:
-		return __COMPAT(vc_read_monitor, id, data, compat);
-#endif
 	default:
 		vxwprintk_task(1, "unimplemented VCMD_%02d_%d[%d]",
 			VC_CATEGORY(cmd), VC_COMMAND(cmd), VC_VERSION(cmd));
@@ -405,9 +401,6 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 #ifdef	CONFIG_VSERVER_HISTORY
 	__VCMD(dump_history,	 9, VCA_NONE,	0);
 	__VCMD(read_history,	 9, VCA_NONE,	0);
-#endif
-#ifdef	CONFIG_VSERVER_MONITOR
-	__VCMD(read_monitor,	 9, VCA_NONE,	0);
 #endif
 
 	default:

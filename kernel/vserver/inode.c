@@ -358,7 +358,7 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 		token = match_token(p, tokens, args);
 
 		vxdprintk(VXD_CBIT(tag, 7),
-			"dx_parse_tag(»%s«): %d:#%d",
+			"dx_parse_tag(" VS_Q("%s") "): %d:#%d",
 			p, token, option);
 
 		switch (token) {

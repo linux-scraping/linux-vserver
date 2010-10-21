@@ -10,6 +10,19 @@
 			imajor((d)->bd_inode), iminor((d)->bd_inode)
 #define VXF_DEV		"%p[%lu,%d:%d]"
 
+#if	defined(CONFIG_QUOTES_UTF8)
+#define	VS_Q_LQM	"\xc2\xbb"
+#define	VS_Q_RQM	"\xc2\xab"
+#elif	defined(CONFIG_QUOTES_ASCII)
+#define	VS_Q_LQM	"\x27"
+#define	VS_Q_RQM	"\x27"
+#else
+#define	VS_Q_LQM	"\xbb"
+#define	VS_Q_RQM	"\xab"
+#endif
+
+#define	VS_Q(f)		VS_Q_LQM f VS_Q_RQM
+
 
 #define vxd_path(p)						\
 	({ static char _buffer[PATH_MAX];			\
@@ -86,7 +99,7 @@ void dump_vx_info_inactive(int);
 #ifdef	CONFIG_VSERVER_WARN
 
 #define VX_WARNLEVEL	KERN_WARNING "vxW: "
-#define VX_WARN_TASK	"[»%s«,%u:#%u|%u|%u] "
+#define VX_WARN_TASK	"[" VS_Q("%s") ",%u:#%u|%u|%u] "
 #define VX_WARN_XID	"[xid #%u] "
 #define VX_WARN_NID	"[nid #%u] "
 #define VX_WARN_TAG	"[tag #%u] "
