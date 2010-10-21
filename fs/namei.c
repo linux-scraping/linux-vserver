@@ -193,6 +193,9 @@ static int __dx_permission(const struct inode *inode, int mask)
 		if (S_ISDIR(inode->i_mode) ||
 		    vx_check((xid_t)inode->i_tag, VS_IDENT | VS_WATCH_P))
 			return 0;
+
+		/* just say we didn't find anything */
+		return -ENOENT;
 	}
 	else if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {
 		struct proc_dir_entry *de = PDE(inode);
@@ -238,7 +241,11 @@ int dx_permission(const struct inode *inode, int mask)
 {
 	int ret = __dx_permission(inode, mask);
 	if (unlikely(ret)) {
-		vxwprintk_task(1, "denied %x access to %s:%p[#%d,%lu]",
+#ifndef	CONFIG_VSERVER_WARN_DEVPTS
+		if (inode->i_sb->s_magic != DEVPTS_SUPER_MAGIC)
+#endif
+		    vxwprintk_task(1,
+			"denied [0x%x] access to inode %s:%p[#%d,%lu]",
 			mask, inode->i_sb->s_id, inode, inode->i_tag,
 			inode->i_ino);
 	}
@@ -848,9 +855,14 @@ done:
 	return 0;
 
 hidden:
-	vxwprintk_task(1, "did lookup hidden %s:%p[#%d,%lu] »%s/%.*s«.",
+#ifndef	CONFIG_VSERVER_WARN_DEVPTS
+	if (inode->i_sb->s_magic != DEVPTS_SUPER_MAGIC)
+#endif
+	    vxwprintk_task(1,
+		"did lookup hidden %s:%p[#%d,%lu] " VS_Q("%s/%.*s") ".",
 		inode->i_sb->s_id, inode, inode->i_tag, inode->i_ino,
 		vxd_path(&nd->path), name->len, name->name);
+
 	dput(dentry);
 	return -ENOENT;
 
@@ -2968,7 +2980,8 @@ struct dentry *cow_break_link(const char *pathname)
 	char *to, *path, pad='\251';
 	loff_t size;
 
-	vxdprintk(VXD_CBIT(misc, 1), "cow_break_link(»%s«)", pathname);
+	vxdprintk(VXD_CBIT(misc, 1),
+		"cow_break_link(" VS_Q("%s") ")", pathname);
 	path = kmalloc(PATH_MAX, GFP_KERNEL);
 	ret = -ENOMEM;
 	if (!path)
@@ -2985,7 +2998,8 @@ struct dentry *cow_break_link(const char *pathname)
 
 	to = d_path(&old_path, path, PATH_MAX-2);
 	pathlen = strlen(to);
-	vxdprintk(VXD_CBIT(misc, 2), "old path »%s« [»%.*s«:%d]", to,
+	vxdprintk(VXD_CBIT(misc, 2),
+		"old path " VS_Q("%s") " [" VS_Q("%.*s") ":%d]", to,
 		old_path.dentry->d_name.len, old_path.dentry->d_name.name,
 		old_path.dentry->d_name.len);
 
@@ -2996,7 +3010,7 @@ retry:
 	if (pad <= '\240')
 		goto out_rel_old;
 
-	vxdprintk(VXD_CBIT(misc, 1), "temp copy »%s«", to);
+	vxdprintk(VXD_CBIT(misc, 1), "temp copy " VS_Q("%s"), to);
 	/* dir_nd will have refs to dentry and mnt */
 	ret = path_lookup(to,
 		LOOKUP_PARENT | LOOKUP_OPEN | LOOKUP_CREATE, &dir_nd);
@@ -3015,7 +3029,8 @@ retry:
 		goto retry;
 	}
 	vxdprintk(VXD_CBIT(misc, 2),
-		"lookup_create(new): %p [»%.*s«:%d]", new_path.dentry,
+		"lookup_create(new): %p [" VS_Q("%.*s") ":%d]",
+		new_path.dentry,
 		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
 		new_path.dentry->d_name.len);
 	dir = dir_nd.path.dentry;
@@ -3091,7 +3106,7 @@ retry:
 		goto out_unlock;
 
 	vxdprintk(VXD_CBIT(misc, 2),
-		"vfs_rename: [»%*s«:%d] -> [»%*s«:%d]",
+		"vfs_rename: [" VS_Q("%*s") ":%d] -> [" VS_Q("%*s") ":%d]",
 		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
 		new_path.dentry->d_name.len,
 		old_path.dentry->d_name.len, old_path.dentry->d_name.name,
@@ -3136,7 +3151,8 @@ out_redo:
 
 	new_path.dentry = old_nd.path.dentry;
 	vxdprintk(VXD_CBIT(misc, 2),
-		"path_lookup(redo): %p [»%.*s«:%d]", new_path.dentry,
+		"path_lookup(redo): %p [" VS_Q("%.*s") ":%d]",
+		new_path.dentry,
 		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
 		new_path.dentry->d_name.len);
 	dget(new_path.dentry);

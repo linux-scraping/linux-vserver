@@ -425,8 +425,8 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 	for (de = de->subdir; de ; de = de->next) {
 		if (de->namelen != dentry->d_name.len)
 			continue;
-			if (!vx_hide_check(0, de->vx_flags))
-				continue;
+		if (!vx_hide_check(0, de->vx_flags))
+			continue;
 		if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 			unsigned int ino;
 
@@ -435,8 +435,8 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 			spin_unlock(&proc_subdir_lock);
 			error = -EINVAL;
 			inode = proc_get_inode(dir->i_sb, ino, de);
-				/* generic proc entries belong to the host */
-				inode->i_tag = 0;
+			/* generic proc entries belong to the host */
+			inode->i_tag = 0;
 			goto out_unlock;
 		}
 	}

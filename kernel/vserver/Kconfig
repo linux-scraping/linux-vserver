@@ -177,6 +177,15 @@ config	VSERVER_WARN
 	  resource shortage. It is generally considered to
 	  be a good idea to have that enabled.
 
+config	VSERVER_WARN_DEVPTS
+	bool	"VServer DevPTS Warnings"
+	depends on VSERVER_WARN
+	default y
+	help
+	  This enables DevPTS related warnings, issued when a
+	  process inside a context tries to lookup or access
+	  a dynamic pts from the host or a different context.
+
 config	VSERVER_DEBUG
 	bool	"VServer Debugging Code"
 	default n
@@ -204,33 +213,6 @@ config	VSERVER_HISTORY_SIZE
 	  This allows you to specify the number of entries in
 	  the per-CPU history buffer.
 
-config	VSERVER_MONITOR
-	bool	"VServer Scheduling Monitor"
-	depends on VSERVER_DISABLED
-	default n
-	help
-	  Set this to yes if you want to record the scheduling
-	  decisions, so that they can be relayed to userspace
-	  for detailed analysis.
-
-config	VSERVER_MONITOR_SIZE
-	int	"Per-CPU Monitor Queue Size (32-65536)"
-	depends on VSERVER_MONITOR
-	range 32 65536
-	default 1024
-	help
-	  This allows you to specify the number of entries in
-	  the per-CPU scheduling monitor buffer.
-
-config	VSERVER_MONITOR_SYNC
-	int	"Per-CPU Monitor Sync Interval (0-65536)"
-	depends on VSERVER_MONITOR
-	range 0 65536
-	default 256
-	help
-	  This allows you to specify the interval in ticks
-	  when a time sync entry is inserted.
-
 config	VSERVER_LEGACY_MEM
 	bool	"Legacy Memory Limits"
 	default n
@@ -239,6 +221,29 @@ config	VSERVER_LEGACY_MEM
 	  older tools happy in the face of memory
 	  cgroups
 
+choice
+	prompt	"Quotes used in debug and warn messages"
+	default	QUOTES_ISO8859
+
+config	QUOTES_ISO8859
+	bool	"Extended ASCII (ISO 8859) angle quotes"
+	help
+	  This uses the extended ASCII characters \xbb
+	  and \xab for quoting file and process names.
+
+config	QUOTES_UTF8
+	bool	"UTF-8 angle quotes"
+	help
+	  This uses the the UTF-8 sequences for angle
+	  quotes to quote file and process names.
+
+config	QUOTES_ASCII
+	bool	"ASCII single quotes"
+	help
+	  This uses the ASCII single quote character
+	  (\x27) to quote file and process names.
+
+endchoice
 
 endmenu
 
