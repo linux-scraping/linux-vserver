@@ -226,9 +226,6 @@ static inline int __task_is_init(struct task_struct *p,
 {
 	int is_init = is_global_init(p);
 
-	if (is_init)
-		return is_init;
-
 	task_lock(p);
 	if (p->vx_info)
 		is_init = p->vx_info->vx_initpid == p->pid;

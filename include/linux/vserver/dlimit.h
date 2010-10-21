@@ -44,7 +44,7 @@ extern struct dl_info *locate_dl_info(struct super_block *, tag_t);
 
 struct kstatfs;
 
-extern int vx_vsi_statfs(struct super_block *, struct kstatfs *, int);
+extern void vx_vsi_statfs(struct super_block *, struct kstatfs *);
 
 typedef uint64_t dlsize_t;
 

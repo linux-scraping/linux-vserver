@@ -226,7 +226,6 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 			if (!error) {
 				setattr_copy(in, &attr);
 				mark_inode_dirty(in);
-				return 0;
 			}
 		}
 	}

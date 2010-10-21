@@ -49,22 +49,20 @@ static int calculate_f_flags(struct vfsmount *mnt)
 
 int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
 {
-	struct super_block *sb = dentry->d_sb;
 	int retval;
 
-	if (!sb->s_op->statfs)
+	if (!dentry->d_sb->s_op->statfs)
 		return -ENOSYS;
 
 	memset(buf, 0, sizeof(*buf));
 	retval = security_sb_statfs(dentry);
 	if (retval)
 		return retval;
-	retval = sb->s_op->statfs(dentry, buf);
+	retval = dentry->d_sb->s_op->statfs(dentry, buf);
 	if (retval == 0 && buf->f_frsize == 0)
 		buf->f_frsize = buf->f_bsize;
-
 	if (!vx_check(0, VS_ADMIN|VS_WATCH))
-		return vx_vsi_statfs(sb, buf, retval);
+		vx_vsi_statfs(dentry->d_sb, buf);
 	return retval;
 }
 

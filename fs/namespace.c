@@ -724,7 +724,9 @@ static int mnt_is_reachable(struct vfsmount *mnt)
 	}
 
 	ret = (mnt == root.mnt) && is_subdir(point, root.dentry);
+
 	br_read_unlock(vfsmount_lock);
+
 	return ret;
 }
 
@@ -1540,19 +1542,40 @@ out_unlock:
 }
 
 /*
+ * Sanity check the flags to change_mnt_propagation.
+ */
+
+static int flags_to_propagation_type(int flags)
+{
+	int type = flags & ~MS_REC;
+
+	/* Fail if any non-propagation flags are set */
+	if (type & ~(MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
+		return 0;
+	/* Only one propagation flag should be set */
+	if (!is_power_of_2(type))
+		return 0;
+	return type;
+}
+
+/*
  * recursively change the type of the mountpoint.
  */
 static int do_change_type(struct path *path, int flag)
 {
 	struct vfsmount *m, *mnt = path->mnt;
 	int recurse = flag & MS_REC;
-	int type = flag & ~MS_REC;
+	int type;
 	int err = 0;
 
 	if (!vx_capable(CAP_SYS_ADMIN, VXC_NAMESPACE))
 		return -EPERM;
 
 	if (path->dentry != path->mnt->mnt_root)
+		return -EINVAL;
+
+	type = flags_to_propagation_type(flag);
+	if (!type)
 		return -EINVAL;
 
 	down_write(&namespace_sem);

@@ -944,6 +944,7 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 		pgid = pid;
 	if (pgid < 0)
 		return -EINVAL;
+	rcu_read_lock();
 
 	/* From this point forward we keep holding onto the tasklist lock
 	 * so that our parent does not change from under us. -DaveM
@@ -997,6 +998,7 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 out:
 	/* All paths lead to here, thus we are safe. -DaveM */
 	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
 	return err;
 }
 
@@ -1394,7 +1396,7 @@ static int check_prlimit_permission(struct task_struct *task)
 	     cred->gid != tcred->egid ||
 	     cred->gid != tcred->sgid ||
 	     cred->gid != tcred->gid) &&
-	     !capable(CAP_SYS_RESOURCE)) {
+	     !vx_capable(CAP_SYS_RESOURCE, VXC_SET_RLIMIT)) {
 		return -EPERM;
 	}
 
