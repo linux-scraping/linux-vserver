@@ -172,16 +172,10 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_ncaps:
 		return vc_get_ncaps(nxi, data);
 
-	case VCMD_set_sched_v4:
-		return vc_set_sched_v4(vxi, data);
-	/* this is version 5 */
-	case VCMD_set_sched:
-		return vc_set_sched(vxi, data);
-	case VCMD_get_sched:
-		return vc_get_sched(vxi, data);
-	case VCMD_sched_info:
-		return vc_sched_info(vxi, data);
-
+	case VCMD_set_prio_bias:
+		return vc_set_prio_bias(vxi, data);
+	case VCMD_get_prio_bias:
+		return vc_get_prio_bias(vxi, data);
 	case VCMD_add_dlimit:
 		return __COMPAT(vc_add_dlimit, id, data, compat);
 	case VCMD_rem_dlimit:
@@ -343,8 +337,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_iattr,	 2, VCA_NONE,	0);
 	__VCMD(fget_iattr,	 2, VCA_NONE,	0);
 	__VCMD(get_dlimit,	 3, VCA_NONE,	VCF_INFO);
-	__VCMD(get_sched,	 3, VCA_VXI,	VCF_INFO);
-	__VCMD(sched_info,	 3, VCA_VXI,	VCF_INFO | VCF_ZIDOK);
+	__VCMD(get_prio_bias,	 3, VCA_VXI,	VCF_INFO);
 
 	/* lower admin commands */
 	__VCMD(wait_exit,	 4, VCA_VXI,	VCF_INFO);
@@ -374,8 +367,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 
 	__VCMD(set_vhi_name,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_rlimit,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
-	__VCMD(set_sched,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
-	__VCMD(set_sched_v4,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(set_prio_bias,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_ncaps,	 7, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_nflags,	 7, VCA_NXI,	VCF_ARES | VCF_SETUP);

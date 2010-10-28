@@ -194,7 +194,7 @@ static int __dx_permission(const struct inode *inode, int mask)
 		    vx_check((xid_t)inode->i_tag, VS_IDENT | VS_WATCH_P))
 			return 0;
 
-		/* just say we didn't find anything */
+		/* just pretend we didn't find anything */
 		return -ENOENT;
 	}
 	else if (inode->i_sb->s_magic == PROC_SUPER_MAGIC) {

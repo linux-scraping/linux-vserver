@@ -398,9 +398,9 @@ static struct sysrq_key_op sysrq_unrt_op = {
 
 
 #ifdef CONFIG_VSERVER_DEBUG
-static void sysrq_handle_vxinfo(int key, struct tty_struct *tty)
+static void sysrq_handle_vxinfo(int key)
 {
-	dump_vx_info_inactive((key == 'x')?0:1);
+	dump_vx_info_inactive((key == 'x') ? 0 : 1);
 }
 
 static struct sysrq_key_op sysrq_showvxinfo_op = {

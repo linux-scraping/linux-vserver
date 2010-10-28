@@ -1,7 +1,7 @@
 
 /*  interface version */
 
-#define VCI_VERSION		0x00020306
+#define VCI_VERSION		0x00020307
 
 
 enum {
@@ -35,9 +35,6 @@ static inline uint32_t vci_kernel_config(void)
 	/* configured features */
 #ifdef	CONFIG_VSERVER_PROC_SECURE
 	(1 << VCI_KCBIT_PROC_SECURE) |
-#endif
-#ifdef	CONFIG_VSERVER_HARDCPU
-	(1 << VCI_KCBIT_HARDCPU) |
 #endif
 #ifdef	CONFIG_VSERVER_IDLELIMIT
 	(1 << VCI_KCBIT_IDLELIMIT) |
