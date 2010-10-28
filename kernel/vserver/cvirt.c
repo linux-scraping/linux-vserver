@@ -292,10 +292,10 @@ int vx_settimeofday(struct timespec *ts)
 		return do_settimeofday(ts);
 
 	getnstimeofday(&ats);
-	delta = timespec_sub(ts, &ats);
+	delta = timespec_sub(*ts, ats);
 
 	vxi = current_vx_info();
-	vxi->cvirt.bias_ts = timespec_add(&vxi->cvirt.bias_ts, &delta);
+	vxi->cvirt.bias_ts = timespec_add(vxi->cvirt.bias_ts, delta);
 	return 0;
 }
 

@@ -14,9 +14,6 @@ struct vx_info;
 void vx_update_load(struct vx_info *);
 
 
-int vx_tokens_recalc(struct _vx_sched_pc *,
-	unsigned long *, unsigned long *, int [2]);
-
 void vx_update_sched_param(struct _vx_sched *sched,
 	struct _vx_sched_pc *sched_pc);
 
