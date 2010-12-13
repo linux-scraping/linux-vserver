@@ -208,6 +208,31 @@ static inline void validate_process_creds(void)
 }
 #endif
 
+static inline void set_cred_subscribers(struct cred *cred, int n)
+{
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	atomic_set(&cred->subscribers, n);
+#endif
+}
+
+static inline int read_cred_subscribers(const struct cred *cred)
+{
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	return atomic_read(&cred->subscribers);
+#else
+	return 0;
+#endif
+}
+
+static inline void alter_cred_subscribers(const struct cred *_cred, int n)
+{
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	struct cred *cred = (struct cred *) _cred;
+
+	atomic_add(n, &cred->subscribers);
+#endif
+}
+
 /**
  * get_new_cred - Get a reference on a new set of credentials
  * @cred: The new credentials to reference

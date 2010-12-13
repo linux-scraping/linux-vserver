@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Support
  *
- *  Copyright (C) 2003-2007  Herbert Pötzl
+ *  Copyright (C) 2003-2010  Herbert Pötzl
  *
  *  V0.01  context helper
  *  V0.02  vx_ctx_kill syscall command
@@ -22,6 +22,7 @@
  *  V0.15  added context stat
  *  V0.16  have __create claim() the vxi
  *  V0.17  removed older and legacy stuff
+ *  V0.18  added user credentials
  *
  */
 
@@ -38,6 +39,7 @@
 #include <linux/vserver/space.h>
 #include <linux/init_task.h>
 #include <linux/fs_struct.h>
+#include <linux/cred.h>
 
 #include <linux/vs_context.h>
 #include <linux/vs_limit.h>
@@ -127,6 +129,10 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 		new->vx_fs[index] = &init_fs;
 	}
 
+	/* FIXME: we want defaults */
+	new->vx_real_cred = 0;
+	new->vx_cred = 0;
+
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
 	vxh_alloc_vx_info(new);
@@ -183,6 +189,7 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 {
 	struct nsproxy *nsproxy;
 	struct fs_struct *fs;
+	const struct cred *cred;
 	int index, kill;
 
 	might_sleep();
@@ -201,6 +208,18 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 		spin_unlock(&fs->lock);
 		if (kill)
 			free_fs_struct(fs);
+	}
+
+	cred = xchg(&vxi->vx_real_cred, NULL);
+	if (cred) {
+		alter_cred_subscribers(cred, -1);
+		put_cred(cred);
+	}
+
+	cred = xchg(&vxi->vx_cred, NULL);
+	if (cred) {
+		alter_cred_subscribers(cred, -1);
+		put_cred(cred);
 	}
 }
 
