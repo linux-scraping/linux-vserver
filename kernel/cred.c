@@ -60,31 +60,6 @@ struct cred init_cred = {
 #endif
 };
 
-static inline void set_cred_subscribers(struct cred *cred, int n)
-{
-#ifdef CONFIG_DEBUG_CREDENTIALS
-	atomic_set(&cred->subscribers, n);
-#endif
-}
-
-static inline int read_cred_subscribers(const struct cred *cred)
-{
-#ifdef CONFIG_DEBUG_CREDENTIALS
-	return atomic_read(&cred->subscribers);
-#else
-	return 0;
-#endif
-}
-
-static inline void alter_cred_subscribers(const struct cred *_cred, int n)
-{
-#ifdef CONFIG_DEBUG_CREDENTIALS
-	struct cred *cred = (struct cred *) _cred;
-
-	atomic_add(n, &cred->subscribers);
-#endif
-}
-
 /*
  * Dispose of the shared task group credentials
  */

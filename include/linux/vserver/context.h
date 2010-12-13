@@ -110,6 +110,8 @@ struct vx_info {
 	unsigned long vx_nsmask[VX_SPACES];	/* assignment mask */
 	struct nsproxy *vx_nsproxy[VX_SPACES];	/* private namespaces */
 	struct fs_struct *vx_fs[VX_SPACES];	/* private namespace fs */
+	const struct cred *vx_real_cred;	/* real task credentials */
+	const struct cred *vx_cred;		/* task credentials */
 
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_ccaps;			/* context caps (vserver) */

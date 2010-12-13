@@ -3,12 +3,13 @@
  *
  *  Virtual Server: Context Space Support
  *
- *  Copyright (C) 2003-2007  Herbert Pötzl
+ *  Copyright (C) 2003-2010  Herbert Pötzl
  *
  *  V0.01  broken out from context.c 0.07
  *  V0.02  added task locking for namespace
  *  V0.03  broken out vx_enter_namespace
  *  V0.04  added *space support and commands
+ *  V0.05  added credential support
  *
  */
 
@@ -16,6 +17,7 @@
 #include <linux/nsproxy.h>
 #include <linux/err.h>
 #include <linux/fs_struct.h>
+#include <linux/cred.h>
 #include <asm/uaccess.h>
 
 #include <linux/vs_context.h>
@@ -238,6 +240,19 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	}
 
 	proxy_new = xchg(&current->nsproxy, proxy_new);
+
+	if (mask & CLONE_NEWUSER) {
+		vxdprintk(VXD_CBIT(space, 10),
+			"vx_enter_space(%p[#%u],%p,%p) cred (%p,%p)",
+			vxi, vxi->vx_id, vxi->vx_real_cred, vxi->vx_cred,
+			current->real_cred, current->cred);
+		exit_creds(current);
+		current->real_cred = get_cred(vxi->vx_real_cred);
+		alter_cred_subscribers(current->real_cred, 1);
+		current->cred = get_cred(vxi->vx_cred);
+		alter_cred_subscribers(current->cred, 1);
+	}
+
 	ret = 0;
 
 	if (proxy_new)
@@ -297,6 +312,38 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	proxy_new = xchg(&vxi->vx_nsproxy[index], proxy_new);
 	vxi->vx_nsmask[index] |= mask;
+
+	if (mask & CLONE_NEWUSER) {
+		const struct cred *cred;
+
+		vxdprintk(VXD_CBIT(space, 10),
+			"vx_set_space(%p[#%u],%p,%p) cred (%p,%p)",
+			vxi, vxi->vx_id, vxi->vx_real_cred, vxi->vx_cred,
+			current->real_cred, current->cred);
+
+		if (current->real_cred) {
+			cred = get_cred(current->real_cred);
+			alter_cred_subscribers(cred, 1);
+		} else
+			cred = NULL;
+		cred = xchg(&vxi->vx_real_cred, cred);
+		if (cred) {
+			alter_cred_subscribers(cred, -1);
+			put_cred(cred);
+		}
+
+		if (current->cred) {
+			cred = get_cred(current->cred);
+			alter_cred_subscribers(cred, 1);
+		} else
+			cred = NULL;
+		cred = xchg(&vxi->vx_cred, cred);
+		if (cred) {
+			alter_cred_subscribers(cred, -1);
+			put_cred(cred);
+		}
+	}
+
 	ret = 0;
 
 	if (proxy_new)
