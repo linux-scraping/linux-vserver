@@ -42,7 +42,7 @@ static struct dl_info *__alloc_dl_info(struct super_block *sb, tag_t tag)
 	memset(new, 0, sizeof(struct dl_info));
 	new->dl_tag = tag;
 	new->dl_sb = sb;
-	INIT_RCU_HEAD(&new->dl_rcu);
+	// INIT_RCU_HEAD(&new->dl_rcu);
 	INIT_HLIST_NODE(&new->dl_hlist);
 	spin_lock_init(&new->dl_lock);
 	atomic_set(&new->dl_refcnt, 0);

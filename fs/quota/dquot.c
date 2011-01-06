@@ -1386,6 +1386,9 @@ static void __dquot_initialize(struct inode *inode, int type)
 		/* Avoid races with quotaoff() */
 		if (!sb_has_quota_active(sb, cnt))
 			continue;
+		/* We could race with quotaon or dqget() could have failed */
+		if (!got[cnt])
+			continue;
 		if (!inode->i_dquot[cnt]) {
 			inode->i_dquot[cnt] = got[cnt];
 			got[cnt] = NULL;
@@ -1746,6 +1749,7 @@ int __dquot_transfer(struct inode *inode, struct dquot **transfer_to)
 	qsize_t rsv_space = 0;
 	struct dquot *transfer_from[MAXQUOTAS] = {};
 	int cnt, ret = 0;
+	char is_valid[MAXQUOTAS] = {};
 	char warntype_to[MAXQUOTAS];
 	char warntype_from_inodes[MAXQUOTAS], warntype_from_space[MAXQUOTAS];
 
@@ -1767,8 +1771,15 @@ int __dquot_transfer(struct inode *inode, struct dquot **transfer_to)
 	space = cur_space + rsv_space;
 	/* Build the transfer_from list and check the limits */
 	for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
+		/*
+		 * Skip changes for same uid or gid or for turned off quota-type.
+		 */
 		if (!transfer_to[cnt])
 			continue;
+		/* Avoid races with quotaoff() */
+		if (!sb_has_quota_active(inode->i_sb, cnt))
+			continue;
+		is_valid[cnt] = 1;
 		transfer_from[cnt] = inode->i_dquot[cnt];
 		ret = check_idq(transfer_to[cnt], 1, warntype_to + cnt);
 		if (ret)
@@ -1782,12 +1793,8 @@ int __dquot_transfer(struct inode *inode, struct dquot **transfer_to)
 	 * Finally perform the needed transfer from transfer_from to transfer_to
 	 */
 	for (cnt = 0; cnt < MAXQUOTAS; cnt++) {
-		/*
-		 * Skip changes for same uid or gid or for turned off quota-type.
-		 */
-		if (!transfer_to[cnt])
+		if (!is_valid[cnt])
 			continue;
-
 		/* Due to IO error we might not have transfer_from[] structure */
 		if (transfer_from[cnt]) {
 			warntype_from_inodes[cnt] =
@@ -1811,18 +1818,19 @@ int __dquot_transfer(struct inode *inode, struct dquot **transfer_to)
 
 	mark_all_dquot_dirty(transfer_from);
 	mark_all_dquot_dirty(transfer_to);
-	/* Pass back references to put */
-	for (cnt = 0; cnt < MAXQUOTAS; cnt++)
-		transfer_to[cnt] = transfer_from[cnt];
-warn:
 	flush_warnings(transfer_to, warntype_to);
 	flush_warnings(transfer_from, warntype_from_inodes);
 	flush_warnings(transfer_from, warntype_from_space);
-	return ret;
+	/* Pass back references to put */
+	for (cnt = 0; cnt < MAXQUOTAS; cnt++)
+		if (is_valid[cnt])
+			transfer_to[cnt] = transfer_from[cnt];
+	return 0;
 over_quota:
 	spin_unlock(&dq_data_lock);
 	up_write(&sb_dqopt(inode->i_sb)->dqptr_sem);
-	goto warn;
+	flush_warnings(transfer_to, warntype_to);
+	return ret;
 }
 EXPORT_SYMBOL(__dquot_transfer);
 
