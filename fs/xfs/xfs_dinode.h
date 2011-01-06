@@ -49,10 +49,11 @@ typedef struct xfs_dinode {
 	__be32		di_uid;		/* owner's user id */
 	__be32		di_gid;		/* owner's group id */
 	__be32		di_nlink;	/* number of links to file */
-	__be16		di_projid;	/* owner's project id */
+	__be16		di_projid_lo;	/* lower part of owner's project id */
+	__be16		di_projid_hi;	/* higher part owner's project id */
+	__u8		di_pad[2];	/* unused, zeroed space */
 	__be16		di_tag;		/* context tagging */
 	__be16		di_vflags;	/* vserver specific flags */
-	__u8		di_pad[4];	/* unused, zeroed space */
 	__be16		di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */
 	xfs_timestamp_t	di_mtime;	/* time last modified */

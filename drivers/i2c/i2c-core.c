@@ -425,14 +425,14 @@ static int __i2c_check_addr_busy(struct device *dev, void *addrp)
 /* walk up mux tree */
 static int i2c_check_mux_parents(struct i2c_adapter *adapter, int addr)
 {
+	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(adapter);
 	int result;
 
 	result = device_for_each_child(&adapter->dev, &addr,
 					__i2c_check_addr_busy);
 
-	if (!result && i2c_parent_is_i2c_adapter(adapter))
-		result = i2c_check_mux_parents(
-				    to_i2c_adapter(adapter->dev.parent), addr);
+	if (!result && parent)
+		result = i2c_check_mux_parents(parent, addr);
 
 	return result;
 }
@@ -453,11 +453,11 @@ static int i2c_check_mux_children(struct device *dev, void *addrp)
 
 static int i2c_check_addr_busy(struct i2c_adapter *adapter, int addr)
 {
+	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(adapter);
 	int result = 0;
 
-	if (i2c_parent_is_i2c_adapter(adapter))
-		result = i2c_check_mux_parents(
-				    to_i2c_adapter(adapter->dev.parent), addr);
+	if (parent)
+		result = i2c_check_mux_parents(parent, addr);
 
 	if (!result)
 		result = device_for_each_child(&adapter->dev, &addr,
@@ -472,8 +472,10 @@ static int i2c_check_addr_busy(struct i2c_adapter *adapter, int addr)
  */
 void i2c_lock_adapter(struct i2c_adapter *adapter)
 {
-	if (i2c_parent_is_i2c_adapter(adapter))
-		i2c_lock_adapter(to_i2c_adapter(adapter->dev.parent));
+	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(adapter);
+
+	if (parent)
+		i2c_lock_adapter(parent);
 	else
 		rt_mutex_lock(&adapter->bus_lock);
 }
@@ -485,8 +487,10 @@ EXPORT_SYMBOL_GPL(i2c_lock_adapter);
  */
 static int i2c_trylock_adapter(struct i2c_adapter *adapter)
 {
-	if (i2c_parent_is_i2c_adapter(adapter))
-		return i2c_trylock_adapter(to_i2c_adapter(adapter->dev.parent));
+	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(adapter);
+
+	if (parent)
+		return i2c_trylock_adapter(parent);
 	else
 		return rt_mutex_trylock(&adapter->bus_lock);
 }
@@ -497,8 +501,10 @@ static int i2c_trylock_adapter(struct i2c_adapter *adapter)
  */
 void i2c_unlock_adapter(struct i2c_adapter *adapter)
 {
-	if (i2c_parent_is_i2c_adapter(adapter))
-		i2c_unlock_adapter(to_i2c_adapter(adapter->dev.parent));
+	struct i2c_adapter *parent = i2c_parent_is_i2c_adapter(adapter);
+
+	if (parent)
+		i2c_unlock_adapter(parent);
 	else
 		rt_mutex_unlock(&adapter->bus_lock);
 }
@@ -677,8 +683,6 @@ i2c_sysfs_new_device(struct device *dev, struct device_attribute *attr,
 	char *blank, end;
 	int res;
 
-	dev_warn(dev, "The new_device interface is still experimental "
-		 "and may change in a near future\n");
 	memset(&info, 0, sizeof(struct i2c_board_info));
 
 	blank = strchr(buf, ' ');
@@ -844,6 +848,18 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
 		goto out_list;
 	}
 
+	/* Sanity checks */
+	if (unlikely(adap->name[0] == '\0')) {
+		pr_err("i2c-core: Attempt to register an adapter with "
+		       "no name!\n");
+		return -EINVAL;
+	}
+	if (unlikely(!adap->algo)) {
+		pr_err("i2c-core: Attempt to register adapter '%s' with "
+		       "no algo!\n", adap->name);
+		return -EINVAL;
+	}
+
 	rt_mutex_init(&adap->bus_lock);
 	mutex_init(&adap->userspace_clients_lock);
 	INIT_LIST_HEAD(&adap->userspace_clients);
@@ -1005,14 +1021,6 @@ static int i2c_do_del_adapter(struct i2c_driver *driver,
 static int __unregister_client(struct device *dev, void *dummy)
 {
 	struct i2c_client *client = i2c_verify_client(dev);
-	if (client && strcmp(client->name, "dummy"))
-		i2c_unregister_device(client);
-	return 0;
-}
-
-static int __unregister_dummy(struct device *dev, void *dummy)
-{
-	struct i2c_client *client = i2c_verify_client(dev);
 	if (client)
 		i2c_unregister_device(client);
 	return 0;
@@ -1067,12 +1075,8 @@ int i2c_del_adapter(struct i2c_adapter *adap)
 	mutex_unlock(&adap->userspace_clients_lock);
 
 	/* Detach any active clients. This can't fail, thus we do not
-	 * check the returned value. This is a two-pass process, because
-	 * we can't remove the dummy devices during the first pass: they
-	 * could have been instantiated by real devices wishing to clean
-	 * them up properly, so we give them a chance to do that first. */
+	   checking the returned value. */
 	res = device_for_each_child(&adap->dev, NULL, __unregister_client);
-	res = device_for_each_child(&adap->dev, NULL, __unregister_dummy);
 
 #ifdef CONFIG_I2C_COMPAT
 	class_compat_remove_link(i2c_adapter_compat_class, &adap->dev,
@@ -1516,26 +1520,25 @@ static int i2c_detect(struct i2c_adapter *adapter, struct i2c_driver *driver)
 	if (!driver->detect || !address_list)
 		return 0;
 
+	/* Stop here if the classes do not match */
+	if (!(adapter->class & driver->class))
+		return 0;
+
 	/* Set up a temporary client to help detect callback */
 	temp_client = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (!temp_client)
 		return -ENOMEM;
 	temp_client->adapter = adapter;
 
-	/* Stop here if the classes do not match */
-	if (!(adapter->class & driver->class))
-		goto exit_free;
-
 	for (i = 0; address_list[i] != I2C_CLIENT_END; i += 1) {
 		dev_dbg(&adapter->dev, "found normal entry for adapter %d, "
 			"addr 0x%02x\n", adap_id, address_list[i]);
 		temp_client->addr = address_list[i];
 		err = i2c_detect_address(temp_client, driver);
-		if (err)
-			goto exit_free;
+		if (unlikely(err))
+			break;
 	}
 
- exit_free:
 	kfree(temp_client);
 	return err;
 }

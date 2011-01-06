@@ -677,8 +677,6 @@ static void hub_init_func3(struct work_struct *ws);
 static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 {
 	struct usb_device *hdev = hub->hdev;
-	struct usb_hcd *hcd;
-	int ret;
 	int port1;
 	int status;
 	bool need_debounce_delay = false;
@@ -717,25 +715,6 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 			usb_autopm_get_interface_no_resume(
 					to_usb_interface(hub->intfdev));
 			return;		/* Continues at init2: below */
-		} else if (type == HUB_RESET_RESUME) {
-			/* The internal host controller state for the hub device
-			 * may be gone after a host power loss on system resume.
-			 * Update the device's info so the HW knows it's a hub.
-			 */
-			hcd = bus_to_hcd(hdev->bus);
-			if (hcd->driver->update_hub_device) {
-				ret = hcd->driver->update_hub_device(hcd, hdev,
-						&hub->tt, GFP_NOIO);
-				if (ret < 0) {
-					dev_err(hub->intfdev, "Host not "
-							"accepting hub info "
-							"update.\n");
-					dev_err(hub->intfdev, "LS/FS devices "
-							"and hubs may not work "
-							"under this hub\n.");
-				}
-			}
-			hub_power_on(hub, true);
 		} else {
 			hub_power_on(hub, true);
 		}
@@ -778,6 +757,9 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 			     !(portstatus & USB_PORT_STAT_SUPER_SPEED))) {
 				clear_port_feature(hdev, port1,
 						   USB_PORT_FEAT_ENABLE);
+				portstatus &= ~USB_PORT_STAT_ENABLE;
+			} else {
+				/* Pretend that power was lost for USB3 devs */
 				portstatus &= ~USB_PORT_STAT_ENABLE;
 			}
 		}
@@ -2615,16 +2597,14 @@ static int hub_set_address(struct usb_device *udev, int devnum)
 		return 0;
 	if (udev->state != USB_STATE_DEFAULT)
 		return -EINVAL;
-	if (hcd->driver->address_device) {
+	if (hcd->driver->address_device)
 		retval = hcd->driver->address_device(hcd, udev);
-	} else {
+	else
 		retval = usb_control_msg(udev, usb_sndaddr0pipe(),
 				USB_REQ_SET_ADDRESS, 0, devnum, 0,
 				NULL, 0, USB_CTRL_SET_TIMEOUT);
-		if (retval == 0)
-			update_address(udev, devnum);
-	}
 	if (retval == 0) {
+		update_address(udev, devnum);
 		/* Device now using proper address. */
 		usb_set_device_state(udev, USB_STATE_ADDRESS);
 		usb_ep0_reinit(udev);
@@ -2743,11 +2723,6 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 		udev->ttport = hdev->ttport;
 	} else if (udev->speed != USB_SPEED_HIGH
 			&& hdev->speed == USB_SPEED_HIGH) {
-		if (!hub->tt.hub) {
-			dev_err(&udev->dev, "parent hub has no TT\n");
-			retval = -EINVAL;
-			goto fail;
-		}
 		udev->tt = &hub->tt;
 		udev->ttport = port1;
 	}
@@ -3126,16 +3101,17 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 			udev->speed = USB_SPEED_UNKNOWN;
 
 		/*
-		 * xHCI needs to issue an address device command later
-		 * in the hub_port_init sequence for SS/HS/FS/LS devices.
+		 * Set the address.
+		 * Note xHCI needs to issue an address device command later
+		 * in the hub_port_init sequence for SS/HS/FS/LS devices,
+		 * and xHC will assign an address to the device. But use
+		 * kernel assigned address here, to avoid any address conflict
+		 * issue.
 		 */
-		if (!(hcd->driver->flags & HCD_USB3)) {
-			/* set the address */
-			choose_address(udev);
-			if (udev->devnum <= 0) {
-				status = -ENOTCONN;	/* Don't retry */
-				goto loop;
-			}
+		choose_address(udev);
+		if (udev->devnum <= 0) {
+			status = -ENOTCONN;	/* Don't retry */
+			goto loop;
 		}
 
 		/* reset (non-USB 3.0 devices) and get descriptor */
@@ -3658,7 +3634,7 @@ static int usb_reset_and_verify_device(struct usb_device *udev)
 	}
 
 	if (!parent_hdev) {
-		/* this requires hcd-specific logic; see OHCI hc_restart() */
+		/* this requires hcd-specific logic; see ohci_restart() */
 		dev_dbg(&udev->dev, "%s for root hub!\n", __func__);
 		return -EISDIR;
 	}

@@ -2262,7 +2262,7 @@ retry:
 
 	inode->i_ctime = CURRENT_TIME_SEC;
 	inc_nlink(inode);
-	atomic_inc(&inode->i_count);
+	ihold(inode);
 
 	err = ext3_add_entry(handle, dentry, inode);
 	if (!err) {

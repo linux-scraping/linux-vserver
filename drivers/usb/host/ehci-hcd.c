@@ -114,9 +114,6 @@ MODULE_PARM_DESC(hird, "host initiated resume duration, +1 for each 75us\n");
 
 #define	INTR_MASK (STS_IAA | STS_FATAL | STS_PCD | STS_ERR | STS_INT)
 
-/* for ASPM quirk of ISOC on AMD SB800 */
-static struct pci_dev *amd_nb_dev;
-
 /*-------------------------------------------------------------------------*/
 
 #include "ehci.h"
@@ -197,6 +194,17 @@ static int handshake (struct ehci_hcd *ehci, void __iomem *ptr,
 	return -ETIMEDOUT;
 }
 
+/* check TDI/ARC silicon is in host mode */
+static int tdi_in_host_mode (struct ehci_hcd *ehci)
+{
+	u32 __iomem	*reg_ptr;
+	u32		tmp;
+
+	reg_ptr = (u32 __iomem *)(((u8 __iomem *)ehci->regs) + USBMODE);
+	tmp = ehci_readl(ehci, reg_ptr);
+	return (tmp & 3) == USBMODE_CM_HC;
+}
+
 /* force HC to halt state from unknown (EHCI spec section 2.3) */
 static int ehci_halt (struct ehci_hcd *ehci)
 {
@@ -204,6 +212,10 @@ static int ehci_halt (struct ehci_hcd *ehci)
 
 	/* disable any irqs left enabled by previous code */
 	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+
+	if (ehci_is_TDI(ehci) && tdi_in_host_mode(ehci) == 0) {
+		return 0;
+	}
 
 	if ((temp & STS_HALT) != 0)
 		return 0;
@@ -517,11 +529,6 @@ static void ehci_stop (struct usb_hcd *hcd)
 	spin_unlock_irq (&ehci->lock);
 	ehci_mem_cleanup (ehci);
 
-	if (amd_nb_dev) {
-		pci_dev_put(amd_nb_dev);
-		amd_nb_dev = NULL;
-	}
-
 #ifdef	EHCI_STATS
 	ehci_dbg (ehci, "irq normal %ld err %ld reclaim %ld (lost %ld)\n",
 		ehci->stats.normal, ehci->stats.error, ehci->stats.reclaim,
@@ -557,8 +564,6 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->iaa_watchdog.function = ehci_iaa_watchdog;
 	ehci->iaa_watchdog.data = (unsigned long) ehci;
 
-	hcc_params = ehci_readl(ehci, &ehci->caps->hcc_params);
-
 	/*
 	 * hw default: 1K periodic list heads, one per frame.
 	 * periodic_size can shrink by USBCMD update if hcc_params allows.
@@ -566,20 +571,11 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->periodic_size = DEFAULT_I_TDPS;
 	INIT_LIST_HEAD(&ehci->cached_itd_list);
 	INIT_LIST_HEAD(&ehci->cached_sitd_list);
-
-	if (HCC_PGM_FRAMELISTLEN(hcc_params)) {
-		/* periodic schedule size can be smaller than default */
-		switch (EHCI_TUNE_FLS) {
-		case 0: ehci->periodic_size = 1024; break;
-		case 1: ehci->periodic_size = 512; break;
-		case 2: ehci->periodic_size = 256; break;
-		default:	BUG();
-		}
-	}
 	if ((retval = ehci_mem_init(ehci, GFP_KERNEL)) < 0)
 		return retval;
 
 	/* controllers may cache some of the periodic schedule ... */
+	hcc_params = ehci_readl(ehci, &ehci->caps->hcc_params);
 	if (HCC_ISOC_CACHE(hcc_params))		// full frame cache
 		ehci->i_thresh = 2 + 8;
 	else					// N microframes cached
@@ -633,6 +629,12 @@ static int ehci_init(struct usb_hcd *hcd)
 		/* periodic schedule size can be smaller than default */
 		temp &= ~(3 << 2);
 		temp |= (EHCI_TUNE_FLS << 2);
+		switch (EHCI_TUNE_FLS) {
+		case 0: ehci->periodic_size = 1024; break;
+		case 1: ehci->periodic_size = 512; break;
+		case 2: ehci->periodic_size = 256; break;
+		default:	BUG();
+		}
 	}
 	if (HCC_LPM(hcc_params)) {
 		/* support link power management EHCI 1.1 addendum */
@@ -1093,7 +1095,6 @@ idle_timeout:
 	ep->hcpriv = NULL;
 done:
 	spin_unlock_irqrestore (&ehci->lock, flags);
-	return;
 }
 
 static void
@@ -1208,6 +1209,11 @@ MODULE_LICENSE ("GPL");
 #ifdef CONFIG_ARCH_AT91
 #include "ehci-atmel.c"
 #define	PLATFORM_DRIVER		ehci_atmel_driver
+#endif
+
+#ifdef CONFIG_USB_OCTEON_EHCI
+#include "ehci-octeon.c"
+#define PLATFORM_DRIVER		ehci_octeon_driver
 #endif
 
 #if !defined(PCI_DRIVER) && !defined(PLATFORM_DRIVER) && \

@@ -36,6 +36,7 @@
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/random.h>
+#include <linux/ctype.h>
 #include <linux/nl80211.h>
 #include <linux/platform_device.h>
 #include <net/cfg80211.h>
@@ -73,7 +74,11 @@ const struct ieee80211_regdomain *cfg80211_regdomain;
  *     - last_request
  */
 static DEFINE_MUTEX(reg_mutex);
-#define assert_reg_lock() WARN_ON(!mutex_is_locked(&reg_mutex))
+
+static inline void assert_reg_lock(void)
+{
+	lockdep_assert_held(&reg_mutex);
+}
 
 /* Used to queue up regulatory hints */
 static LIST_HEAD(reg_requests_list);
@@ -181,14 +186,6 @@ static bool is_alpha2_set(const char *alpha2)
 	return false;
 }
 
-static bool is_alpha_upper(char letter)
-{
-	/* ASCII A - Z */
-	if (letter >= 65 && letter <= 90)
-		return true;
-	return false;
-}
-
 static bool is_unknown_alpha2(const char *alpha2)
 {
 	if (!alpha2)
@@ -220,7 +217,7 @@ static bool is_an_alpha2(const char *alpha2)
 {
 	if (!alpha2)
 		return false;
-	if (is_alpha_upper(alpha2[0]) && is_alpha_upper(alpha2[1]))
+	if (isalpha(alpha2[0]) && isalpha(alpha2[1]))
 		return true;
 	return false;
 }
@@ -723,9 +720,7 @@ EXPORT_SYMBOL(freq_reg_info);
  * on the wiphy with the target_bw specified. Then we can simply use
  * that below for the desired_bw_khz below.
  */
-static void handle_channel(struct wiphy *wiphy,
-			   enum nl80211_reg_initiator initiator,
-			   enum ieee80211_band band,
+static void handle_channel(struct wiphy *wiphy, enum ieee80211_band band,
 			   unsigned int chan_idx)
 {
 	int r;
@@ -789,9 +784,7 @@ static void handle_channel(struct wiphy *wiphy,
 		chan->max_power = (int) MBM_TO_DBM(power_rule->max_eirp);
 }
 
-static void handle_band(struct wiphy *wiphy,
-			enum ieee80211_band band,
-			enum nl80211_reg_initiator initiator)
+static void handle_band(struct wiphy *wiphy, enum ieee80211_band band)
 {
 	unsigned int i;
 	struct ieee80211_supported_band *sband;
@@ -800,7 +793,7 @@ static void handle_band(struct wiphy *wiphy,
 	sband = wiphy->bands[band];
 
 	for (i = 0; i < sband->n_channels; i++)
-		handle_channel(wiphy, initiator, band, i);
+		handle_channel(wiphy, band, i);
 }
 
 static bool ignore_reg_update(struct wiphy *wiphy,
@@ -816,7 +809,6 @@ static bool ignore_reg_update(struct wiphy *wiphy,
 	 * desired regulatory domain set
 	 */
 	if (wiphy->flags & WIPHY_FLAG_STRICT_REGULATORY && !wiphy->regd &&
-	    initiator != NL80211_REGDOM_SET_BY_COUNTRY_IE &&
 	    !is_world_regdom(last_request->alpha2))
 		return true;
 	return false;
@@ -1038,7 +1030,7 @@ void wiphy_update_regulatory(struct wiphy *wiphy,
 		goto out;
 	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 		if (wiphy->bands[band])
-			handle_band(wiphy, band, initiator);
+			handle_band(wiphy, band);
 	}
 out:
 	reg_process_beacons(wiphy);
@@ -1404,6 +1396,11 @@ static DECLARE_WORK(reg_work, reg_todo);
 
 static void queue_regulatory_request(struct regulatory_request *request)
 {
+	if (isalpha(request->alpha2[0]))
+		request->alpha2[0] = toupper(request->alpha2[0]);
+	if (isalpha(request->alpha2[1]))
+		request->alpha2[1] = toupper(request->alpha2[1]);
+
 	spin_lock(&reg_requests_lock);
 	list_add_tail(&request->list, &reg_requests_list);
 	spin_unlock(&reg_requests_lock);

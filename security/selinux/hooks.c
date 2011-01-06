@@ -1972,13 +1972,9 @@ static int selinux_quota_on(struct dentry *dentry)
 	return dentry_has_perm(cred, NULL, dentry, FILE__QUOTAON);
 }
 
-static int selinux_syslog(int type, bool from_file)
+static int selinux_syslog(int type)
 {
 	int rc;
-
-	rc = cap_syslog(type, from_file);
-	if (rc)
-		return rc;
 
 	switch (type) {
 	case SYSLOG_ACTION_READ_ALL:	/* Read last kernel messages */
@@ -2528,10 +2524,7 @@ static int selinux_inode_init_security(struct inode *inode, struct inode *dir,
 	sid = tsec->sid;
 	newsid = tsec->create_sid;
 
-	if ((sbsec->flags & SE_SBINITIALIZED) &&
-	    (sbsec->behavior == SECURITY_FS_USE_MNTPOINT))
-		newsid = sbsec->mntpoint_sid;
-	else if (!newsid || !(sbsec->flags & SE_SBLABELSUPP)) {
+	if (!newsid || !(sbsec->flags & SE_SBLABELSUPP)) {
 		rc = security_transition_sid(sid, dsec->sid,
 					     inode_mode_to_security_class(inode->i_mode),
 					     &newsid);
@@ -3356,11 +3349,11 @@ static int selinux_task_setrlimit(struct task_struct *p, unsigned int resource,
 	return 0;
 }
 
-static int selinux_task_setscheduler(struct task_struct *p, int policy, struct sched_param *lp)
+static int selinux_task_setscheduler(struct task_struct *p)
 {
 	int rc;
 
-	rc = cap_task_setscheduler(p, policy, lp);
+	rc = cap_task_setscheduler(p);
 	if (rc)
 		return rc;
 
@@ -4279,6 +4272,27 @@ static void selinux_inet_conn_established(struct sock *sk, struct sk_buff *skb)
 		family = PF_INET;
 
 	selinux_skb_peerlbl_sid(skb, family, &sksec->peer_sid);
+}
+
+static int selinux_secmark_relabel_packet(u32 sid)
+{
+	const struct task_security_struct *__tsec;
+	u32 tsid;
+
+	__tsec = current_security();
+	tsid = __tsec->sid;
+
+	return avc_has_perm(tsid, sid, SECCLASS_PACKET, PACKET__RELABELTO, NULL);
+}
+
+static void selinux_secmark_refcount_inc(void)
+{
+	atomic_inc(&selinux_secmark_refcount);
+}
+
+static void selinux_secmark_refcount_dec(void)
+{
+	atomic_dec(&selinux_secmark_refcount);
 }
 
 static void selinux_req_classify_flow(const struct request_sock *req,
@@ -5535,6 +5549,9 @@ static struct security_operations selinux_ops = {
 	.inet_conn_request =		selinux_inet_conn_request,
 	.inet_csk_clone =		selinux_inet_csk_clone,
 	.inet_conn_established =	selinux_inet_conn_established,
+	.secmark_relabel_packet =	selinux_secmark_relabel_packet,
+	.secmark_refcount_inc =		selinux_secmark_refcount_inc,
+	.secmark_refcount_dec =		selinux_secmark_refcount_dec,
 	.req_classify_flow =		selinux_req_classify_flow,
 	.tun_dev_create =		selinux_tun_dev_create,
 	.tun_dev_post_create = 		selinux_tun_dev_post_create,

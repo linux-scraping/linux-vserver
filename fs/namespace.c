@@ -13,7 +13,6 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
-#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/acct.h>
@@ -600,7 +599,7 @@ static struct vfsmount *clone_mnt(struct vfsmount *old, struct dentry *root,
 				goto out_free;
 		}
 
-		mnt->mnt_flags = old->mnt_flags;
+		mnt->mnt_flags = old->mnt_flags & ~MNT_WRITE_HOLD;
 		atomic_inc(&sb->s_active);
 		mnt->mnt_sb = sb;
 		mnt->mnt_root = dget(root);
@@ -1805,9 +1804,7 @@ static int do_new_mount(struct path *path, char *type, int flags,
 	if (!vx_capable(CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
 		return -EPERM;
 
-	lock_kernel();
 	mnt = do_kern_mount(type, flags, name, data);
-	unlock_kernel();
 	if (IS_ERR(mnt))
 		return PTR_ERR(mnt);
 

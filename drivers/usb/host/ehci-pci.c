@@ -41,42 +41,6 @@ static int ehci_pci_reinit(struct ehci_hcd *ehci, struct pci_dev *pdev)
 	return 0;
 }
 
-static int ehci_quirk_amd_hudson(struct ehci_hcd *ehci)
-{
-	struct pci_dev *amd_smbus_dev;
-	u8 rev = 0;
-
-	amd_smbus_dev = pci_get_device(PCI_VENDOR_ID_ATI, 0x4385, NULL);
-	if (amd_smbus_dev) {
-		pci_read_config_byte(amd_smbus_dev, PCI_REVISION_ID, &rev);
-		if (rev < 0x40) {
-			pci_dev_put(amd_smbus_dev);
-			amd_smbus_dev = NULL;
-			return 0;
-		}
-	} else {
-		amd_smbus_dev = pci_get_device(PCI_VENDOR_ID_AMD, 0x780b, NULL);
-		if (!amd_smbus_dev)
-			return 0;
-		pci_read_config_byte(amd_smbus_dev, PCI_REVISION_ID, &rev);
-		if (rev < 0x11 || rev > 0x18) {
-			pci_dev_put(amd_smbus_dev);
-			amd_smbus_dev = NULL;
-			return 0;
-		}
-	}
-
-	if (!amd_nb_dev)
-		amd_nb_dev = pci_get_device(PCI_VENDOR_ID_AMD, 0x1510, NULL);
-
-	ehci_info(ehci, "QUIRK: Enable exception for AMD Hudson ASPM\n");
-
-	pci_dev_put(amd_smbus_dev);
-	amd_smbus_dev = NULL;
-
-	return 1;
-}
-
 /* called during probe() after chip reset completes */
 static int ehci_pci_setup(struct usb_hcd *hcd)
 {
@@ -135,12 +99,22 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 	/* cache this readonly data; minimize chip reads */
 	ehci->hcs_params = ehci_readl(ehci, &ehci->caps->hcs_params);
 
-	if (ehci_quirk_amd_hudson(ehci))
-		ehci->amd_l1_fix = 1;
-
 	retval = ehci_halt(ehci);
 	if (retval)
 		return retval;
+
+	if ((pdev->vendor == PCI_VENDOR_ID_AMD && pdev->device == 0x7808) ||
+	    (pdev->vendor == PCI_VENDOR_ID_ATI && pdev->device == 0x4396)) {
+		/* EHCI controller on AMD SB700/SB800/Hudson-2/3 platforms may
+		 * read/write memory space which does not belong to it when
+		 * there is NULL pointer with T-bit set to 1 in the frame list
+		 * table. To avoid the issue, the frame list link pointer
+		 * should always contain a valid pointer to a inactive qh.
+		 */
+		ehci->use_dummy_qh = 1;
+		ehci_info(ehci, "applying AMD SB700/SB800/Hudson-2/3 EHCI "
+				"dummy qh workaround\n");
+	}
 
 	/* data structure init */
 	retval = ehci_init(hcd);
@@ -347,8 +321,8 @@ static int ehci_pci_suspend(struct usb_hcd *hcd, bool do_wakeup)
 	 * mark HW unaccessible.  The PM and USB cores make sure that
 	 * the root hub is either suspended or stopped.
 	 */
-	ehci_prepare_ports_for_controller_suspend(ehci, do_wakeup);
 	spin_lock_irqsave (&ehci->lock, flags);
+	ehci_prepare_ports_for_controller_suspend(ehci, do_wakeup);
 	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
 	(void)ehci_readl(ehci, &ehci->regs->intr_enable);
 

@@ -29,12 +29,11 @@ MODULE_AUTHOR("Utz Bacher <utz.bacher@de.ibm.com>,"\
 MODULE_DESCRIPTION("QDIO base support");
 MODULE_LICENSE("GPL");
 
-static inline int do_siga_sync(unsigned long schid,
-			       unsigned int out_mask, unsigned int in_mask,
-			       unsigned int fc)
+static inline int do_siga_sync(struct subchannel_id schid,
+			       unsigned int out_mask, unsigned int in_mask)
 {
-	register unsigned long __fc asm ("0") = fc;
-	register unsigned long __schid asm ("1") = schid;
+	register unsigned long __fc asm ("0") = 2;
+	register struct subchannel_id __schid asm ("1") = schid;
 	register unsigned long out asm ("2") = out_mask;
 	register unsigned long in asm ("3") = in_mask;
 	int cc;
@@ -48,11 +47,10 @@ static inline int do_siga_sync(unsigned long schid,
 	return cc;
 }
 
-static inline int do_siga_input(unsigned long schid, unsigned int mask,
-				unsigned int fc)
+static inline int do_siga_input(struct subchannel_id schid, unsigned int mask)
 {
-	register unsigned long __fc asm ("0") = fc;
-	register unsigned long __schid asm ("1") = schid;
+	register unsigned long __fc asm ("0") = 1;
+	register struct subchannel_id __schid asm ("1") = schid;
 	register unsigned long __mask asm ("2") = mask;
 	int cc;
 
@@ -281,8 +279,6 @@ void qdio_init_buf_states(struct qdio_irq *irq_ptr)
 static inline int qdio_siga_sync(struct qdio_q *q, unsigned int output,
 			  unsigned int input)
 {
-	unsigned long schid = *((u32 *) &q->irq_ptr->schid);
-	unsigned int fc = QDIO_SIGA_SYNC;
 	int cc;
 
 	if (!need_siga_sync(q))
@@ -291,12 +287,7 @@ static inline int qdio_siga_sync(struct qdio_q *q, unsigned int output,
 	DBF_DEV_EVENT(DBF_INFO, q->irq_ptr, "siga-s:%1d", q->nr);
 	qperf_inc(q, siga_sync);
 
-	if (is_qebsm(q)) {
-		schid = q->irq_ptr->sch_token;
-		fc |= QDIO_SIGA_QEBSM_FLAG;
-	}
-
-	cc = do_siga_sync(schid, output, input, fc);
+	cc = do_siga_sync(q->irq_ptr->schid, output, input);
 	if (cc)
 		DBF_ERROR("%4x SIGA-S:%2d", SCH_NO(q), cc);
 	return cc;
@@ -322,8 +313,8 @@ static inline int qdio_siga_sync_all(struct qdio_q *q)
 
 static int qdio_siga_output(struct qdio_q *q, unsigned int *busy_bit)
 {
-	unsigned long schid = *((u32 *) &q->irq_ptr->schid);
-	unsigned int fc = QDIO_SIGA_WRITE;
+	unsigned long schid;
+	unsigned int fc = 0;
 	u64 start_time = 0;
 	int cc;
 
@@ -332,8 +323,11 @@ static int qdio_siga_output(struct qdio_q *q, unsigned int *busy_bit)
 
 	if (is_qebsm(q)) {
 		schid = q->irq_ptr->sch_token;
-		fc |= QDIO_SIGA_QEBSM_FLAG;
+		fc |= 0x80;
 	}
+	else
+		schid = *((u32 *)&q->irq_ptr->schid);
+
 again:
 	cc = do_siga_output(schid, q->mask, busy_bit, fc);
 
@@ -353,19 +347,12 @@ again:
 
 static inline int qdio_siga_input(struct qdio_q *q)
 {
-	unsigned long schid = *((u32 *) &q->irq_ptr->schid);
-	unsigned int fc = QDIO_SIGA_READ;
 	int cc;
 
 	DBF_DEV_EVENT(DBF_INFO, q->irq_ptr, "siga-r:%1d", q->nr);
 	qperf_inc(q, siga_read);
 
-	if (is_qebsm(q)) {
-		schid = q->irq_ptr->sch_token;
-		fc |= QDIO_SIGA_QEBSM_FLAG;
-	}
-
-	cc = do_siga_input(schid, q->mask, fc);
+	cc = do_siga_input(q->irq_ptr->schid, q->mask);
 	if (cc)
 		DBF_ERROR("%4x SIGA-R:%2d", SCH_NO(q), cc);
 	return cc;
@@ -897,8 +884,19 @@ static void qdio_int_handler_pci(struct qdio_irq *irq_ptr)
 	if (unlikely(irq_ptr->state == QDIO_IRQ_STATE_STOPPED))
 		return;
 
-	for_each_input_queue(irq_ptr, q, i)
-		tasklet_schedule(&q->tasklet);
+	for_each_input_queue(irq_ptr, q, i) {
+		if (q->u.in.queue_start_poll) {
+			/* skip if polling is enabled or already in work */
+			if (test_and_set_bit(QDIO_QUEUE_IRQS_DISABLED,
+				     &q->u.in.queue_irq_state)) {
+				qperf_inc(q, int_discarded);
+				continue;
+			}
+			q->u.in.queue_start_poll(q->irq_ptr->cdev, q->nr,
+						 q->irq_ptr->int_parm);
+		} else
+			tasklet_schedule(&q->tasklet);
+	}
 
 	if (!(irq_ptr->qib.ac & QIB_AC_OUTBOUND_PCI_SUPPORTED))
 		return;
@@ -1531,6 +1529,129 @@ int do_QDIO(struct ccw_device *cdev, unsigned int callflags,
 	return -EINVAL;
 }
 EXPORT_SYMBOL_GPL(do_QDIO);
+
+/**
+ * qdio_start_irq - process input buffers
+ * @cdev: associated ccw_device for the qdio subchannel
+ * @nr: input queue number
+ *
+ * Return codes
+ *   0 - success
+ *   1 - irqs not started since new data is available
+ */
+int qdio_start_irq(struct ccw_device *cdev, int nr)
+{
+	struct qdio_q *q;
+	struct qdio_irq *irq_ptr = cdev->private->qdio_data;
+
+	if (!irq_ptr)
+		return -ENODEV;
+	q = irq_ptr->input_qs[nr];
+
+	WARN_ON(queue_irqs_enabled(q));
+
+	if (!shared_ind(q->irq_ptr))
+		xchg(q->irq_ptr->dsci, 0);
+
+	qdio_stop_polling(q);
+	clear_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state);
+
+	/*
+	 * We need to check again to not lose initiative after
+	 * resetting the ACK state.
+	 */
+	if (!shared_ind(q->irq_ptr) && *q->irq_ptr->dsci)
+		goto rescan;
+	if (!qdio_inbound_q_done(q))
+		goto rescan;
+	return 0;
+
+rescan:
+	if (test_and_set_bit(QDIO_QUEUE_IRQS_DISABLED,
+			     &q->u.in.queue_irq_state))
+		return 0;
+	else
+		return 1;
+
+}
+EXPORT_SYMBOL(qdio_start_irq);
+
+/**
+ * qdio_get_next_buffers - process input buffers
+ * @cdev: associated ccw_device for the qdio subchannel
+ * @nr: input queue number
+ * @bufnr: first filled buffer number
+ * @error: buffers are in error state
+ *
+ * Return codes
+ *   < 0 - error
+ *   = 0 - no new buffers found
+ *   > 0 - number of processed buffers
+ */
+int qdio_get_next_buffers(struct ccw_device *cdev, int nr, int *bufnr,
+			  int *error)
+{
+	struct qdio_q *q;
+	int start, end;
+	struct qdio_irq *irq_ptr = cdev->private->qdio_data;
+
+	if (!irq_ptr)
+		return -ENODEV;
+	q = irq_ptr->input_qs[nr];
+	WARN_ON(queue_irqs_enabled(q));
+
+	qdio_sync_after_thinint(q);
+
+	/*
+	 * The interrupt could be caused by a PCI request. Check the
+	 * PCI capable outbound queues.
+	 */
+	qdio_check_outbound_after_thinint(q);
+
+	if (!qdio_inbound_q_moved(q))
+		return 0;
+
+	/* Note: upper-layer MUST stop processing immediately here ... */
+	if (unlikely(q->irq_ptr->state != QDIO_IRQ_STATE_ACTIVE))
+		return -EIO;
+
+	start = q->first_to_kick;
+	end = q->first_to_check;
+	*bufnr = start;
+	*error = q->qdio_error;
+
+	/* for the next time */
+	q->first_to_kick = end;
+	q->qdio_error = 0;
+	return sub_buf(end, start);
+}
+EXPORT_SYMBOL(qdio_get_next_buffers);
+
+/**
+ * qdio_stop_irq - disable interrupt processing for the device
+ * @cdev: associated ccw_device for the qdio subchannel
+ * @nr: input queue number
+ *
+ * Return codes
+ *   0 - interrupts were already disabled
+ *   1 - interrupts successfully disabled
+ */
+int qdio_stop_irq(struct ccw_device *cdev, int nr)
+{
+	struct qdio_q *q;
+	struct qdio_irq *irq_ptr = cdev->private->qdio_data;
+
+	if (!irq_ptr)
+		return -ENODEV;
+	q = irq_ptr->input_qs[nr];
+
+	if (test_and_set_bit(QDIO_QUEUE_IRQS_DISABLED,
+			     &q->u.in.queue_irq_state))
+		return 0;
+	else
+		return 1;
+}
+EXPORT_SYMBOL(qdio_stop_irq);
 
 static int __init init_QDIO(void)
 {

@@ -132,8 +132,8 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 		space->vx_fs = &init_fs;
 
 		/* FIXME: do we want defaults? */
-		// space->vx_real_cred = 0;
-		// space->vx_cred = 0;
+		space->vx_real_cred = 0;
+		space->vx_cred = 0;
 	}
 
 
@@ -214,7 +214,7 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 		spin_unlock(&fs->lock);
 		if (kill)
 			free_fs_struct(fs);
-#if 0
+
 		cred = xchg(&space->vx_real_cred, NULL);
 		if (cred) {
 			alter_cred_subscribers(cred, -1);
@@ -226,7 +226,6 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 			alter_cred_subscribers(cred, -1);
 			put_cred(cred);
 		}
-#endif
 	}
 }
 
@@ -253,8 +252,8 @@ void free_vx_info(struct vx_info *vxi)
 
 		BUG_ON(space->vx_nsproxy);
 		BUG_ON(space->vx_fs);
-		// BUG_ON(space->vx_real_cred);
-		// BUG_ON(space->vx_cred);
+		BUG_ON(space->vx_real_cred);
+		BUG_ON(space->vx_cred);
 	}
 
 	spin_lock_irqsave(&vx_info_inactive_lock, flags);

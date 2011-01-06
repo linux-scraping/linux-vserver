@@ -218,7 +218,7 @@ int __init vroot_init(void)
 		struct gendisk *disk = disks[i];
 
 		memset(vr, 0, sizeof(*vr));
-		init_MUTEX(&vr->vr_ctl_mutex);
+		mutex_init(&vr->vr_ctl_mutex);
 		vr->vr_number = i;
 		disk->major = VROOT_MAJOR;
 		disk->first_minor = i;

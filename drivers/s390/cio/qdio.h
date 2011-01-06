@@ -91,12 +91,6 @@ enum qdio_irq_states {
 #define AC1_SC_QEBSM_AVAILABLE		0x02	/* available for subchannel */
 #define AC1_SC_QEBSM_ENABLED		0x01	/* enabled for subchannel */
 
-/* SIGA flags */
-#define QDIO_SIGA_WRITE		0x00
-#define QDIO_SIGA_READ		0x01
-#define QDIO_SIGA_SYNC		0x02
-#define QDIO_SIGA_QEBSM_FLAG	0x80
-
 #ifdef CONFIG_64BIT
 static inline int do_sqbs(u64 token, unsigned char state, int queue,
 			  int *start, int *count)
@@ -214,6 +208,7 @@ struct qdio_dev_perf_stat {
 	unsigned int eqbs_partial;
 	unsigned int sqbs;
 	unsigned int sqbs_partial;
+	unsigned int int_discarded;
 } ____cacheline_aligned;
 
 struct qdio_queue_perf_stat {
@@ -228,6 +223,10 @@ struct qdio_queue_perf_stat {
 	unsigned int nr_sbal_total;
 };
 
+enum qdio_queue_irq_states {
+	QDIO_QUEUE_IRQS_DISABLED,
+};
+
 struct qdio_input_q {
 	/* input buffer acknowledgement flag */
 	int polling;
@@ -237,6 +236,10 @@ struct qdio_input_q {
 	int ack_count;
 	/* last time of noticing incoming data */
 	u64 timestamp;
+	/* upper-layer polling flag */
+	unsigned long queue_irq_state;
+	/* callback to start upper-layer polling */
+	void (*queue_start_poll) (struct ccw_device *, int, unsigned long);
 };
 
 struct qdio_output_q {
@@ -404,6 +407,26 @@ static inline int multicast_outbound(struct qdio_q *q)
 	((bufnr + inc) & QDIO_MAX_BUFFERS_MASK)
 #define sub_buf(bufnr, dec) \
 	((bufnr - dec) & QDIO_MAX_BUFFERS_MASK)
+
+#define queue_irqs_enabled(q)			\
+	(test_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state) == 0)
+#define queue_irqs_disabled(q)			\
+	(test_bit(QDIO_QUEUE_IRQS_DISABLED, &q->u.in.queue_irq_state) != 0)
+
+#define TIQDIO_SHARED_IND		63
+
+/* device state change indicators */
+struct indicator_t {
+	u32 ind;	/* u32 because of compare-and-swap performance */
+	atomic_t count; /* use count, 0 or 1 for non-shared indicators */
+};
+
+extern struct indicator_t *q_indicators;
+
+static inline int shared_ind(struct qdio_irq *irq_ptr)
+{
+	return irq_ptr->dsci == &q_indicators[TIQDIO_SHARED_IND].ind;
+}
 
 /* prototypes for thin interrupt */
 void qdio_setup_thinint(struct qdio_irq *irq_ptr);

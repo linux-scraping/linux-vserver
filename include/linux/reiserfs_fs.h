@@ -22,7 +22,6 @@
 #include <asm/unaligned.h>
 #include <linux/bitops.h>
 #include <linux/proc_fs.h>
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include <linux/reiserfs_fs_i.h>
 #include <linux/reiserfs_fs_sb.h>
@@ -2080,6 +2079,8 @@ void sd_attrs_to_i_attrs(__u16 sd_attrs, struct inode *inode);
 void i_attrs_to_sd_attrs(struct inode *inode, __u16 * sd_attrs);
 int reiserfs_setattr(struct dentry *dentry, struct iattr *attr);
 int reiserfs_sync_flags(struct inode *inode, int, int);
+
+int __reiserfs_write_begin(struct page *page, unsigned from, unsigned len);
 
 /* namei.c */
 void set_de_name_and_namelen(struct reiserfs_dir_entry *de);

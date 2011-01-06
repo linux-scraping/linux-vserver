@@ -76,10 +76,6 @@
 /* Wrapper for extended mode pgprot twiddling */
 #define _PAGE_EXT(x)		((unsigned long long)(x) << 32)
 
-#ifdef CONFIG_X2TLB
-#define _PAGE_PCC_MASK	0x00000000	/* No legacy PTEA support */
-#else
-
 /* software: moves to PTEA.TC (Timing Control) */
 #define _PAGE_PCC_AREA5	0x00000000	/* use BSC registers for area5 */
 #define _PAGE_PCC_AREA6	0x80000000	/* use BSC registers for area6 */
@@ -93,8 +89,7 @@
 #define _PAGE_PCC_ATR8	0x60000000	/* Attribute Memory space, 8 bit bus */
 #define _PAGE_PCC_ATR16	0x60000001	/* Attribute Memory space, 6 bit bus */
 
-#define _PAGE_PCC_MASK	0xe0000001
-
+#ifndef CONFIG_X2TLB
 /* copy the ptea attributes */
 static inline unsigned long copy_ptea_attributes(unsigned long x)
 {
@@ -383,8 +378,6 @@ PTE_BIT_FUNC(low, mkold, &= ~_PAGE_ACCESSED);
 PTE_BIT_FUNC(low, mkyoung, |= _PAGE_ACCESSED);
 PTE_BIT_FUNC(low, mkspecial, |= _PAGE_SPECIAL);
 
-#define __HAVE_ARCH_PTE_SPECIAL
-
 /*
  * Macro and implementation to make a page protection as uncachable.
  */
@@ -434,10 +427,7 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 #define pte_offset_kernel(dir, address) \
 	((pte_t *) pmd_page_vaddr(*(dir)) + pte_index(address))
 #define pte_offset_map(dir, address)		pte_offset_kernel(dir, address)
-#define pte_offset_map_nested(dir, address)	pte_offset_kernel(dir, address)
-
 #define pte_unmap(pte)		do { } while (0)
-#define pte_unmap_nested(pte)	do { } while (0)
 
 #ifdef CONFIG_X2TLB
 #define pte_ERROR(e) \

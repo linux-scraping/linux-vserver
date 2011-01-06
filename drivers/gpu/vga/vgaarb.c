@@ -636,7 +636,7 @@ int vga_client_register(struct pci_dev *pdev, void *cookie,
 			void (*irq_set_state)(void *cookie, bool state),
 			unsigned int (*set_vga_decode)(void *cookie, bool decode))
 {
-	int ret = -ENODEV;
+	int ret = -1;
 	struct vga_device *vgadev;
 	unsigned long flags;
 
@@ -1211,6 +1211,7 @@ static const struct file_operations vga_arb_device_fops = {
 	.poll = vga_arb_fpoll,
 	.open = vga_arb_open,
 	.release = vga_arb_release,
+	.llseek = noop_llseek,
 };
 
 static struct miscdevice vga_arb_device = {

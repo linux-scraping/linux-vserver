@@ -194,24 +194,6 @@ void generic_smp_call_function_interrupt(void)
 	list_for_each_entry_rcu(data, &call_function.queue, csd.list) {
 		int refs;
 
-		/*
-		 * Since we walk the list without any locks, we might
-		 * see an entry that was completed, removed from the
-		 * list and is in the process of being reused.
-		 *
-		 * We must check that the cpu is in the cpumask before
-		 * checking the refs, and both must be set before
-		 * executing the callback on this cpu.
-		 */
-
-		if (!cpumask_test_cpu(cpu, data->cpumask))
-			continue;
-
-		smp_rmb();
-
-		if (atomic_read(&data->refs) == 0)
-			continue;
-
 		if (!cpumask_test_and_clear_cpu(cpu, data->cpumask))
 			continue;
 
@@ -220,8 +202,6 @@ void generic_smp_call_function_interrupt(void)
 		refs = atomic_dec_return(&data->refs);
 		WARN_ON(refs < 0);
 		if (!refs) {
-			WARN_ON(!cpumask_empty(data->cpumask));
-
 			raw_spin_lock(&call_function.lock);
 			list_del_rcu(&data->csd.list);
 			raw_spin_unlock(&call_function.lock);
@@ -287,7 +267,7 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(struct call_single_data, csd_data);
  *
  * Returns 0 on success, else a negative status code.
  */
-int smp_call_function_single(int cpu, void (*func) (void *info), void *info,
+int smp_call_function_single(int cpu, smp_call_func_t func, void *info,
 			     int wait)
 {
 	struct call_single_data d = {
@@ -356,7 +336,7 @@ EXPORT_SYMBOL(smp_call_function_single);
  *	3) any other online cpu in @mask
  */
 int smp_call_function_any(const struct cpumask *mask,
-			  void (*func)(void *info), void *info, int wait)
+			  smp_call_func_t func, void *info, int wait)
 {
 	unsigned int cpu;
 	const struct cpumask *nodemask;
@@ -436,7 +416,7 @@ void __smp_call_function_single(int cpu, struct call_single_data *data,
  * must be disabled when calling this function.
  */
 void smp_call_function_many(const struct cpumask *mask,
-			    void (*func)(void *), void *info, bool wait)
+			    smp_call_func_t func, void *info, bool wait)
 {
 	struct call_function_data *data;
 	unsigned long flags;
@@ -473,21 +453,11 @@ void smp_call_function_many(const struct cpumask *mask,
 
 	data = &__get_cpu_var(cfd_data);
 	csd_lock(&data->csd);
-	BUG_ON(atomic_read(&data->refs) || !cpumask_empty(data->cpumask));
 
 	data->csd.func = func;
 	data->csd.info = info;
 	cpumask_and(data->cpumask, mask, cpu_online_mask);
 	cpumask_clear_cpu(this_cpu, data->cpumask);
-
-	/*
-	 * To ensure the interrupt handler gets an complete view
-	 * we order the cpumask and refs writes and order the read
-	 * of them in the interrupt handler.  In addition we may
-	 * only clear our own cpu bit from the mask.
-	 */
-	smp_wmb();
-
 	atomic_set(&data->refs, cpumask_weight(data->cpumask));
 
 	raw_spin_lock_irqsave(&call_function.lock, flags);
@@ -530,7 +500,7 @@ EXPORT_SYMBOL(smp_call_function_many);
  * You must not call this function with disabled interrupts or from a
  * hardware interrupt handler or from a bottom half handler.
  */
-int smp_call_function(void (*func)(void *), void *info, int wait)
+int smp_call_function(smp_call_func_t func, void *info, int wait)
 {
 	preempt_disable();
 	smp_call_function_many(cpu_online_mask, func, info, wait);

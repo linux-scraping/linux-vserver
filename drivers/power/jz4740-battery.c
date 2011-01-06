@@ -47,8 +47,6 @@ struct jz_battery {
 
 	struct power_supply battery;
 	struct delayed_work work;
-
-	struct mutex lock;
 };
 
 static inline struct jz_battery *psy_to_jz_battery(struct power_supply *psy)
@@ -69,8 +67,6 @@ static long jz_battery_read_voltage(struct jz_battery *battery)
 	unsigned long t;
 	unsigned long val;
 	long voltage;
-
-	mutex_lock(&battery->lock);
 
 	INIT_COMPLETION(battery->read_completion);
 
@@ -94,8 +90,6 @@ static long jz_battery_read_voltage(struct jz_battery *battery)
 
 	battery->cell->disable(battery->pdev);
 	disable_irq(battery->irq);
-
-	mutex_unlock(&battery->lock);
 
 	return voltage;
 }
@@ -297,7 +291,6 @@ static int __devinit jz_battery_probe(struct platform_device *pdev)
 	jz_battery->pdev = pdev;
 
 	init_completion(&jz_battery->read_completion);
-	mutex_init(&jz_battery->lock);
 
 	INIT_DELAYED_WORK(&jz_battery->work, jz_battery_work);
 
@@ -390,6 +383,7 @@ static int __devexit jz_battery_remove(struct platform_device *pdev)
 
 	iounmap(jz_battery->base);
 	release_mem_region(jz_battery->mem->start, resource_size(jz_battery->mem));
+	kfree(jz_battery);
 
 	return 0;
 }

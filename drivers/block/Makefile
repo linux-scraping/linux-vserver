@@ -38,5 +38,6 @@ obj-$(CONFIG_BLK_DEV_VROOT)	+= vroot.o
 
 obj-$(CONFIG_XEN_BLKDEV_FRONTEND)	+= xen-blkfront.o
 obj-$(CONFIG_BLK_DEV_DRBD)     += drbd/
+obj-$(CONFIG_BLK_DEV_RBD)     += rbd.o
 
 swim_mod-objs	:= swim.o swim_asm.o

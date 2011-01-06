@@ -98,10 +98,10 @@ static int hif_usb_send_regout(struct hif_device_usb *hif_dev,
 	cmd->skb = skb;
 	cmd->hif_dev = hif_dev;
 
-	usb_fill_int_urb(urb, hif_dev->udev,
-			 usb_sndintpipe(hif_dev->udev, USB_REG_OUT_PIPE),
+	usb_fill_bulk_urb(urb, hif_dev->udev,
+			 usb_sndbulkpipe(hif_dev->udev, USB_REG_OUT_PIPE),
 			 skb->data, skb->len,
-			 hif_usb_regout_cb, cmd, 1);
+			 hif_usb_regout_cb, cmd);
 
 	usb_anchor_urb(urb, &hif_dev->regout_submitted);
 	ret = usb_submit_urb(urb, GFP_KERNEL);
@@ -144,36 +144,16 @@ static void hif_usb_tx_cb(struct urb *urb)
 	case -ENODEV:
 	case -ESHUTDOWN:
 		/*
-		 * The URB has been killed, free the SKBs.
+		 * The URB has been killed, free the SKBs
+		 * and return.
 		 */
 		ath9k_skb_queue_purge(hif_dev, &tx_buf->skb_queue);
-
-		/*
-		 * If the URBs are being flushed, no need to add this
-		 * URB to the free list.
-		 */
-		spin_lock(&hif_dev->tx.tx_lock);
-		if (hif_dev->tx.flags & HIF_USB_TX_FLUSH) {
-			spin_unlock(&hif_dev->tx.tx_lock);
-			return;
-		}
-		spin_unlock(&hif_dev->tx.tx_lock);
-
-		/*
-		 * In the stop() case, this URB has to be added to
-		 * the free list.
-		 */
-		goto add_free;
+		return;
 	default:
 		break;
 	}
 
-	/*
-	 * Check if TX has been stopped, this is needed because
-	 * this CB could have been invoked just after the TX lock
-	 * was released in hif_stop() and kill_urb() hasn't been
-	 * called yet.
-	 */
+	/* Check if TX has been stopped */
 	spin_lock(&hif_dev->tx.tx_lock);
 	if (hif_dev->tx.flags & HIF_USB_TX_STOP) {
 		spin_unlock(&hif_dev->tx.tx_lock);
@@ -325,7 +305,6 @@ static void hif_usb_start(void *hif_handle, u8 pipe_id)
 static void hif_usb_stop(void *hif_handle, u8 pipe_id)
 {
 	struct hif_device_usb *hif_dev = (struct hif_device_usb *)hif_handle;
-	struct tx_buf *tx_buf = NULL, *tx_buf_tmp = NULL;
 	unsigned long flags;
 
 	spin_lock_irqsave(&hif_dev->tx.tx_lock, flags);
@@ -333,12 +312,6 @@ static void hif_usb_stop(void *hif_handle, u8 pipe_id)
 	hif_dev->tx.tx_skb_cnt = 0;
 	hif_dev->tx.flags |= HIF_USB_TX_STOP;
 	spin_unlock_irqrestore(&hif_dev->tx.tx_lock, flags);
-
-	/* The pending URBs have to be canceled. */
-	list_for_each_entry_safe(tx_buf, tx_buf_tmp,
-				 &hif_dev->tx.tx_pending, list) {
-		usb_kill_urb(tx_buf->urb);
-	}
 }
 
 static int hif_usb_send(void *hif_handle, u8 pipe_id, struct sk_buff *skb,
@@ -573,10 +546,11 @@ static void ath9k_hif_usb_reg_in_cb(struct urb *urb)
 			return;
 		}
 
-		usb_fill_int_urb(urb, hif_dev->udev,
-				 usb_rcvintpipe(hif_dev->udev, USB_REG_IN_PIPE),
+		usb_fill_bulk_urb(urb, hif_dev->udev,
+				 usb_rcvbulkpipe(hif_dev->udev,
+						 USB_REG_IN_PIPE),
 				 nskb->data, MAX_REG_IN_BUF_SIZE,
-				 ath9k_hif_usb_reg_in_cb, nskb, 1);
+				 ath9k_hif_usb_reg_in_cb, nskb);
 
 		ret = usb_submit_urb(urb, GFP_ATOMIC);
 		if (ret) {
@@ -604,7 +578,6 @@ free:
 static void ath9k_hif_usb_dealloc_tx_urbs(struct hif_device_usb *hif_dev)
 {
 	struct tx_buf *tx_buf = NULL, *tx_buf_tmp = NULL;
-	unsigned long flags;
 
 	list_for_each_entry_safe(tx_buf, tx_buf_tmp,
 				 &hif_dev->tx.tx_buf, list) {
@@ -614,10 +587,6 @@ static void ath9k_hif_usb_dealloc_tx_urbs(struct hif_device_usb *hif_dev)
 		kfree(tx_buf->buf);
 		kfree(tx_buf);
 	}
-
-	spin_lock_irqsave(&hif_dev->tx.tx_lock, flags);
-	hif_dev->tx.flags |= HIF_USB_TX_FLUSH;
-	spin_unlock_irqrestore(&hif_dev->tx.tx_lock, flags);
 
 	list_for_each_entry_safe(tx_buf, tx_buf_tmp,
 				 &hif_dev->tx.tx_pending, list) {
@@ -757,10 +726,11 @@ static int ath9k_hif_usb_alloc_reg_in_urb(struct hif_device_usb *hif_dev)
 	if (!skb)
 		goto err;
 
-	usb_fill_int_urb(hif_dev->reg_in_urb, hif_dev->udev,
-			 usb_rcvintpipe(hif_dev->udev, USB_REG_IN_PIPE),
+	usb_fill_bulk_urb(hif_dev->reg_in_urb, hif_dev->udev,
+			 usb_rcvbulkpipe(hif_dev->udev,
+					 USB_REG_IN_PIPE),
 			 skb->data, MAX_REG_IN_BUF_SIZE,
-			 ath9k_hif_usb_reg_in_cb, skb, 1);
+			 ath9k_hif_usb_reg_in_cb, skb);
 
 	if (usb_submit_urb(hif_dev->reg_in_urb, GFP_KERNEL) != 0)
 		goto err;
@@ -868,7 +838,9 @@ static int ath9k_hif_usb_download_fw(struct hif_device_usb *hif_dev)
 
 static int ath9k_hif_usb_dev_init(struct hif_device_usb *hif_dev)
 {
-	int ret;
+	int ret, idx;
+	struct usb_host_interface *alt = &hif_dev->interface->altsetting[0];
+	struct usb_endpoint_descriptor *endp;
 
 	/* Request firmware */
 	ret = request_firmware(&hif_dev->firmware, hif_dev->fw_name,
@@ -879,14 +851,6 @@ static int ath9k_hif_usb_dev_init(struct hif_device_usb *hif_dev)
 		goto err_fw_req;
 	}
 
-	/* Alloc URBs */
-	ret = ath9k_hif_usb_alloc_urbs(hif_dev);
-	if (ret) {
-		dev_err(&hif_dev->udev->dev,
-			"ath9k_htc: Unable to allocate URBs\n");
-		goto err_urb;
-	}
-
 	/* Download firmware */
 	ret = ath9k_hif_usb_download_fw(hif_dev);
 	if (ret) {
@@ -894,6 +858,28 @@ static int ath9k_hif_usb_dev_init(struct hif_device_usb *hif_dev)
 			"ath9k_htc: Firmware - %s download failed\n",
 			hif_dev->fw_name);
 		goto err_fw_download;
+	}
+
+	/* On downloading the firmware to the target, the USB descriptor of EP4
+	 * is 'patched' to change the type of the endpoint to Bulk. This will
+	 * bring down CPU usage during the scan period.
+	 */
+	for (idx = 0; idx < alt->desc.bNumEndpoints; idx++) {
+		endp = &alt->endpoint[idx].desc;
+		if ((endp->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
+				== USB_ENDPOINT_XFER_INT) {
+			endp->bmAttributes &= ~USB_ENDPOINT_XFERTYPE_MASK;
+			endp->bmAttributes |= USB_ENDPOINT_XFER_BULK;
+			endp->bInterval = 0;
+		}
+	}
+
+	/* Alloc URBs */
+	ret = ath9k_hif_usb_alloc_urbs(hif_dev);
+	if (ret) {
+		dev_err(&hif_dev->udev->dev,
+			"ath9k_htc: Unable to allocate URBs\n");
+		goto err_urb;
 	}
 
 	return 0;
@@ -968,7 +954,8 @@ static int ath9k_hif_usb_probe(struct usb_interface *interface,
 	}
 
 	ret = ath9k_htc_hw_init(hif_dev->htc_handle,
-				&hif_dev->udev->dev, hif_dev->device_id);
+				&hif_dev->udev->dev, hif_dev->device_id,
+				hif_dev->udev->product);
 	if (ret) {
 		ret = -EINVAL;
 		goto err_htc_hw_init;
@@ -1036,6 +1023,13 @@ static int ath9k_hif_usb_suspend(struct usb_interface *interface,
 {
 	struct hif_device_usb *hif_dev =
 		(struct hif_device_usb *) usb_get_intfdata(interface);
+
+	/*
+	 * The device has to be set to FULLSLEEP mode in case no
+	 * interface is up.
+	 */
+	if (!(hif_dev->flags & HIF_USB_START))
+		ath9k_htc_suspend(hif_dev->htc_handle);
 
 	ath9k_hif_usb_dealloc_urbs(hif_dev);
 

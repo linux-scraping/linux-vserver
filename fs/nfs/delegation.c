@@ -11,7 +11,6 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 #include <linux/spinlock.h>
 
 #include <linux/nfs4.h>
@@ -24,6 +23,8 @@
 
 static void nfs_do_free_delegation(struct nfs_delegation *delegation)
 {
+	if (delegation->cred)
+		put_rpccred(delegation->cred);
 	kfree(delegation);
 }
 
@@ -36,10 +37,6 @@ static void nfs_free_delegation_callback(struct rcu_head *head)
 
 static void nfs_free_delegation(struct nfs_delegation *delegation)
 {
-	if (delegation->cred) {
-		put_rpccred(delegation->cred);
-		delegation->cred = NULL;
-	}
 	call_rcu(&delegation->rcu, nfs_free_delegation_callback);
 }
 
@@ -73,20 +70,20 @@ static int nfs_delegation_claim_locks(struct nfs_open_context *ctx, struct nfs4_
 	if (inode->i_flock == NULL)
 		goto out;
 
-	/* Protect inode->i_flock using the BKL */
-	lock_kernel();
+	/* Protect inode->i_flock using the file locks lock */
+	lock_flocks();
 	for (fl = inode->i_flock; fl != NULL; fl = fl->fl_next) {
 		if (!(fl->fl_flags & (FL_POSIX|FL_FLOCK)))
 			continue;
 		if (nfs_file_open_context(fl->fl_file) != ctx)
 			continue;
-		unlock_kernel();
+		unlock_flocks();
 		status = nfs4_lock_delegation_recall(state, fl);
 		if (status < 0)
 			goto out;
-		lock_kernel();
+		lock_flocks();
 	}
-	unlock_kernel();
+	unlock_flocks();
 out:
 	return status;
 }

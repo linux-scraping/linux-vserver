@@ -276,7 +276,7 @@ static bool drm_encoder_crtc_ok(struct drm_encoder *encoder,
 	struct drm_crtc *tmp;
 	int crtc_mask = 1;
 
-	WARN(!crtc, "checking null crtc?");
+	WARN(!crtc, "checking null crtc?\n");
 
 	dev = crtc->dev;
 
@@ -471,6 +471,7 @@ int drm_crtc_helper_set_config(struct drm_mode_set *set)
 	int count = 0, ro, fail = 0;
 	struct drm_crtc_helper_funcs *crtc_funcs;
 	int ret = 0;
+	int i;
 
 	DRM_DEBUG_KMS("\n");
 
@@ -649,7 +650,6 @@ int drm_crtc_helper_set_config(struct drm_mode_set *set)
 						      old_fb)) {
 				DRM_ERROR("failed to set mode on [CRTC:%d]\n",
 					  set->crtc->base.id);
-				set->crtc->fb = old_fb;
 				ret = -EINVAL;
 				goto fail;
 			}
@@ -664,10 +664,14 @@ int drm_crtc_helper_set_config(struct drm_mode_set *set)
 			set->crtc->fb = set->fb;
 		ret = crtc_funcs->mode_set_base(set->crtc,
 						set->x, set->y, old_fb);
-		if (ret != 0) {
-			set->crtc->fb = old_fb;
+		if (ret != 0)
 			goto fail;
-		}
+	}
+	DRM_DEBUG_KMS("Setting connector DPMS state to on\n");
+	for (i = 0; i < set->num_connectors; i++) {
+		DRM_DEBUG_KMS("\t[CONNECTOR:%d:%s] set DPMS on\n", set->connectors[i]->base.id,
+			      drm_get_connector_name(set->connectors[i]));
+		set->connectors[i]->dpms = DRM_MODE_DPMS_ON;
 	}
 
 	kfree(save_connectors);
@@ -844,7 +848,7 @@ static void output_poll_execute(struct work_struct *work)
 	struct delayed_work *delayed_work = to_delayed_work(work);
 	struct drm_device *dev = container_of(delayed_work, struct drm_device, mode_config.output_poll_work);
 	struct drm_connector *connector;
-	enum drm_connector_status old_status, status;
+	enum drm_connector_status old_status;
 	bool repoll = false, changed = false;
 
 	if (!drm_kms_helper_poll)
@@ -869,8 +873,12 @@ static void output_poll_execute(struct work_struct *work)
 		    !(connector->polled & DRM_CONNECTOR_POLL_HPD))
 			continue;
 
-		status = connector->funcs->detect(connector, false);
-		if (old_status != status)
+		connector->status = connector->funcs->detect(connector, false);
+		DRM_DEBUG_KMS("[CONNECTOR:%d:%s] status updated from %d to %d\n",
+			      connector->base.id,
+			      drm_get_connector_name(connector),
+			      old_status, connector->status);
+		if (old_status != connector->status)
 			changed = true;
 	}
 

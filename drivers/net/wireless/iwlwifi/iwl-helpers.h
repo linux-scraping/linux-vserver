@@ -44,11 +44,6 @@ static inline struct ieee80211_conf *ieee80211_get_hw_conf(
 	return &hw->conf;
 }
 
-static inline int iwl_check_bits(unsigned long field, unsigned long mask)
-{
-	return ((field & mask) == mask) ? 1 : 0;
-}
-
 static inline unsigned long elapsed_jiffies(unsigned long start,
 					    unsigned long end)
 {
@@ -166,12 +161,6 @@ static inline void iwl_disable_interrupts(struct iwl_priv *priv)
 	iwl_write32(priv, CSR_INT, 0xffffffff);
 	iwl_write32(priv, CSR_FH_INT_STATUS, 0xffffffff);
 	IWL_DEBUG_ISR(priv, "Disabled interrupts\n");
-}
-
-static inline void iwl_enable_rfkill_int(struct iwl_priv *priv)
-{
-	IWL_DEBUG_ISR(priv, "Enabling rfkill interrupt\n");
-	iwl_write32(priv, CSR_INT_MASK, CSR_INT_BIT_RF_KILL);
 }
 
 static inline void iwl_enable_interrupts(struct iwl_priv *priv)
