@@ -249,6 +249,9 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	if (mask & CLONE_NEWUSER) {
 		vxdprintk(VXD_CBIT(space, 10),
+#if 1
+			"vx_enter_space(%p[#%u])", vxi, vxi->vx_id);
+#else
 			"vx_enter_space(%p[#%u],%p,%p) cred (%p,%p)",
 			vxi, vxi->vx_id,
 			space->vx_real_cred, space->vx_cred,
@@ -258,6 +261,7 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 		alter_cred_subscribers(current->real_cred, 1);
 		current->cred = get_cred(space->vx_cred);
 		alter_cred_subscribers(current->cred, 1);
+#endif
 	}
 
 	ret = 0;
@@ -324,9 +328,12 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	space->vx_nsmask |= mask;
 
 	if (mask & CLONE_NEWUSER) {
-		const struct cred *cred;
+		// const struct cred *cred;
 
 		vxdprintk(VXD_CBIT(space, 10),
+#if 1
+			"vx_set_space(%p[#%u])", vxi, vxi->vx_id);
+#else
 			"vx_set_space(%p[#%u],%p,%p) cred (%p,%p)",
 			vxi, vxi->vx_id,
 			space->vx_real_cred, space->vx_cred,
@@ -353,6 +360,7 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 			alter_cred_subscribers(cred, -1);
 			put_cred(cred);
 		}
+#endif
 	}
 
 	ret = 0;
