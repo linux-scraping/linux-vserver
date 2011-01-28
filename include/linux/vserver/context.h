@@ -99,6 +99,14 @@ struct _vx_info_pc {
 	struct _vx_cvirt_pc cvirt_pc;
 };
 
+struct _vx_space {
+	unsigned long vx_nsmask;		/* assignment mask */
+	struct nsproxy *vx_nsproxy;             /* private namespaces */
+	struct fs_struct *vx_fs;                /* private namespace fs */
+//	const struct cred *vx_real_cred;        /* real task credentials */
+//	const struct cred *vx_cred;             /* task credentials */
+};
+
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
 	xid_t vx_id;				/* context id */
@@ -107,11 +115,7 @@ struct vx_info {
 	struct vx_info *vx_parent;		/* parent context */
 	int vx_state;				/* context state */
 
-	unsigned long vx_nsmask[VX_SPACES];	/* assignment mask */
-	struct nsproxy *vx_nsproxy[VX_SPACES];	/* private namespaces */
-	struct fs_struct *vx_fs[VX_SPACES];	/* private namespace fs */
-	const struct cred *vx_real_cred;	/* real task credentials */
-	const struct cred *vx_cred;		/* task credentials */
+	struct _vx_space space[VX_SPACES];	/* namespace store */
 
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_ccaps;			/* context caps (vserver) */

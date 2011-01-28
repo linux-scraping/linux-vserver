@@ -121,17 +121,21 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
 
-	// preconfig fs entries
+	// preconfig spaces
 	for (index = 0; index < VX_SPACES; index++) {
+		struct _vx_space *space = &new->space[index];
+
+		// filesystem
 		spin_lock(&init_fs.lock);
 		init_fs.users++;
 		spin_unlock(&init_fs.lock);
-		new->vx_fs[index] = &init_fs;
+		space->vx_fs = &init_fs;
+
+		/* FIXME: do we want defaults? */
+		// space->vx_real_cred = 0;
+		// space->vx_cred = 0;
 	}
 
-	/* FIXME: we want defaults */
-	new->vx_real_cred = 0;
-	new->vx_cred = 0;
 
 	vxdprintk(VXD_CBIT(xid, 0),
 		"alloc_vx_info(%d) = %p", xid, new);
@@ -198,28 +202,31 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 	vs_state_change(vxi, VSC_SHUTDOWN);
 
 	for (index = 0; index < VX_SPACES; index++) {
-		nsproxy = xchg(&vxi->vx_nsproxy[index], NULL);
+		struct _vx_space *space = &vxi->space[index];
+
+		nsproxy = xchg(&space->vx_nsproxy, NULL);
 		if (nsproxy)
 			put_nsproxy(nsproxy);
 
-		fs = xchg(&vxi->vx_fs[index], NULL);
+		fs = xchg(&space->vx_fs, NULL);
 		spin_lock(&fs->lock);
 		kill = !--fs->users;
 		spin_unlock(&fs->lock);
 		if (kill)
 			free_fs_struct(fs);
-	}
+#if 0
+		cred = xchg(&space->vx_real_cred, NULL);
+		if (cred) {
+			alter_cred_subscribers(cred, -1);
+			put_cred(cred);
+		}
 
-	cred = xchg(&vxi->vx_real_cred, NULL);
-	if (cred) {
-		alter_cred_subscribers(cred, -1);
-		put_cred(cred);
-	}
-
-	cred = xchg(&vxi->vx_cred, NULL);
-	if (cred) {
-		alter_cred_subscribers(cred, -1);
-		put_cred(cred);
+		cred = xchg(&space->vx_cred, NULL);
+		if (cred) {
+			alter_cred_subscribers(cred, -1);
+			put_cred(cred);
+		}
+#endif
 	}
 }
 
@@ -240,10 +247,14 @@ void free_vx_info(struct vx_info *vxi)
 	/* context shutdown is mandatory */
 	BUG_ON(!vx_info_state(vxi, VXS_SHUTDOWN));
 
-	/* nsproxy and fs check */
+	/* spaces check */
 	for (index = 0; index < VX_SPACES; index++) {
-		BUG_ON(vxi->vx_nsproxy[index]);
-		BUG_ON(vxi->vx_fs[index]);
+		struct _vx_space *space = &vxi->space[index];
+
+		BUG_ON(space->vx_nsproxy);
+		BUG_ON(space->vx_fs);
+		// BUG_ON(space->vx_real_cred);
+		// BUG_ON(space->vx_cred);
 	}
 
 	spin_lock_irqsave(&vx_info_inactive_lock, flags);

@@ -169,7 +169,7 @@ static char *vx_vhi_name(struct vx_info *vxi, int id)
 	if (id == VHIN_CONTEXT)
 		return vxi->vx_name;
 
-	nsproxy = vxi->vx_nsproxy[0];
+	nsproxy = vxi->space[0].vx_nsproxy;
 	if (!nsproxy)
 		return NULL;
 

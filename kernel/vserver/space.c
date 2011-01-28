@@ -191,6 +191,7 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy, *proxy_cur, *proxy_new;
 	struct fs_struct *fs_cur, *fs = NULL;
+	struct _vx_space *space;
 	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_enter_space(%p[#%u],0x%08lx,%d)",
@@ -199,18 +200,23 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 	if (vx_info_flags(vxi, VXF_INFO_PRIVATE, 0))
 		return -EACCES;
 
-	if (!mask)
-		mask = vxi->vx_nsmask[index];
+	if (index >= VX_SPACES)
+		return -EINVAL;
 
-	if ((mask & vxi->vx_nsmask[index]) != mask)
+	space = &vxi->space[index];
+
+	if (!mask)
+		mask = space->vx_nsmask;
+
+	if ((mask & space->vx_nsmask) != mask)
 		return -EINVAL;
 
 	if (mask & CLONE_FS) {
-		fs = copy_fs_struct(vxi->vx_fs[index]);
+		fs = copy_fs_struct(space->vx_fs);
 		if (!fs)
 			return -ENOMEM;
 	}
-	proxy = vxi->vx_nsproxy[index];
+	proxy = space->vx_nsproxy;
 
 	vxdprintk(VXD_CBIT(space, 9),
 		"vx_enter_space(%p[#%u],0x%08lx,%d) -> (%p,%p)",
@@ -243,14 +249,19 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	if (mask & CLONE_NEWUSER) {
 		vxdprintk(VXD_CBIT(space, 10),
+#if 1
+			"vx_enter_space(%p[#%u])", vxi, vxi->vx_id);
+#else
 			"vx_enter_space(%p[#%u],%p,%p) cred (%p,%p)",
-			vxi, vxi->vx_id, vxi->vx_real_cred, vxi->vx_cred,
+			vxi, vxi->vx_id,
+			space->vx_real_cred, space->vx_cred,
 			current->real_cred, current->cred);
 		exit_creds(current);
-		current->real_cred = get_cred(vxi->vx_real_cred);
+		current->real_cred = get_cred(space->vx_real_cred);
 		alter_cred_subscribers(current->real_cred, 1);
-		current->cred = get_cred(vxi->vx_cred);
+		current->cred = get_cred(space->vx_cred);
 		alter_cred_subscribers(current->cred, 1);
+#endif
 	}
 
 	ret = 0;
@@ -268,19 +279,22 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy_vxi, *proxy_cur, *proxy_new;
 	struct fs_struct *fs_vxi, *fs;
+	struct _vx_space *space;
 	int ret, kill = 0;
 
 	vxdprintk(VXD_CBIT(space, 8), "vx_set_space(%p[#%u],0x%08lx,%d)",
 		vxi, vxi->vx_id, mask, index);
-#if 0
-	if (!mask)
-		mask = default_space_mask.mask;
-#endif
+
 	if ((mask & space_mask.mask) != mask)
 		return -EINVAL;
 
-	proxy_vxi = vxi->vx_nsproxy[index];
-	fs_vxi = vxi->vx_fs[index];
+	if (index >= VX_SPACES)
+		return -EINVAL;
+
+	space = &vxi->space[index];
+
+	proxy_vxi = space->vx_nsproxy;
+	fs_vxi = space->vx_fs;
 
 	if (mask & CLONE_FS) {
 		fs = copy_fs_struct(current->fs);
@@ -292,7 +306,7 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 
 	if (mask & CLONE_FS) {
 		spin_lock(&fs_vxi->lock);
-		vxi->vx_fs[index] = fs;
+		space->vx_fs = fs;
 		kill = !--fs_vxi->users;
 		spin_unlock(&fs_vxi->lock);
 	}
@@ -310,15 +324,19 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 		goto out_put;
 	}
 
-	proxy_new = xchg(&vxi->vx_nsproxy[index], proxy_new);
-	vxi->vx_nsmask[index] |= mask;
+	proxy_new = xchg(&space->vx_nsproxy, proxy_new);
+	space->vx_nsmask |= mask;
 
 	if (mask & CLONE_NEWUSER) {
-		const struct cred *cred;
+		// const struct cred *cred;
 
 		vxdprintk(VXD_CBIT(space, 10),
+#if 1
+			"vx_set_space(%p[#%u])", vxi, vxi->vx_id);
+#else
 			"vx_set_space(%p[#%u],%p,%p) cred (%p,%p)",
-			vxi, vxi->vx_id, vxi->vx_real_cred, vxi->vx_cred,
+			vxi, vxi->vx_id,
+			space->vx_real_cred, space->vx_cred,
 			current->real_cred, current->cred);
 
 		if (current->real_cred) {
@@ -326,7 +344,7 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 			alter_cred_subscribers(cred, 1);
 		} else
 			cred = NULL;
-		cred = xchg(&vxi->vx_real_cred, cred);
+		cred = xchg(&space->vx_real_cred, cred);
 		if (cred) {
 			alter_cred_subscribers(cred, -1);
 			put_cred(cred);
@@ -337,11 +355,12 @@ int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 			alter_cred_subscribers(cred, 1);
 		} else
 			cred = NULL;
-		cred = xchg(&vxi->vx_cred, cred);
+		cred = xchg(&space->vx_cred, cred);
 		if (cred) {
 			alter_cred_subscribers(cred, -1);
 			put_cred(cred);
 		}
+#endif
 	}
 
 	ret = 0;
