@@ -37,13 +37,13 @@
 #define DEVPTS_DEFAULT_PTMX_MODE 0000
 #define PTMX_MINOR	2
 
-static int devpts_permission(struct inode *inode, int mask)
+static int devpts_permission(struct inode *inode, int mask, unsigned int flags)
 {
 	int ret = -EACCES;
 
 	/* devpts is xid tagged */
 	if (vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
-		ret = generic_permission(inode, mask, NULL);
+		ret = generic_permission(inode, mask, flags, NULL);
 	return ret;
 }
 
