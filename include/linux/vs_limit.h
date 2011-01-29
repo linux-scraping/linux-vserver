@@ -74,12 +74,12 @@
 /* dentry limits */
 
 #define vx_dentry_inc(d) do {						\
-	if (atomic_read(&d->d_count) == 1)				\
+	if ((d)->d_count == 1)						\
 		vx_acc_cres(current_vx_info(), 1, d, VLIMIT_DENTRY);	\
 	} while (0)
 
 #define vx_dentry_dec(d) do {						\
-	if (atomic_read(&d->d_count) == 0)				\
+	if ((d)->d_count == 0)						\
 		vx_acc_cres(current_vx_info(),-1, d, VLIMIT_DENTRY);	\
 	} while (0)
 

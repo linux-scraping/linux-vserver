@@ -8,9 +8,9 @@ enum {
 	VCI_KCBIT_NO_DYNAMIC = 0,
 
 	VCI_KCBIT_PROC_SECURE = 4,
-	/* VCI_KCBIT_HARDCPU = 5, */
-	/* VCI_KCBIT_IDLELIMIT = 6, */
-	/* VCI_KCBIT_IDLETIME = 7, */
+	VCI_KCBIT_HARDCPU = 5,
+	VCI_KCBIT_IDLELIMIT = 6,
+	VCI_KCBIT_IDLETIME = 7,
 
 	VCI_KCBIT_COWBL = 8,
 	VCI_KCBIT_FULLCOWBL = 9,
@@ -35,6 +35,12 @@ static inline uint32_t vci_kernel_config(void)
 	/* configured features */
 #ifdef	CONFIG_VSERVER_PROC_SECURE
 	(1 << VCI_KCBIT_PROC_SECURE) |
+#endif
+#ifdef	CONFIG_VSERVER_IDLELIMIT
+	(1 << VCI_KCBIT_IDLELIMIT) |
+#endif
+#ifdef	CONFIG_VSERVER_IDLETIME
+	(1 << VCI_KCBIT_IDLETIME) |
 #endif
 #ifdef	CONFIG_VSERVER_COWBL
 	(1 << VCI_KCBIT_COWBL) |

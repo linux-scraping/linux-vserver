@@ -227,13 +227,13 @@ struct cred *cred_alloc_blank(void)
 #endif
 
 	atomic_set(&new->usage, 1);
-#ifdef CONFIG_DEBUG_CREDENTIALS
-	new->magic = CRED_MAGIC;
-#endif
 
 	if (security_cred_alloc_blank(new, GFP_KERNEL) < 0)
 		goto error;
 
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	new->magic = CRED_MAGIC;
+#endif
 	return new;
 
 error:
@@ -255,9 +255,13 @@ error:
  *
  * Call commit_creds() or abort_creds() to clean up.
  */
-struct cred *__prepare_creds(const struct cred *old)
+struct cred *prepare_creds(void)
 {
+	struct task_struct *task = current;
+	const struct cred *old;
 	struct cred *new;
+
+	validate_process_creds();
 
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
@@ -265,6 +269,7 @@ struct cred *__prepare_creds(const struct cred *old)
 
 	kdebug("prepare_creds() alloc %p", new);
 
+	old = task->cred;
 	memcpy(new, old, sizeof(struct cred));
 
 	atomic_set(&new->usage, 1);
@@ -290,13 +295,6 @@ struct cred *__prepare_creds(const struct cred *old)
 error:
 	abort_creds(new);
 	return NULL;
-}
-
-struct cred *prepare_creds(void)
-{
-	validate_process_creds();
-
-	return __prepare_creds(current->cred);
 }
 EXPORT_SYMBOL(prepare_creds);
 
@@ -634,8 +632,6 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	validate_creds(old);
 
 	*new = *old;
-	atomic_set(&new->usage, 1);
-	set_cred_subscribers(new, 0);
 	get_uid(new->user);
 	get_group_info(new->group_info);
 
@@ -653,6 +649,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	if (security_prepare_creds(new, old, GFP_KERNEL) < 0)
 		goto error;
 
+	atomic_set(&new->usage, 1);
+	set_cred_subscribers(new, 0);
 	put_cred(old);
 	validate_creds(new);
 	return new;
@@ -725,11 +723,7 @@ bool creds_are_invalid(const struct cred *cred)
 	if (cred->magic != CRED_MAGIC)
 		return true;
 #ifdef CONFIG_SECURITY_SELINUX
-	/*
-	 * cred->security == NULL if security_cred_alloc_blank() or
-	 * security_prepare_creds() returned an error.
-	 */
-	if (selinux_is_enabled() && cred->security) {
+	if (selinux_is_enabled()) {
 		if ((unsigned long) cred->security < PAGE_SIZE)
 			return true;
 		if ((*(u32 *)cred->security & 0xffffff00) ==

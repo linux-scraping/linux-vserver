@@ -336,7 +336,7 @@ bool drm_crtc_helper_set_mode(struct drm_crtc *crtc,
 			      struct drm_framebuffer *old_fb)
 {
 	struct drm_device *dev = crtc->dev;
-	struct drm_display_mode *adjusted_mode, saved_mode;
+	struct drm_display_mode *adjusted_mode, saved_mode, saved_hwmode;
 	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 	struct drm_encoder_helper_funcs *encoder_funcs;
 	int saved_x, saved_y;
@@ -350,6 +350,7 @@ bool drm_crtc_helper_set_mode(struct drm_crtc *crtc,
 	if (!crtc->enabled)
 		return true;
 
+	saved_hwmode = crtc->hwmode;
 	saved_mode = crtc->mode;
 	saved_x = crtc->x;
 	saved_y = crtc->y;
@@ -427,11 +428,21 @@ bool drm_crtc_helper_set_mode(struct drm_crtc *crtc,
 
 	}
 
+	/* Store real post-adjustment hardware mode. */
+	crtc->hwmode = *adjusted_mode;
+
+	/* Calculate and store various constants which
+	 * are later needed by vblank and swap-completion
+	 * timestamping. They are derived from true hwmode.
+	 */
+	drm_calc_timestamping_constants(crtc);
+
 	/* XXX free adjustedmode */
 	drm_mode_destroy(dev, adjusted_mode);
 	/* FIXME: add subpixel order */
 done:
 	if (!ret) {
+		crtc->hwmode = saved_hwmode;
 		crtc->mode = saved_mode;
 		crtc->x = saved_x;
 		crtc->y = saved_y;
@@ -654,12 +665,6 @@ int drm_crtc_helper_set_config(struct drm_mode_set *set)
 				ret = -EINVAL;
 				goto fail;
 			}
-			DRM_DEBUG_KMS("Setting connector DPMS state to on\n");
-			for (i = 0; i < set->num_connectors; i++) {
-				DRM_DEBUG_KMS("\t[CONNECTOR:%d:%s] set DPMS on\n", set->connectors[i]->base.id,
-					      drm_get_connector_name(set->connectors[i]));
-				set->connectors[i]->dpms = DRM_MODE_DPMS_ON;
-			}
 		}
 		drm_helper_disable_unused_functions(dev);
 	} else if (fb_changed) {
@@ -675,6 +680,12 @@ int drm_crtc_helper_set_config(struct drm_mode_set *set)
 			set->crtc->fb = old_fb;
 			goto fail;
 		}
+	}
+	DRM_DEBUG_KMS("Setting connector DPMS state to on\n");
+	for (i = 0; i < set->num_connectors; i++) {
+		DRM_DEBUG_KMS("\t[CONNECTOR:%d:%s] set DPMS on\n", set->connectors[i]->base.id,
+			      drm_get_connector_name(set->connectors[i]));
+		set->connectors[i]->dpms = DRM_MODE_DPMS_ON;
 	}
 
 	kfree(save_connectors);

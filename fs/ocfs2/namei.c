@@ -148,7 +148,6 @@ static struct dentry *ocfs2_lookup(struct inode *dir, struct dentry *dentry,
 	spin_unlock(&oi->ip_lock);
 
 bail_add:
-	dentry->d_op = &ocfs2_dentry_ops;
 	ret = d_splice_alias(inode, dentry);
 
 	if (inode) {
@@ -416,7 +415,6 @@ static int ocfs2_mknod(struct inode *dir,
 		mlog_errno(status);
 		goto leave;
 	}
-	dentry->d_op = &ocfs2_dentry_ops;
 
 	status = ocfs2_add_entry(handle, dentry, inode,
 				 OCFS2_I(inode)->ip_blkno, parent_fe_bh,
@@ -748,7 +746,6 @@ static int ocfs2_link(struct dentry *old_dentry,
 	}
 
 	ihold(inode);
-	dentry->d_op = &ocfs2_dentry_ops;
 	d_instantiate(dentry, inode);
 
 out_commit:
@@ -1022,8 +1019,11 @@ static int ocfs2_double_lock(struct ocfs2_super *osb,
 		 * An error return must mean that no cluster locks
 		 * were held on function exit.
 		 */
-		if (oi1->ip_blkno != oi2->ip_blkno)
+		if (oi1->ip_blkno != oi2->ip_blkno) {
 			ocfs2_inode_unlock(inode2, 1);
+			brelse(*bh2);
+			*bh2 = NULL;
+		}
 
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -1799,7 +1799,6 @@ static int ocfs2_symlink(struct inode *dir,
 		mlog_errno(status);
 		goto bail;
 	}
-	dentry->d_op = &ocfs2_dentry_ops;
 
 	status = ocfs2_add_entry(handle, dentry, inode,
 				 le64_to_cpu(fe->i_blkno), parent_fe_bh,
@@ -2464,7 +2463,6 @@ int ocfs2_mv_orphaned_inode_to_new(struct inode *dir,
 		goto out_commit;
 	}
 
-	dentry->d_op = &ocfs2_dentry_ops;
 	d_instantiate(dentry, inode);
 	status = 0;
 out_commit:

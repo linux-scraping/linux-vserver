@@ -320,8 +320,9 @@ static void apbt_setup_irq(struct apbt_dev *adev)
 
 	if (system_state == SYSTEM_BOOTING) {
 		if (request_irq(adev->irq, apbt_interrupt_handler,
-				IRQF_TIMER | IRQF_DISABLED | IRQF_NOBALANCING,
-				adev->name, adev)) {
+					IRQF_TIMER | IRQF_DISABLED |
+					IRQF_NOBALANCING,
+					adev->name, adev)) {
 			printk(KERN_ERR "Failed request IRQ for APBT%d\n",
 			       adev->num);
 		}

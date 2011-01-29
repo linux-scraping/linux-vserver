@@ -63,6 +63,43 @@ config	VSERVER_PROC_SECURE
 
 	  (note: on 1.2x the entries were visible by default)
 
+config	VSERVER_HARDCPU
+	bool	"Enable Hard CPU Limits"
+	default y
+	help
+	  Activate the Hard CPU Limits
+
+	  This will compile in code that allows the Token Bucket
+	  Scheduler to put processes on hold when a context's
+	  tokens are depleted (provided that its per-context
+	  sched_hard flag is set).
+
+	  Processes belonging to that context will not be able
+	  to consume CPU resources again until a per-context
+	  configured minimum of tokens has been reached.
+
+config	VSERVER_IDLETIME
+	bool	"Avoid idle CPUs by skipping Time"
+	depends on VSERVER_HARDCPU
+	default y
+	help
+	  This option allows the scheduler to artificially
+	  advance time (per cpu) when otherwise the idle
+	  task would be scheduled, thus keeping the cpu
+	  busy and sharing the available resources among
+	  certain contexts.
+
+config	VSERVER_IDLELIMIT
+	bool	"Limit the IDLE task"
+	depends on VSERVER_HARDCPU
+	default n
+	help
+	  Limit the idle slices, so the the next context
+	  will be scheduled as soon as possible.
+
+	  This might improve interactivity and latency, but
+	  will also marginally increase scheduling overhead.
+
 choice
 	prompt	"Persistent Inode Tagging"
 	default	TAGGING_ID24

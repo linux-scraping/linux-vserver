@@ -37,13 +37,13 @@
 #define DEVPTS_DEFAULT_PTMX_MODE 0000
 #define PTMX_MINOR	2
 
-static int devpts_permission(struct inode *inode, int mask)
+static int devpts_permission(struct inode *inode, int mask, unsigned int flags)
 {
 	int ret = -EACCES;
 
 	/* devpts is xid tagged */
 	if (vx_check((xid_t)inode->i_tag, VS_WATCH_P | VS_IDENT))
-		ret = generic_permission(inode, mask, NULL);
+		ret = generic_permission(inode, mask, flags, NULL);
 	return ret;
 }
 
@@ -280,17 +280,8 @@ static int devpts_show_options(struct seq_file *seq, struct vfsmount *vfs)
 
 static int devpts_filter(struct dentry *de)
 {
-	xid_t xid = 0;
-
 	/* devpts is xid tagged */
-	if (de && de->d_inode)
-		xid = (xid_t)de->d_inode->i_tag;
-#ifdef CONFIG_VSERVER_WARN_DEVPTS
-	else
-		vxwprintk_task(1, "devpts " VS_Q("%.*s") " without inode.",
-			de->d_name.len, de->d_name.name);
-#endif
-	return vx_check(xid, VS_WATCH_P | VS_IDENT);
+	return vx_check((xid_t)de->d_inode->i_tag, VS_WATCH_P | VS_IDENT);
 }
 
 static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)

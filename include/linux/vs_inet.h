@@ -167,7 +167,7 @@ static inline
 int __v4_addr_match_socket(const struct sock *sk, struct nx_addr_v4 *nxa)
 {
 	struct nx_info *nxi = sk->sk_nx_info;
-	__be32 saddr = inet_rcv_saddr(sk);
+	__be32 saddr = sk_rcv_saddr(sk);
 
 	vxdprintk(VXD_CBIT(net, 5),
 		"__v4_addr_in_socket(%p," NXAV4_FMT ") %p:" NIPQUAD_FMT " %p;%lx",

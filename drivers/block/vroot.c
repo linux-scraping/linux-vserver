@@ -145,13 +145,6 @@ static struct block_device_operations vr_fops = {
 	.ioctl =	vr_ioctl,
 };
 
-static int vroot_make_request(struct request_queue *q, struct bio *bio)
-{
-	printk("vroot_make_request %p, %p\n", q, bio);
-	bio_io_error(bio);
-	return 0;
-}
-
 struct block_device *__vroot_get_real_bdev(struct block_device *bdev)
 {
 	struct inode *inode = bdev->bd_inode;
@@ -172,8 +165,6 @@ struct block_device *__vroot_get_real_bdev(struct block_device *bdev)
 	__iget(real_bdev->bd_inode);
 	return real_bdev;
 }
-
-
 
 /*
  * And now the modules code and kernel interface.
@@ -220,7 +211,6 @@ int __init vroot_init(void)
 		disks[i]->queue = blk_alloc_queue(GFP_KERNEL);
 		if (!disks[i]->queue)
 			goto out_mem3;
-		blk_queue_make_request(disks[i]->queue, vroot_make_request);
 	}
 
 	for (i = 0; i < max_vroot; i++) {

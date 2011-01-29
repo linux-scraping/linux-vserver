@@ -392,22 +392,24 @@ ENDPROC(__turn_mmu_on)
 
 #ifdef CONFIG_SMP_ON_UP
 __fixup_smp:
-	and	r3, r9, #0x000f0000	@ architecture version
-	teq	r3, #0x000f0000		@ CPU ID supported?
+	mov	r4, #0x00070000
+	orr	r3, r4, #0xff000000	@ mask 0xff070000
+	orr	r4, r4, #0x41000000	@ val 0x41070000
+	and	r0, r9, r3
+	teq	r0, r4			@ ARM CPU and ARMv6/v7?
 	bne	__fixup_smp_on_up	@ no, assume UP
 
-	bic	r3, r9, #0x00ff0000
-	bic	r3, r3, #0x0000000f	@ mask 0xff00fff0
-	mov	r4, #0x41000000
+	orr	r3, r3, #0x0000ff00
+	orr	r3, r3, #0x000000f0	@ mask 0xff07fff0
 	orr	r4, r4, #0x0000b000
-	orr	r4, r4, #0x00000020	@ val 0x4100b020
-	teq	r3, r4			@ ARM 11MPCore?
+	orr	r4, r4, #0x00000020	@ val 0x4107b020
+	and	r0, r9, r3
+	teq	r0, r4			@ ARM 11MPCore?
 	moveq	pc, lr			@ yes, assume SMP
 
 	mrc	p15, 0, r0, c0, c0, 5	@ read MPIDR
-	and	r0, r0, #0xc0000000	@ multiprocessing extensions and
-	teq	r0, #0x80000000		@ not part of a uniprocessor system?
-	moveq	pc, lr			@ yes, assume SMP
+	tst	r0, #1 << 31
+	movne	pc, lr			@ bit 31 => SMP
 
 __fixup_smp_on_up:
 	adr	r0, 1f
@@ -416,10 +418,17 @@ __fixup_smp_on_up:
 	add	r4, r4, r3
 	add	r5, r5, r3
 2:	cmp	r4, r5
+	movhs	pc, lr
 	ldmia	r4!, {r0, r6}
-	strlo	r6, [r0, r3]
-	blo	2b
-	mov	pc, lr
+ ARM(	str	r6, [r0, r3]	)
+ THUMB(	add	r0, r0, r3	)
+#ifdef __ARMEB__
+ THUMB(	mov	r6, r6, ror #16	)	@ Convert word order for big-endian.
+#endif
+ THUMB(	strh	r6, [r0], #2	)	@ For Thumb-2, store as two halfwords
+ THUMB(	mov	r6, r6, lsr #16	)	@ to be robust against misaligned r3.
+ THUMB(	strh	r6, [r0]	)
+	b	2b
 ENDPROC(__fixup_smp)
 
 	.align

@@ -151,7 +151,7 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 		dumpable = get_dumpable(task->mm);
 	if (!dumpable && !capable(CAP_SYS_PTRACE))
 		return -EPERM;
-	if (!vx_check(task->xid, VS_ADMIN_P|VS_WATCH_P|VS_IDENT))
+	if (!vx_check(task->xid, VS_ADMIN_P|VS_IDENT))
 		return -EPERM;
 	if (!vx_check(task->xid, VS_IDENT) &&
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
@@ -319,7 +319,7 @@ int ptrace_detach(struct task_struct *child, unsigned int data)
 		child->exit_code = data;
 		dead = __ptrace_detach(current, child);
 		if (!child->exit_state)
-			wake_up_state(child, TASK_TRACED | TASK_STOPPED);
+			wake_up_process(child);
 	}
 	write_unlock_irq(&tasklist_lock);
 
