@@ -255,13 +255,9 @@ error:
  *
  * Call commit_creds() or abort_creds() to clean up.
  */
-struct cred *prepare_creds(void)
+struct cred *__prepare_creds(const struct cred *old)
 {
-	struct task_struct *task = current;
-	const struct cred *old;
 	struct cred *new;
-
-	validate_process_creds();
 
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
@@ -269,7 +265,6 @@ struct cred *prepare_creds(void)
 
 	kdebug("prepare_creds() alloc %p", new);
 
-	old = task->cred;
 	memcpy(new, old, sizeof(struct cred));
 
 	atomic_set(&new->usage, 1);
@@ -295,6 +290,13 @@ struct cred *prepare_creds(void)
 error:
 	abort_creds(new);
 	return NULL;
+}
+
+struct cred *prepare_creds(void)
+{
+	validate_process_creds();
+
+	return __prepare_creds(current->cred);
 }
 EXPORT_SYMBOL(prepare_creds);
 
