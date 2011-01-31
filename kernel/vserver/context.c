@@ -193,7 +193,7 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 {
 	struct nsproxy *nsproxy;
 	struct fs_struct *fs;
-	const struct cred *cred;
+	struct cred *cred;
 	int index, kill;
 
 	might_sleep();
@@ -214,19 +214,10 @@ static void __shutdown_vx_info(struct vx_info *vxi)
 		spin_unlock(&fs->lock);
 		if (kill)
 			free_fs_struct(fs);
-#if 0
-		cred = xchg(&space->vx_real_cred, NULL);
-		if (cred) {
-			alter_cred_subscribers(cred, -1);
-			put_cred(cred);
-		}
 
-		cred = xchg(&space->vx_cred, NULL);
-		if (cred) {
-			alter_cred_subscribers(cred, -1);
-			put_cred(cred);
-		}
-#endif
+		cred = (struct cred *)xchg(&space->vx_cred, NULL);
+		if (cred)
+			abort_creds(cred);
 	}
 }
 

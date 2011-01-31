@@ -103,8 +103,7 @@ struct _vx_space {
 	unsigned long vx_nsmask;		/* assignment mask */
 	struct nsproxy *vx_nsproxy;             /* private namespaces */
 	struct fs_struct *vx_fs;                /* private namespace fs */
-//	const struct cred *vx_real_cred;        /* real task credentials */
-//	const struct cred *vx_cred;             /* task credentials */
+	const struct cred *vx_cred;             /* task credentials */
 };
 
 struct vx_info {
