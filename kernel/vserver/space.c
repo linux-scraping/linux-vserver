@@ -254,12 +254,12 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 			"vx_enter_space(%p[#%u],%p) cred (%p,%p)",
 			vxi, vxi->vx_id, space->vx_cred,
 			current->real_cred, current->cred);
-		/* FIXME: do we need that at all? */
-		exit_creds(current);
 
-		cred = __prepare_creds(space->vx_cred);
-		if (cred)
-			commit_creds(cred);
+		if (space->vx_cred) {
+			cred = __prepare_creds(space->vx_cred);
+			if (cred)
+				commit_creds(cred);
+		}
 	}
 
 	ret = 0;
