@@ -418,7 +418,7 @@ again:
 	}
 	if (start == 0) {
 		trans = btrfs_join_transaction(root, 1);
-		BUG_ON(!trans);
+		BUG_ON(IS_ERR(trans));
 		btrfs_set_trans_block_group(trans, inode);
 		trans->block_rsv = &root->fs_info->delalloc_block_rsv;
 
@@ -614,6 +614,7 @@ retry:
 			    GFP_NOFS);
 
 		trans = btrfs_join_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		ret = btrfs_reserve_extent(trans, root,
 					   async_extent->compressed_size,
 					   async_extent->compressed_size,
@@ -645,6 +646,7 @@ retry:
 					async_extent->ram_size - 1, 0);
 
 		em = alloc_extent_map(GFP_NOFS);
+		BUG_ON(!em);
 		em->start = async_extent->start;
 		em->len = async_extent->ram_size;
 		em->orig_start = em->start;
@@ -773,7 +775,7 @@ static noinline int cow_file_range(struct inode *inode,
 
 	BUG_ON(root == root->fs_info->tree_root);
 	trans = btrfs_join_transaction(root, 1);
-	BUG_ON(!trans);
+	BUG_ON(IS_ERR(trans));
 	btrfs_set_trans_block_group(trans, inode);
 	trans->block_rsv = &root->fs_info->delalloc_block_rsv;
 
@@ -821,6 +823,7 @@ static noinline int cow_file_range(struct inode *inode,
 		BUG_ON(ret);
 
 		em = alloc_extent_map(GFP_NOFS);
+		BUG_ON(!em);
 		em->start = start;
 		em->orig_start = em->start;
 		ram_size = ins.offset;
@@ -1051,7 +1054,7 @@ static noinline int run_delalloc_nocow(struct inode *inode,
 	} else {
 		trans = btrfs_join_transaction(root, 1);
 	}
-	BUG_ON(!trans);
+	BUG_ON(IS_ERR(trans));
 
 	cow_start = (u64)-1;
 	cur_offset = start;
@@ -1170,6 +1173,7 @@ out_check:
 			struct extent_map_tree *em_tree;
 			em_tree = &BTRFS_I(inode)->extent_tree;
 			em = alloc_extent_map(GFP_NOFS);
+			BUG_ON(!em);
 			em->start = cur_offset;
 			em->orig_start = em->start;
 			em->len = num_bytes;
@@ -1559,6 +1563,7 @@ out:
 out_page:
 	unlock_page(page);
 	page_cache_release(page);
+	kfree(fixup);
 }
 
 /*
@@ -1705,7 +1710,7 @@ static int btrfs_finish_ordered_io(struct inode *inode, u64 start, u64 end)
 				trans = btrfs_join_transaction_nolock(root, 1);
 			else
 				trans = btrfs_join_transaction(root, 1);
-			BUG_ON(!trans);
+			BUG_ON(IS_ERR(trans));
 			btrfs_set_trans_block_group(trans, inode);
 			trans->block_rsv = &root->fs_info->delalloc_block_rsv;
 			ret = btrfs_update_inode(trans, root, inode);
@@ -1722,6 +1727,7 @@ static int btrfs_finish_ordered_io(struct inode *inode, u64 start, u64 end)
 		trans = btrfs_join_transaction_nolock(root, 1);
 	else
 		trans = btrfs_join_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	btrfs_set_trans_block_group(trans, inode);
 	trans->block_rsv = &root->fs_info->delalloc_block_rsv;
 
@@ -2356,6 +2362,7 @@ void btrfs_orphan_cleanup(struct btrfs_root *root)
 		 */
 		if (is_bad_inode(inode)) {
 			trans = btrfs_start_transaction(root, 0);
+			BUG_ON(IS_ERR(trans));
 			btrfs_orphan_del(trans, inode);
 			btrfs_end_transaction(trans, root);
 			iput(inode);
@@ -2383,6 +2390,7 @@ void btrfs_orphan_cleanup(struct btrfs_root *root)
 
 	if (root->orphan_block_rsv || root->orphan_item_inserted) {
 		trans = btrfs_join_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		btrfs_end_transaction(trans, root);
 	}
 
@@ -2657,7 +2665,7 @@ int btrfs_unlink_inode(struct btrfs_trans_handle *trans,
 	path = btrfs_alloc_path();
 	if (!path) {
 		ret = -ENOMEM;
-		goto err;
+		goto out;
 	}
 
 	path->leave_spinning = 1;
@@ -2730,9 +2738,10 @@ static int check_path_shared(struct btrfs_root *root,
 	struct extent_buffer *eb;
 	int level;
 	u64 refs = 1;
-	int uninitialized_var(ret);
 
 	for (level = 0; level < BTRFS_MAX_LEVEL; level++) {
+		int ret;
+
 		if (!path->nodes[level])
 			break;
 		eb = path->nodes[level];
@@ -2743,7 +2752,7 @@ static int check_path_shared(struct btrfs_root *root,
 		if (refs > 1)
 			return 1;
 	}
-	return ret; /* XXX callers? */
+	return 0;
 }
 
 /*
@@ -4150,7 +4159,7 @@ struct inode *btrfs_lookup_dentry(struct inode *dir, struct dentry *dentry)
 	}
 	srcu_read_unlock(&root->fs_info->subvol_srcu, index);
 
-	if (root != sub_root) {
+	if (!IS_ERR(inode) && root != sub_root) {
 		down_read(&root->fs_info->cleanup_work_sem);
 		if (!(inode->i_sb->s_flags & MS_RDONLY))
 			btrfs_orphan_cleanup(sub_root);
@@ -4363,6 +4372,8 @@ int btrfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 			trans = btrfs_join_transaction_nolock(root, 1);
 		else
 			trans = btrfs_join_transaction(root, 1);
+		if (IS_ERR(trans))
+			return PTR_ERR(trans);
 		btrfs_set_trans_block_group(trans, inode);
 		if (nolock)
 			ret = btrfs_end_transaction_nolock(trans, root);
@@ -4388,6 +4399,7 @@ void btrfs_dirty_inode(struct inode *inode)
 		return;
 
 	trans = btrfs_join_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	btrfs_set_trans_block_group(trans, inode);
 
 	ret = btrfs_update_inode(trans, root, inode);
@@ -5192,6 +5204,8 @@ again:
 				em = NULL;
 				btrfs_release_path(root, path);
 				trans = btrfs_join_transaction(root, 1);
+				if (IS_ERR(trans))
+					return ERR_CAST(trans);
 				goto again;
 			}
 			map = kmap(page);
@@ -5296,8 +5310,8 @@ static struct extent_map *btrfs_new_extent_direct(struct inode *inode,
 	btrfs_drop_extent_cache(inode, start, start + len - 1, 0);
 
 	trans = btrfs_join_transaction(root, 0);
-	if (!trans)
-		return ERR_PTR(-ENOMEM);
+	if (IS_ERR(trans))
+		return ERR_CAST(trans);
 
 	trans->block_rsv = &root->fs_info->delalloc_block_rsv;
 
@@ -5521,7 +5535,7 @@ static int btrfs_get_blocks_direct(struct inode *inode, sector_t iblock,
 		 * while we look for nocow cross refs
 		 */
 		trans = btrfs_join_transaction(root, 0);
-		if (!trans)
+		if (IS_ERR(trans))
 			goto must_cow;
 
 		if (can_nocow_odirect(trans, inode, start, len) == 1) {
@@ -5656,7 +5670,7 @@ again:
 	BUG_ON(!ordered);
 
 	trans = btrfs_join_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		err = -ENOMEM;
 		goto out;
 	}

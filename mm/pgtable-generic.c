@@ -8,6 +8,7 @@
 
 #include <linux/mm.h>
 
+#include <linux/pagemap.h>
 #include <asm/tlb.h>
 #include <asm-generic/pgtable.h>
 

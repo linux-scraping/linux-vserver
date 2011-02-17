@@ -32,6 +32,7 @@
 #include <linux/netfilter_ipv6.h>
 #include <linux/vs_inet6.h>
 #include <linux/skbuff.h>
+#include <linux/compat.h>
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
 
@@ -1165,6 +1166,23 @@ static int rawv6_ioctl(struct sock *sk, int cmd, unsigned long arg)
 	}
 }
 
+#ifdef CONFIG_COMPAT
+static int compat_rawv6_ioctl(struct sock *sk, unsigned int cmd, unsigned long arg)
+{
+	switch (cmd) {
+	case SIOCOUTQ:
+	case SIOCINQ:
+		return -ENOIOCTLCMD;
+	default:
+#ifdef CONFIG_IPV6_MROUTE
+		return ip6mr_compat_ioctl(sk, cmd, compat_ptr(arg));
+#else
+		return -ENOIOCTLCMD;
+#endif
+	}
+}
+#endif
+
 static void rawv6_close(struct sock *sk, long timeout)
 {
 	if (inet_sk(sk)->inet_num == IPPROTO_RAW)
@@ -1223,6 +1241,7 @@ struct proto rawv6_prot = {
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_rawv6_setsockopt,
 	.compat_getsockopt = compat_rawv6_getsockopt,
+	.compat_ioctl	   = compat_rawv6_ioctl,
 #endif
 };
 
