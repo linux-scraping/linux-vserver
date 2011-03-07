@@ -1760,6 +1760,8 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
 
 /* dentry stuff */
 
+static unsigned name_to_int(struct dentry *dentry);
+
 /*
  *	Exceptional case: normally we are not allowed to unhash a busy
  * directory. In this case, however, we can do it - no aliasing problems
@@ -1788,6 +1790,12 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 	task = get_proc_task(inode);
 
 	if (task) {
+		unsigned pid = name_to_int(dentry);
+
+		if (pid != ~0U && pid != vx_map_pid(task->pid)) {
+			put_task_struct(task);
+			goto drop;
+		}
 		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
 		    task_dumpable(task)) {
 			rcu_read_lock();
@@ -1804,6 +1812,7 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
 		put_task_struct(task);
 		return 1;
 	}
+drop:
 	d_drop(dentry);
 	return 0;
 }
