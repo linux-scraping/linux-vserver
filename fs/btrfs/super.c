@@ -156,7 +156,7 @@ enum {
 	Opt_compress_type, Opt_compress_force, Opt_compress_force_type,
 	Opt_notreelog, Opt_ratio, Opt_flushoncommit, Opt_discard,
 	Opt_space_cache, Opt_clear_cache, Opt_user_subvol_rm_allowed,
-	Opt_tag, Opt_notag, Opt_tagid, Opt_err,
+	Opt_enospc_debug, Opt_tag, Opt_notag, Opt_tagid, Opt_err,
 };
 
 static match_table_t tokens = {
@@ -185,6 +185,7 @@ static match_table_t tokens = {
 	{Opt_space_cache, "space_cache"},
 	{Opt_clear_cache, "clear_cache"},
 	{Opt_user_subvol_rm_allowed, "user_subvol_rm_allowed"},
+	{Opt_enospc_debug, "enospc_debug"},
 	{Opt_tag, "tag"},
 	{Opt_notag, "notag"},
 	{Opt_tagid, "tagid=%u"},
@@ -361,6 +362,9 @@ int btrfs_parse_options(struct btrfs_root *root, char *options)
 			break;
 		case Opt_user_subvol_rm_allowed:
 			btrfs_set_opt(info->mount_opt, USER_SUBVOL_RM_ALLOWED);
+			break;
+		case Opt_enospc_debug:
+			btrfs_set_opt(info->mount_opt, ENOSPC_DEBUG);
 			break;
 #ifndef CONFIG_TAGGING_NONE
 		case Opt_tag:
