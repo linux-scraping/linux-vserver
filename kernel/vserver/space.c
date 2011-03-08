@@ -262,9 +262,11 @@ int vx_enter_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 		current->real_cred = get_cred(space->vx_real_cred);
 		alter_cred_subscribers(current->real_cred, 1);
 #endif
-		cred = __prepare_creds(space->vx_cred);
-		if (cred)
-			commit_creds(cred);
+		if (space->vx_cred) {
+			cred = __prepare_creds(space->vx_cred);
+			if (cred)
+				commit_creds(cred);
+		}
 	}
 
 	ret = 0;
