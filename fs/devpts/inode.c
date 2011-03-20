@@ -280,8 +280,17 @@ static int devpts_show_options(struct seq_file *seq, struct vfsmount *vfs)
 
 static int devpts_filter(struct dentry *de)
 {
+	xid_t xid = 0;
+
 	/* devpts is xid tagged */
-	return vx_check((xid_t)de->d_inode->i_tag, VS_WATCH_P | VS_IDENT);
+	if (de && de->d_inode)
+		xid = (xid_t)de->d_inode->i_tag;
+#ifdef CONFIG_VSERVER_WARN_DEVPTS
+	else
+		vxwprintk_task(1, "devpts " VS_Q("%.*s") " without inode.",
+			de->d_name.len, de->d_name.name);
+#endif
+	return vx_check(xid, VS_WATCH_P | VS_IDENT);
 }
 
 static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)
