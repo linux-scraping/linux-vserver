@@ -45,10 +45,10 @@ int vc_task_tag(uint32_t id)
 
 	if (id) {
 		struct task_struct *tsk;
-		read_lock(&tasklist_lock);
+		rcu_read_lock();
 		tsk = find_task_by_real_pid(id);
 		tag = (tsk) ? tsk->tag : -ESRCH;
-		read_unlock(&tasklist_lock);
+		rcu_read_unlock();
 	} else
 		tag = dx_current_tag();
 	return tag;
