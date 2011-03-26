@@ -344,8 +344,11 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 {
 	int set = 0;
 	substring_t args[MAX_OPT_ARGS];
-	int token, option = 0;
+	int token;
 	char *s, *p, *opts;
+#if defined(CONFIG_PROPAGATE) || defined(CONFIG_VSERVER_WARN)
+	int option = 0;
+#endif
 
 	if (!string)
 		return 0;
@@ -356,10 +359,6 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 	opts = s;
 	while ((p = strsep(&opts, ",")) != NULL) {
 		token = match_token(p, tokens, args);
-
-		vxdprintk(VXD_CBIT(tag, 7),
-			"dx_parse_tag(" VS_Q("%s") "): %d:#%d",
-			p, token, option);
 
 		switch (token) {
 #ifdef CONFIG_PROPAGATE
@@ -393,6 +392,9 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 			set |= MS_NOTAGCHECK;
 			break;
 		}
+		vxdprintk(VXD_CBIT(tag, 7),
+			"dx_parse_tag(" VS_Q("%s") "): %d:#%d",
+			p, token, option);
 	}
 	if (set)
 		strcpy(string, s);

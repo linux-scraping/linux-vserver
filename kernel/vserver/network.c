@@ -518,10 +518,10 @@ int vc_task_nid(uint32_t id)
 	if (id) {
 		struct task_struct *tsk;
 
-		read_lock(&tasklist_lock);
+		rcu_read_lock();
 		tsk = find_task_by_real_pid(id);
 		nid = (tsk) ? tsk->nid : -ESRCH;
-		read_unlock(&tasklist_lock);
+		rcu_read_unlock();
 	} else
 		nid = nx_current_nid();
 	return nid;

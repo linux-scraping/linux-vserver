@@ -57,7 +57,9 @@ int vx_info_kill(struct vx_info *vxi, int pid, int sig)
 		}
 		/* fallthrough */
 	default:
+		rcu_read_lock();
 		p = find_task_by_real_pid(pid);
+		rcu_read_unlock();
 		if (p) {
 			if (vx_task_xid(p) == vxi->vx_id)
 				retval = group_send_sig_info(sig, sip, p);

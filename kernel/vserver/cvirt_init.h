@@ -44,8 +44,9 @@ void vx_info_init_cvirt_pc(struct _vx_cvirt_pc *cvirt_pc, int cpu)
 
 static inline void vx_info_exit_cvirt(struct _vx_cvirt *cvirt)
 {
+#ifdef	CONFIG_VSERVER_WARN
 	int value;
-
+#endif
 	vxwprintk_xid((value = atomic_read(&cvirt->nr_threads)),
 		"!!! cvirt: %p[nr_threads] = %d on exit.",
 		cvirt, value);
