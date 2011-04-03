@@ -719,10 +719,6 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
 		goto out;
 	}
 
-	ret = -EPERM;
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT))
-		goto out_put_task_struct;
-
 	if (request == PTRACE_ATTACH) {
 		ret = ptrace_attach(child);
 		/*
