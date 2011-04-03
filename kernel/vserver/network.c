@@ -687,10 +687,15 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ADDR:
-	case NXA_TYPE_RANGE:
+		vc_data.mask.s_addr = ~0;
+		/* fallthrough */
 	case NXA_TYPE_MASK:
 		return do_add_v4_addr(nxi, vc_data.ip.s_addr, 0,
 			vc_data.mask.s_addr, vc_data.type, vc_data.flags);
+
+	case NXA_TYPE_RANGE:
+		return do_add_v4_addr(nxi, vc_data.ip.s_addr,
+			vc_data.mask.s_addr, 0, vc_data.type, vc_data.flags);
 
 	case NXA_TYPE_ADDR | NXA_MOD_BCAST:
 		nxi->v4_bcast = vc_data.ip;
@@ -765,6 +770,8 @@ int vc_net_add_ipv6(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ADDR:
+		memset(&vc_data.mask, ~0, sizeof(vc_data.mask));
+		/* fallthrough */
 	case NXA_TYPE_MASK:
 		return do_add_v6_addr(nxi, &vc_data.ip, &vc_data.mask,
 			vc_data.prefix, vc_data.type, vc_data.flags);
