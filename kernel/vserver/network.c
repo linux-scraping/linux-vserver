@@ -755,7 +755,7 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 	return 0;
 }
 
-int vc_net_remove_ipv4_v1(struct nx_info *nxi, void __user *data)
+int vc_net_rem_ipv4_v1(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_ipv4_v1 vc_data;
 
@@ -766,7 +766,7 @@ int vc_net_remove_ipv4_v1(struct nx_info *nxi, void __user *data)
 		vc_data.mask.s_addr, vc_data.type, vc_data.flags);
 }
 
-int vc_net_remove_ipv4(struct nx_info *nxi, void __user *data)
+int vc_net_rem_ipv4(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_ipv4_v2 vc_data;
 
