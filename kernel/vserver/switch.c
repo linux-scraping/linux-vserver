@@ -233,8 +233,15 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_net_remove:
 		return vc_net_remove(nxi, data);
 
+	case VCMD_net_add_ipv4_v1:
+		return vc_net_add_ipv4_v1(nxi, data);
+	/* this is version 2 */
 	case VCMD_net_add_ipv4:
 		return vc_net_add_ipv4(nxi, data);
+
+	case VCMD_net_remove_ipv4_v1:
+		return vc_net_remove_ipv4_v1(nxi, data);
+	/* this is version 2 */
 	case VCMD_net_remove_ipv4:
 		return vc_net_remove_ipv4(nxi, data);
 #ifdef	CONFIG_IPV6

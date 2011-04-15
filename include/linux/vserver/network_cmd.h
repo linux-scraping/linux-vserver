@@ -45,13 +45,24 @@ struct	vcmd_net_addr_v0 {
 	struct in_addr mask[4];
 };
 
-#define VCMD_net_add_ipv4	VC_CMD(NETALT, 1, 1)
-#define VCMD_net_remove_ipv4	VC_CMD(NETALT, 2, 1)
+#define VCMD_net_add_ipv4_v1	VC_CMD(NETALT, 1, 1)
+#define VCMD_net_remove_ipv4_v1	VC_CMD(NETALT, 2, 1)
 
 struct	vcmd_net_addr_ipv4_v1 {
 	uint16_t type;
 	uint16_t flags;
 	struct in_addr ip;
+	struct in_addr mask;
+};
+
+#define VCMD_net_add_ipv4	VC_CMD(NETALT, 1, 2)
+#define VCMD_net_remove_ipv4	VC_CMD(NETALT, 2, 2)
+
+struct	vcmd_net_addr_ipv4_v2 {
+	uint16_t type;
+	uint16_t flags;
+	struct in_addr ip;
+	struct in_addr ip2;
 	struct in_addr mask;
 };
 
@@ -100,7 +111,10 @@ extern int vc_net_migrate(struct nx_info *, void __user *);
 extern int vc_net_add(struct nx_info *, void __user *);
 extern int vc_net_remove(struct nx_info *, void __user *);
 
+extern int vc_net_add_ipv4_v1(struct nx_info *, void __user *);
 extern int vc_net_add_ipv4(struct nx_info *, void __user *);
+
+extern int vc_net_remove_ipv4_v1(struct nx_info *, void __user *);
 extern int vc_net_remove_ipv4(struct nx_info *, void __user *);
 
 extern int vc_net_add_ipv6(struct nx_info *, void __user *);

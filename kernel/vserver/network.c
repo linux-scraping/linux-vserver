@@ -616,6 +616,26 @@ int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	return 0;
 }
 
+int do_remove_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
+	uint16_t type, uint16_t flags)
+{
+	struct nx_addr_v4 *nxa = &nxi->v4;
+
+	switch (type) {
+/*	case NXA_TYPE_ADDR:
+		break;		*/
+
+	case NXA_TYPE_ANY:
+		__dealloc_nx_addr_v4_all(xchg(&nxa->next, NULL));
+		memset(nxa, 0, sizeof(*nxa));
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
 
 int vc_net_add(struct nx_info *nxi, void __user *data)
 {
@@ -678,7 +698,7 @@ int vc_net_remove(struct nx_info *nxi, void __user *data)
 }
 
 
-int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
+int vc_net_add_ipv4_v1(struct nx_info *nxi, void __user *data)
 {
 	struct vcmd_net_addr_ipv4_v1 vc_data;
 
@@ -692,10 +712,6 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 	case NXA_TYPE_MASK:
 		return do_add_v4_addr(nxi, vc_data.ip.s_addr, 0,
 			vc_data.mask.s_addr, vc_data.type, vc_data.flags);
-
-	case NXA_TYPE_RANGE:
-		return do_add_v4_addr(nxi, vc_data.ip.s_addr,
-			vc_data.mask.s_addr, 0, vc_data.type, vc_data.flags);
 
 	case NXA_TYPE_ADDR | NXA_MOD_BCAST:
 		nxi->v4_bcast = vc_data.ip;
@@ -711,20 +727,26 @@ int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 	return 0;
 }
 
-int vc_net_remove_ipv4(struct nx_info *nxi, void __user *data)
+int vc_net_add_ipv4(struct nx_info *nxi, void __user *data)
 {
-	struct vcmd_net_addr_ipv4_v1 vc_data;
+	struct vcmd_net_addr_ipv4_v2 vc_data;
 
 	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
 		return -EFAULT;
 
 	switch (vc_data.type) {
-/*	case NXA_TYPE_ADDR:
-		break;		*/
+	case NXA_TYPE_ADDR:
+	case NXA_TYPE_MASK:
+	case NXA_TYPE_RANGE:
+		return do_add_v4_addr(nxi, vc_data.ip.s_addr, vc_data.ip2.s_addr,
+			vc_data.mask.s_addr, vc_data.type, vc_data.flags);
 
-	case NXA_TYPE_ANY:
-		__dealloc_nx_addr_v4_all(xchg(&nxi->v4.next, NULL));
-		memset(&nxi->v4, 0, sizeof(nxi->v4));
+	case NXA_TYPE_ADDR | NXA_MOD_BCAST:
+		nxi->v4_bcast = vc_data.ip;
+		break;
+
+	case NXA_TYPE_ADDR | NXA_MOD_LBACK:
+		nxi->v4_lback = vc_data.ip;
 		break;
 
 	default:
@@ -733,6 +755,27 @@ int vc_net_remove_ipv4(struct nx_info *nxi, void __user *data)
 	return 0;
 }
 
+int vc_net_remove_ipv4_v1(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv4_v1 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_remove_v4_addr(nxi, vc_data.ip.s_addr, 0,
+		vc_data.mask.s_addr, vc_data.type, vc_data.flags);
+}
+
+int vc_net_remove_ipv4(struct nx_info *nxi, void __user *data)
+{
+	struct vcmd_net_addr_ipv4_v2 vc_data;
+
+	if (data && copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	return do_remove_v4_addr(nxi, vc_data.ip.s_addr, vc_data.ip2.s_addr,
+		vc_data.mask.s_addr, vc_data.type, vc_data.flags);
+}
 
 #ifdef CONFIG_IPV6
 
