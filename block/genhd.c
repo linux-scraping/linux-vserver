@@ -1154,17 +1154,17 @@ static int diskstats_show(struct seq_file *seqf, void *v)
 		cpu = part_stat_lock();
 		part_round_stats(cpu, hd);
 		part_stat_unlock();
-		seq_printf(seqf, "%4d %7d %s %lu %lu %llu "
-			   "%u %lu %lu %llu %u %u %u %u\n",
+		seq_printf(seqf, "%4d %7d %s %lu %lu %lu "
+			   "%u %lu %lu %lu %u %u %u %u\n",
 			   MAJOR(part_devt(hd)), MINOR(part_devt(hd)),
 			   disk_name(gp, hd->partno, buf),
 			   part_stat_read(hd, ios[0]),
 			   part_stat_read(hd, merges[0]),
-			   (unsigned long long)part_stat_read(hd, sectors[0]),
+			   part_stat_read(hd, sectors[0]),
 			   jiffies_to_msecs(part_stat_read(hd, ticks[0])),
 			   part_stat_read(hd, ios[1]),
 			   part_stat_read(hd, merges[1]),
-			   (unsigned long long)part_stat_read(hd, sectors[1]),
+			   part_stat_read(hd, sectors[1]),
 			   jiffies_to_msecs(part_stat_read(hd, ticks[1])),
 			   part_in_flight(hd),
 			   jiffies_to_msecs(part_stat_read(hd, io_ticks)),
