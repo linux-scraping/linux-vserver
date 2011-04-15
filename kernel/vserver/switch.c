@@ -239,11 +239,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_net_add_ipv4:
 		return vc_net_add_ipv4(nxi, data);
 
-	case VCMD_net_remove_ipv4_v1:
-		return vc_net_remove_ipv4_v1(nxi, data);
+	case VCMD_net_rem_ipv4_v1:
+		return vc_net_rem_ipv4_v1(nxi, data);
 	/* this is version 2 */
-	case VCMD_net_remove_ipv4:
-		return vc_net_remove_ipv4(nxi, data);
+	case VCMD_net_rem_ipv4:
+		return vc_net_rem_ipv4(nxi, data);
 #ifdef	CONFIG_IPV6
 	case VCMD_net_add_ipv6:
 		return vc_net_add_ipv6(nxi, data);
@@ -380,8 +380,10 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(set_nflags,	 7, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_add,		 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_remove,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(net_add_ipv4_v1,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(net_rem_ipv4_v1,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_add_ipv4,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
-	__VCMD(net_remove_ipv4,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(net_rem_ipv4,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 #ifdef	CONFIG_IPV6
 	__VCMD(net_add_ipv6,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(net_remove_ipv6,	 8, VCA_NXI,	VCF_ARES | VCF_SETUP);
