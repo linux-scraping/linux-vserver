@@ -2220,7 +2220,8 @@ int may_open(struct path *path, int acc_mode, int flag)
 	}
 
 #ifdef	CONFIG_VSERVER_COWBL
-	if (IS_COW(inode) && (flag & FMODE_WRITE)) {
+	if (IS_COW(inode) &&
+		((flag & O_ACCMODE) != O_RDONLY)) {
 		if (IS_COW_LINK(inode))
 			return -EMLINK;
 		inode->i_flags &= ~(S_IXUNLINK|S_IMMUTABLE);
