@@ -118,8 +118,8 @@ struct vx_info {
 
 	uint64_t vx_flags;			/* context flags */
 	uint64_t vx_ccaps;			/* context caps (vserver) */
+	uint64_t vx_umask;			/* unshare mask (guest) */
 	kernel_cap_t vx_bcaps;			/* bounding caps (system) */
-	unsigned long vx_umask;			/* unshare mask (guest) */
 
 	struct task_struct *vx_reaper;		/* guest reaper process */
 	pid_t vx_initpid;			/* PID of guest init */
