@@ -707,8 +707,6 @@ int vc_net_add_ipv4_v1(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ADDR:
-		vc_data.mask.s_addr = ~0;
-		/* fallthrough */
 	case NXA_TYPE_MASK:
 		return do_add_v4_addr(nxi, vc_data.ip.s_addr, 0,
 			vc_data.mask.s_addr, vc_data.type, vc_data.flags);

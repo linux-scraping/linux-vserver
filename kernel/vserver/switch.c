@@ -109,6 +109,12 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_space_default:
 		return vc_get_space_mask(data, -1);
 
+	case VCMD_set_umask:
+		return vc_set_umask(vxi, data);
+
+	case VCMD_get_umask:
+		return vc_get_umask(vxi, data);
+
 #ifdef	CONFIG_IA32_EMULATION
 	case VCMD_get_rlimit:
 		return __COMPAT(vc_get_rlimit, vxi, data, compat);
@@ -325,6 +331,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_bcaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_ccaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_cflags,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(get_umask,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_badness,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
@@ -370,6 +377,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(set_ccaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_bcaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_cflags,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(set_umask,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_badness,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_vhi_name,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
