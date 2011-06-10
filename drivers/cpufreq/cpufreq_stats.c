@@ -338,8 +338,7 @@ static int __cpuinit cpufreq_stat_cpu_callback(struct notifier_block *nfb,
 }
 
 /* priority=1 so this will get called before cpufreq_remove_dev */
-static struct notifier_block cpufreq_stat_cpu_notifier __refdata =
-{
+static struct notifier_block cpufreq_stat_cpu_notifier __refdata = {
 	.notifier_call = cpufreq_stat_cpu_callback,
 	.priority = 1,
 };
@@ -388,7 +387,6 @@ static void __exit cpufreq_stats_exit(void)
 	unregister_hotcpu_notifier(&cpufreq_stat_cpu_notifier);
 	for_each_online_cpu(cpu) {
 		cpufreq_stats_free_table(cpu);
-		cpufreq_stats_free_sysfs(cpu);
 	}
 }
 

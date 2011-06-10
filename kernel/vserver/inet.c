@@ -136,39 +136,38 @@ out:
 	return ret;
 }
 
-struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
-	struct flowi4 *fl4)
+int ip_v4_find_src(struct net *net, struct nx_info *nxi,
+	struct rtable **rp, struct flowi *fl)
 {
-	struct rtable *rt;
-
 	if (!nxi)
-		return NULL;
+		return 0;
 
 	/* FIXME: handle lback only case */
 	if (!NX_IPV4(nxi))
-		return ERR_PTR(-EPERM);
+		return -EPERM;
 
 	vxdprintk(VXD_CBIT(net, 4),
 		"ip_v4_find_src(%p[#%u]) " NIPQUAD_FMT " -> " NIPQUAD_FMT,
 		nxi, nxi ? nxi->nx_id : 0,
-		NIPQUAD(fl4->saddr), NIPQUAD(fl4->daddr));
+		NIPQUAD(fl->fl4_src), NIPQUAD(fl->fl4_dst));
 
 	/* single IP is unconditional */
 	if (nx_info_flags(nxi, NXF_SINGLE_IP, 0) &&
-		(fl4->saddr == INADDR_ANY))
-		fl4->saddr = nxi->v4.ip[0].s_addr;
+		(fl->fl4_src == INADDR_ANY))
+		fl->fl4_src = nxi->v4.ip[0].s_addr;
 
-	if (fl4->saddr == INADDR_ANY) {
+	if (fl->fl4_src == INADDR_ANY) {
 		struct nx_addr_v4 *ptr;
 		__be32 found = 0;
+		int err;
 
-		rt = __ip_route_output_key(net, fl4);
-		if (!IS_ERR(rt)) {
-			found = fl4->saddr;
-			ip_rt_put(rt);
+		err = __ip_route_output_key(net, rp, fl);
+		if (!err) {
+			found = (*rp)->rt_src;
+			ip_rt_put(*rp);
 			vxdprintk(VXD_CBIT(net, 4),
 				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
-				nxi, nxi ? nxi->nx_id : 0, fl4->flowi4_oif, NIPQUAD(found));
+				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(found));
 			if (v4_addr_in_nx_info(nxi, found, NXA_MASK_BIND))
 				goto found;
 		}
@@ -185,40 +184,40 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 			if ((found & mask) != neta)
 				continue;
 
-			fl4->saddr = primary;
-			rt = __ip_route_output_key(net, fl4);
+			fl->fl4_src = primary;
+			err = __ip_route_output_key(net, rp, fl);
 			vxdprintk(VXD_CBIT(net, 4),
 				"ip_v4_find_src(%p[#%u]) rok[%u]: " NIPQUAD_FMT,
-				nxi, nxi ? nxi->nx_id : 0, fl4->flowi4_oif, NIPQUAD(primary));
-			if (!IS_ERR(rt)) {
-				found = fl4->saddr;
-				ip_rt_put(rt);
+				nxi, nxi ? nxi->nx_id : 0, fl->oif, NIPQUAD(primary));
+			if (!err) {
+				found = (*rp)->rt_src;
+				ip_rt_put(*rp);
 				if (found == primary)
 					goto found;
 			}
 		}
 		/* still no source ip? */
-		found = ipv4_is_loopback(fl4->daddr)
+		found = ipv4_is_loopback(fl->fl4_dst)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found:
 		/* assign src ip to flow */
-		fl4->saddr = found;
+		fl->fl4_src = found;
 
 	} else {
-		if (!v4_addr_in_nx_info(nxi, fl4->saddr, NXA_MASK_BIND))
-			return ERR_PTR(-EPERM);
+		if (!v4_addr_in_nx_info(nxi, fl->fl4_src, NXA_MASK_BIND))
+			return -EPERM;
 	}
 
 	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
-		if (ipv4_is_loopback(fl4->daddr))
-			fl4->daddr = nxi->v4_lback.s_addr;
-		if (ipv4_is_loopback(fl4->saddr))
-			fl4->saddr = nxi->v4_lback.s_addr;
-	} else if (ipv4_is_loopback(fl4->daddr) &&
+		if (ipv4_is_loopback(fl->fl4_dst))
+			fl->fl4_dst = nxi->v4_lback.s_addr;
+		if (ipv4_is_loopback(fl->fl4_src))
+			fl->fl4_src = nxi->v4_lback.s_addr;
+	} else if (ipv4_is_loopback(fl->fl4_dst) &&
 		!nx_info_flags(nxi, NXF_LBACK_ALLOW, 0))
-		return ERR_PTR(-EPERM);
+		return -EPERM;
 
-	return NULL;
+	return 0;
 }
 
 EXPORT_SYMBOL_GPL(ip_v4_find_src);

@@ -31,9 +31,7 @@
 #include <linux/mutex.h>
 #include <linux/backing-dev.h>
 #include <linux/rculist_bl.h>
-#include <linux/devpts_fs.h>
-#include <linux/proc_fs.h>
-#include <linux/vs_context.h>
+#include <linux/cleancache.h>
 #include "internal.h"
 
 
@@ -115,6 +113,7 @@ static struct super_block *alloc_super(struct file_system_type *type)
 		s->s_maxbytes = MAX_NON_LFS;
 		s->s_op = &default_op;
 		s->s_time_gran = 1000000000;
+		s->cleancache_poolid = -1;
 	}
 out:
 	return s;
@@ -180,6 +179,7 @@ void deactivate_locked_super(struct super_block *s)
 {
 	struct file_system_type *fs = s->s_type;
 	if (atomic_dec_and_test(&s->s_active)) {
+		cleancache_flush_fs(s);
 		fs->kill_sb(s);
 		/*
 		 * We need to call rcu_barrier so all the delayed rcu free
@@ -943,13 +943,6 @@ mount_fs(struct file_system_type *type, int flags, const char *name, void *data)
 	WARN_ON(sb->s_bdi == &default_backing_dev_info);
 	sb->s_flags |= MS_BORN;
 
-	error = -EPERM;
-	if (!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT) &&
-		!sb->s_bdev &&
-		(sb->s_magic != PROC_SUPER_MAGIC) &&
-		(sb->s_magic != DEVPTS_SUPER_MAGIC))
-		goto out_sb;
-
 	error = security_sb_kern_mount(sb, flags, secdata);
 	if (error)
 		goto out_sb;
@@ -958,8 +951,7 @@ mount_fs(struct file_system_type *type, int flags, const char *name, void *data)
 	 * filesystems should never set s_maxbytes larger than MAX_LFS_FILESIZE
 	 * but s_maxbytes was an unsigned long long for many releases. Throw
 	 * this warning for a little while to try and catch filesystems that
-	 * violate this rule. This warning should be either removed or
-	 * converted to a BUG() in 2.6.34.
+	 * violate this rule.
 	 */
 	WARN((sb->s_maxbytes < 0), "%s set sb->s_maxbytes to "
 		"negative value (%lld)\n", type->name, sb->s_maxbytes);

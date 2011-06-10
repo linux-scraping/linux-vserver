@@ -137,9 +137,6 @@ enum {
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current_cap(), b) && vx_ccaps(c)))
 
-#define vx_ns_capable(n, b, c) (ns_capable(n, b) || \
-	(cap_raised(current_cap(), b) && vx_ccaps(c)))
-
 #define nx_capable(b, c) (capable(b) || \
 	(cap_raised(current_cap(), b) && nx_ncaps(c)))
 
@@ -159,11 +156,6 @@ enum {
 #define vx_can_unshare(b, f) (capable(b) || \
 	(cap_raised(current_cap(), b) && \
 	!((f) & ~vx_current_umask())))
-
-
-#define __vx_wmask(v)		((v)->vx_wmask)
-
-#define vx_current_wmask()	__vx_wmask(current_vx_info())
 
 
 #define __vx_state(v)	((v) ? ((v)->vx_state) : 0)

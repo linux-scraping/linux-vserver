@@ -684,10 +684,6 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (!type)
 		return ERR_PTR(-ENODEV);
 
-	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
-		!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT))
-		return ERR_PTR(-EPERM);
-
 	mnt = alloc_vfsmnt(name);
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
@@ -1757,7 +1753,7 @@ static int graft_tree(struct vfsmount *mnt, struct path *path)
 
 static int flags_to_propagation_type(int flags)
 {
-	int type = flags & ~MS_REC;
+	int type = flags & ~(MS_REC | MS_SILENT);
 
 	/* Fail if any non-propagation flags are set */
 	if (type & ~(MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))
@@ -1794,7 +1790,7 @@ static int do_change_type(struct path *path, int flag)
 		if (err)
 			goto out_unlock;
 	}
-	// mnt->mnt_flags = mnt_flags;
+	mnt->mnt_flags = mnt_flags;
 
 	br_write_lock(vfsmount_lock);
 	for (m = mnt; m; m = (recurse ? next_mnt(m, mnt) : NULL))
@@ -2657,7 +2653,7 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 
 	error = -EINVAL;
 	if ((IS_MNT_SHARED(old.mnt) ||
-		IS_MNT_SHARED(new.mnt->mnt_parent) ||
+ 		IS_MNT_SHARED(new.mnt->mnt_parent) ||
 		IS_MNT_SHARED(root.mnt->mnt_parent)) &&
 		!vx_flags(VXF_STATE_SETUP, 0))
 		goto out4;

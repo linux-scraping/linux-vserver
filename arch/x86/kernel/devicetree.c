@@ -13,7 +13,6 @@
 #include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/of_pci.h>
-#include <linux/initrd.h>
 
 #include <asm/hpet.h>
 #include <asm/irq_controller.h>
@@ -98,16 +97,6 @@ void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
 {
 	return __alloc_bootmem(size, align, __pa(MAX_DMA_ADDRESS));
 }
-
-#ifdef CONFIG_BLK_DEV_INITRD
-void __init early_init_dt_setup_initrd_arch(unsigned long start,
-					    unsigned long end)
-{
-	initrd_start = (unsigned long)__va(start);
-	initrd_end = (unsigned long)__va(end);
-	initrd_below_start_ok = 1;
-}
-#endif
 
 void __init add_dtb(u64 data)
 {
@@ -380,6 +369,7 @@ static struct of_ioapic_type of_ioapic_type[] =
 static int ioapic_xlate(struct irq_domain *id, const u32 *intspec, u32 intsize,
 			u32 *out_hwirq, u32 *out_type)
 {
+	struct mp_ioapic_gsi *gsi_cfg;
 	struct io_apic_irq_attr attr;
 	struct of_ioapic_type *it;
 	u32 line, idx, type;
@@ -389,7 +379,8 @@ static int ioapic_xlate(struct irq_domain *id, const u32 *intspec, u32 intsize,
 
 	line = *intspec;
 	idx = (u32) id->priv;
-	*out_hwirq = line + mp_gsi_routing[idx].gsi_base;
+	gsi_cfg = mp_ioapic_gsi_routing(idx);
+	*out_hwirq = line + gsi_cfg->gsi_base;
 
 	intspec++;
 	type = *intspec;
@@ -418,7 +409,7 @@ static void __init ioapic_add_ofnode(struct device_node *np)
 	}
 
 	for (i = 0; i < nr_ioapics; i++) {
-		if (r.start == mp_ioapics[i].apicaddr) {
+		if (r.start == mpc_ioapic_addr(i)) {
 			struct irq_domain *id;
 
 			id = kzalloc(sizeof(*id), GFP_KERNEL);

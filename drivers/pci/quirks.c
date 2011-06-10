@@ -606,7 +606,7 @@ static void __devinit ich6_lpc_acpi_gpio(struct pci_dev *dev)
 	}
 
 	pci_read_config_byte(dev, ICH6_GPIO_CNTL, &enable);
-	if (enable & ICH4_GPIO_EN) {
+	if (enable & ICH6_GPIO_EN) {
 		pci_read_config_dword(dev, ICH6_GPIOBASE, &region);
 		region &= PCI_BASE_ADDRESS_IO_MASK;
 		if (region >= PCIBIOS_MIN_IO)
@@ -681,7 +681,7 @@ static void __devinit ich7_lpc_generic_decode(struct pci_dev *dev, unsigned reg,
 /* ICH7-10 has the same common LPC generic IO decode registers */
 static void __devinit quirk_ich7_lpc(struct pci_dev *dev)
 {
-	/* We share the common ACPI/DPIO decode with ICH6 */
+	/* We share the common ACPI/GPIO decode with ICH6 */
 	ich6_lpc_acpi_gpio(dev);
 
 	/* And have 4 ICH7+ generic decodes */
@@ -2349,8 +2349,11 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_8132_BRIDGE,
  */
 static void __devinit nvenet_msi_disable(struct pci_dev *dev)
 {
-	if (dmi_name_in_vendors("P5N32-SLI PREMIUM") ||
-	    dmi_name_in_vendors("P5N32-E SLI")) {
+	const char *board_name = dmi_get_system_info(DMI_BOARD_NAME);
+
+	if (board_name &&
+	    (strstr(board_name, "P5N32-SLI PREMIUM") ||
+	     strstr(board_name, "P5N32-E SLI"))) {
 		dev_info(&dev->dev,
 			 "Disabling msi for MCP55 NIC on P5N32-SLI\n");
 		dev->no_msi = 1;
@@ -2755,34 +2758,9 @@ static void ricoh_mmc_fixup_r5c832(struct pci_dev *dev)
 
 	dev_notice(&dev->dev, "proprietary Ricoh MMC controller disabled (via firewire function)\n");
 	dev_notice(&dev->dev, "MMC cards are now supported by standard SDHCI controller\n");
-
-	/*
-	 * RICOH 0xe823 SD/MMC card reader fails to recognize
-	 * certain types of SD/MMC cards. Lowering the SD base
-	 * clock frequency from 200Mhz to 50Mhz fixes this issue.
-	 *
-	 * 0x150 - SD2.0 mode enable for changing base clock
-	 *	   frequency to 50Mhz
-	 * 0xe1  - Base clock frequency
-	 * 0x32  - 50Mhz new clock frequency
-	 * 0xf9  - Key register for 0x150
-	 * 0xfc  - key register for 0xe1
-	 */
-	if (dev->device == PCI_DEVICE_ID_RICOH_R5CE823) {
-		pci_write_config_byte(dev, 0xf9, 0xfc);
-		pci_write_config_byte(dev, 0x150, 0x10);
-		pci_write_config_byte(dev, 0xf9, 0x00);
-		pci_write_config_byte(dev, 0xfc, 0x01);
-		pci_write_config_byte(dev, 0xe1, 0x32);
-		pci_write_config_byte(dev, 0xfc, 0x00);
-
-		dev_notice(&dev->dev, "MMC controller base frequency changed to 50Mhz.\n");
-	}
 }
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_RICOH, PCI_DEVICE_ID_RICOH_R5C832, ricoh_mmc_fixup_r5c832);
 DECLARE_PCI_FIXUP_RESUME_EARLY(PCI_VENDOR_ID_RICOH, PCI_DEVICE_ID_RICOH_R5C832, ricoh_mmc_fixup_r5c832);
-DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_RICOH, PCI_DEVICE_ID_RICOH_R5CE823, ricoh_mmc_fixup_r5c832);
-DECLARE_PCI_FIXUP_RESUME_EARLY(PCI_VENDOR_ID_RICOH, PCI_DEVICE_ID_RICOH_R5CE823, ricoh_mmc_fixup_r5c832);
 #endif /*CONFIG_MMC_RICOH_MMC*/
 
 #if defined(CONFIG_DMAR) || defined(CONFIG_INTR_REMAP)

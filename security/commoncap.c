@@ -84,20 +84,14 @@ EXPORT_SYMBOL(cap_netlink_recv);
 int cap_capable(struct task_struct *tsk, const struct cred *cred,
 		struct user_namespace *targ_ns, int cap, int audit)
 {
-	struct vx_info *vxi = tsk->vx_info;
-
 	for (;;) {
 		/* The creator of the user namespace has all caps. */
 		if (targ_ns != &init_user_ns && targ_ns->creator == cred->user)
 			return 0;
 
 		/* Do we have the necessary capabilities? */
-		if (targ_ns == cred->user->user_ns) {
-			if (vx_info_flags(vxi, VXF_STATE_SETUP, 0) &&
-			    cap_raised(cred->cap_effective, cap))
-				return 0;
-			return vx_cap_raised(vxi, cred->cap_effective, cap) ? 0 : -EPERM;
-		}
+		if (targ_ns == cred->user->user_ns)
+			return cap_raised(cred->cap_effective, cap) ? 0 : -EPERM;
 
 		/* Have we tried all of the parent namespaces? */
 		if (targ_ns == &init_user_ns)
@@ -536,15 +530,10 @@ skip:
 	new->suid = new->fsuid = new->euid;
 	new->sgid = new->fsgid = new->egid;
 
-	/* For init, we want to retain the capabilities set in the initial
-	 * task.  Thus we skip the usual capability rules
-	 */
-	if (!is_global_init(current)) {
-		if (effective)
-			new->cap_effective = new->cap_permitted;
-		else
-			cap_clear(new->cap_effective);
-	}
+	if (effective)
+		new->cap_effective = new->cap_permitted;
+	else
+		cap_clear(new->cap_effective);
 	bprm->cap_effective = effective;
 
 	/*

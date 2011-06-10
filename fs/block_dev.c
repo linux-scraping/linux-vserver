@@ -769,19 +769,7 @@ static struct block_device *bd_start_claiming(struct block_device *bdev,
 	if (!disk)
 		return ERR_PTR(-ENXIO);
 
-	/*
-	 * Normally, @bdev should equal what's returned from bdget_disk()
-	 * if partno is 0; however, some drivers (floppy) use multiple
-	 * bdev's for the same physical device and @bdev may be one of the
-	 * aliases.  Keep @bdev if partno is 0.  This means claimer
-	 * tracking is broken for those devices but it has always been that
-	 * way.
-	 */
-	if (partno)
-		whole = bdget_disk(disk, 0);
-	else
-		whole = bdgrab(bdev);
-
+	whole = bdget_disk(disk, 0);
 	module_put(disk->fops->owner);
 	put_disk(disk);
 	if (!whole)

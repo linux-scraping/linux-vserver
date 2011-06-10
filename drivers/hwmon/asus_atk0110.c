@@ -673,7 +673,6 @@ static int atk_debugfs_gitm_get(void *p, u64 *val)
 	else
 		err = -EIO;
 
-	ACPI_FREE(ret);
 	return err;
 }
 

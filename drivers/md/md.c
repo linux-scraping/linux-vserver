@@ -2462,7 +2462,7 @@ slot_store(mdk_rdev_t *rdev, const char *buf, size_t len)
 		if (rdev->raid_disk == -1)
 			return -EEXIST;
 		/* personality does all needed checks */
-		if (rdev->mddev->pers->hot_remove_disk == NULL)
+		if (rdev->mddev->pers->hot_add_disk == NULL)
 			return -EINVAL;
 		err = rdev->mddev->pers->
 			hot_remove_disk(rdev->mddev, rdev->raid_disk);
@@ -3324,7 +3324,7 @@ resync_start_store(mddev_t *mddev, const char *buf, size_t len)
 	char *e;
 	unsigned long long n = simple_strtoull(buf, &e, 10);
 
-	if (mddev->pers)
+	if (mddev->pers && !test_bit(MD_RECOVERY_FROZEN, &mddev->recovery))
 		return -EBUSY;
 	if (cmd_match(buf, "none"))
 		n = MaxSector;
@@ -5216,6 +5216,16 @@ static int add_new_disk(mddev_t * mddev, mdu_disk_info_t *info)
 		} else
 			super_types[mddev->major_version].
 				validate_super(mddev, rdev);
+		if ((info->state & (1<<MD_DISK_SYNC)) &&
+		    (!test_bit(In_sync, &rdev->flags) ||
+		     rdev->raid_disk != info->raid_disk)) {
+			/* This was a hot-add request, but events doesn't
+			 * match, so reject it.
+			 */
+			export_rdev(rdev);
+			return -EINVAL;
+		}
+
 		if (test_bit(In_sync, &rdev->flags))
 			rdev->saved_raid_disk = rdev->raid_disk;
 		else
@@ -7062,7 +7072,6 @@ static int remove_and_add_spares(mddev_t *mddev)
 		list_for_each_entry(rdev, &mddev->disks, same_set) {
 			if (rdev->raid_disk >= 0 &&
 			    !test_bit(In_sync, &rdev->flags) &&
-			    !test_bit(Faulty, &rdev->flags) &&
 			    !test_bit(Blocked, &rdev->flags))
 				spares++;
 			if (rdev->raid_disk < 0

@@ -68,8 +68,8 @@ static struct raw_hashinfo raw_v6_hashinfo = {
 };
 
 static struct sock *__raw_v6_lookup(struct net *net, struct sock *sk,
-		unsigned short num, struct in6_addr *loc_addr,
-		struct in6_addr *rmt_addr, int dif)
+		unsigned short num, const struct in6_addr *loc_addr,
+		const struct in6_addr *rmt_addr, int dif)
 {
 	struct hlist_node *node;
 	int is_multicast = ipv6_addr_is_multicast(loc_addr);
@@ -155,8 +155,8 @@ EXPORT_SYMBOL(rawv6_mh_filter_unregister);
  */
 static int ipv6_raw_deliver(struct sk_buff *skb, int nexthdr)
 {
-	struct in6_addr *saddr;
-	struct in6_addr *daddr;
+	const struct in6_addr *saddr;
+	const struct in6_addr *daddr;
 	struct sock *sk;
 	int delivered = 0;
 	__u8 hash;
@@ -356,7 +356,7 @@ void raw6_icmp_error(struct sk_buff *skb, int nexthdr,
 {
 	struct sock *sk;
 	int hash;
-	struct in6_addr *saddr, *daddr;
+	const struct in6_addr *saddr, *daddr;
 	struct net *net;
 
 	hash = nexthdr & (RAW_HTABLE_SIZE - 1);
@@ -365,7 +365,7 @@ void raw6_icmp_error(struct sk_buff *skb, int nexthdr,
 	sk = sk_head(&raw_v6_hashinfo.ht[hash]);
 	if (sk != NULL) {
 		/* Note: ipv6_hdr(skb) != skb->data */
-		struct ipv6hdr *ip6h = (struct ipv6hdr *)skb->data;
+		const struct ipv6hdr *ip6h = (const struct ipv6hdr *)skb->data;
 		saddr = &ip6h->saddr;
 		daddr = &ip6h->daddr;
 		net = dev_net(skb->dev);
@@ -550,8 +550,8 @@ static int rawv6_push_pending_frames(struct sock *sk, struct flowi6 *fl6,
 		goto out;
 
 	offset = rp->offset;
-	total_len = inet_sk(sk)->cork.length - (skb_network_header(skb) -
-						skb->data);
+	total_len = inet_sk(sk)->cork.base.length - (skb_network_header(skb) -
+						     skb->data);
 	if (offset >= total_len - 1) {
 		err = -EINVAL;
 		ip6_flush_pending_frames(sk);
@@ -1239,7 +1239,7 @@ struct proto rawv6_prot = {
 static void raw6_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
 {
 	struct ipv6_pinfo *np = inet6_sk(sp);
-	struct in6_addr *dest, *src;
+	const struct in6_addr *dest, *src;
 	__u16 destp, srcp;
 
 	dest  = &np->daddr;
@@ -1248,7 +1248,7 @@ static void raw6_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
 	srcp  = inet_sk(sp)->inet_num;
 	seq_printf(seq,
 		   "%4d: %08X%08X%08X%08X:%04X %08X%08X%08X%08X:%04X "
-		   "%02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p %d\n",
+		   "%02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %pK %d\n",
 		   i,
 		   src->s6_addr32[0], src->s6_addr32[1],
 		   src->s6_addr32[2], src->s6_addr32[3], srcp,

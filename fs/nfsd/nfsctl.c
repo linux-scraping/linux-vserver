@@ -13,7 +13,6 @@
 #include <linux/lockd/lockd.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/gss_api.h>
-#include <linux/sunrpc/gss_krb5_enctypes.h>
 
 #include "idmap.h"
 #include "nfsd.h"
@@ -190,10 +189,18 @@ static struct file_operations export_features_operations = {
 	.release	= single_release,
 };
 
-#if defined(CONFIG_SUNRPC_GSS) || defined(CONFIG_SUNRPC_GSS_MODULE)
+#ifdef CONFIG_SUNRPC_GSS
 static int supported_enctypes_show(struct seq_file *m, void *v)
 {
-	seq_printf(m, KRB5_SUPPORTED_ENCTYPES);
+	struct gss_api_mech *k5mech;
+
+	k5mech = gss_mech_get_by_name("krb5");
+	if (k5mech == NULL)
+		goto out;
+	if (k5mech->gm_upcall_enctypes != NULL)
+		seq_printf(m, k5mech->gm_upcall_enctypes);
+	gss_mech_put(k5mech);
+out:
 	return 0;
 }
 
@@ -208,7 +215,7 @@ static struct file_operations supported_enctypes_ops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
-#endif /* CONFIG_SUNRPC_GSS or CONFIG_SUNRPC_GSS_MODULE */
+#endif /* CONFIG_SUNRPC_GSS */
 
 extern int nfsd_pool_stats_open(struct inode *inode, struct file *file);
 extern int nfsd_pool_stats_release(struct inode *inode, struct file *file);
@@ -1420,9 +1427,9 @@ static int nfsd_fill_super(struct super_block * sb, void * data, int silent)
 		[NFSD_Versions] = {"versions", &transaction_ops, S_IWUSR|S_IRUSR},
 		[NFSD_Ports] = {"portlist", &transaction_ops, S_IWUSR|S_IRUGO},
 		[NFSD_MaxBlkSize] = {"max_block_size", &transaction_ops, S_IWUSR|S_IRUGO},
-#if defined(CONFIG_SUNRPC_GSS) || defined(CONFIG_SUNRPC_GSS_MODULE)
+#ifdef CONFIG_SUNRPC_GSS
 		[NFSD_SupportedEnctypes] = {"supported_krb5_enctypes", &supported_enctypes_ops, S_IRUGO},
-#endif /* CONFIG_SUNRPC_GSS or CONFIG_SUNRPC_GSS_MODULE */
+#endif /* CONFIG_SUNRPC_GSS */
 #ifdef CONFIG_NFSD_V4
 		[NFSD_Leasetime] = {"nfsv4leasetime", &transaction_ops, S_IWUSR|S_IRUSR},
 		[NFSD_Gracetime] = {"nfsv4gracetime", &transaction_ops, S_IWUSR|S_IRUSR},

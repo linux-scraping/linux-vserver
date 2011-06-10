@@ -144,20 +144,9 @@ static void isolate_freepages(struct zone *zone,
 	int nr_freepages = cc->nr_freepages;
 	struct list_head *freelist = &cc->freepages;
 
-	/*
-	 * Initialise the free scanner. The starting point is where we last
-	 * scanned from (or the end of the zone if starting). The low point
-	 * is the end of the pageblock the migration scanner is using.
-	 */
 	pfn = cc->free_pfn;
 	low_pfn = cc->migrate_pfn + pageblock_nr_pages;
-
-	/*
-	 * Take care that if the migration scanner is at the end of the zone
-	 * that the free scanner does not accidentally move to the next zone
-	 * in the next isolation cycle.
-	 */
-	high_pfn = min(low_pfn, pfn);
+	high_pfn = low_pfn;
 
 	/*
 	 * Isolate free pages until enough are available to migrate the
@@ -251,18 +240,11 @@ static bool too_many_isolated(struct zone *zone)
 	return isolated > (inactive + active) / 2;
 }
 
-/* possible outcome of isolate_migratepages */
-typedef enum {
-	ISOLATE_ABORT,		/* Abort compaction now */
-	ISOLATE_NONE,		/* No pages isolated, continue scanning */
-	ISOLATE_SUCCESS,	/* Pages isolated, migrate */
-} isolate_migrate_t;
-
 /*
  * Isolate all pages that can be migrated from the block pointed to by
  * the migrate scanner within compact_control.
  */
-static isolate_migrate_t isolate_migratepages(struct zone *zone,
+static unsigned long isolate_migratepages(struct zone *zone,
 					struct compact_control *cc)
 {
 	unsigned long low_pfn, end_pfn;
@@ -279,7 +261,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	/* Do not cross the free scanner or scan within a memory hole */
 	if (end_pfn > cc->free_pfn || !pfn_valid(low_pfn)) {
 		cc->migrate_pfn = end_pfn;
-		return ISOLATE_NONE;
+		return 0;
 	}
 
 	/*
@@ -288,14 +270,10 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	 * delay for some time until fewer pages are isolated
 	 */
 	while (unlikely(too_many_isolated(zone))) {
-		/* async migration should just abort */
-		if (!cc->sync)
-			return ISOLATE_ABORT;
-
 		congestion_wait(BLK_RW_ASYNC, HZ/10);
 
 		if (fatal_signal_pending(current))
-			return ISOLATE_ABORT;
+			return 0;
 	}
 
 	/* Time to isolate some pages for migration */
@@ -380,7 +358,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 
 	trace_mm_compaction_isolate_migratepages(nr_scanned, nr_isolated);
 
-	return ISOLATE_SUCCESS;
+	return cc->nr_migratepages;
 }
 
 /*
@@ -544,15 +522,8 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 		unsigned long nr_migrate, nr_remaining;
 		int err;
 
-		switch (isolate_migratepages(zone, cc)) {
-		case ISOLATE_ABORT:
-			ret = COMPACT_PARTIAL;
-			goto out;
-		case ISOLATE_NONE:
+		if (!isolate_migratepages(zone, cc))
 			continue;
-		case ISOLATE_SUCCESS:
-			;
-		}
 
 		nr_migrate = cc->nr_migratepages;
 		err = migrate_pages(&cc->migratepages, compaction_alloc,
@@ -576,7 +547,6 @@ static int compact_zone(struct zone *zone, struct compact_control *cc)
 
 	}
 
-out:
 	/* Release free pages and check accounting */
 	cc->nr_freepages -= release_freepages(&cc->freepages);
 	VM_BUG_ON(cc->nr_freepages != 0);
