@@ -43,6 +43,17 @@
 #include <linux/slab.h>
 #include <acpi/video.h>
 
+static void i915_write_hws_pga(struct drm_device *dev)
+{
+	drm_i915_private_t *dev_priv = dev->dev_private;
+	u32 addr;
+
+	addr = dev_priv->status_page_dmah->busaddr;
+	if (INTEL_INFO(dev)->gen >= 4)
+		addr |= (dev_priv->status_page_dmah->busaddr >> 28) & 0xf0;
+	I915_WRITE(HWS_PGA, addr);
+}
+
 /**
  * Sets up the hardware status page for devices that need a physical address
  * in the register.
@@ -60,16 +71,13 @@ static int i915_init_phys_hws(struct drm_device *dev)
 		DRM_ERROR("Can not allocate hardware status page\n");
 		return -ENOMEM;
 	}
-	ring->status_page.page_addr = dev_priv->status_page_dmah->vaddr;
-	dev_priv->dma_status_page = dev_priv->status_page_dmah->busaddr;
+	ring->status_page.page_addr =
+		(void __force __iomem *)dev_priv->status_page_dmah->vaddr;
 
-	memset(ring->status_page.page_addr, 0, PAGE_SIZE);
+	memset_io(ring->status_page.page_addr, 0, PAGE_SIZE);
 
-	if (INTEL_INFO(dev)->gen >= 4)
-		dev_priv->dma_status_page |= (dev_priv->dma_status_page >> 28) &
-					     0xf0;
+	i915_write_hws_pga(dev);
 
-	I915_WRITE(HWS_PGA, dev_priv->dma_status_page);
 	DRM_DEBUG_DRIVER("Enabled hardware status page\n");
 	return 0;
 }
@@ -216,7 +224,7 @@ static int i915_dma_resume(struct drm_device * dev)
 	if (ring->status_page.gfx_addr != 0)
 		intel_ring_setup_status_page(ring);
 	else
-		I915_WRITE(HWS_PGA, dev_priv->dma_status_page);
+		i915_write_hws_pga(dev);
 
 	DRM_DEBUG_DRIVER("Enabled hardware status page\n");
 
@@ -563,7 +571,7 @@ static int i915_quiescent(struct drm_device *dev)
 	struct intel_ring_buffer *ring = LP_RING(dev->dev_private);
 
 	i915_kernel_lost_context(dev);
-	return intel_wait_ring_buffer(ring, ring->size - 8);
+	return intel_wait_ring_idle(ring);
 }
 
 static int i915_flush_ioctl(struct drm_device *dev, void *data,
@@ -771,6 +779,9 @@ static int i915_getparam(struct drm_device *dev, void *data,
 	case I915_PARAM_HAS_EXEC_CONSTANTS:
 		value = INTEL_INFO(dev)->gen >= 4;
 		break;
+	case I915_PARAM_HAS_RELAXED_DELTA:
+		value = 1;
+		break;
 	default:
 		DRM_DEBUG_DRIVER("Unknown parameter %d\n",
 				 param->param);
@@ -859,8 +870,9 @@ static int i915_set_status_page(struct drm_device *dev, void *data,
 				" G33 hw status page\n");
 		return -ENOMEM;
 	}
-	ring->status_page.page_addr = dev_priv->hws_map.handle;
-	memset(ring->status_page.page_addr, 0, PAGE_SIZE);
+	ring->status_page.page_addr =
+		(void __force __iomem *)dev_priv->hws_map.handle;
+	memset_io(ring->status_page.page_addr, 0, PAGE_SIZE);
 	I915_WRITE(HWS_PGA, ring->status_page.gfx_addr);
 
 	DRM_DEBUG_DRIVER("load hws HWS_PGA with gfx mem 0x%x\n",
@@ -1164,11 +1176,11 @@ static bool i915_switcheroo_can_switch(struct pci_dev *pdev)
 	return can_switch;
 }
 
-static int i915_load_modeset_init(struct drm_device *dev)
+static int i915_load_gem_init(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	unsigned long prealloc_size, gtt_size, mappable_size;
-	int ret = 0;
+	int ret;
 
 	prealloc_size = dev_priv->mm.gtt->stolen_size;
 	gtt_size = dev_priv->mm.gtt->gtt_total_entries << PAGE_SHIFT;
@@ -1192,7 +1204,7 @@ static int i915_load_modeset_init(struct drm_device *dev)
 	ret = i915_gem_init_ringbuffer(dev);
 	mutex_unlock(&dev->struct_mutex);
 	if (ret)
-		goto out;
+		return ret;
 
 	/* Try to set up FBC with a reasonable compressed buffer size */
 	if (I915_HAS_FBC(dev) && i915_powersave) {
@@ -1210,6 +1222,13 @@ static int i915_load_modeset_init(struct drm_device *dev)
 
 	/* Allow hardware batchbuffers unless told otherwise. */
 	dev_priv->allow_batchbuffer = 1;
+	return 0;
+}
+
+static int i915_load_modeset_init(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	int ret;
 
 	ret = intel_parse_bios(dev);
 	if (ret)
@@ -1224,7 +1243,7 @@ static int i915_load_modeset_init(struct drm_device *dev)
 	 */
 	ret = vga_client_register(dev->pdev, dev, NULL, i915_vga_set_decode);
 	if (ret && ret != -ENODEV)
-		goto cleanup_ringbuffer;
+		goto out;
 
 	intel_register_dsm_handler();
 
@@ -1241,9 +1260,39 @@ static int i915_load_modeset_init(struct drm_device *dev)
 
 	intel_modeset_init(dev);
 
-	ret = drm_irq_install(dev);
+	ret = i915_load_gem_init(dev);
 	if (ret)
 		goto cleanup_vga_switcheroo;
+
+	intel_modeset_gem_init(dev);
+
+	if (IS_IVYBRIDGE(dev)) {
+		/* Share pre & uninstall handlers with ILK/SNB */
+		dev->driver->irq_handler = ivybridge_irq_handler;
+		dev->driver->irq_preinstall = ironlake_irq_preinstall;
+		dev->driver->irq_postinstall = ivybridge_irq_postinstall;
+		dev->driver->irq_uninstall = ironlake_irq_uninstall;
+		dev->driver->enable_vblank = ivybridge_enable_vblank;
+		dev->driver->disable_vblank = ivybridge_disable_vblank;
+	} else if (HAS_PCH_SPLIT(dev)) {
+		dev->driver->irq_handler = ironlake_irq_handler;
+		dev->driver->irq_preinstall = ironlake_irq_preinstall;
+		dev->driver->irq_postinstall = ironlake_irq_postinstall;
+		dev->driver->irq_uninstall = ironlake_irq_uninstall;
+		dev->driver->enable_vblank = ironlake_enable_vblank;
+		dev->driver->disable_vblank = ironlake_disable_vblank;
+	} else {
+		dev->driver->irq_preinstall = i915_driver_irq_preinstall;
+		dev->driver->irq_postinstall = i915_driver_irq_postinstall;
+		dev->driver->irq_uninstall = i915_driver_irq_uninstall;
+		dev->driver->irq_handler = i915_driver_irq_handler;
+		dev->driver->enable_vblank = i915_enable_vblank;
+		dev->driver->disable_vblank = i915_disable_vblank;
+	}
+
+	ret = drm_irq_install(dev);
+	if (ret)
+		goto cleanup_gem;
 
 	/* Always safe in the mode setting case. */
 	/* FIXME: do pre/post-mode set stuff in core KMS code */
@@ -1262,14 +1311,14 @@ static int i915_load_modeset_init(struct drm_device *dev)
 
 cleanup_irq:
 	drm_irq_uninstall(dev);
+cleanup_gem:
+	mutex_lock(&dev->struct_mutex);
+	i915_gem_cleanup_ringbuffer(dev);
+	mutex_unlock(&dev->struct_mutex);
 cleanup_vga_switcheroo:
 	vga_switcheroo_unregister_client(dev->pdev);
 cleanup_vga_client:
 	vga_client_register(dev->pdev, NULL, NULL, NULL);
-cleanup_ringbuffer:
-	mutex_lock(&dev->struct_mutex);
-	i915_gem_cleanup_ringbuffer(dev);
-	mutex_unlock(&dev->struct_mutex);
 out:
 	return ret;
 }
@@ -1970,7 +2019,7 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 
 	dev->driver->get_vblank_counter = i915_get_vblank_counter;
 	dev->max_vblank_count = 0xffffff; /* only 24 bits of frame count */
-	if (IS_G4X(dev) || IS_GEN5(dev) || IS_GEN6(dev)) {
+	if (IS_G4X(dev) || IS_GEN5(dev) || IS_GEN6(dev) || IS_IVYBRIDGE(dev)) {
 		dev->max_vblank_count = 0xffffffff; /* full 32 bit counter */
 		dev->driver->get_vblank_counter = gm45_get_vblank_counter;
 	}
@@ -2013,9 +2062,14 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 
 	spin_lock_init(&dev_priv->irq_lock);
 	spin_lock_init(&dev_priv->error_lock);
-	dev_priv->trace_irq_seqno = 0;
+	spin_lock_init(&dev_priv->rps_lock);
 
-	ret = drm_vblank_init(dev, I915_NUM_PIPE);
+	if (IS_MOBILE(dev) || !IS_GEN2(dev))
+		dev_priv->num_pipe = 2;
+	else
+		dev_priv->num_pipe = 1;
+
+	ret = drm_vblank_init(dev, dev_priv->num_pipe);
 	if (ret)
 		goto out_gem_unload;
 
@@ -2191,7 +2245,7 @@ void i915_driver_lastclose(struct drm_device * dev)
 	drm_i915_private_t *dev_priv = dev->dev_private;
 
 	if (!dev_priv || drm_core_check_feature(dev, DRIVER_MODESET)) {
-		drm_fb_helper_restore();
+		intel_fb_restore_mode(dev);
 		vga_switcheroo_process_delayed_switch();
 		return;
 	}

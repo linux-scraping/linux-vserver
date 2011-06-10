@@ -55,8 +55,7 @@ static int mmc_queue_thread(void *d)
 
 		spin_lock_irq(q->queue_lock);
 		set_current_state(TASK_INTERRUPTIBLE);
-		if (!blk_queue_plugged(q))
-			req = blk_fetch_request(q);
+		req = blk_fetch_request(q);
 		mq->req = req;
 		spin_unlock_irq(q->queue_lock);
 
@@ -344,18 +343,14 @@ unsigned int mmc_queue_map_sg(struct mmc_queue *mq)
  */
 void mmc_queue_bounce_pre(struct mmc_queue *mq)
 {
-	unsigned long flags;
-
 	if (!mq->bounce_buf)
 		return;
 
 	if (rq_data_dir(mq->req) != WRITE)
 		return;
 
-	local_irq_save(flags);
 	sg_copy_to_buffer(mq->bounce_sg, mq->bounce_sg_len,
 		mq->bounce_buf, mq->sg[0].length);
-	local_irq_restore(flags);
 }
 
 /*
@@ -364,17 +359,13 @@ void mmc_queue_bounce_pre(struct mmc_queue *mq)
  */
 void mmc_queue_bounce_post(struct mmc_queue *mq)
 {
-	unsigned long flags;
-
 	if (!mq->bounce_buf)
 		return;
 
 	if (rq_data_dir(mq->req) != READ)
 		return;
 
-	local_irq_save(flags);
 	sg_copy_from_buffer(mq->bounce_sg, mq->bounce_sg_len,
 		mq->bounce_buf, mq->sg[0].length);
-	local_irq_restore(flags);
 }
 

@@ -14,3 +14,20 @@ EXPORT_SYMBOL(__ashrdi3);
 EXPORT_SYMBOL(__lshrdi3);
 EXPORT_SYMBOL(__muldi3);
 
+#if !defined(__mc68020__) && !defined(__mc68030__) && \
+    !defined(__mc68040__) && !defined(__mc68060__) && !defined(__mcpu32__)
+/*
+ * Simpler 68k and ColdFire parts also need a few other gcc functions.
+ */
+extern long long __divsi3(long long, long long);
+extern long long __modsi3(long long, long long);
+extern long long __mulsi3(long long, long long);
+extern long long __udivsi3(long long, long long);
+extern long long __umodsi3(long long, long long);
+
+EXPORT_SYMBOL(__divsi3);
+EXPORT_SYMBOL(__modsi3);
+EXPORT_SYMBOL(__mulsi3);
+EXPORT_SYMBOL(__udivsi3);
+EXPORT_SYMBOL(__umodsi3);
+#endif

@@ -40,6 +40,7 @@
 #include <linux/string.h>
 #include <linux/platform_device.h>
 #include <linux/init.h>
+#include <linux/kernel.h>
 
 #include <linux/uaccess.h>
 
@@ -112,11 +113,14 @@ static struct pm_qos_object *pm_qos_array[] = {
 
 static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
 		size_t count, loff_t *f_pos);
+static ssize_t pm_qos_power_read(struct file *filp, char __user *buf,
+		size_t count, loff_t *f_pos);
 static int pm_qos_power_open(struct inode *inode, struct file *filp);
 static int pm_qos_power_release(struct inode *inode, struct file *filp);
 
 static const struct file_operations pm_qos_power_fops = {
 	.write = pm_qos_power_write,
+	.read = pm_qos_power_read,
 	.open = pm_qos_power_open,
 	.release = pm_qos_power_release,
 	.llseek = noop_llseek,
@@ -389,28 +393,61 @@ static int pm_qos_power_release(struct inode *inode, struct file *filp)
 }
 
 
+static ssize_t pm_qos_power_read(struct file *filp, char __user *buf,
+		size_t count, loff_t *f_pos)
+{
+	s32 value;
+	unsigned long flags;
+	struct pm_qos_object *o;
+	struct pm_qos_request_list *pm_qos_req = filp->private_data;
+
+	if (!pm_qos_req)
+		return -EINVAL;
+	if (!pm_qos_request_active(pm_qos_req))
+		return -EINVAL;
+
+	o = pm_qos_array[pm_qos_req->pm_qos_class];
+	spin_lock_irqsave(&pm_qos_lock, flags);
+	value = pm_qos_get_value(o);
+	spin_unlock_irqrestore(&pm_qos_lock, flags);
+
+	return simple_read_from_buffer(buf, count, f_pos, &value, sizeof(s32));
+}
+
 static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
 		size_t count, loff_t *f_pos)
 {
 	s32 value;
-	int x;
-	char ascii_value[11];
 	struct pm_qos_request_list *pm_qos_req;
 
 	if (count == sizeof(s32)) {
 		if (copy_from_user(&value, buf, sizeof(s32)))
 			return -EFAULT;
-	} else if (count == 11) { /* len('0x12345678/0') */
-		if (copy_from_user(ascii_value, buf, 11))
+	} else if (count <= 11) { /* ASCII perhaps? */
+		char ascii_value[11];
+		unsigned long int ulval;
+		int ret;
+
+		if (copy_from_user(ascii_value, buf, count))
 			return -EFAULT;
-		if (strlen(ascii_value) != 10)
+
+		if (count > 10) {
+			if (ascii_value[10] == '\n')
+				ascii_value[10] = '\0';
+			else
+				return -EINVAL;
+		} else {
+			ascii_value[count] = '\0';
+		}
+		ret = strict_strtoul(ascii_value, 16, &ulval);
+		if (ret) {
+			pr_debug("%s, 0x%lx, 0x%x\n", ascii_value, ulval, ret);
 			return -EINVAL;
-		x = sscanf(ascii_value, "%x", &value);
-		if (x != 1)
-			return -EINVAL;
-		pr_debug("%s, %d, 0x%x\n", ascii_value, x, value);
-	} else
+		}
+		value = (s32)lower_32_bits(ulval);
+	} else {
 		return -EINVAL;
+	}
 
 	pm_qos_req = filp->private_data;
 	pm_qos_update_request(pm_qos_req, value);

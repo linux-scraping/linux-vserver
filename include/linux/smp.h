@@ -10,6 +10,7 @@
 #include <linux/types.h>
 #include <linux/list.h>
 #include <linux/cpumask.h>
+#include <linux/init.h>
 
 extern void cpu_idle(void);
 
@@ -97,16 +98,6 @@ void ipi_call_unlock_irq(void);
  */
 int on_each_cpu(smp_call_func_t func, void *info, int wait);
 
-#define MSG_ALL_BUT_SELF	0x8000	/* Assume <32768 CPU's */
-#define MSG_ALL			0x8001
-
-#define MSG_INVALIDATE_TLB	0x0001	/* Remote processor TLB invalidate */
-#define MSG_STOP_CPU		0x0002	/* Sent to shut down slave CPU's
-					 * when rebooting
-					 */
-#define MSG_RESCHEDULE		0x0003	/* Reschedule request from master CPU*/
-#define MSG_CALL_FUNCTION       0x0004  /* Call function on all other CPUs */
-
 /*
  * Mark the boot cpu "online" so that it can call console drivers in
  * printk() and can access its per-cpu storage.
@@ -114,6 +105,8 @@ int on_each_cpu(smp_call_func_t func, void *info, int wait);
 void smp_prepare_boot_cpu(void);
 
 extern unsigned int setup_max_cpus;
+extern void __init setup_nr_cpu_ids(void);
+extern void __init smp_init(void);
 
 #else /* !SMP */
 

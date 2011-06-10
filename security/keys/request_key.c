@@ -8,7 +8,7 @@
  * as published by the Free Software Foundation; either version
  * 2 of the License, or (at your option) any later version.
  *
- * See Documentation/keys-request-key.txt
+ * See Documentation/security/keys-request-key.txt
  */
 
 #include <linux/module.h>
@@ -530,8 +530,7 @@ struct key *request_key_and_link(struct key_type *type,
 	       dest_keyring, flags);
 
 	/* search all the process keyrings for a key */
-	key_ref = search_process_keyrings(type, description, type->match,
-					  cred);
+	key_ref = search_process_keyrings(type, description, type->match, cred);
 
 	if (!IS_ERR(key_ref)) {
 		key = key_ref_to_ptr(key_ref);
@@ -585,7 +584,7 @@ int wait_for_key_construction(struct key *key, bool intr)
 	if (ret < 0)
 		return ret;
 	if (test_bit(KEY_FLAG_NEGATIVE, &key->flags))
-		return -ENOKEY;
+		return key->type_data.reject_error;
 	return key_validate(key);
 }
 EXPORT_SYMBOL(wait_for_key_construction);

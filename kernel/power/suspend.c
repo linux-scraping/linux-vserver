@@ -22,6 +22,7 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/suspend.h>
+#include <linux/syscore_ops.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -162,13 +163,13 @@ static int suspend_enter(suspend_state_t state)
 	arch_suspend_disable_irqs();
 	BUG_ON(!irqs_disabled());
 
-	error = sysdev_suspend(PMSG_SUSPEND);
+	error = syscore_suspend();
 	if (!error) {
 		if (!(suspend_test(TEST_CORE) || pm_wakeup_pending())) {
 			error = suspend_ops->enter(state);
 			events_check_enabled = false;
 		}
-		sysdev_resume();
+		syscore_resume();
 	}
 
 	arch_suspend_enable_irqs();
@@ -219,7 +220,7 @@ int suspend_devices_and_enter(suspend_state_t state)
 	if (suspend_test(TEST_DEVICES))
 		goto Recover_platform;
 
-	suspend_enter(state);
+	error = suspend_enter(state);
 
  Resume_devices:
 	suspend_test_start();

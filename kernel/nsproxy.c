@@ -24,6 +24,9 @@
 #include <linux/vserver/debug.h>
 #include <net/net_namespace.h>
 #include <linux/ipc_namespace.h>
+#include <linux/proc_fs.h>
+#include <linux/file.h>
+#include <linux/syscalls.h>
 
 static struct kmem_cache *nsproxy_cachep;
 
@@ -58,52 +61,41 @@ static inline struct nsproxy *create_nsproxy(void)
  * Return the newly created nsproxy.  Do not attach this to the task,
  * leave it to the caller to do proper locking and attach it to task.
  */
-static struct nsproxy *unshare_namespaces(unsigned long flags,
-			struct nsproxy *orig, struct fs_struct *new_fs)
+static struct nsproxy *create_new_namespaces(unsigned long flags,
+			struct task_struct *tsk, struct fs_struct *new_fs)
 {
 	struct nsproxy *new_nsp;
 	int err;
-
-	vxdprintk(VXD_CBIT(space, 4),
-		"unshare_namespaces(0x%08lx,%p,%p)",
-		flags, orig, new_fs);
 
 	new_nsp = create_nsproxy();
 	if (!new_nsp)
 		return ERR_PTR(-ENOMEM);
 
-	new_nsp->mnt_ns = copy_mnt_ns(flags, orig->mnt_ns, new_fs);
+	new_nsp->mnt_ns = copy_mnt_ns(flags, tsk->nsproxy->mnt_ns, new_fs);
 	if (IS_ERR(new_nsp->mnt_ns)) {
 		err = PTR_ERR(new_nsp->mnt_ns);
 		goto out_ns;
 	}
 
-	new_nsp->uts_ns = copy_utsname(flags, orig->uts_ns);
+	new_nsp->uts_ns = copy_utsname(flags, tsk);
 	if (IS_ERR(new_nsp->uts_ns)) {
 		err = PTR_ERR(new_nsp->uts_ns);
 		goto out_uts;
 	}
 
-	new_nsp->ipc_ns = copy_ipcs(flags, orig->ipc_ns);
+	new_nsp->ipc_ns = copy_ipcs(flags, tsk);
 	if (IS_ERR(new_nsp->ipc_ns)) {
 		err = PTR_ERR(new_nsp->ipc_ns);
 		goto out_ipc;
 	}
 
-	new_nsp->pid_ns = copy_pid_ns(flags, orig->pid_ns);
+	new_nsp->pid_ns = copy_pid_ns(flags, task_active_pid_ns(tsk));
 	if (IS_ERR(new_nsp->pid_ns)) {
 		err = PTR_ERR(new_nsp->pid_ns);
 		goto out_pid;
 	}
 
-	/* disabled now?
-	new_nsp->user_ns = copy_user_ns(flags, orig->user_ns);
-	if (IS_ERR(new_nsp->user_ns)) {
-		err = PTR_ERR(new_nsp->user_ns);
-		goto out_user;
-	} */
-
-	new_nsp->net_ns = copy_net_ns(flags, orig->net_ns);
+	new_nsp->net_ns = copy_net_ns(flags, tsk->nsproxy->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
 		err = PTR_ERR(new_nsp->net_ns);
 		goto out_net;
@@ -258,10 +250,6 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 		goto out;
 	}
 
-	err = ns_cgroup_clone(current, task_pid(current));
-	if (err)
-		put_nsproxy(*new_nsp);
-
 out:
 	return err;
 }
@@ -291,6 +279,45 @@ void switch_task_namespaces(struct task_struct *p, struct nsproxy *new)
 void exit_task_namespaces(struct task_struct *p)
 {
 	switch_task_namespaces(p, NULL);
+}
+
+SYSCALL_DEFINE2(setns, int, fd, int, nstype)
+{
+	const struct proc_ns_operations *ops;
+	struct task_struct *tsk = current;
+	struct nsproxy *new_nsproxy;
+	struct proc_inode *ei;
+	struct file *file;
+	int err;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	file = proc_ns_fget(fd);
+	if (IS_ERR(file))
+		return PTR_ERR(file);
+
+	err = -EINVAL;
+	ei = PROC_I(file->f_dentry->d_inode);
+	ops = ei->ns_ops;
+	if (nstype && (ops->type != nstype))
+		goto out;
+
+	new_nsproxy = create_new_namespaces(0, tsk, tsk->fs);
+	if (IS_ERR(new_nsproxy)) {
+		err = PTR_ERR(new_nsproxy);
+		goto out;
+	}
+
+	err = ops->install(new_nsproxy, ei->ns);
+	if (err) {
+		free_nsproxy(new_nsproxy);
+		goto out;
+	}
+	switch_task_namespaces(tsk, new_nsproxy);
+out:
+	fput(file);
+	return err;
 }
 
 static int __init nsproxy_cache_init(void)

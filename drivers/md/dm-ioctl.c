@@ -1512,14 +1512,10 @@ static int check_version(unsigned int cmd, struct dm_ioctl __user *user)
 	return r;
 }
 
-static void free_params(struct dm_ioctl *param)
-{
-	vfree(param);
-}
-
 static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param)
 {
 	struct dm_ioctl tmp, *dmi;
+	int secure_data;
 
 	if (copy_from_user(&tmp, user, sizeof(tmp) - sizeof(tmp.data)))
 		return -EFAULT;
@@ -1527,17 +1523,30 @@ static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl **param)
 	if (tmp.data_size < (sizeof(tmp) - sizeof(tmp.data)))
 		return -EINVAL;
 
-	dmi = vmalloc(tmp.data_size);
-	if (!dmi)
-		return -ENOMEM;
+	secure_data = tmp.flags & DM_SECURE_DATA_FLAG;
 
-	if (copy_from_user(dmi, user, tmp.data_size)) {
-		vfree(dmi);
-		return -EFAULT;
+	dmi = vmalloc(tmp.data_size);
+	if (!dmi) {
+		if (secure_data && clear_user(user, tmp.data_size))
+			return -EFAULT;
+		return -ENOMEM;
 	}
+
+	if (copy_from_user(dmi, user, tmp.data_size))
+		goto bad;
+
+	/* Wipe the user buffer so we do not return it to userspace */
+	if (secure_data && clear_user(user, tmp.data_size))
+		goto bad;
 
 	*param = dmi;
 	return 0;
+
+bad:
+	if (secure_data)
+		memset(dmi, 0, tmp.data_size);
+	vfree(dmi);
+	return -EFAULT;
 }
 
 static int validate_params(uint cmd, struct dm_ioctl *param)
@@ -1545,6 +1554,7 @@ static int validate_params(uint cmd, struct dm_ioctl *param)
 	/* Always clear this flag */
 	param->flags &= ~DM_BUFFER_FULL_FLAG;
 	param->flags &= ~DM_UEVENT_GENERATED_FLAG;
+	param->flags &= ~DM_SECURE_DATA_FLAG;
 
 	/* Ignores parameters */
 	if (cmd == DM_REMOVE_ALL_CMD ||
@@ -1572,10 +1582,11 @@ static int validate_params(uint cmd, struct dm_ioctl *param)
 static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 {
 	int r = 0;
+	int wipe_buffer;
 	unsigned int cmd;
 	struct dm_ioctl *uninitialized_var(param);
 	ioctl_fn fn = NULL;
-	size_t param_size;
+	size_t input_param_size;
 
 	/* only root and certain contexts can play with this */
 	if (!vx_capable(CAP_SYS_ADMIN, VXC_ADMIN_MAPPER))
@@ -1622,13 +1633,15 @@ static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 	if (r)
 		return r;
 
+	input_param_size = param->data_size;
+	wipe_buffer = param->flags & DM_SECURE_DATA_FLAG;
+
 	r = validate_params(cmd, param);
 	if (r)
 		goto out;
 
-	param_size = param->data_size;
 	param->data_size = sizeof(*param);
-	r = fn(param, param_size);
+	r = fn(param, input_param_size);
 
 	/*
 	 * Copy the results back to userland.
@@ -1636,8 +1649,11 @@ static int ctl_ioctl(uint command, struct dm_ioctl __user *user)
 	if (!r && copy_to_user(user, param, param->data_size))
 		r = -EFAULT;
 
- out:
-	free_params(param);
+out:
+	if (wipe_buffer)
+		memset(param, 0, input_param_size);
+
+	vfree(param);
 	return r;
 }
 

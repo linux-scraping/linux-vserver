@@ -27,6 +27,7 @@
  */
 
 /*-------------------------------------------------------------------------*/
+#include <linux/usb/otg.h>
 
 #define	PORT_WAKE_BITS	(PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E)
 
@@ -127,7 +128,7 @@ static int ehci_port_change(struct ehci_hcd *ehci)
 	return 0;
 }
 
-static void ehci_adjust_port_wakeup_flags(struct ehci_hcd *ehci,
+static __maybe_unused void ehci_adjust_port_wakeup_flags(struct ehci_hcd *ehci,
 		bool suspending, bool do_wakeup)
 {
 	int		port;
@@ -559,14 +560,15 @@ static ssize_t store_companion(struct device *dev,
 }
 static DEVICE_ATTR(companion, 0644, show_companion, store_companion);
 
-static inline void create_companion_file(struct ehci_hcd *ehci)
+static inline int create_companion_file(struct ehci_hcd *ehci)
 {
-	int	i;
+	int	i = 0;
 
 	/* with integrated TT there is no companion! */
 	if (!ehci_is_TDI(ehci))
 		i = device_create_file(ehci_to_hcd(ehci)->self.controller,
 				       &dev_attr_companion);
+	return i;
 }
 
 static inline void remove_companion_file(struct ehci_hcd *ehci)
@@ -716,8 +718,8 @@ ehci_hub_descriptor (
 	desc->bDescLength = 7 + 2 * temp;
 
 	/* two bitmaps:  ports removable, and usb 1.0 legacy PortPwrCtrlMask */
-	memset (&desc->bitmap [0], 0, temp);
-	memset (&desc->bitmap [temp], 0xff, temp);
+	memset(&desc->u.hs.DeviceRemovable[0], 0, temp);
+	memset(&desc->u.hs.DeviceRemovable[temp], 0xff, temp);
 
 	temp = 0x0008;			/* per-port overcurrent reporting */
 	if (HCS_PPC (ehci->hcs_params))
@@ -800,6 +802,13 @@ static int ehci_hub_control (
 				goto error;
 			if (ehci->no_selective_suspend)
 				break;
+#ifdef CONFIG_USB_OTG
+			if ((hcd->self.otg_port == (wIndex + 1))
+			    && hcd->self.b_hnp_enable) {
+				otg_start_hnp(ehci->transceiver);
+				break;
+			}
+#endif
 			if (!(temp & PORT_SUSPEND))
 				break;
 			if ((temp & PORT_PE) == 0)

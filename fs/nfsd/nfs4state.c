@@ -148,7 +148,7 @@ static struct list_head	ownerstr_hashtbl[OWNER_HASH_SIZE];
 /* hash table for nfs4_file */
 #define FILE_HASH_BITS                   8
 #define FILE_HASH_SIZE                  (1 << FILE_HASH_BITS)
-#define FILE_HASH_MASK                  (FILE_HASH_SIZE - 1)
+
 /* hash table for (open)nfs4_stateid */
 #define STATEID_HASH_BITS              10
 #define STATEID_HASH_SIZE              (1 << STATEID_HASH_BITS)
@@ -612,7 +612,8 @@ static void init_forechannel_attrs(struct nfsd4_channel_attrs *new, struct nfsd4
 	u32 maxrpc = nfsd_serv->sv_max_mesg;
 
 	new->maxreqs = numslots;
-	new->maxresp_cached = slotsize + NFSD_MIN_HDR_SEQ_SZ;
+	new->maxresp_cached = min_t(u32, req->maxresp_cached,
+					slotsize + NFSD_MIN_HDR_SEQ_SZ);
 	new->maxreq_sz = min_t(u32, req->maxreq_sz, maxrpc);
 	new->maxresp_sz = min_t(u32, req->maxresp_sz, maxrpc);
 	new->maxops = min_t(u32, req->maxops, NFSD_MAX_OPS_PER_COMPOUND);
@@ -1518,6 +1519,9 @@ nfsd4_create_session(struct svc_rqst *rqstp,
 	bool confirm_me = false;
 	int status = 0;
 
+	if (cr_ses->flags & ~SESSION4_FLAG_MASK_A)
+		return nfserr_inval;
+
 	nfs4_lock_state();
 	unconf = find_unconfirmed_client(&cr_ses->clientid);
 	conf = find_confirmed_client(&cr_ses->clientid);
@@ -1636,8 +1640,9 @@ __be32 nfsd4_bind_conn_to_session(struct svc_rqst *rqstp,
 		return nfserr_badsession;
 
 	status = nfsd4_map_bcts_dir(&bcts->dir);
-	nfsd4_new_conn(rqstp, cstate->session, bcts->dir);
-	return nfs_ok;
+	if (!status)
+		nfsd4_new_conn(rqstp, cstate->session, bcts->dir);
+	return status;
 }
 
 static bool nfsd4_compound_in_session(struct nfsd4_session *session, struct nfs4_sessionid *sid)
@@ -1724,6 +1729,13 @@ static void nfsd4_sequence_check_conn(struct nfsd4_conn *new, struct nfsd4_sessi
 	return;
 }
 
+static bool nfsd4_session_too_many_ops(struct svc_rqst *rqstp, struct nfsd4_session *session)
+{
+	struct nfsd4_compoundargs *args = rqstp->rq_argp;
+
+	return args->opcnt > session->se_fchannel.maxops;
+}
+
 __be32
 nfsd4_sequence(struct svc_rqst *rqstp,
 	       struct nfsd4_compound_state *cstate,
@@ -1750,6 +1762,10 @@ nfsd4_sequence(struct svc_rqst *rqstp,
 	status = nfserr_badsession;
 	session = find_in_sessionid_hashtbl(&seq->sessionid);
 	if (!session)
+		goto out;
+
+	status = nfserr_too_many_ops;
+	if (nfsd4_session_too_many_ops(rqstp, session))
 		goto out;
 
 	status = nfserr_badslot;
@@ -1807,6 +1823,8 @@ out:
 __be32
 nfsd4_reclaim_complete(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, struct nfsd4_reclaim_complete *rc)
 {
+	int status = 0;
+
 	if (rc->rca_one_fs) {
 		if (!cstate->current_fh.fh_dentry)
 			return nfserr_nofilehandle;
@@ -1816,9 +1834,14 @@ nfsd4_reclaim_complete(struct svc_rqst *rqstp, struct nfsd4_compound_state *csta
 		 */
 		 return nfs_ok;
 	}
+
 	nfs4_lock_state();
-	if (is_client_expired(cstate->session->se_client)) {
-		nfs4_unlock_state();
+	status = nfserr_complete_already;
+	if (cstate->session->se_client->cl_firststate)
+		goto out;
+
+	status = nfserr_stale_clientid;
+	if (is_client_expired(cstate->session->se_client))
 		/*
 		 * The following error isn't really legal.
 		 * But we only get here if the client just explicitly
@@ -1826,11 +1849,13 @@ nfsd4_reclaim_complete(struct svc_rqst *rqstp, struct nfsd4_compound_state *csta
 		 * error it gets back on an operation for the dead
 		 * client.
 		 */
-		return nfserr_stale_clientid;
-	}
+		goto out;
+
+	status = nfs_ok;
 	nfsd4_create_clid_dir(cstate->session->se_client);
+out:
 	nfs4_unlock_state();
-	return nfs_ok;
+	return status;
 }
 
 __be32
@@ -2461,7 +2486,7 @@ find_delegation_file(struct nfs4_file *fp, stateid_t *stid)
 	return NULL;
 }
 
-int share_access_to_flags(u32 share_access)
+static int share_access_to_flags(u32 share_access)
 {
 	share_access &= ~NFS4_SHARE_WANT_MASK;
 
@@ -2881,7 +2906,7 @@ out:
 	return status;
 }
 
-struct lock_manager nfsd4_manager = {
+static struct lock_manager nfsd4_manager = {
 };
 
 static void
@@ -3058,7 +3083,7 @@ check_special_stateids(svc_fh *current_fh, stateid_t *stateid, int flags)
 	if (ONE_STATEID(stateid) && (flags & RD_STATE))
 		return nfs_ok;
 	else if (locks_in_grace()) {
-		/* Answer in remaining cases depends on existance of
+		/* Answer in remaining cases depends on existence of
 		 * conflicting state; so we must wait out the grace period. */
 		return nfserr_grace;
 	} else if (flags & WR_STATE)
@@ -3678,7 +3703,7 @@ find_lockstateowner_str(struct inode *inode, clientid_t *clid,
 /*
  * Alloc a lock owner structure.
  * Called in nfsd4_lock - therefore, OPEN and OPEN_CONFIRM (if needed) has 
- * occured. 
+ * occurred. 
  *
  * strhashval = lock_ownerstr_hashval 
  */

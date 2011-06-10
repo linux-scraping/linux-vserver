@@ -116,7 +116,7 @@ _ctl_sas_device_find_by_handle(struct MPT2SAS_ADAPTER *ioc, u16 handle)
  * @mpi_reply: reply message frame
  * Context: none.
  *
- * Function for displaying debug info helpfull when debugging issues
+ * Function for displaying debug info helpful when debugging issues
  * in this module.
  */
 static void
@@ -1041,7 +1041,10 @@ _ctl_getiocinfo(void __user *arg)
 	    __func__));
 
 	memset(&karg, 0 , sizeof(karg));
-	karg.adapter_type = MPT2_IOCTL_INTERFACE_SAS2;
+	if (ioc->is_warpdrive)
+		karg.adapter_type = MPT2_IOCTL_INTERFACE_SAS2_SSS6200;
+	else
+		karg.adapter_type = MPT2_IOCTL_INTERFACE_SAS2;
 	if (ioc->pfacts)
 		karg.port_number = ioc->pfacts[0].PortNumber;
 	pci_read_config_byte(ioc->pdev, PCI_CLASS_REVISION, &revision);

@@ -826,6 +826,7 @@ qh_make (
 				is_input, 0,
 				hb_mult(maxp) * max_packet(maxp)));
 		qh->start = NO_FRAME;
+		qh->stamp = ehci->periodic_stamp;
 
 		if (urb->dev->speed == USB_SPEED_HIGH) {
 			qh->c_usecs = 0;
@@ -1095,22 +1096,24 @@ submit_async (
 	struct list_head	*qtd_list,
 	gfp_t			mem_flags
 ) {
-	struct ehci_qtd		*qtd;
 	int			epnum;
 	unsigned long		flags;
 	struct ehci_qh		*qh = NULL;
 	int			rc;
 
-	qtd = list_entry (qtd_list->next, struct ehci_qtd, qtd_list);
 	epnum = urb->ep->desc.bEndpointAddress;
 
 #ifdef EHCI_URB_TRACE
-	ehci_dbg (ehci,
-		"%s %s urb %p ep%d%s len %d, qtd %p [qh %p]\n",
-		__func__, urb->dev->devpath, urb,
-		epnum & 0x0f, (epnum & USB_DIR_IN) ? "in" : "out",
-		urb->transfer_buffer_length,
-		qtd, urb->ep->hcpriv);
+	{
+		struct ehci_qtd *qtd;
+		qtd = list_entry(qtd_list->next, struct ehci_qtd, qtd_list);
+		ehci_dbg(ehci,
+			 "%s %s urb %p ep%d%s len %d, qtd %p [qh %p]\n",
+			 __func__, urb->dev->devpath, urb,
+			 epnum & 0x0f, (epnum & USB_DIR_IN) ? "in" : "out",
+			 urb->transfer_buffer_length,
+			 qtd, urb->ep->hcpriv);
+	}
 #endif
 
 	spin_lock_irqsave (&ehci->lock, flags);
@@ -1181,6 +1184,10 @@ static void end_unlink_async (struct ehci_hcd *ehci)
 		ehci->reclaim = NULL;
 		start_unlink_async (ehci, next);
 	}
+
+	if (ehci->has_synopsys_hc_bug)
+		ehci_writel(ehci, (u32) ehci->async->qh_dma,
+			    &ehci->regs->async_next);
 }
 
 /* makes sure the async qh will become idle */

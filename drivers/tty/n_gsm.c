@@ -74,7 +74,7 @@ module_param(debug, int, 0600);
 #endif
 
 /*
- * Semi-arbitary buffer size limits. 0710 is normally run with 32-64 byte
+ * Semi-arbitrary buffer size limits. 0710 is normally run with 32-64 byte
  * limits so this is plenty
  */
 #define MAX_MRU 512
@@ -82,7 +82,7 @@ module_param(debug, int, 0600);
 
 /*
  *	Each block of data we have queued to go out is in the form of
- *	a gsm_msg which holds everything we need in a link layer independant
+ *	a gsm_msg which holds everything we need in a link layer independent
  *	format
  */
 
@@ -526,19 +526,6 @@ static int gsm_stuff_frame(const u8 *input, u8 *output, int len)
 	return olen;
 }
 
-static void hex_packet(const unsigned char *p, int len)
-{
-	int i;
-	for (i = 0; i < len; i++) {
-		if (i && (i % 16) == 0) {
-			pr_cont("\n");
-			pr_debug("");
-		}
-		pr_cont("%02X ", *p++);
-	}
-	pr_cont("\n");
-}
-
 /**
  *	gsm_send	-	send a control frame
  *	@gsm: our GSM mux
@@ -685,10 +672,10 @@ static void gsm_data_kick(struct gsm_mux *gsm)
 			len = msg->len + 2;
 		}
 
-		if (debug & 4) {
-			pr_debug("gsm_data_kick:\n");
-			hex_packet(gsm->txframe, len);
-		}
+		if (debug & 4)
+			print_hex_dump_bytes("gsm_data_kick: ",
+					     DUMP_PREFIX_OFFSET,
+					     gsm->txframe, len);
 
 		if (gsm->output(gsm, gsm->txframe + skip_sof,
 						len - skip_sof) < 0)
@@ -1193,8 +1180,8 @@ static void gsm_control_message(struct gsm_mux *gsm, unsigned int command,
 		break;
 		/* Optional unsupported commands */
 	case CMD_PN:	/* Parameter negotiation */
-	case CMD_RPN:	/* Remote port negotation */
-	case CMD_SNC:	/* Service negotation command */
+	case CMD_RPN:	/* Remote port negotiation */
+	case CMD_SNC:	/* Service negotiation command */
 	default:
 		/* Reply to bad commands with an NSC */
 		buf[0] = command;
@@ -1250,8 +1237,7 @@ static void gsm_control_response(struct gsm_mux *gsm, unsigned int command,
 
 static void gsm_control_transmit(struct gsm_mux *gsm, struct gsm_control *ctrl)
 {
-	struct gsm_msg *msg = gsm_data_alloc(gsm, 0, ctrl->len + 1,
-							gsm->ftype|PF);
+	struct gsm_msg *msg = gsm_data_alloc(gsm, 0, ctrl->len + 1, gsm->ftype);
 	if (msg == NULL)
 		return;
 	msg->data[0] = (ctrl->cmd << 1) | 2 | EA;	/* command */
@@ -2031,7 +2017,7 @@ EXPORT_SYMBOL_GPL(gsm_activate_mux);
  *	@mux: mux to free
  *
  *	Dispose of allocated resources for a dead mux. No refcounting
- *	at present so the mux must be truely dead.
+ *	at present so the mux must be truly dead.
  */
 void gsm_free_mux(struct gsm_mux *gsm)
 {
@@ -2096,10 +2082,9 @@ static int gsmld_output(struct gsm_mux *gsm, u8 *data, int len)
 		set_bit(TTY_DO_WRITE_WAKEUP, &gsm->tty->flags);
 		return -ENOSPC;
 	}
-	if (debug & 4) {
-		pr_debug("-->%d bytes out\n", len);
-		hex_packet(data, len);
-	}
+	if (debug & 4)
+		print_hex_dump_bytes("gsmld_output: ", DUMP_PREFIX_OFFSET,
+				     data, len);
 	gsm->tty->ops->write(gsm->tty, data, len);
 	return len;
 }
@@ -2129,7 +2114,7 @@ static int gsmld_attach_gsm(struct tty_struct *tty, struct gsm_mux *gsm)
 
 /**
  *	gsmld_detach_gsm	-	stop doing 0710 mux
- *	@tty: tty atttached to the mux
+ *	@tty: tty attached to the mux
  *	@gsm: mux
  *
  *	Shutdown and then clean up the resources used by the line discipline
@@ -2153,10 +2138,9 @@ static void gsmld_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	char buf[64];
 	char flags;
 
-	if (debug & 4) {
-		pr_debug("Inbytes %dd\n", count);
-		hex_packet(cp, count);
-	}
+	if (debug & 4)
+		print_hex_dump_bytes("gsmld_receive: ", DUMP_PREFIX_OFFSET,
+				     cp, count);
 
 	for (i = count, dp = cp, f = fp; i; i--, dp++) {
 		flags = *f++;
@@ -2653,13 +2637,13 @@ static void gsmtty_wait_until_sent(struct tty_struct *tty, int timeout)
 	   to do here */
 }
 
-static int gsmtty_tiocmget(struct tty_struct *tty, struct file *filp)
+static int gsmtty_tiocmget(struct tty_struct *tty)
 {
 	struct gsm_dlci *dlci = tty->driver_data;
 	return dlci->modem_rx;
 }
 
-static int gsmtty_tiocmset(struct tty_struct *tty, struct file *filp,
+static int gsmtty_tiocmset(struct tty_struct *tty,
 	unsigned int set, unsigned int clear)
 {
 	struct gsm_dlci *dlci = tty->driver_data;
@@ -2676,7 +2660,7 @@ static int gsmtty_tiocmset(struct tty_struct *tty, struct file *filp,
 }
 
 
-static int gsmtty_ioctl(struct tty_struct *tty, struct file *filp,
+static int gsmtty_ioctl(struct tty_struct *tty,
 			unsigned int cmd, unsigned long arg)
 {
 	return -ENOIOCTLCMD;

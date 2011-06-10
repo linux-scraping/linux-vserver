@@ -29,6 +29,7 @@
 #include <linux/signal.h>
 #include <linux/seccomp.h>
 #include <linux/audit.h>
+#include <trace/syscall.h>
 #ifdef CONFIG_PPC32
 #include <linux/module.h>
 #endif
@@ -39,6 +40,9 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/system.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/syscalls.h>
 
 /*
  * The parameter save area on the stack is used to store arguments being passed
@@ -229,12 +233,16 @@ static int gpr_get(struct task_struct *target, const struct user_regset *regset,
 		   unsigned int pos, unsigned int count,
 		   void *kbuf, void __user *ubuf)
 {
-	int ret;
+	int i, ret;
 
 	if (target->thread.regs == NULL)
 		return -EIO;
 
-	CHECK_FULL_REGS(target->thread.regs);
+	if (!FULL_REGS(target->thread.regs)) {
+		/* We have a partial register set.  Fill 14-31 with bogus values */
+		for (i = 14; i < 32; i++)
+			target->thread.regs->gpr[i] = NV_REG_POISON;
+	}
 
 	ret = user_regset_copyout(&pos, &count, &kbuf, &ubuf,
 				  target->thread.regs,
@@ -459,7 +467,7 @@ static int vr_set(struct task_struct *target, const struct user_regset *regset,
 #ifdef CONFIG_VSX
 /*
  * Currently to set and and get all the vsx state, you need to call
- * the fp and VMX calls aswell.  This only get/sets the lower 32
+ * the fp and VMX calls as well.  This only get/sets the lower 32
  * 128bit VSX registers.
  */
 
@@ -641,11 +649,16 @@ static int gpr32_get(struct task_struct *target,
 	compat_ulong_t *k = kbuf;
 	compat_ulong_t __user *u = ubuf;
 	compat_ulong_t reg;
+	int i;
 
 	if (target->thread.regs == NULL)
 		return -EIO;
 
-	CHECK_FULL_REGS(target->thread.regs);
+	if (!FULL_REGS(target->thread.regs)) {
+		/* We have a partial register set.  Fill 14-31 with bogus values */
+		for (i = 14; i < 32; i++)
+			target->thread.regs->gpr[i] = NV_REG_POISON; 
+	}
 
 	pos /= sizeof(reg);
 	count /= sizeof(reg);
@@ -1701,6 +1714,9 @@ long do_syscall_trace_enter(struct pt_regs *regs)
 		 */
 		ret = -1L;
 
+	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
+		trace_sys_enter(regs, regs->gpr[0]);
+
 	if (unlikely(current->audit_context)) {
 #ifdef CONFIG_PPC64
 		if (!is_32bit_task())
@@ -1728,6 +1744,9 @@ void do_syscall_trace_leave(struct pt_regs *regs)
 	if (unlikely(current->audit_context))
 		audit_syscall_exit((regs->ccr&0x10000000)?AUDITSC_FAILURE:AUDITSC_SUCCESS,
 				   regs->result);
+
+	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
+		trace_sys_exit(regs, regs->result);
 
 	step = test_thread_flag(TIF_SINGLESTEP);
 	if (step || test_thread_flag(TIF_SYSCALL_TRACE))
