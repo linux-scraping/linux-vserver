@@ -380,10 +380,10 @@ out_unlock:
 
 void unhash_vx_info(struct vx_info *vxi)
 {
-	__shutdown_vx_info(vxi);
 	spin_lock(&vx_info_hash_lock);
 	__unhash_vx_info(vxi);
 	spin_unlock(&vx_info_hash_lock);
+	__shutdown_vx_info(vxi);
 	__wakeup_vx_info(vxi);
 }
 

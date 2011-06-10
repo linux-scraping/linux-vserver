@@ -320,7 +320,7 @@ int ptrace_detach(struct task_struct *child, unsigned int data)
 		child->exit_code = data;
 		dead = __ptrace_detach(current, child);
 		if (!child->exit_state)
-			wake_up_process(child);
+			wake_up_state(child, TASK_TRACED | TASK_STOPPED);
 	}
 	write_unlock_irq(&tasklist_lock);
 
@@ -626,10 +626,6 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, long, addr, long, data)
 		ret = PTR_ERR(child);
 		goto out;
 	}
-
-	ret = -EPERM;
-	if (!vx_check(vx_task_xid(child), VS_WATCH_P | VS_IDENT))
-		goto out_put_task_struct;
 
 	if (request == PTRACE_ATTACH) {
 		ret = ptrace_attach(child);
