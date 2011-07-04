@@ -18,8 +18,7 @@
 
 #include "util.h"
 
-static struct ipc_namespace *create_ipc_ns(struct task_struct *tsk,
-					   struct ipc_namespace *old_ns)
+static struct ipc_namespace *create_ipc_ns(struct user_namespace *user_ns)
 {
 	struct ipc_namespace *ns;
 	int err;
@@ -48,19 +47,18 @@ static struct ipc_namespace *create_ipc_ns(struct task_struct *tsk,
 	ipcns_notify(IPCNS_CREATED);
 	register_ipcns_notifier(ns);
 
-	ns->user_ns = get_user_ns(task_cred_xxx(tsk, user)->user_ns);
+	ns->user_ns = get_user_ns(user_ns);
 
 	return ns;
 }
 
 struct ipc_namespace *copy_ipcs(unsigned long flags,
-				struct task_struct *tsk)
+				struct ipc_namespace *old_ns,
+				struct user_namespace *user_ns)
 {
-	struct ipc_namespace *ns = tsk->nsproxy->ipc_ns;
-
 	if (!(flags & CLONE_NEWIPC))
-		return get_ipc_ns(ns);
-	return create_ipc_ns(tsk, ns);
+		return get_ipc_ns(old_ns);
+	return create_ipc_ns(user_ns);
 }
 
 /*

@@ -197,7 +197,7 @@ int btrfs_sync_flags(struct inode *inode, int flags, int vflags)
 	struct btrfs_trans_handle *trans;
 	int ret;
 
-	trans = btrfs_join_transaction(root, 1);
+	trans = btrfs_join_transaction(root);
 	BUG_ON(!trans);
 
 	inode->i_flags = flags;
@@ -565,8 +565,10 @@ static int create_snapshot(struct btrfs_root *root, struct dentry *dentry,
 	ret = btrfs_snap_reserve_metadata(trans, pending_snapshot);
 	BUG_ON(ret);
 
+	spin_lock(&root->fs_info->trans_lock);
 	list_add(&pending_snapshot->list,
 		 &trans->transaction->pending_snapshots);
+	spin_unlock(&root->fs_info->trans_lock);
 	if (async_transid) {
 		*async_transid = trans->transid;
 		ret = btrfs_commit_transaction_async(trans,
@@ -2137,29 +2139,34 @@ static long btrfs_ioctl_rm_dev(struct btrfs_root *root, void __user *arg)
 
 static long btrfs_ioctl_fs_info(struct btrfs_root *root, void __user *arg)
 {
-	struct btrfs_ioctl_fs_info_args fi_args;
+	struct btrfs_ioctl_fs_info_args *fi_args;
 	struct btrfs_device *device;
 	struct btrfs_device *next;
 	struct btrfs_fs_devices *fs_devices = root->fs_info->fs_devices;
+	int ret = 0;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	fi_args.num_devices = fs_devices->num_devices;
-	fi_args.max_id = 0;
-	memcpy(&fi_args.fsid, root->fs_info->fsid, sizeof(fi_args.fsid));
+	fi_args = kzalloc(sizeof(*fi_args), GFP_KERNEL);
+	if (!fi_args)
+		return -ENOMEM;
+
+	fi_args->num_devices = fs_devices->num_devices;
+	memcpy(&fi_args->fsid, root->fs_info->fsid, sizeof(fi_args->fsid));
 
 	mutex_lock(&fs_devices->device_list_mutex);
 	list_for_each_entry_safe(device, next, &fs_devices->devices, dev_list) {
-		if (device->devid > fi_args.max_id)
-			fi_args.max_id = device->devid;
+		if (device->devid > fi_args->max_id)
+			fi_args->max_id = device->devid;
 	}
 	mutex_unlock(&fs_devices->device_list_mutex);
 
-	if (copy_to_user(arg, &fi_args, sizeof(fi_args)))
-		return -EFAULT;
+	if (copy_to_user(arg, fi_args, sizeof(*fi_args)))
+		ret = -EFAULT;
 
-	return 0;
+	kfree(fi_args);
+	return ret;
 }
 
 static long btrfs_ioctl_dev_info(struct btrfs_root *root, void __user *arg)

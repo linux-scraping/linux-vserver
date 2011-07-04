@@ -211,6 +211,7 @@ struct inodes_stat_t {
 #define MS_TAGGED	(1<<25) /* use generic inode tagging */
 #define MS_TAGID	(1<<26) /* use specific tag for this mount */
 #define MS_NOTAGCHECK	(1<<27) /* don't check tags */
+#define MS_NOSEC	(1<<28)
 #define MS_BORN		(1<<29)
 #define MS_ACTIVE	(1<<30)
 #define MS_NOUSER	(1<<31)
@@ -390,7 +391,7 @@ struct inodes_stat_t {
 
 #define FS_BARRIER_FL			0x04000000 /* Barrier for chroot() */
 #define FS_COW_FL			0x20000000 /* Copy on Write marker */
- 
+
 #define FS_FL_USER_VISIBLE		0x0103DFFF /* User visible flags */
 #define FS_FL_USER_MODIFIABLE		0x010380FF /* User modifiable flags */
 
@@ -670,6 +671,7 @@ struct address_space {
 	struct prio_tree_root	i_mmap;		/* tree of private and shared mappings */
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	struct mutex		i_mmap_mutex;	/* protect tree, count, list */
+	/* Protected by tree_lock together with the radix tree */
 	unsigned long		nrpages;	/* number of total pages */
 	pgoff_t			writeback_index;/* writeback starts here */
 	const struct address_space_operations *a_ops;	/* methods */
@@ -777,9 +779,13 @@ struct inode {
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
 	unsigned short		i_flags;
 	unsigned short		i_vflags;
+	unsigned long		i_state;
+#ifdef CONFIG_SECURITY
+	void			*i_security;
+#endif
 	struct mutex		i_mutex;
 
-	unsigned long		i_state;
+
 	unsigned long		dirtied_when;	/* jiffies of first dirtying */
 
 	struct hlist_node	i_hash;
@@ -832,9 +838,6 @@ struct inode {
 	atomic_t		i_readcount; /* struct files open RO */
 #endif
 	atomic_t		i_writecount;
-#ifdef CONFIG_SECURITY
-	void			*i_security;
-#endif
 #ifdef CONFIG_FS_POSIX_ACL
 	struct posix_acl	*i_acl;
 	struct posix_acl	*i_default_acl;
@@ -2631,7 +2634,7 @@ static inline int is_sxid(mode_t mode)
 
 static inline void inode_has_no_xattr(struct inode *inode)
 {
-	if (!is_sxid(inode->i_mode))
+	if (!is_sxid(inode->i_mode) && (inode->i_sb->s_flags & MS_NOSEC))
 		inode->i_flags |= S_NOSEC;
 }
 

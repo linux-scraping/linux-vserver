@@ -1987,7 +1987,7 @@ static int btrfs_readpage_end_io_hook(struct page *page, u64 start, u64 end,
 	}
 
 	if (BTRFS_I(inode)->flags & BTRFS_INODE_NODATASUM)
-		return 0;
+		goto good;
 
 	if (root->root_key.objectid == BTRFS_DATA_RELOC_TREE_OBJECTID &&
 	    test_range_bit(io_tree, start, end, EXTENT_NODATASUM, 1, NULL)) {
@@ -2512,6 +2512,11 @@ static void btrfs_read_locked_inode(struct inode *inode)
 	uid_t uid;
 	gid_t gid;
 	int ret;
+	bool filled = false;
+
+	ret = btrfs_fill_inode(inode, &rdev);
+	if (!ret)
+		filled = true;
 
 	path = btrfs_alloc_path();
 	BUG_ON(!path);
@@ -2523,6 +2528,10 @@ static void btrfs_read_locked_inode(struct inode *inode)
 		goto make_bad;
 
 	leaf = path->nodes[0];
+
+	if (filled)
+		goto cache_acl;
+
 	inode_item = btrfs_item_ptr(leaf, path->slots[0],
 				    struct btrfs_inode_item);
 	if (!leaf->map_token)
@@ -2564,7 +2573,7 @@ static void btrfs_read_locked_inode(struct inode *inode)
 
 	BTRFS_I(inode)->index_cnt = (u64)-1;
 	BTRFS_I(inode)->flags = btrfs_inode_flags(leaf, inode_item);
-
+cache_acl:
 	/*
 	 * try to precache a NULL acl entry for files that don't have
 	 * any xattrs or acls
@@ -2580,7 +2589,6 @@ static void btrfs_read_locked_inode(struct inode *inode)
 	}
 
 	btrfs_free_path(path);
-	inode_item = NULL;
 
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
@@ -2624,15 +2632,15 @@ static void fill_inode_item(struct btrfs_trans_handle *trans,
 			    struct btrfs_inode_item *item,
 			    struct inode *inode)
 {
+	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
+	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
+
 	if (!leaf->map_token)
 		map_private_extent_buffer(leaf, (unsigned long)item,
 					  sizeof(struct btrfs_inode_item),
 					  &leaf->map_token, &leaf->kaddr,
 					  &leaf->map_start, &leaf->map_len,
 					  KM_USER1);
-
-	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
-	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
 
 	btrfs_set_inode_uid(leaf, item, uid);
 	btrfs_set_inode_gid(leaf, item, gid);
@@ -3090,6 +3098,7 @@ int btrfs_unlink_subvol(struct btrfs_trans_handle *trans,
 	ret = btrfs_update_inode(trans, root, dir);
 	BUG_ON(ret);
 
+	btrfs_free_path(path);
 	return 0;
 }
 
@@ -3660,7 +3669,7 @@ void btrfs_evict_inode(struct inode *inode)
 	btrfs_i_size_write(inode, 0);
 
 	while (1) {
-		trans = btrfs_start_transaction(root, 0);
+		trans = btrfs_join_transaction(root);
 		BUG_ON(IS_ERR(trans));
 		trans->block_rsv = root->orphan_block_rsv;
 
@@ -4533,6 +4542,7 @@ static struct inode *btrfs_new_inode(struct btrfs_trans_handle *trans,
 	inode_tree_add(inode);
 
 	trace_btrfs_inode_new(inode);
+	btrfs_set_inode_last_trans(trans, inode);
 
 	return inode;
 fail:

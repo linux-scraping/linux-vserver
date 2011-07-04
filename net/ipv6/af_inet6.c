@@ -279,6 +279,9 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (addr_len < SIN6_LEN_RFC2133)
 		return -EINVAL;
 
+	if (addr->sin6_family != AF_INET6)
+		return -EINVAL;
+
 	err = v6_map_sock_addr(inet, addr, &nsa);
 	if (err)
 		return err;

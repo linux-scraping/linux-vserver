@@ -61,8 +61,11 @@ static inline struct nsproxy *create_nsproxy(void)
  * Return the newly created nsproxy.  Do not attach this to the task,
  * leave it to the caller to do proper locking and attach it to task.
  */
-static struct nsproxy *create_new_namespaces(unsigned long flags,
-			struct task_struct *tsk, struct fs_struct *new_fs)
+static struct nsproxy *unshare_namespaces(unsigned long flags,
+			struct nsproxy *orig,
+			struct fs_struct *new_fs,
+			struct user_namespace *new_user,
+			struct pid_namespace *new_pid)
 {
 	struct nsproxy *new_nsp;
 	int err;
@@ -71,31 +74,31 @@ static struct nsproxy *create_new_namespaces(unsigned long flags,
 	if (!new_nsp)
 		return ERR_PTR(-ENOMEM);
 
-	new_nsp->mnt_ns = copy_mnt_ns(flags, tsk->nsproxy->mnt_ns, new_fs);
+	new_nsp->mnt_ns = copy_mnt_ns(flags, orig->mnt_ns, new_fs);
 	if (IS_ERR(new_nsp->mnt_ns)) {
 		err = PTR_ERR(new_nsp->mnt_ns);
 		goto out_ns;
 	}
 
-	new_nsp->uts_ns = copy_utsname(flags, tsk);
+	new_nsp->uts_ns = copy_utsname(flags, orig->uts_ns, new_user);
 	if (IS_ERR(new_nsp->uts_ns)) {
 		err = PTR_ERR(new_nsp->uts_ns);
 		goto out_uts;
 	}
 
-	new_nsp->ipc_ns = copy_ipcs(flags, tsk);
+	new_nsp->ipc_ns = copy_ipcs(flags, orig->ipc_ns, new_user);
 	if (IS_ERR(new_nsp->ipc_ns)) {
 		err = PTR_ERR(new_nsp->ipc_ns);
 		goto out_ipc;
 	}
 
-	new_nsp->pid_ns = copy_pid_ns(flags, task_active_pid_ns(tsk));
+	new_nsp->pid_ns = copy_pid_ns(flags, new_pid);
 	if (IS_ERR(new_nsp->pid_ns)) {
 		err = PTR_ERR(new_nsp->pid_ns);
 		goto out_pid;
 	}
 
-	new_nsp->net_ns = copy_net_ns(flags, tsk->nsproxy->net_ns);
+	new_nsp->net_ns = copy_net_ns(flags, orig->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
 		err = PTR_ERR(new_nsp->net_ns);
 		goto out_net;
@@ -120,10 +123,12 @@ out_ns:
 	return ERR_PTR(err);
 }
 
-static struct nsproxy *create_new_namespaces(int flags, struct task_struct *tsk,
-			struct fs_struct *new_fs)
+static struct nsproxy *create_new_namespaces(unsigned long flags,
+			struct task_struct *tsk, struct fs_struct *new_fs)
 {
-	return unshare_namespaces(flags, tsk->nsproxy, new_fs);
+	return unshare_namespaces(flags, tsk->nsproxy,
+		new_fs, task_cred_xxx(tsk, user)->user_ns,
+		task_active_pid_ns(tsk));
 }
 
 /*

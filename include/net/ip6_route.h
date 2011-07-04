@@ -86,7 +86,8 @@ extern int			ip6_route_get_saddr(struct net *net,
 						    struct rt6_info *rt,
 						    const struct in6_addr *daddr,
 						    unsigned int prefs,
-						    struct in6_addr *saddr);
+						    struct in6_addr *saddr,
+						    struct nx_info *nxi);
 
 extern struct rt6_info		*rt6_lookup(struct net *net,
 					    const struct in6_addr *daddr,
