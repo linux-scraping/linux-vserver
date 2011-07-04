@@ -1790,7 +1790,7 @@ static int do_change_type(struct path *path, int flag)
 		if (err)
 			goto out_unlock;
 	}
-	mnt->mnt_flags = mnt_flags;
+	// mnt->mnt_flags = mnt_flags;
 
 	br_write_lock(vfsmount_lock);
 	for (m = mnt; m; m = (recurse ? next_mnt(m, mnt) : NULL))
@@ -2653,7 +2653,7 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
 
 	error = -EINVAL;
 	if ((IS_MNT_SHARED(old.mnt) ||
- 		IS_MNT_SHARED(new.mnt->mnt_parent) ||
+		IS_MNT_SHARED(new.mnt->mnt_parent) ||
 		IS_MNT_SHARED(root.mnt->mnt_parent)) &&
 		!vx_flags(VXF_STATE_SETUP, 0))
 		goto out4;

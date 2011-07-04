@@ -256,6 +256,9 @@ static inline void ip_route_connect_init(struct flowi4 *fl4, __be32 dst, __be32 
 			   protocol, flow_flags, dst, src, dport, sport);
 }
 
+extern struct rtable *ip_v4_find_src(struct net *net, struct nx_info *,
+	struct flowi4 *);
+
 static inline struct rtable *ip_route_connect(struct flowi4 *fl4,
 					      __be32 dst, __be32 src, u32 tos,
 					      int oif, u8 protocol,
@@ -264,11 +267,24 @@ static inline struct rtable *ip_route_connect(struct flowi4 *fl4,
 {
 	struct net *net = sock_net(sk);
 	struct rtable *rt;
+	struct nx_info *nx_info = current_nx_info();
 
 	ip_route_connect_init(fl4, dst, src, tos, oif, protocol,
 			      sport, dport, sk, can_sleep);
 
-	if (!dst || !src) {
+	if (sk)
+		nx_info = sk->sk_nx_info;
+
+	vxdprintk(VXD_CBIT(net, 4),
+		"ip_route_connect(%p) %p,%p;%lx",
+		sk, nx_info, sk->sk_socket,
+		(sk->sk_socket?sk->sk_socket->flags:0));
+
+	rt = ip_v4_find_src(net, nx_info, fl4);
+	if (IS_ERR(rt))
+		return rt;
+
+	if (!fl4->daddr || !fl4->saddr) {
 		rt = __ip_route_output_key(net, fl4);
 		if (IS_ERR(rt))
 			return rt;

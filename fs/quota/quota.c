@@ -304,7 +304,7 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 
 static vroot_grb_func *vroot_get_real_bdev = NULL;
 
-static spinlock_t vroot_grb_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(vroot_grb_lock);
 
 int register_vroot_grb(vroot_grb_func *func) {
 	int ret = -EBUSY;

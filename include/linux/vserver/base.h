@@ -137,6 +137,9 @@ enum {
 #define vx_capable(b, c) (capable(b) || \
 	(cap_raised(current_cap(), b) && vx_ccaps(c)))
 
+#define vx_ns_capable(n, b, c) (ns_capable(n, b) || \
+	(cap_raised(current_cap(), b) && vx_ccaps(c)))
+
 #define nx_capable(b, c) (capable(b) || \
 	(cap_raised(current_cap(), b) && nx_ncaps(c)))
 

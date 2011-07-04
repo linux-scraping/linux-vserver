@@ -209,7 +209,7 @@ extern int __nx_inet_del_lback(__be32 addr);
 
 struct hlist_head nx_info_hash[NX_HASH_SIZE];
 
-static spinlock_t nx_info_hash_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(nx_info_hash_lock);
 
 
 static inline unsigned int __hashval(nid_t nid)

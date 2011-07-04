@@ -30,6 +30,7 @@
 #include <linux/types.h>
 #include <linux/security.h>
 #include <linux/pid_namespace.h>
+#include <linux/capability.h>
 
 #include <linux/vserver/context.h>
 #include <linux/vserver/network.h>
@@ -60,7 +61,7 @@ atomic_t vx_global_cactive	= ATOMIC_INIT(0);
 
 static struct hlist_head vx_info_inactive = HLIST_HEAD_INIT;
 
-static spinlock_t vx_info_inactive_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(vx_info_inactive_lock);
 
 
 /*	__alloc_vx_info()
@@ -114,7 +115,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	}
 
 	new->vx_flags = VXF_INIT_SET;
-	cap_set_init_eff(new->vx_bcaps);
+	new->vx_bcaps = CAP_FULL_SET;
 	new->vx_ccaps = 0;
 	new->vx_umask = 0;
 
@@ -263,7 +264,7 @@ void free_vx_info(struct vx_info *vxi)
 static struct hlist_head vx_info_hash[VX_HASH_SIZE] =
 	{ [0 ... VX_HASH_SIZE-1] = HLIST_HEAD_INIT };
 
-static spinlock_t vx_info_hash_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(vx_info_hash_lock);
 
 
 static inline unsigned int __hashval(xid_t xid)
