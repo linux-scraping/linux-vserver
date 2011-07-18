@@ -280,7 +280,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		return -EINVAL;
 
 	if (addr->sin6_family != AF_INET6)
-		return -EINVAL;
+		return -EAFNOSUPPORT;
 
 	err = v6_map_sock_addr(inet, addr, &nsa);
 	if (err)
