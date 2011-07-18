@@ -1,7 +1,7 @@
 VERSION = 3
 PATCHLEVEL = 0
 SUBLEVEL = 0
-EXTRAVERSION = -rc5-vs2.3.1-pre3
+EXTRAVERSION = -rc7-vs2.3.1-pre3
 NAME = Sneaky Weasel
 
 # *DOCUMENTATION*

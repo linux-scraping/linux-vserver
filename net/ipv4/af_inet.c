@@ -471,8 +471,10 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (addr_len < sizeof(struct sockaddr_in))
 		goto out;
 
-	if (addr->sin_family != AF_INET)
+	if (addr->sin_family != AF_INET) {
+		err = -EAFNOSUPPORT;
 		goto out;
+	}
 
 	err = v4_map_sock_addr(inet, addr, &nsa);
 	if (err)
