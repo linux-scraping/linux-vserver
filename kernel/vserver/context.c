@@ -115,7 +115,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	}
 
 	new->vx_flags = VXF_INIT_SET;
-	new->vx_bcaps = CAP_FULL_SET;
+	new->vx_bcaps = CAP_FULL_SET;	// maybe ~CAP_SETPCAP
 	new->vx_ccaps = 0;
 	new->vx_umask = 0;
 

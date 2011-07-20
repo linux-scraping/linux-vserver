@@ -373,13 +373,13 @@ EXPORT_SYMBOL(capable);
  */
 bool ns_capable(struct user_namespace *ns, int cap)
 {
-	/* here for now so we don't require task locking */
-	if (vs_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
-		return 0;
 	if (unlikely(!cap_valid(cap))) {
 		printk(KERN_CRIT "capable() called with invalid cap=%u\n", cap);
 		BUG();
 	}
+
+	if (vs_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
+		return true;
 
 	if (security_capable(ns, current_cred(), cap) == 0) {
 		current->flags |= PF_SUPERPRIV;
