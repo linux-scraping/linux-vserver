@@ -1434,7 +1434,8 @@ static int check_prlimit_permission(struct task_struct *task)
 	     cred->gid == tcred->sgid &&
 	     cred->gid == tcred->gid))
 		return 0;
-	if (ns_capable(tcred->user->user_ns, CAP_SYS_RESOURCE))
+	if (vx_ns_capable(tcred->user->user_ns,
+		CAP_SYS_RESOURCE, VXC_SET_RLIMIT))
 		return 0;
 
 	return -EPERM;
