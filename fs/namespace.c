@@ -684,6 +684,10 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (!type)
 		return ERR_PTR(-ENODEV);
 
+	if ((type->fs_flags & FS_BINARY_MOUNTDATA) &&
+		!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT))
+		return ERR_PTR(-EPERM);
+
 	mnt = alloc_vfsmnt(name);
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);

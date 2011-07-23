@@ -1266,6 +1266,9 @@ static int do_lookup(struct nameidata *nd, struct qstr *name,
 				goto unlazy;
 			}
 		}
+
+		/* FIXME: check dx permission */
+
 		path->mnt = mnt;
 		path->dentry = dentry;
 		if (unlikely(!__follow_mount_rcu(nd, path, inode)))
@@ -1313,6 +1316,8 @@ retry:
 			goto retry;
 		}
 	}
+
+	/* FIXME: check dx permission */
 
 	path->mnt = mnt;
 	path->dentry = dentry;
