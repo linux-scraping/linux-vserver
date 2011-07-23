@@ -226,7 +226,7 @@ __ip_vs_route_output_v6(struct net *net, struct in6_addr *daddr,
 		return dst;
 	if (ipv6_addr_any(&fl6.saddr) &&
 	    ipv6_dev_get_saddr(net, ip6_dst_idev(dst)->dev,
-			       &fl6.daddr, 0, &fl6.saddr) < 0)
+			       &fl6.daddr, 0, &fl6.saddr, NULL) < 0)
 		goto out_err;
 	if (do_xfrm) {
 		dst = xfrm_lookup(net, dst, flowi6_to_flowi(&fl6), NULL, 0);

@@ -1210,7 +1210,8 @@ SYSCALL_DEFINE2(sethostname, char __user *, name, int, len)
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!ns_capable(current->nsproxy->uts_ns->user_ns, CAP_SYS_ADMIN))
+	if (!vx_ns_capable(current->nsproxy->uts_ns->user_ns,
+		CAP_SYS_ADMIN, VXC_SET_UTSNAME))
 		return -EPERM;
 
 	if (len < 0 || len > __NEW_UTS_LEN)
@@ -1260,7 +1261,8 @@ SYSCALL_DEFINE2(setdomainname, char __user *, name, int, len)
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!ns_capable(current->nsproxy->uts_ns->user_ns, CAP_SYS_ADMIN))
+	if (!vx_ns_capable(current->nsproxy->uts_ns->user_ns,
+		CAP_SYS_ADMIN, VXC_SET_UTSNAME))
 		return -EPERM;
 	if (len < 0 || len > __NEW_UTS_LEN)
 		return -EINVAL;
