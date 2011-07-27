@@ -283,6 +283,7 @@ static inline struct rtable *ip_route_connect(struct flowi4 *fl4,
 	rt = ip_v4_find_src(net, nx_info, fl4);
 	if (IS_ERR(rt))
 		return rt;
+	ip_rt_put(rt);
 
 	if (!fl4->daddr || !fl4->saddr) {
 		rt = __ip_route_output_key(net, fl4);
