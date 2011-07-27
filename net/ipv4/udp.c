@@ -934,6 +934,16 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 				   inet_sk_flowi_flags(sk)|FLOWI_FLAG_CAN_SLEEP,
 				   faddr, saddr, dport, inet->inet_sport);
 
+		if (sk->sk_nx_info) {
+			rt = ip_v4_find_src(net, sk->sk_nx_info, fl4);
+			if (IS_ERR(rt)) {
+				err = PTR_ERR(rt);
+				rt = NULL;
+				goto out;
+			}
+			ip_rt_put(rt);
+		}
+
 		security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
 		rt = ip_route_output_flow(net, fl4, sk);
 		if (IS_ERR(rt)) {

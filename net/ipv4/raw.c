@@ -577,6 +577,16 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			goto done;
 	}
 
+	if (sk->sk_nx_info) {
+		rt = ip_v4_find_src(sock_net(sk), sk->sk_nx_info, &fl4);
+		if (IS_ERR(rt)) {
+			err = PTR_ERR(rt);
+			rt = NULL;
+			goto done;
+		}
+		ip_rt_put(rt);
+	}
+
 	security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
 	rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
 	if (IS_ERR(rt)) {
