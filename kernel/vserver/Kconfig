@@ -217,7 +217,7 @@ config	VSERVER
 	select NAMESPACES
 	select UTS_NS
 	select IPC_NS
-	select USER_NS
+#	select USER_NS
 	select SYSVIPC
 
 config	VSERVER_SECURITY

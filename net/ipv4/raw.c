@@ -408,7 +408,7 @@ error:
 	return err;
 }
 
-static int raw_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
+static int raw_probe_proto_opt(struct flowi4 *fl4, struct msghdr *msg)
 {
 	struct iovec *iov;
 	u8 __user *type = NULL;
@@ -424,7 +424,7 @@ static int raw_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 		if (!iov)
 			continue;
 
-		switch (fl->proto) {
+		switch (fl4->flowi4_proto) {
 		case IPPROTO_ICMP:
 			/* check if one-byte field is readable or not. */
 			if (iov->iov_base && iov->iov_len < 1)
@@ -439,8 +439,8 @@ static int raw_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 				code = iov->iov_base;
 
 			if (type && code) {
-				if (get_user(fl->fl_icmp_type, type) ||
-				    get_user(fl->fl_icmp_code, code))
+				if (get_user(fl4->fl4_icmp_type, type) ||
+				    get_user(fl4->fl4_icmp_code, code))
 					return -EFAULT;
 				probed = 1;
 			}
@@ -554,32 +554,41 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	}
 
 	{
-		struct flowi fl = { .oif = ipc.oif,
-				    .mark = sk->sk_mark,
-				    .fl4_dst = daddr,
-				    .fl4_src = saddr,
-				    .fl4_tos = tos,
-				    .proto = inet->hdrincl ? IPPROTO_RAW :
-							     sk->sk_protocol,
-				  };
+		struct flowi4 fl4 = {
+			.flowi4_oif = ipc.oif,
+			.flowi4_mark = sk->sk_mark,
+			.daddr = daddr,
+			.saddr = saddr,
+			.flowi4_tos = tos,
+			.flowi4_proto = (inet->hdrincl ?
+					 IPPROTO_RAW :
+					 sk->sk_protocol),
+			.flowi4_flags = FLOWI_FLAG_CAN_SLEEP,
+		};
 		if (!inet->hdrincl) {
-			err = raw_probe_proto_opt(&fl, msg);
+			err = raw_probe_proto_opt(&fl4, msg);
 			if (err)
 				goto done;
 		}
 
-		security_sk_classify_flow(sk, &fl);
-		if (sk->sk_nx_info) {
-			err = ip_v4_find_src(sock_net(sk),
-				sk->sk_nx_info, &rt, &fl);
-
-			if (err)
-				goto done;
+	if (sk->sk_nx_info) {
+		rt = ip_v4_find_src(sock_net(sk), sk->sk_nx_info, &fl4);
+		if (IS_ERR(rt)) {
+			err = PTR_ERR(rt);
+			rt = NULL;
+			goto done;
 		}
-		err = ip_route_output_flow(sock_net(sk), &rt, &fl, sk, 1);
+		ip_rt_put(rt);
 	}
-	if (err)
-		goto done;
+
+		security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
+		rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
+		if (IS_ERR(rt)) {
+			err = PTR_ERR(rt);
+			rt = NULL;
+			goto done;
+		}
+	}
 
 	err = -EACCES;
 	if (rt->rt_flags & RTCF_BROADCAST && !sock_flag(sk, SOCK_BROADCAST))
@@ -629,7 +638,7 @@ do_confirm:
 static void raw_close(struct sock *sk, long timeout)
 {
 	/*
-	 * Raw sockets may have direct kernel refereneces. Kill them.
+	 * Raw sockets may have direct kernel references. Kill them.
 	 */
 	ip_ra_control(sk, 0, NULL);
 
@@ -986,10 +995,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
 
 	seq_printf(seq, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p %d\n",
-		i,
-		nx_map_sock_lback(current_nx_info(), src), srcp,
-		nx_map_sock_lback(current_nx_info(), dest), destp,
-		sp->sk_state,
+		i, src, srcp, dest, destp, sp->sk_state,
 		sk_wmem_alloc_get(sp),
 		sk_rmem_alloc_get(sp),
 		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),

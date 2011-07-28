@@ -283,7 +283,7 @@ void vx_adjust_timespec(struct timespec *ts)
 	}
 }
 
-int vx_settimeofday(struct timespec *ts)
+int vx_settimeofday(const struct timespec *ts)
 {
 	struct timespec ats, delta;
 	struct vx_info *vxi;

@@ -44,18 +44,30 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 static const struct vcmd_space_mask_v1 space_mask_v0 = {
 	.mask = CLONE_FS |
 		CLONE_NEWNS |
+#ifdef	CONFIG_UTS_NS
 		CLONE_NEWUTS |
+#endif
+#ifdef	CONFIG_IPC_NS
 		CLONE_NEWIPC |
+#endif
+#ifdef	CONFIG_USER_NS
 		CLONE_NEWUSER |
+#endif
 		0
 };
 
 static const struct vcmd_space_mask_v1 space_mask = {
 	.mask = CLONE_FS |
 		CLONE_NEWNS |
+#ifdef	CONFIG_UTS_NS
 		CLONE_NEWUTS |
+#endif
+#ifdef	CONFIG_IPC_NS
 		CLONE_NEWIPC |
+#endif
+#ifdef	CONFIG_USER_NS
 		CLONE_NEWUSER |
+#endif
 #ifdef	CONFIG_PID_NS
 		CLONE_NEWPID |
 #endif
@@ -68,9 +80,15 @@ static const struct vcmd_space_mask_v1 space_mask = {
 static const struct vcmd_space_mask_v1 default_space_mask = {
 	.mask = CLONE_FS |
 		CLONE_NEWNS |
+#ifdef	CONFIG_UTS_NS
 		CLONE_NEWUTS |
+#endif
+#ifdef	CONFIG_IPC_NS
 		CLONE_NEWIPC |
+#endif
+#ifdef	CONFIG_USER_NS
 		CLONE_NEWUSER |
+#endif
 #ifdef	CONFIG_PID_NS
 //		CLONE_NEWPID |
 #endif
