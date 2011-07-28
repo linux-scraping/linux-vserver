@@ -62,6 +62,7 @@ extern int mem_cgroup_cache_charge(struct page *page, struct mm_struct *mm,
 					gfp_t gfp_mask);
 extern void mem_cgroup_add_lru_list(struct page *page, enum lru_list lru);
 extern void mem_cgroup_del_lru_list(struct page *page, enum lru_list lru);
+extern void mem_cgroup_rotate_reclaimable_page(struct page *page);
 extern void mem_cgroup_rotate_lru_list(struct page *page, enum lru_list lru);
 extern void mem_cgroup_del_lru(struct page *page);
 extern void mem_cgroup_move_lists(struct page *page,
@@ -103,7 +104,7 @@ extern struct cgroup_subsys_state *mem_cgroup_css(struct mem_cgroup *mem);
 
 extern int
 mem_cgroup_prepare_migration(struct page *page,
-	struct page *newpage, struct mem_cgroup **ptr);
+	struct page *newpage, struct mem_cgroup **ptr, gfp_t gfp_mask);
 extern void mem_cgroup_end_migration(struct mem_cgroup *mem,
 	struct page *oldpage, struct page *newpage, bool migration_ok);
 
@@ -157,6 +158,10 @@ u64 mem_cgroup_get_limit(struct mem_cgroup *mem);
 void mem_cgroup_split_huge_fixup(struct page *head, struct page *tail);
 #endif
 
+#ifdef CONFIG_DEBUG_VM
+bool mem_cgroup_bad_page_check(struct page *page);
+void mem_cgroup_print_bad_page(struct page *page);
+#endif
 #else /* CONFIG_CGROUP_MEM_RES_CTLR */
 struct mem_cgroup;
 
@@ -218,6 +223,11 @@ static inline void mem_cgroup_del_lru_list(struct page *page, int lru)
 	return ;
 }
 
+static inline void mem_cgroup_rotate_reclaimable_page(struct page *page)
+{
+	return ;
+}
+
 static inline void mem_cgroup_rotate_lru_list(struct page *page, int lru)
 {
 	return ;
@@ -256,7 +266,7 @@ static inline struct cgroup_subsys_state *mem_cgroup_css(struct mem_cgroup *mem)
 
 static inline int
 mem_cgroup_prepare_migration(struct page *page, struct page *newpage,
-	struct mem_cgroup **ptr)
+	struct mem_cgroup **ptr, gfp_t gfp_mask)
 {
 	return 0;
 }
@@ -352,6 +362,19 @@ static inline void mem_cgroup_split_huge_fixup(struct page *head,
 }
 
 #endif /* CONFIG_CGROUP_MEM_CONT */
+
+#if !defined(CONFIG_CGROUP_MEM_RES_CTLR) || !defined(CONFIG_DEBUG_VM)
+static inline bool
+mem_cgroup_bad_page_check(struct page *page)
+{
+	return false;
+}
+
+static inline void
+mem_cgroup_print_bad_page(struct page *page)
+{
+}
+#endif
 
 #endif /* _LINUX_MEMCONTROL_H */
 

@@ -81,7 +81,7 @@ static void __dealloc_dl_info(struct dl_info *dli)
 
 struct hlist_head dl_info_hash[DL_HASH_SIZE];
 
-static spinlock_t dl_info_hash_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(dl_info_hash_lock);
 
 
 static inline unsigned int __hashval(struct super_block *sb, tag_t tag)

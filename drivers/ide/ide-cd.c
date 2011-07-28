@@ -258,17 +258,10 @@ static int ide_cd_breathe(ide_drive_t *drive, struct request *rq)
 	if (time_after(jiffies, info->write_timeout))
 		return 0;
 	else {
-		struct request_queue *q = drive->queue;
-		unsigned long flags;
-
 		/*
-		 * take a breather relying on the unplug timer to kick us again
+		 * take a breather
 		 */
-
-		spin_lock_irqsave(q->queue_lock, flags);
-		blk_plug_device(q);
-		spin_unlock_irqrestore(q->queue_lock, flags);
-
+		blk_delay_queue(drive->queue, 1);
 		return 1;
 	}
 }
@@ -1514,8 +1507,6 @@ static int ide_cdrom_setup(ide_drive_t *drive)
 	blk_queue_dma_alignment(q, 31);
 	blk_queue_update_dma_pad(q, 15);
 
-	q->unplug_delay = max((1 * HZ) / 1000, 1);
-
 	drive->dev_flags |= IDE_DFLAG_MEDIA_CHANGED;
 	drive->atapi_flags = IDE_AFLAG_NO_EJECT | ide_cd_flags(id);
 
@@ -1782,7 +1773,8 @@ static int ide_cd_probe(ide_drive_t *drive)
 
 	g->minors = 1;
 	g->driverfs_dev = &drive->gendev;
-	g->flags = GENHD_FL_CD | GENHD_FL_REMOVABLE;
+	g->flags = GENHD_FL_CD | GENHD_FL_REMOVABLE |
+		   GENHD_FL_BLOCK_EVENTS_ON_EXCL_WRITE;
 	if (ide_cdrom_setup(drive)) {
 		put_device(&info->dev);
 		goto failed;
@@ -1790,8 +1782,7 @@ static int ide_cd_probe(ide_drive_t *drive)
 
 	ide_cd_read_toc(drive, &sense);
 	g->fops = &idecd_ops;
-	g->flags |= GENHD_FL_REMOVABLE | GENHD_FL_BLOCK_EVENTS_ON_EXCL_WRITE;
-	g->events = DISK_EVENT_MEDIA_CHANGE;
+	g->flags |= GENHD_FL_REMOVABLE;
 	add_disk(g);
 	return 0;
 

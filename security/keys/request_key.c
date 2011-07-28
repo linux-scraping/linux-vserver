@@ -470,7 +470,7 @@ static struct key *construct_key_and_link(struct key_type *type,
 	} else if (ret == -EINPROGRESS) {
 		ret = 0;
 	} else {
-		key = ERR_PTR(ret);
+		goto couldnt_alloc_key;
 	}
 
 	key_put(dest_keyring);
@@ -480,6 +480,7 @@ static struct key *construct_key_and_link(struct key_type *type,
 construction_failed:
 	key_negate_and_link(key, key_negative_timeout, NULL, NULL);
 	key_put(key);
+couldnt_alloc_key:
 	key_put(dest_keyring);
 	kleave(" = %d", ret);
 	return ERR_PTR(ret);
@@ -585,7 +586,7 @@ int wait_for_key_construction(struct key *key, bool intr)
 	if (ret < 0)
 		return ret;
 	if (test_bit(KEY_FLAG_NEGATIVE, &key->flags))
-		return -ENOKEY;
+		return key->type_data.reject_error;
 	return key_validate(key);
 }
 EXPORT_SYMBOL(wait_for_key_construction);

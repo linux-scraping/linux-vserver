@@ -472,7 +472,7 @@ static inline int zone_is_oom_locked(const struct zone *zone)
 #ifdef CONFIG_NUMA
 
 /*
- * The NUMA zonelists are doubled becausse we need zonelists that restrict the
+ * The NUMA zonelists are doubled because we need zonelists that restrict the
  * allocations to a single node for GFP_THISNODE.
  *
  * [0]	: Zonelist with fallback
@@ -651,6 +651,13 @@ typedef struct pglist_data {
 #define pgdat_page_nr(pgdat, pagenr)	pfn_to_page((pgdat)->node_start_pfn + (pagenr))
 #endif
 #define nid_page_nr(nid, pagenr) 	pgdat_page_nr(NODE_DATA(nid),(pagenr))
+
+#define node_start_pfn(nid)	(NODE_DATA(nid)->node_start_pfn)
+
+#define node_end_pfn(nid) ({\
+	pg_data_t *__pgdat = NODE_DATA(nid);\
+	__pgdat->node_start_pfn + __pgdat->node_spanned_pages;\
+})
 
 #include <linux/memory_hotplug.h>
 

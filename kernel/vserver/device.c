@@ -44,7 +44,7 @@ struct vs_mapping {
 
 static struct hlist_head dmap_main_hash[1 << DMAP_HASH_BITS];
 
-static spinlock_t dmap_main_hash_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(dmap_main_hash_lock);
 
 static struct vx_dmap_target dmap_defaults[2] = {
 	{ .flags = DATTR_OPEN },

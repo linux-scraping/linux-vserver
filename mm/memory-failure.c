@@ -52,6 +52,7 @@
 #include <linux/swapops.h>
 #include <linux/hugetlb.h>
 #include <linux/memory_hotplug.h>
+#include <linux/mm_inline.h>
 #include "internal.h"
 
 int sysctl_memory_failure_early_kill __read_mostly = 0;
@@ -208,7 +209,7 @@ static int kill_proc_ao(struct task_struct *t, unsigned long addr, int trapno,
 	 * Don't use force here, it's convenient if the signal
 	 * can be temporarily blocked.
 	 * This could cause a loop when the user sets SIGBUS
-	 * to SIG_IGN, but hopefully noone will do that?
+	 * to SIG_IGN, but hopefully no one will do that?
 	 */
 	ret = send_sig_info(SIGBUS, &si, t);  /* synchronous? */
 	if (ret < 0)
@@ -634,7 +635,7 @@ static int me_pagecache_dirty(struct page *p, unsigned long pfn)
 		 * when the page is reread or dropped.  If an
 		 * application assumes it will always get error on
 		 * fsync, but does other operations on the fd before
-		 * and the page is dropped inbetween then the error
+		 * and the page is dropped between then the error
 		 * will not be properly reported.
 		 *
 		 * This can already happen even without hwpoisoned
@@ -728,7 +729,7 @@ static int me_huge_page(struct page *p, unsigned long pfn)
  * The table matches them in order and calls the right handler.
  *
  * This is quite tricky because we can access page at any time
- * in its live cycle, so all accesses have to be extremly careful.
+ * in its live cycle, so all accesses have to be extremely careful.
  *
  * This is not complete. More states could be added.
  * For any missing state don't attempt recovery.
@@ -945,7 +946,7 @@ static int hwpoison_user_mappings(struct page *p, unsigned long pfn,
 		collect_procs(ppage, &tokill);
 
 	if (hpage != ppage)
-		lock_page_nosync(ppage);
+		lock_page(ppage);
 
 	ret = try_to_unmap(ppage, ttu);
 	if (ret != SWAP_SUCCESS)
@@ -1038,7 +1039,7 @@ int __memory_failure(unsigned long pfn, int trapno, int flags)
 			 * Check "just unpoisoned", "filter hit", and
 			 * "race with other subpage."
 			 */
-			lock_page_nosync(hpage);
+			lock_page(hpage);
 			if (!PageHWPoison(hpage)
 			    || (hwpoison_filter(p) && TestClearPageHWPoison(p))
 			    || (p != hpage && TestSetPageHWPoison(hpage))) {
@@ -1088,7 +1089,7 @@ int __memory_failure(unsigned long pfn, int trapno, int flags)
 	 * It's very difficult to mess with pages currently under IO
 	 * and in many cases impossible, so we just avoid it here.
 	 */
-	lock_page_nosync(hpage);
+	lock_page(hpage);
 
 	/*
 	 * unpoison always clear PG_hwpoison inside page lock
@@ -1130,7 +1131,7 @@ int __memory_failure(unsigned long pfn, int trapno, int flags)
 
 	/*
 	 * Now take care of user space mappings.
-	 * Abort on fail: __remove_from_page_cache() assumes unmapped page.
+	 * Abort on fail: __delete_from_page_cache() assumes unmapped page.
 	 */
 	if (hwpoison_user_mappings(p, pfn, trapno) != SWAP_SUCCESS) {
 		printk(KERN_ERR "MCE %#lx: cannot unmap page, give up\n", pfn);
@@ -1231,7 +1232,7 @@ int unpoison_memory(unsigned long pfn)
 		return 0;
 	}
 
-	lock_page_nosync(page);
+	lock_page(page);
 	/*
 	 * This test is racy because PG_hwpoison is set outside of page lock.
 	 * That's acceptable because that won't trigger kernel panic. Instead,
@@ -1463,7 +1464,8 @@ int soft_offline_page(struct page *page, int flags)
 	ret = isolate_lru_page(page);
 	if (!ret) {
 		LIST_HEAD(pagelist);
-
+		inc_zone_page_state(page, NR_ISOLATED_ANON +
+					    page_is_file_cache(page));
 		list_add(&page->lru, &pagelist);
 		ret = migrate_pages(&pagelist, new_page, MPOL_MF_MOVE_ALL,
 								0, true);
@@ -1487,35 +1489,3 @@ done:
 	/* keep elevated page count for bad page */
 	return ret;
 }
-
-/*
- * The caller must hold current->mm->mmap_sem in read mode.
- */
-int is_hwpoison_address(unsigned long addr)
-{
-	pgd_t *pgdp;
-	pud_t pud, *pudp;
-	pmd_t pmd, *pmdp;
-	pte_t pte, *ptep;
-	swp_entry_t entry;
-
-	pgdp = pgd_offset(current->mm, addr);
-	if (!pgd_present(*pgdp))
-		return 0;
-	pudp = pud_offset(pgdp, addr);
-	pud = *pudp;
-	if (!pud_present(pud) || pud_large(pud))
-		return 0;
-	pmdp = pmd_offset(pudp, addr);
-	pmd = *pmdp;
-	if (!pmd_present(pmd) || pmd_large(pmd))
-		return 0;
-	ptep = pte_offset_map(pmdp, addr);
-	pte = *ptep;
-	pte_unmap(ptep);
-	if (!is_swap_pte(pte))
-		return 0;
-	entry = pte_to_swp_entry(pte);
-	return is_hwpoison_entry(entry);
-}
-EXPORT_SYMBOL_GPL(is_hwpoison_address);

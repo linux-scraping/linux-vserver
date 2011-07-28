@@ -813,14 +813,64 @@ void xhci_copy_ep0_dequeue_into_input_ctx(struct xhci_hcd *xhci,
 	ep0_ctx->deq |= ep_ring->cycle_state;
 }
 
+/*
+ * The xHCI roothub may have ports of differing speeds in any order in the port
+ * status registers.  xhci->port_array provides an array of the port speed for
+ * each offset into the port status registers.
+ *
+ * The xHCI hardware wants to know the roothub port number that the USB device
+ * is attached to (or the roothub port its ancestor hub is attached to).  All we
+ * know is the index of that port under either the USB 2.0 or the USB 3.0
+ * roothub, but that doesn't give us the real index into the HW port status
+ * registers.  Scan through the xHCI roothub port array, looking for the Nth
+ * entry of the correct port speed.  Return the port number of that entry.
+ */
+static u32 xhci_find_real_port_number(struct xhci_hcd *xhci,
+		struct usb_device *udev)
+{
+	struct usb_device *top_dev;
+	unsigned int num_similar_speed_ports;
+	unsigned int faked_port_num;
+	int i;
+
+	for (top_dev = udev; top_dev->parent && top_dev->parent->parent;
+			top_dev = top_dev->parent)
+		/* Found device below root hub */;
+	faked_port_num = top_dev->portnum;
+	for (i = 0, num_similar_speed_ports = 0;
+			i < HCS_MAX_PORTS(xhci->hcs_params1); i++) {
+		u8 port_speed = xhci->port_array[i];
+
+		/*
+		 * Skip ports that don't have known speeds, or have duplicate
+		 * Extended Capabilities port speed entries.
+		 */
+		if (port_speed == 0 || port_speed == DUPLICATE_ENTRY)
+			continue;
+
+		/*
+		 * USB 3.0 ports are always under a USB 3.0 hub.  USB 2.0 and
+		 * 1.1 ports are under the USB 2.0 hub.  If the port speed
+		 * matches the device speed, it's a similar speed port.
+		 */
+		if ((port_speed == 0x03) == (udev->speed == USB_SPEED_SUPER))
+			num_similar_speed_ports++;
+		if (num_similar_speed_ports == faked_port_num)
+			/* Roothub ports are numbered from 1 to N */
+			return i+1;
+	}
+	return 0;
+}
+
 /* Setup an xHCI virtual device for a Set Address command */
 int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *udev)
 {
 	struct xhci_virt_device *dev;
 	struct xhci_ep_ctx	*ep0_ctx;
-	struct usb_device	*top_dev;
 	struct xhci_slot_ctx    *slot_ctx;
 	struct xhci_input_control_ctx *ctrl_ctx;
+	u32			port_num;
+	struct usb_device *top_dev;
 
 	dev = xhci->devs[udev->slot_id];
 	/* Slot ID 0 is reserved */
@@ -862,16 +912,20 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 		BUG();
 	}
 	/* Find the root hub port this device is under */
+	port_num = xhci_find_real_port_number(xhci, udev);
+	if (!port_num)
+		return -EINVAL;
+	slot_ctx->dev_info2 |= (u32) ROOT_HUB_PORT(port_num);
+	/* Set the port number in the virtual_device to the faked port number */
 	for (top_dev = udev; top_dev->parent && top_dev->parent->parent;
 			top_dev = top_dev->parent)
 		/* Found device below root hub */;
-	slot_ctx->dev_info2 |= (u32) ROOT_HUB_PORT(top_dev->portnum);
 	dev->port = top_dev->portnum;
-	xhci_dbg(xhci, "Set root hub portnum to %d\n", top_dev->portnum);
+	xhci_dbg(xhci, "Set root hub portnum to %d\n", port_num);
+	xhci_dbg(xhci, "Set fake root hub portnum to %d\n", dev->port);
 
-	/* Is this a LS/FS device under a HS hub? */
-	if ((udev->speed == USB_SPEED_LOW || udev->speed == USB_SPEED_FULL) &&
-			udev->tt) {
+	/* Is this a LS/FS device under an external HS hub? */
+	if (udev->tt && udev->tt->hub->parent) {
 		slot_ctx->tt_info = udev->tt->hub->slot_id;
 		slot_ctx->tt_info |= udev->ttport << 8;
 		if (udev->tt->multi)
@@ -932,9 +986,19 @@ static unsigned int xhci_parse_exponent_interval(struct usb_device *udev,
 	interval = clamp_val(ep->desc.bInterval, 1, 16) - 1;
 	if (interval != ep->desc.bInterval - 1)
 		dev_warn(&udev->dev,
-			 "ep %#x - rounding interval to %d microframes\n",
+			 "ep %#x - rounding interval to %d %sframes\n",
 			 ep->desc.bEndpointAddress,
-			 1 << interval);
+			 1 << interval,
+			 udev->speed == USB_SPEED_FULL ? "" : "micro");
+
+	if (udev->speed == USB_SPEED_FULL) {
+		/*
+		 * Full speed isoc endpoints specify interval in frames,
+		 * not microframes. We are using microframes everywhere,
+		 * so adjust accordingly.
+		 */
+		interval += 3;	/* 1 frame = 2^3 uframes */
+	}
 
 	return interval;
 }
@@ -968,7 +1032,7 @@ static unsigned int xhci_parse_frame_interval(struct usb_device *udev,
  * The NAK interval is one NAK per 1 to 255 microframes, or no NAKs if interval
  * is set to 0.
  */
-static inline unsigned int xhci_get_endpoint_interval(struct usb_device *udev,
+static unsigned int xhci_get_endpoint_interval(struct usb_device *udev,
 		struct usb_host_endpoint *ep)
 {
 	unsigned int interval = 0;
@@ -1020,7 +1084,7 @@ static inline unsigned int xhci_get_endpoint_interval(struct usb_device *udev,
  * transaction opportunities per microframe", but that goes in the Max Burst
  * endpoint context field.
  */
-static inline u32 xhci_get_endpoint_mult(struct usb_device *udev,
+static u32 xhci_get_endpoint_mult(struct usb_device *udev,
 		struct usb_host_endpoint *ep)
 {
 	if (udev->speed != USB_SPEED_SUPER ||
@@ -1029,7 +1093,7 @@ static inline u32 xhci_get_endpoint_mult(struct usb_device *udev,
 	return ep->ss_ep_comp.bmAttributes;
 }
 
-static inline u32 xhci_get_endpoint_type(struct usb_device *udev,
+static u32 xhci_get_endpoint_type(struct usb_device *udev,
 		struct usb_host_endpoint *ep)
 {
 	int in;
@@ -1063,7 +1127,7 @@ static inline u32 xhci_get_endpoint_type(struct usb_device *udev,
  * Basically, this is the maxpacket size, multiplied by the burst size
  * and mult size.
  */
-static inline u32 xhci_get_max_esit_payload(struct xhci_hcd *xhci,
+static u32 xhci_get_max_esit_payload(struct xhci_hcd *xhci,
 		struct usb_device *udev,
 		struct usb_host_endpoint *ep)
 {
@@ -1485,7 +1549,8 @@ void xhci_mem_cleanup(struct xhci_hcd *xhci)
 
 	xhci->page_size = 0;
 	xhci->page_shift = 0;
-	xhci->bus_suspended = 0;
+	xhci->bus_state[0].bus_suspended = 0;
+	xhci->bus_state[1].bus_suspended = 0;
 }
 
 static int xhci_test_trb_in_td(struct xhci_hcd *xhci,
@@ -1705,12 +1770,12 @@ static void xhci_add_in_port(struct xhci_hcd *xhci, unsigned int num_ports,
 			 * found a similar duplicate.
 			 */
 			if (xhci->port_array[i] != major_revision &&
-				xhci->port_array[i] != (u8) -1) {
+				xhci->port_array[i] != DUPLICATE_ENTRY) {
 				if (xhci->port_array[i] == 0x03)
 					xhci->num_usb3_ports--;
 				else
 					xhci->num_usb2_ports--;
-				xhci->port_array[i] = (u8) -1;
+				xhci->port_array[i] = DUPLICATE_ENTRY;
 			}
 			/* FIXME: Should we disable the port? */
 			continue;
@@ -1781,6 +1846,20 @@ static int xhci_setup_port_arrays(struct xhci_hcd *xhci, gfp_t flags)
 	}
 	xhci_dbg(xhci, "Found %u USB 2.0 ports and %u USB 3.0 ports.\n",
 			xhci->num_usb2_ports, xhci->num_usb3_ports);
+
+	/* Place limits on the number of roothub ports so that the hub
+	 * descriptors aren't longer than the USB core will allocate.
+	 */
+	if (xhci->num_usb3_ports > 15) {
+		xhci_dbg(xhci, "Limiting USB 3.0 roothub ports to 15.\n");
+		xhci->num_usb3_ports = 15;
+	}
+	if (xhci->num_usb2_ports > USB_MAXCHILDREN) {
+		xhci_dbg(xhci, "Limiting USB 2.0 roothub ports to %u.\n",
+				USB_MAXCHILDREN);
+		xhci->num_usb2_ports = USB_MAXCHILDREN;
+	}
+
 	/*
 	 * Note we could have all USB 3.0 ports, or all USB 2.0 ports.
 	 * Not sure how the USB core will handle a hub with no ports...
@@ -1795,7 +1874,7 @@ static int xhci_setup_port_arrays(struct xhci_hcd *xhci, gfp_t flags)
 		for (i = 0; i < num_ports; i++) {
 			if (xhci->port_array[i] == 0x03 ||
 					xhci->port_array[i] == 0 ||
-					xhci->port_array[i] == -1)
+					xhci->port_array[i] == DUPLICATE_ENTRY)
 				continue;
 
 			xhci->usb2_ports[port_index] =
@@ -1805,6 +1884,8 @@ static int xhci_setup_port_arrays(struct xhci_hcd *xhci, gfp_t flags)
 					"addr = %p\n", i,
 					xhci->usb2_ports[port_index]);
 			port_index++;
+			if (port_index == xhci->num_usb2_ports)
+				break;
 		}
 	}
 	if (xhci->num_usb3_ports) {
@@ -1823,6 +1904,8 @@ static int xhci_setup_port_arrays(struct xhci_hcd *xhci, gfp_t flags)
 						"addr = %p\n", i,
 						xhci->usb3_ports[port_index]);
 				port_index++;
+				if (port_index == xhci->num_usb3_ports)
+					break;
 			}
 	}
 	return 0;
@@ -2004,8 +2087,10 @@ int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
 	init_completion(&xhci->addr_dev);
 	for (i = 0; i < MAX_HC_SLOTS; ++i)
 		xhci->devs[i] = NULL;
-	for (i = 0; i < MAX_HC_PORTS; ++i)
-		xhci->resume_done[i] = 0;
+	for (i = 0; i < USB_MAXCHILDREN; ++i) {
+		xhci->bus_state[0].resume_done[i] = 0;
+		xhci->bus_state[1].resume_done[i] = 0;
+	}
 
 	if (scratchpad_alloc(xhci, flags))
 		goto fail;

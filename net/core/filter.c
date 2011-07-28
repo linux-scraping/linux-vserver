@@ -38,6 +38,7 @@
 #include <asm/unaligned.h>
 #include <linux/filter.h>
 #include <linux/reciprocal_div.h>
+#include <linux/ratelimit.h>
 
 enum {
 	BPF_S_RET_K = 1,
@@ -142,14 +143,14 @@ int sk_filter(struct sock *sk, struct sk_buff *skb)
 	if (err)
 		return err;
 
-	rcu_read_lock_bh();
-	filter = rcu_dereference_bh(sk->sk_filter);
+	rcu_read_lock();
+	filter = rcu_dereference(sk->sk_filter);
 	if (filter) {
 		unsigned int pkt_len = sk_run_filter(skb, filter->insns);
 
 		err = pkt_len ? pskb_trim(skb, pkt_len) : -EPERM;
 	}
-	rcu_read_unlock_bh();
+	rcu_read_unlock();
 
 	return err;
 }
@@ -409,7 +410,9 @@ load_b:
 			continue;
 		}
 		default:
-			WARN_ON(1);
+			WARN_RATELIMIT(1, "Unknown code:%u jt:%u tf:%u k:%u\n",
+				       fentry->code, fentry->jt,
+				       fentry->jf, fentry->k);
 			return 0;
 		}
 	}
@@ -425,7 +428,7 @@ EXPORT_SYMBOL(sk_run_filter);
  * As we dont want to clear mem[] array for each packet going through
  * sk_run_filter(), we check that filter loaded by user never try to read
  * a cell if not previously written, and we check all branches to be sure
- * a malicious user doesnt try to abuse us.
+ * a malicious user doesn't try to abuse us.
  */
 static int check_load_and_stores(struct sock_filter *filter, int flen)
 {

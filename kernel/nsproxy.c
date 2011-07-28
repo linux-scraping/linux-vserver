@@ -59,14 +59,13 @@ static inline struct nsproxy *create_nsproxy(void)
  * leave it to the caller to do proper locking and attach it to task.
  */
 static struct nsproxy *unshare_namespaces(unsigned long flags,
-			struct nsproxy *orig, struct fs_struct *new_fs)
+			struct nsproxy *orig,
+			struct fs_struct *new_fs,
+			struct user_namespace *new_user,
+			struct pid_namespace *new_pid)
 {
 	struct nsproxy *new_nsp;
 	int err;
-
-	vxdprintk(VXD_CBIT(space, 4),
-		"unshare_namespaces(0x%08lx,%p,%p)",
-		flags, orig, new_fs);
 
 	new_nsp = create_nsproxy();
 	if (!new_nsp)
@@ -78,30 +77,23 @@ static struct nsproxy *unshare_namespaces(unsigned long flags,
 		goto out_ns;
 	}
 
-	new_nsp->uts_ns = copy_utsname(flags, orig->uts_ns);
+	new_nsp->uts_ns = copy_utsname(flags, orig->uts_ns, new_user);
 	if (IS_ERR(new_nsp->uts_ns)) {
 		err = PTR_ERR(new_nsp->uts_ns);
 		goto out_uts;
 	}
 
-	new_nsp->ipc_ns = copy_ipcs(flags, orig->ipc_ns);
+	new_nsp->ipc_ns = copy_ipcs(flags, orig->ipc_ns, new_user);
 	if (IS_ERR(new_nsp->ipc_ns)) {
 		err = PTR_ERR(new_nsp->ipc_ns);
 		goto out_ipc;
 	}
 
-	new_nsp->pid_ns = copy_pid_ns(flags, orig->pid_ns);
+	new_nsp->pid_ns = copy_pid_ns(flags, new_pid);
 	if (IS_ERR(new_nsp->pid_ns)) {
 		err = PTR_ERR(new_nsp->pid_ns);
 		goto out_pid;
 	}
-
-	/* disabled now?
-	new_nsp->user_ns = copy_user_ns(flags, orig->user_ns);
-	if (IS_ERR(new_nsp->user_ns)) {
-		err = PTR_ERR(new_nsp->user_ns);
-		goto out_user;
-	} */
 
 	new_nsp->net_ns = copy_net_ns(flags, orig->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
@@ -128,10 +120,12 @@ out_ns:
 	return ERR_PTR(err);
 }
 
-static struct nsproxy *create_new_namespaces(int flags, struct task_struct *tsk,
-			struct fs_struct *new_fs)
+static struct nsproxy *create_new_namespaces(unsigned long flags,
+			struct task_struct *tsk, struct fs_struct *new_fs)
 {
-	return unshare_namespaces(flags, tsk->nsproxy, new_fs);
+	return unshare_namespaces(flags, tsk->nsproxy,
+		new_fs, task_cred_xxx(tsk, user)->user_ns,
+		task_active_pid_ns(tsk));
 }
 
 /*
