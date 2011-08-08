@@ -567,7 +567,7 @@ static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 			vx_sock_fail(sock->sk, size);
 	}
 	vxdprintk(VXD_CBIT(net, 7),
-		"__sock_sendmsg: %p[%p,%p,%p;%d/%d]:%d/%d",
+		"__sock_sendmsg: %p[%p,%p,%p;%d/%d]:%d/%zu",
 		sock, sock->sk,
 		(sock->sk)?sock->sk->sk_nx_info:0,
 		(sock->sk)?sock->sk->sk_vx_info:0,

@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Syscall Switch
  *
- *  Copyright (C) 2003-2007  Herbert Pötzl
+ *  Copyright (C) 2003-2011  Herbert Pötzl
  *
  *  V0.01  syscall switch
  *  V0.02  added signal to context
@@ -16,6 +16,7 @@
  *  V0.09  added tag commands
  *  V0.10  added oom bias
  *  V0.11  added device commands
+ *  V0.12  added warn mask
  *
  */
 
@@ -115,6 +116,11 @@ long do_vcmd(uint32_t cmd, uint32_t id,
 	case VCMD_get_umask:
 		return vc_get_umask(vxi, data);
 
+	case VCMD_set_wmask:
+		return vc_set_wmask(vxi, data);
+
+	case VCMD_get_wmask:
+		return vc_get_wmask(vxi, data);
 #ifdef	CONFIG_IA32_EMULATION
 	case VCMD_get_rlimit:
 		return __COMPAT(vc_get_rlimit, vxi, data, compat);
@@ -332,6 +338,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(get_ccaps,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_cflags,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_umask,	 3, VCA_VXI,	VCF_INFO);
+	__VCMD(get_wmask,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_badness,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_vhi_name,	 3, VCA_VXI,	VCF_INFO);
 	__VCMD(get_rlimit,	 3, VCA_VXI,	VCF_INFO);
@@ -378,6 +385,7 @@ long do_vserver(uint32_t cmd, uint32_t id, void __user *data, int compat)
 	__VCMD(set_bcaps,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_cflags,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_umask,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
+	__VCMD(set_wmask,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 	__VCMD(set_badness,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);
 
 	__VCMD(set_vhi_name,	 7, VCA_VXI,	VCF_ARES | VCF_SETUP);

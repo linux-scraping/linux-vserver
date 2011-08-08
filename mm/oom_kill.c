@@ -325,7 +325,7 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 	do_each_thread(g, p) {
 		unsigned int points;
 
-		if (!p->mm)
+		if (p->exit_state)
 			continue;
 		if (oom_unkillable_task(p, mem, nodemask))
 			continue;
@@ -341,6 +341,8 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 		 */
 		if (test_tsk_thread_flag(p, TIF_MEMDIE))
 			return ERR_PTR(-1UL);
+		if (!p->mm)
+			continue;
 
 		if (p->flags & PF_EXITING) {
 			/*

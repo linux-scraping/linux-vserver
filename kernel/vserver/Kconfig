@@ -226,3 +226,7 @@ config	VSERVER_SECURITY
 	default y
 	select SECURITY_CAPABILITIES
 
+config	VSERVER_DISABLED
+	bool
+	default n
+

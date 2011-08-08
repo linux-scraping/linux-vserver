@@ -3,7 +3,7 @@
  *
  *  Virtual Context Support
  *
- *  Copyright (C) 2003-2007  Herbert Pötzl
+ *  Copyright (C) 2003-2011  Herbert Pötzl
  *
  *  V0.01  basic structure
  *  V0.02  adaptation vs1.3.0
@@ -13,6 +13,7 @@
  *  V0.06  inode validation
  *  V0.07  generic rewrite vid
  *  V0.08  remove inode type
+ *  V0.09  added u/wmask info
  *
  */
 
@@ -133,9 +134,11 @@ int proc_vxi_status(struct vx_info *vxi, char *buffer)
 	buffer += sprintf(buffer,
 		"CCaps:\t%016llx\n"
 		"Umask:\t%16llx\n"
+		"Wmask:\t%16llx\n"
 		"Spaces:\t%08lx %08lx\n",
 		(unsigned long long)vxi->vx_ccaps,
 		(unsigned long long)vxi->vx_umask,
+		(unsigned long long)vxi->vx_wmask,
 		vxi->space[0].vx_nsmask, vxi->space[1].vx_nsmask);
 	return buffer - orig;
 }
