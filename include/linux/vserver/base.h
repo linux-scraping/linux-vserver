@@ -161,6 +161,11 @@ enum {
 	!((f) & ~vx_current_umask())))
 
 
+#define __vx_wmask(v)		((v)->vx_wmask)
+
+#define vx_current_wmask()	__vx_wmask(current_vx_info())
+
+
 #define __vx_state(v)	((v) ? ((v)->vx_state) : 0)
 
 #define vx_info_state(v, m)	(__vx_state(v) & (m))

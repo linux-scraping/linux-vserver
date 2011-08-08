@@ -3,7 +3,7 @@
  *
  *  Virtual Server: Context Support
  *
- *  Copyright (C) 2003-2010  Herbert Pötzl
+ *  Copyright (C) 2003-2011  Herbert Pötzl
  *
  *  V0.01  context helper
  *  V0.02  vx_ctx_kill syscall command
@@ -23,6 +23,7 @@
  *  V0.16  have __create claim() the vxi
  *  V0.17  removed older and legacy stuff
  *  V0.18  added user credentials
+ *  V0.19  added warn mask
  *
  */
 
@@ -118,6 +119,7 @@ static struct vx_info *__alloc_vx_info(xid_t xid)
 	new->vx_bcaps = CAP_FULL_SET;	// maybe ~CAP_SETPCAP
 	new->vx_ccaps = 0;
 	new->vx_umask = 0;
+	new->vx_wmask = 0;
 
 	new->reboot_cmd = 0;
 	new->exit_code = 0;
@@ -1048,6 +1050,31 @@ int vc_set_umask(struct vx_info *vxi, void __user *data)
 
 	vxi->vx_umask = vs_mask_flags(vxi->vx_umask,
 		vc_data.umask, vc_data.mask);
+	return 0;
+}
+
+
+int vc_get_wmask(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_wmask vc_data;
+
+	vc_data.wmask = vxi->vx_wmask;
+	vc_data.mask = ~0ULL;
+
+	if (copy_to_user(data, &vc_data, sizeof(vc_data)))
+		return -EFAULT;
+	return 0;
+}
+
+int vc_set_wmask(struct vx_info *vxi, void __user *data)
+{
+	struct vcmd_wmask vc_data;
+
+	if (copy_from_user(&vc_data, data, sizeof(vc_data)))
+		return -EFAULT;
+
+	vxi->vx_wmask = vs_mask_flags(vxi->vx_wmask,
+		vc_data.wmask, vc_data.mask);
 	return 0;
 }
 
