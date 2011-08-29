@@ -48,6 +48,8 @@ static inline uint64_t __nxf_init_set(void) {
 
 #define NXC_RAW_ICMP		0x00000100
 
+#define NXC_MULTICAST		0x00001000
+
 
 /* address types */
 

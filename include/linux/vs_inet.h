@@ -253,7 +253,9 @@ int v4_map_sock_addr(struct inet_sock *inet, struct sockaddr_in *addr,
 		} else if (saddr == IPI_LOOPBACK) {
 			if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0))
 				baddr = nxi->v4_lback.s_addr;
-		} else {	/* normal address bind */
+		} else if (!ipv4_is_multicast(saddr) ||
+			!nx_info_ncaps(nxi, NXC_MULTICAST)) {
+			/* normal address bind */
 			if (!v4_addr_in_nx_info(nxi, saddr, NXA_MASK_BIND))
 				return -EADDRNOTAVAIL;
 		}
