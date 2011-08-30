@@ -146,7 +146,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 
 	/* FIXME: handle lback only case */
 	if (!NX_IPV4(nxi))
-		return ERR_PTR(EPERM);
+		return ERR_PTR(-EPERM);
 
 	vxdprintk(VXD_CBIT(net, 4),
 		"ip_v4_find_src(%p[#%u]) " NIPQUAD_FMT " -> " NIPQUAD_FMT,
@@ -206,7 +206,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 
 	} else {
 		if (!v4_addr_in_nx_info(nxi, fl4->saddr, NXA_MASK_BIND))
-			return ERR_PTR(EPERM);
+			return ERR_PTR(-EPERM);
 	}
 
 	if (nx_info_flags(nxi, NXF_LBACK_REMAP, 0)) {
@@ -216,7 +216,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 			fl4->saddr = nxi->v4_lback.s_addr;
 	} else if (ipv4_is_loopback(fl4->daddr) &&
 		!nx_info_flags(nxi, NXF_LBACK_ALLOW, 0))
-		return ERR_PTR(EPERM);
+		return ERR_PTR(-EPERM);
 
 	return NULL;
 }
