@@ -791,6 +791,7 @@ config IPC_NS
 config USER_NS
 	bool "User namespace (EXPERIMENTAL)"
 	depends on EXPERIMENTAL
+	depends on VSERVER_DISABLED
 	default n
 	help
 	  This allows containers, i.e. vservers, to use user namespaces
