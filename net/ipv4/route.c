@@ -2525,7 +2525,7 @@ static struct rtable *ip_route_output_slow(struct net *net, struct flowi4 *fl4)
 
 
 	if (fl4->flowi4_oif) {
-		dev_out = dev_get_by_index_rcu(net, fl4->flowi4_oif);
+		dev_out = dev_get_by_index_real_rcu(net, fl4->flowi4_oif);
 		rth = ERR_PTR(-ENODEV);
 		if (dev_out == NULL)
 			goto out;

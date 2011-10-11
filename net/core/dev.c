@@ -708,17 +708,26 @@ EXPORT_SYMBOL(__dev_get_by_index);
  *	about locking. The caller must hold RCU lock.
  */
 
-struct net_device *dev_get_by_index_rcu(struct net *net, int ifindex)
+struct net_device *dev_get_by_index_real_rcu(struct net *net, int ifindex)
 {
 	struct hlist_node *p;
 	struct net_device *dev;
 	struct hlist_head *head = dev_index_hash(net, ifindex);
 
 	hlist_for_each_entry_rcu(dev, p, head, index_hlist)
-		if ((dev->ifindex == ifindex) &&
-		    nx_dev_visible(current_nx_info(), dev))
+		if (dev->ifindex == ifindex)
 			return dev;
 
+	return NULL;
+}
+EXPORT_SYMBOL(dev_get_by_index_real_rcu);
+
+struct net_device *dev_get_by_index_rcu(struct net *net, int ifindex)
+{
+	struct net_device *dev = dev_get_by_index_real_rcu(net, ifindex);
+
+	if (nx_dev_visible(current_nx_info(), dev))
+		return dev;
 	return NULL;
 }
 EXPORT_SYMBOL(dev_get_by_index_rcu);

@@ -304,14 +304,20 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
 	memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
 
+	/* memory unlimited */
 	if (res_limit == RESOURCE_MAX)
 		return;
 
 	swap_limit = memsw_limit - res_limit;
+	/* we have a swap limit? */
 	if (memsw_limit != RESOURCE_MAX)
 		val->totalswap = swap_limit >> PAGE_SHIFT;
 
-	swap_usage = memsw_usage - res_usage;
+	/* calculate swap part */
+	swap_usage = (memsw_usage > res_usage) ?
+		memsw_usage - res_usage : 0;
+
+	/* total shown minus usage gives free swap */
 	val->freeswap = (swap_usage < swap_limit) ?
 		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
 #else	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */

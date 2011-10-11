@@ -639,7 +639,7 @@ int datagram_send_ctl(struct net *net,
 
 			rcu_read_lock();
 			if (fl6->flowi6_oif) {
-				dev = dev_get_by_index_rcu(net, fl6->flowi6_oif);
+				dev = dev_get_by_index_real_rcu(net, fl6->flowi6_oif);
 				if (!dev) {
 					rcu_read_unlock();
 					return -ENODEV;
