@@ -2426,8 +2426,8 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i, int *len)
 	struct tcp_sock *tp = tcp_sk(sk);
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
-	__be32 dest = inet->inet_daddr;
-	__be32 src = inet->inet_rcv_saddr;
+	__be32 dest = nx_map_sock_lback(current_nx_info(), inet->inet_daddr);
+	__be32 src = nx_map_sock_lback(current_nx_info(), inet->inet_rcv_saddr);
 	__u16 destp = ntohs(inet->inet_dport);
 	__u16 srcp = ntohs(inet->inet_sport);
 	int rx_queue;
@@ -2484,8 +2484,8 @@ static void get_timewait4_sock(struct inet_timewait_sock *tw,
 	if (ttd < 0)
 		ttd = 0;
 
-	dest  = tw->tw_daddr;
-	src   = tw->tw_rcv_saddr;
+	dest  = nx_map_sock_lback(current_nx_info(), tw->tw_daddr);
+	src   = nx_map_sock_lback(current_nx_info(), tw->tw_rcv_saddr);
 	destp = ntohs(tw->tw_dport);
 	srcp  = ntohs(tw->tw_sport);
 

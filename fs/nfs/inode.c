@@ -1333,9 +1333,9 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 				| NFS_INO_REVAL_PAGECACHE
 				| NFS_INO_REVAL_FORCED);
 
-	uid = INOTAG_UID(DX_TAG(inode), fattr->uid, fattr->gid);
-	gid = INOTAG_GID(DX_TAG(inode), fattr->uid, fattr->gid);
-	tag = INOTAG_TAG(DX_TAG(inode), fattr->uid, fattr->gid, 0);
+	uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
+	gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
+	tag = inode->i_tag;
 
 	if (fattr->valid & NFS_ATTR_FATTR_ATIME)
 		memcpy(&inode->i_atime, &fattr->atime, sizeof(inode->i_atime));
@@ -1378,9 +1378,9 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 				| NFS_INO_INVALID_ACL
 				| NFS_INO_REVAL_FORCED);
 
-	inode->i_uid = uid;
-	inode->i_gid = gid;
-	inode->i_tag = tag;
+	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
+	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid, tag);
 
 	if (fattr->valid & NFS_ATTR_FATTR_NLINK) {
 		if (inode->i_nlink != fattr->nlink) {

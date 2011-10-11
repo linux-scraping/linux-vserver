@@ -2307,6 +2307,16 @@ ok:
 	}
 common:
 	error = may_open(&nd->path, acc_mode, open_flag);
+#ifdef	CONFIG_VSERVER_COWBL
+	if (error == -EMLINK) {
+		struct dentry *dentry;
+		dentry = cow_break_link(pathname);
+		if (IS_ERR(dentry))
+			error = PTR_ERR(dentry);
+		else
+			dput(dentry);
+	}
+#endif
 	if (error)
 		goto exit;
 	filp = nameidata_to_filp(nd);
@@ -2349,6 +2359,7 @@ static struct file *path_openat(int dfd, const char *pathname,
 	struct path path;
 	int error;
 
+restart:
 	filp = get_empty_filp();
 	if (!filp)
 		return ERR_PTR(-ENFILE);
@@ -2386,6 +2397,17 @@ static struct file *path_openat(int dfd, const char *pathname,
 			filp = do_last(nd, &path, op, pathname);
 		put_link(nd, &link, cookie);
 	}
+
+#ifdef	CONFIG_VSERVER_COWBL
+	if (filp == ERR_PTR(-EMLINK)) {
+		if (nd->root.mnt && !(nd->flags & LOOKUP_ROOT))
+			path_put(&nd->root);
+		if (base)
+			fput(base);
+		release_open_intent(nd);
+		goto restart;
+	}
+#endif
 out:
 	if (nd->root.mnt && !(nd->flags & LOOKUP_ROOT))
 		path_put(&nd->root);
@@ -3355,8 +3377,6 @@ int vfs_follow_link(struct nameidata *nd, const char *link)
 
 
 #ifdef	CONFIG_VSERVER_COWBL
-
-#include <linux/file.h>
 
 static inline
 long do_cow_splice(struct file *in, struct file *out, size_t len)
