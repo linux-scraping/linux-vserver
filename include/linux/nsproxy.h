@@ -70,6 +70,7 @@ void switch_task_namespaces(struct task_struct *tsk, struct nsproxy *new);
 void free_nsproxy(struct nsproxy *ns);
 int unshare_nsproxy_namespaces(unsigned long, struct nsproxy **,
 	struct fs_struct *);
+int __init nsproxy_cache_init(void);
 
 #define	get_nsproxy(n)	__get_nsproxy(n, __FILE__, __LINE__)
 

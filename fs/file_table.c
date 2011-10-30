@@ -27,7 +27,7 @@
 #include <linux/vs_limit.h>
 #include <linux/vs_context.h>
 
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 
 #include "internal.h"
 

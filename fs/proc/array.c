@@ -177,7 +177,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 
 	tpid = 0;
 	if (pid_alive(p)) {
-		struct task_struct *tracer = tracehook_tracer_task(p);
+		struct task_struct *tracer = ptrace_parent(p);
 		if (tracer)
 			tpid = task_pid_nr_ns(tracer, ns);
 	}

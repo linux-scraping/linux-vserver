@@ -2503,4 +2503,5 @@ const struct inode_operations ocfs2_dir_iops = {
 	.listxattr	= ocfs2_listxattr,
 	.removexattr	= generic_removexattr,
 	.fiemap         = ocfs2_fiemap,
+	.get_acl	= ocfs2_iop_get_acl,
 };

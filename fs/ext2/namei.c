@@ -68,17 +68,13 @@ static struct dentry *ext2_lookup(struct inode * dir, struct dentry *dentry, str
 	inode = NULL;
 	if (ino) {
 		inode = ext2_iget(dir->i_sb, ino);
-		if (IS_ERR(inode)) {
-			if (PTR_ERR(inode) == -ESTALE) {
-				ext2_error(dir->i_sb, __func__,
-						"deleted inode referenced: %lu",
-						(unsigned long) ino);
-				return ERR_PTR(-EIO);
-			} else {
-				return ERR_CAST(inode);
-		dx_propagate_tag(nd, inode);
-			}
+		if (inode == ERR_PTR(-ESTALE)) {
+			ext2_error(dir->i_sb, __func__,
+					"deleted inode referenced: %lu",
+					(unsigned long) ino);
+			return ERR_PTR(-EIO);
 		}
+		dx_propagate_tag(nd, inode);
 	}
 	return d_splice_alias(inode, dentry);
 }
@@ -414,8 +410,8 @@ const struct inode_operations ext2_dir_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.setattr	= ext2_setattr,
-	.check_acl	= ext2_check_acl,
 	.sync_flags	= ext2_sync_flags,
+	.get_acl	= ext2_get_acl,
 };
 
 const struct inode_operations ext2_special_inode_operations = {
@@ -426,5 +422,5 @@ const struct inode_operations ext2_special_inode_operations = {
 	.removexattr	= generic_removexattr,
 #endif
 	.setattr	= ext2_setattr,
-	.check_acl	= ext2_check_acl,
+	.get_acl	= ext2_get_acl,
 };
