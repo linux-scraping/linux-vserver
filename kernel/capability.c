@@ -378,9 +378,6 @@ bool ns_capable(struct user_namespace *ns, int cap)
 		BUG();
 	}
 
-	if (vs_check_bit(VXC_CAP_MASK, cap) && !vx_mcaps(1L << cap))
-		return true;
-
 	if (security_capable(ns, current_cred(), cap) == 0) {
 		current->flags |= PF_SUPERPRIV;
 		return true;

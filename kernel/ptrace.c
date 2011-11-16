@@ -146,9 +146,15 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	 * or halting the specified task is impossible.
 	 */
 	int dumpable = 0;
+
 	/* Don't let security modules deny introspection */
 	if (task == current)
 		return 0;
+
+	vxdprintk(VXD_CBIT(perm, 8),
+		"__ptrace_may_access(%p[#%d,%d,%d], %d)",
+		task, task->xid, task->pid, task->tgid, mode);
+
 	rcu_read_lock();
 	tcred = __task_cred(task);
 	if (cred->user->user_ns == tcred->user->user_ns &&
@@ -162,6 +168,8 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	if (ns_capable(tcred->user->user_ns, CAP_SYS_PTRACE))
 		goto ok;
 	rcu_read_unlock();
+	vxdprintk(VXD_CBIT(perm, 8),
+		"__ptrace_may_access(%p) cred/cap failed", task);
 	return -EPERM;
 ok:
 	rcu_read_unlock();
@@ -170,11 +178,24 @@ ok:
 		dumpable = get_dumpable(task->mm);
 	if (!dumpable && !task_ns_capable(task, CAP_SYS_PTRACE))
 		return -EPERM;
+	vxdprintk(VXD_CBIT(perm, 8),
+		"__ptrace_may_access(%p) cap/dump ok", task);
+
 	if (!vx_check(task->xid, VS_ADMIN_P|VS_WATCH_P|VS_IDENT))
 		return -EPERM;
+	vxdprintk(VXD_CBIT(perm, 8),
+		"__ptrace_may_access(%p) check ok", task);
+
+	printk("%d,%d %d,%d\n",
+		vx_check(task->xid, VS_IDENT),
+		task_vx_flags(task, VXF_STATE_ADMIN, 0),
+		current->xid, task->xid);
+
 	if (!vx_check(task->xid, VS_IDENT) &&
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
 		return -EACCES;
+	vxdprintk(VXD_CBIT(perm, 8),
+		"__ptrace_may_access(%p) admin ok", task);
 
 	return security_ptrace_access_check(task, mode);
 }

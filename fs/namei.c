@@ -144,7 +144,7 @@ static int do_getname(const char __user *filename, char *page)
 	return retval;
 }
 
-static char *getname_flags(const char __user * filename, int flags)
+static char *getname_flags(const char __user *filename, int flags, int *empty)
 {
 	char *tmp, *result;
 
@@ -155,6 +155,8 @@ static char *getname_flags(const char __user * filename, int flags)
 
 		result = tmp;
 		if (retval < 0) {
+			if (retval == -ENOENT && empty)
+				*empty = 1;
 			if (retval != -ENOENT || !(flags & LOOKUP_EMPTY)) {
 				__putname(tmp);
 				result = ERR_PTR(retval);
@@ -167,7 +169,7 @@ static char *getname_flags(const char __user * filename, int flags)
 
 char *getname(const char __user * filename)
 {
-	return getname_flags(filename, 0);
+	return getname_flags(filename, 0, 0);
 }
 
 #ifdef CONFIG_AUDITSYSCALL
@@ -222,11 +224,16 @@ static int __dx_permission(const struct inode *inode, int mask)
 			if (!pid)
 				goto out;
 
+			rcu_read_lock();
 			tsk = pid_task(pid, PIDTYPE_PID);
 			vxdprintk(VXD_CBIT(tag, 0), "accessing %p[#%u]",
 				  tsk, (tsk ? vx_task_xid(tsk) : 0));
-			if (tsk && vx_check(vx_task_xid(tsk), VS_IDENT | VS_WATCH_P))
+			if (tsk &&
+				vx_check(vx_task_xid(tsk), VS_IDENT | VS_WATCH_P)) {
+				rcu_read_unlock();
 				return 0;
+			}
+			rcu_read_unlock();
 		}
 		else {
 			/* FIXME: Should we block some entries here? */
@@ -872,17 +879,20 @@ static int follow_automount(struct path *path, unsigned flags,
 	if ((flags & LOOKUP_NO_AUTOMOUNT) && !(flags & LOOKUP_CONTINUE))
 		return -EISDIR; /* we actually want to stop here */
 
-	/* We want to mount if someone is trying to open/create a file of any
-	 * type under the mountpoint, wants to traverse through the mountpoint
-	 * or wants to open the mounted directory.
+	/* We don't want to mount if someone's just doing a stat -
+	 * unless they're stat'ing a directory and appended a '/' to
+	 * the name.
 	 *
-	 * We don't want to mount if someone's just doing a stat and they've
-	 * set AT_SYMLINK_NOFOLLOW - unless they're stat'ing a directory and
-	 * appended a '/' to the name.
+	 * We do, however, want to mount if someone wants to open or
+	 * create a file of any type under the mountpoint, wants to
+	 * traverse through the mountpoint or wants to open the
+	 * mounted directory.  Also, autofs may mark negative dentries
+	 * as being automount points.  These will need the attentions
+	 * of the daemon to instantiate them before they can be used.
 	 */
-	if (!(flags & LOOKUP_FOLLOW) &&
-	    !(flags & (LOOKUP_CONTINUE | LOOKUP_DIRECTORY |
-		       LOOKUP_OPEN | LOOKUP_CREATE)))
+	if (!(flags & (LOOKUP_CONTINUE | LOOKUP_DIRECTORY |
+		     LOOKUP_OPEN | LOOKUP_CREATE | LOOKUP_AUTOMOUNT)) &&
+	    path->dentry->d_inode)
 		return -EISDIR;
 
 	current->total_link_count++;
@@ -998,7 +1008,7 @@ static int follow_managed(struct path *path, unsigned flags)
 		mntput(path->mnt);
 	if (ret == -EISDIR)
 		ret = 0;
-	return ret;
+	return ret < 0 ? ret : need_mntput;
 }
 
 int follow_down_one(struct path *path)
@@ -1046,6 +1056,7 @@ static bool __follow_mount_rcu(struct nameidata *nd, struct path *path,
 			break;
 		path->mnt = mounted;
 		path->dentry = mounted->mnt_root;
+		nd->flags |= LOOKUP_JUMPED;
 		nd->seq = read_seqcount_begin(&path->dentry->d_seq);
 		/*
 		 * Update the inode too. We don't need to re-check the
@@ -1326,6 +1337,8 @@ retry:
 		path_put_conditional(path, nd);
 		return err;
 	}
+	if (err)
+		nd->flags |= LOOKUP_JUMPED;
 	*inode = path->dentry->d_inode;
 	return 0;
 }
@@ -1846,11 +1859,11 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
 	return __lookup_hash(&this, base, NULL);
 }
 
-int user_path_at(int dfd, const char __user *name, unsigned flags,
-		 struct path *path)
+int user_path_at_empty(int dfd, const char __user *name, unsigned flags,
+		 struct path *path, int *empty)
 {
 	struct nameidata nd;
-	char *tmp = getname_flags(name, flags);
+	char *tmp = getname_flags(name, flags, empty);
 	int err = PTR_ERR(tmp);
 	if (!IS_ERR(tmp)) {
 
@@ -1862,6 +1875,12 @@ int user_path_at(int dfd, const char __user *name, unsigned flags,
 			*path = nd.path;
 	}
 	return err;
+}
+
+int user_path_at(int dfd, const char __user *name, unsigned flags,
+		 struct path *path)
+{
+	return user_path_at_empty(dfd, name, flags, path, 0);
 }
 
 static int user_path_parent(int dfd, const char __user *path,
@@ -2215,6 +2234,10 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
 	}
 
 	/* create side of things */
+	/*
+	 * This will *only* deal with leaving RCU mode - LOOKUP_JUMPED has been
+	 * cleared when we got to the last component we are about to look up
+	 */
 	error = complete_walk(nd);
 	if (error)
 		return ERR_PTR(error);
@@ -2283,6 +2306,9 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
 	if (error < 0)
 		goto exit_dput;
 
+	if (error)
+		nd->flags |= LOOKUP_JUMPED;
+
 	error = -ENOENT;
 	if (!path->dentry->d_inode)
 		goto exit_dput;
@@ -2292,6 +2318,10 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
 
 	path_to_nameidata(path, nd);
 	nd->inode = path->dentry->d_inode;
+	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
+	error = complete_walk(nd);
+	if (error)
+		goto exit;
 	error = -EISDIR;
 	if (S_ISDIR(nd->inode->i_mode))
 		goto exit;
@@ -3394,8 +3424,8 @@ struct dentry *cow_break_link(const char *pathname)
 {
 	int ret, mode, pathlen, redo = 0;
 	struct nameidata old_nd, dir_nd;
-	struct path old_path, new_path;
-	struct dentry *dir, *res = NULL;
+	struct path old_path;
+	struct dentry *dir, *old_dentry, *new_dentry = NULL;
 	struct file *old_file;
 	struct file *new_file;
 	char *to, *path, pad='\251';
@@ -3410,24 +3440,29 @@ struct dentry *cow_break_link(const char *pathname)
 
 	/* old_nd will have refs to dentry and mnt */
 	ret = do_path_lookup(AT_FDCWD, pathname, LOOKUP_FOLLOW, &old_nd);
-	vxdprintk(VXD_CBIT(misc, 2), "do_path_lookup(old): %d", ret);
+	vxdprintk(VXD_CBIT(misc, 2),
+		"do_path_lookup(old): %d [r=%d]",
+		ret, mnt_get_count(old_nd.path.mnt));
 	if (ret < 0)
 		goto out_free_path;
 
 	old_path = old_nd.path;
-	mode = old_path.dentry->d_inode->i_mode;
+	old_dentry = old_path.dentry;
+	mode = old_dentry->d_inode->i_mode;
 
 	to = d_path(&old_path, path, PATH_MAX-2);
 	pathlen = strlen(to);
 	vxdprintk(VXD_CBIT(misc, 2),
-		"old path " VS_Q("%s") " [" VS_Q("%.*s") ":%d]", to,
-		old_path.dentry->d_name.len, old_path.dentry->d_name.name,
-		old_path.dentry->d_name.len);
+		"old path " VS_Q("%s") " [%p:" VS_Q("%.*s") ":%d]", to,
+		old_dentry,
+		old_dentry->d_name.len, old_dentry->d_name.name,
+		old_dentry->d_name.len);
 
 	to[pathlen + 1] = 0;
 retry:
+	new_dentry = NULL;
 	to[pathlen] = pad--;
-	ret = -EMLINK;
+	ret = -ELOOP;
 	if (pad <= '\240')
 		goto out_rel_old;
 
@@ -3435,34 +3470,35 @@ retry:
 	/* dir_nd will have refs to dentry and mnt */
 	ret = do_path_lookup(AT_FDCWD, to,
 		LOOKUP_PARENT | LOOKUP_OPEN | LOOKUP_CREATE, &dir_nd);
-	vxdprintk(VXD_CBIT(misc, 2),
-		"do_path_lookup(new): %d", ret);
+	vxdprintk(VXD_CBIT(misc, 2), "do_path_lookup(new): %d", ret);
 	if (ret < 0)
 		goto retry;
 
 	/* this puppy downs the inode mutex */
-	new_path.dentry = lookup_create(&dir_nd, 0);
-	if (!new_path.dentry || IS_ERR(new_path.dentry)) {
-		vxdprintk(VXD_CBIT(misc, 2),
-			"lookup_create(new): %p", new_path.dentry);
-		mutex_unlock(&dir_nd.path.dentry->d_inode->i_mutex);
+	new_dentry = lookup_create(&dir_nd, 0);
+	if (!new_dentry || IS_ERR(new_dentry)) {
 		path_put(&dir_nd.path);
+		vxdprintk(VXD_CBIT(misc, 2),
+			"lookup_create(new): failed with %ld",
+			PTR_ERR(new_dentry));
+		mutex_unlock(&dir_nd.path.dentry->d_inode->i_mutex);
 		goto retry;
 	}
 	vxdprintk(VXD_CBIT(misc, 2),
 		"lookup_create(new): %p [" VS_Q("%.*s") ":%d]",
-		new_path.dentry,
-		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
-		new_path.dentry->d_name.len);
+		new_dentry,
+		new_dentry->d_name.len, new_dentry->d_name.name,
+		new_dentry->d_name.len);
+
 	dir = dir_nd.path.dentry;
 
-	ret = vfs_create(dir_nd.path.dentry->d_inode, new_path.dentry, mode, &dir_nd);
+	ret = vfs_create(dir->d_inode, new_dentry, mode, &dir_nd);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"vfs_create(new): %d", ret);
 	if (ret == -EEXIST) {
 		mutex_unlock(&dir->d_inode->i_mutex);
-		dput(new_path.dentry);
 		path_put(&dir_nd.path);
+		dput(new_dentry);
 		goto retry;
 	}
 	else if (ret < 0)
@@ -3470,33 +3506,31 @@ retry:
 
 	/* drop out early, ret passes ENOENT */
 	ret = -ENOENT;
-	if ((redo = d_unhashed(old_path.dentry)))
+	if ((redo = d_unhashed(old_dentry)))
 		goto out_unlock_new;
 
-	new_path.mnt = dir_nd.path.mnt;
-	dget(old_path.dentry);
-	mntget(old_path.mnt);
+	path_get(&old_path);
 	/* this one cleans up the dentry/mnt in case of failure */
-	old_file = dentry_open(old_path.dentry, old_path.mnt,
+	old_file = dentry_open(old_dentry, old_path.mnt,
 		O_RDONLY, current_cred());
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(old): %p", old_file);
-	if (!old_file || IS_ERR(old_file)) {
-		res = IS_ERR(old_file) ? (void *) old_file : res;
+	if (IS_ERR(old_file)) {
+		ret = PTR_ERR(old_file);
 		goto out_unlock_new;
 	}
 
-	dget(new_path.dentry);
-	mntget(new_path.mnt);
+	dget(new_dentry);
+	mntget(old_path.mnt);
 	/* this one cleans up the dentry/mnt in case of failure */
-	new_file = dentry_open(new_path.dentry, new_path.mnt,
+	new_file = dentry_open(new_dentry, old_path.mnt,
 		O_WRONLY, current_cred());
 	vxdprintk(VXD_CBIT(misc, 2),
 		"dentry_open(new): %p", new_file);
-
-	ret = IS_ERR(new_file) ? PTR_ERR(new_file) : -ENOENT;
-	if (!new_file || IS_ERR(new_file))
+	if (IS_ERR(new_file)) {
+		ret = PTR_ERR(new_file);
 		goto out_fput_old;
+	}
 
 	size = i_size_read(old_file->f_dentry->d_inode);
 	ret = do_cow_splice(old_file, new_file, size);
@@ -3507,8 +3541,8 @@ retry:
 		ret = -ENOSPC;
 		goto out_fput_both;
 	} else {
-		struct inode *old_inode = old_path.dentry->d_inode;
-		struct inode *new_inode = new_path.dentry->d_inode;
+		struct inode *old_inode = old_dentry->d_inode;
+		struct inode *new_inode = new_dentry->d_inode;
 		struct iattr attr = {
 			.ia_uid = old_inode->i_uid,
 			.ia_gid = old_inode->i_gid,
@@ -3519,26 +3553,25 @@ retry:
 		mark_inode_dirty(new_inode);
 	}
 
-	mutex_lock(&old_path.dentry->d_inode->i_sb->s_vfs_rename_mutex);
+	mutex_lock(&old_dentry->d_inode->i_sb->s_vfs_rename_mutex);
 
 	/* drop out late */
 	ret = -ENOENT;
-	if ((redo = d_unhashed(old_path.dentry)))
+	if ((redo = d_unhashed(old_dentry)))
 		goto out_unlock;
 
 	vxdprintk(VXD_CBIT(misc, 2),
 		"vfs_rename: [" VS_Q("%*s") ":%d] -> [" VS_Q("%*s") ":%d]",
-		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
-		new_path.dentry->d_name.len,
-		old_path.dentry->d_name.len, old_path.dentry->d_name.name,
-		old_path.dentry->d_name.len);
-	ret = vfs_rename(dir_nd.path.dentry->d_inode, new_path.dentry,
-		old_nd.path.dentry->d_parent->d_inode, old_path.dentry);
+		new_dentry->d_name.len, new_dentry->d_name.name,
+		new_dentry->d_name.len,
+		old_dentry->d_name.len, old_dentry->d_name.name,
+		old_dentry->d_name.len);
+	ret = vfs_rename(dir_nd.path.dentry->d_inode, new_dentry,
+		old_dentry->d_parent->d_inode, old_dentry);
 	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
-	res = new_path.dentry;
 
 out_unlock:
-	mutex_unlock(&old_path.dentry->d_inode->i_sb->s_vfs_rename_mutex);
+	mutex_unlock(&old_dentry->d_inode->i_sb->s_vfs_rename_mutex);
 
 out_fput_both:
 	vxdprintk(VXD_CBIT(misc, 3),
@@ -3558,37 +3591,41 @@ out_unlock_new:
 		goto out_redo;
 
 	/* error path cleanup */
-	vfs_unlink(dir->d_inode, new_path.dentry);
-	dput(new_path.dentry);
+	vfs_unlink(dir->d_inode, new_dentry);
 
 out_redo:
 	if (!redo)
 		goto out_rel_both;
 	/* lookup dentry once again */
-	path_put(&old_nd.path);
+	/* old_nd.path is freed as old_path in out_rel_old */
 	ret = do_path_lookup(AT_FDCWD, pathname, LOOKUP_FOLLOW, &old_nd);
 	if (ret)
 		goto out_rel_both;
 
-	new_path.dentry = old_nd.path.dentry;
+	dput(new_dentry);
+	new_dentry = old_nd.path.dentry;
 	vxdprintk(VXD_CBIT(misc, 2),
 		"do_path_lookup(redo): %p [" VS_Q("%.*s") ":%d]",
-		new_path.dentry,
-		new_path.dentry->d_name.len, new_path.dentry->d_name.name,
-		new_path.dentry->d_name.len);
-	dget(new_path.dentry);
-	res = new_path.dentry;
+		new_dentry,
+		new_dentry->d_name.len, new_dentry->d_name.name,
+		new_dentry->d_name.len);
+	dget(new_dentry);
 
 out_rel_both:
 	path_put(&dir_nd.path);
 out_rel_old:
-	path_put(&old_nd.path);
+	path_put(&old_path);
 out_free_path:
 	kfree(path);
 out:
-	if (ret)
-		res = ERR_PTR(ret);
-	return res;
+	if (ret) {
+		dput(new_dentry);
+		new_dentry = ERR_PTR(ret);
+	}
+	vxdprintk(VXD_CBIT(misc, 3),
+		"cow_break_link returning with %p [r=%d]",
+		new_dentry, mnt_get_count(old_nd.path.mnt));
+	return new_dentry;
 }
 
 #endif
