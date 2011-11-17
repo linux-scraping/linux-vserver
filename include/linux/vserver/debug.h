@@ -80,8 +80,7 @@ void dump_vx_info_inactive(int);
 
 #else	/* CONFIG_VSERVER_DEBUG */
 
-/*
-#define vs_debug_switch 0
+#define vs_debug_switch	0
 #define vs_debug_xid	0
 #define vs_debug_nid	0
 #define vs_debug_tag	0
@@ -89,8 +88,11 @@ void dump_vx_info_inactive(int);
 #define vs_debug_limit	0
 #define vs_debug_cres	0
 #define vs_debug_dlim	0
+#define vs_debug_quota	0
 #define vs_debug_cvirt	0
-*/
+#define vs_debug_space	0
+#define vs_debug_perm	0
+#define vs_debug_misc	0
 
 #define vxdprintk(x...) do { } while (0)
 #define vxlprintk(x...) do { } while (0)
