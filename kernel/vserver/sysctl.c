@@ -28,22 +28,24 @@ enum {
 	CTL_DEBUG_QUOTA,
 	CTL_DEBUG_CVIRT,
 	CTL_DEBUG_SPACE,
+	CTL_DEBUG_PERM,
 	CTL_DEBUG_MISC,
 };
 
 
-unsigned int vx_debug_switch	= 0;
-unsigned int vx_debug_xid	= 0;
-unsigned int vx_debug_nid	= 0;
-unsigned int vx_debug_tag	= 0;
-unsigned int vx_debug_net	= 0;
-unsigned int vx_debug_limit	= 0;
-unsigned int vx_debug_cres	= 0;
-unsigned int vx_debug_dlim	= 0;
-unsigned int vx_debug_quota	= 0;
-unsigned int vx_debug_cvirt	= 0;
-unsigned int vx_debug_space	= 0;
-unsigned int vx_debug_misc	= 0;
+unsigned int vs_debug_switch	= 0;
+unsigned int vs_debug_xid	= 0;
+unsigned int vs_debug_nid	= 0;
+unsigned int vs_debug_tag	= 0;
+unsigned int vs_debug_net	= 0;
+unsigned int vs_debug_limit	= 0;
+unsigned int vs_debug_cres	= 0;
+unsigned int vs_debug_dlim	= 0;
+unsigned int vs_debug_quota	= 0;
+unsigned int vs_debug_cvirt	= 0;
+unsigned int vs_debug_space	= 0;
+unsigned int vs_debug_perm	= 0;
+unsigned int vs_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
@@ -129,7 +131,7 @@ static int zero;
 #define	CTL_ENTRY(ctl, name)				\
 	{						\
 		.procname	= #name,		\
-		.data		= &vx_ ## name,		\
+		.data		= &vs_ ## name,		\
 		.maxlen		= sizeof(int),		\
 		.mode		= 0644,			\
 		.proc_handler	= &proc_dodebug,	\
@@ -149,6 +151,7 @@ static ctl_table vserver_debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_QUOTA,	debug_quota),
 	CTL_ENTRY(CTL_DEBUG_CVIRT,	debug_cvirt),
 	CTL_ENTRY(CTL_DEBUG_SPACE,	debug_space),
+	CTL_ENTRY(CTL_DEBUG_PERM,	debug_perm),
 	CTL_ENTRY(CTL_DEBUG_MISC,	debug_misc),
 	{ 0 }
 };
@@ -175,13 +178,14 @@ static match_table_t tokens = {
 	{ CTL_DEBUG_QUOTA,	"quota=%x"	},
 	{ CTL_DEBUG_CVIRT,	"cvirt=%x"	},
 	{ CTL_DEBUG_SPACE,	"space=%x"	},
+	{ CTL_DEBUG_PERM,	"perm=%x"	},
 	{ CTL_DEBUG_MISC,	"misc=%x"	},
 	{ CTL_DEBUG_ERROR,	NULL		}
 };
 
 #define	HANDLE_CASE(id, name, val)				\
 	case CTL_DEBUG_ ## id:					\
-		vx_debug_ ## name = val;			\
+		vs_debug_ ## name = val;			\
 		printk("vs_debug_" #name "=0x%x\n", val);	\
 		break
 
@@ -214,6 +218,7 @@ static int __init vs_debug_setup(char *str)
 		HANDLE_CASE(QUOTA,  quota,  value);
 		HANDLE_CASE(CVIRT,  cvirt,  value);
 		HANDLE_CASE(SPACE,  space,  value);
+		HANDLE_CASE(PERM,   perm,   value);
 		HANDLE_CASE(MISC,   misc,   value);
 		default:
 			return -EINVAL;
@@ -227,15 +232,16 @@ __setup("vsdebug=", vs_debug_setup);
 
 
 
-EXPORT_SYMBOL_GPL(vx_debug_switch);
-EXPORT_SYMBOL_GPL(vx_debug_xid);
-EXPORT_SYMBOL_GPL(vx_debug_nid);
-EXPORT_SYMBOL_GPL(vx_debug_net);
-EXPORT_SYMBOL_GPL(vx_debug_limit);
-EXPORT_SYMBOL_GPL(vx_debug_cres);
-EXPORT_SYMBOL_GPL(vx_debug_dlim);
-EXPORT_SYMBOL_GPL(vx_debug_quota);
-EXPORT_SYMBOL_GPL(vx_debug_cvirt);
-EXPORT_SYMBOL_GPL(vx_debug_space);
-EXPORT_SYMBOL_GPL(vx_debug_misc);
+EXPORT_SYMBOL_GPL(vs_debug_switch);
+EXPORT_SYMBOL_GPL(vs_debug_xid);
+EXPORT_SYMBOL_GPL(vs_debug_nid);
+EXPORT_SYMBOL_GPL(vs_debug_net);
+EXPORT_SYMBOL_GPL(vs_debug_limit);
+EXPORT_SYMBOL_GPL(vs_debug_cres);
+EXPORT_SYMBOL_GPL(vs_debug_dlim);
+EXPORT_SYMBOL_GPL(vs_debug_quota);
+EXPORT_SYMBOL_GPL(vs_debug_cvirt);
+EXPORT_SYMBOL_GPL(vs_debug_space);
+EXPORT_SYMBOL_GPL(vs_debug_perm);
+EXPORT_SYMBOL_GPL(vs_debug_misc);
 

@@ -2,9 +2,9 @@
 #define _VX_DEBUG_H
 
 
-#define VXD_CBIT(n, m)	(vx_debug_ ## n & (1 << (m)))
-#define VXD_CMIN(n, m)	(vx_debug_ ## n > (m))
-#define VXD_MASK(n, m)	(vx_debug_ ## n & (m))
+#define VXD_CBIT(n, m)	(vs_debug_ ## n & (1 << (m)))
+#define VXD_CMIN(n, m)	(vs_debug_ ## n > (m))
+#define VXD_MASK(n, m)	(vs_debug_ ## n & (m))
 
 #define VXD_DEV(d)	(d), (d)->bd_inode->i_ino,		\
 			imajor((d)->bd_inode), iminor((d)->bd_inode)
@@ -34,18 +34,19 @@
 
 #ifdef	CONFIG_VSERVER_DEBUG
 
-extern unsigned int vx_debug_switch;
-extern unsigned int vx_debug_xid;
-extern unsigned int vx_debug_nid;
-extern unsigned int vx_debug_tag;
-extern unsigned int vx_debug_net;
-extern unsigned int vx_debug_limit;
-extern unsigned int vx_debug_cres;
-extern unsigned int vx_debug_dlim;
-extern unsigned int vx_debug_quota;
-extern unsigned int vx_debug_cvirt;
-extern unsigned int vx_debug_space;
-extern unsigned int vx_debug_misc;
+extern unsigned int vs_debug_switch;
+extern unsigned int vs_debug_xid;
+extern unsigned int vs_debug_nid;
+extern unsigned int vs_debug_tag;
+extern unsigned int vs_debug_net;
+extern unsigned int vs_debug_limit;
+extern unsigned int vs_debug_cres;
+extern unsigned int vs_debug_dlim;
+extern unsigned int vs_debug_quota;
+extern unsigned int vs_debug_cvirt;
+extern unsigned int vs_debug_space;
+extern unsigned int vs_debug_perm;
+extern unsigned int vs_debug_misc;
 
 
 #define VX_LOGLEVEL	"vxD: "
@@ -79,15 +80,19 @@ void dump_vx_info_inactive(int);
 
 #else	/* CONFIG_VSERVER_DEBUG */
 
-#define vx_debug_switch 0
-#define vx_debug_xid	0
-#define vx_debug_nid	0
-#define vx_debug_tag	0
-#define vx_debug_net	0
-#define vx_debug_limit	0
-#define vx_debug_cres	0
-#define vx_debug_dlim	0
-#define vx_debug_cvirt	0
+#define vs_debug_switch	0
+#define vs_debug_xid	0
+#define vs_debug_nid	0
+#define vs_debug_tag	0
+#define vs_debug_net	0
+#define vs_debug_limit	0
+#define vs_debug_cres	0
+#define vs_debug_dlim	0
+#define vs_debug_quota	0
+#define vs_debug_cvirt	0
+#define vs_debug_space	0
+#define vs_debug_perm	0
+#define vs_debug_misc	0
 
 #define vxdprintk(x...) do { } while (0)
 #define vxlprintk(x...) do { } while (0)
