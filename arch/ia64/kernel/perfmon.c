@@ -42,7 +42,6 @@
 #include <linux/completion.h>
 #include <linux/tracehook.h>
 #include <linux/slab.h>
-#include <linux/vs_memory.h>
 
 #include <asm/errno.h>
 #include <asm/intrinsics.h>

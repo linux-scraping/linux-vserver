@@ -25,7 +25,6 @@
 #include <linux/init.h>
 #include <linux/coredump.h>
 #include <linux/slab.h>
-#include <linux/vs_memory.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>

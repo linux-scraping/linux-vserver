@@ -19,7 +19,6 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/mmu_notifier.h>
-#include <linux/vs_memory.h>
 
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>

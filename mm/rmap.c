@@ -56,7 +56,6 @@
 #include <linux/mmu_notifier.h>
 #include <linux/migrate.h>
 #include <linux/hugetlb.h>
-#include <linux/vs_memory.h>
 
 #include <asm/tlbflush.h>
 

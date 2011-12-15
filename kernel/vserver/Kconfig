@@ -176,14 +176,6 @@ config	VSERVER_HISTORY_SIZE
 	  This allows you to specify the number of entries in
 	  the per-CPU history buffer.
 
-config	VSERVER_LEGACY_MEM
-	bool	"Legacy Memory Limits"
-	default n
-	help
-	  This provides fake memory limits to keep
-	  older tools happy in the face of memory
-	  cgroups
-
 choice
 	prompt	"Quotes used in debug and warn messages"
 	default	QUOTES_ISO8859

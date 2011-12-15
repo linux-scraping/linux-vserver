@@ -3389,7 +3389,6 @@ int handle_pte_fault(struct mm_struct *mm,
 {
 	pte_t entry;
 	spinlock_t *ptl;
-	int ret = 0, type = VXPT_UNKNOWN;
 
 	entry = *pte;
 	if (!pte_present(entry)) {
@@ -3414,12 +3413,9 @@ int handle_pte_fault(struct mm_struct *mm,
 	if (unlikely(!pte_same(*pte, entry)))
 		goto unlock;
 	if (flags & FAULT_FLAG_WRITE) {
-		if (!pte_write(entry)) {
-			ret = do_wp_page(mm, vma, address,
+		if (!pte_write(entry))
+			return do_wp_page(mm, vma, address,
 					pte, pmd, ptl, entry);
-			type = VXPT_WRITE;
-			goto out;
-		}
 		entry = pte_mkdirty(entry);
 	}
 	entry = pte_mkyoung(entry);
@@ -3437,10 +3433,7 @@ int handle_pte_fault(struct mm_struct *mm,
 	}
 unlock:
 	pte_unmap_unlock(pte, ptl);
-	ret = 0;
-out:
-	vx_page_fault(mm, vma, type, ret);
-	return ret;
+	return 0;
 }
 
 /*

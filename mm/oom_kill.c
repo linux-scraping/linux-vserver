@@ -33,7 +33,6 @@
 #include <linux/security.h>
 #include <linux/ptrace.h>
 #include <linux/reboot.h>
-#include <linux/vs_memory.h>
 #include <linux/vs_context.h>
 
 int sysctl_panic_on_oom;
@@ -222,18 +221,6 @@ unsigned int oom_badness(struct task_struct *p, struct mem_cgroup *mem,
 	 * task.
 	 */
 	points += p->signal->oom_score_adj;
-
-	/*
-	 * add points for context badness and
-	 * reduce badness for processes belonging to
-	 * a different context
-	 */
-
-	points += vx_badness(p, p->mm);
-
-	if ((vx_current_xid() > 1) &&
-		vx_current_xid() != vx_task_xid(p))
-		points /= 16;
 
 	/*
 	 * Never return 0 for an eligible task that may be killed since it's

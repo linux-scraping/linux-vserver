@@ -18,7 +18,6 @@
 #include <linux/elf.h>
 #include <linux/sched.h>
 #include <linux/err.h>
-#include <linux/vs_memory.h>
 
 /*
  * Should the kernel map a VDSO page into processes and pass its

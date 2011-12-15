@@ -11,7 +11,6 @@
 #include <linux/kprobes.h>
 #include <linux/kdebug.h>
 #include <linux/prefetch.h>
-#include <linux/vs_memory.h>
 
 #include <asm/pgtable.h>
 #include <asm/processor.h>

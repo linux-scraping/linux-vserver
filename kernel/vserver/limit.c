@@ -23,10 +23,6 @@
 
 
 const char *vlimit_name[NUM_LIMITS] = {
-#ifdef	CONFIG_VSERVER_LEGACY_MEM
-	[RLIMIT_RSS]		= "RSS",
-	[RLIMIT_AS]		= "VM",
-#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	[RLIMIT_CPU]		= "CPU",
 	[RLIMIT_NPROC]		= "NPROC",
 	[RLIMIT_NOFILE]		= "NOFILE",
@@ -48,15 +44,8 @@ const struct vcmd_ctx_rlimit_mask_v0 vlimit_mask = {
 		/* minimum */
 	0
 	,	/* softlimit */
-#ifdef	CONFIG_VSERVER_LEGACY_MEM
-	MASK_ENTRY( RLIMIT_RSS		) |
-#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	0
 	,       /* maximum */
-#ifdef	CONFIG_VSERVER_LEGACY_MEM
-	MASK_ENTRY( RLIMIT_RSS		) |
-	MASK_ENTRY( RLIMIT_AS		) |
-#endif	/* CONFIG_VSERVER_LEGACY_MEM */
 	MASK_ENTRY( RLIMIT_NPROC	) |
 	MASK_ENTRY( RLIMIT_NOFILE	) |
 	MASK_ENTRY( RLIMIT_LOCKS	) |
@@ -337,24 +326,5 @@ long vx_vsi_cached(struct sysinfo *val)
 #else
 	return 0;
 #endif
-}
-
-
-unsigned long vx_badness(struct task_struct *task, struct mm_struct *mm)
-{
-	struct vx_info *vxi = mm->mm_vx_info;
-	unsigned long points;
-	rlim_t v, w;
-
-	if (!vxi)
-		return 0;
-
-	points = vxi->vx_badness_bias;
-
-	v = __vx_cres_array_fixup(&vxi->limit, VLA_RSS);
-	w = __rlim_soft(&vxi->limit, RLIMIT_RSS);
-	points += (v > w) ? (v - w) : 0;
-
-	return points;
 }
 

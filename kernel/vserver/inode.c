@@ -346,7 +346,7 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 	substring_t args[MAX_OPT_ARGS];
 	int token;
 	char *s, *p, *opts;
-#if defined(CONFIG_PROPAGATE) || defined(CONFIG_VSERVER_WARN)
+#if defined(CONFIG_PROPAGATE) || defined(CONFIG_VSERVER_DEBUG)
 	int option = 0;
 #endif
 
@@ -384,7 +384,7 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 			*mnt_flags |= MNT_TAGID;
 			set |= MNT_TAGID;
 			break;
-#endif
+#endif	/* CONFIG_PROPAGATE */
 		case Opt_notagcheck:
 			if (remove)
 				__dx_parse_remove(s, "notagcheck");

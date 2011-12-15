@@ -3,7 +3,6 @@
 
 #include <linux/pagemap.h>
 #include <linux/swap.h>
-#include <linux/vs_memory.h>
 #include <asm/percpu.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
