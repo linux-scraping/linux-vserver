@@ -1494,8 +1494,10 @@ static int lo_open(struct block_device *bdev, fmode_t mode)
 		goto out;
 	}
 
-	if (!vx_check(lo->lo_xid, VS_IDENT|VS_HOSTID|VS_ADMIN_P))
-		return -EACCES;
+	if (!vx_check(lo->lo_xid, VS_IDENT|VS_HOSTID|VS_ADMIN_P)) {
+		err = -EACCES;
+		goto out;
+	}
 
 	mutex_lock(&lo->lo_ctl_mutex);
 	lo->lo_refcnt++;
