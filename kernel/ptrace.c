@@ -186,11 +186,6 @@ ok:
 	vxdprintk(VXD_CBIT(perm, 8),
 		"__ptrace_may_access(%p) check ok", task);
 
-	printk("%d,%d %d,%d\n",
-		vx_check(task->xid, VS_IDENT),
-		task_vx_flags(task, VXF_STATE_ADMIN, 0),
-		current->xid, task->xid);
-
 	if (!vx_check(task->xid, VS_IDENT) &&
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
 		return -EACCES;
