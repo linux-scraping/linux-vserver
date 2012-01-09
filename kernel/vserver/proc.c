@@ -282,7 +282,7 @@ static struct inode *vs_proc_make_inode(struct super_block *sb, struct vs_entry 
 	if (p->fop)
 		inode->i_fop = p->fop;
 
-	inode->i_nlink = (p->mode & S_IFDIR) ? 2 : 1;
+	set_nlink(inode, (p->mode & S_IFDIR) ? 2 : 1);
 	inode->i_flags |= S_IMMUTABLE;
 
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;

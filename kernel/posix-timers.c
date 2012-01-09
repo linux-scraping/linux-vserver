@@ -46,7 +46,7 @@
 #include <linux/syscalls.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/vs_context.h>
 
 /*

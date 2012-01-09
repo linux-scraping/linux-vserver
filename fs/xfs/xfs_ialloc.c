@@ -149,7 +149,7 @@ xfs_check_agi_freecount(
 /*
  * Initialise a new set of inodes.
  */
-STATIC void
+STATIC int
 xfs_ialloc_inode_init(
 	struct xfs_mount	*mp,
 	struct xfs_trans	*tp,
@@ -201,8 +201,8 @@ xfs_ialloc_inode_init(
 		fbuf = xfs_trans_get_buf(tp, mp->m_ddev_targp, d,
 					 mp->m_bsize * blks_per_cluster,
 					 XBF_LOCK);
-		ASSERT(!xfs_buf_geterror(fbuf));
-
+		if (!fbuf)
+			return ENOMEM;
 		/*
 		 * Initialize all inodes in this buffer and then log them.
 		 *
@@ -224,6 +224,7 @@ xfs_ialloc_inode_init(
 		}
 		xfs_trans_inode_alloc_buf(tp, fbuf);
 	}
+	return 0;
 }
 
 /*
@@ -368,9 +369,11 @@ xfs_ialloc_ag_alloc(
 	 * rather than a linear progression to prevent the next generation
 	 * number from being easily guessable.
 	 */
-	xfs_ialloc_inode_init(args.mp, tp, agno, args.agbno, args.len,
-			      random32());
+	error = xfs_ialloc_inode_init(args.mp, tp, agno, args.agbno,
+			args.len, random32());
 
+	if (error)
+		return error;
 	/*
 	 * Convert the results.
 	 */
@@ -1501,7 +1504,7 @@ xfs_read_agi(
 		return XFS_ERROR(EFSCORRUPTED);
 	}
 
-	XFS_BUF_SET_VTYPE_REF(*bpp, B_FS_AGI, XFS_AGI_REF);
+	xfs_buf_set_ref(*bpp, XFS_AGI_REF);
 
 	xfs_check_agi_unlinked(agi);
 	return 0;
