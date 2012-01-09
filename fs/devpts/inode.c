@@ -345,13 +345,12 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	inode = new_inode(s);
 	if (!inode)
 		goto free_fsi;
-
 	inode->i_ino = 1;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO | S_IWUSR;
 	inode->i_op = &simple_dir_inode_operations;
 	inode->i_fop = &devpts_dir_operations;
-	inode->i_nlink = 2;
+	set_nlink(inode, 2);
 	/* devpts is xid tagged */
 	inode->i_tag = (tag_t)vx_current_xid();
 
@@ -598,7 +597,7 @@ void devpts_pty_kill(struct tty_struct *tty)
 
 	dentry = d_find_alias(inode);
 
-	inode->i_nlink--;
+	drop_nlink(inode);
 	d_delete(dentry);
 	dput(dentry);	/* d_alloc_name() in devpts_pty_new() */
 	dput(dentry);		/* d_find_alias above */

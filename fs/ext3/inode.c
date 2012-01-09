@@ -1618,13 +1618,7 @@ static int ext3_ordered_writepage(struct page *page,
 	int err;
 
 	J_ASSERT(PageLocked(page));
-	/*
-	 * We don't want to warn for emergency remount. The condition is
-	 * ordered to avoid dereferencing inode->i_sb in non-error case to
-	 * avoid slow-downs.
-	 */
-	WARN_ON_ONCE(IS_RDONLY(inode) &&
-		     !(EXT3_SB(inode->i_sb)->s_mount_state & EXT3_ERROR_FS));
+	WARN_ON_ONCE(IS_RDONLY(inode));
 
 	/*
 	 * We give up here if we're reentered, because it might be for a
@@ -1699,13 +1693,7 @@ static int ext3_writeback_writepage(struct page *page,
 	int err;
 
 	J_ASSERT(PageLocked(page));
-	/*
-	 * We don't want to warn for emergency remount. The condition is
-	 * ordered to avoid dereferencing inode->i_sb in non-error case to
-	 * avoid slow-downs.
-	 */
-	WARN_ON_ONCE(IS_RDONLY(inode) &&
-		     !(EXT3_SB(inode->i_sb)->s_mount_state & EXT3_ERROR_FS));
+	WARN_ON_ONCE(IS_RDONLY(inode));
 
 	if (ext3_journal_current_handle())
 		goto out_fail;
@@ -1748,13 +1736,7 @@ static int ext3_journalled_writepage(struct page *page,
 	int err;
 
 	J_ASSERT(PageLocked(page));
-	/*
-	 * We don't want to warn for emergency remount. The condition is
-	 * ordered to avoid dereferencing inode->i_sb in non-error case to
-	 * avoid slow-downs.
-	 */
-	WARN_ON_ONCE(IS_RDONLY(inode) &&
-		     !(EXT3_SB(inode->i_sb)->s_mount_state & EXT3_ERROR_FS));
+	WARN_ON_ONCE(IS_RDONLY(inode));
 
 	if (ext3_journal_current_handle())
 		goto no_write;
@@ -2948,8 +2930,7 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
 	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
 		le16_to_cpu(raw_inode->i_raw_tag));
-
-	inode->i_nlink = le16_to_cpu(raw_inode->i_links_count);
+	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
 	inode->i_atime.tv_sec = (signed)le32_to_cpu(raw_inode->i_atime);
 	inode->i_ctime.tv_sec = (signed)le32_to_cpu(raw_inode->i_ctime);

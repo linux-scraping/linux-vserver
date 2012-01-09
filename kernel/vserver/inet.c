@@ -1,6 +1,7 @@
 
 #include <linux/in.h>
 #include <linux/inetdevice.h>
+#include <linux/export.h>
 #include <linux/vs_inet.h>
 #include <linux/vs_inet6.h>
 #include <linux/vserver/debug.h>
