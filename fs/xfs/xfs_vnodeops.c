@@ -152,7 +152,7 @@ xfs_sync_flags(
 		goto error_out;
 
 	xfs_ilock(ip, XFS_ILOCK_EXCL);
-	xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
+	xfs_trans_ijoin(tp, ip, 0);
 
 	inode->i_flags = flags;
 	inode->i_vflags = vflags;
