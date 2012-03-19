@@ -27,6 +27,7 @@
 #include <linux/proc_fs.h>
 #include <linux/file.h>
 #include <linux/syscalls.h>
+#include "../fs/mount.h"
 
 static struct kmem_cache *nsproxy_cachep;
 

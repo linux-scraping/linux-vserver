@@ -30,6 +30,8 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	if (!ns)
 		goto skip_ns;
 
+/*	FIXME: move to fs?
+
 	pstr = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!pstr)
 		goto skip_ns;
@@ -42,7 +44,7 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 		"RootPath:\t%s\n",
 		ns, atomic_read(&ns->count),
 		root);
-	kfree(pstr);
+	kfree(pstr); */
 skip_ns:
 
 	uts = nsproxy->uts_ns;

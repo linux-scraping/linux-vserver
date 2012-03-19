@@ -274,7 +274,7 @@ int __register_chrdev(unsigned int major, unsigned int baseminor,
 	cd = __register_chrdev_region(major, baseminor, count, name);
 	if (IS_ERR(cd))
 		return PTR_ERR(cd);
-	
+
 	cdev = cdev_alloc();
 	if (!cdev)
 		goto out2;
@@ -282,7 +282,7 @@ int __register_chrdev(unsigned int major, unsigned int baseminor,
 	cdev->owner = fops->owner;
 	cdev->ops = fops;
 	kobject_set_name(&cdev->kobj, "%s", name);
-		
+
 	err = cdev_add(cdev, MKDEV(cd->major, baseminor), count);
 	if (err)
 		goto out;
@@ -414,7 +414,7 @@ static int chrdev_open(struct inode *inode, struct file *filp)
 		goto out_cdev_put;
 
 	if (filp->f_op->open) {
-		ret = filp->f_op->open(inode,filp);
+		ret = filp->f_op->open(inode, filp);
 		if (ret)
 			goto out_cdev_put;
 	}

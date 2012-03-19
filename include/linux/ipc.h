@@ -94,7 +94,7 @@ struct kern_ipc_perm
 	xid_t		xid;
 	uid_t		cuid;
 	gid_t		cgid;
-	mode_t		mode; 
+	umode_t		mode; 
 	unsigned long	seq;
 	void		*security;
 };

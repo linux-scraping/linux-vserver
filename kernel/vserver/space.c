@@ -39,6 +39,7 @@ atomic_t vs_global_pid_ns	= ATOMIC_INIT(0);
 #include <linux/pid_namespace.h>
 #include <linux/ipc_namespace.h>
 #include <net/net_namespace.h>
+#include "../fs/mount.h"
 
 
 static const struct vcmd_space_mask_v1 space_mask_v0 = {
