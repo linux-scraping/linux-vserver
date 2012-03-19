@@ -38,7 +38,6 @@
 #include <linux/io.h>
 #include <linux/ftrace.h>
 #include <linux/cpuidle.h>
-#include <xen/xen.h>
 
 #include <asm/pgtable.h>
 #include <asm/system.h>
@@ -53,11 +52,10 @@
 #include <asm/syscalls.h>
 #include <asm/debugreg.h>
 #include <asm/nmi.h>
-#include <asm/xen/hypervisor.h>
 
 asmlinkage extern void ret_from_fork(void);
 
-DEFINE_PER_CPU_USER_MAPPED(unsigned long, old_rsp);
+DEFINE_PER_CPU(unsigned long, old_rsp);
 static DEFINE_PER_CPU(unsigned char, is_idle);
 
 static ATOMIC_NOTIFIER_HEAD(idle_notifier);
@@ -124,7 +122,7 @@ void cpu_idle(void)
 
 	/* endless idle loop with no priority at all */
 	while (1) {
-		tick_nohz_stop_sched_tick(1);
+		tick_nohz_idle_enter();
 		while (!need_resched()) {
 
 			rmb();
@@ -141,8 +139,14 @@ void cpu_idle(void)
 			enter_idle();
 			/* Don't trace irqs off for idle */
 			stop_critical_timings();
+
+			/* enter_idle() needs rcu for notifiers */
+			rcu_idle_enter();
+
 			if (cpuidle_idle_call())
 				pm_idle();
+
+			rcu_idle_exit();
 			start_critical_timings();
 
 			/* In many cases the interrupt that ended idle
@@ -151,7 +155,7 @@ void cpu_idle(void)
 			__exit_idle();
 		}
 
-		tick_nohz_restart_sched_tick();
+		tick_nohz_idle_exit();
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
@@ -220,11 +224,11 @@ void __show_regs(struct pt_regs *regs, int all)
 void release_thread(struct task_struct *dead_task)
 {
 	if (dead_task->mm) {
-		if (dead_task->mm->context.ldt) {
+		if (dead_task->mm->context.size) {
 			printk("WARNING: dead process %8s still has LDT? <%p/%d>\n",
 					dead_task->comm,
-					dead_task->mm->context.ldt->entries,
-					dead_task->mm->context.ldt->size);
+					dead_task->mm->context.ldt,
+					dead_task->mm->context.size);
 			BUG();
 		}
 	}
@@ -282,6 +286,7 @@ int copy_thread(unsigned long clone_flags, unsigned long sp,
 
 	set_tsk_thread_flag(p, TIF_FORK);
 
+	p->fpu_counter = 0;
 	p->thread.io_bitmap_ptr = NULL;
 
 	savesegment(gs, p->thread.gsindex);
@@ -295,13 +300,12 @@ int copy_thread(unsigned long clone_flags, unsigned long sp,
 	memset(p->thread.ptrace_bps, 0, sizeof(p->thread.ptrace_bps));
 
 	if (unlikely(test_tsk_thread_flag(me, TIF_IO_BITMAP))) {
-		p->thread.io_bitmap_ptr = kmalloc(IO_BITMAP_BYTES, GFP_KERNEL);
+		p->thread.io_bitmap_ptr = kmemdup(me->thread.io_bitmap_ptr,
+						  IO_BITMAP_BYTES, GFP_KERNEL);
 		if (!p->thread.io_bitmap_ptr) {
 			p->thread.io_bitmap_max = 0;
 			return -ENOMEM;
 		}
-		memcpy(p->thread.io_bitmap_ptr, me->thread.io_bitmap_ptr,
-				IO_BITMAP_BYTES);
 		set_tsk_thread_flag(p, TIF_IO_BITMAP);
 	}
 
@@ -385,47 +389,16 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	unsigned fsindex, gsindex;
 	fpu_switch_t fpu;
 
-	fpu = switch_fpu_prepare(prev_p, next_p);
+	fpu = switch_fpu_prepare(prev_p, next_p, cpu);
 
-	/* Reload esp0 and ss1. */
+	/*
+	 * Reload esp0, LDT and the page table pointer:
+	 */
 	load_sp0(tss, next);
 
-	/* We must save %fs and %gs before load_TLS() because
-	 * %fs and %gs may be cleared by load_TLS().
-	 *
-	 * (e.g. xen_load_tls())
-	 */
-	savesegment(fs, fsindex);
-	savesegment(gs, gsindex);
-
 	/*
-	 * Load TLS before restoring any segments so that segment loads
-	 * reference the correct GDT entries.
-	 */
-	load_TLS(next, cpu);
-
-	/*
-	 * Leave lazy mode, flushing any hypercalls made here.  This
-	 * must be done after loading TLS entries in the GDT but before
-	 * loading segments that might reference them, and and it must
-	 * be done before math_state_restore, so the TS bit is up to
-	 * date.
-	 */
-	arch_end_context_switch(next_p);
-
-	/* Switch DS and ES.
-	 *
-	 * Reading them only returns the selectors, but writing them (if
-	 * nonzero) loads the full descriptor from the GDT or LDT.  The
-	 * LDT for next is loaded in switch_mm, and the GDT is loaded
-	 * above.
-	 *
-	 * We therefore need to write new values to the segment
-	 * registers on every context switch unless both the new and old
-	 * values are zero.
-	 *
-	 * Note that we don't need to do anything for CS and SS, as
-	 * those are saved and restored as part of pt_regs.
+	 * Switch DS and ES.
+	 * This won't pick up thread selector changes, but I guess that is ok.
 	 */
 	savesegment(es, prev->es);
 	if (unlikely(next->es | prev->es))
@@ -435,64 +408,50 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	if (unlikely(next->ds | prev->ds))
 		loadsegment(ds, next->ds);
 
+
+	/* We must save %fs and %gs before load_TLS() because
+	 * %fs and %gs may be cleared by load_TLS().
+	 *
+	 * (e.g. xen_load_tls())
+	 */
+	savesegment(fs, fsindex);
+	savesegment(gs, gsindex);
+
+	load_TLS(next, cpu);
+
+	/*
+	 * Leave lazy mode, flushing any hypercalls made here.
+	 * This must be done before restoring TLS segments so
+	 * the GDT and LDT are properly updated, and must be
+	 * done before math_state_restore, so the TS bit is up
+	 * to date.
+	 */
+	arch_end_context_switch(next_p);
+
 	/*
 	 * Switch FS and GS.
 	 *
-	 * These are even more complicated than FS and GS: they have
-	 * 64-bit bases are that controlled by arch_prctl.  Those bases
-	 * only differ from the values in the GDT or LDT if the selector
-	 * is 0.
-	 *
-	 * Loading the segment register resets the hidden base part of
-	 * the register to 0 or the value from the GDT / LDT.  If the
-	 * next base address zero, writing 0 to the segment register is
-	 * much faster than using wrmsr to explicitly zero the base.
-	 *
-	 * The thread_struct.fs and thread_struct.gs values are 0
-	 * if the fs and gs bases respectively are not overridden
-	 * from the values implied by fsindex and gsindex.  They
-	 * are nonzero, and store the nonzero base addresses, if
-	 * the bases are overridden.
-	 *
-	 * (fs != 0 && fsindex != 0) || (gs != 0 && gsindex != 0) should
-	 * be impossible.
-	 *
-	 * Therefore we need to reload the segment registers if either
-	 * the old or new selector is nonzero, and we need to override
-	 * the base address if next thread expects it to be overridden.
-	 *
-	 * This code is unnecessarily slow in the case where the old and
-	 * new indexes are zero and the new base is nonzero -- it will
-	 * unnecessarily write 0 to the selector before writing the new
-	 * base address.
-	 *
-	 * Note: This all depends on arch_prctl being the only way that
-	 * user code can override the segment base.  Once wrfsbase and
-	 * wrgsbase are enabled, most of this code will need to change.
+	 * Segment register != 0 always requires a reload.  Also
+	 * reload when it has changed.  When prev process used 64bit
+	 * base always reload to avoid an information leak.
 	 */
 	if (unlikely(fsindex | next->fsindex | prev->fs)) {
 		loadsegment(fs, next->fsindex);
-
 		/*
-		 * If user code wrote a nonzero value to FS, then it also
-		 * cleared the overridden base address.
-		 *
-		 * XXX: if user code wrote 0 to FS and cleared the base
-		 * address itself, we won't notice and we'll incorrectly
-		 * restore the prior base address next time we reschdule
-		 * the process.
+		 * Check if the user used a selector != 0; if yes
+		 *  clear 64bit base, since overloaded base is always
+		 *  mapped to the Null selector
 		 */
 		if (fsindex)
 			prev->fs = 0;
 	}
+	/* when next process has a 64bit base use it */
 	if (next->fs)
 		wrmsrl(MSR_FS_BASE, next->fs);
 	prev->fsindex = fsindex;
 
 	if (unlikely(gsindex | next->gsindex | prev->gs)) {
 		load_gs_index(next->gsindex);
-
-		/* This works (and fails) the same way as fsindex above. */
 		if (gsindex)
 			prev->gs = 0;
 	}
@@ -519,16 +478,6 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	if (unlikely(task_thread_info(next_p)->flags & _TIF_WORK_CTXSW_NEXT ||
 		     task_thread_info(prev_p)->flags & _TIF_WORK_CTXSW_PREV))
 		__switch_to_xtra(prev_p, next_p, tss);
-
-#ifdef CONFIG_XEN
-	/*
-	 * On Xen PV, IOPL bits in pt_regs->flags have no effect, and
-	 * current_pt_regs()->flags may not match the current task's
-	 * intended IOPL.  We need to switch it manually.
-	 */
-	if (unlikely(xen_pv_domain() && prev->iopl != next->iopl))
-		xen_set_iopl_mask(next->iopl);
-#endif
 
 	return prev_p;
 }
@@ -567,59 +516,27 @@ void set_personality_ia32(void)
 	current_thread_info()->status |= TS_COMPAT;
 }
 
-/*
- * Called from fs/proc with a reference on @p to find the function
- * which called into schedule(). This needs to be done carefully
- * because the task might wake up and we might look at a stack
- * changing under us.
- */
 unsigned long get_wchan(struct task_struct *p)
 {
-	unsigned long start, bottom, top, sp, fp, ip;
+	unsigned long stack;
+	u64 fp, ip;
 	int count = 0;
 
 	if (!p || p == current || p->state == TASK_RUNNING)
 		return 0;
-
-	start = (unsigned long)task_stack_page(p);
-	if (!start)
+	stack = (unsigned long)task_stack_page(p);
+	if (p->thread.sp < stack || p->thread.sp >= stack+THREAD_SIZE)
 		return 0;
-
-	/*
-	 * Layout of the stack page:
-	 *
-	 * ----------- topmax = start + THREAD_SIZE - sizeof(unsigned long)
-	 * PADDING
-	 * ----------- top = topmax - TOP_OF_KERNEL_STACK_PADDING
-	 * stack
-	 * ----------- bottom = start + sizeof(thread_info)
-	 * thread_info
-	 * ----------- start
-	 *
-	 * The tasks stack pointer points at the location where the
-	 * framepointer is stored. The data on the stack is:
-	 * ... IP FP ... IP FP
-	 *
-	 * We need to read FP and IP, so we need to adjust the upper
-	 * bound by another unsigned long.
-	 */
-	top = start + THREAD_SIZE;
-	top -= 2 * sizeof(unsigned long);
-	bottom = start + sizeof(struct thread_info);
-
-	sp = ACCESS_ONCE(p->thread.sp);
-	if (sp < bottom || sp > top)
-		return 0;
-
-	fp = ACCESS_ONCE(*(unsigned long *)sp);
+	fp = *(u64 *)(p->thread.sp);
 	do {
-		if (fp < bottom || fp > top)
+		if (fp < (unsigned long)stack ||
+		    fp >= (unsigned long)stack+THREAD_SIZE)
 			return 0;
-		ip = ACCESS_ONCE(*(unsigned long *)(fp + sizeof(unsigned long)));
+		ip = *(u64 *)(fp+8);
 		if (!in_sched_functions(ip))
 			return ip;
-		fp = ACCESS_ONCE(*(unsigned long *)fp);
-	} while (count++ < 16 && p->state != TASK_RUNNING);
+		fp = *(u64 *)fp;
+	} while (count++ < 16);
 	return 0;
 }
 

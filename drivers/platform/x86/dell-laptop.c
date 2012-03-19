@@ -184,37 +184,10 @@ static struct dmi_system_id __devinitdata dell_quirks[] = {
 		},
 		.driver_data = &quirk_dell_vostro_v130,
 	},
-	{
-		.callback = dmi_matched,
-		.ident = "Dell Vostro 3555",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "Vostro 3555"),
-		},
-		.driver_data = &quirk_dell_vostro_v130,
-	},
-	{
-		.callback = dmi_matched,
-		.ident = "Dell Inspiron N311z",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron N311z"),
-		},
-		.driver_data = &quirk_dell_vostro_v130,
-	},
-	{
-		.callback = dmi_matched,
-		.ident = "Dell Inspiron M5110",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron M5110"),
-		},
-		.driver_data = &quirk_dell_vostro_v130,
-	},
-	{ }
 };
 
 static struct calling_interface_buffer *buffer;
+static struct page *bufferpage;
 static DEFINE_MUTEX(buffer_mutex);
 
 static int hwswitch_state;
@@ -642,7 +615,6 @@ static void touchpad_led_set(struct led_classdev *led_cdev,
 static struct led_classdev touchpad_led = {
 	.name = "dell-laptop::touchpad",
 	.brightness_set = touchpad_led_set,
-	.flags = LED_CORE_SUSPENDRESUME,
 };
 
 static int __devinit touchpad_led_init(struct device *dev)
@@ -714,10 +686,11 @@ static int __init dell_init(void)
 	 * Allocate buffer below 4GB for SMI data--only 32-bit physical addr
 	 * is passed to SMI handler.
 	 */
-	buffer = (void *)__get_free_page(GFP_KERNEL | GFP_DMA32);
+	bufferpage = alloc_page(GFP_KERNEL | GFP_DMA32);
 
-	if (!buffer)
+	if (!bufferpage)
 		goto fail_buffer;
+	buffer = page_address(bufferpage);
 
 	ret = dell_setup_rfkill();
 
@@ -786,7 +759,7 @@ fail_backlight:
 fail_filter:
 	dell_cleanup_rfkill();
 fail_rfkill:
-	free_page((unsigned long)buffer);
+	free_page((unsigned long)bufferpage);
 fail_buffer:
 	platform_device_del(platform_device);
 fail_platform_device2:

@@ -36,7 +36,7 @@ There are several variants of perf script:
 
   'perf script report <script> [args]' to run and display the results
   of <script>.  <script> is the name displayed in the output of 'perf
-  script --list' i.e. the actual script name minus any language
+  trace --list' i.e. the actual script name minus any language
   extension.  The perf.data output from a previous run of 'perf script
   record <script>' is used and should be present for this command to
   succeed.  [args] refers to the (mainly optional) args expected by
@@ -76,7 +76,7 @@ OPTIONS
 	Any command you can specify in a shell.
 
 -D::
---dump-raw-trace=::
+--dump-raw-script=::
         Display verbose dump of the trace data.
 
 -L::
@@ -106,7 +106,7 @@ OPTIONS
 
 -i::
 --input=::
-        Input file name.
+        Input file name. (default: perf.data unless stdin is a fifo)
 
 -d::
 --debug-mode::
@@ -182,11 +182,16 @@ OPTIONS
 --hide-call-graph::
         When printing symbols do not display call chain.
 
--c::
+-C::
 --cpu:: Only report samples for the list of CPUs provided. Multiple CPUs can
 	be provided as a comma-separated list with no space: 0,1. Ranges of
 	CPUs are specified with -: 0-2. Default is to report samples on all
 	CPUs.
+
+-c::
+--comms=::
+	Only display events for these comms. CSV that understands
+	file://filename entries.
 
 -I::
 --show-info::

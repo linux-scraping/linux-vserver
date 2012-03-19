@@ -485,10 +485,6 @@ struct hv_context {
 
 	void *synic_message_page[MAX_NUM_CPUS];
 	void *synic_event_page[MAX_NUM_CPUS];
-	/*
-	 * buffer to post messages to the host.
-	 */
-	void *post_msg_page[MAX_NUM_CPUS];
 };
 
 extern struct hv_context hv_context;
@@ -615,6 +611,7 @@ void vmbus_device_unregister(struct hv_device *device_obj);
 
 struct vmbus_channel *relid2channel(u32 relid);
 
+void vmbus_free_channels(void);
 
 /* Connection interface */
 

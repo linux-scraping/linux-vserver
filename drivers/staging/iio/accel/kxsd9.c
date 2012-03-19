@@ -81,7 +81,7 @@ static int kxsd9_write_scale(struct iio_dev *indio_dev, int micro)
 
 	mutex_lock(&st->buf_lock);
 	ret = spi_w8r8(st->us, KXSD9_READ(KXSD9_REG_CTRL_C));
-	if (ret < 0)
+	if (ret)
 		goto error_ret;
 	st->tx[0] = KXSD9_WRITE(KXSD9_REG_CTRL_C);
 	st->tx[1] = (ret & ~KXSD9_FS_MASK) | i;
@@ -140,7 +140,7 @@ static int kxsd9_write_raw(struct iio_dev *indio_dev,
 {
 	int ret = -EINVAL;
 
-	if (mask == (1 << IIO_CHAN_INFO_SCALE_SHARED)) {
+	if (mask == IIO_CHAN_INFO_SCALE) {
 		/* Check no integer component */
 		if (val)
 			return -EINVAL;
@@ -163,13 +163,11 @@ static int kxsd9_read_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			goto error_ret;
 		*val = ret;
-		ret = IIO_VAL_INT;
 		break;
-	case (1 << IIO_CHAN_INFO_SCALE_SHARED):
+	case IIO_CHAN_INFO_SCALE:
 		ret = spi_w8r8(st->us, KXSD9_READ(KXSD9_REG_CTRL_C));
-		if (ret < 0)
+		if (ret)
 			goto error_ret;
-		*val = 0;
 		*val2 = kxsd9_micro_scales[ret & KXSD9_FS_MASK];
 		ret = IIO_VAL_INT_PLUS_MICRO;
 		break;
@@ -183,7 +181,7 @@ error_ret:
 		.type = IIO_ACCEL,					\
 		.modified = 1,						\
 		.channel2 = IIO_MOD_##axis,				\
-		.info_mask = 1 << IIO_CHAN_INFO_SCALE_SHARED,		\
+		.info_mask = IIO_CHAN_INFO_SCALE_SHARED_BIT,		\
 		.address = KXSD9_REG_##axis,				\
 	}
 
@@ -270,8 +268,10 @@ static int __devexit kxsd9_remove(struct spi_device *spi)
 }
 
 static const struct spi_device_id kxsd9_id[] = {
-	{"kxsd9", 0}
+	{"kxsd9", 0},
+	{ },
 };
+MODULE_DEVICE_TABLE(spi, kxsd9_id);
 
 static struct spi_driver kxsd9_driver = {
 	.driver = {
@@ -282,18 +282,7 @@ static struct spi_driver kxsd9_driver = {
 	.remove = __devexit_p(kxsd9_remove),
 	.id_table = kxsd9_id,
 };
-
-static __init int kxsd9_spi_init(void)
-{
-	return spi_register_driver(&kxsd9_driver);
-}
-module_init(kxsd9_spi_init);
-
-static __exit void kxsd9_spi_exit(void)
-{
-	spi_unregister_driver(&kxsd9_driver);
-}
-module_exit(kxsd9_spi_exit);
+module_spi_driver(kxsd9_driver);
 
 MODULE_AUTHOR("Jonathan Cameron <jic23@cam.ac.uk>");
 MODULE_DESCRIPTION("Kionix KXSD9 SPI driver");

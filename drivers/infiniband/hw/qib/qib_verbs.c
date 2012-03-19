@@ -40,7 +40,6 @@
 #include <linux/rculist.h>
 #include <linux/mm.h>
 #include <linux/random.h>
-#include <linux/vmalloc.h>
 
 #include "qib.h"
 #include "qib_common.h"
@@ -914,8 +913,8 @@ static void copy_io(u32 __iomem *piobuf, struct qib_sge_state *ss,
 		__raw_writel(last, piobuf);
 }
 
-static struct qib_verbs_txreq *get_txreq(struct qib_ibdev *dev,
-					 struct qib_qp *qp, int *retp)
+static noinline struct qib_verbs_txreq *__get_txreq(struct qib_ibdev *dev,
+					   struct qib_qp *qp)
 {
 	struct qib_verbs_txreq *tx;
 	unsigned long flags;
@@ -927,8 +926,9 @@ static struct qib_verbs_txreq *get_txreq(struct qib_ibdev *dev,
 		struct list_head *l = dev->txreq_free.next;
 
 		list_del(l);
+		spin_unlock(&dev->pending_lock);
+		spin_unlock_irqrestore(&qp->s_lock, flags);
 		tx = list_entry(l, struct qib_verbs_txreq, txreq.list);
-		*retp = 0;
 	} else {
 		if (ib_qib_state_ops[qp->state] & QIB_PROCESS_RECV_OK &&
 		    list_empty(&qp->iowait)) {
@@ -936,14 +936,33 @@ static struct qib_verbs_txreq *get_txreq(struct qib_ibdev *dev,
 			qp->s_flags |= QIB_S_WAIT_TX;
 			list_add_tail(&qp->iowait, &dev->txwait);
 		}
-		tx = NULL;
 		qp->s_flags &= ~QIB_S_BUSY;
-		*retp = -EBUSY;
+		spin_unlock(&dev->pending_lock);
+		spin_unlock_irqrestore(&qp->s_lock, flags);
+		tx = ERR_PTR(-EBUSY);
 	}
+	return tx;
+}
 
-	spin_unlock(&dev->pending_lock);
-	spin_unlock_irqrestore(&qp->s_lock, flags);
+static inline struct qib_verbs_txreq *get_txreq(struct qib_ibdev *dev,
+					 struct qib_qp *qp)
+{
+	struct qib_verbs_txreq *tx;
+	unsigned long flags;
 
+	spin_lock_irqsave(&dev->pending_lock, flags);
+	/* assume the list non empty */
+	if (likely(!list_empty(&dev->txreq_free))) {
+		struct list_head *l = dev->txreq_free.next;
+
+		list_del(l);
+		spin_unlock_irqrestore(&dev->pending_lock, flags);
+		tx = list_entry(l, struct qib_verbs_txreq, txreq.list);
+	} else {
+		/* call slow path to get the extra lock */
+		spin_unlock_irqrestore(&dev->pending_lock, flags);
+		tx =  __get_txreq(dev, qp);
+	}
 	return tx;
 }
 
@@ -1123,9 +1142,9 @@ static int qib_verbs_send_dma(struct qib_qp *qp, struct qib_ib_header *hdr,
 		goto bail;
 	}
 
-	tx = get_txreq(dev, qp, &ret);
-	if (!tx)
-		goto bail;
+	tx = get_txreq(dev, qp);
+	if (IS_ERR(tx))
+		goto bail_tx;
 
 	control = dd->f_setpbc_control(ppd, plen, qp->s_srate,
 				       be16_to_cpu(hdr->lrh[0]) >> 12);
@@ -1196,6 +1215,9 @@ unaligned:
 	ibp->n_unaligned++;
 bail:
 	return ret;
+bail_tx:
+	ret = PTR_ERR(tx);
+	goto bail;
 }
 
 /*
@@ -2036,16 +2058,10 @@ int qib_register_ib_device(struct qib_devdata *dd)
 	 * the LKEY).  The remaining bits act as a generation number or tag.
 	 */
 	spin_lock_init(&dev->lk_table.lock);
-	/* insure generation is at least 4 bits see keys.c */
-	if (ib_qib_lkey_table_size > MAX_LKEY_TABLE_BITS) {
-		qib_dev_warn(dd, "lkey bits %u too large, reduced to %u\n",
-			ib_qib_lkey_table_size, MAX_LKEY_TABLE_BITS);
-		ib_qib_lkey_table_size = MAX_LKEY_TABLE_BITS;
-	}
 	dev->lk_table.max = 1 << ib_qib_lkey_table_size;
 	lk_tab_size = dev->lk_table.max * sizeof(*dev->lk_table.table);
 	dev->lk_table.table = (struct qib_mregion **)
-		vmalloc(lk_tab_size);
+		__get_free_pages(GFP_KERNEL, get_order(lk_tab_size));
 	if (dev->lk_table.table == NULL) {
 		ret = -ENOMEM;
 		goto err_lk;
@@ -2215,7 +2231,7 @@ err_tx:
 					sizeof(struct qib_pio_header),
 				  dev->pio_hdrs, dev->pio_hdrs_phys);
 err_hdrs:
-	vfree(dev->lk_table.table);
+	free_pages((unsigned long) dev->lk_table.table, get_order(lk_tab_size));
 err_lk:
 	kfree(dev->qp_table);
 err_qpt:
@@ -2269,6 +2285,7 @@ void qib_unregister_ib_device(struct qib_devdata *dd)
 					sizeof(struct qib_pio_header),
 				  dev->pio_hdrs, dev->pio_hdrs_phys);
 	lk_tab_size = dev->lk_table.max * sizeof(*dev->lk_table.table);
-	vfree(dev->lk_table.table);
+	free_pages((unsigned long) dev->lk_table.table,
+		   get_order(lk_tab_size));
 	kfree(dev->qp_table);
 }

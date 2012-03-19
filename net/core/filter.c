@@ -64,10 +64,9 @@ static inline void *load_pointer(const struct sk_buff *skb, int k,
 }
 
 /**
- *	sk_filter_trim_cap - run a packet through a socket filter
+ *	sk_filter - run a packet through a socket filter
  *	@sk: sock associated with &sk_buff
  *	@skb: buffer to filter
- *	@cap: limit on how short the eBPF program may trim the packet
  *
  * Run the filter code and then cut skb->data to correct size returned by
  * sk_run_filter. If pkt_len is 0 we toss packet. If skb->len is smaller
@@ -76,7 +75,7 @@ static inline void *load_pointer(const struct sk_buff *skb, int k,
  * be accepted or -EPERM if the packet should be tossed.
  *
  */
-int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
+int sk_filter(struct sock *sk, struct sk_buff *skb)
 {
 	int err;
 	struct sk_filter *filter;
@@ -89,13 +88,14 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 	filter = rcu_dereference(sk->sk_filter);
 	if (filter) {
 		unsigned int pkt_len = SK_RUN_FILTER(filter, skb);
-		err = pkt_len ? pskb_trim(skb, max(cap, pkt_len)) : -EPERM;
+
+		err = pkt_len ? pskb_trim(skb, pkt_len) : -EPERM;
 	}
 	rcu_read_unlock();
 
 	return err;
 }
-EXPORT_SYMBOL(sk_filter_trim_cap);
+EXPORT_SYMBOL(sk_filter);
 
 /**
  *	sk_run_filter - run a filter on a socket
@@ -320,8 +320,6 @@ load_b:
 
 			if (skb_is_nonlinear(skb))
 				return 0;
-			if (skb->len < sizeof(struct nlattr))
-				return 0;
 			if (A > skb->len - sizeof(struct nlattr))
 				return 0;
 
@@ -338,13 +336,11 @@ load_b:
 
 			if (skb_is_nonlinear(skb))
 				return 0;
-			if (skb->len < sizeof(struct nlattr))
-				return 0;
 			if (A > skb->len - sizeof(struct nlattr))
 				return 0;
 
 			nla = (struct nlattr *)&skb->data[A];
-			if (nla->nla_len > skb->len - A)
+			if (nla->nla_len > A - skb->len)
 				return 0;
 
 			nla = nla_find_nested(nla, X);

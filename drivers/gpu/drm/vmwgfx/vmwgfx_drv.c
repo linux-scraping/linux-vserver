@@ -25,7 +25,6 @@
  *
  **************************************************************************/
 #include <linux/module.h>
-#include <linux/console.h>
 
 #include "drmP.h"
 #include "vmwgfx_drv.h"
@@ -179,7 +178,6 @@ static struct pci_device_id vmw_pci_id_list[] = {
 	{0x15ad, 0x0405, PCI_ANY_ID, PCI_ANY_ID, 0, 0, VMWGFX_CHIP_SVGAII},
 	{0, 0, 0}
 };
-MODULE_DEVICE_TABLE(pci, vmw_pci_id_list);
 
 static int enable_fbdev;
 
@@ -504,6 +502,21 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 		goto out_err1;
 	}
 
+	ret = ttm_bo_init_mm(&dev_priv->bdev, TTM_PL_VRAM,
+			     (dev_priv->vram_size >> PAGE_SHIFT));
+	if (unlikely(ret != 0)) {
+		DRM_ERROR("Failed initializing memory manager for VRAM.\n");
+		goto out_err2;
+	}
+
+	dev_priv->has_gmr = true;
+	if (ttm_bo_init_mm(&dev_priv->bdev, VMW_PL_GMR,
+			   dev_priv->max_gmr_ids) != 0) {
+		DRM_INFO("No GMR memory available. "
+			 "Graphics memory resources are very limited.\n");
+		dev_priv->has_gmr = false;
+	}
+
 	dev_priv->mmio_mtrr = drm_mtrr_add(dev_priv->mmio_start,
 					   dev_priv->mmio_size, DRM_MTRR_WC);
 
@@ -556,22 +569,6 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 	if (unlikely(dev_priv->fman == NULL))
 		goto out_no_fman;
 
-
-	ret = ttm_bo_init_mm(&dev_priv->bdev, TTM_PL_VRAM,
-			     (dev_priv->vram_size >> PAGE_SHIFT));
-	if (unlikely(ret != 0)) {
-		DRM_ERROR("Failed initializing memory manager for VRAM.\n");
-		goto out_no_vram;
-	}
-
-	dev_priv->has_gmr = true;
-	if (ttm_bo_init_mm(&dev_priv->bdev, VMW_PL_GMR,
-			   dev_priv->max_gmr_ids) != 0) {
-		DRM_INFO("No GMR memory available. "
-			 "Graphics memory resources are very limited.\n");
-		dev_priv->has_gmr = false;
-	}
-
 	/* Need to start the fifo to check if we can do screen objects */
 	ret = vmw_3d_resource_inc(dev_priv, true);
 	if (unlikely(ret != 0))
@@ -622,10 +619,6 @@ out_no_kms:
 		vmw_3d_resource_dec(dev_priv, false);
 	}
 out_no_fifo:
-	if (dev_priv->has_gmr)
-		(void) ttm_bo_clean_mm(&dev_priv->bdev, VMW_PL_GMR);
-	(void)ttm_bo_clean_mm(&dev_priv->bdev, TTM_PL_VRAM);
-out_no_vram:
 	vmw_fence_manager_takedown(dev_priv->fman);
 out_no_fman:
 	if (dev_priv->stealth)
@@ -639,6 +632,10 @@ out_err4:
 out_err3:
 	drm_mtrr_del(dev_priv->mmio_mtrr, dev_priv->mmio_start,
 		     dev_priv->mmio_size, DRM_MTRR_WC);
+	if (dev_priv->has_gmr)
+		(void) ttm_bo_clean_mm(&dev_priv->bdev, VMW_PL_GMR);
+	(void)ttm_bo_clean_mm(&dev_priv->bdev, TTM_PL_VRAM);
+out_err2:
 	(void)ttm_bo_device_release(&dev_priv->bdev);
 out_err1:
 	vmw_ttm_global_release(dev_priv);
@@ -667,11 +664,6 @@ static int vmw_driver_unload(struct drm_device *dev)
 	}
 	vmw_kms_close(dev_priv);
 	vmw_overlay_close(dev_priv);
-
-	if (dev_priv->has_gmr)
-		(void)ttm_bo_clean_mm(&dev_priv->bdev, VMW_PL_GMR);
-	(void)ttm_bo_clean_mm(&dev_priv->bdev, TTM_PL_VRAM);
-
 	vmw_fence_manager_takedown(dev_priv->fman);
 	if (dev_priv->stealth)
 		pci_release_region(dev->pdev, 2);
@@ -682,6 +674,9 @@ static int vmw_driver_unload(struct drm_device *dev)
 	iounmap(dev_priv->mmio_virt);
 	drm_mtrr_del(dev_priv->mmio_mtrr, dev_priv->mmio_start,
 		     dev_priv->mmio_size, DRM_MTRR_WC);
+	if (dev_priv->has_gmr)
+		(void)ttm_bo_clean_mm(&dev_priv->bdev, VMW_PL_GMR);
+	(void)ttm_bo_clean_mm(&dev_priv->bdev, TTM_PL_VRAM);
 	(void)ttm_bo_device_release(&dev_priv->bdev);
 	vmw_ttm_global_release(dev_priv);
 	idr_destroy(&dev_priv->surface_idr);
@@ -1052,11 +1047,6 @@ static void vmw_pm_complete(struct device *kdev)
 	struct drm_device *dev = pci_get_drvdata(pdev);
 	struct vmw_private *dev_priv = vmw_priv(dev);
 
-	mutex_lock(&dev_priv->hw_mutex);
-	vmw_write(dev_priv, SVGA_REG_ID, SVGA_ID_2);
-	(void) vmw_read(dev_priv, SVGA_REG_ID);
-	mutex_unlock(&dev_priv->hw_mutex);
-
 	/**
 	 * Reclaim 3d reference held by fbdev and potentially
 	 * start fifo.
@@ -1072,6 +1062,21 @@ static const struct dev_pm_ops vmw_pm_ops = {
 	.complete = vmw_pm_complete,
 	.suspend = vmw_pm_suspend,
 	.resume = vmw_pm_resume,
+};
+
+static const struct file_operations vmwgfx_driver_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = drm_release,
+	.unlocked_ioctl = vmw_unlocked_ioctl,
+	.mmap = vmw_mmap,
+	.poll = vmw_fops_poll,
+	.read = vmw_fops_read,
+	.fasync = drm_fasync,
+#if defined(CONFIG_COMPAT)
+	.compat_ioctl = drm_compat_ioctl,
+#endif
+	.llseek = noop_llseek,
 };
 
 static struct drm_driver driver = {
@@ -1098,25 +1103,7 @@ static struct drm_driver driver = {
 	.master_drop = vmw_master_drop,
 	.open = vmw_driver_open,
 	.postclose = vmw_postclose,
-
-	.dumb_create = vmw_dumb_create,
-	.dumb_map_offset = vmw_dumb_map_offset,
-	.dumb_destroy = vmw_dumb_destroy,
-
-	.fops = {
-		 .owner = THIS_MODULE,
-		 .open = drm_open,
-		 .release = drm_release,
-		 .unlocked_ioctl = vmw_unlocked_ioctl,
-		 .mmap = vmw_mmap,
-		 .poll = vmw_fops_poll,
-		 .read = vmw_fops_read,
-		 .fasync = drm_fasync,
-#if defined(CONFIG_COMPAT)
-		 .compat_ioctl = drm_compat_ioctl,
-#endif
-		 .llseek = noop_llseek,
-	},
+	.fops = &vmwgfx_driver_fops,
 	.name = VMWGFX_DRIVER_NAME,
 	.desc = VMWGFX_DRIVER_DESC,
 	.date = VMWGFX_DRIVER_DATE,
@@ -1143,12 +1130,6 @@ static int vmw_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 static int __init vmwgfx_init(void)
 {
 	int ret;
-
-#ifdef CONFIG_VGA_CONSOLE
-	if (vgacon_text_force())
-		return -EINVAL;
-#endif
-
 	ret = drm_pci_init(&driver, &vmw_pci_driver);
 	if (ret)
 		DRM_ERROR("Failed initializing DRM.\n");

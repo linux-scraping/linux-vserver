@@ -19,7 +19,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <linux/sysdev.h>
 #include <linux/ctype.h>
 #include <linux/workqueue.h>
 #include <asm/uaccess.h>
@@ -275,12 +274,13 @@ static void edac_pci_workq_setup(struct edac_pci_ctl_info *pci,
  */
 static void edac_pci_workq_teardown(struct edac_pci_ctl_info *pci)
 {
+	int status;
+
 	debugf0("%s()\n", __func__);
 
-	pci->op_state = OP_OFFLINE;
-
-	cancel_delayed_work_sync(&pci->work);
-	flush_workqueue(edac_workqueue);
+	status = cancel_delayed_work(&pci->work);
+	if (status == 0)
+		flush_workqueue(edac_workqueue);
 }
 
 /*

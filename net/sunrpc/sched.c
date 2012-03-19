@@ -18,6 +18,7 @@
 #include <linux/smp.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
+#include <linux/freezer.h>
 
 #include <linux/sunrpc/clnt.h>
 
@@ -139,8 +140,6 @@ static void __rpc_add_wait_queue(struct rpc_wait_queue *queue,
 		list_add_tail(&task->u.tk_wait.list, &queue->tasks[0]);
 	task->tk_waitqueue = queue;
 	queue->qlen++;
-	/* barrier matches the read in rpc_wake_up_task_queue_locked() */
-	smp_wmb();
 	rpc_set_queued(task);
 
 	dprintk("RPC: %5u added to queue %p \"%s\"\n",
@@ -233,7 +232,7 @@ static int rpc_wait_bit_killable(void *word)
 {
 	if (fatal_signal_pending(current))
 		return -ERESTARTSYS;
-	schedule();
+	freezable_schedule();
 	return 0;
 }
 
@@ -296,20 +295,13 @@ EXPORT_SYMBOL_GPL(__rpc_wait_for_completion_task);
 /*
  * Make an RPC task runnable.
  *
- * Note: If the task is ASYNC, and is being made runnable after sitting on an
- * rpc_wait_queue, this must be called with the queue spinlock held to protect
- * the wait queue operation.
- * Note the ordering of rpc_test_and_set_running() and rpc_clear_queued(),
- * which is needed to ensure that __rpc_execute() doesn't loop (due to the
- * lockless RPC_IS_QUEUED() test) before we've had a chance to test
- * the RPC_TASK_RUNNING flag.
+ * Note: If the task is ASYNC, this must be called with
+ * the spinlock held to protect the wait queue operation.
  */
 static void rpc_make_runnable(struct rpc_task *task)
 {
-	bool need_wakeup = !rpc_test_and_set_running(task);
-
 	rpc_clear_queued(task);
-	if (!need_wakeup)
+	if (rpc_test_and_set_running(task))
 		return;
 	if (RPC_IS_ASYNC(task)) {
 		INIT_WORK(&task->u.tk_work, rpc_async_schedule);
@@ -398,11 +390,8 @@ static void __rpc_do_wake_up_task(struct rpc_wait_queue *queue, struct rpc_task 
  */
 static void rpc_wake_up_task_queue_locked(struct rpc_wait_queue *queue, struct rpc_task *task)
 {
-	if (RPC_IS_QUEUED(task)) {
-		smp_rmb();
-		if (task->tk_waitqueue == queue)
-			__rpc_do_wake_up_task(queue, task);
-	}
+	if (RPC_IS_QUEUED(task) && task->tk_waitqueue == queue)
+		__rpc_do_wake_up_task(queue, task);
 }
 
 /*
@@ -512,18 +501,14 @@ EXPORT_SYMBOL_GPL(rpc_wake_up_next);
  */
 void rpc_wake_up(struct rpc_wait_queue *queue)
 {
+	struct rpc_task *task, *next;
 	struct list_head *head;
 
 	spin_lock_bh(&queue->lock);
 	head = &queue->tasks[queue->maxpriority];
 	for (;;) {
-		while (!list_empty(head)) {
-			struct rpc_task *task;
-			task = list_first_entry(head,
-					struct rpc_task,
-					u.tk_wait.list);
+		list_for_each_entry_safe(task, next, head, u.tk_wait.list)
 			rpc_wake_up_task_queue_locked(queue, task);
-		}
 		if (head == &queue->tasks[0])
 			break;
 		head--;
@@ -541,16 +526,13 @@ EXPORT_SYMBOL_GPL(rpc_wake_up);
  */
 void rpc_wake_up_status(struct rpc_wait_queue *queue, int status)
 {
+	struct rpc_task *task, *next;
 	struct list_head *head;
 
 	spin_lock_bh(&queue->lock);
 	head = &queue->tasks[queue->maxpriority];
 	for (;;) {
-		while (!list_empty(head)) {
-			struct rpc_task *task;
-			task = list_first_entry(head,
-					struct rpc_task,
-					u.tk_wait.list);
+		list_for_each_entry_safe(task, next, head, u.tk_wait.list) {
 			task->tk_status = status;
 			rpc_wake_up_task_queue_locked(queue, task);
 		}
@@ -767,9 +749,7 @@ void rpc_execute(struct rpc_task *task)
 
 static void rpc_async_schedule(struct work_struct *work)
 {
-	current->flags |= PF_FSTRANS;
 	__rpc_execute(container_of(work, struct rpc_task, u.tk_work));
-	current->flags &= ~PF_FSTRANS;
 }
 
 /**
@@ -892,35 +872,16 @@ struct rpc_task *rpc_new_task(const struct rpc_task_setup *setup_data)
 	return task;
 }
 
-/*
- * rpc_free_task - release rpc task and perform cleanups
- *
- * Note that we free up the rpc_task _after_ rpc_release_calldata()
- * in order to work around a workqueue dependency issue.
- *
- * Tejun Heo states:
- * "Workqueue currently considers two work items to be the same if they're
- * on the same address and won't execute them concurrently - ie. it
- * makes a work item which is queued again while being executed wait
- * for the previous execution to complete.
- *
- * If a work function frees the work item, and then waits for an event
- * which should be performed by another work item and *that* work item
- * recycles the freed work item, it can create a false dependency loop.
- * There really is no reliable way to detect this short of verifying
- * every memory free."
- *
- */
 static void rpc_free_task(struct rpc_task *task)
 {
-	unsigned short tk_flags = task->tk_flags;
+	const struct rpc_call_ops *tk_ops = task->tk_ops;
+	void *calldata = task->tk_calldata;
 
-	rpc_release_calldata(task->tk_ops, task->tk_calldata);
-
-	if (tk_flags & RPC_TASK_DYNAMIC) {
+	if (task->tk_flags & RPC_TASK_DYNAMIC) {
 		dprintk("RPC: %5u freeing task\n", task->tk_pid);
 		mempool_free(task, rpc_task_mempool);
 	}
+	rpc_release_calldata(tk_ops, calldata);
 }
 
 static void rpc_async_release(struct work_struct *work)
@@ -930,7 +891,8 @@ static void rpc_async_release(struct work_struct *work)
 
 static void rpc_release_resources_task(struct rpc_task *task)
 {
-	xprt_release(task);
+	if (task->tk_rqstp)
+		xprt_release(task);
 	if (task->tk_msg.rpc_cred) {
 		put_rpccred(task->tk_msg.rpc_cred);
 		task->tk_msg.rpc_cred = NULL;

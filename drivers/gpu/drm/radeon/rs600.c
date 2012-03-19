@@ -322,16 +322,6 @@ void rs600_hpd_fini(struct radeon_device *rdev)
 	}
 }
 
-void rs600_bm_disable(struct radeon_device *rdev)
-{
-	u16 tmp;
-
-	/* disable bus mastering */
-	pci_read_config_word(rdev->pdev, 0x4, &tmp);
-	pci_write_config_word(rdev->pdev, 0x4, tmp & 0xFFFB);
-	mdelay(1);
-}
-
 int rs600_asic_reset(struct radeon_device *rdev)
 {
 	struct rv515_mc_save save;
@@ -355,7 +345,8 @@ int rs600_asic_reset(struct radeon_device *rdev)
 	WREG32(RADEON_CP_RB_CNTL, tmp);
 	pci_save_state(rdev->pdev);
 	/* disable bus mastering */
-	rs600_bm_disable(rdev);
+	pci_clear_master(rdev->pdev);
+	mdelay(1);
 	/* reset GA+VAP */
 	WREG32(R_0000F0_RBBM_SOFT_RESET, S_0000F0_SOFT_RESET_VAP(1) |
 					S_0000F0_SOFT_RESET_GA(1));
@@ -529,11 +520,8 @@ int rs600_gart_set_page(struct radeon_device *rdev, int i, uint64_t addr)
 		return -EINVAL;
 	}
 	addr = addr & 0xFFFFFFFFFFFFF000ULL;
-	if (addr == rdev->dummy_page.addr)
-		addr |= R600_PTE_SYSTEM | R600_PTE_SNOOPED;
-	else
-		addr |= (R600_PTE_VALID | R600_PTE_SYSTEM | R600_PTE_SNOOPED |
-			 R600_PTE_READABLE | R600_PTE_WRITEABLE);
+	addr |= R600_PTE_VALID | R600_PTE_SYSTEM | R600_PTE_SNOOPED;
+	addr |= R600_PTE_READABLE | R600_PTE_WRITEABLE;
 	writeq(addr, ptr + (i * 8));
 	return 0;
 }
@@ -552,7 +540,7 @@ int rs600_irq_set(struct radeon_device *rdev)
 		WREG32(R_000040_GEN_INT_CNTL, 0);
 		return -EINVAL;
 	}
-	if (rdev->irq.sw_int) {
+	if (rdev->irq.sw_int[RADEON_RING_TYPE_GFX_INDEX]) {
 		tmp |= S_000040_SW_INT_EN(1);
 	}
 	if (rdev->irq.gui_idle) {
@@ -576,10 +564,6 @@ int rs600_irq_set(struct radeon_device *rdev)
 	WREG32(R_006540_DxMODE_INT_MASK, mode_int);
 	WREG32(R_007D08_DC_HOT_PLUG_DETECT1_INT_CONTROL, hpd1);
 	WREG32(R_007D18_DC_HOT_PLUG_DETECT2_INT_CONTROL, hpd2);
-
-	/* posting read */
-	RREG32(R_000040_GEN_INT_CNTL);
-
 	return 0;
 }
 
@@ -649,7 +633,7 @@ int rs600_irq_process(struct radeon_device *rdev)
 	while (status || rdev->irq.stat_regs.r500.disp_int) {
 		/* SW interrupt */
 		if (G_000044_SW_INT(status)) {
-			radeon_fence_process(rdev);
+			radeon_fence_process(rdev, RADEON_RING_TYPE_GFX_INDEX);
 		}
 		/* GUI idle */
 		if (G_000040_GUI_IDLE(status)) {
@@ -854,24 +838,19 @@ static int rs600_startup(struct radeon_device *rdev)
 	if (r)
 		return r;
 
-	/* Enable IRQ */
-	if (!rdev->irq.installed) {
-		r = radeon_irq_kms_init(rdev);
-		if (r)
-			return r;
+	r = radeon_fence_driver_start_ring(rdev, RADEON_RING_TYPE_GFX_INDEX);
+	if (r) {
+		dev_err(rdev->dev, "failed initializing CP fences (%d).\n", r);
+		return r;
 	}
 
+	/* Enable IRQ */
 	rs600_irq_set(rdev);
 	rdev->config.r300.hdp_cntl = RREG32(RADEON_HOST_PATH_CNTL);
 	/* 1M ring buffer */
 	r = r100_cp_init(rdev, 1024 * 1024);
 	if (r) {
 		dev_err(rdev->dev, "failed initializing CP (%d).\n", r);
-		return r;
-	}
-	r = r100_ib_init(rdev);
-	if (r) {
-		dev_err(rdev->dev, "failed initializing IB (%d).\n", r);
 		return r;
 	}
 
@@ -881,11 +860,24 @@ static int rs600_startup(struct radeon_device *rdev)
 		return r;
 	}
 
+	r = radeon_ib_pool_start(rdev);
+	if (r)
+		return r;
+
+	r = r100_ib_test(rdev);
+	if (r) {
+		dev_err(rdev->dev, "failed testing IB (%d).\n", r);
+		rdev->accel_working = false;
+		return r;
+	}
+
 	return 0;
 }
 
 int rs600_resume(struct radeon_device *rdev)
 {
+	int r;
+
 	/* Make sur GART are not working */
 	rs600_gart_disable(rdev);
 	/* Resume clock before doing reset */
@@ -902,11 +894,18 @@ int rs600_resume(struct radeon_device *rdev)
 	rv515_clock_startup(rdev);
 	/* Initialize surface registers */
 	radeon_surface_init(rdev);
-	return rs600_startup(rdev);
+
+	rdev->accel_working = true;
+	r = rs600_startup(rdev);
+	if (r) {
+		rdev->accel_working = false;
+	}
+	return r;
 }
 
 int rs600_suspend(struct radeon_device *rdev)
 {
+	radeon_ib_pool_suspend(rdev);
 	r600_audio_fini(rdev);
 	r100_cp_disable(rdev);
 	radeon_wb_disable(rdev);
@@ -976,6 +975,9 @@ int rs600_init(struct radeon_device *rdev)
 	r = radeon_fence_driver_init(rdev);
 	if (r)
 		return r;
+	r = radeon_irq_kms_init(rdev);
+	if (r)
+		return r;
 	/* Memory manager */
 	r = radeon_bo_init(rdev);
 	if (r)
@@ -984,7 +986,14 @@ int rs600_init(struct radeon_device *rdev)
 	if (r)
 		return r;
 	rs600_set_safe_registers(rdev);
+
+	r = radeon_ib_pool_init(rdev);
 	rdev->accel_working = true;
+	if (r) {
+		dev_err(rdev->dev, "IB initialization failed (%d).\n", r);
+		rdev->accel_working = false;
+	}
+
 	r = rs600_startup(rdev);
 	if (r) {
 		/* Somethings want wront with the accel init stop accel */

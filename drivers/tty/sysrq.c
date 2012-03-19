@@ -32,7 +32,6 @@
 #include <linux/module.h>
 #include <linux/suspend.h>
 #include <linux/writeback.h>
-#include <linux/buffer_head.h>		/* for fsync_bdev() */
 #include <linux/swap.h>
 #include <linux/spinlock.h>
 #include <linux/vt_kern.h>
@@ -41,6 +40,7 @@
 #include <linux/oom.h>
 #include <linux/slab.h>
 #include <linux/input.h>
+#include <linux/uaccess.h>
 #include <linux/vserver/debug.h>
 
 #include <asm/ptrace.h>
@@ -785,8 +785,8 @@ static const struct input_device_id sysrq_ids[] = {
 	{
 		.flags = INPUT_DEVICE_ID_MATCH_EVBIT |
 				INPUT_DEVICE_ID_MATCH_KEYBIT,
-		.evbit = { [BIT_WORD(EV_KEY)] = BIT_MASK(EV_KEY) },
-		.keybit = { [BIT_WORD(KEY_LEFTALT)] = BIT_MASK(KEY_LEFTALT) },
+		.evbit = { BIT_MASK(EV_KEY) },
+		.keybit = { BIT_MASK(KEY_LEFTALT) },
 	},
 	{ },
 };

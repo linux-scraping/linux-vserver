@@ -63,7 +63,8 @@
 #define AC_MAX					4
 #define QOS_QUEUE_NUM				4
 #define RTL_MAC80211_NUM_QUEUE			5
-#define RTL_USB_MAX_RX_COUNT			100
+#define REALTEK_USB_VENQT_MAX_BUF_SIZE		254
+
 #define QBSS_LOAD_SIZE				5
 #define MAX_WMMELE_LENGTH			64
 
@@ -73,7 +74,11 @@
 #define RTL_SLOT_TIME_9				9
 #define RTL_SLOT_TIME_20			20
 
-/*related to tcp/ip. */
+/*related with tcp/ip. */
+/*if_ehther.h*/
+#define ETH_P_PAE		0x888E	/*Port Access Entity (IEEE 802.1X) */
+#define ETH_P_IP		0x0800	/*Internet Protocol packet */
+#define ETH_P_ARP		0x0806	/*Address Resolution packet */
 #define SNAP_SIZE		6
 #define PROTOC_TYPE_SIZE	2
 
@@ -939,8 +944,10 @@ struct rtl_io {
 	unsigned long pci_base_addr;	/*device I/O address */
 
 	void (*write8_async) (struct rtl_priv *rtlpriv, u32 addr, u8 val);
-	void (*write16_async) (struct rtl_priv *rtlpriv, u32 addr, __le16 val);
-	void (*write32_async) (struct rtl_priv *rtlpriv, u32 addr, __le32 val);
+	void (*write16_async) (struct rtl_priv *rtlpriv, u32 addr, u16 val);
+	void (*write32_async) (struct rtl_priv *rtlpriv, u32 addr, u32 val);
+	void (*writeN_sync) (struct rtl_priv *rtlpriv, u32 addr, void *buf,
+			     u16 len);
 
 	u8(*read8_sync) (struct rtl_priv *rtlpriv, u32 addr);
 	u16(*read16_sync) (struct rtl_priv *rtlpriv, u32 addr);
@@ -1481,7 +1488,7 @@ struct rtl_intf_ops {
 
 struct rtl_mod_params {
 	/* default: 0 = using hardware encryption */
-	int sw_crypto;
+	bool sw_crypto;
 
 	/* default: 0 = DBG_EMERG (0)*/
 	int debug;
@@ -1537,6 +1544,7 @@ struct rtl_hal_cfg {
 struct rtl_locks {
 	/* mutex */
 	struct mutex conf_mutex;
+	struct mutex ps_mutex;
 
 	/*spin lock */
 	spinlock_t ips_lock;
@@ -1544,9 +1552,7 @@ struct rtl_locks {
 	spinlock_t h2c_lock;
 	spinlock_t rf_ps_lock;
 	spinlock_t rf_lock;
-	spinlock_t lps_lock;
 	spinlock_t waitq_lock;
-	spinlock_t usb_lock;
 
 	/*Dual mac*/
 	spinlock_t cck_and_rw_pagea_lock;
@@ -1570,7 +1576,8 @@ struct rtl_works {
 	/* For SW LPS */
 	struct delayed_work ps_work;
 	struct delayed_work ps_rfon_wq;
-	struct tasklet_struct ips_leave_tasklet;
+
+	struct work_struct lps_leave_work;
 };
 
 struct rtl_debug {
@@ -1618,15 +1625,11 @@ struct rtl_priv {
 	   interface or hardware */
 	unsigned long status;
 
-	/* data buffer pointer for USB reads */
-	__le32 *usb_data;
-	int usb_data_index;
-
 	/*This must be the last item so
 	   that it points to the data allocated
 	   beyond  this structure like:
 	   rtl_pci_priv or rtl_usb_priv */
-	u8 priv[0] __aligned(sizeof(void *));
+	u8 priv[0];
 };
 
 #define rtl_priv(hw)		(((struct rtl_priv *)(hw)->priv))

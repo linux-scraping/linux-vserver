@@ -144,28 +144,14 @@ ext4_listxattr(struct dentry *dentry, char *buffer, size_t size)
 }
 
 static int
-ext4_xattr_check_names(struct ext4_xattr_entry *entry, void *end,
-		       void *value_start)
+ext4_xattr_check_names(struct ext4_xattr_entry *entry, void *end)
 {
-	struct ext4_xattr_entry *e = entry;
-
-	while (!IS_LAST_ENTRY(e)) {
-		struct ext4_xattr_entry *next = EXT4_XATTR_NEXT(e);
+	while (!IS_LAST_ENTRY(entry)) {
+		struct ext4_xattr_entry *next = EXT4_XATTR_NEXT(entry);
 		if ((void *)next >= end)
 			return -EIO;
-		e = next;
+		entry = next;
 	}
-
-	while (!IS_LAST_ENTRY(entry)) {
-		if (entry->e_value_size != 0 &&
-		    (value_start + le16_to_cpu(entry->e_value_offs) <
-		     (void *)e + sizeof(__u32) ||
-		     value_start + le16_to_cpu(entry->e_value_offs) +
-		    le32_to_cpu(entry->e_value_size) > end))
-			return -EIO;
-		entry = EXT4_XATTR_NEXT(entry);
-	}
-
 	return 0;
 }
 
@@ -177,8 +163,7 @@ ext4_xattr_check_block(struct buffer_head *bh)
 	if (BHDR(bh)->h_magic != cpu_to_le32(EXT4_XATTR_MAGIC) ||
 	    BHDR(bh)->h_blocks != cpu_to_le32(1))
 		return -EIO;
-	error = ext4_xattr_check_names(BFIRST(bh), bh->b_data + bh->b_size,
-				       bh->b_data);
+	error = ext4_xattr_check_names(BFIRST(bh), bh->b_data + bh->b_size);
 	return error;
 }
 
@@ -291,7 +276,7 @@ ext4_xattr_ibody_get(struct inode *inode, int name_index, const char *name,
 	header = IHDR(inode, raw_inode);
 	entry = IFIRST(header);
 	end = (void *)raw_inode + EXT4_SB(inode->i_sb)->s_inode_size;
-	error = ext4_xattr_check_names(entry, end, entry);
+	error = ext4_xattr_check_names(entry, end);
 	if (error)
 		goto cleanup;
 	error = ext4_xattr_find_entry(&entry, name_index, name,
@@ -418,7 +403,7 @@ ext4_xattr_ibody_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 	raw_inode = ext4_raw_inode(&iloc);
 	header = IHDR(inode, raw_inode);
 	end = (void *)raw_inode + EXT4_SB(inode->i_sb)->s_inode_size;
-	error = ext4_xattr_check_names(IFIRST(header), end, IFIRST(header));
+	error = ext4_xattr_check_names(IFIRST(header), end);
 	if (error)
 		goto cleanup;
 	error = ext4_xattr_list_entries(dentry, IFIRST(header),
@@ -502,19 +487,18 @@ ext4_xattr_release_block(handle_t *handle, struct inode *inode,
 		ext4_free_blocks(handle, inode, bh, 0, 1,
 				 EXT4_FREE_BLOCKS_METADATA |
 				 EXT4_FREE_BLOCKS_FORGET);
-		unlock_buffer(bh);
 	} else {
 		le32_add_cpu(&BHDR(bh)->h_refcount, -1);
-		if (ce)
-			mb_cache_entry_release(ce);
-		unlock_buffer(bh);
 		error = ext4_handle_dirty_metadata(handle, inode, bh);
 		if (IS_SYNC(inode))
 			ext4_handle_sync(handle);
-		dquot_free_block(inode, EXT4_C2B(EXT4_SB(inode->i_sb), 1));
+		dquot_free_block(inode, 1);
 		ea_bdebug(bh, "refcount now=%d; releasing",
 			  le32_to_cpu(BHDR(bh)->h_refcount));
+		if (ce)
+			mb_cache_entry_release(ce);
 	}
+	unlock_buffer(bh);
 out:
 	ext4_std_error(inode->i_sb, error);
 	return;
@@ -800,8 +784,7 @@ inserted:
 			else {
 				/* The old block is released after updating
 				   the inode. */
-				error = dquot_alloc_block(inode,
-						EXT4_C2B(EXT4_SB(sb), 1));
+				error = dquot_alloc_block(inode, 1);
 				if (error)
 					goto cleanup;
 				error = ext4_journal_get_write_access(handle,
@@ -855,17 +838,16 @@ inserted:
 
 			new_bh = sb_getblk(sb, block);
 			if (!new_bh) {
-				error = -ENOMEM;
 getblk_failed:
 				ext4_free_blocks(handle, inode, NULL, block, 1,
 						 EXT4_FREE_BLOCKS_METADATA);
+				error = -EIO;
 				goto cleanup;
 			}
 			lock_buffer(new_bh);
 			error = ext4_journal_get_create_access(handle, new_bh);
 			if (error) {
 				unlock_buffer(new_bh);
-				error = -EIO;
 				goto getblk_failed;
 			}
 			memcpy(new_bh->b_data, s->base, new_bh->b_size);
@@ -897,7 +879,7 @@ cleanup:
 	return error;
 
 cleanup_dquot:
-	dquot_free_block(inode, EXT4_C2B(EXT4_SB(sb), 1));
+	dquot_free_block(inode, 1);
 	goto cleanup;
 
 bad_block:
@@ -929,8 +911,7 @@ ext4_xattr_ibody_find(struct inode *inode, struct ext4_xattr_info *i,
 	is->s.here = is->s.first;
 	is->s.end = (void *)raw_inode + EXT4_SB(inode->i_sb)->s_inode_size;
 	if (ext4_test_inode_state(inode, EXT4_STATE_XATTR)) {
-		error = ext4_xattr_check_names(IFIRST(header), is->s.end,
-					       IFIRST(header));
+		error = ext4_xattr_check_names(IFIRST(header), is->s.end);
 		if (error)
 			return error;
 		/* Find the named attribute. */
@@ -1285,9 +1266,6 @@ retry:
 				    s_min_extra_isize) {
 					tried_min_extra_isize++;
 					new_extra_isize = s_min_extra_isize;
-					kfree(is); is = NULL;
-					kfree(bs); bs = NULL;
-					brelse(bh);
 					goto retry;
 				}
 				error = -1;

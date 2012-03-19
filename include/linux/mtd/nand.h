@@ -215,6 +215,9 @@ typedef enum {
 #define NAND_SUBPAGE_READ(chip) ((chip->ecc.mode == NAND_ECC_SOFT) \
 					&& (chip->page_shift > 9))
 
+/* Mask to zero out the chip options, which come from the id table */
+#define NAND_CHIPOPTIONS_MSK	(0x0000ffff & ~NAND_NO_AUTOINCR)
+
 /* Non chip related options */
 /* This option skips the bbt scan during initialization. */
 #define NAND_SKIP_BBTSCAN	0x00010000
@@ -283,7 +286,7 @@ struct nand_onfi_params {
 	__le16 t_r;
 	__le16 t_ccs;
 	__le16 src_sync_timing_mode;
-	u8 src_ssync_features;
+	__le16 src_ssync_features;
 	__le16 clk_pin_capacitance_typ;
 	__le16 io_pin_capacitance_typ;
 	__le16 input_pin_capacitance_typ;
@@ -291,7 +294,7 @@ struct nand_onfi_params {
 	u8 driver_strenght_support;
 	__le16 t_int_r;
 	__le16 t_ald;
-	u8 reserved4[8];
+	u8 reserved4[7];
 
 	/* vendor */
 	u8 reserved5[90];
@@ -552,6 +555,7 @@ struct nand_chip {
 #define NAND_MFR_HYNIX		0xad
 #define NAND_MFR_MICRON		0x2c
 #define NAND_MFR_AMD		0x01
+#define NAND_MFR_MACRONIX	0xc2
 
 /**
  * struct nand_flash_dev - NAND Flash Device ID Structure

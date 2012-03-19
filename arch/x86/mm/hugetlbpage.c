@@ -56,16 +56,9 @@ static int vma_shareable(struct vm_area_struct *vma, unsigned long addr)
 }
 
 /*
- * Search for a shareable pmd page for hugetlb. In any case calls pmd_alloc()
- * and returns the corresponding pte. While this is not necessary for the
- * !shared pmd case because we can allocate the pmd later as well, it makes the
- * code much cleaner. pmd allocation is essential for the shared case because
- * pud has to be populated inside the same i_mmap_mutex section - otherwise
- * racing tasks could either miss the sharing (see huge_pte_offset) or select a
- * bad pmd for sharing.
+ * search for a shareable pmd page for hugetlb.
  */
-static pte_t *
-huge_pmd_share(struct mm_struct *mm, unsigned long addr, pud_t *pud)
+static void huge_pmd_share(struct mm_struct *mm, unsigned long addr, pud_t *pud)
 {
 	struct vm_area_struct *vma = find_vma(mm, addr);
 	struct address_space *mapping = vma->vm_file->f_mapping;
@@ -75,10 +68,9 @@ huge_pmd_share(struct mm_struct *mm, unsigned long addr, pud_t *pud)
 	struct vm_area_struct *svma;
 	unsigned long saddr;
 	pte_t *spte = NULL;
-	pte_t *pte;
 
 	if (!vma_shareable(vma, addr))
-		return (pte_t *)pmd_alloc(mm, pud, addr);
+		return;
 
 	mutex_lock(&mapping->i_mmap_mutex);
 	vma_prio_tree_foreach(svma, &iter, &mapping->i_mmap, idx, idx) {
@@ -105,9 +97,7 @@ huge_pmd_share(struct mm_struct *mm, unsigned long addr, pud_t *pud)
 		put_page(virt_to_page(spte));
 	spin_unlock(&mm->page_table_lock);
 out:
-	pte = (pte_t *)pmd_alloc(mm, pud, addr);
 	mutex_unlock(&mapping->i_mmap_mutex);
-	return pte;
 }
 
 /*
@@ -152,9 +142,8 @@ pte_t *huge_pte_alloc(struct mm_struct *mm,
 		} else {
 			BUG_ON(sz != PMD_SIZE);
 			if (pud_none(*pud))
-				pte = huge_pmd_share(mm, addr, pud);
-			else
-				pte = (pte_t *)pmd_alloc(mm, pud, addr);
+				huge_pmd_share(mm, addr, pud);
+			pte = (pte_t *) pmd_alloc(mm, pud, addr);
 		}
 	}
 	BUG_ON(pte && !pte_none(*pte) && !pte_huge(*pte));
@@ -277,7 +266,7 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
 	struct hstate *h = hstate_file(file);
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma;
-	unsigned long start_addr, vm_start;
+	unsigned long start_addr;
 
 	if (len > mm->cached_hole_size) {
 	        start_addr = mm->free_area_cache;
@@ -303,14 +292,12 @@ full_search:
 			}
 			return -ENOMEM;
 		}
-		if (vma)
-			vm_start = vm_start_gap(vma);
-		if (!vma || addr + len <= vm_start) {
+		if (!vma || addr + len <= vma->vm_start) {
 			mm->free_area_cache = addr + len;
 			return addr;
 		}
-		if (addr + mm->cached_hole_size < vm_start)
-			mm->cached_hole_size = vm_start - addr;
+		if (addr + mm->cached_hole_size < vma->vm_start)
+		        mm->cached_hole_size = vma->vm_start - addr;
 		addr = ALIGN(vma->vm_end, huge_page_size(h));
 	}
 }
@@ -324,7 +311,6 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
 	struct vm_area_struct *vma, *prev_vma;
 	unsigned long base = mm->mmap_base, addr = addr0;
 	unsigned long largest_hole = mm->cached_hole_size;
-	unsigned long vm_start;
 	int first_time = 1;
 
 	/* don't allow allocations above current base */
@@ -347,15 +333,16 @@ try_again:
 		 * Lookup failure means no vma is above this address,
 		 * i.e. return with success:
 		 */
-		if (!(vma = find_vma_prev(mm, addr, &prev_vma)))
+		vma = find_vma(mm, addr);
+		if (!vma)
 			return addr;
 
 		/*
 		 * new region fits between prev_vma->vm_end and
 		 * vma->vm_start, use it:
 		 */
-		vm_start = vm_start_gap(vma);
-		if (addr + len <= vm_start &&
+		prev_vma = vma->vm_prev;
+		if (addr + len <= vma->vm_start &&
 		            (!prev_vma || (addr >= prev_vma->vm_end))) {
 			/* remember the address as a hint for next time */
 		        mm->cached_hole_size = largest_hole;
@@ -369,12 +356,12 @@ try_again:
 		}
 
 		/* remember the largest hole we saw so far */
-		if (addr + largest_hole < vm_start)
-			largest_hole = vm_start - addr;
+		if (addr + largest_hole < vma->vm_start)
+		        largest_hole = vma->vm_start - addr;
 
 		/* try just below the current vma->vm_start */
-		addr = (vm_start - len) & huge_page_mask(h);
-	} while (len <= vm_start);
+		addr = (vma->vm_start - len) & huge_page_mask(h);
+	} while (len <= vma->vm_start);
 
 fail:
 	/*
@@ -430,7 +417,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
 		addr = ALIGN(addr, huge_page_size(h));
 		vma = find_vma(mm, addr);
 		if (TASK_SIZE - len >= addr &&
-		    (!vma || addr + len <= vm_start_gap(vma)))
+		    (!vma || addr + len <= vma->vm_start))
 			return addr;
 	}
 	if (mm->get_unmapped_area == arch_get_unmapped_area)

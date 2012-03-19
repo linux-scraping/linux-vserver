@@ -41,21 +41,17 @@ extern struct file_system_type cifs_fs_type;
 extern const struct address_space_operations cifs_addr_ops;
 extern const struct address_space_operations cifs_addr_ops_smallbuf;
 
-/* Functions related to super block operations */
-extern void cifs_sb_active(struct super_block *sb);
-extern void cifs_sb_deactive(struct super_block *sb);
-
 /* Functions related to inodes */
 extern const struct inode_operations cifs_dir_inode_ops;
 extern struct inode *cifs_root_iget(struct super_block *);
-extern int cifs_create(struct inode *, struct dentry *, int,
+extern int cifs_create(struct inode *, struct dentry *, umode_t,
 		       struct nameidata *);
 extern struct dentry *cifs_lookup(struct inode *, struct dentry *,
 				  struct nameidata *);
 extern int cifs_unlink(struct inode *dir, struct dentry *dentry);
 extern int cifs_hardlink(struct dentry *, struct inode *, struct dentry *);
-extern int cifs_mknod(struct inode *, struct dentry *, int, dev_t);
-extern int cifs_mkdir(struct inode *, struct dentry *, int);
+extern int cifs_mknod(struct inode *, struct dentry *, umode_t, dev_t);
+extern int cifs_mkdir(struct inode *, struct dentry *, umode_t);
 extern int cifs_rmdir(struct inode *, struct dentry *);
 extern int cifs_rename(struct inode *, struct dentry *, struct inode *,
 		       struct dentry *);

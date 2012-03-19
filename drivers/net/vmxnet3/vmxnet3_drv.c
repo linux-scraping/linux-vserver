@@ -838,8 +838,8 @@ vmxnet3_parse_and_copy_hdr(struct sk_buff *skb, struct vmxnet3_tx_queue *tq,
 				/* for simplicity, don't copy L4 headers */
 				ctx->l4_hdr_size = 0;
 			}
-			ctx->copy_size = ctx->eth_ip_hdr_size +
-					 ctx->l4_hdr_size;
+			ctx->copy_size = min(ctx->eth_ip_hdr_size +
+					 ctx->l4_hdr_size, skb->len);
 		} else {
 			ctx->eth_ip_hdr_size = 0;
 			ctx->l4_hdr_size = 0;
@@ -1734,20 +1734,11 @@ vmxnet3_netpoll(struct net_device *netdev)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
 
-	switch (adapter->intr.type) {
-#ifdef CONFIG_PCI_MSI
-	case VMXNET3_IT_MSIX: {
-		int i;
-		for (i = 0; i < adapter->num_rx_queues; i++)
-			vmxnet3_msix_rx(0, &adapter->rx_queue[i]);
-		break;
-	}
-#endif
-	case VMXNET3_IT_MSI:
-	default:
-		vmxnet3_intr(0, adapter->netdev);
-		break;
-	}
+	if (adapter->intr.mask_mode == VMXNET3_IMM_ACTIVE)
+		vmxnet3_disable_all_intrs(adapter);
+
+	vmxnet3_do_poll(adapter, adapter->rx_queue[0].rx_ring[0].size);
+	vmxnet3_enable_all_intrs(adapter);
 
 }
 #endif	/* CONFIG_NET_POLL_CONTROLLER */
@@ -1930,7 +1921,7 @@ vmxnet3_restore_vlan(struct vmxnet3_adapter *adapter)
 }
 
 
-static void
+static int
 vmxnet3_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
@@ -1947,10 +1938,12 @@ vmxnet3_vlan_rx_add_vid(struct net_device *netdev, u16 vid)
 	}
 
 	set_bit(vid, adapter->active_vlans);
+
+	return 0;
 }
 
 
-static void
+static int
 vmxnet3_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
@@ -1967,6 +1960,8 @@ vmxnet3_vlan_rx_kill_vid(struct net_device *netdev, u16 vid)
 	}
 
 	clear_bit(vid, adapter->active_vlans);
+
+	return 0;
 }
 
 
@@ -2167,7 +2162,8 @@ vmxnet3_setup_driver_shared(struct vmxnet3_adapter *adapter)
 		rssConf->indTableSize = VMXNET3_RSS_IND_TABLE_SIZE;
 		get_random_bytes(&rssConf->hashKey[0], rssConf->hashKeySize);
 		for (i = 0; i < rssConf->indTableSize; i++)
-			rssConf->indTable[i] = i % adapter->num_rx_queues;
+			rssConf->indTable[i] = ethtool_rxfh_indir_default(
+				i, adapter->num_rx_queues);
 
 		devRead->rssConfDesc.confVer = 1;
 		devRead->rssConfDesc.confLen = sizeof(*rssConf);

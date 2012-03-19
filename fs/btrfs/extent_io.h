@@ -129,6 +129,7 @@ struct extent_buffer {
 	struct list_head leak_list;
 	struct rcu_head rcu_head;
 	atomic_t refs;
+	pid_t lock_owner;
 
 	/* count of read lock holders on the extent buffer */
 	atomic_t write_locks;
@@ -137,6 +138,7 @@ struct extent_buffer {
 	atomic_t blocking_readers;
 	atomic_t spinning_readers;
 	atomic_t spinning_writers;
+	int lock_nested;
 
 	/* protects write locks */
 	rwlock_t lock;
@@ -304,8 +306,6 @@ int map_private_extent_buffer(struct extent_buffer *eb, unsigned long offset,
 		      unsigned long *map_len);
 int extent_range_uptodate(struct extent_io_tree *tree,
 			  u64 start, u64 end);
-int extent_range_clear_dirty_for_io(struct inode *inode, u64 start, u64 end);
-int extent_range_redirty_for_io(struct inode *inode, u64 start, u64 end);
 int extent_clear_unlock_delalloc(struct inode *inode,
 				struct extent_io_tree *tree,
 				u64 start, u64 end, struct page *locked_page,
@@ -319,4 +319,5 @@ struct btrfs_mapping_tree;
 int repair_io_failure(struct btrfs_mapping_tree *map_tree, u64 start,
 			u64 length, u64 logical, struct page *page,
 			int mirror_num);
+int end_extent_writepage(struct page *page, int err, u64 start, u64 end);
 #endif

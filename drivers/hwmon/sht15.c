@@ -683,7 +683,7 @@ static ssize_t sht15_store_heater(struct device *dev,
 	long value;
 	u8 status;
 
-	if (strict_strtol(buf, 10, &value))
+	if (kstrtol(buf, 10, &value))
 		return -EINVAL;
 
 	mutex_lock(&data->read_lock);
@@ -926,13 +926,7 @@ static int __devinit sht15_probe(struct platform_device *pdev)
 		if (voltage)
 			data->supply_uV = voltage;
 
-		ret = regulator_enable(data->reg);
-		if (ret != 0) {
-			dev_err(&pdev->dev,
-				"failed to enable regulator: %d\n", ret);
-			goto err_free_data;
-		}
-
+		regulator_enable(data->reg);
 		/*
 		 * Setup a notifier block to update this if another device
 		 * causes the voltage to change

@@ -118,9 +118,6 @@ MODULE_LICENSE("GPL v2");
  */
 #define EMS_USB_ARM7_CLOCK 8000000
 
-#define CPC_TX_QUEUE_TRIGGER_LOW	25
-#define CPC_TX_QUEUE_TRIGGER_HIGH	35
-
 /*
  * CAN-Message representation in a CPC_MSG. Message object type is
  * CPC_MSG_TYPE_CAN_FRAME or CPC_MSG_TYPE_RTR_FRAME or
@@ -283,11 +280,6 @@ static void ems_usb_read_interrupt_callback(struct urb *urb)
 	switch (urb->status) {
 	case 0:
 		dev->free_slots = dev->intr_in_buffer[1];
-		if(dev->free_slots > CPC_TX_QUEUE_TRIGGER_HIGH){
-			if (netif_queue_stopped(netdev)){
-				netif_wake_queue(netdev);
-			}
-		}
 		break;
 
 	case -ECONNRESET: /* unlink */
@@ -543,6 +535,8 @@ static void ems_usb_write_bulk_callback(struct urb *urb)
 	/* Release context */
 	context->echo_index = MAX_TX_URBS;
 
+	if (netif_queue_stopped(netdev))
+		netif_wake_queue(netdev);
 }
 
 /*
@@ -602,7 +596,7 @@ static int ems_usb_start(struct ems_usb *dev)
 	int err, i;
 
 	dev->intr_in_buffer[0] = 0;
-	dev->free_slots = 50; /* initial size */
+	dev->free_slots = 15; /* initial size */
 
 	for (i = 0; i < MAX_RX_URBS; i++) {
 		struct urb *urb = NULL;
@@ -633,9 +627,6 @@ static int ems_usb_start(struct ems_usb *dev)
 
 		err = usb_submit_urb(urb, GFP_KERNEL);
 		if (err) {
-			if (err == -ENODEV)
-				netif_device_detach(dev->netdev);
-
 			usb_unanchor_urb(urb);
 			usb_free_coherent(dev->udev, RX_BUFFER_SIZE, buf,
 					  urb->transfer_dma);
@@ -665,9 +656,6 @@ static int ems_usb_start(struct ems_usb *dev)
 
 	err = usb_submit_urb(dev->intr_urb, GFP_KERNEL);
 	if (err) {
-		if (err == -ENODEV)
-			netif_device_detach(dev->netdev);
-
 		dev_warn(netdev->dev.parent, "intr URB submit failed: %d\n",
 			 err);
 
@@ -698,9 +686,6 @@ static int ems_usb_start(struct ems_usb *dev)
 	return 0;
 
 failed:
-	if (err == -ENODEV)
-		netif_device_detach(dev->netdev);
-
 	dev_warn(netdev->dev.parent, "couldn't submit control: %d\n", err);
 
 	return err;
@@ -864,7 +849,7 @@ static netdev_tx_t ems_usb_start_xmit(struct sk_buff *skb, struct net_device *ne
 
 		/* Slow down tx path */
 		if (atomic_read(&dev->active_tx_urbs) >= MAX_TX_URBS ||
-		    dev->free_slots < CPC_TX_QUEUE_TRIGGER_LOW) {
+		    dev->free_slots < 5) {
 			netif_stop_queue(netdev);
 		}
 	}
@@ -1121,28 +1106,4 @@ static struct usb_driver ems_usb_driver = {
 	.id_table = ems_usb_table,
 };
 
-static int __init ems_usb_init(void)
-{
-	int err;
-
-	printk(KERN_INFO "CPC-USB kernel driver loaded\n");
-
-	/* register this driver with the USB subsystem */
-	err = usb_register(&ems_usb_driver);
-
-	if (err) {
-		err("usb_register failed. Error number %d\n", err);
-		return err;
-	}
-
-	return 0;
-}
-
-static void __exit ems_usb_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&ems_usb_driver);
-}
-
-module_init(ems_usb_init);
-module_exit(ems_usb_exit);
+module_usb_driver(ems_usb_driver);

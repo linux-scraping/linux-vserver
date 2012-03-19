@@ -368,7 +368,7 @@ static struct attribute *ideapad_attributes[] = {
 	NULL
 };
 
-static mode_t ideapad_is_visible(struct kobject *kobj,
+static umode_t ideapad_is_visible(struct kobject *kobj,
 				 struct attribute *attr,
 				 int idx)
 {
@@ -407,8 +407,7 @@ const struct ideapad_rfk_data ideapad_rfk_data[] = {
 
 static int ideapad_rfk_set(void *data, bool blocked)
 {
-	unsigned long dev = (unsigned long)data;
-	int opcode = ideapad_rfk_data[dev].opcode;
+	unsigned long opcode = (unsigned long)data;
 
 	return write_ec_cmd(ideapad_handle, opcode, !blocked);
 }

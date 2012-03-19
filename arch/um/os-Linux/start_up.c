@@ -15,8 +15,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/time.h>
-#include <sys/resource.h>
 #include <asm/unistd.h>
 #include "init.h"
 #include "os.h"
@@ -94,8 +92,6 @@ static void non_fatal(char *fmt, ...)
 static int start_ptraced_child(void)
 {
 	int pid, n, status;
-
-	fflush(stdout);
 
 	pid = fork();
 	if (pid == 0)

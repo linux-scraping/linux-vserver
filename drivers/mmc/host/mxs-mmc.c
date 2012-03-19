@@ -154,6 +154,7 @@ struct mxs_mmc_host {
 	struct dma_chan         	*dmach;
 	struct mxs_dma_data		dma_data;
 	unsigned int			dma_dir;
+	enum dma_transfer_direction	slave_dirn;
 	u32				ssp_pio_words[SSP_PIO_NUM];
 
 	unsigned int			version;
@@ -279,10 +280,10 @@ static irqreturn_t mxs_mmc_irq_handler(int irq, void *dev_id)
 	writel(stat & MXS_MMC_IRQ_BITS,
 	       host->base + HW_SSP_CTRL1 + MXS_CLR_ADDR);
 
-	spin_unlock(&host->lock);
-
 	if ((stat & BM_SSP_CTRL1_SDIO_IRQ) && (stat & BM_SSP_CTRL1_SDIO_IRQ_EN))
 		mmc_signal_sdio_irq(host->mmc);
+
+	spin_unlock(&host->lock);
 
 	if (stat & BM_SSP_CTRL1_RESP_TIMEOUT_IRQ)
 		cmd->error = -ETIMEDOUT;
@@ -324,7 +325,7 @@ static struct dma_async_tx_descriptor *mxs_mmc_prep_dma(
 	}
 
 	desc = host->dmach->device->device_prep_slave_sg(host->dmach,
-				sgl, sg_len, host->dma_dir, append);
+				sgl, sg_len, host->slave_dirn, append);
 	if (desc) {
 		desc->callback = mxs_mmc_dma_irq_callback;
 		desc->callback_param = host;
@@ -356,6 +357,7 @@ static void mxs_mmc_bc(struct mxs_mmc_host *host)
 	host->ssp_pio_words[1] = cmd0;
 	host->ssp_pio_words[2] = cmd1;
 	host->dma_dir = DMA_NONE;
+	host->slave_dirn = DMA_TRANS_NONE;
 	desc = mxs_mmc_prep_dma(host, 0);
 	if (!desc)
 		goto out;
@@ -386,9 +388,6 @@ static void mxs_mmc_ac(struct mxs_mmc_host *host)
 	cmd0 = BF_SSP(cmd->opcode, CMD0_CMD);
 	cmd1 = cmd->arg;
 
-	if (cmd->opcode == MMC_STOP_TRANSMISSION)
-		cmd0 |= BM_SSP_CMD0_APPEND_8CYC;
-
 	if (host->sdio_irq_en) {
 		ctrl0 |= BM_SSP_CTRL0_SDIO_IRQ_CHECK;
 		cmd0 |= BM_SSP_CMD0_CONT_CLKING_EN | BM_SSP_CMD0_SLOW_CLKING_EN;
@@ -398,6 +397,7 @@ static void mxs_mmc_ac(struct mxs_mmc_host *host)
 	host->ssp_pio_words[1] = cmd0;
 	host->ssp_pio_words[2] = cmd1;
 	host->dma_dir = DMA_NONE;
+	host->slave_dirn = DMA_TRANS_NONE;
 	desc = mxs_mmc_prep_dma(host, 0);
 	if (!desc)
 		goto out;
@@ -436,6 +436,7 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 	int i;
 
 	unsigned short dma_data_dir, timeout;
+	enum dma_transfer_direction slave_dirn;
 	unsigned int data_size = 0, log2_blksz;
 	unsigned int blocks = data->blocks;
 
@@ -451,9 +452,11 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 
 	if (data->flags & MMC_DATA_WRITE) {
 		dma_data_dir = DMA_TO_DEVICE;
+		slave_dirn = DMA_MEM_TO_DEV;
 		read = 0;
 	} else {
 		dma_data_dir = DMA_FROM_DEVICE;
+		slave_dirn = DMA_DEV_TO_MEM;
 		read = BM_SSP_CTRL0_READ;
 	}
 
@@ -490,7 +493,8 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 		       host->base + HW_SSP_BLOCK_SIZE);
 	}
 
-	if (cmd->opcode == SD_IO_RW_EXTENDED)
+	if ((cmd->opcode == MMC_STOP_TRANSMISSION) ||
+	    (cmd->opcode == SD_IO_RW_EXTENDED))
 		cmd0 |= BM_SSP_CMD0_APPEND_8CYC;
 
 	cmd1 = cmd->arg;
@@ -512,6 +516,7 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 	host->ssp_pio_words[1] = cmd0;
 	host->ssp_pio_words[2] = cmd1;
 	host->dma_dir = DMA_NONE;
+	host->slave_dirn = DMA_TRANS_NONE;
 	desc = mxs_mmc_prep_dma(host, 0);
 	if (!desc)
 		goto out;
@@ -520,6 +525,7 @@ static void mxs_mmc_adtc(struct mxs_mmc_host *host)
 	WARN_ON(host->data != NULL);
 	host->data = data;
 	host->dma_dir = dma_data_dir;
+	host->slave_dirn = slave_dirn;
 	desc = mxs_mmc_prep_dma(host, 1);
 	if (!desc)
 		goto out;
@@ -630,6 +636,10 @@ static void mxs_mmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 		       host->base + HW_SSP_CTRL0 + MXS_SET_ADDR);
 		writel(BM_SSP_CTRL1_SDIO_IRQ_EN,
 		       host->base + HW_SSP_CTRL1 + MXS_SET_ADDR);
+
+		if (readl(host->base + HW_SSP_STATUS) & BM_SSP_STATUS_SDIO_IRQ)
+			mmc_signal_sdio_irq(host->mmc);
+
 	} else {
 		writel(BM_SSP_CTRL0_SDIO_IRQ_CHECK,
 		       host->base + HW_SSP_CTRL0 + MXS_CLR_ADDR);
@@ -638,10 +648,6 @@ static void mxs_mmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	}
 
 	spin_unlock_irqrestore(&host->lock, flags);
-
-	if (enable && readl(host->base + HW_SSP_STATUS) & BM_SSP_STATUS_SDIO_IRQ)
-		mmc_signal_sdio_irq(host->mmc);
-
 }
 
 static const struct mmc_host_ops mxs_mmc_ops = {
@@ -715,7 +721,7 @@ static int mxs_mmc_probe(struct platform_device *pdev)
 		ret = PTR_ERR(host->clk);
 		goto out_iounmap;
 	}
-	clk_enable(host->clk);
+	clk_prepare_enable(host->clk);
 
 	mxs_mmc_reset(host);
 
@@ -754,11 +760,11 @@ static int mxs_mmc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mmc);
 
-	spin_lock_init(&host->lock);
-
 	ret = request_irq(host->irq, mxs_mmc_irq_handler, 0, DRIVER_NAME, host);
 	if (ret)
 		goto out_free_dma;
+
+	spin_lock_init(&host->lock);
 
 	ret = mmc_add_host(mmc);
 	if (ret)
@@ -774,7 +780,7 @@ out_free_dma:
 	if (host->dmach)
 		dma_release_channel(host->dmach);
 out_clk_put:
-	clk_disable(host->clk);
+	clk_disable_unprepare(host->clk);
 	clk_put(host->clk);
 out_iounmap:
 	iounmap(host->base);
@@ -800,7 +806,7 @@ static int mxs_mmc_remove(struct platform_device *pdev)
 	if (host->dmach)
 		dma_release_channel(host->dmach);
 
-	clk_disable(host->clk);
+	clk_disable_unprepare(host->clk);
 	clk_put(host->clk);
 
 	iounmap(host->base);
@@ -821,7 +827,7 @@ static int mxs_mmc_suspend(struct device *dev)
 
 	ret = mmc_suspend_host(mmc);
 
-	clk_disable(host->clk);
+	clk_disable_unprepare(host->clk);
 
 	return ret;
 }
@@ -832,7 +838,7 @@ static int mxs_mmc_resume(struct device *dev)
 	struct mxs_mmc_host *host = mmc_priv(mmc);
 	int ret = 0;
 
-	clk_enable(host->clk);
+	clk_prepare_enable(host->clk);
 
 	ret = mmc_resume_host(mmc);
 
@@ -857,18 +863,7 @@ static struct platform_driver mxs_mmc_driver = {
 	},
 };
 
-static int __init mxs_mmc_init(void)
-{
-	return platform_driver_register(&mxs_mmc_driver);
-}
-
-static void __exit mxs_mmc_exit(void)
-{
-	platform_driver_unregister(&mxs_mmc_driver);
-}
-
-module_init(mxs_mmc_init);
-module_exit(mxs_mmc_exit);
+module_platform_driver(mxs_mmc_driver);
 
 MODULE_DESCRIPTION("FREESCALE MXS MMC peripheral");
 MODULE_AUTHOR("Freescale Semiconductor");

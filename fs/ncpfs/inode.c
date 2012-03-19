@@ -44,7 +44,7 @@
 static void ncp_evict_inode(struct inode *);
 static void ncp_put_super(struct super_block *);
 static int  ncp_statfs(struct dentry *, struct kstatfs *);
-static int  ncp_show_options(struct seq_file *, struct vfsmount *);
+static int  ncp_show_options(struct seq_file *, struct dentry *);
 
 static struct kmem_cache * ncp_inode_cachep;
 
@@ -60,7 +60,6 @@ static struct inode *ncp_alloc_inode(struct super_block *sb)
 static void ncp_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(ncp_inode_cachep, NCP_FINFO(inode));
 }
 
@@ -323,9 +322,9 @@ static void ncp_stop_tasks(struct ncp_server *server) {
 		flush_work_sync(&server->timeout_tq);
 }
 
-static int  ncp_show_options(struct seq_file *seq, struct vfsmount *mnt)
+static int  ncp_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct ncp_server *server = NCP_SBP(mnt->mnt_sb);
+	struct ncp_server *server = NCP_SBP(root->d_sb);
 	unsigned int tmp;
 
 	if (server->m.uid != 0)
@@ -880,7 +879,7 @@ int ncp_notify_change(struct dentry *dentry, struct iattr *attr)
 	/* ageing the dentry to force validation */
 	ncp_age_dentry(server, dentry);
 
-	result = setattr_prepare(dentry, attr);
+	result = inode_change_ok(inode, attr);
 	if (result < 0)
 		goto out;
 

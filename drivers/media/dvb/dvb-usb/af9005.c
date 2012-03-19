@@ -30,7 +30,7 @@ MODULE_PARM_DESC(debug,
 		 "set debugging level (1=info,xfer=2,rc=4,reg=8,i2c=16,fw=32 (or-able))."
 		 DVB_USB_DEBUG_STATUS);
 /* enable obnoxious led */
-int dvb_usb_af9005_led = 1;
+bool dvb_usb_af9005_led = 1;
 module_param_named(led, dvb_usb_af9005_led, bool, 0644);
 MODULE_PARM_DESC(led, "enable led (default: 1).");
 
@@ -977,11 +977,20 @@ static int af9005_usb_probe(struct usb_interface *intf,
 				   THIS_MODULE, NULL, adapter_nr);
 }
 
+enum af9005_usb_table_entry {
+	AFATECH_AF9005,
+	TERRATEC_AF9005,
+	ANSONIC_AF9005,
+};
+
 static struct usb_device_id af9005_usb_table[] = {
-	{USB_DEVICE(USB_VID_AFATECH, USB_PID_AFATECH_AF9005)},
-	{USB_DEVICE(USB_VID_TERRATEC, USB_PID_TERRATEC_CINERGY_T_USB_XE)},
-	{USB_DEVICE(USB_VID_ANSONIC, USB_PID_ANSONIC_DVBT_USB)},
-	{0},
+	[AFATECH_AF9005] = {USB_DEVICE(USB_VID_AFATECH,
+				USB_PID_AFATECH_AF9005)},
+	[TERRATEC_AF9005] = {USB_DEVICE(USB_VID_TERRATEC,
+				USB_PID_TERRATEC_CINERGY_T_USB_XE)},
+	[ANSONIC_AF9005] = {USB_DEVICE(USB_VID_ANSONIC,
+				USB_PID_ANSONIC_DVBT_USB)},
+	{ }
 };
 
 MODULE_DEVICE_TABLE(usb, af9005_usb_table);
@@ -1041,15 +1050,15 @@ static struct dvb_usb_device_properties af9005_properties = {
 	.num_device_descs = 3,
 	.devices = {
 		    {.name = "Afatech DVB-T USB1.1 stick",
-		     .cold_ids = {&af9005_usb_table[0], NULL},
+		     .cold_ids = {&af9005_usb_table[AFATECH_AF9005], NULL},
 		     .warm_ids = {NULL},
 		     },
 		    {.name = "TerraTec Cinergy T USB XE",
-		     .cold_ids = {&af9005_usb_table[1], NULL},
+		     .cold_ids = {&af9005_usb_table[TERRATEC_AF9005], NULL},
 		     .warm_ids = {NULL},
 		     },
 		    {.name = "Ansonic DVB-T USB1.1 stick",
-		     .cold_ids = {&af9005_usb_table[2], NULL},
+		     .cold_ids = {&af9005_usb_table[ANSONIC_AF9005], NULL},
 		     .warm_ids = {NULL},
 		     },
 		    {NULL},
@@ -1072,12 +1081,9 @@ static int __init af9005_usb_module_init(void)
 		err("usb_register failed. (%d)", result);
 		return result;
 	}
-#if IS_MODULE(CONFIG_DVB_USB_AF9005) || defined(CONFIG_DVB_USB_AF9005_REMOTE)
-	/* FIXME: convert to todays kernel IR infrastructure */
 	rc_decode = symbol_request(af9005_rc_decode);
 	rc_keys = symbol_request(rc_map_af9005_table);
 	rc_keys_size = symbol_request(rc_map_af9005_table_size);
-#endif
 	if (rc_decode == NULL || rc_keys == NULL || rc_keys_size == NULL) {
 		err("af9005_rc_decode function not found, disabling remote");
 		af9005_properties.rc.legacy.rc_query = NULL;

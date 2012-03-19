@@ -71,7 +71,7 @@
 #include <linux/jiffies.h>
 #include <linux/idr.h>
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 #include <net/ipv6.h>
 #include <net/ip6_route.h>
 #endif
@@ -383,7 +383,7 @@ static inline void sctp_sysctl_unregister(void) { return; }
 /* Size of Supported Address Parameter for 'x' address types. */
 #define SCTP_SAT_LEN(x) (sizeof(struct sctp_paramhdr) + (x) * sizeof(__u16))
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 
 void sctp_v6_pf_init(void);
 void sctp_v6_pf_exit(void);
@@ -523,11 +523,6 @@ static inline void sctp_assoc_pending_pmtu(struct sctp_association *asoc)
 	asoc->pmtu_pending = 0;
 }
 
-static inline bool sctp_chunk_pending(const struct sctp_chunk *chunk)
-{
-	return !list_empty(&chunk->list);
-}
-
 /* Walk through a list of TLV parameters.  Don't trust the
  * individual parameter lengths and instead depend on
  * the chunk length to indicate when to stop.  Make sure
@@ -538,8 +533,6 @@ _sctp_walk_params((pos), (chunk), ntohs((chunk)->chunk_hdr.length), member)
 
 #define _sctp_walk_params(pos, chunk, end, member)\
 for (pos.v = chunk->member;\
-     (pos.v + offsetof(struct sctp_paramhdr, length) + sizeof(pos.p->length) <=\
-      (void *)chunk + end) &&\
      pos.v <= (void *)chunk + end - ntohs(pos.p->length) &&\
      ntohs(pos.p->length) >= sizeof(sctp_paramhdr_t);\
      pos.v += WORD_ROUND(ntohs(pos.p->length)))
@@ -550,8 +543,6 @@ _sctp_walk_errors((err), (chunk_hdr), ntohs((chunk_hdr)->length))
 #define _sctp_walk_errors(err, chunk_hdr, end)\
 for (err = (sctp_errhdr_t *)((void *)chunk_hdr + \
 	    sizeof(sctp_chunkhdr_t));\
-     ((void *)err + offsetof(sctp_errhdr_t, length) + sizeof(err->length) <=\
-      (void *)chunk_hdr + end) &&\
      (void *)err <= (void *)chunk_hdr + end - ntohs(err->length) &&\
      ntohs(err->length) >= sizeof(sctp_errhdr_t); \
      err = (sctp_errhdr_t *)((void *)err + WORD_ROUND(ntohs(err->length))))
@@ -705,26 +696,11 @@ static inline void sctp_v6_map_v4(union sctp_addr *addr)
 static inline void sctp_v4_map_v6(union sctp_addr *addr)
 {
 	addr->v6.sin6_family = AF_INET6;
-	addr->v6.sin6_flowinfo = 0;
-	addr->v6.sin6_scope_id = 0;
 	addr->v6.sin6_port = addr->v4.sin_port;
 	addr->v6.sin6_addr.s6_addr32[3] = addr->v4.sin_addr.s_addr;
 	addr->v6.sin6_addr.s6_addr32[0] = 0;
 	addr->v6.sin6_addr.s6_addr32[1] = 0;
 	addr->v6.sin6_addr.s6_addr32[2] = htonl(0x0000ffff);
-}
-
-/* The cookie is always 0 since this is how it's used in the
- * pmtu code.
- */
-static inline struct dst_entry *sctp_transport_dst_check(struct sctp_transport *t)
-{
-	if (t->dst && !dst_check(t->dst, 0)) {
-		dst_release(t->dst);
-		t->dst = NULL;
-	}
-
-	return t->dst;
 }
 
 #endif /* __net_sctp_h__ */

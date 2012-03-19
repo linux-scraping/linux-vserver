@@ -307,7 +307,7 @@ static int adav80x_put_deemph(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct adav80x *adav80x = snd_soc_codec_get_drvdata(codec);
-	unsigned int deemph = ucontrol->value.integer.value[0];
+	unsigned int deemph = ucontrol->value.enumerated.item[0];
 
 	if (deemph > 1)
 		return -EINVAL;
@@ -323,7 +323,7 @@ static int adav80x_get_deemph(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct adav80x *adav80x = snd_soc_codec_get_drvdata(codec);
 
-	ucontrol->value.integer.value[0] = adav80x->deemph;
+	ucontrol->value.enumerated.item[0] = adav80x->deemph;
 	return 0;
 };
 
@@ -798,7 +798,7 @@ static int adav80x_probe(struct snd_soc_codec *codec)
 	return adav80x_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 }
 
-static int adav80x_suspend(struct snd_soc_codec *codec, pm_message_t state)
+static int adav80x_suspend(struct snd_soc_codec *codec)
 {
 	return adav80x_set_bias_level(codec, SND_SOC_BIAS_OFF);
 }

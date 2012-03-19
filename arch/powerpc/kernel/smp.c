@@ -27,7 +27,7 @@
 #include <linux/spinlock.h>
 #include <linux/cache.h>
 #include <linux/err.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/cpu.h>
 #include <linux/notifier.h>
 #include <linux/topology.h>
@@ -187,7 +187,8 @@ int smp_request_message_ipi(int virq, int msg)
 		return 1;
 	}
 #endif
-	err = request_irq(virq, smp_ipi_action[msg], IRQF_PERCPU,
+	err = request_irq(virq, smp_ipi_action[msg],
+			  IRQF_PERCPU | IRQF_NO_THREAD,
 			  smp_ipi_name[msg], 0);
 	WARN(err < 0, "unable to request_irq %d for %s (rc %d)\n",
 		virq, smp_ipi_name[msg], err);
@@ -214,15 +215,8 @@ void smp_muxed_ipi_message_pass(int cpu, int msg)
 	struct cpu_messages *info = &per_cpu(ipi_message, cpu);
 	char *message = (char *)&info->messages;
 
-	/*
-	 * Order previous accesses before accesses in the IPI handler.
-	 */
-	smp_mb();
 	message[msg] = 1;
-	/*
-	 * cause_ipi functions are required to include a full barrier
-	 * before doing whatever causes the IPI.
-	 */
+	mb();
 	smp_ops->cause_ipi(cpu, info->data);
 }
 
@@ -234,7 +228,7 @@ irqreturn_t smp_ipi_demux(void)
 	mb();	/* order any irq clear */
 
 	do {
-		all = xchg(&info->messages, 0);
+		all = xchg_local(&info->messages, 0);
 
 #ifdef __BIG_ENDIAN
 		if (all & (1 << (24 - 8 * PPC_MSG_CALL_FUNCTION)))

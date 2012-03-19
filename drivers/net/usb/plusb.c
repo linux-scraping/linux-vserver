@@ -139,11 +139,6 @@ static const struct usb_device_id	products [] = {
 }, {
 	USB_DEVICE(0x050d, 0x258a),     /* Belkin F5U258/F5U279 (PL-25A1) */
 	.driver_info =  (unsigned long) &prolific_info,
-}, {
-	USB_DEVICE(0x3923, 0x7825),     /* National Instruments USB
-					 * Host-to-Host Cable
-					 */
-	.driver_info =  (unsigned long) &prolific_info,
 },
 
 	{ },		// END
@@ -159,17 +154,7 @@ static struct usb_driver plusb_driver = {
 	.resume =	usbnet_resume,
 };
 
-static int __init plusb_init(void)
-{
-	return usb_register(&plusb_driver);
-}
-module_init(plusb_init);
-
-static void __exit plusb_exit(void)
-{
-	usb_deregister(&plusb_driver);
-}
-module_exit(plusb_exit);
+module_usb_driver(plusb_driver);
 
 MODULE_AUTHOR("David Brownell");
 MODULE_DESCRIPTION("Prolific PL-2301/2302/25A1 USB Host to Host Link Driver");

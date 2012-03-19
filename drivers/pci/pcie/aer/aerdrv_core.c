@@ -27,8 +27,8 @@
 #include <linux/kfifo.h>
 #include "aerdrv.h"
 
-static int forceload;
-static int nosourceid;
+static bool forceload;
+static bool nosourceid;
 module_param(forceload, bool, 0);
 module_param(nosourceid, bool, 0);
 
@@ -367,14 +367,7 @@ static pci_ers_result_t broadcast_error_message(struct pci_dev *dev,
 		 * If the error is reported by an end point, we think this
 		 * error is related to the upstream link of the end point.
 		 */
-		if (state == pci_channel_io_normal)
-			/*
-			 * the error is non fatal so the bus is ok, just invoke
-			 * the callback for the function that logged the error.
-			 */
-			cb(dev, &result_data);
-		else
-			pci_walk_bus(dev->bus, cb, &result_data);
+		pci_walk_bus(dev->bus, cb, &result_data);
 	}
 
 	return result_data.result;
@@ -644,7 +637,6 @@ static void aer_recover_work_func(struct work_struct *work)
 			continue;
 		}
 		do_recovery(pdev, entry.severity);
-		pci_dev_put(pdev);
 	}
 }
 #endif
@@ -830,6 +822,8 @@ void aer_isr(struct work_struct *work)
 	while (get_e_source(rpc, &e_src))
 		aer_isr_one_error(p_device, &e_src);
 	mutex_unlock(&rpc->rpc_mutex);
+
+	wake_up(&rpc->wait_release);
 }
 
 /**

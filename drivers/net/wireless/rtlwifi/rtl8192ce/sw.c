@@ -98,9 +98,9 @@ int rtl92c_init_sw_vars(struct ieee80211_hw *hw)
 
 	rtl8192ce_bt_reg_init(hw);
 
-	rtlpriv->dm.dm_initialgain_enable = 1;
+	rtlpriv->dm.dm_initialgain_enable = true;
 	rtlpriv->dm.dm_flag = 0;
-	rtlpriv->dm.disable_framebursting = 0;
+	rtlpriv->dm.disable_framebursting = false;
 	rtlpriv->dm.thermalvalue = 0;
 	rtlpci->transmit_config = CFENDFORM | BIT(12) | BIT(13);
 
@@ -138,8 +138,6 @@ int rtl92c_init_sw_vars(struct ieee80211_hw *hw)
 	rtlpriv->psc.inactiveps = rtlpriv->cfg->mod_params->inactiveps;
 	rtlpriv->psc.swctrl_lps = rtlpriv->cfg->mod_params->swctrl_lps;
 	rtlpriv->psc.fwctrl_lps = rtlpriv->cfg->mod_params->fwctrl_lps;
-	rtlpriv->cfg->mod_params->sw_crypto =
-		rtlpriv->cfg->mod_params->sw_crypto;
 	if (!rtlpriv->psc.inactiveps)
 		pr_info("rtl8192ce: Power Save off (module option)\n");
 	if (!rtlpriv->psc.fwctrl_lps)
@@ -167,14 +165,12 @@ int rtl92c_init_sw_vars(struct ieee80211_hw *hw)
 
 	/* request fw */
 	if (IS_VENDOR_UMC_A_CUT(rtlhal->version) &&
-	    !IS_92C_SERIAL(rtlhal->version)) {
+	    !IS_92C_SERIAL(rtlhal->version))
 		fw_name = "rtlwifi/rtl8192cfwU.bin";
-	} else if (IS_81xxC_VENDOR_UMC_B_CUT(rtlhal->version)) {
+	else if (IS_81xxC_VENDOR_UMC_B_CUT(rtlhal->version))
 		fw_name = "rtlwifi/rtl8192cfwU_B.bin";
-		pr_info("****** This B_CUT device may not work with kernels 3.6 and earlier\n");
-	} else {
+	else
 		fw_name = rtlpriv->cfg->fw_name;
-	}
 	err = request_firmware(&firmware, fw_name, rtlpriv->io.dev);
 	if (err) {
 		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,

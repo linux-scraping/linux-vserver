@@ -6,7 +6,6 @@
 #include <linux/dmi.h>
 #include <linux/efi.h>
 #include <linux/bootmem.h>
-#include <linux/random.h>
 #include <asm/dmi.h>
 
 /*
@@ -16,7 +15,6 @@
  */
 static char dmi_empty_string[] = "        ";
 
-static u16 __initdata dmi_ver;
 /*
  * Catch too early calls to dmi_check_system():
  */
@@ -113,18 +111,16 @@ static int __init dmi_walk_early(void (*decode)(const struct dmi_header *,
 
 	dmi_table(buf, dmi_len, dmi_num, decode, NULL);
 
-	add_device_randomness(buf, dmi_len);
-
 	dmi_iounmap(buf, dmi_len);
 	return 0;
 }
 
-static int __init dmi_checksum(const u8 *buf, u8 len)
+static int __init dmi_checksum(const u8 *buf)
 {
 	u8 sum = 0;
 	int a;
 
-	for (a = 0; a < len; a++)
+	for (a = 0; a < 15; a++)
 		sum += buf[a];
 
 	return sum == 0;
@@ -162,10 +158,8 @@ static void __init dmi_save_uuid(const struct dmi_header *dm, int slot, int inde
 		return;
 
 	for (i = 0; i < 16 && (is_ff || is_00); i++) {
-		if (d[i] != 0x00)
-			is_00 = 0;
-		if (d[i] != 0xFF)
-			is_ff = 0;
+		if(d[i] != 0x00) is_ff = 0;
+		if(d[i] != 0xFF) is_00 = 0;
 	}
 
 	if (is_ff || is_00)
@@ -175,15 +169,7 @@ static void __init dmi_save_uuid(const struct dmi_header *dm, int slot, int inde
 	if (!s)
 		return;
 
-	/*
-	 * As of version 2.6 of the SMBIOS specification, the first 3 fields of
-	 * the UUID are supposed to be little-endian encoded.  The specification
-	 * says that this is the defacto standard.
-	 */
-	if (dmi_ver >= 0x0206)
-		sprintf(s, "%pUL", d);
-	else
-		sprintf(s, "%pUB", d);
+	sprintf(s, "%pUB", d);
 
         dmi_ident[slot] = s;
 }
@@ -410,65 +396,40 @@ static void __init dmi_dump_ids(void)
 	printk(KERN_CONT "\n");
 }
 
-static int __init dmi_present(const u8 *buf)
+static int __init dmi_present(const char __iomem *p)
 {
-	int smbios_ver;
+	u8 buf[15];
 
-	if (memcmp(buf, "_SM_", 4) == 0 &&
-	    buf[5] < 32 && dmi_checksum(buf, buf[5])) {
-		smbios_ver = (buf[6] << 8) + buf[7];
-
-		/* Some BIOS report weird SMBIOS version, fix that up */
-		switch (smbios_ver) {
-		case 0x021F:
-		case 0x0221:
-			pr_debug("SMBIOS version fixup(2.%d->2.%d)\n",
-				 smbios_ver & 0xFF, 3);
-			smbios_ver = 0x0203;
-			break;
-		case 0x0233:
-			pr_debug("SMBIOS version fixup(2.%d->2.%d)\n", 51, 6);
-			smbios_ver = 0x0206;
-			break;
-		}
-	} else {
-		smbios_ver = 0;
-	}
-
-	buf += 16;
-
-	if (memcmp(buf, "_DMI_", 5) == 0 && dmi_checksum(buf, 15)) {
-		if (smbios_ver)
-			dmi_ver = smbios_ver;
-		else
-			dmi_ver = (buf[14] & 0xF0) << 4 | (buf[14] & 0x0F);
+	memcpy_fromio(buf, p, 15);
+	if ((memcmp(buf, "_DMI_", 5) == 0) && dmi_checksum(buf)) {
 		dmi_num = (buf[13] << 8) | buf[12];
 		dmi_len = (buf[7] << 8) | buf[6];
 		dmi_base = (buf[11] << 24) | (buf[10] << 16) |
 			(buf[9] << 8) | buf[8];
 
+		/*
+		 * DMI version 0.0 means that the real version is taken from
+		 * the SMBIOS version, which we don't know at this point.
+		 */
+		if (buf[14] != 0)
+			printk(KERN_INFO "DMI %d.%d present.\n",
+			       buf[14] >> 4, buf[14] & 0xF);
+		else
+			printk(KERN_INFO "DMI present.\n");
 		if (dmi_walk_early(dmi_decode) == 0) {
-			if (smbios_ver) {
-				pr_info("SMBIOS %d.%d present.\n",
-				       dmi_ver >> 8, dmi_ver & 0xFF);
-			} else {
-				pr_info("Legacy DMI %d.%d present.\n",
-				       dmi_ver >> 8, dmi_ver & 0xFF);
-			}
 			dmi_dump_ids();
 			return 0;
 		}
 	}
-
 	return 1;
 }
 
 void __init dmi_scan_machine(void)
 {
 	char __iomem *p, *q;
-	char buf[32];
+	int rc;
 
-	if (efi_enabled(EFI_CONFIG_TABLES)) {
+	if (efi_enabled) {
 		if (efi.smbios == EFI_INVALID_TABLE_ADDR)
 			goto error;
 
@@ -479,10 +440,10 @@ void __init dmi_scan_machine(void)
 		p = dmi_ioremap(efi.smbios, 32);
 		if (p == NULL)
 			goto error;
-		memcpy_fromio(buf, p, 32);
-		dmi_iounmap(p, 32);
 
-		if (!dmi_present(buf)) {
+		rc = dmi_present(p + 0x10); /* offset of _DMI_ string */
+		dmi_iounmap(p, 32);
+		if (!rc) {
 			dmi_available = 1;
 			goto out;
 		}
@@ -497,15 +458,13 @@ void __init dmi_scan_machine(void)
 		if (p == NULL)
 			goto error;
 
-		memset(buf, 0, 16);
 		for (q = p; q < p + 0x10000; q += 16) {
-			memcpy_fromio(buf + 16, q, 16);
-			if (!dmi_present(buf)) {
+			rc = dmi_present(q);
+			if (!rc) {
 				dmi_available = 1;
 				dmi_iounmap(p, 0x10000);
 				goto out;
 			}
-			memcpy(buf, buf + 16, 16);
 		}
 		dmi_iounmap(p, 0x10000);
 	}
@@ -529,15 +488,9 @@ static bool dmi_matches(const struct dmi_system_id *dmi)
 		int s = dmi->matches[i].slot;
 		if (s == DMI_NONE)
 			break;
-		if (dmi_ident[s]) {
-			if (!dmi->matches[i].exact_match &&
-			    strstr(dmi_ident[s], dmi->matches[i].substr))
-				continue;
-			else if (dmi->matches[i].exact_match &&
-				 !strcmp(dmi_ident[s], dmi->matches[i].substr))
-				continue;
-		}
-
+		if (dmi_ident[s]
+		    && strstr(dmi_ident[s], dmi->matches[i].substr))
+			continue;
 		/* No match */
 		return false;
 	}

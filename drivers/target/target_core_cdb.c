@@ -29,10 +29,11 @@
 #include <scsi/scsi.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_backend.h>
+#include <target/target_core_fabric.h>
+
+#include "target_core_internal.h"
 #include "target_core_ua.h"
-#include "target_core_cdb.h"
 
 static void
 target_fill_alua_data(struct se_port *port, unsigned char *buf)
@@ -116,7 +117,7 @@ target_emulate_inquiry_std(struct se_cmd *cmd)
 		goto out;
 	}
 
-	buf[7] = 0x2; /* CmdQue=1 */
+	buf[7] = 0x32; /* Sync=1 and CmdQue=1 */
 
 	/*
 	 * Do not include vendor, product, reversion info in INQUIRY
@@ -127,12 +128,9 @@ target_emulate_inquiry_std(struct se_cmd *cmd)
 		goto out;
 	}
 
-	memcpy(&buf[8], "LIO-ORG ", 8);
-	memset(&buf[16], 0x20, 16);
-	memcpy(&buf[16], dev->se_sub_dev->t10_wwn.model,
-	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.model), 16));
-	memcpy(&buf[32], dev->se_sub_dev->t10_wwn.revision,
-	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.revision), 4));
+	snprintf(&buf[8], 8, "LIO-ORG");
+	snprintf(&buf[16], 16, "%s", dev->se_sub_dev->t10_wwn.model);
+	snprintf(&buf[32], 4, "%s", dev->se_sub_dev->t10_wwn.revision);
 	buf[4] = 31; /* Set additional length to 31 */
 
 out:
@@ -151,8 +149,7 @@ target_emulate_evpd_80(struct se_cmd *cmd, unsigned char *buf)
 			SDF_EMULATED_VPD_UNIT_SERIAL) {
 		u32 unit_serial_len;
 
-		unit_serial_len =
-			strlen(&dev->se_sub_dev->t10_wwn.unit_serial[0]);
+		unit_serial_len = strlen(dev->se_sub_dev->t10_wwn.unit_serial);
 		unit_serial_len++; /* For NULL Terminator */
 
 		if (((len + 4) + unit_serial_len) > cmd->data_length) {
@@ -161,8 +158,8 @@ target_emulate_evpd_80(struct se_cmd *cmd, unsigned char *buf)
 			buf[3] = (len & 0xff);
 			return 0;
 		}
-		len += sprintf((unsigned char *)&buf[4], "%s",
-			&dev->se_sub_dev->t10_wwn.unit_serial[0]);
+		len += sprintf(&buf[4], "%s",
+			dev->se_sub_dev->t10_wwn.unit_serial);
 		len++; /* Extra Byte for NULL Terminator */
 		buf[3] = len;
 	}
@@ -292,14 +289,13 @@ check_t10_vend_desc:
 			len += (prod_len + unit_serial_len);
 			goto check_port;
 		}
-		id_len += sprintf((unsigned char *)&buf[off+12],
-				"%s:%s", prod,
+		id_len += sprintf(&buf[off+12], "%s:%s", prod,
 				&dev->se_sub_dev->t10_wwn.unit_serial[0]);
 	}
 	buf[off] = 0x2; /* ASCII */
 	buf[off+1] = 0x1; /* T10 Vendor ID */
 	buf[off+2] = 0x0;
-	memcpy((unsigned char *)&buf[off+4], "LIO-ORG", 8);
+	memcpy(&buf[off+4], "LIO-ORG", 8);
 	/* Extra Byte for NULL Terminator */
 	id_len++;
 	/* Identifier Length */
@@ -1062,11 +1058,8 @@ int target_emulate_request_sense(struct se_task *task)
 		 */
 		buf[0] = 0x70;
 		buf[SPC_SENSE_KEY_OFFSET] = UNIT_ATTENTION;
-		/*
-		 * Make sure request data length is enough for additional
-		 * sense data.
-		 */
-		if (cmd->data_length <= 18) {
+
+		if (cmd->data_length < 18) {
 			buf[7] = 0x00;
 			err = -EINVAL;
 			goto end;
@@ -1083,11 +1076,8 @@ int target_emulate_request_sense(struct se_task *task)
 		 */
 		buf[0] = 0x70;
 		buf[SPC_SENSE_KEY_OFFSET] = NO_SENSE;
-		/*
-		 * Make sure request data length is enough for additional
-		 * sense data.
-		 */
-		if (cmd->data_length <= 18) {
+
+		if (cmd->data_length < 18) {
 			buf[7] = 0x00;
 			err = -EINVAL;
 			goto end;
@@ -1115,11 +1105,11 @@ int target_emulate_unmap(struct se_task *task)
 	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	unsigned char *buf, *ptr = NULL;
+	unsigned char *cdb = &cmd->t_task_cdb[0];
 	sector_t lba;
-	int size = cmd->data_length;
-	u32 range;
-	int ret = 0;
-	int dl, bd_dl;
+	unsigned int size = cmd->data_length, range;
+	int ret = 0, offset;
+	unsigned short dl, bd_dl;
 
 	if (!dev->transport->do_discard) {
 		pr_err("UNMAP emulation not supported for: %s\n",
@@ -1128,40 +1118,23 @@ int target_emulate_unmap(struct se_task *task)
 		return -ENOSYS;
 	}
 
+	/* First UNMAP block descriptor starts at 8 byte offset */
+	offset = 8;
+	size -= 8;
+	dl = get_unaligned_be16(&cdb[0]);
+	bd_dl = get_unaligned_be16(&cdb[2]);
+
 	buf = transport_kmap_data_sg(cmd);
 
-	dl = get_unaligned_be16(&buf[0]);
-	bd_dl = get_unaligned_be16(&buf[2]);
-
-	size = min(size - 8, bd_dl);
-	if (size / 16 > dev->se_sub_dev->se_dev_attrib.max_unmap_block_desc_count) {
-		cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
-		ret = -EINVAL;
-		goto err;
-	}
-
-	/* First UNMAP block descriptor starts at 8 byte offset */
-	ptr = &buf[8];
-	pr_debug("UNMAP: Sub: %s Using dl: %u bd_dl: %u size: %u"
+	ptr = &buf[offset];
+	pr_debug("UNMAP: Sub: %s Using dl: %hu bd_dl: %hu size: %hu"
 		" ptr: %p\n", dev->transport->name, dl, bd_dl, size, ptr);
 
-	while (size >= 16) {
+	while (size) {
 		lba = get_unaligned_be64(&ptr[0]);
 		range = get_unaligned_be32(&ptr[8]);
 		pr_debug("UNMAP: Using lba: %llu and range: %u\n",
 				 (unsigned long long)lba, range);
-
-		if (range > dev->se_sub_dev->se_dev_attrib.max_unmap_lba_count) {
-			cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
-			ret = -EINVAL;
-			goto err;
-		}
-
-		if (lba + range > dev->transport->get_blocks(dev) + 1) {
-			cmd->scsi_sense_reason = TCM_ADDRESS_OUT_OF_RANGE;
-			ret = -EINVAL;
-			goto err;
-		}
 
 		ret = dev->transport->do_discard(dev, lba, range);
 		if (ret < 0) {
@@ -1217,7 +1190,7 @@ int target_emulate_write_same(struct se_task *task)
 	if (num_blocks != 0)
 		range = num_blocks;
 	else
-		range = (dev->transport->get_blocks(dev) - lba) + 1;
+		range = (dev->transport->get_blocks(dev) - lba);
 
 	pr_debug("WRITE_SAME UNMAP: LBA: %llu Range: %llu\n",
 		 (unsigned long long)lba, (unsigned long long)range);

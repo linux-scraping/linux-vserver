@@ -62,7 +62,7 @@ MODULE_LICENSE("GPL");
 
 /* Module parameters */
 static DEFINE_MUTEX(iowarrior_mutex);
-static int debug = 0;
+static bool debug = 0;
 module_param(debug, bool, 0644);
 MODULE_PARM_DESC(debug, "debug=1 enables debugging messages");
 
@@ -560,7 +560,7 @@ static long iowarrior_ioctl(struct file *file, unsigned int cmd,
 			info.revision = le16_to_cpu(dev->udev->descriptor.bcdDevice);
 
 			/* 0==UNKNOWN, 1==LOW(usb1.1) ,2=FULL(usb1.1), 3=HIGH(usb2.0) */
-			info.speed = dev->udev->speed;
+			info.speed = le16_to_cpu(dev->udev->speed);
 			info.if_num = dev->interface->cur_altsetting->desc.bInterfaceNumber;
 			info.report_size = dev->report_size;
 
@@ -734,7 +734,7 @@ static const struct file_operations iowarrior_fops = {
 	.llseek = noop_llseek,
 };
 
-static char *iowarrior_devnode(struct device *dev, mode_t *mode)
+static char *iowarrior_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "usb/%s", dev_name(dev));
 }
@@ -802,21 +802,6 @@ static int iowarrior_probe(struct usb_interface *interface,
 			/* this one will match for the IOWarrior56 only */
 			dev->int_out_endpoint = endpoint;
 	}
-
-	if (!dev->int_in_endpoint) {
-		dev_err(&interface->dev, "no interrupt-in endpoint found\n");
-		retval = -ENODEV;
-		goto error;
-	}
-
-	if (dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW56) {
-		if (!dev->int_out_endpoint) {
-			dev_err(&interface->dev, "no interrupt-out endpoint found\n");
-			retval = -ENODEV;
-			goto error;
-		}
-	}
-
 	/* we have to check the report_size often, so remember it in the endianess suitable for our machine */
 	dev->report_size = usb_endpoint_maxp(dev->int_in_endpoint);
 	if ((dev->interface->cur_altsetting->desc.bInterfaceNumber == 0) &&
@@ -942,15 +927,4 @@ static struct usb_driver iowarrior_driver = {
 	.id_table = iowarrior_ids,
 };
 
-static int __init iowarrior_init(void)
-{
-	return usb_register(&iowarrior_driver);
-}
-
-static void __exit iowarrior_exit(void)
-{
-	usb_deregister(&iowarrior_driver);
-}
-
-module_init(iowarrior_init);
-module_exit(iowarrior_exit);
+module_usb_driver(iowarrior_driver);

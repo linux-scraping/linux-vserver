@@ -243,9 +243,9 @@ static int ipv6_dest_hao(struct sk_buff *skb, int optoff)
 	if (skb->ip_summed == CHECKSUM_COMPLETE)
 		skb->ip_summed = CHECKSUM_NONE;
 
-	ipv6_addr_copy(&tmp_addr, &ipv6h->saddr);
-	ipv6_addr_copy(&ipv6h->saddr, &hao->addr);
-	ipv6_addr_copy(&hao->addr, &tmp_addr);
+	tmp_addr = ipv6h->saddr;
+	ipv6h->saddr = hao->addr;
+	hao->addr = tmp_addr;
 
 	if (skb->tstamp.tv64 == 0)
 		__net_timestamp(skb);
@@ -461,9 +461,9 @@ looped_back:
 		return -1;
 	}
 
-	ipv6_addr_copy(&daddr, addr);
-	ipv6_addr_copy(addr, &ipv6_hdr(skb)->daddr);
-	ipv6_addr_copy(&ipv6_hdr(skb)->daddr, &daddr);
+	daddr = *addr;
+	*addr = ipv6_hdr(skb)->daddr;
+	ipv6_hdr(skb)->daddr = daddr;
 
 	skb_dst_drop(skb);
 	ip6_route_input(skb);
@@ -690,7 +690,7 @@ static void ipv6_push_rthdr(struct sk_buff *skb, u8 *proto,
 		memcpy(phdr->addr, ihdr->addr + 1,
 		       (hops - 1) * sizeof(struct in6_addr));
 
-	ipv6_addr_copy(phdr->addr + (hops - 1), *addr_p);
+	phdr->addr[hops - 1] = **addr_p;
 	*addr_p = ihdr->addr;
 
 	phdr->rt_hdr.nexthdr = *proto;
@@ -723,13 +723,13 @@ void ipv6_push_nfrag_opts(struct sk_buff *skb, struct ipv6_txoptions *opt,
 		ipv6_push_exthdr(skb, proto, NEXTHDR_HOP, opt->hopopt);
 }
 
+EXPORT_SYMBOL(ipv6_push_nfrag_opts);
 
 void ipv6_push_frag_opts(struct sk_buff *skb, struct ipv6_txoptions *opt, u8 *proto)
 {
 	if (opt->dst1opt)
 		ipv6_push_exthdr(skb, proto, NEXTHDR_DEST, opt->dst1opt);
 }
-EXPORT_SYMBOL(ipv6_push_frag_opts);
 
 struct ipv6_txoptions *
 ipv6_dup_options(struct sock *sk, struct ipv6_txoptions *opt)
@@ -748,7 +748,6 @@ ipv6_dup_options(struct sock *sk, struct ipv6_txoptions *opt)
 			*((char**)&opt2->dst1opt) += dif;
 		if (opt2->srcrt)
 			*((char**)&opt2->srcrt) += dif;
-		atomic_set(&opt2->refcnt, 1);
 	}
 	return opt2;
 }
@@ -813,7 +812,7 @@ ipv6_renew_options(struct sock *sk, struct ipv6_txoptions *opt,
 		return ERR_PTR(-ENOBUFS);
 
 	memset(opt2, 0, tot_len);
-	atomic_set(&opt2->refcnt, 1);
+
 	opt2->tot_len = tot_len;
 	p = (char *)(opt2 + 1);
 
@@ -889,8 +888,8 @@ struct in6_addr *fl6_update_dst(struct flowi6 *fl6,
 	if (!opt || !opt->srcrt)
 		return NULL;
 
-	ipv6_addr_copy(orig, &fl6->daddr);
-	ipv6_addr_copy(&fl6->daddr, ((struct rt0_hdr *)opt->srcrt)->addr);
+	*orig = fl6->daddr;
+	fl6->daddr = *((struct rt0_hdr *)opt->srcrt)->addr;
 	return orig;
 }
 

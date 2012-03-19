@@ -301,9 +301,9 @@ static struct fb_ops atyfb_ops = {
 	.fb_sync	= atyfb_sync,
 };
 
-static int noaccel;
+static bool noaccel;
 #ifdef CONFIG_MTRR
-static int nomtrr;
+static bool nomtrr;
 #endif
 static int vram;
 static int pll;
@@ -1852,7 +1852,7 @@ static int atyfb_ioctl(struct fb_info *info, u_int cmd, u_long arg)
 #if defined(DEBUG) && defined(CONFIG_FB_ATY_CT)
 	case ATYIO_CLKR:
 		if (M64_HAS(INTEGRATED)) {
-			struct atyclk clk = { 0 };
+			struct atyclk clk;
 			union aty_pll *pll = &par->pll;
 			u32 dsp_config = pll->ct.dsp_config;
 			u32 dsp_on_off = pll->ct.dsp_on_off;

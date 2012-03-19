@@ -56,14 +56,13 @@ void autofs4_catatonic_mode(struct autofs_sb_info *sbi)
 	mutex_unlock(&sbi->wq_mutex);
 }
 
-static int autofs4_write(struct file *file, const void *addr, int bytes)
+static int autofs4_write(struct autofs_sb_info *sbi,
+			 struct file *file, const void *addr, int bytes)
 {
 	unsigned long sigpipe, flags;
 	mm_segment_t fs;
 	const char *data = (const char *)addr;
 	ssize_t wr = 0;
-
-	/** WARNING: this is not safe for writing more than PIPE_BUF bytes! **/
 
 	sigpipe = sigismember(&current->pending.signal, SIGPIPE);
 
@@ -71,11 +70,13 @@ static int autofs4_write(struct file *file, const void *addr, int bytes)
 	fs = get_fs();
 	set_fs(KERNEL_DS);
 
+	mutex_lock(&sbi->pipe_mutex);
 	while (bytes &&
 	       (wr = file->f_op->write(file,data,bytes,&file->f_pos)) > 0) {
 		data += wr;
 		bytes -= wr;
 	}
+	mutex_unlock(&sbi->pipe_mutex);
 
 	set_fs(fs);
 
@@ -88,10 +89,26 @@ static int autofs4_write(struct file *file, const void *addr, int bytes)
 		spin_unlock_irqrestore(&current->sighand->siglock, flags);
 	}
 
-	/* if 'wr' returned 0 (impossible) we assume -EIO (safe) */
-	return bytes == 0 ? 0 : wr < 0 ? wr : -EIO;
+	return (bytes > 0);
 }
-	
+
+/*
+ * The autofs_v5 packet was misdesigned.
+ *
+ * The packets are identical on x86-32 and x86-64, but have different
+ * alignment. Which means that 'sizeof()' will give different results.
+ * Fix it up for the case of running 32-bit user mode on a 64-bit kernel.
+ */
+static noinline size_t autofs_v5_packet_size(struct autofs_sb_info *sbi)
+{
+	size_t pktsz = sizeof(struct autofs_v5_packet);
+#if defined(CONFIG_X86_64) && defined(CONFIG_COMPAT)
+	if (sbi->compat_daemon > 0)
+		pktsz -= 4;
+#endif
+	return pktsz;
+}
+
 static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 				 struct autofs_wait_queue *wq,
 				 int type)
@@ -103,7 +120,6 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	} pkt;
 	struct file *pipe = NULL;
 	size_t pktsz;
-	int ret;
 
 	DPRINTK("wait id = 0x%08lx, name = %.*s, type=%d",
 		(unsigned long) wq->wait_queue_token, wq->name.len, wq->name.name, type);
@@ -156,8 +172,7 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	{
 		struct autofs_v5_packet *packet = &pkt.v5_pkt.v5_packet;
 
-		pktsz = sizeof(*packet);
-
+		pktsz = autofs_v5_packet_size(sbi);
 		packet->wait_queue_token = wq->wait_queue_token;
 		packet->len = wq->name.len;
 		memcpy(packet->name, wq->name.name, wq->name.len);
@@ -181,18 +196,8 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 
 	mutex_unlock(&sbi->wq_mutex);
 
-	switch (ret = autofs4_write(pipe, &pkt, pktsz)) {
-	case 0:
-		break;
-	case -ENOMEM:
-	case -ERESTARTSYS:
-		/* Just fail this one */
-		autofs4_wait_release(sbi, wq->wait_queue_token, ret);
-		break;
-	default:
+	if (autofs4_write(sbi, pipe, &pkt, pktsz))
 		autofs4_catatonic_mode(sbi);
-		break;
-	}
 	fput(pipe);
 }
 

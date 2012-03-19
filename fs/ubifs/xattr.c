@@ -138,12 +138,11 @@ static int create_xattr(struct ubifs_info *c, struct inode *host,
 	ui = ubifs_inode(inode);
 	ui->xattr = 1;
 	ui->flags |= UBIFS_XATTR_FL;
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -168,7 +167,6 @@ out_cancel:
 	host_ui->xattr_cnt -= 1;
 	host_ui->xattr_size -= CALC_DENT_SIZE(nm->len);
 	host_ui->xattr_size -= CALC_XATTR_BYTES(size);
-	host_ui->xattr_names -= nm->len;
 	mutex_unlock(&host_ui->ui_mutex);
 out_free:
 	make_bad_inode(inode);
@@ -205,12 +203,11 @@ static int change_xattr(struct ubifs_info *c, struct inode *host,
 		return err;
 
 	kfree(ui->data);
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -483,28 +480,6 @@ ssize_t ubifs_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	return written;
 }
 
-/**
- * ubifs_evict_xattr_inode - Evict an xattr inode.
- * @c: UBIFS file-system description object
- * @xattr_inum: xattr inode number
- *
- * When an inode that hosts xattrs is being removed we have to make sure
- * that cached inodes of the xattrs also get removed from the inode cache
- * otherwise we'd waste memory. This function looks up an inode from the
- * inode cache and clears the link counter such that iput() will evict
- * the inode.
- */
-void ubifs_evict_xattr_inode(struct ubifs_info *c, ino_t xattr_inum)
-{
-	struct inode *inode;
-
-	inode = ilookup(c->vfs_sb, xattr_inum);
-	if (inode) {
-		clear_nlink(inode);
-		iput(inode);
-	}
-}
-
 static int remove_xattr(struct ubifs_info *c, struct inode *host,
 			struct inode *inode, const struct qstr *nm)
 {
@@ -539,7 +514,6 @@ out_cancel:
 	host_ui->xattr_cnt += 1;
 	host_ui->xattr_size += CALC_DENT_SIZE(nm->len);
 	host_ui->xattr_size += CALC_XATTR_BYTES(ui->data_len);
-	host_ui->xattr_names += nm->len;
 	mutex_unlock(&host_ui->ui_mutex);
 	ubifs_release_budget(c, &req);
 	make_bad_inode(inode);

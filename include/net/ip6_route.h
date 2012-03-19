@@ -34,11 +34,6 @@ struct route_info {
 #define RT6_LOOKUP_F_SRCPREF_PUBLIC	0x00000010
 #define RT6_LOOKUP_F_SRCPREF_COA	0x00000020
 
-/* We do not (yet ?) support IPv6 jumbograms (RFC 2675)
- * Unlike IPv4, hdr->seg_len doesn't include the IPv6 header
- */
-#define IP6_MAX_MTU (0xFFFF + sizeof(struct ipv6hdr))
-
 /*
  * rt6_srcprefs2flags() and rt6_flags2srcprefs() translate
  * between IPV6_ADDR_PREFERENCES socket option values
@@ -75,6 +70,8 @@ extern void			ip6_route_input(struct sk_buff *skb);
 extern struct dst_entry *	ip6_route_output(struct net *net,
 						 const struct sock *sk,
 						 struct flowi6 *fl6);
+extern struct dst_entry *	ip6_route_lookup(struct net *net,
+						 struct flowi6 *fl6, int flags);
 
 extern int			ip6_route_init(void);
 extern void			ip6_route_cleanup(void);
@@ -101,14 +98,14 @@ extern struct rt6_info		*rt6_lookup(struct net *net,
 
 extern struct dst_entry *icmp6_dst_alloc(struct net_device *dev,
 					 struct neighbour *neigh,
-					 const struct in6_addr *addr);
+					 struct flowi6 *fl6);
 extern int icmp6_dst_gc(void);
 
 extern void fib6_force_start_gc(struct net *net);
 
 extern struct rt6_info *addrconf_dst_alloc(struct inet6_dev *idev,
 					   const struct in6_addr *addr,
-					   int anycast);
+					   bool anycast);
 
 extern int			ip6_dst_hoplimit(struct dst_entry *dst);
 
@@ -168,7 +165,7 @@ static inline void __ip6_dst_store(struct sock *sk, struct dst_entry *dst,
 #ifdef CONFIG_IPV6_SUBTREES
 	np->saddr_cache = saddr;
 #endif
-	np->dst_cookie = rt6_get_cookie(rt);
+	np->dst_cookie = rt->rt6i_node ? rt->rt6i_node->fn_sernum : 0;
 }
 
 static inline void ip6_dst_store(struct sock *sk, struct dst_entry *dst,

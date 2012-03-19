@@ -62,28 +62,15 @@
  * the Net/FreeBSD uchcom.c driver by Takanori Watanabe.  Domo arigato.
  */
 
-#define CH341_REQ_READ_VERSION 0x5F
 #define CH341_REQ_WRITE_REG    0x9A
 #define CH341_REQ_READ_REG     0x95
-#define CH341_REQ_SERIAL_INIT  0xA1
-#define CH341_REQ_MODEM_CTRL   0xA4
+#define CH341_REG_BREAK1       0x05
+#define CH341_REG_BREAK2       0x18
+#define CH341_NBREAK_BITS_REG1 0x01
+#define CH341_NBREAK_BITS_REG2 0x40
 
-#define CH341_REG_BREAK        0x05
-#define CH341_REG_LCR          0x18
-#define CH341_NBREAK_BITS      0x01
 
-#define CH341_LCR_ENABLE_RX    0x80
-#define CH341_LCR_ENABLE_TX    0x40
-#define CH341_LCR_MARK_SPACE   0x20
-#define CH341_LCR_PAR_EVEN     0x10
-#define CH341_LCR_ENABLE_PAR   0x08
-#define CH341_LCR_STOP_BITS_2  0x04
-#define CH341_LCR_CS8          0x03
-#define CH341_LCR_CS7          0x02
-#define CH341_LCR_CS6          0x01
-#define CH341_LCR_CS5          0x00
-
-static int debug;
+static bool debug;
 
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x4348, 0x5523) },
@@ -95,15 +82,12 @@ MODULE_DEVICE_TABLE(usb, id_table);
 
 struct ch341_private {
 	spinlock_t lock; /* access lock */
+	wait_queue_head_t delta_msr_wait; /* wait queue for modem status */
 	unsigned baud_rate; /* set baud rate */
 	u8 line_control; /* set line control value RTS/DTR */
 	u8 line_status; /* active status of modem control inputs */
 	u8 multi_status_change; /* status changed multiple since last call */
 };
-
-static void ch341_set_termios(struct tty_struct *tty,
-			      struct usb_serial_port *port,
-			      struct ktermios *old_termios);
 
 static int ch341_control_out(struct usb_device *dev, u8 request,
 			     u16 value, u16 index)
@@ -115,8 +99,6 @@ static int ch341_control_out(struct usb_device *dev, u8 request,
 	r = usb_control_msg(dev, usb_sndctrlpipe(dev, 0), request,
 			    USB_TYPE_VENDOR | USB_RECIP_DEVICE | USB_DIR_OUT,
 			    value, index, NULL, 0, DEFAULT_TIMEOUT);
-	if (r < 0)
-		dev_err(&dev->dev, "failed to send control message: %d\n", r);
 
 	return r;
 }
@@ -132,26 +114,13 @@ static int ch341_control_in(struct usb_device *dev,
 	r = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0), request,
 			    USB_TYPE_VENDOR | USB_RECIP_DEVICE | USB_DIR_IN,
 			    value, index, buf, bufsize, DEFAULT_TIMEOUT);
-	if (r < bufsize) {
-		if (r >= 0) {
-			dev_err(&dev->dev,
-				"short control message received (%d < %u)\n",
-				r, bufsize);
-			r = -EIO;
-		}
-
-		dev_err(&dev->dev, "failed to receive control message: %d\n",
-			r);
-		return r;
-	}
-
-	return 0;
+	return r;
 }
 
-static int ch341_set_baudrate_lcr(struct usb_device *dev,
-				  struct ch341_private *priv, u8 lcr)
+static int ch341_set_baudrate(struct usb_device *dev,
+			      struct ch341_private *priv)
 {
-	short a;
+	short a, b;
 	int r;
 	unsigned long factor;
 	short divisor;
@@ -173,20 +142,11 @@ static int ch341_set_baudrate_lcr(struct usb_device *dev,
 
 	factor = 0x10000 - factor;
 	a = (factor & 0xff00) | divisor;
+	b = factor & 0xff;
 
-	/*
-	 * CH341A buffers data until a full endpoint-size packet (32 bytes)
-	 * has been received unless bit 7 is set.
-	 */
-	a |= BIT(7);
-
-	r = ch341_control_out(dev, CH341_REQ_WRITE_REG, 0x1312, a);
-	if (r)
-		return r;
-
-	r = ch341_control_out(dev, CH341_REQ_WRITE_REG, 0x2518, lcr);
-	if (r)
-		return r;
+	r = ch341_control_out(dev, 0x9a, 0x1312, a);
+	if (!r)
+		r = ch341_control_out(dev, 0x9a, 0x0f2c, b);
 
 	return r;
 }
@@ -194,14 +154,14 @@ static int ch341_set_baudrate_lcr(struct usb_device *dev,
 static int ch341_set_handshake(struct usb_device *dev, u8 control)
 {
 	dbg("ch341_set_handshake(0x%02x)", control);
-	return ch341_control_out(dev, CH341_REQ_MODEM_CTRL, ~control, 0);
+	return ch341_control_out(dev, 0xa4, ~control, 0);
 }
 
 static int ch341_get_status(struct usb_device *dev, struct ch341_private *priv)
 {
-	const unsigned int size = 2;
 	char *buffer;
 	int r;
+	const unsigned size = 8;
 	unsigned long flags;
 
 	dbg("ch341_get_status()");
@@ -210,14 +170,19 @@ static int ch341_get_status(struct usb_device *dev, struct ch341_private *priv)
 	if (!buffer)
 		return -ENOMEM;
 
-	r = ch341_control_in(dev, CH341_REQ_READ_REG, 0x0706, 0, buffer, size);
+	r = ch341_control_in(dev, 0x95, 0x0706, 0, buffer, size);
 	if (r < 0)
 		goto out;
 
-	spin_lock_irqsave(&priv->lock, flags);
-	priv->line_status = (~(*buffer)) & CH341_BITS_MODEM_STAT;
-	priv->multi_status_change = 0;
-	spin_unlock_irqrestore(&priv->lock, flags);
+	/* setup the private status if available */
+	if (r == 2) {
+		r = 0;
+		spin_lock_irqsave(&priv->lock, flags);
+		priv->line_status = (~(*buffer)) & CH341_BITS_MODEM_STAT;
+		priv->multi_status_change = 0;
+		spin_unlock_irqrestore(&priv->lock, flags);
+	} else
+		r = -EPROTO;
 
 out:	kfree(buffer);
 	return r;
@@ -227,9 +192,9 @@ out:	kfree(buffer);
 
 static int ch341_configure(struct usb_device *dev, struct ch341_private *priv)
 {
-	const unsigned int size = 2;
 	char *buffer;
 	int r;
+	const unsigned size = 8;
 
 	dbg("ch341_configure()");
 
@@ -238,28 +203,46 @@ static int ch341_configure(struct usb_device *dev, struct ch341_private *priv)
 		return -ENOMEM;
 
 	/* expect two bytes 0x27 0x00 */
-	r = ch341_control_in(dev, CH341_REQ_READ_VERSION, 0, 0, buffer, size);
+	r = ch341_control_in(dev, 0x5f, 0, 0, buffer, size);
 	if (r < 0)
 		goto out;
 
-	r = ch341_control_out(dev, CH341_REQ_SERIAL_INIT, 0, 0);
+	r = ch341_control_out(dev, 0xa1, 0, 0);
+	if (r < 0)
+		goto out;
+
+	r = ch341_set_baudrate(dev, priv);
 	if (r < 0)
 		goto out;
 
 	/* expect two bytes 0x56 0x00 */
-	r = ch341_control_in(dev, CH341_REQ_READ_REG, 0x2518, 0, buffer, size);
+	r = ch341_control_in(dev, 0x95, 0x2518, 0, buffer, size);
 	if (r < 0)
 		goto out;
 
-	r = ch341_control_out(dev, CH341_REQ_WRITE_REG, 0x2518, 0x0050);
+	r = ch341_control_out(dev, 0x9a, 0x2518, 0x0050);
 	if (r < 0)
 		goto out;
 
-	r = ch341_set_baudrate_lcr(dev, priv, 0);
+	/* expect 0xff 0xee */
+	r = ch341_get_status(dev, priv);
+	if (r < 0)
+		goto out;
+
+	r = ch341_control_out(dev, 0xa1, 0x501f, 0xd90a);
+	if (r < 0)
+		goto out;
+
+	r = ch341_set_baudrate(dev, priv);
 	if (r < 0)
 		goto out;
 
 	r = ch341_set_handshake(dev, priv->line_control);
+	if (r < 0)
+		goto out;
+
+	/* expect 0x9f 0xee */
+	r = ch341_get_status(dev, priv);
 
 out:	kfree(buffer);
 	return r;
@@ -279,7 +262,9 @@ static int ch341_attach(struct usb_serial *serial)
 		return -ENOMEM;
 
 	spin_lock_init(&priv->lock);
+	init_waitqueue_head(&priv->delta_msr_wait);
 	priv->baud_rate = DEFAULT_BAUD_RATE;
+	priv->line_control = CH341_BIT_RTS | CH341_BIT_DTR;
 
 	r = ch341_configure(serial->dev, priv);
 	if (r < 0)
@@ -314,7 +299,7 @@ static void ch341_dtr_rts(struct usb_serial_port *port, int on)
 		priv->line_control &= ~(CH341_BIT_RTS | CH341_BIT_DTR);
 	spin_unlock_irqrestore(&priv->lock, flags);
 	ch341_set_handshake(port->serial->dev, priv->line_control);
-	wake_up_interruptible(&port->delta_msr_wait);
+	wake_up_interruptible(&priv->delta_msr_wait);
 }
 
 static void ch341_close(struct usb_serial_port *port)
@@ -335,34 +320,32 @@ static int ch341_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	dbg("ch341_open()");
 
-	if (tty)
-		ch341_set_termios(tty, port, NULL);
+	priv->baud_rate = DEFAULT_BAUD_RATE;
+
+	r = ch341_configure(serial->dev, priv);
+	if (r)
+		goto out;
+
+	r = ch341_set_handshake(serial->dev, priv->line_control);
+	if (r)
+		goto out;
+
+	r = ch341_set_baudrate(serial->dev, priv);
+	if (r)
+		goto out;
 
 	dbg("%s - submitting interrupt urb", __func__);
-	port->interrupt_in_urb->dev = serial->dev;
 	r = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 	if (r) {
 		dev_err(&port->dev, "%s - failed submitting interrupt urb,"
 			" error %d\n", __func__, r);
-		return r;
-	}
-
-	r = ch341_get_status(port->serial->dev, priv);
-	if (r < 0) {
-		dev_err(&port->dev, "failed to read modem status: %d\n", r);
-		goto err_kill_interrupt_urb;
+		ch341_close(port);
+		goto out;
 	}
 
 	r = usb_serial_generic_open(tty, port);
-	if (r)
-		goto err_kill_interrupt_urb;
 
-	return 0;
-
-err_kill_interrupt_urb:
-	usb_kill_urb(port->interrupt_in_urb);
-
-	return r;
+out:	return r;
 }
 
 /* Old_termios contains the original termios settings and
@@ -374,35 +357,25 @@ static void ch341_set_termios(struct tty_struct *tty,
 	struct ch341_private *priv = usb_get_serial_port_data(port);
 	unsigned baud_rate;
 	unsigned long flags;
-	unsigned char ctrl;
-	int r;
-
-	/* redundant changes may cause the chip to lose bytes */
-	if (old_termios && !tty_termios_hw_change(tty->termios, old_termios))
-		return;
 
 	dbg("ch341_set_termios()");
 
 	baud_rate = tty_get_baud_rate(tty);
 
-	ctrl = CH341_LCR_ENABLE_RX | CH341_LCR_ENABLE_TX | CH341_LCR_CS8;
+	priv->baud_rate = baud_rate;
 
 	if (baud_rate) {
-		priv->baud_rate = baud_rate;
-
-		r = ch341_set_baudrate_lcr(port->serial->dev, priv, ctrl);
-		if (r < 0 && old_termios) {
-			priv->baud_rate = tty_termios_baud_rate(old_termios);
-			tty_termios_copy_hw(tty->termios, old_termios);
-		}
+		spin_lock_irqsave(&priv->lock, flags);
+		priv->line_control |= (CH341_BIT_DTR | CH341_BIT_RTS);
+		spin_unlock_irqrestore(&priv->lock, flags);
+		ch341_set_baudrate(port->serial->dev, priv);
+	} else {
+		spin_lock_irqsave(&priv->lock, flags);
+		priv->line_control &= ~(CH341_BIT_DTR | CH341_BIT_RTS);
+		spin_unlock_irqrestore(&priv->lock, flags);
 	}
 
-	spin_lock_irqsave(&priv->lock, flags);
-	if (C_BAUD(tty) == B0)
-		priv->line_control &= ~(CH341_BIT_DTR | CH341_BIT_RTS);
-	else if (old_termios && (old_termios->c_cflag & CBAUD) == B0)
-		priv->line_control |= (CH341_BIT_DTR | CH341_BIT_RTS);
-	spin_unlock_irqrestore(&priv->lock, flags);
+	ch341_set_handshake(port->serial->dev, priv->line_control);
 
 	/* Unimplemented:
 	 * (cflag & CSIZE) : data bits [5, 8]
@@ -414,7 +387,7 @@ static void ch341_set_termios(struct tty_struct *tty,
 static void ch341_break_ctl(struct tty_struct *tty, int break_state)
 {
 	const uint16_t ch341_break_reg =
-			((uint16_t) CH341_REG_LCR << 8) | CH341_REG_BREAK;
+		CH341_REG_BREAK1 | ((uint16_t) CH341_REG_BREAK2 << 8);
 	struct usb_serial_port *port = tty->driver_data;
 	int r;
 	uint16_t reg_contents;
@@ -439,12 +412,12 @@ static void ch341_break_ctl(struct tty_struct *tty, int break_state)
 			__func__, break_reg[0], break_reg[1]);
 	if (break_state != 0) {
 		dbg("%s - Enter break state requested", __func__);
-		break_reg[0] &= ~CH341_NBREAK_BITS;
-		break_reg[1] &= ~CH341_LCR_ENABLE_TX;
+		break_reg[0] &= ~CH341_NBREAK_BITS_REG1;
+		break_reg[1] &= ~CH341_NBREAK_BITS_REG2;
 	} else {
 		dbg("%s - Leave break state requested", __func__);
-		break_reg[0] |= CH341_NBREAK_BITS;
-		break_reg[1] |= CH341_LCR_ENABLE_TX;
+		break_reg[0] |= CH341_NBREAK_BITS_REG1;
+		break_reg[1] |= CH341_NBREAK_BITS_REG2;
 	}
 	dbg("%s - New ch341 break register contents - reg1: %x, reg2: %x",
 			__func__, break_reg[0], break_reg[1]);
@@ -529,7 +502,7 @@ static void ch341_read_int_callback(struct urb *urb)
 			tty_kref_put(tty);
 		}
 
-		wake_up_interruptible(&port->delta_msr_wait);
+		wake_up_interruptible(&priv->delta_msr_wait);
 	}
 
 exit:
@@ -555,13 +528,10 @@ static int wait_modem_info(struct usb_serial_port *port, unsigned int arg)
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	while (!multi_change) {
-		interruptible_sleep_on(&port->delta_msr_wait);
+		interruptible_sleep_on(&priv->delta_msr_wait);
 		/* see if a signal did it */
 		if (signal_pending(current))
 			return -ERESTARTSYS;
-
-		if (port->serial->disconnected)
-			return -EIO;
 
 		spin_lock_irqsave(&priv->lock, flags);
 		status = priv->line_status;
@@ -633,30 +603,18 @@ static int ch341_tiocmget(struct tty_struct *tty)
 static int ch341_reset_resume(struct usb_interface *intf)
 {
 	struct usb_device *dev = interface_to_usbdev(intf);
-	struct usb_serial *serial = usb_get_intfdata(intf);
-	struct usb_serial_port *port = serial->port[0];
-	struct ch341_private *priv = usb_get_serial_port_data(port);
-	int ret;
+	struct usb_serial *serial = NULL;
+	struct ch341_private *priv;
+
+	serial = usb_get_intfdata(intf);
+	priv = usb_get_serial_port_data(serial->port[0]);
 
 	/*reconfigure ch341 serial port after bus-reset*/
 	ch341_configure(dev, priv);
 
-	if (port->port.flags & ASYNC_INITIALIZED) {
-		ret = usb_submit_urb(port->interrupt_in_urb, GFP_NOIO);
-		if (ret) {
-			dev_err(&port->dev, "failed to submit interrupt urb: %d\n",
-				ret);
-			return ret;
-		}
+	usb_serial_resume(intf);
 
-		ret = ch341_get_status(port->serial->dev, priv);
-		if (ret < 0) {
-			dev_err(&port->dev, "failed to read modem status: %d\n",
-				ret);
-		}
-	}
-
-	return usb_serial_generic_resume(serial);
+	return 0;
 }
 
 static struct usb_driver ch341_driver = {

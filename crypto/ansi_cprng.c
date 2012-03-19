@@ -230,11 +230,11 @@ remainder:
 	 */
 	if (byte_count < DEFAULT_BLK_SZ) {
 empty_rbuf:
-		while (ctx->rand_data_valid < DEFAULT_BLK_SZ) {
+		for (; ctx->rand_data_valid < DEFAULT_BLK_SZ;
+			ctx->rand_data_valid++) {
 			*ptr = ctx->rand_data[ctx->rand_data_valid];
 			ptr++;
 			byte_count--;
-			ctx->rand_data_valid++;
 			if (byte_count == 0)
 				goto done;
 		}
@@ -414,9 +414,17 @@ static int fips_cprng_get_random(struct crypto_rng *tfm, u8 *rdata,
 static int fips_cprng_reset(struct crypto_rng *tfm, u8 *seed, unsigned int slen)
 {
 	u8 rdata[DEFAULT_BLK_SZ];
+	u8 *key = seed + DEFAULT_BLK_SZ;
 	int rc;
 
 	struct prng_context *prng = crypto_rng_ctx(tfm);
+
+	if (slen < DEFAULT_PRNG_KSZ + DEFAULT_BLK_SZ)
+		return -EINVAL;
+
+	/* fips strictly requires seed != key */
+	if (!memcmp(seed, key, DEFAULT_PRNG_KSZ))
+		return -EINVAL;
 
 	rc = cprng_reset(tfm, seed, slen);
 
@@ -485,5 +493,4 @@ module_param(dbg, int, 0);
 MODULE_PARM_DESC(dbg, "Boolean to enable debugging (0/1 == off/on)");
 module_init(prng_mod_init);
 module_exit(prng_mod_fini);
-MODULE_ALIAS_CRYPTO("stdrng");
-MODULE_ALIAS_CRYPTO("ansi_cprng");
+MODULE_ALIAS("stdrng");

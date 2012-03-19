@@ -291,6 +291,7 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 
 	atomic_set(&key->usage, 1);
 	init_rwsem(&key->sem);
+	lockdep_set_class(&key->sem, &type->lock_class);
 	key->type = type;
 	key->user = user;
 	key->quotalen = quotalen;
@@ -305,8 +306,6 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 
 	if (!(flags & KEY_ALLOC_NOT_IN_QUOTA))
 		key->flags |= 1 << KEY_FLAG_IN_QUOTA;
-	if (flags & KEY_ALLOC_UID_KEYRING)
-		key->flags |= 1 << KEY_FLAG_UID_KEYRING;
 
 	memset(&key->type_data, 0, sizeof(key->type_data));
 
@@ -574,7 +573,7 @@ int key_reject_and_link(struct key *key,
 
 	mutex_unlock(&key_construction_mutex);
 
-	if (keyring && link_ret == 0)
+	if (keyring)
 		__key_link_end(keyring, key->type, prealloc);
 
 	/* wake up anyone waiting for a key to be constructed */
@@ -849,16 +848,6 @@ key_ref_t key_create_or_update(key_ref_t keyring_ref,
 	__key_link_end(keyring, ktype, prealloc);
 	key_type_put(ktype);
 
-	key = key_ref_to_ptr(key_ref);
-	if (test_bit(KEY_FLAG_USER_CONSTRUCT, &key->flags)) {
-		ret = wait_for_key_construction(key, true);
-		if (ret < 0) {
-			key_ref_put(key_ref);
-			key_ref = ERR_PTR(ret);
-			goto error;
-		}
-	}
-
 	key_ref = __key_update(key_ref, payload, plen);
 	goto error;
 }
@@ -958,6 +947,8 @@ int register_key_type(struct key_type *ktype)
 	struct key_type *p;
 	int ret;
 
+	memset(&ktype->lock_class, 0, sizeof(ktype->lock_class));
+
 	ret = -EEXIST;
 	down_write(&key_types_sem);
 
@@ -1008,6 +999,7 @@ void __init key_init(void)
 	list_add_tail(&key_type_keyring.link, &key_types_list);
 	list_add_tail(&key_type_dead.link, &key_types_list);
 	list_add_tail(&key_type_user.link, &key_types_list);
+	list_add_tail(&key_type_logon.link, &key_types_list);
 
 	/* record the root user tracking */
 	rb_link_node(&root_key_user.node,

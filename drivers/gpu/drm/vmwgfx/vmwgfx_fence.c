@@ -484,7 +484,14 @@ void vmw_fence_obj_flush(struct vmw_fence_obj *fence)
 
 static void vmw_fence_destroy(struct vmw_fence_obj *fence)
 {
+	struct vmw_fence_manager *fman = fence->fman;
+
 	kfree(fence);
+	/*
+	 * Free kernel space accounting.
+	 */
+	ttm_mem_global_free(vmw_mem_glob(fman->dev_priv),
+			    fman->fence_size);
 }
 
 int vmw_fence_create(struct vmw_fence_manager *fman,
@@ -492,12 +499,20 @@ int vmw_fence_create(struct vmw_fence_manager *fman,
 		     uint32_t mask,
 		     struct vmw_fence_obj **p_fence)
 {
+	struct ttm_mem_global *mem_glob = vmw_mem_glob(fman->dev_priv);
 	struct vmw_fence_obj *fence;
- 	int ret;
+	int ret;
+
+	ret = ttm_mem_global_alloc(mem_glob, fman->fence_size,
+				   false, false);
+	if (unlikely(ret != 0))
+		return ret;
 
 	fence = kzalloc(sizeof(*fence), GFP_KERNEL);
-	if (unlikely(fence == NULL))
-		return -ENOMEM;
+	if (unlikely(fence == NULL)) {
+		ret = -ENOMEM;
+		goto out_no_object;
+	}
 
 	ret = vmw_fence_obj_init(fman, fence, seqno, mask,
 				 vmw_fence_destroy);
@@ -509,6 +524,8 @@ int vmw_fence_create(struct vmw_fence_manager *fman,
 
 out_err_init:
 	kfree(fence);
+out_no_object:
+	ttm_mem_global_free(mem_glob, fman->fence_size);
 	return ret;
 }
 
@@ -661,41 +678,6 @@ void vmw_fence_fifo_up(struct vmw_fence_manager *fman)
 }
 
 
-/**
- * vmw_fence_obj_lookup - Look up a user-space fence object
- *
- * @tfile: A struct ttm_object_file identifying the caller.
- * @handle: A handle identifying the fence object.
- * @return: A struct vmw_user_fence base ttm object on success or
- * an error pointer on failure.
- *
- * The fence object is looked up and type-checked. The caller needs
- * to have opened the fence object first, but since that happens on
- * creation and fence objects aren't shareable, that's not an
- * issue currently.
- */
-static struct ttm_base_object *
-vmw_fence_obj_lookup(struct ttm_object_file *tfile, u32 handle)
-{
-	struct ttm_base_object *base = ttm_base_object_lookup(tfile, handle);
-
-	if (!base) {
-		pr_err("Invalid fence object handle 0x%08lx.\n",
-		       (unsigned long)handle);
-		return ERR_PTR(-EINVAL);
-	}
-
-	if (base->refcount_release != vmw_user_fence_base_release) {
-		pr_err("Invalid fence object handle 0x%08lx.\n",
-		       (unsigned long)handle);
-		ttm_base_object_unref(&base);
-		return ERR_PTR(-EINVAL);
-	}
-
-	return base;
-}
-
-
 int vmw_fence_obj_wait_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file_priv)
 {
@@ -721,9 +703,13 @@ int vmw_fence_obj_wait_ioctl(struct drm_device *dev, void *data,
 		arg->kernel_cookie = jiffies + wait_timeout;
 	}
 
-	base = vmw_fence_obj_lookup(tfile, arg->handle);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	base = ttm_base_object_lookup(tfile, arg->handle);
+	if (unlikely(base == NULL)) {
+		printk(KERN_ERR "Wait invalid fence object handle "
+		       "0x%08lx.\n",
+		       (unsigned long)arg->handle);
+		return -EINVAL;
+	}
 
 	fence = &(container_of(base, struct vmw_user_fence, base)->fence);
 
@@ -762,9 +748,13 @@ int vmw_fence_obj_signaled_ioctl(struct drm_device *dev, void *data,
 	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
 	struct vmw_private *dev_priv = vmw_priv(dev);
 
-	base = vmw_fence_obj_lookup(tfile, arg->handle);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	base = ttm_base_object_lookup(tfile, arg->handle);
+	if (unlikely(base == NULL)) {
+		printk(KERN_ERR "Fence signaled invalid fence object handle "
+		       "0x%08lx.\n",
+		       (unsigned long)arg->handle);
+		return -EINVAL;
+	}
 
 	fence = &(container_of(base, struct vmw_user_fence, base)->fence);
 	fman = fence->fman;
@@ -1014,7 +1004,6 @@ int vmw_fence_event_ioctl(struct drm_device *dev, void *data,
 		(struct drm_vmw_fence_event_arg *) data;
 	struct vmw_fence_obj *fence = NULL;
 	struct vmw_fpriv *vmw_fp = vmw_fpriv(file_priv);
-	struct ttm_object_file *tfile = vmw_fp->tfile;
 	struct drm_vmw_fence_rep __user *user_fence_rep =
 		(struct drm_vmw_fence_rep __user *)(unsigned long)
 		arg->fence_rep;
@@ -1030,11 +1019,14 @@ int vmw_fence_event_ioctl(struct drm_device *dev, void *data,
 	 */
 	if (arg->handle) {
 		struct ttm_base_object *base =
-			vmw_fence_obj_lookup(tfile, arg->handle);
+			ttm_base_object_lookup(vmw_fp->tfile, arg->handle);
 
-		if (IS_ERR(base))
-			return PTR_ERR(base);
-
+		if (unlikely(base == NULL)) {
+			DRM_ERROR("Fence event invalid fence object handle "
+				  "0x%08lx.\n",
+				  (unsigned long)arg->handle);
+			return -EINVAL;
+		}
 		fence = &(container_of(base, struct vmw_user_fence,
 				       base)->fence);
 		(void) vmw_fence_obj_reference(fence);
@@ -1042,7 +1034,7 @@ int vmw_fence_event_ioctl(struct drm_device *dev, void *data,
 		if (user_fence_rep != NULL) {
 			bool existed;
 
-			ret = ttm_ref_object_add(tfile, base,
+			ret = ttm_ref_object_add(vmw_fp->tfile, base,
 						 TTM_REF_USAGE, &existed);
 			if (unlikely(ret != 0)) {
 				DRM_ERROR("Failed to reference a fence "
@@ -1124,7 +1116,8 @@ out_no_event:
 	spin_unlock_irqrestore(&dev->event_lock, irq_flags);
 out_no_event_space:
 	if (user_fence_rep != NULL)
-		ttm_ref_object_base_unref(tfile, handle, TTM_REF_USAGE);
+		ttm_ref_object_base_unref(vmw_fpriv(file_priv)->tfile,
+					  handle, TTM_REF_USAGE);
 out_no_ref_obj:
 	vmw_fence_obj_unreference(&fence);
 	return ret;

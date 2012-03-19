@@ -59,7 +59,7 @@ struct usb_context {
 	struct usbnet *dev;
 };
 
-static int turbo_mode = true;
+static bool turbo_mode = true;
 module_param(turbo_mode, bool, 0644);
 MODULE_PARM_DESC(turbo_mode, "Enable multiple frames per Rx transaction");
 
@@ -419,7 +419,7 @@ static void smsc95xx_set_multicast(struct net_device *netdev)
 static void smsc95xx_phy_update_flowcontrol(struct usbnet *dev, u8 duplex,
 					    u16 lcladv, u16 rmtadv)
 {
-	u32 flow = 0, afc_cfg;
+	u32 flow, afc_cfg = 0;
 
 	int ret = smsc95xx_read_reg(dev, AFC_CFG, &afc_cfg);
 	if (ret < 0) {
@@ -432,19 +432,20 @@ static void smsc95xx_phy_update_flowcontrol(struct usbnet *dev, u8 duplex,
 
 		if (cap & FLOW_CTRL_RX)
 			flow = 0xFFFF0002;
+		else
+			flow = 0;
 
-		if (cap & FLOW_CTRL_TX) {
+		if (cap & FLOW_CTRL_TX)
 			afc_cfg |= 0xF;
-			flow |= 0xFFFF0000;
-		} else {
+		else
 			afc_cfg &= ~0xF;
-		}
 
 		netif_dbg(dev, link, dev->net, "rx pause %s, tx pause %s\n",
 				   cap & FLOW_CTRL_RX ? "enabled" : "disabled",
 				   cap & FLOW_CTRL_TX ? "enabled" : "disabled");
 	} else {
 		netif_dbg(dev, link, dev->net, "half duplex\n");
+		flow = 0;
 		afc_cfg |= 0xF;
 	}
 
@@ -515,7 +516,8 @@ static void smsc95xx_status(struct usbnet *dev, struct urb *urb)
 }
 
 /* Enable or disable Tx & Rx checksum offload engines */
-static int smsc95xx_set_features(struct net_device *netdev, u32 features)
+static int smsc95xx_set_features(struct net_device *netdev,
+	netdev_features_t features)
 {
 	struct usbnet *dev = netdev_priv(netdev);
 	u32 read_buf;
@@ -1038,10 +1040,6 @@ static void smsc95xx_rx_csum_offload(struct sk_buff *skb)
 
 static int smsc95xx_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	while (skb->len > 0) {
 		u32 header, align_count;
 		struct sk_buff *ax_skb;
@@ -1193,7 +1191,7 @@ static const struct driver_info smsc95xx_info = {
 	.rx_fixup	= smsc95xx_rx_fixup,
 	.tx_fixup	= smsc95xx_tx_fixup,
 	.status		= smsc95xx_status,
-	.flags		= FLAG_ETHER | FLAG_SEND_ZLP | FLAG_LINK_INTR,
+	.flags		= FLAG_ETHER | FLAG_SEND_ZLP,
 };
 
 static const struct usb_device_id products[] = {
@@ -1300,17 +1298,7 @@ static struct usb_driver smsc95xx_driver = {
 	.disconnect	= usbnet_disconnect,
 };
 
-static int __init smsc95xx_init(void)
-{
-	return usb_register(&smsc95xx_driver);
-}
-module_init(smsc95xx_init);
-
-static void __exit smsc95xx_exit(void)
-{
-	usb_deregister(&smsc95xx_driver);
-}
-module_exit(smsc95xx_exit);
+module_usb_driver(smsc95xx_driver);
 
 MODULE_AUTHOR("Nancy Lin");
 MODULE_AUTHOR("Steve Glendinning <steve.glendinning@smsc.com>");

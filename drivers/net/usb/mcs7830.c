@@ -601,9 +601,8 @@ static int mcs7830_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
 	u8 status;
 
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len) {
-		dev_err(&dev->udev->dev, "unexpected tiny rx frame\n");
+	if (skb->len == 0) {
+		dev_err(&dev->udev->dev, "unexpected empty rx frame\n");
 		return 0;
 	}
 
@@ -693,17 +692,7 @@ static struct usb_driver mcs7830_driver = {
 	.reset_resume = mcs7830_reset_resume,
 };
 
-static int __init mcs7830_init(void)
-{
-	return usb_register(&mcs7830_driver);
-}
-module_init(mcs7830_init);
-
-static void __exit mcs7830_exit(void)
-{
-	usb_deregister(&mcs7830_driver);
-}
-module_exit(mcs7830_exit);
+module_usb_driver(mcs7830_driver);
 
 MODULE_DESCRIPTION("USB to network adapter MCS7830)");
 MODULE_LICENSE("GPL");

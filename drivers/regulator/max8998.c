@@ -497,7 +497,7 @@ buck2_exit:
 
 	difference = desc->min + desc->step*i - previous_vol/1000;
 	if (difference > 0)
-		udelay(DIV_ROUND_UP(difference, (val & 0x0f) + 1));
+		udelay(difference / ((val & 0x0f) + 1));
 
 	return ret;
 }
@@ -847,7 +847,7 @@ static __devinit int max8998_pmic_probe(struct platform_device *pdev)
 			regulators[index].n_voltages = count;
 		}
 		rdev[i] = regulator_register(&regulators[index], max8998->dev,
-				pdata->regulators[i].initdata, max8998);
+				pdata->regulators[i].initdata, max8998, NULL);
 		if (IS_ERR(rdev[i])) {
 			ret = PTR_ERR(rdev[i]);
 			dev_err(max8998->dev, "regulator init failed\n");

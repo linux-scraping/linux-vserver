@@ -232,10 +232,9 @@ static inline int sock_send_bvec(struct nbd_device *lo, struct bio_vec *bvec,
 /* always call with the tx_lock held */
 static int nbd_send_req(struct nbd_device *lo, struct request *req)
 {
-	int result;
+	int result, flags;
 	struct nbd_request request;
 	unsigned long size = blk_rq_bytes(req);
-	struct bio *bio;
 
 	request.magic = htonl(NBD_REQUEST_MAGIC);
 	request.type = htonl(nbd_cmd(req));
@@ -256,19 +255,17 @@ static int nbd_send_req(struct nbd_device *lo, struct request *req)
 		goto error_out;
 	}
 
-	if (nbd_cmd(req) != NBD_CMD_WRITE)
-		return 0;
-
-	bio = req->bio;
-	while (bio) {
-		struct bio *next = bio->bi_next;
-		int i;
+	if (nbd_cmd(req) == NBD_CMD_WRITE) {
+		struct req_iterator iter;
 		struct bio_vec *bvec;
-
-		bio_for_each_segment(bvec, bio, i) {
-			bool is_last = !next && i == bio->bi_vcnt - 1;
-			int flags = is_last ? 0 : MSG_MORE;
-
+		/*
+		 * we are really probing at internals to determine
+		 * whether to set MSG_MORE or not...
+		 */
+		rq_for_each_segment(bvec, req, iter) {
+			flags = 0;
+			if (!rq_iter_last(req, iter))
+				flags = MSG_MORE;
 			dprintk(DBG_TX, "%s: request %p: sending %d bytes data\n",
 					lo->disk->disk_name, req, bvec->bv_len);
 			result = sock_send_bvec(lo, bvec, flags);
@@ -278,16 +275,7 @@ static int nbd_send_req(struct nbd_device *lo, struct request *req)
 					result);
 				goto error_out;
 			}
-			/*
-			 * The completion might already have come in,
-			 * so break for the last one instead of letting
-			 * the iterator do it. This prevents use-after-free
-			 * of the bio.
-			 */
-			if (is_last)
-				break;
 		}
-		bio = next;
 	}
 	return 0;
 
@@ -457,14 +445,6 @@ static void nbd_clear_que(struct nbd_device *lo)
 		req->errors++;
 		nbd_end_request(req);
 	}
-
-	while (!list_empty(&lo->waiting_queue)) {
-		req = list_entry(lo->waiting_queue.next, struct request,
-				 queuelist);
-		list_del_init(&req->queuelist);
-		req->errors++;
-		nbd_end_request(req);
-	}
 }
 
 
@@ -596,24 +576,14 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 		struct request sreq;
 
 		dev_info(disk_to_dev(lo->disk), "NBD_DISCONNECT\n");
-		if (!lo->sock)
-			return -EINVAL;
 
-		mutex_unlock(&lo->tx_lock);
-		fsync_bdev(bdev);
-		mutex_lock(&lo->tx_lock);
 		blk_rq_init(NULL, &sreq);
 		sreq.cmd_type = REQ_TYPE_SPECIAL;
 		nbd_cmd(&sreq) = NBD_CMD_DISC;
-
-		/* Check again after getting mutex back.  */
 		if (!lo->sock)
 			return -EINVAL;
-
-		lo->disconnect = 1;
-
 		nbd_send_req(lo, &sreq);
-		return 0;
+                return 0;
 	}
  
 	case NBD_CLEAR_SOCK: {
@@ -624,8 +594,6 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 		lo->file = NULL;
 		nbd_clear_que(lo);
 		BUG_ON(!list_empty(&lo->queue_head));
-		BUG_ON(!list_empty(&lo->waiting_queue));
-		kill_bdev(bdev);
 		if (file)
 			fput(file);
 		return 0;
@@ -643,7 +611,6 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 				lo->sock = SOCKET_I(inode);
 				if (max_part > 0)
 					bdev->bd_invalidated = 1;
-				lo->disconnect = 0; /* we're connected now */
 				return 0;
 			} else {
 				fput(file);
@@ -690,8 +657,7 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 
 		mutex_unlock(&lo->tx_lock);
 
-		thread = kthread_create(nbd_thread, lo, "%s",
-					lo->disk->disk_name);
+		thread = kthread_create(nbd_thread, lo, lo->disk->disk_name);
 		if (IS_ERR(thread)) {
 			mutex_lock(&lo->tx_lock);
 			return PTR_ERR(thread);
@@ -708,7 +674,6 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 		lo->file = NULL;
 		nbd_clear_que(lo);
 		dev_warn(disk_to_dev(lo->disk), "queue cleared\n");
-		kill_bdev(bdev);
 		if (file)
 			fput(file);
 		lo->bytesize = 0;
@@ -716,8 +681,6 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *lo,
 		set_capacity(lo->disk, 0);
 		if (max_part > 0)
 			ioctl_by_bdev(bdev, BLKRRPART, 0);
-		if (lo->disconnect) /* user requested, ignore socket errors */
-			return 0;
 		return lo->harderror;
 	}
 
@@ -785,6 +748,10 @@ static int __init nbd_init(void)
 		return -EINVAL;
 	}
 
+	nbd_dev = kcalloc(nbds_max, sizeof(*nbd_dev), GFP_KERNEL);
+	if (!nbd_dev)
+		return -ENOMEM;
+
 	part_shift = 0;
 	if (max_part > 0) {
 		part_shift = fls(max_part);
@@ -805,10 +772,6 @@ static int __init nbd_init(void)
 
 	if (nbds_max > 1UL << (MINORBITS - part_shift))
 		return -EINVAL;
-
-	nbd_dev = kcalloc(nbds_max, sizeof(*nbd_dev), GFP_KERNEL);
-	if (!nbd_dev)
-		return -ENOMEM;
 
 	for (i = 0; i < nbds_max; i++) {
 		struct gendisk *disk = alloc_disk(1 << part_shift);

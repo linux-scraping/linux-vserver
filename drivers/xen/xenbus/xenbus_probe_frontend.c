@@ -129,7 +129,7 @@ static int read_backend_details(struct xenbus_device *xendev)
 	return xenbus_read_otherend_details(xendev, "backend-id", "backend");
 }
 
-static int is_device_connecting(struct device *dev, void *data, bool ignore_nonessential)
+static int is_device_connecting(struct device *dev, void *data)
 {
 	struct xenbus_device *xendev = to_xenbus_device(dev);
 	struct device_driver *drv = data;
@@ -146,41 +146,16 @@ static int is_device_connecting(struct device *dev, void *data, bool ignore_none
 	if (drv && (dev->driver != drv))
 		return 0;
 
-	if (ignore_nonessential) {
-		/* With older QEMU, for PVonHVM guests the guest config files
-		 * could contain: vfb = [ 'vnc=1, vnclisten=0.0.0.0']
-		 * which is nonsensical as there is no PV FB (there can be
-		 * a PVKB) running as HVM guest. */
-
-		if ((strncmp(xendev->nodename, "device/vkbd", 11) == 0))
-			return 0;
-
-		if ((strncmp(xendev->nodename, "device/vfb", 10) == 0))
-			return 0;
-	}
 	xendrv = to_xenbus_driver(dev->driver);
 	return (xendev->state < XenbusStateConnected ||
 		(xendev->state == XenbusStateConnected &&
 		 xendrv->is_ready && !xendrv->is_ready(xendev)));
 }
-static int essential_device_connecting(struct device *dev, void *data)
-{
-	return is_device_connecting(dev, data, true /* ignore PV[KBB+FB] */);
-}
-static int non_essential_device_connecting(struct device *dev, void *data)
-{
-	return is_device_connecting(dev, data, false);
-}
 
-static int exists_essential_connecting_device(struct device_driver *drv)
+static int exists_connecting_device(struct device_driver *drv)
 {
 	return bus_for_each_dev(&xenbus_frontend.bus, NULL, drv,
-				essential_device_connecting);
-}
-static int exists_non_essential_connecting_device(struct device_driver *drv)
-{
-	return bus_for_each_dev(&xenbus_frontend.bus, NULL, drv,
-				non_essential_device_connecting);
+				is_device_connecting);
 }
 
 static int print_device_status(struct device *dev, void *data)
@@ -211,23 +186,6 @@ static int print_device_status(struct device *dev, void *data)
 /* We only wait for device setup after most initcalls have run. */
 static int ready_to_wait_for_devices;
 
-static bool wait_loop(unsigned long start, unsigned int max_delay,
-		     unsigned int *seconds_waited)
-{
-	if (time_after(jiffies, start + (*seconds_waited+5)*HZ)) {
-		if (!*seconds_waited)
-			printk(KERN_WARNING "XENBUS: Waiting for "
-			       "devices to initialise: ");
-		*seconds_waited += 5;
-		printk("%us...", max_delay - *seconds_waited);
-		if (*seconds_waited == max_delay)
-			return true;
-	}
-
-	schedule_timeout_interruptible(HZ/10);
-
-	return false;
-}
 /*
  * On a 5-minute timeout, wait for all devices currently configured.  We need
  * to do this to guarantee that the filesystems and / or network devices
@@ -251,14 +209,19 @@ static void wait_for_devices(struct xenbus_driver *xendrv)
 	if (!ready_to_wait_for_devices || !xen_domain())
 		return;
 
-	while (exists_non_essential_connecting_device(drv))
-		if (wait_loop(start, 30, &seconds_waited))
-			break;
+	while (exists_connecting_device(drv)) {
+		if (time_after(jiffies, start + (seconds_waited+5)*HZ)) {
+			if (!seconds_waited)
+				printk(KERN_WARNING "XENBUS: Waiting for "
+				       "devices to initialise: ");
+			seconds_waited += 5;
+			printk("%us...", 300 - seconds_waited);
+			if (seconds_waited == 300)
+				break;
+		}
 
-	/* Skips PVKB and PVFB check.*/
-	while (exists_essential_connecting_device(drv))
-		if (wait_loop(start, 270, &seconds_waited))
-			break;
+		schedule_timeout_interruptible(HZ/10);
+	}
 
 	if (seconds_waited)
 		printk("\n");
@@ -267,15 +230,13 @@ static void wait_for_devices(struct xenbus_driver *xendrv)
 			 print_device_status);
 }
 
-int __xenbus_register_frontend(struct xenbus_driver *drv,
-			       struct module *owner, const char *mod_name)
+int xenbus_register_frontend(struct xenbus_driver *drv)
 {
 	int ret;
 
 	drv->read_otherend_details = read_backend_details;
 
-	ret = xenbus_register_driver_common(drv, &xenbus_frontend,
-					    owner, mod_name);
+	ret = xenbus_register_driver_common(drv, &xenbus_frontend);
 	if (ret)
 		return ret;
 
@@ -284,7 +245,7 @@ int __xenbus_register_frontend(struct xenbus_driver *drv,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(__xenbus_register_frontend);
+EXPORT_SYMBOL_GPL(xenbus_register_frontend);
 
 static DECLARE_WAIT_QUEUE_HEAD(backend_state_wq);
 static int backend_state;

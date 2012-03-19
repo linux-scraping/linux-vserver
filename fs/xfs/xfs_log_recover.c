@@ -1489,7 +1489,7 @@ xlog_recover_add_to_cont_trans(
 	old_ptr = item->ri_buf[item->ri_cnt-1].i_addr;
 	old_len = item->ri_buf[item->ri_cnt-1].i_len;
 
-	ptr = kmem_realloc(old_ptr, len+old_len, old_len, 0u);
+	ptr = kmem_realloc(old_ptr, len+old_len, old_len, KM_SLEEP);
 	memcpy(&ptr[old_len], dp, len); /* d, s, l */
 	item->ri_buf[item->ri_cnt-1].i_len += len;
 	item->ri_buf[item->ri_cnt-1].i_addr = ptr;
@@ -1981,7 +1981,7 @@ xfs_qm_dqcheck(
 
 	if (!errs && ddq->d_id) {
 		if (ddq->d_blk_softlimit &&
-		    be64_to_cpu(ddq->d_bcount) >=
+		    be64_to_cpu(ddq->d_bcount) >
 				be64_to_cpu(ddq->d_blk_softlimit)) {
 			if (!ddq->d_btimer) {
 				if (flags & XFS_QMOPT_DOWARN)
@@ -1992,7 +1992,7 @@ xfs_qm_dqcheck(
 			}
 		}
 		if (ddq->d_ino_softlimit &&
-		    be64_to_cpu(ddq->d_icount) >=
+		    be64_to_cpu(ddq->d_icount) >
 				be64_to_cpu(ddq->d_ino_softlimit)) {
 			if (!ddq->d_itimer) {
 				if (flags & XFS_QMOPT_DOWARN)
@@ -2003,7 +2003,7 @@ xfs_qm_dqcheck(
 			}
 		}
 		if (ddq->d_rtb_softlimit &&
-		    be64_to_cpu(ddq->d_rtbcount) >=
+		    be64_to_cpu(ddq->d_rtbcount) >
 				be64_to_cpu(ddq->d_rtb_softlimit)) {
 			if (!ddq->d_rtbtimer) {
 				if (flags & XFS_QMOPT_DOWARN)
@@ -3162,26 +3162,37 @@ xlog_recover_process_iunlinks(
 			 */
 			continue;
 		}
-		/*
-		 * Unlock the buffer so that it can be acquired in the normal
-		 * course of the transaction to truncate and free each inode.
-		 * Because we are not racing with anyone else here for the AGI
-		 * buffer, we don't even need to hold it locked to read the
-		 * initial unlinked bucket entries out of the buffer. We keep
-		 * buffer reference though, so that it stays pinned in memory
-		 * while we need the buffer.
-		 */
 		agi = XFS_BUF_TO_AGI(agibp);
-		xfs_buf_unlock(agibp);
 
 		for (bucket = 0; bucket < XFS_AGI_UNLINKED_BUCKETS; bucket++) {
 			agino = be32_to_cpu(agi->agi_unlinked[bucket]);
 			while (agino != NULLAGINO) {
+				/*
+				 * Release the agi buffer so that it can
+				 * be acquired in the normal course of the
+				 * transaction to truncate and free the inode.
+				 */
+				xfs_buf_relse(agibp);
+
 				agino = xlog_recover_process_one_iunlink(mp,
 							agno, agino, bucket);
+
+				/*
+				 * Reacquire the agibuffer and continue around
+				 * the loop. This should never fail as we know
+				 * the buffer was good earlier on.
+				 */
+				error = xfs_read_agi(mp, NULL, agno, &agibp);
+				ASSERT(error == 0);
+				agi = XFS_BUF_TO_AGI(agibp);
 			}
 		}
-		xfs_buf_rele(agibp);
+
+		/*
+		 * Release the buffer for the current agi so we can
+		 * go on to the next one.
+		 */
+		xfs_buf_relse(agibp);
 	}
 
 	mp->m_dmevmask = mp_dmevmask;
@@ -3515,7 +3526,7 @@ xlog_do_recovery_pass(
 				 *   - order is important.
 				 */
 				error = xlog_bread_offset(log, 0,
-						bblks - split_bblks, dbp,
+						bblks - split_bblks, hbp,
 						offset + BBTOB(split_bblks));
 				if (error)
 					goto bread_err2;

@@ -136,7 +136,7 @@ cifs_bp_rename_retry:
 /* Inode operations in similar order to how they appear in Linux file fs.h */
 
 int
-cifs_create(struct inode *inode, struct dentry *direntry, int mode,
+cifs_create(struct inode *inode, struct dentry *direntry, umode_t mode,
 		struct nameidata *nd)
 {
 	int rc = -ENOENT;
@@ -171,7 +171,7 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 	}
 	tcon = tlink_tcon(tlink);
 
-	if (tcon->ses->server->oplocks)
+	if (enable_oplocks)
 		oplock = REQ_OPLOCK;
 
 	if (nd)
@@ -355,7 +355,7 @@ cifs_create_out:
 	return rc;
 }
 
-int cifs_mknod(struct inode *inode, struct dentry *direntry, int mode,
+int cifs_mknod(struct inode *inode, struct dentry *direntry, umode_t mode,
 		dev_t device_number)
 {
 	int rc = -EPERM;
@@ -492,7 +492,7 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 {
 	int xid;
 	int rc = 0; /* to get around spurious gcc warning, set to zero here */
-	__u32 oplock;
+	__u32 oplock = enable_oplocks ? REQ_OPLOCK : 0;
 	__u16 fileHandle = 0;
 	bool posix_open = false;
 	struct cifs_sb_info *cifs_sb;
@@ -517,16 +517,6 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		return (struct dentry *)tlink;
 	}
 	pTcon = tlink_tcon(tlink);
-
-	oplock = pTcon->ses->server->oplocks ? REQ_OPLOCK : 0;
-
-	/* Don't allow path components longer than the server max. */
-	if (unlikely(pTcon->fsAttrInfo.MaxPathNameComponentLength &&
-		     direntry->d_name.len >
-		     le32_to_cpu(pTcon->fsAttrInfo.MaxPathNameComponentLength))) {
-		rc = -ENAMETOOLONG;
-		goto lookup_out;
-	}
 
 	/*
 	 * Don't allow the separator character in a path component.

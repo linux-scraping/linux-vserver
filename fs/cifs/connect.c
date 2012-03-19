@@ -38,6 +38,7 @@
 #include <asm/processor.h>
 #include <linux/inet.h>
 #include <linux/module.h>
+#include <keys/user-type.h>
 #include <net/ipv6.h>
 #include "cifspdu.h"
 #include "cifsglob.h"
@@ -134,6 +135,7 @@ cifs_reconnect(struct TCP_Server_Info *server)
 	server->session_key.response = NULL;
 	server->session_key.len = 0;
 	server->lstrp = jiffies;
+	mutex_unlock(&server->srv_mutex);
 
 	/* mark submitted MIDs for retry and issue callback */
 	INIT_LIST_HEAD(&retry_list);
@@ -146,7 +148,6 @@ cifs_reconnect(struct TCP_Server_Info *server)
 		list_move(&mid_entry->qhead, &retry_list);
 	}
 	spin_unlock(&GlobalMid_Lock);
-	mutex_unlock(&server->srv_mutex);
 
 	cFYI(1, "%s: issuing mid callbacks", __func__);
 	list_for_each_safe(tmp, tmp2, &retry_list) {
@@ -225,74 +226,90 @@ static int check2ndT2(struct smb_hdr *pSMB)
 
 static int coalesce_t2(struct smb_hdr *psecond, struct smb_hdr *pTargetSMB)
 {
-	struct smb_t2_rsp *pSMB2 = (struct smb_t2_rsp *)psecond;
+	struct smb_t2_rsp *pSMBs = (struct smb_t2_rsp *)psecond;
 	struct smb_t2_rsp *pSMBt  = (struct smb_t2_rsp *)pTargetSMB;
-	char *data_area_of_target;
-	char *data_area_of_buf2;
+	char *data_area_of_tgt;
+	char *data_area_of_src;
 	int remaining;
-	unsigned int byte_count, total_in_buf;
-	__u16 total_data_size, total_in_buf2;
+	unsigned int byte_count, total_in_tgt;
+	__u16 tgt_total_cnt, src_total_cnt, total_in_src;
 
-	total_data_size = get_unaligned_le16(&pSMBt->t2_rsp.TotalDataCount);
+	src_total_cnt = get_unaligned_le16(&pSMBs->t2_rsp.TotalDataCount);
+	tgt_total_cnt = get_unaligned_le16(&pSMBt->t2_rsp.TotalDataCount);
 
-	if (total_data_size !=
-	    get_unaligned_le16(&pSMB2->t2_rsp.TotalDataCount))
-		cFYI(1, "total data size of primary and secondary t2 differ");
+	if (tgt_total_cnt != src_total_cnt)
+		cFYI(1, "total data count of primary and secondary t2 differ "
+			"source=%hu target=%hu", src_total_cnt, tgt_total_cnt);
 
-	total_in_buf = get_unaligned_le16(&pSMBt->t2_rsp.DataCount);
+	total_in_tgt = get_unaligned_le16(&pSMBt->t2_rsp.DataCount);
 
-	remaining = total_data_size - total_in_buf;
+	remaining = tgt_total_cnt - total_in_tgt;
 
-	if (remaining < 0)
+	if (remaining < 0) {
+		cFYI(1, "Server sent too much data. tgt_total_cnt=%hu "
+			"total_in_tgt=%hu", tgt_total_cnt, total_in_tgt);
 		return -EPROTO;
-
-	if (remaining == 0) /* nothing to do, ignore */
-		return 0;
-
-	total_in_buf2 = get_unaligned_le16(&pSMB2->t2_rsp.DataCount);
-	if (remaining < total_in_buf2) {
-		cFYI(1, "transact2 2nd response contains too much data");
 	}
 
+	if (remaining == 0) {
+		/* nothing to do, ignore */
+		cFYI(1, "no more data remains");
+		return 0;
+	}
+
+	total_in_src = get_unaligned_le16(&pSMBs->t2_rsp.DataCount);
+	if (remaining < total_in_src)
+		cFYI(1, "transact2 2nd response contains too much data");
+
 	/* find end of first SMB data area */
-	data_area_of_target = (char *)&pSMBt->hdr.Protocol +
+	data_area_of_tgt = (char *)&pSMBt->hdr.Protocol +
 				get_unaligned_le16(&pSMBt->t2_rsp.DataOffset);
+
 	/* validate target area */
+	data_area_of_src = (char *)&pSMBs->hdr.Protocol +
+				get_unaligned_le16(&pSMBs->t2_rsp.DataOffset);
 
-	data_area_of_buf2 = (char *)&pSMB2->hdr.Protocol +
-				get_unaligned_le16(&pSMB2->t2_rsp.DataOffset);
+	data_area_of_tgt += total_in_tgt;
 
-	data_area_of_target += total_in_buf;
-
-	/* copy second buffer into end of first buffer */
-	total_in_buf += total_in_buf2;
+	total_in_tgt += total_in_src;
 	/* is the result too big for the field? */
-	if (total_in_buf > USHRT_MAX)
+	if (total_in_tgt > USHRT_MAX) {
+		cFYI(1, "coalesced DataCount too large (%u)", total_in_tgt);
 		return -EPROTO;
-	put_unaligned_le16(total_in_buf, &pSMBt->t2_rsp.DataCount);
+	}
+	put_unaligned_le16(total_in_tgt, &pSMBt->t2_rsp.DataCount);
 
 	/* fix up the BCC */
 	byte_count = get_bcc(pTargetSMB);
-	byte_count += total_in_buf2;
+	byte_count += total_in_src;
 	/* is the result too big for the field? */
-	if (byte_count > USHRT_MAX)
+	if (byte_count > USHRT_MAX) {
+		cFYI(1, "coalesced BCC too large (%u)", byte_count);
 		return -EPROTO;
+	}
 	put_bcc(byte_count, pTargetSMB);
 
 	byte_count = be32_to_cpu(pTargetSMB->smb_buf_length);
-	byte_count += total_in_buf2;
+	byte_count += total_in_src;
 	/* don't allow buffer to overflow */
-	if (byte_count > CIFSMaxBufSize + MAX_CIFS_HDR_SIZE - 4)
+	if (byte_count > CIFSMaxBufSize + MAX_CIFS_HDR_SIZE - 4) {
+		cFYI(1, "coalesced BCC exceeds buffer size (%u)", byte_count);
 		return -ENOBUFS;
+	}
 	pTargetSMB->smb_buf_length = cpu_to_be32(byte_count);
 
-	memcpy(data_area_of_target, data_area_of_buf2, total_in_buf2);
+	/* copy second buffer into end of first buffer */
+	memcpy(data_area_of_tgt, data_area_of_src, total_in_src);
 
-	if (remaining == total_in_buf2) {
-		cFYI(1, "found the last secondary response");
-		return 0; /* we are done */
-	} else /* more responses to go */
+	if (remaining != total_in_src) {
+		/* more responses to go */
+		cFYI(1, "waiting for more secondary responses");
 		return 1;
+	}
+
+	/* we are done */
+	cFYI(1, "found the last secondary response");
+	return 0;
 }
 
 static void
@@ -625,10 +642,14 @@ static void clean_demultiplex_info(struct TCP_Server_Info *server)
 	spin_unlock(&GlobalMid_Lock);
 	wake_up_all(&server->response_q);
 
-	/* Check if we have blocked requests that need to free. */
+	/*
+	 * Check if we have blocked requests that need to free. Note that
+	 * cifs_max_pending is normally 50, but can be set at module install
+	 * time to as little as two.
+	 */
 	spin_lock(&GlobalMid_Lock);
-	if (atomic_read(&server->inFlight) >= server->maxReq)
-		atomic_set(&server->inFlight, server->maxReq - 1);
+	if (atomic_read(&server->inFlight) >= cifs_max_pending)
+		atomic_set(&server->inFlight, cifs_max_pending - 1);
 	/*
 	 * We do not want to set the max_pending too low or we could end up
 	 * with the counter going negative.
@@ -1113,8 +1134,7 @@ cifs_parse_mount_options(const char *mountdata, const char *devname,
 				cERROR(1, "Krb5 cifs privacy not supported");
 				goto cifs_parse_mount_err;
 			} else if (strnicmp(value, "krb5", 4) == 0) {
-				vol->secFlg |= CIFSSEC_MAY_KRB5 | 
-					CIFSSEC_MAY_SIGN;
+				vol->secFlg |= CIFSSEC_MAY_KRB5;
 			} else if (strnicmp(value, "ntlmsspi", 8) == 0) {
 				vol->secFlg |= CIFSSEC_MAY_NTLMSSP |
 					CIFSSEC_MUST_SIGN;
@@ -1576,11 +1596,14 @@ cifs_parse_mount_options(const char *mountdata, const char *devname,
 		}
 	}
 
-	if (vol->multiuser && !(vol->secFlg & CIFSSEC_MAY_KRB5)) {
-		cERROR(1, "Multiuser mounts currently require krb5 "
-			  "authentication!");
+#ifndef CONFIG_KEYS
+	/* Muliuser mounts require CONFIG_KEYS support */
+	if (vol->multiuser) {
+		cERROR(1, "Multiuser mounts require kernels with "
+			  "CONFIG_KEYS enabled.");
 		goto cifs_parse_mount_err;
 	}
+#endif
 
 	if (vol->UNCip == NULL)
 		vol->UNCip = &vol->UNC[2];
@@ -1887,7 +1910,6 @@ cifs_get_tcp_session(struct smb_vol *volume_info)
 	tcp_ses->noautotune = volume_info->noautotune;
 	tcp_ses->tcp_nodelay = volume_info->sockopt_tcp_nodelay;
 	atomic_set(&tcp_ses->inFlight, 0);
-	tcp_ses->maxReq = 1; /* enough to send negotiate request */
 	init_waitqueue_head(&tcp_ses->response_q);
 	init_waitqueue_head(&tcp_ses->request_q);
 	INIT_LIST_HEAD(&tcp_ses->pending_mid_q);
@@ -1980,10 +2002,16 @@ static int match_session(struct cifs_ses *ses, struct smb_vol *vol)
 			return 0;
 		break;
 	default:
+		/* NULL username means anonymous session */
+		if (ses->user_name == NULL) {
+			if (!vol->nullauth)
+				return 0;
+			break;
+		}
+
 		/* anything else takes username/password */
-		if (ses->user_name == NULL)
-			return 0;
-		if (strncmp(ses->user_name, vol->username,
+		if (strncmp(ses->user_name,
+			    vol->username ? vol->username : "",
 			    MAX_USERNAME_SIZE))
 			return 0;
 		if (strlen(vol->username) != 0 &&
@@ -2037,6 +2065,132 @@ cifs_put_smb_ses(struct cifs_ses *ses)
 	sesInfoFree(ses);
 	cifs_put_tcp_session(server);
 }
+
+#ifdef CONFIG_KEYS
+
+/* strlen("cifs:a:") + INET6_ADDRSTRLEN + 1 */
+#define CIFSCREDS_DESC_SIZE (7 + INET6_ADDRSTRLEN + 1)
+
+/* Populate username and pw fields from keyring if possible */
+static int
+cifs_set_cifscreds(struct smb_vol *vol, struct cifs_ses *ses)
+{
+	int rc = 0;
+	char *desc, *delim, *payload;
+	ssize_t len;
+	struct key *key;
+	struct TCP_Server_Info *server = ses->server;
+	struct sockaddr_in *sa;
+	struct sockaddr_in6 *sa6;
+	struct user_key_payload *upayload;
+
+	desc = kmalloc(CIFSCREDS_DESC_SIZE, GFP_KERNEL);
+	if (!desc)
+		return -ENOMEM;
+
+	/* try to find an address key first */
+	switch (server->dstaddr.ss_family) {
+	case AF_INET:
+		sa = (struct sockaddr_in *)&server->dstaddr;
+		sprintf(desc, "cifs:a:%pI4", &sa->sin_addr.s_addr);
+		break;
+	case AF_INET6:
+		sa6 = (struct sockaddr_in6 *)&server->dstaddr;
+		sprintf(desc, "cifs:a:%pI6c", &sa6->sin6_addr.s6_addr);
+		break;
+	default:
+		cFYI(1, "Bad ss_family (%hu)", server->dstaddr.ss_family);
+		rc = -EINVAL;
+		goto out_err;
+	}
+
+	cFYI(1, "%s: desc=%s", __func__, desc);
+	key = request_key(&key_type_logon, desc, "");
+	if (IS_ERR(key)) {
+		if (!ses->domainName) {
+			cFYI(1, "domainName is NULL");
+			rc = PTR_ERR(key);
+			goto out_err;
+		}
+
+		/* didn't work, try to find a domain key */
+		sprintf(desc, "cifs:d:%s", ses->domainName);
+		cFYI(1, "%s: desc=%s", __func__, desc);
+		key = request_key(&key_type_logon, desc, "");
+		if (IS_ERR(key)) {
+			rc = PTR_ERR(key);
+			goto out_err;
+		}
+	}
+
+	down_read(&key->sem);
+	upayload = key->payload.data;
+	if (IS_ERR_OR_NULL(upayload)) {
+		rc = upayload ? PTR_ERR(upayload) : -EINVAL;
+		goto out_key_put;
+	}
+
+	/* find first : in payload */
+	payload = (char *)upayload->data;
+	delim = strnchr(payload, upayload->datalen, ':');
+	cFYI(1, "payload=%s", payload);
+	if (!delim) {
+		cFYI(1, "Unable to find ':' in payload (datalen=%d)",
+				upayload->datalen);
+		rc = -EINVAL;
+		goto out_key_put;
+	}
+
+	len = delim - payload;
+	if (len > MAX_USERNAME_SIZE || len <= 0) {
+		cFYI(1, "Bad value from username search (len=%zd)", len);
+		rc = -EINVAL;
+		goto out_key_put;
+	}
+
+	vol->username = kstrndup(payload, len, GFP_KERNEL);
+	if (!vol->username) {
+		cFYI(1, "Unable to allocate %zd bytes for username", len);
+		rc = -ENOMEM;
+		goto out_key_put;
+	}
+	cFYI(1, "%s: username=%s", __func__, vol->username);
+
+	len = key->datalen - (len + 1);
+	if (len > MAX_PASSWORD_SIZE || len <= 0) {
+		cFYI(1, "Bad len for password search (len=%zd)", len);
+		rc = -EINVAL;
+		kfree(vol->username);
+		vol->username = NULL;
+		goto out_key_put;
+	}
+
+	++delim;
+	vol->password = kstrndup(delim, len, GFP_KERNEL);
+	if (!vol->password) {
+		cFYI(1, "Unable to allocate %zd bytes for password", len);
+		rc = -ENOMEM;
+		kfree(vol->username);
+		vol->username = NULL;
+		goto out_key_put;
+	}
+
+out_key_put:
+	up_read(&key->sem);
+	key_put(key);
+out_err:
+	kfree(desc);
+	cFYI(1, "%s: returning %d", __func__, rc);
+	return rc;
+}
+#else /* ! CONFIG_KEYS */
+static inline int
+cifs_set_cifscreds(struct smb_vol *vol __attribute__((unused)),
+		   struct cifs_ses *ses __attribute__((unused)))
+{
+	return -ENOSYS;
+}
+#endif /* CONFIG_KEYS */
 
 static bool warned_on_ntlm;  /* globals init to false automatically */
 
@@ -2818,7 +2972,7 @@ void cifs_setup_cifs_sb(struct smb_vol *pvolume_info,
 		cifs_sb->mnt_backupgid = pvolume_info->backupgid;
 	cifs_sb->mnt_file_mode = pvolume_info->file_mode;
 	cifs_sb->mnt_dir_mode = pvolume_info->dir_mode;
-	cFYI(1, "file mode: 0x%x  dir mode: 0x%x",
+	cFYI(1, "file mode: 0x%hx  dir mode: 0x%hx",
 		cifs_sb->mnt_file_mode, cifs_sb->mnt_dir_mode);
 
 	cifs_sb->actimeo = pvolume_info->actimeo;
@@ -2926,18 +3080,6 @@ void cifs_setup_cifs_sb(struct smb_vol *pvolume_info,
 #define CIFS_DEFAULT_NON_POSIX_RSIZE (60 * 1024)
 #define CIFS_DEFAULT_NON_POSIX_WSIZE (65536)
 
-/*
- * On hosts with high memory, we can't currently support wsize/rsize that are
- * larger than we can kmap at once. Cap the rsize/wsize at
- * LAST_PKMAP * PAGE_SIZE. We'll never be able to fill a read or write request
- * larger than that anyway.
- */
-#ifdef CONFIG_HIGHMEM
-#define CIFS_KMAP_SIZE_LIMIT	(LAST_PKMAP * PAGE_CACHE_SIZE)
-#else /* CONFIG_HIGHMEM */
-#define CIFS_KMAP_SIZE_LIMIT	(1<<24)
-#endif /* CONFIG_HIGHMEM */
-
 static unsigned int
 cifs_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *pvolume_info)
 {
@@ -2968,9 +3110,6 @@ cifs_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *pvolume_info)
 		wsize = min_t(unsigned int, wsize,
 				server->maxBuf - sizeof(WRITE_REQ) + 4);
 
-	/* limit to the amount that we can kmap at once */
-	wsize = min_t(unsigned int, wsize, CIFS_KMAP_SIZE_LIMIT);
-
 	/* hard limit of CIFS_MAX_WSIZE */
 	wsize = min_t(unsigned int, wsize, CIFS_MAX_WSIZE);
 
@@ -2991,15 +3130,18 @@ cifs_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *pvolume_info)
 	 * MS-CIFS indicates that servers are only limited by the client's
 	 * bufsize for reads, testing against win98se shows that it throws
 	 * INVALID_PARAMETER errors if you try to request too large a read.
-	 * OS/2 just sends back short reads.
 	 *
-	 * If the server doesn't advertise CAP_LARGE_READ_X, then assume that
-	 * it can't handle a read request larger than its MaxBufferSize either.
+	 * If the server advertises a MaxBufferSize of less than one page,
+	 * assume that it also can't satisfy reads larger than that either.
+	 *
+	 * FIXME: Is there a better heuristic for this?
 	 */
 	if (tcon->unix_ext && (unix_cap & CIFS_UNIX_LARGE_READ_CAP))
 		defsize = CIFS_DEFAULT_IOSIZE;
 	else if (server->capabilities & CAP_LARGE_READ_X)
 		defsize = CIFS_DEFAULT_NON_POSIX_RSIZE;
+	else if (server->maxBuf >= PAGE_CACHE_SIZE)
+		defsize = CIFSMaxBufSize;
 	else
 		defsize = server->maxBuf - sizeof(READ_RSP);
 
@@ -3011,9 +3153,6 @@ cifs_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *pvolume_info)
 	 */
 	if (!(server->capabilities & CAP_LARGE_READ_X))
 		rsize = min_t(unsigned int, CIFSMaxBufSize, rsize);
-
-	/* limit to the amount that we can kmap at once */
-	rsize = min_t(unsigned int, rsize, CIFS_KMAP_SIZE_LIMIT);
 
 	/* hard limit of CIFS_MAX_RSIZE */
 	rsize = min_t(unsigned int, rsize, CIFS_MAX_RSIZE);
@@ -3165,10 +3304,9 @@ cifs_setup_volume_info(struct smb_vol *volume_info, char *mount_data,
 		return -EINVAL;
 
 	if (volume_info->nullauth) {
-		cFYI(1, "null user");
-		volume_info->username = kzalloc(1, GFP_KERNEL);
-		if (volume_info->username == NULL)
-			return -ENOMEM;
+		cFYI(1, "Anonymous login");
+		kfree(volume_info->username);
+		volume_info->username = NULL;
 	} else if (volume_info->username) {
 		/* BB fixme parse for domain name here */
 		cFYI(1, "Username: %s", volume_info->username);
@@ -3233,7 +3371,7 @@ cifs_ra_pages(struct cifs_sb_info *cifs_sb)
 int
 cifs_mount(struct cifs_sb_info *cifs_sb, struct smb_vol *volume_info)
 {
-	int rc;
+	int rc = 0;
 	int xid;
 	struct cifs_ses *pSesInfo;
 	struct cifs_tcon *tcon;
@@ -3260,7 +3398,6 @@ try_mount_again:
 		FreeXid(xid);
 	}
 #endif
-	rc = 0;
 	tcon = NULL;
 	pSesInfo = NULL;
 	srvTcp = NULL;
@@ -3508,7 +3645,7 @@ CIFSTCon(unsigned int xid, struct cifs_ses *ses,
 	if (ses->capabilities & CAP_UNICODE) {
 		smb_buffer->Flags2 |= SMBFLG2_UNICODE;
 		length =
-		    cifs_strtoUCS((__le16 *) bcc_ptr, tree,
+		    cifs_strtoUTF16((__le16 *) bcc_ptr, tree,
 			6 /* max utf8 char length in bytes */ *
 			(/* server len*/ + 256 /* share len */), nls_codepage);
 		bcc_ptr += 2 * length;	/* convert num 16 bit words to bytes */
@@ -3563,7 +3700,7 @@ CIFSTCon(unsigned int xid, struct cifs_ses *ses,
 
 		/* mostly informational -- no need to fail on error here */
 		kfree(tcon->nativeFileSystem);
-		tcon->nativeFileSystem = cifs_strndup_from_ucs(bcc_ptr,
+		tcon->nativeFileSystem = cifs_strndup_from_utf16(bcc_ptr,
 						      bytes_left, is_unicode,
 						      nls_codepage);
 
@@ -3687,25 +3824,43 @@ int cifs_setup_session(unsigned int xid, struct cifs_ses *ses,
 	return rc;
 }
 
+static int
+cifs_set_vol_auth(struct smb_vol *vol, struct cifs_ses *ses)
+{
+	switch (ses->server->secType) {
+	case Kerberos:
+		vol->secFlg = CIFSSEC_MUST_KRB5;
+		return 0;
+	case NTLMv2:
+		vol->secFlg = CIFSSEC_MUST_NTLMV2;
+		break;
+	case NTLM:
+		vol->secFlg = CIFSSEC_MUST_NTLM;
+		break;
+	case RawNTLMSSP:
+		vol->secFlg = CIFSSEC_MUST_NTLMSSP;
+		break;
+	case LANMAN:
+		vol->secFlg = CIFSSEC_MUST_LANMAN;
+		break;
+	}
+
+	return cifs_set_cifscreds(vol, ses);
+}
+
 static struct cifs_tcon *
 cifs_construct_tcon(struct cifs_sb_info *cifs_sb, uid_t fsuid)
 {
+	int rc;
 	struct cifs_tcon *master_tcon = cifs_sb_master_tcon(cifs_sb);
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon = NULL;
 	struct smb_vol *vol_info;
-	char username[28]; /* big enough for "krb50x" + hex of ULONG_MAX 6+16 */
-			   /* We used to have this as MAX_USERNAME which is   */
-			   /* way too big now (256 instead of 32) */
 
 	vol_info = kzalloc(sizeof(*vol_info), GFP_KERNEL);
-	if (vol_info == NULL) {
-		tcon = ERR_PTR(-ENOMEM);
-		goto out;
-	}
+	if (vol_info == NULL)
+		return ERR_PTR(-ENOMEM);
 
-	snprintf(username, sizeof(username), "krb50x%x", fsuid);
-	vol_info->username = username;
 	vol_info->local_nls = cifs_sb->local_nls;
 	vol_info->linux_uid = fsuid;
 	vol_info->cred_uid = fsuid;
@@ -3715,8 +3870,11 @@ cifs_construct_tcon(struct cifs_sb_info *cifs_sb, uid_t fsuid)
 	vol_info->local_lease = master_tcon->local_lease;
 	vol_info->no_linux_ext = !master_tcon->unix_ext;
 
-	/* FIXME: allow for other secFlg settings */
-	vol_info->secFlg = CIFSSEC_MUST_KRB5;
+	rc = cifs_set_vol_auth(vol_info, master_tcon->ses);
+	if (rc) {
+		tcon = ERR_PTR(rc);
+		goto out;
+	}
 
 	/* get a reference for the same TCP session */
 	spin_lock(&cifs_tcp_ses_lock);
@@ -3739,6 +3897,8 @@ cifs_construct_tcon(struct cifs_sb_info *cifs_sb, uid_t fsuid)
 	if (ses->capabilities & CAP_UNIX)
 		reset_cifs_unix_caps(0, tcon, NULL, vol_info);
 out:
+	kfree(vol_info->username);
+	kfree(vol_info->password);
 	kfree(vol_info);
 
 	return tcon;

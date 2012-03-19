@@ -664,7 +664,7 @@ static int io_init(struct ubi_device *ubi)
 	ubi->peb_count  = mtd_div_by_eb(ubi->mtd->size, ubi->mtd);
 	ubi->flash_size = ubi->mtd->size;
 
-	if (ubi->mtd->block_isbad && ubi->mtd->block_markbad)
+	if (mtd_can_have_bb(ubi->mtd))
 		ubi->bad_allowed = 1;
 
 	if (ubi->mtd->type == MTD_NORFLASH) {
@@ -815,11 +815,6 @@ static int autoresize(struct ubi_device *ubi, int vol_id)
 	struct ubi_volume_desc desc;
 	struct ubi_volume *vol = ubi->volumes[vol_id];
 	int err, old_reserved_pebs = vol->reserved_pebs;
-
-	if (ubi->ro_mode) {
-		ubi_warn("skip auto-resize because of R/O mode");
-		return 0;
-	}
 
 	/*
 	 * Clear the auto-resize flag in the volume in-memory copy of the
@@ -974,9 +969,6 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
 			goto out_detach;
 	}
 
-	/* Make device "available" before it becomes accessible via sysfs */
-	ubi_devices[ubi_num] = ubi;
-
 	err = uif_init(ubi, &ref);
 	if (err)
 		goto out_detach;
@@ -1020,6 +1012,7 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
 	wake_up_process(ubi->bgt_thread);
 	spin_unlock(&ubi->wl_lock);
 
+	ubi_devices[ubi_num] = ubi;
 	ubi_notify_all(ubi, UBI_VOLUME_ADDED, NULL);
 	return ubi_num;
 
@@ -1030,7 +1023,6 @@ out_uif:
 	ubi_assert(ref);
 	uif_close(ubi);
 out_detach:
-	ubi_devices[ubi_num] = NULL;
 	ubi_wl_close(ubi);
 	free_internal_volumes(ubi);
 	vfree(ubi->vtbl);

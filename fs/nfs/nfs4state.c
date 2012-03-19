@@ -49,6 +49,7 @@
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
 #include <linux/bitops.h>
+#include <linux/jiffies.h>
 
 #include "nfs4_fs.h"
 #include "callback.h"
@@ -377,31 +378,24 @@ nfs4_find_state_owner_locked(struct nfs_server *server, struct rpc_cred *cred)
 {
 	struct rb_node **p = &server->state_owners.rb_node,
 		       *parent = NULL;
-	struct nfs4_state_owner *sp, *res = NULL;
+	struct nfs4_state_owner *sp;
 
 	while (*p != NULL) {
 		parent = *p;
 		sp = rb_entry(parent, struct nfs4_state_owner, so_server_node);
 
-		if (server < sp->so_server) {
-			p = &parent->rb_left;
-			continue;
-		}
-		if (server > sp->so_server) {
-			p = &parent->rb_right;
-			continue;
-		}
 		if (cred < sp->so_cred)
 			p = &parent->rb_left;
 		else if (cred > sp->so_cred)
 			p = &parent->rb_right;
 		else {
+			if (!list_empty(&sp->so_lru))
+				list_del_init(&sp->so_lru);
 			atomic_inc(&sp->so_count);
-			res = sp;
-			break;
+			return sp;
 		}
 	}
-	return res;
+	return NULL;
 }
 
 static struct nfs4_state_owner *
@@ -421,6 +415,8 @@ nfs4_insert_state_owner_locked(struct nfs4_state_owner *new)
 		else if (new->so_cred > sp->so_cred)
 			p = &parent->rb_right;
 		else {
+			if (!list_empty(&sp->so_lru))
+				list_del_init(&sp->so_lru);
 			atomic_inc(&sp->so_count);
 			return sp;
 		}
@@ -462,6 +458,7 @@ nfs4_alloc_state_owner(void)
 	spin_lock_init(&sp->so_sequence.lock);
 	INIT_LIST_HEAD(&sp->so_sequence.list);
 	atomic_set(&sp->so_count, 1);
+	INIT_LIST_HEAD(&sp->so_lru);
 	return sp;
 }
 
@@ -476,6 +473,38 @@ nfs4_drop_state_owner(struct nfs4_state_owner *sp)
 		rb_erase(&sp->so_server_node, &server->state_owners);
 		RB_CLEAR_NODE(&sp->so_server_node);
 		spin_unlock(&clp->cl_lock);
+	}
+}
+
+static void nfs4_free_state_owner(struct nfs4_state_owner *sp)
+{
+	rpc_destroy_wait_queue(&sp->so_sequence.wait);
+	put_rpccred(sp->so_cred);
+	kfree(sp);
+}
+
+static void nfs4_gc_state_owners(struct nfs_server *server)
+{
+	struct nfs_client *clp = server->nfs_client;
+	struct nfs4_state_owner *sp, *tmp;
+	unsigned long time_min, time_max;
+	LIST_HEAD(doomed);
+
+	spin_lock(&clp->cl_lock);
+	time_max = jiffies;
+	time_min = (long)time_max - (long)clp->cl_lease_time;
+	list_for_each_entry_safe(sp, tmp, &server->state_owners_lru, so_lru) {
+		/* NB: LRU is sorted so that oldest is at the head */
+		if (time_in_range(sp->so_expires, time_min, time_max))
+			break;
+		list_move(&sp->so_lru, &doomed);
+		nfs4_remove_state_owner_locked(sp);
+	}
+	spin_unlock(&clp->cl_lock);
+
+	list_for_each_entry_safe(sp, tmp, &doomed, so_lru) {
+		list_del(&sp->so_lru);
+		nfs4_free_state_owner(sp);
 	}
 }
 
@@ -496,10 +525,10 @@ struct nfs4_state_owner *nfs4_get_state_owner(struct nfs_server *server,
 	sp = nfs4_find_state_owner_locked(server, cred);
 	spin_unlock(&clp->cl_lock);
 	if (sp != NULL)
-		return sp;
+		goto out;
 	new = nfs4_alloc_state_owner();
 	if (new == NULL)
-		return NULL;
+		goto out;
 	new->so_server = server;
 	new->so_cred = cred;
 	spin_lock(&clp->cl_lock);
@@ -511,26 +540,58 @@ struct nfs4_state_owner *nfs4_get_state_owner(struct nfs_server *server,
 		rpc_destroy_wait_queue(&new->so_sequence.wait);
 		kfree(new);
 	}
+out:
+	nfs4_gc_state_owners(server);
 	return sp;
 }
 
 /**
  * nfs4_put_state_owner - Release a nfs4_state_owner
  * @sp: state owner data to release
- *
  */
 void nfs4_put_state_owner(struct nfs4_state_owner *sp)
 {
-	struct nfs_client *clp = sp->so_server->nfs_client;
-	struct rpc_cred *cred = sp->so_cred;
+	struct nfs_server *server = sp->so_server;
+	struct nfs_client *clp = server->nfs_client;
 
 	if (!atomic_dec_and_lock(&sp->so_count, &clp->cl_lock))
 		return;
-	nfs4_remove_state_owner_locked(sp);
+
+	if (!RB_EMPTY_NODE(&sp->so_server_node)) {
+		sp->so_expires = jiffies;
+		list_add_tail(&sp->so_lru, &server->state_owners_lru);
+		spin_unlock(&clp->cl_lock);
+	} else {
+		nfs4_remove_state_owner_locked(sp);
+		spin_unlock(&clp->cl_lock);
+		nfs4_free_state_owner(sp);
+	}
+}
+
+/**
+ * nfs4_purge_state_owners - Release all cached state owners
+ * @server: nfs_server with cached state owners to release
+ *
+ * Called at umount time.  Remaining state owners will be on
+ * the LRU with ref count of zero.
+ */
+void nfs4_purge_state_owners(struct nfs_server *server)
+{
+	struct nfs_client *clp = server->nfs_client;
+	struct nfs4_state_owner *sp, *tmp;
+	LIST_HEAD(doomed);
+
+	spin_lock(&clp->cl_lock);
+	list_for_each_entry_safe(sp, tmp, &server->state_owners_lru, so_lru) {
+		list_move(&sp->so_lru, &doomed);
+		nfs4_remove_state_owner_locked(sp);
+	}
 	spin_unlock(&clp->cl_lock);
-	rpc_destroy_wait_queue(&sp->so_sequence.wait);
-	put_rpccred(cred);
-	kfree(sp);
+
+	list_for_each_entry_safe(sp, tmp, &doomed, so_lru) {
+		list_del(&sp->so_lru);
+		nfs4_free_state_owner(sp);
+	}
 }
 
 static struct nfs4_state *
@@ -935,7 +996,7 @@ static void nfs_increment_seqid(int status, struct nfs_seqid *seqid)
 		case -NFS4ERR_BAD_SEQID:
 			if (seqid->sequence->flags & NFS_SEQID_CONFIRMED)
 				return;
-			pr_warn_ratelimited("NFS: v4 server returned a bad"
+			printk(KERN_WARNING "NFS: v4 server returned a bad"
 					" sequence-id error on an"
 					" unconfirmed sequence %p!\n",
 					seqid->sequence);
@@ -1071,36 +1132,11 @@ void nfs4_schedule_stateid_recovery(const struct nfs_server *server, struct nfs4
 {
 	struct nfs_client *clp = server->nfs_client;
 
+	if (test_and_clear_bit(NFS_DELEGATED_STATE, &state->flags))
+		nfs_async_inode_return_delegation(state->inode, &state->stateid);
 	nfs4_state_mark_reclaim_nograce(clp, state);
 	nfs4_schedule_state_manager(clp);
 }
-
-void nfs_inode_find_state_and_recover(struct inode *inode,
-		const nfs4_stateid *stateid)
-{
-	struct nfs_client *clp = NFS_SERVER(inode)->nfs_client;
-	struct nfs_inode *nfsi = NFS_I(inode);
-	struct nfs_open_context *ctx;
-	struct nfs4_state *state;
-	bool found = false;
-
-	spin_lock(&inode->i_lock);
-	list_for_each_entry(ctx, &nfsi->open_files, list) {
-		state = ctx->state;
-		if (state == NULL)
-			continue;
-		if (!test_bit(NFS_DELEGATED_STATE, &state->flags))
-			continue;
-		if (memcmp(state->stateid.data, stateid->data, sizeof(state->stateid.data)) != 0)
-			continue;
-		nfs4_state_mark_reclaim_nograce(clp, state);
-		found = true;
-	}
-	spin_unlock(&inode->i_lock);
-	if (found)
-		nfs4_schedule_state_manager(clp);
-}
-
 
 static int nfs4_reclaim_locks(struct nfs4_state *state, const struct nfs4_state_recovery_ops *ops)
 {
@@ -1186,14 +1222,11 @@ restart:
 				spin_lock(&state->state_lock);
 				list_for_each_entry(lock, &state->lock_states, ls_locks) {
 					if (!(lock->ls_flags & NFS_LOCK_INITIALIZED))
-						pr_warn_ratelimited("NFS: "
-							"%s: Lock reclaim "
-							"failed!\n", __func__);
+						printk("%s: Lock reclaim failed!\n",
+							__func__);
 				}
 				spin_unlock(&state->state_lock);
 				nfs4_put_open_state(state);
-				clear_bit(NFS_STATE_RECLAIM_NOGRACE,
-					&state->flags);
 				goto restart;
 			}
 		}
@@ -1203,9 +1236,6 @@ restart:
 						__func__, status);
 			case -ENOENT:
 			case -ENOMEM:
-			case -EACCES:
-			case -EROFS:
-			case -EIO:
 			case -ESTALE:
 				/*
 				 * Open state on this file cannot be recovered
@@ -1435,6 +1465,7 @@ static int nfs4_do_reclaim(struct nfs_client *clp, const struct nfs4_state_recov
 restart:
 	rcu_read_lock();
 	list_for_each_entry_rcu(server, &clp->cl_superblocks, client_link) {
+		nfs4_purge_state_owners(server);
 		spin_lock(&clp->cl_lock);
 		for (pos = rb_first(&server->state_owners);
 		     pos != NULL;
@@ -1452,8 +1483,7 @@ restart:
 			if (status < 0) {
 				set_bit(ops->owner_flag_bit, &sp->so_flags);
 				nfs4_put_state_owner(sp);
-				status = nfs4_recovery_handle_error(clp, status);
-				return (status != 0) ? status : -EAGAIN;
+				return nfs4_recovery_handle_error(clp, status);
 			}
 
 			nfs4_put_state_owner(sp);
@@ -1462,7 +1492,7 @@ restart:
 		spin_unlock(&clp->cl_lock);
 	}
 	rcu_read_unlock();
-	return 0;
+	return status;
 }
 
 static int nfs4_check_lease(struct nfs_client *clp)
@@ -1589,18 +1619,8 @@ static int nfs4_reset_session(struct nfs_client *clp)
 
 	nfs4_begin_drain_session(clp);
 	status = nfs4_proc_destroy_session(clp->cl_session);
-	switch (status) {
-	case 0:
-	case -NFS4ERR_BADSESSION:
-	case -NFS4ERR_DEADSESSION:
-		break;
-	case -NFS4ERR_BACK_CHAN_BUSY:
-	case -NFS4ERR_DELAY:
-		set_bit(NFS4CLNT_SESSION_RESET, &clp->cl_state);
-		status = 0;
-		ssleep(1);
-		goto out;
-	default:
+	if (status && status != -NFS4ERR_BADSESSION &&
+	    status != -NFS4ERR_DEADSESSION) {
 		status = nfs4_recovery_handle_error(clp, status);
 		goto out;
 	}
@@ -1735,18 +1755,23 @@ static void nfs4_state_manager(struct nfs_client *clp)
 		if (test_bit(NFS4CLNT_RECLAIM_REBOOT, &clp->cl_state)) {
 			status = nfs4_do_reclaim(clp,
 				clp->cl_mvops->reboot_recovery_ops);
-			if (status == -EAGAIN)
+			if (test_bit(NFS4CLNT_LEASE_EXPIRED, &clp->cl_state) ||
+			    test_bit(NFS4CLNT_SESSION_RESET, &clp->cl_state))
+				continue;
+			nfs4_state_end_reclaim_reboot(clp);
+			if (test_bit(NFS4CLNT_RECLAIM_NOGRACE, &clp->cl_state))
 				continue;
 			if (status < 0)
 				goto out_error;
-			nfs4_state_end_reclaim_reboot(clp);
 		}
 
 		/* Now recover expired state... */
 		if (test_and_clear_bit(NFS4CLNT_RECLAIM_NOGRACE, &clp->cl_state)) {
 			status = nfs4_do_reclaim(clp,
 				clp->cl_mvops->nograce_recovery_ops);
-			if (status == -EAGAIN)
+			if (test_bit(NFS4CLNT_LEASE_EXPIRED, &clp->cl_state) ||
+			    test_bit(NFS4CLNT_SESSION_RESET, &clp->cl_state) ||
+			    test_bit(NFS4CLNT_RECLAIM_REBOOT, &clp->cl_state))
 				continue;
 			if (status < 0)
 				goto out_error;
@@ -1776,7 +1801,7 @@ static void nfs4_state_manager(struct nfs_client *clp)
 	} while (atomic_read(&clp->cl_count) > 1);
 	return;
 out_error:
-	pr_warn_ratelimited("NFS: state manager failed on NFSv4 server %s"
+	printk(KERN_WARNING "Error: state manager failed on NFSv4 server %s"
 			" with error %d\n", clp->cl_hostname, -status);
 	nfs4_end_drain_session(clp);
 	nfs4_clear_state_manager_bit(clp);

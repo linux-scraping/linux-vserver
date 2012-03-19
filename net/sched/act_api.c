@@ -807,8 +807,10 @@ static int tca_action_flush(struct net *net, struct nlattr *nla,
 		goto nla_put_failure;
 
 	err = a->ops->walk(skb, &dcb, RTM_DELACTION, a);
-	if (err <= 0)
+	if (err < 0)
 		goto nla_put_failure;
+	if (err == 0)
+		goto noflush_out;
 
 	nla_nest_end(skb, nest);
 
@@ -827,6 +829,7 @@ nla_put_failure:
 nlmsg_failure:
 	module_put(a->ops->owner);
 err_out:
+noflush_out:
 	kfree_skb(skb);
 	kfree(a);
 	return err;

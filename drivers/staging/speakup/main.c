@@ -1854,7 +1854,7 @@ static void speakup_bits(struct vc_data *vc)
 
 static int handle_goto(struct vc_data *vc, u_char type, u_char ch, u_short key)
 {
-	static u_char goto_buf[8];
+	static u_char *goto_buf = "\0\0\0\0\0\0";
 	static int num;
 	int maxlen, go_pos;
 	char *cp;
@@ -2265,11 +2265,9 @@ static int __init speakup_init(void)
 	     (var->var_id >= 0) && (var->var_id < MAXVARS); var++)
 		speakup_register_var(var);
 	for (i = 1; punc_info[i].mask != 0; i++)
-		spk_set_mask_bits(0, i, 2);
+		set_mask_bits(0, i, 2);
 
 	set_key_info(key_defaults, key_buf);
-	if (quiet_boot)
-		spk_shut_up |= 0x01;
 
 	/* From here on out, initializations can fail. */
 	err = speakup_add_virtual_keyboard();
@@ -2291,6 +2289,9 @@ static int __init speakup_init(void)
 			if (err)
 				goto error_kobjects;
 		}
+
+	if (quiet_boot)
+		spk_shut_up |= 0x01;
 
 	err = speakup_kobj_init();
 	if (err)

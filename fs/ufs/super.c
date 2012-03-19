@@ -695,23 +695,6 @@ static void ufs_put_super_internal(struct super_block *sb)
 	UFSD("EXIT\n");
 }
 
-static u64 ufs_max_bytes(struct super_block *sb)
-{
-	struct ufs_sb_private_info *uspi = UFS_SB(sb)->s_uspi;
-	int bits = uspi->s_apbshift;
-	u64 res;
-
-	if (bits > 21)
-		res = ~0ULL;
-	else
-		res = UFS_NDADDR + (1LL << bits) + (1LL << (2*bits)) +
-			(1LL << (3*bits));
-
-	if (res >= (MAX_LFS_FILESIZE >> uspi->s_bshift))
-		return MAX_LFS_FILESIZE;
-	return res << uspi->s_bshift;
-}
-
 static int ufs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct ufs_sb_info * sbi;
@@ -1174,7 +1157,6 @@ magic_found:
 			    "fast symlink size (%u)\n", uspi->s_maxsymlinklen);
 		uspi->s_maxsymlinklen = maxsymlen;
 	}
-	sb->s_maxbytes = ufs_max_bytes(sb);
 
 	inode = ufs_iget(sb, UFS_ROOTINO);
 	if (IS_ERR(inode)) {
@@ -1369,9 +1351,9 @@ static int ufs_remount (struct super_block *sb, int *mount_flags, char *data)
 	return 0;
 }
 
-static int ufs_show_options(struct seq_file *seq, struct vfsmount *vfs)
+static int ufs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct ufs_sb_info *sbi = UFS_SB(vfs->mnt_sb);
+	struct ufs_sb_info *sbi = UFS_SB(root->d_sb);
 	unsigned mval = sbi->s_mount_opt & UFS_MOUNT_UFSTYPE;
 	const struct match_token *tp = tokens;
 
@@ -1443,7 +1425,6 @@ static struct inode *ufs_alloc_inode(struct super_block *sb)
 static void ufs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(ufs_inode_cachep, UFS_I(inode));
 }
 

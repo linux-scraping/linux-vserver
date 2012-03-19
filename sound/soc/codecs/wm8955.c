@@ -16,7 +16,6 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
-#include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <sound/core.h>
@@ -282,7 +281,7 @@ static int wm8955_configure_clocking(struct snd_soc_codec *codec)
 		snd_soc_update_bits(codec, WM8955_PLL_CONTROL_2,
 				    WM8955_K_17_9_MASK,
 				    (pll.k >> 9) & WM8955_K_17_9_MASK);
-		snd_soc_update_bits(codec, WM8955_PLL_CONTROL_3,
+		snd_soc_update_bits(codec, WM8955_PLL_CONTROL_2,
 				    WM8955_K_8_0_MASK,
 				    pll.k & WM8955_K_8_0_MASK);
 		if (pll.k)
@@ -377,7 +376,7 @@ static int wm8955_get_deemph(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm8955_priv *wm8955 = snd_soc_codec_get_drvdata(codec);
 
-	ucontrol->value.integer.value[0] = wm8955->deemph;
+	ucontrol->value.enumerated.item[0] = wm8955->deemph;
 	return 0;
 }
 
@@ -386,7 +385,7 @@ static int wm8955_put_deemph(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm8955_priv *wm8955 = snd_soc_codec_get_drvdata(codec);
-	int deemph = ucontrol->value.integer.value[0];
+	int deemph = ucontrol->value.enumerated.item[0];
 
 	if (deemph > 1)
 		return -EINVAL;
@@ -859,7 +858,7 @@ static int wm8955_set_bias_level(struct snd_soc_codec *codec,
 #define WM8955_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
 			SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
-static struct snd_soc_dai_ops wm8955_dai_ops = {
+static const struct snd_soc_dai_ops wm8955_dai_ops = {
 	.set_sysclk = wm8955_set_sysclk,
 	.set_fmt = wm8955_set_fmt,
 	.hw_params = wm8955_hw_params,
@@ -879,7 +878,7 @@ static struct snd_soc_dai_driver wm8955_dai = {
 };
 
 #ifdef CONFIG_PM
-static int wm8955_suspend(struct snd_soc_codec *codec, pm_message_t state)
+static int wm8955_suspend(struct snd_soc_codec *codec)
 {
 	wm8955_set_bias_level(codec, SND_SOC_BIAS_OFF);
 
@@ -1038,7 +1037,7 @@ MODULE_DEVICE_TABLE(i2c, wm8955_i2c_id);
 
 static struct i2c_driver wm8955_i2c_driver = {
 	.driver = {
-		.name = "wm8955-codec",
+		.name = "wm8955",
 		.owner = THIS_MODULE,
 	},
 	.probe =    wm8955_i2c_probe,

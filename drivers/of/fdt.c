@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 
+#include <asm/setup.h>  /* for COMMAND_LINE_SIZE */
 #ifdef CONFIG_PPC
 #include <asm/machdep.h>
 #endif /* CONFIG_PPC */
@@ -107,7 +108,7 @@ int of_fdt_is_compatible(struct boot_param_header *blob,
  * of_fdt_match - Return true if node matches a list of compatible values
  */
 int of_fdt_match(struct boot_param_header *blob, unsigned long node,
-                 const char **compat)
+                 const char *const *compat)
 {
 	unsigned int tmp, score = 0;
 
@@ -388,10 +389,6 @@ static void __unflatten_device_tree(struct boot_param_header *blob,
 	/* Allocate memory for the expanded device tree */
 	mem = (unsigned long)
 		dt_alloc(size + 4, __alignof__(struct device_node));
-	if (!mem)
-		return NULL;
-
-	memset((void *)mem, 0, size);
 
 	((__be32 *)mem)[size / 4] = cpu_to_be32(0xdeadbeef);
 
@@ -545,7 +542,7 @@ int __init of_flat_dt_is_compatible(unsigned long node, const char *compat)
 /**
  * of_flat_dt_match - Return true if node matches a list of compatible values
  */
-int __init of_flat_dt_match(unsigned long node, const char **compat)
+int __init of_flat_dt_match(unsigned long node, const char *const *compat)
 {
 	return of_fdt_match(initial_boot_params, node, compat);
 }

@@ -1584,10 +1584,8 @@ struct dentry *reiserfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 			reiserfs_warning(sb, "reiserfs-13077",
 				"nfsd/reiserfs, fhtype=%d, len=%d - odd",
 				fh_type, fh_len);
-		fh_type = fh_len;
+		fh_type = 5;
 	}
-	if (fh_len < 2)
-		return NULL;
 
 	return reiserfs_get_dentry(sb, fid->raw[0], fid->raw[1],
 		(fh_type == 3 || fh_type >= 5) ? fid->raw[2] : 0);
@@ -1596,8 +1594,6 @@ struct dentry *reiserfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 struct dentry *reiserfs_fh_to_parent(struct super_block *sb, struct fid *fid,
 		int fh_len, int fh_type)
 {
-	if (fh_type > fh_len)
-		fh_type = fh_len;
 	if (fh_type < 4)
 		return NULL;
 
@@ -1781,7 +1777,7 @@ static int reiserfs_new_symlink(struct reiserfs_transaction_handle *th, struct i
    for the fresh inode.  This can only be done outside a transaction, so
    if we return non-zero, we also end the transaction.  */
 int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
-		       struct inode *dir, int mode, const char *symname,
+		       struct inode *dir, umode_t mode, const char *symname,
 		       /* 0 for regular, EMTRY_DIR_SIZE for dirs,
 		          strlen (symname) for symlinks) */
 		       loff_t i_size, struct dentry *dentry,
@@ -1799,9 +1795,8 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 
 	BUG_ON(!th->t_trans_id);
 
-	reiserfs_write_unlock(inode->i_sb);
+	dquot_initialize(inode);
 	err = dquot_alloc_inode(inode);
-	reiserfs_write_lock(inode->i_sb);
 	if (err)
 		goto out_end_trans;
 	if (!dir->i_nlink) {
@@ -1997,10 +1992,8 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 
       out_end_trans:
 	journal_end(th, th->t_super, th->t_blocks_allocated);
-	reiserfs_write_unlock(inode->i_sb);
 	/* Drop can be outside and it needs more credits so it's better to have it outside */
 	dquot_drop(inode);
-	reiserfs_write_lock(inode->i_sb);
 	inode->i_flags |= S_NOQUOTA;
 	make_bad_inode(inode);
 
@@ -3130,10 +3123,8 @@ static ssize_t reiserfs_direct_IO(int rw, struct kiocb *iocb,
 		loff_t isize = i_size_read(inode);
 		loff_t end = offset + iov_length(iov, nr_segs);
 
-		if ((end > isize) && inode_newsize_ok(inode, isize) == 0) {
-			truncate_setsize(inode, isize);
-			reiserfs_vfs_truncate_file(inode);
-		}
+		if (end > isize)
+			vmtruncate(inode, isize);
 	}
 
 	return ret;
@@ -3146,16 +3137,17 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 	int depth;
 	int error;
 
-	error = setattr_prepare(dentry, attr);
+	error = inode_change_ok(inode, attr);
 	if (error)
 		return error;
 
 	/* must be turned off for recursive notify_change calls */
 	ia_valid = attr->ia_valid &= ~(ATTR_KILL_SUID|ATTR_KILL_SGID);
 
+	depth = reiserfs_write_lock_once(inode->i_sb);
 	if (is_quota_modification(inode, attr))
 		dquot_initialize(inode);
-	depth = reiserfs_write_lock_once(inode->i_sb);
+
 	if (attr->ia_valid & ATTR_SIZE) {
 		/* version 2 items will be caught by the s_maxbytes check
 		 ** done for us in vmtruncate
@@ -3220,9 +3212,7 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 		error = journal_begin(&th, inode->i_sb, jbegin_count);
 		if (error)
 			goto out;
-		reiserfs_write_unlock_once(inode->i_sb, depth);
 		error = dquot_transfer(inode, attr);
-		depth = reiserfs_write_lock_once(inode->i_sb);
 		if (error) {
 			journal_end(&th, inode->i_sb, jbegin_count);
 			goto out;
@@ -3251,19 +3241,8 @@ int reiserfs_setattr(struct dentry *dentry, struct iattr *attr)
 	 */
 	reiserfs_write_unlock_once(inode->i_sb, depth);
 	if ((attr->ia_valid & ATTR_SIZE) &&
-	    attr->ia_size != i_size_read(inode)) {
-		error = inode_newsize_ok(inode, attr->ia_size);
-		if (!error) {
-			/*
-			 * Could race against reiserfs_file_release
-			 * if called from NFS, so take tailpack mutex.
-			 */
-			mutex_lock(&REISERFS_I(inode)->tailpack);
-			truncate_setsize(inode, attr->ia_size);
-			reiserfs_truncate_file(inode, 1);
-			mutex_unlock(&REISERFS_I(inode)->tailpack);
-		}
-	}
+	    attr->ia_size != i_size_read(inode))
+		error = vmtruncate(inode, attr->ia_size);
 
 	if (!error) {
 		setattr_copy(inode, attr);

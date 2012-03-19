@@ -22,7 +22,6 @@
  *
  * Authors: Dave Airlie
  *          Alex Deucher
- *          Jerome Glisse
  */
 #include "drmP.h"
 #include "radeon_drm.h"
@@ -89,7 +88,7 @@ static int radeon_process_aux_ch(struct radeon_i2c_chan *chan,
 	/* flags not zero */
 	if (args.v1.ucReplyStatus == 2) {
 		DRM_DEBUG_KMS("dp_aux_ch flags not zero\n");
-		return -EIO;
+		return -EBUSY;
 	}
 
 	/* error */
@@ -635,6 +634,7 @@ static bool radeon_dp_get_link_status(struct radeon_connector *radeon_connector,
 	ret = radeon_dp_aux_native_read(radeon_connector, DP_LANE0_1_STATUS,
 					link_status, DP_LINK_STATUS_SIZE, 100);
 	if (ret <= 0) {
+		DRM_ERROR("displayport link status failed\n");
 		return false;
 	}
 
@@ -739,8 +739,10 @@ static int radeon_dp_link_train_init(struct radeon_dp_link_train_info *dp_info)
 		radeon_write_dpcd_reg(dp_info->radeon_connector,
 				      DP_DOWNSPREAD_CTRL, 0);
 
-	if (dig->panel_mode == DP_PANEL_MODE_INTERNAL_DP2_MODE)
+	if ((dp_info->connector->connector_type == DRM_MODE_CONNECTOR_eDP) &&
+	    (dig->panel_mode == DP_PANEL_MODE_INTERNAL_DP2_MODE)) {
 		radeon_write_dpcd_reg(dp_info->radeon_connector, DP_EDP_CONFIGURATION_SET, 1);
+	}
 
 	/* set the lane count on the sink */
 	tmp = dp_info->dp_lane_count;
@@ -810,10 +812,8 @@ static int radeon_dp_link_train_cr(struct radeon_dp_link_train_info *dp_info)
 		else
 			mdelay(dp_info->rd_interval * 4);
 
-		if (!radeon_dp_get_link_status(dp_info->radeon_connector, dp_info->link_status)) {
-			DRM_ERROR("displayport link status failed\n");
+		if (!radeon_dp_get_link_status(dp_info->radeon_connector, dp_info->link_status))
 			break;
-		}
 
 		if (dp_clock_recovery_ok(dp_info->link_status, dp_info->dp_lane_count)) {
 			clock_recovery = true;
@@ -875,10 +875,8 @@ static int radeon_dp_link_train_ce(struct radeon_dp_link_train_info *dp_info)
 		else
 			mdelay(dp_info->rd_interval * 4);
 
-		if (!radeon_dp_get_link_status(dp_info->radeon_connector, dp_info->link_status)) {
-			DRM_ERROR("displayport link status failed\n");
+		if (!radeon_dp_get_link_status(dp_info->radeon_connector, dp_info->link_status))
 			break;
-		}
 
 		if (dp_channel_eq_ok(dp_info->link_status, dp_info->dp_lane_count)) {
 			channel_eq = true;

@@ -8,7 +8,7 @@
 #include <linux/sched.h>
 #include "hpfs_fn.h"
 
-static int hpfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int hpfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	const unsigned char *name = dentry->d_name.name;
 	unsigned len = dentry->d_name.len;
@@ -115,7 +115,7 @@ bail:
 	return err;
 }
 
-static int hpfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata *nd)
+static int hpfs_create(struct inode *dir, struct dentry *dentry, umode_t mode, struct nameidata *nd)
 {
 	const unsigned char *name = dentry->d_name.name;
 	unsigned len = dentry->d_name.len;
@@ -201,7 +201,7 @@ bail:
 	return err;
 }
 
-static int hpfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t rdev)
+static int hpfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	const unsigned char *name = dentry->d_name.name;
 	unsigned len = dentry->d_name.len;
@@ -362,11 +362,12 @@ static int hpfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct inode *inode = dentry->d_inode;
 	dnode_secno dno;
 	int r;
+	int rep = 0;
 	int err;
 
 	hpfs_lock(dir->i_sb);
 	hpfs_adjust_length(name, &len);
-
+again:
 	err = -ENOENT;
 	de = map_dirent(dir, hpfs_i(dir)->i_dno, name, len, &dno, &qbh);
 	if (!de)
@@ -386,9 +387,33 @@ static int hpfs_unlink(struct inode *dir, struct dentry *dentry)
 		hpfs_error(dir->i_sb, "there was error when removing dirent");
 		err = -EFSERROR;
 		break;
-	case 2:		/* no space for deleting */
+	case 2:		/* no space for deleting, try to truncate file */
+
 		err = -ENOSPC;
-		break;
+		if (rep++)
+			break;
+
+		dentry_unhash(dentry);
+		if (!d_unhashed(dentry)) {
+			hpfs_unlock(dir->i_sb);
+			return -ENOSPC;
+		}
+		if (generic_permission(inode, MAY_WRITE) ||
+		    !S_ISREG(inode->i_mode) ||
+		    get_write_access(inode)) {
+			d_rehash(dentry);
+		} else {
+			struct iattr newattrs;
+			/*printk("HPFS: truncating file before delete.\n");*/
+			newattrs.ia_size = 0;
+			newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME;
+			err = notify_change(dentry, &newattrs);
+			put_write_access(inode);
+			if (!err)
+				goto again;
+		}
+		hpfs_unlock(dir->i_sb);
+		return -ENOSPC;
 	default:
 		drop_nlink(inode);
 		err = 0;

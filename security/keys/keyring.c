@@ -319,7 +319,7 @@ key_ref_t keyring_search_aux(key_ref_t keyring_ref,
 	struct key *keyring, *key;
 	key_ref_t key_ref;
 	long err;
-	int sp, kix;
+	int sp, nkeys, kix;
 
 	keyring = key_ref_to_ptr(keyring_ref);
 	possessed = is_key_possessed(keyring_ref);
@@ -335,9 +335,6 @@ key_ref_t keyring_search_aux(key_ref_t keyring_ref,
 	key_ref = ERR_PTR(-ENOTDIR);
 	if (keyring->type != &key_type_keyring)
 		goto error;
-
-	if (!match)
-		return ERR_PTR(-ENOKEY);
 
 	rcu_read_lock();
 
@@ -383,7 +380,9 @@ descend:
 		goto not_this_keyring;
 
 	/* iterate through the keys in this keyring first */
-	for (kix = 0; kix < keylist->nkeys; kix++) {
+	nkeys = keylist->nkeys;
+	smp_rmb();
+	for (kix = 0; kix < nkeys; kix++) {
 		key = keylist->keys[kix];
 		kflags = key->flags;
 
@@ -424,7 +423,9 @@ descend:
 	/* search through the keyrings nested in this one */
 	kix = 0;
 ascend:
-	for (; kix < keylist->nkeys; kix++) {
+	nkeys = keylist->nkeys;
+	smp_rmb();
+	for (; kix < nkeys; kix++) {
 		key = keylist->keys[kix];
 		if (key->type != &key_type_keyring)
 			continue;
@@ -487,6 +488,9 @@ key_ref_t keyring_search(key_ref_t keyring,
 			 struct key_type *type,
 			 const char *description)
 {
+	if (!type->match)
+		return ERR_PTR(-ENOKEY);
+
 	return keyring_search_aux(keyring, current->cred,
 				  type, description, type->match, false);
 }
@@ -515,7 +519,7 @@ key_ref_t __keyring_search_one(key_ref_t keyring_ref,
 	struct keyring_list *klist;
 	unsigned long possessed;
 	struct key *keyring, *key;
-	int loop;
+	int nkeys, loop;
 
 	keyring = key_ref_to_ptr(keyring_ref);
 	possessed = is_key_possessed(keyring_ref);
@@ -524,7 +528,9 @@ key_ref_t __keyring_search_one(key_ref_t keyring_ref,
 
 	klist = rcu_dereference(keyring->payload.subscriptions);
 	if (klist) {
-		for (loop = 0; loop < klist->nkeys; loop++) {
+		nkeys = klist->nkeys;
+		smp_rmb();
+		for (loop = 0; loop < nkeys ; loop++) {
 			key = klist->keys[loop];
 
 			if (key->type == ktype &&
@@ -550,15 +556,15 @@ found:
 /*
  * Find a keyring with the specified name.
  *
- * Only keyrings that have nonzero refcount, are not revoked, and are owned by a
- * user in the current user namespace are considered.  If @uid_keyring is %true,
- * the keyring additionally must have been allocated as a user or user session
- * keyring; otherwise, it must grant Search permission directly to the caller.
+ * All named keyrings in the current user namespace are searched, provided they
+ * grant Search permission directly to the caller (unless this check is
+ * skipped).  Keyrings whose usage points have reached zero or who have been
+ * revoked are skipped.
  *
  * Returns a pointer to the keyring with the keyring's refcount having being
  * incremented on success.  -ENOKEY is returned if a key could not be found.
  */
-struct key *find_keyring_by_name(const char *name, bool uid_keyring)
+struct key *find_keyring_by_name(const char *name, bool skip_perm_check)
 {
 	struct key *keyring;
 	int bucket;
@@ -586,15 +592,10 @@ struct key *find_keyring_by_name(const char *name, bool uid_keyring)
 			if (strcmp(keyring->description, name) != 0)
 				continue;
 
-			if (uid_keyring) {
-				if (!test_bit(KEY_FLAG_UID_KEYRING,
-					      &keyring->flags))
-					continue;
-			} else {
-				if (key_permission(make_key_ref(keyring, 0),
-						   KEY_SEARCH) < 0)
-					continue;
-			}
+			if (!skip_perm_check &&
+			    key_permission(make_key_ref(keyring, 0),
+					   KEY_SEARCH) < 0)
+				continue;
 
 			/* we've got a match but we might end up racing with
 			 * key_cleanup() if the keyring is currently 'dead'
@@ -627,7 +628,7 @@ static int keyring_detect_cycle(struct key *A, struct key *B)
 
 	struct keyring_list *keylist;
 	struct key *subtree, *key;
-	int sp, kix, ret;
+	int sp, nkeys, kix, ret;
 
 	rcu_read_lock();
 
@@ -650,7 +651,9 @@ descend:
 
 ascend:
 	/* iterate through the remaining keys in this keyring */
-	for (; kix < keylist->nkeys; kix++) {
+	nkeys = keylist->nkeys;
+	smp_rmb();
+	for (; kix < nkeys; kix++) {
 		key = keylist->keys[kix];
 
 		if (key == A)

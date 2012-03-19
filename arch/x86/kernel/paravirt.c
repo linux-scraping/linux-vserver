@@ -38,26 +38,18 @@
 #include <asm/tlbflush.h>
 #include <asm/timer.h>
 
-/*
- * nop stub, which must not clobber anything *including the stack* to
- * avoid confusing the entry prologues.
- */
-extern void _paravirt_nop(void);
-asm (".pushsection .entry.text, \"ax\"\n"
-     ".global _paravirt_nop\n"
-     "_paravirt_nop:\n\t"
-     "ret\n\t"
-     ".size _paravirt_nop, . - _paravirt_nop\n\t"
-     ".type _paravirt_nop, @function\n\t"
-     ".popsection");
+/* nop stub */
+void _paravirt_nop(void)
+{
+}
 
 /* identity function, which can be inlined */
-u32 notrace _paravirt_ident_32(u32 x)
+u32 _paravirt_ident_32(u32 x)
 {
 	return x;
 }
 
-u64 notrace _paravirt_ident_64(u64 x)
+u64 _paravirt_ident_64(u64 x)
 {
 	return x;
 }
@@ -269,18 +261,6 @@ void paravirt_leave_lazy_mmu(void)
 	leave_lazy(PARAVIRT_LAZY_MMU);
 }
 
-void paravirt_flush_lazy_mmu(void)
-{
-	preempt_disable();
-
-	if (paravirt_get_lazy_mode() == PARAVIRT_LAZY_MMU) {
-		arch_leave_lazy_mmu_mode();
-		arch_enter_lazy_mmu_mode();
-	}
-
-	preempt_enable();
-}
-
 void paravirt_start_context_switch(struct task_struct *prev)
 {
 	BUG_ON(preemptible());
@@ -308,6 +288,18 @@ enum paravirt_lazy_mode paravirt_get_lazy_mode(void)
 		return PARAVIRT_LAZY_NONE;
 
 	return percpu_read(paravirt_lazy_mode);
+}
+
+void arch_flush_lazy_mmu_mode(void)
+{
+	preempt_disable();
+
+	if (paravirt_get_lazy_mode() == PARAVIRT_LAZY_MMU) {
+		arch_leave_lazy_mmu_mode();
+		arch_enter_lazy_mmu_mode();
+	}
+
+	preempt_enable();
 }
 
 struct pv_info pv_info = {
@@ -483,7 +475,6 @@ struct pv_mmu_ops pv_mmu_ops = {
 	.lazy_mode = {
 		.enter = paravirt_nop,
 		.leave = paravirt_nop,
-		.flush = paravirt_nop,
 	},
 
 	.set_fixmap = native_set_fixmap,

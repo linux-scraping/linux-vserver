@@ -157,7 +157,7 @@ static void svc_set_cmsg_data(struct svc_rqst *rqstp, struct cmsghdr *cmh)
 			cmh->cmsg_level = SOL_IPV6;
 			cmh->cmsg_type = IPV6_PKTINFO;
 			pki->ipi6_ifindex = daddr->sin6_scope_id;
-			ipv6_addr_copy(&pki->ipi6_addr,	&daddr->sin6_addr);
+			pki->ipi6_addr = daddr->sin6_addr;
 			cmh->cmsg_len = CMSG_LEN(sizeof(*pki));
 		}
 		break;
@@ -523,7 +523,7 @@ static int svc_udp_get_dest_address6(struct svc_rqst *rqstp,
 		return 0;
 
 	daddr->sin6_family = AF_INET6;
-	ipv6_addr_copy(&daddr->sin6_addr, &pki->ipi6_addr);
+	daddr->sin6_addr = pki->ipi6_addr;
 	daddr->sin6_scope_id = pki->ipi6_ifindex;
 	return 1;
 }
@@ -739,7 +739,8 @@ static void svc_udp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {
 	int err, level, optname, one = 1;
 
-	svc_xprt_init(&svc_udp_class, &svsk->sk_xprt, serv);
+	svc_xprt_init(sock_net(svsk->sk_sock->sk), &svc_udp_class,
+		      &svsk->sk_xprt, serv);
 	clear_bit(XPT_CACHE_AUTH, &svsk->sk_xprt.xpt_flags);
 	svsk->sk_sk->sk_data_ready = svc_udp_data_ready;
 	svsk->sk_sk->sk_write_space = svc_write_space;
@@ -1054,12 +1055,17 @@ static int receive_cb_reply(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	xid = *p++;
 	calldir = *p;
 
-	if (!bc_xprt)
+	if (bc_xprt)
+		req = xprt_lookup_rqst(bc_xprt, xid);
+
+	if (!req) {
+		printk(KERN_NOTICE
+			"%s: Got unrecognized reply: "
+			"calldir 0x%x xpt_bc_xprt %p xid %08x\n",
+			__func__, ntohl(calldir),
+			bc_xprt, xid);
 		return -EAGAIN;
-	spin_lock_bh(&bc_xprt->transport_lock);
-	req = xprt_lookup_rqst(bc_xprt, xid);
-	if (!req)
-		goto unlock_notfound;
+	}
 
 	memcpy(&req->rq_private_buf, &req->rq_rcv_buf, sizeof(struct xdr_buf));
 	/*
@@ -1070,21 +1076,11 @@ static int receive_cb_reply(struct svc_sock *svsk, struct svc_rqst *rqstp)
 	dst = &req->rq_private_buf.head[0];
 	src = &rqstp->rq_arg.head[0];
 	if (dst->iov_len < src->iov_len)
-		goto unlock_eagain; /* whatever; just giving up. */
+		return -EAGAIN; /* whatever; just giving up. */
 	memcpy(dst->iov_base, src->iov_base, src->iov_len);
 	xprt_complete_rqst(req->rq_task, svsk->sk_reclen);
 	rqstp->rq_arg.len = 0;
-	spin_unlock_bh(&bc_xprt->transport_lock);
 	return 0;
-unlock_notfound:
-	printk(KERN_NOTICE
-		"%s: Got unrecognized reply: "
-		"calldir 0x%x xpt_bc_xprt %p xid %08x\n",
-		__func__, ntohl(calldir),
-		bc_xprt, ntohl(xid));
-unlock_eagain:
-	spin_unlock_bh(&bc_xprt->transport_lock);
-	return -EAGAIN;
 }
 
 static int copy_pages_to_kvecs(struct kvec *vec, struct page **pages, int len)
@@ -1141,9 +1137,9 @@ static int svc_tcp_recvfrom(struct svc_rqst *rqstp)
 	if (len >= 0)
 		svsk->sk_tcplen += len;
 	if (len != want) {
-		svc_tcp_save_pages(svsk, rqstp);
 		if (len < 0 && len != -EAGAIN)
 			goto err_other;
+		svc_tcp_save_pages(svsk, rqstp);
 		dprintk("svc: incomplete TCP record (%d of %d)\n",
 			svsk->sk_tcplen, svsk->sk_reclen);
 		goto err_noclose;
@@ -1348,7 +1344,8 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 {
 	struct sock	*sk = svsk->sk_sk;
 
-	svc_xprt_init(&svc_tcp_class, &svsk->sk_xprt, serv);
+	svc_xprt_init(sock_net(svsk->sk_sock->sk), &svc_tcp_class,
+		      &svsk->sk_xprt, serv);
 	set_bit(XPT_CACHE_AUTH, &svsk->sk_xprt.xpt_flags);
 	if (sk->sk_state == TCP_LISTEN) {
 		dprintk("setting up TCP socket for listening\n");
@@ -1664,7 +1661,7 @@ static struct svc_xprt *svc_bc_create_socket(struct svc_serv *serv,
 		return ERR_PTR(-ENOMEM);
 
 	xprt = &svsk->sk_xprt;
-	svc_xprt_init(&svc_tcp_bc_class, xprt, serv);
+	svc_xprt_init(net, &svc_tcp_bc_class, xprt, serv);
 
 	serv->sv_bc_xprt = xprt;
 

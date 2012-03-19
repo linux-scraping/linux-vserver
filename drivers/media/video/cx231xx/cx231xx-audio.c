@@ -111,6 +111,9 @@ static void cx231xx_audio_isocirq(struct urb *urb)
 	struct snd_pcm_substream *substream;
 	struct snd_pcm_runtime *runtime;
 
+	if (dev->state & DEV_DISCONNECTED)
+		return;
+
 	switch (urb->status) {
 	case 0:		/* success */
 	case -ETIMEDOUT:	/* NAK */
@@ -196,6 +199,9 @@ static void cx231xx_audio_bulkirq(struct urb *urb)
 	struct snd_pcm_substream *substream;
 	struct snd_pcm_runtime *runtime;
 
+	if (dev->state & DEV_DISCONNECTED)
+		return;
+
 	switch (urb->status) {
 	case 0:		/* success */
 	case -ETIMEDOUT:	/* NAK */
@@ -273,6 +279,9 @@ static int cx231xx_init_audio_isoc(struct cx231xx *dev)
 
 	cx231xx_info("%s: Starting ISO AUDIO transfers\n", __func__);
 
+	if (dev->state & DEV_DISCONNECTED)
+		return -ENODEV;
+
 	sb_size = CX231XX_ISO_NUM_AUDIO_PACKETS * dev->adev.max_pkt_size;
 
 	for (i = 0; i < CX231XX_AUDIO_BUFS; i++) {
@@ -298,7 +307,7 @@ static int cx231xx_init_audio_isoc(struct cx231xx *dev)
 		urb->context = dev;
 		urb->pipe = usb_rcvisocpipe(dev->udev,
 						dev->adev.end_point_addr);
-		urb->transfer_flags = URB_ISO_ASAP;
+		urb->transfer_flags = URB_ISO_ASAP | URB_NO_TRANSFER_DMA_MAP;
 		urb->transfer_buffer = dev->adev.transfer_buffer[i];
 		urb->interval = 1;
 		urb->complete = cx231xx_audio_isocirq;
@@ -331,6 +340,9 @@ static int cx231xx_init_audio_bulk(struct cx231xx *dev)
 
 	cx231xx_info("%s: Starting BULK AUDIO transfers\n", __func__);
 
+	if (dev->state & DEV_DISCONNECTED)
+		return -ENODEV;
+
 	sb_size = CX231XX_NUM_AUDIO_PACKETS * dev->adev.max_pkt_size;
 
 	for (i = 0; i < CX231XX_AUDIO_BUFS; i++) {
@@ -356,7 +368,7 @@ static int cx231xx_init_audio_bulk(struct cx231xx *dev)
 		urb->context = dev;
 		urb->pipe = usb_rcvbulkpipe(dev->udev,
 						dev->adev.end_point_addr);
-		urb->transfer_flags = 0;
+		urb->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
 		urb->transfer_buffer = dev->adev.transfer_buffer[i];
 		urb->complete = cx231xx_audio_bulkirq;
 		urb->transfer_buffer_length = sb_size;
@@ -429,6 +441,11 @@ static int snd_cx231xx_capture_open(struct snd_pcm_substream *substream)
 	if (!dev) {
 		cx231xx_errdev("BUG: cx231xx can't find device struct."
 			       " Can't proceed with open\n");
+		return -ENODEV;
+	}
+
+	if (dev->state & DEV_DISCONNECTED) {
+		cx231xx_errdev("Can't open. the device was removed.\n");
 		return -ENODEV;
 	}
 
@@ -571,6 +588,9 @@ static int snd_cx231xx_capture_trigger(struct snd_pcm_substream *substream,
 	struct cx231xx *dev = snd_pcm_substream_chip(substream);
 	int retval;
 
+	if (dev->state & DEV_DISCONNECTED)
+		return -ENODEV;
+
 	spin_lock(&dev->adev.slock);
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -652,8 +672,10 @@ static int cx231xx_audio_init(struct cx231xx *dev)
 
 	spin_lock_init(&adev->slock);
 	err = snd_pcm_new(card, "Cx231xx Audio", 0, 0, 1, &pcm);
-	if (err < 0)
-		goto err_free_card;
+	if (err < 0) {
+		snd_card_free(card);
+		return err;
+	}
 
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE,
 			&snd_cx231xx_pcm_capture);
@@ -668,9 +690,10 @@ static int cx231xx_audio_init(struct cx231xx *dev)
 	INIT_WORK(&dev->wq_trigger, audio_trigger);
 
 	err = snd_card_register(card);
-	if (err < 0)
-		goto err_free_card;
-
+	if (err < 0) {
+		snd_card_free(card);
+		return err;
+	}
 	adev->sndcard = card;
 	adev->udev = dev->udev;
 
@@ -680,11 +703,6 @@ static int cx231xx_audio_init(struct cx231xx *dev)
 					    hs_config_info[0].interface_info.
 					    audio_index + 1];
 
-	if (uif->altsetting[0].desc.bNumEndpoints < isoc_pipe + 1) {
-		err = -ENODEV;
-		goto err_free_card;
-	}
-
 	adev->end_point_addr =
 	    le16_to_cpu(uif->altsetting[0].endpoint[isoc_pipe].desc.
 			bEndpointAddress);
@@ -693,21 +711,15 @@ static int cx231xx_audio_init(struct cx231xx *dev)
 	cx231xx_info("EndPoint Addr 0x%x, Alternate settings: %i\n",
 		     adev->end_point_addr, adev->num_alt);
 	adev->alt_max_pkt_size = kmalloc(32 * adev->num_alt, GFP_KERNEL);
-	if (!adev->alt_max_pkt_size) {
+
+	if (adev->alt_max_pkt_size == NULL) {
 		cx231xx_errdev("out of memory!\n");
-		err = -ENOMEM;
-		goto err_free_card;
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < adev->num_alt; i++) {
-		u16 tmp;
-
-		if (uif->altsetting[i].desc.bNumEndpoints < isoc_pipe + 1) {
-			err = -ENODEV;
-			goto err_free_pkt_size;
-		}
-
-		tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].desc.
+		u16 tmp =
+		    le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].desc.
 				wMaxPacketSize);
 		adev->alt_max_pkt_size[i] =
 		    (tmp & 0x07ff) * (((tmp & 0x1800) >> 11) + 1);
@@ -716,13 +728,6 @@ static int cx231xx_audio_init(struct cx231xx *dev)
 	}
 
 	return 0;
-
-err_free_pkt_size:
-	kfree(adev->alt_max_pkt_size);
-err_free_card:
-	snd_card_free(card);
-
-	return err;
 }
 
 static int cx231xx_audio_fini(struct cx231xx *dev)

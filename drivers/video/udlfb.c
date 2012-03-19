@@ -69,9 +69,9 @@ static struct usb_device_id id_table[] = {
 MODULE_DEVICE_TABLE(usb, id_table);
 
 /* module options */
-static int console = 1; /* Allow fbcon to open framebuffer */
-static int fb_defio = 1;  /* Detect mmap writes using page faults */
-static int shadow = 1; /* Optionally disable shadow framebuffer */
+static bool console = 1; /* Allow fbcon to open framebuffer */
+static bool fb_defio = 1;  /* Detect mmap writes using page faults */
+static bool shadow = 1; /* Optionally disable shadow framebuffer */
 
 /* dlfb keeps a list of urbs for efficient bulk transfers */
 static void dlfb_urb_completion(struct urb *urb);
@@ -646,7 +646,7 @@ static ssize_t dlfb_ops_write(struct fb_info *info, const char __user *buf,
 	result = fb_sys_write(info, buf, count, ppos);
 
 	if (result > 0) {
-		int start = max((int)(offset / info->fix.line_length), 0);
+		int start = max((int)(offset / info->fix.line_length) - 1, 0);
 		int lines = min((u32)((result / info->fix.line_length) + 1),
 				(u32)info->var.yres);
 
@@ -765,11 +765,11 @@ static int dlfb_get_edid(struct dlfb_data *dev, char *edid, int len)
 
 	for (i = 0; i < len; i++) {
 		ret = usb_control_msg(dev->udev,
-				      usb_rcvctrlpipe(dev->udev, 0), 0x02,
-				      (0x80 | (0x02 << 5)), i << 8, 0xA1,
-				      rbuf, 2, USB_CTRL_GET_TIMEOUT);
-		if (ret < 2) {
-			pr_err("Read EDID byte %d failed: %d\n", i, ret);
+				    usb_rcvctrlpipe(dev->udev, 0), (0x02),
+				    (0x80 | (0x02 << 5)), i << 8, 0xA1, rbuf, 2,
+				    HZ);
+		if (ret < 1) {
+			pr_err("Read EDID byte %d failed err %x\n", i, ret);
 			i--;
 			break;
 		}
@@ -1739,7 +1739,7 @@ static void dlfb_usb_disconnect(struct usb_interface *interface)
 	for (i = 0; i < ARRAY_SIZE(fb_device_attrs); i++)
 		device_remove_file(info->dev, &fb_device_attrs[i]);
 	device_remove_bin_file(info->dev, &edid_attr);
-	unlink_framebuffer(info);
+
 	usb_set_intfdata(interface, NULL);
 
 	/* if clients still have us open, will be freed on last close */
@@ -1761,24 +1761,7 @@ static struct usb_driver dlfb_driver = {
 	.id_table = id_table,
 };
 
-static int __init dlfb_module_init(void)
-{
-	int res;
-
-	res = usb_register(&dlfb_driver);
-	if (res)
-		err("usb_register failed. Error number %d", res);
-
-	return res;
-}
-
-static void __exit dlfb_module_exit(void)
-{
-	usb_deregister(&dlfb_driver);
-}
-
-module_init(dlfb_module_init);
-module_exit(dlfb_module_exit);
+module_usb_driver(dlfb_driver);
 
 static void dlfb_urb_completion(struct urb *urb)
 {

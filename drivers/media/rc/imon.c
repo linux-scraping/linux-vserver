@@ -2318,11 +2318,6 @@ static int __devinit imon_probe(struct usb_interface *interface,
 	mutex_lock(&driver_lock);
 
 	first_if = usb_ifnum_to_if(usbdev, 0);
-	if (!first_if) {
-		ret = -ENODEV;
-		goto fail;
-	}
-
 	first_if_ctx = usb_get_intfdata(first_if);
 
 	if (ifnum == 0) {
@@ -2481,23 +2476,4 @@ static int imon_resume(struct usb_interface *intf)
 	return rc;
 }
 
-static int __init imon_init(void)
-{
-	int rc;
-
-	rc = usb_register(&imon_driver);
-	if (rc) {
-		pr_err("usb register failed(%d)\n", rc);
-		rc = -ENODEV;
-	}
-
-	return rc;
-}
-
-static void __exit imon_exit(void)
-{
-	usb_deregister(&imon_driver);
-}
-
-module_init(imon_init);
-module_exit(imon_exit);
+module_usb_driver(imon_driver);

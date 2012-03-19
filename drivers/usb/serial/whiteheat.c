@@ -14,57 +14,6 @@
  *
  * See Documentation/usb/usb-serial.txt for more information on using this
  * driver
- *
- * (10/09/2002) Stuart MacDonald (stuartm@connecttech.com)
- *	Upgrade to full working driver
- *
- * (05/30/2001) gkh
- *	switched from using spinlock to a semaphore, which fixes lots of
- *	problems.
- *
- * (04/08/2001) gb
- *	Identify version on module load.
- *
- * 2001_Mar_19 gkh
- *	Fixed MOD_INC and MOD_DEC logic, the ability to open a port more
- *	than once, and the got the proper usb_device_id table entries so
- *	the driver works again.
- *
- * (11/01/2000) Adam J. Richter
- *	usb_device_id table support
- *
- * (10/05/2000) gkh
- *	Fixed bug with urb->dev not being set properly, now that the usb
- *	core needs it.
- *
- * (10/03/2000) smd
- *	firmware is improved to guard against crap sent to device
- *	firmware now replies CMD_FAILURE on bad things
- *	read_callback fix you provided for private info struct
- *	command_finished now indicates success or fail
- *	setup_port struct now packed to avoid gcc padding
- *	firmware uses 1 based port numbering, driver now handles that
- *
- * (09/11/2000) gkh
- *	Removed DEBUG #ifdefs with call to usb_serial_debug_data
- *
- * (07/19/2000) gkh
- *	Added module_init and module_exit functions to handle the fact that this
- *	driver is a loadable module now.
- *	Fixed bug with port->minor that was found by Al Borchers
- *
- * (07/04/2000) gkh
- *	Added support for port settings. Baud rate can now be changed. Line
- *	signals are not transferred to and from the tty layer yet, but things
- *	seem to be working well now.
- *
- * (05/04/2000) gkh
- *	First cut at open and close commands. Data can flow through the ports at
- *	default speeds now.
- *
- * (03/26/2000) gkh
- *	Split driver up into device specific pieces.
- *
  */
 
 #include <linux/kernel.h>
@@ -87,7 +36,7 @@
 #include <linux/ihex.h>
 #include "whiteheat.h"			/* WhiteHEAT specific commands */
 
-static int debug;
+static bool debug;
 
 #ifndef CMSPAR
 #define CMSPAR 0
@@ -143,8 +92,6 @@ static int  whiteheat_firmware_download(struct usb_serial *serial,
 static int  whiteheat_firmware_attach(struct usb_serial *serial);
 
 /* function prototypes for the Connect Tech WhiteHEAT serial converter */
-static int whiteheat_probe(struct usb_serial *serial,
-				const struct usb_device_id *id);
 static int  whiteheat_attach(struct usb_serial *serial);
 static void whiteheat_release(struct usb_serial *serial);
 static int  whiteheat_open(struct tty_struct *tty,
@@ -190,7 +137,6 @@ static struct usb_serial_driver whiteheat_device = {
 	.usb_driver =		&whiteheat_driver,
 	.id_table =		id_table_std,
 	.num_ports =		4,
-	.probe =		whiteheat_probe,
 	.attach =		whiteheat_attach,
 	.release =		whiteheat_release,
 	.open =			whiteheat_open,
@@ -390,34 +336,6 @@ static int whiteheat_firmware_attach(struct usb_serial *serial)
 /*****************************************************************************
  * Connect Tech's White Heat serial driver functions
  *****************************************************************************/
-
-static int whiteheat_probe(struct usb_serial *serial,
-				const struct usb_device_id *id)
-{
-	struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *endpoint;
-	size_t num_bulk_in = 0;
-	size_t num_bulk_out = 0;
-	size_t min_num_bulk;
-	unsigned int i;
-
-	iface_desc = serial->interface->cur_altsetting;
-
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; i++) {
-		endpoint = &iface_desc->endpoint[i].desc;
-		if (usb_endpoint_is_bulk_in(endpoint))
-			++num_bulk_in;
-		if (usb_endpoint_is_bulk_out(endpoint))
-			++num_bulk_out;
-	}
-
-	min_num_bulk = COMMAND_PORT + 1;
-	if (num_bulk_in < min_num_bulk || num_bulk_out < min_num_bulk)
-		return -ENODEV;
-
-	return 0;
-}
-
 static int whiteheat_attach(struct usb_serial *serial)
 {
 	struct usb_serial_port *command_port;
@@ -607,7 +525,6 @@ no_firmware:
 		"%s: please contact support@connecttech.com\n",
 		serial->type->description);
 	kfree(result);
-	kfree(command);
 	return -ENODEV;
 
 no_command_private:
@@ -785,7 +702,6 @@ static void whiteheat_close(struct usb_serial_port *port)
 static int whiteheat_write(struct tty_struct *tty,
 	struct usb_serial_port *port, const unsigned char *buf, int count)
 {
-	struct usb_serial *serial = port->serial;
 	struct whiteheat_private *info = usb_get_serial_port_data(port);
 	struct whiteheat_urb_wrap *wrap;
 	struct urb *urb;
@@ -821,7 +737,6 @@ static int whiteheat_write(struct tty_struct *tty,
 		usb_serial_debug_data(debug, &port->dev,
 				__func__, bytes, urb->transfer_buffer);
 
-		urb->dev = serial->dev;
 		urb->transfer_buffer_length = bytes;
 		result = usb_submit_urb(urb, GFP_ATOMIC);
 		if (result) {
@@ -1037,10 +952,6 @@ static void command_port_read_callback(struct urb *urb)
 		dbg("%s - command_info is NULL, exiting.", __func__);
 		return;
 	}
-	if (!urb->actual_length) {
-		dev_dbg(&urb->dev->dev, "%s - empty response, exiting.\n", __func__);
-		return;
-	}
 	if (status) {
 		dbg("%s - nonzero urb status: %d", __func__, status);
 		if (status != -ENOENT)
@@ -1062,8 +973,7 @@ static void command_port_read_callback(struct urb *urb)
 		/* These are unsolicited reports from the firmware, hence no
 		   waiting command to wakeup */
 		dbg("%s - event received", __func__);
-	} else if ((data[0] == WHITEHEAT_GET_DTR_RTS) &&
-		(urb->actual_length - 1 <= sizeof(command_info->result_buffer))) {
+	} else if (data[0] == WHITEHEAT_GET_DTR_RTS) {
 		memcpy(command_info->result_buffer, &data[1],
 						urb->actual_length - 1);
 		command_info->command_finished = WHITEHEAT_CMD_COMPLETE;
@@ -1072,7 +982,6 @@ static void command_port_read_callback(struct urb *urb)
 		dbg("%s - bad reply from firmware", __func__);
 
 	/* Continue trying to always read */
-	command_port->read_urb->dev = command_port->serial->dev;
 	result = usb_submit_urb(command_port->read_urb, GFP_ATOMIC);
 	if (result)
 		dbg("%s - failed resubmitting read urb, error %d",
@@ -1178,7 +1087,6 @@ static int firm_send_command(struct usb_serial_port *port, __u8 command,
 	transfer_buffer[0] = command;
 	memcpy(&transfer_buffer[1], data, datasize);
 	command_port->write_urb->transfer_buffer_length = datasize + 1;
-	command_port->write_urb->dev = port->serial->dev;
 	retval = usb_submit_urb(command_port->write_urb, GFP_NOIO);
 	if (retval) {
 		dbg("%s - submit urb failed", __func__);
@@ -1245,7 +1153,7 @@ static void firm_setup_port(struct tty_struct *tty)
 	struct whiteheat_port_settings port_settings;
 	unsigned int cflag = tty->termios->c_cflag;
 
-	port_settings.port = port->number - port->serial->minor + 1;
+	port_settings.port = port->number + 1;
 
 	/* get the byte size */
 	switch (cflag & CSIZE) {
@@ -1399,7 +1307,6 @@ static int start_command_port(struct usb_serial *serial)
 		/* Work around HCD bugs */
 		usb_clear_halt(serial->dev, command_port->read_urb->pipe);
 
-		command_port->read_urb->dev = serial->dev;
 		retval = usb_submit_urb(command_port->read_urb, GFP_KERNEL);
 		if (retval) {
 			dev_err(&serial->dev->dev,
@@ -1447,7 +1354,6 @@ static int start_port_read(struct usb_serial_port *port)
 		list_del(tmp);
 		wrap = list_entry(tmp, struct whiteheat_urb_wrap, list);
 		urb = wrap->urb;
-		urb->dev = port->serial->dev;
 		spin_unlock_irqrestore(&info->lock, flags);
 		retval = usb_submit_urb(urb, GFP_KERNEL);
 		if (retval) {
@@ -1527,7 +1433,6 @@ static void rx_data_softint(struct work_struct *work)
 			sent += tty_insert_flip_string(tty,
 				urb->transfer_buffer, urb->actual_length);
 
-		urb->dev = port->serial->dev;
 		result = usb_submit_urb(urb, GFP_ATOMIC);
 		if (result) {
 			dev_err(&port->dev,

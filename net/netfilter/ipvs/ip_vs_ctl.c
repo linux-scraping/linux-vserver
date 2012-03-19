@@ -85,7 +85,7 @@ static int __ip_vs_addr_is_local_v6(struct net *net,
 	};
 
 	rt = (struct rt6_info *)ip6_route_output(net, NULL, &fl6);
-	if (rt && rt->rt6i_dev && (rt->rt6i_dev->flags & IFF_LOOPBACK))
+	if (rt && rt->dst.dev && (rt->dst.dev->flags & IFF_LOOPBACK))
 		return 1;
 
 	return 0;
@@ -2713,7 +2713,6 @@ do_ip_vs_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
 	{
 		struct ip_vs_timeout_user t;
 
-		memset(&t, 0, sizeof(t));
 		__ip_vs_get_timeouts(net, &t);
 		if (copy_to_user(user, &t, sizeof(t)) != 0)
 			ret = -EFAULT;
@@ -3688,10 +3687,6 @@ void __net_init ip_vs_control_net_cleanup_sysctl(struct net *net)
 	cancel_delayed_work_sync(&ipvs->defense_work);
 	cancel_work_sync(&ipvs->defense_work.work);
 	unregister_net_sysctl_table(ipvs->sysctl_hdr);
-	ip_vs_stop_estimator(net, &ipvs->tot_stats);
-
-	if (!net_eq(net, &init_net))
-		kfree(ipvs->sysctl_tbl);
 }
 
 #else
@@ -3747,6 +3742,7 @@ void __net_exit ip_vs_control_net_cleanup(struct net *net)
 	struct netns_ipvs *ipvs = net_ipvs(net);
 
 	ip_vs_trash_cleanup(net);
+	ip_vs_stop_estimator(net, &ipvs->tot_stats);
 	ip_vs_control_net_cleanup_sysctl(net);
 	proc_net_remove(net, "ip_vs_stats_percpu");
 	proc_net_remove(net, "ip_vs_stats");
@@ -3754,9 +3750,20 @@ void __net_exit ip_vs_control_net_cleanup(struct net *net)
 	free_percpu(ipvs->tot_stats.cpustats);
 }
 
-int __init ip_vs_register_nl_ioctl(void)
+int __init ip_vs_control_init(void)
 {
+	int idx;
 	int ret;
+
+	EnterFunction(2);
+
+	/* Initialize svc_table, ip_vs_svc_fwm_table, rs_table */
+	for(idx = 0; idx < IP_VS_SVC_TAB_SIZE; idx++)  {
+		INIT_LIST_HEAD(&ip_vs_svc_table[idx]);
+		INIT_LIST_HEAD(&ip_vs_svc_fwm_table[idx]);
+	}
+
+	smp_wmb();	/* Do we really need it now ? */
 
 	ret = nf_register_sockopt(&ip_vs_sockopts);
 	if (ret) {
@@ -3769,41 +3776,20 @@ int __init ip_vs_register_nl_ioctl(void)
 		pr_err("cannot register Generic Netlink interface.\n");
 		goto err_genl;
 	}
+
+	ret = register_netdevice_notifier(&ip_vs_dst_notifier);
+	if (ret < 0)
+		goto err_notf;
+
+	LeaveFunction(2);
 	return 0;
 
+err_notf:
+	ip_vs_genl_unregister();
 err_genl:
 	nf_unregister_sockopt(&ip_vs_sockopts);
 err_sock:
 	return ret;
-}
-
-void ip_vs_unregister_nl_ioctl(void)
-{
-	ip_vs_genl_unregister();
-	nf_unregister_sockopt(&ip_vs_sockopts);
-}
-
-int __init ip_vs_control_init(void)
-{
-	int idx;
-	int ret;
-
-	EnterFunction(2);
-
-	/* Initialize svc_table, ip_vs_svc_fwm_table, rs_table */
-	for (idx = 0; idx < IP_VS_SVC_TAB_SIZE; idx++) {
-		INIT_LIST_HEAD(&ip_vs_svc_table[idx]);
-		INIT_LIST_HEAD(&ip_vs_svc_fwm_table[idx]);
-	}
-
-	smp_wmb();	/* Do we really need it now ? */
-
-	ret = register_netdevice_notifier(&ip_vs_dst_notifier);
-	if (ret < 0)
-		return ret;
-
-	LeaveFunction(2);
-	return 0;
 }
 
 
@@ -3811,5 +3797,7 @@ void ip_vs_control_cleanup(void)
 {
 	EnterFunction(2);
 	unregister_netdevice_notifier(&ip_vs_dst_notifier);
+	ip_vs_genl_unregister();
+	nf_unregister_sockopt(&ip_vs_sockopts);
 	LeaveFunction(2);
 }

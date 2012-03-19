@@ -31,6 +31,16 @@ neigh/default/gc_thresh3 - INTEGER
 	when using large numbers of interfaces and when communicating
 	with large numbers of directly-connected peers.
 
+neigh/default/unres_qlen_bytes - INTEGER
+	The maximum number of bytes which may be used by packets
+	queued for each	unresolved address by other network layers.
+	(added in linux 3.3)
+
+neigh/default/unres_qlen - INTEGER
+	The maximum number of packets which may be queued for each
+	unresolved address by other network layers.
+	(deprecated in linux 3.3) : use unres_qlen_bytes instead.
+
 mtu_expires - INTEGER
 	Time, in seconds, that cached PMTU information is kept.
 
@@ -137,7 +147,7 @@ tcp_adv_win_scale - INTEGER
 	(if tcp_adv_win_scale > 0) or bytes-bytes/2^(-tcp_adv_win_scale),
 	if it is <= 0.
 	Possible values are [-31, 31], inclusive.
-	Default: 1
+	Default: 2
 
 tcp_allowed_congestion_control - STRING
 	Show/set the congestion control choices available to non-privileged
@@ -165,6 +175,9 @@ tcp_congestion_control - STRING
 	connections. The algorithm "reno" is always available, but
 	additional choices may be available based on kernel configuration.
 	Default is set as part of kernel configuration.
+	For passive connections, the listener congestion control choice
+	is inherited.
+	[see setsockopt(listenfd, SOL_TCP, TCP_CONGESTION, "name" ...) ]
 
 tcp_cookie_size - INTEGER
 	Default size of TCP Cookie Transactions (TCPCT) option, that may be
@@ -397,7 +410,7 @@ tcp_rmem - vector of 3 INTEGERs: min, default, max
 	net.core.rmem_max.  Calling setsockopt() with SO_RCVBUF disables
 	automatic tuning of that socket's receive buffer size, in which
 	case this value is ignored.
-	Default: between 87380B and 6MB, depending on RAM size.
+	Default: between 87380B and 4MB, depending on RAM size.
 
 tcp_sack - BOOLEAN
 	Enable select acknowledgments (SACKS).
@@ -523,11 +536,6 @@ tcp_thin_dupack - BOOLEAN
 	For more information on thin streams, see
 	Documentation/networking/tcp-thin.txt
 	Default: 0
-
-tcp_challenge_ack_limit - INTEGER
-	Limits number of Challenge ACK sent per second, as recommended
-	in RFC 5961 (Improving TCP's Robustness to Blind In-Window Attacks)
-	Default: 100
 
 UDP variables:
 
@@ -1069,14 +1077,6 @@ accept_ra_defrtr - BOOLEAN
 
 	Functional default: enabled if accept_ra is enabled.
 			    disabled if accept_ra is disabled.
-
-accept_ra_min_hop_limit - INTEGER
-	Minimum hop limit Information in Router Advertisement.
-
-	Hop limit Information in Router Advertisement less than this
-	variable shall be ignored.
-
-	Default: 1
 
 accept_ra_pinfo - BOOLEAN
 	Learn Prefix Information in Router Advertisement.

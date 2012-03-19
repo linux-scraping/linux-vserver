@@ -727,10 +727,9 @@ static int at91_poll_rx(struct net_device *dev, int quota)
 
 	/* upper group completed, look again in lower */
 	if (priv->rx_next > get_mb_rx_low_last(priv) &&
-	    mb > get_mb_rx_last(priv)) {
+	    quota > 0 && mb > get_mb_rx_last(priv)) {
 		priv->rx_next = get_mb_rx_first(priv);
-		if (quota > 0)
-			goto again;
+		goto again;
 	}
 
 	return received;
@@ -1116,9 +1115,7 @@ static int at91_open(struct net_device *dev)
 	struct at91_priv *priv = netdev_priv(dev);
 	int err;
 
-	err = clk_prepare_enable(priv->clk);
-	if (err)
-		return err;
+	clk_enable(priv->clk);
 
 	/* check or determine and set bittime */
 	err = open_candev(dev);
@@ -1142,7 +1139,7 @@ static int at91_open(struct net_device *dev)
  out_close:
 	close_candev(dev);
  out:
-	clk_disable_unprepare(priv->clk);
+	clk_disable(priv->clk);
 
 	return err;
 }
@@ -1159,7 +1156,7 @@ static int at91_close(struct net_device *dev)
 	at91_chip_stop(dev, CAN_STATE_STOPPED);
 
 	free_irq(dev->irq, dev);
-	clk_disable_unprepare(priv->clk);
+	clk_disable(priv->clk);
 
 	close_candev(dev);
 
@@ -1386,18 +1383,7 @@ static struct platform_driver at91_can_driver = {
 	.id_table = at91_can_id_table,
 };
 
-static int __init at91_can_module_init(void)
-{
-	return platform_driver_register(&at91_can_driver);
-}
-
-static void __exit at91_can_module_exit(void)
-{
-	platform_driver_unregister(&at91_can_driver);
-}
-
-module_init(at91_can_module_init);
-module_exit(at91_can_module_exit);
+module_platform_driver(at91_can_driver);
 
 MODULE_AUTHOR("Marc Kleine-Budde <mkl@pengutronix.de>");
 MODULE_LICENSE("GPL v2");

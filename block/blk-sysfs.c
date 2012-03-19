@@ -200,8 +200,6 @@ queue_store_##name(struct request_queue *q, const char *page, size_t count) \
 	unsigned long val;						\
 	ssize_t ret;							\
 	ret = queue_var_store(&val, page, count);			\
-	if (ret < 0)							\
-		 return ret;						\
 	if (neg)							\
 		val = !val;						\
 									\
@@ -481,8 +479,12 @@ static void blk_release_queue(struct kobject *kobj)
 
 	blk_sync_queue(q);
 
-	if (q->elevator)
+	if (q->elevator) {
+		spin_lock_irq(q->queue_lock);
+		ioc_clear_queue(q);
+		spin_unlock_irq(q->queue_lock);
 		elevator_exit(q->elevator);
+	}
 
 	blk_throtl_exit(q);
 
@@ -496,6 +498,8 @@ static void blk_release_queue(struct kobject *kobj)
 	blk_trace_shutdown(q);
 
 	bdi_destroy(&q->backing_dev_info);
+
+	ida_simple_remove(&blk_queue_ida, q->id);
 	kmem_cache_free(blk_requestq_cachep, q);
 }
 

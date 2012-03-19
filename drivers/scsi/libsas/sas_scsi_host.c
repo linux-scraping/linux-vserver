@@ -49,11 +49,26 @@
 #include <linux/scatterlist.h>
 #include <linux/libata.h>
 
-/* record final status and free the task */
-static void sas_end_task(struct scsi_cmnd *sc, struct sas_task *task)
+/* ---------- SCSI Host glue ---------- */
+
+static void sas_scsi_task_done(struct sas_task *task)
 {
 	struct task_status_struct *ts = &task->task_status;
+	struct scsi_cmnd *sc = task->uldd_task;
 	int hs = 0, stat = 0;
+
+	if (unlikely(task->task_state_flags & SAS_TASK_STATE_ABORTED)) {
+		/* Aborted tasks will be completed by the error handler */
+		SAS_DPRINTK("task done but aborted\n");
+		return;
+	}
+
+	if (unlikely(!sc)) {
+		SAS_DPRINTK("task_done called with non existing SCSI cmnd!\n");
+		list_del_init(&task->list);
+		sas_free_task(task);
+		return;
+	}
 
 	if (ts->resp == SAS_TASK_UNDELIVERED) {
 		/* transport error */
@@ -109,32 +124,10 @@ static void sas_end_task(struct scsi_cmnd *sc, struct sas_task *task)
 			break;
 		}
 	}
-
-	sc->result = (hs << 16) | stat;
 	ASSIGN_SAS_TASK(sc, NULL);
+	sc->result = (hs << 16) | stat;
 	list_del_init(&task->list);
 	sas_free_task(task);
-}
-
-static void sas_scsi_task_done(struct sas_task *task)
-{
-	struct scsi_cmnd *sc = task->uldd_task;
-
-	if (unlikely(task->task_state_flags & SAS_TASK_STATE_ABORTED)) {
-		/* Aborted tasks will be completed by the error handler */
-		SAS_DPRINTK("task done but aborted\n");
-		return;
-	}
-
-	if (unlikely(!sc)) {
-		SAS_DPRINTK("task_done called with non existing SCSI cmnd!\n");
-		list_del_init(&task->list);
-		sas_free_task(task);
-		return;
-	}
-
-	ASSIGN_SAS_TASK(sc, NULL);
-	sas_end_task(sc, task);
 	sc->scsi_done(sc);
 }
 
@@ -245,16 +238,18 @@ static void sas_eh_finish_cmd(struct scsi_cmnd *cmd)
 	struct sas_task *task = TO_SAS_TASK(cmd);
 	struct sas_ha_struct *sas_ha = SHOST_TO_SAS_HA(cmd->device->host);
 
-	/* At this point, we only get called following an actual abort
-	 * of the task, so we should be guaranteed not to be racing with
-	 * any completions from the LLD.  Task is freed after this.
-	 */
-	sas_end_task(cmd, task);
-
+	/* remove the aborted task flag to allow the task to be
+	 * completed now. At this point, we only get called following
+	 * an actual abort of the task, so we should be guaranteed not
+	 * to be racing with any completions from the LLD (hence we
+	 * don't need the task state lock to clear the flag) */
+	task->task_state_flags &= ~SAS_TASK_STATE_ABORTED;
+	/* Now call task_done.  However, task will be free'd after
+	 * this */
+	task->task_done(task);
 	/* now finish the command and move it on to the error
 	 * handler done list, this also takes it off the
-	 * error handler pending list.
-	 */
+	 * error handler pending list */
 	scsi_eh_finish_cmd(cmd, &sas_ha->eh_done_q);
 }
 

@@ -166,7 +166,6 @@ that only one external action is invoked at a time.
 #include <net/lib80211.h>
 
 #include "ipw2100.h"
-#include "ipw.h"
 
 #define IPW2100_VERSION "git-1.2.2"
 
@@ -1955,9 +1954,6 @@ static int ipw2100_wdev_init(struct net_device *dev)
 
 		wdev->wiphy->bands[IEEE80211_BAND_2GHZ] = bg_band;
 	}
-
-	wdev->wiphy->cipher_suites = ipw_cipher_suites;
-	wdev->wiphy->n_cipher_suites = ARRAY_SIZE(ipw_cipher_suites);
 
 	set_wiphy_dev(wdev->wiphy, &priv->pci_dev->dev);
 	if (wiphy_register(wdev->wiphy)) {
@@ -5985,8 +5981,8 @@ static void ipw_ethtool_get_drvinfo(struct net_device *dev,
 	struct ipw2100_priv *priv = libipw_priv(dev);
 	char fw_ver[64], ucode_ver[64];
 
-	strcpy(info->driver, DRV_NAME);
-	strcpy(info->version, DRV_VERSION);
+	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
 
 	ipw2100_get_fwversion(priv, fw_ver, sizeof(fw_ver));
 	ipw2100_get_ucodeversion(priv, ucode_ver, sizeof(ucode_ver));
@@ -5994,7 +5990,8 @@ static void ipw_ethtool_get_drvinfo(struct net_device *dev,
 	snprintf(info->fw_version, sizeof(info->fw_version), "%s:%d:%s",
 		 fw_ver, priv->eeprom_version, ucode_ver);
 
-	strcpy(info->bus_info, pci_name(priv->pci_dev));
+	strlcpy(info->bus_info, pci_name(priv->pci_dev),
+		sizeof(info->bus_info));
 }
 
 static u32 ipw2100_ethtool_get_link(struct net_device *dev)

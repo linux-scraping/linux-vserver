@@ -153,7 +153,7 @@ void __init xen_swiotlb_init(int verbose)
 	char *m = NULL;
 	unsigned int repeat = 3;
 
-	nr_tbl = swioltb_nr_tbl();
+	nr_tbl = swiotlb_nr_tbl();
 	if (nr_tbl)
 		xen_io_tlb_nslabs = nr_tbl;
 	else {
@@ -231,7 +231,7 @@ xen_swiotlb_alloc_coherent(struct device *hwdev, size_t size,
 		return ret;
 
 	if (hwdev && hwdev->coherent_dma_mask)
-		dma_mask = dma_alloc_coherent_mask(hwdev, flags);
+		dma_mask = hwdev->coherent_dma_mask;
 
 	phys = virt_to_phys(ret);
 	dev_addr = xen_phys_to_bus(phys);

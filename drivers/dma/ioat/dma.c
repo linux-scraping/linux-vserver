@@ -75,8 +75,7 @@ static irqreturn_t ioat_dma_do_interrupt(int irq, void *data)
 	attnstatus = readl(instance->reg_base + IOAT_ATTNSTATUS_OFFSET);
 	for_each_set_bit(bit, &attnstatus, BITS_PER_LONG) {
 		chan = ioat_chan_by_index(instance, bit);
-		if (test_bit(IOAT_RUN, &chan->state))
-			tasklet_schedule(&chan->cleanup_task);
+		tasklet_schedule(&chan->cleanup_task);
 	}
 
 	writeb(intrctrl, instance->reg_base + IOAT_INTRCTRL_OFFSET);
@@ -92,8 +91,7 @@ static irqreturn_t ioat_dma_do_interrupt_msix(int irq, void *data)
 {
 	struct ioat_chan_common *chan = data;
 
-	if (test_bit(IOAT_RUN, &chan->state))
-		tasklet_schedule(&chan->cleanup_task);
+	tasklet_schedule(&chan->cleanup_task);
 
 	return IRQ_HANDLED;
 }
@@ -115,6 +113,7 @@ void ioat_init_channel(struct ioatdma_device *device, struct ioat_chan_common *c
 	chan->timer.function = device->timer_fn;
 	chan->timer.data = data;
 	tasklet_init(&chan->cleanup_task, device->cleanup_fn, data);
+	tasklet_disable(&chan->cleanup_task);
 }
 
 /**
@@ -357,41 +356,11 @@ static int ioat1_dma_alloc_chan_resources(struct dma_chan *c)
 	writel(((u64) chan->completion_dma) >> 32,
 	       chan->reg_base + IOAT_CHANCMP_OFFSET_HIGH);
 
-	set_bit(IOAT_RUN, &chan->state);
+	tasklet_enable(&chan->cleanup_task);
 	ioat1_dma_start_null_desc(ioat);  /* give chain to dma device */
 	dev_dbg(to_dev(chan), "%s: allocated %d descriptors\n",
 		__func__, ioat->desccount);
 	return ioat->desccount;
-}
-
-void ioat_stop(struct ioat_chan_common *chan)
-{
-	struct ioatdma_device *device = chan->device;
-	struct pci_dev *pdev = device->pdev;
-	int chan_id = chan_num(chan);
-
-	/* 1/ stop irq from firing tasklets
-	 * 2/ stop the tasklet from re-arming irqs
-	 */
-	clear_bit(IOAT_RUN, &chan->state);
-
-	/* flush inflight interrupts */
-#ifdef CONFIG_PCI_MSI
-	if (pdev->msix_enabled) {
-		struct msix_entry *msix = &device->msix_entries[chan_id];
-		synchronize_irq(msix->vector);
-	} else
-#endif
-		synchronize_irq(pdev->irq);
-
-	/* flush inflight timers */
-	del_timer_sync(&chan->timer);
-
-	/* flush inflight tasklet runs */
-	tasklet_kill(&chan->cleanup_task);
-
-	/* final cleanup now that everything is quiesced and can't re-arm */
-	device->cleanup_fn((unsigned long) &chan->common);
 }
 
 /**
@@ -412,7 +381,9 @@ static void ioat1_dma_free_chan_resources(struct dma_chan *c)
 	if (ioat->desccount == 0)
 		return;
 
-	ioat_stop(chan);
+	tasklet_disable(&chan->cleanup_task);
+	del_timer_sync(&chan->timer);
+	ioat1_cleanup(ioat);
 
 	/* Delay 100ms after reset to allow internal DMA logic to quiesce
 	 * before removing DMA descriptor resources.
@@ -557,11 +528,8 @@ ioat1_dma_prep_memcpy(struct dma_chan *c, dma_addr_t dma_dest,
 static void ioat1_cleanup_event(unsigned long data)
 {
 	struct ioat_dma_chan *ioat = to_ioat_chan((void *) data);
-	struct ioat_chan_common *chan = &ioat->base;
 
 	ioat1_cleanup(ioat);
-	if (!test_bit(IOAT_RUN, &chan->state))
-		return;
 	writew(IOAT_CHANCTRL_RUN, ioat->base.reg_base + IOAT_CHANCTRL_OFFSET);
 }
 
@@ -580,9 +548,9 @@ void ioat_dma_unmap(struct ioat_chan_common *chan, enum dma_ctrl_flags flags,
 			   PCI_DMA_TODEVICE, flags, 0);
 }
 
-dma_addr_t ioat_get_current_completion(struct ioat_chan_common *chan)
+unsigned long ioat_get_current_completion(struct ioat_chan_common *chan)
 {
-	dma_addr_t phys_complete;
+	unsigned long phys_complete;
 	u64 completion;
 
 	completion = *chan->completion;
@@ -603,7 +571,7 @@ dma_addr_t ioat_get_current_completion(struct ioat_chan_common *chan)
 }
 
 bool ioat_cleanup_preamble(struct ioat_chan_common *chan,
-			   dma_addr_t *phys_complete)
+			   unsigned long *phys_complete)
 {
 	*phys_complete = ioat_get_current_completion(chan);
 	if (*phys_complete == chan->last_completion)
@@ -614,14 +582,14 @@ bool ioat_cleanup_preamble(struct ioat_chan_common *chan,
 	return true;
 }
 
-static void __cleanup(struct ioat_dma_chan *ioat, dma_addr_t phys_complete)
+static void __cleanup(struct ioat_dma_chan *ioat, unsigned long phys_complete)
 {
 	struct ioat_chan_common *chan = &ioat->base;
 	struct list_head *_desc, *n;
 	struct dma_async_tx_descriptor *tx;
 
-	dev_dbg(to_dev(chan), "%s: phys_complete: %llx\n",
-		 __func__, (unsigned long long) phys_complete);
+	dev_dbg(to_dev(chan), "%s: phys_complete: %lx\n",
+		 __func__, phys_complete);
 	list_for_each_safe(_desc, n, &ioat->used_desc) {
 		struct ioat_desc_sw *desc;
 
@@ -687,7 +655,7 @@ static void __cleanup(struct ioat_dma_chan *ioat, dma_addr_t phys_complete)
 static void ioat1_cleanup(struct ioat_dma_chan *ioat)
 {
 	struct ioat_chan_common *chan = &ioat->base;
-	dma_addr_t phys_complete;
+	unsigned long phys_complete;
 
 	prefetch(chan->completion);
 
@@ -733,7 +701,7 @@ static void ioat1_timer_event(unsigned long data)
 		mod_timer(&chan->timer, jiffies + COMPLETION_TIMEOUT);
 		spin_unlock_bh(&ioat->desc_lock);
 	} else if (test_bit(IOAT_COMPLETION_PENDING, &chan->state)) {
-		dma_addr_t phys_complete;
+		unsigned long phys_complete;
 
 		spin_lock_bh(&ioat->desc_lock);
 		/* if we haven't made progress and we have already

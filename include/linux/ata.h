@@ -464,8 +464,8 @@ enum ata_tf_protocols {
 };
 
 enum ata_ioctls {
-	ATA_IOC_GET_IO32	= 0x309, /* HDIO_GET_32BIT */
-	ATA_IOC_SET_IO32	= 0x324, /* HDIO_SET_32BIT */
+	ATA_IOC_GET_IO32	= 0x309,
+	ATA_IOC_SET_IO32	= 0x324,
 };
 
 /* core structures */
@@ -937,7 +937,7 @@ static inline int atapi_cdb_len(const u16 *dev_id)
 	}
 }
 
-static inline int atapi_command_packet_set(const u16 *dev_id)
+static inline bool atapi_command_packet_set(const u16 *dev_id)
 {
 	return (dev_id[ATA_ID_CONFIG] >> 8) & 0x1f;
 }

@@ -1195,7 +1195,7 @@ static inline int needs_idle_maps(void)
 	/* Query intel_iommu to see if we need the workaround. Presumably that
 	 * was loaded first.
 	 */
-	if ((gpu_devid == PCI_DEVICE_ID_INTEL_IRONLAKE_D_IG ||
+	if ((gpu_devid == PCI_DEVICE_ID_INTEL_IRONLAKE_M_HB ||
 	     gpu_devid == PCI_DEVICE_ID_INTEL_IRONLAKE_M_IG) &&
 	     intel_iommu_gfx_mapped)
 		return 1;
@@ -1458,8 +1458,6 @@ static const struct intel_gtt_driver_description {
 	{ PCI_DEVICE_ID_INTEL_IVYBRIDGE_M_GT2_IG,
 	    "Ivybridge", &sandybridge_gtt_driver },
 	{ PCI_DEVICE_ID_INTEL_IVYBRIDGE_S_GT1_IG,
-	    "Ivybridge", &sandybridge_gtt_driver },
-	{ PCI_DEVICE_ID_INTEL_IVYBRIDGE_S_GT2_IG,
 	    "Ivybridge", &sandybridge_gtt_driver },
 	{ 0, NULL, NULL }
 };

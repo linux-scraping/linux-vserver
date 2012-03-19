@@ -88,18 +88,16 @@ static int iwl_trans_rx_alloc(struct iwl_trans *trans)
 		return -EINVAL;
 
 	/* Allocate the circular buffer of Read Buffer Descriptors (RBDs) */
-	rxq->bd = dma_alloc_coherent(dev, sizeof(__le32) * RX_QUEUE_SIZE,
-				     &rxq->bd_dma, GFP_KERNEL);
+	rxq->bd = dma_zalloc_coherent(dev, sizeof(__le32) * RX_QUEUE_SIZE,
+				      &rxq->bd_dma, GFP_KERNEL);
 	if (!rxq->bd)
 		goto err_bd;
-	memset(rxq->bd, 0, sizeof(__le32) * RX_QUEUE_SIZE);
 
 	/*Allocate the driver's pointer to receive buffer status */
-	rxq->rb_stts = dma_alloc_coherent(dev, sizeof(*rxq->rb_stts),
-					  &rxq->rb_stts_dma, GFP_KERNEL);
+	rxq->rb_stts = dma_zalloc_coherent(dev, sizeof(*rxq->rb_stts),
+					   &rxq->rb_stts_dma, GFP_KERNEL);
 	if (!rxq->rb_stts)
 		goto err_rb_stts;
-	memset(rxq->rb_stts, 0, sizeof(*rxq->rb_stts));
 
 	return 0;
 
@@ -868,11 +866,6 @@ static void iwl_trans_pcie_tx_start(struct iwl_trans *trans)
 	iwl_write_prph(bus(trans), SCD_DRAM_BASE_ADDR,
 		       trans_pcie->scd_bc_tbls.dma >> 10);
 
-	/* The chain extension of the SCD doesn't work well. This feature is
-	 * enabled by default by the HW, so we need to disable it manually.
-	 */
-	iwl_write_prph(bus(trans), SCD_CHAINEXT_EN, 0);
-
 	/* Enable DMA channel */
 	for (chan = 0; chan < FH_TCSR_CHNL_NUM ; chan++)
 		iwl_write_direct32(bus(trans), FH_TCSR_CHNL_TX_CONFIG_REG(chan),
@@ -1049,7 +1042,7 @@ static void iwl_trans_pcie_stop_device(struct iwl_trans *trans)
 
 static int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 		struct iwl_device_cmd *dev_cmd, enum iwl_rxon_context_id ctx,
-		u8 sta_id)
+		u8 sta_id, u8 tid)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
@@ -1063,13 +1056,12 @@ static int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 	dma_addr_t txcmd_phys;
 	dma_addr_t scratch_phys;
 	u16 len, firstlen, secondlen;
-	u16 seq_number = 0;
 	u8 wait_write_ptr = 0;
 	u8 txq_id;
-	u8 tid = 0;
 	bool is_agg = false;
 	__le16 fc = hdr->frame_control;
 	u8 hdr_len = ieee80211_hdrlen(fc);
+	u16 __maybe_unused wifi_seq;
 
 	/*
 	 * Send this frame after DTIM -- there's a special queue
@@ -1090,35 +1082,27 @@ static int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 		txq_id =
 		    trans_pcie->ac_to_queue[ctx][skb_get_queue_mapping(skb)];
 
-	if (ieee80211_is_data_qos(fc) && !ieee80211_is_qos_nullfunc(fc)) {
-		u8 *qc = NULL;
-		struct iwl_tid_data *tid_data;
-		qc = ieee80211_get_qos_ctl(hdr);
-		tid = qc[0] & IEEE80211_QOS_CTL_TID_MASK;
-		tid_data = &trans->shrd->tid_data[sta_id][tid];
-
-		if (WARN_ON_ONCE(tid >= IWL_MAX_TID_COUNT))
-			return -1;
-
-		seq_number = tid_data->seq_number;
-		seq_number &= IEEE80211_SCTL_SEQ;
-		hdr->seq_ctrl = hdr->seq_ctrl &
-				cpu_to_le16(IEEE80211_SCTL_FRAG);
-		hdr->seq_ctrl |= cpu_to_le16(seq_number);
-		seq_number += 0x10;
-		/* aggregation is on for this <sta,tid> */
-		if (info->flags & IEEE80211_TX_CTL_AMPDU) {
-			WARN_ON_ONCE(tid_data->agg.state != IWL_AGG_ON);
-			txq_id = tid_data->agg.txq_id;
-			is_agg = true;
-		}
+	/* aggregation is on for this <sta,tid> */
+	if (info->flags & IEEE80211_TX_CTL_AMPDU) {
+		WARN_ON(tid >= IWL_MAX_TID_COUNT);
+		txq_id = trans_pcie->agg_txq[sta_id][tid];
+		is_agg = true;
 	}
-
-	/* Copy MAC header from skb into command buffer */
-	memcpy(tx_cmd->hdr, hdr, hdr_len);
 
 	txq = &trans_pcie->txq[txq_id];
 	q = &txq->q;
+
+	/* In AGG mode, the index in the ring must correspond to the WiFi
+	 * sequence number. This is a HW requirements to help the SCD to parse
+	 * the BA.
+	 * Check here that the packets are in the right place on the ring.
+	 */
+#ifdef CONFIG_IWLWIFI_DEBUG
+	wifi_seq = SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
+	WARN_ONCE(is_agg && ((wifi_seq & 0xff) != q->write_ptr),
+		  "Q: %d WiFi Seq %d tfdNum %d",
+		  txq_id, wifi_seq, q->write_ptr);
+#endif
 
 	/* Set up driver data for this TFD */
 	txq->skbs[q->write_ptr] = skb;
@@ -1217,13 +1201,6 @@ static int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 	q->write_ptr = iwl_queue_inc_wrap(q->write_ptr, q->n_bd);
 	iwl_txq_update_write_ptr(trans, txq);
 
-	if (ieee80211_is_data_qos(fc) && !ieee80211_is_qos_nullfunc(fc)) {
-		trans->shrd->tid_data[sta_id][tid].tfds_in_queue++;
-		if (!ieee80211_has_morefrags(fc))
-			trans->shrd->tid_data[sta_id][tid].seq_number =
-				seq_number;
-	}
-
 	/*
 	 * At this point the frame is "transmitted" successfully
 	 * and we will get a TX status notification eventually,
@@ -1235,7 +1212,7 @@ static int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 			txq->need_update = 1;
 			iwl_txq_update_write_ptr(trans, txq);
 		} else {
-			iwl_stop_queue(trans, txq);
+			iwl_stop_queue(trans, txq, "Queue is full");
 		}
 	}
 	return 0;
@@ -1272,101 +1249,49 @@ static int iwl_trans_pcie_request_irq(struct iwl_trans *trans)
 	return 0;
 }
 
-static int iwlagn_txq_check_empty(struct iwl_trans *trans,
-			   int sta_id, u8 tid, int txq_id)
-{
-	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	struct iwl_queue *q = &trans_pcie->txq[txq_id].q;
-	struct iwl_tid_data *tid_data = &trans->shrd->tid_data[sta_id][tid];
-
-	lockdep_assert_held(&trans->shrd->sta_lock);
-
-	switch (trans->shrd->tid_data[sta_id][tid].agg.state) {
-	case IWL_EMPTYING_HW_QUEUE_DELBA:
-		/* We are reclaiming the last packet of the */
-		/* aggregated HW queue */
-		if ((txq_id  == tid_data->agg.txq_id) &&
-		    (q->read_ptr == q->write_ptr)) {
-			IWL_DEBUG_HT(trans,
-				"HW queue empty: continue DELBA flow\n");
-			iwl_trans_pcie_txq_agg_disable(trans, txq_id);
-			tid_data->agg.state = IWL_AGG_OFF;
-			iwl_stop_tx_ba_trans_ready(priv(trans),
-						   NUM_IWL_RXON_CTX,
-						   sta_id, tid);
-			iwl_wake_queue(trans, &trans_pcie->txq[txq_id]);
-		}
-		break;
-	case IWL_EMPTYING_HW_QUEUE_ADDBA:
-		/* We are reclaiming the last packet of the queue */
-		if (tid_data->tfds_in_queue == 0) {
-			IWL_DEBUG_HT(trans,
-				"HW queue empty: continue ADDBA flow\n");
-			tid_data->agg.state = IWL_AGG_ON;
-			iwl_start_tx_ba_trans_ready(priv(trans),
-						    NUM_IWL_RXON_CTX,
-						    sta_id, tid);
-		}
-		break;
-	default:
-		break;
-	}
-
-	return 0;
-}
-
-static void iwl_free_tfds_in_queue(struct iwl_trans *trans,
-			    int sta_id, int tid, int freed)
-{
-	lockdep_assert_held(&trans->shrd->sta_lock);
-
-	if (trans->shrd->tid_data[sta_id][tid].tfds_in_queue >= freed)
-		trans->shrd->tid_data[sta_id][tid].tfds_in_queue -= freed;
-	else {
-		IWL_DEBUG_TX(trans, "free more than tfds_in_queue (%u:%d)\n",
-			trans->shrd->tid_data[sta_id][tid].tfds_in_queue,
-			freed);
-		trans->shrd->tid_data[sta_id][tid].tfds_in_queue = 0;
-	}
-}
-
-static void iwl_trans_pcie_reclaim(struct iwl_trans *trans, int sta_id, int tid,
+static int iwl_trans_pcie_reclaim(struct iwl_trans *trans, int sta_id, int tid,
 		      int txq_id, int ssn, u32 status,
 		      struct sk_buff_head *skbs)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_tx_queue *txq = &trans_pcie->txq[txq_id];
-	enum iwl_agg_state agg_state;
 	/* n_bd is usually 256 => n_bd - 1 = 0xff */
 	int tfd_num = ssn & (txq->q.n_bd - 1);
 	int freed = 0;
-	bool cond;
 
 	txq->time_stamp = jiffies;
 
-	if (txq->sched_retry) {
-		agg_state =
-			trans->shrd->tid_data[txq->sta_id][txq->tid].agg.state;
-		cond = (agg_state != IWL_EMPTYING_HW_QUEUE_DELBA);
-	} else {
-		cond = (status != TX_STATUS_FAIL_PASSIVE_NO_RX);
+	if (unlikely(txq_id >= IWLAGN_FIRST_AMPDU_QUEUE &&
+		     tid != IWL_TID_NON_QOS &&
+		     txq_id != trans_pcie->agg_txq[sta_id][tid])) {
+		/*
+		 * FIXME: this is a uCode bug which need to be addressed,
+		 * log the information and return for now.
+		 * Since it is can possibly happen very often and in order
+		 * not to fill the syslog, don't use IWL_ERR or IWL_WARN
+		 */
+		IWL_DEBUG_TX_QUEUES(trans, "Bad queue mapping txq_id %d, "
+			"agg_txq[sta_id[tid] %d", txq_id,
+			trans_pcie->agg_txq[sta_id][tid]);
+		return 1;
 	}
 
 	if (txq->q.read_ptr != tfd_num) {
-		IWL_DEBUG_TX_REPLY(trans, "Retry scheduler reclaim "
-				"scd_ssn=%d idx=%d txq=%d swq=%d\n",
-				ssn , tfd_num, txq_id, txq->swq_id);
+		IWL_DEBUG_TX_REPLY(trans, "[Q %d | AC %d] %d -> %d (%d)\n",
+				txq_id, iwl_get_queue_ac(txq), txq->q.read_ptr,
+				tfd_num, ssn);
 		freed = iwl_tx_queue_reclaim(trans, txq_id, tfd_num, skbs);
-		if (iwl_queue_space(&txq->q) > txq->q.low_mark && cond)
-			iwl_wake_queue(trans, txq);
+		if (iwl_queue_space(&txq->q) > txq->q.low_mark &&
+		   (!txq->sched_retry ||
+		   status != TX_STATUS_FAIL_PASSIVE_NO_RX))
+			iwl_wake_queue(trans, txq, "Packets reclaimed");
 	}
-
-	iwl_free_tfds_in_queue(trans, sta_id, tid, freed);
-	iwlagn_txq_check_empty(trans, sta_id, tid, txq_id);
+	return 0;
 }
 
 static void iwl_trans_pcie_free(struct iwl_trans *trans)
 {
+	iwl_calib_free_results(trans);
 	iwl_trans_pcie_tx_free(trans);
 	iwl_trans_pcie_rx_free(trans);
 	free_irq(bus(trans)->irq, trans);
@@ -1422,7 +1347,8 @@ static int iwl_trans_pcie_resume(struct iwl_trans *trans)
 #endif /* CONFIG_PM_SLEEP */
 
 static void iwl_trans_pcie_wake_any_queue(struct iwl_trans *trans,
-					  enum iwl_rxon_context_id ctx)
+					  enum iwl_rxon_context_id ctx,
+					  const char *msg)
 {
 	u8 ac, txq_id;
 	struct iwl_trans_pcie *trans_pcie =
@@ -1430,11 +1356,11 @@ static void iwl_trans_pcie_wake_any_queue(struct iwl_trans *trans,
 
 	for (ac = 0; ac < AC_NUM; ac++) {
 		txq_id = trans_pcie->ac_to_queue[ctx][ac];
-		IWL_DEBUG_INFO(trans, "Queue Status: Q[%d] %s\n",
+		IWL_DEBUG_TX_QUEUES(trans, "Queue Status: Q[%d] %s\n",
 			ac,
 			(atomic_read(&trans_pcie->queue_stop_count[ac]) > 0)
 			      ? "stopped" : "awake");
-		iwl_wake_queue(trans, &trans_pcie->txq[txq_id]);
+		iwl_wake_queue(trans, &trans_pcie->txq[txq_id], msg);
 	}
 }
 
@@ -1457,11 +1383,12 @@ static struct iwl_trans *iwl_trans_pcie_alloc(struct iwl_shared *shrd)
 	return iwl_trans;
 }
 
-static void iwl_trans_pcie_stop_queue(struct iwl_trans *trans, int txq_id)
+static void iwl_trans_pcie_stop_queue(struct iwl_trans *trans, int txq_id,
+				      const char *msg)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 
-	iwl_stop_queue(trans, &trans_pcie->txq[txq_id]);
+	iwl_stop_queue(trans, &trans_pcie->txq[txq_id], msg);
 }
 
 #define IWL_FLUSH_WAIT_MS	2000
@@ -1516,8 +1443,12 @@ static int iwl_trans_pcie_check_stuck_queue(struct iwl_trans *trans, int cnt)
 	if (time_after(jiffies, timeout)) {
 		IWL_ERR(trans, "Queue %d stuck for %u ms.\n", q->id,
 			hw_params(trans).wd_timeout);
-		IWL_ERR(trans, "Current read_ptr %d write_ptr %d\n",
+		IWL_ERR(trans, "Current SW read_ptr %d write_ptr %d\n",
 			q->read_ptr, q->write_ptr);
+		IWL_ERR(trans, "Current HW read_ptr %d write_ptr %d\n",
+			iwl_read_prph(bus(trans), SCD_QUEUE_RDPTR(cnt))
+				& (TFD_QUEUE_SIZE_MAX - 1),
+			iwl_read_prph(bus(trans), SCD_QUEUE_WRPTR(cnt)));
 		return 1;
 	}
 
@@ -1541,9 +1472,13 @@ static const char *get_fh_string(int cmd)
 	}
 }
 
-int iwl_dump_fh(struct iwl_trans *trans, char **buf)
+int iwl_dump_fh(struct iwl_trans *trans, char **buf, bool display)
 {
 	int i;
+#ifdef CONFIG_IWLWIFI_DEBUG
+	int pos = 0;
+	size_t bufsz = 0;
+#endif
 	static const u32 fh_tbl[] = {
 		FH_RSCSR_CHNL0_STTS_WPTR_REG,
 		FH_RSCSR_CHNL0_RBDCB_BASE_REG,
@@ -1555,35 +1490,29 @@ int iwl_dump_fh(struct iwl_trans *trans, char **buf)
 		FH_TSSR_TX_STATUS_REG,
 		FH_TSSR_TX_ERROR_REG
 	};
-
-#ifdef CONFIG_IWLWIFI_DEBUGFS
-	if (buf) {
-		int pos = 0;
-		size_t bufsz = ARRAY_SIZE(fh_tbl) * 48 + 40;
-
+#ifdef CONFIG_IWLWIFI_DEBUG
+	if (display) {
+		bufsz = ARRAY_SIZE(fh_tbl) * 48 + 40;
 		*buf = kmalloc(bufsz, GFP_KERNEL);
 		if (!*buf)
 			return -ENOMEM;
-
 		pos += scnprintf(*buf + pos, bufsz - pos,
 				"FH register values:\n");
-
-		for (i = 0; i < ARRAY_SIZE(fh_tbl); i++)
+		for (i = 0; i < ARRAY_SIZE(fh_tbl); i++) {
 			pos += scnprintf(*buf + pos, bufsz - pos,
 				"  %34s: 0X%08x\n",
 				get_fh_string(fh_tbl[i]),
 				iwl_read_direct32(bus(trans), fh_tbl[i]));
-
+		}
 		return pos;
 	}
 #endif
-
 	IWL_ERR(trans, "FH register values:\n");
-	for (i = 0; i <  ARRAY_SIZE(fh_tbl); i++)
+	for (i = 0; i <  ARRAY_SIZE(fh_tbl); i++) {
 		IWL_ERR(trans, "  %34s: 0X%08x\n",
 			get_fh_string(fh_tbl[i]),
 			iwl_read_direct32(bus(trans), fh_tbl[i]));
-
+	}
 	return 0;
 }
 
@@ -1779,7 +1708,6 @@ static ssize_t iwl_dbgfs_rx_queue_read(struct file *file,
 	return simple_read_from_buffer(user_buf, count, ppos, buf, pos);
 }
 
-#ifdef CONFIG_IWLWIFI_DEBUG
 static ssize_t iwl_dbgfs_log_event_read(struct file *file,
 					 char __user *user_buf,
 					 size_t count, loff_t *ppos)
@@ -1817,7 +1745,6 @@ static ssize_t iwl_dbgfs_log_event_write(struct file *file,
 
 	return count;
 }
-#endif
 
 static ssize_t iwl_dbgfs_interrupt_read(struct file *file,
 					char __user *user_buf,
@@ -1931,11 +1858,11 @@ static ssize_t iwl_dbgfs_fh_reg_read(struct file *file,
 					 size_t count, loff_t *ppos)
 {
 	struct iwl_trans *trans = file->private_data;
-	char *buf = NULL;
+	char *buf;
 	int pos = 0;
 	ssize_t ret = -EFAULT;
 
-	ret = pos = iwl_dump_fh(trans, &buf);
+	ret = pos = iwl_dump_fh(trans, &buf, true);
 	if (buf) {
 		ret = simple_read_from_buffer(user_buf,
 					      count, ppos, buf, pos);
@@ -1945,9 +1872,7 @@ static ssize_t iwl_dbgfs_fh_reg_read(struct file *file,
 	return ret;
 }
 
-#ifdef CONFIG_IWLWIFI_DEBUG
 DEBUGFS_READ_WRITE_FILE_OPS(log_event);
-#endif
 DEBUGFS_READ_WRITE_FILE_OPS(interrupt);
 DEBUGFS_READ_FILE_OPS(fh_reg);
 DEBUGFS_READ_FILE_OPS(rx_queue);
@@ -1963,9 +1888,7 @@ static int iwl_trans_pcie_dbgfs_register(struct iwl_trans *trans,
 {
 	DEBUGFS_ADD_FILE(rx_queue, dir, S_IRUSR);
 	DEBUGFS_ADD_FILE(tx_queue, dir, S_IRUSR);
-#ifdef CONFIG_IWLWIFI_DEBUG
 	DEBUGFS_ADD_FILE(log_event, dir, S_IWUSR | S_IRUSR);
-#endif
 	DEBUGFS_ADD_FILE(interrupt, dir, S_IWUSR | S_IRUSR);
 	DEBUGFS_ADD_FILE(csr, dir, S_IWUSR);
 	DEBUGFS_ADD_FILE(fh_reg, dir, S_IRUSR);

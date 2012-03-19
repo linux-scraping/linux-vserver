@@ -828,8 +828,6 @@ static ssize_t cache_do_downcall(char *kaddr, const char __user *buf,
 {
 	ssize_t ret;
 
-	if (count == 0)
-		return -EINVAL;
 	if (copy_from_user(kaddr, buf, count))
 		return -EFAULT;
 	kaddr[count] = '\0';
@@ -909,7 +907,7 @@ static unsigned int cache_poll(struct file *filp, poll_table *wait,
 	poll_wait(filp, &queue_wait, wait);
 
 	/* alway allow write */
-	mask = POLLOUT | POLLWRNORM;
+	mask = POLL_OUT | POLLWRNORM;
 
 	if (!rp)
 		return mask;
@@ -1211,7 +1209,7 @@ int qword_get(char **bpp, char *dest, int bufsize)
 	if (bp[0] == '\\' && bp[1] == 'x') {
 		/* HEX STRING */
 		bp += 2;
-		while (len < bufsize - 1) {
+		while (len < bufsize) {
 			int h, l;
 
 			h = hex_to_bin(bp[0]);
@@ -1404,11 +1402,11 @@ static ssize_t read_flush(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos,
 			  struct cache_detail *cd)
 {
-	char tbuf[22];
+	char tbuf[20];
 	unsigned long p = *ppos;
 	size_t len;
 
-	snprintf(tbuf, sizeof(tbuf), "%lu\n", convert_to_wallclock(cd->flush_time));
+	sprintf(tbuf, "%lu\n", convert_to_wallclock(cd->flush_time));
 	len = strlen(tbuf);
 	if (p >= len)
 		return 0;
@@ -1643,6 +1641,7 @@ int cache_register_net(struct cache_detail *cd, struct net *net)
 		sunrpc_destroy_cache_detail(cd);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(cache_register_net);
 
 int cache_register(struct cache_detail *cd)
 {
@@ -1655,6 +1654,7 @@ void cache_unregister_net(struct cache_detail *cd, struct net *net)
 	remove_cache_proc_entries(cd, net);
 	sunrpc_destroy_cache_detail(cd);
 }
+EXPORT_SYMBOL_GPL(cache_unregister_net);
 
 void cache_unregister(struct cache_detail *cd)
 {
@@ -1780,7 +1780,7 @@ const struct file_operations cache_flush_operations_pipefs = {
 };
 
 int sunrpc_cache_register_pipefs(struct dentry *parent,
-				 const char *name, mode_t umode,
+				 const char *name, umode_t umode,
 				 struct cache_detail *cd)
 {
 	struct qstr q;

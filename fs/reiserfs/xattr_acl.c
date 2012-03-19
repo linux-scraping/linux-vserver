@@ -250,9 +250,15 @@ struct posix_acl *reiserfs_get_acl(struct inode *inode, int type)
 	return acl;
 }
 
+/*
+ * Inode operation set_posix_acl().
+ *
+ * inode->i_mutex: down
+ * BKL held [before 2.5.x]
+ */
 static int
-__reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
-		   int type, struct posix_acl *acl)
+reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
+		 int type, struct posix_acl *acl)
 {
 	char *name;
 	void *value = NULL;
@@ -265,6 +271,15 @@ __reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		name = POSIX_ACL_XATTR_ACCESS;
+		if (acl) {
+			error = posix_acl_equiv_mode(acl, &inode->i_mode);
+			if (error < 0)
+				return error;
+			else {
+				if (error == 0)
+					acl = NULL;
+			}
+		}
 		break;
 	case ACL_TYPE_DEFAULT:
 		name = POSIX_ACL_XATTR_DEFAULT;
@@ -305,31 +320,6 @@ __reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
 	return error;
 }
 
-/*
- * Inode operation set_posix_acl().
- *
- * inode->i_mutex: down
- */
-static int
-reiserfs_set_acl(struct reiserfs_transaction_handle *th, struct inode *inode,
-		 int type, struct posix_acl *acl)
-{
-	int error;
-	int update_mode = 0;
-	umode_t mode = inode->i_mode;
-
-	if (type == ACL_TYPE_ACCESS && acl) {
-		error = posix_acl_update_mode(inode, &mode, &acl);
-		if (error)
-			return error;
-		update_mode = 1;
-	}
-	error = __reiserfs_set_acl(th, inode, type, acl);
-	if (!error && update_mode)
-		inode->i_mode = mode;
-	return error;
-}
-
 /* dir->i_mutex: locked,
  * inode is new and not released into the wild yet */
 int
@@ -364,8 +354,8 @@ reiserfs_inherit_default_acl(struct reiserfs_transaction_handle *th,
 	if (acl) {
 		/* Copy the default ACL to the default ACL of a new directory */
 		if (S_ISDIR(inode->i_mode)) {
-			err = __reiserfs_set_acl(th, inode, ACL_TYPE_DEFAULT,
-						 acl);
+			err = reiserfs_set_acl(th, inode, ACL_TYPE_DEFAULT,
+					       acl);
 			if (err)
 				goto cleanup;
 		}
@@ -378,7 +368,7 @@ reiserfs_inherit_default_acl(struct reiserfs_transaction_handle *th,
 
 		/* If we need an ACL.. */
 		if (err > 0)
-			err = __reiserfs_set_acl(th, inode, ACL_TYPE_ACCESS, acl);
+			err = reiserfs_set_acl(th, inode, ACL_TYPE_ACCESS, acl);
 	      cleanup:
 		posix_acl_release(acl);
 	} else {

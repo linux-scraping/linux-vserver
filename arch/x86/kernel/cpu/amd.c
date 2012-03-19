@@ -351,6 +351,13 @@ static void __cpuinit srat_detect_node(struct cpuinfo_x86 *c)
 	if (node == NUMA_NO_NODE)
 		node = per_cpu(cpu_llc_id, cpu);
 
+	/*
+	 * If core numbers are inconsistent, it's likely a multi-fabric platform,
+	 * so invoke platform-specific handler
+	 */
+	if (c->phys_proc_id != node)
+		x86_cpuinit.fixup_cpu_id(c, node);
+
 	if (!node_online(node)) {
 		/*
 		 * Two possibilities here:
@@ -408,16 +415,6 @@ static void __cpuinit early_init_amd_mc(struct cpuinfo_x86 *c)
 
 	c->x86_coreid_bits = bits;
 #endif
-
-	/* F16h erratum 793, CVE-2013-6885 */
-	if (c->x86 == 0x16 && c->x86_model <= 0xf) {
-		u64 val;
-
-		if (!rdmsrl_amd_safe(MSR_AMD64_LS_CFG, &val) &&
-		    !(val & BIT(15)))
-			wrmsrl_amd_safe(MSR_AMD64_LS_CFG, val | BIT(15));
-	}
-
 }
 
 static void __cpuinit bsp_init_amd(struct cpuinfo_x86 *c)
@@ -479,13 +476,6 @@ static void __cpuinit early_init_amd(struct cpuinfo_x86 *c)
 			set_cpu_cap(c, X86_FEATURE_EXTD_APICID);
 	}
 #endif
-
-	/*
-	 * This is only needed to tell the kernel whether to use VMCALL
-	 * and VMMCALL.  VMMCALL is never executed except under virt, so
-	 * we can set it unconditionally.
-	 */
-	set_cpu_cap(c, X86_FEATURE_VMMCALL);
 }
 
 static void __cpuinit init_amd(struct cpuinfo_x86 *c)
@@ -583,38 +573,6 @@ static void __cpuinit init_amd(struct cpuinfo_x86 *c)
 			   a fallback anyways. */
 			strcpy(c->x86_model_id, "Hammer");
 			break;
-		}
-	}
-
-	/* re-enable TopologyExtensions if switched off by BIOS */
-	if ((c->x86 == 0x15) &&
-	    (c->x86_model >= 0x10) && (c->x86_model <= 0x1f) &&
-	    !cpu_has(c, X86_FEATURE_TOPOEXT)) {
-		u64 val;
-
-		if (!rdmsrl_amd_safe(0xc0011005, &val)) {
-			val |= 1ULL << 54;
-			wrmsrl_amd_safe(0xc0011005, val);
-			rdmsrl(0xc0011005, val);
-			if (val & (1ULL << 54)) {
-				set_cpu_cap(c, X86_FEATURE_TOPOEXT);
-				printk(KERN_INFO FW_INFO "CPU: Re-enabling "
-				  "disabled Topology Extensions Support\n");
-			}
-		}
-	}
-
-	/*
-	 * The way access filter has a performance penalty on some workloads.
-	 * Disable it on the affected CPUs.
-	 */
-	if ((c->x86 == 0x15) &&
-	    (c->x86_model >= 0x02) && (c->x86_model < 0x20)) {
-		u64 val;
-
-		if (!rdmsrl_safe(0xc0011021, &val) && !(val & 0x1E)) {
-			val |= 0x1E;
-			checking_wrmsrl(0xc0011021, val);
 		}
 	}
 

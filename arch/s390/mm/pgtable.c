@@ -33,17 +33,6 @@
 #define FRAG_MASK	0x03
 #endif
 
-unsigned long VMALLOC_START = VMALLOC_END - VMALLOC_SIZE;
-EXPORT_SYMBOL(VMALLOC_START);
-
-static int __init parse_vmalloc(char *arg)
-{
-	if (!arg)
-		return -EINVAL;
-	VMALLOC_START = (VMALLOC_END - memparse(arg, &arg)) & PAGE_MASK;
-	return 0;
-}
-early_param("vmalloc", parse_vmalloc);
 
 unsigned long *crst_table_alloc(struct mm_struct *mm)
 {
@@ -97,6 +86,7 @@ repeat:
 		crst_table_free(mm, table);
 	if (mm->context.asce_limit < limit)
 		goto repeat;
+	update_mm(mm, current);
 	return 0;
 }
 
@@ -104,6 +94,9 @@ void crst_table_downgrade(struct mm_struct *mm, unsigned long limit)
 {
 	pgd_t *pgd;
 
+	if (mm->context.asce_limit <= limit)
+		return;
+	__tlb_flush_mm(mm);
 	while (mm->context.asce_limit > limit) {
 		pgd = mm->pgd;
 		switch (pgd_val(*pgd) & _REGION_ENTRY_TYPE_MASK) {
@@ -126,6 +119,7 @@ void crst_table_downgrade(struct mm_struct *mm, unsigned long limit)
 		mm->task_size = mm->context.asce_limit;
 		crst_table_free(mm, (unsigned long *) pgd);
 	}
+	update_mm(mm, current);
 }
 #endif
 
@@ -262,7 +256,10 @@ static int gmap_alloc_table(struct gmap *gmap,
 	struct page *page;
 	unsigned long *new;
 
+	/* since we dont free the gmap table until gmap_free we can unlock */
+	spin_unlock(&gmap->mm->page_table_lock);
 	page = alloc_pages(GFP_KERNEL, ALLOC_ORDER);
+	spin_lock(&gmap->mm->page_table_lock);
 	if (!page)
 		return -ENOMEM;
 	new = (unsigned long *) page_to_phys(page);
@@ -577,7 +574,7 @@ static inline void page_table_free_pgste(unsigned long *table)
 	page = pfn_to_page(__pa(table) >> PAGE_SHIFT);
 	mp = (struct gmap_pgtable *) page->index;
 	BUG_ON(!list_empty(&mp->mapper));
-	pgtable_page_ctor(page);
+	pgtable_page_dtor(page);
 	atomic_set(&page->_mapcount, -1);
 	kfree(mp);
 	__free_page(page);
@@ -682,6 +679,8 @@ void page_table_free(struct mm_struct *mm, unsigned long *table)
 	}
 }
 
+#ifdef CONFIG_HAVE_RCU_TABLE_FREE
+
 static void __page_table_free_rcu(void *table, unsigned bit)
 {
 	struct page *page;
@@ -735,66 +734,7 @@ void __tlb_remove_table(void *_table)
 		free_pages((unsigned long) table, ALLOC_ORDER);
 }
 
-static void tlb_remove_table_smp_sync(void *arg)
-{
-	/* Simply deliver the interrupt */
-}
-
-static void tlb_remove_table_one(void *table)
-{
-	/*
-	 * This isn't an RCU grace period and hence the page-tables cannot be
-	 * assumed to be actually RCU-freed.
-	 *
-	 * It is however sufficient for software page-table walkers that rely
-	 * on IRQ disabling. See the comment near struct mmu_table_batch.
-	 */
-	smp_call_function(tlb_remove_table_smp_sync, NULL, 1);
-	__tlb_remove_table(table);
-}
-
-static void tlb_remove_table_rcu(struct rcu_head *head)
-{
-	struct mmu_table_batch *batch;
-	int i;
-
-	batch = container_of(head, struct mmu_table_batch, rcu);
-
-	for (i = 0; i < batch->nr; i++)
-		__tlb_remove_table(batch->tables[i]);
-
-	free_page((unsigned long)batch);
-}
-
-void tlb_table_flush(struct mmu_gather *tlb)
-{
-	struct mmu_table_batch **batch = &tlb->batch;
-
-	if (*batch) {
-		__tlb_flush_mm(tlb->mm);
-		call_rcu_sched(&(*batch)->rcu, tlb_remove_table_rcu);
-		*batch = NULL;
-	}
-}
-
-void tlb_remove_table(struct mmu_gather *tlb, void *table)
-{
-	struct mmu_table_batch **batch = &tlb->batch;
-
-	if (*batch == NULL) {
-		*batch = (struct mmu_table_batch *)
-			__get_free_page(GFP_NOWAIT | __GFP_NOWARN);
-		if (*batch == NULL) {
-			__tlb_flush_mm(tlb->mm);
-			tlb_remove_table_one(table);
-			return;
-		}
-		(*batch)->nr = 0;
-	}
-	(*batch)->tables[(*batch)->nr++] = table;
-	if ((*batch)->nr == MAX_TABLE_BATCH)
-		tlb_table_flush(tlb);
-}
+#endif
 
 /*
  * switch on pgstes for its userspace process (for kvm)

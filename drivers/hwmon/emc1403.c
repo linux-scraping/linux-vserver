@@ -80,7 +80,7 @@ static ssize_t store_temp(struct device *dev,
 	unsigned long val;
 	int retval;
 
-	if (strict_strtoul(buf, 10, &val))
+	if (kstrtoul(buf, 10, &val))
 		return -EINVAL;
 	retval = i2c_smbus_write_byte_data(client, sda->index,
 					DIV_ROUND_CLOSEST(val, 1000));
@@ -98,7 +98,7 @@ static ssize_t store_bit(struct device *dev,
 	unsigned long val;
 	int retval;
 
-	if (strict_strtoul(buf, 10, &val))
+	if (kstrtoul(buf, 10, &val))
 		return -EINVAL;
 
 	mutex_lock(&data->mutex);
@@ -151,7 +151,7 @@ static ssize_t store_hyst(struct device *dev,
 	int hyst;
 	unsigned long val;
 
-	if (strict_strtoul(buf, 10, &val))
+	if (kstrtoul(buf, 10, &val))
 		return -EINVAL;
 
 	mutex_lock(&data->mutex);
@@ -159,7 +159,7 @@ static ssize_t store_hyst(struct device *dev,
 	if (retval < 0)
 		goto fail;
 
-	hyst = retval * 1000 - val;
+	hyst = val - retval * 1000;
 	hyst = DIV_ROUND_CLOSEST(hyst, 1000);
 	if (hyst < 0 || hyst > 255) {
 		retval = -ERANGE;
@@ -290,7 +290,7 @@ static int emc1403_detect(struct i2c_client *client,
 	}
 
 	id = i2c_smbus_read_byte_data(client, THERMAL_REVISION_REG);
-	if (id < 0x01 || id > 0x04)
+	if (id != 0x01)
 		return -ENODEV;
 
 	return 0;

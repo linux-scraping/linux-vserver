@@ -26,6 +26,7 @@
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/list.h>
+#include <linux/pm.h>
 
 #include "mcam-core.h"
 
@@ -175,6 +176,7 @@ static int mmpcam_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&cam->devlist);
 
 	mcam = &cam->mcam;
+	mcam->platform = MHP_Armada610;
 	mcam->plat_power_up = mmpcam_power_up;
 	mcam->plat_power_down = mmpcam_power_down;
 	mcam->dev = &pdev->dev;
@@ -309,10 +311,44 @@ static int mmpcam_platform_remove(struct platform_device *pdev)
 	return mmpcam_remove(cam);
 }
 
+/*
+ * Suspend/resume support.
+ */
+#ifdef CONFIG_PM
+
+static int mmpcam_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	struct mmp_camera *cam = mmpcam_find_device(pdev);
+
+	if (state.event != PM_EVENT_SUSPEND)
+		return 0;
+	mccic_suspend(&cam->mcam);
+	return 0;
+}
+
+static int mmpcam_resume(struct platform_device *pdev)
+{
+	struct mmp_camera *cam = mmpcam_find_device(pdev);
+
+	/*
+	 * Power up unconditionally just in case the core tries to
+	 * touch a register even if nothing was active before; trust
+	 * me, it's better this way.
+	 */
+	mmpcam_power_up(&cam->mcam);
+	return mccic_resume(&cam->mcam);
+}
+
+#endif
+
 
 static struct platform_driver mmpcam_driver = {
 	.probe		= mmpcam_probe,
 	.remove		= mmpcam_platform_remove,
+#ifdef CONFIG_PM
+	.suspend	= mmpcam_suspend,
+	.resume		= mmpcam_resume,
+#endif
 	.driver = {
 		.name	= "mmp-camera",
 		.owner	= THIS_MODULE

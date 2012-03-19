@@ -342,9 +342,8 @@ extern void lockdep_trace_alloc(gfp_t mask);
 #define lockdep_depth(tsk)	(debug_locks ? (tsk)->lockdep_depth : 0)
 
 #define lockdep_assert_held(l)	WARN_ON(debug_locks && !lockdep_is_held(l))
-#define lockdep_assert_held_once(l)	do {				\
-		WARN_ON_ONCE(debug_locks && !lockdep_is_held(l));	\
-	} while (0)
+
+#define lockdep_recursing(tsk)	((tsk)->lockdep_recursion)
 
 #else /* !LOCKDEP */
 
@@ -365,7 +364,6 @@ static inline void lockdep_on(void)
 # define lockdep_trace_alloc(g)			do { } while (0)
 # define lockdep_init()				do { } while (0)
 # define lockdep_info()				do { } while (0)
-
 # define lockdep_init_map(lock, name, key, sub) \
 		do { (void)(name); (void)(key); } while (0)
 # define lockdep_set_class(lock, key)		do { (void)(key); } while (0)
@@ -394,8 +392,9 @@ struct lock_class_key { };
 
 #define lockdep_depth(tsk)	(0)
 
-#define lockdep_assert_held(l)			do { (void)(l); } while (0)
-#define lockdep_assert_held_once(l)		do { (void)(l); } while (0)
+#define lockdep_assert_held(l)			do { } while (0)
+
+#define lockdep_recursing(tsk)			(0)
 
 #endif /* !LOCKDEP */
 

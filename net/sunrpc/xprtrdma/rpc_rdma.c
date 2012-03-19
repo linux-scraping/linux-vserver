@@ -338,9 +338,9 @@ rpcrdma_inline_pullup(struct rpc_rqst *rqst, int pad)
 			curlen = copy_len;
 		dprintk("RPC:       %s: page %d destp 0x%p len %d curlen %d\n",
 			__func__, i, destp, copy_len, curlen);
-		srcp = kmap_atomic(ppages[i]);
+		srcp = kmap_atomic(ppages[i], KM_SKB_SUNRPC_DATA);
 		memcpy(destp, srcp+page_base, curlen);
-		kunmap_atomic(srcp);
+		kunmap_atomic(srcp, KM_SKB_SUNRPC_DATA);
 		rqst->rq_svec[0].iov_len += curlen;
 		destp += curlen;
 		copy_len -= curlen;
@@ -639,10 +639,10 @@ rpcrdma_inline_fixup(struct rpc_rqst *rqst, char *srcp, int copy_len, int pad)
 			dprintk("RPC:       %s: page %d"
 				" srcp 0x%p len %d curlen %d\n",
 				__func__, i, srcp, copy_len, curlen);
-			destp = kmap_atomic(ppages[i]);
+			destp = kmap_atomic(ppages[i], KM_SKB_SUNRPC_DATA);
 			memcpy(destp + page_base, srcp, curlen);
 			flush_dcache_page(ppages[i]);
-			kunmap_atomic(destp);
+			kunmap_atomic(destp, KM_SKB_SUNRPC_DATA);
 			srcp += curlen;
 			copy_len -= curlen;
 			if (copy_len == 0)

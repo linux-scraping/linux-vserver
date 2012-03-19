@@ -763,16 +763,12 @@ void rtl92d_set_fw_rsvdpagepkt(struct ieee80211_hw *hw, bool dl_finished)
 		      "rtl92d_set_fw_rsvdpagepkt(): HW_VAR_SET_TX_CMD: ALL\n",
 		      u1RsvdPageLoc, 3);
 	skb = dev_alloc_skb(totalpacketlen);
-	if (!skb) {
-		dlok = false;
-	} else {
-		memcpy((u8 *) skb_put(skb, totalpacketlen),
-			&reserved_page_packet, totalpacketlen);
-		rtstatus = _rtl92d_cmd_send_packet(hw, skb);
+	memcpy((u8 *) skb_put(skb, totalpacketlen), &reserved_page_packet,
+		totalpacketlen);
+	rtstatus = _rtl92d_cmd_send_packet(hw, skb);
 
-		if (rtstatus)
-			dlok = true;
-	}
+	if (rtstatus)
+		dlok = true;
 	if (dlok) {
 		RT_TRACE(rtlpriv, COMP_POWER, DBG_LOUD,
 			("Set RSVD page location to Fw.\n"));

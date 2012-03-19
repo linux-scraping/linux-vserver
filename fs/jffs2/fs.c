@@ -186,7 +186,7 @@ int jffs2_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	int rc;
 
-	rc = setattr_prepare(dentry, iattr);
+	rc = inode_change_ok(dentry->d_inode, iattr);
 	if (rc)
 		return rc;
 
@@ -466,7 +466,6 @@ struct inode *jffs2_new_inode (struct inode *dir_i, umode_t mode, struct jffs2_r
 
 	if (insert_inode_locked(inode) < 0) {
 		make_bad_inode(inode);
-		unlock_new_inode(inode);
 		iput(inode);
 		return ERR_PTR(-EINVAL);
 	}

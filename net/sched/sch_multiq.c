@@ -107,7 +107,8 @@ static struct sk_buff *multiq_dequeue(struct Qdisc *sch)
 		/* Check that target subqueue is available before
 		 * pulling an skb to avoid head-of-line blocking.
 		 */
-		if (!__netif_subqueue_stopped(qdisc_dev(sch), q->curband)) {
+		if (!netif_xmit_stopped(
+		    netdev_get_tx_queue(qdisc_dev(sch), q->curband))) {
 			qdisc = q->queues[q->curband];
 			skb = qdisc->dequeue(qdisc);
 			if (skb) {
@@ -138,7 +139,8 @@ static struct sk_buff *multiq_peek(struct Qdisc *sch)
 		/* Check that target subqueue is available before
 		 * pulling an skb to avoid head-of-line blocking.
 		 */
-		if (!__netif_subqueue_stopped(qdisc_dev(sch), curband)) {
+		if (!netif_xmit_stopped(
+		    netdev_get_tx_queue(qdisc_dev(sch), curband))) {
 			qdisc = q->queues[curband];
 			skb = qdisc->ops->peek(qdisc);
 			if (skb)
@@ -250,7 +252,7 @@ static int multiq_tune(struct Qdisc *sch, struct nlattr *opt)
 static int multiq_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct multiq_sched_data *q = qdisc_priv(sch);
-	int i;
+	int i, err;
 
 	q->queues = NULL;
 
@@ -265,7 +267,12 @@ static int multiq_init(struct Qdisc *sch, struct nlattr *opt)
 	for (i = 0; i < q->max_bands; i++)
 		q->queues[i] = &noop_qdisc;
 
-	return multiq_tune(sch, opt);
+	err = multiq_tune(sch, opt);
+
+	if (err)
+		kfree(q->queues);
+
+	return err;
 }
 
 static int multiq_dump(struct Qdisc *sch, struct sk_buff *skb)

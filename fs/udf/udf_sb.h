@@ -50,7 +50,7 @@
 #define UDF_SPARABLE_MAP15		0x1522U
 #define UDF_METADATA_MAP25		0x2511U
 
-#define UDF_INVALID_MODE		((mode_t)-1)
+#define UDF_INVALID_MODE		((umode_t)-1)
 
 #pragma pack(1) /* XXX(hch): Why?  This file just defines in-core structures */
 
@@ -82,7 +82,7 @@ struct udf_virtual_data {
 struct udf_bitmap {
 	__u32			s_extLength;
 	__u32			s_extPosition;
-	int			s_nr_groups;
+	__u16			s_nr_groups;
 	struct buffer_head 	**s_block_bitmap;
 };
 
@@ -127,11 +127,11 @@ struct udf_sb_info {
 	struct buffer_head	*s_lvid_bh;
 
 	/* Default permissions */
-	mode_t			s_umask;
+	umode_t			s_umask;
 	gid_t			s_gid;
 	uid_t			s_uid;
-	mode_t			s_fmode;
-	mode_t			s_dmode;
+	umode_t			s_fmode;
+	umode_t			s_dmode;
 	/* Lock protecting consistency of above permission settings */
 	rwlock_t		s_cred_lock;
 

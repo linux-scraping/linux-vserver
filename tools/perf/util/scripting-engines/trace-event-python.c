@@ -29,6 +29,8 @@
 
 #include "../../perf.h"
 #include "../util.h"
+#include "../event.h"
+#include "../thread.h"
 #include "../trace-event.h"
 
 PyMODINIT_FUNC initperf_trace_context(void);
@@ -207,7 +209,7 @@ static inline struct event *find_cache_event(int type)
 static void python_process_event(union perf_event *pevent __unused,
 				 struct perf_sample *sample,
 				 struct perf_evsel *evsel __unused,
-				 struct perf_session *session __unused,
+				 struct machine *machine __unused,
 				 struct thread *thread)
 {
 	PyObject *handler, *retval, *context, *t, *obj, *dict = NULL;
@@ -465,7 +467,7 @@ static int python_generate_script(const char *outfile)
 	fprintf(ofp, "# be retrieved using Python functions of the form "
 		"common_*(context).\n");
 
-	fprintf(ofp, "# See the perf-script-python Documentation for the list "
+	fprintf(ofp, "# See the perf-trace-python Documentation for the list "
 		"of available functions.\n\n");
 
 	fprintf(ofp, "import os\n");

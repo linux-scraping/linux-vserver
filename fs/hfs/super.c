@@ -133,14 +133,14 @@ static int hfs_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
-static int hfs_show_options(struct seq_file *seq, struct vfsmount *mnt)
+static int hfs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	struct hfs_sb_info *sbi = HFS_SB(mnt->mnt_sb);
+	struct hfs_sb_info *sbi = HFS_SB(root->d_sb);
 
 	if (sbi->s_creator != cpu_to_be32(0x3f3f3f3f))
-		seq_show_option_n(seq, "creator", (char *)&sbi->s_creator, 4);
+		seq_printf(seq, ",creator=%.4s", (char *)&sbi->s_creator);
 	if (sbi->s_type != cpu_to_be32(0x3f3f3f3f))
-		seq_show_option_n(seq, "type", (char *)&sbi->s_type, 4);
+		seq_printf(seq, ",type=%.4s", (char *)&sbi->s_type);
 	seq_printf(seq, ",uid=%u,gid=%u", sbi->s_uid, sbi->s_gid);
 	if (sbi->s_file_umask != 0133)
 		seq_printf(seq, ",file_umask=%o", sbi->s_file_umask);
@@ -170,7 +170,6 @@ static struct inode *hfs_alloc_inode(struct super_block *sb)
 static void hfs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(hfs_inode_cachep, HFS_I(inode));
 }
 

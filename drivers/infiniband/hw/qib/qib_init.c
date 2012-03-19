@@ -765,6 +765,7 @@ static void qib_shutdown_device(struct qib_devdata *dd)
 		dd->f_quiet_serdes(ppd);
 	}
 
+	qib_update_eeprom_log(dd);
 }
 
 /**
@@ -1014,7 +1015,7 @@ static int __devinit qib_init_one(struct pci_dev *,
 #define DRIVER_LOAD_MSG "QLogic " QIB_DRV_NAME " loaded: "
 #define PFX QIB_DRV_NAME ": "
 
-static const struct pci_device_id qib_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(qib_pci_tbl) = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_PATHSCALE, PCI_DEVICE_ID_QLOGIC_IB_6120) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_IB_7220) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_IB_7322) },

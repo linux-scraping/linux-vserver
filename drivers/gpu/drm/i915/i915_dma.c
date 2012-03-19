@@ -781,6 +781,9 @@ static int i915_getparam(struct drm_device *dev, void *data,
 	case I915_PARAM_HAS_RELAXED_DELTA:
 		value = 1;
 		break;
+	case I915_PARAM_HAS_GEN7_SOL_RESET:
+		value = 1;
+		break;
 	default:
 		DRM_DEBUG_DRIVER("Unknown parameter %d\n",
 				 param->param);
@@ -1890,27 +1893,6 @@ ips_ping_for_i915_load(void)
 	}
 }
 
-static void i915_kick_out_firmware_fb(struct drm_i915_private *dev_priv)
-{
-	struct apertures_struct *ap;
-	struct pci_dev *pdev = dev_priv->dev->pdev;
-	bool primary;
-
-	ap = alloc_apertures(1);
-	if (!ap)
-		return;
-
-	ap->ranges[0].base = dev_priv->dev->agp->base;
-	ap->ranges[0].size =
-		dev_priv->mm.gtt->gtt_mappable_entries << PAGE_SHIFT;
-	primary =
-		pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
-
-	remove_conflicting_framebuffers(ap, "inteldrmfb", primary);
-
-	kfree(ap);
-}
-
 /**
  * i915_driver_load - setup chip and create an initial config
  * @dev: DRM device
@@ -1948,15 +1930,6 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 		goto free_priv;
 	}
 
-	dev_priv->mm.gtt = intel_gtt_get();
-	if (!dev_priv->mm.gtt) {
-		DRM_ERROR("Failed to initialize GTT\n");
-		ret = -ENODEV;
-		goto put_bridge;
-	}
-
-	i915_kick_out_firmware_fb(dev_priv);
-
 	/* overlay on gen2 is broken and can't address above 1G */
 	if (IS_GEN2(dev))
 		dma_set_coherent_mask(&dev->pdev->dev, DMA_BIT_MASK(30));
@@ -1978,6 +1951,13 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 		DRM_ERROR("failed to map registers\n");
 		ret = -EIO;
 		goto put_bridge;
+	}
+
+	dev_priv->mm.gtt = intel_gtt_get();
+	if (!dev_priv->mm.gtt) {
+		DRM_ERROR("Failed to initialize GTT\n");
+		ret = -ENODEV;
+		goto out_rmmap;
 	}
 
 	agp_size = dev_priv->mm.gtt->gtt_mappable_entries << PAGE_SHIFT;
@@ -2059,12 +2039,10 @@ int i915_driver_load(struct drm_device *dev, unsigned long flags)
 	 * and the registers being closely associated.
 	 *
 	 * According to chipset errata, on the 965GM, MSI interrupts may
-	 * be lost or delayed, and was defeatured. MSI interrupts seem to
-	 * get lost on g4x as well, and interrupt delivery seems to stay
-	 * properly dead afterwards. So we'll just disable them for all
-	 * pre-gen5 chipsets.
+	 * be lost or delayed, but we use them anyways to avoid
+	 * stuck interrupts on some machines.
 	 */
-	if (INTEL_INFO(dev)->gen >= 5)
+	if (!IS_I945G(dev) && !IS_I945GM(dev))
 		pci_enable_msi(dev->pdev);
 
 	spin_lock_init(&dev_priv->gt_lock);
@@ -2331,6 +2309,8 @@ struct drm_ioctl_desc i915_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(I915_GEM_MADVISE, i915_gem_madvise_ioctl, DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(I915_OVERLAY_PUT_IMAGE, intel_overlay_put_image, DRM_MASTER|DRM_CONTROL_ALLOW|DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(I915_OVERLAY_ATTRS, intel_overlay_attrs, DRM_MASTER|DRM_CONTROL_ALLOW|DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(I915_SET_SPRITE_COLORKEY, intel_sprite_set_colorkey, DRM_MASTER|DRM_CONTROL_ALLOW|DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(I915_GET_SPRITE_COLORKEY, intel_sprite_get_colorkey, DRM_MASTER|DRM_CONTROL_ALLOW|DRM_UNLOCKED),
 };
 
 int i915_max_ioctl = DRM_ARRAY_SIZE(i915_ioctls);

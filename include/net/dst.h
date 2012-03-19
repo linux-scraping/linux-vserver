@@ -54,8 +54,6 @@ struct dst_entry {
 #define DST_NOCACHE		0x0010
 #define DST_NOCOUNT		0x0020
 #define DST_NOPEER		0x0040
-#define DST_FAKE_RTABLE		0x0080
-#define DST_XFRM_TUNNEL		0x0100
 
 	short			error;
 	short			obsolete;
@@ -89,12 +87,12 @@ struct dst_entry {
 	};
 };
 
-static inline struct neighbour *dst_get_neighbour(struct dst_entry *dst)
+static inline struct neighbour *dst_get_neighbour_noref(struct dst_entry *dst)
 {
 	return rcu_dereference(dst->_neighbour);
 }
 
-static inline struct neighbour *dst_get_neighbour_raw(struct dst_entry *dst)
+static inline struct neighbour *dst_get_neighbour_noref_raw(struct dst_entry *dst)
 {
 	return rcu_dereference_raw(dst->_neighbour);
 }
@@ -395,7 +393,7 @@ static inline void dst_confirm(struct dst_entry *dst)
 		struct neighbour *n;
 
 		rcu_read_lock();
-		n = dst_get_neighbour(dst);
+		n = dst_get_neighbour_noref(dst);
 		neigh_confirm(n);
 		rcu_read_unlock();
 	}
@@ -459,22 +457,10 @@ static inline struct dst_entry *xfrm_lookup(struct net *net,
 {
 	return dst_orig;
 } 
-
-static inline struct xfrm_state *dst_xfrm(const struct dst_entry *dst)
-{
-	return NULL;
-}
-
 #else
 extern struct dst_entry *xfrm_lookup(struct net *net, struct dst_entry *dst_orig,
 				     const struct flowi *fl, struct sock *sk,
 				     int flags);
-
-/* skb attached with this dst needs transformation if dst->xfrm is valid */
-static inline struct xfrm_state *dst_xfrm(const struct dst_entry *dst)
-{
-	return dst->xfrm;
-}
 #endif
 
 #endif /* _NET_DST_H */

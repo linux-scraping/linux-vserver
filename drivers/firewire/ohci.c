@@ -2748,7 +2748,7 @@ static int handle_ir_buffer_fill(struct context *context,
 		container_of(context, struct iso_context, context);
 	u32 buffer_dma;
 
-	if (last->res_count != 0)
+	if (!last->transfer_status)
 		/* Descriptor(s) not done yet, stop iteration */
 		return 0;
 
@@ -2762,7 +2762,8 @@ static int handle_ir_buffer_fill(struct context *context,
 	if (le16_to_cpu(last->control) & DESCRIPTOR_IRQ_ALWAYS)
 		ctx->base.callback.mc(&ctx->base,
 				      le32_to_cpu(last->data_address) +
-				      le16_to_cpu(last->req_count),
+				      le16_to_cpu(last->req_count) -
+				      le16_to_cpu(last->res_count),
 				      ctx->base.callback_data);
 
 	return 1;
@@ -3547,11 +3548,6 @@ static int __devinit pci_probe(struct pci_dev *dev,
 
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskSet, ~0);
 	ohci->it_context_support = reg_read(ohci, OHCI1394_IsoXmitIntMaskSet);
-	/* JMicron JMB38x often shows 0 at first read, just ignore it */
-	if (!ohci->it_context_support) {
-		fw_notify("overriding IsoXmitIntMask\n");
-		ohci->it_context_support = 0xf;
-	}
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskClear, ~0);
 	ohci->it_context_mask = ohci->it_context_support;
 	ohci->n_it = hweight32(ohci->it_context_mask);

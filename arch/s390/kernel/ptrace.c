@@ -20,8 +20,8 @@
 #include <linux/regset.h>
 #include <linux/tracehook.h>
 #include <linux/seccomp.h>
-#include <linux/vs_base.h>
 #include <linux/compat.h>
+#include <linux/vs_base.h>
 #include <trace/syscall.h>
 #include <asm/segment.h>
 #include <asm/page.h>
@@ -293,9 +293,7 @@ static int __poke_user(struct task_struct *child, addr_t addr, addr_t data)
 		 * psw and gprs are stored on the stack
 		 */
 		if (addr == (addr_t) &dummy->regs.psw.mask &&
-		    (((data^psw_user_bits) & ~PSW_MASK_USER) ||
-		     (((data^psw_user_bits) & PSW_MASK_ASC) &&
-		      ((data|psw_user_bits) & PSW_MASK_ASC) == PSW_MASK_ASC) ||
+		    ((data & ~PSW_MASK_USER) != psw_user_bits ||
 		     ((data & PSW_MASK_EA) && !(data & PSW_MASK_BA))))
 			/* Invalid psw mask. */
 			return -EINVAL;
@@ -598,10 +596,7 @@ static int __poke_user_compat(struct task_struct *child,
 		 */
 		if (addr == (addr_t) &dummy32->regs.psw.mask) {
 			/* Build a 64 bit psw mask from 31 bit mask. */
-			if (((tmp^psw32_user_bits) & ~PSW32_MASK_USER) ||
-			    (((tmp^psw32_user_bits) & PSW32_MASK_ASC) &&
-			     ((tmp|psw32_user_bits) & PSW32_MASK_ASC)
-			     == PSW32_MASK_ASC))
+			if ((tmp & ~PSW32_MASK_USER) != psw32_user_bits)
 				/* Invalid psw mask. */
 				return -EINVAL;
 			regs->psw.mask = (regs->psw.mask & ~PSW_MASK_USER) |
@@ -746,20 +741,17 @@ asmlinkage long do_syscall_trace_enter(struct pt_regs *regs)
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 		trace_sys_enter(regs, regs->gprs[2]);
 
-	if (unlikely(current->audit_context))
-		audit_syscall_entry(is_compat_task() ?
-					AUDIT_ARCH_S390 : AUDIT_ARCH_S390X,
-				    regs->gprs[2], regs->orig_gpr2,
-				    regs->gprs[3], regs->gprs[4],
-				    regs->gprs[5]);
+	audit_syscall_entry(is_compat_task() ?
+				AUDIT_ARCH_S390 : AUDIT_ARCH_S390X,
+			    regs->gprs[2], regs->orig_gpr2,
+			    regs->gprs[3], regs->gprs[4],
+			    regs->gprs[5]);
 	return ret ?: regs->gprs[2];
 }
 
 asmlinkage void do_syscall_trace_exit(struct pt_regs *regs)
 {
-	if (unlikely(current->audit_context))
-		audit_syscall_exit(AUDITSC_RESULT(regs->gprs[2]),
-				   regs->gprs[2]);
+	audit_syscall_exit(regs);
 
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 		trace_sys_exit(regs, regs->gprs[2]);

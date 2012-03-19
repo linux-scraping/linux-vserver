@@ -1894,8 +1894,7 @@ static struct iscsi_endpoint *bnx2i_ep_connect(struct Scsi_Host *shost,
 
 	bnx2i_ep_active_list_add(hba, bnx2i_ep);
 
-	rc = bnx2i_map_ep_dbell_regs(bnx2i_ep);
-	if (rc)
+	if (bnx2i_map_ep_dbell_regs(bnx2i_ep))
 		goto del_active_ep;
 
 	mutex_unlock(&hba->net_dev_lock);
@@ -2178,7 +2177,7 @@ static int bnx2i_nl_set_path(struct Scsi_Host *shost, struct iscsi_path *params)
 	return 0;
 }
 
-static mode_t bnx2i_attr_is_visible(int param_type, int param)
+static umode_t bnx2i_attr_is_visible(int param_type, int param)
 {
 	switch (param_type) {
 	case ISCSI_HOST_PARAM:

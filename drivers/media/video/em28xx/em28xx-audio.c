@@ -193,7 +193,7 @@ static int em28xx_init_audio_isoc(struct em28xx *dev)
 
 		urb->dev = dev->udev;
 		urb->context = dev;
-		urb->pipe = usb_rcvisocpipe(dev->udev, 0x83);
+		urb->pipe = usb_rcvisocpipe(dev->udev, EM28XX_EP_AUDIO);
 		urb->transfer_flags = URB_ISO_ASAP;
 		urb->transfer_buffer = dev->adev.transfer_buffer[i];
 		urb->interval = 1;
@@ -507,7 +507,7 @@ static int em28xx_vol_get(struct snd_kcontrol *kcontrol,
 		val, (int)kcontrol->private_value);
 
 	value->value.integer.value[0] = 0x1f - (val & 0x1f);
-	value->value.integer.value[1] = 0x1f - ((val >> 8) & 0x1f);
+	value->value.integer.value[1] = 0x1f - ((val << 8) & 0x1f);
 
 	return 0;
 }

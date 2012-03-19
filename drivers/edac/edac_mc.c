@@ -25,7 +25,6 @@
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <linux/sysdev.h>
 #include <linux/ctype.h>
 #include <linux/edac.h>
 #include <asm/uaccess.h>
@@ -323,8 +322,7 @@ static void edac_mc_workq_function(struct work_struct *work_req)
  *
  *		called with the mem_ctls_mutex held
  */
-static void edac_mc_workq_setup(struct mem_ctl_info *mci, unsigned msec,
-				bool init)
+static void edac_mc_workq_setup(struct mem_ctl_info *mci, unsigned msec)
 {
 	debugf0("%s()\n", __func__);
 
@@ -332,9 +330,7 @@ static void edac_mc_workq_setup(struct mem_ctl_info *mci, unsigned msec,
 	if (mci->op_state != OP_RUNNING_POLL)
 		return;
 
-	if (init)
-		INIT_DELAYED_WORK(&mci->work, edac_mc_workq_function);
-
+	INIT_DELAYED_WORK(&mci->work, edac_mc_workq_function);
 	queue_delayed_work(edac_workqueue, &mci->work, msecs_to_jiffies(msec));
 }
 
@@ -348,10 +344,19 @@ static void edac_mc_workq_setup(struct mem_ctl_info *mci, unsigned msec,
  */
 static void edac_mc_workq_teardown(struct mem_ctl_info *mci)
 {
-	mci->op_state = OP_OFFLINE;
+	int status;
 
-	cancel_delayed_work_sync(&mci->work);
-	flush_workqueue(edac_workqueue);
+	if (mci->op_state != OP_RUNNING_POLL)
+		return;
+
+	status = cancel_delayed_work(&mci->work);
+	if (status == 0) {
+		debugf0("%s() not canceled, flush the queue\n",
+			__func__);
+
+		/* workq instance might be running, wait for it */
+		flush_workqueue(edac_workqueue);
+	}
 }
 
 /*
@@ -385,7 +390,7 @@ void edac_mc_reset_delay_period(int value)
 	list_for_each(item, &mc_devices) {
 		mci = list_entry(item, struct mem_ctl_info, link);
 
-		edac_mc_workq_setup(mci, value, false);
+		edac_mc_workq_setup(mci, (unsigned long) value);
 	}
 
 	mutex_unlock(&mem_ctls_mutex);
@@ -533,7 +538,7 @@ int edac_mc_add_mc(struct mem_ctl_info *mci)
 		/* This instance is NOW RUNNING */
 		mci->op_state = OP_RUNNING_POLL;
 
-		edac_mc_workq_setup(mci, edac_mc_get_poll_msec(), true);
+		edac_mc_workq_setup(mci, edac_mc_get_poll_msec());
 	} else {
 		mci->op_state = OP_RUNNING_INTERRUPT;
 	}

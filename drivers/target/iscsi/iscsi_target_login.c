@@ -23,7 +23,7 @@
 #include <linux/crypto.h>
 #include <scsi/iscsi_proto.h>
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
+#include <target/target_core_fabric.h>
 
 #include "iscsi_target_core.h"
 #include "iscsi_target_tq.h"
@@ -44,7 +44,6 @@ extern spinlock_t sess_idr_lock;
 
 static int iscsi_login_init_conn(struct iscsi_conn *conn)
 {
-	init_waitqueue_head(&conn->queues_wq);
 	INIT_LIST_HEAD(&conn->conn_list);
 	INIT_LIST_HEAD(&conn->conn_cmd_list);
 	INIT_LIST_HEAD(&conn->immed_queue_list);
@@ -130,13 +129,13 @@ int iscsi_check_for_session_reinstatement(struct iscsi_conn *conn)
 
 	initiatorname_param = iscsi_find_param_from_key(
 			INITIATORNAME, conn->param_list);
+	if (!initiatorname_param)
+		return -1;
+
 	sessiontype_param = iscsi_find_param_from_key(
 			SESSIONTYPE, conn->param_list);
-	if (!initiatorname_param || !sessiontype_param) {
-		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_INITIATOR_ERR,
-			ISCSI_LOGIN_STATUS_MISSING_FIELDS);
+	if (!sessiontype_param)
 		return -1;
-	}
 
 	sessiontype = (strncmp(sessiontype_param->value, NORMAL, 6)) ? 1 : 0;
 
@@ -144,7 +143,7 @@ int iscsi_check_for_session_reinstatement(struct iscsi_conn *conn)
 	list_for_each_entry_safe(se_sess, se_sess_tmp, &se_tpg->tpg_sess_list,
 			sess_list) {
 
-		sess_p = (struct iscsi_session *)se_sess->fabric_sess_ptr;
+		sess_p = se_sess->fabric_sess_ptr;
 		spin_lock(&sess_p->conn_lock);
 		if (atomic_read(&sess_p->session_fall_back_to_erl0) ||
 		    atomic_read(&sess_p->session_logout) ||
@@ -152,9 +151,9 @@ int iscsi_check_for_session_reinstatement(struct iscsi_conn *conn)
 			spin_unlock(&sess_p->conn_lock);
 			continue;
 		}
-		if (!memcmp((void *)sess_p->isid, (void *)conn->sess->isid, 6) &&
-		   (!strcmp((void *)sess_p->sess_ops->InitiatorName,
-			    (void *)initiatorname_param->value) &&
+		if (!memcmp(sess_p->isid, conn->sess->isid, 6) &&
+		   (!strcmp(sess_p->sess_ops->InitiatorName,
+			    initiatorname_param->value) &&
 		   (sess_p->sess_ops->SessionType == sessiontype))) {
 			atomic_set(&sess_p->session_reinstatement, 1);
 			spin_unlock(&sess_p->conn_lock);
@@ -230,7 +229,7 @@ static int iscsi_login_zero_tsih_s1(
 
 	iscsi_login_set_conn_values(sess, conn, pdu->cid);
 	sess->init_task_tag	= pdu->itt;
-	memcpy((void *)&sess->isid, (void *)pdu->isid, 6);
+	memcpy(&sess->isid, pdu->isid, 6);
 	sess->exp_cmd_sn	= pdu->cmdsn;
 	INIT_LIST_HEAD(&sess->sess_conn_list);
 	INIT_LIST_HEAD(&sess->sess_ooo_cmdsn_list);
@@ -441,8 +440,7 @@ static int iscsi_login_non_zero_tsih_s2(
 		    atomic_read(&sess_p->session_logout) ||
 		   (sess_p->time2retain_timer_flags & ISCSI_TF_EXPIRED))
 			continue;
-		if (!memcmp((const void *)sess_p->isid,
-		     (const void *)pdu->isid, 6) &&
+		if (!memcmp(sess_p->isid, pdu->isid, 6) &&
 		     (sess_p->tsih == pdu->tsih)) {
 			iscsit_inc_session_usage_count(sess_p);
 			iscsit_stop_time2retain_timer(sess_p);
@@ -655,7 +653,7 @@ static int iscsi_post_login_handler(
 
 	spin_lock_bh(&se_tpg->session_lock);
 	__transport_register_session(&sess->tpg->tpg_se_tpg,
-			se_sess->se_node_acl, se_sess, (void *)sess);
+			se_sess->se_node_acl, se_sess, sess);
 	pr_debug("Moving to TARG_SESS_STATE_LOGGED_IN.\n");
 	sess->session_state = TARG_SESS_STATE_LOGGED_IN;
 
@@ -794,10 +792,26 @@ int iscsi_target_setup_login_socket(
 	}
 	np->np_socket = sock;
 	/*
+	 * The SCTP stack needs struct socket->file.
+	 */
+	if ((np->np_network_transport == ISCSI_SCTP_TCP) ||
+	    (np->np_network_transport == ISCSI_SCTP_UDP)) {
+		if (!sock->file) {
+			sock->file = kzalloc(sizeof(struct file), GFP_KERNEL);
+			if (!sock->file) {
+				pr_err("Unable to allocate struct"
+						" file for SCTP\n");
+				ret = -ENOMEM;
+				goto fail;
+			}
+			np->np_flags |= NPF_SCTP_STRUCT_FILE;
+		}
+	}
+	/*
 	 * Setup the np->np_sockaddr from the passed sockaddr setup
 	 * in iscsi_target_configfs.c code..
 	 */
-	memcpy((void *)&np->np_sockaddr, (void *)sockaddr,
+	memcpy(&np->np_sockaddr, sockaddr,
 			sizeof(struct __kernel_sockaddr_storage));
 
 	if (sockaddr->ss_family == AF_INET6)
@@ -807,6 +821,7 @@ int iscsi_target_setup_login_socket(
 	/*
 	 * Set SO_REUSEADDR, and disable Nagel Algorithm with TCP_NODELAY.
 	 */
+	/* FIXME: Someone please explain why this is endian-safe */
 	opt = 1;
 	if (np->np_network_transport == ISCSI_TCP) {
 		ret = kernel_setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
@@ -818,10 +833,19 @@ int iscsi_target_setup_login_socket(
 		}
 	}
 
+	/* FIXME: Someone please explain why this is endian-safe */
 	ret = kernel_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
 			(char *)&opt, sizeof(opt));
 	if (ret < 0) {
 		pr_err("kernel_setsockopt() for SO_REUSEADDR"
+			" failed\n");
+		goto fail;
+	}
+
+	ret = kernel_setsockopt(sock, IPPROTO_IP, IP_FREEBIND,
+			(char *)&opt, sizeof(opt));
+	if (ret < 0) {
+		pr_err("kernel_setsockopt() for IP_FREEBIND"
 			" failed\n");
 		goto fail;
 	}
@@ -842,15 +866,21 @@ int iscsi_target_setup_login_socket(
 
 fail:
 	np->np_socket = NULL;
-	if (sock)
+	if (sock) {
+		if (np->np_flags & NPF_SCTP_STRUCT_FILE) {
+			kfree(sock->file);
+			sock->file = NULL;
+		}
+
 		sock_release(sock);
+	}
 	return ret;
 }
 
 static int __iscsi_target_login_thread(struct iscsi_np *np)
 {
 	u8 buffer[ISCSI_HDR_LEN], iscsi_opcode, zero_tsih = 0;
-	int err, ret = 0, ip_proto, sock_type, stop;
+	int err, ret = 0, ip_proto, sock_type, set_sctp_conn_flag, stop;
 	struct iscsi_conn *conn = NULL;
 	struct iscsi_login *login;
 	struct iscsi_portal_group *tpg = NULL;
@@ -861,6 +891,7 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 	struct sockaddr_in6 sock_in6;
 
 	flush_signals(current);
+	set_sctp_conn_flag = 0;
 	sock = np->np_socket;
 	ip_proto = np->np_ip_proto;
 	sock_type = np->np_sock_type;
@@ -885,12 +916,35 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 		spin_unlock_bh(&np->np_thread_lock);
 		goto out;
 	}
+	/*
+	 * The SCTP stack needs struct socket->file.
+	 */
+	if ((np->np_network_transport == ISCSI_SCTP_TCP) ||
+	    (np->np_network_transport == ISCSI_SCTP_UDP)) {
+		if (!new_sock->file) {
+			new_sock->file = kzalloc(
+					sizeof(struct file), GFP_KERNEL);
+			if (!new_sock->file) {
+				pr_err("Unable to allocate struct"
+						" file for SCTP\n");
+				sock_release(new_sock);
+				/* Get another socket */
+				return 1;
+			}
+			set_sctp_conn_flag = 1;
+		}
+	}
+
 	iscsi_start_login_thread_timer(np);
 
 	conn = kzalloc(sizeof(struct iscsi_conn), GFP_KERNEL);
 	if (!conn) {
 		pr_err("Could not allocate memory for"
 			" new connection\n");
+		if (set_sctp_conn_flag) {
+			kfree(new_sock->file);
+			new_sock->file = NULL;
+		}
 		sock_release(new_sock);
 		/* Get another socket */
 		return 1;
@@ -899,6 +953,9 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 	pr_debug("Moving to TARG_CONN_STATE_FREE.\n");
 	conn->conn_state = TARG_CONN_STATE_FREE;
 	conn->sock = new_sock;
+
+	if (set_sctp_conn_flag)
+		conn->conn_flags |= CONNFLAG_SCTP_STRUCT_FILE;
 
 	pr_debug("Moving to TARG_CONN_STATE_XPT_UP.\n");
 	conn->conn_state = TARG_CONN_STATE_XPT_UP;
@@ -1147,8 +1204,13 @@ old_sess_out:
 		iscsi_release_param_list(conn->param_list);
 		conn->param_list = NULL;
 	}
-	if (conn->sock)
+	if (conn->sock) {
+		if (conn->conn_flags & CONNFLAG_SCTP_STRUCT_FILE) {
+			kfree(conn->sock->file);
+			conn->sock->file = NULL;
+		}
 		sock_release(conn->sock);
+	}
 	kfree(conn);
 
 	if (tpg) {
@@ -1176,7 +1238,7 @@ out:
 
 int iscsi_target_login_thread(void *arg)
 {
-	struct iscsi_np *np = (struct iscsi_np *)arg;
+	struct iscsi_np *np = arg;
 	int ret;
 
 	allow_signal(SIGINT);

@@ -163,7 +163,6 @@ struct atmel_mci {
 	void __iomem		*regs;
 
 	struct scatterlist	*sg;
-	unsigned int		sg_len;
 	unsigned int		pio_offset;
 
 	struct atmel_mci_slot	*cur_slot;
@@ -481,14 +480,7 @@ err:
 static inline unsigned int atmci_ns_to_clocks(struct atmel_mci *host,
 					unsigned int ns)
 {
-	/*
-	 * It is easier here to use us instead of ns for the timeout,
-	 * it prevents from overflows during calculation.
-	 */
-	unsigned int us = DIV_ROUND_UP(ns, 1000);
-
-	/* Maximum clock frequency is host->bus_hz/2 */
-	return us * (DIV_ROUND_UP(host->bus_hz, 2000000));
+	return (ns * (host->bus_hz / 1000000) + 999) / 1000;
 }
 
 static void atmci_set_timeout(struct atmel_mci *host,
@@ -752,7 +744,6 @@ static u32 atmci_prepare_data(struct atmel_mci *host, struct mmc_data *data)
 	data->error = -EINPROGRESS;
 
 	host->sg = data->sg;
-	host->sg_len = data->sg_len;
 	host->data = data;
 	host->data_chan = NULL;
 
@@ -832,6 +823,7 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 	struct scatterlist		*sg;
 	unsigned int			i;
 	enum dma_data_direction		direction;
+	enum dma_transfer_direction	slave_dirn;
 	unsigned int			sglen;
 	u32 iflags;
 
@@ -869,16 +861,19 @@ atmci_prepare_data_dma(struct atmel_mci *host, struct mmc_data *data)
 	if (host->caps.has_dma)
 		atmci_writel(host, ATMCI_DMA, ATMCI_DMA_CHKSIZE(3) | ATMCI_DMAEN);
 
-	if (data->flags & MMC_DATA_READ)
+	if (data->flags & MMC_DATA_READ) {
 		direction = DMA_FROM_DEVICE;
-	else
+		slave_dirn = DMA_DEV_TO_MEM;
+	} else {
 		direction = DMA_TO_DEVICE;
+		slave_dirn = DMA_MEM_TO_DEV;
+	}
 
 	sglen = dma_map_sg(chan->device->dev, data->sg,
 			data->sg_len, direction);
 
 	desc = chan->device->device_prep_slave_sg(chan,
-			data->sg, sglen, direction,
+			data->sg, sglen, slave_dirn,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!desc)
 		goto unmap_exit;
@@ -1014,21 +1009,10 @@ static void atmci_start_request(struct atmel_mci *host,
 	iflags |= ATMCI_CMDRDY;
 	cmd = mrq->cmd;
 	cmdflags = atmci_prepare_command(slot->mmc, cmd);
-
-	/*
-	 * DMA transfer should be started before sending the command to avoid
-	 * unexpected errors especially for read operations in SDIO mode.
-	 * Unfortunately, in PDC mode, command has to be sent before starting
-	 * the transfer.
-	 */
-	if (host->submit_data != &atmci_submit_data_dma)
-		atmci_send_command(host, cmd, cmdflags);
+	atmci_send_command(host, cmd, cmdflags);
 
 	if (data)
 		host->submit_data(host, data);
-
-	if (host->submit_data == &atmci_submit_data_dma)
-		atmci_send_command(host, cmd, cmdflags);
 
 	if (mrq->stop) {
 		host->stop_cmdr = atmci_prepare_command(slot->mmc, mrq->stop);
@@ -1586,8 +1570,7 @@ static void atmci_read_data_pio(struct atmel_mci *host)
 			if (offset == sg->length) {
 				flush_dcache_page(sg_page(sg));
 				host->sg = sg = sg_next(sg);
-				host->sg_len--;
-				if (!sg || !host->sg_len)
+				if (!sg)
 					goto done;
 
 				offset = 0;
@@ -1600,8 +1583,7 @@ static void atmci_read_data_pio(struct atmel_mci *host)
 
 			flush_dcache_page(sg_page(sg));
 			host->sg = sg = sg_next(sg);
-			host->sg_len--;
-			if (!sg || !host->sg_len)
+			if (!sg)
 				goto done;
 
 			offset = 4 - remaining;
@@ -1655,8 +1637,7 @@ static void atmci_write_data_pio(struct atmel_mci *host)
 			nbytes += 4;
 			if (offset == sg->length) {
 				host->sg = sg = sg_next(sg);
-				host->sg_len--;
-				if (!sg || !host->sg_len)
+				if (!sg)
 					goto done;
 
 				offset = 0;
@@ -1670,8 +1651,7 @@ static void atmci_write_data_pio(struct atmel_mci *host)
 			nbytes += remaining;
 
 			host->sg = sg = sg_next(sg);
-			host->sg_len--;
-			if (!sg || !host->sg_len) {
+			if (!sg) {
 				atmci_writel(host, ATMCI_TDR, value);
 				goto done;
 			}
@@ -2184,8 +2164,10 @@ static int __exit atmci_remove(struct platform_device *pdev)
 	atmci_readl(host, ATMCI_SR);
 	clk_disable(host->mck);
 
+#ifdef CONFIG_MMC_ATMELMCI_DMA
 	if (host->dma.chan)
 		dma_release_channel(host->dma.chan);
+#endif
 
 	free_irq(platform_get_irq(pdev, 0), host);
 	iounmap(host->regs);

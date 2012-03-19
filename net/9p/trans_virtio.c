@@ -26,6 +26,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/in.h>
 #include <linux/module.h>
 #include <linux/net.h>
@@ -37,7 +39,6 @@
 #include <linux/inet.h>
 #include <linux/idr.h>
 #include <linux/file.h>
-#include <linux/highmem.h>
 #include <linux/slab.h>
 #include <net/9p/9p.h>
 #include <linux/parser.h>
@@ -146,7 +147,7 @@ static void req_done(struct virtqueue *vq)
 	struct p9_req_t *req;
 	unsigned long flags;
 
-	P9_DPRINTK(P9_DEBUG_TRANS, ": request done\n");
+	p9_debug(P9_DEBUG_TRANS, ": request done\n");
 
 	while (1) {
 		spin_lock_irqsave(&chan->lock, flags);
@@ -159,8 +160,8 @@ static void req_done(struct virtqueue *vq)
 		spin_unlock_irqrestore(&chan->lock, flags);
 		/* Wakeup if anyone waiting for VirtIO ring space. */
 		wake_up(chan->vc_wq);
-		P9_DPRINTK(P9_DEBUG_TRANS, ": rc %p\n", rc);
-		P9_DPRINTK(P9_DEBUG_TRANS, ": lookup tag %d\n", rc->tag);
+		p9_debug(P9_DEBUG_TRANS, ": rc %p\n", rc);
+		p9_debug(P9_DEBUG_TRANS, ": lookup tag %d\n", rc->tag);
 		req = p9_tag_lookup(chan->client, rc->tag);
 		req->status = REQ_STATUS_RCVD;
 		p9_client_cb(chan->client, req);
@@ -258,7 +259,7 @@ p9_virtio_request(struct p9_client *client, struct p9_req_t *req)
 	unsigned long flags;
 	struct virtio_chan *chan = client->trans;
 
-	P9_DPRINTK(P9_DEBUG_TRANS, "9p debug: virtio request\n");
+	p9_debug(P9_DEBUG_TRANS, "9p debug: virtio request\n");
 
 	req->status = REQ_STATUS_SENT;
 req_retry:
@@ -271,30 +272,30 @@ req_retry:
 	in = pack_sg_list(chan->sg, out,
 			  VIRTQUEUE_NUM, req->rc->sdata, req->rc->capacity);
 
-	err = virtqueue_add_buf(chan->vq, chan->sg, out, in, req->tc);
+	err = virtqueue_add_buf(chan->vq, chan->sg, out, in, req->tc,
+				GFP_ATOMIC);
 	if (err < 0) {
 		if (err == -ENOSPC) {
 			chan->ring_bufs_avail = 0;
 			spin_unlock_irqrestore(&chan->lock, flags);
-			err = wait_event_killable(*chan->vc_wq,
-						  chan->ring_bufs_avail);
+			err = wait_event_interruptible(*chan->vc_wq,
+							chan->ring_bufs_avail);
 			if (err  == -ERESTARTSYS)
 				return err;
 
-			P9_DPRINTK(P9_DEBUG_TRANS, "9p:Retry virtio request\n");
+			p9_debug(P9_DEBUG_TRANS, "Retry virtio request\n");
 			goto req_retry;
 		} else {
 			spin_unlock_irqrestore(&chan->lock, flags);
-			P9_DPRINTK(P9_DEBUG_TRANS,
-					"9p debug: "
-					"virtio rpc add_buf returned failure");
+			p9_debug(P9_DEBUG_TRANS,
+				 "virtio rpc add_buf returned failure\n");
 			return -EIO;
 		}
 	}
 	virtqueue_kick(chan->vq);
 	spin_unlock_irqrestore(&chan->lock, flags);
 
-	P9_DPRINTK(P9_DEBUG_TRANS, "9p debug: virtio request kicked\n");
+	p9_debug(P9_DEBUG_TRANS, "virtio request kicked\n");
 	return 0;
 }
 
@@ -309,7 +310,7 @@ static int p9_get_mapped_pages(struct virtio_chan *chan,
 		 * Other zc request to finish here
 		 */
 		if (atomic_read(&vp_pinned) >= chan->p9_max_pages) {
-			err = wait_event_killable(vp_wq,
+			err = wait_event_interruptible(vp_wq,
 			      (atomic_read(&vp_pinned) < chan->p9_max_pages));
 			if (err == -ERESTARTSYS)
 				return err;
@@ -324,7 +325,7 @@ static int p9_get_mapped_pages(struct virtio_chan *chan,
 		int count = nr_pages;
 		while (nr_pages) {
 			s = rest_of_page(data);
-			pages[index++] = kmap_to_page(data);
+			pages[index++] = virt_to_page(data);
 			data += s;
 			nr_pages--;
 		}
@@ -355,7 +356,7 @@ p9_virtio_zc_request(struct p9_client *client, struct p9_req_t *req,
 	struct page **in_pages = NULL, **out_pages = NULL;
 	struct virtio_chan *chan = client->trans;
 
-	P9_DPRINTK(P9_DEBUG_TRANS, "9p debug: virtio request\n");
+	p9_debug(P9_DEBUG_TRANS, "virtio request\n");
 
 	if (uodata) {
 		out_nr_pages = p9_nr_pages(uodata, outlen);
@@ -414,31 +415,32 @@ req_retry_pinned:
 		in += pack_sg_list_p(chan->sg, out + in, VIRTQUEUE_NUM,
 				     in_pages, in_nr_pages, uidata, inlen);
 
-	err = virtqueue_add_buf(chan->vq, chan->sg, out, in, req->tc);
+	err = virtqueue_add_buf(chan->vq, chan->sg, out, in, req->tc,
+				GFP_ATOMIC);
 	if (err < 0) {
 		if (err == -ENOSPC) {
 			chan->ring_bufs_avail = 0;
 			spin_unlock_irqrestore(&chan->lock, flags);
-			err = wait_event_killable(*chan->vc_wq,
-						  chan->ring_bufs_avail);
+			err = wait_event_interruptible(*chan->vc_wq,
+						       chan->ring_bufs_avail);
 			if (err  == -ERESTARTSYS)
 				goto err_out;
 
-			P9_DPRINTK(P9_DEBUG_TRANS, "9p:Retry virtio request\n");
+			p9_debug(P9_DEBUG_TRANS, "Retry virtio request\n");
 			goto req_retry_pinned;
 		} else {
 			spin_unlock_irqrestore(&chan->lock, flags);
-			P9_DPRINTK(P9_DEBUG_TRANS,
-				   "9p debug: "
-				   "virtio rpc add_buf returned failure");
+			p9_debug(P9_DEBUG_TRANS,
+				 "virtio rpc add_buf returned failure\n");
 			err = -EIO;
 			goto err_out;
 		}
 	}
 	virtqueue_kick(chan->vq);
 	spin_unlock_irqrestore(&chan->lock, flags);
-	P9_DPRINTK(P9_DEBUG_TRANS, "9p debug: virtio request kicked\n");
-	err = wait_event_killable(*req->wq, req->status >= REQ_STATUS_RCVD);
+	p9_debug(P9_DEBUG_TRANS, "virtio request kicked\n");
+	err = wait_event_interruptible(*req->wq,
+				       req->status >= REQ_STATUS_RCVD);
 	/*
 	 * Non kernel buffers are pinned, unpin them
 	 */
@@ -491,7 +493,7 @@ static int p9_virtio_probe(struct virtio_device *vdev)
 
 	chan = kmalloc(sizeof(struct virtio_chan), GFP_KERNEL);
 	if (!chan) {
-		printk(KERN_ERR "9p: Failed to allocate virtio 9P channel\n");
+		pr_err("Failed to allocate virtio 9P channel\n");
 		err = -ENOMEM;
 		goto fail;
 	}
@@ -592,7 +594,7 @@ p9_virtio_create(struct p9_client *client, const char *devname, char *args)
 	mutex_unlock(&virtio_9p_lock);
 
 	if (!found) {
-		printk(KERN_ERR "9p: no channels available\n");
+		pr_err("no channels available\n");
 		return ret;
 	}
 

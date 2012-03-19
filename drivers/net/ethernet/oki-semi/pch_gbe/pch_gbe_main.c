@@ -1545,9 +1545,9 @@ pch_gbe_clean_rx(struct pch_gbe_adapter *adapter,
 			skb_put(skb, length);
 			skb->protocol = eth_type_trans(skb, netdev);
 			if (tcp_ip_status & PCH_GBE_RXD_ACC_STAT_TCPIPOK)
-				skb->ip_summed = CHECKSUM_UNNECESSARY;
-			else
 				skb->ip_summed = CHECKSUM_NONE;
+			else
+				skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 			napi_gro_receive(&adapter->napi, skb);
 			(*work_done)++;
@@ -2115,10 +2115,11 @@ static int pch_gbe_change_mtu(struct net_device *netdev, int new_mtu)
  * Returns
  *	0:		HW state updated successfully
  */
-static int pch_gbe_set_features(struct net_device *netdev, u32 features)
+static int pch_gbe_set_features(struct net_device *netdev,
+	netdev_features_t features)
 {
 	struct pch_gbe_adapter *adapter = netdev_priv(netdev);
-	u32 changed = features ^ netdev->features;
+	netdev_features_t changed = features ^ netdev->features;
 
 	if (!(changed & NETIF_F_RXCSUM))
 		return 0;

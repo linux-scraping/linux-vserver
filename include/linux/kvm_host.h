@@ -14,6 +14,7 @@
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/mmu_notifier.h>
 #include <linux/preempt.h>
 #include <linux/msi.h>
 #include <linux/slab.h>
@@ -50,6 +51,9 @@
 #define KVM_REQ_APF_HALT          12
 #define KVM_REQ_STEAL_UPDATE      13
 #define KVM_REQ_NMI               14
+#define KVM_REQ_IMMEDIATE_EXIT    15
+#define KVM_REQ_PMU               16
+#define KVM_REQ_PMI               17
 
 #define KVM_USERSPACE_IRQ_SOURCE_ID	0
 
@@ -95,6 +99,7 @@ struct kvm_async_pf {
 	unsigned long addr;
 	struct kvm_arch_async_pf arch;
 	struct page *page;
+	bool done;
 };
 
 void kvm_clear_async_pf_completion_queue(struct kvm_vcpu *vcpu);
@@ -178,6 +183,7 @@ struct kvm_memory_slot {
 	unsigned long *rmap;
 	unsigned long *dirty_bitmap;
 	unsigned long *dirty_bitmap_head;
+	unsigned long nr_dirty_pages;
 	struct kvm_lpage_info *lpage_info[KVM_NR_PAGE_SIZES - 1];
 	unsigned long userspace_addr;
 	int user_alloc;
@@ -223,11 +229,20 @@ struct kvm_irq_routing_table {};
 
 #endif
 
+#ifndef KVM_MEM_SLOTS_NUM
+#define KVM_MEM_SLOTS_NUM (KVM_MEMORY_SLOTS + KVM_PRIVATE_MEM_SLOTS)
+#endif
+
+/*
+ * Note:
+ * memslots are not sorted by id anymore, please use id_to_memslot()
+ * to get the memslot by its id.
+ */
 struct kvm_memslots {
-	int nmemslots;
 	u64 generation;
-	struct kvm_memory_slot memslots[KVM_MEMORY_SLOTS +
-					KVM_PRIVATE_MEM_SLOTS];
+	struct kvm_memory_slot memslots[KVM_MEM_SLOTS_NUM];
+	/* The mapping table from slot id to the index in memslots[]. */
+	int id_to_index[KVM_MEM_SLOTS_NUM];
 };
 
 struct kvm {
@@ -238,7 +253,6 @@ struct kvm {
 	struct srcu_struct srcu;
 #ifdef CONFIG_KVM_APIC_ARCHITECTURE
 	u32 bsp_vcpu_id;
-	struct kvm_vcpu *bsp_vcpu;
 #endif
 	struct kvm_vcpu *vcpus[KVM_MAX_VCPUS];
 	atomic_t online_vcpus;
@@ -301,6 +315,11 @@ static inline struct kvm_vcpu *kvm_get_vcpu(struct kvm *kvm, int i)
 	     (vcpup = kvm_get_vcpu(kvm, idx)) != NULL; \
 	     idx++)
 
+#define kvm_for_each_memslot(memslot, slots)	\
+	for (memslot = &slots->memslots[0];	\
+	      memslot < slots->memslots + KVM_MEM_SLOTS_NUM && memslot->npages;\
+		memslot++)
+
 int kvm_vcpu_init(struct kvm_vcpu *vcpu, struct kvm *kvm, unsigned id);
 void kvm_vcpu_uninit(struct kvm_vcpu *vcpu);
 
@@ -313,12 +332,25 @@ void kvm_exit(void);
 
 void kvm_get_kvm(struct kvm *kvm);
 void kvm_put_kvm(struct kvm *kvm);
+void update_memslots(struct kvm_memslots *slots, struct kvm_memory_slot *new);
 
 static inline struct kvm_memslots *kvm_memslots(struct kvm *kvm)
 {
 	return rcu_dereference_check(kvm->memslots,
 			srcu_read_lock_held(&kvm->srcu)
 			|| lockdep_is_held(&kvm->slots_lock));
+}
+
+static inline struct kvm_memory_slot *
+id_to_memslot(struct kvm_memslots *slots, int id)
+{
+	int index = slots->id_to_index[id];
+	struct kvm_memory_slot *slot;
+
+	slot = &slots->memslots[index];
+
+	WARN_ON(slot->id != id);
+	return slot;
 }
 
 #define HPA_MSB ((sizeof(hpa_t) * 8) - 1)
@@ -395,7 +427,7 @@ int kvm_write_guest(struct kvm *kvm, gpa_t gpa, const void *data,
 int kvm_write_guest_cached(struct kvm *kvm, struct gfn_to_hva_cache *ghc,
 			   void *data, unsigned long len);
 int kvm_gfn_to_hva_cache_init(struct kvm *kvm, struct gfn_to_hva_cache *ghc,
-			      gpa_t gpa, unsigned long len);
+			      gpa_t gpa);
 int kvm_clear_guest_page(struct kvm *kvm, gfn_t gfn, int offset, int len);
 int kvm_clear_guest(struct kvm *kvm, gpa_t gpa, unsigned long len);
 struct kvm_memory_slot *gfn_to_memslot(struct kvm *kvm, gfn_t gfn);
@@ -561,7 +593,6 @@ void kvm_free_irq_source_id(struct kvm *kvm, int irq_source_id);
 
 #ifdef CONFIG_IOMMU_API
 int kvm_iommu_map_pages(struct kvm *kvm, struct kvm_memory_slot *slot);
-void kvm_iommu_unmap_pages(struct kvm *kvm, struct kvm_memory_slot *slot);
 int kvm_iommu_map_guest(struct kvm *kvm);
 int kvm_iommu_unmap_guest(struct kvm *kvm);
 int kvm_assign_device(struct kvm *kvm,
@@ -573,11 +604,6 @@ static inline int kvm_iommu_map_pages(struct kvm *kvm,
 				      struct kvm_memory_slot *slot)
 {
 	return 0;
-}
-
-static inline void kvm_iommu_unmap_pages(struct kvm *kvm,
-					 struct kvm_memory_slot *slot)
-{
 }
 
 static inline int kvm_iommu_map_guest(struct kvm *kvm)
@@ -743,13 +769,6 @@ static inline bool kvm_vcpu_is_bsp(struct kvm_vcpu *vcpu)
 {
 	return vcpu->kvm->bsp_vcpu_id == vcpu->vcpu_id;
 }
-
-bool kvm_vcpu_compatible(struct kvm_vcpu *vcpu);
-
-#else
-
-static inline bool kvm_vcpu_compatible(struct kvm_vcpu *vcpu) { return true; }
-
 #endif
 
 #ifdef __KVM_HAVE_DEVICE_ASSIGNMENT

@@ -633,7 +633,7 @@ struct picolcd_fb_cleanup_item {
 	struct picolcd_fb_cleanup_item *next;
 };
 static struct picolcd_fb_cleanup_item *fb_pending;
-DEFINE_SPINLOCK(fb_pending_lock);
+static DEFINE_SPINLOCK(fb_pending_lock);
 
 static void picolcd_fb_do_cleanup(struct work_struct *data)
 {
@@ -658,7 +658,7 @@ static void picolcd_fb_do_cleanup(struct work_struct *data)
 	} while (item);
 }
 
-DECLARE_WORK(picolcd_fb_cleanup, picolcd_fb_do_cleanup);
+static DECLARE_WORK(picolcd_fb_cleanup, picolcd_fb_do_cleanup);
 
 static int picolcd_fb_open(struct fb_info *info, int u)
 {
@@ -1424,7 +1424,7 @@ static ssize_t picolcd_operation_mode_store(struct device *dev,
 		buf += 10;
 		cnt -= 10;
 	}
-	if (!report || report->maxfield != 1)
+	if (!report)
 		return -EINVAL;
 
 	while (cnt > 0 && (buf[cnt-1] == '\n' || buf[cnt-1] == '\r'))
@@ -2381,12 +2381,6 @@ static int picolcd_raw_event(struct hid_device *hdev,
 
 	if (!data)
 		return 1;
-
-	if (size > 64) {
-		hid_warn(hdev, "invalid size value (%d) for picolcd raw event\n",
-				size);
-		return 0;
-	}
 
 	if (report->id == REPORT_KEY_STATE) {
 		if (data->input_keys)

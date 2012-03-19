@@ -266,18 +266,6 @@ static irqreturn_t octeon_rlm_interrupt(int cpl, void *dev_id)
 }
 #endif
 
-static char __read_mostly octeon_system_type[80];
-
-static int __init init_octeon_system_type(void)
-{
-	snprintf(octeon_system_type, sizeof(octeon_system_type), "%s (%s)",
-		cvmx_board_type_to_string(octeon_bootinfo->board_type),
-		octeon_model_get_string(read_c0_prid()));
-
-	return 0;
-}
-early_initcall(init_octeon_system_type);
-
 /**
  * Return a string representing the system type
  *
@@ -285,7 +273,11 @@ early_initcall(init_octeon_system_type);
  */
 const char *octeon_board_type_string(void)
 {
-	return octeon_system_type;
+	static char name[80];
+	sprintf(name, "%s (%s)",
+		cvmx_board_type_to_string(octeon_bootinfo->board_type),
+		octeon_model_get_string(read_c0_prid()));
+	return name;
 }
 
 const char *get_system_type(void)
@@ -650,14 +642,6 @@ void __init plat_mem_setup(void)
 
 	total = 0;
 
-	/* First add the init memory we will be returning.  */
-	memory = __pa_symbol(&__init_begin) & PAGE_MASK;
-	mem_alloc_size = (__pa_symbol(&__init_end) & PAGE_MASK) - memory;
-	if (mem_alloc_size > 0) {
-		add_memory_region(memory, mem_alloc_size, BOOT_MEM_RAM);
-		total += mem_alloc_size;
-	}
-
 	/*
 	 * The Mips memory init uses the first memory location for
 	 * some memory vectors. When SPARSEMEM is in use, it doesn't
@@ -775,11 +759,11 @@ void prom_free_prom_memory(void)
 			: "=r" (insn) : : "$31", "memory");
 
 		if ((insn >> 26) != 0x33)
-			panic("No PREF instruction at Core-14449 probe point.\n");
+			panic("No PREF instruction at Core-14449 probe point.");
 
 		if (((insn >> 16) & 0x1f) != 28)
 			panic("Core-14449 WAR not in place (%04x).\n"
-			      "Please build kernel with proper options (CONFIG_CAVIUM_CN63XXP1).\n", insn);
+			      "Please build kernel with proper options (CONFIG_CAVIUM_CN63XXP1).", insn);
 	}
 #ifdef CONFIG_CAVIUM_DECODE_RSL
 	cvmx_interrupt_rsl_enable();
@@ -787,7 +771,7 @@ void prom_free_prom_memory(void)
 	/* Add an interrupt handler for general failures. */
 	if (request_irq(OCTEON_IRQ_RML, octeon_rlm_interrupt, IRQF_SHARED,
 			"RML/RSL", octeon_rlm_interrupt)) {
-		panic("Unable to request_irq(OCTEON_IRQ_RML)\n");
+		panic("Unable to request_irq(OCTEON_IRQ_RML)");
 	}
 #endif
 }

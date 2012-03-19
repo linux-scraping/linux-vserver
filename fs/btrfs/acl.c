@@ -117,6 +117,12 @@ static int btrfs_set_acl(struct btrfs_trans_handle *trans,
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		name = POSIX_ACL_XATTR_ACCESS;
+		if (acl) {
+			ret = posix_acl_equiv_mode(acl, &inode->i_mode);
+			if (ret < 0)
+				return ret;
+		}
+		ret = 0;
 		break;
 	case ACL_TYPE_DEFAULT:
 		if (!S_ISDIR(inode->i_mode))
@@ -155,13 +161,11 @@ static int btrfs_xattr_acl_set(struct dentry *dentry, const char *name,
 {
 	int ret;
 	struct posix_acl *acl = NULL;
-	struct inode *inode = dentry->d_inode;
-	umode_t old_mode = inode->i_mode;
 
-	if (!inode_owner_or_capable(inode))
+	if (!inode_owner_or_capable(dentry->d_inode))
 		return -EPERM;
 
-	if (!IS_POSIXACL(inode))
+	if (!IS_POSIXACL(dentry->d_inode))
 		return -EOPNOTSUPP;
 
 	if (value) {
@@ -176,14 +180,7 @@ static int btrfs_xattr_acl_set(struct dentry *dentry, const char *name,
 		}
 	}
 
-	if (type == ACL_TYPE_ACCESS && acl) {
-		ret = posix_acl_update_mode(inode, &inode->i_mode, &acl);
-		if (ret)
-			goto out;
-	}
-	ret = btrfs_set_acl(NULL, inode, acl, type);
-	if (ret)
-		inode->i_mode = old_mode;
+	ret = btrfs_set_acl(NULL, dentry->d_inode, acl, type);
 out:
 	posix_acl_release(acl);
 

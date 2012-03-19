@@ -43,7 +43,7 @@ static int radeon_benchmark_do_move(struct radeon_device *rdev, unsigned size,
 
 	start_jiffies = jiffies;
 	for (i = 0; i < n; i++) {
-		r = radeon_fence_create(rdev, &fence);
+		r = radeon_fence_create(rdev, &fence, RADEON_RING_TYPE_GFX_INDEX);
 		if (r)
 			return r;
 
@@ -139,15 +139,13 @@ static void radeon_benchmark_move(struct radeon_device *rdev, unsigned size,
 						     sdomain, ddomain, "dma");
 	}
 
-	if (rdev->asic->copy_blit) {
-		time = radeon_benchmark_do_move(rdev, size, saddr, daddr,
-						RADEON_BENCHMARK_COPY_BLIT, n);
-		if (time < 0)
-			goto out_cleanup;
-		if (time > 0)
-			radeon_benchmark_log_results(n, size, time,
-						     sdomain, ddomain, "blit");
-	}
+	time = radeon_benchmark_do_move(rdev, size, saddr, daddr,
+					RADEON_BENCHMARK_COPY_BLIT, n);
+	if (time < 0)
+		goto out_cleanup;
+	if (time > 0)
+		radeon_benchmark_log_results(n, size, time,
+					     sdomain, ddomain, "blit");
 
 out_cleanup:
 	if (sobj) {
@@ -231,21 +229,21 @@ void radeon_benchmark(struct radeon_device *rdev, int test_number)
 		break;
 	case 6:
 		/* GTT to VRAM, buffer size sweep, common modes */
-		for (i = 1; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
+		for (i = 0; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
 			radeon_benchmark_move(rdev, common_modes[i],
 					      RADEON_GEM_DOMAIN_GTT,
 					      RADEON_GEM_DOMAIN_VRAM);
 		break;
 	case 7:
 		/* VRAM to GTT, buffer size sweep, common modes */
-		for (i = 1; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
+		for (i = 0; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
 			radeon_benchmark_move(rdev, common_modes[i],
 					      RADEON_GEM_DOMAIN_VRAM,
 					      RADEON_GEM_DOMAIN_GTT);
 		break;
 	case 8:
 		/* VRAM to VRAM, buffer size sweep, common modes */
-		for (i = 1; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
+		for (i = 0; i < RADEON_BENCHMARK_COMMON_MODES_N; i++)
 			radeon_benchmark_move(rdev, common_modes[i],
 					      RADEON_GEM_DOMAIN_VRAM,
 					      RADEON_GEM_DOMAIN_VRAM);

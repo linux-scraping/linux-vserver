@@ -598,7 +598,7 @@ static __kprobes void kprobe_optimizer(struct work_struct *work)
 }
 
 /* Wait for completing optimization and unoptimization */
-__kprobes void wait_for_kprobe_optimizer(void)
+static __kprobes void wait_for_kprobe_optimizer(void)
 {
 	if (delayed_work_pending(&optimizing_work))
 		wait_for_completion(&optimizer_comp);
@@ -2204,7 +2204,7 @@ static ssize_t write_enabled_file_bool(struct file *file,
 	       const char __user *user_buf, size_t count, loff_t *ppos)
 {
 	char buf[32];
-	int buf_size;
+	size_t buf_size;
 
 	buf_size = min(count, (sizeof(buf)-1));
 	if (copy_from_user(buf, user_buf, buf_size))

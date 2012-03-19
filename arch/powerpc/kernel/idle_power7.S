@@ -54,6 +54,7 @@ _GLOBAL(power7_idle)
 	li	r0,0
 	stb	r0,PACASOFTIRQEN(r13)	/* we'll hard-enable shortly */
 	stb	r0,PACAHARDIRQEN(r13)
+	stb	r0,PACA_NAPSTATELOST(r13)
 
 	/* Continue saving state */
 	SAVE_GPR(2, r1)
@@ -67,7 +68,7 @@ _GLOBAL(power7_idle)
 	std	r0,0(r1)
 	ptesync
 	ld	r0,0(r1)
-1:	cmpd	cr0,r0,r0
+1:	cmp	cr0,r0,r0
 	bne	1b
 	PPC_NAP
 	b	.
@@ -86,6 +87,9 @@ _GLOBAL(power7_wakeup_loss)
 	rfid
 
 _GLOBAL(power7_wakeup_noloss)
+	lbz	r0,PACA_NAPSTATELOST(r13)
+	cmpwi	r0,0
+	bne	.power7_wakeup_loss
 	ld	r1,PACAR1(r13)
 	ld	r4,_MSR(r1)
 	ld	r5,_NIP(r1)

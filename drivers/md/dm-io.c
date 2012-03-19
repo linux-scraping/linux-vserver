@@ -10,7 +10,6 @@
 #include <linux/device-mapper.h>
 
 #include <linux/bio.h>
-#include <linux/completion.h>
 #include <linux/mempool.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -35,7 +34,7 @@ struct dm_io_client {
 struct io {
 	unsigned long error_bits;
 	atomic_t count;
-	struct completion *wait;
+	struct task_struct *sleeper;
 	struct dm_io_client *client;
 	io_notify_fn callback;
 	void *context;
@@ -123,8 +122,8 @@ static void dec_count(struct io *io, unsigned int region, int error)
 			invalidate_kernel_vmap_range(io->vma_invalidate_address,
 						     io->vma_invalidate_size);
 
-		if (io->wait)
-			complete(io->wait);
+		if (io->sleeper)
+			wake_up_process(io->sleeper);
 
 		else {
 			unsigned long r = io->error_bits;
@@ -299,16 +298,6 @@ static void do_region(int rw, unsigned region, struct dm_io_region *where,
 	sector_t remaining = where->count;
 	struct request_queue *q = bdev_get_queue(where->bdev);
 	sector_t discard_sectors;
-	unsigned int uninitialized_var(special_cmd_max_sectors);
-
-	/* Reject unsupported discard requests */
-	if (rw & REQ_DISCARD) {
-		special_cmd_max_sectors = q->limits.max_discard_sectors;
-		if (special_cmd_max_sectors == 0) {
-			dec_count(io, region, -EOPNOTSUPP);
-			return;
-		}
-	}
 
 	/*
 	 * where->count may be zero if rw holds a flush and we need to
@@ -332,7 +321,7 @@ static void do_region(int rw, unsigned region, struct dm_io_region *where,
 		store_io_and_region_in_bio(bio, io, region);
 
 		if (rw & REQ_DISCARD) {
-			discard_sectors = min_t(sector_t, special_cmd_max_sectors, remaining);
+			discard_sectors = min_t(sector_t, q->limits.max_discard_sectors, remaining);
 			bio->bi_size = discard_sectors << SECTOR_SHIFT;
 			remaining -= discard_sectors;
 		} else while (remaining) {
@@ -395,7 +384,6 @@ static int sync_io(struct dm_io_client *client, unsigned int num_regions,
 	 */
 	volatile char io_[sizeof(struct io) + __alignof__(struct io) - 1];
 	struct io *io = (struct io *)PTR_ALIGN(&io_, __alignof__(struct io));
-	DECLARE_COMPLETION_ONSTACK(wait);
 
 	if (num_regions > 1 && (rw & RW_MASK) != WRITE) {
 		WARN_ON(1);
@@ -404,7 +392,7 @@ static int sync_io(struct dm_io_client *client, unsigned int num_regions,
 
 	io->error_bits = 0;
 	atomic_set(&io->count, 1); /* see dispatch_io() */
-	io->wait = &wait;
+	io->sleeper = current;
 	io->client = client;
 
 	io->vma_invalidate_address = dp->vma_invalidate_address;
@@ -412,7 +400,15 @@ static int sync_io(struct dm_io_client *client, unsigned int num_regions,
 
 	dispatch_io(rw, num_regions, where, dp, io, 1);
 
-	wait_for_completion(&wait);
+	while (1) {
+		set_current_state(TASK_UNINTERRUPTIBLE);
+
+		if (!atomic_read(&io->count))
+			break;
+
+		io_schedule();
+	}
+	set_current_state(TASK_RUNNING);
 
 	if (error_bits)
 		*error_bits = io->error_bits;
@@ -435,7 +431,7 @@ static int async_io(struct dm_io_client *client, unsigned int num_regions,
 	io = mempool_alloc(client->pool, GFP_NOIO);
 	io->error_bits = 0;
 	atomic_set(&io->count, 1); /* see dispatch_io() */
-	io->wait = NULL;
+	io->sleeper = NULL;
 	io->client = client;
 	io->callback = fn;
 	io->context = context;

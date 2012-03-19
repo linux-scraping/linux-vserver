@@ -445,6 +445,7 @@ static long __ncp_ioctl(struct inode *inode, unsigned int cmd, unsigned long arg
 						result = -EIO;
 					}
 				}
+				result = 0;
 			}
 			mutex_unlock(&server->root_setup_lock);
 
@@ -900,7 +901,7 @@ long ncp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	ret = __ncp_ioctl(inode, cmd, arg);
 outDropWrite:
 	if (need_drop_write)
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 out:
 	return ret;
 }

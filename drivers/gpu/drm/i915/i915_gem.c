@@ -999,7 +999,6 @@ i915_gem_pwrite_ioctl(struct drm_device *dev, void *data,
 	if (obj->phys_obj)
 		ret = i915_gem_phys_pwrite(dev, obj, args, file);
 	else if (obj->gtt_space &&
-		 obj->tiling_mode == I915_TILING_NONE &&
 		 obj->base.write_domain != I915_GEM_DOMAIN_CPU) {
 		ret = i915_gem_object_pin(obj, 0, true);
 		if (ret)
@@ -1259,11 +1258,6 @@ out:
 	case 0:
 	case -ERESTARTSYS:
 	case -EINTR:
-	case -EBUSY:
-		/*
-		 * EBUSY is ok: this just means that another thread
-		 * already did the job.
-		 */
 		return VM_FAULT_NOPAGE;
 	case -ENOMEM:
 		return VM_FAULT_OOM;
@@ -1549,19 +1543,16 @@ i915_gem_object_move_to_active(struct drm_i915_gem_object *obj,
 	list_move_tail(&obj->ring_list, &ring->active_list);
 
 	obj->last_rendering_seqno = seqno;
-
 	if (obj->fenced_gpu_access) {
+		struct drm_i915_fence_reg *reg;
+
+		BUG_ON(obj->fence_reg == I915_FENCE_REG_NONE);
+
 		obj->last_fenced_seqno = seqno;
 		obj->last_fenced_ring = ring;
 
-		/* Bump MRU to take account of the delayed flush */
-		if (obj->fence_reg != I915_FENCE_REG_NONE) {
-			struct drm_i915_fence_reg *reg;
-
-			reg = &dev_priv->fence_regs[obj->fence_reg];
-			list_move_tail(&reg->lru_list,
-				       &dev_priv->mm.fence_list);
-		}
+		reg = &dev_priv->fence_regs[obj->fence_reg];
+		list_move_tail(&reg->lru_list, &dev_priv->mm.fence_list);
 	}
 }
 
@@ -1570,7 +1561,6 @@ i915_gem_object_move_off_active(struct drm_i915_gem_object *obj)
 {
 	list_del_init(&obj->ring_list);
 	obj->last_rendering_seqno = 0;
-	obj->last_fenced_seqno = 0;
 }
 
 static void
@@ -1599,7 +1589,6 @@ i915_gem_object_move_to_inactive(struct drm_i915_gem_object *obj)
 	BUG_ON(!list_empty(&obj->gpu_write_list));
 	BUG_ON(!obj->active);
 	obj->ring = NULL;
-	obj->last_fenced_ring = NULL;
 
 	i915_gem_object_move_off_active(obj);
 	obj->fenced_gpu_access = false;
@@ -1658,28 +1647,6 @@ i915_gem_process_flushing_list(struct intel_ring_buffer *ring,
 	}
 }
 
-static u32
-i915_gem_get_seqno(struct drm_device *dev)
-{
-	drm_i915_private_t *dev_priv = dev->dev_private;
-	u32 seqno = dev_priv->next_seqno;
-
-	/* reserve 0 for non-seqno */
-	if (++dev_priv->next_seqno == 0)
-		dev_priv->next_seqno = 1;
-
-	return seqno;
-}
-
-u32
-i915_gem_next_request_seqno(struct intel_ring_buffer *ring)
-{
-	if (ring->outstanding_lazy_request == 0)
-		ring->outstanding_lazy_request = i915_gem_get_seqno(ring->dev);
-
-	return ring->outstanding_lazy_request;
-}
-
 int
 i915_add_request(struct intel_ring_buffer *ring,
 		 struct drm_file *file,
@@ -1691,7 +1658,6 @@ i915_add_request(struct intel_ring_buffer *ring,
 	int ret;
 
 	BUG_ON(request == NULL);
-	seqno = i915_gem_next_request_seqno(ring);
 
 	ret = ring->add_request(ring, &seqno);
 	if (ret)
@@ -2040,9 +2006,9 @@ i915_wait_request(struct intel_ring_buffer *ring,
 					   || atomic_read(&dev_priv->mm.wedged));
 
 			ring->irq_put(ring);
-		} else if (wait_for(i915_seqno_passed(ring->get_seqno(ring),
-						      seqno) ||
-				    atomic_read(&dev_priv->mm.wedged), 3000))
+		} else if (wait_for_atomic(i915_seqno_passed(ring->get_seqno(ring),
+							     seqno) ||
+					   atomic_read(&dev_priv->mm.wedged), 3000))
 			ret = -EBUSY;
 		ring->waiting_seqno = 0;
 
@@ -2248,13 +2214,6 @@ static int sandybridge_write_fence_reg(struct drm_i915_gem_object *obj,
 	int regnum = obj->fence_reg;
 	uint64_t val;
 
-	/* Adjust fence size to match tiled area */
-	if (obj->tiling_mode != I915_TILING_NONE) {
-		uint32_t row_size = obj->stride *
-			(obj->tiling_mode == I915_TILING_Y ? 32 : 8);
-		size = (size / row_size) * row_size;
-	}
-
 	val = (uint64_t)((obj->gtt_offset + size - 4096) &
 			 0xfffff000) << 32;
 	val |= obj->gtt_offset & 0xfffff000;
@@ -2291,13 +2250,6 @@ static int i965_write_fence_reg(struct drm_i915_gem_object *obj,
 	u32 size = obj->gtt_space->size;
 	int regnum = obj->fence_reg;
 	uint64_t val;
-
-	/* Adjust fence size to match tiled area */
-	if (obj->tiling_mode != I915_TILING_NONE) {
-		uint32_t row_size = obj->stride *
-			(obj->tiling_mode == I915_TILING_Y ? 32 : 8);
-		size = (size / row_size) * row_size;
-	}
 
 	val = (uint64_t)((obj->gtt_offset + size - 4096) &
 		    0xfffff000) << 32;
@@ -2534,11 +2486,6 @@ i915_find_fence_reg(struct drm_device *dev,
 	return avail;
 }
 
-static void i915_gem_write_fence__ipi(void *data)
-{
-	wbinvd();
-}
-
 /**
  * i915_gem_object_get_fence - set up a fence reg for an object
  * @obj: object to map through a fence reg
@@ -2659,17 +2606,6 @@ update:
 	switch (INTEL_INFO(dev)->gen) {
 	case 7:
 	case 6:
-		/* In order to fully serialize access to the fenced region and
-		 * the update to the fence register we need to take extreme
-		 * measures on SNB+. In theory, the write to the fence register
-		 * flushes all memory transactions before, and coupled with the
-		 * mb() placed around the register write we serialise all memory
-		 * operations with respect to the changes in the tiler. Yet, on
-		 * SNB+ we need to take a step further and emit an explicit wbinvd()
-		 * on each processor in order to manually flush all memory
-		 * transactions before updating the fence register.
-		 */
-		on_each_cpu(i915_gem_write_fence__ipi, NULL, 1);
 		ret = sandybridge_write_fence_reg(obj, pipelined);
 		break;
 	case 5:
@@ -3148,13 +3084,10 @@ i915_gem_object_finish_gpu(struct drm_i915_gem_object *obj)
 			return ret;
 	}
 
-	ret = i915_gem_object_wait_rendering(obj);
-	if (ret)
-		return ret;
-
 	/* Ensure that we invalidate the GPU's caches and TLBs. */
 	obj->base.read_domains &= ~I915_GEM_GPU_DOMAINS;
-	return 0;
+
+	return i915_gem_object_wait_rendering(obj);
 }
 
 /**
@@ -3376,8 +3309,8 @@ i915_gem_ring_throttle(struct drm_device *dev, struct drm_file *file)
 
 			if (ret == 0 && atomic_read(&dev_priv->mm.wedged))
 				ret = -EIO;
-		} else if (wait_for(i915_seqno_passed(ring->get_seqno(ring),
-						      seqno) ||
+		} else if (wait_for_atomic(i915_seqno_passed(ring->get_seqno(ring),
+							     seqno) ||
 				    atomic_read(&dev_priv->mm.wedged), 3000)) {
 			ret = -EBUSY;
 		}
@@ -3398,8 +3331,7 @@ i915_gem_object_pin(struct drm_i915_gem_object *obj,
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	int ret;
 
-	if (WARN_ON(obj->pin_count == DRM_I915_GEM_OBJECT_MAX_PIN_COUNT))
-		return -EBUSY;
+	BUG_ON(obj->pin_count == DRM_I915_GEM_OBJECT_MAX_PIN_COUNT);
 	WARN_ON(i915_verify_lists(dev));
 
 	if (obj->gtt_space != NULL) {
@@ -3486,14 +3418,13 @@ i915_gem_pin_ioctl(struct drm_device *dev, void *data,
 		goto out;
 	}
 
-	if (obj->user_pin_count == 0) {
+	obj->user_pin_count++;
+	obj->pin_filp = file;
+	if (obj->user_pin_count == 1) {
 		ret = i915_gem_object_pin(obj, args->alignment, true);
 		if (ret)
 			goto out;
 	}
-
-	obj->user_pin_count++;
-	obj->pin_filp = file;
 
 	/* XXX - flush the CPU caches for pinned objects
 	 * as the X server doesn't manage domains yet

@@ -29,6 +29,8 @@ void __init arm_mm_memblock_reserve(void)
 
 void __init sanity_check_meminfo(void)
 {
+	phys_addr_t end = bank_phys_end(&meminfo.bank[meminfo.nr_banks - 1]);
+	high_memory = __va(end - 1) + 1;
 }
 
 /*
@@ -43,7 +45,7 @@ void __init paging_init(struct machine_desc *mdesc)
 /*
  * We don't need to do anything here for nommu machines.
  */
-void setup_mm_for_reboot(char mode)
+void setup_mm_for_reboot(void)
 {
 }
 
@@ -52,12 +54,6 @@ void flush_dcache_page(struct page *page)
 	__cpuc_flush_dcache_area(page_address(page), PAGE_SIZE);
 }
 EXPORT_SYMBOL(flush_dcache_page);
-
-void flush_kernel_dcache_page(struct page *page)
-{
-	__cpuc_flush_dcache_area(page_address(page), PAGE_SIZE);
-}
-EXPORT_SYMBOL(flush_kernel_dcache_page);
 
 void copy_to_user_page(struct vm_area_struct *vma, struct page *page,
 		       unsigned long uaddr, void *dst, const void *src,

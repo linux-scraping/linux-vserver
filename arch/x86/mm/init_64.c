@@ -312,16 +312,6 @@ void __init cleanup_highmap(void)
 			continue;
 		if (vaddr < (unsigned long) _text || vaddr > end)
 			set_pmd(pmd, __pmd(0));
-		else if (kaiser_enabled) {
-			/*
-			 * level2_kernel_pgt is initialized with _PAGE_GLOBAL:
-			 * clear that now.  This is not important, so long as
-			 * CR4.PGE remains clear, but it removes an anomaly.
-			 * Physical mapping setup below avoids _PAGE_GLOBAL
-			 * by use of massage_pgprot() inside pfn_pte() etc.
-			 */
-			set_pmd(pmd, pmd_clear_flags(*pmd, _PAGE_GLOBAL));
-		}
 	}
 }
 
@@ -618,21 +608,12 @@ kernel_physical_mapping_init(unsigned long start,
 #ifndef CONFIG_NUMA
 void __init initmem_init(void)
 {
-	memblock_x86_register_active_regions(0, 0, max_pfn);
+	memblock_set_node(0, (phys_addr_t)ULLONG_MAX, 0);
 }
 #endif
 
 void __init paging_init(void)
 {
-	unsigned long max_zone_pfns[MAX_NR_ZONES];
-
-	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
-#ifdef CONFIG_ZONE_DMA
-	max_zone_pfns[ZONE_DMA] = MAX_DMA_PFN;
-#endif
-	max_zone_pfns[ZONE_DMA32] = MAX_DMA32_PFN;
-	max_zone_pfns[ZONE_NORMAL] = max_pfn;
-
 	sparse_memory_present_with_active_regions(MAX_NUMNODES);
 	sparse_init();
 
@@ -644,7 +625,7 @@ void __init paging_init(void)
 	 */
 	node_clear_state(0, N_NORMAL_MEMORY);
 
-	free_area_init_nodes(max_zone_pfns);
+	zone_sizes_init();
 }
 
 /*
@@ -840,9 +821,6 @@ int kern_addr_valid(unsigned long addr)
 	pud = pud_offset(pgd, addr);
 	if (pud_none(*pud))
 		return 0;
-
-	if (pud_large(*pud))
-		return pfn_valid(pud_pfn(*pud));
 
 	pmd = pmd_offset(pud, addr);
 	if (pmd_none(*pmd))

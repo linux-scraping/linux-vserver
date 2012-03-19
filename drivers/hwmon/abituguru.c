@@ -145,7 +145,7 @@ static const u8 abituguru_pwm_max[5] = { 0, 255, 255, 75, 75 };
 
 
 /* Insmod parameters */
-static int force;
+static bool force;
 module_param(force, bool, 0);
 MODULE_PARM_DESC(force, "Set to one to force detection.");
 static int bank1_types[ABIT_UGURU_MAX_BANK1_SENSORS] = { -1, -1, -1, -1, -1,
@@ -1280,18 +1280,14 @@ static int __devinit abituguru_probe(struct platform_device *pdev)
 	pr_info("found Abit uGuru\n");
 
 	/* Register sysfs hooks */
-	for (i = 0; i < sysfs_attr_i; i++) {
-		res = device_create_file(&pdev->dev,
-					 &data->sysfs_attr[i].dev_attr);
-		if (res)
+	for (i = 0; i < sysfs_attr_i; i++)
+		if (device_create_file(&pdev->dev,
+				&data->sysfs_attr[i].dev_attr))
 			goto abituguru_probe_error;
-	}
-	for (i = 0; i < ARRAY_SIZE(abituguru_sysfs_attr); i++) {
-		res = device_create_file(&pdev->dev,
-					 &abituguru_sysfs_attr[i].dev_attr);
-		if (res)
+	for (i = 0; i < ARRAY_SIZE(abituguru_sysfs_attr); i++)
+		if (device_create_file(&pdev->dev,
+				&abituguru_sysfs_attr[i].dev_attr))
 			goto abituguru_probe_error;
-	}
 
 	data->hwmon_dev = hwmon_device_register(&pdev->dev);
 	if (!IS_ERR(data->hwmon_dev))

@@ -36,6 +36,7 @@
 #include <linux/resource.h>
 #include <linux/notifier.h>
 #include <linux/suspend.h>
+#include <linux/rwsem.h>
 #include <asm/uaccess.h>
 
 #include <trace/events/module.h>
@@ -50,6 +51,7 @@ static struct workqueue_struct *khelper_wq;
 static kernel_cap_t usermodehelper_bset = CAP_FULL_SET;
 static kernel_cap_t usermodehelper_inheritable = CAP_FULL_SET;
 static DEFINE_SPINLOCK(umh_sysctl_lock);
+static DECLARE_RWSEM(umhelper_sem);
 
 #ifdef CONFIG_MODULES
 
@@ -57,43 +59,6 @@ static DEFINE_SPINLOCK(umh_sysctl_lock);
 	modprobe_path is set via /proc/sys.
 */
 char modprobe_path[KMOD_PATH_LEN] = "/sbin/modprobe";
-
-static void free_modprobe_argv(struct subprocess_info *info)
-{
-	kfree(info->argv[3]); /* check call_modprobe() */
-	kfree(info->argv);
-}
-
-static int call_modprobe(char *module_name, int wait)
-{
-	static char *envp[] = {
-		"HOME=/",
-		"TERM=linux",
-		"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
-		NULL
-	};
-
-	char **argv = kmalloc(sizeof(char *[5]), GFP_KERNEL);
-	if (!argv)
-		goto out;
-
-	module_name = kstrdup(module_name, GFP_KERNEL);
-	if (!module_name)
-		goto free_argv;
-
-	argv[0] = modprobe_path;
-	argv[1] = "-q";
-	argv[2] = "--";
-	argv[3] = module_name;	/* check free_modprobe_argv() */
-	argv[4] = NULL;
-
-	return call_usermodehelper_fns(modprobe_path, argv, envp,
-		wait | UMH_KILLABLE, NULL, free_modprobe_argv, NULL);
-free_argv:
-	kfree(argv);
-out:
-	return -ENOMEM;
-}
 
 /**
  * __request_module - try to load a kernel module
@@ -116,6 +81,11 @@ int __request_module(bool wait, const char *fmt, ...)
 	char module_name[MODULE_NAME_LEN];
 	unsigned int max_modprobes;
 	int ret;
+	char *argv[] = { modprobe_path, "-q", "--", module_name, NULL };
+	static char *envp[] = { "HOME=/",
+				"TERM=linux",
+				"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
+				NULL };
 	static atomic_t kmod_concurrent = ATOMIC_INIT(0);
 #define MAX_KMOD_CONCURRENT 50	/* Completely arbitrary value - KAO */
 	static int kmod_loop_msg;
@@ -158,7 +128,9 @@ int __request_module(bool wait, const char *fmt, ...)
 
 	trace_module_request(module_name, wait, _RET_IP_);
 
-	ret = call_modprobe(module_name, wait ? UMH_WAIT_PROC : UMH_WAIT_EXEC);
+	ret = call_usermodehelper_fns(modprobe_path, argv, envp,
+			wait ? UMH_WAIT_PROC : UMH_WAIT_EXEC,
+			NULL, NULL, NULL);
 
 	atomic_dec(&kmod_concurrent);
 	return ret;
@@ -216,7 +188,7 @@ static int ____call_usermodehelper(void *data)
 	/* Exec failed? */
 fail:
 	sub_info->retval = retval;
-	return 0;
+	do_exit(0);
 }
 
 void call_usermodehelper_freeinfo(struct subprocess_info *info)
@@ -226,19 +198,6 @@ void call_usermodehelper_freeinfo(struct subprocess_info *info)
 	kfree(info);
 }
 EXPORT_SYMBOL(call_usermodehelper_freeinfo);
-
-static void umh_complete(struct subprocess_info *sub_info)
-{
-	struct completion *comp = xchg(&sub_info->complete, NULL);
-	/*
-	 * See call_usermodehelper_exec(). If xchg() returns NULL
-	 * we own sub_info, the UMH_KILLABLE caller has gone away.
-	 */
-	if (comp)
-		complete(comp);
-	else
-		call_usermodehelper_freeinfo(sub_info);
-}
 
 /* Keventd can't block, but this (a child) can. */
 static int wait_for_helper(void *data)
@@ -276,7 +235,7 @@ static int wait_for_helper(void *data)
 			sub_info->retval = ret;
 	}
 
-	umh_complete(sub_info);
+	complete(sub_info->complete);
 	return 0;
 }
 
@@ -287,9 +246,6 @@ static void __call_usermodehelper(struct work_struct *work)
 		container_of(work, struct subprocess_info, work);
 	enum umh_wait wait = sub_info->wait;
 	pid_t pid;
-
-	if (wait != UMH_NO_WAIT)
-		wait &= ~UMH_KILLABLE;
 
 	/* CLONE_VFORK: wait until the usermode helper has execve'd
 	 * successfully We need the data structures to stay around
@@ -313,7 +269,7 @@ static void __call_usermodehelper(struct work_struct *work)
 	case UMH_WAIT_EXEC:
 		if (pid < 0)
 			sub_info->retval = pid;
-		umh_complete(sub_info);
+		complete(sub_info->complete);
 	}
 }
 
@@ -321,6 +277,7 @@ static void __call_usermodehelper(struct work_struct *work)
  * If set, call_usermodehelper_exec() will exit immediately returning -EBUSY
  * (used for preventing user land processes from being created after the user
  * land has been frozen during a system-wide hibernation or suspend operation).
+ * Should always be manipulated under umhelper_sem acquired for write.
  */
 static int usermodehelper_disabled = 1;
 
@@ -328,16 +285,28 @@ static int usermodehelper_disabled = 1;
 static atomic_t running_helpers = ATOMIC_INIT(0);
 
 /*
- * Wait queue head used by usermodehelper_pm_callback() to wait for all running
+ * Wait queue head used by usermodehelper_disable() to wait for all running
  * helpers to finish.
  */
 static DECLARE_WAIT_QUEUE_HEAD(running_helpers_waitq);
 
 /*
  * Time to wait for running_helpers to become zero before the setting of
- * usermodehelper_disabled in usermodehelper_pm_callback() fails
+ * usermodehelper_disabled in usermodehelper_disable() fails
  */
 #define RUNNING_HELPERS_TIMEOUT	(5 * HZ)
+
+void read_lock_usermodehelper(void)
+{
+	down_read(&umhelper_sem);
+}
+EXPORT_SYMBOL_GPL(read_lock_usermodehelper);
+
+void read_unlock_usermodehelper(void)
+{
+	up_read(&umhelper_sem);
+}
+EXPORT_SYMBOL_GPL(read_unlock_usermodehelper);
 
 /**
  * usermodehelper_disable - prevent new helpers from being started
@@ -346,8 +315,10 @@ int usermodehelper_disable(void)
 {
 	long retval;
 
+	down_write(&umhelper_sem);
 	usermodehelper_disabled = 1;
-	smp_mb();
+	up_write(&umhelper_sem);
+
 	/*
 	 * From now on call_usermodehelper_exec() won't start any new
 	 * helpers, so it is sufficient if running_helpers turns out to
@@ -360,7 +331,9 @@ int usermodehelper_disable(void)
 	if (retval)
 		return 0;
 
+	down_write(&umhelper_sem);
 	usermodehelper_disabled = 0;
+	up_write(&umhelper_sem);
 	return -EAGAIN;
 }
 
@@ -369,7 +342,9 @@ int usermodehelper_disable(void)
  */
 void usermodehelper_enable(void)
 {
+	down_write(&umhelper_sem);
 	usermodehelper_disabled = 0;
+	up_write(&umhelper_sem);
 }
 
 /**
@@ -467,11 +442,6 @@ int call_usermodehelper_exec(struct subprocess_info *sub_info,
 	int retval = 0;
 
 	helper_lock();
-	if (!sub_info->path) {
-		retval = -EINVAL;
-		goto out;
-	}
-
 	if (sub_info->path[0] == '\0')
 		goto out;
 
@@ -486,21 +456,9 @@ int call_usermodehelper_exec(struct subprocess_info *sub_info,
 	queue_work(khelper_wq, &sub_info->work);
 	if (wait == UMH_NO_WAIT)	/* task has freed sub_info */
 		goto unlock;
-
-	if (wait & UMH_KILLABLE) {
-		retval = wait_for_completion_killable(&done);
-		if (!retval)
-			goto wait_done;
-
-		/* umh_complete() will see NULL and free sub_info */
-		if (xchg(&sub_info->complete, NULL))
-			goto unlock;
-		/* fallthrough, umh_complete() was already called */
-	}
-
 	wait_for_completion(&done);
-wait_done:
 	retval = sub_info->retval;
+
 out:
 	call_usermodehelper_freeinfo(sub_info);
 unlock:

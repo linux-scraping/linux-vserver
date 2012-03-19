@@ -342,8 +342,8 @@ static int camelot_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
-static struct snd_soc_platform_driver sh7760_soc_platform = {
-	.ops		= &camelot_pcm_ops,
+static struct snd_soc_platform sh7760_soc_platform = {
+	.pcm_ops 	= &camelot_pcm_ops,
 	.pcm_new	= camelot_pcm_new,
 	.pcm_free	= camelot_pcm_free,
 };
@@ -369,17 +369,7 @@ static struct platform_driver sh7760_pcm_driver = {
 	.remove = __devexit_p(sh7760_soc_platform_remove),
 };
 
-static int __init snd_sh7760_pcm_init(void)
-{
-	return platform_driver_register(&sh7760_pcm_driver);
-}
-module_init(snd_sh7760_pcm_init);
-
-static void __exit snd_sh7760_pcm_exit(void)
-{
-	platform_driver_unregister(&sh7760_pcm_driver);
-}
-module_exit(snd_sh7760_pcm_exit);
+module_platform_driver(sh7760_pcm_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SH7760 Audio DMA (DMABRG) driver");

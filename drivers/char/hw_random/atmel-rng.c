@@ -34,15 +34,8 @@ static int atmel_trng_read(struct hwrng *rng, void *buf, size_t max,
 	u32 *data = buf;
 
 	/* data ready? */
-	if (readl(trng->base + TRNG_ISR) & 1) {
+	if (readl(trng->base + TRNG_ODATA) & 1) {
 		*data = readl(trng->base + TRNG_ODATA);
-		/*
-		  ensure data ready is only set again AFTER the next data
-		  word is ready in case it got set between checking ISR
-		  and reading ODATA, so we don't risk re-reading the
-		  same word
-		*/
-		readl(trng->base + TRNG_ISR);
 		return 4;
 	} else
 		return 0;
@@ -148,17 +141,7 @@ static struct platform_driver atmel_trng_driver = {
 	},
 };
 
-static int __init atmel_trng_init(void)
-{
-	return platform_driver_register(&atmel_trng_driver);
-}
-module_init(atmel_trng_init);
-
-static void __exit atmel_trng_exit(void)
-{
-	platform_driver_unregister(&atmel_trng_driver);
-}
-module_exit(atmel_trng_exit);
+module_platform_driver(atmel_trng_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Korsgaard <jacmet@sunsite.dk>");

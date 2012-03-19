@@ -198,7 +198,7 @@ static struct virtqueue *kvm_find_vq(struct virtio_device *vdev,
 		goto out;
 
 	vq = vring_new_virtqueue(config->num, KVM_S390_VIRTIO_RING_ALIGN,
-				 vdev, (void *) config->address,
+				 vdev, true, (void *) config->address,
 				 kvm_notify, callback, name);
 	if (!vq) {
 		err = -ENOMEM;
@@ -263,6 +263,11 @@ error:
 	return PTR_ERR(vqs[i]);
 }
 
+static const char *kvm_bus_name(struct virtio_device *vdev)
+{
+	return "";
+}
+
 /*
  * The config ops structure as defined by virtio config
  */
@@ -276,6 +281,7 @@ static struct virtio_config_ops kvm_vq_configspace_ops = {
 	.reset = kvm_reset,
 	.find_vqs = kvm_find_vqs,
 	.del_vqs = kvm_del_vqs,
+	.bus_name = kvm_bus_name,
 };
 
 /*
@@ -414,26 +420,6 @@ static void kvm_extint_handler(unsigned int ext_int_code,
 }
 
 /*
- * For s390-virtio, we expect a page above main storage containing
- * the virtio configuration. Try to actually load from this area
- * in order to figure out if the host provides this page.
- */
-static int __init test_devices_support(unsigned long addr)
-{
-	int ret = -EIO;
-
-	asm volatile(
-		"0:	lura	0,%1\n"
-		"1:	xgr	%0,%0\n"
-		"2:\n"
-		EX_TABLE(0b,2b)
-		EX_TABLE(1b,2b)
-		: "+d" (ret)
-		: "a" (addr)
-		: "0", "cc");
-	return ret;
-}
-/*
  * Init function for virtio
  * devices are in a single page above top of "normal" mem
  */
@@ -444,22 +430,20 @@ static int __init kvm_devices_init(void)
 	if (!MACHINE_IS_KVM)
 		return -ENODEV;
 
-	if (test_devices_support(real_memory_size) < 0)
-		return -ENODEV;
-
-	rc = vmem_add_mapping(real_memory_size, PAGE_SIZE);
-	if (rc)
-		return rc;
-
-	kvm_devices = (void *) real_memory_size;
-
 	kvm_root = root_device_register("kvm_s390");
 	if (IS_ERR(kvm_root)) {
 		rc = PTR_ERR(kvm_root);
 		printk(KERN_ERR "Could not register kvm_s390 root device");
-		vmem_remove_mapping(real_memory_size, PAGE_SIZE);
 		return rc;
 	}
+
+	rc = vmem_add_mapping(real_memory_size, PAGE_SIZE);
+	if (rc) {
+		root_device_unregister(kvm_root);
+		return rc;
+	}
+
+	kvm_devices = (void *) real_memory_size;
 
 	INIT_WORK(&hotplug_work, hotplug_devices);
 

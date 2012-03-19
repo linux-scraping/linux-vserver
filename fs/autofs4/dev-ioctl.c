@@ -95,7 +95,7 @@ static int check_dev_ioctl_version(int cmd, struct autofs_dev_ioctl *param)
  */
 static struct autofs_dev_ioctl *copy_dev_ioctl(struct autofs_dev_ioctl __user *in)
 {
-	struct autofs_dev_ioctl tmp, *res;
+	struct autofs_dev_ioctl tmp;
 
 	if (copy_from_user(&tmp, in, sizeof(tmp)))
 		return ERR_PTR(-EFAULT);
@@ -103,14 +103,7 @@ static struct autofs_dev_ioctl *copy_dev_ioctl(struct autofs_dev_ioctl __user *i
 	if (tmp.size < sizeof(tmp))
 		return ERR_PTR(-EINVAL);
 
-	if (tmp.size > (PATH_MAX + sizeof(tmp)))
-		return ERR_PTR(-ENAMETOOLONG);
-
-	res = memdup_user(in, tmp.size);
-	if (!IS_ERR(res))
-		res->size = tmp.size;
-
-	return res;
+	return memdup_user(in, tmp.size);
 }
 
 static inline void free_dev_ioctl(struct autofs_dev_ioctl *param)
@@ -201,7 +194,7 @@ static int find_autofs_mount(const char *pathname,
 		return err;
 	err = -ENOENT;
 	while (path.dentry == path.mnt->mnt_root) {
-		if (path.mnt->mnt_sb->s_magic == AUTOFS_SUPER_MAGIC) {
+		if (path.dentry->d_sb->s_magic == AUTOFS_SUPER_MAGIC) {
 			if (test(&path, data)) {
 				path_get(&path);
 				if (!err) /* already found some */
@@ -219,7 +212,7 @@ static int find_autofs_mount(const char *pathname,
 
 static int test_by_dev(struct path *path, void *p)
 {
-	return path->mnt->mnt_sb->s_dev == *(dev_t *)p;
+	return path->dentry->d_sb->s_dev == *(dev_t *)p;
 }
 
 static int test_by_type(struct path *path, void *p)
@@ -345,7 +338,7 @@ static int autofs_dev_ioctl_fail(struct file *fp,
 	int status;
 
 	token = (autofs_wqt_t) param->fail.token;
-	status = param->fail.status < 0 ? param->fail.status : -ENOENT;
+	status = param->fail.status ? param->fail.status : -ENOENT;
 	return autofs4_wait_release(sbi, token, status);
 }
 
@@ -383,7 +376,7 @@ static int autofs_dev_ioctl_setpipefd(struct file *fp,
 			err = -EBADF;
 			goto out;
 		}
-		if (autofs_prepare_pipe(pipe) < 0) {
+		if (!pipe->f_op || !pipe->f_op->write) {
 			err = -EPIPE;
 			fput(pipe);
 			goto out;
@@ -392,6 +385,7 @@ static int autofs_dev_ioctl_setpipefd(struct file *fp,
 		sbi->pipefd = pipefd;
 		sbi->pipe = pipe;
 		sbi->catatonic = 0;
+		sbi->compat_daemon = is_compat_task();
 	}
 out:
 	mutex_unlock(&sbi->wq_mutex);
@@ -545,11 +539,11 @@ static int autofs_dev_ioctl_ismountpoint(struct file *fp,
 			err = find_autofs_mount(name, &path, test_by_type, &type);
 		if (err)
 			goto out;
-		devid = new_encode_dev(path.mnt->mnt_sb->s_dev);
+		devid = new_encode_dev(path.dentry->d_sb->s_dev);
 		err = 0;
 		if (path.mnt->mnt_root == path.dentry) {
 			err = 1;
-			magic = path.mnt->mnt_sb->s_magic;
+			magic = path.dentry->d_sb->s_magic;
 		}
 	} else {
 		dev_t dev = sbi->sb->s_dev;
@@ -563,7 +557,7 @@ static int autofs_dev_ioctl_ismountpoint(struct file *fp,
 		err = have_submounts(path.dentry);
 
 		if (follow_down_one(&path))
-			magic = path.mnt->mnt_sb->s_magic;
+			magic = path.dentry->d_sb->s_magic;
 	}
 
 	param->ismountpoint.out.devid = devid;

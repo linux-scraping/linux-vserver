@@ -45,10 +45,12 @@ ssize_t usb_store_new_id(struct usb_dynids *dynids,
 	struct usb_dynid *dynid;
 	u32 idVendor = 0;
 	u32 idProduct = 0;
+	unsigned int bInterfaceClass = 0;
 	int fields = 0;
 	int retval = 0;
 
-	fields = sscanf(buf, "%x %x", &idVendor, &idProduct);
+	fields = sscanf(buf, "%x %x %x", &idVendor, &idProduct,
+					&bInterfaceClass);
 	if (fields < 2)
 		return -EINVAL;
 
@@ -60,6 +62,10 @@ ssize_t usb_store_new_id(struct usb_dynids *dynids,
 	dynid->id.idVendor = idVendor;
 	dynid->id.idProduct = idProduct;
 	dynid->id.match_flags = USB_DEVICE_ID_MATCH_DEVICE;
+	if (fields == 3) {
+		dynid->id.bInterfaceClass = (u8)bInterfaceClass;
+		dynid->id.match_flags |= USB_DEVICE_ID_MATCH_INT_CLASS;
+	}
 
 	spin_lock(&dynids->lock);
 	list_add_tail(&dynid->node, &dynids->list);
@@ -428,13 +434,9 @@ static int usb_unbind_interface(struct device *dev)
 int usb_driver_claim_interface(struct usb_driver *driver,
 				struct usb_interface *iface, void *priv)
 {
-	struct device *dev;
+	struct device *dev = &iface->dev;
 	int retval = 0;
 
-	if (!iface)
-		return -ENODEV;
-
-	dev = &iface->dev;
 	if (dev->driver)
 		return -EBUSY;
 
@@ -545,10 +547,22 @@ int usb_match_device(struct usb_device *dev, const struct usb_device_id *id)
 }
 
 /* returns 0 if no match, 1 if match */
-int usb_match_one_id_intf(struct usb_device *dev,
-			  struct usb_host_interface *intf,
-			  const struct usb_device_id *id)
+int usb_match_one_id(struct usb_interface *interface,
+		     const struct usb_device_id *id)
 {
+	struct usb_host_interface *intf;
+	struct usb_device *dev;
+
+	/* proc_connectinfo in devio.c may call us with id == NULL. */
+	if (id == NULL)
+		return 0;
+
+	intf = interface->cur_altsetting;
+	dev = interface_to_usbdev(interface);
+
+	if (!usb_match_device(dev, id))
+		return 0;
+
 	/* The interface class, subclass, and protocol should never be
 	 * checked for a match if the device class is Vendor Specific,
 	 * unless the match record specifies the Vendor ID. */
@@ -572,26 +586,6 @@ int usb_match_one_id_intf(struct usb_device *dev,
 		return 0;
 
 	return 1;
-}
-
-/* returns 0 if no match, 1 if match */
-int usb_match_one_id(struct usb_interface *interface,
-		     const struct usb_device_id *id)
-{
-	struct usb_host_interface *intf;
-	struct usb_device *dev;
-
-	/* proc_connectinfo in devio.c may call us with id == NULL. */
-	if (id == NULL)
-		return 0;
-
-	intf = interface->cur_altsetting;
-	dev = interface_to_usbdev(interface);
-
-	if (!usb_match_device(dev, id))
-		return 0;
-
-	return usb_match_one_id_intf(dev, intf, id);
 }
 EXPORT_SYMBOL_GPL(usb_match_one_id);
 
@@ -1085,17 +1079,10 @@ static int usb_suspend_interface(struct usb_device *udev,
 		goto done;
 	driver = to_usb_driver(intf->dev.driver);
 
-	if (driver->suspend) {
-		status = driver->suspend(intf, msg);
-		if (status && !PMSG_IS_AUTO(msg))
-			dev_err(&intf->dev, "%s error %d\n",
-					"suspend", status);
-	} else {
-		/* Later we will unbind the driver and reprobe */
-		intf->needs_binding = 1;
-		dev_warn(&intf->dev, "no %s for driver %s?\n",
-				"suspend", driver->name);
-	}
+	/* at this time we know the driver supports suspend */
+	status = driver->suspend(intf, msg);
+	if (status && !PMSG_IS_AUTO(msg))
+		dev_err(&intf->dev, "suspend error %d\n", status);
 
  done:
 	dev_vdbg(&intf->dev, "%s: status %d\n", __func__, status);
@@ -1144,16 +1131,9 @@ static int usb_resume_interface(struct usb_device *udev,
 					"reset_resume", driver->name);
 		}
 	} else {
-		if (driver->resume) {
-			status = driver->resume(intf);
-			if (status)
-				dev_err(&intf->dev, "%s error %d\n",
-						"resume", status);
-		} else {
-			intf->needs_binding = 1;
-			dev_warn(&intf->dev, "no %s for driver %s?\n",
-					"resume", driver->name);
-		}
+		status = driver->resume(intf);
+		if (status)
+			dev_err(&intf->dev, "resume error %d\n", status);
 	}
 
 done:
@@ -1210,32 +1190,9 @@ static int usb_suspend_both(struct usb_device *udev, pm_message_t msg)
 	if (status == 0) {
 		status = usb_suspend_device(udev, msg);
 
-		/*
-		 * Ignore errors from non-root-hub devices during
-		 * system sleep transitions.  For the most part,
-		 * these devices should go to low power anyway when
-		 * the entire bus is suspended.
-		 */
-		if (udev->parent && !PMSG_IS_AUTO(msg))
+		/* Again, ignore errors during system sleep transitions */
+		if (!PMSG_IS_AUTO(msg))
 			status = 0;
-
-		/*
-		 * If the device is inaccessible, don't try to resume
-		 * suspended interfaces and just return the error.
-		 */
-		if (status && status != -EBUSY) {
-			int err;
-			u16 devstat;
-
-			err = usb_get_status(udev, USB_RECIP_DEVICE, 0,
-					     &devstat);
-			if (err) {
-				dev_err(&udev->dev,
-					"Failed to suspend device, error %d\n",
-					status);
-				goto done;
-			}
-		}
 	}
 
 	/* If the suspend failed, resume interfaces that did get suspended */
@@ -1649,9 +1606,6 @@ static int autosuspend_check(struct usb_device *udev)
 	int			w, i;
 	struct usb_interface	*intf;
 
-	if (udev->state == USB_STATE_NOTATTACHED)
-		return -ENODEV;
-
 	/* Fail if autosuspend is disabled, or any interfaces are in use, or
 	 * any interface drivers require remote wakeup but it isn't available.
 	 */
@@ -1689,18 +1643,6 @@ static int autosuspend_check(struct usb_device *udev)
 		dev_dbg(&udev->dev, "remote wakeup needed for autosuspend\n");
 		return -EOPNOTSUPP;
 	}
-
-	/*
-	 * If the device is a direct child of the root hub and the HCD
-	 * doesn't handle wakeup requests, don't allow autosuspend when
-	 * wakeup is needed.
-	 */
-	if (w && udev->parent == udev->bus->root_hub &&
-			bus_to_hcd(udev->bus)->cant_recv_wakeups) {
-		dev_dbg(&udev->dev, "HCD doesn't handle wakeup requests\n");
-		return -EOPNOTSUPP;
-	}
-
 	udev->do_remote_wakeup = w;
 	return 0;
 }
@@ -1723,13 +1665,10 @@ int usb_runtime_suspend(struct device *dev)
 	if (status == -EAGAIN || status == -EBUSY)
 		usb_mark_last_busy(udev);
 
-	/*
-	 * The PM core reacts badly unless the return code is 0,
-	 * -EAGAIN, or -EBUSY, so always return -EBUSY on an error
-	 * (except for root hubs, because they don't suspend through
-	 * an upstream port like other USB devices).
+	/* The PM core reacts badly unless the return code is 0,
+	 * -EAGAIN, or -EBUSY, so always return -EBUSY on an error.
 	 */
-	if (status != 0 && udev->parent)
+	if (status != 0)
 		return -EBUSY;
 	return status;
 }

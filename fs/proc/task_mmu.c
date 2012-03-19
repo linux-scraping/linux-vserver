@@ -11,7 +11,6 @@
 #include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/swapops.h>
-#include <linux/security.h>
 
 #include <asm/elf.h>
 #include <asm/uaccess.h>
@@ -230,7 +229,11 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 
 	/* We don't show the stack guard page in /proc/maps */
 	start = vma->vm_start;
+	if (stack_guard_page_start(vma, start))
+		start += PAGE_SIZE;
 	end = vma->vm_end;
+	if (stack_guard_page_end(vma, end))
+		end -= PAGE_SIZE;
 
 	seq_printf(m, "%08lx-%08lx %c%c%c%c %08llx %02x:%02x %lu %n",
 			start,
@@ -406,9 +409,6 @@ static int smaps_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 	} else {
 		spin_unlock(&walk->mm->page_table_lock);
 	}
-
-	if (pmd_trans_unstable(pmd))
-		return 0;
 	/*
 	 * The mmap_sem held all the way back in m_start() is what
 	 * keeps khugepaged out of here and from collapsing things
@@ -507,8 +507,6 @@ static int clear_refs_pte_range(pmd_t *pmd, unsigned long addr,
 	struct page *page;
 
 	split_huge_page_pmd(walk->mm, pmd);
-	if (pmd_trans_unstable(pmd))
-		return 0;
 
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
@@ -601,9 +599,8 @@ const struct file_operations proc_clear_refs_operations = {
 };
 
 struct pagemapread {
-	int pos, len;		/* units: PM_ENTRY_BYTES, not bytes */
+	int pos, len;
 	u64 *buffer;
-	bool show_pfn;
 };
 
 #define PM_ENTRY_BYTES      sizeof(u64)
@@ -652,14 +649,14 @@ static u64 swap_pte_to_pagemap_entry(pte_t pte)
 	return swp_type(e) | (swp_offset(e) << MAX_SWAPFILES_SHIFT);
 }
 
-static u64 pte_to_pagemap_entry(struct pagemapread *pm, pte_t pte)
+static u64 pte_to_pagemap_entry(pte_t pte)
 {
 	u64 pme = 0;
 	if (is_swap_pte(pte))
 		pme = PM_PFRAME(swap_pte_to_pagemap_entry(pte))
 			| PM_PSHIFT(PAGE_SHIFT) | PM_SWAP;
 	else if (pte_present(pte))
-		pme = (pm->show_pfn ? PM_PFRAME(pte_pfn(pte)) : 0)
+		pme = PM_PFRAME(pte_pfn(pte))
 			| PM_PSHIFT(PAGE_SHIFT) | PM_PRESENT;
 	return pme;
 }
@@ -673,8 +670,6 @@ static int pagemap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 	int err = 0;
 
 	split_huge_page_pmd(walk->mm, pmd);
-	if (pmd_trans_unstable(pmd))
-		return 0;
 
 	/* find the first VMA at or above 'addr' */
 	vma = find_vma(walk->mm, addr);
@@ -691,7 +686,7 @@ static int pagemap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 		if (vma && (vma->vm_start <= addr) &&
 		    !is_vm_hugetlb_page(vma)) {
 			pte = pte_offset_map(pmd, addr);
-			pfn = pte_to_pagemap_entry(pm, *pte);
+			pfn = pte_to_pagemap_entry(*pte);
 			/* unmap before userspace copy */
 			pte_unmap(pte);
 		}
@@ -706,11 +701,11 @@ static int pagemap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 }
 
 #ifdef CONFIG_HUGETLB_PAGE
-static u64 huge_pte_to_pagemap_entry(struct pagemapread *pm, pte_t pte, int offset)
+static u64 huge_pte_to_pagemap_entry(pte_t pte, int offset)
 {
 	u64 pme = 0;
 	if (pte_present(pte))
-		pme = (pm->show_pfn ? PM_PFRAME(pte_pfn(pte) + offset) : 0)
+		pme = PM_PFRAME(pte_pfn(pte) + offset)
 			| PM_PSHIFT(PAGE_SHIFT) | PM_PRESENT;
 	return pme;
 }
@@ -726,7 +721,7 @@ static int pagemap_hugetlb_range(pte_t *pte, unsigned long hmask,
 
 	for (; addr != end; addr += PAGE_SIZE) {
 		int offset = (addr & ~hmask) >> PAGE_SHIFT;
-		pfn = huge_pte_to_pagemap_entry(pm, *pte, offset);
+		pfn = huge_pte_to_pagemap_entry(*pte, offset);
 		err = add_to_pagemap(addr, pfn, pm);
 		if (err)
 			return err;
@@ -790,12 +785,8 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	if (!count)
 		goto out_task;
 
-	/* do not disclose physical addresses: attack vector */
-	pm.show_pfn = !security_capable(&init_user_ns, file->f_cred, 
-					CAP_SYS_ADMIN);
-
-	pm.len = (PAGEMAP_WALK_SIZE >> PAGE_SHIFT);
-	pm.buffer = kmalloc(pm.len * PM_ENTRY_BYTES, GFP_TEMPORARY);
+	pm.len = PM_ENTRY_BYTES * (PAGEMAP_WALK_SIZE >> PAGE_SHIFT);
+	pm.buffer = kmalloc(pm.len, GFP_TEMPORARY);
 	ret = -ENOMEM;
 	if (!pm.buffer)
 		goto out_task;
@@ -970,8 +961,6 @@ static int gather_pte_stats(pmd_t *pmd, unsigned long addr,
 		spin_unlock(&walk->mm->page_table_lock);
 	}
 
-	if (pmd_trans_unstable(pmd))
-		return 0;
 	orig_pte = pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
 	do {
 		struct page *page = can_gather_numa_stats(*pte, md->vma, addr);

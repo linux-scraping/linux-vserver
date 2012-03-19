@@ -198,13 +198,6 @@ static void enclosure_remove_links(struct enclosure_component *cdev)
 {
 	char name[ENCLOSURE_NAME_SIZE];
 
-	/*
-	 * In odd circumstances, like multipath devices, something else may
-	 * already have removed the links, so check for this condition first.
-	 */
-	if (!cdev->dev->kobj.sd)
-		return;
-
 	enclosure_link_name(cdev, name);
 	sysfs_remove_link(&cdev->dev->kobj, name);
 	sysfs_remove_link(&cdev->cdev.kobj, "device");
@@ -320,7 +313,6 @@ int enclosure_add_device(struct enclosure_device *edev, int component,
 			 struct device *dev)
 {
 	struct enclosure_component *cdev;
-	int err;
 
 	if (!edev || component >= edev->components)
 		return -EINVAL;
@@ -330,17 +322,12 @@ int enclosure_add_device(struct enclosure_device *edev, int component,
 	if (cdev->dev == dev)
 		return -EEXIST;
 
-	if (cdev->dev) {
+	if (cdev->dev)
 		enclosure_remove_links(cdev);
-		put_device(cdev->dev);
-	}
+
+	put_device(cdev->dev);
 	cdev->dev = get_device(dev);
-	err = enclosure_add_links(cdev);
-	if (err) {
-		put_device(cdev->dev);
-		cdev->dev = NULL;
-	}
-	return err;
+	return enclosure_add_links(cdev);
 }
 EXPORT_SYMBOL_GPL(enclosure_add_device);
 

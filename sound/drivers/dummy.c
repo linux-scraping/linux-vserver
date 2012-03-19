@@ -60,15 +60,15 @@ MODULE_SUPPORTED_DEVICE("{{ALSA,Dummy soundcard}}");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static int enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
+static bool enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
 static char *model[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = NULL};
 static int pcm_devs[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
 static int pcm_substreams[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 8};
 //static int midi_devs[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 2};
 #ifdef CONFIG_HIGH_RES_TIMERS
-static int hrtimer = 1;
+static bool hrtimer = 1;
 #endif
-static int fake_buffer = 1;
+static bool fake_buffer = 1;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for dummy soundcard.");
@@ -109,9 +109,6 @@ struct dummy_timer_ops {
 	snd_pcm_uframes_t (*pointer)(struct snd_pcm_substream *);
 };
 
-#define get_dummy_ops(substream) \
-	(*(const struct dummy_timer_ops **)(substream)->runtime->private_data)
-
 struct dummy_model {
 	const char *name;
 	int (*playback_constraints)(struct snd_pcm_runtime *runtime);
@@ -137,6 +134,7 @@ struct snd_dummy {
 	spinlock_t mixer_lock;
 	int mixer_volume[MIXER_ADDR_LAST+1][2];
 	int capture_source[MIXER_ADDR_LAST+1][2];
+	const struct dummy_timer_ops *timer_ops;
 };
 
 /*
@@ -230,8 +228,6 @@ struct dummy_model *dummy_models[] = {
  */
 
 struct dummy_systimer_pcm {
-	/* ops must be the first item */
-	const struct dummy_timer_ops *timer_ops;
 	spinlock_t lock;
 	struct timer_list timer;
 	unsigned long base_time;
@@ -369,8 +365,6 @@ static struct dummy_timer_ops dummy_systimer_ops = {
  */
 
 struct dummy_hrtimer_pcm {
-	/* ops must be the first item */
-	const struct dummy_timer_ops *timer_ops;
 	ktime_t base_time;
 	ktime_t period_time;
 	atomic_t running;
@@ -419,7 +413,6 @@ static int dummy_hrtimer_stop(struct snd_pcm_substream *substream)
 
 static inline void dummy_hrtimer_sync(struct dummy_hrtimer_pcm *dpcm)
 {
-	hrtimer_cancel(&dpcm->timer);
 	tasklet_kill(&dpcm->tasklet);
 }
 
@@ -498,25 +491,31 @@ static struct dummy_timer_ops dummy_hrtimer_ops = {
 
 static int dummy_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
+	struct snd_dummy *dummy = snd_pcm_substream_chip(substream);
+
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		return get_dummy_ops(substream)->start(substream);
+		return dummy->timer_ops->start(substream);
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-		return get_dummy_ops(substream)->stop(substream);
+		return dummy->timer_ops->stop(substream);
 	}
 	return -EINVAL;
 }
 
 static int dummy_pcm_prepare(struct snd_pcm_substream *substream)
 {
-	return get_dummy_ops(substream)->prepare(substream);
+	struct snd_dummy *dummy = snd_pcm_substream_chip(substream);
+
+	return dummy->timer_ops->prepare(substream);
 }
 
 static snd_pcm_uframes_t dummy_pcm_pointer(struct snd_pcm_substream *substream)
 {
-	return get_dummy_ops(substream)->pointer(substream);
+	struct snd_dummy *dummy = snd_pcm_substream_chip(substream);
+
+	return dummy->timer_ops->pointer(substream);
 }
 
 static struct snd_pcm_hardware dummy_pcm_hardware = {
@@ -562,19 +561,17 @@ static int dummy_pcm_open(struct snd_pcm_substream *substream)
 	struct snd_dummy *dummy = snd_pcm_substream_chip(substream);
 	struct dummy_model *model = dummy->model;
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	const struct dummy_timer_ops *ops;
 	int err;
 
-	ops = &dummy_systimer_ops;
+	dummy->timer_ops = &dummy_systimer_ops;
 #ifdef CONFIG_HIGH_RES_TIMERS
 	if (hrtimer)
-		ops = &dummy_hrtimer_ops;
+		dummy->timer_ops = &dummy_hrtimer_ops;
 #endif
 
-	err = ops->create(substream);
+	err = dummy->timer_ops->create(substream);
 	if (err < 0)
 		return err;
-	get_dummy_ops(substream) = ops;
 
 	runtime->hw = dummy->pcm_hw;
 	if (substream->pcm->device & 1) {
@@ -596,7 +593,7 @@ static int dummy_pcm_open(struct snd_pcm_substream *substream)
 			err = model->capture_constraints(substream->runtime);
 	}
 	if (err < 0) {
-		get_dummy_ops(substream)->free(substream);
+		dummy->timer_ops->free(substream);
 		return err;
 	}
 	return 0;
@@ -604,7 +601,8 @@ static int dummy_pcm_open(struct snd_pcm_substream *substream)
 
 static int dummy_pcm_close(struct snd_pcm_substream *substream)
 {
-	get_dummy_ops(substream)->free(substream);
+	struct snd_dummy *dummy = snd_pcm_substream_chip(substream);
+	dummy->timer_ops->free(substream);
 	return 0;
 }
 

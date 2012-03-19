@@ -17,6 +17,9 @@ config MICROBLAZE
 	select HAVE_GENERIC_HARDIRQS
 	select GENERIC_IRQ_PROBE
 	select GENERIC_IRQ_SHOW
+	select GENERIC_PCI_IOMAP
+	select GENERIC_CPU_DEVICES
+	select GENERIC_ATOMIC64
 
 config SWAP
 	def_bool n
@@ -46,7 +49,7 @@ config GENERIC_CLOCKEVENTS
 	def_bool y
 
 config GENERIC_GPIO
-	bool
+	def_bool y
 
 config GENERIC_CSUM
 	def_bool y

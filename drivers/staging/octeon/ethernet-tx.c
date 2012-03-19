@@ -47,13 +47,13 @@
 #include "ethernet-tx.h"
 #include "ethernet-util.h"
 
-#include "cvmx-wqe.h"
-#include "cvmx-fau.h"
-#include "cvmx-pip.h"
-#include "cvmx-pko.h"
-#include "cvmx-helper.h"
+#include <asm/octeon/cvmx-wqe.h>
+#include <asm/octeon/cvmx-fau.h>
+#include <asm/octeon/cvmx-pip.h>
+#include <asm/octeon/cvmx-pko.h>
+#include <asm/octeon/cvmx-helper.h>
 
-#include "cvmx-gmxx-defs.h"
+#include <asm/octeon/cvmx-gmxx-defs.h>
 
 #define CVM_OCT_SKB_CB(skb)	((u64 *)((skb)->cb))
 
@@ -344,7 +344,7 @@ int cvm_oct_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 	if (unlikely
 	    (skb->truesize !=
-	     sizeof(*skb) + skb_end_offset(skb))) {
+	     sizeof(*skb) + skb_end_pointer(skb) - skb->head)) {
 		/*
 		   printk("TX buffer truesize has been changed\n");
 		 */

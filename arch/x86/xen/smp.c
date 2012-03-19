@@ -172,7 +172,6 @@ static void __init xen_fill_possible_map(void)
 static void __init xen_filter_cpu_maps(void)
 {
 	int i, rc;
-	unsigned int subtract = 0;
 
 	if (!xen_initial_domain())
 		return;
@@ -187,22 +186,8 @@ static void __init xen_filter_cpu_maps(void)
 		} else {
 			set_cpu_possible(i, false);
 			set_cpu_present(i, false);
-			subtract++;
 		}
 	}
-#ifdef CONFIG_HOTPLUG_CPU
-	/* This is akin to using 'nr_cpus' on the Linux command line.
-	 * Which is OK as when we use 'dom0_max_vcpus=X' we can only
-	 * have up to X, while nr_cpu_ids is greater than X. This
-	 * normally is not a problem, except when CPU hotplugging
-	 * is involved and then there might be more than X CPUs
-	 * in the guest - which will not work as there is no
-	 * hypercall to expand the max number of VCPUs an already
-	 * running guest has. So cap it up to X. */
-	if (subtract)
-		nr_cpu_ids = nr_cpu_ids - subtract;
-#endif
-
 }
 
 static void __init xen_smp_prepare_boot_cpu(void)
@@ -368,8 +353,7 @@ static int __cpuinit xen_cpu_up(unsigned int cpu)
 		return rc;
 
 	if (num_online_cpus() == 1)
-		/* Just in case we booted with a single CPU. */
-		alternatives_enable_smp();
+		alternatives_smp_switch(1);
 
 	rc = xen_smp_intr_init(cpu);
 	if (rc)
@@ -415,6 +399,9 @@ static void xen_cpu_die(unsigned int cpu)
 	unbind_from_irqhandler(per_cpu(xen_callfuncsingle_irq, cpu), NULL);
 	xen_uninit_lock_cpu(cpu);
 	xen_teardown_timer(cpu);
+
+	if (num_online_cpus() == 1)
+		alternatives_smp_switch(0);
 }
 
 static void __cpuinit xen_play_dead(void) /* used only with HOTPLUG_CPU */
@@ -422,6 +409,13 @@ static void __cpuinit xen_play_dead(void) /* used only with HOTPLUG_CPU */
 	play_dead_common();
 	HYPERVISOR_vcpu_op(VCPUOP_down, smp_processor_id(), NULL);
 	cpu_bringup();
+	/*
+	 * Balance out the preempt calls - as we are running in cpu_idle
+	 * loop which has been called at bootup from cpu_bringup_and_idle.
+	 * The cpucpu_bringup_and_idle called cpu_bringup which made a
+	 * preempt_disable() So this preempt_enable will balance it out.
+	 */
+	preempt_enable();
 }
 
 #else /* !CONFIG_HOTPLUG_CPU */
@@ -561,8 +555,6 @@ static void xen_hvm_cpu_die(unsigned int cpu)
 	unbind_from_irqhandler(per_cpu(xen_callfunc_irq, cpu), NULL);
 	unbind_from_irqhandler(per_cpu(xen_debug_irq, cpu), NULL);
 	unbind_from_irqhandler(per_cpu(xen_callfuncsingle_irq, cpu), NULL);
-	xen_uninit_lock_cpu(cpu);
-	xen_teardown_timer(cpu);
 	native_cpu_die(cpu);
 }
 

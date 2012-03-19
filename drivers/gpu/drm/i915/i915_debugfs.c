@@ -30,7 +30,6 @@
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 #include <linux/export.h>
-#include <generated/utsrelease.h>
 #include "drmP.h"
 #include "drm.h"
 #include "intel_drv.h"
@@ -122,11 +121,11 @@ static const char *cache_level_str(int type)
 static void
 describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 {
-	seq_printf(m, "%pK: %s%s %8zd %04x %04x %d %d%s%s%s",
+	seq_printf(m, "%p: %s%s %8zdKiB %04x %04x %d %d%s%s%s",
 		   &obj->base,
 		   get_pin_flag(obj),
 		   get_tiling_flag(obj),
-		   obj->base.size,
+		   obj->base.size / 1024,
 		   obj->base.read_domains,
 		   obj->base.write_domain,
 		   obj->last_rendering_seqno,
@@ -340,7 +339,7 @@ static int i915_gem_pageflip_info(struct seq_file *m, void *data)
 			seq_printf(m, "No flip due on pipe %c (plane %c)\n",
 				   pipe, plane);
 		} else {
-			if (atomic_read(&work->pending) < INTEL_FLIP_COMPLETE) {
+			if (!work->pending) {
 				seq_printf(m, "Flip queued on pipe %c (plane %c)\n",
 					   pipe, plane);
 			} else {
@@ -351,7 +350,7 @@ static int i915_gem_pageflip_info(struct seq_file *m, void *data)
 				seq_printf(m, "Stall check enabled, ");
 			else
 				seq_printf(m, "Stall check waiting for page flip ioctl, ");
-			seq_printf(m, "%d prepares\n", atomic_read(&work->pending));
+			seq_printf(m, "%d prepares\n", work->pending);
 
 			if (work->old_fb_obj) {
 				struct drm_i915_gem_object *obj = work->old_fb_obj;
@@ -654,7 +653,7 @@ static int i915_ringbuffer_info(struct seq_file *m, void *data)
 	seq_printf(m, "  Size :    %08x\n", ring->size);
 	seq_printf(m, "  Active :  %08x\n", intel_ring_get_active_head(ring));
 	seq_printf(m, "  NOPID :   %08x\n", I915_READ_NOPID(ring));
-	if (IS_GEN6(dev)) {
+	if (IS_GEN6(dev) || IS_GEN7(dev)) {
 		seq_printf(m, "  Sync 0 :   %08x\n", I915_READ_SYNC_0(ring));
 		seq_printf(m, "  Sync 1 :   %08x\n", I915_READ_SYNC_1(ring));
 	}
@@ -756,7 +755,6 @@ static int i915_error_state(struct seq_file *m, void *unused)
 
 	seq_printf(m, "Time: %ld s %ld us\n", error->time.tv_sec,
 		   error->time.tv_usec);
-	seq_printf(m, "Kernel: " UTS_RELEASE "\n");
 	seq_printf(m, "PCI ID: 0x%04x\n", dev->pci_device);
 	seq_printf(m, "EIR: 0x%08x\n", error->eir);
 	seq_printf(m, "PGTBL_ER: 0x%08x\n", error->pgtbl_er);
@@ -1003,7 +1001,7 @@ static int i915_inttoext_table(struct seq_file *m, void *unused)
 	return 0;
 }
 
-static int i915_drpc_info(struct seq_file *m, void *unused)
+static int ironlake_drpc_info(struct seq_file *m)
 {
 	struct drm_info_node *node = (struct drm_info_node *) m->private;
 	struct drm_device *dev = node->minor->dev;
@@ -1068,6 +1066,95 @@ static int i915_drpc_info(struct seq_file *m, void *unused)
 	}
 
 	return 0;
+}
+
+static int gen6_drpc_info(struct seq_file *m)
+{
+
+	struct drm_info_node *node = (struct drm_info_node *) m->private;
+	struct drm_device *dev = node->minor->dev;
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	u32 rpmodectl1, gt_core_status, rcctl1;
+	unsigned forcewake_count;
+	int count=0, ret;
+
+
+	ret = mutex_lock_interruptible(&dev->struct_mutex);
+	if (ret)
+		return ret;
+
+	spin_lock_irq(&dev_priv->gt_lock);
+	forcewake_count = dev_priv->forcewake_count;
+	spin_unlock_irq(&dev_priv->gt_lock);
+
+	if (forcewake_count) {
+		seq_printf(m, "RC information inaccurate because somebody "
+			      "holds a forcewake reference \n");
+	} else {
+		/* NB: we cannot use forcewake, else we read the wrong values */
+		while (count++ < 50 && (I915_READ_NOTRACE(FORCEWAKE_ACK) & 1))
+			udelay(10);
+		seq_printf(m, "RC information accurate: %s\n", yesno(count < 51));
+	}
+
+	gt_core_status = readl(dev_priv->regs + GEN6_GT_CORE_STATUS);
+	trace_i915_reg_rw(false, GEN6_GT_CORE_STATUS, gt_core_status, 4);
+
+	rpmodectl1 = I915_READ(GEN6_RP_CONTROL);
+	rcctl1 = I915_READ(GEN6_RC_CONTROL);
+	mutex_unlock(&dev->struct_mutex);
+
+	seq_printf(m, "Video Turbo Mode: %s\n",
+		   yesno(rpmodectl1 & GEN6_RP_MEDIA_TURBO));
+	seq_printf(m, "HW control enabled: %s\n",
+		   yesno(rpmodectl1 & GEN6_RP_ENABLE));
+	seq_printf(m, "SW control enabled: %s\n",
+		   yesno((rpmodectl1 & GEN6_RP_MEDIA_MODE_MASK) ==
+			  GEN6_RP_MEDIA_SW_MODE));
+	seq_printf(m, "RC1e Enabled: %s\n",
+		   yesno(rcctl1 & GEN6_RC_CTL_RC1e_ENABLE));
+	seq_printf(m, "RC6 Enabled: %s\n",
+		   yesno(rcctl1 & GEN6_RC_CTL_RC6_ENABLE));
+	seq_printf(m, "Deep RC6 Enabled: %s\n",
+		   yesno(rcctl1 & GEN6_RC_CTL_RC6p_ENABLE));
+	seq_printf(m, "Deepest RC6 Enabled: %s\n",
+		   yesno(rcctl1 & GEN6_RC_CTL_RC6pp_ENABLE));
+	seq_printf(m, "Current RC state: ");
+	switch (gt_core_status & GEN6_RCn_MASK) {
+	case GEN6_RC0:
+		if (gt_core_status & GEN6_CORE_CPD_STATE_MASK)
+			seq_printf(m, "Core Power Down\n");
+		else
+			seq_printf(m, "on\n");
+		break;
+	case GEN6_RC3:
+		seq_printf(m, "RC3\n");
+		break;
+	case GEN6_RC6:
+		seq_printf(m, "RC6\n");
+		break;
+	case GEN6_RC7:
+		seq_printf(m, "RC7\n");
+		break;
+	default:
+		seq_printf(m, "Unknown\n");
+		break;
+	}
+
+	seq_printf(m, "Core Power Down: %s\n",
+		   yesno(gt_core_status & GEN6_CORE_CPD_STATE_MASK));
+	return 0;
+}
+
+static int i915_drpc_info(struct seq_file *m, void *unused)
+{
+	struct drm_info_node *node = (struct drm_info_node *) m->private;
+	struct drm_device *dev = node->minor->dev;
+
+	if (IS_GEN6(dev) || IS_GEN7(dev))
+		return gen6_drpc_info(m);
+	else
+		return ironlake_drpc_info(m);
 }
 
 static int i915_fbc_status(struct seq_file *m, void *unused)
@@ -1587,7 +1674,7 @@ static int i915_forcewake_open(struct inode *inode, struct file *file)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	int ret;
 
-	if (!IS_GEN6(dev))
+	if (INTEL_INFO(dev)->gen < 6)
 		return 0;
 
 	ret = mutex_lock_interruptible(&dev->struct_mutex);
@@ -1604,7 +1691,7 @@ int i915_forcewake_release(struct inode *inode, struct file *file)
 	struct drm_device *dev = inode->i_private;
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
-	if (!IS_GEN6(dev))
+	if (INTEL_INFO(dev)->gen < 6)
 		return 0;
 
 	/*

@@ -191,8 +191,6 @@ static inline struct kobj_type *get_ktype(struct kobject *kobj)
 }
 
 extern struct kobject *kset_find_obj(struct kset *, const char *);
-extern struct kobject *kset_find_obj_hinted(struct kset *, const char *,
-						struct kobject *);
 
 /* The global /sys/kernel/ kobject for people to chain off of */
 extern struct kobject *kernel_kobj;
@@ -226,7 +224,7 @@ static inline int kobject_uevent_env(struct kobject *kobj,
 
 static inline __printf(2, 3)
 int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
-{ return -ENOMEM; }
+{ return 0; }
 
 static inline int kobject_action_type(const char *buf, size_t count,
 				      enum kobject_action *type)

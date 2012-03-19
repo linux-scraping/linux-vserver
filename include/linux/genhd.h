@@ -163,7 +163,7 @@ struct gendisk {
                                          * disks that can't be partitioned. */
 
 	char disk_name[DISK_NAME_LEN];	/* name of major driver */
-	char *(*devnode)(struct gendisk *gd, mode_t *mode);
+	char *(*devnode)(struct gendisk *gd, umode_t *mode);
 
 	unsigned int events;		/* supported events */
 	unsigned int async_events;	/* async events, subset of all */
@@ -220,6 +220,12 @@ static inline void part_pack_uuid(const u8 *uuid_str, u8 *to)
 			continue;
 		}
 	}
+}
+
+static inline char *part_unpack_uuid(const u8 *uuid, char *out)
+{
+	sprintf(out, "%pU", uuid);
+	return out;
 }
 
 static inline int disk_max_parts(struct gendisk *disk)

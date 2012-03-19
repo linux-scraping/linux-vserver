@@ -34,7 +34,7 @@
  * radeon_ddc_probe
  *
  */
-bool radeon_ddc_probe(struct radeon_connector *radeon_connector, bool use_aux)
+bool radeon_ddc_probe(struct radeon_connector *radeon_connector)
 {
 	u8 out = 0x0;
 	u8 buf[8];
@@ -58,13 +58,7 @@ bool radeon_ddc_probe(struct radeon_connector *radeon_connector, bool use_aux)
 	if (radeon_connector->router.ddc_valid)
 		radeon_router_select_ddc_port(radeon_connector);
 
-	if (use_aux) {
-		struct radeon_connector_atom_dig *dig = radeon_connector->con_priv;
-		ret = i2c_transfer(&dig->dp_i2c_bus->adapter, msgs, 2);
-	} else {
-		ret = i2c_transfer(&radeon_connector->ddc_bus->adapter, msgs, 2);
-	}
-
+	ret = i2c_transfer(&radeon_connector->ddc_bus->adapter, msgs, 2);
 	if (ret != 2)
 		/* Couldn't find an accessible DDC on this connector */
 		return false;
@@ -896,10 +890,6 @@ struct radeon_i2c_chan *radeon_i2c_create(struct drm_device *dev,
 	struct radeon_i2c_chan *i2c;
 	int ret;
 
-	/* don't add the mm_i2c bus unless hw_i2c is enabled */
-	if (rec->mm_i2c && (radeon_hw_i2c == 0))
-		return NULL;
-
 	i2c = kzalloc(sizeof(struct radeon_i2c_chan), GFP_KERNEL);
 	if (i2c == NULL)
 		return NULL;
@@ -907,6 +897,7 @@ struct radeon_i2c_chan *radeon_i2c_create(struct drm_device *dev,
 	i2c->rec = *rec;
 	i2c->adapter.owner = THIS_MODULE;
 	i2c->adapter.class = I2C_CLASS_DDC;
+	i2c->adapter.dev.parent = &dev->pdev->dev;
 	i2c->dev = dev;
 	i2c_set_adapdata(&i2c->adapter, i2c);
 	if (rec->mm_i2c ||
@@ -967,6 +958,7 @@ struct radeon_i2c_chan *radeon_i2c_create_dp(struct drm_device *dev,
 	i2c->rec = *rec;
 	i2c->adapter.owner = THIS_MODULE;
 	i2c->adapter.class = I2C_CLASS_DDC;
+	i2c->adapter.dev.parent = &dev->pdev->dev;
 	i2c->dev = dev;
 	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
 		 "Radeon aux bus %s", name);
@@ -998,9 +990,6 @@ void radeon_i2c_destroy(struct radeon_i2c_chan *i2c)
 /* Add the default buses */
 void radeon_i2c_init(struct radeon_device *rdev)
 {
-	if (radeon_hw_i2c)
-		DRM_INFO("hw_i2c forced on, you may experience display detection problems!\n");
-
 	if (rdev->is_atom_bios)
 		radeon_atombios_i2c_init(rdev);
 	else

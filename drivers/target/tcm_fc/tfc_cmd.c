@@ -39,12 +39,8 @@
 #include <scsi/fc_encode.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
-#include <target/target_core_device.h>
-#include <target/target_core_tpg.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
-#include <target/target_core_tmr.h>
 #include <target/configfs_macros.h>
 
 #include "tcm_fc.h"
@@ -130,8 +126,6 @@ int ft_queue_status(struct se_cmd *se_cmd)
 	struct fc_exch *ep;
 	size_t len;
 
-	if (cmd->aborted)
-		return 0;
 	ft_dump_cmd(cmd, __func__);
 	ep = fc_seq_exch(cmd->seq);
 	lport = ep->lp;
@@ -198,8 +192,6 @@ int ft_write_pending(struct se_cmd *se_cmd)
 
 	ft_dump_cmd(cmd, __func__);
 
-	if (cmd->aborted)
-		return 0;
 	ep = fc_seq_exch(cmd->seq);
 	lport = ep->lp;
 	fp = fc_frame_alloc(lport, sizeof(*txrdy));
@@ -249,8 +241,6 @@ u32 ft_get_task_tag(struct se_cmd *se_cmd)
 {
 	struct ft_cmd *cmd = container_of(se_cmd, struct ft_cmd, se_cmd);
 
-	if (cmd->aborted)
-		return ~0;
 	return fc_seq_exch(cmd->seq)->rxid;
 }
 
@@ -272,10 +262,10 @@ static void ft_recv_seq(struct fc_seq *sp, struct fc_frame *fp, void *arg)
 	struct ft_cmd *cmd = arg;
 	struct fc_frame_header *fh;
 
-	if (unlikely(IS_ERR(fp))) {
+	if (IS_ERR(fp)) {
 		/* XXX need to find cmd if queued */
 		cmd->seq = NULL;
-		cmd->aborted = true;
+		transport_generic_free_cmd(&cmd->se_cmd, 0);
 		return;
 	}
 
@@ -335,12 +325,10 @@ static void ft_send_resp_status(struct fc_lport *lport,
 
 	fc_fill_reply_hdr(fp, rx_fp, FC_RCTL_DD_CMD_STATUS, 0);
 	sp = fr_seq(fp);
-	if (sp) {
+	if (sp)
 		lport->tt.seq_send(lport, sp, fp);
-		lport->tt.exch_done(sp);
-	} else {
+	else
 		lport->tt.frame_send(lport, fp);
-	}
 }
 
 /*
@@ -374,6 +362,11 @@ static void ft_send_tm(struct ft_cmd *cmd)
 	struct fcp_cmnd *fcp;
 	struct ft_sess *sess;
 	u8 tm_func;
+
+	transport_init_se_cmd(&cmd->se_cmd, &ft_configfs->tf_ops,
+			cmd->sess->se_sess, 0, DMA_NONE, 0,
+			&cmd->ft_sense_buffer[0]);
+	target_get_sess_cmd(cmd->sess->se_sess, &cmd->se_cmd, false);
 
 	fcp = fc_frame_payload_get(cmd->req_frame, sizeof(*fcp));
 
@@ -428,7 +421,6 @@ static void ft_send_tm(struct ft_cmd *cmd)
 			sess = cmd->sess;
 			transport_send_check_condition_and_sense(&cmd->se_cmd,
 				cmd->se_cmd.scsi_sense_reason, 0);
-			transport_generic_free_cmd(&cmd->se_cmd, 0);
 			ft_sess_put(sess);
 			return;
 		}
@@ -453,8 +445,6 @@ int ft_queue_tm_resp(struct se_cmd *se_cmd)
 	struct se_tmr_req *tmr = se_cmd->se_tmr_req;
 	enum fcp_resp_rsp_codes code;
 
-	if (cmd->aborted)
-		return 0;
 	switch (tmr->response) {
 	case TMR_FUNCTION_COMPLETE:
 		code = FCP_TMF_CMPL;
@@ -546,12 +536,10 @@ static void ft_send_work(struct work_struct *work)
 {
 	struct ft_cmd *cmd = container_of(work, struct ft_cmd, work);
 	struct fc_frame_header *fh = fc_frame_header_get(cmd->req_frame);
-	struct se_cmd *se_cmd;
 	struct fcp_cmnd *fcp;
 	int data_dir = 0;
 	u32 data_len;
 	int task_attr;
-	int ret;
 
 	fcp = fc_frame_payload_get(cmd->req_frame, sizeof(*fcp));
 	if (!fcp)
@@ -601,15 +589,6 @@ static void ft_send_work(struct work_struct *work)
 		data_len = ntohl(fcp->fc_dl);
 		cmd->cdb = fcp->fc_cdb;
 	}
-
-	se_cmd = &cmd->se_cmd;
-	/*
-	 * Initialize struct se_cmd descriptor from target_core_mod
-	 * infrastructure
-	 */
-	transport_init_se_cmd(se_cmd, &ft_configfs->tf_ops, cmd->sess->se_sess,
-			      data_len, data_dir, task_attr,
-			      &cmd->ft_sense_buffer[0]);
 	/*
 	 * Check for FCP task management flags
 	 */
@@ -617,39 +596,16 @@ static void ft_send_work(struct work_struct *work)
 		ft_send_tm(cmd);
 		return;
 	}
-
 	fc_seq_exch(cmd->seq)->lp->tt.seq_set_resp(cmd->seq, ft_recv_seq, cmd);
-
 	cmd->lun = scsilun_to_int((struct scsi_lun *)fcp->fc_lun);
-	ret = transport_lookup_cmd_lun(&cmd->se_cmd, cmd->lun);
-	if (ret < 0) {
-		ft_dump_cmd(cmd, __func__);
-		transport_send_check_condition_and_sense(&cmd->se_cmd,
-			cmd->se_cmd.scsi_sense_reason, 0);
-		return;
-	}
-
-	ret = transport_generic_allocate_tasks(se_cmd, cmd->cdb);
-
-	pr_debug("r_ctl %x alloc task ret %d\n", fh->fh_r_ctl, ret);
-	ft_dump_cmd(cmd, __func__);
-
-	if (ret == -ENOMEM) {
-		transport_send_check_condition_and_sense(se_cmd,
-				TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE, 0);
-		transport_generic_free_cmd(se_cmd, 0);
-		return;
-	}
-	if (ret == -EINVAL) {
-		if (se_cmd->se_cmd_flags & SCF_SCSI_RESERVATION_CONFLICT)
-			ft_queue_status(se_cmd);
-		else
-			transport_send_check_condition_and_sense(se_cmd,
-					se_cmd->scsi_sense_reason, 0);
-		transport_generic_free_cmd(se_cmd, 0);
-		return;
-	}
-	transport_handle_cdb_direct(se_cmd);
+	/*
+	 * Use a single se_cmd->cmd_kref as we expect to release se_cmd
+	 * directly from ft_check_stop_free callback in response path.
+	 */
+	target_submit_cmd(&cmd->se_cmd, cmd->sess->se_sess, cmd->cdb,
+				&cmd->ft_sense_buffer[0], cmd->lun, data_len,
+				task_attr, data_dir, 0);
+	pr_debug("r_ctl %x alloc target_submit_cmd\n", fh->fh_r_ctl);
 	return;
 
 err:

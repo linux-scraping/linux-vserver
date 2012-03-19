@@ -140,7 +140,7 @@ static void saa7164_ts_verifier(struct saa7164_buffer *buf)
 	u32 i;
 	u8 cc, a;
 	u16 pid;
-	u8 *bufcpu = (u8 *)buf->cpu;
+	u8 __iomem *bufcpu = (u8 *)buf->cpu;
 
 	port->sync_errors = 0;
 	port->v_cc_errors = 0;
@@ -281,7 +281,7 @@ static void saa7164_work_enchandler_helper(struct saa7164_port *port, int bufnr)
 	struct saa7164_user_buffer *ubuf = NULL;
 	struct list_head *c, *n;
 	int i = 0;
-	u8 *p;
+	u8 __iomem *p;
 
 	mutex_lock(&port->dmaqueue_lock);
 	list_for_each_safe(c, n, &port->dmaqueue.list) {
@@ -338,7 +338,8 @@ static void saa7164_work_enchandler_helper(struct saa7164_port *port, int bufnr)
 
 				if (buf->actual_size <= ubuf->actual_size) {
 
-					memcpy(ubuf->data, buf->cpu, ubuf->actual_size);
+					memcpy_fromio(ubuf->data, buf->cpu,
+						ubuf->actual_size);
 
 					if (crc_checking) {
 						/* Throw a new checksum on the read buffer */
@@ -365,7 +366,7 @@ static void saa7164_work_enchandler_helper(struct saa7164_port *port, int bufnr)
 			 * with known bad data. We check for this data at a later point
 			 * in time. */
 			saa7164_buffer_zero_offsets(port, bufnr);
-			memset(buf->cpu, 0xff, buf->pci_size);
+			memset_io(buf->cpu, 0xff, buf->pci_size);
 			if (crc_checking) {
 				/* Throw yet aanother new checksum on the dma buffer */
 				buf->crc = crc32(0, buf->cpu, buf->actual_size);
@@ -1133,7 +1134,7 @@ static int saa7164_proc_show(struct seq_file *m, void *v)
 			if (c == 0)
 				seq_printf(m, " %04x:", i);
 
-			seq_printf(m, " %02x", readb(b->m_pdwSetRing + i));
+			seq_printf(m, " %02x", *(b->m_pdwSetRing + i));
 
 			if (++c == 16) {
 				seq_printf(m, "\n");
@@ -1148,7 +1149,7 @@ static int saa7164_proc_show(struct seq_file *m, void *v)
 			if (c == 0)
 				seq_printf(m, " %04x:", i);
 
-			seq_printf(m, " %02x", readb(b->m_pdwGetRing + i));
+			seq_printf(m, " %02x", *(b->m_pdwGetRing + i));
 
 			if (++c == 16) {
 				seq_printf(m, "\n");
@@ -1385,11 +1386,9 @@ static int __devinit saa7164_initdev(struct pci_dev *pci_dev,
 		if (fw_debug) {
 			dev->kthread = kthread_run(saa7164_thread_function, dev,
 				"saa7164 debug");
-			if (IS_ERR(dev->kthread)) {
-				dev->kthread = NULL;
+			if (!dev->kthread)
 				printk(KERN_ERR "%s() Failed to create "
 					"debug kernel thread\n", __func__);
-			}
 		}
 
 	} /* != BOARD_UNKNOWN */

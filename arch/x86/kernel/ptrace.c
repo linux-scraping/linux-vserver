@@ -21,7 +21,6 @@
 #include <linux/signal.h>
 #include <linux/perf_event.h>
 #include <linux/hw_breakpoint.h>
-#include <linux/module.h>
 
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
@@ -164,35 +163,6 @@ static inline bool invalid_selector(u16 value)
 #ifdef CONFIG_X86_32
 
 #define FLAG_MASK		FLAG_MASK_32
-
-/*
- * X86_32 CPUs don't save ss and esp if the CPU is already in kernel mode
- * when it traps.  The previous stack will be directly underneath the saved
- * registers, and 'sp/ss' won't even have been saved. Thus the '&regs->sp'.
- *
- * Now, if the stack is empty, '&regs->sp' is out of range. In this
- * case we try to take the previous stack. To always return a non-null
- * stack pointer we fall back to regs as stack if no previous stack
- * exists.
- *
- * This is valid only for kernel mode traps.
- */
-unsigned long kernel_stack_pointer(struct pt_regs *regs)
-{
-	unsigned long context = (unsigned long)regs & ~(THREAD_SIZE - 1);
-	unsigned long sp = (unsigned long)&regs->sp;
-	struct thread_info *tinfo;
-
-	if (context == (sp & ~(THREAD_SIZE - 1)))
-		return sp;
-
-	tinfo = (struct thread_info *)context;
-	if (tinfo->previous_esp)
-		return tinfo->previous_esp;
-
-	return (unsigned long)regs;
-}
-EXPORT_SYMBOL_GPL(kernel_stack_pointer);
 
 static unsigned long *pt_regs_access(struct pt_regs *regs, unsigned long regno)
 {
@@ -779,7 +749,8 @@ put:
 /*
  * Handle PTRACE_POKEUSR calls for the debug register area.
  */
-int ptrace_set_debugreg(struct task_struct *tsk, int n, unsigned long val)
+static int ptrace_set_debugreg(struct task_struct *tsk, int n,
+			       unsigned long val)
 {
 	struct thread_struct *thread = &(tsk->thread);
 	int rc = 0;
@@ -1421,20 +1392,18 @@ long syscall_trace_enter(struct pt_regs *regs)
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 		trace_sys_enter(regs, regs->orig_ax);
 
-	if (unlikely(current->audit_context)) {
-		if (IS_IA32)
-			audit_syscall_entry(AUDIT_ARCH_I386,
-					    regs->orig_ax,
-					    regs->bx, regs->cx,
-					    regs->dx, regs->si);
+	if (IS_IA32)
+		audit_syscall_entry(AUDIT_ARCH_I386,
+				    regs->orig_ax,
+				    regs->bx, regs->cx,
+				    regs->dx, regs->si);
 #ifdef CONFIG_X86_64
-		else
-			audit_syscall_entry(AUDIT_ARCH_X86_64,
-					    regs->orig_ax,
-					    regs->di, regs->si,
-					    regs->dx, regs->r10);
+	else
+		audit_syscall_entry(AUDIT_ARCH_X86_64,
+				    regs->orig_ax,
+				    regs->di, regs->si,
+				    regs->dx, regs->r10);
 #endif
-	}
 
 	return ret ?: regs->orig_ax;
 }
@@ -1443,8 +1412,7 @@ void syscall_trace_leave(struct pt_regs *regs)
 {
 	bool step;
 
-	if (unlikely(current->audit_context))
-		audit_syscall_exit(AUDITSC_RESULT(regs->ax), regs->ax);
+	audit_syscall_exit(regs);
 
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 		trace_sys_exit(regs, regs->ax);

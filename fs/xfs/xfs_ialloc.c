@@ -446,7 +446,7 @@ STATIC xfs_buf_t *			/* allocation group buffer */
 xfs_ialloc_ag_select(
 	xfs_trans_t	*tp,		/* transaction pointer */
 	xfs_ino_t	parent,		/* parent directory inode number */
-	mode_t		mode,		/* bits set to indicate file type */
+	umode_t		mode,		/* bits set to indicate file type */
 	int		okalloc)	/* ok to allocate more space */
 {
 	xfs_buf_t	*agbp;		/* allocation group header buffer */
@@ -639,7 +639,7 @@ int
 xfs_dialloc(
 	xfs_trans_t	*tp,		/* transaction pointer */
 	xfs_ino_t	parent,		/* parent inode (directory) */
-	mode_t		mode,		/* mode bits for new inode */
+	umode_t		mode,		/* mode bits for new inode */
 	int		okalloc,	/* ok to allocate more space */
 	xfs_buf_t	**IO_agbp,	/* in/out ag header's buffer */
 	boolean_t	*alloc_done,	/* true if we needed to replenish
@@ -893,13 +893,13 @@ nextag:
 
 			/* free inodes to the left? */
 			if (useleft && trec.ir_freecount) {
+				rec = trec;
 				xfs_btree_del_cursor(cur, XFS_BTREE_NOERROR);
 				cur = tcur;
 
 				pag->pagl_leftrec = trec.ir_startino;
 				pag->pagl_rightrec = rec.ir_startino;
 				pag->pagl_pagino = pagino;
-				rec = trec;
 				goto alloc_inode;
 			}
 

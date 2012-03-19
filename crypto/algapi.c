@@ -342,7 +342,7 @@ static void crypto_wait_for_test(struct crypto_larval *larval)
 		crypto_alg_tested(larval->alg.cra_driver_name, 0);
 	}
 
-	err = wait_for_completion_killable(&larval->completion);
+	err = wait_for_completion_interruptible(&larval->completion);
 	WARN_ON(err);
 
 out:
@@ -354,7 +354,6 @@ int crypto_register_alg(struct crypto_alg *alg)
 	struct crypto_larval *larval;
 	int err;
 
-	alg->cra_flags &= ~CRYPTO_ALG_DEAD;
 	err = crypto_check_alg(alg);
 	if (err)
 		return err;
@@ -478,8 +477,7 @@ static struct crypto_template *__crypto_lookup_template(const char *name)
 
 struct crypto_template *crypto_lookup_template(const char *name)
 {
-	return try_then_request_module(__crypto_lookup_template(name),
-				       "crypto-%s", name);
+	return try_then_request_module(__crypto_lookup_template(name), name);
 }
 EXPORT_SYMBOL_GPL(crypto_lookup_template);
 
@@ -519,6 +517,35 @@ err:
 	return err;
 }
 EXPORT_SYMBOL_GPL(crypto_register_instance);
+
+int crypto_unregister_instance(struct crypto_alg *alg)
+{
+	int err;
+	struct crypto_instance *inst = (void *)alg;
+	struct crypto_template *tmpl = inst->tmpl;
+	LIST_HEAD(users);
+
+	if (!(alg->cra_flags & CRYPTO_ALG_INSTANCE))
+		return -EINVAL;
+
+	BUG_ON(atomic_read(&alg->cra_refcnt) != 1);
+
+	down_write(&crypto_alg_sem);
+
+	hlist_del_init(&inst->list);
+	err = crypto_remove_alg(alg, &users);
+
+	up_write(&crypto_alg_sem);
+
+	if (err)
+		return err;
+
+	tmpl->free(inst);
+	crypto_remove_final(&users);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(crypto_unregister_instance);
 
 int crypto_init_spawn(struct crypto_spawn *spawn, struct crypto_alg *alg,
 		      struct crypto_instance *inst, u32 mask)

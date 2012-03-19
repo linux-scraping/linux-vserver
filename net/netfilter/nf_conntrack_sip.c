@@ -1372,11 +1372,8 @@ static int process_sip_request(struct sk_buff *skb, unsigned int dataoff,
 		handler = &sip_handlers[i];
 		if (handler->request == NULL)
 			continue;
-		if (*datalen < handler->len + 2 ||
+		if (*datalen < handler->len ||
 		    strnicmp(*dptr, handler->method, handler->len))
-			continue;
-		if ((*dptr)[handler->len] != ' ' ||
-		    !isalpha((*dptr)[handler->len+1]))
 			continue;
 
 		if (ct_sip_get_header(ct, *dptr, 0, *datalen, SIP_HDR_CSEQ,
@@ -1471,7 +1468,7 @@ static int sip_help_tcp(struct sk_buff *skb, unsigned int protoff,
 
 		msglen = origlen = end - dptr;
 		if (msglen > datalen)
-			return NF_ACCEPT;
+			return NF_DROP;
 
 		ret = process_sip_msg(skb, ct, dataoff, &dptr, &msglen);
 		if (ret != NF_ACCEPT)

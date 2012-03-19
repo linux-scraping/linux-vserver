@@ -963,8 +963,6 @@ call_reserveresult(struct rpc_task *task)
 	}
 
 	switch (status) {
-	case -ENOMEM:
-		rpc_delay(task, HZ >> 2);
 	case -EAGAIN:	/* woken up; retry */
 		task->tk_action = call_reserve;
 		return;
@@ -1006,13 +1004,9 @@ call_refreshresult(struct rpc_task *task)
 	task->tk_action = call_refresh;
 	switch (status) {
 	case 0:
-		if (rpcauth_uptodatecred(task)) {
+		if (rpcauth_uptodatecred(task))
 			task->tk_action = call_allocate;
-			return;
-		}
-		/* Use rate-limiting and a max number of retries if refresh
-		 * had status 0 but failed to update the cred.
-		 */
+		return;
 	case -ETIMEDOUT:
 		rpc_delay(task, 3*HZ);
 	case -EAGAIN:

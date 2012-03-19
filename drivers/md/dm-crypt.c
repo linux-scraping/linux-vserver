@@ -176,6 +176,7 @@ struct crypt_config {
 
 #define MIN_IOS        16
 #define MIN_POOL_PAGES 32
+#define MIN_BIO_PAGES  8
 
 static struct kmem_cache *_crypt_io_pool;
 
@@ -847,11 +848,12 @@ static struct bio *crypt_alloc_buffer(struct dm_crypt_io *io, unsigned size,
 		}
 
 		/*
-		 * If additional pages cannot be allocated without waiting,
-		 * return a partially-allocated bio.  The caller will then try
-		 * to allocate more bios while submitting this partial bio.
+		 * if additional pages cannot be allocated without waiting,
+		 * return a partially allocated bio, the caller will then try
+		 * to allocate additional bios while submitting this partial bio
 		 */
-		gfp_mask = (gfp_mask | __GFP_NOWARN) & ~__GFP_WAIT;
+		if (i == (MIN_BIO_PAGES - 1))
+			gfp_mask = (gfp_mask | __GFP_NOWARN) & ~__GFP_WAIT;
 
 		len = (size > PAGE_SIZE) ? PAGE_SIZE : size;
 
@@ -1044,14 +1046,16 @@ static void kcryptd_queue_io(struct dm_crypt_io *io)
 	queue_work(cc->io_queue, &io->work);
 }
 
-static void kcryptd_crypt_write_io_submit(struct dm_crypt_io *io, int async)
+static void kcryptd_crypt_write_io_submit(struct dm_crypt_io *io,
+					  int error, int async)
 {
 	struct bio *clone = io->ctx.bio_out;
 	struct crypt_config *cc = io->target->private;
 
-	if (unlikely(io->error < 0)) {
+	if (unlikely(error < 0)) {
 		crypt_free_buffer_pages(cc, clone);
 		bio_put(clone);
+		io->error = -EIO;
 		crypt_dec_pending(io);
 		return;
 	}
@@ -1102,16 +1106,12 @@ static void kcryptd_crypt_write_convert(struct dm_crypt_io *io)
 		sector += bio_sectors(clone);
 
 		crypt_inc_pending(io);
-
 		r = crypt_convert(cc, &io->ctx);
-		if (r < 0)
-			io->error = -EIO;
-
 		crypt_finished = atomic_dec_and_test(&io->ctx.pending);
 
 		/* Encryption was already finished, submit io now */
 		if (crypt_finished) {
-			kcryptd_crypt_write_io_submit(io, 0);
+			kcryptd_crypt_write_io_submit(io, r, 0);
 
 			/*
 			 * If there was an error, do not try next fragments.
@@ -1162,8 +1162,11 @@ static void kcryptd_crypt_write_convert(struct dm_crypt_io *io)
 	crypt_dec_pending(io);
 }
 
-static void kcryptd_crypt_read_done(struct dm_crypt_io *io)
+static void kcryptd_crypt_read_done(struct dm_crypt_io *io, int error)
 {
+	if (unlikely(error < 0))
+		io->error = -EIO;
+
 	crypt_dec_pending(io);
 }
 
@@ -1178,11 +1181,9 @@ static void kcryptd_crypt_read_convert(struct dm_crypt_io *io)
 			   io->sector);
 
 	r = crypt_convert(cc, &io->ctx);
-	if (r < 0)
-		io->error = -EIO;
 
 	if (atomic_dec_and_test(&io->ctx.pending))
-		kcryptd_crypt_read_done(io);
+		kcryptd_crypt_read_done(io, r);
 
 	crypt_dec_pending(io);
 }
@@ -1203,18 +1204,15 @@ static void kcryptd_async_done(struct crypto_async_request *async_req,
 	if (!error && cc->iv_gen_ops && cc->iv_gen_ops->post)
 		error = cc->iv_gen_ops->post(cc, iv_of_dmreq(cc, dmreq), dmreq);
 
-	if (error < 0)
-		io->error = -EIO;
-
 	mempool_free(req_of_dmreq(cc, dmreq), cc->req_pool);
 
 	if (!atomic_dec_and_test(&ctx->pending))
 		return;
 
 	if (bio_data_dir(io->base_bio) == READ)
-		kcryptd_crypt_read_done(io);
+		kcryptd_crypt_read_done(io, error);
 	else
-		kcryptd_crypt_write_io_submit(io, 1);
+		kcryptd_crypt_write_io_submit(io, error, 1);
 }
 
 static void kcryptd_crypt(struct work_struct *work)
@@ -1260,6 +1258,20 @@ static int crypt_decode_key(u8 *key, char *hex, unsigned int size)
 		return -EINVAL;
 
 	return 0;
+}
+
+/*
+ * Encode key into its hex representation
+ */
+static void crypt_encode_key(char *hex, u8 *key, unsigned int size)
+{
+	unsigned int i;
+
+	for (i = 0; i < size; i++) {
+		sprintf(hex, "%02x", *key);
+		hex += 2;
+		key++;
+	}
 }
 
 static void crypt_free_tfms(struct crypt_config *cc, int cpu)
@@ -1322,15 +1334,12 @@ static int crypt_set_key(struct crypt_config *cc, char *key)
 	if (!cc->key_size && strcmp(key, "-"))
 		goto out;
 
-	/* clear the flag since following operations may invalidate previously valid key */
-	clear_bit(DM_CRYPT_KEY_VALID, &cc->flags);
-
 	if (cc->key_size && crypt_decode_key(cc->key, key, cc->key_size) < 0)
 		goto out;
 
+	set_bit(DM_CRYPT_KEY_VALID, &cc->flags);
+
 	r = crypt_setkey_allcpus(cc);
-	if (!r)
-		set_bit(DM_CRYPT_KEY_VALID, &cc->flags);
 
 out:
 	/* Hex key string not needed after here, so wipe it. */
@@ -1568,7 +1577,6 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	unsigned int key_size, opt_params;
 	unsigned long long tmpll;
 	int ret;
-	size_t iv_size_padding;
 	struct dm_arg_set as;
 	const char *opt_string;
 
@@ -1604,23 +1612,12 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	cc->dmreq_start = sizeof(struct ablkcipher_request);
 	cc->dmreq_start += crypto_ablkcipher_reqsize(any_tfm(cc));
-	cc->dmreq_start = ALIGN(cc->dmreq_start, __alignof__(struct dm_crypt_request));
-
-	if (crypto_ablkcipher_alignmask(any_tfm(cc)) < CRYPTO_MINALIGN) {
-		/* Allocate the padding exactly */
-		iv_size_padding = -(cc->dmreq_start + sizeof(struct dm_crypt_request))
-				& crypto_ablkcipher_alignmask(any_tfm(cc));
-	} else {
-		/*
-		 * If the cipher requires greater alignment than kmalloc
-		 * alignment, we don't know the exact position of the
-		 * initialization vector. We must assume worst case.
-		 */
-		iv_size_padding = crypto_ablkcipher_alignmask(any_tfm(cc));
-	}
+	cc->dmreq_start = ALIGN(cc->dmreq_start, crypto_tfm_ctx_alignment());
+	cc->dmreq_start += crypto_ablkcipher_alignmask(any_tfm(cc)) &
+			   ~(crypto_tfm_ctx_alignment() - 1);
 
 	cc->req_pool = mempool_create_kmalloc_pool(MIN_IOS, cc->dmreq_start +
-			sizeof(struct dm_crypt_request) + iv_size_padding + cc->iv_size);
+			sizeof(struct dm_crypt_request) + cc->iv_size);
 	if (!cc->req_pool) {
 		ti->error = "Cannot allocate crypt request mempool";
 		goto bad;
@@ -1740,11 +1737,11 @@ static int crypt_map(struct dm_target *ti, struct bio *bio,
 	return DM_MAPIO_SUBMITTED;
 }
 
-static void crypt_status(struct dm_target *ti, status_type_t type,
-			 char *result, unsigned maxlen)
+static int crypt_status(struct dm_target *ti, status_type_t type,
+			char *result, unsigned int maxlen)
 {
 	struct crypt_config *cc = ti->private;
-	unsigned i, sz = 0;
+	unsigned int sz = 0;
 
 	switch (type) {
 	case STATUSTYPE_INFO:
@@ -1754,11 +1751,17 @@ static void crypt_status(struct dm_target *ti, status_type_t type,
 	case STATUSTYPE_TABLE:
 		DMEMIT("%s ", cc->cipher_string);
 
-		if (cc->key_size > 0)
-			for (i = 0; i < cc->key_size; i++)
-				DMEMIT("%02x", cc->key[i]);
-		else
-			DMEMIT("-");
+		if (cc->key_size > 0) {
+			if ((maxlen - sz) < ((cc->key_size << 1) + 1))
+				return -ENOMEM;
+
+			crypt_encode_key(result + sz, cc->key, cc->key_size);
+			sz += cc->key_size << 1;
+		} else {
+			if (sz >= maxlen)
+				return -ENOMEM;
+			result[sz++] = '-';
+		}
 
 		DMEMIT(" %llu %s %llu", (unsigned long long)cc->iv_offset,
 				cc->dev->name, (unsigned long long)cc->start);
@@ -1768,6 +1771,7 @@ static void crypt_status(struct dm_target *ti, status_type_t type,
 
 		break;
 	}
+	return 0;
 }
 
 static void crypt_postsuspend(struct dm_target *ti)
@@ -1861,7 +1865,7 @@ static int crypt_iterate_devices(struct dm_target *ti,
 
 static struct target_type crypt_target = {
 	.name   = "crypt",
-	.version = {1, 11, 1},
+	.version = {1, 11, 0},
 	.module = THIS_MODULE,
 	.ctr    = crypt_ctr,
 	.dtr    = crypt_dtr,

@@ -641,9 +641,6 @@ static int usb_pcwd_probe(struct usb_interface *interface,
 		return -ENODEV;
 	}
 
-	if (iface_desc->desc.bNumEndpoints < 1)
-		return -ENODEV;
-
 	/* check out the endpoint: it has to be Interrupt & IN */
 	endpoint = &iface_desc->endpoint[0].desc;
 
@@ -830,37 +827,4 @@ static void usb_pcwd_disconnect(struct usb_interface *interface)
 	printk(KERN_INFO PFX "USB PC Watchdog disconnected\n");
 }
 
-
-
-/**
- *	usb_pcwd_init
- */
-static int __init usb_pcwd_init(void)
-{
-	int result;
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&usb_pcwd_driver);
-	if (result) {
-		printk(KERN_ERR PFX "usb_register failed. Error number %d\n",
-		    result);
-		return result;
-	}
-
-	printk(KERN_INFO PFX DRIVER_DESC " v" DRIVER_VERSION "\n");
-	return 0;
-}
-
-
-/**
- *	usb_pcwd_exit
- */
-static void __exit usb_pcwd_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&usb_pcwd_driver);
-}
-
-
-module_init(usb_pcwd_init);
-module_exit(usb_pcwd_exit);
+module_usb_driver(usb_pcwd_driver);

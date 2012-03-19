@@ -583,7 +583,7 @@ static int ufs1_read_inode(struct inode *inode, struct ufs_inode *ufs_inode)
 {
 	struct ufs_inode_info *ufsi = UFS_I(inode);
 	struct super_block *sb = inode->i_sb;
-	mode_t mode;
+	umode_t mode;
 
 	/*
 	 * Copy data to the in-core inode.
@@ -630,7 +630,7 @@ static int ufs2_read_inode(struct inode *inode, struct ufs2_inode *ufs2_inode)
 {
 	struct ufs_inode_info *ufsi = UFS_I(inode);
 	struct super_block *sb = inode->i_sb;
-	mode_t mode;
+	umode_t mode;
 
 	UFSD("Reading ufs2 inode, ino %lu\n", inode->i_ino);
 	/*
@@ -890,10 +890,7 @@ void ufs_evict_inode(struct inode * inode)
 		ufs_update_inode(inode, IS_SYNC(inode));
 		old_i_size = inode->i_size;
 		inode->i_size = 0;
-		if (inode->i_blocks &&
-		    (S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) ||
-		     S_ISLNK(inode->i_mode)) &&
-		    ufs_truncate(inode, old_i_size))
+		if (inode->i_blocks && ufs_truncate(inode, old_i_size))
 			ufs_warning(inode->i_sb, __func__, "ufs_truncate failed\n");
 		unlock_ufs(inode->i_sb);
 	}

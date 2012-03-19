@@ -215,7 +215,7 @@ static inline int adt7470_write_word_data(struct i2c_client *client, u8 reg,
 					  u16 value)
 {
 	return i2c_smbus_write_byte_data(client, reg, value & 0xFF)
-	       || i2c_smbus_write_byte_data(client, reg + 1, value >> 8);
+	       && i2c_smbus_write_byte_data(client, reg + 1, value >> 8);
 }
 
 static void adt7470_init_client(struct i2c_client *client)
@@ -449,7 +449,7 @@ static ssize_t set_auto_update_interval(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 60000);
@@ -478,7 +478,7 @@ static ssize_t set_num_temp_sensors(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, -1, 10);
@@ -511,11 +511,11 @@ static ssize_t set_temp_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
-	temp = clamp_val(temp, -128, 127);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->temp_min[attr->index] = temp;
@@ -545,11 +545,11 @@ static ssize_t set_temp_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
-	temp = clamp_val(temp, -128, 127);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->temp_max[attr->index] = temp;
@@ -600,7 +600,7 @@ static ssize_t set_fan_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp) || !temp)
+	if (kstrtol(buf, 10, &temp) || !temp)
 		return -EINVAL;
 
 	temp = FAN_RPM_TO_PERIOD(temp);
@@ -637,7 +637,7 @@ static ssize_t set_fan_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp) || !temp)
+	if (kstrtol(buf, 10, &temp) || !temp)
 		return -EINVAL;
 
 	temp = FAN_RPM_TO_PERIOD(temp);
@@ -682,7 +682,7 @@ static ssize_t set_force_pwm_max(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	mutex_lock(&data->lock);
@@ -714,7 +714,7 @@ static ssize_t set_pwm(struct device *dev, struct device_attribute *devattr,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -746,7 +746,7 @@ static ssize_t set_pwm_max(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -779,7 +779,7 @@ static ssize_t set_pwm_min(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = SENSORS_LIMIT(temp, 0, 255);
@@ -822,11 +822,11 @@ static ssize_t set_pwm_tmin(struct device *dev,
 	struct adt7470_data *data = i2c_get_clientdata(client);
 	long temp;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = DIV_ROUND_CLOSEST(temp, 1000);
-	temp = clamp_val(temp, -128, 127);
+	temp = SENSORS_LIMIT(temp, 0, 255);
 
 	mutex_lock(&data->lock);
 	data->pwm_tmin[attr->index] = temp;
@@ -859,7 +859,7 @@ static ssize_t set_pwm_auto(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	if (attr->index % 2)
@@ -919,7 +919,7 @@ static ssize_t set_pwm_auto_temp(struct device *dev,
 	long temp;
 	u8 reg;
 
-	if (strict_strtol(buf, 10, &temp))
+	if (kstrtol(buf, 10, &temp))
 		return -EINVAL;
 
 	temp = cvt_auto_temp(temp);

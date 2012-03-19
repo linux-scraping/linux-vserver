@@ -128,6 +128,7 @@ enum {
  * @ti_save: Backup of journal_info field of task_struct
  * @ti_flags: Flags
  * @ti_count: Nest level
+ * @ti_garbage:	List of inode to be put when releasing semaphore
  */
 struct nilfs_transaction_info {
 	u32			ti_magic;
@@ -136,6 +137,7 @@ struct nilfs_transaction_info {
 				   one of other filesystems has a bug. */
 	unsigned short		ti_flags;
 	unsigned short		ti_count;
+	struct list_head	ti_garbage;
 };
 
 /* ti_magic */
@@ -244,7 +246,7 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *, struct nilfs_argv *,
 /* inode.c */
 void nilfs_inode_add_blocks(struct inode *inode, int n);
 void nilfs_inode_sub_blocks(struct inode *inode, int n);
-extern struct inode *nilfs_new_inode(struct inode *, int);
+extern struct inode *nilfs_new_inode(struct inode *, umode_t);
 extern void nilfs_free_inode(struct inode *);
 extern int nilfs_get_block(struct inode *, sector_t, struct buffer_head *, int);
 extern void nilfs_set_inode_flags(struct inode *);

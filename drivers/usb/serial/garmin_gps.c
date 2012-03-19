@@ -42,7 +42,7 @@
 static int initial_mode = 1;
 
 /* debug flag */
-static int debug;
+static bool debug;
 
 #define GARMIN_VENDOR_ID             0x091E
 
@@ -142,7 +142,6 @@ struct garmin_data {
 	__u8   privpkt[4*6];
 	spinlock_t lock;
 	struct list_head pktlist;
-	struct usb_anchor write_urbs;
 };
 
 
@@ -902,7 +901,6 @@ static int garmin_init_session(struct usb_serial_port *port)
 		usb_kill_urb(port->interrupt_in_urb);
 
 		dbg("%s - adding interrupt input", __func__);
-		port->interrupt_in_urb->dev = serial->dev;
 		status = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 		if (status)
 			dev_err(&serial->dev->dev,
@@ -924,18 +922,12 @@ static int garmin_init_session(struct usb_serial_port *port)
 					sizeof(GARMIN_START_SESSION_REQ), 0);
 
 			if (status < 0)
-				goto err_kill_urbs;
+				break;
 		}
 
 		if (status > 0)
 			status = 0;
 	}
-
-	return status;
-
-err_kill_urbs:
-	usb_kill_anchored_urbs(&garmin_data_p->write_urbs);
-	usb_kill_urb(port->interrupt_in_urb);
 
 	return status;
 }
@@ -957,6 +949,7 @@ static int garmin_open(struct tty_struct *tty, struct usb_serial_port *port)
 	spin_unlock_irqrestore(&garmin_data_p->lock, flags);
 
 	/* shutdown any bulk reads that might be going on */
+	usb_kill_urb(port->write_urb);
 	usb_kill_urb(port->read_urb);
 
 	if (garmin_data_p->state == STATE_RESET)
@@ -979,15 +972,20 @@ static void garmin_close(struct usb_serial_port *port)
 	if (!serial)
 		return;
 
-	garmin_clear(garmin_data_p);
+	mutex_lock(&port->serial->disc_mutex);
+
+	if (!port->serial->disconnected)
+		garmin_clear(garmin_data_p);
 
 	/* shutdown our urbs */
 	usb_kill_urb(port->read_urb);
-	usb_kill_anchored_urbs(&garmin_data_p->write_urbs);
+	usb_kill_urb(port->write_urb);
 
 	/* keep reset state so we know that we must start a new session */
 	if (garmin_data_p->state != STATE_RESET)
 		garmin_data_p->state = STATE_DISCONNECTED;
+
+	mutex_unlock(&port->serial->disc_mutex);
 }
 
 
@@ -1075,15 +1073,12 @@ static int garmin_write_bulk(struct usb_serial_port *port,
 	}
 
 	/* send it down the pipe */
-	usb_anchor_urb(urb, &garmin_data_p->write_urbs);
 	status = usb_submit_urb(urb, GFP_ATOMIC);
 	if (status) {
 		dev_err(&port->dev,
 		   "%s - usb_submit_urb(write bulk) failed with status = %d\n",
 				__func__, status);
 		count = status;
-		usb_unanchor_urb(urb);
-		kfree(buffer);
 	}
 
 	/* we are done with this urb, so let the host driver
@@ -1281,7 +1276,6 @@ static void garmin_read_int_callback(struct urb *urb)
 	unsigned long flags;
 	int retval;
 	struct usb_serial_port *port = urb->context;
-	struct usb_serial *serial = port->serial;
 	struct garmin_data *garmin_data_p = usb_get_serial_port_data(port);
 	unsigned char *data = urb->transfer_buffer;
 	int status = urb->status;
@@ -1315,12 +1309,6 @@ static void garmin_read_int_callback(struct urb *urb)
 		if (0 == (garmin_data_p->flags & FLAGS_BULK_IN_ACTIVE)) {
 
 			/* bulk data available */
-			usb_fill_bulk_urb(port->read_urb, serial->dev,
-					usb_rcvbulkpipe(serial->dev,
-						port->bulk_in_endpointAddress),
-					port->read_urb->transfer_buffer,
-					port->read_urb->transfer_buffer_length,
-					garmin_read_bulk_callback, port);
 			retval = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 			if (retval) {
 				dev_err(&port->dev,
@@ -1357,7 +1345,6 @@ static void garmin_read_int_callback(struct urb *urb)
 
 	garmin_read_process(garmin_data_p, data, urb->actual_length, 0);
 
-	port->interrupt_in_urb->dev = port->serial->dev;
 	retval = usb_submit_urb(urb, GFP_ATOMIC);
 	if (retval)
 		dev_err(&urb->dev->dev,
@@ -1472,16 +1459,9 @@ static int garmin_attach(struct usb_serial *serial)
 	garmin_data_p->state = 0;
 	garmin_data_p->flags = 0;
 	garmin_data_p->count = 0;
-	init_usb_anchor(&garmin_data_p->write_urbs);
 	usb_set_serial_port_data(port, garmin_data_p);
 
 	status = garmin_init_session(port);
-	if (status)
-		goto err_free;
-
-	return 0;
-err_free:
-	kfree(garmin_data_p);
 
 	return status;
 }
@@ -1494,7 +1474,6 @@ static void garmin_disconnect(struct usb_serial *serial)
 
 	dbg("%s", __func__);
 
-	usb_kill_anchored_urbs(&garmin_data_p->write_urbs);
 	usb_kill_urb(port->interrupt_in_urb);
 	del_timer_sync(&garmin_data_p->timer);
 }

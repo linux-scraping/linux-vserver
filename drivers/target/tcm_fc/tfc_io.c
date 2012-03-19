@@ -48,10 +48,7 @@
 #include <scsi/fc_encode.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
-#include <target/target_core_device.h>
-#include <target/target_core_tpg.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
 #include <target/configfs_macros.h>
 
@@ -84,8 +81,6 @@ int ft_queue_data_in(struct se_cmd *se_cmd)
 	void *from;
 	void *to = NULL;
 
-	if (cmd->aborted)
-		return 0;
 	ep = fc_seq_exch(cmd->seq);
 	lport = ep->lp;
 	cmd->seq = lport->tt.seq_start_next(cmd->seq);
@@ -335,7 +330,7 @@ void ft_invl_hw_context(struct ft_cmd *cmd)
 		ep = fc_seq_exch(seq);
 		if (ep) {
 			lport = ep->lp;
-			if (lport && (ep->xid <= lport->lro_xid)) {
+			if (lport && (ep->xid <= lport->lro_xid))
 				/*
 				 * "ddp_done" trigger invalidation of HW
 				 * specific DDP context
@@ -350,7 +345,6 @@ void ft_invl_hw_context(struct ft_cmd *cmd)
 				 * identified using ep->xid)
 				 */
 				cmd->was_ddp_setup = 0;
-			}
 		}
 	}
 }

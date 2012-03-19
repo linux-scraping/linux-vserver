@@ -74,6 +74,10 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 	for_each_online_cpu(j)
 		seq_printf(p, "%10u ", irq_stats(j)->apic_irq_work_irqs);
 	seq_printf(p, "  IRQ work interrupts\n");
+	seq_printf(p, "%*s: ", prec, "RTR");
+	for_each_online_cpu(j)
+		seq_printf(p, "%10u ", irq_stats(j)->icr_read_retry_count);
+	seq_printf(p, "  APIC ICR read retries\n");
 #endif
 	if (x86_platform_ipi_callback) {
 		seq_printf(p, "%*s: ", prec, "PLT");
@@ -136,6 +140,7 @@ u64 arch_irq_stat_cpu(unsigned int cpu)
 	sum += irq_stats(cpu)->irq_spurious_count;
 	sum += irq_stats(cpu)->apic_perf_irqs;
 	sum += irq_stats(cpu)->apic_irq_work_irqs;
+	sum += irq_stats(cpu)->icr_read_retry_count;
 #endif
 	if (x86_platform_ipi_callback)
 		sum += irq_stats(cpu)->x86_platform_ipis;
@@ -160,6 +165,10 @@ u64 arch_irq_stat_cpu(unsigned int cpu)
 u64 arch_irq_stat(void)
 {
 	u64 sum = atomic_read(&irq_err_count);
+
+#ifdef CONFIG_X86_IO_APIC
+	sum += atomic_read(&irq_mis_count);
+#endif
 	return sum;
 }
 
@@ -177,8 +186,8 @@ unsigned int __irq_entry do_IRQ(struct pt_regs *regs)
 	unsigned vector = ~regs->orig_ax;
 	unsigned irq;
 
-	exit_idle();
 	irq_enter();
+	exit_idle();
 
 	irq = __this_cpu_read(vector_irq[vector]);
 
@@ -205,9 +214,9 @@ void smp_x86_platform_ipi(struct pt_regs *regs)
 
 	ack_APIC_irq();
 
-	exit_idle();
-
 	irq_enter();
+
+	exit_idle();
 
 	inc_irq_stat(x86_platform_ipis);
 
@@ -222,76 +231,6 @@ void smp_x86_platform_ipi(struct pt_regs *regs)
 EXPORT_SYMBOL_GPL(vector_used_by_percpu_irq);
 
 #ifdef CONFIG_HOTPLUG_CPU
-/*
- * This cpu is going to be removed and its vectors migrated to the remaining
- * online cpus.  Check to see if there are enough vectors in the remaining cpus.
- * This function is protected by stop_machine().
- */
-int check_irq_vectors_for_cpu_disable(void)
-{
-	int irq, cpu;
-	unsigned int this_cpu, vector, this_count, count;
-	struct irq_desc *desc;
-	struct irq_data *data;
-	struct cpumask affinity_new, online_new;
-
-	this_cpu = smp_processor_id();
-	cpumask_copy(&online_new, cpu_online_mask);
-	cpu_clear(this_cpu, online_new);
-
-	this_count = 0;
-	for (vector = FIRST_EXTERNAL_VECTOR; vector < NR_VECTORS; vector++) {
-		irq = __this_cpu_read(vector_irq[vector]);
-		if (irq >= 0) {
-			desc = irq_to_desc(irq);
-			data = irq_desc_get_irq_data(desc);
-			cpumask_copy(&affinity_new, data->affinity);
-			cpu_clear(this_cpu, affinity_new);
-
-			/* Do not count inactive or per-cpu irqs. */
-			if (!irq_has_action(irq) || irqd_is_per_cpu(data))
-				continue;
-
-			/*
-			 * A single irq may be mapped to multiple
-			 * cpu's vector_irq[] (for example IOAPIC cluster
-			 * mode).  In this case we have two
-			 * possibilities:
-			 *
-			 * 1) the resulting affinity mask is empty; that is
-			 * this the down'd cpu is the last cpu in the irq's
-			 * affinity mask, or
-			 *
-			 * 2) the resulting affinity mask is no longer
-			 * a subset of the online cpus but the affinity
-			 * mask is not zero; that is the down'd cpu is the
-			 * last online cpu in a user set affinity mask.
-			 */
-			if (cpumask_empty(&affinity_new) ||
-			    !cpumask_subset(&affinity_new, &online_new))
-				this_count++;
-		}
-	}
-
-	count = 0;
-	for_each_online_cpu(cpu) {
-		if (cpu == this_cpu)
-			continue;
-		for (vector = FIRST_EXTERNAL_VECTOR; vector < NR_VECTORS;
-		     vector++) {
-			if (per_cpu(vector_irq, cpu)[vector] < 0)
-				count++;
-		}
-	}
-
-	if (count < this_count) {
-		pr_warn("CPU %d disable failed: CPU has %u vectors assigned and there are only %u available.\n",
-			this_cpu, this_count, count);
-		return -ERANGE;
-	}
-	return 0;
-}
-
 /* A cpu has been removed from cpu_online_mask.  Reset irq affinities. */
 void fixup_irqs(void)
 {

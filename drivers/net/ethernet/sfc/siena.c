@@ -137,18 +137,6 @@ static void siena_remove_port(struct efx_nic *efx)
 	efx_nic_free_buffer(efx, &efx->stats_buffer);
 }
 
-void siena_prepare_flush(struct efx_nic *efx)
-{
-	if (efx->fc_disable++ == 0)
-		efx_mcdi_set_mac(efx);
-}
-
-void siena_finish_flush(struct efx_nic *efx)
-{
-	if (--efx->fc_disable == 0)
-		efx_mcdi_set_mac(efx);
-}
-
 static const struct efx_nic_register_test siena_register_tests[] = {
 	{ FR_AZ_ADR_REGION,
 	  EFX_OWORD32(0x0003FFFF, 0x0003FFFF, 0x0003FFFF, 0x0003FFFF) },
@@ -244,7 +232,7 @@ static int siena_probe_nvconfig(struct efx_nic *efx)
 static int siena_probe_nic(struct efx_nic *efx)
 {
 	struct siena_nic_data *nic_data;
-	bool already_attached = 0;
+	bool already_attached = false;
 	efx_oword_t reg;
 	int rc;
 
@@ -636,8 +624,7 @@ const struct efx_nic_type siena_a0_nic_type = {
 	.reset = siena_reset_hw,
 	.probe_port = siena_probe_port,
 	.remove_port = siena_remove_port,
-	.prepare_flush = siena_prepare_flush,
-	.finish_flush = siena_finish_flush,
+	.prepare_flush = efx_port_dummy_op_void,
 	.update_stats = siena_update_nic_stats,
 	.start_stats = siena_start_nic_stats,
 	.stop_stats = siena_stop_nic_stats,

@@ -24,9 +24,9 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
-#include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -35,6 +35,7 @@
 #include <sound/initval.h>
 #include <sound/tlv.h>
 
+#include <sound/sta32x.h>
 #include "sta32x.h"
 
 #define STA32X_RATES (SNDRV_PCM_RATE_32000 | \
@@ -73,11 +74,14 @@ static const char *sta32x_supply_names[] = {
 struct sta32x_priv {
 	struct regulator_bulk_data supplies[ARRAY_SIZE(sta32x_supply_names)];
 	struct snd_soc_codec *codec;
+	struct sta32x_platform_data *pdata;
 
 	unsigned int mclk;
 	unsigned int format;
 
 	u32 coef_shadow[STA32X_COEF_COUNT];
+	struct delayed_work watchdog_work;
+	int shutdown;
 };
 
 static const DECLARE_TLV_DB_SCALE(mvol_tlv, -12700, 50, 1);
@@ -143,42 +147,42 @@ static const unsigned int sta32x_limiter_drc_release_tlv[] = {
 	13, 16, TLV_DB_SCALE_ITEM(-1500, 300, 0),
 };
 
-static SOC_ENUM_SINGLE_DECL(sta32x_drc_ac_enum,
-			    STA32X_CONFD, STA32X_CONFD_DRC_SHIFT,
-			    sta32x_drc_ac);
-static SOC_ENUM_SINGLE_DECL(sta32x_auto_eq_enum,
-			    STA32X_AUTO1, STA32X_AUTO1_AMEQ_SHIFT,
-			    sta32x_auto_eq_mode);
-static SOC_ENUM_SINGLE_DECL(sta32x_auto_gc_enum,
-			    STA32X_AUTO1, STA32X_AUTO1_AMGC_SHIFT,
-			    sta32x_auto_gc_mode);
-static SOC_ENUM_SINGLE_DECL(sta32x_auto_xo_enum,
-			    STA32X_AUTO2, STA32X_AUTO2_XO_SHIFT,
-			    sta32x_auto_xo_mode);
-static SOC_ENUM_SINGLE_DECL(sta32x_preset_eq_enum,
-			    STA32X_AUTO3, STA32X_AUTO3_PEQ_SHIFT,
-			    sta32x_preset_eq_mode);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter_ch1_enum,
-			    STA32X_C1CFG, STA32X_CxCFG_LS_SHIFT,
-			    sta32x_limiter_select);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter_ch2_enum,
-			    STA32X_C2CFG, STA32X_CxCFG_LS_SHIFT,
-			    sta32x_limiter_select);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter_ch3_enum,
-			    STA32X_C3CFG, STA32X_CxCFG_LS_SHIFT,
-			    sta32x_limiter_select);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter1_attack_rate_enum,
-			    STA32X_L1AR, STA32X_LxA_SHIFT,
-			    sta32x_limiter_attack_rate);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter2_attack_rate_enum,
-			    STA32X_L2AR, STA32X_LxA_SHIFT,
-			    sta32x_limiter_attack_rate);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter1_release_rate_enum,
-			    STA32X_L1AR, STA32X_LxR_SHIFT,
-			    sta32x_limiter_release_rate);
-static SOC_ENUM_SINGLE_DECL(sta32x_limiter2_release_rate_enum,
-			    STA32X_L2AR, STA32X_LxR_SHIFT,
-			    sta32x_limiter_release_rate);
+static const struct soc_enum sta32x_drc_ac_enum =
+	SOC_ENUM_SINGLE(STA32X_CONFD, STA32X_CONFD_DRC_SHIFT,
+			2, sta32x_drc_ac);
+static const struct soc_enum sta32x_auto_eq_enum =
+	SOC_ENUM_SINGLE(STA32X_AUTO1, STA32X_AUTO1_AMEQ_SHIFT,
+			3, sta32x_auto_eq_mode);
+static const struct soc_enum sta32x_auto_gc_enum =
+	SOC_ENUM_SINGLE(STA32X_AUTO1, STA32X_AUTO1_AMGC_SHIFT,
+			4, sta32x_auto_gc_mode);
+static const struct soc_enum sta32x_auto_xo_enum =
+	SOC_ENUM_SINGLE(STA32X_AUTO2, STA32X_AUTO2_XO_SHIFT,
+			16, sta32x_auto_xo_mode);
+static const struct soc_enum sta32x_preset_eq_enum =
+	SOC_ENUM_SINGLE(STA32X_AUTO3, STA32X_AUTO3_PEQ_SHIFT,
+			32, sta32x_preset_eq_mode);
+static const struct soc_enum sta32x_limiter_ch1_enum =
+	SOC_ENUM_SINGLE(STA32X_C1CFG, STA32X_CxCFG_LS_SHIFT,
+			3, sta32x_limiter_select);
+static const struct soc_enum sta32x_limiter_ch2_enum =
+	SOC_ENUM_SINGLE(STA32X_C2CFG, STA32X_CxCFG_LS_SHIFT,
+			3, sta32x_limiter_select);
+static const struct soc_enum sta32x_limiter_ch3_enum =
+	SOC_ENUM_SINGLE(STA32X_C3CFG, STA32X_CxCFG_LS_SHIFT,
+			3, sta32x_limiter_select);
+static const struct soc_enum sta32x_limiter1_attack_rate_enum =
+	SOC_ENUM_SINGLE(STA32X_L1AR, STA32X_LxA_SHIFT,
+			16, sta32x_limiter_attack_rate);
+static const struct soc_enum sta32x_limiter2_attack_rate_enum =
+	SOC_ENUM_SINGLE(STA32X_L2AR, STA32X_LxA_SHIFT,
+			16, sta32x_limiter_attack_rate);
+static const struct soc_enum sta32x_limiter1_release_rate_enum =
+	SOC_ENUM_SINGLE(STA32X_L1AR, STA32X_LxR_SHIFT,
+			16, sta32x_limiter_release_rate);
+static const struct soc_enum sta32x_limiter2_release_rate_enum =
+	SOC_ENUM_SINGLE(STA32X_L2AR, STA32X_LxR_SHIFT,
+			16, sta32x_limiter_release_rate);
 
 /* byte array controls for setting biquad, mixer, scaling coefficients;
  * for biquads all five coefficients need to be set in one go,
@@ -260,7 +264,7 @@ static int sta32x_coefficient_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-int sta32x_sync_coef_shadow(struct snd_soc_codec *codec)
+static int sta32x_sync_coef_shadow(struct snd_soc_codec *codec)
 {
 	struct sta32x_priv *sta32x = snd_soc_codec_get_drvdata(codec);
 	unsigned int cfud;
@@ -285,7 +289,7 @@ int sta32x_sync_coef_shadow(struct snd_soc_codec *codec)
 	return 0;
 }
 
-int sta32x_cache_sync(struct snd_soc_codec *codec)
+static int sta32x_cache_sync(struct snd_soc_codec *codec)
 {
 	unsigned int mute;
 	int rc;
@@ -300,6 +304,46 @@ int sta32x_cache_sync(struct snd_soc_codec *codec)
 	rc = snd_soc_cache_sync(codec);
 	snd_soc_write(codec, STA32X_MMUTE, mute);
 	return rc;
+}
+
+/* work around ESD issue where sta32x resets and loses all configuration */
+static void sta32x_watchdog(struct work_struct *work)
+{
+	struct sta32x_priv *sta32x = container_of(work, struct sta32x_priv,
+						  watchdog_work.work);
+	struct snd_soc_codec *codec = sta32x->codec;
+	unsigned int confa, confa_cached;
+
+	/* check if sta32x has reset itself */
+	confa_cached = snd_soc_read(codec, STA32X_CONFA);
+	codec->cache_bypass = 1;
+	confa = snd_soc_read(codec, STA32X_CONFA);
+	codec->cache_bypass = 0;
+	if (confa != confa_cached) {
+		codec->cache_sync = 1;
+		sta32x_cache_sync(codec);
+	}
+
+	if (!sta32x->shutdown)
+		schedule_delayed_work(&sta32x->watchdog_work,
+				      round_jiffies_relative(HZ));
+}
+
+static void sta32x_watchdog_start(struct sta32x_priv *sta32x)
+{
+	if (sta32x->pdata->needs_esd_watchdog) {
+		sta32x->shutdown = 0;
+		schedule_delayed_work(&sta32x->watchdog_work,
+				      round_jiffies_relative(HZ));
+	}
+}
+
+static void sta32x_watchdog_stop(struct sta32x_priv *sta32x)
+{
+	if (sta32x->pdata->needs_esd_watchdog) {
+		sta32x->shutdown = 1;
+		cancel_delayed_work_sync(&sta32x->watchdog_work);
+	}
 }
 
 #define SINGLE_COEF(xname, index) \
@@ -350,7 +394,7 @@ SOC_SINGLE_TLV("Treble Tone Control", STA32X_TONE, STA32X_TONE_TTC_SHIFT, 15, 0,
 SOC_ENUM("Limiter1 Attack Rate (dB/ms)", sta32x_limiter1_attack_rate_enum),
 SOC_ENUM("Limiter2 Attack Rate (dB/ms)", sta32x_limiter2_attack_rate_enum),
 SOC_ENUM("Limiter1 Release Rate (dB/ms)", sta32x_limiter1_release_rate_enum),
-SOC_ENUM("Limiter2 Release Rate (dB/ms)", sta32x_limiter2_release_rate_enum),
+SOC_ENUM("Limiter2 Release Rate (dB/ms)", sta32x_limiter1_release_rate_enum),
 
 /* depending on mode, the attack/release thresholds have
  * two different enum definitions; provide both
@@ -478,6 +522,7 @@ static int sta32x_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 						rate_min = fs;
 					if (fs > rate_max)
 						rate_max = fs;
+					break;
 				}
 			}
 		}
@@ -712,6 +757,7 @@ static int sta32x_set_bias_level(struct snd_soc_codec *codec,
 			}
 
 			sta32x_cache_sync(codec);
+			sta32x_watchdog_start(sta32x);
 		}
 
 		/* Power up to mute */
@@ -728,7 +774,7 @@ static int sta32x_set_bias_level(struct snd_soc_codec *codec,
 				    STA32X_CONFF_PWDN | STA32X_CONFF_EAPD,
 				    STA32X_CONFF_PWDN);
 		msleep(300);
-
+		sta32x_watchdog_stop(sta32x);
 		regulator_bulk_disable(ARRAY_SIZE(sta32x->supplies),
 				       sta32x->supplies);
 		break;
@@ -737,7 +783,7 @@ static int sta32x_set_bias_level(struct snd_soc_codec *codec,
 	return 0;
 }
 
-static struct snd_soc_dai_ops sta32x_dai_ops = {
+static const struct snd_soc_dai_ops sta32x_dai_ops = {
 	.hw_params	= sta32x_hw_params,
 	.set_sysclk	= sta32x_set_dai_sysclk,
 	.set_fmt	= sta32x_set_dai_fmt,
@@ -756,7 +802,7 @@ static struct snd_soc_dai_driver sta32x_dai = {
 };
 
 #ifdef CONFIG_PM
-static int sta32x_suspend(struct snd_soc_codec *codec, pm_message_t state)
+static int sta32x_suspend(struct snd_soc_codec *codec)
 {
 	sta32x_set_bias_level(codec, SND_SOC_BIAS_OFF);
 	return 0;
@@ -775,9 +821,10 @@ static int sta32x_resume(struct snd_soc_codec *codec)
 static int sta32x_probe(struct snd_soc_codec *codec)
 {
 	struct sta32x_priv *sta32x = snd_soc_codec_get_drvdata(codec);
-	int i, ret = 0;
+	int i, ret = 0, thermal = 0;
 
 	sta32x->codec = codec;
+	sta32x->pdata = dev_get_platdata(codec->dev);
 
 	/* regulators */
 	for (i = 0; i < ARRAY_SIZE(sta32x->supplies); i++)
@@ -820,25 +867,34 @@ static int sta32x_probe(struct snd_soc_codec *codec)
 	snd_soc_cache_write(codec, STA32X_AUTO3, 0x00);
 	snd_soc_cache_write(codec, STA32X_C3CFG, 0x40);
 
-	/* FIXME enable thermal warning adjustment and recovery  */
+	/* set thermal warning adjustment and recovery */
+	if (!(sta32x->pdata->thermal_conf & STA32X_THERMAL_ADJUSTMENT_ENABLE))
+		thermal |= STA32X_CONFA_TWAB;
+	if (!(sta32x->pdata->thermal_conf & STA32X_THERMAL_RECOVERY_ENABLE))
+		thermal |= STA32X_CONFA_TWRB;
 	snd_soc_update_bits(codec, STA32X_CONFA,
-			    STA32X_CONFA_TWAB | STA32X_CONFA_TWRB, 0);
+			    STA32X_CONFA_TWAB | STA32X_CONFA_TWRB,
+			    thermal);
 
-	/* FIXME select 2.1 mode  */
+	/* select output configuration  */
 	snd_soc_update_bits(codec, STA32X_CONFF,
 			    STA32X_CONFF_OCFG_MASK,
-			    1 << STA32X_CONFF_OCFG_SHIFT);
+			    sta32x->pdata->output_conf
+			    << STA32X_CONFF_OCFG_SHIFT);
 
-	/* FIXME channel to output mapping */
+	/* channel to output mapping */
 	snd_soc_update_bits(codec, STA32X_C1CFG,
 			    STA32X_CxCFG_OM_MASK,
-			    0 << STA32X_CxCFG_OM_SHIFT);
+			    sta32x->pdata->ch1_output_mapping
+			    << STA32X_CxCFG_OM_SHIFT);
 	snd_soc_update_bits(codec, STA32X_C2CFG,
 			    STA32X_CxCFG_OM_MASK,
-			    1 << STA32X_CxCFG_OM_SHIFT);
+			    sta32x->pdata->ch2_output_mapping
+			    << STA32X_CxCFG_OM_SHIFT);
 	snd_soc_update_bits(codec, STA32X_C3CFG,
 			    STA32X_CxCFG_OM_MASK,
-			    2 << STA32X_CxCFG_OM_SHIFT);
+			    sta32x->pdata->ch3_output_mapping
+			    << STA32X_CxCFG_OM_SHIFT);
 
 	/* initialize coefficient shadow RAM with reset values */
 	for (i = 4; i <= 49; i += 5)
@@ -850,6 +906,9 @@ static int sta32x_probe(struct snd_soc_codec *codec)
 	sta32x->coef_shadow[59] = 0x7fffff;
 	sta32x->coef_shadow[60] = 0x400000;
 	sta32x->coef_shadow[61] = 0x400000;
+
+	if (sta32x->pdata->needs_esd_watchdog)
+		INIT_DELAYED_WORK(&sta32x->watchdog_work, sta32x_watchdog);
 
 	sta32x_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 	/* Bias level configuration will have done an extra enable */
@@ -867,6 +926,7 @@ static int sta32x_remove(struct snd_soc_codec *codec)
 {
 	struct sta32x_priv *sta32x = snd_soc_codec_get_drvdata(codec);
 
+	sta32x_watchdog_stop(sta32x);
 	sta32x_set_bias_level(codec, SND_SOC_BIAS_OFF);
 	regulator_bulk_disable(ARRAY_SIZE(sta32x->supplies), sta32x->supplies);
 	regulator_bulk_free(ARRAY_SIZE(sta32x->supplies), sta32x->supplies);
@@ -909,28 +969,23 @@ static __devinit int sta32x_i2c_probe(struct i2c_client *i2c,
 	struct sta32x_priv *sta32x;
 	int ret;
 
-	sta32x = kzalloc(sizeof(struct sta32x_priv), GFP_KERNEL);
+	sta32x = devm_kzalloc(&i2c->dev, sizeof(struct sta32x_priv),
+			      GFP_KERNEL);
 	if (!sta32x)
 		return -ENOMEM;
 
 	i2c_set_clientdata(i2c, sta32x);
 
 	ret = snd_soc_register_codec(&i2c->dev, &sta32x_codec, &sta32x_dai, 1);
-	if (ret != 0) {
+	if (ret != 0)
 		dev_err(&i2c->dev, "Failed to register codec (%d)\n", ret);
-		kfree(sta32x);
-		return ret;
-	}
 
-	return 0;
+	return ret;
 }
 
 static __devexit int sta32x_i2c_remove(struct i2c_client *client)
 {
-	struct sta32x_priv *sta32x = i2c_get_clientdata(client);
-
 	snd_soc_unregister_codec(&client->dev);
-	kfree(sta32x);
 	return 0;
 }
 

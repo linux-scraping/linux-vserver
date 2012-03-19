@@ -398,7 +398,7 @@ static int xemaclite_send_data(struct net_local *drvdata, u8 *data,
  *
  * Return:	Total number of bytes received
  */
-static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data, int maxlen)
+static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data)
 {
 	void __iomem *addr;
 	u16 length, proto_type;
@@ -438,7 +438,7 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data, int maxlen)
 
 	/* Check if received ethernet frame is a raw ethernet frame
 	 * or an IP packet or an ARP packet */
-	if (proto_type > ETH_DATA_LEN) {
+	if (proto_type > (ETH_FRAME_LEN + ETH_FCS_LEN)) {
 
 		if (proto_type == ETH_P_IP) {
 			length = ((ntohl(in_be32(addr +
@@ -446,7 +446,6 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data, int maxlen)
 					XEL_RXBUFF_OFFSET)) >>
 					XEL_HEADER_SHIFT) &
 					XEL_RPLR_LENGTH_MASK);
-			length = min_t(u16, length, ETH_DATA_LEN);
 			length += ETH_HLEN + ETH_FCS_LEN;
 
 		} else if (proto_type == ETH_P_ARP)
@@ -458,9 +457,6 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data, int maxlen)
 	} else
 		/* Use the length in the frame, plus the header and trailer */
 		length = proto_type + ETH_HLEN + ETH_FCS_LEN;
-
-	if (WARN_ON(length > maxlen))
-		length = maxlen;
 
 	/* Read from the EmacLite device */
 	xemaclite_aligned_read((u32 __force *) (addr + XEL_RXBUFF_OFFSET),
@@ -636,7 +632,7 @@ static void xemaclite_rx_handler(struct net_device *dev)
 
 	skb_reserve(skb, 2);
 
-	len = xemaclite_recv_data(lp, (u8 *) skb->data, len);
+	len = xemaclite_recv_data(lp, (u8 *) skb->data);
 
 	if (!len) {
 		dev->stats.rx_errors++;
@@ -666,7 +662,7 @@ static void xemaclite_rx_handler(struct net_device *dev)
  */
 static irqreturn_t xemaclite_interrupt(int irq, void *dev_id)
 {
-	bool tx_complete = 0;
+	bool tx_complete = false;
 	struct net_device *dev = dev_id;
 	struct net_local *lp = netdev_priv(dev);
 	void __iomem *base_addr = lp->base_addr;
@@ -687,7 +683,7 @@ static irqreturn_t xemaclite_interrupt(int irq, void *dev_id)
 		tx_status &= ~XEL_TSR_XMIT_ACTIVE_MASK;
 		out_be32(base_addr + XEL_TSR_OFFSET, tx_status);
 
-		tx_complete = 1;
+		tx_complete = true;
 	}
 
 	/* Check if the Transmission for the second buffer is completed */
@@ -699,7 +695,7 @@ static irqreturn_t xemaclite_interrupt(int irq, void *dev_id)
 		out_be32(base_addr + XEL_BUFFER_OFFSET + XEL_TSR_OFFSET,
 			 tx_status);
 
-		tx_complete = 1;
+		tx_complete = true;
 	}
 
 	/* If there was a Tx interrupt, call the Tx Handler */
@@ -1133,7 +1129,7 @@ static int __devinit xemaclite_of_probe(struct platform_device *ofdev)
 
 	/* Get IRQ for the device */
 	rc = of_irq_to_resource(ofdev->dev.of_node, 0, &r_irq);
-	if (rc == NO_IRQ) {
+	if (!rc) {
 		dev_err(dev, "no IRQ found\n");
 		return rc;
 	}
@@ -1307,27 +1303,7 @@ static struct platform_driver xemaclite_of_driver = {
 	.remove		= __devexit_p(xemaclite_of_remove),
 };
 
-/**
- * xgpiopss_init - Initial driver registration call
- *
- * Return:	0 upon success, or a negative error upon failure.
- */
-static int __init xemaclite_init(void)
-{
-	/* No kernel boot options used, we just need to register the driver */
-	return platform_driver_register(&xemaclite_of_driver);
-}
-
-/**
- * xemaclite_cleanup - Driver un-registration call
- */
-static void __exit xemaclite_cleanup(void)
-{
-	platform_driver_unregister(&xemaclite_of_driver);
-}
-
-module_init(xemaclite_init);
-module_exit(xemaclite_cleanup);
+module_platform_driver(xemaclite_of_driver);
 
 MODULE_AUTHOR("Xilinx, Inc.");
 MODULE_DESCRIPTION("Xilinx Ethernet MAC Lite driver");

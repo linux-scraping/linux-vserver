@@ -117,8 +117,8 @@ module_param(fault_devs, int, 0644);
 
 /* module parameter, defined */
 unsigned int minor_count = DRBD_MINOR_COUNT_DEF;
-int disable_sendpage;
-int allow_oos;
+bool disable_sendpage;
+bool allow_oos;
 unsigned int cn_idx = CN_IDX_DRBD;
 int proc_details;       /* Detail level in proc drbd*/
 
@@ -4183,11 +4183,12 @@ const char *drbd_buildtag(void)
 	static char buildtag[38] = "\0uilt-in";
 
 	if (buildtag[0] == 0) {
-#ifdef MODULE
-		sprintf(buildtag, "srcversion: %-24s", THIS_MODULE->srcversion);
-#else
-		buildtag[0] = 'b';
+#ifdef CONFIG_MODULES
+		if (THIS_MODULE != NULL)
+			sprintf(buildtag, "srcversion: %-24s", THIS_MODULE->srcversion);
+		else
 #endif
+			buildtag[0] = 'b';
 	}
 
 	return buildtag;

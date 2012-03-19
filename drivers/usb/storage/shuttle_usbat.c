@@ -170,7 +170,7 @@ static int init_usbat_flash(struct us_data *us);
 { USB_DEVICE_VER(id_vendor, id_product, bcdDeviceMin, bcdDeviceMax), \
   .driver_info = (flags)|(USB_US_TYPE_STOR<<24) }
 
-struct usb_device_id usbat_usb_ids[] = {
+static struct usb_device_id usbat_usb_ids[] = {
 #	include "unusual_usbat.h"
 	{ }		/* Terminating entry */
 };
@@ -1846,7 +1846,7 @@ static int usbat_probe(struct usb_interface *intf,
 	us->transport_name = "Shuttle USBAT";
 	us->transport = usbat_flash_transport;
 	us->transport_reset = usb_stor_CB_reset;
-	us->max_lun = 0;
+	us->max_lun = 1;
 
 	result = usb_stor_probe2(us);
 	return result;
@@ -1865,15 +1865,4 @@ static struct usb_driver usbat_driver = {
 	.soft_unbind =	1,
 };
 
-static int __init usbat_init(void)
-{
-	return usb_register(&usbat_driver);
-}
-
-static void __exit usbat_exit(void)
-{
-	usb_deregister(&usbat_driver);
-}
-
-module_init(usbat_init);
-module_exit(usbat_exit);
+module_usb_driver(usbat_driver);

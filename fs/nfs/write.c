@@ -747,9 +747,6 @@ int nfs_updatepage(struct file *file, struct page *page,
 		file->f_path.dentry->d_name.name, count,
 		(long long)(page_offset(page) + offset));
 
-	if (!count)
-		goto out;
-
 	/* If we're not using byte range locks, and we know the page
 	 * is up to date, it may be more efficient to extend the write
 	 * to cover the entire page in order to avoid fragmentation
@@ -767,7 +764,7 @@ int nfs_updatepage(struct file *file, struct page *page,
 		nfs_set_pageerror(page);
 	else
 		__set_page_dirty_nobuffers(page);
-out:
+
 	dprintk("NFS:       nfs_updatepage returns %d (isize %lld)\n",
 			status, (long long)i_size_read(inode));
 	return status;
@@ -977,7 +974,7 @@ out_bad:
 	while (!list_empty(res)) {
 		data = list_entry(res->next, struct nfs_write_data, list);
 		list_del(&data->list);
-		nfs_writedata_release(data);
+		nfs_writedata_free(data);
 	}
 	nfs_redirty_request(req);
 	return -ENOMEM;
@@ -1055,7 +1052,7 @@ static const struct nfs_pageio_ops nfs_pageio_write_ops = {
 	.pg_doio = nfs_generic_pg_writepages,
 };
 
-static void nfs_pageio_init_write_mds(struct nfs_pageio_descriptor *pgio,
+void nfs_pageio_init_write_mds(struct nfs_pageio_descriptor *pgio,
 				  struct inode *inode, int ioflags)
 {
 	nfs_pageio_init(pgio, inode, &nfs_pageio_write_ops,
@@ -1169,13 +1166,7 @@ static void nfs_writeback_done_full(struct rpc_task *task, void *calldata)
 static void nfs_writeback_release_full(void *calldata)
 {
 	struct nfs_write_data	*data = calldata;
-	int ret, status = data->task.tk_status;
-	struct nfs_pageio_descriptor pgio;
-
-	if (data->pnfs_error) {
-		nfs_pageio_init_write_mds(&pgio, data->inode, FLUSH_STABLE);
-		pgio.pg_recoalesce = 1;
-	}
+	int status = data->task.tk_status;
 
 	/* Update attributes as result of writeback. */
 	while (!list_empty(&data->pages)) {
@@ -1190,11 +1181,6 @@ static void nfs_writeback_release_full(void *calldata)
 			(long long)NFS_FILEID(req->wb_context->dentry->d_inode),
 			req->wb_bytes,
 			(long long)req_offset(req));
-
-		if (data->pnfs_error) {
-			dprintk(", pnfs error = %d\n", data->pnfs_error);
-			goto next;
-		}
 
 		if (status < 0) {
 			nfs_set_pageerror(page);
@@ -1215,19 +1201,7 @@ remove_request:
 	next:
 		nfs_clear_page_tag_locked(req);
 		nfs_end_page_writeback(page);
-		if (data->pnfs_error) {
-			lock_page(page);
-			nfs_pageio_cond_complete(&pgio, page->index);
-			ret = nfs_page_async_flush(&pgio, page, 0);
-			if (ret) {
-				nfs_set_pageerror(page);
-				dprintk("rewrite to MDS error = %d\n", ret);
-			}
-			unlock_page(page);
-		}
 	}
-	if (data->pnfs_error)
-		nfs_pageio_complete(&pgio);
 	nfs_writedata_release(calldata);
 }
 
@@ -1745,12 +1719,12 @@ int __init nfs_init_writepagecache(void)
 	nfs_wdata_mempool = mempool_create_slab_pool(MIN_POOL_WRITE,
 						     nfs_wdata_cachep);
 	if (nfs_wdata_mempool == NULL)
-		goto out_destroy_write_cache;
+		return -ENOMEM;
 
 	nfs_commit_mempool = mempool_create_slab_pool(MIN_POOL_COMMIT,
 						      nfs_wdata_cachep);
 	if (nfs_commit_mempool == NULL)
-		goto out_destroy_write_mempool;
+		return -ENOMEM;
 
 	/*
 	 * NFS congestion size, scale with available memory.
@@ -1773,12 +1747,6 @@ int __init nfs_init_writepagecache(void)
 		nfs_congestion_kb = 256*1024;
 
 	return 0;
-
-out_destroy_write_mempool:
-	mempool_destroy(nfs_wdata_mempool);
-out_destroy_write_cache:
-	kmem_cache_destroy(nfs_wdata_cachep);
-	return -ENOMEM;
 }
 
 void nfs_destroy_writepagecache(void)

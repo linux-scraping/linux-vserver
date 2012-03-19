@@ -2,13 +2,9 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 
-#include <asm/kaiser.h>
 #include <asm/perf_event.h>
 
 #include "perf_event.h"
-
-static
-DEFINE_PER_CPU_SHARED_ALIGNED_USER_MAPPED(struct debug_store, cpu_debug_store);
 
 /* The size of a BTS record in bytes: */
 #define BTS_RECORD_SIZE		24
@@ -64,39 +60,6 @@ void fini_debug_store_on_cpu(int cpu)
 	wrmsr_on_cpu(cpu, MSR_IA32_DS_AREA, 0, 0);
 }
 
-static void *dsalloc(size_t size, gfp_t flags, int node)
-{
-#ifdef CONFIG_PAGE_TABLE_ISOLATION
-	unsigned int order = get_order(size);
-	struct page *page;
-	unsigned long addr;
-
-	page = alloc_pages_node(node, flags | __GFP_ZERO, order);
-	if (!page)
-		return NULL;
-	addr = (unsigned long)page_address(page);
-	if (kaiser_add_mapping(addr, size, __PAGE_KERNEL) < 0) {
-		__free_pages(page, order);
-		addr = 0;
-	}
-	return (void *)addr;
-#else
-	return kmalloc_node(size, flags | __GFP_ZERO, node);
-#endif
-}
-
-static void dsfree(const void *buffer, size_t size)
-{
-#ifdef CONFIG_PAGE_TABLE_ISOLATION
-	if (!buffer)
-		return;
-	kaiser_remove_mapping((unsigned long)buffer, size);
-	free_pages((unsigned long)buffer, get_order(size));
-#else
-	kfree(buffer);
-#endif
-}
-
 static int alloc_pebs_buffer(int cpu)
 {
 	struct debug_store *ds = per_cpu(cpu_hw_events, cpu).ds;
@@ -107,7 +70,7 @@ static int alloc_pebs_buffer(int cpu)
 	if (!x86_pmu.pebs)
 		return 0;
 
-	buffer = dsalloc(PEBS_BUFFER_SIZE, GFP_KERNEL, node);
+	buffer = kmalloc_node(PEBS_BUFFER_SIZE, GFP_KERNEL | __GFP_ZERO, node);
 	if (unlikely(!buffer))
 		return -ENOMEM;
 
@@ -131,7 +94,7 @@ static void release_pebs_buffer(int cpu)
 	if (!ds || !x86_pmu.pebs)
 		return;
 
-	dsfree((void *)(unsigned long)ds->pebs_buffer_base, PEBS_BUFFER_SIZE);
+	kfree((void *)(unsigned long)ds->pebs_buffer_base);
 	ds->pebs_buffer_base = 0;
 }
 
@@ -145,7 +108,7 @@ static int alloc_bts_buffer(int cpu)
 	if (!x86_pmu.bts)
 		return 0;
 
-	buffer = dsalloc(BTS_BUFFER_SIZE, GFP_KERNEL, node);
+	buffer = kmalloc_node(BTS_BUFFER_SIZE, GFP_KERNEL | __GFP_ZERO, node);
 	if (unlikely(!buffer))
 		return -ENOMEM;
 
@@ -169,15 +132,19 @@ static void release_bts_buffer(int cpu)
 	if (!ds || !x86_pmu.bts)
 		return;
 
-	dsfree((void *)(unsigned long)ds->bts_buffer_base, BTS_BUFFER_SIZE);
+	kfree((void *)(unsigned long)ds->bts_buffer_base);
 	ds->bts_buffer_base = 0;
 }
 
 static int alloc_ds_buffer(int cpu)
 {
-	struct debug_store *ds = per_cpu_ptr(&cpu_debug_store, cpu);
+	int node = cpu_to_node(cpu);
+	struct debug_store *ds;
 
-	memset(ds, 0, sizeof(*ds));
+	ds = kmalloc_node(sizeof(*ds), GFP_KERNEL | __GFP_ZERO, node);
+	if (unlikely(!ds))
+		return -ENOMEM;
+
 	per_cpu(cpu_hw_events, cpu).ds = ds;
 
 	return 0;
@@ -191,6 +158,7 @@ static void release_ds_buffer(int cpu)
 		return;
 
 	per_cpu(cpu_hw_events, cpu).ds = NULL;
+	kfree(ds);
 }
 
 void release_ds_buffers(void)
@@ -471,7 +439,6 @@ void intel_pmu_pebs_enable(struct perf_event *event)
 	hwc->config &= ~ARCH_PERFMON_EVENTSEL_INT;
 
 	cpuc->pebs_enabled |= 1ULL << hwc->idx;
-	WARN_ON_ONCE(cpuc->enabled);
 
 	if (x86_pmu.intel_cap.pebs_trap && event->attr.precise_ip > 1)
 		intel_pmu_lbr_enable(event);
@@ -767,14 +734,4 @@ void intel_ds_init(void)
 			x86_pmu.pebs = 0;
 		}
 	}
-}
-
-void perf_restore_debug_store(void)
-{
-	struct debug_store *ds = __this_cpu_read(cpu_hw_events.ds);
-
-	if (!x86_pmu.bts && !x86_pmu.pebs)
-		return;
-
-	wrmsrl(MSR_IA32_DS_AREA, (unsigned long)ds);
 }

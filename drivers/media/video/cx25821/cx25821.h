@@ -67,7 +67,7 @@
 #define MAX_CAMERAS             16
 
 /* Max number of inputs by card */
-#define MAX_CX25821_INPUT 8
+#define MAX_CX25821_INPUT     8
 #define INPUT(nr) (&cx25821_boards[dev->board].input[nr])
 #define RESOURCE_VIDEO0       1
 #define RESOURCE_VIDEO1       2
@@ -85,7 +85,7 @@
 
 #define BUFFER_TIMEOUT     (HZ)	/* 0.5 seconds */
 
-#define UNKNOWN_BOARD       0
+#define UNKNOWN_BOARD        0
 #define CX25821_BOARD        1
 
 /* Currently supported by the driver */
@@ -187,7 +187,7 @@ enum port {
 };
 
 struct cx25821_board {
-	const char *name;
+	char *name;
 	enum port porta;
 	enum port portb;
 	enum port portc;

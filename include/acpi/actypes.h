@@ -198,28 +198,8 @@ typedef int INT32;
 typedef s32 acpi_native_int;
 
 typedef u32 acpi_size;
-
-#ifdef ACPI_32BIT_PHYSICAL_ADDRESS
-
-/*
- * OSPMs can define this to shrink the size of the structures for 32-bit
- * none PAE environment. ASL compiler may always define this to generate
- * 32-bit OSPM compliant tables.
- */
 typedef u32 acpi_io_address;
 typedef u32 acpi_physical_address;
-
-#else				/* ACPI_32BIT_PHYSICAL_ADDRESS */
-
-/*
- * It is reported that, after some calculations, the physical addresses can
- * wrap over the 32-bit boundary on 32-bit PAE environment.
- * https://bugzilla.kernel.org/show_bug.cgi?id=87971
- */
-typedef u64 acpi_io_address;
-typedef u64 acpi_physical_address;
-
-#endif				/* ACPI_32BIT_PHYSICAL_ADDRESS */
 
 #define ACPI_MAX_PTR                    ACPI_UINT32_MAX
 #define ACPI_SIZE_MAX                   ACPI_UINT32_MAX
@@ -495,7 +475,6 @@ typedef u64 acpi_integer;
 #define ACPI_NO_ACPI_ENABLE             0x10
 #define ACPI_NO_DEVICE_INIT             0x20
 #define ACPI_NO_OBJECT_INIT             0x40
-#define ACPI_NO_FACS_INIT               0x80
 
 /*
  * Initialization state
@@ -733,8 +712,10 @@ typedef u8 acpi_adr_space_type;
 #define ACPI_ADR_SPACE_CMOS             (acpi_adr_space_type) 5
 #define ACPI_ADR_SPACE_PCI_BAR_TARGET   (acpi_adr_space_type) 6
 #define ACPI_ADR_SPACE_IPMI             (acpi_adr_space_type) 7
+#define ACPI_ADR_SPACE_GPIO             (acpi_adr_space_type) 8
+#define ACPI_ADR_SPACE_GSBUS            (acpi_adr_space_type) 9
 
-#define ACPI_NUM_PREDEFINED_REGIONS     8
+#define ACPI_NUM_PREDEFINED_REGIONS     10
 
 /*
  * Special Address Spaces
@@ -977,6 +958,14 @@ acpi_status(*acpi_adr_space_handler) (u32 function,
 				      void *region_context);
 
 #define ACPI_DEFAULT_HANDLER            NULL
+
+/* Special Context data for generic_serial_bus/general_purpose_io (ACPI 5.0) */
+
+struct acpi_connection_info {
+	u8 *connection;
+	u16 length;
+	u8 access_length;
+};
 
 typedef
 acpi_status(*acpi_adr_space_setup) (acpi_handle region_handle,

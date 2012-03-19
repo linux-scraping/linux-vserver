@@ -812,17 +812,14 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 	else {
 
 	    /*
-	     * The kernel should never fault on its own address space,
-	     * unless pagefault_disable() was called before.
+	     * The kernel should never fault on its own address space.
 	     */
 
-	    if (fault_space == 0 && !in_atomic())
+	    if (fault_space == 0) 
 	    {
-		/* Clean up and return if in exception table. */
-		if (fixup_exception(regs))
-			return;
 		pdc_chassis_send_status(PDC_CHASSIS_DIRECT_PANIC);
 		parisc_terminate("Kernel Fault", regs, code, fault_address);
+	
 	    }
 	}
 

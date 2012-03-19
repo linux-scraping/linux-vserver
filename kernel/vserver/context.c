@@ -669,7 +669,6 @@ out:
 int vx_set_reaper(struct vx_info *vxi, struct task_struct *p)
 {
 	struct task_struct *old_reaper;
-	struct vx_info *reaper_vxi;
 
 	if (!vxi)
 		return -EINVAL;
@@ -682,21 +681,10 @@ int vx_set_reaper(struct vx_info *vxi, struct task_struct *p)
 	if (old_reaper == p)
 		return 0;
 
-	reaper_vxi = task_get_vx_info(p);
-	if (reaper_vxi && reaper_vxi != vxi) {
-		vxwprintk(1,
-			"Unsuitable reaper [" VS_Q("%s") ",%u:#%u] "
-			"for [xid #%u]",
-			p->comm, p->pid, p->xid, vx_current_xid());
-		goto out;
-	}
-
 	/* set new child reaper */
 	get_task_struct(p);
 	vxi->vx_reaper = p;
 	put_task_struct(old_reaper);
-out:
-	put_vx_info(reaper_vxi);
 	return 0;
 }
 

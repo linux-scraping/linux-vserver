@@ -15,9 +15,7 @@ const char *map_type__name[MAP__NR_TYPES] = {
 
 static inline int is_anon_memory(const char *filename)
 {
-	return !strcmp(filename, "//anon") ||
-	       !strcmp(filename, "/dev/zero (deleted)") ||
-	       !strcmp(filename, "/anon_hugepage (deleted)");
+	return strcmp(filename, "//anon") == 0;
 }
 
 static inline int is_no_dso_memory(const char *filename)
@@ -563,6 +561,10 @@ int machine__init(struct machine *self, const char *root_dir, pid_t pid)
 	RB_CLEAR_NODE(&self->rb_node);
 	INIT_LIST_HEAD(&self->user_dsos);
 	INIT_LIST_HEAD(&self->kernel_dsos);
+
+	self->threads = RB_ROOT;
+	INIT_LIST_HEAD(&self->dead_threads);
+	self->last_match = NULL;
 
 	self->kmaps.machine = self;
 	self->pid	    = pid;

@@ -33,7 +33,8 @@ static ssize_t ieee80211_if_read(
 	ssize_t ret = -EINVAL;
 
 	read_lock(&dev_base_lock);
-	ret = (*format)(sdata, buf, sizeof(buf));
+	if (sdata->dev->reg_state == NETREG_REGISTERED)
+		ret = (*format)(sdata, buf, sizeof(buf));
 	read_unlock(&dev_base_lock);
 
 	if (ret >= 0)
@@ -61,7 +62,8 @@ static ssize_t ieee80211_if_write(
 
 	ret = -ENODEV;
 	rtnl_lock();
-	ret = (*write)(sdata, buf, count);
+	if (sdata->dev->reg_state == NETREG_REGISTERED)
+		ret = (*write)(sdata, buf, count);
 	rtnl_unlock();
 
 freebuf:
@@ -319,6 +321,7 @@ static ssize_t ieee80211_if_parse_tkip_mic_test(
 __IEEE80211_IF_FILE_W(tkip_mic_test);
 
 /* AP attributes */
+IEEE80211_IF_FILE(num_sta_authorized, u.ap.num_sta_authorized, ATOMIC);
 IEEE80211_IF_FILE(num_sta_ps, u.ap.num_sta_ps, ATOMIC);
 IEEE80211_IF_FILE(dtim_count, u.ap.dtim_count, DEC);
 
@@ -403,6 +406,8 @@ IEEE80211_IF_FILE(dot11MeshHWMPactivePathTimeout,
 		u.mesh.mshcfg.dot11MeshHWMPactivePathTimeout, DEC);
 IEEE80211_IF_FILE(dot11MeshHWMPpreqMinInterval,
 		u.mesh.mshcfg.dot11MeshHWMPpreqMinInterval, DEC);
+IEEE80211_IF_FILE(dot11MeshHWMPperrMinInterval,
+		u.mesh.mshcfg.dot11MeshHWMPperrMinInterval, DEC);
 IEEE80211_IF_FILE(dot11MeshHWMPnetDiameterTraversalTime,
 		u.mesh.mshcfg.dot11MeshHWMPnetDiameterTraversalTime, DEC);
 IEEE80211_IF_FILE(dot11MeshHWMPmaxPREQretries,
@@ -454,6 +459,7 @@ static void add_ap_files(struct ieee80211_sub_if_data *sdata)
 	DEBUGFS_ADD(rc_rateidx_mask_2ghz);
 	DEBUGFS_ADD(rc_rateidx_mask_5ghz);
 
+	DEBUGFS_ADD(num_sta_authorized);
 	DEBUGFS_ADD(num_sta_ps);
 	DEBUGFS_ADD(dtim_count);
 	DEBUGFS_ADD(num_buffered_multicast);
@@ -532,6 +538,7 @@ static void add_mesh_config(struct ieee80211_sub_if_data *sdata)
 	MESHPARAMS_ADD(dot11MeshMaxPeerLinks);
 	MESHPARAMS_ADD(dot11MeshHWMPactivePathTimeout);
 	MESHPARAMS_ADD(dot11MeshHWMPpreqMinInterval);
+	MESHPARAMS_ADD(dot11MeshHWMPperrMinInterval);
 	MESHPARAMS_ADD(dot11MeshHWMPnetDiameterTraversalTime);
 	MESHPARAMS_ADD(dot11MeshHWMPmaxPREQretries);
 	MESHPARAMS_ADD(path_refresh_time);
@@ -598,7 +605,6 @@ void ieee80211_debugfs_remove_netdev(struct ieee80211_sub_if_data *sdata)
 
 	debugfs_remove_recursive(sdata->debugfs.dir);
 	sdata->debugfs.dir = NULL;
-	sdata->debugfs.subdir_stations = NULL;
 }
 
 void ieee80211_debugfs_rename_netdev(struct ieee80211_sub_if_data *sdata)

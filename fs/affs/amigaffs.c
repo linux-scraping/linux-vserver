@@ -132,7 +132,7 @@ affs_fix_dcache(struct dentry *dentry, u32 entry_ino)
 	head = &inode->i_dentry;
 	next = head->next;
 	while (next != head) {
-		dentry = list_entry(next, struct dentry, d_u.d_alias);
+		dentry = list_entry(next, struct dentry, d_alias);
 		if (entry_ino == (u32)(long)dentry->d_fsdata) {
 			dentry->d_fsdata = data;
 			break;
@@ -390,10 +390,10 @@ secs_to_datestamp(time_t secs, struct affs_date *ds)
 	ds->ticks = cpu_to_be32(secs * 50);
 }
 
-mode_t
+umode_t
 prot_to_mode(u32 prot)
 {
-	int mode = 0;
+	umode_t mode = 0;
 
 	if (!(prot & FIBF_NOWRITE))
 		mode |= S_IWUSR;
@@ -421,7 +421,7 @@ void
 mode_to_prot(struct inode *inode)
 {
 	u32 prot = AFFS_I(inode)->i_protect;
-	mode_t mode = inode->i_mode;
+	umode_t mode = inode->i_mode;
 
 	if (!(mode & S_IXUSR))
 		prot |= FIBF_NOEXECUTE;

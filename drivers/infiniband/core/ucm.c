@@ -48,7 +48,6 @@
 
 #include <asm/uaccess.h>
 
-#include <rdma/ib.h>
 #include <rdma/ib_cm.h>
 #include <rdma/ib_user_cm.h>
 #include <rdma/ib_marshall.h>
@@ -106,9 +105,6 @@ enum {
 	IB_UCM_BASE_MINOR = 224,
 	IB_UCM_MAX_DEVICES = 32
 };
-
-/* ib_cm and ib_user_cm modules share /sys/class/infiniband_cm */
-extern struct class cm_class;
 
 #define IB_UCM_BASE_DEV MKDEV(IB_UCM_MAJOR, IB_UCM_BASE_MINOR)
 
@@ -1116,9 +1112,6 @@ static ssize_t ib_ucm_write(struct file *filp, const char __user *buf,
 	struct ib_ucm_file *file = filp->private_data;
 	struct ib_ucm_cmd_hdr hdr;
 	ssize_t result;
-
-	if (WARN_ON_ONCE(!ib_safe_file_access(filp)))
-		return -EACCES;
 
 	if (len < sizeof(hdr))
 		return -EINVAL;

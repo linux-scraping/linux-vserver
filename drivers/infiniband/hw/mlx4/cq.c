@@ -233,13 +233,10 @@ struct ib_cq *mlx4_ib_create_cq(struct ib_device *ibdev, int entries, int vector
 	if (context)
 		if (ib_copy_to_udata(udata, &cq->mcq.cqn, sizeof (__u32))) {
 			err = -EFAULT;
-			goto err_cq_free;
+			goto err_dbmap;
 		}
 
 	return &cq->ibcq;
-
-err_cq_free:
-	mlx4_cq_free(dev->dev, &cq->mcq);
 
 err_dbmap:
 	if (context)
@@ -718,13 +715,17 @@ repoll:
 		}
 
 		wc->slid	   = be16_to_cpu(cqe->rlid);
-		wc->sl		   = be16_to_cpu(cqe->sl_vid) >> 12;
 		g_mlpath_rqpn	   = be32_to_cpu(cqe->g_mlpath_rqpn);
 		wc->src_qp	   = g_mlpath_rqpn & 0xffffff;
 		wc->dlid_path_bits = (g_mlpath_rqpn >> 24) & 0x7f;
 		wc->wc_flags	  |= g_mlpath_rqpn & 0x80000000 ? IB_WC_GRH : 0;
 		wc->pkey_index     = be32_to_cpu(cqe->immed_rss_invalid) & 0x7f;
 		wc->csum_ok	   = mlx4_ib_ipoib_csum_ok(cqe->status, cqe->checksum);
+		if (rdma_port_get_link_layer(wc->qp->device,
+				(*cur_qp)->port) == IB_LINK_LAYER_ETHERNET)
+			wc->sl  = be16_to_cpu(cqe->sl_vid) >> 13;
+		else
+			wc->sl  = be16_to_cpu(cqe->sl_vid) >> 12;
 	}
 
 	return 0;

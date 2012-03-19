@@ -615,8 +615,8 @@ struct qib_chippport_specific {
 	u64 ibmalfsnap;
 	u64 ibcctrl_a; /* krp_ibcctrl_a shadow */
 	u64 ibcctrl_b; /* krp_ibcctrl_b shadow */
-	u64 qdr_dfe_time;
-	u64 chase_end;
+	unsigned long qdr_dfe_time;
+	unsigned long chase_end;
 	u32 autoneg_tries;
 	u32 recovery_init;
 	u32 qdr_dfe_on;
@@ -1672,7 +1672,8 @@ static void reenable_chase(unsigned long opaque)
 		QLOGIC_IB_IBCC_LINKINITCMD_POLL);
 }
 
-static void disable_chase(struct qib_pportdata *ppd, u64 tnow, u8 ibclt)
+static void disable_chase(struct qib_pportdata *ppd, unsigned long tnow,
+		u8 ibclt)
 {
 	ppd->cpspec->chase_end = 0;
 
@@ -1688,7 +1689,7 @@ static void disable_chase(struct qib_pportdata *ppd, u64 tnow, u8 ibclt)
 static void handle_serdes_issues(struct qib_pportdata *ppd, u64 ibcst)
 {
 	u8 ibclt;
-	u64 tnow;
+	unsigned long tnow;
 
 	ibclt = (u8)SYM_FIELD(ibcst, IBCStatusA_0, LinkTrainingState);
 
@@ -1703,9 +1704,9 @@ static void handle_serdes_issues(struct qib_pportdata *ppd, u64 ibcst)
 	case IB_7322_LT_STATE_CFGWAITRMT:
 	case IB_7322_LT_STATE_TXREVLANES:
 	case IB_7322_LT_STATE_CFGENH:
-		tnow = get_jiffies_64();
+		tnow = jiffies;
 		if (ppd->cpspec->chase_end &&
-		     time_after64(tnow, ppd->cpspec->chase_end))
+		     time_after(tnow, ppd->cpspec->chase_end))
 			disable_chase(ppd, tnow, ibclt);
 		else if (!ppd->cpspec->chase_end)
 			ppd->cpspec->chase_end = tnow + QIB_CHASE_TIME;
@@ -2279,11 +2280,6 @@ static int qib_7322_bringup_serdes(struct qib_pportdata *ppd)
 	qib_write_kreg_port(ppd, krp_ibcctrl_a, ppd->cpspec->ibcctrl_a);
 	qib_write_kreg(dd, kr_scratch, 0ULL);
 
-	/* ensure previous Tx parameters are not still forced */
-	qib_write_kreg_port(ppd, krp_tx_deemph_override,
-		SYM_MASK(IBSD_TX_DEEMPHASIS_OVERRIDE_0,
-		reset_tx_deemphasis_override));
-
 	if (qib_compat_ddr_negotiate) {
 		ppd->cpspec->ibdeltainprog = 1;
 		ppd->cpspec->ibsymsnap = read_7322_creg32_port(ppd,
@@ -2719,7 +2715,7 @@ static noinline void unknown_7322_gpio_intr(struct qib_devdata *dd)
 			pins >>= SYM_LSB(EXTStatus, GPIOIn);
 			if (!(pins & mask)) {
 				++handled;
-				qd->t_insert = get_jiffies_64();
+				qd->t_insert = jiffies;
 				queue_work(ib_wq, &qd->work);
 			}
 		}
@@ -3607,7 +3603,7 @@ static void qib_7322_config_ctxts(struct qib_devdata *dd)
 	if (qib_rcvhdrcnt)
 		dd->rcvhdrcnt = max(dd->cspec->rcvegrcnt, qib_rcvhdrcnt);
 	else
-		dd->rcvhdrcnt = max(dd->cspec->rcvegrcnt,
+		dd->rcvhdrcnt = 2 * max(dd->cspec->rcvegrcnt,
 				    dd->num_pports > 1 ? 1024U : 2048U);
 }
 
@@ -4793,13 +4789,15 @@ static void qib_get_7322_faststats(unsigned long opaque)
 		spin_lock_irqsave(&ppd->dd->eep_st_lock, flags);
 		traffic_wds -= ppd->dd->traffic_wds;
 		ppd->dd->traffic_wds += traffic_wds;
+		if (traffic_wds >= QIB_TRAFFIC_ACTIVE_THRESHOLD)
+			atomic_add(ACTIVITY_TIMER, &ppd->dd->active_time);
 		spin_unlock_irqrestore(&ppd->dd->eep_st_lock, flags);
 		if (ppd->cpspec->qdr_dfe_on && (ppd->link_speed_active &
 						QIB_IB_QDR) &&
 		    (ppd->lflags & (QIBL_LINKINIT | QIBL_LINKARMED |
 				    QIBL_LINKACTIVE)) &&
 		    ppd->cpspec->qdr_dfe_time &&
-		    time_after64(get_jiffies_64(), ppd->cpspec->qdr_dfe_time)) {
+		    time_is_before_jiffies(ppd->cpspec->qdr_dfe_time)) {
 			ppd->cpspec->qdr_dfe_on = 0;
 
 			qib_write_kreg_port(ppd, krp_static_adapt_dis(2),
@@ -5245,7 +5243,7 @@ static int qib_7322_ib_updown(struct qib_pportdata *ppd, int ibup, u64 ibcs)
 			/* schedule the qsfp refresh which should turn the link
 			   off */
 			if (ppd->dd->flags & QIB_HAS_QSFP) {
-				qd->t_insert = get_jiffies_64();
+				qd->t_insert = jiffies;
 				queue_work(ib_wq, &qd->work);
 			}
 			spin_lock_irqsave(&ppd->sdma_lock, flags);
@@ -5597,7 +5595,7 @@ static void qsfp_7322_event(struct work_struct *work)
 {
 	struct qib_qsfp_data *qd;
 	struct qib_pportdata *ppd;
-	u64 pwrup;
+	unsigned long pwrup;
 	unsigned long flags;
 	int ret;
 	u32 le2;
@@ -5625,8 +5623,7 @@ static void qsfp_7322_event(struct work_struct *work)
 		 * to insertion.
 		 */
 		while (1) {
-			u64 now = get_jiffies_64();
-			if (time_after64(now, pwrup))
+			if (time_is_before_jiffies(pwrup))
 				break;
 			msleep(20);
 		}
@@ -6614,7 +6611,7 @@ static void qib_7322_txchk_change(struct qib_devdata *dd, u32 start,
 	unsigned long flags;
 
 	while (wait) {
-		unsigned long shadow = 0;
+		unsigned long shadow;
 		int cstart, previ = -1;
 
 		/*
@@ -7511,7 +7508,7 @@ static int serdes_7322_init_old(struct qib_pportdata *ppd)
 
 static int serdes_7322_init_new(struct qib_pportdata *ppd)
 {
-	u64 tstart;
+	unsigned long tend;
 	u32 le_val, rxcaldone;
 	int chan, chan_done = (1 << SERDES_CHANS) - 1;
 
@@ -7616,10 +7613,8 @@ static int serdes_7322_init_new(struct qib_pportdata *ppd)
 	msleep(20);
 	/*       Start Calibration */
 	ibsd_wr_allchans(ppd, 4, (1 << 10), BMASK(10, 10));
-	tstart = get_jiffies_64();
-	while (chan_done &&
-	       !time_after64(get_jiffies_64(),
-			tstart + msecs_to_jiffies(500))) {
+	tend = jiffies + msecs_to_jiffies(500);
+	while (chan_done && !time_is_before_jiffies(tend)) {
 		msleep(20);
 		for (chan = 0; chan < SERDES_CHANS; ++chan) {
 			rxcaldone = ahb_mod(ppd->dd, IBSD(ppd->hw_pidx),

@@ -189,7 +189,7 @@ struct compal_data{
 /* =============== */
 /* General globals */
 /* =============== */
-static int force;
+static bool force;
 module_param(force, bool, 0);
 MODULE_PARM_DESC(force, "Force driver load, ignore DMI data");
 
@@ -1046,14 +1046,7 @@ static int __devinit compal_probe(struct platform_device *pdev)
 
 	/* Power supply */
 	initialize_power_supply_data(data);
-	err = power_supply_register(&compal_device->dev, &data->psy);
-	if (err < 0) {
-		hwmon_device_unregister(data->hwmon_dev);
-		sysfs_remove_group(&pdev->dev.kobj,
-				&compal_attribute_group);
-		kfree(data);
-		return err;
-	}
+	power_supply_register(&compal_device->dev, &data->psy);
 
 	platform_set_drvdata(pdev, data);
 

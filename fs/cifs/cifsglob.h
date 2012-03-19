@@ -38,13 +38,11 @@
 #define MAX_TREE_SIZE (2 + MAX_SERVER_SIZE + 1 + MAX_SHARE_SIZE + 1)
 #define MAX_SERVER_SIZE 15
 #define MAX_SHARE_SIZE 80
-#define CIFS_MAX_DOMAINNAME_LEN 256 /* max domain name length */
 #define MAX_USERNAME_SIZE 256	/* reasonable maximum for current servers */
 #define MAX_PASSWORD_SIZE 512	/* max for windows seems to be 256 wide chars */
 
 #define CIFS_MIN_RCV_POOL 4
 
-#define MAX_REOPEN_ATT	5 /* these many maximum attempts to reopen a file */
 /*
  * default attribute cache timeout (jiffies)
  */
@@ -57,9 +55,14 @@
 
 /*
  * MAX_REQ is the maximum number of requests that WE will send
- * on one socket concurrently.
+ * on one socket concurrently. It also matches the most common
+ * value of max multiplex returned by servers.  We may
+ * eventually want to use the negotiated value (in case
+ * future servers can handle more) when we are more confident that
+ * we will not have problems oveloading the socket with pending
+ * write data.
  */
-#define CIFS_MAX_REQ 32767
+#define CIFS_MAX_REQ 50
 
 #define RFC1001_NAME_LEN 15
 #define RFC1001_NAME_LEN_WITH_NULL (RFC1001_NAME_LEN + 1)
@@ -166,8 +169,8 @@ struct smb_vol {
 	gid_t linux_gid;
 	uid_t backupuid;
 	gid_t backupgid;
-	mode_t file_mode;
-	mode_t dir_mode;
+	umode_t file_mode;
+	umode_t dir_mode;
 	unsigned secFlg;
 	bool retry:1;
 	bool intr:1;
@@ -260,7 +263,6 @@ struct TCP_Server_Info {
 	bool session_estab; /* mark when very first sess is established */
 	u16 dialect; /* dialect index that server chose */
 	enum securityEnum secType;
-	bool oplocks:1; /* enable oplocks */
 	unsigned int maxReq;	/* Clients should submit no more */
 	/* than maxReq distinct unanswered SMBs to the server when using  */
 	/* multiplexed reads or writes */
@@ -877,6 +879,8 @@ require use of the stronger protocol */
 #define   CIFSSEC_MASK          0xB70B7 /* current flags supported if weak */
 #endif /* UPCALL */
 #else /* do not allow weak pw hash */
+#define   CIFSSEC_MUST_LANMAN	0
+#define   CIFSSEC_MUST_PLNTXT	0
 #ifdef CONFIG_CIFS_UPCALL
 #define   CIFSSEC_MASK          0x8F08F /* flags supported if no weak allowed */
 #else

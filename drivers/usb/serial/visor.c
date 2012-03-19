@@ -52,7 +52,7 @@ static int palm_os_4_probe(struct usb_serial *serial,
 					const struct usb_device_id *id);
 
 /* Parameters that may be passed into the module. */
-static int debug;
+static bool debug;
 static __u16 vendor;
 static __u16 product;
 
@@ -587,11 +587,6 @@ static int treo_attach(struct usb_serial *serial)
 
 	dbg("%s", __func__);
 
-	if (serial->num_bulk_in < 2 || serial->num_interrupt_in < 2) {
-		dev_err(&serial->interface->dev, "missing endpoints\n");
-		return -ENODEV;
-	}
-
 	/*
 	* It appears that Treos and Kyoceras want to use the
 	* 1st bulk in endpoint to communicate with the 2nd bulk out endpoint,
@@ -604,9 +599,7 @@ static int treo_attach(struct usb_serial *serial)
 		dest->read_urb = src->read_urb;				\
 		dest->bulk_in_endpointAddress = src->bulk_in_endpointAddress;\
 		dest->bulk_in_buffer = src->bulk_in_buffer;		\
-		dest->bulk_in_size = src->bulk_in_size;			\
 		dest->interrupt_in_urb = src->interrupt_in_urb;		\
-		dest->interrupt_in_urb->context = dest;			\
 		dest->interrupt_in_endpointAddress = \
 					src->interrupt_in_endpointAddress;\
 		dest->interrupt_in_buffer = src->interrupt_in_buffer;	\
@@ -640,10 +633,8 @@ static int clie_5_attach(struct usb_serial *serial)
 	 */
 
 	/* some sanity check */
-	if (serial->num_bulk_out < 2) {
-		dev_err(&serial->interface->dev, "missing bulk out endpoints\n");
-		return -ENODEV;
-	}
+	if (serial->num_ports < 2)
+		return -1;
 
 	/* port 0 now uses the modified endpoint Address */
 	port = serial->port[0];

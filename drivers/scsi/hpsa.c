@@ -98,15 +98,6 @@ static const struct pci_device_id hpsa_pci_device_id[] = {
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3354},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3355},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3356},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1920},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1921},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1922},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1923},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1924},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1925},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1926},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1928},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x334d},
 	{PCI_VENDOR_ID_HP,     PCI_ANY_ID,	PCI_ANY_ID, PCI_ANY_ID,
 		PCI_CLASS_STORAGE_RAID << 8, 0xffff << 8, 0},
 	{0,}
@@ -126,22 +117,13 @@ static struct board_type products[] = {
 	{0x3249103C, "Smart Array P812", &SA5_access},
 	{0x324a103C, "Smart Array P712m", &SA5_access},
 	{0x324b103C, "Smart Array P711m", &SA5_access},
-	{0x3350103C, "Smart Array P222", &SA5_access},
-	{0x3351103C, "Smart Array P420", &SA5_access},
-	{0x3352103C, "Smart Array P421", &SA5_access},
-	{0x3353103C, "Smart Array P822", &SA5_access},
-	{0x3354103C, "Smart Array P420i", &SA5_access},
-	{0x3355103C, "Smart Array P220i", &SA5_access},
-	{0x3356103C, "Smart Array P721m", &SA5_access},
-	{0x1920103C, "Smart Array", &SA5_access},
-	{0x1921103C, "Smart Array", &SA5_access},
-	{0x1922103C, "Smart Array", &SA5_access},
-	{0x1923103C, "Smart Array", &SA5_access},
-	{0x1924103C, "Smart Array", &SA5_access},
-	{0x1925103C, "Smart Array", &SA5_access},
-	{0x1926103C, "Smart Array", &SA5_access},
-	{0x1928103C, "Smart Array", &SA5_access},
-	{0x334d103C, "Smart Array P822se", &SA5_access},
+	{0x3350103C, "Smart Array", &SA5_access},
+	{0x3351103C, "Smart Array", &SA5_access},
+	{0x3352103C, "Smart Array", &SA5_access},
+	{0x3353103C, "Smart Array", &SA5_access},
+	{0x3354103C, "Smart Array", &SA5_access},
+	{0x3355103C, "Smart Array", &SA5_access},
+	{0x3356103C, "Smart Array", &SA5_access},
 	{0xFFFF103C, "Unknown Smart Array", &SA5_access},
 };
 
@@ -311,12 +293,14 @@ static u32 unresettable_controller[] = {
 	0x3215103C, /* Smart Array E200i */
 	0x3237103C, /* Smart Array E500 */
 	0x323D103C, /* Smart Array P700m */
+	0x40800E11, /* Smart Array 5i */
 	0x409C0E11, /* Smart Array 6400 */
 	0x409D0E11, /* Smart Array 6400 EM */
 };
 
 /* List of controllers which cannot even be soft reset */
 static u32 soft_unresettable_controller[] = {
+	0x40800E11, /* Smart Array 5i */
 	/* Exclude 640x boards.  These are two pci devices in one slot
 	 * which share a battery backed cache module.  One controls the
 	 * cache, the other accesses the cache through the one that controls
@@ -550,42 +534,12 @@ static void set_performant_mode(struct ctlr_info *h, struct CommandList *c)
 		c->busaddr |= 1 | (h->blockFetchTable[c->Header.SGList] << 1);
 }
 
-static int is_firmware_flash_cmd(u8 *cdb)
-{
-	return cdb[0] == BMIC_WRITE && cdb[6] == BMIC_FLASH_FIRMWARE;
-}
-
-/*
- * During firmware flash, the heartbeat register may not update as frequently
- * as it should.  So we dial down lockup detection during firmware flash. and
- * dial it back up when firmware flash completes.
- */
-#define HEARTBEAT_SAMPLE_INTERVAL_DURING_FLASH (240 * HZ)
-#define HEARTBEAT_SAMPLE_INTERVAL (30 * HZ)
-static void dial_down_lockup_detection_during_fw_flash(struct ctlr_info *h,
-		struct CommandList *c)
-{
-	if (!is_firmware_flash_cmd(c->Request.CDB))
-		return;
-	atomic_inc(&h->firmware_flash_in_progress);
-	h->heartbeat_sample_interval = HEARTBEAT_SAMPLE_INTERVAL_DURING_FLASH;
-}
-
-static void dial_up_lockup_detection_on_fw_flash_complete(struct ctlr_info *h,
-		struct CommandList *c)
-{
-	if (is_firmware_flash_cmd(c->Request.CDB) &&
-		atomic_dec_and_test(&h->firmware_flash_in_progress))
-		h->heartbeat_sample_interval = HEARTBEAT_SAMPLE_INTERVAL;
-}
-
 static void enqueue_cmd_and_start_io(struct ctlr_info *h,
 	struct CommandList *c)
 {
 	unsigned long flags;
 
 	set_performant_mode(h, c);
-	dial_down_lockup_detection_during_fw_flash(h, c);
 	spin_lock_irqsave(&h->lock, flags);
 	addQ(&h->reqQ, c);
 	h->Qdepth++;
@@ -1126,8 +1080,8 @@ static void complete_scsi_command(struct CommandList *cp)
 	scsi_set_resid(cmd, ei->ResidualCnt);
 
 	if (ei->CommandStatus == 0) {
-		cmd_free(h, cp);
 		cmd->scsi_done(cmd);
+		cmd_free(h, cp);
 		return;
 	}
 
@@ -1186,7 +1140,7 @@ static void complete_scsi_command(struct CommandList *cp)
 					"has check condition: aborted command: "
 					"ASC: 0x%x, ASCQ: 0x%x\n",
 					cp, asc, ascq);
-				cmd->result |= DID_SOFT_ERROR << 16;
+				cmd->result = DID_SOFT_ERROR << 16;
 				break;
 			}
 			/* Must be some other type of check condition */
@@ -1261,9 +1215,8 @@ static void complete_scsi_command(struct CommandList *cp)
 	}
 		break;
 	case CMD_PROTOCOL_ERR:
-		cmd->result = DID_ERROR << 16;
 		dev_warn(&h->pdev->dev, "cp %p has "
-			"protocol error\n", cp);
+			"protocol error \n", cp);
 		break;
 	case CMD_HARDWARE_ERR:
 		cmd->result = DID_ERROR << 16;
@@ -1300,8 +1253,8 @@ static void complete_scsi_command(struct CommandList *cp)
 		dev_warn(&h->pdev->dev, "cp %p returned unknown status %x\n",
 				cp, ei->CommandStatus);
 	}
-	cmd_free(h, cp);
 	cmd->scsi_done(cmd);
+	cmd_free(h, cp);
 }
 
 static int hpsa_scsi_detect(struct ctlr_info *h)
@@ -1723,26 +1676,30 @@ static void figure_bus_target_lun(struct ctlr_info *h,
 
 	if (is_logical_dev_addr_mode(lunaddrbytes)) {
 		/* logical device */
-		lunid = le32_to_cpu(*((__le32 *) lunaddrbytes));
-		if (is_msa2xxx(h, device)) {
-			/* msa2xxx way, put logicals on bus 1
-			 * and match target/lun numbers box
-			 * reports.
+		if (unlikely(is_scsi_rev_5(h))) {
+			/* p1210m, logical drives lun assignments
+			 * match SCSI REPORT LUNS data.
 			 */
-			*bus = 1;
-			*target = (lunid >> 16) & 0x3fff;
-			*lun = lunid & 0x00ff;
+			lunid = le32_to_cpu(*((__le32 *) lunaddrbytes));
+			*bus = 0;
+			*target = 0;
+			*lun = (lunid & 0x3fff) + 1;
 		} else {
-			if (likely(is_scsi_rev_5(h))) {
-				/* All current smart arrays (circa 2011) */
-				*bus = 0;
-				*target = 0;
-				*lun = (lunid & 0x3fff) + 1;
+			/* not p1210m... */
+			lunid = le32_to_cpu(*((__le32 *) lunaddrbytes));
+			if (is_msa2xxx(h, device)) {
+				/* msa2xxx way, put logicals on bus 1
+				 * and match target/lun numbers box
+				 * reports.
+				 */
+				*bus = 1;
+				*target = (lunid >> 16) & 0x3fff;
+				*lun = lunid & 0x00ff;
 			} else {
-				/* Traditional old smart array way. */
+				/* Traditional smart array way. */
 				*bus = 0;
-				*target = lunid & 0x3fff;
 				*lun = 0;
+				*target = lunid & 0x3fff;
 			}
 		}
 	} else {
@@ -2769,7 +2726,7 @@ static int hpsa_big_passthru_ioctl(struct ctlr_info *h, void __user *argp)
 		}
 		if (ioc->Request.Type.Direction == XFER_WRITE) {
 			if (copy_from_user(buff[sg_used], data_ptr, sz)) {
-				status = -EFAULT;
+				status = -ENOMEM;
 				goto cleanup1;
 			}
 		} else
@@ -2974,7 +2931,7 @@ static void fill_cmd(struct CommandList *c, u8 cmd, struct ctlr_info *h,
 			c->Request.Timeout = 0; /* Don't time out */
 			memset(&c->Request.CDB[0], 0, sizeof(c->Request.CDB));
 			c->Request.CDB[0] =  cmd;
-			c->Request.CDB[1] = HPSA_RESET_TYPE_LUN;
+			c->Request.CDB[1] = 0x03;  /* Reset target above */
 			/* If bytes 4-7 are zero, it means reset the */
 			/* LunID device */
 			c->Request.CDB[4] = 0x00;
@@ -3080,7 +3037,6 @@ static inline int bad_tag(struct ctlr_info *h, u32 tag_index,
 static inline void finish_cmd(struct CommandList *c, u32 raw_tag)
 {
 	removeQ(c);
-	dial_up_lockup_detection_on_fw_flash_complete(c->h, c);
 	if (likely(c->cmd_type == CMD_SCSI))
 		complete_scsi_command(c);
 	else if (c->cmd_type == CMD_IOCTL_PEND)
@@ -4221,6 +4177,9 @@ static void controller_lockup_detected(struct ctlr_info *h)
 	spin_unlock_irqrestore(&h->lock, flags);
 }
 
+#define HEARTBEAT_SAMPLE_INTERVAL (10 * HZ)
+#define HEARTBEAT_CHECK_MINIMUM_INTERVAL (HEARTBEAT_SAMPLE_INTERVAL / 2)
+
 static void detect_controller_lockup(struct ctlr_info *h)
 {
 	u64 now;
@@ -4231,7 +4190,7 @@ static void detect_controller_lockup(struct ctlr_info *h)
 	now = get_jiffies_64();
 	/* If we've received an interrupt recently, we're ok. */
 	if (time_after64(h->last_intr_timestamp +
-				(h->heartbeat_sample_interval), now))
+				(HEARTBEAT_CHECK_MINIMUM_INTERVAL), now))
 		return;
 
 	/*
@@ -4240,7 +4199,7 @@ static void detect_controller_lockup(struct ctlr_info *h)
 	 * otherwise don't care about signals in this thread.
 	 */
 	if (time_after64(h->last_heartbeat_timestamp +
-				(h->heartbeat_sample_interval), now))
+				(HEARTBEAT_CHECK_MINIMUM_INTERVAL), now))
 		return;
 
 	/* If heartbeat has not changed since we last looked, we're not ok. */
@@ -4282,7 +4241,6 @@ static void add_ctlr_to_lockup_detector_list(struct ctlr_info *h)
 {
 	unsigned long flags;
 
-	h->heartbeat_sample_interval = HEARTBEAT_SAMPLE_INTERVAL;
 	spin_lock_irqsave(&lockup_detector_lock, flags);
 	list_add_tail(&h->lockup_list, &hpsa_ctlr_list);
 	spin_unlock_irqrestore(&lockup_detector_lock, flags);
@@ -4313,7 +4271,9 @@ static void stop_controller_lockup_detector(struct ctlr_info *h)
 	remove_ctlr_from_lockup_detector_list(h);
 	/* If the list of ctlr's to monitor is empty, stop the thread */
 	if (list_empty(&hpsa_ctlr_list)) {
+		spin_unlock_irqrestore(&lockup_detector_lock, flags);
 		kthread_stop(hpsa_lockup_detector);
+		spin_lock_irqsave(&lockup_detector_lock, flags);
 		hpsa_lockup_detector = NULL;
 	}
 	spin_unlock_irqrestore(&lockup_detector_lock, flags);
@@ -4465,7 +4425,7 @@ reinit_after_soft_reset:
 	hpsa_hba_inquiry(h);
 	hpsa_register_scsi(h);	/* hook ourselves into SCSI subsystem */
 	start_controller_lockup_detector(h);
-	return 0;
+	return 1;
 
 clean4:
 	hpsa_free_sg_chain_blocks(h);

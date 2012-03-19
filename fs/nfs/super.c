@@ -41,7 +41,6 @@
 #include <linux/lockd/bind.h>
 #include <linux/seq_file.h>
 #include <linux/mount.h>
-#include <linux/mnt_namespace.h>
 #include <linux/namei.h>
 #include <linux/nfs_idmap.h>
 #include <linux/vfs.h>
@@ -270,10 +269,10 @@ static match_table_t nfs_local_lock_tokens = {
 
 static void nfs_umount_begin(struct super_block *);
 static int  nfs_statfs(struct dentry *, struct kstatfs *);
-static int  nfs_show_options(struct seq_file *, struct vfsmount *);
-static int  nfs_show_devname(struct seq_file *, struct vfsmount *);
-static int  nfs_show_path(struct seq_file *, struct vfsmount *);
-static int  nfs_show_stats(struct seq_file *, struct vfsmount *);
+static int  nfs_show_options(struct seq_file *, struct dentry *);
+static int  nfs_show_devname(struct seq_file *, struct dentry *);
+static int  nfs_show_path(struct seq_file *, struct dentry *);
+static int  nfs_show_stats(struct seq_file *, struct dentry *);
 static struct dentry *nfs_fs_mount(struct file_system_type *,
 		int, const char *, void *);
 static struct dentry *nfs_xdev_mount(struct file_system_type *fs_type,
@@ -729,9 +728,9 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss,
 /*
  * Describe the mount options on this VFS mountpoint
  */
-static int nfs_show_options(struct seq_file *m, struct vfsmount *mnt)
+static int nfs_show_options(struct seq_file *m, struct dentry *root)
 {
-	struct nfs_server *nfss = NFS_SB(mnt->mnt_sb);
+	struct nfs_server *nfss = NFS_SB(root->d_sb);
 
 	nfs_show_mount_options(m, nfss, 0);
 
@@ -769,14 +768,14 @@ static void show_pnfs(struct seq_file *m, struct nfs_server *server) {}
 #endif
 #endif
 
-static int nfs_show_devname(struct seq_file *m, struct vfsmount *mnt)
+static int nfs_show_devname(struct seq_file *m, struct dentry *root)
 {
 	char *page = (char *) __get_free_page(GFP_KERNEL);
 	char *devname, *dummy;
 	int err = 0;
 	if (!page)
 		return -ENOMEM;
-	devname = nfs_path(&dummy, mnt->mnt_root, page, PAGE_SIZE, 0);
+	devname = nfs_path(&dummy, root, page, PAGE_SIZE);
 	if (IS_ERR(devname))
 		err = PTR_ERR(devname);
 	else
@@ -785,7 +784,7 @@ static int nfs_show_devname(struct seq_file *m, struct vfsmount *mnt)
 	return err;
 }
 
-static int nfs_show_path(struct seq_file *m, struct vfsmount *mnt)
+static int nfs_show_path(struct seq_file *m, struct dentry *dentry)
 {
 	seq_puts(m, "/");
 	return 0;
@@ -794,10 +793,10 @@ static int nfs_show_path(struct seq_file *m, struct vfsmount *mnt)
 /*
  * Present statistical information for this VFS mountpoint
  */
-static int nfs_show_stats(struct seq_file *m, struct vfsmount *mnt)
+static int nfs_show_stats(struct seq_file *m, struct dentry *root)
 {
 	int i, cpu;
-	struct nfs_server *nfss = NFS_SB(mnt->mnt_sb);
+	struct nfs_server *nfss = NFS_SB(root->d_sb);
 	struct rpc_auth *auth = nfss->client->cl_auth;
 	struct nfs_iostats totals = { };
 
@@ -807,10 +806,10 @@ static int nfs_show_stats(struct seq_file *m, struct vfsmount *mnt)
 	 * Display all mount option settings
 	 */
 	seq_printf(m, "\n\topts:\t");
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_RDONLY ? "ro" : "rw");
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_SYNCHRONOUS ? ",sync" : "");
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_NOATIME ? ",noatime" : "");
-	seq_puts(m, mnt->mnt_sb->s_flags & MS_NODIRATIME ? ",nodiratime" : "");
+	seq_puts(m, root->d_sb->s_flags & MS_RDONLY ? "ro" : "rw");
+	seq_puts(m, root->d_sb->s_flags & MS_SYNCHRONOUS ? ",sync" : "");
+	seq_puts(m, root->d_sb->s_flags & MS_NOATIME ? ",noatime" : "");
+	seq_puts(m, root->d_sb->s_flags & MS_NODIRATIME ? ",nodiratime" : "");
 	nfs_show_mount_options(m, nfss, 1);
 
 	seq_printf(m, "\n\tage:\t%lu", (jiffies - nfss->mount_time) / HZ);
@@ -1065,7 +1064,7 @@ static int nfs_get_option_str(substring_t args[], char **option)
 {
 	kfree(*option);
 	*option = match_strdup(args);
-	return !*option;
+	return !option;
 }
 
 static int nfs_get_option_ul(substring_t args[], unsigned long *option)
@@ -1842,7 +1841,6 @@ static int nfs_validate_mount_data(void *options,
 
 		memcpy(sap, &data->addr, sizeof(data->addr));
 		args->nfs_server.addrlen = sizeof(data->addr);
-		args->nfs_server.port = ntohs(data->addr.sin_port);
 		if (!nfs_verify_server_address(sap))
 			goto out_no_address;
 
@@ -2561,7 +2559,6 @@ static int nfs4_validate_mount_data(void *options,
 			return -EFAULT;
 		if (!nfs_verify_server_address(sap))
 			goto out_no_address;
-		args->nfs_server.port = ntohs(((struct sockaddr_in *)sap)->sin_port);
 
 		if (data->auth_flavourlen) {
 			if (data->auth_flavourlen > 1)
@@ -2732,15 +2729,11 @@ static struct vfsmount *nfs_do_root_mount(struct file_system_type *fs_type,
 	char *root_devname;
 	size_t len;
 
-	len = strlen(hostname) + 5;
+	len = strlen(hostname) + 3;
 	root_devname = kmalloc(len, GFP_KERNEL);
 	if (root_devname == NULL)
 		return ERR_PTR(-ENOMEM);
-	/* Does hostname needs to be enclosed in brackets? */
-	if (strchr(hostname, ':'))
-		snprintf(root_devname, len, "[%s]:/", hostname);
-	else
-		snprintf(root_devname, len, "%s:/", hostname);
+	snprintf(root_devname, len, "%s:/", hostname);
 	root_mnt = vfs_kern_mount(fs_type, flags, root_devname, data);
 	kfree(root_devname);
 	return root_mnt;
@@ -2816,11 +2809,15 @@ static struct dentry *nfs_follow_remote_path(struct vfsmount *root_mnt,
 		const char *export_path)
 {
 	struct dentry *dentry;
-	int ret = nfs_referral_loop_protect();
+	int err;
 
-	if (ret) {
+	if (IS_ERR(root_mnt))
+		return ERR_CAST(root_mnt);
+
+	err = nfs_referral_loop_protect();
+	if (err) {
 		mntput(root_mnt);
-		return ERR_PTR(ret);
+		return ERR_PTR(err);
 	}
 
 	dentry = mount_subtree(root_mnt, export_path);
@@ -2844,9 +2841,7 @@ static struct dentry *nfs4_try_mount(int flags, const char *dev_name,
 			data->nfs_server.hostname);
 	data->nfs_server.export_path = export_path;
 
-	res = ERR_CAST(root_mnt);
-	if (!IS_ERR(root_mnt))
-		res = nfs_follow_remote_path(root_mnt, export_path);
+	res = nfs_follow_remote_path(root_mnt, export_path);
 
 	dfprintk(MOUNT, "<-- nfs4_try_mount() = %ld%s\n",
 			IS_ERR(res) ? PTR_ERR(res) : 0,
@@ -3102,15 +3097,11 @@ static struct dentry *nfs4_referral_mount(struct file_system_type *fs_type,
 			flags, data, data->hostname);
 	data->mnt_path = export_path;
 
-	res = ERR_CAST(root_mnt);
-	if (!IS_ERR(root_mnt))
-		res = nfs_follow_remote_path(root_mnt, export_path);
+	res = nfs_follow_remote_path(root_mnt, export_path);
 	dprintk("<-- nfs4_referral_mount() = %ld%s\n",
 			IS_ERR(res) ? PTR_ERR(res) : 0,
 			IS_ERR(res) ? " [error]" : "");
 	return res;
 }
-
-MODULE_ALIAS("nfs4");
 
 #endif /* CONFIG_NFS_V4 */

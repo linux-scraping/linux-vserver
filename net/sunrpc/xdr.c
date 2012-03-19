@@ -122,9 +122,9 @@ xdr_terminate_string(struct xdr_buf *buf, const u32 len)
 {
 	char *kaddr;
 
-	kaddr = kmap_atomic(buf->pages[0]);
+	kaddr = kmap_atomic(buf->pages[0], KM_USER0);
 	kaddr[buf->page_base + len] = '\0';
-	kunmap_atomic(kaddr);
+	kunmap_atomic(kaddr, KM_USER0);
 }
 EXPORT_SYMBOL_GPL(xdr_terminate_string);
 
@@ -232,15 +232,12 @@ _shift_data_right_pages(struct page **pages, size_t pgto_base,
 		pgto_base -= copy;
 		pgfrom_base -= copy;
 
-		vto = kmap_atomic(*pgto);
-		if (*pgto != *pgfrom) {
-			vfrom = kmap_atomic(*pgfrom);
-			memcpy(vto + pgto_base, vfrom + pgfrom_base, copy);
-			kunmap_atomic(vfrom);
-		} else
-			memmove(vto + pgto_base, vto + pgfrom_base, copy);
+		vto = kmap_atomic(*pgto, KM_USER0);
+		vfrom = kmap_atomic(*pgfrom, KM_USER1);
+		memmove(vto + pgto_base, vfrom + pgfrom_base, copy);
 		flush_dcache_page(*pgto);
-		kunmap_atomic(vto);
+		kunmap_atomic(vfrom, KM_USER1);
+		kunmap_atomic(vto, KM_USER0);
 
 	} while ((len -= copy) != 0);
 }
@@ -270,9 +267,9 @@ _copy_to_pages(struct page **pages, size_t pgbase, const char *p, size_t len)
 		if (copy > len)
 			copy = len;
 
-		vto = kmap_atomic(*pgto);
+		vto = kmap_atomic(*pgto, KM_USER0);
 		memcpy(vto + pgbase, p, copy);
-		kunmap_atomic(vto);
+		kunmap_atomic(vto, KM_USER0);
 
 		len -= copy;
 		if (len == 0)
@@ -314,9 +311,9 @@ _copy_from_pages(char *p, struct page **pages, size_t pgbase, size_t len)
 		if (copy > len)
 			copy = len;
 
-		vfrom = kmap_atomic(*pgfrom);
+		vfrom = kmap_atomic(*pgfrom, KM_USER0);
 		memcpy(p, vfrom + pgbase, copy);
-		kunmap_atomic(vfrom);
+		kunmap_atomic(vfrom, KM_USER0);
 
 		pgbase += copy;
 		if (pgbase == PAGE_CACHE_SIZE) {

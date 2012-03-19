@@ -76,16 +76,9 @@ static bool ar9002_hw_get_isr(struct ath_hw *ah, enum ath9k_int *masked)
 				mask2 |= ATH9K_INT_CST;
 			if (isr2 & AR_ISR_S2_TSFOOR)
 				mask2 |= ATH9K_INT_TSFOOR;
-
-			if (!(pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED)) {
-				REG_WRITE(ah, AR_ISR_S2, isr2);
-				isr &= ~AR_ISR_BCNMISC;
-			}
 		}
 
-		if (pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED)
-			isr = REG_READ(ah, AR_ISR_RAC);
-
+		isr = REG_READ(ah, AR_ISR_RAC);
 		if (isr == 0xffffffff) {
 			*masked = 0;
 			return false;
@@ -104,44 +97,30 @@ static bool ar9002_hw_get_isr(struct ath_hw *ah, enum ath9k_int *masked)
 
 			*masked |= ATH9K_INT_TX;
 
-			if (pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED) {
-				s0_s = REG_READ(ah, AR_ISR_S0_S);
-				s1_s = REG_READ(ah, AR_ISR_S1_S);
-			} else {
-				s0_s = REG_READ(ah, AR_ISR_S0);
-				REG_WRITE(ah, AR_ISR_S0, s0_s);
-				s1_s = REG_READ(ah, AR_ISR_S1);
-				REG_WRITE(ah, AR_ISR_S1, s1_s);
-
-				isr &= ~(AR_ISR_TXOK |
-					 AR_ISR_TXDESC |
-					 AR_ISR_TXERR |
-					 AR_ISR_TXEOL);
-			}
-
+			s0_s = REG_READ(ah, AR_ISR_S0_S);
 			ah->intr_txqs |= MS(s0_s, AR_ISR_S0_QCU_TXOK);
 			ah->intr_txqs |= MS(s0_s, AR_ISR_S0_QCU_TXDESC);
+
+			s1_s = REG_READ(ah, AR_ISR_S1_S);
 			ah->intr_txqs |= MS(s1_s, AR_ISR_S1_QCU_TXERR);
 			ah->intr_txqs |= MS(s1_s, AR_ISR_S1_QCU_TXEOL);
 		}
 
 		if (isr & AR_ISR_RXORN) {
-			ath_dbg(common, ATH_DBG_INTERRUPT,
+			ath_dbg(common, INTERRUPT,
 				"receive FIFO overrun interrupt\n");
 		}
 
 		*masked |= mask2;
 	}
 
-	if (!AR_SREV_9100(ah) && (isr & AR_ISR_GENTMR)) {
+	if (AR_SREV_9100(ah))
+		return true;
+
+	if (isr & AR_ISR_GENTMR) {
 		u32 s5_s;
 
-		if (pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED) {
-			s5_s = REG_READ(ah, AR_ISR_S5_S);
-		} else {
-			s5_s = REG_READ(ah, AR_ISR_S5);
-		}
-
+		s5_s = REG_READ(ah, AR_ISR_S5_S);
 		ah->intr_gen_timer_trigger =
 				MS(s5_s, AR_ISR_S5_GENTIMER_TRIG);
 
@@ -154,20 +133,7 @@ static bool ar9002_hw_get_isr(struct ath_hw *ah, enum ath9k_int *masked)
 		if ((s5_s & AR_ISR_S5_TIM_TIMER) &&
 		    !(pCap->hw_caps & ATH9K_HW_CAP_AUTOSLEEP))
 			*masked |= ATH9K_INT_TIM_TIMER;
-
-		if (!(pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED)) {
-			REG_WRITE(ah, AR_ISR_S5, s5_s);
-			isr &= ~AR_ISR_GENTMR;
-		}
 	}
-
-	if (!(pCap->hw_caps & ATH9K_HW_CAP_RAC_SUPPORTED)) {
-		REG_WRITE(ah, AR_ISR, isr);
-		REG_READ(ah, AR_ISR);
-	}
-
-	if (AR_SREV_9100(ah))
-		return true;
 
 	if (sync_cause) {
 		fatal_int =
@@ -177,24 +143,24 @@ static bool ar9002_hw_get_isr(struct ath_hw *ah, enum ath9k_int *masked)
 
 		if (fatal_int) {
 			if (sync_cause & AR_INTR_SYNC_HOST1_FATAL) {
-				ath_dbg(common, ATH_DBG_ANY,
+				ath_dbg(common, ANY,
 					"received PCI FATAL interrupt\n");
 			}
 			if (sync_cause & AR_INTR_SYNC_HOST1_PERR) {
-				ath_dbg(common, ATH_DBG_ANY,
+				ath_dbg(common, ANY,
 					"received PCI PERR interrupt\n");
 			}
 			*masked |= ATH9K_INT_FATAL;
 		}
 		if (sync_cause & AR_INTR_SYNC_RADM_CPL_TIMEOUT) {
-			ath_dbg(common, ATH_DBG_INTERRUPT,
+			ath_dbg(common, INTERRUPT,
 				"AR_INTR_SYNC_RADM_CPL_TIMEOUT\n");
 			REG_WRITE(ah, AR_RC, AR_RC_HOSTIF);
 			REG_WRITE(ah, AR_RC, 0);
 			*masked |= ATH9K_INT_FATAL;
 		}
 		if (sync_cause & AR_INTR_SYNC_LOCAL_TIMEOUT) {
-			ath_dbg(common, ATH_DBG_INTERRUPT,
+			ath_dbg(common, INTERRUPT,
 				"AR_INTR_SYNC_LOCAL_TIMEOUT\n");
 		}
 

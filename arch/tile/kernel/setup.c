@@ -119,8 +119,7 @@ early_param("maxmem", setup_maxmem);
 static int __init setup_maxnodemem(char *str)
 {
 	char *endp;
-	long maxnodemem_mb;
-	unsigned long node;
+	long maxnodemem_mb, node;
 
 	node = str ? simple_strtoul(str, &endp, 0) : INT_MAX;
 	if (node >= MAX_NUMNODES || *endp != ':' ||
@@ -915,7 +914,7 @@ void __cpuinit setup_cpu(int boot)
 #ifdef CONFIG_BLK_DEV_INITRD
 
 static int __initdata set_initramfs_file;
-static char __initdata initramfs_file[128] = "initramfs";
+static char __initdata initramfs_file[128] = "initramfs.cpio.gz";
 
 static int __init setup_initramfs_file(char *str)
 {
@@ -929,9 +928,9 @@ static int __init setup_initramfs_file(char *str)
 early_param("initramfs_file", setup_initramfs_file);
 
 /*
- * We look for a file called "initramfs" in the hvfs.  If there is one, we
- * allocate some memory for it and it will be unpacked to the initramfs.
- * If it's compressed, the initd code will uncompress it first.
+ * We look for an additional "initramfs.cpio.gz" file in the hvfs.
+ * If there is one, we allocate some memory for it and it will be
+ * unpacked to the initramfs after any built-in initramfs_data.
  */
 static void __init load_hv_initrd(void)
 {
@@ -941,16 +940,10 @@ static void __init load_hv_initrd(void)
 
 	fd = hv_fs_findfile((HV_VirtAddr) initramfs_file);
 	if (fd == HV_ENOENT) {
-		if (set_initramfs_file) {
+		if (set_initramfs_file)
 			pr_warning("No such hvfs initramfs file '%s'\n",
 				   initramfs_file);
-			return;
-		} else {
-			/* Try old backwards-compatible name. */
-			fd = hv_fs_findfile((HV_VirtAddr)"initramfs.cpio.gz");
-			if (fd == HV_ENOENT)
-				return;
-		}
+		return;
 	}
 	BUG_ON(fd < 0);
 	stat = hv_fs_fstat(fd);
@@ -974,7 +967,7 @@ static void __init load_hv_initrd(void)
 
 void __init free_initrd_mem(unsigned long begin, unsigned long end)
 {
-	free_bootmem_late(__pa(begin), end - begin);
+	free_bootmem(__pa(begin), end - begin);
 }
 
 #else

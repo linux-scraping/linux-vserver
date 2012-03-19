@@ -1083,7 +1083,7 @@ static int stir421x_patch_device(struct irda_usb_cb *self)
          * are "42101001.sb" or "42101002.sb"
          */
         sprintf(stir421x_fw_name, "4210%4X.sb",
-		le16_to_cpu(self->usbdev->descriptor.bcdDevice));
+                self->usbdev->descriptor.bcdDevice);
         ret = request_firmware(&fw, stir421x_fw_name, &self->usbdev->dev);
         if (ret < 0)
                 return ret;
@@ -1914,41 +1914,8 @@ static struct usb_driver irda_driver = {
 #endif
 };
 
-/************************* MODULE CALLBACKS *************************/
-/*
- * Deal with module insertion/removal
- * Mostly tell USB about our existence
- */
+module_usb_driver(irda_driver);
 
-/*------------------------------------------------------------------*/
-/*
- * Module insertion
- */
-static int __init usb_irda_init(void)
-{
-	int	ret;
-
-	ret = usb_register(&irda_driver);
-	if (ret < 0)
-		return ret;
-
-	IRDA_MESSAGE("USB IrDA support registered\n");
-	return 0;
-}
-module_init(usb_irda_init);
-
-/*------------------------------------------------------------------*/
-/*
- * Module removal
- */
-static void __exit usb_irda_cleanup(void)
-{
-	/* Deregister the driver and remove all pending instances */
-	usb_deregister(&irda_driver);
-}
-module_exit(usb_irda_cleanup);
-
-/*------------------------------------------------------------------*/
 /*
  * Module parameters
  */

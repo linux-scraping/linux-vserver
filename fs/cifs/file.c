@@ -265,8 +265,6 @@ cifs_new_fileinfo(__u16 fileHandle, struct file *file,
 	mutex_init(&pCifsFile->fh_mutex);
 	INIT_WORK(&pCifsFile->oplock_break, cifs_oplock_break);
 
-	cifs_sb_active(inode->i_sb);
-
 	spin_lock(&cifs_file_list_lock);
 	list_add(&pCifsFile->tlist, &(tlink_tcon(tlink)->openFileList));
 	/* if readable file instance put first in list*/
@@ -295,8 +293,7 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 	struct inode *inode = cifs_file->dentry->d_inode;
 	struct cifs_tcon *tcon = tlink_tcon(cifs_file->tlink);
 	struct cifsInodeInfo *cifsi = CIFS_I(inode);
-	struct super_block *sb = inode->i_sb;
-	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
+	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct cifsLockInfo *li, *tmp;
 
 	spin_lock(&cifs_file_list_lock);
@@ -348,7 +345,6 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 
 	cifs_put_tlink(cifs_file->tlink);
 	dput(cifs_file->dentry);
-	cifs_sb_deactive(sb);
 	kfree(cifs_file);
 }
 
@@ -384,7 +380,7 @@ int cifs_open(struct inode *inode, struct file *file)
 	cFYI(1, "inode = 0x%p file flags are 0x%x for %s",
 		 inode, file->f_flags, full_path);
 
-	if (tcon->ses->server->oplocks)
+	if (enable_oplocks)
 		oplock = REQ_OPLOCK;
 	else
 		oplock = 0;
@@ -509,7 +505,7 @@ static int cifs_reopen_file(struct cifsFileInfo *pCifsFile, bool can_flush)
 	cFYI(1, "inode = 0x%p file flags 0x%x for %s",
 		 inode, pCifsFile->f_flags, full_path);
 
-	if (tcon->ses->server->oplocks)
+	if (enable_oplocks)
 		oplock = REQ_OPLOCK;
 	else
 		oplock = 0;
@@ -839,21 +835,13 @@ cifs_posix_lock_set(struct file *file, struct file_lock *flock)
 	if ((flock->fl_flags & FL_POSIX) == 0)
 		return rc;
 
-try_again:
 	mutex_lock(&cinode->lock_mutex);
 	if (!cinode->can_cache_brlcks) {
 		mutex_unlock(&cinode->lock_mutex);
 		return rc;
 	}
-
-	rc = posix_lock_file(file, flock, NULL);
+	rc = posix_lock_file_wait(file, flock);
 	mutex_unlock(&cinode->lock_mutex);
-	if (rc == FILE_LOCK_DEFERRED) {
-		rc = wait_event_interruptible(flock->fl_wait, !flock->fl_next);
-		if (!rc)
-			goto try_again;
-		locks_delete_block(flock);
-	}
 	return rc;
 }
 
@@ -886,7 +874,7 @@ cifs_push_mandatory_locks(struct cifsFileInfo *cfile)
 	if (!buf) {
 		mutex_unlock(&cinode->lock_mutex);
 		FreeXid(xid);
-		return -ENOMEM;
+		return rc;
 	}
 
 	for (i = 0; i < 2; i++) {
@@ -972,9 +960,9 @@ cifs_push_posix_locks(struct cifsFileInfo *cfile)
 	INIT_LIST_HEAD(&locks_to_send);
 
 	/*
-	 * Allocating count locks is enough because no FL_POSIX locks can be
-	 * added to the list while we are holding cinode->lock_mutex that
-	 * protects locking operations of this inode.
+	 * Allocating count locks is enough because no locks can be added to
+	 * the list while we are holding cinode->lock_mutex that protects
+	 * locking operations of this inode.
 	 */
 	for (; i < count; i++) {
 		lck = kmalloc(sizeof(struct lock_to_push), GFP_KERNEL);
@@ -985,20 +973,18 @@ cifs_push_posix_locks(struct cifsFileInfo *cfile)
 		list_add_tail(&lck->llist, &locks_to_send);
 	}
 
+	i = 0;
 	el = locks_to_send.next;
 	lock_flocks();
 	cifs_for_each_lock(cfile->dentry->d_inode, before) {
-		flock = *before;
-		if ((flock->fl_flags & FL_POSIX) == 0)
-			continue;
 		if (el == &locks_to_send) {
-			/*
-			 * The list ended. We don't have enough allocated
-			 * structures - something is really wrong.
-			 */
+			/* something is really wrong */
 			cERROR(1, "Can't push all brlocks!");
 			break;
 		}
+		flock = *before;
+		if ((flock->fl_flags & FL_POSIX) == 0)
+			continue;
 		length = 1 + flock->fl_end - flock->fl_start;
 		if (flock->fl_type == F_RDLCK || flock->fl_type == F_SHLCK)
 			type = CIFS_RDLCK;
@@ -1010,6 +996,7 @@ cifs_push_posix_locks(struct cifsFileInfo *cfile)
 		lck->length = length;
 		lck->type = type;
 		lck->offset = flock->fl_start;
+		i++;
 		el = el->next;
 	}
 	unlock_flocks();
@@ -1538,11 +1525,10 @@ struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *cifs_inode,
 struct cifsFileInfo *find_writable_file(struct cifsInodeInfo *cifs_inode,
 					bool fsuid_only)
 {
-	struct cifsFileInfo *open_file, *inv_file = NULL;
+	struct cifsFileInfo *open_file;
 	struct cifs_sb_info *cifs_sb;
 	bool any_available = false;
 	int rc;
-	unsigned int refind = 0;
 
 	/* Having a null inode here (because mapping->host was set to zero by
 	the VFS or MM) should not happen but we had reports of on oops (due to
@@ -1562,25 +1548,40 @@ struct cifsFileInfo *find_writable_file(struct cifsInodeInfo *cifs_inode,
 
 	spin_lock(&cifs_file_list_lock);
 refind_writable:
-	if (refind > MAX_REOPEN_ATT) {
-		spin_unlock(&cifs_file_list_lock);
-		return NULL;
-	}
 	list_for_each_entry(open_file, &cifs_inode->openFileList, flist) {
 		if (!any_available && open_file->pid != current->tgid)
 			continue;
 		if (fsuid_only && open_file->uid != current_fsuid())
 			continue;
 		if (OPEN_FMODE(open_file->f_flags) & FMODE_WRITE) {
+			cifsFileInfo_get(open_file);
+
 			if (!open_file->invalidHandle) {
 				/* found a good writable file */
-				cifsFileInfo_get(open_file);
 				spin_unlock(&cifs_file_list_lock);
 				return open_file;
-			} else {
-				if (!inv_file)
-					inv_file = open_file;
 			}
+
+			spin_unlock(&cifs_file_list_lock);
+
+			/* Had to unlock since following call can block */
+			rc = cifs_reopen_file(open_file, false);
+			if (!rc)
+				return open_file;
+
+			/* if it fails, try another handle if possible */
+			cFYI(1, "wp failed on reopen file");
+			cifsFileInfo_put(open_file);
+
+			spin_lock(&cifs_file_list_lock);
+
+			/* else we simply continue to the next entry. Thus
+			   we do not loop on reopen errors.  If we
+			   can not reopen the file, for example if we
+			   reconnected to a server with another client
+			   racing to delete or lock the file we would not
+			   make progress if we restarted before the beginning
+			   of the loop here. */
 		}
 	}
 	/* couldn't find useable FH with same pid, try any available */
@@ -1588,31 +1589,7 @@ refind_writable:
 		any_available = true;
 		goto refind_writable;
 	}
-
-	if (inv_file) {
-		any_available = false;
-		cifsFileInfo_get(inv_file);
-	}
-
 	spin_unlock(&cifs_file_list_lock);
-
-	if (inv_file) {
-		rc = cifs_reopen_file(inv_file, false);
-		if (!rc)
-			return inv_file;
-		else {
-			spin_lock(&cifs_file_list_lock);
-			list_move_tail(&inv_file->flist,
-					&cifs_inode->openFileList);
-			spin_unlock(&cifs_file_list_lock);
-			cifsFileInfo_put(inv_file);
-			spin_lock(&cifs_file_list_lock);
-			++refind;
-			inv_file = NULL;
-			goto refind_writable;
-		}
-	}
-
 	return NULL;
 }
 
@@ -2108,7 +2085,7 @@ cifs_iovec_write(struct file *file, const struct iovec *iov,
 {
 	unsigned int written;
 	unsigned long num_pages, npages, i;
-	size_t bytes, copied, len, cur_len;
+	size_t copied, len, cur_len;
 	ssize_t total_written = 0;
 	struct kvec *to_send;
 	struct page **pages;
@@ -2166,44 +2143,16 @@ cifs_iovec_write(struct file *file, const struct iovec *iov,
 	do {
 		size_t save_len = cur_len;
 		for (i = 0; i < npages; i++) {
-			bytes = min_t(const size_t, cur_len, PAGE_CACHE_SIZE);
+			copied = min_t(const size_t, cur_len, PAGE_CACHE_SIZE);
 			copied = iov_iter_copy_from_user(pages[i], &it, 0,
-							 bytes);
+							 copied);
 			cur_len -= copied;
 			iov_iter_advance(&it, copied);
 			to_send[i+1].iov_base = kmap(pages[i]);
 			to_send[i+1].iov_len = copied;
-			/*
-			 * If we didn't copy as much as we expected, then that
-			 * may mean we trod into an unmapped area. Stop copying
-			 * at that point. On the next pass through the big
-			 * loop, we'll likely end up getting a zero-length
-			 * write and bailing out of it.
-			 */
-			if (copied < bytes)
-				break;
 		}
 
 		cur_len = save_len - cur_len;
-
-		/*
-		 * If we have no data to send, then that probably means that
-		 * the copy above failed altogether. That's most likely because
-		 * the address in the iovec was bogus. Set the rc to -EFAULT,
-		 * free anything we allocated and bail out.
-		 */
-		if (!cur_len) {
-			kunmap(pages[0]);
-			if (!total_written)
-				total_written = -EFAULT;
-			break;
-		}
-
-		/*
-		 * i + 1 now represents the number of pages we actually used in
-		 * the copy phase above.
-		 */
-		npages = min(npages, i + 1);
 
 		do {
 			if (open_file->invalidHandle) {

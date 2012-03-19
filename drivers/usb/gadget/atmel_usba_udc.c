@@ -739,10 +739,10 @@ static int queue_dma(struct usba_udc *udc, struct usba_ep *ep,
 
 	req->ctrl = USBA_BF(DMA_BUF_LEN, req->req.length)
 			| USBA_DMA_CH_EN | USBA_DMA_END_BUF_IE
-			| USBA_DMA_END_BUF_EN;
+			| USBA_DMA_END_TR_EN | USBA_DMA_END_TR_IE;
 
-	if (!ep->is_in)
-		req->ctrl |= USBA_DMA_END_TR_EN | USBA_DMA_END_TR_IE;
+	if (ep->is_in)
+		req->ctrl |= USBA_DMA_END_BUF_EN;
 
 	/*
 	 * Add this request to the queue and submit for DMA if
@@ -850,7 +850,7 @@ static int usba_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 {
 	struct usba_ep *ep = to_usba_ep(_ep);
 	struct usba_udc *udc = ep->udc;
-	struct usba_request *req;
+	struct usba_request *req = to_usba_req(_req);
 	unsigned long flags;
 	u32 status;
 
@@ -858,16 +858,6 @@ static int usba_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 			ep->ep.name, req);
 
 	spin_lock_irqsave(&udc->lock, flags);
-
-	list_for_each_entry(req, &ep->queue, queue) {
-		if (&req->req == _req)
-			break;
-	}
-
-	if (&req->req != _req) {
-		spin_unlock_irqrestore(&udc->lock, flags);
-		return -EINVAL;
-	}
 
 	if (req->using_dma) {
 		/*
@@ -1048,7 +1038,7 @@ static struct usba_udc the_udc = {
 	.gadget	= {
 		.ops		= &usba_udc_ops,
 		.ep_list	= LIST_HEAD_INIT(the_udc.gadget.ep_list),
-		.is_dualspeed	= 1,
+		.max_speed	= USB_SPEED_HIGH,
 		.name		= "atmel_usba_udc",
 		.dev	= {
 			.init_name	= "gadget",
@@ -1607,6 +1597,7 @@ static void usba_ep_irq(struct usba_udc *udc, struct usba_ep *ep)
 	if ((epstatus & epctrl) & USBA_RX_BK_RDY) {
 		DBG(DBG_BUS, "%s: RX data ready\n", ep->ep.name);
 		receive_data(ep);
+		usba_ep_writel(ep, CLR_STA, USBA_RX_BK_RDY);
 	}
 }
 
@@ -1884,13 +1875,12 @@ static int atmel_usba_stop(struct usb_gadget_driver *driver)
 
 	driver->unbind(&udc->gadget);
 	udc->gadget.dev.driver = NULL;
+	udc->driver = NULL;
 
 	clk_disable(udc->hclk);
 	clk_disable(udc->pclk);
 
-	DBG(DBG_GADGET, "unregistered driver `%s'\n", udc->driver->driver.name);
-
-	udc->driver = NULL;
+	DBG(DBG_GADGET, "unregistered driver `%s'\n", driver->driver.name);
 
 	return 0;
 }

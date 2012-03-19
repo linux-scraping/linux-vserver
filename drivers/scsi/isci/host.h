@@ -309,8 +309,9 @@ static inline struct isci_pci_info *to_pci_info(struct pci_dev *pdev)
 }
 
 #define for_each_isci_host(id, ihost, pdev) \
-	for (id = 0; id < SCI_MAX_CONTROLLERS && \
-	     (ihost = to_pci_info(pdev)->hosts[id]); id++)
+	for (id = 0, ihost = to_pci_info(pdev)->hosts[id]; \
+	     id < ARRAY_SIZE(to_pci_info(pdev)->hosts) && ihost; \
+	     ihost = to_pci_info(pdev)->hosts[++id])
 
 static inline enum isci_status isci_host_get_state(struct isci_host *isci_host)
 {
@@ -434,10 +435,35 @@ static inline bool is_b0(struct pci_dev *pdev)
 
 static inline bool is_c0(struct pci_dev *pdev)
 {
-	if (pdev->revision >= 5)
+	if (pdev->revision == 5)
 		return true;
 	return false;
 }
+
+static inline bool is_c1(struct pci_dev *pdev)
+{
+	if (pdev->revision >= 6)
+		return true;
+	return false;
+}
+
+enum cable_selections {
+	short_cable     = 0,
+	long_cable      = 1,
+	medium_cable    = 2,
+	undefined_cable = 3
+};
+
+#define CABLE_OVERRIDE_DISABLED (0x10000)
+
+static inline int is_cable_select_overridden(void)
+{
+	return cable_selection_override < CABLE_OVERRIDE_DISABLED;
+}
+
+enum cable_selections decode_cable_selection(struct isci_host *ihost, int phy);
+void validate_cable_selections(struct isci_host *ihost);
+char *lookup_cable_names(enum cable_selections);
 
 /* set hw control for 'activity', even though active enclosures seem to drive
  * the activity led on their own.  Skip setting FSENG control on 'status' due

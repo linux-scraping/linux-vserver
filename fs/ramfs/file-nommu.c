@@ -110,7 +110,6 @@ int ramfs_nommu_expand_for_mapping(struct inode *inode, size_t newsize)
 
 		/* prevent the page from being discarded on memory pressure */
 		SetPageDirty(page);
-		SetPageUptodate(page);
 
 		unlock_page(page);
 		put_page(page);
@@ -164,7 +163,7 @@ static int ramfs_nommu_setattr(struct dentry *dentry, struct iattr *ia)
 	int ret = 0;
 
 	/* POSIX UID/GID verification for setting inode attributes */
-	ret = setattr_prepare(dentry, ia);
+	ret = inode_change_ok(inode, ia);
 	if (ret)
 		return ret;
 

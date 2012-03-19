@@ -28,9 +28,6 @@
 #include "stb6100.h"
 #include "stb6100_proc.h"
 
-/* Max transfer size done by I2C transfer functions */
-#define MAX_XFER_SIZE  64
-
 #ifndef USB_PID_DW2102
 #define USB_PID_DW2102 0x2102
 #endif
@@ -234,20 +231,6 @@ static int dw2102_serit_i2c_transfer(struct i2c_adapter *adap,
 
 	switch (num) {
 	case 2:
-		if (msg[0].len != 1) {
-			warn("i2c rd: len=%d is not 1!\n",
-			     msg[0].len);
-			num = -EOPNOTSUPP;
-			break;
-		}
-
-		if (2 + msg[1].len > sizeof(buf6)) {
-			warn("i2c rd: len=%d is too big!\n",
-			     msg[1].len);
-			num = -EOPNOTSUPP;
-			break;
-		}
-
 		/* read si2109 register by number */
 		buf6[0] = msg[0].addr << 1;
 		buf6[1] = msg[0].len;
@@ -263,13 +246,6 @@ static int dw2102_serit_i2c_transfer(struct i2c_adapter *adap,
 	case 1:
 		switch (msg[0].addr) {
 		case 0x68:
-			if (2 + msg[0].len > sizeof(buf6)) {
-				warn("i2c wr: len=%d is too big!\n",
-				     msg[0].len);
-				num = -EOPNOTSUPP;
-				break;
-			}
-
 			/* write to si2109 register */
 			buf6[0] = msg[0].addr << 1;
 			buf6[1] = msg[0].len;
@@ -311,22 +287,7 @@ static int dw2102_earda_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg ms
 	case 2: {
 		/* read */
 		/* first write first register number */
-		u8 ibuf[MAX_XFER_SIZE], obuf[3];
-
-		if (2 + msg[0].len != sizeof(obuf)) {
-			warn("i2c rd: len=%d is not 1!\n",
-			     msg[0].len);
-			ret = -EOPNOTSUPP;
-			goto unlock;
-		}
-
-		if (2 + msg[1].len > sizeof(ibuf)) {
-			warn("i2c rd: len=%d is too big!\n",
-			     msg[1].len);
-			ret = -EOPNOTSUPP;
-			goto unlock;
-		}
-
+		u8 ibuf[msg[1].len + 2], obuf[3];
 		obuf[0] = msg[0].addr << 1;
 		obuf[1] = msg[0].len;
 		obuf[2] = msg[0].buf[0];
@@ -343,15 +304,7 @@ static int dw2102_earda_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg ms
 		switch (msg[0].addr) {
 		case 0x68: {
 			/* write to register */
-			u8 obuf[MAX_XFER_SIZE];
-
-			if (2 + msg[0].len > sizeof(obuf)) {
-				warn("i2c wr: len=%d is too big!\n",
-				     msg[1].len);
-				ret = -EOPNOTSUPP;
-				goto unlock;
-			}
-
+			u8 obuf[msg[0].len + 2];
 			obuf[0] = msg[0].addr << 1;
 			obuf[1] = msg[0].len;
 			memcpy(obuf + 2, msg[0].buf, msg[0].len);
@@ -361,15 +314,7 @@ static int dw2102_earda_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg ms
 		}
 		case 0x61: {
 			/* write to tuner */
-			u8 obuf[MAX_XFER_SIZE];
-
-			if (2 + msg[0].len > sizeof(obuf)) {
-				warn("i2c wr: len=%d is too big!\n",
-				     msg[1].len);
-				ret = -EOPNOTSUPP;
-				goto unlock;
-			}
-
+			u8 obuf[msg[0].len + 2];
 			obuf[0] = msg[0].addr << 1;
 			obuf[1] = msg[0].len;
 			memcpy(obuf + 2, msg[0].buf, msg[0].len);
@@ -396,11 +341,9 @@ static int dw2102_earda_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg ms
 
 		break;
 	}
-	ret = num;
 
-unlock:
 	mutex_unlock(&d->i2c_mutex);
-	return ret;
+	return num;
 }
 
 static int dw2104_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[], int num)
@@ -438,15 +381,7 @@ static int dw2104_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[], i
 		default: {
 			if (msg[j].flags == I2C_M_RD) {
 				/* read registers */
-				u8  ibuf[MAX_XFER_SIZE];
-
-				if (2 + msg[j].len > sizeof(ibuf)) {
-					warn("i2c rd: len=%d is too big!\n",
-					     msg[j].len);
-					ret = -EOPNOTSUPP;
-					goto unlock;
-				}
-
+				u8  ibuf[msg[j].len + 2];
 				ret = dw210x_op_rw(d->udev, 0xc3,
 						(msg[j].addr << 1) + 1, 0,
 						ibuf, msg[j].len + 2,
@@ -475,15 +410,7 @@ static int dw2104_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[], i
 				} while (len > 0);
 			} else {
 				/* write registers */
-				u8 obuf[MAX_XFER_SIZE];
-
-				if (2 + msg[j].len > sizeof(obuf)) {
-					warn("i2c wr: len=%d is too big!\n",
-					     msg[j].len);
-					ret = -EOPNOTSUPP;
-					goto unlock;
-				}
-
+				u8 obuf[msg[j].len + 2];
 				obuf[0] = msg[j].addr << 1;
 				obuf[1] = msg[j].len;
 				memcpy(obuf + 2, msg[j].buf, msg[j].len);
@@ -496,11 +423,9 @@ static int dw2104_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[], i
 		}
 
 	}
-	ret = num;
 
-unlock:
 	mutex_unlock(&d->i2c_mutex);
-	return ret;
+	return num;
 }
 
 static int dw3101_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
@@ -518,20 +443,7 @@ static int dw3101_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 	case 2: {
 		/* read */
 		/* first write first register number */
-		u8 ibuf[MAX_XFER_SIZE], obuf[3];
-
-		if (2 + msg[0].len != sizeof(obuf)) {
-			warn("i2c rd: len=%d is not 1!\n",
-			     msg[0].len);
-			ret = -EOPNOTSUPP;
-			goto unlock;
-		}
-		if (2 + msg[1].len > sizeof(ibuf)) {
-			warn("i2c rd: len=%d is too big!\n",
-			     msg[1].len);
-			ret = -EOPNOTSUPP;
-			goto unlock;
-		}
+		u8 ibuf[msg[1].len + 2], obuf[3];
 		obuf[0] = msg[0].addr << 1;
 		obuf[1] = msg[0].len;
 		obuf[2] = msg[0].buf[0];
@@ -549,14 +461,7 @@ static int dw3101_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 		case 0x60:
 		case 0x0c: {
 			/* write to register */
-			u8 obuf[MAX_XFER_SIZE];
-
-			if (2 + msg[0].len > sizeof(obuf)) {
-				warn("i2c wr: len=%d is too big!\n",
-				     msg[0].len);
-				ret = -EOPNOTSUPP;
-				goto unlock;
-			}
+			u8 obuf[msg[0].len + 2];
 			obuf[0] = msg[0].addr << 1;
 			obuf[1] = msg[0].len;
 			memcpy(obuf + 2, msg[0].buf, msg[0].len);
@@ -581,11 +486,9 @@ static int dw3101_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 				msg[i].flags == 0 ? ">>>" : "<<<");
 		debug_dump(msg[i].buf, msg[i].len, deb_xfer);
 	}
-	ret = num;
 
-unlock:
 	mutex_unlock(&d->i2c_mutex);
-	return ret;
+	return num;
 }
 
 static int s6x0_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
@@ -641,15 +544,7 @@ static int s6x0_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 		default: {
 			if (msg[j].flags == I2C_M_RD) {
 				/* read registers */
-				u8 ibuf[MAX_XFER_SIZE];
-
-				if (msg[j].len > sizeof(ibuf)) {
-					warn("i2c rd: len=%d is too big!\n",
-					     msg[j].len);
-					ret = -EOPNOTSUPP;
-					goto unlock;
-				}
-
+				u8 ibuf[msg[j].len];
 				ret = dw210x_op_rw(d->udev, 0x91, 0, 0,
 						ibuf, msg[j].len,
 						DW210X_READ_MSG);
@@ -676,15 +571,7 @@ static int s6x0_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 				} while (len > 0);
 			} else if (j < (num - 1)) {
 				/* write register addr before read */
-				u8 obuf[MAX_XFER_SIZE];
-
-				if (2 + msg[j].len > sizeof(obuf)) {
-					warn("i2c wr: len=%d is too big!\n",
-					     msg[j].len);
-					ret = -EOPNOTSUPP;
-					goto unlock;
-				}
-
+				u8 obuf[msg[j].len + 2];
 				obuf[0] = msg[j + 1].len;
 				obuf[1] = (msg[j].addr << 1);
 				memcpy(obuf + 2, msg[j].buf, msg[j].len);
@@ -696,14 +583,7 @@ static int s6x0_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 				break;
 			} else {
 				/* write registers */
-				u8 obuf[MAX_XFER_SIZE];
-
-				if (2 + msg[j].len > sizeof(obuf)) {
-					warn("i2c wr: len=%d is too big!\n",
-					     msg[j].len);
-					ret = -EOPNOTSUPP;
-					goto unlock;
-				}
+				u8 obuf[msg[j].len + 2];
 				obuf[0] = msg[j].len + 1;
 				obuf[1] = (msg[j].addr << 1);
 				memcpy(obuf + 2, msg[j].buf, msg[j].len);
@@ -716,11 +596,9 @@ static int s6x0_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 		}
 		}
 	}
-	ret = num;
 
-unlock:
 	mutex_unlock(&d->i2c_mutex);
-	return ret;
+	return num;
 }
 
 static int su3000_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
@@ -752,13 +630,6 @@ static int su3000_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 			msg[0].buf[0] = ibuf[1];
 			break;
 		default:
-			if (3 + msg[0].len > sizeof(obuf)) {
-				warn("i2c wr: len=%d is too big!\n",
-				     msg[0].len);
-				num = -EOPNOTSUPP;
-				break;
-			}
-
 			/* always i2c write*/
 			obuf[0] = 0x08;
 			obuf[1] = msg[0].addr;
@@ -774,19 +645,6 @@ static int su3000_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg msg[],
 		break;
 	case 2:
 		/* always i2c read */
-		if (4 + msg[0].len > sizeof(obuf)) {
-			warn("i2c rd: len=%d is too big!\n",
-			     msg[0].len);
-			num = -EOPNOTSUPP;
-			break;
-		}
-		if (1 + msg[1].len > sizeof(obuf)) {
-			warn("i2c rd: len=%d is too big!\n",
-			     msg[1].len);
-			num = -EOPNOTSUPP;
-			break;
-		}
-
 		obuf[0] = 0x09;
 		obuf[1] = msg[0].len;
 		obuf[2] = msg[1].len;
@@ -1577,22 +1435,40 @@ static int dw2102_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
 	return 0;
 }
 
+enum dw2102_table_entry {
+	CYPRESS_DW2102,
+	CYPRESS_DW2101,
+	CYPRESS_DW2104,
+	TEVII_S650,
+	TERRATEC_CINERGY_S,
+	CYPRESS_DW3101,
+	TEVII_S630,
+	PROF_1100,
+	TEVII_S660,
+	PROF_7500,
+	GENIATECH_SU3000,
+	TERRATEC_CINERGY_S2,
+	TEVII_S480_1,
+	TEVII_S480_2,
+	X3M_SPC1400HD,
+};
+
 static struct usb_device_id dw2102_table[] = {
-	{USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW2102)},
-	{USB_DEVICE(USB_VID_CYPRESS, 0x2101)},
-	{USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW2104)},
-	{USB_DEVICE(0x9022, USB_PID_TEVII_S650)},
-	{USB_DEVICE(USB_VID_TERRATEC, USB_PID_CINERGY_S)},
-	{USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW3101)},
-	{USB_DEVICE(0x9022, USB_PID_TEVII_S630)},
-	{USB_DEVICE(0x3011, USB_PID_PROF_1100)},
-	{USB_DEVICE(0x9022, USB_PID_TEVII_S660)},
-	{USB_DEVICE(0x3034, 0x7500)},
-	{USB_DEVICE(0x1f4d, 0x3000)},
-	{USB_DEVICE(USB_VID_TERRATEC, 0x00a8)},
-	{USB_DEVICE(0x9022, USB_PID_TEVII_S480_1)},
-	{USB_DEVICE(0x9022, USB_PID_TEVII_S480_2)},
-	{USB_DEVICE(0x1f4d, 0x3100)},
+	[CYPRESS_DW2102] = {USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW2102)},
+	[CYPRESS_DW2101] = {USB_DEVICE(USB_VID_CYPRESS, 0x2101)},
+	[CYPRESS_DW2104] = {USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW2104)},
+	[TEVII_S650] = {USB_DEVICE(0x9022, USB_PID_TEVII_S650)},
+	[TERRATEC_CINERGY_S] = {USB_DEVICE(USB_VID_TERRATEC, USB_PID_CINERGY_S)},
+	[CYPRESS_DW3101] = {USB_DEVICE(USB_VID_CYPRESS, USB_PID_DW3101)},
+	[TEVII_S630] = {USB_DEVICE(0x9022, USB_PID_TEVII_S630)},
+	[PROF_1100] = {USB_DEVICE(0x3011, USB_PID_PROF_1100)},
+	[TEVII_S660] = {USB_DEVICE(0x9022, USB_PID_TEVII_S660)},
+	[PROF_7500] = {USB_DEVICE(0x3034, 0x7500)},
+	[GENIATECH_SU3000] = {USB_DEVICE(0x1f4d, 0x3000)},
+	[TERRATEC_CINERGY_S2] = {USB_DEVICE(USB_VID_TERRATEC, 0x00a8)},
+	[TEVII_S480_1] = {USB_DEVICE(0x9022, USB_PID_TEVII_S480_1)},
+	[TEVII_S480_2] = {USB_DEVICE(0x9022, USB_PID_TEVII_S480_2)},
+	[X3M_SPC1400HD] = {USB_DEVICE(0x1f4d, 0x3100)},
 	{ }
 };
 
@@ -1752,15 +1628,15 @@ static struct dvb_usb_device_properties dw2102_properties = {
 	.num_device_descs = 3,
 	.devices = {
 		{"DVBWorld DVB-S 2102 USB2.0",
-			{&dw2102_table[0], NULL},
+			{&dw2102_table[CYPRESS_DW2102], NULL},
 			{NULL},
 		},
 		{"DVBWorld DVB-S 2101 USB2.0",
-			{&dw2102_table[1], NULL},
+			{&dw2102_table[CYPRESS_DW2101], NULL},
 			{NULL},
 		},
 		{"TerraTec Cinergy S USB",
-			{&dw2102_table[4], NULL},
+			{&dw2102_table[TERRATEC_CINERGY_S], NULL},
 			{NULL},
 		},
 	}
@@ -1806,11 +1682,11 @@ static struct dvb_usb_device_properties dw2104_properties = {
 	.num_device_descs = 2,
 	.devices = {
 		{ "DVBWorld DW2104 USB2.0",
-			{&dw2102_table[2], NULL},
+			{&dw2102_table[CYPRESS_DW2104], NULL},
 			{NULL},
 		},
 		{ "TeVii S650 USB2.0",
-			{&dw2102_table[3], NULL},
+			{&dw2102_table[TEVII_S650], NULL},
 			{NULL},
 		},
 	}
@@ -1857,7 +1733,7 @@ static struct dvb_usb_device_properties dw3101_properties = {
 	.num_device_descs = 1,
 	.devices = {
 		{ "DVBWorld DVB-C 3101 USB2.0",
-			{&dw2102_table[5], NULL},
+			{&dw2102_table[CYPRESS_DW3101], NULL},
 			{NULL},
 		},
 	}
@@ -1903,7 +1779,7 @@ static struct dvb_usb_device_properties s6x0_properties = {
 	.num_device_descs = 1,
 	.devices = {
 		{"TeVii S630 USB",
-			{&dw2102_table[6], NULL},
+			{&dw2102_table[TEVII_S630], NULL},
 			{NULL},
 		},
 	}
@@ -1912,33 +1788,33 @@ static struct dvb_usb_device_properties s6x0_properties = {
 struct dvb_usb_device_properties *p1100;
 static struct dvb_usb_device_description d1100 = {
 	"Prof 1100 USB ",
-	{&dw2102_table[7], NULL},
+	{&dw2102_table[PROF_1100], NULL},
 	{NULL},
 };
 
 struct dvb_usb_device_properties *s660;
 static struct dvb_usb_device_description d660 = {
 	"TeVii S660 USB",
-	{&dw2102_table[8], NULL},
+	{&dw2102_table[TEVII_S660], NULL},
 	{NULL},
 };
 
 static struct dvb_usb_device_description d480_1 = {
 	"TeVii S480.1 USB",
-	{&dw2102_table[12], NULL},
+	{&dw2102_table[TEVII_S480_1], NULL},
 	{NULL},
 };
 
 static struct dvb_usb_device_description d480_2 = {
 	"TeVii S480.2 USB",
-	{&dw2102_table[13], NULL},
+	{&dw2102_table[TEVII_S480_2], NULL},
 	{NULL},
 };
 
 struct dvb_usb_device_properties *p7500;
 static struct dvb_usb_device_description d7500 = {
 	"Prof 7500 USB DVB-S2",
-	{&dw2102_table[9], NULL},
+	{&dw2102_table[PROF_7500], NULL},
 	{NULL},
 };
 
@@ -1984,15 +1860,15 @@ static struct dvb_usb_device_properties su3000_properties = {
 	.num_device_descs = 3,
 	.devices = {
 		{ "SU3000HD DVB-S USB2.0",
-			{ &dw2102_table[10], NULL },
+			{ &dw2102_table[GENIATECH_SU3000], NULL },
 			{ NULL },
 		},
 		{ "Terratec Cinergy S2 USB HD",
-			{ &dw2102_table[11], NULL },
+			{ &dw2102_table[TERRATEC_CINERGY_S2], NULL },
 			{ NULL },
 		},
 		{ "X3M TV SPC1400HD PCI",
-			{ &dw2102_table[14], NULL },
+			{ &dw2102_table[X3M_SPC1400HD], NULL },
 			{ NULL },
 		},
 	}
@@ -2001,12 +1877,11 @@ static struct dvb_usb_device_properties su3000_properties = {
 static int dw2102_probe(struct usb_interface *intf,
 		const struct usb_device_id *id)
 {
-	p1100 = kzalloc(sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
+	p1100 = kmemdup(&s6x0_properties,
+			sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
 	if (!p1100)
 		return -ENOMEM;
 	/* copy default structure */
-	memcpy(p1100, &s6x0_properties,
-			sizeof(struct dvb_usb_device_properties));
 	/* fill only different fields */
 	p1100->firmware = "dvb-usb-p1100.fw";
 	p1100->devices[0] = d1100;
@@ -2014,13 +1889,12 @@ static int dw2102_probe(struct usb_interface *intf,
 	p1100->rc.legacy.rc_map_size = ARRAY_SIZE(rc_map_tbs_table);
 	p1100->adapter->fe[0].frontend_attach = stv0288_frontend_attach;
 
-	s660 = kzalloc(sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
+	s660 = kmemdup(&s6x0_properties,
+		       sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
 	if (!s660) {
 		kfree(p1100);
 		return -ENOMEM;
 	}
-	memcpy(s660, &s6x0_properties,
-			sizeof(struct dvb_usb_device_properties));
 	s660->firmware = "dvb-usb-s660.fw";
 	s660->num_device_descs = 3;
 	s660->devices[0] = d660;
@@ -2028,14 +1902,13 @@ static int dw2102_probe(struct usb_interface *intf,
 	s660->devices[2] = d480_2;
 	s660->adapter->fe[0].frontend_attach = ds3000_frontend_attach;
 
-	p7500 = kzalloc(sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
+	p7500 = kmemdup(&s6x0_properties,
+			sizeof(struct dvb_usb_device_properties), GFP_KERNEL);
 	if (!p7500) {
 		kfree(p1100);
 		kfree(s660);
 		return -ENOMEM;
 	}
-	memcpy(p7500, &s6x0_properties,
-			sizeof(struct dvb_usb_device_properties));
 	p7500->firmware = "dvb-usb-p7500.fw";
 	p7500->devices[0] = d7500;
 	p7500->rc.legacy.rc_map_table = rc_map_tbs_table;
@@ -2070,22 +1943,7 @@ static struct usb_driver dw2102_driver = {
 	.id_table = dw2102_table,
 };
 
-static int __init dw2102_module_init(void)
-{
-	int ret =  usb_register(&dw2102_driver);
-	if (ret)
-		err("usb_register failed. Error number %d", ret);
-
-	return ret;
-}
-
-static void __exit dw2102_module_exit(void)
-{
-	usb_deregister(&dw2102_driver);
-}
-
-module_init(dw2102_module_init);
-module_exit(dw2102_module_exit);
+module_usb_driver(dw2102_driver);
 
 MODULE_AUTHOR("Igor M. Liplianin (c) liplianin@me.by");
 MODULE_DESCRIPTION("Driver for DVBWorld DVB-S 2101, 2102, DVB-S2 2104,"

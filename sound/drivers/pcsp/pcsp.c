@@ -25,8 +25,8 @@ MODULE_ALIAS("platform:pcspkr");
 
 static int index = SNDRV_DEFAULT_IDX1;	/* Index 0-MAX */
 static char *id = SNDRV_DEFAULT_STR1;	/* ID for this card */
-static int enable = SNDRV_DEFAULT_ENABLE1;	/* Enable this card */
-static int nopcm;	/* Disable PCM capability of the driver */
+static bool enable = SNDRV_DEFAULT_ENABLE1;	/* Enable this card */
+static bool nopcm;	/* Disable PCM capability of the driver */
 
 module_param(index, int, 0444);
 MODULE_PARM_DESC(index, "Index value for pcsp soundcard.");
@@ -187,8 +187,8 @@ static int __devinit pcsp_probe(struct platform_device *dev)
 static int __devexit pcsp_remove(struct platform_device *dev)
 {
 	struct snd_pcsp *chip = platform_get_drvdata(dev);
-	pcspkr_input_remove(chip->input_dev);
 	alsa_card_pcsp_exit(chip);
+	pcspkr_input_remove(chip->input_dev);
 	platform_set_drvdata(dev, NULL);
 	return 0;
 }

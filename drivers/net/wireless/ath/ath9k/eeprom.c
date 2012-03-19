@@ -305,8 +305,7 @@ void ath9k_hw_update_regulatory_maxpower(struct ath_hw *ah)
 		regulatory->max_power_level += INCREASE_MAXPOW_BY_THREE_CHAIN;
 		break;
 	default:
-		ath_dbg(common, ATH_DBG_EEPROM,
-			"Invalid chainmask configuration\n");
+		ath_dbg(common, EEPROM, "Invalid chainmask configuration\n");
 		break;
 	}
 }
@@ -364,9 +363,10 @@ void ath9k_hw_get_gain_boundaries_pdadcs(struct ath_hw *ah,
 
 	if (match) {
 		if (AR_SREV_9287(ah)) {
+			/* FIXME: array overrun? */
 			for (i = 0; i < numXpdGains; i++) {
 				minPwrT4[i] = data_9287[idxL].pwrPdg[i][0];
-				maxPwrT4[i] = data_9287[idxL].pwrPdg[i][intercepts - 1];
+				maxPwrT4[i] = data_9287[idxL].pwrPdg[i][4];
 				ath9k_hw_fill_vpd_table(minPwrT4[i], maxPwrT4[i],
 						data_9287[idxL].pwrPdg[i],
 						data_9287[idxL].vpdPdg[i],
@@ -376,7 +376,7 @@ void ath9k_hw_get_gain_boundaries_pdadcs(struct ath_hw *ah,
 		} else if (eeprom_4k) {
 			for (i = 0; i < numXpdGains; i++) {
 				minPwrT4[i] = data_4k[idxL].pwrPdg[i][0];
-				maxPwrT4[i] = data_4k[idxL].pwrPdg[i][intercepts - 1];
+				maxPwrT4[i] = data_4k[idxL].pwrPdg[i][4];
 				ath9k_hw_fill_vpd_table(minPwrT4[i], maxPwrT4[i],
 						data_4k[idxL].pwrPdg[i],
 						data_4k[idxL].vpdPdg[i],
@@ -386,7 +386,7 @@ void ath9k_hw_get_gain_boundaries_pdadcs(struct ath_hw *ah,
 		} else {
 			for (i = 0; i < numXpdGains; i++) {
 				minPwrT4[i] = data_def[idxL].pwrPdg[i][0];
-				maxPwrT4[i] = data_def[idxL].pwrPdg[i][intercepts - 1];
+				maxPwrT4[i] = data_def[idxL].pwrPdg[i][4];
 				ath9k_hw_fill_vpd_table(minPwrT4[i], maxPwrT4[i],
 						data_def[idxL].pwrPdg[i],
 						data_def[idxL].vpdPdg[i],

@@ -19,50 +19,6 @@
  *   DTR/RTS signal handling may be incomplete or incorrect. I have mainly
  *   implemented what I have seen with SniffUSB or found in belkin_sa.c.
  *   For further TODOs check also belkin_sa.c.
- *
- * TEST STATUS:
- *   Basic tests have been performed with minicom/zmodem transfers and
- *   modem dialing under Linux 2.4.0-test10 (for me it works fine).
- *
- * 04-Nov-2003 Bill Marr <marr at flex dot com>
- *   - Mimic Windows driver by sending 2 USB 'device request' messages
- *     following normal 'baud rate change' message.  This allows data to be
- *     transmitted to RS-232 devices which don't assert the 'CTS' signal.
- *
- * 10-Nov-2001 Wolfgang Grandegger
- *   - Fixed an endianess problem with the baudrate selection for PowerPC.
- *
- * 06-Dec-2001 Martin Hamilton <martinh@gnu.org>
- *   - Added support for the Belkin F5U109 DB9 adaptor
- *
- * 30-May-2001 Greg Kroah-Hartman
- *   - switched from using spinlock to a semaphore, which fixes lots of
- *     problems.
- *
- * 04-May-2001 Stelian Pop
- *   - Set the maximum bulk output size for Sitecom U232-P25 model to 16 bytes
- *     instead of the device reported 32 (using 32 bytes causes many data
- *     loss, Windows driver uses 16 too).
- *
- * 02-May-2001 Stelian Pop
- *   - Fixed the baud calculation for Sitecom U232-P25 model
- *
- * 08-Apr-2001 gb
- *   - Identify version on module load.
- *
- * 06-Jan-2001 Cornel Ciocirlan
- *   - Added support for Sitecom U232-P25 model (Product Id 0x0230)
- *   - Added support for D-Link DU-H3SP USB BAY (Product Id 0x0200)
- *
- * 29-Nov-2000 Greg Kroah-Hartman
- *   - Added device id table to fit with 2.4.0-test11 structure.
- *   - took out DEAL_WITH_TWO_INT_IN_ENDPOINTS #define as it's not needed
- *     (lots of things will change if/when the usb-serial core changes to
- *     handle these issues.
- *
- * 27-Nov-2000 Wolfgang Grandegge
- *   A version for kernel 2.4.0-test10 released to the Linux community
- *   (via linux-usb-devel).
  */
 
 #include <linux/kernel.h>
@@ -89,7 +45,7 @@
 #define DRIVER_AUTHOR "Wolfgang Grandegger <wolfgang@ces.ch>"
 #define DRIVER_DESC "Magic Control Technology USB-RS232 converter driver"
 
-static int debug;
+static bool debug;
 
 /*
  * Function prototypes
@@ -168,6 +124,8 @@ struct mct_u232_private {
 	unsigned char	     last_msr;      /* Modem Status Register */
 	unsigned int	     rx_flags;      /* Throttling flags */
 	struct async_icount  icount;
+	wait_queue_head_t    msr_wait;	/* for handling sleeping while waiting
+						for msr change to happen */
 };
 
 #define THROTTLED		0x01
@@ -251,7 +209,7 @@ static int mct_u232_set_baud_rate(struct tty_struct *tty,
 		return -ENOMEM;
 
 	divisor = mct_u232_calculate_baud_rate(serial, value, &speed);
-	put_unaligned_le32(divisor, buf);
+	put_unaligned_le32(cpu_to_le32(divisor), buf);
 	rc = usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
 				MCT_U232_SET_BAUD_RATE_REQUEST,
 				MCT_U232_SET_REQUEST_TYPE,
@@ -357,16 +315,13 @@ static int mct_u232_set_modem_ctrl(struct usb_serial *serial,
 			MCT_U232_SET_REQUEST_TYPE,
 			0, 0, buf, MCT_U232_SET_MODEM_CTRL_SIZE,
 			WDR_TIMEOUT);
-	kfree(buf);
-
-	dbg("set_modem_ctrl: state=0x%x ==> mcr=0x%x", control_state, mcr);
-
-	if (rc < 0) {
+	if (rc < 0)
 		dev_err(&serial->dev->dev,
 			"Set MODEM CTRL 0x%x failed (error = %d)\n", mcr, rc);
-		return rc;
-	}
-	return 0;
+	dbg("set_modem_ctrl: state=0x%x ==> mcr=0x%x", control_state, mcr);
+
+	kfree(buf);
+	return rc;
 } /* mct_u232_set_modem_ctrl */
 
 static int mct_u232_get_modem_stat(struct usb_serial *serial,
@@ -385,13 +340,9 @@ static int mct_u232_get_modem_stat(struct usb_serial *serial,
 			MCT_U232_GET_REQUEST_TYPE,
 			0, 0, buf, MCT_U232_GET_MODEM_STAT_SIZE,
 			WDR_TIMEOUT);
-	if (rc < MCT_U232_GET_MODEM_STAT_SIZE) {
+	if (rc < 0) {
 		dev_err(&serial->dev->dev,
 			"Get MODEM STATus failed (error = %d)\n", rc);
-
-		if (rc >= 0)
-			rc = -EIO;
-
 		*msr = 0;
 	} else {
 		*msr = buf[0];
@@ -447,16 +398,11 @@ static int mct_u232_startup(struct usb_serial *serial)
 	struct mct_u232_private *priv;
 	struct usb_serial_port *port, *rport;
 
-	/* check first to simplify error handling */
-	if (!serial->port[1] || !serial->port[1]->interrupt_in_urb) {
-		dev_err(&serial->dev->dev, "expected endpoint missing\n");
-		return -ENODEV;
-	}
-
 	priv = kzalloc(sizeof(struct mct_u232_private), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 	spin_lock_init(&priv->lock);
+	init_waitqueue_head(&priv->msr_wait);
 	usb_set_serial_port_data(serial->port[0], priv);
 
 	init_waitqueue_head(&serial->port[0]->write_wait);
@@ -536,7 +482,6 @@ static int  mct_u232_open(struct tty_struct *tty, struct usb_serial_port *port)
 	mct_u232_msr_to_state(&priv->control_state, priv->last_msr);
 	spin_unlock_irqrestore(&priv->lock, flags);
 
-	port->read_urb->dev = port->serial->dev;
 	retval = usb_submit_urb(port->read_urb, GFP_KERNEL);
 	if (retval) {
 		dev_err(&port->dev,
@@ -545,7 +490,6 @@ static int  mct_u232_open(struct tty_struct *tty, struct usb_serial_port *port)
 		goto error;
 	}
 
-	port->interrupt_in_urb->dev = port->serial->dev;
 	retval = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 	if (retval) {
 		usb_kill_urb(port->read_urb);
@@ -565,29 +509,31 @@ static void mct_u232_dtr_rts(struct usb_serial_port *port, int on)
 	unsigned int control_state;
 	struct mct_u232_private *priv = usb_get_serial_port_data(port);
 
-	spin_lock_irq(&priv->lock);
-	if (on)
-		priv->control_state |= TIOCM_DTR | TIOCM_RTS;
-	else
-		priv->control_state &= ~(TIOCM_DTR | TIOCM_RTS);
-	control_state = priv->control_state;
-	spin_unlock_irq(&priv->lock);
-
-	mct_u232_set_modem_ctrl(port->serial, control_state);
+	mutex_lock(&port->serial->disc_mutex);
+	if (!port->serial->disconnected) {
+		/* drop DTR and RTS */
+		spin_lock_irq(&priv->lock);
+		if (on)
+			priv->control_state |= TIOCM_DTR | TIOCM_RTS;
+		else
+			priv->control_state &= ~(TIOCM_DTR | TIOCM_RTS);
+		control_state = priv->control_state;
+		spin_unlock_irq(&priv->lock);
+		mct_u232_set_modem_ctrl(port->serial, control_state);
+	}
+	mutex_unlock(&port->serial->disc_mutex);
 }
 
 static void mct_u232_close(struct usb_serial_port *port)
 {
 	dbg("%s port %d", __func__, port->number);
 
-	/*
-	 * Must kill the read urb as it is actually an interrupt urb, which
-	 * generic close thus fails to kill.
-	 */
-	usb_kill_urb(port->read_urb);
-	usb_kill_urb(port->interrupt_in_urb);
-
-	usb_serial_generic_close(port);
+	if (port->serial->dev) {
+		/* shutdown our urbs */
+		usb_kill_urb(port->write_urb);
+		usb_kill_urb(port->read_urb);
+		usb_kill_urb(port->interrupt_in_urb);
+	}
 } /* mct_u232_close */
 
 
@@ -682,7 +628,7 @@ static void mct_u232_read_int_callback(struct urb *urb)
 		tty_kref_put(tty);
 	}
 #endif
-	wake_up_interruptible(&port->delta_msr_wait);
+	wake_up_interruptible(&priv->msr_wait);
 	spin_unlock_irqrestore(&priv->lock, flags);
 exit:
 	retval = usb_submit_urb(urb, GFP_ATOMIC);
@@ -903,17 +849,13 @@ static int  mct_u232_ioctl(struct tty_struct *tty,
 		cprev = mct_u232_port->icount;
 		spin_unlock_irqrestore(&mct_u232_port->lock, flags);
 		for ( ; ; ) {
-			prepare_to_wait(&port->delta_msr_wait,
+			prepare_to_wait(&mct_u232_port->msr_wait,
 					&wait, TASK_INTERRUPTIBLE);
 			schedule();
-			finish_wait(&port->delta_msr_wait, &wait);
+			finish_wait(&mct_u232_port->msr_wait, &wait);
 			/* see if a signal did it */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
-
-			if (port->serial->disconnected)
-				return -EIO;
-
 			spin_lock_irqsave(&mct_u232_port->lock, flags);
 			cnow = mct_u232_port->icount;
 			spin_unlock_irqrestore(&mct_u232_port->lock, flags);

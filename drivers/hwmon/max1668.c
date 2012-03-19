@@ -59,7 +59,7 @@ static unsigned short max1668_addr_list[] = {
 #define DEV_ID_MAX1989		0xb
 
 /* read only mode module parameter */
-static int read_only;
+static bool read_only;
 module_param(read_only, bool, 0);
 MODULE_PARM_DESC(read_only, "Don't set any values, read only mode");
 
@@ -243,7 +243,7 @@ static ssize_t set_temp_min(struct device *dev,
 	data->temp_min[index] = SENSORS_LIMIT(temp/1000, -128, 127);
 	if (i2c_smbus_write_byte_data(client,
 					MAX1668_REG_LIML_WR(index),
-					data->temp_min[index]))
+					data->temp_max[index]))
 		count = -EIO;
 	mutex_unlock(&data->update_lock);
 
@@ -335,10 +335,10 @@ static struct attribute *max1668_attribute_unique[] = {
 	NULL
 };
 
-static mode_t max1668_attribute_mode(struct kobject *kobj,
+static umode_t max1668_attribute_mode(struct kobject *kobj,
 				     struct attribute *attr, int index)
 {
-	int ret = S_IRUGO;
+	umode_t ret = S_IRUGO;
 	if (read_only)
 		return ret;
 	if (attr == &sensor_dev_attr_temp1_max.dev_attr.attr ||

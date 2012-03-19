@@ -16,32 +16,6 @@
  *
  * See http://geocities.com/i0xox0i for information on this driver and the
  * earthmate usb device.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  4-29-2005
- *	Fixed problem where setting or retreiving the serial config would fail
- *	with EPIPE.  Removed CRTS toggling so the driver behaves more like
- *	other usbserial adapters.  Issued new interval of 1ms instead of the
- *	default 10ms.  As a result, transfer speed has been substantially
- *	increased from avg. 850bps to avg. 3300bps.  initial termios has also
- *	been modified.  Cleaned up code and formatting issues so it is more
- *	readable.  Replaced the C++ style comments.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  12-15-2004
- *	Incorporated write buffering from pl2303 driver.  Fixed bug with line
- *	handling so both lines are raised in cypress_open. (was dropping rts)
- *      Various code cleanups made as well along with other misc bug fixes.
- *
- *  Lonnie Mendez <dignome@gmail.com>
- *  04-10-2004
- *	Driver modified to support dynamic line settings.  Various improvements
- *      and features.
- *
- *  Neil Whelchel
- *  10-2003
- *	Driver first released.
- *
  */
 
 /* Thanks to Neil Whelchel for writing the first cypress m8 implementation
@@ -72,10 +46,10 @@
 #include "cypress_m8.h"
 
 
-static int debug;
-static int stats;
+static bool debug;
+static bool stats;
 static int interval;
-static int unstable_bauds;
+static bool unstable_bauds;
 
 /*
  * Version Information
@@ -96,7 +70,6 @@ static const struct usb_device_id id_table_earthmate[] = {
 static const struct usb_device_id id_table_cyphidcomrs232[] = {
 	{ USB_DEVICE(VENDOR_ID_CYPRESS, PRODUCT_ID_CYPHIDCOM) },
 	{ USB_DEVICE(VENDOR_ID_POWERCOM, PRODUCT_ID_UPS) },
-	{ USB_DEVICE(VENDOR_ID_FRWD, PRODUCT_ID_CYPHIDCOM_FRWD) },
 	{ }						/* Terminating entry */
 };
 
@@ -110,7 +83,6 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(VENDOR_ID_DELORME, PRODUCT_ID_EARTHMATEUSB_LT20) },
 	{ USB_DEVICE(VENDOR_ID_CYPRESS, PRODUCT_ID_CYPHIDCOM) },
 	{ USB_DEVICE(VENDOR_ID_POWERCOM, PRODUCT_ID_UPS) },
-	{ USB_DEVICE(VENDOR_ID_FRWD, PRODUCT_ID_CYPHIDCOM_FRWD) },
 	{ USB_DEVICE(VENDOR_ID_DAZZLE, PRODUCT_ID_CA42) },
 	{ }						/* Terminating entry */
 };
@@ -152,6 +124,7 @@ struct cypress_private {
 	int baud_rate;			   /* stores current baud rate in
 					      integer form */
 	int isthrottled;		   /* if throttled, discard reads */
+	wait_queue_head_t delta_msr_wait;  /* used for TIOCMIWAIT */
 	char prev_status, diff_status;	   /* used for TIOCMIWAIT */
 	/* we pass a pointer to this as the argument sent to
 	   cypress_set_termios old_termios */
@@ -269,12 +242,6 @@ static struct usb_serial_driver cypress_ca42v2_device = {
  * Cypress serial helper functions
  *****************************************************************************/
 
-/* FRWD Dongle hidcom needs to skip reset and speed checks */
-static inline bool is_frwd(struct usb_device *dev)
-{
-	return ((le16_to_cpu(dev->descriptor.idVendor) == VENDOR_ID_FRWD) &&
-		(le16_to_cpu(dev->descriptor.idProduct) == PRODUCT_ID_CYPHIDCOM_FRWD));
-}
 
 static int analyze_baud_rate(struct usb_serial_port *port, speed_t new_rate)
 {
@@ -282,10 +249,6 @@ static int analyze_baud_rate(struct usb_serial_port *port, speed_t new_rate)
 	priv = usb_get_serial_port_data(port);
 
 	if (unstable_bauds)
-		return new_rate;
-
-	/* FRWD Dongle uses 115200 bps */
-	if (is_frwd(port->serial->dev))
 		return new_rate;
 
 	/*
@@ -489,11 +452,6 @@ static int generic_startup(struct usb_serial *serial)
 
 	dbg("%s - port %d", __func__, port->number);
 
-	if (!port->interrupt_out_urb || !port->interrupt_in_urb) {
-		dev_err(&port->dev, "required endpoint is missing\n");
-		return -ENODEV;
-	}
-
 	priv = kzalloc(sizeof(struct cypress_private), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
@@ -504,12 +462,9 @@ static int generic_startup(struct usb_serial *serial)
 		kfree(priv);
 		return -ENOMEM;
 	}
+	init_waitqueue_head(&priv->delta_msr_wait);
 
-	/* Skip reset for FRWD device. It is a workaound:
-	   device hangs if it receives SET_CONFIGURE in Configured
-	   state. */
-	if (!is_frwd(serial->dev))
-		usb_reset_configuration(serial->dev);
+	usb_reset_configuration(serial->dev);
 
 	priv->cmd_ctrl = 0;
 	priv->line_control = 0;
@@ -663,6 +618,12 @@ static int cypress_open(struct tty_struct *tty, struct usb_serial_port *port)
 		cypress_set_termios(tty, port, &priv->tmp_termios);
 
 	/* setup the port and start reading from the device */
+	if (!port->interrupt_in_urb) {
+		dev_err(&port->dev, "%s - interrupt_in_urb is empty!\n",
+			__func__);
+		return -1;
+	}
+
 	usb_fill_int_urb(port->interrupt_in_urb, serial->dev,
 		usb_rcvintpipe(serial->dev, port->interrupt_in_endpointAddress),
 		port->interrupt_in_urb->transfer_buffer,
@@ -941,16 +902,12 @@ static int cypress_ioctl(struct tty_struct *tty,
 	switch (cmd) {
 	/* This code comes from drivers/char/serial.c and ftdi_sio.c */
 	case TIOCMIWAIT:
-		for (;;) {
-			interruptible_sleep_on(&port->delta_msr_wait);
+		while (priv != NULL) {
+			interruptible_sleep_on(&priv->delta_msr_wait);
 			/* see if a signal did it */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
-
-			if (port->serial->disconnected)
-				return -EIO;
-
-			{
+			else {
 				char diff = priv->diff_status;
 				if (diff == 0)
 					return -EIO; /* no change => error */
@@ -1179,8 +1136,6 @@ static void cypress_unthrottle(struct tty_struct *tty)
 		return;
 
 	if (actually_throttled) {
-		port->interrupt_in_urb->dev = port->serial->dev;
-
 		result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 		if (result) {
 			dev_err(&port->dev, "%s - failed submitting read urb, "
@@ -1278,7 +1233,7 @@ static void cypress_read_int_callback(struct urb *urb)
 	if (priv->current_status != priv->prev_status) {
 		priv->diff_status |= priv->current_status ^
 			priv->prev_status;
-		wake_up_interruptible(&port->delta_msr_wait);
+		wake_up_interruptible(&priv->delta_msr_wait);
 		priv->prev_status = priv->current_status;
 	}
 	spin_unlock_irqrestore(&priv->lock, flags);
@@ -1369,7 +1324,6 @@ static void cypress_write_int_callback(struct urb *urb)
 		dbg("%s - nonzero write bulk status received: %d",
 			__func__, status);
 		port->interrupt_out_urb->transfer_buffer_length = 1;
-		port->interrupt_out_urb->dev = port->serial->dev;
 		result = usb_submit_urb(port->interrupt_out_urb, GFP_ATOMIC);
 		if (!result)
 			return;

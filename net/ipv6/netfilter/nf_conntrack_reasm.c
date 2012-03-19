@@ -14,8 +14,6 @@
  * 2 of the License, or (at your option) any later version.
  */
 
-#define pr_fmt(fmt) "IPv6-nf: " fmt
-
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -162,7 +160,7 @@ out:
 /* Creation primitives. */
 
 static __inline__ struct nf_ct_frag6_queue *
-fq_find(__be32 id, u32 user, struct in6_addr *src, struct in6_addr *dst, int iif)
+fq_find(__be32 id, u32 user, struct in6_addr *src, struct in6_addr *dst)
 {
 	struct inet_frag_queue *q;
 	struct ip6_create_arg arg;
@@ -172,19 +170,19 @@ fq_find(__be32 id, u32 user, struct in6_addr *src, struct in6_addr *dst, int iif
 	arg.user = user;
 	arg.src = src;
 	arg.dst = dst;
-	arg.iif = iif;
 
 	read_lock_bh(&nf_frags.lock);
 	hash = inet6_hash_frag(id, src, dst, nf_frags.rnd);
 
 	q = inet_frag_find(&nf_init_frags, &nf_frags, &arg, hash);
 	local_bh_enable();
-	if (IS_ERR_OR_NULL(q)) {
-		inet_frag_maybe_warn_overflow(q, pr_fmt());
-		return NULL;
-	}
+	if (q == NULL)
+		goto oom;
 
 	return container_of(q, struct nf_ct_frag6_queue, q);
+
+oom:
+	return NULL;
 }
 
 
@@ -559,8 +557,7 @@ struct sk_buff *nf_ct_frag6_gather(struct sk_buff *skb, u32 user)
 	if (atomic_read(&nf_init_frags.mem) > nf_init_frags.high_thresh)
 		nf_ct_frag6_evictor();
 
-	fq = fq_find(fhdr->identification, user, &hdr->saddr, &hdr->daddr,
-		     skb->dev ? skb->dev->ifindex : 0);
+	fq = fq_find(fhdr->identification, user, &hdr->saddr, &hdr->daddr);
 	if (fq == NULL) {
 		pr_debug("Can't find and can't create new queue\n");
 		goto ret_orig;

@@ -76,7 +76,7 @@ static void queue_process(struct work_struct *work)
 
 		local_irq_save(flags);
 		__netif_tx_lock(txq, smp_processor_id());
-		if (netif_tx_queue_frozen_or_stopped(txq) ||
+		if (netif_xmit_frozen_or_stopped(txq) ||
 		    ops->ndo_start_xmit(skb, dev) != NETDEV_TX_OK) {
 			skb_queue_head(&npinfo->txq, skb);
 			__netif_tx_unlock(txq);
@@ -317,7 +317,7 @@ void netpoll_send_skb_on_dev(struct netpoll *np, struct sk_buff *skb,
 		for (tries = jiffies_to_usecs(1)/USEC_PER_POLL;
 		     tries > 0; --tries) {
 			if (__netif_tx_trylock(txq)) {
-				if (!netif_tx_queue_stopped(txq)) {
+				if (!netif_xmit_stopped(txq)) {
 					status = ops->ndo_start_xmit(skb, dev);
 					if (status == NETDEV_TX_OK)
 						txq_trans_update(txq);
@@ -351,23 +351,22 @@ EXPORT_SYMBOL(netpoll_send_skb_on_dev);
 
 void netpoll_send_udp(struct netpoll *np, const char *msg, int len)
 {
-	int total_len, ip_len, udp_len;
+	int total_len, eth_len, ip_len, udp_len;
 	struct sk_buff *skb;
 	struct udphdr *udph;
 	struct iphdr *iph;
 	struct ethhdr *eth;
 
 	udp_len = len + sizeof(*udph);
-	ip_len = udp_len + sizeof(*iph);
-	total_len = ip_len + LL_RESERVED_SPACE(np->dev);
+	ip_len = eth_len = udp_len + sizeof(*iph);
+	total_len = eth_len + ETH_HLEN + NET_IP_ALIGN;
 
-	skb = find_skb(np, total_len + np->dev->needed_tailroom,
-		       total_len - len);
+	skb = find_skb(np, total_len, total_len - len);
 	if (!skb)
 		return;
 
 	skb_copy_to_linear_data(skb, msg, len);
-	skb_put(skb, len);
+	skb->len += len;
 
 	skb_push(skb, sizeof(*udph));
 	skb_reset_transport_header(skb);
@@ -423,6 +422,7 @@ static void arp_reply(struct sk_buff *skb)
 	struct sk_buff *send_skb;
 	struct netpoll *np, *tmp;
 	unsigned long flags;
+	int hlen, tlen;
 	int hits = 0;
 
 	if (list_empty(&npinfo->rx_np))
@@ -480,8 +480,9 @@ static void arp_reply(struct sk_buff *skb)
 		if (tip != np->local_ip)
 			continue;
 
-		send_skb = find_skb(np, size + LL_ALLOCATED_SPACE(np->dev),
-				    LL_RESERVED_SPACE(np->dev));
+		hlen = LL_RESERVED_SPACE(np->dev);
+		tlen = np->dev->needed_tailroom;
+		send_skb = find_skb(np, size + hlen + tlen, hlen);
 		if (!send_skb)
 			continue;
 
@@ -923,14 +924,15 @@ EXPORT_SYMBOL_GPL(__netpoll_cleanup);
 
 void netpoll_cleanup(struct netpoll *np)
 {
-	rtnl_lock();
 	if (!np->dev)
-		goto out;
+		return;
+
+	rtnl_lock();
 	__netpoll_cleanup(np);
+	rtnl_unlock();
+
 	dev_put(np->dev);
 	np->dev = NULL;
-out:
-	rtnl_unlock();
 }
 EXPORT_SYMBOL(netpoll_cleanup);
 

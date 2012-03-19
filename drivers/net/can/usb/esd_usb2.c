@@ -332,7 +332,7 @@ static void esd_usb2_rx_can_msg(struct esd_usb2_net_priv *priv,
 		}
 
 		cf->can_id = id & ESD_IDMASK;
-		cf->can_dlc = get_can_dlc(msg->msg.rx.dlc & ~ESD_RTR);
+		cf->can_dlc = get_can_dlc(msg->msg.rx.dlc);
 
 		if (id & ESD_EXTID)
 			cf->can_id |= CAN_EFF_FLAG;
@@ -1097,7 +1097,6 @@ static void esd_usb2_disconnect(struct usb_interface *intf)
 			}
 		}
 		unlink_all_urbs(dev);
-		kfree(dev);
 	}
 }
 
@@ -1109,25 +1108,4 @@ static struct usb_driver esd_usb2_driver = {
 	.id_table = esd_usb2_table,
 };
 
-static int __init esd_usb2_init(void)
-{
-	int err;
-
-	/* register this driver with the USB subsystem */
-	err = usb_register(&esd_usb2_driver);
-
-	if (err) {
-		err("usb_register failed. Error number %d\n", err);
-		return err;
-	}
-
-	return 0;
-}
-module_init(esd_usb2_init);
-
-static void __exit esd_usb2_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&esd_usb2_driver);
-}
-module_exit(esd_usb2_exit);
+module_usb_driver(esd_usb2_driver);

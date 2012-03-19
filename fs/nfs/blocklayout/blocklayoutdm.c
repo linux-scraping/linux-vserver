@@ -52,8 +52,7 @@ static void dev_remove(dev_t dev)
 	dprintk("Entering %s\n", __func__);
 
 	memset(&msg, 0, sizeof(msg));
-	msg.len = sizeof(bl_msg) + bl_msg.totallen;
-	msg.data = kzalloc(msg.len, GFP_NOFS);
+	msg.data = kzalloc(1 + sizeof(bl_umount_request), GFP_NOFS);
 	if (!msg.data)
 		goto out;
 
@@ -64,6 +63,7 @@ static void dev_remove(dev_t dev)
 	memcpy(msg.data, &bl_msg, sizeof(bl_msg));
 	dataptr = (uint8_t *) msg.data;
 	memcpy(&dataptr[sizeof(bl_msg)], &bl_umount_request, sizeof(bl_umount_request));
+	msg.len = sizeof(bl_msg) + bl_msg.totallen;
 
 	add_wait_queue(&bl_wq, &wq);
 	if (rpc_queue_upcall(bl_device_pipe->d_inode, &msg) < 0) {

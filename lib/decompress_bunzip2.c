@@ -1,4 +1,3 @@
-/* vi: set sw = 4 ts = 4: */
 /*	Small bzip2 deflate implementation, by Rob Landley (rob@landley.net).
 
 	Based on bzip2 decompression code by Julian R Seward (jseward@acm.org),
@@ -185,7 +184,7 @@ static int INIT get_next_block(struct bunzip_data *bd)
 	if (get_bits(bd, 1))
 		return RETVAL_OBSOLETE_INPUT;
 	origPtr = get_bits(bd, 24);
-	if (origPtr >= dbufSize)
+	if (origPtr > dbufSize)
 		return RETVAL_DATA_ERROR;
 	/* mapping table: if some byte values are never used (encoding things
 	   like ascii text), the compression code removes the gaps to have fewer
@@ -691,7 +690,7 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 		outbuf = malloc(BZIP2_IOBUF_SIZE);
 
 	if (!outbuf) {
-		error("Could not allocate output bufer");
+		error("Could not allocate output buffer");
 		return RETVAL_OUT_OF_MEMORY;
 	}
 	if (buf)
@@ -699,7 +698,7 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 	else
 		inbuf = malloc(BZIP2_IOBUF_SIZE);
 	if (!inbuf) {
-		error("Could not allocate input bufer");
+		error("Could not allocate input buffer");
 		i = RETVAL_OUT_OF_MEMORY;
 		goto exit_0;
 	}

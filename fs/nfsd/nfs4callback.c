@@ -633,11 +633,9 @@ static int max_cb_time(void)
 
 static int setup_callback_client(struct nfs4_client *clp, struct nfs4_cb_conn *conn, struct nfsd4_session *ses)
 {
-	int maxtime = max_cb_time();
 	struct rpc_timeout	timeparms = {
-		.to_initval	= maxtime,
+		.to_initval	= max_cb_time(),
 		.to_retries	= 0,
-		.to_maxval	= maxtime,
 	};
 	struct rpc_create_args args = {
 		.net		= &init_net,
@@ -720,7 +718,7 @@ int set_callback_cred(void)
 {
 	if (callback_cred)
 		return 0;
-	callback_cred = rpc_lookup_machine_cred();
+	callback_cred = rpc_lookup_machine_cred("nfs");
 	if (!callback_cred)
 		return -ENOMEM;
 	return 0;
@@ -785,12 +783,8 @@ static bool nfsd41_cb_get_slot(struct nfs4_client *clp, struct rpc_task *task)
 {
 	if (test_and_set_bit(0, &clp->cl_cb_slot_busy) != 0) {
 		rpc_sleep_on(&clp->cl_cb_waitq, task, NULL);
-		/* Race breaker */
-		if (test_and_set_bit(0, &clp->cl_cb_slot_busy) != 0) {
-			dprintk("%s slot is busy\n", __func__);
-			return false;
-		}
-		rpc_wake_up_queued_task(&clp->cl_cb_waitq, task);
+		dprintk("%s slot is busy\n", __func__);
+		return false;
 	}
 	return true;
 }

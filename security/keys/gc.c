@@ -46,7 +46,7 @@ static unsigned long key_gc_flags;
  * immediately unlinked.
  */
 struct key_type key_type_dead = {
-	.name = ".dead",
+	.name = "dead",
 };
 
 /*
@@ -145,7 +145,9 @@ static void key_gc_keyring(struct key *keyring, time_t limit)
 	if (!klist)
 		goto unlock_dont_gc;
 
-	for (loop = klist->nkeys - 1; loop >= 0; loop--) {
+	loop = klist->nkeys;
+	smp_rmb();
+	for (loop--; loop >= 0; loop--) {
 		key = klist->keys[loop];
 		if (test_bit(KEY_FLAG_DEAD, &key->flags) ||
 		    (key->expiry > 0 && key->expiry <= limit))
@@ -172,12 +174,6 @@ static noinline void key_gc_unused_key(struct key *key)
 {
 	key_check(key);
 
-	/* Throw away the key data if the key is instantiated */
-	if (test_bit(KEY_FLAG_INSTANTIATED, &key->flags) &&
-	    !test_bit(KEY_FLAG_NEGATIVE, &key->flags) &&
-	    key->type->destroy)
-		key->type->destroy(key);
-
 	security_key_free(key);
 
 	/* deal with the user's key tracking and quota */
@@ -193,6 +189,10 @@ static noinline void key_gc_unused_key(struct key *key)
 		atomic_dec(&key->user->nikeys);
 
 	key_user_put(key->user);
+
+	/* now throw away the key memory */
+	if (key->type->destroy)
+		key->type->destroy(key);
 
 	kfree(key->description);
 

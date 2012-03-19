@@ -481,7 +481,7 @@ static inline void kvmppc_e500_priv_release(struct tlbe_priv *priv)
 }
 
 static inline void kvmppc_e500_deliver_tlb_miss(struct kvm_vcpu *vcpu,
-		gva_t eaddr, int as)
+		unsigned int eaddr, int as)
 {
 	struct kvmppc_vcpu_e500 *vcpu_e500 = to_e500(vcpu);
 	unsigned int victim, pidsel, tsized;

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2011, Intel Corp.
+ * Copyright (C) 2000 - 2012, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -228,9 +228,9 @@ acpi_tb_add_table(struct acpi_table_desc *table_desc, u32 *table_index)
 	status = acpi_os_table_override(table_desc->pointer, &override_table);
 	if (ACPI_SUCCESS(status) && override_table) {
 		ACPI_INFO((AE_INFO,
-			   "%4.4s @ 0x%8.8X%8.8X Table override, replaced with:",
+			   "%4.4s @ 0x%p Table override, replaced with:",
 			   table_desc->pointer->signature,
-			   ACPI_FORMAT_UINT64(table_desc->address)));
+			   ACPI_CAST_PTR(void, table_desc->address)));
 
 		/* We can delete the table that was passed as a parameter */
 

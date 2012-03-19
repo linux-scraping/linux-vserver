@@ -44,7 +44,7 @@
 #define DRIVER_DESC "Moschip USB Serial Driver"
 
 /* default urb timeout */
-#define MOS_WDR_TIMEOUT	5000
+#define MOS_WDR_TIMEOUT	(HZ * 5)
 
 #define MOS_MAX_PORT	0x02
 #define MOS_WRITE	0x0E
@@ -71,7 +71,9 @@ struct moschip_port {
 	struct urb		*write_urb_pool[NUM_URBS];
 };
 
-static int debug;
+static bool debug;
+
+static struct usb_serial_driver moschip7720_2port_driver;
 
 #define USB_VENDOR_ID_MOSCHIP		0x9710
 #define MOSCHIP_DEVICE_ID_7720		0x7720
@@ -95,7 +97,6 @@ struct urbtracker {
 	struct list_head        urblist_entry;
 	struct kref             ref_count;
 	struct urb              *urb;
-	struct usb_ctrlrequest	*setup;
 };
 
 enum mos7715_pp_modes {
@@ -233,22 +234,11 @@ static int read_mos_reg(struct usb_serial *serial, unsigned int serial_portnum,
 	__u8 requesttype = (__u8)0xc0;
 	__u16 index = get_reg_index(reg);
 	__u16 value = get_reg_value(reg, serial_portnum);
-	u8 *buf;
-	int status;
-
-	buf = kmalloc(1, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	status = usb_control_msg(usbdev, pipe, request, requesttype, value,
-				     index, buf, 1, MOS_WDR_TIMEOUT);
-	if (status == 1)
-		*data = *buf;
-	else if (status < 0)
+	int status = usb_control_msg(usbdev, pipe, request, requesttype, value,
+				     index, data, 1, MOS_WDR_TIMEOUT);
+	if (status < 0)
 		dev_err(&usbdev->dev,
 			"mos7720: usb_control_msg() failed: %d", status);
-	kfree(buf);
-
 	return status;
 }
 
@@ -278,7 +268,6 @@ static void destroy_urbtracker(struct kref *kref)
 	struct mos7715_parport *mos_parport = urbtrack->mos_parport;
 	dbg("%s called", __func__);
 	usb_free_urb(urbtrack->urb);
-	kfree(urbtrack->setup);
 	kfree(urbtrack);
 	kref_put(&mos_parport->ref_count, destroy_mos_parport);
 }
@@ -363,6 +352,7 @@ static int write_parport_reg_nonblock(struct mos7715_parport *mos_parport,
 	struct urbtracker *urbtrack;
 	int ret_val;
 	unsigned long flags;
+	struct usb_ctrlrequest setup;
 	struct usb_serial *serial = mos_parport->serial;
 	struct usb_device *usbdev = serial->dev;
 	dbg("%s called", __func__);
@@ -381,20 +371,14 @@ static int write_parport_reg_nonblock(struct mos7715_parport *mos_parport,
 		kfree(urbtrack);
 		return -ENOMEM;
 	}
-	urbtrack->setup = kmalloc(sizeof(*urbtrack->setup), GFP_ATOMIC);
-	if (!urbtrack->setup) {
-		usb_free_urb(urbtrack->urb);
-		kfree(urbtrack);
-		return -ENOMEM;
-	}
-	urbtrack->setup->bRequestType = (__u8)0x40;
-	urbtrack->setup->bRequest = (__u8)0x0e;
-	urbtrack->setup->wValue = cpu_to_le16(get_reg_value(reg, dummy));
-	urbtrack->setup->wIndex = cpu_to_le16(get_reg_index(reg));
-	urbtrack->setup->wLength = 0;
+	setup.bRequestType = (__u8)0x40;
+	setup.bRequest = (__u8)0x0e;
+	setup.wValue = get_reg_value(reg, dummy);
+	setup.wIndex = get_reg_index(reg);
+	setup.wLength = 0;
 	usb_fill_control_urb(urbtrack->urb, usbdev,
 			     usb_sndctrlpipe(usbdev, 0),
-			     (unsigned char *)urbtrack->setup,
+			     (unsigned char *)&setup,
 			     NULL, 0, async_complete, urbtrack);
 	kref_init(&urbtrack->ref_count);
 	INIT_LIST_HEAD(&urbtrack->urblist_entry);
@@ -955,14 +939,7 @@ static void mos7720_bulk_in_callback(struct urb *urb)
 	}
 	tty_kref_put(tty);
 
-	if (!port->read_urb) {
-		dbg("URB KILLED !!!");
-		return;
-	}
-
 	if (port->read_urb->status != -EINPROGRESS) {
-		port->read_urb->dev = port->serial->dev;
-
 		retval = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 		if (retval)
 			dbg("usb_submit_urb(read bulk) failed, retval = %d",
@@ -999,6 +976,25 @@ static void mos7720_bulk_out_data_callback(struct urb *urb)
 	tty_kref_put(tty);
 }
 
+/*
+ * mos77xx_probe
+ *	this function installs the appropriate read interrupt endpoint callback
+ *	depending on whether the device is a 7720 or 7715, thus avoiding costly
+ *	run-time checks in the high-frequency callback routine itself.
+ */
+static int mos77xx_probe(struct usb_serial *serial,
+			 const struct usb_device_id *id)
+{
+	if (id->idProduct == MOSCHIP_DEVICE_ID_7715)
+		moschip7720_2port_driver.read_int_callback =
+			mos7715_interrupt_callback;
+	else
+		moschip7720_2port_driver.read_int_callback =
+			mos7720_interrupt_callback;
+
+	return 0;
+}
+
 static int mos77xx_calc_num_ports(struct usb_serial *serial)
 {
 	u16 product = le16_to_cpu(serial->dev->descriptor.idProduct);
@@ -1011,7 +1007,6 @@ static int mos77xx_calc_num_ports(struct usb_serial *serial)
 static int mos7720_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
 	struct usb_serial *serial;
-	struct usb_serial_port *port0;
 	struct urb *urb;
 	struct moschip_port *mos7720_port;
 	int response;
@@ -1025,8 +1020,6 @@ static int mos7720_open(struct tty_struct *tty, struct usb_serial_port *port)
 	mos7720_port = usb_get_serial_port_data(port);
 	if (mos7720_port == NULL)
 		return -ENODEV;
-
-	port0 = serial->port[0];
 
 	usb_clear_halt(serial->dev, port->write_urb->pipe);
 	usb_clear_halt(serial->dev, port->read_urb->pipe);
@@ -1299,7 +1292,7 @@ static int mos7720_write(struct tty_struct *tty, struct usb_serial_port *port,
 
 	if (urb->transfer_buffer == NULL) {
 		urb->transfer_buffer = kmalloc(URB_TRANSFER_BUFFER_SIZE,
-					       GFP_ATOMIC);
+					       GFP_KERNEL);
 		if (urb->transfer_buffer == NULL) {
 			dev_err(&port->dev, "%s no more kernel memory...\n",
 				__func__);
@@ -1697,7 +1690,7 @@ static void change_port_settings(struct tty_struct *tty,
 		mos7720_port->shadowMCR |= (UART_MCR_XONANY);
 		/* To set hardware flow control to the specified *
 		 * serial port, in SP1/2_CONTROL_REG             */
-		if (port_number)
+		if (port->number)
 			write_mos_reg(serial, dummy, SP_CONTROL_REG, 0x01);
 		else
 			write_mos_reg(serial, dummy, SP_CONTROL_REG, 0x02);
@@ -1732,8 +1725,6 @@ static void change_port_settings(struct tty_struct *tty,
 	write_mos_reg(serial, port_number, IER, 0x0c);
 
 	if (port->read_urb->status != -EINPROGRESS) {
-		port->read_urb->dev = serial->dev;
-
 		status = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 		if (status)
 			dbg("usb_submit_urb(read bulk) failed, status = %d",
@@ -1783,13 +1774,7 @@ static void mos7720_set_termios(struct tty_struct *tty,
 	/* change the port settings to the new ones specified */
 	change_port_settings(tty, mos7720_port, old_termios);
 
-	if (!port->read_urb) {
-		dbg("%s", "URB KILLED !!!!!");
-		return;
-	}
-
 	if (port->read_urb->status != -EINPROGRESS) {
-		port->read_urb->dev = serial->dev;
 		status = usb_submit_urb(port->read_urb, GFP_ATOMIC);
 		if (status)
 			dbg("usb_submit_urb(read bulk) failed, status = %d",
@@ -2058,11 +2043,6 @@ static int mos7720_startup(struct usb_serial *serial)
 		return -ENODEV;
 	}
 
-	if (serial->num_bulk_in < 2 || serial->num_bulk_out < 2) {
-		dev_err(&serial->interface->dev, "missing bulk endpoints\n");
-		return -ENODEV;
-	}
-
 	product = le16_to_cpu(serial->dev->descriptor.idProduct);
 	dev = serial->dev;
 
@@ -2087,12 +2067,6 @@ static int mos7720_startup(struct usb_serial *serial)
 			tmp->interrupt_in_endpointAddress;
 		serial->port[1]->interrupt_in_urb = NULL;
 		serial->port[1]->interrupt_in_buffer = NULL;
-
-		if (serial->port[0]->interrupt_in_urb) {
-			struct urb *urb = serial->port[0]->interrupt_in_urb;
-
-			urb->complete = mos7715_interrupt_callback;
-		}
 	}
 
 
@@ -2120,7 +2094,14 @@ static int mos7720_startup(struct usb_serial *serial)
 
 	/* setting configuration feature to one */
 	usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
-			(__u8)0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5000);
+			(__u8)0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5*HZ);
+
+	/* start the interrupt urb */
+	ret_val = usb_submit_urb(serial->port[0]->interrupt_in_urb, GFP_KERNEL);
+	if (ret_val)
+		dev_err(&dev->dev,
+			"%s - Error %d submitting control urb\n",
+			__func__, ret_val);
 
 #ifdef CONFIG_USB_SERIAL_MOS7715_PARPORT
 	if (product == MOSCHIP_DEVICE_ID_7715) {
@@ -2129,13 +2110,6 @@ static int mos7720_startup(struct usb_serial *serial)
 			return ret_val;
 	}
 #endif
-	/* start the interrupt urb */
-	ret_val = usb_submit_urb(serial->port[0]->interrupt_in_urb, GFP_KERNEL);
-	if (ret_val) {
-		dev_err(&dev->dev, "failed to submit interrupt urb: %d\n",
-			ret_val);
-	}
-
 	/* LSR For Port 1 */
 	read_mos_reg(serial, 0, LSR, &data);
 	dbg("LSR:%x", data);
@@ -2146,8 +2120,6 @@ static int mos7720_startup(struct usb_serial *serial)
 static void mos7720_release(struct usb_serial *serial)
 {
 	int i;
-
-	usb_kill_urb(serial->port[0]->interrupt_in_urb);
 
 #ifdef CONFIG_USB_SERIAL_MOS7715_PARPORT
 	/* close the parallel port */
@@ -2167,7 +2139,7 @@ static void mos7720_release(struct usb_serial *serial)
 		/* wait for synchronous usb calls to return */
 		if (mos_parport->msg_pending)
 			wait_for_completion_timeout(&mos_parport->syncmsg_compl,
-					    msecs_to_jiffies(MOS_WDR_TIMEOUT));
+						    MOS_WDR_TIMEOUT);
 
 		parport_remove_port(mos_parport->pp);
 		usb_set_serial_data(serial, NULL);
@@ -2213,6 +2185,7 @@ static struct usb_serial_driver moschip7720_2port_driver = {
 	.close			= mos7720_close,
 	.throttle		= mos7720_throttle,
 	.unthrottle		= mos7720_unthrottle,
+	.probe			= mos77xx_probe,
 	.attach			= mos7720_startup,
 	.release		= mos7720_release,
 	.ioctl			= mos7720_ioctl,
@@ -2225,7 +2198,7 @@ static struct usb_serial_driver moschip7720_2port_driver = {
 	.chars_in_buffer	= mos7720_chars_in_buffer,
 	.break_ctl		= mos7720_break,
 	.read_bulk_callback	= mos7720_bulk_in_callback,
-	.read_int_callback	= mos7720_interrupt_callback,
+	.read_int_callback	= NULL  /* dynamically assigned in probe() */
 };
 
 static int __init moschip7720_init(void)

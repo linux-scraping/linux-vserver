@@ -63,7 +63,6 @@ struct fib6_node {
 	__u16			fn_flags;
 	__u32			fn_sernum;
 	struct rt6_info		*rr_ptr;
-	struct rcu_head		rcu;
 };
 
 #ifndef CONFIG_IPV6_SUBTREES
@@ -87,16 +86,13 @@ struct fib6_table;
 struct rt6_info {
 	struct dst_entry		dst;
 
-#define rt6i_dev			dst.dev
-#define rt6i_expires			dst.expires
-
 	/*
 	 * Tail elements of dst_entry (__refcnt etc.)
 	 * and these elements (rarely used in hot path) are in
 	 * the same cache line.
 	 */
 	struct fib6_table		*rt6i_table;
-	struct fib6_node __rcu		*rt6i_node;
+	struct fib6_node		*rt6i_node;
 
 	struct in6_addr			rt6i_gateway;
 
@@ -125,38 +121,6 @@ struct rt6_info {
 static inline struct inet6_dev *ip6_dst_idev(struct dst_entry *dst)
 {
 	return ((struct rt6_info *)dst)->rt6i_idev;
-}
-
-/* Function to safely get fn->sernum for passed in rt
- * and store result in passed in cookie.
- * Return true if we can get cookie safely
- * Return false if not
- */
-static inline bool rt6_get_cookie_safe(const struct rt6_info *rt,
-				       u32 *cookie)
-{
-	struct fib6_node *fn;
-	bool status = false;
-
-	rcu_read_lock();
-	fn = rcu_dereference(rt->rt6i_node);
-
-	if (fn) {
-		*cookie = fn->fn_sernum;
-		status = true;
-	}
-
-	rcu_read_unlock();
-	return status;
-}
-
-static inline u32 rt6_get_cookie(const struct rt6_info *rt)
-{
-	u32 cookie = 0;
-
-	rt6_get_cookie_safe(rt, &cookie);
-
-	return cookie;
 }
 
 struct fib6_walker_t {
@@ -235,6 +199,10 @@ struct fib6_node		*fib6_locate(struct fib6_node *root,
 					     const struct in6_addr *daddr, int dst_len,
 					     const struct in6_addr *saddr, int src_len);
 
+extern void			fib6_clean_all_ro(struct net *net,
+					       int (*func)(struct rt6_info *, void *arg),
+					       int prune, void *arg);
+
 extern void			fib6_clean_all(struct net *net,
 					       int (*func)(struct rt6_info *, void *arg),
 					       int prune, void *arg);
@@ -250,7 +218,7 @@ extern void			inet6_rt_notify(int event, struct rt6_info *rt,
 						struct nl_info *info);
 
 extern void			fib6_run_gc(unsigned long expires,
-					    struct net *net, bool force);
+					    struct net *net);
 
 extern void			fib6_gc_cleanup(void);
 

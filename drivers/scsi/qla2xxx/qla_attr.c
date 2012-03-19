@@ -215,17 +215,12 @@ qla2x00_sysfs_read_optrom(struct file *filp, struct kobject *kobj,
 	struct scsi_qla_host *vha = shost_priv(dev_to_shost(container_of(kobj,
 	    struct device, kobj)));
 	struct qla_hw_data *ha = vha->hw;
-	ssize_t rval = 0;
 
 	if (ha->optrom_state != QLA_SREADING)
 		return 0;
 
-	mutex_lock(&ha->optrom_mutex);
-	rval = memory_read_from_buffer(buf, count, &off, ha->optrom_buffer,
-	    ha->optrom_region_size);
-	mutex_unlock(&ha->optrom_mutex);
-
-	return rval;
+	return memory_read_from_buffer(buf, count, &off, ha->optrom_buffer,
+					ha->optrom_region_size);
 }
 
 static ssize_t
@@ -244,9 +239,7 @@ qla2x00_sysfs_write_optrom(struct file *filp, struct kobject *kobj,
 	if (off + count > ha->optrom_region_size)
 		count = ha->optrom_region_size - off;
 
-	mutex_lock(&ha->optrom_mutex);
 	memcpy(&ha->optrom_buffer[off], buf, count);
-	mutex_unlock(&ha->optrom_mutex);
 
 	return count;
 }
@@ -269,10 +262,10 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 	struct scsi_qla_host *vha = shost_priv(dev_to_shost(container_of(kobj,
 	    struct device, kobj)));
 	struct qla_hw_data *ha = vha->hw;
+
 	uint32_t start = 0;
 	uint32_t size = ha->optrom_size;
 	int val, valid;
-	ssize_t rval = count;
 
 	if (off)
 		return -EINVAL;
@@ -284,17 +277,13 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		return -EINVAL;
 	if (start > ha->optrom_size)
 		return -EINVAL;
-	if (size > ha->optrom_size - start)
-		size = ha->optrom_size - start;
 
-	mutex_lock(&ha->optrom_mutex);
 	switch (val) {
 	case 0:
 		if (ha->optrom_state != QLA_SREADING &&
-		    ha->optrom_state != QLA_SWRITING) {
-			rval =  -EINVAL;
-			goto out;
-		}
+		    ha->optrom_state != QLA_SWRITING)
+			return -EINVAL;
+
 		ha->optrom_state = QLA_SWAITING;
 
 		ql_dbg(ql_dbg_user, vha, 0x7061,
@@ -305,13 +294,12 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		ha->optrom_buffer = NULL;
 		break;
 	case 1:
-		if (ha->optrom_state != QLA_SWAITING) {
-			rval = -EINVAL;
-			goto out;
-		}
+		if (ha->optrom_state != QLA_SWAITING)
+			return -EINVAL;
 
 		ha->optrom_region_start = start;
-		ha->optrom_region_size = start + size;
+		ha->optrom_region_size = start + size > ha->optrom_size ?
+		    ha->optrom_size - start : size;
 
 		ha->optrom_state = QLA_SREADING;
 		ha->optrom_buffer = vmalloc(ha->optrom_region_size);
@@ -321,15 +309,13 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 			    "(%x).\n", ha->optrom_region_size);
 
 			ha->optrom_state = QLA_SWAITING;
-			rval = -ENOMEM;
-			goto out;
+			return -ENOMEM;
 		}
 
 		if (qla2x00_wait_for_hba_online(vha) != QLA_SUCCESS) {
 			ql_log(ql_log_warn, vha, 0x7063,
 			    "HBA not online, failing NVRAM update.\n");
-			rval = -EAGAIN;
-			goto out;
+			return -EAGAIN;
 		}
 
 		ql_dbg(ql_dbg_user, vha, 0x7064,
@@ -341,10 +327,8 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		    ha->optrom_region_start, ha->optrom_region_size);
 		break;
 	case 2:
-		if (ha->optrom_state != QLA_SWAITING) {
-			rval = -EINVAL;
-			goto out;
-		}
+		if (ha->optrom_state != QLA_SWAITING)
+			return -EINVAL;
 
 		/*
 		 * We need to be more restrictive on which FLASH regions are
@@ -377,12 +361,12 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		if (!valid) {
 			ql_log(ql_log_warn, vha, 0x7065,
 			    "Invalid start region 0x%x/0x%x.\n", start, size);
-			rval = -EINVAL;
-			goto out;
+			return -EINVAL;
 		}
 
 		ha->optrom_region_start = start;
-		ha->optrom_region_size = start + size;
+		ha->optrom_region_size = start + size > ha->optrom_size ?
+		    ha->optrom_size - start : size;
 
 		ha->optrom_state = QLA_SWRITING;
 		ha->optrom_buffer = vmalloc(ha->optrom_region_size);
@@ -392,8 +376,7 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 			    "(%x)\n", ha->optrom_region_size);
 
 			ha->optrom_state = QLA_SWAITING;
-			rval = -ENOMEM;
-			goto out;
+			return -ENOMEM;
 		}
 
 		ql_dbg(ql_dbg_user, vha, 0x7067,
@@ -403,16 +386,13 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		memset(ha->optrom_buffer, 0, ha->optrom_region_size);
 		break;
 	case 3:
-		if (ha->optrom_state != QLA_SWRITING) {
-			rval = -EINVAL;
-			goto out;
-		}
+		if (ha->optrom_state != QLA_SWRITING)
+			return -EINVAL;
 
 		if (qla2x00_wait_for_hba_online(vha) != QLA_SUCCESS) {
 			ql_log(ql_log_warn, vha, 0x7068,
 			    "HBA not online, failing flash update.\n");
-			rval = -EAGAIN;
-			goto out;
+			return -EAGAIN;
 		}
 
 		ql_dbg(ql_dbg_user, vha, 0x7069,
@@ -423,12 +403,9 @@ qla2x00_sysfs_write_optrom_ctl(struct file *filp, struct kobject *kobj,
 		    ha->optrom_region_start, ha->optrom_region_size);
 		break;
 	default:
-		rval = -EINVAL;
+		return -EINVAL;
 	}
-
-out:
-	mutex_unlock(&ha->optrom_mutex);
-	return rval;
+	return count;
 }
 
 static struct bin_attribute sysfs_optrom_ctl_attr = {
@@ -690,7 +667,7 @@ qla2x00_sysfs_write_edc(struct file *filp, struct kobject *kobj,
 	    dev, adr, len, opt);
 	if (rval != QLA_SUCCESS) {
 		ql_log(ql_log_warn, vha, 0x7074,
-		    "Unable to write EDC (%x) %02x:%04x:%02x:%02hhx\n",
+		    "Unable to write EDC (%x) %02x:%04x:%02x:%02x:%02hhx\n",
 		    rval, dev, adr, opt, len, buf[8]);
 		return -EIO;
 	}
@@ -747,7 +724,7 @@ qla2x00_sysfs_write_edc_status(struct file *filp, struct kobject *kobj,
 			dev, adr, len, opt);
 	if (rval != QLA_SUCCESS) {
 		ql_log(ql_log_info, vha, 0x7075,
-		    "Unable to write EDC status (%x) %02x:%04x:%02x.\n",
+		    "Unable to write EDC status (%x) %02x:%04x:%02x:%02x.\n",
 		    rval, dev, adr, opt, len);
 		return -EIO;
 	}
@@ -1059,8 +1036,7 @@ qla2x00_link_state_show(struct device *dev, struct device_attribute *attr,
 	    vha->device_flags & DFLG_NO_CABLE)
 		len = snprintf(buf, PAGE_SIZE, "Link Down\n");
 	else if (atomic_read(&vha->loop_state) != LOOP_READY ||
-	    test_bit(ABORT_ISP_ACTIVE, &vha->dpc_flags) ||
-	    test_bit(ISP_ABORT_NEEDED, &vha->dpc_flags))
+	    qla2x00_reset_active(vha))
 		len = snprintf(buf, PAGE_SIZE, "Unknown Link State\n");
 	else {
 		len = snprintf(buf, PAGE_SIZE, "Link Up - ");
@@ -1382,8 +1358,7 @@ qla2x00_thermal_temp_show(struct device *dev,
 		return snprintf(buf, PAGE_SIZE, "\n");
 
 	temp = frac = 0;
-	if (test_bit(ABORT_ISP_ACTIVE, &vha->dpc_flags) ||
-	    test_bit(ISP_ABORT_NEEDED, &vha->dpc_flags))
+	if (qla2x00_reset_active(vha))
 		ql_log(ql_log_warn, vha, 0x707b,
 		    "ISP reset active.\n");
 	else if (!vha->hw->flags.eeh_busy)
@@ -1402,8 +1377,7 @@ qla2x00_fw_state_show(struct device *dev, struct device_attribute *attr,
 	int rval = QLA_FUNCTION_FAILED;
 	uint16_t state[5];
 
-	if (test_bit(ABORT_ISP_ACTIVE, &vha->dpc_flags) ||
-		test_bit(ISP_ABORT_NEEDED, &vha->dpc_flags))
+	if (qla2x00_reset_active(vha))
 		ql_log(ql_log_warn, vha, 0x707c,
 		    "ISP reset active.\n");
 	else if (!vha->hw->flags.eeh_busy)
@@ -1716,9 +1690,7 @@ qla2x00_get_fc_host_stats(struct Scsi_Host *shost)
 	if (IS_FWI2_CAPABLE(ha)) {
 		rval = qla24xx_get_isp_stats(base_vha, stats, stats_dma);
 	} else if (atomic_read(&base_vha->loop_state) == LOOP_READY &&
-		    !test_bit(ABORT_ISP_ACTIVE, &base_vha->dpc_flags) &&
-		    !test_bit(ISP_ABORT_NEEDED, &base_vha->dpc_flags) &&
-		    !ha->dpc_active) {
+	    !qla2x00_reset_active(vha) && !ha->dpc_active) {
 		/* Must be in a 'READY' state for statistics retrieval. */
 		rval = qla2x00_get_link_status(base_vha, base_vha->loop_id,
 						stats, stats_dma);
@@ -1994,8 +1966,8 @@ qla24xx_vport_delete(struct fc_vport *fc_vport)
 			    "Queue delete failed.\n");
 	}
 
-	scsi_host_put(vha->host);
 	ql_log(ql_log_info, vha, 0x7088, "VP[%d] deleted.\n", id);
+	scsi_host_put(vha->host);
 	return 0;
 }
 

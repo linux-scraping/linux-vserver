@@ -114,6 +114,7 @@ struct edgeport_port {
 	wait_queue_head_t	wait_chase;		/* for handling sleeping while waiting for chase to finish */
 	wait_queue_head_t	wait_open;		/* for handling sleeping while waiting for open to finish */
 	wait_queue_head_t	wait_command;		/* for handling sleeping while waiting for command to finish */
+	wait_queue_head_t	delta_msr_wait;		/* for handling sleeping while waiting for msr change to happen */
 
 	struct async_icount	icount;
 	struct usb_serial_port	*port;			/* loop back to the owner of this object */
@@ -190,7 +191,7 @@ static const struct divisor_table_entry divisor_table[] = {
 };
 
 /* local variables */
-static int debug;
+static bool debug;
 
 static atomic_t CmdUrbs;	/* Number of outstanding Command Write Urbs */
 
@@ -496,25 +497,21 @@ static int get_epic_descriptor(struct edgeport_serial *ep)
 	int result;
 	struct usb_serial *serial = ep->serial;
 	struct edgeport_product_info *product_info = &ep->product_info;
-	struct edge_compatibility_descriptor *epic;
+	struct edge_compatibility_descriptor *epic = &ep->epic_descriptor;
 	struct edge_compatibility_bits *bits;
 
 	ep->is_epic = 0;
-
-	epic = kmalloc(sizeof(*epic), GFP_KERNEL);
-	if (!epic)
-		return -ENOMEM;
-
 	result = usb_control_msg(serial->dev, usb_rcvctrlpipe(serial->dev, 0),
 				 USB_REQUEST_ION_GET_EPIC_DESC,
 				 0xC0, 0x00, 0x00,
-				 epic, sizeof(*epic),
+				 &ep->epic_descriptor,
+				 sizeof(struct edge_compatibility_descriptor),
 				 300);
+
 	dbg("%s result = %d", __func__, result);
 
-	if (result == sizeof(*epic)) {
+	if (result > 0) {
 		ep->is_epic = 1;
-		memcpy(&ep->epic_descriptor, epic, sizeof(*epic));
 		memset(product_info, 0, sizeof(struct edgeport_product_info));
 
 		product_info->NumPorts = epic->NumPorts;
@@ -543,15 +540,7 @@ static int get_epic_descriptor(struct edgeport_serial *ep)
 		dbg("  IOSPWriteLCR     : %s", bits->IOSPWriteLCR	? "TRUE": "FALSE");
 		dbg("  IOSPSetBaudRate  : %s", bits->IOSPSetBaudRate	? "TRUE": "FALSE");
 		dbg("  TrueEdgeport     : %s", bits->TrueEdgeport	? "TRUE": "FALSE");
-
-		result = 0;
-	} else if (result >= 0) {
-		dev_warn(&serial->interface->dev, "short epic descriptor received: %d\n",
-			 result);
-		result = -EIO;
 	}
-
-	kfree(epic);
 
 	return result;
 }
@@ -621,7 +610,6 @@ static void edge_interrupt_callback(struct urb *urb)
 
 					/* we have pending bytes on the
 					   bulk in pipe, send a request */
-					edge_serial->read_urb->dev = edge_serial->serial->dev;
 					result = usb_submit_urb(edge_serial->read_urb, GFP_ATOMIC);
 					if (result) {
 						dev_err(&edge_serial->serial->dev->dev, "%s - usb_submit_urb(read bulk) failed with result = %d\n", __func__, result);
@@ -722,7 +710,6 @@ static void edge_bulk_in_callback(struct urb *urb)
 	/* check to see if there's any more data for us to read */
 	if (edge_serial->rxBytesAvail > 0) {
 		dbg("%s - posting a read", __func__);
-		edge_serial->read_urb->dev = edge_serial->serial->dev;
 		retval = usb_submit_urb(edge_serial->read_urb, GFP_ATOMIC);
 		if (retval) {
 			dev_err(&urb->dev->dev,
@@ -896,6 +883,7 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 	/* initialize our wait queues */
 	init_waitqueue_head(&edge_port->wait_open);
 	init_waitqueue_head(&edge_port->wait_chase);
+	init_waitqueue_head(&edge_port->delta_msr_wait);
 	init_waitqueue_head(&edge_port->wait_command);
 
 	/* initialize our icount structure */
@@ -1340,7 +1328,6 @@ static void send_more_port_data(struct edgeport_serial *edge_serial,
 	edge_port->txCredits -= count;
 	edge_port->icount.tx += count;
 
-	urb->dev = edge_serial->serial->dev;
 	status = usb_submit_urb(urb, GFP_ATOMIC);
 	if (status) {
 		/* something went wrong */
@@ -1713,17 +1700,13 @@ static int edge_ioctl(struct tty_struct *tty,
 		dbg("%s (%d) TIOCMIWAIT", __func__,  port->number);
 		cprev = edge_port->icount;
 		while (1) {
-			prepare_to_wait(&port->delta_msr_wait,
+			prepare_to_wait(&edge_port->delta_msr_wait,
 						&wait, TASK_INTERRUPTIBLE);
 			schedule();
-			finish_wait(&port->delta_msr_wait, &wait);
+			finish_wait(&edge_port->delta_msr_wait, &wait);
 			/* see if a signal did it */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
-
-			if (port->serial->disconnected)
-				return -EIO;
-
 			cnow = edge_port->icount;
 			if (cnow.rng == cprev.rng && cnow.dsr == cprev.dsr &&
 			    cnow.dcd == cprev.dcd && cnow.cts == cprev.cts)
@@ -2104,7 +2087,7 @@ static void handle_new_msr(struct edgeport_port *edge_port, __u8 newMsr)
 			icount->dcd++;
 		if (newMsr & EDGEPORT_MSR_DELTA_RI)
 			icount->rng++;
-		wake_up_interruptible(&edge_port->port->delta_msr_wait);
+		wake_up_interruptible(&edge_port->delta_msr_wait);
 	}
 
 	/* Save the new modem status */
@@ -2263,7 +2246,8 @@ static int rom_write(struct usb_serial *serial, __u16 extAddr, __u16 addr,
  * rom_read
  *	reads a number of bytes from the Edgeport device starting at the given
  *	address.
- *	Returns zero on success or a negative error number.
+ *	If successful returns the number of bytes read, otherwise it returns
+ *	a negative error number of the problem.
  ****************************************************************************/
 static int rom_read(struct usb_serial *serial, __u16 extAddr,
 					__u16 addr, __u16 length, __u8 *data)
@@ -2295,17 +2279,12 @@ static int rom_read(struct usb_serial *serial, __u16 extAddr,
 					USB_REQUEST_ION_READ_ROM,
 					0xC0, addr, extAddr, transfer_buffer,
 					current_length, 300);
-		if (result < current_length) {
-			if (result >= 0)
-				result = -EIO;
+		if (result < 0)
 			break;
-		}
 		memcpy(data, transfer_buffer, current_length);
 		length -= current_length;
 		addr += current_length;
 		data += current_length;
-
-		result = 0;
 	}
 
 	kfree(transfer_buffer);
@@ -2776,11 +2755,10 @@ static void get_manufacturing_desc(struct edgeport_serial *edge_serial)
 				EDGE_MANUF_DESC_LEN,
 				(__u8 *)(&edge_serial->manuf_descriptor));
 
-	if (response < 0) {
+	if (response < 1)
 		dev_err(&edge_serial->serial->dev->dev,
-			"error in getting manufacturer descriptor: %d\n",
-			response);
-	} else {
+			"error in getting manufacturer descriptor\n");
+	else {
 		char string[30];
 		dbg("**Manufacturer Descriptor");
 		dbg("  RomSize:        %dK",
@@ -2836,11 +2814,10 @@ static void get_boot_desc(struct edgeport_serial *edge_serial)
 				EDGE_BOOT_DESC_LEN,
 				(__u8 *)(&edge_serial->boot_descriptor));
 
-	if (response < 0) {
+	if (response < 1)
 		dev_err(&edge_serial->serial->dev->dev,
-			"error in getting boot descriptor: %d\n",
-			response);
-	} else {
+				"error in getting boot descriptor\n");
+	else {
 		dbg("**Boot Descriptor:");
 		dbg("  BootCodeLength: %d",
 		    le16_to_cpu(edge_serial->boot_descriptor.BootCodeLength));
@@ -2954,11 +2931,6 @@ static int edge_startup(struct usb_serial *serial)
 					EDGE_COMPATIBILITY_MASK1,
 					EDGE_COMPATIBILITY_MASK2 };
 
-	if (serial->num_bulk_in < 1 || serial->num_interrupt_in < 1) {
-		dev_err(&serial->interface->dev, "missing endpoints\n");
-		return -ENODEV;
-	}
-
 	dev = serial->dev;
 
 	/* create our private serial structure */
@@ -2983,7 +2955,7 @@ static int edge_startup(struct usb_serial *serial)
 	dev_info(&serial->dev->dev, "%s detected\n", edge_serial->name);
 
 	/* Read the epic descriptor */
-	if (get_epic_descriptor(edge_serial) < 0) {
+	if (get_epic_descriptor(edge_serial) <= 0) {
 		/* memcpy descriptor to Supports structures */
 		memcpy(&edge_serial->epic_descriptor.Supports, descriptor,
 		       sizeof(struct edge_compatibility_bits));

@@ -268,7 +268,7 @@ static const struct lm90_params lm90_params[] = {
 	[max6696] = {
 		.flags = LM90_HAVE_EMERGENCY
 		  | LM90_HAVE_EMERGENCY_ALARM | LM90_HAVE_TEMP3,
-		.alert_alarms = 0x1c7c,
+		.alert_alarms = 0x187c,
 		.max_convrate = 6,
 		.reg_local_ext = MAX6657_REG_R_LOCAL_TEMPL,
 	},
@@ -730,7 +730,7 @@ static ssize_t set_temp8(struct device *dev, struct device_attribute *devattr,
 	long val;
 	int err;
 
-	err = strict_strtol(buf, 10, &val);
+	err = kstrtol(buf, 10, &val);
 	if (err < 0)
 		return err;
 
@@ -798,7 +798,7 @@ static ssize_t set_temp11(struct device *dev, struct device_attribute *devattr,
 	long val;
 	int err;
 
-	err = strict_strtol(buf, 10, &val);
+	err = kstrtol(buf, 10, &val);
 	if (err < 0)
 		return err;
 
@@ -859,7 +859,7 @@ static ssize_t set_temphyst(struct device *dev, struct device_attribute *dummy,
 	int err;
 	int temp;
 
-	err = strict_strtol(buf, 10, &val);
+	err = kstrtol(buf, 10, &val);
 	if (err < 0)
 		return err;
 
@@ -912,12 +912,12 @@ static ssize_t set_update_interval(struct device *dev,
 	unsigned long val;
 	int err;
 
-	err = strict_strtoul(buf, 10, &val);
+	err = kstrtoul(buf, 10, &val);
 	if (err)
 		return err;
 
 	mutex_lock(&data->update_lock);
-	lm90_set_convrate(client, data, val);
+	lm90_set_convrate(client, data, SENSORS_LIMIT(val, 0, 100000));
 	mutex_unlock(&data->update_lock);
 
 	return count;
@@ -1080,7 +1080,7 @@ static ssize_t set_pec(struct device *dev, struct device_attribute *dummy,
 	long val;
 	int err;
 
-	err = strict_strtol(buf, 10, &val);
+	err = kstrtol(buf, 10, &val);
 	if (err < 0)
 		return err;
 
@@ -1474,22 +1474,19 @@ static void lm90_alert(struct i2c_client *client, unsigned int flag)
 	if ((alarms & 0x7f) == 0 && (alarms2 & 0xfe) == 0) {
 		dev_info(&client->dev, "Everything OK\n");
 	} else {
-		if ((alarms & 0x61) || (alarms2 & 0x80))
+		if (alarms & 0x61)
 			dev_warn(&client->dev,
 				 "temp%d out of range, please check!\n", 1);
-		if ((alarms & 0x1a) || (alarms2 & 0x20))
+		if (alarms & 0x1a)
 			dev_warn(&client->dev,
 				 "temp%d out of range, please check!\n", 2);
 		if (alarms & 0x04)
 			dev_warn(&client->dev,
 				 "temp%d diode open, please check!\n", 2);
 
-		if (alarms2 & 0x5a)
+		if (alarms2 & 0x18)
 			dev_warn(&client->dev,
 				 "temp%d out of range, please check!\n", 3);
-		if (alarms2 & 0x04)
-			dev_warn(&client->dev,
-				 "temp%d diode open, please check!\n", 3);
 
 		/* Disable ALERT# output, because these chips don't implement
 		  SMBus alert correctly; they should only hold the alert line

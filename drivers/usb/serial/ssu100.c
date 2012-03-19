@@ -46,7 +46,7 @@
 #define FULLPWRBIT          0x00000080
 #define NEXT_BOARD_POWER_BIT        0x00000004
 
-static int debug;
+static bool debug;
 
 /* Version Information */
 #define DRIVER_VERSION "v0.1"
@@ -78,6 +78,7 @@ struct ssu100_port_private {
 	spinlock_t status_lock;
 	u8 shadowLSR;
 	u8 shadowMSR;
+	wait_queue_head_t delta_msr_wait; /* Used for TIOCMIWAIT */
 	struct async_icount icount;
 };
 
@@ -107,17 +108,9 @@ static inline int ssu100_setdevice(struct usb_device *dev, u8 *data)
 
 static inline int ssu100_getdevice(struct usb_device *dev, u8 *data)
 {
-	int ret;
-
-	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-			      QT_SET_GET_DEVICE, 0xc0, 0, 0,
-			      data, 3, 300);
-	if (ret < 3) {
-		if (ret >= 0)
-			ret = -EIO;
-	}
-
-	return ret;
+	return usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+			       QT_SET_GET_DEVICE, 0xc0, 0, 0,
+			       data, 3, 300);
 }
 
 static inline int ssu100_getregister(struct usb_device *dev,
@@ -125,17 +118,10 @@ static inline int ssu100_getregister(struct usb_device *dev,
 				     unsigned short reg,
 				     u8 *data)
 {
-	int ret;
+	return usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+			       QT_SET_GET_REGISTER, 0xc0, reg,
+			       uart, data, sizeof(*data), 300);
 
-	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-			      QT_SET_GET_REGISTER, 0xc0, reg,
-			      uart, data, sizeof(*data), 300);
-	if (ret < sizeof(*data)) {
-		if (ret >= 0)
-			ret = -EIO;
-	}
-
-	return ret;
 }
 
 
@@ -337,10 +323,8 @@ static int ssu100_open(struct tty_struct *tty, struct usb_serial_port *port)
 				 QT_OPEN_CLOSE_CHANNEL,
 				 QT_TRANSFER_IN, 0x01,
 				 0, data, 2, 300);
-	if (result < 2) {
+	if (result < 0) {
 		dbg("%s - open failed %i", __func__, result);
-		if (result >= 0)
-			result = -EIO;
 		kfree(data);
 		return result;
 	}
@@ -403,18 +387,14 @@ static int wait_modem_info(struct usb_serial_port *port, unsigned int arg)
 	spin_unlock_irqrestore(&priv->status_lock, flags);
 
 	while (1) {
-		wait_event_interruptible(port->delta_msr_wait,
-					 (port->serial->disconnected ||
-					  (priv->icount.rng != prev.rng) ||
+		wait_event_interruptible(priv->delta_msr_wait,
+					 ((priv->icount.rng != prev.rng) ||
 					  (priv->icount.dsr != prev.dsr) ||
 					  (priv->icount.dcd != prev.dcd) ||
 					  (priv->icount.cts != prev.cts)));
 
 		if (signal_pending(current))
 			return -ERESTARTSYS;
-
-		if (port->serial->disconnected)
-			return -EIO;
 
 		spin_lock_irqsave(&priv->status_lock, flags);
 		cur = priv->icount;
@@ -498,6 +478,7 @@ static int ssu100_attach(struct usb_serial *serial)
 	}
 
 	spin_lock_init(&priv->status_lock);
+	init_waitqueue_head(&priv->delta_msr_wait);
 	usb_set_serial_port_data(port, priv);
 
 	return ssu100_initdevice(serial->dev);
@@ -552,16 +533,19 @@ static void ssu100_dtr_rts(struct usb_serial_port *port, int on)
 
 	dbg("%s\n", __func__);
 
-	/* Disable flow control */
-	if (!on) {
-		if (ssu100_setregister(dev, 0, UART_MCR, 0) < 0)
+	mutex_lock(&port->serial->disc_mutex);
+	if (!port->serial->disconnected) {
+		/* Disable flow control */
+		if (!on &&
+		    ssu100_setregister(dev, 0, UART_MCR, 0) < 0)
 			dev_err(&port->dev, "error from flowcontrol urb\n");
+		/* drop RTS and DTR */
+		if (on)
+			set_mctrl(dev, TIOCM_DTR | TIOCM_RTS);
+		else
+			clear_mctrl(dev, TIOCM_DTR | TIOCM_RTS);
 	}
-	/* drop RTS and DTR */
-	if (on)
-		set_mctrl(dev, TIOCM_DTR | TIOCM_RTS);
-	else
-		clear_mctrl(dev, TIOCM_DTR | TIOCM_RTS);
+	mutex_unlock(&port->serial->disc_mutex);
 }
 
 static void ssu100_update_msr(struct usb_serial_port *port, u8 msr)
@@ -583,7 +567,7 @@ static void ssu100_update_msr(struct usb_serial_port *port, u8 msr)
 			priv->icount.dcd++;
 		if (msr & UART_MSR_TERI)
 			priv->icount.rng++;
-		wake_up_interruptible(&port->delta_msr_wait);
+		wake_up_interruptible(&priv->delta_msr_wait);
 	}
 }
 
@@ -616,10 +600,10 @@ static void ssu100_update_lsr(struct usb_serial_port *port, u8 lsr,
 			if (*tty_flag == TTY_NORMAL)
 				*tty_flag = TTY_FRAME;
 		}
-		if (lsr & UART_LSR_OE) {
+		if (lsr & UART_LSR_OE){
 			priv->icount.overrun++;
-			tty_insert_flip_char(tty_port_tty_get(&port->port),
-					     0, TTY_OVERRUN);
+			if (*tty_flag == TTY_NORMAL)
+				*tty_flag = TTY_OVERRUN;
 		}
 	}
 
@@ -640,8 +624,11 @@ static int ssu100_process_packet(struct urb *urb,
 	if ((len >= 4) &&
 	    (packet[0] == 0x1b) && (packet[1] == 0x1b) &&
 	    ((packet[2] == 0x00) || (packet[2] == 0x01))) {
-		if (packet[2] == 0x00)
+		if (packet[2] == 0x00) {
 			ssu100_update_lsr(port, packet[3], &flag);
+			if (flag == TTY_OVERRUN)
+				tty_insert_flip_char(tty, 0, TTY_OVERRUN);
+		}
 		if (packet[2] == 0x01)
 			ssu100_update_msr(port, packet[3]);
 

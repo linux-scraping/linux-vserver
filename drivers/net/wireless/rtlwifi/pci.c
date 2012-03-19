@@ -78,7 +78,7 @@ static void _rtl_pci_update_default_setting(struct ieee80211_hw *hw)
 	u8 init_aspm;
 
 	ppsc->reg_rfps_level = 0;
-	ppsc->support_aspm = 0;
+	ppsc->support_aspm = false;
 
 	/*Update PCI ASPM setting */
 	ppsc->const_amdpci_aspm = rtlpci->const_amdpci_aspm;
@@ -570,9 +570,9 @@ static void _rtl_pci_tx_isr(struct ieee80211_hw *hw, int prio)
 		if (ieee80211_is_nullfunc(fc)) {
 			if (ieee80211_has_pm(fc)) {
 				rtlpriv->mac80211.offchan_delay = true;
-				rtlpriv->psc.state_inap = 1;
+				rtlpriv->psc.state_inap = true;
 			} else {
-				rtlpriv->psc.state_inap = 0;
+				rtlpriv->psc.state_inap = false;
 			}
 		}
 
@@ -610,7 +610,7 @@ tx_status_ok:
 	if (((rtlpriv->link_info.num_rx_inperiod +
 		rtlpriv->link_info.num_tx_inperiod) > 8) ||
 		(rtlpriv->link_info.num_rx_inperiod > 2)) {
-		tasklet_schedule(&rtlpriv->works.ips_leave_tasklet);
+		schedule_work(&rtlpriv->works.lps_leave_work);
 	}
 }
 
@@ -657,8 +657,6 @@ static void _rtl_receive_one(struct ieee80211_hw *hw, struct sk_buff *skb,
 		return;
 
 	uskb = dev_alloc_skb(skb->len + 128);
-	if (!uskb)
-		return;		/* exit if allocation failed */
 	memcpy(IEEE80211_SKB_RXCB(uskb), &rx_status, sizeof(rx_status));
 	pdata = (u8 *)skb_put(uskb, skb->len);
 	memcpy(pdata, skb->data, skb->len);
@@ -685,8 +683,6 @@ static void _rtl_pci_rx_interrupt(struct ieee80211_hw *hw)
 	};
 	int index = rtlpci->rx_ring[rx_queue_idx].idx;
 
-	if (rtlpci->driver_is_goingto_unload)
-		return;
 	/*RX NORMAL PKT */
 	while (count--) {
 		/*rx descriptor */
@@ -740,7 +736,7 @@ static void _rtl_pci_rx_interrupt(struct ieee80211_hw *hw)
 		if (((rtlpriv->link_info.num_rx_inperiod +
 			rtlpriv->link_info.num_tx_inperiod) > 8) ||
 			(rtlpriv->link_info.num_rx_inperiod > 2)) {
-			tasklet_schedule(&rtlpriv->works.ips_leave_tasklet);
+			schedule_work(&rtlpriv->works.lps_leave_work);
 		}
 
 		dev_kfree_skb_any(skb);
@@ -784,6 +780,7 @@ static irqreturn_t _rtl_pci_interrupt(int irq, void *dev_id)
 	unsigned long flags;
 	u32 inta = 0;
 	u32 intb = 0;
+	irqreturn_t ret = IRQ_HANDLED;
 
 	spin_lock_irqsave(&rtlpriv->locks.irq_th_lock, flags);
 
@@ -791,8 +788,10 @@ static irqreturn_t _rtl_pci_interrupt(int irq, void *dev_id)
 	rtlpriv->cfg->ops->interrupt_recognized(hw, &inta, &intb);
 
 	/*Shared IRQ or HW disappared */
-	if (!inta || inta == 0xffff)
+	if (!inta || inta == 0xffff) {
+		ret = IRQ_NONE;
 		goto done;
+	}
 
 	/*<1> beacon related */
 	if (inta & rtlpriv->cfg->maps[RTL_IMR_TBDOK]) {
@@ -894,22 +893,14 @@ static irqreturn_t _rtl_pci_interrupt(int irq, void *dev_id)
 	if (rtlpriv->rtlhal.earlymode_enable)
 		tasklet_schedule(&rtlpriv->works.irq_tasklet);
 
-	spin_unlock_irqrestore(&rtlpriv->locks.irq_th_lock, flags);
-	return IRQ_HANDLED;
-
 done:
 	spin_unlock_irqrestore(&rtlpriv->locks.irq_th_lock, flags);
-	return IRQ_HANDLED;
+	return ret;
 }
 
 static void _rtl_pci_irq_tasklet(struct ieee80211_hw *hw)
 {
 	_rtl_pci_tx_chk_waitq(hw);
-}
-
-static void _rtl_pci_ips_leave_tasklet(struct ieee80211_hw *hw)
-{
-	rtl_lps_leave(hw);
 }
 
 static void _rtl_pci_prepare_bcn_tasklet(struct ieee80211_hw *hw)
@@ -928,13 +919,8 @@ static void _rtl_pci_prepare_bcn_tasklet(struct ieee80211_hw *hw)
 	memset(&tcb_desc, 0, sizeof(struct rtl_tcb_desc));
 	ring = &rtlpci->tx_ring[BEACON_QUEUE];
 	pskb = __skb_dequeue(&ring->queue);
-	if (pskb) {
-		struct rtl_tx_desc *entry = &ring->desc[ring->idx];
-		pci_unmap_single(rtlpci->pdev, rtlpriv->cfg->ops->get_desc(
-				 (u8 *) entry, true, HW_DESC_TXBUFF_ADDR),
-				 pskb->len, PCI_DMA_TODEVICE);
+	if (pskb)
 		kfree_skb(pskb);
-	}
 
 	/*NB: the beacon data buffer must be 32-bit aligned. */
 	pskb = ieee80211_beacon_get(hw, mac->vif);
@@ -952,6 +938,15 @@ static void _rtl_pci_prepare_bcn_tasklet(struct ieee80211_hw *hw)
 				    (u8 *)&temp_one);
 
 	return;
+}
+
+static void rtl_lps_leave_work_callback(struct work_struct *work)
+{
+	struct rtl_works *rtlworks =
+	    container_of(work, struct rtl_works, lps_leave_work);
+	struct ieee80211_hw *hw = rtlworks->hw;
+
+	rtl_lps_leave(hw);
 }
 
 static void _rtl_pci_init_trx_var(struct ieee80211_hw *hw)
@@ -1015,9 +1010,7 @@ static void _rtl_pci_init_struct(struct ieee80211_hw *hw,
 	tasklet_init(&rtlpriv->works.irq_prepare_bcn_tasklet,
 		     (void (*)(unsigned long))_rtl_pci_prepare_bcn_tasklet,
 		     (unsigned long)hw);
-	tasklet_init(&rtlpriv->works.ips_leave_tasklet,
-		     (void (*)(unsigned long))_rtl_pci_ips_leave_tasklet,
-		     (unsigned long)hw);
+	INIT_WORK(&rtlpriv->works.lps_leave_work, rtl_lps_leave_work_callback);
 }
 
 static int _rtl_pci_init_tx_ring(struct ieee80211_hw *hw,
@@ -1162,12 +1155,10 @@ static void _rtl_pci_free_tx_ring(struct ieee80211_hw *hw,
 		ring->idx = (ring->idx + 1) % ring->entries;
 	}
 
-	if (ring->desc) {
-		pci_free_consistent(rtlpci->pdev,
-				    sizeof(*ring->desc) * ring->entries,
-				    ring->desc, ring->dma);
-		ring->desc = NULL;
-	}
+	pci_free_consistent(rtlpci->pdev,
+			    sizeof(*ring->desc) * ring->entries,
+			    ring->desc, ring->dma);
+	ring->desc = NULL;
 }
 
 static void _rtl_pci_free_rx_ring(struct rtl_pci *rtlpci)
@@ -1191,14 +1182,12 @@ static void _rtl_pci_free_rx_ring(struct rtl_pci *rtlpci)
 			kfree_skb(skb);
 		}
 
-		if (rtlpci->rx_ring[rx_queue_idx].desc) {
-			pci_free_consistent(rtlpci->pdev,
+		pci_free_consistent(rtlpci->pdev,
 				    sizeof(*rtlpci->rx_ring[rx_queue_idx].
 					   desc) * rtlpci->rxringcount,
 				    rtlpci->rx_ring[rx_queue_idx].desc,
 				    rtlpci->rx_ring[rx_queue_idx].dma);
-			rtlpci->rx_ring[rx_queue_idx].desc = NULL;
-		}
+		rtlpci->rx_ring[rx_queue_idx].desc = NULL;
 	}
 }
 
@@ -1491,7 +1480,7 @@ static void rtl_pci_deinit(struct ieee80211_hw *hw)
 
 	synchronize_irq(rtlpci->pdev->irq);
 	tasklet_kill(&rtlpriv->works.irq_tasklet);
-	tasklet_kill(&rtlpriv->works.ips_leave_tasklet);
+	cancel_work_sync(&rtlpriv->works.lps_leave_work);
 
 	flush_workqueue(rtlpriv->works.rtl_wq);
 	destroy_workqueue(rtlpriv->works.rtl_wq);
@@ -1512,7 +1501,7 @@ static int rtl_pci_init(struct ieee80211_hw *hw, struct pci_dev *pdev)
 		return err;
 	}
 
-	return 1;
+	return 0;
 }
 
 static int rtl_pci_start(struct ieee80211_hw *hw)
@@ -1565,9 +1554,8 @@ static void rtl_pci_stop(struct ieee80211_hw *hw)
 	 */
 	set_hal_stop(rtlhal);
 
-	rtlpci->driver_is_goingto_unload = true;
 	rtlpriv->cfg->ops->disable_interrupt(hw);
-	tasklet_kill(&rtlpriv->works.ips_leave_tasklet);
+	cancel_work_sync(&rtlpriv->works.lps_leave_work);
 
 	spin_lock_irqsave(&rtlpriv->locks.rf_ps_lock, flags);
 	while (ppsc->rfchange_inprogress) {
@@ -1583,6 +1571,7 @@ static void rtl_pci_stop(struct ieee80211_hw *hw)
 	ppsc->rfchange_inprogress = true;
 	spin_unlock_irqrestore(&rtlpriv->locks.rf_ps_lock, flags);
 
+	rtlpci->driver_is_goingto_unload = true;
 	rtlpriv->cfg->ops->hw_disable(hw);
 	rtlpriv->cfg->ops->led_control(hw, LED_CTL_POWER_OFF);
 
@@ -1881,7 +1870,7 @@ int __devinit rtl_pci_probe(struct pci_dev *pdev,
 	}
 
 	/* Init PCI sw */
-	err = !rtl_pci_init(hw, pdev);
+	err = rtl_pci_init(hw, pdev);
 	if (err) {
 		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
 			 ("Failed to init PCI.\n"));
@@ -1963,7 +1952,6 @@ void rtl_pci_disconnect(struct pci_dev *pdev)
 		rtl_deinit_deferred_work(hw);
 		rtlpriv->intf_ops->adapter_stop(hw);
 	}
-	rtlpriv->cfg->ops->disable_interrupt(hw);
 
 	/*deinit rfkill */
 	rtl_deinit_rfkill(hw);

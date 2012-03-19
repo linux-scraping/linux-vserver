@@ -906,9 +906,9 @@ static void korina_restart_task(struct work_struct *work)
 				DMA_STAT_DONE | DMA_STAT_HALT | DMA_STAT_ERR,
 				&lp->rx_dma_regs->dmasm);
 
-	napi_disable(&lp->napi);
-
 	korina_free_ring(dev);
+
+	napi_disable(&lp->napi);
 
 	if (korina_init(dev) < 0) {
 		printk(KERN_ERR "%s: cannot restart device\n", dev->name);
@@ -1070,11 +1070,11 @@ static int korina_close(struct net_device *dev)
 	tmp = tmp | DMA_STAT_DONE | DMA_STAT_HALT | DMA_STAT_ERR;
 	writel(tmp, &lp->rx_dma_regs->dmasm);
 
+	korina_free_ring(dev);
+
 	napi_disable(&lp->napi);
 
 	cancel_work_sync(&lp->restart_task);
-
-	korina_free_ring(dev);
 
 	free_irq(lp->rx_irq, dev);
 	free_irq(lp->tx_irq, dev);
@@ -1230,18 +1230,7 @@ static struct platform_driver korina_driver = {
 	.remove = korina_remove,
 };
 
-static int __init korina_init_module(void)
-{
-	return platform_driver_register(&korina_driver);
-}
-
-static void korina_cleanup_module(void)
-{
-	return platform_driver_unregister(&korina_driver);
-}
-
-module_init(korina_init_module);
-module_exit(korina_cleanup_module);
+module_platform_driver(korina_driver);
 
 MODULE_AUTHOR("Philip Rischel <rischelp@idt.com>");
 MODULE_AUTHOR("Felix Fietkau <nbd@openwrt.org>");

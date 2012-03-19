@@ -26,6 +26,7 @@
 
 #include <linux/fsnotify_backend.h>
 #include "fsnotify.h"
+#include "../mount.h"
 
 /*
  * Clear all of the marks on an inode when it is being evicted from core
@@ -62,14 +63,14 @@ void __fsnotify_update_child_dentry_flags(struct inode *inode)
 	spin_lock(&inode->i_lock);
 	/* run all of the dentries associated with this inode.  Since this is a
 	 * directory, there damn well better only be one item on this list */
-	list_for_each_entry(alias, &inode->i_dentry, d_u.d_alias) {
+	list_for_each_entry(alias, &inode->i_dentry, d_alias) {
 		struct dentry *child;
 
 		/* run all of the children of the original inode and fix their
 		 * d_flags to indicate parental interest (their parent is the
 		 * original inode) */
 		spin_lock(&alias->d_lock);
-		list_for_each_entry(child, &alias->d_subdirs, d_child) {
+		list_for_each_entry(child, &alias->d_subdirs, d_u.d_child) {
 			if (!child->d_inode)
 				continue;
 
@@ -205,13 +206,13 @@ int fsnotify(struct inode *to_tell, __u32 mask, void *data, int data_is,
 	struct fsnotify_mark *inode_mark = NULL, *vfsmount_mark = NULL;
 	struct fsnotify_group *inode_group, *vfsmount_group;
 	struct fsnotify_event *event = NULL;
-	struct vfsmount *mnt;
+	struct mount *mnt;
 	int idx, ret = 0;
 	/* global tests shouldn't care about events on child only the specific event */
 	__u32 test_mask = (mask & ~FS_EVENT_ON_CHILD);
 
 	if (data_is == FSNOTIFY_EVENT_PATH)
-		mnt = ((struct path *)data)->mnt;
+		mnt = real_mount(((struct path *)data)->mnt);
 	else
 		mnt = NULL;
 
@@ -262,11 +263,11 @@ int fsnotify(struct inode *to_tell, __u32 mask, void *data, int data_is,
 			/* we didn't use the vfsmount_mark */
 			vfsmount_group = NULL;
 		} else if (vfsmount_group > inode_group) {
-			ret = send_to_group(to_tell, mnt, NULL, vfsmount_mark, mask, data,
+			ret = send_to_group(to_tell, &mnt->mnt, NULL, vfsmount_mark, mask, data,
 					    data_is, cookie, file_name, &event);
 			inode_group = NULL;
 		} else {
-			ret = send_to_group(to_tell, mnt, inode_mark, vfsmount_mark,
+			ret = send_to_group(to_tell, &mnt->mnt, inode_mark, vfsmount_mark,
 					    mask, data, data_is, cookie, file_name,
 					    &event);
 		}

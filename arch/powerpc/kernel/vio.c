@@ -1351,15 +1351,11 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 	const char *cp;
 
 	dn = dev->of_node;
-	if (!dn) {
-		strcpy(buf, "\n");
-		return strlen(buf);
-	}
+	if (!dn)
+		return -ENODEV;
 	cp = of_get_property(dn, "compatible", NULL);
-	if (!cp) {
-		strcpy(buf, "\n");
-		return strlen(buf);
-	}
+	if (!cp)
+		return -ENODEV;
 
 	return sprintf(buf, "vio:T%sS%s\n", vio_dev->type, cp);
 }
@@ -1410,7 +1406,6 @@ static struct bus_type vio_bus_type = {
 	.match = vio_bus_match,
 	.probe = vio_bus_probe,
 	.remove = vio_bus_remove,
-	.pm = GENERIC_SUBSYS_PM_OPS,
 };
 
 /**

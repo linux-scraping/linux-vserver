@@ -829,7 +829,7 @@ static int adu_probe(struct usb_interface *interface,
 
 	/* let the user know what node this device is now attached to */
 	dev_info(&interface->dev, "ADU%d %s now attached to /dev/usb/adutux%d\n",
-		 le16_to_cpu(udev->descriptor.idProduct), dev->serial_number,
+		 udev->descriptor.idProduct, dev->serial_number,
 		 (dev->minor - ADU_MINOR_BASE));
 exit:
 	dbg(2," %s : leave, return value %p (dev)", __func__, dev);
@@ -865,10 +865,14 @@ static void adu_disconnect(struct usb_interface *interface)
 	usb_set_intfdata(interface, NULL);
 
 	/* if the device is not opened, then we clean up right now */
+	dbg(2," %s : open count %d", __func__, dev->open_count);
 	if (!dev->open_count)
 		adu_delete(dev);
 
 	mutex_unlock(&adutux_mutex);
+
+	dev_info(&interface->dev, "ADU device adutux%d now disconnected\n",
+		 (minor - ADU_MINOR_BASE));
 
 	dbg(2," %s : leave", __func__);
 }
@@ -881,40 +885,7 @@ static struct usb_driver adu_driver = {
 	.id_table = device_table,
 };
 
-static int __init adu_init(void)
-{
-	int result;
-
-	dbg(2," %s : enter", __func__);
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&adu_driver);
-	if (result < 0) {
-		printk(KERN_ERR "usb_register failed for the "__FILE__
-		       " driver. Error number %d\n", result);
-		goto exit;
-	}
-
-	printk(KERN_INFO "adutux " DRIVER_DESC " " DRIVER_VERSION "\n");
-	printk(KERN_INFO "adutux is an experimental driver. "
-	       "Use at your own risk\n");
-
-exit:
-	dbg(2," %s : leave, return value %d", __func__, result);
-
-	return result;
-}
-
-static void __exit adu_exit(void)
-{
-	dbg(2," %s : enter", __func__);
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&adu_driver);
-	dbg(2," %s : leave", __func__);
-}
-
-module_init(adu_init);
-module_exit(adu_exit);
+module_usb_driver(adu_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

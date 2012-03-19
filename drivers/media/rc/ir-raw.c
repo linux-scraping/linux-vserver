@@ -225,7 +225,7 @@ void ir_raw_event_handle(struct rc_dev *dev)
 {
 	unsigned long flags;
 
-	if (!dev->raw || !dev->raw->thread)
+	if (!dev->raw)
 		return;
 
 	spin_lock_irqsave(&dev->raw->lock, flags);
@@ -252,7 +252,6 @@ int ir_raw_event_register(struct rc_dev *dev)
 {
 	int rc;
 	struct ir_raw_handler *handler;
-	struct task_struct *thread;
 
 	if (!dev)
 		return -EINVAL;
@@ -270,15 +269,13 @@ int ir_raw_event_register(struct rc_dev *dev)
 		goto out;
 
 	spin_lock_init(&dev->raw->lock);
-	thread = kthread_run(ir_raw_event_thread, dev->raw, "rc%ld",
-			     dev->devno);
+	dev->raw->thread = kthread_run(ir_raw_event_thread, dev->raw,
+				       "rc%ld", dev->devno);
 
-	if (IS_ERR(thread)) {
-		rc = PTR_ERR(thread);
+	if (IS_ERR(dev->raw->thread)) {
+		rc = PTR_ERR(dev->raw->thread);
 		goto out;
 	}
-
-	dev->raw->thread = thread;
 
 	mutex_lock(&ir_raw_handler_lock);
 	list_add_tail(&dev->raw->list, &ir_raw_client_list);
@@ -360,6 +357,7 @@ static void init_decoders(struct work_struct *work)
 	load_rc6_decode();
 	load_jvc_decode();
 	load_sony_decode();
+	load_sanyo_decode();
 	load_mce_kbd_decode();
 	load_lirc_codec();
 

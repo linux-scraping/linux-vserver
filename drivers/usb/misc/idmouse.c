@@ -346,9 +346,6 @@ static int idmouse_probe(struct usb_interface *interface,
 	if (iface_desc->desc.bInterfaceClass != 0x0A)
 		return -ENODEV;
 
-	if (iface_desc->desc.bNumEndpoints < 1)
-		return -ENODEV;
-
 	/* allocate memory for our device state and initialize it */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL)
@@ -431,29 +428,7 @@ static void idmouse_disconnect(struct usb_interface *interface)
 	dev_info(&interface->dev, "disconnected\n");
 }
 
-static int __init usb_idmouse_init(void)
-{
-	int result;
-
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-	       DRIVER_DESC "\n");
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&idmouse_driver);
-	if (result)
-		err("Unable to register device (error %d).", result);
-
-	return result;
-}
-
-static void __exit usb_idmouse_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&idmouse_driver);
-}
-
-module_init(usb_idmouse_init);
-module_exit(usb_idmouse_exit);
+module_usb_driver(idmouse_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

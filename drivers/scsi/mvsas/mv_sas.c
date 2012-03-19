@@ -991,8 +991,6 @@ static void mvs_slot_free(struct mvs_info *mvi, u32 rx_desc)
 static void mvs_slot_task_free(struct mvs_info *mvi, struct sas_task *task,
 			  struct mvs_slot_info *slot, u32 slot_idx)
 {
-	if (!slot)
-		return;
 	if (!slot->task)
 		return;
 	if (!sas_protocol_ata(task->task_proto))
@@ -1637,7 +1635,7 @@ int mvs_abort_task(struct sas_task *task)
 			mv_dprintk("mvs_abort_task() mvi=%p task=%p "
 				   "slot=%p slot_idx=x%x\n",
 				   mvi, task, slot, slot_idx);
-			task->task_state_flags |= SAS_TASK_STATE_ABORTED;
+			mvs_tmf_timedout((unsigned long)task);
 			mvs_slot_task_free(mvi, task, slot, slot_idx);
 			rc = TMF_RESP_FUNC_COMPLETE;
 			goto out;

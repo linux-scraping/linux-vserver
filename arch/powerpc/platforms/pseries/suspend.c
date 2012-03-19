@@ -16,7 +16,6 @@
   * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
   */
 
-#include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/suspend.h>
 #include <linux/stat.h>
@@ -28,7 +27,7 @@
 #include <asm/topology.h>
 
 static u64 stream_id;
-static struct sys_device suspend_sysdev;
+static struct device suspend_dev;
 static DECLARE_COMPLETION(suspend_work);
 static struct rtas_suspend_me_data suspend_data;
 static atomic_t suspending;
@@ -112,8 +111,8 @@ static int pseries_prepare_late(void)
 
 /**
  * store_hibernate - Initiate partition hibernation
- * @classdev:	sysdev class struct
- * @attr:		class device attribute struct
+ * @dev:		subsys root device
+ * @attr:		device attribute struct
  * @buf:		buffer
  * @count:		buffer size
  *
@@ -123,18 +122,14 @@ static int pseries_prepare_late(void)
  * Return value:
  * 	number of bytes printed to buffer / other on failure
  **/
-static ssize_t store_hibernate(struct sysdev_class *classdev,
-			       struct sysdev_class_attribute *attr,
+static ssize_t store_hibernate(struct device *dev,
+			       struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
-	cpumask_var_t offline_mask;
 	int rc;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-
-	if (!alloc_cpumask_var(&offline_mask, GFP_TEMPORARY))
-		return -ENOMEM;
 
 	stream_id = simple_strtoul(buf, NULL, 16);
 
@@ -145,39 +140,23 @@ static ssize_t store_hibernate(struct sysdev_class *classdev,
 	} while (rc == -EAGAIN);
 
 	if (!rc) {
-		/* All present CPUs must be online */
-		cpumask_andnot(offline_mask, cpu_present_mask,
-				cpu_online_mask);
-		rc = rtas_online_cpus_mask(offline_mask);
-		if (rc) {
-			pr_err("%s: Could not bring present CPUs online.\n",
-					__func__);
-			goto out;
-		}
-
 		stop_topology_update();
 		rc = pm_suspend(PM_SUSPEND_MEM);
 		start_topology_update();
-
-		/* Take down CPUs not online prior to suspend */
-		if (!rtas_offline_cpus_mask(offline_mask))
-			pr_warn("%s: Could not restore CPUs to offline "
-					"state.\n", __func__);
 	}
 
 	stream_id = 0;
 
 	if (!rc)
 		rc = count;
-out:
-	free_cpumask_var(offline_mask);
 	return rc;
 }
 
-static SYSDEV_CLASS_ATTR(hibernate, S_IWUSR, NULL, store_hibernate);
+static DEVICE_ATTR(hibernate, S_IWUSR, NULL, store_hibernate);
 
-static struct sysdev_class suspend_sysdev_class = {
+static struct bus_type suspend_subsys = {
 	.name = "power",
+	.dev_name = "power",
 };
 
 static const struct platform_suspend_ops pseries_suspend_ops = {
@@ -193,23 +172,23 @@ static const struct platform_suspend_ops pseries_suspend_ops = {
  * Return value:
  * 	0 on success / other on failure
  **/
-static int pseries_suspend_sysfs_register(struct sys_device *sysdev)
+static int pseries_suspend_sysfs_register(struct device *dev)
 {
 	int rc;
 
-	if ((rc = sysdev_class_register(&suspend_sysdev_class)))
+	if ((rc = subsys_system_register(&suspend_subsys, NULL)))
 		return rc;
 
-	sysdev->id = 0;
-	sysdev->cls = &suspend_sysdev_class;
+	dev->id = 0;
+	dev->bus = &suspend_subsys;
 
-	if ((rc = sysdev_class_create_file(&suspend_sysdev_class, &attr_hibernate)))
-		goto class_unregister;
+	if ((rc = device_create_file(suspend_subsys.dev_root, &dev_attr_hibernate)))
+		goto subsys_unregister;
 
 	return 0;
 
-class_unregister:
-	sysdev_class_unregister(&suspend_sysdev_class);
+subsys_unregister:
+	bus_unregister(&suspend_subsys);
 	return rc;
 }
 
@@ -230,7 +209,7 @@ static int __init pseries_suspend_init(void)
 	if (suspend_data.token == RTAS_UNKNOWN_SERVICE)
 		return 0;
 
-	if ((rc = pseries_suspend_sysfs_register(&suspend_sysdev)))
+	if ((rc = pseries_suspend_sysfs_register(&suspend_dev)))
 		return rc;
 
 	ppc_md.suspend_disable_cpu = pseries_suspend_cpu;

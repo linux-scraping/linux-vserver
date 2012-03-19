@@ -151,6 +151,18 @@ static int alloc_name(char *name)
 	return 0;
 }
 
+static int start_port(struct ib_device *device)
+{
+	return (device->node_type == RDMA_NODE_IB_SWITCH) ? 0 : 1;
+}
+
+
+static int end_port(struct ib_device *device)
+{
+	return (device->node_type == RDMA_NODE_IB_SWITCH) ?
+		0 : device->phys_port_cnt;
+}
+
 /**
  * ib_alloc_device - allocate an IB device struct
  * @size:size of structure to allocate
@@ -220,7 +232,7 @@ static int read_port_table_lengths(struct ib_device *device)
 	if (!tprops)
 		goto out;
 
-	num_ports = rdma_end_port(device) - rdma_start_port(device) + 1;
+	num_ports = end_port(device) - start_port(device) + 1;
 
 	device->pkey_tbl_len = kmalloc(sizeof *device->pkey_tbl_len * num_ports,
 				       GFP_KERNEL);
@@ -230,7 +242,7 @@ static int read_port_table_lengths(struct ib_device *device)
 		goto err;
 
 	for (port_index = 0; port_index < num_ports; ++port_index) {
-		ret = ib_query_port(device, port_index + rdma_start_port(device),
+		ret = ib_query_port(device, port_index + start_port(device),
 					tprops);
 		if (ret)
 			goto err;
@@ -563,7 +575,7 @@ int ib_query_port(struct ib_device *device,
 		  u8 port_num,
 		  struct ib_port_attr *port_attr)
 {
-	if (!rdma_is_port_valid(device, port_num))
+	if (port_num < start_port(device) || port_num > end_port(device))
 		return -EINVAL;
 
 	return device->query_port(device, port_num, port_attr);
@@ -641,7 +653,7 @@ int ib_modify_port(struct ib_device *device,
 	if (!device->modify_port)
 		return -ENOSYS;
 
-	if (!rdma_is_port_valid(device, port_num))
+	if (port_num < start_port(device) || port_num > end_port(device))
 		return -EINVAL;
 
 	return device->modify_port(device, port_num, port_modify_mask,
@@ -664,8 +676,8 @@ int ib_find_gid(struct ib_device *device, union ib_gid *gid,
 	union ib_gid tmp_gid;
 	int ret, port, i;
 
-	for (port = rdma_start_port(device); port <= rdma_end_port(device); ++port) {
-		for (i = 0; i < device->gid_tbl_len[port - rdma_start_port(device)]; ++i) {
+	for (port = start_port(device); port <= end_port(device); ++port) {
+		for (i = 0; i < device->gid_tbl_len[port - start_port(device)]; ++i) {
 			ret = ib_query_gid(device, port, i, &tmp_gid);
 			if (ret)
 				return ret;
@@ -696,7 +708,7 @@ int ib_find_pkey(struct ib_device *device,
 	int ret, i;
 	u16 tmp_pkey;
 
-	for (i = 0; i < device->pkey_tbl_len[port_num - rdma_start_port(device)]; ++i) {
+	for (i = 0; i < device->pkey_tbl_len[port_num - start_port(device)]; ++i) {
 		ret = ib_query_pkey(device, port_num, i, &tmp_pkey);
 		if (ret)
 			return ret;

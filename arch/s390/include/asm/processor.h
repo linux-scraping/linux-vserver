@@ -80,8 +80,6 @@ struct thread_struct {
 	unsigned int  acrs[NUM_ACRS];
         unsigned long ksp;              /* kernel stack pointer             */
 	mm_segment_t mm_segment;
-        unsigned long prot_addr;        /* address of protection-excep.     */
-        unsigned int trap_no;
 	unsigned long gmap_addr;	/* address of last gmap fault. */
 	struct per_regs per_user;	/* User specified PER registers */
 	struct per_event per_event;	/* Cause of the last PER trap */
@@ -130,9 +128,7 @@ struct stack_frame {
 	regs->psw.mask	= psw_user_bits | PSW_MASK_BA;			\
 	regs->psw.addr	= new_psw | PSW_ADDR_AMODE;			\
 	regs->gprs[15]	= new_stackp;					\
-	__tlb_flush_mm(current->mm);					\
 	crst_table_downgrade(current->mm, 1UL << 31);			\
-	update_mm(current->mm, current);				\
 } while (0)
 
 /* Forward declaration, a strange C thing */
@@ -240,7 +236,7 @@ static inline unsigned long __rewind_psw(psw_t psw, unsigned long ilc)
 /*
  * Function to drop a processor into disabled wait state
  */
-static inline void ATTRIB_NORET disabled_wait(unsigned long code)
+static inline void __noreturn disabled_wait(unsigned long code)
 {
         unsigned long ctl_buf;
         psw_t dw_psw;

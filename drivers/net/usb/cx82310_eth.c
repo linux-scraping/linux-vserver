@@ -277,9 +277,12 @@ static struct sk_buff *cx82310_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 {
 	int len = skb->len;
 
-	if (skb_cow_head(skb, 2)) {
+	if (skb_headroom(skb) < 2) {
+		struct sk_buff *skb2 = skb_copy_expand(skb, 2, 0, flags);
 		dev_kfree_skb_any(skb);
-		return NULL;
+		skb = skb2;
+		if (!skb)
+			return NULL;
 	}
 	skb_push(skb, 2);
 
@@ -326,17 +329,7 @@ static struct usb_driver cx82310_driver = {
 	.resume		= usbnet_resume,
 };
 
-static int __init cx82310_init(void)
-{
-	return usb_register(&cx82310_driver);
-}
-module_init(cx82310_init);
-
-static void __exit cx82310_exit(void)
-{
-	usb_deregister(&cx82310_driver);
-}
-module_exit(cx82310_exit);
+module_usb_driver(cx82310_driver);
 
 MODULE_AUTHOR("Ondrej Zary");
 MODULE_DESCRIPTION("Conexant CX82310-based ADSL router USB ethernet driver");

@@ -1167,14 +1167,9 @@ xfs_buf_bio_end_io(
 {
 	xfs_buf_t		*bp = (xfs_buf_t *)bio->bi_private;
 
-	/*
-	 * don't overwrite existing errors - otherwise we can lose errors on
-	 * buffers that require multiple bios to complete.
-	 */
-	if (!bp->b_error)
-		xfs_buf_ioerror(bp, -error);
+	xfs_buf_ioerror(bp, -error);
 
-	if (!bp->b_error && xfs_buf_is_vmapped(bp) && (bp->b_flags & XBF_READ))
+	if (!error && xfs_buf_is_vmapped(bp) && (bp->b_flags & XBF_READ))
 		invalidate_kernel_vmap_range(bp->b_addr, xfs_buf_vmap_len(bp));
 
 	_xfs_buf_ioend(bp, 1);
@@ -1250,11 +1245,6 @@ next_chunk:
 		if (size)
 			goto next_chunk;
 	} else {
-		/*
-		 * This is guaranteed not to be the last io reference count
-		 * because the caller (xfs_buf_iorequest) holds a count itself.
-		 */
-		atomic_dec(&bp->b_io_remaining);
 		xfs_buf_ioerror(bp, EIO);
 		bio_put(bio);
 	}
@@ -1380,7 +1370,7 @@ restart:
 			goto restart;
 		}
 		/*
-		 * clear the LRU reference count so the bufer doesn't get
+		 * clear the LRU reference count so the buffer doesn't get
 		 * ignored in xfs_buf_rele().
 		 */
 		atomic_set(&bp->b_lru_ref, 0);
@@ -1711,12 +1701,8 @@ xfsbufd(
 		struct list_head tmp;
 		struct blk_plug plug;
 
-		if (unlikely(freezing(current))) {
-			set_bit(XBT_FORCE_SLEEP, &target->bt_flags);
-			refrigerator();
-		} else {
-			clear_bit(XBT_FORCE_SLEEP, &target->bt_flags);
-		}
+		if (unlikely(freezing(current)))
+			try_to_freeze();
 
 		/* sleep for a long time if there is nothing to do. */
 		if (list_empty(&target->bt_delwri_queue))

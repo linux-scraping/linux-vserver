@@ -33,14 +33,11 @@
 #include <asm/unaligned.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_tmr.h>
-#include <target/target_core_tpg.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_backend.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
 
-#include "target_core_hba.h"
+#include "target_core_internal.h"
 #include "target_core_pr.h"
 #include "target_core_ua.h"
 
@@ -221,9 +218,6 @@ int target_scsi2_reservation_release(struct se_task *task)
 		goto out_unlock;
 
 	if (dev->dev_reserved_node_acl != sess->se_node_acl)
-		goto out_unlock;
-
-	if (dev->dev_res_bin_isid != sess->sess_bin_isid)
 		goto out_unlock;
 
 	dev->dev_reserved_node_acl = NULL;
@@ -2042,7 +2036,7 @@ static int __core_scsi3_write_aptpl_to_file(
 	if (IS_ERR(file) || !file || !file->f_dentry) {
 		pr_err("filp_open(%s) for APTPL metadata"
 			" failed\n", path);
-		return IS_ERR(file) ? PTR_ERR(file) : -ENOENT;
+		return (PTR_ERR(file) < 0 ? PTR_ERR(file) : -ENOENT);
 	}
 
 	iov[0].iov_base = &buf[0];
@@ -2998,21 +2992,6 @@ static void core_scsi3_release_preempt_and_abort(
 	}
 }
 
-int core_scsi3_check_cdb_abort_and_preempt(
-	struct list_head *preempt_and_abort_list,
-	struct se_cmd *cmd)
-{
-	struct t10_pr_registration *pr_reg, *pr_reg_tmp;
-
-	list_for_each_entry_safe(pr_reg, pr_reg_tmp, preempt_and_abort_list,
-				pr_reg_abort_list) {
-		if (pr_reg->pr_res_key == cmd->pr_res_key)
-			return 0;
-	}
-
-	return 1;
-}
-
 static int core_scsi3_pro_preempt(
 	struct se_cmd *cmd,
 	int type,
@@ -3853,7 +3832,7 @@ int target_scsi3_emulate_pr_out(struct se_task *task)
 			" SPC-2 reservation is held, returning"
 			" RESERVATION_CONFLICT\n");
 		cmd->scsi_sense_reason = TCM_RESERVATION_CONFLICT;
-		ret = -EINVAL;
+		ret = EINVAL;
 		goto out;
 	}
 
@@ -3863,8 +3842,7 @@ int target_scsi3_emulate_pr_out(struct se_task *task)
 	 */
 	if (!cmd->se_sess) {
 		cmd->scsi_sense_reason = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
-		ret = -EINVAL;
-		goto out;
+		return -EINVAL;
 	}
 
 	if (cmd->data_length < 24) {

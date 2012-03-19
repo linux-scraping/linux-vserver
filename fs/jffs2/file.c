@@ -144,7 +144,7 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 		return -ENOMEM;
 	*pagep = pg;
 
-	D1(printk(KERN_DEBUG "%s()\n", __func__));
+	D1(printk(KERN_DEBUG "jffs2_write_begin()\n"));
 
 	if (pageofs > inode->i_size) {
 		/* Make new hole frag from old EOF to new page */

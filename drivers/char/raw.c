@@ -190,7 +190,7 @@ static int bind_get(int number, dev_t *dev)
 	struct raw_device_data *rawdev;
 	struct block_device *bdev;
 
-	if (number <= 0 || number >= max_raw_minors)
+	if (number <= 0 || number >= MAX_RAW_MINORS)
 		return -EINVAL;
 
 	rawdev = &raw_devices[number];
@@ -308,7 +308,7 @@ static const struct file_operations raw_ctl_fops = {
 
 static struct cdev raw_cdev;
 
-static char *raw_devnode(struct device *dev, mode_t *mode)
+static char *raw_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "raw/%s", dev_name(dev));
 }

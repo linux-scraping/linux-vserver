@@ -552,7 +552,7 @@ int iscsi_copy_param_list(
 	param_list = kzalloc(sizeof(struct iscsi_param_list), GFP_KERNEL);
 	if (!param_list) {
 		pr_err("Unable to allocate memory for struct iscsi_param_list.\n");
-		return -1;
+		goto err_out;
 	}
 	INIT_LIST_HEAD(&param_list->param_list);
 	INIT_LIST_HEAD(&param_list->extra_response_list);
@@ -713,9 +713,9 @@ static int iscsi_add_notunderstood_response(
 	}
 	INIT_LIST_HEAD(&extra_response->er_list);
 
-	strlcpy(extra_response->key, key, sizeof(extra_response->key));
-	strlcpy(extra_response->value, NOTUNDERSTOOD,
-		sizeof(extra_response->value));
+	strncpy(extra_response->key, key, strlen(key) + 1);
+	strncpy(extra_response->value, NOTUNDERSTOOD,
+			strlen(NOTUNDERSTOOD) + 1);
 
 	list_add_tail(&extra_response->er_list,
 			&param_list->extra_response_list);
@@ -759,6 +759,22 @@ static void iscsi_check_proposer_for_optional_reply(struct iscsi_param *param)
 			SET_PSTATE_REPLY_OPTIONAL(param);
 	} else if (IS_TYPE_NUMBER(param)) {
 		if (!strcmp(param->name, MAXRECVDATASEGMENTLENGTH))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		/*
+		 * The GlobalSAN iSCSI Initiator for MacOSX does
+		 * not respond to MaxBurstLength, FirstBurstLength,
+		 * DefaultTime2Wait or DefaultTime2Retain parameter keys.
+		 * So, we set them to 'reply optional' here, and assume the
+		 * the defaults from iscsi_parameters.h if the initiator
+		 * is not RFC compliant and the keys are not negotiated.
+		 */
+		if (!strcmp(param->name, MAXBURSTLENGTH))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, FIRSTBURSTLENGTH))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, DEFAULTTIME2WAIT))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, DEFAULTTIME2RETAIN))
 			SET_PSTATE_REPLY_OPTIONAL(param);
 		/*
 		 * Required for gPXE iSCSI boot client
@@ -1556,6 +1572,8 @@ int iscsi_decode_text_input(
 
 		if (phase & PHASE_SECURITY) {
 			if (iscsi_check_for_auth_key(key) > 0) {
+				char *tmpptr = key + strlen(key);
+				*tmpptr = '=';
 				kfree(tmpbuf);
 				return 1;
 			}

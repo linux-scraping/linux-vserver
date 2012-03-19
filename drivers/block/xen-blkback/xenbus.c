@@ -118,7 +118,6 @@ static struct xen_blkif *xen_blkif_alloc(domid_t domid)
 	atomic_set(&blkif->drain, 0);
 	blkif->st_print = jiffies;
 	init_waitqueue_head(&blkif->waiting_to_free);
-	init_waitqueue_head(&blkif->shutdown_wq);
 
 	return blkif;
 }
@@ -179,7 +178,6 @@ static void xen_blkif_disconnect(struct xen_blkif *blkif)
 {
 	if (blkif->xenblkd) {
 		kthread_stop(blkif->xenblkd);
-		wake_up(&blkif->shutdown_wq);
 		blkif->xenblkd = NULL;
 	}
 
@@ -340,6 +338,9 @@ static int xen_vbd_create(struct xen_blkif *blkif, blkif_vdev_t handle,
 	if (q && q->flush_flags)
 		vbd->flush_support = true;
 
+	if (q && blk_queue_secdiscard(q))
+		vbd->discard_secure = true;
+
 	DPRINTK("Successful creation of handle=%04x (dom=%u)\n",
 		handle, blkif->domid);
 	return 0;
@@ -366,7 +367,6 @@ static int xen_blkbk_remove(struct xenbus_device *dev)
 		be->blkif = NULL;
 	}
 
-	kfree(be->mode);
 	kfree(be);
 	dev_set_drvdata(&dev->dev, NULL);
 	return 0;
@@ -422,6 +422,15 @@ int xen_blkbk_discard(struct xenbus_transaction xbt, struct backend_info *be)
 				}
 				state = 1;
 				blkif->blk_backend_type = BLKIF_BACKEND_PHY;
+			}
+			/* Optional. */
+			err = xenbus_printf(xbt, dev->nodename,
+				"discard-secure", "%d",
+				blkif->vbd.discard_secure);
+			if (err) {
+				xenbus_dev_fatal(dev, err,
+					"writting discard-secure");
+				goto kfree;
 			}
 		}
 	} else {
@@ -516,7 +525,6 @@ static void backend_changed(struct xenbus_watch *watch,
 		= container_of(watch, struct backend_info, backend_watch);
 	struct xenbus_device *dev = be->dev;
 	int cdrom = 0;
-	unsigned long handle;
 	char *device_type;
 
 	DPRINTK("");
@@ -536,10 +544,10 @@ static void backend_changed(struct xenbus_watch *watch,
 		return;
 	}
 
-	if (be->major | be->minor) {
-		if (be->major != major || be->minor != minor)
-			pr_warn(DRV_PFX "changing physical device (from %x:%x to %x:%x) not supported.\n",
-				be->major, be->minor, major, minor);
+	if ((be->major || be->minor) &&
+	    ((be->major != major) || (be->minor != minor))) {
+		pr_warn(DRV_PFX "changing physical device (from %x:%x to %x:%x) not supported.\n",
+			be->major, be->minor, major, minor);
 		return;
 	}
 
@@ -557,33 +565,36 @@ static void backend_changed(struct xenbus_watch *watch,
 		kfree(device_type);
 	}
 
-	/* Front end dir is a number, which is used as the handle. */
-	err = strict_strtoul(strrchr(dev->otherend, '/') + 1, 0, &handle);
-	if (err)
-		return;
+	if (be->major == 0 && be->minor == 0) {
+		/* Front end dir is a number, which is used as the handle. */
 
-	be->major = major;
-	be->minor = minor;
+		char *p = strrchr(dev->otherend, '/') + 1;
+		long handle;
+		err = strict_strtoul(p, 0, &handle);
+		if (err)
+			return;
 
-	err = xen_vbd_create(be->blkif, handle, major, minor,
-			     !strchr(be->mode, 'w'), cdrom);
+		be->major = major;
+		be->minor = minor;
 
-	if (err)
-		xenbus_dev_fatal(dev, err, "creating vbd structure");
-	else {
+		err = xen_vbd_create(be->blkif, handle, major, minor,
+				 (NULL == strchr(be->mode, 'w')), cdrom);
+		if (err) {
+			be->major = 0;
+			be->minor = 0;
+			xenbus_dev_fatal(dev, err, "creating vbd structure");
+			return;
+		}
+
 		err = xenvbd_sysfs_addif(dev);
 		if (err) {
 			xen_vbd_free(&be->blkif->vbd);
+			be->major = 0;
+			be->minor = 0;
 			xenbus_dev_fatal(dev, err, "creating sysfs entries");
+			return;
 		}
-	}
 
-	if (err) {
-		kfree(be->mode);
-		be->mode = NULL;
-		be->major = 0;
-		be->minor = 0;
-	} else {
 		/* We're potentially connected now */
 		xen_update_blkif_status(be->blkif);
 	}
@@ -614,7 +625,7 @@ static void frontend_changed(struct xenbus_device *dev,
 	case XenbusStateConnected:
 		/*
 		 * Ensure we connect even when two watches fire in
-		 * close successsion and we miss the intermediate value
+		 * close succession and we miss the intermediate value
 		 * of frontend_state.
 		 */
 		if (dev->state == XenbusStateConnected)
@@ -788,17 +799,14 @@ static const struct xenbus_device_id xen_blkbk_ids[] = {
 };
 
 
-static struct xenbus_driver xen_blkbk = {
-	.name = "vbd",
-	.owner = THIS_MODULE,
-	.ids = xen_blkbk_ids,
+static DEFINE_XENBUS_DRIVER(xen_blkbk, ,
 	.probe = xen_blkbk_probe,
 	.remove = xen_blkbk_remove,
 	.otherend_changed = frontend_changed
-};
+);
 
 
 int xen_blkif_xenbus_init(void)
 {
-	return xenbus_register_backend(&xen_blkbk);
+	return xenbus_register_backend(&xen_blkbk_driver);
 }

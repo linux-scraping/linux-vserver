@@ -104,7 +104,7 @@ static int ndesc_get_rx_status(void *data, struct stmmac_extra_stats *x,
 		ret = discard_frame;
 	}
 	if (unlikely(p->des01.rx.dribbling))
-		ret = discard_frame;
+		x->dribbling_bit++;
 
 	if (unlikely(p->des01.rx.length_error)) {
 		x->rx_length++;
@@ -126,7 +126,6 @@ static void ndesc_init_rx_desc(struct dma_desc *p, unsigned int ring_size,
 {
 	int i;
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
 		p->des01.rx.own = 1;
 		p->des01.rx.buffer1_size = BUF_SIZE_2KiB - 1;
 
@@ -142,7 +141,7 @@ static void ndesc_init_tx_desc(struct dma_desc *p, unsigned int ring_size)
 {
 	int i;
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
+		p->des01.tx.own = 0;
 		ndesc_tx_set_on_ring_chain(p, (i == (ring_size - 1)));
 		p++;
 	}

@@ -1767,13 +1767,14 @@ struct reiserfs_journal_header {
 					      REISERFS_QUOTA_TRANS_BLOCKS(sb)))
 
 #ifdef CONFIG_QUOTA
+#define REISERFS_QUOTA_OPTS ((1 << REISERFS_USRQUOTA) | (1 << REISERFS_GRPQUOTA))
 /* We need to update data and inode (atime) */
-#define REISERFS_QUOTA_TRANS_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & (1<<REISERFS_QUOTA) ? 2 : 0)
+#define REISERFS_QUOTA_TRANS_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & REISERFS_QUOTA_OPTS ? 2 : 0)
 /* 1 balancing, 1 bitmap, 1 data per write + stat data update */
-#define REISERFS_QUOTA_INIT_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & (1<<REISERFS_QUOTA) ? \
+#define REISERFS_QUOTA_INIT_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & REISERFS_QUOTA_OPTS ? \
 (DQUOT_INIT_ALLOC*(JOURNAL_PER_BALANCE_CNT+2)+DQUOT_INIT_REWRITE+1) : 0)
 /* same as with INIT */
-#define REISERFS_QUOTA_DEL_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & (1<<REISERFS_QUOTA) ? \
+#define REISERFS_QUOTA_DEL_BLOCKS(s) (REISERFS_SB(s)->s_mount_opt & REISERFS_QUOTA_OPTS ? \
 (DQUOT_DEL_ALLOC*(JOURNAL_PER_BALANCE_CNT+2)+DQUOT_DEL_REWRITE+1) : 0)
 #else
 #define REISERFS_QUOTA_TRANS_BLOCKS(s) 0
@@ -1890,7 +1891,6 @@ struct reiserfs_transaction_handle *reiserfs_persistent_transaction(struct
 								    *,
 								    int count);
 int reiserfs_end_persistent_transaction(struct reiserfs_transaction_handle *);
-void reiserfs_vfs_truncate_file(struct inode *inode);
 int reiserfs_commit_page(struct inode *inode, struct page *page,
 			 unsigned from, unsigned to);
 int reiserfs_flush_old_commits(struct super_block *);
@@ -2065,7 +2065,7 @@ struct inode *reiserfs_iget(struct super_block *s, const struct cpu_key *key);
 
 struct reiserfs_security_handle;
 int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
-		       struct inode *dir, int mode,
+		       struct inode *dir, umode_t mode,
 		       const char *symname, loff_t i_size,
 		       struct dentry *dentry, struct inode *inode,
 		       struct reiserfs_security_handle *security);

@@ -12,9 +12,8 @@ fb-y                              := fbmem.o fbmon.o fbcmap.o fbsysfs.o \
 fb-objs                           := $(fb-y)
 
 obj-$(CONFIG_VT)		  += console/
-obj-$(CONFIG_FB_STI)		  += console/
 obj-$(CONFIG_LOGO)		  += logo/
-obj-y				  += backlight/ display/
+obj-y				  += backlight/
 
 obj-$(CONFIG_FB_CFB_FILLRECT)  += cfbfillrect.o
 obj-$(CONFIG_FB_CFB_COPYAREA)  += cfbcopyarea.o

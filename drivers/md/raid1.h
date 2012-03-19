@@ -12,6 +12,9 @@ struct mirror_info {
  * pool was allocated for, so they know how much to allocate and free.
  * mddev->raid_disks cannot be used, as it can change while a pool is active
  * These two datums are stored in a kmalloced struct.
+ * The 'raid_disks' here is twice the raid_disks in r1conf.
+ * This allows space for each 'real' device can have a replacement in the
+ * second half of the array.
  */
 
 struct pool_info {
@@ -21,7 +24,9 @@ struct pool_info {
 
 struct r1conf {
 	struct mddev		*mddev;
-	struct mirror_info		*mirrors;
+	struct mirror_info	*mirrors;	/* twice 'raid_disks' to
+						 * allow for replacements.
+						 */
 	int			raid_disks;
 
 	/* When choose the best device for a read (read_balance())
@@ -43,11 +48,6 @@ struct r1conf {
 	 * block, or anything else.
 	 */
 	struct list_head	retry_list;
-	/* A separate list of r1bio which just need raid_end_bio_io called.
-	 * This mustn't happen for writes which had any errors if the superblock
-	 * needs to be written.
-	 */
-	struct list_head	bio_end_io_list;
 
 	/* queue pending writes to be submitted on unplug */
 	struct bio_list		pending_bio_list;

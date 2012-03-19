@@ -34,9 +34,9 @@
 
 
 #ifdef CONFIG_USB_SERIAL_DEBUG
-static int debug = 1;
+static bool debug = 1;
 #else
-static int debug;
+static bool debug;
 #endif
 
 /*
@@ -65,7 +65,7 @@ static int clockmode = 1;
 static int cdmode = 1;
 static int iuu_cardin;
 static int iuu_cardout;
-static int xmas;
+static bool xmas;
 static int vcc_default = 5;
 
 static void read_rxcmd_callback(struct urb *urb);
@@ -112,12 +112,7 @@ static int iuu_alloc_buf(struct iuu_private *priv)
 
 static int iuu_startup(struct usb_serial *serial)
 {
-	unsigned char num_ports = serial->num_ports;
 	struct iuu_private *priv;
-
-	if (serial->num_bulk_in < num_ports || serial->num_bulk_out < num_ports)
-		return -ENODEV;
-
 	priv = kzalloc(sizeof(struct iuu_private), GFP_KERNEL);
 	dbg("%s- priv allocation success", __func__);
 	if (!priv)
@@ -332,7 +327,7 @@ static int bulk_immediate(struct usb_serial_port *port, u8 *buf, u8 count)
 	    usb_bulk_msg(serial->dev,
 			 usb_sndbulkpipe(serial->dev,
 					 port->bulk_out_endpointAddress), buf,
-			 count, &actual, 1000);
+			 count, &actual, HZ * 1);
 
 	if (status != IUU_OPERATION_OK)
 		dbg("%s - error = %2x", __func__, status);
@@ -355,7 +350,7 @@ static int read_immediate(struct usb_serial_port *port, u8 *buf, u8 count)
 	    usb_bulk_msg(serial->dev,
 			 usb_rcvbulkpipe(serial->dev,
 					 port->bulk_in_endpointAddress), buf,
-			 count, &actual, 1000);
+			 count, &actual, HZ * 1);
 
 	if (status != IUU_OPERATION_OK)
 		dbg("%s - error = %2x", __func__, status);
@@ -1173,15 +1168,14 @@ static int iuu_open(struct tty_struct *tty, struct usb_serial_port *port)
 			  port->write_urb->transfer_buffer, 1,
 			  read_rxcmd_callback, port);
 	result = usb_submit_urb(port->write_urb, GFP_KERNEL);
-
 	if (result) {
 		dev_err(&port->dev, "%s - failed submitting read urb,"
 			" error %d\n", __func__, result);
 		iuu_close(port);
-		return -EPROTO;
 	} else {
 		dbg("%s - rxcmd OK", __func__);
 	}
+
 	return result;
 }
 

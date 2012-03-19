@@ -44,7 +44,6 @@ struct crypto_rfc4543_ctx {
 
 struct crypto_rfc4543_req_ctx {
 	u8 auth_tag[16];
-	u8 assocbuf[32];
 	struct scatterlist cipher[1];
 	struct scatterlist payload[2];
 	struct scatterlist assoc[2];
@@ -103,7 +102,7 @@ static int crypto_gcm_setkey(struct crypto_aead *aead, const u8 *key,
 	struct crypto_ablkcipher *ctr = ctx->ctr;
 	struct {
 		be128 hash;
-		u8 iv[16];
+		u8 iv[8];
 
 		struct crypto_gcm_setkey_result result;
 
@@ -140,8 +139,10 @@ static int crypto_gcm_setkey(struct crypto_aead *aead, const u8 *key,
 
 	err = crypto_ablkcipher_encrypt(&data->req);
 	if (err == -EINPROGRESS || err == -EBUSY) {
-		wait_for_completion(&data->result.completion);
-		err = data->result.err;
+		err = wait_for_completion_interruptible(
+			&data->result.completion);
+		if (!err)
+			err = data->result.err;
 	}
 
 	if (err)
@@ -709,9 +710,7 @@ static struct crypto_instance *crypto_gcm_alloc_common(struct rtattr **tb,
 
 	ghash_alg = crypto_find_alg(ghash_name, &crypto_ahash_type,
 				    CRYPTO_ALG_TYPE_HASH,
-				    CRYPTO_ALG_TYPE_AHASH_MASK |
-				    crypto_requires_sync(algt->type,
-							 algt->mask));
+				    CRYPTO_ALG_TYPE_AHASH_MASK);
 	err = PTR_ERR(ghash_alg);
 	if (IS_ERR(ghash_alg))
 		return ERR_PTR(err);
@@ -1103,21 +1102,6 @@ static int crypto_rfc4543_setauthsize(struct crypto_aead *parent,
 	return crypto_aead_setauthsize(ctx->child, authsize);
 }
 
-static void crypto_rfc4543_done(struct crypto_async_request *areq, int err)
-{
-	struct aead_request *req = areq->data;
-	struct crypto_aead *aead = crypto_aead_reqtfm(req);
-	struct crypto_rfc4543_req_ctx *rctx = crypto_rfc4543_reqctx(req);
-
-	if (!err) {
-		scatterwalk_map_and_copy(rctx->auth_tag, req->dst,
-					 req->cryptlen,
-					 crypto_aead_authsize(aead), 1);
-	}
-
-	aead_request_complete(req, err);
-}
-
 static struct aead_request *crypto_rfc4543_crypt(struct aead_request *req,
 						 int enc)
 {
@@ -1158,27 +1142,14 @@ static struct aead_request *crypto_rfc4543_crypt(struct aead_request *req,
 	scatterwalk_crypto_chain(payload, dst, vdst == req->iv + 8, 2);
 	assoclen += 8 + req->cryptlen - (enc ? 0 : authsize);
 
-	if (req->assoc->length == req->assoclen) {
-		sg_init_table(assoc, 2);
-		sg_set_page(assoc, sg_page(req->assoc), req->assoc->length,
-			    req->assoc->offset);
-	} else {
-		BUG_ON(req->assoclen > sizeof(rctx->assocbuf));
-
-		scatterwalk_map_and_copy(rctx->assocbuf, req->assoc, 0,
-					 req->assoclen, 0);
-
-		sg_init_table(assoc, 2);
-		sg_set_buf(assoc, rctx->assocbuf, req->assoclen);
-	}
+	sg_init_table(assoc, 2);
+	sg_set_page(assoc, sg_page(req->assoc), req->assoc->length,
+		    req->assoc->offset);
 	scatterwalk_crypto_chain(assoc, payload, 0, 2);
 
 	aead_request_set_tfm(subreq, ctx->child);
-	aead_request_set_callback(subreq, req->base.flags, crypto_rfc4543_done,
-				  req);
-	if (!enc)
-		aead_request_set_callback(subreq, req->base.flags,
-					  req->base.complete, req->base.data);
+	aead_request_set_callback(subreq, req->base.flags, req->base.complete,
+				  req->base.data);
 	aead_request_set_crypt(subreq, cipher, cipher, enc ? 0 : authsize, iv);
 	aead_request_set_assoc(subreq, assoc, assoclen);
 
@@ -1392,7 +1363,6 @@ module_exit(crypto_gcm_module_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Galois/Counter Mode");
 MODULE_AUTHOR("Mikko Herranen <mh1@iki.fi>");
-MODULE_ALIAS_CRYPTO("gcm_base");
-MODULE_ALIAS_CRYPTO("rfc4106");
-MODULE_ALIAS_CRYPTO("rfc4543");
-MODULE_ALIAS_CRYPTO("gcm");
+MODULE_ALIAS("gcm_base");
+MODULE_ALIAS("rfc4106");
+MODULE_ALIAS("rfc4543");

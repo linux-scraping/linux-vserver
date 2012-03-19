@@ -22,7 +22,6 @@ enum vsyscall_num {
 /* kernel space (writeable) */
 extern int vgetcpu_mode;
 extern struct timezone sys_tz;
-extern unsigned long vsyscall_pgprot;
 
 #include <asm/vvar.h>
 

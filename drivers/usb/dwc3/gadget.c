@@ -65,6 +65,22 @@ void dwc3_map_buffer_to_dma(struct dwc3_request *req)
 		return;
 	}
 
+	if (req->request.num_sgs) {
+		int	mapped;
+
+		mapped = dma_map_sg(dwc->dev, req->request.sg,
+				req->request.num_sgs,
+				req->direction ? DMA_TO_DEVICE
+				: DMA_FROM_DEVICE);
+		if (mapped < 0) {
+			dev_err(dwc->dev, "failed to map SGs\n");
+			return;
+		}
+
+		req->request.num_mapped_sgs = mapped;
+		return;
+	}
+
 	if (req->request.dma == DMA_ADDR_INVALID) {
 		req->request.dma = dma_map_single(dwc->dev, req->request.buf,
 				req->request.length, req->direction
@@ -79,6 +95,17 @@ void dwc3_unmap_buffer_from_dma(struct dwc3_request *req)
 
 	if (req->request.length == 0) {
 		req->request.dma = DMA_ADDR_INVALID;
+		return;
+	}
+
+	if (req->request.num_mapped_sgs) {
+		req->request.dma = DMA_ADDR_INVALID;
+		dma_unmap_sg(dwc->dev, req->request.sg,
+				req->request.num_mapped_sgs,
+				req->direction ? DMA_TO_DEVICE
+				: DMA_FROM_DEVICE);
+
+		req->request.num_mapped_sgs = 0;
 		return;
 	}
 
@@ -97,7 +124,11 @@ void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 	struct dwc3			*dwc = dep->dwc;
 
 	if (req->queued) {
-		dep->busy_slot++;
+		if (req->request.num_mapped_sgs)
+			dep->busy_slot += req->request.num_mapped_sgs;
+		else
+			dep->busy_slot++;
+
 		/*
 		 * Skip LINK TRB. We can't use req->trb and check for
 		 * DWC3_TRBCTL_LINK_TRB because it points the TRB we just
@@ -108,6 +139,7 @@ void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 			dep->busy_slot++;
 	}
 	list_del(&req->list);
+	req->trb = NULL;
 
 	if (req->request.status == -EINPROGRESS)
 		req->request.status = status;
@@ -171,8 +203,6 @@ int dwc3_send_gadget_ep_cmd(struct dwc3 *dwc, unsigned ep,
 		if (!(reg & DWC3_DEPCMD_CMDACT)) {
 			dev_vdbg(dwc->dev, "Command Complete --> %d\n",
 					DWC3_DEPCMD_STATUS(reg));
-			if (DWC3_DEPCMD_STATUS(reg))
-				return -EINVAL;
 			return 0;
 		}
 
@@ -229,73 +259,32 @@ static void dwc3_free_trb_pool(struct dwc3_ep *dep)
 	dep->trb_pool_dma = 0;
 }
 
-static int dwc3_gadget_set_xfer_resource(struct dwc3 *dwc, struct dwc3_ep *dep);
-
-/**
- * dwc3_gadget_start_config - Configure EP resources
- * @dwc: pointer to our controller context structure
- * @dep: endpoint that is being enabled
- *
- * The assignment of transfer resources cannot perfectly follow the
- * data book due to the fact that the controller driver does not have
- * all knowledge of the configuration in advance. It is given this
- * information piecemeal by the composite gadget framework after every
- * SET_CONFIGURATION and SET_INTERFACE. Trying to follow the databook
- * programming model in this scenario can cause errors. For two
- * reasons:
- *
- * 1) The databook says to do DEPSTARTCFG for every SET_CONFIGURATION
- * and SET_INTERFACE (8.1.5). This is incorrect in the scenario of
- * multiple interfaces.
- *
- * 2) The databook does not mention doing more DEPXFERCFG for new
- * endpoint on alt setting (8.1.6).
- *
- * The following simplified method is used instead:
- *
- * All hardware endpoints can be assigned a transfer resource and this
- * setting will stay persistent until either a core reset or
- * hibernation. So whenever we do a DEPSTARTCFG(0) we can go ahead and
- * do DEPXFERCFG for every hardware endpoint as well. We are
- * guaranteed that there are as many transfer resources as endpoints.
- *
- * This function is called for each endpoint when it is being enabled
- * but is triggered only when called for EP0-out, which always happens
- * first, and which should only happen in one of the above conditions.
- */
 static int dwc3_gadget_start_config(struct dwc3 *dwc, struct dwc3_ep *dep)
 {
 	struct dwc3_gadget_ep_cmd_params params;
 	u32			cmd;
-	int			i;
-	int			ret;
-
-	if (dep->number)
-		return 0;
 
 	memset(&params, 0x00, sizeof(params));
-	cmd = DWC3_DEPCMD_DEPSTARTCFG;
 
-	ret = dwc3_send_gadget_ep_cmd(dwc, 0, cmd, &params);
-	if (ret)
-		return ret;
+	if (dep->number != 1) {
+		cmd = DWC3_DEPCMD_DEPSTARTCFG;
+		/* XferRscIdx == 0 for ep0 and 2 for the remaining */
+		if (dep->number > 1) {
+			if (dwc->start_config_issued)
+				return 0;
+			dwc->start_config_issued = true;
+			cmd |= DWC3_DEPCMD_PARAM(2);
+		}
 
-	for (i = 0; i < DWC3_ENDPOINTS_NUM; i++) {
-		struct dwc3_ep *dep = dwc->eps[i];
-
-		if (!dep)
-			continue;
-
-		ret = dwc3_gadget_set_xfer_resource(dwc, dep);
-		if (ret)
-			return ret;
+		return dwc3_send_gadget_ep_cmd(dwc, 0, cmd, &params);
 	}
 
 	return 0;
 }
 
 static int dwc3_gadget_set_ep_config(struct dwc3 *dwc, struct dwc3_ep *dep,
-		const struct usb_endpoint_descriptor *desc)
+		const struct usb_endpoint_descriptor *desc,
+		const struct usb_ss_ep_comp_descriptor *comp_desc)
 {
 	struct dwc3_gadget_ep_cmd_params params;
 
@@ -308,7 +297,7 @@ static int dwc3_gadget_set_ep_config(struct dwc3 *dwc, struct dwc3_ep *dep,
 	params.param1 = DWC3_DEPCFG_XFER_COMPLETE_EN
 		| DWC3_DEPCFG_XFER_NOT_READY_EN;
 
-	if (usb_endpoint_xfer_bulk(desc) && dep->endpoint.max_streams) {
+	if (usb_ss_max_streams(comp_desc) && usb_endpoint_xfer_bulk(desc)) {
 		params.param1 |= DWC3_DEPCFG_STREAM_CAPABLE
 			| DWC3_DEPCFG_STREAM_EVENT_EN;
 		dep->stream_capable = true;
@@ -361,7 +350,8 @@ static int dwc3_gadget_set_xfer_resource(struct dwc3 *dwc, struct dwc3_ep *dep)
  * Caller should take care of locking
  */
 static int __dwc3_gadget_ep_enable(struct dwc3_ep *dep,
-		const struct usb_endpoint_descriptor *desc)
+		const struct usb_endpoint_descriptor *desc,
+		const struct usb_ss_ep_comp_descriptor *comp_desc)
 {
 	struct dwc3		*dwc = dep->dwc;
 	u32			reg;
@@ -373,7 +363,7 @@ static int __dwc3_gadget_ep_enable(struct dwc3_ep *dep,
 			return ret;
 	}
 
-	ret = dwc3_gadget_set_ep_config(dwc, dep, desc);
+	ret = dwc3_gadget_set_ep_config(dwc, dep, desc, comp_desc);
 	if (ret)
 		return ret;
 
@@ -382,7 +372,12 @@ static int __dwc3_gadget_ep_enable(struct dwc3_ep *dep,
 		struct dwc3_trb_hw	*trb_link_hw;
 		struct dwc3_trb		trb_link;
 
+		ret = dwc3_gadget_set_xfer_resource(dwc, dep);
+		if (ret)
+			return ret;
+
 		dep->desc = desc;
+		dep->comp_desc = comp_desc;
 		dep->type = usb_endpoint_type(desc);
 		dep->flags |= DWC3_EP_ENABLED;
 
@@ -445,6 +440,7 @@ static int __dwc3_gadget_ep_disable(struct dwc3_ep *dep)
 
 	dep->stream_capable = false;
 	dep->desc = NULL;
+	dep->comp_desc = NULL;
 	dep->type = 0;
 	dep->flags = 0;
 
@@ -489,16 +485,16 @@ static int dwc3_gadget_ep_enable(struct usb_ep *ep,
 
 	switch (usb_endpoint_type(desc)) {
 	case USB_ENDPOINT_XFER_CONTROL:
-		strlcat(dep->name, "-control", sizeof(dep->name));
+		strncat(dep->name, "-control", sizeof(dep->name));
 		break;
 	case USB_ENDPOINT_XFER_ISOC:
-		strlcat(dep->name, "-isoc", sizeof(dep->name));
+		strncat(dep->name, "-isoc", sizeof(dep->name));
 		break;
 	case USB_ENDPOINT_XFER_BULK:
-		strlcat(dep->name, "-bulk", sizeof(dep->name));
+		strncat(dep->name, "-bulk", sizeof(dep->name));
 		break;
 	case USB_ENDPOINT_XFER_INT:
-		strlcat(dep->name, "-int", sizeof(dep->name));
+		strncat(dep->name, "-int", sizeof(dep->name));
 		break;
 	default:
 		dev_err(dwc->dev, "invalid endpoint transfer type\n");
@@ -513,7 +509,7 @@ static int dwc3_gadget_ep_enable(struct usb_ep *ep,
 	dev_vdbg(dwc->dev, "Enabling %s\n", dep->name);
 
 	spin_lock_irqsave(&dwc->lock, flags);
-	ret = __dwc3_gadget_ep_enable(dep, desc);
+	ret = __dwc3_gadget_ep_enable(dep, desc, ep->comp_desc);
 	spin_unlock_irqrestore(&dwc->lock, flags);
 
 	return ret;
@@ -579,6 +575,85 @@ static void dwc3_gadget_ep_free_request(struct usb_ep *ep,
 	kfree(req);
 }
 
+/**
+ * dwc3_prepare_one_trb - setup one TRB from one request
+ * @dep: endpoint for which this request is prepared
+ * @req: dwc3_request pointer
+ */
+static void dwc3_prepare_one_trb(struct dwc3_ep *dep,
+		struct dwc3_request *req, dma_addr_t dma,
+		unsigned length, unsigned last, unsigned chain)
+{
+	struct dwc3		*dwc = dep->dwc;
+	struct dwc3_trb_hw	*trb_hw;
+	struct dwc3_trb		trb;
+
+	unsigned int		cur_slot;
+
+	dev_vdbg(dwc->dev, "%s: req %p dma %08llx length %d%s%s\n",
+			dep->name, req, (unsigned long long) dma,
+			length, last ? " last" : "",
+			chain ? " chain" : "");
+
+	trb_hw = &dep->trb_pool[dep->free_slot & DWC3_TRB_MASK];
+	cur_slot = dep->free_slot;
+	dep->free_slot++;
+
+	/* Skip the LINK-TRB on ISOC */
+	if (((cur_slot & DWC3_TRB_MASK) == DWC3_TRB_NUM - 1) &&
+			usb_endpoint_xfer_isoc(dep->desc))
+		return;
+
+	memset(&trb, 0, sizeof(trb));
+	if (!req->trb) {
+		dwc3_gadget_move_request_queued(req);
+		req->trb = trb_hw;
+		req->trb_dma = dwc3_trb_dma_offset(dep, trb_hw);
+	}
+
+	if (usb_endpoint_xfer_isoc(dep->desc)) {
+		trb.isp_imi = true;
+		trb.csp = true;
+	} else {
+		trb.chn = chain;
+		trb.lst = last;
+	}
+
+	if (usb_endpoint_xfer_bulk(dep->desc) && dep->stream_capable)
+		trb.sid_sofn = req->request.stream_id;
+
+	switch (usb_endpoint_type(dep->desc)) {
+	case USB_ENDPOINT_XFER_CONTROL:
+		trb.trbctl = DWC3_TRBCTL_CONTROL_SETUP;
+		break;
+
+	case USB_ENDPOINT_XFER_ISOC:
+		trb.trbctl = DWC3_TRBCTL_ISOCHRONOUS_FIRST;
+
+		/* IOC every DWC3_TRB_NUM / 4 so we can refill */
+		if (!(cur_slot % (DWC3_TRB_NUM / 4)))
+			trb.ioc = last;
+		break;
+
+	case USB_ENDPOINT_XFER_BULK:
+	case USB_ENDPOINT_XFER_INT:
+		trb.trbctl = DWC3_TRBCTL_NORMAL;
+		break;
+	default:
+		/*
+		 * This is only possible with faulty memory because we
+		 * checked it already :)
+		 */
+		BUG();
+	}
+
+	trb.length	= length;
+	trb.bplh	= dma;
+	trb.hwo		= true;
+
+	dwc3_trb_to_hw(&trb, trb_hw);
+}
+
 /*
  * dwc3_prepare_trbs - setup TRBs from requests
  * @dep: endpoint for which requests are being prepared
@@ -588,18 +663,17 @@ static void dwc3_gadget_ep_free_request(struct usb_ep *ep,
  * transfers. The functions returns once there are not more TRBs available or
  * it run out of requests.
  */
-static struct dwc3_request *dwc3_prepare_trbs(struct dwc3_ep *dep,
-		bool starting)
+static void dwc3_prepare_trbs(struct dwc3_ep *dep, bool starting)
 {
-	struct dwc3_request	*req, *n, *ret = NULL;
-	struct dwc3_trb_hw	*trb_hw;
-	struct dwc3_trb		trb;
+	struct dwc3_request	*req, *n;
 	u32			trbs_left;
+	unsigned int		last_one = 0;
 
 	BUILD_BUG_ON_NOT_POWER_OF_2(DWC3_TRB_NUM);
 
 	/* the first request must not be queued */
 	trbs_left = (dep->busy_slot - dep->free_slot) & DWC3_TRB_MASK;
+
 	/*
 	 * if busy & slot are equal than it is either full or empty. If we are
 	 * starting to proceed requests then we are empty. Otherwise we ar
@@ -607,7 +681,7 @@ static struct dwc3_request *dwc3_prepare_trbs(struct dwc3_ep *dep,
 	 */
 	if (!trbs_left) {
 		if (!starting)
-			return NULL;
+			return;
 		trbs_left = DWC3_TRB_NUM;
 		/*
 		 * In case we start from scratch, we queue the ISOC requests
@@ -631,94 +705,62 @@ static struct dwc3_request *dwc3_prepare_trbs(struct dwc3_ep *dep,
 
 	/* The last TRB is a link TRB, not used for xfer */
 	if ((trbs_left <= 1) && usb_endpoint_xfer_isoc(dep->desc))
-		return NULL;
+		return;
 
 	list_for_each_entry_safe(req, n, &dep->request_list, list) {
-		unsigned int last_one = 0;
-		unsigned int cur_slot;
+		unsigned	length;
+		dma_addr_t	dma;
 
-		trb_hw = &dep->trb_pool[dep->free_slot & DWC3_TRB_MASK];
-		cur_slot = dep->free_slot;
-		dep->free_slot++;
+		if (req->request.num_mapped_sgs > 0) {
+			struct usb_request *request = &req->request;
+			struct scatterlist *sg = request->sg;
+			struct scatterlist *s;
+			int		i;
 
-		/* Skip the LINK-TRB on ISOC */
-		if (((cur_slot & DWC3_TRB_MASK) == DWC3_TRB_NUM - 1) &&
-				usb_endpoint_xfer_isoc(dep->desc))
-			continue;
+			for_each_sg(sg, s, request->num_mapped_sgs, i) {
+				unsigned chain = true;
 
-		dwc3_gadget_move_request_queued(req);
-		memset(&trb, 0, sizeof(trb));
-		trbs_left--;
+				length = sg_dma_len(s);
+				dma = sg_dma_address(s);
 
-		/* Is our TRB pool empty? */
-		if (!trbs_left)
-			last_one = 1;
-		/* Is this the last request? */
-		if (list_empty(&dep->request_list))
-			last_one = 1;
+				if (i == (request->num_mapped_sgs - 1)
+						|| sg_is_last(s)) {
+					last_one = true;
+					chain = false;
+				}
 
-		/*
-		 * FIXME we shouldn't need to set LST bit always but we are
-		 * facing some weird problem with the Hardware where it doesn't
-		 * complete even though it has been previously started.
-		 *
-		 * While we're debugging the problem, as a workaround to
-		 * multiple TRBs handling, use only one TRB at a time.
-		 */
-		last_one = 1;
+				trbs_left--;
+				if (!trbs_left)
+					last_one = true;
 
-		req->trb = trb_hw;
-		if (!ret)
-			ret = req;
+				if (last_one)
+					chain = false;
 
-		trb.bplh = req->request.dma;
+				dwc3_prepare_one_trb(dep, req, dma, length,
+						last_one, chain);
 
-		if (usb_endpoint_xfer_isoc(dep->desc)) {
-			trb.isp_imi = true;
-			trb.csp = true;
+				if (last_one)
+					break;
+			}
 		} else {
-			trb.lst = last_one;
+			dma = req->request.dma;
+			length = req->request.length;
+			trbs_left--;
+
+			if (!trbs_left)
+				last_one = 1;
+
+			/* Is this the last request? */
+			if (list_is_last(&req->list, &dep->request_list))
+				last_one = 1;
+
+			dwc3_prepare_one_trb(dep, req, dma, length,
+					last_one, false);
+
+			if (last_one)
+				break;
 		}
-
-		if (usb_endpoint_xfer_bulk(dep->desc) && dep->stream_capable)
-			trb.sid_sofn = req->request.stream_id;
-
-		switch (usb_endpoint_type(dep->desc)) {
-		case USB_ENDPOINT_XFER_CONTROL:
-			trb.trbctl = DWC3_TRBCTL_CONTROL_SETUP;
-			break;
-
-		case USB_ENDPOINT_XFER_ISOC:
-			trb.trbctl = DWC3_TRBCTL_ISOCHRONOUS_FIRST;
-
-			/* IOC every DWC3_TRB_NUM / 4 so we can refill */
-			if (!(cur_slot % (DWC3_TRB_NUM / 4)))
-				trb.ioc = last_one;
-			break;
-
-		case USB_ENDPOINT_XFER_BULK:
-		case USB_ENDPOINT_XFER_INT:
-			trb.trbctl = DWC3_TRBCTL_NORMAL;
-			break;
-		default:
-			/*
-			 * This is only possible with faulty memory because we
-			 * checked it already :)
-			 */
-			BUG();
-		}
-
-		trb.length	= req->request.length;
-		trb.hwo = true;
-
-		dwc3_trb_to_hw(&trb, trb_hw);
-		req->trb_dma = dwc3_trb_dma_offset(dep, trb_hw);
-
-		if (last_one)
-			break;
 	}
-
-	return ret;
 }
 
 static int __dwc3_gadget_kick_transfer(struct dwc3_ep *dep, u16 cmd_param,
@@ -747,11 +789,13 @@ static int __dwc3_gadget_kick_transfer(struct dwc3_ep *dep, u16 cmd_param,
 		/* req points to the first request which will be sent */
 		req = next_request(&dep->req_queued);
 	} else {
+		dwc3_prepare_trbs(dep, start_new);
+
 		/*
 		 * req points to the first request where HWO changed
 		 * from 0 to 1
 		 */
-		req = dwc3_prepare_trbs(dep, start_new);
+		req = next_request(&dep->req_queued);
 	}
 	if (!req) {
 		dep->flags |= DWC3_EP_PENDING_REQUEST;
@@ -785,8 +829,9 @@ static int __dwc3_gadget_kick_transfer(struct dwc3_ep *dep, u16 cmd_param,
 	dep->flags |= DWC3_EP_BUSY;
 	dep->res_trans_idx = dwc3_gadget_ep_get_transfer_index(dwc,
 			dep->number);
-	if (!dep->res_trans_idx)
-		printk_once(KERN_ERR "%s() res_trans_idx is invalid\n", __func__);
+
+	WARN_ON_ONCE(!dep->res_trans_idx);
+
 	return 0;
 }
 
@@ -925,9 +970,6 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value)
 	memset(&params, 0x00, sizeof(params));
 
 	if (value) {
-		if (dep->flags & DWC3_EP_STALL)
-			return 0;
-
 		if (dep->number == 0 || dep->number == 1) {
 			/*
 			 * Whenever EP0 is stalled, we will restart
@@ -946,7 +988,7 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value)
 		else
 			dep->flags |= DWC3_EP_STALL;
 	} else {
-		if (!(dep->flags & DWC3_EP_STALL))
+		if (dep->flags & DWC3_EP_WEDGE)
 			return 0;
 
 		ret = dwc3_send_gadget_ep_cmd(dwc, dep->number,
@@ -956,7 +998,7 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value)
 					value ? "set" : "clear",
 					dep->name);
 		else
-			dep->flags &= ~(DWC3_EP_STALL | DWC3_EP_WEDGE);
+			dep->flags &= ~DWC3_EP_STALL;
 	}
 
 	return ret;
@@ -1198,49 +1240,25 @@ static int dwc3_gadget_start(struct usb_gadget *g,
 	dwc->gadget_driver	= driver;
 	dwc->gadget.dev.driver	= &driver->driver;
 
-	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
-
-	reg &= ~DWC3_GCTL_SCALEDOWN(3);
-	reg &= ~DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_OTG);
-	reg &= ~DWC3_GCTL_DISSCRAMBLE;
-	reg |= DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_DEVICE);
-
-	switch (DWC3_GHWPARAMS1_EN_PWROPT(dwc->hwparams.hwparams0)) {
-	case DWC3_GHWPARAMS1_EN_PWROPT_CLK:
-		reg &= ~DWC3_GCTL_DSBLCLKGTNG;
-		break;
-	default:
-		dev_dbg(dwc->dev, "No power optimization available\n");
-	}
-
-	/*
-	 * WORKAROUND: DWC3 revisions <1.90a have a bug
-	 * when The device fails to connect at SuperSpeed
-	 * and falls back to high-speed mode which causes
-	 * the device to enter in a Connect/Disconnect loop
-	 */
-	if (dwc->revision < DWC3_REVISION_190A)
-		reg |= DWC3_GCTL_U2RSTECN;
-
-	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
-
 	reg = dwc3_readl(dwc->regs, DWC3_DCFG);
 	reg &= ~(DWC3_DCFG_SPEED_MASK);
-	reg |= DWC3_DCFG_SUPERSPEED;
+	reg |= dwc->maximum_speed;
 	dwc3_writel(dwc->regs, DWC3_DCFG, reg);
+
+	dwc->start_config_issued = false;
 
 	/* Start with SuperSpeed Default */
 	dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(512);
 
 	dep = dwc->eps[0];
-	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc);
+	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc, NULL);
 	if (ret) {
 		dev_err(dwc->dev, "failed to enable %s\n", dep->name);
 		goto err0;
 	}
 
 	dep = dwc->eps[1];
-	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc);
+	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc, NULL);
 	if (ret) {
 		dev_err(dwc->dev, "failed to enable %s\n", dep->name);
 		goto err1;
@@ -1258,7 +1276,6 @@ err1:
 	__dwc3_gadget_ep_disable(dwc->eps[0]);
 
 err0:
-	dwc->gadget_driver = NULL;
 	spin_unlock_irqrestore(&dwc->lock, flags);
 
 	return ret;
@@ -1319,7 +1336,6 @@ static int __devinit dwc3_gadget_init_endpoints(struct dwc3 *dwc)
 
 		if (epnum == 0 || epnum == 1) {
 			dep->endpoint.maxpacket = 512;
-			dep->endpoint.maxburst = 1;
 			dep->endpoint.ops = &dwc3_gadget_ep0_ops;
 			if (!epnum)
 				dwc->gadget.ep0 = &dep->endpoint;
@@ -1333,11 +1349,10 @@ static int __devinit dwc3_gadget_init_endpoints(struct dwc3 *dwc)
 					&dwc->gadget.ep_list);
 
 			ret = dwc3_alloc_trb_pool(dep);
-			if (ret) {
-				dev_err(dwc->dev, "%s: failed to allocate TRB pool\n", dep->name);
+			if (ret)
 				return ret;
-			}
 		}
+
 		INIT_LIST_HEAD(&dep->request_list);
 		INIT_LIST_HEAD(&dep->req_queued);
 	}
@@ -1352,19 +1367,10 @@ static void dwc3_gadget_free_endpoints(struct dwc3 *dwc)
 
 	for (epnum = 0; epnum < DWC3_ENDPOINTS_NUM; epnum++) {
 		dep = dwc->eps[epnum];
-		/*
-		 * Physical endpoints 0 and 1 are special; they form the
-		 * bi-directional USB endpoint 0.
-		 *
-		 * For those two physical endpoints, we don't allocate a TRB
-		 * pool nor do we add them the endpoints list. Due to that, we
-		 * shouldn't do these two operations otherwise we would end up
-		 * with all sorts of bugs when removing dwc3.ko.
-		 */
-		if (epnum != 0 && epnum != 1) {
-			dwc3_free_trb_pool(dep);
+		dwc3_free_trb_pool(dep);
+
+		if (epnum != 0 && epnum != 1)
 			list_del(&dep->endpoint.ep_list);
-		}
 
 		kfree(dep);
 	}
@@ -1386,8 +1392,10 @@ static int dwc3_cleanup_done_reqs(struct dwc3 *dwc, struct dwc3_ep *dep,
 
 	do {
 		req = next_request(&dep->req_queued);
-		if (!req)
-			break;
+		if (!req) {
+			WARN_ON_ONCE(1);
+			return 1;
+		}
 
 		dwc3_trb_to_nat(req->trb, &trb);
 
@@ -1452,12 +1460,37 @@ static void dwc3_endpoint_transfer_complete(struct dwc3 *dwc,
 		dep->flags &= ~DWC3_EP_BUSY;
 		dep->res_trans_idx = 0;
 	}
+
+	/*
+	 * WORKAROUND: This is the 2nd half of U1/U2 -> U0 workaround.
+	 * See dwc3_gadget_linksts_change_interrupt() for 1st half.
+	 */
+	if (dwc->revision < DWC3_REVISION_183A) {
+		u32		reg;
+		int		i;
+
+		for (i = 0; i < DWC3_ENDPOINTS_NUM; i++) {
+			struct dwc3_ep	*dep = dwc->eps[i];
+
+			if (!(dep->flags & DWC3_EP_ENABLED))
+				continue;
+
+			if (!list_empty(&dep->req_queued))
+				return;
+		}
+
+		reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+		reg |= dwc->u1u2;
+		dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+
+		dwc->u1u2 = 0;
+	}
 }
 
 static void dwc3_gadget_start_isoc(struct dwc3 *dwc,
 		struct dwc3_ep *dep, const struct dwc3_event_depevt *event)
 {
-	u32 uf, mask;
+	u32 uf;
 
 	if (list_empty(&dep->request_list)) {
 		dev_vdbg(dwc->dev, "ISOC ep %s run out for requests.\n",
@@ -1465,10 +1498,16 @@ static void dwc3_gadget_start_isoc(struct dwc3 *dwc,
 		return;
 	}
 
-	mask = ~(dep->interval - 1);
-	uf = event->parameters & mask;
-	/* 4 micro frames in the future */
-	uf += dep->interval * 4;
+	if (event->parameters) {
+		u32 mask;
+
+		mask = ~(dep->interval - 1);
+		uf = event->parameters & mask;
+		/* 4 micro frames in the future */
+		uf += dep->interval * 4;
+	} else {
+		uf = 0;
+	}
 
 	__dwc3_gadget_kick_transfer(dep, uf, 1);
 }
@@ -1682,8 +1721,10 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 
 	dwc3_stop_active_transfers(dwc);
 	dwc3_disconnect_gadget(dwc);
+	dwc->start_config_issued = false;
 
 	dwc->gadget.speed = USB_SPEED_UNKNOWN;
+	dwc->setup_packet_pending = false;
 }
 
 static void dwc3_gadget_usb3_phy_power(struct dwc3 *dwc, int on)
@@ -1720,6 +1761,40 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 
 	dev_vdbg(dwc->dev, "%s\n", __func__);
 
+	/*
+	 * WORKAROUND: DWC3 revisions <1.88a have an issue which
+	 * would cause a missing Disconnect Event if there's a
+	 * pending Setup Packet in the FIFO.
+	 *
+	 * There's no suggested workaround on the official Bug
+	 * report, which states that "unless the driver/application
+	 * is doing any special handling of a disconnect event,
+	 * there is no functional issue".
+	 *
+	 * Unfortunately, it turns out that we _do_ some special
+	 * handling of a disconnect event, namely complete all
+	 * pending transfers, notify gadget driver of the
+	 * disconnection, and so on.
+	 *
+	 * Our suggested workaround is to follow the Disconnect
+	 * Event steps here, instead, based on a setup_packet_pending
+	 * flag. Such flag gets set whenever we have a XferNotReady
+	 * event on EP0 and gets cleared on XferComplete for the
+	 * same endpoint.
+	 *
+	 * Refers to:
+	 *
+	 * STAR#9000466709: RTL: Device : Disconnect event not
+	 * generated if setup packet pending in FIFO
+	 */
+	if (dwc->revision < DWC3_REVISION_188A) {
+		if (dwc->setup_packet_pending)
+			dwc3_gadget_disconnect_interrupt(dwc);
+	}
+
+	/* after reset -> Default State */
+	dwc->dev_state = DWC3_DEFAULT_STATE;
+
 	/* Enable PHYs */
 	dwc3_gadget_usb2_phy_power(dwc, true);
 	dwc3_gadget_usb3_phy_power(dwc, true);
@@ -1733,6 +1808,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 
 	dwc3_stop_active_transfers(dwc);
 	dwc3_clear_stall_all_ep(dwc);
+	dwc->start_config_issued = false;
 
 	/* Reset device address to zero */
 	reg = dwc3_readl(dwc->regs, DWC3_DCFG);
@@ -1799,6 +1875,22 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 
 	switch (speed) {
 	case DWC3_DCFG_SUPERSPEED:
+		/*
+		 * WORKAROUND: DWC3 revisions <1.90a have an issue which
+		 * would cause a missing USB3 Reset event.
+		 *
+		 * In such situations, we should force a USB3 Reset
+		 * event by calling our dwc3_gadget_reset_interrupt()
+		 * routine.
+		 *
+		 * Refers to:
+		 *
+		 * STAR#9000483510: RTL: SS : USB3 reset event may
+		 * not be generated always when the link enters poll
+		 */
+		if (dwc->revision < DWC3_REVISION_190A)
+			dwc3_gadget_reset_interrupt(dwc);
+
 		dwc3_gadget_ep0_desc.wMaxPacketSize = cpu_to_le16(512);
 		dwc->gadget.ep0->maxpacket = 512;
 		dwc->gadget.speed = USB_SPEED_SUPER;
@@ -1825,14 +1917,14 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 	dwc3_gadget_disable_phy(dwc, dwc->gadget.speed);
 
 	dep = dwc->eps[0];
-	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc);
+	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc, NULL);
 	if (ret) {
 		dev_err(dwc->dev, "failed to enable %s\n", dep->name);
 		return;
 	}
 
 	dep = dwc->eps[1];
-	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc);
+	ret = __dwc3_gadget_ep_enable(dep, &dwc3_gadget_ep0_desc, NULL);
 	if (ret) {
 		dev_err(dwc->dev, "failed to enable %s\n", dep->name);
 		return;
@@ -1862,8 +1954,55 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
 static void dwc3_gadget_linksts_change_interrupt(struct dwc3 *dwc,
 		unsigned int evtinfo)
 {
-	/*  The fith bit says SuperSpeed yes or no. */
-	dwc->link_state = evtinfo & DWC3_LINK_STATE_MASK;
+	enum dwc3_link_state	next = evtinfo & DWC3_LINK_STATE_MASK;
+
+	/*
+	 * WORKAROUND: DWC3 Revisions <1.83a have an issue which, depending
+	 * on the link partner, the USB session might do multiple entry/exit
+	 * of low power states before a transfer takes place.
+	 *
+	 * Due to this problem, we might experience lower throughput. The
+	 * suggested workaround is to disable DCTL[12:9] bits if we're
+	 * transitioning from U1/U2 to U0 and enable those bits again
+	 * after a transfer completes and there are no pending transfers
+	 * on any of the enabled endpoints.
+	 *
+	 * This is the first half of that workaround.
+	 *
+	 * Refers to:
+	 *
+	 * STAR#9000446952: RTL: Device SS : if U1/U2 ->U0 takes >128us
+	 * core send LGO_Ux entering U0
+	 */
+	if (dwc->revision < DWC3_REVISION_183A) {
+		if (next == DWC3_LINK_STATE_U0) {
+			u32	u1u2;
+			u32	reg;
+
+			switch (dwc->link_state) {
+			case DWC3_LINK_STATE_U1:
+			case DWC3_LINK_STATE_U2:
+				reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+				u1u2 = reg & (DWC3_DCTL_INITU2ENA
+						| DWC3_DCTL_ACCEPTU2ENA
+						| DWC3_DCTL_INITU1ENA
+						| DWC3_DCTL_ACCEPTU1ENA);
+
+				if (!dwc->u1u2)
+					dwc->u1u2 = reg & u1u2;
+
+				reg &= ~u1u2;
+
+				dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+				break;
+			default:
+				/* do nothing */
+				break;
+			}
+		}
+	}
+
+	dwc->link_state = next;
 
 	dev_vdbg(dwc->dev, "%s link %d\n", __func__, dwc->link_state);
 }
@@ -1969,7 +2108,7 @@ static irqreturn_t dwc3_interrupt(int irq, void *_dwc)
 
 	spin_lock(&dwc->lock);
 
-	for (i = 0; i < DWC3_EVENT_BUFFERS_NUM; i++) {
+	for (i = 0; i < dwc->num_event_buffers; i++) {
 		irqreturn_t status;
 
 		status = dwc3_process_event_buf(dwc, i);
@@ -2030,9 +2169,10 @@ int __devinit dwc3_gadget_init(struct dwc3 *dwc)
 	dev_set_name(&dwc->gadget.dev, "gadget");
 
 	dwc->gadget.ops			= &dwc3_gadget_ops;
-	dwc->gadget.is_dualspeed	= true;
+	dwc->gadget.max_speed		= USB_SPEED_SUPER;
 	dwc->gadget.speed		= USB_SPEED_UNKNOWN;
 	dwc->gadget.dev.parent		= dwc->dev;
+	dwc->gadget.sg_supported	= true;
 
 	dma_set_coherent_mask(&dwc->gadget.dev, dwc->dev->coherent_dma_mask);
 
@@ -2120,16 +2260,12 @@ err0:
 void dwc3_gadget_exit(struct dwc3 *dwc)
 {
 	int			irq;
-	int			i;
 
 	usb_del_gadget_udc(&dwc->gadget);
 	irq = platform_get_irq(to_platform_device(dwc->dev), 0);
 
 	dwc3_writel(dwc->regs, DWC3_DEVTEN, 0x00);
 	free_irq(irq, dwc);
-
-	for (i = 0; i < ARRAY_SIZE(dwc->eps); i++)
-		__dwc3_gadget_ep_disable(dwc->eps[i]);
 
 	dwc3_gadget_free_endpoints(dwc);
 

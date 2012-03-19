@@ -265,12 +265,12 @@ static int wait_for_free_request(struct TCP_Server_Info *server,
 
 	spin_lock(&GlobalMid_Lock);
 	while (1) {
-		if (atomic_read(&server->inFlight) >= server->maxReq) {
+		if (atomic_read(&server->inFlight) >= cifs_max_pending) {
 			spin_unlock(&GlobalMid_Lock);
 			cifs_num_waiters_inc(server);
 			wait_event(server->request_q,
 				   atomic_read(&server->inFlight)
-				     < server->maxReq);
+				     < cifs_max_pending);
 			cifs_num_waiters_dec(server);
 			spin_lock(&GlobalMid_Lock);
 		} else {
@@ -370,8 +370,10 @@ cifs_call_async(struct TCP_Server_Info *server, struct kvec *iov,
 	spin_unlock(&GlobalMid_Lock);
 
 	rc = cifs_sign_smb2(iov, nvec, server, &mid->sequence_number);
-	if (rc)
-		goto out;
+	if (rc) {
+		mutex_unlock(&server->srv_mutex);
+		goto out_err;
+	}
 
 	mid->receive = receive;
 	mid->callback = callback;
@@ -382,15 +384,14 @@ cifs_call_async(struct TCP_Server_Info *server, struct kvec *iov,
 	rc = smb_sendv(server, iov, nvec);
 	cifs_in_send_dec(server);
 	cifs_save_when_sent(mid);
-out:
-	if (rc < 0)
-		delete_mid(mid);
-
 	mutex_unlock(&server->srv_mutex);
 
-	if (rc == 0)
-		return 0;
+	if (rc)
+		goto out_err;
 
+	return rc;
+out_err:
+	delete_mid(mid);
 	atomic_dec(&server->inFlight);
 	wake_up(&server->request_q);
 	return rc;
@@ -484,13 +485,6 @@ send_nt_cancel(struct TCP_Server_Info *server, struct smb_hdr *in_buf,
 		mutex_unlock(&server->srv_mutex);
 		return rc;
 	}
-
-	/*
-	 * The response to this call was already factored into the sequence
-	 * number when the call went out, so we must adjust it back downward
-	 * after signing here.
-	 */
-	--server->sequence_number;
 	rc = smb_send(server, in_buf, be32_to_cpu(in_buf->smb_buf_length));
 	mutex_unlock(&server->srv_mutex);
 

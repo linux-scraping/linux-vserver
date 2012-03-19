@@ -2,7 +2,6 @@
 #include <linux/clockchips.h>
 #include <linux/interrupt.h>
 #include <linux/export.h>
-#include <linux/sysdev.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/i8253.h>
@@ -12,7 +11,6 @@
 #include <linux/cpu.h>
 #include <linux/pm.h>
 #include <linux/io.h>
-#include <linux/kaiser.h>
 
 #include <asm/fixmap.h>
 #include <asm/hpet.h>
@@ -32,8 +30,6 @@
 
 #define HPET_MIN_CYCLES			128
 #define HPET_MIN_PROG_DELTA		(HPET_MIN_CYCLES + (HPET_MIN_CYCLES >> 1))
-
-#define EVT_TO_HPET_DEV(evt) container_of(evt, struct hpet_dev, evt)
 
 /*
  * HPET address is set in acpi/boot.c, when an ACPI entry exists
@@ -56,6 +52,11 @@ struct hpet_dev {
 	char				name[10];
 };
 
+inline struct hpet_dev *EVT_TO_HPET_DEV(struct clock_event_device *evtdev)
+{
+	return container_of(evtdev, struct hpet_dev, evt);
+}
+
 inline unsigned int hpet_readl(unsigned int a)
 {
 	return readl(hpet_virt_address + a);
@@ -75,8 +76,6 @@ static inline void hpet_set_mapping(void)
 	hpet_virt_address = ioremap_nocache(hpet_address, HPET_MMAP_SIZE);
 #ifdef CONFIG_X86_64
 	__set_fixmap(VSYSCALL_HPET, hpet_address, PAGE_KERNEL_VVAR_NOCACHE);
-	kaiser_add_mapping(__fix_to_virt(VSYSCALL_HPET), PAGE_SIZE,
-			   __PAGE_KERNEL_VVAR_NOCACHE);
 #endif
 }
 
@@ -432,7 +431,7 @@ void hpet_msi_unmask(struct irq_data *data)
 
 	/* unmask it */
 	cfg = hpet_readl(HPET_Tn_CFG(hdev->num));
-	cfg |= HPET_TN_ENABLE | HPET_TN_FSB;
+	cfg |= HPET_TN_FSB;
 	hpet_writel(cfg, HPET_Tn_CFG(hdev->num));
 }
 
@@ -443,7 +442,7 @@ void hpet_msi_mask(struct irq_data *data)
 
 	/* mask it */
 	cfg = hpet_readl(HPET_Tn_CFG(hdev->num));
-	cfg &= ~(HPET_TN_ENABLE | HPET_TN_FSB);
+	cfg &= ~HPET_TN_FSB;
 	hpet_writel(cfg, HPET_Tn_CFG(hdev->num));
 }
 

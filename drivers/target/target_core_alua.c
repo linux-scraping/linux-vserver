@@ -30,16 +30,14 @@
 #include <linux/export.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
-#include <asm/unaligned.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_backend.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
 
+#include "target_core_internal.h"
 #include "target_core_alua.h"
-#include "target_core_hba.h"
 #include "target_core_ua.h"
 
 static int core_alua_check_transition(int state, int *primary);
@@ -269,7 +267,8 @@ int target_emulate_set_target_port_groups(struct se_task *task)
 		 * changed.
 		 */
 		if (primary) {
-			tg_pt_id = get_unaligned_be16(ptr + 2);
+			tg_pt_id = ((ptr[2] << 8) & 0xff);
+			tg_pt_id |= (ptr[3] & 0xff);
 			/*
 			 * Locate the matching target port group ID from
 			 * the global tg_pt_gp list
@@ -313,7 +312,8 @@ int target_emulate_set_target_port_groups(struct se_task *task)
 			 * the Target Port in question for the the incoming
 			 * SET_TARGET_PORT_GROUPS op.
 			 */
-			rtpi = get_unaligned_be16(ptr + 2);
+			rtpi = ((ptr[2] << 8) & 0xff);
+			rtpi |= (ptr[3] & 0xff);
 			/*
 			 * Locate the matching relative target port identifer
 			 * for the struct se_device storage object.
@@ -352,11 +352,9 @@ int target_emulate_set_target_port_groups(struct se_task *task)
 
 out:
 	transport_kunmap_data_sg(cmd);
-	if (!rc) {
-		task->task_scsi_status = GOOD;
-		transport_complete_task(task, 1);
-	}
-	return rc;
+	task->task_scsi_status = GOOD;
+	transport_complete_task(task, 1);
+	return 0;
 }
 
 static inline int core_alua_state_nonoptimized(
@@ -393,9 +391,8 @@ static inline int core_alua_state_standby(
 	case REPORT_LUNS:
 	case RECEIVE_DIAGNOSTIC:
 	case SEND_DIAGNOSTIC:
-		return 0;
 	case MAINTENANCE_IN:
-		switch (cdb[1] & 0x1f) {
+		switch (cdb[1]) {
 		case MI_REPORT_TARGET_PGS:
 			return 0;
 		default:
@@ -436,9 +433,8 @@ static inline int core_alua_state_unavailable(
 	switch (cdb[0]) {
 	case INQUIRY:
 	case REPORT_LUNS:
-		return 0;
 	case MAINTENANCE_IN:
-		switch (cdb[1] & 0x1f) {
+		switch (cdb[1]) {
 		case MI_REPORT_TARGET_PGS:
 			return 0;
 		default:
@@ -477,9 +473,8 @@ static inline int core_alua_state_transition(
 	switch (cdb[0]) {
 	case INQUIRY:
 	case REPORT_LUNS:
-		return 0;
 	case MAINTENANCE_IN:
-		switch (cdb[1] & 0x1f) {
+		switch (cdb[1]) {
 		case MI_REPORT_TARGET_PGS:
 			return 0;
 		default:

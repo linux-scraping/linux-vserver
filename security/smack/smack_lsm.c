@@ -38,6 +38,8 @@
 #include <linux/personality.h>
 #include "smack.h"
 
+#define task_security(task)	(task_cred_xxx((task), security))
+
 #define TRANS_TRUE	"TRUE"
 #define TRANS_TRUE_SIZE	4
 
@@ -159,7 +161,7 @@ static int smack_ptrace_access_check(struct task_struct *ctp, unsigned int mode)
 	if (rc != 0)
 		return rc;
 
-	tsp = smk_of_task_struct(ctp);
+	tsp = smk_of_task(task_security(ctp));
 	smk_ad_init(&ad, __func__, LSM_AUDIT_DATA_TASK);
 	smk_ad_setfield_u_tsk(&ad, ctp);
 
@@ -185,7 +187,7 @@ static int smack_ptrace_traceme(struct task_struct *ptp)
 	if (rc != 0)
 		return rc;
 
-	tsp = smk_of_task_struct(ptp);
+	tsp = smk_of_task(task_security(ptp));
 	smk_ad_init(&ad, __func__, LSM_AUDIT_DATA_TASK);
 	smk_ad_setfield_u_tsk(&ad, ptp);
 
@@ -404,7 +406,7 @@ static int smack_sb_statfs(struct dentry *dentry)
 static int smack_sb_mount(char *dev_name, struct path *path,
 			  char *type, unsigned long flags, void *data)
 {
-	struct superblock_smack *sbp = path->mnt->mnt_sb->s_security;
+	struct superblock_smack *sbp = path->dentry->d_sb->s_security;
 	struct smk_audit_info ad;
 
 	smk_ad_init(&ad, __func__, LSM_AUDIT_DATA_PATH);
@@ -433,7 +435,7 @@ static int smack_sb_umount(struct vfsmount *mnt, int flags)
 	smk_ad_init(&ad, __func__, LSM_AUDIT_DATA_PATH);
 	smk_ad_setfield_u_fs_path(&ad, path);
 
-	sbp = mnt->mnt_sb->s_security;
+	sbp = path.dentry->d_sb->s_security;
 	return smk_curacc(sbp->smk_floor, MAY_WRITE, &ad);
 }
 
@@ -583,7 +585,7 @@ static int smack_inode_init_security(struct inode *inode, struct inode *dir,
 	}
 
 	if (len)
-		*len = strlen(isp);
+		*len = strlen(isp) + 1;
 
 	return 0;
 }
@@ -940,7 +942,7 @@ static int smack_inode_removexattr(struct dentry *dentry, const char *name)
  * @inode: the object
  * @name: attribute name
  * @buffer: where to put the result
- * @alloc: duplicate memory
+ * @alloc: unused
  *
  * Returns the size of the attribute or an error code
  */
@@ -953,38 +955,43 @@ static int smack_inode_getsecurity(const struct inode *inode,
 	struct super_block *sbp;
 	struct inode *ip = (struct inode *)inode;
 	char *isp;
+	int ilen;
+	int rc = 0;
 
-	if (strcmp(name, XATTR_SMACK_SUFFIX) == 0)
+	if (strcmp(name, XATTR_SMACK_SUFFIX) == 0) {
 		isp = smk_of_inode(inode);
-	else {
-		/*
-		 * The rest of the Smack xattrs are only on sockets.
-		 */
-		sbp = ip->i_sb;
-		if (sbp->s_magic != SOCKFS_MAGIC)
-			return -EOPNOTSUPP;
-
-		sock = SOCKET_I(ip);
-		if (sock == NULL || sock->sk == NULL)
-			return -EOPNOTSUPP;
-
-		ssp = sock->sk->sk_security;
-
-		if (strcmp(name, XATTR_SMACK_IPIN) == 0)
-			isp = ssp->smk_in;
-		else if (strcmp(name, XATTR_SMACK_IPOUT) == 0)
-			isp = ssp->smk_out;
-		else
-			return -EOPNOTSUPP;
+		ilen = strlen(isp) + 1;
+		*buffer = isp;
+		return ilen;
 	}
 
-	if (alloc) {
-		*buffer = kstrdup(isp, GFP_KERNEL);
-		if (*buffer == NULL)
-			return -ENOMEM;
+	/*
+	 * The rest of the Smack xattrs are only on sockets.
+	 */
+	sbp = ip->i_sb;
+	if (sbp->s_magic != SOCKFS_MAGIC)
+		return -EOPNOTSUPP;
+
+	sock = SOCKET_I(ip);
+	if (sock == NULL || sock->sk == NULL)
+		return -EOPNOTSUPP;
+
+	ssp = sock->sk->sk_security;
+
+	if (strcmp(name, XATTR_SMACK_IPIN) == 0)
+		isp = ssp->smk_in;
+	else if (strcmp(name, XATTR_SMACK_IPOUT) == 0)
+		isp = ssp->smk_out;
+	else
+		return -EOPNOTSUPP;
+
+	ilen = strlen(isp) + 1;
+	if (rc == 0) {
+		*buffer = isp;
+		rc = ilen;
 	}
 
-	return strlen(isp);
+	return rc;
 }
 
 
@@ -1508,7 +1515,7 @@ static int smk_curacc_on_task(struct task_struct *p, int access,
 
 	smk_ad_init(&ad, caller, LSM_AUDIT_DATA_TASK);
 	smk_ad_setfield_u_tsk(&ad, p);
-	return smk_curacc(smk_of_task_struct(p), access, &ad);
+	return smk_curacc(smk_of_task(task_security(p)), access, &ad);
 }
 
 /**
@@ -1554,7 +1561,7 @@ static int smack_task_getsid(struct task_struct *p)
  */
 static void smack_task_getsecid(struct task_struct *p, u32 *secid)
 {
-	*secid = smack_to_secid(smk_of_task_struct(p));
+	*secid = smack_to_secid(smk_of_task(task_security(p)));
 }
 
 /**
@@ -1666,7 +1673,7 @@ static int smack_task_kill(struct task_struct *p, struct siginfo *info,
 	 * can write the receiver.
 	 */
 	if (secid == 0)
-		return smk_curacc(smk_of_task_struct(p), MAY_WRITE,
+		return smk_curacc(smk_of_task(task_security(p)), MAY_WRITE,
 				  &ad);
 	/*
 	 * If the secid isn't 0 we're dealing with some USB IO
@@ -1674,7 +1681,7 @@ static int smack_task_kill(struct task_struct *p, struct siginfo *info,
 	 * we can't take privilege into account.
 	 */
 	return smk_access(smack_from_secid(secid),
-			  smk_of_task_struct(p), MAY_WRITE, &ad);
+			  smk_of_task(task_security(p)), MAY_WRITE, &ad);
 }
 
 /**
@@ -1687,12 +1694,8 @@ static int smack_task_wait(struct task_struct *p)
 {
 	struct smk_audit_info ad;
 	char *sp = smk_of_current();
-	char *tsp;
+	char *tsp = smk_of_forked(task_security(p));
 	int rc;
-
-	rcu_read_lock();
-	tsp = smk_of_forked(__task_cred(p)->security);
-	rcu_read_unlock();
 
 	/* we don't log here, we can be overriden */
 	rc = smk_access(tsp, sp, MAY_WRITE, NULL);
@@ -1730,7 +1733,7 @@ static int smack_task_wait(struct task_struct *p)
 static void smack_task_to_inode(struct task_struct *p, struct inode *inode)
 {
 	struct inode_smack *isp = inode->i_security;
-	isp->smk_inode = smk_of_task_struct(p);
+	isp->smk_inode = smk_of_task(task_security(p));
 }
 
 /*
@@ -1839,7 +1842,7 @@ static void smack_set_catset(char *catset, struct netlbl_lsm_secattr *sap)
 		for (m = 0x80; m != 0; m >>= 1, cat++) {
 			if ((m & *cp) == 0)
 				continue;
-			rc = netlbl_secattr_catmap_setbit(&sap->attr.mls.cat,
+			rc = netlbl_secattr_catmap_setbit(sap->attr.mls.cat,
 							  cat, GFP_ATOMIC);
 		}
 }
@@ -2711,7 +2714,7 @@ static int smack_getprocattr(struct task_struct *p, char *name, char **value)
 	if (strcmp(name, "current") != 0)
 		return -EINVAL;
 
-	cp = kstrdup(smk_of_task_struct(p), GFP_KERNEL);
+	cp = kstrdup(smk_of_task(task_security(p)), GFP_KERNEL);
 	if (cp == NULL)
 		return -ENOMEM;
 

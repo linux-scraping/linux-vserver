@@ -6,7 +6,7 @@
  * Copyright (C) 2004-2005 Richard Purdie
  *
  * Copyright (C) 2008 Marvell International Ltd.
- * 	Eric Miao <eric.miao@marvell.com>
+ *	Eric Miao <eric.miao@marvell.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2 as
@@ -80,9 +80,6 @@ static struct max1111_data *the_max1111;
 
 int max1111_read_channel(int channel)
 {
-	if (!the_max1111 || !the_max1111->spi)
-		return -ENODEV;
-
 	return max1111_read(&the_max1111->spi->dev, channel);
 }
 EXPORT_SYMBOL(max1111_read_channel);
@@ -109,11 +106,14 @@ static ssize_t show_adc(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%d\n", ret);
+	/* assume the reference voltage to be 2.048V, with an 8-bit sample,
+	 * the LSB weight is 8mV
+	 */
+	return sprintf(buf, "%d\n", ret * 8);
 }
 
 #define MAX1111_ADC_ATTR(_id)		\
-	SENSOR_DEVICE_ATTR(adc##_id##_in, S_IRUGO, show_adc, NULL, _id)
+	SENSOR_DEVICE_ATTR(in##_id##_input, S_IRUGO, show_adc, NULL, _id)
 
 static DEVICE_ATTR(name, S_IRUGO, show_name, NULL);
 static MAX1111_ADC_ATTR(0);
@@ -123,10 +123,10 @@ static MAX1111_ADC_ATTR(3);
 
 static struct attribute *max1111_attributes[] = {
 	&dev_attr_name.attr,
-	&sensor_dev_attr_adc0_in.dev_attr.attr,
-	&sensor_dev_attr_adc1_in.dev_attr.attr,
-	&sensor_dev_attr_adc2_in.dev_attr.attr,
-	&sensor_dev_attr_adc3_in.dev_attr.attr,
+	&sensor_dev_attr_in0_input.dev_attr.attr,
+	&sensor_dev_attr_in1_input.dev_attr.attr,
+	&sensor_dev_attr_in2_input.dev_attr.attr,
+	&sensor_dev_attr_in3_input.dev_attr.attr,
 	NULL,
 };
 
@@ -211,9 +211,6 @@ static int __devexit max1111_remove(struct spi_device *spi)
 {
 	struct max1111_data *data = spi_get_drvdata(spi);
 
-#ifdef CONFIG_SHARPSL_PM
-	the_max1111 = NULL;
-#endif
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&spi->dev.kobj, &max1111_attr_group);
 	mutex_destroy(&data->drvdata_lock);

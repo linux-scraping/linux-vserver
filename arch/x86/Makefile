@@ -117,8 +117,11 @@ KBUILD_CFLAGS += $(call cc-option,-mno-sse -mno-mmx -mno-sse2 -mno-3dnow,)
 KBUILD_CFLAGS += $(mflags-y)
 KBUILD_AFLAGS += $(mflags-y)
 
-archscripts:
-	$(Q)$(MAKE) $(build)=arch/x86/tools relocs
+###
+# Syscall table generation
+
+archheaders:
+	$(Q)$(MAKE) $(build)=arch/x86/syscalls all
 
 ###
 # Kernel objects
@@ -183,7 +186,6 @@ archclean:
 	$(Q)rm -rf $(objtree)/arch/i386
 	$(Q)rm -rf $(objtree)/arch/x86_64
 	$(Q)$(MAKE) $(clean)=$(boot)
-	$(Q)$(MAKE) $(clean)=arch/x86/tools
 
 define archhelp
   echo  '* bzImage      - Compressed kernel image (arch/x86/boot/bzImage)'

@@ -461,8 +461,7 @@ enum dmi_field {
 };
 
 struct dmi_strmatch {
-	unsigned char slot:7;
-	unsigned char exact_match:1;
+	unsigned char slot;
 	char substr[79];
 };
 
@@ -490,8 +489,7 @@ struct dmi_system_id {
 #define dmi_device_id dmi_system_id
 #endif
 
-#define DMI_MATCH(a, b)	{ .slot = a, .substr = b }
-#define DMI_EXACT_MATCH(a, b)	{ .slot = a, .substr = b, .exact_match = 1 }
+#define DMI_MATCH(a, b)	{ a, b }
 
 #define PLATFORM_NAME_SIZE	20
 #define PLATFORM_MODULE_PREFIX	"platform:"
@@ -542,6 +540,24 @@ struct isapnp_device_id {
 	unsigned short card_vendor, card_device;
 	unsigned short vendor, function;
 	kernel_ulong_t driver_data;	/* data private to the driver */
+};
+
+/**
+ * struct amba_id - identifies a device on an AMBA bus
+ * @id: The significant bits if the hardware device ID
+ * @mask: Bitmask specifying which bits of the id field are significant when
+ *	matching.  A driver binds to a device when ((hardware device ID) & mask)
+ *	== id.
+ * @data: Private data used by the driver.
+ */
+struct amba_id {
+	unsigned int		id;
+	unsigned int		mask;
+#ifndef __KERNEL__
+	kernel_ulong_t		data;
+#else
+	void			*data;
+#endif
 };
 
 #endif /* LINUX_MOD_DEVICETABLE_H */

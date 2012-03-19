@@ -573,7 +573,7 @@ int ubifs_jnl_update(struct ubifs_info *c, const struct inode *dir,
 	aligned_dlen = ALIGN(dlen, 8);
 	aligned_ilen = ALIGN(ilen, 8);
 	len = aligned_dlen + aligned_ilen + UBIFS_INO_NODE_SZ;
-	dent = kzalloc(len, GFP_NOFS);
+	dent = kmalloc(len, GFP_NOFS);
 	if (!dent)
 		return -ENOMEM;
 
@@ -697,9 +697,8 @@ int ubifs_jnl_write_data(struct ubifs_info *c, const struct inode *inode,
 	int dlen = COMPRESSED_DATA_NODE_BUF_SZ, allocated = 1;
 	struct ubifs_inode *ui = ubifs_inode(inode);
 
-	dbg_jnl("ino %lu, blk %u, len %d, key %s",
-		(unsigned long)key_inum(c, key), key_block(c, key), len,
-		DBGKEY(key));
+	dbg_jnlk(key, "ino %lu, blk %u, len %d, key ",
+		(unsigned long)key_inum(c, key), key_block(c, key), len);
 	ubifs_assert(len <= UBIFS_BLOCK_SIZE);
 
 	data = kmalloc(dlen, GFP_NOFS | __GFP_NOWARN);
@@ -959,7 +958,7 @@ int ubifs_jnl_rename(struct ubifs_info *c, const struct inode *old_dir,
 	len = aligned_dlen1 + aligned_dlen2 + ALIGN(ilen, 8) + ALIGN(plen, 8);
 	if (old_dir != new_dir)
 		len += plen;
-	dent = kzalloc(len, GFP_NOFS);
+	dent = kmalloc(len, GFP_NOFS);
 	if (!dent)
 		return -ENOMEM;
 
@@ -1177,7 +1176,7 @@ int ubifs_jnl_truncate(struct ubifs_info *c, const struct inode *inode,
 		dn = (void *)trun + UBIFS_TRUN_NODE_SZ;
 		blk = new_size >> UBIFS_BLOCK_SHIFT;
 		data_key_init(c, &key, inum, blk);
-		dbg_jnl("last block key %s", DBGKEY(&key));
+		dbg_jnlk(&key, "last block key ");
 		err = ubifs_tnc_lookup(c, &key, dn);
 		if (err == -ENOENT)
 			dlen = 0; /* Not found (so it is a hole) */
@@ -1307,7 +1306,7 @@ int ubifs_jnl_delete_xattr(struct ubifs_info *c, const struct inode *host,
 	hlen = host_ui->data_len + UBIFS_INO_NODE_SZ;
 	len = aligned_xlen + UBIFS_INO_NODE_SZ + ALIGN(hlen, 8);
 
-	xent = kzalloc(len, GFP_NOFS);
+	xent = kmalloc(len, GFP_NOFS);
 	if (!xent)
 		return -ENOMEM;
 
@@ -1414,7 +1413,7 @@ int ubifs_jnl_change_xattr(struct ubifs_info *c, const struct inode *inode,
 	aligned_len1 = ALIGN(len1, 8);
 	aligned_len = aligned_len1 + ALIGN(len2, 8);
 
-	ino = kzalloc(aligned_len, GFP_NOFS);
+	ino = kmalloc(aligned_len, GFP_NOFS);
 	if (!ino)
 		return -ENOMEM;
 

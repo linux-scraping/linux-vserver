@@ -276,8 +276,7 @@ bfad_debugfs_write_regrd(struct file *file, const char __user *buf,
 	struct bfad_s *bfad = port->bfad;
 	struct bfa_s *bfa = &bfad->bfa;
 	struct bfa_ioc_s *ioc = &bfa->ioc;
-	int addr, rc, i;
-	u32 len;
+	int addr, len, rc, i;
 	u32 *regbuf;
 	void __iomem *rb, *reg_addr;
 	unsigned long flags;
@@ -297,7 +296,7 @@ bfad_debugfs_write_regrd(struct file *file, const char __user *buf,
 	}
 
 	rc = sscanf(kern_buf, "%x:%x", &addr, &len);
-	if (rc < 2 || len > (UINT_MAX >> 2)) {
+	if (rc < 2) {
 		printk(KERN_INFO
 			"bfad[%d]: %s failed to read user buf\n",
 			bfad->inst_no, __func__);
@@ -473,7 +472,7 @@ static const struct file_operations bfad_debugfs_op_regwr = {
 
 struct bfad_debugfs_entry {
 	const char *name;
-	mode_t	mode;
+	umode_t	mode;
 	const struct file_operations *fops;
 };
 
@@ -558,8 +557,7 @@ bfad_debugfs_exit(struct bfad_port_s *port)
 		}
 	}
 
-	/*
-	 * Remove the pci_dev debugfs directory for the port */
+	/* Remove the pci_dev debugfs directory for the port */
 	if (port->port_debugfs_root) {
 		debugfs_remove(port->port_debugfs_root);
 		port->port_debugfs_root = NULL;

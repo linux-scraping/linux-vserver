@@ -55,7 +55,7 @@ static const u8 REG_TEMP_MAX[4] = { 0x34, 0x30, 0x31, 0x32 };
  * it.  Default is to leave the device in the state it's already in (-1).
  * This parameter allows APD mode to be optionally forced on or off */
 static int apd = -1;
-module_param(apd, bool, 0);
+module_param(apd, bint, 0);
 MODULE_PARM_DESC(init, "Set to zero to disable anti-parallel diode mode");
 
 struct temperature {
@@ -244,11 +244,13 @@ static ssize_t set_temp_min(struct device *dev, struct device_attribute *da,
 	struct emc2103_data *data = i2c_get_clientdata(client);
 	long val;
 
-	int result = strict_strtol(buf, 10, &val);
+	int result = kstrtol(buf, 10, &val);
 	if (result < 0)
 		return -EINVAL;
 
-	val = clamp_val(DIV_ROUND_CLOSEST(val, 1000), -63, 127);
+	val = DIV_ROUND_CLOSEST(val, 1000);
+	if ((val < -63) || (val > 127))
+		return -EINVAL;
 
 	mutex_lock(&data->update_lock);
 	data->temp_min[nr] = val;
@@ -266,11 +268,13 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *da,
 	struct emc2103_data *data = i2c_get_clientdata(client);
 	long val;
 
-	int result = strict_strtol(buf, 10, &val);
+	int result = kstrtol(buf, 10, &val);
 	if (result < 0)
 		return -EINVAL;
 
-	val = clamp_val(DIV_ROUND_CLOSEST(val, 1000), -63, 127);
+	val = DIV_ROUND_CLOSEST(val, 1000);
+	if ((val < -63) || (val > 127))
+		return -EINVAL;
 
 	mutex_lock(&data->update_lock);
 	data->temp_max[nr] = val;
@@ -310,7 +314,7 @@ static ssize_t set_fan_div(struct device *dev, struct device_attribute *da,
 	int new_range_bits, old_div = 8 / data->fan_multiplier;
 	long new_div;
 
-	int status = strict_strtol(buf, 10, &new_div);
+	int status = kstrtol(buf, 10, &new_div);
 	if (status < 0)
 		return -EINVAL;
 
@@ -382,14 +386,15 @@ static ssize_t set_fan_target(struct device *dev, struct device_attribute *da,
 {
 	struct emc2103_data *data = emc2103_update_device(dev);
 	struct i2c_client *client = to_i2c_client(dev);
-	unsigned long rpm_target;
+	long rpm_target;
 
-	int result = kstrtoul(buf, 10, &rpm_target);
+	int result = kstrtol(buf, 10, &rpm_target);
 	if (result < 0)
 		return -EINVAL;
 
 	/* Datasheet states 16384 as maximum RPM target (table 3.2) */
-	rpm_target = clamp_val(rpm_target, 0, 16384);
+	if ((rpm_target < 0) || (rpm_target > 16384))
+		return -EINVAL;
 
 	mutex_lock(&data->update_lock);
 
@@ -429,7 +434,7 @@ static ssize_t set_pwm_enable(struct device *dev, struct device_attribute *da,
 	long new_value;
 	u8 conf_reg;
 
-	int result = strict_strtol(buf, 10, &new_value);
+	int result = kstrtol(buf, 10, &new_value);
 	if (result < 0)
 		return -EINVAL;
 

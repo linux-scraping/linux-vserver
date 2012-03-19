@@ -1481,13 +1481,8 @@ static void sd_set_streamparm(struct gspca_dev *gspca_dev,
 	struct v4l2_fract *tpf = &cp->timeperframe;
 	struct sd *sd = (struct sd *) gspca_dev;
 
-	if (tpf->numerator == 0 || tpf->denominator == 0)
-		/* Set default framerate */
-		sd->frame_rate = 30;
-	else
-		/* Set requested framerate */
-		sd->frame_rate = tpf->denominator / tpf->numerator;
-
+	/* Set requested framerate */
+	sd->frame_rate = tpf->denominator / tpf->numerator;
 	if (gspca_dev->streaming)
 		set_frame_rate(gspca_dev);
 
@@ -1538,16 +1533,4 @@ static struct usb_driver sd_driver = {
 #endif
 };
 
-/* -- module insert / remove -- */
-static int __init sd_mod_init(void)
-{
-	return usb_register(&sd_driver);
-}
-
-static void __exit sd_mod_exit(void)
-{
-	usb_deregister(&sd_driver);
-}
-
-module_init(sd_mod_init);
-module_exit(sd_mod_exit);
+module_usb_driver(sd_driver);

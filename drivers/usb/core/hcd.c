@@ -658,7 +658,7 @@ error:
 				len > offsetof(struct usb_device_descriptor,
 						bDeviceProtocol))
 			((struct usb_device_descriptor *) ubuf)->
-					bDeviceProtocol = 1;
+				bDeviceProtocol = USB_HUB_PR_HS_SINGLE_TT;
 	}
 
 	/* any errors get returned through the urb completion */
@@ -1002,7 +1002,10 @@ static int register_root_hub(struct usb_hcd *hcd)
 	if (retval) {
 		dev_err (parent_dev, "can't register root hub for %s, %d\n",
 				dev_name(&usb_dev->dev), retval);
-	} else {
+	}
+	mutex_unlock(&usb_bus_list_lock);
+
+	if (retval == 0) {
 		spin_lock_irq (&hcd_root_hub_lock);
 		hcd->rh_registered = 1;
 		spin_unlock_irq (&hcd_root_hub_lock);
@@ -1011,7 +1014,6 @@ static int register_root_hub(struct usb_hcd *hcd)
 		if (HCD_DEAD(hcd))
 			usb_hc_died (hcd);	/* This time clean up */
 	}
-	mutex_unlock(&usb_bus_list_lock);
 
 	return retval;
 }
@@ -1166,20 +1168,6 @@ int usb_hcd_check_unlink_urb(struct usb_hcd *hcd, struct urb *urb,
 	if (urb->unlinked)
 		return -EBUSY;
 	urb->unlinked = status;
-
-	/* IRQ setup can easily be broken so that USB controllers
-	 * never get completion IRQs ... maybe even the ones we need to
-	 * finish unlinking the initial failed usb_set_address()
-	 * or device descriptor fetch.
-	 */
-	if (!HCD_SAW_IRQ(hcd) && !is_root_hub(urb->dev)) {
-		dev_warn(hcd->self.controller, "Unlink after no-IRQ?  "
-			"Controller is probably using the wrong IRQ.\n");
-		set_bit(HCD_FLAG_SAW_IRQ, &hcd->flags);
-		if (hcd->shared_hcd)
-			set_bit(HCD_FLAG_SAW_IRQ, &hcd->shared_hcd->flags);
-	}
-
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_hcd_check_unlink_urb);
@@ -1542,7 +1530,6 @@ static int unlink1(struct usb_hcd *hcd, struct urb *urb, int status)
 int usb_hcd_unlink_urb (struct urb *urb, int status)
 {
 	struct usb_hcd		*hcd;
-	struct usb_device	*udev = urb->dev;
 	int			retval = -EIDRM;
 	unsigned long		flags;
 
@@ -1554,19 +1541,20 @@ int usb_hcd_unlink_urb (struct urb *urb, int status)
 	spin_lock_irqsave(&hcd_urb_unlink_lock, flags);
 	if (atomic_read(&urb->use_count) > 0) {
 		retval = 0;
-		usb_get_dev(udev);
+		usb_get_dev(urb->dev);
 	}
 	spin_unlock_irqrestore(&hcd_urb_unlink_lock, flags);
 	if (retval == 0) {
 		hcd = bus_to_hcd(urb->dev->bus);
 		retval = unlink1(hcd, urb, status);
-		if (retval == 0)
-			retval = -EINPROGRESS;
-		else if (retval != -EIDRM && retval != -EBUSY)
-			dev_dbg(&udev->dev, "hcd_unlink_urb %pK fail %d\n",
-					urb, retval);
-		usb_put_dev(udev);
+		usb_put_dev(urb->dev);
 	}
+
+	if (retval == 0)
+		retval = -EINPROGRESS;
+	else if (retval != -EIDRM && retval != -EBUSY)
+		dev_dbg(&urb->dev->dev, "hcd_unlink_urb %p fail %d\n",
+				urb, retval);
 	return retval;
 }
 
@@ -1645,7 +1633,7 @@ rescan:
 		/* kick hcd */
 		unlink1(hcd, urb, -ESHUTDOWN);
 		dev_dbg (hcd->self.controller,
-			"shutdown urb %pK ep%d%s%s\n",
+			"shutdown urb %p ep%d%s%s\n",
 			urb, usb_endpoint_num(&ep->desc),
 			is_in ? "in" : "out",
 			({	char *s;
@@ -1896,8 +1884,6 @@ int usb_alloc_streams(struct usb_interface *interface,
 		return -EINVAL;
 	if (dev->speed != USB_SPEED_SUPER)
 		return -EINVAL;
-	if (dev->state < USB_STATE_CONFIGURED)
-		return -ENODEV;
 
 	/* Streams only apply to bulk endpoints. */
 	for (i = 0; i < num_eps; i++)
@@ -2147,16 +2133,12 @@ irqreturn_t usb_hcd_irq (int irq, void *__hcd)
 	 */
 	local_irq_save(flags);
 
-	if (unlikely(HCD_DEAD(hcd) || !HCD_HW_ACCESSIBLE(hcd))) {
+	if (unlikely(HCD_DEAD(hcd) || !HCD_HW_ACCESSIBLE(hcd)))
 		rc = IRQ_NONE;
-	} else if (hcd->driver->irq(hcd) == IRQ_NONE) {
+	else if (hcd->driver->irq(hcd) == IRQ_NONE)
 		rc = IRQ_NONE;
-	} else {
-		set_bit(HCD_FLAG_SAW_IRQ, &hcd->flags);
-		if (hcd->shared_hcd)
-			set_bit(HCD_FLAG_SAW_IRQ, &hcd->shared_hcd->flags);
+	else
 		rc = IRQ_HANDLED;
-	}
 
 	local_irq_restore(flags);
 	return rc;
@@ -2194,8 +2176,6 @@ void usb_hc_died (struct usb_hcd *hcd)
 	}
 	if (usb_hcd_is_primary_hcd(hcd) && hcd->shared_hcd) {
 		hcd = hcd->shared_hcd;
-		clear_bit(HCD_FLAG_RH_RUNNING, &hcd->flags);
-		set_bit(HCD_FLAG_DEAD, &hcd->flags);
 		if (hcd->rh_registered) {
 			clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 

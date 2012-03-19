@@ -22,7 +22,10 @@ void crst_table_free(struct mm_struct *, unsigned long *);
 
 unsigned long *page_table_alloc(struct mm_struct *, unsigned long);
 void page_table_free(struct mm_struct *, unsigned long *);
+#ifdef CONFIG_HAVE_RCU_TABLE_FREE
 void page_table_free_rcu(struct mmu_gather *, unsigned long *);
+void __tlb_remove_table(void *_table);
+#endif
 
 static inline void clear_table(unsigned long *s, unsigned long val, size_t n)
 {
@@ -110,6 +113,9 @@ static inline void pud_populate(struct mm_struct *mm, pud_t *pud, pmd_t *pmd)
 
 static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {
+	spin_lock_init(&mm->context.list_lock);
+	INIT_LIST_HEAD(&mm->context.pgtable_list);
+	INIT_LIST_HEAD(&mm->context.gmap_list);
 	return (pgd_t *) crst_table_alloc(mm);
 }
 #define pgd_free(mm, pgd) crst_table_free(mm, (unsigned long *) pgd)

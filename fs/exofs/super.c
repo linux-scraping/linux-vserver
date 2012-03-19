@@ -166,7 +166,6 @@ static struct inode *exofs_alloc_inode(struct super_block *sb)
 static void exofs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(exofs_inode_cachep, exofs_i(inode));
 }
 
@@ -745,6 +744,7 @@ static int exofs_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->one_comp.obj.partition = opts->pid;
 	sbi->one_comp.obj.id = 0;
 	exofs_make_credential(sbi->one_comp.cred, &sbi->one_comp.obj);
+	sbi->oc.numdevs = 1;
 	sbi->oc.single_comp = EC_SINGLE_COMP;
 	sbi->oc.comps = &sbi->one_comp;
 
@@ -802,7 +802,6 @@ static int exofs_fill_super(struct super_block *sb, void *data, int silent)
 			goto free_sbi;
 
 		ore_comp_set_dev(&sbi->oc, 0, od);
-		sbi->oc.numdevs = 1;
 	}
 
 	__sbi_read_stats(sbi);
@@ -839,6 +838,8 @@ static int exofs_fill_super(struct super_block *sb, void *data, int silent)
 	ret = bdi_setup_and_register(&sbi->bdi, "exofs", BDI_CAP_MAP_COPY);
 	if (ret) {
 		EXOFS_DBGMSG("Failed to bdi_setup_and_register\n");
+		dput(sb->s_root);
+		sb->s_root = NULL;
 		goto free_sbi;
 	}
 

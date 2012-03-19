@@ -19,10 +19,8 @@
  ******************************************************************************/
 
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
-#include <target/target_core_tpg.h>
 
 #include "iscsi_target_core.h"
 #include "iscsi_target_erl0.h"
@@ -72,7 +70,7 @@ int iscsit_load_discovery_tpg(void)
 
 	ret = core_tpg_register(
 			&lio_target_fabric_configfs->tf_ops,
-			NULL, &tpg->tpg_se_tpg, (void *)tpg,
+			NULL, &tpg->tpg_se_tpg, tpg,
 			TRANSPORT_TPG_TYPE_DISCOVERY);
 	if (ret < 0) {
 		kfree(tpg);
@@ -253,6 +251,7 @@ err_out:
 		iscsi_release_param_list(tpg->param_list);
 		tpg->param_list = NULL;
 	}
+	kfree(tpg);
 	return -ENOMEM;
 }
 
@@ -673,12 +672,6 @@ int iscsit_ta_generate_node_acls(
 	pr_debug("iSCSI_TPG[%hu] - Generate Initiator Portal Group ACLs: %s\n",
 		tpg->tpgt, (a->generate_node_acls) ? "Enabled" : "Disabled");
 
-	if (flag == 1 && a->cache_dynamic_acls == 0) {
-		pr_debug("Explicitly setting cache_dynamic_acls=1 when "
-			"generate_node_acls=1\n");
-		a->cache_dynamic_acls = 1;
-	}
-
 	return 0;
 }
 
@@ -716,12 +709,6 @@ int iscsit_ta_cache_dynamic_acls(
 	if ((flag != 0) && (flag != 1)) {
 		pr_err("Illegal value %d\n", flag);
 		return -EINVAL;
-	}
-
-	if (a->generate_node_acls == 1 && flag == 0) {
-		pr_debug("Skipping cache_dynamic_acls=0 when"
-			" generate_node_acls=1\n");
-		return 0;
 	}
 
 	a->cache_dynamic_acls = flag;

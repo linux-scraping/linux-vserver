@@ -163,12 +163,14 @@ xfs_swap_extents_check_format(
 
 	/* Check temp in extent form to max in target */
 	if (tip->i_d.di_format == XFS_DINODE_FMT_EXTENTS &&
-	    XFS_IFORK_NEXTENTS(tip, XFS_DATA_FORK) > ip->i_df.if_ext_max)
+	    XFS_IFORK_NEXTENTS(tip, XFS_DATA_FORK) >
+			XFS_IFORK_MAXEXT(ip, XFS_DATA_FORK))
 		return EINVAL;
 
 	/* Check target in extent form to max in temp */
 	if (ip->i_d.di_format == XFS_DINODE_FMT_EXTENTS &&
-	    XFS_IFORK_NEXTENTS(ip, XFS_DATA_FORK) > tip->i_df.if_ext_max)
+	    XFS_IFORK_NEXTENTS(ip, XFS_DATA_FORK) >
+			XFS_IFORK_MAXEXT(tip, XFS_DATA_FORK))
 		return EINVAL;
 
 	/*
@@ -180,18 +182,25 @@ xfs_swap_extents_check_format(
 	 * (a common defrag case) which will occur when the temp inode is in
 	 * extent format...
 	 */
-	if (tip->i_d.di_format == XFS_DINODE_FMT_BTREE &&
-	    ((XFS_IFORK_BOFF(ip) &&
-	      tip->i_df.if_broot_bytes > XFS_IFORK_BOFF(ip)) ||
-	     XFS_IFORK_NEXTENTS(tip, XFS_DATA_FORK) <= ip->i_df.if_ext_max))
-		return EINVAL;
+	if (tip->i_d.di_format == XFS_DINODE_FMT_BTREE) {
+		if (XFS_IFORK_BOFF(ip) &&
+		    tip->i_df.if_broot_bytes > XFS_IFORK_BOFF(ip))
+			return EINVAL;
+		if (XFS_IFORK_NEXTENTS(tip, XFS_DATA_FORK) <=
+		    XFS_IFORK_MAXEXT(ip, XFS_DATA_FORK))
+			return EINVAL;
+	}
 
 	/* Reciprocal target->temp btree format checks */
-	if (ip->i_d.di_format == XFS_DINODE_FMT_BTREE &&
-	    ((XFS_IFORK_BOFF(tip) &&
-	      ip->i_df.if_broot_bytes > XFS_IFORK_BOFF(tip)) ||
-	     XFS_IFORK_NEXTENTS(ip, XFS_DATA_FORK) <= tip->i_df.if_ext_max))
-		return EINVAL;
+	if (ip->i_d.di_format == XFS_DINODE_FMT_BTREE) {
+		if (XFS_IFORK_BOFF(tip) &&
+		    ip->i_df.if_broot_bytes > XFS_IFORK_BOFF(tip))
+			return EINVAL;
+
+		if (XFS_IFORK_NEXTENTS(ip, XFS_DATA_FORK) <=
+		    XFS_IFORK_MAXEXT(tip, XFS_DATA_FORK))
+			return EINVAL;
+	}
 
 	return 0;
 }
@@ -210,7 +219,6 @@ xfs_swap_extents(
 	int		error = 0;
 	int		aforkblks = 0;
 	int		taforkblks = 0;
-	xfs_extnum_t	nextents;
 	__uint64_t	tmp;
 
 	tempifp = kmem_alloc(sizeof(xfs_ifork_t), KM_MAYFAIL);
@@ -350,16 +358,6 @@ xfs_swap_extents(
 	*tifp = *tempifp;	/* struct copy */
 
 	/*
-	 * Fix the in-memory data fork values that are dependent on the fork
-	 * offset in the inode. We can't assume they remain the same as attr2
-	 * has dynamic fork offsets.
-	 */
-	ifp->if_ext_max = XFS_IFORK_SIZE(ip, XFS_DATA_FORK) /
-					(uint)sizeof(xfs_bmbt_rec_t);
-	tifp->if_ext_max = XFS_IFORK_SIZE(tip, XFS_DATA_FORK) /
-					(uint)sizeof(xfs_bmbt_rec_t);
-
-	/*
 	 * Fix the on-disk inode values
 	 */
 	tmp = (__uint64_t)ip->i_d.di_nblocks;
@@ -395,8 +393,7 @@ xfs_swap_extents(
 		 * pointer.  Otherwise it's already NULL or
 		 * pointing to the extent.
 		 */
-		nextents = ip->i_df.if_bytes / (uint)sizeof(xfs_bmbt_rec_t);
-		if (nextents <= XFS_INLINE_EXTS) {
+		if (ip->i_d.di_nextents <= XFS_INLINE_EXTS) {
 			ifp->if_u1.if_extents =
 				ifp->if_u2.if_inline_ext;
 		}
@@ -415,8 +412,7 @@ xfs_swap_extents(
 		 * pointer.  Otherwise it's already NULL or
 		 * pointing to the extent.
 		 */
-		nextents = tip->i_df.if_bytes / (uint)sizeof(xfs_bmbt_rec_t);
-		if (nextents <= XFS_INLINE_EXTS) {
+		if (tip->i_d.di_nextents <= XFS_INLINE_EXTS) {
 			tifp->if_u1.if_extents =
 				tifp->if_u2.if_inline_ext;
 		}

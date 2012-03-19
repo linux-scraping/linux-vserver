@@ -4,12 +4,10 @@ static struct usb_device_id InterfaceUsbtable[] = {
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_T3, BCM_USB_PRODUCT_ID_T3) },
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_T3, BCM_USB_PRODUCT_ID_T3B) },
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_T3, BCM_USB_PRODUCT_ID_T3L) },
-	{ USB_DEVICE(BCM_USB_VENDOR_ID_T3, BCM_USB_PRODUCT_ID_SYM) },
+	{ USB_DEVICE(BCM_USB_VENDOR_ID_T3, BCM_USB_PRODUCT_ID_SM250) },
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_ZTE, BCM_USB_PRODUCT_ID_226) },
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_FOXCONN, BCM_USB_PRODUCT_ID_1901) },
 	{ USB_DEVICE(BCM_USB_VENDOR_ID_ZTE, BCM_USB_PRODUCT_ID_ZTE_TU25) },
-	{ USB_DEVICE(BCM_USB_VENDOR_ID_ZTE, BCM_USB_PRODUCT_ID_ZTE_226) },
-	{ USB_DEVICE(BCM_USB_VENDOR_ID_ZTE, BCM_USB_PRODUCT_ID_ZTE_326) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, InterfaceUsbtable);
@@ -70,7 +68,7 @@ static void InterfaceAdapterFree(PS_INTERFACE_ADAPTER psIntfAdapter)
 static void ConfigureEndPointTypesThroughEEPROM(PMINI_ADAPTER Adapter)
 {
 	unsigned long ulReg = 0;
-	int ret;
+	int bytes;
 
 	/* Program EP2 MAX_PKT_SIZE */
 	ulReg = ntohl(EP2_MPS_REG);
@@ -96,8 +94,8 @@ static void ConfigureEndPointTypesThroughEEPROM(PMINI_ADAPTER Adapter)
 	BeceemEEPROMBulkWrite(Adapter, (PUCHAR)&ulReg, 0x140, 4, TRUE);
 
 	/* Program TX EP as interrupt(Alternate Setting) */
-	ret = rdmalt(Adapter, 0x0F0110F8, (u32 *)&ulReg, sizeof(u32));
-	if (ret) {
+	bytes = rdmalt(Adapter, 0x0F0110F8, (u32 *)&ulReg, sizeof(u32));
+	if (bytes < 0) {
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_INITEXIT, DRV_ENTRY, DBG_LVL_ALL,
 			"reading of Tx EP failed\n");
 		return;
@@ -432,6 +430,7 @@ static int InterfaceAdapterInit(PS_INTERFACE_ADAPTER psIntfAdapter)
 	int usedIntOutForBulkTransfer = 0 ;
 	BOOLEAN bBcm16 = FALSE;
 	UINT uiData = 0;
+	int bytes;
 
 	/* Store the usb dev into interface adapter */
 	psIntfAdapter->udev = usb_get_dev(interface_to_usbdev(psIntfAdapter->interface));
@@ -440,9 +439,10 @@ static int InterfaceAdapterInit(PS_INTERFACE_ADAPTER psIntfAdapter)
 	psIntfAdapter->psAdapter->interface_rdm = BcmRDM;
 	psIntfAdapter->psAdapter->interface_wrm = BcmWRM;
 
-	retval = rdmalt(psIntfAdapter->psAdapter, CHIP_ID_REG,
+	bytes = rdmalt(psIntfAdapter->psAdapter, CHIP_ID_REG,
 			(u32 *)&(psIntfAdapter->psAdapter->chip_id), sizeof(u32));
-	if (retval) {
+	if (bytes < 0) {
+		retval = bytes;
 		BCM_DEBUG_PRINT(psIntfAdapter->psAdapter, DBG_TYPE_PRINTK, 0, 0, "CHIP ID Read Failed\n");
 		return retval;
 	}

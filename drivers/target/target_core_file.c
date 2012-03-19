@@ -37,8 +37,7 @@
 #include <scsi/scsi_host.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_transport.h>
+#include <target/target_core_backend.h>
 
 #include "target_core_file.h"
 
@@ -86,7 +85,7 @@ static void fd_detach_hba(struct se_hba *hba)
 static void *fd_allocate_virtdevice(struct se_hba *hba, const char *name)
 {
 	struct fd_dev *fd_dev;
-	struct fd_host *fd_host = (struct fd_host *) hba->hba_ptr;
+	struct fd_host *fd_host = hba->hba_ptr;
 
 	fd_dev = kzalloc(sizeof(struct fd_dev), GFP_KERNEL);
 	if (!fd_dev) {
@@ -114,8 +113,8 @@ static struct se_device *fd_create_virtdevice(
 	struct se_device *dev;
 	struct se_dev_limits dev_limits;
 	struct queue_limits *limits;
-	struct fd_dev *fd_dev = (struct fd_dev *) p;
-	struct fd_host *fd_host = (struct fd_host *) hba->hba_ptr;
+	struct fd_dev *fd_dev = p;
+	struct fd_host *fd_host = hba->hba_ptr;
 	mm_segment_t old_fs;
 	struct file *file;
 	struct inode *inode = NULL;
@@ -134,24 +133,21 @@ static struct se_device *fd_create_virtdevice(
 		ret = PTR_ERR(dev_p);
 		goto fail;
 	}
+#if 0
+	if (di->no_create_file)
+		flags = O_RDWR | O_LARGEFILE;
+	else
+		flags = O_RDWR | O_CREAT | O_LARGEFILE;
+#else
+	flags = O_RDWR | O_CREAT | O_LARGEFILE;
+#endif
+/*	flags |= O_DIRECT; */
 	/*
-	 * Use O_DSYNC by default instead of O_SYNC to forgo syncing
-	 * of pure timestamp updates.
+	 * If fd_buffered_io=1 has not been set explicitly (the default),
+	 * use O_SYNC to force FILEIO writes to disk.
 	 */
-	flags = O_RDWR | O_CREAT | O_LARGEFILE | O_DSYNC;
-	/*
-	 * Optionally allow fd_buffered_io=1 to be enabled for people
-	 * who want use the fs buffer cache as an WriteCache mechanism.
-	 *
-	 * This means that in event of a hard failure, there is a risk
-	 * of silent data-loss if the SCSI client has *not* performed a
-	 * forced unit access (FUA) write, or issued SYNCHRONIZE_CACHE
-	 * to write-out the entire device cache.
-	 */
-	if (fd_dev->fbd_flags & FDBD_HAS_BUFFERED_IO_WCE) {
-		pr_debug("FILEIO: Disabling O_DSYNC, using buffered FILEIO\n");
-		flags &= ~O_DSYNC;
-	}
+	if (!(fd_dev->fbd_flags & FDBD_USE_BUFFERED_IO))
+		flags |= O_SYNC;
 
 	file = filp_open(dev_p, flags, 0600);
 	if (IS_ERR(file)) {
@@ -173,7 +169,6 @@ static struct se_device *fd_create_virtdevice(
 	inode = file->f_mapping->host;
 	if (S_ISBLK(inode->i_mode)) {
 		struct request_queue *q;
-		unsigned long long dev_size;
 		/*
 		 * Setup the local scope queue_limits from struct request_queue->limits
 		 * to pass into transport_add_device_to_core_hba() as struct se_dev_limits.
@@ -188,12 +183,13 @@ static struct se_device *fd_create_virtdevice(
 		 * one (1) logical sector from underlying struct block_device
 		 */
 		fd_dev->fd_block_size = bdev_logical_block_size(inode->i_bdev);
-		dev_size = (i_size_read(file->f_mapping->host) -
+		fd_dev->fd_dev_size = (i_size_read(file->f_mapping->host) -
 				       fd_dev->fd_block_size);
 
 		pr_debug("FILEIO: Using size: %llu bytes from struct"
 			" block_device blocks: %llu logical_block_size: %d\n",
-			dev_size, div_u64(dev_size, fd_dev->fd_block_size),
+			fd_dev->fd_dev_size,
+			div_u64(fd_dev->fd_dev_size, fd_dev->fd_block_size),
 			fd_dev->fd_block_size);
 	} else {
 		if (!(fd_dev->fbd_flags & FBDF_HAS_SIZE)) {
@@ -219,12 +215,6 @@ static struct se_device *fd_create_virtdevice(
 	if (!dev)
 		goto fail;
 
-	if (fd_dev->fbd_flags & FDBD_HAS_BUFFERED_IO_WCE) {
-		pr_debug("FILEIO: Forcing setting of emulate_write_cache=1"
-			" with FDBD_HAS_BUFFERED_IO_WCE\n");
-		dev->se_sub_dev->se_dev_attrib.emulate_write_cache = 1;
-	}
-
 	fd_dev->fd_dev_id = fd_host->fd_host_dev_id_count++;
 	fd_dev->fd_queue_depth = dev->queue_depth;
 
@@ -249,7 +239,7 @@ fail:
  */
 static void fd_free_device(void *p)
 {
-	struct fd_dev *fd_dev = (struct fd_dev *) p;
+	struct fd_dev *fd_dev = p;
 
 	if (fd_dev->fd_file) {
 		filp_close(fd_dev->fd_file, NULL);
@@ -300,7 +290,7 @@ static int fd_do_readv(struct se_task *task)
 
 	for_each_sg(task->task_sg, sg, task->task_sg_nents, i) {
 		iov[i].iov_len = sg->length;
-		iov[i].iov_base = kmap(sg_page(sg)) + sg->offset;
+		iov[i].iov_base = sg_virt(sg);
 	}
 
 	old_fs = get_fs();
@@ -308,8 +298,6 @@ static int fd_do_readv(struct se_task *task)
 	ret = vfs_readv(fd, &iov[0], task->task_sg_nents, &pos);
 	set_fs(old_fs);
 
-	for_each_sg(task->task_sg, sg, task->task_sg_nents, i)
-		kunmap(sg_page(sg));
 	kfree(iov);
 	/*
 	 * Return zeros and GOOD status even if the READ did not return
@@ -355,16 +343,13 @@ static int fd_do_writev(struct se_task *task)
 
 	for_each_sg(task->task_sg, sg, task->task_sg_nents, i) {
 		iov[i].iov_len = sg->length;
-		iov[i].iov_base = kmap(sg_page(sg)) + sg->offset;
+		iov[i].iov_base = sg_virt(sg);
 	}
 
 	old_fs = get_fs();
 	set_fs(get_ds());
 	ret = vfs_writev(fd, &iov[0], task->task_sg_nents, &pos);
 	set_fs(old_fs);
-
-	for_each_sg(task->task_sg, sg, task->task_sg_nents, i)
-		kunmap(sg_page(sg));
 
 	kfree(iov);
 
@@ -414,6 +399,26 @@ static void fd_emulate_sync_cache(struct se_task *task)
 		transport_complete_sync_cache(cmd, ret == 0);
 }
 
+/*
+ * WRITE Force Unit Access (FUA) emulation on a per struct se_task
+ * LBA range basis..
+ */
+static void fd_emulate_write_fua(struct se_cmd *cmd, struct se_task *task)
+{
+	struct se_device *dev = cmd->se_dev;
+	struct fd_dev *fd_dev = dev->dev_ptr;
+	loff_t start = task->task_lba * dev->se_sub_dev->se_dev_attrib.block_size;
+	loff_t end = start + task->task_size;
+	int ret;
+
+	pr_debug("FILEIO: FUA WRITE LBA: %llu, bytes: %u\n",
+			task->task_lba, task->task_size);
+
+	ret = vfs_fsync_range(fd_dev->fd_file, start, end, 1);
+	if (ret != 0)
+		pr_err("FILEIO: vfs_fsync_range() failed: %d\n", ret);
+}
+
 static int fd_do_task(struct se_task *task)
 {
 	struct se_cmd *cmd = task->task_se_cmd;
@@ -428,21 +433,19 @@ static int fd_do_task(struct se_task *task)
 		ret = fd_do_readv(task);
 	} else {
 		ret = fd_do_writev(task);
-		/*
-		 * Perform implict vfs_fsync_range() for fd_do_writev() ops
-		 * for SCSI WRITEs with Forced Unit Access (FUA) set.
-		 * Allow this to happen independent of WCE=0 setting.
-		 */
+
 		if (ret > 0 &&
+		    dev->se_sub_dev->se_dev_attrib.emulate_write_cache > 0 &&
 		    dev->se_sub_dev->se_dev_attrib.emulate_fua_write > 0 &&
 		    (cmd->se_cmd_flags & SCF_FUA)) {
-			struct fd_dev *fd_dev = dev->dev_ptr;
-			loff_t start = task->task_lba *
-				dev->se_sub_dev->se_dev_attrib.block_size;
-			loff_t end = start + task->task_size;
-
-			vfs_fsync_range(fd_dev->fd_file, start, end, 1);
+			/*
+			 * We might need to be a bit smarter here
+			 * and return some sense data to let the initiator
+			 * know the FUA WRITE cache sync failed..?
+			 */
+			fd_emulate_write_fua(cmd, task);
 		}
+
 	}
 
 	if (ret < 0) {
@@ -494,7 +497,7 @@ static ssize_t fd_set_configfs_dev_params(
 
 	orig = opts;
 
-	while ((ptr = strsep(&opts, ",")) != NULL) {
+	while ((ptr = strsep(&opts, ",\n")) != NULL) {
 		if (!*ptr)
 			continue;
 
@@ -541,7 +544,7 @@ static ssize_t fd_set_configfs_dev_params(
 			pr_debug("FILEIO: Using buffered I/O"
 				" operations for struct fd_dev\n");
 
-			fd_dev->fbd_flags |= FDBD_HAS_BUFFERED_IO_WCE;
+			fd_dev->fbd_flags |= FDBD_USE_BUFFERED_IO;
 			break;
 		default:
 			break;
@@ -555,7 +558,7 @@ out:
 
 static ssize_t fd_check_configfs_dev_params(struct se_hba *hba, struct se_subsystem_dev *se_dev)
 {
-	struct fd_dev *fd_dev = (struct fd_dev *) se_dev->se_dev_su_ptr;
+	struct fd_dev *fd_dev = se_dev->se_dev_su_ptr;
 
 	if (!(fd_dev->fbd_flags & FBDF_HAS_PATH)) {
 		pr_err("Missing fd_dev_name=\n");
@@ -576,8 +579,8 @@ static ssize_t fd_show_configfs_dev_params(
 	bl = sprintf(b + bl, "TCM FILEIO ID: %u", fd_dev->fd_dev_id);
 	bl += sprintf(b + bl, "        File: %s  Size: %llu  Mode: %s\n",
 		fd_dev->fd_dev_name, fd_dev->fd_dev_size,
-		(fd_dev->fbd_flags & FDBD_HAS_BUFFERED_IO_WCE) ?
-		"Buffered-WCE" : "O_DSYNC");
+		(fd_dev->fbd_flags & FDBD_USE_BUFFERED_IO) ?
+		"Buffered" : "Synchronous");
 	return bl;
 }
 
@@ -602,20 +605,10 @@ static u32 fd_get_device_type(struct se_device *dev)
 static sector_t fd_get_blocks(struct se_device *dev)
 {
 	struct fd_dev *fd_dev = dev->dev_ptr;
-	struct file *f = fd_dev->fd_file;
-	struct inode *i = f->f_mapping->host;
-	unsigned long long dev_size;
-	/*
-	 * When using a file that references an underlying struct block_device,
-	 * ensure dev_size is always based on the current inode size in order
-	 * to handle underlying block_device resize operations.
-	 */
-	if (S_ISBLK(i->i_mode))
-		dev_size = (i_size_read(i) - fd_dev->fd_block_size);
-	else
-		dev_size = fd_dev->fd_dev_size;
+	unsigned long long blocks_long = div_u64(fd_dev->fd_dev_size,
+			dev->se_sub_dev->se_dev_attrib.block_size);
 
-	return div_u64(dev_size, dev->se_sub_dev->se_dev_attrib.block_size);
+	return blocks_long;
 }
 
 static struct se_subsystem_api fileio_template = {

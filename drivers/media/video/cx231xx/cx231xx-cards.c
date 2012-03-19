@@ -448,7 +448,7 @@ struct cx231xx_board cx231xx_boards[] = {
 		.output_mode = OUT_MODE_VIP11,
 		.demod_xfer_mode = 0,
 		.ctl_pin_status_mask = 0xFFFFFFC4,
-		.agc_analog_digital_select_gpio = 0x1c,
+		.agc_analog_digital_select_gpio = 0x00,	/* According with PV cxPolaris.inf file */
 		.tuner_sif_gpio = -1,
 		.tuner_scl_gpio = -1,
 		.tuner_sda_gpio = -1,
@@ -843,26 +843,36 @@ void cx231xx_release_resources(struct cx231xx *dev)
 
 	cx231xx_remove_from_devlist(dev);
 
+	cx231xx_ir_exit(dev);
+
 	/* Release I2C buses */
 	cx231xx_dev_uninit(dev);
 
-	cx231xx_ir_exit(dev);
+	/* delete v4l2 device */
+	v4l2_device_unregister(&dev->v4l2_dev);
 
 	usb_put_dev(dev->udev);
 
 	/* Mark device as unused */
-	cx231xx_devused &= ~(1 << dev->devno);
+	clear_bit(dev->devno, &cx231xx_devused);
+
+	kfree(dev->video_mode.alt_max_pkt_size);
+	kfree(dev->vbi_mode.alt_max_pkt_size);
+	kfree(dev->sliced_cc_mode.alt_max_pkt_size);
+	kfree(dev->ts1_mode.alt_max_pkt_size);
+	kfree(dev);
+	dev = NULL;
 }
 
 /*
  * cx231xx_init_dev()
  * allocates and inits the device structs, registers i2c bus and v4l device
  */
-static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
+static int cx231xx_init_dev(struct cx231xx *dev, struct usb_device *udev,
 			    int minor)
 {
-	struct cx231xx *dev = *devhandle;
 	int retval = -ENOMEM;
+	int errCode;
 	unsigned int maxh, maxw;
 
 	dev->udev = udev;
@@ -898,8 +908,8 @@ static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
 	/* Cx231xx pre card setup */
 	cx231xx_pre_card_setup(dev);
 
-	retval = cx231xx_config(dev);
-	if (retval) {
+	errCode = cx231xx_config(dev);
+	if (errCode) {
 		cx231xx_errdev("error configuring device\n");
 		return -ENOMEM;
 	}
@@ -908,11 +918,12 @@ static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
 	dev->norm = dev->board.norm;
 
 	/* register i2c bus */
-	retval = cx231xx_dev_init(dev);
-	if (retval) {
+	errCode = cx231xx_dev_init(dev);
+	if (errCode < 0) {
+		cx231xx_dev_uninit(dev);
 		cx231xx_errdev("%s: cx231xx_i2c_register - errCode [%d]!\n",
-			       __func__, retval);
-		goto err_dev_init;
+			       __func__, errCode);
+		return errCode;
 	}
 
 	/* Do board specific init */
@@ -930,11 +941,11 @@ static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
 	dev->interlaced = 0;
 	dev->video_input = 0;
 
-	retval = cx231xx_config(dev);
-	if (retval) {
+	errCode = cx231xx_config(dev);
+	if (errCode < 0) {
 		cx231xx_errdev("%s: cx231xx_config - errCode [%d]!\n",
-			       __func__, retval);
-		goto err_dev_init;
+			       __func__, errCode);
+		return errCode;
 	}
 
 	/* init video dma queues */
@@ -958,9 +969,9 @@ static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
 	}
 
 	retval = cx231xx_register_analog_devices(dev);
-	if (retval) {
-		cx231xx_release_analog_resources(dev);
-		goto err_analog;
+	if (retval < 0) {
+		cx231xx_release_resources(dev);
+		return retval;
 	}
 
 	cx231xx_ir_init(dev);
@@ -968,11 +979,6 @@ static int cx231xx_init_dev(struct cx231xx **devhandle, struct usb_device *udev,
 	cx231xx_init_extension(dev);
 
 	return 0;
-err_analog:
-	cx231xx_remove_from_devlist(dev);
-err_dev_init:
-	cx231xx_dev_uninit(dev);
-	return retval;
 }
 
 #if defined(CONFIG_MODULES) && defined(MODULE)
@@ -1019,9 +1025,9 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	int i, isoc_pipe = 0;
 	char *speed;
 	char descr[255] = "";
-	struct usb_interface *lif = NULL;
 	struct usb_interface_assoc_descriptor *assoc_desc;
 
+	udev = usb_get_dev(interface_to_usbdev(interface));
 	ifnum = interface->altsetting[0].desc.bInterfaceNumber;
 
 	/*
@@ -1032,25 +1038,23 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 		return -ENODEV;
 
 	/* Check to see next free device and mark as used */
-	nr = find_first_zero_bit(&cx231xx_devused, CX231XX_MAXBOARDS);
-	cx231xx_devused |= 1 << nr;
-
-	if (nr >= CX231XX_MAXBOARDS) {
-		cx231xx_err(DRIVER_NAME
-		 ": Supports only %i cx231xx boards.\n", CX231XX_MAXBOARDS);
-		cx231xx_devused &= ~(1 << nr);
-		return -ENOMEM;
-	}
+	do {
+		nr = find_first_zero_bit(&cx231xx_devused, CX231XX_MAXBOARDS);
+		if (nr >= CX231XX_MAXBOARDS) {
+			/* No free device slots */
+			cx231xx_err(DRIVER_NAME ": Supports only %i devices.\n",
+					CX231XX_MAXBOARDS);
+			return -ENOMEM;
+		}
+	} while (test_and_set_bit(nr, &cx231xx_devused));
 
 	/* allocate memory for our device state and initialize it */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL) {
 		cx231xx_err(DRIVER_NAME ": out of memory!\n");
-		cx231xx_devused &= ~(1 << nr);
+		clear_bit(nr, &cx231xx_devused);
 		return -ENOMEM;
 	}
-
-	udev = usb_get_dev(interface_to_usbdev(interface));
 
 	snprintf(dev->name, 29, "cx231xx #%d", nr);
 	dev->devno = nr;
@@ -1070,12 +1074,10 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	dev->vbi_or_sliced_cc_mode = 0;
 
 	/* get maximum no.of IAD interfaces */
-	dev->max_iad_interface_count = udev->config->desc.bNumInterfaces;
+	assoc_desc = udev->actconfig->intf_assoc[0];
+	dev->max_iad_interface_count = assoc_desc->bInterfaceCount;
 
 	/* init CIR module TBD */
-
-	/* store the current interface */
-	lif = interface;
 
 	/*mode_tv: digital=1 or analog=0*/
 	dev->mode_tv = 0;
@@ -1116,9 +1118,6 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	     le16_to_cpu(udev->descriptor.idProduct),
 	     dev->max_iad_interface_count);
 
-	/* store the interface 0 back */
-	lif = udev->actconfig->interface[0];
-
 	/* increment interface count */
 	dev->interface_count++;
 
@@ -1126,17 +1125,19 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	nr = dev->devno;
 
 	assoc_desc = udev->actconfig->intf_assoc[0];
-	if (!assoc_desc || assoc_desc->bFirstInterface != ifnum) {
+	if (assoc_desc->bFirstInterface != ifnum) {
 		cx231xx_err(DRIVER_NAME ": Not found "
 			    "matching IAD interface\n");
-		retval = -ENODEV;
-		goto err_if;
+		clear_bit(dev->devno, &cx231xx_devused);
+		kfree(dev);
+		dev = NULL;
+		return -ENODEV;
 	}
 
 	cx231xx_info("registering interface %d\n", ifnum);
 
 	/* save our data pointer in this interface device */
-	usb_set_intfdata(lif, dev);
+	usb_set_intfdata(interface, dev);
 
 	/*
 	 * AV device initialization - only done at the last interface
@@ -1146,20 +1147,26 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	retval = v4l2_device_register(&interface->dev, &dev->v4l2_dev);
 	if (retval) {
 		cx231xx_errdev("v4l2_device_register failed\n");
-		retval = -EIO;
-		goto err_v4l2;
+		clear_bit(dev->devno, &cx231xx_devused);
+		kfree(dev);
+		dev = NULL;
+		return -EIO;
 	}
 	/* allocate device struct */
-	retval = cx231xx_init_dev(&dev, udev, nr);
-	if (retval)
-		goto err_init;
+	retval = cx231xx_init_dev(dev, udev, nr);
+	if (retval) {
+		clear_bit(dev->devno, &cx231xx_devused);
+		v4l2_device_unregister(&dev->v4l2_dev);
+		kfree(dev);
+		dev = NULL;
+		usb_set_intfdata(interface, NULL);
+
+		return retval;
+	}
 
 	/* compute alternate max packet sizes for video */
 	uif = udev->actconfig->interface[dev->current_pcb_config.
 		       hs_config_info[0].interface_info.video_index + 1];
-
-	if (uif->altsetting[0].desc.bNumEndpoints < isoc_pipe + 1)
-		return -ENODEV;
 
 	dev->video_mode.end_point_addr = le16_to_cpu(uif->altsetting[0].
 			endpoint[isoc_pipe].desc.bEndpointAddress);
@@ -1173,17 +1180,16 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 
 	if (dev->video_mode.alt_max_pkt_size == NULL) {
 		cx231xx_errdev("out of memory!\n");
-		retval = -ENOMEM;
-		goto err_video_alt;
+		clear_bit(dev->devno, &cx231xx_devused);
+		v4l2_device_unregister(&dev->v4l2_dev);
+		kfree(dev);
+		dev = NULL;
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < dev->video_mode.num_alt; i++) {
-		u16 tmp;
-
-		if (uif->altsetting[i].desc.bNumEndpoints < isoc_pipe + 1)
-			return -ENODEV;
-
-		tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].desc.wMaxPacketSize);
+		u16 tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].
+				desc.wMaxPacketSize);
 		dev->video_mode.alt_max_pkt_size[i] =
 		    (tmp & 0x07ff) * (((tmp & 0x1800) >> 11) + 1);
 		cx231xx_info("Alternate setting %i, max size= %i\n", i,
@@ -1194,9 +1200,6 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	uif = udev->actconfig->interface[dev->current_pcb_config.
 				       hs_config_info[0].interface_info.
 				       vanc_index + 1];
-
-	if (uif->altsetting[0].desc.bNumEndpoints < isoc_pipe + 1)
-		return -ENODEV;
 
 	dev->vbi_mode.end_point_addr =
 	    le16_to_cpu(uif->altsetting[0].endpoint[isoc_pipe].desc.
@@ -1211,17 +1214,16 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 
 	if (dev->vbi_mode.alt_max_pkt_size == NULL) {
 		cx231xx_errdev("out of memory!\n");
-		retval = -ENOMEM;
-		goto err_vbi_alt;
+		clear_bit(dev->devno, &cx231xx_devused);
+		v4l2_device_unregister(&dev->v4l2_dev);
+		kfree(dev);
+		dev = NULL;
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < dev->vbi_mode.num_alt; i++) {
-		u16 tmp;
-
-		if (uif->altsetting[i].desc.bNumEndpoints < isoc_pipe + 1)
-			return -ENODEV;
-
-		tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].
+		u16 tmp =
+		    le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].
 				desc.wMaxPacketSize);
 		dev->vbi_mode.alt_max_pkt_size[i] =
 		    (tmp & 0x07ff) * (((tmp & 0x1800) >> 11) + 1);
@@ -1233,9 +1235,6 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	uif = udev->actconfig->interface[dev->current_pcb_config.
 				       hs_config_info[0].interface_info.
 				       hanc_index + 1];
-
-	if (uif->altsetting[0].desc.bNumEndpoints < isoc_pipe + 1)
-		return -ENODEV;
 
 	dev->sliced_cc_mode.end_point_addr =
 	    le16_to_cpu(uif->altsetting[0].endpoint[isoc_pipe].desc.
@@ -1250,17 +1249,15 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 
 	if (dev->sliced_cc_mode.alt_max_pkt_size == NULL) {
 		cx231xx_errdev("out of memory!\n");
-		retval = -ENOMEM;
-		goto err_sliced_cc_alt;
+		clear_bit(dev->devno, &cx231xx_devused);
+		v4l2_device_unregister(&dev->v4l2_dev);
+		kfree(dev);
+		dev = NULL;
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < dev->sliced_cc_mode.num_alt; i++) {
-		u16 tmp;
-
-		if (uif->altsetting[i].desc.bNumEndpoints < isoc_pipe + 1)
-			return -ENODEV;
-
-		tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].
+		u16 tmp = le16_to_cpu(uif->altsetting[i].endpoint[isoc_pipe].
 				desc.wMaxPacketSize);
 		dev->sliced_cc_mode.alt_max_pkt_size[i] =
 		    (tmp & 0x07ff) * (((tmp & 0x1800) >> 11) + 1);
@@ -1275,11 +1272,6 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 					       interface_info.
 					       ts1_index + 1];
 
-		if (uif->altsetting[0].desc.bNumEndpoints < isoc_pipe + 1) {
-			retval = -ENODEV;
-			goto err_video_alt;
-		}
-
 		dev->ts1_mode.end_point_addr =
 		    le16_to_cpu(uif->altsetting[0].endpoint[isoc_pipe].
 				desc.bEndpointAddress);
@@ -1293,19 +1285,15 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 
 		if (dev->ts1_mode.alt_max_pkt_size == NULL) {
 			cx231xx_errdev("out of memory!\n");
-			retval = -ENOMEM;
-			goto err_ts1_alt;
+			clear_bit(dev->devno, &cx231xx_devused);
+			v4l2_device_unregister(&dev->v4l2_dev);
+			kfree(dev);
+			dev = NULL;
+			return -ENOMEM;
 		}
 
 		for (i = 0; i < dev->ts1_mode.num_alt; i++) {
-			u16 tmp;
-
-			if (uif->altsetting[i].desc.bNumEndpoints < isoc_pipe + 1) {
-				retval = -ENODEV;
-				goto err_video_alt;
-			}
-
-			tmp = le16_to_cpu(uif->altsetting[i].
+			u16 tmp = le16_to_cpu(uif->altsetting[i].
 						endpoint[isoc_pipe].desc.
 						wMaxPacketSize);
 			dev->ts1_mode.alt_max_pkt_size[i] =
@@ -1328,29 +1316,6 @@ static int cx231xx_usb_probe(struct usb_interface *interface,
 	request_modules(dev);
 
 	return 0;
-err_ts1_alt:
-	kfree(dev->sliced_cc_mode.alt_max_pkt_size);
-err_sliced_cc_alt:
-	kfree(dev->vbi_mode.alt_max_pkt_size);
-err_vbi_alt:
-	kfree(dev->video_mode.alt_max_pkt_size);
-err_video_alt:
-	/* cx231xx_uninit_dev: */
-	cx231xx_close_extension(dev);
-	cx231xx_ir_exit(dev);
-	cx231xx_release_analog_resources(dev);
-	cx231xx_417_unregister(dev);
-	cx231xx_remove_from_devlist(dev);
-	cx231xx_dev_uninit(dev);
-err_init:
-	v4l2_device_unregister(&dev->v4l2_dev);
-err_v4l2:
-	usb_set_intfdata(lif, NULL);
-err_if:
-	usb_put_dev(udev);
-	kfree(dev);
-	cx231xx_devused &= ~(1 << nr);
-	return retval;
 }
 
 /*
@@ -1371,10 +1336,9 @@ static void cx231xx_usb_disconnect(struct usb_interface *interface)
 	if (!dev->udev)
 		return;
 
-	flush_request_modules(dev);
+	dev->state |= DEV_DISCONNECTED;
 
-	/* delete v4l2 device */
-	v4l2_device_unregister(&dev->v4l2_dev);
+	flush_request_modules(dev);
 
 	/* wait until all current v4l2 io is finished then deallocate
 	   resources */
@@ -1388,31 +1352,24 @@ static void cx231xx_usb_disconnect(struct usb_interface *interface)
 		     "deallocation are deferred on close.\n",
 		     video_device_node_name(dev->vdev));
 
-		dev->state |= DEV_MISCONFIGURED;
+		/* Even having users, it is safe to remove the RC i2c driver */
+		cx231xx_ir_exit(dev);
+
 		if (dev->USE_ISO)
 			cx231xx_uninit_isoc(dev);
 		else
 			cx231xx_uninit_bulk(dev);
-		dev->state |= DEV_DISCONNECTED;
 		wake_up_interruptible(&dev->wait_frame);
 		wake_up_interruptible(&dev->wait_stream);
 	} else {
-		dev->state |= DEV_DISCONNECTED;
-		cx231xx_release_resources(dev);
 	}
 
 	cx231xx_close_extension(dev);
 
 	mutex_unlock(&dev->lock);
 
-	if (!dev->users) {
-		kfree(dev->video_mode.alt_max_pkt_size);
-		kfree(dev->vbi_mode.alt_max_pkt_size);
-		kfree(dev->sliced_cc_mode.alt_max_pkt_size);
-		kfree(dev->ts1_mode.alt_max_pkt_size);
-		kfree(dev);
-		dev = NULL;
-	}
+	if (!dev->users)
+		cx231xx_release_resources(dev);
 }
 
 static struct usb_driver cx231xx_usb_driver = {
@@ -1422,26 +1379,4 @@ static struct usb_driver cx231xx_usb_driver = {
 	.id_table = cx231xx_id_table,
 };
 
-static int __init cx231xx_module_init(void)
-{
-	int result;
-
-	printk(KERN_INFO DRIVER_NAME " v4l2 driver loaded.\n");
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&cx231xx_usb_driver);
-	if (result)
-		cx231xx_err(DRIVER_NAME
-			    " usb_register failed. Error number %d.\n", result);
-
-	return result;
-}
-
-static void __exit cx231xx_module_exit(void)
-{
-	/* deregister this driver with the USB subsystem */
-	usb_deregister(&cx231xx_usb_driver);
-}
-
-module_init(cx231xx_module_init);
-module_exit(cx231xx_module_exit);
+module_usb_driver(cx231xx_usb_driver);

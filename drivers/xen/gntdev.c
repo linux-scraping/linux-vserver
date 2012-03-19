@@ -60,7 +60,7 @@ static int use_ptemod;
 struct gntdev_priv {
 	struct list_head maps;
 	/* lock protects maps from concurrent changes */
-	struct mutex lock;
+	spinlock_t lock;
 	struct mm_struct *mm;
 	struct mmu_notifier mn;
 };
@@ -105,21 +105,6 @@ static void gntdev_print_maps(struct gntdev_priv *priv,
 #endif
 }
 
-static void gntdev_free_map(struct grant_map *map)
-{
-	if (map == NULL)
-		return;
-
-	if (map->pages)
-		free_xenballooned_pages(map->count, map->pages);
-	kfree(map->pages);
-	kfree(map->grants);
-	kfree(map->map_ops);
-	kfree(map->unmap_ops);
-	kfree(map->kmap_ops);
-	kfree(map);
-}
-
 static struct grant_map *gntdev_alloc_map(struct gntdev_priv *priv, int count)
 {
 	struct grant_map *add;
@@ -157,7 +142,12 @@ static struct grant_map *gntdev_alloc_map(struct gntdev_priv *priv, int count)
 	return add;
 
 err:
-	gntdev_free_map(add);
+	kfree(add->pages);
+	kfree(add->grants);
+	kfree(add->map_ops);
+	kfree(add->unmap_ops);
+	kfree(add->kmap_ops);
+	kfree(add);
 	return NULL;
 }
 
@@ -203,12 +193,22 @@ static void gntdev_put_map(struct grant_map *map)
 
 	atomic_sub(map->count, &pages_mapped);
 
-	if (map->notify.flags & UNMAP_NOTIFY_SEND_EVENT)
+	if (map->notify.flags & UNMAP_NOTIFY_SEND_EVENT) {
 		notify_remote_via_evtchn(map->notify.event);
+		evtchn_put(map->notify.event);
+	}
 
-	if (map->pages && !use_ptemod)
-		unmap_grant_pages(map, 0, map->count);
-	gntdev_free_map(map);
+	if (map->pages) {
+		if (!use_ptemod)
+			unmap_grant_pages(map, 0, map->count);
+
+		free_xenballooned_pages(map->count, map->pages);
+	}
+	kfree(map->pages);
+	kfree(map->grants);
+	kfree(map->map_ops);
+	kfree(map->unmap_ops);
+	kfree(map);
 }
 
 /* ------------------------------------------------------------------ */
@@ -314,7 +314,8 @@ static int __unmap_grant_pages(struct grant_map *map, int offset, int pages)
 		}
 	}
 
-	err = gnttab_unmap_refs(map->unmap_ops + offset, map->pages + offset, pages);
+	err = gnttab_unmap_refs(map->unmap_ops + offset, map->pages + offset,
+				pages, true);
 	if (err)
 		return err;
 
@@ -395,7 +396,7 @@ static void mn_invl_range_start(struct mmu_notifier *mn,
 	unsigned long mstart, mend;
 	int err;
 
-	mutex_lock(&priv->lock);
+	spin_lock(&priv->lock);
 	list_for_each_entry(map, &priv->maps, next) {
 		if (!map->vma)
 			continue;
@@ -414,7 +415,7 @@ static void mn_invl_range_start(struct mmu_notifier *mn,
 					(mend - mstart) >> PAGE_SHIFT);
 		WARN_ON(err);
 	}
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 }
 
 static void mn_invl_page(struct mmu_notifier *mn,
@@ -431,7 +432,7 @@ static void mn_release(struct mmu_notifier *mn,
 	struct grant_map *map;
 	int err;
 
-	mutex_lock(&priv->lock);
+	spin_lock(&priv->lock);
 	list_for_each_entry(map, &priv->maps, next) {
 		if (!map->vma)
 			continue;
@@ -441,7 +442,7 @@ static void mn_release(struct mmu_notifier *mn,
 		err = unmap_grant_pages(map, /* offset */ 0, map->count);
 		WARN_ON(err);
 	}
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 }
 
 struct mmu_notifier_ops gntdev_mmu_ops = {
@@ -462,7 +463,7 @@ static int gntdev_open(struct inode *inode, struct file *flip)
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&priv->maps);
-	mutex_init(&priv->lock);
+	spin_lock_init(&priv->lock);
 
 	if (use_ptemod) {
 		priv->mm = get_task_mm(current);
@@ -493,13 +494,11 @@ static int gntdev_release(struct inode *inode, struct file *flip)
 
 	pr_debug("priv %p\n", priv);
 
-	mutex_lock(&priv->lock);
 	while (!list_empty(&priv->maps)) {
 		map = list_entry(priv->maps.next, struct grant_map, next);
 		list_del(&map->next);
 		gntdev_put_map(map);
 	}
-	mutex_unlock(&priv->lock);
 
 	if (use_ptemod)
 		mmu_notifier_unregister(&priv->mn, priv->mm);
@@ -537,10 +536,10 @@ static long gntdev_ioctl_map_grant_ref(struct gntdev_priv *priv,
 		return err;
 	}
 
-	mutex_lock(&priv->lock);
+	spin_lock(&priv->lock);
 	gntdev_add_map(priv, map);
 	op.index = map->index << PAGE_SHIFT;
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 
 	if (copy_to_user(u, &op, sizeof(op)) != 0)
 		return -EFAULT;
@@ -559,13 +558,13 @@ static long gntdev_ioctl_unmap_grant_ref(struct gntdev_priv *priv,
 		return -EFAULT;
 	pr_debug("priv %p, del %d+%d\n", priv, (int)op.index, (int)op.count);
 
-	mutex_lock(&priv->lock);
+	spin_lock(&priv->lock);
 	map = gntdev_find_map_index(priv, op.index >> PAGE_SHIFT, op.count);
 	if (map) {
 		list_del(&map->next);
 		err = 0;
 	}
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 	if (map)
 		gntdev_put_map(map);
 	return err;
@@ -603,6 +602,8 @@ static long gntdev_ioctl_notify(struct gntdev_priv *priv, void __user *u)
 	struct ioctl_gntdev_unmap_notify op;
 	struct grant_map *map;
 	int rc;
+	int out_flags;
+	unsigned int out_event;
 
 	if (copy_from_user(&op, u, sizeof(op)))
 		return -EFAULT;
@@ -610,7 +611,22 @@ static long gntdev_ioctl_notify(struct gntdev_priv *priv, void __user *u)
 	if (op.action & ~(UNMAP_NOTIFY_CLEAR_BYTE|UNMAP_NOTIFY_SEND_EVENT))
 		return -EINVAL;
 
-	mutex_lock(&priv->lock);
+	/* We need to grab a reference to the event channel we are going to use
+	 * to send the notify before releasing the reference we may already have
+	 * (if someone has called this ioctl twice). This is required so that
+	 * it is possible to change the clear_byte part of the notification
+	 * without disturbing the event channel part, which may now be the last
+	 * reference to that event channel.
+	 */
+	if (op.action & UNMAP_NOTIFY_SEND_EVENT) {
+		if (evtchn_get(op.event_channel_port))
+			return -EINVAL;
+	}
+
+	out_flags = op.action;
+	out_event = op.event_channel_port;
+
+	spin_lock(&priv->lock);
 
 	list_for_each_entry(map, &priv->maps, next) {
 		uint64_t begin = map->index << PAGE_SHIFT;
@@ -628,12 +644,22 @@ static long gntdev_ioctl_notify(struct gntdev_priv *priv, void __user *u)
 		goto unlock_out;
 	}
 
+	out_flags = map->notify.flags;
+	out_event = map->notify.event;
+
 	map->notify.flags = op.action;
 	map->notify.addr = op.index - (map->index << PAGE_SHIFT);
 	map->notify.event = op.event_channel_port;
+
 	rc = 0;
+
  unlock_out:
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
+
+	/* Drop the reference to the event channel we did not save in the map */
+	if (out_flags & UNMAP_NOTIFY_SEND_EVENT)
+		evtchn_put(out_event);
+
 	return rc;
 }
 
@@ -678,7 +704,7 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 	pr_debug("map %d+%d at %lx (pgoff %lx)\n",
 			index, count, vma->vm_start, vma->vm_pgoff);
 
-	mutex_lock(&priv->lock);
+	spin_lock(&priv->lock);
 	map = gntdev_find_map_index(priv, index, count);
 	if (!map)
 		goto unlock_out;
@@ -696,7 +722,7 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 	vma->vm_flags |= VM_RESERVED|VM_DONTEXPAND;
 
 	if (use_ptemod)
-		vma->vm_flags |= VM_DONTCOPY;
+		vma->vm_flags |= VM_DONTCOPY|VM_PFNMAP;
 
 	vma->vm_private_data = map;
 
@@ -713,7 +739,7 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 			map->flags |= GNTMAP_readonly;
 	}
 
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 
 	if (use_ptemod) {
 		err = apply_to_page_range(vma->vm_mm, vma->vm_start,
@@ -741,11 +767,11 @@ static int gntdev_mmap(struct file *flip, struct vm_area_struct *vma)
 	return 0;
 
 unlock_out:
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 	return err;
 
 out_unlock_put:
-	mutex_unlock(&priv->lock);
+	spin_unlock(&priv->lock);
 out_put_map:
 	if (use_ptemod)
 		map->vma = NULL;

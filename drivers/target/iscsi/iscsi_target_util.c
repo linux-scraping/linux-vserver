@@ -22,9 +22,7 @@
 #include <scsi/scsi_tcq.h>
 #include <scsi/iscsi_proto.h>
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_tmr.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
 
 #include "iscsi_target_core.h"
@@ -289,7 +287,7 @@ struct iscsi_cmd *iscsit_allocate_se_cmd_for_tmr(
 	}
 
 	se_cmd->se_tmr_req = core_tmr_alloc_req(se_cmd,
-				(void *)cmd->tmr_req, tcm_function,
+				cmd->tmr_req, tcm_function,
 				GFP_KERNEL);
 	if (!se_cmd->se_tmr_req)
 		goto out;
@@ -659,7 +657,7 @@ void iscsit_add_cmd_to_immediate_queue(
 	atomic_set(&conn->check_immediate_queue, 1);
 	spin_unlock_bh(&conn->immed_queue_lock);
 
-	wake_up(&conn->queues_wq);
+	wake_up_process(conn->thread_set->tx_thread);
 }
 
 struct iscsi_queue_req *iscsit_get_cmd_from_immediate_queue(struct iscsi_conn *conn)
@@ -733,7 +731,7 @@ void iscsit_add_cmd_to_response_queue(
 	atomic_inc(&cmd->response_queue_count);
 	spin_unlock_bh(&conn->response_queue_lock);
 
-	wake_up(&conn->queues_wq);
+	wake_up_process(conn->thread_set->tx_thread);
 }
 
 struct iscsi_queue_req *iscsit_get_cmd_from_response_queue(struct iscsi_conn *conn)
@@ -785,24 +783,6 @@ static void iscsit_remove_cmd_from_response_queue(
 			cmd->init_task_tag,
 			atomic_read(&cmd->response_queue_count));
 	}
-}
-
-bool iscsit_conn_all_queues_empty(struct iscsi_conn *conn)
-{
-	bool empty;
-
-	spin_lock_bh(&conn->immed_queue_lock);
-	empty = list_empty(&conn->immed_queue_list);
-	spin_unlock_bh(&conn->immed_queue_lock);
-
-	if (!empty)
-		return empty;
-
-	spin_lock_bh(&conn->response_queue_lock);
-	empty = list_empty(&conn->response_queue_list);
-	spin_unlock_bh(&conn->response_queue_lock);
-
-	return empty;
 }
 
 void iscsit_free_queue_reqs_for_conn(struct iscsi_conn *conn)
@@ -1095,7 +1075,7 @@ static void iscsit_handle_nopin_response_timeout(unsigned long data)
 	if (tiqn) {
 		spin_lock_bh(&tiqn->sess_err_stats.lock);
 		strcpy(tiqn->sess_err_stats.last_sess_fail_rem_name,
-				(void *)conn->sess->sess_ops->InitiatorName);
+				conn->sess->sess_ops->InitiatorName);
 		tiqn->sess_err_stats.last_sess_failure_type =
 				ISCSI_SESS_ERR_CXN_TIMEOUT;
 		tiqn->sess_err_stats.cxn_timeout_errors++;
@@ -1483,15 +1463,15 @@ static int iscsit_do_tx_data(
 	struct iscsi_conn *conn,
 	struct iscsi_data_count *count)
 {
-	int ret, iov_len;
+	int data = count->data_length, total_tx = 0, tx_loop = 0, iov_len;
 	struct kvec *iov_p;
 	struct msghdr msg;
 
 	if (!conn || !conn->sock || !conn->conn_ops)
 		return -1;
 
-	if (count->data_length <= 0) {
-		pr_err("Data length is: %d\n", count->data_length);
+	if (data <= 0) {
+		pr_err("Data length is: %d\n", data);
 		return -1;
 	}
 
@@ -1500,16 +1480,20 @@ static int iscsit_do_tx_data(
 	iov_p = count->iov;
 	iov_len = count->iov_count;
 
-	ret = kernel_sendmsg(conn->sock, &msg, iov_p, iov_len,
-			     count->data_length);
-	if (ret != count->data_length) {
-		pr_err("Unexpected ret: %d send data %d\n",
-		       ret, count->data_length);
-		return -EPIPE;
+	while (total_tx < data) {
+		tx_loop = kernel_sendmsg(conn->sock, &msg, iov_p, iov_len,
+					(data - total_tx));
+		if (tx_loop <= 0) {
+			pr_debug("tx_loop: %d total_tx %d\n",
+				tx_loop, total_tx);
+			return tx_loop;
+		}
+		total_tx += tx_loop;
+		pr_debug("tx_loop: %d, total_tx: %d, data: %d\n",
+					tx_loop, total_tx, data);
 	}
-	pr_debug("ret: %d, sent data: %d\n", ret, count->data_length);
 
-	return ret;
+	return total_tx;
 }
 
 int rx_data(

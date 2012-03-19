@@ -15,7 +15,6 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 
-#include <net/ipv6.h>
 #include <net/net_namespace.h>
 #include <net/rtnetlink.h>
 #include <net/sock.h>
@@ -146,8 +145,8 @@ static void macvtap_put_queue(struct macvtap_queue *q)
 	if (vlan) {
 		int index = get_slot(vlan, q);
 
-		rcu_assign_pointer(vlan->taps[index], NULL);
-		rcu_assign_pointer(q->vlan, NULL);
+		RCU_INIT_POINTER(vlan->taps[index], NULL);
+		RCU_INIT_POINTER(q->vlan, NULL);
 		sock_put(&q->sk);
 		--vlan->numvtaps;
 	}
@@ -176,6 +175,14 @@ static struct macvtap_queue *macvtap_get_queue(struct net_device *dev,
 	if (!numvtaps)
 		goto out;
 
+	/* Check if we can use flow to select a queue */
+	rxq = skb_get_rxhash(skb);
+	if (rxq) {
+		tap = rcu_dereference(vlan->taps[rxq % numvtaps]);
+		if (tap)
+			goto out;
+	}
+
 	if (likely(skb_rx_queue_recorded(skb))) {
 		rxq = skb_get_rx_queue(skb);
 
@@ -183,14 +190,6 @@ static struct macvtap_queue *macvtap_get_queue(struct net_device *dev,
 			rxq -= numvtaps;
 
 		tap = rcu_dereference(vlan->taps[rxq]);
-		if (tap)
-			goto out;
-	}
-
-	/* Check if we can use flow to select a queue */
-	rxq = skb_get_rxhash(skb);
-	if (rxq) {
-		tap = rcu_dereference(vlan->taps[rxq % numvtaps]);
 		if (tap)
 			goto out;
 	}
@@ -224,8 +223,8 @@ static void macvtap_del_queues(struct net_device *dev)
 					      lockdep_is_held(&macvtap_lock));
 		if (q) {
 			qlist[j++] = q;
-			rcu_assign_pointer(vlan->taps[i], NULL);
-			rcu_assign_pointer(q->vlan, NULL);
+			RCU_INIT_POINTER(vlan->taps[i], NULL);
+			RCU_INIT_POINTER(q->vlan, NULL);
 			vlan->numvtaps--;
 		}
 	}
@@ -505,11 +504,10 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
 		if (copy > size) {
 			++from;
 			--count;
-			offset = 0;
-		} else
-			offset += size;
+		}
 		copy -= size;
 		offset1 += size;
+		offset = 0;
 	}
 
 	if (len == offset1)
@@ -519,31 +517,24 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
 		struct page *page[MAX_SKB_FRAGS];
 		int num_pages;
 		unsigned long base;
-		unsigned long truesize;
 
-		len = from->iov_len - offset;
+		len = from->iov_len - offset1;
 		if (!len) {
-			offset = 0;
+			offset1 = 0;
 			++from;
 			continue;
 		}
-		base = (unsigned long)from->iov_base + offset;
+		base = (unsigned long)from->iov_base + offset1;
 		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
-		if (i + size > MAX_SKB_FRAGS)
-			return -EMSGSIZE;
 		num_pages = get_user_pages_fast(base, size, 0, &page[i]);
-		if (num_pages != size) {
-			int j;
-
-			for (j = 0; j < num_pages; j++)
-				put_page(page[i + j]);
+		if ((num_pages != size) ||
+		    (num_pages > MAX_SKB_FRAGS - skb_shinfo(skb)->nr_frags))
+			/* put_page is in skb free */
 			return -EFAULT;
-		}
-		truesize = size * PAGE_SIZE;
 		skb->data_len += len;
 		skb->len += len;
-		skb->truesize += truesize;
-		atomic_add(truesize, &skb->sk->sk_wmem_alloc);
+		skb->truesize += len;
+		atomic_add(len, &skb->sk->sk_wmem_alloc);
 		while (len) {
 			int off = base & ~PAGE_MASK;
 			int size = min_t(int, len, PAGE_SIZE - off);
@@ -554,7 +545,7 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
 			len -= size;
 			i++;
 		}
-		offset = 0;
+		offset1 = 0;
 		++from;
 	}
 	return 0;
@@ -578,8 +569,6 @@ static int macvtap_skb_from_vnet_hdr(struct sk_buff *skb,
 			break;
 		case VIRTIO_NET_HDR_GSO_UDP:
 			gso_type = SKB_GSO_UDP;
-			if (skb->protocol == htons(ETH_P_IPV6))
-				ipv6_proxy_select_ident(skb);
 			break;
 		default:
 			return -EINVAL;
@@ -644,50 +633,23 @@ static int macvtap_skb_to_vnet_hdr(const struct sk_buff *skb,
 	return 0;
 }
 
-static unsigned long iov_pages(const struct iovec *iv, int offset,
-			       unsigned long nr_segs)
-{
-	unsigned long seg, base;
-	int pages = 0, len, size;
-
-	while (nr_segs && (offset >= iv->iov_len)) {
-		offset -= iv->iov_len;
-		++iv;
-		--nr_segs;
-	}
-
-	for (seg = 0; seg < nr_segs; seg++) {
-		base = (unsigned long)iv[seg].iov_base + offset;
-		len = iv[seg].iov_len - offset;
-		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
-		pages += size;
-		offset = 0;
-	}
-
-	return pages;
-}
-
-/* Neighbour code has some assumptions on HH_DATA_MOD alignment */
-#define MACVTAP_RESERVE HH_DATA_OFF(ETH_HLEN)
 
 /* Get packet from user space buffer */
 static ssize_t macvtap_get_user(struct macvtap_queue *q, struct msghdr *m,
 				const struct iovec *iv, unsigned long total_len,
 				size_t count, int noblock)
 {
-	int good_linear = SKB_MAX_HEAD(MACVTAP_RESERVE);
 	struct sk_buff *skb;
 	struct macvlan_dev *vlan;
 	unsigned long len = total_len;
 	int err;
 	struct virtio_net_hdr vnet_hdr = { 0 };
 	int vnet_hdr_len = 0;
-	int copylen = 0;
+	int copylen;
 	bool zerocopy = false;
-	size_t linear;
 
 	if (q->flags & IFF_VNET_HDR) {
-		vnet_hdr_len = ACCESS_ONCE(q->vnet_hdr_sz);
+		vnet_hdr_len = q->vnet_hdr_sz;
 
 		err = -EINVAL;
 		if (len < vnet_hdr_len)
@@ -712,47 +674,31 @@ static ssize_t macvtap_get_user(struct macvtap_queue *q, struct msghdr *m,
 	if (unlikely(len < ETH_HLEN))
 		goto err;
 
-	err = -EMSGSIZE;
-	if (unlikely(count > UIO_MAXIOV))
-		goto err;
+	if (m && m->msg_control && sock_flag(&q->sk, SOCK_ZEROCOPY))
+		zerocopy = true;
 
-	if (m && m->msg_control && sock_flag(&q->sk, SOCK_ZEROCOPY)) {
-		copylen = vnet_hdr.hdr_len ? vnet_hdr.hdr_len : GOODCOPY_LEN;
-		if (copylen > good_linear)
-			copylen = good_linear;
-		else if (copylen < ETH_HLEN)
-			copylen = ETH_HLEN;
-		linear = copylen;
-		if (iov_pages(iv, vnet_hdr_len + copylen, count)
-		    <= MAX_SKB_FRAGS)
-			zerocopy = true;
-	}
-
-	if (!zerocopy) {
+	if (zerocopy) {
+		/* There are 256 bytes to be copied in skb, so there is enough
+		 * room for skb expand head in case it is used.
+		 * The rest buffer is mapped from userspace.
+		 */
+		copylen = vnet_hdr.hdr_len;
+		if (!copylen)
+			copylen = GOODCOPY_LEN;
+	} else
 		copylen = len;
-		linear = vnet_hdr.hdr_len;
-		if (linear > good_linear)
-			linear = good_linear;
-		else if (linear < ETH_HLEN)
-			linear = ETH_HLEN;
-	}
 
-	skb = macvtap_alloc_skb(&q->sk, MACVTAP_RESERVE, copylen,
-				linear, noblock, &err);
+	skb = macvtap_alloc_skb(&q->sk, NET_IP_ALIGN, copylen,
+				vnet_hdr.hdr_len, noblock, &err);
 	if (!skb)
 		goto err;
 
-	if (zerocopy)
+	if (zerocopy) {
 		err = zerocopy_sg_from_iovec(skb, iv, vnet_hdr_len, count);
-	else {
+		skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
+	} else
 		err = skb_copy_datagram_from_iovec(skb, 0, iv, vnet_hdr_len,
 						   len);
-		if (!err && m && m->msg_control) {
-			struct ubuf_info *uarg = m->msg_control;
-			uarg->callback(uarg);
-		}
-	}
-
 	if (err)
 		goto err_kfree;
 
@@ -769,10 +715,8 @@ static ssize_t macvtap_get_user(struct macvtap_queue *q, struct msghdr *m,
 	rcu_read_lock_bh();
 	vlan = rcu_dereference_bh(q->vlan);
 	/* copy skb_ubuf_info for callback when skb has no error */
-	if (zerocopy) {
+	if (zerocopy)
 		skb_shinfo(skb)->destructor_arg = m->msg_control;
-		skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
-	}
 	if (vlan)
 		macvlan_start_xmit(skb, vlan->dev);
 	else
@@ -817,7 +761,7 @@ static ssize_t macvtap_put_user(struct macvtap_queue *q,
 
 	if (q->flags & IFF_VNET_HDR) {
 		struct virtio_net_hdr vnet_hdr;
-		vnet_hdr_len = ACCESS_ONCE(q->vnet_hdr_sz);
+		vnet_hdr_len = q->vnet_hdr_sz;
 		if ((len -= vnet_hdr_len) < 0)
 			return -EINVAL;
 
@@ -951,12 +895,10 @@ static long macvtap_ioctl(struct file *file, unsigned int cmd,
 		return 0;
 
 	case TUNSETSNDBUF:
-		if (get_user(s, sp))
+		if (get_user(u, up))
 			return -EFAULT;
-		if (s <= 0)
-			return -EINVAL;
 
-		q->sk.sk_sndbuf = s;
+		q->sk.sk_sndbuf = u;
 		return 0;
 
 	case TUNGETVNETHDRSZ:

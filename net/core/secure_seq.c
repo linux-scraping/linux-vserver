@@ -36,7 +36,7 @@ static u32 seq_scale(u32 seq)
 }
 #endif
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 __u32 secure_tcpv6_sequence_number(const __be32 *saddr, const __be32 *daddr,
 				   __be16 sport, __be16 dport)
 {
@@ -46,7 +46,7 @@ __u32 secure_tcpv6_sequence_number(const __be32 *saddr, const __be32 *daddr,
 
 	memcpy(hash, saddr, 16);
 	for (i = 0; i < 4; i++)
-		secret[i] = net_secret[i] + daddr[i];
+		secret[i] = net_secret[i] + (__force u32)daddr[i];
 	secret[4] = net_secret[4] +
 		(((__force u16)sport << 16) + (__force u16)dport);
 	for (i = 5; i < MD5_MESSAGE_BYTES / 4; i++)
@@ -79,6 +79,29 @@ u32 secure_ipv6_port_ephemeral(const __be32 *saddr, const __be32 *daddr,
 #endif
 
 #ifdef CONFIG_INET
+__u32 secure_ip_id(__be32 daddr)
+{
+	u32 hash[MD5_DIGEST_WORDS];
+
+	hash[0] = (__force __u32) daddr;
+	hash[1] = net_secret[13];
+	hash[2] = net_secret[14];
+	hash[3] = net_secret[15];
+
+	md5_transform(hash, net_secret);
+
+	return hash[0];
+}
+
+__u32 secure_ipv6_id(const __be32 daddr[4])
+{
+	__u32 hash[4];
+
+	memcpy(hash, daddr, 16);
+	md5_transform(hash, net_secret);
+
+	return hash[0];
+}
 
 __u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
 				 __be16 sport, __be16 dport)
@@ -111,7 +134,7 @@ u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport)
 EXPORT_SYMBOL_GPL(secure_ipv4_port_ephemeral);
 #endif
 
-#if defined(CONFIG_IP_DCCP) || defined(CONFIG_IP_DCCP_MODULE)
+#if IS_ENABLED(CONFIG_IP_DCCP)
 u64 secure_dccp_sequence_number(__be32 saddr, __be32 daddr,
 				__be16 sport, __be16 dport)
 {
@@ -133,7 +156,7 @@ u64 secure_dccp_sequence_number(__be32 saddr, __be32 daddr,
 }
 EXPORT_SYMBOL(secure_dccp_sequence_number);
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 u64 secure_dccpv6_sequence_number(__be32 *saddr, __be32 *daddr,
 				  __be16 sport, __be16 dport)
 {

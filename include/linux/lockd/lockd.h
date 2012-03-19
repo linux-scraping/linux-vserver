@@ -195,7 +195,7 @@ extern struct svc_procedure	nlmsvc_procedures4[];
 #endif
 extern int			nlmsvc_grace_period;
 extern unsigned long		nlmsvc_timeout;
-extern int			nsm_use_hostnames;
+extern bool			nsm_use_hostnames;
 extern u32			nsm_local_state;
 
 /*
@@ -301,7 +301,7 @@ static inline int __nlm_privileged_request4(const struct sockaddr *sap)
 	return ipv4_is_loopback(sin->sin_addr.s_addr);
 }
 
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 {
 	const struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sap;
@@ -314,12 +314,12 @@ static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 
 	return ipv6_addr_type(&sin6->sin6_addr) & IPV6_ADDR_LOOPBACK;
 }
-#else	/* defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE) */
+#else	/* IS_ENABLED(CONFIG_IPV6) */
 static inline int __nlm_privileged_request6(const struct sockaddr *sap)
 {
 	return 0;
 }
-#endif	/* defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE) */
+#endif	/* IS_ENABLED(CONFIG_IPV6) */
 
 /*
  * Ensure incoming requests are from local privileged callers.
@@ -348,8 +348,7 @@ static inline int nlm_privileged_requester(const struct svc_rqst *rqstp)
 static inline int nlm_compare_locks(const struct file_lock *fl1,
 				    const struct file_lock *fl2)
 {
-	return fl1->fl_file->f_dentry->d_inode == fl2->fl_file->f_dentry->d_inode
-	     && fl1->fl_pid   == fl2->fl_pid
+	return	fl1->fl_pid   == fl2->fl_pid
 	     && fl1->fl_owner == fl2->fl_owner
 	     && fl1->fl_start == fl2->fl_start
 	     && fl1->fl_end   == fl2->fl_end

@@ -32,7 +32,7 @@ struct cpa_data {
 	unsigned long	*vaddr;
 	pgprot_t	mask_set;
 	pgprot_t	mask_clr;
-	unsigned long	numpages;
+	int		numpages;
 	int		flags;
 	unsigned long	pfn;
 	unsigned	force_split : 1;
@@ -820,7 +820,7 @@ static int __change_page_attr_set_clr(struct cpa_data *cpa, int checkalias)
 		 * CPA operation. Either a large page has been
 		 * preserved or a single page update happened.
 		 */
-		BUG_ON(cpa->numpages > numpages || !cpa->numpages);
+		BUG_ON(cpa->numpages > numpages);
 		numpages -= cpa->numpages;
 		if (cpa->flags & (CPA_PAGES_ARRAY | CPA_ARRAY))
 			cpa->curpage++;
@@ -998,7 +998,7 @@ out_err:
 }
 EXPORT_SYMBOL(set_memory_uc);
 
-int _set_memory_array(unsigned long *addr, int addrinarray,
+static int _set_memory_array(unsigned long *addr, int addrinarray,
 		unsigned long new_type)
 {
 	int i, j;
@@ -1332,12 +1332,6 @@ void kernel_map_pages(struct page *page, int numpages, int enable)
 		debug_check_no_locks_freed(page_address(page),
 					   numpages * PAGE_SIZE);
 	}
-
-	/*
-	 * If page allocator is not up yet then do not call c_p_a():
-	 */
-	if (!debug_pagealloc_enabled)
-		return;
 
 	/*
 	 * The return value is ignored as the calls cannot fail.

@@ -201,7 +201,7 @@ static int enh_desc_get_rx_status(void *data, struct stmmac_extra_stats *x,
 
 	if (unlikely(p->des01.erx.dribbling)) {
 		CHIP_DBG(KERN_ERR "GMAC RX: dribbling error\n");
-		ret = discard_frame;
+		x->dribbling_bit++;
 	}
 	if (unlikely(p->des01.erx.sa_filter_fail)) {
 		CHIP_DBG(KERN_ERR "GMAC RX : Source Address filter fail\n");
@@ -232,7 +232,6 @@ static void enh_desc_init_rx_desc(struct dma_desc *p, unsigned int ring_size,
 {
 	int i;
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
 		p->des01.erx.own = 1;
 		p->des01.erx.buffer1_size = BUF_SIZE_8KiB - 1;
 
@@ -249,7 +248,7 @@ static void enh_desc_init_tx_desc(struct dma_desc *p, unsigned int ring_size)
 	int i;
 
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
+		p->des01.etx.own = 0;
 		ehn_desc_tx_set_on_ring_chain(p, (i == ring_size - 1));
 		p++;
 	}

@@ -239,7 +239,7 @@ static long rc32434_wdt_ioctl(struct file *file, unsigned int cmd,
 			return -EINVAL;
 		/* Fall through */
 	case WDIOC_GETTIMEOUT:
-		return copy_to_user(argp, &timeout, sizeof(int)) ? -EFAULT : 0;
+		return copy_to_user(argp, &timeout, sizeof(int));
 	default:
 		return -ENOTTY;
 	}
@@ -332,18 +332,7 @@ static struct platform_driver rc32434_wdt_driver = {
 	}
 };
 
-static int __init rc32434_wdt_init(void)
-{
-	return platform_driver_register(&rc32434_wdt_driver);
-}
-
-static void __exit rc32434_wdt_exit(void)
-{
-	platform_driver_unregister(&rc32434_wdt_driver);
-}
-
-module_init(rc32434_wdt_init);
-module_exit(rc32434_wdt_exit);
+module_platform_driver(rc32434_wdt_driver);
 
 MODULE_AUTHOR("Ondrej Zajicek <santiago@crfreenet.org>,"
 		"Florian Fainelli <florian@openwrt.org>");

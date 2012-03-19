@@ -49,20 +49,15 @@
 #define IWL6000_UCODE_API_MAX 6
 #define IWL6050_UCODE_API_MAX 5
 #define IWL6000G2_UCODE_API_MAX 6
-#define IWL6035_UCODE_API_MAX 6
 
 /* Oldest version we won't warn about */
 #define IWL6000_UCODE_API_OK 4
 #define IWL6000G2_UCODE_API_OK 5
-#define IWL6050_UCODE_API_OK 5
-#define IWL6000G2B_UCODE_API_OK 6
-#define IWL6035_UCODE_API_OK 6
 
 /* Lowest firmware API version supported */
 #define IWL6000_UCODE_API_MIN 4
 #define IWL6050_UCODE_API_MIN 4
-#define IWL6000G2_UCODE_API_MIN 5
-#define IWL6035_UCODE_API_MIN 6
+#define IWL6000G2_UCODE_API_MIN 4
 
 #define IWL6000_FW_PRE "iwlwifi-6000-"
 #define IWL6000_MODULE_FIRMWARE(api) IWL6000_FW_PRE __stringify(api) ".ucode"
@@ -86,7 +81,7 @@ static void iwl6000_set_ct_threshold(struct iwl_priv *priv)
 static void iwl6050_additional_nic_config(struct iwl_priv *priv)
 {
 	/* Indicate calibration version to uCode. */
-	if (iwlagn_eeprom_calib_version(priv) >= 6)
+	if (iwl_eeprom_calib_version(priv->shrd) >= 6)
 		iwl_set_bit(bus(priv), CSR_GP_DRIVER_REG,
 				CSR_GP_DRIVER_REG_BIT_CALIB_VERSION6);
 }
@@ -94,7 +89,7 @@ static void iwl6050_additional_nic_config(struct iwl_priv *priv)
 static void iwl6150_additional_nic_config(struct iwl_priv *priv)
 {
 	/* Indicate calibration version to uCode. */
-	if (iwlagn_eeprom_calib_version(priv) >= 6)
+	if (iwl_eeprom_calib_version(priv->shrd) >= 6)
 		iwl_set_bit(bus(priv), CSR_GP_DRIVER_REG,
 				CSR_GP_DRIVER_REG_BIT_CALIB_VERSION6);
 	iwl_set_bit(bus(priv), CSR_GP_DRIVER_REG,
@@ -107,14 +102,14 @@ static void iwl6000_nic_config(struct iwl_priv *priv)
 	iwl_rf_config(priv);
 
 	/* no locking required for register write */
-	if (priv->cfg->pa_type == IWL_PA_INTERNAL) {
+	if (cfg(priv)->pa_type == IWL_PA_INTERNAL) {
 		/* 2x2 IPA phy type */
 		iwl_write32(bus(priv), CSR_GP_DRIVER_REG,
 			     CSR_GP_DRIVER_REG_BIT_RADIO_SKU_2x2_IPA);
 	}
 	/* do additional nic configuration if needed */
-	if (priv->cfg->additional_nic_config)
-			priv->cfg->additional_nic_config(priv);
+	if (cfg(priv)->additional_nic_config)
+			cfg(priv)->additional_nic_config(priv);
 }
 
 static struct iwl_sensitivity_ranges iwl6000_sensitivity = {
@@ -146,10 +141,10 @@ static int iwl6000_hw_set_hw_params(struct iwl_priv *priv)
 {
 	if (iwlagn_mod_params.num_of_queues >= IWL_MIN_NUM_QUEUES &&
 	    iwlagn_mod_params.num_of_queues <= IWLAGN_NUM_QUEUES)
-		priv->cfg->base_params->num_of_queues =
+		cfg(priv)->base_params->num_of_queues =
 			iwlagn_mod_params.num_of_queues;
 
-	hw_params(priv).max_txq_num = priv->cfg->base_params->num_of_queues;
+	hw_params(priv).max_txq_num = cfg(priv)->base_params->num_of_queues;
 	priv->contexts[IWL_RXON_CTX_BSS].bcast_sta_id = IWLAGN_BROADCAST_ID;
 
 	hw_params(priv).max_data_size = IWL60_RTC_DATA_SIZE;
@@ -158,29 +153,19 @@ static int iwl6000_hw_set_hw_params(struct iwl_priv *priv)
 	hw_params(priv).ht40_channel =  BIT(IEEE80211_BAND_2GHZ) |
 					BIT(IEEE80211_BAND_5GHZ);
 
-	hw_params(priv).tx_chains_num = num_of_ant(priv->cfg->valid_tx_ant);
-	if (priv->cfg->rx_with_siso_diversity)
+	hw_params(priv).tx_chains_num = num_of_ant(cfg(priv)->valid_tx_ant);
+	if (cfg(priv)->rx_with_siso_diversity)
 		hw_params(priv).rx_chains_num = 1;
 	else
 		hw_params(priv).rx_chains_num =
-			num_of_ant(priv->cfg->valid_rx_ant);
-	hw_params(priv).valid_tx_ant = priv->cfg->valid_tx_ant;
-	hw_params(priv).valid_rx_ant = priv->cfg->valid_rx_ant;
+			num_of_ant(cfg(priv)->valid_rx_ant);
+	hw_params(priv).valid_tx_ant = cfg(priv)->valid_tx_ant;
+	hw_params(priv).valid_rx_ant = cfg(priv)->valid_rx_ant;
 
 	iwl6000_set_ct_threshold(priv);
 
 	/* Set initial sensitivity parameters */
-	/* Set initial calibration set */
 	hw_params(priv).sens = &iwl6000_sensitivity;
-	hw_params(priv).calib_init_cfg =
-		BIT(IWL_CALIB_XTAL)		|
-		BIT(IWL_CALIB_LO)		|
-		BIT(IWL_CALIB_TX_IQ)		|
-		BIT(IWL_CALIB_BASE_BAND);
-	if (priv->cfg->need_dc_calib)
-		hw_params(priv).calib_rt_cfg |= IWL_CALIB_CFG_DC_IDX;
-	if (priv->cfg->need_temp_offset_calib)
-		hw_params(priv).calib_init_cfg |= BIT(IWL_CALIB_TEMP_OFFSET);
 
 	return 0;
 }
@@ -193,7 +178,7 @@ static int iwl6000_hw_channel_switch(struct iwl_priv *priv,
 	 * See iwlagn_mac_channel_switch.
 	 */
 	struct iwl_rxon_context *ctx = &priv->contexts[IWL_RXON_CTX_BSS];
-	struct iwl6000_channel_switch_cmd *cmd;
+	struct iwl6000_channel_switch_cmd cmd;
 	const struct iwl_channel_info *ch_info;
 	u32 switch_time_in_usec, ucode_switch_time;
 	u16 ch;
@@ -203,25 +188,18 @@ static int iwl6000_hw_channel_switch(struct iwl_priv *priv,
 	struct ieee80211_vif *vif = ctx->vif;
 	struct iwl_host_cmd hcmd = {
 		.id = REPLY_CHANNEL_SWITCH,
-		.len = { sizeof(*cmd), },
+		.len = { sizeof(cmd), },
 		.flags = CMD_SYNC,
-		.dataflags[0] = IWL_HCMD_DFL_NOCOPY,
+		.data = { &cmd, },
 	};
-	int err;
 
-	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
-
-	hcmd.data[0] = cmd;
-
-	cmd->band = priv->band == IEEE80211_BAND_2GHZ;
+	cmd.band = priv->band == IEEE80211_BAND_2GHZ;
 	ch = ch_switch->channel->hw_value;
 	IWL_DEBUG_11H(priv, "channel switch from %u to %u\n",
 		      ctx->active.channel, ch);
-	cmd->channel = cpu_to_le16(ch);
-	cmd->rxon_flags = ctx->staging.flags;
-	cmd->rxon_filter_flags = ctx->staging.filter_flags;
+	cmd.channel = cpu_to_le16(ch);
+	cmd.rxon_flags = ctx->staging.flags;
+	cmd.rxon_filter_flags = ctx->staging.filter_flags;
 	switch_count = ch_switch->count;
 	tsf_low = ch_switch->timestamp & 0x0ffffffff;
 	/*
@@ -237,32 +215,30 @@ static int iwl6000_hw_channel_switch(struct iwl_priv *priv,
 			switch_count = 0;
 	}
 	if (switch_count <= 1)
-		cmd->switch_time = cpu_to_le32(priv->ucode_beacon_time);
+		cmd.switch_time = cpu_to_le32(priv->ucode_beacon_time);
 	else {
 		switch_time_in_usec =
 			vif->bss_conf.beacon_int * switch_count * TIME_UNIT;
 		ucode_switch_time = iwl_usecs_to_beacons(priv,
 							 switch_time_in_usec,
 							 beacon_interval);
-		cmd->switch_time = iwl_add_beacon_time(priv,
-						       priv->ucode_beacon_time,
-						       ucode_switch_time,
-						       beacon_interval);
+		cmd.switch_time = iwl_add_beacon_time(priv,
+						      priv->ucode_beacon_time,
+						      ucode_switch_time,
+						      beacon_interval);
 	}
 	IWL_DEBUG_11H(priv, "uCode time for the switch is 0x%x\n",
-		      cmd->switch_time);
+		      cmd.switch_time);
 	ch_info = iwl_get_channel_info(priv, priv->band, ch);
 	if (ch_info)
-		cmd->expect_beacon = is_channel_radar(ch_info);
+		cmd.expect_beacon = is_channel_radar(ch_info);
 	else {
 		IWL_ERR(priv, "invalid channel switch from %u to %u\n",
 			ctx->active.channel, ch);
 		return -EFAULT;
 	}
 
-	err = iwl_trans_send_cmd(trans(priv), &hcmd);
-	kfree(cmd);
-	return err;
+	return iwl_trans_send_cmd(trans(priv), &hcmd);
 }
 
 static struct iwl_lib_ops iwl6000_lib = {
@@ -320,7 +296,7 @@ static struct iwl_base_params iwl6000_base_params = {
 	.chain_noise_scale = 1000,
 	.wd_timeout = IWL_DEF_WD_TIMEOUT,
 	.max_event_log_size = 512,
-	.shadow_reg_enable = false, /* TODO: fix bugs using this feature */
+	.shadow_reg_enable = true,
 };
 
 static struct iwl_base_params iwl6050_base_params = {
@@ -337,7 +313,7 @@ static struct iwl_base_params iwl6050_base_params = {
 	.chain_noise_scale = 1500,
 	.wd_timeout = IWL_DEF_WD_TIMEOUT,
 	.max_event_log_size = 1024,
-	.shadow_reg_enable = false, /* TODO: fix bugs using this feature */
+	.shadow_reg_enable = true,
 };
 static struct iwl_base_params iwl6000_g2_base_params = {
 	.eeprom_size = OTP_LOW_IMAGE_SIZE,
@@ -353,7 +329,7 @@ static struct iwl_base_params iwl6000_g2_base_params = {
 	.chain_noise_scale = 1000,
 	.wd_timeout = IWL_LONG_WD_TIMEOUT,
 	.max_event_log_size = 512,
-	.shadow_reg_enable = false, /* TODO: fix bugs using this feature */
+	.shadow_reg_enable = true,
 };
 
 static struct iwl_ht_params iwl6000_ht_params = {
@@ -379,7 +355,6 @@ static struct iwl_bt_params iwl6000_bt_params = {
 	.eeprom_calib_ver = EEPROM_6005_TX_POWER_VERSION,	\
 	.lib = &iwl6000_lib,					\
 	.base_params = &iwl6000_g2_base_params,			\
-	.need_dc_calib = true,					\
 	.need_temp_offset_calib = true,				\
 	.led_mode = IWL_LED_RF_STATE
 
@@ -411,28 +386,16 @@ struct iwl_cfg iwl6005_2agn_d_cfg = {
 	.ht_params = &iwl6000_ht_params,
 };
 
-struct iwl_cfg iwl6005_2agn_mow1_cfg = {
-	.name = "Intel(R) Centrino(R) Advanced-N 6206 AGN",
-	IWL_DEVICE_6005,
-	.ht_params = &iwl6000_ht_params,
-};
-struct iwl_cfg iwl6005_2agn_mow2_cfg = {
-	.name = "Intel(R) Centrino(R) Advanced-N 6207 AGN",
-	IWL_DEVICE_6005,
-	.ht_params = &iwl6000_ht_params,
-};
-
 #define IWL_DEVICE_6030						\
 	.fw_name_pre = IWL6030_FW_PRE,				\
 	.ucode_api_max = IWL6000G2_UCODE_API_MAX,		\
-	.ucode_api_ok = IWL6000G2B_UCODE_API_OK,		\
+	.ucode_api_ok = IWL6000G2_UCODE_API_OK,			\
 	.ucode_api_min = IWL6000G2_UCODE_API_MIN,		\
 	.eeprom_ver = EEPROM_6030_EEPROM_VERSION,		\
 	.eeprom_calib_ver = EEPROM_6030_TX_POWER_VERSION,	\
 	.lib = &iwl6030_lib,					\
 	.base_params = &iwl6000_g2_base_params,			\
 	.bt_params = &iwl6000_bt_params,			\
-	.need_dc_calib = true,					\
 	.need_temp_offset_calib = true,				\
 	.led_mode = IWL_LED_RF_STATE,				\
 	.adv_pm = true						\
@@ -459,30 +422,9 @@ struct iwl_cfg iwl6030_2bg_cfg = {
 	IWL_DEVICE_6030,
 };
 
-#define IWL_DEVICE_6035						\
-	.fw_name_pre = IWL6030_FW_PRE,				\
-	.ucode_api_max = IWL6035_UCODE_API_MAX,			\
-	.ucode_api_ok = IWL6035_UCODE_API_OK,			\
-	.ucode_api_min = IWL6035_UCODE_API_MIN,			\
-	.eeprom_ver = EEPROM_6030_EEPROM_VERSION,		\
-	.eeprom_calib_ver = EEPROM_6030_TX_POWER_VERSION,	\
-	.lib = &iwl6030_lib,					\
-	.base_params = &iwl6000_g2_base_params,			\
-	.bt_params = &iwl6000_bt_params,			\
-	.need_dc_calib = true,					\
-	.need_temp_offset_calib = true,				\
-	.led_mode = IWL_LED_RF_STATE,				\
-	.adv_pm = true
-
 struct iwl_cfg iwl6035_2agn_cfg = {
-	.name = "6035 Series 2x2 AGN/BT",
-	IWL_DEVICE_6035,
-	.ht_params = &iwl6000_ht_params,
-};
-
-struct iwl_cfg iwl6035_2agn_sff_cfg = {
-	.name = "Intel(R) Centrino(R) Ultimate-N 6235 AGN",
-	IWL_DEVICE_6035,
+	.name = "Intel(R) Centrino(R) Advanced-N 6235 AGN",
+	IWL_DEVICE_6030,
 	.ht_params = &iwl6000_ht_params,
 };
 
@@ -554,7 +496,6 @@ struct iwl_cfg iwl6000i_2bg_cfg = {
 	.eeprom_ver = EEPROM_6050_EEPROM_VERSION,		\
 	.eeprom_calib_ver = EEPROM_6050_TX_POWER_VERSION,	\
 	.base_params = &iwl6050_base_params,			\
-	.need_dc_calib = true,					\
 	.led_mode = IWL_LED_BLINK,				\
 	.internal_wimax_coex = true
 
@@ -578,7 +519,6 @@ struct iwl_cfg iwl6050_2abg_cfg = {
 	.eeprom_ver = EEPROM_6150_EEPROM_VERSION,		\
 	.eeprom_calib_ver = EEPROM_6150_TX_POWER_VERSION,	\
 	.base_params = &iwl6050_base_params,			\
-	.need_dc_calib = true,					\
 	.led_mode = IWL_LED_BLINK,				\
 	.internal_wimax_coex = true
 
@@ -604,11 +544,10 @@ struct iwl_cfg iwl6000_3agn_cfg = {
 	.lib = &iwl6000_lib,
 	.base_params = &iwl6000_base_params,
 	.ht_params = &iwl6000_ht_params,
-	.need_dc_calib = true,
 	.led_mode = IWL_LED_BLINK,
 };
 
 MODULE_FIRMWARE(IWL6000_MODULE_FIRMWARE(IWL6000_UCODE_API_OK));
-MODULE_FIRMWARE(IWL6050_MODULE_FIRMWARE(IWL6050_UCODE_API_OK));
-MODULE_FIRMWARE(IWL6005_MODULE_FIRMWARE(IWL6000G2_UCODE_API_OK));
-MODULE_FIRMWARE(IWL6030_MODULE_FIRMWARE(IWL6000G2B_UCODE_API_OK));
+MODULE_FIRMWARE(IWL6050_MODULE_FIRMWARE(IWL6050_UCODE_API_MAX));
+MODULE_FIRMWARE(IWL6005_MODULE_FIRMWARE(IWL6000G2_UCODE_API_MAX));
+MODULE_FIRMWARE(IWL6030_MODULE_FIRMWARE(IWL6000G2_UCODE_API_MAX));

@@ -38,6 +38,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/ethtool.h>
+#include <linux/if_vlan.h>
 #include <linux/sh_eth.h>
 
 #include "sh_eth.h"
@@ -136,9 +137,8 @@ static struct sh_eth_cpu_data sh_eth_my_cpu_data = {
 	.rmcr_value	= 0x00000001,
 
 	.tx_check	= EESR_FTC | EESR_CND | EESR_DLC | EESR_CD | EESR_RTO,
-	.eesr_err_check	= EESR_TWB | EESR_TABT | EESR_RABT | EESR_RFE |
-			  EESR_RDE | EESR_RFRMER | EESR_TFE | EESR_TDE |
-			  EESR_ECI,
+	.eesr_err_check	= EESR_TWB | EESR_TABT | EESR_RABT | EESR_RDE |
+			  EESR_RFRMER | EESR_TFE | EESR_TDE | EESR_ECI,
 	.tx_error_check	= EESR_TWB | EESR_TABT | EESR_TDE | EESR_TFE,
 
 	.apr		= 1,
@@ -252,9 +252,9 @@ static struct sh_eth_cpu_data sh_eth_my_cpu_data_giga = {
 	.eesipr_value	= DMAC_M_RFRMER | DMAC_M_ECI | 0x003fffff,
 
 	.tx_check	= EESR_TC1 | EESR_FTC,
-	.eesr_err_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_RABT |
-			  EESR_RFE | EESR_RDE | EESR_RFRMER | EESR_TFE |
-			  EESR_TDE | EESR_ECI,
+	.eesr_err_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_RABT | \
+			  EESR_RDE | EESR_RFRMER | EESR_TFE | EESR_TDE | \
+			  EESR_ECI,
 	.tx_error_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_TDE | \
 			  EESR_TFE,
 	.fdr_value	= 0x0000072f,
@@ -356,9 +356,9 @@ static struct sh_eth_cpu_data sh_eth_my_cpu_data = {
 	.eesipr_value	= DMAC_M_RFRMER | DMAC_M_ECI | 0x003fffff,
 
 	.tx_check	= EESR_TC1 | EESR_FTC,
-	.eesr_err_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_RABT |
-			  EESR_RFE | EESR_RDE | EESR_RFRMER | EESR_TFE |
-			  EESR_TDE | EESR_ECI,
+	.eesr_err_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_RABT | \
+			  EESR_RDE | EESR_RFRMER | EESR_TFE | EESR_TDE | \
+			  EESR_ECI,
 	.tx_error_check	= EESR_TWB1 | EESR_TWB | EESR_TABT | EESR_TDE | \
 			  EESR_TFE,
 
@@ -681,8 +681,7 @@ static void sh_eth_ring_format(struct net_device *ndev)
 	mdp->dirty_rx = (u32) (i - RX_RING_SIZE);
 
 	/* Mark the last entry as wrapping the ring. */
-	if (rxdesc)
-		rxdesc->status |= cpu_to_edmac(mdp, RD_RDEL);
+	rxdesc->status |= cpu_to_edmac(mdp, RD_RDEL);
 
 	memset(mdp->tx_ring, 0, tx_ringsize);
 
@@ -819,7 +818,8 @@ static int sh_eth_dev_init(struct net_device *ndev)
 		sh_eth_write(ndev, 0, TRIMD);
 
 	/* Recv frame limit set register */
-	sh_eth_write(ndev, RFLR_VALUE, RFLR);
+	sh_eth_write(ndev, ndev->mtu + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN,
+		     RFLR);
 
 	sh_eth_write(ndev, sh_eth_read(ndev, EESR), EESR);
 	sh_eth_write(ndev, mdp->cd->eesipr_value, EESIPR);
@@ -912,7 +912,6 @@ static int sh_eth_rx(struct net_device *ndev)
 		if (!(desc_status & RDFEND))
 			mdp->stats.rx_length_errors++;
 
-		skb = mdp->rx_skbuff[entry];
 		if (desc_status & (RD_RFS1 | RD_RFS2 | RD_RFS3 | RD_RFS4 |
 				   RD_RFS5 | RD_RFS6 | RD_RFS10)) {
 			mdp->stats.rx_errors++;
@@ -928,11 +927,12 @@ static int sh_eth_rx(struct net_device *ndev)
 				mdp->stats.rx_missed_errors++;
 			if (desc_status & RD_RFS10)
 				mdp->stats.rx_over_errors++;
-		} else	if (skb) {
+		} else {
 			if (!mdp->cd->hw_swap)
 				sh_eth_soft_swap(
 					phys_to_virt(ALIGN(rxdesc->addr, 4)),
 					pkt_len + 2);
+			skb = mdp->rx_skbuff[entry];
 			mdp->rx_skbuff[entry] = NULL;
 			if (mdp->cd->rpadir)
 				skb_reserve(skb, NET_IP_ALIGN);
@@ -1371,13 +1371,13 @@ static void sh_eth_get_strings(struct net_device *ndev, u32 stringset, u8 *data)
 	}
 }
 
-static struct ethtool_ops sh_eth_ethtool_ops = {
+static const struct ethtool_ops sh_eth_ethtool_ops = {
 	.get_settings	= sh_eth_get_settings,
 	.set_settings	= sh_eth_set_settings,
-	.nway_reset		= sh_eth_nway_reset,
+	.nway_reset	= sh_eth_nway_reset,
 	.get_msglevel	= sh_eth_get_msglevel,
 	.set_msglevel	= sh_eth_set_msglevel,
-	.get_link		= ethtool_op_get_link,
+	.get_link	= ethtool_op_get_link,
 	.get_strings	= sh_eth_get_strings,
 	.get_ethtool_stats  = sh_eth_get_ethtool_stats,
 	.get_sset_count     = sh_eth_get_sset_count,
@@ -1500,7 +1500,8 @@ static int sh_eth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	txdesc = &mdp->tx_ring[entry];
 	/* soft swap. */
 	if (!mdp->cd->hw_swap)
-		sh_eth_soft_swap(PTR_ALIGN(skb->data, 4), skb->len + 2);
+		sh_eth_soft_swap(phys_to_virt(ALIGN(txdesc->addr, 4)),
+				 skb->len + 2);
 	txdesc->addr = dma_map_single(&ndev->dev, skb->data, skb->len,
 				      DMA_TO_DEVICE);
 	if (skb->len < ETHERSMALL)
@@ -1703,7 +1704,8 @@ static int sh_mdio_init(struct net_device *ndev, int id,
 	/* Hook up MII support for ethtool */
 	mdp->mii_bus->name = "sh_mii";
 	mdp->mii_bus->parent = &ndev->dev;
-	snprintf(mdp->mii_bus->id, MII_BUS_ID_SIZE, "%x", id);
+	snprintf(mdp->mii_bus->id, MII_BUS_ID_SIZE, "%s-%x",
+		mdp->pdev->name, id);
 
 	/* PHY IRQ */
 	mdp->mii_bus->irq = kmalloc(sizeof(int)*PHY_MAX_ADDR, GFP_KERNEL);
@@ -1958,18 +1960,7 @@ static struct platform_driver sh_eth_driver = {
 	},
 };
 
-static int __init sh_eth_init(void)
-{
-	return platform_driver_register(&sh_eth_driver);
-}
-
-static void __exit sh_eth_cleanup(void)
-{
-	platform_driver_unregister(&sh_eth_driver);
-}
-
-module_init(sh_eth_init);
-module_exit(sh_eth_cleanup);
+module_platform_driver(sh_eth_driver);
 
 MODULE_AUTHOR("Nobuhiro Iwamatsu, Yoshihiro Shimoda");
 MODULE_DESCRIPTION("Renesas SuperH Ethernet driver");

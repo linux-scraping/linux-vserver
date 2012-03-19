@@ -44,11 +44,11 @@ static struct fb_fix_screeninfo uvesafb_fix __devinitdata = {
 };
 
 static int mtrr		__devinitdata = 3; /* enable mtrr by default */
-static int blank	= 1;		   /* enable blanking by default */
+static bool blank	= 1;		   /* enable blanking by default */
 static int ypan		= 1; 		 /* 0: scroll, 1: ypan, 2: ywrap */
 static bool pmi_setpal	__devinitdata = true; /* use PMI for palette changes */
-static int nocrtc	__devinitdata; /* ignore CRTC settings */
-static int noedid	__devinitdata; /* don't try DDC transfers */
+static bool nocrtc	__devinitdata; /* ignore CRTC settings */
+static bool noedid	__devinitdata; /* don't try DDC transfers */
 static int vram_remap	__devinitdata; /* set amt. of memory to be used */
 static int vram_total	__devinitdata; /* set total amount of memory */
 static u16 maxclk	__devinitdata; /* maximum pixel clock */
@@ -815,15 +815,8 @@ static int __devinit uvesafb_vbe_init(struct fb_info *info)
 	par->pmi_setpal = pmi_setpal;
 	par->ypan = ypan;
 
-	if (par->pmi_setpal || par->ypan) {
-		if (__supported_pte_mask & _PAGE_NX) {
-			par->pmi_setpal = par->ypan = 0;
-			printk(KERN_WARNING "uvesafb: NX protection is actively."
-				"We have better not to use the PMI.\n");
-		} else {
-			uvesafb_vbe_getpmi(task, par);
-		}
-	}
+	if (par->pmi_setpal || par->ypan)
+		uvesafb_vbe_getpmi(task, par);
 #else
 	/* The protected mode interface is not available on non-x86. */
 	par->pmi_setpal = par->ypan = 0;

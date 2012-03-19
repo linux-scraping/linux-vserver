@@ -1462,6 +1462,8 @@ static int video_release(struct file *file)
 	struct saa6588_command cmd;
 	unsigned long flags;
 
+	saa7134_tvaudio_close(dev);
+
 	/* turn off overlay */
 	if (res_check(fh, RESOURCE_OVERLAY)) {
 		spin_lock_irqsave(&dev->slock,flags);
@@ -1577,13 +1579,10 @@ static int saa7134_g_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.height       = fh->height;
 	f->fmt.pix.field        = fh->cap.field;
 	f->fmt.pix.pixelformat  = fh->fmt->fourcc;
-	if (fh->fmt->planar)
-		f->fmt.pix.bytesperline = f->fmt.pix.width;
-	else
-		f->fmt.pix.bytesperline =
-			(f->fmt.pix.width * fh->fmt->depth) / 8;
+	f->fmt.pix.bytesperline =
+		(f->fmt.pix.width * fh->fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =
-		(f->fmt.pix.height * f->fmt.pix.width * fh->fmt->depth) / 8;
+		f->fmt.pix.height * f->fmt.pix.bytesperline;
 	return 0;
 }
 
@@ -1644,13 +1643,10 @@ static int saa7134_try_fmt_vid_cap(struct file *file, void *priv,
 	if (f->fmt.pix.height > maxh)
 		f->fmt.pix.height = maxh;
 	f->fmt.pix.width &= ~0x03;
-	if (fmt->planar)
-		f->fmt.pix.bytesperline = f->fmt.pix.width;
-	else
-		f->fmt.pix.bytesperline =
-			(f->fmt.pix.width * fmt->depth) / 8;
+	f->fmt.pix.bytesperline =
+		(f->fmt.pix.width * fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =
-		(f->fmt.pix.height * f->fmt.pix.width * fmt->depth) / 8;
+		f->fmt.pix.height * f->fmt.pix.bytesperline;
 
 	return 0;
 }

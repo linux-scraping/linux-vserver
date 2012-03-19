@@ -8,7 +8,7 @@ obj-y += linked_dtb.o
 
 targets := linux.bin linux.bin.gz simpleImage.%
 
-OBJCOPYFLAGS := -R .note -R .comment -R .note.gnu.build-id -O binary
+OBJCOPYFLAGS := -O binary
 
 # Ensure system.dtb exists
 $(obj)/linked_dtb.o: $(obj)/system.dtb
@@ -53,6 +53,6 @@ $(obj)/simpleImage.%: vmlinux FORCE
 DTC_FLAGS := -p 1024
 
 $(obj)/%.dtb: $(src)/dts/%.dts FORCE
-	$(call cmd,dtc)
+	$(call if_changed_dep,dtc)
 
 clean-files += *.dtb simpleImage.*.unstrip linux.bin.ub

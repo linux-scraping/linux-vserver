@@ -490,10 +490,6 @@ EXPORT_SYMBOL_GPL(rndis_unbind);
  */
 int rndis_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	/* peripheral may have batched packets to us... */
 	while (likely(skb->len)) {
 		struct rndis_data_hdr	*hdr = (void *)skb->data;
@@ -639,17 +635,7 @@ static struct usb_driver rndis_driver = {
 	.resume =	usbnet_resume,
 };
 
-static int __init rndis_init(void)
-{
-	return usb_register(&rndis_driver);
-}
-module_init(rndis_init);
-
-static void __exit rndis_exit(void)
-{
-	usb_deregister(&rndis_driver);
-}
-module_exit(rndis_exit);
+module_usb_driver(rndis_driver);
 
 MODULE_AUTHOR("David Brownell");
 MODULE_DESCRIPTION("USB Host side RNDIS driver");

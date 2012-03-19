@@ -68,7 +68,7 @@ static void isofs_put_super(struct super_block *sb)
 	return;
 }
 
-static int isofs_read_inode(struct inode *, int relocated);
+static int isofs_read_inode(struct inode *);
 static int isofs_statfs (struct dentry *, struct kstatfs *);
 
 static struct kmem_cache *isofs_inode_cachep;
@@ -85,7 +85,6 @@ static struct inode *isofs_alloc_inode(struct super_block *sb)
 static void isofs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(isofs_inode_cachep, ISOFS_I(inode));
 }
 
@@ -120,8 +119,8 @@ static void destroy_inodecache(void)
 
 static int isofs_remount(struct super_block *sb, int *flags, char *data)
 {
-	if (!(*flags & MS_RDONLY))
-		return -EROFS;
+	/* we probably want a lot more here */
+	*flags |= MS_RDONLY;
 	return 0;
 }
 
@@ -170,8 +169,8 @@ struct iso9660_options{
 	unsigned char map;
 	unsigned char check;
 	unsigned int blocksize;
-	mode_t fmode;
-	mode_t dmode;
+	umode_t fmode;
+	umode_t dmode;
 	gid_t gid;
 	uid_t uid;
 	char *iocharset;
@@ -717,11 +716,6 @@ static int isofs_fill_super(struct super_block *s, void *data, int silent)
 	pri_bh = NULL;
 
 root_found:
-	/* We don't support read-write mounts */
-	if (!(s->s_flags & MS_RDONLY)) {
-		error = -EACCES;
-		goto out_freebh;
-	}
 
 	if (joliet_level && (pri == NULL || !opt.rock)) {
 		/* This is the case of Joliet with the norock mount flag.
@@ -774,6 +768,15 @@ root_found:
 	 * size of a file system, which is 8 TB.
 	 */
 	s->s_maxbytes = 0x80000000000LL;
+
+	/*
+	 * The CDROM is read-only, has no nodes (devices) on it, and since
+	 * all of the files appear to be owned by root, we really do not want
+	 * to allow suid.  (suid or devices will not show up unless we have
+	 * Rock Ridge extensions)
+	 */
+
+	s->s_flags |= MS_RDONLY /* | MS_NODEV | MS_NOSUID */;
 
 	/* Set this for reference. Its not currently used except on write
 	   which we don't have .. */
@@ -945,8 +948,11 @@ root_found:
 
 	/* get the root dentry */
 	s->s_root = d_alloc_root(inode);
-	if (!(s->s_root))
-		goto out_no_root;
+	if (!(s->s_root)) {
+		iput(inode);
+		error = -ENOMEM;
+		goto out_no_inode;
+	}
 
 	kfree(opt.iocharset);
 
@@ -1268,7 +1274,7 @@ out_toomany:
 	goto out;
 }
 
-static int isofs_read_inode(struct inode *inode, int relocated)
+static int isofs_read_inode(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct isofs_sb_info *sbi = ISOFS_SB(sb);
@@ -1413,7 +1419,7 @@ static int isofs_read_inode(struct inode *inode, int relocated)
 	 */
 
 	if (!high_sierra) {
-		parse_rock_ridge_inode(de, inode, relocated);
+		parse_rock_ridge_inode(de, inode);
 		/* if we want uid/gid set, override the rock ridge setting */
 		if (sbi->s_uid_set)
 			inode->i_uid = sbi->s_uid;
@@ -1492,10 +1498,9 @@ static int isofs_iget5_set(struct inode *ino, void *data)
  * offset that point to the underlying meta-data for the inode.  The
  * code below is otherwise similar to the iget() code in
  * include/linux/fs.h */
-struct inode *__isofs_iget(struct super_block *sb,
-			   unsigned long block,
-			   unsigned long offset,
-			   int relocated)
+struct inode *isofs_iget(struct super_block *sb,
+			 unsigned long block,
+			 unsigned long offset)
 {
 	unsigned long hashval;
 	struct inode *inode;
@@ -1517,7 +1522,7 @@ struct inode *__isofs_iget(struct super_block *sb,
 		return ERR_PTR(-ENOMEM);
 
 	if (inode->i_state & I_NEW) {
-		ret = isofs_read_inode(inode, relocated);
+		ret = isofs_read_inode(inode);
 		if (ret < 0) {
 			iget_failed(inode);
 			inode = ERR_PTR(ret);

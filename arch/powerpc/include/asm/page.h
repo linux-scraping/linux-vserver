@@ -92,20 +92,34 @@ extern unsigned int HPAGE_SHIFT;
 #define PAGE_OFFSET	ASM_CONST(CONFIG_PAGE_OFFSET)
 #define LOAD_OFFSET	ASM_CONST((CONFIG_KERNEL_START-CONFIG_PHYSICAL_START))
 
-#if defined(CONFIG_RELOCATABLE)
+#if defined(CONFIG_NONSTATIC_KERNEL)
 #ifndef __ASSEMBLY__
 
 extern phys_addr_t memstart_addr;
 extern phys_addr_t kernstart_addr;
+
+#ifdef CONFIG_RELOCATABLE_PPC32
+extern long long virt_phys_offset;
 #endif
+
+#endif /* __ASSEMBLY__ */
 #define PHYSICAL_START	kernstart_addr
-#else
+
+#else	/* !CONFIG_NONSTATIC_KERNEL */
 #define PHYSICAL_START	ASM_CONST(CONFIG_PHYSICAL_START)
 #endif
 
+/* See Description below for VIRT_PHYS_OFFSET */
+#ifdef CONFIG_RELOCATABLE_PPC32
+#define VIRT_PHYS_OFFSET virt_phys_offset
+#else
+#define VIRT_PHYS_OFFSET (KERNELBASE - PHYSICAL_START)
+#endif
+
+
 #ifdef CONFIG_PPC64
 #define MEMORY_START	0UL
-#elif defined(CONFIG_RELOCATABLE)
+#elif defined(CONFIG_NONSTATIC_KERNEL)
 #define MEMORY_START	memstart_addr
 #else
 #define MEMORY_START	(PHYSICAL_START + PAGE_OFFSET - KERNELBASE)
@@ -118,44 +132,87 @@ extern phys_addr_t kernstart_addr;
 
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
-
-#ifdef CONFIG_PPC_BOOK3S_64
-/*
- * On hash the vmalloc and other regions alias to the kernel region when passed
- * through __pa(), which virt_to_pfn() uses. That means virt_addr_valid() can
- * return true for some vmalloc addresses, which is incorrect. So explicitly
- * check that the address is in the kernel region.
- */
-#define virt_addr_valid(kaddr) (REGION_ID(kaddr) == KERNEL_REGION_ID && \
-				pfn_valid(__pa(kaddr) >> PAGE_SHIFT))
-#else
 #define virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
-#endif
 
 /*
  * On Book-E parts we need __va to parse the device tree and we can't
  * determine MEMORY_START until then.  However we can determine PHYSICAL_START
  * from information at hand (program counter, TLB lookup).
  *
+ * On BookE with RELOCATABLE (RELOCATABLE_PPC32)
+ *
+ *   With RELOCATABLE_PPC32,  we support loading the kernel at any physical 
+ *   address without any restriction on the page alignment.
+ *
+ *   We find the runtime address of _stext and relocate ourselves based on 
+ *   the following calculation:
+ *
+ *  	  virtual_base = ALIGN_DOWN(KERNELBASE,256M) +
+ *  				MODULO(_stext.run,256M)
+ *   and create the following mapping:
+ *
+ * 	  ALIGN_DOWN(_stext.run,256M) => ALIGN_DOWN(KERNELBASE,256M)
+ *
+ *   When we process relocations, we cannot depend on the
+ *   existing equation for the __va()/__pa() translations:
+ *
+ * 	   __va(x) = (x)  - PHYSICAL_START + KERNELBASE
+ *
+ *   Where:
+ *   	 PHYSICAL_START = kernstart_addr = Physical address of _stext
+ *  	 KERNELBASE = Compiled virtual address of _stext.
+ *
+ *   This formula holds true iff, kernel load address is TLB page aligned.
+ *
+ *   In our case, we need to also account for the shift in the kernel Virtual 
+ *   address.
+ *
+ *   E.g.,
+ *
+ *   Let the kernel be loaded at 64MB and KERNELBASE be 0xc0000000 (same as PAGE_OFFSET).
+ *   In this case, we would be mapping 0 to 0xc0000000, and kernstart_addr = 64M
+ *
+ *   Now __va(1MB) = (0x100000) - (0x4000000) + 0xc0000000
+ *                 = 0xbc100000 , which is wrong.
+ *
+ *   Rather, it should be : 0xc0000000 + 0x100000 = 0xc0100000
+ *      	according to our mapping.
+ *
+ *   Hence we use the following formula to get the translations right:
+ *
+ * 	  __va(x) = (x) - [ PHYSICAL_START - Effective KERNELBASE ]
+ *
+ * 	  Where :
+ * 		PHYSICAL_START = dynamic load address.(kernstart_addr variable)
+ * 		Effective KERNELBASE = virtual_base =
+ * 				     = ALIGN_DOWN(KERNELBASE,256M) +
+ * 						MODULO(PHYSICAL_START,256M)
+ *
+ * 	To make the cost of __va() / __pa() more light weight, we introduce
+ * 	a new variable virt_phys_offset, which will hold :
+ *
+ * 	virt_phys_offset = Effective KERNELBASE - PHYSICAL_START
+ * 			 = ALIGN_DOWN(KERNELBASE,256M) - 
+ * 			 	ALIGN_DOWN(PHYSICALSTART,256M)
+ *
+ * 	Hence :
+ *
+ * 	__va(x) = x - PHYSICAL_START + Effective KERNELBASE
+ * 		= x + virt_phys_offset
+ *
+ * 		and
+ * 	__pa(x) = x + PHYSICAL_START - Effective KERNELBASE
+ * 		= x - virt_phys_offset
+ * 		
  * On non-Book-E PPC64 PAGE_OFFSET and MEMORY_START are constants so use
  * the other definitions for __va & __pa.
  */
 #ifdef CONFIG_BOOKE
-#define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) - PHYSICAL_START + KERNELBASE))
-#define __pa(x) ((unsigned long)(x) + PHYSICAL_START - KERNELBASE)
+#define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) + VIRT_PHYS_OFFSET))
+#define __pa(x) ((unsigned long)(x) - VIRT_PHYS_OFFSET)
 #else
-#ifdef CONFIG_PPC64
-/*
- * gcc miscompiles (unsigned long)(&static_var) - PAGE_OFFSET
- * with -mcmodel=medium, so we use & and | instead of - and + on 64-bit.
- */
-#define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) | PAGE_OFFSET))
-#define __pa(x) ((unsigned long)(x) & 0x0fffffffffffffffUL)
-
-#else /* 32-bit, non book E */
 #define __va(x) ((void *)(unsigned long)((phys_addr_t)(x) + PAGE_OFFSET - MEMORY_START))
 #define __pa(x) ((unsigned long)(x) - PAGE_OFFSET + MEMORY_START)
-#endif
 #endif
 
 /*
@@ -312,6 +369,7 @@ extern void clear_user_page(void *page, unsigned long vaddr, struct page *pg);
 extern void copy_user_page(void *to, void *from, unsigned long vaddr,
 		struct page *p);
 extern int page_is_ram(unsigned long pfn);
+extern int devmem_is_allowed(unsigned long pfn);
 
 #ifdef CONFIG_PPC_SMLPAR
 void arch_free_page(struct page *page, int order);

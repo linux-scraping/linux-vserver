@@ -160,7 +160,7 @@ static int mwifiex_pcie_suspend(struct pci_dev *pdev, pm_message_t state)
 
 	if (pdev) {
 		card = (struct pcie_service_card *) pci_get_drvdata(pdev);
-		if (!card || !card->adapter) {
+		if (!card || card->adapter) {
 			pr_err("Card or adapter structure is not valid\n");
 			return 0;
 		}
@@ -290,7 +290,7 @@ static int mwifiex_pm_wakeup_card(struct mwifiex_adapter *adapter)
 		i++;
 		udelay(10);
 		/* 50ms max wait */
-		if (i == 5000)
+		if (i == 50000)
 			break;
 	}
 
@@ -386,8 +386,7 @@ static int mwifiex_pcie_create_txbd_ring(struct mwifiex_adapter *adapter)
 	card->txbd_ring_vbase = kzalloc(card->txbd_ring_size, GFP_KERNEL);
 	if (!card->txbd_ring_vbase) {
 		dev_err(adapter->dev, "Unable to allocate buffer for txbd ring.\n");
-		kfree(card->txbd_ring_vbase);
-		return -1;
+		return -ENOMEM;
 	}
 	card->txbd_ring_pbase = virt_to_phys(card->txbd_ring_vbase);
 
@@ -477,7 +476,7 @@ static int mwifiex_pcie_create_rxbd_ring(struct mwifiex_adapter *adapter)
 	if (!card->rxbd_ring_vbase) {
 		dev_err(adapter->dev, "Unable to allocate buffer for "
 				"rxbd_ring.\n");
-		return -1;
+		return -ENOMEM;
 	}
 	card->rxbd_ring_pbase = virt_to_phys(card->rxbd_ring_vbase);
 
@@ -570,7 +569,7 @@ static int mwifiex_pcie_create_evtbd_ring(struct mwifiex_adapter *adapter)
 	if (!card->evtbd_ring_vbase) {
 		dev_err(adapter->dev, "Unable to allocate buffer. "
 				"Terminating download\n");
-		return -1;
+		return -ENOMEM;
 	}
 	card->evtbd_ring_pbase = virt_to_phys(card->evtbd_ring_vbase);
 
@@ -1229,15 +1228,16 @@ static int mwifiex_pcie_event_complete(struct mwifiex_adapter *adapter,
 	if (!skb)
 		return 0;
 
-	if (rdptr >= MWIFIEX_MAX_EVT_BD)
+	if (rdptr >= MWIFIEX_MAX_EVT_BD) {
 		dev_err(adapter->dev, "event_complete: Invalid rdptr 0x%x\n",
 					rdptr);
+		return -EINVAL;
+	}
 
 	/* Read the event ring write pointer set by firmware */
 	if (mwifiex_read_reg(adapter, REG_EVTBD_WRPTR, &wrptr)) {
 		dev_err(adapter->dev, "event_complete: failed to read REG_EVTBD_WRPTR\n");
-		ret = -1;
-		goto done;
+		return -1;
 	}
 
 	if (!card->evt_buf_list[rdptr]) {
@@ -1266,14 +1266,8 @@ static int mwifiex_pcie_event_complete(struct mwifiex_adapter *adapter,
 	/* Write the event ring read pointer in to REG_EVTBD_RDPTR */
 	if (mwifiex_write_reg(adapter, REG_EVTBD_RDPTR, card->evtbd_rdptr)) {
 		dev_err(adapter->dev, "event_complete: failed to read REG_EVTBD_RDPTR\n");
-		ret = -1;
-		goto done;
+		return -1;
 	}
-
-done:
-	/* Free the buffer for failure case */
-	if (ret && skb)
-		dev_kfree_skb_any(skb);
 
 	dev_dbg(adapter->dev, "info: Check Events Again\n");
 	ret = mwifiex_pcie_process_event_ready(adapter);
@@ -1672,9 +1666,8 @@ static int mwifiex_pcie_host_to_card(struct mwifiex_adapter *adapter, u8 type,
 				     struct sk_buff *skb,
 				     struct mwifiex_tx_param *tx_param)
 {
-	if (!adapter || !skb) {
-		dev_err(adapter->dev, "Invalid parameter in %s <%p, %p>\n",
-				__func__, adapter, skb);
+	if (!skb) {
+		dev_err(adapter->dev, "Passed NULL skb to %s\n", __func__);
 		return -1;
 	}
 
@@ -1821,9 +1814,9 @@ static void mwifiex_pcie_cleanup(struct mwifiex_adapter *adapter)
 	if (pdev) {
 		pci_iounmap(pdev, card->pci_mmap);
 		pci_iounmap(pdev, card->pci_mmap1);
+
+		pci_release_regions(pdev);
 		pci_disable_device(pdev);
-		pci_release_region(pdev, 2);
-		pci_release_region(pdev, 0);
 		pci_set_drvdata(pdev, NULL);
 	}
 }

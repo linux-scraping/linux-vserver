@@ -250,7 +250,6 @@ static void hostfs_evict_inode(struct inode *inode)
 static void hostfs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kfree(HOSTFS_I(inode));
 }
 
@@ -259,13 +258,13 @@ static void hostfs_destroy_inode(struct inode *inode)
 	call_rcu(&inode->i_rcu, hostfs_i_callback);
 }
 
-static int hostfs_show_options(struct seq_file *seq, struct vfsmount *vfs)
+static int hostfs_show_options(struct seq_file *seq, struct dentry *root)
 {
-	const char *root_path = vfs->mnt_sb->s_fs_info;
+	const char *root_path = root->d_sb->s_fs_info;
 	size_t offset = strlen(root_ino) + 1;
 
 	if (strlen(root_path) > offset)
-		seq_show_option(seq, root_path + offset, NULL);
+		seq_printf(seq, ",%s", root_path + offset);
 
 	return 0;
 }
@@ -552,7 +551,7 @@ static int read_name(struct inode *ino, char *name)
 	return 0;
 }
 
-int hostfs_create(struct inode *dir, struct dentry *dentry, int mode,
+int hostfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 		  struct nameidata *nd)
 {
 	struct inode *inode;
@@ -677,7 +676,7 @@ int hostfs_symlink(struct inode *ino, struct dentry *dentry, const char *to)
 	return err;
 }
 
-int hostfs_mkdir(struct inode *ino, struct dentry *dentry, int mode)
+int hostfs_mkdir(struct inode *ino, struct dentry *dentry, umode_t mode)
 {
 	char *file;
 	int err;
@@ -701,7 +700,7 @@ int hostfs_rmdir(struct inode *ino, struct dentry *dentry)
 	return err;
 }
 
-int hostfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
+static int hostfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
 	struct inode *inode;
 	char *name;
@@ -720,11 +719,13 @@ int hostfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
 
 	init_special_inode(inode, mode, dev);
 	err = do_mknod(name, mode, MAJOR(dev), MINOR(dev));
-	if (err)
+	if (!err)
 		goto out_free;
 
 	err = read_name(inode, name);
 	__putname(name);
+	if (err)
+		goto out_put;
 	if (err)
 		goto out_put;
 
@@ -792,7 +793,7 @@ int hostfs_setattr(struct dentry *dentry, struct iattr *attr)
 
 	int fd = HOSTFS_I(inode)->fd;
 
-	err = setattr_prepare(dentry, attr);
+	err = inode_change_ok(inode, attr);
 	if (err)
 		return err;
 
@@ -955,11 +956,10 @@ static int hostfs_fill_sb_common(struct super_block *sb, void *d, int silent)
 
 	if (S_ISLNK(root_inode->i_mode)) {
 		char *name = follow_link(host_root_path);
-		if (IS_ERR(name)) {
+		if (IS_ERR(name))
 			err = PTR_ERR(name);
-			goto out_put;
-		}
-		err = read_name(root_inode, name);
+		else
+			err = read_name(root_inode, name);
 		kfree(name);
 		if (err)
 			goto out_put;

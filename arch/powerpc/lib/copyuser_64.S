@@ -11,6 +11,12 @@
 
 	.align	7
 _GLOBAL(__copy_tofrom_user)
+BEGIN_FTR_SECTION
+	nop
+FTR_SECTION_ELSE
+	b	__copy_tofrom_user_power7
+ALT_FTR_SECTION_END_IFCLR(CPU_FTR_VMX_COPY)
+_GLOBAL(__copy_tofrom_user_base)
 	/* first check for a whole page copy on a page boundary */
 	cmpldi	cr1,r5,16
 	cmpdi	cr6,r5,4096
@@ -330,7 +336,6 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 	addi	r3,r3,8
 171:
 177:
-179:
 	addi	r3,r3,8
 370:
 372:
@@ -345,6 +350,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 173:
 174:
 175:
+179:
 181:
 184:
 186:

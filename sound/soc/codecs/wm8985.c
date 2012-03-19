@@ -411,7 +411,8 @@ static const struct snd_soc_dapm_widget wm8985_dapm_widgets[] = {
 	SND_SOC_DAPM_PGA("Right Speaker Out", WM8985_POWER_MANAGEMENT_3,
 		6, 0, NULL, 0),
 
-	SND_SOC_DAPM_MICBIAS("Mic Bias", WM8985_POWER_MANAGEMENT_1, 4, 0),
+	SND_SOC_DAPM_SUPPLY("Mic Bias", WM8985_POWER_MANAGEMENT_1, 4, 0,
+			    NULL, 0),
 
 	SND_SOC_DAPM_INPUT("LIN"),
 	SND_SOC_DAPM_INPUT("LIP"),
@@ -785,30 +786,33 @@ static int wm8985_set_pll(struct snd_soc_dai *dai, int pll_id,
 	struct pll_div pll_div;
 
 	codec = dai->codec;
-	if (!freq_in || !freq_out) {
-		/* disable the PLL */
-		snd_soc_update_bits(codec, WM8985_POWER_MANAGEMENT_1,
-				    WM8985_PLLEN_MASK, 0);
-	} else {
+	if (freq_in && freq_out) {
 		ret = pll_factors(&pll_div, freq_out * 4 * 2, freq_in);
 		if (ret)
 			return ret;
-
-		/* set PLLN and PRESCALE */
-		snd_soc_write(codec, WM8985_PLL_N,
-			      (pll_div.div2 << WM8985_PLL_PRESCALE_SHIFT)
-			      | pll_div.n);
-		/* set PLLK */
-		snd_soc_write(codec, WM8985_PLL_K_3, pll_div.k & 0x1ff);
-		snd_soc_write(codec, WM8985_PLL_K_2, (pll_div.k >> 9) & 0x1ff);
-		snd_soc_write(codec, WM8985_PLL_K_1, (pll_div.k >> 18));
-		/* set the source of the clock to be the PLL */
-		snd_soc_update_bits(codec, WM8985_CLOCK_GEN_CONTROL,
-				    WM8985_CLKSEL_MASK, WM8985_CLKSEL);
-		/* enable the PLL */
-		snd_soc_update_bits(codec, WM8985_POWER_MANAGEMENT_1,
-				    WM8985_PLLEN_MASK, WM8985_PLLEN);
 	}
+
+	/* disable the PLL before reprogramming it */
+	snd_soc_update_bits(codec, WM8985_POWER_MANAGEMENT_1,
+			    WM8985_PLLEN_MASK, 0);
+	
+	if (!freq_in || !freq_out)
+		return 0;
+
+	/* set PLLN and PRESCALE */
+	snd_soc_write(codec, WM8985_PLL_N,
+		      (pll_div.div2 << WM8985_PLL_PRESCALE_SHIFT)
+		      | pll_div.n);
+	/* set PLLK */
+	snd_soc_write(codec, WM8985_PLL_K_3, pll_div.k & 0x1ff);
+	snd_soc_write(codec, WM8985_PLL_K_2, (pll_div.k >> 9) & 0x1ff);
+	snd_soc_write(codec, WM8985_PLL_K_1, (pll_div.k >> 18));
+	/* set the source of the clock to be the PLL */
+	snd_soc_update_bits(codec, WM8985_CLOCK_GEN_CONTROL,
+			    WM8985_CLKSEL_MASK, WM8985_CLKSEL);
+	/* enable the PLL */
+	snd_soc_update_bits(codec, WM8985_POWER_MANAGEMENT_1,
+			    WM8985_PLLEN_MASK, WM8985_PLLEN);
 	return 0;
 }
 
@@ -941,7 +945,7 @@ static int wm8985_set_bias_level(struct snd_soc_codec *codec,
 }
 
 #ifdef CONFIG_PM
-static int wm8985_suspend(struct snd_soc_codec *codec, pm_message_t state)
+static int wm8985_suspend(struct snd_soc_codec *codec)
 {
 	wm8985_set_bias_level(codec, SND_SOC_BIAS_OFF);
 	return 0;
@@ -1027,7 +1031,7 @@ err_reg_get:
 	return ret;
 }
 
-static struct snd_soc_dai_ops wm8985_dai_ops = {
+static const struct snd_soc_dai_ops wm8985_dai_ops = {
 	.digital_mute = wm8985_dac_mute,
 	.hw_params = wm8985_hw_params,
 	.set_fmt = wm8985_set_fmt,

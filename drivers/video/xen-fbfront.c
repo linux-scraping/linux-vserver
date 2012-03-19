@@ -640,6 +640,7 @@ static void xenfb_backend_changed(struct xenbus_device *dev,
 		break;
 
 	case XenbusStateInitWait:
+InitWait:
 		xenbus_switch_state(dev, XenbusStateConnected);
 		break;
 
@@ -650,8 +651,7 @@ static void xenfb_backend_changed(struct xenbus_device *dev,
 		 * get Connected twice here.
 		 */
 		if (dev->state != XenbusStateConnected)
-			/* no InitWait seen yet, fudge it */
-			xenbus_switch_state(dev, XenbusStateConnected);
+			goto InitWait; /* no InitWait seen yet, fudge it */
 
 		if (xenbus_scanf(XBT_NIL, info->xbdev->otherend,
 				 "request-update", "%d", &val) < 0)
@@ -671,20 +671,17 @@ static void xenfb_backend_changed(struct xenbus_device *dev,
 	}
 }
 
-static struct xenbus_device_id xenfb_ids[] = {
+static const struct xenbus_device_id xenfb_ids[] = {
 	{ "vfb" },
 	{ "" }
 };
 
-static struct xenbus_driver xenfb_driver = {
-	.name = "vfb",
-	.owner = THIS_MODULE,
-	.ids = xenfb_ids,
+static DEFINE_XENBUS_DRIVER(xenfb, ,
 	.probe = xenfb_probe,
 	.remove = xenfb_remove,
 	.resume = xenfb_resume,
 	.otherend_changed = xenfb_backend_changed,
-};
+);
 
 static int __init xenfb_init(void)
 {

@@ -780,19 +780,27 @@ static int ib_umad_open(struct inode *inode, struct file *filp)
 {
 	struct ib_umad_port *port;
 	struct ib_umad_file *file;
-	int ret = -ENXIO;
+	int ret;
 
 	port = container_of(inode->i_cdev, struct ib_umad_port, cdev);
+	if (port)
+		kref_get(&port->umad_dev->ref);
+	else
+		return -ENXIO;
 
 	mutex_lock(&port->file_mutex);
 
-	if (!port->ib_dev)
+	if (!port->ib_dev) {
+		ret = -ENXIO;
 		goto out;
+	}
 
-	ret = -ENOMEM;
 	file = kzalloc(sizeof *file, GFP_KERNEL);
-	if (!file)
+	if (!file) {
+		kref_put(&port->umad_dev->ref, ib_umad_release_dev);
+		ret = -ENOMEM;
 		goto out;
+	}
 
 	mutex_init(&file->mutex);
 	spin_lock_init(&file->send_lock);
@@ -806,13 +814,6 @@ static int ib_umad_open(struct inode *inode, struct file *filp)
 	list_add_tail(&file->port_list, &port->file_list);
 
 	ret = nonseekable_open(inode, filp);
-	if (ret) {
-		list_del(&file->port_list);
-		kfree(file);
-		goto out;
-	}
-
-	kref_get(&port->umad_dev->ref);
 
 out:
 	mutex_unlock(&port->file_mutex);
@@ -879,6 +880,10 @@ static int ib_umad_sm_open(struct inode *inode, struct file *filp)
 	int ret;
 
 	port = container_of(inode->i_cdev, struct ib_umad_port, sm_cdev);
+	if (port)
+		kref_get(&port->umad_dev->ref);
+	else
+		return -ENXIO;
 
 	if (filp->f_flags & O_NONBLOCK) {
 		if (down_trylock(&port->sm_sem)) {
@@ -893,27 +898,17 @@ static int ib_umad_sm_open(struct inode *inode, struct file *filp)
 	}
 
 	ret = ib_modify_port(port->ib_dev, port->port_num, 0, &props);
-	if (ret)
-		goto err_up_sem;
+	if (ret) {
+		up(&port->sm_sem);
+		goto fail;
+	}
 
 	filp->private_data = port;
 
-	ret = nonseekable_open(inode, filp);
-	if (ret)
-		goto err_clr_sm_cap;
-
-	kref_get(&port->umad_dev->ref);
-
-	return 0;
-
-err_clr_sm_cap:
-	swap(props.set_port_cap_mask, props.clr_port_cap_mask);
-	ib_modify_port(port->ib_dev, port->port_num, 0, &props);
-
-err_up_sem:
-	up(&port->sm_sem);
+	return nonseekable_open(inode, filp);
 
 fail:
+	kref_put(&port->umad_dev->ref, ib_umad_release_dev);
 	return ret;
 }
 
@@ -1180,7 +1175,7 @@ static void ib_umad_remove_one(struct ib_device *device)
 	kref_put(&umad_dev->ref, ib_umad_release_dev);
 }
 
-static char *umad_devnode(struct device *dev, mode_t *mode)
+static char *umad_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "infiniband/%s", dev_name(dev));
 }

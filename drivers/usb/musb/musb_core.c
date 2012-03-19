@@ -131,7 +131,7 @@ static inline struct musb *dev_to_musb(struct device *dev)
 /*-------------------------------------------------------------------------*/
 
 #ifndef CONFIG_BLACKFIN
-static int musb_ulpi_read(struct otg_transceiver *otg, u32 reg)
+static int musb_ulpi_read(struct otg_transceiver *otg, u32 offset)
 {
 	void __iomem *addr = otg->io_priv;
 	int	i = 0;
@@ -147,7 +147,7 @@ static int musb_ulpi_read(struct otg_transceiver *otg, u32 reg)
 	 * ULPICarKitControlDisableUTMI after clearing POWER_SUSPENDM.
 	 */
 
-	musb_writeb(addr, MUSB_ULPI_REG_ADDR, (u8)reg);
+	musb_writeb(addr, MUSB_ULPI_REG_ADDR, (u8)offset);
 	musb_writeb(addr, MUSB_ULPI_REG_CONTROL,
 			MUSB_ULPI_REG_REQ | MUSB_ULPI_RDN_WR);
 
@@ -165,7 +165,8 @@ static int musb_ulpi_read(struct otg_transceiver *otg, u32 reg)
 	return musb_readb(addr, MUSB_ULPI_REG_DATA);
 }
 
-static int musb_ulpi_write(struct otg_transceiver *otg, u32 val, u32 reg)
+static int musb_ulpi_write(struct otg_transceiver *otg,
+		u32 offset, u32 data)
 {
 	void __iomem *addr = otg->io_priv;
 	int	i = 0;
@@ -177,8 +178,8 @@ static int musb_ulpi_write(struct otg_transceiver *otg, u32 val, u32 reg)
 	power &= ~MUSB_POWER_SUSPENDM;
 	musb_writeb(addr, MUSB_POWER, power);
 
-	musb_writeb(addr, MUSB_ULPI_REG_ADDR, (u8)reg);
-	musb_writeb(addr, MUSB_ULPI_REG_DATA, (u8)val);
+	musb_writeb(addr, MUSB_ULPI_REG_ADDR, (u8)offset);
+	musb_writeb(addr, MUSB_ULPI_REG_DATA, (u8)data);
 	musb_writeb(addr, MUSB_ULPI_REG_CONTROL, MUSB_ULPI_REG_REQ);
 
 	while (!(musb_readb(addr, MUSB_ULPI_REG_CONTROL)
@@ -660,7 +661,6 @@ static irqreturn_t musb_stage0_irq(struct musb *musb, u8 int_usb,
 
 		handled = IRQ_HANDLED;
 		musb->is_active = 1;
-		set_bit(HCD_FLAG_SAW_IRQ, &hcd->flags);
 
 		musb->ep0_stage = MUSB_EP0_START;
 
@@ -981,6 +981,9 @@ static void musb_shutdown(struct platform_device *pdev)
 	unsigned long	flags;
 
 	pm_runtime_get_sync(musb->controller);
+
+	musb_gadget_cleanup(musb);
+
 	spin_lock_irqsave(&musb->lock, flags);
 	musb_platform_disable(musb);
 	musb_generic_disable(musb);
@@ -1431,7 +1434,7 @@ static int __init musb_core_init(u16 musb_type, struct musb *musb)
 		struct musb_hw_ep	*hw_ep = musb->endpoints + i;
 
 		hw_ep->fifo = MUSB_FIFO_OFFSET(i) + mbase;
-#ifdef CONFIG_USB_MUSB_TUSB6010
+#if defined(CONFIG_USB_MUSB_TUSB6010) || defined (CONFIG_USB_MUSB_TUSB6010_MODULE)
 		hw_ep->fifo_async = musb->async + 0x400 + MUSB_FIFO_OFFSET(i);
 		hw_ep->fifo_sync = musb->sync + 0x400 + MUSB_FIFO_OFFSET(i);
 		hw_ep->fifo_sync_va =
@@ -1523,30 +1526,16 @@ irqreturn_t musb_interrupt(struct musb *musb)
 		(devctl & MUSB_DEVCTL_HM) ? "host" : "peripheral",
 		musb->int_usb, musb->int_tx, musb->int_rx);
 
-	/**
-	 * According to Mentor Graphics' documentation, flowchart on page 98,
-	 * IRQ should be handled as follows:
-	 *
-	 * . Resume IRQ
-	 * . Session Request IRQ
-	 * . VBUS Error IRQ
-	 * . Suspend IRQ
-	 * . Connect IRQ
-	 * . Disconnect IRQ
-	 * . Reset/Babble IRQ
-	 * . SOF IRQ (we're not using this one)
-	 * . Endpoint 0 IRQ
-	 * . TX Endpoints
-	 * . RX Endpoints
-	 *
-	 * We will be following that flowchart in order to avoid any problems
-	 * that might arise with internal Finite State Machine.
+	/* the core can interrupt us for multiple reasons; docs have
+	 * a generic interrupt flowchart to follow
 	 */
-
 	if (musb->int_usb)
 		retval |= musb_stage0_irq(musb, musb->int_usb,
 				devctl, power);
 
+	/* "stage 1" is handling endpoint irqs */
+
+	/* handle endpoint 0 first */
 	if (musb->int_tx & 1) {
 		if (devctl & MUSB_DEVCTL_HM)
 			retval |= musb_h_ep0_irq(musb);
@@ -1554,27 +1543,13 @@ irqreturn_t musb_interrupt(struct musb *musb)
 			retval |= musb_g_ep0_irq(musb);
 	}
 
-	reg = musb->int_tx >> 1;
-	ep_num = 1;
-	while (reg) {
-		if (reg & 1) {
-			retval = IRQ_HANDLED;
-			if (devctl & MUSB_DEVCTL_HM) {
-				if (is_host_capable())
-					musb_host_tx(musb, ep_num);
-			} else {
-				if (is_peripheral_capable())
-					musb_g_tx(musb, ep_num);
-			}
-		}
-		reg >>= 1;
-		ep_num++;
-	}
-
+	/* RX on endpoints 1-15 */
 	reg = musb->int_rx >> 1;
 	ep_num = 1;
 	while (reg) {
 		if (reg & 1) {
+			/* musb_ep_select(musb->mregs, ep_num); */
+			/* REVISIT just retval = ep->rx_irq(...) */
 			retval = IRQ_HANDLED;
 			if (devctl & MUSB_DEVCTL_HM) {
 				if (is_host_capable())
@@ -1589,12 +1564,32 @@ irqreturn_t musb_interrupt(struct musb *musb)
 		ep_num++;
 	}
 
+	/* TX on endpoints 1-15 */
+	reg = musb->int_tx >> 1;
+	ep_num = 1;
+	while (reg) {
+		if (reg & 1) {
+			/* musb_ep_select(musb->mregs, ep_num); */
+			/* REVISIT just retval |= ep->tx_irq(...) */
+			retval = IRQ_HANDLED;
+			if (devctl & MUSB_DEVCTL_HM) {
+				if (is_host_capable())
+					musb_host_tx(musb, ep_num);
+			} else {
+				if (is_peripheral_capable())
+					musb_g_tx(musb, ep_num);
+			}
+		}
+		reg >>= 1;
+		ep_num++;
+	}
+
 	return retval;
 }
 EXPORT_SYMBOL_GPL(musb_interrupt);
 
 #ifndef CONFIG_MUSB_PIO_ONLY
-static int __initdata use_dma = 1;
+static bool __initdata use_dma = 1;
 
 /* "modprobe ... use_dma=0" etc */
 module_param(use_dma, bool, 0);
@@ -1638,6 +1633,7 @@ void musb_dma_completion(struct musb *musb, u8 epnum, u8 transmit)
 		}
 	}
 }
+EXPORT_SYMBOL_GPL(musb_dma_completion);
 
 #else
 #define use_dma			0
@@ -1833,8 +1829,6 @@ static void musb_free(struct musb *musb)
 #ifdef CONFIG_SYSFS
 	sysfs_remove_group(&musb->controller->kobj, &musb_attr_group);
 #endif
-
-	musb_gadget_cleanup(musb);
 
 	if (musb->nIrq >= 0) {
 		if (musb->irq_wake)
@@ -2163,6 +2157,7 @@ static void musb_save_context(struct musb *musb)
 		if (!epio)
 			continue;
 
+		musb_writeb(musb_base, MUSB_INDEX, i);
 		musb->context.index_regs[i].txmaxp =
 			musb_readw(epio, MUSB_TXMAXP);
 		musb->context.index_regs[i].txcsr =
@@ -2238,6 +2233,7 @@ static void musb_restore_context(struct musb *musb)
 		if (!epio)
 			continue;
 
+		musb_writeb(musb_base, MUSB_INDEX, i);
 		musb_writew(epio, MUSB_TXMAXP,
 			musb->context.index_regs[i].txmaxp);
 		musb_writew(epio, MUSB_TXCSR,
@@ -2379,7 +2375,10 @@ static int __init musb_init(void)
 	if (usb_disabled())
 		return 0;
 
-	pr_info("%s: version " MUSB_VERSION ", ?dma?, otg (peripheral+host)\n",
+	pr_info("%s: version " MUSB_VERSION ", "
+		"?dma?"
+		", "
+		"otg (peripheral+host)",
 		musb_driver_name);
 	return platform_driver_probe(&musb_driver, musb_probe);
 }

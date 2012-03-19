@@ -712,7 +712,7 @@ static long ffs_ep0_ioctl(struct file *file, unsigned code, unsigned long value)
 	if (code == FUNCTIONFS_INTERFACE_REVMAP) {
 		struct ffs_function *func = ffs->func;
 		ret = func ? ffs_func_revmap_intf(func, value) : -ENODEV;
-	} else if (gadget && gadget->ops->ioctl) {
+	} else if (gadget->ops->ioctl) {
 		ret = gadget->ops->ioctl(gadget, code, value);
 	} else {
 		ret = -ENOTTY;
@@ -1037,7 +1037,6 @@ static int ffs_sb_fill(struct super_block *sb, void *_data, int silent)
 {
 	struct ffs_sb_fill_data *data = _data;
 	struct inode	*inode;
-	struct dentry	*d;
 	struct ffs_data	*ffs;
 
 	ENTER();
@@ -1045,7 +1044,7 @@ static int ffs_sb_fill(struct super_block *sb, void *_data, int silent)
 	/* Initialise data */
 	ffs = ffs_data_new();
 	if (unlikely(!ffs))
-		goto enomem0;
+		goto Enomem;
 
 	ffs->sb              = sb;
 	ffs->dev_name        = data->dev_name;
@@ -1065,26 +1064,21 @@ static int ffs_sb_fill(struct super_block *sb, void *_data, int silent)
 				  &simple_dir_inode_operations,
 				  &data->perms);
 	if (unlikely(!inode))
-		goto enomem1;
-	d = d_alloc_root(inode);
-	if (unlikely(!d))
-		goto enomem2;
-	sb->s_root = d;
+		goto Enomem;
+	sb->s_root = d_alloc_root(inode);
+	if (unlikely(!sb->s_root)) {
+		iput(inode);
+		goto Enomem;
+	}
 
 	/* EP0 file */
 	if (unlikely(!ffs_sb_create_file(sb, "ep0", ffs,
 					 &ffs_ep0_operations, NULL)))
-		goto enomem3;
+		goto Enomem;
 
 	return 0;
 
-enomem3:
-	dput(d);
-enomem2:
-	iput(inode);
-enomem1:
-	ffs_data_put(ffs);
-enomem0:
+Enomem:
 	return -ENOMEM;
 }
 
@@ -1196,14 +1190,11 @@ ffs_fs_mount(struct file_system_type *t, int flags,
 static void
 ffs_fs_kill_sb(struct super_block *sb)
 {
-	void *ptr;
-
 	ENTER();
 
 	kill_litter_super(sb);
-	ptr = xchg(&sb->s_fs_info, NULL);
-	if (ptr)
-		ffs_data_put(ptr);
+	if (sb->s_fs_info)
+		ffs_data_put(sb->s_fs_info);
 }
 
 static struct file_system_type ffs_fs_type = {
@@ -1376,13 +1367,11 @@ static int functionfs_bind(struct ffs_data *ffs, struct usb_composite_dev *cdev)
 	ffs->ep0req->context = ffs;
 
 	lang = ffs->stringtabs;
-	if (lang) {
-		for (; *lang; ++lang) {
-			struct usb_string *str = (*lang)->strings;
-			int id = first_id;
-			for (; str->s; ++id, ++str)
-				str->id = id;
-		}
+	for (lang = ffs->stringtabs; *lang; ++lang) {
+		struct usb_string *str = (*lang)->strings;
+		int id = first_id;
+		for (; str->s; ++id, ++str)
+			str->id = id;
 	}
 
 	ffs->gadget = cdev->gadget;
@@ -1410,7 +1399,7 @@ static int ffs_epfiles_create(struct ffs_data *ffs)
 	ENTER();
 
 	count = ffs->eps_count;
-	epfiles = kzalloc(count * sizeof *epfiles, GFP_KERNEL);
+	epfiles = kcalloc(count, sizeof(*epfiles), GFP_KERNEL);
 	if (!epfiles)
 		return -ENOMEM;
 
@@ -2165,7 +2154,7 @@ static int ffs_func_bind(struct usb_configuration *c,
 	const int high = gadget_is_dualspeed(func->gadget) &&
 		func->ffs->hs_descs_count;
 
-	int ret, i;
+	int ret;
 
 	/* Make it a single chunk, less management later on */
 	struct {
@@ -2194,8 +2183,8 @@ static int ffs_func_bind(struct usb_configuration *c,
 	memset(data->eps, 0, sizeof data->eps);
 	memcpy(data->raw_descs, ffs->raw_descs + 16, sizeof data->raw_descs);
 	memset(data->inums, 0xff, sizeof data->inums);
-	for (i = 0; i < ffs->eps_count; i++)
-		data->eps[i].num = -1;
+	for (ret = ffs->eps_count; ret; --ret)
+		data->eps[ret].num = -1;
 
 	/* Save pointers */
 	func->eps             = data->eps;

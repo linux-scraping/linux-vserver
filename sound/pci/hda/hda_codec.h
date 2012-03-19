@@ -550,9 +550,6 @@ enum {
 /* max. codec address */
 #define HDA_MAX_CODEC_ADDRESS	0x0f
 
-/* max number of PCM devics per card */
-#define HDA_MAX_PCMS		10
-
 /*
  * generic arrays
  */
@@ -858,7 +855,6 @@ struct hda_codec {
 	unsigned int pins_shutup:1;	/* pins are shut up */
 	unsigned int no_trigger_sense:1; /* don't trigger at pin-sensing */
 	unsigned int ignore_misc_bit:1; /* ignore MISC_NO_PRESENCE bit */
-	unsigned int no_jack_detect:1;	/* Machine has no jack-detection */
 #ifdef CONFIG_SND_HDA_POWER_SAVE
 	unsigned int power_on :1;	/* current (global) power-state */
 	unsigned int power_transition :1; /* power-state in transition */
@@ -872,6 +868,9 @@ struct hda_codec {
 	/* codec-specific additional proc output */
 	void (*proc_widget_hook)(struct snd_info_buffer *buffer,
 				 struct hda_codec *codec, hda_nid_t nid);
+
+	/* jack detection */
+	struct snd_array jacktbl;
 
 #ifdef CONFIG_SND_HDA_INPUT_JACK
 	/* jack detection */

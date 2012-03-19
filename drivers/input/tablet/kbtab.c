@@ -117,9 +117,6 @@ static int kbtab_probe(struct usb_interface *intf, const struct usb_device_id *i
 	struct input_dev *input_dev;
 	int error = -ENOMEM;
 
-	if (intf->cur_altsetting->desc.bNumEndpoints < 1)
-		return -ENODEV;
-
 	kbtab = kzalloc(sizeof(struct kbtab), GFP_KERNEL);
 	input_dev = input_allocate_device();
 	if (!kbtab || !input_dev)
@@ -201,22 +198,4 @@ static struct usb_driver kbtab_driver = {
 	.id_table =	kbtab_ids,
 };
 
-static int __init kbtab_init(void)
-{
-	int retval;
-	retval = usb_register(&kbtab_driver);
-	if (retval)
-		goto out;
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-	       DRIVER_DESC "\n");
-out:
-	return retval;
-}
-
-static void __exit kbtab_exit(void)
-{
-	usb_deregister(&kbtab_driver);
-}
-
-module_init(kbtab_init);
-module_exit(kbtab_exit);
+module_usb_driver(kbtab_driver);

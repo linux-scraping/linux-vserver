@@ -674,6 +674,7 @@ bfad_vport_create(struct bfad_s *bfad, u16 vf_id,
 
 	spin_lock_irqsave(&bfad->bfad_lock, flags);
 	bfa_fcs_vport_start(&vport->fcs_vport);
+	list_add_tail(&vport->list_entry, &bfad->vport_list);
 	spin_unlock_irqrestore(&bfad->bfad_lock, flags);
 
 	return BFA_STATUS_OK;
@@ -1404,6 +1405,7 @@ bfad_pci_probe(struct pci_dev *pdev, const struct pci_device_id *pid)
 	bfad->ref_count = 0;
 	bfad->pport.bfad = bfad;
 	INIT_LIST_HEAD(&bfad->pbc_vport_list);
+	INIT_LIST_HEAD(&bfad->vport_list);
 
 	/* Setup the debugfs node for this bfad */
 	if (bfa_debugfs_enable)
@@ -1613,7 +1615,7 @@ out:
 static u32 *
 bfad_load_fwimg(struct pci_dev *pdev)
 {
-	if (bfa_asic_id_ct2(pdev->device)) {
+	if (pdev->device == BFA_PCI_DEVICE_ID_CT2) {
 		if (bfi_image_ct2_size == 0)
 			bfad_read_firmware(pdev, &bfi_image_ct2,
 				&bfi_image_ct2_size, BFAD_FW_FILE_CT2);
@@ -1623,14 +1625,12 @@ bfad_load_fwimg(struct pci_dev *pdev)
 			bfad_read_firmware(pdev, &bfi_image_ct,
 				&bfi_image_ct_size, BFAD_FW_FILE_CT);
 		return bfi_image_ct;
-	} else if (bfa_asic_id_cb(pdev->device)) {
+	} else {
 		if (bfi_image_cb_size == 0)
 			bfad_read_firmware(pdev, &bfi_image_cb,
 				&bfi_image_cb_size, BFAD_FW_FILE_CB);
 		return bfi_image_cb;
 	}
-
-	return NULL;
 }
 
 static void

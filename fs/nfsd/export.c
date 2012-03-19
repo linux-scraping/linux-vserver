@@ -401,7 +401,7 @@ fsloc_parse(char **mesg, char *buf, struct nfsd4_fs_locations *fsloc)
 	int migrated, i, err;
 
 	/* listsize */
-	err = get_uint(mesg, &fsloc->locations_count);
+	err = get_int(mesg, &fsloc->locations_count);
 	if (err)
 		return err;
 	if (fsloc->locations_count > MAX_FS_LOCATIONS)
@@ -459,7 +459,7 @@ static int secinfo_parse(char **mesg, char *buf, struct svc_export *exp)
 		return -EINVAL;
 
 	for (f = exp->ex_flavors; f < exp->ex_flavors + listsize; f++) {
-		err = get_uint(mesg, &f->pseudoflavor);
+		err = get_int(mesg, &f->pseudoflavor);
 		if (err)
 			return err;
 		/*
@@ -468,7 +468,7 @@ static int secinfo_parse(char **mesg, char *buf, struct svc_export *exp)
 		 * problem at export time instead of when a client fails
 		 * to authenticate.
 		 */
-		err = get_uint(mesg, &f->flags);
+		err = get_int(mesg, &f->flags);
 		if (err)
 			return err;
 		/* Only some flags are allowed to differ between flavors: */
@@ -1226,12 +1226,12 @@ nfsd_export_init(void)
 	int rv;
 	dprintk("nfsd: initializing export module.\n");
 
-	rv = cache_register(&svc_export_cache);
+	rv = cache_register_net(&svc_export_cache, &init_net);
 	if (rv)
 		return rv;
-	rv = cache_register(&svc_expkey_cache);
+	rv = cache_register_net(&svc_expkey_cache, &init_net);
 	if (rv)
-		cache_unregister(&svc_export_cache);
+		cache_unregister_net(&svc_export_cache, &init_net);
 	return rv;
 
 }
@@ -1255,8 +1255,8 @@ nfsd_export_shutdown(void)
 
 	dprintk("nfsd: shutting down export module.\n");
 
-	cache_unregister(&svc_expkey_cache);
-	cache_unregister(&svc_export_cache);
+	cache_unregister_net(&svc_expkey_cache, &init_net);
+	cache_unregister_net(&svc_export_cache, &init_net);
 	svcauth_unix_purge();
 
 	dprintk("nfsd: export shutdown complete.\n");

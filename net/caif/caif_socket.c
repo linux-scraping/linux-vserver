@@ -317,7 +317,7 @@ static int caif_seqpkt_recvmsg(struct kiocb *iocb, struct socket *sock,
 	int copylen;
 
 	ret = -EOPNOTSUPP;
-	if (flags & MSG_OOB)
+	if (m->msg_flags&MSG_OOB)
 		goto read_error;
 
 	skb = skb_recv_datagram(sk, flags, 0 , &ret);
@@ -366,10 +366,6 @@ static long caif_stream_data_wait(struct sock *sk, long timeo)
 		release_sock(sk);
 		timeo = schedule_timeout(timeo);
 		lock_sock(sk);
-
-		if (sock_flag(sk, SOCK_DEAD))
-			break;
-
 		clear_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
 	}
 
@@ -397,6 +393,8 @@ static int caif_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (flags&MSG_OOB)
 		goto out;
 
+	msg->msg_namelen = 0;
+
 	/*
 	 * Lock the socket to prevent queue disordering
 	 * while sleeps in memcpy_tomsg
@@ -414,10 +412,6 @@ static int caif_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 		struct sk_buff *skb;
 
 		lock_sock(sk);
-		if (sock_flag(sk, SOCK_DEAD)) {
-			err = -ECONNRESET;
-			goto unlock;
-		}
 		skb = skb_dequeue(&sk->sk_receive_queue);
 		caif_check_flow_release(sk);
 
@@ -545,8 +539,10 @@ static int transmit_skb(struct sk_buff *skb, struct caifsock *cf_sk,
 	pkt = cfpkt_fromnative(CAIF_DIR_OUT, skb);
 	memset(skb->cb, 0, sizeof(struct caif_payload_info));
 
-	if (cf_sk->layer.dn == NULL)
+	if (cf_sk->layer.dn == NULL) {
+		kfree_skb(skb);
 		return -EINVAL;
+	}
 
 	return cf_sk->layer.dn->transmit(cf_sk->layer.dn, pkt);
 }
@@ -689,10 +685,10 @@ static int caif_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 		}
 		err = transmit_skb(skb, cf_sk,
 				msg->msg_flags&MSG_DONTWAIT, timeo);
-		if (err < 0) {
-			kfree_skb(skb);
+		if (err < 0)
+			/* skb is already freed */
 			goto pipe_err;
-		}
+
 		sent += size;
 	}
 

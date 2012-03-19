@@ -27,8 +27,7 @@
 #include <scsi/scsi_device.h>
 #include <scsi/iscsi_proto.h>
 #include <target/target_core_base.h>
-#include <target/target_core_tmr.h>
-#include <target/target_core_transport.h>
+#include <target/target_core_fabric.h>
 
 #include "iscsi_target_core.h"
 #include "iscsi_target_parameters.h"
@@ -50,7 +49,7 @@
 static LIST_HEAD(g_tiqn_list);
 static LIST_HEAD(g_np_list);
 static DEFINE_SPINLOCK(tiqn_lock);
-static DEFINE_MUTEX(np_lock);
+static DEFINE_SPINLOCK(np_lock);
 
 static struct idr tiqn_idr;
 struct idr sess_idr;
@@ -262,9 +261,6 @@ int iscsit_deaccess_np(struct iscsi_np *np, struct iscsi_portal_group *tpg)
 	return 0;
 }
 
-/*
- * Called with mutex np_lock held
- */
 static struct iscsi_np *iscsit_get_np(
 	struct __kernel_sockaddr_storage *sockaddr,
 	int network_transport)
@@ -275,10 +271,11 @@ static struct iscsi_np *iscsit_get_np(
 	int ip_match = 0;
 	u16 port;
 
+	spin_lock_bh(&np_lock);
 	list_for_each_entry(np, &g_np_list, np_list) {
-		spin_lock_bh(&np->np_thread_lock);
+		spin_lock(&np->np_thread_lock);
 		if (np->np_thread_state != ISCSI_NP_THREAD_ACTIVE) {
-			spin_unlock_bh(&np->np_thread_lock);
+			spin_unlock(&np->np_thread_lock);
 			continue;
 		}
 
@@ -286,8 +283,8 @@ static struct iscsi_np *iscsit_get_np(
 			sock_in6 = (struct sockaddr_in6 *)sockaddr;
 			sock_in6_e = (struct sockaddr_in6 *)&np->np_sockaddr;
 
-			if (!memcmp((void *)&sock_in6->sin6_addr.in6_u,
-				    (void *)&sock_in6_e->sin6_addr.in6_u,
+			if (!memcmp(&sock_in6->sin6_addr.in6_u,
+				    &sock_in6_e->sin6_addr.in6_u,
 				    sizeof(struct in6_addr)))
 				ip_match = 1;
 
@@ -311,11 +308,13 @@ static struct iscsi_np *iscsit_get_np(
 			 * while iscsi_tpg_add_network_portal() is called.
 			 */
 			np->np_exports++;
-			spin_unlock_bh(&np->np_thread_lock);
+			spin_unlock(&np->np_thread_lock);
+			spin_unlock_bh(&np_lock);
 			return np;
 		}
-		spin_unlock_bh(&np->np_thread_lock);
+		spin_unlock(&np->np_thread_lock);
 	}
+	spin_unlock_bh(&np_lock);
 
 	return NULL;
 }
@@ -329,22 +328,16 @@ struct iscsi_np *iscsit_add_np(
 	struct sockaddr_in6 *sock_in6;
 	struct iscsi_np *np;
 	int ret;
-
-	mutex_lock(&np_lock);
-
 	/*
 	 * Locate the existing struct iscsi_np if already active..
 	 */
 	np = iscsit_get_np(sockaddr, network_transport);
-	if (np) {
-		mutex_unlock(&np_lock);
+	if (np)
 		return np;
-	}
 
 	np = kzalloc(sizeof(struct iscsi_np), GFP_KERNEL);
 	if (!np) {
 		pr_err("Unable to allocate memory for struct iscsi_np\n");
-		mutex_unlock(&np_lock);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -367,7 +360,6 @@ struct iscsi_np *iscsit_add_np(
 	ret = iscsi_target_setup_login_socket(np, sockaddr);
 	if (ret != 0) {
 		kfree(np);
-		mutex_unlock(&np_lock);
 		return ERR_PTR(ret);
 	}
 
@@ -376,7 +368,6 @@ struct iscsi_np *iscsit_add_np(
 		pr_err("Unable to create kthread: iscsi_np\n");
 		ret = PTR_ERR(np->np_thread);
 		kfree(np);
-		mutex_unlock(&np_lock);
 		return ERR_PTR(ret);
 	}
 	/*
@@ -387,10 +378,10 @@ struct iscsi_np *iscsit_add_np(
 	 * point because iscsi_np has not been added to g_np_list yet.
 	 */
 	np->np_exports = 1;
-	np->np_thread_state = ISCSI_NP_THREAD_ACTIVE;
 
+	spin_lock_bh(&np_lock);
 	list_add_tail(&np->np_list, &g_np_list);
-	mutex_unlock(&np_lock);
+	spin_unlock_bh(&np_lock);
 
 	pr_debug("CORE[0] - Added Network Portal: %s:%hu on %s\n",
 		np->np_ip, np->np_port, (np->np_network_transport == ISCSI_TCP) ?
@@ -435,8 +426,19 @@ int iscsit_reset_np_thread(
 
 int iscsit_del_np_comm(struct iscsi_np *np)
 {
-	if (np->np_socket)
-		sock_release(np->np_socket);
+	if (!np->np_socket)
+		return 0;
+
+	/*
+	 * Some network transports allocate their own struct sock->file,
+	 * see  if we need to free any additional allocated resources.
+	 */
+	if (np->np_flags & NPF_SCTP_STRUCT_FILE) {
+		kfree(np->np_socket->file);
+		np->np_socket->file = NULL;
+	}
+
+	sock_release(np->np_socket);
 	return 0;
 }
 
@@ -461,9 +463,9 @@ int iscsit_del_np(struct iscsi_np *np)
 	}
 	iscsit_del_np_comm(np);
 
-	mutex_lock(&np_lock);
+	spin_lock_bh(&np_lock);
 	list_del(&np->np_list);
-	mutex_unlock(&np_lock);
+	spin_unlock_bh(&np_lock);
 
 	pr_debug("CORE[0] - Removed Network Portal: %s:%hu on %s\n",
 		np->np_ip, np->np_port, (np->np_network_transport == ISCSI_TCP) ?
@@ -778,7 +780,7 @@ static int iscsit_alloc_buffs(struct iscsi_cmd *cmd)
 	struct scatterlist *sgl;
 	u32 length = cmd->se_cmd.data_length;
 	int nents = DIV_ROUND_UP(length, PAGE_SIZE);
-	int i = 0, j = 0, ret;
+	int i = 0, ret;
 	/*
 	 * If no SCSI payload is present, allocate the default iovecs used for
 	 * iSCSI PDU Header
@@ -819,15 +821,17 @@ static int iscsit_alloc_buffs(struct iscsi_cmd *cmd)
 	 */
         ret = iscsit_allocate_iovecs(cmd);
         if (ret < 0)
-		return -ENOMEM;
+		goto page_alloc_failed;
 
 	return 0;
 
 page_alloc_failed:
-	while (j < i)
-		__free_page(sg_page(&sgl[j++]));
-
-	kfree(sgl);
+	while (i >= 0) {
+		__free_page(sg_page(&sgl[i]));
+		i--;
+	}
+	kfree(cmd->t_mem_sg);
+	cmd->t_mem_sg = NULL;
 	return -ENOMEM;
 }
 
@@ -869,22 +873,24 @@ static int iscsit_handle_scsi_cmd(
 	if (((hdr->flags & ISCSI_FLAG_CMD_READ) ||
 	     (hdr->flags & ISCSI_FLAG_CMD_WRITE)) && !hdr->data_length) {
 		/*
-		 * From RFC-3720 Section 10.3.1:
-		 *
-		 * "Either or both of R and W MAY be 1 when either the
-		 *  Expected Data Transfer Length and/or Bidirectional Read
-		 *  Expected Data Transfer Length are 0"
-		 *
-		 * For this case, go ahead and clear the unnecssary bits
-		 * to avoid any confusion with ->data_direction.
+		 * Vmware ESX v3.0 uses a modified Cisco Initiator (v3.4.2)
+		 * that adds support for RESERVE/RELEASE.  There is a bug
+		 * add with this new functionality that sets R/W bits when
+		 * neither CDB carries any READ or WRITE datapayloads.
 		 */
-		hdr->flags &= ~ISCSI_FLAG_CMD_READ;
-		hdr->flags &= ~ISCSI_FLAG_CMD_WRITE;
+		if ((hdr->cdb[0] == 0x16) || (hdr->cdb[0] == 0x17)) {
+			hdr->flags &= ~ISCSI_FLAG_CMD_READ;
+			hdr->flags &= ~ISCSI_FLAG_CMD_WRITE;
+			goto done;
+		}
 
-		pr_warn("ISCSI_FLAG_CMD_READ or ISCSI_FLAG_CMD_WRITE"
+		pr_err("ISCSI_FLAG_CMD_READ or ISCSI_FLAG_CMD_WRITE"
 			" set when Expected Data Transfer Length is 0 for"
-			" CDB: 0x%02x, Fixing up flags\n", hdr->cdb[0]);
+			" CDB: 0x%02x. Bad iSCSI Initiator.\n", hdr->cdb[0]);
+		return iscsit_add_reject(ISCSI_REASON_BOOKMARK_INVALID, 1,
+				buf, conn);
 	}
+done:
 
 	if (!(hdr->flags & ISCSI_FLAG_CMD_READ) &&
 	    !(hdr->flags & ISCSI_FLAG_CMD_WRITE) && (hdr->data_length != 0)) {
@@ -979,7 +985,7 @@ static int iscsit_handle_scsi_cmd(
 		if (cmd->targ_xfer_tag == 0xFFFFFFFF)
 			cmd->targ_xfer_tag = conn->sess->targ_xfer_tag++;
 		spin_unlock_bh(&conn->sess->ttt_lock);
-	} else
+	} else if (hdr->flags & ISCSI_FLAG_CMD_WRITE)
 		cmd->targ_xfer_tag = 0xFFFFFFFF;
 	cmd->cmd_sn		= hdr->cmdsn;
 	cmd->exp_stat_sn	= hdr->exp_statsn;
@@ -1218,7 +1224,7 @@ static void iscsit_do_crypto_hash_buf(
 
 	crypto_hash_init(hash);
 
-	sg_init_one(&sg, (u8 *)buf, payload_length);
+	sg_init_one(&sg, buf, payload_length);
 	crypto_hash_update(hash, &sg, payload_length);
 
 	if (padding) {
@@ -1596,7 +1602,7 @@ static int iscsit_handle_nop_out(
 		/*
 		 * Attach ping data to struct iscsi_cmd->buf_ptr.
 		 */
-		cmd->buf_ptr = (void *)ping_data;
+		cmd->buf_ptr = ping_data;
 		cmd->buf_ptr_size = payload_length;
 
 		pr_debug("Got %u bytes of NOPOUT ping"
@@ -2358,7 +2364,6 @@ static void iscsit_build_conn_drop_async_message(struct iscsi_conn *conn)
 {
 	struct iscsi_cmd *cmd;
 	struct iscsi_conn *conn_p;
-	bool found = false;
 
 	/*
 	 * Only send a Asynchronous Message on connections whos network
@@ -2367,15 +2372,14 @@ static void iscsit_build_conn_drop_async_message(struct iscsi_conn *conn)
 	list_for_each_entry(conn_p, &conn->sess->sess_conn_list, conn_list) {
 		if (conn_p->conn_state == TARG_CONN_STATE_LOGGED_IN) {
 			iscsit_inc_conn_usage_count(conn_p);
-			found = true;
 			break;
 		}
 	}
 
-	if (!found)
+	if (!conn_p)
 		return;
 
-	cmd = iscsit_allocate_cmd(conn_p, GFP_ATOMIC);
+	cmd = iscsit_allocate_cmd(conn_p, GFP_KERNEL);
 	if (!cmd) {
 		iscsit_dec_conn_usage_count(conn_p);
 		return;
@@ -3212,10 +3216,11 @@ static int iscsit_build_sendtargets_response(struct iscsi_cmd *cmd)
 		len += 1;
 
 		if ((len + payload_len) > buffer_len) {
+			spin_unlock(&tiqn->tiqn_tpg_lock);
 			end_of_buf = 1;
 			goto eob;
 		}
-		memcpy((void *)payload + payload_len, buf, len);
+		memcpy(payload + payload_len, buf, len);
 		payload_len += len;
 
 		spin_lock(&tiqn->tiqn_tpg_lock);
@@ -3252,7 +3257,7 @@ static int iscsit_build_sendtargets_response(struct iscsi_cmd *cmd)
 					end_of_buf = 1;
 					goto eob;
 				}
-				memcpy((void *)payload + payload_len, buf, len);
+				memcpy(payload + payload_len, buf, len);
 				payload_len += len;
 			}
 			spin_unlock(&tpg->tpg_np_lock);
@@ -3364,7 +3369,6 @@ static int iscsit_send_reject(
 	hdr->opcode		= ISCSI_OP_REJECT;
 	hdr->flags		|= ISCSI_FLAG_CMD_FINAL;
 	hton24(hdr->dlength, ISCSI_HDR_LEN);
-	hdr->ffffffff		= 0xffffffff;
 	cmd->stat_sn		= conn->stat_sn++;
 	hdr->statsn		= cpu_to_be32(cmd->stat_sn);
 	hdr->exp_cmdsn	= cpu_to_be32(conn->sess->exp_cmd_sn);
@@ -3510,7 +3514,7 @@ int iscsi_target_tx_thread(void *arg)
 	struct iscsi_conn *conn;
 	struct iscsi_queue_req *qr = NULL;
 	struct se_cmd *se_cmd;
-	struct iscsi_thread_set *ts = (struct iscsi_thread_set *)arg;
+	struct iscsi_thread_set *ts = arg;
 	/*
 	 * Allow ourselves to be interrupted by SIGINT so that a
 	 * connection recovery / failure event can be triggered externally.
@@ -3531,9 +3535,7 @@ restart:
 		 */
 		iscsit_thread_check_cpumask(conn, current, 1);
 
-		wait_event_interruptible(conn->queues_wq,
-					 !iscsit_conn_all_queues_empty(conn) ||
-					 ts->status == ISCSI_THREAD_SET_RESET);
+		schedule_timeout_interruptible(MAX_SCHEDULE_TIMEOUT);
 
 		if ((ts->status == ISCSI_THREAD_SET_RESET) ||
 		     signal_pending(current))
@@ -3801,7 +3803,7 @@ int iscsi_target_rx_thread(void *arg)
 	u8 buffer[ISCSI_HDR_LEN], opcode;
 	u32 checksum = 0, digest = 0;
 	struct iscsi_conn *conn = NULL;
-	struct iscsi_thread_set *ts = (struct iscsi_thread_set *)arg;
+	struct iscsi_thread_set *ts = arg;
 	struct kvec iov;
 	/*
 	 * Allow ourselves to be interrupted by SIGINT so that a
@@ -4104,8 +4106,13 @@ int iscsit_close_connection(
 	kfree(conn->conn_ops);
 	conn->conn_ops = NULL;
 
-	if (conn->sock)
+	if (conn->sock) {
+		if (conn->conn_flags & CONNFLAG_SCTP_STRUCT_FILE) {
+			kfree(conn->sock->file);
+			conn->sock->file = NULL;
+		}
 		sock_release(conn->sock);
+	}
 	conn->thread_set = NULL;
 
 	pr_debug("Moving to TARG_CONN_STATE_FREE.\n");
@@ -4306,7 +4313,6 @@ static void iscsit_logout_post_handler_diffcid(
 {
 	struct iscsi_conn *l_conn;
 	struct iscsi_session *sess = conn->sess;
-	bool conn_found = false;
 
 	if (!sess)
 		return;
@@ -4315,13 +4321,12 @@ static void iscsit_logout_post_handler_diffcid(
 	list_for_each_entry(l_conn, &sess->sess_conn_list, conn_list) {
 		if (l_conn->cid == cid) {
 			iscsit_inc_conn_usage_count(l_conn);
-			conn_found = true;
 			break;
 		}
 	}
 	spin_unlock_bh(&sess->conn_lock);
 
-	if (!conn_found)
+	if (!l_conn)
 		return;
 
 	if (l_conn->sock)
@@ -4509,7 +4514,6 @@ int iscsit_release_sessions_for_tpg(struct iscsi_portal_group *tpg, int force)
 	struct iscsi_session *sess;
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
 	struct se_session *se_sess, *se_sess_tmp;
-	LIST_HEAD(free_list);
 	int session_count = 0;
 
 	spin_lock_bh(&se_tpg->session_lock);
@@ -4531,17 +4535,14 @@ int iscsit_release_sessions_for_tpg(struct iscsi_portal_group *tpg, int force)
 		}
 		atomic_set(&sess->session_reinstatement, 1);
 		spin_unlock(&sess->conn_lock);
-
-		list_move_tail(&se_sess->sess_list, &free_list);
-	}
-	spin_unlock_bh(&se_tpg->session_lock);
-
-	list_for_each_entry_safe(se_sess, se_sess_tmp, &free_list, sess_list) {
-		sess = (struct iscsi_session *)se_sess->fabric_sess_ptr;
+		spin_unlock_bh(&se_tpg->session_lock);
 
 		iscsit_free_session(sess);
+		spin_lock_bh(&se_tpg->session_lock);
+
 		session_count++;
 	}
+	spin_unlock_bh(&se_tpg->session_lock);
 
 	pr_debug("Released %d iSCSI Session(s) from Target Portal"
 			" Group: %hu\n", session_count, tpg->tpgt);

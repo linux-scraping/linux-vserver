@@ -1052,7 +1052,7 @@ static void set_feature(struct m66592 *m66592, struct usb_ctrlrequest *ctrl)
 				tmp = m66592_read(m66592, M66592_INTSTS0) &
 								M66592_CTSQ;
 				udelay(1);
-			} while (tmp != M66592_CS_IDST && timeout-- > 0);
+			} while (tmp != M66592_CS_IDST || timeout-- > 0);
 
 			if (tmp == M66592_CS_IDST)
 				m66592_bset(m66592,
@@ -1472,7 +1472,7 @@ static int m66592_start(struct usb_gadget_driver *driver,
 	int retval;
 
 	if (!driver
-			|| driver->speed < USB_SPEED_HIGH
+			|| driver->max_speed < USB_SPEED_HIGH
 			|| !bind
 			|| !driver->setup)
 		return -EINVAL;
@@ -1653,7 +1653,7 @@ static int __init m66592_probe(struct platform_device *pdev)
 	m66592->gadget.ops = &m66592_gadget_ops;
 	device_initialize(&m66592->gadget.dev);
 	dev_set_name(&m66592->gadget.dev, "gadget");
-	m66592->gadget.is_dualspeed = 1;
+	m66592->gadget.max_speed = USB_SPEED_HIGH;
 	m66592->gadget.dev.parent = &pdev->dev;
 	m66592->gadget.dev.dma_mask = pdev->dev.dma_mask;
 	m66592->gadget.dev.release = pdev->dev.release;

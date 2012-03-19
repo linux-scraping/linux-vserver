@@ -16,6 +16,8 @@
 
 #include <asm/ioctls.h>
 
+#include "../../mount.h"
+
 #define FANOTIFY_DEFAULT_MAX_EVENTS	16384
 #define FANOTIFY_DEFAULT_MAX_MARKS	8192
 #define FANOTIFY_DEFAULT_MAX_LISTENERS	128
@@ -65,7 +67,7 @@ static int create_fd(struct fsnotify_group *group, struct fsnotify_event *event)
 
 	pr_debug("%s: group=%p event=%p\n", __func__, group, event);
 
-	client_fd = get_unused_fd_flags(group->fanotify_data.f_flags);
+	client_fd = get_unused_fd();
 	if (client_fd < 0)
 		return client_fd;
 
@@ -118,7 +120,6 @@ static int fill_event_metadata(struct fsnotify_group *group,
 	metadata->event_len = FAN_EVENT_METADATA_LEN;
 	metadata->metadata_len = FAN_EVENT_METADATA_LEN;
 	metadata->vers = FANOTIFY_METADATA_VERSION;
-	metadata->reserved = 0;
 	metadata->mask = event->mask & FAN_ALL_OUTGOING_EVENTS;
 	metadata->pid = pid_vnr(event->tgid);
 	if (unlikely(event->mask & FAN_Q_OVERFLOW))
@@ -547,7 +548,7 @@ static int fanotify_remove_vfsmount_mark(struct fsnotify_group *group,
 
 	removed = fanotify_mark_remove_from_mask(fsn_mark, mask, flags);
 	fsnotify_put_mark(fsn_mark);
-	if (removed & mnt->mnt_fsnotify_mask)
+	if (removed & real_mount(mnt)->mnt_fsnotify_mask)
 		fsnotify_recalc_vfsmount_mask(mnt);
 
 	return 0;
@@ -624,7 +625,7 @@ static int fanotify_add_vfsmount_mark(struct fsnotify_group *group,
 	}
 	added = fanotify_mark_add_to_mask(fsn_mark, mask, flags);
 
-	if (added & ~mnt->mnt_fsnotify_mask)
+	if (added & ~real_mount(mnt)->mnt_fsnotify_mask)
 		fsnotify_recalc_vfsmount_mask(mnt);
 err:
 	fsnotify_put_mark(fsn_mark);

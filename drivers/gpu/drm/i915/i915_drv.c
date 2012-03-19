@@ -64,7 +64,7 @@ MODULE_PARM_DESC(semaphores,
 		"Use semaphores for inter-ring sync (default: -1 (use per-chip defaults))");
 
 int i915_enable_rc6 __read_mostly = -1;
-module_param_named(i915_enable_rc6, i915_enable_rc6, int, 0400);
+module_param_named(i915_enable_rc6, i915_enable_rc6, int, 0600);
 MODULE_PARM_DESC(i915_enable_rc6,
 		"Enable power-saving render C-state 6 (default: -1 (use per-chip default)");
 
@@ -214,7 +214,6 @@ static const struct intel_device_info intel_sandybridge_d_info = {
 	.need_gfx_hws = 1, .has_hotplug = 1,
 	.has_bsd_ring = 1,
 	.has_blt_ring = 1,
-	.has_force_wake = 1,
 };
 
 static const struct intel_device_info intel_sandybridge_m_info = {
@@ -223,7 +222,6 @@ static const struct intel_device_info intel_sandybridge_m_info = {
 	.has_fbc = 1,
 	.has_bsd_ring = 1,
 	.has_blt_ring = 1,
-	.has_force_wake = 1,
 };
 
 static const struct intel_device_info intel_ivybridge_d_info = {
@@ -231,7 +229,6 @@ static const struct intel_device_info intel_ivybridge_d_info = {
 	.need_gfx_hws = 1, .has_hotplug = 1,
 	.has_bsd_ring = 1,
 	.has_blt_ring = 1,
-	.has_force_wake = 1,
 };
 
 static const struct intel_device_info intel_ivybridge_m_info = {
@@ -240,7 +237,6 @@ static const struct intel_device_info intel_ivybridge_m_info = {
 	.has_fbc = 0,	/* FBC is not enabled on Ivybridge mobile yet */
 	.has_bsd_ring = 1,
 	.has_blt_ring = 1,
-	.has_force_wake = 1,
 };
 
 static const struct pci_device_id pciidlist[] = {		/* aka */
@@ -287,7 +283,6 @@ static const struct pci_device_id pciidlist[] = {		/* aka */
 	INTEL_VGA_DEVICE(0x0152, &intel_ivybridge_d_info), /* GT1 desktop */
 	INTEL_VGA_DEVICE(0x0162, &intel_ivybridge_d_info), /* GT2 desktop */
 	INTEL_VGA_DEVICE(0x015a, &intel_ivybridge_d_info), /* GT1 server */
-	INTEL_VGA_DEVICE(0x016a, &intel_ivybridge_d_info), /* GT2 server */
 	{0, 0, 0}
 };
 
@@ -447,10 +442,6 @@ static int i915_drm_freeze(struct drm_device *dev)
 	/* Modeset on resume, not lid events */
 	dev_priv->modeset_on_lid = 0;
 
-	console_lock();
-	intel_fbdev_set_suspend(dev, 1);
-	console_unlock();
-
 	return 0;
 }
 
@@ -513,9 +504,7 @@ static int i915_drm_thaw(struct drm_device *dev)
 		drm_irq_install(dev);
 
 		/* Resume the modeset for every activated CRTC */
-		mutex_lock(&dev->mode_config.mutex);
 		drm_helper_resume_force_mode(dev);
-		mutex_unlock(&dev->mode_config.mutex);
 
 		if (IS_IRONLAKE_M(dev))
 			ironlake_enable_rc6(dev);
@@ -525,9 +514,6 @@ static int i915_drm_thaw(struct drm_device *dev)
 
 	dev_priv->modeset_on_lid = 0;
 
-	console_lock();
-	intel_fbdev_set_suspend(dev, 0);
-	console_unlock();
 	return error;
 }
 
@@ -538,35 +524,6 @@ int i915_resume(struct drm_device *dev)
 	if (dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
 
-	/*
-	 * Note that we need to set the power state explicitly, since we
-	 * powered off the device during freeze and the PCI core won't power
-	 * it back up for us during thaw. Powering off the device during
-	 * freeze is not a hard requirement though, and during the
-	 * suspend/resume phases the PCI core makes sure we get here with the
-	 * device powered on. So in case we change our freeze logic and keep
-	 * the device powered we can also remove the following set power state
-	 * call.
-	 */
-	ret = pci_set_power_state(dev->pdev, PCI_D0);
-	if (ret) {
-		DRM_ERROR("failed to set PCI D0 power state (%d)\n", ret);
-		return ret;
-	}
-
-	/*
-	 * Note that pci_enable_device() first enables any parent bridge
-	 * device and only then sets the power state for this device. The
-	 * bridge enabling is a nop though, since bridge devices are resumed
-	 * first. The order of enabling power and enabling the device is
-	 * imposed by the PCI core as described above, so here we preserve the
-	 * same order for the freeze/thaw phases.
-	 *
-	 * TODO: eventually we should remove pci_disable_device() /
-	 * pci_enable_enable_device() from suspend/resume. Due to how they
-	 * depend on the device enable refcount we can't anyway depend on them
-	 * disabling/enabling the device.
-	 */
 	if (pci_enable_device(dev->pdev))
 		return -EIO;
 
@@ -643,9 +600,36 @@ static int ironlake_do_reset(struct drm_device *dev, u8 flags)
 static int gen6_do_reset(struct drm_device *dev, u8 flags)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
+	int	ret;
+	unsigned long irqflags;
 
-	I915_WRITE(GEN6_GDRST, GEN6_GRDOM_FULL);
-	return wait_for((I915_READ(GEN6_GDRST) & GEN6_GRDOM_FULL) == 0, 500);
+	/* Hold gt_lock across reset to prevent any register access
+	 * with forcewake not set correctly
+	 */
+	spin_lock_irqsave(&dev_priv->gt_lock, irqflags);
+
+	/* Reset the chip */
+
+	/* GEN6_GDRST is not in the gt power well, no need to check
+	 * for fifo space for the write or forcewake the chip for
+	 * the read
+	 */
+	I915_WRITE_NOTRACE(GEN6_GDRST, GEN6_GRDOM_FULL);
+
+	/* Spin waiting for the device to ack the reset request */
+	ret = wait_for((I915_READ_NOTRACE(GEN6_GDRST) & GEN6_GRDOM_FULL) == 0, 500);
+
+	/* If reset with a user forcewake, try to restore, otherwise turn it off */
+	if (dev_priv->forcewake_count)
+		dev_priv->display.force_wake_get(dev_priv);
+	else
+		dev_priv->display.force_wake_put(dev_priv);
+
+	/* Restore fifo count */
+	dev_priv->gt_fifo_count = I915_READ_NOTRACE(GT_FIFO_FREE_ENTRIES);
+
+	spin_unlock_irqrestore(&dev_priv->gt_lock, irqflags);
+	return ret;
 }
 
 /**
@@ -672,7 +656,6 @@ int i915_reset(struct drm_device *dev, u8 flags)
 	 * need to
 	 */
 	bool need_display = true;
-	unsigned long irqflags;
 	int ret;
 
 	if (!i915_try_reset)
@@ -690,11 +673,6 @@ int i915_reset(struct drm_device *dev, u8 flags)
 	case 7:
 	case 6:
 		ret = gen6_do_reset(dev, flags);
-		/* If reset with a user forcewake, try to restore */
-		spin_lock_irqsave(&dev_priv->gt_lock, irqflags);
-		if (dev_priv->forcewake_count)
-			dev_priv->display.force_wake_get(dev_priv);
-		spin_unlock_irqrestore(&dev_priv->gt_lock, irqflags);
 		break;
 	case 5:
 		ret = ironlake_do_reset(dev, flags);
@@ -859,6 +837,21 @@ static struct vm_operations_struct i915_gem_vm_ops = {
 	.close = drm_gem_vm_close,
 };
 
+static const struct file_operations i915_driver_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = drm_release,
+	.unlocked_ioctl = drm_ioctl,
+	.mmap = drm_gem_mmap,
+	.poll = drm_poll,
+	.fasync = drm_fasync,
+	.read = drm_read,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = i915_compat_ioctl,
+#endif
+	.llseek = noop_llseek,
+};
+
 static struct drm_driver driver = {
 	/* Don't use MTRRs here; the Xserver or userspace app should
 	 * deal with them for Intel hardware.
@@ -892,21 +885,7 @@ static struct drm_driver driver = {
 	.dumb_map_offset = i915_gem_mmap_gtt,
 	.dumb_destroy = i915_gem_dumb_destroy,
 	.ioctls = i915_ioctls,
-	.fops = {
-		 .owner = THIS_MODULE,
-		 .open = drm_open,
-		 .release = drm_release,
-		 .unlocked_ioctl = drm_ioctl,
-		 .mmap = drm_gem_mmap,
-		 .poll = drm_poll,
-		 .fasync = drm_fasync,
-		 .read = drm_read,
-#ifdef CONFIG_COMPAT
-		 .compat_ioctl = i915_compat_ioctl,
-#endif
-		 .llseek = noop_llseek,
-	},
-
+	.fops = &i915_driver_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
 	.date = DRIVER_DATE,
@@ -975,9 +954,14 @@ MODULE_LICENSE("GPL and additional rights");
 u##x i915_read##x(struct drm_i915_private *dev_priv, u32 reg) { \
 	u##x val = 0; \
 	if (NEEDS_FORCE_WAKE((dev_priv), (reg))) { \
-		gen6_gt_force_wake_get(dev_priv); \
+		unsigned long irqflags; \
+		spin_lock_irqsave(&dev_priv->gt_lock, irqflags); \
+		if (dev_priv->forcewake_count == 0) \
+			dev_priv->display.force_wake_get(dev_priv); \
 		val = read##y(dev_priv->regs + reg); \
-		gen6_gt_force_wake_put(dev_priv); \
+		if (dev_priv->forcewake_count == 0) \
+			dev_priv->display.force_wake_put(dev_priv); \
+		spin_unlock_irqrestore(&dev_priv->gt_lock, irqflags); \
 	} else { \
 		val = read##y(dev_priv->regs + reg); \
 	} \

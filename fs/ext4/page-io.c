@@ -6,7 +6,6 @@
  * Written by Theodore Ts'o, 2010.
  */
 
-#include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/time.h>
 #include <linux/jbd2.h>
@@ -108,13 +107,12 @@ int ext4_end_io_nolock(ext4_io_end_t *io)
 			 inode->i_ino, offset, size, ret);
 	}
 
+	if (io->iocb)
+		aio_complete(io->iocb, io->result, 0);
+
 	/* Wake up anyone waiting on unwritten extent conversion */
 	if (atomic_dec_and_test(&EXT4_I(inode)->i_aiodio_unwritten))
 		wake_up_all(ext4_ioend_wq(io->inode));
-	if (io->flag & EXT4_IO_END_DIRECT)
-		inode_dio_done(inode);
-	if (io->iocb)
-		aio_complete(io->iocb, io->result, 0);
 	return ret;
 }
 
@@ -129,18 +127,12 @@ static void ext4_end_io_work(struct work_struct *work)
 	unsigned long		flags;
 
 	spin_lock_irqsave(&ei->i_completed_io_lock, flags);
-	if (io->flag & EXT4_IO_END_IN_FSYNC)
-		goto requeue;
 	if (list_empty(&io->list)) {
 		spin_unlock_irqrestore(&ei->i_completed_io_lock, flags);
 		goto free;
 	}
 
 	if (!mutex_trylock(&inode->i_mutex)) {
-		bool was_queued;
-requeue:
-		was_queued = !!(io->flag & EXT4_IO_END_QUEUED);
-		io->flag |= EXT4_IO_END_QUEUED;
 		spin_unlock_irqrestore(&ei->i_completed_io_lock, flags);
 		/*
 		 * Requeue the work instead of waiting so that the work
@@ -153,8 +145,9 @@ requeue:
 		 * yield the cpu if it sees an end_io request that has already
 		 * been requeued.
 		 */
-		if (was_queued)
+		if (io->flag & EXT4_IO_END_QUEUED)
 			yield();
+		io->flag |= EXT4_IO_END_QUEUED;
 		return;
 	}
 	list_del_init(&io->list);
@@ -241,14 +234,13 @@ static void ext4_end_bio(struct bio *bio, int error)
 
 	if (error) {
 		io_end->flag |= EXT4_IO_END_ERROR;
-		ext4_warning(inode->i_sb, "I/O error %d writing to inode %lu "
+		ext4_warning(inode->i_sb, "I/O error writing to inode %lu "
 			     "(offset %llu size %ld starting block %llu)",
-			     error, inode->i_ino,
+			     inode->i_ino,
 			     (unsigned long long) io_end->offset,
 			     (long) io_end->size,
 			     (unsigned long long)
 			     bi_sector >> (inode->i_blkbits - 9));
-		mapping_set_error(inode->i_mapping, error);
 	}
 
 	if (!(io_end->flag & EXT4_IO_END_UNWRITTEN)) {
@@ -386,24 +378,24 @@ int ext4_bio_write_page(struct ext4_io_submit *io,
 	set_page_writeback(page);
 	ClearPageError(page);
 
-	/*
-	 * Comments copied from block_write_full_page_endio:
-	 *
-	 * The page straddles i_size.  It must be zeroed out on each and every
-	 * writepage invocation because it may be mmapped.  "A file is mapped
-	 * in multiples of the page size.  For a file that is not a multiple of
-	 * the page size, the remaining memory is zeroed when mapped, and
-	 * writes to that region are not written out to the file."
-	 */
-	if (len < PAGE_CACHE_SIZE)
-		zero_user_segment(page, len, PAGE_CACHE_SIZE);
-
 	for (bh = head = page_buffers(page), block_start = 0;
 	     bh != head || !block_start;
 	     block_start = block_end, bh = bh->b_this_page) {
 
 		block_end = block_start + blocksize;
 		if (block_start >= len) {
+			/*
+			 * Comments copied from block_write_full_page_endio:
+			 *
+			 * The page straddles i_size.  It must be zeroed out on
+			 * each and every writepage invocation because it may
+			 * be mmapped.  "A file is mapped in multiples of the
+			 * page size.  For a file that is not a multiple of
+			 * the  page size, the remaining memory is zeroed when
+			 * mapped, and writes to that region are not written
+			 * out to the file."
+			 */
+			zero_user_segment(page, block_start, block_end);
 			clear_buffer_dirty(bh);
 			set_buffer_uptodate(bh);
 			continue;

@@ -254,10 +254,10 @@ void * devres_get(struct device *dev, void *new_res,
 	if (!dr) {
 		add_dr(dev, &new_dr->node);
 		dr = new_dr;
-		new_res = NULL;
+		new_dr = NULL;
 	}
 	spin_unlock_irqrestore(&dev->devres_lock, flags);
-	devres_free(new_res);
+	devres_free(new_dr);
 
 	return dr->data;
 }
@@ -639,7 +639,7 @@ EXPORT_SYMBOL_GPL(devm_kzalloc);
  * @dev: Device this memory belongs to
  * @p: Memory to free
  *
- * Free memory allocated with dev_kzalloc().
+ * Free memory allocated with devm_kzalloc().
  */
 void devm_kfree(struct device *dev, void *p)
 {

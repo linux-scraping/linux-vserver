@@ -23,13 +23,6 @@
 #include "hw.h"
 
 /*
- * MEI Char Driver Minors
- */
-#define MEI_MINORS_BASE	1
-#define MEI_MINORS_COUNT	1
-#define MEI_MINOR_NUMBER	1
-
-/*
  * watch dog definition
  */
 #define MEI_WATCHDOG_DATA_SIZE         16
@@ -42,11 +35,6 @@
  */
 extern struct pci_dev *mei_device;
 
-/*
- * AMT Watchdog Device
- */
-#define INTEL_AMT_WATCHDOG_ID "INTCAMT"
-extern struct watchdog_device amt_wd_dev;
 
 /*
  * AMTHI Client UUID
@@ -62,11 +50,6 @@ extern const uuid_le mei_wd_guid;
  * Watchdog independence state message
  */
 extern const u8 mei_wd_state_independence_msg[3][4];
-
-/*
- * maximum number of consecutive resets
- */
-#define MEI_MAX_CONSEC_RESET  3
 
 /*
  * Number of File descriptors/handles
@@ -180,14 +163,9 @@ struct mei_cl {
 
 struct mei_io_list {
 	struct mei_cl_cb mei_cb;
-	int status;
 };
 
-/**
- * mei_device - MEI private device struct
- *
- * @reset_count - limits the number of consecutive resets
- */
+/* MEI private device struct */
 struct mei_device {
 	struct pci_dev *pdev;	/* pointer to pci device struct */
 	/*
@@ -234,7 +212,6 @@ struct mei_device {
 	/*
 	 * mei device  states
 	 */
-	unsigned long reset_count;
 	enum mei_states mei_state;
 	enum mei_init_clients_states init_clients_state;
 	u16 init_clients_timer;

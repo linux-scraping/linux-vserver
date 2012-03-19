@@ -186,13 +186,7 @@ static long pSeries_lpar_hpte_remove(unsigned long hpte_group)
 					   (0x1UL << 4), &dummy1, &dummy2);
 		if (lpar_rc == H_SUCCESS)
 			return i;
-
-		/*
-		 * The test for adjunct partition is performed before the
-		 * ANDCOND test.  H_RESOURCE may be returned, so we need to
-		 * check for that as well.
-		 */
-		BUG_ON(lpar_rc != H_NOT_FOUND && lpar_rc != H_RESOURCE);
+		BUG_ON(lpar_rc != H_NOT_FOUND);
 
 		slot_offset++;
 		slot_offset &= 0x7;
@@ -552,6 +546,13 @@ void __trace_hcall_entry(unsigned long opcode, unsigned long *args)
 	unsigned long flags;
 	unsigned int *depth;
 
+	/*
+	 * We cannot call tracepoints inside RCU idle regions which
+	 * means we must not trace H_CEDE.
+	 */
+	if (opcode == H_CEDE)
+		return;
+
 	local_irq_save(flags);
 
 	depth = &__get_cpu_var(hcall_trace_depth);
@@ -573,6 +574,9 @@ void __trace_hcall_exit(long opcode, unsigned long retval,
 {
 	unsigned long flags;
 	unsigned int *depth;
+
+	if (opcode == H_CEDE)
+		return;
 
 	local_irq_save(flags);
 

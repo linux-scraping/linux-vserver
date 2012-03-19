@@ -89,7 +89,6 @@ int ext4_flush_completed_IO(struct inode *inode)
 		io = list_entry(ei->i_completed_io_list.next,
 				ext4_io_end_t, list);
 		list_del_init(&io->list);
-		io->flag |= EXT4_IO_END_IN_FSYNC;
 		/*
 		 * Calling ext4_end_io_nolock() to convert completed
 		 * IO to written.
@@ -109,7 +108,6 @@ int ext4_flush_completed_IO(struct inode *inode)
 		if (ret < 0)
 			ret2 = ret;
 		spin_lock_irqsave(&ei->i_completed_io_lock, flags);
-		io->flag &= ~EXT4_IO_END_IN_FSYNC;
 	}
 	spin_unlock_irqrestore(&ei->i_completed_io_lock, flags);
 	return (ret2 < 0) ? ret2 : 0;
@@ -139,7 +137,7 @@ static int ext4_sync_parent(struct inode *inode)
 		spin_lock(&inode->i_lock);
 		if (!list_empty(&inode->i_dentry)) {
 			dentry = list_first_entry(&inode->i_dentry,
-						  struct dentry, d_u.d_alias);
+						  struct dentry, d_alias);
 			dget(dentry);
 		}
 		spin_unlock(&inode->i_lock);
@@ -260,7 +258,8 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	if (journal->j_flags & JBD2_BARRIER &&
 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
 		needs_barrier = true;
-	ret = jbd2_complete_transaction(journal, commit_tid);
+	jbd2_log_start_commit(journal, commit_tid);
+	ret = jbd2_log_wait_commit(journal, commit_tid);
 	if (needs_barrier)
 		blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
  out:

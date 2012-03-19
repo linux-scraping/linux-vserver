@@ -156,19 +156,12 @@ static int __devinit max8925_probe(struct i2c_client *client,
 	mutex_init(&chip->io_lock);
 
 	chip->rtc = i2c_new_dummy(chip->i2c->adapter, RTC_I2C_ADDR);
-	if (!chip->rtc) {
-		dev_err(chip->dev, "Failed to allocate I2C device for RTC\n");
-		return -ENODEV;
-	}
 	i2c_set_clientdata(chip->rtc, chip);
 
 	chip->adc = i2c_new_dummy(chip->i2c->adapter, ADC_I2C_ADDR);
-	if (!chip->adc) {
-		dev_err(chip->dev, "Failed to allocate I2C device for ADC\n");
-		i2c_unregister_device(chip->rtc);
-		return -ENODEV;
-	}
 	i2c_set_clientdata(chip->adc, chip);
+
+	device_init_wakeup(&client->dev, 1);
 
 	max8925_device_init(chip, pdata);
 
@@ -186,10 +179,35 @@ static int __devexit max8925_remove(struct i2c_client *client)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int max8925_suspend(struct device *dev)
+{
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
+	struct max8925_chip *chip = i2c_get_clientdata(client);
+
+	if (device_may_wakeup(dev) && chip->wakeup_flag)
+		enable_irq_wake(chip->core_irq);
+	return 0;
+}
+
+static int max8925_resume(struct device *dev)
+{
+	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
+	struct max8925_chip *chip = i2c_get_clientdata(client);
+
+	if (device_may_wakeup(dev) && chip->wakeup_flag)
+		disable_irq_wake(chip->core_irq);
+	return 0;
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(max8925_pm_ops, max8925_suspend, max8925_resume);
+
 static struct i2c_driver max8925_driver = {
 	.driver	= {
 		.name	= "max8925",
 		.owner	= THIS_MODULE,
+		.pm     = &max8925_pm_ops,
 	},
 	.probe		= max8925_probe,
 	.remove		= __devexit_p(max8925_remove),

@@ -14,6 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
+#include <linux/notifier.h>
 #include <linux/power_supply.h>
 #include <linux/pda_power.h>
 #include <linux/regulator/consumer.h>
@@ -33,14 +34,16 @@ static inline unsigned int get_irq_flags(struct resource *res)
 static struct device *dev;
 static struct pda_power_pdata *pdata;
 static struct resource *ac_irq, *usb_irq;
-static struct delayed_work charger_work;
-static struct delayed_work polling_work;
-static struct delayed_work supply_work;
+static struct timer_list charger_timer;
+static struct timer_list supply_timer;
+static struct timer_list polling_timer;
 static int polling;
 
 #ifdef CONFIG_USB_OTG_UTILS
 static struct otg_transceiver *transceiver;
+static struct notifier_block otg_nb;
 #endif
+
 static struct regulator *ac_draw;
 
 enum {
@@ -144,7 +147,7 @@ static void update_charger(void)
 	}
 }
 
-static void supply_work_func(struct work_struct *work)
+static void supply_timer_func(unsigned long unused)
 {
 	if (ac_status == PDA_PSY_TO_CHANGE) {
 		ac_status = new_ac_status;
@@ -165,12 +168,11 @@ static void psy_changed(void)
 	 * Okay, charger set. Now wait a bit before notifying supplicants,
 	 * charge power should stabilize.
 	 */
-	cancel_delayed_work(&supply_work);
-	schedule_delayed_work(&supply_work,
-			      msecs_to_jiffies(pdata->wait_for_charger));
+	mod_timer(&supply_timer,
+		  jiffies + msecs_to_jiffies(pdata->wait_for_charger));
 }
 
-static void charger_work_func(struct work_struct *work)
+static void charger_timer_func(unsigned long unused)
 {
 	update_status();
 	psy_changed();
@@ -189,14 +191,13 @@ static irqreturn_t power_changed_isr(int irq, void *power_supply)
 	 * Wait a bit before reading ac/usb line status and setting charger,
 	 * because ac/usb status readings may lag from irq.
 	 */
-	cancel_delayed_work(&charger_work);
-	schedule_delayed_work(&charger_work,
-			      msecs_to_jiffies(pdata->wait_for_status));
+	mod_timer(&charger_timer,
+		  jiffies + msecs_to_jiffies(pdata->wait_for_status));
 
 	return IRQ_HANDLED;
 }
 
-static void polling_work_func(struct work_struct *work)
+static void polling_timer_func(unsigned long unused)
 {
 	int changed = 0;
 
@@ -217,15 +218,49 @@ static void polling_work_func(struct work_struct *work)
 	if (changed)
 		psy_changed();
 
-	cancel_delayed_work(&polling_work);
-	schedule_delayed_work(&polling_work,
-			      msecs_to_jiffies(pdata->polling_interval));
+	mod_timer(&polling_timer,
+		  jiffies + msecs_to_jiffies(pdata->polling_interval));
 }
 
 #ifdef CONFIG_USB_OTG_UTILS
 static int otg_is_usb_online(void)
 {
-	return (transceiver->state == OTG_STATE_B_PERIPHERAL);
+	return (transceiver->last_event == USB_EVENT_VBUS ||
+		transceiver->last_event == USB_EVENT_ENUMERATED);
+}
+
+static int otg_is_ac_online(void)
+{
+	return (transceiver->last_event == USB_EVENT_CHARGER);
+}
+
+static int otg_handle_notification(struct notifier_block *nb,
+		unsigned long event, void *unused)
+{
+	switch (event) {
+	case USB_EVENT_CHARGER:
+		ac_status = PDA_PSY_TO_CHANGE;
+		break;
+	case USB_EVENT_VBUS:
+	case USB_EVENT_ENUMERATED:
+		usb_status = PDA_PSY_TO_CHANGE;
+		break;
+	case USB_EVENT_NONE:
+		ac_status = PDA_PSY_TO_CHANGE;
+		usb_status = PDA_PSY_TO_CHANGE;
+		break;
+	default:
+		return NOTIFY_OK;
+	}
+
+	/*
+	 * Wait a bit before reading ac/usb line status and setting charger,
+	 * because ac/usb status readings may lag from irq.
+	 */
+	mod_timer(&charger_timer,
+		  jiffies + msecs_to_jiffies(pdata->wait_for_status));
+
+	return NOTIFY_OK;
 }
 #endif
 
@@ -265,8 +300,8 @@ static int pda_power_probe(struct platform_device *pdev)
 	if (!pdata->ac_max_uA)
 		pdata->ac_max_uA = 500000;
 
-	INIT_DELAYED_WORK(&charger_work, charger_work_func);
-	INIT_DELAYED_WORK(&supply_work, supply_work_func);
+	setup_timer(&charger_timer, charger_timer_func, 0);
+	setup_timer(&supply_timer, supply_timer_func, 0);
 
 	ac_irq = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "ac");
 	usb_irq = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "usb");
@@ -284,6 +319,16 @@ static int pda_power_probe(struct platform_device *pdev)
 		ac_draw = NULL;
 		ret = PTR_ERR(ac_draw);
 	}
+
+#ifdef CONFIG_USB_OTG_UTILS
+	transceiver = otg_get_transceiver();
+	if (transceiver && !pdata->is_usb_online) {
+		pdata->is_usb_online = otg_is_usb_online;
+	}
+	if (transceiver && !pdata->is_ac_online) {
+		pdata->is_ac_online = otg_is_ac_online;
+	}
+#endif
 
 	if (pdata->is_ac_online) {
 		ret = power_supply_register(&pdev->dev, &pda_psy_ac);
@@ -306,13 +351,6 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 	}
 
-#ifdef CONFIG_USB_OTG_UTILS
-	transceiver = otg_get_transceiver();
-	if (transceiver && !pdata->is_usb_online) {
-		pdata->is_usb_online = otg_is_usb_online;
-	}
-#endif
-
 	if (pdata->is_usb_online) {
 		ret = power_supply_register(&pdev->dev, &pda_psy_usb);
 		if (ret) {
@@ -334,12 +372,23 @@ static int pda_power_probe(struct platform_device *pdev)
 		}
 	}
 
+#ifdef CONFIG_USB_OTG_UTILS
+	if (transceiver && pdata->use_otg_notifier) {
+		otg_nb.notifier_call = otg_handle_notification;
+		ret = otg_register_notifier(transceiver, &otg_nb);
+		if (ret) {
+			dev_err(dev, "failure to register otg notifier\n");
+			goto otg_reg_notifier_failed;
+		}
+		polling = 0;
+	}
+#endif
+
 	if (polling) {
 		dev_dbg(dev, "will poll for status\n");
-		INIT_DELAYED_WORK(&polling_work, polling_work_func);
-		cancel_delayed_work(&polling_work);
-		schedule_delayed_work(&polling_work,
-				      msecs_to_jiffies(pdata->polling_interval));
+		setup_timer(&polling_timer, polling_timer_func, 0);
+		mod_timer(&polling_timer,
+			  jiffies + msecs_to_jiffies(pdata->polling_interval));
 	}
 
 	if (ac_irq || usb_irq)
@@ -347,6 +396,11 @@ static int pda_power_probe(struct platform_device *pdev)
 
 	return 0;
 
+#ifdef CONFIG_USB_OTG_UTILS
+otg_reg_notifier_failed:
+	if (pdata->is_usb_online && usb_irq)
+		free_irq(usb_irq->start, &pda_psy_usb);
+#endif
 usb_irq_failed:
 	if (pdata->is_usb_online)
 		power_supply_unregister(&pda_psy_usb);
@@ -380,9 +434,9 @@ static int pda_power_remove(struct platform_device *pdev)
 		free_irq(ac_irq->start, &pda_psy_ac);
 
 	if (polling)
-		cancel_delayed_work_sync(&polling_work);
-	cancel_delayed_work_sync(&charger_work);
-	cancel_delayed_work_sync(&supply_work);
+		del_timer_sync(&polling_timer);
+	del_timer_sync(&charger_timer);
+	del_timer_sync(&supply_timer);
 
 	if (pdata->is_usb_online)
 		power_supply_unregister(&pda_psy_usb);
@@ -444,8 +498,6 @@ static int pda_power_resume(struct platform_device *pdev)
 #define pda_power_resume NULL
 #endif /* CONFIG_PM */
 
-MODULE_ALIAS("platform:pda-power");
-
 static struct platform_driver pda_power_pdrv = {
 	.driver = {
 		.name = "pda-power",
@@ -456,17 +508,8 @@ static struct platform_driver pda_power_pdrv = {
 	.resume = pda_power_resume,
 };
 
-static int __init pda_power_init(void)
-{
-	return platform_driver_register(&pda_power_pdrv);
-}
+module_platform_driver(pda_power_pdrv);
 
-static void __exit pda_power_exit(void)
-{
-	platform_driver_unregister(&pda_power_pdrv);
-}
-
-module_init(pda_power_init);
-module_exit(pda_power_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Anton Vorontsov <cbou@mail.ru>");
+MODULE_ALIAS("platform:pda-power");

@@ -37,7 +37,7 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 
-static int debug;
+static bool debug;
 /*
  * Version information
  */
@@ -49,7 +49,7 @@ static int debug;
 #define DRIVER_NAME "ark3116"
 
 /* usb timeout of 1 second */
-#define ARK_TIMEOUT 1000
+#define ARK_TIMEOUT (1*HZ)
 
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x6547, 0x0232) },
@@ -68,6 +68,7 @@ static int is_irda(struct usb_serial *serial)
 }
 
 struct ark3116_private {
+	wait_queue_head_t       delta_msr_wait;
 	struct async_icount	icount;
 	int			irda;	/* 1 for irda device */
 
@@ -107,17 +108,10 @@ static int ark3116_read_reg(struct usb_serial *serial,
 				 usb_rcvctrlpipe(serial->dev, 0),
 				 0xfe, 0xc0, 0, reg,
 				 buf, 1, ARK_TIMEOUT);
-	if (result < 1) {
-		dev_err(&serial->interface->dev,
-				"failed to read register %u: %d\n",
-				reg, result);
-		if (result >= 0)
-			result = -EIO;
-
+	if (result < 0)
 		return result;
-	}
-
-	return buf[0];
+	else
+		return buf[0];
 }
 
 static inline int calc_divisor(int bps)
@@ -154,6 +148,7 @@ static int ark3116_attach(struct usb_serial *serial)
 	if (!priv)
 		return -ENOMEM;
 
+	init_waitqueue_head(&priv->delta_msr_wait);
 	mutex_init(&priv->hw_lock);
 	spin_lock_init(&priv->status_lock);
 
@@ -382,29 +377,23 @@ static int ark3116_open(struct tty_struct *tty, struct usb_serial_port *port)
 	if (result) {
 		dbg("%s - usb_serial_generic_open failed: %d",
 		    __func__, result);
-		goto err_free;
+		goto err_out;
 	}
 
 	/* remove any data still left: also clears error state */
 	ark3116_read_reg(serial, UART_RX, buf);
 
 	/* read modem status */
-	result = ark3116_read_reg(serial, UART_MSR, buf);
-	if (result < 0)
-		goto err_close;
-	priv->msr = *buf;
-
+	priv->msr = ark3116_read_reg(serial, UART_MSR, buf);
 	/* read line status */
-	result = ark3116_read_reg(serial, UART_LSR, buf);
-	if (result < 0)
-		goto err_close;
-	priv->lsr = *buf;
+	priv->lsr = ark3116_read_reg(serial, UART_LSR, buf);
 
 	result = usb_submit_urb(port->interrupt_in_urb, GFP_KERNEL);
 	if (result) {
 		dev_err(&port->dev, "submit irq_in urb failed %d\n",
 			result);
-		goto err_close;
+		ark3116_close(port);
+		goto err_out;
 	}
 
 	/* activate interrupts */
@@ -417,15 +406,8 @@ static int ark3116_open(struct tty_struct *tty, struct usb_serial_port *port)
 	if (tty)
 		ark3116_set_termios(tty, port, NULL);
 
+err_out:
 	kfree(buf);
-
-	return 0;
-
-err_close:
-	usb_serial_generic_close(port);
-err_free:
-	kfree(buf);
-
 	return result;
 }
 
@@ -478,14 +460,10 @@ static int ark3116_ioctl(struct tty_struct *tty,
 	case TIOCMIWAIT:
 		for (;;) {
 			struct async_icount prev = priv->icount;
-			interruptible_sleep_on(&port->delta_msr_wait);
+			interruptible_sleep_on(&priv->delta_msr_wait);
 			/* see if a signal did it */
 			if (signal_pending(current))
 				return -ERESTARTSYS;
-
-			if (port->serial->disconnected)
-				return -EIO;
-
 			if ((prev.rng == priv->icount.rng) &&
 			    (prev.dsr == priv->icount.dsr) &&
 			    (prev.dcd == priv->icount.dcd) &&
@@ -606,7 +584,7 @@ static void ark3116_update_msr(struct usb_serial_port *port, __u8 msr)
 			priv->icount.dcd++;
 		if (msr & UART_MSR_TERI)
 			priv->icount.rng++;
-		wake_up_interruptible(&port->delta_msr_wait);
+		wake_up_interruptible(&priv->delta_msr_wait);
 	}
 }
 

@@ -14,7 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/string.h>
-#include <linux/sysdev.h>
+#include <linux/device.h>
 #include <linux/amba/bus.h>
 #include <linux/amba/kmi.h>
 #include <linux/amba/clcd.h>
@@ -384,8 +384,7 @@ static struct amba_device aaci_device = {
 static void cp_clcd_enable(struct clcd_fb *fb)
 {
 	struct fb_var_screeninfo *var = &fb->fb.var;
-	u32 val = CM_CTRL_STATIC1 | CM_CTRL_STATIC2
-			| CM_CTRL_LCDEN0 | CM_CTRL_LCDEN1;
+	u32 val = CM_CTRL_STATIC1 | CM_CTRL_STATIC2;
 
 	if (var->bits_per_pixel <= 8 ||
 	    (var->bits_per_pixel == 16 && var->green.length == 5))
@@ -500,4 +499,5 @@ MACHINE_START(CINTEGRATOR, "ARM-IntegratorCP")
 	.init_irq	= intcp_init_irq,
 	.timer		= &cp_timer,
 	.init_machine	= intcp_init,
+	.restart	= integrator_restart,
 MACHINE_END

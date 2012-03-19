@@ -130,8 +130,8 @@ static struct usb_device_id id_table[] = {
 MODULE_DEVICE_TABLE(usb, id_table);
 
 /* module options */
-static int console;   /* Optionally allow fbcon to consume first framebuffer */
-static int fb_defio = true;  /* Optionally enable fb_defio mmap support */
+static bool console;   /* Optionally allow fbcon to consume first framebuffer */
+static bool fb_defio = true;  /* Optionally enable fb_defio mmap support */
 
 /* ufx keeps a list of urbs for efficient bulk transfers */
 static void ufx_urb_completion(struct urb *urb);
@@ -904,7 +904,7 @@ static ssize_t ufx_ops_write(struct fb_info *info, const char __user *buf,
 	result = fb_sys_write(info, buf, count, ppos);
 
 	if (result > 0) {
-		int start = max((int)(offset / info->fix.line_length), 0);
+		int start = max((int)(offset / info->fix.line_length) - 1, 0);
 		int lines = min((u32)((result / info->fix.line_length) + 1),
 				(u32)info->var.yres);
 
@@ -1792,24 +1792,7 @@ static struct usb_driver ufx_driver = {
 	.id_table = id_table,
 };
 
-static int __init ufx_module_init(void)
-{
-	int res;
-
-	res = usb_register(&ufx_driver);
-	if (res)
-		err("usb_register failed. Error number %d", res);
-
-	return res;
-}
-
-static void __exit ufx_module_exit(void)
-{
-	usb_deregister(&ufx_driver);
-}
-
-module_init(ufx_module_init);
-module_exit(ufx_module_exit);
+module_usb_driver(ufx_driver);
 
 static void ufx_urb_completion(struct urb *urb)
 {

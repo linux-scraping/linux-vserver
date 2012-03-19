@@ -56,7 +56,7 @@ static struct usbhs_pkt_handle usbhsf_null_handler = {
 void usbhs_pkt_push(struct usbhs_pipe *pipe, struct usbhs_pkt *pkt,
 		    void (*done)(struct usbhs_priv *priv,
 				 struct usbhs_pkt *pkt),
-		    void *buf, int len, int zero)
+		    void *buf, int len, int zero, int sequence)
 {
 	struct usbhs_priv *priv = usbhs_pipe_to_priv(pipe);
 	struct device *dev = usbhs_priv_to_dev(priv);
@@ -90,6 +90,7 @@ void usbhs_pkt_push(struct usbhs_pipe *pipe, struct usbhs_pkt *pkt,
 	pkt->zero	= zero;
 	pkt->actual	= 0;
 	pkt->done	= done;
+	pkt->sequence	= sequence;
 
 	usbhs_unlock(priv, flags);
 	/********************  spin unlock ******************/
@@ -166,8 +167,7 @@ static int usbhsf_pkt_handler(struct usbhs_pipe *pipe, int type)
 		goto __usbhs_pkt_handler_end;
 	}
 
-	if (likely(func))
-		ret = func(pkt, &is_done);
+	ret = func(pkt, &is_done);
 
 	if (is_done)
 		__usbhsf_pkt_del(pkt);
@@ -261,26 +261,11 @@ static void usbhsf_fifo_clear(struct usbhs_pipe *pipe,
 			      struct usbhs_fifo *fifo)
 {
 	struct usbhs_priv *priv = usbhs_pipe_to_priv(pipe);
-	int ret = 0;
 
-	if (!usbhs_pipe_is_dcp(pipe)) {
-		/*
-		 * This driver checks the pipe condition first to avoid -EBUSY
-		 * from usbhsf_fifo_barrier() with about 10 msec delay in
-		 * the interrupt handler if the pipe is RX direction and empty.
-		 */
-		if (usbhs_pipe_is_dir_in(pipe))
-			ret = usbhs_pipe_is_accessible(pipe);
-		if (!ret)
-			ret = usbhsf_fifo_barrier(priv, fifo);
-	}
+	if (!usbhs_pipe_is_dcp(pipe))
+		usbhsf_fifo_barrier(priv, fifo);
 
-	/*
-	 * if non-DCP pipe, this driver should set BCLR when
-	 * usbhsf_fifo_barrier() returns 0.
-	 */
-	if (!ret)
-		usbhs_write(priv, fifo->ctr, BCLR);
+	usbhs_write(priv, fifo->ctr, BCLR);
 }
 
 static int usbhsf_fifo_rcv_len(struct usbhs_priv *priv,
@@ -497,6 +482,9 @@ static int usbhsf_pio_try_push(struct usbhs_pkt *pkt, int *is_done)
 	int i, ret, len;
 	int is_short;
 
+	usbhs_pipe_data_sequence(pipe, pkt->sequence);
+	pkt->sequence = -1; /* -1 sequence will be ignored */
+
 	ret = usbhsf_fifo_select(pipe, fifo, 1);
 	if (ret < 0)
 		return 0;
@@ -600,6 +588,8 @@ static int usbhsf_prepare_pop(struct usbhs_pkt *pkt, int *is_done)
 	/*
 	 * pipe enable to prepare packet receive
 	 */
+	usbhs_pipe_data_sequence(pipe, pkt->sequence);
+	pkt->sequence = -1; /* -1 sequence will be ignored */
 
 	usbhs_pipe_enable(pipe);
 	usbhsf_rx_irq_ctrl(pipe, 1);
@@ -657,6 +647,7 @@ static int usbhsf_pio_try_pop(struct usbhs_pkt *pkt, int *is_done)
 	 * "Operation" - "FIFO Buffer Memory" - "FIFO Port Function"
 	 */
 	if (0 == rcv_len) {
+		pkt->zero = 1;
 		usbhsf_fifo_clear(pipe, fifo);
 		goto usbhs_fifo_read_end;
 	}
@@ -775,23 +766,16 @@ static void usbhsf_dma_prepare_tasklet(unsigned long data)
 {
 	struct usbhs_pkt *pkt = (struct usbhs_pkt *)data;
 	struct usbhs_pipe *pipe = pkt->pipe;
-	struct usbhs_fifo *fifo;
+	struct usbhs_fifo *fifo = usbhs_pipe_to_fifo(pipe);
 	struct usbhs_priv *priv = usbhs_pipe_to_priv(pipe);
 	struct scatterlist sg;
 	struct dma_async_tx_descriptor *desc;
-	struct dma_chan *chan;
+	struct dma_chan *chan = usbhsf_dma_chan_get(fifo, pkt);
 	struct device *dev = usbhs_priv_to_dev(priv);
-	enum dma_data_direction dir;
+	enum dma_transfer_direction dir;
 	dma_cookie_t cookie;
-	unsigned long flags;
 
-	usbhs_lock(priv, flags);
-	fifo = usbhs_pipe_to_fifo(pipe);
-	if (!fifo)
-		goto xfer_work_end;
-
-	chan = usbhsf_dma_chan_get(fifo, pkt);
-	dir = usbhs_pipe_is_dir_in(pipe) ? DMA_FROM_DEVICE : DMA_TO_DEVICE;
+	dir = usbhs_pipe_is_dir_in(pipe) ? DMA_DEV_TO_MEM : DMA_MEM_TO_DEV;
 
 	sg_init_table(&sg, 1);
 	sg_set_page(&sg, virt_to_page(pkt->dma),
@@ -803,7 +787,7 @@ static void usbhsf_dma_prepare_tasklet(unsigned long data)
 						  DMA_PREP_INTERRUPT |
 						  DMA_CTRL_ACK);
 	if (!desc)
-		goto xfer_work_end;
+		return;
 
 	desc->callback		= usbhsf_dma_complete;
 	desc->callback_param	= pipe;
@@ -811,17 +795,14 @@ static void usbhsf_dma_prepare_tasklet(unsigned long data)
 	cookie = desc->tx_submit(desc);
 	if (cookie < 0) {
 		dev_err(dev, "Failed to submit dma descriptor\n");
-		goto xfer_work_end;
+		return;
 	}
 
 	dev_dbg(dev, "  %s %d (%d/ %d)\n",
 		fifo->name, usbhs_pipe_number(pipe), pkt->length, pkt->zero);
 
-	dma_async_issue_pending(chan);
 	usbhsf_dma_start(pipe, fifo);
-
-xfer_work_end:
-	usbhs_unlock(priv, flags);
+	dma_async_issue_pending(chan);
 }
 
 /*
@@ -957,7 +938,6 @@ static int usbhsf_dma_try_pop(struct usbhs_pkt *pkt, int *is_done)
 
 	pkt->trans = len;
 
-	usbhsf_tx_irq_ctrl(pipe, 0);
 	tasklet_init(&fifo->tasklet,
 		     usbhsf_dma_prepare_tasklet,
 		     (unsigned long)pkt);

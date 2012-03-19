@@ -56,19 +56,10 @@ static void configfs_d_iput(struct dentry * dentry,
 	struct configfs_dirent *sd = dentry->d_fsdata;
 
 	if (sd) {
+		BUG_ON(sd->s_dentry != dentry);
 		/* Coordinate with configfs_readdir */
 		spin_lock(&configfs_dirent_lock);
-		/* Coordinate with configfs_attach_attr where will increase
-		 * sd->s_count and update sd->s_dentry to new allocated one.
-		 * Only set sd->dentry to null when this dentry is the only
-		 * sd owner.
-		 * If not do so, configfs_d_iput may run just after
-		 * configfs_attach_attr and set sd->s_dentry to null
-		 * even it's still in use.
-		 */
-		if (atomic_read(&sd->s_count) <= 2)
-			sd->s_dentry = NULL;
-
+		sd->s_dentry = NULL;
 		spin_unlock(&configfs_dirent_lock);
 		configfs_put(sd);
 	}
@@ -320,8 +311,8 @@ static int configfs_create_dir(struct config_item * item, struct dentry *dentry)
 
 	if (item->ci_parent)
 		parent = item->ci_parent->ci_dentry;
-	else if (configfs_mount && configfs_mount->mnt_sb)
-		parent = configfs_mount->mnt_sb->s_root;
+	else if (configfs_mount)
+		parent = configfs_mount->mnt_root;
 	else
 		return -EFAULT;
 
@@ -445,11 +436,8 @@ static int configfs_attach_attr(struct configfs_dirent * sd, struct dentry * den
 	struct configfs_attribute * attr = sd->s_element;
 	int error;
 
-	spin_lock(&configfs_dirent_lock);
 	dentry->d_fsdata = configfs_get(sd);
 	sd->s_dentry = dentry;
-	spin_unlock(&configfs_dirent_lock);
-
 	error = configfs_create(dentry, (attr->ca_mode & S_IALLUGO) | S_IFREG,
 				configfs_init_file);
 	if (error) {
@@ -1182,7 +1170,7 @@ void configfs_undepend_item(struct configfs_subsystem *subsys,
 }
 EXPORT_SYMBOL(configfs_undepend_item);
 
-static int configfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int configfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	int ret = 0;
 	int module_got = 0;

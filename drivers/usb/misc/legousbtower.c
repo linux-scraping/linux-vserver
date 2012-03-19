@@ -269,7 +269,7 @@ static const struct file_operations tower_fops = {
 	.llseek =	tower_llseek,
 };
 
-static char *legousbtower_devnode(struct device *dev, mode_t *mode)
+static char *legousbtower_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "usb/%s", dev_name(dev));
 }
@@ -951,6 +951,24 @@ static int tower_probe (struct usb_interface *interface, const struct usb_device
 	dev->interrupt_in_interval = interrupt_in_interval ? interrupt_in_interval : dev->interrupt_in_endpoint->bInterval;
 	dev->interrupt_out_interval = interrupt_out_interval ? interrupt_out_interval : dev->interrupt_out_endpoint->bInterval;
 
+	/* we can register the device now, as it is ready */
+	usb_set_intfdata (interface, dev);
+
+	retval = usb_register_dev (interface, &tower_class);
+
+	if (retval) {
+		/* something prevented us from registering this driver */
+		err ("Not able to get a minor for this device.");
+		usb_set_intfdata (interface, NULL);
+		goto error;
+	}
+	dev->minor = interface->minor;
+
+	/* let the user know what node this device is now attached to */
+	dev_info(&interface->dev, "LEGO USB Tower #%d now attached to major "
+		 "%d minor %d\n", (dev->minor - LEGO_USB_TOWER_MINOR_BASE),
+		 USB_MAJOR, dev->minor);
+
 	/* get the firmware version and log it */
 	result = usb_control_msg (udev,
 				  usb_rcvctrlpipe(udev, 0),
@@ -971,23 +989,6 @@ static int tower_probe (struct usb_interface *interface, const struct usb_device
 		 get_version_reply.minor,
 		 le16_to_cpu(get_version_reply.build_no));
 
-	/* we can register the device now, as it is ready */
-	usb_set_intfdata (interface, dev);
-
-	retval = usb_register_dev (interface, &tower_class);
-
-	if (retval) {
-		/* something prevented us from registering this driver */
-		err ("Not able to get a minor for this device.");
-		usb_set_intfdata (interface, NULL);
-		goto error;
-	}
-	dev->minor = interface->minor;
-
-	/* let the user know what node this device is now attached to */
-	dev_info(&interface->dev, "LEGO USB Tower #%d now attached to major "
-		 "%d minor %d\n", (dev->minor - LEGO_USB_TOWER_MINOR_BASE),
-		 USB_MAJOR, dev->minor);
 
 exit:
 	dbg(2, "%s: leave, return value 0x%.8lx (dev)", __func__, (long) dev);
@@ -1042,51 +1043,7 @@ static void tower_disconnect (struct usb_interface *interface)
 	dbg(2, "%s: leave", __func__);
 }
 
-
-
-/**
- *	lego_usb_tower_init
- */
-static int __init lego_usb_tower_init(void)
-{
-	int result;
-	int retval = 0;
-
-	dbg(2, "%s: enter", __func__);
-
-	/* register this driver with the USB subsystem */
-	result = usb_register(&tower_driver);
-	if (result < 0) {
-		err("usb_register failed for the %s driver. Error number %d", __FILE__, result);
-		retval = -1;
-		goto exit;
-	}
-
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
-	       DRIVER_DESC "\n");
-
-exit:
-	dbg(2, "%s: leave, return value %d", __func__, retval);
-
-	return retval;
-}
-
-
-/**
- *	lego_usb_tower_exit
- */
-static void __exit lego_usb_tower_exit(void)
-{
-	dbg(2, "%s: enter", __func__);
-
-	/* deregister this driver with the USB subsystem */
-	usb_deregister (&tower_driver);
-
-	dbg(2, "%s: leave", __func__);
-}
-
-module_init (lego_usb_tower_init);
-module_exit (lego_usb_tower_exit);
+module_usb_driver(tower_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

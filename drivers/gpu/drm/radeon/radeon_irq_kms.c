@@ -51,17 +51,10 @@ static void radeon_hotplug_work_func(struct work_struct *work)
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_connector *connector;
 
-	/* we can race here at startup, some boards seem to trigger
-	 * hotplug irqs when they shouldn't. */
-	if (!rdev->mode_info.mode_config_initialized)
-		return;
-
-	mutex_lock(&mode_config->mutex);
 	if (mode_config->num_connector) {
 		list_for_each_entry(connector, &mode_config->connector_list, head)
 			radeon_connector_hotplug(connector);
 	}
-	mutex_unlock(&mode_config->mutex);
 	/* Just fire off a uevent and let userspace tell us what to do */
 	drm_helper_hpd_irq_event(dev);
 }
@@ -72,7 +65,8 @@ void radeon_driver_irq_preinstall_kms(struct drm_device *dev)
 	unsigned i;
 
 	/* Disable *all* interrupts */
-	rdev->irq.sw_int = false;
+	for (i = 0; i < RADEON_NUM_RINGS; i++)
+		rdev->irq.sw_int[i] = false;
 	rdev->irq.gui_idle = false;
 	for (i = 0; i < RADEON_MAX_HPD_PINS; i++)
 		rdev->irq.hpd[i] = false;
@@ -88,9 +82,11 @@ void radeon_driver_irq_preinstall_kms(struct drm_device *dev)
 int radeon_driver_irq_postinstall_kms(struct drm_device *dev)
 {
 	struct radeon_device *rdev = dev->dev_private;
+	unsigned i;
 
 	dev->max_vblank_count = 0x001fffff;
-	rdev->irq.sw_int = true;
+	for (i = 0; i < RADEON_NUM_RINGS; i++)
+		rdev->irq.sw_int[i] = true;
 	radeon_irq_set(rdev);
 	return 0;
 }
@@ -104,7 +100,8 @@ void radeon_driver_irq_uninstall_kms(struct drm_device *dev)
 		return;
 	}
 	/* Disable *all* interrupts */
-	rdev->irq.sw_int = false;
+	for (i = 0; i < RADEON_NUM_RINGS; i++)
+		rdev->irq.sw_int[i] = false;
 	rdev->irq.gui_idle = false;
 	for (i = 0; i < RADEON_MAX_HPD_PINS; i++)
 		rdev->irq.hpd[i] = false;
@@ -150,22 +147,6 @@ static bool radeon_msi_ok(struct radeon_device *rdev)
 	    (rdev->pdev->subsystem_device == 0x01fd))
 		return true;
 
-	/* Gateway RS690 only seems to work with MSIs. */
-	if ((rdev->pdev->device == 0x791f) &&
-	    (rdev->pdev->subsystem_vendor == 0x107b) &&
-	    (rdev->pdev->subsystem_device == 0x0185))
-		return true;
-
-	/* try and enable MSIs by default on all RS690s */
-	if (rdev->family == CHIP_RS690)
-		return true;
-
-	/* RV515 seems to have MSI issues where it loses
-	 * MSI rearms occasionally. This leads to lockups and freezes.
-	 * disable it by default.
-	 */
-	if (rdev->family == CHIP_RV515)
-		return false;
 	if (rdev->flags & RADEON_IS_IGP) {
 		/* APUs work fine with MSIs */
 		if (rdev->family >= CHIP_PALM)
@@ -223,26 +204,26 @@ void radeon_irq_kms_fini(struct radeon_device *rdev)
 	flush_work_sync(&rdev->hotplug_work);
 }
 
-void radeon_irq_kms_sw_irq_get(struct radeon_device *rdev)
+void radeon_irq_kms_sw_irq_get(struct radeon_device *rdev, int ring)
 {
 	unsigned long irqflags;
 
 	spin_lock_irqsave(&rdev->irq.sw_lock, irqflags);
-	if (rdev->ddev->irq_enabled && (++rdev->irq.sw_refcount == 1)) {
-		rdev->irq.sw_int = true;
+	if (rdev->ddev->irq_enabled && (++rdev->irq.sw_refcount[ring] == 1)) {
+		rdev->irq.sw_int[ring] = true;
 		radeon_irq_set(rdev);
 	}
 	spin_unlock_irqrestore(&rdev->irq.sw_lock, irqflags);
 }
 
-void radeon_irq_kms_sw_irq_put(struct radeon_device *rdev)
+void radeon_irq_kms_sw_irq_put(struct radeon_device *rdev, int ring)
 {
 	unsigned long irqflags;
 
 	spin_lock_irqsave(&rdev->irq.sw_lock, irqflags);
-	BUG_ON(rdev->ddev->irq_enabled && rdev->irq.sw_refcount <= 0);
-	if (rdev->ddev->irq_enabled && (--rdev->irq.sw_refcount == 0)) {
-		rdev->irq.sw_int = false;
+	BUG_ON(rdev->ddev->irq_enabled && rdev->irq.sw_refcount[ring] <= 0);
+	if (rdev->ddev->irq_enabled && (--rdev->irq.sw_refcount[ring] == 0)) {
+		rdev->irq.sw_int[ring] = false;
 		radeon_irq_set(rdev);
 	}
 	spin_unlock_irqrestore(&rdev->irq.sw_lock, irqflags);

@@ -306,19 +306,22 @@ mega_query_adapter(adapter_t *adapter)
 	adapter->host->sg_tablesize = adapter->sglen;
 
 
-	/* use HP firmware and bios version encoding */
+	/* use HP firmware and bios version encoding
+	   Note: fw_version[0|1] and bios_version[0|1] were originally shifted
+	   right 8 bits making them zero. This 0 value was hardcoded to fix
+	   sparse warnings. */
 	if (adapter->product_info.subsysvid == HP_SUBSYS_VID) {
 		sprintf (adapter->fw_version, "%c%d%d.%d%d",
 			 adapter->product_info.fw_version[2],
-			 adapter->product_info.fw_version[1] >> 8,
+			 0,
 			 adapter->product_info.fw_version[1] & 0x0f,
-			 adapter->product_info.fw_version[0] >> 8,
+			 0,
 			 adapter->product_info.fw_version[0] & 0x0f);
 		sprintf (adapter->bios_version, "%c%d%d.%d%d",
 			 adapter->product_info.bios_version[2],
-			 adapter->product_info.bios_version[1] >> 8,
+			 0,
 			 adapter->product_info.bios_version[1] & 0x0f,
-			 adapter->product_info.bios_version[0] >> 8,
+			 0,
 			 adapter->product_info.bios_version[0] & 0x0f);
 	} else {
 		memcpy(adapter->fw_version,
@@ -1964,7 +1967,7 @@ megaraid_abort_and_reset(adapter_t *adapter, Scsi_Cmnd *cmd, int aor)
 	     cmd->device->id, cmd->device->lun);
 
 	if(list_empty(&adapter->pending_list))
-		return FAILED;
+		return FALSE;
 
 	list_for_each_safe(pos, next, &adapter->pending_list) {
 
@@ -1987,7 +1990,7 @@ megaraid_abort_and_reset(adapter_t *adapter, Scsi_Cmnd *cmd, int aor)
 					(aor==SCB_ABORT) ? "ABORTING":"RESET",
 					scb->idx);
 
-				return FAILED;
+				return FALSE;
 			}
 			else {
 
@@ -2012,12 +2015,12 @@ megaraid_abort_and_reset(adapter_t *adapter, Scsi_Cmnd *cmd, int aor)
 				list_add_tail(SCSI_LIST(cmd),
 						&adapter->completed_list);
 
-				return SUCCESS;
+				return TRUE;
 			}
 		}
 	}
 
-	return FAILED;
+	return FALSE;
 }
 
 static inline int

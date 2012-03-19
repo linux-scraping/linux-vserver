@@ -147,10 +147,6 @@ static int restore_sigregs(struct pt_regs *regs, _sigregs __user *sregs)
 	/* Use regs->psw.mask instead of psw_user_bits to preserve PER bit. */
 	regs->psw.mask = (regs->psw.mask & ~PSW_MASK_USER) |
 		(user_sregs.regs.psw.mask & PSW_MASK_USER);
-	/* Check for invalid user address space control. */
-	if ((regs->psw.mask & PSW_MASK_ASC) >= (psw_kernel_bits & PSW_MASK_ASC))
-		regs->psw.mask = (psw_user_bits & PSW_MASK_ASC) |
-			(regs->psw.mask & ~PSW_MASK_ASC);
 	/* Check for invalid amode */
 	if (regs->psw.mask & PSW_MASK_EA)
 		regs->psw.mask |= PSW_MASK_BA;
@@ -297,10 +293,7 @@ static int setup_frame(int sig, struct k_sigaction *ka,
 
 	/* Set up registers for signal handler */
 	regs->gprs[15] = (unsigned long) frame;
-	/* Force default amode and default user address space control. */
-	regs->psw.mask = PSW_MASK_EA | PSW_MASK_BA |
-		(psw_user_bits & PSW_MASK_ASC) |
-		(regs->psw.mask & ~PSW_MASK_ASC);
+	regs->psw.mask |= PSW_MASK_EA | PSW_MASK_BA;	/* 64 bit amode */
 	regs->psw.addr = (unsigned long) ka->sa.sa_handler | PSW_ADDR_AMODE;
 
 	regs->gprs[2] = map_signal(sig);
@@ -308,9 +301,13 @@ static int setup_frame(int sig, struct k_sigaction *ka,
 
 	/* We forgot to include these in the sigcontext.
 	   To avoid breaking binary compatibility, they are passed as args. */
-	regs->gprs[4] = current->thread.trap_no;
-	regs->gprs[5] = current->thread.prot_addr;
-	regs->gprs[6] = task_thread_info(current)->last_break;
+	if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+	    sig == SIGTRAP || sig == SIGFPE) {
+		/* set extra registers only for synchronous signals */
+		regs->gprs[4] = regs->int_code & 127;
+		regs->gprs[5] = regs->int_parm_long;
+		regs->gprs[6] = task_thread_info(current)->last_break;
+	}
 
 	/* Place signal number on stack to allow backtrace from handler.  */
 	if (__put_user(regs->gprs[2], (int __user *) &frame->signo))
@@ -369,10 +366,7 @@ static int setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 
 	/* Set up registers for signal handler */
 	regs->gprs[15] = (unsigned long) frame;
-	/* Force default amode and default user address space control. */
-	regs->psw.mask = PSW_MASK_EA | PSW_MASK_BA |
-		(psw_user_bits & PSW_MASK_ASC) |
-		(regs->psw.mask & ~PSW_MASK_ASC);
+	regs->psw.mask |= PSW_MASK_EA | PSW_MASK_BA;	/* 64 bit amode */
 	regs->psw.addr = (unsigned long) ka->sa.sa_handler | PSW_ADDR_AMODE;
 
 	regs->gprs[2] = map_signal(sig);
@@ -443,13 +437,13 @@ void do_signal(struct pt_regs *regs)
 	 * call information.
 	 */
 	current_thread_info()->system_call =
-		test_thread_flag(TIF_SYSCALL) ? regs->svc_code : 0;
+		test_thread_flag(TIF_SYSCALL) ? regs->int_code : 0;
 	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 
 	if (signr > 0) {
 		/* Whee!  Actually deliver the signal.  */
 		if (current_thread_info()->system_call) {
-			regs->svc_code = current_thread_info()->system_call;
+			regs->int_code = current_thread_info()->system_call;
 			/* Check for system call restarting. */
 			switch (regs->gprs[2]) {
 			case -ERESTART_RESTARTBLOCK:
@@ -466,7 +460,7 @@ void do_signal(struct pt_regs *regs)
 				regs->gprs[2] = regs->orig_gpr2;
 				regs->psw.addr =
 					__rewind_psw(regs->psw,
-						     regs->svc_code >> 16);
+						     regs->int_code >> 16);
 				break;
 			}
 		}
@@ -497,11 +491,11 @@ void do_signal(struct pt_regs *regs)
 	/* No handlers present - check for system call restart */
 	clear_thread_flag(TIF_SYSCALL);
 	if (current_thread_info()->system_call) {
-		regs->svc_code = current_thread_info()->system_call;
+		regs->int_code = current_thread_info()->system_call;
 		switch (regs->gprs[2]) {
 		case -ERESTART_RESTARTBLOCK:
 			/* Restart with sys_restart_syscall */
-			regs->svc_code = __NR_restart_syscall;
+			regs->int_code = __NR_restart_syscall;
 		/* fallthrough */
 		case -ERESTARTNOHAND:
 		case -ERESTARTSYS:

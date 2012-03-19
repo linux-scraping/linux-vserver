@@ -1304,14 +1304,11 @@ int vmw_surface_define_ioctl(struct drm_device *dev, void *data,
 			128;
 
 	num_sizes = 0;
-	for (i = 0; i < DRM_VMW_MAX_SURFACE_FACES; ++i) {
-		if (req->mip_levels[i] > DRM_VMW_MAX_MIP_LEVELS)
-			return -EINVAL;
+	for (i = 0; i < DRM_VMW_MAX_SURFACE_FACES; ++i)
 		num_sizes += req->mip_levels[i];
-	}
 
-	if (num_sizes > DRM_VMW_MAX_SURFACE_FACES * DRM_VMW_MAX_MIP_LEVELS ||
-	    num_sizes == 0)
+	if (num_sizes > DRM_VMW_MAX_SURFACE_FACES *
+	    DRM_VMW_MAX_MIP_LEVELS)
 		return -EINVAL;
 
 	size = vmw_user_surface_size + 128 +
@@ -1543,29 +1540,10 @@ out_bad_surface:
 /**
  * Buffer management.
  */
-
-static size_t vmw_dmabuf_acc_size(struct ttm_bo_global *glob,
-				  unsigned long num_pages)
-{
-	static size_t bo_user_size = ~0;
-
-	size_t page_array_size =
-	    (num_pages * sizeof(void *) + PAGE_SIZE - 1) & PAGE_MASK;
-
-	if (unlikely(bo_user_size == ~0)) {
-		bo_user_size = glob->ttm_bo_extra_size +
-		    ttm_round_pot(sizeof(struct vmw_dma_buffer));
-	}
-
-	return bo_user_size + page_array_size;
-}
-
 void vmw_dmabuf_bo_free(struct ttm_buffer_object *bo)
 {
 	struct vmw_dma_buffer *vmw_bo = vmw_dma_buffer(bo);
-	struct ttm_bo_global *glob = bo->glob;
 
-	ttm_mem_global_free(glob->mem_glob, bo->acc_size);
 	kfree(vmw_bo);
 }
 
@@ -1576,24 +1554,12 @@ int vmw_dmabuf_init(struct vmw_private *dev_priv,
 		    void (*bo_free) (struct ttm_buffer_object *bo))
 {
 	struct ttm_bo_device *bdev = &dev_priv->bdev;
-	struct ttm_mem_global *mem_glob = bdev->glob->mem_glob;
 	size_t acc_size;
 	int ret;
 
 	BUG_ON(!bo_free);
 
-	acc_size =
-	    vmw_dmabuf_acc_size(bdev->glob,
-				(size + PAGE_SIZE - 1) >> PAGE_SHIFT);
-
-	ret = ttm_mem_global_alloc(mem_glob, acc_size, false, false);
-	if (unlikely(ret != 0)) {
-		/* we must free the bo here as
-		 * ttm_buffer_object_init does so as well */
-		bo_free(&vmw_bo->base);
-		return ret;
-	}
-
+	acc_size = ttm_bo_acc_size(bdev, size, sizeof(struct vmw_dma_buffer));
 	memset(vmw_bo, 0, sizeof(*vmw_bo));
 
 	INIT_LIST_HEAD(&vmw_bo->validate_list);
@@ -1608,9 +1574,7 @@ int vmw_dmabuf_init(struct vmw_private *dev_priv,
 static void vmw_user_dmabuf_destroy(struct ttm_buffer_object *bo)
 {
 	struct vmw_user_dma_buffer *vmw_user_bo = vmw_user_dma_buffer(bo);
-	struct ttm_bo_global *glob = bo->glob;
 
-	ttm_mem_global_free(glob->mem_glob, bo->acc_size);
 	kfree(vmw_user_bo);
 }
 
@@ -1952,77 +1916,4 @@ int vmw_user_stream_lookup(struct vmw_private *dev_priv,
 err_ref:
 	vmw_resource_unreference(&res);
 	return ret;
-}
-
-
-int vmw_dumb_create(struct drm_file *file_priv,
-		    struct drm_device *dev,
-		    struct drm_mode_create_dumb *args)
-{
-	struct vmw_private *dev_priv = vmw_priv(dev);
-	struct vmw_master *vmaster = vmw_master(file_priv->master);
-	struct vmw_user_dma_buffer *vmw_user_bo;
-	struct ttm_buffer_object *tmp;
-	int ret;
-
-	args->pitch = args->width * ((args->bpp + 7) / 8);
-	args->size = args->pitch * args->height;
-
-	vmw_user_bo = kzalloc(sizeof(*vmw_user_bo), GFP_KERNEL);
-	if (vmw_user_bo == NULL)
-		return -ENOMEM;
-
-	ret = ttm_read_lock(&vmaster->lock, true);
-	if (ret != 0) {
-		kfree(vmw_user_bo);
-		return ret;
-	}
-
-	ret = vmw_dmabuf_init(dev_priv, &vmw_user_bo->dma, args->size,
-			      &vmw_vram_sys_placement, true,
-			      &vmw_user_dmabuf_destroy);
-	if (ret != 0)
-		goto out_no_dmabuf;
-
-	tmp = ttm_bo_reference(&vmw_user_bo->dma.base);
-	ret = ttm_base_object_init(vmw_fpriv(file_priv)->tfile,
-				   &vmw_user_bo->base,
-				   false,
-				   ttm_buffer_type,
-				   &vmw_user_dmabuf_release, NULL);
-	if (unlikely(ret != 0))
-		goto out_no_base_object;
-
-	args->handle = vmw_user_bo->base.hash.key;
-
-out_no_base_object:
-	ttm_bo_unref(&tmp);
-out_no_dmabuf:
-	ttm_read_unlock(&vmaster->lock);
-	return ret;
-}
-
-int vmw_dumb_map_offset(struct drm_file *file_priv,
-			struct drm_device *dev, uint32_t handle,
-			uint64_t *offset)
-{
-	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
-	struct vmw_dma_buffer *out_buf;
-	int ret;
-
-	ret = vmw_user_dmabuf_lookup(tfile, handle, &out_buf);
-	if (ret != 0)
-		return -EINVAL;
-
-	*offset = out_buf->base.addr_space_offset;
-	vmw_dmabuf_unreference(&out_buf);
-	return 0;
-}
-
-int vmw_dumb_destroy(struct drm_file *file_priv,
-		     struct drm_device *dev,
-		     uint32_t handle)
-{
-	return ttm_ref_object_base_unref(vmw_fpriv(file_priv)->tfile,
-					 handle, TTM_REF_USAGE);
 }

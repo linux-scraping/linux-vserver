@@ -599,7 +599,6 @@ SYSCALL_DEFINE3(timer_create, const clockid_t, which_clock,
 			goto out;
 		}
 	} else {
-		memset(&event.sigev_value, 0, sizeof(event.sigev_value));
 		event.sigev_notify = SIGEV_SIGNAL;
 		event.sigev_signo = SIGALRM;
 		event.sigev_value.sival_int = new_timer->it_id;
@@ -649,13 +648,6 @@ out:
 static struct k_itimer *__lock_timer(timer_t timer_id, unsigned long *flags)
 {
 	struct k_itimer *timr;
-
-	/*
-	 * timer_t could be any type >= int and we want to make sure any
-	 * @timer_id outside positive int range fails lookup.
-	 */
-	if ((unsigned long long)timer_id > INT_MAX)
-		return NULL;
 
 	rcu_read_lock();
 	timr = idr_find(&posix_timers_id, (int)timer_id);
@@ -716,7 +708,7 @@ common_timer_get(struct k_itimer *timr, struct itimerspec *cur_setting)
 	    (timr->it_sigev_notify & ~SIGEV_THREAD_ID) == SIGEV_NONE))
 		timr->it_overrun += (unsigned int) hrtimer_forward(timer, now, iv);
 
-	remaining = __hrtimer_expires_remaining_adjusted(timer, now);
+	remaining = ktime_sub(hrtimer_get_expires(timer), now);
 	/* Return 0 only, when the timer is expired and not pending */
 	if (remaining.tv64 <= 0) {
 		/*

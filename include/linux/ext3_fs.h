@@ -788,11 +788,7 @@ struct dx_hash_info
 	u32		*seed;
 };
 
-
-/* 32 and 64 bit signed EOF for dx directories */
-#define EXT3_HTREE_EOF_32BIT   ((1UL  << (32 - 1)) - 1)
-#define EXT3_HTREE_EOF_64BIT   ((1ULL << (64 - 1)) - 1)
-
+#define EXT3_HTREE_EOF	0x7fffffff
 
 /*
  * Control parameters used by ext3_htree_next_block
@@ -895,7 +891,7 @@ extern int ext3fs_dirhash(const char *name, int len, struct
 
 /* ialloc.c */
 extern struct inode * ext3_new_inode (handle_t *, struct inode *,
-				      const struct qstr *, int);
+				      const struct qstr *, umode_t);
 extern void ext3_free_inode (handle_t *, struct inode *);
 extern struct inode * ext3_orphan_get (struct super_block *, unsigned long);
 extern unsigned long ext3_count_free_inodes (struct super_block *);

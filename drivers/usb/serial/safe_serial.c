@@ -81,9 +81,9 @@
 #define CONFIG_USB_SERIAL_SAFE_PADDED 0
 #endif
 
-static int debug;
-static int safe = 1;
-static int padded = CONFIG_USB_SERIAL_SAFE_PADDED;
+static bool debug;
+static bool safe = 1;
+static bool padded = CONFIG_USB_SERIAL_SAFE_PADDED;
 
 #define DRIVER_VERSION "v0.1"
 #define DRIVER_AUTHOR "sl@lineo.com, tbr@lineo.com, Johan Hovold <jhovold@gmail.com>"
@@ -231,11 +231,6 @@ static void safe_process_read_urb(struct urb *urb)
 
 	if (!safe)
 		goto out;
-
-	if (length < 2) {
-		dev_err(&port->dev, "malformed packet\n");
-		return;
-	}
 
 	fcs = fcs_compute10(data, length, CRC10_INITFCS);
 	if (fcs) {

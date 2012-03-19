@@ -244,7 +244,7 @@ static int dn_dst_gc(struct dst_ops *ops)
  */
 static void dn_dst_update_pmtu(struct dst_entry *dst, u32 mtu)
 {
-	struct neighbour *n = dst_get_neighbour(dst);
+	struct neighbour *n = dst_get_neighbour_noref(dst);
 	u32 min_mtu = 230;
 	struct dn_dev *dn;
 
@@ -713,7 +713,7 @@ out:
 static int dn_to_neigh_output(struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb_dst(skb);
-	struct neighbour *n = dst_get_neighbour(dst);
+	struct neighbour *n = dst_get_neighbour_noref(dst);
 
 	return n->output(n, skb);
 }
@@ -728,7 +728,7 @@ static int dn_output(struct sk_buff *skb)
 
 	int err = -EINVAL;
 
-	if ((neigh = dst_get_neighbour(dst)) == NULL)
+	if ((neigh = dst_get_neighbour_noref(dst)) == NULL)
 		goto error;
 
 	skb->dev = dev;
@@ -852,7 +852,7 @@ static int dn_rt_set_next_hop(struct dn_route *rt, struct dn_fib_res *res)
 	}
 	rt->rt_type = res->type;
 
-	if (dev != NULL && dst_get_neighbour(&rt->dst) == NULL) {
+	if (dev != NULL && dst_get_neighbour_noref(&rt->dst) == NULL) {
 		n = __neigh_lookup_errno(&dn_neigh_table, &rt->rt_gateway, dev);
 		if (IS_ERR(n))
 			return PTR_ERR(n);
@@ -998,13 +998,10 @@ source_ok:
 	if (!fld.daddr) {
 		fld.daddr = fld.saddr;
 
+		err = -EADDRNOTAVAIL;
 		if (dev_out)
 			dev_put(dev_out);
-		err = -EINVAL;
 		dev_out = init_net.loopback_dev;
-		if (!dev_out->dn_ptr)
-			goto out;
-		err = -EADDRNOTAVAIL;
 		dev_hold(dev_out);
 		if (!fld.daddr) {
 			fld.daddr =
@@ -1077,8 +1074,6 @@ source_ok:
 		if (dev_out == NULL)
 			goto out;
 		dn_db = rcu_dereference_raw(dev_out->dn_ptr);
-		if (!dn_db)
-			goto e_inval;
 		/* Possible improvement - check all devices for local addr */
 		if (dn_dev_islocal(dev_out, fld.daddr)) {
 			dev_put(dev_out);
@@ -1120,8 +1115,6 @@ select_source:
 			dev_put(dev_out);
 		dev_out = init_net.loopback_dev;
 		dev_hold(dev_out);
-		if (!dev_out->dn_ptr)
-			goto e_inval;
 		fld.flowidn_oif = dev_out->ifindex;
 		if (res.fi)
 			dn_fib_info_put(res.fi);

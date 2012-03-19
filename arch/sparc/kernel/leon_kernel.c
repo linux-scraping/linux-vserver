@@ -288,37 +288,37 @@ void __init leon_init_timers(irq_handler_t counter_fn)
 
 	/* Find GPTIMER Timer Registers base address otherwise bail out. */
 	nnp = rootnp;
-
-retry:
-	np = of_find_node_by_name(nnp, "GAISLER_GPTIMER");
-	if (!np) {
-		np = of_find_node_by_name(nnp, "01_011");
-		if (!np)
-			goto bad;
-	}
-
-	ampopts = 0;
-	pp = of_find_property(np, "ampopts", &len);
-	if (pp) {
-		ampopts = *(int *)pp->value;
-		if (ampopts == 0) {
-			/* Skip this instance, resource already
-			 * allocated by other OS */
-			nnp = np;
-			goto retry;
+	do {
+		np = of_find_node_by_name(nnp, "GAISLER_GPTIMER");
+		if (!np) {
+			np = of_find_node_by_name(nnp, "01_011");
+			if (!np)
+				goto bad;
 		}
-	}
 
-	/* Select Timer-Instance on Timer Core. Default is zero */
-	leon3_gptimer_idx = ampopts & 0x7;
+		ampopts = 0;
+		pp = of_find_property(np, "ampopts", &len);
+		if (pp) {
+			ampopts = *(int *)pp->value;
+			if (ampopts == 0) {
+				/* Skip this instance, resource already
+				 * allocated by other OS */
+				nnp = np;
+				continue;
+			}
+		}
 
-	pp = of_find_property(np, "reg", &len);
-	if (pp)
-		leon3_gptimer_regs = *(struct leon3_gptimer_regs_map **)
-					pp->value;
-	pp = of_find_property(np, "interrupts", &len);
-	if (pp)
-		leon3_gptimer_irq = *(unsigned int *)pp->value;
+		/* Select Timer-Instance on Timer Core. Default is zero */
+		leon3_gptimer_idx = ampopts & 0x7;
+
+		pp = of_find_property(np, "reg", &len);
+		if (pp)
+			leon3_gptimer_regs = *(struct leon3_gptimer_regs_map **)
+						pp->value;
+		pp = of_find_property(np, "interrupts", &len);
+		if (pp)
+			leon3_gptimer_irq = *(unsigned int *)pp->value;
+	} while (0);
 
 	if (!(leon3_gptimer_regs && leon3_irqctrl_regs && leon3_gptimer_irq))
 		goto bad;

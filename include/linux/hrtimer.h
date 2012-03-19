@@ -96,7 +96,6 @@ enum hrtimer_restart {
  * @function:	timer expiry callback function
  * @base:	pointer to the timer base (per cpu and per clock)
  * @state:	state information (See bit values above)
- * @is_rel:	Set if the timer was armed relative
  * @start_site:	timer statistics field to store the site where the timer
  *		was started
  * @start_comm: timer statistics field to store the name of the process which
@@ -111,8 +110,7 @@ struct hrtimer {
 	ktime_t				_softexpires;
 	enum hrtimer_restart		(*function)(struct hrtimer *);
 	struct hrtimer_clock_base	*base;
-	u8				state;
-	u8				is_rel;
+	unsigned long			state;
 #ifdef CONFIG_TIMER_STATS
 	int				start_pid;
 	void				*start_site;
@@ -167,7 +165,6 @@ enum  hrtimer_base_type {
  * @lock:		lock protecting the base and associated clock bases
  *			and timers
  * @active_bases:	Bitfield to mark bases with active timers
- * @clock_was_set:	Indicates that clock was set from irq context.
  * @expires_next:	absolute time of the next event which was scheduled
  *			via clock_set_next_event()
  * @hres_active:	State of high resolution mode
@@ -180,8 +177,7 @@ enum  hrtimer_base_type {
  */
 struct hrtimer_cpu_base {
 	raw_spinlock_t			lock;
-	unsigned int			active_bases;
-	unsigned int			clock_was_set;
+	unsigned long			active_bases;
 #ifdef CONFIG_HIGH_RES_TIMERS
 	ktime_t				expires_next;
 	int				hres_active;
@@ -290,8 +286,6 @@ extern void hrtimer_peek_ahead_timers(void);
 # define MONOTONIC_RES_NSEC	HIGH_RES_NSEC
 # define KTIME_MONOTONIC_RES	KTIME_HIGH_RES
 
-extern void clock_was_set_delayed(void);
-
 #else
 
 # define MONOTONIC_RES_NSEC	LOW_RES_NSEC
@@ -312,33 +306,7 @@ static inline int hrtimer_is_hres_active(struct hrtimer *timer)
 {
 	return 0;
 }
-
-static inline void clock_was_set_delayed(void) { }
-
 #endif
-
-static inline ktime_t
-__hrtimer_expires_remaining_adjusted(const struct hrtimer *timer, ktime_t now)
-{
-	ktime_t rem = ktime_sub(timer->node.expires, now);
-
-	/*
-	 * Adjust relative timers for the extra we added in
-	 * hrtimer_start_range_ns() to prevent short timeouts.
-	 */
-#ifdef CONFIG_TIME_LOW_RES
-	if (timer->is_rel)
-		rem = ktime_sub(rem, KTIME_LOW_RES);
-#endif
-	return rem;
-}
-
-static inline ktime_t
-hrtimer_expires_remaining_adjusted(const struct hrtimer *timer)
-{
-	return __hrtimer_expires_remaining_adjusted(timer,
-						    timer->base->get_time());
-}
 
 extern void clock_was_set(void);
 #ifdef CONFIG_TIMERFD
@@ -352,7 +320,6 @@ extern ktime_t ktime_get(void);
 extern ktime_t ktime_get_real(void);
 extern ktime_t ktime_get_boottime(void);
 extern ktime_t ktime_get_monotonic_offset(void);
-extern ktime_t ktime_get_update_offsets(ktime_t *offs_real, ktime_t *offs_boot);
 
 DECLARE_PER_CPU(struct tick_device, tick_cpu_device);
 
@@ -408,12 +375,7 @@ static inline int hrtimer_restart(struct hrtimer *timer)
 }
 
 /* Query timers: */
-extern ktime_t __hrtimer_get_remaining(const struct hrtimer *timer, bool adjust);
-
-static inline ktime_t hrtimer_get_remaining(const struct hrtimer *timer)
-{
-	return __hrtimer_get_remaining(timer, false);
-}
+extern ktime_t hrtimer_get_remaining(const struct hrtimer *timer);
 extern int hrtimer_get_res(const clockid_t which_clock, struct timespec *tp);
 
 extern ktime_t hrtimer_get_next_event(void);

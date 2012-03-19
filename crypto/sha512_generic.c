@@ -174,7 +174,7 @@ sha512_update(struct shash_desc *desc, const u8 *data, unsigned int len)
 	index = sctx->count[0] & 0x7f;
 
 	/* Update number of bytes */
-	if ((sctx->count[0] += len) < len)
+	if (!(sctx->count[0] += len))
 		sctx->count[1]++;
 
         part_len = 128 - index;
@@ -294,7 +294,5 @@ module_exit(sha512_generic_mod_fini);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SHA-512 and SHA-384 Secure Hash Algorithms");
 
-MODULE_ALIAS_CRYPTO("sha384");
-MODULE_ALIAS_CRYPTO("sha384-generic");
-MODULE_ALIAS_CRYPTO("sha512");
-MODULE_ALIAS_CRYPTO("sha512-generic");
+MODULE_ALIAS("sha384");
+MODULE_ALIAS("sha512");

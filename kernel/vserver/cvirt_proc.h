@@ -30,6 +30,8 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	if (!ns)
 		goto skip_ns;
 
+/*	FIXME: move to fs?
+
 	pstr = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!pstr)
 		goto skip_ns;
@@ -42,7 +44,7 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 		"RootPath:\t%s\n",
 		ns, atomic_read(&ns->count),
 		root);
-	kfree(pstr);
+	kfree(pstr); */
 skip_ns:
 
 	uts = nsproxy->uts_ns;
@@ -71,7 +73,7 @@ skip_uts:
 	length += sprintf(buffer + length,
 		"SEMS:\t\t%d %d %d %d  %d\n"
 		"MSG:\t\t%d %d %d\n"
-		"SHM:\t\t%lu %lu  %d %ld\n",
+		"SHM:\t\t%lu %lu  %d %d\n",
 		ipc->sem_ctls[0], ipc->sem_ctls[1],
 		ipc->sem_ctls[2], ipc->sem_ctls[3],
 		ipc->used_sems,

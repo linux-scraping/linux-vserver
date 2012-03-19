@@ -170,7 +170,7 @@ STATIC int
 xfs_vn_mknod(
 	struct inode	*dir,
 	struct dentry	*dentry,
-	int		mode,
+	umode_t		mode,
 	dev_t		rdev)
 {
 	struct inode	*inode;
@@ -233,7 +233,7 @@ STATIC int
 xfs_vn_create(
 	struct inode	*dir,
 	struct dentry	*dentry,
-	int		mode,
+	umode_t		mode,
 	struct nameidata *nd)
 {
 	return xfs_vn_mknod(dir, dentry, mode, 0);
@@ -243,7 +243,7 @@ STATIC int
 xfs_vn_mkdir(
 	struct inode	*dir,
 	struct dentry	*dentry,
-	int		mode)
+	umode_t		mode)
 {
 	return xfs_vn_mknod(dir, dentry, mode|S_IFDIR, 0);
 }
@@ -368,7 +368,7 @@ xfs_vn_symlink(
 	struct xfs_inode *cip = NULL;
 	struct xfs_name	name;
 	int		error;
-	mode_t		mode;
+	umode_t		mode;
 
 	mode = S_IFLNK |
 		(irix_symlink_mode ? 0777 & ~current_umask() : S_IRWXUGO);
@@ -510,31 +510,8 @@ xfs_vn_getattr(
 	return 0;
 }
 
-static void
-xfs_setattr_mode(
-	struct xfs_trans	*tp,
-	struct xfs_inode	*ip,
-	struct iattr		*iattr)
-{
-	struct inode	*inode = VFS_I(ip);
-	umode_t		mode = iattr->ia_mode;
-
-	ASSERT(tp);
-	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL));
-
-	if (!in_group_p(inode->i_gid) && !capable(CAP_FSETID))
-		mode &= ~S_ISGID;
-
-	ip->i_d.di_mode &= S_IFMT;
-	ip->i_d.di_mode |= mode & ~S_IFMT;
-
-	inode->i_mode &= S_IFMT;
-	inode->i_mode |= mode & ~S_IFMT;
-}
-
 int
 xfs_setattr_nonsize(
-	struct dentry		*dentry,
 	struct xfs_inode	*ip,
 	struct iattr		*iattr,
 	int			flags)
@@ -557,15 +534,9 @@ xfs_setattr_nonsize(
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return XFS_ERROR(EIO);
 
-	/*
-	 * dentry can be NULL only when we're called from xfs_inherit_acl(),
-	 * in which case no permission checks are needed
-	 */
-	if (dentry) {
-		error = -setattr_prepare(dentry, iattr);
-		if (error)
-			return XFS_ERROR(error);
-	}
+	error = -inode_change_ok(inode, iattr);
+	if (error)
+		return XFS_ERROR(error);
 
 	ASSERT((mask & ATTR_SIZE) == 0);
 
@@ -690,8 +661,18 @@ xfs_setattr_nonsize(
 	/*
 	 * Change file access modes.
 	 */
-	if (mask & ATTR_MODE)
-		xfs_setattr_mode(tp, ip, iattr);
+	if (mask & ATTR_MODE) {
+		umode_t mode = iattr->ia_mode;
+
+		if (!in_group_p(inode->i_gid) && !capable(CAP_FSETID))
+			mode &= ~S_ISGID;
+
+		ip->i_d.di_mode &= S_IFMT;
+		ip->i_d.di_mode |= mode & ~S_IFMT;
+
+		inode->i_mode &= S_IFMT;
+		inode->i_mode |= mode & ~S_IFMT;
+	}
 
 	/*
 	 * Change file access or modified times.
@@ -765,19 +746,18 @@ out_dqrele:
  */
 int
 xfs_setattr_size(
-	struct dentry		*dentry,
+	struct xfs_inode	*ip,
 	struct iattr		*iattr,
 	int			flags)
 {
-	struct inode		*inode = dentry->d_inode;
-	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
+	struct inode		*inode = VFS_I(ip);
 	int			mask = iattr->ia_valid;
+	xfs_off_t		oldsize, newsize;
 	struct xfs_trans	*tp;
 	int			error;
 	uint			lock_flags;
 	uint			commit_flags = 0;
-	bool			did_zeroing = false;
 
 	trace_xfs_setattr(ip);
 
@@ -787,24 +767,27 @@ xfs_setattr_size(
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return XFS_ERROR(EIO);
 
-	error = -setattr_prepare(dentry, iattr);
+	error = -inode_change_ok(inode, iattr);
 	if (error)
 		return XFS_ERROR(error);
 
 	ASSERT(S_ISREG(ip->i_d.di_mode));
-	ASSERT((mask & (ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_ATIME_SET|
-			ATTR_MTIME_SET|ATTR_KILL_PRIV|ATTR_TIMES_SET)) == 0);
+	ASSERT((mask & (ATTR_MODE|ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_ATIME_SET|
+			ATTR_MTIME_SET|ATTR_KILL_SUID|ATTR_KILL_SGID|
+			ATTR_KILL_PRIV|ATTR_TIMES_SET)) == 0);
 
 	lock_flags = XFS_ILOCK_EXCL;
 	if (!(flags & XFS_ATTR_NOLOCK))
 		lock_flags |= XFS_IOLOCK_EXCL;
 	xfs_ilock(ip, lock_flags);
 
+	oldsize = inode->i_size;
+	newsize = iattr->ia_size;
+
 	/*
 	 * Short circuit the truncate case for zero length files.
 	 */
-	if (iattr->ia_size == 0 &&
-	    ip->i_size == 0 && ip->i_d.di_nextents == 0) {
+	if (newsize == 0 && oldsize == 0 && ip->i_d.di_nextents == 0) {
 		if (!(mask & (ATTR_CTIME|ATTR_MTIME)))
 			goto out_unlock;
 
@@ -813,7 +796,7 @@ xfs_setattr_size(
 		 */
 		xfs_iunlock(ip, lock_flags);
 		iattr->ia_valid &= ~ATTR_SIZE;
-		return xfs_setattr_nonsize(dentry, ip, iattr, 0);
+		return xfs_setattr_nonsize(ip, iattr, 0);
 	}
 
 	/*
@@ -824,16 +807,20 @@ xfs_setattr_size(
 		goto out_unlock;
 
 	/*
-	 * File data changes must be complete before we start the transaction to
-	 * modify the inode.  This needs to be done before joining the inode to
-	 * the transaction because the inode cannot be unlocked once it is a
-	 * part of the transaction.
-	 *
-	 * Start with zeroing any data block beyond EOF that we may expose on
-	 * file extension.
+	 * Now we can make the changes.  Before we join the inode to the
+	 * transaction, take care of the part of the truncation that must be
+	 * done without the inode lock.  This needs to be done before joining
+	 * the inode to the transaction, because the inode cannot be unlocked
+	 * once it is a part of the transaction.
 	 */
-	if (iattr->ia_size > ip->i_size) {
-		error = xfs_zero_eof(ip, iattr->ia_size, ip->i_size, &did_zeroing);
+	if (newsize > oldsize) {
+		/*
+		 * Do the first part of growing a file: zero any data in the
+		 * last block that is beyond the old EOF.  We need to do this
+		 * before the inode is joined to the transaction to modify
+		 * i_size.
+		 */
+		error = xfs_zero_eof(ip, newsize, oldsize);
 		if (error)
 			goto out_unlock;
 	}
@@ -845,22 +832,26 @@ xfs_setattr_size(
 	 * any previous writes that are beyond the on disk EOF and the new
 	 * EOF that have not been written out need to be written here.  If we
 	 * do not write the data out, we expose ourselves to the null files
-	 * problem. Note that this includes any block zeroing we did above;
-	 * otherwise those blocks may not be zeroed after a crash.
+	 * problem.
+	 *
+	 * Only flush from the on disk size to the smaller of the in memory
+	 * file size or the new size as that's the range we really care about
+	 * here and prevents waiting for other data not within the range we
+	 * care about here.
 	 */
-	if (iattr->ia_size > ip->i_d.di_size &&
-	    (ip->i_size != ip->i_d.di_size || did_zeroing)) {
-		error = xfs_flush_pages(ip, ip->i_d.di_size, iattr->ia_size, 0,
+	if (oldsize != ip->i_d.di_size && newsize > ip->i_d.di_size) {
+		error = xfs_flush_pages(ip, ip->i_d.di_size, newsize, 0,
 					FI_NONE);
 		if (error)
 			goto out_unlock;
 	}
 
-	/* Now wait for all direct I/O to complete. */
+	/*
+	 * Wait for all direct I/O to complete.
+	 */
 	inode_dio_wait(inode);
 
-	error = -block_truncate_page(inode->i_mapping, iattr->ia_size,
-				     xfs_get_blocks);
+	error = -block_truncate_page(inode->i_mapping, newsize, xfs_get_blocks);
 	if (error)
 		goto out_unlock;
 
@@ -871,7 +862,7 @@ xfs_setattr_size(
 	if (error)
 		goto out_trans_cancel;
 
-	truncate_setsize(inode, iattr->ia_size);
+	truncate_setsize(inode, newsize);
 
 	commit_flags = XFS_TRANS_RELEASE_LOG_RES;
 	lock_flags |= XFS_ILOCK_EXCL;
@@ -890,19 +881,29 @@ xfs_setattr_size(
 	 * these flags set.  For all other operations the VFS set these flags
 	 * explicitly if it wants a timestamp update.
 	 */
-	if (iattr->ia_size != ip->i_size &&
-	    (!(mask & (ATTR_CTIME | ATTR_MTIME)))) {
+	if (newsize != oldsize && (!(mask & (ATTR_CTIME | ATTR_MTIME)))) {
 		iattr->ia_ctime = iattr->ia_mtime =
 			current_fs_time(inode->i_sb);
 		mask |= ATTR_CTIME | ATTR_MTIME;
 	}
 
-	if (iattr->ia_size > ip->i_size) {
-		ip->i_d.di_size = iattr->ia_size;
-		ip->i_size = iattr->ia_size;
-	} else if (iattr->ia_size <= ip->i_size ||
-		   (iattr->ia_size == 0 && ip->i_d.di_nextents)) {
-		error = xfs_itruncate_data(&tp, ip, iattr->ia_size);
+	/*
+	 * The first thing we do is set the size to new_size permanently on
+	 * disk.  This way we don't have to worry about anyone ever being able
+	 * to look at the data being freed even in the face of a crash.
+	 * What we're getting around here is the case where we free a block, it
+	 * is allocated to another file, it is written to, and then we crash.
+	 * If the new data gets written to the file but the log buffers
+	 * containing the free and reallocation don't, then we'd end up with
+	 * garbage in the blocks being freed.  As long as we make the new size
+	 * permanent before actually freeing any blocks it doesn't matter if
+	 * they get written to.
+	 */
+	ip->i_d.di_size = newsize;
+	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
+
+	if (newsize <= oldsize) {
+		error = xfs_itruncate_extents(&tp, ip, XFS_DATA_FORK, newsize);
 		if (error)
 			goto out_trans_abort;
 
@@ -915,12 +916,6 @@ xfs_setattr_size(
 		 */
 		xfs_iflags_set(ip, XFS_ITRUNCATED);
 	}
-
-	/*
-	 * Change file access modes.
-	 */
-	if (mask & ATTR_MODE)
-		xfs_setattr_mode(tp, ip, iattr);
 
 	if (mask & ATTR_CTIME) {
 		inode->i_ctime = iattr->ia_ctime;
@@ -961,8 +956,8 @@ xfs_vn_setattr(
 	struct iattr	*iattr)
 {
 	if (iattr->ia_valid & ATTR_SIZE)
-		return -xfs_setattr_size(dentry, iattr, 0);
-	return -xfs_setattr_nonsize(dentry, XFS_I(dentry->d_inode), iattr, 0);
+		return -xfs_setattr_size(XFS_I(dentry->d_inode), iattr, 0);
+	return -xfs_setattr_nonsize(XFS_I(dentry->d_inode), iattr, 0);
 }
 
 #define XFS_FIEMAP_FLAGS	(FIEMAP_FLAG_SYNC|FIEMAP_FLAG_XATTR)

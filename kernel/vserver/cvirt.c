@@ -20,16 +20,6 @@
 #include <asm/uaccess.h>
 
 
-void vx_vsi_boottime(struct timespec *boottime)
-{
-	struct vx_info *vxi = current_vx_info();
-
-	set_normalized_timespec(boottime,
-		boottime->tv_sec + vxi->cvirt.bias_uptime.tv_sec,
-		boottime->tv_nsec + vxi->cvirt.bias_uptime.tv_nsec);
-	return;
-}
-
 void vx_vsi_uptime(struct timespec *uptime, struct timespec *idle)
 {
 	struct vx_info *vxi = current_vx_info();

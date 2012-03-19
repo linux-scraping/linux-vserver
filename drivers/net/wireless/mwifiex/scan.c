@@ -500,7 +500,6 @@ mwifiex_scan_create_channel_list(struct mwifiex_private *priv,
 	struct ieee80211_channel *ch;
 	struct mwifiex_adapter *adapter = priv->adapter;
 	int chan_idx = 0, i;
-	u8 scan_type;
 
 	for (band = 0; (band < IEEE80211_NUM_BANDS) ; band++) {
 
@@ -514,19 +513,20 @@ mwifiex_scan_create_channel_list(struct mwifiex_private *priv,
 			if (ch->flags & IEEE80211_CHAN_DISABLED)
 				continue;
 			scan_chan_list[chan_idx].radio_type = band;
-			scan_type = ch->flags & IEEE80211_CHAN_PASSIVE_SCAN;
+
 			if (user_scan_in &&
 				user_scan_in->chan_list[0].scan_time)
 				scan_chan_list[chan_idx].max_scan_time =
 					cpu_to_le16((u16) user_scan_in->
 					chan_list[0].scan_time);
-			else if (scan_type == MWIFIEX_SCAN_TYPE_PASSIVE)
+			else if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
 				scan_chan_list[chan_idx].max_scan_time =
 					cpu_to_le16(adapter->passive_scan_time);
 			else
 				scan_chan_list[chan_idx].max_scan_time =
 					cpu_to_le16(adapter->active_scan_time);
-			if (scan_type == MWIFIEX_SCAN_TYPE_PASSIVE)
+
+			if (ch->flags & IEEE80211_CHAN_PASSIVE_SCAN)
 				scan_chan_list[chan_idx].chan_scan_mode_bitmap
 					|= MWIFIEX_PASSIVE_SCAN;
 			else
@@ -1391,11 +1391,8 @@ int mwifiex_set_user_scan_ioctl(struct mwifiex_private *priv,
 {
 	int status;
 
-	priv->adapter->scan_wait_q_woken = false;
-
 	status = mwifiex_scan_networks(priv, scan_req);
-	if (!status)
-		status = mwifiex_wait_queue_complete(priv->adapter);
+	queue_work(priv->adapter->workqueue, &priv->adapter->main_work);
 
 	return status;
 }
@@ -1537,11 +1534,6 @@ done:
 	return 0;
 }
 
-static void mwifiex_free_bss_priv(struct cfg80211_bss *bss)
-{
-	kfree(bss->priv);
-}
-
 /*
  * This function handles the command response of scan.
  *
@@ -1594,7 +1586,7 @@ int mwifiex_ret_802_11_scan(struct mwifiex_private *priv,
 		dev_err(adapter->dev, "SCAN_RESP: too many AP returned (%d)\n",
 		       scan_rsp->number_of_sets);
 		ret = -1;
-		goto check_next_scan;
+		goto done;
 	}
 
 	bytes_left = le16_to_cpu(scan_rsp->bss_descript_size);
@@ -1663,8 +1655,7 @@ int mwifiex_ret_802_11_scan(struct mwifiex_private *priv,
 		if (!beacon_size || beacon_size > bytes_left) {
 			bss_info += bytes_left;
 			bytes_left = 0;
-			ret = -1;
-			goto check_next_scan;
+			return -1;
 		}
 
 		/* Initialize the current working beacon pointer for this BSS
@@ -1717,7 +1708,7 @@ int mwifiex_ret_802_11_scan(struct mwifiex_private *priv,
 				dev_err(priv->adapter->dev, "%s: in processing"
 					" IE, bytes left < IE length\n",
 					__func__);
-				goto check_next_scan;
+				goto done;
 			}
 			if (element_id == WLAN_EID_DS_PARAMS) {
 				channel = *(u8 *) (current_ptr +
@@ -1768,7 +1759,7 @@ int mwifiex_ret_802_11_scan(struct mwifiex_private *priv,
 					      cap_info_bitmap, beacon_period,
 					      ie_buf, ie_len, rssi, GFP_KERNEL);
 				*(u8 *)bss->priv = band;
-				bss->free_priv = mwifiex_free_bss_priv;
+				cfg80211_put_bss(bss);
 
 				if (priv->media_connected && !memcmp(bssid,
 					priv->curr_bss_params.bss_descriptor
@@ -1783,7 +1774,6 @@ int mwifiex_ret_802_11_scan(struct mwifiex_private *priv,
 		}
 	}
 
-check_next_scan:
 	spin_lock_irqsave(&adapter->scan_pending_q_lock, flags);
 	if (list_empty(&adapter->scan_pending_q)) {
 		spin_unlock_irqrestore(&adapter->scan_pending_q_lock, flags);
@@ -1803,6 +1793,14 @@ check_next_scan:
 			up(&priv->async_sem);
 		}
 
+		if (priv->user_scan_cfg) {
+			dev_dbg(priv->adapter->dev, "info: %s: sending scan "
+							"results\n", __func__);
+			cfg80211_scan_done(priv->scan_request, 0);
+			priv->scan_request = NULL;
+			kfree(priv->user_scan_cfg);
+			priv->user_scan_cfg = NULL;
+		}
 	} else {
 		/* Get scan command from scan_pending_q and put to
 		   cmd_pending_q */
@@ -1814,6 +1812,7 @@ check_next_scan:
 		mwifiex_insert_cmd_to_pending_q(adapter, cmd_node, true);
 	}
 
+done:
 	return ret;
 }
 

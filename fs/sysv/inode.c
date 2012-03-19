@@ -176,8 +176,14 @@ void sysv_set_inode(struct inode *inode, dev_t rdev)
 		inode->i_fop = &sysv_dir_operations;
 		inode->i_mapping->a_ops = &sysv_aops;
 	} else if (S_ISLNK(inode->i_mode)) {
-		inode->i_op = &sysv_symlink_inode_operations;
-		inode->i_mapping->a_ops = &sysv_aops;
+		if (inode->i_blocks) {
+			inode->i_op = &sysv_symlink_inode_operations;
+			inode->i_mapping->a_ops = &sysv_aops;
+		} else {
+			inode->i_op = &sysv_fast_symlink_inode_operations;
+			nd_terminate_link(SYSV_I(inode)->i_data, inode->i_size,
+				sizeof(SYSV_I(inode)->i_data) - 1);
+		}
 	} else
 		init_special_inode(inode, inode->i_mode, rdev);
 }
@@ -330,7 +336,6 @@ static struct inode *sysv_alloc_inode(struct super_block *sb)
 static void sysv_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(sysv_inode_cachep, SYSV_I(inode));
 }
 

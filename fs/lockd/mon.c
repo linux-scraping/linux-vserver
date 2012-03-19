@@ -55,7 +55,7 @@ static				DEFINE_SPINLOCK(nsm_lock);
  * Local NSM state
  */
 u32	__read_mostly		nsm_local_state;
-int	__read_mostly		nsm_use_hostnames;
+bool	__read_mostly		nsm_use_hostnames;
 
 static inline struct sockaddr *nsm_addr(const struct nsm_handle *nsm)
 {
@@ -111,12 +111,6 @@ static int nsm_mon_unmon(struct nsm_handle *nsm, u32 proc, struct nsm_res *res)
 
 	msg.rpc_proc = &clnt->cl_procinfo[proc];
 	status = rpc_call_sync(clnt, &msg, 0);
-	if (status == -ECONNREFUSED) {
-		dprintk("lockd:	NSM upcall RPC failed, status=%d, forcing rebind\n",
-				status);
-		rpc_force_rebind(clnt);
-		status = rpc_call_sync(clnt, &msg, 0);
-	}
 	if (status < 0)
 		dprintk("lockd: NSM upcall RPC failed, status=%d\n",
 				status);

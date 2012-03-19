@@ -181,20 +181,11 @@ static int smsusb_start_streaming(struct smsusb_device_t *dev)
 static int smsusb_sendrequest(void *context, void *buffer, size_t size)
 {
 	struct smsusb_device_t *dev = (struct smsusb_device_t *) context;
-	struct SmsMsgHdr_ST *phdr;
-	int dummy, ret;
+	int dummy;
 
-	phdr = kmalloc(size, GFP_KERNEL);
-	if (!phdr)
-		return -ENOMEM;
-	memcpy(phdr, buffer, size);
-
-	smsendian_handle_message_header((struct SmsMsgHdr_ST *)phdr);
-	ret = usb_bulk_msg(dev->udev, usb_sndbulkpipe(dev->udev, 2),
-			    phdr, size, &dummy, 1000);
-
-	kfree(phdr);
-	return ret;
+	smsendian_handle_message_header((struct SmsMsgHdr_ST *)buffer);
+	return usb_bulk_msg(dev->udev, usb_sndbulkpipe(dev->udev, 2),
+			    buffer, size, &dummy, 1000);
 }
 
 static char *smsusb1_fw_lkup[] = {
@@ -490,7 +481,7 @@ static int smsusb_resume(struct usb_interface *intf)
 	return 0;
 }
 
-static const struct usb_device_id smsusb_id_table[] = {
+static const struct usb_device_id smsusb_id_table[] __devinitconst = {
 	{ USB_DEVICE(0x187f, 0x0010),
 		.driver_info = SMS1XXX_BOARD_SIANO_STELLAR },
 	{ USB_DEVICE(0x187f, 0x0100),
@@ -551,10 +542,6 @@ static const struct usb_device_id smsusb_id_table[] = {
 		.driver_info = SMS1XXX_BOARD_HAUPPAUGE_WINDHAM },
 	{ USB_DEVICE(0x2040, 0xc090),
 		.driver_info = SMS1XXX_BOARD_HAUPPAUGE_WINDHAM },
-	{ USB_DEVICE(0x2040, 0xc0a0),
-		.driver_info = SMS1XXX_BOARD_HAUPPAUGE_WINDHAM },
-	{ USB_DEVICE(0x2040, 0xf5a0),
-		.driver_info = SMS1XXX_BOARD_HAUPPAUGE_WINDHAM },
 	{ } /* Terminating entry */
 	};
 
@@ -570,26 +557,7 @@ static struct usb_driver smsusb_driver = {
 	.resume			= smsusb_resume,
 };
 
-static int __init smsusb_module_init(void)
-{
-	int rc = usb_register(&smsusb_driver);
-	if (rc)
-		sms_err("usb_register failed. Error number %d", rc);
-
-	sms_debug("");
-
-	return rc;
-}
-
-static void __exit smsusb_module_exit(void)
-{
-	/* Regular USB Cleanup */
-	usb_deregister(&smsusb_driver);
-	sms_info("end");
-}
-
-module_init(smsusb_module_init);
-module_exit(smsusb_module_exit);
+module_usb_driver(smsusb_driver);
 
 MODULE_DESCRIPTION("Driver for the Siano SMS1xxx USB dongle");
 MODULE_AUTHOR("Siano Mobile Silicon, INC. (uris@siano-ms.com)");

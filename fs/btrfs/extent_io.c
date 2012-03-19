@@ -18,6 +18,7 @@
 #include "ctree.h"
 #include "btrfs_inode.h"
 #include "volumes.h"
+#include "check-integrity.h"
 
 static struct kmem_cache *extent_state_cache;
 static struct kmem_cache *extent_buffer_cache;
@@ -512,6 +513,15 @@ hit_next:
 	WARN_ON(state->end < start);
 	last_end = state->end;
 
+	if (state->end < end && !need_resched())
+		next_node = rb_next(&state->rb_node);
+	else
+		next_node = NULL;
+
+	/* the state doesn't have the wanted bits, go ahead */
+	if (!(state->state & bits))
+		goto next;
+
 	/*
 	 *     | ---- desired range ---- |
 	 *  | state | or
@@ -564,20 +574,15 @@ hit_next:
 		goto out;
 	}
 
-	if (state->end < end && prealloc && !need_resched())
-		next_node = rb_next(&state->rb_node);
-	else
-		next_node = NULL;
-
 	set |= clear_state_bit(tree, state, &bits, wake);
+next:
 	if (last_end == (u64)-1)
 		goto out;
 	start = last_end + 1;
 	if (start <= end && next_node) {
 		state = rb_entry(next_node, struct extent_state,
 				 rb_node);
-		if (state->start == start)
-			goto hit_next;
+		goto hit_next;
 	}
 	goto search_again;
 
@@ -960,8 +965,6 @@ hit_next:
 
 		set_state_bits(tree, state, &bits);
 		clear_state_bit(tree, state, &clear_bits, 0);
-
-		merge_state(tree, state);
 		if (last_end == (u64)-1)
 			goto out;
 
@@ -1006,7 +1009,6 @@ hit_next:
 		if (state->end <= end) {
 			set_state_bits(tree, state, &bits);
 			clear_state_bit(tree, state, &clear_bits, 0);
-			merge_state(tree, state);
 			if (last_end == (u64)-1)
 				goto out;
 			start = last_end + 1;
@@ -1067,8 +1069,6 @@ hit_next:
 
 		set_state_bits(tree, prealloc, &bits);
 		clear_state_bit(tree, prealloc, &clear_bits, 0);
-
-		merge_state(tree, prealloc);
 		prealloc = NULL;
 		goto out;
 	}
@@ -1207,39 +1207,6 @@ int unlock_extent(struct extent_io_tree *tree, u64 start, u64 end, gfp_t mask)
 {
 	return clear_extent_bit(tree, start, end, EXTENT_LOCKED, 1, 0, NULL,
 				mask);
-}
-
-int extent_range_clear_dirty_for_io(struct inode *inode, u64 start, u64 end)
-{
-	unsigned long index = start >> PAGE_CACHE_SHIFT;
-	unsigned long end_index = end >> PAGE_CACHE_SHIFT;
-	struct page *page;
-
-	while (index <= end_index) {
-		page = find_get_page(inode->i_mapping, index);
-		BUG_ON(!page); /* Pages should be in the extent_io_tree */
-		clear_page_dirty_for_io(page);
-		page_cache_release(page);
-		index++;
-	}
-	return 0;
-}
-
-int extent_range_redirty_for_io(struct inode *inode, u64 start, u64 end)
-{
-	unsigned long index = start >> PAGE_CACHE_SHIFT;
-	unsigned long end_index = end >> PAGE_CACHE_SHIFT;
-	struct page *page;
-
-	while (index <= end_index) {
-		page = find_get_page(inode->i_mapping, index);
-		BUG_ON(!page); /* Pages should be in the extent_io_tree */
-		account_page_redirty(page);
-		__set_page_dirty_nobuffers(page);
-		page_cache_release(page);
-		index++;
-	}
-	return 0;
 }
 
 /*
@@ -1523,7 +1490,6 @@ again:
 		 * shortening the size of the delalloc range we're searching
 		 */
 		free_extent_state(cached_state);
-		cached_state = NULL;
 		if (!loops) {
 			unsigned long offset = (*start) & (PAGE_CACHE_SIZE - 1);
 			max_bytes = PAGE_CACHE_SIZE - offset;
@@ -1929,7 +1895,7 @@ int repair_io_failure(struct btrfs_mapping_tree *map_tree, u64 start,
 	}
 	bio->bi_bdev = dev->bdev;
 	bio_add_page(bio, page, length, start-page_offset(page));
-	submit_bio(WRITE_SYNC, bio);
+	btrfsic_submit_bio(WRITE_SYNC, bio);
 	wait_for_completion(&compl);
 
 	if (!test_bit(BIO_UPTODATE, &bio->bi_flags)) {
@@ -2187,12 +2153,45 @@ static int bio_readpage_error(struct bio *failed_bio, struct page *page,
 		 "this_mirror=%d, num_copies=%d, in_validation=%d\n", read_mode,
 		 failrec->this_mirror, num_copies, failrec->in_validation);
 
-	tree->ops->submit_bio_hook(inode, read_mode, bio, failrec->this_mirror,
-					failrec->bio_flags, 0);
-	return 0;
+	ret = tree->ops->submit_bio_hook(inode, read_mode, bio,
+					 failrec->this_mirror,
+					 failrec->bio_flags, 0);
+	return ret;
 }
 
 /* lots and lots of room for performance fixes in the end_bio funcs */
+
+int end_extent_writepage(struct page *page, int err, u64 start, u64 end)
+{
+	int uptodate = (err == 0);
+	struct extent_io_tree *tree;
+	int ret;
+
+	tree = &BTRFS_I(page->mapping->host)->io_tree;
+
+	if (tree->ops && tree->ops->writepage_end_io_hook) {
+		ret = tree->ops->writepage_end_io_hook(page, start,
+					       end, NULL, uptodate);
+		if (ret)
+			uptodate = 0;
+	}
+
+	if (!uptodate && tree->ops &&
+	    tree->ops->writepage_io_failed_hook) {
+		ret = tree->ops->writepage_io_failed_hook(NULL, page,
+						 start, end, NULL);
+		/* Writeback already completed */
+		if (ret == 0)
+			return 1;
+	}
+
+	if (!uptodate) {
+		clear_extent_uptodate(tree, start, end, NULL, GFP_NOFS);
+		ClearPageUptodate(page);
+		SetPageError(page);
+	}
+	return 0;
+}
 
 /*
  * after a writepage IO is done, we need to:
@@ -2205,13 +2204,11 @@ static int bio_readpage_error(struct bio *failed_bio, struct page *page,
  */
 static void end_bio_extent_writepage(struct bio *bio, int err)
 {
-	int uptodate = err == 0;
 	struct bio_vec *bvec = bio->bi_io_vec + bio->bi_vcnt - 1;
 	struct extent_io_tree *tree;
 	u64 start;
 	u64 end;
 	int whole_page;
-	int ret;
 
 	do {
 		struct page *page = bvec->bv_page;
@@ -2228,28 +2225,9 @@ static void end_bio_extent_writepage(struct bio *bio, int err)
 
 		if (--bvec >= bio->bi_io_vec)
 			prefetchw(&bvec->bv_page->flags);
-		if (tree->ops && tree->ops->writepage_end_io_hook) {
-			ret = tree->ops->writepage_end_io_hook(page, start,
-						       end, NULL, uptodate);
-			if (ret)
-				uptodate = 0;
-		}
 
-		if (!uptodate && tree->ops &&
-		    tree->ops->writepage_io_failed_hook) {
-			ret = tree->ops->writepage_io_failed_hook(bio, page,
-							 start, end, NULL);
-			if (ret == 0) {
-				uptodate = (err == 0);
-				continue;
-			}
-		}
-
-		if (!uptodate) {
-			clear_extent_uptodate(tree, start, end, NULL, GFP_NOFS);
-			ClearPageUptodate(page);
-			SetPageError(page);
-		}
+		if (end_extent_writepage(page, err, start, end))
+			continue;
 
 		if (whole_page)
 			end_page_writeback(page);
@@ -2427,7 +2405,7 @@ static int submit_one_bio(int rw, struct bio *bio, int mirror_num,
 		ret = tree->ops->submit_bio_hook(page->mapping->host, rw, bio,
 					   mirror_num, bio_flags, start);
 	else
-		submit_bio(rw, bio);
+		btrfsic_submit_bio(rw, bio);
 
 	if (bio_flagged(bio, BIO_EOPNOTSUPP))
 		ret = -EOPNOTSUPP;
@@ -2444,8 +2422,7 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
 			      bio_end_io_t end_io_func,
 			      int mirror_num,
 			      unsigned long prev_bio_flags,
-			      unsigned long bio_flags,
-			      bool force_bio_submit)
+			      unsigned long bio_flags)
 {
 	int ret = 0;
 	struct bio *bio;
@@ -2464,7 +2441,6 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
 				sector;
 
 		if (prev_bio_flags != bio_flags || !contig ||
-		    force_bio_submit ||
 		    (tree->ops && tree->ops->merge_bio_hook &&
 		     tree->ops->merge_bio_hook(page, offset, page_size, bio,
 					       bio_flags)) ||
@@ -2521,8 +2497,7 @@ static int __extent_read_full_page(struct extent_io_tree *tree,
 				   struct page *page,
 				   get_extent_t *get_extent,
 				   struct bio **bio, int mirror_num,
-				   unsigned long *bio_flags,
-				   u64 *prev_em_start)
+				   unsigned long *bio_flags)
 {
 	struct inode *inode = page->mapping->host;
 	u64 start = (u64)page->index << PAGE_CACHE_SHIFT;
@@ -2578,8 +2553,6 @@ static int __extent_read_full_page(struct extent_io_tree *tree,
 		}
 	}
 	while (cur <= end) {
-		bool force_bio_submit = false;
-
 		if (cur >= last_byte) {
 			char *userpage;
 			struct extent_state *cached = NULL;
@@ -2626,49 +2599,6 @@ static int __extent_read_full_page(struct extent_io_tree *tree,
 		block_start = em->block_start;
 		if (test_bit(EXTENT_FLAG_PREALLOC, &em->flags))
 			block_start = EXTENT_MAP_HOLE;
-
-		/*
-		 * If we have a file range that points to a compressed extent
-		 * and it's followed by a consecutive file range that points to
-		 * to the same compressed extent (possibly with a different
-		 * offset and/or length, so it either points to the whole extent
-		 * or only part of it), we must make sure we do not submit a
-		 * single bio to populate the pages for the 2 ranges because
-		 * this makes the compressed extent read zero out the pages
-		 * belonging to the 2nd range. Imagine the following scenario:
-		 *
-		 *  File layout
-		 *  [0 - 8K]                     [8K - 24K]
-		 *    |                               |
-		 *    |                               |
-		 * points to extent X,         points to extent X,
-		 * offset 4K, length of 8K     offset 0, length 16K
-		 *
-		 * [extent X, compressed length = 4K uncompressed length = 16K]
-		 *
-		 * If the bio to read the compressed extent covers both ranges,
-		 * it will decompress extent X into the pages belonging to the
-		 * first range and then it will stop, zeroing out the remaining
-		 * pages that belong to the other range that points to extent X.
-		 * So here we make sure we submit 2 bios, one for the first
-		 * range and another one for the third range. Both will target
-		 * the same physical extent from disk, but we can't currently
-		 * make the compressed bio endio callback populate the pages
-		 * for both ranges because each compressed bio is tightly
-		 * coupled with a single extent map, and each range can have
-		 * an extent map with a different offset value relative to the
-		 * uncompressed data of our extent and different lengths. This
-		 * is a corner case so we prioritize correctness over
-		 * non-optimal behavior (submitting 2 bios for the same extent).
-		 */
-		if (test_bit(EXTENT_FLAG_COMPRESSED, &em->flags) &&
-		    prev_em_start && *prev_em_start != (u64)-1 &&
-		    *prev_em_start != em->orig_start)
-			force_bio_submit = true;
-
-		if (prev_em_start)
-			*prev_em_start = em->orig_start;
-
 		free_extent_map(em);
 		em = NULL;
 
@@ -2723,8 +2653,7 @@ static int __extent_read_full_page(struct extent_io_tree *tree,
 					 bdev, bio, pnr,
 					 end_bio_extent_readpage, mirror_num,
 					 *bio_flags,
-					 this_bio_flag,
-					 force_bio_submit);
+					 this_bio_flag);
 			nr++;
 			*bio_flags = this_bio_flag;
 		}
@@ -2750,7 +2679,7 @@ int extent_read_full_page(struct extent_io_tree *tree, struct page *page,
 	int ret;
 
 	ret = __extent_read_full_page(tree, page, get_extent, &bio, mirror_num,
-				      &bio_flags, NULL);
+				      &bio_flags);
 	if (bio)
 		ret = submit_one_bio(READ, bio, mirror_num, bio_flags);
 	return ret;
@@ -2861,9 +2790,12 @@ static int __extent_writepage(struct page *page, struct writeback_control *wbc,
 				delalloc_start = delalloc_end + 1;
 				continue;
 			}
-			tree->ops->fill_delalloc(inode, page, delalloc_start,
-						 delalloc_end, &page_started,
-						 &nr_written);
+			ret = tree->ops->fill_delalloc(inode, page,
+						       delalloc_start,
+						       delalloc_end,
+						       &page_started,
+						       &nr_written);
+			BUG_ON(ret);
 			/*
 			 * delalloc_end is already one less than the total
 			 * length, so we don't subtract one from
@@ -2900,8 +2832,12 @@ static int __extent_writepage(struct page *page, struct writeback_control *wbc,
 	if (tree->ops && tree->ops->writepage_start_hook) {
 		ret = tree->ops->writepage_start_hook(page, start,
 						      page_end);
-		if (ret == -EAGAIN) {
-			redirty_page_for_writepage(wbc, page);
+		if (ret) {
+			/* Fixup worker will requeue */
+			if (ret == -EBUSY)
+				wbc->pages_skipped++;
+			else
+				redirty_page_for_writepage(wbc, page);
 			update_nr_written(page, wbc, nr_written);
 			unlock_page(page);
 			ret = 0;
@@ -3009,7 +2945,7 @@ static int __extent_writepage(struct page *page, struct writeback_control *wbc,
 						 sector, iosize, pg_offset,
 						 bdev, &epd->bio, max_nr,
 						 end_bio_extent_writepage,
-						 0, 0, 0, false);
+						 0, 0, 0);
 			if (ret)
 				SetPageError(page);
 		}
@@ -3268,7 +3204,6 @@ int extent_readpages(struct extent_io_tree *tree,
 	struct bio *bio = NULL;
 	unsigned page_idx;
 	unsigned long bio_flags = 0;
-	u64 prev_em_start = (u64)-1;
 
 	for (page_idx = 0; page_idx < nr_pages; page_idx++) {
 		struct page *page = list_entry(pages->prev, struct page, lru);
@@ -3278,8 +3213,7 @@ int extent_readpages(struct extent_io_tree *tree,
 		if (!add_to_page_cache_lru(page, mapping,
 					page->index, GFP_NOFS)) {
 			__extent_read_full_page(tree, page, get_extent,
-						&bio, 0, &bio_flags,
-						&prev_em_start);
+						&bio, 0, &bio_flags);
 		}
 		page_cache_release(page);
 	}
@@ -3373,7 +3307,7 @@ int try_release_extent_mapping(struct extent_map_tree *map,
 			len = end - start + 1;
 			write_lock(&map->lock);
 			em = lookup_extent_mapping(map, start, len);
-			if (IS_ERR_OR_NULL(em)) {
+			if (!em) {
 				write_unlock(&map->lock);
 				break;
 			}
@@ -3664,6 +3598,7 @@ static struct extent_buffer *__alloc_extent_buffer(struct extent_io_tree *tree,
 	atomic_set(&eb->blocking_writers, 0);
 	atomic_set(&eb->spinning_readers, 0);
 	atomic_set(&eb->spinning_writers, 0);
+	eb->lock_nested = 0;
 	init_waitqueue_head(&eb->write_lock_wq);
 	init_waitqueue_head(&eb->read_lock_wq);
 
@@ -3936,10 +3871,9 @@ int clear_extent_buffer_uptodate(struct extent_io_tree *tree,
 	num_pages = num_extent_pages(eb->start, eb->len);
 	clear_bit(EXTENT_BUFFER_UPTODATE, &eb->bflags);
 
-	if (eb_straddles_pages(eb)) {
-		clear_extent_uptodate(tree, eb->start, eb->start + eb->len - 1,
-				      cached_state, GFP_NOFS);
-	}
+	clear_extent_uptodate(tree, eb->start, eb->start + eb->len - 1,
+			      cached_state, GFP_NOFS);
+
 	for (i = 0; i < num_pages; i++) {
 		page = extent_buffer_page(eb, i);
 		if (page)
@@ -3992,6 +3926,8 @@ int extent_range_uptodate(struct extent_io_tree *tree,
 	while (start <= end) {
 		index = start >> PAGE_CACHE_SHIFT;
 		page = find_get_page(tree->mapping, index);
+		if (!page)
+			return 1;
 		uptodate = PageUptodate(page);
 		page_cache_release(page);
 		if (!uptodate) {
@@ -4049,7 +3985,6 @@ int read_extent_buffer_pages(struct extent_io_tree *tree,
 	unsigned long num_pages;
 	struct bio *bio = NULL;
 	unsigned long bio_flags = 0;
-	u64 prev_em_start = (u64)-1;
 
 	if (test_bit(EXTENT_BUFFER_UPTODATE, &eb->bflags))
 		return 0;
@@ -4105,8 +4040,7 @@ int read_extent_buffer_pages(struct extent_io_tree *tree,
 			ClearPageError(page);
 			err = __extent_read_full_page(tree, page,
 						      get_extent, &bio,
-						      mirror_num, &bio_flags,
-						      &prev_em_start);
+						      mirror_num, &bio_flags);
 			if (err)
 				ret = err;
 		} else {

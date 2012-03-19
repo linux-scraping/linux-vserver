@@ -223,6 +223,17 @@ static void vmbus_process_rescind_offer(struct work_struct *work)
 	vmbus_device_unregister(channel->device_obj);
 }
 
+void vmbus_free_channels(void)
+{
+	struct vmbus_channel *channel;
+
+	list_for_each_entry(channel, &vmbus_connection.chn_list, listentry) {
+		vmbus_device_unregister(channel->device_obj);
+		kfree(channel->device_obj);
+		free_channel(channel);
+	}
+}
+
 /*
  * vmbus_process_offer - Process the offer by creating a channel/device
  * associated with this offer
@@ -287,6 +298,7 @@ static void vmbus_process_offer(struct work_struct *work)
 		spin_lock_irqsave(&vmbus_connection.channel_lock, flags);
 		list_del(&newchannel->listentry);
 		spin_unlock_irqrestore(&vmbus_connection.channel_lock, flags);
+		kfree(newchannel->device_obj);
 
 		free_channel(newchannel);
 	} else {
@@ -606,13 +618,15 @@ int vmbus_request_offers(void)
 {
 	struct vmbus_channel_message_header *msg;
 	struct vmbus_channel_msginfo *msginfo;
-	int ret;
+	int ret, t;
 
 	msginfo = kmalloc(sizeof(*msginfo) +
 			  sizeof(struct vmbus_channel_message_header),
 			  GFP_KERNEL);
 	if (!msginfo)
 		return -ENOMEM;
+
+	init_completion(&msginfo->waitevent);
 
 	msg = (struct vmbus_channel_message_header *)msginfo->msg;
 
@@ -626,6 +640,14 @@ int vmbus_request_offers(void)
 
 		goto cleanup;
 	}
+
+	t = wait_for_completion_timeout(&msginfo->waitevent, 5*HZ);
+	if (t == 0) {
+		ret = -ETIMEDOUT;
+		goto cleanup;
+	}
+
+
 
 cleanup:
 	kfree(msginfo);

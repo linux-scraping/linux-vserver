@@ -55,6 +55,7 @@
 #include <trace/events/sched.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/oom.h>
+#include <linux/writeback.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -125,9 +126,9 @@ static void __exit_signal(struct task_struct *tsk)
 		 * We won't ever get here for the group leader, since it
 		 * will have been the last reference on the signal_struct.
 		 */
-		sig->utime = cputime_add(sig->utime, tsk->utime);
-		sig->stime = cputime_add(sig->stime, tsk->stime);
-		sig->gtime = cputime_add(sig->gtime, tsk->gtime);
+		sig->utime += tsk->utime;
+		sig->stime += tsk->stime;
+		sig->gtime += tsk->gtime;
 		sig->min_flt += tsk->min_flt;
 		sig->maj_flt += tsk->maj_flt;
 		sig->nvcsw += tsk->nvcsw;
@@ -685,8 +686,6 @@ static void exit_mm(struct task_struct * tsk)
 	tsk->mm = NULL;
 	up_read(&mm->mmap_sem);
 	enter_lazy_tlb(mm, current);
-	/* We don't want this task to be frozen prematurely */
-	clear_freeze_flag(tsk);
 	task_unlock(tsk);
 	mm_update_next_owner(mm);
 	mmput(mm);
@@ -704,25 +703,15 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 	__acquires(&tasklist_lock)
 {
 	struct pid_namespace *pid_ns = task_active_pid_ns(father);
-	struct vx_info *vxi = task_get_vx_info(father);
-	struct task_struct *thread = father;
-	struct task_struct *reaper;
+	struct task_struct *thread;
 
+	thread = father;
 	while_each_thread(father, thread) {
 		if (thread->flags & PF_EXITING)
 			continue;
 		if (unlikely(pid_ns->child_reaper == father))
 			pid_ns->child_reaper = thread;
-		reaper = thread;
-		goto out_put;
-	}
-
-	reaper = pid_ns->child_reaper;
-	if (vxi) {
-		BUG_ON(!vxi->vx_reaper);
-		if (vxi->vx_reaper != init_pid_ns.child_reaper &&
-		    vxi->vx_reaper != father)
-			reaper = vxi->vx_reaper;
+		return thread;
 	}
 
 	if (unlikely(pid_ns->child_reaper == father)) {
@@ -740,9 +729,7 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 		pid_ns->child_reaper = init_pid_ns.child_reaper;
 	}
 
-out_put:
-	put_vx_info(vxi);
-	return reaper;
+	return pid_ns->child_reaper;
 }
 
 /*
@@ -752,6 +739,9 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 				struct list_head *dead)
 {
 	list_move_tail(&p->sibling, &p->real_parent->children);
+
+	if (p->exit_state == EXIT_DEAD)
+		return;
 	/*
 	 * If this is a threaded reparent there is no need to
 	 * notify anyone anything has happened.
@@ -759,18 +749,8 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 	if (same_thread_group(p->real_parent, father))
 		return;
 
-	/*
-	 * We don't want people slaying init.
-	 *
-	 * Note: we do this even if it is EXIT_DEAD, wait_task_zombie()
-	 * can change ->exit_state to EXIT_ZOMBIE. If this is the final
-	 * state, do_notify_parent() was already called and ->exit_signal
-	 * doesn't matter.
-	 */
+	/* We don't want people slaying init.  */
 	p->exit_signal = SIGCHLD;
-
-	if (p->exit_state == EXIT_DEAD)
-		return;
 
 	/* If it has exited notify the new parent about this child's death. */
 	if (!p->ptrace &&
@@ -800,15 +780,10 @@ static void forget_original_parent(struct task_struct *father)
 	list_for_each_entry_safe(p, n, &father->children, sibling) {
 		struct task_struct *t = p;
 		do {
-			struct task_struct *new_parent = reaper;
-
-			if (unlikely(p == reaper))
-				new_parent = task_active_pid_ns(p)->child_reaper;
-
-			t->real_parent = new_parent;
+			t->real_parent = reaper;
 			if (t->parent == father) {
 				BUG_ON(t->ptrace);
-				t->parent = new_parent;
+				t->parent = t->real_parent;
 			}
 			if (t->pdeath_signal)
 				group_send_sig_info(t->pdeath_signal,
@@ -848,6 +823,25 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 	write_lock_irq(&tasklist_lock);
 	if (group_dead)
 		kill_orphaned_pgrp(tsk->group_leader, NULL);
+
+	/* Let father know we died
+	 *
+	 * Thread signals are configurable, but you aren't going to use
+	 * that to send signals to arbitrary processes.
+	 * That stops right now.
+	 *
+	 * If the parent exec id doesn't match the exec id we saved
+	 * when we started then we know the parent has changed security
+	 * domain.
+	 *
+	 * If our self_exec id doesn't match our parent_exec_id then
+	 * we have changed execution domain as these two values started
+	 * the same after a fork.
+	 */
+	if (thread_group_leader(tsk) && tsk->exit_signal != SIGCHLD &&
+	    (tsk->parent_exec_id != tsk->real_parent->self_exec_id ||
+	     tsk->self_exec_id != tsk->parent_exec_id))
+		tsk->exit_signal = SIGCHLD;
 
 	if (unlikely(tsk->ptrace)) {
 		int sig = thread_group_leader(tsk) &&
@@ -899,7 +893,7 @@ static void check_stack_usage(void)
 static inline void check_stack_usage(void) {}
 #endif
 
-NORET_TYPE void do_exit(long code)
+void do_exit(long code)
 {
 	struct task_struct *tsk = current;
 	int group_dead;
@@ -976,8 +970,7 @@ NORET_TYPE void do_exit(long code)
 	acct_collect(code, group_dead);
 	if (group_dead)
 		tty_audit_exit();
-	if (unlikely(tsk->audit_context))
-		audit_free(tsk);
+	audit_free(tsk);
 
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
@@ -1017,9 +1010,6 @@ NORET_TYPE void do_exit(long code)
 	 */
 	ptrace_put_breakpoints(tsk);
 
-	/* needs to stay before exit_notify() */
-	exit_vx_info_early(tsk, code);
-
 	exit_notify(tsk, group_dead);
 #ifdef CONFIG_NUMA
 	task_lock(tsk);
@@ -1050,11 +1040,9 @@ NORET_TYPE void do_exit(long code)
 
 	validate_creds_for_do_exit(tsk);
 
-	/* needs to stay after exit_notify() */
-	exit_vx_info(tsk, code);
-	exit_nx_info(tsk);
-
 	preempt_disable();
+	if (tsk->nr_dirtied)
+		__this_cpu_add(dirty_throttle_leaks, tsk->nr_dirtied);
 	exit_rcu();
 
 	/*
@@ -1072,8 +1060,13 @@ NORET_TYPE void do_exit(long code)
 	smp_mb();
 	raw_spin_unlock_wait(&tsk->pi_lock);
 
+	/* needs to stay after exit_notify() */
+	exit_vx_info(tsk, code);
+	exit_nx_info(tsk);
+
 	/* causes final put_task_struct in finish_task_switch(). */
 	tsk->state = TASK_DEAD;
+	tsk->flags |= PF_NOFREEZE;	/* tell freezer to ignore us */
 	schedule();
 	printk("bad task: %p [%lx]\n", current, current->state);
 	BUG();
@@ -1084,7 +1077,7 @@ NORET_TYPE void do_exit(long code)
 
 EXPORT_SYMBOL_GPL(do_exit);
 
-NORET_TYPE void complete_and_exit(struct completion *comp, long code)
+void complete_and_exit(struct completion *comp, long code)
 {
 	if (comp)
 		complete(comp);
@@ -1103,7 +1096,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
  * Take down every thread in the group.  This is called by fatal signals
  * as well as by sys_exit_group (below).
  */
-NORET_TYPE void
+void
 do_group_exit(int exit_code)
 {
 	struct signal_struct *sig = current->signal;
@@ -1169,28 +1162,17 @@ static int eligible_pid(struct wait_opts *wo, struct task_struct *p)
 		task_pid_type(p, wo->wo_type) == wo->wo_pid;
 }
 
-static int
-eligible_child(struct wait_opts *wo, bool ptrace, struct task_struct *p)
+static int eligible_child(struct wait_opts *wo, struct task_struct *p)
 {
 	if (!eligible_pid(wo, p))
 		return 0;
-
-	/*
-	 * Wait for all children (clone and not) if __WALL is set or
-	 * if it is traced by us.
-	 */
-	if (ptrace || (wo->wo_flags & __WALL))
-		return 1;
-
-	/*
-	 * Otherwise, wait for clone children *only* if __WCLONE is set;
-	 * otherwise, wait for non-clone children *only*.
-	 *
-	 * Note: a "clone" child here is one that reports to its parent
-	 * using a signal other than SIGCHLD, or a non-leader thread which
-	 * we can only see if it is traced by us.
-	 */
-	if ((p->exit_signal != SIGCHLD) ^ !!(wo->wo_flags & __WCLONE))
+	/* Wait for all children (clone and not) if __WALL is set;
+	 * otherwise, wait for clone children *only* if __WCLONE is
+	 * set; otherwise, wait for non-clone children *only*.  (Note:
+	 * A "clone" child here is one that reports to its parent
+	 * using a signal other than SIGCHLD.) */
+	if (((p->exit_signal != SIGCHLD) ^ !!(wo->wo_flags & __WCLONE))
+	    && !(wo->wo_flags & __WALL))
 		return 0;
 
 	return 1;
@@ -1301,19 +1283,9 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
 		spin_lock_irq(&p->real_parent->sighand->siglock);
 		psig = p->real_parent->signal;
 		sig = p->signal;
-		psig->cutime =
-			cputime_add(psig->cutime,
-			cputime_add(tgutime,
-				    sig->cutime));
-		psig->cstime =
-			cputime_add(psig->cstime,
-			cputime_add(tgstime,
-				    sig->cstime));
-		psig->cgtime =
-			cputime_add(psig->cgtime,
-			cputime_add(p->gtime,
-			cputime_add(sig->gtime,
-				    sig->cgtime)));
+		psig->cutime += tgutime + sig->cutime;
+		psig->cstime += tgstime + sig->cstime;
+		psig->cgtime += p->gtime + sig->gtime + sig->cgtime;
 		psig->cmin_flt +=
 			p->min_flt + sig->min_flt + sig->cmin_flt;
 		psig->cmaj_flt +=
@@ -1567,7 +1539,7 @@ static int wait_task_continued(struct wait_opts *wo, struct task_struct *p)
 static int wait_consider_task(struct wait_opts *wo, int ptrace,
 				struct task_struct *p)
 {
-	int ret = eligible_child(wo, ptrace, p);
+	int ret = eligible_child(wo, p);
 	if (!ret)
 		return ret;
 

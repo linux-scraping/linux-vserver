@@ -184,10 +184,8 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
 		size -= n;
 		buf += n;
 		copied += n;
-		if (!m->count) {
-			m->from = 0;
+		if (!m->count)
 			m->index++;
-		}
 		if (!size)
 			goto Done;
 	}
@@ -399,7 +397,7 @@ EXPORT_SYMBOL(seq_printf);
  *      Returns pointer past last written character in @s, or NULL in case of
  *      failure.
  */
-char *mangle_path(char *s, char *p, char *esc)
+char *mangle_path(char *s, const char *p, const char *esc)
 {
 	while (s <= p) {
 		char c = *p++;
@@ -429,7 +427,7 @@ EXPORT_SYMBOL(mangle_path);
  * return the absolute path of 'path', as represented by the
  * dentry / mnt pair in the path parameter.
  */
-int seq_path(struct seq_file *m, struct path *path, char *esc)
+int seq_path(struct seq_file *m, const struct path *path, const char *esc)
 {
 	char *buf;
 	size_t size = seq_get_buf(m, &buf);
@@ -452,8 +450,8 @@ EXPORT_SYMBOL(seq_path);
 /*
  * Same as seq_path, but relative to supplied root.
  */
-int seq_path_root(struct seq_file *m, struct path *path, struct path *root,
-		  char *esc)
+int seq_path_root(struct seq_file *m, const struct path *path,
+		  const struct path *root, const char *esc)
 {
 	char *buf;
 	size_t size = seq_get_buf(m, &buf);
@@ -482,7 +480,7 @@ int seq_path_root(struct seq_file *m, struct path *path, struct path *root,
 /*
  * returns the path of the 'dentry' from the root of its filesystem.
  */
-int seq_dentry(struct seq_file *m, struct dentry *dentry, char *esc)
+int seq_dentry(struct seq_file *m, struct dentry *dentry, const char *esc)
 {
 	char *buf;
 	size_t size = seq_get_buf(m, &buf);

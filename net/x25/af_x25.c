@@ -232,7 +232,7 @@ static int x25_device_event(struct notifier_block *this, unsigned long event,
 		return NOTIFY_DONE;
 
 	if (dev->type == ARPHRD_X25
-#if defined(CONFIG_LLC) || defined(CONFIG_LLC_MODULE)
+#if IS_ENABLED(CONFIG_LLC)
 	 || dev->type == ARPHRD_ETHER
 #endif
 	 ) {
@@ -1343,8 +1343,9 @@ static int x25_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (sx25) {
 		sx25->sx25_family = AF_X25;
 		sx25->sx25_addr   = x25->dest_addr;
-		msg->msg_namelen = sizeof(*sx25);
 	}
+
+	msg->msg_namelen = sizeof(struct sockaddr_x25);
 
 	x25_check_rbuf(sk);
 	rc = copied;
@@ -1585,11 +1586,11 @@ out_cud_release:
 	case SIOCX25CALLACCPTAPPRV: {
 		rc = -EINVAL;
 		lock_sock(sk);
-		if (sk->sk_state == TCP_CLOSE) {
-			clear_bit(X25_ACCPT_APPRV_FLAG, &x25->flags);
-			rc = 0;
-		}
+		if (sk->sk_state != TCP_CLOSE)
+			break;
+		clear_bit(X25_ACCPT_APPRV_FLAG, &x25->flags);
 		release_sock(sk);
+		rc = 0;
 		break;
 	}
 
@@ -1597,15 +1598,14 @@ out_cud_release:
 		rc = -EINVAL;
 		lock_sock(sk);
 		if (sk->sk_state != TCP_ESTABLISHED)
-			goto out_sendcallaccpt_release;
+			break;
 		/* must call accptapprv above */
 		if (test_bit(X25_ACCPT_APPRV_FLAG, &x25->flags))
-			goto out_sendcallaccpt_release;
+			break;
 		x25_write_internal(sk, X25_CALL_ACCEPTED);
 		x25->state = X25_STATE_3;
-		rc = 0;
-out_sendcallaccpt_release:
 		release_sock(sk);
+		rc = 0;
 		break;
 	}
 

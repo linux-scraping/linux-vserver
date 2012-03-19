@@ -64,7 +64,7 @@ int rt2x00usb_vendor_request(struct rt2x00_dev *rt2x00dev,
 		 * -ENODEV: Device has disappeared, no point continuing.
 		 * All other errors: Try again.
 		 */
-		else if (status == -ENODEV || status == -ENOENT) {
+		else if (status == -ENODEV) {
 			clear_bit(DEVICE_STATE_PRESENT, &rt2x00dev->flags);
 			break;
 		}
@@ -298,11 +298,21 @@ static bool rt2x00usb_kick_tx_entry(struct queue_entry *entry, void* data)
 		return false;
 
 	/*
-	 * USB devices cannot blindly pass the skb->len as the
-	 * length of the data to usb_fill_bulk_urb. Pass the skb
-	 * to the driver to determine what the length should be.
+	 * USB devices require certain padding at the end of each frame
+	 * and urb. Those paddings are not included in skbs. Pass entry
+	 * to the driver to determine what the overall length should be.
 	 */
 	length = rt2x00dev->ops->lib->get_tx_data_len(entry);
+
+	status = skb_padto(entry->skb, length);
+	if (unlikely(status)) {
+		/* TODO: report something more appropriate than IO_FAILED. */
+		WARNING(rt2x00dev, "TX SKB padding error, out of memory\n");
+		set_bit(ENTRY_DATA_IO_FAILED, &entry->flags);
+		rt2x00lib_dmadone(entry);
+
+		return false;
+	}
 
 	usb_fill_bulk_urb(entry_priv->urb, usb_dev,
 			  usb_sndbulkpipe(usb_dev, entry->queue->usb_endpoint),
@@ -311,7 +321,7 @@ static bool rt2x00usb_kick_tx_entry(struct queue_entry *entry, void* data)
 
 	status = usb_submit_urb(entry_priv->urb, GFP_ATOMIC);
 	if (status) {
-		if (status == -ENODEV || status == -ENOENT)
+		if (status == -ENODEV)
 			clear_bit(DEVICE_STATE_PRESENT, &rt2x00dev->flags);
 		set_bit(ENTRY_DATA_IO_FAILED, &entry->flags);
 		rt2x00lib_dmadone(entry);
@@ -400,7 +410,7 @@ static bool rt2x00usb_kick_rx_entry(struct queue_entry *entry, void* data)
 
 	status = usb_submit_urb(entry_priv->urb, GFP_ATOMIC);
 	if (status) {
-		if (status == -ENODEV || status == -ENOENT)
+		if (status == -ENODEV)
 			clear_bit(DEVICE_STATE_PRESENT, &rt2x00dev->flags);
 		set_bit(ENTRY_DATA_IO_FAILED, &entry->flags);
 		rt2x00lib_dmadone(entry);
@@ -426,8 +436,8 @@ void rt2x00usb_kick_queue(struct data_queue *queue)
 	case QID_RX:
 		if (!rt2x00queue_full(queue))
 			rt2x00queue_for_each_entry(queue,
-						   Q_INDEX,
 						   Q_INDEX_DONE,
+						   Q_INDEX,
 						   NULL,
 						   rt2x00usb_kick_rx_entry);
 		break;

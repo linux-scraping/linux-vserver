@@ -251,7 +251,7 @@
 #define IPR_RUNTIME_RESET				0x40000000
 
 #define IPR_IPL_INIT_MIN_STAGE_TIME			5
-#define IPR_IPL_INIT_DEFAULT_STAGE_TIME                 30
+#define IPR_IPL_INIT_DEFAULT_STAGE_TIME                 15
 #define IPR_IPL_INIT_STAGE_UNKNOWN			0x0
 #define IPR_IPL_INIT_STAGE_TRANSOP			0xB0000000
 #define IPR_IPL_INIT_STAGE_MASK				0xff000000
@@ -1387,6 +1387,7 @@ struct ipr_ioa_cfg {
 	u8 msi_received:1;
 	u8 sis64:1;
 	u8 dump_timeout:1;
+	u8 cfg_locked:1;
 
 	u8 revid;
 

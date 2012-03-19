@@ -604,7 +604,8 @@ static bool pci_has_legacy_pm_support(struct pci_dev *pci_dev)
 	 * supported as well.  Drivers are supposed to support either the
 	 * former, or the latter, but not both at the same time.
 	 */
-	WARN_ON(ret && drv->driver.pm);
+	WARN(ret && drv->driver.pm, "driver %s device %04x:%04x\n",
+		drv->name, pci_dev->vendor, pci_dev->device);
 
 	return ret;
 }
@@ -742,18 +743,6 @@ static int pci_pm_suspend_noirq(struct device *dev)
 
 	pci_pm_set_unknown_state(pci_dev);
 
-	/*
-	 * Some BIOSes from ASUS have a bug: If a USB EHCI host controller's
-	 * PCI COMMAND register isn't 0, the BIOS assumes that the controller
-	 * hasn't been quiesced and tries to turn it off.  If the controller
-	 * is already in D3, this can hang or cause memory corruption.
-	 *
-	 * Since the value of the COMMAND register doesn't matter once the
-	 * device has been suspended, we can safely set it to 0 here.
-	 */
-	if (pci_dev->class == PCI_CLASS_SERIAL_USB_EHCI)
-		pci_write_config_word(pci_dev, PCI_COMMAND, 0);
-
 	return 0;
 }
 
@@ -873,7 +862,6 @@ static int pci_pm_thaw_noirq(struct device *dev)
 		return pci_legacy_resume_early(dev);
 
 	pci_update_current_state(pci_dev, PCI_D0);
-	pci_restore_state(pci_dev);
 
 	if (drv && drv->pm && drv->pm->thaw_noirq)
 		error = drv->pm->thaw_noirq(dev);
@@ -952,13 +940,6 @@ static int pci_pm_poweroff_noirq(struct device *dev)
 
 	if (!pci_dev->state_saved && !pci_is_bridge(pci_dev))
 		pci_prepare_to_sleep(pci_dev);
-
-	/*
-	 * The reason for doing this here is the same as for the analogous code
-	 * in pci_pm_suspend_noirq().
-	 */
-	if (pci_dev->class == PCI_CLASS_SERIAL_USB_EHCI)
-		pci_write_config_word(pci_dev, PCI_COMMAND, 0);
 
 	return 0;
 }

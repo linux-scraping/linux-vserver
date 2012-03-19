@@ -41,12 +41,8 @@
 #include <scsi/libfc.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_fabric_configfs.h>
-#include <target/target_core_fabric_lib.h>
-#include <target/target_core_device.h>
-#include <target/target_core_tpg.h>
 #include <target/target_core_configfs.h>
 #include <target/configfs_macros.h>
 
@@ -304,7 +300,6 @@ static struct se_portal_group *ft_add_tpg(
 {
 	struct ft_lport_acl *lacl;
 	struct ft_tpg *tpg;
-	struct workqueue_struct *wq;
 	unsigned long index;
 	int ret;
 
@@ -326,20 +321,18 @@ static struct se_portal_group *ft_add_tpg(
 	tpg->lport_acl = lacl;
 	INIT_LIST_HEAD(&tpg->lun_list);
 
-	wq = alloc_workqueue("tcm_fc", 0, 1);
-	if (!wq) {
+	ret = core_tpg_register(&ft_configfs->tf_ops, wwn, &tpg->se_tpg,
+				tpg, TRANSPORT_TPG_TYPE_NORMAL);
+	if (ret < 0) {
 		kfree(tpg);
 		return NULL;
 	}
 
-	ret = core_tpg_register(&ft_configfs->tf_ops, wwn, &tpg->se_tpg,
-				tpg, TRANSPORT_TPG_TYPE_NORMAL);
-	if (ret < 0) {
-		destroy_workqueue(wq);
+	tpg->workqueue = alloc_workqueue("tcm_fc", 0, 1);
+	if (!tpg->workqueue) {
 		kfree(tpg);
 		return NULL;
 	}
-	tpg->workqueue = wq;
 
 	mutex_lock(&ft_lport_lock);
 	list_add_tail(&tpg->list, &lacl->tpg_list);

@@ -419,10 +419,6 @@ static int net1080_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	struct nc_trailer	*trailer;
 	u16			hdr_len, packet_len;
 
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	if (!(skb->len & 0x01)) {
 #ifdef DEBUG
 		struct net_device	*net = dev->net;
@@ -593,17 +589,7 @@ static struct usb_driver net1080_driver = {
 	.resume =	usbnet_resume,
 };
 
-static int __init net1080_init(void)
-{
- 	return usb_register(&net1080_driver);
-}
-module_init(net1080_init);
-
-static void __exit net1080_exit(void)
-{
- 	usb_deregister(&net1080_driver);
-}
-module_exit(net1080_exit);
+module_usb_driver(net1080_driver);
 
 MODULE_AUTHOR("David Brownell");
 MODULE_DESCRIPTION("NetChip 1080 based USB Host-to-Host Links");

@@ -515,12 +515,12 @@ static noinline int hiddev_ioctl_usage(struct hiddev *hiddev, unsigned int cmd, 
 					goto inval;
 			} else if (uref->usage_index >= field->report_count)
 				goto inval;
-		}
 
-		if ((cmd == HIDIOCGUSAGES || cmd == HIDIOCSUSAGES) &&
-		    (uref_multi->num_values > HID_MAX_MULTI_USAGES ||
-		     uref->usage_index + uref_multi->num_values > field->report_count))
-			goto inval;
+			else if ((cmd == HIDIOCGUSAGES || cmd == HIDIOCSUSAGES) &&
+				 (uref_multi->num_values > HID_MAX_MULTI_USAGES ||
+				  uref->usage_index + uref_multi->num_values > field->report_count))
+				goto inval;
+		}
 
 		switch (cmd) {
 		case HIDIOCGUSAGE:
@@ -859,7 +859,7 @@ static const struct file_operations hiddev_fops = {
 	.llseek		= noop_llseek,
 };
 
-static char *hiddev_devnode(struct device *dev, mode_t *mode)
+static char *hiddev_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "usb/%s", dev_name(dev));
 }
@@ -922,10 +922,10 @@ void hiddev_disconnect(struct hid_device *hid)
 	struct hiddev *hiddev = hid->hiddev;
 	struct usbhid_device *usbhid = hid->driver_data;
 
+	usb_deregister_dev(usbhid->intf, &hiddev_class);
+
 	mutex_lock(&hiddev->existancelock);
 	hiddev->exist = 0;
-
-	usb_deregister_dev(usbhid->intf, &hiddev_class);
 
 	if (hiddev->open) {
 		mutex_unlock(&hiddev->existancelock);

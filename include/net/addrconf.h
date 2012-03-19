@@ -82,9 +82,6 @@ extern int			ipv6_dev_get_saddr(struct net *net,
 					       unsigned int srcprefs,
 					       struct in6_addr *saddr,
 					       struct nx_info *nxi);
-extern int			__ipv6_get_lladdr(struct inet6_dev *idev,
-						  struct in6_addr *addr,
-						  unsigned char banned_flags);
 extern int			ipv6_get_lladdr(struct net_device *dev,
 						struct in6_addr *addr,
 						unsigned char banned_flags);
@@ -155,7 +152,8 @@ extern int ipv6_chk_mcast_addr(struct net_device *dev,
 			       const struct in6_addr *src_addr);
 extern int ipv6_is_mld(struct sk_buff *skb, int nexthdr);
 
-extern void addrconf_prefix_rcv(struct net_device *dev, u8 *opt, int len);
+extern void addrconf_prefix_rcv(struct net_device *dev,
+				u8 *opt, int len, bool sllao);
 
 /*
  *	anycast prototypes (anycast.c)

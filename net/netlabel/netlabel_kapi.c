@@ -147,7 +147,7 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 				goto cfg_unlbl_map_add_failure;
 			break;
 			}
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 		case AF_INET6: {
 			const struct in6_addr *addr6 = addr;
 			const struct in6_addr *mask6 = mask;
@@ -155,12 +155,12 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 			if (map6 == NULL)
 				goto cfg_unlbl_map_add_failure;
 			map6->type = NETLBL_NLTYPE_UNLABELED;
-			ipv6_addr_copy(&map6->list.addr, addr6);
+			map6->list.addr = *addr6;
 			map6->list.addr.s6_addr32[0] &= mask6->s6_addr32[0];
 			map6->list.addr.s6_addr32[1] &= mask6->s6_addr32[1];
 			map6->list.addr.s6_addr32[2] &= mask6->s6_addr32[2];
 			map6->list.addr.s6_addr32[3] &= mask6->s6_addr32[3];
-			ipv6_addr_copy(&map6->list.mask, mask6);
+			map6->list.mask = *mask6;
 			map6->list.valid = 1;
 			ret_val = netlbl_af6list_add(&map6->list,
 						     &addrmap->list6);
@@ -227,7 +227,7 @@ int netlbl_cfg_unlbl_static_add(struct net *net,
 	case AF_INET:
 		addr_len = sizeof(struct in_addr);
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		addr_len = sizeof(struct in6_addr);
 		break;
@@ -270,7 +270,7 @@ int netlbl_cfg_unlbl_static_del(struct net *net,
 	case AF_INET:
 		addr_len = sizeof(struct in_addr);
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		addr_len = sizeof(struct in6_addr);
 		break;
@@ -523,7 +523,7 @@ int netlbl_secattr_catmap_walk_rng(struct netlbl_lsm_secattr_catmap *catmap,
 
 /**
  * netlbl_secattr_catmap_setbit - Set a bit in a LSM secattr catmap
- * @catmap: pointer to the category bitmap
+ * @catmap: the category bitmap
  * @bit: the bit to set
  * @flags: memory allocation flags
  *
@@ -532,25 +532,18 @@ int netlbl_secattr_catmap_walk_rng(struct netlbl_lsm_secattr_catmap *catmap,
  * negative values on failure.
  *
  */
-int netlbl_secattr_catmap_setbit(struct netlbl_lsm_secattr_catmap **catmap,
+int netlbl_secattr_catmap_setbit(struct netlbl_lsm_secattr_catmap *catmap,
 				 u32 bit,
 				 gfp_t flags)
 {
-	struct netlbl_lsm_secattr_catmap *iter = *catmap;
+	struct netlbl_lsm_secattr_catmap *iter = catmap;
 	u32 node_bit;
 	u32 node_idx;
 
 	while (iter->next != NULL &&
 	       bit >= (iter->startbit + NETLBL_CATMAP_SIZE))
 		iter = iter->next;
-	if (bit < iter->startbit) {
-		iter = netlbl_secattr_catmap_alloc(flags);
-		if (iter == NULL)
-			return -ENOMEM;
-		iter->next = *catmap;
-		iter->startbit = bit & ~(NETLBL_CATMAP_SIZE - 1);
-		*catmap = iter;
-	} else if (bit >= (iter->startbit + NETLBL_CATMAP_SIZE)) {
+	if (bit >= (iter->startbit + NETLBL_CATMAP_SIZE)) {
 		iter->next = netlbl_secattr_catmap_alloc(flags);
 		if (iter->next == NULL)
 			return -ENOMEM;
@@ -568,7 +561,7 @@ int netlbl_secattr_catmap_setbit(struct netlbl_lsm_secattr_catmap **catmap,
 
 /**
  * netlbl_secattr_catmap_setrng - Set a range of bits in a LSM secattr catmap
- * @catmap: pointer to the category bitmap
+ * @catmap: the category bitmap
  * @start: the starting bit
  * @end: the last bit in the string
  * @flags: memory allocation flags
@@ -578,16 +571,15 @@ int netlbl_secattr_catmap_setbit(struct netlbl_lsm_secattr_catmap **catmap,
  * on success, negative values on failure.
  *
  */
-int netlbl_secattr_catmap_setrng(struct netlbl_lsm_secattr_catmap **catmap,
+int netlbl_secattr_catmap_setrng(struct netlbl_lsm_secattr_catmap *catmap,
 				 u32 start,
 				 u32 end,
 				 gfp_t flags)
 {
 	int ret_val = 0;
-	struct netlbl_lsm_secattr_catmap *iter = *catmap;
+	struct netlbl_lsm_secattr_catmap *iter = catmap;
 	u32 iter_max_spot;
 	u32 spot;
-	u32 orig_spot = iter->startbit;
 
 	/* XXX - This could probably be made a bit faster by combining writes
 	 * to the catmap instead of setting a single bit each time, but for
@@ -605,9 +597,7 @@ int netlbl_secattr_catmap_setrng(struct netlbl_lsm_secattr_catmap **catmap,
 			iter = iter->next;
 			iter_max_spot = iter->startbit + NETLBL_CATMAP_SIZE;
 		}
-		ret_val = netlbl_secattr_catmap_setbit(&iter, spot, flags);
-		if (iter->startbit < orig_spot)
-			*catmap = iter;
+		ret_val = netlbl_secattr_catmap_setbit(iter, spot, GFP_ATOMIC);
 	}
 
 	return ret_val;
@@ -683,7 +673,7 @@ int netlbl_sock_setattr(struct sock *sk,
 			ret_val = -ENOENT;
 		}
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -710,11 +700,7 @@ socket_setattr_return:
  */
 void netlbl_sock_delattr(struct sock *sk)
 {
-	switch (sk->sk_family) {
-	case AF_INET:
-		cipso_v4_sock_delattr(sk);
-		break;
-	}
+	cipso_v4_sock_delattr(sk);
 }
 
 /**
@@ -738,7 +724,7 @@ int netlbl_sock_getattr(struct sock *sk,
 	case AF_INET:
 		ret_val = cipso_v4_sock_getattr(sk, secattr);
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		ret_val = -ENOMSG;
 		break;
@@ -796,7 +782,7 @@ int netlbl_conn_setattr(struct sock *sk,
 			ret_val = -ENOENT;
 		}
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -867,7 +853,7 @@ int netlbl_req_setattr(struct request_sock *req,
 			ret_val = -ENOENT;
 		}
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -893,11 +879,7 @@ req_setattr_return:
 */
 void netlbl_req_delattr(struct request_sock *req)
 {
-	switch (req->rsk_ops->family) {
-	case AF_INET:
-		cipso_v4_req_delattr(req);
-		break;
-	}
+	cipso_v4_req_delattr(req);
 }
 
 /**
@@ -944,7 +926,7 @@ int netlbl_skbuff_setattr(struct sk_buff *skb,
 			ret_val = -ENOENT;
 		}
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -983,7 +965,7 @@ int netlbl_skbuff_getattr(const struct sk_buff *skb,
 		    cipso_v4_skbuff_getattr(skb, secattr) == 0)
 			return 0;
 		break;
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
+#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		break;
 #endif /* IPv6 */

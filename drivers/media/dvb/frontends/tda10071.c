@@ -636,15 +636,13 @@ error:
 	return ret;
 }
 
-static int tda10071_set_frontend(struct dvb_frontend *fe,
-	struct dvb_frontend_parameters *params)
+static int tda10071_set_frontend(struct dvb_frontend *fe)
 {
 	struct tda10071_priv *priv = fe->demodulator_priv;
 	struct tda10071_cmd cmd;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	int ret, i;
 	u8 mode, rolloff, pilot, inversion, div;
-	fe_modulation_t modulation;
 
 	dbg("%s: delivery_system=%d modulation=%d frequency=%d " \
 		"symbol_rate=%d inversion=%d pilot=%d rolloff=%d", __func__,
@@ -678,13 +676,10 @@ static int tda10071_set_frontend(struct dvb_frontend *fe,
 
 	switch (c->delivery_system) {
 	case SYS_DVBS:
-		modulation = QPSK;
 		rolloff = 0;
 		pilot = 2;
 		break;
 	case SYS_DVBS2:
-		modulation = c->modulation;
-
 		switch (c->rolloff) {
 		case ROLLOFF_20:
 			rolloff = 2;
@@ -726,7 +721,7 @@ static int tda10071_set_frontend(struct dvb_frontend *fe,
 
 	for (i = 0, mode = 0xff; i < ARRAY_SIZE(TDA10071_MODCOD); i++) {
 		if (c->delivery_system == TDA10071_MODCOD[i].delivery_system &&
-			modulation == TDA10071_MODCOD[i].modulation &&
+			c->modulation == TDA10071_MODCOD[i].modulation &&
 			c->fec_inner == TDA10071_MODCOD[i].fec) {
 			mode = TDA10071_MODCOD[i].val;
 			dbg("%s: mode found=%02x", __func__, mode);
@@ -781,8 +776,7 @@ error:
 	return ret;
 }
 
-static int tda10071_get_frontend(struct dvb_frontend *fe,
-	struct dvb_frontend_parameters *p)
+static int tda10071_get_frontend(struct dvb_frontend *fe)
 {
 	struct tda10071_priv *priv = fe->demodulator_priv;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
@@ -1221,9 +1215,9 @@ error:
 EXPORT_SYMBOL(tda10071_attach);
 
 static struct dvb_frontend_ops tda10071_ops = {
+	.delsys = { SYS_DVBT, SYS_DVBT2 },
 	.info = {
 		.name = "NXP TDA10071",
-		.type = FE_QPSK,
 		.frequency_min = 950000,
 		.frequency_max = 2150000,
 		.frequency_tolerance = 5000,

@@ -785,13 +785,7 @@ static void scsi_done(struct scsi_cmnd *cmd)
 /* Move this to a header if it becomes more generally useful */
 static struct scsi_driver *scsi_cmd_to_driver(struct scsi_cmnd *cmd)
 {
-	struct scsi_driver **sdp;
-
-	sdp = (struct scsi_driver **)cmd->request->rq_disk->private_data;
-	if (!sdp)
-		return NULL;
-
-	return *sdp;
+	return *(struct scsi_driver **)cmd->request->rq_disk->private_data;
 }
 
 /**

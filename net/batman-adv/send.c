@@ -375,9 +375,6 @@ void purge_outstanding_packets(struct bat_priv *bat_priv,
 
 		if (pending) {
 			hlist_del(&forw_packet->list);
-			if (!forw_packet->own)
-				atomic_inc(&bat_priv->bcast_queue_left);
-
 			forw_packet_free(forw_packet);
 		}
 	}
@@ -407,9 +404,6 @@ void purge_outstanding_packets(struct bat_priv *bat_priv,
 
 		if (pending) {
 			hlist_del(&forw_packet->list);
-			if (!forw_packet->own)
-				atomic_inc(&bat_priv->batman_queue_left);
-
 			forw_packet_free(forw_packet);
 		}
 	}

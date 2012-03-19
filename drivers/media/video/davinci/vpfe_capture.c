@@ -2002,7 +2002,6 @@ static __init int vpfe_probe(struct platform_device *pdev)
 			v4l2_info(&vpfe_dev->v4l2_dev,
 				  "v4l2 sub device %s register fails\n",
 				  sdinfo->name);
-			ret = -ENXIO;
 			goto probe_sd_out;
 		}
 	}
@@ -2077,20 +2076,4 @@ static struct platform_driver vpfe_driver = {
 	.remove = __devexit_p(vpfe_remove),
 };
 
-static __init int vpfe_init(void)
-{
-	printk(KERN_NOTICE "vpfe_init\n");
-	/* Register driver to the kernel */
-	return platform_driver_register(&vpfe_driver);
-}
-
-/*
- * vpfe_cleanup : This function un-registers device driver
- */
-static void vpfe_cleanup(void)
-{
-	platform_driver_unregister(&vpfe_driver);
-}
-
-module_init(vpfe_init);
-module_exit(vpfe_cleanup);
+module_platform_driver(vpfe_driver);

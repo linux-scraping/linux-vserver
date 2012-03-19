@@ -127,6 +127,7 @@ struct gianfar_ptp_registers {
 
 #define DRIVER		"gianfar_ptp"
 #define DEFAULT_CKSEL	1
+#define N_ALARM		1 /* first alarm is used internally to reset fipers */
 #define N_EXT_TS	2
 #define REG_SIZE	sizeof(struct gianfar_ptp_registers)
 
@@ -409,7 +410,7 @@ static struct ptp_clock_info ptp_gianfar_caps = {
 	.owner		= THIS_MODULE,
 	.name		= "gianfar clock",
 	.max_adj	= 512000,
-	.n_alarm	= 0,
+	.n_alarm	= N_ALARM,
 	.n_ext_ts	= N_EXT_TS,
 	.n_per_out	= 0,
 	.pps		= 1,
@@ -520,7 +521,6 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 	return 0;
 
 no_clock:
-	iounmap(etsects->regs);
 no_ioremap:
 	release_resource(etsects->rsrc);
 no_resource:
@@ -562,21 +562,7 @@ static struct platform_driver gianfar_ptp_driver = {
 	.remove      = gianfar_ptp_remove,
 };
 
-/* module operations */
-
-static int __init ptp_gianfar_init(void)
-{
-	return platform_driver_register(&gianfar_ptp_driver);
-}
-
-module_init(ptp_gianfar_init);
-
-static void __exit ptp_gianfar_exit(void)
-{
-	platform_driver_unregister(&gianfar_ptp_driver);
-}
-
-module_exit(ptp_gianfar_exit);
+module_platform_driver(gianfar_ptp_driver);
 
 MODULE_AUTHOR("Richard Cochran <richard.cochran@omicron.at>");
 MODULE_DESCRIPTION("PTP clock using the eTSEC");

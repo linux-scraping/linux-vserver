@@ -1018,7 +1018,7 @@ int exofs_setattr(struct dentry *dentry, struct iattr *iattr)
 	if (unlikely(error))
 		return error;
 
-	error = setattr_prepare(dentry, iattr);
+	error = inode_change_ok(inode, iattr);
 	if (unlikely(error))
 		return error;
 
@@ -1276,7 +1276,7 @@ static void create_done(struct ore_io_state *ios, void *p)
 /*
  * Set up a new inode and create an object for it on the OSD
  */
-struct inode *exofs_new_inode(struct inode *dir, int mode)
+struct inode *exofs_new_inode(struct inode *dir, umode_t mode)
 {
 	struct super_block *sb = dir->i_sb;
 	struct exofs_sb_info *sbi = sb->s_fs_info;

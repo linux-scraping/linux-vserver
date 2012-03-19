@@ -31,7 +31,6 @@
 
 #include <linux/ip.h>
 #include <linux/module.h>
-#include <linux/udp.h>
 #include "wifi.h"
 #include "rc.h"
 #include "base.h"
@@ -346,9 +345,9 @@ static void _rtl_init_mac80211(struct ieee80211_hw *hw)
 	if (is_valid_ether_addr(rtlefuse->dev_addr)) {
 		SET_IEEE80211_PERM_ADDR(hw, rtlefuse->dev_addr);
 	} else {
-		u8 rtlmac[] = { 0x00, 0xe0, 0x4c, 0x81, 0x92, 0x00 };
-		get_random_bytes((rtlmac + (ETH_ALEN - 1)), 1);
-		SET_IEEE80211_PERM_ADDR(hw, rtlmac);
+		u8 rtlmac1[] = { 0x00, 0xe0, 0x4c, 0x81, 0x92, 0x00 };
+		get_random_bytes((rtlmac1 + (ETH_ALEN - 1)), 1);
+		SET_IEEE80211_PERM_ADDR(hw, rtlmac1);
 	}
 
 }
@@ -397,7 +396,7 @@ void rtl_init_rfkill(struct ieee80211_hw *hw)
 	u8 valid = 0;
 
 	/*set init state to on */
-	rtlpriv->rfkill.rfkill_state = 1;
+	rtlpriv->rfkill.rfkill_state = true;
 	wiphy_rfkill_set_hw_state(hw->wiphy, 0);
 
 	radio_state = rtlpriv->cfg->ops->radio_onoff_checking(hw, &valid);
@@ -449,12 +448,12 @@ int rtl_init_core(struct ieee80211_hw *hw)
 
 	/* <4> locks */
 	mutex_init(&rtlpriv->locks.conf_mutex);
+	mutex_init(&rtlpriv->locks.ps_mutex);
 	spin_lock_init(&rtlpriv->locks.ips_lock);
 	spin_lock_init(&rtlpriv->locks.irq_th_lock);
 	spin_lock_init(&rtlpriv->locks.h2c_lock);
 	spin_lock_init(&rtlpriv->locks.rf_ps_lock);
 	spin_lock_init(&rtlpriv->locks.rf_lock);
-	spin_lock_init(&rtlpriv->locks.lps_lock);
 	spin_lock_init(&rtlpriv->locks.waitq_lock);
 	spin_lock_init(&rtlpriv->locks.cck_and_rw_pagea_lock);
 
@@ -957,51 +956,60 @@ u8 rtl_is_special_data(struct ieee80211_hw *hw, struct sk_buff *skb, u8 is_tx)
 	if (!ieee80211_is_data(fc))
 		return false;
 
-	ip = (const struct iphdr *)(skb->data + mac_hdr_len +
-				    SNAP_SIZE + PROTOC_TYPE_SIZE);
-	ether_type = be16_to_cpup((__be16 *)
-				  (skb->data + mac_hdr_len + SNAP_SIZE));
 
-	switch (ether_type) {
-	case ETH_P_IP: {
-		struct udphdr *udp;
-		u16 src;
-		u16 dst;
+	ip = (struct iphdr *)((u8 *) skb->data + mac_hdr_len +
+			      SNAP_SIZE + PROTOC_TYPE_SIZE);
+	ether_type = *(u16 *) ((u8 *) skb->data + mac_hdr_len + SNAP_SIZE);
+	/*	ether_type = ntohs(ether_type); */
 
-		if (ip->protocol != IPPROTO_UDP)
-			return false;
-		udp = (struct udphdr *)((u8 *)ip + (ip->ihl << 2));
-		src = be16_to_cpu(udp->source);
-		dst = be16_to_cpu(udp->dest);
+	if (ETH_P_IP == ether_type) {
+		if (IPPROTO_UDP == ip->protocol) {
+			struct udphdr *udp = (struct udphdr *)((u8 *) ip +
+							       (ip->ihl << 2));
+			if (((((u8 *) udp)[1] == 68) &&
+			     (((u8 *) udp)[3] == 67)) ||
+			    ((((u8 *) udp)[1] == 67) &&
+			     (((u8 *) udp)[3] == 68))) {
+				/*
+				 * 68 : UDP BOOTP client
+				 * 67 : UDP BOOTP server
+				 */
+				RT_TRACE(rtlpriv, (COMP_SEND | COMP_RECV),
+					 DBG_DMESG, ("dhcp %s !!\n",
+						     (is_tx) ? "Tx" : "Rx"));
 
-		/* If this case involves port 68 (UDP BOOTP client) connecting
-		 * with port 67 (UDP BOOTP server), then return true so that
-		 * the lowest speed is used.
-		 */
-		if (!((src == 68 && dst == 67) || (src == 67 && dst == 68)))
-			return false;
+				if (is_tx) {
+					rtl_lps_leave(hw);
+					ppsc->last_delaylps_stamp_jiffies =
+					    jiffies;
+				}
 
+				return true;
+			}
+		}
+	} else if (ETH_P_ARP == ether_type) {
+		if (is_tx) {
+			rtl_lps_leave(hw);
+			ppsc->last_delaylps_stamp_jiffies = jiffies;
+		}
+
+		return true;
+	} else if (ETH_P_PAE == ether_type) {
 		RT_TRACE(rtlpriv, (COMP_SEND | COMP_RECV), DBG_DMESG,
-			 ("dhcp %s !!\n", is_tx ? "Tx" : "Rx"));
-		break;
+			 ("802.1X %s EAPOL pkt!!\n", (is_tx) ? "Tx" : "Rx"));
+
+		if (is_tx) {
+			rtl_lps_leave(hw);
+			ppsc->last_delaylps_stamp_jiffies = jiffies;
+		}
+
+		return true;
+	} else if (ETH_P_IPV6 == ether_type) {
+		/* IPv6 */
+		return true;
 	}
-	case ETH_P_ARP:
-		break;
-	case ETH_P_PAE:
-		RT_TRACE(rtlpriv, (COMP_SEND | COMP_RECV), DBG_DMESG,
-			 ("802.1X %s EAPOL pkt!!\n", is_tx ? "Tx" : "Rx"));
-		break;
-	case ETH_P_IPV6:
-		/* TODO: Is this right? */
-		return false;
-	default:
-		return false;
-	}
-	if (is_tx) {
-		rtl_lps_leave(hw);
-		ppsc->last_delaylps_stamp_jiffies = jiffies;
-	}
-	return true;
+
+	return false;
 }
 
 /*********************************************************

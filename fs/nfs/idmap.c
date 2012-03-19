@@ -38,6 +38,89 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/nfs_idmap.h>
+#include <linux/nfs_fs.h>
+
+/**
+ * nfs_fattr_init_names - initialise the nfs_fattr owner_name/group_name fields
+ * @fattr: fully initialised struct nfs_fattr
+ * @owner_name: owner name string cache
+ * @group_name: group name string cache
+ */
+void nfs_fattr_init_names(struct nfs_fattr *fattr,
+		struct nfs4_string *owner_name,
+		struct nfs4_string *group_name)
+{
+	fattr->owner_name = owner_name;
+	fattr->group_name = group_name;
+}
+
+static void nfs_fattr_free_owner_name(struct nfs_fattr *fattr)
+{
+	fattr->valid &= ~NFS_ATTR_FATTR_OWNER_NAME;
+	kfree(fattr->owner_name->data);
+}
+
+static void nfs_fattr_free_group_name(struct nfs_fattr *fattr)
+{
+	fattr->valid &= ~NFS_ATTR_FATTR_GROUP_NAME;
+	kfree(fattr->group_name->data);
+}
+
+static bool nfs_fattr_map_owner_name(struct nfs_server *server, struct nfs_fattr *fattr)
+{
+	struct nfs4_string *owner = fattr->owner_name;
+	__u32 uid;
+
+	if (!(fattr->valid & NFS_ATTR_FATTR_OWNER_NAME))
+		return false;
+	if (nfs_map_name_to_uid(server, owner->data, owner->len, &uid) == 0) {
+		fattr->uid = uid;
+		fattr->valid |= NFS_ATTR_FATTR_OWNER;
+	}
+	return true;
+}
+
+static bool nfs_fattr_map_group_name(struct nfs_server *server, struct nfs_fattr *fattr)
+{
+	struct nfs4_string *group = fattr->group_name;
+	__u32 gid;
+
+	if (!(fattr->valid & NFS_ATTR_FATTR_GROUP_NAME))
+		return false;
+	if (nfs_map_group_to_gid(server, group->data, group->len, &gid) == 0) {
+		fattr->gid = gid;
+		fattr->valid |= NFS_ATTR_FATTR_GROUP;
+	}
+	return true;
+}
+
+/**
+ * nfs_fattr_free_names - free up the NFSv4 owner and group strings
+ * @fattr: a fully initialised nfs_fattr structure
+ */
+void nfs_fattr_free_names(struct nfs_fattr *fattr)
+{
+	if (fattr->valid & NFS_ATTR_FATTR_OWNER_NAME)
+		nfs_fattr_free_owner_name(fattr);
+	if (fattr->valid & NFS_ATTR_FATTR_GROUP_NAME)
+		nfs_fattr_free_group_name(fattr);
+}
+
+/**
+ * nfs_fattr_map_and_free_names - map owner/group strings into uid/gid and free
+ * @server: pointer to the filesystem nfs_server structure
+ * @fattr: a fully initialised nfs_fattr structure
+ *
+ * This helper maps the cached NFSv4 owner/group strings in fattr into
+ * their numeric uid/gid equivalents, and then frees the cached strings.
+ */
+void nfs_fattr_map_and_free_names(struct nfs_server *server, struct nfs_fattr *fattr)
+{
+	if (nfs_fattr_map_owner_name(server, fattr))
+		nfs_fattr_free_owner_name(fattr);
+	if (nfs_fattr_map_group_name(server, fattr))
+		nfs_fattr_free_group_name(fattr);
+}
 
 static int nfs_map_string_to_numeric(const char *name, size_t namelen, __u32 *res)
 {
@@ -318,12 +401,12 @@ struct idmap_hashent {
 	unsigned long		ih_expires;
 	__u32			ih_id;
 	size_t			ih_namelen;
-	const char		*ih_name;
+	char			ih_name[IDMAP_NAMESZ];
 };
 
 struct idmap_hashtable {
 	__u8			h_type;
-	struct idmap_hashent	*h_entries;
+	struct idmap_hashent	h_entries[IDMAP_HASH_SZ];
 };
 
 struct idmap {
@@ -378,28 +461,6 @@ nfs_idmap_new(struct nfs_client *clp)
 	return 0;
 }
 
-static void
-idmap_alloc_hashtable(struct idmap_hashtable *h)
-{
-	if (h->h_entries != NULL)
-		return;
-	h->h_entries = kcalloc(IDMAP_HASH_SZ,
-			sizeof(*h->h_entries),
-			GFP_KERNEL);
-}
-
-static void
-idmap_free_hashtable(struct idmap_hashtable *h)
-{
-	int i;
-
-	if (h->h_entries == NULL)
-		return;
-	for (i = 0; i < IDMAP_HASH_SZ; i++)
-		kfree(h->h_entries[i].ih_name);
-	kfree(h->h_entries);
-}
-
 void
 nfs_idmap_delete(struct nfs_client *clp)
 {
@@ -409,8 +470,6 @@ nfs_idmap_delete(struct nfs_client *clp)
 		return;
 	rpc_unlink(idmap->idmap_dentry);
 	clp->cl_idmap = NULL;
-	idmap_free_hashtable(&idmap->idmap_user_hash);
-	idmap_free_hashtable(&idmap->idmap_group_hash);
 	kfree(idmap);
 }
 
@@ -420,8 +479,6 @@ nfs_idmap_delete(struct nfs_client *clp)
 static inline struct idmap_hashent *
 idmap_name_hash(struct idmap_hashtable* h, const char *name, size_t len)
 {
-	if (h->h_entries == NULL)
-		return NULL;
 	return &h->h_entries[fnvhash32(name, len) % IDMAP_HASH_SZ];
 }
 
@@ -430,8 +487,6 @@ idmap_lookup_name(struct idmap_hashtable *h, const char *name, size_t len)
 {
 	struct idmap_hashent *he = idmap_name_hash(h, name, len);
 
-	if (he == NULL)
-		return NULL;
 	if (he->ih_namelen != len || memcmp(he->ih_name, name, len) != 0)
 		return NULL;
 	if (time_after(jiffies, he->ih_expires))
@@ -442,8 +497,6 @@ idmap_lookup_name(struct idmap_hashtable *h, const char *name, size_t len)
 static inline struct idmap_hashent *
 idmap_id_hash(struct idmap_hashtable* h, __u32 id)
 {
-	if (h->h_entries == NULL)
-		return NULL;
 	return &h->h_entries[fnvhash32(&id, sizeof(id)) % IDMAP_HASH_SZ];
 }
 
@@ -451,9 +504,6 @@ static struct idmap_hashent *
 idmap_lookup_id(struct idmap_hashtable *h, __u32 id)
 {
 	struct idmap_hashent *he = idmap_id_hash(h, id);
-
-	if (he == NULL)
-		return NULL;
 	if (he->ih_id != id || he->ih_namelen == 0)
 		return NULL;
 	if (time_after(jiffies, he->ih_expires))
@@ -469,14 +519,12 @@ idmap_lookup_id(struct idmap_hashtable *h, __u32 id)
 static inline struct idmap_hashent *
 idmap_alloc_name(struct idmap_hashtable *h, char *name, size_t len)
 {
-	idmap_alloc_hashtable(h);
 	return idmap_name_hash(h, name, len);
 }
 
 static inline struct idmap_hashent *
 idmap_alloc_id(struct idmap_hashtable *h, __u32 id)
 {
-	idmap_alloc_hashtable(h);
 	return idmap_id_hash(h, id);
 }
 
@@ -484,14 +532,9 @@ static void
 idmap_update_entry(struct idmap_hashent *he, const char *name,
 		size_t namelen, __u32 id)
 {
-	char *str = kmalloc(namelen + 1, GFP_KERNEL);
-	if (str == NULL)
-		return;
-	kfree(he->ih_name);
 	he->ih_id = id;
-	memcpy(str, name, namelen);
-	str[namelen] = '\0';
-	he->ih_name = str;
+	memcpy(he->ih_name, name, namelen);
+	he->ih_name[namelen] = '\0';
 	he->ih_namelen = namelen;
 	he->ih_expires = jiffies + nfs_idmap_cache_timeout;
 }

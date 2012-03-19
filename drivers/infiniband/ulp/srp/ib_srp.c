@@ -310,18 +310,9 @@ static void srp_path_rec_completion(int status,
 
 static int srp_lookup_path(struct srp_target_port *target)
 {
-	int ret = -ENODEV;
-
 	target->path.numb_path = 1;
 
 	init_completion(&target->done);
-
-	/*
-	 * Avoid that the SCSI host can be removed by srp_remove_target()
-	 * before srp_path_rec_completion() is called.
-	 */
-	if (!scsi_host_get(target->scsi_host))
-		goto out;
 
 	target->path_query_id = ib_sa_path_rec_get(&srp_sa_client,
 						   target->srp_host->srp_dev->dev,
@@ -336,22 +327,16 @@ static int srp_lookup_path(struct srp_target_port *target)
 						   GFP_KERNEL,
 						   srp_path_rec_completion,
 						   target, &target->path_query);
-	ret = target->path_query_id;
-	if (ret < 0)
-		goto put;
+	if (target->path_query_id < 0)
+		return target->path_query_id;
 
 	wait_for_completion(&target->done);
 
-	ret = target->status;
-	if (ret < 0)
+	if (target->status < 0)
 		shost_printk(KERN_WARNING, target->scsi_host,
 			     PFX "Path record query failed\n");
 
-put:
-	scsi_host_put(target->scsi_host);
-
-out:
-	return ret;
+	return target->status;
 }
 
 static int srp_send_req(struct srp_target_port *target)
@@ -583,62 +568,24 @@ static void srp_unmap_data(struct scsi_cmnd *scmnd,
 			scmnd->sc_data_direction);
 }
 
-/**
- * srp_claim_req - Take ownership of the scmnd associated with a request.
- * @target: SRP target port.
- * @req: SRP request.
- * @scmnd: If NULL, take ownership of @req->scmnd. If not NULL, only take
- *         ownership of @req->scmnd if it equals @scmnd.
- *
- * Return value:
- * Either NULL or a pointer to the SCSI command the caller became owner of.
- */
-static struct scsi_cmnd *srp_claim_req(struct srp_target_port *target,
-				       struct srp_request *req,
-				       struct scsi_cmnd *scmnd)
+static void srp_remove_req(struct srp_target_port *target,
+			   struct srp_request *req, s32 req_lim_delta)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&target->lock, flags);
-	if (!scmnd) {
-		scmnd = req->scmnd;
-		req->scmnd = NULL;
-	} else if (req->scmnd == scmnd) {
-		req->scmnd = NULL;
-	} else {
-		scmnd = NULL;
-	}
-	spin_unlock_irqrestore(&target->lock, flags);
-
-	return scmnd;
-}
-
-/**
- * srp_free_req() - Unmap data and add request to the free request list.
- */
-static void srp_free_req(struct srp_target_port *target,
-			 struct srp_request *req, struct scsi_cmnd *scmnd,
-			 s32 req_lim_delta)
-{
-	unsigned long flags;
-
-	srp_unmap_data(scmnd, target, req);
-
+	srp_unmap_data(req->scmnd, target, req);
 	spin_lock_irqsave(&target->lock, flags);
 	target->req_lim += req_lim_delta;
+	req->scmnd = NULL;
 	list_add_tail(&req->list, &target->free_reqs);
 	spin_unlock_irqrestore(&target->lock, flags);
 }
 
 static void srp_reset_req(struct srp_target_port *target, struct srp_request *req)
 {
-	struct scsi_cmnd *scmnd = srp_claim_req(target, req, NULL);
-
-	if (scmnd) {
-		srp_free_req(target, req, scmnd, 0);
-		scmnd->result = DID_RESET << 16;
-		scmnd->scsi_done(scmnd);
-	}
+	req->scmnd->result = DID_RESET << 16;
+	req->scmnd->scsi_done(req->scmnd);
+	srp_remove_req(target, req, 0);
 }
 
 static int srp_reconnect_target(struct srp_target_port *target)
@@ -1108,18 +1055,11 @@ static void srp_process_rsp(struct srp_target_port *target, struct srp_rsp *rsp)
 		complete(&target->tsk_mgmt_done);
 	} else {
 		req = &target->req_ring[rsp->tag];
-		scmnd = srp_claim_req(target, req, NULL);
-		if (!scmnd) {
+		scmnd = req->scmnd;
+		if (!scmnd)
 			shost_printk(KERN_ERR, target->scsi_host,
 				     "Null scmnd for RSP w/tag %016llx\n",
 				     (unsigned long long) rsp->tag);
-
-			spin_lock_irqsave(&target->lock, flags);
-			target->req_lim += be32_to_cpu(rsp->req_lim_delta);
-			spin_unlock_irqrestore(&target->lock, flags);
-
-			return;
-		}
 		scmnd->result = rsp->status;
 
 		if (rsp->flags & SRP_RSP_FLAG_SNSVALID) {
@@ -1134,9 +1074,7 @@ static void srp_process_rsp(struct srp_target_port *target, struct srp_rsp *rsp)
 		else if (rsp->flags & (SRP_RSP_FLAG_DIOVER | SRP_RSP_FLAG_DIUNDER))
 			scsi_set_resid(scmnd, be32_to_cpu(rsp->data_in_res_cnt));
 
-		srp_free_req(target, req, scmnd,
-			     be32_to_cpu(rsp->req_lim_delta));
-
+		srp_remove_req(target, req, be32_to_cpu(rsp->req_lim_delta));
 		scmnd->host_scribble = NULL;
 		scmnd->scsi_done(scmnd);
 	}
@@ -1367,12 +1305,6 @@ err_unmap:
 
 err_iu:
 	srp_put_tx_iu(target, iu, SRP_IU_CMD);
-
-	/*
-	 * Avoid that the loops that iterate over the request ring can
-	 * encounter a dangling SCSI command pointer.
-	 */
-	req->scmnd = NULL;
 
 	spin_lock_irqsave(&target->lock, flags);
 	list_add(&req->list, &target->free_reqs);
@@ -1681,18 +1613,25 @@ static int srp_abort(struct scsi_cmnd *scmnd)
 {
 	struct srp_target_port *target = host_to_target(scmnd->device->host);
 	struct srp_request *req = (struct srp_request *) scmnd->host_scribble;
+	int ret = SUCCESS;
 
 	shost_printk(KERN_ERR, target->scsi_host, "SRP abort called\n");
 
-	if (!req || target->qp_in_error || !srp_claim_req(target, req, scmnd))
+	if (!req || target->qp_in_error)
 		return FAILED;
-	srp_send_tsk_mgmt(target, req->index, scmnd->device->lun,
-			  SRP_TSK_ABORT_TASK);
-	srp_free_req(target, req, scmnd, 0);
-	scmnd->result = DID_ABORT << 16;
-	scmnd->scsi_done(scmnd);
+	if (srp_send_tsk_mgmt(target, req->index, scmnd->device->lun,
+			      SRP_TSK_ABORT_TASK))
+		return FAILED;
 
-	return SUCCESS;
+	if (req->scmnd) {
+		if (!target->tsk_mgmt_status) {
+			srp_remove_req(target, req, 0);
+			scmnd->result = DID_ABORT << 16;
+		} else
+			ret = FAILED;
+	}
+
+	return ret;
 }
 
 static int srp_reset_device(struct scsi_cmnd *scmnd)

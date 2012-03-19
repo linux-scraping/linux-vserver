@@ -149,8 +149,8 @@ void nfs_inode_reclaim_delegation(struct inode *inode, struct rpc_cred *cred,
 				  &delegation->flags);
 			NFS_I(inode)->delegation_state = delegation->type;
 			spin_unlock(&delegation->lock);
-			rcu_read_unlock();
 			put_rpccred(oldcred);
+			rcu_read_unlock();
 		} else {
 			/* We appear to have raced with a delegation return. */
 			spin_unlock(&delegation->lock);
@@ -464,17 +464,6 @@ static void nfs_delegation_run_state_manager(struct nfs_client *clp)
 {
 	if (test_bit(NFS4CLNT_DELEGRETURN, &clp->cl_state))
 		nfs4_schedule_state_manager(clp);
-}
-
-void nfs_remove_bad_delegation(struct inode *inode)
-{
-	struct nfs_delegation *delegation;
-
-	delegation = nfs_detach_delegation(NFS_I(inode), NFS_SERVER(inode));
-	if (delegation) {
-		nfs_inode_find_state_and_recover(inode, &delegation->stateid);
-		nfs_free_delegation(delegation);
-	}
 }
 
 /**

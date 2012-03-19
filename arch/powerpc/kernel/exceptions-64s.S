@@ -65,7 +65,7 @@ BEGIN_FTR_SECTION
 	lbz	r0,PACAPROCSTART(r13)
 	cmpwi	r0,0x80
 	bne	1f
-	li	r0,0
+	li	r0,1
 	stb	r0,PACAPROCSTART(r13)
 	b	kvm_start_guest
 1:
@@ -463,7 +463,7 @@ machine_check_common:
 	STD_EXCEPTION_COMMON(0xb00, trap_0b, .unknown_exception)
 	STD_EXCEPTION_COMMON(0xd00, single_step, .single_step_exception)
 	STD_EXCEPTION_COMMON(0xe00, trap_0e, .unknown_exception)
-	STD_EXCEPTION_COMMON(0xe40, emulation_assist, .emulation_assist_interrupt)
+        STD_EXCEPTION_COMMON(0xe40, emulation_assist, .program_check_exception)
         STD_EXCEPTION_COMMON(0xe60, hmi_exception, .unknown_exception)
 	STD_EXCEPTION_COMMON_IDLE(0xf00, performance_monitor, .performance_monitor_exception)
 	STD_EXCEPTION_COMMON(0x1300, instruction_breakpoint, .instruction_breakpoint_exception)
@@ -774,8 +774,8 @@ alignment_common:
 program_check_common:
 	EXCEPTION_PROLOG_COMMON(0x700, PACA_EXGEN)
 	bl	.save_nvgprs
+	DISABLE_INTS
 	addi	r3,r1,STACK_FRAME_OVERHEAD
-	ENABLE_INTS
 	bl	.program_check_exception
 	b	.ret_from_except
 

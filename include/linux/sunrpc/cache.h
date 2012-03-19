@@ -203,7 +203,7 @@ extern void cache_unregister(struct cache_detail *cd);
 extern void cache_unregister_net(struct cache_detail *cd, struct net *net);
 
 extern int sunrpc_cache_register_pipefs(struct dentry *parent, const char *,
-					mode_t, struct cache_detail *);
+					umode_t, struct cache_detail *);
 extern void sunrpc_cache_unregister_pipefs(struct cache_detail *);
 
 extern void qword_add(char **bpp, int *lp, char *str);
@@ -221,22 +221,6 @@ static inline int get_int(char **bpp, int *anint)
 	rv = simple_strtol(buf, &ep, 0);
 	if (*ep) return -EINVAL;
 	*anint = rv;
-	return 0;
-}
-
-static inline int get_uint(char **bpp, unsigned int *anint)
-{
-	char buf[50];
-	int len = qword_get(bpp, buf, sizeof(buf));
-
-	if (len < 0)
-		return -EINVAL;
-	if (len == 0)
-		return -ENOENT;
-
-	if (kstrtouint(buf, 0, anint))
-		return -EINVAL;
-
 	return 0;
 }
 

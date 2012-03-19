@@ -86,10 +86,6 @@ static int genelink_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	u32			size;
 	u32			count;
 
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	header = (struct gl_header *) skb->data;
 
 	// get the packet count of the received skb
@@ -231,17 +227,7 @@ static struct usb_driver gl620a_driver = {
 	.resume =	usbnet_resume,
 };
 
-static int __init usbnet_init(void)
-{
- 	return usb_register(&gl620a_driver);
-}
-module_init(usbnet_init);
-
-static void __exit usbnet_exit(void)
-{
- 	usb_deregister(&gl620a_driver);
-}
-module_exit(usbnet_exit);
+module_usb_driver(gl620a_driver);
 
 MODULE_AUTHOR("Jiun-Jie Huang");
 MODULE_DESCRIPTION("GL620-USB-A Host-to-Host Link cables");

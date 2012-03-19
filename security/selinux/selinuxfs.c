@@ -150,7 +150,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 		goto out;
 
 	/* No partial writes. */
-	length = -EINVAL;
+	length = EINVAL;
 	if (*ppos != 0)
 		goto out;
 
@@ -749,14 +749,6 @@ out:
 	return length;
 }
 
-static inline int hexcode_to_int(int code) {
-	if (code == '\0' || !isxdigit(code))
-		return -1;
-	if (isdigit(code))
-		return code - '0';
-	return tolower(code) - 'a' + 10;
-}
-
 static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 {
 	char *scon = NULL, *tcon = NULL;
@@ -808,9 +800,11 @@ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 			if (c1 == '+')
 				c1 = ' ';
 			else if (c1 == '%') {
-				if ((c1 = hexcode_to_int(*r++)) < 0)
+				c1 = hex_to_bin(*r++);
+				if (c1 < 0)
 					goto out;
-				if ((c2 = hexcode_to_int(*r++)) < 0)
+				c2 = hex_to_bin(*r++);
+				if (c2 < 0)
 					goto out;
 				c1 = (c1 << 4) | c2;
 			}
@@ -1197,7 +1191,7 @@ static void sel_remove_entries(struct dentry *de)
 	spin_lock(&de->d_lock);
 	node = de->d_subdirs.next;
 	while (node != &de->d_subdirs) {
-		struct dentry *d = list_entry(node, struct dentry, d_child);
+		struct dentry *d = list_entry(node, struct dentry, d_u.d_child);
 
 		spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
 		list_del_init(node);
@@ -1238,7 +1232,6 @@ static int sel_make_bools(void)
 		kfree(bool_pending_names[i]);
 	kfree(bool_pending_names);
 	kfree(bool_pending_values);
-	bool_num = 0;
 	bool_pending_names = NULL;
 	bool_pending_values = NULL;
 
@@ -1704,12 +1697,12 @@ static void sel_remove_classes(void)
 
 	list_for_each(class_node, &class_dir->d_subdirs) {
 		struct dentry *class_subdir = list_entry(class_node,
-					struct dentry, d_child);
+					struct dentry, d_u.d_child);
 		struct list_head *class_subdir_node;
 
 		list_for_each(class_subdir_node, &class_subdir->d_subdirs) {
 			struct dentry *d = list_entry(class_subdir_node,
-						struct dentry, d_child);
+						struct dentry, d_u.d_child);
 
 			if (d->d_inode)
 				if (d->d_inode->i_mode & S_IFDIR)

@@ -239,9 +239,6 @@ static void nand_davinci_hwctl_4bit(struct mtd_info *mtd, int mode)
 	unsigned long flags;
 	u32 val;
 
-	/* Reset ECC hardware */
-	davinci_nand_readl(info, NAND_4BIT_ECC1_OFFSET);
-
 	spin_lock_irqsave(&davinci_nand_lock, flags);
 
 	/* Start 4-bit ECC calculation for read/write */
@@ -678,7 +675,9 @@ static int __init nand_davinci_probe(struct platform_device *pdev)
 
 	davinci_nand_writel(info, A1CR_OFFSET + info->core_chipsel * 4, val);
 
-	ret = davinci_aemif_setup_timing(info->timing, info->base,
+	ret = 0;
+	if (info->timing)
+		ret = davinci_aemif_setup_timing(info->timing, info->base,
 							info->core_chipsel);
 	if (ret < 0) {
 		dev_dbg(&pdev->dev, "NAND timing values setup fail\n");

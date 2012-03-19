@@ -42,7 +42,7 @@ static struct uac_clock_source_descriptor *
 	while ((cs = snd_usb_find_csint_desc(ctrl_iface->extra,
 					     ctrl_iface->extralen,
 					     cs, UAC2_CLOCK_SOURCE))) {
-		if (cs->bLength >= sizeof(*cs) && cs->bClockID == clock_id)
+		if (cs->bClockID == clock_id)
 			return cs;
 	}
 
@@ -58,11 +58,8 @@ static struct uac_clock_selector_descriptor *
 	while ((cs = snd_usb_find_csint_desc(ctrl_iface->extra,
 					     ctrl_iface->extralen,
 					     cs, UAC2_CLOCK_SELECTOR))) {
-		if (cs->bLength >= sizeof(*cs) && cs->bClockID == clock_id) {
-			if (cs->bLength < 5 + cs->bNrInPins)
-				return NULL;
+		if (cs->bClockID == clock_id)
 			return cs;
-		}
 	}
 
 	return NULL;
@@ -77,7 +74,7 @@ static struct uac_clock_multiplier_descriptor *
 	while ((cs = snd_usb_find_csint_desc(ctrl_iface->extra,
 					     ctrl_iface->extralen,
 					     cs, UAC2_CLOCK_MULTIPLIER))) {
-		if (cs->bLength >= sizeof(*cs) && cs->bClockID == clock_id)
+		if (cs->bClockID == clock_id)
 			return cs;
 	}
 
@@ -114,8 +111,7 @@ static bool uac_clock_source_is_valid(struct snd_usb_audio *chip, int source_id)
 		return 0;
 
 	/* If a clock source can't tell us whether it's valid, we assume it is */
-	if (!uac2_control_is_readable(cs_desc->bmControls,
-				      UAC2_CS_CONTROL_CLOCK_VALID - 1))
+	if (!uac2_control_is_readable(cs_desc->bmControls, UAC2_CS_CONTROL_CLOCK_VALID))
 		return 1;
 
 	err = snd_usb_ctl_msg(dev, usb_rcvctrlpipe(dev, 0), UAC2_CS_CUR,
@@ -214,8 +210,6 @@ static int set_sample_rate_v1(struct snd_usb_audio *chip, int iface,
 	unsigned char data[3];
 	int err, crate;
 
-	if (get_iface_desc(alts)->bNumEndpoints < 1)
-		return -EINVAL;
 	ep = get_endpoint(alts, 0)->bEndpointAddress;
 
 	/* if endpoint doesn't have sampling rate control, bail out */

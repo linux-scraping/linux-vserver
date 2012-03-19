@@ -54,8 +54,6 @@ enum umh_wait {
 	UMH_WAIT_PROC = 1,	/* wait for the process to complete */
 };
 
-#define UMH_KILLABLE	4	/* wait for EXEC/PROC killable */
-
 struct subprocess_info {
 	struct work_struct work;
 	struct completion *complete;
@@ -119,5 +117,7 @@ extern void usermodehelper_init(void);
 extern int usermodehelper_disable(void);
 extern void usermodehelper_enable(void);
 extern bool usermodehelper_is_disabled(void);
+extern void read_lock_usermodehelper(void);
+extern void read_unlock_usermodehelper(void);
 
 #endif /* __LINUX_KMOD_H__ */

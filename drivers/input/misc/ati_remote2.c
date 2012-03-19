@@ -42,13 +42,13 @@ static int ati_remote2_set_mask(const char *val,
 				const struct kernel_param *kp,
 				unsigned int max)
 {
-	unsigned long mask;
+	unsigned int mask;
 	int ret;
 
 	if (!val)
 		return -EINVAL;
 
-	ret = strict_strtoul(val, 0, &mask);
+	ret = kstrtouint(val, 0, &mask);
 	if (ret)
 		return ret;
 
@@ -720,11 +720,12 @@ static ssize_t ati_remote2_store_channel_mask(struct device *dev,
 	struct usb_device *udev = to_usb_device(dev);
 	struct usb_interface *intf = usb_ifnum_to_if(udev, 0);
 	struct ati_remote2 *ar2 = usb_get_intfdata(intf);
-	unsigned long mask;
+	unsigned int mask;
 	int r;
 
-	if (strict_strtoul(buf, 0, &mask))
-		return -EINVAL;
+	r = kstrtouint(buf, 0, &mask);
+	if (r)
+		return r;
 
 	if (mask & ~ATI_REMOTE2_MAX_CHANNEL_MASK)
 		return -EINVAL;
@@ -769,10 +770,12 @@ static ssize_t ati_remote2_store_mode_mask(struct device *dev,
 	struct usb_device *udev = to_usb_device(dev);
 	struct usb_interface *intf = usb_ifnum_to_if(udev, 0);
 	struct ati_remote2 *ar2 = usb_get_intfdata(intf);
-	unsigned long mask;
+	unsigned int mask;
+	int err;
 
-	if (strict_strtoul(buf, 0, &mask))
-		return -EINVAL;
+	err = kstrtouint(buf, 0, &mask);
+	if (err)
+		return err;
 
 	if (mask & ~ATI_REMOTE2_MAX_MODE_MASK)
 		return -EINVAL;
@@ -814,49 +817,26 @@ static int ati_remote2_probe(struct usb_interface *interface, const struct usb_d
 
 	ar2->udev = udev;
 
-	/* Sanity check, first interface must have an endpoint */
-	if (alt->desc.bNumEndpoints < 1 || !alt->endpoint) {
-		dev_err(&interface->dev,
-			"%s(): interface 0 must have an endpoint\n", __func__);
-		r = -ENODEV;
-		goto fail1;
-	}
 	ar2->intf[0] = interface;
 	ar2->ep[0] = &alt->endpoint[0].desc;
 
-	/* Sanity check, the device must have two interfaces */
 	ar2->intf[1] = usb_ifnum_to_if(udev, 1);
-	if ((udev->actconfig->desc.bNumInterfaces < 2) || !ar2->intf[1]) {
-		dev_err(&interface->dev, "%s(): need 2 interfaces, found %d\n",
-			__func__, udev->actconfig->desc.bNumInterfaces);
-		r = -ENODEV;
-		goto fail1;
-	}
-
 	r = usb_driver_claim_interface(&ati_remote2_driver, ar2->intf[1], ar2);
 	if (r)
 		goto fail1;
-
-	/* Sanity check, second interface must have an endpoint */
 	alt = ar2->intf[1]->cur_altsetting;
-	if (alt->desc.bNumEndpoints < 1 || !alt->endpoint) {
-		dev_err(&interface->dev,
-			"%s(): interface 1 must have an endpoint\n", __func__);
-		r = -ENODEV;
-		goto fail2;
-	}
 	ar2->ep[1] = &alt->endpoint[0].desc;
 
 	r = ati_remote2_urb_init(ar2);
 	if (r)
-		goto fail3;
+		goto fail2;
 
 	ar2->channel_mask = channel_mask;
 	ar2->mode_mask = mode_mask;
 
 	r = ati_remote2_setup(ar2, ar2->channel_mask);
 	if (r)
-		goto fail3;
+		goto fail2;
 
 	usb_make_path(udev, ar2->phys, sizeof(ar2->phys));
 	strlcat(ar2->phys, "/input0", sizeof(ar2->phys));
@@ -865,11 +845,11 @@ static int ati_remote2_probe(struct usb_interface *interface, const struct usb_d
 
 	r = sysfs_create_group(&udev->dev.kobj, &ati_remote2_attr_group);
 	if (r)
-		goto fail3;
+		goto fail2;
 
 	r = ati_remote2_input_init(ar2);
 	if (r)
-		goto fail4;
+		goto fail3;
 
 	usb_set_intfdata(interface, ar2);
 
@@ -877,11 +857,10 @@ static int ati_remote2_probe(struct usb_interface *interface, const struct usb_d
 
 	return 0;
 
- fail4:
-	sysfs_remove_group(&udev->dev.kobj, &ati_remote2_attr_group);
  fail3:
-	ati_remote2_urb_cleanup(ar2);
+	sysfs_remove_group(&udev->dev.kobj, &ati_remote2_attr_group);
  fail2:
+	ati_remote2_urb_cleanup(ar2);
 	usb_driver_release_interface(&ati_remote2_driver, ar2->intf[1]);
  fail1:
 	kfree(ar2);
@@ -1034,23 +1013,4 @@ static int ati_remote2_post_reset(struct usb_interface *interface)
 	return r;
 }
 
-static int __init ati_remote2_init(void)
-{
-	int r;
-
-	r = usb_register(&ati_remote2_driver);
-	if (r)
-		printk(KERN_ERR "ati_remote2: usb_register() = %d\n", r);
-	else
-		printk(KERN_INFO "ati_remote2: " DRIVER_DESC " " DRIVER_VERSION "\n");
-
-	return r;
-}
-
-static void __exit ati_remote2_exit(void)
-{
-	usb_deregister(&ati_remote2_driver);
-}
-
-module_init(ati_remote2_init);
-module_exit(ati_remote2_exit);
+module_usb_driver(ati_remote2_driver);

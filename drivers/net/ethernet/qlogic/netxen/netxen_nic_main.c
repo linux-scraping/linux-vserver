@@ -544,7 +544,8 @@ static void netxen_set_multicast_list(struct net_device *dev)
 	adapter->set_multi(dev);
 }
 
-static u32 netxen_fix_features(struct net_device *dev, u32 features)
+static netdev_features_t netxen_fix_features(struct net_device *dev,
+	netdev_features_t features)
 {
 	if (!(features & NETIF_F_RXCSUM)) {
 		netdev_info(dev, "disabling LRO as RXCSUM is off\n");
@@ -555,7 +556,8 @@ static u32 netxen_fix_features(struct net_device *dev, u32 features)
 	return features;
 }
 
-static int netxen_set_features(struct net_device *dev, u32 features)
+static int netxen_set_features(struct net_device *dev,
+	netdev_features_t features)
 {
 	struct netxen_adapter *adapter = netdev_priv(dev);
 	int hw_lro;
@@ -1351,10 +1353,6 @@ static void netxen_mask_aer_correctable(struct netxen_adapter *adapter)
 	struct pci_dev *root = pdev->bus->self;
 	u32 aer_pos;
 
-	/* root bus? */
-	if (!root)
-		return;
-
 	if (adapter->ahw.board_type != NETXEN_BRDTYPE_P3_4_GB_MM &&
 		adapter->ahw.board_type != NETXEN_BRDTYPE_P3_10G_TP)
 		return;
@@ -1924,12 +1922,10 @@ unwind:
 	while (--i >= 0) {
 		nf = &pbuf->frag_array[i+1];
 		pci_unmap_page(pdev, nf->dma, nf->length, PCI_DMA_TODEVICE);
-		nf->dma = 0ULL;
 	}
 
 	nf = &pbuf->frag_array[0];
 	pci_unmap_single(pdev, nf->dma, skb_headlen(skb), PCI_DMA_TODEVICE);
-	nf->dma = 0ULL;
 
 out_err:
 	return -ENOMEM;
@@ -2277,10 +2273,7 @@ static int netxen_nic_poll(struct napi_struct *napi, int budget)
 
 	work_done = netxen_process_rcv_ring(sds_ring, budget);
 
-	if (!tx_complete)
-		work_done = budget;
-
-	if (work_done < budget) {
+	if ((work_done < budget) && tx_complete) {
 		napi_complete(&sds_ring->napi);
 		if (test_bit(__NX_DEV_UP, &adapter->state))
 			netxen_nic_enable_int(sds_ring);

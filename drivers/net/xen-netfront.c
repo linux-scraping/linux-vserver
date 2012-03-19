@@ -36,7 +36,7 @@
 #include <linux/skbuff.h>
 #include <linux/ethtool.h>
 #include <linux/if_ether.h>
-#include <net/tcp.h>
+#include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/moduleparam.h>
 #include <linux/mm.h>
@@ -68,7 +68,7 @@ struct netfront_cb {
 
 #define NET_TX_RING_SIZE __CONST_RING_SIZE(xen_netif_tx, PAGE_SIZE)
 #define NET_RX_RING_SIZE __CONST_RING_SIZE(xen_netif_rx, PAGE_SIZE)
-#define TX_MAX_TARGET min_t(int, NET_RX_RING_SIZE, 256)
+#define TX_MAX_TARGET min_t(int, NET_TX_RING_SIZE, 256)
 
 struct netfront_stats {
 	u64			rx_packets;
@@ -201,7 +201,7 @@ static void xennet_sysfs_delif(struct net_device *netdev);
 #define xennet_sysfs_delif(dev) do { } while (0)
 #endif
 
-static int xennet_can_sg(struct net_device *dev)
+static bool xennet_can_sg(struct net_device *dev)
 {
 	return dev->features & NETIF_F_SG;
 }
@@ -489,16 +489,6 @@ static int xennet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	int frags = skb_shinfo(skb)->nr_frags;
 	unsigned int offset = offset_in_page(data);
 	unsigned int len = skb_headlen(skb);
-
-	/* If skb->len is too big for wire format, drop skb and alert
-	 * user about misconfiguration.
-	 */
-	if (unlikely(skb->len > XEN_NETIF_MAX_TX_SIZE)) {
-		net_alert_ratelimited(
-			"xennet: skb->len = %u, too big for wire format\n",
-			skb->len);
-		goto drop;
-	}
 
 	frags += DIV_ROUND_UP(offset + len, PAGE_SIZE);
 	if (unlikely(frags > MAX_SKB_FRAGS + 1)) {
@@ -1053,7 +1043,7 @@ err:
 
 static int xennet_change_mtu(struct net_device *dev, int mtu)
 {
-	int max = xennet_can_sg(dev) ? XEN_NETIF_MAX_TX_SIZE : ETH_DATA_LEN;
+	int max = xennet_can_sg(dev) ? 65535 - ETH_HLEN : ETH_DATA_LEN;
 
 	if (mtu > max)
 		return -EINVAL;
@@ -1200,7 +1190,8 @@ static void xennet_uninit(struct net_device *dev)
 	gnttab_free_grant_references(np->gref_rx_head);
 }
 
-static u32 xennet_fix_features(struct net_device *dev, u32 features)
+static netdev_features_t xennet_fix_features(struct net_device *dev,
+	netdev_features_t features)
 {
 	struct netfront_info *np = netdev_priv(dev);
 	int val;
@@ -1226,7 +1217,8 @@ static u32 xennet_fix_features(struct net_device *dev, u32 features)
 	return features;
 }
 
-static int xennet_set_features(struct net_device *dev, u32 features)
+static int xennet_set_features(struct net_device *dev,
+	netdev_features_t features)
 {
 	if (!(features & NETIF_F_SG) && dev->mtu > ETH_DATA_LEN) {
 		netdev_info(dev, "Reducing MTU because no SG offload");
@@ -1403,8 +1395,6 @@ static void xennet_disconnect_backend(struct netfront_info *info)
 	netif_carrier_off(info->netdev);
 	spin_unlock_irq(&info->tx_lock);
 	spin_unlock_bh(&info->rx_lock);
-
-	del_timer_sync(&info->rx_refill_timer);
 
 	if (info->netdev->irq)
 		unbind_from_irqhandler(info->netdev->irq, info->netdev);
@@ -1924,7 +1914,7 @@ static void xennet_sysfs_delif(struct net_device *netdev)
 
 #endif /* CONFIG_SYSFS */
 
-static struct xenbus_device_id netfront_ids[] = {
+static const struct xenbus_device_id netfront_ids[] = {
 	{ "vif" },
 	{ "" }
 };
@@ -1936,11 +1926,13 @@ static int __devexit xennet_remove(struct xenbus_device *dev)
 
 	dev_dbg(&dev->dev, "%s\n", dev->nodename);
 
+	unregister_netdev(info->netdev);
+
 	xennet_disconnect_backend(info);
 
-	xennet_sysfs_delif(info->netdev);
+	del_timer_sync(&info->rx_refill_timer);
 
-	unregister_netdev(info->netdev);
+	xennet_sysfs_delif(info->netdev);
 
 	free_percpu(info->stats);
 
@@ -1949,15 +1941,12 @@ static int __devexit xennet_remove(struct xenbus_device *dev)
 	return 0;
 }
 
-static struct xenbus_driver netfront_driver = {
-	.name = "vif",
-	.owner = THIS_MODULE,
-	.ids = netfront_ids,
+static DEFINE_XENBUS_DRIVER(netfront, ,
 	.probe = netfront_probe,
 	.remove = __devexit_p(xennet_remove),
 	.resume = netfront_resume,
 	.otherend_changed = netback_changed,
-};
+);
 
 static int __init netif_init(void)
 {

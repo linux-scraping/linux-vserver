@@ -317,6 +317,17 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 		return retval;
 	}
 
+	id = ipc_addid(&sem_ids(ns), &sma->sem_perm, ns->sc_semmni);
+	if (id < 0) {
+		security_sem_free(sma);
+		ipc_rcu_putref(sma);
+		return id;
+	}
+	ns->used_sems += nsems;
+	/* FIXME: obsoleted? */
+	vx_semary_inc(sma);
+	vx_nsems_add(sma, nsems);
+
 	sma->sem_base = (struct sem *) &sma[1];
 
 	for (i = 0; i < nsems; i++)
@@ -327,19 +338,6 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 	INIT_LIST_HEAD(&sma->list_id);
 	sma->sem_nsems = nsems;
 	sma->sem_ctime = get_seconds();
-
-	id = ipc_addid(&sem_ids(ns), &sma->sem_perm, ns->sc_semmni);
-	if (id < 0) {
-		security_sem_free(sma);
-		ipc_rcu_putref(sma);
-		return id;
-	}
-	ns->used_sems += nsems;
-
-	/* FIXME: obsoleted? */
-	vx_semary_inc(sma);
-	vx_nsems_add(sma, nsems);
-
 	sem_unlock(sma);
 
 	return sma->sem_perm.id;
@@ -1617,27 +1615,16 @@ void exit_sem(struct task_struct *tsk)
 		rcu_read_lock();
 		un = list_entry_rcu(ulp->list_proc.next,
 				    struct sem_undo, list_proc);
-		if (&un->list_proc == &ulp->list_proc) {
-			/*
-			 * We must wait for freeary() before freeing this ulp,
-			 * in case we raced with last sem_undo. There is a small
-			 * possibility where we exit while freeary() didn't
-			 * finish unlocking sem_undo_list.
-			 */
-			spin_unlock_wait(&ulp->lock);
-			rcu_read_unlock();
-			break;
-		}
-		spin_lock(&ulp->lock);
-		semid = un->semid;
-		spin_unlock(&ulp->lock);
+		if (&un->list_proc == &ulp->list_proc)
+			semid = -1;
+		 else
+			semid = un->semid;
 		rcu_read_unlock();
 
-		/* exit_sem raced with IPC_RMID, nothing to do */
 		if (semid == -1)
-			continue;
+			break;
 
-		sma = sem_lock_check(tsk->nsproxy->ipc_ns, semid);
+		sma = sem_lock_check(tsk->nsproxy->ipc_ns, un->semid);
 
 		/* exit_sem raced with IPC_RMID, nothing to do */
 		if (IS_ERR(sma))

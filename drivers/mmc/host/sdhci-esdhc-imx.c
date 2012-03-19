@@ -232,18 +232,15 @@ static void esdhc_writel_le(struct sdhci_host *host, u32 val, int reg)
 
 static u16 esdhc_readw_le(struct sdhci_host *host, int reg)
 {
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct pltfm_imx_data *imx_data = pltfm_host->priv;
-
 	if (unlikely(reg == SDHCI_HOST_VERSION)) {
-		reg ^= 2;
-		if (is_imx6q_usdhc(imx_data)) {
-			/*
-			 * The usdhc register returns a wrong host version.
-			 * Correct it here.
-			 */
-			return SDHCI_SPEC_300;
-		}
+		u16 val = readw(host->ioaddr + (reg ^ 2));
+		/*
+		 * uSDHC supports SDHCI v3.0, but it's encoded as value
+		 * 0x3 in host controller version register, which violates
+		 * SDHCI_SPEC_300 definition.  Work it around here.
+		 */
+		if ((val & SDHCI_SPEC_VER_MASK) == 3)
+			return --val;
 	}
 
 	return readw(host->ioaddr + reg);
@@ -470,7 +467,8 @@ static int __devinit sdhci_esdhc_imx_probe(struct platform_device *pdev)
 	clk_enable(clk);
 	pltfm_host->clk = clk;
 
-	host->quirks |= SDHCI_QUIRK_BROKEN_TIMEOUT_VAL;
+	if (!is_imx25_esdhc(imx_data))
+		host->quirks |= SDHCI_QUIRK_BROKEN_TIMEOUT_VAL;
 
 	if (is_imx25_esdhc(imx_data) || is_imx35_esdhc(imx_data))
 		/* Fix errata ENGcm07207 present on i.MX25 and i.MX35 */
@@ -609,17 +607,7 @@ static struct platform_driver sdhci_esdhc_imx_driver = {
 	.remove		= __devexit_p(sdhci_esdhc_imx_remove),
 };
 
-static int __init sdhci_esdhc_imx_init(void)
-{
-	return platform_driver_register(&sdhci_esdhc_imx_driver);
-}
-module_init(sdhci_esdhc_imx_init);
-
-static void __exit sdhci_esdhc_imx_exit(void)
-{
-	platform_driver_unregister(&sdhci_esdhc_imx_driver);
-}
-module_exit(sdhci_esdhc_imx_exit);
+module_platform_driver(sdhci_esdhc_imx_driver);
 
 MODULE_DESCRIPTION("SDHCI driver for Freescale i.MX eSDHC");
 MODULE_AUTHOR("Wolfram Sang <w.sang@pengutronix.de>");

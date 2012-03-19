@@ -462,11 +462,6 @@ static int __devinit twl_rtc_probe(struct platform_device *pdev)
 			goto out1;
 	}
 
-	/* ensure interrupts are disabled, bootloaders can be strange */
-	ret = twl_rtc_write_u8(0, REG_RTC_INTERRUPTS_REG);
-	if (ret < 0)
-		dev_warn(&pdev->dev, "unable to disable interrupt\n");
-
 	/* init cached IRQ enable bits */
 	ret = twl_rtc_read_u8(&rtc_irq_bits, REG_RTC_INTERRUPTS_REG);
 	if (ret < 0)
@@ -490,7 +485,6 @@ static int __devinit twl_rtc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, rtc);
-	device_init_wakeup(&pdev->dev, 1);
 	return 0;
 
 out2:
@@ -556,6 +550,11 @@ static int twl_rtc_resume(struct platform_device *pdev)
 #define twl_rtc_resume  NULL
 #endif
 
+static const struct of_device_id twl_rtc_of_match[] = {
+	{.compatible = "ti,twl4030-rtc", },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, twl_rtc_of_match);
 MODULE_ALIAS("platform:twl_rtc");
 
 static struct platform_driver twl4030rtc_driver = {
@@ -565,8 +564,9 @@ static struct platform_driver twl4030rtc_driver = {
 	.suspend	= twl_rtc_suspend,
 	.resume		= twl_rtc_resume,
 	.driver		= {
-		.owner	= THIS_MODULE,
-		.name	= "twl_rtc",
+		.owner		= THIS_MODULE,
+		.name		= "twl_rtc",
+		.of_match_table = twl_rtc_of_match,
 	},
 };
 

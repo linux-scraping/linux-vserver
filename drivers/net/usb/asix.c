@@ -35,9 +35,8 @@
 #include <linux/crc32.h>
 #include <linux/usb/usbnet.h>
 #include <linux/slab.h>
-#include <linux/if_vlan.h>
 
-#define DRIVER_VERSION "08-Nov-2011"
+#define DRIVER_VERSION "22-Dec-2011"
 #define DRIVER_NAME "asix"
 
 /* ASIX AX8817X based USB 2.0 Ethernet Devices */
@@ -183,17 +182,6 @@ struct ax88172_int_data {
 	__le16 res3;
 } __packed;
 
-struct asix_rx_fixup_info {
-	struct sk_buff *ax_skb;
-	u32 header;
-	u16 size;
-	bool split_head;
-};
-
-struct asix_common_private {
-	struct asix_rx_fixup_info rx_fixup_info;
-};
-
 static int asix_read_cmd(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 			    u16 size, void *data)
 {
@@ -315,87 +303,95 @@ asix_write_cmd_async(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 	}
 }
 
-static int asix_rx_fixup_internal(struct usbnet *dev, struct sk_buff *skb,
-				  struct asix_rx_fixup_info *rx)
+static int asix_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
-	int offset = 0;
+	u8  *head;
+	u32  header;
+	char *packet;
+	struct sk_buff *ax_skb;
+	u16 size;
 
-	while (offset + sizeof(u16) <= skb->len) {
-		u16 remaining = 0;
-		unsigned char *data;
+	head = (u8 *) skb->data;
+	memcpy(&header, head, sizeof(header));
+	le32_to_cpus(&header);
+	packet = head + sizeof(header);
 
-		if (!rx->size) {
-			if ((skb->len - offset == sizeof(u16)) ||
-			    rx->split_head) {
-				if(!rx->split_head) {
-					rx->header = get_unaligned_le16(
-							skb->data + offset);
-					rx->split_head = true;
-					offset += sizeof(u16);
-					break;
-				} else {
-					rx->header |= (get_unaligned_le16(
-							skb->data + offset)
-							<< 16);
-					rx->split_head = false;
-					offset += sizeof(u16);
-				}
-			} else {
-				rx->header = get_unaligned_le32(skb->data +
-								offset);
-				offset += sizeof(u32);
+	skb_pull(skb, 4);
+
+	while (skb->len > 0) {
+		if ((header & 0x07ff) != ((~header >> 16) & 0x07ff))
+			netdev_err(dev->net, "asix_rx_fixup() Bad Header Length\n");
+
+		/* get the packet length */
+		size = (u16) (header & 0x000007ff);
+
+		if ((skb->len) - ((size + 1) & 0xfffe) == 0) {
+			u8 alignment = (unsigned long)skb->data & 0x3;
+			if (alignment != 0x2) {
+				/*
+				 * not 16bit aligned so use the room provided by
+				 * the 32 bit header to align the data
+				 *
+				 * note we want 16bit alignment as MAC header is
+				 * 14bytes thus ip header will be aligned on
+				 * 32bit boundary so accessing ipheader elements
+				 * using a cast to struct ip header wont cause
+				 * an unaligned accesses.
+				 */
+				u8 realignment = (alignment + 2) & 0x3;
+				memmove(skb->data - realignment,
+					skb->data,
+					size);
+				skb->data -= realignment;
+				skb_set_tail_pointer(skb, size);
 			}
-
-			/* get the packet length */
-			rx->size = (u16) (rx->header & 0x7ff);
-			if (rx->size != ((~rx->header >> 16) & 0x7ff)) {
-				netdev_err(dev->net, "asix_rx_fixup() Bad Header Length 0x%x, offset %d\n",
-					   rx->header, offset);
-				rx->size = 0;
-				return 0;
-			}
-			rx->ax_skb = netdev_alloc_skb_ip_align(dev->net,
-							       rx->size);
-			if (!rx->ax_skb)
-				return 0;
+			return 2;
 		}
 
-		if (rx->size > dev->net->mtu + ETH_HLEN + VLAN_HLEN) {
-			netdev_dbg(dev->net, "asix_rx_fixup() Bad RX Length %d\n",
-				   rx->size);
-			kfree_skb(rx->ax_skb);
+		if (size > dev->net->mtu + ETH_HLEN) {
+			netdev_err(dev->net, "asix_rx_fixup() Bad RX Length %d\n",
+				   size);
+			return 0;
+		}
+		ax_skb = skb_clone(skb, GFP_ATOMIC);
+		if (ax_skb) {
+			u8 alignment = (unsigned long)packet & 0x3;
+			ax_skb->len = size;
+
+			if (alignment != 0x2) {
+				/*
+				 * not 16bit aligned use the room provided by
+				 * the 32 bit header to align the data
+				 */
+				u8 realignment = (alignment + 2) & 0x3;
+				memmove(packet - realignment, packet, size);
+				packet -= realignment;
+			}
+			ax_skb->data = packet;
+			skb_set_tail_pointer(ax_skb, size);
+			usbnet_skb_return(dev, ax_skb);
+		} else {
 			return 0;
 		}
 
-		if (rx->size > skb->len - offset) {
-			remaining = rx->size - (skb->len - offset);
-			rx->size = skb->len - offset;
-		}
+		skb_pull(skb, (size + 1) & 0xfffe);
 
-		data = skb_put(rx->ax_skb, rx->size);
-		memcpy(data, skb->data + offset, rx->size);
-		if (!remaining)
-			usbnet_skb_return(dev, rx->ax_skb);
+		if (skb->len < sizeof(header))
+			break;
 
-		offset += (rx->size + 1) & 0xfffe;
-		rx->size = remaining;
+		head = (u8 *) skb->data;
+		memcpy(&header, head, sizeof(header));
+		le32_to_cpus(&header);
+		packet = head + sizeof(header);
+		skb_pull(skb, 4);
 	}
 
-	if (skb->len != offset) {
-		netdev_err(dev->net, "asix_rx_fixup() Bad SKB Length %d, %d\n",
-			   skb->len, offset);
+	if (skb->len < 0) {
+		netdev_err(dev->net, "asix_rx_fixup() Bad SKB Length %d\n",
+			   skb->len);
 		return 0;
 	}
-
 	return 1;
-}
-
-static int asix_rx_fixup_common(struct usbnet *dev, struct sk_buff *skb)
-{
-	struct asix_common_private *dp = dev->driver_priv;
-	struct asix_rx_fixup_info *rx = &dp->rx_fixup_info;
-
-	return asix_rx_fixup_internal(dev, skb, rx);
 }
 
 static struct sk_buff *asix_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
@@ -407,7 +403,7 @@ static struct sk_buff *asix_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 	u32 packet_len;
 	u32 padbytes = 0xffff0000;
 
-	padlen = ((skb->len + 4) & (dev->maxpacket - 1)) ? 0 : 4;
+	padlen = ((skb->len + 4) % 512) ? 0 : 4;
 
 	if ((!skb_cloned(skb)) &&
 	    ((headroom + tailroom) >= (4 + padlen))) {
@@ -429,7 +425,7 @@ static struct sk_buff *asix_tx_fixup(struct usbnet *dev, struct sk_buff *skb,
 	cpu_to_le32s(&packet_len);
 	skb_copy_to_linear_data(skb, &packet_len, sizeof(packet_len));
 
-	if (padlen) {
+	if ((skb->len % 512) == 0) {
 		cpu_to_le32s(&padbytes);
 		memcpy(skb_tail_pointer(skb), &padbytes, sizeof(padbytes));
 		skb_put(skb, sizeof(padbytes));
@@ -693,6 +689,10 @@ asix_get_wol(struct net_device *net, struct ethtool_wolinfo *wolinfo)
 	}
 	wolinfo->supported = WAKE_PHY | WAKE_MAGIC;
 	wolinfo->wolopts = 0;
+	if (opt & AX_MONITOR_LINK)
+		wolinfo->wolopts |= WAKE_PHY;
+	if (opt & AX_MONITOR_MAGIC)
+		wolinfo->wolopts |= WAKE_MAGIC;
 }
 
 static int
@@ -1132,7 +1132,19 @@ static int ax88772_bind(struct usbnet *dev, struct usb_interface *intf)
 		return ret;
 	}
 
-	ax88772_reset(dev);
+	ret = asix_sw_reset(dev, AX_SWRESET_IPPD | AX_SWRESET_PRL);
+	if (ret < 0)
+		return ret;
+
+	msleep(150);
+
+	ret = asix_sw_reset(dev, AX_SWRESET_CLEAR);
+	if (ret < 0)
+		return ret;
+
+	msleep(150);
+
+	ret = asix_sw_reset(dev, embd_phy ? AX_SWRESET_IPRL : AX_SWRESET_PRTE);
 
 	/* Read PHYID register *AFTER* the PHY was reset properly */
 	phyid = asix_get_phyid(dev);
@@ -1145,20 +1157,10 @@ static int ax88772_bind(struct usbnet *dev, struct usb_interface *intf)
 		dev->rx_urb_size = 2048;
 	}
 
-	dev->driver_priv = kzalloc(sizeof(struct asix_common_private), GFP_KERNEL);
-	if (!dev->driver_priv)
-		return -ENOMEM;
-
 	return 0;
 }
 
-static void ax88772_unbind(struct usbnet *dev, struct usb_interface *intf)
-{
-	if (dev->driver_priv)
-		kfree(dev->driver_priv);
-}
-
-static struct ethtool_ops ax88178_ethtool_ops = {
+static const struct ethtool_ops ax88178_ethtool_ops = {
 	.get_drvinfo		= asix_get_drvinfo,
 	.get_link		= asix_get_link,
 	.get_msglevel		= usbnet_get_msglevel,
@@ -1490,10 +1492,6 @@ static int ax88178_bind(struct usbnet *dev, struct usb_interface *intf)
 		dev->rx_urb_size = 2048;
 	}
 
-	dev->driver_priv = kzalloc(sizeof(struct asix_common_private), GFP_KERNEL);
-	if (!dev->driver_priv)
-			return -ENOMEM;
-
 	return 0;
 }
 
@@ -1540,25 +1538,22 @@ static const struct driver_info hawking_uf200_info = {
 static const struct driver_info ax88772_info = {
 	.description = "ASIX AX88772 USB 2.0 Ethernet",
 	.bind = ax88772_bind,
-	.unbind = ax88772_unbind,
 	.status = asix_status,
 	.link_reset = ax88772_link_reset,
-	.reset = ax88772_link_reset,
-	.flags = FLAG_ETHER | FLAG_FRAMING_AX | FLAG_LINK_INTR | FLAG_MULTI_PACKET,
-	.rx_fixup = asix_rx_fixup_common,
+	.reset = ax88772_reset,
+	.flags = FLAG_ETHER | FLAG_FRAMING_AX | FLAG_LINK_INTR,
+	.rx_fixup = asix_rx_fixup,
 	.tx_fixup = asix_tx_fixup,
 };
 
 static const struct driver_info ax88178_info = {
 	.description = "ASIX AX88178 USB 2.0 Ethernet",
 	.bind = ax88178_bind,
-	.unbind = ax88772_unbind,
 	.status = asix_status,
 	.link_reset = ax88178_link_reset,
 	.reset = ax88178_reset,
-	.flags = FLAG_ETHER | FLAG_FRAMING_AX | FLAG_LINK_INTR |
-		 FLAG_MULTI_PACKET,
-	.rx_fixup = asix_rx_fixup_common,
+	.flags = FLAG_ETHER | FLAG_FRAMING_AX | FLAG_LINK_INTR,
+	.rx_fixup = asix_rx_fixup,
 	.tx_fixup = asix_tx_fixup,
 };
 
@@ -1656,10 +1651,6 @@ static const struct usb_device_id	products [] = {
 	USB_DEVICE (0x2001, 0x3c05),
 	.driver_info = (unsigned long) &ax88772_info,
 }, {
-       // DLink DUB-E100 H/W Ver C1
-       USB_DEVICE (0x2001, 0x1a02),
-       .driver_info = (unsigned long) &ax88772_info,
-}, {
 	// Linksys USB1000
 	USB_DEVICE (0x1737, 0x0039),
 	.driver_info = (unsigned long) &ax88178_info,
@@ -1706,17 +1697,7 @@ static struct usb_driver asix_driver = {
 	.supports_autosuspend = 1,
 };
 
-static int __init asix_init(void)
-{
- 	return usb_register(&asix_driver);
-}
-module_init(asix_init);
-
-static void __exit asix_exit(void)
-{
- 	usb_deregister(&asix_driver);
-}
-module_exit(asix_exit);
+module_usb_driver(asix_driver);
 
 MODULE_AUTHOR("David Hollis");
 MODULE_VERSION(DRIVER_VERSION);

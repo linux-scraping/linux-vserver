@@ -113,7 +113,7 @@ long __strnlen_user(const char __user *s, long n)
 	char c;
 
 	while (1) {
-		if (res >= n)
+		if (res>n)
 			return n+1;
 		if (__get_user(c, s))
 			return 0;
@@ -169,10 +169,10 @@ copy_user_handle_tail(char *to, char *from, unsigned len, unsigned zerorest)
 	char c;
 	unsigned zero_len;
 
-	for (; len; --len, to++) {
+	for (; len; --len) {
 		if (__get_user_nocheck(c, from++, sizeof(char)))
 			break;
-		if (__put_user_nocheck(c, to, sizeof(char)))
+		if (__put_user_nocheck(c, to++, sizeof(char)))
 			break;
 	}
 

@@ -8,7 +8,6 @@
 #define PIPE_BUF_FLAG_LRU	0x01	/* page is on the LRU */
 #define PIPE_BUF_FLAG_ATOMIC	0x02	/* was atomically mapped */
 #define PIPE_BUF_FLAG_GIFT	0x04	/* page is a gift */
-#define PIPE_BUF_FLAG_PACKET	0x08	/* read() as a packet */
 
 /**
  *	struct pipe_buffer - a linux kernel pipe buffer
@@ -43,7 +42,6 @@ struct pipe_buffer {
  *	@fasync_writers: writer side fasync
  *	@inode: inode this pipe is attached to
  *	@bufs: the circular array of pipe buffers
- *	@user: the user who created this pipe
  **/
 struct pipe_inode_info {
 	wait_queue_head_t wait;
@@ -58,7 +56,6 @@ struct pipe_inode_info {
 	struct fasync_struct *fasync_writers;
 	struct inode *inode;
 	struct pipe_buffer *bufs;
-	struct user_struct *user;
 };
 
 /*
@@ -144,8 +141,6 @@ void pipe_unlock(struct pipe_inode_info *);
 void pipe_double_lock(struct pipe_inode_info *, struct pipe_inode_info *);
 
 extern unsigned int pipe_max_size, pipe_min_size;
-extern unsigned long pipe_user_pages_hard;
-extern unsigned long pipe_user_pages_soft;
 int pipe_proc_fn(struct ctl_table *, int, void __user *, size_t *, loff_t *);
 
 
@@ -163,8 +158,6 @@ void generic_pipe_buf_get(struct pipe_inode_info *, struct pipe_buffer *);
 int generic_pipe_buf_confirm(struct pipe_inode_info *, struct pipe_buffer *);
 int generic_pipe_buf_steal(struct pipe_inode_info *, struct pipe_buffer *);
 void generic_pipe_buf_release(struct pipe_inode_info *, struct pipe_buffer *);
-
-extern const struct pipe_buf_operations nosteal_pipe_buf_ops;
 
 /* for F_SETPIPE_SZ and F_GETPIPE_SZ */
 long pipe_fcntl(struct file *, unsigned int, unsigned long arg);

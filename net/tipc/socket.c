@@ -185,9 +185,6 @@ static int tipc_create(struct net *net, struct socket *sock, int protocol,
 
 	/* Validate arguments */
 
-	if (!net_eq(net, &init_net))
-		return -EAFNOSUPPORT;
-
 	if (unlikely(protocol != 0))
 		return -EPROTONOSUPPORT;
 
@@ -829,7 +826,6 @@ static void set_orig_addr(struct msghdr *m, struct tipc_msg *msg)
 	if (addr) {
 		addr->family = AF_TIPC;
 		addr->addrtype = TIPC_ADDR_ID;
-		memset(&addr->addr, 0, sizeof(addr->addr));
 		addr->addr.id.ref = msg_origport(msg);
 		addr->addr.id.node = msg_orignode(msg);
 		addr->addr.name.domain = 0;	/* could leave uninitialized */
@@ -1540,8 +1536,6 @@ static int accept(struct socket *sock, struct socket *new_sock, int flags)
 		struct tipc_port *new_tport = new_tsock->p;
 		u32 new_ref = new_tport->ref;
 		struct tipc_msg *msg = buf_msg(buf);
-
-		security_sk_clone(sock->sk, new_sock->sk);
 
 		lock_sock(new_sk);
 

@@ -67,7 +67,7 @@ static int xattr_create(struct inode *dir, struct dentry *dentry, int mode)
 }
 #endif
 
-static int xattr_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+static int xattr_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	BUG_ON(!mutex_is_locked(&dir->i_mutex));
 	return dir->i_op->mkdir(dir, dentry, mode);
@@ -188,8 +188,8 @@ fill_with_dentries(void *buf, const char *name, int namelen, loff_t offset,
 	if (dbuf->count == ARRAY_SIZE(dbuf->dentries))
 		return -ENOSPC;
 
-	if (name[0] == '.' && (namelen < 2 ||
-			       (namelen == 2 && name[1] == '.')))
+	if (name[0] == '.' && (name[1] == '\0' ||
+			       (name[1] == '.' && name[2] == '\0')))
 		return 0;
 
 	dentry = lookup_one_len(name, dbuf->xadir, namelen);
