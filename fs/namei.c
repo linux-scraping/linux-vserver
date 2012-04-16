@@ -3671,6 +3671,30 @@ out:
 
 #endif
 
+int	vx_info_mnt_namespace(struct mnt_namespace *ns, char *buffer)
+{
+	struct path path;
+	struct vfsmount *vmnt;
+	char *pstr, *root;
+	int length = 0;
+
+	pstr = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!pstr)
+		return 0;
+
+	vmnt = &ns->root->mnt;
+	path.mnt = vmnt;
+	path.dentry = vmnt->mnt_root;
+	root = d_path(&path, pstr, PATH_MAX - 2);
+	length = sprintf(buffer + length,
+		"Namespace:\t%p [#%u]\n"
+		"RootPath:\t%s\n",
+		ns, atomic_read(&ns->count),
+		root);
+	kfree(pstr);
+	return length;
+}
+
 /* get the link contents into pagecache */
 static char *page_getlink(struct dentry * dentry, struct page **ppage)
 {
@@ -3795,3 +3819,4 @@ EXPORT_SYMBOL(vfs_symlink);
 EXPORT_SYMBOL(vfs_unlink);
 EXPORT_SYMBOL(dentry_unhash);
 EXPORT_SYMBOL(generic_readlink);
+EXPORT_SYMBOL(vx_info_mnt_namespace);
