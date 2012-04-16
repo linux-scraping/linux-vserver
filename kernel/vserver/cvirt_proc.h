@@ -7,6 +7,7 @@
 #include <linux/utsname.h>
 #include <linux/ipc.h>
 
+extern int vx_info_mnt_namespace(struct mnt_namespace *, char *);
 
 static inline
 int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
@@ -14,8 +15,6 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	struct mnt_namespace *ns;
 	struct uts_namespace *uts;
 	struct ipc_namespace *ipc;
-	struct path path;
-	char *pstr, *root;
 	int length = 0;
 
 	if (!nsproxy)
@@ -30,21 +29,8 @@ int vx_info_proc_nsproxy(struct nsproxy *nsproxy, char *buffer)
 	if (!ns)
 		goto skip_ns;
 
-/*	FIXME: move to fs?
+	length += vx_info_mnt_namespace(ns, buffer + length);
 
-	pstr = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!pstr)
-		goto skip_ns;
-
-	path.mnt = ns->root;
-	path.dentry = ns->root->mnt_root;
-	root = d_path(&path, pstr, PATH_MAX - 2);
-	length += sprintf(buffer + length,
-		"Namespace:\t%p [#%u]\n"
-		"RootPath:\t%s\n",
-		ns, atomic_read(&ns->count),
-		root);
-	kfree(pstr); */
 skip_ns:
 
 	uts = nsproxy->uts_ns;
