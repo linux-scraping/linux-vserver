@@ -9,6 +9,7 @@
 #include <linux/slab.h>
 #include <linux/time.h>
 #include <linux/irqnr.h>
+#include <linux/vserver/cvirt.h>
 #include <asm/cputime.h>
 #include <linux/tick.h>
 
@@ -64,6 +65,10 @@ static int show_stat(struct seq_file *p, void *v)
 		irq = softirq = steal = 0;
 	guest = guest_nice = 0;
 	getboottime(&boottime);
+
+	if (vx_flags(VXF_VIRT_UPTIME, 0))
+		vx_vsi_boottime(&boottime);
+
 	jif = boottime.tv_sec;
 
 	for_each_possible_cpu(i) {
