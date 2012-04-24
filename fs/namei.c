@@ -3461,6 +3461,8 @@ long do_cow_splice(struct file *in, struct file *out, size_t len)
 	return do_splice_direct(in, &ppos, out, len, 0);
 }
 
+extern unsigned int mnt_get_count(struct mount *mnt);
+
 struct dentry *cow_break_link(const char *pathname)
 {
 	int ret, mode, pathlen, redo = 0;
@@ -3483,7 +3485,7 @@ struct dentry *cow_break_link(const char *pathname)
 	ret = do_path_lookup(AT_FDCWD, pathname, LOOKUP_FOLLOW, &old_nd);
 	vxdprintk(VXD_CBIT(misc, 2),
 		"do_path_lookup(old): %d [r=%d]",
-		ret, mnt_get_count(old_nd.path.mnt));
+		ret, mnt_get_count(real_mount(old_nd.path.mnt)));
 	if (ret < 0)
 		goto out_free_path;
 
@@ -3665,7 +3667,7 @@ out:
 	}
 	vxdprintk(VXD_CBIT(misc, 3),
 		"cow_break_link returning with %p [r=%d]",
-		new_dentry, mnt_get_count(old_nd.path.mnt));
+		new_dentry, mnt_get_count(real_mount(old_nd.path.mnt)));
 	return new_dentry;
 }
 
