@@ -6,6 +6,8 @@
 
 struct timespec;
 
+void vx_vsi_boottime(struct timespec *);
+
 void vx_vsi_uptime(struct timespec *, struct timespec *);
 
 
