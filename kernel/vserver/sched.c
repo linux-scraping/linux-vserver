@@ -15,6 +15,7 @@
 
 #include <linux/vs_context.h>
 #include <linux/vs_sched.h>
+#include <linux/cpumask.h>
 #include <linux/vserver/sched_cmd.h>
 
 #include <asm/uaccess.h>
@@ -37,10 +38,10 @@ static int do_set_prio_bias(struct vx_info *vxi, struct vcmd_prio_bias *data)
 
 	if (data->cpu_id != ~0) {
 		vxi->sched.update = cpumask_of_cpu(data->cpu_id);
-		cpus_and(vxi->sched.update, cpu_online_map,
-			vxi->sched.update);
+		cpumask_and(&vxi->sched.update, &vxi->sched.update,
+			cpu_online_mask);
 	} else
-		vxi->sched.update = cpu_online_map;
+		cpumask_copy(&vxi->sched.update, cpu_online_mask);
 
 	for_each_cpu_mask(cpu, vxi->sched.update)
 		vx_update_sched_param(&vxi->sched,

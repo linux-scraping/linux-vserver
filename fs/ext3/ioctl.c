@@ -7,16 +7,10 @@
  * Universite Pierre et Marie Curie (Paris VI)
  */
 
-#include <linux/fs.h>
 #include <linux/mount.h>
-#include <linux/jbd.h>
-#include <linux/capability.h>
-#include <linux/ext3_fs.h>
-#include <linux/ext3_jbd.h>
-#include <linux/mount.h>
-#include <linux/time.h>
 #include <linux/compat.h>
 #include <asm/uaccess.h>
+#include "ext3.h"
 
 
 int ext3_sync_flags(struct inode *inode, int flags, int vflags)

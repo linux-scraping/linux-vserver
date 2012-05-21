@@ -14,9 +14,9 @@
 #include <linux/time.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
-#include <linux/reiserfs_fs.h>
-#include <linux/reiserfs_acl.h>
-#include <linux/reiserfs_xattr.h>
+#include "reiserfs.h"
+#include "acl.h"
+#include "xattr.h"
 #include <linux/quotaops.h>
 #include <linux/vs_tag.h>
 
