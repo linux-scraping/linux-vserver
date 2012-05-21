@@ -1,6 +1,6 @@
 VERSION = 3
-PATCHLEVEL = 3
-SUBLEVEL = 8
+PATCHLEVEL = 4
+SUBLEVEL = 0
 EXTRAVERSION = -vs2.3.3.4
 NAME = Saber-toothed Squirrel
 
@@ -1173,7 +1173,7 @@ MRPROPER_FILES += .config .config.old .version .old_version             \
 #
 clean: rm-dirs  := $(CLEAN_DIRS)
 clean: rm-files := $(CLEAN_FILES)
-clean-dirs      := $(addprefix _clean_, . $(vmlinux-alldirs) Documentation)
+clean-dirs      := $(addprefix _clean_, . $(vmlinux-alldirs) Documentation samples)
 
 PHONY += $(clean-dirs) clean archclean
 $(clean-dirs):

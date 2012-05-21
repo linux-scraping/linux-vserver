@@ -376,6 +376,12 @@ struct usb_bus {
 
 struct usb_tt;
 
+enum usb_device_removable {
+	USB_DEVICE_REMOVABLE_UNKNOWN = 0,
+	USB_DEVICE_REMOVABLE,
+	USB_DEVICE_FIXED,
+};
+
 /**
  * struct usb_device - kernel's representation of a USB device
  * @devnum: device number; address on a USB bus
@@ -432,6 +438,7 @@ struct usb_tt;
  * @wusb_dev: if this is a Wireless USB device, link to the WUSB
  *	specific data for the device.
  * @slot_id: Slot ID assigned by xHCI
+ * @removable: Device can be physically removed from this port
  *
  * Notes:
  * Usbcore drivers should not set usbdev->state directly.  Instead use
@@ -494,7 +501,7 @@ struct usb_device {
 #endif
 
 	int maxchild;
-	struct usb_device *children[USB_MAXCHILDREN];
+	struct usb_device **children;
 
 	u32 quirks;
 	atomic_t urbnum;
@@ -509,6 +516,7 @@ struct usb_device {
 #endif
 	struct wusb_dev *wusb_dev;
 	int slot_id;
+	enum usb_device_removable removable;
 };
 #define	to_usb_device(d) container_of(d, struct usb_device, dev)
 
@@ -1371,7 +1379,6 @@ extern int usb_unlink_urb(struct urb *urb);
 extern void usb_kill_urb(struct urb *urb);
 extern void usb_poison_urb(struct urb *urb);
 extern void usb_unpoison_urb(struct urb *urb);
-extern void usb_block_urb(struct urb *urb);
 extern void usb_kill_anchored_urbs(struct usb_anchor *anchor);
 extern void usb_poison_anchored_urbs(struct usb_anchor *anchor);
 extern void usb_unpoison_anchored_urbs(struct usb_anchor *anchor);
@@ -1383,8 +1390,6 @@ extern int usb_wait_anchor_empty_timeout(struct usb_anchor *anchor,
 extern struct urb *usb_get_from_anchor(struct usb_anchor *anchor);
 extern void usb_scuttle_anchored_urbs(struct usb_anchor *anchor);
 extern int usb_anchor_empty(struct usb_anchor *anchor);
-
-#define usb_unblock_urb	usb_unpoison_urb
 
 /**
  * usb_urb_dir_in - check if an URB describes an IN transfer

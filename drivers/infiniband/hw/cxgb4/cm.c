@@ -1114,7 +1114,7 @@ static void process_mpa_reply(struct c4iw_ep *ep, struct sk_buff *skb)
 	 * generated when moving QP to RTS state.
 	 * A TERM message will be sent after QP has moved to RTS state
 	 */
-	if ((ep->mpa_attr.version == 2) &&
+	if ((ep->mpa_attr.version == 2) && peer2peer &&
 			(ep->mpa_attr.p2p_type != p2p_type)) {
 		ep->mpa_attr.p2p_type = FW_RI_INIT_P2PTYPE_DISABLED;
 		rtr_mismatch = 1;
@@ -1562,11 +1562,11 @@ static int import_ep(struct c4iw_ep *ep, __be32 peer_ip, struct dst_entry *dst,
 	struct neighbour *n;
 	int err, step;
 
-	rcu_read_lock();
-	n = dst_get_neighbour_noref(dst);
-	err = -ENODEV;
+	n = dst_neigh_lookup(dst, &peer_ip);
 	if (!n)
-		goto out;
+		return -ENODEV;
+
+	rcu_read_lock();
 	err = -ENOMEM;
 	if (n->dev->flags & IFF_LOOPBACK) {
 		struct net_device *pdev;
@@ -1593,7 +1593,7 @@ static int import_ep(struct c4iw_ep *ep, __be32 peer_ip, struct dst_entry *dst,
 					n, n->dev, 0);
 		if (!ep->l2t)
 			goto out;
-		ep->mtu = dst_mtu(dst);
+		ep->mtu = dst_mtu(ep->dst);
 		ep->tx_chan = cxgb4_port_chan(n->dev);
 		ep->smac_idx = (cxgb4_port_viid(n->dev) & 0x7F) << 1;
 		step = cdev->rdev.lldi.ntxq /
@@ -1613,6 +1613,8 @@ static int import_ep(struct c4iw_ep *ep, __be32 peer_ip, struct dst_entry *dst,
 	err = 0;
 out:
 	rcu_read_unlock();
+
+	neigh_release(n);
 
 	return err;
 }
@@ -2654,12 +2656,6 @@ static int peer_abort_intr(struct c4iw_dev *dev, struct sk_buff *skb)
 	unsigned int tid = GET_TID(req);
 
 	ep = lookup_tid(t, tid);
-	if (!ep) {
-		printk(KERN_WARNING MOD
-		       "Abort on non-existent endpoint, tid %d\n", tid);
-		kfree_skb(skb);
-		return 0;
-	}
 	if (is_neg_adv_abort(req->status)) {
 		PDBG("%s neg_adv_abort ep %p tid %u\n", __func__, ep,
 		     ep->hwtid);
@@ -2671,8 +2667,11 @@ static int peer_abort_intr(struct c4iw_dev *dev, struct sk_buff *skb)
 
 	/*
 	 * Wake up any threads in rdma_init() or rdma_fini().
+	 * However, this is not needed if com state is just
+	 * MPA_REQ_SENT
 	 */
-	c4iw_wake_up(&ep->com.wr_wait, -ECONNRESET);
+	if (ep->com.state != MPA_REQ_SENT)
+		c4iw_wake_up(&ep->com.wr_wait, -ECONNRESET);
 	sched(dev, skb);
 	return 0;
 }

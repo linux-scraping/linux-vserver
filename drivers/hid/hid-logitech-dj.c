@@ -26,7 +26,6 @@
 #include <linux/hid.h>
 #include <linux/module.h>
 #include <linux/usb.h>
-#include <asm/unaligned.h>
 #include "usbhid/usbhid.h"
 #include "hid-ids.h"
 #include "hid-logitech-dj.h"
@@ -266,8 +265,8 @@ static void logi_dj_recv_add_djhid_device(struct dj_receiver_dev *djrcv_dev,
 		goto dj_device_allocate_fail;
 	}
 
-	dj_dev->reports_supported = get_unaligned_le32(
-		dj_report->report_params + DEVICE_PAIRED_RF_REPORT_TYPE);
+	dj_dev->reports_supported = le32_to_cpu(
+		dj_report->report_params[DEVICE_PAIRED_RF_REPORT_TYPE]);
 	dj_dev->hdev = dj_hiddev;
 	dj_dev->dj_receiver_dev = djrcv_dev;
 	dj_dev->device_index = dj_report->device_index;
@@ -446,7 +445,7 @@ static int logi_dj_recv_switch_to_dj_mode(struct dj_receiver_dev *djrcv_dev,
 	dj_report.report_id = REPORT_ID_DJ_SHORT;
 	dj_report.device_index = 0xFF;
 	dj_report.report_type = REPORT_TYPE_CMD_SWITCH;
-	dj_report.report_params[CMD_SWITCH_PARAM_DEVBITFIELD] = 0x1F;
+	dj_report.report_params[CMD_SWITCH_PARAM_DEVBITFIELD] = 0x3F;
 	dj_report.report_params[CMD_SWITCH_PARAM_TIMEOUT_SECONDS] = (u8)timeout;
 	return logi_dj_recv_send_report(djrcv_dev, &dj_report);
 }

@@ -72,7 +72,6 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
 		xhci_dbg(xhci, "QUIRK: Fresco Logic revision %u "
 				"has broken MSI implementation\n",
 				pdev->revision);
-		xhci->quirks |= XHCI_TRUST_TX_LENGTH;
 	}
 
 	if (pdev->vendor == PCI_VENDOR_ID_NEC)
@@ -329,7 +328,7 @@ int __init xhci_register_pci(void)
 	return pci_register_driver(&xhci_pci_driver);
 }
 
-void __exit xhci_unregister_pci(void)
+void xhci_unregister_pci(void)
 {
 	pci_unregister_driver(&xhci_pci_driver);
 }
