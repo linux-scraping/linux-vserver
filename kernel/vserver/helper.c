@@ -18,14 +18,19 @@
 
 char vshelper_path[255] = "/sbin/vshelper";
 
+static int vshelper_init(struct subprocess_info *info, struct cred *new_cred)
+{
+	current->flags &= ~PF_THREAD_BOUND;
+	return 0;
+}
 
 static int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 {
 	int ret;
 
-	if ((ret = call_usermodehelper(name, argv, envp, sync))) {
-		printk(	KERN_WARNING
-			"%s: (%s %s) returned %s with %d\n",
+	if ((ret = call_usermodehelper_fns(name, argv, envp, sync,
+		vshelper_init, NULL, NULL))) {
+		printk(KERN_WARNING "%s: (%s %s) returned %s with %d\n",
 			name, argv[1], argv[2],
 			sync ? "sync" : "async", ret);
 	}
