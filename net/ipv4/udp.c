@@ -2107,8 +2107,8 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
 		int bucket, int *len)
 {
 	struct inet_sock *inet = inet_sk(sp);
-	__be32 dest = inet->inet_daddr;
-	__be32 src  = inet->inet_rcv_saddr;
+	__be32 dest = nx_map_sock_lback(current_nx_info(), inet->inet_daddr);
+	__be32 src = nx_map_sock_lback(current_nx_info(), inet->inet_rcv_saddr);
 	__u16 destp	  = ntohs(inet->inet_dport);
 	__u16 srcp	  = ntohs(inet->inet_sport);
 
