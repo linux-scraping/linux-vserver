@@ -993,6 +993,9 @@ NORET_TYPE void do_exit(long code)
 	 */
 	ptrace_put_breakpoints(tsk);
 
+	/* needs to stay before exit_notify() */
+	exit_vx_info_early(tsk, code);
+
 	exit_notify(tsk, group_dead);
 #ifdef CONFIG_NUMA
 	task_lock(tsk);

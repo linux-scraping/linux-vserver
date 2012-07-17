@@ -2187,6 +2187,33 @@ intel_pipe_set_base_atomic(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 }
 
 static int
+intel_finish_fb(struct drm_framebuffer *old_fb)
+{
+	struct drm_i915_gem_object *obj = to_intel_framebuffer(old_fb)->obj;
+	struct drm_i915_private *dev_priv = obj->base.dev->dev_private;
+	bool was_interruptible = dev_priv->mm.interruptible;
+	int ret;
+
+	wait_event(dev_priv->pending_flip_queue,
+		   atomic_read(&dev_priv->mm.wedged) ||
+		   atomic_read(&obj->pending_flip) == 0);
+
+	/* Big Hammer, we also need to ensure that any pending
+	 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
+	 * current scanout is retired before unpinning the old
+	 * framebuffer.
+	 *
+	 * This should only fail upon a hung GPU, in which case we
+	 * can safely continue.
+	 */
+	dev_priv->mm.interruptible = false;
+	ret = i915_gem_object_finish_gpu(obj);
+	dev_priv->mm.interruptible = was_interruptible;
+
+	return ret;
+}
+
+static int
 intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 		    struct drm_framebuffer *old_fb)
 {
@@ -2224,25 +2251,8 @@ intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 		return ret;
 	}
 
-	if (old_fb) {
-		struct drm_i915_private *dev_priv = dev->dev_private;
-		struct drm_i915_gem_object *obj = to_intel_framebuffer(old_fb)->obj;
-
-		wait_event(dev_priv->pending_flip_queue,
-			   atomic_read(&dev_priv->mm.wedged) ||
-			   atomic_read(&obj->pending_flip) == 0);
-
-		/* Big Hammer, we also need to ensure that any pending
-		 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
-		 * current scanout is retired before unpinning the old
-		 * framebuffer.
-		 *
-		 * This should only fail upon a hung GPU, in which case we
-		 * can safely continue.
-		 */
-		ret = i915_gem_object_finish_gpu(obj);
-		(void) ret;
-	}
+	if (old_fb)
+		intel_finish_fb(old_fb);
 
 	ret = intel_pipe_set_base_atomic(crtc, crtc->fb, x, y,
 					 LEAVE_ATOMIC_MODE_SET);
@@ -3311,6 +3321,23 @@ static void intel_crtc_disable(struct drm_crtc *crtc)
 {
 	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 	struct drm_device *dev = crtc->dev;
+
+	/* Flush any pending WAITs before we disable the pipe. Note that
+	 * we need to drop the struct_mutex in order to acquire it again
+	 * during the lowlevel dpms routines around a couple of the
+	 * operations. It does not look trivial nor desirable to move
+	 * that locking higher. So instead we leave a window for the
+	 * submission of further commands on the fb before we can actually
+	 * disable it. This race with userspace exists anyway, and we can
+	 * only rely on the pipe being disabled by userspace after it
+	 * receives the hotplug notification and has flushed any pending
+	 * batches.
+	 */
+	if (crtc->fb) {
+		mutex_lock(&dev->struct_mutex);
+		intel_finish_fb(crtc->fb);
+		mutex_unlock(&dev->struct_mutex);
+	}
 
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
 
@@ -7009,14 +7036,14 @@ static int intel_gen2_queue_flip(struct drm_device *dev,
 
 	ret = intel_pin_and_fence_fb_obj(dev, obj, LP_RING(dev_priv));
 	if (ret)
-		goto out;
+		goto err;
 
 	/* Offset into the new buffer for cases of shared fbs between CRTCs */
 	offset = crtc->y * fb->pitch + crtc->x * fb->bits_per_pixel/8;
 
 	ret = BEGIN_LP_RING(6);
 	if (ret)
-		goto out;
+		goto err_unpin;
 
 	/* Can't queue multiple flips, so wait for the previous
 	 * one to finish before executing the next.
@@ -7033,7 +7060,11 @@ static int intel_gen2_queue_flip(struct drm_device *dev,
 	OUT_RING(obj->gtt_offset + offset);
 	OUT_RING(MI_NOOP);
 	ADVANCE_LP_RING();
-out:
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin(obj);
+err:
 	return ret;
 }
 
@@ -7050,14 +7081,14 @@ static int intel_gen3_queue_flip(struct drm_device *dev,
 
 	ret = intel_pin_and_fence_fb_obj(dev, obj, LP_RING(dev_priv));
 	if (ret)
-		goto out;
+		goto err;
 
 	/* Offset into the new buffer for cases of shared fbs between CRTCs */
 	offset = crtc->y * fb->pitch + crtc->x * fb->bits_per_pixel/8;
 
 	ret = BEGIN_LP_RING(6);
 	if (ret)
-		goto out;
+		goto err_unpin;
 
 	if (intel_crtc->plane)
 		flip_mask = MI_WAIT_FOR_PLANE_B_FLIP;
@@ -7072,7 +7103,11 @@ static int intel_gen3_queue_flip(struct drm_device *dev,
 	OUT_RING(MI_NOOP);
 
 	ADVANCE_LP_RING();
-out:
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin(obj);
+err:
 	return ret;
 }
 
@@ -7088,11 +7123,11 @@ static int intel_gen4_queue_flip(struct drm_device *dev,
 
 	ret = intel_pin_and_fence_fb_obj(dev, obj, LP_RING(dev_priv));
 	if (ret)
-		goto out;
+		goto err;
 
 	ret = BEGIN_LP_RING(4);
 	if (ret)
-		goto out;
+		goto err_unpin;
 
 	/* i965+ uses the linear or tiled offsets from the
 	 * Display Registers (which do not change across a page-flip)
@@ -7111,7 +7146,11 @@ static int intel_gen4_queue_flip(struct drm_device *dev,
 	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
 	OUT_RING(pf | pipesrc);
 	ADVANCE_LP_RING();
-out:
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin(obj);
+err:
 	return ret;
 }
 
@@ -7127,11 +7166,11 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
 
 	ret = intel_pin_and_fence_fb_obj(dev, obj, LP_RING(dev_priv));
 	if (ret)
-		goto out;
+		goto err;
 
 	ret = BEGIN_LP_RING(4);
 	if (ret)
-		goto out;
+		goto err_unpin;
 
 	OUT_RING(MI_DISPLAY_FLIP |
 		 MI_DISPLAY_FLIP_PLANE(intel_crtc->plane));
@@ -7142,7 +7181,11 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
 	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
 	OUT_RING(pf | pipesrc);
 	ADVANCE_LP_RING();
-out:
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin(obj);
+err:
 	return ret;
 }
 
@@ -7160,22 +7203,43 @@ static int intel_gen7_queue_flip(struct drm_device *dev,
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_crtc *intel_crtc = to_intel_crtc(crtc);
 	struct intel_ring_buffer *ring = &dev_priv->ring[BCS];
+	uint32_t plane_bit = 0;
 	int ret;
 
 	ret = intel_pin_and_fence_fb_obj(dev, obj, ring);
 	if (ret)
-		goto out;
+		goto err;
+
+	switch(intel_crtc->plane) {
+	case PLANE_A:
+		plane_bit = MI_DISPLAY_FLIP_IVB_PLANE_A;
+		break;
+	case PLANE_B:
+		plane_bit = MI_DISPLAY_FLIP_IVB_PLANE_B;
+		break;
+	case PLANE_C:
+		plane_bit = MI_DISPLAY_FLIP_IVB_PLANE_C;
+		break;
+	default:
+		WARN_ONCE(1, "unknown plane in flip command\n");
+		ret = -ENODEV;
+		goto err;
+	}
 
 	ret = intel_ring_begin(ring, 4);
 	if (ret)
-		goto out;
+		goto err_unpin;
 
-	intel_ring_emit(ring, MI_DISPLAY_FLIP_I915 | (intel_crtc->plane << 19));
+	intel_ring_emit(ring, MI_DISPLAY_FLIP_I915 | plane_bit);
 	intel_ring_emit(ring, (fb->pitch | obj->tiling_mode));
 	intel_ring_emit(ring, (obj->gtt_offset));
 	intel_ring_emit(ring, (MI_NOOP));
 	intel_ring_advance(ring);
-out:
+	return 0;
+
+err_unpin:
+	i915_gem_object_unpin(obj);
+err:
 	return ret;
 }
 
