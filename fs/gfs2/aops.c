@@ -36,8 +36,8 @@
 #include "glops.h"
 
 
-void gfs2_page_add_databufs(struct gfs2_inode *ip, struct page *page,
-			    unsigned int from, unsigned int to)
+static void gfs2_page_add_databufs(struct gfs2_inode *ip, struct page *page,
+				   unsigned int from, unsigned int to)
 {
 	struct buffer_head *head = page_buffers(page);
 	unsigned int bsize = head->b_size;
@@ -517,15 +517,14 @@ out:
 /**
  * gfs2_internal_read - read an internal file
  * @ip: The gfs2 inode
- * @ra_state: The readahead state (or NULL for no readahead)
  * @buf: The buffer to fill
  * @pos: The file position
  * @size: The amount to read
  *
  */
 
-int gfs2_internal_read(struct gfs2_inode *ip, struct file_ra_state *ra_state,
-                       char *buf, loff_t *pos, unsigned size)
+int gfs2_internal_read(struct gfs2_inode *ip, char *buf, loff_t *pos,
+                       unsigned size)
 {
 	struct address_space *mapping = ip->i_inode.i_mapping;
 	unsigned long index = *pos / PAGE_CACHE_SIZE;
@@ -943,8 +942,8 @@ static void gfs2_discard(struct gfs2_sbd *sdp, struct buffer_head *bh)
 	clear_buffer_dirty(bh);
 	bd = bh->b_private;
 	if (bd) {
-		if (!list_empty(&bd->bd_le.le_list) && !buffer_pinned(bh))
-			list_del_init(&bd->bd_le.le_list);
+		if (!list_empty(&bd->bd_list) && !buffer_pinned(bh))
+			list_del_init(&bd->bd_list);
 		else
 			gfs2_remove_from_journal(bh, current->journal_info, 0);
 	}
@@ -1012,7 +1011,6 @@ static ssize_t gfs2_direct_IO(int rw, struct kiocb *iocb,
 {
 	struct file *file = iocb->ki_filp;
 	struct inode *inode = file->f_mapping->host;
-	struct address_space *mapping = inode->i_mapping;
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_holder gh;
 	int rv;
@@ -1032,35 +1030,6 @@ static ssize_t gfs2_direct_IO(int rw, struct kiocb *iocb,
 	rv = gfs2_ok_for_dio(ip, rw, offset);
 	if (rv != 1)
 		goto out; /* dio not valid, fall back to buffered i/o */
-
-	/*
-	 * Now since we are holding a deferred (CW) lock at this point, you
-	 * might be wondering why this is ever needed. There is a case however
-	 * where we've granted a deferred local lock against a cached exclusive
-	 * glock. That is ok provided all granted local locks are deferred, but
-	 * it also means that it is possible to encounter pages which are
-	 * cached and possibly also mapped. So here we check for that and sort
-	 * them out ahead of the dio. The glock state machine will take care of
-	 * everything else.
-	 *
-	 * If in fact the cached glock state (gl->gl_state) is deferred (CW) in
-	 * the first place, mapping->nr_pages will always be zero.
-	 */
-	if (mapping->nrpages) {
-		loff_t lstart = offset & (PAGE_CACHE_SIZE - 1);
-		loff_t len = iov_length(iov, nr_segs);
-		loff_t end = PAGE_ALIGN(offset + len) - 1;
-
-		rv = 0;
-		if (len == 0)
-			goto out;
-		if (test_and_clear_bit(GIF_SW_PAGED, &ip->i_flags))
-			unmap_shared_mapping_range(ip->i_inode.i_mapping, offset, len);
-		rv = filemap_write_and_wait_range(mapping, lstart, end);
-		if (rv)
-			return rv;
-		truncate_inode_pages_range(mapping, lstart, end);
-	}
 
 	rv = __blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
 				  offset, nr_segs, gfs2_get_block_direct,
@@ -1114,10 +1083,9 @@ int gfs2_releasepage(struct page *page, gfp_t gfp_mask)
 		bd = bh->b_private;
 		if (bd) {
 			gfs2_assert_warn(sdp, bd->bd_bh == bh);
-			gfs2_assert_warn(sdp, list_empty(&bd->bd_list_tr));
-			if (!list_empty(&bd->bd_le.le_list)) {
+			if (!list_empty(&bd->bd_list)) {
 				if (!buffer_pinned(bh))
-					list_del_init(&bd->bd_le.le_list);
+					list_del_init(&bd->bd_list);
 				else
 					bd = NULL;
 			}

@@ -41,9 +41,6 @@ struct oz_serial_ctx {
 };
 /*------------------------------------------------------------------------------
  */
-int g_taction;
-/*------------------------------------------------------------------------------
- */
 static struct oz_cdev g_cdev;
 /*------------------------------------------------------------------------------
  * Context: process and softirq
@@ -152,9 +149,6 @@ ssize_t oz_cdev_write(struct file *filp, const char __user *buf, size_t count,
 	struct oz_elt *elt;
 	struct oz_app_hdr *app_hdr;
 	struct oz_serial_ctx *ctx;
-
-	if (count > sizeof(ei->data) - sizeof(*elt) - sizeof(*app_hdr))
-		return -EINVAL;
 
 	spin_lock_bh(&g_cdev.lock);
 	pd = g_cdev.active_pd;
@@ -279,20 +273,6 @@ long oz_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				return -EFAULT;
 		}
 		break;
-#ifdef WANT_EVENT_TRACE
-	case OZ_IOCTL_CLEAR_EVENTS:
-		oz_events_clear();
-		break;
-	case OZ_IOCTL_GET_EVENTS:
-		rc = oz_events_copy((void __user *)arg);
-		break;
-	case OZ_IOCTL_SET_EVENT_MASK:
-		if (copy_from_user(&g_evt_mask, (void __user *)arg,
-			sizeof(unsigned long))) {
-			return -EFAULT;
-		}
-		break;
-#endif /* WANT_EVENT_TRACE */
 	case OZ_IOCTL_ADD_BINDING:
 	case OZ_IOCTL_REMOVE_BINDING: {
 			struct oz_binding_info b;

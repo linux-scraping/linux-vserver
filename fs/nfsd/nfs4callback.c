@@ -650,9 +650,10 @@ static int setup_callback_client(struct nfs4_client *clp, struct nfs4_cb_conn *c
 	struct rpc_clnt *client;
 
 	if (clp->cl_minorversion == 0) {
-		if (!clp->cl_principal && (clp->cl_flavor >= RPC_AUTH_GSS_KRB5))
+		if (!clp->cl_cred.cr_principal &&
+				(clp->cl_flavor >= RPC_AUTH_GSS_KRB5))
 			return -EINVAL;
-		args.client_name = clp->cl_principal;
+		args.client_name = clp->cl_cred.cr_principal;
 		args.prognumber	= conn->cb_prog,
 		args.protocol = XPRT_TRANSPORT_TCP;
 		args.authflavor = clp->cl_flavor;
@@ -784,12 +785,8 @@ static bool nfsd41_cb_get_slot(struct nfs4_client *clp, struct rpc_task *task)
 {
 	if (test_and_set_bit(0, &clp->cl_cb_slot_busy) != 0) {
 		rpc_sleep_on(&clp->cl_cb_waitq, task, NULL);
-		/* Race breaker */
-		if (test_and_set_bit(0, &clp->cl_cb_slot_busy) != 0) {
-			dprintk("%s slot is busy\n", __func__);
-			return false;
-		}
-		rpc_wake_up_queued_task(&clp->cl_cb_waitq, task);
+		dprintk("%s slot is busy\n", __func__);
+		return false;
 	}
 	return true;
 }

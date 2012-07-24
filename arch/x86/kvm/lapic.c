@@ -92,6 +92,11 @@ static inline int apic_test_and_clear_vector(int vec, void *bitmap)
 	return test_and_clear_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
 }
 
+static inline int apic_test_vector(int vec, void *bitmap)
+{
+	return test_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
+}
+
 static inline void apic_set_vector(int vec, void *bitmap)
 {
 	set_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
@@ -480,7 +485,6 @@ int kvm_apic_compare_prio(struct kvm_vcpu *vcpu1, struct kvm_vcpu *vcpu2)
 static void apic_set_eoi(struct kvm_lapic *apic)
 {
 	int vector = apic_find_highest_isr(apic);
-	int trigger_mode;
 	/*
 	 * Not every write EOI will has corresponding ISR,
 	 * one example is when Kernel check timer on setup_IO_APIC
@@ -491,12 +495,15 @@ static void apic_set_eoi(struct kvm_lapic *apic)
 	apic_clear_vector(vector, apic->regs + APIC_ISR);
 	apic_update_ppr(apic);
 
-	if (apic_test_and_clear_vector(vector, apic->regs + APIC_TMR))
-		trigger_mode = IOAPIC_LEVEL_TRIG;
-	else
-		trigger_mode = IOAPIC_EDGE_TRIG;
-	if (!(apic_get_reg(apic, APIC_SPIV) & APIC_SPIV_DIRECTED_EOI))
+	if (!(apic_get_reg(apic, APIC_SPIV) & APIC_SPIV_DIRECTED_EOI) &&
+	    kvm_ioapic_handles_vector(apic->vcpu->kvm, vector)) {
+		int trigger_mode;
+		if (apic_test_vector(vector, apic->regs + APIC_TMR))
+			trigger_mode = IOAPIC_LEVEL_TRIG;
+		else
+			trigger_mode = IOAPIC_EDGE_TRIG;
 		kvm_ioapic_update_eoi(apic->vcpu->kvm, vector, trigger_mode);
+	}
 	kvm_make_request(KVM_REQ_EVENT, apic->vcpu);
 }
 
@@ -538,8 +545,7 @@ static u32 apic_get_tmcct(struct kvm_lapic *apic)
 	ASSERT(apic != NULL);
 
 	/* if initial count is 0, current count should also be 0 */
-	if (apic_get_reg(apic, APIC_TMICT) == 0 ||
-		apic->lapic_timer.period == 0)
+	if (apic_get_reg(apic, APIC_TMICT) == 0)
 		return 0;
 
 	remaining = hrtimer_get_remaining(&apic->lapic_timer.timer);
@@ -761,10 +767,10 @@ static void apic_manage_nmi_watchdog(struct kvm_lapic *apic, u32 lvt0_val)
 		if (!nmi_wd_enabled) {
 			apic_debug("Receive NMI setting on APIC_LVT0 "
 				   "for cpu %d\n", apic->vcpu->vcpu_id);
-			atomic_inc(&apic->vcpu->kvm->arch.vapics_in_nmi_mode);
+			apic->vcpu->kvm->arch.vapics_in_nmi_mode++;
 		}
 	} else if (nmi_wd_enabled)
-		atomic_dec(&apic->vcpu->kvm->arch.vapics_in_nmi_mode);
+		apic->vcpu->kvm->arch.vapics_in_nmi_mode--;
 }
 
 static int apic_reg_write(struct kvm_lapic *apic, u32 reg, u32 val)
@@ -1082,6 +1088,7 @@ void kvm_lapic_reset(struct kvm_vcpu *vcpu)
 	apic_update_ppr(apic);
 
 	vcpu->arch.apic_arb_prio = 0;
+	vcpu->arch.apic_attention = 0;
 
 	apic_debug(KERN_INFO "%s: vcpu=%p, id=%d, base_msr="
 		   "0x%016" PRIx64 ", base_address=0x%0lx.\n", __func__,
@@ -1257,7 +1264,6 @@ void kvm_apic_post_state_restore(struct kvm_vcpu *vcpu)
 
 	apic_update_ppr(apic);
 	hrtimer_cancel(&apic->lapic_timer.timer);
-	apic_manage_nmi_watchdog(apic, apic_get_reg(apic, APIC_LVT0));
 	update_divide_count(apic);
 	start_apic_timer(apic);
 	apic->irr_pending = true;
@@ -1280,12 +1286,14 @@ void __kvm_migrate_apic_timer(struct kvm_vcpu *vcpu)
 void kvm_lapic_sync_from_vapic(struct kvm_vcpu *vcpu)
 {
 	u32 data;
+	void *vapic;
 
-	if (!irqchip_in_kernel(vcpu->kvm) || !vcpu->arch.apic->vapic_addr)
+	if (!test_bit(KVM_APIC_CHECK_VAPIC, &vcpu->arch.apic_attention))
 		return;
 
-	kvm_read_guest_cached(vcpu->kvm, &vcpu->arch.apic->vapic_cache, &data,
-			      sizeof(u32));
+	vapic = kmap_atomic(vcpu->arch.apic->vapic_page);
+	data = *(u32 *)(vapic + offset_in_page(vcpu->arch.apic->vapic_addr));
+	kunmap_atomic(vapic);
 
 	apic_set_tpr(vcpu->arch.apic, data & 0xff);
 }
@@ -1295,8 +1303,9 @@ void kvm_lapic_sync_to_vapic(struct kvm_vcpu *vcpu)
 	u32 data, tpr;
 	int max_irr, max_isr;
 	struct kvm_lapic *apic;
+	void *vapic;
 
-	if (!irqchip_in_kernel(vcpu->kvm) || !vcpu->arch.apic->vapic_addr)
+	if (!test_bit(KVM_APIC_CHECK_VAPIC, &vcpu->arch.apic_attention))
 		return;
 
 	apic = vcpu->arch.apic;
@@ -1309,24 +1318,18 @@ void kvm_lapic_sync_to_vapic(struct kvm_vcpu *vcpu)
 		max_isr = 0;
 	data = (tpr & 0xff) | ((max_isr & 0xf0) << 8) | (max_irr << 24);
 
-	kvm_write_guest_cached(vcpu->kvm, &vcpu->arch.apic->vapic_cache, &data,
-			       sizeof(u32));
+	vapic = kmap_atomic(vcpu->arch.apic->vapic_page);
+	*(u32 *)(vapic + offset_in_page(vcpu->arch.apic->vapic_addr)) = data;
+	kunmap_atomic(vapic);
 }
 
-int kvm_lapic_set_vapic_addr(struct kvm_vcpu *vcpu, gpa_t vapic_addr)
+void kvm_lapic_set_vapic_addr(struct kvm_vcpu *vcpu, gpa_t vapic_addr)
 {
-	if (!irqchip_in_kernel(vcpu->kvm))
-		return -EINVAL;
-
-	if (vapic_addr) {
-		if (kvm_gfn_to_hva_cache_init(vcpu->kvm,
-					&vcpu->arch.apic->vapic_cache,
-					vapic_addr, sizeof(u32)))
-			return -EINVAL;
-       }
-
 	vcpu->arch.apic->vapic_addr = vapic_addr;
-	return 0;
+	if (vapic_addr)
+		__set_bit(KVM_APIC_CHECK_VAPIC, &vcpu->arch.apic_attention);
+	else
+		__clear_bit(KVM_APIC_CHECK_VAPIC, &vcpu->arch.apic_attention);
 }
 
 int kvm_x2apic_msr_write(struct kvm_vcpu *vcpu, u32 msr, u64 data)

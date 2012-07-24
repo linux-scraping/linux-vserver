@@ -237,12 +237,6 @@ static noinline void do_fault_error(struct pt_regs *regs, int fault)
 				do_no_context(regs);
 			else
 				pagefault_out_of_memory();
-		} else if (fault & VM_FAULT_SIGSEGV) {
-			/* Kernel mode? Handle exceptions or die */
-			if (!user_mode(regs))
-				do_no_context(regs);
-			else
-				do_sigsegv(regs, SEGV_MAPERR);
 		} else if (fault & VM_FAULT_SIGBUS) {
 			/* Kernel mode? Handle exceptions or die */
 			if (!(regs->psw.mask & PSW_MASK_PSTATE))
@@ -300,7 +294,7 @@ static inline int do_exception(struct pt_regs *regs, int access)
 	down_read(&mm->mmap_sem);
 
 #ifdef CONFIG_PGSTE
-	if (test_tsk_thread_flag(current, TIF_SIE) && S390_lowcore.gmap) {
+	if ((current->flags & PF_VCPU) && S390_lowcore.gmap) {
 		address = __gmap_fault(address,
 				     (struct gmap *) S390_lowcore.gmap);
 		if (address == -EFAULT) {
@@ -449,7 +443,6 @@ int __handle_fault(unsigned long uaddr, unsigned long pgm_int_code, int write)
 	struct pt_regs regs;
 	int access, fault;
 
-	/* Emulate a uaccess fault from kernel mode. */
 	regs.psw.mask = psw_kernel_bits | PSW_MASK_DAT | PSW_MASK_MCHECK;
 	if (!irqs_disabled())
 		regs.psw.mask |= PSW_MASK_IO | PSW_MASK_EXT;
@@ -459,12 +452,12 @@ int __handle_fault(unsigned long uaddr, unsigned long pgm_int_code, int write)
 	regs.int_parm_long = (uaddr & PAGE_MASK) | 2;
 	access = write ? VM_WRITE : VM_READ;
 	fault = do_exception(&regs, access);
-	/*
-	 * Since the fault happened in kernel mode while performing a uaccess
-	 * all we need to do now is emulating a fixup in case "fault" is not
-	 * zero.
-	 * For the calling uaccess functions this results always in -EFAULT.
-	 */
+	if (unlikely(fault)) {
+		if (fault & VM_FAULT_OOM)
+			return -EFAULT;
+		else if (fault & VM_FAULT_SIGBUS)
+			do_sigbus(&regs);
+	}
 	return fault ? -EFAULT : 0;
 }
 
@@ -556,19 +549,15 @@ static void pfault_interrupt(struct ext_code ext_code,
 	if ((subcode & 0xff00) != __SUBCODE_MASK)
 		return;
 	kstat_cpu(smp_processor_id()).irqs[EXTINT_PFL]++;
-	if (subcode & 0x0080) {
-		/* Get the token (= pid of the affected task). */
-		pid = sizeof(void *) == 4 ? param32 : param64;
-		rcu_read_lock();
-		tsk = find_task_by_pid_ns(pid, &init_pid_ns);
-		if (tsk)
-			get_task_struct(tsk);
-		rcu_read_unlock();
-		if (!tsk)
-			return;
-	} else {
-		tsk = current;
-	}
+	/* Get the token (= pid of the affected task). */
+	pid = sizeof(void *) == 4 ? param32 : param64;
+	rcu_read_lock();
+	tsk = find_task_by_pid_ns(pid, &init_pid_ns);
+	if (tsk)
+		get_task_struct(tsk);
+	rcu_read_unlock();
+	if (!tsk)
+		return;
 	spin_lock(&pfault_lock);
 	if (subcode & 0x0080) {
 		/* signal bit is set -> a page has been swapped in by VM */
@@ -593,12 +582,13 @@ static void pfault_interrupt(struct ext_code ext_code,
 			if (tsk->state == TASK_RUNNING)
 				tsk->thread.pfault_wait = -1;
 		}
-		put_task_struct(tsk);
 	} else {
 		/* signal bit not set -> a real page is missing. */
+		if (WARN_ON_ONCE(tsk != current))
+			goto out;
 		if (tsk->thread.pfault_wait == 1) {
 			/* Already on the list with a reference: put to sleep */
-			set_task_state(tsk, TASK_UNINTERRUPTIBLE);
+			__set_task_state(tsk, TASK_UNINTERRUPTIBLE);
 			set_tsk_need_resched(tsk);
 		} else if (tsk->thread.pfault_wait == -1) {
 			/* Completion interrupt was faster than the initial
@@ -614,11 +604,13 @@ static void pfault_interrupt(struct ext_code ext_code,
 			get_task_struct(tsk);
 			tsk->thread.pfault_wait = 1;
 			list_add(&tsk->thread.list, &pfault_list);
-			set_task_state(tsk, TASK_UNINTERRUPTIBLE);
+			__set_task_state(tsk, TASK_UNINTERRUPTIBLE);
 			set_tsk_need_resched(tsk);
 		}
 	}
+out:
 	spin_unlock(&pfault_lock);
+	put_task_struct(tsk);
 }
 
 static int __cpuinit pfault_cpu_notify(struct notifier_block *self,

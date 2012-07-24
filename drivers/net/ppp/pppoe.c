@@ -201,7 +201,7 @@ static int __set_item(struct pppoe_net *pn, struct pppox_sock *po)
 	return 0;
 }
 
-static struct pppox_sock *__delete_item(struct pppoe_net *pn, __be16 sid,
+static void __delete_item(struct pppoe_net *pn, __be16 sid,
 					char *addr, int ifindex)
 {
 	int hash = hash_item(sid, addr);
@@ -220,8 +220,6 @@ static struct pppox_sock *__delete_item(struct pppoe_net *pn, __be16 sid,
 		src = &ret->next;
 		ret = ret->next;
 	}
-
-	return ret;
 }
 
 /**********************************************************************
@@ -264,16 +262,12 @@ static inline struct pppox_sock *get_item_by_addr(struct net *net,
 	return pppox_sock;
 }
 
-static inline struct pppox_sock *delete_item(struct pppoe_net *pn, __be16 sid,
+static inline void delete_item(struct pppoe_net *pn, __be16 sid,
 					char *addr, int ifindex)
 {
-	struct pppox_sock *ret;
-
 	write_lock_bh(&pn->hash_lock);
-	ret = __delete_item(pn, sid, addr, ifindex);
+	__delete_item(pn, sid, addr, ifindex);
 	write_unlock_bh(&pn->hash_lock);
-
-	return ret;
 }
 
 /***************************************************************************
@@ -576,7 +570,7 @@ static int pppoe_release(struct socket *sock)
 
 	po = pppox_sk(sk);
 
-	if (sk->sk_state & (PPPOX_CONNECTED | PPPOX_BOUND | PPPOX_ZOMBIE)) {
+	if (sk->sk_state & (PPPOX_CONNECTED | PPPOX_BOUND)) {
 		dev_put(po->pppoe_dev);
 		po->pppoe_dev = NULL;
 	}
@@ -681,7 +675,7 @@ static int pppoe_connect(struct socket *sock, struct sockaddr *uservaddr,
 		po->chan.hdrlen = (sizeof(struct pppoe_hdr) +
 				   dev->hard_header_len);
 
-		po->chan.mtu = dev->mtu - sizeof(struct pppoe_hdr) - 2;
+		po->chan.mtu = dev->mtu - sizeof(struct pppoe_hdr);
 		po->chan.private = sk;
 		po->chan.ops = &pppoe_chan_ops;
 
@@ -985,11 +979,15 @@ static int pppoe_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (error < 0)
 		goto end;
 
+	m->msg_namelen = 0;
+
 	if (skb) {
 		total_len = min_t(size_t, total_len, skb->len);
 		error = skb_copy_datagram_iovec(skb, 0, m->msg_iov, total_len);
-		if (error == 0)
-			error = total_len;
+		if (error == 0) {
+			consume_skb(skb);
+			return total_len;
+		}
 	}
 
 	kfree_skb(skb);

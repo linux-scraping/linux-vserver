@@ -28,12 +28,13 @@
 
 #define _RTL8712_RECV_C_
 
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+
 #include "osdep_service.h"
 #include "drv_types.h"
 #include "recv_osdep.h"
 #include "mlme_osdep.h"
-#include "ip.h"
-#include "if_ether.h"
 #include "ethernet.h"
 #include "usb_ops.h"
 #include "wifi.h"
@@ -459,7 +460,7 @@ void r8712_rxcmd_event_hdl(struct _adapter *padapter, void *prxcmdbuf)
 		cmd_seq = (u8)((le32_to_cpu(voffset) >> 24) & 0x7f);
 		eid = (u8)((le32_to_cpu(voffset) >> 16) & 0xff);
 		r8712_event_handle(padapter, (uint *)poffset);
-		poffset += (cmd_len + 8);/*8 bytes aligment*/
+		poffset += (cmd_len + 8);/*8 bytes alignment*/
 	} while (le32_to_cpu(voffset) & BIT(31));
 
 }
@@ -603,7 +604,7 @@ static int recv_indicatepkt_reorder(struct _adapter *padapter,
 		}
 	}
 	spin_lock_irqsave(&ppending_recvframe_queue->lock, irql);
-	/*s2. check if winstart_b(indicate_seq) needs to been updated*/
+	/*s2. check if winstart_b(indicate_seq) needs to be updated*/
 	if (!check_indicate_seq(preorder_ctrl, pattrib->seq_num))
 		goto _err_exit;
 	/*s3. Insert all packet into Reorder Queue to maintain its ordering.*/
@@ -1074,8 +1075,7 @@ static int recvbuf2recvframe(struct _adapter *padapter, struct sk_buff *pskb)
 		/* for first fragment packet, driver need allocate 1536 +
 		 * drvinfo_sz + RXDESC_SIZE to defrag packet. */
 		if ((mf == 1) && (frag == 0))
-			/*1658+6=1664, 1664 is 128 alignment.*/
-			alloc_sz = max_t(u16, tmp_len, 1658);
+			alloc_sz = 1658;/*1658+6=1664, 1664 is 128 alignment.*/
 		else
 			alloc_sz = tmp_len;
 		/* 2 is for IP header 4 bytes alignment in QoS packet case.
@@ -1127,9 +1127,6 @@ static void recv_tasklet(void *priv)
 		recvbuf2recvframe(padapter, pskb);
 		skb_reset_tail_pointer(pskb);
 		pskb->len = 0;
-		if (!skb_cloned(pskb))
-			skb_queue_tail(&precvpriv->free_recv_skb_queue, pskb);
-		else
-			consume_skb(pskb);
+		skb_queue_tail(&precvpriv->free_recv_skb_queue, pskb);
 	}
 }

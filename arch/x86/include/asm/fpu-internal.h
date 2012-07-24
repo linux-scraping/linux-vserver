@@ -266,13 +266,12 @@ static inline int restore_fpu_checking(struct task_struct *tsk)
 	/* AMD K7/K8 CPUs don't save/restore FDP/FIP/FOP unless an exception
 	   is pending.  Clear the x87 state here by setting it to fixed
 	   values. "m" is a random variable that should be in L1 */
-	if (unlikely(static_cpu_has(X86_FEATURE_FXSAVE_LEAK))) {
-		asm volatile(
-			"fnclex\n\t"
-			"emms\n\t"
-			"fildl %P[addr]"	/* set F?P to defined value */
-			: : [addr] "m" (tsk->thread.fpu.has_fpu));
-	}
+	alternative_input(
+		ASM_NOP8 ASM_NOP2,
+		"emms\n\t"		/* clear stack tags */
+		"fildl %P[addr]",	/* set F?P to defined value */
+		X86_FEATURE_FXSAVE_LEAK,
+		[addr] "m" (tsk->thread.fpu.has_fpu));
 
 	return fpu_restore_checking(&tsk->thread.fpu);
 }
@@ -291,14 +290,14 @@ static inline int __thread_has_fpu(struct task_struct *tsk)
 static inline void __thread_clear_has_fpu(struct task_struct *tsk)
 {
 	tsk->thread.fpu.has_fpu = 0;
-	percpu_write(fpu_owner_task, NULL);
+	this_cpu_write(fpu_owner_task, NULL);
 }
 
 /* Must be paired with a 'clts' before! */
 static inline void __thread_set_has_fpu(struct task_struct *tsk)
 {
 	tsk->thread.fpu.has_fpu = 1;
-	percpu_write(fpu_owner_task, tsk);
+	this_cpu_write(fpu_owner_task, tsk);
 }
 
 /*
@@ -335,20 +334,17 @@ static inline void __thread_fpu_begin(struct task_struct *tsk)
 typedef struct { int preload; } fpu_switch_t;
 
 /*
- * Must be run with preemption disabled: this clears the fpu_owner_task,
- * on this CPU.
+ * FIXME! We could do a totally lazy restore, but we need to
+ * add a per-cpu "this was the task that last touched the FPU
+ * on this CPU" variable, and the task needs to have a "I last
+ * touched the FPU on this CPU" and check them.
  *
- * This will disable any lazy FPU state restore of the current FPU state,
- * but if the current thread owns the FPU, it will still be saved by.
+ * We don't do that yet, so "fpu_lazy_restore()" always returns
+ * false, but some day..
  */
-static inline void __cpu_disable_lazy_restore(unsigned int cpu)
-{
-	per_cpu(fpu_owner_task, cpu) = NULL;
-}
-
 static inline int fpu_lazy_restore(struct task_struct *new, unsigned int cpu)
 {
-	return new == percpu_read_stable(fpu_owner_task) &&
+	return new == this_cpu_read_stable(fpu_owner_task) &&
 		cpu == new->thread.fpu.last_cpu;
 }
 

@@ -419,10 +419,6 @@ static int net1080_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	struct nc_trailer	*trailer;
 	u16			hdr_len, packet_len;
 
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	if (!(skb->len & 0x01)) {
 #ifdef DEBUG
 		struct net_device	*net = dev->net;
@@ -591,6 +587,7 @@ static struct usb_driver net1080_driver = {
 	.disconnect =	usbnet_disconnect,
 	.suspend =	usbnet_suspend,
 	.resume =	usbnet_resume,
+	.disable_hub_initiated_lpm = 1,
 };
 
 module_usb_driver(net1080_driver);

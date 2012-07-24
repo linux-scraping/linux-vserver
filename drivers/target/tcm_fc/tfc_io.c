@@ -228,7 +228,7 @@ void ft_recv_write_data(struct ft_cmd *cmd, struct fc_frame *fp)
 				"payload, Frame will be dropped if"
 				"'Sequence Initiative' bit in f_ctl is"
 				"not set\n", __func__, ep->xid, f_ctl,
-				cmd->sg, cmd->sg_cnt);
+				se_cmd->t_data_sg, se_cmd->t_data_nents);
 		/*
 		 * Invalidate HW DDP context if it was setup for respective
 		 * command. Invalidation of HW DDP context is requited in both
@@ -330,7 +330,7 @@ void ft_invl_hw_context(struct ft_cmd *cmd)
 		ep = fc_seq_exch(seq);
 		if (ep) {
 			lport = ep->lp;
-			if (lport && (ep->xid <= lport->lro_xid)) {
+			if (lport && (ep->xid <= lport->lro_xid))
 				/*
 				 * "ddp_done" trigger invalidation of HW
 				 * specific DDP context
@@ -345,7 +345,6 @@ void ft_invl_hw_context(struct ft_cmd *cmd)
 				 * identified using ep->xid)
 				 */
 				cmd->was_ddp_setup = 0;
-			}
 		}
 	}
 }

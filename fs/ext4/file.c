@@ -80,7 +80,7 @@ ext4_unaligned_aio(struct inode *inode, const struct iovec *iov,
 	size_t count = iov_length(iov, nr_segs);
 	loff_t final_size = pos + count;
 
-	if (pos >= i_size_read(inode))
+	if (pos >= inode->i_size)
 		return 0;
 
 	if ((pos & blockmask) || (final_size & blockmask))
@@ -95,7 +95,7 @@ ext4_file_write(struct kiocb *iocb, const struct iovec *iov,
 {
 	struct inode *inode = iocb->ki_filp->f_path.dentry->d_inode;
 	int unaligned_aio = 0;
-	int ret;
+	ssize_t ret;
 
 	/*
 	 * If we have encountered a bitmap-format file, the size limit

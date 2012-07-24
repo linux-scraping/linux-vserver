@@ -48,7 +48,6 @@
 #define AR9300_DEVID_AR9580	0x0033
 #define AR9300_DEVID_AR9462	0x0034
 #define AR9300_DEVID_AR9330	0x0035
-#define AR9485_DEVID_AR1111	0x0037
 
 #define AR5416_AR9100_DEVID	0x000b
 
@@ -181,8 +180,8 @@
 #define PAPRD_IDEAL_AGC2_PWR_RANGE	0xe0
 
 enum ath_hw_txq_subtype {
-	ATH_TXQ_AC_BK = 0,
-	ATH_TXQ_AC_BE = 1,
+	ATH_TXQ_AC_BE = 0,
+	ATH_TXQ_AC_BK = 1,
 	ATH_TXQ_AC_VI = 2,
 	ATH_TXQ_AC_VO = 3,
 };
@@ -349,22 +348,16 @@ enum ath9k_int {
 	 CHANNEL_HT40MINUS)
 
 #define MAX_RTT_TABLE_ENTRY     6
-#define RTT_HIST_MAX            3
-struct ath9k_rtt_hist {
-	u32 table[AR9300_MAX_CHAINS][RTT_HIST_MAX][MAX_RTT_TABLE_ENTRY];
-	u8 num_readings;
-};
-
 #define MAX_IQCAL_MEASUREMENT	8
 #define MAX_CL_TAB_ENTRY	16
 
 struct ath9k_hw_cal_data {
 	u16 channel;
 	u32 channelFlags;
-	u32 chanmode;
 	int32_t CalValid;
 	int8_t iCoff;
 	int8_t qCoff;
+	bool rtt_done;
 	bool paprd_done;
 	bool nfcal_pending;
 	bool nfcal_interference;
@@ -375,8 +368,8 @@ struct ath9k_hw_cal_data {
 	u32 num_measures[AR9300_MAX_CHAINS];
 	int tx_corr_coeff[MAX_IQCAL_MEASUREMENT][AR9300_MAX_CHAINS];
 	u32 tx_clcal[AR9300_MAX_CHAINS][MAX_CL_TAB_ENTRY];
+	u32 rtt_table[AR9300_MAX_CHAINS][MAX_RTT_TABLE_ENTRY];
 	struct ath9k_nfcal_hist nfCalHist[NUM_NF_READINGS];
-	struct ath9k_rtt_hist rtt_hist;
 };
 
 struct ath9k_channel {
@@ -710,7 +703,6 @@ struct ath_hw {
 	struct ar5416Stats stats;
 	struct ath9k_tx_queue_info txq[ATH9K_NUM_TX_QUEUES];
 
-	int16_t curchan_rad_index;
 	enum ath9k_int imask;
 	u32 imrs2_reg;
 	u32 txok_interrupt_mask;
@@ -764,11 +756,6 @@ struct ath_hw {
 
 	u32 sta_id1_defaults;
 	u32 misc_mode;
-	enum {
-		AUTO_32KHZ,
-		USE_32KHZ,
-		DONT_USE_32KHZ,
-	} enable_32kHz_clock;
 
 	/* Private to hardware code */
 	struct ath_hw_private_ops private_ops;
@@ -785,7 +772,6 @@ struct ath_hw {
 	u32 *analogBank7Data;
 	u32 *bank6Temp;
 
-	u8 txpower_limit;
 	int coverage_class;
 	u32 slottime;
 	u32 globaltxtimeout;
@@ -850,7 +836,6 @@ struct ath_hw {
 	struct ath_gen_timer_table hw_gen_timers;
 
 	struct ar9003_txs *ts_ring;
-	void *ts_start;
 	u32 ts_paddr_start;
 	u32 ts_paddr_end;
 	u16 ts_tail;
@@ -917,7 +902,6 @@ static inline u8 get_streams(int mask)
 }
 
 /* Initialization, Detach, Reset */
-const char *ath9k_hw_probe(u16 vendorid, u16 devid);
 void ath9k_hw_deinit(struct ath_hw *ah);
 int ath9k_hw_init(struct ath_hw *ah);
 int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
@@ -934,6 +918,8 @@ void ath9k_hw_set_gpio(struct ath_hw *ah, u32 gpio, u32 val);
 void ath9k_hw_setantenna(struct ath_hw *ah, u32 antenna);
 
 /* General Operation */
+void ath9k_hw_synth_delay(struct ath_hw *ah, struct ath9k_channel *chan,
+			  int hw_delay);
 bool ath9k_hw_wait(struct ath_hw *ah, u32 reg, u32 mask, u32 val, u32 timeout);
 void ath9k_hw_write_array(struct ath_hw *ah, struct ar5416IniArray *array,
 			  int column, unsigned int *writecnt);
@@ -966,6 +952,13 @@ void ath9k_hw_set_sta_beacon_timers(struct ath_hw *ah,
 bool ath9k_hw_check_alive(struct ath_hw *ah);
 
 bool ath9k_hw_setpower(struct ath_hw *ah, enum ath9k_power_mode mode);
+
+#ifdef CONFIG_ATH9K_DEBUGFS
+void ath9k_debug_sync_cause(struct ath_common *common, u32 sync_cause);
+#else
+static inline void ath9k_debug_sync_cause(struct ath_common *common,
+					  u32 sync_cause) {}
+#endif
 
 /* Generic hw timer primitives */
 struct ath_gen_timer *ath_gen_timer_alloc(struct ath_hw *ah,
@@ -1014,8 +1007,6 @@ int ar9003_paprd_create_curve(struct ath_hw *ah,
 int ar9003_paprd_setup_gain_table(struct ath_hw *ah, int chain);
 int ar9003_paprd_init_table(struct ath_hw *ah);
 bool ar9003_paprd_is_done(struct ath_hw *ah);
-void ar9003_hw_set_paprd_txdesc(struct ath_hw *ah, void *ds, u8 chains);
-void ar9003_hw_set_chain_masks(struct ath_hw *ah, u8 rx, u8 tx);
 
 /* Hardware family op attach helpers */
 void ar5008_hw_attach_phy_ops(struct ath_hw *ah);

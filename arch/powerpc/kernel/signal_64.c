@@ -117,12 +117,6 @@ static long setup_sigcontext(struct sigcontext __user *sc, struct pt_regs *regs,
 	flush_fp_to_thread(current);
 	/* copy fpr regs and fpscr */
 	err |= copy_fpr_to_user(&sc->fp_regs, current);
-
-	/*
-	 * Clear the MSR VSX bit to indicate there is no valid state attached
-	 * to this context, except in the specific case below where we set it.
-	 */
-	msr &= ~MSR_VSX;
 #ifdef CONFIG_VSX
 	/*
 	 * Copy VSX low doubleword to local buffer for formatting,
@@ -341,7 +335,7 @@ int sys_swapcontext(struct ucontext __user *old_ctx,
 
 	if (__copy_from_user(&set, &new_ctx->uc_sigmask, sizeof(set)))
 		do_exit(SIGSEGV);
-	restore_sigmask(&set);
+	set_current_blocked(&set);
 	if (restore_sigcontext(regs, NULL, 0, &new_ctx->uc_mcontext))
 		do_exit(SIGSEGV);
 
@@ -370,7 +364,7 @@ int sys_rt_sigreturn(unsigned long r3, unsigned long r4, unsigned long r5,
 
 	if (__copy_from_user(&set, &uc->uc_sigmask, sizeof(set)))
 		goto badframe;
-	restore_sigmask(&set);
+	set_current_blocked(&set);
 	if (restore_sigcontext(regs, NULL, 1, &uc->uc_mcontext))
 		goto badframe;
 

@@ -67,7 +67,6 @@ EXPORT_SYMBOL(jiffies_64);
 #define TVR_SIZE (1 << TVR_BITS)
 #define TVN_MASK (TVN_SIZE - 1)
 #define TVR_MASK (TVR_SIZE - 1)
-#define MAX_TVAL ((unsigned long)((1ULL << (TVR_BITS + 4*TVN_BITS)) - 1))
 
 struct tvec {
 	struct list_head vec[TVN_SIZE];
@@ -149,11 +148,9 @@ static unsigned long round_jiffies_common(unsigned long j, int cpu,
 	/* now that we have rounded, subtract the extra skew again */
 	j -= cpu * 3;
 
-	/*
-	 * Make sure j is still in the future. Otherwise return the
-	 * unmodified value.
-	 */
-	return time_is_after_jiffies(j) ? j : original;
+	if (j <= jiffies) /* rounding ate our timeout entirely; */
+		return original;
+	return j;
 }
 
 /**
@@ -363,12 +360,11 @@ static void internal_add_timer(struct tvec_base *base, struct timer_list *timer)
 		vec = base->tv1.vec + (base->timer_jiffies & TVR_MASK);
 	} else {
 		int i;
-		/* If the timeout is larger than MAX_TVAL (on 64-bit
-		 * architectures or with CONFIG_BASE_SMALL=1) then we
-		 * use the maximum timeout.
+		/* If the timeout is larger than 0xffffffff on 64-bit
+		 * architectures then we use the maximum timeout:
 		 */
-		if (idx > MAX_TVAL) {
-			idx = MAX_TVAL;
+		if (idx > 0xffffffffUL) {
+			idx = 0xffffffffUL;
 			expires = idx + base->timer_jiffies;
 		}
 		i = (expires >> (TVR_BITS + 3 * TVN_BITS)) & TVN_MASK;
@@ -819,7 +815,7 @@ unsigned long apply_slack(struct timer_list *timer, unsigned long expires)
 
 	bit = find_last_bit(&mask, BITS_PER_LONG);
 
-	mask = (1UL << bit) - 1;
+	mask = (1 << bit) - 1;
 
 	expires_limit = expires_limit & ~(mask);
 
@@ -869,7 +865,13 @@ EXPORT_SYMBOL(mod_timer);
  *
  * mod_timer_pinned() is a way to update the expire field of an
  * active timer (if the timer is inactive it will be activated)
- * and not allow the timer to be migrated to a different CPU.
+ * and to ensure that the timer is scheduled on the current CPU.
+ *
+ * Note that this does not prevent the timer from being migrated
+ * when the current CPU goes offline.  If this is a problem for
+ * you, use CPU-hotplug notifiers to handle it correctly, for
+ * example, cancelling the timer when the corresponding CPU goes
+ * offline.
  *
  * mod_timer_pinned(timer, expires) is equivalent to:
  *
@@ -1110,7 +1112,9 @@ static void call_timer_fn(struct timer_list *timer, void (*fn)(unsigned long),
 	 * warnings as well as problems when looking into
 	 * timer->lockdep_map, make a copy and use that here.
 	 */
-	struct lockdep_map lockdep_map = timer->lockdep_map;
+	struct lockdep_map lockdep_map;
+
+	lockdep_copy_map(&lockdep_map, &timer->lockdep_map);
 #endif
 	/*
 	 * Couple the lock chain with the lock chain at
@@ -1442,25 +1446,25 @@ asmlinkage long do_getxpid(long *ppid)
 SYSCALL_DEFINE0(getuid)
 {
 	/* Only we change this so SMP safe */
-	return current_uid();
+	return from_kuid_munged(current_user_ns(), current_uid());
 }
 
 SYSCALL_DEFINE0(geteuid)
 {
 	/* Only we change this so SMP safe */
-	return current_euid();
+	return from_kuid_munged(current_user_ns(), current_euid());
 }
 
 SYSCALL_DEFINE0(getgid)
 {
 	/* Only we change this so SMP safe */
-	return current_gid();
+	return from_kgid_munged(current_user_ns(), current_gid());
 }
 
 SYSCALL_DEFINE0(getegid)
 {
 	/* Only we change this so SMP safe */
-	return  current_egid();
+	return from_kgid_munged(current_user_ns(), current_egid());
 }
 
 #endif
@@ -1693,12 +1697,12 @@ static int __cpuinit init_timers_cpu(int cpu)
 			boot_done = 1;
 			base = &boot_tvec_bases;
 		}
-		spin_lock_init(&base->lock);
 		tvec_base_done[cpu] = 1;
 	} else {
 		base = per_cpu(tvec_bases, cpu);
 	}
 
+	spin_lock_init(&base->lock);
 
 	for (j = 0; j < TVN_SIZE; j++) {
 		INIT_LIST_HEAD(base->tv5.vec + j);

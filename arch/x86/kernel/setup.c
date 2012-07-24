@@ -34,7 +34,6 @@
 #include <linux/memblock.h>
 #include <linux/seq_file.h>
 #include <linux/console.h>
-#include <linux/mca.h>
 #include <linux/root_dev.h>
 #include <linux/highmem.h>
 #include <linux/module.h>
@@ -50,6 +49,7 @@
 #include <asm/pci-direct.h>
 #include <linux/init_ohci1394_dma.h>
 #include <linux/kvm_para.h>
+#include <linux/dma-contiguous.h>
 
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -73,7 +73,7 @@
 
 #include <asm/mtrr.h>
 #include <asm/apic.h>
-#include <asm/trampoline.h>
+#include <asm/realmode.h>
 #include <asm/e820.h>
 #include <asm/mpspec.h>
 #include <asm/setup.h>
@@ -179,12 +179,6 @@ struct cpuinfo_x86 new_cpu_data __cpuinitdata = {0, 0, 0, 0, -1, 1, 0, 0, -1};
 /* common cpu data for all cpus */
 struct cpuinfo_x86 boot_cpu_data __read_mostly = {0, 0, 0, 0, -1, 1, 0, 0, -1};
 EXPORT_SYMBOL(boot_cpu_data);
-static void set_mca_bus(int x)
-{
-#ifdef CONFIG_MCA
-	MCA_bus = x;
-#endif
-}
 
 unsigned int def_to_bigsmp;
 
@@ -340,8 +334,8 @@ static void __init relocate_initrd(void)
 	memblock_reserve(ramdisk_here, area_size);
 	initrd_start = ramdisk_here + PAGE_OFFSET;
 	initrd_end   = initrd_start + ramdisk_size;
-	printk(KERN_INFO "Allocated new RAMDISK: %08llx - %08llx\n",
-			 ramdisk_here, ramdisk_here + ramdisk_size);
+	printk(KERN_INFO "Allocated new RAMDISK: [mem %#010llx-%#010llx]\n",
+			 ramdisk_here, ramdisk_here + ramdisk_size - 1);
 
 	q = (char *)initrd_start;
 
@@ -372,8 +366,8 @@ static void __init relocate_initrd(void)
 	/* high pages is not converted by early_res_to_bootmem */
 	ramdisk_image = boot_params.hdr.ramdisk_image;
 	ramdisk_size  = boot_params.hdr.ramdisk_size;
-	printk(KERN_INFO "Move RAMDISK from %016llx - %016llx to"
-		" %08llx - %08llx\n",
+	printk(KERN_INFO "Move RAMDISK from [mem %#010llx-%#010llx] to"
+		" [mem %#010llx-%#010llx]\n",
 		ramdisk_image, ramdisk_image + ramdisk_size - 1,
 		ramdisk_here, ramdisk_here + ramdisk_size - 1);
 }
@@ -393,14 +387,13 @@ static void __init reserve_initrd(void)
 	initrd_start = 0;
 
 	if (ramdisk_size >= (end_of_lowmem>>1)) {
-		memblock_free(ramdisk_image, ramdisk_end - ramdisk_image);
-		printk(KERN_ERR "initrd too large to handle, "
-		       "disabling initrd\n");
-		return;
+		panic("initrd too large to handle, "
+		       "disabling initrd (%lld needed, %lld available)\n",
+		       ramdisk_size, end_of_lowmem>>1);
 	}
 
-	printk(KERN_INFO "RAMDISK: %08llx - %08llx\n", ramdisk_image,
-			ramdisk_end);
+	printk(KERN_INFO "RAMDISK: [mem %#010llx-%#010llx]\n", ramdisk_image,
+			ramdisk_end - 1);
 
 
 	if (ramdisk_end <= end_of_lowmem) {
@@ -620,83 +613,6 @@ static __init void reserve_ibft_region(void)
 
 static unsigned reserve_low = CONFIG_X86_RESERVE_LOW << 10;
 
-static bool __init snb_gfx_workaround_needed(void)
-{
-#ifdef CONFIG_PCI
-	int i;
-	u16 vendor, devid;
-	static const __initconst u16 snb_ids[] = {
-		0x0102,
-		0x0112,
-		0x0122,
-		0x0106,
-		0x0116,
-		0x0126,
-		0x010a,
-	};
-
-	/* Assume no if something weird is going on with PCI */
-	if (!early_pci_allowed())
-		return false;
-
-	vendor = read_pci_config_16(0, 2, 0, PCI_VENDOR_ID);
-	if (vendor != 0x8086)
-		return false;
-
-	devid = read_pci_config_16(0, 2, 0, PCI_DEVICE_ID);
-	for (i = 0; i < ARRAY_SIZE(snb_ids); i++)
-		if (devid == snb_ids[i])
-			return true;
-#endif
-
-	return false;
-}
-
-/*
- * Sandy Bridge graphics has trouble with certain ranges, exclude
- * them from allocation.
- */
-static void __init trim_snb_memory(void)
-{
-	static const __initconst unsigned long bad_pages[] = {
-		0x20050000,
-		0x20110000,
-		0x20130000,
-		0x20138000,
-		0x40004000,
-	};
-	int i;
-
-	if (!snb_gfx_workaround_needed())
-		return;
-
-	printk(KERN_DEBUG "reserving inaccessible SNB gfx pages\n");
-
-	/*
-	 * Reserve all memory below the 1 MB mark that has not
-	 * already been reserved.
-	 */
-	memblock_reserve(0, 1<<20);
-
-	for (i = 0; i < ARRAY_SIZE(bad_pages); i++) {
-		if (memblock_reserve(bad_pages[i], PAGE_SIZE))
-			printk(KERN_WARNING "failed to reserve 0x%08lx\n",
-			       bad_pages[i]);
-	}
-}
-
-/*
- * Here we put platform-specific memory range workarounds, i.e.
- * memory known to be corrupt or otherwise in need to be reserved on
- * specific platforms.
- *
- * If this gets used more widely it could use a real dispatch mechanism.
- */
-static void __init trim_platform_memory_ranges(void)
-{
-	trim_snb_memory();
-}
-
 static void __init trim_bios_range(void)
 {
 	/*
@@ -717,7 +633,6 @@ static void __init trim_bios_range(void)
 	 * take them out.
 	 */
 	e820_remove_range(BIOS_BEGIN, BIOS_END - BIOS_BEGIN, E820_RAM, 1);
-
 	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
 }
 
@@ -795,7 +710,6 @@ void __init setup_arch(char **cmdline_p)
 	apm_info.bios = boot_params.apm_bios_info;
 	ist_info = boot_params.ist_info;
 	if (boot_params.sys_desc_table.length != 0) {
-		set_mca_bus(boot_params.sys_desc_table.table[3] & 0x2);
 		machine_id = boot_params.sys_desc_table.table[0];
 		machine_submodel_id = boot_params.sys_desc_table.table[1];
 		BIOS_revision = boot_params.sys_desc_table.table[2];
@@ -818,15 +732,15 @@ void __init setup_arch(char **cmdline_p)
 #ifdef CONFIG_EFI
 	if (!strncmp((char *)&boot_params.efi_info.efi_loader_signature,
 		     "EL32", 4)) {
-		set_bit(EFI_BOOT, &x86_efi_facility);
+		efi_enabled = 1;
+		efi_64bit = false;
 	} else if (!strncmp((char *)&boot_params.efi_info.efi_loader_signature,
 		     "EL64", 4)) {
-		set_bit(EFI_BOOT, &x86_efi_facility);
-		set_bit(EFI_64BIT, &x86_efi_facility);
+		efi_enabled = 1;
+		efi_64bit = true;
 	}
-
-	if (efi_enabled(EFI_BOOT))
-		efi_memblock_x86_reserve_range();
+	if (efi_enabled && efi_memblock_x86_reserve_range())
+		efi_enabled = 0;
 #endif
 
 	x86_init.oem.arch_setup();
@@ -899,7 +813,7 @@ void __init setup_arch(char **cmdline_p)
 
 	finish_e820_parsing();
 
-	if (efi_enabled(EFI_BOOT))
+	if (efi_enabled)
 		efi_init();
 
 	dmi_scan_machine();
@@ -982,7 +896,7 @@ void __init setup_arch(char **cmdline_p)
 	 * The EFI specification says that boot service code won't be called
 	 * after ExitBootServices(). This is, in fact, a lie.
 	 */
-	if (efi_enabled(EFI_MEMMAP))
+	if (efi_enabled)
 		efi_reserve_boot_services();
 
 	/* preallocate 4k for mptable mpc */
@@ -992,12 +906,10 @@ void __init setup_arch(char **cmdline_p)
 	setup_bios_corruption_check();
 #endif
 
-	printk(KERN_DEBUG "initial memory mapped : 0 - %08lx\n",
-			max_pfn_mapped<<PAGE_SHIFT);
+	printk(KERN_DEBUG "initial memory mapped: [mem 0x00000000-%#010lx]\n",
+			(max_pfn_mapped<<PAGE_SHIFT) - 1);
 
-	setup_trampolines();
-
-	trim_platform_memory_ranges();
+	setup_real_mode();
 
 	init_gbpages();
 
@@ -1007,27 +919,14 @@ void __init setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_X86_64
 	if (max_pfn > max_low_pfn) {
-		int i;
-		unsigned long start, end;
-		unsigned long start_pfn, end_pfn;
-
-		for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn,
-							 NULL) {
-
-			end = PFN_PHYS(end_pfn);
-			if (end <= (1UL<<32))
-				continue;
-
-			start = PFN_PHYS(start_pfn);
-			max_pfn_mapped = init_memory_mapping(
-						max((1UL<<32), start), end);
-		}
-
+		max_pfn_mapped = init_memory_mapping(1UL<<32,
+						     max_pfn<<PAGE_SHIFT);
 		/* can we preseve max_low_pfn ?*/
 		max_low_pfn = max_pfn;
 	}
 #endif
 	memblock.current_limit = get_max_mapped();
+	dma_contiguous_reserve(0);
 
 	/*
 	 * NOTE: On x86-32, only from this point on, fixmaps are ready for use.
@@ -1069,6 +968,8 @@ void __init setup_arch(char **cmdline_p)
 	if (boot_cpu_data.cpuid_level >= 0) {
 		/* A CPU has %cr4 if and only if it has CPUID */
 		mmu_cr4_features = read_cr4();
+		if (trampoline_cr4_features)
+			*trampoline_cr4_features = mmu_cr4_features;
 	}
 
 #ifdef CONFIG_X86_32
@@ -1106,7 +1007,8 @@ void __init setup_arch(char **cmdline_p)
 	init_cpu_to_node();
 
 	init_apic_mappings();
-	ioapic_and_gsi_init();
+	if (x86_io_apic_ops.init)
+		x86_io_apic_ops.init();
 
 	kvm_guest_init();
 
@@ -1119,7 +1021,7 @@ void __init setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_VT
 #if defined(CONFIG_VGA_CONSOLE)
-	if (!efi_enabled(EFI_BOOT) || (efi_mem_type(0xa0000) != EFI_CONVENTIONAL_MEMORY))
+	if (!efi_enabled || (efi_mem_type(0xa0000) != EFI_CONVENTIONAL_MEMORY))
 		conswitchp = &vga_con;
 #elif defined(CONFIG_DUMMY_CONSOLE)
 	conswitchp = &dummy_con;
@@ -1134,18 +1036,6 @@ void __init setup_arch(char **cmdline_p)
 	mcheck_init();
 
 	arch_init_ideal_nops();
-
-#ifdef CONFIG_EFI
-	/* Once setup is done above, unmap the EFI memory map on
-	 * mismatched firmware/kernel archtectures since there is no
-	 * support for runtime services.
-	 */
-	if (efi_enabled(EFI_BOOT) &&
-	    IS_ENABLED(CONFIG_X86_64) != efi_enabled(EFI_64BIT)) {
-		pr_info("efi: Setup done, disabling due to 32/64-bit mismatch\n");
-		efi_unmap_memmap();
-	}
-#endif
 }
 
 #ifdef CONFIG_X86_32

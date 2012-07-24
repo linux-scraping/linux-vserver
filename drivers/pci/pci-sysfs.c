@@ -27,6 +27,7 @@
 #include <linux/security.h>
 #include <linux/pci-aspm.h>
 #include <linux/slab.h>
+#include <linux/vgaarb.h>
 #include "pci.h"
 
 static int sysfs_initialized;	/* = 0 */
@@ -173,7 +174,7 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr, 
 {
 	struct pci_dev *pci_dev = to_pci_dev(dev);
 
-	return sprintf(buf, "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X\n",
+	return sprintf(buf, "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02x\n",
 		       pci_dev->vendor, pci_dev->device,
 		       pci_dev->subsystem_vendor, pci_dev->subsystem_device,
 		       (u8)(pci_dev->class >> 16), (u8)(pci_dev->class >> 8),
@@ -417,6 +418,10 @@ static ssize_t
 boot_vga_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
+	struct pci_dev *vga_dev = vga_default_device();
+
+	if (vga_dev)
+		return sprintf(buf, "%u\n", (pdev == vga_dev));
 
 	return sprintf(buf, "%u\n",
 		!!(pdev->resource[PCI_ROM_RESOURCE].flags &

@@ -10,12 +10,17 @@
 #include <linux/sched.h>
 #include <linux/unistd.h>
 #include <linux/cpu.h>
+#include <linux/oom.h>
+#include <linux/rcupdate.h>
 #include <linux/export.h>
+#include <linux/bug.h>
 #include <linux/kthread.h>
 #include <linux/stop_machine.h>
 #include <linux/mutex.h>
 #include <linux/gfp.h>
 #include <linux/suspend.h>
+
+#include "smpboot.h"
 
 #ifdef CONFIG_SMP
 /* Serializes the updates to cpu_online_mask, cpu_present_mask */
@@ -124,27 +129,6 @@ static void cpu_hotplug_done(void)
 	mutex_unlock(&cpu_hotplug.lock);
 }
 
-/*
- * Wait for currently running CPU hotplug operations to complete (if any) and
- * disable future CPU hotplug (from sysfs). The 'cpu_add_remove_lock' protects
- * the 'cpu_hotplug_disabled' flag. The same lock is also acquired by the
- * hotplug path before performing hotplug operations. So acquiring that lock
- * guarantees mutual exclusion from any currently running hotplug operations.
- */
-void cpu_hotplug_disable(void)
-{
-	cpu_maps_update_begin();
-	cpu_hotplug_disabled = 1;
-	cpu_maps_update_done();
-}
-
-void cpu_hotplug_enable(void)
-{
-	cpu_maps_update_begin();
-	cpu_hotplug_disabled = 0;
-	cpu_maps_update_done();
-}
-
 #else /* #if CONFIG_HOTPLUG_CPU */
 static void cpu_hotplug_begin(void) {}
 static void cpu_hotplug_done(void) {}
@@ -191,6 +175,47 @@ void __ref unregister_cpu_notifier(struct notifier_block *nb)
 	cpu_maps_update_done();
 }
 EXPORT_SYMBOL(unregister_cpu_notifier);
+
+/**
+ * clear_tasks_mm_cpumask - Safely clear tasks' mm_cpumask for a CPU
+ * @cpu: a CPU id
+ *
+ * This function walks all processes, finds a valid mm struct for each one and
+ * then clears a corresponding bit in mm's cpumask.  While this all sounds
+ * trivial, there are various non-obvious corner cases, which this function
+ * tries to solve in a safe manner.
+ *
+ * Also note that the function uses a somewhat relaxed locking scheme, so it may
+ * be called only for an already offlined CPU.
+ */
+void clear_tasks_mm_cpumask(int cpu)
+{
+	struct task_struct *p;
+
+	/*
+	 * This function is called after the cpu is taken down and marked
+	 * offline, so its not like new tasks will ever get this cpu set in
+	 * their mm mask. -- Peter Zijlstra
+	 * Thus, we may use rcu_read_lock() here, instead of grabbing
+	 * full-fledged tasklist_lock.
+	 */
+	WARN_ON(cpu_online(cpu));
+	rcu_read_lock();
+	for_each_process(p) {
+		struct task_struct *t;
+
+		/*
+		 * Main thread might exit, but other threads may still have
+		 * a valid mm. Find one.
+		 */
+		t = find_lock_task_mm(p);
+		if (!t)
+			continue;
+		cpumask_clear_cpu(cpu, mm_cpumask(t->mm));
+		task_unlock(t);
+	}
+	rcu_read_unlock();
+}
 
 static inline void check_for_tasks(int cpu)
 {
@@ -316,11 +341,19 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 	int ret, nr_calls = 0;
 	void *hcpu = (void *)(long)cpu;
 	unsigned long mod = tasks_frozen ? CPU_TASKS_FROZEN : 0;
+	struct task_struct *idle;
 
 	if (cpu_online(cpu) || !cpu_present(cpu))
 		return -EINVAL;
 
 	cpu_hotplug_begin();
+
+	idle = idle_thread_get(cpu);
+	if (IS_ERR(idle)) {
+		ret = PTR_ERR(idle);
+		goto out;
+	}
+
 	ret = __cpu_notify(CPU_UP_PREPARE | mod, hcpu, -1, &nr_calls);
 	if (ret) {
 		nr_calls--;
@@ -330,7 +363,7 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 	}
 
 	/* Arch-specific enabling code. */
-	ret = __cpu_up(cpu);
+	ret = __cpu_up(cpu, idle);
 	if (ret != 0)
 		goto out_notify;
 	BUG_ON(!cpu_online(cpu));
@@ -341,6 +374,7 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 out_notify:
 	if (ret != 0)
 		__cpu_notify(CPU_UP_CANCELED | mod, hcpu, nr_calls, NULL);
+out:
 	cpu_hotplug_done();
 
 	return ret;
@@ -500,6 +534,36 @@ static int __init alloc_frozen_cpus(void)
 core_initcall(alloc_frozen_cpus);
 
 /*
+ * Prevent regular CPU hotplug from racing with the freezer, by disabling CPU
+ * hotplug when tasks are about to be frozen. Also, don't allow the freezer
+ * to continue until any currently running CPU hotplug operation gets
+ * completed.
+ * To modify the 'cpu_hotplug_disabled' flag, we need to acquire the
+ * 'cpu_add_remove_lock'. And this same lock is also taken by the regular
+ * CPU hotplug path and released only after it is complete. Thus, we
+ * (and hence the freezer) will block here until any currently running CPU
+ * hotplug operation gets completed.
+ */
+void cpu_hotplug_disable_before_freeze(void)
+{
+	cpu_maps_update_begin();
+	cpu_hotplug_disabled = 1;
+	cpu_maps_update_done();
+}
+
+
+/*
+ * When tasks have been thawed, re-enable regular CPU hotplug (which had been
+ * disabled while beginning to freeze tasks).
+ */
+void cpu_hotplug_enable_after_thaw(void)
+{
+	cpu_maps_update_begin();
+	cpu_hotplug_disabled = 0;
+	cpu_maps_update_done();
+}
+
+/*
  * When callbacks for CPU hotplug notifications are being executed, we must
  * ensure that the state of the system with respect to the tasks being frozen
  * or not, as reported by the notification, remains unchanged *throughout the
@@ -518,12 +582,12 @@ cpu_hotplug_pm_callback(struct notifier_block *nb,
 
 	case PM_SUSPEND_PREPARE:
 	case PM_HIBERNATION_PREPARE:
-		cpu_hotplug_disable();
+		cpu_hotplug_disable_before_freeze();
 		break;
 
 	case PM_POST_SUSPEND:
 	case PM_POST_HIBERNATION:
-		cpu_hotplug_enable();
+		cpu_hotplug_enable_after_thaw();
 		break;
 
 	default:
@@ -631,12 +695,10 @@ void set_cpu_present(unsigned int cpu, bool present)
 
 void set_cpu_online(unsigned int cpu, bool online)
 {
-	if (online) {
+	if (online)
 		cpumask_set_cpu(cpu, to_cpumask(cpu_online_bits));
-		cpumask_set_cpu(cpu, to_cpumask(cpu_active_bits));
-	} else {
+	else
 		cpumask_clear_cpu(cpu, to_cpumask(cpu_online_bits));
-	}
 }
 
 void set_cpu_active(unsigned int cpu, bool active)

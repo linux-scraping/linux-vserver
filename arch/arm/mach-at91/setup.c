@@ -104,8 +104,6 @@ static void __init soc_detect(u32 dbgu_base)
 	switch (socid) {
 	case ARCH_ID_AT91RM9200:
 		at91_soc_initdata.type = AT91_SOC_RM9200;
-		if (at91_soc_initdata.subtype == AT91_SOC_SUBTYPE_NONE)
-			at91_soc_initdata.subtype = AT91_SOC_RM9200_BGA;
 		at91_boot_soc = at91rm9200_soc;
 		break;
 
@@ -145,10 +143,15 @@ static void __init soc_detect(u32 dbgu_base)
 		at91_soc_initdata.type = AT91_SOC_SAM9X5;
 		at91_boot_soc = at91sam9x5_soc;
 		break;
+
+	case ARCH_ID_AT91SAM9N12:
+		at91_soc_initdata.type = AT91_SOC_SAM9N12;
+		at91_boot_soc = at91sam9n12_soc;
+		break;
 	}
 
 	/* at91sam9g10 */
-	if ((socid & ~AT91_CIDR_EXT) == ARCH_ID_AT91SAM9G10) {
+	if ((cidr & ~AT91_CIDR_EXT) == ARCH_ID_AT91SAM9G10) {
 		at91_soc_initdata.type = AT91_SOC_SAM9G10;
 		at91_boot_soc = at91sam9261_soc;
 	}
@@ -212,6 +215,7 @@ static const char *soc_name[] = {
 	[AT91_SOC_SAM9G45]	= "at91sam9g45",
 	[AT91_SOC_SAM9RL]	= "at91sam9rl",
 	[AT91_SOC_SAM9X5]	= "at91sam9x5",
+	[AT91_SOC_SAM9N12]	= "at91sam9n12",
 	[AT91_SOC_NONE]		= "Unknown"
 };
 
@@ -326,7 +330,7 @@ static void at91_dt_rstc(void)
 
 	of_id = of_match_node(rstc_ids, np);
 	if (!of_id)
-		panic("AT91: rtsc no restart function available\n");
+		panic("AT91: rtsc no restart function availlable\n");
 
 	arm_pm_restart = of_id->data;
 

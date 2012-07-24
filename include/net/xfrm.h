@@ -269,9 +269,6 @@ struct xfrm_replay {
 	int	(*check)(struct xfrm_state *x,
 			 struct sk_buff *skb,
 			 __be32 net_seq);
-	int	(*recheck)(struct xfrm_state *x,
-			   struct sk_buff *skb,
-			   __be32 net_seq);
 	void	(*notify)(struct xfrm_state *x, int event);
 	int	(*overflow)(struct xfrm_state *x, struct sk_buff *skb);
 };
@@ -889,15 +886,15 @@ __be16 xfrm_flowi_dport(const struct flowi *fl, const union flowi_uli *uli)
 	return port;
 }
 
-extern int xfrm_selector_match(const struct xfrm_selector *sel,
-			       const struct flowi *fl,
-			       unsigned short family);
+extern bool xfrm_selector_match(const struct xfrm_selector *sel,
+				const struct flowi *fl,
+				unsigned short family);
 
 #ifdef CONFIG_SECURITY_NETWORK_XFRM
 /*	If neither has a context --> match
  * 	Otherwise, both must have a context and the sids, doi, alg must match
  */
-static inline int xfrm_sec_ctx_match(struct xfrm_sec_ctx *s1, struct xfrm_sec_ctx *s2)
+static inline bool xfrm_sec_ctx_match(struct xfrm_sec_ctx *s1, struct xfrm_sec_ctx *s2)
 {
 	return ((!s1 && !s2) ||
 		(s1 && s2 &&
@@ -906,9 +903,9 @@ static inline int xfrm_sec_ctx_match(struct xfrm_sec_ctx *s1, struct xfrm_sec_ct
 		 (s1->ctx_alg == s2->ctx_alg)));
 }
 #else
-static inline int xfrm_sec_ctx_match(struct xfrm_sec_ctx *s1, struct xfrm_sec_ctx *s2)
+static inline bool xfrm_sec_ctx_match(struct xfrm_sec_ctx *s1, struct xfrm_sec_ctx *s2)
 {
-	return 1;
+	return true;
 }
 #endif
 
@@ -1685,8 +1682,9 @@ static inline int xfrm_mark_get(struct nlattr **attrs, struct xfrm_mark *m)
 
 static inline int xfrm_mark_put(struct sk_buff *skb, const struct xfrm_mark *m)
 {
-	if (m->m | m->v)
-		NLA_PUT(skb, XFRMA_MARK, sizeof(struct xfrm_mark), m);
+	if ((m->m | m->v) &&
+	    nla_put(skb, XFRMA_MARK, sizeof(struct xfrm_mark), m))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:

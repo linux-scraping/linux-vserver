@@ -775,7 +775,7 @@ static const unsigned armv7_a7_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 /*
  * PMXEVTYPER: Event selection reg
  */
-#define	ARMV7_EVTYPE_MASK	0xc80000ff	/* Mask for writable bits */
+#define	ARMV7_EVTYPE_MASK	0xc00000ff	/* Mask for writable bits */
 #define	ARMV7_EVTYPE_EVENT	0xff		/* Mask for EVENT bits */
 
 /*
@@ -1077,8 +1077,6 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 	 */
 	regs = get_irq_regs();
 
-	perf_sample_data_init(&data, 0);
-
 	cpuc = &__get_cpu_var(cpu_hw_events);
 	for (idx = 0; idx < cpu_pmu->num_events; ++idx) {
 		struct perf_event *event = cpuc->events[idx];
@@ -1097,7 +1095,7 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 
 		hwc = &event->hw;
 		armpmu_event_update(event, hwc, idx);
-		data.period = event->hw.last_period;
+		perf_sample_data_init(&data, 0, hwc->last_period);
 		if (!armpmu_event_set_period(event, hwc, idx))
 			continue;
 

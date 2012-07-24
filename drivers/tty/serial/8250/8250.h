@@ -37,6 +37,10 @@ struct uart_8250_port {
 	unsigned char		lsr_saved_flags;
 #define MSR_SAVE_FLAGS UART_MSR_ANY_DELTA
 	unsigned char		msr_saved_flags;
+
+	/* 8250 specific callbacks */
+	int			(*dl_read)(struct uart_8250_port *);
+	void			(*dl_write)(struct uart_8250_port *, int);
 };
 
 struct old_serial_port {
@@ -69,7 +73,6 @@ struct serial8250_config {
 #define UART_CAP_AFE	(1 << 11)	/* MCR-based hw flow control */
 #define UART_CAP_UUE	(1 << 12)	/* UART needs IER bit 6 set (Xscale) */
 #define UART_CAP_RTOIE	(1 << 13)	/* UART needs IER bit 4 set (Xscale, Tegra) */
-#define UART_CAP_HFIFO	(1 << 14)	/* UART has a "hidden" FIFO */
 
 #define UART_BUG_QUOT	(1 << 0)	/* UART has buggy quot LSB */
 #define UART_BUG_TXEN	(1 << 1)	/* UART has buggy TX IIR status */
@@ -95,6 +98,18 @@ static inline int serial_in(struct uart_8250_port *up, int offset)
 static inline void serial_out(struct uart_8250_port *up, int offset, int value)
 {
 	up->port.serial_out(&up->port, offset, value);
+}
+
+void serial8250_clear_and_reinit_fifos(struct uart_8250_port *p);
+
+static inline int serial_dl_read(struct uart_8250_port *up)
+{
+	return up->dl_read(up);
+}
+
+static inline void serial_dl_write(struct uart_8250_port *up, int value)
+{
+	up->dl_write(up, value);
 }
 
 #if defined(__alpha__) && !defined(CONFIG_PCI)

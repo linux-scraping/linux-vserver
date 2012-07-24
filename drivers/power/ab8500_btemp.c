@@ -964,10 +964,15 @@ static int __devinit ab8500_btemp_probe(struct platform_device *pdev)
 {
 	int irq, i, ret = 0;
 	u8 val;
-	struct abx500_bm_plat_data *plat_data;
+	struct abx500_bm_plat_data *plat_data = pdev->dev.platform_data;
+	struct ab8500_btemp *di;
 
-	struct ab8500_btemp *di =
-		kzalloc(sizeof(struct ab8500_btemp), GFP_KERNEL);
+	if (!plat_data) {
+		dev_err(&pdev->dev, "No platform data\n");
+		return -EINVAL;
+	}
+
+	di = kzalloc(sizeof(*di), GFP_KERNEL);
 	if (!di)
 		return -ENOMEM;
 
@@ -977,7 +982,6 @@ static int __devinit ab8500_btemp_probe(struct platform_device *pdev)
 	di->gpadc = ab8500_gpadc_get("ab8500-gpadc.0");
 
 	/* get btemp specific platform data */
-	plat_data = pdev->dev.platform_data;
 	di->pdata = plat_data->btemp;
 	if (!di->pdata) {
 		dev_err(di->dev, "no btemp platform data supplied\n");
@@ -1115,7 +1119,7 @@ static void __exit ab8500_btemp_exit(void)
 	platform_driver_unregister(&ab8500_btemp_driver);
 }
 
-device_initcall(ab8500_btemp_init);
+subsys_initcall_sync(ab8500_btemp_init);
 module_exit(ab8500_btemp_exit);
 
 MODULE_LICENSE("GPL v2");

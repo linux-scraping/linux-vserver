@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/nl80211.h>
 #include <linux/pci.h>
 #include <linux/pci-aspm.h>
@@ -35,7 +37,6 @@ static DEFINE_PCI_DEVICE_TABLE(ath_pci_id_table) = {
 	{ PCI_VDEVICE(ATHEROS, 0x0032) }, /* PCI-E  AR9485 */
 	{ PCI_VDEVICE(ATHEROS, 0x0033) }, /* PCI-E  AR9580 */
 	{ PCI_VDEVICE(ATHEROS, 0x0034) }, /* PCI-E  AR9462 */
-	{ PCI_VDEVICE(ATHEROS, 0x0037) }, /* PCI-E  AR1111/AR9485 */
 	{ 0 }
 };
 
@@ -122,9 +123,8 @@ static void ath_pci_aspm_init(struct ath_common *common)
 	if (!parent)
 		return;
 
-	if ((ath9k_hw_get_btcoex_scheme(ah) != ATH_BTCOEX_CFG_NONE) &&
-	    (AR_SREV_9285(ah))) {
-		/* Bluetooth coexistance requires disabling ASPM for AR9285. */
+	if (ath9k_hw_get_btcoex_scheme(ah) != ATH_BTCOEX_CFG_NONE) {
+		/* Bluetooth coexistance requires disabling ASPM. */
 		pci_read_config_byte(pdev, pos + PCI_EXP_LNKCTL, &aspm);
 		aspm &= ~(PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1);
 		pci_write_config_byte(pdev, pos + PCI_EXP_LNKCTL, aspm);
@@ -173,14 +173,13 @@ static int ath_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	ret =  pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret) {
-		printk(KERN_ERR "ath9k: 32-bit DMA not available\n");
+		pr_err("32-bit DMA not available\n");
 		goto err_dma;
 	}
 
 	ret = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (ret) {
-		printk(KERN_ERR "ath9k: 32-bit DMA consistent "
-			"DMA enable failed\n");
+		pr_err("32-bit DMA consistent DMA enable failed\n");
 		goto err_dma;
 	}
 
@@ -226,7 +225,7 @@ static int ath_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	mem = pci_iomap(pdev, 0, 0);
 	if (!mem) {
-		printk(KERN_ERR "PCI memory map error\n") ;
+		pr_err("PCI memory map error\n") ;
 		ret = -EIO;
 		goto err_iomap;
 	}

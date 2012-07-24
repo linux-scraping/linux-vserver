@@ -343,6 +343,16 @@ static int ttm_bo_add_ttm(struct ttm_buffer_object *bo, bool zero_alloc)
 		if (unlikely(bo->ttm == NULL))
 			ret = -ENOMEM;
 		break;
+	case ttm_bo_type_sg:
+		bo->ttm = bdev->driver->ttm_tt_create(bdev, bo->num_pages << PAGE_SHIFT,
+						      page_flags | TTM_PAGE_FLAG_SG,
+						      glob->dummy_read_page);
+		if (unlikely(bo->ttm == NULL)) {
+			ret = -ENOMEM;
+			break;
+		}
+		bo->ttm->sg = bo->sg;
+		break;
 	default:
 		pr_err("Illegal buffer object type\n");
 		ret = -EINVAL;
@@ -430,11 +440,9 @@ static int ttm_bo_handle_move_mem(struct ttm_buffer_object *bo,
 
 moved:
 	if (bo->evicted) {
-		if (bdev->driver->invalidate_caches) {
-			ret = bdev->driver->invalidate_caches(bdev, bo->mem.placement);
-			if (ret)
-				pr_err("Can not flush read caches\n");
-		}
+		ret = bdev->driver->invalidate_caches(bdev, bo->mem.placement);
+		if (ret)
+			pr_err("Can not flush read caches\n");
 		bo->evicted = false;
 	}
 
@@ -1091,32 +1099,24 @@ out_unlock:
 	return ret;
 }
 
-static bool ttm_bo_mem_compat(struct ttm_placement *placement,
-			      struct ttm_mem_reg *mem,
-			      uint32_t *new_flags)
+static int ttm_bo_mem_compat(struct ttm_placement *placement,
+			     struct ttm_mem_reg *mem)
 {
 	int i;
 
 	if (mem->mm_node && placement->lpfn != 0 &&
 	    (mem->start < placement->fpfn ||
 	     mem->start + mem->num_pages > placement->lpfn))
-		return false;
+		return -1;
 
 	for (i = 0; i < placement->num_placement; i++) {
-		*new_flags = placement->placement[i];
-		if ((*new_flags & mem->placement & TTM_PL_MASK_CACHING) &&
-		    (*new_flags & mem->placement & TTM_PL_MASK_MEM))
-			return true;
+		if ((placement->placement[i] & mem->placement &
+			TTM_PL_MASK_CACHING) &&
+			(placement->placement[i] & mem->placement &
+			TTM_PL_MASK_MEM))
+			return i;
 	}
-
-	for (i = 0; i < placement->num_busy_placement; i++) {
-		*new_flags = placement->busy_placement[i];
-		if ((*new_flags & mem->placement & TTM_PL_MASK_CACHING) &&
-		    (*new_flags & mem->placement & TTM_PL_MASK_MEM))
-			return true;
-	}
-
-	return false;
+	return -1;
 }
 
 int ttm_bo_validate(struct ttm_buffer_object *bo,
@@ -1125,7 +1125,6 @@ int ttm_bo_validate(struct ttm_buffer_object *bo,
 			bool no_wait_gpu)
 {
 	int ret;
-	uint32_t new_flags;
 
 	BUG_ON(!atomic_read(&bo->reserved));
 	/* Check that range is valid */
@@ -1136,7 +1135,8 @@ int ttm_bo_validate(struct ttm_buffer_object *bo,
 	/*
 	 * Check whether we need to move buffer.
 	 */
-	if (!ttm_bo_mem_compat(placement, &bo->mem, &new_flags)) {
+	ret = ttm_bo_mem_compat(placement, &bo->mem);
+	if (ret < 0) {
 		ret = ttm_bo_move_buffer(bo, placement, interruptible, no_wait_reserve, no_wait_gpu);
 		if (ret)
 			return ret;
@@ -1145,7 +1145,7 @@ int ttm_bo_validate(struct ttm_buffer_object *bo,
 		 * Use the access and other non-mapping-related flag bits from
 		 * the compatible memory placement flags to the active flags
 		 */
-		ttm_flag_masked(&bo->mem.placement, new_flags,
+		ttm_flag_masked(&bo->mem.placement, placement->placement[ret],
 				~TTM_PL_MASK_MEMTYPE);
 	}
 	/*
@@ -1179,6 +1179,7 @@ int ttm_bo_init(struct ttm_bo_device *bdev,
 		bool interruptible,
 		struct file *persistent_swap_storage,
 		size_t acc_size,
+		struct sg_table *sg,
 		void (*destroy) (struct ttm_buffer_object *))
 {
 	int ret = 0;
@@ -1234,6 +1235,7 @@ int ttm_bo_init(struct ttm_bo_device *bdev,
 	bo->seq_valid = false;
 	bo->persistent_swap_storage = persistent_swap_storage;
 	bo->acc_size = acc_size;
+	bo->sg = sg;
 	atomic_inc(&bo->glob->bo_count);
 
 	ret = ttm_bo_check_placement(bo, placement);
@@ -1244,7 +1246,8 @@ int ttm_bo_init(struct ttm_bo_device *bdev,
 	 * For ttm_bo_type_device buffers, allocate
 	 * address space from the device.
 	 */
-	if (bo->type == ttm_bo_type_device) {
+	if (bo->type == ttm_bo_type_device ||
+	    bo->type == ttm_bo_type_sg) {
 		ret = ttm_bo_setup_vm(bo);
 		if (ret)
 			goto out_err;
@@ -1315,7 +1318,7 @@ int ttm_bo_create(struct ttm_bo_device *bdev,
 	acc_size = ttm_bo_acc_size(bdev, size, sizeof(struct ttm_buffer_object));
 	ret = ttm_bo_init(bdev, bo, size, type, placement, page_alignment,
 				buffer_start, interruptible,
-				persistent_swap_storage, acc_size, NULL);
+			  persistent_swap_storage, acc_size, NULL, NULL);
 	if (likely(ret == 0))
 		*p_bo = bo;
 

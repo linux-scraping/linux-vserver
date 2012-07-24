@@ -148,7 +148,7 @@
 
 #define SMMU_ADDR_TO_PFN(addr)	((addr) >> 12)
 #define SMMU_ADDR_TO_PDN(addr)	((addr) >> 22)
-#define SMMU_PDN_TO_ADDR(pdn)	((pdn) << 22)
+#define SMMU_PDN_TO_ADDR(addr)	((pdn) << 22)
 
 #define _READABLE	(1 << SMMU_PTB_DATA_ASID_READABLE_SHIFT)
 #define _WRITABLE	(1 << SMMU_PTB_DATA_ASID_WRITABLE_SHIFT)
@@ -733,7 +733,7 @@ static int smmu_iommu_attach_dev(struct iommu_domain *domain,
 		pr_info("Reserve \"page zero\" for AVP vectors using a common dummy\n");
 	}
 
-	dev_dbg(smmu->dev, "%s is attached\n", dev_name(c->dev));
+	dev_dbg(smmu->dev, "%s is attached\n", dev_name(dev));
 	return 0;
 
 err_client:

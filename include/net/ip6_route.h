@@ -34,11 +34,6 @@ struct route_info {
 #define RT6_LOOKUP_F_SRCPREF_PUBLIC	0x00000010
 #define RT6_LOOKUP_F_SRCPREF_COA	0x00000020
 
-/* We do not (yet ?) support IPv6 jumbograms (RFC 2675)
- * Unlike IPv4, hdr->seg_len doesn't include the IPv6 header
- */
-#define IP6_MAX_MTU (0xFFFF + sizeof(struct ipv6hdr))
-
 /*
  * rt6_srcprefs2flags() and rt6_flags2srcprefs() translate
  * between IPV6_ADDR_PREFERENCES socket option values
@@ -152,7 +147,7 @@ struct rt6_rtnl_dump_arg {
 
 extern int rt6_dump_route(struct rt6_info *rt, void *p_arg);
 extern void rt6_ifdown(struct net *net, struct net_device *dev);
-extern void rt6_mtu_change(struct net_device *dev, unsigned mtu);
+extern void rt6_mtu_change(struct net_device *dev, unsigned int mtu);
 extern void rt6_remove_prefsrc(struct inet6_ifaddr *ifp);
 
 
@@ -181,7 +176,7 @@ static inline void ip6_dst_store(struct sock *sk, struct dst_entry *dst,
 	spin_unlock(&sk->sk_dst_lock);
 }
 
-static inline int ipv6_unicast_destination(struct sk_buff *skb)
+static inline bool ipv6_unicast_destination(const struct sk_buff *skb)
 {
 	struct rt6_info *rt = (struct rt6_info *) skb_dst(skb);
 

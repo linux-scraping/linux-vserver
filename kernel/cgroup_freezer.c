@@ -186,15 +186,23 @@ static void freezer_fork(struct task_struct *task)
 {
 	struct freezer *freezer;
 
+	/*
+	 * No lock is needed, since the task isn't on tasklist yet,
+	 * so it can't be moved to another cgroup, which means the
+	 * freezer won't be removed and will be valid during this
+	 * function call.  Nevertheless, apply RCU read-side critical
+	 * section to suppress RCU lockdep false positives.
+	 */
 	rcu_read_lock();
 	freezer = task_freezer(task);
+	rcu_read_unlock();
 
 	/*
 	 * The root cgroup is non-freezable, so we can skip the
 	 * following check.
 	 */
 	if (!freezer->css.cgroup->parent)
-		goto out;
+		return;
 
 	spin_lock_irq(&freezer->lock);
 	BUG_ON(freezer->state == CGROUP_FROZEN);
@@ -202,10 +210,7 @@ static void freezer_fork(struct task_struct *task)
 	/* Locking avoids race with FREEZING -> THAWED transitions. */
 	if (freezer->state == CGROUP_FREEZING)
 		freeze_task(task);
-
 	spin_unlock_irq(&freezer->lock);
-out:
-	rcu_read_unlock();
 }
 
 /*
@@ -353,24 +358,19 @@ static int freezer_write(struct cgroup *cgroup,
 static struct cftype files[] = {
 	{
 		.name = "state",
+		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_seq_string = freezer_read,
 		.write_string = freezer_write,
 	},
+	{ }	/* terminate */
 };
-
-static int freezer_populate(struct cgroup_subsys *ss, struct cgroup *cgroup)
-{
-	if (!cgroup->parent)
-		return 0;
-	return cgroup_add_files(cgroup, ss, files, ARRAY_SIZE(files));
-}
 
 struct cgroup_subsys freezer_subsys = {
 	.name		= "freezer",
 	.create		= freezer_create,
 	.destroy	= freezer_destroy,
-	.populate	= freezer_populate,
 	.subsys_id	= freezer_subsys_id,
 	.can_attach	= freezer_can_attach,
 	.fork		= freezer_fork,
+	.base_cftypes	= files,
 };

@@ -324,7 +324,7 @@ static int flock_make_lock(struct file *filp, struct file_lock **lock,
 	return 0;
 }
 
-static int assign_type(struct file_lock *fl, long type)
+static int assign_type(struct file_lock *fl, int type)
 {
 	switch (type) {
 	case F_RDLCK:
@@ -461,7 +461,7 @@ static const struct lock_manager_operations lease_manager_ops = {
 /*
  * Initialize a lease, use the default lock manager operations
  */
-static int lease_init(struct file *filp, long type, struct file_lock *fl)
+static int lease_init(struct file *filp, int type, struct file_lock *fl)
  {
 	if (assign_type(fl, type) != 0)
 		return -EINVAL;
@@ -480,7 +480,7 @@ static int lease_init(struct file *filp, long type, struct file_lock *fl)
 }
 
 /* Allocate a file_lock initialised to this type of lease */
-static struct file_lock *lease_alloc(struct file *filp, long type)
+static struct file_lock *lease_alloc(struct file *filp, int type)
 {
 	struct file_lock *fl = locks_alloc_lock();
 	int error = -ENOMEM;
@@ -1285,10 +1285,11 @@ int __break_lease(struct inode *inode, unsigned int mode)
 
 restart:
 	break_time = flock->fl_break_time;
-	if (break_time != 0)
+	if (break_time != 0) {
 		break_time -= jiffies;
-	if (break_time == 0)
-		break_time++;
+		if (break_time == 0)
+			break_time++;
+	}
 	locks_insert_block(flock, new_fl);
 	unlock_flocks();
 	error = wait_event_interruptible_timeout(new_fl->fl_wait,
@@ -1478,7 +1479,7 @@ int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
 	struct inode *inode = dentry->d_inode;
 	int error;
 
-	if ((current_fsuid() != inode->i_uid) && !capable(CAP_LEASE))
+	if ((!uid_eq(current_fsuid(), inode->i_uid)) && !capable(CAP_LEASE))
 		return -EACCES;
 	if (!S_ISREG(inode->i_mode))
 		return -EINVAL;
@@ -1668,12 +1669,13 @@ EXPORT_SYMBOL(flock_lock_file_wait);
 SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
 {
 	struct file *filp;
+	int fput_needed;
 	struct file_lock *lock;
 	int can_sleep, unlock;
 	int error;
 
 	error = -EBADF;
-	filp = fget(fd);
+	filp = fget_light(fd, &fput_needed);
 	if (!filp)
 		goto out;
 
@@ -1706,7 +1708,7 @@ SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
 	locks_free_lock(lock);
 
  out_putf:
-	fput(filp);
+	fput_light(filp, fput_needed);
  out:
 	return error;
 }

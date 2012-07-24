@@ -328,6 +328,7 @@ static noinline void xen_spin_unlock_slow(struct xen_spinlock *xl)
 		if (per_cpu(lock_spinners, cpu) == xl) {
 			ADD_STATS(released_slow_kicked, 1);
 			xen_send_IPI_one(cpu, XEN_SPIN_UNLOCK_VECTOR);
+			break;
 		}
 	}
 }
@@ -439,12 +440,12 @@ static int __init xen_spinlock_debugfs(void)
 	debugfs_create_u64("time_total", 0444, d_spin_debug,
 			   &spinlock_stats.time_total);
 
-	xen_debugfs_create_u32_array("histo_total", 0444, d_spin_debug,
-				     spinlock_stats.histo_spin_total, HISTO_BUCKETS + 1);
-	xen_debugfs_create_u32_array("histo_spinning", 0444, d_spin_debug,
-				     spinlock_stats.histo_spin_spinning, HISTO_BUCKETS + 1);
-	xen_debugfs_create_u32_array("histo_blocked", 0444, d_spin_debug,
-				     spinlock_stats.histo_spin_blocked, HISTO_BUCKETS + 1);
+	debugfs_create_u32_array("histo_total", 0444, d_spin_debug,
+				spinlock_stats.histo_spin_total, HISTO_BUCKETS + 1);
+	debugfs_create_u32_array("histo_spinning", 0444, d_spin_debug,
+				spinlock_stats.histo_spin_spinning, HISTO_BUCKETS + 1);
+	debugfs_create_u32_array("histo_blocked", 0444, d_spin_debug,
+				spinlock_stats.histo_spin_blocked, HISTO_BUCKETS + 1);
 
 	return 0;
 }

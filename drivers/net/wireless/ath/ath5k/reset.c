@@ -23,6 +23,8 @@
   Reset function and helpers
 \****************************/
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <asm/unaligned.h>
 
 #include <linux/pci.h>		/* To determine if a card is pci-e */
@@ -476,7 +478,7 @@ ath5k_hw_wisoc_reset(struct ath5k_hw *ah, u32 flags)
 	regval = ioread32(reg);
 	iowrite32(regval | val, reg);
 	regval = ioread32(reg);
-	udelay(100);	/* NB: should be atomic */
+	usleep_range(100, 150);
 
 	/* Bring BB/MAC out of reset */
 	iowrite32(regval & ~val, reg);

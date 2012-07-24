@@ -341,11 +341,7 @@ static int tegra_i2c_init(struct tegra_i2c_dev *i2c_dev)
 	u32 val;
 	int err = 0;
 
-	err = clk_enable(i2c_dev->clk);
-	if (err < 0) {
-		dev_err(i2c_dev->dev, "Clock enable failed %d\n", err);
-		return err;
-	}
+	clk_enable(i2c_dev->clk);
 
 	tegra_periph_reset_assert(i2c_dev->clk);
 	udelay(2);
@@ -479,12 +475,15 @@ static int tegra_i2c_xfer_msg(struct tegra_i2c_dev *i2c_dev,
 	packet_header = msg->len - 1;
 	i2c_writel(i2c_dev, packet_header, I2C_TX_FIFO);
 
-	packet_header = msg->addr << I2C_HEADER_SLAVE_ADDR_SHIFT;
-	packet_header |= I2C_HEADER_IE_ENABLE;
+	packet_header = I2C_HEADER_IE_ENABLE;
 	if (!stop)
 		packet_header |= I2C_HEADER_REPEAT_START;
-	if (msg->flags & I2C_M_TEN)
+	if (msg->flags & I2C_M_TEN) {
+		packet_header |= msg->addr;
 		packet_header |= I2C_HEADER_10BIT_ADDR;
+	} else {
+		packet_header |= msg->addr << I2C_HEADER_SLAVE_ADDR_SHIFT;
+	}
 	if (msg->flags & I2C_M_IGNORE_NAK)
 		packet_header |= I2C_HEADER_CONT_ON_NAK;
 	if (msg->flags & I2C_M_RD)
@@ -547,12 +546,7 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 	if (i2c_dev->is_suspended)
 		return -EBUSY;
 
-	ret = clk_enable(i2c_dev->clk);
-	if (ret < 0) {
-		dev_err(i2c_dev->dev, "Clock enable failed %d\n", ret);
-		return ret;
-	}
-
+	clk_enable(i2c_dev->clk);
 	for (i = 0; i < num; i++) {
 		int stop = (i == (num - 1)) ? 1  : 0;
 		ret = tegra_i2c_xfer_msg(i2c_dev, &msgs[i], stop);
@@ -565,7 +559,7 @@ static int tegra_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 
 static u32 tegra_i2c_func(struct i2c_adapter *adap)
 {
-	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
+	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL | I2C_FUNC_10BIT_ADDR;
 }
 
 static const struct i2c_algorithm tegra_i2c_algo = {

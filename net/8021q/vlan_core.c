@@ -5,7 +5,7 @@
 #include <linux/export.h>
 #include "vlan.h"
 
-bool vlan_do_receive(struct sk_buff **skbp)
+bool vlan_do_receive(struct sk_buff **skbp, bool last_handler)
 {
 	struct sk_buff *skb = *skbp;
 	u16 vlan_id = skb->vlan_tci & VLAN_VID_MASK;
@@ -13,8 +13,14 @@ bool vlan_do_receive(struct sk_buff **skbp)
 	struct vlan_pcpu_stats *rx_stats;
 
 	vlan_dev = vlan_find_dev(skb->dev, vlan_id);
-	if (!vlan_dev)
+	if (!vlan_dev) {
+		/* Only the last call to vlan_do_receive() should change
+		 * pkt_type to PACKET_OTHERHOST
+		 */
+		if (vlan_id && last_handler)
+			skb->pkt_type = PACKET_OTHERHOST;
 		return false;
+	}
 
 	skb = *skbp = skb_share_check(skb, GFP_ATOMIC);
 	if (unlikely(!skb))
@@ -25,8 +31,7 @@ bool vlan_do_receive(struct sk_buff **skbp)
 		/* Our lower layer thinks this is not local, let's make sure.
 		 * This allows the VLAN to have a different MAC than the
 		 * underlying device, and still route correctly. */
-		if (!compare_ether_addr(eth_hdr(skb)->h_dest,
-					vlan_dev->dev_addr))
+		if (ether_addr_equal(eth_hdr(skb)->h_dest, vlan_dev->dev_addr))
 			skb->pkt_type = PACKET_HOST;
 	}
 
@@ -96,13 +101,11 @@ EXPORT_SYMBOL(vlan_dev_vlan_id);
 
 static struct sk_buff *vlan_reorder_header(struct sk_buff *skb)
 {
-	if (skb_cow(skb, skb_headroom(skb)) < 0) {
-		kfree_skb(skb);
+	if (skb_cow(skb, skb_headroom(skb)) < 0)
 		return NULL;
-	}
-
 	memmove(skb->data - ETH_HLEN, skb->data - VLAN_ETH_HLEN, 2 * ETH_ALEN);
 	skb->mac_header += VLAN_HLEN;
+	skb_reset_mac_len(skb);
 	return skb;
 }
 
@@ -136,8 +139,6 @@ struct sk_buff *vlan_untag(struct sk_buff *skb)
 
 	skb_reset_network_header(skb);
 	skb_reset_transport_header(skb);
-	skb_reset_mac_len(skb);
-
 	return skb;
 
 err_free:

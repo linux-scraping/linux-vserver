@@ -1283,11 +1283,10 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 	BUG_ON(ident != TAG_IDENT_LVD);
 	lvd = (struct logicalVolDesc *)bh->b_data;
 	table_len = le32_to_cpu(lvd->mapTableLength);
-	if (table_len > sb->s_blocksize - sizeof(*lvd)) {
+	if (sizeof(*lvd) + table_len > sb->s_blocksize) {
 		udf_err(sb, "error loading logical volume descriptor: "
 			"Partition table too long (%u > %lu)\n", table_len,
 			sb->s_blocksize - sizeof(*lvd));
-		ret = 1;
 		goto out_bh;
 	}
 
@@ -1332,10 +1331,8 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
 						UDF_ID_SPARABLE,
 						strlen(UDF_ID_SPARABLE))) {
 				if (udf_load_sparable_map(sb, map,
-				    (struct sparablePartitionMap *)gpm) < 0) {
-					ret = 1;
+				    (struct sparablePartitionMap *)gpm) < 0)
 					goto out_bh;
-				}
 			} else if (!strncmp(upm2->partIdent.ident,
 						UDF_ID_METADATA,
 						strlen(UDF_ID_METADATA))) {

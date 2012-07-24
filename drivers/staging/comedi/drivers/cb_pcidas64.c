@@ -423,29 +423,6 @@ static const struct comedi_lrange ai_ranges_64xx = {
 	 }
 };
 
-static const uint8_t ai_range_code_64xx[8] = {
-	0x0, 0x1, 0x2, 0x3,	/* bipolar 10, 5, 2,5, 1.25 */
-	0x8, 0x9, 0xa, 0xb	/* unipolar 10, 5, 2.5, 1.25 */
-};
-
-/* analog input ranges for 64-Mx boards */
-static const struct comedi_lrange ai_ranges_64_mx = {
-	7, {
-		BIP_RANGE(5),
-		BIP_RANGE(2.5),
-		BIP_RANGE(1.25),
-		BIP_RANGE(0.625),
-		UNI_RANGE(5),
-		UNI_RANGE(2.5),
-		UNI_RANGE(1.25)
-	}
-};
-
-static const uint8_t ai_range_code_64_mx[7] = {
-	0x0, 0x1, 0x2, 0x3,	/* bipolar 5, 2.5, 1.25, 0.625 */
-	0x9, 0xa, 0xb		/* unipolar 5, 2.5, 1.25 */
-};
-
 /* analog input ranges for 60xx boards */
 static const struct comedi_lrange ai_ranges_60xx = {
 	4,
@@ -455,10 +432,6 @@ static const struct comedi_lrange ai_ranges_60xx = {
 	 BIP_RANGE(0.5),
 	 BIP_RANGE(0.05),
 	 }
-};
-
-static const uint8_t ai_range_code_60xx[4] = {
-	0x0, 0x1, 0x4, 0x7	/* bipolar 10, 5, 0.5, 0.05 */
 };
 
 /* analog input ranges for 6030, etc boards */
@@ -482,11 +455,6 @@ static const struct comedi_lrange ai_ranges_6030 = {
 	 }
 };
 
-static const uint8_t ai_range_code_6030[14] = {
-	0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, /* bip 10, 5, 2, 1, 0.5, 0.2, 0.1 */
-	0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf  /* uni 10, 5, 2, 1, 0.5, 0.2, 0.1 */
-};
-
 /* analog input ranges for 6052, etc boards */
 static const struct comedi_lrange ai_ranges_6052 = {
 	15,
@@ -507,11 +475,6 @@ static const struct comedi_lrange ai_ranges_6052 = {
 	 UNI_RANGE(0.2),
 	 UNI_RANGE(0.1),
 	 }
-};
-
-static const uint8_t ai_range_code_6052[15] = {
-	0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7,	/* bipolar 10 ... 0.05 */
-	0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf	/* unipolar 10 ... 0.1 */
 };
 
 /* analog input ranges for 4020 board */
@@ -598,7 +561,6 @@ struct pcidas64_board {
 	int ai_bits;		/*  analog input resolution */
 	int ai_speed;		/*  fastest conversion period in ns */
 	const struct comedi_lrange *ai_range_table;
-	const uint8_t *ai_range_code;
 	int ao_nchan;		/*  number of analog out channels */
 	int ao_bits;		/*  analog output resolution */
 	int ao_scan_speed;	/*  analog output speed (for a scan, not conversion) */
@@ -657,7 +619,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
 	 .ai_range_table = &ai_ranges_64xx,
-	 .ai_range_code = ai_range_code_64xx,
 	 .ao_range_table = &ao_ranges_64xx,
 	 .ao_range_code = ao_range_code_64xx,
 	 .ai_fifo = &ai_fifo_64xx,
@@ -674,7 +635,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
 	 .ai_range_table = &ai_ranges_64xx,
-	 .ai_range_code = ai_range_code_64xx,
 	 .ao_range_table = &ao_ranges_64xx,
 	 .ao_range_code = ao_range_code_64xx,
 	 .ai_fifo = &ai_fifo_64xx,
@@ -690,8 +650,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_bits = 16,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ao_range_table = &ao_ranges_64xx,
 	 .ao_range_code = ao_range_code_64xx,
 	 .ai_fifo = &ai_fifo_64xx,
@@ -707,8 +666,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_bits = 16,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ao_range_table = &ao_ranges_64xx,
 	 .ao_range_code = ao_range_code_64xx,
 	 .ai_fifo = &ai_fifo_64xx,
@@ -724,8 +682,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_bits = 16,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ao_range_table = &ao_ranges_64xx,
 	 .ao_range_code = ao_range_code_64xx,
 	 .ai_fifo = &ai_fifo_64xx,
@@ -741,7 +698,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_bits = 16,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -758,7 +714,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 100000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -774,7 +729,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 100000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -791,7 +745,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 100000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -808,7 +761,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6030,
-	 .ai_range_code = ai_range_code_6030,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -825,7 +777,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6030,
-	 .ai_range_code = ai_range_code_6030,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -840,7 +791,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 0,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6030,
-	 .ai_range_code = ai_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
 	 .has_8255 = 0,
 	 },
@@ -853,7 +803,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 0,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6030,
-	 .ai_range_code = ai_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
 	 .has_8255 = 0,
 	 },
@@ -867,7 +816,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 0,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
 	 .has_8255 = 0,
 	 },
@@ -882,7 +830,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 100000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -899,7 +846,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 100000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_60xx,
-	 .ai_range_code = ai_range_code_60xx,
 	 .ao_range_table = &ao_ranges_60xx,
 	 .ao_range_code = ao_range_code_60xx,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -916,7 +862,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 1000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6052,
-	 .ai_range_code = ai_range_code_6052,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -933,7 +878,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 3333,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6052,
-	 .ai_range_code = ai_range_code_6052,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -950,7 +894,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 1000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6052,
-	 .ai_range_code = ai_range_code_6052,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -967,7 +910,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 1000,
 	 .layout = LAYOUT_60XX,
 	 .ai_range_table = &ai_ranges_6052,
-	 .ai_range_code = ai_range_code_6052,
 	 .ao_range_table = &ao_ranges_6030,
 	 .ao_range_code = ao_range_code_6030,
 	 .ai_fifo = &ai_fifo_60xx,
@@ -1000,7 +942,6 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
 	 .ai_range_table = &ai_ranges_64xx,
-	 .ai_range_code = ai_range_code_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1013,8 +954,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 0,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1027,8 +967,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 0,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1041,8 +980,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 0,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1055,8 +993,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 2,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1069,8 +1006,7 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 2,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
@@ -1083,38 +1019,12 @@ static const struct pcidas64_board pcidas64_boards[] = {
 	 .ao_nchan = 2,
 	 .ao_scan_speed = 10000,
 	 .layout = LAYOUT_64XX,
-	 .ai_range_table = &ai_ranges_64_mx,
-	 .ai_range_code = ai_range_code_64_mx,
+	 .ai_range_table = &ai_ranges_64xx,
 	 .ai_fifo = ai_fifo_64xx,
 	 .has_8255 = 1,
 	 },
 #endif
 };
-
-static DEFINE_PCI_DEVICE_TABLE(pcidas64_pci_table) = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x001d) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x001e) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0035) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0036) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0037) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0052) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005d) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005e) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005f) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0061) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0062) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0063) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0064) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0066) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0067) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0068) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x006f) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0078) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0079) },
-	{ 0 }
-};
-
-MODULE_DEVICE_TABLE(pci, pcidas64_pci_table);
 
 static inline struct pcidas64_board *board(const struct comedi_device *dev)
 {
@@ -1192,21 +1102,6 @@ static inline struct pcidas64_private *priv(struct comedi_device *dev)
 	return dev->private;
 }
 
-/*
- * The comedi_driver structure tells the Comedi core module
- * which functions to call to configure/deconfigure (attach/detach)
- * the board, and also about the kernel module that contains
- * the device code.
- */
-static int attach(struct comedi_device *dev, struct comedi_devconfig *it);
-static int detach(struct comedi_device *dev);
-static struct comedi_driver driver_cb_pcidas = {
-	.driver_name = "cb_pcidas64",
-	.module = THIS_MODULE,
-	.attach = attach,
-	.detach = detach,
-};
-
 static int ai_rinsn(struct comedi_device *dev, struct comedi_subdevice *s,
 		    struct comedi_insn *insn, unsigned int *data);
 static int ai_config_insn(struct comedi_device *dev, struct comedi_subdevice *s,
@@ -1281,48 +1176,48 @@ static unsigned int get_ao_divisor(unsigned int ns, unsigned int flags);
 static void load_ao_dma(struct comedi_device *dev,
 			const struct comedi_cmd *cmd);
 
-static int __devinit driver_cb_pcidas_pci_probe(struct pci_dev *dev,
-						const struct pci_device_id *ent)
-{
-	return comedi_pci_auto_config(dev, driver_cb_pcidas.driver_name);
-}
-
-static void __devexit driver_cb_pcidas_pci_remove(struct pci_dev *dev)
-{
-	comedi_pci_auto_unconfig(dev);
-}
-
-static struct pci_driver driver_cb_pcidas_pci_driver = {
-	.id_table = pcidas64_pci_table,
-	.probe = &driver_cb_pcidas_pci_probe,
-	.remove = __devexit_p(&driver_cb_pcidas_pci_remove)
-};
-
-static int __init driver_cb_pcidas_init_module(void)
-{
-	int retval;
-
-	retval = comedi_driver_register(&driver_cb_pcidas);
-	if (retval < 0)
-		return retval;
-
-	driver_cb_pcidas_pci_driver.name = (char *)driver_cb_pcidas.driver_name;
-	return pci_register_driver(&driver_cb_pcidas_pci_driver);
-}
-
-static void __exit driver_cb_pcidas_cleanup_module(void)
-{
-	pci_unregister_driver(&driver_cb_pcidas_pci_driver);
-	comedi_driver_unregister(&driver_cb_pcidas);
-}
-
-module_init(driver_cb_pcidas_init_module);
-module_exit(driver_cb_pcidas_cleanup_module);
-
 static unsigned int ai_range_bits_6xxx(const struct comedi_device *dev,
 				       unsigned int range_index)
 {
-	return board(dev)->ai_range_code[range_index] << 8;
+	const struct comedi_krange *range =
+	    &board(dev)->ai_range_table->range[range_index];
+	unsigned int bits = 0;
+
+	switch (range->max) {
+	case 10000000:
+		bits = 0x000;
+		break;
+	case 5000000:
+		bits = 0x100;
+		break;
+	case 2000000:
+	case 2500000:
+		bits = 0x200;
+		break;
+	case 1000000:
+	case 1250000:
+		bits = 0x300;
+		break;
+	case 500000:
+		bits = 0x400;
+		break;
+	case 200000:
+	case 250000:
+		bits = 0x500;
+		break;
+	case 100000:
+		bits = 0x600;
+		break;
+	case 50000:
+		bits = 0x700;
+		break;
+	default:
+		comedi_error(dev, "bug! in ai_range_bits_6xxx");
+		break;
+	}
+	if (range->min == 0)
+		bits += 0x900;
+	return bits;
 }
 
 static unsigned int hw_revision(const struct comedi_device *dev,
@@ -1808,7 +1703,7 @@ static int attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	dev_dbg(dev->hw_dev, "Found %s on bus %i, slot %i\n", board(dev)->name,
 		pcidev->bus->number, PCI_SLOT(pcidev->devfn));
 
-	if (comedi_pci_enable(pcidev, driver_cb_pcidas.driver_name)) {
+	if (comedi_pci_enable(pcidev, dev->driver->driver_name)) {
 		dev_warn(dev->hw_dev, "failed to enable PCI device and request regions\n");
 		return -EIO;
 	}
@@ -1895,15 +1790,7 @@ static int attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	return 0;
 }
 
-/*
- * _detach is called to deconfigure a device.  It should deallocate
- * resources.
- * This function is also called when _attach() fails, so it should be
- * careful not to release resources that were not necessarily
- * allocated by _attach().  dev->private and dev->subdevices are
- * deallocated automatically by the core.
- */
-static int detach(struct comedi_device *dev)
+static void detach(struct comedi_device *dev)
 {
 	unsigned int i;
 
@@ -1965,8 +1852,6 @@ static int detach(struct comedi_device *dev)
 	}
 	if (dev->subdevices)
 		subdev_8255_cleanup(dev, dev->subdevices + 4);
-
-	return 0;
 }
 
 static int ai_rinsn(struct comedi_device *dev, struct comedi_subdevice *s,
@@ -4341,6 +4226,56 @@ static void i2c_write(struct comedi_device *dev, unsigned int address,
 	}
 	i2c_stop(dev);
 }
+
+static struct comedi_driver cb_pcidas64_driver = {
+	.driver_name	= "cb_pcidas64",
+	.module		= THIS_MODULE,
+	.attach		= attach,
+	.detach		= detach,
+};
+
+static int __devinit cb_pcidas64_pci_probe(struct pci_dev *dev,
+					   const struct pci_device_id *ent)
+{
+	return comedi_pci_auto_config(dev, &cb_pcidas64_driver);
+}
+
+static void __devexit cb_pcidas64_pci_remove(struct pci_dev *dev)
+{
+	comedi_pci_auto_unconfig(dev);
+}
+
+static DEFINE_PCI_DEVICE_TABLE(cb_pcidas64_pci_table) = {
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x001d) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x001e) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0035) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0036) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0037) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0052) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005d) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005e) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x005f) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0061) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0062) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0063) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0064) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0066) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0067) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0068) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x006f) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0078) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_COMPUTERBOARDS, 0x0079) },
+	{ 0 }
+};
+MODULE_DEVICE_TABLE(pci, cb_pcidas64_pci_table);
+
+static struct pci_driver cb_pcidas64_pci_driver = {
+	.name		= "cb_pcidas64",
+	.id_table	= cb_pcidas64_pci_table,
+	.probe		= cb_pcidas64_pci_probe,
+	.remove		= __devexit_p(cb_pcidas64_pci_remove),
+};
+module_comedi_pci_driver(cb_pcidas64_driver, cb_pcidas64_pci_driver);
 
 MODULE_AUTHOR("Comedi http://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");

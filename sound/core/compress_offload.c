@@ -102,15 +102,12 @@ static int snd_compr_open(struct inode *inode, struct file *f)
 
 	if (dirn != compr->direction) {
 		pr_err("this device doesn't support this direction\n");
-		snd_card_unref(compr->card);
 		return -EINVAL;
 	}
 
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
-	if (!data) {
-		snd_card_unref(compr->card);
+	if (!data)
 		return -ENOMEM;
-	}
 	data->stream.ops = compr->ops;
 	data->stream.direction = dirn;
 	data->stream.private_data = compr->private_data;
@@ -118,7 +115,6 @@ static int snd_compr_open(struct inode *inode, struct file *f)
 	runtime = kzalloc(sizeof(*runtime), GFP_KERNEL);
 	if (!runtime) {
 		kfree(data);
-		snd_card_unref(compr->card);
 		return -ENOMEM;
 	}
 	runtime->state = SNDRV_PCM_STATE_OPEN;
@@ -132,7 +128,6 @@ static int snd_compr_open(struct inode *inode, struct file *f)
 		kfree(runtime);
 		kfree(data);
 	}
-	snd_card_unref(compr->card);
 	return ret;
 }
 
@@ -507,10 +502,8 @@ static int snd_compr_pause(struct snd_compr_stream *stream)
 	if (stream->runtime->state != SNDRV_PCM_STATE_RUNNING)
 		return -EPERM;
 	retval = stream->ops->trigger(stream, SNDRV_PCM_TRIGGER_PAUSE_PUSH);
-	if (!retval) {
+	if (!retval)
 		stream->runtime->state = SNDRV_PCM_STATE_PAUSED;
-		wake_up(&stream->runtime->sleep);
-	}
 	return retval;
 }
 
@@ -549,6 +542,10 @@ static int snd_compr_stop(struct snd_compr_stream *stream)
 	if (!retval) {
 		stream->runtime->state = SNDRV_PCM_STATE_SETUP;
 		wake_up(&stream->runtime->sleep);
+		stream->runtime->hw_pointer = 0;
+		stream->runtime->app_pointer = 0;
+		stream->runtime->total_bytes_available = 0;
+		stream->runtime->total_bytes_transferred = 0;
 	}
 	return retval;
 }
@@ -582,7 +579,7 @@ static long snd_compr_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	mutex_lock(&stream->device->lock);
 	switch (_IOC_NR(cmd)) {
 	case _IOC_NR(SNDRV_COMPRESS_IOCTL_VERSION):
-		retval = put_user(SNDRV_COMPRESS_VERSION,
+		put_user(SNDRV_COMPRESS_VERSION,
 				(int __user *)arg) ? -EFAULT : 0;
 		break;
 	case _IOC_NR(SNDRV_COMPRESS_GET_CAPS):
@@ -663,8 +660,7 @@ static int snd_compress_dev_disconnect(struct snd_device *device)
 	struct snd_compr *compr;
 
 	compr = device->device_data;
-	snd_unregister_device(SNDRV_DEVICE_TYPE_COMPRESS, compr->card,
-		compr->device);
+	snd_unregister_device(compr->direction, compr->card, compr->device);
 	return 0;
 }
 

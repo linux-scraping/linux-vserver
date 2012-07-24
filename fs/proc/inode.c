@@ -33,7 +33,7 @@ static void proc_evict_inode(struct inode *inode)
 	const struct proc_ns_operations *ns_ops;
 
 	truncate_inode_pages(&inode->i_data, 0);
-	end_writeback(inode);
+	clear_inode(inode);
 
 	/* Stop tracking associated processes */
 	put_pid(PROC_I(inode)->pid);
@@ -108,8 +108,8 @@ static int proc_show_options(struct seq_file *seq, struct dentry *root)
 	struct super_block *sb = root->d_sb;
 	struct pid_namespace *pid = sb->s_fs_info;
 
-	if (pid->pid_gid)
-		seq_printf(seq, ",gid=%lu", (unsigned long)pid->pid_gid);
+	if (!gid_eq(pid->pid_gid, GLOBAL_ROOT_GID))
+		seq_printf(seq, ",gid=%u", from_kgid_munged(&init_user_ns, pid->pid_gid));
 	if (pid->hide_pid != 0)
 		seq_printf(seq, ",hidepid=%u", pid->hide_pid);
 
@@ -443,10 +443,12 @@ static const struct file_operations proc_reg_file_ops_no_compat = {
 
 struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 {
-	struct inode *inode = new_inode_pseudo(sb);
+	struct inode * inode;
 
-	if (inode) {
-		inode->i_ino = de->low_ino;
+	inode = iget_locked(sb, de->low_ino);
+	if (!inode)
+		return NULL;
+	if (inode->i_state & I_NEW) {
 		inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 		PROC_I(inode)->fd = 0;
 		PROC_I(inode)->pde = de;
@@ -477,7 +479,9 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 				inode->i_fop = de->proc_fops;
 			}
 		}
-	}
+		unlock_new_inode(inode);
+	} else
+	       pde_put(de);
 	return inode;
 }			
 

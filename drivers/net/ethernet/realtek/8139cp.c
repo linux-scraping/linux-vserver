@@ -478,7 +478,7 @@ rx_status_loop:
 
 	while (1) {
 		u32 status, len;
-		dma_addr_t mapping, new_mapping;
+		dma_addr_t mapping;
 		struct sk_buff *skb, *new_skb;
 		struct cp_desc *desc;
 		const unsigned buflen = cp->rx_buf_sz;
@@ -520,14 +520,6 @@ rx_status_loop:
 			goto rx_next;
 		}
 
-		new_mapping = dma_map_single(&cp->pdev->dev, new_skb->data, buflen,
-					 PCI_DMA_FROMDEVICE);
-		if (dma_mapping_error(&cp->pdev->dev, new_mapping)) {
-			dev->stats.rx_dropped++;
-			kfree_skb(new_skb);
-			goto rx_next;
-		}
-
 		dma_unmap_single(&cp->pdev->dev, mapping,
 				 buflen, PCI_DMA_FROMDEVICE);
 
@@ -539,11 +531,12 @@ rx_status_loop:
 
 		skb_put(skb, len);
 
+		mapping = dma_map_single(&cp->pdev->dev, new_skb->data, buflen,
+					 PCI_DMA_FROMDEVICE);
 		cp->rx_skb[rx_tail] = new_skb;
 
 		cp_rx_skb(cp, skb, desc);
 		rx++;
-		mapping = new_mapping;
 
 rx_next:
 		cp->rx_ring[rx_tail].opts2 = 0;
@@ -642,9 +635,12 @@ static irqreturn_t cp_interrupt (int irq, void *dev_instance)
  */
 static void cp_poll_controller(struct net_device *dev)
 {
-	disable_irq(dev->irq);
-	cp_interrupt(dev->irq, dev);
-	enable_irq(dev->irq);
+	struct cp_private *cp = netdev_priv(dev);
+	const int irq = cp->pdev->irq;
+
+	disable_irq(irq);
+	cp_interrupt(irq, dev);
+	enable_irq(irq);
 }
 #endif
 
@@ -711,22 +707,6 @@ static inline u32 cp_tx_vlan_tag(struct sk_buff *skb)
 		TxVlanTag | swab16(vlan_tx_tag_get(skb)) : 0x00;
 }
 
-static void unwind_tx_frag_mapping(struct cp_private *cp, struct sk_buff *skb,
-				   int first, int entry_last)
-{
-	int frag, index;
-	struct cp_desc *txd;
-	skb_frag_t *this_frag;
-	for (frag = 0; frag+first < entry_last; frag++) {
-		index = first+frag;
-		cp->tx_skb[index] = NULL;
-		txd = &cp->tx_ring[index];
-		this_frag = &skb_shinfo(skb)->frags[frag];
-		dma_unmap_single(&cp->pdev->dev, le64_to_cpu(txd->addr),
-				 skb_frag_size(this_frag), PCI_DMA_TODEVICE);
-	}
-}
-
 static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 					struct net_device *dev)
 {
@@ -760,9 +740,6 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 
 		len = skb->len;
 		mapping = dma_map_single(&cp->pdev->dev, skb->data, len, PCI_DMA_TODEVICE);
-		if (dma_mapping_error(&cp->pdev->dev, mapping))
-			goto out_dma_error;
-
 		txd->opts2 = opts2;
 		txd->addr = cpu_to_le64(mapping);
 		wmb();
@@ -800,9 +777,6 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 		first_len = skb_headlen(skb);
 		first_mapping = dma_map_single(&cp->pdev->dev, skb->data,
 					       first_len, PCI_DMA_TODEVICE);
-		if (dma_mapping_error(&cp->pdev->dev, first_mapping))
-			goto out_dma_error;
-
 		cp->tx_skb[entry] = skb;
 		entry = NEXT_TX(entry);
 
@@ -816,11 +790,6 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 			mapping = dma_map_single(&cp->pdev->dev,
 						 skb_frag_address(this_frag),
 						 len, PCI_DMA_TODEVICE);
-			if (dma_mapping_error(&cp->pdev->dev, mapping)) {
-				unwind_tx_frag_mapping(cp, skb, first_entry, entry);
-				goto out_dma_error;
-			}
-
 			eor = (entry == (CP_TX_RING_SIZE - 1)) ? RingEnd : 0;
 
 			ctrl = eor | len | DescOwn;
@@ -879,16 +848,11 @@ static netdev_tx_t cp_start_xmit (struct sk_buff *skb,
 	if (TX_BUFFS_AVAIL(cp) <= (MAX_SKB_FRAGS + 1))
 		netif_stop_queue(dev);
 
-out_unlock:
 	spin_unlock_irqrestore(&cp->lock, intr_flags);
 
 	cpw8(TxPoll, NormalTxPoll);
 
 	return NETDEV_TX_OK;
-out_dma_error:
-	kfree_skb(skb);
-	cp->dev->stats.tx_dropped++;
-	goto out_unlock;
 }
 
 /* Set or clear the multicast filter for this adaptor.
@@ -1015,6 +979,17 @@ static void cp_init_hw (struct cp_private *cp)
 	cpw32_f (MAC0 + 0, le32_to_cpu (*(__le32 *) (dev->dev_addr + 0)));
 	cpw32_f (MAC0 + 4, le32_to_cpu (*(__le32 *) (dev->dev_addr + 4)));
 
+	cpw32_f(HiTxRingAddr, 0);
+	cpw32_f(HiTxRingAddr + 4, 0);
+
+	ring_dma = cp->ring_dma;
+	cpw32_f(RxRingAddr, ring_dma & 0xffffffff);
+	cpw32_f(RxRingAddr + 4, (ring_dma >> 16) >> 16);
+
+	ring_dma += sizeof(struct cp_desc) * CP_RX_RING_SIZE;
+	cpw32_f(TxRingAddr, ring_dma & 0xffffffff);
+	cpw32_f(TxRingAddr + 4, (ring_dma >> 16) >> 16);
+
 	cp_start_hw(cp);
 	cpw8(TxThresh, 0x06); /* XXX convert magic num to a constant */
 
@@ -1027,17 +1002,6 @@ static void cp_init_hw (struct cp_private *cp)
 	cp->wol_enabled = 0;
 
 	cpw8(Config5, cpr8(Config5) & PMEStatus);
-
-	cpw32_f(HiTxRingAddr, 0);
-	cpw32_f(HiTxRingAddr + 4, 0);
-
-	ring_dma = cp->ring_dma;
-	cpw32_f(RxRingAddr, ring_dma & 0xffffffff);
-	cpw32_f(RxRingAddr + 4, (ring_dma >> 16) >> 16);
-
-	ring_dma += sizeof(struct cp_desc) * CP_RX_RING_SIZE;
-	cpw32_f(TxRingAddr, ring_dma & 0xffffffff);
-	cpw32_f(TxRingAddr + 4, (ring_dma >> 16) >> 16);
 
 	cpw16(MultiIntr, 0);
 
@@ -1059,10 +1023,6 @@ static int cp_refill_rx(struct cp_private *cp)
 
 		mapping = dma_map_single(&cp->pdev->dev, skb->data,
 					 cp->rx_buf_sz, PCI_DMA_FROMDEVICE);
-		if (dma_mapping_error(&cp->pdev->dev, mapping)) {
-			kfree_skb(skb);
-			goto err_out;
-		}
 		cp->rx_skb[i] = skb;
 
 		cp->rx_ring[i].opts2 = 0;
@@ -1140,7 +1100,6 @@ static void cp_clean_rings (struct cp_private *cp)
 			cp->dev->stats.tx_dropped++;
 		}
 	}
-	netdev_reset_queue(cp->dev);
 
 	memset(cp->rx_ring, 0, sizeof(struct cp_desc) * CP_RX_RING_SIZE);
 	memset(cp->tx_ring, 0, sizeof(struct cp_desc) * CP_TX_RING_SIZE);
@@ -1161,6 +1120,7 @@ static void cp_free_rings (struct cp_private *cp)
 static int cp_open (struct net_device *dev)
 {
 	struct cp_private *cp = netdev_priv(dev);
+	const int irq = cp->pdev->irq;
 	int rc;
 
 	netif_dbg(cp, ifup, dev, "enabling interface\n");
@@ -1173,7 +1133,7 @@ static int cp_open (struct net_device *dev)
 
 	cp_init_hw(cp);
 
-	rc = request_irq(dev->irq, cp_interrupt, IRQF_SHARED, dev->name, dev);
+	rc = request_irq(irq, cp_interrupt, IRQF_SHARED, dev->name, dev);
 	if (rc)
 		goto err_out_hw;
 
@@ -1210,7 +1170,7 @@ static int cp_close (struct net_device *dev)
 
 	spin_unlock_irqrestore(&cp->lock, flags);
 
-	free_irq(dev->irq, dev);
+	free_irq(cp->pdev->irq, dev);
 
 	cp_free_rings(cp);
 	return 0;
@@ -1232,7 +1192,6 @@ static void cp_tx_timeout(struct net_device *dev)
 	cp_clean_rings(cp);
 	rc = cp_init_rings(cp);
 	cp_start_hw(cp);
-	cp_enable_irq(cp);
 
 	netif_wake_queue(dev);
 
@@ -1677,7 +1636,7 @@ static void eeprom_cmd(void __iomem *ee_addr, int cmd, int cmd_len)
 
 static void eeprom_cmd_end(void __iomem *ee_addr)
 {
-	writeb (~EE_CS, ee_addr);
+	writeb(0, ee_addr);
 	eeprom_delay ();
 }
 
@@ -1959,7 +1918,6 @@ static int cp_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 		       (unsigned long long)pciaddr);
 		goto err_out_res;
 	}
-	dev->base_addr = (unsigned long) regs;
 	cp->regs = regs;
 
 	cp_stop_hw(cp);
@@ -1987,14 +1945,12 @@ static int cp_init_one (struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->vlan_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
 		NETIF_F_HIGHDMA;
 
-	dev->irq = pdev->irq;
-
 	rc = register_netdev(dev);
 	if (rc)
 		goto err_out_iomap;
 
-	netdev_info(dev, "RTL-8139C+ at 0x%lx, %pM, IRQ %d\n",
-		    dev->base_addr, dev->dev_addr, dev->irq);
+	netdev_info(dev, "RTL-8139C+ at 0x%p, %pM, IRQ %d\n",
+		    regs, dev->dev_addr, pdev->irq);
 
 	pci_set_drvdata(pdev, dev);
 

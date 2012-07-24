@@ -183,9 +183,6 @@ static void ieee80211_frame_acked(struct sta_info *sta, struct sk_buff *skb)
 	struct ieee80211_local *local = sta->local;
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
 
-	if (local->hw.flags & IEEE80211_HW_REPORTS_TX_ACK_STATUS)
-		sta->last_rx = jiffies;
-
 	if (ieee80211_is_data_qos(mgmt->frame_control)) {
 		struct ieee80211_hdr *hdr = (void *) skb->data;
 		u8 *qc = ieee80211_get_qos_ctl(hdr);
@@ -358,7 +355,13 @@ void ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
 	int rtap_len;
 
 	for (i = 0; i < IEEE80211_TX_MAX_RATES; i++) {
-		if (info->status.rates[i].idx < 0) {
+		if ((info->flags & IEEE80211_TX_CTL_AMPDU) &&
+		    !(info->flags & IEEE80211_TX_STAT_AMPDU)) {
+			/* just the first aggr frame carry status info */
+			info->status.rates[i].idx = -1;
+			info->status.rates[i].count = 0;
+			break;
+		} else if (info->status.rates[i].idx < 0) {
 			break;
 		} else if (i >= hw->max_report_rates) {
 			/* the HW cannot have attempted that rate */
@@ -381,7 +384,7 @@ void ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	for_each_sta_info(local, hdr->addr1, sta, tmp) {
 		/* skip wrong virtual interface */
-		if (compare_ether_addr(hdr->addr2, sta->sdata->vif.addr))
+		if (!ether_addr_equal(hdr->addr2, sta->sdata->vif.addr))
 			continue;
 
 		if (info->flags & IEEE80211_TX_STATUS_EOSP)
@@ -432,11 +435,7 @@ void ieee80211_tx_status(struct ieee80211_hw *hw, struct sk_buff *skb)
 				       IEEE80211_BAR_CTRL_TID_INFO_MASK) >>
 				      IEEE80211_BAR_CTRL_TID_INFO_SHIFT;
 
-				if (local->hw.flags &
-				    IEEE80211_HW_TEARDOWN_AGGR_ON_BAR_FAIL)
-					ieee80211_stop_tx_ba_session(&sta->sta, tid);
-				else
-					ieee80211_set_bar_pending(sta, tid, ssn);
+				ieee80211_set_bar_pending(sta, tid, ssn);
 			}
 		}
 
@@ -667,12 +666,3 @@ void ieee80211_free_txskb(struct ieee80211_hw *hw, struct sk_buff *skb)
 	dev_kfree_skb_any(skb);
 }
 EXPORT_SYMBOL(ieee80211_free_txskb);
-
-void ieee80211_purge_tx_queue(struct ieee80211_hw *hw,
-			      struct sk_buff_head *skbs)
-{
-	struct sk_buff *skb;
-
-	while ((skb = __skb_dequeue(skbs)))
-		ieee80211_free_txskb(hw, skb);
-}

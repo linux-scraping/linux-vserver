@@ -404,14 +404,14 @@ static int crypto_ahash_report(struct sk_buff *skb, struct crypto_alg *alg)
 {
 	struct crypto_report_hash rhash;
 
-	strncpy(rhash.type, "ahash", sizeof(rhash.type));
+	snprintf(rhash.type, CRYPTO_MAX_ALG_NAME, "%s", "ahash");
 
 	rhash.blocksize = alg->cra_blocksize;
 	rhash.digestsize = __crypto_hash_alg_common(alg)->digestsize;
 
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_HASH,
-		sizeof(struct crypto_report_hash), &rhash);
-
+	if (nla_put(skb, CRYPTOCFGA_REPORT_HASH,
+		    sizeof(struct crypto_report_hash), &rhash))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:
@@ -462,8 +462,7 @@ static int ahash_prepare_alg(struct ahash_alg *alg)
 	struct crypto_alg *base = &alg->halg.base;
 
 	if (alg->halg.digestsize > PAGE_SIZE / 8 ||
-	    alg->halg.statesize > PAGE_SIZE / 8 ||
-	    alg->halg.statesize == 0)
+	    alg->halg.statesize > PAGE_SIZE / 8)
 		return -EINVAL;
 
 	base->cra_type = &crypto_ahash_type;

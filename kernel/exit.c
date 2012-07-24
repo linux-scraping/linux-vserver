@@ -76,9 +76,20 @@ static void __unhash_process(struct task_struct *p, bool group_dead)
 		list_del_rcu(&p->tasks);
 		list_del_init(&p->sibling);
 		__this_cpu_dec(process_counts);
+		/*
+		 * If we are the last child process in a pid namespace to be
+		 * reaped, notify the reaper sleeping zap_pid_ns_processes().
+		 */
+		if (IS_ENABLED(CONFIG_PID_NS)) {
+			struct task_struct *parent = p->real_parent;
+
+			if ((task_active_pid_ns(parent)->child_reaper == parent) &&
+			    list_empty(&parent->children) &&
+			    (parent->flags & PF_EXITING))
+				wake_up_process(parent);
+		}
 	}
 	list_del_rcu(&p->thread_group);
-	list_del_rcu(&p->thread_node);
 }
 
 /*
@@ -476,7 +487,7 @@ static void close_files(struct files_struct * files)
 	rcu_read_unlock();
 	for (;;) {
 		unsigned long set;
-		i = j * BITS_PER_LONG;
+		i = j * __NFDBITS;
 		if (i >= fdt->max_fds)
 			break;
 		set = fdt->open_fds[j++];
@@ -706,25 +717,15 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 	__acquires(&tasklist_lock)
 {
 	struct pid_namespace *pid_ns = task_active_pid_ns(father);
-	struct vx_info *vxi = task_get_vx_info(father);
-	struct task_struct *thread = father;
-	struct task_struct *reaper;
+	struct task_struct *thread;
 
+	thread = father;
 	while_each_thread(father, thread) {
 		if (thread->flags & PF_EXITING)
 			continue;
 		if (unlikely(pid_ns->child_reaper == father))
 			pid_ns->child_reaper = thread;
-		reaper = thread;
-		goto out_put;
-	}
-
-	reaper = pid_ns->child_reaper;
-	if (vxi) {
-		BUG_ON(!vxi->vx_reaper);
-		if (vxi->vx_reaper != init_pid_ns.child_reaper &&
-		    vxi->vx_reaper != father)
-			reaper = vxi->vx_reaper;
+		return thread;
 	}
 
 	if (unlikely(pid_ns->child_reaper == father)) {
@@ -737,12 +738,6 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 
 		zap_pid_ns_processes(pid_ns);
 		write_lock_irq(&tasklist_lock);
-		/*
-		 * We can not clear ->child_reaper or leave it alone.
-		 * There may by stealth EXIT_DEAD tasks on ->children,
-		 * forget_original_parent() must move them somewhere.
-		 */
-		pid_ns->child_reaper = init_pid_ns.child_reaper;
 	} else if (father->signal->has_child_subreaper) {
 		struct task_struct *reaper;
 
@@ -768,9 +763,7 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 		}
 	}
 
-out_put:
-	put_vx_info(vxi);
-	return reaper;
+	return pid_ns->child_reaper;
 }
 
 /*
@@ -780,6 +773,9 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 				struct list_head *dead)
 {
 	list_move_tail(&p->sibling, &p->real_parent->children);
+
+	if (p->exit_state == EXIT_DEAD)
+		return;
 	/*
 	 * If this is a threaded reparent there is no need to
 	 * notify anyone anything has happened.
@@ -787,18 +783,8 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 	if (same_thread_group(p->real_parent, father))
 		return;
 
-	/*
-	 * We don't want people slaying init.
-	 *
-	 * Note: we do this even if it is EXIT_DEAD, wait_task_zombie()
-	 * can change ->exit_state to EXIT_ZOMBIE. If this is the final
-	 * state, do_notify_parent() was already called and ->exit_signal
-	 * doesn't matter.
-	 */
+	/* We don't want people slaying init.  */
 	p->exit_signal = SIGCHLD;
-
-	if (p->exit_state == EXIT_DEAD)
-		return;
 
 	/* If it has exited notify the new parent about this child's death. */
 	if (!p->ptrace &&
@@ -828,15 +814,10 @@ static void forget_original_parent(struct task_struct *father)
 	list_for_each_entry_safe(p, n, &father->children, sibling) {
 		struct task_struct *t = p;
 		do {
-			struct task_struct *new_parent = reaper;
-
-			if (unlikely(p == reaper))
-				new_parent = task_active_pid_ns(p)->child_reaper;
-
-			t->real_parent = new_parent;
+			t->real_parent = reaper;
 			if (t->parent == father) {
 				BUG_ON(t->ptrace);
-				t->parent = new_parent;
+				t->parent = t->real_parent;
 			}
 			if (t->pdeath_signal)
 				group_send_sig_info(t->pdeath_signal,
@@ -916,9 +897,9 @@ static void check_stack_usage(void)
 
 	spin_lock(&low_water_lock);
 	if (free < lowest_to_date) {
-		printk(KERN_WARNING "%s used greatest stack depth: %lu bytes "
-				"left\n",
-				current->comm, free);
+		printk(KERN_WARNING "%s (%d) used greatest stack depth: "
+				"%lu bytes left\n",
+				current->comm, task_pid_nr(current), free);
 		lowest_to_date = free;
 	}
 	spin_unlock(&low_water_lock);
@@ -978,12 +959,13 @@ void do_exit(long code)
 	exit_signals(tsk);  /* sets PF_EXITING */
 	/*
 	 * tsk->flags are checked in the futex code to protect against
-	 * an exiting task cleaning up the robust pi futexes.
+	 * an exiting task cleaning up the robust pi futexes, and in
+	 * task_work_add() to avoid the race with exit_task_work().
 	 */
 	smp_mb();
 	raw_spin_unlock_wait(&tsk->pi_lock);
 
-	exit_irq_thread();
+	exit_task_work(tsk);
 
 	if (unlikely(in_atomic()))
 		printk(KERN_INFO "note: %s[%d] exited with preempt_count %d\n",
@@ -1254,7 +1236,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
 	unsigned long state;
 	int retval, status, traced;
 	pid_t pid = task_pid_vnr(p);
-	uid_t uid = __task_cred(p)->uid;
+	uid_t uid = from_kuid_munged(current_user_ns(), task_uid(p));
 	struct siginfo __user *infop;
 
 	if (!likely(wo->wo_flags & WEXITED))
@@ -1467,7 +1449,7 @@ static int wait_task_stopped(struct wait_opts *wo,
 	if (!unlikely(wo->wo_flags & WNOWAIT))
 		*p_code = 0;
 
-	uid = task_uid(p);
+	uid = from_kuid_munged(current_user_ns(), task_uid(p));
 unlock_sig:
 	spin_unlock_irq(&p->sighand->siglock);
 	if (!exit_code)
@@ -1540,7 +1522,7 @@ static int wait_task_continued(struct wait_opts *wo, struct task_struct *p)
 	}
 	if (!unlikely(wo->wo_flags & WNOWAIT))
 		p->signal->flags &= ~SIGNAL_STOP_CONTINUED;
-	uid = task_uid(p);
+	uid = from_kuid_munged(current_user_ns(), task_uid(p));
 	spin_unlock_irq(&p->sighand->siglock);
 
 	pid = task_pid_vnr(p);

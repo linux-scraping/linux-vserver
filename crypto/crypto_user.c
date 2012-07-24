@@ -75,15 +75,15 @@ static int crypto_report_cipher(struct sk_buff *skb, struct crypto_alg *alg)
 {
 	struct crypto_report_cipher rcipher;
 
-	strncpy(rcipher.type, "cipher", sizeof(rcipher.type));
+	snprintf(rcipher.type, CRYPTO_MAX_ALG_NAME, "%s", "cipher");
 
 	rcipher.blocksize = alg->cra_blocksize;
 	rcipher.min_keysize = alg->cra_cipher.cia_min_keysize;
 	rcipher.max_keysize = alg->cra_cipher.cia_max_keysize;
 
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_CIPHER,
-		sizeof(struct crypto_report_cipher), &rcipher);
-
+	if (nla_put(skb, CRYPTOCFGA_REPORT_CIPHER,
+		    sizeof(struct crypto_report_cipher), &rcipher))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:
@@ -94,10 +94,11 @@ static int crypto_report_comp(struct sk_buff *skb, struct crypto_alg *alg)
 {
 	struct crypto_report_comp rcomp;
 
-	strncpy(rcomp.type, "compression", sizeof(rcomp.type));
-	NLA_PUT(skb, CRYPTOCFGA_REPORT_COMPRESS,
-		sizeof(struct crypto_report_comp), &rcomp);
+	snprintf(rcomp.type, CRYPTO_MAX_ALG_NAME, "%s", "compression");
 
+	if (nla_put(skb, CRYPTOCFGA_REPORT_COMPRESS,
+		    sizeof(struct crypto_report_comp), &rcomp))
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:
@@ -107,26 +108,25 @@ nla_put_failure:
 static int crypto_report_one(struct crypto_alg *alg,
 			     struct crypto_user_alg *ualg, struct sk_buff *skb)
 {
-	strncpy(ualg->cru_name, alg->cra_name, sizeof(ualg->cru_name));
-	strncpy(ualg->cru_driver_name, alg->cra_driver_name,
-		sizeof(ualg->cru_driver_name));
-	strncpy(ualg->cru_module_name, module_name(alg->cra_module),
-		sizeof(ualg->cru_module_name));
+	memcpy(&ualg->cru_name, &alg->cra_name, sizeof(ualg->cru_name));
+	memcpy(&ualg->cru_driver_name, &alg->cra_driver_name,
+	       sizeof(ualg->cru_driver_name));
+	memcpy(&ualg->cru_module_name, module_name(alg->cra_module),
+	       CRYPTO_MAX_ALG_NAME);
 
-	ualg->cru_type = 0;
-	ualg->cru_mask = 0;
 	ualg->cru_flags = alg->cra_flags;
 	ualg->cru_refcnt = atomic_read(&alg->cra_refcnt);
 
-	NLA_PUT_U32(skb, CRYPTOCFGA_PRIORITY_VAL, alg->cra_priority);
-
+	if (nla_put_u32(skb, CRYPTOCFGA_PRIORITY_VAL, alg->cra_priority))
+		goto nla_put_failure;
 	if (alg->cra_flags & CRYPTO_ALG_LARVAL) {
 		struct crypto_report_larval rl;
 
-		strncpy(rl.type, "larval", sizeof(rl.type));
-		NLA_PUT(skb, CRYPTOCFGA_REPORT_LARVAL,
-			sizeof(struct crypto_report_larval), &rl);
+		snprintf(rl.type, CRYPTO_MAX_ALG_NAME, "%s", "larval");
 
+		if (nla_put(skb, CRYPTOCFGA_REPORT_LARVAL,
+			    sizeof(struct crypto_report_larval), &rl))
+			goto nla_put_failure;
 		goto out;
 	}
 
@@ -350,7 +350,7 @@ static struct crypto_alg *crypto_user_aead_alg(const char *name, u32 type,
 		err = PTR_ERR(alg);
 		if (err != -EAGAIN)
 			break;
-		if (fatal_signal_pending(current)) {
+		if (signal_pending(current)) {
 			err = -EINTR;
 			break;
 		}

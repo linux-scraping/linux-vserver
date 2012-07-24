@@ -138,7 +138,7 @@ static const u8 usb3_rh_dev_descriptor[18] = {
 	0x03,       /*  __u8  bDeviceProtocol; USB 3.0 hub */
 	0x09,       /*  __u8  bMaxPacketSize0; 2^9 = 512 Bytes */
 
-	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation */
+	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation 0x1d6b */
 	0x03, 0x00, /*  __le16 idProduct; device 0x0003 */
 	KERNEL_VER, KERNEL_REL, /*  __le16 bcdDevice */
 
@@ -159,7 +159,7 @@ static const u8 usb2_rh_dev_descriptor [18] = {
 	0x00,       /*  __u8  bDeviceProtocol; [ usb 2.0 no TT ] */
 	0x40,       /*  __u8  bMaxPacketSize0; 64 Bytes */
 
-	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation */
+	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation 0x1d6b */
 	0x02, 0x00, /*  __le16 idProduct; device 0x0002 */
 	KERNEL_VER, KERNEL_REL, /*  __le16 bcdDevice */
 
@@ -182,7 +182,7 @@ static const u8 usb11_rh_dev_descriptor [18] = {
 	0x00,       /*  __u8  bDeviceProtocol; [ low/full speeds only ] */
 	0x40,       /*  __u8  bMaxPacketSize0; 64 Bytes */
 
-	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation */
+	0x6b, 0x1d, /*  __le16 idVendor; Linux Foundation 0x1d6b */
 	0x01, 0x00, /*  __le16 idProduct; device 0x0001 */
 	KERNEL_VER, KERNEL_REL, /*  __le16 bcdDevice */
 
@@ -997,12 +997,24 @@ static int register_root_hub(struct usb_hcd *hcd)
 				dev_name(&usb_dev->dev), retval);
 		return (retval < 0) ? retval : -EMSGSIZE;
 	}
+	if (usb_dev->speed == USB_SPEED_SUPER) {
+		retval = usb_get_bos_descriptor(usb_dev);
+		if (retval < 0) {
+			mutex_unlock(&usb_bus_list_lock);
+			dev_dbg(parent_dev, "can't read %s bos descriptor %d\n",
+					dev_name(&usb_dev->dev), retval);
+			return retval;
+		}
+	}
 
 	retval = usb_new_device (usb_dev);
 	if (retval) {
 		dev_err (parent_dev, "can't register root hub for %s, %d\n",
 				dev_name(&usb_dev->dev), retval);
-	} else {
+	}
+	mutex_unlock(&usb_bus_list_lock);
+
+	if (retval == 0) {
 		spin_lock_irq (&hcd_root_hub_lock);
 		hcd->rh_registered = 1;
 		spin_unlock_irq (&hcd_root_hub_lock);
@@ -1011,7 +1023,6 @@ static int register_root_hub(struct usb_hcd *hcd)
 		if (HCD_DEAD(hcd))
 			usb_hc_died (hcd);	/* This time clean up */
 	}
-	mutex_unlock(&usb_bus_list_lock);
 
 	return retval;
 }
@@ -1528,7 +1539,6 @@ static int unlink1(struct usb_hcd *hcd, struct urb *urb, int status)
 int usb_hcd_unlink_urb (struct urb *urb, int status)
 {
 	struct usb_hcd		*hcd;
-	struct usb_device	*udev = urb->dev;
 	int			retval = -EIDRM;
 	unsigned long		flags;
 
@@ -1540,19 +1550,20 @@ int usb_hcd_unlink_urb (struct urb *urb, int status)
 	spin_lock_irqsave(&hcd_urb_unlink_lock, flags);
 	if (atomic_read(&urb->use_count) > 0) {
 		retval = 0;
-		usb_get_dev(udev);
+		usb_get_dev(urb->dev);
 	}
 	spin_unlock_irqrestore(&hcd_urb_unlink_lock, flags);
 	if (retval == 0) {
 		hcd = bus_to_hcd(urb->dev->bus);
 		retval = unlink1(hcd, urb, status);
-		if (retval == 0)
-			retval = -EINPROGRESS;
-		else if (retval != -EIDRM && retval != -EBUSY)
-			dev_dbg(&udev->dev, "hcd_unlink_urb %p fail %d\n",
-					urb, retval);
-		usb_put_dev(udev);
+		usb_put_dev(urb->dev);
 	}
+
+	if (retval == 0)
+		retval = -EINPROGRESS;
+	else if (retval != -EIDRM && retval != -EBUSY)
+		dev_dbg(&urb->dev->dev, "hcd_unlink_urb %p fail %d\n",
+				urb, retval);
 	return retval;
 }
 
@@ -1882,8 +1893,6 @@ int usb_alloc_streams(struct usb_interface *interface,
 		return -EINVAL;
 	if (dev->speed != USB_SPEED_SUPER)
 		return -EINVAL;
-	if (dev->state < USB_STATE_CONFIGURED)
-		return -ENODEV;
 
 	/* Streams only apply to bulk endpoints. */
 	for (i = 0; i < num_eps; i++)

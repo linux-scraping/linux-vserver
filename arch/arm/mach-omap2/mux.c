@@ -41,6 +41,7 @@
 #include "control.h"
 #include "mux.h"
 #include "prm.h"
+#include "common.h"
 
 #define OMAP_MUX_BASE_OFFSET		0x30	/* Offset from CTRL_BASE */
 #define OMAP_MUX_BASE_SZ		0x5ca
@@ -184,10 +185,8 @@ static int __init _omap_mux_get_by_name(struct omap_mux_partition *partition,
 		m0_entry = mux->muxnames[0];
 
 		/* First check for full name in mode0.muxmode format */
-		if (mode0_len)
-			if (strncmp(muxname, m0_entry, mode0_len) ||
-			    (strlen(m0_entry) != mode0_len))
-				continue;
+		if (mode0_len && strncmp(muxname, m0_entry, mode0_len))
+			continue;
 
 		/* Then check for muxmode only */
 		for (i = 0; i < OMAP_MUX_NR_MODES; i++) {
@@ -219,8 +218,7 @@ static int __init _omap_mux_get_by_name(struct omap_mux_partition *partition,
 	return -ENODEV;
 }
 
-static int __init
-omap_mux_get_by_name(const char *muxname,
+int __init omap_mux_get_by_name(const char *muxname,
 			struct omap_mux_partition **found_partition,
 			struct omap_mux **found_mux)
 {
@@ -249,7 +247,7 @@ int __init omap_mux_init_signal(const char *muxname, int val)
 	int mux_mode;
 
 	mux_mode = omap_mux_get_by_name(muxname, &partition, &mux);
-	if (mux_mode < 0)
+	if (mux_mode < 0 || !mux)
 		return mux_mode;
 
 	old_mode = omap_mux_read(partition, mux->reg_offset);
@@ -790,7 +788,7 @@ static void __init omap_mux_free_names(struct omap_mux *m)
 }
 
 /* Free all data except for GPIO pins unless CONFIG_DEBUG_FS is set */
-static int __init omap_mux_late_init(void)
+int __init omap_mux_late_init(void)
 {
 	struct omap_mux_partition *partition;
 	int ret;
@@ -825,7 +823,6 @@ static int __init omap_mux_late_init(void)
 
 	return 0;
 }
-late_initcall(omap_mux_late_init);
 
 static void __init omap_mux_package_fixup(struct omap_mux *p,
 					struct omap_mux *superset)

@@ -30,37 +30,6 @@
 #include "hyperv_vmbus.h"
 
 
-/* #defines */
-
-
-/* Amount of space to write to */
-#define BYTES_AVAIL_TO_WRITE(r, w, z) \
-	((w) >= (r)) ? ((z) - ((w) - (r))) : ((r) - (w))
-
-
-/*
- *
- * hv_get_ringbuffer_availbytes()
- *
- * Get number of bytes available to read and to write to
- * for the specified ring buffer
- */
-static inline void
-hv_get_ringbuffer_availbytes(struct hv_ring_buffer_info *rbi,
-			  u32 *read, u32 *write)
-{
-	u32 read_loc, write_loc;
-
-	smp_read_barrier_depends();
-
-	/* Capture the read/write indices before they changed */
-	read_loc = rbi->ring_buffer->read_index;
-	write_loc = rbi->ring_buffer->write_index;
-
-	*write = BYTES_AVAIL_TO_WRITE(read_loc, write_loc, rbi->ring_datasize);
-	*read = rbi->ring_datasize - *write;
-}
-
 /*
  * hv_get_next_write_location()
  *
@@ -383,7 +352,7 @@ int hv_ringbuffer_write(struct hv_ring_buffer_info *outring_info,
 					     sizeof(u64));
 
 	/* Make sure we flush all writes before updating the writeIndex */
-	wmb();
+	smp_wmb();
 
 	/* Now, update the write location */
 	hv_set_next_write_location(outring_info, next_write_location);
@@ -485,7 +454,7 @@ int hv_ringbuffer_read(struct hv_ring_buffer_info *inring_info, void *buffer,
 	/* Make sure all reads are done before we update the read index since */
 	/* the writer may start writing to the read area once the read index */
 	/*is updated */
-	mb();
+	smp_mb();
 
 	/* Update the read index */
 	hv_set_next_read_location(inring_info, next_read_location);

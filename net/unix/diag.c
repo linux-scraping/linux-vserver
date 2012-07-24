@@ -134,7 +134,6 @@ static int sk_diag_fill(struct sock *sk, struct sk_buff *skb, struct unix_diag_r
 	rep->udiag_family = AF_UNIX;
 	rep->udiag_type = sk->sk_type;
 	rep->udiag_state = sk->sk_state;
-	rep->pad = 0;
 	rep->udiag_ino = sk_ino;
 	sock_diag_save_cookie(sk, rep->udiag_cookie);
 
@@ -311,7 +310,7 @@ static int unix_diag_handler_dump(struct sk_buff *skb, struct nlmsghdr *h)
 		return unix_diag_get_exact(skb, h, (struct unix_diag_req *)NLMSG_DATA(h));
 }
 
-static struct sock_diag_handler unix_diag_handler = {
+static const struct sock_diag_handler unix_diag_handler = {
 	.family = AF_UNIX,
 	.dump = unix_diag_handler_dump,
 };

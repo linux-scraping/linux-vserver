@@ -28,6 +28,8 @@
  *      Chris Wilson <chris@chris-wilson.co.uk>
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/moduleparam.h>
 #include "intel_drv.h"
 
@@ -170,7 +172,7 @@ u32 intel_panel_get_max_backlight(struct drm_device *dev)
 		/* XXX add code here to query mode clock or hardware clock
 		 * and program max PWM appropriately.
 		 */
-		printk_once(KERN_WARNING "fixme: max PWM is zero.\n");
+		pr_warn_once("fixme: max PWM is zero\n");
 		return 1;
 	}
 
@@ -359,9 +361,6 @@ int intel_panel_setup_backlight(struct drm_device *dev)
 
 	intel_panel_init_backlight(dev);
 
-	if (WARN_ON(dev_priv->backlight))
-		return -ENODEV;
-
 	if (dev_priv->int_lvds_connector)
 		connector = dev_priv->int_lvds_connector;
 	else if (dev_priv->int_edp_connector)
@@ -369,6 +368,7 @@ int intel_panel_setup_backlight(struct drm_device *dev)
 	else
 		return -ENODEV;
 
+	memset(&props, 0, sizeof(props));
 	props.type = BACKLIGHT_RAW;
 	props.max_brightness = intel_panel_get_max_backlight(dev);
 	dev_priv->backlight =
@@ -389,10 +389,8 @@ int intel_panel_setup_backlight(struct drm_device *dev)
 void intel_panel_destroy_backlight(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
-	if (dev_priv->backlight) {
+	if (dev_priv->backlight)
 		backlight_device_unregister(dev_priv->backlight);
-		dev_priv->backlight = NULL;
-	}
 }
 #else
 int intel_panel_setup_backlight(struct drm_device *dev)

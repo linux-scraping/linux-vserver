@@ -524,7 +524,7 @@ static void sctp_do_8_2_transport_strike(struct sctp_association *asoc,
 /* Worker routine to handle INIT command failure.  */
 static void sctp_cmd_init_failed(sctp_cmd_seq_t *commands,
 				 struct sctp_association *asoc,
-				 unsigned error)
+				 unsigned int error)
 {
 	struct sctp_ulpevent *event;
 
@@ -550,7 +550,7 @@ static void sctp_cmd_assoc_failed(sctp_cmd_seq_t *commands,
 				  sctp_event_t event_type,
 				  sctp_subtype_t subtype,
 				  struct sctp_chunk *chunk,
-				  unsigned error)
+				  unsigned int error)
 {
 	struct sctp_ulpevent *event;
 
@@ -682,7 +682,7 @@ static void sctp_cmd_transport_on(sctp_cmd_seq_t *cmds,
 	 * outstanding data and rely on the retransmission limit be reached
 	 * to shutdown the association.
 	 */
-	if (t->asoc->state < SCTP_STATE_SHUTDOWN_PENDING)
+	if (t->asoc->state != SCTP_STATE_SHUTDOWN_PENDING)
 		t->asoc->overall_error_count = 0;
 
 	/* Clear the hb_sent flag to signal that we had a good
@@ -1161,9 +1161,8 @@ static int sctp_side_effects(sctp_event_t event_type, sctp_subtype_t subtype,
 		break;
 
 	case SCTP_DISPOSITION_VIOLATION:
-		if (net_ratelimit())
-			pr_err("protocol violation state %d chunkid %d\n",
-			       state, subtype.chunk);
+		net_err_ratelimited("protocol violation state %d chunkid %d\n",
+				    state, subtype.chunk);
 		break;
 
 	case SCTP_DISPOSITION_NOT_IMPL:
@@ -1269,7 +1268,7 @@ static int sctp_cmd_interpreter(sctp_event_t event_type,
 		case SCTP_CMD_REPORT_TSN:
 			/* Record the arrival of a TSN.  */
 			error = sctp_tsnmap_mark(&asoc->peer.tsn_map,
-						 cmd->obj.u32);
+						 cmd->obj.u32, NULL);
 			break;
 
 		case SCTP_CMD_REPORT_FWDTSN:

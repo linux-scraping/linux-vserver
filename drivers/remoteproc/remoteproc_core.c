@@ -78,7 +78,7 @@ typedef int (*rproc_handle_resource_t)(struct rproc *rproc, void *, int avail);
  * the recovery of the remote processor.
  */
 static int rproc_iommu_fault(struct iommu_domain *domain, struct device *dev,
-		unsigned long iova, int flags)
+		unsigned long iova, int flags, void *token)
 {
 	dev_err(dev, "iommu fault: da 0x%lx flags 0x%x\n", iova, flags);
 
@@ -117,7 +117,7 @@ static int rproc_enable_iommu(struct rproc *rproc)
 		return -ENOMEM;
 	}
 
-	iommu_set_fault_handler(domain, rproc_iommu_fault);
+	iommu_set_fault_handler(domain, rproc_iommu_fault, rproc);
 
 	ret = iommu_attach_device(domain, dev);
 	if (ret) {
@@ -643,10 +643,17 @@ static int rproc_handle_carveout(struct rproc *rproc,
 	dev_dbg(dev, "carveout rsc: da %x, pa %x, len %x, flags %x\n",
 			rsc->da, rsc->pa, rsc->len, rsc->flags);
 
+	mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
+	if (!mapping) {
+		dev_err(dev, "kzalloc mapping failed\n");
+		return -ENOMEM;
+	}
+
 	carveout = kzalloc(sizeof(*carveout), GFP_KERNEL);
 	if (!carveout) {
 		dev_err(dev, "kzalloc carveout failed\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto free_mapping;
 	}
 
 	va = dma_alloc_coherent(dev, rsc->len, &dma, GFP_KERNEL);
@@ -676,18 +683,11 @@ static int rproc_handle_carveout(struct rproc *rproc,
 	 * physical address in this case.
 	 */
 	if (rproc->domain) {
-		mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
-		if (!mapping) {
-			dev_err(dev, "kzalloc mapping failed\n");
-			ret = -ENOMEM;
-			goto dma_free;
-		}
-
 		ret = iommu_map(rproc->domain, rsc->da, dma, rsc->len,
 								rsc->flags);
 		if (ret) {
 			dev_err(dev, "iommu_map failed: %d\n", ret);
-			goto free_mapping;
+			goto dma_free;
 		}
 
 		/*
@@ -728,12 +728,12 @@ static int rproc_handle_carveout(struct rproc *rproc,
 
 	return 0;
 
-free_mapping:
-	kfree(mapping);
 dma_free:
 	dma_free_coherent(dev, rsc->len, va, dma);
 free_carv:
 	kfree(carveout);
+free_mapping:
+	kfree(mapping);
 	return ret;
 }
 
@@ -1107,8 +1107,7 @@ static void rproc_fw_config_virtio(const struct firmware *fw, void *context)
 		goto out;
 
 out:
-	if (fw)
-		release_firmware(fw);
+	release_firmware(fw);
 	/* allow rproc_unregister() contexts, if any, to proceed */
 	complete_all(&rproc->firmware_loading_complete);
 }

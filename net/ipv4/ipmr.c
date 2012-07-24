@@ -124,8 +124,6 @@ static DEFINE_SPINLOCK(mfc_unres_lock);
 static struct kmem_cache *mrt_cachep __read_mostly;
 
 static struct mr_table *ipmr_new_table(struct net *net, u32 id);
-static void ipmr_free_table(struct mr_table *mrt);
-
 static int ip_mr_forward(struct net *net, struct mr_table *mrt,
 			 struct sk_buff *skb, struct mfc_cache *cache,
 			 int local);
@@ -133,7 +131,6 @@ static int ipmr_cache_report(struct mr_table *mrt,
 			     struct sk_buff *pkt, vifi_t vifi, int assert);
 static int __ipmr_fill_mroute(struct mr_table *mrt, struct sk_buff *skb,
 			      struct mfc_cache *c, struct rtmsg *rtm);
-static void mroute_clean_tables(struct mr_table *mrt);
 static void ipmr_expire_process(unsigned long arg);
 
 #ifdef CONFIG_IP_MROUTE_MULTIPLE_TABLES
@@ -154,12 +151,9 @@ static struct mr_table *ipmr_get_table(struct net *net, u32 id)
 static int ipmr_fib_lookup(struct net *net, struct flowi4 *flp4,
 			   struct mr_table **mrt)
 {
-	int err;
 	struct ipmr_result res;
-	struct fib_lookup_arg arg = {
-		.result = &res,
-		.flags = FIB_LOOKUP_NOREF,
-	};
+	struct fib_lookup_arg arg = { .result = &res, };
+	int err;
 
 	err = fib_rules_lookup(net->ipv4.mr_rules_ops,
 			       flowi4_to_flowi(flp4), 0, &arg);
@@ -277,7 +271,7 @@ static void __net_exit ipmr_rules_exit(struct net *net)
 
 	list_for_each_entry_safe(mrt, next, &net->ipv4.mr_tables, list) {
 		list_del(&mrt->list);
-		ipmr_free_table(mrt);
+		kfree(mrt);
 	}
 	fib_rules_unregister(net->ipv4.mr_rules_ops);
 }
@@ -305,7 +299,7 @@ static int __net_init ipmr_rules_init(struct net *net)
 
 static void __net_exit ipmr_rules_exit(struct net *net)
 {
-	ipmr_free_table(net->ipv4.mrt);
+	kfree(net->ipv4.mrt);
 }
 #endif
 
@@ -340,13 +334,6 @@ static struct mr_table *ipmr_new_table(struct net *net, u32 id)
 	list_add_tail_rcu(&mrt->list, &net->ipv4.mr_tables);
 #endif
 	return mrt;
-}
-
-static void ipmr_free_table(struct mr_table *mrt)
-{
-	del_timer_sync(&mrt->ipmr_expire_timer);
-	mroute_clean_tables(mrt);
-	kfree(mrt);
 }
 
 /* Service routines creating virtual interfaces: DVMRP tunnels and PIMREG */
@@ -962,8 +949,7 @@ static int ipmr_cache_report(struct mr_table *mrt,
 	ret = sock_queue_rcv_skb(mroute_sk, skb);
 	rcu_read_unlock();
 	if (ret < 0) {
-		if (net_ratelimit())
-			pr_warn("mroute: pending queue full, dropping entries\n");
+		net_warn_ratelimited("mroute: pending queue full, dropping entries\n");
 		kfree_skb(skb);
 	}
 
@@ -1576,7 +1562,7 @@ static void ip_encap(struct sk_buff *skb, __be32 saddr, __be32 daddr)
 	iph->protocol	=	IPPROTO_IPIP;
 	iph->ihl	=	5;
 	iph->tot_len	=	htons(skb->len);
-	ip_select_ident(skb, NULL);
+	ip_select_ident(iph, skb_dst(skb), NULL);
 	ip_send_check(iph);
 
 	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
@@ -1588,6 +1574,7 @@ static inline int ipmr_forward_finish(struct sk_buff *skb)
 	struct ip_options *opt = &(IPCB(skb)->opt);
 
 	IP_INC_STATS_BH(dev_net(skb_dst(skb)->dev), IPSTATS_MIB_OUTFORWDATAGRAMS);
+	IP_ADD_STATS_BH(dev_net(skb_dst(skb)->dev), IPSTATS_MIB_OUTOCTETS, skb->len);
 
 	if (unlikely(opt->optlen))
 		ip_forward_options(skb);
@@ -2132,15 +2119,16 @@ static int ipmr_fill_mroute(struct mr_table *mrt, struct sk_buff *skb,
 	rtm->rtm_src_len  = 32;
 	rtm->rtm_tos      = 0;
 	rtm->rtm_table    = mrt->id;
-	NLA_PUT_U32(skb, RTA_TABLE, mrt->id);
+	if (nla_put_u32(skb, RTA_TABLE, mrt->id))
+		goto nla_put_failure;
 	rtm->rtm_type     = RTN_MULTICAST;
 	rtm->rtm_scope    = RT_SCOPE_UNIVERSE;
 	rtm->rtm_protocol = RTPROT_UNSPEC;
 	rtm->rtm_flags    = 0;
 
-	NLA_PUT_BE32(skb, RTA_SRC, c->mfc_origin);
-	NLA_PUT_BE32(skb, RTA_DST, c->mfc_mcastgrp);
-
+	if (nla_put_be32(skb, RTA_SRC, c->mfc_origin) ||
+	    nla_put_be32(skb, RTA_DST, c->mfc_mcastgrp))
+		goto nla_put_failure;
 	if (__ipmr_fill_mroute(mrt, skb, c, rtm) < 0)
 		goto nla_put_failure;
 

@@ -99,7 +99,6 @@ static struct gfs2_sbd *init_sbd(struct super_block *sb)
 	atomic_set(&sdp->sd_log_pinned, 0);
 	INIT_LIST_HEAD(&sdp->sd_log_le_buf);
 	INIT_LIST_HEAD(&sdp->sd_log_le_revoke);
-	INIT_LIST_HEAD(&sdp->sd_log_le_rg);
 	INIT_LIST_HEAD(&sdp->sd_log_le_databuf);
 	INIT_LIST_HEAD(&sdp->sd_log_le_ordered);
 
@@ -994,6 +993,7 @@ static int gfs2_lm_mount(struct gfs2_sbd *sdp, int silent)
 				ls->ls_jid = option;
 			break;
 		case Opt_id:
+		case Opt_nodir:
 			/* Obsolete, but left for backward compat purposes */
 			break;
 		case Opt_first:
@@ -1001,12 +1001,6 @@ static int gfs2_lm_mount(struct gfs2_sbd *sdp, int silent)
 			if (ret || (option != 0 && option != 1))
 				goto hostdata_error;
 			ls->ls_first = option;
-			break;
-		case Opt_nodir:
-			ret = match_int(&tmp[0], &option);
-			if (ret || (option != 0 && option != 1))
-				goto hostdata_error;
-			ls->ls_nodir = option;
 			break;
 		case Opt_err:
 		default:
@@ -1298,18 +1292,8 @@ static struct dentry *gfs2_mount(struct file_system_type *fs_type, int flags,
 	if (IS_ERR(s))
 		goto error_bdev;
 
-	if (s->s_root) {
-		/*
-		 * s_umount nests inside bd_mutex during
-		 * __invalidate_device().  blkdev_put() acquires
-		 * bd_mutex and can't be called under s_umount.  Drop
-		 * s_umount temporarily.  This is safe as we're
-		 * holding an active reference.
-		 */
-		up_write(&s->s_umount);
+	if (s->s_root)
 		blkdev_put(bdev, mode);
-		down_write(&s->s_umount);
-	}
 
 	memset(&args, 0, sizeof(args));
 	args.ar_quota = GFS2_QUOTA_DEFAULT;

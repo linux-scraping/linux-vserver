@@ -223,7 +223,7 @@ begin:
 }
 EXPORT_SYMBOL_GPL(__inet_lookup_listener);
 
-struct sock * __inet_lookup_established(struct net *net,
+struct sock *__inet_lookup_established(struct net *net,
 				  struct inet_hashinfo *hashinfo,
 				  const __be32 saddr, const __be16 sport,
 				  const __be32 daddr, const u16 hnum,
@@ -274,7 +274,7 @@ begintw:
 			}
 			if (unlikely(!INET_TW_MATCH(sk, net, hash, acookie,
 				 saddr, daddr, ports, dif))) {
-				inet_twsk_put(inet_twsk(sk));
+				sock_put(sk);
 				goto begintw;
 			}
 			goto out;

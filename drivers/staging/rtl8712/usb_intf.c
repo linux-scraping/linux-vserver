@@ -66,8 +66,6 @@ static struct usb_device_id rtl871x_usb_id_tbl[] = {
 	{USB_DEVICE(0x0B05, 0x1791)}, /* 11n mode disable */
 	/* Belkin */
 	{USB_DEVICE(0x050D, 0x945A)},
-	/* ISY IWL - Belkin clone */
-	{USB_DEVICE(0x050D, 0x11F1)},
 	/* Corega */
 	{USB_DEVICE(0x07AA, 0x0047)},
 	/* D-Link */
@@ -361,10 +359,6 @@ static u8 key_2char2num(u8 hch, u8 lch)
 	return (hex_to_bin(hch) << 4) | hex_to_bin(lch);
 }
 
-static const struct device_type wlan_type = {
-	.name = "wlan",
-};
-
 /*
  * drv_init() - a device potentially for us
  *
@@ -400,7 +394,6 @@ static int r871xu_drv_init(struct usb_interface *pusb_intf,
 	padapter->pusb_intf = pusb_intf;
 	usb_set_intfdata(pusb_intf, pnetdev);
 	SET_NETDEV_DEV(pnetdev, &pusb_intf->dev);
-	pnetdev->dev.type = &wlan_type;
 	/* step 2. */
 	padapter->dvobj_init = &r8712_usb_dvobj_init;
 	padapter->dvobj_deinit = &r8712_usb_dvobj_deinit;
@@ -630,30 +623,28 @@ static void r871xu_dev_remove(struct usb_interface *pusb_intf)
 	struct usb_device *udev = interface_to_usbdev(pusb_intf);
 
 	usb_set_intfdata(pusb_intf, NULL);
-	if (padapter) {
-		if (padapter->fw_found)
-			release_firmware(padapter->fw);
-		/* never exit with a firmware callback pending */
-		wait_for_completion(&padapter->rtl8712_fw_ready);
-		if (drvpriv.drv_registered == true)
-			padapter->bSurpriseRemoved = true;
-		if (pnetdev != NULL) {
-			/* will call netdev_close() */
-			unregister_netdev(pnetdev);
-		}
-		flush_scheduled_work();
-		udelay(1);
-		/*Stop driver mlme relation timer */
-		if (padapter->fw_found)
-			r8712_stop_drv_timers(padapter);
-		r871x_dev_unload(padapter);
-		r8712_free_drv_sw(padapter);
+	if (padapter->fw_found)
+		release_firmware(padapter->fw);
+	/* never exit with a firmware callback pending */
+	wait_for_completion(&padapter->rtl8712_fw_ready);
+	if (drvpriv.drv_registered == true)
+		padapter->bSurpriseRemoved = true;
+	if (pnetdev != NULL) {
+		/* will call netdev_close() */
+		unregister_netdev(pnetdev);
 	}
+	flush_scheduled_work();
+	udelay(1);
+	/*Stop driver mlme relation timer */
+	if (padapter->fw_found)
+		r8712_stop_drv_timers(padapter);
+	r871x_dev_unload(padapter);
+	r8712_free_drv_sw(padapter);
 	usb_set_intfdata(pusb_intf, NULL);
 	/* decrease the reference count of the usb device structure
 	 * when disconnect */
 	usb_put_dev(udev);
-	/* If we didn't unplug usb dongle and remove/insert modlue, driver
+	/* If we didn't unplug usb dongle and remove/insert module, driver
 	 * fails on sitesurvey for the first time when device is up.
 	 * Reset usb port for sitesurvey fail issue. */
 	if (udev->state != USB_STATE_NOTATTACHED)

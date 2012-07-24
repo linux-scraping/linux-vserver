@@ -415,7 +415,7 @@ static ssize_t __iscsi_##prefix##_store_##name(				\
 	if (!capable(CAP_SYS_ADMIN))					\
 		return -EPERM;						\
 									\
-	snprintf(auth->name, sizeof(auth->name), "%s", page);		\
+	snprintf(auth->name, PAGE_SIZE, "%s", page);			\
 	if (!strncmp("NULL", auth->name, 4))				\
 		auth->naf_flags &= ~flags;				\
 	else								\
@@ -1538,7 +1538,7 @@ static int lio_write_pending(struct se_cmd *se_cmd)
 	struct iscsi_cmd *cmd = container_of(se_cmd, struct iscsi_cmd, se_cmd);
 
 	if (!cmd->immediate_data && !cmd->unsolicited_data)
-		return iscsit_build_r2ts_for_cmd(cmd, cmd->conn, 1);
+		return iscsit_build_r2ts_for_cmd(cmd, cmd->conn, false);
 
 	return 0;
 }

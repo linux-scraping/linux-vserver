@@ -49,7 +49,7 @@
 #include "nfs4_fs.h"
 #include "delegation.h"
 
-#define NFSDBG_FACILITY	NFSDBG_PROC
+#define NFSDBG_FACILITY		NFSDBG_STATE
 
 void
 nfs4_renew_state(struct work_struct *work)
@@ -88,18 +88,10 @@ nfs4_renew_state(struct work_struct *work)
 			}
 			nfs_expire_all_delegations(clp);
 		} else {
-			int ret;
-
 			/* Queue an asynchronous RENEW. */
-			ret = ops->sched_state_renewal(clp, cred, renew_flags);
+			ops->sched_state_renewal(clp, cred, renew_flags);
 			put_rpccred(cred);
-			switch (ret) {
-			default:
-				goto out_exp;
-			case -EAGAIN:
-			case -ENOMEM:
-				break;
-			}
+			goto out_exp;
 		}
 	} else {
 		dprintk("%s: failed to call renewd. Reason: lease not expired \n",

@@ -32,7 +32,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #define DRV_NAME	"via-rhine"
-#define DRV_VERSION	"1.5.1"
+#define DRV_VERSION	"1.5.0"
 #define DRV_RELDATE	"2010-10-09"
 
 #include <linux/types.h>
@@ -689,9 +689,12 @@ static void __devinit rhine_reload_eeprom(long pioaddr, struct net_device *dev)
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void rhine_poll(struct net_device *dev)
 {
-	disable_irq(dev->irq);
-	rhine_interrupt(dev->irq, (void *)dev);
-	enable_irq(dev->irq);
+	struct rhine_private *rp = netdev_priv(dev);
+	const int irq = rp->pdev->irq;
+
+	disable_irq(irq);
+	rhine_interrupt(irq, dev);
+	enable_irq(irq);
 }
 #endif
 
@@ -972,7 +975,6 @@ static int __devinit rhine_init_one(struct pci_dev *pdev,
 	}
 #endif /* USE_MMIO */
 
-	dev->base_addr = (unsigned long)ioaddr;
 	rp->base = ioaddr;
 
 	/* Get chip registers into a sane state */
@@ -994,8 +996,6 @@ static int __devinit rhine_init_one(struct pci_dev *pdev,
 	/* For Rhine-I/II, phy_id is loaded from EEPROM */
 	if (!phy_id)
 		phy_id = ioread8(ioaddr + 0x6C);
-
-	dev->irq = pdev->irq;
 
 	spin_lock_init(&rp->lock);
 	mutex_init(&rp->task_lock);
@@ -1601,7 +1601,6 @@ static void rhine_reset_task(struct work_struct *work)
 		goto out_unlock;
 
 	napi_disable(&rp->napi);
-	netif_tx_disable(dev);
 	spin_lock_bh(&rp->lock);
 
 	/* clear all descriptors */
@@ -1685,12 +1684,7 @@ static netdev_tx_t rhine_start_tx(struct sk_buff *skb,
 		cpu_to_le32(TXDESC | (skb->len >= ETH_ZLEN ? skb->len : ETH_ZLEN));
 
 	if (unlikely(vlan_tx_tag_present(skb))) {
-		u16 vid_pcp = vlan_tx_tag_get(skb);
-
-		/* drop CFI/DEI bit, register needs VID and PCP */
-		vid_pcp = (vid_pcp & VLAN_VID_MASK) |
-			  ((vid_pcp & VLAN_PRIO_MASK) >> 1);
-		rp->tx_ring[entry].tx_status = cpu_to_le32((vid_pcp) << 16);
+		rp->tx_ring[entry].tx_status = cpu_to_le32((vlan_tx_tag_get(skb)) << 16);
 		/* request tagging */
 		rp->tx_ring[entry].desc_length |= cpu_to_le32(0x020000);
 	}
@@ -1808,7 +1802,7 @@ static void rhine_tx(struct net_device *dev)
 					 rp->tx_skbuff[entry]->len,
 					 PCI_DMA_TODEVICE);
 		}
-		dev_kfree_skb(rp->tx_skbuff[entry]);
+		dev_kfree_skb_irq(rp->tx_skbuff[entry]);
 		rp->tx_skbuff[entry] = NULL;
 		entry = (++rp->dirty_tx) % TX_RING_SIZE;
 	}
@@ -2017,7 +2011,11 @@ static void rhine_slow_event_task(struct work_struct *work)
 	if (intr_status & IntrPCIErr)
 		netif_warn(rp, hw, dev, "PCI error\n");
 
-	iowrite16(RHINE_EVENT & 0xffff, rp->base + IntrEnable);
+	napi_disable(&rp->napi);
+	rhine_irq_disable(rp);
+	/* Slow and safe. Consider __napi_schedule as a replacement ? */
+	napi_enable(&rp->napi);
+	napi_schedule(&rp->napi);
 
 out_unlock:
 	mutex_unlock(&rp->task_lock);

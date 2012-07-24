@@ -44,7 +44,7 @@
 #define DRIVER_DESC "Moschip USB Serial Driver"
 
 /* default urb timeout */
-#define MOS_WDR_TIMEOUT	5000
+#define MOS_WDR_TIMEOUT	(HZ * 5)
 
 #define MOS_MAX_PORT	0x02
 #define MOS_WRITE	0x0E
@@ -79,12 +79,12 @@ static struct usb_serial_driver moschip7720_2port_driver;
 #define MOSCHIP_DEVICE_ID_7720		0x7720
 #define MOSCHIP_DEVICE_ID_7715		0x7715
 
-static const struct usb_device_id moschip_port_id_table[] = {
+static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(USB_VENDOR_ID_MOSCHIP, MOSCHIP_DEVICE_ID_7720) },
 	{ USB_DEVICE(USB_VENDOR_ID_MOSCHIP, MOSCHIP_DEVICE_ID_7715) },
 	{ } /* terminating entry */
 };
-MODULE_DEVICE_TABLE(usb, moschip_port_id_table);
+MODULE_DEVICE_TABLE(usb, id_table);
 
 #ifdef CONFIG_USB_SERIAL_MOS7715_PARPORT
 
@@ -97,7 +97,6 @@ struct urbtracker {
 	struct list_head        urblist_entry;
 	struct kref             ref_count;
 	struct urb              *urb;
-	struct usb_ctrlrequest	*setup;
 };
 
 enum mos7715_pp_modes {
@@ -235,22 +234,11 @@ static int read_mos_reg(struct usb_serial *serial, unsigned int serial_portnum,
 	__u8 requesttype = (__u8)0xc0;
 	__u16 index = get_reg_index(reg);
 	__u16 value = get_reg_value(reg, serial_portnum);
-	u8 *buf;
-	int status;
-
-	buf = kmalloc(1, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	status = usb_control_msg(usbdev, pipe, request, requesttype, value,
-				     index, buf, 1, MOS_WDR_TIMEOUT);
-	if (status == 1)
-		*data = *buf;
-	else if (status < 0)
+	int status = usb_control_msg(usbdev, pipe, request, requesttype, value,
+				     index, data, 1, MOS_WDR_TIMEOUT);
+	if (status < 0)
 		dev_err(&usbdev->dev,
 			"mos7720: usb_control_msg() failed: %d", status);
-	kfree(buf);
-
 	return status;
 }
 
@@ -269,7 +257,6 @@ static void destroy_mos_parport(struct kref *kref)
 	struct mos7715_parport *mos_parport =
 		container_of(kref, struct mos7715_parport, ref_count);
 
-	dbg("%s called", __func__);
 	kfree(mos_parport);
 }
 
@@ -278,9 +265,8 @@ static void destroy_urbtracker(struct kref *kref)
 	struct urbtracker *urbtrack =
 		container_of(kref, struct urbtracker, ref_count);
 	struct mos7715_parport *mos_parport = urbtrack->mos_parport;
-	dbg("%s called", __func__);
+
 	usb_free_urb(urbtrack->urb);
-	kfree(urbtrack->setup);
 	kfree(urbtrack);
 	kref_put(&mos_parport->ref_count, destroy_mos_parport);
 }
@@ -297,8 +283,6 @@ static void send_deferred_urbs(unsigned long _mos_parport)
 	struct mos7715_parport *mos_parport = (void *)_mos_parport;
 	struct urbtracker *urbtrack;
 	struct list_head *cursor, *next;
-
-	dbg("%s called", __func__);
 
 	/* if release function ran, game over */
 	if (unlikely(mos_parport->serial == NULL))
@@ -348,7 +332,7 @@ static void async_complete(struct urb *urb)
 {
 	struct urbtracker *urbtrack = urb->context;
 	int status = urb->status;
-	dbg("%s called", __func__);
+
 	if (unlikely(status))
 		dbg("%s - nonzero urb status received: %d", __func__, status);
 
@@ -365,9 +349,9 @@ static int write_parport_reg_nonblock(struct mos7715_parport *mos_parport,
 	struct urbtracker *urbtrack;
 	int ret_val;
 	unsigned long flags;
+	struct usb_ctrlrequest setup;
 	struct usb_serial *serial = mos_parport->serial;
 	struct usb_device *usbdev = serial->dev;
-	dbg("%s called", __func__);
 
 	/* create and initialize the control urb and containing urbtracker */
 	urbtrack = kmalloc(sizeof(struct urbtracker), GFP_ATOMIC);
@@ -383,20 +367,14 @@ static int write_parport_reg_nonblock(struct mos7715_parport *mos_parport,
 		kfree(urbtrack);
 		return -ENOMEM;
 	}
-	urbtrack->setup = kmalloc(sizeof(*urbtrack->setup), GFP_ATOMIC);
-	if (!urbtrack->setup) {
-		usb_free_urb(urbtrack->urb);
-		kfree(urbtrack);
-		return -ENOMEM;
-	}
-	urbtrack->setup->bRequestType = (__u8)0x40;
-	urbtrack->setup->bRequest = (__u8)0x0e;
-	urbtrack->setup->wValue = cpu_to_le16(get_reg_value(reg, dummy));
-	urbtrack->setup->wIndex = cpu_to_le16(get_reg_index(reg));
-	urbtrack->setup->wLength = 0;
+	setup.bRequestType = (__u8)0x40;
+	setup.bRequest = (__u8)0x0e;
+	setup.wValue = get_reg_value(reg, dummy);
+	setup.wIndex = get_reg_index(reg);
+	setup.wLength = 0;
 	usb_fill_control_urb(urbtrack->urb, usbdev,
 			     usb_sndctrlpipe(usbdev, 0),
-			     (unsigned char *)urbtrack->setup,
+			     (unsigned char *)&setup,
 			     NULL, 0, async_complete, urbtrack);
 	kref_init(&urbtrack->ref_count);
 	INIT_LIST_HEAD(&urbtrack->urblist_entry);
@@ -494,7 +472,7 @@ static inline void parport_epilogue(struct parport *pp)
 static void parport_mos7715_write_data(struct parport *pp, unsigned char d)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
-	dbg("%s called: %2.2x", __func__, d);
+
 	if (parport_prologue(pp) < 0)
 		return;
 	mos7715_change_mode(mos_parport, SPP);
@@ -506,7 +484,7 @@ static unsigned char parport_mos7715_read_data(struct parport *pp)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
 	unsigned char d;
-	dbg("%s called", __func__);
+
 	if (parport_prologue(pp) < 0)
 		return 0;
 	read_mos_reg(mos_parport->serial, dummy, DPR, &d);
@@ -518,7 +496,7 @@ static void parport_mos7715_write_control(struct parport *pp, unsigned char d)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
 	__u8 data;
-	dbg("%s called: %2.2x", __func__, d);
+
 	if (parport_prologue(pp) < 0)
 		return;
 	data = ((__u8)d & 0x0f) | (mos_parport->shadowDCR & 0xf0);
@@ -531,7 +509,7 @@ static unsigned char parport_mos7715_read_control(struct parport *pp)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
 	__u8 dcr;
-	dbg("%s called", __func__);
+
 	spin_lock(&release_lock);
 	mos_parport = pp->private_data;
 	if (unlikely(mos_parport == NULL)) {
@@ -549,7 +527,7 @@ static unsigned char parport_mos7715_frob_control(struct parport *pp,
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
 	__u8 dcr;
-	dbg("%s called", __func__);
+
 	mask &= 0x0f;
 	val &= 0x0f;
 	if (parport_prologue(pp) < 0)
@@ -565,7 +543,7 @@ static unsigned char parport_mos7715_read_status(struct parport *pp)
 {
 	unsigned char status;
 	struct mos7715_parport *mos_parport = pp->private_data;
-	dbg("%s called", __func__);
+
 	spin_lock(&release_lock);
 	mos_parport = pp->private_data;
 	if (unlikely(mos_parport == NULL)) {	/* release called */
@@ -579,17 +557,16 @@ static unsigned char parport_mos7715_read_status(struct parport *pp)
 
 static void parport_mos7715_enable_irq(struct parport *pp)
 {
-	dbg("%s called", __func__);
 }
+
 static void parport_mos7715_disable_irq(struct parport *pp)
 {
-	dbg("%s called", __func__);
 }
 
 static void parport_mos7715_data_forward(struct parport *pp)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
-	dbg("%s called", __func__);
+
 	if (parport_prologue(pp) < 0)
 		return;
 	mos7715_change_mode(mos_parport, PS2);
@@ -601,7 +578,7 @@ static void parport_mos7715_data_forward(struct parport *pp)
 static void parport_mos7715_data_reverse(struct parport *pp)
 {
 	struct mos7715_parport *mos_parport = pp->private_data;
-	dbg("%s called", __func__);
+
 	if (parport_prologue(pp) < 0)
 		return;
 	mos7715_change_mode(mos_parport, PS2);
@@ -613,7 +590,6 @@ static void parport_mos7715_data_reverse(struct parport *pp)
 static void parport_mos7715_init_state(struct pardevice *dev,
 				       struct parport_state *s)
 {
-	dbg("%s called", __func__);
 	s->u.pc.ctr = DCR_INIT_VAL;
 	s->u.pc.ecr = ECR_INIT_VAL;
 }
@@ -623,7 +599,7 @@ static void parport_mos7715_save_state(struct parport *pp,
 				       struct parport_state *s)
 {
 	struct mos7715_parport *mos_parport;
-	dbg("%s called", __func__);
+
 	spin_lock(&release_lock);
 	mos_parport = pp->private_data;
 	if (unlikely(mos_parport == NULL)) {	/* release called */
@@ -640,7 +616,7 @@ static void parport_mos7715_restore_state(struct parport *pp,
 					  struct parport_state *s)
 {
 	struct mos7715_parport *mos_parport;
-	dbg("%s called", __func__);
+
 	spin_lock(&release_lock);
 	mos_parport = pp->private_data;
 	if (unlikely(mos_parport == NULL)) {	/* release called */
@@ -659,7 +635,7 @@ static size_t parport_mos7715_write_compat(struct parport *pp,
 	int retval;
 	struct mos7715_parport *mos_parport = pp->private_data;
 	int actual_len;
-	dbg("%s called: %u chars", __func__, (unsigned int)len);
+
 	if (parport_prologue(pp) < 0)
 		return 0;
 	mos7715_change_mode(mos_parport, PPF);
@@ -1708,7 +1684,7 @@ static void change_port_settings(struct tty_struct *tty,
 		mos7720_port->shadowMCR |= (UART_MCR_XONANY);
 		/* To set hardware flow control to the specified *
 		 * serial port, in SP1/2_CONTROL_REG             */
-		if (port_number)
+		if (port->number)
 			write_mos_reg(serial, dummy, SP_CONTROL_REG, 0x01);
 		else
 			write_mos_reg(serial, dummy, SP_CONTROL_REG, 0x02);
@@ -2112,7 +2088,7 @@ static int mos7720_startup(struct usb_serial *serial)
 
 	/* setting configuration feature to one */
 	usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
-			(__u8)0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5000);
+			(__u8)0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5*HZ);
 
 	/* start the interrupt urb */
 	ret_val = usb_submit_urb(serial->port[0]->interrupt_in_urb, GFP_KERNEL);
@@ -2157,7 +2133,7 @@ static void mos7720_release(struct usb_serial *serial)
 		/* wait for synchronous usb calls to return */
 		if (mos_parport->msg_pending)
 			wait_for_completion_timeout(&mos_parport->syncmsg_compl,
-					    msecs_to_jiffies(MOS_WDR_TIMEOUT));
+						    MOS_WDR_TIMEOUT);
 
 		parport_remove_port(mos_parport->pp);
 		usb_set_serial_data(serial, NULL);
@@ -2182,20 +2158,13 @@ static void mos7720_release(struct usb_serial *serial)
 		kfree(usb_get_serial_port_data(serial->port[i]));
 }
 
-static struct usb_driver usb_driver = {
-	.name =		"moschip7720",
-	.probe =	usb_serial_probe,
-	.disconnect =	usb_serial_disconnect,
-	.id_table =	moschip_port_id_table,
-};
-
 static struct usb_serial_driver moschip7720_2port_driver = {
 	.driver = {
 		.owner =	THIS_MODULE,
 		.name =		"moschip7720",
 	},
 	.description		= "Moschip 2 port adapter",
-	.id_table		= moschip_port_id_table,
+	.id_table		= id_table,
 	.calc_num_ports		= mos77xx_calc_num_ports,
 	.open			= mos7720_open,
 	.close			= mos7720_close,
@@ -2221,7 +2190,7 @@ static struct usb_serial_driver * const serial_drivers[] = {
 	&moschip7720_2port_driver, NULL
 };
 
-module_usb_serial_driver(usb_driver, serial_drivers);
+module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

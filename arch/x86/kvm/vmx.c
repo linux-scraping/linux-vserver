@@ -27,6 +27,7 @@
 #include <linux/highmem.h>
 #include <linux/sched.h>
 #include <linux/moduleparam.h>
+#include <linux/mod_devicetable.h>
 #include <linux/ftrace_event.h>
 #include <linux/slab.h>
 #include <linux/tboot.h>
@@ -50,6 +51,12 @@
 
 MODULE_AUTHOR("Qumranet");
 MODULE_LICENSE("GPL");
+
+static const struct x86_cpu_id vmx_cpu_id[] = {
+	X86_FEATURE_MATCH(X86_FEATURE_VMX),
+	{}
+};
+MODULE_DEVICE_TABLE(x86cpu, vmx_cpu_id);
 
 static bool __read_mostly enable_vpid = 1;
 module_param_named(vpid, enable_vpid, bool, 0444);
@@ -386,9 +393,11 @@ struct vcpu_vmx {
 	struct {
 		int           loaded;
 		u16           fs_sel, gs_sel, ldt_sel;
+#ifdef CONFIG_X86_64
+		u16           ds_sel, es_sel;
+#endif
 		int           gs_ldt_reload_needed;
 		int           fs_reload_needed;
-		unsigned long vmcs_host_cr4;    /* May not match real cr4 */
 	} host_state;
 	struct {
 		int vm86_active;
@@ -1169,7 +1178,7 @@ static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 	u32 eb;
 
 	eb = (1u << PF_VECTOR) | (1u << UD_VECTOR) | (1u << MC_VECTOR) |
-	     (1u << NM_VECTOR) | (1u << DB_VECTOR) | (1u << AC_VECTOR);
+	     (1u << NM_VECTOR) | (1u << DB_VECTOR);
 	if ((vcpu->guest_debug &
 	     (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP)) ==
 	    (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP))
@@ -1412,6 +1421,11 @@ static void vmx_save_host_state(struct kvm_vcpu *vcpu)
 	}
 
 #ifdef CONFIG_X86_64
+	savesegment(ds, vmx->host_state.ds_sel);
+	savesegment(es, vmx->host_state.es_sel);
+#endif
+
+#ifdef CONFIG_X86_64
 	vmcs_writel(HOST_FS_BASE, read_msr(MSR_FS_BASE));
 	vmcs_writel(HOST_GS_BASE, read_msr(MSR_GS_BASE));
 #else
@@ -1451,16 +1465,25 @@ static void __vmx_load_host_state(struct vcpu_vmx *vmx)
 	}
 	if (vmx->host_state.fs_reload_needed)
 		loadsegment(fs, vmx->host_state.fs_sel);
+#ifdef CONFIG_X86_64
+	if (unlikely(vmx->host_state.ds_sel | vmx->host_state.es_sel)) {
+		loadsegment(ds, vmx->host_state.ds_sel);
+		loadsegment(es, vmx->host_state.es_sel);
+	}
+#else
+	/*
+	 * The sysexit path does not restore ds/es, so we must set them to
+	 * a reasonable value ourselves.
+	 */
+	loadsegment(ds, __USER_DS);
+	loadsegment(es, __USER_DS);
+#endif
 	reload_tss();
 #ifdef CONFIG_X86_64
 	wrmsrl(MSR_KERNEL_GS_BASE, vmx->msr_host_kernel_gs_base);
 #endif
-	/*
-	 * If the FPU is not active (through the host task or
-	 * the guest vcpu), then restore the cr0.TS bit.
-	 */
-	if (!user_has_fpu() && !vmx->vcpu.guest_fpu_loaded)
-		stts();
+	if (user_has_fpu())
+		clts();
 	load_gdt(&__get_cpu_var(host_gdt));
 }
 
@@ -2214,15 +2237,12 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, u32 msr_index, u64 data)
 			break;
 		msr = find_msr_entry(vmx, msr_index);
 		if (msr) {
-			u64 old_msr_data = msr->data;
 			msr->data = data;
 			if (msr - vmx->guest_msrs < vmx->save_nmsrs) {
 				preempt_disable();
-				ret = kvm_set_shared_msr(msr->index, msr->data,
-							 msr->mask);
+				kvm_set_shared_msr(msr->index, msr->data,
+						   msr->mask);
 				preempt_enable();
-				if (ret)
-					msr->data = old_msr_data;
 			}
 			break;
 		}
@@ -3630,24 +3650,29 @@ static void vmx_disable_intercept_for_msr(u32 msr, bool longmode_only)
  * Note that host-state that does change is set elsewhere. E.g., host-state
  * that is set differently for each CPU is set in vmx_vcpu_load(), not here.
  */
-static void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
+static void vmx_set_constant_host_state(void)
 {
 	u32 low32, high32;
 	unsigned long tmpl;
 	struct desc_ptr dt;
-	unsigned long cr4;
 
-	vmcs_writel(HOST_CR0, read_cr0() & ~X86_CR0_TS);  /* 22.2.3 */
+	vmcs_writel(HOST_CR0, read_cr0() | X86_CR0_TS);  /* 22.2.3 */
+	vmcs_writel(HOST_CR4, read_cr4());  /* 22.2.3, 22.2.5 */
 	vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
 
-	/* Save the most likely value for this task's CR4 in the VMCS. */
-	cr4 = read_cr4();
-	vmcs_writel(HOST_CR4, cr4);			/* 22.2.3, 22.2.5 */
-	vmx->host_state.vmcs_host_cr4 = cr4;
-
 	vmcs_write16(HOST_CS_SELECTOR, __KERNEL_CS);  /* 22.2.4 */
+#ifdef CONFIG_X86_64
+	/*
+	 * Load null selectors, so we can avoid reloading them in
+	 * __vmx_load_host_state(), in case userspace uses the null selectors
+	 * too (the expected case).
+	 */
+	vmcs_write16(HOST_DS_SELECTOR, 0);
+	vmcs_write16(HOST_ES_SELECTOR, 0);
+#else
 	vmcs_write16(HOST_DS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
 	vmcs_write16(HOST_ES_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
+#endif
 	vmcs_write16(HOST_SS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
 	vmcs_write16(HOST_TR_SELECTOR, GDT_ENTRY_TSS*8);  /* 22.2.4 */
 
@@ -3766,7 +3791,7 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
 
 	vmcs_write16(HOST_FS_SELECTOR, 0);            /* 22.2.4 */
 	vmcs_write16(HOST_GS_SELECTOR, 0);            /* 22.2.4 */
-	vmx_set_constant_host_state(vmx);
+	vmx_set_constant_host_state();
 #ifdef CONFIG_X86_64
 	rdmsrl(MSR_FS_BASE, a);
 	vmcs_writel(HOST_FS_BASE, a); /* 22.2.4 */
@@ -4260,9 +4285,6 @@ static int handle_exception(struct kvm_vcpu *vcpu)
 
 	ex_no = intr_info & INTR_INFO_VECTOR_MASK;
 	switch (ex_no) {
-	case AC_VECTOR:
-		kvm_queue_exception_e(vcpu, AC_VECTOR, error_code);
-		return 1;
 	case DB_VECTOR:
 		dr6 = vmcs_readl(EXIT_QUALIFICATION);
 		if (!(vcpu->guest_debug &
@@ -4555,7 +4577,7 @@ static int handle_wrmsr(struct kvm_vcpu *vcpu)
 	u64 data = (vcpu->arch.regs[VCPU_REGS_RAX] & -1u)
 		| ((u64)(vcpu->arch.regs[VCPU_REGS_RDX] & -1u) << 32);
 
-	if (kvm_set_msr(vcpu, ecx, data) != 0) {
+	if (vmx_set_msr(vcpu, ecx, data) != 0) {
 		trace_kvm_msr_write_ex(ecx, data);
 		kvm_inject_gp(vcpu, 0);
 		return 1;
@@ -4904,12 +4926,6 @@ static int handle_invalid_guest_state(struct kvm_vcpu *vcpu)
 
 		if (err != EMULATE_DONE)
 			return 0;
-
-		if (vcpu->arch.halt_request) {
-			vcpu->arch.halt_request = 0;
-			ret = kvm_emulate_halt(vcpu);
-			goto out;
-		}
 
 		if (signal_pending(current))
 			goto out;
@@ -5573,18 +5589,6 @@ static int handle_vmptrst(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
-static int handle_invept(struct kvm_vcpu *vcpu)
-{
-	kvm_queue_exception(vcpu, UD_VECTOR);
-	return 1;
-}
-
-static int handle_invvpid(struct kvm_vcpu *vcpu)
-{
-	kvm_queue_exception(vcpu, UD_VECTOR);
-	return 1;
-}
-
 /*
  * The exit handlers return 1 if the exit was handled fully and guest execution
  * may resume.  Otherwise they set the kvm_run parameter to indicate what needs
@@ -5627,8 +5631,6 @@ static int (*kvm_vmx_exit_handlers[])(struct kvm_vcpu *vcpu) = {
 	[EXIT_REASON_PAUSE_INSTRUCTION]       = handle_pause,
 	[EXIT_REASON_MWAIT_INSTRUCTION]	      = handle_invalid_op,
 	[EXIT_REASON_MONITOR_INSTRUCTION]     = handle_invalid_op,
-	[EXIT_REASON_INVEPT]                  = handle_invept,
-	[EXIT_REASON_INVVPID]                 = handle_invvpid,
 };
 
 static const int kvm_vmx_max_exit_handlers =
@@ -5813,7 +5815,6 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
 	case EXIT_REASON_VMPTRST: case EXIT_REASON_VMREAD:
 	case EXIT_REASON_VMRESUME: case EXIT_REASON_VMWRITE:
 	case EXIT_REASON_VMOFF: case EXIT_REASON_VMON:
-	case EXIT_REASON_INVEPT: case EXIT_REASON_INVVPID:
 		/*
 		 * VMX instructions trap unconditionally. This allows L1 to
 		 * emulate them for its L2 guest, i.e., allows 3-level nesting!
@@ -5943,10 +5944,10 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 	    && kvm_vmx_exit_handlers[exit_reason])
 		return kvm_vmx_exit_handlers[exit_reason](vcpu);
 	else {
-		WARN_ONCE(1, "vmx: unexpected exit reason 0x%x\n", exit_reason);
-		kvm_queue_exception(vcpu, UD_VECTOR);
-		return 1;
+		vcpu->run->exit_reason = KVM_EXIT_UNKNOWN;
+		vcpu->run->hw.hardware_exit_reason = exit_reason;
 	}
+	return 0;
 }
 
 static void update_cr8_intercept(struct kvm_vcpu *vcpu, int tpr, int irr)
@@ -6132,7 +6133,6 @@ static void atomic_switch_perf_msrs(struct vcpu_vmx *vmx)
 static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
-	unsigned long cr4;
 
 	if (is_guest_mode(vcpu) && !vmx->nested.nested_run_pending) {
 		struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
@@ -6162,12 +6162,6 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 		vmcs_writel(GUEST_RSP, vcpu->arch.regs[VCPU_REGS_RSP]);
 	if (test_bit(VCPU_REGS_RIP, (unsigned long *)&vcpu->arch.regs_dirty))
 		vmcs_writel(GUEST_RIP, vcpu->arch.regs[VCPU_REGS_RIP]);
-
-	cr4 = read_cr4();
-	if (unlikely(cr4 != vmx->host_state.vmcs_host_cr4)) {
-		vmcs_writel(HOST_CR4, cr4);
-		vmx->host_state.vmcs_host_cr4 = cr4;
-	}
 
 	/* When single-stepping over STI and MOV SS, we must clear the
 	 * corresponding interruptibility bits in the guest state. Otherwise
@@ -6300,7 +6294,6 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
 		}
 	}
 
-	asm("mov %0, %%ds; mov %0, %%es" : : "r"(__USER_DS));
 	vmx->loaded_vmcs->launched = 1;
 
 	vmx->exit_reason = vmcs_read32(VM_EXIT_REASON);
@@ -6319,8 +6312,8 @@ static void vmx_free_vcpu(struct kvm_vcpu *vcpu)
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 
 	free_vpid(vmx);
-	free_loaded_vmcs(vmx->loaded_vmcs);
 	free_nested(vmx);
+	free_loaded_vmcs(vmx->loaded_vmcs);
 	kfree(vmx->guest_msrs);
 	kvm_vcpu_uninit(vcpu);
 	kmem_cache_free(kvm_vcpu_cache, vmx);
@@ -6387,7 +6380,7 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	return &vmx->vcpu;
 
 free_vmcs:
-	free_vmcs(vmx->loaded_vmcs->vmcs);
+	free_loaded_vmcs(vmx->loaded_vmcs);
 free_msrs:
 	kfree(vmx->guest_msrs);
 uninit_vcpu:
@@ -6627,7 +6620,7 @@ static void prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
 	 * Other fields are different per CPU, and will be set later when
 	 * vmx_vcpu_load() is called, and when vmx_save_host_state() is called.
 	 */
-	vmx_set_constant_host_state(vmx);
+	vmx_set_constant_host_state();
 
 	/*
 	 * HOST_RSP is normally set correctly in vmx_vcpu_run() just before

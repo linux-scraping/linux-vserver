@@ -53,6 +53,7 @@ int mwifiex_copy_mcast_addr(struct mwifiex_multicast_list *mlist,
  */
 int mwifiex_wait_queue_complete(struct mwifiex_adapter *adapter)
 {
+	bool cancel_flag = false;
 	int status;
 	struct cmd_ctrl_node *cmd_queued;
 
@@ -69,11 +70,14 @@ int mwifiex_wait_queue_complete(struct mwifiex_adapter *adapter)
 	queue_work(adapter->workqueue, &adapter->main_work);
 
 	/* Wait for completion */
-	status = wait_event_interruptible(adapter->cmd_wait_q.wait,
-					  *(cmd_queued->condition));
-	if (status) {
-		dev_err(adapter->dev, "cmd_wait_q terminated: %d\n", status);
-		return status;
+	wait_event_interruptible(adapter->cmd_wait_q.wait,
+				 *(cmd_queued->condition));
+	if (!*(cmd_queued->condition))
+		cancel_flag = true;
+
+	if (cancel_flag) {
+		mwifiex_cancel_pending_ioctl(adapter);
+		dev_dbg(adapter->dev, "cmd cancel\n");
 	}
 
 	status = adapter->cmd_wait_q.status;
@@ -105,7 +109,7 @@ int mwifiex_request_set_multicast_list(struct mwifiex_private *priv,
 	} else {
 		/* Multicast */
 		priv->curr_pkt_filter &= ~HostCmd_ACT_MAC_PROMISCUOUS_ENABLE;
-		if (mcast_list->mode == MWIFIEX_ALL_MULTI_MODE) {
+		if (mcast_list->mode == MWIFIEX_MULTICAST_MODE) {
 			dev_dbg(priv->adapter->dev,
 				"info: Enabling All Multicast!\n");
 			priv->curr_pkt_filter |=
@@ -117,11 +121,20 @@ int mwifiex_request_set_multicast_list(struct mwifiex_private *priv,
 				dev_dbg(priv->adapter->dev,
 					"info: Set multicast list=%d\n",
 				       mcast_list->num_multicast_addr);
-				/* Send multicast addresses to firmware */
-				ret = mwifiex_send_cmd_async(priv,
-					HostCmd_CMD_MAC_MULTICAST_ADR,
-					HostCmd_ACT_GEN_SET, 0,
-					mcast_list);
+				/* Set multicast addresses to firmware */
+				if (old_pkt_filter == priv->curr_pkt_filter) {
+					/* Send request to firmware */
+					ret = mwifiex_send_cmd_async(priv,
+						HostCmd_CMD_MAC_MULTICAST_ADR,
+						HostCmd_ACT_GEN_SET, 0,
+						mcast_list);
+				} else {
+					/* Send request to firmware */
+					ret = mwifiex_send_cmd_async(priv,
+						HostCmd_CMD_MAC_MULTICAST_ADR,
+						HostCmd_ACT_GEN_SET, 0,
+						mcast_list);
+				}
 			}
 		}
 	}
@@ -142,20 +155,29 @@ int mwifiex_request_set_multicast_list(struct mwifiex_private *priv,
  * information.
  */
 int mwifiex_fill_new_bss_desc(struct mwifiex_private *priv,
-			      u8 *bssid, s32 rssi, u8 *ie_buf,
-			      size_t ie_len, u16 beacon_period,
-			      u16 cap_info_bitmap, u8 band,
+			      struct cfg80211_bss *bss,
 			      struct mwifiex_bssdescriptor *bss_desc)
 {
 	int ret;
+	u8 *beacon_ie;
+	struct mwifiex_bss_priv *bss_priv = (void *)bss->priv;
 
-	memcpy(bss_desc->mac_address, bssid, ETH_ALEN);
-	bss_desc->rssi = rssi;
-	bss_desc->beacon_buf = ie_buf;
-	bss_desc->beacon_buf_size = ie_len;
-	bss_desc->beacon_period = beacon_period;
-	bss_desc->cap_info_bitmap = cap_info_bitmap;
-	bss_desc->bss_band = band;
+	beacon_ie = kmemdup(bss->information_elements, bss->len_beacon_ies,
+			    GFP_KERNEL);
+	if (!beacon_ie) {
+		dev_err(priv->adapter->dev, " failed to alloc beacon_ie\n");
+		return -ENOMEM;
+	}
+
+	memcpy(bss_desc->mac_address, bss->bssid, ETH_ALEN);
+	bss_desc->rssi = bss->signal;
+	bss_desc->beacon_buf = beacon_ie;
+	bss_desc->beacon_buf_size = bss->len_beacon_ies;
+	bss_desc->beacon_period = bss->beacon_interval;
+	bss_desc->cap_info_bitmap = bss->capability;
+	bss_desc->bss_band = bss_priv->band;
+	bss_desc->fw_tsf = bss_priv->fw_tsf;
+	bss_desc->timestamp = bss->tsf;
 	if (bss_desc->cap_info_bitmap & WLAN_CAPABILITY_PRIVACY) {
 		dev_dbg(priv->adapter->dev, "info: InterpretIE: AP WEP enabled\n");
 		bss_desc->privacy = MWIFIEX_802_11_PRIV_FILTER_8021X_WEP;
@@ -167,9 +189,9 @@ int mwifiex_fill_new_bss_desc(struct mwifiex_private *priv,
 	else
 		bss_desc->bss_mode = NL80211_IFTYPE_STATION;
 
-	ret = mwifiex_update_bss_desc_with_ie(priv->adapter, bss_desc,
-					      ie_buf, ie_len);
+	ret = mwifiex_update_bss_desc_with_ie(priv->adapter, bss_desc);
 
+	kfree(beacon_ie);
 	return ret;
 }
 
@@ -184,7 +206,6 @@ int mwifiex_bss_start(struct mwifiex_private *priv, struct cfg80211_bss *bss,
 	int ret;
 	struct mwifiex_adapter *adapter = priv->adapter;
 	struct mwifiex_bssdescriptor *bss_desc = NULL;
-	u8 *beacon_ie = NULL;
 
 	priv->scan_block = false;
 
@@ -197,19 +218,7 @@ int mwifiex_bss_start(struct mwifiex_private *priv, struct cfg80211_bss *bss,
 			return -ENOMEM;
 		}
 
-		beacon_ie = kmemdup(bss->information_elements,
-					bss->len_beacon_ies, GFP_KERNEL);
-		if (!beacon_ie) {
-			kfree(bss_desc);
-			dev_err(priv->adapter->dev, " failed to alloc beacon_ie\n");
-			return -ENOMEM;
-		}
-
-		ret = mwifiex_fill_new_bss_desc(priv, bss->bssid, bss->signal,
-						beacon_ie, bss->len_beacon_ies,
-						bss->beacon_interval,
-						bss->capability,
-						*(u8 *)bss->priv, bss_desc);
+		ret = mwifiex_fill_new_bss_desc(priv, bss, bss_desc);
 		if (ret)
 			goto done;
 	}
@@ -256,7 +265,6 @@ int mwifiex_bss_start(struct mwifiex_private *priv, struct cfg80211_bss *bss,
 		    (!mwifiex_ssid_cmp(&priv->curr_bss_params.bss_descriptor.
 				       ssid, &bss_desc->ssid))) {
 			kfree(bss_desc);
-			kfree(beacon_ie);
 			return 0;
 		}
 
@@ -291,7 +299,6 @@ int mwifiex_bss_start(struct mwifiex_private *priv, struct cfg80211_bss *bss,
 
 done:
 	kfree(bss_desc);
-	kfree(beacon_ie);
 	return ret;
 }
 
@@ -423,11 +430,8 @@ int mwifiex_enable_hs(struct mwifiex_adapter *adapter)
 		return false;
 	}
 
-	if (wait_event_interruptible(adapter->hs_activate_wait_q,
-				     adapter->hs_activate_wait_q_woken)) {
-		dev_err(adapter->dev, "hs_activate_wait_q terminated\n");
-		return false;
-	}
+	wait_event_interruptible(adapter->hs_activate_wait_q,
+				 adapter->hs_activate_wait_q_woken);
 
 	return true;
 }
@@ -458,7 +462,8 @@ int mwifiex_get_bss_info(struct mwifiex_private *priv,
 
 	info->bss_chan = bss_desc->channel;
 
-	info->region_code = adapter->region_code;
+	memcpy(info->country_code, adapter->country_code,
+	       IEEE80211_COUNTRY_STRING_LEN);
 
 	info->media_connected = priv->media_connected;
 
@@ -986,6 +991,39 @@ static int mwifiex_set_wapi_ie(struct mwifiex_private *priv,
 }
 
 /*
+ * IOCTL request handler to set/reset WPS IE.
+ *
+ * The supplied WPS IE is treated as a opaque buffer. Only the first field
+ * is checked to internally enable WPS. If buffer length is zero, the existing
+ * WPS IE is reset.
+ */
+static int mwifiex_set_wps_ie(struct mwifiex_private *priv,
+			       u8 *ie_data_ptr, u16 ie_len)
+{
+	if (ie_len) {
+		priv->wps_ie = kzalloc(MWIFIEX_MAX_VSIE_LEN, GFP_KERNEL);
+		if (!priv->wps_ie)
+			return -ENOMEM;
+		if (ie_len > sizeof(priv->wps_ie)) {
+			dev_dbg(priv->adapter->dev,
+				"info: failed to copy WPS IE, too big\n");
+			kfree(priv->wps_ie);
+			return -1;
+		}
+		memcpy(priv->wps_ie, ie_data_ptr, ie_len);
+		priv->wps_ie_len = ie_len;
+		dev_dbg(priv->adapter->dev, "cmd: Set wps_ie_len=%d IE=%#x\n",
+			priv->wps_ie_len, priv->wps_ie[0]);
+	} else {
+		kfree(priv->wps_ie);
+		priv->wps_ie_len = ie_len;
+		dev_dbg(priv->adapter->dev,
+			"info: Reset wps_ie_len=%d\n", priv->wps_ie_len);
+	}
+	return 0;
+}
+
+/*
  * IOCTL request handler to set WAPI key.
  *
  * This function prepares the correct firmware command and
@@ -1175,46 +1213,14 @@ mwifiex_drv_get_driver_version(struct mwifiex_adapter *adapter, char *version,
 }
 
 /*
- * Sends IOCTL request to get signal information.
- *
- * This function allocates the IOCTL request buffer, fills it
- * with requisite parameters and calls the IOCTL handler.
- */
-int mwifiex_get_signal_info(struct mwifiex_private *priv,
-			    struct mwifiex_ds_get_signal *signal)
-{
-	int status;
-
-	signal->selector = ALL_RSSI_INFO_MASK;
-
-	/* Signal info can be obtained only if connected */
-	if (!priv->media_connected) {
-		dev_dbg(priv->adapter->dev,
-			"info: Can not get signal in disconnected state\n");
-		return -1;
-	}
-
-	status = mwifiex_send_cmd_sync(priv, HostCmd_CMD_RSSI_INFO,
-				       HostCmd_ACT_GEN_GET, 0, signal);
-
-	if (!status) {
-		if (signal->selector & BCN_RSSI_AVG_MASK)
-			priv->qual_level = signal->bcn_rssi_avg;
-		if (signal->selector & BCN_NF_AVG_MASK)
-			priv->qual_noise = signal->bcn_nf_avg;
-	}
-
-	return status;
-}
-
-/*
  * Sends IOCTL request to set encoding parameters.
  *
  * This function allocates the IOCTL request buffer, fills it
  * with requisite parameters and calls the IOCTL handler.
  */
 int mwifiex_set_encode(struct mwifiex_private *priv, const u8 *key,
-			int key_len, u8 key_index, int disable)
+			int key_len, u8 key_index,
+			const u8 *mac_addr, int disable)
 {
 	struct mwifiex_ds_encrypt_key encrypt_key;
 
@@ -1224,8 +1230,12 @@ int mwifiex_set_encode(struct mwifiex_private *priv, const u8 *key,
 		encrypt_key.key_index = key_index;
 		if (key_len)
 			memcpy(encrypt_key.key_material, key, key_len);
+		if (mac_addr)
+			memcpy(encrypt_key.mac_addr, mac_addr, ETH_ALEN);
 	} else {
 		encrypt_key.key_disable = true;
+		if (mac_addr)
+			memcpy(encrypt_key.mac_addr, mac_addr, ETH_ALEN);
 	}
 
 	return mwifiex_sec_ioctl_encrypt_key(priv, &encrypt_key);
@@ -1431,6 +1441,7 @@ mwifiex_set_gen_ie_helper(struct mwifiex_private *priv, u8 *ie_data_ptr,
 			priv->wps.session_enable = true;
 			dev_dbg(priv->adapter->dev,
 				"info: WPS Session Enabled.\n");
+			ret = mwifiex_set_wps_ie(priv, ie_data_ptr, ie_len);
 		}
 
 		/* Append the passed data to the end of the

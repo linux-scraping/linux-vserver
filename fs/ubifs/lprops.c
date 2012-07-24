@@ -300,11 +300,8 @@ void ubifs_add_to_cat(struct ubifs_info *c, struct ubifs_lprops *lprops,
 	default:
 		ubifs_assert(0);
 	}
-
 	lprops->flags &= ~LPROPS_CAT_MASK;
 	lprops->flags |= cat;
-	c->in_a_category_cnt += 1;
-	ubifs_assert(c->in_a_category_cnt <= c->main_lebs);
 }
 
 /**
@@ -337,9 +334,6 @@ static void ubifs_remove_from_cat(struct ubifs_info *c,
 	default:
 		ubifs_assert(0);
 	}
-
-	c->in_a_category_cnt -= 1;
-	ubifs_assert(c->in_a_category_cnt >= 0);
 }
 
 /**
@@ -453,7 +447,7 @@ static void change_category(struct ubifs_info *c, struct ubifs_lprops *lprops)
 	int new_cat = ubifs_categorize_lprops(c, lprops);
 
 	if (old_cat == new_cat) {
-		struct ubifs_lpt_heap *heap = &c->lpt_heap[new_cat - 1];
+		struct ubifs_lpt_heap *heap;
 
 		/* lprops on a heap now must be moved up or down */
 		if (new_cat < 1 || new_cat > LPROPS_HEAP_CNT)
@@ -852,7 +846,9 @@ const struct ubifs_lprops *ubifs_fast_find_frdi_idx(struct ubifs_info *c)
 	return lprops;
 }
 
-#ifdef CONFIG_UBIFS_FS_DEBUG
+/*
+ * Everything below is related to debugging.
+ */
 
 /**
  * dbg_check_cats - check category heaps and lists.
@@ -1007,8 +1003,8 @@ void dbg_check_heap(struct ubifs_info *c, struct ubifs_lpt_heap *heap, int cat,
 out:
 	if (err) {
 		dbg_msg("failed cat %d hpos %d err %d", cat, i, err);
-		dbg_dump_stack();
-		dbg_dump_heap(c, heap, cat);
+		dump_stack();
+		ubifs_dump_heap(c, heap, cat);
 	}
 }
 
@@ -1115,8 +1111,8 @@ static int scan_check_cb(struct ubifs_info *c,
 	if (IS_ERR(sleb)) {
 		ret = PTR_ERR(sleb);
 		if (ret == -EUCLEAN) {
-			dbg_dump_lprops(c);
-			dbg_dump_budg(c, &c->bi);
+			ubifs_dump_lprops(c);
+			ubifs_dump_budg(c, &c->bi);
 		}
 		goto out;
 	}
@@ -1243,7 +1239,7 @@ out_print:
 	ubifs_err("bad accounting of LEB %d: free %d, dirty %d flags %#x, "
 		  "should be free %d, dirty %d",
 		  lnum, lp->free, lp->dirty, lp->flags, free, dirty);
-	dbg_dump_leb(c, lnum);
+	ubifs_dump_leb(c, lnum);
 out_destroy:
 	ubifs_scan_destroy(sleb);
 	ret = -EINVAL;
@@ -1321,5 +1317,3 @@ int dbg_check_lprops(struct ubifs_info *c)
 out:
 	return err;
 }
-
-#endif /* CONFIG_UBIFS_FS_DEBUG */

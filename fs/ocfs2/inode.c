@@ -301,11 +301,13 @@ void ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 		/* le16_to_cpu(raw_inode->i_raw_tag)i */ 0);
 
 	/* Fast symlinks will have i_size but no allocated clusters. */
-	if (S_ISLNK(inode->i_mode) && !fe->i_clusters)
+	if (S_ISLNK(inode->i_mode) && !fe->i_clusters) {
 		inode->i_blocks = 0;
-	else
+		inode->i_mapping->a_ops = &ocfs2_fast_symlink_aops;
+	} else {
 		inode->i_blocks = ocfs2_inode_sector_count(inode);
-	inode->i_mapping->a_ops = &ocfs2_aops;
+		inode->i_mapping->a_ops = &ocfs2_aops;
+	}
 	inode->i_atime.tv_sec = le64_to_cpu(fe->i_atime);
 	inode->i_atime.tv_nsec = le32_to_cpu(fe->i_atime_nsec);
 	inode->i_mtime.tv_sec = le64_to_cpu(fe->i_mtime);
@@ -359,10 +361,7 @@ void ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 		    OCFS2_I(inode)->ip_dir_lock_gen = 1;
 		    break;
 	    case S_IFLNK:
-		    if (ocfs2_inode_is_fast_symlink(inode))
-			inode->i_op = &ocfs2_fast_symlink_inode_operations;
-		    else
-			inode->i_op = &ocfs2_symlink_inode_operations;
+		    inode->i_op = &ocfs2_symlink_inode_operations;
 		    i_size_write(inode, le64_to_cpu(fe->i_size));
 		    break;
 	    default:
@@ -1097,7 +1096,7 @@ static void ocfs2_clear_inode(struct inode *inode)
 	int status;
 	struct ocfs2_inode_info *oi = OCFS2_I(inode);
 
-	end_writeback(inode);
+	clear_inode(inode);
 	trace_ocfs2_clear_inode((unsigned long long)oi->ip_blkno,
 				inode->i_nlink);
 

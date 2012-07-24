@@ -173,11 +173,14 @@ asmlinkage long sys32_setfsgid16(u16 gid)
 
 static int groups16_to_user(u16 __user *grouplist, struct group_info *group_info)
 {
+	struct user_namespace *user_ns = current_user_ns();
 	int i;
 	u16 group;
+	kgid_t kgid;
 
 	for (i = 0; i < group_info->ngroups; i++) {
-		group = (u16)GROUP_AT(group_info, i);
+		kgid = GROUP_AT(group_info, i);
+		group = (u16)from_kgid_munged(user_ns, kgid);
 		if (put_user(group, grouplist+i))
 			return -EFAULT;
 	}
@@ -187,13 +190,20 @@ static int groups16_to_user(u16 __user *grouplist, struct group_info *group_info
 
 static int groups16_from_user(struct group_info *group_info, u16 __user *grouplist)
 {
+	struct user_namespace *user_ns = current_user_ns();
 	int i;
 	u16 group;
+	kgid_t kgid;
 
 	for (i = 0; i < group_info->ngroups; i++) {
 		if (get_user(group, grouplist+i))
 			return  -EFAULT;
-		GROUP_AT(group_info, i) = (gid_t)group;
+
+		kgid = make_kgid(user_ns, (gid_t)group);
+		if (!gid_valid(kgid))
+			return -EINVAL;
+
+		GROUP_AT(group_info, i) = kgid;
 	}
 
 	return 0;
@@ -537,8 +547,8 @@ static int cp_stat64(struct stat64_emu31 __user *ubuf, struct kstat *stat)
 	tmp.__st_ino = (u32)stat->ino;
 	tmp.st_mode = stat->mode;
 	tmp.st_nlink = (unsigned int)stat->nlink;
-	tmp.st_uid = stat->uid;
-	tmp.st_gid = stat->gid;
+	tmp.st_uid = from_kuid_munged(current_user_ns(), stat->uid);
+	tmp.st_gid = from_kgid_munged(current_user_ns(), stat->gid);
 	tmp.st_rdev = huge_encode_dev(stat->rdev);
 	tmp.st_size = stat->size;
 	tmp.st_blksize = (u32)stat->blksize;
@@ -612,6 +622,7 @@ asmlinkage unsigned long old32_mmap(struct mmap_arg_struct_emu31 __user *arg)
 		return -EFAULT;
 	if (a.offset & ~PAGE_MASK)
 		return -EINVAL;
+	a.addr = (unsigned long) compat_ptr(a.addr);
 	return sys_mmap_pgoff(a.addr, a.len, a.prot, a.flags, a.fd,
 			      a.offset >> PAGE_SHIFT);
 }
@@ -622,6 +633,7 @@ asmlinkage long sys32_mmap2(struct mmap_arg_struct_emu31 __user *arg)
 
 	if (copy_from_user(&a, arg, sizeof(a)))
 		return -EFAULT;
+	a.addr = (unsigned long) compat_ptr(a.addr);
 	return sys_mmap_pgoff(a.addr, a.len, a.prot, a.flags, a.fd, a.offset);
 }
 

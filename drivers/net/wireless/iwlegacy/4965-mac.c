@@ -2565,7 +2565,7 @@ il4965_find_station(struct il_priv *il, const u8 *addr)
 	spin_lock_irqsave(&il->sta_lock, flags);
 	for (i = start; i < il->hw_params.max_stations; i++)
 		if (il->stations[i].used &&
-		    (!compare_ether_addr(il->stations[i].sta.sta.addr, addr))) {
+		    ether_addr_equal(il->stations[i].sta.sta.addr, addr)) {
 			ret = i;
 			goto out;
 		}
@@ -2850,9 +2850,9 @@ void
 il4965_hwrate_to_tx_control(struct il_priv *il, u32 rate_n_flags,
 			    struct ieee80211_tx_info *info)
 {
-	struct ieee80211_tx_rate *r = &info->control.rates[0];
+	struct ieee80211_tx_rate *r = &info->status.rates[0];
 
-	info->antenna_sel_tx =
+	info->status.antenna =
 	    ((rate_n_flags & RATE_MCS_ANT_ABC_MSK) >> RATE_MCS_ANT_POS);
 	if (rate_n_flags & RATE_MCS_HT_MSK)
 		r->flags |= IEEE80211_TX_RC_MCS;
@@ -4411,13 +4411,13 @@ il4965_irq_tasklet(struct il_priv *il)
 		 * is killed. Hence update the killswitch state here. The
 		 * rfkill handler will care about restarting if needed.
 		 */
-		if (hw_rf_kill) {
-			set_bit(S_RFKILL, &il->status);
-		} else {
-			clear_bit(S_RFKILL, &il->status);
-			il_force_reset(il, true);
+		if (!test_bit(S_ALIVE, &il->status)) {
+			if (hw_rf_kill)
+				set_bit(S_RFKILL, &il->status);
+			else
+				clear_bit(S_RFKILL, &il->status);
+			wiphy_rfkill_set_hw_state(il->hw->wiphy, hw_rf_kill);
 		}
-		wiphy_rfkill_set_hw_state(il->hw->wiphy, hw_rf_kill);
 
 		handled |= CSR_INT_BIT_RF_KILL;
 	}
@@ -5285,9 +5285,6 @@ il4965_alive_start(struct il_priv *il)
 
 	il->active_rate = RATES_MASK;
 
-	il_power_update_mode(il, true);
-	D_INFO("Updated power mode\n");
-
 	if (il_is_associated(il)) {
 		struct il_rxon_cmd *active_rxon =
 		    (struct il_rxon_cmd *)&il->active;
@@ -5317,6 +5314,9 @@ il4965_alive_start(struct il_priv *il)
 
 	D_INFO("ALIVE processing complete.\n");
 	wake_up(&il->wait_command_queue);
+
+	il_power_update_mode(il, true);
+	D_INFO("Updated power mode\n");
 
 	return;
 

@@ -128,9 +128,7 @@ static struct dentry *rpc_setup_pipedir_sb(struct super_block *sb,
 {
 	static uint32_t clntid;
 	char name[15];
-	struct qstr q = {
-		.name = name,
-	};
+	struct qstr q = { .name = name };
 	struct dentry *dir, *dentry;
 	int error;
 
@@ -237,7 +235,7 @@ static struct rpc_clnt *rpc_get_client_for_event(struct net *net, int event)
 	spin_lock(&sn->rpc_client_lock);
 	list_for_each_entry(clnt, &sn->all_clients, cl_clients) {
 		if (clnt->cl_program->pipe_dir_name == NULL)
-			continue;
+			break;
 		if (rpc_clnt_skip_event(clnt, event))
 			continue;
 		if (atomic_inc_not_zero(&clnt->cl_count) == 0)
@@ -1335,18 +1333,13 @@ call_refreshresult(struct rpc_task *task)
 	task->tk_action = call_refresh;
 	switch (status) {
 	case 0:
-		if (rpcauth_uptodatecred(task)) {
+		if (rpcauth_uptodatecred(task))
 			task->tk_action = call_allocate;
-			return;
-		}
-		/* Use rate-limiting and a max number of retries if refresh
-		 * had status 0 but failed to update the cred.
-		 */
+		return;
 	case -ETIMEDOUT:
 		rpc_delay(task, 3*HZ);
 	case -EAGAIN:
 		status = -EACCES;
-	case -EKEYEXPIRED:
 		if (!task->tk_cred_retry)
 			break;
 		task->tk_cred_retry--;
@@ -1855,13 +1848,12 @@ call_timeout(struct rpc_task *task)
 		return;
 	}
 	if (RPC_IS_SOFT(task)) {
-		if (clnt->cl_chatty) {
+		if (clnt->cl_chatty)
 			rcu_read_lock();
 			printk(KERN_NOTICE "%s: server %s not responding, timed out\n",
 				clnt->cl_protname,
 				rcu_dereference(clnt->cl_xprt)->servername);
 			rcu_read_unlock();
-		}
 		if (task->tk_flags & RPC_TASK_TIMEOUT)
 			rpc_exit(task, -ETIMEDOUT);
 		else

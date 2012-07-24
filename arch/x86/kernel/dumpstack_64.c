@@ -24,6 +24,7 @@ static char x86_stack_ids[][8] = {
 		[ DEBUG_STACK-1			]	= "#DB",
 		[ NMI_STACK-1			]	= "NMI",
 		[ DOUBLEFAULT_STACK-1		]	= "#DF",
+		[ STACKFAULT_STACK-1		]	= "#SS",
 		[ MCE_STACK-1			]	= "#MC",
 #if DEBUG_STKSZ > EXCEPTION_STKSZ
 		[ N_EXCEPTION_STACKS ...
@@ -244,7 +245,7 @@ show_stack_log_lvl(struct task_struct *task, struct pt_regs *regs,
 	show_trace_log_lvl(task, regs, sp, bp, log_lvl);
 }
 
-void show_registers(struct pt_regs *regs)
+void show_regs(struct pt_regs *regs)
 {
 	int i;
 	unsigned long sp;

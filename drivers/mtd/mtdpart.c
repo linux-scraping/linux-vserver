@@ -67,12 +67,12 @@ static int part_read(struct mtd_info *mtd, loff_t from, size_t len,
 	stats = part->master->ecc_stats;
 	res = part->master->_read(part->master, from + part->offset, len,
 				  retlen, buf);
-	if (unlikely(res)) {
-		if (mtd_is_bitflip(res))
-			mtd->ecc_stats.corrected += part->master->ecc_stats.corrected - stats.corrected;
-		if (mtd_is_eccerr(res))
-			mtd->ecc_stats.failed += part->master->ecc_stats.failed - stats.failed;
-	}
+	if (unlikely(mtd_is_eccerr(res)))
+		mtd->ecc_stats.failed +=
+			part->master->ecc_stats.failed - stats.failed;
+	else
+		mtd->ecc_stats.corrected +=
+			part->master->ecc_stats.corrected - stats.corrected;
 	return res;
 }
 
@@ -517,6 +517,8 @@ static struct mtd_part *allocate_partition(struct mtd_info *master,
 
 	slave->mtd.ecclayout = master->ecclayout;
 	slave->mtd.ecc_strength = master->ecc_strength;
+	slave->mtd.bitflip_threshold = master->bitflip_threshold;
+
 	if (master->_block_isbad) {
 		uint64_t offs = 0;
 
@@ -709,8 +711,6 @@ static const char *default_mtd_part_types[] = {
  * partition parsers, specified in @types. However, if @types is %NULL, then
  * the default list of parsers is used. The default list contains only the
  * "cmdlinepart" and "ofpart" parsers ATM.
- * Note: If there are more then one parser in @types, the kernel only takes the
- * partitions parsed out by the first parser.
  *
  * This function may return:
  * o a negative error code in case of failure
@@ -735,12 +735,11 @@ int parse_mtd_partitions(struct mtd_info *master, const char **types,
 		if (!parser)
 			continue;
 		ret = (*parser->parse_fn)(master, pparts, data);
-		put_partition_parser(parser);
 		if (ret > 0) {
 			printk(KERN_NOTICE "%d %s partitions found on MTD device %s\n",
 			       ret, parser->name, master->name);
-			break;
 		}
+		put_partition_parser(parser);
 	}
 	return ret;
 }

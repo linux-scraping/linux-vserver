@@ -456,23 +456,6 @@ bfa_fcb_lport_new(struct bfad_s *bfad, struct bfa_fcs_lport_s *port,
 	return port_drv;
 }
 
-void
-bfa_fcb_lport_delete(struct bfad_s *bfad, enum bfa_lport_role roles,
-		    struct bfad_vf_s *vf_drv, struct bfad_vport_s *vp_drv)
-{
-	struct bfad_port_s    *port_drv;
-
-	/* this will be only called from rmmod context */
-	if (vp_drv && !vp_drv->comp_del) {
-		port_drv = (vp_drv) ? (&(vp_drv)->drv_port) :
-				((vf_drv) ? (&(vf_drv)->base_port) :
-				(&(bfad)->pport));
-		bfa_trc(bfad, roles);
-		if (roles & BFA_LPORT_ROLE_FCP_IM)
-			bfad_im_port_delete(bfad, port_drv);
-	}
-}
-
 /*
  * FCS RPORT alloc callback, after successful PLOGI by FCS
  */
@@ -1615,7 +1598,7 @@ out:
 static u32 *
 bfad_load_fwimg(struct pci_dev *pdev)
 {
-	if (bfa_asic_id_ct2(pdev->device)) {
+	if (pdev->device == BFA_PCI_DEVICE_ID_CT2) {
 		if (bfi_image_ct2_size == 0)
 			bfad_read_firmware(pdev, &bfi_image_ct2,
 				&bfi_image_ct2_size, BFAD_FW_FILE_CT2);
@@ -1625,14 +1608,12 @@ bfad_load_fwimg(struct pci_dev *pdev)
 			bfad_read_firmware(pdev, &bfi_image_ct,
 				&bfi_image_ct_size, BFAD_FW_FILE_CT);
 		return bfi_image_ct;
-	} else if (bfa_asic_id_cb(pdev->device)) {
+	} else {
 		if (bfi_image_cb_size == 0)
 			bfad_read_firmware(pdev, &bfi_image_cb,
 				&bfi_image_cb_size, BFAD_FW_FILE_CB);
 		return bfi_image_cb;
 	}
-
-	return NULL;
 }
 
 static void

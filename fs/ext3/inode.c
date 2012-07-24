@@ -220,8 +220,7 @@ void ext3_evict_inode (struct inode *inode)
 	 */
 	if (inode->i_nlink && ext3_should_journal_data(inode) &&
 	    EXT3_SB(inode->i_sb)->s_journal &&
-	    (S_ISLNK(inode->i_mode) || S_ISREG(inode->i_mode)) &&
-	    inode->i_ino != EXT3_JOURNAL_INO) {
+	    (S_ISLNK(inode->i_mode) || S_ISREG(inode->i_mode))) {
 		tid_t commit_tid = atomic_read(&ei->i_datasync_tid);
 		journal_t *journal = EXT3_SB(inode->i_sb)->s_journal;
 
@@ -275,18 +274,18 @@ void ext3_evict_inode (struct inode *inode)
 	if (ext3_mark_inode_dirty(handle, inode)) {
 		/* If that failed, just dquot_drop() and be done with that */
 		dquot_drop(inode);
-		end_writeback(inode);
+		clear_inode(inode);
 	} else {
 		ext3_xattr_delete_inode(handle, inode);
 		dquot_free_inode(inode);
 		dquot_drop(inode);
-		end_writeback(inode);
+		clear_inode(inode);
 		ext3_free_inode(handle, inode);
 	}
 	ext3_journal_stop(handle);
 	return;
 no_delete:
-	end_writeback(inode);
+	clear_inode(inode);
 	dquot_drop(inode);
 }
 
@@ -2918,8 +2917,8 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	transaction_t *transaction;
 	long ret;
 	int block;
-	uid_t uid;
-	gid_t gid;
+	uid_t i_uid;
+	gid_t i_gid;
 
 	inode = iget_locked(sb, ino);
 	if (!inode)
@@ -2936,15 +2935,15 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	bh = iloc.bh;
 	raw_inode = ext3_raw_inode(&iloc);
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
-	uid = (uid_t)le16_to_cpu(raw_inode->i_uid_low);
-	gid = (gid_t)le16_to_cpu(raw_inode->i_gid_low);
+	i_uid = (uid_t)le16_to_cpu(raw_inode->i_uid_low);
+	i_gid = (gid_t)le16_to_cpu(raw_inode->i_gid_low);
 	if(!(test_opt (inode->i_sb, NO_UID32))) {
-		uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
-		gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
+		i_uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
+		i_gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
 	}
-	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
-	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
-	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
+	i_uid_write(inode, INOTAG_UID(DX_TAG(inode), i_uid, i_gid));
+	i_gid_write(inode, INOTAG_GID(DX_TAG(inode), i_uid, i_gid));
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
 		le16_to_cpu(raw_inode->i_raw_tag));
 	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
@@ -3100,11 +3099,9 @@ static int ext3_do_update_inode(handle_t *handle,
 	struct ext3_inode *raw_inode = ext3_raw_inode(iloc);
 	struct ext3_inode_info *ei = EXT3_I(inode);
 	struct buffer_head *bh = iloc->bh;
-	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
-	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
 	int err = 0, rc, block;
-	int need_datasync = 0;
-	__le32 disksize;
+	uid_t i_uid;
+	gid_t i_gid;
 
 again:
 	/* we can't allow multiple procs in here at once, its a bit racey */
@@ -3117,27 +3114,29 @@ again:
 
 	ext3_get_inode_flags(ei);
 	raw_inode->i_mode = cpu_to_le16(inode->i_mode);
+	i_uid = TAGINO_UID(DX_TAG(inode), i_uid_read(inode), inode->i_tag);
+	i_gid = TAGINO_GID(DX_TAG(inode), i_gid_read(inode), inode->i_tag);
 	if(!(test_opt(inode->i_sb, NO_UID32))) {
-		raw_inode->i_uid_low = cpu_to_le16(low_16_bits(uid));
-		raw_inode->i_gid_low = cpu_to_le16(low_16_bits(gid));
+		raw_inode->i_uid_low = cpu_to_le16(low_16_bits(i_uid));
+		raw_inode->i_gid_low = cpu_to_le16(low_16_bits(i_gid));
 /*
  * Fix up interoperability with old kernels. Otherwise, old inodes get
  * re-used with the upper 16 bits of the uid/gid intact
  */
 		if(!ei->i_dtime) {
 			raw_inode->i_uid_high =
-				cpu_to_le16(high_16_bits(uid));
+				cpu_to_le16(high_16_bits(i_uid));
 			raw_inode->i_gid_high =
-				cpu_to_le16(high_16_bits(gid));
+				cpu_to_le16(high_16_bits(i_gid));
 		} else {
 			raw_inode->i_uid_high = 0;
 			raw_inode->i_gid_high = 0;
 		}
 	} else {
 		raw_inode->i_uid_low =
-			cpu_to_le16(fs_high2lowuid(uid));
+			cpu_to_le16(fs_high2lowuid(i_uid));
 		raw_inode->i_gid_low =
-			cpu_to_le16(fs_high2lowgid(gid));
+			cpu_to_le16(fs_high2lowgid(i_gid));
 		raw_inode->i_uid_high = 0;
 		raw_inode->i_gid_high = 0;
 	}
@@ -3145,11 +3144,7 @@ again:
 	raw_inode->i_raw_tag = cpu_to_le16(inode->i_tag);
 #endif
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
-	disksize = cpu_to_le32(ei->i_disksize);
-	if (disksize != raw_inode->i_size) {
-		need_datasync = 1;
-		raw_inode->i_size = disksize;
-	}
+	raw_inode->i_size = cpu_to_le32(ei->i_disksize);
 	raw_inode->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
 	raw_inode->i_ctime = cpu_to_le32(inode->i_ctime.tv_sec);
 	raw_inode->i_mtime = cpu_to_le32(inode->i_mtime.tv_sec);
@@ -3165,11 +3160,8 @@ again:
 	if (!S_ISREG(inode->i_mode)) {
 		raw_inode->i_dir_acl = cpu_to_le32(ei->i_dir_acl);
 	} else {
-		disksize = cpu_to_le32(ei->i_disksize >> 32);
-		if (disksize != raw_inode->i_size_high) {
-			raw_inode->i_size_high = disksize;
-			need_datasync = 1;
-		}
+		raw_inode->i_size_high =
+			cpu_to_le32(ei->i_disksize >> 32);
 		if (ei->i_disksize > 0x7fffffffULL) {
 			struct super_block *sb = inode->i_sb;
 			if (!EXT3_HAS_RO_COMPAT_FEATURE(sb,
@@ -3222,8 +3214,6 @@ again:
 	ext3_clear_inode_state(inode, EXT3_STATE_NEW);
 
 	atomic_set(&ei->i_sync_tid, handle->h_transaction->t_tid);
-	if (need_datasync)
-		atomic_set(&ei->i_datasync_tid, handle->h_transaction->t_tid);
 out_brelse:
 	brelse (bh);
 	ext3_std_error(inode->i_sb, err);
@@ -3311,9 +3301,9 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 
 	if (is_quota_modification(inode, attr))
 		dquot_initialize(inode);
-	if ((ia_valid & ATTR_UID && attr->ia_uid != inode->i_uid) ||
-		(ia_valid & ATTR_GID && attr->ia_gid != inode->i_gid) ||
-		(ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag)) {
+	if ((ia_valid & ATTR_UID && !uid_eq(attr->ia_uid, inode->i_uid)) ||
+	    (ia_valid & ATTR_GID && !gid_eq(attr->ia_gid, inode->i_gid)) ||
+	    (ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag)) {
 		handle_t *handle;
 
 		/* (user+group)*(old+new) structure, inode write (sb,

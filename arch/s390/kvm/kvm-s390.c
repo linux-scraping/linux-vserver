@@ -28,6 +28,7 @@
 #include <asm/pgtable.h>
 #include <asm/nmi.h>
 #include <asm/switch_to.h>
+#include <asm/sclp.h>
 #include "kvm-s390.h"
 #include "gaccess.h"
 
@@ -74,6 +75,7 @@ struct kvm_stats_debugfs_item debugfs_entries[] = {
 	{ "instruction_sigp_restart", VCPU_STAT(instruction_sigp_restart) },
 	{ "diagnose_10", VCPU_STAT(diagnose_10) },
 	{ "diagnose_44", VCPU_STAT(diagnose_44) },
+	{ "diagnose_9c", VCPU_STAT(diagnose_9c) },
 	{ NULL }
 };
 
@@ -133,7 +135,15 @@ int kvm_dev_ioctl_check_extension(long ext)
 	case KVM_CAP_S390_UCONTROL:
 #endif
 	case KVM_CAP_SYNC_REGS:
+	case KVM_CAP_ONE_REG:
 		r = 1;
+		break;
+	case KVM_CAP_NR_VCPUS:
+	case KVM_CAP_MAX_VCPUS:
+		r = KVM_MAX_VCPUS;
+		break;
+	case KVM_CAP_S390_COW:
+		r = sclp_get_fac85() & 0x2;
 		break;
 	default:
 		r = 0;
@@ -347,7 +357,7 @@ int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
 	vcpu->arch.sie_block->ecb   = 6;
 	vcpu->arch.sie_block->eca   = 0xC1002001U;
 	vcpu->arch.sie_block->fac   = (int) (long) facilities;
-	hrtimer_init(&vcpu->arch.ckc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&vcpu->arch.ckc_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
 	tasklet_init(&vcpu->arch.tasklet, kvm_s390_tasklet,
 		     (unsigned long) vcpu);
 	vcpu->arch.ckc_timer.function = kvm_s390_idle_wakeup;
@@ -421,6 +431,71 @@ int kvm_arch_vcpu_runnable(struct kvm_vcpu *vcpu)
 	/* kvm common code refers to this, but never calls it */
 	BUG();
 	return 0;
+}
+
+int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
+{
+	/* kvm common code refers to this, but never calls it */
+	BUG();
+	return 0;
+}
+
+static int kvm_arch_vcpu_ioctl_get_one_reg(struct kvm_vcpu *vcpu,
+					   struct kvm_one_reg *reg)
+{
+	int r = -EINVAL;
+
+	switch (reg->id) {
+	case KVM_REG_S390_TODPR:
+		r = put_user(vcpu->arch.sie_block->todpr,
+			     (u32 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_EPOCHDIFF:
+		r = put_user(vcpu->arch.sie_block->epoch,
+			     (u64 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_CPU_TIMER:
+		r = put_user(vcpu->arch.sie_block->cputm,
+			     (u64 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_CLOCK_COMP:
+		r = put_user(vcpu->arch.sie_block->ckc,
+			     (u64 __user *)reg->addr);
+		break;
+	default:
+		break;
+	}
+
+	return r;
+}
+
+static int kvm_arch_vcpu_ioctl_set_one_reg(struct kvm_vcpu *vcpu,
+					   struct kvm_one_reg *reg)
+{
+	int r = -EINVAL;
+
+	switch (reg->id) {
+	case KVM_REG_S390_TODPR:
+		r = get_user(vcpu->arch.sie_block->todpr,
+			     (u32 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_EPOCHDIFF:
+		r = get_user(vcpu->arch.sie_block->epoch,
+			     (u64 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_CPU_TIMER:
+		r = get_user(vcpu->arch.sie_block->cputm,
+			     (u64 __user *)reg->addr);
+		break;
+	case KVM_REG_S390_CLOCK_COMP:
+		r = get_user(vcpu->arch.sie_block->ckc,
+			     (u64 __user *)reg->addr);
+		break;
+	default:
+		break;
+	}
+
+	return r;
 }
 
 static int kvm_arch_vcpu_ioctl_initial_reset(struct kvm_vcpu *vcpu)
@@ -525,18 +600,13 @@ static int __vcpu_run(struct kvm_vcpu *vcpu)
 	if (!kvm_is_ucontrol(vcpu->kvm))
 		kvm_s390_deliver_pending_interrupts(vcpu);
 
-	VCPU_EVENT(vcpu, 6, "entering sie flags %x",
-		   atomic_read(&vcpu->arch.sie_block->cpuflags));
-
 	vcpu->arch.sie_block->icptcode = 0;
 	local_irq_disable();
 	kvm_guest_enter();
 	local_irq_enable();
+	VCPU_EVENT(vcpu, 6, "entering sie flags %x",
+		   atomic_read(&vcpu->arch.sie_block->cpuflags));
 	rc = sie64a(vcpu->arch.sie_block, vcpu->run->s.regs.gprs);
-	local_irq_disable();
-	kvm_guest_exit();
-	local_irq_enable();
-
 	if (rc) {
 		if (kvm_is_ucontrol(vcpu->kvm)) {
 			rc = SIE_INTERCEPT_UCONTROL;
@@ -548,6 +618,9 @@ static int __vcpu_run(struct kvm_vcpu *vcpu)
 	}
 	VCPU_EVENT(vcpu, 6, "exit sie icptcode %d",
 		   vcpu->arch.sie_block->icptcode);
+	local_irq_disable();
+	kvm_guest_exit();
+	local_irq_enable();
 
 	memcpy(&vcpu->run->s.regs.gprs[14], &vcpu->arch.sie_block->gg14, 16);
 	return rc;
@@ -565,6 +638,17 @@ rerun_vcpu:
 	atomic_clear_mask(CPUSTAT_STOPPED, &vcpu->arch.sie_block->cpuflags);
 
 	BUG_ON(vcpu->kvm->arch.float_int.local_int[vcpu->vcpu_id] == NULL);
+
+	switch (kvm_run->exit_reason) {
+	case KVM_EXIT_S390_SIEIC:
+	case KVM_EXIT_UNKNOWN:
+	case KVM_EXIT_INTR:
+	case KVM_EXIT_S390_RESET:
+	case KVM_EXIT_S390_UCONTROL:
+		break;
+	default:
+		BUG();
+	}
 
 	vcpu->arch.sie_block->gpsw.mask = kvm_run->psw_mask;
 	vcpu->arch.sie_block->gpsw.addr = kvm_run->psw_addr;
@@ -668,14 +752,6 @@ int kvm_s390_vcpu_store_status(struct kvm_vcpu *vcpu, unsigned long addr)
 	} else
 		prefix = 0;
 
-	/*
-	 * The guest FPRS and ACRS are in the host FPRS/ACRS due to the lazy
-	 * copying in vcpu load/put. Lets update our copies before we save
-	 * it into the save area
-	 */
-	save_fp_regs(&vcpu->arch.guest_fpregs);
-	save_access_regs(vcpu->run->s.regs.acrs);
-
 	if (__guestcopy(vcpu, addr + offsetof(struct save_area, fp_regs),
 			vcpu->arch.guest_fpregs.fprs, 128, prefix))
 		return -EFAULT;
@@ -752,6 +828,18 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
 	case KVM_S390_INITIAL_RESET:
 		r = kvm_arch_vcpu_ioctl_initial_reset(vcpu);
 		break;
+	case KVM_SET_ONE_REG:
+	case KVM_GET_ONE_REG: {
+		struct kvm_one_reg reg;
+		r = -EFAULT;
+		if (copy_from_user(&reg, argp, sizeof(reg)))
+			break;
+		if (ioctl == KVM_SET_ONE_REG)
+			r = kvm_arch_vcpu_ioctl_set_one_reg(vcpu, &reg);
+		else
+			r = kvm_arch_vcpu_ioctl_get_one_reg(vcpu, &reg);
+		break;
+	}
 #ifdef CONFIG_KVM_S390_UCONTROL
 	case KVM_S390_UCAS_MAP: {
 		struct kvm_s390_ucas_mapping ucasmap;
@@ -893,7 +981,7 @@ static int __init kvm_s390_init(void)
 	}
 	memcpy(facilities, S390_lowcore.stfle_fac_list, 16);
 	facilities[0] &= 0xff00fff3f47c0000ULL;
-	facilities[1] &= 0x001c000000000000ULL;
+	facilities[1] &= 0x201c000000000000ULL;
 	return 0;
 }
 

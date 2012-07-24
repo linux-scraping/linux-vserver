@@ -37,13 +37,7 @@
 
 #include "signal.h"
 
-static const char *handler[]= {
-	"prefetch abort",
-	"data abort",
-	"address exception",
-	"interrupt",
-	"undefined instruction",
-};
+static const char *handler[]= { "prefetch abort", "data abort", "address exception", "interrupt" };
 
 void *vectors_page;
 
@@ -376,9 +370,17 @@ static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 
 asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 {
+	unsigned int correction = thumb_mode(regs) ? 2 : 4;
 	unsigned int instr;
 	siginfo_t info;
 	void __user *pc;
+
+	/*
+	 * According to the ARM ARM, PC is 2 or 4 bytes ahead,
+	 * depending whether we're in Thumb mode or not.
+	 * Correct this offset.
+	 */
+	regs->ARM_pc -= correction;
 
 	pc = (void __user *)instruction_pointer(regs);
 
@@ -394,23 +396,20 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 #endif
 			instr = *(u32 *) pc;
 	} else if (thumb_mode(regs)) {
-		if (get_user(instr, (u16 __user *)pc))
-			goto die_sig;
+		get_user(instr, (u16 __user *)pc);
 		if (is_wide_instruction(instr)) {
 			unsigned int instr2;
-			if (get_user(instr2, (u16 __user *)pc+1))
-				goto die_sig;
+			get_user(instr2, (u16 __user *)pc+1);
 			instr <<= 16;
 			instr |= instr2;
 		}
-	} else if (get_user(instr, (u32 __user *)pc)) {
-		goto die_sig;
+	} else {
+		get_user(instr, (u32 __user *)pc);
 	}
 
 	if (call_undef_hook(regs, instr) == 0)
 		return;
 
-die_sig:
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_UNDEFINED) {
 		printk(KERN_INFO "%s (%d): undefined instruction: pc=%p\n",
@@ -480,14 +479,14 @@ static int bad_syscall(int n, struct pt_regs *regs)
 	return regs->ARM_r0;
 }
 
-static inline void
+static inline int
 do_cache_op(unsigned long start, unsigned long end, int flags)
 {
 	struct mm_struct *mm = current->active_mm;
 	struct vm_area_struct *vma;
 
 	if (end < start || flags)
-		return;
+		return -EINVAL;
 
 	down_read(&mm->mmap_sem);
 	vma = find_vma(mm, start);
@@ -498,10 +497,10 @@ do_cache_op(unsigned long start, unsigned long end, int flags)
 			end = vma->vm_end;
 
 		up_read(&mm->mmap_sem);
-		flush_cache_user_range(start, end);
-		return;
+		return flush_cache_user_range(start, end);
 	}
 	up_read(&mm->mmap_sem);
+	return -EINVAL;
 }
 
 /*
@@ -547,8 +546,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 	 * the specified region).
 	 */
 	case NR(cacheflush):
-		do_cache_op(regs->ARM_r0, regs->ARM_r1, regs->ARM_r2);
-		return 0;
+		return do_cache_op(regs->ARM_r0, regs->ARM_r1, regs->ARM_r2);
 
 	case NR(usr26):
 		if (!(elf_hwcap & HWCAP_26BIT))

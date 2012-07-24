@@ -60,10 +60,8 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x0489, 0xE000) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
 	{ USB_DEVICE(0x0489, 0xE003) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
 	{ USB_DEVICE(0x0745, 0x1000) }, /* CipherLab USB CCD Barcode Scanner 1000 */
-	{ USB_DEVICE(0x0846, 0x1100) }, /* NetGear Managed Switch M4100 series, M5300 series, M7100 series */
 	{ USB_DEVICE(0x08e6, 0x5501) }, /* Gemalto Prox-PU/CU contactless smartcard reader */
 	{ USB_DEVICE(0x08FD, 0x000A) }, /* Digianswer A/S , ZigBee/802.15.4 MAC Device */
-	{ USB_DEVICE(0x0908, 0x01FF) }, /* Siemens RUGGEDCOM USB Serial Console */
 	{ USB_DEVICE(0x0BED, 0x1100) }, /* MEI (TM) Cashflow-SC Bill/Voucher Acceptor */
 	{ USB_DEVICE(0x0BED, 0x1101) }, /* MEI series 2000 Combo Acceptor */
 	{ USB_DEVICE(0x0FCF, 0x1003) }, /* Dynastream ANT development board */
@@ -93,7 +91,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x813F) }, /* Tams Master Easy Control */
 	{ USB_DEVICE(0x10C4, 0x814A) }, /* West Mountain Radio RIGblaster P&P */
 	{ USB_DEVICE(0x10C4, 0x814B) }, /* West Mountain Radio RIGtalk */
-	{ USB_DEVICE(0x2405, 0x0003) }, /* West Mountain Radio RIGblaster Advantage */
 	{ USB_DEVICE(0x10C4, 0x8156) }, /* B&G H3000 link cable */
 	{ USB_DEVICE(0x10C4, 0x815E) }, /* Helicomm IP-Link 1220-DVM */
 	{ USB_DEVICE(0x10C4, 0x815F) }, /* Timewave HamLinkUSB */
@@ -111,7 +108,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x8218) }, /* Lipowsky Industrie Elektronik GmbH, HARP-1 */
 	{ USB_DEVICE(0x10C4, 0x822B) }, /* Modem EDGE(GSM) Comander 2 */
 	{ USB_DEVICE(0x10C4, 0x826B) }, /* Cygnal Integrated Products, Inc., Fasttrax GPS demonstration module */
-	{ USB_DEVICE(0x10C4, 0x8281) }, /* Nanotec Plug & Drive */
 	{ USB_DEVICE(0x10C4, 0x8293) }, /* Telegesis ETRX2USB */
 	{ USB_DEVICE(0x10C4, 0x82F9) }, /* Procyon AVS */
 	{ USB_DEVICE(0x10C4, 0x8341) }, /* Siemens MC35PU GPRS Modem */
@@ -124,17 +120,8 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x8477) }, /* Balluff RFID */
 	{ USB_DEVICE(0x10C4, 0x85EA) }, /* AC-Services IBUS-IF */
 	{ USB_DEVICE(0x10C4, 0x85EB) }, /* AC-Services CIS-IBUS */
-	{ USB_DEVICE(0x10C4, 0x85F8) }, /* Virtenio Preon32 */
 	{ USB_DEVICE(0x10C4, 0x8664) }, /* AC-Services CAN-IF */
 	{ USB_DEVICE(0x10C4, 0x8665) }, /* AC-Services OBD-IF */
-	{ USB_DEVICE(0x10C4, 0x8856) },	/* CEL EM357 ZigBee USB Stick - LR */
-	{ USB_DEVICE(0x10C4, 0x8857) },	/* CEL EM357 ZigBee USB Stick */
-	{ USB_DEVICE(0x10C4, 0x88A4) }, /* MMB Networks ZigBee USB Device */
-	{ USB_DEVICE(0x10C4, 0x88A5) }, /* Planet Innovation Ingeni ZigBee USB Device */
-	{ USB_DEVICE(0x10C4, 0x8946) }, /* Ketra N1 Wireless Interface */
-	{ USB_DEVICE(0x10C4, 0x8977) },	/* CEL MeshWorks DevKit Device */
-	{ USB_DEVICE(0x10C4, 0x8998) }, /* KCF Technologies PRN */
-	{ USB_DEVICE(0x10C4, 0x8A2A) }, /* HubZ dual ZigBee and Z-Wave dongle */
 	{ USB_DEVICE(0x10C4, 0xEA60) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA61) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA70) }, /* Silicon Labs factory default */
@@ -155,8 +142,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x166A, 0x0305) }, /* Clipsal C-5000CT2 C-Bus Spectrum Colour Touchscreen */
 	{ USB_DEVICE(0x166A, 0x0401) }, /* Clipsal L51xx C-Bus Architectural Dimmer */
 	{ USB_DEVICE(0x166A, 0x0101) }, /* Clipsal 5560884 C-Bus Multi-room Audio Matrix Switcher */
-	{ USB_DEVICE(0x16C0, 0x09B0) }, /* Lunatico Seletek */
-	{ USB_DEVICE(0x16C0, 0x09B1) }, /* Lunatico Seletek */
 	{ USB_DEVICE(0x16D6, 0x0001) }, /* Jablotron serial interface */
 	{ USB_DEVICE(0x16DC, 0x0010) }, /* W-IE-NE-R Plein & Baus GmbH PL512 Power Supply */
 	{ USB_DEVICE(0x16DC, 0x0011) }, /* W-IE-NE-R Plein & Baus GmbH RCM Remote Control for MARATON Power Supply */
@@ -167,33 +152,9 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x17F4, 0xAAAA) }, /* Wavesense Jazz blood glucose meter */
 	{ USB_DEVICE(0x1843, 0x0200) }, /* Vaisala USB Instrument Cable */
 	{ USB_DEVICE(0x18EF, 0xE00F) }, /* ELV USB-I2C-Interface */
-	{ USB_DEVICE(0x1ADB, 0x0001) }, /* Schweitzer Engineering C662 Cable */
-	{ USB_DEVICE(0x1B1C, 0x1C00) }, /* Corsair USB Dongle */
-	{ USB_DEVICE(0x1BA4, 0x0002) },	/* Silicon Labs 358x factory default */
 	{ USB_DEVICE(0x1BE3, 0x07A6) }, /* WAGO 750-923 USB Service Cable */
-	{ USB_DEVICE(0x1D6F, 0x0010) }, /* Seluxit ApS RF Dongle */
 	{ USB_DEVICE(0x1E29, 0x0102) }, /* Festo CPX-USB */
 	{ USB_DEVICE(0x1E29, 0x0501) }, /* Festo CMSP */
-	{ USB_DEVICE(0x1FB9, 0x0100) }, /* Lake Shore Model 121 Current Source */
-	{ USB_DEVICE(0x1FB9, 0x0200) }, /* Lake Shore Model 218A Temperature Monitor */
-	{ USB_DEVICE(0x1FB9, 0x0201) }, /* Lake Shore Model 219 Temperature Monitor */
-	{ USB_DEVICE(0x1FB9, 0x0202) }, /* Lake Shore Model 233 Temperature Transmitter */
-	{ USB_DEVICE(0x1FB9, 0x0203) }, /* Lake Shore Model 235 Temperature Transmitter */
-	{ USB_DEVICE(0x1FB9, 0x0300) }, /* Lake Shore Model 335 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0301) }, /* Lake Shore Model 336 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0302) }, /* Lake Shore Model 350 Temperature Controller */
-	{ USB_DEVICE(0x1FB9, 0x0303) }, /* Lake Shore Model 371 AC Bridge */
-	{ USB_DEVICE(0x1FB9, 0x0400) }, /* Lake Shore Model 411 Handheld Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0401) }, /* Lake Shore Model 425 Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0402) }, /* Lake Shore Model 455A Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0403) }, /* Lake Shore Model 475A Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0404) }, /* Lake Shore Model 465 Three Axis Gaussmeter */
-	{ USB_DEVICE(0x1FB9, 0x0600) }, /* Lake Shore Model 625A Superconducting MPS */
-	{ USB_DEVICE(0x1FB9, 0x0601) }, /* Lake Shore Model 642A Magnet Power Supply */
-	{ USB_DEVICE(0x1FB9, 0x0602) }, /* Lake Shore Model 648 Magnet Power Supply */
-	{ USB_DEVICE(0x1FB9, 0x0700) }, /* Lake Shore Model 737 VSM Controller */
-	{ USB_DEVICE(0x1FB9, 0x0701) }, /* Lake Shore Model 776 Hall Matrix */
-	{ USB_DEVICE(0x2626, 0xEA60) }, /* Aruba Networks 7xxx USB Serial Console */
 	{ USB_DEVICE(0x3195, 0xF190) }, /* Link Instruments MSO-19 */
 	{ USB_DEVICE(0x3195, 0xF280) }, /* Link Instruments MSO-28 */
 	{ USB_DEVICE(0x3195, 0xF281) }, /* Link Instruments MSO-28 */
@@ -205,13 +166,6 @@ MODULE_DEVICE_TABLE(usb, id_table);
 
 struct cp210x_port_private {
 	__u8			bInterfaceNumber;
-};
-
-static struct usb_driver cp210x_driver = {
-	.name		= "cp210x",
-	.probe		= usb_serial_probe,
-	.disconnect	= usb_serial_disconnect,
-	.id_table	= id_table,
 };
 
 static struct usb_serial_driver cp210x_device = {
@@ -239,8 +193,10 @@ static struct usb_serial_driver * const serial_drivers[] = {
 };
 
 /* Config request types */
-#define REQTYPE_HOST_TO_DEVICE	0x41
-#define REQTYPE_DEVICE_TO_HOST	0xc1
+#define REQTYPE_HOST_TO_INTERFACE	0x41
+#define REQTYPE_INTERFACE_TO_HOST	0xc1
+#define REQTYPE_HOST_TO_DEVICE	0x40
+#define REQTYPE_DEVICE_TO_HOST	0xc0
 
 /* Config request codes */
 #define CP210X_IFC_ENABLE	0x00
@@ -337,7 +293,7 @@ static int cp210x_get_config(struct usb_serial_port *port, u8 request,
 
 	/* Issue the request, attempting to read 'size' bytes */
 	result = usb_control_msg(serial->dev, usb_rcvctrlpipe(serial->dev, 0),
-				request, REQTYPE_DEVICE_TO_HOST, 0x0000,
+				request, REQTYPE_INTERFACE_TO_HOST, 0x0000,
 				port_priv->bInterfaceNumber, buf, size,
 				USB_CTRL_GET_TIMEOUT);
 
@@ -391,13 +347,13 @@ static int cp210x_set_config(struct usb_serial_port *port, u8 request,
 	if (size > 2) {
 		result = usb_control_msg(serial->dev,
 				usb_sndctrlpipe(serial->dev, 0),
-				request, REQTYPE_HOST_TO_DEVICE, 0x0000,
+				request, REQTYPE_HOST_TO_INTERFACE, 0x0000,
 				port_priv->bInterfaceNumber, buf, size,
 				USB_CTRL_SET_TIMEOUT);
 	} else {
 		result = usb_control_msg(serial->dev,
 				usb_sndctrlpipe(serial->dev, 0),
-				request, REQTYPE_HOST_TO_DEVICE, data[0],
+				request, REQTYPE_HOST_TO_INTERFACE, data[0],
 				port_priv->bInterfaceNumber, NULL, 0,
 				USB_CTRL_SET_TIMEOUT);
 	}
@@ -473,8 +429,6 @@ static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
 	int result;
 
-	dbg("%s - port %d", __func__, port->number);
-
 	result = cp210x_set_config_single(port, CP210X_IFC_ENABLE,
 								UART_ENABLE);
 	if (result) {
@@ -494,8 +448,6 @@ static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 static void cp210x_close(struct usb_serial_port *port)
 {
-	dbg("%s - port %d", __func__, port->number);
-
 	usb_serial_generic_close(port);
 
 	mutex_lock(&port->serial->disc_mutex);
@@ -538,8 +490,6 @@ static void cp210x_get_termios_port(struct usb_serial_port *port,
 	unsigned int cflag, modem_ctl[4];
 	unsigned int baud;
 	unsigned int bits;
-
-	dbg("%s - port %d", __func__, port->number);
 
 	cp210x_get_config(port, CP210X_GET_BAUDRATE, &baud, 4);
 
@@ -838,8 +788,6 @@ static int cp210x_tiocmset_port(struct usb_serial_port *port,
 {
 	unsigned int control = 0;
 
-	dbg("%s - port %d", __func__, port->number);
-
 	if (set & TIOCM_RTS) {
 		control |= CONTROL_RTS;
 		control |= CONTROL_WRITE_RTS;
@@ -876,8 +824,6 @@ static int cp210x_tiocmget (struct tty_struct *tty)
 	unsigned int control;
 	int result;
 
-	dbg("%s - port %d", __func__, port->number);
-
 	cp210x_get_config(port, CP210X_GET_MDMSTS, &control, 1);
 
 	result = ((control & CONTROL_DTR) ? TIOCM_DTR : 0)
@@ -897,7 +843,6 @@ static void cp210x_break_ctl (struct tty_struct *tty, int break_state)
 	struct usb_serial_port *port = tty->driver_data;
 	unsigned int state;
 
-	dbg("%s - port %d", __func__, port->number);
 	if (break_state == 0)
 		state = BREAK_OFF;
 	else
@@ -942,7 +887,7 @@ static void cp210x_release(struct usb_serial *serial)
 	}
 }
 
-module_usb_serial_driver(cp210x_driver, serial_drivers);
+module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_VERSION(DRIVER_VERSION);

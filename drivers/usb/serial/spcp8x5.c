@@ -151,17 +151,10 @@ enum spcp8x5_type {
 	SPCP835_TYPE,
 };
 
-static struct usb_driver spcp8x5_driver = {
-	.name =			"spcp8x5",
-	.probe =		usb_serial_probe,
-	.disconnect =		usb_serial_disconnect,
-	.id_table =		id_table,
-};
-
-
 struct spcp8x5_private {
 	spinlock_t 	lock;
 	enum spcp8x5_type	type;
+	wait_queue_head_t	delta_msr_wait;
 	u8 			line_control;
 	u8 			line_status;
 };
@@ -195,6 +188,7 @@ static int spcp8x5_startup(struct usb_serial *serial)
 			goto cleanup;
 
 		spin_lock_init(&priv->lock);
+		init_waitqueue_head(&priv->delta_msr_wait);
 		priv->type = type;
 		usb_set_serial_port_data(serial->port[i] , priv);
 	}
@@ -337,6 +331,7 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 	struct spcp8x5_private *priv = usb_get_serial_port_data(port);
 	unsigned long flags;
 	unsigned int cflag = tty->termios->c_cflag;
+	unsigned int old_cflag = old_termios->c_cflag;
 	unsigned short uartdata;
 	unsigned char buf[2] = {0, 0};
 	int baud;
@@ -345,15 +340,15 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 
 
 	/* check that they really want us to change something */
-	if (old_termios && !tty_termios_hw_change(tty->termios, old_termios))
+	if (!tty_termios_hw_change(tty->termios, old_termios))
 		return;
 
 	/* set DTR/RTS active */
 	spin_lock_irqsave(&priv->lock, flags);
 	control = priv->line_control;
-	if (old_termios && (old_termios->c_cflag & CBAUD) == B0) {
+	if ((old_cflag & CBAUD) == B0) {
 		priv->line_control |= MCR_DTR;
-		if (!(old_termios->c_cflag & CRTSCTS))
+		if (!(old_cflag & CRTSCTS))
 			priv->line_control |= MCR_RTS;
 	}
 	if (control != priv->line_control) {
@@ -393,20 +388,22 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 	}
 
 	/* Set Data Length : 00:5bit, 01:6bit, 10:7bit, 11:8bit */
-	switch (cflag & CSIZE) {
-	case CS5:
-		buf[1] |= SET_UART_FORMAT_SIZE_5;
-		break;
-	case CS6:
-		buf[1] |= SET_UART_FORMAT_SIZE_6;
-		break;
-	case CS7:
-		buf[1] |= SET_UART_FORMAT_SIZE_7;
-		break;
-	default:
-	case CS8:
-		buf[1] |= SET_UART_FORMAT_SIZE_8;
-		break;
+	if (cflag & CSIZE) {
+		switch (cflag & CSIZE) {
+		case CS5:
+			buf[1] |= SET_UART_FORMAT_SIZE_5;
+			break;
+		case CS6:
+			buf[1] |= SET_UART_FORMAT_SIZE_6;
+			break;
+		case CS7:
+			buf[1] |= SET_UART_FORMAT_SIZE_7;
+			break;
+		default:
+		case CS8:
+			buf[1] |= SET_UART_FORMAT_SIZE_8;
+			break;
+		}
 	}
 
 	/* Set Stop bit2 : 0:1bit 1:2bit */
@@ -428,7 +425,7 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
 	if (i < 0)
 		dev_err(&port->dev, "Set UART format %#x failed (error = %d)\n",
 			uartdata, i);
-	dbg("0x21:0x40:0:0  %d", i);
+	dev_dbg(&port->dev, "0x21:0x40:0:0  %d\n", i);
 
 	if (cflag & CRTSCTS) {
 		/* enable hardware flow control */
@@ -441,14 +438,13 @@ static void spcp8x5_set_termios(struct tty_struct *tty,
  * status of the device. */
 static int spcp8x5_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
+	struct ktermios tmp_termios;
 	struct usb_serial *serial = port->serial;
 	struct spcp8x5_private *priv = usb_get_serial_port_data(port);
 	int ret;
 	unsigned long flags;
 	u8 status = 0x30;
 	/* status 0x30 means DSR and CTS = 1 other CDC RI and delta = 0 */
-
-	dbg("%s -  port %d", __func__, port->number);
 
 	usb_clear_halt(serial->dev, port->write_urb->pipe);
 	usb_clear_halt(serial->dev, port->read_urb->pipe);
@@ -463,7 +459,7 @@ static int spcp8x5_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	/* Setup termios */
 	if (tty)
-		spcp8x5_set_termios(tty, port, NULL);
+		spcp8x5_set_termios(tty, port, &tmp_termios);
 
 	spcp8x5_get_msr(serial->dev, &status, priv->type);
 
@@ -495,7 +491,7 @@ static void spcp8x5_process_read_urb(struct urb *urb)
 	priv->line_status &= ~UART_STATE_TRANSIENT_MASK;
 	spin_unlock_irqrestore(&priv->lock, flags);
 	/* wake up the wait for termios */
-	wake_up_interruptible(&port->delta_msr_wait);
+	wake_up_interruptible(&priv->delta_msr_wait);
 
 	if (!urb->actual_length)
 		return;
@@ -545,14 +541,11 @@ static int spcp8x5_wait_modem_info(struct usb_serial_port *port,
 
 	while (1) {
 		/* wake up in bulk read */
-		interruptible_sleep_on(&port->delta_msr_wait);
+		interruptible_sleep_on(&priv->delta_msr_wait);
 
 		/* see if a signal did it */
 		if (signal_pending(current))
 			return -ERESTARTSYS;
-
-		if (port->serial->disconnected)
-			return -EIO;
 
 		spin_lock_irqsave(&priv->lock, flags);
 		status = priv->line_status;
@@ -576,15 +569,19 @@ static int spcp8x5_ioctl(struct tty_struct *tty,
 			 unsigned int cmd, unsigned long arg)
 {
 	struct usb_serial_port *port = tty->driver_data;
-	dbg("%s (%d) cmd = 0x%04x", __func__, port->number, cmd);
+
+	dev_dbg(&port->dev, "%s (%d) cmd = 0x%04x\n", __func__,
+		port->number, cmd);
 
 	switch (cmd) {
 	case TIOCMIWAIT:
-		dbg("%s (%d) TIOCMIWAIT", __func__,  port->number);
+		dev_dbg(&port->dev, "%s (%d) TIOCMIWAIT\n", __func__,
+			port->number);
 		return spcp8x5_wait_modem_info(port, arg);
 
 	default:
-		dbg("%s not supported = 0x%04x", __func__, cmd);
+		dev_dbg(&port->dev, "%s not supported = 0x%04x", __func__,
+			cmd);
 		break;
 	}
 
@@ -663,7 +660,7 @@ static struct usb_serial_driver * const serial_drivers[] = {
 	&spcp8x5_device, NULL
 };
 
-module_usb_serial_driver(spcp8x5_driver, serial_drivers);
+module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_VERSION(DRIVER_VERSION);

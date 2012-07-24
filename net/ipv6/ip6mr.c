@@ -138,12 +138,9 @@ static struct mr6_table *ip6mr_get_table(struct net *net, u32 id)
 static int ip6mr_fib_lookup(struct net *net, struct flowi6 *flp6,
 			    struct mr6_table **mrt)
 {
-	int err;
 	struct ip6mr_result res;
-	struct fib_lookup_arg arg = {
-		.result = &res,
-		.flags = FIB_LOOKUP_NOREF,
-	};
+	struct fib_lookup_arg arg = { .result = &res, };
+	int err;
 
 	err = fib_rules_lookup(net->ipv6.mr6_rules_ops,
 			       flowi6_to_flowi(flp6), 0, &arg);
@@ -259,12 +256,10 @@ static void __net_exit ip6mr_rules_exit(struct net *net)
 {
 	struct mr6_table *mrt, *next;
 
-	rtnl_lock();
 	list_for_each_entry_safe(mrt, next, &net->ipv6.mr6_tables, list) {
 		list_del(&mrt->list);
 		ip6mr_free_table(mrt);
 	}
-	rtnl_unlock();
 	fib_rules_unregister(net->ipv6.mr6_rules_ops);
 }
 #else
@@ -291,10 +286,7 @@ static int __net_init ip6mr_rules_init(struct net *net)
 
 static void __net_exit ip6mr_rules_exit(struct net *net)
 {
-	rtnl_lock();
 	ip6mr_free_table(net->ipv6.mrt6);
-	net->ipv6.mrt6 = NULL;
-	rtnl_unlock();
 }
 #endif
 
@@ -1155,8 +1147,7 @@ static int ip6mr_cache_report(struct mr6_table *mrt, struct sk_buff *pkt,
 	 */
 	ret = sock_queue_rcv_skb(mrt->mroute6_sk, skb);
 	if (ret < 0) {
-		if (net_ratelimit())
-			printk(KERN_WARNING "mroute6: pending queue full, dropping entries.\n");
+		net_warn_ratelimited("mroute6: pending queue full, dropping entries\n");
 		kfree_skb(skb);
 	}
 
@@ -1359,7 +1350,7 @@ int __init ip6_mr_init(void)
 		goto reg_notif_fail;
 #ifdef CONFIG_IPV6_PIMSM_V2
 	if (inet6_add_protocol(&pim6_protocol, IPPROTO_PIM) < 0) {
-		printk(KERN_ERR "ip6_mr_init: can't add PIM protocol\n");
+		pr_err("%s: can't add PIM protocol\n", __func__);
 		err = -EAGAIN;
 		goto add_proto_fail;
 	}
@@ -1895,6 +1886,8 @@ static inline int ip6mr_forward2_finish(struct sk_buff *skb)
 {
 	IP6_INC_STATS_BH(dev_net(skb_dst(skb)->dev), ip6_dst_idev(skb_dst(skb)),
 			 IPSTATS_MIB_OUTFORWDATAGRAMS);
+	IP6_ADD_STATS_BH(dev_net(skb_dst(skb)->dev), ip6_dst_idev(skb_dst(skb)),
+			 IPSTATS_MIB_OUTOCTETS, skb->len);
 	return dst_output(skb);
 }
 
@@ -2223,14 +2216,15 @@ static int ip6mr_fill_mroute(struct mr6_table *mrt, struct sk_buff *skb,
 	rtm->rtm_src_len  = 128;
 	rtm->rtm_tos      = 0;
 	rtm->rtm_table    = mrt->id;
-	NLA_PUT_U32(skb, RTA_TABLE, mrt->id);
+	if (nla_put_u32(skb, RTA_TABLE, mrt->id))
+		goto nla_put_failure;
 	rtm->rtm_scope    = RT_SCOPE_UNIVERSE;
 	rtm->rtm_protocol = RTPROT_UNSPEC;
 	rtm->rtm_flags    = 0;
 
-	NLA_PUT(skb, RTA_SRC, 16, &c->mf6c_origin);
-	NLA_PUT(skb, RTA_DST, 16, &c->mf6c_mcastgrp);
-
+	if (nla_put(skb, RTA_SRC, 16, &c->mf6c_origin) ||
+	    nla_put(skb, RTA_DST, 16, &c->mf6c_mcastgrp))
+		goto nla_put_failure;
 	if (__ip6mr_fill_mroute(mrt, skb, c, rtm) < 0)
 		goto nla_put_failure;
 

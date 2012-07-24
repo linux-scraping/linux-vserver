@@ -87,6 +87,8 @@
 				XDR_QUADLEN(NFS_ACL_INLINE_BUFSIZE))
 #define ACL3_setaclres_sz	(1+NFS3_post_op_attr_sz)
 
+static int nfs3_stat_to_errno(enum nfs_stat);
+
 /*
  * Map file type to S_IFMT bits
  */
@@ -681,6 +683,7 @@ static int decode_fattr3(struct xdr_stream *xdr, struct nfs_fattr *fattr)
 	p = xdr_decode_nfstime3(p, &fattr->atime);
 	p = xdr_decode_nfstime3(p, &fattr->mtime);
 	xdr_decode_nfstime3(p, &fattr->ctime);
+	fattr->change_attr = nfs_timespec_to_change_attr(&fattr->ctime);
 
 	fattr->valid |= NFS_ATTR_FATTR_V3;
 	return 0;
@@ -731,12 +734,14 @@ static int decode_wcc_attr(struct xdr_stream *xdr, struct nfs_fattr *fattr)
 		goto out_overflow;
 
 	fattr->valid |= NFS_ATTR_FATTR_PRESIZE
+		| NFS_ATTR_FATTR_PRECHANGE
 		| NFS_ATTR_FATTR_PREMTIME
 		| NFS_ATTR_FATTR_PRECTIME;
 
 	p = xdr_decode_size3(p, &fattr->pre_size);
 	p = xdr_decode_nfstime3(p, &fattr->pre_mtime);
 	xdr_decode_nfstime3(p, &fattr->pre_ctime);
+	fattr->pre_change_attr = nfs_timespec_to_change_attr(&fattr->pre_ctime);
 
 	return 0;
 out_overflow:
@@ -1293,7 +1298,7 @@ static void nfs3_xdr_enc_readdirplus3args(struct rpc_rqst *req,
  *	};
  */
 static void encode_commit3args(struct xdr_stream *xdr,
-			       const struct nfs_writeargs *args)
+			       const struct nfs_commitargs *args)
 {
 	__be32 *p;
 
@@ -1306,7 +1311,7 @@ static void encode_commit3args(struct xdr_stream *xdr,
 
 static void nfs3_xdr_enc_commit3args(struct rpc_rqst *req,
 				     struct xdr_stream *xdr,
-				     const struct nfs_writeargs *args)
+				     const struct nfs_commitargs *args)
 {
 	encode_commit3args(xdr, args);
 }
@@ -1339,7 +1344,7 @@ static void nfs3_xdr_enc_setacl3args(struct rpc_rqst *req,
 	if (args->npages != 0)
 		xdr_write_pages(xdr, args->pages, 0, args->len);
 	else
-		xdr_reserve_space(xdr, args->len);
+		xdr_reserve_space(xdr, NFS_ACL_INLINE_BUFSIZE);
 
 	error = nfsacl_encode(xdr->buf, base, args->inode,
 			    (args->mask & NFS_ACL) ?
@@ -1391,7 +1396,7 @@ static int nfs3_xdr_dec_getattr3res(struct rpc_rqst *req,
 out:
 	return error;
 out_default:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1430,7 +1435,7 @@ static int nfs3_xdr_dec_setattr3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1478,7 +1483,7 @@ out_default:
 	error = decode_post_op_attr(xdr, result->dir_attr);
 	if (unlikely(error))
 		goto out;
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1519,7 +1524,7 @@ static int nfs3_xdr_dec_access3res(struct rpc_rqst *req,
 out:
 	return error;
 out_default:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1560,7 +1565,7 @@ static int nfs3_xdr_dec_readlink3res(struct rpc_rqst *req,
 out:
 	return error;
 out_default:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1642,7 +1647,7 @@ static int nfs3_xdr_dec_read3res(struct rpc_rqst *req, struct xdr_stream *xdr,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1712,7 +1717,7 @@ static int nfs3_xdr_dec_write3res(struct rpc_rqst *req, struct xdr_stream *xdr,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1776,7 +1781,7 @@ out_default:
 	error = decode_wcc_data(xdr, result->dir_attr);
 	if (unlikely(error))
 		goto out;
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1815,7 +1820,7 @@ static int nfs3_xdr_dec_remove3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1859,7 +1864,7 @@ static int nfs3_xdr_dec_rename3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -1902,7 +1907,7 @@ static int nfs3_xdr_dec_link3res(struct rpc_rqst *req, struct xdr_stream *xdr,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /**
@@ -2094,7 +2099,7 @@ out_default:
 	error = decode_post_op_attr(xdr, result->dir_attr);
 	if (unlikely(error))
 		goto out;
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -2162,7 +2167,7 @@ static int nfs3_xdr_dec_fsstat3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -2238,7 +2243,7 @@ static int nfs3_xdr_dec_fsinfo3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -2301,7 +2306,7 @@ static int nfs3_xdr_dec_pathconf3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 /*
@@ -2325,7 +2330,7 @@ out_status:
  */
 static int nfs3_xdr_dec_commit3res(struct rpc_rqst *req,
 				   struct xdr_stream *xdr,
-				   struct nfs_writeres *result)
+				   struct nfs_commitres *result)
 {
 	enum nfs_stat status;
 	int error;
@@ -2342,7 +2347,7 @@ static int nfs3_xdr_dec_commit3res(struct rpc_rqst *req,
 out:
 	return error;
 out_status:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 #ifdef CONFIG_NFS_V3_ACL
@@ -2407,7 +2412,7 @@ static int nfs3_xdr_dec_getacl3res(struct rpc_rqst *req,
 out:
 	return error;
 out_default:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 static int nfs3_xdr_dec_setacl3res(struct rpc_rqst *req,
@@ -2426,10 +2431,75 @@ static int nfs3_xdr_dec_setacl3res(struct rpc_rqst *req,
 out:
 	return error;
 out_default:
-	return nfs_stat_to_errno(status);
+	return nfs3_stat_to_errno(status);
 }
 
 #endif  /* CONFIG_NFS_V3_ACL */
+
+
+/*
+ * We need to translate between nfs status return values and
+ * the local errno values which may not be the same.
+ */
+static const struct {
+	int stat;
+	int errno;
+} nfs_errtbl[] = {
+	{ NFS_OK,		0		},
+	{ NFSERR_PERM,		-EPERM		},
+	{ NFSERR_NOENT,		-ENOENT		},
+	{ NFSERR_IO,		-errno_NFSERR_IO},
+	{ NFSERR_NXIO,		-ENXIO		},
+/*	{ NFSERR_EAGAIN,	-EAGAIN		}, */
+	{ NFSERR_ACCES,		-EACCES		},
+	{ NFSERR_EXIST,		-EEXIST		},
+	{ NFSERR_XDEV,		-EXDEV		},
+	{ NFSERR_NODEV,		-ENODEV		},
+	{ NFSERR_NOTDIR,	-ENOTDIR	},
+	{ NFSERR_ISDIR,		-EISDIR		},
+	{ NFSERR_INVAL,		-EINVAL		},
+	{ NFSERR_FBIG,		-EFBIG		},
+	{ NFSERR_NOSPC,		-ENOSPC		},
+	{ NFSERR_ROFS,		-EROFS		},
+	{ NFSERR_MLINK,		-EMLINK		},
+	{ NFSERR_NAMETOOLONG,	-ENAMETOOLONG	},
+	{ NFSERR_NOTEMPTY,	-ENOTEMPTY	},
+	{ NFSERR_DQUOT,		-EDQUOT		},
+	{ NFSERR_STALE,		-ESTALE		},
+	{ NFSERR_REMOTE,	-EREMOTE	},
+#ifdef EWFLUSH
+	{ NFSERR_WFLUSH,	-EWFLUSH	},
+#endif
+	{ NFSERR_BADHANDLE,	-EBADHANDLE	},
+	{ NFSERR_NOT_SYNC,	-ENOTSYNC	},
+	{ NFSERR_BAD_COOKIE,	-EBADCOOKIE	},
+	{ NFSERR_NOTSUPP,	-ENOTSUPP	},
+	{ NFSERR_TOOSMALL,	-ETOOSMALL	},
+	{ NFSERR_SERVERFAULT,	-EREMOTEIO	},
+	{ NFSERR_BADTYPE,	-EBADTYPE	},
+	{ NFSERR_JUKEBOX,	-EJUKEBOX	},
+	{ -1,			-EIO		}
+};
+
+/**
+ * nfs3_stat_to_errno - convert an NFS status code to a local errno
+ * @status: NFS status code to convert
+ *
+ * Returns a local errno value, or -EIO if the NFS status code is
+ * not recognized.  This function is used jointly by NFSv2 and NFSv3.
+ */
+static int nfs3_stat_to_errno(enum nfs_stat status)
+{
+	int i;
+
+	for (i = 0; nfs_errtbl[i].stat != -1; i++) {
+		if (nfs_errtbl[i].stat == (int)status)
+			return nfs_errtbl[i].errno;
+	}
+	dprintk("NFS: Unrecognized nfs status value: %u\n", status);
+	return nfs_errtbl[i].errno;
+}
+
 
 #define PROC(proc, argtype, restype, timer)				\
 [NFS3PROC_##proc] = {							\

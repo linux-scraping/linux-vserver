@@ -339,8 +339,6 @@
 
 #define AR_PHY_CCA_NOM_VAL_9330_2GHZ          -118
 
-#define AR9300_EXT_LNA_CTL_GPIO_AR9485 9
-
 /*
  * AGC Field Definitions
  */
@@ -469,6 +467,9 @@
 #define AR_PHY_ANALOG_SWAP       (AR_SM_BASE + 0x14c)
 #define AR_PHY_ADDAC_PARA_CTL    (AR_SM_BASE + 0x150)
 #define AR_PHY_XPA_CFG           (AR_SM_BASE + 0x158)
+
+#define AR_PHY_FRAME_CTL_CF_OVERLAP_WINDOW  3
+#define AR_PHY_FRAME_CTL_CF_OVERLAP_WINDOW_S    0
 
 #define AR_PHY_SPUR_MASK_A_CF_PUNC_MASK_IDX_A           0x0001FC00
 #define AR_PHY_SPUR_MASK_A_CF_PUNC_MASK_IDX_A_S         10

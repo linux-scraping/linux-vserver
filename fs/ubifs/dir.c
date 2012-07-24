@@ -170,8 +170,6 @@ struct inode *ubifs_new_inode(struct ubifs_info *c, const struct inode *dir,
 	return inode;
 }
 
-#ifdef CONFIG_UBIFS_FS_DEBUG
-
 static int dbg_check_name(const struct ubifs_info *c,
 			  const struct ubifs_dent_node *dent,
 			  const struct qstr *nm)
@@ -184,12 +182,6 @@ static int dbg_check_name(const struct ubifs_info *c,
 		return -EINVAL;
 	return 0;
 }
-
-#else
-
-#define dbg_check_name(c, dent, nm) 0
-
-#endif
 
 static struct dentry *ubifs_lookup(struct inode *dir, struct dentry *dentry,
 				   struct nameidata *nd)
@@ -357,50 +349,31 @@ static unsigned int vfs_dent_type(uint8_t type)
 static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 {
 	int err, over = 0;
-	loff_t pos = file->f_pos;
 	struct qstr nm;
 	union ubifs_key key;
 	struct ubifs_dent_node *dent;
 	struct inode *dir = file->f_path.dentry->d_inode;
 	struct ubifs_info *c = dir->i_sb->s_fs_info;
 
-	dbg_gen("dir ino %lu, f_pos %#llx", dir->i_ino, pos);
+	dbg_gen("dir ino %lu, f_pos %#llx", dir->i_ino, file->f_pos);
 
-	if (pos > UBIFS_S_KEY_HASH_MASK || pos == 2)
+	if (file->f_pos > UBIFS_S_KEY_HASH_MASK || file->f_pos == 2)
 		/*
 		 * The directory was seek'ed to a senseless position or there
 		 * are no more entries.
 		 */
 		return 0;
 
-	if (file->f_version == 0) {
-		/*
-		 * The file was seek'ed, which means that @file->private_data
-		 * is now invalid. This may also be just the first
-		 * 'ubifs_readdir()' invocation, in which case
-		 * @file->private_data is NULL, and the below code is
-		 * basically a no-op.
-		 */
-		kfree(file->private_data);
-		file->private_data = NULL;
-	}
-
-	/*
-	 * 'generic_file_llseek()' unconditionally sets @file->f_version to
-	 * zero, and we use this for detecting whether the file was seek'ed.
-	 */
-	file->f_version = 1;
-
 	/* File positions 0 and 1 correspond to "." and ".." */
-	if (pos == 0) {
+	if (file->f_pos == 0) {
 		ubifs_assert(!file->private_data);
 		over = filldir(dirent, ".", 1, 0, dir->i_ino, DT_DIR);
 		if (over)
 			return 0;
-		file->f_pos = pos = 1;
+		file->f_pos = 1;
 	}
 
-	if (pos == 1) {
+	if (file->f_pos == 1) {
 		ubifs_assert(!file->private_data);
 		over = filldir(dirent, "..", 2, 1,
 			       parent_ino(file->f_path.dentry), DT_DIR);
@@ -416,7 +389,7 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 			goto out;
 		}
 
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 	}
 
@@ -424,16 +397,17 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 	if (!dent) {
 		/*
 		 * The directory was seek'ed to and is now readdir'ed.
-		 * Find the entry corresponding to @pos or the closest one.
+		 * Find the entry corresponding to @file->f_pos or the
+		 * closest one.
 		 */
-		dent_key_init_hash(c, &key, dir->i_ino, pos);
+		dent_key_init_hash(c, &key, dir->i_ino, file->f_pos);
 		nm.name = NULL;
 		dent = ubifs_tnc_next_ent(c, &key, &nm);
 		if (IS_ERR(dent)) {
 			err = PTR_ERR(dent);
 			goto out;
 		}
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 	}
 
@@ -445,7 +419,7 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 			     ubifs_inode(dir)->creat_sqnum);
 
 		nm.len = le16_to_cpu(dent->nlen);
-		over = filldir(dirent, dent->name, nm.len, pos,
+		over = filldir(dirent, dent->name, nm.len, file->f_pos,
 			       le64_to_cpu(dent->inum),
 			       vfs_dent_type(dent->type));
 		if (over)
@@ -461,17 +435,9 @@ static int ubifs_readdir(struct file *file, void *dirent, filldir_t filldir)
 		}
 
 		kfree(file->private_data);
-		file->f_pos = pos = key_hash_flash(c, &dent->key);
+		file->f_pos = key_hash_flash(c, &dent->key);
 		file->private_data = dent;
 		cond_resched();
-
-		if (file->f_version == 0)
-			/*
-			 * The file was seek'ed meanwhile, lets return and start
-			 * reading direntries from the new position on the next
-			 * invocation.
-			 */
-			return 0;
 	}
 
 out:
@@ -482,13 +448,15 @@ out:
 
 	kfree(file->private_data);
 	file->private_data = NULL;
-	/* 2 is a special value indicating that there are no more direntries */
 	file->f_pos = 2;
 	return 0;
 }
 
+/* If a directory is seeked, we have to free saved readdir() state */
 static loff_t ubifs_dir_llseek(struct file *file, loff_t offset, int origin)
 {
+	kfree(file->private_data);
+	file->private_data = NULL;
 	return generic_file_llseek(file, offset, origin);
 }
 
@@ -1001,7 +969,7 @@ static int ubifs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct ubifs_budget_req ino_req = { .dirtied_ino = 1,
 			.dirtied_ino_d = ALIGN(old_inode_ui->data_len, 8) };
 	struct timespec time;
-	unsigned int uninitialized_var(saved_nlink);
+	unsigned int saved_nlink;
 
 	/*
 	 * Budget request settings: deletion direntry, new direntry, removing
@@ -1159,16 +1127,7 @@ int ubifs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 	struct ubifs_inode *ui = ubifs_inode(inode);
 
 	mutex_lock(&ui->ui_mutex);
-	stat->dev = inode->i_sb->s_dev;
-	stat->ino = inode->i_ino;
-	stat->mode = inode->i_mode;
-	stat->nlink = inode->i_nlink;
-	stat->uid = inode->i_uid;
-	stat->gid = inode->i_gid;
-	stat->rdev = inode->i_rdev;
-	stat->atime = inode->i_atime;
-	stat->mtime = inode->i_mtime;
-	stat->ctime = inode->i_ctime;
+	generic_fillattr(inode, stat);
 	stat->blksize = UBIFS_BLOCK_SIZE;
 	stat->size = ui->ui_size;
 
@@ -1211,12 +1170,10 @@ const struct inode_operations ubifs_dir_inode_operations = {
 	.rename      = ubifs_rename,
 	.setattr     = ubifs_setattr,
 	.getattr     = ubifs_getattr,
-#ifdef CONFIG_UBIFS_FS_XATTR
 	.setxattr    = ubifs_setxattr,
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
-#endif
 };
 
 const struct file_operations ubifs_dir_operations = {

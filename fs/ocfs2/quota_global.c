@@ -399,8 +399,6 @@ int ocfs2_global_read_info(struct super_block *sb, int type)
 			      msecs_to_jiffies(oinfo->dqi_syncms));
 
 out_err:
-	if (status)
-		mlog_errno(status);
 	return status;
 out_unlock:
 	ocfs2_unlock_global_qf(oinfo, 0);
@@ -712,12 +710,6 @@ static int ocfs2_release_dquot(struct dquot *dquot)
 	 */
 	if (status < 0)
 		mlog_errno(status);
-	/*
-	 * Clear dq_off so that we search for the structure in quota file next
-	 * time we acquire it. The structure might be deleted and reallocated
-	 * elsewhere by another node while our dquot structure is on freelist.
-	 */
-	dquot->dq_off = 0;
 	clear_bit(DQ_ACTIVE_B, &dquot->dq_flags);
 out_trans:
 	ocfs2_commit_trans(osb, handle);
@@ -756,17 +748,16 @@ static int ocfs2_acquire_dquot(struct dquot *dquot)
 	status = ocfs2_lock_global_qf(info, 1);
 	if (status < 0)
 		goto out;
-	status = ocfs2_qinfo_lock(info, 0);
-	if (status < 0)
-		goto out_dq;
-	/*
-	 * We always want to read dquot structure from disk because we don't
-	 * know what happened with it while it was on freelist.
-	 */
-	status = qtree_read_dquot(&info->dqi_gi, dquot);
-	ocfs2_qinfo_unlock(info, 0);
-	if (status < 0)
-		goto out_dq;
+	if (!test_bit(DQ_READ_B, &dquot->dq_flags)) {
+		status = ocfs2_qinfo_lock(info, 0);
+		if (status < 0)
+			goto out_dq;
+		status = qtree_read_dquot(&info->dqi_gi, dquot);
+		ocfs2_qinfo_unlock(info, 0);
+		if (status < 0)
+			goto out_dq;
+	}
+	set_bit(DQ_READ_B, &dquot->dq_flags);
 
 	OCFS2_DQUOT(dquot)->dq_use_count++;
 	OCFS2_DQUOT(dquot)->dq_origspace = dquot->dq_dqb.dqb_curspace;

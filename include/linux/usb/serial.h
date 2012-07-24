@@ -1,7 +1,7 @@
 /*
  * USB Serial Converter stuff
  *
- *	Copyright (C) 1999 - 2005
+ *	Copyright (C) 1999 - 2012
  *	    Greg Kroah-Hartman (greg@kroah.com)
  *
  *	This program is free software; you can redistribute it and/or modify
@@ -66,7 +66,6 @@
  *	port.
  * @flags: usb serial port flags
  * @write_wait: a wait_queue_head_t used by the port.
- * @delta_msr_wait: modem-status-change wait queue
  * @work: work queue entry for the line discipline waking up.
  * @throttled: nonzero if the read urb is inactive to throttle the device
  * @throttle_req: nonzero if the tty wants to throttle us
@@ -113,7 +112,6 @@ struct usb_serial_port {
 
 	unsigned long		flags;
 	wait_queue_head_t	write_wait;
-	wait_queue_head_t	delta_msr_wait;
 	struct work_struct	work;
 	char			throttled;
 	char			throttle_req;
@@ -251,6 +249,7 @@ struct usb_serial_driver {
 
 	int (*suspend)(struct usb_serial *serial, pm_message_t message);
 	int (*resume)(struct usb_serial *serial);
+	int (*reset_resume)(struct usb_serial *serial);
 
 	/* serial function calls */
 	/* Called by console and by the tty layer */
@@ -294,15 +293,10 @@ struct usb_serial_driver {
 #define to_usb_serial_driver(d) \
 	container_of(d, struct usb_serial_driver, driver)
 
-extern int usb_serial_register_drivers(struct usb_driver *udriver,
-		struct usb_serial_driver * const serial_drivers[]);
-extern void usb_serial_deregister_drivers(struct usb_driver *udriver,
-		struct usb_serial_driver * const serial_drivers[]);
+extern int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[],
+		const char *name, const struct usb_device_id *id_table);
+extern void usb_serial_deregister_drivers(struct usb_serial_driver *const serial_drivers[]);
 extern void usb_serial_port_softint(struct usb_serial_port *port);
-
-extern int usb_serial_probe(struct usb_interface *iface,
-			    const struct usb_device_id *id);
-extern void usb_serial_disconnect(struct usb_interface *iface);
 
 extern int usb_serial_suspend(struct usb_interface *intf, pm_message_t message);
 extern int usb_serial_resume(struct usb_interface *intf);
@@ -402,8 +396,8 @@ do {									\
 
 /*
  * module_usb_serial_driver() - Helper macro for registering a USB Serial driver
- * @__usb_driver: usb_driver struct to register
  * @__serial_drivers: list of usb_serial drivers to register
+ * @__ids: all device ids that @__serial_drivers bind to
  *
  * Helper macro for USB serial drivers which do not do anything special
  * in module init/exit. This eliminates a lot of boilerplate. Each
@@ -411,9 +405,21 @@ do {									\
  * module_init() and module_exit()
  *
  */
-#define module_usb_serial_driver(__usb_driver, __serial_drivers)	\
-	module_driver(__usb_driver, usb_serial_register_drivers,	\
-		       usb_serial_deregister_drivers, __serial_drivers)
+#define usb_serial_module_driver(__name, __serial_drivers, __ids)	\
+static int __init usb_serial_module_init(void)				\
+{									\
+	return usb_serial_register_drivers(__serial_drivers,		\
+					   __name, __ids);		\
+}									\
+module_init(usb_serial_module_init);					\
+static void __exit usb_serial_module_exit(void)				\
+{									\
+	usb_serial_deregister_drivers(__serial_drivers);		\
+}									\
+module_exit(usb_serial_module_exit);
+
+#define module_usb_serial_driver(__serial_drivers, __ids)		\
+	usb_serial_module_driver(KBUILD_MODNAME, __serial_drivers, __ids)
 
 #endif /* __LINUX_USB_SERIAL_H */
 

@@ -68,7 +68,7 @@ struct dentry *simple_lookup(struct inode *dir, struct dentry *dentry, struct na
 
 int dcache_dir_open(struct inode *inode, struct file *file)
 {
-	static struct qstr cursor_name = {.len = 1, .name = "."};
+	static struct qstr cursor_name = QSTR_INIT(".", 1);
 
 	file->private_data = d_alloc(file->f_path.dentry, &cursor_name);
 
@@ -104,18 +104,18 @@ loff_t dcache_dir_lseek(struct file *file, loff_t offset, int origin)
 
 			spin_lock(&dentry->d_lock);
 			/* d_lock not required for cursor */
-			list_del(&cursor->d_child);
+			list_del(&cursor->d_u.d_child);
 			p = dentry->d_subdirs.next;
 			while (n && p != &dentry->d_subdirs) {
 				struct dentry *next;
-				next = list_entry(p, struct dentry, d_child);
+				next = list_entry(p, struct dentry, d_u.d_child);
 				spin_lock_nested(&next->d_lock, DENTRY_D_LOCK_NESTED);
 				if (simple_positive(next))
 					n--;
 				spin_unlock(&next->d_lock);
 				p = p->next;
 			}
-			list_add_tail(&cursor->d_child, p);
+			list_add_tail(&cursor->d_u.d_child, p);
 			spin_unlock(&dentry->d_lock);
 		}
 	}
@@ -140,7 +140,7 @@ static inline int do_dcache_readdir_filter(struct file *filp,
 {
 	struct dentry *dentry = filp->f_path.dentry;
 	struct dentry *cursor = filp->private_data;
-	struct list_head *p, *q = &cursor->d_child;
+	struct list_head *p, *q = &cursor->d_u.d_child;
 	ino_t ino;
 	int i = filp->f_pos;
 
@@ -166,7 +166,7 @@ static inline int do_dcache_readdir_filter(struct file *filp,
 
 			for (p=q->next; p != &dentry->d_subdirs; p=p->next) {
 				struct dentry *next;
-				next = list_entry(p, struct dentry, d_child);
+				next = list_entry(p, struct dentry, d_u.d_child);
 				if (filter && !filter(next))
 					continue;
 				spin_lock_nested(&next->d_lock, DENTRY_D_LOCK_NESTED);
@@ -239,7 +239,7 @@ struct dentry *mount_pseudo(struct file_system_type *fs_type, char *name,
 	struct super_block *s = sget(fs_type, NULL, set_anon_super, NULL);
 	struct dentry *dentry;
 	struct inode *root;
-	struct qstr d_name = {.name = name, .len = strlen(name)};
+	struct qstr d_name = QSTR_INIT(name, strlen(name));
 
 	if (IS_ERR(s))
 		return ERR_CAST(s);
@@ -303,7 +303,7 @@ int simple_empty(struct dentry *dentry)
 	int ret = 0;
 
 	spin_lock(&dentry->d_lock);
-	list_for_each_entry(child, &dentry->d_subdirs, d_child) {
+	list_for_each_entry(child, &dentry->d_subdirs, d_u.d_child) {
 		spin_lock_nested(&child->d_lock, DENTRY_D_LOCK_NESTED);
 		if (simple_positive(child)) {
 			spin_unlock(&child->d_lock);

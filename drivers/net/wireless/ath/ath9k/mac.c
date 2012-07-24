@@ -133,7 +133,15 @@ EXPORT_SYMBOL(ath9k_hw_updatetxtriglevel);
 
 void ath9k_hw_abort_tx_dma(struct ath_hw *ah)
 {
+	int maxdelay = 1000;
 	int i, q;
+
+	if (ah->curchan) {
+		if (IS_CHAN_HALF_RATE(ah->curchan))
+			maxdelay *= 2;
+		else if (IS_CHAN_QUARTER_RATE(ah->curchan))
+			maxdelay *= 4;
+	}
 
 	REG_WRITE(ah, AR_Q_TXD, AR_Q_TXD_M);
 
@@ -142,7 +150,7 @@ void ath9k_hw_abort_tx_dma(struct ath_hw *ah)
 	REG_SET_BIT(ah, AR_D_GBL_IFS_MISC, AR_D_GBL_IFS_MISC_IGNORE_BACKOFF);
 
 	for (q = 0; q < AR_NUM_QCU; q++) {
-		for (i = 0; i < 1000; i++) {
+		for (i = 0; i < maxdelay; i++) {
 			if (i)
 				udelay(5);
 
@@ -303,7 +311,14 @@ int ath9k_hw_setuptxqueue(struct ath_hw *ah, enum ath9k_tx_queue type,
 		q = ATH9K_NUM_TX_QUEUES - 3;
 		break;
 	case ATH9K_TX_QUEUE_DATA:
-		q = qinfo->tqi_subtype;
+		for (q = 0; q < ATH9K_NUM_TX_QUEUES; q++)
+			if (ah->txq[q].tqi_type ==
+			    ATH9K_TX_QUEUE_INACTIVE)
+				break;
+		if (q == ATH9K_NUM_TX_QUEUES) {
+			ath_err(common, "No available TX queue\n");
+			return -1;
+		}
 		break;
 	default:
 		ath_err(common, "Invalid TX queue type: %u\n", type);

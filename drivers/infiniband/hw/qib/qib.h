@@ -530,8 +530,6 @@ struct qib_pportdata {
 	/* qib_lflags driver is waiting for */
 	u32 state_wanted;
 	spinlock_t lflags_lock;
-	/* number of (port-specific) interrupts for this port -- saturates... */
-	u32 int_counter;
 
 	/* ref count for each pkey */
 	atomic_t pkeyrefs[4];
@@ -543,24 +541,26 @@ struct qib_pportdata {
 	u64 *statusp;
 
 	/* SendDMA related entries */
-	spinlock_t            sdma_lock;
-	struct qib_sdma_state sdma_state;
-	unsigned long         sdma_buf_jiffies;
-	struct qib_sdma_desc *sdma_descq;
-	u64                   sdma_descq_added;
-	u64                   sdma_descq_removed;
-	u16                   sdma_descq_cnt;
-	u16                   sdma_descq_tail;
-	u16                   sdma_descq_head;
-	u16                   sdma_next_intr;
-	u16                   sdma_reset_wait;
-	u8                    sdma_generation;
-	struct tasklet_struct sdma_sw_clean_up_task;
-	struct list_head      sdma_activelist;
 
+	/* read mostly */
+	struct qib_sdma_desc *sdma_descq;
+	struct qib_sdma_state sdma_state;
 	dma_addr_t       sdma_descq_phys;
 	volatile __le64 *sdma_head_dma; /* DMA'ed by chip */
 	dma_addr_t       sdma_head_phys;
+	u16                   sdma_descq_cnt;
+
+	/* read/write using lock */
+	spinlock_t            sdma_lock ____cacheline_aligned_in_smp;
+	struct list_head      sdma_activelist;
+	u64                   sdma_descq_added;
+	u64                   sdma_descq_removed;
+	u16                   sdma_descq_tail;
+	u16                   sdma_descq_head;
+	u8                    sdma_generation;
+
+	struct tasklet_struct sdma_sw_clean_up_task
+		____cacheline_aligned_in_smp;
 
 	wait_queue_head_t state_wait; /* for state_wanted */
 
@@ -873,7 +873,14 @@ struct qib_devdata {
 	 * pio_writing.
 	 */
 	spinlock_t pioavail_lock;
-
+	/*
+	 * index of last buffer to optimize search for next
+	 */
+	u32 last_pio;
+	/*
+	 * min kernel pio buffer to optimize search
+	 */
+	u32 min_kernel_pio;
 	/*
 	 * Shadow copies of registers; size indicates read access size.
 	 * Most of them are readonly, but some are write-only register,
@@ -1013,6 +1020,12 @@ struct qib_devdata {
 	/* control high-level access to EEPROM */
 	struct mutex eep_lock;
 	uint64_t traffic_wds;
+	/* active time is kept in seconds, but logged in hours */
+	atomic_t active_time;
+	/* Below are nominal shadow of EEPROM, new since last EEPROM update */
+	uint8_t eep_st_errs[QIB_EEP_LOG_CNT];
+	uint8_t eep_st_new_errs[QIB_EEP_LOG_CNT];
+	uint16_t eep_hrs;
 	/*
 	 * masks for which bits of errs, hwerrs that cause
 	 * each of the counters to increment.
@@ -1229,7 +1242,8 @@ int qib_twsi_blk_rd(struct qib_devdata *dd, int dev, int addr, void *buffer,
 int qib_twsi_blk_wr(struct qib_devdata *dd, int dev, int addr,
 		    const void *buffer, int len);
 void qib_get_eeprom_info(struct qib_devdata *);
-#define qib_inc_eeprom_err(dd, eidx, incr)
+int qib_update_eeprom_log(struct qib_devdata *dd);
+void qib_inc_eeprom_err(struct qib_devdata *dd, u32 eidx, u32 incr);
 void qib_dump_lookup_output_queue(struct qib_devdata *);
 void qib_force_pio_avail_update(struct qib_devdata *);
 void qib_clear_symerror_on_linkup(unsigned long opaque);
@@ -1428,10 +1442,6 @@ extern struct mutex qib_mutex;
 		dev_err(&(dd)->pcidev->dev, "%s: " fmt, \
 			qib_get_unit_name((dd)->unit), ##__VA_ARGS__); \
 	} while (0)
-
-#define qib_dev_warn(dd, fmt, ...) \
-	dev_warn(&(dd)->pcidev->dev, "%s: " fmt, \
-		qib_get_unit_name((dd)->unit), ##__VA_ARGS__)
 
 #define qib_dev_porterr(dd, port, fmt, ...) \
 	do { \

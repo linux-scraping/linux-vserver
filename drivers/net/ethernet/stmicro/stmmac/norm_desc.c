@@ -22,6 +22,7 @@
   Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
 *******************************************************************************/
 
+#include <linux/stmmac.h>
 #include "common.h"
 #include "descs_com.h"
 
@@ -126,7 +127,6 @@ static void ndesc_init_rx_desc(struct dma_desc *p, unsigned int ring_size,
 {
 	int i;
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
 		p->des01.rx.own = 1;
 		p->des01.rx.buffer1_size = BUF_SIZE_2KiB - 1;
 
@@ -142,7 +142,7 @@ static void ndesc_init_tx_desc(struct dma_desc *p, unsigned int ring_size)
 {
 	int i;
 	for (i = 0; i < ring_size; i++) {
-		p->des01.all_flags = 0;
+		p->des01.tx.own = 0;
 		ndesc_tx_set_on_ring_chain(p, (i == (ring_size - 1)));
 		p++;
 	}
@@ -165,7 +165,6 @@ static void ndesc_set_tx_owner(struct dma_desc *p)
 
 static void ndesc_set_rx_owner(struct dma_desc *p)
 {
-	p->des01.all_flags = 0;
 	p->des01.rx.own = 1;
 }
 
@@ -203,9 +202,17 @@ static void ndesc_close_tx_desc(struct dma_desc *p)
 	p->des01.tx.interrupt = 1;
 }
 
-static int ndesc_get_rx_frame_len(struct dma_desc *p)
+static int ndesc_get_rx_frame_len(struct dma_desc *p, int rx_coe_type)
 {
-	return p->des01.rx.frame_length;
+	/* The type-1 checksum offload engines append the checksum at
+	 * the end of frame and the two bytes of checksum are added in
+	 * the length.
+	 * Adjust for that in the framelen for type-1 checksum offload
+	 * engines. */
+	if (rx_coe_type == STMMAC_RX_COE_TYPE1)
+		return p->des01.rx.frame_length - 2;
+	else
+		return p->des01.rx.frame_length;
 }
 
 const struct stmmac_desc_ops ndesc_ops = {

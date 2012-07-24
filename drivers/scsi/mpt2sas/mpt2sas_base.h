@@ -69,8 +69,8 @@
 #define MPT2SAS_DRIVER_NAME		"mpt2sas"
 #define MPT2SAS_AUTHOR	"LSI Corporation <DL-MPTFusionLinux@lsi.com>"
 #define MPT2SAS_DESCRIPTION	"LSI MPT Fusion SAS 2.0 Device Driver"
-#define MPT2SAS_DRIVER_VERSION		"12.100.00.00"
-#define MPT2SAS_MAJOR_VERSION		12
+#define MPT2SAS_DRIVER_VERSION		"13.100.00.00"
+#define MPT2SAS_MAJOR_VERSION		13
 #define MPT2SAS_MINOR_VERSION		100
 #define MPT2SAS_BUILD_VERSION		00
 #define MPT2SAS_RELEASE_VERSION		00
@@ -720,6 +720,7 @@ typedef void (*MPT2SAS_FLUSH_RUNNING_CMDS)(struct MPT2SAS_ADAPTER *ioc);
  * @io_missing_delay: time for IO completed by fw when PDR enabled
  * @device_missing_delay: time for device missing by fw when PDR enabled
  * @sas_id : used for setting volume target IDs
+ * @blocking_handles: bitmask used to identify which devices need blocking
  * @pd_handles : bitmask for PD handles
  * @pd_handles_sz : size of pd_handle bitmask
  * @config_page_sz: config page size
@@ -889,7 +890,7 @@ struct MPT2SAS_ADAPTER {
 	u8		io_missing_delay;
 	u16		device_missing_delay;
 	int		sas_id;
-
+	void		*blocking_handles;
 	void		*pd_handles;
 	u16		pd_handles_sz;
 
@@ -1047,9 +1048,6 @@ void mpt2sas_base_validate_event_type(struct MPT2SAS_ADAPTER *ioc, u32 *event_ty
 
 void mpt2sas_halt_firmware(struct MPT2SAS_ADAPTER *ioc);
 
-void mpt2sas_base_update_missing_delay(struct MPT2SAS_ADAPTER *ioc,
-	u16 device_missing_delay, u8 io_missing_delay);
-
 int mpt2sas_port_enable(struct MPT2SAS_ADAPTER *ioc);
 
 /* scsih shared API */
@@ -1061,7 +1059,8 @@ int mpt2sas_scsih_issue_tm(struct MPT2SAS_ADAPTER *ioc, u16 handle,
 void mpt2sas_scsih_set_tm_flag(struct MPT2SAS_ADAPTER *ioc, u16 handle);
 void mpt2sas_scsih_clear_tm_flag(struct MPT2SAS_ADAPTER *ioc, u16 handle);
 void mpt2sas_expander_remove(struct MPT2SAS_ADAPTER *ioc, u64 sas_address);
-void mpt2sas_device_remove(struct MPT2SAS_ADAPTER *ioc, u64 sas_address);
+void mpt2sas_device_remove_by_sas_address(struct MPT2SAS_ADAPTER *ioc,
+		u64 sas_address);
 struct _sas_node *mpt2sas_scsih_expander_find_by_handle(struct MPT2SAS_ADAPTER *ioc,
     u16 handle);
 struct _sas_node *mpt2sas_scsih_expander_find_by_sas_address(struct MPT2SAS_ADAPTER

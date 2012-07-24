@@ -1369,7 +1369,7 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 
 	inc_slabs_node(s, page_to_nid(page), page->objects);
 	page->slab = s;
-	page->flags |= 1 << PG_slab;
+	__SetPageSlab(page);
 
 	start = page_address(page);
 
@@ -1582,7 +1582,7 @@ static void *get_partial_node(struct kmem_cache *s,
 /*
  * Get a page from somewhere. Search in increasing NUMA distances.
  */
-static struct page *get_any_partial(struct kmem_cache *s, gfp_t flags,
+static void *get_any_partial(struct kmem_cache *s, gfp_t flags,
 		struct kmem_cache_cpu *c)
 {
 #ifdef CONFIG_NUMA
@@ -1617,7 +1617,7 @@ static struct page *get_any_partial(struct kmem_cache *s, gfp_t flags,
 
 	do {
 		cpuset_mems_cookie = get_mems_allowed();
-		zonelist = node_zonelist(slab_node(), flags);
+		zonelist = node_zonelist(slab_node(current->mempolicy), flags);
 		for_each_zone_zonelist(zone, z, zonelist, high_zoneidx) {
 			struct kmem_cache_node *n;
 
@@ -1882,24 +1882,18 @@ redo:
 /* Unfreeze all the cpu partial slabs */
 static void unfreeze_partials(struct kmem_cache *s)
 {
-	struct kmem_cache_node *n = NULL, *n2 = NULL;
+	struct kmem_cache_node *n = NULL;
 	struct kmem_cache_cpu *c = this_cpu_ptr(s->cpu_slab);
 	struct page *page, *discard_page = NULL;
 
 	while ((page = c->partial)) {
+		enum slab_modes { M_PARTIAL, M_FREE };
+		enum slab_modes l, m;
 		struct page new;
 		struct page old;
 
 		c->partial = page->next;
-
-		n2 = get_node(s, page_to_nid(page));
-		if (n != n2) {
-			if (n)
-				spin_unlock(&n->list_lock);
-
-			n = n2;
-			spin_lock(&n->list_lock);
-		}
+		l = M_FREE;
 
 		do {
 
@@ -1912,17 +1906,43 @@ static void unfreeze_partials(struct kmem_cache *s)
 
 			new.frozen = 0;
 
+			if (!new.inuse && (!n || n->nr_partial > s->min_partial))
+				m = M_FREE;
+			else {
+				struct kmem_cache_node *n2 = get_node(s,
+							page_to_nid(page));
+
+				m = M_PARTIAL;
+				if (n != n2) {
+					if (n)
+						spin_unlock(&n->list_lock);
+
+					n = n2;
+					spin_lock(&n->list_lock);
+				}
+			}
+
+			if (l != m) {
+				if (l == M_PARTIAL) {
+					remove_partial(n, page);
+					stat(s, FREE_REMOVE_PARTIAL);
+				} else {
+					add_partial(n, page,
+						DEACTIVATE_TO_TAIL);
+					stat(s, FREE_ADD_PARTIAL);
+				}
+
+				l = m;
+			}
+
 		} while (!cmpxchg_double_slab(s, page,
 				old.freelist, old.counters,
 				new.freelist, new.counters,
 				"unfreezing slab"));
 
-		if (unlikely(!new.inuse && n->nr_partial > s->min_partial)) {
+		if (m == M_FREE) {
 			page->next = discard_page;
 			discard_page = page;
-		} else {
-			add_partial(n, page, DEACTIVATE_TO_TAIL);
-			stat(s, FREE_ADD_PARTIAL);
 		}
 	}
 
@@ -2749,7 +2769,7 @@ static unsigned long calculate_alignment(unsigned long flags,
 }
 
 static void
-init_kmem_cache_node(struct kmem_cache_node *n, struct kmem_cache *s)
+init_kmem_cache_node(struct kmem_cache_node *n)
 {
 	n->nr_partial = 0;
 	spin_lock_init(&n->list_lock);
@@ -2819,7 +2839,7 @@ static void early_kmem_cache_node_alloc(int node)
 	init_object(kmem_cache_node, n, SLUB_RED_ACTIVE);
 	init_tracking(kmem_cache_node, n);
 #endif
-	init_kmem_cache_node(n, kmem_cache_node);
+	init_kmem_cache_node(n);
 	inc_slabs_node(kmem_cache_node, node, page->objects);
 
 	add_partial(n, page, DEACTIVATE_TO_HEAD);
@@ -2859,7 +2879,7 @@ static int init_kmem_cache_nodes(struct kmem_cache *s)
 		}
 
 		s->node[node] = n;
-		init_kmem_cache_node(n, s);
+		init_kmem_cache_node(n);
 	}
 	return 1;
 }
@@ -3608,7 +3628,7 @@ static int slab_mem_going_online_callback(void *arg)
 			ret = -ENOMEM;
 			goto out;
 		}
-		init_kmem_cache_node(n, s);
+		init_kmem_cache_node(n);
 		s->node[nid] = n;
 	}
 out:
@@ -3951,9 +3971,9 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
 			}
 			return s;
 		}
-		kfree(n);
 		kfree(s);
 	}
+	kfree(n);
 err:
 	up_write(&slub_lock);
 
@@ -4500,13 +4520,7 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 			page = c->partial;
 
 			if (page) {
-				node = page_to_nid(page);
-				if (flags & SO_TOTAL)
-					WARN_ON_ONCE(1);
-				else if (flags & SO_OBJECTS)
-					WARN_ON_ONCE(1);
-				else
-					x = page->pages;
+				x = page->pobjects;
 				total += x;
 				nodes[node] += x;
 			}

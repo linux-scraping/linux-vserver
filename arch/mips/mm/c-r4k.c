@@ -12,7 +12,6 @@
 #include <linux/highmem.h>
 #include <linux/kernel.h>
 #include <linux/linkage.h>
-#include <linux/preempt.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/mm.h>
@@ -33,7 +32,7 @@
 #include <asm/mmu_context.h>
 #include <asm/war.h>
 #include <asm/cacheflush.h> /* for run_uncached() */
-
+#include <asm/traps.h>
 
 /*
  * Special Variant of smp_call_function for use by cache functions:
@@ -599,7 +598,6 @@ static void r4k_dma_cache_wback_inv(unsigned long addr, unsigned long size)
 	/* Catch bad driver code */
 	BUG_ON(size == 0);
 
-	preempt_disable();
 	if (cpu_has_inclusive_pcaches) {
 		if (size >= scache_size)
 			r4k_blast_scache();
@@ -620,7 +618,6 @@ static void r4k_dma_cache_wback_inv(unsigned long addr, unsigned long size)
 		R4600_HIT_CACHEOP_WAR_IMPL;
 		blast_dcache_range(addr, addr + size);
 	}
-	preempt_enable();
 
 	bc_wback_inv(addr, size);
 	__sync();
@@ -631,7 +628,6 @@ static void r4k_dma_cache_inv(unsigned long addr, unsigned long size)
 	/* Catch bad driver code */
 	BUG_ON(size == 0);
 
-	preempt_disable();
 	if (cpu_has_inclusive_pcaches) {
 		if (size >= scache_size)
 			r4k_blast_scache();
@@ -667,7 +663,6 @@ static void r4k_dma_cache_inv(unsigned long addr, unsigned long size)
 		cache_op(Hit_Writeback_Inv_D, (addr + size - 1)  & almask);
 		blast_inv_dcache_range(addr, addr + size);
 	}
-	preempt_enable();
 
 	bc_inv(addr, size);
 	__sync();
@@ -982,7 +977,7 @@ static void __cpuinit probe_pcache(void)
 			c->icache.linesz = 2 << lsize;
 		else
 			c->icache.linesz = lsize;
-		c->icache.sets = 64 << ((config1 >> 22) & 7);
+		c->icache.sets = 32 << (((config1 >> 22) + 1) & 7);
 		c->icache.ways = 1 + ((config1 >> 16) & 7);
 
 		icache_size = c->icache.sets *
@@ -1002,7 +997,7 @@ static void __cpuinit probe_pcache(void)
 			c->dcache.linesz = 2 << lsize;
 		else
 			c->dcache.linesz= lsize;
-		c->dcache.sets = 64 << ((config1 >> 13) & 7);
+		c->dcache.sets = 32 << (((config1 >> 13) + 1) & 7);
 		c->dcache.ways = 1 + ((config1 >> 7) & 7);
 
 		dcache_size = c->dcache.sets *
@@ -1056,6 +1051,7 @@ static void __cpuinit probe_pcache(void)
 	case CPU_R14000:
 		break;
 
+	case CPU_M14KC:
 	case CPU_24K:
 	case CPU_34K:
 	case CPU_74K:
@@ -1390,10 +1386,8 @@ static int __init setcoherentio(char *str)
 __setup("coherentio", setcoherentio);
 #endif
 
-void __cpuinit r4k_cache_init(void)
+static void __cpuinit r4k_cache_error_setup(void)
 {
-	extern void build_clear_page(void);
-	extern void build_copy_page(void);
 	extern char __weak except_vec2_generic;
 	extern char __weak except_vec2_sb1;
 	struct cpuinfo_mips *c = &current_cpu_data;
@@ -1408,6 +1402,13 @@ void __cpuinit r4k_cache_init(void)
 		set_uncached_handler(0x100, &except_vec2_generic, 0x80);
 		break;
 	}
+}
+
+void __cpuinit r4k_cache_init(void)
+{
+	extern void build_clear_page(void);
+	extern void build_copy_page(void);
+	struct cpuinfo_mips *c = &current_cpu_data;
 
 	probe_pcache();
 	setup_scache();
@@ -1470,4 +1471,5 @@ void __cpuinit r4k_cache_init(void)
 	local_r4k___flush_cache_all(NULL);
 #endif
 	coherency_setup();
+	board_cache_error_setup = r4k_cache_error_setup;
 }

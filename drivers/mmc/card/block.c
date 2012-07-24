@@ -182,8 +182,6 @@ static ssize_t power_ro_lock_show(struct device *dev,
 
 	ret = snprintf(buf, PAGE_SIZE, "%d\n", locked);
 
-	mmc_blk_put(md);
-
 	return ret;
 }
 
@@ -386,7 +384,7 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 	md = mmc_blk_get(bdev->bd_disk);
 	if (!md) {
 		err = -EINVAL;
-		goto cmd_done;
+		goto cmd_err;
 	}
 
 	card = md->queue.card;
@@ -485,6 +483,7 @@ cmd_rel_host:
 
 cmd_done:
 	mmc_blk_put(md);
+cmd_err:
 	kfree(idata->buf);
 	kfree(idata);
 	return err;
@@ -555,7 +554,6 @@ static u32 mmc_sd_num_wr_blocks(struct mmc_card *card)
 	struct mmc_request mrq = {NULL};
 	struct mmc_command cmd = {0};
 	struct mmc_data data = {0};
-	unsigned int timeout_us;
 
 	struct scatterlist sg;
 
@@ -575,23 +573,12 @@ static u32 mmc_sd_num_wr_blocks(struct mmc_card *card)
 	cmd.arg = 0;
 	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
 
-	data.timeout_ns = card->csd.tacc_ns * 100;
-	data.timeout_clks = card->csd.tacc_clks * 100;
-
-	timeout_us = data.timeout_ns / 1000;
-	timeout_us += data.timeout_clks * 1000 /
-		(card->host->ios.clock / 1000);
-
-	if (timeout_us > 100000) {
-		data.timeout_ns = 100000000;
-		data.timeout_clks = 0;
-	}
-
 	data.blksz = 4;
 	data.blocks = 1;
 	data.flags = MMC_DATA_READ;
 	data.sg = &sg;
 	data.sg_len = 1;
+	mmc_set_data_timeout(&data, card);
 
 	mrq.cmd = &cmd;
 	mrq.data = &data;
@@ -703,7 +690,7 @@ static int mmc_blk_cmd_error(struct request *req, const char *name, int error,
  * Otherwise we don't understand what happened, so abort.
  */
 static int mmc_blk_cmd_recovery(struct mmc_card *card, struct request *req,
-	struct mmc_blk_request *brq, int *ecc_err, int *gen_err)
+	struct mmc_blk_request *brq, int *ecc_err)
 {
 	bool prev_cmd_status_valid = true;
 	u32 status, stop_status = 0;
@@ -741,16 +728,6 @@ static int mmc_blk_cmd_recovery(struct mmc_card *card, struct request *req,
 	    (brq->cmd.resp[0] & R1_CARD_ECC_FAILED))
 		*ecc_err = 1;
 
-	/* Flag General errors */
-	if (!mmc_host_is_spi(card->host) && rq_data_dir(req) != READ)
-		if ((status & R1_ERROR) ||
-			(brq->stop.resp[0] & R1_ERROR)) {
-			pr_err("%s: %s: general error sending stop or status command, stop cmd response %#x, card status %#x\n",
-			       req->rq_disk->disk_name, __func__,
-			       brq->stop.resp[0], status);
-			*gen_err = 1;
-		}
-
 	/*
 	 * Check the current card state.  If it is in some data transfer
 	 * mode, tell it to stop (and hopefully transition back to TRAN.)
@@ -770,13 +747,6 @@ static int mmc_blk_cmd_recovery(struct mmc_card *card, struct request *req,
 			return ERR_ABORT;
 		if (stop_status & R1_CARD_ECC_FAILED)
 			*ecc_err = 1;
-		if (!mmc_host_is_spi(card->host) && rq_data_dir(req) != READ)
-			if (stop_status & R1_ERROR) {
-				pr_err("%s: %s: general error sending stop command, stop cmd response %#x\n",
-				       req->rq_disk->disk_name, __func__,
-				       stop_status);
-				*gen_err = 1;
-			}
 	}
 
 	/* Check for set block count errors */
@@ -1026,7 +996,7 @@ static int mmc_blk_err_check(struct mmc_card *card,
 						    mmc_active);
 	struct mmc_blk_request *brq = &mq_mrq->brq;
 	struct request *req = mq_mrq->req;
-	int ecc_err = 0, gen_err = 0;
+	int ecc_err = 0;
 
 	/*
 	 * sbc.error indicates a problem with the set block count
@@ -1040,7 +1010,7 @@ static int mmc_blk_err_check(struct mmc_card *card,
 	 */
 	if (brq->sbc.error || brq->cmd.error || brq->stop.error ||
 	    brq->data.error) {
-		switch (mmc_blk_cmd_recovery(card, req, brq, &ecc_err, &gen_err)) {
+		switch (mmc_blk_cmd_recovery(card, req, brq, &ecc_err)) {
 		case ERR_RETRY:
 			return MMC_BLK_RETRY;
 		case ERR_ABORT:
@@ -1070,15 +1040,6 @@ static int mmc_blk_err_check(struct mmc_card *card,
 	 */
 	if (!mmc_host_is_spi(card->host) && rq_data_dir(req) != READ) {
 		u32 status;
-
-		/* Check stop command response */
-		if (brq->stop.resp[0] & R1_ERROR) {
-			pr_err("%s: %s: general error sending stop command, stop cmd response %#x\n",
-			       req->rq_disk->disk_name, __func__,
-			       brq->stop.resp[0]);
-			gen_err = 1;
-		}
-
 		do {
 			int err = get_card_status(card, &status, 5);
 			if (err) {
@@ -1086,14 +1047,6 @@ static int mmc_blk_err_check(struct mmc_card *card,
 				       req->rq_disk->disk_name, err);
 				return MMC_BLK_CMD_ERR;
 			}
-
-			if (status & R1_ERROR) {
-				pr_err("%s: %s: general error sending status command, card status %#x\n",
-				       req->rq_disk->disk_name, __func__,
-				       status);
-				gen_err = 1;
-			}
-
 			/*
 			 * Some cards mishandle the status bits,
 			 * so make sure to check both the busy
@@ -1101,13 +1054,6 @@ static int mmc_blk_err_check(struct mmc_card *card,
 			 */
 		} while (!(status & R1_READY_FOR_DATA) ||
 			 (R1_CURRENT_STATE(status) == R1_STATE_PRG));
-	}
-
-	/* if general error occurs, retry the write operation. */
-	if (gen_err) {
-		pr_warning("%s: retrying write for general error\n",
-				req->rq_disk->disk_name);
-		return MMC_BLK_RETRY;
 	}
 
 	if (brq->data.error) {
@@ -1326,7 +1272,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 	int ret = 1, disable_multi = 0, retry = 0, type;
 	enum mmc_blk_status status;
 	struct mmc_queue_req *mq_rq;
-	struct request *req;
+	struct request *req = rqc;
 	struct mmc_async_req *areq;
 
 	if (!rqc && !mq->mqrq_prev->req)
@@ -1334,6 +1280,16 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 
 	do {
 		if (rqc) {
+			/*
+			 * When 4KB native sector is enabled, only 8 blocks
+			 * multiple read or write is allowed
+			 */
+			if ((brq->data.blocks & 0x07) &&
+			    (card->ext_csd.data_sector_size == 4096)) {
+				pr_err("%s: Transfer size is not 4KB sector size aligned\n",
+					req->rq_disk->disk_name);
+				goto cmd_abort;
+			}
 			mmc_blk_rw_rq_prep(mq->mqrq_cur, card, 0, mq);
 			areq = &mq->mqrq_cur->mmc_active;
 		} else
@@ -1374,11 +1330,9 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 			break;
 		case MMC_BLK_CMD_ERR:
 			ret = mmc_blk_cmd_err(md, card, brq, req, ret);
-			if (mmc_blk_reset(md, card->host, type))
-				goto cmd_abort;
-			if (!ret)
-				goto start_new_req;
-			break;
+			if (!mmc_blk_reset(md, card->host, type))
+				break;
+			goto cmd_abort;
 		case MMC_BLK_RETRY:
 			if (retry++ < 5)
 				break;
@@ -1475,8 +1429,7 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		/* complete ongoing async transfer before issuing discard */
 		if (card->host->areq)
 			mmc_blk_issue_rw_rq(mq, NULL);
-		if (req->cmd_flags & REQ_SECURE &&
-			!(card->quirks & MMC_QUIRK_SEC_ERASE_TRIM_BROKEN))
+		if (req->cmd_flags & REQ_SECURE)
 			ret = mmc_blk_issue_secdiscard_rq(mq, req);
 		else
 			ret = mmc_blk_issue_discard_rq(mq, req);
@@ -1584,7 +1537,12 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 	snprintf(md->disk->disk_name, sizeof(md->disk->disk_name),
 		 "mmcblk%d%s", md->name_idx, subname ? subname : "");
 
-	blk_queue_logical_block_size(md->queue.queue, 512);
+	if (mmc_card_mmc(card))
+		blk_queue_logical_block_size(md->queue.queue,
+					     card->ext_csd.data_sector_size);
+	else
+		blk_queue_logical_block_size(md->queue.queue, 512);
+
 	set_capacity(md->disk, size);
 
 	if (mmc_host_cmd23(card->host)) {
@@ -1776,7 +1734,6 @@ force_ro_fail:
 #define CID_MANFID_SANDISK	0x2
 #define CID_MANFID_TOSHIBA	0x11
 #define CID_MANFID_MICRON	0x13
-#define CID_MANFID_SAMSUNG	0x15
 
 static const struct mmc_fixup blk_fixups[] =
 {
@@ -1812,28 +1769,6 @@ static const struct mmc_fixup blk_fixups[] =
 	 */
 	MMC_FIXUP(CID_NAME_ANY, CID_MANFID_MICRON, 0x200, add_quirk_mmc,
 		  MMC_QUIRK_LONG_READ_TIME),
-
-	/*
-	 * On these Samsung MoviNAND parts, performing secure erase or
-	 * secure trim can result in unrecoverable corruption due to a
-	 * firmware bug.
-	 */
-	MMC_FIXUP("M8G2FA", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("MAG4FA", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("MBG8FA", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("MCGAFA", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("VAL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("VYL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("KYL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
-	MMC_FIXUP("VZL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
-		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
 
 	END_FIXUP
 };

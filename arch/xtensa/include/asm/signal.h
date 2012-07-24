@@ -120,20 +120,12 @@ typedef void (*__sighandler_t)(int);
 #define SIG_ERR	((__sighandler_t)-1)	/* error return from signal */
 
 #ifdef __KERNEL__
-struct old_sigaction {
-	__sighandler_t sa_handler;
-	old_sigset_t sa_mask;
-	unsigned long sa_flags;
-	void (*sa_restorer)(void);
-};
-
 struct sigaction {
 	__sighandler_t sa_handler;
 	unsigned long sa_flags;
 	void (*sa_restorer)(void);
 	sigset_t sa_mask;		/* mask last for extensibility */
 };
-#define __ARCH_HAS_SA_RESTORER
 
 struct k_sigaction {
 	struct sigaction sa;

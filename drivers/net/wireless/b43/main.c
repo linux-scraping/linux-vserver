@@ -1895,18 +1895,30 @@ static void b43_do_interrupt_thread(struct b43_wldev *dev)
 		}
 	}
 
-	if (unlikely(merged_dma_reason & (B43_DMAIRQ_FATALMASK))) {
-		b43err(dev->wl,
-			"Fatal DMA error: 0x%08X, 0x%08X, 0x%08X, 0x%08X, 0x%08X, 0x%08X\n",
-			dma_reason[0], dma_reason[1],
-			dma_reason[2], dma_reason[3],
-			dma_reason[4], dma_reason[5]);
-		b43err(dev->wl, "This device does not support DMA "
+	if (unlikely(merged_dma_reason & (B43_DMAIRQ_FATALMASK |
+					  B43_DMAIRQ_NONFATALMASK))) {
+		if (merged_dma_reason & B43_DMAIRQ_FATALMASK) {
+			b43err(dev->wl, "Fatal DMA error: "
+			       "0x%08X, 0x%08X, 0x%08X, "
+			       "0x%08X, 0x%08X, 0x%08X\n",
+			       dma_reason[0], dma_reason[1],
+			       dma_reason[2], dma_reason[3],
+			       dma_reason[4], dma_reason[5]);
+			b43err(dev->wl, "This device does not support DMA "
 			       "on your system. It will now be switched to PIO.\n");
-		/* Fall back to PIO transfers if we get fatal DMA errors! */
-		dev->use_pio = true;
-		b43_controller_restart(dev, "DMA error");
-		return;
+			/* Fall back to PIO transfers if we get fatal DMA errors! */
+			dev->use_pio = true;
+			b43_controller_restart(dev, "DMA error");
+			return;
+		}
+		if (merged_dma_reason & B43_DMAIRQ_NONFATALMASK) {
+			b43err(dev->wl, "DMA error: "
+			       "0x%08X, 0x%08X, 0x%08X, "
+			       "0x%08X, 0x%08X, 0x%08X\n",
+			       dma_reason[0], dma_reason[1],
+			       dma_reason[2], dma_reason[3],
+			       dma_reason[4], dma_reason[5]);
+		}
 	}
 
 	if (unlikely(reason & B43_IRQ_UCODE_DEBUG))
@@ -1925,11 +1937,6 @@ static void b43_do_interrupt_thread(struct b43_wldev *dev)
 		handle_irq_noise(dev);
 
 	/* Check the DMA reason registers for received data. */
-	if (dma_reason[0] & B43_DMAIRQ_RDESC_UFLOW) {
-		if (B43_DEBUG)
-			b43warn(dev->wl, "RX descriptor underrun\n");
-		b43_dma_handle_rx_overflow(dev->dma.rx_ring);
-	}
 	if (dma_reason[0] & B43_DMAIRQ_RX_DONE) {
 		if (b43_using_pio_transfers(dev))
 			b43_pio_rx(dev->pio.rx_queue);
@@ -1987,7 +1994,7 @@ static irqreturn_t b43_do_interrupt(struct b43_wldev *dev)
 		return IRQ_NONE;
 
 	dev->dma_reason[0] = b43_read32(dev, B43_MMIO_DMA0_REASON)
-	    & 0x0001FC00;
+	    & 0x0001DC00;
 	dev->dma_reason[1] = b43_read32(dev, B43_MMIO_DMA1_REASON)
 	    & 0x0000DC00;
 	dev->dma_reason[2] = b43_read32(dev, B43_MMIO_DMA2_REASON)
@@ -2061,7 +2068,6 @@ void b43_do_release_fw(struct b43_firmware_file *fw)
 
 static void b43_release_firmware(struct b43_wldev *dev)
 {
-	complete(&dev->fw_load_complete);
 	b43_do_release_fw(&dev->fw.ucode);
 	b43_do_release_fw(&dev->fw.pcm);
 	b43_do_release_fw(&dev->fw.initvals);
@@ -2082,18 +2088,11 @@ static void b43_print_fw_helptext(struct b43_wl *wl, bool error)
 		b43warn(wl, text);
 }
 
-static void b43_fw_cb(const struct firmware *firmware, void *context)
-{
-	struct b43_request_fw_context *ctx = context;
-
-	ctx->blob = firmware;
-	complete(&ctx->dev->fw_load_complete);
-}
-
 int b43_do_request_fw(struct b43_request_fw_context *ctx,
 		      const char *name,
-		      struct b43_firmware_file *fw, bool async)
+		      struct b43_firmware_file *fw)
 {
+	const struct firmware *blob;
 	struct b43_fw_header *hdr;
 	u32 size;
 	int err;
@@ -2132,30 +2131,11 @@ int b43_do_request_fw(struct b43_request_fw_context *ctx,
 		B43_WARN_ON(1);
 		return -ENOSYS;
 	}
-	if (async) {
-		/* do this part asynchronously */
-		init_completion(&ctx->dev->fw_load_complete);
-		err = request_firmware_nowait(THIS_MODULE, 1, ctx->fwname,
-					      ctx->dev->dev->dev, GFP_KERNEL,
-					      ctx, b43_fw_cb);
-		if (err < 0) {
-			pr_err("Unable to load firmware\n");
-			return err;
-		}
-		wait_for_completion(&ctx->dev->fw_load_complete);
-		if (ctx->blob)
-			goto fw_ready;
-	/* On some ARM systems, the async request will fail, but the next sync
-	 * request works. For this reason, we fall through here
-	 */
-	}
-	err = request_firmware(&ctx->blob, ctx->fwname,
-			       ctx->dev->dev->dev);
+	err = request_firmware(&blob, ctx->fwname, ctx->dev->dev->dev);
 	if (err == -ENOENT) {
 		snprintf(ctx->errors[ctx->req_type],
 			 sizeof(ctx->errors[ctx->req_type]),
-			 "Firmware file \"%s\" not found\n",
-			 ctx->fwname);
+			 "Firmware file \"%s\" not found\n", ctx->fwname);
 		return err;
 	} else if (err) {
 		snprintf(ctx->errors[ctx->req_type],
@@ -2164,15 +2144,14 @@ int b43_do_request_fw(struct b43_request_fw_context *ctx,
 			 ctx->fwname, err);
 		return err;
 	}
-fw_ready:
-	if (ctx->blob->size < sizeof(struct b43_fw_header))
+	if (blob->size < sizeof(struct b43_fw_header))
 		goto err_format;
-	hdr = (struct b43_fw_header *)(ctx->blob->data);
+	hdr = (struct b43_fw_header *)(blob->data);
 	switch (hdr->type) {
 	case B43_FW_TYPE_UCODE:
 	case B43_FW_TYPE_PCM:
 		size = be32_to_cpu(hdr->size);
-		if (size != ctx->blob->size - sizeof(struct b43_fw_header))
+		if (size != blob->size - sizeof(struct b43_fw_header))
 			goto err_format;
 		/* fallthrough */
 	case B43_FW_TYPE_IV:
@@ -2183,7 +2162,7 @@ fw_ready:
 		goto err_format;
 	}
 
-	fw->data = ctx->blob;
+	fw->data = blob;
 	fw->filename = name;
 	fw->type = ctx->req_type;
 
@@ -2193,7 +2172,7 @@ err_format:
 	snprintf(ctx->errors[ctx->req_type],
 		 sizeof(ctx->errors[ctx->req_type]),
 		 "Firmware file \"%s\" format error.\n", ctx->fwname);
-	release_firmware(ctx->blob);
+	release_firmware(blob);
 
 	return -EPROTO;
 }
@@ -2244,7 +2223,7 @@ static int b43_try_request_fw(struct b43_request_fw_context *ctx)
 			goto err_no_ucode;
 		}
 	}
-	err = b43_do_request_fw(ctx, filename, &fw->ucode, true);
+	err = b43_do_request_fw(ctx, filename, &fw->ucode);
 	if (err)
 		goto err_load;
 
@@ -2256,7 +2235,7 @@ static int b43_try_request_fw(struct b43_request_fw_context *ctx)
 	else
 		goto err_no_pcm;
 	fw->pcm_request_failed = false;
-	err = b43_do_request_fw(ctx, filename, &fw->pcm, false);
+	err = b43_do_request_fw(ctx, filename, &fw->pcm);
 	if (err == -ENOENT) {
 		/* We did not find a PCM file? Not fatal, but
 		 * core rev <= 10 must do without hwcrypto then. */
@@ -2317,7 +2296,7 @@ static int b43_try_request_fw(struct b43_request_fw_context *ctx)
 	default:
 		goto err_no_initvals;
 	}
-	err = b43_do_request_fw(ctx, filename, &fw->initvals, false);
+	err = b43_do_request_fw(ctx, filename, &fw->initvals);
 	if (err)
 		goto err_load;
 
@@ -2376,7 +2355,7 @@ static int b43_try_request_fw(struct b43_request_fw_context *ctx)
 	default:
 		goto err_no_initvals;
 	}
-	err = b43_do_request_fw(ctx, filename, &fw->initvals_band, false);
+	err = b43_do_request_fw(ctx, filename, &fw->initvals_band);
 	if (err)
 		goto err_load;
 
@@ -2413,7 +2392,6 @@ error:
 
 static int b43_one_core_attach(struct b43_bus_dev *dev, struct b43_wl *wl);
 static void b43_one_core_detach(struct b43_bus_dev *dev);
-static int b43_rng_init(struct b43_wl *wl);
 
 static void b43_request_firmware(struct work_struct *work)
 {
@@ -2450,7 +2428,7 @@ static void b43_request_firmware(struct work_struct *work)
 	for (i = 0; i < B43_NR_FWTYPES; i++) {
 		errmsg = ctx->errors[i];
 		if (strlen(errmsg))
-			b43err(dev->wl, "%s", errmsg);
+			b43err(dev->wl, errmsg);
 	}
 	b43_print_fw_helptext(dev->wl, 1);
 	goto out;
@@ -2459,11 +2437,8 @@ start_ieee80211:
 	err = ieee80211_register_hw(wl->hw);
 	if (err)
 		goto err_one_core_detach;
+	wl->hw_registred = true;
 	b43_leds_register(wl->current_dev);
-
-	/* Register HW RNG driver */
-	b43_rng_init(wl);
-
 	goto out;
 
 err_one_core_detach:
@@ -3120,7 +3095,7 @@ static int b43_chip_init(struct b43_wldev *dev)
 		b43_write32(dev, 0x018C, 0x02000000);
 	}
 	b43_write32(dev, B43_MMIO_GEN_IRQ_REASON, 0x00004000);
-	b43_write32(dev, B43_MMIO_DMA0_IRQ_MASK, 0x0001FC00);
+	b43_write32(dev, B43_MMIO_DMA0_IRQ_MASK, 0x0001DC00);
 	b43_write32(dev, B43_MMIO_DMA1_IRQ_MASK, 0x0000DC00);
 	b43_write32(dev, B43_MMIO_DMA2_IRQ_MASK, 0x0000DC00);
 	b43_write32(dev, B43_MMIO_DMA3_IRQ_MASK, 0x0001DC00);
@@ -3419,7 +3394,7 @@ static void b43_tx_work(struct work_struct *work)
 				break;
 			}
 			if (unlikely(err))
-				ieee80211_free_txskb(wl->hw, skb);
+				dev_kfree_skb(skb); /* Drop it */
 			err = 0;
 		}
 
@@ -3440,7 +3415,7 @@ static void b43_op_tx(struct ieee80211_hw *hw,
 
 	if (unlikely(skb->len < 2 + 2 + 6)) {
 		/* Too short, this can't be a valid frame. */
-		ieee80211_free_txskb(hw, skb);
+		dev_kfree_skb_any(skb);
 		return;
 	}
 	B43_WARN_ON(skb_shinfo(skb)->nr_frags);
@@ -3792,7 +3767,7 @@ static int b43_switch_band(struct b43_wl *wl, struct ieee80211_channel *chan)
 	if (prev_status >= B43_STAT_STARTED) {
 		err = b43_wireless_core_start(up_dev);
 		if (err) {
-			b43err(wl, "Fatal: Coult not start device for "
+			b43err(wl, "Fatal: Could not start device for "
 			       "selected %s-GHz band\n",
 			       band_to_string(chan->band));
 			b43_wireless_core_exit(up_dev);
@@ -4036,6 +4011,20 @@ static int b43_op_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	if (modparam_nohwcrypt)
 		return -ENOSPC; /* User disabled HW-crypto */
 
+	if ((vif->type == NL80211_IFTYPE_ADHOC ||
+	     vif->type == NL80211_IFTYPE_MESH_POINT) &&
+	    (key->cipher == WLAN_CIPHER_SUITE_TKIP ||
+	     key->cipher == WLAN_CIPHER_SUITE_CCMP) &&
+	    !(key->flags & IEEE80211_KEY_FLAG_PAIRWISE)) {
+		/*
+		 * For now, disable hw crypto for the RSN IBSS group keys. This
+		 * could be optimized in the future, but until that gets
+		 * implemented, use of software crypto for group addressed
+		 * frames is a acceptable to allow RSN IBSS to be used.
+		 */
+		return -EOPNOTSUPP;
+	}
+
 	mutex_lock(&wl->mutex);
 
 	dev = wl->current_dev;
@@ -4236,12 +4225,8 @@ redo:
 
 	/* Drain all TX queues. */
 	for (queue_num = 0; queue_num < B43_QOS_QUEUE_NUM; queue_num++) {
-		while (skb_queue_len(&wl->tx_queue[queue_num])) {
-			struct sk_buff *skb;
-
-			skb = skb_dequeue(&wl->tx_queue[queue_num]);
-			ieee80211_free_txskb(wl->hw, skb);
-		}
+		while (skb_queue_len(&wl->tx_queue[queue_num]))
+			dev_kfree_skb(skb_dequeue(&wl->tx_queue[queue_num]));
 	}
 
 	b43_mac_suspend(dev);
@@ -4588,6 +4573,9 @@ static void b43_wireless_core_exit(struct b43_wldev *dev)
 	if (!dev || b43_status(dev) != B43_STAT_INITIALIZED)
 		return;
 
+	/* Unregister HW RNG driver */
+	b43_rng_exit(dev->wl);
+
 	b43_set_status(dev, B43_STAT_UNINIT);
 
 	/* Stop the microcode PSM. */
@@ -4729,6 +4717,9 @@ static int b43_wireless_core_init(struct b43_wldev *dev)
 	ieee80211_wake_queues(dev->wl->hw);
 
 	b43_set_status(dev, B43_STAT_INITIALIZED);
+
+	/* Register HW RNG driver */
+	b43_rng_init(dev->wl);
 
 out:
 	return err;
@@ -5253,10 +5244,10 @@ static void b43_sprom_fixup(struct ssb_bus *bus)
 
 	/* boardflags workarounds */
 	if (bus->boardinfo.vendor == SSB_BOARDVENDOR_DELL &&
-	    bus->chip_id == 0x4301 && bus->boardinfo.rev == 0x74)
+	    bus->chip_id == 0x4301 && bus->sprom.board_rev == 0x74)
 		bus->sprom.boardflags_lo |= B43_BFL_BTCOEXIST;
 	if (bus->boardinfo.vendor == PCI_VENDOR_ID_APPLE &&
-	    bus->boardinfo.type == 0x4E && bus->boardinfo.rev > 0x40)
+	    bus->boardinfo.type == 0x4E && bus->sprom.board_rev > 0x40)
 		bus->sprom.boardflags_lo |= B43_BFL_PACTRL;
 	if (bus->bustype == SSB_BUSTYPE_PCI) {
 		pdev = bus->host_pci;
@@ -5305,8 +5296,11 @@ static struct b43_wl *b43_wireless_init(struct b43_bus_dev *dev)
 		BIT(NL80211_IFTYPE_WDS) |
 		BIT(NL80211_IFTYPE_ADHOC);
 
+	hw->wiphy->flags |= WIPHY_FLAG_IBSS_RSN;
+
 	hw->queues = modparam_qos ? B43_QOS_QUEUE_NUM : 1;
 	wl->mac80211_initially_registered_queues = hw->queues;
+	wl->hw_registred = false;
 	hw->max_rates = 2;
 	SET_IEEE80211_DEV(hw, dev->dev);
 	if (is_valid_ether_addr(sprom->et1mac))
@@ -5378,17 +5372,17 @@ static void b43_bcma_remove(struct bcma_device *core)
 	 * as the ieee80211 unreg will destroy the workqueue. */
 	cancel_work_sync(&wldev->restart_work);
 
-	/* Restore the queues count before unregistering, because firmware detect
-	 * might have modified it. Restoring is important, so the networking
-	 * stack can properly free resources. */
-	wl->hw->queues = wl->mac80211_initially_registered_queues;
-	b43_leds_stop(wldev);
-	ieee80211_unregister_hw(wl->hw);
+	B43_WARN_ON(!wl);
+	if (wl->current_dev == wldev && wl->hw_registred) {
+		/* Restore the queues count before unregistering, because firmware detect
+		 * might have modified it. Restoring is important, so the networking
+		 * stack can properly free resources. */
+		wl->hw->queues = wl->mac80211_initially_registered_queues;
+		b43_leds_stop(wldev);
+		ieee80211_unregister_hw(wl->hw);
+	}
 
 	b43_one_core_detach(wldev->dev);
-
-	/* Unregister HW RNG driver */
-	b43_rng_exit(wl);
 
 	b43_leds_unregister(wl);
 
@@ -5457,9 +5451,7 @@ static void b43_ssb_remove(struct ssb_device *sdev)
 	cancel_work_sync(&wldev->restart_work);
 
 	B43_WARN_ON(!wl);
-	if (!wldev->fw.ucode.data)
-		return;			/* NULL if firmware never loaded */
-	if (wl->current_dev == wldev) {
+	if (wl->current_dev == wldev && wl->hw_registred) {
 		/* Restore the queues count before unregistering, because firmware detect
 		 * might have modified it. Restoring is important, so the networking
 		 * stack can properly free resources. */
@@ -5469,9 +5461,6 @@ static void b43_ssb_remove(struct ssb_device *sdev)
 	}
 
 	b43_one_core_detach(dev);
-
-	/* Unregister HW RNG driver */
-	b43_rng_exit(wl);
 
 	if (list_empty(&wl->devlist)) {
 		b43_leds_unregister(wl);

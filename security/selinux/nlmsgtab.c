@@ -14,7 +14,6 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/if.h>
-#include <linux/netfilter_ipv4/ip_queue.h>
 #include <linux/inet_diag.h>
 #include <linux/xfrm.h>
 #include <linux/audit.h>
@@ -70,12 +69,6 @@ static struct nlmsg_perm nlmsg_route_perms[] =
 	{ RTM_SETDCB,		NETLINK_ROUTE_SOCKET__NLMSG_WRITE },
 };
 
-static struct nlmsg_perm nlmsg_firewall_perms[] =
-{
-	{ IPQM_MODE,		NETLINK_FIREWALL_SOCKET__NLMSG_WRITE },
-	{ IPQM_VERDICT,		NETLINK_FIREWALL_SOCKET__NLMSG_WRITE },
-};
-
 static struct nlmsg_perm nlmsg_tcpdiag_perms[] =
 {
 	{ TCPDIAG_GETSOCK,	NETLINK_TCPDIAG_SOCKET__NLMSG_READ },
@@ -100,12 +93,6 @@ static struct nlmsg_perm nlmsg_xfrm_perms[] =
 	{ XFRM_MSG_FLUSHPOLICY,	NETLINK_XFRM_SOCKET__NLMSG_WRITE },
 	{ XFRM_MSG_NEWAE,	NETLINK_XFRM_SOCKET__NLMSG_WRITE },
 	{ XFRM_MSG_GETAE,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
-	{ XFRM_MSG_REPORT,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
-	{ XFRM_MSG_MIGRATE,	NETLINK_XFRM_SOCKET__NLMSG_WRITE },
-	{ XFRM_MSG_NEWSADINFO,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
-	{ XFRM_MSG_GETSADINFO,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
-	{ XFRM_MSG_GETSPDINFO,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
-	{ XFRM_MSG_MAPPING,	NETLINK_XFRM_SOCKET__NLMSG_READ  },
 };
 
 static struct nlmsg_perm nlmsg_audit_perms[] =
@@ -149,12 +136,6 @@ int selinux_nlmsg_lookup(u16 sclass, u16 nlmsg_type, u32 *perm)
 	case SECCLASS_NETLINK_ROUTE_SOCKET:
 		err = nlmsg_perm(nlmsg_type, perm, nlmsg_route_perms,
 				 sizeof(nlmsg_route_perms));
-		break;
-
-	case SECCLASS_NETLINK_FIREWALL_SOCKET:
-	case SECCLASS_NETLINK_IP6FW_SOCKET:
-		err = nlmsg_perm(nlmsg_type, perm, nlmsg_firewall_perms,
-				 sizeof(nlmsg_firewall_perms));
 		break;
 
 	case SECCLASS_NETLINK_TCPDIAG_SOCKET:

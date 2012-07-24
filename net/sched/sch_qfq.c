@@ -429,8 +429,9 @@ static int qfq_dump_class(struct Qdisc *sch, unsigned long arg,
 	nest = nla_nest_start(skb, TCA_OPTIONS);
 	if (nest == NULL)
 		goto nla_put_failure;
-	NLA_PUT_U32(skb, TCA_QFQ_WEIGHT, ONE_FP/cl->inv_w);
-	NLA_PUT_U32(skb, TCA_QFQ_LMAX, cl->lmax);
+	if (nla_put_u32(skb, TCA_QFQ_WEIGHT, ONE_FP/cl->inv_w) ||
+	    nla_put_u32(skb, TCA_QFQ_LMAX, cl->lmax))
+		goto nla_put_failure;
 	return nla_nest_end(skb, nest);
 
 nla_put_failure:
@@ -830,10 +831,7 @@ static void qfq_update_start(struct qfq_sched *q, struct qfq_class *cl)
 		if (mask) {
 			struct qfq_group *next = qfq_ffs(q, mask);
 			if (qfq_gt(roundedF, next->F)) {
-				if (qfq_gt(limit, next->F))
-					cl->S = next->F;
-				else /* preserve timestamp correctness */
-					cl->S = limit;
+				cl->S = next->F;
 				return;
 			}
 		}

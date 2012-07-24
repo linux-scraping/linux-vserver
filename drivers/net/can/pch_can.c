@@ -560,7 +560,7 @@ static void pch_can_error(struct net_device *ndev, u32 status)
 		stats->rx_errors++;
 		break;
 	case PCH_CRC_ERR:
-		cf->data[3] |= CAN_ERR_PROT_LOC_CRC_SEQ |
+		cf->data[2] |= CAN_ERR_PROT_LOC_CRC_SEQ |
 			       CAN_ERR_PROT_LOC_CRC_DEL;
 		priv->can.can_stats.bus_error++;
 		stats->rx_errors++;
@@ -1274,17 +1274,7 @@ static struct pci_driver pch_can_pci_driver = {
 	.resume = pch_can_resume,
 };
 
-static int __init pch_can_pci_init(void)
-{
-	return pci_register_driver(&pch_can_pci_driver);
-}
-module_init(pch_can_pci_init);
-
-static void __exit pch_can_pci_exit(void)
-{
-	pci_unregister_driver(&pch_can_pci_driver);
-}
-module_exit(pch_can_pci_exit);
+module_pci_driver(pch_can_pci_driver);
 
 MODULE_DESCRIPTION("Intel EG20T PCH CAN(Controller Area Network) Driver");
 MODULE_LICENSE("GPL v2");

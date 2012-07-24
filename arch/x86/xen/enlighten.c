@@ -42,6 +42,7 @@
 #include <xen/page.h>
 #include <xen/hvm.h>
 #include <xen/hvc-console.h>
+#include <xen/acpi.h>
 
 #include <asm/paravirt.h>
 #include <asm/apic.h>
@@ -64,7 +65,6 @@
 #include <asm/hypervisor.h>
 #include <asm/mwait.h>
 #include <asm/pci_x86.h>
-#include <asm/pat.h>
 
 #ifdef CONFIG_ACPI
 #include <linux/acpi.h>
@@ -76,6 +76,7 @@
 
 #include "xen-ops.h"
 #include "mmu.h"
+#include "smp.h"
 #include "multicalls.h"
 
 EXPORT_SYMBOL_GPL(hypercall_page);
@@ -139,21 +140,6 @@ static void xen_vcpu_setup(int cpu)
 
 	BUG_ON(HYPERVISOR_shared_info == &xen_dummy_shared_info);
 
-	/*
-	 * This path is called twice on PVHVM - first during bootup via
-	 * smp_init -> xen_hvm_cpu_notify, and then if the VCPU is being
-	 * hotplugged: cpu_up -> xen_hvm_cpu_notify.
-	 * As we can only do the VCPUOP_register_vcpu_info once lets
-	 * not over-write its result.
-	 *
-	 * For PV it is called during restore (xen_vcpu_restore) and bootup
-	 * (xen_setup_vcpu_info_placement). The hotplug mechanism does not
-	 * use this function.
-	 */
-	if (xen_hvm_domain()) {
-		if (per_cpu(xen_vcpu, cpu) == &per_cpu(xen_vcpu_info, cpu))
-			return;
-	}
 	if (cpu < MAX_VIRT_CPUS)
 		per_cpu(xen_vcpu,cpu) = &HYPERVISOR_shared_info->vcpu_info[cpu];
 
@@ -413,7 +399,6 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 	pte_t pte;
 	unsigned long pfn;
 	struct page *page;
-	unsigned char dummy;
 
 	ptep = lookup_address((unsigned long)v, &level);
 	BUG_ON(ptep == NULL);
@@ -422,32 +407,6 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 	page = pfn_to_page(pfn);
 
 	pte = pfn_pte(pfn, prot);
-
-	/*
-	 * Careful: update_va_mapping() will fail if the virtual address
-	 * we're poking isn't populated in the page tables.  We don't
-	 * need to worry about the direct map (that's always in the page
-	 * tables), but we need to be careful about vmap space.  In
-	 * particular, the top level page table can lazily propagate
-	 * entries between processes, so if we've switched mms since we
-	 * vmapped the target in the first place, we might not have the
-	 * top-level page table entry populated.
-	 *
-	 * We disable preemption because we want the same mm active when
-	 * we probe the target and when we issue the hypercall.  We'll
-	 * have the same nominal mm, but if we're a kernel thread, lazy
-	 * mm dropping could change our pgd.
-	 *
-	 * Out of an abundance of caution, this uses __get_user() to fault
-	 * in the target address just in case there's some obscure case
-	 * in which the target address isn't readable.
-	 */
-
-	preempt_disable();
-
-	pagefault_disable();	/* Avoid warnings due to being atomic. */
-	__get_user(dummy, (unsigned char __user __force *)v);
-	pagefault_enable();
 
 	if (HYPERVISOR_update_va_mapping((unsigned long)v, pte, 0))
 		BUG();
@@ -460,25 +419,12 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 				BUG();
 	} else
 		kmap_flush_unused();
-
-	preempt_enable();
 }
 
 static void xen_alloc_ldt(struct desc_struct *ldt, unsigned entries)
 {
 	const unsigned entries_per_page = PAGE_SIZE / LDT_ENTRY_SIZE;
 	int i;
-
-	/*
-	 * We need to mark the all aliases of the LDT pages RO.  We
-	 * don't need to call vm_flush_aliases(), though, since that's
-	 * only responsible for flushing aliases out the TLBs, not the
-	 * page tables, and Xen will flush the TLB for us if needed.
-	 *
-	 * To avoid confusing future readers: none of this is necessary
-	 * to load the LDT.  The hypervisor only checks this when the
-	 * LDT is faulted in due to subsequent descriptor access.
-	 */
 
 	for(i = 0; i < entries; i += entries_per_page)
 		set_aliased_prot(ldt + i, PAGE_KERNEL_RO);
@@ -860,7 +806,7 @@ static void xen_load_sp0(struct tss_struct *tss,
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
 }
 
-void xen_set_iopl_mask(unsigned mask)
+static void xen_set_iopl_mask(unsigned mask)
 {
 	struct physdev_set_iopl set_iopl;
 
@@ -947,6 +893,14 @@ static void set_xen_basic_apic_ops(void)
 	apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
 	apic->set_apic_id = xen_set_apic_id;
 	apic->get_apic_id = xen_get_apic_id;
+
+#ifdef CONFIG_SMP
+	apic->send_IPI_allbutself = xen_send_IPI_allbutself;
+	apic->send_IPI_mask_allbutself = xen_send_IPI_mask_allbutself;
+	apic->send_IPI_mask = xen_send_IPI_mask;
+	apic->send_IPI_all = xen_send_IPI_all;
+	apic->send_IPI_self = xen_send_IPI_self;
+#endif
 }
 
 #endif
@@ -998,16 +952,7 @@ static void xen_write_cr4(unsigned long cr4)
 
 	native_write_cr4(cr4);
 }
-#ifdef CONFIG_X86_64
-static inline unsigned long xen_read_cr8(void)
-{
-	return 0;
-}
-static inline void xen_write_cr8(unsigned long val)
-{
-	BUG_ON(val);
-}
-#endif
+
 static int xen_write_msr_safe(unsigned int msr, unsigned low, unsigned high)
 {
 	int ret;
@@ -1176,11 +1121,6 @@ static const struct pv_cpu_ops xen_cpu_ops __initconst = {
 	.read_cr4_safe = native_read_cr4_safe,
 	.write_cr4 = xen_write_cr4,
 
-#ifdef CONFIG_X86_64
-	.read_cr8 = xen_read_cr8,
-	.write_cr8 = xen_write_cr8,
-#endif
-
 	.wbinvd = native_wbinvd,
 
 	.read_msr = native_read_msr_safe,
@@ -1190,8 +1130,6 @@ static const struct pv_cpu_ops xen_cpu_ops __initconst = {
 
 	.read_tsc = native_read_tsc,
 	.read_pmc = native_read_pmc,
-
-	.read_tscp = native_read_tscp,
 
 	.iret = xen_iret,
 	.irq_enable_sysexit = xen_sysexit,
@@ -1411,14 +1349,7 @@ asmlinkage void __init xen_start_kernel(void)
 	 */
 	acpi_numa = -1;
 #endif
-#ifdef CONFIG_X86_PAT
-	/*
-	 * For right now disable the PAT. We should remove this once
-	 * git commit 8eaffa67b43e99ae581622c5133e20b0f48bcef1
-	 * (xen/pat: Disable PAT support for now) is reverted.
-	 */
-	pat_enabled = 0;
-#endif
+
 	pgd = (pgd_t *)xen_start_info->pt_base;
 
 	/* Don't do the full vcpu_info placement stuff until we have a
@@ -1430,7 +1361,6 @@ asmlinkage void __init xen_start_kernel(void)
 
 	xen_raw_console_write("mapping kernel into physical memory\n");
 	pgd = xen_setup_kernel_pagetable(pgd, xen_start_info->nr_pages);
-	xen_ident_map_ISA();
 
 	/* Allocate and initialize top and mid mfn levels for p2m structure */
 	xen_build_mfn_list_list();
@@ -1486,12 +1416,12 @@ asmlinkage void __init xen_start_kernel(void)
 		xen_start_info->console.domU.mfn = 0;
 		xen_start_info->console.domU.evtchn = 0;
 
+		xen_init_apic();
+
 		/* Make sure ACS will be enabled */
 		pci_request_acs();
 
-		/* Avoid searching for BIOS MP tables */
-		x86_init.mpparse.find_smp_config = x86_init_noop;
-		x86_init.mpparse.get_smp_config = x86_init_uint_noop;
+		xen_acpi_sleep_register();
 	}
 #ifdef CONFIG_PCI
 	/* PCI BIOS service won't work from a PV guest. */
@@ -1574,11 +1504,8 @@ static int __cpuinit xen_hvm_cpu_notify(struct notifier_block *self,
 	switch (action) {
 	case CPU_UP_PREPARE:
 		xen_vcpu_setup(cpu);
-		if (xen_have_vector_callback) {
+		if (xen_have_vector_callback)
 			xen_init_lock_cpu(cpu);
-			if (xen_feature(XENFEAT_hvm_safe_pvclock))
-				xen_setup_timer(cpu);
-		}
 		break;
 	default:
 		break;

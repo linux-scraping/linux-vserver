@@ -25,7 +25,6 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <linux/rcupdate.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
@@ -108,7 +107,6 @@ void cpu_idle(void)
 {
 	/* endless idle loop with no priority at all */
 	for (;;) {
-		rcu_idle_enter();
 		while (!need_resched()) {
 			void (*idle)(void);
 
@@ -123,7 +121,6 @@ void cpu_idle(void)
 			}
 			idle();
 		}
-		rcu_idle_exit();
 
 		schedule_preempt_disabled();
 	}
@@ -211,12 +208,14 @@ void copy_segments(struct task_struct *p, struct mm_struct *new_mm)
 }
 
 /*
- * this gets called before we allocate a new thread and copy the current task
- * into it so that we can store lazy state into memory
+ * this gets called so that we can store lazy state into memory and copy the
+ * current task into the new thread.
  */
-void prepare_to_copy(struct task_struct *tsk)
+int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
-	unlazy_fpu(tsk);
+	unlazy_fpu(src);
+	*dst = *src;
+	return 0;
 }
 
 /*

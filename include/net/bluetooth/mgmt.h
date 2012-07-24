@@ -42,7 +42,6 @@
 #define MGMT_STATUS_NOT_POWERED		0x0f
 #define MGMT_STATUS_CANCELLED		0x10
 #define MGMT_STATUS_INVALID_INDEX	0x11
-#define MGMT_STATUS_RFKILLED		0x12
 
 struct mgmt_hdr {
 	__le16	opcode;
@@ -341,6 +340,15 @@ struct mgmt_cp_unblock_device {
 	struct mgmt_addr_info addr;
 } __packed;
 #define MGMT_UNBLOCK_DEVICE_SIZE	MGMT_ADDR_INFO_SIZE
+
+#define MGMT_OP_SET_DEVICE_ID		0x0028
+struct mgmt_cp_set_device_id {
+	__le16	source;
+	__le16	vendor;
+	__le16	product;
+	__le16	version;
+} __packed;
+#define MGMT_SET_DEVICE_ID_SIZE		8
 
 #define MGMT_EV_CMD_COMPLETE		0x0001
 struct mgmt_ev_cmd_complete {

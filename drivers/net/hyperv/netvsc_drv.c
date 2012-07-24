@@ -211,9 +211,13 @@ static int netvsc_start_xmit(struct sk_buff *skb, struct net_device *net)
 		net->stats.tx_packets++;
 	} else {
 		kfree(packet);
+		if (ret != -EAGAIN) {
+			dev_kfree_skb_any(skb);
+			net->stats.tx_dropped++;
+		}
 	}
 
-	return ret ? NETDEV_TX_BUSY : NETDEV_TX_OK;
+	return (ret == -EAGAIN) ? NETDEV_TX_BUSY : NETDEV_TX_OK;
 }
 
 /*
@@ -321,6 +325,7 @@ static int netvsc_change_mtu(struct net_device *ndev, int mtu)
 		return -EINVAL;
 
 	nvdev->start_remove = true;
+	cancel_delayed_work_sync(&ndevctx->dwork);
 	cancel_work_sync(&ndevctx->work);
 	netif_tx_disable(ndev);
 	rndis_filter_device_remove(hdev);

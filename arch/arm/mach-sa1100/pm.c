@@ -80,7 +80,6 @@ static int sa11x0_pm_enter(suspend_state_t state)
 	/*
 	 * Ensure not to come back here if it wasn't intended
 	 */
-	RCSR = RCSR_SMR;
 	PSPR = 0;
 
 	/*
@@ -118,10 +117,8 @@ static const struct platform_suspend_ops sa11x0_pm_ops = {
 	.valid		= suspend_valid_only_mem,
 };
 
-static int __init sa11x0_pm_init(void)
+int __init sa11x0_pm_init(void)
 {
 	suspend_set_ops(&sa11x0_pm_ops);
 	return 0;
 }
-
-late_initcall(sa11x0_pm_init);

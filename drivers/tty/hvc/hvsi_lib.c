@@ -341,8 +341,8 @@ void hvsilib_establish(struct hvsi_priv *pv)
 
 	pr_devel("HVSI@%x:   ... waiting handshake\n", pv->termno);
 
-	/* Try for up to 400ms */
-	for (timeout = 0; timeout < 40; timeout++) {
+	/* Try for up to 200s */
+	for (timeout = 0; timeout < 20; timeout++) {
 		if (pv->established)
 			goto established;
 		if (!hvsi_get_packet(pv))
@@ -377,7 +377,7 @@ int hvsilib_open(struct hvsi_priv *pv, struct hvc_struct *hp)
 	pr_devel("HVSI@%x: open !\n", pv->termno);
 
 	/* Keep track of the tty data structure */
-	pv->tty = tty_kref_get(hp->tty);
+	pv->tty = tty_port_tty_get(&hp->port);
 
 	hvsilib_establish(pv);
 

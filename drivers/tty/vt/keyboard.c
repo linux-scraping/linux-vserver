@@ -53,17 +53,13 @@ extern void ctrl_alt_del(void);
 
 #define KBD_DEFMODE ((1 << VC_REPEAT) | (1 << VC_META))
 
-/*
- * Some laptops take the 789uiojklm,. keys as number pad when NumLock is on.
- * This seems a good reason to start with NumLock off. On HIL keyboards
- * of PARISC machines however there is no NumLock key and everyone expects the
- * keypad to be used for numbers.
- */
-
-#if defined(CONFIG_PARISC) && (defined(CONFIG_KEYBOARD_HIL) || defined(CONFIG_KEYBOARD_HIL_OLD))
-#define KBD_DEFLEDS (1 << VC_NUMLOCK)
+#if defined(CONFIG_X86) || defined(CONFIG_PARISC)
+#include <asm/kbdleds.h>
 #else
-#define KBD_DEFLEDS 0
+static inline int kbd_defleds(void)
+{
+	return 0;
+}
 #endif
 
 #define KBD_DEFLOCK 0
@@ -1053,10 +1049,13 @@ static int kbd_update_leds_helper(struct input_handle *handle, void *data)
  */
 int vt_get_leds(int console, int flag)
 {
+	unsigned long flags;
 	struct kbd_struct * kbd = kbd_table + console;
 	int ret;
 
+	spin_lock_irqsave(&kbd_event_lock, flags);
 	ret = vc_kbd_led(kbd, flag);
+	spin_unlock_irqrestore(&kbd_event_lock, flags);
 
 	return ret;
 }
@@ -1521,8 +1520,8 @@ int __init kbd_init(void)
 	int error;
 
 	for (i = 0; i < MAX_NR_CONSOLES; i++) {
-		kbd_table[i].ledflagstate = KBD_DEFLEDS;
-		kbd_table[i].default_ledflagstate = KBD_DEFLEDS;
+		kbd_table[i].ledflagstate = kbd_defleds();
+		kbd_table[i].default_ledflagstate = kbd_defleds();
 		kbd_table[i].ledmode = LED_SHOW_FLAGS;
 		kbd_table[i].lockstate = KBD_DEFLOCK;
 		kbd_table[i].slockstate = 0;

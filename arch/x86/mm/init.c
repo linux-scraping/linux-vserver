@@ -35,50 +35,41 @@ struct map_range {
 	unsigned page_size_mask;
 };
 
-/*
- * First calculate space needed for kernel direct mapping page tables to cover
- * mr[0].start to mr[nr_range - 1].end, while accounting for possible 2M and 1GB
- * pages. Then find enough contiguous space for those page tables.
- */
-static void __init find_early_table_space(struct map_range *mr, int nr_range)
+static void __init find_early_table_space(struct map_range *mr, unsigned long end,
+					  int use_pse, int use_gbpages)
 {
-	int i;
-	unsigned long puds = 0, pmds = 0, ptes = 0, tables;
-	unsigned long start = 0, good_end;
-	unsigned long pgd_extra = 0;
+	unsigned long puds, pmds, ptes, tables, start = 0, good_end = end;
 	phys_addr_t base;
 
-	for (i = 0; i < nr_range; i++) {
-		unsigned long range, extra;
-
-		if ((mr[i].end >> PGDIR_SHIFT) - (mr[i].start >> PGDIR_SHIFT))
-			pgd_extra++;
-
-		range = mr[i].end - mr[i].start;
-		puds += (range + PUD_SIZE - 1) >> PUD_SHIFT;
-
-		if (mr[i].page_size_mask & (1 << PG_LEVEL_1G)) {
-			extra = range - ((range >> PUD_SHIFT) << PUD_SHIFT);
-			pmds += (extra + PMD_SIZE - 1) >> PMD_SHIFT;
-		} else {
-			pmds += (range + PMD_SIZE - 1) >> PMD_SHIFT;
-		}
-
-		if (mr[i].page_size_mask & (1 << PG_LEVEL_2M)) {
-			extra = range - ((range >> PMD_SHIFT) << PMD_SHIFT);
-#ifdef CONFIG_X86_32
-			extra += PMD_SIZE;
-#endif
-			ptes += (extra + PAGE_SIZE - 1) >> PAGE_SHIFT;
-		} else {
-			ptes += (range + PAGE_SIZE - 1) >> PAGE_SHIFT;
-		}
-	}
-
+	puds = (end + PUD_SIZE - 1) >> PUD_SHIFT;
 	tables = roundup(puds * sizeof(pud_t), PAGE_SIZE);
+
+	if (use_gbpages) {
+		unsigned long extra;
+
+		extra = end - ((end>>PUD_SHIFT) << PUD_SHIFT);
+		pmds = (extra + PMD_SIZE - 1) >> PMD_SHIFT;
+	} else
+		pmds = (end + PMD_SIZE - 1) >> PMD_SHIFT;
+
 	tables += roundup(pmds * sizeof(pmd_t), PAGE_SIZE);
+
+	if (use_pse) {
+		unsigned long extra;
+
+		extra = end - ((end>>PMD_SHIFT) << PMD_SHIFT);
+#ifdef CONFIG_X86_32
+		extra += PMD_SIZE;
+#endif
+		/* The first 2/4M doesn't use large pages. */
+		if (mr->start < PMD_SIZE)
+			extra += mr->end - mr->start;
+
+		ptes = (extra + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	} else
+		ptes = (end + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
 	tables += roundup(ptes * sizeof(pte_t), PAGE_SIZE);
-	tables += (pgd_extra * PAGE_SIZE);
 
 #ifdef CONFIG_X86_32
 	/* for fixmap */
@@ -94,9 +85,9 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
 	pgt_buf_end = pgt_buf_start;
 	pgt_buf_top = pgt_buf_start + (tables >> PAGE_SHIFT);
 
- 	printk(KERN_DEBUG "kernel direct mapping tables up to %#lx @ [mem %#010lx-%#010lx]\n",
-		mr[nr_range - 1].end - 1, pgt_buf_start << PAGE_SHIFT,
- 		(pgt_buf_top << PAGE_SHIFT) - 1);
+	printk(KERN_DEBUG "kernel direct mapping tables up to %#lx @ [mem %#010lx-%#010lx]\n",
+		end - 1, pgt_buf_start << PAGE_SHIFT,
+		(pgt_buf_top << PAGE_SHIFT) - 1);
 }
 
 void __init native_pagetable_reserve(u64 start, u64 end)
@@ -143,7 +134,8 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
 	int nr_range, i;
 	int use_pse, use_gbpages;
 
-	printk(KERN_INFO "init_memory_mapping: %016lx-%016lx\n", start, end);
+	printk(KERN_INFO "init_memory_mapping: [mem %#010lx-%#010lx]\n",
+	       start, end - 1);
 
 #if defined(CONFIG_DEBUG_PAGEALLOC) || defined(CONFIG_KMEMCHECK)
 	/*
@@ -262,8 +254,8 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
 	}
 
 	for (i = 0; i < nr_range; i++)
-		printk(KERN_DEBUG " %010lx - %010lx page %s\n",
-				mr[i].start, mr[i].end,
+		printk(KERN_DEBUG " [mem %#010lx-%#010lx] page %s\n",
+				mr[i].start, mr[i].end - 1,
 			(mr[i].page_size_mask & (1<<PG_LEVEL_1G))?"1G":(
 			 (mr[i].page_size_mask & (1<<PG_LEVEL_2M))?"2M":"4k"));
 
@@ -275,7 +267,7 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
 	 * nodes are discovered.
 	 */
 	if (!after_bootmem)
-		find_early_table_space(mr, nr_range);
+		find_early_table_space(&mr[0], end, use_pse, use_gbpages);
 
 	for (i = 0; i < nr_range; i++)
 		ret = kernel_physical_mapping_init(mr[i].start, mr[i].end,
@@ -361,8 +353,8 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
 	 * create a kernel page fault:
 	 */
 #ifdef CONFIG_DEBUG_PAGEALLOC
-	printk(KERN_INFO "debug: unmapping init memory %08lx..%08lx\n",
-		begin, end);
+	printk(KERN_INFO "debug: unmapping init [mem %#010lx-%#010lx]\n",
+		begin, end - 1);
 	set_memory_np(begin, (end - begin) >> PAGE_SHIFT);
 #else
 	/*

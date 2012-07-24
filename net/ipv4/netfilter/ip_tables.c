@@ -153,8 +153,7 @@ ip_checkentry(const struct ipt_ip *ip)
 static unsigned int
 ipt_error(struct sk_buff *skb, const struct xt_action_param *par)
 {
-	if (net_ratelimit())
-		pr_info("error: `%s'\n", (const char *)par->targinfo);
+	net_info_ratelimited("error: `%s'\n", (const char *)par->targinfo);
 
 	return NF_DROP;
 }
@@ -377,7 +376,7 @@ ipt_do_table(struct sk_buff *skb,
 			if (v < 0) {
 				/* Pop from stack? */
 				if (v != XT_RETURN) {
-					verdict = (unsigned)(-v) - 1;
+					verdict = (unsigned int)(-v) - 1;
 					break;
 				}
 				if (*stackptr <= origptr) {
@@ -1227,10 +1226,8 @@ __do_replace(struct net *net, const char *name, unsigned int valid_hooks,
 
 	xt_free_table_info(oldinfo);
 	if (copy_to_user(counters_ptr, counters,
-			 sizeof(struct xt_counters) * num_counters) != 0) {
-		/* Silent error, can't fail, new table is already in place */
-		net_warn_ratelimited("iptables: counters copy to user failed while replacing table\n");
-	}
+			 sizeof(struct xt_counters) * num_counters) != 0)
+		ret = -EFAULT;
 	vfree(counters);
 	xt_table_unlock(t);
 	return ret;

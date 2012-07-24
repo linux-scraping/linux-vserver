@@ -21,6 +21,7 @@ KBUILD_DEFCONFIG := default_defconfig
 
 NM		= sh $(srctree)/arch/parisc/nm
 CHECKFLAGS	+= -D__hppa__=1
+LIBGCC		= $(shell $(CC) $(KBUILD_CFLAGS) -print-libgcc-file-name)
 
 MACHINE		:= $(shell uname -m)
 ifeq ($(MACHINE),parisc*)
@@ -51,12 +52,7 @@ cflags-y	:= -pipe
 
 # These flags should be implied by an hppa-linux configuration, but they
 # are not in gcc 3.2.
-cflags-y	+= -mno-space-regs
-
-# -mfast-indirect-calls is only relevant for 32-bit kernels.
-ifndef CONFIG_64BIT
-cflags-y	+= -mfast-indirect-calls
-endif
+cflags-y	+= -mno-space-regs -mfast-indirect-calls
 
 # Currently we save and restore fpregs on all kernel entry/interruption paths.
 # If that gets optimized, we might need to disable the use of fpregs in the
@@ -80,11 +76,11 @@ head-y			:= arch/parisc/kernel/head.o
 
 KBUILD_CFLAGS	+= $(cflags-y)
 
-kernel-y			:= mm/ kernel/ math-emu/ kernel/init_task.o
+kernel-y			:= mm/ kernel/ math-emu/
 kernel-$(CONFIG_HPUX)		+= hpux/
 
 core-y	+= $(addprefix arch/parisc/, $(kernel-y))
-libs-y	+= arch/parisc/lib/ `$(CC) -print-libgcc-file-name`
+libs-y	+= arch/parisc/lib/ $(LIBGCC)
 
 drivers-$(CONFIG_OPROFILE)		+= arch/parisc/oprofile/
 

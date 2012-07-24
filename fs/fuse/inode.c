@@ -92,7 +92,6 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->attr_version = 0;
 	fi->writectr = 0;
 	fi->orig_ino = 0;
-	fi->state = 0;
 	INIT_LIST_HEAD(&fi->write_files);
 	INIT_LIST_HEAD(&fi->queued_writes);
 	INIT_LIST_HEAD(&fi->writepages);
@@ -124,7 +123,7 @@ static void fuse_destroy_inode(struct inode *inode)
 static void fuse_evict_inode(struct inode *inode)
 {
 	truncate_inode_pages(&inode->i_data, 0);
-	end_writeback(inode);
+	clear_inode(inode);
 	if (inode->i_sb->s_flags & MS_ACTIVE) {
 		struct fuse_conn *fc = get_fuse_conn(inode);
 		struct fuse_inode *fi = get_fuse_inode(inode);
@@ -200,8 +199,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	loff_t oldsize;
 
 	spin_lock(&fc->lock);
-	if ((attr_version != 0 && fi->attr_version > attr_version) ||
-	    test_bit(FUSE_I_SIZE_UNSTABLE, &fi->state)) {
+	if (attr_version != 0 && fi->attr_version > attr_version) {
 		spin_unlock(&fc->lock);
 		return;
 	}
@@ -644,12 +642,10 @@ static struct dentry *fuse_get_dentry(struct super_block *sb,
 	return ERR_PTR(err);
 }
 
-static int fuse_encode_fh(struct dentry *dentry, u32 *fh, int *max_len,
-			   int connectable)
+static int fuse_encode_fh(struct inode *inode, u32 *fh, int *max_len,
+			   struct inode *parent)
 {
-	struct inode *inode = dentry->d_inode;
-	bool encode_parent = connectable && !S_ISDIR(inode->i_mode);
-	int len = encode_parent ? 6 : 3;
+	int len = parent ? 6 : 3;
 	u64 nodeid;
 	u32 generation;
 
@@ -665,14 +661,9 @@ static int fuse_encode_fh(struct dentry *dentry, u32 *fh, int *max_len,
 	fh[1] = (u32)(nodeid & 0xffffffff);
 	fh[2] = generation;
 
-	if (encode_parent) {
-		struct inode *parent;
-
-		spin_lock(&dentry->d_lock);
-		parent = dentry->d_parent->d_inode;
+	if (parent) {
 		nodeid = get_fuse_inode(parent)->nodeid;
 		generation = parent->i_generation;
-		spin_unlock(&dentry->d_lock);
 
 		fh[3] = (u32)(nodeid >> 32);
 		fh[4] = (u32)(nodeid & 0xffffffff);
@@ -680,7 +671,7 @@ static int fuse_encode_fh(struct dentry *dentry, u32 *fh, int *max_len,
 	}
 
 	*max_len = len;
-	return encode_parent ? 0x82 : 0x81;
+	return parent ? 0x82 : 0x81;
 }
 
 static struct dentry *fuse_fh_to_dentry(struct super_block *sb,
@@ -981,7 +972,6 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 		goto err_fput;
 
 	fuse_conn_init(fc);
-	fc->release = fuse_free_conn;
 
 	fc->dev = sb->s_dev;
 	fc->sb = sb;
@@ -996,6 +986,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 		fc->dont_mask = 1;
 	sb->s_flags |= MS_POSIXACL;
 
+	fc->release = fuse_free_conn;
 	fc->flags = d.flags;
 	fc->user_id = d.user_id;
 	fc->group_id = d.group_id;

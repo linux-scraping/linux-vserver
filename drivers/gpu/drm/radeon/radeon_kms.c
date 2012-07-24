@@ -39,12 +39,8 @@ int radeon_driver_unload_kms(struct drm_device *dev)
 
 	if (rdev == NULL)
 		return 0;
-	if (rdev->rmmio == NULL)
-		goto done_free;
 	radeon_modeset_fini(rdev);
 	radeon_device_fini(rdev);
-
-done_free:
 	kfree(rdev);
 	dev->dev_private = NULL;
 	return 0;
@@ -60,8 +56,6 @@ int radeon_driver_load_kms(struct drm_device *dev, unsigned long flags)
 		return -ENOMEM;
 	}
 	dev->dev_private = (void *)rdev;
-
-	pci_set_master(dev->pdev);
 
 	/* update BUS flag */
 	if (drm_pci_device_is_agp(dev)) {
@@ -279,7 +273,7 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		break;
 	case RADEON_INFO_MAX_PIPES:
 		if (rdev->family >= CHIP_TAHITI)
-			value = rdev->config.si.max_pipes_per_simd;
+			value = rdev->config.si.max_cu_per_sh;
 		else if (rdev->family >= CHIP_CAYMAN)
 			value = rdev->config.cayman.max_pipes_per_simd;
 		else if (rdev->family >= CHIP_CEDAR)
@@ -428,8 +422,6 @@ int radeon_get_vblank_timestamp_kms(struct drm_device *dev, int crtc,
 
 	/* Get associated drm_crtc: */
 	drmcrtc = &rdev->mode_info.crtcs[crtc]->base;
-	if (!drmcrtc)
-		return -EINVAL;
 
 	/* Helper routine in DRM core does all the work: */
 	return drm_calc_vbltimestamp_from_scanoutpos(dev, crtc, max_error,

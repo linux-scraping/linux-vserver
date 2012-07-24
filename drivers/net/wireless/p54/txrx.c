@@ -308,7 +308,7 @@ static void p54_pspoll_workaround(struct p54_common *priv, struct sk_buff *skb)
 		return;
 
 	/* only consider beacons from the associated BSSID */
-	if (compare_ether_addr(hdr->addr3, priv->bssid))
+	if (!ether_addr_equal(hdr->addr3, priv->bssid))
 		return;
 
 	tim = p54_find_ie(skb, WLAN_EID_TIM);
@@ -583,7 +583,7 @@ static void p54_rx_stats(struct p54_common *priv, struct sk_buff *skb)
 	chan = priv->curchan;
 	if (chan) {
 		struct survey_info *survey = &priv->survey[chan->hw_value];
-		survey->noise = clamp(priv->noise, -128, 127);
+		survey->noise = clamp_t(s8, priv->noise, -128, 127);
 		survey->channel_time = priv->survey_raw.active;
 		survey->channel_time_tx = priv->survey_raw.tx;
 		survey->channel_time_busy = priv->survey_raw.tx +
@@ -914,8 +914,7 @@ void p54_tx_80211(struct ieee80211_hw *dev, struct sk_buff *skb)
 	txhdr->hw_queue = queue;
 	txhdr->backlog = priv->tx_stats[queue].len - 1;
 	memset(txhdr->durations, 0, sizeof(txhdr->durations));
-	txhdr->tx_antenna = ((info->antenna_sel_tx == 0) ?
-		2 : info->antenna_sel_tx - 1) & priv->tx_diversity_mask;
+	txhdr->tx_antenna = 2 & priv->tx_diversity_mask;
 	if (priv->rxhw == 5) {
 		txhdr->longbow.cts_rate = cts_rate;
 		txhdr->longbow.output_power = cpu_to_le16(priv->output_power);

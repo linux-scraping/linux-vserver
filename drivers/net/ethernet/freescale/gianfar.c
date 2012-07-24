@@ -136,7 +136,7 @@ static void gfar_netpoll(struct net_device *dev);
 int gfar_clean_rx_ring(struct gfar_priv_rx_q *rx_queue, int rx_work_limit);
 static int gfar_clean_tx_ring(struct gfar_priv_tx_q *tx_queue);
 static int gfar_process_frame(struct net_device *dev, struct sk_buff *skb,
-			      int amount_pull);
+			      int amount_pull, struct napi_struct *napi);
 void gfar_halt(struct net_device *dev);
 static void gfar_halt_nodisable(struct net_device *dev);
 void gfar_start(struct net_device *dev);
@@ -394,13 +394,7 @@ static void gfar_init_mac(struct net_device *ndev)
 	if (ndev->features & NETIF_F_IP_CSUM)
 		tctrl |= TCTRL_INIT_CSUM;
 
-	if (priv->prio_sched_en)
-		tctrl |= TCTRL_TXSCHED_PRIO;
-	else {
-		tctrl |= TCTRL_TXSCHED_WRRS;
-		gfar_write(&regs->tr03wt, DEFAULT_WRRS_WEIGHT);
-		gfar_write(&regs->tr47wt, DEFAULT_WRRS_WEIGHT);
-	}
+	tctrl |= TCTRL_TXSCHED_PRIO;
 
 	gfar_write(&regs->tctrl, tctrl);
 
@@ -1043,7 +1037,7 @@ static int gfar_probe(struct platform_device *ofdev)
 
 	if (priv->device_flags & FSL_GIANFAR_DEV_HAS_VLAN) {
 		dev->hw_features |= NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
-		dev->features |= NETIF_F_HW_VLAN_RX;
+		dev->features |= NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX;
 	}
 
 	if (priv->device_flags & FSL_GIANFAR_DEV_HAS_EXTENDED_HASH) {
@@ -1088,7 +1082,7 @@ static int gfar_probe(struct platform_device *ofdev)
 
 	if (dev->features & NETIF_F_IP_CSUM ||
 			priv->device_flags & FSL_GIANFAR_DEV_HAS_TIMER)
-		dev->hard_header_len += GMAC_FCB_LEN;
+		dev->needed_headroom = GMAC_FCB_LEN;
 
 	/* Program the isrg regs only if number of grps > 1 */
 	if (priv->num_grps > 1) {
@@ -1159,9 +1153,6 @@ static int gfar_probe(struct platform_device *ofdev)
 	priv->rx_filer_enable = 1;
 	/* Enable most messages by default */
 	priv->msg_enable = (NETIF_MSG_IFUP << 1 ) - 1;
-	/* use pritority h/w tx queue scheduling for single queue devices */
-	if (priv->num_tx_queues == 1)
-		priv->prio_sched_en = 1;
 
 	/* Carrier starts down, phylib will bring it up */
 	netif_carrier_off(dev);
@@ -1813,18 +1804,16 @@ void gfar_configure_coalescing(struct gfar_private *priv,
 	if (priv->mode == MQ_MG_MODE) {
 		baddr = &regs->txic0;
 		for_each_set_bit(i, &tx_mask, priv->num_tx_queues) {
-			if (likely(priv->tx_queue[i]->txcoalescing)) {
-				gfar_write(baddr + i, 0);
+			gfar_write(baddr + i, 0);
+			if (likely(priv->tx_queue[i]->txcoalescing))
 				gfar_write(baddr + i, priv->tx_queue[i]->txic);
-			}
 		}
 
 		baddr = &regs->rxic0;
 		for_each_set_bit(i, &rx_mask, priv->num_rx_queues) {
-			if (likely(priv->rx_queue[i]->rxcoalescing)) {
-				gfar_write(baddr + i, 0);
+			gfar_write(baddr + i, 0);
+			if (likely(priv->rx_queue[i]->rxcoalescing))
 				gfar_write(baddr + i, priv->rx_queue[i]->rxic);
-			}
 		}
 	}
 }
@@ -2683,12 +2672,12 @@ static inline void gfar_rx_checksum(struct sk_buff *skb, struct rxfcb *fcb)
 /* gfar_process_frame() -- handle one incoming packet if skb
  * isn't NULL.  */
 static int gfar_process_frame(struct net_device *dev, struct sk_buff *skb,
-			      int amount_pull)
+			      int amount_pull, struct napi_struct *napi)
 {
 	struct gfar_private *priv = netdev_priv(dev);
 	struct rxfcb *fcb = NULL;
 
-	int ret;
+	gro_result_t ret;
 
 	/* fcb is at the beginning if exists */
 	fcb = (struct rxfcb *)skb->data;
@@ -2727,9 +2716,9 @@ static int gfar_process_frame(struct net_device *dev, struct sk_buff *skb,
 		__vlan_hwaccel_put_tag(skb, fcb->vlctl);
 
 	/* Send the packet up the stack */
-	ret = netif_receive_skb(skb);
+	ret = napi_gro_receive(napi, skb);
 
-	if (NET_RX_DROP == ret)
+	if (GRO_DROP == ret)
 		priv->extra_stats.kernel_dropped++;
 
 	return 0;
@@ -2791,7 +2780,8 @@ int gfar_clean_rx_ring(struct gfar_priv_rx_q *rx_queue, int rx_work_limit)
 				skb_put(skb, pkt_len);
 				rx_queue->stats.rx_bytes += pkt_len;
 				skb_record_rx_queue(skb, rx_queue->qindex);
-				gfar_process_frame(dev, skb, amount_pull);
+				gfar_process_frame(dev, skb, amount_pull,
+						&rx_queue->grp->napi);
 
 			} else {
 				netif_warn(priv, rx_err, dev, "Missing skb!\n");

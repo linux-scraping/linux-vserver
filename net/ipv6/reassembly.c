@@ -26,9 +26,6 @@
  *	YOSHIFUJI,H. @USAGI	Always remove fragment header to
  *				calculate ICV correctly.
  */
-
-#define pr_fmt(fmt) "IPv6: " fmt
-
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -137,15 +134,16 @@ static unsigned int ip6_hashfn(struct inet_frag_queue *q)
 	return inet6_hash_frag(fq->id, &fq->saddr, &fq->daddr, ip6_frags.rnd);
 }
 
-int ip6_frag_match(struct inet_frag_queue *q, void *a)
+bool ip6_frag_match(struct inet_frag_queue *q, void *a)
 {
 	struct frag_queue *fq;
 	struct ip6_create_arg *arg = a;
 
 	fq = container_of(q, struct frag_queue, q);
-	return (fq->id == arg->id && fq->user == arg->user &&
-			ipv6_addr_equal(&fq->saddr, arg->src) &&
-			ipv6_addr_equal(&fq->daddr, arg->dst));
+	return	fq->id == arg->id &&
+		fq->user == arg->user &&
+		ipv6_addr_equal(&fq->saddr, arg->src) &&
+		ipv6_addr_equal(&fq->daddr, arg->dst);
 }
 EXPORT_SYMBOL(ip6_frag_match);
 
@@ -243,10 +241,9 @@ fq_find(struct net *net, __be32 id, const struct in6_addr *src, const struct in6
 	hash = inet6_hash_frag(id, src, dst, ip6_frags.rnd);
 
 	q = inet_frag_find(&net->ipv6.frags, &ip6_frags, &arg, hash);
-	if (IS_ERR_OR_NULL(q)) {
-		inet_frag_maybe_warn_overflow(q, pr_fmt());
+	if (q == NULL)
 		return NULL;
-	}
+
 	return container_of(q, struct frag_queue, q);
 }
 
@@ -385,17 +382,8 @@ found:
 	}
 
 	if (fq->q.last_in == (INET_FRAG_FIRST_IN | INET_FRAG_LAST_IN) &&
-	    fq->q.meat == fq->q.len) {
-		int res;
-		unsigned long orefdst = skb->_skb_refdst;
-
-		skb->_skb_refdst = 0UL;
-		res = ip6_frag_reasm(fq, prev, dev);
-		skb->_skb_refdst = orefdst;
-		return res;
-	}
-
-	skb_dst_drop(skb);
+	    fq->q.meat == fq->q.len)
+		return ip6_frag_reasm(fq, prev, dev);
 
 	write_lock(&ip6_frags.lock);
 	list_move_tail(&fq->q.lru_list, &fq->q.net->lru_list);
@@ -427,6 +415,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	struct sk_buff *fp, *head = fq->q.fragments;
 	int    payload_len;
 	unsigned int nhoff;
+	int sum_truesize;
 
 	fq_kill(fq);
 
@@ -446,7 +435,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 		skb_morph(head, fq->q.fragments);
 		head->next = fq->q.fragments->next;
 
-		kfree_skb(fq->q.fragments);
+		consume_skb(fq->q.fragments);
 		fq->q.fragments = head;
 	}
 
@@ -496,27 +485,39 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	head->mac_header += sizeof(struct frag_hdr);
 	head->network_header += sizeof(struct frag_hdr);
 
-	skb_shinfo(head)->frag_list = head->next;
 	skb_reset_transport_header(head);
 	skb_push(head, head->data - skb_network_header(head));
 
-	for (fp=head->next; fp; fp = fp->next) {
-		head->data_len += fp->len;
-		head->len += fp->len;
+	sum_truesize = head->truesize;
+	for (fp = head->next; fp;) {
+		bool headstolen;
+		int delta;
+		struct sk_buff *next = fp->next;
+
+		sum_truesize += fp->truesize;
 		if (head->ip_summed != fp->ip_summed)
 			head->ip_summed = CHECKSUM_NONE;
 		else if (head->ip_summed == CHECKSUM_COMPLETE)
 			head->csum = csum_add(head->csum, fp->csum);
-		head->truesize += fp->truesize;
+
+		if (skb_try_coalesce(head, fp, &headstolen, &delta)) {
+			kfree_skb_partial(fp, headstolen);
+		} else {
+			if (!skb_shinfo(head)->frag_list)
+				skb_shinfo(head)->frag_list = fp;
+			head->data_len += fp->len;
+			head->len += fp->len;
+			head->truesize += fp->truesize;
+		}
+		fp = next;
 	}
-	atomic_sub(head->truesize, &fq->q.net->mem);
+	atomic_sub(sum_truesize, &fq->q.net->mem);
 
 	head->next = NULL;
 	head->dev = dev;
 	head->tstamp = fq->q.stamp;
 	ipv6_hdr(head)->payload_len = htons(payload_len);
 	IP6CB(head)->nhoff = nhoff;
-	IP6CB(head)->flags |= IP6SKB_FRAGMENTED;
 
 	/* Yes, and fold redundant checksum back. 8) */
 	if (head->ip_summed == CHECKSUM_COMPLETE)
@@ -532,12 +533,10 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	return 1;
 
 out_oversize:
-	if (net_ratelimit())
-		printk(KERN_DEBUG "ip6_frag_reasm: payload len = %d\n", payload_len);
+	net_dbg_ratelimited("ip6_frag_reasm: payload len = %d\n", payload_len);
 	goto out_fail;
 out_oom:
-	if (net_ratelimit())
-		printk(KERN_DEBUG "ip6_frag_reasm: no memory for reassembly\n");
+	net_dbg_ratelimited("ip6_frag_reasm: no memory for reassembly\n");
 out_fail:
 	rcu_read_lock();
 	IP6_INC_STATS_BH(net, __in6_dev_get(dev), IPSTATS_MIB_REASMFAILS);
@@ -551,9 +550,6 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	struct frag_queue *fq;
 	const struct ipv6hdr *hdr = ipv6_hdr(skb);
 	struct net *net = dev_net(skb_dst(skb)->dev);
-
-	if (IP6CB(skb)->flags & IP6SKB_FRAGMENTED)
-		goto fail_hdr;
 
 	IP6_INC_STATS_BH(net, ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMREQDS);
 
@@ -575,7 +571,6 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 				 ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMOKS);
 
 		IP6CB(skb)->nhoff = (u8 *)fhdr - skb_network_header(skb);
-		IP6CB(skb)->flags |= IP6SKB_FRAGMENTED;
 		return 1;
 	}
 
@@ -664,7 +659,7 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
 		table[2].data = &net->ipv6.frags.timeout;
 	}
 
-	hdr = register_net_sysctl_table(net, net_ipv6_ctl_path, table);
+	hdr = register_net_sysctl(net, "net/ipv6", table);
 	if (hdr == NULL)
 		goto err_reg;
 
@@ -692,7 +687,7 @@ static struct ctl_table_header *ip6_ctl_header;
 
 static int ip6_frags_sysctl_register(void)
 {
-	ip6_ctl_header = register_net_sysctl_rotable(net_ipv6_ctl_path,
+	ip6_ctl_header = register_net_sysctl(&init_net, "net/ipv6",
 			ip6_frags_ctl_table);
 	return ip6_ctl_header == NULL ? -ENOMEM : 0;
 }

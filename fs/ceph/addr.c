@@ -205,7 +205,7 @@ static int readpage_nounlock(struct file *filp, struct page *page)
 	dout("readpage inode %p file %p page %p index %lu\n",
 	     inode, filp, page, page->index);
 	err = ceph_osdc_readpages(osdc, ceph_vino(inode), &ci->i_layout,
-				  (u64) page_offset(page), &len,
+				  page->index << PAGE_CACHE_SHIFT, &len,
 				  ci->i_truncate_seq, ci->i_truncate_size,
 				  &page, 1, 0);
 	if (err == -ENOENT)
@@ -213,13 +213,9 @@ static int readpage_nounlock(struct file *filp, struct page *page)
 	if (err < 0) {
 		SetPageError(page);
 		goto out;
-	} else {
-		if (err < PAGE_CACHE_SIZE) {
+	} else if (err < PAGE_CACHE_SIZE) {
 		/* zero fill remainder of page */
-			zero_user_segment(page, err, PAGE_CACHE_SIZE);
-		} else {
-			flush_dcache_page(page);
-		}
+		zero_user_segment(page, err, PAGE_CACHE_SIZE);
 	}
 	SetPageUptodate(page);
 
@@ -271,14 +267,6 @@ static void finish_read(struct ceph_osd_request *req, struct ceph_msg *msg)
 	kfree(req->r_pages);
 }
 
-static void ceph_unlock_page_vector(struct page **pages, int num_pages)
-{
-	int i;
-
-	for (i = 0; i < num_pages; i++)
-		unlock_page(pages[i]);
-}
-
 /*
  * start an async read(ahead) operation.  return nr_pages we submitted
  * a read for on success, or negative error code.
@@ -298,7 +286,7 @@ static int start_read(struct inode *inode, struct list_head *page_list, int max)
 	int nr_pages = 0;
 	int ret;
 
-	off = (u64) page_offset(page);
+	off = page->index << PAGE_CACHE_SHIFT;
 
 	/* count pages */
 	next_index = page->index;
@@ -320,8 +308,8 @@ static int start_read(struct inode *inode, struct list_head *page_list, int max)
 				    NULL, 0,
 				    ci->i_truncate_seq, ci->i_truncate_size,
 				    NULL, false, 1, 0);
-	if (IS_ERR(req))
-		return PTR_ERR(req);
+	if (!req)
+		return -ENOMEM;
 
 	/* build page vector */
 	nr_pages = len >> PAGE_CACHE_SHIFT;
@@ -359,7 +347,6 @@ static int start_read(struct inode *inode, struct list_head *page_list, int max)
 	return nr_pages;
 
 out_pages:
-	ceph_unlock_page_vector(pages, nr_pages);
 	ceph_release_page_vector(pages, nr_pages);
 out:
 	ceph_osdc_put_request(req);
@@ -439,7 +426,7 @@ static int writepage_nounlock(struct page *page, struct writeback_control *wbc)
 	struct ceph_inode_info *ci;
 	struct ceph_fs_client *fsc;
 	struct ceph_osd_client *osdc;
-	loff_t page_off = page_offset(page);
+	loff_t page_off = page->index << PAGE_CACHE_SHIFT;
 	int len = PAGE_CACHE_SIZE;
 	loff_t i_size;
 	int err = 0;
@@ -830,7 +817,8 @@ get_more_pages:
 			/* ok */
 			if (locked_pages == 0) {
 				/* prepare async write request */
-				offset = (u64) page_offset(page);
+				offset = (unsigned long long)page->index
+					<< PAGE_CACHE_SHIFT;
 				len = wsize;
 				req = ceph_osdc_new_request(&fsc->client->osdc,
 					    &ci->i_layout,
@@ -844,8 +832,8 @@ get_more_pages:
 					    ci->i_truncate_size,
 					    &inode->i_mtime, true, 1, 0);
 
-				if (IS_ERR(req)) {
-					rc = PTR_ERR(req);
+				if (!req) {
+					rc = -ENOMEM;
 					unlock_page(page);
 					break;
 				}
@@ -1192,7 +1180,7 @@ static int ceph_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct inode *inode = vma->vm_file->f_dentry->d_inode;
 	struct page *page = vmf->page;
 	struct ceph_mds_client *mdsc = ceph_inode_to_client(inode)->mdsc;
-	loff_t off = page_offset(page);
+	loff_t off = page->index << PAGE_CACHE_SHIFT;
 	loff_t size, len;
 	int ret;
 

@@ -463,10 +463,8 @@ static __be32 decode_cb_sequence_args(struct svc_rqst *rqstp,
 
 		for (i = 0; i < args->csa_nrclists; i++) {
 			status = decode_rc_list(xdr, &args->csa_rclists[i]);
-			if (status) {
-				args->csa_nrclists = i;
+			if (status)
 				goto out_free;
-			}
 		}
 	}
 	status = 0;
@@ -698,7 +696,7 @@ static __be32 encode_cb_sequence_res(struct svc_rqst *rqstp,
 				       const struct cb_sequenceres *res)
 {
 	__be32 *p;
-	unsigned status = res->csr_status;
+	__be32 status = res->csr_status;
 
 	if (unlikely(status != 0))
 		goto out;

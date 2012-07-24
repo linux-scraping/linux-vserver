@@ -39,7 +39,6 @@
 #include <linux/inet.h>
 #include <linux/idr.h>
 #include <linux/file.h>
-#include <linux/highmem.h>
 #include <linux/slab.h>
 #include <net/9p/9p.h>
 #include <linux/parser.h>
@@ -326,7 +325,7 @@ static int p9_get_mapped_pages(struct virtio_chan *chan,
 		int count = nr_pages;
 		while (nr_pages) {
 			s = rest_of_page(data);
-			pages[index++] = kmap_to_page(data);
+			pages[index++] = virt_to_page(data);
 			data += s;
 			nr_pages--;
 		}
@@ -616,7 +615,8 @@ static void p9_virtio_remove(struct virtio_device *vdev)
 {
 	struct virtio_chan *chan = vdev->priv;
 
-	BUG_ON(chan->inuse);
+	if (chan->inuse)
+		p9_virtio_close(chan->client);
 	vdev->config->del_vqs(vdev);
 
 	mutex_lock(&virtio_9p_lock);

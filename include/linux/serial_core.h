@@ -47,11 +47,7 @@
 #define PORT_U6_16550A	19	/* ST-Ericsson U6xxx internal UART */
 #define PORT_TEGRA	20	/* NVIDIA Tegra internal UART */
 #define PORT_XR17D15X	21	/* Exar XR17D15x UART */
-#define PORT_BRCM_TRUMANAGE	25
-#define PORT_ALTR_16550_F32 26 /* Altera 16550 UART with 32 FIFOs */
-#define PORT_ALTR_16550_F64 27 /* Altera 16550 UART with 64 FIFOs */
-#define PORT_ALTR_16550_F128 28 /* Altera 16550 UART with 128 FIFOs */
-#define PORT_MAX_8250	28	/* max port ID */
+#define PORT_MAX_8250	21	/* max port ID */
 
 /*
  * ARM specific type numbers.  These are not currently guaranteed
@@ -314,6 +310,7 @@ struct uart_port {
 	int			(*handle_irq)(struct uart_port *);
 	void			(*pm)(struct uart_port *, unsigned int state,
 				      unsigned int old);
+	void			(*handle_break)(struct uart_port *);
 	unsigned int		irq;			/* irq number */
 	unsigned long		irqflags;		/* irq flags  */
 	unsigned int		uartclk;		/* base uart clock */
@@ -537,6 +534,10 @@ uart_handle_sysrq_char(struct uart_port *port, unsigned int ch)
 static inline int uart_handle_break(struct uart_port *port)
 {
 	struct uart_state *state = port->state;
+
+	if (port->handle_break)
+		port->handle_break(port);
+
 #ifdef SUPPORT_SYSRQ
 	if (port->cons && port->cons->index == port->line) {
 		if (!port->sysrq) {

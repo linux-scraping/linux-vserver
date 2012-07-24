@@ -308,11 +308,6 @@ static int magicmouse_raw_event(struct hid_device *hdev,
 		if (size < 4 || ((size - 4) % 9) != 0)
 			return 0;
 		npoints = (size - 4) / 9;
-		if (npoints > 15) {
-			hid_warn(hdev, "invalid size value (%d) for TRACKPAD_REPORT_ID\n",
-					size);
-			return 0;
-		}
 		msc->ntouches = 0;
 		for (ii = 0; ii < npoints; ii++)
 			magicmouse_emit_touch(msc, ii, data + ii * 9 + 4);
@@ -336,11 +331,6 @@ static int magicmouse_raw_event(struct hid_device *hdev,
 		if (size < 6 || ((size - 6) % 8) != 0)
 			return 0;
 		npoints = (size - 6) / 8;
-		if (npoints > 15) {
-			hid_warn(hdev, "invalid size value (%d) for MOUSE_REPORT_ID\n",
-					size);
-			return 0;
-		}
 		msc->ntouches = 0;
 		for (ii = 0; ii < npoints; ii++)
 			magicmouse_emit_touch(msc, ii, data + ii * 8 + 6);
@@ -436,8 +426,10 @@ static void magicmouse_setup_input(struct input_dev *input, struct hid_device *h
 		__set_bit(EV_ABS, input->evbit);
 
 		input_set_abs_params(input, ABS_MT_TRACKING_ID, 0, 15, 0, 0);
-		input_set_abs_params(input, ABS_MT_TOUCH_MAJOR, 0, 255, 4, 0);
-		input_set_abs_params(input, ABS_MT_TOUCH_MINOR, 0, 255, 4, 0);
+		input_set_abs_params(input, ABS_MT_TOUCH_MAJOR, 0, 255 << 2,
+				     4, 0);
+		input_set_abs_params(input, ABS_MT_TOUCH_MINOR, 0, 255 << 2,
+				     4, 0);
 		input_set_abs_params(input, ABS_MT_ORIENTATION, -31, 32, 1, 0);
 
 		/* Note: Touch Y position from the device is inverted relative

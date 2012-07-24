@@ -97,12 +97,9 @@ target_emulate_inquiry_std(struct se_cmd *cmd, char *buf)
 
 	buf[7] = 0x2; /* CmdQue=1 */
 
-	memcpy(&buf[8], "LIO-ORG ", 8);
-	memset(&buf[16], 0x20, 16);
-	memcpy(&buf[16], dev->se_sub_dev->t10_wwn.model,
-	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.model), 16));
-	memcpy(&buf[32], dev->se_sub_dev->t10_wwn.revision,
-	       min_t(size_t, strlen(dev->se_sub_dev->t10_wwn.revision), 4));
+	snprintf(&buf[8], 8, "LIO-ORG");
+	snprintf(&buf[16], 16, "%s", dev->se_sub_dev->t10_wwn.model);
+	snprintf(&buf[32], 4, "%s", dev->se_sub_dev->t10_wwn.revision);
 	buf[4] = 31; /* Set additional length to 31 */
 
 	return 0;
@@ -435,6 +432,7 @@ static int
 target_emulate_evpd_b0(struct se_cmd *cmd, unsigned char *buf)
 {
 	struct se_device *dev = cmd->se_dev;
+	u32 max_sectors;
 	int have_tp = 0;
 
 	/*
@@ -459,7 +457,9 @@ target_emulate_evpd_b0(struct se_cmd *cmd, unsigned char *buf)
 	/*
 	 * Set MAXIMUM TRANSFER LENGTH
 	 */
-	put_unaligned_be32(dev->se_sub_dev->se_dev_attrib.fabric_max_sectors, &buf[8]);
+	max_sectors = min(dev->se_sub_dev->se_dev_attrib.fabric_max_sectors,
+			  dev->se_sub_dev->se_dev_attrib.hw_max_sectors);
+	put_unaligned_be32(max_sectors, &buf[8]);
 
 	/*
 	 * Set OPTIMAL TRANSFER LENGTH
@@ -601,9 +601,8 @@ target_emulate_evpd_00(struct se_cmd *cmd, unsigned char *buf)
 	return 0;
 }
 
-int target_emulate_inquiry(struct se_task *task)
+int target_emulate_inquiry(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	struct se_portal_group *tpg = cmd->se_lun->lun_sep->sep_tpg;
 	unsigned char *buf, *map_buf;
@@ -667,16 +666,13 @@ out:
 	}
 	transport_kunmap_data_sg(cmd);
 
-	if (!ret) {
-		task->task_scsi_status = GOOD;
-		transport_complete_task(task, 1);
-	}
+	if (!ret)
+		target_complete_cmd(cmd, GOOD);
 	return ret;
 }
 
-int target_emulate_readcapacity(struct se_task *task)
+int target_emulate_readcapacity(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	unsigned char *buf;
 	unsigned long long blocks_long = dev->transport->get_blocks(dev);
@@ -700,14 +696,12 @@ int target_emulate_readcapacity(struct se_task *task)
 
 	transport_kunmap_data_sg(cmd);
 
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
 
-int target_emulate_readcapacity_16(struct se_task *task)
+int target_emulate_readcapacity_16(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	unsigned char *buf;
 	unsigned long long blocks = dev->transport->get_blocks(dev);
@@ -735,8 +729,7 @@ int target_emulate_readcapacity_16(struct se_task *task)
 
 	transport_kunmap_data_sg(cmd);
 
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
 
@@ -875,9 +868,8 @@ target_modesense_dpofua(unsigned char *buf, int type)
 	}
 }
 
-int target_emulate_modesense(struct se_task *task)
+int target_emulate_modesense(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	char *cdb = cmd->t_task_cdb;
 	unsigned char *rbuf;
@@ -950,14 +942,12 @@ int target_emulate_modesense(struct se_task *task)
 	memcpy(rbuf, buf, offset);
 	transport_kunmap_data_sg(cmd);
 
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
 
-int target_emulate_request_sense(struct se_task *task)
+int target_emulate_request_sense(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	unsigned char *cdb = cmd->t_task_cdb;
 	unsigned char *buf;
 	u8 ua_asc = 0, ua_ascq = 0;
@@ -1011,8 +1001,7 @@ int target_emulate_request_sense(struct se_task *task)
 
 end:
 	transport_kunmap_data_sg(cmd);
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
 
@@ -1020,16 +1009,15 @@ end:
  * Used for TCM/IBLOCK and TCM/FILEIO for block/blk-lib.c level discard support.
  * Note this is not used for TCM/pSCSI passthrough
  */
-int target_emulate_unmap(struct se_task *task)
+int target_emulate_unmap(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	unsigned char *buf, *ptr = NULL;
+	unsigned char *cdb = &cmd->t_task_cdb[0];
 	sector_t lba;
-	int size = cmd->data_length;
-	u32 range;
-	int ret = 0;
-	int dl, bd_dl;
+	unsigned int size = cmd->data_length, range;
+	int ret = 0, offset;
+	unsigned short dl, bd_dl;
 
 	if (!dev->transport->do_discard) {
 		pr_err("UNMAP emulation not supported for: %s\n",
@@ -1038,40 +1026,23 @@ int target_emulate_unmap(struct se_task *task)
 		return -ENOSYS;
 	}
 
+	/* First UNMAP block descriptor starts at 8 byte offset */
+	offset = 8;
+	size -= 8;
+	dl = get_unaligned_be16(&cdb[0]);
+	bd_dl = get_unaligned_be16(&cdb[2]);
+
 	buf = transport_kmap_data_sg(cmd);
 
-	dl = get_unaligned_be16(&buf[0]);
-	bd_dl = get_unaligned_be16(&buf[2]);
-
-	size = min(size - 8, bd_dl);
-	if (size / 16 > dev->se_sub_dev->se_dev_attrib.max_unmap_block_desc_count) {
-		cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
-		ret = -EINVAL;
-		goto err;
-	}
-
-	/* First UNMAP block descriptor starts at 8 byte offset */
-	ptr = &buf[8];
-	pr_debug("UNMAP: Sub: %s Using dl: %u bd_dl: %u size: %u"
+	ptr = &buf[offset];
+	pr_debug("UNMAP: Sub: %s Using dl: %hu bd_dl: %hu size: %hu"
 		" ptr: %p\n", dev->transport->name, dl, bd_dl, size, ptr);
 
-	while (size >= 16) {
+	while (size) {
 		lba = get_unaligned_be64(&ptr[0]);
 		range = get_unaligned_be32(&ptr[8]);
 		pr_debug("UNMAP: Using lba: %llu and range: %u\n",
 				 (unsigned long long)lba, range);
-
-		if (range > dev->se_sub_dev->se_dev_attrib.max_unmap_lba_count) {
-			cmd->scsi_sense_reason = TCM_INVALID_PARAMETER_LIST;
-			ret = -EINVAL;
-			goto err;
-		}
-
-		if (lba + range > dev->transport->get_blocks(dev) + 1) {
-			cmd->scsi_sense_reason = TCM_ADDRESS_OUT_OF_RANGE;
-			ret = -EINVAL;
-			goto err;
-		}
 
 		ret = dev->transport->do_discard(dev, lba, range);
 		if (ret < 0) {
@@ -1086,10 +1057,8 @@ int target_emulate_unmap(struct se_task *task)
 
 err:
 	transport_kunmap_data_sg(cmd);
-	if (!ret) {
-		task->task_scsi_status = GOOD;
-		transport_complete_task(task, 1);
-	}
+	if (!ret)
+		target_complete_cmd(cmd, GOOD);
 	return ret;
 }
 
@@ -1097,9 +1066,8 @@ err:
  * Used for TCM/IBLOCK and TCM/FILEIO for block/blk-lib.c level discard support.
  * Note this is not used for TCM/pSCSI passthrough
  */
-int target_emulate_write_same(struct se_task *task)
+int target_emulate_write_same(struct se_cmd *cmd)
 {
-	struct se_cmd *cmd = task->task_se_cmd;
 	struct se_device *dev = cmd->se_dev;
 	sector_t range;
 	sector_t lba = cmd->t_task_lba;
@@ -1138,79 +1106,25 @@ int target_emulate_write_same(struct se_task *task)
 		return ret;
 	}
 
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
 
-int target_emulate_synchronize_cache(struct se_task *task)
+int target_emulate_synchronize_cache(struct se_cmd *cmd)
 {
-	struct se_device *dev = task->task_se_cmd->se_dev;
-	struct se_cmd *cmd = task->task_se_cmd;
-
-	if (!dev->transport->do_sync_cache) {
+	if (!cmd->se_dev->transport->do_sync_cache) {
 		pr_err("SYNCHRONIZE_CACHE emulation not supported"
-			" for: %s\n", dev->transport->name);
+			" for: %s\n", cmd->se_dev->transport->name);
 		cmd->scsi_sense_reason = TCM_UNSUPPORTED_SCSI_OPCODE;
 		return -ENOSYS;
 	}
 
-	dev->transport->do_sync_cache(task);
+	cmd->se_dev->transport->do_sync_cache(cmd);
 	return 0;
 }
 
-int target_emulate_noop(struct se_task *task)
+int target_emulate_noop(struct se_cmd *cmd)
 {
-	task->task_scsi_status = GOOD;
-	transport_complete_task(task, 1);
+	target_complete_cmd(cmd, GOOD);
 	return 0;
 }
-
-/*
- * Write a CDB into @cdb that is based on the one the intiator sent us,
- * but updated to only cover the sectors that the current task handles.
- */
-void target_get_task_cdb(struct se_task *task, unsigned char *cdb)
-{
-	struct se_cmd *cmd = task->task_se_cmd;
-	unsigned int cdb_len = scsi_command_size(cmd->t_task_cdb);
-
-	memcpy(cdb, cmd->t_task_cdb, cdb_len);
-	if (cmd->se_cmd_flags & SCF_SCSI_DATA_SG_IO_CDB) {
-		unsigned long long lba = task->task_lba;
-		u32 sectors = task->task_sectors;
-
-		switch (cdb_len) {
-		case 6:
-			/* 21-bit LBA and 8-bit sectors */
-			cdb[1] = (lba >> 16) & 0x1f;
-			cdb[2] = (lba >> 8) & 0xff;
-			cdb[3] = lba & 0xff;
-			cdb[4] = sectors & 0xff;
-			break;
-		case 10:
-			/* 32-bit LBA and 16-bit sectors */
-			put_unaligned_be32(lba, &cdb[2]);
-			put_unaligned_be16(sectors, &cdb[7]);
-			break;
-		case 12:
-			/* 32-bit LBA and 32-bit sectors */
-			put_unaligned_be32(lba, &cdb[2]);
-			put_unaligned_be32(sectors, &cdb[6]);
-			break;
-		case 16:
-			/* 64-bit LBA and 32-bit sectors */
-			put_unaligned_be64(lba, &cdb[2]);
-			put_unaligned_be32(sectors, &cdb[10]);
-			break;
-		case 32:
-			/* 64-bit LBA and 32-bit sectors, extended CDB */
-			put_unaligned_be64(lba, &cdb[12]);
-			put_unaligned_be32(sectors, &cdb[28]);
-			break;
-		default:
-			BUG();
-		}
-	}
-}
-EXPORT_SYMBOL(target_get_task_cdb);

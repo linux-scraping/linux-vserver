@@ -99,7 +99,7 @@ int line6_pcm_acquire(struct snd_line6_pcm *line6pcm, int channels)
 	unsigned long flags_new = flags_old | channels;
 	unsigned long flags_final = flags_old;
 	int err = 0;
-	
+
 	line6pcm->prev_fbuf = NULL;
 
 	if (test_flags(flags_old, flags_new, LINE6_BITS_CAPTURE_BUFFER)) {
@@ -378,11 +378,8 @@ static int snd_line6_pcm_free(struct snd_device *device)
 */
 static void pcm_disconnect_substream(struct snd_pcm_substream *substream)
 {
-	if (substream->runtime && snd_pcm_running(substream)) {
-		snd_pcm_stream_lock_irq(substream);
+	if (substream->runtime && snd_pcm_running(substream))
 		snd_pcm_stop(substream, SNDRV_PCM_STATE_DISCONNECTED);
-		snd_pcm_stream_unlock_irq(substream);
-	}
 }
 
 /*

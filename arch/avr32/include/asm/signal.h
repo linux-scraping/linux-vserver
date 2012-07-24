@@ -115,20 +115,12 @@ typedef unsigned long sigset_t;
 #include <asm-generic/signal-defs.h>
 
 #ifdef __KERNEL__
-struct old_sigaction {
-	__sighandler_t sa_handler;
-	old_sigset_t sa_mask;
-	unsigned long sa_flags;
-	__sigrestore_t sa_restorer;
-};
-
 struct sigaction {
 	__sighandler_t sa_handler;
 	unsigned long sa_flags;
 	__sigrestore_t sa_restorer;
 	sigset_t sa_mask;		/* mask last for extensibility */
 };
-#define __ARCH_HAS_SA_RESTORER
 
 struct k_sigaction {
 	struct sigaction sa;

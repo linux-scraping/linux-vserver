@@ -44,7 +44,6 @@
 #define RTC_YMR		0x34	/* Year match register */
 #define RTC_YLR		0x38	/* Year data load register */
 
-#define RTC_CR_EN	(1 << 0)	/* counter enable bit */
 #define RTC_CR_CWEN	(1 << 26)	/* Clockwatch enable bit */
 
 #define RTC_TCR_EN	(1 << 1) /* Periodic timer enable bit */
@@ -221,17 +220,9 @@ static irqreturn_t pl031_interrupt(int irq, void *dev_id)
 	unsigned long events = 0;
 
 	rtcmis = readl(ldata->base + RTC_MIS);
-	if (rtcmis) {
-		writel(rtcmis, ldata->base + RTC_ICR);
-
-		if (rtcmis & RTC_BIT_AI)
-			events |= (RTC_AF | RTC_IRQF);
-
-		/* Timer interrupt is only available in ST variants */
-		if ((rtcmis & RTC_BIT_PI) &&
-			(ldata->hw_designer == AMBA_VENDOR_ST))
-			events |= (RTC_PF | RTC_IRQF);
-
+	if (rtcmis & RTC_BIT_AI) {
+		writel(RTC_BIT_AI, ldata->base + RTC_ICR);
+		events |= (RTC_AF | RTC_IRQF);
 		rtc_update_irq(ldata->rtc, 1, events);
 
 		return IRQ_HANDLED;
@@ -313,7 +304,7 @@ static int pl031_probe(struct amba_device *adev, const struct amba_id *id)
 	int ret;
 	struct pl031_local *ldata;
 	struct rtc_class_ops *ops = id->data;
-	unsigned long time, data;
+	unsigned long time;
 
 	ret = amba_request_regions(adev, NULL);
 	if (ret)
@@ -340,13 +331,10 @@ static int pl031_probe(struct amba_device *adev, const struct amba_id *id)
 	dev_dbg(&adev->dev, "designer ID = 0x%02x\n", ldata->hw_designer);
 	dev_dbg(&adev->dev, "revision = 0x%01x\n", ldata->hw_revision);
 
-	data = readl(ldata->base + RTC_CR);
 	/* Enable the clockwatch on ST Variants */
 	if (ldata->hw_designer == AMBA_VENDOR_ST)
-		data |= RTC_CR_CWEN;
-	else
-		data |= RTC_CR_EN;
-	writel(data, ldata->base + RTC_CR);
+		writel(readl(ldata->base + RTC_CR) | RTC_CR_CWEN,
+		       ldata->base + RTC_CR);
 
 	/*
 	 * On ST PL031 variants, the RTC reset value does not provide correct

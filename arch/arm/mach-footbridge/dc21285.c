@@ -18,6 +18,7 @@
 #include <linux/irq.h>
 #include <linux/io.h>
 #include <linux/spinlock.h>
+#include <video/vga.h>
 
 #include <asm/irq.h>
 #include <asm/mach/pci.h>
@@ -128,7 +129,7 @@ dc21285_write_config(struct pci_bus *bus, unsigned int devfn, int where,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-static struct pci_ops dc21285_ops = {
+struct pci_ops dc21285_ops = {
 	.read	= dc21285_read_config,
 	.write	= dc21285_write_config,
 };
@@ -283,11 +284,6 @@ int __init dc21285_setup(int nr, struct pci_sys_data *sys)
 	return 1;
 }
 
-struct pci_bus * __init dc21285_scan_bus(int nr, struct pci_sys_data *sys)
-{
-	return pci_scan_root_bus(NULL, 0, &dc21285_ops, sys, &sys->resources);
-}
-
 #define dc21285_request_irq(_a, _b, _c, _d, _e) \
 	WARN_ON(request_irq(_a, _b, _c, _d, _e) < 0)
 
@@ -297,6 +293,7 @@ void __init dc21285_preinit(void)
 	int cfn_mode;
 
 	pcibios_min_mem = 0x81000000;
+	vga_base = PCIMEM_BASE;
 
 	mem_size = (unsigned int)high_memory - PAGE_OFFSET;
 	for (mem_mask = 0x00100000; mem_mask < 0x10000000; mem_mask <<= 1)

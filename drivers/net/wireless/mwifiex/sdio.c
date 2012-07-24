@@ -123,6 +123,9 @@ mwifiex_sdio_remove(struct sdio_func *func)
 	if (!adapter || !adapter->priv_num)
 		return;
 
+	/* In case driver is removed when asynchronous FW load is in progress */
+	wait_for_completion(&adapter->fw_load);
+
 	if (user_rmmod) {
 		if (adapter->is_suspended)
 			mwifiex_sdio_resume(adapter->dev);
@@ -158,6 +161,7 @@ static int mwifiex_sdio_suspend(struct device *dev)
 	struct sdio_mmc_card *card;
 	struct mwifiex_adapter *adapter;
 	mmc_pm_flag_t pm_flag = 0;
+	int hs_actived = 0;
 	int i;
 	int ret = 0;
 
@@ -184,13 +188,11 @@ static int mwifiex_sdio_suspend(struct device *dev)
 	adapter = card->adapter;
 
 	/* Enable the Host Sleep */
-	if (!mwifiex_enable_hs(adapter)) {
-		dev_err(adapter->dev, "cmd: failed to suspend\n");
-		return -EFAULT;
+	hs_actived = mwifiex_enable_hs(adapter);
+	if (hs_actived) {
+		pr_debug("cmd: suspend with MMC_PM_KEEP_POWER\n");
+		ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
 	}
-
-	dev_dbg(adapter->dev, "cmd: suspend with MMC_PM_KEEP_POWER\n");
-	ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
 
 	/* Indicate device suspended */
 	adapter->is_suspended = true;
@@ -251,6 +253,8 @@ static int mwifiex_sdio_resume(struct device *dev)
 	return 0;
 }
 
+/* Device ID for SD8786 */
+#define SDIO_DEVICE_ID_MARVELL_8786   (0x9116)
 /* Device ID for SD8787 */
 #define SDIO_DEVICE_ID_MARVELL_8787   (0x9119)
 /* Device ID for SD8797 */
@@ -258,6 +262,7 @@ static int mwifiex_sdio_resume(struct device *dev)
 
 /* WLAN IDs */
 static const struct sdio_device_id mwifiex_ids[] = {
+	{SDIO_DEVICE(SDIO_VENDOR_ID_MARVELL, SDIO_DEVICE_ID_MARVELL_8786)},
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MARVELL, SDIO_DEVICE_ID_MARVELL_8787)},
 	{SDIO_DEVICE(SDIO_VENDOR_ID_MARVELL, SDIO_DEVICE_ID_MARVELL_8797)},
 	{},
@@ -938,10 +943,7 @@ static int mwifiex_decode_rx_packet(struct mwifiex_adapter *adapter,
 				    struct sk_buff *skb, u32 upld_typ)
 {
 	u8 *cmd_buf;
-	__le16 *curr_ptr = (__le16 *)skb->data;
-	u16 pkt_len = le16_to_cpu(*curr_ptr);
 
-	skb_trim(skb, pkt_len);
 	skb_pull(skb, INTF_HEADER_LEN);
 
 	switch (upld_typ) {
@@ -976,10 +978,10 @@ static int mwifiex_decode_rx_packet(struct mwifiex_adapter *adapter,
 		dev_dbg(adapter->dev, "info: --- Rx: Event ---\n");
 		adapter->event_cause = *(u32 *) skb->data;
 
-		skb_pull(skb, MWIFIEX_EVENT_HEADER_LEN);
-
 		if ((skb->len > 0) && (skb->len  < MAX_EVENT_SIZE))
-			memcpy(adapter->event_body, skb->data, skb->len);
+			memcpy(adapter->event_body,
+			       skb->data + MWIFIEX_EVENT_HEADER_LEN,
+			       skb->len);
 
 		/* event cause has been saved to adapter->event_cause */
 		adapter->event_received = true;
@@ -1452,8 +1454,8 @@ static int mwifiex_sdio_host_to_card(struct mwifiex_adapter *adapter,
 	/* Allocate buffer and copy payload */
 	blk_size = MWIFIEX_SDIO_BLOCK_SIZE;
 	buf_block_len = (pkt_len + blk_size - 1) / blk_size;
-	*(__le16 *)&payload[0] = cpu_to_le16((u16)pkt_len);
-	*(__le16 *)&payload[2] = cpu_to_le16(type);
+	*(u16 *) &payload[0] = (u16) pkt_len;
+	*(u16 *) &payload[2] = type;
 
 	/*
 	 * This is SDIO specific header
@@ -1600,6 +1602,9 @@ static int mwifiex_register_dev(struct mwifiex_adapter *adapter)
 	adapter->dev = &func->dev;
 
 	switch (func->device) {
+	case SDIO_DEVICE_ID_MARVELL_8786:
+		strcpy(adapter->fw_name, SD8786_DEFAULT_FW_NAME);
+		break;
 	case SDIO_DEVICE_ID_MARVELL_8797:
 		strcpy(adapter->fw_name, SD8797_DEFAULT_FW_NAME);
 		break;
@@ -1808,5 +1813,6 @@ MODULE_AUTHOR("Marvell International Ltd.");
 MODULE_DESCRIPTION("Marvell WiFi-Ex SDIO Driver version " SDIO_VERSION);
 MODULE_VERSION(SDIO_VERSION);
 MODULE_LICENSE("GPL v2");
+MODULE_FIRMWARE(SD8786_DEFAULT_FW_NAME);
 MODULE_FIRMWARE(SD8787_DEFAULT_FW_NAME);
 MODULE_FIRMWARE(SD8797_DEFAULT_FW_NAME);

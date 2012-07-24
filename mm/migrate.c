@@ -139,16 +139,13 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 
 	get_page(new);
 	pte = pte_mkold(mk_pte(new, vma->vm_page_prot));
-
-	/* Recheck VMA as permissions can change since migration started  */
 	if (is_write_migration_entry(entry))
-		pte = maybe_mkwrite(pte, vma);
-
+		pte = pte_mkwrite(pte);
 #ifdef CONFIG_HUGETLB_PAGE
 	if (PageHuge(new))
 		pte = pte_mkhuge(pte);
 #endif
-	flush_dcache_page(new);
+	flush_cache_page(vma, addr, pte_pfn(pte));
 	set_pte_at(mm, addr, ptep, pte);
 
 	if (PageHuge(new)) {
@@ -183,14 +180,15 @@ static void remove_migration_ptes(struct page *old, struct page *new)
  * get to the page and wait until migration is finished.
  * When we return from this function the fault will be retried.
  */
-static void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
-				spinlock_t *ptl)
+void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
+				unsigned long address)
 {
-	pte_t pte;
+	pte_t *ptep, pte;
+	spinlock_t *ptl;
 	swp_entry_t entry;
 	struct page *page;
 
-	spin_lock(ptl);
+	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	pte = *ptep;
 	if (!is_swap_pte(pte))
 		goto out;
@@ -216,20 +214,6 @@ static void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 	return;
 out:
 	pte_unmap_unlock(ptep, ptl);
-}
-
-void migration_entry_wait(struct mm_struct *mm, pmd_t *pmd,
-				unsigned long address)
-{
-	spinlock_t *ptl = pte_lockptr(mm, pmd);
-	pte_t *ptep = pte_offset_map(pmd, address);
-	__migration_entry_wait(mm, ptep, ptl);
-}
-
-void migration_entry_wait_huge(struct mm_struct *mm, pte_t *pte)
-{
-	spinlock_t *ptl = &(mm)->page_table_lock;
-	__migration_entry_wait(mm, pte, ptl);
 }
 
 #ifdef CONFIG_BLOCK
@@ -452,7 +436,10 @@ void migrate_page_copy(struct page *newpage, struct page *page)
 		 * is actually a signal that all of the page has become dirty.
 		 * Whereas only part of our page may be dirty.
 		 */
-		__set_page_dirty_nobuffers(newpage);
+		if (PageSwapBacked(page))
+			SetPageDirty(newpage);
+		else
+			__set_page_dirty_nobuffers(newpage);
  	}
 
 	mlock_migrate_page(newpage, page);
@@ -1387,8 +1374,8 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
 	 * userid as the target process.
 	 */
 	tcred = __task_cred(task);
-	if (cred->euid != tcred->suid && cred->euid != tcred->uid &&
-	    cred->uid  != tcred->suid && cred->uid  != tcred->uid &&
+	if (!uid_eq(cred->euid, tcred->suid) && !uid_eq(cred->euid, tcred->uid) &&
+	    !uid_eq(cred->uid,  tcred->suid) && !uid_eq(cred->uid,  tcred->uid) &&
 	    !capable(CAP_SYS_NICE)) {
 		rcu_read_unlock();
 		err = -EPERM;

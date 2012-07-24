@@ -22,6 +22,7 @@
 #include <linux/interrupt.h>
 #include <linux/device.h>
 #include <linux/pm_runtime.h>
+#include <asm-generic/pci-bridge.h>
 #include <asm/setup.h>
 #include "pci.h"
 
@@ -673,11 +674,15 @@ static int pci_platform_power_transition(struct pci_dev *dev, pci_power_t state)
 		error = platform_pci_set_power_state(dev, state);
 		if (!error)
 			pci_update_current_state(dev, state);
-	} else
+		/* Fall back to PCI_D0 if native PM is not supported */
+		if (!dev->pm_cap)
+			dev->current_state = PCI_D0;
+	} else {
 		error = -ENODEV;
-
-	if (error && !dev->pm_cap) /* Fall back to PCI_D0 */
-		dev->current_state = PCI_D0;
+		/* Fall back to PCI_D0 if native PM is not supported */
+		if (!dev->pm_cap)
+			dev->current_state = PCI_D0;
+	}
 
 	return error;
 }
@@ -1984,6 +1989,10 @@ void pci_enable_ari(struct pci_dev *dev)
 	if (pcie_ari_disabled || !pci_is_pcie(dev) || dev->devfn)
 		return;
 
+	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ARI);
+	if (!pos)
+		return;
+
 	bridge = dev->bus->self;
 	if (!bridge || !pci_is_pcie(bridge))
 		return;
@@ -2002,14 +2011,10 @@ void pci_enable_ari(struct pci_dev *dev)
 		return;
 
 	pci_read_config_word(bridge, pos + PCI_EXP_DEVCTL2, &ctrl);
-	if (pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ARI)) {
-		ctrl |= PCI_EXP_DEVCTL2_ARI;
-		bridge->ari_enabled = 1;
-	} else {
-		ctrl &= ~PCI_EXP_DEVCTL2_ARI;
-		bridge->ari_enabled = 0;
-	}
+	ctrl |= PCI_EXP_DEVCTL2_ARI;
 	pci_write_config_word(bridge, pos + PCI_EXP_DEVCTL2, ctrl);
+
+	bridge->ari_enabled = 1;
 }
 
 /**
@@ -2365,7 +2370,7 @@ void pci_enable_acs(struct pci_dev *dev)
  * number is always 0 (see the Implementation Note in section 2.2.8.1 of
  * the PCI Express Base Specification, Revision 2.1)
  */
-u8 pci_swizzle_interrupt_pin(struct pci_dev *dev, u8 pin)
+u8 pci_swizzle_interrupt_pin(const struct pci_dev *dev, u8 pin)
 {
 	int slot;
 
@@ -3160,17 +3165,11 @@ static int pci_parent_bus_reset(struct pci_dev *dev, int probe)
 	return 0;
 }
 
-static int pci_dev_reset(struct pci_dev *dev, int probe)
+static int __pci_dev_reset(struct pci_dev *dev, int probe)
 {
 	int rc;
 
 	might_sleep();
-
-	if (!probe) {
-		pci_cfg_access_lock(dev);
-		/* block PM suspend, driver probe, etc. */
-		device_lock(&dev->dev);
-	}
 
 	rc = pci_dev_specific_reset(dev, probe);
 	if (rc != -ENOTTY)
@@ -3190,14 +3189,27 @@ static int pci_dev_reset(struct pci_dev *dev, int probe)
 
 	rc = pci_parent_bus_reset(dev, probe);
 done:
+	return rc;
+}
+
+static int pci_dev_reset(struct pci_dev *dev, int probe)
+{
+	int rc;
+
+	if (!probe) {
+		pci_cfg_access_lock(dev);
+		/* block PM suspend, driver probe, etc. */
+		device_lock(&dev->dev);
+	}
+
+	rc = __pci_dev_reset(dev, probe);
+
 	if (!probe) {
 		device_unlock(&dev->dev);
 		pci_cfg_access_unlock(dev);
 	}
-
 	return rc;
 }
-
 /**
  * __pci_reset_function - reset a PCI device function
  * @dev: PCI device to reset
@@ -3242,7 +3254,7 @@ EXPORT_SYMBOL_GPL(__pci_reset_function);
  */
 int __pci_reset_function_locked(struct pci_dev *dev)
 {
-	return pci_dev_reset(dev, 1);
+	return __pci_dev_reset(dev, 0);
 }
 EXPORT_SYMBOL_GPL(__pci_reset_function_locked);
 
@@ -3610,7 +3622,7 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 	u16 cmd;
 	int rc;
 
-	WARN_ON((flags & PCI_VGA_STATE_CHANGE_DECODES) && (command_bits & ~(PCI_COMMAND_IO|PCI_COMMAND_MEMORY)));
+	WARN_ON((flags & PCI_VGA_STATE_CHANGE_DECODES) & (command_bits & ~(PCI_COMMAND_IO|PCI_COMMAND_MEMORY)));
 
 	/* ARCH specific VGA enables */
 	rc = pci_set_vga_state_arch(dev, decode, command_bits, flags);
@@ -3889,6 +3901,8 @@ static int __init pci_setup(char *str)
 				pcie_bus_config = PCIE_BUS_PERFORMANCE;
 			} else if (!strncmp(str, "pcie_bus_peer2peer", 18)) {
 				pcie_bus_config = PCIE_BUS_PEER2PEER;
+			} else if (!strncmp(str, "pcie_scan_all", 13)) {
+				pci_add_flags(PCI_SCAN_ALL_PCIE_DEVS);
 			} else {
 				printk(KERN_ERR "PCI: Unknown option `%s'\n",
 						str);

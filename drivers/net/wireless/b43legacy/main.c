@@ -1056,6 +1056,7 @@ static void b43legacy_write_probe_resp_plcp(struct b43legacy_wldev *dev,
 	b43legacy_generate_plcp_hdr(&plcp, size + FCS_LEN, rate->hw_value);
 	dur = ieee80211_generic_frame_duration(dev->wl->hw,
 					       dev->wl->vif,
+					       IEEE80211_BAND_2GHZ,
 					       size,
 					       rate);
 	/* Write PLCP in two parts and timing for packet transfer */
@@ -1121,6 +1122,7 @@ static const u8 *b43legacy_generate_probe_resp(struct b43legacy_wldev *dev,
 					 IEEE80211_STYPE_PROBE_RESP);
 	dur = ieee80211_generic_frame_duration(dev->wl->hw,
 					       dev->wl->vif,
+					       IEEE80211_BAND_2GHZ,
 					       *dest_size,
 					       rate);
 	hdr->duration_id = dur;
@@ -1511,17 +1513,9 @@ static void b43legacy_print_fw_helptext(struct b43legacy_wl *wl)
 		     "and download the correct firmware (version 3).\n");
 }
 
-static void b43legacy_fw_cb(const struct firmware *firmware, void *context)
-{
-	struct b43legacy_wldev *dev = context;
-
-	dev->fwp = firmware;
-	complete(&dev->fw_load_complete);
-}
-
 static int do_request_fw(struct b43legacy_wldev *dev,
 			 const char *name,
-			 const struct firmware **fw, bool async)
+			 const struct firmware **fw)
 {
 	char path[sizeof(modparam_fwpostfix) + 32];
 	struct b43legacy_fw_header *hdr;
@@ -1534,24 +1528,7 @@ static int do_request_fw(struct b43legacy_wldev *dev,
 	snprintf(path, ARRAY_SIZE(path),
 		 "b43legacy%s/%s.fw",
 		 modparam_fwpostfix, name);
-	b43legacyinfo(dev->wl, "Loading firmware %s\n", path);
-	if (async) {
-		init_completion(&dev->fw_load_complete);
-		err = request_firmware_nowait(THIS_MODULE, 1, path,
-					      dev->dev->dev, GFP_KERNEL,
-					      dev, b43legacy_fw_cb);
-		if (err) {
-			b43legacyerr(dev->wl, "Unable to load firmware\n");
-			return err;
-		}
-		/* stall here until fw ready */
-		wait_for_completion(&dev->fw_load_complete);
-		if (!dev->fwp)
-			err = -EINVAL;
-		*fw = dev->fwp;
-	} else {
-		err = request_firmware(fw, path, dev->dev->dev);
-	}
+	err = request_firmware(fw, path, dev->dev->dev);
 	if (err) {
 		b43legacyerr(dev->wl, "Firmware file \"%s\" not found "
 		       "or load failed.\n", path);
@@ -1603,7 +1580,7 @@ static void b43legacy_request_firmware(struct work_struct *work)
 			filename = "ucode4";
 		else
 			filename = "ucode5";
-		err = do_request_fw(dev, filename, &fw->ucode, true);
+		err = do_request_fw(dev, filename, &fw->ucode);
 		if (err)
 			goto err_load;
 	}
@@ -1612,7 +1589,7 @@ static void b43legacy_request_firmware(struct work_struct *work)
 			filename = "pcm4";
 		else
 			filename = "pcm5";
-		err = do_request_fw(dev, filename, &fw->pcm, false);
+		err = do_request_fw(dev, filename, &fw->pcm);
 		if (err)
 			goto err_load;
 	}
@@ -1630,7 +1607,7 @@ static void b43legacy_request_firmware(struct work_struct *work)
 		default:
 			goto err_no_initvals;
 		}
-		err = do_request_fw(dev, filename, &fw->initvals, false);
+		err = do_request_fw(dev, filename, &fw->initvals);
 		if (err)
 			goto err_load;
 	}
@@ -1650,7 +1627,7 @@ static void b43legacy_request_firmware(struct work_struct *work)
 		default:
 			goto err_no_initvals;
 		}
-		err = do_request_fw(dev, filename, &fw->initvals_band, false);
+		err = do_request_fw(dev, filename, &fw->initvals_band);
 		if (err)
 			goto err_load;
 	}
@@ -2656,7 +2633,7 @@ static int b43legacy_switch_phymode(struct b43legacy_wl *wl,
 	if (prev_status >= B43legacy_STAT_STARTED) {
 		err = b43legacy_wireless_core_start(up_dev);
 		if (err) {
-			b43legacyerr(wl, "Fatal: Coult not start device for "
+			b43legacyerr(wl, "Fatal: Could not start device for "
 			       "newly selected %s-PHY mode\n",
 			       phymode_to_string(new_mode));
 			b43legacy_wireless_core_exit(up_dev);
@@ -3802,7 +3779,7 @@ static void b43legacy_sprom_fixup(struct ssb_bus *bus)
 	/* boardflags workarounds */
 	if (bus->boardinfo.vendor == PCI_VENDOR_ID_APPLE &&
 	    bus->boardinfo.type == 0x4E &&
-	    bus->boardinfo.rev > 0x40)
+	    bus->sprom.board_rev > 0x40)
 		bus->sprom.boardflags_lo |= B43legacy_BFL_PACTRL;
 }
 
@@ -3915,11 +3892,8 @@ static void b43legacy_remove(struct ssb_device *dev)
 	 * as the ieee80211 unreg will destroy the workqueue. */
 	cancel_work_sync(&wldev->restart_work);
 	cancel_work_sync(&wl->firmware_load);
-	complete(&wldev->fw_load_complete);
 
 	B43legacy_WARN_ON(!wl);
-	if (!wldev->fw.ucode)
-		return;			/* NULL if fw never loaded */
 	if (wl->current_dev == wldev)
 		ieee80211_unregister_hw(wl->hw);
 

@@ -338,6 +338,18 @@ struct bnx2x_fw_port_stats_old {
 		s_hi += a_hi + ((s_lo < a_lo) ? 1 : 0); \
 	} while (0)
 
+#define LE32_0 ((__force __le32) 0)
+#define LE16_0 ((__force __le16) 0)
+
+/* The _force is for cases where high value is 0 */
+#define ADD_64_LE(s_hi, a_hi_le, s_lo, a_lo_le) \
+		ADD_64(s_hi, le32_to_cpu(a_hi_le), \
+		       s_lo, le32_to_cpu(a_lo_le))
+
+#define ADD_64_LE16(s_hi, a_hi_le, s_lo, a_lo_le) \
+		ADD_64(s_hi, le16_to_cpu(a_hi_le), \
+		       s_lo, le16_to_cpu(a_lo_le))
+
 /* difference = minuend - subtrahend */
 #define DIFF_64(d_hi, m_hi, s_hi, d_lo, m_lo, s_lo) \
 	do { \
@@ -439,9 +451,8 @@ struct bnx2x_fw_port_stats_old {
 
 #define UPDATE_QSTAT(s, t) \
 	do { \
+		qstats->t##_hi = qstats_old->t##_hi + le32_to_cpu(s.hi); \
 		qstats->t##_lo = qstats_old->t##_lo + le32_to_cpu(s.lo); \
-		qstats->t##_hi = qstats_old->t##_hi + le32_to_cpu(s.hi) \
-			+ ((qstats->t##_lo < qstats_old->t##_lo) ? 1 : 0); \
 	} while (0)
 
 #define UPDATE_QSTAT_OLD(f) \
@@ -530,4 +541,7 @@ void bnx2x_stats_handle(struct bnx2x *bp, enum bnx2x_stats_event event);
  * @bp:		driver handle
  */
 void bnx2x_save_statistics(struct bnx2x *bp);
+
+void bnx2x_afex_collect_stats(struct bnx2x *bp, void *void_afex_stats,
+			      u32 stats_type);
 #endif /* BNX2X_STATS_H */

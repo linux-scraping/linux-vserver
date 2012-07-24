@@ -228,12 +228,8 @@ EXPORT_SYMBOL(inet_listen);
 u32 inet_ehash_secret __read_mostly;
 EXPORT_SYMBOL(inet_ehash_secret);
 
-u32 ipv6_hash_secret __read_mostly;
-EXPORT_SYMBOL(ipv6_hash_secret);
-
 /*
- * inet_ehash_secret must be set exactly once, and to a non nul value
- * ipv6_hash_secret must be set exactly once.
+ * inet_ehash_secret must be set exactly once
  */
 void build_ehash_secret(void)
 {
@@ -243,8 +239,7 @@ void build_ehash_secret(void)
 		get_random_bytes(&rnd, sizeof(rnd));
 	} while (rnd == 0);
 
-	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0)
-		get_random_bytes(&ipv6_hash_secret, sizeof(ipv6_hash_secret));
+	cmpxchg(&inet_ehash_secret, 0, rnd);
 }
 EXPORT_SYMBOL(build_ehash_secret);
 
@@ -284,9 +279,6 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
 	if (unlikely(!inet_ehash_secret))
 		if (sock->type != SOCK_RAW && sock->type != SOCK_DGRAM)
 			build_ehash_secret();
-
-	if (protocol < 0 || protocol >= IPPROTO_MAX)
-		return -EINVAL;
 
 	sock->state = SS_UNCONNECTED;
 
@@ -363,7 +355,7 @@ override:
 	err = 0;
 	sk->sk_no_check = answer_no_check;
 	if (INET_PROTOSW_REUSE & answer_flags)
-		sk->sk_reuse = 1;
+		sk->sk_reuse = SK_CAN_REUSE;
 
 	inet = inet_sk(sk);
 	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
@@ -559,7 +551,7 @@ out:
 }
 EXPORT_SYMBOL(inet_bind);
 
-int inet_dgram_connect(struct socket *sock, struct sockaddr * uaddr,
+int inet_dgram_connect(struct socket *sock, struct sockaddr *uaddr,
 		       int addr_len, int flags)
 {
 	struct sock *sk = sock->sk;

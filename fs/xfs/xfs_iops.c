@@ -18,9 +18,7 @@
 #include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_acl.h"
-#include "xfs_bit.h"
 #include "xfs_log.h"
-#include "xfs_inum.h"
 #include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
@@ -35,7 +33,6 @@
 #include "xfs_rtalloc.h"
 #include "xfs_error.h"
 #include "xfs_itable.h"
-#include "xfs_rw.h"
 #include "xfs_attr.h"
 #include "xfs_buf_item.h"
 #include "xfs_utils.h"
@@ -460,28 +457,6 @@ xfs_vn_getattr(
 	return 0;
 }
 
-static void
-xfs_setattr_mode(
-	struct xfs_trans	*tp,
-	struct xfs_inode	*ip,
-	struct iattr		*iattr)
-{
-	struct inode	*inode = VFS_I(ip);
-	umode_t		mode = iattr->ia_mode;
-
-	ASSERT(tp);
-	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL));
-
-	if (!in_group_p(inode->i_gid) && !capable(CAP_FSETID))
-		mode &= ~S_ISGID;
-
-	ip->i_d.di_mode &= S_IFMT;
-	ip->i_d.di_mode |= mode & ~S_IFMT;
-
-	inode->i_mode &= S_IFMT;
-	inode->i_mode |= mode & ~S_IFMT;
-}
-
 int
 xfs_setattr_nonsize(
 	struct xfs_inode	*ip,
@@ -633,8 +608,18 @@ xfs_setattr_nonsize(
 	/*
 	 * Change file access modes.
 	 */
-	if (mask & ATTR_MODE)
-		xfs_setattr_mode(tp, ip, iattr);
+	if (mask & ATTR_MODE) {
+		umode_t mode = iattr->ia_mode;
+
+		if (!in_group_p(inode->i_gid) && !capable(CAP_FSETID))
+			mode &= ~S_ISGID;
+
+		ip->i_d.di_mode &= S_IFMT;
+		ip->i_d.di_mode |= mode & ~S_IFMT;
+
+		inode->i_mode &= S_IFMT;
+		inode->i_mode |= mode & ~S_IFMT;
+	}
 
 	/*
 	 * Change file access or modified times.
@@ -715,7 +700,7 @@ xfs_setattr_size(
 	xfs_off_t		oldsize, newsize;
 	struct xfs_trans	*tp;
 	int			error;
-	uint			lock_flags;
+	uint			lock_flags = 0;
 	uint			commit_flags = 0;
 
 	trace_xfs_setattr(ip);
@@ -731,13 +716,14 @@ xfs_setattr_size(
 		return XFS_ERROR(error);
 
 	ASSERT(S_ISREG(ip->i_d.di_mode));
-	ASSERT((mask & (ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_ATIME_SET|
-			ATTR_MTIME_SET|ATTR_KILL_PRIV|ATTR_TIMES_SET)) == 0);
+	ASSERT((mask & (ATTR_MODE|ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_ATIME_SET|
+			ATTR_MTIME_SET|ATTR_KILL_SUID|ATTR_KILL_SGID|
+			ATTR_KILL_PRIV|ATTR_TIMES_SET)) == 0);
 
-	lock_flags = XFS_ILOCK_EXCL;
-	if (!(flags & XFS_ATTR_NOLOCK))
+	if (!(flags & XFS_ATTR_NOLOCK)) {
 		lock_flags |= XFS_IOLOCK_EXCL;
-	xfs_ilock(ip, lock_flags);
+		xfs_ilock(ip, lock_flags);
+	}
 
 	oldsize = inode->i_size;
 	newsize = iattr->ia_size;
@@ -760,7 +746,7 @@ xfs_setattr_size(
 	/*
 	 * Make sure that the dquots are attached to the inode.
 	 */
-	error = xfs_qm_dqattach_locked(ip, 0);
+	error = xfs_qm_dqattach(ip, 0);
 	if (error)
 		goto out_unlock;
 
@@ -782,8 +768,6 @@ xfs_setattr_size(
 		if (error)
 			goto out_unlock;
 	}
-	xfs_iunlock(ip, XFS_ILOCK_EXCL);
-	lock_flags &= ~XFS_ILOCK_EXCL;
 
 	/*
 	 * We are going to log the inode size change in this transaction so
@@ -874,12 +858,6 @@ xfs_setattr_size(
 		 */
 		xfs_iflags_set(ip, XFS_ITRUNCATED);
 	}
-
-	/*
-	 * Change file access modes.
-	 */
-	if (mask & ATTR_MODE)
-		xfs_setattr_mode(tp, ip, iattr);
 
 	if (mask & ATTR_CTIME) {
 		inode->i_ctime = iattr->ia_ctime;

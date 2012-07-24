@@ -431,7 +431,7 @@ static bool dccp_new(struct nf_conn *ct, const struct sk_buff *skb,
 	const char *msg;
 	u_int8_t state;
 
-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
 	BUG_ON(dh == NULL);
 
 	state = dccp_state_table[CT_DCCP_ROLE_CLIENT][dh->dccph_type][CT_DCCP_NONE];
@@ -488,7 +488,7 @@ static int dccp_packet(struct nf_conn *ct, const struct sk_buff *skb,
 	u_int8_t type, old_state, new_state;
 	enum ct_dccp_roles role;
 
-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
 	BUG_ON(dh == NULL);
 	type = dh->dccph_type;
 
@@ -579,7 +579,7 @@ static int dccp_error(struct net *net, struct nf_conn *tmpl,
 	unsigned int cscov;
 	const char *msg;
 
-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
 	if (dh == NULL) {
 		msg = "nf_ct_dccp: short packet ";
 		goto out_invalid;
@@ -643,11 +643,12 @@ static int dccp_to_nlattr(struct sk_buff *skb, struct nlattr *nla,
 	nest_parms = nla_nest_start(skb, CTA_PROTOINFO_DCCP | NLA_F_NESTED);
 	if (!nest_parms)
 		goto nla_put_failure;
-	NLA_PUT_U8(skb, CTA_PROTOINFO_DCCP_STATE, ct->proto.dccp.state);
-	NLA_PUT_U8(skb, CTA_PROTOINFO_DCCP_ROLE,
-		   ct->proto.dccp.role[IP_CT_DIR_ORIGINAL]);
-	NLA_PUT_BE64(skb, CTA_PROTOINFO_DCCP_HANDSHAKE_SEQ,
-		     cpu_to_be64(ct->proto.dccp.handshake_seq));
+	if (nla_put_u8(skb, CTA_PROTOINFO_DCCP_STATE, ct->proto.dccp.state) ||
+	    nla_put_u8(skb, CTA_PROTOINFO_DCCP_ROLE,
+		       ct->proto.dccp.role[IP_CT_DIR_ORIGINAL]) ||
+	    nla_put_be64(skb, CTA_PROTOINFO_DCCP_HANDSHAKE_SEQ,
+			 cpu_to_be64(ct->proto.dccp.handshake_seq)))
+		goto nla_put_failure;
 	nla_nest_end(skb, nest_parms);
 	spin_unlock_bh(&ct->lock);
 	return 0;
@@ -739,9 +740,10 @@ dccp_timeout_obj_to_nlattr(struct sk_buff *skb, const void *data)
         const unsigned int *timeouts = data;
 	int i;
 
-	for (i=CTA_TIMEOUT_DCCP_UNSPEC+1; i<CTA_TIMEOUT_DCCP_MAX+1; i++)
-		NLA_PUT_BE32(skb, i, htonl(timeouts[i] / HZ));
-
+	for (i=CTA_TIMEOUT_DCCP_UNSPEC+1; i<CTA_TIMEOUT_DCCP_MAX+1; i++) {
+		if (nla_put_be32(skb, i, htonl(timeouts[i] / HZ)))
+			goto nla_put_failure;
+	}
 	return 0;
 
 nla_put_failure:
@@ -908,8 +910,8 @@ static __net_init int dccp_net_init(struct net *net)
 	dn->sysctl_table[6].data = &dn->dccp_timeout[CT_DCCP_TIMEWAIT];
 	dn->sysctl_table[7].data = &dn->dccp_loose;
 
-	dn->sysctl_header = register_net_sysctl_table(net,
-			nf_net_netfilter_sysctl_path, dn->sysctl_table);
+	dn->sysctl_header = register_net_sysctl(net, "net/netfilter",
+						dn->sysctl_table);
 	if (!dn->sysctl_header) {
 		kfree(dn->sysctl_table);
 		return -ENOMEM;

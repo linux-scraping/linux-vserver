@@ -86,6 +86,13 @@ void unregister_vlan_dev(struct net_device *dev, struct list_head *head)
 
 	grp = &vlan_info->grp;
 
+	/* Take it out of our own structures, but be sure to interlock with
+	 * HW accelerating devices or SW vlan input packet processing if
+	 * VLAN is not 0 (leave it there for 802.1p).
+	 */
+	if (vlan_id)
+		vlan_vid_del(real_dev, vlan_id);
+
 	grp->nr_vlan_devs--;
 
 	if (vlan->flags & VLAN_FLAG_GVRP)
@@ -100,13 +107,6 @@ void unregister_vlan_dev(struct net_device *dev, struct list_head *head)
 
 	if (grp->nr_vlan_devs == 0)
 		vlan_gvrp_uninit_applicant(real_dev);
-
-	/* Take it out of our own structures, but be sure to interlock with
-	 * HW accelerating devices or SW vlan input packet processing if
-	 * VLAN is not 0 (leave it there for 802.1p).
-	 */
-	if (vlan_id)
-		vlan_vid_del(real_dev, vlan_id);
 
 	/* Get rid of the vlan's reference to real_dev */
 	dev_put(real_dev);
@@ -266,19 +266,19 @@ static void vlan_sync_address(struct net_device *dev,
 	struct vlan_dev_priv *vlan = vlan_dev_priv(vlandev);
 
 	/* May be called without an actual change */
-	if (!compare_ether_addr(vlan->real_dev_addr, dev->dev_addr))
+	if (ether_addr_equal(vlan->real_dev_addr, dev->dev_addr))
 		return;
 
 	/* vlan address was different from the old address and is equal to
 	 * the new address */
-	if (compare_ether_addr(vlandev->dev_addr, vlan->real_dev_addr) &&
-	    !compare_ether_addr(vlandev->dev_addr, dev->dev_addr))
+	if (!ether_addr_equal(vlandev->dev_addr, vlan->real_dev_addr) &&
+	    ether_addr_equal(vlandev->dev_addr, dev->dev_addr))
 		dev_uc_del(dev, vlandev->dev_addr);
 
 	/* vlan address was equal to the old address and is different from
 	 * the new address */
-	if (!compare_ether_addr(vlandev->dev_addr, vlan->real_dev_addr) &&
-	    compare_ether_addr(vlandev->dev_addr, dev->dev_addr))
+	if (ether_addr_equal(vlandev->dev_addr, vlan->real_dev_addr) &&
+	    !ether_addr_equal(vlandev->dev_addr, dev->dev_addr))
 		dev_uc_add(dev, vlandev->dev_addr);
 
 	memcpy(vlan->real_dev_addr, dev->dev_addr, ETH_ALEN);

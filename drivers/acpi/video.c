@@ -389,12 +389,6 @@ static int __init video_set_bqc_offset(const struct dmi_system_id *d)
 	return 0;
 }
 
-static int video_ignore_initial_backlight(const struct dmi_system_id *d)
-{
-	use_bios_initial_backlight = 0;
-	return 0;
-}
-
 static struct dmi_system_id video_dmi_table[] __initdata = {
 	/*
 	 * Broken _BQC workaround http://bugzilla.kernel.org/show_bug.cgi?id=13121
@@ -437,46 +431,6 @@ static struct dmi_system_id video_dmi_table[] __initdata = {
 	 .matches = {
 		DMI_MATCH(DMI_BOARD_VENDOR, "Acer"),
 		DMI_MATCH(DMI_PRODUCT_NAME, "Aspire 7720"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP Folio 13-2000",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP Folio 13 - 2000 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP Pavilion g6 Notebook PC",
-	 .matches = {
-		 DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		 DMI_MATCH(DMI_PRODUCT_NAME, "HP Pavilion g6 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP Pavilion m4",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP Pavilion m4 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP 1000 Notebook PC",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP 1000 Notebook PC"),
-		},
-	},
-	{
-	 .callback = video_ignore_initial_backlight,
-	 .ident = "HP Pavilion dm4",
-	 .matches = {
-		DMI_MATCH(DMI_BOARD_VENDOR, "Hewlett-Packard"),
-		DMI_MATCH(DMI_PRODUCT_NAME, "HP Pavilion dm4 Notebook PC"),
 		},
 	},
 	{}
@@ -648,7 +602,6 @@ acpi_video_init_brightness(struct acpi_video_device *device)
 	union acpi_object *o;
 	struct acpi_video_device_brightness *br = NULL;
 	int result = -EINVAL;
-	u32 value;
 
 	if (!ACPI_SUCCESS(acpi_video_device_lcd_query_levels(device, &obj))) {
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Could not query available "
@@ -679,12 +632,7 @@ acpi_video_init_brightness(struct acpi_video_device *device)
 			printk(KERN_ERR PREFIX "Invalid data\n");
 			continue;
 		}
-		value = (u32) o->integer.value;
-		/* Skip duplicate entries */
-		if (count > 2 && br->levels[count - 1] == value)
-			continue;
-
-		br->levels[count] = value;
+		br->levels[count] = (u32) o->integer.value;
 
 		if (br->levels[count] > max_level)
 			max_level = br->levels[count];
@@ -1397,15 +1345,12 @@ static int
 acpi_video_bus_get_devices(struct acpi_video_bus *video,
 			   struct acpi_device *device)
 {
-	int status = 0;
+	int status;
 	struct acpi_device *dev;
 
-	/*
-	 * There are systems where video module known to work fine regardless
-	 * of broken _DOD and ignoring returned value here doesn't cause
-	 * any issues later.
-	 */
-	acpi_video_device_enumerate(video);
+	status = acpi_video_device_enumerate(video);
+	if (status)
+		return status;
 
 	list_for_each_entry(dev, &device->children, node) {
 
@@ -1744,10 +1689,6 @@ static int acpi_video_bus_add(struct acpi_device *device)
 	set_bit(KEY_BRIGHTNESS_ZERO, input->keybit);
 	set_bit(KEY_DISPLAY_OFF, input->keybit);
 
-	error = input_register_device(input);
-	if (error)
-		goto err_stop_video;
-
 	printk(KERN_INFO PREFIX "%s [%s] (multi-head: %s  rom: %s  post: %s)\n",
 	       ACPI_VIDEO_DEVICE_NAME, acpi_device_bid(device),
 	       video->flags.multihead ? "yes" : "no",
@@ -1758,12 +1699,16 @@ static int acpi_video_bus_add(struct acpi_device *device)
 	video->pm_nb.priority = 0;
 	error = register_pm_notifier(&video->pm_nb);
 	if (error)
-		goto err_unregister_input_dev;
+		goto err_stop_video;
+
+	error = input_register_device(input);
+	if (error)
+		goto err_unregister_pm_notifier;
 
 	return 0;
 
- err_unregister_input_dev:
-	input_unregister_device(input);
+ err_unregister_pm_notifier:
+	unregister_pm_notifier(&video->pm_nb);
  err_stop_video:
 	acpi_video_bus_stop_devices(video);
  err_free_input_dev:
@@ -1800,10 +1745,18 @@ static int acpi_video_bus_remove(struct acpi_device *device, int type)
 	return 0;
 }
 
+static int __init is_i740(struct pci_dev *dev)
+{
+	if (dev->device == 0x00D1)
+		return 1;
+	if (dev->device == 0x7000)
+		return 1;
+	return 0;
+}
+
 static int __init intel_opregion_present(void)
 {
-	int i915 = 0;
-#if defined(CONFIG_DRM_I915) || defined(CONFIG_DRM_I915_MODULE)
+	int opregion = 0;
 	struct pci_dev *dev = NULL;
 	u32 address;
 
@@ -1812,13 +1765,15 @@ static int __init intel_opregion_present(void)
 			continue;
 		if (dev->vendor != PCI_VENDOR_ID_INTEL)
 			continue;
+		/* We don't want to poke around undefined i740 registers */
+		if (is_i740(dev))
+			continue;
 		pci_read_config_dword(dev, 0xfc, &address);
 		if (!address)
 			continue;
-		i915 = 1;
+		opregion = 1;
 	}
-#endif
-	return i915;
+	return opregion;
 }
 
 int acpi_video_register(void)
@@ -1872,17 +1827,6 @@ EXPORT_SYMBOL(acpi_video_unregister);
 
 static int __init acpi_video_init(void)
 {
-	/*
-	 * Let the module load even if ACPI is disabled (e.g. due to
-	 * a broken BIOS) so that i915.ko can still be loaded on such
-	 * old systems without an AcpiOpRegion.
-	 *
-	 * acpi_video_register() will report -ENODEV later as well due
-	 * to acpi_disabled when i915.ko tries to register itself afterwards.
-	 */
-	if (acpi_disabled)
-		return 0;
-
 	dmi_check_system(video_dmi_table);
 
 	if (intel_opregion_present())

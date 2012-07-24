@@ -327,7 +327,8 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 
 	if (!issecure(SECURE_NO_SETUID_FIXUP)) {
 		/* Clear the capabilities if we switch to a non-root user */
-		if (override_cred->uid)
+		kuid_t root_uid = make_kuid(override_cred->user_ns, 0);
+		if (!uid_eq(override_cred->uid, root_uid))
 			cap_clear(override_cred->cap_effective);
 		else
 			override_cred->cap_effective =
@@ -520,13 +521,22 @@ static int chown_common(struct path *path, uid_t user, gid_t group)
 	struct inode *inode = path->dentry->d_inode;
 	int error;
 	struct iattr newattrs;
+	kuid_t uid;
+	kgid_t gid;
+
+	uid = make_kuid(current_user_ns(), user);
+	gid = make_kgid(current_user_ns(), group);
 
 	newattrs.ia_valid =  ATTR_CTIME;
 	if (user != (uid_t) -1) {
+		if (!uid_valid(uid))
+			return -EINVAL;
 		newattrs.ia_valid |= ATTR_UID;
 		newattrs.ia_uid = dx_map_uid(user);
 	}
 	if (group != (gid_t) -1) {
+		if (!gid_valid(gid))
+			return -EINVAL;
 		newattrs.ia_valid |= ATTR_GID;
 		newattrs.ia_gid = dx_map_gid(group);
 	}
@@ -671,10 +681,23 @@ static inline int __get_file_write_access(struct inode *inode,
 	return error;
 }
 
-static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
-					struct file *f,
-					int (*open)(struct inode *, struct file *),
-					const struct cred *cred)
+int open_check_o_direct(struct file *f)
+{
+	/* NB: we're sure to have correct a_ops only after f_op->open */
+	if (f->f_flags & O_DIRECT) {
+		if (!f->f_mapping->a_ops ||
+		    ((!f->f_mapping->a_ops->direct_IO) &&
+		    (!f->f_mapping->a_ops->get_xip_mem))) {
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+static struct file *do_dentry_open(struct dentry *dentry, struct vfsmount *mnt,
+				   struct file *f,
+				   int (*open)(struct inode *, struct file *),
+				   const struct cred *cred)
 {
 	static const struct file_operations empty_fops = {};
 	struct inode *inode;
@@ -699,6 +722,7 @@ static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
 	f->f_path.dentry = dentry;
 	f->f_path.mnt = mnt;
 	f->f_pos = 0;
+	file_sb_list_add(f, inode->i_sb);
 
 	if (unlikely(f->f_mode & FMODE_PATH)) {
 		f->f_op = &empty_fops;
@@ -707,7 +731,7 @@ static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
 
 	f->f_op = fops_get(inode->i_fop);
 
-	error = security_dentry_open(f, cred);
+	error = security_file_open(f, cred);
 	if (error)
 		goto cleanup_all;
 
@@ -729,16 +753,6 @@ static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
 
 	file_ra_state_init(&f->f_ra, f->f_mapping->host->i_mapping);
 
-	/* NB: we're sure to have correct a_ops only after f_op->open */
-	if (f->f_flags & O_DIRECT) {
-		if (!f->f_mapping->a_ops ||
-		    ((!f->f_mapping->a_ops->direct_IO) &&
-		    (!f->f_mapping->a_ops->get_xip_mem))) {
-			fput(f);
-			f = ERR_PTR(-EINVAL);
-		}
-	}
-
 	return f;
 
 cleanup_all:
@@ -756,13 +770,31 @@ cleanup_all:
 			mnt_drop_write(mnt);
 		}
 	}
+	file_sb_list_del(f);
 	f->f_path.dentry = NULL;
 	f->f_path.mnt = NULL;
 cleanup_file:
-	put_filp(f);
 	dput(dentry);
 	mntput(mnt);
 	return ERR_PTR(error);
+}
+
+static struct file *__dentry_open(struct dentry *dentry, struct vfsmount *mnt,
+				struct file *f,
+				int (*open)(struct inode *, struct file *),
+				const struct cred *cred)
+{
+	struct file *res = do_dentry_open(dentry, mnt, f, open, cred);
+	if (!IS_ERR(res)) {
+		int error = open_check_o_direct(f);
+		if (error) {
+			fput(res);
+			res = ERR_PTR(error);
+		}
+	} else {
+		put_filp(f);
+	}
+	return res;
 }
 
 /**
@@ -819,13 +851,31 @@ struct file *nameidata_to_filp(struct nameidata *nd)
 
 	/* Pick up the filp from the open intent */
 	filp = nd->intent.open.file;
-	nd->intent.open.file = NULL;
 
 	/* Has the filesystem initialised the file for us? */
-	if (filp->f_path.dentry == NULL) {
+	if (filp->f_path.dentry != NULL) {
+		nd->intent.open.file = NULL;
+	} else {
+		struct file *res;
+
 		path_get(&nd->path);
-		filp = __dentry_open(nd->path.dentry, nd->path.mnt, filp,
-				     NULL, cred);
+		res = do_dentry_open(nd->path.dentry, nd->path.mnt,
+				     filp, NULL, cred);
+		if (!IS_ERR(res)) {
+			int error;
+
+			nd->intent.open.file = NULL;
+			BUG_ON(res != filp);
+
+			error = open_check_o_direct(filp);
+			if (error) {
+				fput(filp);
+				filp = ERR_PTR(error);
+			}
+		} else {
+			/* Allow nd->intent.open.file to be recycled */
+			filp = res;
+		}
 	}
 	return filp;
 }
@@ -908,10 +958,9 @@ static inline int build_open_flags(int flags, umode_t mode, struct open_flags *o
 	int lookup_flags = 0;
 	int acc_mode;
 
-	if (flags & O_CREAT)
-		op->mode = (mode & S_IALLUGO) | S_IFREG;
-	else
-		op->mode = 0;
+	if (!(flags & O_CREAT))
+		mode = 0;
+	op->mode = mode;
 
 	/* Must never be set by userspace */
 	flags &= ~FMODE_NONOTIFY;

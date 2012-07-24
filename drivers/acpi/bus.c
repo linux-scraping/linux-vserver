@@ -33,7 +33,6 @@
 #include <linux/proc_fs.h>
 #include <linux/acpi.h>
 #include <linux/slab.h>
-#include <linux/regulator/machine.h>
 #ifdef CONFIG_X86
 #include <asm/mpspec.h>
 #endif
@@ -57,12 +56,6 @@ EXPORT_SYMBOL(acpi_root_dir);
 
 
 #ifdef CONFIG_X86
-#ifdef CONFIG_ACPI_CUSTOM_DSDT
-static inline int set_copy_dsdt(const struct dmi_system_id *id)
-{
-	return 0;
-}
-#else
 static int set_copy_dsdt(const struct dmi_system_id *id)
 {
 	printk(KERN_NOTICE "%s detected - "
@@ -70,7 +63,6 @@ static int set_copy_dsdt(const struct dmi_system_id *id)
 	acpi_gbl_copy_dsdt_locally = 1;
 	return 0;
 }
-#endif
 
 static struct dmi_system_id dsdt_dmi_table[] __initdata = {
 	/*
@@ -190,41 +182,66 @@ EXPORT_SYMBOL(acpi_bus_get_private_data);
                                  Power Management
    -------------------------------------------------------------------------- */
 
+static const char *state_string(int state)
+{
+	switch (state) {
+	case ACPI_STATE_D0:
+		return "D0";
+	case ACPI_STATE_D1:
+		return "D1";
+	case ACPI_STATE_D2:
+		return "D2";
+	case ACPI_STATE_D3_HOT:
+		return "D3hot";
+	case ACPI_STATE_D3_COLD:
+		return "D3";
+	default:
+		return "(unknown)";
+	}
+}
+
 static int __acpi_bus_get_power(struct acpi_device *device, int *state)
 {
-	int result = 0;
-	acpi_status status = 0;
-	unsigned long long psc = 0;
+	int result = ACPI_STATE_UNKNOWN;
 
 	if (!device || !state)
 		return -EINVAL;
 
-	*state = ACPI_STATE_UNKNOWN;
-
-	if (device->flags.power_manageable) {
-		/*
-		 * Get the device's power state either directly (via _PSC) or
-		 * indirectly (via power resources).
-		 */
-		if (device->power.flags.power_resources) {
-			result = acpi_power_get_inferred_state(device, state);
-			if (result)
-				return result;
-		} else if (device->power.flags.explicit_get) {
-			status = acpi_evaluate_integer(device->handle, "_PSC",
-						       NULL, &psc);
-			if (ACPI_FAILURE(status))
-				return -ENODEV;
-			*state = (int)psc;
-		}
-	} else {
+	if (!device->flags.power_manageable) {
 		/* TBD: Non-recursive algorithm for walking up hierarchy. */
 		*state = device->parent ?
 			device->parent->power.state : ACPI_STATE_D0;
+		goto out;
 	}
 
-	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] power state is D%d\n",
-			  device->pnp.bus_id, *state));
+	/*
+	 * Get the device's power state either directly (via _PSC) or
+	 * indirectly (via power resources).
+	 */
+	if (device->power.flags.explicit_get) {
+		unsigned long long psc;
+		acpi_status status = acpi_evaluate_integer(device->handle,
+							   "_PSC", NULL, &psc);
+		if (ACPI_FAILURE(status))
+			return -ENODEV;
+
+		result = psc;
+	}
+	/* The test below covers ACPI_STATE_UNKNOWN too. */
+	if (result <= ACPI_STATE_D2) {
+	  ; /* Do nothing. */
+	} else if (device->power.flags.power_resources) {
+		int error = acpi_power_get_inferred_state(device, &result);
+		if (error)
+			return error;
+	} else if (result == ACPI_STATE_D3_HOT) {
+		result = ACPI_STATE_D3;
+	}
+	*state = result;
+
+ out:
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] power state is %s\n",
+			  device->pnp.bus_id, state_string(*state)));
 
 	return 0;
 }
@@ -242,13 +259,14 @@ static int __acpi_bus_set_power(struct acpi_device *device, int state)
 	/* Make sure this is a valid target state */
 
 	if (state == device->power.state) {
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device is already at D%d\n",
-				  state));
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device is already at %s\n",
+				  state_string(state)));
 		return 0;
 	}
 
 	if (!device->power.states[state].flags.valid) {
-		printk(KERN_WARNING PREFIX "Device does not support D%d\n", state);
+		printk(KERN_WARNING PREFIX "Device does not support %s\n",
+		       state_string(state));
 		return -ENODEV;
 	}
 	if (device->parent && (state < device->parent->power.state)) {
@@ -302,13 +320,13 @@ static int __acpi_bus_set_power(struct acpi_device *device, int state)
       end:
 	if (result)
 		printk(KERN_WARNING PREFIX
-			      "Device [%s] failed to transition to D%d\n",
-			      device->pnp.bus_id, state);
+			      "Device [%s] failed to transition to %s\n",
+			      device->pnp.bus_id, state_string(state));
 	else {
 		device->power.state = state;
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-				  "Device [%s] transitioned to D%d\n",
-				  device->pnp.bus_id, state));
+				  "Device [%s] transitioned to %s\n",
+				  device->pnp.bus_id, state_string(state)));
 	}
 
 	return result;
@@ -929,14 +947,6 @@ void __init acpi_early_init(void)
 		goto error0;
 	}
 
-	/*
-	 * If the system is using ACPI then we can be reasonably
-	 * confident that any regulators are managed by the firmware
-	 * so tell the regulator core it has everything it needs to
-	 * know.
-	 */
-	regulator_has_full_constraints();
-
 	return;
 
       error0:
@@ -970,17 +980,13 @@ static int __init acpi_bus_init(void)
 	status = acpi_ec_ecdt_probe();
 	/* Ignore result. Not having an ECDT is not fatal. */
 
+	acpi_bus_osc_support();
+
 	status = acpi_initialize_objects(ACPI_FULL_INITIALIZATION);
 	if (ACPI_FAILURE(status)) {
 		printk(KERN_ERR PREFIX "Unable to initialize ACPI objects\n");
 		goto error1;
 	}
-
-	/*
-	 * _OSC method may exist in module level code,
-	 * so it must be run after ACPI_FULL_INITIALIZATION
-	 */
-	acpi_bus_osc_support();
 
 	/*
 	 * _PDC control method may load dynamic SSDT tables,

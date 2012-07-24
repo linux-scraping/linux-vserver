@@ -100,7 +100,7 @@ static int decrementer_set_next_event(unsigned long evt,
 static void decrementer_set_mode(enum clock_event_mode mode,
 				 struct clock_event_device *dev);
 
-static struct clock_event_device decrementer_clockevent = {
+struct clock_event_device decrementer_clockevent = {
 	.name           = "decrementer",
 	.rating         = 200,
 	.irq            = 0,
@@ -108,6 +108,7 @@ static struct clock_event_device decrementer_clockevent = {
 	.set_mode       = decrementer_set_mode,
 	.features       = CLOCK_EVT_FEAT_ONESHOT,
 };
+EXPORT_SYMBOL(decrementer_clockevent);
 
 DEFINE_PER_CPU(u64, decrementers_next_tb);
 static DEFINE_PER_CPU(struct clock_event_device, decrementers);
@@ -212,6 +213,8 @@ static u64 scan_dispatch_log(u64 stop_tb)
 	if (i == vpa->dtl_idx)
 		return 0;
 	while (i < vpa->dtl_idx) {
+		if (dtl_consumer)
+			dtl_consumer(dtl, i);
 		dtb = dtl->timebase;
 		tb_delta = dtl->enqueue_to_dispatch_time +
 			dtl->ready_to_enqueue_time;
@@ -224,8 +227,6 @@ static u64 scan_dispatch_log(u64 stop_tb)
 		}
 		if (dtb > stop_tb)
 			break;
-		if (dtl_consumer)
-			dtl_consumer(dtl, i);
 		stolen += tb_delta;
 		++i;
 		++dtl;
@@ -496,7 +497,7 @@ void timer_interrupt(struct pt_regs * regs)
 
 	__get_cpu_var(irq_stat).timer_irqs++;
 
-#if defined(CONFIG_PPC32) && defined(CONFIG_PPC_PMAC)
+#if defined(CONFIG_PPC32) && defined(CONFIG_PMAC)
 	if (atomic_read(&ppc_n_lost_interrupts) != 0)
 		do_IRQ(regs);
 #endif
@@ -749,8 +750,13 @@ void update_vsyscall(struct timespec *wall_time, struct timespec *wtm,
 
 void update_vsyscall_tz(void)
 {
+	/* Make userspace gettimeofday spin until we're done. */
+	++vdso_data->tb_update_count;
+	smp_mb();
 	vdso_data->tz_minuteswest = sys_tz.tz_minuteswest;
 	vdso_data->tz_dsttime = sys_tz.tz_dsttime;
+	smp_mb();
+	++vdso_data->tb_update_count;
 }
 
 static void __init clocksource_init(void)

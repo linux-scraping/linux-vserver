@@ -18,6 +18,9 @@
  * 				routing table.
  * 	Ville Nuorvala:		Fixed routing subtrees.
  */
+
+#define pr_fmt(fmt) "IPv6: " fmt
+
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/net.h>
@@ -38,7 +41,7 @@
 #define RT6_DEBUG 2
 
 #if RT6_DEBUG >= 3
-#define RT6_TRACE(x...) printk(KERN_DEBUG x)
+#define RT6_TRACE(x...) pr_debug(x)
 #else
 #define RT6_TRACE(x...) do { ; } while (0)
 #endif
@@ -451,12 +454,10 @@ static struct fib6_node * fib6_add_1(struct fib6_node *root, void *addr,
 		    !ipv6_prefix_equal(&key->addr, addr, fn->fn_bit)) {
 			if (!allow_create) {
 				if (replace_required) {
-					pr_warn("IPv6: Can't replace route, "
-						"no match found\n");
+					pr_warn("Can't replace route, no match found\n");
 					return ERR_PTR(-ENOENT);
 				}
-				pr_warn("IPv6: NLM_F_CREATE should be set "
-					"when creating new route\n");
+				pr_warn("NLM_F_CREATE should be set when creating new route\n");
 			}
 			goto insert_above;
 		}
@@ -499,11 +500,10 @@ static struct fib6_node * fib6_add_1(struct fib6_node *root, void *addr,
 		 * That would keep IPv6 consistent with IPv4
 		 */
 		if (replace_required) {
-			pr_warn("IPv6: Can't replace route, no match found\n");
+			pr_warn("Can't replace route, no match found\n");
 			return ERR_PTR(-ENOENT);
 		}
-		pr_warn("IPv6: NLM_F_CREATE should be set "
-			"when creating new route\n");
+		pr_warn("NLM_F_CREATE should be set when creating new route\n");
 	}
 	/*
 	 *	We walked to the bottom of tree.
@@ -633,29 +633,6 @@ insert_above:
 	return ln;
 }
 
-static void fib6_purge_rt(struct rt6_info *rt, struct fib6_node *fn,
-			  struct net *net)
-{
-	if (atomic_read(&rt->rt6i_ref) != 1) {
-		/* This route is used as dummy address holder in some split
-		 * nodes. It is not leaked, but it still holds other resources,
-		 * which must be released in time. So, scan ascendant nodes
-		 * and replace dummy references to this route with references
-		 * to still alive ones.
-		 */
-		while (fn) {
-			if (!(fn->fn_flags & RTN_RTINFO) && fn->leaf == rt) {
-				fn->leaf = fib6_find_prefix(net, fn);
-				atomic_inc(&fn->leaf->rt6i_ref);
-				rt6_release(rt);
-			}
-			fn = fn->parent;
-		}
-		/* No more references are possible at this point. */
-		BUG_ON(atomic_read(&rt->rt6i_ref) != 1);
-	}
-}
-
 /*
  *	Insert routing information in a node.
  */
@@ -719,7 +696,7 @@ static int fib6_add_rt2node(struct fib6_node *fn, struct rt6_info *rt,
 	 */
 	if (!replace) {
 		if (!add)
-			pr_warn("IPv6: NLM_F_CREATE should be set when creating new route\n");
+			pr_warn("NLM_F_CREATE should be set when creating new route\n");
 
 add:
 		rt->dst.rt6_next = iter;
@@ -738,7 +715,7 @@ add:
 		if (!found) {
 			if (add)
 				goto add;
-			pr_warn("IPv6: NLM_F_REPLACE set, but no existing node found!\n");
+			pr_warn("NLM_F_REPLACE set, but no existing node found!\n");
 			return -ENOENT;
 		}
 		*ins = rt;
@@ -746,12 +723,11 @@ add:
 		rt->dst.rt6_next = iter->dst.rt6_next;
 		atomic_inc(&rt->rt6i_ref);
 		inet6_rt_notify(RTM_NEWROUTE, rt, info);
+		rt6_release(iter);
 		if (!(fn->fn_flags & RTN_RTINFO)) {
 			info->nl_net->ipv6.rt6_stats->fib_route_nodes++;
 			fn->fn_flags |= RTN_RTINFO;
 		}
-		fib6_purge_rt(iter, fn, info->nl_net);
-		rt6_release(iter);
 	}
 
 	return 0;
@@ -792,7 +768,7 @@ int fib6_add(struct fib6_node *root, struct rt6_info *rt, struct nl_info *info)
 			replace_required = 1;
 	}
 	if (!allow_create && !replace_required)
-		pr_warn("IPv6: RTM_NEWROUTE with no NLM_F_CREATE or NLM_F_REPLACE\n");
+		pr_warn("RTM_NEWROUTE with no NLM_F_CREATE or NLM_F_REPLACE\n");
 
 	fn = fib6_add_1(root, &rt->rt6i_dst.addr, sizeof(struct in6_addr),
 			rt->rt6i_dst.plen, offsetof(struct rt6_info, rt6i_dst),
@@ -842,10 +818,6 @@ int fib6_add(struct fib6_node *root, struct rt6_info *rt, struct nl_info *info)
 					offsetof(struct rt6_info, rt6i_src),
 					allow_create, replace_required);
 
-			if (IS_ERR(sn)) {
-				err = PTR_ERR(sn);
-				sn = NULL;
-			}
 			if (!sn) {
 				/* If it is failed, discard just allocated
 				   root, and then (in st_failure) stale node
@@ -973,22 +945,14 @@ static struct fib6_node * fib6_lookup_1(struct fib6_node *root,
 
 			if (ipv6_prefix_equal(&key->addr, args->addr, key->plen)) {
 #ifdef CONFIG_IPV6_SUBTREES
-				if (fn->subtree) {
-					struct fib6_node *sfn;
-					sfn = fib6_lookup_1(fn->subtree,
-							    args + 1);
-					if (!sfn)
-						goto backtrack;
-					fn = sfn;
-				}
+				if (fn->subtree)
+					fn = fib6_lookup_1(fn->subtree, args + 1);
 #endif
-				if (fn->fn_flags & RTN_RTINFO)
+				if (!fn || fn->fn_flags & RTN_RTINFO)
 					return fn;
 			}
 		}
-#ifdef CONFIG_IPV6_SUBTREES
-backtrack:
-#endif
+
 		if (fn->fn_flags & RTN_ROOT)
 			break;
 
@@ -1253,7 +1217,24 @@ static void fib6_del_route(struct fib6_node *fn, struct rt6_info **rtp,
 		fn = fib6_repair_tree(net, fn);
 	}
 
-	fib6_purge_rt(rt, fn, net);
+	if (atomic_read(&rt->rt6i_ref) != 1) {
+		/* This route is used as dummy address holder in some split
+		 * nodes. It is not leaked, but it still holds other resources,
+		 * which must be released in time. So, scan ascendant nodes
+		 * and replace dummy references to this route with references
+		 * to still alive ones.
+		 */
+		while (fn) {
+			if (!(fn->fn_flags & RTN_RTINFO) && fn->leaf == rt) {
+				fn->leaf = fib6_find_prefix(net, fn);
+				atomic_inc(&fn->leaf->rt6i_ref);
+				rt6_release(rt);
+			}
+			fn = fn->parent;
+		}
+		/* No more references are possible at this point. */
+		BUG_ON(atomic_read(&rt->rt6i_ref) != 1);
+	}
 
 	inet6_rt_notify(RTM_DELROUTE, rt, info);
 	rt6_release(rt);
@@ -1368,8 +1349,8 @@ static int fib6_walk_continue(struct fib6_walker_t *w)
 			if (w->leaf && fn->fn_flags & RTN_RTINFO) {
 				int err;
 
-				if (w->count < w->skip) {
-					w->count++;
+				if (w->skip) {
+					w->skip--;
 					continue;
 				}
 
@@ -1439,7 +1420,8 @@ static int fib6_clean_node(struct fib6_walker_t *w)
 			res = fib6_del(rt, &info);
 			if (res) {
 #if RT6_DEBUG >= 2
-				printk(KERN_DEBUG "fib6_clean_node: del failed: rt=%p@%p err=%d\n", rt, rt->rt6i_node, res);
+				pr_debug("%s: del failed: rt=%p@%p err=%d\n",
+					 __func__, rt, rt->rt6i_node, res);
 #endif
 				continue;
 			}
@@ -1593,16 +1575,19 @@ static int fib6_age(struct rt6_info *rt, void *arg)
 
 static DEFINE_SPINLOCK(fib6_gc_lock);
 
-void fib6_run_gc(unsigned long expires, struct net *net, bool force)
+void fib6_run_gc(unsigned long expires, struct net *net)
 {
-	if (force) {
+	if (expires != ~0UL) {
 		spin_lock_bh(&fib6_gc_lock);
-	} else if (!spin_trylock_bh(&fib6_gc_lock)) {
-		mod_timer(&net->ipv6.ip6_fib_timer, jiffies + HZ);
-		return;
+		gc_args.timeout = expires ? (int)expires :
+			net->ipv6.sysctl.ip6_rt_gc_interval;
+	} else {
+		if (!spin_trylock_bh(&fib6_gc_lock)) {
+			mod_timer(&net->ipv6.ip6_fib_timer, jiffies + HZ);
+			return;
+		}
+		gc_args.timeout = net->ipv6.sysctl.ip6_rt_gc_interval;
 	}
-	gc_args.timeout = expires ? (int)expires :
-			  net->ipv6.sysctl.ip6_rt_gc_interval;
 
 	gc_args.more = icmp6_dst_gc();
 
@@ -1619,7 +1604,7 @@ void fib6_run_gc(unsigned long expires, struct net *net, bool force)
 
 static void fib6_gc_timer_cb(unsigned long arg)
 {
-	fib6_run_gc(0, (struct net *)arg, true);
+	fib6_run_gc(0, (struct net *)arg);
 }
 
 static int __net_init fib6_net_init(struct net *net)

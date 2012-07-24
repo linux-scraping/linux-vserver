@@ -33,9 +33,9 @@
 /*
  * MegaRAID SAS Driver meta data
  */
-#define MEGASAS_VERSION				"00.00.06.14-rc1"
-#define MEGASAS_RELDATE				"Jan. 6, 2012"
-#define MEGASAS_EXT_VERSION			"Fri. Jan. 6 17:00:00 PDT 2012"
+#define MEGASAS_VERSION				"00.00.06.15-rc1"
+#define MEGASAS_RELDATE				"Mar. 19, 2012"
+#define MEGASAS_EXT_VERSION			"Mon. Mar. 19 17:00:00 PDT 2012"
 
 /*
  * Device IDs
@@ -1294,6 +1294,7 @@ struct megasas_instance {
 	u32 *reply_queue;
 	dma_addr_t reply_queue_h;
 
+	unsigned long base_addr;
 	struct megasas_register_set __iomem *reg_set;
 
 	struct megasas_pd_list          pd_list[MEGASAS_MAX_PD];

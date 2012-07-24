@@ -40,8 +40,6 @@ static inline struct crypto_alg *crypto_alg_get(struct crypto_alg *alg)
 	return alg;
 }
 
-static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg);
-
 struct crypto_alg *crypto_mod_get(struct crypto_alg *alg)
 {
 	return try_module_get(alg->cra_module) ? crypto_alg_get(alg) : NULL;
@@ -152,11 +150,8 @@ static struct crypto_alg *crypto_larval_add(const char *name, u32 type,
 	}
 	up_write(&crypto_alg_sem);
 
-	if (alg != &larval->alg) {
+	if (alg != &larval->alg)
 		kfree(larval);
-		if (crypto_is_larval(alg))
-			alg = crypto_larval_wait(alg);
-	}
 
 	return alg;
 }
@@ -178,7 +173,7 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	struct crypto_larval *larval = (void *)alg;
 	long timeout;
 
-	timeout = wait_for_completion_killable_timeout(
+	timeout = wait_for_completion_interruptible_timeout(
 		&larval->completion, 60 * HZ);
 
 	alg = larval->adult;
@@ -441,7 +436,7 @@ struct crypto_tfm *crypto_alloc_base(const char *alg_name, u32 type, u32 mask)
 err:
 		if (err != -EAGAIN)
 			break;
-		if (fatal_signal_pending(current)) {
+		if (signal_pending(current)) {
 			err = -EINTR;
 			break;
 		}
@@ -558,7 +553,7 @@ void *crypto_alloc_tfm(const char *alg_name,
 err:
 		if (err != -EAGAIN)
 			break;
-		if (fatal_signal_pending(current)) {
+		if (signal_pending(current)) {
 			err = -EINTR;
 			break;
 		}

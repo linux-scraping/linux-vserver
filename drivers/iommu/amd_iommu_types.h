@@ -99,7 +99,6 @@
 #define PASID_MASK		0x000fffff
 
 /* MMIO status bits */
-#define MMIO_STATUS_EVT_INT_MASK	(1 << 1)
 #define MMIO_STATUS_COM_WAIT_INT_MASK	(1 << 2)
 #define MMIO_STATUS_PPR_INT_MASK	(1 << 6)
 
@@ -277,7 +276,6 @@
 #define IOMMU_PTE_IR (1ULL << 61)
 #define IOMMU_PTE_IW (1ULL << 62)
 
-#define DTE_FLAG_MASK	(0x3ffULL << 32)
 #define DTE_FLAG_IOTLB	(0x01UL << 32)
 #define DTE_FLAG_GV	(0x01ULL << 55)
 #define DTE_GLX_SHIFT	(56)
@@ -654,7 +652,7 @@ extern unsigned long *amd_iommu_pd_alloc_bitmap;
  * If true, the addresses will be flushed on unmap time, not when
  * they are reused
  */
-extern bool amd_iommu_unmap_flush;
+extern u32 amd_iommu_unmap_flush;
 
 /* Smallest number of PASIDs supported by any IOMMU in the system */
 extern u32 amd_iommu_max_pasids;

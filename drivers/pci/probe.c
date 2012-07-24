@@ -10,17 +10,15 @@
 #include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/pci-aspm.h>
+#include <asm-generic/pci-bridge.h>
 #include "pci.h"
 
 #define CARDBUS_LATENCY_TIMER	176	/* secondary latency timer */
 #define CARDBUS_RESERVE_BUSNR	3
 
-static LIST_HEAD(pci_host_bridges);
-
 /* Ugh.  Need to stop exporting this to modules. */
 LIST_HEAD(pci_root_buses);
 EXPORT_SYMBOL(pci_root_buses);
-
 
 static int find_anything(struct device *dev, void *data)
 {
@@ -43,80 +41,6 @@ int no_pci_devices(void)
 	return no_devices;
 }
 EXPORT_SYMBOL(no_pci_devices);
-
-static struct pci_host_bridge *pci_host_bridge(struct pci_bus *bus)
-{
-	struct pci_host_bridge *bridge;
-
-	while (bus->parent)
-		bus = bus->parent;
-
-	list_for_each_entry(bridge, &pci_host_bridges, list) {
-		if (bridge->bus == bus)
-			return bridge;
-	}
-
-	return NULL;
-}
-
-static bool resource_contains(struct resource *res1, struct resource *res2)
-{
-	return res1->start <= res2->start && res1->end >= res2->end;
-}
-
-void pcibios_resource_to_bus(struct pci_bus *bus, struct pci_bus_region *region,
-			     struct resource *res)
-{
-	struct pci_host_bridge *bridge = pci_host_bridge(bus);
-	struct pci_host_bridge_window *window;
-	resource_size_t offset = 0;
-
-	list_for_each_entry(window, &bridge->windows, list) {
-		if (resource_type(res) != resource_type(window->res))
-			continue;
-
-		if (resource_contains(window->res, res)) {
-			offset = window->offset;
-			break;
-		}
-	}
-
-	region->start = res->start - offset;
-	region->end = res->end - offset;
-}
-EXPORT_SYMBOL(pcibios_resource_to_bus);
-
-static bool region_contains(struct pci_bus_region *region1,
-			    struct pci_bus_region *region2)
-{
-	return region1->start <= region2->start && region1->end >= region2->end;
-}
-
-void pcibios_bus_to_resource(struct pci_bus *bus, struct resource *res,
-			     struct pci_bus_region *region)
-{
-	struct pci_host_bridge *bridge = pci_host_bridge(bus);
-	struct pci_host_bridge_window *window;
-	struct pci_bus_region bus_region;
-	resource_size_t offset = 0;
-
-	list_for_each_entry(window, &bridge->windows, list) {
-		if (resource_type(res) != resource_type(window->res))
-			continue;
-
-		bus_region.start = window->res->start - window->offset;
-		bus_region.end = window->res->end - window->offset;
-
-		if (region_contains(&bus_region, region)) {
-			offset = window->offset;
-			break;
-		}
-	}
-
-	res->start = region->start + offset;
-	res->end = region->end + offset;
-}
-EXPORT_SYMBOL(pcibios_bus_to_resource);
 
 /*
  * PCI Bus Class
@@ -252,17 +176,14 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 		res->flags |= IORESOURCE_SIZEALIGN;
 		if (res->flags & IORESOURCE_IO) {
 			l &= PCI_BASE_ADDRESS_IO_MASK;
-			sz &= PCI_BASE_ADDRESS_IO_MASK;
 			mask = PCI_BASE_ADDRESS_IO_MASK & (u32) IO_SPACE_LIMIT;
 		} else {
 			l &= PCI_BASE_ADDRESS_MEM_MASK;
-			sz &= PCI_BASE_ADDRESS_MEM_MASK;
 			mask = (u32)PCI_BASE_ADDRESS_MEM_MASK;
 		}
 	} else {
 		res->flags |= (l & IORESOURCE_ROM_ENABLE);
 		l &= PCI_ROM_ADDRESS_MASK;
-		sz &= PCI_ROM_ADDRESS_MASK;
 		mask = (u32)PCI_ROM_ADDRESS_MASK;
 	}
 
@@ -296,11 +217,11 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 			pci_write_config_dword(dev, pos + 4, 0);
 			region.start = 0;
 			region.end = sz64;
-			pcibios_bus_to_resource(dev->bus, res, &region);
+			pcibios_bus_to_resource(dev, res, &region);
 		} else {
 			region.start = l64;
 			region.end = l64 + sz64;
-			pcibios_bus_to_resource(dev->bus, res, &region);
+			pcibios_bus_to_resource(dev, res, &region);
 			dev_printk(KERN_DEBUG, &dev->dev, "reg %x: %pR\n",
 				   pos, res);
 		}
@@ -312,7 +233,7 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 
 		region.start = l;
 		region.end = l + sz;
-		pcibios_bus_to_resource(dev->bus, res, &region);
+		pcibios_bus_to_resource(dev, res, &region);
 
 		dev_printk(KERN_DEBUG, &dev->dev, "reg %x: %pR\n", pos, res);
 	}
@@ -371,7 +292,7 @@ static void __devinit pci_read_bridge_io(struct pci_bus *child)
 		res2.flags = res->flags;
 		region.start = base;
 		region.end = limit + 0xfff;
-		pcibios_bus_to_resource(dev->bus, &res2, &region);
+		pcibios_bus_to_resource(dev, &res2, &region);
 		if (!res->start)
 			res->start = res2.start;
 		if (!res->end)
@@ -397,7 +318,7 @@ static void __devinit pci_read_bridge_mmio(struct pci_bus *child)
 		res->flags = (mem_base_lo & PCI_MEMORY_RANGE_TYPE_MASK) | IORESOURCE_MEM;
 		region.start = base;
 		region.end = limit + 0xfffff;
-		pcibios_bus_to_resource(dev->bus, res, &region);
+		pcibios_bus_to_resource(dev, res, &region);
 		dev_printk(KERN_DEBUG, &dev->dev, "  bridge window %pR\n", res);
 	}
 }
@@ -446,7 +367,7 @@ static void __devinit pci_read_bridge_mmio_pref(struct pci_bus *child)
 			res->flags |= IORESOURCE_MEM_64;
 		region.start = base;
 		region.end = limit + 0xfffff;
-		pcibios_bus_to_resource(dev->bus, res, &region);
+		pcibios_bus_to_resource(dev, res, &region);
 		dev_printk(KERN_DEBUG, &dev->dev, "  bridge window %pR\n", res);
 	}
 }
@@ -500,6 +421,19 @@ static struct pci_bus * pci_alloc_bus(void)
 		b->cur_bus_speed = PCI_SPEED_UNKNOWN;
 	}
 	return b;
+}
+
+static struct pci_host_bridge *pci_alloc_host_bridge(struct pci_bus *b)
+{
+	struct pci_host_bridge *bridge;
+
+	bridge = kzalloc(sizeof(*bridge), GFP_KERNEL);
+	if (bridge) {
+		INIT_LIST_HEAD(&bridge->windows);
+		bridge->bus = b;
+	}
+
+	return bridge;
 }
 
 static unsigned char pcix_bus_speed[] = {
@@ -750,10 +684,8 @@ int __devinit pci_scan_bridge(struct pci_bus *bus, struct pci_dev *dev, int max,
 
 	/* Check if setup is sensible at all */
 	if (!pass &&
-	    (primary != bus->number || secondary <= bus->number ||
-	     secondary > subordinate)) {
-		dev_info(&dev->dev, "bridge configuration invalid ([bus %02x-%02x]), reconfiguring\n",
-			 secondary, subordinate);
+	    (primary != bus->number || secondary <= bus->number)) {
+		dev_dbg(&dev->dev, "bus configuration invalid, reconfiguring\n");
 		broken = 1;
 	}
 
@@ -1061,24 +993,24 @@ int pci_setup_device(struct pci_dev *dev)
 				region.end = 0x1F7;
 				res = &dev->resource[0];
 				res->flags = LEGACY_IO_RESOURCE;
-				pcibios_bus_to_resource(dev->bus, res, &region);
+				pcibios_bus_to_resource(dev, res, &region);
 				region.start = 0x3F6;
 				region.end = 0x3F6;
 				res = &dev->resource[1];
 				res->flags = LEGACY_IO_RESOURCE;
-				pcibios_bus_to_resource(dev->bus, res, &region);
+				pcibios_bus_to_resource(dev, res, &region);
 			}
 			if ((progif & 4) == 0) {
 				region.start = 0x170;
 				region.end = 0x177;
 				res = &dev->resource[2];
 				res->flags = LEGACY_IO_RESOURCE;
-				pcibios_bus_to_resource(dev->bus, res, &region);
+				pcibios_bus_to_resource(dev, res, &region);
 				region.start = 0x376;
 				region.end = 0x376;
 				res = &dev->resource[3];
 				res->flags = LEGACY_IO_RESOURCE;
-				pcibios_bus_to_resource(dev->bus, res, &region);
+				pcibios_bus_to_resource(dev, res, &region);
 			}
 		}
 		break;
@@ -1204,7 +1136,14 @@ int pci_cfg_space_size(struct pci_dev *dev)
 
 static void pci_release_bus_bridge_dev(struct device *dev)
 {
-	kfree(dev);
+	struct pci_host_bridge *bridge = to_pci_host_bridge(dev);
+
+	if (bridge->release_fn)
+		bridge->release_fn(bridge);
+
+	pci_free_resource_list(&bridge->windows);
+
+	kfree(bridge);
 }
 
 struct pci_dev *alloc_pci_dev(void)
@@ -1398,10 +1337,13 @@ static unsigned no_next_fn(struct pci_dev *dev, unsigned fn)
 static int only_one_child(struct pci_bus *bus)
 {
 	struct pci_dev *parent = bus->self;
+
 	if (!parent || !pci_is_pcie(parent))
 		return 0;
-	if (parent->pcie_type == PCI_EXP_TYPE_ROOT_PORT ||
-	    parent->pcie_type == PCI_EXP_TYPE_DOWNSTREAM)
+	if (parent->pcie_type == PCI_EXP_TYPE_ROOT_PORT)
+		return 1;
+	if (parent->pcie_type == PCI_EXP_TYPE_DOWNSTREAM &&
+	    !pci_has_flag(PCI_SCAN_ALL_PCIE_DEVS))
 		return 1;
 	return 0;
 }
@@ -1653,28 +1595,19 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	int error;
 	struct pci_host_bridge *bridge;
 	struct pci_bus *b, *b2;
-	struct device *dev;
 	struct pci_host_bridge_window *window, *n;
 	struct resource *res;
 	resource_size_t offset;
 	char bus_addr[64];
 	char *fmt;
 
-	bridge = kzalloc(sizeof(*bridge), GFP_KERNEL);
-	if (!bridge)
-		return NULL;
 
 	b = pci_alloc_bus();
 	if (!b)
-		goto err_bus;
-
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
-	if (!dev)
-		goto err_dev;
+		return NULL;
 
 	b->sysdata = sysdata;
 	b->ops = ops;
-
 	b2 = pci_find_bus(pci_domain_nr(b), bus);
 	if (b2) {
 		/* If we already got to this bus through a different bridge, ignore it */
@@ -1682,13 +1615,17 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 		goto err_out;
 	}
 
-	dev->parent = parent;
-	dev->release = pci_release_bus_bridge_dev;
-	dev_set_name(dev, "pci%04x:%02x", pci_domain_nr(b), bus);
-	error = device_register(dev);
+	bridge = pci_alloc_host_bridge(b);
+	if (!bridge)
+		goto err_out;
+
+	bridge->dev.parent = parent;
+	bridge->dev.release = pci_release_bus_bridge_dev;
+	dev_set_name(&bridge->dev, "pci%04x:%02x", pci_domain_nr(b), bus);
+	error = device_register(&bridge->dev);
 	if (error)
-		goto dev_reg_err;
-	b->bridge = get_device(dev);
+		goto bridge_dev_reg_err;
+	b->bridge = get_device(&bridge->dev);
 	device_enable_async_suspend(b->bridge);
 	pci_set_bus_of_node(b);
 
@@ -1706,9 +1643,6 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	pci_create_legacy_files(b);
 
 	b->number = b->secondary = bus;
-
-	bridge->bus = b;
-	INIT_LIST_HEAD(&bridge->windows);
 
 	if (parent)
 		dev_info(parent, "PCI host bridge to bus %s\n", dev_name(&b->dev));
@@ -1735,25 +1669,18 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	}
 
 	down_write(&pci_bus_sem);
-	list_add_tail(&bridge->list, &pci_host_bridges);
 	list_add_tail(&b->node, &pci_root_buses);
 	up_write(&pci_bus_sem);
 
 	return b;
 
 class_dev_reg_err:
-	device_unregister(dev);
-dev_reg_err:
-	down_write(&pci_bus_sem);
-	list_del(&bridge->list);
-	list_del(&b->node);
-	up_write(&pci_bus_sem);
-err_out:
-	kfree(dev);
-err_dev:
-	kfree(b);
-err_bus:
+	put_device(&bridge->dev);
+	device_unregister(&bridge->dev);
+bridge_dev_reg_err:
 	kfree(bridge);
+err_out:
+	kfree(b);
 	return NULL;
 }
 

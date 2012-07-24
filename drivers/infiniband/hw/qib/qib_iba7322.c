@@ -2279,11 +2279,6 @@ static int qib_7322_bringup_serdes(struct qib_pportdata *ppd)
 	qib_write_kreg_port(ppd, krp_ibcctrl_a, ppd->cpspec->ibcctrl_a);
 	qib_write_kreg(dd, kr_scratch, 0ULL);
 
-	/* ensure previous Tx parameters are not still forced */
-	qib_write_kreg_port(ppd, krp_tx_deemph_override,
-		SYM_MASK(IBSD_TX_DEEMPHASIS_OVERRIDE_0,
-		reset_tx_deemphasis_override));
-
 	if (qib_compat_ddr_negotiate) {
 		ppd->cpspec->ibdeltainprog = 1;
 		ppd->cpspec->ibsymsnap = read_7322_creg32_port(ppd,
@@ -4841,6 +4836,8 @@ static void qib_get_7322_faststats(unsigned long opaque)
 		spin_lock_irqsave(&ppd->dd->eep_st_lock, flags);
 		traffic_wds -= ppd->dd->traffic_wds;
 		ppd->dd->traffic_wds += traffic_wds;
+		if (traffic_wds >= QIB_TRAFFIC_ACTIVE_THRESHOLD)
+			atomic_add(ACTIVITY_TIMER, &ppd->dd->active_time);
 		spin_unlock_irqrestore(&ppd->dd->eep_st_lock, flags);
 		if (ppd->cpspec->qdr_dfe_on && (ppd->link_speed_active &
 						QIB_IB_QDR) &&
@@ -6382,6 +6379,7 @@ static int qib_init_7322_variables(struct qib_devdata *dd)
 		dd->cspec->sdmabufcnt;
 	dd->lastctxt_piobuf = dd->cspec->lastbuf_for_pio - sbufs;
 	dd->cspec->lastbuf_for_pio--; /* range is <= , not < */
+	dd->last_pio = dd->cspec->lastbuf_for_pio;
 	dd->pbufsctxt = (dd->cfgctxts > dd->first_user_ctxt) ?
 		dd->lastctxt_piobuf / (dd->cfgctxts - dd->first_user_ctxt) : 0;
 
@@ -7711,7 +7709,7 @@ static int serdes_7322_init_new(struct qib_pportdata *ppd)
 	ibsd_wr_allchans(ppd, 5, 0, BMASK(0, 0));
 	msleep(20);
 	/*       Set Frequency Loop Bandwidth */
-	ibsd_wr_allchans(ppd, 2, (7 << 5), BMASK(8, 5));
+	ibsd_wr_allchans(ppd, 2, (15 << 5), BMASK(8, 5));
 	/*       Enable Frequency Loop */
 	ibsd_wr_allchans(ppd, 2, (1 << 4), BMASK(4, 4));
 	/*       Set Timing Loop Bandwidth */

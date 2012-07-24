@@ -132,6 +132,24 @@ static void sysfs_unlink_sibling(struct sysfs_dirent *sd)
 	rb_erase(&sd->s_rb, &sd->s_parent->s_dir.children);
 }
 
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+
+/* Test for attributes that want to ignore lockdep for read-locking */
+static bool ignore_lockdep(struct sysfs_dirent *sd)
+{
+	return sysfs_type(sd) == SYSFS_KOBJ_ATTR &&
+			sd->s_attr.attr->ignore_lockdep;
+}
+
+#else
+
+static inline bool ignore_lockdep(struct sysfs_dirent *sd)
+{
+	return true;
+}
+
+#endif
+
 /**
  *	sysfs_get_active - get an active reference to sysfs_dirent
  *	@sd: sysfs_dirent to get an active reference to
@@ -155,15 +173,17 @@ struct sysfs_dirent *sysfs_get_active(struct sysfs_dirent *sd)
 			return NULL;
 
 		t = atomic_cmpxchg(&sd->s_active, v, v + 1);
-		if (likely(t == v)) {
-			rwsem_acquire_read(&sd->dep_map, 0, 1, _RET_IP_);
-			return sd;
-		}
+		if (likely(t == v))
+			break;
 		if (t < 0)
 			return NULL;
 
 		cpu_relax();
 	}
+
+	if (likely(!ignore_lockdep(sd)))
+		rwsem_acquire_read(&sd->dep_map, 0, 1, _RET_IP_);
+	return sd;
 }
 
 /**
@@ -180,7 +200,8 @@ void sysfs_put_active(struct sysfs_dirent *sd)
 	if (unlikely(!sd))
 		return;
 
-	rwsem_release(&sd->dep_map, 1, _RET_IP_);
+	if (likely(!ignore_lockdep(sd)))
+		rwsem_release(&sd->dep_map, 1, _RET_IP_);
 	v = atomic_dec_return(&sd->s_active);
 	if (likely(v != SD_DEACTIVATED_BIAS))
 		return;
@@ -457,18 +478,20 @@ int __sysfs_add_one(struct sysfs_addrm_cxt *acxt, struct sysfs_dirent *sd)
 /**
  *	sysfs_pathname - return full path to sysfs dirent
  *	@sd: sysfs_dirent whose path we want
- *	@path: caller allocated buffer of size PATH_MAX
+ *	@path: caller allocated buffer
  *
  *	Gives the name "/" to the sysfs_root entry; any path returned
  *	is relative to wherever sysfs is mounted.
+ *
+ *	XXX: does no error checking on @path size
  */
 static char *sysfs_pathname(struct sysfs_dirent *sd, char *path)
 {
 	if (sd->s_parent) {
 		sysfs_pathname(sd->s_parent, path);
-		strlcat(path, "/", PATH_MAX);
+		strcat(path, "/");
 	}
-	strlcat(path, sd->s_name, PATH_MAX);
+	strcat(path, sd->s_name);
 	return path;
 }
 
@@ -501,11 +524,9 @@ int sysfs_add_one(struct sysfs_addrm_cxt *acxt, struct sysfs_dirent *sd)
 		char *path = kzalloc(PATH_MAX, GFP_KERNEL);
 		WARN(1, KERN_WARNING
 		     "sysfs: cannot create duplicate filename '%s'\n",
-		     (path == NULL) ? sd->s_name
-				    : (sysfs_pathname(acxt->parent_sd, path),
-				       strlcat(path, "/", PATH_MAX),
-				       strlcat(path, sd->s_name, PATH_MAX),
-				       path));
+		     (path == NULL) ? sd->s_name :
+		     strcat(strcat(sysfs_pathname(acxt->parent_sd, path), "/"),
+		            sd->s_name));
 		kfree(path);
 	}
 
@@ -858,7 +879,6 @@ int sysfs_rename(struct sysfs_dirent *sd,
 	struct sysfs_dirent *new_parent_sd, const void *new_ns,
 	const char *new_name)
 {
-	const char *dup_name = NULL;
 	int error;
 
 	mutex_lock(&sysfs_mutex);
@@ -875,11 +895,11 @@ int sysfs_rename(struct sysfs_dirent *sd,
 	/* rename sysfs_dirent */
 	if (strcmp(sd->s_name, new_name) != 0) {
 		error = -ENOMEM;
-		new_name = dup_name = kstrdup(new_name, GFP_KERNEL);
+		new_name = kstrdup(new_name, GFP_KERNEL);
 		if (!new_name)
 			goto out;
 
-		dup_name = sd->s_name;
+		kfree(sd->s_name);
 		sd->s_name = new_name;
 	}
 
@@ -895,7 +915,6 @@ int sysfs_rename(struct sysfs_dirent *sd,
 	error = 0;
  out:
 	mutex_unlock(&sysfs_mutex);
-	kfree(dup_name);
 	return error;
 }
 
@@ -994,7 +1013,6 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	enum kobj_ns_type type;
 	const void *ns;
 	ino_t ino;
-	loff_t off;
 
 	type = sysfs_ns_type(parent_sd);
 	ns = sysfs_info(dentry->d_sb)->ns[type];
@@ -1003,8 +1021,6 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 		ino = parent_sd->s_ino;
 		if (filldir(dirent, ".", 1, filp->f_pos, ino, DT_DIR) == 0)
 			filp->f_pos++;
-		else
-			return 0;
 	}
 	if (filp->f_pos == 1) {
 		if (parent_sd->s_parent)
@@ -1013,11 +1029,8 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 			ino = parent_sd->s_ino;
 		if (filldir(dirent, "..", 2, filp->f_pos, ino, DT_DIR) == 0)
 			filp->f_pos++;
-		else
-			return 0;
 	}
 	mutex_lock(&sysfs_mutex);
-	off = filp->f_pos;
 	for (pos = sysfs_dir_pos(ns, parent_sd, filp->f_pos, pos);
 	     pos;
 	     pos = sysfs_dir_next_pos(ns, parent_sd, filp->f_pos, pos)) {
@@ -1029,43 +1042,27 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 		len = strlen(name);
 		ino = pos->s_ino;
 		type = dt_type(pos);
-		off = filp->f_pos = pos->s_hash;
+		filp->f_pos = pos->s_hash;
 		filp->private_data = sysfs_get(pos);
 
 		mutex_unlock(&sysfs_mutex);
-		ret = filldir(dirent, name, len, off, ino, type);
+		ret = filldir(dirent, name, len, filp->f_pos, ino, type);
 		mutex_lock(&sysfs_mutex);
 		if (ret < 0)
 			break;
 	}
 	mutex_unlock(&sysfs_mutex);
-
-	/* don't reference last entry if its refcount is dropped */
-	if (!pos) {
+	if ((filp->f_pos > 1) && !pos) { /* EOF */
+		filp->f_pos = INT_MAX;
 		filp->private_data = NULL;
-
-		/* EOF and not changed as 0 or 1 in read/write path */
-		if (off == filp->f_pos && off > 1)
-			filp->f_pos = INT_MAX;
 	}
 	return 0;
 }
 
-static loff_t sysfs_dir_llseek(struct file *file, loff_t offset, int whence)
-{
-	struct inode *inode = file->f_path.dentry->d_inode;
-	loff_t ret;
-
-	mutex_lock(&inode->i_mutex);
-	ret = generic_file_llseek(file, offset, whence);
-	mutex_unlock(&inode->i_mutex);
-
-	return ret;
-}
 
 const struct file_operations sysfs_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= sysfs_readdir,
 	.release	= sysfs_dir_release,
-	.llseek		= sysfs_dir_llseek,
+	.llseek		= generic_file_llseek,
 };

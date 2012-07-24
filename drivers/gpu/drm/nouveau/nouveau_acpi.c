@@ -338,7 +338,8 @@ void nouveau_switcheroo_optimus_dsm(void)
 
 void nouveau_unregister_dsm_handler(void)
 {
-	vga_switcheroo_unregister_handler();
+	if (nouveau_dsm_priv.optimus_detected || nouveau_dsm_priv.dsm_detected)
+		vga_switcheroo_unregister_handler();
 }
 
 /* retrieve the ROM in 4k blocks */
@@ -374,6 +375,9 @@ bool nouveau_acpi_rom_supported(struct pci_dev *pdev)
 {
 	acpi_status status;
 	acpi_handle dhandle, rom_handle;
+
+	if (!nouveau_dsm_priv.dsm_detected && !nouveau_dsm_priv.optimus_detected)
+		return false;
 
 	dhandle = DEVICE_ACPI_HANDLE(&pdev->dev);
 	if (!dhandle)

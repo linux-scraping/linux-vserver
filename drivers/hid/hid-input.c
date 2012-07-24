@@ -225,7 +225,10 @@ static __s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code)
 	 * Verify and convert units.
 	 * See HID specification v1.11 6.2.2.7 Global Items for unit decoding
 	 */
-	if (code == ABS_X || code == ABS_Y || code == ABS_Z) {
+	switch (code) {
+	case ABS_X:
+	case ABS_Y:
+	case ABS_Z:
 		if (field->unit == 0x11) {		/* If centimeters */
 			/* Convert to millimeters */
 			unit_exponent += 1;
@@ -239,7 +242,13 @@ static __s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code)
 		} else {
 			return 0;
 		}
-	} else if (code == ABS_RX || code == ABS_RY || code == ABS_RZ) {
+		break;
+
+	case ABS_RX:
+	case ABS_RY:
+	case ABS_RZ:
+	case ABS_TILT_X:
+	case ABS_TILT_Y:
 		if (field->unit == 0x14) {		/* If degrees */
 			/* Convert to radians */
 			prev = logical_extents;
@@ -250,7 +259,9 @@ static __s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code)
 		} else if (field->unit != 0x12) {	/* If not radians */
 			return 0;
 		}
-	} else {
+		break;
+
+	default:
 		return 0;
 	}
 
@@ -314,7 +325,7 @@ static int hidinput_get_battery_property(struct power_supply *psy,
 {
 	struct hid_device *dev = container_of(psy, struct hid_device, battery);
 	int ret = 0;
-	__u8 *buf;
+	__u8 buf[2] = {};
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_PRESENT:
@@ -323,20 +334,13 @@ static int hidinput_get_battery_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_CAPACITY:
-
-		buf = kmalloc(2 * sizeof(__u8), GFP_KERNEL);
-		if (!buf) {
-			ret = -ENOMEM;
-			break;
-		}
 		ret = dev->hid_get_raw_report(dev, dev->battery_report_id,
-					      buf, 2,
+					      buf, sizeof(buf),
 					      dev->battery_report_type);
 
 		if (ret != 2) {
 			if (ret >= 0)
 				ret = -EINVAL;
-			kfree(buf);
 			break;
 		}
 
@@ -345,7 +349,6 @@ static int hidinput_get_battery_property(struct power_supply *psy,
 		    buf[1] <= dev->battery_max)
 			val->intval = (100 * (buf[1] - dev->battery_min)) /
 				(dev->battery_max - dev->battery_min);
-		kfree(buf);
 		break;
 
 	case POWER_SUPPLY_PROP_MODEL_NAME:
@@ -457,10 +460,6 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 	field->hidinput = hidinput;
 
 	if (field->flags & HID_MAIN_ITEM_CONSTANT)
-		goto ignore;
-
-	/* Ignore if report count is out of bounds. */
-	if (field->report_count < 1)
 		goto ignore;
 
 	/* only LED usages are supported in output fields */
@@ -638,6 +637,14 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			map_key_clear(BTN_TOOL_RUBBER);
 			break;
 
+		case 0x3d: /* X Tilt */
+			map_abs_clear(ABS_TILT_X);
+			break;
+
+		case 0x3e: /* Y Tilt */
+			map_abs_clear(ABS_TILT_Y);
+			break;
+
 		case 0x33: /* Touch */
 		case 0x42: /* TipSwitch */
 		case 0x43: /* TipSwitch2 */
@@ -652,10 +659,6 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x46: /* TabletPick */
 			map_key_clear(BTN_STYLUS2);
 			break;
-
-		case 0x51: /* ContactID */
-			device->quirks |= HID_QUIRK_MULTITOUCH;
-			goto unknown;
 
 		default:  goto unknown;
 		}
@@ -1123,12 +1126,7 @@ static void report_features(struct hid_device *hid)
 
 	rep_enum = &hid->report_enum[HID_FEATURE_REPORT];
 	list_for_each_entry(rep, &rep_enum->report_list, list)
-		for (i = 0; i < rep->maxfield; i++) {
-
-			/* Ignore if report count is out of bounds. */
-			if (rep->field[i]->report_count < 1)
-				continue;
-
+		for (i = 0; i < rep->maxfield; i++)
 			for (j = 0; j < rep->field[i]->maxusage; j++) {
 				/* Verify if Battery Strength feature is available */
 				hidinput_setup_battery(hid, HID_FEATURE_REPORT, rep->field[i]);
@@ -1137,7 +1135,6 @@ static void report_features(struct hid_device *hid)
 					drv->feature_mapping(hid, rep->field[i],
 							     rep->field[i]->usage + j);
 			}
-		}
 }
 
 /*
@@ -1227,13 +1224,6 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 				hidinput = NULL;
 			}
 		}
-	}
-
-	if (hid->quirks & HID_QUIRK_MULTITOUCH) {
-		/* generic hid does not know how to handle multitouch devices */
-		if (hidinput)
-			goto out_cleanup;
-		goto out_unwind;
 	}
 
 	if (hidinput && input_register_device(hidinput->input))

@@ -53,9 +53,6 @@
 #ifndef __6LOWPAN_H__
 #define __6LOWPAN_H__
 
-/* need to know address length to manipulate with it */
-#define IEEE802154_ALEN		8
-
 #define UIP_802154_SHORTADDR_LEN	2  /* compressed ipv6 address length */
 #define UIP_IPH_LEN			40 /* ipv6 fixed header size */
 #define UIP_PROTO_UDP			17 /* ipv6 next header value for UDP */
@@ -87,7 +84,7 @@
 	(memcmp(addr1, addr2, length >> 3) == 0)
 
 /* local link, i.e. FE80::/10 */
-#define is_addr_link_local(a) (((a)->s6_addr16[0]) == htons(0xFE80))
+#define is_addr_link_local(a) (((a)->s6_addr16[0]) == 0x80FE)
 
 /*
  * check whether we can compress the IID to 16 bits,

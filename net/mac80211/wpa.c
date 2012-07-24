@@ -106,8 +106,7 @@ ieee80211_rx_h_michael_mic_verify(struct ieee80211_rx_data *rx)
 		if (status->flag & RX_FLAG_MMIC_ERROR)
 			goto mic_fail;
 
-		if (!(status->flag & RX_FLAG_IV_STRIPPED) && rx->key &&
-		    rx->key->conf.cipher == WLAN_CIPHER_SUITE_TKIP)
+		if (!(status->flag & RX_FLAG_IV_STRIPPED) && rx->key)
 			goto update_iv;
 
 		return RX_CONTINUE;
@@ -184,7 +183,8 @@ static int tkip_encrypt_skb(struct ieee80211_tx_data *tx, struct sk_buff *skb)
 	u8 *pos;
 
 	if (info->control.hw_key &&
-	    !(info->control.hw_key->flags & IEEE80211_KEY_FLAG_GENERATE_IV)) {
+	    !(info->control.hw_key->flags & IEEE80211_KEY_FLAG_GENERATE_IV) &&
+	    !(info->control.hw_key->flags & IEEE80211_KEY_FLAG_PUT_IV_SPACE)) {
 		/* hwaccel - with no need for software-generated IV */
 		return 0;
 	}
@@ -203,7 +203,13 @@ static int tkip_encrypt_skb(struct ieee80211_tx_data *tx, struct sk_buff *skb)
 
 	pos = skb_push(skb, TKIP_IV_LEN);
 	memmove(pos, pos + TKIP_IV_LEN, hdrlen);
+	skb_set_network_header(skb, skb_network_offset(skb) + TKIP_IV_LEN);
 	pos += hdrlen;
+
+	/* the HW only needs room for the IV, but not the actual IV */
+	if (info->control.hw_key &&
+	    (info->control.hw_key->flags & IEEE80211_KEY_FLAG_PUT_IV_SPACE))
+		return 0;
 
 	/* Increase IV for the frame */
 	spin_lock_irqsave(&key->u.tkip.txlock, flags);
@@ -423,6 +429,7 @@ static int ccmp_encrypt_skb(struct ieee80211_tx_data *tx, struct sk_buff *skb)
 
 	pos = skb_push(skb, CCMP_HDR_LEN);
 	memmove(pos, pos + CCMP_HDR_LEN, hdrlen);
+	skb_set_network_header(skb, skb_network_offset(skb) + CCMP_HDR_LEN);
 
 	/* the HW only needs room for the IV, but not the actual IV */
 	if (info->control.hw_key &&

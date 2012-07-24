@@ -34,7 +34,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <sched.h>
-#include <cpuid.h>
 
 #define MSR_TSC	0x10
 #define MSR_NEHALEM_PLATFORM_INFO	0xCE
@@ -74,8 +73,8 @@ int backwards_count;
 char *progname;
 
 int num_cpus;
-cpu_set_t *cpu_mask;
-size_t cpu_mask_size;
+cpu_set_t *cpu_present_set, *cpu_mask;
+size_t cpu_present_setsize, cpu_mask_size;
 
 struct counters {
 	unsigned long long tsc;		/* per thread */
@@ -104,6 +103,12 @@ struct timeval tv_even;
 struct timeval tv_odd;
 struct timeval tv_delta;
 
+int mark_cpu_present(int pkg, int core, int cpu)
+{
+	CPU_SET_S(cpu, cpu_present_setsize, cpu_present_set);
+	return 0;
+}
+
 /*
  * cpu_mask_init(ncpus)
  *
@@ -119,6 +124,18 @@ void cpu_mask_init(int ncpus)
 	}
 	cpu_mask_size = CPU_ALLOC_SIZE(ncpus);
 	CPU_ZERO_S(cpu_mask_size, cpu_mask);
+
+	/*
+	 * Allocate and initialize cpu_present_set
+	 */
+	cpu_present_set = CPU_ALLOC(ncpus);
+	if (cpu_present_set == NULL) {
+		perror("CPU_ALLOC");
+		exit(3);
+	}
+	cpu_present_setsize = CPU_ALLOC_SIZE(ncpus);
+	CPU_ZERO_S(cpu_present_setsize, cpu_present_set);
+	for_all_cpus(mark_cpu_present);
 }
 
 void cpu_mask_uninit()
@@ -126,6 +143,9 @@ void cpu_mask_uninit()
 	CPU_FREE(cpu_mask);
 	cpu_mask = NULL;
 	cpu_mask_size = 0;
+	CPU_FREE(cpu_present_set);
+	cpu_present_set = NULL;
+	cpu_present_setsize = 0;
 }
 
 int cpu_migrate(int cpu)
@@ -913,6 +933,8 @@ int is_snb(unsigned int family, unsigned int model)
 	switch (model) {
 	case 0x2A:
 	case 0x2D:
+	case 0x3A:	/* IVB */
+	case 0x3D:	/* IVB Xeon */
 		return 1;
 	}
 	return 0;
@@ -933,7 +955,7 @@ void check_cpuid()
 
 	eax = ebx = ecx = edx = 0;
 
-	__get_cpuid(0, &max_level, &ebx, &ecx, &edx);
+	asm("cpuid" : "=a" (max_level), "=b" (ebx), "=c" (ecx), "=d" (edx) : "a" (0));
 
 	if (ebx == 0x756e6547 && edx == 0x49656e69 && ecx == 0x6c65746e)
 		genuine_intel = 1;
@@ -942,7 +964,7 @@ void check_cpuid()
 		fprintf(stderr, "%.4s%.4s%.4s ",
 			(char *)&ebx, (char *)&edx, (char *)&ecx);
 
-	__get_cpuid(1, &fms, &ebx, &ecx, &edx);
+	asm("cpuid" : "=a" (fms), "=c" (ecx), "=d" (edx) : "a" (1) : "ebx");
 	family = (fms >> 8) & 0xf;
 	model = (fms >> 4) & 0xf;
 	stepping = fms & 0xf;
@@ -964,7 +986,7 @@ void check_cpuid()
 	 * This check is valid for both Intel and AMD.
 	 */
 	ebx = ecx = edx = 0;
-	__get_cpuid(0x80000000, &max_level, &ebx, &ecx, &edx);
+	asm("cpuid" : "=a" (max_level), "=b" (ebx), "=c" (ecx), "=d" (edx) : "a" (0x80000000));
 
 	if (max_level < 0x80000007) {
 		fprintf(stderr, "CPUID: no invariant TSC (max_level 0x%x)\n", max_level);
@@ -975,7 +997,7 @@ void check_cpuid()
 	 * Non-Stop TSC is advertised by CPUID.EAX=0x80000007: EDX.bit8
 	 * this check is valid for both Intel and AMD
 	 */
-	__get_cpuid(0x80000007, &eax, &ebx, &ecx, &edx);
+	asm("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "a" (0x80000007));
 	has_invariant_tsc = edx & (1 << 8);
 
 	if (!has_invariant_tsc) {
@@ -988,7 +1010,7 @@ void check_cpuid()
 	 * this check is valid for both Intel and AMD
 	 */
 
-	__get_cpuid(0x6, &eax, &ebx, &ecx, &edx);
+	asm("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "a" (0x6));
 	has_aperf = ecx & (1 << 0);
 	if (!has_aperf) {
 		fprintf(stderr, "No APERF MSR\n");
@@ -1048,6 +1070,9 @@ int fork_it(char **argv)
 	int retval;
 	pid_t child_pid;
 	get_counters(cnt_even);
+
+        /* clear affinity side-effect of get_counters() */
+        sched_setaffinity(0, cpu_present_setsize, cpu_present_set);
 	gettimeofday(&tv_even, (struct timezone *)NULL);
 
 	child_pid = fork();

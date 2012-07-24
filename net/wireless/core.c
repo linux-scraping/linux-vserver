@@ -422,10 +422,6 @@ static int wiphy_verify_combinations(struct wiphy *wiphy)
 	const struct ieee80211_iface_combination *c;
 	int i, j;
 
-	/* If we have combinations enforce them */
-	if (wiphy->n_iface_combinations)
-		wiphy->flags |= WIPHY_FLAG_ENFORCE_COMBINATIONS;
-
 	for (i = 0; i < wiphy->n_iface_combinations; i++) {
 		u32 cnt = 0;
 		u16 all_iftypes = 0;
@@ -552,7 +548,8 @@ int wiphy_register(struct wiphy *wiphy)
 		for (i = 0; i < sband->n_channels; i++) {
 			sband->channels[i].orig_flags =
 				sband->channels[i].flags;
-			sband->channels[i].orig_mag = INT_MAX;
+			sband->channels[i].orig_mag =
+				sband->channels[i].max_antenna_gain;
 			sband->channels[i].orig_mpwr =
 				sband->channels[i].max_power;
 			sband->channels[i].band = band;
@@ -667,7 +664,7 @@ void wiphy_unregister(struct wiphy *wiphy)
 		mutex_lock(&rdev->devlist_mtx);
 		__count = rdev->opencount;
 		mutex_unlock(&rdev->devlist_mtx);
-		__count == 0;}));
+		__count == 0; }));
 
 	mutex_lock(&rdev->devlist_mtx);
 	BUG_ON(!list_empty(&rdev->netdev_list));
@@ -707,6 +704,10 @@ void wiphy_unregister(struct wiphy *wiphy)
 	flush_work(&rdev->scan_done_wk);
 	cancel_work_sync(&rdev->conn_work);
 	flush_work(&rdev->event_work);
+
+	if (rdev->wowlan && rdev->ops->set_wakeup)
+		rdev->ops->set_wakeup(&rdev->wiphy, false);
+	cfg80211_rdev_free_wowlan(rdev);
 }
 EXPORT_SYMBOL(wiphy_unregister);
 
@@ -719,7 +720,6 @@ void cfg80211_dev_free(struct cfg80211_registered_device *rdev)
 	mutex_destroy(&rdev->sched_scan_mtx);
 	list_for_each_entry_safe(scan, tmp, &rdev->bss_list, list)
 		cfg80211_put_bss(&scan->pub);
-	cfg80211_rdev_free_wowlan(rdev);
 	kfree(rdev);
 }
 
@@ -776,7 +776,7 @@ static struct device_type wiphy_type = {
 	.name	= "wlan",
 };
 
-static int cfg80211_netdev_notifier_call(struct notifier_block * nb,
+static int cfg80211_netdev_notifier_call(struct notifier_block *nb,
 					 unsigned long state,
 					 void *ndev)
 {
@@ -974,11 +974,6 @@ static int cfg80211_netdev_notifier_call(struct notifier_block * nb,
 		 */
 		synchronize_rcu();
 		INIT_LIST_HEAD(&wdev->list);
-		/*
-		 * Ensure that all events have been processed and
-		 * freed.
-		 */
-		cfg80211_process_wdev_events(wdev);
 		break;
 	case NETDEV_PRE_UP:
 		if (!(wdev->wiphy->interface_modes & BIT(wdev->iftype)))

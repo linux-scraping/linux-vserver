@@ -130,14 +130,12 @@ struct keyspan_port_private {
 #include "keyspan_usa67msg.h"
 
 
-module_usb_serial_driver(keyspan_driver, serial_drivers);
+module_usb_serial_driver(serial_drivers, keyspan_ids_combined);
 
 static void keyspan_break_ctl(struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct keyspan_port_private 	*p_priv;
-
-	dbg("%s", __func__);
 
 	p_priv = usb_get_serial_port_data(port);
 
@@ -157,8 +155,6 @@ static void keyspan_set_termios(struct tty_struct *tty,
 	struct keyspan_port_private 	*p_priv;
 	const struct keyspan_device_details	*d_details;
 	unsigned int 			cflag;
-
-	dbg("%s", __func__);
 
 	p_priv = usb_get_serial_port_data(port);
 	d_details = p_priv->device_details;
@@ -306,8 +302,6 @@ static void	usa26_indat_callback(struct urb *urb)
 	unsigned char 		*data = urb->transfer_buffer;
 	int status = urb->status;
 
-	dbg("%s", __func__);
-
 	endpoint = usb_pipeendpoint(urb->pipe);
 
 	if (status) {
@@ -323,28 +317,24 @@ static void	usa26_indat_callback(struct urb *urb)
 		if ((data[0] & 0x80) == 0) {
 			/* no errors on individual bytes, only
 			   possible overrun err */
-			if (data[0] & RXERROR_OVERRUN) {
-				tty_insert_flip_char(tty, 0, TTY_OVERRUN);
-			}
+			if (data[0] & RXERROR_OVERRUN)
+				err = TTY_OVERRUN;
+			else
+				err = 0;
 			for (i = 1; i < urb->actual_length ; ++i)
-				tty_insert_flip_char(tty, data[i], TTY_NORMAL);
+				tty_insert_flip_char(tty, data[i], err);
 		} else {
 			/* some bytes had errors, every byte has status */
 			dbg("%s - RX error!!!!", __func__);
 			for (i = 0; i + 1 < urb->actual_length; i += 2) {
-				int stat = data[i];
-				int flag = TTY_NORMAL;
-
-				if (stat & RXERROR_OVERRUN) {
-					tty_insert_flip_char(tty, 0,
-								TTY_OVERRUN);
-				}
-				/* XXX should handle break (0x10) */
+				int stat = data[i], flag = 0;
+				if (stat & RXERROR_OVERRUN)
+					flag |= TTY_OVERRUN;
+				if (stat & RXERROR_FRAMING)
+					flag |= TTY_FRAME;
 				if (stat & RXERROR_PARITY)
-					flag = TTY_PARITY;
-				else if (stat & RXERROR_FRAMING)
-					flag = TTY_FRAME;
-
+					flag |= TTY_PARITY;
+				/* XXX should handle break (0x10) */
 				tty_insert_flip_char(tty, data[i+1], flag);
 			}
 		}
@@ -373,8 +363,6 @@ static void	usa2x_outdat_callback(struct urb *urb)
 
 static void	usa26_inack_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
-
 }
 
 static void	usa26_outcont_callback(struct urb *urb)
@@ -456,7 +444,6 @@ exit: ;
 
 static void	usa26_glocont_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
 }
 
 
@@ -468,8 +455,6 @@ static void usa28_indat_callback(struct urb *urb)
 	unsigned char           *data;
 	struct keyspan_port_private             *p_priv;
 	int status = urb->status;
-
-	dbg("%s", __func__);
 
 	port =  urb->context;
 	p_priv = usb_get_serial_port_data(port);
@@ -509,7 +494,6 @@ static void usa28_indat_callback(struct urb *urb)
 
 static void	usa28_inack_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
 }
 
 static void	usa28_outcont_callback(struct urb *urb)
@@ -589,7 +573,6 @@ exit: ;
 
 static void	usa28_glocont_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
 }
 
 
@@ -599,8 +582,6 @@ static void	usa49_glocont_callback(struct urb *urb)
 	struct usb_serial_port *port;
 	struct keyspan_port_private *p_priv;
 	int i;
-
-	dbg("%s", __func__);
 
 	serial =  urb->context;
 	for (i = 0; i < serial->num_ports; ++i) {
@@ -628,8 +609,6 @@ static void	usa49_instat_callback(struct urb *urb)
 	struct keyspan_port_private	 	*p_priv;
 	int old_dcd_state;
 	int status = urb->status;
-
-	dbg("%s", __func__);
 
 	serial =  urb->context;
 
@@ -683,7 +662,6 @@ exit:	;
 
 static void	usa49_inack_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
 }
 
 static void	usa49_indat_callback(struct urb *urb)
@@ -694,8 +672,6 @@ static void	usa49_indat_callback(struct urb *urb)
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
 	int status = urb->status;
-
-	dbg("%s", __func__);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 
@@ -716,19 +692,14 @@ static void	usa49_indat_callback(struct urb *urb)
 		} else {
 			/* some bytes had errors, every byte has status */
 			for (i = 0; i + 1 < urb->actual_length; i += 2) {
-				int stat = data[i];
-				int flag = TTY_NORMAL;
-
-				if (stat & RXERROR_OVERRUN) {
-					tty_insert_flip_char(tty, 0,
-								TTY_OVERRUN);
-				}
-				/* XXX should handle break (0x10) */
+				int stat = data[i], flag = 0;
+				if (stat & RXERROR_OVERRUN)
+					flag |= TTY_OVERRUN;
+				if (stat & RXERROR_FRAMING)
+					flag |= TTY_FRAME;
 				if (stat & RXERROR_PARITY)
-					flag = TTY_PARITY;
-				else if (stat & RXERROR_FRAMING)
-					flag = TTY_FRAME;
-
+					flag |= TTY_PARITY;
+				/* XXX should handle break (0x10) */
 				tty_insert_flip_char(tty, data[i+1], flag);
 			}
 		}
@@ -750,8 +721,6 @@ static void usa49wg_indat_callback(struct urb *urb)
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
 	int status = urb->status;
-
-	dbg("%s", __func__);
 
 	serial = urb->context;
 
@@ -788,19 +757,14 @@ static void usa49wg_indat_callback(struct urb *urb)
 				 * some bytes had errors, every byte has status
 				 */
 				for (x = 0; x + 1 < len; x += 2) {
-					int stat = data[i];
-					int flag = TTY_NORMAL;
-
-					if (stat & RXERROR_OVERRUN) {
-						tty_insert_flip_char(tty, 0,
-								TTY_OVERRUN);
-					}
-					/* XXX should handle break (0x10) */
+					int stat = data[i], flag = 0;
+					if (stat & RXERROR_OVERRUN)
+						flag |= TTY_OVERRUN;
+					if (stat & RXERROR_FRAMING)
+						flag |= TTY_FRAME;
 					if (stat & RXERROR_PARITY)
-						flag = TTY_PARITY;
-					else if (stat & RXERROR_FRAMING)
-						flag = TTY_FRAME;
-
+						flag |= TTY_PARITY;
+					/* XXX should handle break (0x10) */
 					tty_insert_flip_char(tty,
 							data[i+1], flag);
 					i += 2;
@@ -820,7 +784,6 @@ static void usa49wg_indat_callback(struct urb *urb)
 /* not used, usa-49 doesn't have per-port control endpoints */
 static void usa49_outcont_callback(struct urb *urb)
 {
-	dbg("%s", __func__);
 }
 
 static void usa90_indat_callback(struct urb *urb)
@@ -832,8 +795,6 @@ static void usa90_indat_callback(struct urb *urb)
 	struct tty_struct	*tty;
 	unsigned char 		*data = urb->transfer_buffer;
 	int status = urb->status;
-
-	dbg("%s", __func__);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
 
@@ -858,32 +819,25 @@ static void usa90_indat_callback(struct urb *urb)
 			if ((data[0] & 0x80) == 0) {
 				/* no errors on individual bytes, only
 				   possible overrun err*/
-				if (data[0] & RXERROR_OVERRUN) {
-					tty_insert_flip_char(tty, 0,
-								TTY_OVERRUN);
-				}
+				if (data[0] & RXERROR_OVERRUN)
+					err = TTY_OVERRUN;
+				else
+					err = 0;
 				for (i = 1; i < urb->actual_length ; ++i)
 					tty_insert_flip_char(tty, data[i],
-								TTY_NORMAL);
+									err);
 			}  else {
 			/* some bytes had errors, every byte has status */
 				dbg("%s - RX error!!!!", __func__);
 				for (i = 0; i + 1 < urb->actual_length; i += 2) {
-					int stat = data[i];
-					int flag = TTY_NORMAL;
-
-					if (stat & RXERROR_OVERRUN) {
-						tty_insert_flip_char(
-								tty, 0,
-								TTY_OVERRUN);
-					}
-
-					/* XXX should handle break (0x10) */
+					int stat = data[i], flag = 0;
+					if (stat & RXERROR_OVERRUN)
+						flag |= TTY_OVERRUN;
+					if (stat & RXERROR_FRAMING)
+						flag |= TTY_FRAME;
 					if (stat & RXERROR_PARITY)
-						flag = TTY_PARITY;
-					else if (stat & RXERROR_FRAMING)
-						flag = TTY_FRAME;
-
+						flag |= TTY_PARITY;
+					/* XXX should handle break (0x10) */
 					tty_insert_flip_char(tty, data[i+1],
 									flag);
 				}
@@ -978,8 +932,6 @@ static void	usa67_instat_callback(struct urb *urb)
 	int old_dcd_state;
 	int status = urb->status;
 
-	dbg("%s", __func__);
-
 	serial = urb->context;
 
 	if (status) {
@@ -1031,8 +983,6 @@ static void usa67_glocont_callback(struct urb *urb)
 	struct keyspan_port_private *p_priv;
 	int i;
 
-	dbg("%s", __func__);
-
 	serial = urb->context;
 	for (i = 0; i < serial->num_ports; ++i) {
 		port = serial->port[i];
@@ -1056,7 +1006,6 @@ static int keyspan_write_room(struct tty_struct *tty)
 	int				data_len;
 	struct urb			*this_urb;
 
-	dbg("%s", __func__);
 	p_priv = usb_get_serial_port_data(port);
 	d_details = p_priv->device_details;
 
@@ -1098,8 +1047,6 @@ static int keyspan_open(struct tty_struct *tty, struct usb_serial_port *port)
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
 	d_details = p_priv->device_details;
-
-	dbg("%s - port%d.", __func__, port->number);
 
 	/* Set some sane defaults */
 	p_priv->rts_state = 1;
@@ -1186,7 +1133,6 @@ static void keyspan_close(struct usb_serial_port *port)
 	struct keyspan_serial_private 	*s_priv;
 	struct keyspan_port_private 	*p_priv;
 
-	dbg("%s", __func__);
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
 
@@ -1459,8 +1405,6 @@ static void keyspan_setup_urbs(struct usb_serial *serial)
 	struct callbacks		*cback;
 	int				endp;
 
-	dbg("%s", __func__);
-
 	s_priv = usb_get_serial_data(serial);
 	d_details = s_priv->device_details;
 
@@ -1726,7 +1670,7 @@ static int keyspan_usa26_send_setup(struct usb_serial *serial,
 	d_details = s_priv->device_details;
 	device_port = port->number - port->serial->minor;
 
-	outcont_urb = d_details->outcont_endpoints[device_port];
+	outcont_urb = d_details->outcont_endpoints[port->number];
 	this_urb = p_priv->outcont_urb;
 
 	dbg("%s - endpoint %d", __func__, usb_pipeendpoint(this_urb->pipe));
@@ -1874,8 +1818,6 @@ static int keyspan_usa28_send_setup(struct usb_serial *serial,
 	struct urb				*this_urb;
 	int 					device_port, err;
 
-	dbg("%s", __func__);
-
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
 	d_details = s_priv->device_details;
@@ -2000,8 +1942,6 @@ static int keyspan_usa49_send_setup(struct usb_serial *serial,
 	const struct keyspan_device_details	*d_details;
 	struct urb				*this_urb;
 	int 					err, device_port;
-
-	dbg("%s", __func__);
 
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
@@ -2189,8 +2129,6 @@ static int keyspan_usa90_send_setup(struct usb_serial *serial,
 	int 					err;
 	u8						prescaler;
 
-	dbg("%s", __func__);
-
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
 	d_details = s_priv->device_details;
@@ -2320,8 +2258,6 @@ static int keyspan_usa67_send_setup(struct usb_serial *serial,
 	const struct keyspan_device_details	*d_details;
 	struct urb				*this_urb;
 	int 					err, device_port;
-
-	dbg("%s", __func__);
 
 	s_priv = usb_get_serial_data(serial);
 	p_priv = usb_get_serial_port_data(port);
@@ -2463,8 +2399,6 @@ static void keyspan_send_setup(struct usb_serial_port *port, int reset_port)
 	struct keyspan_serial_private *s_priv;
 	const struct keyspan_device_details *d_details;
 
-	dbg("%s", __func__);
-
 	s_priv = usb_get_serial_data(serial);
 	d_details = s_priv->device_details;
 
@@ -2498,8 +2432,6 @@ static int keyspan_startup(struct usb_serial *serial)
 	struct keyspan_port_private	*p_priv;
 	const struct keyspan_device_details	*d_details;
 
-	dbg("%s", __func__);
-
 	for (i = 0; (d_details = keyspan_devices[i]) != NULL; ++i)
 		if (d_details->product_id ==
 				le16_to_cpu(serial->dev->descriptor.idProduct))
@@ -2507,7 +2439,7 @@ static int keyspan_startup(struct usb_serial *serial)
 	if (d_details == NULL) {
 		dev_err(&serial->dev->dev, "%s - unknown product id %x\n",
 		    __func__, le16_to_cpu(serial->dev->descriptor.idProduct));
-		return -ENODEV;
+		return 1;
 	}
 
 	/* Setup private data for serial driver */
@@ -2559,8 +2491,6 @@ static void keyspan_disconnect(struct usb_serial *serial)
 	struct keyspan_serial_private 	*s_priv;
 	struct keyspan_port_private	*p_priv;
 
-	dbg("%s", __func__);
-
 	s_priv = usb_get_serial_data(serial);
 
 	/* Stop reading/writing urbs */
@@ -2599,8 +2529,6 @@ static void keyspan_release(struct usb_serial *serial)
 	int				i;
 	struct usb_serial_port		*port;
 	struct keyspan_serial_private 	*s_priv;
-
-	dbg("%s", __func__);
 
 	s_priv = usb_get_serial_data(serial);
 

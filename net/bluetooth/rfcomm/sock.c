@@ -260,7 +260,8 @@ static void rfcomm_sock_init(struct sock *sk, struct sock *parent)
 
 	if (parent) {
 		sk->sk_type = parent->sk_type;
-		pi->dlc->defer_setup = bt_sk(parent)->defer_setup;
+		pi->dlc->defer_setup = test_bit(BT_SK_DEFER_SETUP,
+						&bt_sk(parent)->flags);
 
 		pi->sec_level = rfcomm_pi(parent)->sec_level;
 		pi->role_switch = rfcomm_pi(parent)->role_switch;
@@ -485,7 +486,7 @@ static int rfcomm_sock_accept(struct socket *sock, struct socket *newsock, int f
 	long timeo;
 	int err = 0;
 
-	lock_sock_nested(sk, SINGLE_DEPTH_NESTING);
+	lock_sock(sk);
 
 	if (sk->sk_type != SOCK_STREAM) {
 		err = -EINVAL;
@@ -522,7 +523,7 @@ static int rfcomm_sock_accept(struct socket *sock, struct socket *newsock, int f
 
 		release_sock(sk);
 		timeo = schedule_timeout(timeo);
-		lock_sock_nested(sk, SINGLE_DEPTH_NESTING);
+		lock_sock(sk);
 	}
 	__set_current_state(TASK_RUNNING);
 	remove_wait_queue(sk_sleep(sk), &wait);
@@ -546,7 +547,6 @@ static int rfcomm_sock_getname(struct socket *sock, struct sockaddr *addr, int *
 
 	BT_DBG("sock %p, sk %p", sock, sk);
 
-	memset(sa, 0, sizeof(*sa));
 	sa->rc_family  = AF_BLUETOOTH;
 	sa->rc_channel = rfcomm_pi(sk)->channel;
 	if (peer)
@@ -732,7 +732,11 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
 			break;
 		}
 
-		bt_sk(sk)->defer_setup = opt;
+		if (opt)
+			set_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags);
+		else
+			clear_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags);
+
 		break;
 
 	default:
@@ -837,7 +841,6 @@ static int rfcomm_sock_getsockopt(struct socket *sock, int level, int optname, c
 		}
 
 		sec.level = rfcomm_pi(sk)->sec_level;
-		sec.key_size = 0;
 
 		len = min_t(unsigned int, len, sizeof(sec));
 		if (copy_to_user(optval, (char *) &sec, len))
@@ -851,7 +854,8 @@ static int rfcomm_sock_getsockopt(struct socket *sock, int level, int optname, c
 			break;
 		}
 
-		if (put_user(bt_sk(sk)->defer_setup, (u32 __user *) optval))
+		if (put_user(test_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags),
+			     (u32 __user *) optval))
 			err = -EFAULT;
 
 		break;
@@ -974,7 +978,7 @@ int rfcomm_connect_ind(struct rfcomm_session *s, u8 channel, struct rfcomm_dlc *
 done:
 	bh_unlock_sock(parent);
 
-	if (bt_sk(parent)->defer_setup)
+	if (test_bit(BT_SK_DEFER_SETUP, &bt_sk(parent)->flags))
 		parent->sk_state_change(parent);
 
 	return result;

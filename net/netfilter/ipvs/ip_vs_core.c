@@ -80,7 +80,7 @@ static atomic_t ipvs_netns_cnt = ATOMIC_INIT(0);
 #define icmp_id(icmph)          (((icmph)->un).echo.id)
 #define icmpv6_id(icmph)        (icmph->icmp6_dataun.u_echo.identifier)
 
-const char *ip_vs_proto_name(unsigned proto)
+const char *ip_vs_proto_name(unsigned int proto)
 {
 	static char buf[20];
 
@@ -662,24 +662,16 @@ static inline int ip_vs_gather_frags_v6(struct sk_buff *skb, u_int32_t user)
 }
 #endif
 
-static int ip_vs_route_me_harder(int af, struct sk_buff *skb,
-				 unsigned int hooknum)
+static int ip_vs_route_me_harder(int af, struct sk_buff *skb)
 {
-	if (!sysctl_snat_reroute(skb))
-		return 0;
-	/* Reroute replies only to remote clients (FORWARD and LOCAL_OUT) */
-	if (NF_INET_LOCAL_IN == hooknum)
-		return 0;
 #ifdef CONFIG_IP_VS_IPV6
 	if (af == AF_INET6) {
-		struct dst_entry *dst = skb_dst(skb);
-
-		if (dst->dev && !(dst->dev->flags & IFF_LOOPBACK) &&
-		    ip6_route_me_harder(skb) != 0)
+		if (sysctl_snat_reroute(skb) && ip6_route_me_harder(skb) != 0)
 			return 1;
 	} else
 #endif
-		if (!(skb_rtable(skb)->rt_flags & RTCF_LOCAL) &&
+		if ((sysctl_snat_reroute(skb) ||
+		     skb_rtable(skb)->rt_flags & RTCF_LOCAL) &&
 		    ip_route_me_harder(skb, RTN_LOCAL) != 0)
 			return 1;
 
@@ -790,8 +782,7 @@ static int handle_response_icmp(int af, struct sk_buff *skb,
 				union nf_inet_addr *snet,
 				__u8 protocol, struct ip_vs_conn *cp,
 				struct ip_vs_protocol *pp,
-				unsigned int offset, unsigned int ihl,
-				unsigned int hooknum)
+				unsigned int offset, unsigned int ihl)
 {
 	unsigned int verdict = NF_DROP;
 
@@ -821,7 +812,7 @@ static int handle_response_icmp(int af, struct sk_buff *skb,
 #endif
 		ip_vs_nat_icmp(skb, pp, cp, 1);
 
-	if (ip_vs_route_me_harder(af, skb, hooknum))
+	if (ip_vs_route_me_harder(af, skb))
 		goto out;
 
 	/* do the statistics and put it back */
@@ -917,7 +908,7 @@ static int ip_vs_out_icmp(struct sk_buff *skb, int *related,
 
 	snet.ip = iph->saddr;
 	return handle_response_icmp(AF_INET, skb, &snet, cih->protocol, cp,
-				    pp, offset, ihl, hooknum);
+				    pp, offset, ihl);
 }
 
 #ifdef CONFIG_IP_VS_IPV6
@@ -994,8 +985,7 @@ static int ip_vs_out_icmp_v6(struct sk_buff *skb, int *related,
 
 	snet.in6 = iph->saddr;
 	return handle_response_icmp(AF_INET6, skb, &snet, cih->nexthdr, cp,
-				    pp, offset, sizeof(struct ipv6hdr),
-				    hooknum);
+				    pp, offset, sizeof(struct ipv6hdr));
 }
 #endif
 
@@ -1028,7 +1018,7 @@ static inline int is_tcp_reset(const struct sk_buff *skb, int nh_len)
  */
 static unsigned int
 handle_response(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
-		struct ip_vs_conn *cp, int ihl, unsigned int hooknum)
+		struct ip_vs_conn *cp, int ihl)
 {
 	struct ip_vs_protocol *pp = pd->pp;
 
@@ -1066,7 +1056,7 @@ handle_response(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
 	 * if it came from this machine itself.  So re-compute
 	 * the routing information.
 	 */
-	if (ip_vs_route_me_harder(af, skb, hooknum))
+	if (ip_vs_route_me_harder(af, skb))
 		goto drop;
 
 	IP_VS_DBG_PKT(10, af, pp, skb, 0, "After SNAT");
@@ -1179,7 +1169,7 @@ ip_vs_out(unsigned int hooknum, struct sk_buff *skb, int af)
 	cp = pp->conn_out_get(af, skb, &iph, iph.len, 0);
 
 	if (likely(cp))
-		return handle_response(af, skb, pd, cp, iph.len, hooknum);
+		return handle_response(af, skb, pd, cp, iph.len);
 	if (sysctl_nat_icmp_send(net) &&
 	    (pp->protocol == IPPROTO_TCP ||
 	     pp->protocol == IPPROTO_UDP ||
@@ -1623,34 +1613,8 @@ ip_vs_in(unsigned int hooknum, struct sk_buff *skb, int af)
 	else
 		pkts = atomic_add_return(1, &cp->in_pkts);
 
-	if ((ipvs->sync_state & IP_VS_STATE_MASTER) &&
-	    cp->protocol == IPPROTO_SCTP) {
-		if ((cp->state == IP_VS_SCTP_S_ESTABLISHED &&
-			(pkts % sysctl_sync_period(ipvs)
-			 == sysctl_sync_threshold(ipvs))) ||
-				(cp->old_state != cp->state &&
-				 ((cp->state == IP_VS_SCTP_S_CLOSED) ||
-				  (cp->state == IP_VS_SCTP_S_SHUT_ACK_CLI) ||
-				  (cp->state == IP_VS_SCTP_S_SHUT_ACK_SER)))) {
-			ip_vs_sync_conn(net, cp);
-			goto out;
-		}
-	}
-
-	/* Keep this block last: TCP and others with pp->num_states <= 1 */
-	else if ((ipvs->sync_state & IP_VS_STATE_MASTER) &&
-	    (((cp->protocol != IPPROTO_TCP ||
-	       cp->state == IP_VS_TCP_S_ESTABLISHED) &&
-	      (pkts % sysctl_sync_period(ipvs)
-	       == sysctl_sync_threshold(ipvs))) ||
-	     ((cp->protocol == IPPROTO_TCP) && (cp->old_state != cp->state) &&
-	      ((cp->state == IP_VS_TCP_S_FIN_WAIT) ||
-	       (cp->state == IP_VS_TCP_S_CLOSE) ||
-	       (cp->state == IP_VS_TCP_S_CLOSE_WAIT) ||
-	       (cp->state == IP_VS_TCP_S_TIME_WAIT)))))
-		ip_vs_sync_conn(net, cp);
-out:
-	cp->old_state = cp->state;
+	if (ipvs->sync_state & IP_VS_STATE_MASTER)
+		ip_vs_sync_conn(net, cp, pkts);
 
 	ip_vs_conn_put(cp);
 	return ret;

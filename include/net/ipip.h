@@ -50,12 +50,14 @@ struct ip_tunnel_prl_entry {
 	int pkt_len = skb->len - skb_transport_offset(skb);		\
 									\
 	skb->ip_summed = CHECKSUM_NONE;					\
-	ip_select_ident(skb, NULL);				\
+	ip_select_ident(iph, &rt->dst, NULL);				\
 									\
 	err = ip_local_out(skb);					\
 	if (likely(net_xmit_eval(err) == 0)) {				\
+		u64_stats_update_begin(&(stats1)->syncp);		\
 		(stats1)->tx_bytes += pkt_len;				\
 		(stats1)->tx_packets++;					\
+		u64_stats_update_end(&(stats1)->syncp);			\
 	} else {							\
 		(stats2)->tx_errors++;					\
 		(stats2)->tx_aborted_errors++;				\

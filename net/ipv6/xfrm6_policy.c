@@ -96,10 +96,8 @@ static int xfrm6_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
 	dev_hold(dev);
 
 	xdst->u.rt6.rt6i_idev = in6_dev_get(dev);
-	if (!xdst->u.rt6.rt6i_idev) {
-		dev_put(dev);
+	if (!xdst->u.rt6.rt6i_idev)
 		return -ENODEV;
-	}
 
 	xdst->u.rt6.rt6i_peer = rt->rt6i_peer;
 	if (rt->rt6i_peer)
@@ -336,8 +334,8 @@ int __init xfrm6_init(void)
 		goto out_policy;
 
 #ifdef CONFIG_SYSCTL
-	sysctl_hdr = register_net_sysctl_table(&init_net, net_ipv6_ctl_path,
-						xfrm6_policy_table);
+	sysctl_hdr = register_net_sysctl(&init_net, "net/ipv6",
+					 xfrm6_policy_table);
 #endif
 out:
 	return ret;

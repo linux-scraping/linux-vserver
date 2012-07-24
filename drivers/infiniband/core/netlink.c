@@ -125,7 +125,8 @@ int ibnl_put_attr(struct sk_buff *skb, struct nlmsghdr *nlh,
 	unsigned char *prev_tail;
 
 	prev_tail = skb_tail_pointer(skb);
-	NLA_PUT(skb, type, len, data);
+	if (nla_put(skb, type, len, data))
+		goto nla_put_failure;
 	nlh->nlmsg_len += skb_tail_pointer(skb) - prev_tail;
 	return 0;
 
@@ -151,7 +152,6 @@ static int ibnl_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			{
 				struct netlink_dump_control c = {
 					.dump = client->cb_table[op].dump,
-					.module = client->cb_table[op].module,
 				};
 				return netlink_dump_start(nls, skb, nlh, &c);
 			}

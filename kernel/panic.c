@@ -27,7 +27,7 @@
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
 
-int panic_on_oops;
+int panic_on_oops = CONFIG_PANIC_ON_OOPS_VALUE;
 static unsigned long tainted_mask;
 static int pause_on_oops;
 static int pause_on_oops_flag;
@@ -73,14 +73,6 @@ void panic(const char *fmt, ...)
 	va_list args;
 	long i, i_next = 0;
 	int state = 0;
-
-	/*
-	 * Disable local interrupts. This will prevent panic_smp_self_stop
-	 * from deadlocking the first cpu that invokes the panic, since
-	 * there is nothing to prevent an interrupt handler (that runs
-	 * after the panic_lock is acquired) from invoking panic again.
-	 */
-	local_irq_disable();
 
 	/*
 	 * It's possible to come here directly from a panic-assertion and

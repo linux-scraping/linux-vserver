@@ -116,8 +116,8 @@ static int lookup_chan_dst(u16 call_id, __be32 d_addr)
 	int i;
 
 	rcu_read_lock();
-	for (i = find_next_bit(callid_bitmap, MAX_CALLID, 1); i < MAX_CALLID;
-	     i = find_next_bit(callid_bitmap, MAX_CALLID, i + 1)) {
+	i = 1;
+	for_each_set_bit_from(i, callid_bitmap, MAX_CALLID) {
 		sock = rcu_dereference(callid_sock[i]);
 		if (!sock)
 			continue;
@@ -189,7 +189,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	if (sk_pppox(po)->sk_state & PPPOX_DEAD)
 		goto tx_error;
 
-	rt = ip_route_output_ports(sock_net(sk), &fl4, NULL,
+	rt = ip_route_output_ports(&init_net, &fl4, NULL,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0, IPPROTO_GRE,
@@ -209,7 +209,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 		}
 		if (skb->sk)
 			skb_set_owner_w(new_skb, skb->sk);
-		kfree_skb(skb);
+		consume_skb(skb);
 		skb = new_skb;
 	}
 
@@ -281,7 +281,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	nf_reset(skb);
 
 	skb->ip_summed = CHECKSUM_NONE;
-	ip_select_ident(skb, NULL);
+	ip_select_ident(iph, &rt->dst, NULL);
 	ip_send_check(iph);
 
 	ip_local_out(skb);
@@ -420,9 +420,6 @@ static int pptp_bind(struct socket *sock, struct sockaddr *uservaddr,
 	struct pptp_opt *opt = &po->proto.pptp;
 	int error = 0;
 
-	if (sockaddr_len < sizeof(struct sockaddr_pppox))
-		return -EINVAL;
-
 	lock_sock(sk);
 
 	opt->src_addr = sp->sa_addr.pptp;
@@ -443,9 +440,6 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 	struct rtable *rt;
 	struct flowi4 fl4;
 	int error = 0;
-
-	if (sockaddr_len < sizeof(struct sockaddr_pppox))
-		return -EINVAL;
 
 	if (sp->sa_protocol != PX_PROTO_PPTP)
 		return -EINVAL;
@@ -474,7 +468,7 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 	po->chan.private = sk;
 	po->chan.ops = &pptp_chan_ops;
 
-	rt = ip_route_output_ports(sock_net(sk), &fl4, sk,
+	rt = ip_route_output_ports(&init_net, &fl4, sk,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0,

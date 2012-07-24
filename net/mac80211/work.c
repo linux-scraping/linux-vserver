@@ -122,9 +122,6 @@ static void ieee80211_work_work(struct work_struct *work)
 	enum work_action rma;
 	bool remain_off_channel = false;
 
-	if (local->scanning)
-		return;
-
 	/*
 	 * ieee80211_queue_work() should have picked up most cases,
 	 * here we'll pick the rest.
@@ -133,6 +130,11 @@ static void ieee80211_work_work(struct work_struct *work)
 		return;
 
 	mutex_lock(&local->mtx);
+
+	if (local->scanning) {
+		mutex_unlock(&local->mtx);
+		return;
+	}
 
 	ieee80211_recalc_idle(local);
 
@@ -148,7 +150,7 @@ static void ieee80211_work_work(struct work_struct *work)
 		}
 
 		if (!started && !local->tmp_channel) {
-			ieee80211_offchannel_stop_vifs(local);
+			ieee80211_offchannel_stop_vifs(local, true);
 
 			local->tmp_channel = wk->chan;
 			local->tmp_channel_type = wk->chan_type;
@@ -220,19 +222,14 @@ static void ieee80211_work_work(struct work_struct *work)
 		local->tmp_channel = NULL;
 		ieee80211_hw_config(local, 0);
 
-		ieee80211_offchannel_return(local);
+		ieee80211_offchannel_return(local, true);
 
 		/* give connection some time to breathe */
 		run_again(local, jiffies + HZ/2);
 	}
 
-	if (list_empty(&local->work_list) && local->scan_req &&
-	    !local->scanning)
-		ieee80211_queue_delayed_work(&local->hw,
-					     &local->scan_work,
-					     round_jiffies_relative(0));
-
 	ieee80211_recalc_idle(local);
+	ieee80211_run_deferred_scan(local);
 
 	mutex_unlock(&local->mtx);
 

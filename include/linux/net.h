@@ -72,8 +72,7 @@ struct net;
 #define SOCK_NOSPACE		2
 #define SOCK_PASSCRED		3
 #define SOCK_PASSSEC		4
-#define SOCK_EXTERNALLY_ALLOCATED 5
-#define SOCK_USER_SOCKET	6
+#define SOCK_USER_SOCKET	5
 
 #ifndef ARCH_HAS_SOCKET_TYPES
 /**
@@ -199,14 +198,6 @@ struct proto_ops {
 #endif
 	int		(*sendmsg)   (struct kiocb *iocb, struct socket *sock,
 				      struct msghdr *m, size_t total_len);
-	/* Notes for implementing recvmsg:
-	 * ===============================
-	 * msg->msg_namelen should get updated by the recvmsg handlers
-	 * iff msg_name != NULL. It is by default 0 to prevent
-	 * returning uninitialized memory to user space.  The recvfrom
-	 * handlers can assume that msg.msg_name is either NULL or has
-	 * a minimum size of sizeof(struct sockaddr_storage).
-	 */
 	int		(*recvmsg)   (struct kiocb *iocb, struct socket *sock,
 				      struct msghdr *m, size_t total_len,
 				      int flags);
@@ -216,7 +207,7 @@ struct proto_ops {
 				      int offset, size_t size, int flags);
 	ssize_t 	(*splice_read)(struct socket *sock,  loff_t *ppos,
 				       struct pipe_inode_info *pipe, size_t len, unsigned int flags);
-	int		(*set_peek_off)(struct sock *sk, int val);
+	void		(*set_peek_off)(struct sock *sk, int val);
 };
 
 #define DECLARE_SOCKADDR(type, dst, src)	\
@@ -283,29 +274,6 @@ do {								\
 #define net_dbg_ratelimited(fmt, ...)				\
 	net_ratelimited_function(pr_debug, fmt, ##__VA_ARGS__)
 
-#define net_ratelimited_function(function, ...)			\
-do {								\
-	if (net_ratelimit())					\
-		function(__VA_ARGS__);				\
-} while (0)
-
-#define net_emerg_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_emerg, fmt, ##__VA_ARGS__)
-#define net_alert_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_alert, fmt, ##__VA_ARGS__)
-#define net_crit_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_crit, fmt, ##__VA_ARGS__)
-#define net_err_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_err, fmt, ##__VA_ARGS__)
-#define net_notice_ratelimited(fmt, ...)			\
-	net_ratelimited_function(pr_notice, fmt, ##__VA_ARGS__)
-#define net_warn_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_warn, fmt, ##__VA_ARGS__)
-#define net_info_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_info, fmt, ##__VA_ARGS__)
-#define net_dbg_ratelimited(fmt, ...)				\
-	net_ratelimited_function(pr_debug, fmt, ##__VA_ARGS__)
-
 #define net_random()		random32()
 #define net_srandom(seed)	srandom32((__force u32)seed)
 
@@ -346,5 +314,8 @@ extern int kernel_sock_shutdown(struct socket *sock,
 	MODULE_ALIAS("net-pf-" __stringify(pf) "-proto-" __stringify(proto) \
 		     "-type-" __stringify(type))
 
+#define MODULE_ALIAS_NET_PF_PROTO_NAME(pf, proto, name) \
+	MODULE_ALIAS("net-pf-" __stringify(pf) "-proto-" __stringify(proto) \
+		     name)
 #endif /* __KERNEL__ */
 #endif	/* _LINUX_NET_H */

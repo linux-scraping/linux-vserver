@@ -634,9 +634,7 @@ megasas_ioc_init_fusion(struct megasas_instance *instance)
 		fusion->reply_frames_desc_phys;
 	IOCInitMessage->SystemRequestFrameBaseAddress =
 		fusion->io_request_frames_phys;
-	/* Set to 0 for none or 1 MSI-X vectors */
-	IOCInitMessage->HostMSIxVectors = (instance->msix_vectors > 0 ?
-					   instance->msix_vectors : 0);
+	IOCInitMessage->HostMSIxVectors = instance->msix_vectors;
 	init_frame = (struct megasas_init_frame *)cmd->frame;
 	memset(init_frame, 0, MEGAMFI_FRAME_SIZE);
 
@@ -1426,11 +1424,11 @@ megasas_build_ldio_fusion(struct megasas_instance *instance,
 			fp_possible = io_info.fpOkForIo;
 	}
 
-	/* Use raw_smp_processor_id() for now until cmd->request->cpu is CPU
+	/* Use smp_processor_id() for now until cmd->request->cpu is CPU
 	   id by default, not CPU group id, otherwise all MSI-X queues won't
 	   be utilized */
 	cmd->request_desc->SCSIIO.MSIxIndex = instance->msix_vectors ?
-		raw_smp_processor_id() % instance->msix_vectors : 0;
+		smp_processor_id() % instance->msix_vectors : 0;
 
 	if (fp_possible) {
 		megasas_set_pd_lba(io_request, scp->cmd_len, &io_info, scp,

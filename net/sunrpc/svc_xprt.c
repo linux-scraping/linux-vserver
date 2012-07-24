@@ -316,6 +316,7 @@ static bool svc_xprt_has_something_to_do(struct svc_xprt *xprt)
  */
 void svc_xprt_enqueue(struct svc_xprt *xprt)
 {
+	struct svc_serv	*serv = xprt->xpt_server;
 	struct svc_pool *pool;
 	struct svc_rqst	*rqstp;
 	int cpu;
@@ -361,6 +362,8 @@ void svc_xprt_enqueue(struct svc_xprt *xprt)
 				rqstp, rqstp->rq_xprt);
 		rqstp->rq_xprt = xprt;
 		svc_xprt_get(xprt);
+		rqstp->rq_reserved = serv->sv_max_mesg;
+		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
 		pool->sp_stats.threads_woken++;
 		wake_up(&rqstp->rq_wait);
 	} else {
@@ -541,14 +544,11 @@ static void svc_check_conn_limits(struct svc_serv *serv)
 		struct svc_xprt *xprt = NULL;
 		spin_lock_bh(&serv->sv_lock);
 		if (!list_empty(&serv->sv_tempsocks)) {
-			if (net_ratelimit()) {
-				/* Try to help the admin */
-				printk(KERN_NOTICE "%s: too many open  "
-				       "connections, consider increasing %s\n",
-				       serv->sv_name, serv->sv_maxconn ?
-				       "the max number of connections." :
-				       "the number of threads.");
-			}
+			/* Try to help the admin */
+			net_notice_ratelimited("%s: too many open connections, consider increasing the %s\n",
+					       serv->sv_name, serv->sv_maxconn ?
+					       "max number of connections" :
+					       "number of threads");
 			/*
 			 * Always select the oldest connection. It's not fair,
 			 * but so is life
@@ -598,6 +598,7 @@ int svc_recv(struct svc_rqst *rqstp, long timeout)
 
 	/* now allocate needed pages.  If we get a failure, sleep briefly */
 	pages = (serv->sv_max_mesg + PAGE_SIZE) / PAGE_SIZE;
+	BUG_ON(pages >= RPCSVC_MAXPAGES);
 	for (i = 0; i < pages ; i++)
 		while (rqstp->rq_pages[i] == NULL) {
 			struct page *p = alloc_page(GFP_KERNEL);
@@ -612,7 +613,6 @@ int svc_recv(struct svc_rqst *rqstp, long timeout)
 			rqstp->rq_pages[i] = p;
 		}
 	rqstp->rq_pages[i++] = NULL; /* this might be seen in nfs_read_actor */
-	BUG_ON(pages >= RPCSVC_MAXPAGES);
 
 	/* Make arg->head point to first page and arg->pages point to rest */
 	arg = &rqstp->rq_arg;
@@ -640,6 +640,8 @@ int svc_recv(struct svc_rqst *rqstp, long timeout)
 	if (xprt) {
 		rqstp->rq_xprt = xprt;
 		svc_xprt_get(xprt);
+		rqstp->rq_reserved = serv->sv_max_mesg;
+		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
 
 		/* As there is a shortage of threads and this request
 		 * had to be queued, don't allow the thread to wait so
@@ -736,8 +738,6 @@ int svc_recv(struct svc_rqst *rqstp, long timeout)
 		else
 			len = xprt->xpt_ops->xpo_recvfrom(rqstp);
 		dprintk("svc: got len=%d\n", len);
-		rqstp->rq_reserved = serv->sv_max_mesg;
-		atomic_add(rqstp->rq_reserved, &xprt->xpt_reserved);
 	}
 	svc_xprt_received(xprt);
 
@@ -794,8 +794,7 @@ int svc_send(struct svc_rqst *rqstp)
 
 	/* Grab mutex to serialize outgoing data. */
 	mutex_lock(&xprt->xpt_mutex);
-	if (test_bit(XPT_DEAD, &xprt->xpt_flags)
-			|| test_bit(XPT_CLOSE, &xprt->xpt_flags))
+	if (test_bit(XPT_DEAD, &xprt->xpt_flags))
 		len = -ENOTCONN;
 	else
 		len = xprt->xpt_ops->xpo_sendto(rqstp);
@@ -817,6 +816,7 @@ static void svc_age_temp_xprts(unsigned long closure)
 	struct svc_serv *serv = (struct svc_serv *)closure;
 	struct svc_xprt *xprt;
 	struct list_head *le, *next;
+	LIST_HEAD(to_be_aged);
 
 	dprintk("svc_age_temp_xprts\n");
 
@@ -837,15 +837,25 @@ static void svc_age_temp_xprts(unsigned long closure)
 		if (atomic_read(&xprt->xpt_ref.refcount) > 1 ||
 		    test_bit(XPT_BUSY, &xprt->xpt_flags))
 			continue;
-		list_del_init(le);
+		svc_xprt_get(xprt);
+		list_move(le, &to_be_aged);
 		set_bit(XPT_CLOSE, &xprt->xpt_flags);
 		set_bit(XPT_DETACHED, &xprt->xpt_flags);
+	}
+	spin_unlock_bh(&serv->sv_lock);
+
+	while (!list_empty(&to_be_aged)) {
+		le = to_be_aged.next;
+		/* fiddling the xpt_list node is safe 'cos we're XPT_DETACHED */
+		list_del_init(le);
+		xprt = list_entry(le, struct svc_xprt, xpt_list);
+
 		dprintk("queuing xprt %p for closing\n", xprt);
 
 		/* a thread will dequeue and close it soon */
 		svc_xprt_enqueue(xprt);
+		svc_xprt_put(xprt);
 	}
-	spin_unlock_bh(&serv->sv_lock);
 
 	mod_timer(&serv->sv_temptimer, jiffies + svc_conn_age_period * HZ);
 }
@@ -963,7 +973,7 @@ void svc_close_net(struct svc_serv *serv, struct net *net)
 	svc_clear_pools(serv, net);
 	/*
 	 * At this point the sp_sockets lists will stay empty, since
-	 * svc_enqueue will not add new entries without taking the
+	 * svc_xprt_enqueue will not add new entries without taking the
 	 * sp_lock and checking XPT_BUSY.
 	 */
 	svc_clear_list(&serv->sv_tempsocks, net);

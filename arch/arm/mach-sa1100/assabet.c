@@ -509,9 +509,6 @@ static void __init assabet_map_io(void)
 	 * Its called GPCLKR0 in my SA1110 manual.
 	 */
 	Ser1SDCR0 |= SDCR0_SUS;
-	MSC1 = (MSC1 & ~0xffff) |
-		MSC_NonBrst | MSC_32BitStMem |
-		MSC_RdAcc(2) | MSC_WrAcc(2) | MSC_Rec(0);
 
 	if (!machine_has_neponset())
 		sa1100_register_uart_fns(&assabet_port_fns);
@@ -541,6 +538,7 @@ MACHINE_START(ASSABET, "Intel-Assabet")
 	.init_irq	= sa1100_init_irq,
 	.timer		= &sa1100_timer,
 	.init_machine	= assabet_init,
+	.init_late	= sa11x0_init_late,
 #ifdef CONFIG_SA1111
 	.dma_zone_size	= SZ_1M,
 #endif

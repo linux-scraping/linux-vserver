@@ -53,7 +53,7 @@ MODULE_PARM_DESC(tjmax, "TjMax value in degrees Celsius");
 
 #define BASE_SYSFS_ATTR_NO	2	/* Sysfs Base attr no for coretemp */
 #define NUM_REAL_CORES		32	/* Number of Real cores per cpu */
-#define CORETEMP_NAME_LENGTH	19	/* String Length of attrs */
+#define CORETEMP_NAME_LENGTH	17	/* String Length of attrs */
 #define MAX_CORE_ATTRS		4	/* Maximum no of basic attrs */
 #define TOTAL_ATTRS		(MAX_CORE_ATTRS + 1)
 #define MAX_CORE_DATA		(NUM_REAL_CORES + BASE_SYSFS_ATTR_NO)
@@ -205,11 +205,8 @@ static struct tjmax __cpuinitconst tjmax_table[] = {
 	{ "CPU N455", 100000 },
 	{ "CPU N470", 100000 },
 	{ "CPU N475", 100000 },
-	{ "CPU  230", 100000 },		/* Model 0x1c, stepping 2	*/
-	{ "CPU  330", 125000 },		/* Model 0x1c, stepping 2	*/
-	{ "CPU CE4110", 110000 },	/* Model 0x1c, stepping 10	*/
-	{ "CPU CE4150", 110000 },	/* Model 0x1c, stepping 10	*/
-	{ "CPU CE4170", 110000 },	/* Model 0x1c, stepping 10	*/
+	{ "CPU  230", 100000 },
+	{ "CPU  330", 125000 },
 };
 
 static int __cpuinit adjust_tjmax(struct cpuinfo_x86 *c, u32 id,
@@ -804,7 +801,7 @@ MODULE_DEVICE_TABLE(x86cpu, coretemp_ids);
 
 static int __init coretemp_init(void)
 {
-	int i, err = -ENODEV;
+	int i, err;
 
 	/*
 	 * CPUID.06H.EAX[0] indicates whether the CPU has thermal

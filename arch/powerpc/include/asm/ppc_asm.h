@@ -294,16 +294,11 @@ n:
  *      ld	rY,ADDROFF(name)(rX)
  */
 #ifdef __powerpc64__
-#ifdef HAVE_AS_ATHIGH
-#define __AS_ATHIGH high
-#else
-#define __AS_ATHIGH h
-#endif
 #define LOAD_REG_IMMEDIATE(reg,expr)		\
 	lis     (reg),(expr)@highest;		\
 	ori     (reg),(reg),(expr)@higher;	\
 	rldicr  (reg),(reg),32,31;		\
-	oris    (reg),(reg),(expr)@__AS_ATHIGH;	\
+	oris    (reg),(reg),(expr)@h;		\
 	ori     (reg),(reg),(expr)@l;
 
 #define LOAD_REG_ADDR(reg,name)			\
@@ -374,7 +369,15 @@ BEGIN_FTR_SECTION			\
 END_FTR_SECTION_IFCLR(CPU_FTR_601)
 #endif
 
-	
+#ifdef CONFIG_PPC64
+#define MTOCRF(FXM, RS)			\
+	BEGIN_FTR_SECTION_NESTED(848);	\
+	mtcrf	(FXM), (RS);		\
+	FTR_SECTION_ELSE_NESTED(848);	\
+	mtocrf (FXM), (RS);		\
+	ALT_FTR_SECTION_END_NESTED_IFCLR(CPU_FTR_NOEXECUTE, 848)
+#endif
+
 /*
  * This instruction is not implemented on the PPC 603 or 601; however, on
  * the 403GCX and 405GP tlbia IS defined and tlbie is not.

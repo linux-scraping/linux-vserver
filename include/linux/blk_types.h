@@ -14,6 +14,8 @@ struct bio;
 struct bio_integrity_payload;
 struct page;
 struct block_device;
+struct io_context;
+struct cgroup_subsys_state;
 typedef void (bio_end_io_t) (struct bio *, int);
 typedef void (bio_destructor_t) (struct bio *);
 
@@ -66,6 +68,14 @@ struct bio {
 	bio_end_io_t		*bi_end_io;
 
 	void			*bi_private;
+#ifdef CONFIG_BLK_CGROUP
+	/*
+	 * Optional ioc and css associated with this bio.  Put on bio
+	 * release.  Read comment on top of bio_associate_current().
+	 */
+	struct io_context	*bi_ioc;
+	struct cgroup_subsys_state *bi_css;
+#endif
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 	struct bio_integrity_payload *bi_integrity;  /* data integrity */
 #endif
@@ -144,9 +154,7 @@ enum rq_flag_bits {
 	__REQ_ELVPRIV,		/* elevator private data attached */
 	__REQ_FAILED,		/* set if the request failed */
 	__REQ_QUIET,		/* don't worry about errors */
-	__REQ_PREEMPT,		/* set for "ide_preempt" requests and also
-				   for requests for which the SCSI "quiesce"
-				   state must be ignored. */
+	__REQ_PREEMPT,		/* set for "ide_preempt" requests */
 	__REQ_ALLOCED,		/* request came from our alloc pool */
 	__REQ_COPY_USER,	/* contains copies of user pages */
 	__REQ_FLUSH_SEQ,	/* request for flush sequence */

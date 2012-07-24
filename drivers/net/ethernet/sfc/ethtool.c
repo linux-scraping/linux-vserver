@@ -680,27 +680,21 @@ static int efx_ethtool_set_ringparam(struct net_device *net_dev,
 				     struct ethtool_ringparam *ring)
 {
 	struct efx_nic *efx = netdev_priv(net_dev);
-	u32 txq_entries;
 
 	if (ring->rx_mini_pending || ring->rx_jumbo_pending ||
 	    ring->rx_pending > EFX_MAX_DMAQ_SIZE ||
 	    ring->tx_pending > EFX_MAX_DMAQ_SIZE)
 		return -EINVAL;
 
-	if (ring->rx_pending < EFX_RXQ_MIN_ENT) {
+	if (ring->rx_pending < EFX_MIN_RING_SIZE ||
+	    ring->tx_pending < EFX_MIN_RING_SIZE) {
 		netif_err(efx, drv, efx->net_dev,
-			  "RX queues cannot be smaller than %u\n",
-			  EFX_RXQ_MIN_ENT);
+			  "TX and RX queues cannot be smaller than %ld\n",
+			  EFX_MIN_RING_SIZE);
 		return -EINVAL;
 	}
 
-	txq_entries = max(ring->tx_pending, EFX_TXQ_MIN_ENT(efx));
-	if (txq_entries != ring->tx_pending)
-		netif_warn(efx, drv, efx->net_dev,
-			   "increasing TX queue size to minimum of %u\n",
-			   txq_entries);
-
-	return efx_realloc_channels(efx, ring->rx_pending, txq_entries);
+	return efx_realloc_channels(efx, ring->rx_pending, ring->tx_pending);
 }
 
 static int efx_ethtool_set_pauseparam(struct net_device *net_dev,
@@ -863,8 +857,8 @@ static int efx_ethtool_get_class_rule(struct efx_nic *efx,
 				       &ip_entry->ip4dst, &ip_entry->pdst);
 	if (rc != 0) {
 		rc = efx_filter_get_ipv4_full(
-			&spec, &proto, &ip_entry->ip4dst, &ip_entry->pdst,
-			&ip_entry->ip4src, &ip_entry->psrc);
+			&spec, &proto, &ip_entry->ip4src, &ip_entry->psrc,
+			&ip_entry->ip4dst, &ip_entry->pdst);
 		EFX_WARN_ON_PARANOID(rc);
 		ip_mask->ip4src = ~0;
 		ip_mask->psrc = ~0;
@@ -1029,7 +1023,7 @@ static int efx_ethtool_set_class_rule(struct efx_nic *efx,
 			return -EINVAL;
 
 		/* Is it a default UC or MC filter? */
-		if (!compare_ether_addr(mac_mask->h_dest, mac_addr_mc_mask) &&
+		if (ether_addr_equal(mac_mask->h_dest, mac_addr_mc_mask) &&
 		    vlan_tag_mask == 0) {
 			if (is_multicast_ether_addr(mac_entry->h_dest))
 				rc = efx_filter_set_mc_def(&spec);
@@ -1114,6 +1108,39 @@ static int efx_ethtool_set_rxfh_indir(struct net_device *net_dev,
 	return 0;
 }
 
+static int efx_ethtool_get_module_eeprom(struct net_device *net_dev,
+					 struct ethtool_eeprom *ee,
+					 u8 *data)
+{
+	struct efx_nic *efx = netdev_priv(net_dev);
+	int ret;
+
+	if (!efx->phy_op || !efx->phy_op->get_module_eeprom)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&efx->mac_lock);
+	ret = efx->phy_op->get_module_eeprom(efx, ee, data);
+	mutex_unlock(&efx->mac_lock);
+
+	return ret;
+}
+
+static int efx_ethtool_get_module_info(struct net_device *net_dev,
+				       struct ethtool_modinfo *modinfo)
+{
+	struct efx_nic *efx = netdev_priv(net_dev);
+	int ret;
+
+	if (!efx->phy_op || !efx->phy_op->get_module_info)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&efx->mac_lock);
+	ret = efx->phy_op->get_module_info(efx, modinfo);
+	mutex_unlock(&efx->mac_lock);
+
+	return ret;
+}
+
 const struct ethtool_ops efx_ethtool_ops = {
 	.get_settings		= efx_ethtool_get_settings,
 	.set_settings		= efx_ethtool_set_settings,
@@ -1143,4 +1170,6 @@ const struct ethtool_ops efx_ethtool_ops = {
 	.get_rxfh_indir_size	= efx_ethtool_get_rxfh_indir_size,
 	.get_rxfh_indir		= efx_ethtool_get_rxfh_indir,
 	.set_rxfh_indir		= efx_ethtool_set_rxfh_indir,
+	.get_module_info	= efx_ethtool_get_module_info,
+	.get_module_eeprom	= efx_ethtool_get_module_eeprom,
 };

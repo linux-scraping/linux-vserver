@@ -251,7 +251,7 @@ static int rpcb_create_local_unix(struct net *net)
 	if (IS_ERR(clnt)) {
 		dprintk("RPC:       failed to create AF_LOCAL rpcbind "
 				"client (errno %ld).\n", PTR_ERR(clnt));
-		result = PTR_ERR(clnt);
+		result = -PTR_ERR(clnt);
 		goto out;
 	}
 
@@ -298,7 +298,7 @@ static int rpcb_create_local_net(struct net *net)
 	if (IS_ERR(clnt)) {
 		dprintk("RPC:       failed to create local rpcbind "
 				"client (errno %ld).\n", PTR_ERR(clnt));
-		result = PTR_ERR(clnt);
+		result = -PTR_ERR(clnt);
 		goto out;
 	}
 
@@ -396,6 +396,7 @@ static int rpcb_register_call(struct rpc_clnt *clnt, struct rpc_message *msg)
 
 /**
  * rpcb_register - set or unset a port registration with the local rpcbind svc
+ * @net: target network namespace
  * @prog: RPC program number to bind
  * @vers: RPC version number to bind
  * @prot: transport protocol to register
@@ -523,6 +524,7 @@ static int rpcb_unregister_all_protofamilies(struct sunrpc_net *sn,
 
 /**
  * rpcb_v4_register - set or unset a port registration with the local rpcbind
+ * @net: target network namespace
  * @program: RPC program number of service to (un)register
  * @version: RPC version number of service to (un)register
  * @address: address family, IP address, and port to (un)register

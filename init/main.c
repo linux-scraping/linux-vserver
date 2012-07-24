@@ -68,7 +68,6 @@
 #include <linux/shmem_fs.h>
 #include <linux/slab.h>
 #include <linux/perf_event.h>
-#include <linux/random.h>
 #include <linux/vserver/percpu.h>
 
 #include <asm/io.h>
@@ -228,7 +227,7 @@ static int __init loglevel(char *str)
 early_param("loglevel", loglevel);
 
 /* Change NUL term back to "=", to make "param" the whole string. */
-static int __init repair_env_string(char *param, char *val)
+static int __init repair_env_string(char *param, char *val, const char *unused)
 {
 	if (val) {
 		/* param=val or param="val"? */
@@ -248,9 +247,9 @@ static int __init repair_env_string(char *param, char *val)
  * Unknown boot options get handed to init, unless they look like
  * unused parameters (modprobe will find them in /proc/cmdline).
  */
-static int __init unknown_bootoption(char *param, char *val)
+static int __init unknown_bootoption(char *param, char *val, const char *unused)
 {
-	repair_env_string(param, val);
+	repair_env_string(param, val, unused);
 
 	/* Handle obsolete-style parameters */
 	if (obsolete_checksetup(param))
@@ -387,7 +386,7 @@ static noinline void __init_refok rest_init(void)
 }
 
 /* Check for early params. */
-static int __init do_early_param(char *param, char *val)
+static int __init do_early_param(char *param, char *val, const char *unused)
 {
 	const struct obs_kernel_param *p;
 
@@ -604,12 +603,8 @@ asmlinkage void __init start_kernel(void)
 	pidmap_init();
 	anon_vma_init();
 #ifdef CONFIG_X86
-	if (efi_enabled(EFI_RUNTIME_SERVICES))
+	if (efi_enabled)
 		efi_enter_virtual_mode();
-#endif
-#ifdef CONFIG_X86_ESPFIX64
-	/* Should be run before the first non-init thread is created */
-	init_espfix_bsp();
 #endif
 	thread_info_cache_init();
 	cred_init();
@@ -635,9 +630,6 @@ asmlinkage void __init start_kernel(void)
 
 	acpi_early_init(); /* before LAPIC and SMP init */
 	sfi_init_late();
-
-	if (efi_enabled(EFI_RUNTIME_SERVICES))
-		efi_free_boot_services();
 
 	ftrace_init();
 
@@ -734,14 +726,14 @@ static initcall_t *initcall_levels[] __initdata = {
 };
 
 static char *initcall_level_names[] __initdata = {
-	"early parameters",
-	"core parameters",
-	"postcore parameters",
-	"arch parameters",
-	"subsys parameters",
-	"fs parameters",
-	"device parameters",
-	"late parameters",
+	"early",
+	"core",
+	"postcore",
+	"arch",
+	"subsys",
+	"fs",
+	"device",
+	"late",
 };
 
 static void __init do_initcall_level(int level)
@@ -754,7 +746,7 @@ static void __init do_initcall_level(int level)
 		   static_command_line, __start___param,
 		   __stop___param - __start___param,
 		   level, level,
-		   repair_env_string);
+		   &repair_env_string);
 
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(*fn);
@@ -785,7 +777,6 @@ static void __init do_basic_setup(void)
 	do_ctors();
 	usermodehelper_enable();
 	do_initcalls();
-	random_int_secret_init();
 }
 
 static void __init do_pre_smp_initcalls(void)

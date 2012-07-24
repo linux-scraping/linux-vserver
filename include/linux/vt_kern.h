@@ -47,7 +47,6 @@ int con_set_cmap(unsigned char __user *cmap);
 int con_get_cmap(unsigned char __user *cmap);
 void scrollback(struct vc_data *vc, int lines);
 void scrollfront(struct vc_data *vc, int lines);
-void clear_buffer_attributes(struct vc_data *vc);
 void update_region(struct vc_data *vc, unsigned long start, int count);
 void redraw_screen(struct vc_data *vc, int is_switch);
 #define update_screen(x) redraw_screen(x, 0)
@@ -71,7 +70,6 @@ int con_set_unimap(struct vc_data *vc, ushort ct, struct unipair __user *list);
 int con_get_unimap(struct vc_data *vc, ushort ct, ushort __user *uct, struct unipair __user *list);
 int con_set_default_unimap(struct vc_data *vc);
 void con_free_unimap(struct vc_data *vc);
-void con_protect_unimap(struct vc_data *vc, int rdonly);
 int con_copy_unimap(struct vc_data *dst_vc, struct vc_data *src_vc);
 
 #define vc_translate(vc, c) ((vc)->vc_translate[(c) |			\
@@ -132,8 +130,6 @@ void vt_event_post(unsigned int event, unsigned int old, unsigned int new);
 int vt_waitactive(int n);
 void change_console(struct vc_data *new_vc);
 void reset_vc(struct vc_data *vc);
-extern int do_unbind_con_driver(const struct consw *csw, int first, int last,
-			     int deflt);
 extern int unbind_con_driver(const struct consw *csw, int first, int last,
 			     int deflt);
 int vty_init(const struct file_operations *console_fops);

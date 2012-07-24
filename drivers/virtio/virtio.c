@@ -2,39 +2,41 @@
 #include <linux/spinlock.h>
 #include <linux/virtio_config.h>
 #include <linux/module.h>
+#include <linux/idr.h>
 
 /* Unique numbering for virtio devices. */
-static unsigned int dev_index;
+static DEFINE_IDA(virtio_index_ida);
 
 static ssize_t device_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
 	return sprintf(buf, "0x%04x\n", dev->id.device);
 }
 static ssize_t vendor_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
 	return sprintf(buf, "0x%04x\n", dev->id.vendor);
 }
 static ssize_t status_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
 	return sprintf(buf, "0x%08x\n", dev->config->get_status(dev));
 }
 static ssize_t modalias_show(struct device *_d,
 			     struct device_attribute *attr, char *buf)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
+
 	return sprintf(buf, "virtio:d%08Xv%08X\n",
 		       dev->id.device, dev->id.vendor);
 }
 static ssize_t features_show(struct device *_d,
 			     struct device_attribute *attr, char *buf)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d, struct virtio_device, dev);
 	unsigned int i;
 	ssize_t len = 0;
 
@@ -69,7 +71,7 @@ static inline int virtio_id_match(const struct virtio_device *dev,
 static int virtio_dev_match(struct device *_dv, struct device_driver *_dr)
 {
 	unsigned int i;
-	struct virtio_device *dev = dev_to_virtio(_dv);
+	struct virtio_device *dev = container_of(_dv,struct virtio_device,dev);
 	const struct virtio_device_id *ids;
 
 	ids = container_of(_dr, struct virtio_driver, driver)->id_table;
@@ -81,7 +83,7 @@ static int virtio_dev_match(struct device *_dv, struct device_driver *_dr)
 
 static int virtio_uevent(struct device *_dv, struct kobj_uevent_env *env)
 {
-	struct virtio_device *dev = dev_to_virtio(_dv);
+	struct virtio_device *dev = container_of(_dv,struct virtio_device,dev);
 
 	return add_uevent_var(env, "MODALIAS=virtio:d%08Xv%08X",
 			      dev->id.device, dev->id.vendor);
@@ -109,7 +111,7 @@ EXPORT_SYMBOL_GPL(virtio_check_driver_offered_feature);
 static int virtio_dev_probe(struct device *_d)
 {
 	int err, i;
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
 	struct virtio_driver *drv = container_of(dev->dev.driver,
 						 struct virtio_driver, driver);
 	u32 device_features;
@@ -147,7 +149,7 @@ static int virtio_dev_probe(struct device *_d)
 
 static int virtio_dev_remove(struct device *_d)
 {
-	struct virtio_device *dev = dev_to_virtio(_d);
+	struct virtio_device *dev = container_of(_d,struct virtio_device,dev);
 	struct virtio_driver *drv = container_of(dev->dev.driver,
 						 struct virtio_driver, driver);
 
@@ -192,7 +194,11 @@ int register_virtio_device(struct virtio_device *dev)
 	dev->dev.bus = &virtio_bus;
 
 	/* Assign a unique device index and hence name. */
-	dev->index = dev_index++;
+	err = ida_simple_get(&virtio_index_ida, 0, 0, GFP_KERNEL);
+	if (err < 0)
+		goto out;
+
+	dev->index = err;
 	dev_set_name(&dev->dev, "virtio%u", dev->index);
 
 	/* We always start by resetting the device, in case a previous
@@ -207,6 +213,7 @@ int register_virtio_device(struct virtio_device *dev)
 	/* device_register() causes the bus infrastructure to look for a
 	 * matching driver. */
 	err = device_register(&dev->dev);
+out:
 	if (err)
 		add_status(dev, VIRTIO_CONFIG_S_FAILED);
 	return err;
@@ -216,6 +223,7 @@ EXPORT_SYMBOL_GPL(register_virtio_device);
 void unregister_virtio_device(struct virtio_device *dev)
 {
 	device_unregister(&dev->dev);
+	ida_simple_remove(&virtio_index_ida, dev->index);
 }
 EXPORT_SYMBOL_GPL(unregister_virtio_device);
 

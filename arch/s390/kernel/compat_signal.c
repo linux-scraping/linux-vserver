@@ -32,8 +32,6 @@
 #include "compat_ptrace.h"
 #include "entry.h"
 
-#define _BLOCKABLE (~(sigmask(SIGKILL) | sigmask(SIGSTOP)))
-
 typedef struct 
 {
 	__u8 callee_used_stack[__SIGNAL_FRAMESIZE32];
@@ -313,10 +311,6 @@ static int restore_sigregs32(struct pt_regs *regs,_sigregs32 __user *sregs)
 	regs->psw.mask = (regs->psw.mask & ~PSW_MASK_USER) |
 		(__u64)(regs32.psw.mask & PSW32_MASK_USER) << 32 |
 		(__u64)(regs32.psw.addr & PSW32_ADDR_AMODE);
-	/* Check for invalid user address space control. */
-	if ((regs->psw.mask & PSW_MASK_ASC) >= (psw_kernel_bits & PSW_MASK_ASC))
-		regs->psw.mask = (psw_user_bits & PSW_MASK_ASC) |
-			(regs->psw.mask & ~PSW_MASK_ASC);
 	regs->psw.addr = (__u64)(regs32.psw.addr & PSW32_ADDR_INSN);
 	for (i = 0; i < NUM_GPRS; i++)
 		regs->gprs[i] = (__u64) regs32.gprs[i];
@@ -368,7 +362,6 @@ asmlinkage long sys32_sigreturn(void)
 		goto badframe;
 	if (__copy_from_user(&set.sig, &frame->sc.oldmask, _SIGMASK_COPY_SIZE32))
 		goto badframe;
-	sigdelsetmask(&set, ~_BLOCKABLE);
 	set_current_blocked(&set);
 	if (restore_sigregs32(regs, &frame->sregs))
 		goto badframe;
@@ -394,7 +387,6 @@ asmlinkage long sys32_rt_sigreturn(void)
 		goto badframe;
 	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
 		goto badframe;
-	sigdelsetmask(&set, ~_BLOCKABLE);
 	set_current_blocked(&set);
 	if (restore_sigregs32(regs, &frame->uc.uc_mcontext))
 		goto badframe;
@@ -439,13 +431,6 @@ get_sigframe(struct k_sigaction *ka, struct pt_regs * regs, size_t frame_size)
 	if (ka->sa.sa_flags & SA_ONSTACK) {
 		if (! sas_ss_flags(sp))
 			sp = current->sas_ss_sp + current->sas_ss_size;
-	}
-
-	/* This is the legacy signal stack switching. */
-	else if (!user_mode(regs) &&
-		 !(ka->sa.sa_flags & SA_RESTORER) &&
-		 ka->sa.sa_restorer) {
-		sp = (unsigned long) ka->sa.sa_restorer;
 	}
 
 	return (void __user *)((sp - frame_size) & -8ul);
@@ -498,10 +483,7 @@ static int setup_frame32(int sig, struct k_sigaction *ka,
 
 	/* Set up registers for signal handler */
 	regs->gprs[15] = (__force __u64) frame;
-	/* Force 31 bit amode and default user address space control. */
-	regs->psw.mask = PSW_MASK_BA |
-		(psw_user_bits & PSW_MASK_ASC) |
-		(regs->psw.mask & ~PSW_MASK_ASC);
+	regs->psw.mask |= PSW_MASK_BA;		/* force amode 31 */
 	regs->psw.addr = (__force __u64) ka->sa.sa_handler;
 
 	regs->gprs[2] = map_signal(sig);
@@ -569,10 +551,7 @@ static int setup_rt_frame32(int sig, struct k_sigaction *ka, siginfo_t *info,
 
 	/* Set up registers for signal handler */
 	regs->gprs[15] = (__force __u64) frame;
-	/* Force 31 bit amode and default user address space control. */
-	regs->psw.mask = PSW_MASK_BA |
-		(psw_user_bits & PSW_MASK_ASC) |
-		(regs->psw.mask & ~PSW_MASK_ASC);
+	regs->psw.mask |= PSW_MASK_BA;		/* force amode 31 */
 	regs->psw.addr = (__u64) ka->sa.sa_handler;
 
 	regs->gprs[2] = map_signal(sig);
@@ -589,7 +568,7 @@ give_sigsegv:
  * OK, we're invoking a handler
  */	
 
-int handle_signal32(unsigned long sig, struct k_sigaction *ka,
+void handle_signal32(unsigned long sig, struct k_sigaction *ka,
 		    siginfo_t *info, sigset_t *oldset, struct pt_regs *regs)
 {
 	int ret;
@@ -600,8 +579,8 @@ int handle_signal32(unsigned long sig, struct k_sigaction *ka,
 	else
 		ret = setup_frame32(sig, ka, oldset, regs);
 	if (ret)
-		return ret;
-	block_sigmask(ka, sig);
-	return 0;
+		return;
+	signal_delivered(sig, info, ka, regs,
+				 test_thread_flag(TIF_SINGLE_STEP));
 }
 

@@ -126,7 +126,6 @@ struct usb_hcd {
 	unsigned		wireless:1;	/* Wireless USB HCD */
 	unsigned		authorized_default:1;
 	unsigned		has_tt:1;	/* Integrated TT in root hub */
-	unsigned		cant_recv_wakeups:1;
 
 	unsigned int		irq;		/* irq allocated */
 	void __iomem		*regs;		/* device memory/io */
@@ -343,6 +342,15 @@ struct hc_driver {
 		 */
 	int	(*update_device)(struct usb_hcd *, struct usb_device *);
 	int	(*set_usb2_hw_lpm)(struct usb_hcd *, struct usb_device *, int);
+	/* USB 3.0 Link Power Management */
+		/* Returns the USB3 hub-encoded value for the U1/U2 timeout. */
+	int	(*enable_usb3_lpm_timeout)(struct usb_hcd *,
+			struct usb_device *, enum usb3_link_state state);
+		/* The xHCI host controller can still fail the command to
+		 * disable the LPM timeouts, so this can return an error code.
+		 */
+	int	(*disable_usb3_lpm_timeout)(struct usb_hcd *,
+			struct usb_device *, enum usb3_link_state state);
 };
 
 extern int usb_hcd_link_urb_to_ep(struct usb_hcd *hcd, struct urb *urb);
@@ -394,13 +402,12 @@ extern int usb_hcd_pci_probe(struct pci_dev *dev,
 extern void usb_hcd_pci_remove(struct pci_dev *dev);
 extern void usb_hcd_pci_shutdown(struct pci_dev *dev);
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 extern const struct dev_pm_ops usb_hcd_pci_pm_ops;
 #endif
 #endif /* CONFIG_PCI */
 
 /* pci-ish (pdev null is ok) buffer alloc/mapping support */
-void usb_init_pool_max(void);
 int hcd_buffer_create(struct usb_hcd *hcd);
 void hcd_buffer_destroy(struct usb_hcd *hcd);
 
@@ -583,29 +590,6 @@ static inline void usb_hcd_resume_root_hub(struct usb_hcd *hcd)
 	return;
 }
 #endif /* CONFIG_USB_SUSPEND */
-
-
-/*
- * USB device fs stuff
- */
-
-#ifdef CONFIG_USB_DEVICEFS
-
-/*
- * these are expected to be called from the USB core/hub thread
- * with the kernel lock held
- */
-extern void usbfs_update_special(void);
-extern int usbfs_init(void);
-extern void usbfs_cleanup(void);
-
-#else /* CONFIG_USB_DEVICEFS */
-
-static inline void usbfs_update_special(void) {}
-static inline int usbfs_init(void) { return 0; }
-static inline void usbfs_cleanup(void) { }
-
-#endif /* CONFIG_USB_DEVICEFS */
 
 /*-------------------------------------------------------------------------*/
 

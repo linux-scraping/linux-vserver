@@ -1297,7 +1297,8 @@ handle_newline:
 			tty->canon_data++;
 			spin_unlock_irqrestore(&tty->read_lock, flags);
 			kill_fasync(&tty->fasync, SIGIO, POLL_IN);
-			wake_up_interruptible(&tty->read_wait);
+			if (waitqueue_active(&tty->read_wait))
+				wake_up_interruptible(&tty->read_wait);
 			return;
 		}
 	}
@@ -1420,7 +1421,8 @@ static void n_tty_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	if ((!tty->icanon && (tty->read_cnt >= tty->minimum_to_wake)) ||
 		L_EXTPROC(tty)) {
 		kill_fasync(&tty->fasync, SIGIO, POLL_IN);
-		wake_up_interruptible(&tty->read_wait);
+		if (waitqueue_active(&tty->read_wait))
+			wake_up_interruptible(&tty->read_wait);
 	}
 
 	/*
@@ -1527,14 +1529,6 @@ static void n_tty_set_termios(struct tty_struct *tty, struct ktermios *old)
 			tty->real_raw = 0;
 	}
 	n_tty_set_room(tty);
-	/*
-	 * Fix tty hang when I_IXON(tty) is cleared, but the tty
-	 * been stopped by STOP_CHAR(tty) before it.
-	 */
-	if (!I_IXON(tty) && old && (old->c_iflag & IXON) && !tty->flow_stopped) {
-		start_tty(tty);
-	}
-
 	/* The termios change make the tty ready for I/O */
 	wake_up_interruptible(&tty->write_wait);
 	wake_up_interruptible(&tty->read_wait);
@@ -1636,6 +1630,7 @@ static int copy_from_read_buf(struct tty_struct *tty,
 	int retval;
 	size_t n;
 	unsigned long flags;
+	bool is_eof;
 
 	retval = 0;
 	spin_lock_irqsave(&tty->read_lock, flags);
@@ -1645,15 +1640,15 @@ static int copy_from_read_buf(struct tty_struct *tty,
 	if (n) {
 		retval = copy_to_user(*b, &tty->read_buf[tty->read_tail], n);
 		n -= retval;
+		is_eof = n == 1 &&
+			tty->read_buf[tty->read_tail] == EOF_CHAR(tty);
 		tty_audit_add_data(tty, &tty->read_buf[tty->read_tail], n);
 		spin_lock_irqsave(&tty->read_lock, flags);
 		tty->read_tail = (tty->read_tail + n) & (N_TTY_BUF_SIZE-1);
 		tty->read_cnt -= n;
 		/* Turn single EOF into zero-length read */
-		if (L_EXTPROC(tty) && tty->icanon && n == 1) {
-			if (!tty->read_cnt && (*b)[n-1] == EOF_CHAR(tty))
-				n--;
-		}
+		if (L_EXTPROC(tty) && tty->icanon && is_eof && !tty->read_cnt)
+			n = 0;
 		spin_unlock_irqrestore(&tty->read_lock, flags);
 		*b += n;
 		*nr -= n;
@@ -1733,8 +1728,7 @@ static ssize_t n_tty_read(struct tty_struct *tty, struct file *file,
 
 do_it_again:
 
-	if (WARN_ON(!tty->read_buf))
-		return -EAGAIN;
+	BUG_ON(!tty->read_buf);
 
 	c = job_control(tty, file);
 	if (c < 0)
@@ -1994,9 +1988,7 @@ static ssize_t n_tty_write(struct tty_struct *tty, struct file *file,
 				tty->ops->flush_chars(tty);
 		} else {
 			while (nr > 0) {
-				mutex_lock(&tty->output_lock);
 				c = tty->ops->write(tty, b, nr);
-				mutex_unlock(&tty->output_lock);
 				if (c < 0) {
 					retval = c;
 					goto break_out;

@@ -39,7 +39,6 @@
  */
 
 #define	ATC_DEFAULT_CFG		(ATC_FIFOCFG_HALFFIFO)
-#define	ATC_DEFAULT_CTRLA	(0)
 #define	ATC_DEFAULT_CTRLB	(ATC_SIF(AT_DMA_MEM_IF) \
 				|ATC_DIF(AT_DMA_MEM_IF))
 
@@ -574,7 +573,6 @@ atc_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 		return NULL;
 	}
 
-	ctrla =   ATC_DEFAULT_CTRLA;
 	ctrlb =   ATC_DEFAULT_CTRLB | ATC_IEN
 		| ATC_SRC_ADDR_MODE_INCR
 		| ATC_DST_ADDR_MODE_INCR
@@ -585,13 +583,13 @@ atc_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dest, dma_addr_t src,
 	 * of the most common optimization.
 	 */
 	if (!((src | dest  | len) & 3)) {
-		ctrla |= ATC_SRC_WIDTH_WORD | ATC_DST_WIDTH_WORD;
+		ctrla = ATC_SRC_WIDTH_WORD | ATC_DST_WIDTH_WORD;
 		src_width = dst_width = 2;
 	} else if (!((src | dest | len) & 1)) {
-		ctrla |= ATC_SRC_WIDTH_HALFWORD | ATC_DST_WIDTH_HALFWORD;
+		ctrla = ATC_SRC_WIDTH_HALFWORD | ATC_DST_WIDTH_HALFWORD;
 		src_width = dst_width = 1;
 	} else {
-		ctrla |= ATC_SRC_WIDTH_BYTE | ATC_DST_WIDTH_BYTE;
+		ctrla = ATC_SRC_WIDTH_BYTE | ATC_DST_WIDTH_BYTE;
 		src_width = dst_width = 0;
 	}
 
@@ -664,11 +662,12 @@ atc_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 			flags);
 
 	if (unlikely(!atslave || !sg_len)) {
-		dev_dbg(chan2dev(chan), "prep_slave_sg: sg length is zero!\n");
+		dev_dbg(chan2dev(chan), "prep_dma_memcpy: length is zero!\n");
 		return NULL;
 	}
 
-	ctrla = ATC_DEFAULT_CTRLA | atslave->ctrla;
+	ctrla =   ATC_SCSIZE(sconfig->src_maxburst)
+		| ATC_DCSIZE(sconfig->dst_maxburst);
 	ctrlb = ATC_IEN;
 
 	switch (direction) {
@@ -691,11 +690,6 @@ atc_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 
 			mem = sg_dma_address(sg);
 			len = sg_dma_len(sg);
-			if (unlikely(!len)) {
-				dev_dbg(chan2dev(chan),
-					"prep_slave_sg: sg(%d) data length is zero\n", i);
-				goto err;
-			}
 			mem_width = 2;
 			if (unlikely(mem & 3 || len & 3))
 				mem_width = 0;
@@ -731,11 +725,6 @@ atc_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 
 			mem = sg_dma_address(sg);
 			len = sg_dma_len(sg);
-			if (unlikely(!len)) {
-				dev_dbg(chan2dev(chan),
-					"prep_slave_sg: sg(%d) data length is zero\n", i);
-				goto err;
-			}
 			mem_width = 2;
 			if (unlikely(mem & 3 || len & 3))
 				mem_width = 0;
@@ -769,7 +758,6 @@ atc_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 
 err_desc_get:
 	dev_err(chan2dev(chan), "not enough descriptors available\n");
-err:
 	atc_desc_put(atchan, first);
 	return NULL;
 }
@@ -807,12 +795,12 @@ atc_dma_cyclic_fill_desc(struct dma_chan *chan, struct at_desc *desc,
 		enum dma_transfer_direction direction)
 {
 	struct at_dma_chan	*atchan = to_at_dma_chan(chan);
-	struct at_dma_slave	*atslave = chan->private;
 	struct dma_slave_config	*sconfig = &atchan->dma_sconfig;
 	u32			ctrla;
 
 	/* prepare common CRTLA value */
-	ctrla =   ATC_DEFAULT_CTRLA | atslave->ctrla
+	ctrla =   ATC_SCSIZE(sconfig->src_maxburst)
+		| ATC_DCSIZE(sconfig->dst_maxburst)
 		| ATC_DST_WIDTH(reg_width)
 		| ATC_SRC_WIDTH(reg_width)
 		| period_len >> reg_width;

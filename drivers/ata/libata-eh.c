@@ -1287,14 +1287,14 @@ void ata_eh_qc_complete(struct ata_queued_cmd *qc)
  *	should be retried.  To be used from EH.
  *
  *	SCSI midlayer limits the number of retries to scmd->allowed.
- *	scmd->allowed is incremented for commands which get retried
+ *	scmd->retries is decremented for commands which get retried
  *	due to unrelated failures (qc->err_mask is zero).
  */
 void ata_eh_qc_retry(struct ata_queued_cmd *qc)
 {
 	struct scsi_cmnd *scmd = qc->scsicmd;
-	if (!qc->err_mask)
-		scmd->allowed++;
+	if (!qc->err_mask && scmd->retries)
+		scmd->retries--;
 	__ata_eh_qc_complete(qc);
 }
 
@@ -2047,6 +2047,26 @@ static unsigned int ata_eh_speed_down(struct ata_device *dev,
 }
 
 /**
+ *	ata_eh_worth_retry - analyze error and decide whether to retry
+ *	@qc: qc to possibly retry
+ *
+ *	Look at the cause of the error and decide if a retry
+ * 	might be useful or not.  We don't want to retry media errors
+ *	because the drive itself has probably already taken 10-30 seconds
+ *	doing its own internal retries before reporting the failure.
+ */
+static inline int ata_eh_worth_retry(struct ata_queued_cmd *qc)
+{
+	if (qc->flags & AC_ERR_MEDIA)
+		return 0;	/* don't retry media errors */
+	if (qc->flags & ATA_QCFLAG_IO)
+		return 1;	/* otherwise retry anything from fs stack */
+	if (qc->err_mask & AC_ERR_INVALID)
+		return 0;	/* don't retry these */
+	return qc->err_mask != AC_ERR_DEV;  /* retry if not dev error */
+}
+
+/**
  *	ata_eh_link_autopsy - analyze error and determine recovery action
  *	@link: host link to perform autopsy on
  *
@@ -2120,9 +2140,7 @@ static void ata_eh_link_autopsy(struct ata_link *link)
 			qc->err_mask &= ~(AC_ERR_DEV | AC_ERR_OTHER);
 
 		/* determine whether the command is worth retrying */
-		if (qc->flags & ATA_QCFLAG_IO ||
-		    (!(qc->err_mask & AC_ERR_INVALID) &&
-		     qc->err_mask != AC_ERR_DEV))
+		if (ata_eh_worth_retry(qc))
 			qc->flags |= ATA_QCFLAG_RETRY;
 
 		/* accumulate error info */
@@ -2600,7 +2618,6 @@ int ata_eh_reset(struct ata_link *link, int classify,
 		 * bus as we may be talking too fast.
 		 */
 		dev->pio_mode = XFER_PIO_0;
-		dev->dma_mode = 0xff;
 
 		/* If the controller has a pio mode setup function
 		 * then use it to set the chipset to rights. Don't
@@ -3423,9 +3440,6 @@ static int ata_eh_set_lpm(struct ata_link *link, enum ata_lpm_policy policy,
 			}
 		}
 	}
-
-	link->last_lpm_change = jiffies;
-	link->flags |= ATA_LFLAG_CHANGED;
 
 	return 0;
 

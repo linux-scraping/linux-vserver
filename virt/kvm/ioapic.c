@@ -73,12 +73,9 @@ static unsigned long ioapic_read_indirect(struct kvm_ioapic *ioapic,
 			u32 redir_index = (ioapic->ioregsel - 0x10) >> 1;
 			u64 redir_content;
 
-			if (redir_index < IOAPIC_NUM_PINS)
-				redir_content =
-					ioapic->redirtbl[redir_index].bits;
-			else
-				redir_content = ~0ULL;
+			ASSERT(redir_index < IOAPIC_NUM_PINS);
 
+			redir_content = ioapic->redirtbl[redir_index].bits;
 			result = (ioapic->ioregsel & 0x1) ?
 			    (redir_content >> 32) & 0xffffffff :
 			    redir_content & 0xffffffff;
@@ -257,13 +254,17 @@ static void __kvm_ioapic_update_eoi(struct kvm_ioapic *ioapic, int vector,
 	}
 }
 
+bool kvm_ioapic_handles_vector(struct kvm *kvm, int vector)
+{
+	struct kvm_ioapic *ioapic = kvm->arch.vioapic;
+	smp_rmb();
+	return test_bit(vector, ioapic->handled_vectors);
+}
+
 void kvm_ioapic_update_eoi(struct kvm *kvm, int vector, int trigger_mode)
 {
 	struct kvm_ioapic *ioapic = kvm->arch.vioapic;
 
-	smp_rmb();
-	if (!test_bit(vector, ioapic->handled_vectors))
-		return;
 	spin_lock(&ioapic->lock);
 	__kvm_ioapic_update_eoi(ioapic, vector, trigger_mode);
 	spin_unlock(&ioapic->lock);

@@ -142,8 +142,6 @@ EXPORT_PER_CPU_SYMBOL_GPL(gdt_page);
 
 static int __init x86_xsave_setup(char *s)
 {
-	if (strlen(s))
-		return 0;
 	setup_clear_cpu_cap(X86_FEATURE_XSAVE);
 	setup_clear_cpu_cap(X86_FEATURE_XSAVEOPT);
 	return 1;
@@ -1103,14 +1101,20 @@ int is_debug_stack(unsigned long addr)
 		 addr > (__get_cpu_var(debug_stack_addr) - DEBUG_STKSZ));
 }
 
+static DEFINE_PER_CPU(u32, debug_stack_use_ctr);
+
 void debug_stack_set_zero(void)
 {
+	this_cpu_inc(debug_stack_use_ctr);
 	load_idt((const struct desc_ptr *)&nmi_idt_descr);
 }
 
 void debug_stack_reset(void)
 {
-	load_idt((const struct desc_ptr *)&idt_descr);
+	if (WARN_ON(!this_cpu_read(debug_stack_use_ctr)))
+		return;
+	if (this_cpu_dec_return(debug_stack_use_ctr) == 0)
+		load_idt((const struct desc_ptr *)&idt_descr);
 }
 
 #else	/* CONFIG_X86_64 */
@@ -1187,7 +1191,7 @@ void __cpuinit cpu_init(void)
 	oist = &per_cpu(orig_ist, cpu);
 
 #ifdef CONFIG_NUMA
-	if (cpu != 0 && percpu_read(numa_node) == 0 &&
+	if (cpu != 0 && this_cpu_read(numa_node) == 0 &&
 	    early_cpu_to_node(cpu) != NUMA_NO_NODE)
 		set_numa_node(early_cpu_to_node(cpu));
 #endif
@@ -1254,7 +1258,7 @@ void __cpuinit cpu_init(void)
 	load_sp0(t, &current->thread);
 	set_tss_desc(cpu, t);
 	load_TR_desc();
-	load_mm_ldt(&init_mm);
+	load_LDT(&init_mm.context);
 
 	clear_all_debug_regs();
 	dbg_restore_debug_regs();
@@ -1302,7 +1306,7 @@ void __cpuinit cpu_init(void)
 	load_sp0(t, thread);
 	set_tss_desc(cpu, t);
 	load_TR_desc();
-	load_mm_ldt(&init_mm);
+	load_LDT(&init_mm.context);
 
 	t->x86_tss.io_bitmap_base = offsetof(struct tss_struct, io_bitmap);
 

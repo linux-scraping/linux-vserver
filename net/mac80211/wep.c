@@ -92,17 +92,26 @@ static u8 *ieee80211_wep_add_iv(struct ieee80211_local *local,
 				int keylen, int keyidx)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	unsigned int hdrlen;
 	u8 *newhdr;
 
 	hdr->frame_control |= cpu_to_le16(IEEE80211_FCTL_PROTECTED);
 
-	if (WARN_ON(skb_headroom(skb) < WEP_IV_LEN))
+	if (WARN_ON(skb_tailroom(skb) < WEP_ICV_LEN ||
+		    skb_headroom(skb) < WEP_IV_LEN))
 		return NULL;
 
 	hdrlen = ieee80211_hdrlen(hdr->frame_control);
 	newhdr = skb_push(skb, WEP_IV_LEN);
 	memmove(newhdr, newhdr + WEP_IV_LEN, hdrlen);
+
+	/* the HW only needs room for the IV, but not the actual IV */
+	if (info->control.hw_key &&
+	    (info->control.hw_key->flags & IEEE80211_KEY_FLAG_PUT_IV_SPACE))
+		return newhdr + hdrlen;
+
+	skb_set_network_header(skb, skb_network_offset(skb) + WEP_IV_LEN);
 	ieee80211_wep_get_iv(local, keylen, keyidx, newhdr + hdrlen);
 	return newhdr + hdrlen;
 }
@@ -158,9 +167,6 @@ int ieee80211_wep_encrypt(struct ieee80211_local *local,
 	u8 *iv;
 	size_t len;
 	u8 rc4key[3 + WLAN_KEY_LEN_WEP104];
-
-	if (WARN_ON(skb_tailroom(skb) < WEP_ICV_LEN))
-		return -1;
 
 	iv = ieee80211_wep_add_iv(local, skb, keylen, keyidx);
 	if (!iv)
@@ -315,14 +321,15 @@ ieee80211_crypto_wep_decrypt(struct ieee80211_rx_data *rx)
 static int wep_encrypt_skb(struct ieee80211_tx_data *tx, struct sk_buff *skb)
 {
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+	struct ieee80211_key_conf *hw_key = info->control.hw_key;
 
-	if (!info->control.hw_key) {
+	if (!hw_key) {
 		if (ieee80211_wep_encrypt(tx->local, skb, tx->key->conf.key,
 					  tx->key->conf.keylen,
 					  tx->key->conf.keyidx))
 			return -1;
-	} else if (info->control.hw_key->flags &
-			IEEE80211_KEY_FLAG_GENERATE_IV) {
+	} else if ((hw_key->flags & IEEE80211_KEY_FLAG_GENERATE_IV) ||
+		   (hw_key->flags & IEEE80211_KEY_FLAG_PUT_IV_SPACE)) {
 		if (!ieee80211_wep_add_iv(tx->local, skb,
 					  tx->key->conf.keylen,
 					  tx->key->conf.keyidx))

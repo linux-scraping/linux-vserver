@@ -226,10 +226,10 @@ create_elf_tables(struct linux_binprm *bprm, struct elfhdr *exec,
 	NEW_AUX_ENT(AT_BASE, interp_load_addr);
 	NEW_AUX_ENT(AT_FLAGS, 0);
 	NEW_AUX_ENT(AT_ENTRY, exec->e_entry);
-	NEW_AUX_ENT(AT_UID, cred->uid);
-	NEW_AUX_ENT(AT_EUID, cred->euid);
-	NEW_AUX_ENT(AT_GID, cred->gid);
-	NEW_AUX_ENT(AT_EGID, cred->egid);
+	NEW_AUX_ENT(AT_UID, from_kuid_munged(cred->user_ns, cred->uid));
+	NEW_AUX_ENT(AT_EUID, from_kuid_munged(cred->user_ns, cred->euid));
+	NEW_AUX_ENT(AT_GID, from_kgid_munged(cred->user_ns, cred->gid));
+	NEW_AUX_ENT(AT_EGID, from_kgid_munged(cred->user_ns, cred->egid));
  	NEW_AUX_ENT(AT_SECURE, security_bprm_secureexec(bprm));
 	NEW_AUX_ENT(AT_RANDOM, (elf_addr_t)(unsigned long)u_rand_bytes);
 	NEW_AUX_ENT(AT_EXECFN, bprm->exec);
@@ -329,7 +329,6 @@ static unsigned long elf_map(struct file *filep, unsigned long addr,
 	if (!size)
 		return addr;
 
-	down_write(&current->mm->mmap_sem);
 	/*
 	* total_size is the size of the ELF (interpreter) image.
 	* The _first_ mmap needs to know the full size, otherwise
@@ -340,13 +339,12 @@ static unsigned long elf_map(struct file *filep, unsigned long addr,
 	*/
 	if (total_size) {
 		total_size = ELF_PAGEALIGN(total_size);
-		map_addr = do_mmap(filep, addr, total_size, prot, type, off);
+		map_addr = vm_mmap(filep, addr, total_size, prot, type, off);
 		if (!BAD_ADDR(map_addr))
-			do_munmap(current->mm, map_addr+size, total_size-size);
+			vm_munmap(map_addr+size, total_size-size);
 	} else
-		map_addr = do_mmap(filep, addr, size, prot, type, off);
+		map_addr = vm_mmap(filep, addr, size, prot, type, off);
 
-	up_write(&current->mm->mmap_sem);
 	return(map_addr);
 }
 
@@ -539,12 +537,11 @@ out:
 
 static unsigned long randomize_stack_top(unsigned long stack_top)
 {
-	unsigned long random_variable = 0;
+	unsigned int random_variable = 0;
 
 	if ((current->flags & PF_RANDOMIZE) &&
 		!(current->personality & ADDR_NO_RANDOMIZE)) {
-		random_variable = (unsigned long) get_random_int();
-		random_variable &= STACK_RND_MASK;
+		random_variable = get_random_int() & STACK_RND_MASK;
 		random_variable <<= PAGE_SHIFT;
 	}
 #ifdef CONFIG_STACK_GROWSUP
@@ -742,7 +739,6 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 	    i < loc->elf_ex.e_phnum; i++, elf_ppnt++) {
 		int elf_prot = 0, elf_flags;
 		unsigned long k, vaddr;
-		unsigned long total_size = 0;
 
 		if (elf_ppnt->p_type != PT_LOAD)
 			continue;
@@ -806,16 +802,10 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 #else
 			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
 #endif
-			total_size = total_mapping_size(elf_phdata,
-							loc->elf_ex.e_phnum);
-			if (!total_size) {
-				error = -EINVAL;
-				goto out_free_dentry;
-			}
 		}
 
 		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-				elf_prot, elf_flags, total_size);
+				elf_prot, elf_flags, 0);
 		if (BAD_ADDR(error)) {
 			send_sig(SIGKILL, current, 0);
 			retval = IS_ERR((void *)error) ?
@@ -1364,8 +1354,8 @@ static int fill_psinfo(struct elf_prpsinfo *psinfo, struct task_struct *p,
 	psinfo->pr_flag = p->flags;
 	rcu_read_lock();
 	cred = __task_cred(p);
-	SET_UID(psinfo->pr_uid, cred->uid);
-	SET_GID(psinfo->pr_gid, cred->gid);
+	SET_UID(psinfo->pr_uid, from_kuid_munged(cred->user_ns, cred->uid));
+	SET_GID(psinfo->pr_gid, from_kgid_munged(cred->user_ns, cred->gid));
 	rcu_read_unlock();
 	strncpy(psinfo->pr_fname, p->comm, sizeof(psinfo->pr_fname));
 	
@@ -1706,19 +1696,30 @@ static int elf_note_info_init(struct elf_note_info *info)
 		return 0;
 	info->psinfo = kmalloc(sizeof(*info->psinfo), GFP_KERNEL);
 	if (!info->psinfo)
-		return 0;
+		goto notes_free;
 	info->prstatus = kmalloc(sizeof(*info->prstatus), GFP_KERNEL);
 	if (!info->prstatus)
-		return 0;
+		goto psinfo_free;
 	info->fpu = kmalloc(sizeof(*info->fpu), GFP_KERNEL);
 	if (!info->fpu)
-		return 0;
+		goto prstatus_free;
 #ifdef ELF_CORE_COPY_XFPREGS
 	info->xfpu = kmalloc(sizeof(*info->xfpu), GFP_KERNEL);
 	if (!info->xfpu)
-		return 0;
+		goto fpu_free;
 #endif
 	return 1;
+#ifdef ELF_CORE_COPY_XFPREGS
+ fpu_free:
+	kfree(info->fpu);
+#endif
+ prstatus_free:
+	kfree(info->prstatus);
+ psinfo_free:
+	kfree(info->psinfo);
+ notes_free:
+	kfree(info->notes);
+	return 0;
 }
 
 static int fill_note_info(struct elfhdr *elf, int phdrs,

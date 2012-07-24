@@ -444,7 +444,6 @@ static void async_completed(struct urb *urb)
 	as->status = urb->status;
 	signr = as->signr;
 	if (signr) {
-		memset(&sinfo, 0, sizeof(sinfo));
 		sinfo.si_signo = as->signr;
 		sinfo.si_errno = as->status;
 		sinfo.si_code = SI_ASYNCIO;
@@ -682,25 +681,7 @@ static int check_ctrlrecip(struct dev_state *ps, unsigned int requesttype,
 	index &= 0xff;
 	switch (requesttype & USB_RECIP_MASK) {
 	case USB_RECIP_ENDPOINT:
-		if ((index & ~USB_DIR_IN) == 0)
-			return 0;
 		ret = findintfep(ps->dev, index);
-		if (ret < 0) {
-			/*
-			 * Some not fully compliant Win apps seem to get
-			 * index wrong and have the endpoint number here
-			 * rather than the endpoint address (with the
-			 * correct direction). Win does let this through,
-			 * so we'll not reject it here but leave it to
-			 * the device to not break KVM. But we warn.
-			 */
-			ret = findintfep(ps->dev, index ^ 0x80);
-			if (ret >= 0)
-				dev_info(&ps->dev->dev,
-					"%s: process %i (%s) requesting ep %02x but needs %02x\n",
-					__func__, task_pid_nr(current),
-					current->comm, index, index ^ 0x80);
-		}
 		if (ret >= 0)
 			ret = checkintf(ps, ret);
 		break;
@@ -751,17 +732,6 @@ static int usbdev_open(struct inode *inode, struct file *file)
 	if (imajor(inode) == USB_DEVICE_MAJOR)
 		dev = usbdev_lookup_by_devt(inode->i_rdev);
 
-#ifdef CONFIG_USB_DEVICEFS
-	/* procfs file */
-	if (!dev) {
-		dev = inode->i_private;
-		if (dev && dev->usbfs_dentry &&
-					dev->usbfs_dentry->d_inode == inode)
-			usb_get_dev(dev);
-		else
-			dev = NULL;
-	}
-#endif
 	mutex_unlock(&usbfs_mutex);
 
 	if (!dev)
@@ -1634,14 +1604,10 @@ static int processcompl_compat(struct async *as, void __user * __user *arg)
 	void __user *addr = as->userurb;
 	unsigned int i;
 
-	if (as->userbuffer && urb->actual_length) {
-		if (urb->number_of_packets > 0)		/* Isochronous */
-			i = urb->transfer_buffer_length;
-		else					/* Non-Isoc */
-			i = urb->actual_length;
-		if (copy_to_user(as->userbuffer, urb->transfer_buffer, i))
+	if (as->userbuffer && urb->actual_length)
+		if (copy_to_user(as->userbuffer, urb->transfer_buffer,
+				 urb->actual_length))
 			return -EFAULT;
-	}
 	if (put_user(as->status, &userurb->status))
 		return -EFAULT;
 	if (put_user(urb->actual_length, &userurb->actual_length))
@@ -2092,7 +2058,6 @@ static void usbdev_remove(struct usb_device *udev)
 		wake_up_all(&ps->wait);
 		list_del_init(&ps->list);
 		if (ps->discsignr) {
-			memset(&sinfo, 0, sizeof(sinfo));
 			sinfo.si_signo = ps->discsignr;
 			sinfo.si_errno = EPIPE;
 			sinfo.si_code = SI_ASYNCIO;
@@ -2103,44 +2068,13 @@ static void usbdev_remove(struct usb_device *udev)
 	}
 }
 
-#ifdef CONFIG_USB_DEVICE_CLASS
-static struct class *usb_classdev_class;
-
-static int usb_classdev_add(struct usb_device *dev)
-{
-	struct device *cldev;
-
-	cldev = device_create(usb_classdev_class, &dev->dev, dev->dev.devt,
-			      NULL, "usbdev%d.%d", dev->bus->busnum,
-			      dev->devnum);
-	if (IS_ERR(cldev))
-		return PTR_ERR(cldev);
-	dev->usb_classdev = cldev;
-	return 0;
-}
-
-static void usb_classdev_remove(struct usb_device *dev)
-{
-	if (dev->usb_classdev)
-		device_unregister(dev->usb_classdev);
-}
-
-#else
-#define usb_classdev_add(dev)		0
-#define usb_classdev_remove(dev)	do {} while (0)
-
-#endif
-
 static int usbdev_notify(struct notifier_block *self,
 			       unsigned long action, void *dev)
 {
 	switch (action) {
 	case USB_DEVICE_ADD:
-		if (usb_classdev_add(dev))
-			return NOTIFY_BAD;
 		break;
 	case USB_DEVICE_REMOVE:
-		usb_classdev_remove(dev);
 		usbdev_remove(dev);
 		break;
 	}
@@ -2170,21 +2104,6 @@ int __init usb_devio_init(void)
 		       USB_DEVICE_MAJOR);
 		goto error_cdev;
 	}
-#ifdef CONFIG_USB_DEVICE_CLASS
-	usb_classdev_class = class_create(THIS_MODULE, "usb_device");
-	if (IS_ERR(usb_classdev_class)) {
-		printk(KERN_ERR "Unable to register usb_device class\n");
-		retval = PTR_ERR(usb_classdev_class);
-		cdev_del(&usb_device_cdev);
-		usb_classdev_class = NULL;
-		goto out;
-	}
-	/* devices of this class shadow the major:minor of their parent
-	 * device, so clear ->dev_kobj to prevent adding duplicate entries
-	 * to /sys/dev
-	 */
-	usb_classdev_class->dev_kobj = NULL;
-#endif
 	usb_register_notify(&usbdev_nb);
 out:
 	return retval;
@@ -2197,9 +2116,6 @@ error_cdev:
 void usb_devio_cleanup(void)
 {
 	usb_unregister_notify(&usbdev_nb);
-#ifdef CONFIG_USB_DEVICE_CLASS
-	class_destroy(usb_classdev_class);
-#endif
 	cdev_del(&usb_device_cdev);
 	unregister_chrdev_region(USB_DEVICE_DEV, USB_DEVICE_MAX);
 }

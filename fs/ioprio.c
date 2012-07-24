@@ -38,8 +38,8 @@ int set_task_ioprio(struct task_struct *task, int ioprio)
 
 	rcu_read_lock();
 	tcred = __task_cred(task);
-	if (tcred->uid != cred->euid &&
-	    tcred->uid != cred->uid && !capable(CAP_SYS_NICE)) {
+	if (!uid_eq(tcred->uid, cred->euid) &&
+	    !uid_eq(tcred->uid, cred->uid) && !capable(CAP_SYS_NICE)) {
 		rcu_read_unlock();
 		return -EPERM;
 	}
@@ -51,7 +51,7 @@ int set_task_ioprio(struct task_struct *task, int ioprio)
 
 	ioc = get_task_io_context(task, GFP_ATOMIC, NUMA_NO_NODE);
 	if (ioc) {
-		ioc_ioprio_changed(ioc, ioprio);
+		ioc->ioprio = ioprio;
 		put_io_context(ioc);
 	}
 
@@ -66,6 +66,7 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 	struct task_struct *p, *g;
 	struct user_struct *user;
 	struct pid *pgrp;
+	kuid_t uid;
 	int ret;
 
 	switch (class) {
@@ -113,16 +114,19 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
 			} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);
 			break;
 		case IOPRIO_WHO_USER:
+			uid = make_kuid(current_user_ns(), who);
+			if (!uid_valid(uid))
+				break;
 			if (!who)
 				user = current_user();
 			else
-				user = find_user(who);
+				user = find_user(uid);
 
 			if (!user)
 				break;
 
 			do_each_thread(g, p) {
-				if (__task_cred(p)->uid != who)
+				if (!uid_eq(task_uid(p), uid))
 					continue;
 				ret = set_task_ioprio(p, ioprio);
 				if (ret)
@@ -156,16 +160,14 @@ out:
 
 int ioprio_best(unsigned short aprio, unsigned short bprio)
 {
-	unsigned short aclass;
-	unsigned short bclass;
+	unsigned short aclass = IOPRIO_PRIO_CLASS(aprio);
+	unsigned short bclass = IOPRIO_PRIO_CLASS(bprio);
 
-	if (!ioprio_valid(aprio))
-		aprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, IOPRIO_NORM);
-	if (!ioprio_valid(bprio))
-		bprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, IOPRIO_NORM);
+	if (aclass == IOPRIO_CLASS_NONE)
+		aclass = IOPRIO_CLASS_BE;
+	if (bclass == IOPRIO_CLASS_NONE)
+		bclass = IOPRIO_CLASS_BE;
 
-	aclass = IOPRIO_PRIO_CLASS(aprio);
-	bclass = IOPRIO_PRIO_CLASS(bprio);
 	if (aclass == bclass)
 		return min(aprio, bprio);
 	if (aclass > bclass)
@@ -179,6 +181,7 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
 	struct task_struct *g, *p;
 	struct user_struct *user;
 	struct pid *pgrp;
+	kuid_t uid;
 	int ret = -ESRCH;
 	int tmpio;
 
@@ -210,16 +213,17 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
 			} while_each_pid_thread(pgrp, PIDTYPE_PGID, p);
 			break;
 		case IOPRIO_WHO_USER:
+			uid = make_kuid(current_user_ns(), who);
 			if (!who)
 				user = current_user();
 			else
-				user = find_user(who);
+				user = find_user(uid);
 
 			if (!user)
 				break;
 
 			do_each_thread(g, p) {
-				if (__task_cred(p)->uid != user->uid)
+				if (!uid_eq(task_uid(p), user->uid))
 					continue;
 				tmpio = get_task_ioprio(p);
 				if (tmpio < 0)
