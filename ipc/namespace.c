@@ -47,6 +47,7 @@ static struct ipc_namespace *create_ipc_ns(struct user_namespace *user_ns)
 	ipcns_notify(IPCNS_CREATED);
 	register_ipcns_notifier(ns);
 
+	// ns->user_ns = get_user_ns(task_cred_xxx(tsk, user_ns));
 	ns->user_ns = get_user_ns(user_ns);
 
 	return ns;

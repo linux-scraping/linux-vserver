@@ -12,14 +12,15 @@
 #include <linux/module.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/auth.h>
+#include <linux/user_namespace.h>
 #include <linux/vs_tag.h>
 
 #define NFS_NGROUPS	16
 
 struct unx_cred {
 	struct rpc_cred		uc_base;
-	gid_t			uc_gid;
 	tag_t			uc_tag;
+	gid_t			uc_gid;
 	gid_t			uc_gids[NFS_NGROUPS];
 };
 #define uc_uid			uc_base.cr_uid
@@ -81,8 +82,11 @@ unx_create_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 
 	cred->uc_gid = acred->gid;
 	cred->uc_tag = acred->tag;
-	for (i = 0; i < groups; i++)
-		cred->uc_gids[i] = GROUP_AT(acred->group_info, i);
+	for (i = 0; i < groups; i++) {
+		gid_t gid;
+		gid = from_kgid(&init_user_ns, GROUP_AT(acred->group_info, i));
+		cred->uc_gids[i] = gid;
+	}
 	if (i < NFS_NGROUPS)
 		cred->uc_gids[i] = NOGROUP;
 
@@ -131,9 +135,12 @@ unx_match(struct auth_cred *acred, struct rpc_cred *rcred, int flags)
 		groups = acred->group_info->ngroups;
 	if (groups > NFS_NGROUPS)
 		groups = NFS_NGROUPS;
-	for (i = 0; i < groups ; i++)
-		if (cred->uc_gids[i] != GROUP_AT(acred->group_info, i))
+	for (i = 0; i < groups ; i++) {
+		gid_t gid;
+		gid = from_kgid(&init_user_ns, GROUP_AT(acred->group_info, i));
+		if (cred->uc_gids[i] != gid)
 			return 0;
+	}
 	if (groups < NFS_NGROUPS &&
 	    cred->uc_gids[groups] != NOGROUP)
 		return 0;

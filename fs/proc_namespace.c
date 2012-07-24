@@ -23,12 +23,12 @@ static unsigned mounts_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &p->ns->poll, wait);
 
-	br_read_lock(vfsmount_lock);
+	br_read_lock(&vfsmount_lock);
 	if (p->m.poll_event != ns->event) {
 		p->m.poll_event = ns->event;
 		res |= POLLERR | POLLPRI;
 	}
-	br_read_unlock(vfsmount_lock);
+	br_read_unlock(&vfsmount_lock);
 
 	return res;
 }
@@ -93,7 +93,7 @@ static int mnt_is_reachable(struct vfsmount *vfsmnt)
 	if (mnt == mnt->mnt_ns->root)
 		return 1;
 
-	br_read_lock(vfsmount_lock);
+	br_read_lock(&vfsmount_lock);
 	root = current->fs->root;
 	root_mnt = real_mount(root.mnt);
 	point = root.dentry;
@@ -105,7 +105,7 @@ static int mnt_is_reachable(struct vfsmount *vfsmnt)
 
 	ret = (mnt == root_mnt) && is_subdir(point, root.dentry);
 
-	br_read_unlock(vfsmount_lock);
+	br_read_unlock(&vfsmount_lock);
 
 	return ret;
 }

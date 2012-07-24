@@ -128,7 +128,7 @@ static struct nsproxy *create_new_namespaces(unsigned long flags,
 			struct task_struct *tsk, struct fs_struct *new_fs)
 {
 	return unshare_namespaces(flags, tsk->nsproxy,
-		new_fs, task_cred_xxx(tsk, user)->user_ns,
+		new_fs, task_cred_xxx(tsk, user_ns),
 		task_active_pid_ns(tsk));
 }
 

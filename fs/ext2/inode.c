@@ -91,7 +91,7 @@ void ext2_evict_inode(struct inode * inode)
 	}
 
 	invalidate_inode_buffers(inode);
-	end_writeback(inode);
+	clear_inode(inode);
 
 	ext2_discard_reservation(inode);
 	rsv = EXT2_I(inode)->i_block_alloc_info;
@@ -1318,9 +1318,9 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	struct ext2_inode *raw_inode;
 	struct inode *inode;
 	long ret = -EIO;
-	uid_t uid;
-	gid_t gid;
 	int n;
+	uid_t i_uid;
+	gid_t i_gid;
 
 	inode = iget_locked(sb, ino);
 	if (!inode)
@@ -1338,15 +1338,15 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	}
 
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
-	uid = (uid_t)le16_to_cpu(raw_inode->i_uid_low);
-	gid = (gid_t)le16_to_cpu(raw_inode->i_gid_low);
+	i_uid = (uid_t)le16_to_cpu(raw_inode->i_uid_low);
+	i_gid = (gid_t)le16_to_cpu(raw_inode->i_gid_low);
 	if (!(test_opt (inode->i_sb, NO_UID32))) {
-		uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
-		gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
+		i_uid |= le16_to_cpu(raw_inode->i_uid_high) << 16;
+		i_gid |= le16_to_cpu(raw_inode->i_gid_high) << 16;
 	}
-	inode->i_uid = INOTAG_UID(DX_TAG(inode), uid, gid);
-	inode->i_gid = INOTAG_GID(DX_TAG(inode), uid, gid);
-	inode->i_tag = INOTAG_TAG(DX_TAG(inode), uid, gid,
+	i_uid_write(inode, INOTAG_UID(DX_TAG(inode), i_uid, i_gid));
+	i_gid_write(inode, INOTAG_GID(DX_TAG(inode), i_uid, i_gid));
+	inode->i_tag = INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
 		le16_to_cpu(raw_inode->i_raw_tag));
 	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
@@ -1445,8 +1445,8 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	struct super_block *sb = inode->i_sb;
 	ino_t ino = inode->i_ino;
-	uid_t uid = TAGINO_UID(DX_TAG(inode), inode->i_uid, inode->i_tag);
-	gid_t gid = TAGINO_GID(DX_TAG(inode), inode->i_gid, inode->i_tag);
+	uid_t uid = TAGINO_UID(DX_TAG(inode), i_uid_read(inode), inode->i_tag);
+	gid_t gid = TAGINO_GID(DX_TAG(inode), i_gid_read(inode), inode->i_tag);
 	struct buffer_head * bh;
 	struct ext2_inode * raw_inode = ext2_get_inode(sb, ino, &bh);
 	int n;
@@ -1564,8 +1564,8 @@ int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if (is_quota_modification(inode, iattr))
 		dquot_initialize(inode);
-	if ((iattr->ia_valid & ATTR_UID && iattr->ia_uid != inode->i_uid) ||
-	    (iattr->ia_valid & ATTR_GID && iattr->ia_gid != inode->i_gid) ||
+	if ((iattr->ia_valid & ATTR_UID && !uid_eq(iattr->ia_uid, inode->i_uid)) ||
+	    (iattr->ia_valid & ATTR_GID && !gid_eq(iattr->ia_gid, inode->i_gid)) ||
 	    (iattr->ia_valid & ATTR_TAG && iattr->ia_tag != inode->i_tag)) {
 		error = dquot_transfer(inode, iattr);
 		if (error)
