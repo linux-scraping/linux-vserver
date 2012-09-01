@@ -72,7 +72,8 @@ struct net;
 #define SOCK_NOSPACE		2
 #define SOCK_PASSCRED		3
 #define SOCK_PASSSEC		4
-#define SOCK_USER_SOCKET	5
+#define SOCK_EXTERNALLY_ALLOCATED 5
+#define SOCK_USER_SOCKET	6
 
 #ifndef ARCH_HAS_SOCKET_TYPES
 /**
