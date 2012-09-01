@@ -359,7 +359,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 			if (!v6_addr_in_nx_info(sk->sk_nx_info, &addr->sin6_addr, -1)) {
 				err = -EADDRNOTAVAIL;
-				goto out;
+				goto out_unlock;
 			}
 
 			/* ipv4 addr of the socket is invalid.  Only the
