@@ -28,7 +28,8 @@ static int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 {
 	int ret;
 
-	if ((ret = call_usermodehelper_fns(name, argv, envp, sync,
+	if ((ret = call_usermodehelper_fns(name, argv, envp,
+		sync ? UMH_WAIT_PROC : UMH_WAIT_EXEC,
 		vshelper_init, NULL, NULL))) {
 		printk(KERN_WARNING "%s: (%s %s) returned %s with %d\n",
 			name, argv[1], argv[2],
@@ -67,11 +68,11 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 		return -EAGAIN;
 	vxi->vx_state |= VXS_HELPER;
 
-	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
+	snprintf(id_buf, sizeof(id_buf), "%d", vxi->vx_id);
 
-	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
-	snprintf(uid_buf, sizeof(uid_buf)-1, "VS_UID=%d", current_uid());
-	snprintf(pid_buf, sizeof(pid_buf)-1, "VS_PID=%d", current->pid);
+	snprintf(cmd_buf, sizeof(cmd_buf), "VS_CMD=%08x", cmd);
+	snprintf(uid_buf, sizeof(uid_buf), "VS_UID=%d", current_uid());
+	snprintf(pid_buf, sizeof(pid_buf), "VS_PID=%d", current->pid);
 
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
@@ -173,8 +174,8 @@ long vs_state_change(struct vx_info *vxi, unsigned int cmd)
 	if (!vx_info_flags(vxi, VXF_SC_HELPER, 0))
 		return 0;
 
-	snprintf(id_buf, sizeof(id_buf)-1, "%d", vxi->vx_id);
-	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
+	snprintf(id_buf, sizeof(id_buf), "%d", vxi->vx_id);
+	snprintf(cmd_buf, sizeof(cmd_buf), "VS_CMD=%08x", cmd);
 
 	switch (cmd) {
 	case VSC_STARTUP:
@@ -209,8 +210,8 @@ long vs_net_change(struct nx_info *nxi, unsigned int cmd)
 	if (!nx_info_flags(nxi, NXF_SC_HELPER, 0))
 		return 0;
 
-	snprintf(id_buf, sizeof(id_buf)-1, "%d", nxi->nx_id);
-	snprintf(cmd_buf, sizeof(cmd_buf)-1, "VS_CMD=%08x", cmd);
+	snprintf(id_buf, sizeof(id_buf), "%d", nxi->nx_id);
+	snprintf(cmd_buf, sizeof(cmd_buf), "VS_CMD=%08x", cmd);
 
 	switch (cmd) {
 	case VSC_NETUP:
