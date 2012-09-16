@@ -263,6 +263,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	rcu_read_unlock();
 	if (!mcg)
 		goto out;
 
@@ -276,7 +277,6 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	val->totalhigh = 0;
 	val->freehigh = 0;
 out:
-	rcu_read_unlock();
 #endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
 	return;
 }
@@ -291,6 +291,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	rcu_read_unlock();
 	if (!mcg)
 		goto out;
 
@@ -316,7 +317,6 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->freeswap = (swap_usage < swap_limit) ?
 		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
 out:
-	rcu_read_unlock();
 #else	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
 	val->totalswap = 0;
 	val->freeswap = 0;
@@ -333,12 +333,12 @@ long vx_vsi_cached(struct sysinfo *val)
 
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	rcu_read_unlock();
 	if (!mcg)
 		goto out;
 
 	cache = mem_cgroup_stat_read_cache(mcg);
 out:
-	rcu_read_unlock();
 #endif
 	return cache;
 }
