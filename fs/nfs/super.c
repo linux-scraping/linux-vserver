@@ -2936,4 +2936,6 @@ out:
 	return error;
 }
 
+MODULE_ALIAS("nfs4");
+
 #endif /* CONFIG_NFS_V4 */
