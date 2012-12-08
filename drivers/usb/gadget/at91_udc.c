@@ -1632,6 +1632,7 @@ static int at91_start(struct usb_gadget *gadget,
 	udc = container_of(gadget, struct at91_udc, gadget);
 	udc->driver = driver;
 	udc->gadget.dev.driver = &driver->driver;
+	udc->gadget.dev.of_node = udc->pdev->dev.of_node;
 	udc->enabled = 1;
 	udc->selfpowered = 1;
 
@@ -1698,7 +1699,7 @@ static int __devinit at91udc_probe(struct platform_device *pdev)
 	int		retval;
 	struct resource	*res;
 
-	if (!dev->platform_data) {
+	if (!dev->platform_data && !pdev->dev.of_node) {
 		/* small (so we copy it) but critical! */
 		DBG("missing platform_data\n");
 		return -ENODEV;

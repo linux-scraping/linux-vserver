@@ -118,6 +118,8 @@ enum {
 };
 
 struct via_spec {
+	struct hda_gen_spec gen;
+
 	/* codec parameterization */
 	const struct snd_kcontrol_new *mixers[6];
 	unsigned int num_mixers;
@@ -246,6 +248,7 @@ static struct via_spec * via_new_spec(struct hda_codec *codec)
 	/* VT1708BCE & VT1708S are almost same */
 	if (spec->codec_type == VT1708BCE)
 		spec->codec_type = VT1708S;
+	snd_hda_gen_init(&spec->gen);
 	return spec;
 }
 
@@ -1628,6 +1631,7 @@ static void via_free(struct hda_codec *codec)
 	vt1708_stop_hp_work(spec);
 	kfree(spec->bind_cap_vol);
 	kfree(spec->bind_cap_sw);
+	snd_hda_gen_free(&spec->gen);
 	kfree(spec);
 }
 
@@ -1672,7 +1676,8 @@ static void via_hp_automute(struct hda_codec *codec)
 	struct via_spec *spec = codec->spec;
 
 	if (!spec->hp_independent_mode && spec->autocfg.hp_pins[0] &&
-	    (spec->codec_type != VT1708 || spec->vt1708_jack_detect))
+	    (spec->codec_type != VT1708 || spec->vt1708_jack_detect) &&
+	    is_jack_detectable(codec, spec->autocfg.hp_pins[0]))
 		present = snd_hda_jack_detect(codec, spec->autocfg.hp_pins[0]);
 
 	if (spec->smart51_enabled)
@@ -1748,10 +1753,18 @@ static void via_unsol_event(struct hda_codec *codec,
 }
 
 #ifdef CONFIG_PM
-static int via_suspend(struct hda_codec *codec, pm_message_t state)
+static int via_suspend(struct hda_codec *codec)
 {
 	struct via_spec *spec = codec->spec;
 	vt1708_stop_hp_work(spec);
+
+	if (spec->codec_type == VT1802) {
+		/* Fix pop noise on headphones */
+		int i;
+		for (i = 0; i < spec->autocfg.hp_outs; i++)
+			snd_hda_set_pin_ctl(codec, spec->autocfg.hp_pins[i], 0);
+	}
+
 	return 0;
 }
 #endif

@@ -1182,11 +1182,10 @@ static int __devexit loopback_remove(struct platform_device *devptr)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int loopback_suspend(struct platform_device *pdev,
-				pm_message_t state)
+#ifdef CONFIG_PM_SLEEP
+static int loopback_suspend(struct device *pdev)
 {
-	struct snd_card *card = platform_get_drvdata(pdev);
+	struct snd_card *card = dev_get_drvdata(pdev);
 	struct loopback *loopback = card->private_data;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
@@ -1196,13 +1195,18 @@ static int loopback_suspend(struct platform_device *pdev,
 	return 0;
 }
 	
-static int loopback_resume(struct platform_device *pdev)
+static int loopback_resume(struct device *pdev)
 {
-	struct snd_card *card = platform_get_drvdata(pdev);
+	struct snd_card *card = dev_get_drvdata(pdev);
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D0);
 	return 0;
 }
+
+static SIMPLE_DEV_PM_OPS(loopback_pm, loopback_suspend, loopback_resume);
+#define LOOPBACK_PM_OPS	&loopback_pm
+#else
+#define LOOPBACK_PM_OPS	NULL
 #endif
 
 #define SND_LOOPBACK_DRIVER	"snd_aloop"
@@ -1210,12 +1214,10 @@ static int loopback_resume(struct platform_device *pdev)
 static struct platform_driver loopback_driver = {
 	.probe		= loopback_probe,
 	.remove		= __devexit_p(loopback_remove),
-#ifdef CONFIG_PM
-	.suspend	= loopback_suspend,
-	.resume		= loopback_resume,
-#endif
 	.driver		= {
-		.name	= SND_LOOPBACK_DRIVER
+		.name	= SND_LOOPBACK_DRIVER,
+		.owner	= THIS_MODULE,
+		.pm	= LOOPBACK_PM_OPS,
 	},
 };
 

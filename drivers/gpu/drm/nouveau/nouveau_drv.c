@@ -29,6 +29,7 @@
 #include "drm.h"
 #include "drm_crtc_helper.h"
 #include "nouveau_drv.h"
+#include "nouveau_abi16.h"
 #include "nouveau_hw.h"
 #include "nouveau_fb.h"
 #include "nouveau_fbcon.h"
@@ -187,11 +188,13 @@ nouveau_pci_suspend(struct pci_dev *pdev, pm_message_t pm_state)
 	if (dev->switch_power_state == DRM_SWITCH_POWER_OFF)
 		return 0;
 
-	NV_INFO(dev, "Disabling display...\n");
-	nouveau_display_fini(dev);
+	if (dev->mode_config.num_crtc) {
+		NV_INFO(dev, "Disabling display...\n");
+		nouveau_display_fini(dev);
 
-	NV_INFO(dev, "Disabling fbcon...\n");
-	nouveau_fbcon_set_suspend(dev, 1);
+		NV_INFO(dev, "Disabling fbcon...\n");
+		nouveau_fbcon_set_suspend(dev, 1);
+	}
 
 	NV_INFO(dev, "Unpinning framebuffer(s)...\n");
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
@@ -358,10 +361,12 @@ nouveau_pci_resume(struct pci_dev *pdev)
 			NV_ERROR(dev, "Could not pin/map cursor.\n");
 	}
 
-	nouveau_fbcon_set_suspend(dev, 0);
-	nouveau_fbcon_zfill_all(dev);
+	if (dev->mode_config.num_crtc) {
+		nouveau_fbcon_set_suspend(dev, 0);
+		nouveau_fbcon_zfill_all(dev);
 
-	nouveau_display_init(dev);
+		nouveau_display_init(dev);
+	}
 
 	/* Force CLUT to get re-loaded during modeset */
 	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
@@ -383,6 +388,21 @@ nouveau_pci_resume(struct pci_dev *pdev)
 
 	return 0;
 }
+
+static struct drm_ioctl_desc nouveau_ioctls[] = {
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GETPARAM, nouveau_abi16_ioctl_getparam, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_SETPARAM, nouveau_abi16_ioctl_setparam, DRM_UNLOCKED|DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_CHANNEL_ALLOC, nouveau_abi16_ioctl_channel_alloc, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_CHANNEL_FREE, nouveau_abi16_ioctl_channel_free, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GROBJ_ALLOC, nouveau_abi16_ioctl_grobj_alloc, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_NOTIFIEROBJ_ALLOC, nouveau_abi16_ioctl_notifierobj_alloc, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GPUOBJ_FREE, nouveau_abi16_ioctl_gpuobj_free, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GEM_NEW, nouveau_gem_ioctl_new, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GEM_PUSHBUF, nouveau_gem_ioctl_pushbuf, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GEM_CPU_PREP, nouveau_gem_ioctl_cpu_prep, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GEM_CPU_FINI, nouveau_gem_ioctl_cpu_fini, DRM_UNLOCKED|DRM_AUTH),
+	DRM_IOCTL_DEF_DRV(NOUVEAU_GEM_INFO, nouveau_gem_ioctl_info, DRM_UNLOCKED|DRM_AUTH),
+};
 
 static const struct file_operations nouveau_driver_fops = {
 	.owner = THIS_MODULE,
@@ -422,7 +442,6 @@ static struct drm_driver driver = {
 	.get_vblank_counter = drm_vblank_count,
 	.enable_vblank = nouveau_vblank_enable,
 	.disable_vblank = nouveau_vblank_disable,
-	.reclaim_buffers = drm_core_reclaim_buffers,
 	.ioctls = nouveau_ioctls,
 	.fops = &nouveau_driver_fops,
 
@@ -463,15 +482,13 @@ static struct pci_driver nouveau_pci_driver = {
 
 static int __init nouveau_init(void)
 {
-	driver.num_ioctls = nouveau_max_ioctl;
+	driver.num_ioctls = ARRAY_SIZE(nouveau_ioctls);
 
 	if (nouveau_modeset == -1) {
 #ifdef CONFIG_VGA_CONSOLE
 		if (vgacon_text_force())
 			nouveau_modeset = 0;
-		else
 #endif
-			nouveau_modeset = 1;
 	}
 
 	if (!nouveau_modeset)

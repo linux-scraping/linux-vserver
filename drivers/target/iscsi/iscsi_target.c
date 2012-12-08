@@ -1402,8 +1402,10 @@ static int iscsit_handle_data_out(struct iscsi_conn *conn, unsigned char *buf)
 		spin_unlock_bh(&cmd->istate_lock);
 
 		iscsit_stop_dataout_timer(cmd);
-		return (!ooo_cmdsn) ? transport_generic_handle_data(
-					&cmd->se_cmd) : 0;
+		if (ooo_cmdsn)
+			return 0;
+		target_execute_cmd(&cmd->se_cmd);
+		return 0;
 	} else /* DATAOUT_CANNOT_RECOVER */
 		return -1;
 
@@ -2672,7 +2674,7 @@ static int iscsit_send_logout_response(
 		 */
 		logout_conn = iscsit_get_conn_from_cid_rcfr(sess,
 				cmd->logout_cid);
-		if ((logout_conn)) {
+		if (logout_conn) {
 			iscsit_connection_reinstatement_rcfr(logout_conn);
 			iscsit_dec_conn_usage_count(logout_conn);
 		}
@@ -3269,7 +3271,6 @@ static int iscsit_build_sendtargets_response(struct iscsi_cmd *cmd)
 		len += 1;
 
 		if ((len + payload_len) > buffer_len) {
-			spin_unlock(&tiqn->tiqn_tpg_lock);
 			end_of_buf = 1;
 			goto eob;
 		}
@@ -3422,6 +3423,7 @@ static int iscsit_send_reject(
 	hdr->opcode		= ISCSI_OP_REJECT;
 	hdr->flags		|= ISCSI_FLAG_CMD_FINAL;
 	hton24(hdr->dlength, ISCSI_HDR_LEN);
+	hdr->ffffffff		= 0xffffffff;
 	cmd->stat_sn		= conn->stat_sn++;
 	hdr->statsn		= cpu_to_be32(cmd->stat_sn);
 	hdr->exp_cmdsn	= cpu_to_be32(conn->sess->exp_cmd_sn);
