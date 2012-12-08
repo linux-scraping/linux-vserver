@@ -20,6 +20,7 @@
 #include <linux/proc_fs.h>
 #include <linux/fs_struct.h>
 #include <linux/mount.h>
+#include <linux/namei.h>
 #include <asm/unistd.h>
 
 #include <linux/vs_context.h>
@@ -379,10 +380,13 @@ struct vx_info *get_proc_vx_info(struct inode *inode)
 	return lookup_vx_info(PROC_I(inode)->fd);
 }
 
-static int proc_xid_revalidate(struct dentry *dentry, struct nameidata *nd)
+static int proc_xid_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode = dentry->d_inode;
 	xid_t xid = PROC_I(inode)->fd;
+
+	if (flags & LOOKUP_RCU)	/* FIXME: can be dropped? */
+		return -ECHILD;
 
 	if (!xid || xid_is_hashed(xid))
 		return 1;
@@ -393,10 +397,13 @@ static int proc_xid_revalidate(struct dentry *dentry, struct nameidata *nd)
 
 /* get and revalidate nx_info/nid */
 
-static int proc_nid_revalidate(struct dentry *dentry, struct nameidata *nd)
+static int proc_nid_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode = dentry->d_inode;
 	nid_t nid = PROC_I(inode)->fd;
+
+	if (flags & LOOKUP_RCU)	/* FIXME: can be dropped? */
+		return -ECHILD;
 
 	if (!nid || nid_is_hashed(nid))
 		return 1;
@@ -578,7 +585,7 @@ static struct dentry *proc_xid_instantiate(struct inode *dir,
 }
 
 static struct dentry *proc_xid_lookup(struct inode *dir,
-	struct dentry *dentry, struct nameidata *nd)
+	struct dentry *dentry, unsigned int flags)
 {
 	struct vs_entry *p = vx_base_stuff;
 	struct dentry *error = ERR_PTR(-ENOENT);
@@ -662,7 +669,7 @@ static struct dentry *proc_nid_instantiate(struct inode *dir,
 }
 
 static struct dentry *proc_nid_lookup(struct inode *dir,
-	struct dentry *dentry, struct nameidata *nd)
+	struct dentry *dentry, unsigned int flags)
 {
 	struct vs_entry *p = nx_base_stuff;
 	struct dentry *error = ERR_PTR(-ENOENT);
@@ -764,7 +771,7 @@ static struct vs_entry vx_virtual_stuff[] = {
 
 
 static struct dentry *proc_virtual_lookup(struct inode *dir,
-	struct dentry *dentry, struct nameidata *nd)
+	struct dentry *dentry, unsigned int flags)
 {
 	struct vs_entry *p = vx_virtual_stuff;
 	struct dentry *error = ERR_PTR(-ENOENT);
@@ -806,7 +813,7 @@ static struct vs_entry nx_virtnet_stuff[] = {
 
 
 static struct dentry *proc_virtnet_lookup(struct inode *dir,
-	struct dentry *dentry, struct nameidata *nd)
+	struct dentry *dentry, unsigned int flags)
 {
 	struct vs_entry *p = nx_virtnet_stuff;
 	struct dentry *error = ERR_PTR(-ENOENT);

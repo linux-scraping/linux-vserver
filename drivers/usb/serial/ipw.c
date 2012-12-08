@@ -209,8 +209,7 @@ static int ipw_open(struct tty_struct *tty, struct usb_serial_port *port)
 	return 0;
 }
 
-/* fake probe - only to allocate data structures */
-static int ipw_probe(struct usb_serial *serial, const struct usb_device_id *id)
+static int ipw_attach(struct usb_serial *serial)
 {
 	struct usb_wwan_intf_private *data;
 
@@ -227,7 +226,6 @@ static void ipw_release(struct usb_serial *serial)
 {
 	struct usb_wwan_intf_private *data = usb_get_serial_data(serial);
 
-	usb_wwan_release(serial);
 	usb_set_serial_data(serial, NULL);
 	kfree(data);
 }
@@ -309,12 +307,12 @@ static struct usb_serial_driver ipw_device = {
 	.description =		"IPWireless converter",
 	.id_table =		id_table,
 	.num_ports =		1,
-	.disconnect =		usb_wwan_disconnect,
 	.open =			ipw_open,
 	.close =		ipw_close,
-	.probe =		ipw_probe,
-	.attach =		usb_wwan_startup,
+	.attach =		ipw_attach,
 	.release =		ipw_release,
+	.port_probe =		usb_wwan_port_probe,
+	.port_remove =		usb_wwan_port_remove,
 	.dtr_rts =		ipw_dtr_rts,
 	.write =		usb_wwan_write,
 };

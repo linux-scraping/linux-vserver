@@ -726,7 +726,7 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		break;
 
 	case SIOCSIFFLAGS:
-		ret = -EACCES;
+		ret = -EPERM;
 		if (!capable(CAP_NET_ADMIN))
 			goto out;
 		break;
@@ -734,7 +734,7 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	case SIOCSIFBRDADDR:	/* Set the broadcast address */
 	case SIOCSIFDSTADDR:	/* Set the destination address */
 	case SIOCSIFNETMASK: 	/* Set the netmask for the interface */
-		ret = -EACCES;
+		ret = -EPERM;
 		if (!capable(CAP_NET_ADMIN))
 			goto out;
 		ret = -EINVAL;
@@ -1513,9 +1513,10 @@ static int devinet_conf_proc(ctl_table *ctl, int write,
 
 		if (cnf == net->ipv4.devconf_dflt)
 			devinet_copy_dflt_conf(net, i);
-		if (i == IPV4_DEVCONF_ACCEPT_LOCAL - 1)
+		if (i == IPV4_DEVCONF_ACCEPT_LOCAL - 1 ||
+		    i == IPV4_DEVCONF_ROUTE_LOCALNET - 1)
 			if ((new_value == 0) && (old_value != 0))
-				rt_cache_flush(net, 0);
+				rt_cache_flush(net);
 	}
 
 	return ret;
@@ -1549,7 +1550,7 @@ static int devinet_sysctl_forward(ctl_table *ctl, int write,
 				dev_disable_lro(idev->dev);
 			}
 			rtnl_unlock();
-			rt_cache_flush(net, 0);
+			rt_cache_flush(net);
 		}
 	}
 
@@ -1566,7 +1567,7 @@ static int ipv4_doint_and_flush(ctl_table *ctl, int write,
 	struct net *net = ctl->extra2;
 
 	if (write && *valp != val)
-		rt_cache_flush(net, 0);
+		rt_cache_flush(net);
 
 	return ret;
 }
@@ -1630,6 +1631,8 @@ static struct devinet_sysctl_table {
 					      "force_igmp_version"),
 		DEVINET_SYSCTL_FLUSHING_ENTRY(PROMOTE_SECONDARIES,
 					      "promote_secondaries"),
+		DEVINET_SYSCTL_FLUSHING_ENTRY(ROUTE_LOCALNET,
+					      "route_localnet"),
 	},
 };
 

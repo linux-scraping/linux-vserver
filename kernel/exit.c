@@ -717,15 +717,25 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 	__acquires(&tasklist_lock)
 {
 	struct pid_namespace *pid_ns = task_active_pid_ns(father);
-	struct task_struct *thread;
+	struct vx_info *vxi = task_get_vx_info(father);
+	struct task_struct *thread = father;
+	struct task_struct *reaper;
 
-	thread = father;
 	while_each_thread(father, thread) {
 		if (thread->flags & PF_EXITING)
 			continue;
 		if (unlikely(pid_ns->child_reaper == father))
 			pid_ns->child_reaper = thread;
-		return thread;
+		reaper = thread;
+		goto out_put;
+	}
+
+	reaper = pid_ns->child_reaper;
+	if (vxi) {
+		BUG_ON(!vxi->vx_reaper);
+		if (vxi->vx_reaper != init_pid_ns.child_reaper &&
+		    vxi->vx_reaper != father)
+			reaper = vxi->vx_reaper;
 	}
 
 	if (unlikely(pid_ns->child_reaper == father)) {
@@ -763,7 +773,9 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 		}
 	}
 
-	return pid_ns->child_reaper;
+out_put:
+	put_vx_info(vxi);
+	return reaper;
 }
 
 /*
@@ -814,10 +826,15 @@ static void forget_original_parent(struct task_struct *father)
 	list_for_each_entry_safe(p, n, &father->children, sibling) {
 		struct task_struct *t = p;
 		do {
-			t->real_parent = reaper;
+			struct task_struct *new_parent = reaper;
+
+			if (unlikely(p == reaper))
+				new_parent = task_active_pid_ns(p)->child_reaper;
+
+			t->real_parent = new_parent;
 			if (t->parent == father) {
 				BUG_ON(t->ptrace);
-				t->parent = t->real_parent;
+				t->parent = new_parent;
 			}
 			if (t->pdeath_signal)
 				group_send_sig_info(t->pdeath_signal,
@@ -959,13 +976,10 @@ void do_exit(long code)
 	exit_signals(tsk);  /* sets PF_EXITING */
 	/*
 	 * tsk->flags are checked in the futex code to protect against
-	 * an exiting task cleaning up the robust pi futexes, and in
-	 * task_work_add() to avoid the race with exit_task_work().
+	 * an exiting task cleaning up the robust pi futexes.
 	 */
 	smp_mb();
 	raw_spin_unlock_wait(&tsk->pi_lock);
-
-	exit_task_work(tsk);
 
 	if (unlikely(in_atomic()))
 		printk(KERN_INFO "note: %s[%d] exited with preempt_count %d\n",
@@ -1001,6 +1015,7 @@ void do_exit(long code)
 	exit_shm(tsk);
 	exit_files(tsk);
 	exit_fs(tsk);
+	exit_task_work(tsk);
 	check_stack_usage();
 	exit_thread();
 
