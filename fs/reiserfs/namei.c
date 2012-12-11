@@ -18,7 +18,6 @@
 #include "acl.h"
 #include "xattr.h"
 #include <linux/quotaops.h>
-#include <linux/vs_tag.h>
 
 #define INC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) { inc_nlink(i); if (i->i_nlink >= REISERFS_LINK_MAX) set_nlink(i, 1); }
 #define DEC_DIR_INODE_NLINK(i) if (i->i_nlink != 1) drop_nlink(i);
@@ -363,7 +362,6 @@ static struct dentry *reiserfs_lookup(struct inode *dir, struct dentry *dentry,
 	if (retval == IO_ERROR) {
 		return ERR_PTR(-EIO);
 	}
-		dx_propagate_tag(nd, inode);
 
 	return d_splice_alias(inode, dentry);
 }

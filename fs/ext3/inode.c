@@ -2943,8 +2943,8 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	}
 	i_uid_write(inode, INOTAG_UID(DX_TAG(inode), i_uid, i_gid));
 	i_gid_write(inode, INOTAG_GID(DX_TAG(inode), i_uid, i_gid));
-	inode->i_tag = INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
-		le16_to_cpu(raw_inode->i_raw_tag));
+	i_tag_write(inode, INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
+		le16_to_cpu(raw_inode->i_raw_tag)));
 	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
 	inode->i_atime.tv_sec = (signed)le32_to_cpu(raw_inode->i_atime);
@@ -3116,8 +3116,10 @@ again:
 
 	ext3_get_inode_flags(ei);
 	raw_inode->i_mode = cpu_to_le16(inode->i_mode);
-	i_uid = TAGINO_UID(DX_TAG(inode), i_uid_read(inode), inode->i_tag);
-	i_gid = TAGINO_GID(DX_TAG(inode), i_gid_read(inode), inode->i_tag);
+	i_uid = TAGINO_UID(DX_TAG(inode),
+		i_uid_read(inode), i_tag_read(inode));
+	i_gid = TAGINO_GID(DX_TAG(inode),
+		i_gid_read(inode), i_tag_read(inode));
 	if(!(test_opt(inode->i_sb, NO_UID32))) {
 		raw_inode->i_uid_low = cpu_to_le16(low_16_bits(i_uid));
 		raw_inode->i_gid_low = cpu_to_le16(low_16_bits(i_gid));
@@ -3143,7 +3145,7 @@ again:
 		raw_inode->i_gid_high = 0;
 	}
 #ifdef CONFIG_TAGGING_INTERN
-	raw_inode->i_raw_tag = cpu_to_le16(inode->i_tag);
+	raw_inode->i_raw_tag = cpu_to_le16(i_tag_read(inode));
 #endif
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
 	disksize = cpu_to_le32(ei->i_disksize);
@@ -3238,7 +3240,7 @@ out_brelse:
  *
  * - Within generic_file_write() for O_SYNC files.
  *   Here, there will be no transaction running. We wait for any running
- *   trasnaction to commit.
+ *   transaction to commit.
  *
  * - Within sys_sync(), kupdate and such.
  *   We wait on commit, if tol to.
@@ -3314,7 +3316,7 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 		dquot_initialize(inode);
 	if ((ia_valid & ATTR_UID && !uid_eq(attr->ia_uid, inode->i_uid)) ||
 	    (ia_valid & ATTR_GID && !gid_eq(attr->ia_gid, inode->i_gid)) ||
-	    (ia_valid & ATTR_TAG && attr->ia_tag != inode->i_tag)) {
+	    (ia_valid & ATTR_TAG && !tag_eq(attr->ia_tag, inode->i_tag))) {
 		handle_t *handle;
 
 		/* (user+group)*(old+new) structure, inode write (sb,

@@ -11,21 +11,6 @@
 #include <linux/pagemap.h>
 #include <linux/compat.h>
 
-
-int reiserfs_sync_flags(struct inode *inode, int flags, int vflags)
-{
-	__u16 sd_attrs = 0;
-
-	inode->i_flags = flags;
-	inode->i_vflags = vflags;
-
-	i_attrs_to_sd_attrs(inode, &sd_attrs);
-	REISERFS_I(inode)->i_attrs = sd_attrs;
-	inode->i_ctime = CURRENT_TIME_SEC;
-	mark_inode_dirty(inode);
-	return 0;
-}
-
 /*
  * reiserfs_ioctl - handler for ioctl for inode
  * supported commands:
@@ -37,7 +22,7 @@ int reiserfs_sync_flags(struct inode *inode, int flags, int vflags)
 long reiserfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct inode *inode = filp->f_path.dentry->d_inode;
-	unsigned int flags, oldflags;
+	unsigned int flags;
 	int err = 0;
 
 	reiserfs_write_lock(inode->i_sb);
@@ -62,7 +47,6 @@ long reiserfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 		flags = REISERFS_I(inode)->i_attrs;
 		i_attrs_to_sd_attrs(inode, (__u16 *) & flags);
-		flags &= REISERFS_FL_USER_VISIBLE;
 		err = put_user(flags, (int __user *)arg);
 		break;
 	case REISERFS_IOC_SETFLAGS:{
@@ -82,10 +66,6 @@ long reiserfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			if (get_user(flags, (int __user *)arg)) {
 				err = -EFAULT;
 				goto setflags_out;
-			}
-			if (IS_BARRIER(inode)) {
-				vxwprintk_task(1, "messing with the barrier.");
-				return -EACCES;
 			}
 			/*
 			 * Is it quota file? Do not allow user to mess with it
@@ -111,10 +91,6 @@ long reiserfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 					goto setflags_out;
 				}
 			}
-
-			oldflags = REISERFS_I(inode)->i_attrs;
-			flags &= REISERFS_FL_USER_MODIFIABLE;
-			flags |= oldflags & ~REISERFS_FL_USER_MODIFIABLE;
 			sd_attrs_to_i_attrs(flags, inode);
 			REISERFS_I(inode)->i_attrs = flags;
 			inode->i_ctime = CURRENT_TIME_SEC;

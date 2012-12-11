@@ -27,6 +27,7 @@
 #include <linux/times.h>
 #include <linux/ptrace.h>
 #include <linux/gfp.h>
+#include <linux/vs_time.h>
 
 #include <asm/uaccess.h>
 
