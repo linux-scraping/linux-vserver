@@ -82,6 +82,8 @@ static inline void mangle(struct seq_file *m, const char *s)
 	seq_escape(m, s, " \t\n\\");
 }
 
+#ifdef	CONFIG_VSERVER_EXTRA_MNT_CHECK
+
 static int mnt_is_reachable(struct vfsmount *vfsmnt)
 {
 	struct path root;
@@ -109,6 +111,10 @@ static int mnt_is_reachable(struct vfsmount *vfsmnt)
 
 	return ret;
 }
+
+#else
+#define	mnt_is_reachable(v)	(1)
+#endif
 
 static void show_type(struct seq_file *m, struct super_block *sb)
 {
