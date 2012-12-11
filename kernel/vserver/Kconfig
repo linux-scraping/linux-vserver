@@ -176,6 +176,15 @@ config	VSERVER_HISTORY_SIZE
 	  This allows you to specify the number of entries in
 	  the per-CPU history buffer.
 
+config	VSERVER_EXTRA_MNT_CHECK
+	bool	"Extra Checks for Reachability"
+	default n
+	help
+	  Set this to yes if you want to do extra checks for
+	  vfsmount reachability in the proc filesystem code.
+	  This shouldn't be required on any setup utilizing
+	  mnt namespaces.
+
 choice
 	prompt	"Quotes used in debug and warn messages"
 	default	QUOTES_ISO8859
