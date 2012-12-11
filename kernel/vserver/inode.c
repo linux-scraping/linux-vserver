@@ -44,7 +44,7 @@ static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint
 		*mask |= IATTR_BARRIER;
 
 	if (IS_TAGGED(in)) {
-		*tag = in->i_tag;
+		*tag = i_tag_read(in);
 		*mask |= IATTR_TAG;
 	}
 
@@ -62,7 +62,7 @@ static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint
 		break;
 
 	case DEVPTS_SUPER_MAGIC:
-		*tag = in->i_tag;
+		*tag = i_tag_read(in);
 		*mask |= IATTR_TAG;
 		break;
 
@@ -426,7 +426,7 @@ void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 		new_tag, (propagate) ? 1 : 0);
 
 	if (propagate)
-		inode->i_tag = new_tag;
+		i_tag_write(inode, new_tag);
 }
 
 #include <linux/module.h>

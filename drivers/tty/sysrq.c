@@ -468,6 +468,7 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	NULL,				/* v */
 	&sysrq_showstate_blocked_op,	/* w */
 	/* x: May be registered on ppc/powerpc for xmon */
+	/* x: May be registered on sparc64 for global PMU dump */
 #ifdef CONFIG_VSERVER_DEBUG
 	&sysrq_showvxinfo_op,		/* x */
 #else

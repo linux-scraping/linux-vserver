@@ -1,7 +1,7 @@
 #ifndef __UM_FS_HOSTFS
 #define __UM_FS_HOSTFS
 
-#include "os.h"
+#include <os.h>
 
 /*
  * These are exactly the same definitions as in fs.h, but the names are
@@ -42,6 +42,7 @@ struct hostfs_iattr {
 	unsigned short	ia_mode;
 	uid_t		ia_uid;
 	gid_t		ia_gid;
+	tag_t		ia_tag;
 	loff_t		ia_size;
 	struct timespec	ia_atime;
 	struct timespec	ia_mtime;

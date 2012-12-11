@@ -131,7 +131,6 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_sb = sb;
 
 	/* essential because of inode slab reuse */
-	inode->i_tag = 0;
 	inode->i_blkbits = sb->s_blocksize_bits;
 	inode->i_flags = 0;
 	atomic_set(&inode->i_count, 1);
@@ -141,6 +140,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_opflags = 0;
 	i_uid_write(inode, 0);
 	i_gid_write(inode, 0);
+	i_tag_write(inode, 0);
 	atomic_set(&inode->i_writecount, 0);
 	inode->i_size = 0;
 	inode->i_blocks = 0;
@@ -353,7 +353,7 @@ void address_space_init_once(struct address_space *mapping)
 	mutex_init(&mapping->i_mmap_mutex);
 	INIT_LIST_HEAD(&mapping->private_list);
 	spin_lock_init(&mapping->private_lock);
-	INIT_RAW_PRIO_TREE_ROOT(&mapping->i_mmap);
+	mapping->i_mmap = RB_ROOT;
 	INIT_LIST_HEAD(&mapping->i_mmap_nonlinear);
 }
 EXPORT_SYMBOL(address_space_init_once);

@@ -1349,8 +1349,8 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	}
 	i_uid_write(inode, INOTAG_UID(DX_TAG(inode), i_uid, i_gid));
 	i_gid_write(inode, INOTAG_GID(DX_TAG(inode), i_uid, i_gid));
-	inode->i_tag = INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
-		le16_to_cpu(raw_inode->i_raw_tag));
+	i_tag_write(inode, INOTAG_TAG(DX_TAG(inode), i_uid, i_gid,
+		le16_to_cpu(raw_inode->i_raw_tag)));
 	set_nlink(inode, le16_to_cpu(raw_inode->i_links_count));
 	inode->i_size = le32_to_cpu(raw_inode->i_size);
 	inode->i_atime.tv_sec = (signed)le32_to_cpu(raw_inode->i_atime);
@@ -1448,8 +1448,10 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	struct super_block *sb = inode->i_sb;
 	ino_t ino = inode->i_ino;
-	uid_t uid = TAGINO_UID(DX_TAG(inode), i_uid_read(inode), inode->i_tag);
-	gid_t gid = TAGINO_GID(DX_TAG(inode), i_gid_read(inode), inode->i_tag);
+	uid_t uid = TAGINO_UID(DX_TAG(inode),
+		i_uid_read(inode), i_tag_read(inode));
+	gid_t gid = TAGINO_GID(DX_TAG(inode),
+		i_gid_read(inode), i_tag_read(inode));
 	struct buffer_head * bh;
 	struct ext2_inode * raw_inode = ext2_get_inode(sb, ino, &bh);
 	int n;
@@ -1486,7 +1488,7 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 		raw_inode->i_gid_high = 0;
 	}
 #ifdef CONFIG_TAGGING_INTERN
-	raw_inode->i_raw_tag = cpu_to_le16(inode->i_tag);
+	raw_inode->i_raw_tag = cpu_to_le16(i_tag_read(inode));
 #endif
 	raw_inode->i_links_count = cpu_to_le16(inode->i_nlink);
 	raw_inode->i_size = cpu_to_le32(inode->i_size);
@@ -1569,7 +1571,7 @@ int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 		dquot_initialize(inode);
 	if ((iattr->ia_valid & ATTR_UID && !uid_eq(iattr->ia_uid, inode->i_uid)) ||
 	    (iattr->ia_valid & ATTR_GID && !gid_eq(iattr->ia_gid, inode->i_gid)) ||
-	    (iattr->ia_valid & ATTR_TAG && iattr->ia_tag != inode->i_tag)) {
+	    (iattr->ia_valid & ATTR_TAG && !tag_eq(iattr->ia_tag, inode->i_tag))) {
 		error = dquot_transfer(inode, iattr);
 		if (error)
 			return error;

@@ -483,6 +483,7 @@ pid_t pid_unmapped_nr_ns(struct pid *pid, struct pid_namespace *ns)
 	}
 	return nr;
 }
+EXPORT_SYMBOL_GPL(pid_nr_ns);
 
 pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
 {

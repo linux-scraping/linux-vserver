@@ -521,7 +521,7 @@ static int gfs2_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 		rblocks += data_blocks ? data_blocks : 1;
 	if (ind_blocks || data_blocks) {
 		rblocks += RES_STATFS + RES_QUOTA;
-		rblocks += gfs2_rg_blocks(ip);
+		rblocks += gfs2_rg_blocks(ip, data_blocks + ind_blocks);
 	}
 	ret = gfs2_trans_begin(sdp, rblocks, 0);
 	if (ret)
@@ -572,6 +572,7 @@ out:
 static const struct vm_operations_struct gfs2_vm_ops = {
 	.fault = filemap_fault,
 	.page_mkwrite = gfs2_page_mkwrite,
+	.remap_pages = generic_file_remap_pages,
 };
 
 /**
@@ -604,7 +605,6 @@ static int gfs2_mmap(struct file *file, struct vm_area_struct *vma)
 		file_accessed(file);
 	}
 	vma->vm_ops = &gfs2_vm_ops;
-	vma->vm_flags |= VM_CAN_NONLINEAR;
 
 	return 0;
 }
@@ -755,10 +755,8 @@ static ssize_t gfs2_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	size_t writesize = iov_length(iov, nr_segs);
 	struct dentry *dentry = file->f_dentry;
 	struct gfs2_inode *ip = GFS2_I(dentry->d_inode);
-	struct gfs2_sbd *sdp;
 	int ret;
 
-	sdp = GFS2_SB(file->f_mapping->host);
 	ret = gfs2_rs_alloc(ip);
 	if (ret)
 		return ret;
@@ -923,7 +921,7 @@ retry:
 				&max_bytes, &data_blocks, &ind_blocks);
 
 		rblocks = RES_DINODE + ind_blocks + RES_STATFS + RES_QUOTA +
-			  RES_RG_HDR + gfs2_rg_blocks(ip);
+			  RES_RG_HDR + gfs2_rg_blocks(ip, data_blocks + ind_blocks);
 		if (gfs2_is_jdata(ip))
 			rblocks += data_blocks ? data_blocks : 1;
 

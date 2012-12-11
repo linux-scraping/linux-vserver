@@ -95,9 +95,6 @@ static int pnpacpi_set_resources(struct pnp_dev *dev)
 		return -ENODEV;
 	}
 
-	if (WARN_ON_ONCE(acpi_dev != dev->data))
-		dev->data = acpi_dev;
-
 	ret = pnpacpi_build_resource_template(dev, &buffer);
 	if (ret)
 		return ret;
@@ -324,14 +321,9 @@ static int __init acpi_pnp_match(struct device *dev, void *_pnp)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pnp_dev *pnp = _pnp;
-	struct device *physical_device;
-
-	physical_device = acpi_get_physical_device(acpi->handle);
-	if (physical_device)
-		put_device(physical_device);
 
 	/* true means it matched */
-	return !physical_device
+	return !acpi->physical_node_count
 	    && compare_pnp_id(pnp->id, acpi_device_hid(acpi));
 }
 
