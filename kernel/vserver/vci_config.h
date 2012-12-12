@@ -17,6 +17,7 @@ enum {
 	VCI_KCBIT_SPACES = 10,
 	VCI_KCBIT_NETV2 = 11,
 	VCI_KCBIT_MEMCG = 12,
+	VCI_KCBIT_MEMCG_SWAP = 13,
 
 	VCI_KCBIT_DEBUG = 16,
 	VCI_KCBIT_HISTORY = 20,
@@ -42,8 +43,11 @@ static inline uint32_t vci_kernel_config(void)
 #endif
 	(1 << VCI_KCBIT_SPACES) |
 	(1 << VCI_KCBIT_NETV2) |
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+#ifdef	CONFIG_MEMCG
 	(1 << VCI_KCBIT_MEMCG) |
+#endif
+#ifdef	CONFIG_MEMCG_SWAP
+	(1 << VCI_KCBIT_MEMCG_SWAP) |
 #endif
 
 	/* debug options */

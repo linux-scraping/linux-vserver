@@ -751,7 +751,7 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 		dump_header(NULL, gfp_mask, order, NULL, mpol_mask);
 
 		/* avoid panic for guest OOM */
-		if (current->xid)
+		if (vx_current_xid())
 			vs_oom_action(LINUX_REBOOT_CMD_OOM);
 		else
 			panic("Out of memory and no killable processes...\n");
