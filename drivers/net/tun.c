@@ -1036,7 +1036,7 @@ static void tun_setup(struct net_device *dev)
 
 	tun->owner = INVALID_UID;
 	tun->group = INVALID_GID;
-	tun->nid = current->nid;
+	tun->nid = nx_current_nid();
 
 	dev->ethtool_ops = &tun_ethtool_ops;
 	dev->destructor = tun_free_netdev;

@@ -257,7 +257,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+#ifdef	CONFIG_MEMCG
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage;
 
@@ -277,14 +277,14 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	val->totalhigh = 0;
 	val->freehigh = 0;
 out:
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
+#endif	/* CONFIG_MEMCG */
 	return;
 }
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR_SWAP
+#ifdef	CONFIG_MEMCG
+#ifdef	CONFIG_MEMCG_SWAP
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage, memsw_limit, memsw_usage;
 	s64 swap_limit, swap_usage;
@@ -317,18 +317,18 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	val->freeswap = (swap_usage < swap_limit) ?
 		val->totalswap - (swap_usage >> PAGE_SHIFT) : 0;
 out:
-#else	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
+#else	/* !CONFIG_MEMCG_SWAP */
 	val->totalswap = 0;
 	val->freeswap = 0;
-#endif	/* !CONFIG_CGROUP_MEM_RES_CTLR_SWAP */
-#endif	/* CONFIG_CGROUP_MEM_RES_CTLR */
+#endif	/* !CONFIG_MEMCG_SWAP */
+#endif	/* CONFIG_MEMCG */
 	return;
 }
 
 long vx_vsi_cached(struct sysinfo *val)
 {
 	long cache = 0;
-#ifdef	CONFIG_CGROUP_MEM_RES_CTLR
+#ifdef	CONFIG_MEMCG
 	struct mem_cgroup *mcg;
 
 	rcu_read_lock();
