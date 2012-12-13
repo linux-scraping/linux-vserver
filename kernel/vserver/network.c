@@ -18,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
+#include <net/ipv6.h>
 
 #include <linux/vs_network.h>
 #include <linux/vs_pid.h>
@@ -131,6 +132,7 @@ static struct nx_info *__alloc_nx_info(nid_t nid)
 	INIT_HLIST_NODE(&new->nx_hlist);
 	atomic_set(&new->nx_usecnt, 0);
 	atomic_set(&new->nx_tasks, 0);
+	spin_lock_init(&new->addr_lock);
 	new->nx_state = 0;
 
 	new->nx_flags = NXF_INIT_SET;
@@ -162,6 +164,9 @@ static void __dealloc_nx_info(struct nx_info *nxi)
 	BUG_ON(atomic_read(&nxi->nx_tasks));
 
 	__dealloc_nx_addr_v4_all(nxi->v4.next);
+#ifdef CONFIG_IPV6
+	__dealloc_nx_addr_v6_all(nxi->v6.next);
+#endif
 
 	nxi->nx_state |= NXS_RELEASED;
 	kfree(nxi);
@@ -588,52 +593,106 @@ int vc_net_migrate(struct nx_info *nxi, void __user *data)
 }
 
 
+static inline
+struct nx_addr_v4 *__find_v4_addr(struct nx_info *nxi,
+	__be32 ip, __be32 ip2, __be32 mask, uint16_t type, uint16_t flags,
+	struct nx_addr_v4 **prev)
+{
+	struct nx_addr_v4 *nxa = &nxi->v4;
+
+	for (; nxa; nxa = nxa->next) {
+		if ((nxa->ip[0].s_addr == ip) &&
+		    (nxa->ip[1].s_addr == ip2) &&
+		    (nxa->mask.s_addr == mask) &&
+		    (nxa->type == type) &&
+		    (nxa->flags == flags))
+		    return nxa;
+
+		/* save previous entry */
+		if (prev)
+			*prev = nxa;
+	}
+	return NULL;
+}
 
 int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	uint16_t type, uint16_t flags)
 {
-	struct nx_addr_v4 *nxa = &nxi->v4;
+	struct nx_addr_v4 *nxa = NULL;
+	struct nx_addr_v4 *new = __alloc_nx_addr_v4();
+	int ret = -EEXIST;
+
+	if (IS_ERR(new))
+		return PTR_ERR(new);
+
+	spin_lock(&nxi->addr_lock);
+	if (__find_v4_addr(nxi, ip, ip2, mask, type, flags, &nxa))
+		goto out_unlock;
 
 	if (NX_IPV4(nxi)) {
-		/* locate last entry */
-		for (; nxa->next; nxa = nxa->next);
-		nxa->next = __alloc_nx_addr_v4();
-		nxa = nxa->next;
+		nxa->next = new;
+		nxa = new;
+		new = NULL;
 
-		if (IS_ERR(nxa))
-			return PTR_ERR(nxa);
-	}
-
-	if (nxi->v4.next)
 		/* remove single ip for ip list */
 		nxi->nx_flags &= ~NXF_SINGLE_IP;
+	}
 
 	nxa->ip[0].s_addr = ip;
 	nxa->ip[1].s_addr = ip2;
 	nxa->mask.s_addr = mask;
 	nxa->type = type;
 	nxa->flags = flags;
-	return 0;
+	ret = 0;
+out_unlock:
+	spin_unlock(&nxi->addr_lock);
+	if (new)
+		__dealloc_nx_addr_v4(new);
+	return ret;
 }
 
 int do_remove_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	uint16_t type, uint16_t flags)
 {
-	struct nx_addr_v4 *nxa = &nxi->v4;
+	struct nx_addr_v4 *nxa = NULL;
+	struct nx_addr_v4 *old = NULL;
+	int ret = 0;
 
+	spin_lock(&nxi->addr_lock);
 	switch (type) {
-/*	case NXA_TYPE_ADDR:
-		break;		*/
+	case NXA_TYPE_ADDR:
+		old = __find_v4_addr(nxi, ip, ip2, mask, type, flags, &nxa);
+		if (old) {
+			if (nxa) {
+				nxa->next = old->next;
+				old->next = NULL;
+			} else {
+				if (old->next) {
+					nxa = old;
+					old = old->next;
+					*nxa = *old;
+					old->next = NULL;
+				} else {
+					memset(old, 0, sizeof(*old));
+					old = NULL;
+				}
+			}
+		} else
+			ret = -ESRCH;
+		break;
 
 	case NXA_TYPE_ANY:
-		__dealloc_nx_addr_v4_all(xchg(&nxa->next, NULL));
+		nxa = &nxi->v4;
+		old = xchg(&nxa->next, NULL);
 		memset(nxa, 0, sizeof(*nxa));
 		break;
 
 	default:
-		return -EINVAL;
+		ret = -EINVAL;
 	}
-	return 0;
+	spin_unlock(&nxi->addr_lock);
+	__dealloc_nx_addr_v4_all(old);
+	return ret;
 }
 
 
@@ -687,10 +746,7 @@ int vc_net_remove(struct nx_info *nxi, void __user *data)
 
 	switch (vc_data.type) {
 	case NXA_TYPE_ANY:
-		__dealloc_nx_addr_v4_all(xchg(&nxi->v4.next, NULL));
-		memset(&nxi->v4, 0, sizeof(nxi->v4));
-		break;
-
+		return do_remove_v4_addr(nxi, 0, 0, 0, vc_data.type, 0);
 	default:
 		return -EINVAL;
 	}
@@ -777,20 +833,49 @@ int vc_net_rem_ipv4(struct nx_info *nxi, void __user *data)
 
 #ifdef CONFIG_IPV6
 
+static inline
+struct nx_addr_v6 *__find_v6_addr(struct nx_info *nxi,
+	struct in6_addr *ip, struct in6_addr *mask,
+	uint32_t prefix, uint16_t type, uint16_t flags,
+	struct nx_addr_v6 **prev)
+{
+	struct nx_addr_v6 *nxa = &nxi->v6;
+
+	for (; nxa; nxa = nxa->next) {
+		if (ipv6_addr_equal(&nxa->ip, ip) &&
+		    ipv6_addr_equal(&nxa->mask, mask) &&
+		    (nxa->prefix == prefix) &&
+		    (nxa->type == type) &&
+		    (nxa->flags == flags))
+		    return nxa;
+
+		/* save previous entry */
+		if (prev)
+			*prev = nxa;
+	}
+	return NULL;
+}
+
+
 int do_add_v6_addr(struct nx_info *nxi,
 	struct in6_addr *ip, struct in6_addr *mask,
 	uint32_t prefix, uint16_t type, uint16_t flags)
 {
-	struct nx_addr_v6 *nxa = &nxi->v6;
+	struct nx_addr_v6 *nxa = NULL;
+	struct nx_addr_v6 *new = __alloc_nx_addr_v6();
+	int ret = -EEXIST;
+
+	if (IS_ERR(new))
+		return PTR_ERR(new);
+
+	spin_lock(&nxi->addr_lock);
+	if (__find_v6_addr(nxi, ip, mask, prefix, type, flags, &nxa))
+		goto out_unlock;
 
 	if (NX_IPV6(nxi)) {
-		/* locate last entry */
-		for (; nxa->next; nxa = nxa->next);
-		nxa->next = __alloc_nx_addr_v6();
-		nxa = nxa->next;
-
-		if (IS_ERR(nxa))
-			return PTR_ERR(nxa);
+		nxa->next = new;
+		nxa = new;
+		new = NULL;
 	}
 
 	nxa->ip = *ip;
@@ -798,9 +883,58 @@ int do_add_v6_addr(struct nx_info *nxi,
 	nxa->prefix = prefix;
 	nxa->type = type;
 	nxa->flags = flags;
-	return 0;
+	ret = 0;
+out_unlock:
+	spin_unlock(&nxi->addr_lock);
+	if (new)
+		__dealloc_nx_addr_v6(new);
+	return ret;
 }
 
+int do_remove_v6_addr(struct nx_info *nxi,
+	struct in6_addr *ip, struct in6_addr *mask,
+	uint32_t prefix, uint16_t type, uint16_t flags)
+{
+	struct nx_addr_v6 *nxa = NULL;
+	struct nx_addr_v6 *old = NULL;
+	int ret = 0;
+
+	spin_lock(&nxi->addr_lock);
+	switch (type) {
+	case NXA_TYPE_ADDR:
+		old = __find_v6_addr(nxi, ip, mask, prefix, type, flags, &nxa);
+		if (old) {
+			if (nxa) {
+				nxa->next = old->next;
+				old->next = NULL;
+			} else {
+				if (old->next) {
+					nxa = old;
+					old = old->next;
+					*nxa = *old;
+					old->next = NULL;
+				} else {
+					memset(old, 0, sizeof(*old));
+					old = NULL;
+				}
+			}
+		} else
+			ret = -ESRCH;
+		break;
+
+	case NXA_TYPE_ANY:
+		nxa = &nxi->v6;
+		old = xchg(&nxa->next, NULL);
+		memset(nxa, 0, sizeof(*nxa));
+		break;
+
+	default:
+		ret = -EINVAL;
+	}
+	spin_unlock(&nxi->addr_lock);
+	__dealloc_nx_addr_v6_all(old);
+	return ret;
+}
 
 int vc_net_add_ipv6(struct nx_info *nxi, void __user *data)
 {
@@ -830,11 +964,14 @@ int vc_net_remove_ipv6(struct nx_info *nxi, void __user *data)
 		return -EFAULT;
 
 	switch (vc_data.type) {
+	case NXA_TYPE_ADDR:
+		memset(&vc_data.mask, ~0, sizeof(vc_data.mask));
+		/* fallthrough */
+	case NXA_TYPE_MASK:
+		return do_remove_v6_addr(nxi, &vc_data.ip, &vc_data.mask,
+			vc_data.prefix, vc_data.type, vc_data.flags);
 	case NXA_TYPE_ANY:
-		__dealloc_nx_addr_v6_all(xchg(&nxi->v6.next, NULL));
-		memset(&nxi->v6, 0, sizeof(nxi->v6));
-		break;
-
+		return do_remove_v6_addr(nxi, NULL, NULL, 0, vc_data.type, 0);
 	default:
 		return -EINVAL;
 	}

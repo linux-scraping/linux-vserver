@@ -1,5 +1,5 @@
-#ifndef _VX_SCHED_DEF_H
-#define _VX_SCHED_DEF_H
+#ifndef _VSERVER_SCHED_DEF_H
+#define _VSERVER_SCHED_DEF_H
 
 #include <linux/spinlock.h>
 #include <linux/jiffies.h>
@@ -35,4 +35,4 @@ static inline void __dump_vx_sched(struct _vx_sched *sched)
 
 #endif
 
-#endif	/* _VX_SCHED_DEF_H */
+#endif	/* _VSERVER_SCHED_DEF_H */

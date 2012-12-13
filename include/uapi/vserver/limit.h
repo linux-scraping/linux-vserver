@@ -1,0 +1,14 @@
+#ifndef _UAPI_VS_LIMIT_H
+#define _UAPI_VS_LIMIT_H
+
+
+#define VLIMIT_NSOCK	16
+#define VLIMIT_OPENFD	17
+#define VLIMIT_ANON	18
+#define VLIMIT_SHMEM	19
+#define VLIMIT_SEMARY	20
+#define VLIMIT_NSEMS	21
+#define VLIMIT_DENTRY	22
+#define VLIMIT_MAPPED	23
+
+#endif /* _UAPI_VS_LIMIT_H */

@@ -81,12 +81,15 @@ int v4_addr_in_nx_info(struct nx_info *nxi, __be32 addr, uint16_t tmask)
 		(nxi->v4_bcast.s_addr == addr))
 		goto out;
 	ret = 5;
+
 	/* check for v4 addresses */
+	spin_lock(&nxi->addr_lock);
 	for (nxa = &nxi->v4; nxa; nxa = nxa->next)
 		if (v4_addr_match(nxa, addr, tmask))
 			goto out;
 	ret = 0;
 out:
+	spin_unlock(&nxi->addr_lock);
 	vxdprintk(VXD_CBIT(net, 0),
 		"v4_addr_in_nx_info(%p[#%u]," NIPQUAD_FMT ",%04x) = %d",
 		nxi, nxi ? nxi->nx_id : 0, NIPQUAD(addr), tmask, ret);
@@ -104,11 +107,16 @@ static inline
 int v4_nx_addr_in_nx_info(struct nx_info *nxi, struct nx_addr_v4 *nxa, uint16_t mask)
 {
 	struct nx_addr_v4 *ptr;
+	int ret = 1;
 
+	spin_lock(&nxi->addr_lock);
 	for (ptr = &nxi->v4; ptr; ptr = ptr->next)
 		if (v4_nx_addr_match(ptr, nxa, mask))
-			return 1;
-	return 0;
+			goto out;
+	ret = 0;
+out:
+	spin_unlock(&nxi->addr_lock);
+	return ret;
 }
 
 #include <net/inet_sock.h>

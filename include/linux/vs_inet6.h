@@ -45,11 +45,14 @@ int v6_addr_in_nx_info(struct nx_info *nxi,
 
 	if (!nxi)
 		goto out;
+
+	spin_lock(&nxi->addr_lock);
 	for (nxa = &nxi->v6; nxa; nxa = nxa->next)
 		if (v6_addr_match(nxa, addr, mask))
 			goto out;
 	ret = 0;
 out:
+	spin_unlock(&nxi->addr_lock);
 	vxdprintk(VXD_CBIT(net, 0),
 		"v6_addr_in_nx_info(%p[#%u],%pI6,%04x) = %d",
 		nxi, nxi ? nxi->nx_id : 0, addr, mask, ret);
@@ -67,11 +70,16 @@ static inline
 int v6_nx_addr_in_nx_info(struct nx_info *nxi, struct nx_addr_v6 *nxa, uint16_t mask)
 {
 	struct nx_addr_v6 *ptr;
+	int ret = 1;
 
+	spin_lock(&nxi->addr_lock);
 	for (ptr = &nxi->v6; ptr; ptr = ptr->next)
 		if (v6_nx_addr_match(ptr, nxa, mask))
-			return 1;
-	return 0;
+			goto out;
+	ret = 0;
+out:
+	spin_unlock(&nxi->addr_lock);
+	return ret;
 }
 
 

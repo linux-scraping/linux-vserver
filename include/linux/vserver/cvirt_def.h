@@ -1,5 +1,5 @@
-#ifndef _VX_CVIRT_DEF_H
-#define _VX_CVIRT_DEF_H
+#ifndef _VSERVER_CVIRT_DEF_H
+#define _VSERVER_CVIRT_DEF_H
 
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
@@ -77,4 +77,4 @@ static inline void __dump_vx_cvirt(struct _vx_cvirt *cvirt)
 
 #endif
 
-#endif	/* _VX_CVIRT_DEF_H */
+#endif	/* _VSERVER_CVIRT_DEF_H */

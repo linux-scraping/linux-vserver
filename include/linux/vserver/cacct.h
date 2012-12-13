@@ -1,5 +1,5 @@
-#ifndef _VX_CACCT_H
-#define _VX_CACCT_H
+#ifndef _VSERVER_CACCT_H
+#define _VSERVER_CACCT_H
 
 
 enum sock_acc_field {
@@ -12,4 +12,4 @@ enum sock_acc_field {
 	VXA_SOCK_SIZE	/* array size */
 };
 
-#endif	/* _VX_CACCT_H */
+#endif	/* _VSERVER_CACCT_H */

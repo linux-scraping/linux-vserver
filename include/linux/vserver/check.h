@@ -1,5 +1,5 @@
-#ifndef _VS_CHECK_H
-#define _VS_CHECK_H
+#ifndef _VSERVER_CHECK_H
+#define _VSERVER_CHECK_H
 
 
 #define MAX_S_CONTEXT	65535	/* Arbitrary limit */

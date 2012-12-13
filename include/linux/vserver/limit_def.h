@@ -1,5 +1,5 @@
-#ifndef _VX_LIMIT_DEF_H
-#define _VX_LIMIT_DEF_H
+#ifndef _VSERVER_LIMIT_DEF_H
+#define _VSERVER_LIMIT_DEF_H
 
 #include <asm/atomic.h>
 #include <asm/resource.h>
@@ -44,4 +44,4 @@ static inline void __dump_vx_limit(struct _vx_limit *limit)
 
 #endif
 
-#endif	/* _VX_LIMIT_DEF_H */
+#endif	/* _VSERVER_LIMIT_DEF_H */

@@ -1,5 +1,5 @@
-#ifndef _VX_DEVICE_DEF_H
-#define _VX_DEVICE_DEF_H
+#ifndef _VSERVER_DEVICE_DEF_H
+#define _VSERVER_DEVICE_DEF_H
 
 #include <linux/types.h>
 
@@ -14,4 +14,4 @@ struct _vx_device {
 #endif
 };
 
-#endif	/* _VX_DEVICE_DEF_H */
+#endif	/* _VSERVER_DEVICE_DEF_H */

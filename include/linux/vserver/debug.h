@@ -1,5 +1,5 @@
-#ifndef _VX_DEBUG_H
-#define _VX_DEBUG_H
+#ifndef _VSERVER_DEBUG_H
+#define _VSERVER_DEBUG_H
 
 
 #define VXD_CBIT(n, m)	(vs_debug_ ## n & (1 << (m)))
@@ -142,4 +142,4 @@ void dump_vx_info_inactive(int);
 #endif
 
 
-#endif /* _VX_DEBUG_H */
+#endif /* _VSERVER_DEBUG_H */

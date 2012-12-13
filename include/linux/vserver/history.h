@@ -1,5 +1,5 @@
-#ifndef _VX_HISTORY_H
-#define _VX_HISTORY_H
+#ifndef _VSERVER_HISTORY_H
+#define _VSERVER_HISTORY_H
 
 
 enum {
@@ -194,4 +194,4 @@ extern void vxh_dump_history(void);
 
 #endif /* CONFIG_VSERVER_HISTORY */
 
-#endif /* _VX_HISTORY_H */
+#endif /* _VSERVER_HISTORY_H */

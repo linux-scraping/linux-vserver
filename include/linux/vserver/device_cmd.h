@@ -1,20 +1,8 @@
-#ifndef _VX_DEVICE_CMD_H
-#define _VX_DEVICE_CMD_H
+#ifndef _VSERVER_DEVICE_CMD_H
+#define _VSERVER_DEVICE_CMD_H
 
+#include <uapi/vserver/device_cmd.h>
 
-/*  device vserver commands */
-
-#define VCMD_set_mapping	VC_CMD(DEVICE, 1, 0)
-#define VCMD_unset_mapping	VC_CMD(DEVICE, 2, 0)
-
-struct	vcmd_set_mapping_v0 {
-	const char __user *device;
-	const char __user *target;
-	uint32_t flags;
-};
-
-
-#ifdef	__KERNEL__
 
 #ifdef	CONFIG_COMPAT
 
@@ -40,5 +28,4 @@ extern int vc_unset_mapping_x32(struct vx_info *, void __user *);
 
 #endif	/* CONFIG_COMPAT */
 
-#endif	/* __KERNEL__ */
-#endif	/* _VX_DEVICE_CMD_H */
+#endif	/* _VSERVER_DEVICE_CMD_H */

@@ -4,5 +4,6 @@ header-y += context_cmd.h network_cmd.h space_cmd.h \
 	inode_cmd.h tag_cmd.h sched_cmd.h signal_cmd.h \
 	debug_cmd.h device_cmd.h
 
-header-y += switch.h network.h monitor.h inode.h device.h
+header-y += switch.h context.h network.h monitor.h \
+	limit.h inode.h device.h
 
