@@ -1,9 +1,5 @@
-#ifndef _VX_LIMIT_INT_H
-#define _VX_LIMIT_INT_H
-
-#include "context.h"
-
-#ifdef	__KERNEL__
+#ifndef _VSERVER_LIMIT_INT_H
+#define _VSERVER_LIMIT_INT_H
 
 #define VXD_RCRES_COND(r)	VXD_CBIT(cres, r)
 #define VXD_RLIMIT_COND(r)	VXD_CBIT(limit, r)
@@ -194,5 +190,4 @@ static inline void vx_limit_fixup(struct _vx_limit *limit, int id)
 }
 
 
-#endif	/* __KERNEL__ */
-#endif	/* _VX_LIMIT_INT_H */
+#endif	/* _VSERVER_LIMIT_INT_H */

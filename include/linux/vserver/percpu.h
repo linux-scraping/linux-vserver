@@ -1,5 +1,5 @@
-#ifndef _VX_PERCPU_H
-#define _VX_PERCPU_H
+#ifndef _VSERVER_PERCPU_H
+#define _VSERVER_PERCPU_H
 
 #include "cvirt_def.h"
 #include "sched_def.h"
@@ -11,4 +11,4 @@ struct	_vx_percpu {
 
 #define	PERCPU_PERCTX	(sizeof(struct _vx_percpu))
 
-#endif	/* _VX_PERCPU_H */
+#endif	/* _VSERVER_PERCPU_H */

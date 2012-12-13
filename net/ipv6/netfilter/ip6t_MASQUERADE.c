@@ -34,7 +34,7 @@ masquerade_tg6(struct sk_buff *skb, const struct xt_action_param *par)
 			    ctinfo == IP_CT_RELATED_REPLY));
 
 	if (ipv6_dev_get_saddr(dev_net(par->out), par->out,
-			       &ipv6_hdr(skb)->daddr, 0, &src) < 0)
+			       &ipv6_hdr(skb)->daddr, 0, &src, NULL) < 0)
 		return NF_DROP;
 
 	nfct_nat(ct)->masq_index = par->out->ifindex;

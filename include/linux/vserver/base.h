@@ -1,5 +1,5 @@
-#ifndef _VX_BASE_H
-#define _VX_BASE_H
+#ifndef _VSERVER_BASE_H
+#define _VSERVER_BASE_H
 
 
 /* context state changes */

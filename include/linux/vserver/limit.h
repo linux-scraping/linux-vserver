@@ -1,17 +1,8 @@
-#ifndef _VX_LIMIT_H
-#define _VX_LIMIT_H
+#ifndef _VSERVER_LIMIT_H
+#define _VSERVER_LIMIT_H
 
-#define VLIMIT_NSOCK	16
-#define VLIMIT_OPENFD	17
-#define VLIMIT_ANON	18
-#define VLIMIT_SHMEM	19
-#define VLIMIT_SEMARY	20
-#define VLIMIT_NSEMS	21
-#define VLIMIT_DENTRY	22
-#define VLIMIT_MAPPED	23
+#include <uapi/vserver/limit.h>
 
-
-#ifdef	__KERNEL__
 
 #define	VLIM_NOCHECK	((1L << VLIMIT_DENTRY) | (1L << RLIMIT_RSS))
 
@@ -67,5 +58,4 @@ long vx_vsi_cached(struct sysinfo *);
 
 #define NUM_LIMITS	24
 
-#endif	/* __KERNEL__ */
-#endif	/* _VX_LIMIT_H */
+#endif	/* _VSERVER_LIMIT_H */

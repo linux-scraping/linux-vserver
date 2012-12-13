@@ -3,4 +3,3 @@ header-y += hdlc/
 header-y += hsi/
 header-y += raid/
 header-y += usb/
-header-y += vserver/

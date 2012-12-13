@@ -1,5 +1,5 @@
-#ifndef _VX_CACCT_DEF_H
-#define _VX_CACCT_DEF_H
+#ifndef _VSERVER_CACCT_DEF_H
+#define _VSERVER_CACCT_DEF_H
 
 #include <asm/atomic.h>
 #include <linux/vserver/cacct.h>
@@ -40,4 +40,4 @@ static inline void __dump_vx_cacct(struct _vx_cacct *cacct)
 
 #endif
 
-#endif	/* _VX_CACCT_DEF_H */
+#endif	/* _VSERVER_CACCT_DEF_H */

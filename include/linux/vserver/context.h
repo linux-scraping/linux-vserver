@@ -1,88 +1,11 @@
-#ifndef _VX_CONTEXT_H
-#define _VX_CONTEXT_H
+#ifndef _VSERVER_CONTEXT_H
+#define _VSERVER_CONTEXT_H
 
-#include <linux/types.h>
-#include <linux/capability.h>
-
-
-/* context flags */
-
-#define VXF_INFO_SCHED		0x00000002
-#define VXF_INFO_NPROC		0x00000004
-#define VXF_INFO_PRIVATE	0x00000008
-
-#define VXF_INFO_INIT		0x00000010
-#define VXF_INFO_HIDE		0x00000020
-#define VXF_INFO_ULIMIT		0x00000040
-#define VXF_INFO_NSPACE		0x00000080
-
-#define VXF_SCHED_HARD		0x00000100
-#define VXF_SCHED_PRIO		0x00000200
-#define VXF_SCHED_PAUSE		0x00000400
-
-#define VXF_VIRT_MEM		0x00010000
-#define VXF_VIRT_UPTIME		0x00020000
-#define VXF_VIRT_CPU		0x00040000
-#define VXF_VIRT_LOAD		0x00080000
-#define VXF_VIRT_TIME		0x00100000
-
-#define VXF_HIDE_MOUNT		0x01000000
-/* was	VXF_HIDE_NETIF		0x02000000 */
-#define VXF_HIDE_VINFO		0x04000000
-
-#define VXF_STATE_SETUP		(1ULL << 32)
-#define VXF_STATE_INIT		(1ULL << 33)
-#define VXF_STATE_ADMIN		(1ULL << 34)
-
-#define VXF_SC_HELPER		(1ULL << 36)
-#define VXF_REBOOT_KILL		(1ULL << 37)
-#define VXF_PERSISTENT		(1ULL << 38)
-
-#define VXF_FORK_RSS		(1ULL << 48)
-#define VXF_PROLIFIC		(1ULL << 49)
-
-#define VXF_IGNEG_NICE		(1ULL << 52)
-
-#define VXF_ONE_TIME		(0x0007ULL << 32)
-
-#define VXF_INIT_SET		(VXF_STATE_SETUP | VXF_STATE_INIT | VXF_STATE_ADMIN)
-
-
-/* context migration */
-
-#define VXM_SET_INIT		0x00000001
-#define VXM_SET_REAPER		0x00000002
-
-/* context caps */
-
-#define VXC_SET_UTSNAME		0x00000001
-#define VXC_SET_RLIMIT		0x00000002
-#define VXC_FS_SECURITY		0x00000004
-#define VXC_FS_TRUSTED		0x00000008
-#define VXC_TIOCSTI		0x00000010
-
-/* was	VXC_RAW_ICMP		0x00000100 */
-#define VXC_SYSLOG		0x00001000
-#define VXC_OOM_ADJUST		0x00002000
-#define VXC_AUDIT_CONTROL	0x00004000
-
-#define VXC_SECURE_MOUNT	0x00010000
-#define VXC_SECURE_REMOUNT	0x00020000
-#define VXC_BINARY_MOUNT	0x00040000
-
-#define VXC_QUOTA_CTL		0x00100000
-#define VXC_ADMIN_MAPPER	0x00200000
-#define VXC_ADMIN_CLOOP		0x00400000
-
-#define VXC_KTHREAD		0x01000000
-#define VXC_NAMESPACE		0x02000000
-
-
-#ifdef	__KERNEL__
 
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/rcupdate.h>
+#include <uapi/vserver/context.h>
 
 #include "limit_def.h"
 #include "sched_def.h"
@@ -184,5 +107,4 @@ extern int vx_migrate_task(struct task_struct *, struct vx_info *, int);
 extern long vs_state_change(struct vx_info *, unsigned int);
 
 
-#endif	/* __KERNEL__ */
-#endif	/* _VX_CONTEXT_H */
+#endif	/* _VSERVER_CONTEXT_H */

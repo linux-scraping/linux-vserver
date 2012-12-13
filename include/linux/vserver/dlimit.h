@@ -1,5 +1,5 @@
-#ifndef _VX_DLIMIT_H
-#define _VX_DLIMIT_H
+#ifndef _VSERVER_DLIMIT_H
+#define _VSERVER_DLIMIT_H
 
 #include "switch.h"
 
@@ -49,6 +49,6 @@ extern void vx_vsi_statfs(struct super_block *, struct kstatfs *);
 typedef uint64_t dlsize_t;
 
 #endif	/* __KERNEL__ */
-#else	/* _VX_DLIMIT_H */
+#else	/* _VSERVER_DLIMIT_H */
 #warning duplicate inclusion
-#endif	/* _VX_DLIMIT_H */
+#endif	/* _VSERVER_DLIMIT_H */

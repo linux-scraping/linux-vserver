@@ -1,5 +1,5 @@
-#ifndef _VX_SCHED_H
-#define _VX_SCHED_H
+#ifndef _VSERVER_SCHED_H
+#define _VSERVER_SCHED_H
 
 
 #ifdef	__KERNEL__
@@ -18,6 +18,6 @@ void vx_update_sched_param(struct _vx_sched *sched,
 	struct _vx_sched_pc *sched_pc);
 
 #endif	/* __KERNEL__ */
-#else	/* _VX_SCHED_H */
+#else	/* _VSERVER_SCHED_H */
 #warning duplicate inclusion
-#endif	/* _VX_SCHED_H */
+#endif	/* _VSERVER_SCHED_H */
