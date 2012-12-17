@@ -683,7 +683,7 @@ int do_remove_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 
 	case NXA_TYPE_ANY:
 		nxa = &nxi->v4;
-		old = xchg(&nxa->next, NULL);
+		old = nxa->next;
 		memset(nxa, 0, sizeof(*nxa));
 		break;
 
@@ -924,7 +924,7 @@ int do_remove_v6_addr(struct nx_info *nxi,
 
 	case NXA_TYPE_ANY:
 		nxa = &nxi->v6;
-		old = xchg(&nxa->next, NULL);
+		old = nxa->next;
 		memset(nxa, 0, sizeof(*nxa));
 		break;
 
