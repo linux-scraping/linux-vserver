@@ -17,13 +17,18 @@ int nx_v4_addr_conflict(struct nx_info *nxi1, struct nx_info *nxi2)
 		ret = 1;
 	else {
 		struct nx_addr_v4 *ptr;
+		unsigned long flags;
 
+		spin_lock_irqsave(&nxi1->addr_lock, flags);
+		spin_lock(&nxi2->addr_lock);
 		for (ptr = &nxi1->v4; ptr; ptr = ptr->next) {
 			if (v4_nx_addr_in_nx_info(nxi2, ptr, -1)) {
 				ret = 1;
 				break;
 			}
 		}
+		spin_unlock(&nxi2->addr_lock);
+		spin_unlock_irqrestore(&nxi1->addr_lock, flags);
 	}
 
 	vxdprintk(VXD_CBIT(net, 2),
@@ -44,13 +49,18 @@ int nx_v6_addr_conflict(struct nx_info *nxi1, struct nx_info *nxi2)
 		ret = 1;
 	else {
 		struct nx_addr_v6 *ptr;
+		unsigned long flags;
 
+		spin_lock_irqsave(&nxi1->addr_lock, flags);
+		spin_lock(&nxi2->addr_lock);
 		for (ptr = &nxi1->v6; ptr; ptr = ptr->next) {
 			if (v6_nx_addr_in_nx_info(nxi2, ptr, -1)) {
 				ret = 1;
 				break;
 			}
 		}
+		spin_unlock(&nxi2->addr_lock);
+		spin_unlock_irqrestore(&nxi1->addr_lock, flags);
 	}
 
 	vxdprintk(VXD_CBIT(net, 2),
@@ -161,6 +171,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 
 	if (fl4->saddr == INADDR_ANY) {
 		struct nx_addr_v4 *ptr;
+		unsigned long flags;
 		__be32 found = 0;
 
 		rt = __ip_route_output_key(net, fl4);
@@ -174,6 +185,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 				goto found;
 		}
 
+		spin_lock_irqsave(&nxi->addr_lock, flags);
 		for (ptr = &nxi->v4; ptr; ptr = ptr->next) {
 			__be32 primary = ptr->ip[0].s_addr;
 			__be32 mask = ptr->mask.s_addr;
@@ -195,12 +207,14 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 				found = fl4->saddr;
 				ip_rt_put(rt);
 				if (found == primary)
-					goto found;
+					goto found_unlock;
 			}
 		}
 		/* still no source ip? */
 		found = ipv4_is_loopback(fl4->daddr)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
+	found_unlock:
+		spin_unlock_irqrestore(&nxi->addr_lock, flags);
 	found:
 		/* assign src ip to flow */
 		fl4->saddr = found;

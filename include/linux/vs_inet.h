@@ -59,6 +59,7 @@ static inline
 int v4_addr_in_nx_info(struct nx_info *nxi, __be32 addr, uint16_t tmask)
 {
 	struct nx_addr_v4 *nxa;
+	unsigned long flags;
 	int ret = 1;
 
 	if (!nxi)
@@ -83,13 +84,13 @@ int v4_addr_in_nx_info(struct nx_info *nxi, __be32 addr, uint16_t tmask)
 	ret = 5;
 
 	/* check for v4 addresses */
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, flags);
 	for (nxa = &nxi->v4; nxa; nxa = nxa->next)
 		if (v4_addr_match(nxa, addr, tmask))
 			goto out_unlock;
 	ret = 0;
 out_unlock:
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, flags);
 out:
 	vxdprintk(VXD_CBIT(net, 0),
 		"v4_addr_in_nx_info(%p[#%u]," NIPQUAD_FMT ",%04x) = %d",
@@ -108,15 +109,16 @@ static inline
 int v4_nx_addr_in_nx_info(struct nx_info *nxi, struct nx_addr_v4 *nxa, uint16_t mask)
 {
 	struct nx_addr_v4 *ptr;
+	unsigned long flags;
 	int ret = 1;
 
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, flags);
 	for (ptr = &nxi->v4; ptr; ptr = ptr->next)
 		if (v4_nx_addr_match(ptr, nxa, mask))
 			goto out_unlock;
 	ret = 0;
 out_unlock:
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, flags);
 	return ret;
 }
 

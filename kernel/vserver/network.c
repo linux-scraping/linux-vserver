@@ -620,12 +620,13 @@ int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 {
 	struct nx_addr_v4 *nxa = NULL;
 	struct nx_addr_v4 *new = __alloc_nx_addr_v4();
+	unsigned long irqflags;
 	int ret = -EEXIST;
 
 	if (IS_ERR(new))
 		return PTR_ERR(new);
 
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, irqflags);
 	if (__find_v4_addr(nxi, ip, ip2, mask, type, flags, &nxa))
 		goto out_unlock;
 
@@ -645,7 +646,7 @@ int do_add_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	nxa->flags = flags;
 	ret = 0;
 out_unlock:
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, irqflags);
 	if (new)
 		__dealloc_nx_addr_v4(new);
 	return ret;
@@ -656,9 +657,10 @@ int do_remove_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 {
 	struct nx_addr_v4 *nxa = NULL;
 	struct nx_addr_v4 *old = NULL;
+	unsigned long irqflags;
 	int ret = 0;
 
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, irqflags);
 	switch (type) {
 	case NXA_TYPE_ADDR:
 		old = __find_v4_addr(nxi, ip, ip2, mask, type, flags, &nxa);
@@ -690,7 +692,7 @@ int do_remove_v4_addr(struct nx_info *nxi, __be32 ip, __be32 ip2, __be32 mask,
 	default:
 		ret = -EINVAL;
 	}
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, irqflags);
 	__dealloc_nx_addr_v4_all(old);
 	return ret;
 }
@@ -863,12 +865,13 @@ int do_add_v6_addr(struct nx_info *nxi,
 {
 	struct nx_addr_v6 *nxa = NULL;
 	struct nx_addr_v6 *new = __alloc_nx_addr_v6();
+	unsigned long irqflags;
 	int ret = -EEXIST;
 
 	if (IS_ERR(new))
 		return PTR_ERR(new);
 
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, irqflags);
 	if (__find_v6_addr(nxi, ip, mask, prefix, type, flags, &nxa))
 		goto out_unlock;
 
@@ -885,7 +888,7 @@ int do_add_v6_addr(struct nx_info *nxi,
 	nxa->flags = flags;
 	ret = 0;
 out_unlock:
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, irqflags);
 	if (new)
 		__dealloc_nx_addr_v6(new);
 	return ret;
@@ -897,9 +900,10 @@ int do_remove_v6_addr(struct nx_info *nxi,
 {
 	struct nx_addr_v6 *nxa = NULL;
 	struct nx_addr_v6 *old = NULL;
+	unsigned long irqflags;
 	int ret = 0;
 
-	spin_lock(&nxi->addr_lock);
+	spin_lock_irqsave(&nxi->addr_lock, irqflags);
 	switch (type) {
 	case NXA_TYPE_ADDR:
 		old = __find_v6_addr(nxi, ip, mask, prefix, type, flags, &nxa);
@@ -931,7 +935,7 @@ int do_remove_v6_addr(struct nx_info *nxi,
 	default:
 		ret = -EINVAL;
 	}
-	spin_unlock(&nxi->addr_lock);
+	spin_unlock_irqrestore(&nxi->addr_lock, irqflags);
 	__dealloc_nx_addr_v6_all(old);
 	return ret;
 }
