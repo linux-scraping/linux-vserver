@@ -167,7 +167,6 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 
 	if (fl4->saddr == INADDR_ANY) {
 		struct nx_addr_v4 *ptr;
-		unsigned long irqflags;
 		__be32 found = 0;
 
 		rt = __ip_route_output_key(net, fl4);
@@ -181,7 +180,8 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 				goto found;
 		}
 
-		spin_lock_irqsave(&nxi->addr_lock, irqflags);
+		WARN_ON_ONCE(in_irq());
+		spin_lock(&nxi->addr_lock);
 		for (ptr = &nxi->v4; ptr; ptr = ptr->next) {
 			__be32 primary = ptr->ip[0].s_addr;
 			__be32 mask = ptr->mask.s_addr;
@@ -210,7 +210,7 @@ struct rtable *ip_v4_find_src(struct net *net, struct nx_info *nxi,
 		found = ipv4_is_loopback(fl4->daddr)
 			? IPI_LOOPBACK : nxi->v4.ip[0].s_addr;
 	found_unlock:
-		spin_unlock_irqrestore(&nxi->addr_lock, irqflags);
+		spin_unlock(&nxi->addr_lock);
 	found:
 		/* assign src ip to flow */
 		fl4->saddr = found;
