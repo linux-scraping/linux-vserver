@@ -1680,13 +1680,10 @@ static int netlink_dump(struct sock *sk)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
 	struct netlink_callback *cb;
-	struct sk_buff *skb;
+	struct sk_buff *skb = NULL;
 	struct nlmsghdr *nlh;
 	int len, err = -ENOBUFS;
-
-	skb = sock_rmalloc(sk, NLMSG_GOODSIZE, 0, GFP_KERNEL);
-	if (!skb)
-		goto errout;
+	int alloc_size;
 
 	mutex_lock(nlk->cb_mutex);
 
@@ -1695,6 +1692,12 @@ static int netlink_dump(struct sock *sk)
 		err = -EINVAL;
 		goto errout_skb;
 	}
+
+	alloc_size = max_t(int, cb->min_dump_alloc, NLMSG_GOODSIZE);
+
+	skb = sock_rmalloc(sk, alloc_size, 0, GFP_KERNEL);
+	if (!skb)
+		goto errout;
 
 	len = cb->dump(skb, cb);
 
@@ -1738,7 +1741,8 @@ int netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 		       const struct nlmsghdr *nlh,
 		       int (*dump)(struct sk_buff *skb,
 				   struct netlink_callback *),
-		       int (*done)(struct netlink_callback *))
+		       int (*done)(struct netlink_callback *),
+		       u16 min_dump_alloc)
 {
 	struct netlink_callback *cb;
 	struct sock *sk;
@@ -1752,6 +1756,7 @@ int netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 	cb->dump = dump;
 	cb->done = done;
 	cb->nlh = nlh;
+	cb->min_dump_alloc = min_dump_alloc;
 	atomic_inc(&skb->users);
 	cb->skb = skb;
 
