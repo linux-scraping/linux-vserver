@@ -294,7 +294,7 @@ out_put:
 int vx_set_space(struct vx_info *vxi, unsigned long mask, unsigned index)
 {
 	struct nsproxy *proxy_vxi, *proxy_cur, *proxy_new;
-	struct fs_struct *fs_vxi, *fs;
+	struct fs_struct *fs_vxi, *fs = NULL;
 	struct _vx_space *space;
 	int ret, kill = 0;
 
