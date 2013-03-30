@@ -142,7 +142,7 @@ static struct buffer_head *bclean(handle_t *handle, struct super_block *sb,
 
 	bh = sb_getblk(sb, blk);
 	if (!bh)
-		return ERR_PTR(-EIO);
+		return ERR_PTR(-ENOMEM);
 	if ((err = ext4_journal_get_write_access(handle, bh))) {
 		brelse(bh);
 		bh = ERR_PTR(err);
@@ -220,7 +220,7 @@ static int setup_new_group_blocks(struct super_block *sb,
 
 		gdb = sb_getblk(sb, block);
 		if (!gdb) {
-			err = -EIO;
+			err = -ENOMEM;
 			goto exit_journal;
 		}
 		if ((err = ext4_journal_get_write_access(handle, gdb))) {
@@ -694,7 +694,7 @@ static void update_backups(struct super_block *sb,
 
 		bh = sb_getblk(sb, group * bpg + blk_off);
 		if (!bh) {
-			err = -EIO;
+			err = -ENOMEM;
 			break;
 		}
 		ext4_debug("update metadata backup %#04lx\n",
@@ -938,7 +938,7 @@ int ext4_group_add(struct super_block *sb, struct ext4_new_group_data *input)
 
 	/* Update the free space counts */
 	percpu_counter_add(&sbi->s_freeclusters_counter,
-			   EXT4_B2C(sbi, input->free_blocks_count));
+			   EXT4_NUM_B2C(sbi, input->free_blocks_count));
 	percpu_counter_add(&sbi->s_freeinodes_counter,
 			   EXT4_INODES_PER_GROUP(sb));
 
@@ -946,8 +946,8 @@ int ext4_group_add(struct super_block *sb, struct ext4_new_group_data *input)
 	    sbi->s_log_groups_per_flex) {
 		ext4_group_t flex_group;
 		flex_group = ext4_flex_group(sbi, input->group);
-		atomic_add(EXT4_B2C(sbi, input->free_blocks_count),
-			   &sbi->s_flex_groups[flex_group].free_clusters);
+		atomic64_add(EXT4_NUM_B2C(sbi, input->free_blocks_count),
+			     &sbi->s_flex_groups[flex_group].free_clusters);
 		atomic_add(EXT4_INODES_PER_GROUP(sb),
 			   &sbi->s_flex_groups[flex_group].free_inodes);
 	}
