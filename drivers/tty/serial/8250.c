@@ -322,6 +322,27 @@ static const struct serial8250_config uart_config[] = {
 		.tx_loadsz	= 1024,
 		.flags		= UART_CAP_HFIFO,
 	},
+	[PORT_ALTR_16550_F32] = {
+		.name		= "Altera 16550 FIFO32",
+		.fifo_size	= 32,
+		.tx_loadsz	= 32,
+		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10,
+		.flags		= UART_CAP_FIFO | UART_CAP_AFE,
+	},
+	[PORT_ALTR_16550_F64] = {
+		.name		= "Altera 16550 FIFO64",
+		.fifo_size	= 64,
+		.tx_loadsz	= 64,
+		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10,
+		.flags		= UART_CAP_FIFO | UART_CAP_AFE,
+	},
+	[PORT_ALTR_16550_F128] = {
+		.name		= "Altera 16550 FIFO128",
+		.fifo_size	= 128,
+		.tx_loadsz	= 128,
+		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10,
+		.flags		= UART_CAP_FIFO | UART_CAP_AFE,
+	},
 };
 
 #if defined(CONFIG_MIPS_ALCHEMY)
@@ -2695,7 +2716,7 @@ serial8250_verify_port(struct uart_port *port, struct serial_struct *ser)
 	if (ser->irq >= nr_irqs || ser->irq < 0 ||
 	    ser->baud_base < 9600 || ser->type < PORT_UNKNOWN ||
 	    ser->type >= ARRAY_SIZE(uart_config) || ser->type == PORT_CIRRUS ||
-	    ser->type == PORT_STARTECH)
+	    ser->type == PORT_STARTECH || uart_config[ser->type].name == NULL)
 		return -EINVAL;
 	return 0;
 }
@@ -2705,7 +2726,7 @@ serial8250_type(struct uart_port *port)
 {
 	int type = port->type;
 
-	if (type >= ARRAY_SIZE(uart_config))
+	if (type >= ARRAY_SIZE(uart_config) || uart_config[type].name == NULL)
 		type = 0;
 	return uart_config[type].name;
 }
