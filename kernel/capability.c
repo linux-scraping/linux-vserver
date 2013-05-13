@@ -16,7 +16,6 @@
 #include <linux/pid_namespace.h>
 #include <linux/vs_context.h>
 #include <asm/uaccess.h>
-#include "cred-internals.h"
 
 /*
  * Leveraged for setting/resetting capabilities
