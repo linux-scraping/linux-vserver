@@ -543,6 +543,8 @@ struct rq {
 	struct root_domain *rd;
 	struct sched_domain *sd;
 
+	unsigned long cpu_power;
+
 	unsigned char idle_at_tick;
 	/* For active balancing */
 	int post_schedule;
@@ -1271,6 +1273,10 @@ static void resched_task(struct task_struct *p)
 static void sched_rt_avg_update(struct rq *rq, u64 rt_delta)
 {
 }
+
+static void sched_avg_update(struct rq *rq)
+{
+}
 #endif /* CONFIG_SMP */
 
 #if BITS_PER_LONG == 32
@@ -1494,24 +1500,9 @@ static unsigned long target_load(int cpu, int type)
 	return max(rq->cpu_load[type-1], total);
 }
 
-static struct sched_group *group_of(int cpu)
-{
-	struct sched_domain *sd = rcu_dereference_sched(cpu_rq(cpu)->sd);
-
-	if (!sd)
-		return NULL;
-
-	return sd->groups;
-}
-
 static unsigned long power_of(int cpu)
 {
-	struct sched_group *group = group_of(cpu);
-
-	if (!group)
-		return SCHED_LOAD_SCALE;
-
-	return group->cpu_power;
+	return cpu_rq(cpu)->cpu_power;
 }
 
 static int task_hot(struct task_struct *p, u64 now, struct sched_domain *sd);
@@ -1848,8 +1839,8 @@ static void dec_nr_running(struct rq *rq)
 static void set_load_weight(struct task_struct *p)
 {
 	if (task_has_rt_policy(p)) {
-		p->se.load.weight = prio_to_weight[0] * 2;
-		p->se.load.inv_weight = prio_to_wmult[0] >> 1;
+		p->se.load.weight = 0;
+		p->se.load.inv_weight = WMULT_CONST;
 		return;
 	}
 
@@ -3112,6 +3103,8 @@ static void update_cpu_load(struct rq *this_rq)
 		this_rq->calc_load_update += LOAD_FREQ;
 		calc_load_account_active(this_rq);
 	}
+
+	sched_avg_update(this_rq);
 }
 
 #ifdef CONFIG_SMP
@@ -3432,6 +3425,20 @@ void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *st)
 # define nsecs_to_cputime(__nsecs)	nsecs_to_jiffies(__nsecs)
 #endif
 
+static cputime_t scale_utime(cputime_t utime, cputime_t rtime, cputime_t total)
+{
+	u64 temp = (__force u64) rtime;
+
+	temp *= (__force u64) utime;
+
+	if (sizeof(cputime_t) == 4)
+		temp = div_u64(temp, (__force u32) total);
+	else
+		temp = div64_u64(temp, (__force u64) total);
+
+	return (__force cputime_t) temp;
+}
+
 void task_times(struct task_struct *p, cputime_t *ut, cputime_t *st)
 {
 	cputime_t rtime, utime = p->utime, total = cputime_add(utime, p->stime);
@@ -3441,13 +3448,9 @@ void task_times(struct task_struct *p, cputime_t *ut, cputime_t *st)
 	 */
 	rtime = nsecs_to_cputime(p->se.sum_exec_runtime);
 
-	if (total) {
-		u64 temp = rtime;
-
-		temp *= utime;
-		do_div(temp, total);
-		utime = (cputime_t)temp;
-	} else
+	if (total)
+		utime = scale_utime(utime, rtime, total);
+	else
 		utime = rtime;
 
 	/*
@@ -3474,13 +3477,9 @@ void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *st)
 	total = cputime_add(cputime.utime, cputime.stime);
 	rtime = nsecs_to_cputime(cputime.sum_exec_runtime);
 
-	if (total) {
-		u64 temp = rtime;
-
-		temp *= cputime.utime;
-		do_div(temp, total);
-		utime = (cputime_t)temp;
-	} else
+	if (total)
+		utime = scale_utime(cputime.utime, rtime, total);
+	else
 		utime = rtime;
 
 	sig->prev_utime = max(sig->prev_utime, utime);
@@ -5244,7 +5243,19 @@ void __cpuinit init_idle(struct task_struct *idle, int cpu)
 	idle->se.exec_start = sched_clock();
 
 	cpumask_copy(&idle->cpus_allowed, cpumask_of(cpu));
+	/*
+	 * We're having a chicken and egg problem, even though we are
+	 * holding rq->lock, the cpu isn't yet set to this cpu so the
+	 * lockdep check in task_group() will fail.
+	 *
+	 * Similar case to sched_fork(). / Alternatively we could
+	 * use task_rq_lock() here and obtain the other rq->lock.
+	 *
+	 * Silence PROVE_RCU
+	 */
+	rcu_read_lock();
 	__set_task_cpu(idle, cpu);
+	rcu_read_unlock();
 
 	rq->curr = rq->idle = idle;
 #if defined(CONFIG_SMP) && defined(__ARCH_WANT_UNLOCKED_CTXSW)
@@ -5262,7 +5273,7 @@ void __cpuinit init_idle(struct task_struct *idle, int cpu)
 	 * The idle tasks have their own, simple scheduling class:
 	 */
 	idle->sched_class = &idle_sched_class;
-	ftrace_graph_init_task(idle);
+	ftrace_graph_init_idle_task(idle, cpu);
 }
 
 /*
@@ -7790,6 +7801,7 @@ void __init sched_init(void)
 #ifdef CONFIG_SMP
 		rq->sd = NULL;
 		rq->rd = NULL;
+		rq->cpu_power = SCHED_LOAD_SCALE;
 		rq->post_schedule = 0;
 		rq->active_balance = 0;
 		rq->next_balance = jiffies;
@@ -8272,12 +8284,12 @@ void sched_move_task(struct task_struct *tsk)
 	if (unlikely(running))
 		tsk->sched_class->put_prev_task(rq, tsk);
 
-	set_task_rq(tsk, task_cpu(tsk));
-
 #ifdef CONFIG_FAIR_GROUP_SCHED
-	if (tsk->sched_class->moved_group)
-		tsk->sched_class->moved_group(tsk, on_rq);
+	if (tsk->sched_class->task_move_group)
+		tsk->sched_class->task_move_group(tsk, on_rq);
+	else
 #endif
+		set_task_rq(tsk, task_cpu(tsk));
 
 	if (unlikely(running))
 		tsk->sched_class->set_curr_task(rq);

@@ -2066,7 +2066,8 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 
 	if (!capable(CAP_SYS_ADMIN))
 		mnt_flags |= MNT_NODEV;
-	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE |
+
+	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE | MS_BORN |
 		   MS_NOATIME | MS_NODIRATIME | MS_RELATIME| MS_KERNMOUNT |
 		   MS_STRICTATIME);
 

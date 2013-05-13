@@ -53,6 +53,7 @@
 /* FTDI 2332C Dual channel device, side A=245 FIFO (JTAG), Side B=RS232 UART */
 #define LMI_LM3S_DEVEL_BOARD_PID	0xbcd8
 #define LMI_LM3S_EVAL_BOARD_PID		0xbcd9
+#define LMI_LM3S_ICDI_BOARD_PID		0xbcda
 
 #define FTDI_TURTELIZER_PID	0xBDC8 /* JTAG/RS-232 adapter by egnite GmbH */
 
@@ -110,9 +111,13 @@
 
 /* Propox devices */
 #define FTDI_PROPOX_JTAGCABLEII_PID	0xD738
+#define FTDI_PROPOX_ISPCABLEIII_PID	0xD739
 
 /* Lenz LI-USB Computer Interface. */
 #define FTDI_LENZ_LIUSB_PID	0xD780
+
+/* Vardaan Enterprises Serial Interface VEUSB422R3 */
+#define FTDI_VARDAAN_PID	0xF070
 
 /*
  * Xsens Technologies BV products (http://www.xsens.com).
@@ -297,6 +302,8 @@
  * Hameg HO820 and HO870 interface (using VID 0x0403)
  */
 #define        HAMEG_HO820_PID         0xed74
+#define        HAMEG_HO730_PID         0xed73
+#define        HAMEG_HO720_PID         0xed72
 #define        HAMEG_HO870_PID         0xed71
 
 /*
@@ -346,6 +353,7 @@
  */
 #define FTDI_4N_GALAXY_DE_1_PID	0xF3C0
 #define FTDI_4N_GALAXY_DE_2_PID	0xF3C1
+#define FTDI_4N_GALAXY_DE_3_PID	0xF3C2
 
 /*
  * Linx Technologies product ids
@@ -413,9 +421,11 @@
 #define PROTEGO_SPECIAL_4	0xFC73	/* special/unknown device */
 
 /*
- * DSS-20 Sync Station for Sony Ericsson P800
+ * Sony Ericsson product ids
  */
-#define FTDI_DSS20_PID          0xFC82
+#define FTDI_DSS20_PID		0xFC82	/* DSS-20 Sync Station for Sony Ericsson P800 */
+#define FTDI_URBAN_0_PID	0xFC8A	/* Sony Ericsson Urban, uart #0 */
+#define FTDI_URBAN_1_PID	0xFC8B	/* Sony Ericsson Urban, uart #1 */
 
 /* www.irtrans.de device */
 #define FTDI_IRTRANS_PID 0xFC60 /* Product Id */
@@ -486,6 +496,11 @@
 /* www.canusb.com Lawicel CANUSB device (FTDI_VID) */
 #define FTDI_CANUSB_PID 0xFFA8 /* Product Id */
 
+/*
+ * TavIR AVR product ids (FTDI_VID)
+ */
+#define FTDI_TAVIR_STK500_PID	0xFA33	/* STK500 AVR programmer */
+
 
 
 /********************************/
@@ -513,6 +528,12 @@
  */
 #define RATOC_VENDOR_ID		0x0584
 #define RATOC_PRODUCT_ID_USB60F	0xb020
+
+/*
+ * Acton Research Corp.
+ */
+#define ACTON_VID		0x0647	/* Vendor ID */
+#define ACTON_SPECTRAPRO_PID	0x0100
 
 /*
  * Contec products (http://www.contec.com)
@@ -570,14 +591,27 @@
 /* Note: OCT US101 is also rebadged as Dick Smith Electronics (NZ) XH6381 */
 /* Also rebadged as Dick Smith Electronics (Aus) XH6451 */
 /* Also rebadged as SIIG Inc. model US2308 hardware version 1 */
+#define OCT_DK201_PID		0x0103	/* OCT DK201 USB docking station */
 #define OCT_US101_PID		0x0421	/* OCT US101 USB to RS-232 */
 
 /*
- * Icom ID-1 digital transceiver
+ * Definitions for Icom Inc. devices
  */
-
-#define ICOM_ID1_VID            0x0C26
-#define ICOM_ID1_PID            0x0004
+#define ICOM_VID		0x0C26 /* Icom vendor ID */
+/* Note: ID-1 is a communications tranceiver for HAM-radio operators */
+#define ICOM_ID_1_PID		0x0004 /* ID-1 USB to RS-232 */
+/* Note: OPC is an Optional cable to connect an Icom Tranceiver */
+#define ICOM_OPC_U_UC_PID	0x0018 /* OPC-478UC, OPC-1122U cloning cable */
+/* Note: ID-RP* devices are Icom Repeater Devices for HAM-radio */
+#define ICOM_ID_RP2C1_PID	0x0009 /* ID-RP2C Asset 1 to RS-232 */
+#define ICOM_ID_RP2C2_PID	0x000A /* ID-RP2C Asset 2 to RS-232 */
+#define ICOM_ID_RP2D_PID	0x000B /* ID-RP2D configuration port*/
+#define ICOM_ID_RP2VT_PID	0x000C /* ID-RP2V Transmit config port */
+#define ICOM_ID_RP2VR_PID	0x000D /* ID-RP2V Receive config port */
+#define ICOM_ID_RP4KVT_PID	0x0010 /* ID-RP4000V Transmit config port */
+#define ICOM_ID_RP4KVR_PID	0x0011 /* ID-RP4000V Receive config port */
+#define ICOM_ID_RP2KVT_PID	0x0012 /* ID-RP2000V Transmit config port */
+#define ICOM_ID_RP2KVR_PID	0x0013 /* ID-RP2000V Receive config port */
 
 /*
  * GN Otometrics (http://www.otometrics.com)
@@ -728,6 +762,7 @@
  */
 #define RTSYSTEMS_VID			0x2100	/* Vendor ID */
 #define RTSYSTEMS_SERIAL_VX7_PID	0x9e52	/* Serial converter for VX-7 Radios using FT232RL */
+#define RTSYSTEMS_CT29B_PID		0x9e54	/* CT29B Radio Cable */
 
 /*
  * Bayer Ascensia Contour blood glucose meter USB-converter cable.
@@ -1025,6 +1060,12 @@
 #define WHT_PID			0x0004 /* Wireless Handheld Terminal */
 
 /*
+ * STMicroelectonics
+ */
+#define ST_VID			0x0483
+#define ST_STMCLT1030_PID	0x3747 /* ST Micro Connect Lite STMCLT1030 */
+
+/*
  * Papouch products (http://www.papouch.com/)
  * Submitted by Folkert van Heusden
  */
@@ -1084,6 +1125,11 @@
 #define MJSG_HD_RADIO_PID	0x937C
 
 /*
+ * D.O.Tec products (http://www.directout.eu)
+ */
+#define FTDI_DOTEC_PID 0x9868
+
+/*
  * Xverve Signalyzer tools (http://www.signalyzer.com/)
  */
 #define XVERVE_SIGNALYZER_ST_PID	0xBCA0
@@ -1107,3 +1153,23 @@
 #define FTDI_SCIENCESCOPE_LOGBOOKML_PID		0xFF18
 #define FTDI_SCIENCESCOPE_LS_LOGBOOK_PID	0xFF1C
 #define FTDI_SCIENCESCOPE_HS_LOGBOOK_PID	0xFF1D
+
+/*
+ * Milkymist One JTAG/Serial
+ */
+#define QIHARDWARE_VID			0x20B7
+#define MILKYMISTONE_JTAGSERIAL_PID	0x0713
+
+/*
+ * CTI GmbH RS485 Converter http://www.cti-lean.com/
+ */
+/* USB-485-Mini*/
+#define FTDI_CTI_MINI_PID	0xF608
+/* USB-Nano-485*/
+#define FTDI_CTI_NANO_PID	0xF60B
+
+/*
+ * ZeitControl cardsystems GmbH rfid-readers http://zeitconrol.de
+ */
+/* TagTracer MIFARE*/
+#define FTDI_ZEITCONTROL_TAGTRACE_MIFARE_PID	0xF7C0

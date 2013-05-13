@@ -67,6 +67,7 @@ static struct super_block *alloc_super(struct file_system_type *type)
 			goto out;
 		}
 		INIT_LIST_HEAD(&s->s_files);
+		s->s_bdi = &default_backing_dev_info;
 		INIT_LIST_HEAD(&s->s_instances);
 		INIT_HLIST_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
@@ -359,6 +360,11 @@ retry:
 			if (s) {
 				up_write(&s->s_umount);
 				destroy_super(s);
+				s = NULL;
+			}
+			if (unlikely(!(old->s_flags & MS_BORN))) {
+				deactivate_locked_super(old);
+				goto retry;
 			}
 			return old;
 		}
@@ -968,6 +974,8 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	sb = mnt->mnt_sb;
 	BUG_ON(!sb);
 	WARN_ON(!sb->s_bdi);
+	WARN_ON(sb->s_bdi == &default_backing_dev_info);
+	sb->s_flags |= MS_BORN;
 
 	error = -EPERM;
 	if (!vx_capable(CAP_SYS_ADMIN, VXC_BINARY_MOUNT) && !sb->s_bdev &&
