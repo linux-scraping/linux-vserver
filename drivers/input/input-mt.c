@@ -18,6 +18,7 @@ static void copy_abs(struct input_dev *dev, unsigned int dst, unsigned int src)
 {
 	if (dev->absinfo && test_bit(src, dev->absbit)) {
 		dev->absinfo[dst] = dev->absinfo[src];
+		dev->absinfo[dst].fuzz = 0;
 		dev->absbit[BIT_WORD(dst)] |= BIT_MASK(dst);
 	}
 }
@@ -194,7 +195,7 @@ void input_mt_report_pointer_emulation(struct input_dev *dev, bool use_count)
 	if (!mt)
 		return;
 
-	oldest = 0;
+	oldest = NULL;
 	oldid = mt->trkid;
 	count = 0;
 
@@ -251,7 +252,7 @@ void input_mt_sync_frame(struct input_dev *dev)
 
 	if (mt->flags & INPUT_MT_DROP_UNUSED) {
 		for (s = mt->slots; s != mt->slots + mt->num_slots; s++) {
-			if (s->frame == mt->frame)
+			if (input_mt_is_used(mt, s))
 				continue;
 			input_mt_slot(dev, s - mt->slots);
 			input_event(dev, EV_ABS, ABS_MT_TRACKING_ID, -1);

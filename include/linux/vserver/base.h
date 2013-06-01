@@ -160,6 +160,9 @@ enum {
 	(cap_raised(current_cap(), b) && \
 	!((f) & ~vx_current_umask())))
 
+#define vx_ns_can_unshare(n, b, f) (ns_capable(n, b) || \
+	(cap_raised(current_cap(), b) && \
+	!((f) & ~vx_current_umask())))
 
 #define __vx_wmask(v)		((v)->vx_wmask)
 

@@ -149,8 +149,7 @@ asmlinkage long sys_rt_sigreturn(struct pt_regs *regs)
 	if (restore_sigframe(regs, frame))
 		goto badframe;
 
-	if (do_sigaltstack(&frame->uc.uc_stack,
-			   NULL, regs->sp) == -EFAULT)
+	if (restore_altstack(&frame->uc.uc_stack))
 		goto badframe;
 
 	return regs->regs[0];
@@ -162,12 +161,6 @@ badframe:
 				    regs->pc, regs->sp);
 	force_sig(SIGSEGV, current);
 	return 0;
-}
-
-asmlinkage long sys_sigaltstack(const stack_t __user *uss, stack_t __user *uoss,
-				unsigned long sp)
-{
-	return do_sigaltstack(uss, uoss, sp);
 }
 
 static int setup_sigframe(struct rt_sigframe __user *sf,
@@ -202,11 +195,11 @@ static int setup_sigframe(struct rt_sigframe __user *sf,
 	return err;
 }
 
-static void __user *get_sigframe(struct k_sigaction *ka, struct pt_regs *regs,
-				 int framesize)
+static struct rt_sigframe __user *get_sigframe(struct k_sigaction *ka,
+					       struct pt_regs *regs)
 {
 	unsigned long sp, sp_top;
-	void __user *frame;
+	struct rt_sigframe __user *frame;
 
 	sp = sp_top = regs->sp;
 
@@ -216,8 +209,8 @@ static void __user *get_sigframe(struct k_sigaction *ka, struct pt_regs *regs,
 	if ((ka->sa.sa_flags & SA_ONSTACK) && !sas_ss_flags(sp))
 		sp = sp_top = current->sas_ss_sp + current->sas_ss_size;
 
-	sp = (sp - framesize) & ~15;
-	frame = (void __user *)sp;
+	sp = (sp - sizeof(struct rt_sigframe)) & ~15;
+	frame = (struct rt_sigframe __user *)sp;
 
 	/*
 	 * Check that we can actually write to the signal frame.
@@ -250,22 +243,16 @@ static int setup_rt_frame(int usig, struct k_sigaction *ka, siginfo_t *info,
 			  sigset_t *set, struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
-	stack_t stack;
 	int err = 0;
 
-	frame = get_sigframe(ka, regs, sizeof(*frame));
+	frame = get_sigframe(ka, regs);
 	if (!frame)
 		return 1;
 
 	__put_user_error(0, &frame->uc.uc_flags, err);
 	__put_user_error(NULL, &frame->uc.uc_link, err);
 
-	memset(&stack, 0, sizeof(stack));
-	stack.ss_sp = (void __user *)current->sas_ss_sp;
-	stack.ss_flags = sas_ss_flags(regs->sp);
-	stack.ss_size = current->sas_ss_size;
-	err |= __copy_to_user(&frame->uc.uc_stack, &stack, sizeof(stack));
-
+	err |= __save_altstack(&frame->uc.uc_stack, regs->sp);
 	err |= setup_sigframe(frame, regs, set);
 	if (err == 0) {
 		setup_return(regs, ka, frame, usig);

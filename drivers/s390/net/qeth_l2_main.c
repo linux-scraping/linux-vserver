@@ -411,7 +411,7 @@ static int qeth_l2_process_inbound_buffer(struct qeth_card *card,
 	unsigned int len;
 
 	*done = 0;
-	BUG_ON(!budget);
+	WARN_ON_ONCE(!budget);
 	while (budget) {
 		skb = qeth_core_get_next_skb(card,
 			&card->qdio.in_q->bufs[card->rx.b_index],
@@ -973,7 +973,6 @@ static int __qeth_l2_set_online(struct ccwgroup_device *gdev, int recovery_mode)
 	int rc = 0;
 	enum qeth_card_states recover_flag;
 
-	BUG_ON(!card);
 	mutex_lock(&card->discipline_mutex);
 	mutex_lock(&card->conf_mutex);
 	QETH_DBF_TEXT(SETUP, 2, "setonlin");
@@ -986,6 +985,7 @@ static int __qeth_l2_set_online(struct ccwgroup_device *gdev, int recovery_mode)
 		rc = -ENODEV;
 		goto out_remove;
 	}
+	qeth_trace_features(card);
 
 	if (!card->dev && qeth_l2_setup_netdev(card)) {
 		rc = -ENODEV;
@@ -1025,9 +1025,14 @@ static int __qeth_l2_set_online(struct ccwgroup_device *gdev, int recovery_mode)
 
 contin:
 	if ((card->info.type == QETH_CARD_TYPE_OSD) ||
-	    (card->info.type == QETH_CARD_TYPE_OSX))
+	    (card->info.type == QETH_CARD_TYPE_OSX)) {
 		/* configure isolation level */
-		qeth_set_access_ctrl_online(card);
+		rc = qeth_set_access_ctrl_online(card, 0);
+		if (rc) {
+			rc = -ENODEV;
+			goto out_remove;
+		}
+	}
 
 	if (card->info.type != QETH_CARD_TYPE_OSN &&
 	    card->info.type != QETH_CARD_TYPE_OSM)
@@ -1138,19 +1143,18 @@ static int qeth_l2_recover(void *ptr)
 	QETH_CARD_TEXT(card, 2, "recover2");
 	dev_warn(&card->gdev->dev,
 		"A recovery process has been started for the device\n");
+	qeth_set_recovery_task(card);
 	__qeth_l2_set_offline(card->gdev, 1);
 	rc = __qeth_l2_set_online(card->gdev, 1);
 	if (!rc)
 		dev_info(&card->gdev->dev,
 			"Device successfully recovered!\n");
 	else {
-		if (rtnl_trylock()) {
-			dev_close(card->dev);
-			rtnl_unlock();
-			dev_warn(&card->gdev->dev, "The qeth device driver "
+		qeth_close_dev(card);
+		dev_warn(&card->gdev->dev, "The qeth device driver "
 				"failed to recover an error on the device\n");
-		}
 	}
+	qeth_clear_recovery_task(card);
 	qeth_clear_thread_start_bit(card, QETH_RECOVER_THREAD);
 	qeth_clear_thread_running_bit(card, QETH_RECOVER_THREAD);
 	return 0;

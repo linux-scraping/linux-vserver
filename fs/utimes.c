@@ -56,13 +56,13 @@ static int utimes_common(struct path *path, struct timespec *times)
 	struct iattr newattrs;
 	struct inode *inode;
 
-	error = mnt_want_write(path->mnt);
+	error = cow_check_and_break(path);
 	if (error)
 		goto out;
 
-	error = cow_check_and_break(path);
+	error = mnt_want_write(path->mnt);
 	if (error)
-		goto mnt_drop_write_and_out;
+		goto out;
 
 	inode = path->dentry->d_inode;
 
@@ -166,13 +166,17 @@ long do_utimes(int dfd, const char __user *filename, struct timespec *times,
 
 		if (!(flags & AT_SYMLINK_NOFOLLOW))
 			lookup_flags |= LOOKUP_FOLLOW;
-
+retry:
 		error = user_path_at(dfd, filename, lookup_flags, &path);
 		if (error)
 			goto out;
 
 		error = utimes_common(&path, times);
 		path_put(&path);
+		if (retry_estale(error, lookup_flags)) {
+			lookup_flags |= LOOKUP_REVAL;
+			goto retry;
+		}
 	}
 
 out:

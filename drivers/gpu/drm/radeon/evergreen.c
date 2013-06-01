@@ -105,6 +105,27 @@ void evergreen_fix_pci_max_read_req_size(struct radeon_device *rdev)
 	}
 }
 
+static bool dce4_is_in_vblank(struct radeon_device *rdev, int crtc)
+{
+	if (RREG32(EVERGREEN_CRTC_STATUS + crtc_offsets[crtc]) & EVERGREEN_CRTC_V_BLANK)
+		return true;
+	else
+		return false;
+}
+
+static bool dce4_is_counter_moving(struct radeon_device *rdev, int crtc)
+{
+	u32 pos1, pos2;
+
+	pos1 = RREG32(EVERGREEN_CRTC_STATUS_POSITION + crtc_offsets[crtc]);
+	pos2 = RREG32(EVERGREEN_CRTC_STATUS_POSITION + crtc_offsets[crtc]);
+
+	if (pos1 != pos2)
+		return true;
+	else
+		return false;
+}
+
 /**
  * dce4_wait_for_vblank - vblank wait asic callback.
  *
@@ -115,21 +136,28 @@ void evergreen_fix_pci_max_read_req_size(struct radeon_device *rdev)
  */
 void dce4_wait_for_vblank(struct radeon_device *rdev, int crtc)
 {
-	int i;
+	unsigned i = 0;
 
 	if (crtc >= rdev->num_crtc)
 		return;
 
-	if (RREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[crtc]) & EVERGREEN_CRTC_MASTER_EN) {
-		for (i = 0; i < rdev->usec_timeout; i++) {
-			if (!(RREG32(EVERGREEN_CRTC_STATUS + crtc_offsets[crtc]) & EVERGREEN_CRTC_V_BLANK))
+	if (!(RREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[crtc]) & EVERGREEN_CRTC_MASTER_EN))
+		return;
+
+	/* depending on when we hit vblank, we may be close to active; if so,
+	 * wait for another frame.
+	 */
+	while (dce4_is_in_vblank(rdev, crtc)) {
+		if (i++ % 100 == 0) {
+			if (!dce4_is_counter_moving(rdev, crtc))
 				break;
-			udelay(1);
 		}
-		for (i = 0; i < rdev->usec_timeout; i++) {
-			if (RREG32(EVERGREEN_CRTC_STATUS + crtc_offsets[crtc]) & EVERGREEN_CRTC_V_BLANK)
+	}
+
+	while (!dce4_is_in_vblank(rdev, crtc)) {
+		if (i++ % 100 == 0) {
+			if (!dce4_is_counter_moving(rdev, crtc))
 				break;
-			udelay(1);
 		}
 	}
 }
@@ -403,6 +431,19 @@ void evergreen_pm_misc(struct radeon_device *rdev)
 			rdev->pm.current_vddc = voltage->voltage;
 			DRM_DEBUG("Setting: vddc: %d\n", voltage->voltage);
 		}
+
+		/* starting with BTC, there is one state that is used for both
+		 * MH and SH.  Difference is that we always use the high clock index for
+		 * mclk and vddci.
+		 */
+		if ((rdev->pm.pm_method == PM_METHOD_PROFILE) &&
+		    (rdev->family >= CHIP_BARTS) &&
+		    rdev->pm.active_crtc_count &&
+		    ((rdev->pm.profile_index == PM_PROFILE_MID_MH_IDX) ||
+		     (rdev->pm.profile_index == PM_PROFILE_LOW_MH_IDX)))
+			voltage = &rdev->pm.power_state[req_ps_idx].
+				clock_info[rdev->pm.profiles[PM_PROFILE_HIGH_MH_IDX].dpms_on_cm_idx].voltage;
+
 		/* 0xff01 is a flag rather then an actual voltage */
 		if (voltage->vddci == 0xff01)
 			return;
@@ -595,6 +636,16 @@ void evergreen_hpd_init(struct radeon_device *rdev)
 
 	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
 		struct radeon_connector *radeon_connector = to_radeon_connector(connector);
+
+		if (connector->connector_type == DRM_MODE_CONNECTOR_eDP ||
+		    connector->connector_type == DRM_MODE_CONNECTOR_LVDS) {
+			/* don't try to enable hpd on eDP or LVDS avoid breaking the
+			 * aux dp channel on imac and help (but not completely fix)
+			 * https://bugzilla.redhat.com/show_bug.cgi?id=726143
+			 * also avoid interrupt storms during dpms.
+			 */
+			continue;
+		}
 		switch (radeon_connector->hpd.hpd) {
 		case RADEON_HPD_1:
 			WREG32(DC_HPD1_CONTROL, tmp);
@@ -1312,17 +1363,16 @@ void evergreen_mc_stop(struct radeon_device *rdev, struct evergreen_mc_save *sav
 				tmp = RREG32(EVERGREEN_CRTC_BLANK_CONTROL + crtc_offsets[i]);
 				if (!(tmp & EVERGREEN_CRTC_BLANK_DATA_EN)) {
 					radeon_wait_for_vblank(rdev, i);
-					tmp |= EVERGREEN_CRTC_BLANK_DATA_EN;
 					WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 1);
+					tmp |= EVERGREEN_CRTC_BLANK_DATA_EN;
 					WREG32(EVERGREEN_CRTC_BLANK_CONTROL + crtc_offsets[i], tmp);
-					WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 0);
 				}
 			} else {
 				tmp = RREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[i]);
 				if (!(tmp & EVERGREEN_CRTC_DISP_READ_REQUEST_DISABLE)) {
 					radeon_wait_for_vblank(rdev, i);
-					tmp |= EVERGREEN_CRTC_DISP_READ_REQUEST_DISABLE;
 					WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 1);
+					tmp |= EVERGREEN_CRTC_DISP_READ_REQUEST_DISABLE;
 					WREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[i], tmp);
 					WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 0);
 				}
@@ -1334,6 +1384,15 @@ void evergreen_mc_stop(struct radeon_device *rdev, struct evergreen_mc_save *sav
 					break;
 				udelay(1);
 			}
+
+			/* XXX this is a hack to avoid strange behavior with EFI on certain systems */
+			WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 1);
+			tmp = RREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[i]);
+			tmp &= ~EVERGREEN_CRTC_MASTER_EN;
+			WREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[i], tmp);
+			WREG32(EVERGREEN_CRTC_UPDATE_LOCK + crtc_offsets[i], 0);
+			save->crtc_enabled[i] = false;
+			/* ***** */
 		} else {
 			save->crtc_enabled[i] = false;
 		}
@@ -1351,6 +1410,22 @@ void evergreen_mc_stop(struct radeon_device *rdev, struct evergreen_mc_save *sav
 	}
 	/* wait for the MC to settle */
 	udelay(100);
+
+	/* lock double buffered regs */
+	for (i = 0; i < rdev->num_crtc; i++) {
+		if (save->crtc_enabled[i]) {
+			tmp = RREG32(EVERGREEN_GRPH_UPDATE + crtc_offsets[i]);
+			if (!(tmp & EVERGREEN_GRPH_UPDATE_LOCK)) {
+				tmp |= EVERGREEN_GRPH_UPDATE_LOCK;
+				WREG32(EVERGREEN_GRPH_UPDATE + crtc_offsets[i], tmp);
+			}
+			tmp = RREG32(EVERGREEN_MASTER_UPDATE_LOCK + crtc_offsets[i]);
+			if (!(tmp & 1)) {
+				tmp |= 1;
+				WREG32(EVERGREEN_MASTER_UPDATE_LOCK + crtc_offsets[i], tmp);
+			}
+		}
+	}
 }
 
 void evergreen_mc_resume(struct radeon_device *rdev, struct evergreen_mc_save *save)
@@ -1371,6 +1446,33 @@ void evergreen_mc_resume(struct radeon_device *rdev, struct evergreen_mc_save *s
 	}
 	WREG32(EVERGREEN_VGA_MEMORY_BASE_ADDRESS_HIGH, upper_32_bits(rdev->mc.vram_start));
 	WREG32(EVERGREEN_VGA_MEMORY_BASE_ADDRESS, (u32)rdev->mc.vram_start);
+
+	/* unlock regs and wait for update */
+	for (i = 0; i < rdev->num_crtc; i++) {
+		if (save->crtc_enabled[i]) {
+			tmp = RREG32(EVERGREEN_MASTER_UPDATE_MODE + crtc_offsets[i]);
+			if ((tmp & 0x3) != 0) {
+				tmp &= ~0x3;
+				WREG32(EVERGREEN_MASTER_UPDATE_MODE + crtc_offsets[i], tmp);
+			}
+			tmp = RREG32(EVERGREEN_GRPH_UPDATE + crtc_offsets[i]);
+			if (tmp & EVERGREEN_GRPH_UPDATE_LOCK) {
+				tmp &= ~EVERGREEN_GRPH_UPDATE_LOCK;
+				WREG32(EVERGREEN_GRPH_UPDATE + crtc_offsets[i], tmp);
+			}
+			tmp = RREG32(EVERGREEN_MASTER_UPDATE_LOCK + crtc_offsets[i]);
+			if (tmp & 1) {
+				tmp &= ~1;
+				WREG32(EVERGREEN_MASTER_UPDATE_LOCK + crtc_offsets[i], tmp);
+			}
+			for (j = 0; j < rdev->usec_timeout; j++) {
+				tmp = RREG32(EVERGREEN_GRPH_UPDATE + crtc_offsets[i]);
+				if ((tmp & EVERGREEN_GRPH_SURFACE_UPDATE_PENDING) == 0)
+					break;
+				udelay(1);
+			}
+		}
+	}
 
 	/* unblackout the MC */
 	tmp = RREG32(MC_SHARED_BLACKOUT_CNTL);
@@ -1660,7 +1762,7 @@ static int evergreen_cp_resume(struct radeon_device *rdev)
 	ring->wptr = 0;
 	WREG32(CP_RB_WPTR, ring->wptr);
 
-	/* set the wb address wether it's enabled or not */
+	/* set the wb address whether it's enabled or not */
 	WREG32(CP_RB_RPTR_ADDR,
 	       ((rdev->wb.gpu_addr + RADEON_WB_CP_RPTR_OFFSET) & 0xFFFFFFFC));
 	WREG32(CP_RB_RPTR_ADDR_HI, upper_32_bits(rdev->wb.gpu_addr + RADEON_WB_CP_RPTR_OFFSET) & 0xFF);
@@ -2044,6 +2146,7 @@ static void evergreen_gpu_init(struct radeon_device *rdev)
 	WREG32(GB_ADDR_CONFIG, gb_addr_config);
 	WREG32(DMIF_ADDR_CONFIG, gb_addr_config);
 	WREG32(HDP_ADDR_CONFIG, gb_addr_config);
+	WREG32(DMA_TILING_CONFIG, gb_addr_config);
 
 	if ((rdev->config.evergreen.max_backends == 1) &&
 	    (rdev->flags & RADEON_IS_IGP)) {
@@ -2297,8 +2400,8 @@ int evergreen_mc_init(struct radeon_device *rdev)
 		rdev->mc.real_vram_size = RREG32(CONFIG_MEMSIZE);
 	} else {
 		/* size in MB on evergreen/cayman/tn */
-		rdev->mc.mc_vram_size = RREG32(CONFIG_MEMSIZE) * 1024 * 1024;
-		rdev->mc.real_vram_size = RREG32(CONFIG_MEMSIZE) * 1024 * 1024;
+		rdev->mc.mc_vram_size = RREG32(CONFIG_MEMSIZE) * 1024ULL * 1024ULL;
+		rdev->mc.real_vram_size = RREG32(CONFIG_MEMSIZE) * 1024ULL * 1024ULL;
 	}
 	rdev->mc.visible_vram_size = rdev->mc.aper_size;
 	r700_vram_gtt_location(rdev, &rdev->mc);
@@ -2307,17 +2410,281 @@ int evergreen_mc_init(struct radeon_device *rdev)
 	return 0;
 }
 
-bool evergreen_gpu_is_lockup(struct radeon_device *rdev, struct radeon_ring *ring)
+void evergreen_print_gpu_status_regs(struct radeon_device *rdev)
 {
-	u32 srbm_status;
-	u32 grbm_status;
-	u32 grbm_status_se0, grbm_status_se1;
+	dev_info(rdev->dev, "  GRBM_STATUS               = 0x%08X\n",
+		RREG32(GRBM_STATUS));
+	dev_info(rdev->dev, "  GRBM_STATUS_SE0           = 0x%08X\n",
+		RREG32(GRBM_STATUS_SE0));
+	dev_info(rdev->dev, "  GRBM_STATUS_SE1           = 0x%08X\n",
+		RREG32(GRBM_STATUS_SE1));
+	dev_info(rdev->dev, "  SRBM_STATUS               = 0x%08X\n",
+		RREG32(SRBM_STATUS));
+	dev_info(rdev->dev, "  SRBM_STATUS2              = 0x%08X\n",
+		RREG32(SRBM_STATUS2));
+	dev_info(rdev->dev, "  R_008674_CP_STALLED_STAT1 = 0x%08X\n",
+		RREG32(CP_STALLED_STAT1));
+	dev_info(rdev->dev, "  R_008678_CP_STALLED_STAT2 = 0x%08X\n",
+		RREG32(CP_STALLED_STAT2));
+	dev_info(rdev->dev, "  R_00867C_CP_BUSY_STAT     = 0x%08X\n",
+		RREG32(CP_BUSY_STAT));
+	dev_info(rdev->dev, "  R_008680_CP_STAT          = 0x%08X\n",
+		RREG32(CP_STAT));
+	dev_info(rdev->dev, "  R_00D034_DMA_STATUS_REG   = 0x%08X\n",
+		RREG32(DMA_STATUS_REG));
+	if (rdev->family >= CHIP_CAYMAN) {
+		dev_info(rdev->dev, "  R_00D834_DMA_STATUS_REG   = 0x%08X\n",
+			 RREG32(DMA_STATUS_REG + 0x800));
+	}
+}
 
-	srbm_status = RREG32(SRBM_STATUS);
-	grbm_status = RREG32(GRBM_STATUS);
-	grbm_status_se0 = RREG32(GRBM_STATUS_SE0);
-	grbm_status_se1 = RREG32(GRBM_STATUS_SE1);
-	if (!(grbm_status & GUI_ACTIVE)) {
+bool evergreen_is_display_hung(struct radeon_device *rdev)
+{
+	u32 crtc_hung = 0;
+	u32 crtc_status[6];
+	u32 i, j, tmp;
+
+	for (i = 0; i < rdev->num_crtc; i++) {
+		if (RREG32(EVERGREEN_CRTC_CONTROL + crtc_offsets[i]) & EVERGREEN_CRTC_MASTER_EN) {
+			crtc_status[i] = RREG32(EVERGREEN_CRTC_STATUS_HV_COUNT + crtc_offsets[i]);
+			crtc_hung |= (1 << i);
+		}
+	}
+
+	for (j = 0; j < 10; j++) {
+		for (i = 0; i < rdev->num_crtc; i++) {
+			if (crtc_hung & (1 << i)) {
+				tmp = RREG32(EVERGREEN_CRTC_STATUS_HV_COUNT + crtc_offsets[i]);
+				if (tmp != crtc_status[i])
+					crtc_hung &= ~(1 << i);
+			}
+		}
+		if (crtc_hung == 0)
+			return false;
+		udelay(100);
+	}
+
+	return true;
+}
+
+static u32 evergreen_gpu_check_soft_reset(struct radeon_device *rdev)
+{
+	u32 reset_mask = 0;
+	u32 tmp;
+
+	/* GRBM_STATUS */
+	tmp = RREG32(GRBM_STATUS);
+	if (tmp & (PA_BUSY | SC_BUSY |
+		   SH_BUSY | SX_BUSY |
+		   TA_BUSY | VGT_BUSY |
+		   DB_BUSY | CB_BUSY |
+		   SPI_BUSY | VGT_BUSY_NO_DMA))
+		reset_mask |= RADEON_RESET_GFX;
+
+	if (tmp & (CF_RQ_PENDING | PF_RQ_PENDING |
+		   CP_BUSY | CP_COHERENCY_BUSY))
+		reset_mask |= RADEON_RESET_CP;
+
+	if (tmp & GRBM_EE_BUSY)
+		reset_mask |= RADEON_RESET_GRBM | RADEON_RESET_GFX | RADEON_RESET_CP;
+
+	/* DMA_STATUS_REG */
+	tmp = RREG32(DMA_STATUS_REG);
+	if (!(tmp & DMA_IDLE))
+		reset_mask |= RADEON_RESET_DMA;
+
+	/* SRBM_STATUS2 */
+	tmp = RREG32(SRBM_STATUS2);
+	if (tmp & DMA_BUSY)
+		reset_mask |= RADEON_RESET_DMA;
+
+	/* SRBM_STATUS */
+	tmp = RREG32(SRBM_STATUS);
+	if (tmp & (RLC_RQ_PENDING | RLC_BUSY))
+		reset_mask |= RADEON_RESET_RLC;
+
+	if (tmp & IH_BUSY)
+		reset_mask |= RADEON_RESET_IH;
+
+	if (tmp & SEM_BUSY)
+		reset_mask |= RADEON_RESET_SEM;
+
+	if (tmp & GRBM_RQ_PENDING)
+		reset_mask |= RADEON_RESET_GRBM;
+
+	if (tmp & VMC_BUSY)
+		reset_mask |= RADEON_RESET_VMC;
+
+	if (tmp & (MCB_BUSY | MCB_NON_DISPLAY_BUSY |
+		   MCC_BUSY | MCD_BUSY))
+		reset_mask |= RADEON_RESET_MC;
+
+	if (evergreen_is_display_hung(rdev))
+		reset_mask |= RADEON_RESET_DISPLAY;
+
+	/* VM_L2_STATUS */
+	tmp = RREG32(VM_L2_STATUS);
+	if (tmp & L2_BUSY)
+		reset_mask |= RADEON_RESET_VMC;
+
+	/* Skip MC reset as it's mostly likely not hung, just busy */
+	if (reset_mask & RADEON_RESET_MC) {
+		DRM_DEBUG("MC busy: 0x%08X, clearing.\n", reset_mask);
+		reset_mask &= ~RADEON_RESET_MC;
+	}
+
+	return reset_mask;
+}
+
+static void evergreen_gpu_soft_reset(struct radeon_device *rdev, u32 reset_mask)
+{
+	struct evergreen_mc_save save;
+	u32 grbm_soft_reset = 0, srbm_soft_reset = 0;
+	u32 tmp;
+
+	if (reset_mask == 0)
+		return;
+
+	dev_info(rdev->dev, "GPU softreset: 0x%08X\n", reset_mask);
+
+	evergreen_print_gpu_status_regs(rdev);
+
+	/* Disable CP parsing/prefetching */
+	WREG32(CP_ME_CNTL, CP_ME_HALT | CP_PFP_HALT);
+
+	if (reset_mask & RADEON_RESET_DMA) {
+		/* Disable DMA */
+		tmp = RREG32(DMA_RB_CNTL);
+		tmp &= ~DMA_RB_ENABLE;
+		WREG32(DMA_RB_CNTL, tmp);
+	}
+
+	udelay(50);
+
+	evergreen_mc_stop(rdev, &save);
+	if (evergreen_mc_wait_for_idle(rdev)) {
+		dev_warn(rdev->dev, "Wait for MC idle timedout !\n");
+	}
+
+	if (reset_mask & (RADEON_RESET_GFX | RADEON_RESET_COMPUTE)) {
+		grbm_soft_reset |= SOFT_RESET_DB |
+			SOFT_RESET_CB |
+			SOFT_RESET_PA |
+			SOFT_RESET_SC |
+			SOFT_RESET_SPI |
+			SOFT_RESET_SX |
+			SOFT_RESET_SH |
+			SOFT_RESET_TC |
+			SOFT_RESET_TA |
+			SOFT_RESET_VC |
+			SOFT_RESET_VGT;
+	}
+
+	if (reset_mask & RADEON_RESET_CP) {
+		grbm_soft_reset |= SOFT_RESET_CP |
+			SOFT_RESET_VGT;
+
+		srbm_soft_reset |= SOFT_RESET_GRBM;
+	}
+
+	if (reset_mask & RADEON_RESET_DMA)
+		srbm_soft_reset |= SOFT_RESET_DMA;
+
+	if (reset_mask & RADEON_RESET_DISPLAY)
+		srbm_soft_reset |= SOFT_RESET_DC;
+
+	if (reset_mask & RADEON_RESET_RLC)
+		srbm_soft_reset |= SOFT_RESET_RLC;
+
+	if (reset_mask & RADEON_RESET_SEM)
+		srbm_soft_reset |= SOFT_RESET_SEM;
+
+	if (reset_mask & RADEON_RESET_IH)
+		srbm_soft_reset |= SOFT_RESET_IH;
+
+	if (reset_mask & RADEON_RESET_GRBM)
+		srbm_soft_reset |= SOFT_RESET_GRBM;
+
+	if (reset_mask & RADEON_RESET_VMC)
+		srbm_soft_reset |= SOFT_RESET_VMC;
+
+	if (!(rdev->flags & RADEON_IS_IGP)) {
+		if (reset_mask & RADEON_RESET_MC)
+			srbm_soft_reset |= SOFT_RESET_MC;
+	}
+
+	if (grbm_soft_reset) {
+		tmp = RREG32(GRBM_SOFT_RESET);
+		tmp |= grbm_soft_reset;
+		dev_info(rdev->dev, "GRBM_SOFT_RESET=0x%08X\n", tmp);
+		WREG32(GRBM_SOFT_RESET, tmp);
+		tmp = RREG32(GRBM_SOFT_RESET);
+
+		udelay(50);
+
+		tmp &= ~grbm_soft_reset;
+		WREG32(GRBM_SOFT_RESET, tmp);
+		tmp = RREG32(GRBM_SOFT_RESET);
+	}
+
+	if (srbm_soft_reset) {
+		tmp = RREG32(SRBM_SOFT_RESET);
+		tmp |= srbm_soft_reset;
+		dev_info(rdev->dev, "SRBM_SOFT_RESET=0x%08X\n", tmp);
+		WREG32(SRBM_SOFT_RESET, tmp);
+		tmp = RREG32(SRBM_SOFT_RESET);
+
+		udelay(50);
+
+		tmp &= ~srbm_soft_reset;
+		WREG32(SRBM_SOFT_RESET, tmp);
+		tmp = RREG32(SRBM_SOFT_RESET);
+	}
+
+	/* Wait a little for things to settle down */
+	udelay(50);
+
+	evergreen_mc_resume(rdev, &save);
+	udelay(50);
+
+	evergreen_print_gpu_status_regs(rdev);
+}
+
+int evergreen_asic_reset(struct radeon_device *rdev)
+{
+	u32 reset_mask;
+
+	reset_mask = evergreen_gpu_check_soft_reset(rdev);
+
+	if (reset_mask)
+		r600_set_bios_scratch_engine_hung(rdev, true);
+
+	evergreen_gpu_soft_reset(rdev, reset_mask);
+
+	reset_mask = evergreen_gpu_check_soft_reset(rdev);
+
+	if (!reset_mask)
+		r600_set_bios_scratch_engine_hung(rdev, false);
+
+	return 0;
+}
+
+/**
+ * evergreen_gfx_is_lockup - Check if the GFX engine is locked up
+ *
+ * @rdev: radeon_device pointer
+ * @ring: radeon_ring structure holding ring information
+ *
+ * Check if the GFX engine is locked up.
+ * Returns true if the engine appears to be locked up, false if not.
+ */
+bool evergreen_gfx_is_lockup(struct radeon_device *rdev, struct radeon_ring *ring)
+{
+	u32 reset_mask = evergreen_gpu_check_soft_reset(rdev);
+
+	if (!(reset_mask & (RADEON_RESET_GFX |
+			    RADEON_RESET_COMPUTE |
+			    RADEON_RESET_CP))) {
 		radeon_ring_lockup_update(ring);
 		return false;
 	}
@@ -2326,83 +2693,26 @@ bool evergreen_gpu_is_lockup(struct radeon_device *rdev, struct radeon_ring *rin
 	return radeon_ring_test_lockup(rdev, ring);
 }
 
-static int evergreen_gpu_soft_reset(struct radeon_device *rdev)
+/**
+ * evergreen_dma_is_lockup - Check if the DMA engine is locked up
+ *
+ * @rdev: radeon_device pointer
+ * @ring: radeon_ring structure holding ring information
+ *
+ * Check if the async DMA engine is locked up.
+ * Returns true if the engine appears to be locked up, false if not.
+ */
+bool evergreen_dma_is_lockup(struct radeon_device *rdev, struct radeon_ring *ring)
 {
-	struct evergreen_mc_save save;
-	u32 grbm_reset = 0;
+	u32 reset_mask = evergreen_gpu_check_soft_reset(rdev);
 
-	if (!(RREG32(GRBM_STATUS) & GUI_ACTIVE))
-		return 0;
-
-	dev_info(rdev->dev, "GPU softreset \n");
-	dev_info(rdev->dev, "  GRBM_STATUS=0x%08X\n",
-		RREG32(GRBM_STATUS));
-	dev_info(rdev->dev, "  GRBM_STATUS_SE0=0x%08X\n",
-		RREG32(GRBM_STATUS_SE0));
-	dev_info(rdev->dev, "  GRBM_STATUS_SE1=0x%08X\n",
-		RREG32(GRBM_STATUS_SE1));
-	dev_info(rdev->dev, "  SRBM_STATUS=0x%08X\n",
-		RREG32(SRBM_STATUS));
-	dev_info(rdev->dev, "  R_008674_CP_STALLED_STAT1 = 0x%08X\n",
-		RREG32(CP_STALLED_STAT1));
-	dev_info(rdev->dev, "  R_008678_CP_STALLED_STAT2 = 0x%08X\n",
-		RREG32(CP_STALLED_STAT2));
-	dev_info(rdev->dev, "  R_00867C_CP_BUSY_STAT     = 0x%08X\n",
-		RREG32(CP_BUSY_STAT));
-	dev_info(rdev->dev, "  R_008680_CP_STAT          = 0x%08X\n",
-		RREG32(CP_STAT));
-	evergreen_mc_stop(rdev, &save);
-	if (evergreen_mc_wait_for_idle(rdev)) {
-		dev_warn(rdev->dev, "Wait for MC idle timedout !\n");
+	if (!(reset_mask & RADEON_RESET_DMA)) {
+		radeon_ring_lockup_update(ring);
+		return false;
 	}
-	/* Disable CP parsing/prefetching */
-	WREG32(CP_ME_CNTL, CP_ME_HALT | CP_PFP_HALT);
-
-	/* reset all the gfx blocks */
-	grbm_reset = (SOFT_RESET_CP |
-		      SOFT_RESET_CB |
-		      SOFT_RESET_DB |
-		      SOFT_RESET_PA |
-		      SOFT_RESET_SC |
-		      SOFT_RESET_SPI |
-		      SOFT_RESET_SH |
-		      SOFT_RESET_SX |
-		      SOFT_RESET_TC |
-		      SOFT_RESET_TA |
-		      SOFT_RESET_VC |
-		      SOFT_RESET_VGT);
-
-	dev_info(rdev->dev, "  GRBM_SOFT_RESET=0x%08X\n", grbm_reset);
-	WREG32(GRBM_SOFT_RESET, grbm_reset);
-	(void)RREG32(GRBM_SOFT_RESET);
-	udelay(50);
-	WREG32(GRBM_SOFT_RESET, 0);
-	(void)RREG32(GRBM_SOFT_RESET);
-	/* Wait a little for things to settle down */
-	udelay(50);
-	dev_info(rdev->dev, "  GRBM_STATUS=0x%08X\n",
-		RREG32(GRBM_STATUS));
-	dev_info(rdev->dev, "  GRBM_STATUS_SE0=0x%08X\n",
-		RREG32(GRBM_STATUS_SE0));
-	dev_info(rdev->dev, "  GRBM_STATUS_SE1=0x%08X\n",
-		RREG32(GRBM_STATUS_SE1));
-	dev_info(rdev->dev, "  SRBM_STATUS=0x%08X\n",
-		RREG32(SRBM_STATUS));
-	dev_info(rdev->dev, "  R_008674_CP_STALLED_STAT1 = 0x%08X\n",
-		RREG32(CP_STALLED_STAT1));
-	dev_info(rdev->dev, "  R_008678_CP_STALLED_STAT2 = 0x%08X\n",
-		RREG32(CP_STALLED_STAT2));
-	dev_info(rdev->dev, "  R_00867C_CP_BUSY_STAT     = 0x%08X\n",
-		RREG32(CP_BUSY_STAT));
-	dev_info(rdev->dev, "  R_008680_CP_STAT          = 0x%08X\n",
-		RREG32(CP_STAT));
-	evergreen_mc_resume(rdev, &save);
-	return 0;
-}
-
-int evergreen_asic_reset(struct radeon_device *rdev)
-{
-	return evergreen_gpu_soft_reset(rdev);
+	/* force ring activities */
+	radeon_ring_force_activity(rdev, ring);
+	return radeon_ring_test_lockup(rdev, ring);
 }
 
 /* Interrupts */
@@ -2424,8 +2734,12 @@ void evergreen_disable_interrupt_state(struct radeon_device *rdev)
 					 CNTX_BUSY_INT_ENABLE | CNTX_EMPTY_INT_ENABLE);
 		cayman_cp_int_cntl_setup(rdev, 1, 0);
 		cayman_cp_int_cntl_setup(rdev, 2, 0);
+		tmp = RREG32(CAYMAN_DMA1_CNTL) & ~TRAP_ENABLE;
+		WREG32(CAYMAN_DMA1_CNTL, tmp);
 	} else
 		WREG32(CP_INT_CNTL, CNTX_BUSY_INT_ENABLE | CNTX_EMPTY_INT_ENABLE);
+	tmp = RREG32(DMA_CNTL) & ~TRAP_ENABLE;
+	WREG32(DMA_CNTL, tmp);
 	WREG32(GRBM_INT_CNTL, 0);
 	WREG32(INT_MASK + EVERGREEN_CRTC0_REGISTER_OFFSET, 0);
 	WREG32(INT_MASK + EVERGREEN_CRTC1_REGISTER_OFFSET, 0);
@@ -2478,6 +2792,7 @@ int evergreen_irq_set(struct radeon_device *rdev)
 	u32 grbm_int_cntl = 0;
 	u32 grph1 = 0, grph2 = 0, grph3 = 0, grph4 = 0, grph5 = 0, grph6 = 0;
 	u32 afmt1 = 0, afmt2 = 0, afmt3 = 0, afmt4 = 0, afmt5 = 0, afmt6 = 0;
+	u32 dma_cntl, dma_cntl1 = 0;
 
 	if (!rdev->irq.installed) {
 		WARN(1, "Can't enable IRQ/MSI because no handler is installed\n");
@@ -2505,6 +2820,8 @@ int evergreen_irq_set(struct radeon_device *rdev)
 	afmt5 = RREG32(AFMT_AUDIO_PACKET_CONTROL + EVERGREEN_CRTC4_REGISTER_OFFSET) & ~AFMT_AZ_FORMAT_WTRIG_MASK;
 	afmt6 = RREG32(AFMT_AUDIO_PACKET_CONTROL + EVERGREEN_CRTC5_REGISTER_OFFSET) & ~AFMT_AZ_FORMAT_WTRIG_MASK;
 
+	dma_cntl = RREG32(DMA_CNTL) & ~TRAP_ENABLE;
+
 	if (rdev->family >= CHIP_CAYMAN) {
 		/* enable CP interrupts on all rings */
 		if (atomic_read(&rdev->irq.ring_int[RADEON_RING_TYPE_GFX_INDEX])) {
@@ -2524,6 +2841,19 @@ int evergreen_irq_set(struct radeon_device *rdev)
 			DRM_DEBUG("evergreen_irq_set: sw int gfx\n");
 			cp_int_cntl |= RB_INT_ENABLE;
 			cp_int_cntl |= TIME_STAMP_INT_ENABLE;
+		}
+	}
+
+	if (atomic_read(&rdev->irq.ring_int[R600_RING_TYPE_DMA_INDEX])) {
+		DRM_DEBUG("r600_irq_set: sw int dma\n");
+		dma_cntl |= TRAP_ENABLE;
+	}
+
+	if (rdev->family >= CHIP_CAYMAN) {
+		dma_cntl1 = RREG32(CAYMAN_DMA1_CNTL) & ~TRAP_ENABLE;
+		if (atomic_read(&rdev->irq.ring_int[CAYMAN_RING_TYPE_DMA1_INDEX])) {
+			DRM_DEBUG("r600_irq_set: sw int dma1\n");
+			dma_cntl1 |= TRAP_ENABLE;
 		}
 	}
 
@@ -2612,6 +2942,12 @@ int evergreen_irq_set(struct radeon_device *rdev)
 		cayman_cp_int_cntl_setup(rdev, 2, cp_int_cntl2);
 	} else
 		WREG32(CP_INT_CNTL, cp_int_cntl);
+
+	WREG32(DMA_CNTL, dma_cntl);
+
+	if (rdev->family >= CHIP_CAYMAN)
+		WREG32(CAYMAN_DMA1_CNTL, dma_cntl1);
+
 	WREG32(GRBM_INT_CNTL, grbm_int_cntl);
 
 	WREG32(INT_MASK + EVERGREEN_CRTC0_REGISTER_OFFSET, crtc1);
@@ -3147,8 +3483,18 @@ restart_ih:
 			} else
 				radeon_fence_process(rdev, RADEON_RING_TYPE_GFX_INDEX);
 			break;
+		case 224: /* DMA trap event */
+			DRM_DEBUG("IH: DMA trap\n");
+			radeon_fence_process(rdev, R600_RING_TYPE_DMA_INDEX);
+			break;
 		case 233: /* GUI IDLE */
 			DRM_DEBUG("IH: GUI idle\n");
+			break;
+		case 244: /* DMA trap event */
+			if (rdev->family >= CHIP_CAYMAN) {
+				DRM_DEBUG("IH: DMA1 trap\n");
+				radeon_fence_process(rdev, CAYMAN_RING_TYPE_DMA1_INDEX);
+			}
 			break;
 		default:
 			DRM_DEBUG("Unhandled interrupt: %d %d\n", src_id, src_data);
@@ -3173,6 +3519,143 @@ restart_ih:
 		goto restart_ih;
 
 	return IRQ_HANDLED;
+}
+
+/**
+ * evergreen_dma_fence_ring_emit - emit a fence on the DMA ring
+ *
+ * @rdev: radeon_device pointer
+ * @fence: radeon fence object
+ *
+ * Add a DMA fence packet to the ring to write
+ * the fence seq number and DMA trap packet to generate
+ * an interrupt if needed (evergreen-SI).
+ */
+void evergreen_dma_fence_ring_emit(struct radeon_device *rdev,
+				   struct radeon_fence *fence)
+{
+	struct radeon_ring *ring = &rdev->ring[fence->ring];
+	u64 addr = rdev->fence_drv[fence->ring].gpu_addr;
+	/* write the fence */
+	radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_FENCE, 0, 0));
+	radeon_ring_write(ring, addr & 0xfffffffc);
+	radeon_ring_write(ring, (upper_32_bits(addr) & 0xff));
+	radeon_ring_write(ring, fence->seq);
+	/* generate an interrupt */
+	radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_TRAP, 0, 0));
+	/* flush HDP */
+	radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_SRBM_WRITE, 0, 0));
+	radeon_ring_write(ring, (0xf << 16) | (HDP_MEM_COHERENCY_FLUSH_CNTL >> 2));
+	radeon_ring_write(ring, 1);
+}
+
+/**
+ * evergreen_dma_ring_ib_execute - schedule an IB on the DMA engine
+ *
+ * @rdev: radeon_device pointer
+ * @ib: IB object to schedule
+ *
+ * Schedule an IB in the DMA ring (evergreen).
+ */
+void evergreen_dma_ring_ib_execute(struct radeon_device *rdev,
+				   struct radeon_ib *ib)
+{
+	struct radeon_ring *ring = &rdev->ring[ib->ring];
+
+	if (rdev->wb.enabled) {
+		u32 next_rptr = ring->wptr + 4;
+		while ((next_rptr & 7) != 5)
+			next_rptr++;
+		next_rptr += 3;
+		radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_WRITE, 0, 1));
+		radeon_ring_write(ring, ring->next_rptr_gpu_addr & 0xfffffffc);
+		radeon_ring_write(ring, upper_32_bits(ring->next_rptr_gpu_addr) & 0xff);
+		radeon_ring_write(ring, next_rptr);
+	}
+
+	/* The indirect buffer packet must end on an 8 DW boundary in the DMA ring.
+	 * Pad as necessary with NOPs.
+	 */
+	while ((ring->wptr & 7) != 5)
+		radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_NOP, 0, 0));
+	radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_INDIRECT_BUFFER, 0, 0));
+	radeon_ring_write(ring, (ib->gpu_addr & 0xFFFFFFE0));
+	radeon_ring_write(ring, (ib->length_dw << 12) | (upper_32_bits(ib->gpu_addr) & 0xFF));
+
+}
+
+/**
+ * evergreen_copy_dma - copy pages using the DMA engine
+ *
+ * @rdev: radeon_device pointer
+ * @src_offset: src GPU address
+ * @dst_offset: dst GPU address
+ * @num_gpu_pages: number of GPU pages to xfer
+ * @fence: radeon fence object
+ *
+ * Copy GPU paging using the DMA engine (evergreen-cayman).
+ * Used by the radeon ttm implementation to move pages if
+ * registered as the asic copy callback.
+ */
+int evergreen_copy_dma(struct radeon_device *rdev,
+		       uint64_t src_offset, uint64_t dst_offset,
+		       unsigned num_gpu_pages,
+		       struct radeon_fence **fence)
+{
+	struct radeon_semaphore *sem = NULL;
+	int ring_index = rdev->asic->copy.dma_ring_index;
+	struct radeon_ring *ring = &rdev->ring[ring_index];
+	u32 size_in_dw, cur_size_in_dw;
+	int i, num_loops;
+	int r = 0;
+
+	r = radeon_semaphore_create(rdev, &sem);
+	if (r) {
+		DRM_ERROR("radeon: moving bo (%d).\n", r);
+		return r;
+	}
+
+	size_in_dw = (num_gpu_pages << RADEON_GPU_PAGE_SHIFT) / 4;
+	num_loops = DIV_ROUND_UP(size_in_dw, 0xfffff);
+	r = radeon_ring_lock(rdev, ring, num_loops * 5 + 11);
+	if (r) {
+		DRM_ERROR("radeon: moving bo (%d).\n", r);
+		radeon_semaphore_free(rdev, &sem, NULL);
+		return r;
+	}
+
+	if (radeon_fence_need_sync(*fence, ring->idx)) {
+		radeon_semaphore_sync_rings(rdev, sem, (*fence)->ring,
+					    ring->idx);
+		radeon_fence_note_sync(*fence, ring->idx);
+	} else {
+		radeon_semaphore_free(rdev, &sem, NULL);
+	}
+
+	for (i = 0; i < num_loops; i++) {
+		cur_size_in_dw = size_in_dw;
+		if (cur_size_in_dw > 0xFFFFF)
+			cur_size_in_dw = 0xFFFFF;
+		size_in_dw -= cur_size_in_dw;
+		radeon_ring_write(ring, DMA_PACKET(DMA_PACKET_COPY, 0, cur_size_in_dw));
+		radeon_ring_write(ring, dst_offset & 0xfffffffc);
+		radeon_ring_write(ring, src_offset & 0xfffffffc);
+		radeon_ring_write(ring, upper_32_bits(dst_offset) & 0xff);
+		radeon_ring_write(ring, upper_32_bits(src_offset) & 0xff);
+		src_offset += cur_size_in_dw * 4;
+		dst_offset += cur_size_in_dw * 4;
+	}
+
+	r = radeon_fence_emit(rdev, fence, ring->idx);
+	if (r) {
+		radeon_ring_unlock_undo(rdev, ring);
+		return r;
+	}
+
+	radeon_ring_unlock_commit(rdev, ring);
+	radeon_semaphore_free(rdev, &sem, *fence);
+
+	return r;
 }
 
 static int evergreen_startup(struct radeon_device *rdev)
@@ -3238,6 +3721,12 @@ static int evergreen_startup(struct radeon_device *rdev)
 		return r;
 	}
 
+	r = radeon_fence_driver_start_ring(rdev, R600_RING_TYPE_DMA_INDEX);
+	if (r) {
+		dev_err(rdev->dev, "failed initializing DMA fences (%d).\n", r);
+		return r;
+	}
+
 	/* Enable IRQ */
 	r = r600_irq_init(rdev);
 	if (r) {
@@ -3252,10 +3741,21 @@ static int evergreen_startup(struct radeon_device *rdev)
 			     0, 0xfffff, RADEON_CP_PACKET2);
 	if (r)
 		return r;
+
+	ring = &rdev->ring[R600_RING_TYPE_DMA_INDEX];
+	r = radeon_ring_init(rdev, ring, ring->ring_size, R600_WB_DMA_RPTR_OFFSET,
+			     DMA_RB_RPTR, DMA_RB_WPTR,
+			     2, 0x3fffc, DMA_PACKET(DMA_PACKET_NOP, 0, 0));
+	if (r)
+		return r;
+
 	r = evergreen_cp_load_microcode(rdev);
 	if (r)
 		return r;
 	r = evergreen_cp_resume(rdev);
+	if (r)
+		return r;
+	r = r600_dma_resume(rdev);
 	if (r)
 		return r;
 
@@ -3304,11 +3804,9 @@ int evergreen_resume(struct radeon_device *rdev)
 
 int evergreen_suspend(struct radeon_device *rdev)
 {
-	struct radeon_ring *ring = &rdev->ring[RADEON_RING_TYPE_GFX_INDEX];
-
 	r600_audio_fini(rdev);
 	r700_cp_stop(rdev);
-	ring->ready = false;
+	r600_dma_stop(rdev);
 	evergreen_irq_suspend(rdev);
 	radeon_wb_disable(rdev);
 	evergreen_pcie_gart_disable(rdev);
@@ -3385,6 +3883,9 @@ int evergreen_init(struct radeon_device *rdev)
 	rdev->ring[RADEON_RING_TYPE_GFX_INDEX].ring_obj = NULL;
 	r600_ring_init(rdev, &rdev->ring[RADEON_RING_TYPE_GFX_INDEX], 1024 * 1024);
 
+	rdev->ring[R600_RING_TYPE_DMA_INDEX].ring_obj = NULL;
+	r600_ring_init(rdev, &rdev->ring[R600_RING_TYPE_DMA_INDEX], 64 * 1024);
+
 	rdev->ih.ring_obj = NULL;
 	r600_ih_ring_init(rdev, 64 * 1024);
 
@@ -3397,6 +3898,7 @@ int evergreen_init(struct radeon_device *rdev)
 	if (r) {
 		dev_err(rdev->dev, "disabling GPU acceleration\n");
 		r700_cp_fini(rdev);
+		r600_dma_fini(rdev);
 		r600_irq_fini(rdev);
 		radeon_wb_fini(rdev);
 		radeon_ib_pool_fini(rdev);
@@ -3424,6 +3926,7 @@ void evergreen_fini(struct radeon_device *rdev)
 	r600_audio_fini(rdev);
 	r600_blit_fini(rdev);
 	r700_cp_fini(rdev);
+	r600_dma_fini(rdev);
 	r600_irq_fini(rdev);
 	radeon_wb_fini(rdev);
 	radeon_ib_pool_fini(rdev);

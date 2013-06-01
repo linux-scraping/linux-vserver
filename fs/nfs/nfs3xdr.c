@@ -199,7 +199,7 @@ static void encode_filename3(struct xdr_stream *xdr,
 {
 	__be32 *p;
 
-	BUG_ON(length > NFS3_MAXNAMLEN);
+	WARN_ON_ONCE(length > NFS3_MAXNAMLEN);
 	p = xdr_reserve_space(xdr, 4 + length);
 	xdr_encode_opaque(p, name, length);
 }
@@ -239,7 +239,6 @@ out_overflow:
 static void encode_nfspath3(struct xdr_stream *xdr, struct page **pages,
 			    const u32 length)
 {
-	BUG_ON(length > NFS3_MAXPATHLEN);
 	encode_uint32(xdr, length);
 	xdr_write_pages(xdr, pages, 0, length);
 }
@@ -389,7 +388,6 @@ out_overflow:
  */
 static void encode_ftype3(struct xdr_stream *xdr, const u32 type)
 {
-	BUG_ON(type > NF3FIFO);
 	encode_uint32(xdr, type);
 }
 
@@ -444,7 +442,7 @@ static void encode_nfs_fh3(struct xdr_stream *xdr, const struct nfs_fh *fh)
 {
 	__be32 *p;
 
-	BUG_ON(fh->size > NFS3_FHSIZE);
+	WARN_ON_ONCE(fh->size > NFS3_FHSIZE);
 	p = xdr_reserve_space(xdr, 4 + fh->size);
 	xdr_encode_opaque(p, fh->data, fh->size);
 }
@@ -598,7 +596,7 @@ static void encode_sattr3(struct xdr_stream *xdr,
 		(tag && (attr->ia_valid & ATTR_TAG))) {
 		*p++ = xdr_one;
 		*p++ = cpu_to_be32(TAGINO_UID(tag,
-			attr->ia_uid, attr->ia_tag));
+			from_kuid(&init_user_ns, attr->ia_uid), attr->ia_tag));
 	} else
 		*p++ = xdr_zero;
 
@@ -606,7 +604,7 @@ static void encode_sattr3(struct xdr_stream *xdr,
 		(tag && (attr->ia_valid & ATTR_TAG))) {
 		*p++ = xdr_one;
 		*p++ = cpu_to_be32(TAGINO_GID(tag,
-			attr->ia_gid, attr->ia_tag));
+			from_kgid(&init_user_ns, attr->ia_gid), attr->ia_tag));
 	} else
 		*p++ = xdr_zero;
 
@@ -665,8 +663,12 @@ static int decode_fattr3(struct xdr_stream *xdr, struct nfs_fattr *fattr)
 
 	fattr->mode = (be32_to_cpup(p++) & ~S_IFMT) | fmode;
 	fattr->nlink = be32_to_cpup(p++);
-	fattr->uid = be32_to_cpup(p++);
-	fattr->gid = be32_to_cpup(p++);
+	fattr->uid = make_kuid(&init_user_ns, be32_to_cpup(p++));
+	if (!uid_valid(fattr->uid))
+		goto out_uid;
+	fattr->gid = make_kgid(&init_user_ns, be32_to_cpup(p++));
+	if (!gid_valid(fattr->gid))
+		goto out_gid;
 
 	p = xdr_decode_size3(p, &fattr->size);
 	p = xdr_decode_size3(p, &fattr->du.nfs3.used);
@@ -683,6 +685,12 @@ static int decode_fattr3(struct xdr_stream *xdr, struct nfs_fattr *fattr)
 
 	fattr->valid |= NFS_ATTR_FATTR_V3;
 	return 0;
+out_uid:
+	dprintk("NFS: returned invalid uid\n");
+	return -EINVAL;
+out_gid:
+	dprintk("NFS: returned invalid gid\n");
+	return -EINVAL;
 out_overflow:
 	print_overflow_msg(__func__, xdr);
 	return -EIO;
@@ -1345,6 +1353,7 @@ static void nfs3_xdr_enc_setacl3args(struct rpc_rqst *req,
 	error = nfsacl_encode(xdr->buf, base, args->inode,
 			    (args->mask & NFS_ACL) ?
 			    args->acl_access : NULL, 1, 0);
+	/* FIXME: this is just broken */
 	BUG_ON(error < 0);
 	error = nfsacl_encode(xdr->buf, base + error, args->inode,
 			    (args->mask & NFS_DFACL) ?

@@ -62,11 +62,12 @@ static inline struct nsproxy *create_nsproxy(void)
  * Return the newly created nsproxy.  Do not attach this to the task,
  * leave it to the caller to do proper locking and attach it to task.
  */
-static struct nsproxy *unshare_namespaces(unsigned long flags,
-			struct nsproxy *orig,
-			struct fs_struct *new_fs,
-			struct user_namespace *new_user,
-			struct pid_namespace *new_pid)
+static struct nsproxy *unshare_namespaces(
+	unsigned long flags,
+	struct nsproxy *orig,
+	struct fs_struct *new_fs,
+	struct user_namespace *new_user,
+	struct pid_namespace *new_pid)
 {
 	struct nsproxy *new_nsp;
 	int err;
@@ -75,31 +76,31 @@ static struct nsproxy *unshare_namespaces(unsigned long flags,
 	if (!new_nsp)
 		return ERR_PTR(-ENOMEM);
 
-	new_nsp->mnt_ns = copy_mnt_ns(flags, orig->mnt_ns, new_fs);
+	new_nsp->mnt_ns = copy_mnt_ns(flags, orig->mnt_ns, new_user, new_fs);
 	if (IS_ERR(new_nsp->mnt_ns)) {
 		err = PTR_ERR(new_nsp->mnt_ns);
 		goto out_ns;
 	}
 
-	new_nsp->uts_ns = copy_utsname(flags, orig->uts_ns, new_user);
+	new_nsp->uts_ns = copy_utsname(flags, new_user, orig->uts_ns);
 	if (IS_ERR(new_nsp->uts_ns)) {
 		err = PTR_ERR(new_nsp->uts_ns);
 		goto out_uts;
 	}
 
-	new_nsp->ipc_ns = copy_ipcs(flags, orig->ipc_ns, new_user);
+	new_nsp->ipc_ns = copy_ipcs(flags, new_user, orig->ipc_ns);
 	if (IS_ERR(new_nsp->ipc_ns)) {
 		err = PTR_ERR(new_nsp->ipc_ns);
 		goto out_ipc;
 	}
 
-	new_nsp->pid_ns = copy_pid_ns(flags, new_pid);
+	new_nsp->pid_ns = copy_pid_ns(flags, new_user, new_pid);
 	if (IS_ERR(new_nsp->pid_ns)) {
 		err = PTR_ERR(new_nsp->pid_ns);
 		goto out_pid;
 	}
 
-	new_nsp->net_ns = copy_net_ns(flags, orig->net_ns);
+	new_nsp->net_ns = copy_net_ns(flags, new_user, orig->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
 		err = PTR_ERR(new_nsp->net_ns);
 		goto out_net;
@@ -125,11 +126,12 @@ out_ns:
 }
 
 static struct nsproxy *create_new_namespaces(unsigned long flags,
-			struct task_struct *tsk, struct fs_struct *new_fs)
+	struct task_struct *tsk, struct user_namespace *user_ns,
+	struct fs_struct *new_fs)
+
 {
 	return unshare_namespaces(flags, tsk->nsproxy,
-		new_fs, task_cred_xxx(tsk, user_ns),
-		task_active_pid_ns(tsk));
+		new_fs, user_ns, task_active_pid_ns(tsk));
 }
 
 /*
@@ -165,6 +167,7 @@ struct nsproxy *copy_nsproxy(struct nsproxy *orig)
 int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 {
 	struct nsproxy *old_ns = tsk->nsproxy;
+	struct user_namespace *user_ns = task_cred_xxx(tsk, user_ns);
 	struct nsproxy *new_ns = NULL;
 	int err = 0;
 
@@ -180,7 +183,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 				CLONE_NEWPID | CLONE_NEWNET)))
 		return 0;
 
-	if (!vx_can_unshare(CAP_SYS_ADMIN, flags)) {
+	if (!vx_ns_can_unshare(user_ns, CAP_SYS_ADMIN, flags)) {
 		err = -EPERM;
 		goto out;
 	}
@@ -197,7 +200,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 		goto out;
 	}
 
-	new_ns = create_new_namespaces(flags, tsk, tsk->fs);
+	new_ns = create_new_namespaces(flags, tsk, user_ns, tsk->fs);
 	if (IS_ERR(new_ns)) {
 		err = PTR_ERR(new_ns);
 		goto out;
@@ -234,8 +237,9 @@ void free_nsproxy(struct nsproxy *ns)
  * On success, returns the new nsproxy.
  */
 int unshare_nsproxy_namespaces(unsigned long unshare_flags,
-		struct nsproxy **new_nsp, struct fs_struct *new_fs)
+	struct nsproxy **new_nsp, struct cred *new_cred, struct fs_struct *new_fs)
 {
+	struct user_namespace *user_ns;
 	int err = 0;
 
 	vxdprintk(VXD_CBIT(space, 4),
@@ -243,14 +247,15 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 		unshare_flags, current->nsproxy);
 
 	if (!(unshare_flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-			       CLONE_NEWNET)))
+			       CLONE_NEWNET | CLONE_NEWPID)))
 		return 0;
 
-	if (!vx_can_unshare(CAP_SYS_ADMIN, unshare_flags))
+	user_ns = new_cred ? new_cred->user_ns : current_user_ns();
+	if (!vx_ns_can_unshare(user_ns, CAP_SYS_ADMIN, unshare_flags))
 		return -EPERM;
 
-	*new_nsp = create_new_namespaces(unshare_flags, current,
-				new_fs ? new_fs : current->fs);
+	*new_nsp = create_new_namespaces(unshare_flags, current, user_ns,
+					 new_fs ? new_fs : current->fs);
 	if (IS_ERR(*new_nsp)) {
 		err = PTR_ERR(*new_nsp);
 		goto out;
@@ -296,20 +301,17 @@ SYSCALL_DEFINE2(setns, int, fd, int, nstype)
 	struct file *file;
 	int err;
 
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
 	file = proc_ns_fget(fd);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
 
 	err = -EINVAL;
-	ei = PROC_I(file->f_dentry->d_inode);
+	ei = PROC_I(file_inode(file));
 	ops = ei->ns_ops;
 	if (nstype && (ops->type != nstype))
 		goto out;
 
-	new_nsproxy = create_new_namespaces(0, tsk, tsk->fs);
+	new_nsproxy = create_new_namespaces(0, tsk, current_user_ns(), tsk->fs);
 	if (IS_ERR(new_nsproxy)) {
 		err = PTR_ERR(new_nsproxy);
 		goto out;

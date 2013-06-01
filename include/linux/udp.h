@@ -27,6 +27,11 @@ static inline struct udphdr *udp_hdr(const struct sk_buff *skb)
 	return (struct udphdr *)skb_transport_header(skb);
 }
 
+static inline struct udphdr *inner_udp_hdr(const struct sk_buff *skb)
+{
+	return (struct udphdr *)skb_inner_transport_header(skb);
+}
+
 #define UDP_HTABLE_SIZE_MIN		(CONFIG_BASE_SMALL ? 128 : 256)
 
 static inline int udp_hashfn(struct net *net, unsigned num, unsigned mask)
@@ -63,6 +68,7 @@ struct udp_sock {
 	 * For encapsulation sockets.
 	 */
 	int (*encap_rcv)(struct sock *sk, struct sk_buff *skb);
+	void (*encap_destroy)(struct sock *sk);
 };
 
 static inline struct udp_sock *udp_sk(const struct sock *sk)

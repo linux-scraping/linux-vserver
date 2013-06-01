@@ -262,6 +262,8 @@ extern void rtas_progress(char *s, unsigned short hex);
 extern void rtas_initialize(void);
 extern int rtas_suspend_cpu(struct rtas_suspend_me_data *data);
 extern int rtas_suspend_last_cpu(struct rtas_suspend_me_data *data);
+extern int rtas_online_cpus_mask(cpumask_var_t cpus);
+extern int rtas_offline_cpus_mask(cpumask_var_t cpus);
 extern int rtas_ibm_suspend_me(struct rtas_args *);
 
 struct rtc_time;
@@ -353,8 +355,13 @@ static inline int page_is_rtas_user_buf(unsigned long pfn)
 		return 1;
 	return 0;
 }
+
+/* Not the best place to put pSeries_coalesce_init, will be fixed when we
+ * move some of the rtas suspend-me stuff to pseries */
+extern void pSeries_coalesce_init(void);
 #else
 static inline int page_is_rtas_user_buf(unsigned long pfn) { return 0;}
+static inline void pSeries_coalesce_init(void) { }
 #endif
 
 extern int call_rtas(const char *, int, int, unsigned long *, ...);

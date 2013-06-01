@@ -319,6 +319,9 @@ static void __cache_size_refresh(void)
 static void *alloc_buffer_data(struct dm_bufio_client *c, gfp_t gfp_mask,
 			       enum data_mode *data_mode)
 {
+	unsigned noio_flag;
+	void *ptr;
+
 	if (c->block_size <= DM_BUFIO_BLOCK_SIZE_SLAB_LIMIT) {
 		*data_mode = DATA_MODE_SLAB;
 		return kmem_cache_alloc(DM_BUFIO_CACHE(c), gfp_mask);
@@ -332,7 +335,26 @@ static void *alloc_buffer_data(struct dm_bufio_client *c, gfp_t gfp_mask,
 	}
 
 	*data_mode = DATA_MODE_VMALLOC;
-	return __vmalloc(c->block_size, gfp_mask, PAGE_KERNEL);
+
+	/*
+	 * __vmalloc allocates the data pages and auxiliary structures with
+	 * gfp_flags that were specified, but pagetables are always allocated
+	 * with GFP_KERNEL, no matter what was specified as gfp_mask.
+	 *
+	 * Consequently, we must set per-process flag PF_MEMALLOC_NOIO so that
+	 * all allocations done by this process (including pagetables) are done
+	 * as if GFP_NOIO was specified.
+	 */
+
+	if (gfp_mask & __GFP_NORETRY)
+		noio_flag = memalloc_noio_save();
+
+	ptr = __vmalloc(c->block_size, gfp_mask, PAGE_KERNEL);
+
+	if (gfp_mask & __GFP_NORETRY)
+		memalloc_noio_restore(noio_flag);
+
+	return ptr;
 }
 
 /*
@@ -859,9 +881,8 @@ static void __check_watermark(struct dm_bufio_client *c)
 static struct dm_buffer *__find(struct dm_bufio_client *c, sector_t block)
 {
 	struct dm_buffer *b;
-	struct hlist_node *hn;
 
-	hlist_for_each_entry(b, hn, &c->cache_hash[DM_BUFIO_HASH(block)],
+	hlist_for_each_entry(b, &c->cache_hash[DM_BUFIO_HASH(block)],
 			     hash_list) {
 		dm_bufio_cond_resched();
 		if (b->block == block)
@@ -1025,6 +1046,8 @@ void dm_bufio_prefetch(struct dm_bufio_client *c,
 		       sector_t block, unsigned n_blocks)
 {
 	struct blk_plug plug;
+
+	BUG_ON(dm_bufio_in_request());
 
 	blk_start_plug(&plug);
 	dm_bufio_lock(c);
@@ -1193,7 +1216,7 @@ EXPORT_SYMBOL_GPL(dm_bufio_write_dirty_buffers);
 int dm_bufio_issue_flush(struct dm_bufio_client *c)
 {
 	struct dm_io_request io_req = {
-		.bi_rw = REQ_FLUSH,
+		.bi_rw = WRITE_FLUSH,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = NULL,
 		.client = c->dm_io,

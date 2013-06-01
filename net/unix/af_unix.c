@@ -265,9 +265,8 @@ static struct sock *__unix_find_socket_byname(struct net *net,
 					      int len, int type, unsigned int hash)
 {
 	struct sock *s;
-	struct hlist_node *node;
 
-	sk_for_each(s, node, &unix_socket_table[hash ^ type]) {
+	sk_for_each(s, &unix_socket_table[hash ^ type]) {
 		struct unix_sock *u = unix_sk(s);
 
 		if (!net_eq(sock_net(s), net))
@@ -302,10 +301,9 @@ static inline struct sock *unix_find_socket_byname(struct net *net,
 static struct sock *unix_find_socket_byinode(struct inode *i)
 {
 	struct sock *s;
-	struct hlist_node *node;
 
 	spin_lock(&unix_table_lock);
-	sk_for_each(s, node,
+	sk_for_each(s,
 		    &unix_socket_table[i->i_ino & (UNIX_HASH_SIZE - 1)]) {
 		struct dentry *dentry = unix_sk(s)->path.dentry;
 
@@ -388,7 +386,7 @@ static void unix_sock_destructor(struct sock *sk)
 #endif
 }
 
-static int unix_release_sock(struct sock *sk, int embrion)
+static void unix_release_sock(struct sock *sk, int embrion)
 {
 	struct unix_sock *u = unix_sk(sk);
 	struct path path;
@@ -457,8 +455,6 @@ static int unix_release_sock(struct sock *sk, int embrion)
 
 	if (unix_tot_inflight)
 		unix_gc();		/* Garbage collect fds */
-
-	return 0;
 }
 
 static void init_peercred(struct sock *sk)
@@ -705,9 +701,10 @@ static int unix_release(struct socket *sock)
 	if (!sk)
 		return 0;
 
+	unix_release_sock(sk, 0);
 	sock->sk = NULL;
 
-	return unix_release_sock(sk, 0);
+	return 0;
 }
 
 static int unix_autobind(struct socket *sock)
@@ -2000,7 +1997,7 @@ again:
 			if ((UNIXCB(skb).pid  != siocb->scm->pid) ||
 			    (UNIXCB(skb).cred != siocb->scm->cred))
 				break;
-		} else {
+		} else if (test_bit(SOCK_PASSCRED, &sock->flags)) {
 			/* Copy credentials */
 			scm_set_cred(siocb->scm, UNIXCB(skb).pid, UNIXCB(skb).cred);
 			check_creds = 1;
@@ -2410,7 +2407,7 @@ static int __net_init unix_net_init(struct net *net)
 		goto out;
 
 #ifdef CONFIG_PROC_FS
-	if (!proc_net_fops_create(net, "unix", 0, &unix_seq_fops)) {
+	if (!proc_create("unix", 0, net->proc_net, &unix_seq_fops)) {
 		unix_sysctl_unregister(net);
 		goto out;
 	}
@@ -2423,7 +2420,7 @@ out:
 static void __net_exit unix_net_exit(struct net *net)
 {
 	unix_sysctl_unregister(net);
-	proc_net_remove(net, "unix");
+	remove_proc_entry("unix", net->proc_net);
 }
 
 static struct pernet_operations unix_net_ops = {
@@ -2434,9 +2431,8 @@ static struct pernet_operations unix_net_ops = {
 static int __init af_unix_init(void)
 {
 	int rc = -1;
-	struct sk_buff *dummy_skb;
 
-	BUILD_BUG_ON(sizeof(struct unix_skb_parms) > sizeof(dummy_skb->cb));
+	BUILD_BUG_ON(sizeof(struct unix_skb_parms) > FIELD_SIZEOF(struct sk_buff, cb));
 
 	rc = proto_register(&unix_proto, 1);
 	if (rc != 0) {

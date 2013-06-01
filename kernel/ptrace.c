@@ -174,7 +174,7 @@ static void ptrace_unfreeze_traced(struct task_struct *task)
  * RETURNS:
  * 0 on success, -ESRCH if %child is not ready.
  */
-int ptrace_check_attach(struct task_struct *child, bool ignore_state)
+static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 {
 	int ret = -ESRCH;
 
@@ -255,14 +255,18 @@ ok:
 	smp_rmb();
 	if (task->mm)
 		dumpable = get_dumpable(task->mm);
-	if (!dumpable  && !ptrace_has_cap(task_user_ns(task), mode))
+	rcu_read_lock();
+	if (!dumpable && !ptrace_has_cap(__task_cred(task)->user_ns, mode)) {
+		rcu_read_unlock();
 		return -EPERM;
+	}
+	rcu_read_unlock();
+
 	if (!vx_check(task->xid, VS_ADMIN_P|VS_WATCH_P|VS_IDENT))
 		return -EPERM;
 	if (!vx_check(task->xid, VS_IDENT) &&
 		!task_vx_flags(task, VXF_STATE_ADMIN, 0))
 		return -EACCES;
-
 	return security_ptrace_access_check(task, mode);
 }
 
@@ -325,8 +329,10 @@ static int ptrace_attach(struct task_struct *task, long request,
 
 	if (seize)
 		flags |= PT_SEIZED;
-	if (ns_capable(task_user_ns(task), CAP_SYS_PTRACE))
+	rcu_read_lock();
+	if (ns_capable(__task_cred(task)->user_ns, CAP_SYS_PTRACE))
 		flags |= PT_PTRACE_CAP;
+	rcu_read_unlock();
 	task->ptrace = flags;
 
 	__ptrace_link(task, current);
@@ -502,6 +508,9 @@ void exit_ptrace(struct task_struct *tracer)
 		return;
 
 	list_for_each_entry_safe(p, n, &tracer->ptraced, ptrace_entry) {
+		if (unlikely(p->ptrace & PT_EXITKILL))
+			send_sig_info(SIGKILL, SEND_SIG_FORCED, p);
+
 		if (__ptrace_detach(tracer, p))
 			list_add(&p->ptrace_entry, &ptrace_dead);
 	}
@@ -709,6 +718,12 @@ static int ptrace_regset(struct task_struct *task, int req, unsigned int type,
 					     kiov->iov_len, kiov->iov_base);
 }
 
+/*
+ * This is declared in linux/regset.h and defined in machine-dependent
+ * code.  We put the export here, near the primary machine-neutral use,
+ * to ensure no machine forgets it.
+ */
+EXPORT_SYMBOL_GPL(task_user_regset_view);
 #endif
 
 int ptrace_request(struct task_struct *child, long request,

@@ -937,7 +937,6 @@ int usb_stor_probe1(struct us_data **pus,
 	host->max_cmd_len = 16;
 	host->sg_tablesize = usb_stor_sg_tablesize(intf);
 	*pus = us = host_to_us(host);
-	memset(us, 0, sizeof(struct us_data));
 	mutex_init(&(us->dev_mutex));
 	us_set_lock_class(&us->dev_mutex, intf);
 	init_completion(&us->cmnd_ready);
@@ -988,6 +987,9 @@ int usb_stor_probe2(struct us_data *us)
 	/* fix for single-lun devices */
 	if (us->fflags & US_FL_SINGLE_LUN)
 		us->max_lun = 0;
+
+	if (!(us->fflags & US_FL_SCM_MULT_TARG))
+		us_to_host(us)->max_id = 1;
 
 	/* Find the endpoints and calculate pipe values */
 	result = get_pipes(us);

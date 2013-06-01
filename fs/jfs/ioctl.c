@@ -69,7 +69,7 @@ int jfs_sync_flags(struct inode *inode, int flags, int vflags)
 
 long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct jfs_inode_info *jfs_inode = JFS_IP(inode);
 	unsigned int flags;
 

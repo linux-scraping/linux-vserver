@@ -39,6 +39,7 @@
 #include <asm/unaligned.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
+#include <linux/pm_runtime.h>
 
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
@@ -619,6 +620,10 @@ nongeneric:
 		status = hcd->driver->hub_control (hcd,
 			typeReq, wValue, wIndex,
 			tbuf, wLength);
+
+		if (typeReq == GetHubDescriptor)
+			usb_hub_adjust_deviceremovable(hcd->self.root_hub,
+				(struct usb_hub_descriptor *)tbuf);
 		break;
 error:
 		/* "protocol stall" on error */
@@ -1025,6 +1030,49 @@ static int register_root_hub(struct usb_hcd *hcd)
 	return retval;
 }
 
+/*
+ * usb_hcd_start_port_resume - a root-hub port is sending a resume signal
+ * @bus: the bus which the root hub belongs to
+ * @portnum: the port which is being resumed
+ *
+ * HCDs should call this function when they know that a resume signal is
+ * being sent to a root-hub port.  The root hub will be prevented from
+ * going into autosuspend until usb_hcd_end_port_resume() is called.
+ *
+ * The bus's private lock must be held by the caller.
+ */
+void usb_hcd_start_port_resume(struct usb_bus *bus, int portnum)
+{
+	unsigned bit = 1 << portnum;
+
+	if (!(bus->resuming_ports & bit)) {
+		bus->resuming_ports |= bit;
+		pm_runtime_get_noresume(&bus->root_hub->dev);
+	}
+}
+EXPORT_SYMBOL_GPL(usb_hcd_start_port_resume);
+
+/*
+ * usb_hcd_end_port_resume - a root-hub port has stopped sending a resume signal
+ * @bus: the bus which the root hub belongs to
+ * @portnum: the port which is being resumed
+ *
+ * HCDs should call this function when they know that a resume signal has
+ * stopped being sent to a root-hub port.  The root hub will be allowed to
+ * autosuspend again.
+ *
+ * The bus's private lock must be held by the caller.
+ */
+void usb_hcd_end_port_resume(struct usb_bus *bus, int portnum)
+{
+	unsigned bit = 1 << portnum;
+
+	if (bus->resuming_ports & bit) {
+		bus->resuming_ports &= ~bit;
+		pm_runtime_put_noidle(&bus->root_hub->dev);
+	}
+}
+EXPORT_SYMBOL_GPL(usb_hcd_end_port_resume);
 
 /*-------------------------------------------------------------------------*/
 
@@ -2039,8 +2087,9 @@ int hcd_bus_resume(struct usb_device *rhdev, pm_message_t msg)
 	status = hcd->driver->bus_resume(hcd);
 	clear_bit(HCD_FLAG_WAKEUP_PENDING, &hcd->flags);
 	if (status == 0) {
-		/* TRSMRCY = 10 msec */
-		msleep(10);
+		struct usb_device *udev;
+		int port1;
+
 		spin_lock_irq(&hcd_root_hub_lock);
 		if (!HCD_DEAD(hcd)) {
 			usb_set_device_state(rhdev, rhdev->actconfig
@@ -2050,6 +2099,20 @@ int hcd_bus_resume(struct usb_device *rhdev, pm_message_t msg)
 			hcd->state = HC_STATE_RUNNING;
 		}
 		spin_unlock_irq(&hcd_root_hub_lock);
+
+		/*
+		 * Check whether any of the enabled ports on the root hub are
+		 * unsuspended.  If they are then a TRSMRCY delay is needed
+		 * (this is what the USB-2 spec calls a "global resume").
+		 * Otherwise we can skip the delay.
+		 */
+		usb_hub_for_each_child(rhdev, port1, udev) {
+			if (udev->state != USB_STATE_NOTATTACHED &&
+					!udev->port_is_suspended) {
+				usleep_range(10000, 11000);	/* TRSMRCY */
+				break;
+			}
+		}
 	} else {
 		hcd->state = old_state;
 		dev_dbg(&rhdev->dev, "bus %s fail, err %d\n",
@@ -2349,6 +2412,14 @@ int usb_hcd_is_primary_hcd(struct usb_hcd *hcd)
 }
 EXPORT_SYMBOL_GPL(usb_hcd_is_primary_hcd);
 
+int usb_hcd_find_raw_port_number(struct usb_hcd *hcd, int port1)
+{
+	if (!hcd->driver->find_raw_port_number)
+		return port1;
+
+	return hcd->driver->find_raw_port_number(hcd, port1);
+}
+
 static int usb_hcd_request_irqs(struct usb_hcd *hcd,
 		unsigned int irqnum, unsigned long irqflags)
 {
@@ -2491,7 +2562,6 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	}
 
 	/* starting here, usbcore will pay attention to this root hub */
-	rhdev->bus_mA = min(500u, hcd->power_budget);
 	if ((retval = register_root_hub(hcd)) != 0)
 		goto err_register_root_hub;
 

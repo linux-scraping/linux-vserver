@@ -819,7 +819,7 @@ static int iscsit_attach_ooo_cmdsn(
 		/*
 		 * CmdSN is greater than the tail of the list.
 		 */
-		if (ooo_tail->cmdsn < ooo_cmdsn->cmdsn)
+		if (iscsi_sna_lt(ooo_tail->cmdsn, ooo_cmdsn->cmdsn))
 			list_add_tail(&ooo_cmdsn->ooo_list,
 					&sess->sess_ooo_cmdsn_list);
 		else {
@@ -829,11 +829,12 @@ static int iscsit_attach_ooo_cmdsn(
 			 */
 			list_for_each_entry(ooo_tmp, &sess->sess_ooo_cmdsn_list,
 						ooo_list) {
-				if (ooo_tmp->cmdsn < ooo_cmdsn->cmdsn)
+				if (iscsi_sna_lt(ooo_tmp->cmdsn, ooo_cmdsn->cmdsn))
 					continue;
 
+				/* Insert before this entry */
 				list_add(&ooo_cmdsn->ooo_list,
-					&ooo_tmp->ooo_list);
+					ooo_tmp->ooo_list.prev);
 				break;
 			}
 		}
@@ -929,11 +930,10 @@ int iscsit_execute_cmd(struct iscsi_cmd *cmd, int ooo)
 	case ISCSI_OP_SCSI_CMD:
 		/*
 		 * Go ahead and send the CHECK_CONDITION status for
-		 * any SCSI CDB exceptions that may have occurred, also
-		 * handle the SCF_SCSI_RESERVATION_CONFLICT case here as well.
+		 * any SCSI CDB exceptions that may have occurred.
 		 */
-		if (se_cmd->se_cmd_flags & SCF_SCSI_CDB_EXCEPTION) {
-			if (se_cmd->scsi_sense_reason == TCM_RESERVATION_CONFLICT) {
+		if (cmd->sense_reason) {
+			if (cmd->sense_reason == TCM_RESERVATION_CONFLICT) {
 				cmd->i_state = ISTATE_SEND_STATUS;
 				spin_unlock_bh(&cmd->istate_lock);
 				iscsit_add_cmd_to_response_queue(cmd, cmd->conn,
@@ -956,7 +956,7 @@ int iscsit_execute_cmd(struct iscsi_cmd *cmd, int ooo)
 			 * exception
 			 */
 			return transport_send_check_condition_and_sense(se_cmd,
-					se_cmd->scsi_sense_reason, 0);
+					cmd->sense_reason, 0);
 		}
 		/*
 		 * Special case for delayed CmdSN with Immediate
@@ -1013,7 +1013,7 @@ int iscsit_execute_cmd(struct iscsi_cmd *cmd, int ooo)
 		iscsit_add_cmd_to_response_queue(cmd, cmd->conn, cmd->i_state);
 		break;
 	case ISCSI_OP_SCSI_TMFUNC:
-		if (se_cmd->se_cmd_flags & SCF_SCSI_CDB_EXCEPTION) {
+		if (cmd->se_cmd.se_tmr_req->response) {
 			spin_unlock_bh(&cmd->istate_lock);
 			iscsit_add_cmd_to_response_queue(cmd, cmd->conn,
 					cmd->i_state);

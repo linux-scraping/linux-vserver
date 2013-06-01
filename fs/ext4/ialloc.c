@@ -325,8 +325,8 @@ error_return:
 }
 
 struct orlov_stats {
+	__u64 free_clusters;
 	__u32 free_inodes;
-	__u32 free_clusters;
 	__u32 used_dirs;
 };
 
@@ -343,7 +343,7 @@ static void get_orlov_stats(struct super_block *sb, ext4_group_t g,
 
 	if (flex_size > 1) {
 		stats->free_inodes = atomic_read(&flex_group[g].free_inodes);
-		stats->free_clusters = atomic_read(&flex_group[g].free_clusters);
+		stats->free_clusters = atomic64_read(&flex_group[g].free_clusters);
 		stats->used_dirs = atomic_read(&flex_group[g].used_dirs);
 		return;
 	}
@@ -635,8 +635,10 @@ static int find_group_other(struct super_block *sb, struct inode *parent,
  * For other inodes, search forward from the parent directory's block
  * group to find a free inode.
  */
-struct inode *ext4_new_inode(handle_t *handle, struct inode *dir, umode_t mode,
-			     const struct qstr *qstr, __u32 goal, uid_t *owner)
+struct inode *__ext4_new_inode(handle_t *handle, struct inode *dir,
+			       umode_t mode, const struct qstr *qstr,
+			       __u32 goal, uid_t *owner, int handle_type,
+			       unsigned int line_no, int nblocks)
 {
 	struct super_block *sb;
 	struct buffer_head *inode_bitmap_bh = NULL;
@@ -725,6 +727,15 @@ repeat_in_this_group:
 			ext4_error(sb, "reserved inode found cleared - "
 				   "inode=%lu", ino + 1);
 			continue;
+		}
+		if (!handle) {
+			BUG_ON(nblocks <= 0);
+			handle = __ext4_journal_start_sb(dir->i_sb, line_no,
+							 handle_type, nblocks);
+			if (IS_ERR(handle)) {
+				err = PTR_ERR(handle);
+				goto fail;
+			}
 		}
 		BUFFER_TRACE(inode_bitmap_bh, "get_write_access");
 		err = ext4_journal_get_write_access(handle, inode_bitmap_bh);
@@ -904,6 +915,10 @@ got:
 
 	ei->i_extra_isize = EXT4_SB(sb)->s_want_extra_isize;
 
+	ei->i_inline_off = 0;
+	if (EXT4_HAS_INCOMPAT_FEATURE(sb, EXT4_FEATURE_INCOMPAT_INLINE_DATA))
+		ext4_set_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA);
+
 	ret = inode;
 	dquot_initialize(inode);
 	err = dquot_alloc_inode(inode);
@@ -1015,17 +1030,17 @@ iget_failed:
 	inode = NULL;
 bad_orphan:
 	ext4_warning(sb, "bad orphan inode %lu!  e2fsck was run?", ino);
-	printk(KERN_NOTICE "ext4_test_bit(bit=%d, block=%llu) = %d\n",
+	printk(KERN_WARNING "ext4_test_bit(bit=%d, block=%llu) = %d\n",
 	       bit, (unsigned long long)bitmap_bh->b_blocknr,
 	       ext4_test_bit(bit, bitmap_bh->b_data));
-	printk(KERN_NOTICE "inode=%p\n", inode);
+	printk(KERN_WARNING "inode=%p\n", inode);
 	if (inode) {
-		printk(KERN_NOTICE "is_bad_inode(inode)=%d\n",
+		printk(KERN_WARNING "is_bad_inode(inode)=%d\n",
 		       is_bad_inode(inode));
-		printk(KERN_NOTICE "NEXT_ORPHAN(inode)=%u\n",
+		printk(KERN_WARNING "NEXT_ORPHAN(inode)=%u\n",
 		       NEXT_ORPHAN(inode));
-		printk(KERN_NOTICE "max_ino=%lu\n", max_ino);
-		printk(KERN_NOTICE "i_nlink=%u\n", inode->i_nlink);
+		printk(KERN_WARNING "max_ino=%lu\n", max_ino);
+		printk(KERN_WARNING "i_nlink=%u\n", inode->i_nlink);
 		/* Avoid freeing blocks if we got a bad deleted inode */
 		if (inode->i_nlink == 0)
 			inode->i_blocks = 0;
@@ -1135,7 +1150,7 @@ int ext4_init_inode_table(struct super_block *sb, ext4_group_t group,
 	if (gdp->bg_flags & cpu_to_le16(EXT4_BG_INODE_ZEROED))
 		goto out;
 
-	handle = ext4_journal_start_sb(sb, 1);
+	handle = ext4_journal_start_sb(sb, EXT4_HT_MISC, 1);
 	if (IS_ERR(handle)) {
 		ret = PTR_ERR(handle);
 		goto out;

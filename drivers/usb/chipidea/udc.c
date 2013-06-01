@@ -461,6 +461,8 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
 		mReq->ptr->page[i] =
 			(mReq->req.dma + i * CI13XXX_PAGE_SIZE) & ~TD_RESERVED_MASK;
 
+	wmb();
+
 	if (!list_empty(&mEp->qh.queue)) {
 		struct ci13xxx_req *mReqPrev;
 		int n = hw_ep_bit(mEp->num, mEp->dir);
@@ -561,6 +563,12 @@ __acquires(mEp->lock)
 		struct ci13xxx_req *mReq = \
 			list_entry(mEp->qh.queue.next,
 				   struct ci13xxx_req, queue);
+
+		if (mReq->zptr) {
+			dma_pool_free(mEp->td_pool, mReq->zptr, mReq->zdma);
+			mReq->zptr = NULL;
+		}
+
 		list_del_init(&mReq->queue);
 		mReq->req.status = -ESHUTDOWN;
 
@@ -1767,7 +1775,7 @@ static int udc_start(struct ci13xxx *ci)
 		goto put_transceiver;
 	}
 
-	retval = dbg_create_files(&ci->gadget.dev);
+	retval = dbg_create_files(ci->dev);
 	if (retval)
 		goto unreg_device;
 
@@ -1796,7 +1804,7 @@ remove_trans:
 
 	dev_err(dev, "error = %i\n", retval);
 remove_dbg:
-	dbg_remove_files(&ci->gadget.dev);
+	dbg_remove_files(ci->dev);
 unreg_device:
 	device_unregister(&ci->gadget.dev);
 put_transceiver:
@@ -1836,7 +1844,7 @@ static void udc_stop(struct ci13xxx *ci)
 		if (ci->global_phy)
 			usb_put_phy(ci->transceiver);
 	}
-	dbg_remove_files(&ci->gadget.dev);
+	dbg_remove_files(ci->dev);
 	device_unregister(&ci->gadget.dev);
 	/* my kobject is dynamic, I swear! */
 	memset(&ci->gadget, 0, sizeof(ci->gadget));

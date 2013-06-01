@@ -82,12 +82,10 @@ cifs_prime_dcache(struct dentry *parent, struct qstr *name,
 
 	cFYI(1, "%s: for %s", __func__, name->name);
 
-	if (parent->d_op && parent->d_op->d_hash)
-		parent->d_op->d_hash(parent, parent->d_inode, name);
-	else
-		name->hash = full_name_hash(name->name, name->len);
+	dentry = d_hash_and_lookup(parent, name);
+	if (unlikely(IS_ERR(dentry)))
+		return;
 
-	dentry = d_lookup(parent, name);
 	if (dentry) {
 		int err;
 
@@ -144,6 +142,16 @@ cifs_fill_common_info(struct cifs_fattr *fattr, struct cifs_sb_info *cifs_sb)
 
 	if (fattr->cf_cifsattrs & ATTR_READONLY)
 		fattr->cf_mode &= ~S_IWUGO;
+
+	/*
+	 * We of course don't get ACL info in FIND_FIRST/NEXT results, so
+	 * mark it for revalidation so that "ls -l" will look right. It might
+	 * be super-slow, but if we don't do this then the ownership of files
+	 * may look wrong since the inodes may not have timed out by the time
+	 * "ls" does a stat() call on them.
+	 */
+	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_CIFS_ACL)
+		fattr->cf_flags |= CIFS_FATTR_NEED_REVAL;
 
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL &&
 	    fattr->cf_cifsattrs & ATTR_SYSTEM) {
@@ -495,7 +503,7 @@ static int cifs_entry_is_dot(struct cifs_dirent *de, bool is_unicode)
    whether we can use the cached search results from the previous search */
 static int is_dir_changed(struct file *file)
 {
-	struct inode *inode = file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(file);
 	struct cifsInodeInfo *cifsInfo = CIFS_I(inode);
 
 	if (cifsInfo->time == 0)
@@ -768,7 +776,7 @@ int cifs_readdir(struct file *file, void *direntry, filldir_t filldir)
 	switch ((int) file->f_pos) {
 	case 0:
 		if (filldir(direntry, ".", 1, file->f_pos,
-		     file->f_path.dentry->d_inode->i_ino, DT_DIR) < 0) {
+		     file_inode(file)->i_ino, DT_DIR) < 0) {
 			cERROR(1, "Filldir for current dir failed");
 			rc = -ENOMEM;
 			break;

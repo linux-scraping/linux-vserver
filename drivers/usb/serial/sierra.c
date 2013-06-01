@@ -18,7 +18,7 @@
 */
 /* Uncomment to log function calls */
 /* #define DEBUG */
-#define DRIVER_VERSION "v.1.7.16"
+
 #define DRIVER_AUTHOR "Kevin Lloyd, Elina Pasheva, Matthew Safar, Rory Filer"
 #define DRIVER_DESC "USB Driver for Sierra Wireless USB modems"
 
@@ -569,7 +569,6 @@ static void sierra_indat_callback(struct urb *urb)
 	int err;
 	int endpoint;
 	struct usb_serial_port *port;
-	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	int status = urb->status;
 
@@ -581,16 +580,12 @@ static void sierra_indat_callback(struct urb *urb)
 			" endpoint %02x\n", __func__, status, endpoint);
 	} else {
 		if (urb->actual_length) {
-			tty = tty_port_tty_get(&port->port);
-			if (tty) {
-				tty_insert_flip_string(tty, data,
-					urb->actual_length);
-				tty_flip_buffer_push(tty);
+			tty_insert_flip_string(&port->port, data,
+				urb->actual_length);
+			tty_flip_buffer_push(&port->port);
 
-				tty_kref_put(tty);
-				usb_serial_debug_data(&port->dev, __func__,
-						      urb->actual_length, data);
-			}
+			usb_serial_debug_data(&port->dev, __func__,
+					      urb->actual_length, data);
 		} else {
 			dev_dbg(&port->dev, "%s: empty read urb"
 				" received\n", __func__);
@@ -1072,7 +1067,6 @@ module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
 
 module_param(nmea, bool, S_IRUGO | S_IWUSR);

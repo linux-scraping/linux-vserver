@@ -7,7 +7,7 @@
  * From code in the latency_tracer, that is:
  *
  *  Copyright (C) 2004-2006 Ingo Molnar
- *  Copyright (C) 2004 William Lee Irwin III
+ *  Copyright (C) 2004 Nadia Yvette Chambers
  */
 #include <linux/kallsyms.h>
 #include <linux/debugfs.h>
@@ -32,7 +32,7 @@ enum {
 
 static int trace_type __read_mostly;
 
-static int save_lat_flag;
+static int save_flags;
 
 static void stop_irqsoff_tracer(struct trace_array *tr, int graph);
 static int start_irqsoff_tracer(struct trace_array *tr, int graph);
@@ -558,8 +558,11 @@ static void stop_irqsoff_tracer(struct trace_array *tr, int graph)
 
 static void __irqsoff_tracer_init(struct trace_array *tr)
 {
-	save_lat_flag = trace_flags & TRACE_ITER_LATENCY_FMT;
-	trace_flags |= TRACE_ITER_LATENCY_FMT;
+	save_flags = trace_flags;
+
+	/* non overwrite screws up the latency tracers */
+	set_tracer_flag(TRACE_ITER_OVERWRITE, 1);
+	set_tracer_flag(TRACE_ITER_LATENCY_FMT, 1);
 
 	tracing_max_latency = 0;
 	irqsoff_trace = tr;
@@ -573,10 +576,13 @@ static void __irqsoff_tracer_init(struct trace_array *tr)
 
 static void irqsoff_tracer_reset(struct trace_array *tr)
 {
+	int lat_flag = save_flags & TRACE_ITER_LATENCY_FMT;
+	int overwrite_flag = save_flags & TRACE_ITER_OVERWRITE;
+
 	stop_irqsoff_tracer(tr, is_graph());
 
-	if (!save_lat_flag)
-		trace_flags &= ~TRACE_ITER_LATENCY_FMT;
+	set_tracer_flag(TRACE_ITER_LATENCY_FMT, lat_flag);
+	set_tracer_flag(TRACE_ITER_OVERWRITE, overwrite_flag);
 }
 
 static void irqsoff_tracer_start(struct trace_array *tr)
@@ -604,17 +610,18 @@ static struct tracer irqsoff_tracer __read_mostly =
 	.reset		= irqsoff_tracer_reset,
 	.start		= irqsoff_tracer_start,
 	.stop		= irqsoff_tracer_stop,
-	.print_max	= 1,
+	.print_max	= true,
 	.print_header   = irqsoff_print_header,
 	.print_line     = irqsoff_print_line,
 	.flags		= &tracer_flags,
 	.set_flag	= irqsoff_set_flag,
+	.flag_changed	= trace_keep_overwrite,
 #ifdef CONFIG_FTRACE_SELFTEST
 	.selftest    = trace_selftest_startup_irqsoff,
 #endif
 	.open           = irqsoff_trace_open,
 	.close          = irqsoff_trace_close,
-	.use_max_tr	= 1,
+	.use_max_tr	= true,
 };
 # define register_irqsoff(trace) register_tracer(&trace)
 #else
@@ -637,17 +644,18 @@ static struct tracer preemptoff_tracer __read_mostly =
 	.reset		= irqsoff_tracer_reset,
 	.start		= irqsoff_tracer_start,
 	.stop		= irqsoff_tracer_stop,
-	.print_max	= 1,
+	.print_max	= true,
 	.print_header   = irqsoff_print_header,
 	.print_line     = irqsoff_print_line,
 	.flags		= &tracer_flags,
 	.set_flag	= irqsoff_set_flag,
+	.flag_changed	= trace_keep_overwrite,
 #ifdef CONFIG_FTRACE_SELFTEST
 	.selftest    = trace_selftest_startup_preemptoff,
 #endif
 	.open		= irqsoff_trace_open,
 	.close		= irqsoff_trace_close,
-	.use_max_tr	= 1,
+	.use_max_tr	= true,
 };
 # define register_preemptoff(trace) register_tracer(&trace)
 #else
@@ -672,17 +680,18 @@ static struct tracer preemptirqsoff_tracer __read_mostly =
 	.reset		= irqsoff_tracer_reset,
 	.start		= irqsoff_tracer_start,
 	.stop		= irqsoff_tracer_stop,
-	.print_max	= 1,
+	.print_max	= true,
 	.print_header   = irqsoff_print_header,
 	.print_line     = irqsoff_print_line,
 	.flags		= &tracer_flags,
 	.set_flag	= irqsoff_set_flag,
+	.flag_changed	= trace_keep_overwrite,
 #ifdef CONFIG_FTRACE_SELFTEST
 	.selftest    = trace_selftest_startup_preemptirqsoff,
 #endif
 	.open		= irqsoff_trace_open,
 	.close		= irqsoff_trace_close,
-	.use_max_tr	= 1,
+	.use_max_tr	= true,
 };
 
 # define register_preemptirqsoff(trace) register_tracer(&trace)
@@ -698,4 +707,4 @@ __init static int init_irqsoff_tracer(void)
 
 	return 0;
 }
-device_initcall(init_irqsoff_tracer);
+core_initcall(init_irqsoff_tracer);

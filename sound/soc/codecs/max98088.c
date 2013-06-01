@@ -2006,7 +2006,7 @@ static int max98088_probe(struct snd_soc_codec *codec)
                        ret);
                goto err_access;
        }
-       dev_info(codec->dev, "revision %c\n", ret + 'A');
+       dev_info(codec->dev, "revision %c\n", ret - 0x40 + 'A');
 
        snd_soc_write(codec, M98088_REG_51_PWR_SYS, M98088_PWRSV);
 
@@ -2084,7 +2084,7 @@ static int max98088_i2c_probe(struct i2c_client *i2c,
        return ret;
 }
 
-static int __devexit max98088_i2c_remove(struct i2c_client *client)
+static int max98088_i2c_remove(struct i2c_client *client)
 {
        snd_soc_unregister_codec(&client->dev);
        return 0;
@@ -2098,13 +2098,13 @@ static const struct i2c_device_id max98088_i2c_id[] = {
 MODULE_DEVICE_TABLE(i2c, max98088_i2c_id);
 
 static struct i2c_driver max98088_i2c_driver = {
-       .driver = {
-               .name = "max98088",
-               .owner = THIS_MODULE,
-       },
-       .probe  = max98088_i2c_probe,
-       .remove = __devexit_p(max98088_i2c_remove),
-       .id_table = max98088_i2c_id,
+	.driver = {
+		.name = "max98088",
+		.owner = THIS_MODULE,
+	},
+	.probe  = max98088_i2c_probe,
+	.remove = max98088_i2c_remove,
+	.id_table = max98088_i2c_id,
 };
 
 module_i2c_driver(max98088_i2c_driver);

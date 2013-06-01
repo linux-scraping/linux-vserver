@@ -137,18 +137,20 @@ unsigned long __init free_low_memory_core_early(int nodeid)
 	return count;
 }
 
-/**
- * free_all_bootmem_node - release a node's free pages to the buddy allocator
- * @pgdat: node to be released
- *
- * Returns the number of pages actually released.
- */
-unsigned long __init free_all_bootmem_node(pg_data_t *pgdat)
+static void reset_node_lowmem_managed_pages(pg_data_t *pgdat)
 {
-	register_page_bootmem_info_node(pgdat);
+	struct zone *z;
 
-	/* free_low_memory_core_early(MAX_NUMNODES) will be called later */
-	return 0;
+	/*
+	 * In free_area_init_core(), highmem zone's managed_pages is set to
+	 * present_pages, and bootmem allocator doesn't allocate from highmem
+	 * zones. So there's no need to recalculate managed_pages because all
+	 * highmem pages will be managed by the buddy system. Here highmem
+	 * zone also includes highmem movable zone.
+	 */
+	for (z = pgdat->node_zones; z < pgdat->node_zones + MAX_NR_ZONES; z++)
+		if (!is_highmem(z))
+			z->managed_pages = 0;
 }
 
 /**
@@ -158,6 +160,11 @@ unsigned long __init free_all_bootmem_node(pg_data_t *pgdat)
  */
 unsigned long __init free_all_bootmem(void)
 {
+	struct pglist_data *pgdat;
+
+	for_each_online_pgdat(pgdat)
+		reset_node_lowmem_managed_pages(pgdat);
+
 	/*
 	 * We need to use MAX_NUMNODES instead of NODE_DATA(0)->node_id
 	 *  because in some case like Node0 doesn't have RAM installed
@@ -382,6 +389,14 @@ void * __init __alloc_bootmem_low(unsigned long size, unsigned long align,
 				  unsigned long goal)
 {
 	return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
+}
+
+void * __init __alloc_bootmem_low_nopanic(unsigned long size,
+					  unsigned long align,
+					  unsigned long goal)
+{
+	return ___alloc_bootmem_nopanic(size, align, goal,
+					ARCH_LOW_ADDRESS_LIMIT);
 }
 
 /**

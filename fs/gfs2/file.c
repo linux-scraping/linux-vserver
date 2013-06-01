@@ -44,7 +44,7 @@
  * gfs2_llseek - seek to a location in a file
  * @file: the file
  * @offset: the offset
- * @origin: Where to seek from (SEEK_SET, SEEK_CUR, or SEEK_END)
+ * @whence: Where to seek from (SEEK_SET, SEEK_CUR, or SEEK_END)
  *
  * SEEK_END requires the glock for the file because it references the
  * file's size.
@@ -52,26 +52,26 @@
  * Returns: The new offset, or errno
  */
 
-static loff_t gfs2_llseek(struct file *file, loff_t offset, int origin)
+static loff_t gfs2_llseek(struct file *file, loff_t offset, int whence)
 {
 	struct gfs2_inode *ip = GFS2_I(file->f_mapping->host);
 	struct gfs2_holder i_gh;
 	loff_t error;
 
-	switch (origin) {
+	switch (whence) {
 	case SEEK_END: /* These reference inode->i_size */
 	case SEEK_DATA:
 	case SEEK_HOLE:
 		error = gfs2_glock_nq_init(ip->i_gl, LM_ST_SHARED, LM_FLAG_ANY,
 					   &i_gh);
 		if (!error) {
-			error = generic_file_llseek(file, offset, origin);
+			error = generic_file_llseek(file, offset, whence);
 			gfs2_glock_dq_uninit(&i_gh);
 		}
 		break;
 	case SEEK_CUR:
 	case SEEK_SET:
-		error = generic_file_llseek(file, offset, origin);
+		error = generic_file_llseek(file, offset, whence);
 		break;
 	default:
 		error = -EINVAL;
@@ -163,7 +163,7 @@ static const u32 gfs2_to_fsflags[32] = {
 
 static int gfs2_get_flags(struct file *filp, u32 __user *ptr)
 {
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_holder gh;
 	int error;
@@ -266,7 +266,7 @@ void gfs2_get_inode_flags(struct inode *inode)
  */
 static int do_gfs2_set_flags(struct file *filp, u32 reqflags, u32 mask)
 {
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	struct buffer_head *bh;
@@ -325,7 +325,7 @@ static int do_gfs2_set_flags(struct file *filp, u32 reqflags, u32 mask)
 	error = gfs2_meta_inode_buffer(ip, &bh);
 	if (error)
 		goto out_trans_end;
-	gfs2_trans_add_bh(ip->i_gl, bh, 1);
+	gfs2_trans_add_meta(ip->i_gl, bh);
 	ip->i_diskflags = new_flags;
 	gfs2_dinode_out(ip, bh->b_data);
 	brelse(bh);
@@ -342,7 +342,7 @@ out_drop_write:
 
 static int gfs2_set_flags(struct file *filp, u32 __user *ptr)
 {
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	u32 fsflags, gfsflags;
 
 	if (get_user(fsflags, ptr))
@@ -375,7 +375,7 @@ int gfs2_sync_flags(struct inode *inode, int flags, int vflags)
 	error = gfs2_meta_inode_buffer(ip, &bh);
 	if (error)
 		goto out_trans_end;
-	gfs2_trans_add_bh(ip->i_gl, bh, 1);
+	gfs2_trans_add_meta(ip->i_gl, bh);
 	inode->i_flags = flags;
 	inode->i_vflags = vflags;
 	gfs2_get_inode_flags(inode);
@@ -416,7 +416,7 @@ static long gfs2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 static void gfs2_size_hint(struct file *filep, loff_t offset, size_t size)
 {
-	struct inode *inode = filep->f_dentry->d_inode;
+	struct inode *inode = file_inode(filep);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	size_t blks = (size + sdp->sd_sb.sb_bsize - 1) >> sdp->sd_sb.sb_bsize_shift;
@@ -466,7 +466,7 @@ static int gfs2_allocate_page_backing(struct page *page)
 static int gfs2_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct page *page = vmf->page;
-	struct inode *inode = vma->vm_file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(vma->vm_file);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	unsigned long last_index;
@@ -512,7 +512,7 @@ static int gfs2_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (ret)
 		goto out_unlock;
 	gfs2_write_calc_reserv(ip, PAGE_CACHE_SIZE, &data_blocks, &ind_blocks);
-	ret = gfs2_inplace_reserve(ip, data_blocks + ind_blocks);
+	ret = gfs2_inplace_reserve(ip, data_blocks + ind_blocks, 0);
 	if (ret)
 		goto out_quota_unlock;
 
@@ -563,7 +563,7 @@ out:
 	gfs2_holder_uninit(&gh);
 	if (ret == 0) {
 		set_page_dirty(page);
-		wait_on_page_writeback(page);
+		wait_for_stable_page(page);
 	}
 	sb_end_pagefault(inode->i_sb);
 	return block_page_mkwrite_return(ret);
@@ -753,8 +753,7 @@ static ssize_t gfs2_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 {
 	struct file *file = iocb->ki_filp;
 	size_t writesize = iov_length(iov, nr_segs);
-	struct dentry *dentry = file->f_dentry;
-	struct gfs2_inode *ip = GFS2_I(dentry->d_inode);
+	struct gfs2_inode *ip = GFS2_I(file_inode(file));
 	int ret;
 
 	ret = gfs2_rs_alloc(ip);
@@ -789,7 +788,7 @@ static int fallocate_chunk(struct inode *inode, loff_t offset, loff_t len,
 	if (unlikely(error))
 		return error;
 
-	gfs2_trans_add_bh(ip->i_gl, dibh, 1);
+	gfs2_trans_add_meta(ip->i_gl, dibh);
 
 	if (gfs2_is_stuffed(ip)) {
 		error = gfs2_unstuff_dinode(ip, NULL);
@@ -852,7 +851,7 @@ static void calc_max_reserv(struct gfs2_inode *ip, loff_t max, loff_t *len,
 static long gfs2_fallocate(struct file *file, int mode, loff_t offset,
 			   loff_t len)
 {
-	struct inode *inode = file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(file);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	struct gfs2_inode *ip = GFS2_I(inode);
 	unsigned int data_blocks = 0, ind_blocks = 0, rblocks;
@@ -905,7 +904,7 @@ static long gfs2_fallocate(struct file *file, int mode, loff_t offset,
 retry:
 		gfs2_write_calc_reserv(ip, bytes, &data_blocks, &ind_blocks);
 
-		error = gfs2_inplace_reserve(ip, data_blocks + ind_blocks);
+		error = gfs2_inplace_reserve(ip, data_blocks + ind_blocks, 0);
 		if (error) {
 			if (error == -ENOSPC && bytes > sdp->sd_sb.sb_bsize) {
 				bytes >>= 1;
@@ -1004,8 +1003,11 @@ static int gfs2_lock(struct file *file, int cmd, struct file_lock *fl)
 		cmd = F_SETLK;
 		fl->fl_type = F_UNLCK;
 	}
-	if (unlikely(test_bit(SDF_SHUTDOWN, &sdp->sd_flags)))
+	if (unlikely(test_bit(SDF_SHUTDOWN, &sdp->sd_flags))) {
+		if (fl->fl_type == F_UNLCK)
+			posix_lock_file_wait(file, fl);
 		return -EIO;
+	}
 	if (IS_GETLK(cmd))
 		return dlm_posix_get(ls->ls_dlm, ip->i_no_addr, file, fl);
 	else if (fl->fl_type == F_UNLCK)
@@ -1018,7 +1020,7 @@ static int do_flock(struct file *file, int cmd, struct file_lock *fl)
 {
 	struct gfs2_file *fp = file->private_data;
 	struct gfs2_holder *fl_gh = &fp->f_fl_gh;
-	struct gfs2_inode *ip = GFS2_I(file->f_path.dentry->d_inode);
+	struct gfs2_inode *ip = GFS2_I(file_inode(file));
 	struct gfs2_glock *gl;
 	unsigned int state;
 	int flags;

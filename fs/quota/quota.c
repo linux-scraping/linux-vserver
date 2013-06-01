@@ -308,6 +308,8 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 	}
 }
 
+#ifdef CONFIG_BLOCK
+
 #if defined(CONFIG_BLK_DEV_VROOT) || defined(CONFIG_BLK_DEV_VROOT_MODULE)
 
 #include <linux/vroot.h>
@@ -362,6 +364,8 @@ static int quotactl_cmd_write(int cmd)
 	}
 	return 1;
 }
+
+#endif /* CONFIG_BLOCK */
 
 /*
  * look up a superblock on which quota ops will be performed

@@ -129,14 +129,11 @@ static inline void __unhash_dl_info(struct dl_info *dli)
 static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag)
 {
 	struct hlist_head *head = &dl_info_hash[__hashval(sb, tag)];
-	struct hlist_node *pos;
 	struct dl_info *dli;
 
-	hlist_for_each_entry_rcu(dli, pos, head, dl_hlist) {
-
-		if (dli->dl_tag == tag && dli->dl_sb == sb) {
+	hlist_for_each_entry_rcu(dli, head, dl_hlist) {
+		if (dli->dl_tag == tag && dli->dl_sb == sb)
 			return dli;
-		}
 	}
 	return NULL;
 }

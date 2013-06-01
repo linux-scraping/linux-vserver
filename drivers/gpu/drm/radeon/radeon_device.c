@@ -93,6 +93,7 @@ static const char radeon_family_name[][16] = {
 	"TAHITI",
 	"PITCAIRN",
 	"VERDE",
+	"OLAND",
 	"LAST",
 };
 
@@ -758,6 +759,11 @@ int radeon_atombios_init(struct radeon_device *rdev)
 	atom_card_info->pll_write = cail_pll_write;
 
 	rdev->mode_info.atom_context = atom_parse(atom_card_info, rdev->bios);
+	if (!rdev->mode_info.atom_context) {
+		radeon_atombios_fini(rdev);
+		return -ENOMEM;
+	}
+
 	mutex_init(&rdev->mode_info.atom_context->mutex);
 	radeon_atom_initialize_bios_scratch_regs(rdev->ddev);
 	atom_allocate_fb_scratch(rdev->mode_info.atom_context);
@@ -777,9 +783,11 @@ void radeon_atombios_fini(struct radeon_device *rdev)
 {
 	if (rdev->mode_info.atom_context) {
 		kfree(rdev->mode_info.atom_context->scratch);
-		kfree(rdev->mode_info.atom_context);
 	}
+	kfree(rdev->mode_info.atom_context);
+	rdev->mode_info.atom_context = NULL;
 	kfree(rdev->mode_info.atom_card_info);
+	rdev->mode_info.atom_card_info = NULL;
 }
 
 /* COMBIOS */
@@ -898,6 +906,25 @@ static void radeon_check_arguments(struct radeon_device *rdev)
 }
 
 /**
+ * radeon_switcheroo_quirk_long_wakeup - return true if longer d3 delay is
+ * needed for waking up.
+ *
+ * @pdev: pci dev pointer
+ */
+static bool radeon_switcheroo_quirk_long_wakeup(struct pci_dev *pdev)
+{
+
+	/* 6600m in a macbook pro */
+	if (pdev->subsystem_vendor == PCI_VENDOR_ID_APPLE &&
+	    pdev->subsystem_device == 0x00e2) {
+		printk(KERN_INFO "radeon: quirking longer d3 wakeup delay\n");
+		return true;
+	}
+
+	return false;
+}
+
+/**
  * radeon_switcheroo_set_state - set switcheroo state
  *
  * @pdev: pci dev pointer
@@ -911,10 +938,19 @@ static void radeon_switcheroo_set_state(struct pci_dev *pdev, enum vga_switchero
 	struct drm_device *dev = pci_get_drvdata(pdev);
 	pm_message_t pmm = { .event = PM_EVENT_SUSPEND };
 	if (state == VGA_SWITCHEROO_ON) {
+		unsigned d3_delay = dev->pdev->d3_delay;
+
 		printk(KERN_INFO "radeon: switched on\n");
 		/* don't suspend or resume card normally */
 		dev->switch_power_state = DRM_SWITCH_POWER_CHANGING;
+
+		if (d3_delay < 20 && radeon_switcheroo_quirk_long_wakeup(pdev))
+			dev->pdev->d3_delay = 20;
+
 		radeon_resume_kms(dev);
+
+		dev->pdev->d3_delay = d3_delay;
+
 		dev->switch_power_state = DRM_SWITCH_POWER_ON;
 		drm_kms_helper_poll_enable(dev);
 	} else {
@@ -1060,6 +1096,7 @@ int radeon_device_init(struct radeon_device *rdev,
 
 	/* Registers mapping */
 	/* TODO: block userspace mapping of io register */
+	spin_lock_init(&rdev->mmio_idx_lock);
 	rdev->rmmio_base = pci_resource_start(rdev->pdev, 2);
 	rdev->rmmio_size = pci_resource_len(rdev->pdev, 2);
 	rdev->rmmio = ioremap(rdev->rmmio_base, rdev->rmmio_size);
