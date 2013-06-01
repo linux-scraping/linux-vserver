@@ -71,7 +71,8 @@ long vs_reboot_helper(struct vx_info *vxi, int cmd, void __user *arg)
 	snprintf(id_buf, sizeof(id_buf), "%d", vxi->vx_id);
 
 	snprintf(cmd_buf, sizeof(cmd_buf), "VS_CMD=%08x", cmd);
-	snprintf(uid_buf, sizeof(uid_buf), "VS_UID=%d", current_uid());
+	snprintf(uid_buf, sizeof(uid_buf), "VS_UID=%d",
+		from_kuid(&init_user_ns, current_uid()));
 	snprintf(pid_buf, sizeof(pid_buf), "VS_PID=%d", current->pid);
 
 	switch (cmd) {

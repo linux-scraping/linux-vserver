@@ -167,7 +167,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 
 	mutex_lock(&in->i_mutex);
 	if (*mask & IATTR_TAG) {
-		attr.ia_tag = *tag;
+		attr.ia_tag = make_ktag(&init_user_ns, *tag);
 		attr.ia_valid |= ATTR_TAG;
 	}
 

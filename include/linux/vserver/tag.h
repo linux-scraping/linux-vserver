@@ -113,12 +113,18 @@ static inline uid_t dx_map_uid(uid_t uid)
 	return (uid & MAX_UID);
 }
 
+#define	dx_map_kuid(n, u) \
+	make_kuid(n, dx_map_uid(from_kuid(n, u)))
+
 static inline gid_t dx_map_gid(gid_t gid)
 {
 	if ((gid > MAX_GID) && (gid != -1))
 		gid = -2;
 	return (gid & MAX_GID);
 }
+
+#define	dx_map_kgid(n, u) \
+	make_kgid(n, dx_map_gid(from_kgid(n, u)))
 
 struct peer_tag {
 	int32_t xid;

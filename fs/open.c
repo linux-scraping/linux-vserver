@@ -581,13 +581,15 @@ static int chown_common(struct path *path, uid_t user, gid_t group)
 		if (!uid_valid(uid))
 			return -EINVAL;
 		newattrs.ia_valid |= ATTR_UID;
-		newattrs.ia_uid = dx_map_uid(user);
+		newattrs.ia_uid = make_kuid(&init_user_ns,
+			dx_map_uid(user));
 	}
 	if (group != (gid_t) -1) {
 		if (!gid_valid(gid))
 			return -EINVAL;
 		newattrs.ia_valid |= ATTR_GID;
-		newattrs.ia_gid = dx_map_gid(group);
+		newattrs.ia_gid = make_kgid(&init_user_ns,
+			dx_map_gid(group));
 	}
 	if (!S_ISDIR(inode->i_mode))
 		newattrs.ia_valid |=

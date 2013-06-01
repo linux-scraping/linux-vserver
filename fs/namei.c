@@ -351,8 +351,8 @@ int dx_permission(const struct inode *inode, int mask)
 #endif
 		    vxwprintk_task(1,
 			"denied [0x%x] access to inode %s:%p[#%d,%lu]",
-			mask, inode->i_sb->s_id, inode, inode->i_tag,
-			inode->i_ino);
+			mask, inode->i_sb->s_id, inode,
+			i_tag_read(inode), inode->i_ino);
 	}
 	return ret;
 }
