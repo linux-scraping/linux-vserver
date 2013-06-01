@@ -33,6 +33,7 @@
 #include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
+#include <linux/syscalls.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
@@ -48,7 +49,6 @@
 #include <asm/io.h>
 #include <asm/tlbflush.h>
 #include <asm/irq.h>
-#include <asm/syscalls.h>
 
 /*
  * Known problems:
@@ -182,7 +182,7 @@ static void mark_screen_rdonly(struct mm_struct *mm)
 	if (pud_none_or_clear_bad(pud))
 		goto out;
 	pmd = pmd_offset(pud, 0xA0000);
-	split_huge_page_pmd(mm, pmd);
+	split_huge_page_pmd_mm(mm, 0xA0000, pmd);
 	if (pmd_none_or_clear_bad(pmd))
 		goto out;
 	pte = pte_offset_map_lock(mm, pmd, 0xA0000, &ptl);
@@ -202,17 +202,16 @@ out:
 static int do_vm86_irq_handling(int subfunction, int irqnumber);
 static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk);
 
-int sys_vm86old(struct vm86_struct __user *v86, struct pt_regs *regs)
+SYSCALL_DEFINE1(vm86old, struct vm86_struct __user *, v86)
 {
 	struct kernel_vm86_struct info; /* declare this _on top_,
 					 * this avoids wasting of stack space.
 					 * This remains on the stack until we
 					 * return to 32 bit user space.
 					 */
-	struct task_struct *tsk;
+	struct task_struct *tsk = current;
 	int tmp, ret = -EPERM;
 
-	tsk = current;
 	if (tsk->thread.saved_sp0)
 		goto out;
 	tmp = copy_vm86_regs_from_user(&info.regs, &v86->regs,
@@ -222,16 +221,17 @@ int sys_vm86old(struct vm86_struct __user *v86, struct pt_regs *regs)
 	if (tmp)
 		goto out;
 	memset(&info.vm86plus, 0, (int)&info.regs32 - (int)&info.vm86plus);
-	info.regs32 = regs;
+	info.regs32 = current_pt_regs();
 	tsk->thread.vm86_info = v86;
 	do_sys_vm86(&info, tsk);
 	ret = 0;	/* we never return here */
 out:
+	asmlinkage_protect(1, ret, v86);
 	return ret;
 }
 
 
-int sys_vm86(unsigned long cmd, unsigned long arg, struct pt_regs *regs)
+SYSCALL_DEFINE2(vm86, unsigned long, cmd, unsigned long, arg)
 {
 	struct kernel_vm86_struct info; /* declare this _on top_,
 					 * this avoids wasting of stack space.
@@ -272,12 +272,13 @@ int sys_vm86(unsigned long cmd, unsigned long arg, struct pt_regs *regs)
 	ret = -EFAULT;
 	if (tmp)
 		goto out;
-	info.regs32 = regs;
+	info.regs32 = current_pt_regs();
 	info.vm86plus.is_vm86pus = 1;
 	tsk->thread.vm86_info = (struct vm86_struct __user *)v86;
 	do_sys_vm86(&info, tsk);
 	ret = 0;	/* we never return here */
 out:
+	asmlinkage_protect(2, ret, cmd, arg);
 	return ret;
 }
 

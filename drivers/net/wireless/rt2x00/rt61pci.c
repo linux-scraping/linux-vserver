@@ -35,6 +35,7 @@
 #include <linux/eeprom_93cx6.h>
 
 #include "rt2x00.h"
+#include "rt2x00mmio.h"
 #include "rt2x00pci.h"
 #include "rt61pci.h"
 
@@ -3094,7 +3095,7 @@ static struct pci_driver rt61pci_driver = {
 	.name		= KBUILD_MODNAME,
 	.id_table	= rt61pci_device_table,
 	.probe		= rt61pci_probe,
-	.remove		= __devexit_p(rt2x00pci_remove),
+	.remove		= rt2x00pci_remove,
 	.suspend	= rt2x00pci_suspend,
 	.resume		= rt2x00pci_resume,
 };

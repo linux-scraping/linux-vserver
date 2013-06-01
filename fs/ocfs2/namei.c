@@ -516,9 +516,9 @@ static int __ocfs2_mknod_locked(struct inode *dir,
 	fe->i_suballoc_slot = cpu_to_le16(inode_ac->ac_alloc_slot);
 
 	tag = dx_current_fstag(osb->sb);
-	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode), inode->i_uid, tag));
-	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode), inode->i_gid, tag));
-	inode->i_tag = tag;
+	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode), i_uid_read(inode), tag));
+	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode), i_gid_read(inode), tag));
+	inode->i_tag = tag; /* is this correct? */
 	fe->i_mode = cpu_to_le16(inode->i_mode);
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
 		fe->id1.dev1.i_rdev = cpu_to_le64(huge_encode_dev(dev));

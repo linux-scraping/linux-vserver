@@ -44,7 +44,6 @@
  */
 static int ext4_sync_parent(struct inode *inode)
 {
-	struct writeback_control wbc;
 	struct dentry *dentry = NULL;
 	struct inode *next;
 	int ret = 0;
@@ -66,10 +65,7 @@ static int ext4_sync_parent(struct inode *inode)
 		ret = sync_mapping_buffers(inode->i_mapping);
 		if (ret)
 			break;
-		memset(&wbc, 0, sizeof(wbc));
-		wbc.sync_mode = WB_SYNC_ALL;
-		wbc.nr_to_write = 0;         /* only write out the inode */
-		ret = sync_inode(inode, &wbc);
+		ret = sync_inode_metadata(inode, 1);
 		if (ret)
 			break;
 	}
@@ -113,8 +109,6 @@ static int __sync_inode(struct inode *inode, int datasync)
  *
  * What we do is just kick off a commit and wait on it.  This will snapshot the
  * inode to disk.
- *
- * i_mutex lock is held when entering and exiting this function
  */
 
 int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
@@ -172,8 +166,7 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	if (journal->j_flags & JBD2_BARRIER &&
 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
 		needs_barrier = true;
-	jbd2_log_start_commit(journal, commit_tid);
-	ret = jbd2_log_wait_commit(journal, commit_tid);
+	ret = jbd2_complete_transaction(journal, commit_tid);
 	if (needs_barrier) {
 		err = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
 		if (!ret)

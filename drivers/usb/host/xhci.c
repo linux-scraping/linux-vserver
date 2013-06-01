@@ -40,7 +40,7 @@ MODULE_PARM_DESC(link_quirk, "Don't clear the chain bit on a link TRB");
 
 /* TODO: copied from ehci-hcd.c - can this be refactored? */
 /*
- * handshake - spin reading hc until handshake completes or fails
+ * xhci_handshake - spin reading hc until handshake completes or fails
  * @ptr: address of hc register to be read
  * @mask: bits to look at in result of read
  * @done: value of those bits when handshake succeeds
@@ -52,7 +52,7 @@ MODULE_PARM_DESC(link_quirk, "Don't clear the chain bit on a link TRB");
  * handshake done).  There are two failure modes:  "usec" have passed (major
  * hardware flakeout), or the register reads as all-ones (hardware removed).
  */
-int handshake(struct xhci_hcd *xhci, void __iomem *ptr,
+int xhci_handshake(struct xhci_hcd *xhci, void __iomem *ptr,
 		      u32 mask, u32 done, int usec)
 {
 	u32	result;
@@ -103,7 +103,7 @@ int xhci_halt(struct xhci_hcd *xhci)
 	xhci_dbg(xhci, "// Halt the HC\n");
 	xhci_quiesce(xhci);
 
-	ret = handshake(xhci, &xhci->op_regs->status,
+	ret = xhci_handshake(xhci, &xhci->op_regs->status,
 			STS_HALT, STS_HALT, XHCI_MAX_HALT_USEC);
 	if (!ret) {
 		xhci->xhc_state |= XHCI_STATE_HALTED;
@@ -132,7 +132,7 @@ static int xhci_start(struct xhci_hcd *xhci)
 	 * Wait for the HCHalted Status bit to be 0 to indicate the host is
 	 * running.
 	 */
-	ret = handshake(xhci, &xhci->op_regs->status,
+	ret = xhci_handshake(xhci, &xhci->op_regs->status,
 			STS_HALT, 0, XHCI_MAX_HALT_USEC);
 	if (ret == -ETIMEDOUT)
 		xhci_err(xhci, "Host took too long to start, "
@@ -167,7 +167,7 @@ int xhci_reset(struct xhci_hcd *xhci)
 	command |= CMD_RESET;
 	xhci_writel(xhci, command, &xhci->op_regs->command);
 
-	ret = handshake(xhci, &xhci->op_regs->command,
+	ret = xhci_handshake(xhci, &xhci->op_regs->command,
 			CMD_RESET, 0, 10 * 1000 * 1000);
 	if (ret)
 		return ret;
@@ -177,7 +177,7 @@ int xhci_reset(struct xhci_hcd *xhci)
 	 * xHCI cannot write to any doorbells or operational registers other
 	 * than status until the "Controller Not Ready" flag is cleared.
 	 */
-	ret = handshake(xhci, &xhci->op_regs->status,
+	ret = xhci_handshake(xhci, &xhci->op_regs->status,
 			STS_CNR, 0, 10 * 1000 * 1000);
 
 	for (i = 0; i < 2; ++i) {
@@ -350,7 +350,7 @@ static int xhci_try_enable_msi(struct usb_hcd *hcd)
 	 * generate interrupts.  Don't even try to enable MSI.
 	 */
 	if (xhci->quirks & XHCI_BROKEN_MSI)
-		return 0;
+		goto legacy_irq;
 
 	/* unregister the legacy interrupt */
 	if (hcd->irq)
@@ -371,6 +371,7 @@ static int xhci_try_enable_msi(struct usb_hcd *hcd)
 		return -EINVAL;
 	}
 
+ legacy_irq:
 	/* fall back to legacy interrupt*/
 	ret = request_irq(pdev->irq, &usb_hcd_irq, IRQF_SHARED,
 			hcd->irq_descr, hcd);
@@ -880,6 +881,10 @@ int xhci_suspend(struct xhci_hcd *xhci)
 	struct usb_hcd		*hcd = xhci_to_hcd(xhci);
 	u32			command;
 
+	if (hcd->state != HC_STATE_SUSPENDED ||
+			xhci->shared_hcd->state != HC_STATE_SUSPENDED)
+		return -EINVAL;
+
 	/* Don't poll the roothubs on bus suspend. */
 	xhci_dbg(xhci, "%s: stopping port polling.\n", __func__);
 	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
@@ -895,7 +900,7 @@ int xhci_suspend(struct xhci_hcd *xhci)
 	command = xhci_readl(xhci, &xhci->op_regs->command);
 	command &= ~CMD_RUN;
 	xhci_writel(xhci, command, &xhci->op_regs->command);
-	if (handshake(xhci, &xhci->op_regs->status,
+	if (xhci_handshake(xhci, &xhci->op_regs->status,
 		      STS_HALT, STS_HALT, XHCI_MAX_HALT_USEC)) {
 		xhci_warn(xhci, "WARN: xHC CMD_RUN timeout\n");
 		spin_unlock_irq(&xhci->lock);
@@ -910,7 +915,8 @@ int xhci_suspend(struct xhci_hcd *xhci)
 	command = xhci_readl(xhci, &xhci->op_regs->command);
 	command |= CMD_CSS;
 	xhci_writel(xhci, command, &xhci->op_regs->command);
-	if (handshake(xhci, &xhci->op_regs->status, STS_SAVE, 0, 10 * 1000)) {
+	if (xhci_handshake(xhci, &xhci->op_regs->status,
+				STS_SAVE, 0, 10 * 1000)) {
 		xhci_warn(xhci, "WARN: xHC save state timeout\n");
 		spin_unlock_irq(&xhci->lock);
 		return -ETIMEDOUT;
@@ -972,7 +978,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		command = xhci_readl(xhci, &xhci->op_regs->command);
 		command |= CMD_CRS;
 		xhci_writel(xhci, command, &xhci->op_regs->command);
-		if (handshake(xhci, &xhci->op_regs->status,
+		if (xhci_handshake(xhci, &xhci->op_regs->status,
 			      STS_RESTORE, 0, 10 * 1000)) {
 			xhci_warn(xhci, "WARN: xHC restore state timeout\n");
 			spin_unlock_irq(&xhci->lock);
@@ -1040,7 +1046,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	command = xhci_readl(xhci, &xhci->op_regs->command);
 	command |= CMD_RUN;
 	xhci_writel(xhci, command, &xhci->op_regs->command);
-	handshake(xhci, &xhci->op_regs->status, STS_HALT,
+	xhci_handshake(xhci, &xhci->op_regs->status, STS_HALT,
 		  0, 250 * 1000);
 
 	/* step 5: walk topology and initialize portsc,
@@ -3773,6 +3779,28 @@ int xhci_address_device(struct usb_hcd *hcd, struct usb_device *udev)
 	return 0;
 }
 
+/*
+ * Transfer the port index into real index in the HW port status
+ * registers. Caculate offset between the port's PORTSC register
+ * and port status base. Divide the number of per port register
+ * to get the real index. The raw port number bases 1.
+ */
+int xhci_find_raw_port_number(struct usb_hcd *hcd, int port1)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	__le32 __iomem *base_addr = &xhci->op_regs->port_status_base;
+	__le32 __iomem *addr;
+	int raw_port;
+
+	if (hcd->speed != HCD_USB3)
+		addr = xhci->usb2_ports[port1 - 1];
+	else
+		addr = xhci->usb3_ports[port1 - 1];
+
+	raw_port = (addr - base_addr)/NUM_PORT_REGS + 1;
+	return raw_port;
+}
+
 #ifdef CONFIG_USB_SUSPEND
 
 /* BESL to HIRD Encoding array for USB2 LPM */
@@ -3884,7 +3912,8 @@ static int xhci_usb2_software_lpm_test(struct usb_hcd *hcd,
 	spin_lock_irqsave(&xhci->lock, flags);
 
 	/* Check L1 Status */
-	ret = handshake(xhci, pm_addr, PORT_L1S_MASK, PORT_L1S_SUCCESS, 125);
+	ret = xhci_handshake(xhci, pm_addr,
+			PORT_L1S_MASK, PORT_L1S_SUCCESS, 125);
 	if (ret != -ETIMEDOUT) {
 		/* enter L1 successfully */
 		temp = xhci_readl(xhci, addr);

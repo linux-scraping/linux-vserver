@@ -187,7 +187,7 @@ die_if_kernel(char * str, struct pt_regs *regs, long err, unsigned long *r9_15)
 	printk("%s(%d[#%u]): %s %ld\n", current->comm,
 		task_pid_nr(current), current->xid, str, err);
 	dik_show_regs(regs, r9_15);
-	add_taint(TAINT_DIE);
+	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
 	dik_show_trace((unsigned long *)(regs+1));
 	dik_show_code((unsigned int *)regs->pc);
 

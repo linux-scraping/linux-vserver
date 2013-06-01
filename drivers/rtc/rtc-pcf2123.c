@@ -219,7 +219,7 @@ static const struct rtc_class_ops pcf2123_rtc_ops = {
 	.set_time	= pcf2123_rtc_set_time,
 };
 
-static int __devinit pcf2123_probe(struct spi_device *spi)
+static int pcf2123_probe(struct spi_device *spi)
 {
 	struct rtc_device *rtc;
 	struct pcf2123_plat_data *pdata;
@@ -265,6 +265,7 @@ static int __devinit pcf2123_probe(struct spi_device *spi)
 
 	if (!(rxbuf[0] & 0x20)) {
 		dev_err(&spi->dev, "chip not found\n");
+		ret = -ENODEV;
 		goto kfree_exit;
 	}
 
@@ -319,7 +320,7 @@ kfree_exit:
 	return ret;
 }
 
-static int __devexit pcf2123_remove(struct spi_device *spi)
+static int pcf2123_remove(struct spi_device *spi)
 {
 	struct pcf2123_plat_data *pdata = spi->dev.platform_data;
 	int i;
@@ -345,7 +346,7 @@ static struct spi_driver pcf2123_driver = {
 			.owner	= THIS_MODULE,
 	},
 	.probe	= pcf2123_probe,
-	.remove	= __devexit_p(pcf2123_remove),
+	.remove	= pcf2123_remove,
 };
 
 module_spi_driver(pcf2123_driver);

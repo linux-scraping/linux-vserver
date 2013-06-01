@@ -311,24 +311,12 @@ static int max8998_set_voltage_buck_sel(struct regulator_dev *rdev,
 		dev_get_platdata(max8998->iodev->dev);
 	struct i2c_client *i2c = max8998->iodev->i2c;
 	int buck = rdev_get_id(rdev);
-	int reg, shift = 0, mask, ret;
-	int j, previous_sel;
+	int reg, shift = 0, mask, ret, j;
 	static u8 buck1_last_val;
 
 	ret = max8998_get_voltage_register(rdev, &reg, &shift, &mask);
 	if (ret)
 		return ret;
-
-	previous_sel = max8998_get_voltage_sel(rdev);
-
-	/* Check if voltage needs to be changed */
-	/* if previous_voltage equal new voltage, return */
-	if (previous_sel == selector) {
-		dev_dbg(max8998->dev, "No voltage change, old:%d, new:%d\n",
-			regulator_list_voltage_linear(rdev, previous_sel),
-			regulator_list_voltage_linear(rdev, selector));
-		return ret;
-	}
 
 	switch (buck) {
 	case MAX8998_BUCK1:
@@ -633,7 +621,7 @@ static struct regulator_desc regulators[] = {
 	}
 };
 
-static __devinit int max8998_pmic_probe(struct platform_device *pdev)
+static int max8998_pmic_probe(struct platform_device *pdev)
 {
 	struct max8998_dev *iodev = dev_get_drvdata(pdev->dev.parent);
 	struct max8998_platform_data *pdata = dev_get_platdata(iodev->dev);
@@ -818,7 +806,7 @@ err_out:
 	return ret;
 }
 
-static int __devexit max8998_pmic_remove(struct platform_device *pdev)
+static int max8998_pmic_remove(struct platform_device *pdev)
 {
 	struct max8998_data *max8998 = platform_get_drvdata(pdev);
 	struct regulator_dev **rdev = max8998->rdev;
@@ -842,7 +830,7 @@ static struct platform_driver max8998_pmic_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = max8998_pmic_probe,
-	.remove = __devexit_p(max8998_pmic_remove),
+	.remove = max8998_pmic_remove,
 	.id_table = max8998_pmic_id,
 };
 

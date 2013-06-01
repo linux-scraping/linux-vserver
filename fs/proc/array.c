@@ -145,6 +145,7 @@ static const char * const task_state_array[] = {
 	"x (dead)",		/*  64 */
 	"K (wakekill)",		/* 128 */
 	"W (waking)",		/* 256 */
+	"P (parked)",		/* 512 */
 };
 
 static inline const char *get_task_state(struct task_struct *tsk)
@@ -164,7 +165,7 @@ static inline const char *get_task_state(struct task_struct *tsk)
 static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 				struct pid *pid, struct task_struct *p)
 {
-	struct user_namespace *user_ns = current_user_ns();
+	struct user_namespace *user_ns = seq_user_ns(m);
 	struct group_info *group_info;
 	int g;
 	struct fdtable *fdt = NULL;
@@ -225,7 +226,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	seq_putc(m, '\n');
 }
 
-static void render_sigset_t(struct seq_file *m, const char *header,
+void render_sigset_t(struct seq_file *m, const char *header,
 				sigset_t *set)
 {
 	int i;
@@ -313,6 +314,10 @@ static void render_cap_t(struct seq_file *m, const char *header,
 	seq_putc(m, '\n');
 }
 
+/* Remove non-existent capabilities */
+#define NORM_CAPS(v) (v.cap[CAP_TO_INDEX(CAP_LAST_CAP)] &= \
+				CAP_TO_MASK(CAP_LAST_CAP + 1) - 1)
+
 static inline void task_cap(struct seq_file *m, struct task_struct *p)
 {
 	const struct cred *cred;
@@ -326,11 +331,23 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	cap_bset	= cred->cap_bset;
 	rcu_read_unlock();
 
+	NORM_CAPS(cap_inheritable);
+	NORM_CAPS(cap_permitted);
+	NORM_CAPS(cap_effective);
+	NORM_CAPS(cap_bset);
+
 	/* FIXME: maybe move the p->vx_info masking to __task_cred() ? */
 	render_cap_t(m, "CapInh:\t", p->vx_info, &cap_inheritable);
 	render_cap_t(m, "CapPrm:\t", p->vx_info, &cap_permitted);
 	render_cap_t(m, "CapEff:\t", p->vx_info, &cap_effective);
 	render_cap_t(m, "CapBnd:\t", p->vx_info, &cap_bset);
+}
+
+static inline void task_seccomp(struct seq_file *m, struct task_struct *p)
+{
+#ifdef CONFIG_SECCOMP
+	seq_printf(m, "Seccomp:\t%d\n", p->seccomp.mode);
+#endif
 }
 
 static inline void task_context_switch_counts(struct seq_file *m,
@@ -402,6 +419,7 @@ int proc_pid_status(struct seq_file *m, struct pid_namespace *ns,
 	}
 	task_sig(m, task);
 	task_cap(m, task);
+	task_seccomp(m, task);
 	task_cpus_allowed(m, task);
 	cpuset_task_status_allowed(m, task);
 	task_vs_id(m, task);
@@ -475,13 +493,13 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 			do {
 				min_flt += t->min_flt;
 				maj_flt += t->maj_flt;
-				gtime += t->gtime;
+				gtime += task_gtime(t);
 				t = next_thread(t);
 			} while (t != task);
 
 			min_flt += sig->min_flt;
 			maj_flt += sig->maj_flt;
-			thread_group_times(task, &utime, &stime);
+			thread_group_cputime_adjusted(task, &utime, &stime);
 			gtime += sig->gtime;
 		}
 
@@ -497,8 +515,8 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 	if (!whole) {
 		min_flt = task->min_flt;
 		maj_flt = task->maj_flt;
-		task_times(task, &utime, &stime);
-		gtime = task->gtime;
+		task_cputime_adjusted(task, &utime, &stime);
+		gtime = task_gtime(task);
 	}
 
 	/* scale priority and nice values from timeslices to -20..20 */

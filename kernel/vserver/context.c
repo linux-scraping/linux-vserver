@@ -651,7 +651,7 @@ int vx_migrate_task(struct task_struct *p, struct vx_info *vxi, int unshare)
 
 			ret = unshare_nsproxy_namespaces(
 				CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER,
-				&new_nsp, NULL);
+				&new_nsp, NULL, NULL);
 			if (ret)
 				goto out;
 

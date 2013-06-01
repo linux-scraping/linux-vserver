@@ -26,17 +26,20 @@
 #define E500_PID_NUM   3
 #define E500_TLB_NUM   2
 
-#define E500_TLB_VALID 1
-#define E500_TLB_DIRTY 2
-#define E500_TLB_BITMAP 4
+/* entry is mapped somewhere in host TLB */
+#define E500_TLB_VALID		(1 << 0)
+/* TLB1 entry is mapped by host TLB1, tracked by bitmaps */
+#define E500_TLB_BITMAP		(1 << 1)
+/* TLB1 entry is mapped by host TLB0 */
+#define E500_TLB_TLB0		(1 << 2)
 
 struct tlbe_ref {
-	pfn_t pfn;
-	unsigned int flags; /* E500_TLB_* */
+	pfn_t pfn;		/* valid only for TLB0, except briefly */
+	unsigned int flags;	/* E500_TLB_* */
 };
 
 struct tlbe_priv {
-	struct tlbe_ref ref; /* TLB0 only -- TLB1 uses tlb_refs */
+	struct tlbe_ref ref;
 };
 
 #ifdef CONFIG_KVM_E500V2
@@ -63,17 +66,6 @@ struct kvmppc_vcpu_e500 {
 
 	unsigned int gtlb_nv[E500_TLB_NUM];
 
-	/*
-	 * information associated with each host TLB entry --
-	 * TLB1 only for now.  If/when guest TLB1 entries can be
-	 * mapped with host TLB0, this will be used for that too.
-	 *
-	 * We don't want to use this for guest TLB0 because then we'd
-	 * have the overhead of doing the translation again even if
-	 * the entry is still in the guest TLB (e.g. we swapped out
-	 * and back, and our host TLB entries got evicted).
-	 */
-	struct tlbe_ref *tlb_refs[E500_TLB_NUM];
 	unsigned int host_tlb1_nv;
 
 	u32 svr;
@@ -130,9 +122,9 @@ int kvmppc_e500_emul_mt_mmucsr0(struct kvmppc_vcpu_e500 *vcpu_e500,
 				ulong value);
 int kvmppc_e500_emul_tlbwe(struct kvm_vcpu *vcpu);
 int kvmppc_e500_emul_tlbre(struct kvm_vcpu *vcpu);
-int kvmppc_e500_emul_tlbivax(struct kvm_vcpu *vcpu, int ra, int rb);
-int kvmppc_e500_emul_tlbilx(struct kvm_vcpu *vcpu, int rt, int ra, int rb);
-int kvmppc_e500_emul_tlbsx(struct kvm_vcpu *vcpu, int rb);
+int kvmppc_e500_emul_tlbivax(struct kvm_vcpu *vcpu, gva_t ea);
+int kvmppc_e500_emul_tlbilx(struct kvm_vcpu *vcpu, int type, gva_t ea);
+int kvmppc_e500_emul_tlbsx(struct kvm_vcpu *vcpu, gva_t ea);
 int kvmppc_e500_tlb_init(struct kvmppc_vcpu_e500 *vcpu_e500);
 void kvmppc_e500_tlb_uninit(struct kvmppc_vcpu_e500 *vcpu_e500);
 
@@ -155,7 +147,7 @@ get_tlb_size(const struct kvm_book3e_206_tlb_entry *tlbe)
 
 static inline gva_t get_tlb_eaddr(const struct kvm_book3e_206_tlb_entry *tlbe)
 {
-	return tlbe->mas2 & 0xfffff000;
+	return tlbe->mas2 & MAS2_EPN;
 }
 
 static inline u64 get_tlb_bytes(const struct kvm_book3e_206_tlb_entry *tlbe)

@@ -398,6 +398,7 @@ enum {
 	ATA_HORKAGE_NOSETXFER	= (1 << 14),	/* skip SETXFER, SATA only */
 	ATA_HORKAGE_BROKEN_FPDMA_AA	= (1 << 15),	/* skip AA */
 	ATA_HORKAGE_DUMP_ID	= (1 << 16),	/* dump IDENTIFY data */
+	ATA_HORKAGE_MAX_SEC_LBA48 = (1 << 17),	/* Set max sects to 65535 */
 
 	 /* DMA mask for user DMA control: User visible values; DO NOT
 	    renumber */
@@ -619,6 +620,9 @@ struct ata_device {
 #ifdef CONFIG_ATA_ACPI
 	union acpi_object	*gtf_cache;
 	unsigned int		gtf_filter;
+#endif
+#ifdef CONFIG_SATA_ZPODD
+	void			*zpodd;
 #endif
 	struct device		tdev;
 	/* n_sector is CLEAR_BEGIN, read comment above CLEAR_BEGIN */
@@ -1114,6 +1118,10 @@ extern int ata_pci_device_suspend(struct pci_dev *pdev, pm_message_t mesg);
 extern int ata_pci_device_resume(struct pci_dev *pdev);
 #endif /* CONFIG_PM */
 #endif /* CONFIG_PCI */
+
+struct platform_device;
+
+extern int ata_platform_remove_one(struct platform_device *pdev);
 
 /*
  * ACPI - drivers/ata/libata-acpi.c

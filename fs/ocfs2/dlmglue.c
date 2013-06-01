@@ -2045,8 +2045,8 @@ static void __ocfs2_stuff_meta_lvb(struct inode *inode)
 	lvb->lvb_version   = OCFS2_LVB_VERSION;
 	lvb->lvb_isize	   = cpu_to_be64(i_size_read(inode));
 	lvb->lvb_iclusters = cpu_to_be32(oi->ip_clusters);
-	lvb->lvb_iuid      = cpu_to_be32(inode->i_uid);
-	lvb->lvb_igid      = cpu_to_be32(inode->i_gid);
+	lvb->lvb_iuid      = cpu_to_be32(i_uid_read(inode));
+	lvb->lvb_igid      = cpu_to_be32(i_gid_read(inode));
 	lvb->lvb_itag      = cpu_to_be16(inode->i_tag);
 	lvb->lvb_imode     = cpu_to_be16(inode->i_mode);
 	lvb->lvb_inlink    = cpu_to_be16(inode->i_nlink);
@@ -2096,9 +2096,9 @@ static void ocfs2_refresh_inode_from_lvb(struct inode *inode)
 	else
 		inode->i_blocks = ocfs2_inode_sector_count(inode);
 
-	inode->i_uid     = be32_to_cpu(lvb->lvb_iuid);
-	inode->i_gid     = be32_to_cpu(lvb->lvb_igid);
-	inode->i_tag     = be16_to_cpu(lvb->lvb_itag);
+	i_uid_write(inode, be32_to_cpu(lvb->lvb_iuid));
+	i_gid_write(inode, be32_to_cpu(lvb->lvb_igid));
+	i_tag_write(inode, be16_to_cpu(lvb->lvb_itag));
 	inode->i_mode    = be16_to_cpu(lvb->lvb_imode);
 	set_nlink(inode, be16_to_cpu(lvb->lvb_inlink));
 	ocfs2_unpack_timespec(&inode->i_atime,

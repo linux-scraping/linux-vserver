@@ -100,6 +100,16 @@ static int alloc_host_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
 	return 0;
 }
 
+static int alloc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq, int user)
+{
+	int ret = -ENOSYS;
+	if (user)
+		ret = alloc_oc_sq(rdev, sq);
+	if (ret)
+		ret = alloc_host_sq(rdev, sq);
+	return ret;
+}
+
 static int destroy_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 		      struct c4iw_dev_ucontext *uctx)
 {
@@ -168,26 +178,19 @@ static int create_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 		goto free_sw_rq;
 	}
 
-	if (user) {
-		ret = alloc_oc_sq(rdev, &wq->sq);
-		if (ret)
-			goto free_hwaddr;
-
-		ret = alloc_host_sq(rdev, &wq->sq);
-		if (ret)
-			goto free_sq;
-	} else
-		ret = alloc_host_sq(rdev, &wq->sq);
-		if (ret)
-			goto free_hwaddr;
+	ret = alloc_sq(rdev, &wq->sq, user);
+	if (ret)
+		goto free_hwaddr;
 	memset(wq->sq.queue, 0, wq->sq.memsize);
 	dma_unmap_addr_set(&wq->sq, mapping, wq->sq.dma_addr);
 
 	wq->rq.queue = dma_alloc_coherent(&(rdev->lldi.pdev->dev),
 					  wq->rq.memsize, &(wq->rq.dma_addr),
 					  GFP_KERNEL);
-	if (!wq->rq.queue)
+	if (!wq->rq.queue) {
+		ret = -ENOMEM;
 		goto free_sq;
+	}
 	PDBG("%s sq base va 0x%p pa 0x%llx rq base va 0x%p pa 0x%llx\n",
 		__func__, wq->sq.queue,
 		(unsigned long long)virt_to_phys(wq->sq.queue),
@@ -1383,6 +1386,7 @@ err:
 	qhp->ep = NULL;
 	set_state(qhp, C4IW_QP_STATE_ERROR);
 	free = 1;
+	abort = 1;
 	wake_up(&qhp->wait);
 	BUG_ON(!ep);
 	flush_qp(qhp);

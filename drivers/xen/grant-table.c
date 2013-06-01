@@ -1147,7 +1147,7 @@ static int gnttab_setup(void)
 		return gnttab_map(0, nr_grant_frames - 1);
 
 	if (gnttab_shared.addr == NULL) {
-		gnttab_shared.addr = ioremap(xen_hvm_resume_frames,
+		gnttab_shared.addr = xen_remap(xen_hvm_resume_frames,
 						PAGE_SIZE * max_nr_gframes);
 		if (gnttab_shared.addr == NULL) {
 			printk(KERN_WARNING
@@ -1249,7 +1249,7 @@ int gnttab_init(void)
 }
 EXPORT_SYMBOL_GPL(gnttab_init);
 
-static int __devinit __gnttab_init(void)
+static int __gnttab_init(void)
 {
 	/* Delay grant-table initialization in the PV on HVM case */
 	if (xen_hvm_domain())

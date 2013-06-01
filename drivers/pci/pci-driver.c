@@ -89,10 +89,6 @@ static void pci_free_dynids(struct pci_driver *drv)
 	spin_unlock(&drv->dynids.lock);
 }
 
-/*
- * Dynamic device ID manipulation via sysfs is disabled for !CONFIG_HOTPLUG
- */
-#ifdef CONFIG_HOTPLUG
 /**
  * store_new_id - sysfs frontend to pci_add_dynid()
  * @driver: target device driver
@@ -190,10 +186,6 @@ static struct driver_attribute pci_drv_attrs[] = {
 	__ATTR(remove_id, S_IWUSR, NULL, store_remove_id),
 	__ATTR_NULL,
 };
-
-#else
-#define pci_drv_attrs	NULL
-#endif /* CONFIG_HOTPLUG */
 
 /**
  * pci_match_id - See if a pci device matches a given pci_id table
@@ -398,9 +390,10 @@ static void pci_device_shutdown(struct device *dev)
 
 	/*
 	 * Turn off Bus Master bit on the device to tell it to not
-	 * continue to do DMA
+	 * continue to do DMA. Don't touch devices in D3cold or unknown states.
 	 */
-	pci_disable_device(pci_dev);
+	if (pci_dev->current_state <= PCI_D3hot)
+		pci_clear_master(pci_dev);
 }
 
 #ifdef CONFIG_PM
@@ -636,6 +629,7 @@ static int pci_pm_suspend(struct device *dev)
 		goto Fixup;
 	}
 
+	pci_dev->state_saved = false;
 	if (pm->suspend) {
 		pci_power_t prev = pci_dev->current_state;
 		int error;
@@ -782,6 +776,7 @@ static int pci_pm_freeze(struct device *dev)
 		return 0;
 	}
 
+	pci_dev->state_saved = false;
 	if (pm->freeze) {
 		int error;
 
@@ -870,6 +865,7 @@ static int pci_pm_poweroff(struct device *dev)
 		goto Fixup;
 	}
 
+	pci_dev->state_saved = false;
 	if (pm->poweroff) {
 		int error;
 
@@ -995,6 +991,7 @@ static int pci_pm_runtime_suspend(struct device *dev)
 	if (!pm || !pm->runtime_suspend)
 		return -ENOSYS;
 
+	pci_dev->state_saved = false;
 	pci_dev->no_d3cold = false;
 	error = pm->runtime_suspend(dev);
 	suspend_report_result(pm->runtime_suspend, error);
@@ -1013,10 +1010,10 @@ static int pci_pm_runtime_suspend(struct device *dev)
 		return 0;
 	}
 
-	if (!pci_dev->state_saved)
+	if (!pci_dev->state_saved) {
 		pci_save_state(pci_dev);
-
-	pci_finish_runtime_suspend(pci_dev);
+		pci_finish_runtime_suspend(pci_dev);
+	}
 
 	return 0;
 }
@@ -1194,9 +1191,13 @@ pci_dev_driver(const struct pci_dev *dev)
 static int pci_bus_match(struct device *dev, struct device_driver *drv)
 {
 	struct pci_dev *pci_dev = to_pci_dev(dev);
-	struct pci_driver *pci_drv = to_pci_driver(drv);
+	struct pci_driver *pci_drv;
 	const struct pci_device_id *found_id;
 
+	if (!pci_dev->match_driver)
+		return 0;
+
+	pci_drv = to_pci_driver(drv);
 	found_id = pci_match_device(pci_drv, pci_dev);
 	if (found_id)
 		return 1;
@@ -1236,12 +1237,38 @@ void pci_dev_put(struct pci_dev *dev)
 		put_device(&dev->dev);
 }
 
-#ifndef CONFIG_HOTPLUG
-int pci_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int pci_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	return -ENODEV;
+	struct pci_dev *pdev;
+
+	if (!dev)
+		return -ENODEV;
+
+	pdev = to_pci_dev(dev);
+	if (!pdev)
+		return -ENODEV;
+
+	if (add_uevent_var(env, "PCI_CLASS=%04X", pdev->class))
+		return -ENOMEM;
+
+	if (add_uevent_var(env, "PCI_ID=%04X:%04X", pdev->vendor, pdev->device))
+		return -ENOMEM;
+
+	if (add_uevent_var(env, "PCI_SUBSYS_ID=%04X:%04X", pdev->subsystem_vendor,
+			   pdev->subsystem_device))
+		return -ENOMEM;
+
+	if (add_uevent_var(env, "PCI_SLOT_NAME=%s", pci_name(pdev)))
+		return -ENOMEM;
+
+	if (add_uevent_var(env, "MODALIAS=pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02x",
+			   pdev->vendor, pdev->device,
+			   pdev->subsystem_vendor, pdev->subsystem_device,
+			   (u8)(pdev->class >> 16), (u8)(pdev->class >> 8),
+			   (u8)(pdev->class)))
+		return -ENOMEM;
+	return 0;
 }
-#endif
 
 struct bus_type pci_bus_type = {
 	.name		= "pci",

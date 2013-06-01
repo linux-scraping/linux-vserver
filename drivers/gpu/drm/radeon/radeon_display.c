@@ -378,8 +378,12 @@ static int radeon_crtc_page_flip(struct drm_crtc *crtc,
 	work->old_rbo = rbo;
 	obj = new_radeon_fb->obj;
 	rbo = gem_to_radeon_bo(obj);
+
+	spin_lock(&rbo->tbo.bdev->fence_lock);
 	if (rbo->tbo.sync_obj)
 		work->fence = radeon_fence_ref(rbo->tbo.sync_obj);
+	spin_unlock(&rbo->tbo.bdev->fence_lock);
+
 	INIT_WORK(&work->work, radeon_unpin_work_func);
 
 	/* We borrow the event spin lock for protecting unpin_work */
@@ -1085,12 +1089,12 @@ radeon_framebuffer_init(struct drm_device *dev,
 {
 	int ret;
 	rfb->obj = obj;
+	drm_helper_mode_fill_fb_struct(&rfb->base, mode_cmd);
 	ret = drm_framebuffer_init(dev, &rfb->base, &radeon_fb_funcs);
 	if (ret) {
 		rfb->obj = NULL;
 		return ret;
 	}
-	drm_helper_mode_fill_fb_struct(&rfb->base, mode_cmd);
 	return 0;
 }
 

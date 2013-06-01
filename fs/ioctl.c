@@ -178,7 +178,7 @@ static int ioctl_fiemap(struct file *filp, unsigned long arg)
 	struct fiemap fiemap;
 	struct fiemap __user *ufiemap = (struct fiemap __user *) arg;
 	struct fiemap_extent_info fieinfo = { 0, };
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct super_block *sb = inode->i_sb;
 	u64 len;
 	int error;
@@ -427,7 +427,7 @@ EXPORT_SYMBOL(generic_block_fiemap);
  */
 int ioctl_preallocate(struct file *filp, void __user *argp)
 {
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	struct space_resv sr;
 
 	if (copy_from_user(&sr, argp, sizeof(sr)))
@@ -452,7 +452,7 @@ int ioctl_preallocate(struct file *filp, void __user *argp)
 static int file_ioctl(struct file *filp, unsigned int cmd,
 		unsigned long arg)
 {
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 	int __user *p = (int __user *)arg;
 
 	switch (cmd) {
@@ -515,7 +515,7 @@ static int ioctl_fioasync(unsigned int fd, struct file *filp,
 
 static int ioctl_fsfreeze(struct file *filp)
 {
-	struct super_block *sb = filp->f_path.dentry->d_inode->i_sb;
+	struct super_block *sb = file_inode(filp)->i_sb;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -530,7 +530,7 @@ static int ioctl_fsfreeze(struct file *filp)
 
 static int ioctl_fsthaw(struct file *filp)
 {
-	struct super_block *sb = filp->f_path.dentry->d_inode->i_sb;
+	struct super_block *sb = file_inode(filp)->i_sb;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -551,7 +551,7 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 {
 	int error = 0;
 	int __user *argp = (int __user *)arg;
-	struct inode *inode = filp->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(filp);
 
 	switch (cmd) {
 	case FIOCLEX:

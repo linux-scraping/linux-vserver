@@ -200,7 +200,7 @@ static void flush_request_modules(struct bttv *dev)
 }
 #else
 #define request_modules(dev)
-#define flush_request_modules(dev)
+#define flush_request_modules(dev) do {} while(0)
 #endif /* CONFIG_MODULES */
 
 
@@ -250,17 +250,19 @@ static u8 SRAM_Table[][60] =
    vdelay	start of active video in 2 * field lines relative to
 		trailing edge of /VRESET pulse (VDELAY register).
    sheight	height of active video in 2 * field lines.
+   extraheight	Added to sheight for cropcap.bounds.height only
    videostart0	ITU-R frame line number of the line corresponding
 		to vdelay in the first field. */
 #define CROPCAP(minhdelayx1, hdelayx1, swidth, totalwidth, sqwidth,	 \
-		vdelay, sheight, videostart0)				 \
+		vdelay, sheight, extraheight, videostart0)		 \
 	.cropcap.bounds.left = minhdelayx1,				 \
 	/* * 2 because vertically we count field lines times two, */	 \
 	/* e.g. 23 * 2 to 23 * 2 + 576 in PAL-BGHI defrect. */		 \
 	.cropcap.bounds.top = (videostart0) * 2 - (vdelay) + MIN_VDELAY, \
 	/* 4 is a safety margin at the end of the line. */		 \
 	.cropcap.bounds.width = (totalwidth) - (minhdelayx1) - 4,	 \
-	.cropcap.bounds.height = (sheight) + (vdelay) - MIN_VDELAY,	 \
+	.cropcap.bounds.height = (sheight) + (extraheight) + (vdelay) -	 \
+				 MIN_VDELAY,				 \
 	.cropcap.defrect.left = hdelayx1,				 \
 	.cropcap.defrect.top = (videostart0) * 2,			 \
 	.cropcap.defrect.width = swidth,				 \
@@ -302,10 +304,10 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 944,
 			/* vdelay */ 0x20,
 			/* sheight */ 576,
+			/* bt878 (and bt848?) can capture another
+			   line below active video. */
+			/* extraheight */ 2,
 			/* videostart0 */ 23)
-		/* bt878 (and bt848?) can capture another
-		   line below active video. */
-		.cropcap.bounds.height = (576 + 2) + 0x20 - 2,
 	},{
 		.v4l2_id        = V4L2_STD_NTSC_M | V4L2_STD_NTSC_M_KR,
 		.name           = "NTSC",
@@ -331,6 +333,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 780,
 			/* vdelay */ 0x1a,
 			/* sheight */ 480,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		.v4l2_id        = V4L2_STD_SECAM,
@@ -356,6 +359,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 944,
 			/* vdelay */ 0x20,
 			/* sheight */ 576,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		.v4l2_id        = V4L2_STD_PAL_Nc,
@@ -381,6 +385,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 780,
 			/* vdelay */ 0x1a,
 			/* sheight */ 576,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		.v4l2_id        = V4L2_STD_PAL_M,
@@ -406,6 +411,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 780,
 			/* vdelay */ 0x1a,
 			/* sheight */ 480,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		.v4l2_id        = V4L2_STD_PAL_N,
@@ -431,6 +437,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 944,
 			/* vdelay */ 0x20,
 			/* sheight */ 576,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		.v4l2_id        = V4L2_STD_NTSC_M_JP,
@@ -456,6 +463,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 780,
 			/* vdelay */ 0x16,
 			/* sheight */ 480,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	},{
 		/* that one hopefully works with the strange timing
@@ -485,6 +493,7 @@ const struct bttv_tvnorm bttv_tvnorms[] = {
 			/* sqwidth */ 944,
 			/* vdelay */ 0x1a,
 			/* sheight */ 480,
+			/* extraheight */ 0,
 			/* videostart0 */ 23)
 	}
 };
@@ -3836,7 +3845,7 @@ bttv_irq_wakeup_video(struct bttv *btv, struct bttv_buffer_set *wakeup,
 {
 	struct timeval ts;
 
-	do_gettimeofday(&ts);
+	v4l2_get_timestamp(&ts);
 
 	if (wakeup->top == wakeup->bottom) {
 		if (NULL != wakeup->top && curr->top != wakeup->top) {
@@ -3879,7 +3888,7 @@ bttv_irq_wakeup_vbi(struct bttv *btv, struct bttv_buffer *wakeup,
 	if (NULL == wakeup)
 		return;
 
-	do_gettimeofday(&ts);
+	v4l2_get_timestamp(&ts);
 	wakeup->vb.ts = ts;
 	wakeup->vb.field_count = btv->field_count;
 	wakeup->vb.state = state;
@@ -3950,7 +3959,7 @@ bttv_irq_wakeup_top(struct bttv *btv)
 	btv->curr.top = NULL;
 	bttv_risc_hook(btv, RISC_SLOT_O_FIELD, NULL, 0);
 
-	do_gettimeofday(&wakeup->vb.ts);
+	v4l2_get_timestamp(&wakeup->vb.ts);
 	wakeup->vb.field_count = btv->field_count;
 	wakeup->vb.state = VIDEOBUF_DONE;
 	wake_up(&wakeup->vb.done);
@@ -4200,7 +4209,7 @@ static void bttv_unregister_video(struct bttv *btv)
 }
 
 /* register video4linux devices */
-static int __devinit bttv_register_video(struct bttv *btv)
+static int bttv_register_video(struct bttv *btv)
 {
 	if (no_overlay > 0)
 		pr_notice("Overlay support disabled\n");
@@ -4266,8 +4275,7 @@ static void pci_set_command(struct pci_dev *dev)
 #endif
 }
 
-static int __devinit bttv_probe(struct pci_dev *dev,
-				const struct pci_device_id *pci_id)
+static int bttv_probe(struct pci_dev *dev, const struct pci_device_id *pci_id)
 {
 	int result;
 	unsigned char lat;
@@ -4455,7 +4463,7 @@ fail0:
 	return result;
 }
 
-static void __devexit bttv_remove(struct pci_dev *pci_dev)
+static void bttv_remove(struct pci_dev *pci_dev)
 {
 	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
 	struct bttv *btv = to_bttv(v4l2_dev);
@@ -4599,7 +4607,7 @@ static struct pci_driver bttv_pci_driver = {
 	.name     = "bttv",
 	.id_table = bttv_pci_tbl,
 	.probe    = bttv_probe,
-	.remove   = __devexit_p(bttv_remove),
+	.remove   = bttv_remove,
 #ifdef CONFIG_PM
 	.suspend  = bttv_suspend,
 	.resume   = bttv_resume,

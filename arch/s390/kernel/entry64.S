@@ -72,9 +72,9 @@ _TIF_EXIT_SIE = (_TIF_SIGPENDING | _TIF_NEED_RESCHED | _TIF_MCCK_PENDING)
 #endif
 	.endm
 
-	.macro SPP newpp
+	.macro LPP newpp
 #if defined(CONFIG_KVM) || defined(CONFIG_KVM_MODULE)
-	tm	__LC_MACHINE_FLAGS+6,0x20	# MACHINE_FLAG_SPP
+	tm	__LC_MACHINE_FLAGS+6,0x20	# MACHINE_FLAG_LPP
 	jz	.+8
 	.insn	s,0xb2800000,\newpp
 #endif
@@ -96,7 +96,7 @@ _TIF_EXIT_SIE = (_TIF_SIGPENDING | _TIF_NEED_RESCHED | _TIF_MCCK_PENDING)
 	jhe	.+22
 	.endif
 	lg	%r9,BASED(.Lsie_loop)
-	SPP	BASED(.Lhost_id)	# set host id
+	LPP	BASED(.Lhost_id)	# set host id
 #endif
 	.endm
 
@@ -269,12 +269,12 @@ sysc_work:
 	jo	sysc_mcck_pending
 	tm	__TI_flags+7(%r12),_TIF_NEED_RESCHED
 	jo	sysc_reschedule
+	tm	__TI_flags+7(%r12),_TIF_PER_TRAP
+	jo	sysc_singlestep
 	tm	__TI_flags+7(%r12),_TIF_SIGPENDING
 	jo	sysc_sigpending
 	tm	__TI_flags+7(%r12),_TIF_NOTIFY_RESUME
 	jo	sysc_notify_resume
-	tm	__TI_flags+7(%r12),_TIF_PER_TRAP
-	jo	sysc_singlestep
 	j	sysc_return		# beware of critical section cleanup
 
 #
@@ -295,7 +295,6 @@ sysc_mcck_pending:
 # _TIF_SIGPENDING is set, call do_signal
 #
 sysc_sigpending:
-	ni	__TI_flags+7(%r12),255-_TIF_PER_TRAP # clear TIF_PER_TRAP
 	lgr	%r2,%r11		# pass pointer to pt_regs
 	brasl	%r14,do_signal
 	tm	__TI_flags+7(%r12),_TIF_SYSCALL
@@ -320,7 +319,7 @@ sysc_notify_resume:
 # _TIF_PER_TRAP is set, call do_per_trap
 #
 sysc_singlestep:
-	ni	__TI_flags+7(%r12),255-(_TIF_SYSCALL | _TIF_PER_TRAP)
+	ni	__TI_flags+7(%r12),255-_TIF_PER_TRAP
 	lgr	%r2,%r11		# pass pointer to pt_regs
 	larl	%r14,sysc_return
 	jg	do_per_trap
@@ -359,33 +358,17 @@ sysc_tracenogo:
 ENTRY(ret_from_fork)
 	la	%r11,STACK_FRAME_OVERHEAD(%r15)
 	lg	%r12,__LC_THREAD_INFO
+	brasl	%r14,schedule_tail
+	TRACE_IRQS_ON
+	ssm	__LC_SVC_NEW_PSW	# reenable interrupts
 	tm	__PT_PSW+1(%r11),0x01	# forking a kernel thread ?
-	je	1f
-	brasl	%r14,schedule_tail
-	TRACE_IRQS_ON
-	ssm	__LC_SVC_NEW_PSW	# reenable interrupts
-	j	sysc_tracenogo
-1:	# it's a kernel thread
-	stg	%r15,__PT_R15(%r11)	# store stack pointer for new kthread
-	brasl	%r14,schedule_tail
-	TRACE_IRQS_ON
-	ssm	__LC_SVC_NEW_PSW	# reenable interrupts
-	lmg	%r9,%r11,__PT_R9(%r11)	# load gprs
+	jne	sysc_tracenogo
+	# it's a kernel thread
+	lmg	%r9,%r10,__PT_R9(%r11)	# load gprs
 ENTRY(kernel_thread_starter)
 	la	%r2,0(%r10)
 	basr	%r14,%r9
-	la	%r2,0
-	br	%r11			# do_exit
-
-ENTRY(ret_from_kernel_execve)
-	ssm	__LC_PGM_NEW_PSW	# disable I/O and ext. interrupts
-	lgr	%r15,%r2
-	lgr	%r11,%r2
-	aghi	%r15,-STACK_FRAME_OVERHEAD
-	xc	__SF_BACKCHAIN(8,%r15),__SF_BACKCHAIN(%r15)
-	lg	%r12,__LC_THREAD_INFO
-	ssm	__LC_SVC_NEW_PSW	# reenable interrupts
-	j	sysc_return
+	j	sysc_tracenogo
 
 /*
  * Program check handler routine
@@ -436,9 +419,9 @@ ENTRY(pgm_check_handler)
 	larl	%r1,pgm_check_table
 	llgh	%r10,__PT_INT_CODE+2(%r11)
 	nill	%r10,0x007f
-	sll	%r10,3
+	sll	%r10,2
 	je	sysc_return
-	lg	%r1,0(%r10,%r1)		# load address of handler routine
+	lgf	%r1,0(%r10,%r1)		# load address of handler routine
 	lgr	%r2,%r11		# pass pointer to pt_regs
 	basr	%r14,%r1		# branch to interrupt-handler
 	j	sysc_return
@@ -695,8 +678,9 @@ ENTRY(mcck_int_handler)
 	UPDATE_VTIME %r14,__LC_MCCK_ENTER_TIMER
 	LAST_BREAK %r14
 mcck_skip:
-	lghi	%r14,__LC_GPREGS_SAVE_AREA
-	mvc	__PT_R0(128,%r11),0(%r14)
+	lghi	%r14,__LC_GPREGS_SAVE_AREA+64
+	stmg	%r0,%r7,__PT_R0(%r11)
+	mvc	__PT_R8(64,%r11),0(%r14)
 	stmg	%r8,%r9,__PT_PSW(%r11)
 	xc	__SF_BACKCHAIN(8,%r15),__SF_BACKCHAIN(%r15)
 	lgr	%r2,%r11		# pass pointer to pt_regs
@@ -984,10 +968,10 @@ sie_loop:
 	lctlg	%c1,%c1,__GMAP_ASCE(%r14)	# load primary asce
 sie_gmap:
 	lg	%r14,__SF_EMPTY(%r15)		# get control block pointer
-	SPP	__SF_EMPTY(%r15)		# set guest id
+	LPP	__SF_EMPTY(%r15)		# set guest id
 	sie	0(%r14)
 sie_done:
-	SPP	__SF_EMPTY+16(%r15)		# set host id
+	LPP	__SF_EMPTY+16(%r15)		# set host id
 	lg	%r14,__LC_THREAD_INFO		# pointer thread_info struct
 sie_exit:
 	lctlg	%c1,%c1,__LC_USER_ASCE		# load primary asce

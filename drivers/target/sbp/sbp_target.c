@@ -704,16 +704,17 @@ static void session_maintenance_work(struct work_struct *work)
 static int tgt_agent_rw_agent_state(struct fw_card *card, int tcode, void *data,
 		struct sbp_target_agent *agent)
 {
-	__be32 state;
+	int state;
 
 	switch (tcode) {
 	case TCODE_READ_QUADLET_REQUEST:
 		pr_debug("tgt_agent AGENT_STATE READ\n");
 
 		spin_lock_bh(&agent->lock);
-		state = cpu_to_be32(agent->state);
+		state = agent->state;
 		spin_unlock_bh(&agent->lock);
-		memcpy(data, &state, sizeof(state));
+
+		*(__be32 *)data = cpu_to_be32(state);
 
 		return RCODE_COMPLETE;
 
@@ -1718,7 +1719,7 @@ static struct se_node_acl *sbp_alloc_fabric_acl(struct se_portal_group *se_tpg)
 
 	nacl = kzalloc(sizeof(struct sbp_nacl), GFP_KERNEL);
 	if (!nacl) {
-		pr_err("Unable to alocate struct sbp_nacl\n");
+		pr_err("Unable to allocate struct sbp_nacl\n");
 		return NULL;
 	}
 
@@ -2597,7 +2598,7 @@ static int __init sbp_init(void)
 	return 0;
 };
 
-static void sbp_exit(void)
+static void __exit sbp_exit(void)
 {
 	sbp_deregister_configfs();
 };

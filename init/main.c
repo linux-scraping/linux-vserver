@@ -70,6 +70,8 @@
 #include <linux/perf_event.h>
 #include <linux/file.h>
 #include <linux/ptrace.h>
+#include <linux/blkdev.h>
+#include <linux/elevator.h>
 #include <linux/vserver/percpu.h>
 
 #include <asm/io.h>
@@ -795,10 +797,23 @@ static void __init do_pre_smp_initcalls(void)
 		do_one_initcall(*fn);
 }
 
+/*
+ * This function requests modules which should be loaded by default and is
+ * called twice right after initrd is mounted and right before init is
+ * exec'd.  If such modules are on either initrd or rootfs, they will be
+ * loaded before control is passed to userland.
+ */
+void __init load_default_modules(void)
+{
+	load_default_elevator_module();
+}
+
 static int run_init_process(const char *init_filename)
 {
 	argv_init[0] = init_filename;
-	return kernel_execve(init_filename, argv_init, envp_init);
+	return do_execve(init_filename,
+		(const char __user *const __user *)argv_init,
+		(const char __user *const __user *)envp_init);
 }
 
 static noinline void __init kernel_init_freeable(void);
@@ -813,7 +828,6 @@ static int __ref kernel_init(void *unused)
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
-	current->signal->flags |= SIGNAL_UNKILLABLE;
 	flush_delayed_fput();
 
 	if (ramdisk_execute_command) {
@@ -858,7 +872,7 @@ static noinline void __init kernel_init_freeable(void)
 	/*
 	 * init can allocate pages on any node
 	 */
-	set_mems_allowed(node_states[N_HIGH_MEMORY]);
+	set_mems_allowed(node_states[N_MEMORY]);
 	/*
 	 * init can run on any cpu.
 	 */
@@ -900,4 +914,7 @@ static noinline void __init kernel_init_freeable(void)
 	 * we're essentially up and running. Get rid of the
 	 * initmem segments and start the user-mode stuff..
 	 */
+
+	/* rootfs is available now, try loading default modules */
+	load_default_modules();
 }

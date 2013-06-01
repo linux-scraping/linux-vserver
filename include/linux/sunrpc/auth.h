@@ -17,15 +17,16 @@
 
 #include <linux/atomic.h>
 #include <linux/rcupdate.h>
+#include <linux/uidgid.h>
 
 /* size of the nodename buffer */
 #define UNX_MAXNODENAME	32
 
 /* Work around the lack of a VFS credential */
 struct auth_cred {
-	uid_t	uid;
-	gid_t	gid;
-	tag_t	tag;
+	kuid_t	uid;
+	kgid_t	gid;
+	ktag_t	tag;
 	struct group_info *group_info;
 	const char *principal;
 	unsigned char machine_cred : 1;
@@ -49,7 +50,7 @@ struct rpc_cred {
 	unsigned long		cr_flags;	/* various flags */
 	atomic_t		cr_count;	/* ref count */
 
-	uid_t			cr_uid;
+	kuid_t			cr_uid;
 
 	/* per-flavor data */
 };

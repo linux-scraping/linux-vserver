@@ -23,6 +23,7 @@ struct uts_namespace {
 	struct kref kref;
 	struct new_utsname name;
 	struct user_namespace *user_ns;
+	unsigned int proc_inum;
 };
 extern struct uts_namespace init_uts_ns;
 
@@ -33,8 +34,7 @@ static inline void get_uts_ns(struct uts_namespace *ns)
 }
 
 extern struct uts_namespace *copy_utsname(unsigned long flags,
-					  struct uts_namespace *old_ns,
-					  struct user_namespace *user_ns);
+	struct user_namespace *user_ns, struct uts_namespace *old_ns);
 extern void free_uts_ns(struct kref *kref);
 
 static inline void put_uts_ns(struct uts_namespace *ns)
@@ -51,8 +51,7 @@ static inline void put_uts_ns(struct uts_namespace *ns)
 }
 
 static inline struct uts_namespace *copy_utsname(unsigned long flags,
-						 struct uts_namespace *old_ns,
-						 struct user_namespace *user_ns)
+	struct user_namespace *user_ns, struct uts_namespace *old_ns)
 {
 	if (flags & CLONE_NEWUTS)
 		return ERR_PTR(-EINVAL);

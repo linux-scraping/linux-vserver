@@ -51,6 +51,7 @@
 #include <linux/tty.h>
 #include <net/icmp.h>
 #include <net/ip.h>		/* for local_port_range[] */
+#include <net/sock.h>
 #include <net/tcp.h>		/* struct or_callable used in sock_rcv_skb */
 #include <net/net_namespace.h>
 #include <net/netlabel.h>
@@ -1527,7 +1528,7 @@ static int file_has_perm(const struct cred *cred,
 			 u32 av)
 {
 	struct file_security_struct *fsec = file->f_security;
-	struct inode *inode = file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(file);
 	struct common_audit_data ad;
 	u32 sid = cred_sid(cred);
 	int rc;
@@ -1956,7 +1957,7 @@ static int selinux_bprm_set_creds(struct linux_binprm *bprm)
 	struct task_security_struct *new_tsec;
 	struct inode_security_struct *isec;
 	struct common_audit_data ad;
-	struct inode *inode = bprm->file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(bprm->file);
 	int rc;
 
 	rc = cap_bprm_set_creds(bprm);
@@ -2928,7 +2929,7 @@ static void selinux_inode_getsecid(const struct inode *inode, u32 *secid)
 static int selinux_revalidate_file_permission(struct file *file, int mask)
 {
 	const struct cred *cred = current_cred();
-	struct inode *inode = file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(file);
 
 	/* file_mask_to_av won't add FILE__WRITE if MAY_APPEND is set */
 	if ((file->f_flags & O_APPEND) && (mask & MAY_WRITE))
@@ -2940,7 +2941,7 @@ static int selinux_revalidate_file_permission(struct file *file, int mask)
 
 static int selinux_file_permission(struct file *file, int mask)
 {
-	struct inode *inode = file->f_path.dentry->d_inode;
+	struct inode *inode = file_inode(file);
 	struct file_security_struct *fsec = file->f_security;
 	struct inode_security_struct *isec = inode->i_security;
 	u32 sid = current_sid();
@@ -3134,11 +3135,6 @@ static int selinux_file_fcntl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case F_SETFL:
-		if (!file->f_path.dentry || !file->f_path.dentry->d_inode) {
-			err = -EINVAL;
-			break;
-		}
-
 		if ((file->f_flags & O_APPEND) && !(arg & O_APPEND)) {
 			err = file_has_perm(cred, file, FILE__WRITE);
 			break;
@@ -3161,10 +3157,6 @@ static int selinux_file_fcntl(struct file *file, unsigned int cmd,
 	case F_SETLK64:
 	case F_SETLKW64:
 #endif
-		if (!file->f_path.dentry || !file->f_path.dentry->d_inode) {
-			err = -EINVAL;
-			break;
-		}
 		err = file_has_perm(cred, file, FILE__LOCK);
 		break;
 	}
@@ -3217,7 +3209,7 @@ static int selinux_file_open(struct file *file, const struct cred *cred)
 	struct inode_security_struct *isec;
 
 	fsec = file->f_security;
-	isec = file->f_path.dentry->d_inode->i_security;
+	isec = file_inode(file)->i_security;
 	/*
 	 * Save inode label and policy sequence number
 	 * at open-time so that selinux_file_permission
@@ -4371,6 +4363,11 @@ static void selinux_inet_conn_established(struct sock *sk, struct sk_buff *skb)
 	selinux_skb_peerlbl_sid(skb, family, &sksec->peer_sid);
 }
 
+static void selinux_skb_owned_by(struct sk_buff *skb, struct sock *sk)
+{
+	skb_set_owner_w(skb, sk);
+}
+
 static int selinux_secmark_relabel_packet(u32 sid)
 {
 	const struct task_security_struct *__tsec;
@@ -4398,6 +4395,24 @@ static void selinux_req_classify_flow(const struct request_sock *req,
 	fl->flowi_secid = req->secid;
 }
 
+static int selinux_tun_dev_alloc_security(void **security)
+{
+	struct tun_security_struct *tunsec;
+
+	tunsec = kzalloc(sizeof(*tunsec), GFP_KERNEL);
+	if (!tunsec)
+		return -ENOMEM;
+	tunsec->sid = current_sid();
+
+	*security = tunsec;
+	return 0;
+}
+
+static void selinux_tun_dev_free_security(void *security)
+{
+	kfree(security);
+}
+
 static int selinux_tun_dev_create(void)
 {
 	u32 sid = current_sid();
@@ -4413,8 +4428,17 @@ static int selinux_tun_dev_create(void)
 			    NULL);
 }
 
-static void selinux_tun_dev_post_create(struct sock *sk)
+static int selinux_tun_dev_attach_queue(void *security)
 {
+	struct tun_security_struct *tunsec = security;
+
+	return avc_has_perm(current_sid(), tunsec->sid, SECCLASS_TUN_SOCKET,
+			    TUN_SOCKET__ATTACH_QUEUE, NULL);
+}
+
+static int selinux_tun_dev_attach(struct sock *sk, void *security)
+{
+	struct tun_security_struct *tunsec = security;
 	struct sk_security_struct *sksec = sk->sk_security;
 
 	/* we don't currently perform any NetLabel based labeling here and it
@@ -4424,20 +4448,19 @@ static void selinux_tun_dev_post_create(struct sock *sk)
 	 * cause confusion to the TUN user that had no idea network labeling
 	 * protocols were being used */
 
-	/* see the comments in selinux_tun_dev_create() about why we don't use
-	 * the sockcreate SID here */
-
-	sksec->sid = current_sid();
+	sksec->sid = tunsec->sid;
 	sksec->sclass = SECCLASS_TUN_SOCKET;
+
+	return 0;
 }
 
-static int selinux_tun_dev_attach(struct sock *sk)
+static int selinux_tun_dev_open(void *security)
 {
-	struct sk_security_struct *sksec = sk->sk_security;
+	struct tun_security_struct *tunsec = security;
 	u32 sid = current_sid();
 	int err;
 
-	err = avc_has_perm(sid, sksec->sid, SECCLASS_TUN_SOCKET,
+	err = avc_has_perm(sid, tunsec->sid, SECCLASS_TUN_SOCKET,
 			   TUN_SOCKET__RELABELFROM, NULL);
 	if (err)
 		return err;
@@ -4445,8 +4468,7 @@ static int selinux_tun_dev_attach(struct sock *sk)
 			   TUN_SOCKET__RELABELTO, NULL);
 	if (err)
 		return err;
-
-	sksec->sid = sid;
+	tunsec->sid = sid;
 
 	return 0;
 }
@@ -5641,9 +5663,13 @@ static struct security_operations selinux_ops = {
 	.secmark_refcount_inc =		selinux_secmark_refcount_inc,
 	.secmark_refcount_dec =		selinux_secmark_refcount_dec,
 	.req_classify_flow =		selinux_req_classify_flow,
+	.tun_dev_alloc_security =	selinux_tun_dev_alloc_security,
+	.tun_dev_free_security =	selinux_tun_dev_free_security,
 	.tun_dev_create =		selinux_tun_dev_create,
-	.tun_dev_post_create = 		selinux_tun_dev_post_create,
+	.tun_dev_attach_queue =		selinux_tun_dev_attach_queue,
 	.tun_dev_attach =		selinux_tun_dev_attach,
+	.tun_dev_open =			selinux_tun_dev_open,
+	.skb_owned_by =			selinux_skb_owned_by,
 
 #ifdef CONFIG_SECURITY_NETWORK_XFRM
 	.xfrm_policy_alloc_security =	selinux_xfrm_policy_alloc,

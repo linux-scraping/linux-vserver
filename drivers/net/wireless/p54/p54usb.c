@@ -510,11 +510,8 @@ static int p54u_upload_firmware_3887(struct ieee80211_hw *dev)
 		return err;
 
 	tmp = buf = kmalloc(P54U_FW_BLOCK, GFP_KERNEL);
-	if (!buf) {
-		dev_err(&priv->udev->dev, "(p54usb) cannot allocate firmware"
-					  "upload buffer!\n");
+	if (!buf)
 		return -ENOMEM;
-	}
 
 	left = block_size = min((size_t)P54U_FW_BLOCK, priv->fw->size);
 	strcpy(buf, p54u_firmware_upload_3887);
@@ -637,11 +634,8 @@ static int p54u_upload_firmware_net2280(struct ieee80211_hw *dev)
 	const u8 *data;
 
 	buf = kmalloc(512, GFP_KERNEL);
-	if (!buf) {
-		dev_err(&priv->udev->dev, "(p54usb) firmware buffer "
-					  "alloc failed!\n");
+	if (!buf)
 		return -ENOMEM;
-	}
 
 #define P54U_WRITE(type, addr, data) \
 	do {\
@@ -990,7 +984,7 @@ static int p54u_load_firmware(struct ieee80211_hw *dev,
 	return err;
 }
 
-static int __devinit p54u_probe(struct usb_interface *intf,
+static int p54u_probe(struct usb_interface *intf,
 				const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(intf);
@@ -1061,7 +1055,7 @@ static int __devinit p54u_probe(struct usb_interface *intf,
 	return err;
 }
 
-static void __devexit p54u_disconnect(struct usb_interface *intf)
+static void p54u_disconnect(struct usb_interface *intf)
 {
 	struct ieee80211_hw *dev = usb_get_intfdata(intf);
 	struct p54u_priv *priv;
@@ -1135,7 +1129,7 @@ static struct usb_driver p54u_driver = {
 	.name	= "p54usb",
 	.id_table = p54u_table,
 	.probe = p54u_probe,
-	.disconnect = __devexit_p(p54u_disconnect),
+	.disconnect = p54u_disconnect,
 	.pre_reset = p54u_pre_reset,
 	.post_reset = p54u_post_reset,
 #ifdef CONFIG_PM

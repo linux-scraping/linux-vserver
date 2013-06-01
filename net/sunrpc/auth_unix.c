@@ -19,9 +19,9 @@
 
 struct unx_cred {
 	struct rpc_cred		uc_base;
-	tag_t			uc_tag;
-	gid_t			uc_gid;
-	gid_t			uc_gids[NFS_NGROUPS];
+	ktag_t			uc_tag;
+	kgid_t			uc_gid;
+	kgid_t			uc_gids[NFS_NGROUPS];
 };
 #define uc_uid			uc_base.cr_uid
 
@@ -67,7 +67,8 @@ unx_create_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 	unsigned int i;
 
 	dprintk("RPC:       allocating UNIX cred for uid %d gid %d\n",
-			acred->uid, acred->gid);
+			from_kuid(&init_user_ns, acred->uid),
+			from_kgid(&init_user_ns, acred->gid));
 
 	if (!(cred = kmalloc(sizeof(*cred), GFP_NOFS)))
 		return ERR_PTR(-ENOMEM);
@@ -82,13 +83,10 @@ unx_create_cred(struct rpc_auth *auth, struct auth_cred *acred, int flags)
 
 	cred->uc_gid = acred->gid;
 	cred->uc_tag = acred->tag;
-	for (i = 0; i < groups; i++) {
-		gid_t gid;
-		gid = from_kgid(&init_user_ns, GROUP_AT(acred->group_info, i));
-		cred->uc_gids[i] = gid;
-	}
+	for (i = 0; i < groups; i++)
+		cred->uc_gids[i] = GROUP_AT(acred->group_info, i);
 	if (i < NFS_NGROUPS)
-		cred->uc_gids[i] = NOGROUP;
+		cred->uc_gids[i] = INVALID_GID;
 
 	return &cred->uc_base;
 }
@@ -126,23 +124,19 @@ unx_match(struct auth_cred *acred, struct rpc_cred *rcred, int flags)
 	unsigned int i;
 
 
-	if (cred->uc_uid != acred->uid ||
-		cred->uc_gid != acred->gid ||
-		cred->uc_tag != acred->tag)
+	if (!uid_eq(cred->uc_uid, acred->uid) ||
+	    !gid_eq(cred->uc_gid, acred->gid) ||
+	    !tag_eq(cred->uc_tag, acred->tag))
 		return 0;
 
 	if (acred->group_info != NULL)
 		groups = acred->group_info->ngroups;
 	if (groups > NFS_NGROUPS)
 		groups = NFS_NGROUPS;
-	for (i = 0; i < groups ; i++) {
-		gid_t gid;
-		gid = from_kgid(&init_user_ns, GROUP_AT(acred->group_info, i));
-		if (cred->uc_gids[i] != gid)
+	for (i = 0; i < groups ; i++)
+		if (!gid_eq(cred->uc_gids[i], GROUP_AT(acred->group_info, i)))
 			return 0;
-	}
-	if (groups < NFS_NGROUPS &&
-	    cred->uc_gids[groups] != NOGROUP)
+	if (groups < NFS_NGROUPS && gid_valid(cred->uc_gids[groups]))
 		return 0;
 	return 1;
 }
@@ -167,15 +161,17 @@ unx_marshal(struct rpc_task *task, __be32 *p)
 	 * Copy the UTS nodename captured when the client was created.
 	 */
 	p = xdr_encode_array(p, clnt->cl_nodename, clnt->cl_nodelen);
-	tag = task->tk_client->cl_tag;
 
+	tag = task->tk_client->cl_tag;
 	*p++ = htonl((u32) TAGINO_UID(tag,
-		cred->uc_uid, cred->uc_tag));
+		from_kuid(&init_user_ns, cred->uc_uid),
+		from_ktag(&init_user_ns, cred->uc_tag)));
 	*p++ = htonl((u32) TAGINO_GID(tag,
-		cred->uc_gid, cred->uc_tag));
+		from_kgid(&init_user_ns, cred->uc_gid),
+		from_ktag(&init_user_ns, cred->uc_tag)));
 	hold = p++;
-	for (i = 0; i < 16 && cred->uc_gids[i] != (gid_t) NOGROUP; i++)
-		*p++ = htonl((u32) cred->uc_gids[i]);
+	for (i = 0; i < 16 && gid_valid(cred->uc_gids[i]); i++)
+		*p++ = htonl((u32) from_kgid(&init_user_ns, cred->uc_gids[i]));
 	*hold = htonl(p - hold - 1);		/* gid array length */
 	*base = htonl((p - base - 1) << 2);	/* cred length */
 

@@ -39,6 +39,7 @@
 #include "xfs_vnodeops.h"
 #include "xfs_inode_item.h"
 #include "xfs_trace.h"
+#include "xfs_icache.h"
 
 #include <linux/capability.h>
 #include <linux/xattr.h>
@@ -782,8 +783,8 @@ xfs_setattr_size(
 	 * care about here.
 	 */
 	if (oldsize != ip->i_d.di_size && newsize > ip->i_d.di_size) {
-		error = xfs_flush_pages(ip, ip->i_d.di_size, newsize, 0,
-					FI_NONE);
+		error = -filemap_write_and_wait_range(VFS_I(ip)->i_mapping,
+						      ip->i_d.di_size, newsize);
 		if (error)
 			goto out_unlock;
 	}
@@ -857,6 +858,9 @@ xfs_setattr_size(
 		 * and do not wait the usual (long) time for writeout.
 		 */
 		xfs_iflags_set(ip, XFS_ITRUNCATED);
+
+		/* A truncate down always removes post-EOF blocks. */
+		xfs_inode_clear_eofblocks_tag(ip);
 	}
 
 	if (mask & ATTR_CTIME) {

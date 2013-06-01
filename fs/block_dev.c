@@ -319,10 +319,10 @@ static int blkdev_write_end(struct file *file, struct address_space *mapping,
 
 /*
  * private llseek:
- * for a block special file file->f_path.dentry->d_inode->i_size is zero
+ * for a block special file file_inode(file)->i_size is zero
  * so we compute the size by hand (just as in block_read/write above)
  */
-static loff_t block_llseek(struct file *file, loff_t offset, int origin)
+static loff_t block_llseek(struct file *file, loff_t offset, int whence)
 {
 	struct inode *bd_inode = file->f_mapping->host;
 	loff_t size;
@@ -332,7 +332,7 @@ static loff_t block_llseek(struct file *file, loff_t offset, int origin)
 	size = i_size_read(bd_inode);
 
 	retval = -EINVAL;
-	switch (origin) {
+	switch (whence) {
 		case SEEK_END:
 			offset += size;
 			break;
@@ -553,6 +553,7 @@ struct block_device *bdgrab(struct block_device *bdev)
 	ihold(bdev->bd_inode);
 	return bdev;
 }
+EXPORT_SYMBOL(bdgrab);
 
 long nr_blockdev_pages(void)
 {
@@ -1040,7 +1041,9 @@ void bd_set_size(struct block_device *bdev, loff_t size)
 {
 	unsigned bsize = bdev_logical_block_size(bdev);
 
-	bdev->bd_inode->i_size = size;
+	mutex_lock(&bdev->bd_inode->i_mutex);
+	i_size_write(bdev->bd_inode, size);
+	mutex_unlock(&bdev->bd_inode->i_mutex);
 	while (bsize < PAGE_CACHE_SIZE) {
 		if (size & bsize)
 			break;
@@ -1125,7 +1128,7 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
 				}
 			}
 
-			if (!ret && !bdev->bd_openers) {
+			if (!ret) {
 				bd_set_size(bdev,(loff_t)get_capacity(disk)<<9);
 				bdi = blk_get_backing_dev_info(bdev);
 				if (bdi == NULL)
