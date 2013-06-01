@@ -288,9 +288,9 @@ static struct inode *vs_proc_make_inode(struct super_block *sb, struct vs_entry 
 
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 
-	inode->i_uid = 0;
-	inode->i_gid = 0;
-	inode->i_tag = 0;
+	i_uid_write(inode, 0);
+	i_gid_write(inode, 0);
+	i_tag_write(inode, 0);
 out:
 	return inode;
 }

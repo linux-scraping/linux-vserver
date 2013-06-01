@@ -1839,7 +1839,7 @@ void inode_init_owner(struct inode *inode, const struct inode *dir,
 	} else
 		inode->i_gid = current_fsgid();
 	inode->i_mode = mode;
-	inode->i_tag = dx_current_fstag(inode->i_sb);
+	i_tag_write(inode, dx_current_fstag(inode->i_sb));
 }
 EXPORT_SYMBOL(inode_init_owner);
 

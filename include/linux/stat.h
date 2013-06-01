@@ -25,7 +25,7 @@ struct kstat {
 	unsigned int	nlink;
 	kuid_t		uid;
 	kgid_t		gid;
-	tag_t		tag;
+	ktag_t		tag;
 	dev_t		rdev;
 	loff_t		size;
 	struct timespec  atime;
