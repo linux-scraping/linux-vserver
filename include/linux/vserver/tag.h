@@ -2,6 +2,7 @@
 #define _DX_TAG_H
 
 #include <linux/types.h>
+#include <linux/uidgid.h>
 
 
 #define DX_TAG(in)	(IS_TAGGED(in))
@@ -100,10 +101,26 @@
 #define TAGINO_TAG(cond, tag)	((cond) ? (tag) : 0)
 #endif
 
+#define TAGINO_KUID(cond, kuid, ktag)	\
+	KUIDT_INIT(TAGINO_UID(cond, __kuid_val(kuid), __ktag_val(ktag)))
+#define TAGINO_KGID(cond, kgid, ktag)	\
+	KGIDT_INIT(TAGINO_GID(cond, __kgid_val(kgid), __ktag_val(ktag)))
+#define TAGINO_KTAG(cond, ktag)		\
+	KTAGT_INIT(TAGINO_TAG(cond, __ktag_val(ktag)))
+
+
 #define INOTAG_UID(cond, uid, gid)	\
 	((cond) ? ((uid) & MAX_UID) : (uid))
 #define INOTAG_GID(cond, uid, gid)	\
 	((cond) ? ((gid) & MAX_GID) : (gid))
+
+#define INOTAG_KUID(cond, kuid, kgid)	\
+	KUIDT_INIT(INOTAG_UID(cond, __kuid_val(kuid), __kgid_val(kgid)))
+#define INOTAG_KGID(cond, kuid, kgid)	\
+	KGIDT_INIT(INOTAG_GID(cond, __kuid_val(kuid), __kgid_val(kgid)))
+#define INOTAG_KTAG(cond, kuid, kgid, ktag) \
+	KTAGT_INIT(INOTAG_TAG(cond, \
+		__kuid_val(kuid), __kgid_val(kgid), __ktag_val(ktag)))
 
 
 static inline uid_t dx_map_uid(uid_t uid)
@@ -113,18 +130,12 @@ static inline uid_t dx_map_uid(uid_t uid)
 	return (uid & MAX_UID);
 }
 
-#define	dx_map_kuid(n, u) \
-	make_kuid(n, dx_map_uid(from_kuid(n, u)))
-
 static inline gid_t dx_map_gid(gid_t gid)
 {
 	if ((gid > MAX_GID) && (gid != -1))
 		gid = -2;
 	return (gid & MAX_GID);
 }
-
-#define	dx_map_kgid(n, u) \
-	make_kgid(n, dx_map_gid(from_kgid(n, u)))
 
 struct peer_tag {
 	int32_t xid;

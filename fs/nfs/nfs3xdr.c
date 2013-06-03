@@ -595,16 +595,16 @@ static void encode_sattr3(struct xdr_stream *xdr,
 	if (attr->ia_valid & ATTR_UID ||
 		(tag && (attr->ia_valid & ATTR_TAG))) {
 		*p++ = xdr_one;
-		*p++ = cpu_to_be32(TAGINO_UID(tag,
-			from_kuid(&init_user_ns, attr->ia_uid), attr->ia_tag));
+		*p++ = cpu_to_be32(from_kuid(&init_user_ns,
+			TAGINO_KUID(tag, attr->ia_uid, attr->ia_tag)));
 	} else
 		*p++ = xdr_zero;
 
 	if (attr->ia_valid & ATTR_GID ||
 		(tag && (attr->ia_valid & ATTR_TAG))) {
 		*p++ = xdr_one;
-		*p++ = cpu_to_be32(TAGINO_GID(tag,
-			from_kgid(&init_user_ns, attr->ia_gid), attr->ia_tag));
+		*p++ = cpu_to_be32(from_kgid(&init_user_ns,
+			TAGINO_KGID(tag, attr->ia_gid, attr->ia_tag)));
 	} else
 		*p++ = xdr_zero;
 

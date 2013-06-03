@@ -2047,7 +2047,7 @@ static void __ocfs2_stuff_meta_lvb(struct inode *inode)
 	lvb->lvb_iclusters = cpu_to_be32(oi->ip_clusters);
 	lvb->lvb_iuid      = cpu_to_be32(i_uid_read(inode));
 	lvb->lvb_igid      = cpu_to_be32(i_gid_read(inode));
-	lvb->lvb_itag      = cpu_to_be16(inode->i_tag);
+	lvb->lvb_itag      = cpu_to_be16(i_tag_read(inode));
 	lvb->lvb_imode     = cpu_to_be16(inode->i_mode);
 	lvb->lvb_inlink    = cpu_to_be16(inode->i_nlink);
 	lvb->lvb_iatime_packed  =

@@ -3119,10 +3119,10 @@ again:
 
 	ext3_get_inode_flags(ei);
 	raw_inode->i_mode = cpu_to_le16(inode->i_mode);
-	i_uid = TAGINO_UID(DX_TAG(inode),
-		i_uid_read(inode), i_tag_read(inode));
-	i_gid = TAGINO_GID(DX_TAG(inode),
-		i_gid_read(inode), i_tag_read(inode));
+	i_uid = from_kuid(&init_user_ns,
+		TAGINO_KUID(DX_TAG(inode), inode->i_uid, inode->i_tag));
+	i_gid = from_kgid(&init_user_ns,
+		TAGINO_KGID(DX_TAG(inode), inode->i_gid, inode->i_tag));
 	if(!(test_opt(inode->i_sb, NO_UID32))) {
 		raw_inode->i_uid_low = cpu_to_le16(low_16_bits(i_uid));
 		raw_inode->i_gid_low = cpu_to_le16(low_16_bits(i_gid));

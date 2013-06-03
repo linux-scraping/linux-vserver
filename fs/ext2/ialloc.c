@@ -547,8 +547,7 @@ got:
 		inode->i_mode = mode;
 		inode->i_uid = current_fsuid();
 		inode->i_gid = dir->i_gid;
-		inode->i_tag = make_ktag(&init_user_ns,
-			dx_current_fstag(sb));
+		i_tag_write(inode, dx_current_fstag(sb));
 	} else
 		inode_init_owner(inode, dir, mode);
 

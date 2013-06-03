@@ -1462,10 +1462,10 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	struct super_block *sb = inode->i_sb;
 	ino_t ino = inode->i_ino;
-	uid_t uid = TAGINO_UID(DX_TAG(inode),
-		i_uid_read(inode), i_tag_read(inode));
-	gid_t gid = TAGINO_GID(DX_TAG(inode),
-		i_gid_read(inode), i_tag_read(inode));
+	uid_t uid = from_kuid(&init_user_ns,
+		TAGINO_KUID(DX_TAG(inode), inode->i_uid, inode->i_tag));
+	gid_t gid = from_kgid(&init_user_ns,
+		TAGINO_KGID(DX_TAG(inode), inode->i_gid, inode->i_tag));
 	struct buffer_head * bh;
 	struct ext2_inode * raw_inode = ext2_get_inode(sb, ino, &bh);
 	int n;

@@ -163,12 +163,10 @@ unx_marshal(struct rpc_task *task, __be32 *p)
 	p = xdr_encode_array(p, clnt->cl_nodename, clnt->cl_nodelen);
 
 	tag = task->tk_client->cl_tag;
-	*p++ = htonl((u32) TAGINO_UID(tag,
-		from_kuid(&init_user_ns, cred->uc_uid),
-		from_ktag(&init_user_ns, cred->uc_tag)));
-	*p++ = htonl((u32) TAGINO_GID(tag,
-		from_kgid(&init_user_ns, cred->uc_gid),
-		from_ktag(&init_user_ns, cred->uc_tag)));
+	*p++ = htonl((u32) from_kuid(&init_user_ns,
+		TAGINO_KUID(tag, cred->uc_uid, cred->uc_tag)));
+	*p++ = htonl((u32) from_kgid(&init_user_ns,
+		TAGINO_KGID(tag, cred->uc_gid, cred->uc_tag)));
 	hold = p++;
 	for (i = 0; i < 16 && gid_valid(cred->uc_gids[i]); i++)
 		*p++ = htonl((u32) from_kgid(&init_user_ns, cred->uc_gids[i]));

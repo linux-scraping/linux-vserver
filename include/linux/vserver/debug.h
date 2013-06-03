@@ -124,7 +124,8 @@ void dump_vx_info_inactive(int);
 #define vxwprintk_task(c, f, x...)				\
 	vxwprintk(c, VX_WARN_TASK f,				\
 		current->comm, current->pid,			\
-		current->xid, current->nid, current->tag, ##x)
+		current->xid, current->nid, 			\
+		current->tag, ##x)
 #define vxwprintk_xid(c, f, x...)				\
 	vxwprintk(c, VX_WARN_XID f, current->xid, x)
 #define vxwprintk_nid(c, f, x...)				\

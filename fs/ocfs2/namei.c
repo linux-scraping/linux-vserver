@@ -476,7 +476,7 @@ static int __ocfs2_mknod_locked(struct inode *dir,
 	struct ocfs2_dinode *fe = NULL;
 	struct ocfs2_extent_list *fel;
 	u16 feat;
-	tag_t tag;
+	ktag_t ktag;
 
 	*new_fe_bh = NULL;
 
@@ -515,10 +515,12 @@ static int __ocfs2_mknod_locked(struct inode *dir,
 	fe->i_suballoc_bit = cpu_to_le16(suballoc_bit);
 	fe->i_suballoc_slot = cpu_to_le16(inode_ac->ac_alloc_slot);
 
-	tag = dx_current_fstag(osb->sb);
-	fe->i_uid = cpu_to_le32(TAGINO_UID(DX_TAG(inode), i_uid_read(inode), tag));
-	fe->i_gid = cpu_to_le32(TAGINO_GID(DX_TAG(inode), i_gid_read(inode), tag));
-	inode->i_tag = tag; /* is this correct? */
+	ktag = make_ktag(&init_user_ns, dx_current_fstag(osb->sb));
+	fe->i_uid = cpu_to_le32(from_kuid(&init_user_ns,
+		TAGINO_KUID(DX_TAG(inode), inode->i_uid, ktag)));
+	fe->i_gid = cpu_to_le32(from_kgid(&init_user_ns,
+		TAGINO_KGID(DX_TAG(inode), inode->i_gid, ktag)));
+	inode->i_tag = ktag; /* is this correct? */
 	fe->i_mode = cpu_to_le16(inode->i_mode);
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
 		fe->id1.dev1.i_rdev = cpu_to_le64(huge_encode_dev(dev));
