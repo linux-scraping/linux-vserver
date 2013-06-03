@@ -340,11 +340,10 @@ lookup_protocol:
 	if ((protocol == IPPROTO_ICMP) &&
 		nx_capable(CAP_NET_RAW, NXC_RAW_ICMP))
 		goto override;
-override:
 	if (sock->type == SOCK_RAW && !kern &&
 	    !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out_rcu_unlock;
-
+override:
 	sock->ops = answer->ops;
 	answer_prot = answer->prot;
 	answer_no_check = answer->no_check;

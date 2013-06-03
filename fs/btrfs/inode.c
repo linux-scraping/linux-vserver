@@ -3313,8 +3313,9 @@ static void btrfs_read_locked_inode(struct inode *inode)
 	struct btrfs_key location;
 	int maybe_acls;
 	u32 rdev;
-	uid_t uid;
-	gid_t gid;
+	kuid_t kuid;
+	kgid_t kgid;
+	ktag_t ktag;
 	int ret;
 	bool filled = false;
 
@@ -3343,12 +3344,13 @@ static void btrfs_read_locked_inode(struct inode *inode)
 	inode->i_mode = btrfs_inode_mode(leaf, inode_item);
 	set_nlink(inode, btrfs_inode_nlink(leaf, inode_item));
 
-	uid = btrfs_inode_uid(leaf, inode_item);
-	gid = btrfs_inode_gid(leaf, inode_item);
-	i_uid_write(inode, INOTAG_UID(DX_TAG(inode), uid, gid));
-	i_gid_write(inode, INOTAG_GID(DX_TAG(inode), uid, gid));
-	i_tag_write(inode, INOTAG_TAG(DX_TAG(inode), uid, gid,
-		btrfs_inode_tag(leaf, inode_item)));
+	kuid = make_kuid(&init_user_ns, btrfs_inode_uid(leaf, inode_item));
+	kgid = make_kgid(&init_user_ns, btrfs_inode_gid(leaf, inode_item));
+	ktag = make_ktag(&init_user_ns, btrfs_inode_tag(leaf, inode_item));
+
+	inode->i_uid = INOTAG_KUID(DX_TAG(inode), kuid, kgid);
+	inode->i_gid = INOTAG_KGID(DX_TAG(inode), kuid, kgid);
+	inode->i_tag = INOTAG_KTAG(DX_TAG(inode), kuid, kgid, ktag);
 	btrfs_i_size_write(inode, btrfs_inode_size(leaf, inode_item));
 
 	tspec = btrfs_inode_atime(inode_item);
@@ -3439,10 +3441,10 @@ static void fill_inode_item(struct btrfs_trans_handle *trans,
 			    struct inode *inode)
 {
 	struct btrfs_map_token token;
-	uid_t uid = TAGINO_UID(DX_TAG(inode),
-		i_uid_read(inode), i_tag_read(inode));
-	gid_t gid = TAGINO_GID(DX_TAG(inode),
-		i_gid_read(inode), i_tag_read(inode));
+	uid_t uid = from_kuid(&init_user_ns,
+		TAGINO_KUID(DX_TAG(inode), inode->i_uid, inode->i_tag));
+	gid_t gid = from_kgid(&init_user_ns,
+		TAGINO_KGID(DX_TAG(inode), inode->i_gid, inode->i_tag));
 
 	btrfs_init_map_token(&token);
 

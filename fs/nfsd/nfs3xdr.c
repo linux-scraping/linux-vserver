@@ -99,8 +99,8 @@ static __be32 *
 decode_sattr3(__be32 *p, struct iattr *iap)
 {
 	u32	tmp;
-	uid_t	uid = 0;
-	gid_t	gid = 0;
+	kuid_t	kuid = GLOBAL_ROOT_UID;
+	kgid_t	kgid = GLOBAL_ROOT_GID;
 
 	iap->ia_valid = 0;
 
@@ -109,18 +109,18 @@ decode_sattr3(__be32 *p, struct iattr *iap)
 		iap->ia_mode = ntohl(*p++);
 	}
 	if (*p++) {
-		uid = make_kuid(&init_user_ns, ntohl(*p++));
+		kuid = make_kuid(&init_user_ns, ntohl(*p++));
 		if (uid_valid(iap->ia_uid))
 			iap->ia_valid |= ATTR_UID;
 	}
 	if (*p++) {
-		gid = make_kgid(&init_user_ns, ntohl(*p++));
+		kgid = make_kgid(&init_user_ns, ntohl(*p++));
 		if (gid_valid(iap->ia_gid))
 			iap->ia_valid |= ATTR_GID;
 	}
-	iap->ia_uid = INOTAG_UID(DX_TAG_NFSD, uid, gid);
-	iap->ia_gid = INOTAG_GID(DX_TAG_NFSD, uid, gid);
-	iap->ia_tag = INOTAG_TAG(DX_TAG_NFSD, uid, gid, 0);
+	iap->ia_uid = INOTAG_KUID(DX_TAG_NFSD, kuid, kgid);
+	iap->ia_gid = INOTAG_KGID(DX_TAG_NFSD, kuid, kgid);
+	iap->ia_tag = INOTAG_KTAG(DX_TAG_NFSD, kuid, kgid, GLOBAL_ROOT_TAG);
 	if (*p++) {
 		u64	newsize;
 
@@ -177,10 +177,10 @@ encode_fattr3(struct svc_rqst *rqstp, __be32 *p, struct svc_fh *fhp,
 	*p++ = htonl((u32) stat->mode);
 	*p++ = htonl((u32) stat->nlink);
 	*p++ = htonl((u32) from_kuid(&init_user_ns,
-		TAGINO_UID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
+		TAGINO_KUID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
 		stat->uid, stat->tag)));
 	*p++ = htonl((u32) from_kgid(&init_user_ns,
-		TAGINO_GID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
+		TAGINO_KGID(0 /* FIXME: DX_TAG(dentry->d_inode) */,
 		stat->gid, stat->tag)));
 	if (S_ISLNK(stat->mode) && stat->size > NFS3_MAXPATHLEN) {
 		p = xdr_encode_hyper(p, (u64) NFS3_MAXPATHLEN);

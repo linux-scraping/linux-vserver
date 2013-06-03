@@ -481,7 +481,7 @@ rpcauth_lookupcred(struct rpc_auth *auth, int flags)
 	memset(&acred, 0, sizeof(acred));
 	acred.uid = cred->fsuid;
 	acred.gid = cred->fsgid;
-	acred.tag = dx_current_tag();
+	acred.tag = make_ktag(&init_user_ns, dx_current_tag());
 	acred.group_info = get_group_info(((struct cred *)cred)->group_info);
 
 	ret = auth->au_ops->lookup_cred(auth, &acred, flags);
@@ -522,7 +522,7 @@ rpcauth_bind_root_cred(struct rpc_task *task, int lookupflags)
 	struct auth_cred acred = {
 		.uid = GLOBAL_ROOT_UID,
 		.gid = GLOBAL_ROOT_GID,
-		.tag = dx_current_tag(),
+		.tag = KTAGT_INIT(dx_current_tag()),
 	};
 
 	dprintk("RPC: %5u looking up %s cred\n",
