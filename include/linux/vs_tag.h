@@ -27,7 +27,7 @@
  * check current context for ADMIN/WATCH and
  * optionally against supplied argument
  */
-static inline int __dx_check(tag_t cid, tag_t id, unsigned int mode)
+static inline int __dx_check(vtag_t cid, vtag_t id, unsigned int mode)
 {
 	if (mode & DX_ARG_MASK) {
 		if ((mode & DX_IDENT) && (id == cid))

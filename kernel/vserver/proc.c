@@ -383,7 +383,7 @@ struct vx_info *get_proc_vx_info(struct inode *inode)
 static int proc_xid_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode = dentry->d_inode;
-	xid_t xid = PROC_I(inode)->fd;
+	vxid_t xid = PROC_I(inode)->fd;
 
 	if (flags & LOOKUP_RCU)	/* FIXME: can be dropped? */
 		return -ECHILD;
@@ -400,7 +400,7 @@ static int proc_xid_revalidate(struct dentry *dentry, unsigned int flags)
 static int proc_nid_revalidate(struct dentry *dentry, unsigned int flags)
 {
 	struct inode *inode = dentry->d_inode;
-	nid_t nid = PROC_I(inode)->fd;
+	vnid_t nid = PROC_I(inode)->fd;
 
 	if (flags & LOOKUP_RCU)	/* FIXME: can be dropped? */
 		return -ECHILD;
@@ -447,7 +447,7 @@ static ssize_t proc_vx_info_read(struct file *file, char __user *buf,
 {
 	struct inode *inode = file->f_dentry->d_inode;
 	struct vx_info *vxi = NULL;
-	xid_t xid = PROC_I(inode)->fd;
+	vxid_t xid = PROC_I(inode)->fd;
 	unsigned long page;
 	ssize_t length = 0;
 
@@ -483,7 +483,7 @@ static ssize_t proc_nx_info_read(struct file *file, char __user *buf,
 {
 	struct inode *inode = file->f_dentry->d_inode;
 	struct nx_info *nxi = NULL;
-	nid_t nid = PROC_I(inode)->fd;
+	vnid_t nid = PROC_I(inode)->fd;
 	unsigned long page;
 	ssize_t length = 0;
 

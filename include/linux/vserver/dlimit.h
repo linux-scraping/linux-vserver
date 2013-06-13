@@ -18,7 +18,7 @@ struct super_block;
 struct dl_info {
 	struct hlist_node dl_hlist;		/* linked list of contexts */
 	struct rcu_head dl_rcu;			/* the rcu head */
-	tag_t dl_tag;				/* context tag */
+	vtag_t dl_tag;				/* context tag */
 	atomic_t dl_usecnt;			/* usage count */
 	atomic_t dl_refcnt;			/* reference count */
 
@@ -39,7 +39,7 @@ struct rcu_head;
 extern void rcu_free_dl_info(struct rcu_head *);
 extern void unhash_dl_info(struct dl_info *);
 
-extern struct dl_info *locate_dl_info(struct super_block *, tag_t);
+extern struct dl_info *locate_dl_info(struct super_block *, vtag_t);
 
 
 struct kstatfs;

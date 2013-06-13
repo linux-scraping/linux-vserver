@@ -17,7 +17,7 @@
 #include <linux/vserver/tag_cmd.h>
 
 
-int dx_migrate_task(struct task_struct *p, tag_t tag)
+int dx_migrate_task(struct task_struct *p, vtag_t tag)
 {
 	if (!p)
 		BUG();
@@ -41,7 +41,7 @@ int dx_migrate_task(struct task_struct *p, tag_t tag)
 
 int vc_task_tag(uint32_t id)
 {
-	tag_t tag;
+	vtag_t tag;
 
 	if (id) {
 		struct task_struct *tsk;

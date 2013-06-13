@@ -195,7 +195,7 @@ static void show_registers(struct pt_regs *regs)
 	} else {
 		printk("SPI: %08lx\n", sp);
 	}
-	printk("Process %s (pid: %d[#%u], process nr: %d, stackpage=%08lx)",
+	printk("Process %s (pid: %d:#%u, process nr: %d, stackpage=%08lx)",
 		current->comm, task_pid_nr(current), current->xid,
 		0xffff & i, 4096+(unsigned long)current);
 

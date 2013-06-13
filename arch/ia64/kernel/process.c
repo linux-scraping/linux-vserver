@@ -109,7 +109,7 @@ show_regs (struct pt_regs *regs)
 	unsigned long ip = regs->cr_iip + ia64_psr(regs)->ri;
 
 	print_modules();
-	printk("\nPid: %d[#%u], CPU %d, comm: %20s\n", task_pid_nr(current),
+	printk("\nPid: %d:#%u, CPU %d, comm: %20s\n", task_pid_nr(current),
 			current->xid, smp_processor_id(), current->comm);
 	printk("psr : %016lx ifs : %016lx ip  : [<%016lx>]    %s (%s)\n",
 	       regs->cr_ipsr, regs->cr_ifs, ip, print_tainted(),

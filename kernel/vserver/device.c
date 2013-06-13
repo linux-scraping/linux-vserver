@@ -36,7 +36,7 @@ struct vs_mapping {
 	} u;
 #define dm_hlist	u.hlist
 #define dm_list		u.list
-	xid_t xid;
+	vxid_t xid;
 	dev_t device;
 	struct vx_dmap_target target;
 };
@@ -148,7 +148,7 @@ static inline int __remove_default(struct vx_info *vxi, umode_t mode)
  *
  *	caller must hold hash_lock
  */
-static inline int __find_mapping(xid_t xid, dev_t device, umode_t mode,
+static inline int __find_mapping(vxid_t xid, dev_t device, umode_t mode,
 	struct vs_mapping **local, struct vs_mapping **global)
 {
 	struct hlist_head *hash = dmap_main_hash;
@@ -190,7 +190,7 @@ static inline int __lookup_mapping(struct vx_info *vxi,
 	struct vs_mapping *vdm, *global;
 	struct vx_dmap_target *vdmt;
 	int ret = 0;
-	xid_t xid = vxi->vx_id;
+	vxid_t xid = vxi->vx_id;
 	int index;
 
 	spin_lock(hash_lock);

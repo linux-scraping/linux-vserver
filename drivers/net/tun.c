@@ -165,7 +165,7 @@ struct tun_struct {
 	unsigned int 		flags;
 	kuid_t			owner;
 	kgid_t			group;
-	nid_t			nid;
+	vnid_t			nid;
 
 	struct net_device	*dev;
 	netdev_features_t	set_features;
@@ -1962,7 +1962,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 			return -EPERM;
 
 		/* Set nid owner of the device */
-		tun->nid = (nid_t) arg;
+		tun->nid = (vnid_t) arg;
 
 		tun_debug(KERN_INFO, tun, "nid owner set to %u\n", tun->nid);
 		break;

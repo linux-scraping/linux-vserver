@@ -126,7 +126,7 @@ struct mapped_device {
 	rwlock_t map_lock;
 	atomic_t holders;
 	atomic_t open_count;
-	xid_t xid;
+	vxid_t xid;
 
 	unsigned long flags;
 
@@ -554,7 +554,7 @@ int dm_set_geometry(struct mapped_device *md, struct hd_geometry *geo)
 /*
  * Get the xid associated with a dm device
  */
-xid_t dm_get_xid(struct mapped_device *md)
+vxid_t dm_get_xid(struct mapped_device *md)
 {
 	return md->xid;
 }

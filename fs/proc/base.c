@@ -1535,7 +1535,7 @@ struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *t
 		rcu_read_unlock();
 	}
 	/* procfs is xid tagged */
-	i_tag_write(inode, (tag_t)vx_task_xid(task));
+	i_tag_write(inode, (vtag_t)vx_task_xid(task));
 	security_task_to_inode(task, inode);
 
 out:

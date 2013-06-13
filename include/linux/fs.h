@@ -707,7 +707,7 @@ static inline gid_t i_gid_read(const struct inode *inode)
 	return from_kgid(&init_user_ns, inode->i_gid);
 }
 
-static inline tag_t i_tag_read(const struct inode *inode)
+static inline vtag_t i_tag_read(const struct inode *inode)
 {
 	return from_ktag(&init_user_ns, inode->i_tag);
 }
@@ -722,7 +722,7 @@ static inline void i_gid_write(struct inode *inode, gid_t gid)
 	inode->i_gid = make_kgid(&init_user_ns, gid);
 }
 
-static inline void i_tag_write(struct inode *inode, tag_t tag)
+static inline void i_tag_write(struct inode *inode, vtag_t tag)
 {
 	inode->i_tag = make_ktag(&init_user_ns, tag);
 }
@@ -801,7 +801,7 @@ struct file {
 	loff_t			f_pos;
 	struct fown_struct	f_owner;
 	const struct cred	*f_cred;
-	xid_t			f_xid;
+	vxid_t			f_xid;
 	struct file_ra_state	f_ra;
 
 	u64			f_version;
@@ -953,7 +953,7 @@ struct file_lock {
 	struct file *fl_file;
 	loff_t fl_start;
 	loff_t fl_end;
-	xid_t fl_xid;
+	vxid_t fl_xid;
 
 	struct fasync_struct *	fl_fasync; /* for lease break notifications */
 	/* for lease breaks: */

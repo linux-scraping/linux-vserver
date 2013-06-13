@@ -55,7 +55,7 @@ typedef struct
 {
     char t_name[4];
     u32     t_len;
-} ctag_t;
+} tag_t;
 
 
 #define TAG_EQ(i, v)    (((i)[0] == (v)[0]) &&  \
@@ -90,7 +90,7 @@ typedef struct
     u32 ptr;
 } xbv_stack_t;
 
-static s32 read_tag(card_t *card, ct_t *ct, ctag_t *tag);
+static s32 read_tag(card_t *card, ct_t *ct, tag_t *tag);
 static s32 read_bytes(card_t *card, ct_t *ct, void *buf, u32 len);
 static s32 read_uint(card_t *card, ct_t *ct, u32 *u, u32 len);
 static s32 xbv_check(xbv1_t *fwinfo, const xbv_stack_t *stack,
@@ -160,7 +160,7 @@ static u32 write_fwdl_to_ptdl(void *buf, const u32 offset,
 CsrResult xbv1_parse(card_t *card, fwreadfn_t readfn, void *dlpriv, xbv1_t *fwinfo)
 {
     ct_t ct;
-    ctag_t tag;
+    tag_t tag;
     xbv_stack_t stack;
 
     ct.dlpriv = dlpriv;
@@ -505,7 +505,7 @@ static u32 xbv2uint(u8 *ptr, s32 len)
 }
 
 
-static s32 read_tag(card_t *card, ct_t *ct, ctag_t *tag)
+static s32 read_tag(card_t *card, ct_t *ct, tag_t *tag)
 {
     u8 buf[8];
     s32 n;

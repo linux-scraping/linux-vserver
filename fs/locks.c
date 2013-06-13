@@ -808,7 +808,7 @@ out:
 }
 
 static int __posix_lock_file(struct inode *inode, struct file_lock *request,
-	struct file_lock *conflock, xid_t xid)
+	struct file_lock *conflock, vxid_t xid)
 {
 	struct file_lock *fl;
 	struct file_lock *new_fl = NULL;

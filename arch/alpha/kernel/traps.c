@@ -184,7 +184,7 @@ die_if_kernel(char * str, struct pt_regs *regs, long err, unsigned long *r9_15)
 #ifdef CONFIG_SMP
 	printk("CPU %d ", hard_smp_processor_id());
 #endif
-	printk("%s(%d[#%u]): %s %ld\n", current->comm,
+	printk("%s(%d:#%u): %s %ld\n", current->comm,
 		task_pid_nr(current), current->xid, str, err);
 	dik_show_regs(regs, r9_15);
 	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);

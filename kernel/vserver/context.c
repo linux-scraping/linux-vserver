@@ -70,7 +70,7 @@ static DEFINE_SPINLOCK(vx_info_inactive_lock);
 	* allocate an initialized vx_info struct
 	* doesn't make it visible (hash)			*/
 
-static struct vx_info *__alloc_vx_info(xid_t xid)
+static struct vx_info *__alloc_vx_info(vxid_t xid)
 {
 	struct vx_info *new = NULL;
 	int cpu, index;
@@ -269,7 +269,7 @@ static struct hlist_head vx_info_hash[VX_HASH_SIZE] =
 static DEFINE_SPINLOCK(vx_info_hash_lock);
 
 
-static inline unsigned int __hashval(xid_t xid)
+static inline unsigned int __hashval(vxid_t xid)
 {
 	return (xid % VX_HASH_SIZE);
 }
@@ -333,7 +333,7 @@ static inline void __unhash_vx_info(struct vx_info *vxi)
 	* requires the hash_lock to be held
 	* doesn't increment the vx_refcnt			*/
 
-static inline struct vx_info *__lookup_vx_info(xid_t xid)
+static inline struct vx_info *__lookup_vx_info(vxid_t xid)
 {
 	struct hlist_head *head = &vx_info_hash[__hashval(xid)];
 	struct hlist_node *pos;
@@ -435,7 +435,7 @@ struct vx_info *lookup_vx_info(int id)
 
 	* verify that xid is still hashed			*/
 
-int xid_is_hashed(xid_t xid)
+int xid_is_hashed(vxid_t xid)
 {
 	int hashed;
 
@@ -790,7 +790,7 @@ void	exit_vx_info_early(struct task_struct *p, int code)
 
 int vc_task_xid(uint32_t id)
 {
-	xid_t xid;
+	vxid_t xid;
 
 	if (id) {
 		struct task_struct *tsk;

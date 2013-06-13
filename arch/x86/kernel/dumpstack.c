@@ -188,8 +188,8 @@ void dump_stack(void)
 	unsigned long stack;
 
 	bp = stack_frame(current, NULL);
-	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
-		current->pid, current->comm, print_tainted(),
+	printk("Pid: %d:#%u, comm: %.20s %s %s %.*s\n",
+		current->pid, current->xid, current->comm, print_tainted(),
 		init_utsname()->release,
 		(int)strcspn(init_utsname()->version, " "),
 		init_utsname()->version);

@@ -339,7 +339,7 @@ static void __dx_parse_remove(char *string, char *opt)
 	}
 }
 
-int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
+int dx_parse_tag(char *string, vtag_t *tag, int remove, int *mnt_flags,
 		 unsigned long *flags)
 {
 	int set = 0;
@@ -406,7 +406,7 @@ int dx_parse_tag(char *string, tag_t *tag, int remove, int *mnt_flags,
 
 void __dx_propagate_tag(struct nameidata *nd, struct inode *inode)
 {
-	tag_t new_tag = 0;
+	vtag_t new_tag = 0;
 	struct vfsmount *mnt;
 	int propagate;
 

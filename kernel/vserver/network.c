@@ -116,7 +116,7 @@ static inline void __dealloc_nx_addr_v6_all(struct nx_addr_v6 *nxa)
 	* allocate an initialized nx_info struct
 	* doesn't make it visible (hash)			*/
 
-static struct nx_info *__alloc_nx_info(nid_t nid)
+static struct nx_info *__alloc_nx_info(vnid_t nid)
 {
 	struct nx_info *new = NULL;
 
@@ -217,7 +217,7 @@ struct hlist_head nx_info_hash[NX_HASH_SIZE];
 static DEFINE_SPINLOCK(nx_info_hash_lock);
 
 
-static inline unsigned int __hashval(nid_t nid)
+static inline unsigned int __hashval(vnid_t nid)
 {
 	return (nid % NX_HASH_SIZE);
 }
@@ -274,7 +274,7 @@ static inline void __unhash_nx_info(struct nx_info *nxi)
 	* requires the hash_lock to be held
 	* doesn't increment the nx_refcnt			*/
 
-static inline struct nx_info *__lookup_nx_info(nid_t nid)
+static inline struct nx_info *__lookup_nx_info(vnid_t nid)
 {
 	struct hlist_head *head = &nx_info_hash[__hashval(nid)];
 	struct hlist_node *pos;
@@ -374,7 +374,7 @@ struct nx_info *lookup_nx_info(int id)
 
 	* verify that nid is still hashed			*/
 
-int nid_is_hashed(nid_t nid)
+int nid_is_hashed(vnid_t nid)
 {
 	int hashed;
 
@@ -518,7 +518,7 @@ void nx_update_persistent(struct nx_info *nxi)
 
 int vc_task_nid(uint32_t id)
 {
-	nid_t nid;
+	vnid_t nid;
 
 	if (id) {
 		struct task_struct *tsk;
