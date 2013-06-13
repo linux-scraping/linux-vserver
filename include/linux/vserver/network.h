@@ -29,7 +29,7 @@ struct nx_addr_v6 {
 
 struct nx_info {
 	struct hlist_node nx_hlist;	/* linked list of nxinfos */
-	nid_t nx_id;			/* vnet id */
+	vnid_t nx_id;			/* vnet id */
 	atomic_t nx_usecnt;		/* usage count */
 	atomic_t nx_tasks;		/* tasks count */
 	int nx_state;			/* context state */
@@ -57,7 +57,7 @@ struct nx_info {
 extern struct nx_info *lookup_nx_info(int);
 
 extern int get_nid_list(int, unsigned int *, int);
-extern int nid_is_hashed(nid_t);
+extern int nid_is_hashed(vnid_t);
 
 extern int nx_migrate_task(struct task_struct *, struct nx_info *);
 

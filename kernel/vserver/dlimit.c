@@ -27,7 +27,7 @@
 	* allocate an initialized dl_info struct
 	* doesn't make it visible (hash)			*/
 
-static struct dl_info *__alloc_dl_info(struct super_block *sb, tag_t tag)
+static struct dl_info *__alloc_dl_info(struct super_block *sb, vtag_t tag)
 {
 	struct dl_info *new = NULL;
 
@@ -84,7 +84,7 @@ struct hlist_head dl_info_hash[DL_HASH_SIZE];
 static DEFINE_SPINLOCK(dl_info_hash_lock);
 
 
-static inline unsigned int __hashval(struct super_block *sb, tag_t tag)
+static inline unsigned int __hashval(struct super_block *sb, vtag_t tag)
 {
 	return ((tag ^ (unsigned long)sb) % DL_HASH_SIZE);
 }
@@ -126,7 +126,7 @@ static inline void __unhash_dl_info(struct dl_info *dli)
 	* requires the rcu_read_lock()
 	* doesn't increment the dl_refcnt			*/
 
-static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag)
+static inline struct dl_info *__lookup_dl_info(struct super_block *sb, vtag_t tag)
 {
 	struct hlist_head *head = &dl_info_hash[__hashval(sb, tag)];
 	struct dl_info *dli;
@@ -139,7 +139,7 @@ static inline struct dl_info *__lookup_dl_info(struct super_block *sb, tag_t tag
 }
 
 
-struct dl_info *locate_dl_info(struct super_block *sb, tag_t tag)
+struct dl_info *locate_dl_info(struct super_block *sb, vtag_t tag)
 {
 	struct dl_info *dli;
 

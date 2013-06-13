@@ -16,7 +16,7 @@ struct kern_ipc_perm
 	key_t		key;
 	kuid_t		uid;
 	kgid_t		gid;
-	xid_t		xid;
+	vxid_t		xid;
 	kuid_t		cuid;
 	kgid_t		cgid;
 	umode_t		mode; 

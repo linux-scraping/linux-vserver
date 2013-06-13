@@ -42,7 +42,7 @@ static int devpts_permission(struct inode *inode, int mask)
 	int ret = -EACCES;
 
 	/* devpts is xid tagged */
-	if (vx_check((xid_t)i_tag_read(inode), VS_WATCH_P | VS_IDENT))
+	if (vx_check((vxid_t)i_tag_read(inode), VS_WATCH_P | VS_IDENT))
 		ret = generic_permission(inode, mask);
 	return ret;
 }
@@ -363,11 +363,11 @@ static int devpts_show_options(struct seq_file *seq, struct dentry *root)
 
 static int devpts_filter(struct dentry *de)
 {
-	xid_t xid = 0;
+	vxid_t xid = 0;
 
 	/* devpts is xid tagged */
 	if (de && de->d_inode)
-		xid = (xid_t)i_tag_read(de->d_inode);
+		xid = (vxid_t)i_tag_read(de->d_inode);
 #ifdef CONFIG_VSERVER_WARN_DEVPTS
 	else
 		vxwprintk_task(1, "devpts " VS_Q("%.*s") " without inode.",
@@ -435,7 +435,7 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	inode->i_fop = &devpts_dir_operations;
 	set_nlink(inode, 2);
 	/* devpts is xid tagged */
-	i_tag_write(inode, (tag_t)vx_current_xid());
+	i_tag_write(inode, (vtag_t)vx_current_xid());
 
 	s->s_root = d_make_root(inode);
 	if (s->s_root)
@@ -639,7 +639,7 @@ struct inode *devpts_pty_new(struct inode *ptmx_inode, dev_t device, int index,
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	init_special_inode(inode, S_IFCHR|opts->mode, device);
 	/* devpts is xid tagged */
-	i_tag_write(inode, (tag_t)vx_current_xid());
+	i_tag_write(inode, (vtag_t)vx_current_xid());
 	inode->i_op = &devpts_file_inode_operations;
 	inode->i_private = priv;
 

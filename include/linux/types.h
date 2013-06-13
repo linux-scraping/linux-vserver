@@ -32,9 +32,9 @@ typedef __kernel_uid32_t	uid_t;
 typedef __kernel_gid32_t	gid_t;
 typedef __kernel_uid16_t        uid16_t;
 typedef __kernel_gid16_t        gid16_t;
-typedef unsigned int		xid_t;
-typedef unsigned int		nid_t;
-typedef unsigned int		tag_t;
+typedef unsigned int		vxid_t;
+typedef unsigned int		vnid_t;
+typedef unsigned int		vtag_t;
 
 typedef unsigned long		uintptr_t;
 

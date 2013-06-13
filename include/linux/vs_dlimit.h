@@ -46,7 +46,7 @@ static inline void __put_dl_info(struct dl_info *dli,
 #define __dlimit_char(d)	((d) ? '*' : ' ')
 
 static inline int __dl_alloc_space(struct super_block *sb,
-	tag_t tag, dlsize_t nr, const char *file, int line)
+	vtag_t tag, dlsize_t nr, const char *file, int line)
 {
 	struct dl_info *dli = NULL;
 	int ret = 0;
@@ -72,7 +72,7 @@ out:
 }
 
 static inline void __dl_free_space(struct super_block *sb,
-	tag_t tag, dlsize_t nr, const char *_file, int _line)
+	vtag_t tag, dlsize_t nr, const char *_file, int _line)
 {
 	struct dl_info *dli = NULL;
 
@@ -97,7 +97,7 @@ out:
 }
 
 static inline int __dl_alloc_inode(struct super_block *sb,
-	tag_t tag, const char *_file, int _line)
+	vtag_t tag, const char *_file, int _line)
 {
 	struct dl_info *dli;
 	int ret = 0;
@@ -119,7 +119,7 @@ out:
 }
 
 static inline void __dl_free_inode(struct super_block *sb,
-	tag_t tag, const char *_file, int _line)
+	vtag_t tag, const char *_file, int _line)
 {
 	struct dl_info *dli;
 
@@ -140,7 +140,7 @@ out:
 		sb, tag, __dlimit_char(dli), _file, _line);
 }
 
-static inline void __dl_adjust_block(struct super_block *sb, tag_t tag,
+static inline void __dl_adjust_block(struct super_block *sb, vtag_t tag,
 	unsigned long long *free_blocks, unsigned long long *root_blocks,
 	const char *_file, int _line)
 {

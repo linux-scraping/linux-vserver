@@ -291,7 +291,7 @@ static int __dx_permission(const struct inode *inode, int mask)
 	if (inode->i_sb->s_magic == DEVPTS_SUPER_MAGIC) {
 		/* devpts is xid tagged */
 		if (S_ISDIR(inode->i_mode) ||
-		    vx_check((xid_t)i_tag_read(inode), VS_IDENT | VS_WATCH_P))
+		    vx_check((vxid_t)i_tag_read(inode), VS_IDENT | VS_WATCH_P))
 			return 0;
 
 		/* just pretend we didn't find anything */
@@ -333,7 +333,7 @@ static int __dx_permission(const struct inode *inode, int mask)
 	}
 	else {
 		if (dx_notagcheck(inode->i_sb) ||
-		    dx_check((xid_t)i_tag_read(inode),
+		    dx_check((vxid_t)i_tag_read(inode),
 			DX_HOSTID | DX_ADMIN | DX_WATCH | DX_IDENT))
 			return 0;
 	}

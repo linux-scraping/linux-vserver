@@ -1402,9 +1402,9 @@ struct task_struct {
 	struct vx_info *vx_info;
 	struct nx_info *nx_info;
 
-	xid_t xid;
-	nid_t nid;
-	tag_t tag;
+	vxid_t xid;
+	vnid_t nid;
+	vtag_t tag;
 
 /* Thread group tracking */
    	u32 parent_exec_id;

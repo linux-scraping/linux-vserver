@@ -191,9 +191,9 @@ struct sock_common {
 #ifdef CONFIG_NET_NS
 	struct net	 	*skc_net;
 #endif
-	xid_t			skc_xid;
+	vxid_t			skc_xid;
 	struct vx_info		*skc_vx_info;
-	nid_t			skc_nid;
+	vnid_t			skc_nid;
 	struct nx_info		*skc_nx_info;
 	/*
 	 * fields between dontcopy_begin/dontcopy_end

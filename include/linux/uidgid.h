@@ -28,7 +28,7 @@ typedef struct {
 } kgid_t;
 
 typedef struct {
-	tag_t val;
+	vtag_t val;
 } ktag_t;
 
 #define KUIDT_INIT(value) (kuid_t){ value }
@@ -45,7 +45,7 @@ static inline gid_t __kgid_val(kgid_t gid)
 	return gid.val;
 }
 
-static inline tag_t __ktag_val(ktag_t tag)
+static inline vtag_t __ktag_val(ktag_t tag)
 {
 	return tag.val;
 }
@@ -54,7 +54,7 @@ static inline tag_t __ktag_val(ktag_t tag)
 
 typedef uid_t kuid_t;
 typedef gid_t kgid_t;
-typedef tag_t ktag_t;
+typedef vtag_t ktag_t;
 
 static inline uid_t __kuid_val(kuid_t uid)
 {
@@ -66,7 +66,7 @@ static inline gid_t __kgid_val(kgid_t gid)
 	return gid;
 }
 
-static inline tag_t __ktag_val(ktag_t tag)
+static inline vtag_t __ktag_val(ktag_t tag)
 {
 	return tag;
 }
@@ -163,7 +163,7 @@ extern krag_t make_ktag(struct user_namespace *from, gid_t gid);
 
 extern uid_t from_kuid(struct user_namespace *to, kuid_t uid);
 extern gid_t from_kgid(struct user_namespace *to, kgid_t gid);
-extern tag_t from_ktag(struct user_namespace *to, ktag_t tag);
+extern vtag_t from_ktag(struct user_namespace *to, ktag_t tag);
 
 extern uid_t from_kuid_munged(struct user_namespace *to, kuid_t uid);
 extern gid_t from_kgid_munged(struct user_namespace *to, kgid_t gid);
@@ -190,7 +190,7 @@ static inline kgid_t make_kgid(struct user_namespace *from, gid_t gid)
 	return KGIDT_INIT(gid);
 }
 
-static inline ktag_t make_ktag(struct user_namespace *from, tag_t tag)
+static inline ktag_t make_ktag(struct user_namespace *from, vtag_t tag)
 {
 	return KTAGT_INIT(tag);
 }
@@ -205,7 +205,7 @@ static inline gid_t from_kgid(struct user_namespace *to, kgid_t kgid)
 	return __kgid_val(kgid);
 }
 
-static inline tag_t from_ktag(struct user_namespace *to, ktag_t ktag)
+static inline vtag_t from_ktag(struct user_namespace *to, ktag_t ktag)
 {
 	return __ktag_val(ktag);
 }

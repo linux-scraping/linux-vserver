@@ -1665,7 +1665,7 @@ static int do_change_type(struct path *path, int flag)
  * do loopback mount.
  */
 static int do_loopback(struct path *path, const char *old_name,
-	tag_t tag, unsigned long flags, int mnt_flags)
+	vtag_t tag, unsigned long flags, int mnt_flags)
 {
 	LIST_HEAD(umount_list);
 	struct path old_path;
@@ -1746,7 +1746,7 @@ static int change_mount_flags(struct vfsmount *mnt, int ms_flags)
  * on it - tough luck.
  */
 static int do_remount(struct path *path, int flags, int mnt_flags,
-	void *data, xid_t xid)
+	void *data, vxid_t xid)
 {
 	int err;
 	struct super_block *sb = path->mnt->mnt_sb;
@@ -2230,7 +2230,7 @@ long do_mount(const char *dev_name, const char *dir_name,
 	struct path path;
 	int retval = 0;
 	int mnt_flags = 0;
-	tag_t tag = 0;
+	vtag_t tag = 0;
 
 	/* Discard magic */
 	if ((flags & MS_MGC_MSK) == MS_MGC_VAL)

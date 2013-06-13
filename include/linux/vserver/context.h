@@ -29,7 +29,7 @@ struct _vx_space {
 
 struct vx_info {
 	struct hlist_node vx_hlist;		/* linked list of contexts */
-	xid_t vx_id;				/* context id */
+	vxid_t vx_id;				/* context id */
 	atomic_t vx_usecnt;			/* usage count */
 	atomic_t vx_tasks;			/* tasks count */
 	struct vx_info *vx_parent;		/* parent context */
@@ -80,7 +80,7 @@ struct vx_info {
 
 struct vx_info_save {
 	struct vx_info *vxi;
-	xid_t xid;
+	vxid_t xid;
 };
 
 
@@ -100,7 +100,7 @@ extern struct vx_info *lookup_vx_info(int);
 extern struct vx_info *lookup_or_create_vx_info(int);
 
 extern int get_xid_list(int, unsigned int *, int);
-extern int xid_is_hashed(xid_t);
+extern int xid_is_hashed(vxid_t);
 
 extern int vx_migrate_task(struct task_struct *, struct vx_info *, int);
 
