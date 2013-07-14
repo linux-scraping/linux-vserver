@@ -71,6 +71,7 @@
 #include <net/sock.h>
 
 #include <asm/uaccess.h>
+#include <net/flow_keys.h>
 
 /* Uncomment to enable debugging */
 /* #define TUN_DEBUG 1 */
@@ -1054,6 +1055,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	bool zerocopy = false;
 	int err;
 	u32 rxhash;
+	struct flow_keys keys;
 
 	if (!(tun->flags & TUN_NO_PI)) {
 		if ((len -= sizeof(pi)) > total_len)
@@ -1208,6 +1210,14 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	}
 
 	skb_reset_network_header(skb);
+
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		skb_set_transport_header(skb, skb_checksum_start_offset(skb));
+	else if (skb_flow_dissect(skb, &keys))
+		skb_set_transport_header(skb, keys.thoff);
+	else
+		skb_reset_transport_header(skb);
+
 	rxhash = skb_get_rxhash(skb);
 	netif_rx_ni(skb);
 
@@ -1589,6 +1599,10 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		else
 			return -EINVAL;
 
+		if (!!(ifr->ifr_flags & IFF_MULTI_QUEUE) !=
+		    !!(tun->flags & TUN_TAP_MQ))
+			return -EINVAL;
+
 		if (tun_not_capable(tun))
 			return -EPERM;
 		err = security_tun_dev_open(tun->security);
@@ -1603,8 +1617,12 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 			return err;
 
 		if (tun->flags & TUN_TAP_MQ &&
-		    (tun->numqueues + tun->numdisabled > 1))
-			return -EBUSY;
+		    (tun->numqueues + tun->numdisabled > 1)) {
+			/* One or more queue has already been attached, no need
+			 * to initialize the device again.
+			 */
+			return 0;
+		}
 	}
 	else {
 		char *name;
@@ -2166,6 +2184,8 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 	file->private_data = tfile;
 	set_bit(SOCK_EXTERNALLY_ALLOCATED, &tfile->socket.flags);
 	INIT_LIST_HEAD(&tfile->next);
+
+	sock_set_flag(&tfile->sk, SOCK_ZEROCOPY);
 
 	return 0;
 }
