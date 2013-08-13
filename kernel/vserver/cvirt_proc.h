@@ -59,7 +59,7 @@ skip_uts:
 	length += sprintf(buffer + length,
 		"SEMS:\t\t%d %d %d %d  %d\n"
 		"MSG:\t\t%d %d %d\n"
-		"SHM:\t\t%lu %lu  %d %d\n",
+		"SHM:\t\t%lu %lu  %d %ld\n",
 		ipc->sem_ctls[0], ipc->sem_ctls[1],
 		ipc->sem_ctls[2], ipc->sem_ctls[3],
 		ipc->used_sems,
