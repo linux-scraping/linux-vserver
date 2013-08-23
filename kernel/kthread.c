@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/freezer.h>
 #include <linux/ptrace.h>
+#include <linux/uaccess.h>
 #include <linux/vs_pid.h>
 #include <trace/events/sched.h>
 
@@ -53,8 +54,21 @@ enum KTHREAD_BITS {
 	KTHREAD_IS_PARKED,
 };
 
-#define to_kthread(tsk)	\
-	container_of((tsk)->vfork_done, struct kthread, exited)
+#define __to_kthread(vfork)	\
+	container_of(vfork, struct kthread, exited)
+
+static inline struct kthread *to_kthread(struct task_struct *k)
+{
+	return __to_kthread(k->vfork_done);
+}
+
+static struct kthread *to_live_kthread(struct task_struct *k)
+{
+	struct completion *vfork = ACCESS_ONCE(k->vfork_done);
+	if (likely(vfork))
+		return __to_kthread(vfork);
+	return NULL;
+}
 
 /**
  * kthread_should_stop - should this kthread return now?
@@ -121,6 +135,24 @@ EXPORT_SYMBOL_GPL(kthread_freezable_should_stop);
 void *kthread_data(struct task_struct *task)
 {
 	return to_kthread(task)->data;
+}
+
+/**
+ * probe_kthread_data - speculative version of kthread_data()
+ * @task: possible kthread task in question
+ *
+ * @task could be a kthread task.  Return the data value specified when it
+ * was created if accessible.  If @task isn't a kthread task or its data is
+ * inaccessible for any reason, %NULL is returned.  This function requires
+ * that @task itself is safe to dereference.
+ */
+void *probe_kthread_data(struct task_struct *task)
+{
+	struct kthread *kthread = to_kthread(task);
+	void *data = NULL;
+
+	probe_kernel_read(&data, &kthread->data, sizeof(data));
+	return data;
 }
 
 static void __kthread_parkme(struct kthread *self)
@@ -266,7 +298,7 @@ static void __kthread_bind(struct task_struct *p, unsigned int cpu, long state)
 	}
 	/* It's safe because the task is inactive. */
 	do_set_cpus_allowed(p, cpumask_of(cpu));
-	p->flags |= PF_THREAD_BOUND;
+	p->flags |= PF_NO_SETAFFINITY;
 }
 
 /**
@@ -312,19 +344,6 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 	return p;
 }
 
-static struct kthread *task_get_live_kthread(struct task_struct *k)
-{
-	struct kthread *kthread;
-
-	get_task_struct(k);
-	kthread = to_kthread(k);
-	/* It might have exited */
-	barrier();
-	if (k->vfork_done != NULL)
-		return kthread;
-	return NULL;
-}
-
 static void __kthread_unpark(struct task_struct *k, struct kthread *kthread)
 {
 	clear_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
@@ -351,11 +370,10 @@ static void __kthread_unpark(struct task_struct *k, struct kthread *kthread)
  */
 void kthread_unpark(struct task_struct *k)
 {
-	struct kthread *kthread = task_get_live_kthread(k);
+	struct kthread *kthread = to_live_kthread(k);
 
 	if (kthread)
 		__kthread_unpark(k, kthread);
-	put_task_struct(k);
 }
 
 /**
@@ -372,7 +390,7 @@ void kthread_unpark(struct task_struct *k)
  */
 int kthread_park(struct task_struct *k)
 {
-	struct kthread *kthread = task_get_live_kthread(k);
+	struct kthread *kthread = to_live_kthread(k);
 	int ret = -ENOSYS;
 
 	if (kthread) {
@@ -385,7 +403,6 @@ int kthread_park(struct task_struct *k)
 		}
 		ret = 0;
 	}
-	put_task_struct(k);
 	return ret;
 }
 
@@ -406,10 +423,13 @@ int kthread_park(struct task_struct *k)
  */
 int kthread_stop(struct task_struct *k)
 {
-	struct kthread *kthread = task_get_live_kthread(k);
+	struct kthread *kthread;
 	int ret;
 
 	trace_sched_kthread_stop(k);
+
+	get_task_struct(k);
+	kthread = to_live_kthread(k);
 	if (kthread) {
 		set_bit(KTHREAD_SHOULD_STOP, &kthread->flags);
 		__kthread_unpark(k, kthread);
@@ -417,10 +437,9 @@ int kthread_stop(struct task_struct *k)
 		wait_for_completion(&kthread->exited);
 	}
 	ret = k->exit_code;
-
 	put_task_struct(k);
-	trace_sched_kthread_stop_ret(ret);
 
+	trace_sched_kthread_stop_ret(ret);
 	return ret;
 }
 EXPORT_SYMBOL(kthread_stop);

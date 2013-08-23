@@ -610,7 +610,7 @@ static int davinci_spi_bufs(struct spi_device *spi, struct spi_transfer *t)
 		else
 			buf = (void *)t->tx_buf;
 		t->tx_dma = dma_map_single(&spi->dev, buf,
-				t->len, DMA_FROM_DEVICE);
+				t->len, DMA_TO_DEVICE);
 		if (!t->tx_dma) {
 			ret = -EFAULT;
 			goto err_tx_map;
@@ -776,15 +776,15 @@ rx_dma_failed:
 #if defined(CONFIG_OF)
 static const struct of_device_id davinci_spi_of_match[] = {
 	{
-		.compatible = "ti,dm644x-spi",
+		.compatible = "ti,dm6441-spi",
 	},
 	{
-		.compatible = "ti,da8xx-spi",
+		.compatible = "ti,da830-spi",
 		.data = (void *)SPI_VERSION_2,
 	},
 	{ },
 };
-MODULE_DEVICE_TABLE(of, davini_spi_of_match);
+MODULE_DEVICE_TABLE(of, davinci_spi_of_match);
 
 /**
  * spi_davinci_get_pdata - Get platform data from DTS binding

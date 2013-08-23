@@ -162,7 +162,7 @@ static unsigned int arc_serial_tx_empty(struct uart_port *port)
 /*
  * Driver internal routine, used by both tty(serial core) as well as tx-isr
  *  -Called under spinlock in either cases
- *  -also tty->stopped / tty->hw_stopped has already been checked
+ *  -also tty->stopped has already been checked
  *     = by uart_start( ) before calling us
  *     = tx_ist checks that too before calling
  */
@@ -773,6 +773,6 @@ module_init(arc_serial_init);
 module_exit(arc_serial_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("plat-arcfpga/uart");
+MODULE_ALIAS("platform:" DRIVER_NAME);
 MODULE_AUTHOR("Vineet Gupta");
 MODULE_DESCRIPTION("ARC(Synopsys) On-Chip(fpga) serial driver");

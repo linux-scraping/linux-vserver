@@ -27,6 +27,7 @@
 #include <linux/namei.h>
 #include <linux/log2.h>
 #include <linux/cleancache.h>
+#include <linux/aio.h>
 #include <linux/vs_device.h>
 #include <asm/uaccess.h>
 #include "internal.h"
@@ -58,17 +59,24 @@ static void bdev_inode_switch_bdi(struct inode *inode,
 			struct backing_dev_info *dst)
 {
 	struct backing_dev_info *old = inode->i_data.backing_dev_info;
+	bool wakeup_bdi = false;
 
 	if (unlikely(dst == old))		/* deadlock avoidance */
 		return;
 	bdi_lock_two(&old->wb, &dst->wb);
 	spin_lock(&inode->i_lock);
 	inode->i_data.backing_dev_info = dst;
-	if (inode->i_state & I_DIRTY)
+	if (inode->i_state & I_DIRTY) {
+		if (bdi_cap_writeback_dirty(dst) && !wb_has_dirty_io(&dst->wb))
+			wakeup_bdi = true;
 		list_move(&inode->i_wb_list, &dst->wb.b_dirty);
+	}
 	spin_unlock(&inode->i_lock);
 	spin_unlock(&old->wb.list_lock);
 	spin_unlock(&dst->wb.list_lock);
+
+	if (wakeup_bdi)
+		bdi_wakeup_thread_delayed(dst);
 }
 
 /* Kill _all_ buffers and pagecache , dirty or not.. */
@@ -624,11 +632,9 @@ void bd_forget(struct inode *inode)
 	struct block_device *bdev = NULL;
 
 	spin_lock(&bdev_lock);
-	if (inode->i_bdev) {
-		if (!sb_is_blkdev_sb(inode->i_sb))
-			bdev = inode->i_bdev;
-		__bd_forget(inode);
-	}
+	if (!sb_is_blkdev_sb(inode->i_sb))
+		bdev = inode->i_bdev;
+	__bd_forget(inode);
 	spin_unlock(&bdev_lock);
 
 	if (bdev)
@@ -1054,7 +1060,7 @@ void bd_set_size(struct block_device *bdev, loff_t size)
 }
 EXPORT_SYMBOL(bd_set_size);
 
-static int __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part);
+static void __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part);
 
 /*
  * bd_mutex locking:
@@ -1409,9 +1415,8 @@ static int blkdev_open(struct inode * inode, struct file * filp)
 	return blkdev_get(bdev, filp->f_mode, filp);
 }
 
-static int __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
+static void __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
 {
-	int ret = 0;
 	struct gendisk *disk = bdev->bd_disk;
 	struct block_device *victim = NULL;
 
@@ -1431,7 +1436,7 @@ static int __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
 	}
 	if (bdev->bd_contains == bdev) {
 		if (disk->fops->release)
-			ret = disk->fops->release(disk, mode);
+			disk->fops->release(disk, mode);
 	}
 	if (!bdev->bd_openers) {
 		struct module *owner = disk->fops->owner;
@@ -1450,10 +1455,9 @@ static int __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
 	bdput(bdev);
 	if (victim)
 		__blkdev_put(victim, mode, 1);
-	return ret;
 }
 
-int blkdev_put(struct block_device *bdev, fmode_t mode)
+void blkdev_put(struct block_device *bdev, fmode_t mode)
 {
 	mutex_lock(&bdev->bd_mutex);
 
@@ -1497,15 +1501,15 @@ int blkdev_put(struct block_device *bdev, fmode_t mode)
 
 	mutex_unlock(&bdev->bd_mutex);
 
-	return __blkdev_put(bdev, mode, 0);
+	__blkdev_put(bdev, mode, 0);
 }
 EXPORT_SYMBOL(blkdev_put);
 
 static int blkdev_close(struct inode * inode, struct file * filp)
 {
 	struct block_device *bdev = I_BDEV(filp->f_mapping->host);
-
-	return blkdev_put(bdev, filp->f_mode);
+	blkdev_put(bdev, filp->f_mode);
+	return 0;
 }
 
 static long block_ioctl(struct file *file, unsigned cmd, unsigned long arg)
@@ -1566,7 +1570,7 @@ static ssize_t blkdev_aio_read(struct kiocb *iocb, const struct iovec *iov,
 		return 0;
 
 	size -= pos;
-	if (size < INT_MAX)
+	if (size < iocb->ki_left)
 		nr_segs = iov_shorten((struct iovec *)iov, nr_segs, size);
 	return generic_file_aio_read(iocb, iov, nr_segs, pos);
 }

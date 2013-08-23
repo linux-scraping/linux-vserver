@@ -343,7 +343,7 @@ out:
 	return ret;
 }
 
-static int dm_blk_close(struct gendisk *disk, fmode_t mode)
+static void dm_blk_close(struct gendisk *disk, fmode_t mode)
 {
 	struct mapped_device *md = disk->private_data;
 
@@ -353,8 +353,6 @@ static int dm_blk_close(struct gendisk *disk, fmode_t mode)
 	dm_put(md);
 
 	spin_unlock(&_minor_lock);
-
-	return 0;
 }
 
 int dm_open_count(struct mapped_device *md)
@@ -392,10 +390,12 @@ static int dm_blk_ioctl(struct block_device *bdev, fmode_t mode,
 			unsigned int cmd, unsigned long arg)
 {
 	struct mapped_device *md = bdev->bd_disk->private_data;
-	struct dm_table *map = dm_get_live_table(md);
+	struct dm_table *map;
 	struct dm_target *tgt;
 	int r = -ENOTTY;
 
+retry:
+	map = dm_get_live_table(md);
 	if (!map || !dm_table_get_size(map))
 		goto out;
 
@@ -415,6 +415,11 @@ static int dm_blk_ioctl(struct block_device *bdev, fmode_t mode,
 
 out:
 	dm_table_put(map);
+
+	if (r == -ENOTCONN) {
+		msleep(10);
+		goto retry;
+	}
 
 	return r;
 }

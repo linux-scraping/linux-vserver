@@ -24,6 +24,7 @@ endif
 
 obj-y += sched/
 obj-y += power/
+obj-y += cpu/
 obj-y += vserver/
 
 obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o

@@ -20,17 +20,29 @@ char vshelper_path[255] = "/sbin/vshelper";
 
 static int vshelper_init(struct subprocess_info *info, struct cred *new_cred)
 {
-	current->flags &= ~PF_THREAD_BOUND;
+	current->flags &= ~PF_NO_SETAFFINITY;
 	return 0;
+}
+
+static int vs_call_usermodehelper(char *path, char **argv, char **envp, int wait)
+{
+	struct subprocess_info *info;
+	gfp_t gfp_mask = (wait == UMH_NO_WAIT) ? GFP_ATOMIC : GFP_KERNEL;
+
+	info = call_usermodehelper_setup(path, argv, envp, gfp_mask,
+					 vshelper_init, NULL, NULL);
+	if (info == NULL)
+		return -ENOMEM;
+
+	return call_usermodehelper_exec(info, wait);
 }
 
 static int do_vshelper(char *name, char *argv[], char *envp[], int sync)
 {
 	int ret;
 
-	if ((ret = call_usermodehelper_fns(name, argv, envp,
-		sync ? UMH_WAIT_PROC : UMH_WAIT_EXEC,
-		vshelper_init, NULL, NULL))) {
+	if ((ret = vs_call_usermodehelper(name, argv, envp,
+		sync ? UMH_WAIT_PROC : UMH_WAIT_EXEC))) {
 		printk(KERN_WARNING "%s: (%s %s) returned %s with %d\n",
 			name, argv[1], argv[2],
 			sync ? "sync" : "async", ret);

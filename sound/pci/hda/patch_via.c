@@ -634,10 +634,30 @@ static void via_set_jack_unsol_events(struct hda_codec *codec)
 	}
 }
 
+static const struct badness_table via_main_out_badness = {
+	.no_primary_dac = 0x10000,
+	.no_dac = 0x4000,
+	.shared_primary = 0x10000,
+	.shared_surr = 0x20,
+	.shared_clfe = 0x20,
+	.shared_surr_main = 0x20,
+};
+static const struct badness_table via_extra_out_badness = {
+	.no_primary_dac = 0x4000,
+	.no_dac = 0x4000,
+	.shared_primary = 0x12,
+	.shared_surr = 0x20,
+	.shared_clfe = 0x20,
+	.shared_surr_main = 0x10,
+};
+
 static int via_parse_auto_config(struct hda_codec *codec)
 {
 	struct via_spec *spec = codec->spec;
 	int err;
+
+	spec->gen.main_out_badness = &via_main_out_badness;
+	spec->gen.extra_out_badness = &via_extra_out_badness;
 
 	err = snd_hda_parse_pin_defcfg(codec, &spec->gen.autocfg, NULL, 0);
 	if (err < 0)
@@ -890,6 +910,8 @@ static const struct hda_verb vt1708S_init_verbs[] = {
 static void override_mic_boost(struct hda_codec *codec, hda_nid_t pin,
 			       int offset, int num_steps, int step_size)
 {
+	snd_hda_override_wcaps(codec, pin,
+			       get_wcaps(codec, pin) | AC_WCAP_IN_AMP);
 	snd_hda_override_amp_caps(codec, pin, HDA_INPUT,
 				  (offset << AC_AMPCAP_OFFSET_SHIFT) |
 				  (num_steps << AC_AMPCAP_NUM_STEPS_SHIFT) |

@@ -40,6 +40,8 @@
 #include "sched_proc.h"
 #include "vci_config.h"
 
+#include <../../fs/proc/internal.h>
+
 
 static inline char *print_cap_t(char *buffer, kernel_cap_t *c)
 {
@@ -315,7 +317,8 @@ out:
 
 /* Lookups */
 
-typedef struct dentry *instantiate_t(struct inode *, struct dentry *, int, void *);
+typedef struct dentry *vx_instantiate_t(struct inode *, struct dentry *, int, void *);
+
 
 /*
  * Fill a directory entry.
@@ -329,8 +332,8 @@ typedef struct dentry *instantiate_t(struct inode *, struct dentry *, int, void 
  * reported by readdir in sync with the inode numbers reported
  * by stat.
  */
-static int proc_fill_cache(struct file *filp, void *dirent, filldir_t filldir,
-	char *name, int len, instantiate_t instantiate, int id, void *ptr)
+static int vx_proc_fill_cache(struct file *filp, void *dirent, filldir_t filldir,
+	char *name, int len, vx_instantiate_t instantiate, int id, void *ptr)
 {
 	struct dentry *child, *dir = filp->f_dentry;
 	struct inode *inode;
@@ -633,7 +636,7 @@ static int proc_xid_readdir(struct file *filp,
 		if (index >= size)
 			goto out;
 		for (p += index; p->name; p++) {
-			if (proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
 				goto out;
 			pos++;
@@ -717,7 +720,7 @@ static int proc_nid_readdir(struct file *filp,
 		if (index >= size)
 			goto out;
 		for (p += index; p->name; p++) {
-			if (proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
 				goto out;
 			pos++;
@@ -873,7 +876,7 @@ int proc_virtual_readdir(struct file *filp,
 		if (index >= size)
 			goto entries;
 		for (p += index; p->name; p++) {
-			if (proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
 				vs_proc_instantiate, 0, p))
 				goto out;
 			pos++;
@@ -891,7 +894,7 @@ int proc_virtual_readdir(struct file *filp,
 				buf[--j] = '0' + (n % 10);
 			while (n /= 10);
 
-			if (proc_fill_cache(filp, dirent, filldir,
+			if (vx_proc_fill_cache(filp, dirent, filldir,
 				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, xid, p))
 				goto out;
@@ -959,7 +962,7 @@ int proc_virtnet_readdir(struct file *filp,
 		if (index >= size)
 			goto entries;
 		for (p += index; p->name; p++) {
-			if (proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
 				vs_proc_instantiate, 0, p))
 				goto out;
 			pos++;
@@ -977,7 +980,7 @@ int proc_virtnet_readdir(struct file *filp,
 				buf[--j] = '0' + (n % 10);
 			while (n /= 10);
 
-			if (proc_fill_cache(filp, dirent, filldir,
+			if (vx_proc_fill_cache(filp, dirent, filldir,
 				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, nid, p))
 				goto out;

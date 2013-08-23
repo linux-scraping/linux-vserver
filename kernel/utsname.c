@@ -15,7 +15,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
-#include <linux/proc_fs.h>
+#include <linux/proc_ns.h>
 #include <linux/vserver/global.h>
 
 static struct uts_namespace *create_uts_ns(void)

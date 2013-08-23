@@ -339,6 +339,13 @@ static void set_debug_reg_defaults(struct thread_struct *thread)
 
 static void prime_debug_regs(struct thread_struct *thread)
 {
+	/*
+	 * We could have inherited MSR_DE from userspace, since
+	 * it doesn't get cleared on exception entry.  Make sure
+	 * MSR_DE is clear before we enable any debug events.
+	 */
+	mtmsr(mfmsr() & ~MSR_DE);
+
 	mtspr(SPRN_IAC1, thread->iac1);
 	mtspr(SPRN_IAC2, thread->iac2);
 #if CONFIG_PPC_ADV_DEBUG_IACS > 2
@@ -593,6 +600,16 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	struct ppc64_tlb_batch *batch;
 #endif
 
+	/* Back up the TAR across context switches.
+	 * Note that the TAR is not available for use in the kernel.  (To
+	 * provide this, the TAR should be backed up/restored on exception
+	 * entry/exit instead, and be in pt_regs.  FIXME, this should be in
+	 * pt_regs anyway (for debug).)
+	 * Save the TAR here before we do treclaim/trecheckpoint as these
+	 * will change the TAR.
+	 */
+	save_tar(&prev->thread);
+
 	__switch_to_tm(prev);
 
 #ifdef CONFIG_SMP
@@ -832,6 +849,8 @@ void show_regs(struct pt_regs * regs)
 {
 	int i, trap;
 
+	show_regs_print_info(KERN_DEFAULT);
+
 	printk("NIP: "REG" LR: "REG" CTR: "REG"\n",
 	       regs->nip, regs->link, regs->ctr);
 	printk("REGS: %p TRAP: %04lx   %s  (%s)\n",
@@ -851,13 +870,6 @@ void show_regs(struct pt_regs * regs)
 #else
 		printk("DAR: "REG", DSISR: %08lx\n", regs->dar, regs->dsisr);
 #endif
-	printk("TASK = %p[%d:#%u] '%s' THREAD: %p",
-	       current, task_pid_nr(current), current->xid,
-	       current->comm, task_thread_info(current));
-
-#ifdef CONFIG_SMP
-	printk(" CPU: %d", raw_smp_processor_id());
-#endif /* CONFIG_SMP */
 
 	for (i = 0;  i < 32;  i++) {
 		if ((i % REGS_PER_LINE) == 0)
@@ -914,10 +926,6 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 	flush_altivec_to_thread(src);
 	flush_vsx_to_thread(src);
 	flush_spe_to_thread(src);
-#ifdef CONFIG_HAVE_HW_BREAKPOINT
-	flush_ptrace_hw_breakpoint(src);
-#endif /* CONFIG_HAVE_HW_BREAKPOINT */
-
 	*dst = *src;
 	return 0;
 }
@@ -981,12 +989,17 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	 * do some house keeping and then return from the fork or clone
 	 * system call, using the stack frame created above.
 	 */
+	((unsigned long *)sp)[0] = 0;
 	sp -= sizeof(struct pt_regs);
 	kregs = (struct pt_regs *) sp;
 	sp -= STACK_FRAME_OVERHEAD;
 	p->thread.ksp = sp;
 	p->thread.ksp_limit = (unsigned long)task_stack_page(p) +
 				_ALIGN_UP(sizeof(struct thread_info), 16);
+
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+	p->thread.ptrace_bps[0] = NULL;
+#endif
 
 #ifdef CONFIG_PPC_STD_MMU_64
 	if (mmu_has_feature(MMU_FTR_SLB)) {
@@ -1363,12 +1376,6 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 		sp = newsp;
 	} while (count++ < kstack_depth_to_print);
 }
-
-void dump_stack(void)
-{
-	show_stack(current, NULL);
-}
-EXPORT_SYMBOL(dump_stack);
 
 #ifdef CONFIG_PPC64
 /* Called with hard IRQs off */

@@ -150,6 +150,7 @@ config I2C_PIIX4
 	    ATI SB700/SP5100
 	    ATI SB800
 	    AMD Hudson-2
+	    AMD CZ
 	    Serverworks OSB4
 	    Serverworks CSB5
 	    Serverworks CSB6
@@ -363,7 +364,7 @@ config I2C_BLACKFIN_TWI_CLK_KHZ
 
 config I2C_CBUS_GPIO
 	tristate "CBUS I2C driver"
-	depends on GENERIC_GPIO
+	depends on GPIOLIB
 	help
 	  Support for CBUS access using I2C API. Mostly relevant for Nokia
 	  Internet Tablets (770, N800 and N810).
@@ -436,7 +437,7 @@ config I2C_EG20T
 
 config I2C_GPIO
 	tristate "GPIO-based bitbanging I2C"
-	depends on GENERIC_GPIO
+	depends on GPIOLIB
 	select I2C_ALGOBIT
 	help
 	  This is a very simple bitbanging I2C driver utilizing the

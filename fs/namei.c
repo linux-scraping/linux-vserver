@@ -35,6 +35,7 @@
 #include <linux/fs_struct.h>
 #include <linux/posix_acl.h>
 #include <linux/proc_fs.h>
+#include <linux/magic.h>
 #include <linux/vserver/inode.h>
 #include <linux/vs_base.h>
 #include <linux/vs_tag.h>
@@ -45,6 +46,7 @@
 #include <asm/uaccess.h>
 
 #include "internal.h"
+#include "proc/internal.h"
 #include "mount.h"
 
 /* [Feb-1997 T. Schoebel-Theuer]
@@ -2077,7 +2079,7 @@ static int path_lookupat(int dfd, const char *name,
 		err = complete_walk(nd);
 
 	if (!err && nd->flags & LOOKUP_DIRECTORY) {
-		if (!nd->inode->i_op->lookup) {
+		if (!can_lookup(nd->inode)) {
 			path_put(&nd->path);
 			err = -ENOTDIR;
 		}
@@ -2966,7 +2968,7 @@ finish_lookup:
 	if ((open_flag & O_CREAT) && S_ISDIR(nd->inode->i_mode))
 		goto out;
 	error = -ENOTDIR;
-	if ((nd->flags & LOOKUP_DIRECTORY) && !nd->inode->i_op->lookup)
+	if ((nd->flags & LOOKUP_DIRECTORY) && !can_lookup(nd->inode))
 		goto out;
 	audit_inode(name, nd->path.dentry, 0);
 finish_open:
@@ -4125,8 +4127,9 @@ static inline
 long do_cow_splice(struct file *in, struct file *out, size_t len)
 {
 	loff_t ppos = 0;
+	loff_t opos = 0;
 
-	return do_splice_direct(in, &ppos, out, len, 0);
+	return do_splice_direct(in, &ppos, out, &opos, len, 0);
 }
 
 struct dentry *cow_break_link(const char *pathname)

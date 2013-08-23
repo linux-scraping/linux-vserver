@@ -352,11 +352,7 @@ static void ax88179_status(struct usbnet *dev, struct urb *urb)
 	link = (((__force u32)event->intdata1) & AX_INT_PPLS_LINK) >> 16;
 
 	if (netif_carrier_ok(dev->net) != link) {
-		if (link)
-			usbnet_defer_kevent(dev, EVENT_LINK_RESET);
-		else
-			netif_carrier_off(dev->net);
-
+		usbnet_link_change(dev, link, 1);
 		netdev_info(dev->net, "ax88179 - Link status is: %d\n", link);
 	}
 }
@@ -455,7 +451,7 @@ static int ax88179_resume(struct usb_interface *intf)
 	u16 tmp16;
 	u8 tmp8;
 
-	netif_carrier_off(dev->net);
+	usbnet_link_change(dev, 0, 0);
 
 	/* Power up ethernet PHY */
 	tmp16 = 0;
@@ -1033,10 +1029,10 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	dev->mii.supports_gmii = 1;
 
 	dev->net->features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-			      NETIF_F_RXCSUM | NETIF_F_SG | NETIF_F_TSO;
+			      NETIF_F_RXCSUM;
 
 	dev->net->hw_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-				 NETIF_F_RXCSUM | NETIF_F_SG | NETIF_F_TSO;
+				 NETIF_F_RXCSUM;
 
 	/* Enable checksum offload */
 	*tmp = AX_RXCOE_IP | AX_RXCOE_TCP | AX_RXCOE_UDP |
@@ -1068,7 +1064,7 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	/* Restart autoneg */
 	mii_nway_restart(&dev->mii);
 
-	netif_carrier_off(dev->net);
+	usbnet_link_change(dev, 0, 0);
 
 	return 0;
 }
@@ -1177,7 +1173,6 @@ ax88179_tx_fixup(struct usbnet *dev, struct sk_buff *skb, gfp_t flags)
 	if (((skb->len + 8) % frame_size) == 0)
 		tx_hdr2 |= 0x80008000;	/* Enable padding */
 
-	skb_linearize(skb);
 	headroom = skb_headroom(skb);
 	tailroom = skb_tailroom(skb);
 
@@ -1321,10 +1316,10 @@ static int ax88179_reset(struct usbnet *dev)
 			  1, 1, tmp);
 
 	dev->net->features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-			      NETIF_F_RXCSUM | NETIF_F_SG | NETIF_F_TSO;
+			      NETIF_F_RXCSUM;
 
 	dev->net->hw_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-				 NETIF_F_RXCSUM | NETIF_F_SG | NETIF_F_TSO;
+				 NETIF_F_RXCSUM;
 
 	/* Enable checksum offload */
 	*tmp = AX_RXCOE_IP | AX_RXCOE_TCP | AX_RXCOE_UDP |
@@ -1356,7 +1351,7 @@ static int ax88179_reset(struct usbnet *dev)
 	/* Restart autoneg */
 	mii_nway_restart(&dev->mii);
 
-	netif_carrier_off(dev->net);
+	usbnet_link_change(dev, 0, 0);
 
 	return 0;
 }
