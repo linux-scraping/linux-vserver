@@ -26,6 +26,7 @@
 #include <linux/scatterlist.h>
 #include <linux/of.h>
 #include <linux/of_dma.h>
+#include <linux/err.h>
 
 #include "dmaengine.h"
 #define PL330_MAX_CHAN		8
@@ -2288,13 +2289,12 @@ static inline void fill_queue(struct dma_pl330_chan *pch)
 
 		/* If already submitted */
 		if (desc->status == BUSY)
-			break;
+			continue;
 
 		ret = pl330_submit_req(pch->pl330_chid,
 						&desc->req);
 		if (!ret) {
 			desc->status = BUSY;
-			break;
 		} else if (ret == -EAGAIN) {
 			/* QFull or DMAC Dying */
 			break;
@@ -2485,9 +2485,9 @@ static void pl330_free_chan_resources(struct dma_chan *chan)
 	struct dma_pl330_chan *pch = to_pchan(chan);
 	unsigned long flags;
 
-	spin_lock_irqsave(&pch->lock, flags);
-
 	tasklet_kill(&pch->task);
+
+	spin_lock_irqsave(&pch->lock, flags);
 
 	pl330_release_channel(pch->pl330_chid);
 	pch->pl330_chid = NULL;
@@ -2527,6 +2527,10 @@ static dma_cookie_t pl330_tx_submit(struct dma_async_tx_descriptor *tx)
 	/* Assign cookies to all nodes */
 	while (!list_empty(&last->node)) {
 		desc = list_entry(last->node.next, struct dma_pl330_desc, node);
+		if (pch->cyclic) {
+			desc->txd.callback = last->txd.callback;
+			desc->txd.callback_param = last->txd.callback_param;
+		}
 
 		dma_cookie_assign(&desc->txd);
 
@@ -2710,45 +2714,82 @@ static struct dma_async_tx_descriptor *pl330_prep_dma_cyclic(
 		size_t period_len, enum dma_transfer_direction direction,
 		unsigned long flags, void *context)
 {
-	struct dma_pl330_desc *desc;
+	struct dma_pl330_desc *desc = NULL, *first = NULL;
 	struct dma_pl330_chan *pch = to_pchan(chan);
+	struct dma_pl330_dmac *pdmac = pch->dmac;
+	unsigned int i;
 	dma_addr_t dst;
 	dma_addr_t src;
 
-	desc = pl330_get_desc(pch);
-	if (!desc) {
-		dev_err(pch->dmac->pif.dev, "%s:%d Unable to fetch desc\n",
-			__func__, __LINE__);
+	if (len % period_len != 0)
 		return NULL;
-	}
 
-	switch (direction) {
-	case DMA_MEM_TO_DEV:
-		desc->rqcfg.src_inc = 1;
-		desc->rqcfg.dst_inc = 0;
-		desc->req.rqtype = MEMTODEV;
-		src = dma_addr;
-		dst = pch->fifo_addr;
-		break;
-	case DMA_DEV_TO_MEM:
-		desc->rqcfg.src_inc = 0;
-		desc->rqcfg.dst_inc = 1;
-		desc->req.rqtype = DEVTOMEM;
-		src = pch->fifo_addr;
-		dst = dma_addr;
-		break;
-	default:
+	if (!is_slave_direction(direction)) {
 		dev_err(pch->dmac->pif.dev, "%s:%d Invalid dma direction\n",
 		__func__, __LINE__);
 		return NULL;
 	}
 
-	desc->rqcfg.brst_size = pch->burst_sz;
-	desc->rqcfg.brst_len = 1;
+	for (i = 0; i < len / period_len; i++) {
+		desc = pl330_get_desc(pch);
+		if (!desc) {
+			dev_err(pch->dmac->pif.dev, "%s:%d Unable to fetch desc\n",
+				__func__, __LINE__);
+
+			if (!first)
+				return NULL;
+
+			spin_lock_irqsave(&pdmac->pool_lock, flags);
+
+			while (!list_empty(&first->node)) {
+				desc = list_entry(first->node.next,
+						struct dma_pl330_desc, node);
+				list_move_tail(&desc->node, &pdmac->desc_pool);
+			}
+
+			list_move_tail(&first->node, &pdmac->desc_pool);
+
+			spin_unlock_irqrestore(&pdmac->pool_lock, flags);
+
+			return NULL;
+		}
+
+		switch (direction) {
+		case DMA_MEM_TO_DEV:
+			desc->rqcfg.src_inc = 1;
+			desc->rqcfg.dst_inc = 0;
+			desc->req.rqtype = MEMTODEV;
+			src = dma_addr;
+			dst = pch->fifo_addr;
+			break;
+		case DMA_DEV_TO_MEM:
+			desc->rqcfg.src_inc = 0;
+			desc->rqcfg.dst_inc = 1;
+			desc->req.rqtype = DEVTOMEM;
+			src = pch->fifo_addr;
+			dst = dma_addr;
+			break;
+		default:
+			break;
+		}
+
+		desc->rqcfg.brst_size = pch->burst_sz;
+		desc->rqcfg.brst_len = 1;
+		fill_px(&desc->px, dst, src, period_len);
+
+		if (!first)
+			first = desc;
+		else
+			list_add_tail(&desc->node, &first->node);
+
+		dma_addr += period_len;
+	}
+
+	if (!desc)
+		return NULL;
 
 	pch->cyclic = true;
-
-	fill_px(&desc->px, dst, src, period_len);
+	desc->txd.flags = flags;
 
 	return &desc->txd;
 }
@@ -2904,9 +2945,9 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 	pi->mcbufsz = pdat ? pdat->mcbuf_sz : 0;
 
 	res = &adev->res;
-	pi->base = devm_request_and_ioremap(&adev->dev, res);
-	if (!pi->base)
-		return -ENXIO;
+	pi->base = devm_ioremap_resource(&adev->dev, res);
+	if (IS_ERR(pi->base))
+		return PTR_ERR(pi->base);
 
 	amba_set_drvdata(adev, pdmac);
 

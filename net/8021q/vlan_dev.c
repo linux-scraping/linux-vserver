@@ -73,6 +73,8 @@ vlan_dev_get_egress_qos_mask(struct net_device *dev, struct sk_buff *skb)
 {
 	struct vlan_priority_tci_mapping *mp;
 
+	smp_rmb(); /* coupled with smp_wmb() in vlan_dev_set_egress_priority() */
+
 	mp = vlan_dev_priv(dev)->egress_priority_map[(skb->priority & 0xF)];
 	while (mp) {
 		if (mp->priority == skb->priority) {
@@ -99,6 +101,7 @@ static int vlan_dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 				const void *daddr, const void *saddr,
 				unsigned int len)
 {
+	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct vlan_hdr *vhdr;
 	unsigned int vhdrlen = 0;
 	u16 vlan_tci = 0;
@@ -120,8 +123,8 @@ static int vlan_dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 		else
 			vhdr->h_vlan_encapsulated_proto = htons(len);
 
-		skb->protocol = htons(ETH_P_8021Q);
-		type = ETH_P_8021Q;
+		skb->protocol = vlan->vlan_proto;
+		type = ntohs(vlan->vlan_proto);
 		vhdrlen = VLAN_HLEN;
 	}
 
@@ -161,12 +164,12 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 	 * NOTE: THIS ASSUMES DIX ETHERNET, SPECIFICALLY NOT SUPPORTING
 	 * OTHER THINGS LIKE FDDI/TokenRing/802.3 SNAPs...
 	 */
-	if (veth->h_vlan_proto != htons(ETH_P_8021Q) ||
+	if (veth->h_vlan_proto != vlan->vlan_proto ||
 	    vlan->flags & VLAN_FLAG_REORDER_HDR) {
 		u16 vlan_tci;
 		vlan_tci = vlan->vlan_id;
 		vlan_tci |= vlan_dev_get_egress_qos_mask(dev, skb);
-		skb = __vlan_hwaccel_put_tag(skb, vlan_tci);
+		skb = __vlan_hwaccel_put_tag(skb, vlan->vlan_proto, vlan_tci);
 	}
 
 	skb->dev = vlan->real_dev;
@@ -248,6 +251,11 @@ int vlan_dev_set_egress_priority(const struct net_device *dev,
 	np->next = mp;
 	np->priority = skb_prio;
 	np->vlan_qos = vlan_qos;
+	/* Before inserting this element in hash table, make sure all its fields
+	 * are committed to memory.
+	 * coupled with smp_rmb() in vlan_dev_get_egress_qos_mask()
+	 */
+	smp_wmb();
 	vlan->egress_priority_map[skb_prio & 0xF] = np;
 	if (vlan_qos)
 		vlan->nr_egress_mappings++;
@@ -583,7 +591,7 @@ static int vlan_dev_init(struct net_device *dev)
 #endif
 
 	dev->needed_headroom = real_dev->needed_headroom;
-	if (real_dev->features & NETIF_F_HW_VLAN_TX) {
+	if (real_dev->features & NETIF_F_HW_VLAN_CTAG_TX) {
 		dev->header_ops      = real_dev->header_ops;
 		dev->hard_header_len = real_dev->hard_header_len;
 	} else {

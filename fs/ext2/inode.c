@@ -31,6 +31,7 @@
 #include <linux/mpage.h>
 #include <linux/fiemap.h>
 #include <linux/namei.h>
+#include <linux/aio.h>
 #include <linux/vs_tag.h>
 #include "ext2.h"
 #include "acl.h"

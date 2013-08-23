@@ -387,7 +387,7 @@ static struct btrfs_path *alloc_path_for_send(void)
 	return path;
 }
 
-int write_buf(struct file *filp, const void *buf, u32 len, loff_t *off)
+static int write_buf(struct file *filp, const void *buf, u32 len, loff_t *off)
 {
 	int ret;
 	mm_segment_t old_fs;
@@ -3479,7 +3479,6 @@ static int __process_changed_new_xattr(int num, struct btrfs_key *di_key,
 	struct send_ctx *sctx = ctx;
 	char *found_data = NULL;
 	int found_data_len  = 0;
-	struct fs_path *p = NULL;
 
 	ret = find_xattr(sctx, sctx->parent_root, sctx->right_path,
 			sctx->cmp_key, name, name_len, &found_data,
@@ -3498,7 +3497,6 @@ static int __process_changed_new_xattr(int num, struct btrfs_key *di_key,
 	}
 
 	kfree(found_data);
-	fs_path_free(sctx, p);
 	return ret;
 }
 
@@ -4529,9 +4527,11 @@ static int send_subvol(struct send_ctx *sctx)
 {
 	int ret;
 
-	ret = send_header(sctx);
-	if (ret < 0)
-		goto out;
+	if (!(sctx->flags & BTRFS_SEND_FLAG_OMIT_STREAM_HEADER)) {
+		ret = send_header(sctx);
+		if (ret < 0)
+			goto out;
+	}
 
 	ret = send_subvol_begin(sctx);
 	if (ret < 0)
@@ -4579,6 +4579,41 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	send_root = BTRFS_I(file_inode(mnt_file))->root;
 	fs_info = send_root->fs_info;
 
+	/*
+	 * This is done when we lookup the root, it should already be complete
+	 * by the time we get here.
+	 */
+	WARN_ON(send_root->orphan_cleanup_state != ORPHAN_CLEANUP_DONE);
+
+	/*
+	 * If we just created this root we need to make sure that the orphan
+	 * cleanup has been done and committed since we search the commit root,
+	 * so check its commit root transid with our otransid and if they match
+	 * commit the transaction to make sure everything is updated.
+	 */
+	down_read(&send_root->fs_info->extent_commit_sem);
+	if (btrfs_header_generation(send_root->commit_root) ==
+	    btrfs_root_otransid(&send_root->root_item)) {
+		struct btrfs_trans_handle *trans;
+
+		up_read(&send_root->fs_info->extent_commit_sem);
+
+		trans = btrfs_attach_transaction_barrier(send_root);
+		if (IS_ERR(trans)) {
+			if (PTR_ERR(trans) != -ENOENT) {
+				ret = PTR_ERR(trans);
+				goto out;
+			}
+			/* ENOENT means theres no transaction */
+		} else {
+			ret = btrfs_commit_transaction(trans, send_root);
+			if (ret)
+				goto out;
+		}
+	} else {
+		up_read(&send_root->fs_info->extent_commit_sem);
+	}
+
 	arg = memdup_user(arg_, sizeof(*arg));
 	if (IS_ERR(arg)) {
 		ret = PTR_ERR(arg);
@@ -4593,7 +4628,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 		goto out;
 	}
 
-	if (arg->flags & ~BTRFS_SEND_FLAG_NO_FILE_DATA) {
+	if (arg->flags & ~BTRFS_SEND_FLAG_MASK) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -4612,8 +4647,8 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	sctx->flags = arg->flags;
 
 	sctx->send_filp = fget(arg->send_fd);
-	if (IS_ERR(sctx->send_filp)) {
-		ret = PTR_ERR(sctx->send_filp);
+	if (!sctx->send_filp) {
+		ret = -EBADF;
 		goto out;
 	}
 
@@ -4704,12 +4739,14 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	if (ret < 0)
 		goto out;
 
-	ret = begin_cmd(sctx, BTRFS_SEND_C_END);
-	if (ret < 0)
-		goto out;
-	ret = send_cmd(sctx);
-	if (ret < 0)
-		goto out;
+	if (!(sctx->flags & BTRFS_SEND_FLAG_OMIT_END_CMD)) {
+		ret = begin_cmd(sctx, BTRFS_SEND_C_END);
+		if (ret < 0)
+			goto out;
+		ret = send_cmd(sctx);
+		if (ret < 0)
+			goto out;
+	}
 
 out:
 	kfree(arg);

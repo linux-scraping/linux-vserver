@@ -411,7 +411,7 @@ static int ahash_set_sh_desc(struct crypto_ahash *ahash)
 	return 0;
 }
 
-static u32 gen_split_hash_key(struct caam_hash_ctx *ctx, const u8 *key_in,
+static int gen_split_hash_key(struct caam_hash_ctx *ctx, const u8 *key_in,
 			      u32 keylen)
 {
 	return gen_split_key(ctx->jrdev, ctx->key, ctx->split_key_len,
@@ -420,7 +420,7 @@ static u32 gen_split_hash_key(struct caam_hash_ctx *ctx, const u8 *key_in,
 }
 
 /* Digest hash size if it is too large */
-static u32 hash_digest_key(struct caam_hash_ctx *ctx, const u8 *key_in,
+static int hash_digest_key(struct caam_hash_ctx *ctx, const u8 *key_in,
 			   u32 *keylen, u8 *key_out, u32 digestsize)
 {
 	struct device *jrdev = ctx->jrdev;
@@ -429,7 +429,7 @@ static u32 hash_digest_key(struct caam_hash_ctx *ctx, const u8 *key_in,
 	dma_addr_t src_dma, dst_dma;
 	int ret = 0;
 
-	desc = kmalloc(CAAM_CMD_SZ * 6 + CAAM_PTR_SZ * 2, GFP_KERNEL | GFP_DMA);
+	desc = kmalloc(CAAM_CMD_SZ * 8 + CAAM_PTR_SZ * 2, GFP_KERNEL | GFP_DMA);
 	if (!desc) {
 		dev_err(jrdev, "unable to allocate key input memory\n");
 		return -ENOMEM;

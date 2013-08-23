@@ -673,6 +673,8 @@ add_dev:
 	ret = device_register(&child->dev);
 	WARN_ON(ret < 0);
 
+	pcibios_add_bus(child);
+
 	/* Create legacy_io and legacy_mem files for this bus */
 	pci_create_legacy_files(child);
 
@@ -1626,8 +1628,7 @@ unsigned int pci_scan_child_bus(struct pci_bus *bus)
 	if (!bus->is_added) {
 		dev_dbg(&bus->dev, "fixups for bus\n");
 		pcibios_fixup_bus(bus);
-		if (pci_is_root_bus(bus))
-			bus->is_added = 1;
+		bus->is_added = 1;
 	}
 
 	for (pass=0; pass < 2; pass++)
@@ -1658,6 +1659,14 @@ unsigned int pci_scan_child_bus(struct pci_bus *bus)
 int __weak pcibios_root_bridge_prepare(struct pci_host_bridge *bridge)
 {
 	return 0;
+}
+
+void __weak pcibios_add_bus(struct pci_bus *bus)
+{
+}
+
+void __weak pcibios_remove_bus(struct pci_bus *bus)
+{
 }
 
 struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
@@ -1694,12 +1703,16 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	bridge->dev.release = pci_release_bus_bridge_dev;
 	dev_set_name(&bridge->dev, "pci%04x:%02x", pci_domain_nr(b), bus);
 	error = pcibios_root_bridge_prepare(bridge);
-	if (error)
-		goto bridge_dev_reg_err;
+	if (error) {
+		kfree(bridge);
+		goto err_out;
+	}
 
 	error = device_register(&bridge->dev);
-	if (error)
-		goto bridge_dev_reg_err;
+	if (error) {
+		put_device(&bridge->dev);
+		goto err_out;
+	}
 	b->bridge = get_device(&bridge->dev);
 	device_enable_async_suspend(b->bridge);
 	pci_set_bus_of_node(b);
@@ -1713,6 +1726,8 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 	error = device_register(&b->dev);
 	if (error)
 		goto class_dev_reg_err;
+
+	pcibios_add_bus(b);
 
 	/* Create legacy_io and legacy_mem files for this bus */
 	pci_create_legacy_files(b);
@@ -1753,8 +1768,6 @@ struct pci_bus *pci_create_root_bus(struct device *parent, int bus,
 class_dev_reg_err:
 	put_device(&bridge->dev);
 	device_unregister(&bridge->dev);
-bridge_dev_reg_err:
-	kfree(bridge);
 err_out:
 	kfree(b);
 	return NULL;

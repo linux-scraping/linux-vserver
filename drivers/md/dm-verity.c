@@ -501,7 +501,7 @@ static int verity_map(struct dm_target *ti, struct bio *bio)
 		return -EIO;
 	}
 
-	if ((bio->bi_sector + bio_sectors(bio)) >>
+	if (bio_end_sector(bio) >>
 	    (v->data_dev_block_bits - SECTOR_SHIFT) > v->data_blocks) {
 		DMERR_LIMIT("io out of range");
 		return -EIO;
@@ -519,7 +519,7 @@ static int verity_map(struct dm_target *ti, struct bio *bio)
 
 	bio->bi_end_io = verity_end_io;
 	bio->bi_private = io;
-	io->io_vec_size = bio->bi_vcnt - bio->bi_idx;
+	io->io_vec_size = bio_segments(bio);
 	if (io->io_vec_size < DM_VERITY_IO_VEC_INLINE)
 		io->io_vec = io->io_vec_inline;
 	else
@@ -831,9 +831,8 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	for (i = v->levels - 1; i >= 0; i--) {
 		sector_t s;
 		v->hash_level_block[i] = hash_position;
-		s = verity_position_at_level(v, v->data_blocks, i);
-		s = (s >> v->hash_per_block_bits) +
-		    !!(s & ((1 << v->hash_per_block_bits) - 1));
+		s = (v->data_blocks + ((sector_t)1 << ((i + 1) * v->hash_per_block_bits)) - 1)
+					>> ((i + 1) * v->hash_per_block_bits);
 		if (hash_position + s < hash_position) {
 			ti->error = "Hash device offset overflow";
 			r = -E2BIG;

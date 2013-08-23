@@ -211,7 +211,6 @@ struct sigmatel_spec {
 
 	/* beep widgets */
 	hda_nid_t anabeep_nid;
-	hda_nid_t digbeep_nid;
 
 	/* SPDIF-out mux */
 	const char * const *spdif_labels;
@@ -418,9 +417,11 @@ static void stac_update_outputs(struct hda_codec *codec)
 			val &= ~spec->eapd_mask;
 		else
 			val |= spec->eapd_mask;
-		if (spec->gpio_data != val)
+		if (spec->gpio_data != val) {
+			spec->gpio_data = val;
 			stac_gpio_set(codec, spec->gpio_mask, spec->gpio_dir,
 				      val);
+		}
 	}
 }
 
@@ -2814,6 +2815,7 @@ static const struct hda_pintbl ecs202_pin_configs[] = {
 
 /* codec SSIDs for Intel Mac sharing the same PCI SSID 8384:7680 */
 static const struct snd_pci_quirk stac922x_intel_mac_fixup_tbl[] = {
+	SND_PCI_QUIRK(0x0000, 0x0100, "Mac Mini", STAC_INTEL_MAC_V3),
 	SND_PCI_QUIRK(0x106b, 0x0800, "Mac", STAC_INTEL_MAC_V1),
 	SND_PCI_QUIRK(0x106b, 0x0600, "Mac", STAC_INTEL_MAC_V2),
 	SND_PCI_QUIRK(0x106b, 0x0700, "Mac", STAC_INTEL_MAC_V2),
@@ -3228,7 +3230,7 @@ static const struct hda_fixup stac927x_fixups[] = {
 			/* configure the analog microphone on some laptops */
 			{ 0x0c, 0x90a79130 },
 			/* correct the front output jack as a hp out */
-			{ 0x0f, 0x0227011f },
+			{ 0x0f, 0x0221101f },
 			/* correct the front input jack as a mic */
 			{ 0x0e, 0x02a79130 },
 			{}
@@ -3529,8 +3531,12 @@ static int stac_parse_auto_config(struct hda_codec *codec)
 {
 	struct sigmatel_spec *spec = codec->spec;
 	int err;
+	int flags = 0;
 
-	err = snd_hda_parse_pin_defcfg(codec, &spec->gen.autocfg, NULL, 0);
+	if (spec->headset_jack)
+		flags |= HDA_PINCFG_HEADSET_MIC;
+
+	err = snd_hda_parse_pin_defcfg(codec, &spec->gen.autocfg, NULL, flags);
 	if (err < 0)
 		return err;
 
@@ -3560,14 +3566,11 @@ static int stac_parse_auto_config(struct hda_codec *codec)
 
 	/* setup digital beep controls and input device */
 #ifdef CONFIG_SND_HDA_INPUT_BEEP
-	if (spec->digbeep_nid > 0) {
-		hda_nid_t nid = spec->digbeep_nid;
+	if (spec->gen.beep_nid) {
+		hda_nid_t nid = spec->gen.beep_nid;
 		unsigned int caps;
 
 		err = stac_auto_create_beep_ctls(codec, nid);
-		if (err < 0)
-			return err;
-		err = snd_hda_attach_beep_device(codec, nid);
 		if (err < 0)
 			return err;
 		if (codec->beep) {
@@ -3608,20 +3611,18 @@ static int stac_parse_auto_config(struct hda_codec *codec)
 static int stac_init(struct hda_codec *codec)
 {
 	struct sigmatel_spec *spec = codec->spec;
-	unsigned int gpio;
 	int i;
 
 	/* override some hints */
 	stac_store_hints(codec);
 
 	/* set up GPIO */
-	gpio = spec->gpio_data;
 	/* turn on EAPD statically when spec->eapd_switch isn't set.
 	 * otherwise, unsol event will turn it on/off dynamically
 	 */
 	if (!spec->eapd_switch)
-		gpio |= spec->eapd_mask;
-	stac_gpio_set(codec, spec->gpio_mask, spec->gpio_dir, gpio);
+		spec->gpio_data |= spec->eapd_mask;
+	stac_gpio_set(codec, spec->gpio_mask, spec->gpio_dir, spec->gpio_data);
 
 	snd_hda_gen_init(codec);
 
@@ -3657,17 +3658,7 @@ static void stac_shutup(struct hda_codec *codec)
 				~spec->eapd_mask);
 }
 
-static void stac_free(struct hda_codec *codec)
-{
-	struct sigmatel_spec *spec = codec->spec;
-
-	if (!spec)
-		return;
-
-	snd_hda_gen_spec_free(&spec->gen);
-	kfree(spec);
-	snd_hda_detach_beep_device(codec);
-}
+#define stac_free	snd_hda_gen_free
 
 #ifdef CONFIG_PROC_FS
 static void stac92hd_proc_hook(struct snd_info_buffer *buffer,
@@ -3797,6 +3788,7 @@ static int patch_stac9200(struct hda_codec *codec)
 	spec->gen.own_eapd_ctl = 1;
 
 	codec->patch_ops = stac_patch_ops;
+	codec->power_filter = snd_hda_codec_eapd_power_filter;
 
 	snd_hda_add_verbs(codec, stac9200_eapd_init);
 
@@ -3884,7 +3876,7 @@ static int patch_stac92hd73xx(struct hda_codec *codec)
 	spec->aloopback_mask = 0x01;
 	spec->aloopback_shift = 8;
 
-	spec->digbeep_nid = 0x1c;
+	spec->gen.beep_nid = 0x1c; /* digital beep */
 
 	/* GPIO0 High = Enable EAPD */
 	spec->eapd_mask = spec->gpio_mask = spec->gpio_dir = 0x1;
@@ -3930,6 +3922,7 @@ static void stac_setup_gpio(struct hda_codec *codec)
 {
 	struct sigmatel_spec *spec = codec->spec;
 
+	spec->gpio_mask |= spec->eapd_mask;
 	if (spec->gpio_led) {
 		if (!spec->vref_mute_led_nid) {
 			spec->gpio_mask |= spec->gpio_led;
@@ -3968,7 +3961,7 @@ static int patch_stac92hd83xxx(struct hda_codec *codec)
 	spec->gen.power_down_unused = 1;
 	spec->gen.mixer_nid = 0x1b;
 
-	spec->digbeep_nid = 0x21;
+	spec->gen.beep_nid = 0x21; /* digital beep */
 	spec->pwr_nids = stac92hd83xxx_pwr_nids;
 	spec->num_pwrs = ARRAY_SIZE(stac92hd83xxx_pwr_nids);
 	spec->default_polarity = -1; /* no default cfg */
@@ -4016,7 +4009,7 @@ static int patch_stac92hd95(struct hda_codec *codec)
 	spec->gen.own_eapd_ctl = 1;
 	spec->gen.power_down_unused = 1;
 
-	spec->digbeep_nid = 0x19;
+	spec->gen.beep_nid = 0x19; /* digital beep */
 	spec->pwr_nids = stac92hd95_pwr_nids;
 	spec->num_pwrs = ARRAY_SIZE(stac92hd95_pwr_nids);
 	spec->default_polarity = -1; /* no default cfg */
@@ -4091,7 +4084,7 @@ static int patch_stac92hd71bxx(struct hda_codec *codec)
 	spec->aloopback_shift = 0;
 
 	spec->powerdown_adcs = 1;
-	spec->digbeep_nid = 0x26;
+	spec->gen.beep_nid = 0x26; /* digital beep */
 	spec->num_pwrs = ARRAY_SIZE(stac92hd71bxx_pwr_nids);
 	spec->pwr_nids = stac92hd71bxx_pwr_nids;
 
@@ -4173,7 +4166,7 @@ static int patch_stac927x(struct hda_codec *codec)
 	spec->have_spdif_mux = 1;
 	spec->spdif_labels = stac927x_spdif_labels;
 
-	spec->digbeep_nid = 0x23;
+	spec->gen.beep_nid = 0x23; /* digital beep */
 
 	/* GPIO0 High = Enable EAPD */
 	spec->eapd_mask = spec->gpio_mask = 0x01;
@@ -4232,7 +4225,7 @@ static int patch_stac9205(struct hda_codec *codec)
 	spec->gen.own_eapd_ctl = 1;
 	spec->have_spdif_mux = 1;
 
-	spec->digbeep_nid = 0x23;
+	spec->gen.beep_nid = 0x23; /* digital beep */
 
 	snd_hda_add_verbs(codec, stac9205_core_init);
 	spec->aloopback_ctl = &stac9205_loopback;

@@ -91,7 +91,6 @@ struct inodes_stat_t {
 #define MS_TAGID	(1<<25) /* use specific tag for this mount */
 
 /* These sb flags are internal to the kernel */
-#define MS_SNAP_STABLE	(1<<27) /* Snapshot pages during writeback, if needed */
 #define MS_NOSEC	(1<<28)
 #define MS_BORN		(1<<29)
 #define MS_ACTIVE	(1<<30)

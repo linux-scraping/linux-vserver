@@ -128,7 +128,7 @@ extern int radeon_bo_init(struct radeon_device *rdev);
 extern void radeon_bo_fini(struct radeon_device *rdev);
 extern void radeon_bo_list_add_object(struct radeon_bo_list *lobj,
 				struct list_head *head);
-extern int radeon_bo_list_validate(struct list_head *head);
+extern int radeon_bo_list_validate(struct list_head *head, int ring);
 extern int radeon_bo_fbdev_mmap(struct radeon_bo *bo,
 				struct vm_area_struct *vma);
 extern int radeon_bo_set_tiling_flags(struct radeon_bo *bo,
@@ -158,7 +158,7 @@ static inline void * radeon_sa_bo_cpu_addr(struct radeon_sa_bo *sa_bo)
 
 extern int radeon_sa_bo_manager_init(struct radeon_device *rdev,
 				     struct radeon_sa_manager *sa_manager,
-				     unsigned size, u32 domain);
+				     unsigned size, u32 align, u32 domain);
 extern void radeon_sa_bo_manager_fini(struct radeon_device *rdev,
 				      struct radeon_sa_manager *sa_manager);
 extern int radeon_sa_bo_manager_start(struct radeon_device *rdev,

@@ -128,14 +128,13 @@ static int vr_open(struct block_device *bdev, fmode_t mode)
 	return 0;
 }
 
-static int vr_release(struct gendisk *disk, fmode_t mode)
+static void vr_release(struct gendisk *disk, fmode_t mode)
 {
 	struct vroot_device *vr = disk->private_data;
 
 	down(&vr->vr_ctl_mutex);
 	--vr->vr_refcnt;
 	up(&vr->vr_ctl_mutex);
-	return 0;
 }
 
 static struct block_device_operations vr_fops = {

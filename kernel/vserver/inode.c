@@ -18,12 +18,15 @@
 #include <linux/mount.h>
 #include <linux/parser.h>
 #include <linux/namei.h>
+#include <linux/magic.h>
+#include <linux/slab.h>
 #include <linux/vserver/inode.h>
 #include <linux/vserver/inode_cmd.h>
 #include <linux/vs_base.h>
 #include <linux/vs_tag.h>
 
 #include <asm/uaccess.h>
+#include <../../fs/proc/internal.h>
 
 
 static int __vc_get_iattr(struct inode *in, uint32_t *tag, uint32_t *flags, uint32_t *mask)

@@ -143,6 +143,12 @@ extern void __cpu_die(unsigned int cpu);
 /* for UP */
 #define hard_smp_processor_id()		get_hard_smp_processor_id(0)
 #define smp_setup_cpu_maps()
+static inline void inhibit_secondary_onlining(void) {}
+static inline void uninhibit_secondary_onlining(void) {}
+static inline const struct cpumask *cpu_sibling_mask(int cpu)
+{
+	return cpumask_of(cpu);
+}
 
 #endif /* CONFIG_SMP */
 
