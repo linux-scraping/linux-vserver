@@ -1053,9 +1053,23 @@ static void request_write(struct cached_dev *dc, struct search *s)
 		trace_bcache_writethrough(s->orig_bio);
 		closure_bio_submit(bio, cl, s->d);
 	} else {
-		s->op.cache_bio = bio;
 		trace_bcache_writeback(s->orig_bio);
 		bch_writeback_add(dc, bio_sectors(bio));
+
+		if (bio->bi_rw & REQ_FLUSH) {
+			/* Also need to send a flush to the backing device */
+			struct bio *flush = bio_alloc_bioset(0, GFP_NOIO,
+							     dc->disk.bio_split);
+
+			flush->bi_rw	= WRITE_FLUSH;
+			flush->bi_bdev	= bio->bi_bdev;
+			flush->bi_end_io = request_endio;
+			flush->bi_private = cl;
+
+			closure_bio_submit(flush, cl, s->d);
+		} else {
+			s->op.cache_bio = bio;
+		}
 	}
 out:
 	closure_call(&s->op.cl, bch_insert_data, NULL, cl);
