@@ -1,8 +1,8 @@
 VERSION = 3
 PATCHLEVEL = 9
-SUBLEVEL = 10
+SUBLEVEL = 11
 EXTRAVERSION = -vs2.3.6.5
-NAME = Unicycling Gorilla
+NAME = Black Squirrel Wakeup Call
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
