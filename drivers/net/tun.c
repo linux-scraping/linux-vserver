@@ -1641,7 +1641,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		int queues = ifr->ifr_flags & IFF_MULTI_QUEUE ?
 			     MAX_TAP_QUEUES : 1;
 
-		if (!vx_ns_capable(net->user_ns, CAP_NET_ADMIN, NXC_TUN_CREATE))
+		if (!nx_ns_capable(net->user_ns, CAP_NET_ADMIN, NXC_TUN_CREATE))
 			return -EPERM;
 		err = security_tun_dev_create();
 		if (err < 0)
