@@ -576,7 +576,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 
 	ns->shm_tot += numpages;
 	error = shp->shm_perm.id;
-	shm_unlock(shp);
+
 	ipc_unlock_object(&shp->shm_perm);
 	rcu_read_unlock();
 	vx_ipcshm_add(current_vx_info(), key, numpages);
