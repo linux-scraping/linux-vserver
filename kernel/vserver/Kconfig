@@ -14,8 +14,7 @@ config	VSERVER_AUTO_LBACK
 
 config	VSERVER_AUTO_SINGLE
 	bool	"Automatic Single IP Special Casing"
-	depends on EXPERIMENTAL
-	default y
+	default n
 	help
 	  This allows network contexts with a single IP to
 	  automatically remap 0.0.0.0 bindings to that IP,
@@ -35,8 +34,7 @@ config	VSERVER_COWBL
 	  link and create a copy of the unified file)
 
 config	VSERVER_VTIME
-	bool	"Enable Virtualized Guest Time"
-	depends on EXPERIMENTAL
+	bool	"Enable Virtualized Guest Time (EXPERIMENTAL)"
 	default n
 	help
 	  This enables per guest time offsets to allow for
@@ -45,8 +43,7 @@ config	VSERVER_VTIME
 	  therefore should not be enabled without good reason.
 
 config	VSERVER_DEVICE
-	bool	"Enable Guest Device Mapping"
-	depends on EXPERIMENTAL
+	bool	"Enable Guest Device Mapping (EXPERIMENTAL)"
 	default n
 	help
 	  This enables generic device remapping.
