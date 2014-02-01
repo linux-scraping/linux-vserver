@@ -147,10 +147,10 @@ struct nsproxy *vs_mix_nsproxy(struct nsproxy *old_nsproxy,
 
 #ifdef	CONFIG_PID_NS
 	if (mask & CLONE_NEWPID) {
-		old_pid = nsproxy->pid_ns;
-		nsproxy->pid_ns = new_nsproxy->pid_ns;
-		if (nsproxy->pid_ns)
-			get_pid_ns(nsproxy->pid_ns);
+		old_pid = nsproxy->pid_ns_for_children;
+		nsproxy->pid_ns_for_children = new_nsproxy->pid_ns_for_children;
+		if (nsproxy->pid_ns_for_children)
+			get_pid_ns(nsproxy->pid_ns_for_children);
 	} else
 		old_pid = NULL;
 #endif

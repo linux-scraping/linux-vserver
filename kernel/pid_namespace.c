@@ -137,7 +137,6 @@ out:
 
 static void delayed_free_pidns(struct rcu_head *p)
 {
-	kmem_cache_free(pid_ns_cachep, ns);
 	kmem_cache_free(pid_ns_cachep,
 			container_of(p, struct pid_namespace, rcu));
 }

@@ -98,7 +98,6 @@
 
 #include <net/sock.h>
 #include <linux/netfilter.h>
-#include <linux/vs_base.h>
 #include <linux/vs_socket.h>
 #include <linux/vs_inet.h>
 #include <linux/vs_inet6.h>
