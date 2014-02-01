@@ -185,7 +185,6 @@ enum rx_ctrl_state{
 #define BM_REQUEST_TYPE (0xa1)
 #define B_NOTIFICATION  (0x20)
 #define W_VALUE         (0x0)
-#define W_INDEX         (0x2)
 #define W_LENGTH        (0x2)
 
 #define B_OVERRUN       (0x1<<6)
@@ -1487,6 +1486,7 @@ static void tiocmget_intr_callback(struct urb *urb)
 	struct uart_icount *icount;
 	struct hso_serial_state_notification *serial_state_notification;
 	struct usb_device *usb;
+	int if_num;
 
 	/* Sanity checks */
 	if (!serial)
@@ -1495,15 +1495,24 @@ static void tiocmget_intr_callback(struct urb *urb)
 		handle_usb_error(status, __func__, serial->parent);
 		return;
 	}
+
+	/* tiocmget is only supported on HSO_PORT_MODEM */
 	tiocmget = serial->tiocmget;
 	if (!tiocmget)
 		return;
+	BUG_ON((serial->parent->port_spec & HSO_PORT_MASK) != HSO_PORT_MODEM);
+
 	usb = serial->parent->usb;
+	if_num = serial->parent->interface->altsetting->desc.bInterfaceNumber;
+
+	/* wIndex should be the USB interface number of the port to which the
+	 * notification applies, which should always be the Modem port.
+	 */
 	serial_state_notification = &tiocmget->serial_state_notification;
 	if (serial_state_notification->bmRequestType != BM_REQUEST_TYPE ||
 	    serial_state_notification->bNotification != B_NOTIFICATION ||
 	    le16_to_cpu(serial_state_notification->wValue) != W_VALUE ||
-	    le16_to_cpu(serial_state_notification->wIndex) != W_INDEX ||
+	    le16_to_cpu(serial_state_notification->wIndex) != if_num ||
 	    le16_to_cpu(serial_state_notification->wLength) != W_LENGTH) {
 		dev_warn(&usb->dev,
 			 "hso received invalid serial state notification\n");
@@ -2816,13 +2825,16 @@ exit:
 static int hso_get_config_data(struct usb_interface *interface)
 {
 	struct usb_device *usbdev = interface_to_usbdev(interface);
-	u8 config_data[17];
+	u8 *config_data = kmalloc(17, GFP_KERNEL);
 	u32 if_num = interface->altsetting->desc.bInterfaceNumber;
 	s32 result;
 
+	if (!config_data)
+		return -ENOMEM;
 	if (usb_control_msg(usbdev, usb_rcvctrlpipe(usbdev, 0),
 			    0x86, 0xC0, 0, 0, config_data, 17,
 			    USB_CTRL_SET_TIMEOUT) != 0x11) {
+		kfree(config_data);
 		return -EIO;
 	}
 
@@ -2873,6 +2885,7 @@ static int hso_get_config_data(struct usb_interface *interface)
 	if (config_data[16] & 0x1)
 		result |= HSO_INFO_CRC_BUG;
 
+	kfree(config_data);
 	return result;
 }
 
@@ -2886,6 +2899,11 @@ static int hso_probe(struct usb_interface *interface,
 	struct hso_shared_int *shared_int;
 	struct hso_device *tmp_dev = NULL;
 
+	if (interface->cur_altsetting->desc.bInterfaceClass != 0xFF) {
+		dev_err(&interface->dev, "Not our interface\n");
+		return -ENODEV;
+	}
+
 	if_num = interface->altsetting->desc.bInterfaceNumber;
 
 	/* Get the interface/port specification from either driver_info or from
@@ -2895,10 +2913,6 @@ static int hso_probe(struct usb_interface *interface,
 	else
 		port_spec = hso_get_config_data(interface);
 
-	if (interface->cur_altsetting->desc.bInterfaceClass != 0xFF) {
-		dev_err(&interface->dev, "Not our interface\n");
-		return -ENODEV;
-	}
 	/* Check if we need to switch to alt interfaces prior to port
 	 * configuration */
 	if (interface->num_altsetting > 1)

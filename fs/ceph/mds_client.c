@@ -43,6 +43,7 @@
  */
 
 struct ceph_reconnect_state {
+	int nr_caps;
 	struct ceph_pagelist *pagelist;
 	bool flock;
 };
@@ -443,6 +444,7 @@ static struct ceph_mds_session *register_session(struct ceph_mds_client *mdsc,
 	INIT_LIST_HEAD(&s->s_waiting);
 	INIT_LIST_HEAD(&s->s_unsafe);
 	s->s_num_cap_releases = 0;
+	s->s_cap_reconnect = 0;
 	s->s_cap_iterator = NULL;
 	INIT_LIST_HEAD(&s->s_cap_releases);
 	INIT_LIST_HEAD(&s->s_cap_releases_done);
@@ -988,7 +990,7 @@ static int remove_session_caps_cb(struct inode *inode, struct ceph_cap *cap,
 	dout("removing cap %p, ci is %p, inode is %p\n",
 	     cap, ci, &ci->vfs_inode);
 	spin_lock(&ci->i_ceph_lock);
-	__ceph_remove_cap(cap);
+	__ceph_remove_cap(cap, false);
 	if (!__ceph_is_any_real_caps(ci)) {
 		struct ceph_mds_client *mdsc =
 			ceph_sb_to_client(inode->i_sb)->mdsc;
@@ -1033,6 +1035,37 @@ static void remove_session_caps(struct ceph_mds_session *session)
 {
 	dout("remove_session_caps on %p\n", session);
 	iterate_session_caps(session, remove_session_caps_cb, NULL);
+
+	spin_lock(&session->s_cap_lock);
+	if (session->s_nr_caps > 0) {
+		struct super_block *sb = session->s_mdsc->fsc->sb;
+		struct inode *inode;
+		struct ceph_cap *cap, *prev = NULL;
+		struct ceph_vino vino;
+		/*
+		 * iterate_session_caps() skips inodes that are being
+		 * deleted, we need to wait until deletions are complete.
+		 * __wait_on_freeing_inode() is designed for the job,
+		 * but it is not exported, so use lookup inode function
+		 * to access it.
+		 */
+		while (!list_empty(&session->s_caps)) {
+			cap = list_entry(session->s_caps.next,
+					 struct ceph_cap, session_caps);
+			if (cap == prev)
+				break;
+			prev = cap;
+			vino = cap->ci->i_vino;
+			spin_unlock(&session->s_cap_lock);
+
+			inode = ceph_find_inode(sb, vino);
+			iput(inode);
+
+			spin_lock(&session->s_cap_lock);
+		}
+	}
+	spin_unlock(&session->s_cap_lock);
+
 	BUG_ON(session->s_nr_caps > 0);
 	BUG_ON(!list_empty(&session->s_cap_flushing));
 	cleanup_cap_releases(session);
@@ -1202,9 +1235,7 @@ static int trim_caps_cb(struct inode *inode, struct ceph_cap *cap, void *arg)
 	session->s_trim_caps--;
 	if (oissued) {
 		/* we aren't the only cap.. just remove us */
-		__queue_cap_release(session, ceph_ino(inode), cap->cap_id,
-				    cap->mseq, cap->issue_seq);
-		__ceph_remove_cap(cap);
+		__ceph_remove_cap(cap, true);
 	} else {
 		/* try to drop referring dentries */
 		spin_unlock(&ci->i_ceph_lock);
@@ -1387,7 +1418,6 @@ static void discard_cap_releases(struct ceph_mds_client *mdsc,
 	unsigned num;
 
 	dout("discard_cap_releases mds%d\n", session->s_mds);
-	spin_lock(&session->s_cap_lock);
 
 	/* zero out the in-progress message */
 	msg = list_first_entry(&session->s_cap_releases,
@@ -1396,6 +1426,7 @@ static void discard_cap_releases(struct ceph_mds_client *mdsc,
 	num = le32_to_cpu(head->num);
 	dout("discard_cap_releases mds%d %p %u\n", session->s_mds, msg, num);
 	head->num = cpu_to_le32(0);
+	msg->front.iov_len = sizeof(*head);
 	session->s_num_cap_releases += num;
 
 	/* requeue completed messages */
@@ -1413,8 +1444,6 @@ static void discard_cap_releases(struct ceph_mds_client *mdsc,
 		msg->front.iov_len = sizeof(*head);
 		list_add(&msg->list_head, &session->s_cap_releases);
 	}
-
-	spin_unlock(&session->s_cap_lock);
 }
 
 /*
@@ -1558,7 +1587,7 @@ retry:
 	*base = ceph_ino(temp->d_inode);
 	*plen = len;
 	dout("build_path on %p %d built %llx '%.*s'\n",
-	     dentry, dentry->d_count, *base, len, path);
+	     dentry, d_count(dentry), *base, len, path);
 	return path;
 }
 
@@ -2210,8 +2239,7 @@ static void handle_reply(struct ceph_mds_session *session, struct ceph_msg *msg)
 	err = ceph_fill_trace(mdsc->fsc->sb, req, req->r_session);
 	if (err == 0) {
 		if (result == 0 && (req->r_op == CEPH_MDS_OP_READDIR ||
-				    req->r_op == CEPH_MDS_OP_LSSNAP) &&
-		    rinfo->dir_nr)
+				    req->r_op == CEPH_MDS_OP_LSSNAP))
 			ceph_readdir_prepopulate(req, req->r_session);
 		ceph_unreserve_caps(mdsc, &req->r_caps_reservation);
 	}
@@ -2461,6 +2489,8 @@ static int encode_caps_cb(struct inode *inode, struct ceph_cap *cap,
 	spin_lock(&ci->i_ceph_lock);
 	cap->seq = 0;        /* reset cap seq */
 	cap->issue_seq = 0;  /* and issue_seq */
+	cap->mseq = 0;       /* and migrate_seq */
+	cap->cap_gen = cap->session->s_cap_gen;
 
 	if (recon_state->flock) {
 		rec.v2.cap_id = cpu_to_le64(cap->cap_id);
@@ -2488,20 +2518,20 @@ static int encode_caps_cb(struct inode *inode, struct ceph_cap *cap,
 		struct ceph_filelock *flocks;
 
 encode_again:
-		lock_flocks();
+		spin_lock(&inode->i_lock);
 		ceph_count_locks(inode, &num_fcntl_locks, &num_flock_locks);
-		unlock_flocks();
+		spin_unlock(&inode->i_lock);
 		flocks = kmalloc((num_fcntl_locks+num_flock_locks) *
 				 sizeof(struct ceph_filelock), GFP_NOFS);
 		if (!flocks) {
 			err = -ENOMEM;
 			goto out_free;
 		}
-		lock_flocks();
+		spin_lock(&inode->i_lock);
 		err = ceph_encode_locks_to_buffer(inode, flocks,
 						  num_fcntl_locks,
 						  num_flock_locks);
-		unlock_flocks();
+		spin_unlock(&inode->i_lock);
 		if (err) {
 			kfree(flocks);
 			if (err == -ENOSPC)
@@ -2523,6 +2553,8 @@ encode_again:
 	} else {
 		err = ceph_pagelist_append(pagelist, &rec, reclen);
 	}
+
+	recon_state->nr_caps++;
 out_free:
 	kfree(path);
 out_dput:
@@ -2550,6 +2582,7 @@ static void send_mds_reconnect(struct ceph_mds_client *mdsc,
 	struct rb_node *p;
 	int mds = session->s_mds;
 	int err = -ENOMEM;
+	int s_nr_caps;
 	struct ceph_pagelist *pagelist;
 	struct ceph_reconnect_state recon_state;
 
@@ -2581,19 +2614,37 @@ static void send_mds_reconnect(struct ceph_mds_client *mdsc,
 	dout("session %p state %s\n", session,
 	     session_state_name(session->s_state));
 
+	spin_lock(&session->s_gen_ttl_lock);
+	session->s_cap_gen++;
+	spin_unlock(&session->s_gen_ttl_lock);
+
+	spin_lock(&session->s_cap_lock);
+	/*
+	 * notify __ceph_remove_cap() that we are composing cap reconnect.
+	 * If a cap get released before being added to the cap reconnect,
+	 * __ceph_remove_cap() should skip queuing cap release.
+	 */
+	session->s_cap_reconnect = 1;
 	/* drop old cap expires; we're about to reestablish that state */
 	discard_cap_releases(mdsc, session);
+	spin_unlock(&session->s_cap_lock);
 
 	/* traverse this session's caps */
-	err = ceph_pagelist_encode_32(pagelist, session->s_nr_caps);
+	s_nr_caps = session->s_nr_caps;
+	err = ceph_pagelist_encode_32(pagelist, s_nr_caps);
 	if (err)
 		goto fail;
 
+	recon_state.nr_caps = 0;
 	recon_state.pagelist = pagelist;
 	recon_state.flock = session->s_con.peer_features & CEPH_FEATURE_FLOCK;
 	err = iterate_session_caps(session, encode_caps_cb, &recon_state);
 	if (err < 0)
 		goto fail;
+
+	spin_lock(&session->s_cap_lock);
+	session->s_cap_reconnect = 0;
+	spin_unlock(&session->s_cap_lock);
 
 	/*
 	 * snaprealms.  we provide mds with the ino, seq (version), and
@@ -2617,11 +2668,18 @@ static void send_mds_reconnect(struct ceph_mds_client *mdsc,
 
 	if (recon_state.flock)
 		reply->hdr.version = cpu_to_le16(2);
-	if (pagelist->length) {
-		/* set up outbound data if we have any */
-		reply->hdr.data_len = cpu_to_le32(pagelist->length);
-		ceph_msg_data_add_pagelist(reply, pagelist);
+
+	/* raced with cap release? */
+	if (s_nr_caps != recon_state.nr_caps) {
+		struct page *page = list_first_entry(&pagelist->head,
+						     struct page, lru);
+		__le32 *addr = kmap_atomic(page);
+		*addr = cpu_to_le32(recon_state.nr_caps);
+		kunmap_atomic(addr);
 	}
+
+	reply->hdr.data_len = cpu_to_le32(pagelist->length);
+	ceph_msg_data_add_pagelist(reply, pagelist);
 	ceph_con_send(&session->s_con, reply);
 
 	mutex_unlock(&session->s_mutex);

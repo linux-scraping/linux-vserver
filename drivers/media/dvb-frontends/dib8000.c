@@ -3048,7 +3048,7 @@ static int dib8000_tune(struct dvb_frontend *fe)
 			dib8000_set_diversity_in(state->fe[0], state->diversity_onoff);
 
 			locks = (dib8000_read_word(state, 180) >> 6) & 0x3f; /* P_coff_winlen ? */
-			/* coff should lock over P_coff_winlen ofdm symbols : give 3 times this lenght to lock */
+			/* coff should lock over P_coff_winlen ofdm symbols : give 3 times this length to lock */
 			*timeout = dib8000_get_timeout(state, 2 * locks, SYMBOL_DEPENDENT_ON);
 			*tune_state = CT_DEMOD_STEP_5;
 			break;
@@ -3115,7 +3115,7 @@ static int dib8000_tune(struct dvb_frontend *fe)
 
 	case CT_DEMOD_STEP_9: /* 39 */
 			if ((state->revision == 0x8090) || ((dib8000_read_word(state, 1291) >> 9) & 0x1)) { /* fe capable of deinterleaving : esram */
-				/* defines timeout for mpeg lock depending on interleaver lenght of longest layer */
+				/* defines timeout for mpeg lock depending on interleaver length of longest layer */
 				for (i = 0; i < 3; i++) {
 					if (c->layer[i].interleaving >= deeper_interleaver) {
 						dprintk("layer%i: time interleaver = %d ", i, c->layer[i].interleaving);
@@ -3406,7 +3406,7 @@ static int dib8000_set_frontend(struct dvb_frontend *fe)
 {
 	struct dib8000_state *state = fe->demodulator_priv;
 	struct dtv_frontend_properties *c = &state->fe[0]->dtv_property_cache;
-	int l, i, active, time, ret, time_slave = FE_CALLBACK_TIME_NEVER;
+	int l, i, active, time, time_slave = FE_CALLBACK_TIME_NEVER;
 	u8 exit_condition, index_frontend;
 	u32 delay, callback_time;
 
@@ -3553,7 +3553,7 @@ static int dib8000_set_frontend(struct dvb_frontend *fe)
 		}
 	}
 
-	return ret;
+	return 0;
 }
 
 static int dib8000_read_status(struct dvb_frontend *fe, fe_status_t * stat)

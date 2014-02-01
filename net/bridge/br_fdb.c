@@ -700,11 +700,16 @@ int br_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 
 		vid = nla_get_u16(tb[NDA_VLAN]);
 
-		if (vid >= VLAN_N_VID) {
+		if (!vid || vid >= VLAN_VID_MASK) {
 			pr_info("bridge: RTM_NEWNEIGH with invalid vlan id %d\n",
 				vid);
 			return -EINVAL;
 		}
+	}
+
+	if (is_zero_ether_addr(addr)) {
+		pr_info("bridge: RTM_NEWNEIGH with invalid ether address\n");
+		return -EINVAL;
 	}
 
 	p = br_port_get_rtnl(dev);
@@ -789,7 +794,7 @@ int br_fdb_delete(struct ndmsg *ndm, struct nlattr *tb[],
 
 		vid = nla_get_u16(tb[NDA_VLAN]);
 
-		if (vid >= VLAN_N_VID) {
+		if (!vid || vid >= VLAN_VID_MASK) {
 			pr_info("bridge: RTM_NEWNEIGH with invalid vlan id %d\n",
 				vid);
 			return -EINVAL;

@@ -85,4 +85,8 @@
 
 #define SO_SELECT_ERR_QUEUE	45
 
+#define SO_BUSY_POLL		46
+
+#define SO_MAX_PACING_RATE	47
+
 #endif	/* _XTENSA_SOCKET_H */

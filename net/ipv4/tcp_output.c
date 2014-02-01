@@ -65,6 +65,9 @@ int sysctl_tcp_base_mss __read_mostly = TCP_BASE_MSS;
 /* By default, RFC2861 behavior.  */
 int sysctl_tcp_slow_start_after_idle __read_mostly = 1;
 
+unsigned int sysctl_tcp_notsent_lowat __read_mostly = UINT_MAX;
+EXPORT_SYMBOL(sysctl_tcp_notsent_lowat);
+
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp);
 
@@ -160,6 +163,7 @@ static void tcp_event_data_sent(struct tcp_sock *tp,
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	const u32 now = tcp_time_stamp;
+	const struct dst_entry *dst = __sk_dst_get(sk);
 
 	if (sysctl_tcp_slow_start_after_idle &&
 	    (!tp->packets_out && (s32)(now - tp->lsndtime) > icsk->icsk_rto))
@@ -170,8 +174,9 @@ static void tcp_event_data_sent(struct tcp_sock *tp,
 	/* If it is a reply for ato after last received
 	 * packet, enter pingpong mode.
 	 */
-	if ((u32)(now - icsk->icsk_ack.lrcvtime) < icsk->icsk_ack.ato)
-		icsk->icsk_ack.pingpong = 1;
+	if ((u32)(now - icsk->icsk_ack.lrcvtime) < icsk->icsk_ack.ato &&
+	    (!dst || !dst_metric(dst, RTAX_QUICKACK)))
+			icsk->icsk_ack.pingpong = 1;
 }
 
 /* Account for an ACK we sent. */
@@ -179,6 +184,21 @@ static inline void tcp_event_ack_sent(struct sock *sk, unsigned int pkts)
 {
 	tcp_dec_quickack_mode(sk, pkts);
 	inet_csk_clear_xmit_timer(sk, ICSK_TIME_DACK);
+}
+
+
+u32 tcp_default_init_rwnd(u32 mss)
+{
+	/* Initial receive window should be twice of TCP_INIT_CWND to
+	 * enable proper sending of new unsent data during fast recovery
+	 * (RFC 3517, Section 4, NextSeg() rule (2)). Further place a
+	 * limit when mss is larger than 1460.
+	 */
+	u32 init_rwnd = TCP_INIT_CWND * 2;
+
+	if (mss > 1460)
+		init_rwnd = max((1460 * init_rwnd) / mss, 2U);
+	return init_rwnd;
 }
 
 /* Determine a window scaling and initial window to offer.
@@ -230,22 +250,10 @@ void tcp_select_initial_window(int __space, __u32 mss,
 		}
 	}
 
-	/* Set initial window to a value enough for senders starting with
-	 * initial congestion window of TCP_DEFAULT_INIT_RCVWND. Place
-	 * a limit on the initial window when mss is larger than 1460.
-	 */
 	if (mss > (1 << *rcv_wscale)) {
-		int init_cwnd = TCP_DEFAULT_INIT_RCVWND;
-		if (mss > 1460)
-			init_cwnd =
-			max_t(u32, (1460 * TCP_DEFAULT_INIT_RCVWND) / mss, 2);
-		/* when initializing use the value from init_rcv_wnd
-		 * rather than the default from above
-		 */
-		if (init_rcv_wnd)
-			*rcv_wnd = min(*rcv_wnd, init_rcv_wnd * mss);
-		else
-			*rcv_wnd = min(*rcv_wnd, init_cwnd * mss);
+		if (!init_rcv_wnd) /* Use default unless specified otherwise */
+			init_rcv_wnd = tcp_default_init_rwnd(mss);
+		*rcv_wnd = min(*rcv_wnd, init_rcv_wnd * mss);
 	}
 
 	/* Set the clamp no higher than max representable value */
@@ -629,6 +637,8 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 	unsigned int size = 0;
 	unsigned int eff_sacks;
 
+	opts->options = 0;
+
 #ifdef CONFIG_TCP_MD5SIG
 	*md5 = tp->af_specific->md5_lookup(sk, sk);
 	if (unlikely(*md5)) {
@@ -840,14 +850,14 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 
 	BUG_ON(!skb || !tcp_skb_pcount(skb));
 
-	/* If congestion control is doing timestamping, we must
-	 * take such a timestamp before we potentially clone/copy.
-	 */
-	if (icsk->icsk_ca_ops->flags & TCP_CONG_RTT_STAMP)
-		__net_timestamp(skb);
-
-	if (likely(clone_it)) {
+	if (clone_it) {
 		const struct sk_buff *fclone = skb + 1;
+
+		/* If congestion control is doing timestamping, we must
+		 * take such a timestamp before we potentially clone/copy.
+		 */
+		if (icsk->icsk_ca_ops->flags & TCP_CONG_RTT_STAMP)
+			__net_timestamp(skb);
 
 		if (unlikely(skb->fclone == SKB_FCLONE_ORIG &&
 			     fclone->fclone == SKB_FCLONE_CLONE))
@@ -979,8 +989,7 @@ static void tcp_set_skb_tso_segs(const struct sock *sk, struct sk_buff *skb,
 	/* Make sure we own this skb before messing gso_size/gso_segs */
 	WARN_ON_ONCE(skb_cloned(skb));
 
-	if (skb->len <= mss_now || !sk_can_gso(sk) ||
-	    skb->ip_summed == CHECKSUM_NONE) {
+	if (skb->len <= mss_now || skb->ip_summed == CHECKSUM_NONE) {
 		/* Avoid the costly divide in the normal
 		 * non-TSO case.
 		 */
@@ -2348,21 +2357,6 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 
 	tcp_retrans_try_collapse(sk, skb, cur_mss);
 
-	/* Some Solaris stacks overoptimize and ignore the FIN on a
-	 * retransmit when old data is attached.  So strip it off
-	 * since it is cheap to do so and saves bytes on the network.
-	 */
-	if (skb->len > 0 &&
-	    (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) &&
-	    tp->snd_una == (TCP_SKB_CB(skb)->end_seq - 1)) {
-		if (!pskb_trim(skb, 0)) {
-			/* Reuse, even though it does some unnecessary work */
-			tcp_init_nondata_skb(skb, TCP_SKB_CB(skb)->end_seq - 1,
-					     TCP_SKB_CB(skb)->tcp_flags);
-			skb->ip_summed = CHECKSUM_NONE;
-		}
-	}
-
 	/* Make a copy, if the first transmission SKB clone we made
 	 * is still in somebody's hands, else make a clone.
 	 */
@@ -2414,6 +2408,8 @@ int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
 		 * see tcp_input.c tcp_sacktag_write_queue().
 		 */
 		TCP_SKB_CB(skb)->ack_seq = tp->snd_nxt;
+	} else {
+		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPRETRANSFAIL);
 	}
 	return err;
 }
@@ -2535,10 +2531,9 @@ begin_fwd:
 		if (sacked & (TCPCB_SACKED_ACKED|TCPCB_SACKED_RETRANS))
 			continue;
 
-		if (tcp_retransmit_skb(sk, skb)) {
-			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPRETRANSFAIL);
+		if (tcp_retransmit_skb(sk, skb))
 			return;
-		}
+
 		NET_INC_STATS_BH(sock_net(sk), mib_idx);
 
 		if (tcp_in_cwnd_reduction(sk))
@@ -2730,8 +2725,8 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	th->syn = 1;
 	th->ack = 1;
 	TCP_ECN_make_synack(req, th);
-	th->source = ireq->loc_port;
-	th->dest = ireq->rmt_port;
+	th->source = htons(ireq->ir_num);
+	th->dest = ireq->ir_rmt_port;
 	/* Setting of flags are superfluous here for callers (and ECE is
 	 * not even correctly set)
 	 */

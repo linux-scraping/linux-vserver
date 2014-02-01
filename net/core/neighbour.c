@@ -867,7 +867,7 @@ static void neigh_invalidate(struct neighbour *neigh)
 static void neigh_probe(struct neighbour *neigh)
 	__releases(neigh->lock)
 {
-	struct sk_buff *skb = skb_peek(&neigh->arp_queue);
+	struct sk_buff *skb = skb_peek_tail(&neigh->arp_queue);
 	/* keep skb alive even if arp_queue overflows */
 	if (skb)
 		skb = skb_copy(skb, GFP_ATOMIC);
@@ -1161,6 +1161,7 @@ int neigh_update(struct neighbour *neigh, const u8 *lladdr, u8 new,
 						 neigh->parms->reachable_time :
 						 0)));
 		neigh->nud_state = new;
+		notify = 1;
 	}
 
 	if (lladdr != neigh->ha) {
@@ -1421,7 +1422,7 @@ static inline struct neigh_parms *lookup_neigh_parms(struct neigh_table *tbl,
 
 	for (p = &tbl->parms; p; p = p->next) {
 		if ((p->dev && p->dev->ifindex == ifindex && net_eq(neigh_parms_net(p), net)) ||
-		    (!p->dev && !ifindex))
+		    (!p->dev && !ifindex && net_eq(net, &init_net)))
 			return p;
 	}
 
@@ -1431,15 +1432,11 @@ static inline struct neigh_parms *lookup_neigh_parms(struct neigh_table *tbl,
 struct neigh_parms *neigh_parms_alloc(struct net_device *dev,
 				      struct neigh_table *tbl)
 {
-	struct neigh_parms *p, *ref;
+	struct neigh_parms *p;
 	struct net *net = dev_net(dev);
 	const struct net_device_ops *ops = dev->netdev_ops;
 
-	ref = lookup_neigh_parms(tbl, net, 0);
-	if (!ref)
-		return NULL;
-
-	p = kmemdup(ref, sizeof(*p), GFP_KERNEL);
+	p = kmemdup(&tbl->parms, sizeof(*p), GFP_KERNEL);
 	if (p) {
 		p->tbl		  = tbl;
 		atomic_set(&p->refcnt, 1);
@@ -2056,6 +2053,12 @@ static int neightbl_set(struct sk_buff *skb, struct nlmsghdr *nlh)
 			}
 		}
 	}
+
+	err = -ENOENT;
+	if ((tb[NDTA_THRESH1] || tb[NDTA_THRESH2] ||
+	     tb[NDTA_THRESH3] || tb[NDTA_GC_INTERVAL]) &&
+	    !net_eq(net, &init_net))
+		goto errout_tbl_lock;
 
 	if (tb[NDTA_THRESH1])
 		tbl->gc_thresh1 = nla_get_u32(tb[NDTA_THRESH1]);
@@ -2757,23 +2760,22 @@ errout:
 		rtnl_set_sk_err(net, RTNLGRP_NEIGH, err);
 }
 
-#ifdef CONFIG_ARPD
 void neigh_app_ns(struct neighbour *n)
 {
 	__neigh_notify(n, RTM_GETNEIGH, NLM_F_REQUEST);
 }
 EXPORT_SYMBOL(neigh_app_ns);
-#endif /* CONFIG_ARPD */
 
 #ifdef CONFIG_SYSCTL
 static int zero;
+static int int_max = INT_MAX;
 static int unres_qlen_max = INT_MAX / SKB_TRUESIZE(ETH_FRAME_LEN);
 
-static int proc_unres_qlen(ctl_table *ctl, int write, void __user *buffer,
-			   size_t *lenp, loff_t *ppos)
+static int proc_unres_qlen(struct ctl_table *ctl, int write,
+			   void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	int size, ret;
-	ctl_table tmp = *ctl;
+	struct ctl_table tmp = *ctl;
 
 	tmp.extra1 = &zero;
 	tmp.extra2 = &unres_qlen_max;
@@ -2819,19 +2821,25 @@ static struct neigh_sysctl_table {
 			.procname	= "mcast_solicit",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_UCAST_PROBE] = {
 			.procname	= "ucast_solicit",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_APP_PROBE] = {
 			.procname	= "app_solicit",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_RETRANS_TIME] = {
 			.procname	= "retrans_time",
@@ -2874,7 +2882,9 @@ static struct neigh_sysctl_table {
 			.procname	= "proxy_qlen",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_ANYCAST_DELAY] = {
 			.procname	= "anycast_delay",
@@ -2916,19 +2926,25 @@ static struct neigh_sysctl_table {
 			.procname	= "gc_thresh1",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_GC_THRESH2] = {
 			.procname	= "gc_thresh2",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		[NEIGH_VAR_GC_THRESH3] = {
 			.procname	= "gc_thresh3",
 			.maxlen		= sizeof(int),
 			.mode		= 0644,
-			.proc_handler	= proc_dointvec,
+			.extra1 	= &zero,
+			.extra2		= &int_max,
+			.proc_handler	= proc_dointvec_minmax,
 		},
 		{},
 	},

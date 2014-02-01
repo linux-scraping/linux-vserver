@@ -26,6 +26,7 @@
 #include "generic.h"
 #include "clock.h"
 #include "sam9_smc.h"
+#include "pm.h"
 
 /* --------------------------------------------------------------------
  *  Clocks
@@ -321,13 +322,13 @@ static void __init at91sam9263_ioremap_registers(void)
 	at91sam9_ioremap_smc(0, AT91SAM9263_BASE_SMC0);
 	at91sam9_ioremap_smc(1, AT91SAM9263_BASE_SMC1);
 	at91_ioremap_matrix(AT91SAM9263_BASE_MATRIX);
+	at91_pm_set_standby(at91sam9_sdram_standby);
 }
 
 static void __init at91sam9263_initialize(void)
 {
 	arm_pm_idle = at91sam9_idle;
 	arm_pm_restart = at91sam9_alt_restart;
-	at91_extern_irq = (1 << AT91SAM9263_ID_IRQ0) | (1 << AT91SAM9263_ID_IRQ1);
 
 	at91_sysirq_mask_rtt(AT91SAM9263_BASE_RTT0);
 	at91_sysirq_mask_rtt(AT91SAM9263_BASE_RTT1);
@@ -381,6 +382,7 @@ static unsigned int at91sam9263_default_irq_priority[NR_AIC_IRQS] __initdata = {
 AT91_SOC_START(at91sam9263)
 	.map_io = at91sam9263_map_io,
 	.default_irq_priority = at91sam9263_default_irq_priority,
+	.extern_irq = (1 << AT91SAM9263_ID_IRQ0) | (1 << AT91SAM9263_ID_IRQ1),
 	.ioremap_registers = at91sam9263_ioremap_registers,
 	.register_clocks = at91sam9263_register_clocks,
 	.init = at91sam9263_initialize,

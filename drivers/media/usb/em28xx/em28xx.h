@@ -130,6 +130,8 @@
 #define EM2884_BOARD_PCTV_520E			  86
 #define EM2884_BOARD_TERRATEC_HTC_USB_XS	  87
 #define EM2884_BOARD_C3TECH_DIGITAL_DUO		  88
+#define EM2874_BOARD_DELOCK_61959		  89
+#define EM2874_BOARD_KWORLD_UB435Q_V2		  90
 
 /* Limits minimum and default number of buffers */
 #define EM28XX_MIN_BUF 4
@@ -491,6 +493,7 @@ struct em28xx {
 
 	struct v4l2_device v4l2_dev;
 	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_clk *clk;
 	struct em28xx_board board;
 
 	/* Webcam specific fields */
@@ -635,12 +638,6 @@ struct em28xx {
 	int (*em28xx_read_reg_req) (struct em28xx *dev, u8 req, u16 reg);
 
 	enum em28xx_mode mode;
-
-	/* register numbers for GPO/GPIO registers */
-	u16 reg_gpo_num, reg_gpio_num;
-
-	/* Caches GPO and GPIO registers */
-	unsigned char	reg_gpo, reg_gpio;
 
 	/* Snapshot button */
 	char snapshot_button_path[30];	/* path of the input dev */

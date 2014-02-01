@@ -75,6 +75,7 @@ void vmw_display_unit_cleanup(struct vmw_display_unit *du)
 		vmw_surface_unreference(&du->cursor_surface);
 	if (du->cursor_dmabuf)
 		vmw_dmabuf_unreference(&du->cursor_dmabuf);
+	drm_sysfs_connector_remove(&du->connector);
 	drm_crtc_cleanup(&du->crtc);
 	drm_encoder_cleanup(&du->encoder);
 	drm_connector_cleanup(&du->connector);
@@ -174,7 +175,6 @@ int vmw_du_crtc_cursor_set(struct drm_crtc *crtc, struct drm_file *file_priv,
 			   uint32_t handle, uint32_t width, uint32_t height)
 {
 	struct vmw_private *dev_priv = vmw_priv(crtc->dev);
-	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
 	struct vmw_display_unit *du = vmw_crtc_to_du(crtc);
 	struct vmw_surface *surface = NULL;
 	struct vmw_dma_buffer *dmabuf = NULL;
@@ -197,6 +197,8 @@ int vmw_du_crtc_cursor_set(struct drm_crtc *crtc, struct drm_file *file_priv,
 	}
 
 	if (handle) {
+		struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
+
 		ret = vmw_user_lookup_handle(dev_priv, tfile,
 					     handle, &surface, &dmabuf);
 		if (ret) {
@@ -1507,7 +1509,7 @@ int vmw_kms_cursor_bypass_ioctl(struct drm_device *dev, void *data,
 
 	obj = drm_mode_object_find(dev, arg->crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
-		ret = -EINVAL;
+		ret = -ENOENT;
 		goto out;
 	}
 
@@ -1705,7 +1707,8 @@ int vmw_du_update_layout(struct vmw_private *dev_priv, unsigned num,
 
 int vmw_du_page_flip(struct drm_crtc *crtc,
 		     struct drm_framebuffer *fb,
-		     struct drm_pending_vblank_event *event)
+		     struct drm_pending_vblank_event *event,
+		     uint32_t page_flip_flags)
 {
 	struct vmw_private *dev_priv = vmw_priv(crtc->dev);
 	struct drm_framebuffer *old_fb = crtc->fb;

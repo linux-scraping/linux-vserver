@@ -52,7 +52,7 @@ sys32_rt_sigreturn:
 #endif
 	.align	32
 1:	ldx	[%g6 + TI_FLAGS], %l5
-	andcc	%l5, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
+	andcc	%l5, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT|_TIF_NOHZ), %g0
 	be,pt	%icc, rtrap
 	 nop
 	call	syscall_trace_leave
@@ -98,8 +98,8 @@ sys_clone:
 	ba,pt	%xcc, sparc_do_fork
 	 add	%sp, PTREGS_OFF, %o2
 
-	.globl	ret_from_syscall
-ret_from_syscall:
+	.globl	ret_from_fork
+ret_from_fork:
 	/* Clear current_thread_info()->new_child. */
 	stb	%g0, [%g6 + TI_NEW_CHILD]
 	call	schedule_tail
@@ -184,7 +184,7 @@ linux_sparc_syscall32:
 
 	srl	%i3, 0, %o3				! IEU0
 	srl	%i2, 0, %o2				! IEU0	Group
-	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
+	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT|_TIF_NOHZ), %g0
 	bne,pn	%icc, linux_syscall_trace32		! CTI
 	 mov	%i0, %l5				! IEU1
 5:	call	%l7					! CTI	Group brk forced
@@ -207,7 +207,7 @@ linux_sparc_syscall:
 
 	mov	%i3, %o3				! IEU1
 	mov	%i4, %o4				! IEU0	Group
-	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
+	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT|_TIF_NOHZ), %g0
 	bne,pn	%icc, linux_syscall_trace		! CTI	Group
 	 mov	%i0, %l5				! IEU0
 2:	call	%l7					! CTI	Group brk forced
@@ -223,7 +223,7 @@ ret_sys_call:
 
 	cmp	%o0, -ERESTART_RESTARTBLOCK
 	bgeu,pn	%xcc, 1f
-	 andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
+	 andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT|_TIF_NOHZ), %g0
 	ldx	[%sp + PTREGS_OFF + PT_V9_TNPC], %l1 ! pc = npc
 
 2:

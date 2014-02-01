@@ -14,7 +14,7 @@
  ******************************************************************************
 
   Few modifications for Realtek's Wi-Fi drivers by
-  Andrea Merello <andreamrl@tiscali.it>
+  Andrea Merello <andrea.merello@gmail.com>
 
   A special thanks goes to Realtek for their support !
 
@@ -399,8 +399,8 @@ static int is_duplicate_packet(struct ieee80211_device *ieee,
 		struct ieee_ibss_seq *entry = NULL;
 		u8 *mac = header->addr2;
 		int index = mac[5] % IEEE_IBSS_MAC_HASH_SIZE;
-		//for (pos = (head)->next; pos != (head); pos = pos->next)
-		__list_for_each(p, &ieee->ibss_mac_hash[index]) {
+
+		list_for_each(p, &ieee->ibss_mac_hash[index]) {
 			entry = list_entry(p, struct ieee_ibss_seq, list);
 			if (!memcmp(entry->mac, mac, ETH_ALEN))
 				break;
@@ -858,7 +858,7 @@ static inline void ieee80211_extract_country_ie(
 
 }
 
-int
+static int
 ieee80211_TranslateToDbm(
 	unsigned char SignalStrengthIndex	// 0-100 index.
 	)

@@ -88,7 +88,7 @@ static int __init dmar_parse_one_dev_scope(struct acpi_dmar_device_scope *scope,
 			pr_warn("Device scope bus [%d] not found\n", scope->bus);
 			break;
 		}
-		pdev = pci_get_slot(bus, PCI_DEVFN(path->dev, path->fn));
+		pdev = pci_get_slot(bus, PCI_DEVFN(path->device, path->function));
 		if (!pdev) {
 			/* warning will be printed below */
 			break;
@@ -99,7 +99,7 @@ static int __init dmar_parse_one_dev_scope(struct acpi_dmar_device_scope *scope,
 	}
 	if (!pdev) {
 		pr_warn("Device scope device [%04x:%02x:%02x.%02x] not found\n",
-			segment, scope->bus, path->dev, path->fn);
+			segment, scope->bus, path->device, path->function);
 		*dev = NULL;
 		return 0;
 	}
@@ -309,6 +309,7 @@ parse_dmar_table(void)
 	struct acpi_table_dmar *dmar;
 	struct acpi_dmar_header *entry_header;
 	int ret = 0;
+	int drhd_count = 0;
 
 	/*
 	 * Do it again, earlier dmar_tbl mapping could be mapped with
@@ -347,6 +348,7 @@ parse_dmar_table(void)
 
 		switch (entry_header->type) {
 		case ACPI_DMAR_TYPE_HARDWARE_UNIT:
+			drhd_count++;
 			ret = dmar_parse_one_drhd(entry_header);
 			break;
 		case ACPI_DMAR_TYPE_RESERVED_MEMORY:
@@ -371,6 +373,8 @@ parse_dmar_table(void)
 
 		entry_header = ((void *)entry_header + entry_header->length);
 	}
+	if (drhd_count == 0)
+		pr_warn(FW_BUG "No DRHD structure found in DMAR table\n");
 	return ret;
 }
 
@@ -399,7 +403,7 @@ dmar_find_matched_drhd_unit(struct pci_dev *dev)
 
 	dev = pci_physfn(dev);
 
-	list_for_each_entry(dmaru, &dmar_drhd_units, list) {
+	for_each_drhd_unit(dmaru) {
 		drhd = container_of(dmaru->hdr,
 				    struct acpi_dmar_hardware_unit,
 				    header);

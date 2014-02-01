@@ -15,29 +15,17 @@
 
 struct closure;
 
-#include <trace/events/bcache.h>
-
-#ifdef CONFIG_BCACHE_EDEBUG
+#ifdef CONFIG_BCACHE_DEBUG
 
 #define atomic_dec_bug(v)	BUG_ON(atomic_dec_return(v) < 0)
 #define atomic_inc_bug(v, i)	BUG_ON(atomic_inc_return(v) <= i)
 
-#else /* EDEBUG */
+#else /* DEBUG */
 
 #define atomic_dec_bug(v)	atomic_dec(v)
 #define atomic_inc_bug(v, i)	atomic_inc(v)
 
 #endif
-
-#define BITMASK(name, type, field, offset, size)		\
-static inline uint64_t name(const type *k)			\
-{ return (k->field >> offset) & ~(((uint64_t) ~0) << size); }	\
-								\
-static inline void SET_##name(type *k, uint64_t v)		\
-{								\
-	k->field &= ~(~((uint64_t) ~0 << size) << offset);	\
-	k->field |= v << offset;				\
-}
 
 #define DECLARE_HEAP(type, name)					\
 	struct {							\
@@ -122,7 +110,7 @@ do {									\
 	_r;								\
 })
 
-#define heap_peek(h)	((h)->size ? (h)->data[0] : NULL)
+#define heap_peek(h)	((h)->used ? (h)->data[0] : NULL)
 
 #define heap_full(h)	((h)->used == (h)->size)
 
@@ -390,6 +378,7 @@ ssize_t bch_snprint_string_list(char *buf, size_t size, const char * const list[
 ssize_t bch_read_string_list(const char *buf, const char * const list[]);
 
 struct time_stats {
+	spinlock_t	lock;
 	/*
 	 * all fields are in nanoseconds, averages are ewmas stored left shifted
 	 * by 8
@@ -572,11 +561,7 @@ static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
 	return x;
 }
 
-#define bio_end(bio)	((bio)->bi_sector + bio_sectors(bio))
-
 void bch_bio_map(struct bio *bio, void *base);
-
-int bch_bio_alloc_pages(struct bio *bio, gfp_t gfp);
 
 static inline sector_t bdev_sectors(struct block_device *bdev)
 {

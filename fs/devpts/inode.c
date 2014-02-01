@@ -376,9 +376,9 @@ static int devpts_filter(struct dentry *de)
 	return vx_check(xid, VS_WATCH_P | VS_IDENT);
 }
 
-static int devpts_readdir(struct file * filp, void * dirent, filldir_t filldir)
+static int devpts_readdir(struct file * filp, struct dir_context *ctx)
 {
-	return dcache_readdir_filter(filp, dirent, filldir, devpts_filter);
+	return dcache_readdir_filter(filp, ctx, devpts_filter);
 }
 
 static struct file_operations devpts_dir_operations = {
@@ -386,7 +386,7 @@ static struct file_operations devpts_dir_operations = {
 	.release	= dcache_dir_close,
 	.llseek		= dcache_dir_lseek,
 	.read		= generic_read_dir,
-	.readdir	= devpts_readdir,
+	.iterate	= devpts_readdir,
 };
 
 static const struct super_operations devpts_sops = {

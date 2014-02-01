@@ -2624,6 +2624,9 @@ bnad_stop(struct net_device *netdev)
 	bnad_destroy_tx(bnad, 0);
 	bnad_destroy_rx(bnad, 0);
 
+	/* These config flags are cleared in the hardware */
+	bnad->cfg_flags &= ~(BNAD_CF_ALLMULTI | BNAD_CF_PROMISC);
+
 	/* Synchronize mailbox IRQ */
 	bnad_mbox_irq_sync(bnad);
 
@@ -3209,7 +3212,6 @@ bnad_init(struct bnad *bnad,
 	bnad->bar0 = ioremap_nocache(bnad->mmio_start, bnad->mmio_len);
 	if (!bnad->bar0) {
 		dev_err(&pdev->dev, "ioremap for bar0 failed\n");
-		pci_set_drvdata(pdev, NULL);
 		return -ENOMEM;
 	}
 	pr_info("bar0 mapped to %p, len %llu\n", bnad->bar0,
@@ -3297,17 +3299,12 @@ bnad_pci_init(struct bnad *bnad,
 	err = pci_request_regions(pdev, BNAD_NAME);
 	if (err)
 		goto disable_device;
-	if (!dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)) &&
-	    !dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+	if (!dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
 		*using_dac = true;
 	} else {
-		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
-		if (err) {
-			err = dma_set_coherent_mask(&pdev->dev,
-						    DMA_BIT_MASK(32));
-			if (err)
-				goto release_regions;
-		}
+		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+		if (err)
+			goto release_regions;
 		*using_dac = false;
 	}
 	pci_set_master(pdev);

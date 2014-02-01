@@ -193,13 +193,11 @@ extern int _cond_resched(void);
 		(__x < 0) ? -__x : __x;		\
 	})
 
-#ifdef CONFIG_PROVE_LOCKING
+#if defined(CONFIG_MMU) && \
+	(defined(CONFIG_PROVE_LOCKING) || defined(CONFIG_DEBUG_ATOMIC_SLEEP))
 void might_fault(void);
 #else
-static inline void might_fault(void)
-{
-	might_sleep();
-}
+static inline void might_fault(void) { }
 #endif
 
 extern struct atomic_notifier_head panic_notifier_list;
@@ -442,6 +440,17 @@ static inline char *hex_byte_pack(char *buf, u8 byte)
 	return buf;
 }
 
+extern const char hex_asc_upper[];
+#define hex_asc_upper_lo(x)	hex_asc_upper[((x) & 0x0f)]
+#define hex_asc_upper_hi(x)	hex_asc_upper[((x) & 0xf0) >> 4]
+
+static inline char *hex_byte_pack_upper(char *buf, u8 byte)
+{
+	*buf++ = hex_asc_upper_hi(byte);
+	*buf++ = hex_asc_upper_lo(byte);
+	return buf;
+}
+
 static inline char * __deprecated pack_hex_byte(char *buf, u8 byte)
 {
 	return hex_byte_pack(buf, byte);
@@ -449,6 +458,8 @@ static inline char * __deprecated pack_hex_byte(char *buf, u8 byte)
 
 extern int hex_to_bin(char ch);
 extern int __must_check hex2bin(u8 *dst, const char *src, size_t count);
+
+int mac_pton(const char *s, u8 *mac);
 
 /*
  * General tracing related utility functions - trace_printk(),
@@ -491,7 +502,6 @@ void tracing_snapshot_alloc(void);
 
 extern void tracing_start(void);
 extern void tracing_stop(void);
-extern void ftrace_off_permanent(void);
 
 static inline __printf(1, 2)
 void ____trace_printk_check_format(const char *fmt, ...)
@@ -562,9 +572,6 @@ int __trace_bprintk(unsigned long ip, const char *fmt, ...);
 extern __printf(2, 3)
 int __trace_printk(unsigned long ip, const char *fmt, ...);
 
-extern int __trace_bputs(unsigned long ip, const char *str);
-extern int __trace_puts(unsigned long ip, const char *str, int size);
-
 /**
  * trace_puts - write a string into the ftrace buffer
  * @str: the string to record
@@ -600,6 +607,8 @@ extern int __trace_puts(unsigned long ip, const char *str, int size);
 	else								\
 		__trace_puts(_THIS_IP_, str, strlen(str));		\
 })
+extern int __trace_bputs(unsigned long ip, const char *str);
+extern int __trace_puts(unsigned long ip, const char *str, int size);
 
 extern void trace_dump_stack(int skip);
 
@@ -630,8 +639,7 @@ extern void ftrace_dump(enum ftrace_dump_mode oops_dump_mode);
 #else
 static inline void tracing_start(void) { }
 static inline void tracing_stop(void) { }
-static inline void ftrace_off_permanent(void) { }
-static inline void trace_dump_stack(void) { }
+static inline void trace_dump_stack(int skip) { }
 
 static inline void tracing_on(void) { }
 static inline void tracing_off(void) { }

@@ -149,6 +149,7 @@ static void cleanup_single_sta(struct sta_info *sta)
 	 * directly by station destruction.
 	 */
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++) {
+		kfree(sta->ampdu_mlme.tid_start_tx[i]);
 		tid_tx = rcu_dereference_raw(sta->ampdu_mlme.tid_tx[i]);
 		if (!tid_tx)
 			continue;
@@ -346,6 +347,7 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 	if (ieee80211_vif_is_mesh(&sdata->vif) &&
 	    !sdata->u.mesh.user_mpm)
 		init_timer(&sta->plink_timer);
+	sta->nonpeer_pm = NL80211_MESH_POWER_ACTIVE;
 #endif
 
 	memcpy(sta->sta.addr, addr, ETH_ALEN);
@@ -358,6 +360,8 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 	do_posix_clock_monotonic_gettime(&uptime);
 	sta->last_connected = uptime.tv_sec;
 	ewma_init(&sta->avg_signal, 1024, 8);
+	for (i = 0; i < ARRAY_SIZE(sta->chain_signal_avg); i++)
+		ewma_init(&sta->chain_signal_avg[i], 1024, 8);
 
 	if (sta_prepare_rate_control(local, sta, gfp)) {
 		kfree(sta);
@@ -381,6 +385,30 @@ struct sta_info *sta_info_alloc(struct ieee80211_sub_if_data *sdata,
 		sta->last_seq_ctrl[i] = cpu_to_le16(USHRT_MAX);
 
 	sta->sta.smps_mode = IEEE80211_SMPS_OFF;
+	if (sdata->vif.type == NL80211_IFTYPE_AP ||
+	    sdata->vif.type == NL80211_IFTYPE_AP_VLAN) {
+		struct ieee80211_supported_band *sband =
+			local->hw.wiphy->bands[ieee80211_get_sdata_band(sdata)];
+		u8 smps = (sband->ht_cap.cap & IEEE80211_HT_CAP_SM_PS) >>
+				IEEE80211_HT_CAP_SM_PS_SHIFT;
+		/*
+		 * Assume that hostapd advertises our caps in the beacon and
+		 * this is the known_smps_mode for a station that just assciated
+		 */
+		switch (smps) {
+		case WLAN_HT_SMPS_CONTROL_DISABLED:
+			sta->known_smps_mode = IEEE80211_SMPS_OFF;
+			break;
+		case WLAN_HT_SMPS_CONTROL_STATIC:
+			sta->known_smps_mode = IEEE80211_SMPS_STATIC;
+			break;
+		case WLAN_HT_SMPS_CONTROL_DYNAMIC:
+			sta->known_smps_mode = IEEE80211_SMPS_DYNAMIC;
+			break;
+		default:
+			WARN_ON(1);
+		}
+	}
 
 	sta_dbg(sdata, "Allocated STA %pM\n", sta->sta.addr);
 
@@ -1065,6 +1093,19 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta)
 
 	ieee80211_add_pending_skbs_fn(local, &pending, clear_sta_ps_flags, sta);
 
+	/* This station just woke up and isn't aware of our SMPS state */
+	if (!ieee80211_smps_is_restrictive(sta->known_smps_mode,
+					   sdata->smps_mode) &&
+	    sta->known_smps_mode != sdata->bss->req_smps &&
+	    sta_info_tx_streams(sta) != 1) {
+		ht_dbg(sdata,
+		       "%pM just woke up and MIMO capable - update SMPS\n",
+		       sta->sta.addr);
+		ieee80211_send_smps_action(sdata, sdata->bss->req_smps,
+					   sta->sta.addr,
+					   sdata->vif.bss_conf.bssid);
+	}
+
 	local->total_ps_buffered -= buffered;
 
 	sta_info_recalc_tim(sta);
@@ -1130,6 +1171,7 @@ static void ieee80211_send_null_response(struct ieee80211_sub_if_data *sdata,
 	 * ends the poll/service period.
 	 */
 	info->flags |= IEEE80211_TX_CTL_NO_PS_BUFFER |
+		       IEEE80211_TX_CTL_PS_RESPONSE |
 		       IEEE80211_TX_STATUS_EOSP |
 		       IEEE80211_TX_CTL_REQ_TX_STATUS;
 
@@ -1267,7 +1309,8 @@ ieee80211_sta_ps_deliver_response(struct sta_info *sta,
 			 * STA may still remain is PS mode after this frame
 			 * exchange.
 			 */
-			info->flags |= IEEE80211_TX_CTL_NO_PS_BUFFER;
+			info->flags |= IEEE80211_TX_CTL_NO_PS_BUFFER |
+				       IEEE80211_TX_CTL_PS_RESPONSE;
 
 			/*
 			 * Use MoreData flag to indicate whether there are
@@ -1513,4 +1556,39 @@ int sta_info_move_state(struct sta_info *sta,
 	sta->sta_state = new_state;
 
 	return 0;
+}
+
+u8 sta_info_tx_streams(struct sta_info *sta)
+{
+	struct ieee80211_sta_ht_cap *ht_cap = &sta->sta.ht_cap;
+	u8 rx_streams;
+
+	if (!sta->sta.ht_cap.ht_supported)
+		return 1;
+
+	if (sta->sta.vht_cap.vht_supported) {
+		int i;
+		u16 tx_mcs_map =
+			le16_to_cpu(sta->sta.vht_cap.vht_mcs.tx_mcs_map);
+
+		for (i = 7; i >= 0; i--)
+			if ((tx_mcs_map & (0x3 << (i * 2))) !=
+			    IEEE80211_VHT_MCS_NOT_SUPPORTED)
+				return i + 1;
+	}
+
+	if (ht_cap->mcs.rx_mask[3])
+		rx_streams = 4;
+	else if (ht_cap->mcs.rx_mask[2])
+		rx_streams = 3;
+	else if (ht_cap->mcs.rx_mask[1])
+		rx_streams = 2;
+	else
+		rx_streams = 1;
+
+	if (!(ht_cap->mcs.tx_params & IEEE80211_HT_MCS_TX_RX_DIFF))
+		return rx_streams;
+
+	return ((ht_cap->mcs.tx_params & IEEE80211_HT_MCS_TX_MAX_STREAMS_MASK)
+			>> IEEE80211_HT_MCS_TX_MAX_STREAMS_SHIFT) + 1;
 }

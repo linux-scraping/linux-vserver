@@ -58,7 +58,7 @@ AllocMidQEntry(const struct smb_hdr *smb_buffer, struct TCP_Server_Info *server)
 		return temp;
 	else {
 		memset(temp, 0, sizeof(struct mid_q_entry));
-		temp->mid = smb_buffer->Mid;	/* always LE */
+		temp->mid = get_mid(smb_buffer);
 		temp->pid = current->pid;
 		temp->command = cpu_to_le16(smb_buffer->Command);
 		cifs_dbg(FYI, "For smb_command %d\n", smb_buffer->Command);
@@ -410,8 +410,13 @@ static int
 wait_for_free_request(struct TCP_Server_Info *server, const int timeout,
 		      const int optype)
 {
-	return wait_for_free_credits(server, timeout,
-				server->ops->get_credits_field(server, optype));
+	int *val;
+
+	val = server->ops->get_credits_field(server, optype);
+	/* Since an echo is already inflight, no need to wait to send another */
+	if (*val <= 0 && optype == CIFS_ECHO_OP)
+		return -EAGAIN;
+	return wait_for_free_credits(server, timeout, val);
 }
 
 static int allocate_mid(struct cifs_ses *ses, struct smb_hdr *in_buf,
@@ -426,13 +431,20 @@ static int allocate_mid(struct cifs_ses *ses, struct smb_hdr *in_buf,
 		return -EAGAIN;
 	}
 
-	if (ses->status != CifsGood) {
-		/* check if SMB session is bad because we are setting it up */
+	if (ses->status == CifsNew) {
 		if ((in_buf->Command != SMB_COM_SESSION_SETUP_ANDX) &&
 			(in_buf->Command != SMB_COM_NEGOTIATE))
 			return -EAGAIN;
 		/* else ok - we are setting up session */
 	}
+
+	if (ses->status == CifsExiting) {
+		/* check if SMB session is bad because we are setting it up */
+		if (in_buf->Command != SMB_COM_LOGOFF_ANDX)
+			return -EAGAIN;
+		/* else ok - we are shutting down session */
+	}
+
 	*ppmidQ = AllocMidQEntry(in_buf, ses->server);
 	if (*ppmidQ == NULL)
 		return -ENOMEM;
@@ -447,7 +459,7 @@ wait_for_response(struct TCP_Server_Info *server, struct mid_q_entry *midQ)
 {
 	int error;
 
-	error = wait_event_freezekillable(server->response_q,
+	error = wait_event_freezekillable_unsafe(server->response_q,
 				    midQ->mid_state != MID_REQUEST_SUBMITTED);
 	if (error < 0)
 		return -ERESTARTSYS;
@@ -463,7 +475,7 @@ cifs_setup_async_request(struct TCP_Server_Info *server, struct smb_rqst *rqst)
 	struct mid_q_entry *mid;
 
 	/* enable signing if server requires it */
-	if (server->sec_mode & (SECMODE_SIGN_REQUIRED | SECMODE_SIGN_ENABLED))
+	if (server->sign)
 		hdr->Flags2 |= SMBFLG2_SECURITY_SIGNATURE;
 
 	mid = AllocMidQEntry(hdr, server);
@@ -612,7 +624,7 @@ cifs_check_receive(struct mid_q_entry *mid, struct TCP_Server_Info *server,
 	dump_smb(mid->resp_buf, min_t(u32, 92, len));
 
 	/* convert the length into a more usable form */
-	if (server->sec_mode & (SECMODE_SIGN_REQUIRED | SECMODE_SIGN_ENABLED)) {
+	if (server->sign) {
 		struct kvec iov;
 		int rc = 0;
 		struct smb_rqst rqst = { .rq_iov = &iov,

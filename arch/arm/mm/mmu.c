@@ -28,6 +28,8 @@
 #include <asm/highmem.h>
 #include <asm/system_info.h>
 #include <asm/traps.h>
+#include <asm/procinfo.h>
+#include <asm/memory.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -556,8 +558,8 @@ static void __init build_mem_type_table(void)
 		mem_types[MT_CACHECLEAN].prot_sect |= PMD_SECT_WB;
 		break;
 	}
-	printk("Memory policy: ECC %sabled, Data cache %s\n",
-		ecc_mask ? "en" : "dis", cp->policy);
+	pr_info("Memory policy: %sData cache %s\n",
+		ecc_mask ? "ECC enabled, " : "", cp->policy);
 
 	for (i = 0; i < ARRAY_SIZE(mem_types); i++) {
 		struct mem_type *t = &mem_types[i];
@@ -675,7 +677,8 @@ static void __init alloc_init_pmd(pud_t *pud, unsigned long addr,
 }
 
 static void __init alloc_init_pud(pgd_t *pgd, unsigned long addr,
-	unsigned long end, unsigned long phys, const struct mem_type *type)
+				  unsigned long end, phys_addr_t phys,
+				  const struct mem_type *type)
 {
 	pud_t *pud = pud_offset(pgd, addr);
 	unsigned long next;
@@ -949,7 +952,7 @@ void __init debug_ll_io_init(void)
 	map.virtual &= PAGE_MASK;
 	map.length = PAGE_SIZE;
 	map.type = MT_DEVICE;
-	create_mapping(&map);
+	iotable_init(&map, 1);
 }
 #endif
 
@@ -988,28 +991,30 @@ phys_addr_t arm_lowmem_limit __initdata = 0;
 
 void __init sanity_check_meminfo(void)
 {
+	phys_addr_t memblock_limit = 0;
 	int i, j, highmem = 0;
+	phys_addr_t vmalloc_limit = __pa(vmalloc_min - 1) + 1;
 
 	for (i = 0, j = 0; i < meminfo.nr_banks; i++) {
 		struct membank *bank = &meminfo.bank[j];
+		phys_addr_t size_limit;
+
 		*bank = meminfo.bank[i];
+		size_limit = bank->size;
 
-		if (bank->start > ULONG_MAX)
+		if (bank->start >= vmalloc_limit)
 			highmem = 1;
-
-#ifdef CONFIG_HIGHMEM
-		if (__va(bank->start) >= vmalloc_min ||
-		    __va(bank->start) < (void *)PAGE_OFFSET)
-			highmem = 1;
+		else
+			size_limit = vmalloc_limit - bank->start;
 
 		bank->highmem = highmem;
 
+#ifdef CONFIG_HIGHMEM
 		/*
 		 * Split those memory banks which are partially overlapping
 		 * the vmalloc area greatly simplifying things later.
 		 */
-		if (!highmem && __va(bank->start) < vmalloc_min &&
-		    bank->size > vmalloc_min - __va(bank->start)) {
+		if (!highmem && bank->size > size_limit) {
 			if (meminfo.nr_banks >= NR_BANKS) {
 				printk(KERN_CRIT "NR_BANKS too low, "
 						 "ignoring high memory\n");
@@ -1018,16 +1023,14 @@ void __init sanity_check_meminfo(void)
 					(meminfo.nr_banks - i) * sizeof(*bank));
 				meminfo.nr_banks++;
 				i++;
-				bank[1].size -= vmalloc_min - __va(bank->start);
-				bank[1].start = __pa(vmalloc_min - 1) + 1;
+				bank[1].size -= size_limit;
+				bank[1].start = vmalloc_limit;
 				bank[1].highmem = highmem = 1;
 				j++;
 			}
-			bank->size = vmalloc_min - __va(bank->start);
+			bank->size = size_limit;
 		}
 #else
-		bank->highmem = highmem;
-
 		/*
 		 * Highmem banks not allowed with !CONFIG_HIGHMEM.
 		 */
@@ -1040,36 +1043,44 @@ void __init sanity_check_meminfo(void)
 		}
 
 		/*
-		 * Check whether this memory bank would entirely overlap
-		 * the vmalloc area.
-		 */
-		if (__va(bank->start) >= vmalloc_min ||
-		    __va(bank->start) < (void *)PAGE_OFFSET) {
-			printk(KERN_NOTICE "Ignoring RAM at %.8llx-%.8llx "
-			       "(vmalloc region overlap).\n",
-			       (unsigned long long)bank->start,
-			       (unsigned long long)bank->start + bank->size - 1);
-			continue;
-		}
-
-		/*
 		 * Check whether this memory bank would partially overlap
 		 * the vmalloc area.
 		 */
-		if (__va(bank->start + bank->size - 1) >= vmalloc_min ||
-		    __va(bank->start + bank->size - 1) <= __va(bank->start)) {
-			unsigned long newsize = vmalloc_min - __va(bank->start);
+		if (bank->size > size_limit) {
 			printk(KERN_NOTICE "Truncating RAM at %.8llx-%.8llx "
 			       "to -%.8llx (vmalloc region overlap).\n",
 			       (unsigned long long)bank->start,
 			       (unsigned long long)bank->start + bank->size - 1,
-			       (unsigned long long)bank->start + newsize - 1);
-			bank->size = newsize;
+			       (unsigned long long)bank->start + size_limit - 1);
+			bank->size = size_limit;
 		}
 #endif
-		if (!bank->highmem && bank->start + bank->size > arm_lowmem_limit)
-			arm_lowmem_limit = bank->start + bank->size;
+		if (!bank->highmem) {
+			phys_addr_t bank_end = bank->start + bank->size;
 
+			if (bank_end > arm_lowmem_limit)
+				arm_lowmem_limit = bank_end;
+
+			/*
+			 * Find the first non-section-aligned page, and point
+			 * memblock_limit at it. This relies on rounding the
+			 * limit down to be section-aligned, which happens at
+			 * the end of this function.
+			 *
+			 * With this algorithm, the start or end of almost any
+			 * bank can be non-section-aligned. The only exception
+			 * is that the start of the bank 0 must be section-
+			 * aligned, since otherwise memory would need to be
+			 * allocated when mapping the start of bank 0, which
+			 * occurs before any free memory is mapped.
+			 */
+			if (!memblock_limit) {
+				if (!IS_ALIGNED(bank->start, SECTION_SIZE))
+					memblock_limit = bank->start;
+				else if (!IS_ALIGNED(bank_end, SECTION_SIZE))
+					memblock_limit = bank_end;
+			}
+		}
 		j++;
 	}
 #ifdef CONFIG_HIGHMEM
@@ -1094,7 +1105,18 @@ void __init sanity_check_meminfo(void)
 #endif
 	meminfo.nr_banks = j;
 	high_memory = __va(arm_lowmem_limit - 1) + 1;
-	memblock_set_current_limit(arm_lowmem_limit);
+
+	/*
+	 * Round the memblock limit down to a section size.  This
+	 * helps to ensure that we will allocate memory from the
+	 * last full section, which should be mapped.
+	 */
+	if (memblock_limit)
+		memblock_limit = round_down(memblock_limit, SECTION_SIZE);
+	if (!memblock_limit)
+		memblock_limit = arm_lowmem_limit;
+
+	memblock_set_current_limit(memblock_limit);
 }
 
 static inline void prepare_page_table(void)
@@ -1166,7 +1188,7 @@ void __init arm_mm_memblock_reserve(void)
  * called function.  This means you can't use any function or debugging
  * method which may touch any device, otherwise the kernel _will_ crash.
  */
-static void __init devicemaps_init(struct machine_desc *mdesc)
+static void __init devicemaps_init(const struct machine_desc *mdesc)
 {
 	struct map_desc map;
 	unsigned long addr;
@@ -1246,6 +1268,8 @@ static void __init devicemaps_init(struct machine_desc *mdesc)
 	 */
 	if (mdesc->map_io)
 		mdesc->map_io();
+	else
+		debug_ll_io_init();
 	fill_pmd_gaps();
 
 	/* Reserve fixed i/o space in VMALLOC region */
@@ -1293,15 +1317,93 @@ static void __init map_lowmem(void)
 	}
 }
 
+#ifdef CONFIG_ARM_LPAE
+/*
+ * early_paging_init() recreates boot time page table setup, allowing machines
+ * to switch over to a high (>4G) address space on LPAE systems
+ */
+void __init early_paging_init(const struct machine_desc *mdesc,
+			      struct proc_info_list *procinfo)
+{
+	pmdval_t pmdprot = procinfo->__cpu_mm_mmu_flags;
+	unsigned long map_start, map_end;
+	pgd_t *pgd0, *pgdk;
+	pud_t *pud0, *pudk, *pud_start;
+	pmd_t *pmd0, *pmdk;
+	phys_addr_t phys;
+	int i;
+
+	if (!(mdesc->init_meminfo))
+		return;
+
+	/* remap kernel code and data */
+	map_start = init_mm.start_code;
+	map_end   = init_mm.brk;
+
+	/* get a handle on things... */
+	pgd0 = pgd_offset_k(0);
+	pud_start = pud0 = pud_offset(pgd0, 0);
+	pmd0 = pmd_offset(pud0, 0);
+
+	pgdk = pgd_offset_k(map_start);
+	pudk = pud_offset(pgdk, map_start);
+	pmdk = pmd_offset(pudk, map_start);
+
+	mdesc->init_meminfo();
+
+	/* Run the patch stub to update the constants */
+	fixup_pv_table(&__pv_table_begin,
+		(&__pv_table_end - &__pv_table_begin) << 2);
+
+	/*
+	 * Cache cleaning operations for self-modifying code
+	 * We should clean the entries by MVA but running a
+	 * for loop over every pv_table entry pointer would
+	 * just complicate the code.
+	 */
+	flush_cache_louis();
+	dsb();
+	isb();
+
+	/* remap level 1 table */
+	for (i = 0; i < PTRS_PER_PGD; pud0++, i++) {
+		set_pud(pud0,
+			__pud(__pa(pmd0) | PMD_TYPE_TABLE | L_PGD_SWAPPER));
+		pmd0 += PTRS_PER_PMD;
+	}
+
+	/* remap pmds for kernel mapping */
+	phys = __pa(map_start) & PMD_MASK;
+	do {
+		*pmdk++ = __pmd(phys | pmdprot);
+		phys += PMD_SIZE;
+	} while (phys < map_end);
+
+	flush_cache_all();
+	cpu_switch_mm(pgd0, &init_mm);
+	cpu_set_ttbr(1, __pa(pgd0) + TTBR1_OFFSET);
+	local_flush_bp_all();
+	local_flush_tlb_all();
+}
+
+#else
+
+void __init early_paging_init(const struct machine_desc *mdesc,
+			      struct proc_info_list *procinfo)
+{
+	if (mdesc->init_meminfo)
+		mdesc->init_meminfo();
+}
+
+#endif
+
 /*
  * paging_init() sets up the page tables, initialises the zone memory
  * maps, and sets up the zero page, bad page and bad page tables.
  */
-void __init paging_init(struct machine_desc *mdesc)
+void __init paging_init(const struct machine_desc *mdesc)
 {
 	void *zero_page;
-
-	memblock_set_current_limit(arm_lowmem_limit);
 
 	build_mem_type_table();
 	prepare_page_table();

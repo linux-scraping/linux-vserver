@@ -38,6 +38,13 @@
 static const struct vport_ops *vport_ops_list[] = {
 	&ovs_netdev_vport_ops,
 	&ovs_internal_vport_ops,
+
+#ifdef CONFIG_OPENVSWITCH_GRE
+	&ovs_gre_vport_ops,
+#endif
+#ifdef CONFIG_OPENVSWITCH_VXLAN
+	&ovs_vxlan_vport_ops,
+#endif
 };
 
 /* Protected by RCU read lock for reading, ovs_mutex for writing. */
@@ -111,6 +118,7 @@ struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *ops,
 {
 	struct vport *vport;
 	size_t alloc_size;
+	int i;
 
 	alloc_size = sizeof(struct vport);
 	if (priv_size) {
@@ -133,6 +141,13 @@ struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *ops,
 		kfree(vport);
 		return ERR_PTR(-ENOMEM);
 	}
+
+	for_each_possible_cpu(i) {
+		struct pcpu_tstats *vport_stats;
+		vport_stats = per_cpu_ptr(vport->percpu_stats, i);
+		u64_stats_init(&vport_stats->syncp);
+	}
+
 
 	spin_lock_init(&vport->stats_lock);
 
@@ -196,7 +211,7 @@ out:
  *	ovs_vport_set_options - modify existing vport device (for kernel callers)
  *
  * @vport: vport to modify.
- * @port: New configuration.
+ * @options: New configuration.
  *
  * Modifies an existing device with the specified configuration (which is
  * dependent on device type).  ovs_mutex must be held.
@@ -321,11 +336,13 @@ int ovs_vport_get_options(const struct vport *vport, struct sk_buff *skb)
  *
  * @vport: vport that received the packet
  * @skb: skb that was received
+ * @tun_key: tunnel (if any) that carried packet
  *
  * Must be called with rcu_read_lock.  The packet cannot be shared and
  * skb->data should point to the Ethernet header.
  */
-void ovs_vport_receive(struct vport *vport, struct sk_buff *skb)
+void ovs_vport_receive(struct vport *vport, struct sk_buff *skb,
+		       struct ovs_key_ipv4_tunnel *tun_key)
 {
 	struct pcpu_tstats *stats;
 
@@ -335,6 +352,7 @@ void ovs_vport_receive(struct vport *vport, struct sk_buff *skb)
 	stats->rx_bytes += skb->len;
 	u64_stats_update_end(&stats->syncp);
 
+	OVS_CB(skb)->tun_key = tun_key;
 	ovs_dp_process_received_packet(vport, skb);
 }
 
@@ -351,7 +369,7 @@ int ovs_vport_send(struct vport *vport, struct sk_buff *skb)
 {
 	int sent = vport->ops->send(vport, skb);
 
-	if (likely(sent)) {
+	if (likely(sent > 0)) {
 		struct pcpu_tstats *stats;
 
 		stats = this_cpu_ptr(vport->percpu_stats);
@@ -360,7 +378,12 @@ int ovs_vport_send(struct vport *vport, struct sk_buff *skb)
 		stats->tx_packets++;
 		stats->tx_bytes += sent;
 		u64_stats_update_end(&stats->syncp);
-	}
+	} else if (sent < 0) {
+		ovs_vport_record_error(vport, VPORT_E_TX_ERROR);
+		kfree_skb(skb);
+	} else
+		ovs_vport_record_error(vport, VPORT_E_TX_DROPPED);
+
 	return sent;
 }
 
@@ -371,7 +394,7 @@ int ovs_vport_send(struct vport *vport, struct sk_buff *skb)
  * @err_type: one of enum vport_err_type types to indicate the error type
  *
  * If using the vport generic stats layer indicate that an error of the given
- * type has occured.
+ * type has occurred.
  */
 void ovs_vport_record_error(struct vport *vport, enum vport_err_type err_type)
 {
@@ -396,4 +419,19 @@ void ovs_vport_record_error(struct vport *vport, enum vport_err_type err_type)
 	}
 
 	spin_unlock(&vport->stats_lock);
+}
+
+static void free_vport_rcu(struct rcu_head *rcu)
+{
+	struct vport *vport = container_of(rcu, struct vport, rcu);
+
+	ovs_vport_free(vport);
+}
+
+void ovs_vport_deferred_free(struct vport *vport)
+{
+	if (!vport)
+		return;
+
+	call_rcu(&vport->rcu, free_vport_rcu);
 }

@@ -542,9 +542,9 @@ static int logi_dj_output_hidraw_report(struct hid_device *hid, u8 * buf,
 	return 0;
 }
 
-static void rdcat(char **rdesc, unsigned int *rsize, const char *data, unsigned int size)
+static void rdcat(char *rdesc, unsigned int *rsize, const char *data, unsigned int size)
 {
-	memcpy(*rdesc + *rsize, data, size);
+	memcpy(rdesc + *rsize, data, size);
 	*rsize += size;
 }
 
@@ -567,31 +567,31 @@ static int logi_dj_ll_parse(struct hid_device *hid)
 	if (djdev->reports_supported & STD_KEYBOARD) {
 		dbg_hid("%s: sending a kbd descriptor, reports_supported: %x\n",
 			__func__, djdev->reports_supported);
-		rdcat(&rdesc, &rsize, kbd_descriptor, sizeof(kbd_descriptor));
+		rdcat(rdesc, &rsize, kbd_descriptor, sizeof(kbd_descriptor));
 	}
 
 	if (djdev->reports_supported & STD_MOUSE) {
 		dbg_hid("%s: sending a mouse descriptor, reports_supported: "
 			"%x\n", __func__, djdev->reports_supported);
-		rdcat(&rdesc, &rsize, mse_descriptor, sizeof(mse_descriptor));
+		rdcat(rdesc, &rsize, mse_descriptor, sizeof(mse_descriptor));
 	}
 
 	if (djdev->reports_supported & MULTIMEDIA) {
 		dbg_hid("%s: sending a multimedia report descriptor: %x\n",
 			__func__, djdev->reports_supported);
-		rdcat(&rdesc, &rsize, consumer_descriptor, sizeof(consumer_descriptor));
+		rdcat(rdesc, &rsize, consumer_descriptor, sizeof(consumer_descriptor));
 	}
 
 	if (djdev->reports_supported & POWER_KEYS) {
 		dbg_hid("%s: sending a power keys report descriptor: %x\n",
 			__func__, djdev->reports_supported);
-		rdcat(&rdesc, &rsize, syscontrol_descriptor, sizeof(syscontrol_descriptor));
+		rdcat(rdesc, &rsize, syscontrol_descriptor, sizeof(syscontrol_descriptor));
 	}
 
 	if (djdev->reports_supported & MEDIA_CENTER) {
 		dbg_hid("%s: sending a media center report descriptor: %x\n",
 			__func__, djdev->reports_supported);
-		rdcat(&rdesc, &rsize, media_descriptor, sizeof(media_descriptor));
+		rdcat(rdesc, &rsize, media_descriptor, sizeof(media_descriptor));
 	}
 
 	if (djdev->reports_supported & KBD_LEDS) {
@@ -636,7 +636,7 @@ static int logi_dj_ll_input_event(struct input_dev *dev, unsigned int type,
 	}
 	hid_set_field(field, offset, value);
 
-	data = hid_alloc_report_buf(field->report, GFP_KERNEL);
+	data = hid_alloc_report_buf(field->report, GFP_ATOMIC);
 	if (!data) {
 		dev_warn(&dev->dev, "failed to allocate report buf memory\n");
 		return -1;
@@ -815,10 +815,10 @@ static int logi_dj_probe(struct hid_device *hdev,
 	}
 
 	/* This is enabling the polling urb on the IN endpoint */
-	retval = hdev->ll_driver->open(hdev);
+	retval = hid_hw_open(hdev);
 	if (retval < 0) {
-		dev_err(&hdev->dev, "%s:hdev->ll_driver->open returned "
-			"error:%d\n", __func__, retval);
+		dev_err(&hdev->dev, "%s:hid_hw_open returned error:%d\n",
+			__func__, retval);
 		goto llopen_failed;
 	}
 
@@ -835,7 +835,7 @@ static int logi_dj_probe(struct hid_device *hdev,
 	return retval;
 
 logi_dj_recv_query_paired_devices_failed:
-	hdev->ll_driver->close(hdev);
+	hid_hw_close(hdev);
 
 llopen_failed:
 switch_to_dj_mode_fail:
@@ -877,7 +877,7 @@ static void logi_dj_remove(struct hid_device *hdev)
 
 	cancel_work_sync(&djrcv_dev->work);
 
-	hdev->ll_driver->close(hdev);
+	hid_hw_close(hdev);
 	hid_hw_stop(hdev);
 
 	/* I suppose that at this point the only context that can access

@@ -1,6 +1,4 @@
-/* sound/soc/samsung/s3c-i2c-v2.c
- *
- * ALSA Soc Audio Layer - I2S core for newer Samsung SoCs.
+/* ALSA Soc Audio Layer - I2S core for newer Samsung SoCs.
  *
  * Copyright (c) 2006 Wolfson Microelectronics PLC.
  *	Graeme Gregory graeme.gregory@wolfsonmicro.com
@@ -33,11 +31,7 @@
 #undef S3C_IIS_V2_SUPPORTED
 
 #if defined(CONFIG_CPU_S3C2412) || defined(CONFIG_CPU_S3C2413) \
-	|| defined(CONFIG_CPU_S5PV210)
-#define S3C_IIS_V2_SUPPORTED
-#endif
-
-#ifdef CONFIG_PLAT_S3C64XX
+	|| defined(CONFIG_ARCH_S3C64XX) || defined(CONFIG_CPU_S5PV210)
 #define S3C_IIS_V2_SUPPORTED
 #endif
 

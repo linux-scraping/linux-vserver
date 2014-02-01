@@ -33,6 +33,7 @@
 #include <linux/io.h>
 #include <linux/moduleparam.h>
 #include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/dma-mapping.h>
 #include <linux/usb/ch9.h>
@@ -2589,7 +2590,7 @@ static int qe_udc_probe(struct platform_device *ofdev)
 	if (ret)
 		goto err6;
 
-	dev_set_drvdata(&ofdev->dev, udc);
+	platform_set_drvdata(ofdev, udc);
 	dev_info(udc->dev,
 			"%s USB controller initialized as device\n",
 			(udc->soc_type == PORT_QE) ? "QE" : "CPM");
@@ -2640,7 +2641,7 @@ static int qe_udc_resume(struct platform_device *dev)
 
 static int qe_udc_remove(struct platform_device *ofdev)
 {
-	struct qe_udc *udc = dev_get_drvdata(&ofdev->dev);
+	struct qe_udc *udc = platform_get_drvdata(ofdev);
 	struct qe_ep *ep;
 	unsigned int size;
 	DECLARE_COMPLETION(done);

@@ -147,6 +147,8 @@
 #define MSR_PP1_ENERGY_STATUS		0x00000641
 #define MSR_PP1_POLICY			0x00000642
 
+#define MSR_CORE_C1_RES			0x00000660
+
 #define MSR_AMD64_MC0_MASK		0xc0010044
 
 #define MSR_IA32_MCx_CTL(x)		(MSR_IA32_MC0_CTL + 4*(x))
@@ -169,6 +171,9 @@
 #define MSR_KNC_PERFCTR1               0x00000021
 #define MSR_KNC_EVNTSEL0               0x00000028
 #define MSR_KNC_EVNTSEL1               0x00000029
+
+/* Alternative perfctr range with full access. */
+#define MSR_IA32_PMC0			0x000004c1
 
 /* AMD64 MSRs. Not complete. See the architecture manual for a more
    complete list. */
@@ -533,6 +538,7 @@
 
 /* MSR_IA32_VMX_MISC bits */
 #define MSR_IA32_VMX_MISC_VMWRITE_SHADOW_RO_FIELDS (1ULL << 29)
+#define MSR_IA32_VMX_MISC_PREEMPTION_TIMER_SCALE   0x1F
 /* AMD-V MSRs */
 
 #define MSR_VM_CR                       0xc0010114

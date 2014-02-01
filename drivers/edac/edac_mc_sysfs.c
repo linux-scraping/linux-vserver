@@ -58,8 +58,10 @@ static int edac_set_poll_msec(const char *val, struct kernel_param *kp)
 	if (!val)
 		return -EINVAL;
 
-	ret = strict_strtol(val, 0, &l);
-	if (ret == -EINVAL || ((int)l != l))
+	ret = kstrtol(val, 0, &l);
+	if (ret)
+		return ret;
+	if ((int)l != l)
 		return -EINVAL;
 	*((int *)kp->arg) = l;
 
@@ -678,7 +680,7 @@ static ssize_t mci_sdram_scrub_rate_store(struct device *dev,
 	unsigned long bandwidth = 0;
 	int new_bw = 0;
 
-	if (strict_strtoul(data, 10, &bandwidth) < 0)
+	if (kstrtoul(data, 10, &bandwidth) < 0)
 		return -EINVAL;
 
 	new_bw = mci->set_sdram_scrub_rate(mci, bandwidth);

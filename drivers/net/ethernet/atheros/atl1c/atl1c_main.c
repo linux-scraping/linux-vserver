@@ -145,9 +145,11 @@ static void atl1c_reset_pcie(struct atl1c_hw *hw, u32 flag)
 	 * Mask some pcie error bits
 	 */
 	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_ERR);
-	pci_read_config_dword(pdev, pos + PCI_ERR_UNCOR_SEVER, &data);
-	data &= ~(PCI_ERR_UNC_DLP | PCI_ERR_UNC_FCP);
-	pci_write_config_dword(pdev, pos + PCI_ERR_UNCOR_SEVER, data);
+	if (pos) {
+		pci_read_config_dword(pdev, pos + PCI_ERR_UNCOR_SEVER, &data);
+		data &= ~(PCI_ERR_UNC_DLP | PCI_ERR_UNC_FCP);
+		pci_write_config_dword(pdev, pos + PCI_ERR_UNCOR_SEVER, data);
+	}
 	/* clear error status */
 	pcie_capability_write_word(pdev, PCI_EXP_DEVSTA,
 			PCI_EXP_DEVSTA_NFED |
@@ -2793,27 +2795,4 @@ static struct pci_driver atl1c_driver = {
 	.driver.pm = &atl1c_pm_ops,
 };
 
-/**
- * atl1c_init_module - Driver Registration Routine
- *
- * atl1c_init_module is the first routine called when the driver is
- * loaded. All it does is register with the PCI subsystem.
- */
-static int __init atl1c_init_module(void)
-{
-	return pci_register_driver(&atl1c_driver);
-}
-
-/**
- * atl1c_exit_module - Driver Exit Cleanup Routine
- *
- * atl1c_exit_module is called just before the driver is removed
- * from memory.
- */
-static void __exit atl1c_exit_module(void)
-{
-	pci_unregister_driver(&atl1c_driver);
-}
-
-module_init(atl1c_init_module);
-module_exit(atl1c_exit_module);
+module_pci_driver(atl1c_driver);

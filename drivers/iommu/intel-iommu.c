@@ -3781,11 +3781,10 @@ static void iommu_detach_dependent_devices(struct intel_iommu *iommu,
 static void domain_remove_one_dev_info(struct dmar_domain *domain,
 					  struct pci_dev *pdev)
 {
-	struct device_domain_info *info;
+	struct device_domain_info *info, *tmp;
 	struct intel_iommu *iommu;
 	unsigned long flags;
 	int found = 0;
-	struct list_head *entry, *tmp;
 
 	iommu = device_to_iommu(pci_domain_nr(pdev->bus), pdev->bus->number,
 				pdev->devfn);
@@ -3793,8 +3792,7 @@ static void domain_remove_one_dev_info(struct dmar_domain *domain,
 		return;
 
 	spin_lock_irqsave(&device_domain_lock, flags);
-	list_for_each_safe(entry, tmp, &domain->devices) {
-		info = list_entry(entry, struct device_domain_info, link);
+	list_for_each_entry_safe(info, tmp, &domain->devices, link) {
 		if (info->segment == pci_domain_nr(pdev->bus) &&
 		    info->bus == pdev->bus->number &&
 		    info->devfn == pdev->devfn) {
@@ -4184,14 +4182,27 @@ static int intel_iommu_add_device(struct device *dev)
 
 	/*
 	 * If it's a multifunction device that does not support our
-	 * required ACS flags, add to the same group as function 0.
+	 * required ACS flags, add to the same group as lowest numbered
+	 * function that also does not suport the required ACS flags.
 	 */
 	if (dma_pdev->multifunction &&
-	    !pci_acs_enabled(dma_pdev, REQ_ACS_FLAGS))
-		swap_pci_ref(&dma_pdev,
-			     pci_get_slot(dma_pdev->bus,
-					  PCI_DEVFN(PCI_SLOT(dma_pdev->devfn),
-					  0)));
+	    !pci_acs_enabled(dma_pdev, REQ_ACS_FLAGS)) {
+		u8 i, slot = PCI_SLOT(dma_pdev->devfn);
+
+		for (i = 0; i < 8; i++) {
+			struct pci_dev *tmp;
+
+			tmp = pci_get_slot(dma_pdev->bus, PCI_DEVFN(slot, i));
+			if (!tmp)
+				continue;
+
+			if (!pci_acs_enabled(tmp, REQ_ACS_FLAGS)) {
+				swap_pci_ref(&dma_pdev, tmp);
+				break;
+			}
+			pci_dev_put(tmp);
+		}
+	}
 
 	/*
 	 * Devices on the root bus go through the iommu.  If that's not us,

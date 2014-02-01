@@ -32,6 +32,7 @@
 #include <asm/sections.h>
 
 extern int  data_start;
+extern void parisc_kernel_start(void);	/* Kernel entry point in head.S */
 
 #if PT_NLEVELS == 3
 /* NOTE: This layout exactly conforms to the hybrid L2/L3 page table layout
@@ -214,7 +215,6 @@ static void __init setup_bootmem(void)
 	mem_limit_func();       /* check for "mem=" argument */
 
 	mem_max = 0;
-	num_physpages = 0;
 	for (i = 0; i < npmem_ranges; i++) {
 		unsigned long rsize;
 
@@ -229,10 +229,8 @@ static void __init setup_bootmem(void)
 				npmem_ranges = i + 1;
 				mem_max = mem_limit;
 			}
-	        num_physpages += pmem_ranges[i].pages;
 			break;
 		}
-	    num_physpages += pmem_ranges[i].pages;
 		mem_max += rsize;
 	}
 
@@ -327,8 +325,9 @@ static void __init setup_bootmem(void)
 	reserve_bootmem_node(NODE_DATA(0), 0UL,
 			(unsigned long)(PAGE0->mem_free +
 				PDC_CONSOLE_IO_IODC_SIZE), BOOTMEM_DEFAULT);
-	reserve_bootmem_node(NODE_DATA(0), __pa((unsigned long)_text),
-			(unsigned long)(_end - _text), BOOTMEM_DEFAULT);
+	reserve_bootmem_node(NODE_DATA(0), __pa(KERNEL_BINARY_TEXT_START),
+			(unsigned long)(_end - KERNEL_BINARY_TEXT_START),
+			BOOTMEM_DEFAULT);
 	reserve_bootmem_node(NODE_DATA(0), (bootmap_start_pfn << PAGE_SHIFT),
 			((bootmap_pfn - bootmap_start_pfn) << PAGE_SHIFT),
 			BOOTMEM_DEFAULT);
@@ -379,6 +378,17 @@ static void __init setup_bootmem(void)
 		request_resource(res, &data_resource);
 	}
 	request_resource(&sysram_resources[0], &pdcdata_resource);
+}
+
+static int __init parisc_text_address(unsigned long vaddr)
+{
+	static unsigned long head_ptr __initdata;
+
+	if (!head_ptr)
+		head_ptr = PAGE_MASK & (unsigned long)
+			dereference_function_descriptor(&parisc_kernel_start);
+
+	return core_kernel_text(vaddr) || vaddr == head_ptr;
 }
 
 static void __init map_pages(unsigned long start_vaddr,
@@ -469,7 +479,7 @@ static void __init map_pages(unsigned long start_vaddr,
 				 */
 				if (force)
 					pte =  __mk_pte(address, pgprot);
-				else if (core_kernel_text(vaddr) &&
+				else if (parisc_text_address(vaddr) &&
 					 address != fv_addr)
 					pte = __mk_pte(address, PAGE_KERNEL_EXEC);
 				else
@@ -532,7 +542,7 @@ void free_initmem(void)
 	 * pages are no-longer executable */
 	flush_icache_range(init_begin, init_end);
 	
-	num_physpages += free_initmem_default(0);
+	free_initmem_default(-1);
 
 	/* set up a new led state on systems shipped LED State panel */
 	pdc_chassis_send_status(PDC_CHASSIS_DIRECT_BCOMPLETE);
@@ -580,8 +590,6 @@ unsigned long pcxl_dma_start __read_mostly;
 
 void __init mem_init(void)
 {
-	int codesize, reservedpages, datasize, initsize;
-
 	/* Do sanity checks on page table constants */
 	BUILD_BUG_ON(PTE_ENTRY_SIZE != sizeof(pte_t));
 	BUILD_BUG_ON(PMD_ENTRY_SIZE != sizeof(pmd_t));
@@ -590,45 +598,8 @@ void __init mem_init(void)
 			> BITS_PER_LONG);
 
 	high_memory = __va((max_pfn << PAGE_SHIFT));
-
-#ifndef CONFIG_DISCONTIGMEM
-	max_mapnr = page_to_pfn(virt_to_page(high_memory - 1)) + 1;
-	totalram_pages += free_all_bootmem();
-#else
-	{
-		int i;
-
-		for (i = 0; i < npmem_ranges; i++)
-			totalram_pages += free_all_bootmem_node(NODE_DATA(i));
-	}
-#endif
-
-	codesize = (unsigned long)_etext - (unsigned long)_text;
-	datasize = (unsigned long)_edata - (unsigned long)_etext;
-	initsize = (unsigned long)__init_end - (unsigned long)__init_begin;
-
-	reservedpages = 0;
-{
-	unsigned long pfn;
-#ifdef CONFIG_DISCONTIGMEM
-	int i;
-
-	for (i = 0; i < npmem_ranges; i++) {
-		for (pfn = node_start_pfn(i); pfn < node_end_pfn(i); pfn++) {
-			if (PageReserved(pfn_to_page(pfn)))
-				reservedpages++;
-		}
-	}
-#else /* !CONFIG_DISCONTIGMEM */
-	for (pfn = 0; pfn < max_pfn; pfn++) {
-		/*
-		 * Only count reserved RAM pages
-		 */
-		if (PageReserved(pfn_to_page(pfn)))
-			reservedpages++;
-	}
-#endif
-}
+	set_max_mapnr(page_to_pfn(virt_to_page(high_memory - 1)) + 1);
+	free_all_bootmem();
 
 #ifdef CONFIG_PA11
 	if (hppa_dma_ops == &pcxl_dma_ops) {
@@ -643,15 +614,7 @@ void __init mem_init(void)
 	parisc_vmalloc_start = SET_MAP_OFFSET(MAP_START);
 #endif
 
-	printk(KERN_INFO "Memory: %luk/%luk available (%dk kernel code, %dk reserved, %dk data, %dk init)\n",
-		nr_free_pages() << (PAGE_SHIFT-10),
-		num_physpages << (PAGE_SHIFT-10),
-		codesize >> 10,
-		reservedpages << (PAGE_SHIFT-10),
-		datasize >> 10,
-		initsize >> 10
-	);
-
+	mem_init_print_info(NULL);
 #ifdef CONFIG_DEBUG_KERNEL /* double-sanity-check paranoia */
 	printk("virtual kernel memory layout:\n"
 	       "    vmalloc : 0x%p - 0x%p   (%4ld MB)\n"
@@ -1101,6 +1064,6 @@ void flush_tlb_all(void)
 #ifdef CONFIG_BLK_DEV_INITRD
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-	num_physpages += free_reserved_area(start, end, 0, "initrd");
+	free_reserved_area((void *)start, (void *)end, -1, "initrd");
 }
 #endif

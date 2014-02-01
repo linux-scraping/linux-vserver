@@ -28,6 +28,7 @@
 #include <asm/uaccess.h>
 #include <linux/exportfs.h>
 #include <linux/writeback.h>
+#include <linux/security.h>
 
 #ifdef CONFIG_NFSD_V3
 #include "xdr3.h"
@@ -453,7 +454,7 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 		goto out_put_write_access_nfserror;
 
 	fh_lock(fhp);
-	host_err = notify_change(dentry, iap);
+	host_err = notify_change(dentry, iap, NULL);
 	fh_unlock(fhp);
 
 out_put_write_access_nfserror:
@@ -646,6 +647,33 @@ int nfsd4_is_junction(struct dentry *dentry)
 		return 0;
 	return 1;
 }
+#ifdef CONFIG_NFSD_V4_SECURITY_LABEL
+__be32 nfsd4_set_nfs4_label(struct svc_rqst *rqstp, struct svc_fh *fhp,
+		struct xdr_netobj *label)
+{
+	__be32 error;
+	int host_error;
+	struct dentry *dentry;
+
+	error = fh_verify(rqstp, fhp, 0 /* S_IFREG */, NFSD_MAY_SATTR);
+	if (error)
+		return error;
+
+	dentry = fhp->fh_dentry;
+
+	mutex_lock(&dentry->d_inode->i_mutex);
+	host_error = security_inode_setsecctx(dentry, label->data, label->len);
+	mutex_unlock(&dentry->d_inode->i_mutex);
+	return nfserrno(host_error);
+}
+#else
+__be32 nfsd4_set_nfs4_label(struct svc_rqst *rqstp, struct svc_fh *fhp,
+		struct xdr_netobj *label)
+{
+	return nfserr_notsupp;
+}
+#endif
+
 #endif /* defined(CONFIG_NFSD_V4) */
 
 #ifdef CONFIG_NFSD_V3
@@ -985,7 +1013,11 @@ static void kill_suid(struct dentry *dentry)
 	ia.ia_valid = ATTR_KILL_SUID | ATTR_KILL_SGID | ATTR_KILL_PRIV;
 
 	mutex_lock(&dentry->d_inode->i_mutex);
-	notify_change(dentry, &ia);
+	/*
+	 * Note we call this on write, so notify_change will not
+	 * encounter any conflicting delegations:
+	 */
+	notify_change(dentry, &ia, NULL);
 	mutex_unlock(&dentry->d_inode->i_mutex);
 }
 
@@ -1314,9 +1346,8 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		if (!fhp->fh_locked) {
 			/* not actually possible */
 			printk(KERN_ERR
-				"nfsd_create: parent %s/%s not locked!\n",
-				dentry->d_parent->d_name.name,
-				dentry->d_name.name);
+				"nfsd_create: parent %pd2 not locked!\n",
+				dentry);
 			err = nfserr_io;
 			goto out;
 		}
@@ -1326,8 +1357,8 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	 */
 	err = nfserr_exist;
 	if (dchild->d_inode) {
-		dprintk("nfsd_create: dentry %s/%s not negative!\n",
-			dentry->d_name.name, dchild->d_name.name);
+		dprintk("nfsd_create: dentry %pd/%pd not negative!\n",
+			dentry, dchild);
 		goto out; 
 	}
 
@@ -1734,7 +1765,7 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 		err = nfserrno(host_err);
 		goto out_dput;
 	}
-	host_err = vfs_link(dold, dirp, dnew);
+	host_err = vfs_link(dold, dirp, dnew, NULL);
 	if (!host_err) {
 		err = nfserrno(commit_metadata(ffhp));
 		if (!err)
@@ -1835,7 +1866,7 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 		if (host_err)
 			goto out_dput_new;
 	}
-	host_err = vfs_rename(fdir, odentry, tdir, ndentry);
+	host_err = vfs_rename(fdir, odentry, tdir, ndentry, NULL);
 	if (!host_err) {
 		host_err = commit_metadata(tfhp);
 		if (!host_err)
@@ -1908,7 +1939,7 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	if (host_err)
 		goto out_put;
 	if (type != S_IFDIR)
-		host_err = vfs_unlink(dirp, rdentry);
+		host_err = vfs_unlink(dirp, rdentry, NULL);
 	else
 		host_err = vfs_rmdir(dirp, rdentry);
 	if (!host_err)
@@ -1938,6 +1969,7 @@ struct buffered_dirent {
 };
 
 struct readdir_data {
+	struct dir_context ctx;
 	char		*dirent;
 	size_t		used;
 	int		full;
@@ -1969,13 +2001,15 @@ static int nfsd_buffered_filldir(void *__buf, const char *name, int namlen,
 static __be32 nfsd_buffered_readdir(struct file *file, filldir_t func,
 				    struct readdir_cd *cdp, loff_t *offsetp)
 {
-	struct readdir_data buf;
 	struct buffered_dirent *de;
 	int host_err;
 	int size;
 	loff_t offset;
+	struct readdir_data buf = {
+		.ctx.actor = nfsd_buffered_filldir,
+		.dirent = (void *)__get_free_page(GFP_KERNEL)
+	};
 
-	buf.dirent = (void *)__get_free_page(GFP_KERNEL);
 	if (!buf.dirent)
 		return nfserrno(-ENOMEM);
 
@@ -1989,7 +2023,7 @@ static __be32 nfsd_buffered_readdir(struct file *file, filldir_t func,
 		buf.used = 0;
 		buf.full = 0;
 
-		host_err = vfs_readdir(file, nfsd_buffered_filldir, &buf);
+		host_err = iterate_dir(file, &buf.ctx);
 		if (buf.full)
 			host_err = 0;
 

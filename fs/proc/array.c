@@ -188,6 +188,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	seq_printf(m,
 		"State:\t%s\n"
 		"Tgid:\t%d\n"
+		"Ngid:\t%d\n"
 		"Pid:\t%d\n"
 		"PPid:\t%d\n"
 		"TracerPid:\t%d\n"
@@ -195,6 +196,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 		"Gid:\t%d\t%d\t%d\t%d\n",
 		get_task_state(p),
 		task_tgid_nr_ns(p, ns),
+		task_numa_group_id(p),
 		pid_nr_ns(pid, ns),
 		ppid, tpid,
 		from_kuid_munged(user_ns, cred->uid),
@@ -388,8 +390,9 @@ int proc_pid_nsproxy(struct seq_file *m, struct pid_namespace *ns,
 			(task->nsproxy->ipc_ns == init_task.nsproxy->ipc_ns ? 'I' : '-'),
 			task->nsproxy->mnt_ns,
 			(task->nsproxy->mnt_ns == init_task.nsproxy->mnt_ns ? 'I' : '-'),
-			task->nsproxy->pid_ns,
-			(task->nsproxy->pid_ns == init_task.nsproxy->pid_ns ? 'I' : '-'),
+			task->nsproxy->pid_ns_for_children,
+			(task->nsproxy->pid_ns_for_children ==
+				init_task.nsproxy->pid_ns_for_children ? 'I' : '-'),
 			task->nsproxy->net_ns,
 			(task->nsproxy->net_ns == init_task.nsproxy->net_ns ? 'I' : '-'));
 	return 0;

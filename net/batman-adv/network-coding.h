@@ -22,6 +22,7 @@
 
 #ifdef CONFIG_BATMAN_ADV_NC
 
+void batadv_nc_status_update(struct net_device *net_dev);
 int batadv_nc_init(void);
 int batadv_nc_mesh_init(struct batadv_priv *bat_priv);
 void batadv_nc_mesh_free(struct batadv_priv *bat_priv);
@@ -37,8 +38,7 @@ void batadv_nc_purge_orig(struct batadv_priv *bat_priv,
 void batadv_nc_init_bat_priv(struct batadv_priv *bat_priv);
 void batadv_nc_init_orig(struct batadv_orig_node *orig_node);
 bool batadv_nc_skb_forward(struct sk_buff *skb,
-			   struct batadv_neigh_node *neigh_node,
-			   struct ethhdr *ethhdr);
+			   struct batadv_neigh_node *neigh_node);
 void batadv_nc_skb_store_for_decoding(struct batadv_priv *bat_priv,
 				      struct sk_buff *skb);
 void batadv_nc_skb_store_sniffed_unicast(struct batadv_priv *bat_priv,
@@ -47,6 +47,10 @@ int batadv_nc_nodes_seq_print_text(struct seq_file *seq, void *offset);
 int batadv_nc_init_debugfs(struct batadv_priv *bat_priv);
 
 #else /* ifdef CONFIG_BATMAN_ADV_NC */
+
+static inline void batadv_nc_status_update(struct net_device *net_dev)
+{
+}
 
 static inline int batadv_nc_init(void)
 {
@@ -93,8 +97,7 @@ static inline void batadv_nc_init_orig(struct batadv_orig_node *orig_node)
 }
 
 static inline bool batadv_nc_skb_forward(struct sk_buff *skb,
-					 struct batadv_neigh_node *neigh_node,
-					 struct ethhdr *ethhdr)
+					 struct batadv_neigh_node *neigh_node)
 {
 	return false;
 }

@@ -99,7 +99,7 @@ int v6_sock_addr_match (
 	struct in6_addr *addr)
 {
 	struct sock *sk = &inet->sk;
-	struct in6_addr *saddr = inet6_rcv_saddr(sk);
+	const struct in6_addr *saddr = inet6_rcv_saddr(sk);
 
 	if (!ipv6_addr_any(addr) &&
 		ipv6_addr_equal(saddr, addr))
@@ -120,7 +120,7 @@ static inline
 int __v6_addr_match_socket(const struct sock *sk, struct nx_addr_v6 *nxa)
 {
 	struct nx_info *nxi = sk->sk_nx_info;
-	struct in6_addr *saddr = inet6_rcv_saddr(sk);
+	const struct in6_addr *saddr = inet6_rcv_saddr(sk);
 
 	vxdprintk(VXD_CBIT(net, 5),
 		"__v6_addr_in_socket(%p," NXAV6_FMT ") %p:%pI6 %p;%lx",

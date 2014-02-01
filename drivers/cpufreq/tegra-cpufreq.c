@@ -28,17 +28,16 @@
 #include <linux/io.h>
 #include <linux/suspend.h>
 
-/* Frequency table index must be sequential starting at 0 */
 static struct cpufreq_frequency_table freq_table[] = {
-	{ 0, 216000 },
-	{ 1, 312000 },
-	{ 2, 456000 },
-	{ 3, 608000 },
-	{ 4, 760000 },
-	{ 5, 816000 },
-	{ 6, 912000 },
-	{ 7, 1000000 },
-	{ 8, CPUFREQ_TABLE_END },
+	{ .frequency = 216000 },
+	{ .frequency = 312000 },
+	{ .frequency = 456000 },
+	{ .frequency = 608000 },
+	{ .frequency = 760000 },
+	{ .frequency = 816000 },
+	{ .frequency = 912000 },
+	{ .frequency = 1000000 },
+	{ .frequency = CPUFREQ_TABLE_END },
 };
 
 #define NUM_CPUS	2
@@ -51,11 +50,6 @@ static struct clk *emc_clk;
 static unsigned long target_cpu_speed[NUM_CPUS];
 static DEFINE_MUTEX(tegra_cpu_lock);
 static bool is_suspended;
-
-static int tegra_verify_speed(struct cpufreq_policy *policy)
-{
-	return cpufreq_frequency_table_verify(policy, freq_table);
-}
 
 static unsigned int tegra_getspeed(unsigned int cpu)
 {
@@ -108,12 +102,8 @@ static int tegra_update_cpu_speed(struct cpufreq_policy *policy,
 		unsigned long rate)
 {
 	int ret = 0;
-	struct cpufreq_freqs freqs;
 
-	freqs.old = tegra_getspeed(0);
-	freqs.new = rate;
-
-	if (freqs.old == freqs.new)
+	if (tegra_getspeed(0) == rate)
 		return ret;
 
 	/*
@@ -127,23 +117,12 @@ static int tegra_update_cpu_speed(struct cpufreq_policy *policy,
 	else
 		clk_set_rate(emc_clk, 100000000);  /* emc 50Mhz */
 
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_PRECHANGE);
+	ret = tegra_cpu_clk_set_rate(rate * 1000);
+	if (ret)
+		pr_err("cpu-tegra: Failed to set cpu frequency to %lu kHz\n",
+			rate);
 
-#ifdef CONFIG_CPU_FREQ_DEBUG
-	printk(KERN_DEBUG "cpufreq-tegra: transition: %u --> %u\n",
-	       freqs.old, freqs.new);
-#endif
-
-	ret = tegra_cpu_clk_set_rate(freqs.new * 1000);
-	if (ret) {
-		pr_err("cpu-tegra: Failed to set cpu frequency to %d kHz\n",
-			freqs.new);
-		return ret;
-	}
-
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_POSTCHANGE);
-
-	return 0;
+	return ret;
 }
 
 static unsigned long tegra_cpu_highest_speed(void)
@@ -156,25 +135,17 @@ static unsigned long tegra_cpu_highest_speed(void)
 	return rate;
 }
 
-static int tegra_target(struct cpufreq_policy *policy,
-		       unsigned int target_freq,
-		       unsigned int relation)
+static int tegra_target(struct cpufreq_policy *policy, unsigned int index)
 {
-	unsigned int idx;
 	unsigned int freq;
 	int ret = 0;
 
 	mutex_lock(&tegra_cpu_lock);
 
-	if (is_suspended) {
-		ret = -EBUSY;
+	if (is_suspended)
 		goto out;
-	}
 
-	cpufreq_frequency_table_target(policy, freq_table, target_freq,
-		relation, &idx);
-
-	freq = freq_table[idx].frequency;
+	freq = freq_table[index].frequency;
 
 	target_cpu_speed[policy->cpu] = freq;
 
@@ -210,21 +181,23 @@ static struct notifier_block tegra_cpu_pm_notifier = {
 
 static int tegra_cpu_init(struct cpufreq_policy *policy)
 {
+	int ret;
+
 	if (policy->cpu >= NUM_CPUS)
 		return -EINVAL;
 
 	clk_prepare_enable(emc_clk);
 	clk_prepare_enable(cpu_clk);
 
-	cpufreq_frequency_table_cpuinfo(policy, freq_table);
-	cpufreq_frequency_table_get_attr(freq_table, policy->cpu);
-	policy->cur = tegra_getspeed(policy->cpu);
-	target_cpu_speed[policy->cpu] = policy->cur;
+	target_cpu_speed[policy->cpu] = tegra_getspeed(policy->cpu);
 
 	/* FIXME: what's the actual transition time? */
-	policy->cpuinfo.transition_latency = 300 * 1000;
-
-	cpumask_copy(policy->cpus, cpu_possible_mask);
+	ret = cpufreq_generic_init(policy, freq_table, 300 * 1000);
+	if (ret) {
+		clk_disable_unprepare(cpu_clk);
+		clk_disable_unprepare(emc_clk);
+		return ret;
+	}
 
 	if (policy->cpu == 0)
 		register_pm_notifier(&tegra_cpu_pm_notifier);
@@ -234,29 +207,25 @@ static int tegra_cpu_init(struct cpufreq_policy *policy)
 
 static int tegra_cpu_exit(struct cpufreq_policy *policy)
 {
-	cpufreq_frequency_table_cpuinfo(policy, freq_table);
+	cpufreq_frequency_table_put_attr(policy->cpu);
+	clk_disable_unprepare(cpu_clk);
 	clk_disable_unprepare(emc_clk);
 	return 0;
 }
 
-static struct freq_attr *tegra_cpufreq_attr[] = {
-	&cpufreq_freq_attr_scaling_available_freqs,
-	NULL,
-};
-
 static struct cpufreq_driver tegra_cpufreq_driver = {
-	.verify		= tegra_verify_speed,
-	.target		= tegra_target,
+	.verify		= cpufreq_generic_frequency_table_verify,
+	.target_index	= tegra_target,
 	.get		= tegra_getspeed,
 	.init		= tegra_cpu_init,
 	.exit		= tegra_cpu_exit,
 	.name		= "tegra",
-	.attr		= tegra_cpufreq_attr,
+	.attr		= cpufreq_generic_attr,
 };
 
 static int __init tegra_cpufreq_init(void)
 {
-	cpu_clk = clk_get_sys(NULL, "cpu");
+	cpu_clk = clk_get_sys(NULL, "cclk");
 	if (IS_ERR(cpu_clk))
 		return PTR_ERR(cpu_clk);
 
@@ -264,7 +233,7 @@ static int __init tegra_cpufreq_init(void)
 	if (IS_ERR(pll_x_clk))
 		return PTR_ERR(pll_x_clk);
 
-	pll_p_clk = clk_get_sys(NULL, "pll_p_cclk");
+	pll_p_clk = clk_get_sys(NULL, "pll_p");
 	if (IS_ERR(pll_p_clk))
 		return PTR_ERR(pll_p_clk);
 

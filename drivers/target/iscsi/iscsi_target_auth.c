@@ -1,9 +1,7 @@
 /*******************************************************************************
  * This file houses the main functions for the iSCSI CHAP support
  *
- * \u00a9 Copyright 2007-2011 RisingTide Systems LLC.
- *
- * Licensed to the Linux Foundation under the General Public License (GPL) version 2.
+ * (c) Copyright 2007-2013 Datera, Inc.
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
@@ -113,7 +111,7 @@ static struct iscsi_chap *chap_server_open(
 	/*
 	 * Set Identifier.
 	 */
-	chap->id = ISCSI_TPG_C(conn)->tpg_chap_id++;
+	chap->id = conn->tpg->tpg_chap_id++;
 	*aic_len += sprintf(aic_str + *aic_len, "CHAP_I=%d", chap->id);
 	*aic_len += 1;
 	pr_debug("[server] Sending CHAP_I=%d\n", chap->id);

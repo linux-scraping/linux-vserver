@@ -836,9 +836,9 @@ static int nilfs_segctor_fill_in_checkpoint(struct nilfs_sc_info *sci)
 	raw_cp->cp_snapshot_list.ssl_next = 0;
 	raw_cp->cp_snapshot_list.ssl_prev = 0;
 	raw_cp->cp_inodes_count =
-		cpu_to_le64(atomic_read(&sci->sc_root->inodes_count));
+		cpu_to_le64(atomic64_read(&sci->sc_root->inodes_count));
 	raw_cp->cp_blocks_count =
-		cpu_to_le64(atomic_read(&sci->sc_root->blocks_count));
+		cpu_to_le64(atomic64_read(&sci->sc_root->blocks_count));
 	raw_cp->cp_nblk_inc =
 		cpu_to_le64(sci->sc_nblk_inc + sci->sc_nblk_this_inc);
 	raw_cp->cp_create = cpu_to_le64(sci->sc_seg_ctime);
@@ -1440,17 +1440,19 @@ static int nilfs_segctor_collect(struct nilfs_sc_info *sci,
 
 		nilfs_clear_logs(&sci->sc_segbufs);
 
-		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
-		if (unlikely(err))
-			return err;
-
 		if (sci->sc_stage.flags & NILFS_CF_SUFREED) {
 			err = nilfs_sufile_cancel_freev(nilfs->ns_sufile,
 							sci->sc_freesegs,
 							sci->sc_nfreesegs,
 							NULL);
 			WARN_ON(err); /* do not happen */
+			sci->sc_stage.flags &= ~NILFS_CF_SUFREED;
 		}
+
+		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
+		if (unlikely(err))
+			return err;
+
 		nadd = min_t(int, nadd << 1, SC_MAX_SEGDELTA);
 		sci->sc_stage = prev_stage;
 	}

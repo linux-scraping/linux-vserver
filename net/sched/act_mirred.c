@@ -243,7 +243,7 @@ nla_put_failure:
 static int mirred_device_event(struct notifier_block *unused,
 			       unsigned long event, void *ptr)
 {
-	struct net_device *dev = ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct tcf_mirred *m;
 
 	if (event == NETDEV_UNREGISTER)
@@ -271,9 +271,7 @@ static struct tc_action_ops act_mirred_ops = {
 	.act		=	tcf_mirred,
 	.dump		=	tcf_mirred_dump,
 	.cleanup	=	tcf_mirred_cleanup,
-	.lookup		=	tcf_hash_search,
 	.init		=	tcf_mirred_init,
-	.walk		=	tcf_generic_walker
 };
 
 MODULE_AUTHOR("Jamal Hadi Salim(2002)");

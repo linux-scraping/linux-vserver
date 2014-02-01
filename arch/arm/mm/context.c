@@ -20,6 +20,7 @@
 #include <asm/smp_plat.h>
 #include <asm/thread_notify.h>
 #include <asm/tlbflush.h>
+#include <asm/proc-fns.h>
 
 /*
  * On ARMv6, we have the following structure in the Context ID:
@@ -79,17 +80,11 @@ void a15_erratum_get_cpumask(int this_cpu, struct mm_struct *mm,
 #ifdef CONFIG_ARM_LPAE
 static void cpu_set_reserved_ttbr0(void)
 {
-	unsigned long ttbl = __pa(swapper_pg_dir);
-	unsigned long ttbh = 0;
-
 	/*
 	 * Set TTBR0 to swapper_pg_dir which contains only global entries. The
 	 * ASID is set to 0.
 	 */
-	asm volatile(
-	"	mcrr	p15, 0, %0, %1, c2		@ set TTBR0\n"
-	:
-	: "r" (ttbl), "r" (ttbh));
+	cpu_set_ttbr(0, __pa(swapper_pg_dir));
 	isb();
 }
 #else
@@ -167,10 +162,7 @@ static void flush_context(unsigned int cpu)
 	}
 
 	/* Queue a TLB invalidate and flush the I-cache if necessary. */
-	if (!tlb_ops_need_broadcast())
-		cpumask_set_cpu(cpu, &tlb_flush_pending);
-	else
-		cpumask_setall(&tlb_flush_pending);
+	cpumask_setall(&tlb_flush_pending);
 
 	if (icache_is_vivt_asid_tagged())
 		__flush_icache_all();
@@ -250,7 +242,6 @@ void check_and_switch_context(struct mm_struct *mm, struct task_struct *tsk)
 	if (cpumask_test_and_clear_cpu(cpu, &tlb_flush_pending)) {
 		local_flush_bp_all();
 		local_flush_tlb_all();
-		dummy_flush_tlb_a15_erratum();
 	}
 
 	atomic64_set(&per_cpu(active_asids, cpu), asid);

@@ -14,32 +14,12 @@
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
 */
 
 #ifndef _COMEDIDEV_H
 #define _COMEDIDEV_H
 
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/kdev_t.h>
-#include <linux/slab.h>
-#include <linux/delay.h>
-#include <linux/errno.h>
-#include <linux/spinlock.h>
-#include <linux/mutex.h>
-#include <linux/wait.h>
-#include <linux/mm.h>
-#include <linux/init.h>
-#include <linux/vmalloc.h>
 #include <linux/dma-mapping.h>
-#include <linux/uaccess.h>
-#include <linux/io.h>
-#include <linux/timer.h>
 
 #include "comedi.h"
 
@@ -76,11 +56,6 @@ struct comedi_subdevice {
 
 	unsigned int maxdata;	/* if maxdata==0, use list */
 	const unsigned int *maxdata_list;	/* list is channel specific */
-
-	unsigned int flags;
-	const unsigned int *flaglist;
-
-	unsigned int settling_time_0;
 
 	const struct comedi_lrange *range_table;
 	const struct comedi_lrange *const *range_table_list;
@@ -270,10 +245,13 @@ enum subdevice_runflags {
 	/* indicates an COMEDI_CB_ERROR event has occurred since the last
 	 * command was started */
 	SRF_ERROR = 0x00000004,
-	SRF_RUNNING = 0x08000000
+	SRF_RUNNING = 0x08000000,
+	SRF_FREE_SPRIV = 0x80000000,	/* free s->private on detach */
 };
 
 bool comedi_is_subdevice_running(struct comedi_subdevice *s);
+
+void *comedi_alloc_spriv(struct comedi_subdevice *s, size_t size);
 
 int comedi_check_chanlist(struct comedi_subdevice *s,
 			  int n,
@@ -312,7 +290,38 @@ struct comedi_lrange {
 	struct comedi_krange range[GCC_ZERO_LENGTH_ARRAY];
 };
 
-/* some silly little inline functions */
+static inline bool comedi_range_is_bipolar(struct comedi_subdevice *s,
+					   unsigned int range)
+{
+	return s->range_table->range[range].min < 0;
+}
+
+static inline bool comedi_range_is_unipolar(struct comedi_subdevice *s,
+					    unsigned int range)
+{
+	return s->range_table->range[range].min >= 0;
+}
+
+static inline bool comedi_chan_range_is_bipolar(struct comedi_subdevice *s,
+						unsigned int chan,
+						unsigned int range)
+{
+	return s->range_table_list[chan]->range[range].min < 0;
+}
+
+static inline bool comedi_chan_range_is_unipolar(struct comedi_subdevice *s,
+						 unsigned int chan,
+						 unsigned int range)
+{
+	return s->range_table_list[chan]->range[range].min >= 0;
+}
+
+/* munge between offset binary and two's complement values */
+static inline unsigned int comedi_offset_munge(struct comedi_subdevice *s,
+					       unsigned int val)
+{
+	return val ^ s->maxdata ^ (s->maxdata >> 1);
+}
 
 static inline unsigned int bytes_per_sample(const struct comedi_subdevice *subd)
 {
@@ -337,8 +346,8 @@ unsigned int comedi_buf_read_n_available(struct comedi_async *);
 unsigned int comedi_buf_read_alloc(struct comedi_async *, unsigned int);
 unsigned int comedi_buf_read_free(struct comedi_async *, unsigned int);
 
-int comedi_buf_put(struct comedi_async *, short);
-int comedi_buf_get(struct comedi_async *, short *);
+int comedi_buf_put(struct comedi_async *, unsigned short);
+int comedi_buf_get(struct comedi_async *, unsigned short *);
 
 void comedi_buf_memcpy_to(struct comedi_async *async, unsigned int offset,
 			  const void *source, unsigned int num_bytes);
@@ -347,9 +356,21 @@ void comedi_buf_memcpy_from(struct comedi_async *async, unsigned int offset,
 
 /* drivers.c - general comedi driver functions */
 
+int comedi_dio_insn_config(struct comedi_device *, struct comedi_subdevice *,
+			   struct comedi_insn *, unsigned int *data,
+			   unsigned int mask);
+unsigned int comedi_dio_update_state(struct comedi_subdevice *,
+				     unsigned int *data);
+
+void *comedi_alloc_devpriv(struct comedi_device *, size_t);
 int comedi_alloc_subdevices(struct comedi_device *, int);
 
-void comedi_spriv_free(struct comedi_device *, int subdev_num);
+int comedi_load_firmware(struct comedi_device *, struct device *,
+			 const char *name,
+			 int (*cb)(struct comedi_device *,
+				   const u8 *data, size_t size,
+				   unsigned long context),
+			 unsigned long context);
 
 int __comedi_request_region(struct comedi_device *,
 			    unsigned long start, unsigned long len);
@@ -362,7 +383,7 @@ int comedi_auto_config(struct device *, struct comedi_driver *,
 void comedi_auto_unconfig(struct device *);
 
 int comedi_driver_register(struct comedi_driver *);
-int comedi_driver_unregister(struct comedi_driver *);
+void comedi_driver_unregister(struct comedi_driver *);
 
 /**
  * module_comedi_driver() - Helper macro for registering a comedi driver
@@ -385,7 +406,6 @@ int comedi_driver_unregister(struct comedi_driver *);
  */
 #define PCI_VENDOR_ID_KOLTER		0x1001
 #define PCI_VENDOR_ID_ICP		0x104c
-#define PCI_VENDOR_ID_AMCC		0x10e8
 #define PCI_VENDOR_ID_DT		0x1116
 #define PCI_VENDOR_ID_IOTECH		0x1616
 #define PCI_VENDOR_ID_CONTEC		0x1221
@@ -489,6 +509,7 @@ struct usb_driver;
 struct usb_interface;
 
 struct usb_interface *comedi_to_usb_interface(struct comedi_device *);
+struct usb_device *comedi_to_usb_dev(struct comedi_device *);
 
 int comedi_usb_auto_config(struct usb_interface *, struct comedi_driver *,
 			   unsigned long context);

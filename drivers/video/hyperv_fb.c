@@ -575,6 +575,10 @@ static int hvfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	return 0;
 }
 
+static int hvfb_blank(int blank, struct fb_info *info)
+{
+	return 1;	/* get fb_blank to set the colormap to all black */
+}
 
 static struct fb_ops hvfb_ops = {
 	.owner = THIS_MODULE,
@@ -584,6 +588,7 @@ static struct fb_ops hvfb_ops = {
 	.fb_fillrect = cfb_fillrect,
 	.fb_copyarea = cfb_copyarea,
 	.fb_imageblit = cfb_imageblit,
+	.fb_blank = hvfb_blank,
 };
 
 
@@ -863,5 +868,4 @@ module_init(hvfb_drv_init);
 module_exit(hvfb_drv_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_VERSION(HV_DRV_VERSION);
 MODULE_DESCRIPTION("Microsoft Hyper-V Synthetic Video Frame Buffer Driver");

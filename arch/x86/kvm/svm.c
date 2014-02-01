@@ -1026,7 +1026,10 @@ static void svm_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 		g_tsc_offset = svm->vmcb->control.tsc_offset -
 			       svm->nested.hsave->control.tsc_offset;
 		svm->nested.hsave->control.tsc_offset = offset;
-	}
+	} else
+		trace_kvm_write_tsc_offset(vcpu->vcpu_id,
+					   svm->vmcb->control.tsc_offset,
+					   offset);
 
 	svm->vmcb->control.tsc_offset = offset + g_tsc_offset;
 
@@ -1044,6 +1047,11 @@ static void svm_adjust_tsc_offset(struct kvm_vcpu *vcpu, s64 adjustment, bool ho
 	svm->vmcb->control.tsc_offset += adjustment;
 	if (is_guest_mode(vcpu))
 		svm->nested.hsave->control.tsc_offset += adjustment;
+	else
+		trace_kvm_write_tsc_offset(vcpu->vcpu_id,
+				     svm->vmcb->control.tsc_offset - adjustment,
+				     svm->vmcb->control.tsc_offset);
+
 	mark_dirty(svm->vmcb, VMCB_INTERCEPTS);
 }
 
@@ -1951,11 +1959,9 @@ static void nested_svm_inject_npf_exit(struct kvm_vcpu *vcpu,
 	nested_svm_vmexit(svm);
 }
 
-static int nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
+static void nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
 {
-	int r;
-
-	r = kvm_init_shadow_mmu(vcpu, &vcpu->arch.mmu);
+	kvm_init_shadow_mmu(vcpu, &vcpu->arch.mmu);
 
 	vcpu->arch.mmu.set_cr3           = nested_svm_set_tdp_cr3;
 	vcpu->arch.mmu.get_cr3           = nested_svm_get_tdp_cr3;
@@ -1963,8 +1969,6 @@ static int nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
 	vcpu->arch.mmu.inject_page_fault = nested_svm_inject_npf_exit;
 	vcpu->arch.mmu.shadow_root_level = get_npt_level();
 	vcpu->arch.walk_mmu              = &vcpu->arch.nested_mmu;
-
-	return r;
 }
 
 static void nested_svm_uninit_mmu_context(struct kvm_vcpu *vcpu)

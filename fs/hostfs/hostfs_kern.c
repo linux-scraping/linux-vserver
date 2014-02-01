@@ -33,15 +33,6 @@ static inline struct hostfs_inode_info *HOSTFS_I(struct inode *inode)
 
 #define FILE_HOSTFS_I(file) HOSTFS_I(file_inode(file))
 
-static int hostfs_d_delete(const struct dentry *dentry)
-{
-	return 1;
-}
-
-static const struct dentry_operations hostfs_dentry_ops = {
-	.d_delete		= hostfs_d_delete,
-};
-
 /* Changed in hostfs_args before the kernel starts running */
 static char *root_ino = "";
 static int append = 0;
@@ -277,7 +268,7 @@ static const struct super_operations hostfs_sbops = {
 	.show_options	= hostfs_show_options,
 };
 
-int hostfs_readdir(struct file *file, void *ent, filldir_t filldir)
+int hostfs_readdir(struct file *file, struct dir_context *ctx)
 {
 	void *dir;
 	char *name;
@@ -292,12 +283,11 @@ int hostfs_readdir(struct file *file, void *ent, filldir_t filldir)
 	__putname(name);
 	if (dir == NULL)
 		return -error;
-	next = file->f_pos;
+	next = ctx->pos;
 	while ((name = read_dir(dir, &next, &ino, &len, &type)) != NULL) {
-		error = (*filldir)(ent, name, len, file->f_pos,
-				   ino, type);
-		if (error) break;
-		file->f_pos = next;
+		if (!dir_emit(ctx, name, len, ino, type))
+			break;
+		ctx->pos = next;
 	}
 	close_dir(dir);
 	return 0;
@@ -362,6 +352,13 @@ retry:
 	return 0;
 }
 
+static int hostfs_file_release(struct inode *inode, struct file *file)
+{
+	filemap_write_and_wait(inode->i_mapping);
+
+	return 0;
+}
+
 int hostfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
@@ -387,13 +384,13 @@ static const struct file_operations hostfs_file_fops = {
 	.write		= do_sync_write,
 	.mmap		= generic_file_mmap,
 	.open		= hostfs_file_open,
-	.release	= NULL,
+	.release	= hostfs_file_release,
 	.fsync		= hostfs_fsync,
 };
 
 static const struct file_operations hostfs_dir_fops = {
 	.llseek		= generic_file_llseek,
-	.readdir	= hostfs_readdir,
+	.iterate	= hostfs_readdir,
 	.read		= generic_read_dir,
 };
 
@@ -919,7 +916,7 @@ static int hostfs_fill_sb_common(struct super_block *sb, void *d, int silent)
 	sb->s_blocksize_bits = 10;
 	sb->s_magic = HOSTFS_SUPER_MAGIC;
 	sb->s_op = &hostfs_sbops;
-	sb->s_d_op = &hostfs_dentry_ops;
+	sb->s_d_op = &simple_dentry_operations;
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 
 	/* NULL is printed as <NULL> by sprintf: avoid that. */

@@ -569,10 +569,10 @@ void ata_tf_to_fis(const struct ata_taskfile *tf, u8 pmp, int is_cmd, u8 *fis)
 	fis[14] = 0;
 	fis[15] = tf->ctl;
 
-	fis[16] = 0;
-	fis[17] = 0;
-	fis[18] = 0;
-	fis[19] = 0;
+	fis[16] = tf->auxiliary & 0xff;
+	fis[17] = (tf->auxiliary >> 8) & 0xff;
+	fis[18] = (tf->auxiliary >> 16) & 0xff;
+	fis[19] = (tf->auxiliary >> 24) & 0xff;
 }
 
 /**
@@ -2139,6 +2139,29 @@ static int ata_dev_config_ncq(struct ata_device *dev,
 	else
 		snprintf(desc, desc_sz, "NCQ (depth %d/%d)%s", hdepth,
 			ddepth, aa_desc);
+
+	if ((ap->flags & ATA_FLAG_FPDMA_AUX) &&
+	    ata_id_has_ncq_send_and_recv(dev->id)) {
+		err_mask = ata_read_log_page(dev, ATA_LOG_NCQ_SEND_RECV,
+					     0, ap->sector_buf, 1);
+		if (err_mask) {
+			ata_dev_dbg(dev,
+				    "failed to get NCQ Send/Recv Log Emask 0x%x\n",
+				    err_mask);
+		} else {
+			u8 *cmds = dev->ncq_send_recv_cmds;
+
+			dev->flags |= ATA_DFLAG_NCQ_SEND_RECV;
+			memcpy(cmds, ap->sector_buf, ATA_LOG_NCQ_SEND_RECV_SIZE);
+
+			if (dev->horkage & ATA_HORKAGE_NO_NCQ_TRIM) {
+				ata_dev_dbg(dev, "disabling queued TRIM support\n");
+				cmds[ATA_LOG_NCQ_SEND_RECV_DSM_OFFSET] &=
+					~ATA_LOG_NCQ_SEND_RECV_DSM_TRIM;
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -4189,6 +4212,10 @@ static const struct ata_blacklist_entry ata_device_blacklist [] = {
 	{ "PIONEER DVD-RW  DVR-212D",	NULL,	ATA_HORKAGE_NOSETXFER },
 	{ "PIONEER DVD-RW  DVR-216D",	NULL,	ATA_HORKAGE_NOSETXFER },
 
+	/* devices that don't properly handle queued TRIM commands */
+	{ "Micron_M500*",		NULL,	ATA_HORKAGE_NO_NCQ_TRIM, },
+	{ "Crucial_CT???M500SSD1",	NULL,	ATA_HORKAGE_NO_NCQ_TRIM, },
+
 	/* End Marker */
 	{ }
 };
@@ -5440,7 +5467,7 @@ static int ata_port_runtime_idle(struct device *dev)
 				return -EBUSY;
 	}
 
-	return pm_runtime_suspend(dev);
+	return 0;
 }
 
 static int ata_port_runtime_suspend(struct device *dev)
@@ -5646,6 +5673,7 @@ struct ata_port *ata_port_alloc(struct ata_host *host)
 	ap->pflags |= ATA_PFLAG_INITIALIZING | ATA_PFLAG_FROZEN;
 	ap->lock = &host->lock;
 	ap->print_id = -1;
+	ap->local_port_no = -1;
 	ap->host = host;
 	ap->dev = host->dev;
 
@@ -6136,9 +6164,10 @@ int ata_host_register(struct ata_host *host, struct scsi_host_template *sht)
 		kfree(host->ports[i]);
 
 	/* give ports names and add SCSI hosts */
-	for (i = 0; i < host->n_ports; i++)
+	for (i = 0; i < host->n_ports; i++) {
 		host->ports[i]->print_id = atomic_inc_return(&ata_print_id);
-
+		host->ports[i]->local_port_no = i + 1;
+	}
 
 	/* Create associated sysfs transport objects  */
 	for (i = 0; i < host->n_ports; i++) {
@@ -6151,8 +6180,6 @@ int ata_host_register(struct ata_host *host, struct scsi_host_template *sht)
 	rc = ata_scsi_add_hosts(host, sht);
 	if (rc)
 		goto err_tadd;
-
-	ata_acpi_hotplug_init(host);
 
 	/* set cable, sata_spd_limit and report */
 	for (i = 0; i < host->n_ports; i++) {
@@ -6291,10 +6318,9 @@ static void ata_port_detach(struct ata_port *ap)
 		for (i = 0; i < SATA_PMP_MAX_PORTS; i++)
 			ata_tlink_delete(&ap->pmp_link[i]);
 	}
-	ata_tport_delete(ap);
-
 	/* remove the associated SCSI host */
 	scsi_remove_host(ap->scsi_host);
+	ata_tport_delete(ap);
 }
 
 /**
@@ -6635,8 +6661,6 @@ static int __init ata_init(void)
 
 	ata_parse_force_param();
 
-	ata_acpi_register();
-
 	rc = ata_sff_init();
 	if (rc) {
 		kfree(ata_force_tbl);
@@ -6663,7 +6687,6 @@ static void __exit ata_exit(void)
 	ata_release_transport(ata_scsi_transport_template);
 	libata_transport_exit();
 	ata_sff_exit();
-	ata_acpi_unregister();
 	kfree(ata_force_tbl);
 }
 

@@ -270,7 +270,7 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
 	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
 
-	if (res_limit != RESOURCE_MAX)
+	if (res_limit != RES_COUNTER_MAX)
 		val->totalram = (res_limit >> PAGE_SHIFT);
 	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
 	val->bufferram = 0;
@@ -301,12 +301,12 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
 
 	/* memory unlimited */
-	if (res_limit == RESOURCE_MAX)
+	if (res_limit == RES_COUNTER_MAX)
 		goto out;
 
 	swap_limit = memsw_limit - res_limit;
 	/* we have a swap limit? */
-	if (memsw_limit != RESOURCE_MAX)
+	if (memsw_limit != RES_COUNTER_MAX)
 		val->totalswap = swap_limit >> PAGE_SHIFT;
 
 	/* calculate swap part */

@@ -39,9 +39,6 @@ static DEFINE_SPINLOCK(xfrm_state_lock);
 
 static unsigned int xfrm_state_hashmax __read_mostly = 1 * 1024 * 1024;
 
-static struct xfrm_state_afinfo *xfrm_state_get_afinfo(unsigned int family);
-static void xfrm_state_put_afinfo(struct xfrm_state_afinfo *afinfo);
-
 static inline unsigned int xfrm_dst_hash(struct net *net,
 					 const xfrm_address_t *daddr,
 					 const xfrm_address_t *saddr,
@@ -471,7 +468,7 @@ expired:
 	}
 
 	err = __xfrm_state_delete(x);
-	if (!err && x->id.spi)
+	if (!err)
 		km_state_expired(x, 1, 0);
 
 	xfrm_audit_state_delete(x, err ? 0 : 1,
@@ -499,7 +496,8 @@ struct xfrm_state *xfrm_state_alloc(struct net *net)
 		INIT_HLIST_NODE(&x->bydst);
 		INIT_HLIST_NODE(&x->bysrc);
 		INIT_HLIST_NODE(&x->byspi);
-		tasklet_hrtimer_init(&x->mtimer, xfrm_timer_handler, CLOCK_REALTIME, HRTIMER_MODE_ABS);
+		tasklet_hrtimer_init(&x->mtimer, xfrm_timer_handler,
+					CLOCK_BOOTTIME, HRTIMER_MODE_ABS);
 		setup_timer(&x->rtimer, xfrm_replay_timer_handler,
 				(unsigned long)x);
 		x->curlft.add_time = get_seconds();
@@ -817,7 +815,7 @@ xfrm_state_find(const xfrm_address_t *daddr, const xfrm_address_t *saddr,
 			xfrm_state_look_at(pol, x, fl, encap_family,
 					   &best, &acquire_in_progress, &error);
 	}
-	if (best)
+	if (best || acquire_in_progress)
 		goto found;
 
 	h_wildcard = xfrm_dst_hash(net, daddr, &saddr_wildcard, tmpl->reqid, encap_family);
@@ -826,7 +824,7 @@ xfrm_state_find(const xfrm_address_t *daddr, const xfrm_address_t *saddr,
 		    x->props.reqid == tmpl->reqid &&
 		    (mark & x->mark.m) == x->mark.v &&
 		    !(x->props.flags & XFRM_STATE_WILDRECV) &&
-		    xfrm_state_addr_check(x, daddr, saddr, encap_family) &&
+		    xfrm_addr_equal(&x->id.daddr, daddr, encap_family) &&
 		    tmpl->mode == x->props.mode &&
 		    tmpl->id.proto == x->id.proto &&
 		    (tmpl->id.spi == x->id.spi || !tmpl->id.spi))
@@ -990,11 +988,13 @@ void xfrm_state_insert(struct xfrm_state *x)
 EXPORT_SYMBOL(xfrm_state_insert);
 
 /* xfrm_state_lock is held */
-static struct xfrm_state *__find_acq_core(struct net *net, struct xfrm_mark *m,
+static struct xfrm_state *__find_acq_core(struct net *net,
+					  const struct xfrm_mark *m,
 					  unsigned short family, u8 mode,
 					  u32 reqid, u8 proto,
 					  const xfrm_address_t *daddr,
-					  const xfrm_address_t *saddr, int create)
+					  const xfrm_address_t *saddr,
+					  int create)
 {
 	unsigned int h = xfrm_dst_hash(net, daddr, saddr, reqid, family);
 	struct xfrm_state *x;
@@ -1399,9 +1399,9 @@ xfrm_state_lookup_byaddr(struct net *net, u32 mark,
 EXPORT_SYMBOL(xfrm_state_lookup_byaddr);
 
 struct xfrm_state *
-xfrm_find_acq(struct net *net, struct xfrm_mark *mark, u8 mode, u32 reqid, u8 proto,
-	      const xfrm_address_t *daddr, const xfrm_address_t *saddr,
-	      int create, unsigned short family)
+xfrm_find_acq(struct net *net, const struct xfrm_mark *mark, u8 mode, u32 reqid,
+	      u8 proto, const xfrm_address_t *daddr,
+	      const xfrm_address_t *saddr, int create, unsigned short family)
 {
 	struct xfrm_state *x;
 
@@ -1860,7 +1860,7 @@ int xfrm_state_unregister_afinfo(struct xfrm_state_afinfo *afinfo)
 }
 EXPORT_SYMBOL(xfrm_state_unregister_afinfo);
 
-static struct xfrm_state_afinfo *xfrm_state_get_afinfo(unsigned int family)
+struct xfrm_state_afinfo *xfrm_state_get_afinfo(unsigned int family)
 {
 	struct xfrm_state_afinfo *afinfo;
 	if (unlikely(family >= NPROTO))
@@ -1872,7 +1872,7 @@ static struct xfrm_state_afinfo *xfrm_state_get_afinfo(unsigned int family)
 	return afinfo;
 }
 
-static void xfrm_state_put_afinfo(struct xfrm_state_afinfo *afinfo)
+void xfrm_state_put_afinfo(struct xfrm_state_afinfo *afinfo)
 {
 	rcu_read_unlock();
 }

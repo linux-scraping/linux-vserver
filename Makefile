@@ -1,8 +1,8 @@
 VERSION = 3
-PATCHLEVEL = 10
-SUBLEVEL = 27
-EXTRAVERSION = -vs2.3.6.8
-NAME = TOSSUG Baby Fish
+PATCHLEVEL = 13
+SUBLEVEL = 1
+EXTRAVERSION = -vs2.3.6.9
+NAME = One Giant Leap for Frogkind
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
@@ -21,6 +21,9 @@ unexport LC_ALL
 LC_COLLATE=C
 LC_NUMERIC=C
 export LC_COLLATE LC_NUMERIC
+
+# Avoid interference with shell env settings
+unexport GREP_OPTIONS
 
 # We are using a recursive build, so we need to do a little thinking
 # to get the ordering right.
@@ -659,6 +662,12 @@ KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
 # conserve stack if available
 KBUILD_CFLAGS   += $(call cc-option,-fconserve-stack)
 
+# disallow errors like 'EXPORT_GPL(foo);' with missing header
+KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
+
+# require functions to have arguments in prototypes, not empty 'int foo()'
+KBUILD_CFLAGS   += $(call cc-option,-Werror=strict-prototypes)
+
 # use the deterministic mode of AR if available
 KBUILD_ARFLAGS := $(call ar-option,D)
 
@@ -720,6 +729,18 @@ mod_strip_cmd = true
 endif # INSTALL_MOD_STRIP
 export mod_strip_cmd
 
+# Select initial ramdisk compression format, default is gzip(1).
+# This shall be used by the dracut(8) tool while creating an initramfs image.
+#
+INITRD_COMPRESS-y                  := gzip
+INITRD_COMPRESS-$(CONFIG_RD_BZIP2) := bzip2
+INITRD_COMPRESS-$(CONFIG_RD_LZMA)  := lzma
+INITRD_COMPRESS-$(CONFIG_RD_XZ)    := xz
+INITRD_COMPRESS-$(CONFIG_RD_LZO)   := lzo
+INITRD_COMPRESS-$(CONFIG_RD_LZ4)   := lz4
+# do not export INITRD_COMPRESS, since we didn't actually
+# choose a sane default compression above.
+# export INITRD_COMPRESS := $(INITRD_COMPRESS-y)
 
 ifdef CONFIG_MODULE_SIG_ALL
 MODSECKEY = ./signing_key.priv
@@ -794,10 +815,13 @@ PHONY += $(vmlinux-dirs)
 $(vmlinux-dirs): prepare scripts
 	$(Q)$(MAKE) $(build)=$@
 
-# Store (new) KERNELRELASE string in include/config/kernel.release
+define filechk_kernel.release
+	echo "$(KERNELVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion $(srctree))"
+endef
+
+# Store (new) KERNELRELEASE string in include/config/kernel.release
 include/config/kernel.release: include/config/auto.conf FORCE
-	$(Q)rm -f $@
-	$(Q)echo "$(KERNELVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion $(srctree))" > $@
+	$(call filechk,kernel.release)
 
 
 # Things we need to do before we recursively start building the kernel
@@ -1116,6 +1140,7 @@ help:
 	@echo  '  gtags           - Generate GNU GLOBAL index'
 	@echo  '  kernelrelease	  - Output the release version string'
 	@echo  '  kernelversion	  - Output the version stored in Makefile'
+	@echo  '  image_name	  - Output the image name'
 	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
 	 echo  '                    (default: $(INSTALL_HDR_PATH))'; \
 	 echo  ''
@@ -1310,7 +1335,7 @@ export_report:
 endif #ifeq ($(config-targets),1)
 endif #ifeq ($(mixed-targets),1)
 
-PHONY += checkstack kernelrelease kernelversion
+PHONY += checkstack kernelrelease kernelversion image_name
 
 # UML needs a little special treatment here.  It wants to use the host
 # toolchain, so needs $(SUBARCH) passed to checkstack.pl.  Everyone
@@ -1330,6 +1355,9 @@ kernelrelease:
 
 kernelversion:
 	@echo $(KERNELVERSION)
+
+image_name:
+	@echo $(KBUILD_IMAGE)
 
 # Clear a bunch of variables before executing the submake
 tools/: FORCE

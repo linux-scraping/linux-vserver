@@ -38,7 +38,7 @@ const char *mei_dev_state_str(int state)
 	MEI_DEV_STATE(POWER_DOWN);
 	MEI_DEV_STATE(POWER_UP);
 	default:
-		return "unkown";
+		return "unknown";
 	}
 #undef MEI_DEV_STATE
 }
@@ -68,6 +68,14 @@ void mei_device_init(struct mei_device *dev)
 	mei_io_list_init(&dev->amthif_cmd_list);
 	mei_io_list_init(&dev->amthif_rd_complete_list);
 
+	bitmap_zero(dev->host_clients_map, MEI_CLIENTS_MAX);
+	dev->open_handle_count = 0;
+
+	/*
+	 * Reserving the first client ID
+	 * 0: Reserved for MEI Bus Message communications
+	 */
+	bitmap_set(dev->host_clients_map, 0, 1);
 }
 EXPORT_SYMBOL_GPL(mei_device_init);
 
@@ -106,8 +114,7 @@ int mei_start(struct mei_device *dev)
 		goto err;
 	}
 
-	if (dev->version.major_version != HBM_MAJOR_VERSION ||
-	    dev->version.minor_version != HBM_MINOR_VERSION) {
+	if (!mei_hbm_version_is_supported(dev)) {
 		dev_dbg(&dev->pdev->dev, "MEI start failed.\n");
 		goto err;
 	}
@@ -133,13 +140,23 @@ EXPORT_SYMBOL_GPL(mei_start);
 void mei_reset(struct mei_device *dev, int interrupts_enabled)
 {
 	bool unexpected;
+	int ret;
 
 	unexpected = (dev->dev_state != MEI_DEV_INITIALIZING &&
 			dev->dev_state != MEI_DEV_DISABLED &&
 			dev->dev_state != MEI_DEV_POWER_DOWN &&
 			dev->dev_state != MEI_DEV_POWER_UP);
 
-	mei_hw_reset(dev, interrupts_enabled);
+	if (unexpected)
+		dev_warn(&dev->pdev->dev, "unexpected reset: dev_state = %s\n",
+			 mei_dev_state_str(dev->dev_state));
+
+	ret = mei_hw_reset(dev, interrupts_enabled);
+	if (ret) {
+		dev_err(&dev->pdev->dev, "hw reset failed disabling the device\n");
+		interrupts_enabled = false;
+		dev->dev_state = MEI_DEV_DISABLED;
+	}
 
 	dev->hbm_state = MEI_HBM_IDLE;
 
@@ -149,17 +166,18 @@ void mei_reset(struct mei_device *dev, int interrupts_enabled)
 		    dev->dev_state != MEI_DEV_POWER_DOWN)
 			dev->dev_state = MEI_DEV_RESETTING;
 
+		/* remove all waiting requests */
+		mei_cl_all_write_clear(dev);
+
 		mei_cl_all_disconnect(dev);
+
+		/* wake up all readings so they can be interrupted */
+		mei_cl_all_wakeup(dev);
 
 		/* remove entry if already in list */
 		dev_dbg(&dev->pdev->dev, "remove iamthif and wd from the file list.\n");
 		mei_cl_unlink(&dev->wd_cl);
-		if (dev->open_handle_count > 0)
-			dev->open_handle_count--;
 		mei_cl_unlink(&dev->iamthif_cl);
-		if (dev->open_handle_count > 0)
-			dev->open_handle_count--;
-
 		mei_amthif_reset_params(dev);
 		memset(&dev->wr_ext_msg, 0, sizeof(dev->wr_ext_msg));
 	}
@@ -171,16 +189,17 @@ void mei_reset(struct mei_device *dev, int interrupts_enabled)
 	dev->rd_msg_hdr = 0;
 	dev->wd_pending = false;
 
-	if (unexpected)
-		dev_warn(&dev->pdev->dev, "unexpected reset: dev_state = %s\n",
-			 mei_dev_state_str(dev->dev_state));
-
 	if (!interrupts_enabled) {
 		dev_dbg(&dev->pdev->dev, "intr not enabled end of reset\n");
 		return;
 	}
 
-	mei_hw_start(dev);
+	ret = mei_hw_start(dev);
+	if (ret) {
+		dev_err(&dev->pdev->dev, "hw_start failed disabling the device\n");
+		dev->dev_state = MEI_DEV_DISABLED;
+		return;
+	}
 
 	dev_dbg(&dev->pdev->dev, "link is established start sending messages.\n");
 	/* link is established * start sending messages.  */
@@ -189,11 +208,6 @@ void mei_reset(struct mei_device *dev, int interrupts_enabled)
 
 	mei_hbm_start_req(dev);
 
-	/* wake up all readings so they can be interrupted */
-	mei_cl_all_read_wakeup(dev);
-
-	/* remove all waiting requests */
-	mei_cl_all_write_clear(dev);
 }
 EXPORT_SYMBOL_GPL(mei_reset);
 

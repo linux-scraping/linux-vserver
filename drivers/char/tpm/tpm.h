@@ -59,8 +59,6 @@ extern ssize_t tpm_show_pcrs(struct device *, struct device_attribute *attr,
 				char *);
 extern ssize_t tpm_show_caps(struct device *, struct device_attribute *attr,
 				char *);
-extern ssize_t tpm_show_caps_1_2(struct device *, struct device_attribute *attr,
-				char *);
 extern ssize_t tpm_store_cancel(struct device *, struct device_attribute *attr,
 				const char *, size_t);
 extern ssize_t tpm_show_enabled(struct device *, struct device_attribute *attr,
@@ -122,6 +120,7 @@ struct tpm_chip {
 	struct device *dev;	/* Device stuff */
 
 	int dev_num;		/* /dev/tpm# */
+	char devname[7];
 	unsigned long is_open;	/* only one allowed */
 	int time_expired;
 
@@ -272,7 +271,6 @@ typedef union {
 	struct	tpm_output_header out;
 } tpm_cmd_header;
 
-#define TPM_DIGEST_SIZE 20
 struct tpm_pcrread_out {
 	u8	pcr_result[TPM_DIGEST_SIZE];
 } __packed;
@@ -333,6 +331,7 @@ extern struct tpm_chip* tpm_register_hardware(struct device *,
 				 const struct tpm_vendor_specific *);
 extern int tpm_open(struct inode *, struct file *);
 extern int tpm_release(struct inode *, struct file *);
+extern void tpm_dev_release(struct device *dev);
 extern void tpm_dev_vendor_release(struct tpm_chip *);
 extern ssize_t tpm_write(struct file *, const char __user *, size_t,
 			 loff_t *);

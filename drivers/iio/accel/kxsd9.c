@@ -223,13 +223,11 @@ static int kxsd9_probe(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev;
 	struct kxsd9_state *st;
-	int ret;
 
-	indio_dev = iio_device_alloc(sizeof(*st));
-	if (indio_dev == NULL) {
-		ret = -ENOMEM;
-		goto error_ret;
-	}
+	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
+	if (!indio_dev)
+		return -ENOMEM;
+
 	st = iio_priv(indio_dev);
 	spi_set_drvdata(spi, indio_dev);
 
@@ -246,22 +244,12 @@ static int kxsd9_probe(struct spi_device *spi)
 	spi_setup(spi);
 	kxsd9_power_up(st);
 
-	ret = iio_device_register(indio_dev);
-	if (ret)
-		goto error_free_dev;
-
-	return 0;
-
-error_free_dev:
-	iio_device_free(indio_dev);
-error_ret:
-	return ret;
+	return iio_device_register(indio_dev);
 }
 
 static int kxsd9_remove(struct spi_device *spi)
 {
 	iio_device_unregister(spi_get_drvdata(spi));
-	iio_device_free(spi_get_drvdata(spi));
 
 	return 0;
 }

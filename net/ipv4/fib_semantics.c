@@ -169,7 +169,8 @@ static void free_nh_exceptions(struct fib_nh *nh)
 			
 			next = rcu_dereference_protected(fnhe->fnhe_next, 1);
 
-			rt_fibinfo_free(&fnhe->fnhe_rth);
+			rt_fibinfo_free(&fnhe->fnhe_rth_input);
+			rt_fibinfo_free(&fnhe->fnhe_rth_output);
 
 			kfree(fnhe);
 
@@ -379,7 +380,7 @@ static inline size_t fib_nlmsg_size(struct fib_info *fi)
 }
 
 void rtmsg_fib(int event, __be32 key, struct fib_alias *fa,
-	       int dst_len, u32 tb_id, struct nl_info *info,
+	       int dst_len, u32 tb_id, const struct nl_info *info,
 	       unsigned int nlm_flags)
 {
 	struct sk_buff *skb;

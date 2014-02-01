@@ -1131,14 +1131,14 @@ static int au1000_probe(struct platform_device *pdev)
 	writel(0, aup->enable);
 	aup->mac_enabled = 0;
 
-	pd = pdev->dev.platform_data;
+	pd = dev_get_platdata(&pdev->dev);
 	if (!pd) {
 		dev_info(&pdev->dev, "no platform_data passed,"
 					" PHY search on MAC0\n");
 		aup->phy1_search_mac0 = 1;
 	} else {
 		if (is_valid_ether_addr(pd->mac)) {
-			memcpy(dev->dev_addr, pd->mac, 6);
+			memcpy(dev->dev_addr, pd->mac, ETH_ALEN);
 		} else {
 			/* Set a random MAC since no valid provided by platform_data. */
 			eth_hw_addr_random(dev);
@@ -1300,8 +1300,6 @@ static int au1000_remove(struct platform_device *pdev)
 	struct au1000_private *aup = netdev_priv(dev);
 	int i;
 	struct resource *base, *macen;
-
-	platform_set_drvdata(pdev, NULL);
 
 	unregister_netdev(dev);
 	mdiobus_unregister(aup->mii_bus);

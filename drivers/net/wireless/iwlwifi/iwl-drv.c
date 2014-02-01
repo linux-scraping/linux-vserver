@@ -483,6 +483,7 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 	const u8 *tlv_data;
 	char buildstr[25];
 	u32 build;
+	int num_of_cpus;
 
 	if (len < sizeof(*ucode)) {
 		IWL_ERR(drv, "uCode has invalid length: %zd\n", len);
@@ -692,6 +693,42 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				goto invalid_tlv_len;
 			drv->fw.phy_config = le32_to_cpup((__le32 *)tlv_data);
 			break;
+		 case IWL_UCODE_TLV_SECURE_SEC_RT:
+			iwl_store_ucode_sec(pieces, tlv_data, IWL_UCODE_REGULAR,
+					    tlv_len);
+			drv->fw.mvm_fw = true;
+			drv->fw.img[IWL_UCODE_REGULAR].is_secure = true;
+			break;
+		case IWL_UCODE_TLV_SECURE_SEC_INIT:
+			iwl_store_ucode_sec(pieces, tlv_data, IWL_UCODE_INIT,
+					    tlv_len);
+			drv->fw.mvm_fw = true;
+			drv->fw.img[IWL_UCODE_INIT].is_secure = true;
+			break;
+		case IWL_UCODE_TLV_SECURE_SEC_WOWLAN:
+			iwl_store_ucode_sec(pieces, tlv_data, IWL_UCODE_WOWLAN,
+					    tlv_len);
+			drv->fw.mvm_fw = true;
+			drv->fw.img[IWL_UCODE_WOWLAN].is_secure = true;
+			break;
+		case IWL_UCODE_TLV_NUM_OF_CPU:
+			if (tlv_len != sizeof(u32))
+				goto invalid_tlv_len;
+			num_of_cpus =
+				le32_to_cpup((__le32 *)tlv_data);
+
+			if (num_of_cpus == 2) {
+				drv->fw.img[IWL_UCODE_REGULAR].is_dual_cpus =
+					true;
+				drv->fw.img[IWL_UCODE_INIT].is_dual_cpus =
+					true;
+				drv->fw.img[IWL_UCODE_WOWLAN].is_dual_cpus =
+					true;
+			} else if ((num_of_cpus > 2) || (num_of_cpus < 1)) {
+				IWL_ERR(drv, "Driver support upto 2 CPUs\n");
+				return -EINVAL;
+			}
+			break;
 		default:
 			IWL_DEBUG_INFO(drv, "unknown TLV: %d\n", tlv_type);
 			break;
@@ -843,7 +880,7 @@ static void iwl_req_fw_callback(const struct firmware *ucode_raw, void *context)
 	int i;
 	bool load_module = false;
 
-	fw->ucode_capa.max_probe_length = 200;
+	fw->ucode_capa.max_probe_length = IWL_DEFAULT_MAX_PROBE_LENGTH;
 	fw->ucode_capa.standard_phy_calibration_size =
 			IWL_DEFAULT_STANDARD_PHY_CALIBRATE_TBL_SIZE;
 
@@ -1032,8 +1069,10 @@ struct iwl_drv *iwl_drv_start(struct iwl_trans *trans,
 	int ret;
 
 	drv = kzalloc(sizeof(*drv), GFP_KERNEL);
-	if (!drv)
-		return NULL;
+	if (!drv) {
+		ret = -ENOMEM;
+		goto err;
+	}
 
 	drv->trans = trans;
 	drv->dev = trans->dev;
@@ -1078,7 +1117,7 @@ err_free_dbgfs:
 err_free_drv:
 #endif
 	kfree(drv);
-
+err:
 	return ERR_PTR(ret);
 }
 
@@ -1111,11 +1150,8 @@ void iwl_drv_stop(struct iwl_drv *drv)
 /* shared module parameters */
 struct iwl_mod_params iwlwifi_mod_params = {
 	.restart_fw = true,
-	.plcp_check = true,
 	.bt_coex_active = true,
 	.power_level = IWL_POWER_INDEX_1,
-	.bt_ch_announce = true,
-	.auto_agg = true,
 	.wd_disable = true,
 	/* the rest are 0 by default */
 };
@@ -1223,18 +1259,13 @@ module_param_named(antenna_coupling, iwlwifi_mod_params.ant_coupling,
 MODULE_PARM_DESC(antenna_coupling,
 		 "specify antenna coupling in dB (defualt: 0 dB)");
 
-module_param_named(bt_ch_inhibition, iwlwifi_mod_params.bt_ch_announce,
-		   bool, S_IRUGO);
-MODULE_PARM_DESC(bt_ch_inhibition,
-		 "Enable BT channel inhibition (default: enable)");
-
-module_param_named(plcp_check, iwlwifi_mod_params.plcp_check, bool, S_IRUGO);
-MODULE_PARM_DESC(plcp_check, "Check plcp health (default: 1 [enabled])");
-
 module_param_named(wd_disable, iwlwifi_mod_params.wd_disable, int, S_IRUGO);
 MODULE_PARM_DESC(wd_disable,
 		"Disable stuck queue watchdog timer 0=system default, "
 		"1=disable, 2=enable (default: 0)");
+
+module_param_named(nvm_file, iwlwifi_mod_params.nvm_file, charp, S_IRUGO);
+MODULE_PARM_DESC(nvm_file, "NVM file name");
 
 /*
  * set bt_coex_active to true, uCode will do kill/defer
@@ -1269,8 +1300,3 @@ module_param_named(power_level, iwlwifi_mod_params.power_level,
 		int, S_IRUGO);
 MODULE_PARM_DESC(power_level,
 		 "default power save level (range from 1 - 5, default: 1)");
-
-module_param_named(auto_agg, iwlwifi_mod_params.auto_agg,
-		bool, S_IRUGO);
-MODULE_PARM_DESC(auto_agg,
-		 "enable agg w/o check traffic load (default: enable)");

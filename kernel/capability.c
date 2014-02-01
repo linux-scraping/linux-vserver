@@ -437,18 +437,6 @@ bool capable(int cap)
 EXPORT_SYMBOL(capable);
 
 /**
- * nsown_capable - Check superior capability to one's own user_ns
- * @cap: The capability in question
- *
- * Return true if the current task has the given superior capability
- * targeted at its own user namespace.
- */
-bool nsown_capable(int cap)
-{
-	return ns_capable(current_user_ns(), cap);
-}
-
-/**
  * inode_capable - Check superior capability over inode
  * @inode: The inode in question
  * @cap: The capability in question
@@ -468,3 +456,4 @@ bool inode_capable(const struct inode *inode, int cap)
 
 	return ns_capable(ns, cap) && kuid_has_mapping(ns, inode->i_uid);
 }
+EXPORT_SYMBOL(inode_capable);

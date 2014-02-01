@@ -62,10 +62,11 @@
 #include <linux/ptrace.h>
 #include <linux/sched/rt.h>
 #include <linux/hugetlb.h>
+#include <linux/freezer.h>
 
 #include <asm/futex.h>
 
-#include "rtmutex_common.h"
+#include "locking/rtmutex_common.h"
 
 int __read_mostly futex_cmpxchg_enabled;
 
@@ -250,6 +251,9 @@ get_futex_key(u32 __user *uaddr, int fshared, union futex_key *key, int rw)
 		return -EINVAL;
 	address -= key->both.offset;
 
+	if (unlikely(!access_ok(rw, uaddr, sizeof(u32))))
+		return -EFAULT;
+
 	/*
 	 * PROCESS_PRIVATE futexes are fast.
 	 * As the mm cannot disappear under us and the 'key' only needs
@@ -258,8 +262,6 @@ get_futex_key(u32 __user *uaddr, int fshared, union futex_key *key, int rw)
 	 *        but access_ok() should be faster than find_vma()
 	 */
 	if (!fshared) {
-		if (unlikely(!access_ok(VERIFY_WRITE, uaddr, sizeof(u32))))
-			return -EFAULT;
 		key->private.mm = mm;
 		key->private.address = address;
 		get_futex_key_refs(key);
@@ -1808,7 +1810,7 @@ static void futex_wait_queue_me(struct futex_hash_bucket *hb, struct futex_q *q,
 		 * is no timeout, or if it has yet to expire.
 		 */
 		if (!timeout || timeout->task)
-			schedule();
+			freezable_schedule();
 	}
 	__set_current_state(TASK_RUNNING);
 }

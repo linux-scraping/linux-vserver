@@ -541,7 +541,7 @@ static int ismt_access(struct i2c_adapter *adap, u16 addr,
 		desc->dptr_high = upper_32_bits(dma_addr);
 	}
 
-	INIT_COMPLETION(priv->cmp);
+	reinit_completion(&priv->cmp);
 
 	/* Add the descriptor */
 	ismt_submit_desc(priv);
@@ -882,6 +882,7 @@ ismt_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 						 DMA_BIT_MASK(32)) != 0)) {
 			dev_err(&pdev->dev, "pci_set_dma_mask fail %p\n",
 				pdev);
+			err = -ENODEV;
 			goto fail;
 		}
 	}

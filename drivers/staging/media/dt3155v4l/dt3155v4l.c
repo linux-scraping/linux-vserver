@@ -829,7 +829,6 @@ static struct video_device dt3155_vdev = {
 	.minor = -1,
 	.release = video_device_release,
 	.tvnorms = DT3155_CURRENT_NORM,
-	.current_norm = DT3155_CURRENT_NORM,
 };
 
 /* same as in drivers/base/dma-coherent.c */
@@ -902,10 +901,7 @@ dt3155_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	int err;
 	struct dt3155_priv *pd;
 
-	err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
-	if (err)
-		return -ENODEV;
-	err = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err)
 		return -ENODEV;
 	pd = kzalloc(sizeof(*pd), GFP_KERNEL);
