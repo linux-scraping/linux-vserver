@@ -345,7 +345,10 @@ pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 	if ((pte = (unsigned long)pte_alloc_one_kernel(mm, address)) == 0)
 		return NULL;
 	page = pfn_to_page(__nocache_pa(pte) >> PAGE_SHIFT);
-	pgtable_page_ctor(page);
+	if (!pgtable_page_ctor(page)) {
+		__free_page(page);
+		return NULL;
+	}
 	return page;
 }
 
@@ -455,12 +458,10 @@ static void __init sparc_context_init(int numctx)
 void switch_mm(struct mm_struct *old_mm, struct mm_struct *mm,
 	       struct task_struct *tsk)
 {
-	unsigned long flags;
-
 	if (mm->context == NO_CONTEXT) {
-		spin_lock_irqsave(&srmmu_context_spinlock, flags);
+		spin_lock(&srmmu_context_spinlock);
 		alloc_context(old_mm, mm);
-		spin_unlock_irqrestore(&srmmu_context_spinlock, flags);
+		spin_unlock(&srmmu_context_spinlock);
 		srmmu_ctxd_set(&srmmu_context_table[mm->context], mm->pgd);
 	}
 
@@ -860,7 +861,7 @@ static void __init map_kernel(void)
 	}
 }
 
-void (*poke_srmmu)(void) __cpuinitdata = NULL;
+void (*poke_srmmu)(void) = NULL;
 
 extern unsigned long bootmem_init(unsigned long *pages_avail);
 
@@ -985,15 +986,14 @@ int init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 
 void destroy_context(struct mm_struct *mm)
 {
-	unsigned long flags;
 
 	if (mm->context != NO_CONTEXT) {
 		flush_cache_mm(mm);
 		srmmu_ctxd_set(&srmmu_context_table[mm->context], srmmu_swapper_pg_dir);
 		flush_tlb_mm(mm);
-		spin_lock_irqsave(&srmmu_context_spinlock, flags);
+		spin_lock(&srmmu_context_spinlock);
 		free_context(mm->context);
-		spin_unlock_irqrestore(&srmmu_context_spinlock, flags);
+		spin_unlock(&srmmu_context_spinlock);
 		mm->context = NO_CONTEXT;
 	}
 }
@@ -1058,7 +1058,7 @@ static void __init init_vac_layout(void)
 	       (int)vac_cache_size, (int)vac_line_size);
 }
 
-static void __cpuinit poke_hypersparc(void)
+static void poke_hypersparc(void)
 {
 	volatile unsigned long clear;
 	unsigned long mreg = srmmu_get_mmureg();
@@ -1110,7 +1110,7 @@ static void __init init_hypersparc(void)
 	hypersparc_setup_blockops();
 }
 
-static void __cpuinit poke_swift(void)
+static void poke_swift(void)
 {
 	unsigned long mreg;
 
@@ -1290,7 +1290,7 @@ static void turbosparc_flush_tlb_page(struct vm_area_struct *vma, unsigned long 
 }
 
 
-static void __cpuinit poke_turbosparc(void)
+static void poke_turbosparc(void)
 {
 	unsigned long mreg = srmmu_get_mmureg();
 	unsigned long ccreg;
@@ -1353,7 +1353,7 @@ static void __init init_turbosparc(void)
 	poke_srmmu = poke_turbosparc;
 }
 
-static void __cpuinit poke_tsunami(void)
+static void poke_tsunami(void)
 {
 	unsigned long mreg = srmmu_get_mmureg();
 
@@ -1394,7 +1394,7 @@ static void __init init_tsunami(void)
 	tsunami_setup_blockops();
 }
 
-static void __cpuinit poke_viking(void)
+static void poke_viking(void)
 {
 	unsigned long mreg = srmmu_get_mmureg();
 	static int smp_catch;

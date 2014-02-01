@@ -235,12 +235,14 @@ struct fw_ohci {
 	dma_addr_t next_config_rom_bus;
 	__be32     next_header;
 
-	__le32    *self_id_cpu;
+	__le32    *self_id;
 	dma_addr_t self_id_bus;
 	struct work_struct bus_reset_work;
 
 	u32 self_id_buffer[512];
 };
+
+static struct workqueue_struct *selfid_workqueue;
 
 static inline struct fw_ohci *fw_ohci(struct fw_card *card)
 {
@@ -288,6 +290,7 @@ static char ohci_driver_name[] = KBUILD_MODNAME;
 #define QUIRK_NO_MSI			0x10
 #define QUIRK_TI_SLLZ059		0x20
 #define QUIRK_IR_WAKE			0x40
+#define QUIRK_PHY_LCTRL_TIMEOUT		0x80
 
 /* In case of multiple matches in ohci_quirks[], only the first one is used. */
 static const struct {
@@ -300,7 +303,10 @@ static const struct {
 		QUIRK_BE_HEADERS},
 
 	{PCI_VENDOR_ID_ATT, PCI_DEVICE_ID_AGERE_FW643, 6,
-		QUIRK_NO_MSI},
+		QUIRK_PHY_LCTRL_TIMEOUT | QUIRK_NO_MSI},
+
+	{PCI_VENDOR_ID_ATT, PCI_ANY_ID, PCI_ANY_ID,
+		QUIRK_PHY_LCTRL_TIMEOUT},
 
 	{PCI_VENDOR_ID_CREATIVE, PCI_DEVICE_ID_CREATIVE_SB1394, PCI_ANY_ID,
 		QUIRK_RESET_PACKET},
@@ -347,6 +353,7 @@ MODULE_PARM_DESC(quirks, "Chip quirks (default = 0"
 	", disable MSI = "		__stringify(QUIRK_NO_MSI)
 	", TI SLLZ059 erratum = "	__stringify(QUIRK_TI_SLLZ059)
 	", IR wake unreliable = "	__stringify(QUIRK_IR_WAKE)
+	", phy LCtrl timeout = "	__stringify(QUIRK_PHY_LCTRL_TIMEOUT)
 	")");
 
 #define OHCI_PARAM_DEBUG_AT_AR		1
@@ -1924,12 +1931,12 @@ static void bus_reset_work(struct work_struct *work)
 		return;
 	}
 
-	generation = (cond_le32_to_cpu(ohci->self_id_cpu[0]) >> 16) & 0xff;
+	generation = (cond_le32_to_cpu(ohci->self_id[0]) >> 16) & 0xff;
 	rmb();
 
 	for (i = 1, j = 0; j < self_id_count; i += 2, j++) {
-		u32 id  = cond_le32_to_cpu(ohci->self_id_cpu[i]);
-		u32 id2 = cond_le32_to_cpu(ohci->self_id_cpu[i + 1]);
+		u32 id  = cond_le32_to_cpu(ohci->self_id[i]);
+		u32 id2 = cond_le32_to_cpu(ohci->self_id[i + 1]);
 
 		if (id != ~id2) {
 			/*
@@ -2082,7 +2089,7 @@ static irqreturn_t irq_handler(int irq, void *data)
 	log_irqs(ohci, event);
 
 	if (event & OHCI1394_selfIDComplete)
-		queue_work(fw_workqueue, &ohci->bus_reset_work);
+		queue_work(selfid_workqueue, &ohci->bus_reset_work);
 
 	if (event & OHCI1394_RQPkt)
 		tasklet_schedule(&ohci->ar_request_ctx.tasklet);
@@ -2288,6 +2295,9 @@ static int ohci_enable(struct fw_card *card,
 	 * TI TSB82AA2 + TSB81BA3(A) cards signal LPS enabled early but
 	 * cannot actually use the phy at that time.  These need tens of
 	 * millisecods pause between LPS write and first phy access too.
+	 *
+	 * But do not wait for 50msec on Agere/LSI cards.  Their phy
+	 * arbitration state machine may time out during such a long wait.
 	 */
 
 	reg_write(ohci, OHCI1394_HCControlSet,
@@ -2295,8 +2305,11 @@ static int ohci_enable(struct fw_card *card,
 		  OHCI1394_HCControl_postedWriteEnable);
 	flush_writes(ohci);
 
-	for (lps = 0, i = 0; !lps && i < 3; i++) {
+	if (!(ohci->quirks & QUIRK_PHY_LCTRL_TIMEOUT))
 		msleep(50);
+
+	for (lps = 0, i = 0; !lps && i < 150; i++) {
+		msleep(1);
 		lps = reg_read(ohci, OHCI1394_HCControlSet) &
 		      OHCI1394_HCControl_LPS;
 	}
@@ -3670,11 +3683,6 @@ static int pci_probe(struct pci_dev *dev,
 
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskSet, ~0);
 	ohci->it_context_support = reg_read(ohci, OHCI1394_IsoXmitIntMaskSet);
-	/* JMicron JMB38x often shows 0 at first read, just ignore it */
-	if (!ohci->it_context_support) {
-		ohci_notice(ohci, "overriding IsoXmitIntMask\n");
-		ohci->it_context_support = 0xf;
-	}
 	reg_write(ohci, OHCI1394_IsoXmitIntMaskClear, ~0);
 	ohci->it_context_mask = ohci->it_context_support;
 	ohci->n_it = hweight32(ohci->it_context_mask);
@@ -3686,7 +3694,7 @@ static int pci_probe(struct pci_dev *dev,
 		goto fail_contexts;
 	}
 
-	ohci->self_id_cpu = ohci->misc_buffer     + PAGE_SIZE/2;
+	ohci->self_id     = ohci->misc_buffer     + PAGE_SIZE/2;
 	ohci->self_id_bus = ohci->misc_buffer_bus + PAGE_SIZE/2;
 
 	bus_options = reg_read(ohci, OHCI1394_BusOptions);
@@ -3864,7 +3872,23 @@ static struct pci_driver fw_ohci_pci_driver = {
 #endif
 };
 
-module_pci_driver(fw_ohci_pci_driver);
+static int __init fw_ohci_init(void)
+{
+	selfid_workqueue = alloc_workqueue(KBUILD_MODNAME, WQ_MEM_RECLAIM, 0);
+	if (!selfid_workqueue)
+		return -ENOMEM;
+
+	return pci_register_driver(&fw_ohci_pci_driver);
+}
+
+static void __exit fw_ohci_cleanup(void)
+{
+	pci_unregister_driver(&fw_ohci_pci_driver);
+	destroy_workqueue(selfid_workqueue);
+}
+
+module_init(fw_ohci_init);
+module_exit(fw_ohci_cleanup);
 
 MODULE_AUTHOR("Kristian Hoegsberg <krh@bitplanet.net>");
 MODULE_DESCRIPTION("Driver for PCI OHCI IEEE1394 controllers");

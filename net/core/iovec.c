@@ -39,7 +39,7 @@ int verify_iovec(struct msghdr *m, struct iovec *iov, struct sockaddr_storage *a
 {
 	int size, ct, err;
 
-	if (m->msg_name && m->msg_namelen) {
+	if (m->msg_namelen) {
 		if (mode == VERIFY_READ) {
 			void __user *namep;
 			namep = (void __user __force *) m->msg_name;
@@ -48,10 +48,10 @@ int verify_iovec(struct msghdr *m, struct iovec *iov, struct sockaddr_storage *a
 			if (err < 0)
 				return err;
 		}
-		m->msg_name = address;
+		if (m->msg_name)
+			m->msg_name = address;
 	} else {
 		m->msg_name = NULL;
-		m->msg_namelen = 0;
 	}
 
 	size = m->msg_iovlen * sizeof(struct iovec);
@@ -101,16 +101,12 @@ int memcpy_toiovecend(const struct iovec *iov, unsigned char *kdata,
 EXPORT_SYMBOL(memcpy_toiovecend);
 
 /*
- *	Copy iovec from kernel. Returns -EFAULT on error.
+ *	Copy iovec to kernel. Returns -EFAULT on error.
  */
 
 int memcpy_fromiovecend(unsigned char *kdata, const struct iovec *iov,
 			int offset, int len)
 {
-	/* No data? Done! */
-	if (len == 0)
-		return 0;
-
 	/* Skip over the finished iovecs */
 	while (offset >= iov->iov_len) {
 		offset -= iov->iov_len;
@@ -217,3 +213,27 @@ out_fault:
 	goto out;
 }
 EXPORT_SYMBOL(csum_partial_copy_fromiovecend);
+
+unsigned long iov_pages(const struct iovec *iov, int offset,
+			unsigned long nr_segs)
+{
+	unsigned long seg, base;
+	int pages = 0, len, size;
+
+	while (nr_segs && (offset >= iov->iov_len)) {
+		offset -= iov->iov_len;
+		++iov;
+		--nr_segs;
+	}
+
+	for (seg = 0; seg < nr_segs; seg++) {
+		base = (unsigned long)iov[seg].iov_base + offset;
+		len = iov[seg].iov_len - offset;
+		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
+		pages += size;
+		offset = 0;
+	}
+
+	return pages;
+}
+EXPORT_SYMBOL(iov_pages);

@@ -20,6 +20,7 @@
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -27,11 +28,10 @@
 #include <linux/rtc.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/uaccess.h>
 #include <linux/log2.h>
 
 #include <asm/div64.h>
-#include <asm/io.h>
-#include <asm/uaccess.h>
 
 MODULE_AUTHOR("Yoichi Yuasa <yuasa@linux-mips.org>");
 MODULE_DESCRIPTION("NEC VR4100 series RTC driver");
@@ -103,7 +103,7 @@ static inline unsigned long read_elapsed_second(void)
 		second_mid = rtc1_read(ETIMEMREG);
 		second_high = rtc1_read(ETIMEHREG);
 	} while (first_low != second_low || first_mid != second_mid ||
-	         first_high != second_high);
+		 first_high != second_high);
 
 	return (first_high << 17) | (first_mid << 1) | (first_low >> 15);
 }
@@ -154,7 +154,7 @@ static int vr41xx_rtc_set_time(struct device *dev, struct rtc_time *time)
 
 	epoch_sec = mktime(epoch, 1, 1, 0, 0, 0);
 	current_sec = mktime(time->tm_year + 1900, time->tm_mon + 1, time->tm_mday,
-	                     time->tm_hour, time->tm_min, time->tm_sec);
+			     time->tm_hour, time->tm_min, time->tm_sec);
 
 	write_elapsed_second(current_sec - epoch_sec);
 
@@ -186,7 +186,7 @@ static int vr41xx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 	struct rtc_time *time = &wkalrm->time;
 
 	alarm_sec = mktime(time->tm_year + 1900, time->tm_mon + 1, time->tm_mday,
-	                   time->tm_hour, time->tm_min, time->tm_sec);
+			   time->tm_hour, time->tm_min, time->tm_sec);
 
 	spin_lock_irq(&rtc_lock);
 
@@ -272,13 +272,12 @@ static irqreturn_t rtclong1_interrupt(int irq, void *dev_id)
 }
 
 static const struct rtc_class_ops vr41xx_rtc_ops = {
-	.release		= vr41xx_rtc_release,
-	.ioctl			= vr41xx_rtc_ioctl,
-	.read_time		= vr41xx_rtc_read_time,
-	.set_time		= vr41xx_rtc_set_time,
-	.read_alarm		= vr41xx_rtc_read_alarm,
-	.set_alarm		= vr41xx_rtc_set_alarm,
-	.alarm_irq_enable	= vr41xx_rtc_alarm_irq_enable,
+	.release	= vr41xx_rtc_release,
+	.ioctl		= vr41xx_rtc_ioctl,
+	.read_time	= vr41xx_rtc_read_time,
+	.set_time	= vr41xx_rtc_set_time,
+	.read_alarm	= vr41xx_rtc_read_alarm,
+	.set_alarm	= vr41xx_rtc_set_alarm,
 };
 
 static int rtc_probe(struct platform_device *pdev)
@@ -335,16 +334,18 @@ static int rtc_probe(struct platform_device *pdev)
 	}
 
 	retval = request_irq(aie_irq, elapsedtime_interrupt, 0,
-	                     "elapsed_time", pdev);
+			     "elapsed_time", pdev);
 	if (retval < 0)
 		goto err_device_unregister;
 
 	pie_irq = platform_get_irq(pdev, 1);
-	if (pie_irq <= 0)
+	if (pie_irq <= 0) {
+		retval = -EBUSY;
 		goto err_free_irq;
+	}
 
 	retval = request_irq(pie_irq, rtclong1_interrupt, 0,
-		             "rtclong1", pdev);
+			     "rtclong1", pdev);
 	if (retval < 0)
 		goto err_free_irq;
 
@@ -381,8 +382,6 @@ static int rtc_remove(struct platform_device *pdev)
 	rtc = platform_get_drvdata(pdev);
 	if (rtc)
 		rtc_device_unregister(rtc);
-
-	platform_set_drvdata(pdev, NULL);
 
 	free_irq(aie_irq, pdev);
 	free_irq(pie_irq, pdev);

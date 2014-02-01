@@ -883,7 +883,6 @@ struct wl_private
 	int                         is_registered;
 	int                         is_handling_int;
 	int                         firmware_present;
-	bool                        sysfsCreated;
 	CFG_DRV_INFO_STRCT          driverInfo;
 	CFG_IDENTITY_STRCT          driverIdentity;
 	CFG_FW_IDENTITY_STRCT       StationIdentity;
@@ -1014,7 +1013,7 @@ static inline void wl_unlock(struct wl_private *lp,
 /* Interrupt enable disable functions                               */
 /********************************************************************/
 
-static inline void wl_act_int_on(struct wl_private *lp)
+extern inline void wl_act_int_on(struct wl_private *lp)
 {
 	/*
 	 * Only do something when the driver is handling
@@ -1026,7 +1025,7 @@ static inline void wl_act_int_on(struct wl_private *lp)
 	}
 }
 
-static inline void wl_act_int_off(struct wl_private *lp)
+extern inline void wl_act_int_off(struct wl_private *lp)
 {
 	/*
 	 * Only do something when the driver is handling

@@ -51,7 +51,7 @@ static void ast_dirty_update(struct ast_fbdev *afbdev,
 	struct ast_bo *bo;
 	int src_offset, dst_offset;
 	int bpp = (afbdev->afb.base.bits_per_pixel + 7)/8;
-	int ret;
+	int ret = -EBUSY;
 	bool unmap = false;
 	bool store_for_later = false;
 	int x2, y2;
@@ -65,7 +65,8 @@ static void ast_dirty_update(struct ast_fbdev *afbdev,
 	 * then the BO is being moved and we should
 	 * store up the damage until later.
 	 */
-	ret = ast_bo_reserve(bo, true);
+	if (!in_interrupt())
+		ret = ast_bo_reserve(bo, true);
 	if (ret) {
 		if (ret != -EBUSY)
 			return;
@@ -365,11 +366,4 @@ void ast_fbdev_set_suspend(struct drm_device *dev, int state)
 		return;
 
 	fb_set_suspend(ast->fbdev->helper.fbdev, state);
-}
-
-void ast_fbdev_set_base(struct ast_private *ast, unsigned long gpu_addr)
-{
-	ast->fbdev->helper.fbdev->fix.smem_start =
-		ast->fbdev->helper.fbdev->apertures->ranges[0].base + gpu_addr;
-	ast->fbdev->helper.fbdev->fix.smem_len = ast->vram_size - gpu_addr;
 }

@@ -33,10 +33,6 @@
 #include <linux/memblock.h>
 #include <linux/edd.h>
 
-#ifdef CONFIG_KEXEC
-#include <linux/kexec.h>
-#endif
-
 #include <xen/xen.h>
 #include <xen/events.h>
 #include <xen/interface/xen.h>
@@ -431,8 +427,7 @@ static void __init xen_init_cpuid_mask(void)
 
 	if (!xen_initial_domain())
 		cpuid_leaf1_edx_mask &=
-			~((1 << X86_FEATURE_APIC) |  /* disable local APIC */
-			  (1 << X86_FEATURE_ACPI));  /* disable ACPI */
+			~((1 << X86_FEATURE_ACPI));  /* disable ACPI */
 
 	cpuid_leaf1_ecx_mask &= ~(1 << (X86_FEATURE_X2APIC % 32));
 
@@ -485,7 +480,6 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 	pte_t pte;
 	unsigned long pfn;
 	struct page *page;
-	unsigned char dummy;
 
 	ptep = lookup_address((unsigned long)v, &level);
 	BUG_ON(ptep == NULL);
@@ -494,32 +488,6 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 	page = pfn_to_page(pfn);
 
 	pte = pfn_pte(pfn, prot);
-
-	/*
-	 * Careful: update_va_mapping() will fail if the virtual address
-	 * we're poking isn't populated in the page tables.  We don't
-	 * need to worry about the direct map (that's always in the page
-	 * tables), but we need to be careful about vmap space.  In
-	 * particular, the top level page table can lazily propagate
-	 * entries between processes, so if we've switched mms since we
-	 * vmapped the target in the first place, we might not have the
-	 * top-level page table entry populated.
-	 *
-	 * We disable preemption because we want the same mm active when
-	 * we probe the target and when we issue the hypercall.  We'll
-	 * have the same nominal mm, but if we're a kernel thread, lazy
-	 * mm dropping could change our pgd.
-	 *
-	 * Out of an abundance of caution, this uses __get_user() to fault
-	 * in the target address just in case there's some obscure case
-	 * in which the target address isn't readable.
-	 */
-
-	preempt_disable();
-
-	pagefault_disable();	/* Avoid warnings due to being atomic. */
-	__get_user(dummy, (unsigned char __user __force *)v);
-	pagefault_enable();
 
 	if (HYPERVISOR_update_va_mapping((unsigned long)v, pte, 0))
 		BUG();
@@ -532,25 +500,12 @@ static void set_aliased_prot(void *v, pgprot_t prot)
 				BUG();
 	} else
 		kmap_flush_unused();
-
-	preempt_enable();
 }
 
 static void xen_alloc_ldt(struct desc_struct *ldt, unsigned entries)
 {
 	const unsigned entries_per_page = PAGE_SIZE / LDT_ENTRY_SIZE;
 	int i;
-
-	/*
-	 * We need to mark the all aliases of the LDT pages RO.  We
-	 * don't need to call vm_flush_aliases(), though, since that's
-	 * only responsible for flushing aliases out the TLBs, not the
-	 * page tables, and Xen will flush the TLB for us if needed.
-	 *
-	 * To avoid confusing future readers: none of this is necessary
-	 * to load the LDT.  The hypervisor only checks this when the
-	 * LDT is faulted in due to subsequent descriptor access.
-	 */
 
 	for(i = 0; i < entries; i += entries_per_page)
 		set_aliased_prot(ldt + i, PAGE_KERNEL_RO);
@@ -779,8 +734,7 @@ static int cvt_gate_to_trap(int vector, const gate_desc *val,
 		addr = (unsigned long)xen_int3;
 	else if (addr == (unsigned long)stack_segment)
 		addr = (unsigned long)xen_stack_segment;
-	else if (addr == (unsigned long)double_fault ||
-		 addr == (unsigned long)nmi) {
+	else if (addr == (unsigned long)double_fault) {
 		/* Don't need to handle these */
 		return 0;
 #ifdef CONFIG_X86_MCE
@@ -791,7 +745,12 @@ static int cvt_gate_to_trap(int vector, const gate_desc *val,
 		 */
 		;
 #endif
-	} else {
+	} else if (addr == (unsigned long)nmi)
+		/*
+		 * Use the native version as well.
+		 */
+		;
+	else {
 		/* Some other trap using IST? */
 		if (WARN_ON(val->ist != 0))
 			return 0;
@@ -952,7 +911,7 @@ static void xen_load_sp0(struct tss_struct *tss,
 	xen_mc_issue(PARAVIRT_LAZY_CPU);
 }
 
-void xen_set_iopl_mask(unsigned mask)
+static void xen_set_iopl_mask(unsigned mask)
 {
 	struct physdev_set_iopl set_iopl;
 
@@ -1601,7 +1560,7 @@ asmlinkage void __init xen_start_kernel(void)
 #ifdef CONFIG_X86_32
 	/* set up basic CPUID stuff */
 	cpu_detect(&new_cpu_data);
-	new_cpu_data.hard_math = 1;
+	set_cpu_cap(&new_cpu_data, X86_FEATURE_FPU);
 	new_cpu_data.wp_works_ok = 1;
 	new_cpu_data.x86_capability[0] = cpuid_edx(1);
 #endif
@@ -1725,15 +1684,14 @@ static void __init init_hvm_pv_info(void)
 	xen_domain_type = XEN_HVM_DOMAIN;
 }
 
-static int __cpuinit xen_hvm_cpu_notify(struct notifier_block *self,
-				    unsigned long action, void *hcpu)
+static int xen_hvm_cpu_notify(struct notifier_block *self, unsigned long action,
+			      void *hcpu)
 {
 	int cpu = (long)hcpu;
 	switch (action) {
 	case CPU_UP_PREPARE:
 		xen_vcpu_setup(cpu);
 		if (xen_have_vector_callback) {
-			xen_init_lock_cpu(cpu);
 			if (xen_feature(XENFEAT_hvm_safe_pvclock))
 				xen_setup_timer(cpu);
 		}
@@ -1744,30 +1702,17 @@ static int __cpuinit xen_hvm_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block xen_hvm_cpu_notifier __cpuinitdata = {
+static struct notifier_block xen_hvm_cpu_notifier = {
 	.notifier_call	= xen_hvm_cpu_notify,
 };
-
-#ifdef CONFIG_KEXEC
-static void xen_hvm_shutdown(void)
-{
-	native_machine_shutdown();
-	if (kexec_in_progress)
-		xen_reboot(SHUTDOWN_soft_reset);
-}
-
-static void xen_hvm_crash_shutdown(struct pt_regs *regs)
-{
-	native_machine_crash_shutdown(regs);
-	xen_reboot(SHUTDOWN_soft_reset);
-}
-#endif
 
 static void __init xen_hvm_guest_init(void)
 {
 	init_hvm_pv_info();
 
 	xen_hvm_init_shared_info();
+
+	xen_panic_handler_init();
 
 	if (xen_feature(XENFEAT_hvm_callback_vector))
 		xen_have_vector_callback = 1;
@@ -1777,21 +1722,14 @@ static void __init xen_hvm_guest_init(void)
 	x86_init.irqs.intr_init = xen_init_IRQ;
 	xen_hvm_init_time_ops();
 	xen_hvm_init_mmu_ops();
-#ifdef CONFIG_KEXEC
-	machine_ops.shutdown = xen_hvm_shutdown;
-	machine_ops.crash_shutdown = xen_hvm_crash_shutdown;
-#endif
 }
 
-static bool __init xen_hvm_platform(void)
+static uint32_t __init xen_hvm_platform(void)
 {
 	if (xen_pv_domain())
-		return false;
+		return 0;
 
-	if (!xen_cpuid_base())
-		return false;
-
-	return true;
+	return xen_cpuid_base();
 }
 
 bool xen_hvm_need_lapic(void)

@@ -137,7 +137,8 @@ static int wm2000_power_up(struct i2c_client *i2c, int analogue)
 	unsigned long rate;
 	int ret;
 
-	BUG_ON(wm2000->anc_mode != ANC_OFF);
+	if (WARN_ON(wm2000->anc_mode != ANC_OFF))
+		return -EINVAL;
 
 	dev_dbg(&i2c->dev, "Beginning power up\n");
 
@@ -277,7 +278,8 @@ static int wm2000_enter_bypass(struct i2c_client *i2c, int analogue)
 {
 	struct wm2000_priv *wm2000 = dev_get_drvdata(&i2c->dev);
 
-	BUG_ON(wm2000->anc_mode != ANC_ACTIVE);
+	if (WARN_ON(wm2000->anc_mode != ANC_ACTIVE))
+		return -EINVAL;
 
 	if (analogue) {
 		wm2000_write(i2c, WM2000_REG_SYS_MODE_CNTRL,
@@ -315,7 +317,8 @@ static int wm2000_exit_bypass(struct i2c_client *i2c, int analogue)
 {
 	struct wm2000_priv *wm2000 = dev_get_drvdata(&i2c->dev);
 
-	BUG_ON(wm2000->anc_mode != ANC_BYPASS);
+	if (WARN_ON(wm2000->anc_mode != ANC_BYPASS))
+		return -EINVAL;
 	
 	wm2000_write(i2c, WM2000_REG_SYS_CTL1, 0);
 
@@ -349,7 +352,8 @@ static int wm2000_enter_standby(struct i2c_client *i2c, int analogue)
 {
 	struct wm2000_priv *wm2000 = dev_get_drvdata(&i2c->dev);
 
-	BUG_ON(wm2000->anc_mode != ANC_ACTIVE);
+	if (WARN_ON(wm2000->anc_mode != ANC_ACTIVE))
+		return -EINVAL;
 
 	if (analogue) {
 		wm2000_write(i2c, WM2000_REG_ANA_VMID_PD_TIME, 248 / 4);
@@ -392,7 +396,8 @@ static int wm2000_exit_standby(struct i2c_client *i2c, int analogue)
 {
 	struct wm2000_priv *wm2000 = dev_get_drvdata(&i2c->dev);
 
-	BUG_ON(wm2000->anc_mode != ANC_STANDBY);
+	if (WARN_ON(wm2000->anc_mode != ANC_STANDBY))
+		return -EINVAL;
 
 	wm2000_write(i2c, WM2000_REG_SYS_CTL1, 0);
 
@@ -605,7 +610,7 @@ static int wm2000_anc_mode_get(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm2000_priv *wm2000 = dev_get_drvdata(codec->dev);
 
-	ucontrol->value.integer.value[0] = wm2000->anc_active;
+	ucontrol->value.enumerated.item[0] = wm2000->anc_active;
 
 	return 0;
 }
@@ -615,7 +620,7 @@ static int wm2000_anc_mode_put(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm2000_priv *wm2000 = dev_get_drvdata(codec->dev);
-	int anc_active = ucontrol->value.integer.value[0];
+	int anc_active = ucontrol->value.enumerated.item[0];
 	int ret;
 
 	if (anc_active > 1)
@@ -638,7 +643,7 @@ static int wm2000_speaker_get(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm2000_priv *wm2000 = dev_get_drvdata(codec->dev);
 
-	ucontrol->value.integer.value[0] = wm2000->spk_ena;
+	ucontrol->value.enumerated.item[0] = wm2000->spk_ena;
 
 	return 0;
 }
@@ -648,7 +653,7 @@ static int wm2000_speaker_put(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct wm2000_priv *wm2000 = dev_get_drvdata(codec->dev);
-	int val = ucontrol->value.integer.value[0];
+	int val = ucontrol->value.enumerated.item[0];
 	int ret;
 
 	if (val > 1)

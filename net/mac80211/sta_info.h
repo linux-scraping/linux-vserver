@@ -203,6 +203,7 @@ struct tid_ampdu_rx {
  *	driver requested to close until the work for it runs
  * @mtx: mutex to protect all TX data (except non-NULL assignments
  *	to tid_tx[idx], which are protected by the sta spinlock)
+ *	tid_start_tx is also protected by sta->lock.
  */
 struct sta_ampdu_mlme {
 	struct mutex mtx;
@@ -244,7 +245,6 @@ struct sta_ampdu_mlme {
  * @drv_unblock_wk: used for driver PS unblocking
  * @listen_interval: listen interval of this station, when we're acting as AP
  * @_flags: STA flags, see &enum ieee80211_sta_info_flags, do not use directly
- * @ps_lock: used for powersave (when mac80211 is the AP) related locking
  * @ps_tx_buf: buffers (per AC) of frames to transmit to this station
  *	when it leaves power saving state or polls
  * @tx_filtered: buffers (per AC) of frames we already tried to
@@ -298,6 +298,11 @@ struct sta_ampdu_mlme {
  * @rcu_head: RCU head used for freeing this station struct
  * @cur_max_bandwidth: maximum bandwidth to use for TX to the station,
  *	taken from HT/VHT capabilities or VHT operating mode notification
+ * @chains: chains ever used for RX from this station
+ * @chain_signal_last: last signal (per chain)
+ * @chain_signal_avg: signal average (per chain)
+ * @known_smps_mode: the smps_mode the client thinks we are in. Relevant for
+ *	AP only.
  */
 struct sta_info {
 	/* General information, mostly static */
@@ -325,8 +330,10 @@ struct sta_info {
 	/* use the accessors defined below */
 	unsigned long _flags;
 
-	/* STA powersave lock and frame queues */
-	spinlock_t ps_lock;
+	/*
+	 * STA powersave frame queues, no more than the internal
+	 * locking required.
+	 */
 	struct sk_buff_head ps_tx_buf[IEEE80211_NUM_ACS];
 	struct sk_buff_head tx_filtered[IEEE80211_NUM_ACS];
 	unsigned long driver_buffered_tids;
@@ -343,6 +350,11 @@ struct sta_info {
 	int last_signal;
 	struct ewma avg_signal;
 	int last_ack_signal;
+
+	u8 chains;
+	s8 chain_signal_last[IEEE80211_MAX_CHAINS];
+	struct ewma chain_signal_avg[IEEE80211_MAX_CHAINS];
+
 	/* Plus 1 for non-QoS frames */
 	__le16 last_seq_ctrl[IEEE80211_NUM_TIDS + 1];
 
@@ -400,6 +412,8 @@ struct sta_info {
 
 	unsigned int lost_packets;
 	unsigned int beacon_loss_count;
+
+	enum ieee80211_smps_mode known_smps_mode;
 
 	/* keep last! */
 	struct ieee80211_sta sta;
@@ -603,6 +617,7 @@ void sta_set_rate_info_rx(struct sta_info *sta,
 			  struct rate_info *rinfo);
 void ieee80211_sta_expire(struct ieee80211_sub_if_data *sdata,
 			  unsigned long exp_time);
+u8 sta_info_tx_streams(struct sta_info *sta);
 
 void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta);
 void ieee80211_sta_ps_deliver_poll_response(struct sta_info *sta);

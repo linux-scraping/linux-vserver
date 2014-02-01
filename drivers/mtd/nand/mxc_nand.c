@@ -32,6 +32,7 @@
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/completion.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_mtd.h>
 
@@ -266,7 +267,7 @@ static struct nand_ecclayout nandv2_hw_eccoob_4k = {
 	}
 };
 
-static const char const *part_probes[] = {
+static const char * const part_probes[] = {
 	"cmdlinepart", "RedBoot", "ofpart", NULL };
 
 static void memcpy32_fromio(void *trg, const void __iomem  *src, size_t size)
@@ -395,7 +396,7 @@ static void wait_op_done(struct mxc_nand_host *host, int useirq)
 
 	if (useirq) {
 		if (!host->devtype_data->check_int(host)) {
-			INIT_COMPLETION(host->op_completion);
+			reinit_completion(&host->op_completion);
 			irq_control(host, 1);
 			wait_for_completion(&host->op_completion);
 		}
@@ -676,6 +677,7 @@ static int mxc_nand_correct_data_v2_v3(struct mtd_info *mtd, u_char *dat,
 		ecc_stat >>= 4;
 	} while (--no_subpages);
 
+	mtd->ecc_stats.corrected += ret;
 	pr_debug("%d Symbol Correctable RS-ECC Error\n", ret);
 
 	return ret;
@@ -1431,7 +1433,8 @@ static int mxcnd_probe(struct platform_device *pdev)
 
 	err = mxcnd_probe_dt(host);
 	if (err > 0) {
-		struct mxc_nand_platform_data *pdata = pdev->dev.platform_data;
+		struct mxc_nand_platform_data *pdata =
+					dev_get_platdata(&pdev->dev);
 		if (pdata) {
 			host->pdata = *pdata;
 			host->devtype_data = (struct mxc_nand_devtype_data *)
@@ -1445,8 +1448,6 @@ static int mxcnd_probe(struct platform_device *pdev)
 
 	if (host->devtype_data->needs_ip) {
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-		if (!res)
-			return -ENODEV;
 		host->regs_ip = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(host->regs_ip))
 			return PTR_ERR(host->regs_ip);
@@ -1455,9 +1456,6 @@ static int mxcnd_probe(struct platform_device *pdev)
 	} else {
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	}
-
-	if (!res)
-		return -ENODEV;
 
 	host->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(host->base))
@@ -1510,7 +1508,7 @@ static int mxcnd_probe(struct platform_device *pdev)
 	host->devtype_data->irq_control(host, 0);
 
 	err = devm_request_irq(&pdev->dev, host->irq, mxc_nfc_irq,
-			IRQF_DISABLED, DRIVER_NAME, host);
+			0, DRIVER_NAME, host);
 	if (err)
 		return err;
 
@@ -1576,8 +1574,6 @@ escan:
 static int mxcnd_remove(struct platform_device *pdev)
 {
 	struct mxc_nand_host *host = platform_get_drvdata(pdev);
-
-	platform_set_drvdata(pdev, NULL);
 
 	nand_release(&host->mtd);
 

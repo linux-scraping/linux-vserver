@@ -132,12 +132,6 @@ static int shift_state = 0;
 static unsigned char ledstate = 0xff;			/* undefined */
 static unsigned char ledioctl;
 
-static struct ledptr {
-	unsigned int *addr;
-	unsigned int mask;
-	unsigned char valid:1;
-} ledptrs[3];
-
 /*
  * Notifier list for console keyboard events
  */
@@ -371,22 +365,34 @@ static void to_utf8(struct vc_data *vc, uint c)
 
 static void do_compute_shiftstate(void)
 {
-	unsigned int k, sym, val;
+	unsigned int i, j, k, sym, val;
 
 	shift_state = 0;
 	memset(shift_down, 0, sizeof(shift_down));
 
-	for_each_set_bit(k, key_down, min(NR_KEYS, KEY_CNT)) {
-		sym = U(key_maps[0][k]);
-		if (KTYP(sym) != KT_SHIFT && KTYP(sym) != KT_SLOCK)
+	for (i = 0; i < ARRAY_SIZE(key_down); i++) {
+
+		if (!key_down[i])
 			continue;
 
-		val = KVAL(sym);
-		if (val == KVAL(K_CAPSSHIFT))
-			val = KVAL(K_SHIFT);
+		k = i * BITS_PER_LONG;
 
-		shift_down[val]++;
-		shift_state |= BIT(val);
+		for (j = 0; j < BITS_PER_LONG; j++, k++) {
+
+			if (!test_bit(k, key_down))
+				continue;
+
+			sym = U(key_maps[0][k]);
+			if (KTYP(sym) != KT_SHIFT && KTYP(sym) != KT_SLOCK)
+				continue;
+
+			val = KVAL(sym);
+			if (val == KVAL(K_CAPSSHIFT))
+				val = KVAL(K_SHIFT);
+
+			shift_down[val]++;
+			shift_state |= (1 << val);
+		}
 	}
 }
 
@@ -982,24 +988,11 @@ void setledstate(struct kbd_struct *kbd, unsigned int led)
 static inline unsigned char getleds(void)
 {
 	struct kbd_struct *kbd = kbd_table + fg_console;
-	unsigned char leds;
-	int i;
 
 	if (kbd->ledmode == LED_SHOW_IOCTL)
 		return ledioctl;
 
-	leds = kbd->ledflagstate;
-
-	if (kbd->ledmode == LED_SHOW_MEM) {
-		for (i = 0; i < 3; i++)
-			if (ledptrs[i].valid) {
-				if (*ledptrs[i].addr & ledptrs[i].mask)
-					leds |= (1 << i);
-				else
-					leds &= ~(1 << i);
-			}
-	}
-	return leds;
+	return kbd->ledflagstate;
 }
 
 static int kbd_update_leds_helper(struct input_handle *handle, void *data)

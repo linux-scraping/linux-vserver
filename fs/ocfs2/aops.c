@@ -80,6 +80,7 @@ static int ocfs2_symlink_get_block(struct inode *inode, sector_t iblock,
 
 	if ((u64)iblock >= ocfs2_clusters_to_blocks(inode->i_sb,
 						    le32_to_cpu(fe->i_clusters))) {
+		err = -ENOMEM;
 		mlog(ML_ERROR, "block offset is outside the allocated size: "
 		     "%llu\n", (unsigned long long)iblock);
 		goto bail;
@@ -92,6 +93,7 @@ static int ocfs2_symlink_get_block(struct inode *inode, sector_t iblock,
 			    iblock;
 		buffer_cache_bh = sb_getblk(osb->sb, blkno);
 		if (!buffer_cache_bh) {
+			err = -ENOMEM;
 			mlog(ML_ERROR, "couldn't getblock for symlink!\n");
 			goto bail;
 		}
@@ -565,9 +567,7 @@ bail:
 static void ocfs2_dio_end_io(struct kiocb *iocb,
 			     loff_t offset,
 			     ssize_t bytes,
-			     void *private,
-			     int ret,
-			     bool is_async)
+			     void *private)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
 	int level;
@@ -592,31 +592,13 @@ static void ocfs2_dio_end_io(struct kiocb *iocb,
 
 	level = ocfs2_iocb_rw_locked_level(iocb);
 	ocfs2_rw_unlock(inode, level);
-
-	inode_dio_done(inode);
-	if (is_async)
-		aio_complete(iocb, ret, 0);
-}
-
-/*
- * ocfs2_invalidatepage() and ocfs2_releasepage() are shamelessly stolen
- * from ext3.  PageChecked() bits have been removed as OCFS2 does not
- * do journalled data.
- */
-static void ocfs2_invalidatepage(struct page *page, unsigned long offset)
-{
-	journal_t *journal = OCFS2_SB(page->mapping->host->i_sb)->journal->j_journal;
-
-	jbd2_journal_invalidatepage(journal, page, offset);
 }
 
 static int ocfs2_releasepage(struct page *page, gfp_t wait)
 {
-	journal_t *journal = OCFS2_SB(page->mapping->host->i_sb)->journal->j_journal;
-
 	if (!page_has_buffers(page))
 		return 0;
-	return jbd2_journal_try_to_free_buffers(journal, page, wait);
+	return try_to_free_buffers(page);
 }
 
 static ssize_t ocfs2_direct_IO(int rw,
@@ -917,7 +899,7 @@ void ocfs2_unlock_and_free_pages(struct page **pages, int num_pages)
 	}
 }
 
-static void ocfs2_unlock_pages(struct ocfs2_write_ctxt *wc)
+static void ocfs2_free_write_ctxt(struct ocfs2_write_ctxt *wc)
 {
 	int i;
 
@@ -938,11 +920,7 @@ static void ocfs2_unlock_pages(struct ocfs2_write_ctxt *wc)
 		page_cache_release(wc->w_target_page);
 	}
 	ocfs2_unlock_and_free_pages(wc->w_pages, wc->w_num_pages);
-}
 
-static void ocfs2_free_write_ctxt(struct ocfs2_write_ctxt *wc)
-{
-	ocfs2_unlock_pages(wc);
 	brelse(wc->w_di_bh);
 	kfree(wc);
 }
@@ -1760,7 +1738,7 @@ try_again:
 		goto out;
 	} else if (ret == 1) {
 		clusters_need = wc->w_clen;
-		ret = ocfs2_refcount_cow(inode, filp, di_bh,
+		ret = ocfs2_refcount_cow(inode, di_bh,
 					 wc->w_cpos, wc->w_clen, UINT_MAX);
 		if (ret) {
 			mlog_errno(ret);
@@ -1811,8 +1789,7 @@ try_again:
 			data_ac->ac_resv = &OCFS2_I(inode)->ip_la_data_resv;
 
 		credits = ocfs2_calc_extend_credits(inode->i_sb,
-						    &di->id2.i_list,
-						    clusters_to_alloc);
+						    &di->id2.i_list);
 
 	}
 
@@ -1906,10 +1883,14 @@ out_commit:
 out:
 	ocfs2_free_write_ctxt(wc);
 
-	if (data_ac)
+	if (data_ac) {
 		ocfs2_free_alloc_context(data_ac);
-	if (meta_ac)
+		data_ac = NULL;
+	}
+	if (meta_ac) {
 		ocfs2_free_alloc_context(meta_ac);
+		meta_ac = NULL;
+	}
 
 	if (ret == -ENOSPC && try_free) {
 		/*
@@ -2053,7 +2034,7 @@ int ocfs2_write_end_nolock(struct address_space *mapping,
 
 out_write_size:
 	pos += copied;
-	if (pos > inode->i_size) {
+	if (pos > i_size_read(inode)) {
 		i_size_write(inode, pos);
 		mark_inode_dirty(inode);
 	}
@@ -2064,19 +2045,11 @@ out_write_size:
 	di->i_mtime_nsec = di->i_ctime_nsec = cpu_to_le32(inode->i_mtime.tv_nsec);
 	ocfs2_journal_dirty(handle, wc->w_di_bh);
 
-	/* unlock pages before dealloc since it needs acquiring j_trans_barrier
-	 * lock, or it will cause a deadlock since journal commit threads holds
-	 * this lock and will ask for the page lock when flushing the data.
-	 * put it here to preserve the unlock order.
-	 */
-	ocfs2_unlock_pages(wc);
-
 	ocfs2_commit_trans(osb, handle);
 
 	ocfs2_run_deallocs(osb, &wc->w_dealloc);
 
-	brelse(wc->w_di_bh);
-	kfree(wc);
+	ocfs2_free_write_ctxt(wc);
 
 	return copied;
 }
@@ -2104,7 +2077,7 @@ const struct address_space_operations ocfs2_aops = {
 	.write_end		= ocfs2_write_end,
 	.bmap			= ocfs2_bmap,
 	.direct_IO		= ocfs2_direct_IO,
-	.invalidatepage		= ocfs2_invalidatepage,
+	.invalidatepage		= block_invalidatepage,
 	.releasepage		= ocfs2_releasepage,
 	.migratepage		= buffer_migrate_page,
 	.is_partially_uptodate	= block_is_partially_uptodate,

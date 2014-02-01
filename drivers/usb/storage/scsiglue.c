@@ -78,8 +78,6 @@ static const char* host_info(struct Scsi_Host *host)
 
 static int slave_alloc (struct scsi_device *sdev)
 {
-	struct us_data *us = host_to_us(sdev->host);
-
 	/*
 	 * Set the INQUIRY transfer length to 36.  We don't use any of
 	 * the extra data and many devices choke if asked for more or
@@ -103,10 +101,6 @@ static int slave_alloc (struct scsi_device *sdev)
 	 * will require changes to the block layer.
 	 */
 	blk_queue_update_dma_alignment(sdev->request_queue, (512 - 1));
-
-	/* Tell the SCSI layer if we know there is more than one LUN */
-	if (us->protocol == USB_PR_BULK && us->max_lun > 0)
-		sdev->sdev_bflags |= BLIST_FORCELUN;
 
 	return 0;
 }
@@ -505,7 +499,7 @@ US_DO_ALL_FLAGS
  ***********************************************************************/
 
 /* Output routine for the sysfs max_sectors file */
-static ssize_t show_max_sectors(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t max_sectors_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct scsi_device *sdev = to_scsi_device(dev);
 
@@ -513,7 +507,7 @@ static ssize_t show_max_sectors(struct device *dev, struct device_attribute *att
 }
 
 /* Input routine for the sysfs max_sectors file */
-static ssize_t store_max_sectors(struct device *dev, struct device_attribute *attr, const char *buf,
+static ssize_t max_sectors_store(struct device *dev, struct device_attribute *attr, const char *buf,
 		size_t count)
 {
 	struct scsi_device *sdev = to_scsi_device(dev);
@@ -523,16 +517,14 @@ static ssize_t store_max_sectors(struct device *dev, struct device_attribute *at
 		blk_queue_max_hw_sectors(sdev->request_queue, ms);
 		return count;
 	}
-	return -EINVAL;	
+	return -EINVAL;
 }
-
-static DEVICE_ATTR(max_sectors, S_IRUGO | S_IWUSR, show_max_sectors,
-		store_max_sectors);
+static DEVICE_ATTR_RW(max_sectors);
 
 static struct device_attribute *sysfs_device_attr_list[] = {
-		&dev_attr_max_sectors,
-		NULL,
-		};
+	&dev_attr_max_sectors,
+	NULL,
+};
 
 /*
  * this defines our host template, with which we'll allocate hosts

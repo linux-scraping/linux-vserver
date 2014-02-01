@@ -183,7 +183,7 @@ static int dom0_write_console(uint32_t vtermno, const char *str, int len)
 {
 	int rc = HYPERVISOR_console_io(CONSOLEIO_write, len, (char *)str);
 	if (rc < 0)
-		return 0;
+		return rc;
 
 	return len;
 }
@@ -208,7 +208,7 @@ static int xen_hvm_console_init(void)
 
 	info = vtermno_to_xencons(HVC_COOKIE);
 	if (!info) {
-		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL | __GFP_ZERO);
+		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL);
 		if (!info)
 			return -ENOMEM;
 	} else if (info->intf != NULL) {
@@ -257,7 +257,7 @@ static int xen_pv_console_init(void)
 
 	info = vtermno_to_xencons(HVC_COOKIE);
 	if (!info) {
-		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL | __GFP_ZERO);
+		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL);
 		if (!info)
 			return -ENOMEM;
 	} else if (info->intf != NULL) {
@@ -284,7 +284,7 @@ static int xen_initial_domain_console_init(void)
 
 	info = vtermno_to_xencons(HVC_COOKIE);
 	if (!info) {
-		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL | __GFP_ZERO);
+		info = kzalloc(sizeof(struct xencons_info), GFP_KERNEL);
 		if (!info)
 			return -ENOMEM;
 	}
@@ -299,27 +299,11 @@ static int xen_initial_domain_console_init(void)
 	return 0;
 }
 
-static void xen_console_update_evtchn(struct xencons_info *info)
-{
-	if (xen_hvm_domain()) {
-		uint64_t v;
-		int err;
-
-		err = hvm_get_parameter(HVM_PARAM_CONSOLE_EVTCHN, &v);
-		if (!err && v)
-			info->evtchn = v;
-	} else
-		info->evtchn = xen_start_info->console.domU.evtchn;
-}
-
 void xen_console_resume(void)
 {
 	struct xencons_info *info = vtermno_to_xencons(HVC_COOKIE);
-	if (info != NULL && info->irq) {
-		if (!xen_initial_domain())
-			xen_console_update_evtchn(info);
+	if (info != NULL && info->irq)
 		rebind_evtchn_irq(info->evtchn, info->irq);
-	}
 }
 
 static void xencons_disconnect_backend(struct xencons_info *info)
@@ -658,7 +642,22 @@ struct console xenboot_console = {
 
 void xen_raw_console_write(const char *str)
 {
-	dom0_write_console(0, str, strlen(str));
+	ssize_t len = strlen(str);
+	int rc = 0;
+
+	if (xen_domain()) {
+		rc = dom0_write_console(0, str, len);
+#ifdef CONFIG_X86
+		if (rc == -ENOSYS && xen_hvm_domain())
+			goto outb_print;
+
+	} else if (xen_cpuid_base()) {
+		int i;
+outb_print:
+		for (i = 0; i < len; i++)
+			outb(str[i], 0xe9);
+#endif
+	}
 }
 
 void xen_raw_printk(const char *fmt, ...)

@@ -7,6 +7,7 @@
 
 #include <linux/device-mapper.h>
 
+#include "dm.h"
 #include "dm-path-selector.h"
 #include "dm-uevent.h"
 
@@ -117,8 +118,6 @@ struct dm_mpath_io {
 
 typedef int (*action_fn) (struct pgpath *pgpath);
 
-#define MIN_IOS 256	/* Mempool size */
-
 static struct kmem_cache *_mpio_cache;
 
 static struct workqueue_struct *kmultipathd, *kmpath_handlerd;
@@ -191,6 +190,7 @@ static void free_priority_group(struct priority_group *pg,
 static struct multipath *alloc_multipath(struct dm_target *ti)
 {
 	struct multipath *m;
+	unsigned min_ios = dm_get_reserved_rq_based_ios();
 
 	m = kzalloc(sizeof(*m), GFP_KERNEL);
 	if (m) {
@@ -203,7 +203,7 @@ static struct multipath *alloc_multipath(struct dm_target *ti)
 		INIT_WORK(&m->trigger_event, trigger_event);
 		init_waitqueue_head(&m->pg_init_wait);
 		mutex_init(&m->work_mutex);
-		m->mpio_pool = mempool_create_slab_pool(MIN_IOS, _mpio_cache);
+		m->mpio_pool = mempool_create_slab_pool(min_ios, _mpio_cache);
 		if (!m->mpio_pool) {
 			kfree(m);
 			return NULL;
@@ -391,13 +391,16 @@ static int map_io(struct multipath *m, struct request *clone,
 	if (was_queued)
 		m->queue_size--;
 
-	if ((pgpath && m->queue_io) ||
-	    (!pgpath && m->queue_if_no_path)) {
+	if (m->pg_init_required) {
+		if (!m->pg_init_in_progress)
+			queue_work(kmultipathd, &m->process_queued_ios);
+		r = DM_MAPIO_REQUEUE;
+	} else if ((pgpath && m->queue_io) ||
+		   (!pgpath && m->queue_if_no_path)) {
 		/* Queue for the daemon to resubmit */
 		list_add_tail(&clone->queuelist, &m->queued_ios);
 		m->queue_size++;
-		if ((m->pg_init_required && !m->pg_init_in_progress) ||
-		    !m->queue_io)
+		if (!m->queue_io)
 			queue_work(kmultipathd, &m->process_queued_ios);
 		pgpath = NULL;
 		r = DM_MAPIO_SUBMITTED;
@@ -1273,6 +1276,21 @@ static void activate_path(struct work_struct *work)
 				pg_init_done, pgpath);
 }
 
+static int noretry_error(int error)
+{
+	switch (error) {
+	case -EOPNOTSUPP:
+	case -EREMOTEIO:
+	case -EILSEQ:
+	case -ENODATA:
+	case -ENOSPC:
+		return 1;
+	}
+
+	/* Anything else could be a path failure, so should be retried */
+	return 0;
+}
+
 /*
  * end_io handling
  */
@@ -1296,7 +1314,7 @@ static int do_end_io(struct multipath *m, struct request *clone,
 	if (!error && !clone->errors)
 		return 0;	/* I/O complete */
 
-	if (error == -EOPNOTSUPP || error == -EREMOTEIO || error == -EILSEQ) {
+	if (noretry_error(error)) {
 		if ((clone->cmd_flags & REQ_WRITE_SAME) &&
 		    !clone->q->limits.max_write_same_sectors) {
 			struct queue_limits *limits;
@@ -1662,6 +1680,11 @@ static int multipath_busy(struct dm_target *ti)
 
 	spin_lock_irqsave(&m->lock, flags);
 
+	/* pg_init in progress, requeue until done */
+	if (m->pg_init_in_progress) {
+		busy = 1;
+		goto out;
+	}
 	/* Guess which priority_group will be used at next mapping time */
 	if (unlikely(!m->current_pgpath && m->next_pg))
 		pg = m->next_pg;

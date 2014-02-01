@@ -40,9 +40,7 @@
 
 #include <mach/usb.h>
 
-#ifndef	DEBUG
-#undef	VERBOSE
-#endif
+#undef VERBOSE
 
 
 #define	DRIVER_VERSION	"24 August 2004"
@@ -387,7 +385,6 @@ static void b_idle(struct isp1301 *isp, const char *tag)
 static void
 dump_regs(struct isp1301 *isp, const char *label)
 {
-#ifdef	DEBUG
 	u8	ctrl = isp1301_get_u8(isp, ISP1301_OTG_CONTROL_1);
 	u8	status = isp1301_get_u8(isp, ISP1301_OTG_STATUS);
 	u8	src = isp1301_get_u8(isp, ISP1301_INTERRUPT_SOURCE);
@@ -396,7 +393,6 @@ dump_regs(struct isp1301 *isp, const char *label)
 		omap_readl(OTG_CTRL), label, state_name(isp),
 		ctrl, status, src);
 	/* mode control and irq enables don't change much */
-#endif
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1299,7 +1295,7 @@ isp1301_set_host(struct usb_otg *otg, struct usb_bus *host)
 		return isp1301_otg_enable(isp);
 	return 0;
 
-#elif !IS_ENABLED(CONFIG_USB_OMAP)
+#elif	!defined(CONFIG_USB_GADGET_OMAP)
 	// FIXME update its refcount
 	otg->host = host;
 

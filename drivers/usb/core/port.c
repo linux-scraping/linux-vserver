@@ -23,8 +23,8 @@
 
 static const struct attribute_group *port_dev_group[];
 
-static ssize_t show_port_connect_type(struct device *dev,
-	struct device_attribute *attr, char *buf)
+static ssize_t connect_type_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
 {
 	struct usb_port *port_dev = to_usb_port(dev);
 	char *result;
@@ -46,8 +46,7 @@ static ssize_t show_port_connect_type(struct device *dev,
 
 	return sprintf(buf, "%s\n", result);
 }
-static DEVICE_ATTR(connect_type, S_IRUGO, show_port_connect_type,
-		NULL);
+static DEVICE_ATTR_RO(connect_type);
 
 static struct attribute *port_dev_attrs[] = {
 	&dev_attr_connect_type.attr,
@@ -86,7 +85,7 @@ static int usb_port_runtime_resume(struct device *dev)
 	usb_autopm_get_interface(intf);
 	set_bit(port1, hub->busy_bits);
 
-	retval = usb_hub_set_port_power(hdev, port1, true);
+	retval = usb_hub_set_port_power(hdev, hub, port1, true);
 	if (port_dev->child && !retval) {
 		/*
 		 * Attempt to wait for usb hub port to be reconnected in order
@@ -125,7 +124,7 @@ static int usb_port_runtime_suspend(struct device *dev)
 
 	usb_autopm_get_interface(intf);
 	set_bit(port1, hub->busy_bits);
-	retval = usb_hub_set_port_power(hdev, port1, false);
+	retval = usb_hub_set_port_power(hdev, hub, port1, false);
 	usb_clear_port_feature(hdev, port1, USB_PORT_FEAT_C_CONNECTION);
 	usb_clear_port_feature(hdev, port1,	USB_PORT_FEAT_C_ENABLE);
 	clear_bit(port1, hub->busy_bits);
@@ -138,7 +137,6 @@ static const struct dev_pm_ops usb_port_pm_ops = {
 #ifdef CONFIG_PM_RUNTIME
 	.runtime_suspend =	usb_port_runtime_suspend,
 	.runtime_resume =	usb_port_runtime_resume,
-	.runtime_idle =		pm_generic_runtime_idle,
 #endif
 };
 

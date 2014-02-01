@@ -185,20 +185,19 @@ EXPORT_SYMBOL_HDA(snd_hda_get_jack_type);
  * Compose a 32bit command word to be sent to the HD-audio controller
  */
 static inline unsigned int
-make_codec_cmd(struct hda_codec *codec, hda_nid_t nid, int direct,
+make_codec_cmd(struct hda_codec *codec, hda_nid_t nid, int flags,
 	       unsigned int verb, unsigned int parm)
 {
 	u32 val;
 
-	if ((codec->addr & ~0xf) || (direct & ~1) || (nid & ~0x7f) ||
+	if ((codec->addr & ~0xf) || (nid & ~0x7f) ||
 	    (verb & ~0xfff) || (parm & ~0xffff)) {
-		printk(KERN_ERR "hda-codec: out of range cmd %x:%x:%x:%x:%x\n",
-		       codec->addr, direct, nid, verb, parm);
+		printk(KERN_ERR "hda-codec: out of range cmd %x:%x:%x:%x\n",
+		       codec->addr, nid, verb, parm);
 		return ~0;
 	}
 
 	val = (u32)codec->addr << 28;
-	val |= (u32)direct << 27;
 	val |= (u32)nid << 20;
 	val |= verb << 8;
 	val |= parm;
@@ -209,7 +208,7 @@ make_codec_cmd(struct hda_codec *codec, hda_nid_t nid, int direct,
  * Send and receive a verb
  */
 static int codec_exec_verb(struct hda_codec *codec, unsigned int cmd,
-			   unsigned int *res)
+			   int flags, unsigned int *res)
 {
 	struct hda_bus *bus = codec->bus;
 	int err;
@@ -222,6 +221,8 @@ static int codec_exec_verb(struct hda_codec *codec, unsigned int cmd,
  again:
 	snd_hda_power_up(codec);
 	mutex_lock(&bus->cmd_mutex);
+	if (flags & HDA_RW_NO_RESPONSE_FALLBACK)
+		bus->no_response_fallback = 1;
 	for (;;) {
 		trace_hda_send_cmd(codec, cmd);
 		err = bus->ops.command(bus, cmd);
@@ -234,6 +235,7 @@ static int codec_exec_verb(struct hda_codec *codec, unsigned int cmd,
 		*res = bus->ops.get_response(bus, codec->addr);
 		trace_hda_get_response(codec, *res);
 	}
+	bus->no_response_fallback = 0;
 	mutex_unlock(&bus->cmd_mutex);
 	snd_hda_power_down(codec);
 	if (!codec_in_pm(codec) && res && *res == -1 && bus->rirb_error) {
@@ -255,7 +257,7 @@ static int codec_exec_verb(struct hda_codec *codec, unsigned int cmd,
  * snd_hda_codec_read - send a command and get the response
  * @codec: the HDA codec
  * @nid: NID to send the command
- * @direct: direct flag
+ * @flags: optional bit flags
  * @verb: the verb to send
  * @parm: the parameter for the verb
  *
@@ -264,12 +266,12 @@ static int codec_exec_verb(struct hda_codec *codec, unsigned int cmd,
  * Returns the obtained response value, or -1 for an error.
  */
 unsigned int snd_hda_codec_read(struct hda_codec *codec, hda_nid_t nid,
-				int direct,
+				int flags,
 				unsigned int verb, unsigned int parm)
 {
-	unsigned cmd = make_codec_cmd(codec, nid, direct, verb, parm);
+	unsigned cmd = make_codec_cmd(codec, nid, flags, verb, parm);
 	unsigned int res;
-	if (codec_exec_verb(codec, cmd, &res))
+	if (codec_exec_verb(codec, cmd, flags, &res))
 		return -1;
 	return res;
 }
@@ -279,7 +281,7 @@ EXPORT_SYMBOL_HDA(snd_hda_codec_read);
  * snd_hda_codec_write - send a single command without waiting for response
  * @codec: the HDA codec
  * @nid: NID to send the command
- * @direct: direct flag
+ * @flags: optional bit flags
  * @verb: the verb to send
  * @parm: the parameter for the verb
  *
@@ -287,12 +289,12 @@ EXPORT_SYMBOL_HDA(snd_hda_codec_read);
  *
  * Returns 0 if successful, or a negative error code.
  */
-int snd_hda_codec_write(struct hda_codec *codec, hda_nid_t nid, int direct,
-			 unsigned int verb, unsigned int parm)
+int snd_hda_codec_write(struct hda_codec *codec, hda_nid_t nid, int flags,
+			unsigned int verb, unsigned int parm)
 {
-	unsigned int cmd = make_codec_cmd(codec, nid, direct, verb, parm);
+	unsigned int cmd = make_codec_cmd(codec, nid, flags, verb, parm);
 	unsigned int res;
-	return codec_exec_verb(codec, cmd,
+	return codec_exec_verb(codec, cmd, flags,
 			       codec->bus->sync_write ? &res : NULL);
 }
 EXPORT_SYMBOL_HDA(snd_hda_codec_write);
@@ -327,10 +329,8 @@ int snd_hda_get_sub_nodes(struct hda_codec *codec, hda_nid_t nid,
 	unsigned int parm;
 
 	parm = snd_hda_param_read(codec, nid, AC_PAR_NODE_COUNT);
-	if (parm == -1) {
-		*start_id = 0;
+	if (parm == -1)
 		return 0;
-	}
 	*start_id = (parm >> 16) & 0x7fff;
 	return (int)(parm & 0x7fff);
 }
@@ -565,7 +565,7 @@ int snd_hda_get_raw_connections(struct hda_codec *codec, hda_nid_t nid,
 		range_val = !!(parm & (1 << (shift-1))); /* ranges */
 		val = parm & mask;
 		if (val == 0 && null_count++) {  /* no second chance */
-			snd_printk(KERN_WARNING "hda_codec: "
+			snd_printdd("hda_codec: "
 				   "invalid CONNECT_LIST verb %x[%i]:%x\n",
 				    nid, i, parm);
 			return 0;
@@ -665,6 +665,64 @@ int snd_hda_get_conn_index(struct hda_codec *codec, hda_nid_t mux,
 	return -1;
 }
 EXPORT_SYMBOL_HDA(snd_hda_get_conn_index);
+
+
+/* return DEVLIST_LEN parameter of the given widget */
+static unsigned int get_num_devices(struct hda_codec *codec, hda_nid_t nid)
+{
+	unsigned int wcaps = get_wcaps(codec, nid);
+	unsigned int parm;
+
+	if (!codec->dp_mst || !(wcaps & AC_WCAP_DIGITAL) ||
+	    get_wcaps_type(wcaps) != AC_WID_PIN)
+		return 0;
+
+	parm = snd_hda_param_read(codec, nid, AC_PAR_DEVLIST_LEN);
+	if (parm == -1 && codec->bus->rirb_error)
+		parm = 0;
+	return parm & AC_DEV_LIST_LEN_MASK;
+}
+
+/**
+ * snd_hda_get_devices - copy device list without cache
+ * @codec: the HDA codec
+ * @nid: NID of the pin to parse
+ * @dev_list: device list array
+ * @max_devices: max. number of devices to store
+ *
+ * Copy the device list. This info is dynamic and so not cached.
+ * Currently called only from hda_proc.c, so not exported.
+ */
+int snd_hda_get_devices(struct hda_codec *codec, hda_nid_t nid,
+			u8 *dev_list, int max_devices)
+{
+	unsigned int parm;
+	int i, dev_len, devices;
+
+	parm = get_num_devices(codec, nid);
+	if (!parm)	/* not multi-stream capable */
+		return 0;
+
+	dev_len = parm + 1;
+	dev_len = dev_len < max_devices ? dev_len : max_devices;
+
+	devices = 0;
+	while (devices < dev_len) {
+		parm = snd_hda_codec_read(codec, nid, 0,
+					  AC_VERB_GET_DEVICE_LIST, devices);
+		if (parm == -1 && codec->bus->rirb_error)
+			break;
+
+		for (i = 0; i < 8; i++) {
+			dev_list[devices] = (u8)parm;
+			parm >>= 4;
+			devices++;
+			if (devices >= dev_len)
+				break;
+		}
+	}
+	return devices;
+}
 
 /**
  * snd_hda_queue_unsol_event - add an unsolicited event to queue
@@ -1216,11 +1274,13 @@ static void hda_jackpoll_work(struct work_struct *work)
 {
 	struct hda_codec *codec =
 		container_of(work, struct hda_codec, jackpoll_work.work);
-	if (!codec->jackpoll_interval)
-		return;
 
 	snd_hda_jack_set_dirty_all(codec);
 	snd_hda_jack_poll_all(codec);
+
+	if (!codec->jackpoll_interval)
+		return;
+
 	queue_delayed_work(codec->bus->workq, &codec->jackpoll_work,
 			   codec->jackpoll_interval);
 }
@@ -2078,16 +2138,6 @@ int snd_hda_codec_amp_init_stereo(struct hda_codec *codec, hda_nid_t nid,
 }
 EXPORT_SYMBOL_HDA(snd_hda_codec_amp_init_stereo);
 
-/* meta hook to call each driver's vmaster hook */
-static void vmaster_hook(void *private_data, int enabled)
-{
-	struct hda_vmaster_mute_hook *hook = private_data;
-
-	if (hook->mute_mode != HDA_VMUTE_FOLLOW_MASTER)
-		enabled = hook->mute_mode;
-	hook->hook(hook->codec, enabled);
-}
-
 /**
  * snd_hda_codec_resume_amp - Resume all AMP commands from the cache
  * @codec: HD-audio codec
@@ -2532,7 +2582,7 @@ int snd_hda_codec_reset(struct hda_codec *codec)
 	flush_workqueue(bus->workq);
 #endif
 	snd_hda_ctls_clear(codec);
-	/* relase PCMs */
+	/* release PCMs */
 	for (i = 0; i < codec->num_pcms; i++) {
 		if (codec->pcm_info[i].pcm) {
 			snd_device_free(card, codec->pcm_info[i].pcm);
@@ -2581,8 +2631,7 @@ static int map_slaves(struct hda_codec *codec, const char * const *slaves,
 	items = codec->mixers.list;
 	for (i = 0; i < codec->mixers.used; i++) {
 		struct snd_kcontrol *sctl = items[i].kctl;
-		if (!sctl || !sctl->id.name ||
-		    sctl->id.iface != SNDRV_CTL_ELEM_IFACE_MIXER)
+		if (!sctl || sctl->id.iface != SNDRV_CTL_ELEM_IFACE_MIXER)
 			continue;
 		for (s = slaves; *s; s++) {
 			char tmpname[sizeof(sctl->id.name)];
@@ -2609,7 +2658,7 @@ static int check_slave_present(void *data, struct snd_kcontrol *sctl)
 }
 
 /* guess the value corresponding to 0dB */
-static int get_kctl_0dB_offset(struct snd_kcontrol *kctl)
+static int get_kctl_0dB_offset(struct snd_kcontrol *kctl, int *step_to_check)
 {
 	int _tlv[4];
 	const int *tlv = NULL;
@@ -2624,8 +2673,19 @@ static int get_kctl_0dB_offset(struct snd_kcontrol *kctl)
 		set_fs(fs);
 	} else if (kctl->vd[0].access & SNDRV_CTL_ELEM_ACCESS_TLV_READ)
 		tlv = kctl->tlv.p;
-	if (tlv && tlv[0] == SNDRV_CTL_TLVT_DB_SCALE)
-		val = -tlv[2] / tlv[3];
+	if (tlv && tlv[0] == SNDRV_CTL_TLVT_DB_SCALE) {
+		int step = tlv[3];
+		step &= ~TLV_DB_SCALE_MUTE;
+		if (!step)
+			return -1;
+		if (*step_to_check && *step_to_check != step) {
+			snd_printk(KERN_ERR "hda_codec: Mismatching dB step for vmaster slave (%d!=%d)\n",
+				   *step_to_check, step);
+			return -1;
+		}
+		*step_to_check = step;
+		val = -tlv[2] / step;
+	}
 	return val;
 }
 
@@ -2646,7 +2706,7 @@ static int put_kctl_with_value(struct snd_kcontrol *kctl, int val)
 /* initialize the slave volume with 0dB */
 static int init_slave_0dB(void *data, struct snd_kcontrol *slave)
 {
-	int offset = get_kctl_0dB_offset(slave);
+	int offset = get_kctl_0dB_offset(slave, data);
 	if (offset > 0)
 		put_kctl_with_value(slave, offset);
 	return 0;
@@ -2707,9 +2767,11 @@ int __snd_hda_add_vmaster(struct hda_codec *codec, char *name,
 
 	/* init with master mute & zero volume */
 	put_kctl_with_value(kctl, 0);
-	if (init_slave_vol)
+	if (init_slave_vol) {
+		int step = 0;
 		map_slaves(codec, slaves, suffix,
-			   tlv ? init_slave_0dB : init_slave_unmute, kctl);
+			   tlv ? init_slave_0dB : init_slave_unmute, &step);
+	}
 
 	if (ctl_ret)
 		*ctl_ret = kctl;
@@ -2782,9 +2844,9 @@ int snd_hda_add_vmaster_hook(struct hda_codec *codec,
 
 	if (!hook->hook || !hook->sw_kctl)
 		return 0;
+	snd_ctl_add_vmaster_hook(hook->sw_kctl, hook->hook, codec);
 	hook->codec = codec;
 	hook->mute_mode = HDA_VMUTE_FOLLOW_MASTER;
-	snd_ctl_add_vmaster_hook(hook->sw_kctl, vmaster_hook, hook);
 	if (!expose_enum_ctl)
 		return 0;
 	kctl = snd_ctl_new1(&vmaster_mute_mode, hook);
@@ -2807,7 +2869,14 @@ void snd_hda_sync_vmaster_hook(struct hda_vmaster_mute_hook *hook)
 	 */
 	if (hook->codec->bus->shutdown)
 		return;
-	snd_ctl_sync_vmaster_hook(hook->sw_kctl);
+	switch (hook->mute_mode) {
+	case HDA_VMUTE_FOLLOW_MASTER:
+		snd_ctl_sync_vmaster_hook(hook->sw_kctl);
+		break;
+	default:
+		hook->hook(hook->codec, hook->mute_mode);
+		break;
+	}
 }
 EXPORT_SYMBOL_HDA(snd_hda_sync_vmaster_hook);
 
@@ -3584,7 +3653,7 @@ EXPORT_SYMBOL_HDA(snd_hda_create_spdif_in_ctls);
  * snd_hda_codec_write_cache - send a single command with caching
  * @codec: the HDA codec
  * @nid: NID to send the command
- * @direct: direct flag
+ * @flags: optional bit flags
  * @verb: the verb to send
  * @parm: the parameter for the verb
  *
@@ -3593,7 +3662,7 @@ EXPORT_SYMBOL_HDA(snd_hda_create_spdif_in_ctls);
  * Returns 0 if successful, or a negative error code.
  */
 int snd_hda_codec_write_cache(struct hda_codec *codec, hda_nid_t nid,
-			      int direct, unsigned int verb, unsigned int parm)
+			      int flags, unsigned int verb, unsigned int parm)
 {
 	int err;
 	struct hda_cache_head *c;
@@ -3602,7 +3671,7 @@ int snd_hda_codec_write_cache(struct hda_codec *codec, hda_nid_t nid,
 
 	cache_only = codec->cached_write;
 	if (!cache_only) {
-		err = snd_hda_codec_write(codec, nid, direct, verb, parm);
+		err = snd_hda_codec_write(codec, nid, flags, verb, parm);
 		if (err < 0)
 			return err;
 	}
@@ -3626,7 +3695,7 @@ EXPORT_SYMBOL_HDA(snd_hda_codec_write_cache);
  * snd_hda_codec_update_cache - check cache and write the cmd only when needed
  * @codec: the HDA codec
  * @nid: NID to send the command
- * @direct: direct flag
+ * @flags: optional bit flags
  * @verb: the verb to send
  * @parm: the parameter for the verb
  *
@@ -3637,7 +3706,7 @@ EXPORT_SYMBOL_HDA(snd_hda_codec_write_cache);
  * Returns 0 if successful, or a negative error code.
  */
 int snd_hda_codec_update_cache(struct hda_codec *codec, hda_nid_t nid,
-			       int direct, unsigned int verb, unsigned int parm)
+			       int flags, unsigned int verb, unsigned int parm)
 {
 	struct hda_cache_head *c;
 	u32 key;
@@ -3653,7 +3722,7 @@ int snd_hda_codec_update_cache(struct hda_codec *codec, hda_nid_t nid,
 		return 0;
 	}
 	mutex_unlock(&codec->bus->cmd_mutex);
-	return snd_hda_codec_write_cache(codec, nid, direct, verb, parm);
+	return snd_hda_codec_write_cache(codec, nid, flags, verb, parm);
 }
 EXPORT_SYMBOL_HDA(snd_hda_codec_update_cache);
 
@@ -3808,11 +3877,13 @@ static unsigned int hda_set_power_state(struct hda_codec *codec,
 	hda_nid_t fg = codec->afg ? codec->afg : codec->mfg;
 	int count;
 	unsigned int state;
+	int flags = 0;
 
 	/* this delay seems necessary to avoid click noise at power-down */
 	if (power_state == AC_PWRST_D3) {
 		/* transition time less than 10ms for power down */
 		msleep(codec->epss ? 10 : 100);
+		flags = HDA_RW_NO_RESPONSE_FALLBACK;
 	}
 
 	/* repeat power states setting at most 10 times*/
@@ -3821,7 +3892,7 @@ static unsigned int hda_set_power_state(struct hda_codec *codec,
 			codec->patch_ops.set_power_state(codec, fg,
 							 power_state);
 		else {
-			snd_hda_codec_read(codec, fg, 0,
+			snd_hda_codec_read(codec, fg, flags,
 					   AC_VERB_SET_POWER_STATE,
 					   power_state);
 			snd_hda_codec_set_power_to_all(codec, fg, power_state);
@@ -4467,12 +4538,13 @@ const char *snd_hda_pcm_type_name[HDA_PCM_NTYPES] = {
 
 /*
  * get the empty PCM device number to assign
- *
- * note the max device number is limited by HDA_MAX_PCMS, currently 10
  */
-static int get_empty_pcm_device(struct hda_bus *bus, int type)
+static int get_empty_pcm_device(struct hda_bus *bus, unsigned int type)
 {
 	/* audio device indices; not linear to keep compatibility */
+	/* assigned to static slots up to dev#10; if more needed, assign
+	 * the later slot dynamically (when CONFIG_SND_DYNAMIC_MINORS=y)
+	 */
 	static int audio_idx[HDA_PCM_NTYPES][5] = {
 		[HDA_PCM_TYPE_AUDIO] = { 0, 2, 4, 5, -1 },
 		[HDA_PCM_TYPE_SPDIF] = { 1, -1 },
@@ -4486,18 +4558,28 @@ static int get_empty_pcm_device(struct hda_bus *bus, int type)
 		return -EINVAL;
 	}
 
-	for (i = 0; audio_idx[type][i] >= 0 ; i++)
+	for (i = 0; audio_idx[type][i] >= 0; i++) {
+#ifndef CONFIG_SND_DYNAMIC_MINORS
+		if (audio_idx[type][i] >= 8)
+			break;
+#endif
 		if (!test_and_set_bit(audio_idx[type][i], bus->pcm_dev_bits))
 			return audio_idx[type][i];
+	}
 
+#ifdef CONFIG_SND_DYNAMIC_MINORS
 	/* non-fixed slots starting from 10 */
 	for (i = 10; i < 32; i++) {
 		if (!test_and_set_bit(i, bus->pcm_dev_bits))
 			return i;
 	}
+#endif
 
 	snd_printk(KERN_WARNING "Too many %s devices\n",
 		snd_hda_pcm_type_name[type]);
+#ifndef CONFIG_SND_DYNAMIC_MINORS
+	snd_printk(KERN_WARNING "Consider building the kernel with CONFIG_SND_DYNAMIC_MINORS=y\n");
+#endif
 	return -EAGAIN;
 }
 
@@ -5326,11 +5408,6 @@ int snd_hda_multi_out_analog_prepare(struct hda_codec *codec,
 			snd_hda_codec_setup_stream(codec,
 						   mout->hp_out_nid[i],
 						   stream_tag, 0, format);
-	for (i = 0; i < ARRAY_SIZE(mout->extra_out_nid); i++)
-		if (!mout->no_share_stream && mout->extra_out_nid[i])
-			snd_hda_codec_setup_stream(codec,
-						   mout->extra_out_nid[i],
-						   stream_tag, 0, format);
 
 	/* surrounds */
 	for (i = 1; i < mout->num_dacs; i++) {
@@ -5341,6 +5418,20 @@ int snd_hda_multi_out_analog_prepare(struct hda_codec *codec,
 			snd_hda_codec_setup_stream(codec, nids[i], stream_tag,
 						   0, format);
 	}
+
+	/* extra surrounds */
+	for (i = 0; i < ARRAY_SIZE(mout->extra_out_nid); i++) {
+		int ch = 0;
+		if (!mout->extra_out_nid[i])
+			break;
+		if (chs >= (i + 1) * 2)
+			ch = i * 2;
+		else if (!mout->no_share_stream)
+			break;
+		snd_hda_codec_setup_stream(codec, mout->extra_out_nid[i],
+					   stream_tag, ch, format);
+	}
+
 	return 0;
 }
 EXPORT_SYMBOL_HDA(snd_hda_multi_out_analog_prepare);

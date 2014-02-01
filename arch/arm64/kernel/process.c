@@ -81,7 +81,7 @@ void soft_restart(unsigned long addr)
 void (*pm_power_off)(void);
 EXPORT_SYMBOL_GPL(pm_power_off);
 
-void (*arm_pm_restart)(char str, const char *cmd);
+void (*arm_pm_restart)(enum reboot_mode reboot_mode, const char *cmd);
 EXPORT_SYMBOL_GPL(arm_pm_restart);
 
 void arch_cpu_idle_prepare(void)
@@ -101,6 +101,13 @@ void arch_cpu_idle(void)
 	cpu_do_idle();
 	local_irq_enable();
 }
+
+#ifdef CONFIG_HOTPLUG_CPU
+void arch_cpu_idle_dead(void)
+{
+       cpu_die();
+}
+#endif
 
 void machine_shutdown(void)
 {
@@ -132,7 +139,7 @@ void machine_restart(char *cmd)
 
 	/* Now call the architecture specific reboot code. */
 	if (arm_pm_restart)
-		arm_pm_restart('h', cmd);
+		arm_pm_restart(reboot_mode, cmd);
 
 	/*
 	 * Whoops - the architecture was unable to reboot.
@@ -143,15 +150,26 @@ void machine_restart(char *cmd)
 
 void __show_regs(struct pt_regs *regs)
 {
-	int i;
+	int i, top_reg;
+	u64 lr, sp;
+
+	if (compat_user_mode(regs)) {
+		lr = regs->compat_lr;
+		sp = regs->compat_sp;
+		top_reg = 12;
+	} else {
+		lr = regs->regs[30];
+		sp = regs->sp;
+		top_reg = 29;
+	}
 
 	show_regs_print_info(KERN_DEFAULT);
 	print_symbol("PC is at %s\n", instruction_pointer(regs));
-	print_symbol("LR is at %s\n", regs->regs[30]);
+	print_symbol("LR is at %s\n", lr);
 	printk("pc : [<%016llx>] lr : [<%016llx>] pstate: %08llx\n",
-	       regs->pc, regs->regs[30], regs->pstate);
-	printk("sp : %016llx\n", regs->sp);
-	for (i = 29; i >= 0; i--) {
+	       regs->pc, lr, regs->pstate);
+	printk("sp : %016llx\n", sp);
+	for (i = top_reg; i >= 0; i--) {
 		printk("x%-2d: %016llx ", i, regs->regs[i]);
 		if (i % 2 == 0)
 			printk("\n");
@@ -172,27 +190,9 @@ void exit_thread(void)
 {
 }
 
-static void tls_thread_flush(void)
-{
-	asm ("msr tpidr_el0, xzr");
-
-	if (is_compat_task()) {
-		current->thread.tp_value = 0;
-
-		/*
-		 * We need to ensure ordering between the shadow state and the
-		 * hardware state, so that we don't corrupt the hardware state
-		 * with a stale shadow state during context switch.
-		 */
-		barrier();
-		asm ("msr tpidrro_el0, xzr");
-	}
-}
-
 void flush_thread(void)
 {
 	fpsimd_flush_thread();
-	tls_thread_flush();
 	flush_ptrace_hw_breakpoint(current);
 }
 

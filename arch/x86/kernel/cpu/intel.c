@@ -26,7 +26,7 @@
 #include <asm/apic.h>
 #endif
 
-static void __cpuinit early_init_intel(struct cpuinfo_x86 *c)
+static void early_init_intel(struct cpuinfo_x86 *c)
 {
 	u64 misc_enable;
 
@@ -154,21 +154,6 @@ static void __cpuinit early_init_intel(struct cpuinfo_x86 *c)
 			setup_clear_cpu_cap(X86_FEATURE_ERMS);
 		}
 	}
-
-	/*
-	 * Intel Quark Core DevMan_001.pdf section 6.4.11
-	 * "The operating system also is required to invalidate (i.e., flush)
-	 *  the TLB when any changes are made to any of the page table entries.
-	 *  The operating system must reload CR3 to cause the TLB to be flushed"
-	 *
-	 * As a result cpu_has_pge() in arch/x86/include/asm/tlbflush.h should
-	 * be false so that __flush_tlb_all() causes CR3 insted of CR4.PGE
-	 * to be modified
-	 */
-	if (c->x86 == 5 && c->x86_model == 9) {
-		pr_info("Disabling PGE capability bit\n");
-		setup_clear_cpu_cap(X86_FEATURE_PGE);
-	}
 }
 
 #ifdef CONFIG_X86_32
@@ -178,7 +163,7 @@ static void __cpuinit early_init_intel(struct cpuinfo_x86 *c)
  *	This is called before we do cpu ident work
  */
 
-int __cpuinit ppro_with_ram_bug(void)
+int ppro_with_ram_bug(void)
 {
 	/* Uses data from early_cpu_detect now */
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_INTEL &&
@@ -191,7 +176,7 @@ int __cpuinit ppro_with_ram_bug(void)
 	return 0;
 }
 
-static void __cpuinit intel_smp_check(struct cpuinfo_x86 *c)
+static void intel_smp_check(struct cpuinfo_x86 *c)
 {
 	/* calling is from identify_secondary_cpu() ? */
 	if (!c->cpu_index)
@@ -211,7 +196,7 @@ static void __cpuinit intel_smp_check(struct cpuinfo_x86 *c)
 	}
 }
 
-static void __cpuinit intel_workarounds(struct cpuinfo_x86 *c)
+static void intel_workarounds(struct cpuinfo_x86 *c)
 {
 	unsigned long lo, hi;
 
@@ -290,12 +275,12 @@ static void __cpuinit intel_workarounds(struct cpuinfo_x86 *c)
 	intel_smp_check(c);
 }
 #else
-static void __cpuinit intel_workarounds(struct cpuinfo_x86 *c)
+static void intel_workarounds(struct cpuinfo_x86 *c)
 {
 }
 #endif
 
-static void __cpuinit srat_detect_node(struct cpuinfo_x86 *c)
+static void srat_detect_node(struct cpuinfo_x86 *c)
 {
 #ifdef CONFIG_NUMA
 	unsigned node;
@@ -315,7 +300,7 @@ static void __cpuinit srat_detect_node(struct cpuinfo_x86 *c)
 /*
  * find out the number of processor cores on the die
  */
-static int __cpuinit intel_num_cpu_cores(struct cpuinfo_x86 *c)
+static int intel_num_cpu_cores(struct cpuinfo_x86 *c)
 {
 	unsigned int eax, ebx, ecx, edx;
 
@@ -330,7 +315,7 @@ static int __cpuinit intel_num_cpu_cores(struct cpuinfo_x86 *c)
 		return 1;
 }
 
-static void __cpuinit detect_vmx_virtcap(struct cpuinfo_x86 *c)
+static void detect_vmx_virtcap(struct cpuinfo_x86 *c)
 {
 	/* Intel VMX MSR indicated features */
 #define X86_VMX_FEATURE_PROC_CTLS_TPR_SHADOW	0x00200000
@@ -368,7 +353,7 @@ static void __cpuinit detect_vmx_virtcap(struct cpuinfo_x86 *c)
 	}
 }
 
-static void __cpuinit init_intel(struct cpuinfo_x86 *c)
+static void init_intel(struct cpuinfo_x86 *c)
 {
 	unsigned int l2 = 0;
 
@@ -488,7 +473,7 @@ static void __cpuinit init_intel(struct cpuinfo_x86 *c)
 }
 
 #ifdef CONFIG_X86_32
-static unsigned int __cpuinit intel_size_cache(struct cpuinfo_x86 *c, unsigned int size)
+static unsigned int intel_size_cache(struct cpuinfo_x86 *c, unsigned int size)
 {
 	/*
 	 * Intel PIII Tualatin. This comes in two flavours.
@@ -522,7 +507,7 @@ static unsigned int __cpuinit intel_size_cache(struct cpuinfo_x86 *c, unsigned i
 
 #define STLB_4K		0x41
 
-static const struct _tlb_table intel_tlb_table[] __cpuinitconst = {
+static const struct _tlb_table intel_tlb_table[] = {
 	{ 0x01, TLB_INST_4K,		32,	" TLB_INST 4 KByte pages, 4-way set associative" },
 	{ 0x02, TLB_INST_4M,		2,	" TLB_INST 4 MByte pages, full associative" },
 	{ 0x03, TLB_DATA_4K,		64,	" TLB_DATA 4 KByte pages, 4-way set associative" },
@@ -552,7 +537,7 @@ static const struct _tlb_table intel_tlb_table[] __cpuinitconst = {
 	{ 0x00, 0, 0 }
 };
 
-static void __cpuinit intel_tlb_lookup(const unsigned char desc)
+static void intel_tlb_lookup(const unsigned char desc)
 {
 	unsigned char k;
 	if (desc == 0)
@@ -621,7 +606,7 @@ static void __cpuinit intel_tlb_lookup(const unsigned char desc)
 	}
 }
 
-static void __cpuinit intel_tlb_flushall_shift_set(struct cpuinfo_x86 *c)
+static void intel_tlb_flushall_shift_set(struct cpuinfo_x86 *c)
 {
 	switch ((c->x86 << 8) + c->x86_model) {
 	case 0x60f: /* original 65 nm celeron/pentium/core2/xeon, "Merom"/"Conroe" */
@@ -643,14 +628,14 @@ static void __cpuinit intel_tlb_flushall_shift_set(struct cpuinfo_x86 *c)
 		tlb_flushall_shift = 5;
 		break;
 	case 0x63a: /* Ivybridge */
-		tlb_flushall_shift = 2;
+		tlb_flushall_shift = 1;
 		break;
 	default:
 		tlb_flushall_shift = 6;
 	}
 }
 
-static void __cpuinit intel_detect_tlb(struct cpuinfo_x86 *c)
+static void intel_detect_tlb(struct cpuinfo_x86 *c)
 {
 	int i, j, n;
 	unsigned int regs[4];
@@ -677,12 +662,12 @@ static void __cpuinit intel_detect_tlb(struct cpuinfo_x86 *c)
 	intel_tlb_flushall_shift_set(c);
 }
 
-static const struct cpu_dev __cpuinitconst intel_cpu_dev = {
+static const struct cpu_dev intel_cpu_dev = {
 	.c_vendor	= "Intel",
 	.c_ident	= { "GenuineIntel" },
 #ifdef CONFIG_X86_32
-	.c_models = {
-		{ .vendor = X86_VENDOR_INTEL, .family = 4, .model_names =
+	.legacy_models = {
+		{ .family = 4, .model_names =
 		  {
 			  [0] = "486 DX-25/33",
 			  [1] = "486 DX-50",
@@ -695,7 +680,7 @@ static const struct cpu_dev __cpuinitconst intel_cpu_dev = {
 			  [9] = "486 DX/4-WB"
 		  }
 		},
-		{ .vendor = X86_VENDOR_INTEL, .family = 5, .model_names =
+		{ .family = 5, .model_names =
 		  {
 			  [0] = "Pentium 60/66 A-step",
 			  [1] = "Pentium 60/66",
@@ -706,7 +691,7 @@ static const struct cpu_dev __cpuinitconst intel_cpu_dev = {
 			  [8] = "Mobile Pentium MMX"
 		  }
 		},
-		{ .vendor = X86_VENDOR_INTEL, .family = 6, .model_names =
+		{ .family = 6, .model_names =
 		  {
 			  [0] = "Pentium Pro A-step",
 			  [1] = "Pentium Pro",
@@ -720,7 +705,7 @@ static const struct cpu_dev __cpuinitconst intel_cpu_dev = {
 			  [11] = "Pentium III (Tualatin)",
 		  }
 		},
-		{ .vendor = X86_VENDOR_INTEL, .family = 15, .model_names =
+		{ .family = 15, .model_names =
 		  {
 			  [0] = "Pentium 4 (Unknown)",
 			  [1] = "Pentium 4 (Willamette)",
@@ -730,7 +715,7 @@ static const struct cpu_dev __cpuinitconst intel_cpu_dev = {
 		  }
 		},
 	},
-	.c_size_cache	= intel_size_cache,
+	.legacy_cache_size = intel_size_cache,
 #endif
 	.c_detect_tlb	= intel_detect_tlb,
 	.c_early_init   = early_init_intel,

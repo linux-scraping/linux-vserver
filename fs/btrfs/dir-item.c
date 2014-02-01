@@ -21,6 +21,10 @@
 #include "hash.h"
 #include "transaction.h"
 
+static struct btrfs_dir_item *btrfs_match_dir_item_name(struct btrfs_root *root,
+			      struct btrfs_path *path,
+			      const char *name, int name_len);
+
 /*
  * insert a name into a directory, doing overflow properly if there is a hash
  * collision.  data_size indicates how big the item inserted should be.  On
@@ -54,7 +58,7 @@ static struct btrfs_dir_item *insert_with_overflow(struct btrfs_trans_handle
 		return ERR_PTR(ret);
 	WARN_ON(ret > 0);
 	leaf = path->nodes[0];
-	item = btrfs_item_nr(leaf, path->slots[0]);
+	item = btrfs_item_nr(path->slots[0]);
 	ptr = btrfs_item_ptr(leaf, path->slots[0], char);
 	BUG_ON(data_size > btrfs_item_size(leaf, item));
 	ptr += btrfs_item_size(leaf, item) - data_size;
@@ -379,9 +383,9 @@ struct btrfs_dir_item *btrfs_lookup_xattr(struct btrfs_trans_handle *trans,
  * this walks through all the entries in a dir item and finds one
  * for a specific name.
  */
-struct btrfs_dir_item *btrfs_match_dir_item_name(struct btrfs_root *root,
-						 struct btrfs_path *path,
-						 const char *name, int name_len)
+static struct btrfs_dir_item *btrfs_match_dir_item_name(struct btrfs_root *root,
+			      struct btrfs_path *path,
+			      const char *name, int name_len)
 {
 	struct btrfs_dir_item *dir_item;
 	unsigned long name_ptr;
@@ -470,8 +474,10 @@ int verify_dir_item(struct btrfs_root *root,
 	}
 
 	/* BTRFS_MAX_XATTR_SIZE is the same for all dir items */
-	if (btrfs_dir_data_len(leaf, dir_item) > BTRFS_MAX_XATTR_SIZE(root)) {
-		printk(KERN_CRIT "btrfs: invalid dir item data len: %u\n",
+	if ((btrfs_dir_data_len(leaf, dir_item) +
+	     btrfs_dir_name_len(leaf, dir_item)) > BTRFS_MAX_XATTR_SIZE(root)) {
+		printk(KERN_CRIT "btrfs: invalid dir item name + data len: %u + %u\n",
+		       (unsigned)btrfs_dir_name_len(leaf, dir_item),
 		       (unsigned)btrfs_dir_data_len(leaf, dir_item));
 		return 1;
 	}

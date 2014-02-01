@@ -57,7 +57,6 @@
 #include <linux/skbuff.h>
 #include <linux/can.h>
 #include <linux/can/core.h>
-#include <linux/can/skb.h>
 #include <linux/ratelimit.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
@@ -262,9 +261,6 @@ int can_send(struct sk_buff *skb, int loop)
 		goto inval_skb;
 	}
 
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	skb_reset_transport_header(skb);
 
@@ -294,7 +290,7 @@ int can_send(struct sk_buff *skb, int loop)
 				return -ENOMEM;
 			}
 
-			can_skb_set_owner(newskb, skb->sk);
+			newskb->sk = skb->sk;
 			newskb->ip_summed = CHECKSUM_UNNECESSARY;
 			newskb->pkt_type = PACKET_BROADCAST;
 		}
@@ -424,7 +420,7 @@ static struct hlist_head *find_rcv_list(canid_t *can_id, canid_t *mask,
  * @mask: CAN mask (see description)
  * @func: callback function on filter match
  * @data: returned parameter for callback function
- * @ident: string for calling module indentification
+ * @ident: string for calling module identification
  *
  * Description:
  *  Invokes the callback function with the received sk_buff and the given
@@ -798,9 +794,9 @@ EXPORT_SYMBOL(can_proto_unregister);
  * af_can notifier to create/remove CAN netdevice specific structs
  */
 static int can_notifier(struct notifier_block *nb, unsigned long msg,
-			void *data)
+			void *ptr)
 {
-	struct net_device *dev = (struct net_device *)data;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct dev_rcv_lists *d;
 
 	if (!net_eq(dev_net(dev), &init_net))

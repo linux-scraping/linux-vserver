@@ -5,14 +5,15 @@
  */
 
 /*
- * This file builds a disk-image from two different files:
+ * This file builds a disk-image from three different files:
  *
  * - setup: 8086 machine code, sets up system parm
  * - system: 80386 code for actual system
+ * - zoffset.h: header with ZO_* defines
  *
- * It does some checking that all files are of the correct type, and
- * just writes the result to stdout, removing headers and padding to
- * the right amount. It also writes some system data to stderr.
+ * It does some checking that all files are of the correct type, and writes
+ * the result to the specified destination, removing headers and padding to
+ * the right amount. It also writes some system data to stdout.
  */
 
 /*
@@ -136,12 +137,12 @@ static void die(const char * str, ...)
 
 static void usage(void)
 {
-	die("Usage: build setup system [zoffset.h] [> image]");
+	die("Usage: build setup system zoffset.h image");
 }
 
 #ifdef CONFIG_EFI_STUB
 
-static void update_pecoff_section_header_fields(char *section_name, u32 vma, u32 size, u32 datasz, u32 offset)
+static void update_pecoff_section_header(char *section_name, u32 offset, u32 size)
 {
 	unsigned int pe_header;
 	unsigned short num_sections;
@@ -162,10 +163,10 @@ static void update_pecoff_section_header_fields(char *section_name, u32 vma, u32
 			put_unaligned_le32(size, section + 0x8);
 
 			/* section header vma field */
-			put_unaligned_le32(vma, section + 0xc);
+			put_unaligned_le32(offset, section + 0xc);
 
 			/* section header 'size of initialised data' field */
-			put_unaligned_le32(datasz, section + 0x10);
+			put_unaligned_le32(size, section + 0x10);
 
 			/* section header 'file offset' field */
 			put_unaligned_le32(offset, section + 0x14);
@@ -175,11 +176,6 @@ static void update_pecoff_section_header_fields(char *section_name, u32 vma, u32
 		section += 0x28;
 		num_sections--;
 	}
-}
-
-static void update_pecoff_section_header(char *section_name, u32 offset, u32 size)
-{
-	update_pecoff_section_header_fields(section_name, offset, size, size, offset);
 }
 
 static void update_pecoff_setup_and_reloc(unsigned int size)
@@ -206,6 +202,9 @@ static void update_pecoff_text(unsigned int text_start, unsigned int file_sz)
 
 	pe_header = get_unaligned_le32(&buf[0x3c]);
 
+	/* Size of image */
+	put_unaligned_le32(file_sz, &buf[pe_header + 0x50]);
+
 	/*
 	 * Size of code: Subtract the size of the first sector (512 bytes)
 	 * which includes the header.
@@ -218,22 +217,6 @@ static void update_pecoff_text(unsigned int text_start, unsigned int file_sz)
 	put_unaligned_le32(text_start + efi_pe_entry, &buf[pe_header + 0x28]);
 
 	update_pecoff_section_header(".text", text_start, text_sz);
-}
-
-static void update_pecoff_bss(unsigned int file_sz, unsigned int init_sz)
-{
-	unsigned int pe_header;
-	unsigned int bss_sz = init_sz - file_sz;
-
-	pe_header = get_unaligned_le32(&buf[0x3c]);
-
-	/* Size of uninitialized data */
-	put_unaligned_le32(bss_sz, &buf[pe_header + 0x24]);
-
-	/* Size of image */
-	put_unaligned_le32(init_sz, &buf[pe_header + 0x50]);
-
-	update_pecoff_section_header_fields(".bss", file_sz, bss_sz, 0, 0);
 }
 
 #endif /* CONFIG_EFI_STUB */
@@ -261,6 +244,7 @@ static void parse_zoffset(char *fname)
 	c = fread(buf, 1, sizeof(buf) - 1, file);
 	if (ferror(file))
 		die("read-error on `zoffset.h'");
+	fclose(file);
 	buf[c] = 0;
 
 	p = (char *)buf;
@@ -282,13 +266,10 @@ int main(int argc, char ** argv)
 	int c;
 	u32 sys_size;
 	struct stat sb;
-	FILE *file;
+	FILE *file, *dest;
 	int fd;
 	void *kernel;
 	u32 crc = 0xffffffffUL;
-#ifdef CONFIG_EFI_STUB
-	unsigned int init_sz;
-#endif
 
 	/* Defaults for old kernel */
 #ifdef CONFIG_X86_32
@@ -300,10 +281,13 @@ int main(int argc, char ** argv)
 	startup_64 = 0x200;
 #endif
 
-	if (argc == 4)
-		parse_zoffset(argv[3]);
-	else if (argc != 3)
+	if (argc != 5)
 		usage();
+	parse_zoffset(argv[3]);
+
+	dest = fopen(argv[4], "w");
+	if (!dest)
+		die("Unable to write `%s': %m", argv[4]);
 
 	/* Copy the setup code */
 	file = fopen(argv[1], "r");
@@ -338,7 +322,7 @@ int main(int argc, char ** argv)
 	/* Set the default root device */
 	put_unaligned_le16(DEFAULT_ROOT_DEV, &buf[508]);
 
-	fprintf(stderr, "Setup is %d bytes (padded to %d bytes).\n", c, i);
+	printf("Setup is %d bytes (padded to %d bytes).\n", c, i);
 
 	/* Open and stat the kernel file */
 	fd = open(argv[2], O_RDONLY);
@@ -347,7 +331,7 @@ int main(int argc, char ** argv)
 	if (fstat(fd, &sb))
 		die("Unable to stat `%s': %m", argv[2]);
 	sz = sb.st_size;
-	fprintf (stderr, "System is %d kB\n", (sz+1023)/1024);
+	printf("System is %d kB\n", (sz+1023)/1024);
 	kernel = mmap(NULL, sz, PROT_READ, MAP_SHARED, fd, 0);
 	if (kernel == MAP_FAILED)
 		die("Unable to mmap '%s': %m", argv[2]);
@@ -359,9 +343,7 @@ int main(int argc, char ** argv)
 	put_unaligned_le32(sys_size, &buf[0x1f4]);
 
 #ifdef CONFIG_EFI_STUB
-	update_pecoff_text(setup_sectors * 512, i + (sys_size * 16));
-	init_sz = get_unaligned_le32(&buf[0x260]);
-	update_pecoff_bss(i + (sys_size * 16), init_sz);
+	update_pecoff_text(setup_sectors * 512, sz + i + ((sys_size * 16) - sz));
 
 #ifdef CONFIG_X86_64 /* Yes, this is really how we defined it :( */
 	efi_stub_entry -= 0x200;
@@ -370,26 +352,30 @@ int main(int argc, char ** argv)
 #endif
 
 	crc = partial_crc32(buf, i, crc);
-	if (fwrite(buf, 1, i, stdout) != i)
+	if (fwrite(buf, 1, i, dest) != i)
 		die("Writing setup failed");
 
 	/* Copy the kernel code */
 	crc = partial_crc32(kernel, sz, crc);
-	if (fwrite(kernel, 1, sz, stdout) != sz)
+	if (fwrite(kernel, 1, sz, dest) != sz)
 		die("Writing kernel failed");
 
 	/* Add padding leaving 4 bytes for the checksum */
 	while (sz++ < (sys_size*16) - 4) {
 		crc = partial_crc32_one('\0', crc);
-		if (fwrite("\0", 1, 1, stdout) != 1)
+		if (fwrite("\0", 1, 1, dest) != 1)
 			die("Writing padding failed");
 	}
 
 	/* Write the CRC */
-	fprintf(stderr, "CRC %x\n", crc);
+	printf("CRC %x\n", crc);
 	put_unaligned_le32(crc, buf);
-	if (fwrite(buf, 1, 4, stdout) != 4)
+	if (fwrite(buf, 1, 4, dest) != 4)
 		die("Writing CRC failed");
+
+	/* Catch any delayed write failures */
+	if (fclose(dest))
+		die("Writing image failed");
 
 	close(fd);
 

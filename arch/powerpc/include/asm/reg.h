@@ -108,7 +108,6 @@
 #define MSR_TS_T	__MASK(MSR_TS_T_LG)	/*  Transaction Transactional */
 #define MSR_TS_MASK	(MSR_TS_T | MSR_TS_S)   /* Transaction State bits */
 #define MSR_TM_ACTIVE(x) (((x) & MSR_TS_MASK) != 0) /* Transaction active? */
-#define MSR_TM_RESV(x) (((x) & MSR_TS_MASK) == MSR_TS_MASK) /* Reserved */
 #define MSR_TM_TRANSACTIONAL(x)	(((x) & MSR_TS_MASK) == MSR_TS_T)
 #define MSR_TM_SUSPENDED(x)	(((x) & MSR_TS_MASK) == MSR_TS_S)
 
@@ -116,10 +115,15 @@
 #define MSR_64BIT	MSR_SF
 
 /* Server variant */
-#define MSR_		MSR_ME | MSR_RI | MSR_IR | MSR_DR | MSR_ISF |MSR_HV
-#define MSR_KERNEL	MSR_ | MSR_64BIT
-#define MSR_USER32	MSR_ | MSR_PR | MSR_EE
-#define MSR_USER64	MSR_USER32 | MSR_64BIT
+#define __MSR		(MSR_ME | MSR_RI | MSR_IR | MSR_DR | MSR_ISF |MSR_HV)
+#ifdef __BIG_ENDIAN__
+#define MSR_		__MSR
+#else
+#define MSR_		(__MSR | MSR_LE)
+#endif
+#define MSR_KERNEL	(MSR_ | MSR_64BIT)
+#define MSR_USER32	(MSR_ | MSR_PR | MSR_EE)
+#define MSR_USER64	(MSR_USER32 | MSR_64BIT)
 #elif defined(CONFIG_PPC_BOOK3S_32) || defined(CONFIG_8xx)
 /* Default MSR for kernel mode. */
 #define MSR_KERNEL	(MSR_ME|MSR_RI|MSR_IR|MSR_DR)
@@ -209,7 +213,6 @@
 #define SPRN_ACOP	0x1F	/* Available Coprocessor Register */
 #define SPRN_TFIAR	0x81	/* Transaction Failure Inst Addr   */
 #define SPRN_TEXASR	0x82	/* Transaction EXception & Summary */
-#define   TEXASR_FS	__MASK(63-36)	/* Transaction Failure Summary */
 #define SPRN_TEXASRU	0x83	/* ''	   ''	   ''	 Upper 32  */
 #define SPRN_TFHAR	0x80	/* Transaction Failure Handler Addr */
 #define SPRN_CTRLF	0x088
@@ -245,6 +248,7 @@
 #define SPRN_TBRU	0x10D	/* Time Base Read Upper Register (user, R/O) */
 #define SPRN_TBWL	0x11C	/* Time Base Lower Register (super, R/W) */
 #define SPRN_TBWU	0x11D	/* Time Base Upper Register (super, R/W) */
+#define SPRN_TBU40	0x11E	/* Timebase upper 40 bits (hyper, R/W) */
 #define SPRN_SPURR	0x134	/* Scaled PURR */
 #define SPRN_HSPRG0	0x130	/* Hypervisor Scratch 0 */
 #define SPRN_HSPRG1	0x131	/* Hypervisor Scratch 1 */
@@ -260,8 +264,8 @@
 #define FSCR_TAR_LG	8	/* Enable Target Address Register */
 #define FSCR_EBB_LG	7	/* Enable Event Based Branching */
 #define FSCR_TM_LG	5	/* Enable Transactional Memory */
-#define FSCR_PM_LG	4	/* Enable prob/priv access to PMU SPRs */
-#define FSCR_BHRB_LG	3	/* Enable Branch History Rolling Buffer*/
+#define FSCR_BHRB_LG	4	/* Enable Branch History Rolling Buffer*/
+#define FSCR_PM_LG	3	/* Enable prob/priv access to PMU SPRs */
 #define FSCR_DSCR_LG	2	/* Enable Data Stream Control Register */
 #define FSCR_VECVSX_LG	1	/* Enable VMX/VSX  */
 #define FSCR_FP_LG	0	/* Enable Floating Point */
@@ -285,6 +289,7 @@
 #define   LPCR_ISL	(1ul << (63-2))
 #define   LPCR_VC_SH	(63-2)
 #define   LPCR_DPFD_SH	(63-11)
+#define   LPCR_DPFD	(7ul << LPCR_DPFD_SH)
 #define   LPCR_VRMASD	(0x1ful << (63-16))
 #define   LPCR_VRMA_L	(1ul << (63-12))
 #define   LPCR_VRMA_LP0	(1ul << (63-15))
@@ -301,6 +306,7 @@
 #define     LPCR_PECE2	0x00001000	/* machine check etc can cause exit */
 #define   LPCR_MER	0x00000800	/* Mediated External Exception */
 #define   LPCR_MER_SH	11
+#define   LPCR_TC      0x00000200	/* Translation control */
 #define   LPCR_LPES    0x0000000c
 #define   LPCR_LPES0   0x00000008      /* LPAR Env selector 0 */
 #define   LPCR_LPES1   0x00000004      /* LPAR Env selector 1 */
@@ -313,6 +319,10 @@
 #define   LPID_RSVD	0x3ff		/* Reserved LPID for partn switching */
 #define	SPRN_HMER	0x150	/* Hardware m? error recovery */
 #define	SPRN_HMEER	0x151	/* Hardware m? enable error recovery */
+#define SPRN_PCR	0x152	/* Processor compatibility register */
+#define   PCR_VEC_DIS	(1ul << (63-0))	/* Vec. disable (bit NA since POWER8) */
+#define   PCR_VSX_DIS	(1ul << (63-1))	/* VSX disable (bit NA since POWER8) */
+#define   PCR_ARCH_205	0x2		/* Architecture 2.05 */
 #define	SPRN_HEIR	0x153	/* Hypervisor Emulated Instruction Register */
 #define SPRN_TLBINDEXR	0x154	/* P7 TLB control register */
 #define SPRN_TLBVPNR	0x155	/* P7 TLB control register */
@@ -422,6 +432,7 @@
 #define	 HID4_RMLS2_SH	 (63 - 2)	/* Real mode limit bottom 2 bits */
 #define	 HID4_LPID5_SH	 (63 - 6)	/* partition ID bottom 4 bits */
 #define	 HID4_RMOR_SH	 (63 - 22)	/* real mode offset (16 bits) */
+#define  HID4_RMOR	 (0xFFFFul << HID4_RMOR_SH)
 #define  HID4_LPES1	 (1 << (63-57))	/* LPAR env. sel. bit 1 */
 #define  HID4_RMLS0_SH	 (63 - 58)	/* Real mode limit top bit */
 #define	 HID4_LPID1_SH	 0		/* partition ID top 2 bits */
@@ -632,6 +643,9 @@
 #define   MMCR0_PMXE	0x04000000UL /* performance monitor exception enable */
 #define   MMCR0_FCECE	0x02000000UL /* freeze ctrs on enabled cond or event */
 #define   MMCR0_TBEE	0x00400000UL /* time base exception enable */
+#define   MMCR0_EBE	0x00100000UL /* Event based branch enable */
+#define   MMCR0_PMCC	0x000c0000UL /* PMC control */
+#define   MMCR0_PMCC_U6	0x00080000UL /* PMC1-6 are R/W by user (PR) */
 #define   MMCR0_PMC1CE	0x00008000UL /* PMC1 count enable*/
 #define   MMCR0_PMCjCE	0x00004000UL /* PMCj count enable*/
 #define   MMCR0_TRIGGER	0x00002000UL /* TRIGGER enable */
@@ -643,7 +657,7 @@
 #define   MMCR0_FCWAIT	0x00000002UL /* freeze counter in WAIT state */
 #define   MMCR0_FCHV	0x00000001UL /* freeze conditions in hypervisor mode */
 #define SPRN_MMCR1	798
-#define SPRN_MMCR2	785
+#define SPRN_MMCR2	769
 #define SPRN_MMCRA	0x312
 #define   MMCRA_SDSYNC	0x80000000UL /* SDAR synced with SIAR */
 #define   MMCRA_SDAR_DCACHE_MISS 0x40000000UL
@@ -677,13 +691,18 @@
 #define SPRN_PMC6	792
 #define SPRN_PMC7	793
 #define SPRN_PMC8	794
+#define SPRN_SIAR	780
+#define SPRN_SDAR	781
 #define SPRN_SIER	784
 #define   SIER_SIPR		0x2000000	/* Sampled MSR_PR */
 #define   SIER_SIHV		0x1000000	/* Sampled MSR_HV */
 #define   SIER_SIAR_VALID	0x0400000	/* SIAR contents valid */
 #define   SIER_SDAR_VALID	0x0200000	/* SDAR contents valid */
-#define SPRN_SIAR	796
-#define SPRN_SDAR	797
+
+/* When EBB is enabled, some of MMCR0/MMCR2/SIER are user accessible */
+#define MMCR0_USER_MASK	(MMCR0_FC | MMCR0_PMXE | MMCR0_PMAO)
+#define MMCR2_USER_MASK	0x4020100804020000UL /* (FC1P|FC2P|FC3P|FC4P|FC5P|FC6P) */
+#define SIER_USER_MASK	0x7fffffUL
 
 #define SPRN_PA6T_MMCR0 795
 #define   PA6T_MMCR0_EN0	0x0000000000000001UL
@@ -1091,9 +1110,17 @@
 #define PVR_970MP	0x0044
 #define PVR_970GX	0x0045
 #define PVR_POWER7p	0x004A
-#define PVR_POWER8	0x004B
+#define PVR_POWER8E	0x004B
+#define PVR_POWER8	0x004D
 #define PVR_BE		0x0070
 #define PVR_PA6T	0x0090
+
+/* "Logical" PVR values defined in PAPR, representing architecture levels */
+#define PVR_ARCH_204	0x0f000001
+#define PVR_ARCH_205	0x0f000002
+#define PVR_ARCH_206	0x0f000003
+#define PVR_ARCH_206p	0x0f100003
+#define PVR_ARCH_207	0x0f000004
 
 /* Macros for setting and retrieving special purpose registers */
 #ifndef __ASSEMBLY__
@@ -1119,10 +1146,10 @@
 				     : "memory")
 
 #ifdef __powerpc64__
-#ifdef CONFIG_PPC_CELL
+#if defined(CONFIG_PPC_CELL) || defined(CONFIG_PPC_FSL_BOOK3E)
 #define mftb()		({unsigned long rval;				\
 			asm volatile(					\
-				"90:	mftb %0;\n"			\
+				"90:	mfspr %0, %2;\n"		\
 				"97:	cmpwi %0,0;\n"			\
 				"	beq- 90b;\n"			\
 				"99:\n"					\
@@ -1136,18 +1163,30 @@
 				"	.llong 0\n"			\
 				"	.llong 0\n"			\
 				".previous"				\
-			: "=r" (rval) : "i" (CPU_FTR_CELL_TB_BUG)); rval;})
+			: "=r" (rval) \
+			: "i" (CPU_FTR_CELL_TB_BUG), "i" (SPRN_TBRL)); \
+			rval;})
 #else
 #define mftb()		({unsigned long rval;	\
-			asm volatile("mftb %0" : "=r" (rval)); rval;})
+			asm volatile("mfspr %0, %1" : \
+				     "=r" (rval) : "i" (SPRN_TBRL)); rval;})
 #endif /* !CONFIG_PPC_CELL */
 
 #else /* __powerpc64__ */
 
+#if defined(CONFIG_8xx)
 #define mftbl()		({unsigned long rval;	\
 			asm volatile("mftbl %0" : "=r" (rval)); rval;})
 #define mftbu()		({unsigned long rval;	\
 			asm volatile("mftbu %0" : "=r" (rval)); rval;})
+#else
+#define mftbl()		({unsigned long rval;	\
+			asm volatile("mfspr %0, %1" : "=r" (rval) : \
+				"i" (SPRN_TBRL)); rval;})
+#define mftbu()		({unsigned long rval;	\
+			asm volatile("mfspr %0, %1" : "=r" (rval) : \
+				"i" (SPRN_TBRU)); rval;})
+#endif
 #endif /* !__powerpc64__ */
 
 #define mttbl(v)	asm volatile("mttbl %0":: "r"(v))

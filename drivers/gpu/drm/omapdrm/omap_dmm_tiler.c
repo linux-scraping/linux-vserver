@@ -199,7 +199,7 @@ static struct dmm_txn *dmm_txn_init(struct dmm *dmm, struct tcm *tcm)
 static void dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
 		struct page **pages, uint32_t npages, uint32_t roll)
 {
-	dma_addr_t pat_pa = 0, data_pa = 0;
+	dma_addr_t pat_pa = 0;
 	uint32_t *data;
 	struct pat *pat;
 	struct refill_engine *engine = txn->engine_handle;
@@ -223,9 +223,7 @@ static void dmm_txn_append(struct dmm_txn *txn, struct pat_area *area,
 			.lut_id = engine->tcm->lut_id,
 		};
 
-	data = alloc_dma(txn, 4*i, &data_pa);
-	/* FIXME: what if data_pa is more than 32-bit ? */
-	pat->data_pa = data_pa;
+	data = alloc_dma(txn, 4*i, &pat->data_pa);
 
 	while (i--) {
 		int n = i + roll;
@@ -666,8 +664,9 @@ static int omap_dmm_probe(struct platform_device *dev)
 	}
 
 	/* set dma mask for device */
-	/* NOTE: this is a workaround for the hwmod not initializing properly */
-	dev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
+	ret = dma_set_coherent_mask(&dev->dev, DMA_BIT_MASK(32));
+	if (ret)
+		goto fail;
 
 	omap_dmm->dummy_pa = page_to_phys(omap_dmm->dummy_page);
 
@@ -873,7 +872,7 @@ int tiler_map_show(struct seq_file *s, void *arg)
 		goto error;
 
 	for (lut_idx = 0; lut_idx < omap_dmm->num_lut; lut_idx++) {
-		memset(map, 0, sizeof(h_adj * sizeof(*map)));
+		memset(map, 0, h_adj * sizeof(*map));
 		memset(global_map, ' ', (w_adj + 1) * h_adj);
 
 		for (i = 0; i < omap_dmm->container_height; i++) {

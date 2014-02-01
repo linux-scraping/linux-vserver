@@ -337,11 +337,11 @@ void __init mv78xx0_init_early(void)
 	if (mv78xx0_core_index() == 0)
 		mvebu_mbus_init("marvell,mv78xx0-mbus",
 				BRIDGE_WINS_CPU0_BASE, BRIDGE_WINS_SZ,
-				DDR_WINDOW_CPU0_BASE, DDR_WINDOW_CPU_SZ, 0);
+				DDR_WINDOW_CPU0_BASE, DDR_WINDOW_CPU_SZ);
 	else
 		mvebu_mbus_init("marvell,mv78xx0-mbus",
 				BRIDGE_WINS_CPU1_BASE, BRIDGE_WINS_SZ,
-				DDR_WINDOW_CPU1_BASE, DDR_WINDOW_CPU_SZ, 0);
+				DDR_WINDOW_CPU1_BASE, DDR_WINDOW_CPU_SZ);
 }
 
 void __init_refok mv78xx0_timer_init(void)
@@ -413,7 +413,7 @@ void __init mv78xx0_init(void)
 	clk_init();
 }
 
-void mv78xx0_restart(char mode, const char *cmd)
+void mv78xx0_restart(enum reboot_mode mode, const char *cmd)
 {
 	/*
 	 * Enable soft reset to assert RSTOUTn.

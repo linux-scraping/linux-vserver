@@ -90,10 +90,8 @@ static int ipc_memory_callback(struct notifier_block *self,
 		 * In order not to keep the lock on the hotplug memory chain
 		 * for too long, queue a work item that will, when waken up,
 		 * activate the ipcns notification chain.
-		 * No need to keep several ipc work items on the queue.
 		 */
-		if (!work_pending(&ipc_memory_wq))
-			schedule_work(&ipc_memory_wq);
+		schedule_work(&ipc_memory_wq);
 		break;
 	case MEM_GOING_ONLINE:
 	case MEM_GOING_OFFLINE:
@@ -292,10 +290,6 @@ int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 	rcu_read_lock();
 	spin_lock(&new->lock);
 
-	current_euid_egid(&euid, &egid);
-	new->cuid = new->uid = euid;
-	new->gid = new->cgid = egid;
-
 	id = idr_alloc(&ids->ipcs_idr, new,
 		       (next_id < 0) ? 0 : ipcid_to_idx(next_id), 0,
 		       GFP_NOWAIT);
@@ -307,6 +301,10 @@ int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 	}
 
 	ids->in_use++;
+
+	current_euid_egid(&euid, &egid);
+	new->cuid = new->uid = euid;
+	new->gid = new->cgid = egid;
 
 	if (next_id < 0) {
 		new->seq = ids->seq++;

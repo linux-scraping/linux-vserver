@@ -60,13 +60,14 @@ static void reg_dump(struct ak4114 *ak4114)
 
 	printk(KERN_DEBUG "AK4114 REG DUMP:\n");
 	for (i = 0; i < 0x20; i++)
-		printk(KERN_DEBUG "reg[%02x] = %02x (%02x)\n", i, reg_read(ak4114, i), i < sizeof(ak4114->regmap) ? ak4114->regmap[i] : 0);
+		printk(KERN_DEBUG "reg[%02x] = %02x (%02x)\n", i, reg_read(ak4114, i), i < ARRAY_SIZE(ak4114->regmap) ? ak4114->regmap[i] : 0);
 }
 #endif
 
 static void snd_ak4114_free(struct ak4114 *chip)
 {
-	atomic_inc(&chip->wq_processing);	/* don't schedule new work */
+	chip->init = 1;	/* don't schedule new work */
+	mb();
 	cancel_delayed_work_sync(&chip->work);
 	kfree(chip);
 }
@@ -80,7 +81,7 @@ static int snd_ak4114_dev_free(struct snd_device *device)
 
 int snd_ak4114_create(struct snd_card *card,
 		      ak4114_read_t *read, ak4114_write_t *write,
-		      const unsigned char pgm[7], const unsigned char txcsb[5],
+		      const unsigned char pgm[6], const unsigned char txcsb[5],
 		      void *private_data, struct ak4114 **r_ak4114)
 {
 	struct ak4114 *chip;
@@ -99,9 +100,8 @@ int snd_ak4114_create(struct snd_card *card,
 	chip->write = write;
 	chip->private_data = private_data;
 	INIT_DELAYED_WORK(&chip->work, ak4114_stats);
-	atomic_set(&chip->wq_processing, 0);
 
-	for (reg = 0; reg < 7; reg++)
+	for (reg = 0; reg < 6; reg++)
 		chip->regmap[reg] = pgm[reg];
 	for (reg = 0; reg < 5; reg++)
 		chip->txcsb[reg] = txcsb[reg];
@@ -142,7 +142,7 @@ static void ak4114_init_regs(struct ak4114 *chip)
 	/* release reset, but leave powerdown */
 	reg_write(chip, AK4114_REG_PWRDN, (old | AK4114_RST) & ~AK4114_PWN);
 	udelay(200);
-	for (reg = 1; reg < 7; reg++)
+	for (reg = 1; reg < 6; reg++)
 		reg_write(chip, reg, chip->regmap[reg]);
 	for (reg = 0; reg < 5; reg++)
 		reg_write(chip, reg + AK4114_REG_TXCSB0, chip->txcsb[reg]);
@@ -152,11 +152,13 @@ static void ak4114_init_regs(struct ak4114 *chip)
 
 void snd_ak4114_reinit(struct ak4114 *chip)
 {
-	if (atomic_inc_return(&chip->wq_processing) == 1)
-		cancel_delayed_work_sync(&chip->work);
+	chip->init = 1;
+	mb();
+	flush_delayed_work(&chip->work);
 	ak4114_init_regs(chip);
 	/* bring up statistics / event queing */
-	if (atomic_dec_and_test(&chip->wq_processing))
+	chip->init = 0;
+	if (chip->kctls[0])
 		schedule_delayed_work(&chip->work, HZ / 10);
 }
 
@@ -610,10 +612,10 @@ static void ak4114_stats(struct work_struct *work)
 {
 	struct ak4114 *chip = container_of(work, struct ak4114, work.work);
 
-	if (atomic_inc_return(&chip->wq_processing) == 1)
+	if (!chip->init)
 		snd_ak4114_check_rate_and_errors(chip, chip->check_flags);
-	if (atomic_dec_and_test(&chip->wq_processing))
-		schedule_delayed_work(&chip->work, HZ / 10);
+
+	schedule_delayed_work(&chip->work, HZ / 10);
 }
 
 EXPORT_SYMBOL(snd_ak4114_create);

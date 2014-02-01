@@ -90,24 +90,6 @@ __acquires(ohci->lock)
 	dl_done_list (ohci);
 	finish_unlinks (ohci, ohci_frame_no(ohci));
 
-	/*
-	 * Some controllers don't handle "global" suspend properly if
-	 * there are unsuspended ports.  For these controllers, put all
-	 * the enabled ports into suspend before suspending the root hub.
-	 */
-	if (ohci->flags & OHCI_QUIRK_GLOBAL_SUSPEND) {
-		__hc32 __iomem	*portstat = ohci->regs->roothub.portstatus;
-		int		i;
-		unsigned	temp;
-
-		for (i = 0; i < ohci->num_ports; (++i, ++portstat)) {
-			temp = ohci_readl(ohci, portstat);
-			if ((temp & (RH_PS_PES | RH_PS_PSS)) ==
-					RH_PS_PES)
-				ohci_writel(ohci, RH_PS_PSS, portstat);
-		}
-	}
-
 	/* maybe resume can wake root hub */
 	if (ohci_to_hcd(ohci)->self.root_hub->do_remote_wakeup || autostop) {
 		ohci->hc_control |= OHCI_CTRL_RWE;
@@ -194,7 +176,6 @@ __acquires(ohci->lock)
 	if (status == -EBUSY) {
 		if (!autostopped) {
 			spin_unlock_irq (&ohci->lock);
-			(void) ohci_init (ohci);
 			status = ohci_restart (ohci);
 
 			usb_root_hub_lost_power(hcd->self.root_hub);
@@ -231,10 +212,11 @@ __acquires(ohci->lock)
 	/* Sometimes PCI D3 suspend trashes frame timings ... */
 	periodic_reinit (ohci);
 
-	/* the following code is executed with ohci->lock held and
-	 * irqs disabled if and only if autostopped is true
+	/*
+	 * The following code is executed with ohci->lock held and
+	 * irqs disabled if and only if autostopped is true.  This
+	 * will cause sparse to warn about a "context imbalance".
 	 */
-
 skip_resume:
 	/* interrupts might have been disabled */
 	ohci_writel (ohci, OHCI_INTR_INIT, &ohci->regs->intrenable);
@@ -550,7 +532,7 @@ ohci_hub_descriptor (
 	    temp |= 0x0010;
 	else if (rh & RH_A_OCPM)	/* per-port overcurrent reporting? */
 	    temp |= 0x0008;
-	desc->wHubCharacteristics = (__force __u16)cpu_to_hc16(ohci, temp);
+	desc->wHubCharacteristics = cpu_to_le16(temp);
 
 	/* ports removable, and usb 1.0 legacy PortPwrCtrlMask */
 	rh = roothub_b (ohci);

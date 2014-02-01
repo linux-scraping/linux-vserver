@@ -14,7 +14,7 @@
  * Copyright (c) 2004, Intel Corporation
  *
  * Modified for Realtek's wi-fi cards by Andrea Merello
- * <andreamrl@tiscali.it>
+ * <andrea.merello@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -1447,12 +1447,12 @@ extern void ieee80211_sta_ps_send_null_frame(struct ieee80211_device *ieee, shor
 
 extern const long ieee80211_wlan_frequencies[];
 
-static inline void ieee80211_increment_scans(struct ieee80211_device *ieee)
+extern inline void ieee80211_increment_scans(struct ieee80211_device *ieee)
 {
 	ieee->scans++;
 }
 
-static inline int ieee80211_get_scans(struct ieee80211_device *ieee)
+extern inline int ieee80211_get_scans(struct ieee80211_device *ieee)
 {
 	return ieee->scans;
 }

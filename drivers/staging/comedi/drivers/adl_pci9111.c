@@ -17,10 +17,6 @@ This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 /*
@@ -68,6 +64,7 @@ TODO:
 
 */
 
+#include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -88,8 +85,6 @@ TODO:
 #define PCI9111_RANGE_SETTING_DELAY		10
 #define PCI9111_AI_INSTANT_READ_UDELAY_US	2
 #define PCI9111_AI_INSTANT_READ_TIMEOUT		100
-
-#define PCI9111_8254_CLOCK_PERIOD_NS		500
 
 /*
  * IO address map and bit defines
@@ -156,7 +151,7 @@ struct pci9111_private_data {
 	unsigned int div1;
 	unsigned int div2;
 
-	short ai_bounce_buffer[2 * PCI9111_FIFO_HALF_SIZE];
+	unsigned short ai_bounce_buffer[2 * PCI9111_FIFO_HALF_SIZE];
 };
 
 static void plx9050_interrupt_control(unsigned long io_base,
@@ -396,11 +391,10 @@ static int pci9111_ai_do_cmd_test(struct comedi_device *dev,
 
 	if (cmd->convert_src == TRIG_TIMER) {
 		tmp = cmd->convert_arg;
-		i8253_cascade_ns_to_timer_2div(PCI9111_8254_CLOCK_PERIOD_NS,
-					       &dev_private->div1,
-					       &dev_private->div2,
-					       &cmd->convert_arg,
-					       cmd->flags & TRIG_ROUND_MASK);
+		i8253_cascade_ns_to_timer(I8254_OSC_BASE_2MHZ,
+					  &dev_private->div1,
+					  &dev_private->div2,
+					  &cmd->convert_arg, cmd->flags);
 		if (tmp != cmd->convert_arg)
 			error++;
 	}
@@ -573,7 +567,7 @@ static void pci9111_ai_munge(struct comedi_device *dev,
 			     unsigned int num_bytes,
 			     unsigned int start_chan_index)
 {
-	short *array = data;
+	unsigned short *array = data;
 	unsigned int maxdata = s->maxdata;
 	unsigned int invert = (maxdata + 1) >> 1;
 	unsigned int shift = (maxdata == 0xffff) ? 0 : 4;
@@ -816,15 +810,8 @@ static int pci9111_do_insn_bits(struct comedi_device *dev,
 				struct comedi_insn *insn,
 				unsigned int *data)
 {
-	unsigned int mask = data[0];
-	unsigned int bits = data[1];
-
-	if (mask) {
-		s->state &= ~mask;
-		s->state |= (bits & mask);
-
+	if (comedi_dio_update_state(s, data))
 		outw(s->state, dev->iobase + PCI9111_DIO_REG);
-	}
 
 	data[1] = s->state;
 
@@ -859,10 +846,9 @@ static int pci9111_auto_attach(struct comedi_device *dev,
 	struct comedi_subdevice *s;
 	int ret;
 
-	dev_private = kzalloc(sizeof(*dev_private), GFP_KERNEL);
+	dev_private = comedi_alloc_devpriv(dev, sizeof(*dev_private));
 	if (!dev_private)
 		return -ENOMEM;
-	dev->private = dev_private;
 
 	ret = comedi_pci_enable(dev);
 	if (ret)

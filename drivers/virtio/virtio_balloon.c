@@ -148,7 +148,7 @@ static void fill_balloon(struct virtio_balloon *vb, size_t num)
 		}
 		set_page_pfns(vb->pfns + vb->num_pfns, page);
 		vb->num_pages += VIRTIO_BALLOON_PAGES_PER_PAGE;
-		totalram_pages--;
+		adjust_managed_page_count(page, -1);
 	}
 
 	/* Did we get any? */
@@ -163,8 +163,9 @@ static void release_pages_by_pfn(const u32 pfns[], unsigned int num)
 
 	/* Find pfns pointing at start of each page, get pages and free them. */
 	for (i = 0; i < num; i += VIRTIO_BALLOON_PAGES_PER_PAGE) {
-		balloon_page_free(balloon_pfn_to_page(pfns[i]));
-		totalram_pages++;
+		struct page *page = balloon_pfn_to_page(pfns[i]);
+		balloon_page_free(page);
+		adjust_managed_page_count(page, 1);
 	}
 }
 
@@ -177,8 +178,6 @@ static void leak_balloon(struct virtio_balloon *vb, size_t num)
 	num = min(num, ARRAY_SIZE(vb->pfns));
 
 	mutex_lock(&vb->balloon_lock);
-	/* We can't release more pages than taken */
-	num = min(num, (size_t)vb->num_pages);
 	for (vb->num_pfns = 0; vb->num_pfns < num;
 	     vb->num_pfns += VIRTIO_BALLOON_PAGES_PER_PAGE) {
 		page = balloon_page_dequeue(vb_dev_info);
@@ -276,9 +275,8 @@ static inline s64 towards_target(struct virtio_balloon *vb)
 	__le32 v;
 	s64 target;
 
-	vb->vdev->config->get(vb->vdev,
-			      offsetof(struct virtio_balloon_config, num_pages),
-			      &v, sizeof(v));
+	virtio_cread(vb->vdev, struct virtio_balloon_config, num_pages, &v);
+
 	target = le32_to_cpu(v);
 	return target - vb->num_pages;
 }
@@ -287,9 +285,8 @@ static void update_balloon_size(struct virtio_balloon *vb)
 {
 	__le32 actual = cpu_to_le32(vb->num_pages);
 
-	vb->vdev->config->set(vb->vdev,
-			      offsetof(struct virtio_balloon_config, actual),
-			      &actual, sizeof(actual));
+	virtio_cwrite(vb->vdev, struct virtio_balloon_config, actual,
+		      &actual);
 }
 
 static int balloon(void *_vballoon)
@@ -313,12 +310,6 @@ static int balloon(void *_vballoon)
 		else if (diff < 0)
 			leak_balloon(vb, -diff);
 		update_balloon_size(vb);
-
-		/*
-		 * For large balloon changes, we could spend a lot of time
-		 * and always have work to do.  Be nice if preempt disabled.
-		 */
-		cond_resched();
 	}
 	return 0;
 }
@@ -520,7 +511,7 @@ static void virtballoon_remove(struct virtio_device *vdev)
 	kfree(vb);
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int virtballoon_freeze(struct virtio_device *vdev)
 {
 	struct virtio_balloon *vb = vdev->priv;
@@ -563,7 +554,7 @@ static struct virtio_driver virtio_balloon_driver = {
 	.probe =	virtballoon_probe,
 	.remove =	virtballoon_remove,
 	.config_changed = virtballoon_changed,
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 	.freeze	=	virtballoon_freeze,
 	.restore =	virtballoon_restore,
 #endif

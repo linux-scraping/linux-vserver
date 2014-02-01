@@ -31,12 +31,9 @@ static u8 sleep_states[ACPI_S_STATE_COUNT];
 
 static void acpi_sleep_tts_switch(u32 acpi_state)
 {
-	union acpi_object in_arg = { ACPI_TYPE_INTEGER };
-	struct acpi_object_list arg_list = { 1, &in_arg };
-	acpi_status status = AE_OK;
+	acpi_status status;
 
-	in_arg.integer.value = acpi_state;
-	status = acpi_evaluate_object(NULL, "\\_TTS", &arg_list, NULL);
+	status = acpi_execute_simple_method(NULL, "\\_TTS", acpi_state);
 	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
 		/*
 		 * OS can't evaluate the _TTS object correctly. Some warning
@@ -76,17 +73,6 @@ static int acpi_sleep_prepare(u32 acpi_state)
 	acpi_enable_wakeup_devices(acpi_state);
 	acpi_enter_sleep_state_prep(acpi_state);
 	return 0;
-}
-
-static bool acpi_sleep_state_supported(u8 sleep_state)
-{
-	acpi_status status;
-	u8 type_a, type_b;
-
-	status = acpi_get_sleep_type_data(sleep_state, &type_a, &type_b);
-	return ACPI_SUCCESS(status) && (!acpi_gbl_reduced_hardware
-		|| (acpi_gbl_FADT.sleep_control.address
-			&& acpi_gbl_FADT.sleep_status.address));
 }
 
 #ifdef CONFIG_ACPI_SLEEP
@@ -152,7 +138,7 @@ static int __init init_nvs_nosave(const struct dmi_system_id *d)
 	return 0;
 }
 
-static struct dmi_system_id __initdata acpisleep_dmi_table[] = {
+static struct dmi_system_id acpisleep_dmi_table[] __initdata = {
 	{
 	.callback = init_old_suspend_ordering,
 	.ident = "Abit KN9 (nForce4 variant)",
@@ -434,10 +420,21 @@ static void acpi_pm_finish(void)
 }
 
 /**
- *	acpi_pm_end - Finish up suspend sequence.
+ * acpi_pm_start - Start system PM transition.
+ */
+static void acpi_pm_start(u32 acpi_state)
+{
+	acpi_target_sleep_state = acpi_state;
+	acpi_sleep_tts_switch(acpi_target_sleep_state);
+	acpi_scan_lock_acquire();
+}
+
+/**
+ * acpi_pm_end - Finish up system PM transition.
  */
 static void acpi_pm_end(void)
 {
+	acpi_scan_lock_release();
 	/*
 	 * This is necessary in case acpi_pm_finish() is not called during a
 	 * failing transition to a sleep state.
@@ -465,21 +462,19 @@ static u32 acpi_suspend_states[] = {
 static int acpi_suspend_begin(suspend_state_t pm_state)
 {
 	u32 acpi_state = acpi_suspend_states[pm_state];
-	int error = 0;
+	int error;
 
 	error = (nvs_nosave || nvs_nosave_s3) ? 0 : suspend_nvs_alloc();
 	if (error)
 		return error;
 
-	if (sleep_states[acpi_state]) {
-		acpi_target_sleep_state = acpi_state;
-		acpi_sleep_tts_switch(acpi_target_sleep_state);
-	} else {
-		printk(KERN_ERR "ACPI does not support this state: %d\n",
-			pm_state);
-		error = -ENOSYS;
+	if (!sleep_states[acpi_state]) {
+		pr_err("ACPI does not support sleep state S%u\n", acpi_state);
+		return -ENOSYS;
 	}
-	return error;
+
+	acpi_pm_start(acpi_state);
+	return 0;
 }
 
 /**
@@ -505,6 +500,8 @@ static int acpi_suspend_enter(suspend_state_t pm_state)
 		break;
 
 	case ACPI_STATE_S3:
+		if (!acpi_suspend_lowlevel)
+			return -ENOSYS;
 		error = acpi_suspend_lowlevel();
 		if (error)
 			return error;
@@ -528,7 +525,7 @@ static int acpi_suspend_enter(suspend_state_t pm_state)
 	 * generate wakeup events.
 	 */
 	if (ACPI_SUCCESS(status) && (acpi_state == ACPI_STATE_S3)) {
-		acpi_event_status pwr_btn_status;
+		acpi_event_status pwr_btn_status = ACPI_EVENT_FLAG_DISABLED;
 
 		acpi_get_event_status(ACPI_EVENT_POWER_BUTTON, &pwr_btn_status);
 
@@ -611,9 +608,15 @@ static void acpi_sleep_suspend_setup(void)
 {
 	int i;
 
-	for (i = ACPI_STATE_S1; i < ACPI_STATE_S4; i++)
-		if (acpi_sleep_state_supported(i))
+	for (i = ACPI_STATE_S1; i < ACPI_STATE_S4; i++) {
+		acpi_status status;
+		u8 type_a, type_b;
+
+		status = acpi_get_sleep_type_data(i, &type_a, &type_b);
+		if (ACPI_SUCCESS(status)) {
 			sleep_states[i] = 1;
+		}
+	}
 
 	suspend_set_ops(old_suspend_ordering ?
 		&acpi_suspend_ops_old : &acpi_suspend_ops);
@@ -637,10 +640,8 @@ static int acpi_hibernation_begin(void)
 	int error;
 
 	error = nvs_nosave ? 0 : suspend_nvs_alloc();
-	if (!error) {
-		acpi_target_sleep_state = ACPI_STATE_S4;
-		acpi_sleep_tts_switch(acpi_target_sleep_state);
-	}
+	if (!error)
+		acpi_pm_start(ACPI_STATE_S4);
 
 	return error;
 }
@@ -719,8 +720,10 @@ static int acpi_hibernation_begin_old(void)
 	if (!error) {
 		if (!nvs_nosave)
 			error = suspend_nvs_alloc();
-		if (!error)
+		if (!error) {
 			acpi_target_sleep_state = ACPI_STATE_S4;
+			acpi_scan_lock_acquire();
+		}
 	}
 	return error;
 }
@@ -744,7 +747,11 @@ static const struct platform_hibernation_ops acpi_hibernation_ops_old = {
 
 static void acpi_sleep_hibernate_setup(void)
 {
-	if (!acpi_sleep_state_supported(ACPI_STATE_S4))
+	acpi_status status;
+	u8 type_a, type_b;
+
+	status = acpi_get_sleep_type_data(ACPI_STATE_S4, &type_a, &type_b);
+	if (ACPI_FAILURE(status))
 		return;
 
 	hibernation_set_ops(old_suspend_ordering ?
@@ -793,6 +800,8 @@ static void acpi_power_off(void)
 
 int __init acpi_sleep_init(void)
 {
+	acpi_status status;
+	u8 type_a, type_b;
 	char supported[ACPI_S_STATE_COUNT * 3 + 1];
 	char *pos = supported;
 	int i;
@@ -807,7 +816,8 @@ int __init acpi_sleep_init(void)
 	acpi_sleep_suspend_setup();
 	acpi_sleep_hibernate_setup();
 
-	if (acpi_sleep_state_supported(ACPI_STATE_S5)) {
+	status = acpi_get_sleep_type_data(ACPI_STATE_S5, &type_a, &type_b);
+	if (ACPI_SUCCESS(status)) {
 		sleep_states[ACPI_STATE_S5] = 1;
 		pm_power_off_prepare = acpi_power_off_prepare;
 		pm_power_off = acpi_power_off;

@@ -97,11 +97,11 @@ static inline void *bio_data(struct bio *bio)
  * permanent PIO fall back, user is probably better off disabling highmem
  * I/O completely on that queue (see ide-dma for example)
  */
-#define __bio_kmap_atomic(bio, idx, kmtype)				\
+#define __bio_kmap_atomic(bio, idx)				\
 	(kmap_atomic(bio_iovec_idx((bio), (idx))->bv_page) +	\
 		bio_iovec_idx((bio), (idx))->bv_offset)
 
-#define __bio_kunmap_atomic(addr, kmtype) kunmap_atomic(addr)
+#define __bio_kunmap_atomic(addr) kunmap_atomic(addr)
 
 /*
  * merge helpers etc
@@ -218,6 +218,7 @@ struct bio_pair {
 };
 extern struct bio_pair *bio_split(struct bio *bi, int first_sectors);
 extern void bio_pair_release(struct bio_pair *dbio);
+extern void bio_trim(struct bio *bio, int offset, int size);
 
 extern struct bio_set *bioset_create(unsigned int, unsigned int);
 extern void bioset_free(struct bio_set *);
@@ -418,6 +419,8 @@ static inline void bio_list_init(struct bio_list *bl)
 {
 	bl->head = bl->tail = NULL;
 }
+
+#define BIO_EMPTY_LIST	{ NULL, NULL }
 
 #define bio_list_for_each(bio, bl) \
 	for (bio = (bl)->head; bio; bio = bio->bi_next)

@@ -91,7 +91,12 @@ EXPORT_SYMBOL(__vlan_find_dev_deep);
 
 struct net_device *vlan_dev_real_dev(const struct net_device *dev)
 {
-	return vlan_dev_priv(dev)->real_dev;
+	struct net_device *ret = vlan_dev_priv(dev)->real_dev;
+
+	while (is_vlan_dev(ret))
+		ret = vlan_dev_priv(ret)->real_dev;
+
+	return ret;
 }
 EXPORT_SYMBOL(vlan_dev_real_dev);
 
@@ -103,11 +108,8 @@ EXPORT_SYMBOL(vlan_dev_vlan_id);
 
 static struct sk_buff *vlan_reorder_header(struct sk_buff *skb)
 {
-	if (skb_cow(skb, skb_headroom(skb)) < 0) {
-		kfree_skb(skb);
+	if (skb_cow(skb, skb_headroom(skb)) < 0)
 		return NULL;
-	}
-
 	memmove(skb->data - ETH_HLEN, skb->data - VLAN_ETH_HLEN, 2 * ETH_ALEN);
 	skb->mac_header += VLAN_HLEN;
 	return skb;

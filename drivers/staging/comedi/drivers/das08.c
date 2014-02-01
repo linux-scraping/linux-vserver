@@ -16,12 +16,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
- *****************************************************************
  */
 
 /*
@@ -39,7 +33,7 @@
  * cheap das08 hardware doesn't really support them.
  */
 
-#include <linux/delay.h>
+#include <linux/module.h>
 
 #include "../comedidev.h"
 
@@ -285,27 +279,23 @@ static int das08_di_rbits(struct comedi_device *dev, struct comedi_subdevice *s,
 	return insn->n;
 }
 
-static int das08_do_wbits(struct comedi_device *dev, struct comedi_subdevice *s,
-			  struct comedi_insn *insn, unsigned int *data)
+static int das08_do_wbits(struct comedi_device *dev,
+			  struct comedi_subdevice *s,
+			  struct comedi_insn *insn,
+			  unsigned int *data)
 {
 	struct das08_private_struct *devpriv = dev->private;
-	int wbits;
 
-	/*  get current settings of digital output lines */
-	wbits = (devpriv->do_mux_bits >> 4) & 0xf;
-	/*  null bits we are going to set */
-	wbits &= ~data[0];
-	/*  set new bit values */
-	wbits |= data[0] & data[1];
-	/*  remember digital output bits */
-	/*  prevent race with setting of analog input mux */
-	spin_lock(&dev->spinlock);
-	devpriv->do_mux_bits &= ~DAS08_DO_MASK;
-	devpriv->do_mux_bits |= DAS08_OP(wbits);
-	outb(devpriv->do_mux_bits, dev->iobase + DAS08_CONTROL);
-	spin_unlock(&dev->spinlock);
+	if (comedi_dio_update_state(s, data)) {
+		/* prevent race with setting of analog input mux */
+		spin_lock(&dev->spinlock);
+		devpriv->do_mux_bits &= ~DAS08_DO_MASK;
+		devpriv->do_mux_bits |= DAS08_OP(s->state);
+		outb(devpriv->do_mux_bits, dev->iobase + DAS08_CONTROL);
+		spin_unlock(&dev->spinlock);
+	}
 
-	data[1] = wbits;
+	data[1] = s->state;
 
 	return insn->n;
 }
@@ -322,17 +312,13 @@ static int das08jr_di_rbits(struct comedi_device *dev,
 
 static int das08jr_do_wbits(struct comedi_device *dev,
 			    struct comedi_subdevice *s,
-			    struct comedi_insn *insn, unsigned int *data)
+			    struct comedi_insn *insn,
+			    unsigned int *data)
 {
-	struct das08_private_struct *devpriv = dev->private;
+	if (comedi_dio_update_state(s, data))
+		outb(s->state, dev->iobase + DAS08JR_DIO);
 
-	/*  null bits we are going to set */
-	devpriv->do_bits &= ~data[0];
-	/*  set new bit values */
-	devpriv->do_bits |= data[0] & data[1];
-	outb(devpriv->do_bits, dev->iobase + DAS08JR_DIO);
-
-	data[1] = devpriv->do_bits;
+	data[1] = s->state;
 
 	return insn->n;
 }
@@ -565,12 +551,6 @@ int das08_common_attach(struct comedi_device *dev, unsigned long iobase)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(das08_common_attach);
-
-void das08_common_detach(struct comedi_device *dev)
-{
-	comedi_spriv_free(dev, 4);
-}
-EXPORT_SYMBOL_GPL(das08_common_detach);
 
 static int __init das08_init(void)
 {

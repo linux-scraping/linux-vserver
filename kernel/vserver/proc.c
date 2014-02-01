@@ -328,11 +328,11 @@ typedef struct dentry *vx_instantiate_t(struct inode *, struct dentry *, int, vo
  *
  * Since all of the proc inode numbers are dynamically generated, the inode
  * numbers do not exist until the inode is cache.  This means creating the
- * the dcache entry in readdir is necessary to keep the inode numbers
- * reported by readdir in sync with the inode numbers reported
+ * the dcache entry in iterate is necessary to keep the inode numbers
+ * reported by iterate in sync with the inode numbers reported
  * by stat.
  */
-static int vx_proc_fill_cache(struct file *filp, void *dirent, filldir_t filldir,
+static int vx_proc_fill_cache(struct file *filp, struct dir_context *ctx,
 	char *name, int len, vx_instantiate_t instantiate, int id, void *ptr)
 {
 	struct dentry *child, *dir = filp->f_dentry;
@@ -367,10 +367,8 @@ static int vx_proc_fill_cache(struct file *filp, void *dirent, filldir_t filldir
 	dput(child);
 end_instantiate:
 	if (!ino)
-		ino = find_inode_number(dir, &qname);
-	if (!ino)
 		ino = 1;
-	return filldir(dirent, name, len, filp->f_pos, ino, type);
+	return !dir_emit(ctx, name, len, ino, type);
 }
 
 
@@ -607,43 +605,40 @@ out:
 	return error;
 }
 
-static int proc_xid_readdir(struct file *filp,
-	void *dirent, filldir_t filldir)
+static int proc_xid_iterate(struct file *filp, struct dir_context *ctx)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_base_stuff;
 	int size = sizeof(vx_base_stuff) / sizeof(struct vs_entry);
-	int pos, index;
+	int index;
 	u64 ino;
 
-	pos = filp->f_pos;
-	switch (pos) {
+	switch (ctx->pos) {
 	case 0:
 		ino = inode->i_ino;
-		if (filldir(dirent, ".", 1, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	case 1:
 		ino = parent_ino(dentry);
-		if (filldir(dirent, "..", 2, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	default:
-		index = pos - 2;
+		index = ctx->pos - 2;
 		if (index >= size)
 			goto out;
 		for (p += index; p->name; p++) {
-			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	}
 out:
-	filp->f_pos = pos;
 	return 1;
 }
 
@@ -691,43 +686,40 @@ out:
 	return error;
 }
 
-static int proc_nid_readdir(struct file *filp,
-	void *dirent, filldir_t filldir)
+static int proc_nid_iterate(struct file *filp, struct dir_context *ctx)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_base_stuff;
 	int size = sizeof(nx_base_stuff) / sizeof(struct vs_entry);
-	int pos, index;
+	int index;
 	u64 ino;
 
-	pos = filp->f_pos;
-	switch (pos) {
+	switch (ctx->pos) {
 	case 0:
 		ino = inode->i_ino;
-		if (filldir(dirent, ".", 1, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	case 1:
 		ino = parent_ino(dentry);
-		if (filldir(dirent, "..", 2, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	default:
-		index = pos - 2;
+		index = ctx->pos - 2;
 		if (index >= size)
 			goto out;
 		for (p += index; p->name; p++) {
-			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	}
 out:
-	filp->f_pos = pos;
 	return 1;
 }
 
@@ -759,7 +751,7 @@ static inline int atovid(const char *str, int len)
 
 static struct file_operations proc_xid_file_operations = {
 	.read =		generic_read_dir,
-	.readdir =	proc_xid_readdir,
+	.iterate =	proc_xid_iterate,
 };
 
 static struct inode_operations proc_xid_inode_operations = {
@@ -801,7 +793,7 @@ out:
 
 static struct file_operations proc_nid_file_operations = {
 	.read =		generic_read_dir,
-	.readdir =	proc_nid_readdir,
+	.iterate =	proc_nid_iterate,
 };
 
 static struct inode_operations proc_nid_inode_operations = {
@@ -844,45 +836,43 @@ out:
 
 #define PROC_MAXVIDS 32
 
-int proc_virtual_readdir(struct file *filp,
-	void *dirent, filldir_t filldir)
+int proc_virtual_iterate(struct file *filp, struct dir_context *ctx)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_virtual_stuff;
 	int size = sizeof(vx_virtual_stuff) / sizeof(struct vs_entry);
-	int pos, index;
+	int index;
 	unsigned int xid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
 	unsigned int nr_xids, i;
 	u64 ino;
 
-	pos = filp->f_pos;
-	switch (pos) {
+	switch (ctx->pos) {
 	case 0:
 		ino = inode->i_ino;
-		if (filldir(dirent, ".", 1, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	case 1:
 		ino = parent_ino(dentry);
-		if (filldir(dirent, "..", 2, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	default:
-		index = pos - 2;
+		index = ctx->pos - 2;
 		if (index >= size)
 			goto entries;
 		for (p += index; p->name; p++) {
-			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, 0, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	entries:
-		index = pos - size;
+		index = ctx->pos - size;
 		p = &vx_virtual_stuff[size - 1];
 		nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_xids; i++) {
@@ -894,15 +884,14 @@ int proc_virtual_readdir(struct file *filp,
 				buf[--j] = '0' + (n % 10);
 			while (n /= 10);
 
-			if (vx_proc_fill_cache(filp, dirent, filldir,
+			if (vx_proc_fill_cache(filp, ctx,
 				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, xid, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	}
 out:
-	filp->f_pos = pos;
 	return 0;
 }
 
@@ -918,7 +907,7 @@ static int proc_virtual_getattr(struct vfsmount *mnt,
 
 static struct file_operations proc_virtual_dir_operations = {
 	.read =		generic_read_dir,
-	.readdir =	proc_virtual_readdir,
+	.iterate =	proc_virtual_iterate,
 };
 
 static struct inode_operations proc_virtual_dir_inode_operations = {
@@ -928,47 +917,43 @@ static struct inode_operations proc_virtual_dir_inode_operations = {
 
 
 
-
-
-int proc_virtnet_readdir(struct file *filp,
-	void *dirent, filldir_t filldir)
+int proc_virtnet_iterate(struct file *filp, struct dir_context *ctx)
 {
 	struct dentry *dentry = filp->f_dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_virtnet_stuff;
 	int size = sizeof(nx_virtnet_stuff) / sizeof(struct vs_entry);
-	int pos, index;
+	int index;
 	unsigned int nid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
 	unsigned int nr_nids, i;
 	u64 ino;
 
-	pos = filp->f_pos;
-	switch (pos) {
+	switch (ctx->pos) {
 	case 0:
 		ino = inode->i_ino;
-		if (filldir(dirent, ".", 1, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	case 1:
 		ino = parent_ino(dentry);
-		if (filldir(dirent, "..", 2, pos, ino, DT_DIR) < 0)
+		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
 			goto out;
-		pos++;
+		ctx->pos++;
 		/* fall through */
 	default:
-		index = pos - 2;
+		index = ctx->pos - 2;
 		if (index >= size)
 			goto entries;
 		for (p += index; p->name; p++) {
-			if (vx_proc_fill_cache(filp, dirent, filldir, p->name, p->len,
+			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, 0, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	entries:
-		index = pos - size;
+		index = ctx->pos - size;
 		p = &nx_virtnet_stuff[size - 1];
 		nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
 		for (i = 0; i < nr_nids; i++) {
@@ -980,15 +965,14 @@ int proc_virtnet_readdir(struct file *filp,
 				buf[--j] = '0' + (n % 10);
 			while (n /= 10);
 
-			if (vx_proc_fill_cache(filp, dirent, filldir,
+			if (vx_proc_fill_cache(filp, ctx,
 				buf + j, PROC_NUMBUF - j,
 				vs_proc_instantiate, nid, p))
 				goto out;
-			pos++;
+			ctx->pos++;
 		}
 	}
 out:
-	filp->f_pos = pos;
 	return 0;
 }
 
@@ -1004,7 +988,7 @@ static int proc_virtnet_getattr(struct vfsmount *mnt,
 
 static struct file_operations proc_virtnet_dir_operations = {
 	.read =		generic_read_dir,
-	.readdir =	proc_virtnet_readdir,
+	.iterate =	proc_virtnet_iterate,
 };
 
 static struct inode_operations proc_virtnet_dir_inode_operations = {

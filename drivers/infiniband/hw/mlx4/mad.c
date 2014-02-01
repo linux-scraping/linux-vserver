@@ -64,14 +64,6 @@ enum {
 #define GUID_TBL_BLK_NUM_ENTRIES 8
 #define GUID_TBL_BLK_SIZE (GUID_TBL_ENTRY_SIZE * GUID_TBL_BLK_NUM_ENTRIES)
 
-/* Counters should be saturate once they reach their maximum value */
-#define ASSIGN_32BIT_COUNTER(counter, value) do {\
-	if ((value) > U32_MAX)			 \
-		counter = cpu_to_be32(U32_MAX); \
-	else					 \
-		counter = cpu_to_be32(value);	 \
-} while (0)
-
 struct mlx4_mad_rcv_buf {
 	struct ib_grh grh;
 	u8 payload[256];
@@ -738,14 +730,10 @@ static int ib_process_mad(struct ib_device *ibdev, int mad_flags, u8 port_num,
 static void edit_counter(struct mlx4_counter *cnt,
 					struct ib_pma_portcounters *pma_cnt)
 {
-	ASSIGN_32BIT_COUNTER(pma_cnt->port_xmit_data,
-			     (be64_to_cpu(cnt->tx_bytes) >> 2));
-	ASSIGN_32BIT_COUNTER(pma_cnt->port_rcv_data,
-			     (be64_to_cpu(cnt->rx_bytes) >> 2));
-	ASSIGN_32BIT_COUNTER(pma_cnt->port_xmit_packets,
-			     be64_to_cpu(cnt->tx_frames));
-	ASSIGN_32BIT_COUNTER(pma_cnt->port_rcv_packets,
-			     be64_to_cpu(cnt->rx_frames));
+	pma_cnt->port_xmit_data = cpu_to_be32((be64_to_cpu(cnt->tx_bytes)>>2));
+	pma_cnt->port_rcv_data  = cpu_to_be32((be64_to_cpu(cnt->rx_bytes)>>2));
+	pma_cnt->port_xmit_packets = cpu_to_be32(be64_to_cpu(cnt->tx_frames));
+	pma_cnt->port_rcv_packets  = cpu_to_be32(be64_to_cpu(cnt->rx_frames));
 }
 
 static int iboe_process_mad(struct ib_device *ibdev, int mad_flags, u8 port_num,
@@ -1523,8 +1511,14 @@ static int create_pv_sqp(struct mlx4_ib_demux_pv_ctx *ctx,
 
 	memset(&attr, 0, sizeof attr);
 	attr.qp_state = IB_QPS_INIT;
-	attr.pkey_index =
-		to_mdev(ctx->ib_dev)->pkeys.virt2phys_pkey[ctx->slave][ctx->port - 1][0];
+	ret = 0;
+	if (create_tun)
+		ret = find_slave_port_pkey_ix(to_mdev(ctx->ib_dev), ctx->slave,
+					      ctx->port, IB_DEFAULT_PKEY_FULL,
+					      &attr.pkey_index);
+	if (ret || !create_tun)
+		attr.pkey_index =
+			to_mdev(ctx->ib_dev)->pkeys.virt2phys_pkey[ctx->slave][ctx->port - 1][0];
 	attr.qkey = IB_QP1_QKEY;
 	attr.port_num = ctx->port;
 	ret = ib_modify_qp(tun_qp->qp, &attr, qp_attr_mask_INIT);

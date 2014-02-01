@@ -727,7 +727,6 @@ static void __rtl8139_cleanup_dev (struct net_device *dev)
 	pci_release_regions (pdev);
 
 	free_netdev(dev);
-	pci_set_drvdata (pdev, NULL);
 }
 
 
@@ -790,6 +789,9 @@ static struct net_device *rtl8139_init_board(struct pci_dev *pdev)
 	disable_dev_on_err = 1;
 
 	pci_set_master (pdev);
+
+	u64_stats_init(&tp->rx_stats.syncp);
+	u64_stats_init(&tp->tx_stats.syncp);
 
 retry:
 	/* PIO bar register comes first. */
@@ -1715,9 +1717,9 @@ static netdev_tx_t rtl8139_start_xmit (struct sk_buff *skb,
 		if (len < ETH_ZLEN)
 			memset(tp->tx_buf[entry], 0, ETH_ZLEN);
 		skb_copy_and_csum_dev(skb, tp->tx_buf[entry]);
-		dev_kfree_skb_any(skb);
+		dev_kfree_skb(skb);
 	} else {
-		dev_kfree_skb_any(skb);
+		dev_kfree_skb(skb);
 		dev->stats.tx_dropped++;
 		return NETDEV_TX_OK;
 	}

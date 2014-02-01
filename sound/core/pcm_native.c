@@ -1404,8 +1404,6 @@ static int snd_pcm_do_drain_init(struct snd_pcm_substream *substream, int state)
 			if (! snd_pcm_playback_empty(substream)) {
 				snd_pcm_do_start(substream, SNDRV_PCM_STATE_DRAINING);
 				snd_pcm_post_start(substream, SNDRV_PCM_STATE_DRAINING);
-			} else {
-				runtime->status->state = SNDRV_PCM_STATE_SETUP;
 			}
 			break;
 		case SNDRV_PCM_STATE_RUNNING:
@@ -1591,29 +1589,16 @@ static int snd_pcm_drop(struct snd_pcm_substream *substream)
 }
 
 
-/* WARNING: Don't forget to fput back the file */
-static struct file *snd_pcm_file_fd(int fd, int *fput_needed)
+static bool is_pcm_file(struct file *file)
 {
-	struct file *file;
-	struct inode *inode;
+	struct inode *inode = file_inode(file);
 	unsigned int minor;
 
-	file = fget_light(fd, fput_needed);
-	if (!file)
-		return NULL;
-	inode = file_inode(file);
-	if (!S_ISCHR(inode->i_mode) ||
-	    imajor(inode) != snd_major) {
-		fput_light(file, *fput_needed);
-		return NULL;
-	}
+	if (!S_ISCHR(inode->i_mode) || imajor(inode) != snd_major)
+		return false;
 	minor = iminor(inode);
-	if (!snd_lookup_minor_data(minor, SNDRV_DEVICE_TYPE_PCM_PLAYBACK) &&
-	    !snd_lookup_minor_data(minor, SNDRV_DEVICE_TYPE_PCM_CAPTURE)) {
-		fput_light(file, *fput_needed);
-		return NULL;
-	}
-	return file;
+	return snd_lookup_minor_data(minor, SNDRV_DEVICE_TYPE_PCM_PLAYBACK) ||
+		snd_lookup_minor_data(minor, SNDRV_DEVICE_TYPE_PCM_CAPTURE);
 }
 
 /*
@@ -1622,16 +1607,18 @@ static struct file *snd_pcm_file_fd(int fd, int *fput_needed)
 static int snd_pcm_link(struct snd_pcm_substream *substream, int fd)
 {
 	int res = 0;
-	struct file *file;
 	struct snd_pcm_file *pcm_file;
 	struct snd_pcm_substream *substream1;
 	struct snd_pcm_group *group;
-	int fput_needed;
+	struct fd f = fdget(fd);
 
-	file = snd_pcm_file_fd(fd, &fput_needed);
-	if (!file)
+	if (!f.file)
 		return -EBADFD;
-	pcm_file = file->private_data;
+	if (!is_pcm_file(f.file)) {
+		res = -EBADFD;
+		goto _badf;
+	}
+	pcm_file = f.file->private_data;
 	substream1 = pcm_file->substream;
 	group = kmalloc(sizeof(*group), GFP_KERNEL);
 	if (!group) {
@@ -1665,8 +1652,9 @@ static int snd_pcm_link(struct snd_pcm_substream *substream, int fd)
 	up_write(&snd_pcm_link_rwsem);
  _nolock:
 	snd_card_unref(substream1->pcm->card);
-	fput_light(file, fput_needed);
 	kfree(group);
+ _badf:
+	fdput(f);
 	return res;
 }
 
@@ -2440,6 +2428,7 @@ static int snd_pcm_hwsync(struct snd_pcm_substream *substream)
 	case SNDRV_PCM_STATE_DRAINING:
 		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 			goto __badfd;
+		/* Fall through */
 	case SNDRV_PCM_STATE_RUNNING:
 		if ((err = snd_pcm_update_hw_ptr(substream)) < 0)
 			break;
@@ -2472,6 +2461,7 @@ static int snd_pcm_delay(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_STATE_DRAINING:
 		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
 			goto __badfd;
+		/* Fall through */
 	case SNDRV_PCM_STATE_RUNNING:
 		if ((err = snd_pcm_update_hw_ptr(substream)) < 0)
 			break;
@@ -3199,7 +3189,7 @@ static const struct vm_operations_struct snd_pcm_vm_ops_data_fault = {
 
 #ifndef ARCH_HAS_DMA_MMAP_COHERENT
 /* This should be defined / handled globally! */
-#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
+#ifdef CONFIG_ARM
 #define ARCH_HAS_DMA_MMAP_COHERENT
 #endif
 #endif
@@ -3211,6 +3201,14 @@ int snd_pcm_lib_default_mmap(struct snd_pcm_substream *substream,
 			     struct vm_area_struct *area)
 {
 	area->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+#ifdef CONFIG_GENERIC_ALLOCATOR
+	if (substream->dma_buffer.dev.type == SNDRV_DMA_TYPE_DEV_IRAM) {
+		area->vm_page_prot = pgprot_writecombine(area->vm_page_prot);
+		return remap_pfn_range(area, area->vm_start,
+				substream->dma_buffer.addr >> PAGE_SHIFT,
+				area->vm_end - area->vm_start, area->vm_page_prot);
+	}
+#endif /* CONFIG_GENERIC_ALLOCATOR */
 #ifdef ARCH_HAS_DMA_MMAP_COHERENT
 	if (!substream->ops->page &&
 	    substream->dma_buffer.dev.type == SNDRV_DMA_TYPE_DEV)

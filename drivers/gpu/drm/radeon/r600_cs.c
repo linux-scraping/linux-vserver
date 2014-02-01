@@ -749,10 +749,7 @@ static int r600_cs_track_check(struct radeon_cs_parser *p)
 		}
 
 		for (i = 0; i < 8; i++) {
-			u32 format = G_0280A0_FORMAT(track->cb_color_info[i]);
-
-			if (format != V_0280A0_COLOR_INVALID &&
-			    (tmp >> (i * 4)) & 0xF) {
+			if ((tmp >> (i * 4)) & 0xF) {
 				/* at least one component is enabled */
 				if (track->cb_color_bo[i] == NULL) {
 					dev_warn(p->dev, "%s:%d mask 0x%08X | 0x%08X no cb for %d\n",
@@ -890,7 +887,7 @@ int r600_cs_common_vline_parse(struct radeon_cs_parser *p,
 	obj = drm_mode_object_find(p->rdev->ddev, crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
 		DRM_ERROR("cannot find crtc %d\n", crtc_id);
-		return -EINVAL;
+		return -ENOENT;
 	}
 	crtc = obj_to_crtc(obj);
 	radeon_crtc = to_radeon_crtc(crtc);
@@ -2331,13 +2328,8 @@ static void r600_cs_parser_fini(struct radeon_cs_parser *parser, int error)
 	unsigned i;
 
 	kfree(parser->relocs);
-	for (i = 0; i < parser->nchunks; i++) {
-		kfree(parser->chunks[i].kdata);
-		if (parser->rdev && (parser->rdev->flags & RADEON_IS_AGP)) {
-			kfree(parser->chunks[i].kpage[0]);
-			kfree(parser->chunks[i].kpage[1]);
-		}
-	}
+	for (i = 0; i < parser->nchunks; i++)
+		drm_free_large(parser->chunks[i].kdata);
 	kfree(parser->chunks);
 	kfree(parser->chunks_array);
 }
@@ -2394,13 +2386,12 @@ int r600_cs_legacy(struct drm_device *dev, void *data, struct drm_file *filp,
 	ib_chunk = &parser.chunks[parser.chunk_ib_idx];
 	parser.ib.length_dw = ib_chunk->length_dw;
 	*l = parser.ib.length_dw;
-	r = r600_cs_parse(&parser);
-	if (r) {
-		DRM_ERROR("Invalid command stream !\n");
+	if (DRM_COPY_FROM_USER(ib, ib_chunk->user_ptr, ib_chunk->length_dw * 4)) {
+		r = -EFAULT;
 		r600_cs_parser_fini(&parser, r);
 		return r;
 	}
-	r = radeon_cs_finish_pages(&parser);
+	r = r600_cs_parse(&parser);
 	if (r) {
 		DRM_ERROR("Invalid command stream !\n");
 		r600_cs_parser_fini(&parser, r);

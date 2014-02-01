@@ -1078,7 +1078,6 @@ static void srpt_unmap_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 static int srpt_map_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 				 struct srpt_send_ioctx *ioctx)
 {
-	struct ib_device *dev = ch->sport->sdev->device;
 	struct se_cmd *cmd;
 	struct scatterlist *sg, *sg_orig;
 	int sg_cnt;
@@ -1125,7 +1124,7 @@ static int srpt_map_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 
 	db = ioctx->rbufs;
 	tsize = cmd->data_length;
-	dma_len = ib_sg_dma_len(dev, &sg[0]);
+	dma_len = sg_dma_len(&sg[0]);
 	riu = ioctx->rdma_ius;
 
 	/*
@@ -1156,8 +1155,7 @@ static int srpt_map_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 					++j;
 					if (j < count) {
 						sg = sg_next(sg);
-						dma_len = ib_sg_dma_len(
-								dev, sg);
+						dma_len = sg_dma_len(sg);
 					}
 				}
 			} else {
@@ -1194,8 +1192,8 @@ static int srpt_map_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 	tsize = cmd->data_length;
 	riu = ioctx->rdma_ius;
 	sg = sg_orig;
-	dma_len = ib_sg_dma_len(dev, &sg[0]);
-	dma_addr = ib_sg_dma_address(dev, &sg[0]);
+	dma_len = sg_dma_len(&sg[0]);
+	dma_addr = sg_dma_address(&sg[0]);
 
 	/* this second loop is really mapped sg_addres to rdma_iu->ib_sge */
 	for (i = 0, j = 0;
@@ -1218,10 +1216,8 @@ static int srpt_map_sg_to_ib_sge(struct srpt_rdma_ch *ch,
 					++j;
 					if (j < count) {
 						sg = sg_next(sg);
-						dma_len = ib_sg_dma_len(
-								dev, sg);
-						dma_addr = ib_sg_dma_address(
-								dev, sg);
+						dma_len = sg_dma_len(sg);
+						dma_addr = sg_dma_address(sg);
 					}
 				}
 			} else {
@@ -1356,11 +1352,8 @@ static int srpt_abort_cmd(struct srpt_send_ioctx *ioctx)
 
 		/* XXX(hch): this is a horrible layering violation.. */
 		spin_lock_irqsave(&ioctx->cmd.t_state_lock, flags);
-		ioctx->cmd.transport_state |= CMD_T_LUN_STOP;
 		ioctx->cmd.transport_state &= ~CMD_T_ACTIVE;
 		spin_unlock_irqrestore(&ioctx->cmd.t_state_lock, flags);
-
-		complete(&ioctx->cmd.transport_lun_stop_comp);
 		break;
 	case SRPT_STATE_CMD_RSP_SENT:
 		/*
@@ -1368,9 +1361,6 @@ static int srpt_abort_cmd(struct srpt_send_ioctx *ioctx)
 		 * not been received in time.
 		 */
 		srpt_unmap_sg_to_ib_sge(ioctx->ch, ioctx);
-		spin_lock_irqsave(&ioctx->cmd.t_state_lock, flags);
-		ioctx->cmd.transport_state |= CMD_T_LUN_STOP;
-		spin_unlock_irqrestore(&ioctx->cmd.t_state_lock, flags);
 		target_put_sess_cmd(ioctx->ch->sess, &ioctx->cmd);
 		break;
 	case SRPT_STATE_MGMT_RSP_SENT:
@@ -1480,7 +1470,6 @@ static void srpt_handle_rdma_err_comp(struct srpt_rdma_ch *ch,
 {
 	struct se_cmd *cmd;
 	enum srpt_command_state state;
-	unsigned long flags;
 
 	cmd = &ioctx->cmd;
 	state = srpt_get_cmd_state(ioctx);
@@ -1500,9 +1489,6 @@ static void srpt_handle_rdma_err_comp(struct srpt_rdma_ch *ch,
 			       __func__, __LINE__, state);
 		break;
 	case SRPT_RDMA_WRITE_LAST:
-		spin_lock_irqsave(&ioctx->cmd.t_state_lock, flags);
-		ioctx->cmd.transport_state |= CMD_T_LUN_STOP;
-		spin_unlock_irqrestore(&ioctx->cmd.t_state_lock, flags);
 		break;
 	default:
 		printk(KERN_ERR "%s[%d]: opcode = %u\n", __func__,
@@ -2101,7 +2087,6 @@ static int srpt_create_ch_ib(struct srpt_rdma_ch *ch)
 	if (!qp_init)
 		goto out;
 
-retry:
 	ch->cq = ib_create_cq(sdev->device, srpt_completion, NULL, ch,
 			      ch->rq_size + srp_sq_size, 0);
 	if (IS_ERR(ch->cq)) {
@@ -2125,13 +2110,6 @@ retry:
 	ch->qp = ib_create_qp(sdev->pd, qp_init);
 	if (IS_ERR(ch->qp)) {
 		ret = PTR_ERR(ch->qp);
-		if (ret == -ENOMEM) {
-			srp_sq_size /= 2;
-			if (srp_sq_size >= MIN_SRPT_SQ_SIZE) {
-				ib_destroy_cq(ch->cq);
-				goto retry;
-			}
-		}
 		printk(KERN_ERR "failed to create_qp ret= %d\n", ret);
 		goto err_destroy_cq;
 	}
@@ -3021,7 +2999,7 @@ static u8 tcm_to_srp_tsk_mgmt_status(const int tcm_mgmt_status)
  * Callback function called by the TCM core. Must not block since it can be
  * invoked on the context of the IB completion handler.
  */
-static int srpt_queue_response(struct se_cmd *cmd)
+static void srpt_queue_response(struct se_cmd *cmd)
 {
 	struct srpt_rdma_ch *ch;
 	struct srpt_send_ioctx *ioctx;
@@ -3031,8 +3009,6 @@ static int srpt_queue_response(struct se_cmd *cmd)
 	enum dma_data_direction dir;
 	int resp_len;
 	u8 srp_tm_status;
-
-	ret = 0;
 
 	ioctx = container_of(cmd, struct srpt_send_ioctx, cmd);
 	ch = ioctx->ch;
@@ -3059,7 +3035,7 @@ static int srpt_queue_response(struct se_cmd *cmd)
 		     || WARN_ON_ONCE(state == SRPT_STATE_CMD_RSP_SENT))) {
 		atomic_inc(&ch->req_lim_delta);
 		srpt_abort_cmd(ioctx);
-		goto out;
+		return;
 	}
 
 	dir = ioctx->cmd.data_direction;
@@ -3071,7 +3047,7 @@ static int srpt_queue_response(struct se_cmd *cmd)
 		if (ret) {
 			printk(KERN_ERR "xfer_data failed for tag %llu\n",
 			       ioctx->tag);
-			goto out;
+			return;
 		}
 	}
 
@@ -3092,9 +3068,17 @@ static int srpt_queue_response(struct se_cmd *cmd)
 		srpt_set_cmd_state(ioctx, SRPT_STATE_DONE);
 		target_put_sess_cmd(ioctx->ch->sess, &ioctx->cmd);
 	}
+}
 
-out:
-	return ret;
+static int srpt_queue_data_in(struct se_cmd *cmd)
+{
+	srpt_queue_response(cmd);
+	return 0;
+}
+
+static void srpt_queue_tm_rsp(struct se_cmd *cmd)
+{
+	srpt_queue_response(cmd);
 }
 
 static int srpt_queue_status(struct se_cmd *cmd)
@@ -3107,7 +3091,8 @@ static int srpt_queue_status(struct se_cmd *cmd)
 	    (SCF_TRANSPORT_TASK_SENSE | SCF_EMULATED_TASK_SENSE))
 		WARN_ON(cmd->scsi_status != SAM_STAT_CHECK_CONDITION);
 	ioctx->queue_status_only = true;
-	return srpt_queue_response(cmd);
+	srpt_queue_response(cmd);
+	return 0;
 }
 
 static void srpt_refresh_port_work(struct work_struct *work)
@@ -3940,9 +3925,9 @@ static struct target_core_fabric_ops srpt_template = {
 	.set_default_node_attributes	= srpt_set_default_node_attrs,
 	.get_task_tag			= srpt_get_task_tag,
 	.get_cmd_state			= srpt_get_tcm_cmd_state,
-	.queue_data_in			= srpt_queue_response,
+	.queue_data_in			= srpt_queue_data_in,
 	.queue_status			= srpt_queue_status,
-	.queue_tm_rsp			= srpt_queue_response,
+	.queue_tm_rsp			= srpt_queue_tm_rsp,
 	/*
 	 * Setup function pointers for generic logic in
 	 * target_core_fabric_configfs.c

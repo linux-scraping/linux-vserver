@@ -18,6 +18,8 @@
 #include <linux/types.h>
 #include <linux/sizes.h>
 
+#include <asm/cache.h>
+
 #ifdef CONFIG_NEED_MACH_MEMORY_H
 #include <mach/memory.h>
 #endif
@@ -138,6 +140,20 @@
 #define phys_to_page(phys)	(pfn_to_page(__phys_to_pfn(phys)))
 
 /*
+ * Minimum guaranted alignment in pgd_alloc().  The page table pointers passed
+ * around in head.S and proc-*.S are shifted by this amount, in order to
+ * leave spare high bits for systems with physical address extension.  This
+ * does not fully accomodate the 40-bit addressing capability of ARM LPAE, but
+ * gives us about 38-bits or so.
+ */
+#ifdef CONFIG_ARM_LPAE
+#define ARCH_PGD_SHIFT		L1_CACHE_SHIFT
+#else
+#define ARCH_PGD_SHIFT		0
+#endif
+#define ARCH_PGD_MASK		((1 << ARCH_PGD_SHIFT) - 1)
+
+/*
  * PLAT_PHYS_OFFSET is the offset (from zero) of the start of physical
  * memory.  This is used for XIP and NoMMU kernels, or by kernels which
  * have their own mach/memory.h.  Assembly code must always use
@@ -162,8 +178,13 @@
  * so that all we need to do is modify the 8-bit constant field.
  */
 #define __PV_BITS_31_24	0x81000000
+#define __PV_BITS_7_0	0x81
 
-extern unsigned long __pv_phys_offset;
+extern u64 __pv_phys_offset;
+extern u64 __pv_offset;
+extern void fixup_pv_table(const void *, unsigned long);
+extern const void *__pv_table_begin, *__pv_table_end;
+
 #define PHYS_OFFSET __pv_phys_offset
 
 #define __pv_stub(from,to,instr,type)			\
@@ -175,25 +196,66 @@ extern unsigned long __pv_phys_offset;
 	: "=r" (to)					\
 	: "r" (from), "I" (type))
 
-static inline unsigned long __virt_to_phys(unsigned long x)
+#define __pv_stub_mov_hi(t)				\
+	__asm__ volatile("@ __pv_stub_mov\n"		\
+	"1:	mov	%R0, %1\n"			\
+	"	.pushsection .pv_table,\"a\"\n"		\
+	"	.long	1b\n"				\
+	"	.popsection\n"				\
+	: "=r" (t)					\
+	: "I" (__PV_BITS_7_0))
+
+#define __pv_add_carry_stub(x, y)			\
+	__asm__ volatile("@ __pv_add_carry_stub\n"	\
+	"1:	adds	%Q0, %1, %2\n"			\
+	"	adc	%R0, %R0, #0\n"			\
+	"	.pushsection .pv_table,\"a\"\n"		\
+	"	.long	1b\n"				\
+	"	.popsection\n"				\
+	: "+r" (y)					\
+	: "r" (x), "I" (__PV_BITS_31_24)		\
+	: "cc")
+
+static inline phys_addr_t __virt_to_phys(unsigned long x)
 {
-	unsigned long t;
-	__pv_stub(x, t, "add", __PV_BITS_31_24);
+	phys_addr_t t;
+
+	if (sizeof(phys_addr_t) == 4) {
+		__pv_stub(x, t, "add", __PV_BITS_31_24);
+	} else {
+		__pv_stub_mov_hi(t);
+		__pv_add_carry_stub(x, t);
+	}
 	return t;
 }
 
-static inline unsigned long __phys_to_virt(unsigned long x)
+static inline unsigned long __phys_to_virt(phys_addr_t x)
 {
 	unsigned long t;
-	__pv_stub(x, t, "sub", __PV_BITS_31_24);
+
+	/*
+	 * 'unsigned long' cast discard upper word when
+	 * phys_addr_t is 64 bit, and makes sure that inline
+	 * assembler expression receives 32 bit argument
+	 * in place where 'r' 32 bit operand is expected.
+	 */
+	__pv_stub((unsigned long) x, t, "sub", __PV_BITS_31_24);
 	return t;
 }
+
 #else
 
 #define PHYS_OFFSET	PLAT_PHYS_OFFSET
 
-#define __virt_to_phys(x)	((x) - PAGE_OFFSET + PHYS_OFFSET)
-#define __phys_to_virt(x)	((x) - PHYS_OFFSET + PAGE_OFFSET)
+static inline phys_addr_t __virt_to_phys(unsigned long x)
+{
+	return (phys_addr_t)x - PAGE_OFFSET + PHYS_OFFSET;
+}
+
+static inline unsigned long __phys_to_virt(phys_addr_t x)
+{
+	return x - PHYS_OFFSET + PAGE_OFFSET;
+}
 
 #endif
 #endif
@@ -221,15 +283,32 @@ static inline phys_addr_t virt_to_phys(const volatile void *x)
 
 static inline void *phys_to_virt(phys_addr_t x)
 {
-	return (void *)(__phys_to_virt((unsigned long)(x)));
+	return (void *)__phys_to_virt(x);
 }
 
 /*
  * Drivers should NOT use these either.
  */
 #define __pa(x)			__virt_to_phys((unsigned long)(x))
-#define __va(x)			((void *)__phys_to_virt((unsigned long)(x)))
+#define __va(x)			((void *)__phys_to_virt((phys_addr_t)(x)))
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
+
+extern phys_addr_t (*arch_virt_to_idmap)(unsigned long x);
+
+/*
+ * These are for systems that have a hardware interconnect supported alias of
+ * physical memory for idmap purposes.  Most cases should leave these
+ * untouched.
+ */
+static inline phys_addr_t __virt_to_idmap(unsigned long x)
+{
+	if (arch_virt_to_idmap)
+		return arch_virt_to_idmap(x);
+	else
+		return __virt_to_phys(x);
+}
+
+#define virt_to_idmap(x)	__virt_to_idmap((unsigned long)(x))
 
 /*
  * Virtual <-> DMA view memory address translations
@@ -258,12 +337,6 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
 
 /*
  * Conversion between a struct page and a physical address.
- *
- * Note: when converting an unknown physical address to a
- * struct page, the resulting pointer must be validated
- * using VALID_PAGE().  It must return an invalid struct page
- * for any physical address not corresponding to a system
- * RAM address.
  *
  *  page_to_pfn(page)	convert a struct page * to a PFN number
  *  pfn_to_page(pfn)	convert a _valid_ PFN number to struct page *

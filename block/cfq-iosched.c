@@ -1275,16 +1275,12 @@ __cfq_group_service_tree_add(struct cfq_rb_root *st, struct cfq_group *cfqg)
 static void
 cfq_update_group_weight(struct cfq_group *cfqg)
 {
+	BUG_ON(!RB_EMPTY_NODE(&cfqg->rb_node));
+
 	if (cfqg->new_weight) {
 		cfqg->weight = cfqg->new_weight;
 		cfqg->new_weight = 0;
 	}
-}
-
-static void
-cfq_update_group_leaf_weight(struct cfq_group *cfqg)
-{
-	BUG_ON(!RB_EMPTY_NODE(&cfqg->rb_node));
 
 	if (cfqg->new_leaf_weight) {
 		cfqg->leaf_weight = cfqg->new_leaf_weight;
@@ -1303,7 +1299,7 @@ cfq_group_service_tree_add(struct cfq_rb_root *st, struct cfq_group *cfqg)
 	/* add to the service tree */
 	BUG_ON(!RB_EMPTY_NODE(&cfqg->rb_node));
 
-	cfq_update_group_leaf_weight(cfqg);
+	cfq_update_group_weight(cfqg);
 	__cfq_group_service_tree_add(st, cfqg);
 
 	/*
@@ -1327,7 +1323,6 @@ cfq_group_service_tree_add(struct cfq_rb_root *st, struct cfq_group *cfqg)
 	 */
 	while ((parent = cfqg_parent(pos))) {
 		if (propagate) {
-			cfq_update_group_weight(pos);
 			propagate = !parent->nr_active++;
 			parent->children_weight += pos->weight;
 		}
@@ -1513,6 +1508,29 @@ static void cfq_init_cfqg_base(struct cfq_group *cfqg)
 }
 
 #ifdef CONFIG_CFQ_GROUP_IOSCHED
+static void cfqg_stats_init(struct cfqg_stats *stats)
+{
+	blkg_rwstat_init(&stats->service_bytes);
+	blkg_rwstat_init(&stats->serviced);
+	blkg_rwstat_init(&stats->merged);
+	blkg_rwstat_init(&stats->service_time);
+	blkg_rwstat_init(&stats->wait_time);
+	blkg_rwstat_init(&stats->queued);
+
+	blkg_stat_init(&stats->sectors);
+	blkg_stat_init(&stats->time);
+
+#ifdef CONFIG_DEBUG_BLK_CGROUP
+	blkg_stat_init(&stats->unaccounted_time);
+	blkg_stat_init(&stats->avg_queue_size_sum);
+	blkg_stat_init(&stats->avg_queue_size_samples);
+	blkg_stat_init(&stats->dequeue);
+	blkg_stat_init(&stats->group_wait_time);
+	blkg_stat_init(&stats->idle_time);
+	blkg_stat_init(&stats->empty_time);
+#endif
+}
+
 static void cfq_pd_init(struct blkcg_gq *blkg)
 {
 	struct cfq_group *cfqg = blkg_to_cfqg(blkg);
@@ -1520,6 +1538,8 @@ static void cfq_pd_init(struct blkcg_gq *blkg)
 	cfq_init_cfqg_base(cfqg);
 	cfqg->weight = blkg->blkcg->cfq_weight;
 	cfqg->leaf_weight = blkg->blkcg->cfq_leaf_weight;
+	cfqg_stats_init(&cfqg->stats);
+	cfqg_stats_init(&cfqg->dead_stats);
 }
 
 static void cfq_pd_offline(struct blkcg_gq *blkg)
@@ -1612,12 +1632,11 @@ static u64 cfqg_prfill_weight_device(struct seq_file *sf,
 	return __blkg_prfill_u64(sf, pd, cfqg->dev_weight);
 }
 
-static int cfqg_print_weight_device(struct cgroup *cgrp, struct cftype *cft,
-				    struct seq_file *sf)
+static int cfqg_print_weight_device(struct cgroup_subsys_state *css,
+				    struct cftype *cft, struct seq_file *sf)
 {
-	blkcg_print_blkgs(sf, cgroup_to_blkcg(cgrp),
-			  cfqg_prfill_weight_device, &blkcg_policy_cfq, 0,
-			  false);
+	blkcg_print_blkgs(sf, css_to_blkcg(css), cfqg_prfill_weight_device,
+			  &blkcg_policy_cfq, 0, false);
 	return 0;
 }
 
@@ -1631,35 +1650,34 @@ static u64 cfqg_prfill_leaf_weight_device(struct seq_file *sf,
 	return __blkg_prfill_u64(sf, pd, cfqg->dev_leaf_weight);
 }
 
-static int cfqg_print_leaf_weight_device(struct cgroup *cgrp,
+static int cfqg_print_leaf_weight_device(struct cgroup_subsys_state *css,
 					 struct cftype *cft,
 					 struct seq_file *sf)
 {
-	blkcg_print_blkgs(sf, cgroup_to_blkcg(cgrp),
-			  cfqg_prfill_leaf_weight_device, &blkcg_policy_cfq, 0,
-			  false);
+	blkcg_print_blkgs(sf, css_to_blkcg(css), cfqg_prfill_leaf_weight_device,
+			  &blkcg_policy_cfq, 0, false);
 	return 0;
 }
 
-static int cfq_print_weight(struct cgroup *cgrp, struct cftype *cft,
+static int cfq_print_weight(struct cgroup_subsys_state *css, struct cftype *cft,
 			    struct seq_file *sf)
 {
-	seq_printf(sf, "%u\n", cgroup_to_blkcg(cgrp)->cfq_weight);
+	seq_printf(sf, "%u\n", css_to_blkcg(css)->cfq_weight);
 	return 0;
 }
 
-static int cfq_print_leaf_weight(struct cgroup *cgrp, struct cftype *cft,
-				 struct seq_file *sf)
+static int cfq_print_leaf_weight(struct cgroup_subsys_state *css,
+				 struct cftype *cft, struct seq_file *sf)
 {
-	seq_printf(sf, "%u\n",
-		   cgroup_to_blkcg(cgrp)->cfq_leaf_weight);
+	seq_printf(sf, "%u\n", css_to_blkcg(css)->cfq_leaf_weight);
 	return 0;
 }
 
-static int __cfqg_set_weight_device(struct cgroup *cgrp, struct cftype *cft,
-				    const char *buf, bool is_leaf_weight)
+static int __cfqg_set_weight_device(struct cgroup_subsys_state *css,
+				    struct cftype *cft, const char *buf,
+				    bool is_leaf_weight)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 	struct blkg_conf_ctx ctx;
 	struct cfq_group *cfqg;
 	int ret;
@@ -1685,22 +1703,22 @@ static int __cfqg_set_weight_device(struct cgroup *cgrp, struct cftype *cft,
 	return ret;
 }
 
-static int cfqg_set_weight_device(struct cgroup *cgrp, struct cftype *cft,
-				  const char *buf)
+static int cfqg_set_weight_device(struct cgroup_subsys_state *css,
+				  struct cftype *cft, const char *buf)
 {
-	return __cfqg_set_weight_device(cgrp, cft, buf, false);
+	return __cfqg_set_weight_device(css, cft, buf, false);
 }
 
-static int cfqg_set_leaf_weight_device(struct cgroup *cgrp, struct cftype *cft,
-				       const char *buf)
+static int cfqg_set_leaf_weight_device(struct cgroup_subsys_state *css,
+				       struct cftype *cft, const char *buf)
 {
-	return __cfqg_set_weight_device(cgrp, cft, buf, true);
+	return __cfqg_set_weight_device(css, cft, buf, true);
 }
 
-static int __cfq_set_weight(struct cgroup *cgrp, struct cftype *cft, u64 val,
-			    bool is_leaf_weight)
+static int __cfq_set_weight(struct cgroup_subsys_state *css, struct cftype *cft,
+			    u64 val, bool is_leaf_weight)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 	struct blkcg_gq *blkg;
 
 	if (val < CFQ_WEIGHT_MIN || val > CFQ_WEIGHT_MAX)
@@ -1732,30 +1750,32 @@ static int __cfq_set_weight(struct cgroup *cgrp, struct cftype *cft, u64 val,
 	return 0;
 }
 
-static int cfq_set_weight(struct cgroup *cgrp, struct cftype *cft, u64 val)
+static int cfq_set_weight(struct cgroup_subsys_state *css, struct cftype *cft,
+			  u64 val)
 {
-	return __cfq_set_weight(cgrp, cft, val, false);
+	return __cfq_set_weight(css, cft, val, false);
 }
 
-static int cfq_set_leaf_weight(struct cgroup *cgrp, struct cftype *cft, u64 val)
+static int cfq_set_leaf_weight(struct cgroup_subsys_state *css,
+			       struct cftype *cft, u64 val)
 {
-	return __cfq_set_weight(cgrp, cft, val, true);
+	return __cfq_set_weight(css, cft, val, true);
 }
 
-static int cfqg_print_stat(struct cgroup *cgrp, struct cftype *cft,
+static int cfqg_print_stat(struct cgroup_subsys_state *css, struct cftype *cft,
 			   struct seq_file *sf)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 
 	blkcg_print_blkgs(sf, blkcg, blkg_prfill_stat, &blkcg_policy_cfq,
 			  cft->private, false);
 	return 0;
 }
 
-static int cfqg_print_rwstat(struct cgroup *cgrp, struct cftype *cft,
-			     struct seq_file *sf)
+static int cfqg_print_rwstat(struct cgroup_subsys_state *css,
+			     struct cftype *cft, struct seq_file *sf)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 
 	blkcg_print_blkgs(sf, blkcg, blkg_prfill_rwstat, &blkcg_policy_cfq,
 			  cft->private, true);
@@ -1778,20 +1798,20 @@ static u64 cfqg_prfill_rwstat_recursive(struct seq_file *sf,
 	return __blkg_prfill_rwstat(sf, pd, &sum);
 }
 
-static int cfqg_print_stat_recursive(struct cgroup *cgrp, struct cftype *cft,
-				     struct seq_file *sf)
+static int cfqg_print_stat_recursive(struct cgroup_subsys_state *css,
+				     struct cftype *cft, struct seq_file *sf)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 
 	blkcg_print_blkgs(sf, blkcg, cfqg_prfill_stat_recursive,
 			  &blkcg_policy_cfq, cft->private, false);
 	return 0;
 }
 
-static int cfqg_print_rwstat_recursive(struct cgroup *cgrp, struct cftype *cft,
-				       struct seq_file *sf)
+static int cfqg_print_rwstat_recursive(struct cgroup_subsys_state *css,
+				       struct cftype *cft, struct seq_file *sf)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 
 	blkcg_print_blkgs(sf, blkcg, cfqg_prfill_rwstat_recursive,
 			  &blkcg_policy_cfq, cft->private, true);
@@ -1815,10 +1835,10 @@ static u64 cfqg_prfill_avg_queue_size(struct seq_file *sf,
 }
 
 /* print avg_queue_size */
-static int cfqg_print_avg_queue_size(struct cgroup *cgrp, struct cftype *cft,
-				     struct seq_file *sf)
+static int cfqg_print_avg_queue_size(struct cgroup_subsys_state *css,
+				     struct cftype *cft, struct seq_file *sf)
 {
-	struct blkcg *blkcg = cgroup_to_blkcg(cgrp);
+	struct blkcg *blkcg = css_to_blkcg(css);
 
 	blkcg_print_blkgs(sf, blkcg, cfqg_prfill_avg_queue_size,
 			  &blkcg_policy_cfq, 0, false);
@@ -3575,11 +3595,6 @@ retry:
 
 	blkcg = bio_blkcg(bio);
 	cfqg = cfq_lookup_create_cfqg(cfqd, blkcg);
-	if (!cfqg) {
-		cfqq = &cfqd->oom_cfqq;
-		goto out;
-	}
-
 	cfqq = cic_to_cfqq(cic, is_sync);
 
 	/*
@@ -3616,7 +3631,7 @@ retry:
 		} else
 			cfqq = &cfqd->oom_cfqq;
 	}
-out:
+
 	if (new_cfqq)
 		kmem_cache_free(cfq_pool, new_cfqq);
 
@@ -3646,17 +3661,12 @@ static struct cfq_queue *
 cfq_get_queue(struct cfq_data *cfqd, bool is_sync, struct cfq_io_cq *cic,
 	      struct bio *bio, gfp_t gfp_mask)
 {
-	int ioprio_class = IOPRIO_PRIO_CLASS(cic->ioprio);
-	int ioprio = IOPRIO_PRIO_DATA(cic->ioprio);
+	const int ioprio_class = IOPRIO_PRIO_CLASS(cic->ioprio);
+	const int ioprio = IOPRIO_PRIO_DATA(cic->ioprio);
 	struct cfq_queue **async_cfqq = NULL;
 	struct cfq_queue *cfqq = NULL;
 
 	if (!is_sync) {
-		if (!ioprio_valid(cic->ioprio)) {
-			struct task_struct *tsk = current;
-			ioprio = task_nice_ioprio(tsk);
-			ioprio_class = task_nice_ioclass(tsk);
-		}
 		async_cfqq = cfq_async_queue_prio(cfqd, ioprio_class, ioprio);
 		cfqq = *async_cfqq;
 	}
@@ -4373,7 +4383,7 @@ static int cfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	if (!eq)
 		return -ENOMEM;
 
-	cfqd = kmalloc_node(sizeof(*cfqd), GFP_KERNEL | __GFP_ZERO, q->node);
+	cfqd = kzalloc_node(sizeof(*cfqd), GFP_KERNEL, q->node);
 	if (!cfqd) {
 		kobject_put(&eq->kobj);
 		return -ENOMEM;

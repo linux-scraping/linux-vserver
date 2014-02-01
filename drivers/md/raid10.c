@@ -97,7 +97,7 @@ static int max_queued_requests = 1024;
 
 static void allow_barrier(struct r10conf *conf);
 static void lower_barrier(struct r10conf *conf);
-static int enough(struct r10conf *conf, int ignore);
+static int _enough(struct r10conf *conf, int previous, int ignore);
 static sector_t reshape_request(struct mddev *mddev, sector_t sector_nr,
 				int *skipped);
 static void reshape_request_write(struct mddev *mddev, struct r10bio *r10_bio);
@@ -392,11 +392,9 @@ static void raid10_end_read_request(struct bio *bio, int error)
 		 * than fail the last device.  Here we redefine
 		 * "uptodate" to mean "Don't want to retry"
 		 */
-		unsigned long flags;
-		spin_lock_irqsave(&conf->device_lock, flags);
-		if (!enough(conf, rdev->raid_disk))
+		if (!_enough(conf, test_bit(R10BIO_Previous, &r10_bio->state),
+			     rdev->raid_disk))
 			uptodate = 1;
-		spin_unlock_irqrestore(&conf->device_lock, flags);
 	}
 	if (uptodate) {
 		raid_end_bio_io(r10_bio);
@@ -1304,8 +1302,8 @@ read_again:
 		slot = r10_bio->read_slot;
 
 		read_bio = bio_clone_mddev(bio, GFP_NOIO, mddev);
-		md_trim_bio(read_bio, r10_bio->sector - bio->bi_sector,
-			    max_sectors);
+		bio_trim(read_bio, r10_bio->sector - bio->bi_sector,
+			 max_sectors);
 
 		r10_bio->devs[slot].bio = read_bio;
 		r10_bio->devs[slot].rdev = rdev;
@@ -1512,8 +1510,8 @@ retry_write:
 		if (r10_bio->devs[i].bio) {
 			struct md_rdev *rdev = conf->mirrors[d].rdev;
 			mbio = bio_clone_mddev(bio, GFP_NOIO, mddev);
-			md_trim_bio(mbio, r10_bio->sector - bio->bi_sector,
-				    max_sectors);
+			bio_trim(mbio, r10_bio->sector - bio->bi_sector,
+				 max_sectors);
 			r10_bio->devs[i].bio = mbio;
 
 			mbio->bi_sector	= (r10_bio->devs[i].addr+
@@ -1555,8 +1553,8 @@ retry_write:
 				rdev = conf->mirrors[d].rdev;
 			}
 			mbio = bio_clone_mddev(bio, GFP_NOIO, mddev);
-			md_trim_bio(mbio, r10_bio->sector - bio->bi_sector,
-				    max_sectors);
+			bio_trim(mbio, r10_bio->sector - bio->bi_sector,
+				 max_sectors);
 			r10_bio->devs[i].repl_bio = mbio;
 
 			mbio->bi_sector	= (r10_bio->devs[i].addr +
@@ -1632,37 +1630,58 @@ static void status(struct seq_file *seq, struct mddev *mddev)
  * Don't consider the device numbered 'ignore'
  * as we might be about to remove it.
  */
-static int _enough(struct r10conf *conf, struct geom *geo, int ignore)
+static int _enough(struct r10conf *conf, int previous, int ignore)
 {
 	int first = 0;
+	int has_enough = 0;
+	int disks, ncopies;
+	if (previous) {
+		disks = conf->prev.raid_disks;
+		ncopies = conf->prev.near_copies;
+	} else {
+		disks = conf->geo.raid_disks;
+		ncopies = conf->geo.near_copies;
+	}
 
+	rcu_read_lock();
 	do {
 		int n = conf->copies;
 		int cnt = 0;
 		int this = first;
 		while (n--) {
-			if (conf->mirrors[this].rdev &&
-			    this != ignore)
+			struct md_rdev *rdev;
+			if (this != ignore &&
+			    (rdev = rcu_dereference(conf->mirrors[this].rdev)) &&
+			    test_bit(In_sync, &rdev->flags))
 				cnt++;
-			this = (this+1) % geo->raid_disks;
+			this = (this+1) % disks;
 		}
 		if (cnt == 0)
-			return 0;
-		first = (first + geo->near_copies) % geo->raid_disks;
+			goto out;
+		first = (first + ncopies) % disks;
 	} while (first != 0);
-	return 1;
+	has_enough = 1;
+out:
+	rcu_read_unlock();
+	return has_enough;
 }
 
 static int enough(struct r10conf *conf, int ignore)
 {
-	return _enough(conf, &conf->geo, ignore) &&
-		_enough(conf, &conf->prev, ignore);
+	/* when calling 'enough', both 'prev' and 'geo' must
+	 * be stable.
+	 * This is ensured if ->reconfig_mutex or ->device_lock
+	 * is held.
+	 */
+	return _enough(conf, 0, ignore) &&
+		_enough(conf, 1, ignore);
 }
 
 static void error(struct mddev *mddev, struct md_rdev *rdev)
 {
 	char b[BDEVNAME_SIZE];
 	struct r10conf *conf = mddev->private;
+	unsigned long flags;
 
 	/*
 	 * If it is not operational, then we have already marked it as dead
@@ -1670,25 +1689,26 @@ static void error(struct mddev *mddev, struct md_rdev *rdev)
 	 * next level up know.
 	 * else mark the drive as failed
 	 */
+	spin_lock_irqsave(&conf->device_lock, flags);
 	if (test_bit(In_sync, &rdev->flags)
-	    && !enough(conf, rdev->raid_disk))
+	    && !enough(conf, rdev->raid_disk)) {
 		/*
 		 * Don't fail the drive, just return an IO error.
 		 */
-		return;
-	if (test_and_clear_bit(In_sync, &rdev->flags)) {
-		unsigned long flags;
-		spin_lock_irqsave(&conf->device_lock, flags);
-		mddev->degraded++;
 		spin_unlock_irqrestore(&conf->device_lock, flags);
+		return;
 	}
-	/*
-	 * If recovery is running, make sure it aborts.
-	 */
-	set_bit(MD_RECOVERY_INTR, &mddev->recovery);
+	if (test_and_clear_bit(In_sync, &rdev->flags)) {
+		mddev->degraded++;
+			/*
+		 * if recovery is running, make sure it aborts.
+		 */
+		set_bit(MD_RECOVERY_INTR, &mddev->recovery);
+	}
 	set_bit(Blocked, &rdev->flags);
 	set_bit(Faulty, &rdev->flags);
 	set_bit(MD_CHANGE_DEVS, &mddev->flags);
+	spin_unlock_irqrestore(&conf->device_lock, flags);
 	printk(KERN_ALERT
 	       "md/raid10:%s: Disk failure on %s, disabling device.\n"
 	       "md/raid10:%s: Operation continuing on %d devices.\n",
@@ -1792,7 +1812,7 @@ static int raid10_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 		 * very different from resync
 		 */
 		return -EBUSY;
-	if (rdev->saved_raid_disk < 0 && !_enough(conf, &conf->prev, -1))
+	if (rdev->saved_raid_disk < 0 && !_enough(conf, 1, -1))
 		return -EINVAL;
 
 	if (rdev->raid_disk >= 0)
@@ -1820,15 +1840,17 @@ static int raid10_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 			set_bit(Replacement, &rdev->flags);
 			rdev->raid_disk = mirror;
 			err = 0;
-			disk_stack_limits(mddev->gendisk, rdev->bdev,
-					  rdev->data_offset << 9);
+			if (mddev->gendisk)
+				disk_stack_limits(mddev->gendisk, rdev->bdev,
+						  rdev->data_offset << 9);
 			conf->fullsync = 1;
 			rcu_assign_pointer(p->replacement, rdev);
 			break;
 		}
 
-		disk_stack_limits(mddev->gendisk, rdev->bdev,
-				  rdev->data_offset << 9);
+		if (mddev->gendisk)
+			disk_stack_limits(mddev->gendisk, rdev->bdev,
+					  rdev->data_offset << 9);
 
 		p->head_position = 0;
 		p->recovery_disabled = mddev->recovery_disabled - 1;
@@ -2592,12 +2614,12 @@ static int narrow_write_error(struct r10bio *r10_bio, int i)
 			sectors = sect_to_write;
 		/* Write at 'sector' for 'sectors' */
 		wbio = bio_clone_mddev(bio, GFP_NOIO, mddev);
-		md_trim_bio(wbio, sector - bio->bi_sector, sectors);
+		bio_trim(wbio, sector - bio->bi_sector, sectors);
 		wbio->bi_sector = (r10_bio->devs[i].addr+
 				   choose_data_offset(r10_bio, rdev) +
 				   (sector - r10_bio->sector));
 		wbio->bi_bdev = rdev->bdev;
-		if (submit_bio_wait(WRITE, wbio) < 0)
+		if (submit_bio_wait(WRITE, wbio) == 0)
 			/* Failure! */
 			ok = rdev_set_badblocks(rdev, sector,
 						sectors, 0)
@@ -2665,9 +2687,7 @@ read_more:
 		(unsigned long long)r10_bio->sector);
 	bio = bio_clone_mddev(r10_bio->master_bio,
 			      GFP_NOIO, mddev);
-	md_trim_bio(bio,
-		    r10_bio->sector - bio->bi_sector,
-		    max_sectors);
+	bio_trim(bio, r10_bio->sector - bio->bi_sector, max_sectors);
 	r10_bio->devs[slot].bio = bio;
 	r10_bio->devs[slot].rdev = rdev;
 	bio->bi_sector = r10_bio->devs[slot].addr
@@ -2948,7 +2968,6 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
 		 */
 		if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery)) {
 			end_reshape(conf);
-			close_sync(conf);
 			return 0;
 		}
 
@@ -3578,7 +3597,6 @@ static struct r10conf *setup_conf(struct mddev *mddev)
 			/* far_copies must be 1 */
 			conf->prev.stride = conf->dev_sectors;
 	}
-	conf->reshape_safe = conf->reshape_progress;
 	spin_lock_init(&conf->device_lock);
 	INIT_LIST_HEAD(&conf->retry_list);
 
@@ -3786,6 +3804,7 @@ static int run(struct mddev *mddev)
 		}
 		conf->offset_diff = min_offset_diff;
 
+		conf->reshape_safe = conf->reshape_progress;
 		clear_bit(MD_RECOVERY_SYNC, &mddev->recovery);
 		clear_bit(MD_RECOVERY_CHECK, &mddev->recovery);
 		set_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
@@ -4130,7 +4149,6 @@ static int raid10_start_reshape(struct mddev *mddev)
 		conf->reshape_progress = size;
 	} else
 		conf->reshape_progress = 0;
-	conf->reshape_safe = conf->reshape_progress;
 	spin_unlock_irq(&conf->device_lock);
 
 	if (mddev->delta_disks && mddev->bitmap) {
@@ -4197,7 +4215,6 @@ abort:
 		rdev->new_data_offset = rdev->data_offset;
 	smp_wmb();
 	conf->reshape_progress = MaxSector;
-	conf->reshape_safe = MaxSector;
 	mddev->reshape_position = MaxSector;
 	spin_unlock_irq(&conf->device_lock);
 	return ret;
@@ -4367,7 +4384,11 @@ static sector_t reshape_request(struct mddev *mddev, sector_t sector_nr,
 		set_bit(MD_CHANGE_DEVS, &mddev->flags);
 		md_wakeup_thread(mddev->thread);
 		wait_event(mddev->sb_wait, mddev->flags == 0 ||
-			   kthread_should_stop());
+			   test_bit(MD_RECOVERY_INTR, &mddev->recovery));
+		if (test_bit(MD_RECOVERY_INTR, &mddev->recovery)) {
+			allow_barrier(conf);
+			return sectors_done;
+		}
 		conf->reshape_safe = mddev->reshape_position;
 		allow_barrier(conf);
 	}
@@ -4401,7 +4422,7 @@ read_more:
 	read_bio->bi_private = r10_bio;
 	read_bio->bi_end_io = end_sync_read;
 	read_bio->bi_rw = READ;
-	read_bio->bi_flags &= (~0UL << BIO_RESET_BITS);
+	read_bio->bi_flags &= ~(BIO_POOL_MASK - 1);
 	read_bio->bi_flags |= 1 << BIO_UPTODATE;
 	read_bio->bi_vcnt = 0;
 	read_bio->bi_size = 0;
@@ -4545,7 +4566,6 @@ static void end_reshape(struct r10conf *conf)
 	md_finish_reshape(conf->mddev);
 	smp_wmb();
 	conf->reshape_progress = MaxSector;
-	conf->reshape_safe = MaxSector;
 	spin_unlock_irq(&conf->device_lock);
 
 	/* read-ahead size must cover two whole stripes, which is

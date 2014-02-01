@@ -426,18 +426,20 @@ static int brcms_ops_start(struct ieee80211_hw *hw)
 	bool blocked;
 	int err;
 
-	if (!wl->ucode.bcm43xx_bomminor) {
-		err = brcms_request_fw(wl, wl->wlc->hw->d11core);
-		if (err)
-			return -ENOENT;
-	}
-
 	ieee80211_wake_queues(hw);
 	spin_lock_bh(&wl->lock);
 	blocked = brcms_rfkill_set_hw_state(wl);
 	spin_unlock_bh(&wl->lock);
 	if (!blocked)
 		wiphy_rfkill_stop_polling(wl->pub->ieee_hw->wiphy);
+
+	if (!wl->ucode.bcm43xx_bomminor) {
+		err = brcms_request_fw(wl, wl->wlc->hw->d11core);
+		if (err) {
+			brcms_remove(wl->wlc->hw->d11core);
+			return -ENOENT;
+		}
+	}
 
 	spin_lock_bh(&wl->lock);
 	/* avoid acknowledging frames before a non-monitor device is added */
@@ -455,6 +457,8 @@ static int brcms_ops_start(struct ieee80211_hw *hw)
 	if (err != 0)
 		brcms_err(wl->wlc->hw->d11core, "%s: brcms_up() returned %d\n",
 			  __func__, err);
+
+	bcma_core_pci_power_save(wl->wlc->hw->d11core->bus, true);
 	return err;
 }
 
@@ -476,6 +480,8 @@ static void brcms_ops_stop(struct ieee80211_hw *hw)
 			  "wl: brcms_ops_stop: chipmatch failed\n");
 		return;
 	}
+
+	bcma_core_pci_power_save(wl->wlc->hw->d11core->bus, false);
 
 	/* put driver in down state */
 	spin_lock_bh(&wl->lock);

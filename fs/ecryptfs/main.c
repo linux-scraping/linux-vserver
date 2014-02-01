@@ -120,16 +120,15 @@ static int ecryptfs_init_lower_file(struct dentry *dentry,
 				    struct file **lower_file)
 {
 	const struct cred *cred = current_cred();
-	struct dentry *lower_dentry = ecryptfs_dentry_to_lower(dentry);
-	struct vfsmount *lower_mnt = ecryptfs_dentry_to_lower_mnt(dentry);
+	struct path *path = ecryptfs_dentry_to_lower_path(dentry);
 	int rc;
 
-	rc = ecryptfs_privileged_open(lower_file, lower_dentry, lower_mnt,
+	rc = ecryptfs_privileged_open(lower_file, path->dentry, path->mnt,
 				      cred);
 	if (rc) {
 		printk(KERN_ERR "Error opening lower file "
 		       "for lower_dentry [0x%p] and lower_mnt [0x%p]; "
-		       "rc = [%d]\n", lower_dentry, lower_mnt, rc);
+		       "rc = [%d]\n", path->dentry, path->mnt, rc);
 		(*lower_file) = NULL;
 	}
 	return rc;
@@ -494,7 +493,6 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 {
 	struct super_block *s;
 	struct ecryptfs_sb_info *sbi;
-	struct ecryptfs_mount_crypt_stat *mount_crypt_stat;
 	struct ecryptfs_dentry_info *root_info;
 	const char *err = "Getting sb failed";
 	struct inode *inode;
@@ -513,7 +511,6 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 		err = "Error parsing options";
 		goto out;
 	}
-	mount_crypt_stat = &sbi->mount_crypt_stat;
 
 	s = sget(fs_type, NULL, set_anon_super, flags, NULL);
 	if (IS_ERR(s)) {
@@ -560,19 +557,11 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 
 	/**
 	 * Set the POSIX ACL flag based on whether they're enabled in the lower
-	 * mount.
+	 * mount. Force a read-only eCryptfs mount if the lower mount is ro.
+	 * Allow a ro eCryptfs mount even when the lower mount is rw.
 	 */
 	s->s_flags = flags & ~MS_POSIXACL;
-	s->s_flags |= path.dentry->d_sb->s_flags & MS_POSIXACL;
-
-	/**
-	 * Force a read-only eCryptfs mount when:
-	 *   1) The lower mount is ro
-	 *   2) The ecryptfs_encrypted_view mount option is specified
-	 */
-	if (path.dentry->d_sb->s_flags & MS_RDONLY ||
-	    mount_crypt_stat->flags & ECRYPTFS_ENCRYPTED_VIEW_ENABLED)
-		s->s_flags |= MS_RDONLY;
+	s->s_flags |= path.dentry->d_sb->s_flags & (MS_RDONLY | MS_POSIXACL);
 
 	s->s_maxbytes = path.dentry->d_sb->s_maxbytes;
 	s->s_blocksize = path.dentry->d_sb->s_blocksize;
@@ -596,8 +585,7 @@ static struct dentry *ecryptfs_mount(struct file_system_type *fs_type, int flags
 
 	/* ->kill_sb() will take care of root_info */
 	ecryptfs_set_dentry_private(s->s_root, root_info);
-	ecryptfs_set_dentry_lower(s->s_root, path.dentry);
-	ecryptfs_set_dentry_lower_mnt(s->s_root, path.mnt);
+	root_info->lower_path = path;
 
 	s->s_flags |= MS_ACTIVE;
 	return dget(s->s_root);

@@ -106,7 +106,7 @@ struct ibmveth_stat ibmveth_stats[] = {
 /* simple methods of getting data from the current rxq entry */
 static inline u32 ibmveth_rxq_flags(struct ibmveth_adapter *adapter)
 {
-	return adapter->rx_queue.queue_addr[adapter->rx_queue.index].flags_off;
+	return be32_to_cpu(adapter->rx_queue.queue_addr[adapter->rx_queue.index].flags_off);
 }
 
 static inline int ibmveth_rxq_toggle(struct ibmveth_adapter *adapter)
@@ -132,7 +132,7 @@ static inline int ibmveth_rxq_frame_offset(struct ibmveth_adapter *adapter)
 
 static inline int ibmveth_rxq_frame_length(struct ibmveth_adapter *adapter)
 {
-	return adapter->rx_queue.queue_addr[adapter->rx_queue.index].length;
+	return be32_to_cpu(adapter->rx_queue.queue_addr[adapter->rx_queue.index].length);
 }
 
 static inline int ibmveth_rxq_csum_good(struct ibmveth_adapter *adapter)
@@ -293,18 +293,6 @@ failure:
 	atomic_add(buffers_added, &(pool->available));
 }
 
-/*
- * The final 8 bytes of the buffer list is a counter of frames dropped
- * because there was not a buffer in the buffer list capable of holding
- * the frame.
- */
-static void ibmveth_update_rx_no_buffer(struct ibmveth_adapter *adapter)
-{
-	__be64 *p = adapter->buffer_list_addr + 4096 - 8;
-
-	adapter->rx_no_buffer = be64_to_cpup(p);
-}
-
 /* replenish routine */
 static void ibmveth_replenish_task(struct ibmveth_adapter *adapter)
 {
@@ -320,7 +308,8 @@ static void ibmveth_replenish_task(struct ibmveth_adapter *adapter)
 			ibmveth_replenish_buffer_pool(adapter, pool);
 	}
 
-	ibmveth_update_rx_no_buffer(adapter);
+	adapter->rx_no_buffer = *(u64 *)(((char*)adapter->buffer_list_addr) +
+						4096 - 8);
 }
 
 /* empty and free ana buffer pool - also used to do cleanup in error paths */
@@ -700,7 +689,8 @@ static int ibmveth_close(struct net_device *netdev)
 
 	free_irq(netdev->irq, netdev);
 
-	ibmveth_update_rx_no_buffer(adapter);
+	adapter->rx_no_buffer = *(u64 *)(((char *)adapter->buffer_list_addr) +
+						4096 - 8);
 
 	ibmveth_cleanup(adapter);
 
@@ -1195,7 +1185,7 @@ static void ibmveth_set_multicast_list(struct net_device *netdev)
 		netdev_for_each_mc_addr(ha, netdev) {
 			/* add the multicast address to the filter table */
 			unsigned long mcast_addr = 0;
-			memcpy(((char *)&mcast_addr)+2, ha->addr, 6);
+			memcpy(((char *)&mcast_addr)+2, ha->addr, ETH_ALEN);
 			lpar_rc = h_multicast_ctrl(adapter->vdev->unit_address,
 						   IbmVethMcastAddFilter,
 						   mcast_addr);
@@ -1380,7 +1370,7 @@ static int ibmveth_probe(struct vio_dev *dev, const struct vio_device_id *id)
 	netif_napi_add(netdev, &adapter->napi, ibmveth_poll, 16);
 
 	adapter->mac_addr = 0;
-	memcpy(&adapter->mac_addr, mac_addr_p, 6);
+	memcpy(&adapter->mac_addr, mac_addr_p, ETH_ALEN);
 
 	netdev->irq = dev->irq;
 	netdev->netdev_ops = &ibmveth_netdev_ops;

@@ -22,16 +22,10 @@
  *
  * Please send any bug reports or fixes you make to the
  * email address(es):
- *    lksctp developers <lksctp-developers@lists.sourceforge.net>
- *
- * Or submit a bug report through the following website:
- *    http://www.sf.net/projects/lksctp
+ *    lksctp developers <linux-sctp@vger.kernel.org>
  *
  * Written or modified by:
  *   Vlad Yasevich     <vladislav.yasevich@hp.com>
- *
- * Any bugs reported given to us we will try to fix... any fixes shared will
- * be incorporated into the next SCTP release.
  */
 
 #include <linux/slab.h>
@@ -393,13 +387,14 @@ nomem:
  */
 int sctp_auth_asoc_init_active_key(struct sctp_association *asoc, gfp_t gfp)
 {
+	struct net *net = sock_net(asoc->base.sk);
 	struct sctp_auth_bytes	*secret;
 	struct sctp_shared_key *ep_key;
 
 	/* If we don't support AUTH, or peer is not capable
 	 * we don't need to do anything.
 	 */
-	if (!asoc->ep->auth_enable || !asoc->peer.auth_capable)
+	if (!net->sctp.auth_enable || !asoc->peer.auth_capable)
 		return 0;
 
 	/* If the key_id is non-zero and we couldn't find an
@@ -446,16 +441,16 @@ struct sctp_shared_key *sctp_auth_get_shkey(
  */
 int sctp_auth_init_hmacs(struct sctp_endpoint *ep, gfp_t gfp)
 {
+	struct net *net = sock_net(ep->base.sk);
 	struct crypto_hash *tfm = NULL;
 	__u16   id;
 
-	/* If AUTH extension is disabled, we are done */
-	if (!ep->auth_enable) {
+	/* if the transforms are already allocted, we are done */
+	if (!net->sctp.auth_enable) {
 		ep->auth_hmacs = NULL;
 		return 0;
 	}
 
-	/* If the transforms are already allocated, we are done */
 	if (ep->auth_hmacs)
 		return 0;
 
@@ -544,18 +539,14 @@ struct sctp_hmac *sctp_auth_asoc_get_hmac(const struct sctp_association *asoc)
 	for (i = 0; i < n_elt; i++) {
 		id = ntohs(hmacs->hmac_ids[i]);
 
-		/* Check the id is in the supported range */
-		if (id > SCTP_AUTH_HMAC_ID_MAX) {
-			id = 0;
-			continue;
-		}
-
-		/* See is we support the id.  Supported IDs have name and
-		 * length fields set, so that we can allocated and use
+		/* Check the id is in the supported range. And
+		 * see if we support the id.  Supported IDs have name and
+		 * length fields set, so that we can allocate and use
 		 * them.  We can safely just check for name, for without the
 		 * name, we can't allocate the TFM.
 		 */
-		if (!sctp_hmac_list[id].hmac_name) {
+		if (id > SCTP_AUTH_HMAC_ID_MAX ||
+		    !sctp_hmac_list[id].hmac_name) {
 			id = 0;
 			continue;
 		}
@@ -676,10 +667,12 @@ static int __sctp_auth_cid(sctp_cid_t chunk, struct sctp_chunks_param *param)
 /* Check if peer requested that this chunk is authenticated */
 int sctp_auth_send_cid(sctp_cid_t chunk, const struct sctp_association *asoc)
 {
+	struct net  *net;
 	if (!asoc)
 		return 0;
 
-	if (!asoc->ep->auth_enable || !asoc->peer.auth_capable)
+	net = sock_net(asoc->base.sk);
+	if (!net->sctp.auth_enable || !asoc->peer.auth_capable)
 		return 0;
 
 	return __sctp_auth_cid(chunk, asoc->peer.peer_chunks);
@@ -688,10 +681,12 @@ int sctp_auth_send_cid(sctp_cid_t chunk, const struct sctp_association *asoc)
 /* Check if we requested that peer authenticate this chunk. */
 int sctp_auth_recv_cid(sctp_cid_t chunk, const struct sctp_association *asoc)
 {
+	struct net *net;
 	if (!asoc)
 		return 0;
 
-	if (!asoc->ep->auth_enable)
+	net = sock_net(asoc->base.sk);
+	if (!net->sctp.auth_enable)
 		return 0;
 
 	return __sctp_auth_cid(chunk,
@@ -812,8 +807,8 @@ int sctp_auth_ep_set_hmacs(struct sctp_endpoint *ep,
 	if (!has_sha1)
 		return -EINVAL;
 
-	for (i = 0; i < hmacs->shmac_num_idents; i++)
-		ep->auth_hmacs_list->hmac_ids[i] = htons(hmacs->shmac_idents[i]);
+	memcpy(ep->auth_hmacs_list->hmac_ids, &hmacs->shmac_idents[0],
+		hmacs->shmac_num_idents * sizeof(__u16));
 	ep->auth_hmacs_list->param_hdr.length = htons(sizeof(sctp_paramhdr_t) +
 				hmacs->shmac_num_idents * sizeof(__u16));
 	return 0;
@@ -874,6 +869,8 @@ int sctp_auth_set_key(struct sctp_endpoint *ep,
 		list_add(&cur_key->key_list, sh_keys);
 
 	cur_key->key = key;
+	sctp_auth_key_hold(key);
+
 	return 0;
 nomem:
 	if (!replace)

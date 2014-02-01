@@ -394,6 +394,9 @@ static void pump_transfers(unsigned long data)
 	chip = dws->cur_chip;
 	spi = message->spi;
 
+	if (unlikely(!chip->clk_div))
+		chip->clk_div = dws->max_freq / chip->speed_hz;
+
 	if (message->state == ERROR_STATE) {
 		message->status = -EIO;
 		goto early_exit;
@@ -435,7 +438,7 @@ static void pump_transfers(unsigned long data)
 	if (transfer->speed_hz) {
 		speed = chip->speed_hz;
 
-		if ((transfer->speed_hz != speed) || (!chip->clk_div)) {
+		if (transfer->speed_hz != speed) {
 			speed = transfer->speed_hz;
 			if (speed > dws->max_freq) {
 				printk(KERN_ERR "MRST SPI0: unsupported"
@@ -454,19 +457,7 @@ static void pump_transfers(unsigned long data)
 	}
 	if (transfer->bits_per_word) {
 		bits = transfer->bits_per_word;
-
-		switch (bits) {
-		case 8:
-		case 16:
-			dws->n_bytes = dws->dma_width = bits >> 3;
-			break;
-		default:
-			printk(KERN_ERR "MRST SPI0: unsupported bits:"
-				"%db\n", bits);
-			message->status = -EIO;
-			goto early_exit;
-		}
-
+		dws->n_bytes = dws->dma_width = bits >> 3;
 		cr0 = (bits - 1)
 			| (chip->type << SPI_FRF_OFFSET)
 			| (spi->mode << SPI_MODE_OFFSET)
@@ -626,9 +617,6 @@ static int dw_spi_setup(struct spi_device *spi)
 	struct dw_spi_chip *chip_info = NULL;
 	struct chip_data *chip;
 
-	if (spi->bits_per_word != 8 && spi->bits_per_word != 16)
-		return -EINVAL;
-
 	/* Only alloc on first setup */
 	chip = spi_get_ctldata(spi);
 	if (!chip) {
@@ -657,16 +645,12 @@ static int dw_spi_setup(struct spi_device *spi)
 		chip->enable_dma = chip_info->enable_dma;
 	}
 
-	if (spi->bits_per_word <= 8) {
+	if (spi->bits_per_word == 8) {
 		chip->n_bytes = 1;
 		chip->dma_width = 1;
-	} else if (spi->bits_per_word <= 16) {
+	} else if (spi->bits_per_word == 16) {
 		chip->n_bytes = 2;
 		chip->dma_width = 2;
-	} else {
-		/* Never take >16b case for MRST SPIC */
-		dev_err(&spi->dev, "invalid wordsize\n");
-		return -EINVAL;
 	}
 	chip->bits_per_word = spi->bits_per_word;
 
@@ -674,6 +658,7 @@ static int dw_spi_setup(struct spi_device *spi)
 		dev_err(&spi->dev, "No max speed HZ parameter\n");
 		return -EINVAL;
 	}
+	chip->speed_hz = spi->max_speed_hz;
 
 	chip->tmode = 0; /* Tx & Rx */
 	/* Default SPI mode is SCPOL = 0, SCPH = 0 */
@@ -820,6 +805,7 @@ int dw_spi_add_host(struct dw_spi *dws)
 	}
 
 	master->mode_bits = SPI_CPOL | SPI_CPHA;
+	master->bits_per_word_mask = SPI_BPW_MASK(8) | SPI_BPW_MASK(16);
 	master->bus_num = dws->bus_num;
 	master->num_chipselect = dws->num_cs;
 	master->cleanup = dw_spi_cleanup;
@@ -884,8 +870,8 @@ void dw_spi_remove_host(struct dw_spi *dws)
 	/* Remove the queue */
 	status = destroy_queue(dws);
 	if (status != 0)
-		dev_err(&dws->master->dev, "dw_spi_remove: workqueue will not "
-			"complete, message memory not freed\n");
+		dev_err(&dws->master->dev,
+			"dw_spi_remove: workqueue will not complete, message memory not freed\n");
 
 	if (dws->dma_ops && dws->dma_ops->dma_exit)
 		dws->dma_ops->dma_exit(dws);

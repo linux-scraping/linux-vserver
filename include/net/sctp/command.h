@@ -23,18 +23,16 @@
  * the Free Software Foundation, 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
  *
- * Please send any bug reports or fixes you make to one of the
- * following email addresses:
+ * Please send any bug reports or fixes you make to the
+ * email address(es):
+ *    lksctp developers <linux-sctp@vger.kernel.org>
  *
- * La Monte H.P. Yarroll <piggy@acm.org>
- * Karl Knutson <karl@athena.chicago.il.us>
- * Ardelle Fan <ardelle.fan@intel.com>
- * Sridhar Samudrala <sri@us.ibm.com>
- *
- * Any bugs reported given to us we will try to fix... any fixes shared will
- * be incorporated into the next SCTP release.
+ * Written or modified by:
+ *   La Monte H.P. Yarroll <piggy@acm.org>
+ *   Karl Knutson <karl@athena.chicago.il.us>
+ *   Ardelle Fan <ardelle.fan@intel.com>
+ *   Sridhar Samudrala <sri@us.ibm.com>
  */
-
 
 #ifndef __net_sctp_command_h__
 #define __net_sctp_command_h__
@@ -118,7 +116,7 @@ typedef enum {
  * analysis of the state functions, but in reality just taken from
  * thin air in the hopes othat we don't trigger a kernel panic.
  */
-#define SCTP_MAX_NUM_COMMANDS 20
+#define SCTP_MAX_NUM_COMMANDS 14
 
 typedef union {
 	__s32 i32;

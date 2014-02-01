@@ -74,7 +74,7 @@ static int ak4641_put_deemph(struct snd_kcontrol *kcontrol,
 {
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct ak4641_priv *ak4641 = snd_soc_codec_get_drvdata(codec);
-	int deemph = ucontrol->value.integer.value[0];
+	int deemph = ucontrol->value.enumerated.item[0];
 
 	if (deemph > 1)
 		return -EINVAL;
@@ -90,7 +90,7 @@ static int ak4641_get_deemph(struct snd_kcontrol *kcontrol,
 	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
 	struct ak4641_priv *ak4641 = snd_soc_codec_get_drvdata(codec);
 
-	ucontrol->value.integer.value[0] = ak4641->deemph;
+	ucontrol->value.enumerated.item[0] = ak4641->deemph;
 	return 0;
 };
 
@@ -328,7 +328,7 @@ static int ak4641_i2s_hw_params(struct snd_pcm_substream *substream,
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		ak4641->playback_fs = rate;
 		ak4641_set_deemph(codec);
-	};
+	}
 
 	return 0;
 }

@@ -267,9 +267,6 @@ acpi_ds_begin_method_execution(struct acpi_namespace_node *method_node,
 				obj_desc->method.mutex->mutex.
 				    original_sync_level =
 				    obj_desc->method.mutex->mutex.sync_level;
-
-				obj_desc->method.mutex->mutex.thread_id =
-				    acpi_os_get_thread_id();
 			}
 		}
 
@@ -295,9 +292,10 @@ acpi_ds_begin_method_execution(struct acpi_namespace_node *method_node,
 	 * reentered one more time (even if it is the same thread)
 	 */
 	obj_desc->method.thread_count++;
+	acpi_method_count++;
 	return_ACPI_STATUS(status);
 
-      cleanup:
+cleanup:
 	/* On error, must release the method mutex (if present) */
 
 	if (obj_desc->method.mutex) {
@@ -427,7 +425,7 @@ acpi_ds_call_control_method(struct acpi_thread_state *thread,
 
 	return_ACPI_STATUS(status);
 
-      cleanup:
+cleanup:
 
 	/* On error, we must terminate the method properly */
 

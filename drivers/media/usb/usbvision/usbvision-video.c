@@ -467,8 +467,6 @@ static int vidioc_g_register(struct file *file, void *priv,
 	struct usb_usbvision *usbvision = video_drvdata(file);
 	int err_code;
 
-	if (!v4l2_chip_match_host(&reg->match))
-		return -EINVAL;
 	/* NT100x has a 8-bit register space */
 	err_code = usbvision_read_reg(usbvision, reg->reg&0xff);
 	if (err_code < 0) {
@@ -488,8 +486,6 @@ static int vidioc_s_register(struct file *file, void *priv,
 	struct usb_usbvision *usbvision = video_drvdata(file);
 	int err_code;
 
-	if (!v4l2_chip_match_host(&reg->match))
-		return -EINVAL;
 	/* NT100x has a 8-bit register space */
 	err_code = usbvision_write_reg(usbvision, reg->reg & 0xff, reg->val);
 	if (err_code < 0) {
@@ -605,6 +601,14 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id id)
 	/* propagate the change to the decoder */
 	usbvision_muxsel(usbvision, usbvision->ctl_input);
 
+	return 0;
+}
+
+static int vidioc_g_std(struct file *file, void *priv, v4l2_std_id *id)
+{
+	struct usb_usbvision *usbvision = video_drvdata(file);
+
+	*id = usbvision->tvnorm_id;
 	return 0;
 }
 
@@ -1248,6 +1252,7 @@ static const struct v4l2_ioctl_ops usbvision_ioctl_ops = {
 	.vidioc_qbuf          = vidioc_qbuf,
 	.vidioc_dqbuf         = vidioc_dqbuf,
 	.vidioc_s_std         = vidioc_s_std,
+	.vidioc_g_std         = vidioc_g_std,
 	.vidioc_enum_input    = vidioc_enum_input,
 	.vidioc_g_input       = vidioc_g_input,
 	.vidioc_s_input       = vidioc_s_input,
@@ -1274,7 +1279,6 @@ static struct video_device usbvision_video_template = {
 	.name           = "usbvision-video",
 	.release	= video_device_release,
 	.tvnorms        = USBVISION_NORMS,
-	.current_norm   = V4L2_STD_PAL
 };
 
 
@@ -1307,9 +1311,6 @@ static struct video_device usbvision_radio_template = {
 	.name		= "usbvision-radio",
 	.release	= video_device_release,
 	.ioctl_ops	= &usbvision_radio_ioctl_ops,
-
-	.tvnorms              = USBVISION_NORMS,
-	.current_norm         = V4L2_STD_PAL
 };
 
 
@@ -1521,7 +1522,7 @@ static int usbvision_probe(struct usb_interface *intf,
 	const struct usb_host_interface *interface;
 	struct usb_usbvision *usbvision = NULL;
 	const struct usb_endpoint_descriptor *endpoint;
-	int model, i, ret;
+	int model, i;
 
 	PDEBUG(DBG_PROBE, "VID=%#04x, PID=%#04x, ifnum=%u",
 				dev->descriptor.idVendor,
@@ -1530,51 +1531,33 @@ static int usbvision_probe(struct usb_interface *intf,
 	model = devid->driver_info;
 	if (model < 0 || model >= usbvision_device_data_size) {
 		PDEBUG(DBG_PROBE, "model out of bounds %d", model);
-		ret = -ENODEV;
-		goto err_usb;
+		return -ENODEV;
 	}
 	printk(KERN_INFO "%s: %s found\n", __func__,
 				usbvision_device_data[model].model_string);
 
 	if (usbvision_device_data[model].interface >= 0)
 		interface = &dev->actconfig->interface[usbvision_device_data[model].interface]->altsetting[0];
-	else if (ifnum < dev->actconfig->desc.bNumInterfaces)
+	else
 		interface = &dev->actconfig->interface[ifnum]->altsetting[0];
-	else {
-		dev_err(&intf->dev, "interface %d is invalid, max is %d\n",
-		    ifnum, dev->actconfig->desc.bNumInterfaces - 1);
-		ret = -ENODEV;
-		goto err_usb;
-	}
-
-	if (interface->desc.bNumEndpoints < 2) {
-		dev_err(&intf->dev, "interface %d has %d endpoints, but must"
-		    " have minimum 2\n", ifnum, interface->desc.bNumEndpoints);
-		ret = -ENODEV;
-		goto err_usb;
-	}
 	endpoint = &interface->endpoint[1].desc;
-
 	if (!usb_endpoint_xfer_isoc(endpoint)) {
 		dev_err(&intf->dev, "%s: interface %d. has non-ISO endpoint!\n",
 		    __func__, ifnum);
 		dev_err(&intf->dev, "%s: Endpoint attributes %d",
 		    __func__, endpoint->bmAttributes);
-		ret = -ENODEV;
-		goto err_usb;
+		return -ENODEV;
 	}
 	if (usb_endpoint_dir_out(endpoint)) {
 		dev_err(&intf->dev, "%s: interface %d. has ISO OUT endpoint!\n",
 		    __func__, ifnum);
-		ret = -ENODEV;
-		goto err_usb;
+		return -ENODEV;
 	}
 
 	usbvision = usbvision_alloc(dev, intf);
 	if (usbvision == NULL) {
 		dev_err(&intf->dev, "%s: couldn't allocate USBVision struct\n", __func__);
-		ret = -ENOMEM;
-		goto err_usb;
+		return -ENOMEM;
 	}
 
 	if (dev->descriptor.bNumConfigurations > 1)
@@ -1593,8 +1576,8 @@ static int usbvision_probe(struct usb_interface *intf,
 	usbvision->alt_max_pkt_size = kmalloc(32 * usbvision->num_alt, GFP_KERNEL);
 	if (usbvision->alt_max_pkt_size == NULL) {
 		dev_err(&intf->dev, "usbvision: out of memory!\n");
-		ret = -ENOMEM;
-		goto err_pkt;
+		usbvision_release(usbvision);
+		return -ENOMEM;
 	}
 
 	for (i = 0; i < usbvision->num_alt; i++) {
@@ -1629,12 +1612,6 @@ static int usbvision_probe(struct usb_interface *intf,
 
 	PDEBUG(DBG_PROBE, "success");
 	return 0;
-
-err_pkt:
-	usbvision_release(usbvision);
-err_usb:
-	usb_put_dev(dev);
-	return ret;
 }
 
 

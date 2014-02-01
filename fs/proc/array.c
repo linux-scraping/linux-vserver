@@ -188,6 +188,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	seq_printf(m,
 		"State:\t%s\n"
 		"Tgid:\t%d\n"
+		"Ngid:\t%d\n"
 		"Pid:\t%d\n"
 		"PPid:\t%d\n"
 		"TracerPid:\t%d\n"
@@ -195,6 +196,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 		"Gid:\t%d\t%d\t%d\t%d\n",
 		get_task_state(p),
 		task_tgid_nr_ns(p, ns),
+		task_numa_group_id(p),
 		pid_nr_ns(pid, ns),
 		ppid, tpid,
 		from_kuid_munged(user_ns, cred->uid),
@@ -309,10 +311,14 @@ static void render_cap_t(struct seq_file *m, const char *header,
 	seq_puts(m, header);
 	CAP_FOR_EACH_U32(__capi) {
 		seq_printf(m, "%08x",
-			   a->cap[CAP_LAST_U32 - __capi]);
+			   a->cap[(_KERNEL_CAPABILITY_U32S-1) - __capi]);
 	}
 	seq_putc(m, '\n');
 }
+
+/* Remove non-existent capabilities */
+#define NORM_CAPS(v) (v.cap[CAP_TO_INDEX(CAP_LAST_CAP)] &= \
+				CAP_TO_MASK(CAP_LAST_CAP + 1) - 1)
 
 static inline void task_cap(struct seq_file *m, struct task_struct *p)
 {
@@ -326,6 +332,11 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	cap_effective	= cred->cap_effective;
 	cap_bset	= cred->cap_bset;
 	rcu_read_unlock();
+
+	NORM_CAPS(cap_inheritable);
+	NORM_CAPS(cap_permitted);
+	NORM_CAPS(cap_effective);
+	NORM_CAPS(cap_bset);
 
 	/* FIXME: maybe move the p->vx_info masking to __task_cred() ? */
 	render_cap_t(m, "CapInh:\t", p->vx_info, &cap_inheritable);
@@ -379,8 +390,9 @@ int proc_pid_nsproxy(struct seq_file *m, struct pid_namespace *ns,
 			(task->nsproxy->ipc_ns == init_task.nsproxy->ipc_ns ? 'I' : '-'),
 			task->nsproxy->mnt_ns,
 			(task->nsproxy->mnt_ns == init_task.nsproxy->mnt_ns ? 'I' : '-'),
-			task->nsproxy->pid_ns,
-			(task->nsproxy->pid_ns == init_task.nsproxy->pid_ns ? 'I' : '-'),
+			task->nsproxy->pid_ns_for_children,
+			(task->nsproxy->pid_ns_for_children ==
+				init_task.nsproxy->pid_ns_for_children ? 'I' : '-'),
 			task->nsproxy->net_ns,
 			(task->nsproxy->net_ns == init_task.nsproxy->net_ns ? 'I' : '-'));
 	return 0;
@@ -441,7 +453,7 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
 
 	state = *get_task_state(task);
 	vsize = eip = esp = 0;
-	permitted = ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS | PTRACE_MODE_NOAUDIT);
+	permitted = ptrace_may_access(task, PTRACE_MODE_READ | PTRACE_MODE_NOAUDIT);
 	mm = get_task_mm(task);
 	if (mm) {
 		vsize = task_vsize(mm);

@@ -19,7 +19,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
-#include <linux/jiffies.h>
 #include <linux/mman.h>
 #include <linux/delay.h>
 #include <linux/init.h>
@@ -460,11 +459,6 @@ static bool do_hot_add;
  */
 static uint pressure_report_delay = 45;
 
-/*
- * The last time we posted a pressure report to host.
- */
-static unsigned long last_post_time;
-
 module_param(hot_add, bool, (S_IRUGO | S_IWUSR));
 MODULE_PARM_DESC(hot_add, "If set attempt memory hot_add");
 
@@ -548,7 +542,6 @@ struct hv_dynmem_device {
 
 static struct hv_dynmem_device dm_device;
 
-static void post_status(struct hv_dynmem_device *dm);
 #ifdef CONFIG_MEMORY_HOTPLUG
 
 static void hv_bring_pgs_online(unsigned long start_pfn, unsigned long size)
@@ -619,7 +612,7 @@ static void hv_mem_hot_add(unsigned long start, unsigned long size,
 		 * have not been "onlined" within the allowed time.
 		 */
 		wait_for_completion_timeout(&dm_device.ol_waitevent, 5*HZ);
-		post_status(&dm_device);
+
 	}
 
 	return;
@@ -832,7 +825,6 @@ static void hot_add_req(struct work_struct *dummy)
 	memset(&resp, 0, sizeof(struct dm_hot_add_response));
 	resp.hdr.type = DM_MEM_HOT_ADD_RESPONSE;
 	resp.hdr.size = sizeof(struct dm_hot_add_response);
-	resp.hdr.trans_id = atomic_inc_return(&trans_id);
 
 #ifdef CONFIG_MEMORY_HOTPLUG
 	pg_start = dm->ha_wrk.ha_page_range.finfo.start_page;
@@ -894,6 +886,7 @@ static void hot_add_req(struct work_struct *dummy)
 		pr_info("Memory hot add failed\n");
 
 	dm->state = DM_INITIALIZED;
+	resp.hdr.trans_id = atomic_inc_return(&trans_id);
 	vmbus_sendpacket(dm->dev->channel, &resp,
 			sizeof(struct dm_hot_add_response),
 			(unsigned long)NULL,
@@ -958,17 +951,11 @@ static void post_status(struct hv_dynmem_device *dm)
 {
 	struct dm_status status;
 	struct sysinfo val;
-	unsigned long now = jiffies;
-	unsigned long last_post = last_post_time;
 
 	if (pressure_report_delay > 0) {
 		--pressure_report_delay;
 		return;
 	}
-
-	if (!time_after(now, (last_post_time + HZ)))
-		return;
-
 	si_meminfo(&val);
 	memset(&status, 0, sizeof(struct dm_status));
 	status.hdr.type = DM_STATUS_REPORT;
@@ -996,14 +983,6 @@ static void post_status(struct hv_dynmem_device *dm)
 	if (status.hdr.trans_id != atomic_read(&trans_id))
 		return;
 
-	/*
-	 * If the last post time that we sampled has changed,
-	 * we have raced, don't post the status.
-	 */
-	if (last_post != last_post_time)
-		return;
-
-	last_post_time = jiffies;
 	vmbus_sendpacket(dm->dev->channel, &status,
 				sizeof(struct dm_status),
 				(unsigned long)NULL,
@@ -1102,7 +1081,6 @@ static void balloon_up(struct work_struct *dummy)
 		bl_resp = (struct dm_balloon_response *)send_buffer;
 		memset(send_buffer, 0, PAGE_SIZE);
 		bl_resp->hdr.type = DM_BALLOON_RESPONSE;
-		bl_resp->hdr.trans_id = atomic_inc_return(&trans_id);
 		bl_resp->hdr.size = sizeof(struct dm_balloon_response);
 		bl_resp->more_pages = 1;
 
@@ -1130,6 +1108,7 @@ static void balloon_up(struct work_struct *dummy)
 		 */
 
 		do {
+			bl_resp->hdr.trans_id = atomic_inc_return(&trans_id);
 			ret = vmbus_sendpacket(dm_device.dev->channel,
 						bl_resp,
 						bl_resp->hdr.size,
@@ -1138,7 +1117,7 @@ static void balloon_up(struct work_struct *dummy)
 
 			if (ret == -EAGAIN)
 				msleep(20);
-			post_status(&dm_device);
+
 		} while (ret == -EAGAIN);
 
 		if (ret) {
@@ -1165,10 +1144,8 @@ static void balloon_down(struct hv_dynmem_device *dm,
 	struct dm_unballoon_response resp;
 	int i;
 
-	for (i = 0; i < range_count; i++) {
+	for (i = 0; i < range_count; i++)
 		free_balloon_pages(dm, &range_array[i]);
-		post_status(&dm_device);
-	}
 
 	if (req->more_pages == 1)
 		return;
@@ -1549,5 +1526,4 @@ static int __init init_balloon_drv(void)
 module_init(init_balloon_drv);
 
 MODULE_DESCRIPTION("Hyper-V Balloon");
-MODULE_VERSION(HV_DRV_VERSION);
 MODULE_LICENSE("GPL");

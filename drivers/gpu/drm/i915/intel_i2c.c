@@ -34,6 +34,11 @@
 #include <drm/i915_drm.h>
 #include "i915_drv.h"
 
+enum disp_clk {
+	CDCLK,
+	CZCLK
+};
+
 struct gmbus_port {
 	const char *name;
 	int reg;
@@ -58,10 +63,69 @@ to_intel_gmbus(struct i2c_adapter *i2c)
 	return container_of(i2c, struct intel_gmbus, adapter);
 }
 
+static int get_disp_clk_div(struct drm_i915_private *dev_priv,
+			    enum disp_clk clk)
+{
+	u32 reg_val;
+	int clk_ratio;
+
+	reg_val = I915_READ(CZCLK_CDCLK_FREQ_RATIO);
+
+	if (clk == CDCLK)
+		clk_ratio =
+			((reg_val & CDCLK_FREQ_MASK) >> CDCLK_FREQ_SHIFT) + 1;
+	else
+		clk_ratio = (reg_val & CZCLK_FREQ_MASK) + 1;
+
+	return clk_ratio;
+}
+
+static void gmbus_set_freq(struct drm_i915_private *dev_priv)
+{
+	int vco_freq[] = { 800, 1600, 2000, 2400 };
+	int gmbus_freq = 0, cdclk_div, hpll_freq;
+
+	BUG_ON(!IS_VALLEYVIEW(dev_priv->dev));
+
+	/* Skip setting the gmbus freq if BIOS has already programmed it */
+	if (I915_READ(GMBUSFREQ_VLV) != 0xA0)
+		return;
+
+	/* Obtain SKU information */
+	mutex_lock(&dev_priv->dpio_lock);
+	hpll_freq =
+		vlv_cck_read(dev_priv, CCK_FUSE_REG) & CCK_FUSE_HPLL_FREQ_MASK;
+	mutex_unlock(&dev_priv->dpio_lock);
+
+	/* Get the CDCLK divide ratio */
+	cdclk_div = get_disp_clk_div(dev_priv, CDCLK);
+
+	/*
+	 * Program the gmbus_freq based on the cdclk frequency.
+	 * BSpec erroneously claims we should aim for 4MHz, but
+	 * in fact 1MHz is the correct frequency.
+	 */
+	if (cdclk_div)
+		gmbus_freq = (vco_freq[hpll_freq] << 1) / cdclk_div;
+
+	if (WARN_ON(gmbus_freq == 0))
+		return;
+
+	I915_WRITE(GMBUSFREQ_VLV, gmbus_freq);
+}
+
 void
 intel_i2c_reset(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
+
+	/*
+	 * In BIOS-less system, program the correct gmbus frequency
+	 * before reading edid.
+	 */
+	if (IS_VALLEYVIEW(dev))
+		gmbus_set_freq(dev_priv);
+
 	I915_WRITE(dev_priv->gpio_mmio_base + GMBUS0, 0);
 	I915_WRITE(dev_priv->gpio_mmio_base + GMBUS4, 0);
 }
@@ -276,17 +340,18 @@ gmbus_wait_idle(struct drm_i915_private *dev_priv)
 }
 
 static int
-gmbus_xfer_read_chunk(struct drm_i915_private *dev_priv,
-		      unsigned short addr, u8 *buf, unsigned int len,
-		      u32 gmbus1_index)
+gmbus_xfer_read(struct drm_i915_private *dev_priv, struct i2c_msg *msg,
+		u32 gmbus1_index)
 {
 	int reg_offset = dev_priv->gpio_mmio_base;
+	u16 len = msg->len;
+	u8 *buf = msg->buf;
 
 	I915_WRITE(GMBUS1 + reg_offset,
 		   gmbus1_index |
 		   GMBUS_CYCLE_WAIT |
 		   (len << GMBUS_BYTE_COUNT_SHIFT) |
-		   (addr << GMBUS_SLAVE_ADDR_SHIFT) |
+		   (msg->addr << GMBUS_SLAVE_ADDR_SHIFT) |
 		   GMBUS_SLAVE_READ | GMBUS_SW_RDY);
 	while (len) {
 		int ret;
@@ -308,35 +373,11 @@ gmbus_xfer_read_chunk(struct drm_i915_private *dev_priv,
 }
 
 static int
-gmbus_xfer_read(struct drm_i915_private *dev_priv, struct i2c_msg *msg,
-		u32 gmbus1_index)
-{
-	u8 *buf = msg->buf;
-	unsigned int rx_size = msg->len;
-	unsigned int len;
-	int ret;
-
-	do {
-		len = min(rx_size, GMBUS_BYTE_COUNT_MAX);
-
-		ret = gmbus_xfer_read_chunk(dev_priv, msg->addr,
-					    buf, len, gmbus1_index);
-		if (ret)
-			return ret;
-
-		rx_size -= len;
-		buf += len;
-	} while (rx_size != 0);
-
-	return 0;
-}
-
-static int
-gmbus_xfer_write_chunk(struct drm_i915_private *dev_priv,
-		       unsigned short addr, u8 *buf, unsigned int len)
+gmbus_xfer_write(struct drm_i915_private *dev_priv, struct i2c_msg *msg)
 {
 	int reg_offset = dev_priv->gpio_mmio_base;
-	unsigned int chunk_size = len;
+	u16 len = msg->len;
+	u8 *buf = msg->buf;
 	u32 val, loop;
 
 	val = loop = 0;
@@ -348,8 +389,8 @@ gmbus_xfer_write_chunk(struct drm_i915_private *dev_priv,
 	I915_WRITE(GMBUS3 + reg_offset, val);
 	I915_WRITE(GMBUS1 + reg_offset,
 		   GMBUS_CYCLE_WAIT |
-		   (chunk_size << GMBUS_BYTE_COUNT_SHIFT) |
-		   (addr << GMBUS_SLAVE_ADDR_SHIFT) |
+		   (msg->len << GMBUS_BYTE_COUNT_SHIFT) |
+		   (msg->addr << GMBUS_SLAVE_ADDR_SHIFT) |
 		   GMBUS_SLAVE_WRITE | GMBUS_SW_RDY);
 	while (len) {
 		int ret;
@@ -366,29 +407,6 @@ gmbus_xfer_write_chunk(struct drm_i915_private *dev_priv,
 		if (ret)
 			return ret;
 	}
-
-	return 0;
-}
-
-static int
-gmbus_xfer_write(struct drm_i915_private *dev_priv, struct i2c_msg *msg)
-{
-	u8 *buf = msg->buf;
-	unsigned int tx_size = msg->len;
-	unsigned int len;
-	int ret;
-
-	do {
-		len = min(tx_size, GMBUS_BYTE_COUNT_MAX);
-
-		ret = gmbus_xfer_write_chunk(dev_priv, msg->addr, buf, len);
-		if (ret)
-			return ret;
-
-		buf += len;
-		tx_size -= len;
-	} while (tx_size != 0);
-
 	return 0;
 }
 
@@ -441,9 +459,10 @@ gmbus_xfer(struct i2c_adapter *adapter,
 					       struct intel_gmbus,
 					       adapter);
 	struct drm_i915_private *dev_priv = bus->dev_priv;
-	int i = 0, inc, try = 0, reg_offset;
+	int i, reg_offset;
 	int ret = 0;
 
+	intel_aux_display_runtime_get(dev_priv);
 	mutex_lock(&dev_priv->gmbus_mutex);
 
 	if (bus->force_bit) {
@@ -453,14 +472,12 @@ gmbus_xfer(struct i2c_adapter *adapter,
 
 	reg_offset = dev_priv->gpio_mmio_base;
 
-retry:
 	I915_WRITE(GMBUS0 + reg_offset, bus->reg0);
 
-	for (; i < num; i += inc) {
-		inc = 1;
+	for (i = 0; i < num; i++) {
 		if (gmbus_is_index_read(msgs, i, num)) {
 			ret = gmbus_xfer_index_read(dev_priv, &msgs[i]);
-			inc = 2; /* an index read is two msgs */
+			i += 1;  /* set i to the index of the read xfer */
 		} else if (msgs[i].flags & I2C_M_RD) {
 			ret = gmbus_xfer_read(dev_priv, &msgs[i], 0);
 		} else {
@@ -532,18 +549,6 @@ clear_err:
 			 adapter->name, msgs[i].addr,
 			 (msgs[i].flags & I2C_M_RD) ? 'r' : 'w', msgs[i].len);
 
-	/*
-	 * Passive adapters sometimes NAK the first probe. Retry the first
-	 * message once on -ENXIO for GMBUS transfers; the bit banging algorithm
-	 * has retries internally. See also the retry loop in
-	 * drm_do_probe_ddc_edid, which bails out on the first -ENXIO.
-	 */
-	if (ret == -ENXIO && i == 0 && try++ == 0) {
-		DRM_DEBUG_KMS("GMBUS [%s] NAK on first message, retry\n",
-			      adapter->name);
-		goto retry;
-	}
-
 	goto out;
 
 timeout:
@@ -557,6 +562,7 @@ timeout:
 
 out:
 	mutex_unlock(&dev_priv->gmbus_mutex);
+	intel_aux_display_runtime_put(dev_priv);
 	return ret;
 }
 

@@ -24,7 +24,6 @@
 #include <linux/init.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/wait.h>
 #include "tpm.h"
 
@@ -74,7 +73,6 @@ struct tpm_inf_dev {
 };
 
 static struct tpm_inf_dev tpm_dev;
-static struct i2c_driver tpm_tis_i2c_driver;
 
 /*
  * iic_tpm_read() - read from TPM register
@@ -583,7 +581,7 @@ static DEVICE_ATTR(enabled, S_IRUGO, tpm_show_enabled, NULL);
 static DEVICE_ATTR(active, S_IRUGO, tpm_show_active, NULL);
 static DEVICE_ATTR(owned, S_IRUGO, tpm_show_owned, NULL);
 static DEVICE_ATTR(temp_deactivated, S_IRUGO, tpm_show_temp_deactivated, NULL);
-static DEVICE_ATTR(caps, S_IRUGO, tpm_show_caps_1_2, NULL);
+static DEVICE_ATTR(caps, S_IRUGO, tpm_show_caps, NULL);
 static DEVICE_ATTR(cancel, S_IWUSR | S_IWGRP, NULL, tpm_store_cancel);
 static DEVICE_ATTR(durations, S_IRUGO, tpm_show_durations, NULL);
 static DEVICE_ATTR(timeouts, S_IRUGO, tpm_show_timeouts, NULL);
@@ -687,7 +685,6 @@ out_vendor:
 	chip->dev->release = NULL;
 	chip->release = NULL;
 	tpm_dev.client = NULL;
-	dev_set_drvdata(chip->dev, chip);
 out_err:
 	return rc;
 }
@@ -744,11 +741,9 @@ static int tpm_tis_i2c_probe(struct i2c_client *client,
 		return -ENODEV;
 	}
 
-	client->driver = &tpm_tis_i2c_driver;
 	tpm_dev.client = client;
 	rc = tpm_tis_i2c_init(&client->dev);
 	if (rc != 0) {
-		client->driver = NULL;
 		tpm_dev.client = NULL;
 		rc = -ENODEV;
 	}
@@ -770,7 +765,6 @@ static int tpm_tis_i2c_remove(struct i2c_client *client)
 	chip->dev->release = NULL;
 	chip->release = NULL;
 	tpm_dev.client = NULL;
-	dev_set_drvdata(chip->dev, chip);
 
 	return 0;
 }

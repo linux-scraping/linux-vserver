@@ -330,7 +330,7 @@ static __inline__ void __ipxitf_put(struct ipx_interface *intrfc)
 static int ipxitf_device_event(struct notifier_block *notifier,
 				unsigned long event, void *ptr)
 {
-	struct net_device *dev = ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct ipx_interface *i, *tmp;
 
 	if (!net_eq(dev_net(dev), &init_net))
@@ -1778,7 +1778,6 @@ static int ipx_recvmsg(struct kiocb *iocb, struct socket *sock,
 	struct ipxhdr *ipx = NULL;
 	struct sk_buff *skb;
 	int copied, rc;
-	bool locked = true;
 
 	lock_sock(sk);
 	/* put the autobinding in */
@@ -1805,8 +1804,6 @@ static int ipx_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (sock_flag(sk, SOCK_ZAPPED))
 		goto out;
 
-	release_sock(sk);
-	locked = false;
 	skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
 				flags & MSG_DONTWAIT, &rc);
 	if (!skb)
@@ -1840,8 +1837,7 @@ static int ipx_recvmsg(struct kiocb *iocb, struct socket *sock,
 out_free:
 	skb_free_datagram(sk, skb);
 out:
-	if (locked)
-		release_sock(sk);
+	release_sock(sk);
 	return rc;
 }
 

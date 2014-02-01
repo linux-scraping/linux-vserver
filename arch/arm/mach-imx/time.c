@@ -26,8 +26,8 @@
 #include <linux/clockchips.h>
 #include <linux/clk.h>
 #include <linux/err.h>
+#include <linux/sched_clock.h>
 
-#include <asm/sched_clock.h>
 #include <asm/mach/time.h>
 
 #include "common.h"
@@ -250,7 +250,7 @@ static irqreturn_t mxc_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction mxc_timer_irq = {
 	.name		= "i.MX Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
+	.flags		= IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= mxc_timer_interrupt,
 };
 

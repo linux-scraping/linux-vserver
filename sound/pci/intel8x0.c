@@ -1541,17 +1541,16 @@ static int snd_intel8x0_pcm1(struct intel8x0 *chip, int device,
 					      snd_dma_pci_data(chip->pci),
 					      rec->prealloc_size, rec->prealloc_max_size);
 
-	if (rec->ac97_idx == ICHD_PCMOUT && rec->playback_ops) {
+	if (rec->playback_ops &&
+	    rec->playback_ops->open == snd_intel8x0_playback_open) {
 		struct snd_pcm_chmap *chmap;
 		int chs = 2;
-		if (rec->ac97_idx == ICHD_PCMOUT) {
-			if (chip->multi8)
-				chs = 8;
-			else if (chip->multi6)
-				chs = 6;
-			else if (chip->multi4)
-				chs = 4;
-		}
+		if (chip->multi8)
+			chs = 8;
+		else if (chip->multi6)
+			chs = 6;
+		else if (chip->multi4)
+			chs = 4;
 		err = snd_pcm_add_chmap_ctls(pcm, SNDRV_PCM_STREAM_PLAYBACK,
 					     snd_pcm_alt_chmaps, chs, 0,
 					     &chmap);
@@ -2885,7 +2884,6 @@ static void intel8x0_measure_ac97_clock(struct intel8x0 *chip)
 
 static struct snd_pci_quirk intel8x0_clock_list[] = {
 	SND_PCI_QUIRK(0x0e11, 0x008a, "AD1885", 41000),
-	SND_PCI_QUIRK(0x1014, 0x0581, "AD1981B", 48000),
 	SND_PCI_QUIRK(0x1028, 0x00be, "AD1885", 44100),
 	SND_PCI_QUIRK(0x1028, 0x0177, "AD1980", 48000),
 	SND_PCI_QUIRK(0x1028, 0x01ad, "AD1981B", 48000),
@@ -3365,7 +3363,6 @@ static int snd_intel8x0_probe(struct pci_dev *pci,
 static void snd_intel8x0_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
-	pci_set_drvdata(pci, NULL);
 }
 
 static struct pci_driver intel8x0_driver = {

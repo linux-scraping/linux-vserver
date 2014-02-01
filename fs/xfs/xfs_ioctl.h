@@ -27,6 +27,10 @@ xfs_ioc_space(
 	unsigned int		cmd,
 	xfs_flock64_t		*bf);
 
+int
+xfs_ioc_swapext(
+	xfs_swapext_t	*sxp);
+
 extern int
 xfs_find_handle(
 	unsigned int		cmd,
@@ -70,12 +74,6 @@ xfs_handle_to_dentry(
 	void __user		*uhandle,
 	u32			hlen);
 
-extern int
-xfs_sync_flags(
-	struct inode		*inode,
-	int			flags,
-	int			vflags);
-
 extern long
 xfs_file_ioctl(
 	struct file		*filp,
@@ -87,5 +85,11 @@ xfs_file_compat_ioctl(
 	struct file		*file,
 	unsigned int		cmd,
 	unsigned long		arg);
+
+extern int
+xfs_set_dmattrs(
+	struct xfs_inode	*ip,
+	u_int			evmask,
+	u_int16_t		state);
 
 #endif

@@ -54,10 +54,8 @@ nouveau_fan_update(struct nouveau_fan *fan, bool immediate, int target)
 
 	/* check that we're not already at the target duty cycle */
 	duty = fan->get(therm);
-	if (duty == target) {
-		spin_unlock_irqrestore(&fan->lock, flags);
-		return 0;
-	}
+	if (duty == target)
+		goto done;
 
 	/* smooth out the fanspeed increase/decrease */
 	if (!immediate && duty >= 0) {
@@ -75,15 +73,8 @@ nouveau_fan_update(struct nouveau_fan *fan, bool immediate, int target)
 
 	nv_debug(therm, "FAN update: %d\n", duty);
 	ret = fan->set(therm, duty);
-	if (ret) {
-		spin_unlock_irqrestore(&fan->lock, flags);
-		return ret;
-	}
-
-	/* fan speed updated, drop the fan lock before grabbing the
-	 * alarm-scheduling lock and risking a deadlock
-	 */
-	spin_unlock_irqrestore(&fan->lock, flags);
+	if (ret)
+		goto done;
 
 	/* schedule next fan update, if not at target speed already */
 	if (list_empty(&fan->alarm.head) && target != duty) {
@@ -101,6 +92,8 @@ nouveau_fan_update(struct nouveau_fan *fan, bool immediate, int target)
 		ptimer->alarm(ptimer, delay * 1000 * 1000, &fan->alarm);
 	}
 
+done:
+	spin_unlock_irqrestore(&fan->lock, flags);
 	return ret;
 }
 
@@ -192,8 +185,11 @@ nouveau_therm_fan_set_defaults(struct nouveau_therm *therm)
 	priv->fan->bios.max_duty = 100;
 	priv->fan->bios.bump_period = 500;
 	priv->fan->bios.slow_down_period = 2000;
+/*XXX: talk to mupuf */
+#if 0
 	priv->fan->bios.linear_min_temp = 40;
 	priv->fan->bios.linear_max_temp = 85;
+#endif
 }
 
 static void
@@ -208,6 +204,23 @@ nouveau_therm_fan_safety_checks(struct nouveau_therm *therm)
 
 	if (priv->fan->bios.min_duty > priv->fan->bios.max_duty)
 		priv->fan->bios.min_duty = priv->fan->bios.max_duty;
+}
+
+int
+nouveau_therm_fan_init(struct nouveau_therm *therm)
+{
+	return 0;
+}
+
+int
+nouveau_therm_fan_fini(struct nouveau_therm *therm, bool suspend)
+{
+	struct nouveau_therm_priv *priv = (void *)therm;
+	struct nouveau_timer *ptimer = nouveau_timer(therm);
+
+	if (suspend)
+		ptimer->alarm_cancel(ptimer, &priv->fan->alarm);
+	return 0;
 }
 
 int
@@ -240,6 +253,9 @@ nouveau_therm_fan_ctor(struct nouveau_therm *therm)
 	}
 
 	nv_info(therm, "FAN control: %s\n", priv->fan->type);
+
+	/* read the current speed, it is useful when resuming */
+	priv->fan->percent = nouveau_therm_fan_get(therm);
 
 	/* attempt to detect a tachometer connection */
 	ret = gpio->find(gpio, 0, DCB_GPIO_FAN_SENSE, 0xff, &priv->fan->tach);

@@ -54,7 +54,7 @@
 #include "hpsa.h"
 
 /* HPSA_DRIVER_VERSION must be 3 byte values (0-255) separated by '.' */
-#define HPSA_DRIVER_VERSION "2.0.2-1"
+#define HPSA_DRIVER_VERSION "3.4.0-1"
 #define DRIVER_NAME "HP HPSA Driver (v " HPSA_DRIVER_VERSION ")"
 #define HPSA "hpsa"
 
@@ -89,17 +89,17 @@ static const struct pci_device_id hpsa_pci_device_id[] = {
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x3245},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x3247},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x3249},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x324a},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x324b},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x324A},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x324B},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSE,     0x103C, 0x3233},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3350},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3351},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3352},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3353},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x334D},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3354},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3355},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x3356},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1920},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1921},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1922},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1923},
@@ -107,7 +107,19 @@ static const struct pci_device_id hpsa_pci_device_id[] = {
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1925},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1926},
 	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1928},
-	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSF,     0x103C, 0x334d},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSH,     0x103C, 0x1929},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21BD},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21BE},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21BF},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C0},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C1},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C2},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C3},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C4},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C5},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C7},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C8},
+	{PCI_VENDOR_ID_HP,     PCI_DEVICE_ID_HP_CISSI,     0x103C, 0x21C9},
 	{PCI_VENDOR_ID_HP,     PCI_ANY_ID,	PCI_ANY_ID, PCI_ANY_ID,
 		PCI_CLASS_STORAGE_RAID << 8, 0xffff << 8, 0},
 	{0,}
@@ -125,24 +137,35 @@ static struct board_type products[] = {
 	{0x3245103C, "Smart Array P410i", &SA5_access},
 	{0x3247103C, "Smart Array P411", &SA5_access},
 	{0x3249103C, "Smart Array P812", &SA5_access},
-	{0x324a103C, "Smart Array P712m", &SA5_access},
-	{0x324b103C, "Smart Array P711m", &SA5_access},
+	{0x324A103C, "Smart Array P712m", &SA5_access},
+	{0x324B103C, "Smart Array P711m", &SA5_access},
 	{0x3350103C, "Smart Array P222", &SA5_access},
 	{0x3351103C, "Smart Array P420", &SA5_access},
 	{0x3352103C, "Smart Array P421", &SA5_access},
 	{0x3353103C, "Smart Array P822", &SA5_access},
+	{0x334D103C, "Smart Array P822se", &SA5_access},
 	{0x3354103C, "Smart Array P420i", &SA5_access},
 	{0x3355103C, "Smart Array P220i", &SA5_access},
 	{0x3356103C, "Smart Array P721m", &SA5_access},
-	{0x1920103C, "Smart Array", &SA5_access},
-	{0x1921103C, "Smart Array", &SA5_access},
-	{0x1922103C, "Smart Array", &SA5_access},
-	{0x1923103C, "Smart Array", &SA5_access},
-	{0x1924103C, "Smart Array", &SA5_access},
-	{0x1925103C, "Smart Array", &SA5_access},
-	{0x1926103C, "Smart Array", &SA5_access},
-	{0x1928103C, "Smart Array", &SA5_access},
-	{0x334d103C, "Smart Array P822se", &SA5_access},
+	{0x1921103C, "Smart Array P830i", &SA5_access},
+	{0x1922103C, "Smart Array P430", &SA5_access},
+	{0x1923103C, "Smart Array P431", &SA5_access},
+	{0x1924103C, "Smart Array P830", &SA5_access},
+	{0x1926103C, "Smart Array P731m", &SA5_access},
+	{0x1928103C, "Smart Array P230i", &SA5_access},
+	{0x1929103C, "Smart Array P530", &SA5_access},
+	{0x21BD103C, "Smart Array", &SA5_access},
+	{0x21BE103C, "Smart Array", &SA5_access},
+	{0x21BF103C, "Smart Array", &SA5_access},
+	{0x21C0103C, "Smart Array", &SA5_access},
+	{0x21C1103C, "Smart Array", &SA5_access},
+	{0x21C2103C, "Smart Array", &SA5_access},
+	{0x21C3103C, "Smart Array", &SA5_access},
+	{0x21C4103C, "Smart Array", &SA5_access},
+	{0x21C5103C, "Smart Array", &SA5_access},
+	{0x21C7103C, "Smart Array", &SA5_access},
+	{0x21C8103C, "Smart Array", &SA5_access},
+	{0x21C9103C, "Smart Array", &SA5_access},
 	{0xFFFF103C, "Unknown Smart Array", &SA5_access},
 };
 
@@ -584,7 +607,7 @@ static void set_performant_mode(struct ctlr_info *h, struct CommandList *c)
 		c->busaddr |= 1 | (h->blockFetchTable[c->Header.SGList] << 1);
 		if (likely(h->msix_vector))
 			c->Header.ReplyQueue =
-				smp_processor_id() % h->nreply_queues;
+				raw_smp_processor_id() % h->nreply_queues;
 	}
 }
 
@@ -1055,7 +1078,7 @@ free_and_out:
 }
 
 /*
- * Lookup bus/target/lun and retrun corresponding struct hpsa_scsi_dev_t *
+ * Lookup bus/target/lun and return corresponding struct hpsa_scsi_dev_t *
  * Assume's h->devlock is held.
  */
 static struct hpsa_scsi_dev_t *lookup_hpsa_scsi_dev(struct ctlr_info *h,
@@ -2722,7 +2745,6 @@ static struct CommandList *cmd_alloc(struct ctlr_info *h)
 	} while (test_and_set_bit
 		 (i & (BITS_PER_LONG - 1),
 		  h->cmd_pool_bits + (i / BITS_PER_LONG)) != 0);
-	h->nr_allocs++;
 	spin_unlock_irqrestore(&h->lock, flags);
 
 	c = h->cmd_pool + i;
@@ -2794,7 +2816,6 @@ static void cmd_free(struct ctlr_info *h, struct CommandList *c)
 	spin_lock_irqsave(&h->lock, flags);
 	clear_bit(i & (BITS_PER_LONG - 1),
 		  h->cmd_pool_bits + (i / BITS_PER_LONG));
-	h->nr_frees++;
 	spin_unlock_irqrestore(&h->lock, flags);
 }
 
@@ -3118,7 +3139,7 @@ static int hpsa_big_passthru_ioctl(struct ctlr_info *h, void __user *argp)
 		}
 		if (ioc->Request.Type.Direction == XFER_WRITE) {
 			if (copy_from_user(buff[sg_used], data_ptr, sz)) {
-				status = -EFAULT;
+				status = -ENOMEM;
 				goto cleanup1;
 			}
 		} else
@@ -3898,6 +3919,10 @@ static int hpsa_kdump_hard_reset_controller(struct pci_dev *pdev)
 
 	/* Save the PCI command register */
 	pci_read_config_word(pdev, 4, &command_register);
+	/* Turn the board off.  This is so that later pci_restore_state()
+	 * won't turn the board on before the rest of config space is ready.
+	 */
+	pci_disable_device(pdev);
 	pci_save_state(pdev);
 
 	/* find the first memory BAR, so we can find the cfg table */
@@ -3945,6 +3970,11 @@ static int hpsa_kdump_hard_reset_controller(struct pci_dev *pdev)
 		goto unmap_cfgtable;
 
 	pci_restore_state(pdev);
+	rc = pci_enable_device(pdev);
+	if (rc) {
+		dev_warn(&pdev->dev, "failed to enable device.\n");
+		goto unmap_cfgtable;
+	}
 	pci_write_config_word(pdev, 4, command_register);
 
 	/* Some devices (notably the HP Smart Array 5i Controller)
@@ -4439,23 +4469,6 @@ static int hpsa_init_reset_devices(struct pci_dev *pdev)
 	if (!reset_devices)
 		return 0;
 
-	/* kdump kernel is loading, we don't know in which state is
-	 * the pci interface. The dev->enable_cnt is equal zero
-	 * so we call enable+disable, wait a while and switch it on.
-	 */
-	rc = pci_enable_device(pdev);
-	if (rc) {
-		dev_warn(&pdev->dev, "Failed to enable PCI device\n");
-		return -ENODEV;
-	}
-	pci_disable_device(pdev);
-	msleep(260);			/* a randomly chosen number */
-	rc = pci_enable_device(pdev);
-	if (rc) {
-		dev_warn(&pdev->dev, "failed to enable device.\n");
-		return -ENODEV;
-	}
-	pci_set_master(pdev);
 	/* Reset the controller with a PCI power-cycle or via doorbell */
 	rc = hpsa_kdump_hard_reset_controller(pdev);
 
@@ -4464,11 +4477,10 @@ static int hpsa_init_reset_devices(struct pci_dev *pdev)
 	 * "performant mode".  Or, it might be 640x, which can't reset
 	 * due to concerns about shared bbwc between 6402/6404 pair.
 	 */
-	if (rc) {
-		if (rc != -ENOTSUPP) /* just try to do the kdump anyhow. */
-			rc = -ENODEV;
-		goto out_disable;
-	}
+	if (rc == -ENOTSUPP)
+		return rc; /* just try to do the kdump anyhow. */
+	if (rc)
+		return -ENODEV;
 
 	/* Now try to get the controller to respond to a no-op */
 	dev_warn(&pdev->dev, "Waiting for controller to respond to no-op\n");
@@ -4479,11 +4491,7 @@ static int hpsa_init_reset_devices(struct pci_dev *pdev)
 			dev_warn(&pdev->dev, "no-op failed%s\n",
 					(i < 11 ? "; re-trying" : ""));
 	}
-
-out_disable:
-
-	pci_disable_device(pdev);
-	return rc;
+	return 0;
 }
 
 static int hpsa_allocate_cmd_pool(struct ctlr_info *h)
@@ -4626,7 +4634,6 @@ static void hpsa_undo_allocations_after_kdump_soft_reset(struct ctlr_info *h)
 		iounmap(h->transtable);
 	if (h->cfgtable)
 		iounmap(h->cfgtable);
-	pci_disable_device(h->pdev);
 	pci_release_regions(h->pdev);
 	kfree(h);
 }
@@ -5011,7 +5018,6 @@ static void hpsa_remove_one(struct pci_dev *pdev)
 	kfree(h->hba_inquiry_data);
 	pci_disable_device(pdev);
 	pci_release_regions(pdev);
-	pci_set_drvdata(pdev, NULL);
 	kfree(h);
 }
 

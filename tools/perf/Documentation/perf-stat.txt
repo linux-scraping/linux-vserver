@@ -50,14 +50,6 @@ OPTIONS
 --scale::
 	scale/normalize counter values
 
--d::
---detailed::
-	print more detailed statistics, can be specified up to 3 times
-
-	   -d:          detailed events, L1 and LLC data cache
-        -d -d:     more detailed events, dTLB and iTLB events
-     -d -d -d:     very detailed events, adding prefetch events
-
 -r::
 --repeat=<n>::
 	repeat command and print average + stddev (max: 100). 0 means forever.
@@ -139,6 +131,16 @@ Aggregate counts per physical processor for system-wide mode measurements.  This
 is a useful mode to detect imbalance between physical cores.  To enable this mode,
 use --per-core in addition to -a. (system-wide).  The output includes the
 core number and the number of online logical processors on that physical processor.
+
+-D msecs::
+--initial-delay msecs::
+After starting the program, wait msecs before measuring. This is useful to
+filter out the startup phase of the program, which is often very different.
+
+-T::
+--transaction::
+
+Print statistics of transactional execution if supported.
 
 EXAMPLES
 --------

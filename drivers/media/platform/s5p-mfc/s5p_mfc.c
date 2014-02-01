@@ -177,6 +177,21 @@ unlock:
 		mutex_unlock(&dev->mfc_mutex);
 }
 
+static enum s5p_mfc_node_type s5p_mfc_get_node_type(struct file *file)
+{
+	struct video_device *vdev = video_devdata(file);
+
+	if (!vdev) {
+		mfc_err("failed to get video_device");
+		return MFCNODE_INVALID;
+	}
+	if (vdev->index == 0)
+		return MFCNODE_DECODER;
+	else if (vdev->index == 1)
+		return MFCNODE_ENCODER;
+	return MFCNODE_INVALID;
+}
+
 static void s5p_mfc_clear_int_flags(struct s5p_mfc_dev *dev)
 {
 	mfc_write(dev, 0, S5P_FIMV_RISC_HOST_INT);
@@ -224,7 +239,7 @@ static void s5p_mfc_handle_frame_copy_time(struct s5p_mfc_ctx *ctx)
 	frame_type = s5p_mfc_hw_call(dev->mfc_ops, get_dec_frame_type, dev);
 
 	/* Copy timestamp / timecode from decoded src to dst and set
-	   appropraite flags */
+	   appropriate flags */
 	src_buf = list_entry(ctx->src_queue.next, struct s5p_mfc_buf, list);
 	list_for_each_entry(dst_buf, &ctx->dst_queue, list) {
 		if (vb2_dma_contig_plane_dma_addr(dst_buf->b, 0) == dec_y_addr) {
@@ -389,7 +404,11 @@ leave_handle_frame:
 	if (test_and_clear_bit(0, &dev->hw_lock) == 0)
 		BUG();
 	s5p_mfc_clock_off();
-	s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
+	/* if suspending, wake up device and do not try_run again*/
+	if (test_bit(0, &dev->enter_suspend))
+		wake_up_dev(dev, reason, err);
+	else
+		s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
 }
 
 /* Error handling for interrupt */
@@ -409,7 +428,7 @@ static void s5p_mfc_handle_error(struct s5p_mfc_dev *dev,
 		case MFCINST_FINISHING:
 		case MFCINST_FINISHED:
 		case MFCINST_RUNNING:
-			/* It is higly probable that an error occured
+			/* It is highly probable that an error occurred
 			 * while decoding a frame */
 			clear_work_bit(ctx);
 			ctx->state = MFCINST_ERROR;
@@ -592,7 +611,7 @@ static irqreturn_t s5p_mfc_irq(int irq, void *priv)
 	mfc_debug(1, "Int reason: %d (err: %08x)\n", reason, err);
 	switch (reason) {
 	case S5P_MFC_R2H_CMD_ERR_RET:
-		/* An error has occured */
+		/* An error has occurred */
 		if (ctx->state == MFCINST_RUNNING &&
 			s5p_mfc_hw_call(dev->mfc_ops, err_dec, err) >=
 				dev->warn_start)
@@ -686,7 +705,6 @@ irq_cleanup_hw:
 /* Open an MFC node */
 static int s5p_mfc_open(struct file *file)
 {
-	struct video_device *vdev = video_devdata(file);
 	struct s5p_mfc_dev *dev = video_drvdata(file);
 	struct s5p_mfc_ctx *ctx = NULL;
 	struct vb2_queue *q;
@@ -724,7 +742,7 @@ static int s5p_mfc_open(struct file *file)
 	/* Mark context as idle */
 	clear_work_bit_irqsave(ctx);
 	dev->ctx[ctx->num] = ctx;
-	if (vdev == dev->vfd_dec) {
+	if (s5p_mfc_get_node_type(file) == MFCNODE_DECODER) {
 		ctx->type = MFCINST_DECODER;
 		ctx->c_ops = get_dec_codec_ops();
 		s5p_mfc_dec_init(ctx);
@@ -734,7 +752,7 @@ static int s5p_mfc_open(struct file *file)
 			mfc_err("Failed to setup mfc controls\n");
 			goto err_ctrls_setup;
 		}
-	} else if (vdev == dev->vfd_enc) {
+	} else if (s5p_mfc_get_node_type(file) == MFCNODE_ENCODER) {
 		ctx->type = MFCINST_ENCODER;
 		ctx->c_ops = get_enc_codec_ops();
 		/* only for encoder */
@@ -779,10 +797,10 @@ static int s5p_mfc_open(struct file *file)
 	q = &ctx->vq_dst;
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	q->drv_priv = &ctx->fh;
-	if (vdev == dev->vfd_dec) {
+	if (s5p_mfc_get_node_type(file) == MFCNODE_DECODER) {
 		q->io_modes = VB2_MMAP;
 		q->ops = get_dec_queue_ops();
-	} else if (vdev == dev->vfd_enc) {
+	} else if (s5p_mfc_get_node_type(file) == MFCNODE_ENCODER) {
 		q->io_modes = VB2_MMAP | VB2_USERPTR;
 		q->ops = get_enc_queue_ops();
 	} else {
@@ -801,10 +819,10 @@ static int s5p_mfc_open(struct file *file)
 	q->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 	q->io_modes = VB2_MMAP;
 	q->drv_priv = &ctx->fh;
-	if (vdev == dev->vfd_dec) {
+	if (s5p_mfc_get_node_type(file) == MFCNODE_DECODER) {
 		q->io_modes = VB2_MMAP;
 		q->ops = get_dec_queue_ops();
-	} else if (vdev == dev->vfd_enc) {
+	} else if (s5p_mfc_get_node_type(file) == MFCNODE_ENCODER) {
 		q->io_modes = VB2_MMAP | VB2_USERPTR;
 		q->ops = get_enc_queue_ops();
 	} else {
@@ -822,7 +840,7 @@ static int s5p_mfc_open(struct file *file)
 	mutex_unlock(&dev->mfc_mutex);
 	mfc_debug_leave();
 	return ret;
-	/* Deinit when failure occured */
+	/* Deinit when failure occurred */
 err_queue_init:
 	if (dev->num_inst == 1)
 		s5p_mfc_deinit_hw(dev);
@@ -863,14 +881,14 @@ static int s5p_mfc_release(struct file *file)
 	/* Mark context as idle */
 	clear_work_bit_irqsave(ctx);
 	/* If instance was initialised then
-	 * return instance and free reosurces */
+	 * return instance and free resources */
 	if (ctx->inst_no != MFC_NO_INSTANCE_SET) {
 		mfc_debug(2, "Has to free instance\n");
 		ctx->state = MFCINST_RETURN_INST;
 		set_work_bit_irqsave(ctx);
 		s5p_mfc_clean_ctx_int_flags(ctx);
 		s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
-		/* Wait until instance is returned or timeout occured */
+		/* Wait until instance is returned or timeout occurred */
 		if (s5p_mfc_wait_for_done_ctx
 		    (ctx, S5P_MFC_R2H_CMD_CLOSE_INSTANCE_RET, 0)) {
 			s5p_mfc_clock_off();
@@ -1000,11 +1018,6 @@ static int match_child(struct device *dev, void *data)
 	return !strcmp(dev_name(dev), (char *)data);
 }
 
-static void s5p_mfc_memdev_release(struct device *dev)
-{
-	dma_release_declared_memory(dev);
-}
-
 static void *mfc_get_drv_data(struct platform_device *pdev);
 
 static int s5p_mfc_alloc_memdevs(struct s5p_mfc_dev *dev)
@@ -1017,9 +1030,6 @@ static int s5p_mfc_alloc_memdevs(struct s5p_mfc_dev *dev)
 		mfc_err("Not enough memory\n");
 		return -ENOMEM;
 	}
-
-	dev_set_name(dev->mem_dev_l, "%s", "s5p-mfc-l");
-	dev->mem_dev_l->release = s5p_mfc_memdev_release;
 	device_initialize(dev->mem_dev_l);
 	of_property_read_u32_array(dev->plat_dev->dev.of_node,
 			"samsung,mfc-l", mem_info, 2);
@@ -1037,9 +1047,6 @@ static int s5p_mfc_alloc_memdevs(struct s5p_mfc_dev *dev)
 		mfc_err("Not enough memory\n");
 		return -ENOMEM;
 	}
-
-	dev_set_name(dev->mem_dev_r, "%s", "s5p-mfc-r");
-	dev->mem_dev_r->release = s5p_mfc_memdev_release;
 	device_initialize(dev->mem_dev_r);
 	of_property_read_u32_array(dev->plat_dev->dev.of_node,
 			"samsung,mfc-r", mem_info, 2);
@@ -1098,7 +1105,7 @@ static int s5p_mfc_probe(struct platform_device *pdev)
 	}
 	dev->irq = res->start;
 	ret = devm_request_irq(&pdev->dev, dev->irq, s5p_mfc_irq,
-					IRQF_DISABLED, pdev->name, dev);
+					0, pdev->name, dev);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to install irq (%d)\n", ret);
 		goto err_res;
@@ -1283,9 +1290,7 @@ static int s5p_mfc_suspend(struct device *dev)
 		/* Try and lock the HW */
 		/* Wait on the interrupt waitqueue */
 		ret = wait_event_interruptible_timeout(m_dev->queue,
-			m_dev->int_cond || m_dev->ctx[m_dev->curr_ctx]->int_cond,
-			msecs_to_jiffies(MFC_INT_TIMEOUT));
-
+			m_dev->int_cond, msecs_to_jiffies(MFC_INT_TIMEOUT));
 		if (ret == 0) {
 			mfc_err("Waiting for hardware to finish timed out\n");
 			return -EIO;
@@ -1388,6 +1393,32 @@ static struct s5p_mfc_variant mfc_drvdata_v6 = {
 	.fw_name        = "s5p-mfc-v6.fw",
 };
 
+struct s5p_mfc_buf_size_v6 mfc_buf_size_v7 = {
+	.dev_ctx	= MFC_CTX_BUF_SIZE_V7,
+	.h264_dec_ctx	= MFC_H264_DEC_CTX_BUF_SIZE_V7,
+	.other_dec_ctx	= MFC_OTHER_DEC_CTX_BUF_SIZE_V7,
+	.h264_enc_ctx	= MFC_H264_ENC_CTX_BUF_SIZE_V7,
+	.other_enc_ctx	= MFC_OTHER_ENC_CTX_BUF_SIZE_V7,
+};
+
+struct s5p_mfc_buf_size buf_size_v7 = {
+	.fw	= MAX_FW_SIZE_V7,
+	.cpb	= MAX_CPB_SIZE_V7,
+	.priv	= &mfc_buf_size_v7,
+};
+
+struct s5p_mfc_buf_align mfc_buf_align_v7 = {
+	.base = 0,
+};
+
+static struct s5p_mfc_variant mfc_drvdata_v7 = {
+	.version	= MFC_VERSION_V7,
+	.port_num	= MFC_NUM_PORTS_V7,
+	.buf_size	= &buf_size_v7,
+	.buf_align	= &mfc_buf_align_v7,
+	.fw_name        = "s5p-mfc-v7.fw",
+};
+
 static struct platform_device_id mfc_driver_ids[] = {
 	{
 		.name = "s5p-mfc",
@@ -1398,6 +1429,9 @@ static struct platform_device_id mfc_driver_ids[] = {
 	}, {
 		.name = "s5p-mfc-v6",
 		.driver_data = (unsigned long)&mfc_drvdata_v6,
+	}, {
+		.name = "s5p-mfc-v7",
+		.driver_data = (unsigned long)&mfc_drvdata_v7,
 	},
 	{},
 };
@@ -1410,6 +1444,9 @@ static const struct of_device_id exynos_mfc_match[] = {
 	}, {
 		.compatible = "samsung,mfc-v6",
 		.data = &mfc_drvdata_v6,
+	}, {
+		.compatible = "samsung,mfc-v7",
+		.data = &mfc_drvdata_v7,
 	},
 	{},
 };
@@ -1421,7 +1458,7 @@ static void *mfc_get_drv_data(struct platform_device *pdev)
 
 	if (pdev->dev.of_node) {
 		const struct of_device_id *match;
-		match = of_match_node(of_match_ptr(exynos_mfc_match),
+		match = of_match_node(exynos_mfc_match,
 				pdev->dev.of_node);
 		if (match)
 			driver_data = (struct s5p_mfc_variant *)match->data;

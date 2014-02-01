@@ -20,7 +20,13 @@
 
 #define CACHE_SUPERBLOCK_MAGIC 06142003
 #define CACHE_SUPERBLOCK_LOCATION 0
-#define CACHE_VERSION 1
+
+/*
+ * defines a range of metadata versions that this module can handle.
+ */
+#define MIN_CACHE_VERSION 1
+#define MAX_CACHE_VERSION 1
+
 #define CACHE_METADATA_CACHE_SIZE 64
 
 /*
@@ -88,9 +94,6 @@ struct cache_disk_superblock {
 } __packed;
 
 struct dm_cache_metadata {
-	atomic_t ref_count;
-	struct list_head list;
-
 	struct block_device *bdev;
 	struct dm_block_manager *bm;
 	struct dm_space_map *metadata_sm;
@@ -137,6 +140,18 @@ static void sb_prepare_for_write(struct dm_block_validator *v,
 						      SUPERBLOCK_CSUM_XOR));
 }
 
+static int check_metadata_version(struct cache_disk_superblock *disk_super)
+{
+	uint32_t metadata_version = le32_to_cpu(disk_super->version);
+	if (metadata_version < MIN_CACHE_VERSION || metadata_version > MAX_CACHE_VERSION) {
+		DMERR("Cache metadata version %u found, but only versions between %u and %u supported.",
+		      metadata_version, MIN_CACHE_VERSION, MAX_CACHE_VERSION);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int sb_check(struct dm_block_validator *v,
 		    struct dm_block *b,
 		    size_t sb_block_size)
@@ -167,7 +182,7 @@ static int sb_check(struct dm_block_validator *v,
 		return -EILSEQ;
 	}
 
-	return 0;
+	return check_metadata_version(disk_super);
 }
 
 static struct dm_block_validator sb_validator = {
@@ -201,7 +216,7 @@ static int superblock_lock(struct dm_cache_metadata *cmd,
 
 /*----------------------------------------------------------------*/
 
-static int __superblock_all_zeroes(struct dm_block_manager *bm, int *result)
+static int __superblock_all_zeroes(struct dm_block_manager *bm, bool *result)
 {
 	int r;
 	unsigned i;
@@ -217,10 +232,10 @@ static int __superblock_all_zeroes(struct dm_block_manager *bm, int *result)
 		return r;
 
 	data_le = dm_block_data(b);
-	*result = 1;
+	*result = true;
 	for (i = 0; i < sb_block_size; i++) {
 		if (data_le[i] != zero) {
-			*result = 0;
+			*result = false;
 			break;
 		}
 	}
@@ -273,7 +288,7 @@ static int __write_initial_superblock(struct dm_cache_metadata *cmd)
 	disk_super->flags = 0;
 	memset(disk_super->uuid, 0, sizeof(disk_super->uuid));
 	disk_super->magic = cpu_to_le64(CACHE_SUPERBLOCK_MAGIC);
-	disk_super->version = cpu_to_le32(CACHE_VERSION);
+	disk_super->version = cpu_to_le32(MAX_CACHE_VERSION);
 	memset(disk_super->policy_name, 0, sizeof(disk_super->policy_name));
 	memset(disk_super->policy_version, 0, sizeof(disk_super->policy_version));
 	disk_super->policy_hint_size = 0;
@@ -387,15 +402,6 @@ static int __open_metadata(struct dm_cache_metadata *cmd)
 
 	disk_super = dm_block_data(sblock);
 
-	/* Verify the data block size hasn't changed */
-	if (le32_to_cpu(disk_super->data_block_size) != cmd->data_block_size) {
-		DMERR("changing the data block size (from %u to %llu) is not supported",
-		      le32_to_cpu(disk_super->data_block_size),
-		      (unsigned long long)cmd->data_block_size);
-		r = -EINVAL;
-		goto bad;
-	}
-
 	r = __check_incompat_features(disk_super, cmd);
 	if (r < 0)
 		goto bad;
@@ -423,7 +429,8 @@ bad:
 static int __open_or_format_metadata(struct dm_cache_metadata *cmd,
 				     bool format_device)
 {
-	int r, unformatted;
+	int r;
+	bool unformatted = false;
 
 	r = __superblock_all_zeroes(cmd->bm, &unformatted);
 	if (r)
@@ -523,9 +530,8 @@ static int __begin_transaction_flags(struct dm_cache_metadata *cmd,
 	disk_super = dm_block_data(sblock);
 	update_flags(disk_super, mutator);
 	read_superblock_fields(cmd, disk_super);
-	dm_bm_unlock(sblock);
 
-	return dm_bm_flush(cmd->bm);
+	return dm_bm_flush_and_unlock(cmd->bm, sblock);
 }
 
 static int __begin_transaction(struct dm_cache_metadata *cmd)
@@ -637,10 +643,10 @@ static void unpack_value(__le64 value_le, dm_oblock_t *block, unsigned *flags)
 
 /*----------------------------------------------------------------*/
 
-static struct dm_cache_metadata *metadata_open(struct block_device *bdev,
-					       sector_t data_block_size,
-					       bool may_format_device,
-					       size_t policy_hint_size)
+struct dm_cache_metadata *dm_cache_metadata_open(struct block_device *bdev,
+						 sector_t data_block_size,
+						 bool may_format_device,
+						 size_t policy_hint_size)
 {
 	int r;
 	struct dm_cache_metadata *cmd;
@@ -648,10 +654,9 @@ static struct dm_cache_metadata *metadata_open(struct block_device *bdev,
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
 	if (!cmd) {
 		DMERR("could not allocate metadata struct");
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 	}
 
-	atomic_set(&cmd->ref_count, 1);
 	init_rwsem(&cmd->root_lock);
 	cmd->bdev = bdev;
 	cmd->data_block_size = data_block_size;
@@ -674,111 +679,91 @@ static struct dm_cache_metadata *metadata_open(struct block_device *bdev,
 	return cmd;
 }
 
-/*
- * We keep a little list of ref counted metadata objects to prevent two
- * different target instances creating separate bufio instances.  This is
- * an issue if a table is reloaded before the suspend.
- */
-static DEFINE_MUTEX(table_lock);
-static LIST_HEAD(table);
-
-static struct dm_cache_metadata *lookup(struct block_device *bdev)
-{
-	struct dm_cache_metadata *cmd;
-
-	list_for_each_entry(cmd, &table, list)
-		if (cmd->bdev == bdev) {
-			atomic_inc(&cmd->ref_count);
-			return cmd;
-		}
-
-	return NULL;
-}
-
-static struct dm_cache_metadata *lookup_or_open(struct block_device *bdev,
-						sector_t data_block_size,
-						bool may_format_device,
-						size_t policy_hint_size)
-{
-	struct dm_cache_metadata *cmd, *cmd2;
-
-	mutex_lock(&table_lock);
-	cmd = lookup(bdev);
-	mutex_unlock(&table_lock);
-
-	if (cmd)
-		return cmd;
-
-	cmd = metadata_open(bdev, data_block_size, may_format_device, policy_hint_size);
-	if (!IS_ERR(cmd)) {
-		mutex_lock(&table_lock);
-		cmd2 = lookup(bdev);
-		if (cmd2) {
-			mutex_unlock(&table_lock);
-			__destroy_persistent_data_objects(cmd);
-			kfree(cmd);
-			return cmd2;
-		}
-		list_add(&cmd->list, &table);
-		mutex_unlock(&table_lock);
-	}
-
-	return cmd;
-}
-
-static bool same_params(struct dm_cache_metadata *cmd, sector_t data_block_size)
-{
-	if (cmd->data_block_size != data_block_size) {
-		DMERR("data_block_size (%llu) different from that in metadata (%llu)\n",
-		      (unsigned long long) data_block_size,
-		      (unsigned long long) cmd->data_block_size);
-		return false;
-	}
-
-	return true;
-}
-
-struct dm_cache_metadata *dm_cache_metadata_open(struct block_device *bdev,
-						 sector_t data_block_size,
-						 bool may_format_device,
-						 size_t policy_hint_size)
-{
-	struct dm_cache_metadata *cmd = lookup_or_open(bdev, data_block_size,
-						       may_format_device, policy_hint_size);
-
-	if (!IS_ERR(cmd) && !same_params(cmd, data_block_size)) {
-		dm_cache_metadata_close(cmd);
-		return ERR_PTR(-EINVAL);
-	}
-
-	return cmd;
-}
-
 void dm_cache_metadata_close(struct dm_cache_metadata *cmd)
 {
-	if (atomic_dec_and_test(&cmd->ref_count)) {
-		mutex_lock(&table_lock);
-		list_del(&cmd->list);
-		mutex_unlock(&table_lock);
+	__destroy_persistent_data_objects(cmd);
+	kfree(cmd);
+}
 
-		__destroy_persistent_data_objects(cmd);
-		kfree(cmd);
+/*
+ * Checks that the given cache block is either unmapped or clean.
+ */
+static int block_unmapped_or_clean(struct dm_cache_metadata *cmd, dm_cblock_t b,
+				   bool *result)
+{
+	int r;
+	__le64 value;
+	dm_oblock_t ob;
+	unsigned flags;
+
+	r = dm_array_get_value(&cmd->info, cmd->root, from_cblock(b), &value);
+	if (r) {
+		DMERR("block_unmapped_or_clean failed");
+		return r;
 	}
+
+	unpack_value(value, &ob, &flags);
+	*result = !((flags & M_VALID) && (flags & M_DIRTY));
+
+	return 0;
+}
+
+static int blocks_are_unmapped_or_clean(struct dm_cache_metadata *cmd,
+					dm_cblock_t begin, dm_cblock_t end,
+					bool *result)
+{
+	int r;
+	*result = true;
+
+	while (begin != end) {
+		r = block_unmapped_or_clean(cmd, begin, result);
+		if (r)
+			return r;
+
+		if (!*result) {
+			DMERR("cache block %llu is dirty",
+			      (unsigned long long) from_cblock(begin));
+			return 0;
+		}
+
+		begin = to_cblock(from_cblock(begin) + 1);
+	}
+
+	return 0;
 }
 
 int dm_cache_resize(struct dm_cache_metadata *cmd, dm_cblock_t new_cache_size)
 {
 	int r;
+	bool clean;
 	__le64 null_mapping = pack_value(0, 0);
 
 	down_write(&cmd->root_lock);
 	__dm_bless_for_disk(&null_mapping);
+
+	if (from_cblock(new_cache_size) < from_cblock(cmd->cache_blocks)) {
+		r = blocks_are_unmapped_or_clean(cmd, new_cache_size, cmd->cache_blocks, &clean);
+		if (r) {
+			__dm_unbless_for_disk(&null_mapping);
+			goto out;
+		}
+
+		if (!clean) {
+			DMERR("unable to shrink cache due to dirty blocks");
+			r = -EINVAL;
+			__dm_unbless_for_disk(&null_mapping);
+			goto out;
+		}
+	}
+
 	r = dm_array_resize(&cmd->info, cmd->root, from_cblock(cmd->cache_blocks),
 			    from_cblock(new_cache_size),
 			    &null_mapping, &cmd->root);
 	if (!r)
 		cmd->cache_blocks = new_cache_size;
 	cmd->changed = true;
+
+out:
 	up_write(&cmd->root_lock);
 
 	return r;
@@ -1281,4 +1266,9 @@ int dm_cache_save_hint(struct dm_cache_metadata *cmd, dm_cblock_t cblock,
 	up_write(&cmd->root_lock);
 
 	return r;
+}
+
+int dm_cache_metadata_all_clean(struct dm_cache_metadata *cmd, bool *result)
+{
+	return blocks_are_unmapped_or_clean(cmd, 0, cmd->cache_blocks, result);
 }

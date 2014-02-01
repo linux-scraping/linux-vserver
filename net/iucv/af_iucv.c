@@ -1829,7 +1829,7 @@ static void iucv_callback_txdone(struct iucv_path *path,
 		spin_lock_irqsave(&list->lock, flags);
 
 		while (list_skb != (struct sk_buff *)list) {
-			if (msg->tag == IUCV_SKB_CB(list_skb)->tag) {
+			if (msg->tag != IUCV_SKB_CB(list_skb)->tag) {
 				this = list_skb;
 				break;
 			}
@@ -2291,7 +2291,7 @@ out_unlock:
 static int afiucv_netdev_event(struct notifier_block *this,
 			       unsigned long event, void *ptr)
 {
-	struct net_device *event_dev = (struct net_device *)ptr;
+	struct net_device *event_dev = netdev_notifier_info_to_dev(ptr);
 	struct sock *sk;
 	struct iucv_sock *iucv;
 

@@ -1042,6 +1042,7 @@ struct ubifs_debug_info;
  *
  * @mst_node: master node
  * @mst_offs: offset of valid master node
+ * @mst_mutex: protects the master node area, @mst_node, and @mst_offs
  *
  * @max_bu_buf_len: maximum bulk-read buffer length
  * @bu_mutex: protects the pre-allocated bulk-read buffer and @c->bu
@@ -1281,6 +1282,7 @@ struct ubifs_info {
 
 	struct ubifs_mst_node *mst_node;
 	int mst_offs;
+	struct mutex mst_mutex;
 
 	int max_bu_buf_len;
 	struct mutex bu_mutex;
@@ -1622,7 +1624,10 @@ int ubifs_tnc_start_commit(struct ubifs_info *c, struct ubifs_zbranch *zroot);
 int ubifs_tnc_end_commit(struct ubifs_info *c);
 
 /* shrinker.c */
-int ubifs_shrinker(struct shrinker *shrink, struct shrink_control *sc);
+unsigned long ubifs_shrink_scan(struct shrinker *shrink,
+				struct shrink_control *sc);
+unsigned long ubifs_shrink_count(struct shrinker *shrink,
+				 struct shrink_control *sc);
 
 /* commit.c */
 int ubifs_bg_thread(void *info);

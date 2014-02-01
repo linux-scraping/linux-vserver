@@ -27,13 +27,6 @@
 
 #define KVM_COALESCED_MMIO_PAGE_OFFSET 1
 
-/* Don't support huge pages */
-#define KVM_HPAGE_GFN_SHIFT(x)	0
-
-/* We don't currently support large pages. */
-#define KVM_NR_PAGE_SIZES	1
-#define KVM_PAGES_PER_HPAGE(x)	1
-
 
 
 /* Special address that contains the comm page, used for reducing # of traps */
@@ -349,7 +342,6 @@ struct kvm_mips_tlb {
 #define KVM_MIPS_GUEST_TLB_SIZE     64
 struct kvm_vcpu_arch {
 	void *host_ebase, *guest_ebase;
-	int (*vcpu_run)(struct kvm_run *run, struct kvm_vcpu *vcpu);
 	unsigned long host_stack;
 	unsigned long host_gp;
 

@@ -15,12 +15,6 @@
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-************************************************************************
 */
 /*
 Driver: ni_at_a2150
@@ -64,12 +58,14 @@ TRIG_WAKE_EOS
 
 */
 
+#include <linux/module.h>
+#include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/slab.h>
 #include "../comedidev.h"
 
-#include <linux/ioport.h>
 #include <linux/io.h>
+
 #include <asm/dma.h>
 
 #include "8253.h"
@@ -158,7 +154,7 @@ struct a2150_private {
 
 	volatile unsigned int count;	/* number of data points left to be taken */
 	unsigned int dma;	/*  dma channel */
-	s16 *dma_buffer;	/*  dma buffer */
+	uint16_t *dma_buffer;	/*  dma buffer */
 	unsigned int dma_transfer_size;	/*  size in bytes of dma transfers */
 	int irq_dma_bits;	/*  irq/dma register bits */
 	int config_bits;	/*  config register bits */
@@ -196,7 +192,7 @@ static irqreturn_t a2150_interrupt(int irq, void *d)
 	struct comedi_async *async;
 	struct comedi_cmd *cmd;
 	unsigned int max_points, num_points, residue, leftover;
-	short dpnt;
+	unsigned short dpnt;
 	static const int sample_size = sizeof(devpriv->dma_buffer[0]);
 
 	if (!dev->attached) {
@@ -688,13 +684,12 @@ static int a2150_set_chanlist(struct comedi_device *dev,
 		devpriv->config_bits |= CHANNEL_BITS(0x4 | start_channel);
 		break;
 	case 2:
-		if (start_channel == 0) {
+		if (start_channel == 0)
 			devpriv->config_bits |= CHANNEL_BITS(0x2);
-		} else if (start_channel == 2) {
+		else if (start_channel == 2)
 			devpriv->config_bits |= CHANNEL_BITS(0x3);
-		} else {
+		else
 			return -1;
-		}
 		break;
 	case 4:
 		devpriv->config_bits |= CHANNEL_BITS(0x1);
@@ -725,10 +720,9 @@ static int a2150_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	int i;
 	int ret;
 
-	devpriv = kzalloc(sizeof(*devpriv), GFP_KERNEL);
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
 	if (!devpriv)
 		return -ENOMEM;
-	dev->private = devpriv;
 
 	ret = comedi_request_region(dev, it->options[0], A2150_SIZE);
 	if (ret)

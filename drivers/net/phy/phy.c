@@ -203,25 +203,6 @@ static inline int phy_find_valid(int idx, u32 features)
 }
 
 /**
- * phy_check_valid - check if there is a valid PHY setting which matches
- *		     speed, duplex, and feature mask
- * @speed: speed to match
- * @duplex: duplex to match
- * @features: A mask of the valid settings
- *
- * Description: Returns true if there is a valid setting, false otherwise.
- */
-static inline bool phy_check_valid(int speed, int duplex, u32 features)
-{
-	unsigned int idx;
-
-	idx = phy_find_valid(phy_find_setting(speed, duplex), features);
-
-	return settings[idx].speed == speed && settings[idx].duplex == duplex &&
-		(settings[idx].setting & features);
-}
-
-/**
  * phy_sanitize_settings - make sure the PHY is set to supported speed and duplex
  * @phydev: the target phy_device struct
  *
@@ -313,7 +294,8 @@ int phy_ethtool_gset(struct phy_device *phydev, struct ethtool_cmd *cmd)
 	cmd->duplex = phydev->duplex;
 	cmd->port = PORT_MII;
 	cmd->phy_address = phydev->addr;
-	cmd->transceiver = XCVR_EXTERNAL;
+	cmd->transceiver = phy_is_internal(phydev) ?
+		XCVR_INTERNAL : XCVR_EXTERNAL;
 	cmd->autoneg = phydev->autoneg;
 
 	return 0;
@@ -438,8 +420,6 @@ out_unlock:
 EXPORT_SYMBOL(phy_start_aneg);
 
 
-static void phy_change(struct work_struct *work);
-
 /**
  * phy_start_machine - start PHY state machine tracking
  * @phydev: the phy_device struct
@@ -458,7 +438,7 @@ void phy_start_machine(struct phy_device *phydev,
 {
 	phydev->adjust_state = handler;
 
-	schedule_delayed_work(&phydev->state_queue, HZ);
+	queue_delayed_work(system_power_efficient_wq, &phydev->state_queue, HZ);
 }
 
 /**
@@ -519,7 +499,7 @@ static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 	disable_irq_nosync(irq);
 	atomic_inc(&phydev->irq_disable);
 
-	schedule_work(&phydev->phy_queue);
+	queue_work(system_power_efficient_wq, &phydev->phy_queue);
 
 	return IRQ_HANDLED;
 }
@@ -584,13 +564,9 @@ int phy_start_interrupts(struct phy_device *phydev)
 {
 	int err = 0;
 
-	INIT_WORK(&phydev->phy_queue, phy_change);
-
 	atomic_set(&phydev->irq_disable, 0);
-	if (request_irq(phydev->irq, phy_interrupt,
-				IRQF_SHARED,
-				"phy_interrupt",
-				phydev) < 0) {
+	if (request_irq(phydev->irq, phy_interrupt, 0, "phy_interrupt",
+			phydev) < 0) {
 		pr_warn("%s: Can't get IRQ %d (PHY)\n",
 			phydev->bus->name, phydev->irq);
 		phydev->irq = PHY_POLL;
@@ -642,7 +618,7 @@ EXPORT_SYMBOL(phy_stop_interrupts);
  * phy_change - Scheduled by the phy_interrupt/timer to handle PHY changes
  * @work: work_struct that describes the work to be done
  */
-static void phy_change(struct work_struct *work)
+void phy_change(struct work_struct *work)
 {
 	int err;
 	struct phy_device *phydev =
@@ -674,7 +650,7 @@ static void phy_change(struct work_struct *work)
 
 	/* reschedule state queue work to run as soon as possible */
 	cancel_delayed_work_sync(&phydev->state_queue);
-	schedule_delayed_work(&phydev->state_queue, 0);
+	queue_delayed_work(system_power_efficient_wq, &phydev->state_queue, 0);
 
 	return;
 
@@ -701,7 +677,7 @@ void phy_stop(struct phy_device *phydev)
 	if (PHY_HALTED == phydev->state)
 		goto out_unlock;
 
-	if (phydev->irq != PHY_POLL) {
+	if (phy_interrupt_is_valid(phydev)) {
 		/* Disable PHY Interrupts */
 		phy_config_interrupt(phydev, PHY_INTERRUPT_DISABLED);
 
@@ -847,8 +823,9 @@ void phy_state_machine(struct work_struct *work)
 			break;
 		case PHY_RUNNING:
 			/* Only register a CHANGE if we are
-			 * polling */
-			if (PHY_POLL == phydev->irq)
+			 * polling or ignoring interrupts
+			 */
+			if (!phy_interrupt_is_valid(phydev))
 				phydev->state = PHY_CHANGELINK;
 			break;
 		case PHY_CHANGELINK:
@@ -867,7 +844,7 @@ void phy_state_machine(struct work_struct *work)
 
 			phydev->adjust_link(phydev->attached_dev);
 
-			if (PHY_POLL != phydev->irq)
+			if (phy_interrupt_is_valid(phydev))
 				err = phy_config_interrupt(phydev,
 						PHY_INTERRUPT_ENABLED);
 			break;
@@ -937,8 +914,17 @@ void phy_state_machine(struct work_struct *work)
 	if (err < 0)
 		phy_error(phydev);
 
-	schedule_delayed_work(&phydev->state_queue, PHY_STATE_TIME * HZ);
+	queue_delayed_work(system_power_efficient_wq, &phydev->state_queue,
+			PHY_STATE_TIME * HZ);
 }
+
+void phy_mac_interrupt(struct phy_device *phydev, int new_link)
+{
+	cancel_work_sync(&phydev->phy_queue);
+	phydev->link = new_link;
+	schedule_work(&phydev->phy_queue);
+}
+EXPORT_SYMBOL(phy_mac_interrupt);
 
 static inline void mmd_phy_indirect(struct mii_bus *bus, int prtad, int devad,
 				    int addr)
@@ -1022,17 +1008,15 @@ int phy_init_eee(struct phy_device *phydev, bool clk_stop_enable)
 
 	/* According to 802.3az,the EEE is supported only in full duplex-mode.
 	 * Also EEE feature is active when core is operating with MII, GMII
-	 * or RGMII (all kinds). Internal PHYs are also allowed to proceed and
-	 * should return an error if they do not support EEE.
+	 * or RGMII.
 	 */
 	if ((phydev->duplex == DUPLEX_FULL) &&
 	    ((phydev->interface == PHY_INTERFACE_MODE_MII) ||
 	    (phydev->interface == PHY_INTERFACE_MODE_GMII) ||
-	     (phydev->interface >= PHY_INTERFACE_MODE_RGMII &&
-	      phydev->interface <= PHY_INTERFACE_MODE_RGMII_TXID))) {
+	    (phydev->interface == PHY_INTERFACE_MODE_RGMII))) {
 		int eee_lp, eee_cap, eee_adv;
 		u32 lp, cap, adv;
-		int status;
+		int idx, status;
 
 		/* Read phy status to properly get the right settings */
 		status = phy_read_status(phydev);
@@ -1064,7 +1048,8 @@ int phy_init_eee(struct phy_device *phydev, bool clk_stop_enable)
 
 		adv = mmd_eee_adv_to_ethtool_adv_t(eee_adv);
 		lp = mmd_eee_adv_to_ethtool_adv_t(eee_lp);
-		if (!phy_check_valid(phydev->speed, phydev->duplex, lp & adv))
+		idx = phy_find_setting(phydev->speed, phydev->duplex);
+		if (!(lp & adv & settings[idx].setting))
 			goto eee_exit;
 
 		if (clk_stop_enable) {

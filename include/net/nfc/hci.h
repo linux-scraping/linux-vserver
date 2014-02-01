@@ -24,12 +24,6 @@
 
 #include <net/nfc/nfc.h>
 
-struct nfc_phy_ops {
-	int (*write)(void *dev_id, struct sk_buff *skb);
-	int (*enable)(void *dev_id);
-	void (*disable)(void *dev_id);
-};
-
 struct nfc_hci_dev;
 
 struct nfc_hci_ops {
@@ -59,8 +53,10 @@ struct nfc_hci_ops {
 			      struct nfc_target *target);
 	int (*event_received)(struct nfc_hci_dev *hdev, u8 gate, u8 event,
 			      struct sk_buff *skb);
-	int (*enable_se)(struct nfc_dev *dev, u32 secure_element);
-	int (*disable_se)(struct nfc_dev *dev, u32 secure_element);
+	int (*fw_download)(struct nfc_hci_dev *hdev, const char *firmware_name);
+	int (*discover_se)(struct nfc_hci_dev *dev);
+	int (*enable_se)(struct nfc_hci_dev *dev, u32 se_idx);
+	int (*disable_se)(struct nfc_hci_dev *dev, u32 se_idx);
 };
 
 /* Pipes */
@@ -152,7 +148,6 @@ struct nfc_hci_dev *nfc_hci_allocate_device(struct nfc_hci_ops *ops,
 					    struct nfc_hci_init_data *init_data,
 					    unsigned long quirks,
 					    u32 protocols,
-					    u32 supported_se,
 					    const char *llc_name,
 					    int tx_headroom,
 					    int tx_tailroom,

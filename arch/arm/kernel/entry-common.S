@@ -32,9 +32,7 @@ ret_fast_syscall:
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)
 	disable_irq				@ disable interrupts
-	ldr	r1, [tsk, #TI_FLAGS]		@ re-check for syscall tracing
-	tst	r1, #_TIF_SYSCALL_WORK
-	bne	__sys_trace_return
+	ldr	r1, [tsk, #TI_FLAGS]
 	tst	r1, #_TIF_WORK_MASK
 	bne	fast_work_pending
 	asm_trace_hardirqs_on
@@ -352,6 +350,9 @@ ENDPROC(ftrace_stub)
 
 	.align	5
 ENTRY(vector_swi)
+#ifdef CONFIG_CPU_V7M
+	v7m_exception_entry
+#else
 	sub	sp, sp, #S_FRAME_SIZE
 	stmia	sp, {r0 - r12}			@ Calling r0 - r12
  ARM(	add	r8, sp, #S_PC		)
@@ -362,6 +363,7 @@ ENTRY(vector_swi)
 	str	lr, [sp, #S_PC]			@ Save calling PC
 	str	r8, [sp, #S_PSR]		@ Save CPSR
 	str	r0, [sp, #S_OLD_R0]		@ Save OLD_R0
+#endif
 	zero_fp
 
 #ifdef CONFIG_ALIGNMENT_TRAP
@@ -391,9 +393,7 @@ ENTRY(vector_swi)
 #else
  USER(	ldr	r10, [lr, #-4]		)	@ get SWI instruction
 #endif
-#ifdef CONFIG_CPU_ENDIAN_BE8
-	rev	r10, r10			@ little endian instruction
-#endif
+ ARM_BE8(rev	r10, r10)			@ little endian instruction
 
 #elif defined(CONFIG_AEABI)
 
@@ -440,10 +440,10 @@ local_restart:
 	ldrcc	pc, [tbl, scno, lsl #2]		@ call sys_* routine
 
 	add	r1, sp, #S_OFF
-2:	mov	why, #0				@ no longer a real syscall
-	cmp	scno, #(__ARM_NR_BASE - __NR_SYSCALL_BASE)
+2:	cmp	scno, #(__ARM_NR_BASE - __NR_SYSCALL_BASE)
 	eor	r0, scno, #__NR_SYSCALL_BASE	@ put OS number back
-	bcs	arm_syscall	
+	bcs	arm_syscall
+	mov	why, #0				@ no longer a real syscall
 	b	sys_ni_syscall			@ not private func
 
 #if defined(CONFIG_OABI_COMPAT) || !defined(CONFIG_AEABI)

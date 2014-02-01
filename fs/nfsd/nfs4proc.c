@@ -42,6 +42,36 @@
 #include "current_stateid.h"
 #include "netns.h"
 
+#ifdef CONFIG_NFSD_V4_SECURITY_LABEL
+#include <linux/security.h>
+
+static inline void
+nfsd4_security_inode_setsecctx(struct svc_fh *resfh, struct xdr_netobj *label, u32 *bmval)
+{
+	struct inode *inode = resfh->fh_dentry->d_inode;
+	int status;
+
+	mutex_lock(&inode->i_mutex);
+	status = security_inode_setsecctx(resfh->fh_dentry,
+		label->data, label->len);
+	mutex_unlock(&inode->i_mutex);
+
+	if (status)
+		/*
+		 * XXX: We should really fail the whole open, but we may
+		 * already have created a new file, so it may be too
+		 * late.  For now this seems the least of evils:
+		 */
+		bmval[2] &= ~FATTR4_WORD2_SECURITY_LABEL;
+
+	return;
+}
+#else
+static inline void
+nfsd4_security_inode_setsecctx(struct svc_fh *resfh, struct xdr_netobj *label, u32 *bmval)
+{ }
+#endif
+
 #define NFSDDBG_FACILITY		NFSDDBG_PROC
 
 static u32 nfsd_attrmask[] = {
@@ -239,6 +269,9 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 					(u32 *)open->op_verf.data,
 					&open->op_truncate, &open->op_created);
 
+		if (!status && open->op_label.len)
+			nfsd4_security_inode_setsecctx(resfh, &open->op_label, open->op_bmval);
+
 		/*
 		 * Following rfc 3530 14.2.16, use the returned bitmask
 		 * to indicate which attributes we used to store the
@@ -263,7 +296,8 @@ do_open_lookup(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate, stru
 
 	nfsd4_set_open_owner_reply_cache(cstate, open, resfh);
 	accmode = NFSD_MAY_NOP;
-	if (open->op_created)
+	if (open->op_created ||
+			open->op_claim_type == NFS4_OPEN_CLAIM_DELEGATE_CUR)
 		accmode |= NFSD_MAY_OWNER_OVERRIDE;
 	status = do_open_permission(rqstp, resfh, open, accmode);
 	set_change_info(&open->op_cinfo, current_fh);
@@ -576,6 +610,15 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 	switch (create->cr_type) {
 	case NF4LNK:
+		/* ugh! we have to null-terminate the linktext, or
+		 * vfs_symlink() will choke.  it is always safe to
+		 * null-terminate by brute force, since at worst we
+		 * will overwrite the first byte of the create namelen
+		 * in the XDR buffer, which has already been extracted
+		 * during XDR decode.
+		 */
+		create->cr_linkname[create->cr_linklen] = 0;
+
 		status = nfsd_symlink(rqstp, &cstate->current_fh,
 				      create->cr_name, create->cr_namelen,
 				      create->cr_linkname, create->cr_linklen,
@@ -627,6 +670,9 @@ nfsd4_create(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 	if (status)
 		goto out;
+
+	if (create->cr_label.len)
+		nfsd4_security_inode_setsecctx(&resfh, &create->cr_label, create->cr_bmval);
 
 	if (create->cr_acl != NULL)
 		do_set_nfs4_acl(rqstp, &resfh, create->cr_acl,
@@ -905,6 +951,11 @@ nfsd4_setattr(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	if (setattr->sa_acl != NULL)
 		status = nfsd4_set_nfs4_acl(rqstp, &cstate->current_fh,
 					    setattr->sa_acl);
+	if (status)
+		goto out;
+	if (setattr->sa_label.len)
+		status = nfsd4_set_nfs4_label(rqstp, &cstate->current_fh,
+				&setattr->sa_label);
 	if (status)
 		goto out;
 	status = nfsd_setattr(rqstp, &cstate->current_fh, &setattr->sa_iattr,
@@ -1191,8 +1242,7 @@ static bool need_wrongsec_check(struct svc_rqst *rqstp)
 	 */
 	if (argp->opcnt == resp->opcnt)
 		return false;
-	if (next->opnum == OP_ILLEGAL)
-		return false;
+
 	nextd = OPDESC(next);
 	/*
 	 * Rest of 2.6.3.1.1: certain operations will return WRONGSEC
@@ -1243,7 +1293,7 @@ nfsd4_proc_compound(struct svc_rqst *rqstp,
 	 * According to RFC3010, this takes precedence over all other errors.
 	 */
 	status = nfserr_minor_vers_mismatch;
-	if (args->minorversion > nfsd_supported_minorversion)
+	if (nfsd_minorversion(args->minorversion, NFSD_TEST) <= 0)
 		goto out;
 
 	status = nfs41_check_op_ordering(args);
@@ -1299,12 +1349,6 @@ nfsd4_proc_compound(struct svc_rqst *rqstp,
 		/* If op is non-idempotent */
 		if (opdesc->op_flags & OP_MODIFIES_SOMETHING) {
 			plen = opdesc->op_rsize_bop(rqstp, op);
-			/*
-			 * If there's still another operation, make sure
-			 * we'll have space to at least encode an error:
-			 */
-			if (resp->opcnt < args->opcnt)
-				plen += COMPOUND_ERR_SLACK_SPACE;
 			op->status = nfsd4_check_resp_size(resp, plen);
 		}
 
@@ -1469,8 +1513,7 @@ static inline u32 nfsd4_setattr_rsize(struct svc_rqst *rqstp, struct nfsd4_op *o
 
 static inline u32 nfsd4_setclientid_rsize(struct svc_rqst *rqstp, struct nfsd4_op *op)
 {
-	return (op_encode_hdr_size + 2 + XDR_QUADLEN(NFS4_VERIFIER_SIZE)) *
-								sizeof(__be32);
+	return (op_encode_hdr_size + 2 + 1024) * sizeof(__be32);
 }
 
 static inline u32 nfsd4_write_rsize(struct svc_rqst *rqstp, struct nfsd4_op *op)
@@ -1481,7 +1524,7 @@ static inline u32 nfsd4_write_rsize(struct svc_rqst *rqstp, struct nfsd4_op *op)
 static inline u32 nfsd4_exchange_id_rsize(struct svc_rqst *rqstp, struct nfsd4_op *op)
 {
 	return (op_encode_hdr_size + 2 + 1 + /* eir_clientid, eir_sequenceid */\
-		1 + 1 + 0 + /* eir_flags, spr_how, SP4_NONE (for now) */\
+		1 + 1 + 2 + /* eir_flags, spr_how, spo_must_enforce & _allow */\
 		2 + /*eir_server_owner.so_minor_id */\
 		/* eir_server_owner.so_major_id<> */\
 		XDR_QUADLEN(NFS4_OPAQUE_LIMIT) + 1 +\

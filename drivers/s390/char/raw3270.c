@@ -615,10 +615,10 @@ raw3270_reset_device_cb(struct raw3270_request *rq, void *data)
 
 	if (rp->state != RAW3270_STATE_RESET)
 		return;
-	if (rq && rq->rc) {
+	if (rq->rc) {
 		/* Reset command failed. */
 		rp->state = RAW3270_STATE_INIT;
-	} else if (0 && MACHINE_IS_VM) {
+	} else if (MACHINE_IS_VM) {
 		raw3270_size_device_vm(rp);
 		raw3270_size_device_done(rp);
 	} else
@@ -776,23 +776,15 @@ raw3270_setup_device(struct ccw_device *cdev, struct raw3270 *rp, char *ascebc)
 }
 
 #ifdef CONFIG_TN3270_CONSOLE
-/* Tentative definition - see below for actual definition. */
-static struct ccw_driver raw3270_ccw_driver;
-
 /*
  * Setup 3270 device configured as console.
  */
-struct raw3270 __init *raw3270_setup_console(void)
+struct raw3270 __init *raw3270_setup_console(struct ccw_device *cdev)
 {
-	struct ccw_device *cdev;
 	unsigned long flags;
 	struct raw3270 *rp;
 	char *ascebc;
 	int rc;
-
-	cdev = ccw_device_probe_console(&raw3270_ccw_driver);
-	if (IS_ERR(cdev))
-		return ERR_CAST(cdev);
 
 	rp = kzalloc(sizeof(struct raw3270), GFP_KERNEL | GFP_DMA);
 	ascebc = kzalloc(256, GFP_KERNEL);

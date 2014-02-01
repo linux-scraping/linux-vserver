@@ -45,19 +45,20 @@ MODULE_PARM_DESC(usbip_debug_flag, "debug flags (defined in usbip_common.h)");
 struct device_attribute dev_attr_usbip_debug;
 EXPORT_SYMBOL_GPL(dev_attr_usbip_debug);
 
-static ssize_t show_flag(struct device *dev, struct device_attribute *attr,
-			 char *buf)
+static ssize_t usbip_debug_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
 	return sprintf(buf, "%lx\n", usbip_debug_flag);
 }
 
-static ssize_t store_flag(struct device *dev, struct device_attribute *attr,
-			  const char *buf, size_t count)
+static ssize_t usbip_debug_store(struct device *dev,
+				 struct device_attribute *attr, const char *buf,
+				 size_t count)
 {
 	sscanf(buf, "%lx", &usbip_debug_flag);
 	return count;
 }
-DEVICE_ATTR(usbip_debug, (S_IRUGO | S_IWUSR), show_flag, store_flag);
+DEVICE_ATTR_RW(usbip_debug);
 
 static void usbip_dump_buffer(char *buff, int bufflen)
 {
@@ -783,17 +784,6 @@ int usbip_recv_xbuff(struct usbip_device *ud, struct urb *urb)
 	/* no need to recv xbuff */
 	if (!(size > 0))
 		return 0;
-
-	if (size > urb->transfer_buffer_length) {
-		/* should not happen, probably malicious packet */
-		if (ud->side == USBIP_STUB) {
-			usbip_event_add(ud, SDEV_EVENT_ERROR_TCP);
-			return 0;
-		} else {
-			usbip_event_add(ud, VDEV_EVENT_ERROR_TCP);
-			return -EPIPE;
-		}
-	}
 
 	ret = usbip_recv(ud->tcp_socket, urb->transfer_buffer, size);
 	if (ret != size) {

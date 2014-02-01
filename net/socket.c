@@ -108,6 +108,12 @@
 #include <linux/route.h>
 #include <linux/sockios.h>
 #include <linux/atalk.h>
+#include <net/busy_poll.h>
+
+#ifdef CONFIG_NET_RX_BUSY_POLL
+unsigned int sysctl_net_busy_read __read_mostly;
+unsigned int sysctl_net_busy_poll __read_mostly;
+#endif
 
 static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
 static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
@@ -881,11 +887,6 @@ int kernel_recvmsg(struct socket *sock, struct msghdr *msg,
 }
 EXPORT_SYMBOL(kernel_recvmsg);
 
-static void sock_aio_dtor(struct kiocb *iocb)
-{
-	kfree(iocb->private);
-}
-
 static ssize_t sock_sendpage(struct file *file, struct page *page,
 			     int offset, size_t size, loff_t *ppos, int more)
 {
@@ -916,12 +917,8 @@ static ssize_t sock_splice_read(struct file *file, loff_t *ppos,
 static struct sock_iocb *alloc_sock_iocb(struct kiocb *iocb,
 					 struct sock_iocb *siocb)
 {
-	if (!is_sync_kiocb(iocb)) {
-		siocb = kmalloc(sizeof(*siocb), GFP_KERNEL);
-		if (!siocb)
-			return NULL;
-		iocb->ki_dtor = sock_aio_dtor;
-	}
+	if (!is_sync_kiocb(iocb))
+		BUG();
 
 	siocb->kiocb = iocb;
 	iocb->private = siocb;
@@ -958,7 +955,7 @@ static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	if (pos != 0)
 		return -ESPIPE;
 
-	if (iocb->ki_left == 0)	/* Match SYS5 behaviour */
+	if (iocb->ki_nbytes == 0)	/* Match SYS5 behaviour */
 		return 0;
 
 
@@ -1175,13 +1172,24 @@ EXPORT_SYMBOL(sock_create_lite);
 /* No kernel lock held - perfect */
 static unsigned int sock_poll(struct file *file, poll_table *wait)
 {
+	unsigned int busy_flag = 0;
 	struct socket *sock;
 
 	/*
 	 *      We can't return errors to poll, so it's either yes or no.
 	 */
 	sock = file->private_data;
-	return sock->ops->poll(file, sock, wait);
+
+	if (sk_can_busy_loop(sock->sk)) {
+		/* this socket can poll_ll so tell the system call */
+		busy_flag = POLL_BUSY_LOOP;
+
+		/* once, only if requested by syscall */
+		if (wait && (wait->_key & POLL_BUSY_LOOP))
+			sk_busy_loop(sock->sk, 1);
+	}
+
+	return busy_flag | sock->ops->poll(file, sock, wait);
 }
 
 static int sock_mmap(struct file *file, struct vm_area_struct *vma)
@@ -2006,10 +2014,6 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
 {
 	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
 		return -EFAULT;
-
-	if (kmsg->msg_namelen < 0)
-		return -EINVAL;
-
 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
 		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
 	return 0;
@@ -2030,12 +2034,14 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	int err, ctl_len, total_len;
 
 	err = -EFAULT;
-	if (MSG_CMSG_COMPAT & flags)
-		err = get_compat_msghdr(msg_sys, msg_compat);
-	else
+	if (MSG_CMSG_COMPAT & flags) {
+		if (get_compat_msghdr(msg_sys, msg_compat))
+			return -EFAULT;
+	} else {
 		err = copy_msghdr_from_user(msg_sys, msg);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		err = -EMSGSIZE;
@@ -2240,12 +2246,14 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
 	struct sockaddr __user *uaddr;
 	int __user *uaddr_len;
 
-	if (MSG_CMSG_COMPAT & flags)
-		err = get_compat_msghdr(msg_sys, msg_compat);
-	else
+	if (MSG_CMSG_COMPAT & flags) {
+		if (get_compat_msghdr(msg_sys, msg_compat))
+			return -EFAULT;
+	} else {
 		err = copy_msghdr_from_user(msg_sys, msg);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		err = -EMSGSIZE;
@@ -2423,31 +2431,31 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 			break;
 	}
 
-	if (err == 0)
-		goto out_put;
-
-	if (datagrams == 0) {
-		datagrams = err;
-		goto out_put;
-	}
-
-	/*
-	 * We may return less entries than requested (vlen) if the
-	 * sock is non block and there aren't enough datagrams...
-	 */
-	if (err != -EAGAIN) {
-		/*
-		 * ... or  if recvmsg returns an error after we
-		 * received some datagrams, where we record the
-		 * error to return on the next call or if the
-		 * app asks about it using getsockopt(SO_ERROR).
-		 */
-		sock->sk->sk_err = -err;
-	}
 out_put:
 	fput_light(sock->file, fput_needed);
 
-	return datagrams;
+	if (err == 0)
+		return datagrams;
+
+	if (datagrams != 0) {
+		/*
+		 * We may return less entries than requested (vlen) if the
+		 * sock is non block and there aren't enough datagrams...
+		 */
+		if (err != -EAGAIN) {
+			/*
+			 * ... or  if recvmsg returns an error after we
+			 * received some datagrams, where we record the
+			 * error to return on the next call or if the
+			 * app asks about it using getsockopt(SO_ERROR).
+			 */
+			sock->sk->sk_err = -err;
+		}
+
+		return datagrams;
+	}
+
+	return err;
 }
 
 SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,
@@ -2697,7 +2705,9 @@ static int __init sock_init(void)
 	 */
 
 #ifdef CONFIG_NETFILTER
-	netfilter_init();
+	err = netfilter_init();
+	if (err)
+		goto out;
 #endif
 
 #ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
@@ -3115,12 +3125,12 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
 
 	uifmap32 = &uifr32->ifr_ifru.ifru_map;
 	err = copy_from_user(&ifr, uifr32, sizeof(ifr.ifr_name));
-	err |= __get_user(ifr.ifr_map.mem_start, &uifmap32->mem_start);
-	err |= __get_user(ifr.ifr_map.mem_end, &uifmap32->mem_end);
-	err |= __get_user(ifr.ifr_map.base_addr, &uifmap32->base_addr);
-	err |= __get_user(ifr.ifr_map.irq, &uifmap32->irq);
-	err |= __get_user(ifr.ifr_map.dma, &uifmap32->dma);
-	err |= __get_user(ifr.ifr_map.port, &uifmap32->port);
+	err |= get_user(ifr.ifr_map.mem_start, &uifmap32->mem_start);
+	err |= get_user(ifr.ifr_map.mem_end, &uifmap32->mem_end);
+	err |= get_user(ifr.ifr_map.base_addr, &uifmap32->base_addr);
+	err |= get_user(ifr.ifr_map.irq, &uifmap32->irq);
+	err |= get_user(ifr.ifr_map.dma, &uifmap32->dma);
+	err |= get_user(ifr.ifr_map.port, &uifmap32->port);
 	if (err)
 		return -EFAULT;
 
@@ -3131,12 +3141,12 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
 
 	if (cmd == SIOCGIFMAP && !err) {
 		err = copy_to_user(uifr32, &ifr, sizeof(ifr.ifr_name));
-		err |= __put_user(ifr.ifr_map.mem_start, &uifmap32->mem_start);
-		err |= __put_user(ifr.ifr_map.mem_end, &uifmap32->mem_end);
-		err |= __put_user(ifr.ifr_map.base_addr, &uifmap32->base_addr);
-		err |= __put_user(ifr.ifr_map.irq, &uifmap32->irq);
-		err |= __put_user(ifr.ifr_map.dma, &uifmap32->dma);
-		err |= __put_user(ifr.ifr_map.port, &uifmap32->port);
+		err |= put_user(ifr.ifr_map.mem_start, &uifmap32->mem_start);
+		err |= put_user(ifr.ifr_map.mem_end, &uifmap32->mem_end);
+		err |= put_user(ifr.ifr_map.base_addr, &uifmap32->base_addr);
+		err |= put_user(ifr.ifr_map.irq, &uifmap32->irq);
+		err |= put_user(ifr.ifr_map.dma, &uifmap32->dma);
+		err |= put_user(ifr.ifr_map.port, &uifmap32->port);
 		if (err)
 			err = -EFAULT;
 	}
@@ -3210,25 +3220,25 @@ static int routing_ioctl(struct net *net, struct socket *sock,
 		struct in6_rtmsg32 __user *ur6 = argp;
 		ret = copy_from_user(&r6.rtmsg_dst, &(ur6->rtmsg_dst),
 			3 * sizeof(struct in6_addr));
-		ret |= __get_user(r6.rtmsg_type, &(ur6->rtmsg_type));
-		ret |= __get_user(r6.rtmsg_dst_len, &(ur6->rtmsg_dst_len));
-		ret |= __get_user(r6.rtmsg_src_len, &(ur6->rtmsg_src_len));
-		ret |= __get_user(r6.rtmsg_metric, &(ur6->rtmsg_metric));
-		ret |= __get_user(r6.rtmsg_info, &(ur6->rtmsg_info));
-		ret |= __get_user(r6.rtmsg_flags, &(ur6->rtmsg_flags));
-		ret |= __get_user(r6.rtmsg_ifindex, &(ur6->rtmsg_ifindex));
+		ret |= get_user(r6.rtmsg_type, &(ur6->rtmsg_type));
+		ret |= get_user(r6.rtmsg_dst_len, &(ur6->rtmsg_dst_len));
+		ret |= get_user(r6.rtmsg_src_len, &(ur6->rtmsg_src_len));
+		ret |= get_user(r6.rtmsg_metric, &(ur6->rtmsg_metric));
+		ret |= get_user(r6.rtmsg_info, &(ur6->rtmsg_info));
+		ret |= get_user(r6.rtmsg_flags, &(ur6->rtmsg_flags));
+		ret |= get_user(r6.rtmsg_ifindex, &(ur6->rtmsg_ifindex));
 
 		r = (void *) &r6;
 	} else { /* ipv4 */
 		struct rtentry32 __user *ur4 = argp;
 		ret = copy_from_user(&r4.rt_dst, &(ur4->rt_dst),
 					3 * sizeof(struct sockaddr));
-		ret |= __get_user(r4.rt_flags, &(ur4->rt_flags));
-		ret |= __get_user(r4.rt_metric, &(ur4->rt_metric));
-		ret |= __get_user(r4.rt_mtu, &(ur4->rt_mtu));
-		ret |= __get_user(r4.rt_window, &(ur4->rt_window));
-		ret |= __get_user(r4.rt_irtt, &(ur4->rt_irtt));
-		ret |= __get_user(rtdev, &(ur4->rt_dev));
+		ret |= get_user(r4.rt_flags, &(ur4->rt_flags));
+		ret |= get_user(r4.rt_metric, &(ur4->rt_metric));
+		ret |= get_user(r4.rt_mtu, &(ur4->rt_mtu));
+		ret |= get_user(r4.rt_window, &(ur4->rt_window));
+		ret |= get_user(r4.rt_irtt, &(ur4->rt_irtt));
+		ret |= get_user(rtdev, &(ur4->rt_dev));
 		if (rtdev) {
 			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
 			r4.rt_dev = (char __user __force *)devname;

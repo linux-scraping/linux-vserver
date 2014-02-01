@@ -113,13 +113,15 @@ static int b43_modparam_pio = 0;
 module_param_named(pio, b43_modparam_pio, int, 0644);
 MODULE_PARM_DESC(pio, "Use PIO accesses by default: 0=DMA, 1=PIO");
 
+static int modparam_allhwsupport = !IS_ENABLED(CONFIG_BRCMSMAC);
+module_param_named(allhwsupport, modparam_allhwsupport, int, 0444);
+MODULE_PARM_DESC(allhwsupport, "Enable support for all hardware (even it if overlaps with the brcmsmac driver)");
+
 #ifdef CONFIG_B43_BCMA
 static const struct bcma_device_id b43_bcma_tbl[] = {
 	BCMA_CORE(BCMA_MANUF_BCM, BCMA_CORE_80211, 0x11, BCMA_ANY_CLASS),
-#ifdef CONFIG_B43_BCMA_EXTRA
 	BCMA_CORE(BCMA_MANUF_BCM, BCMA_CORE_80211, 0x17, BCMA_ANY_CLASS),
 	BCMA_CORE(BCMA_MANUF_BCM, BCMA_CORE_80211, 0x18, BCMA_ANY_CLASS),
-#endif
 	BCMA_CORE(BCMA_MANUF_BCM, BCMA_CORE_80211, 0x1D, BCMA_ANY_CLASS),
 	BCMA_CORETABLE_END
 };
@@ -2068,7 +2070,6 @@ void b43_do_release_fw(struct b43_firmware_file *fw)
 
 static void b43_release_firmware(struct b43_wldev *dev)
 {
-	complete(&dev->fw_load_complete);
 	b43_do_release_fw(&dev->fw.ucode);
 	b43_do_release_fw(&dev->fw.pcm);
 	b43_do_release_fw(&dev->fw.initvals);
@@ -2094,7 +2095,7 @@ static void b43_fw_cb(const struct firmware *firmware, void *context)
 	struct b43_request_fw_context *ctx = context;
 
 	ctx->blob = firmware;
-	complete(&ctx->dev->fw_load_complete);
+	complete(&ctx->fw_load_complete);
 }
 
 int b43_do_request_fw(struct b43_request_fw_context *ctx,
@@ -2141,7 +2142,7 @@ int b43_do_request_fw(struct b43_request_fw_context *ctx,
 	}
 	if (async) {
 		/* do this part asynchronously */
-		init_completion(&ctx->dev->fw_load_complete);
+		init_completion(&ctx->fw_load_complete);
 		err = request_firmware_nowait(THIS_MODULE, 1, ctx->fwname,
 					      ctx->dev->dev->dev, GFP_KERNEL,
 					      ctx, b43_fw_cb);
@@ -2149,11 +2150,12 @@ int b43_do_request_fw(struct b43_request_fw_context *ctx,
 			pr_err("Unable to load firmware\n");
 			return err;
 		}
-		wait_for_completion(&ctx->dev->fw_load_complete);
+		/* stall here until fw ready */
+		wait_for_completion(&ctx->fw_load_complete);
 		if (ctx->blob)
 			goto fw_ready;
 	/* On some ARM systems, the async request will fail, but the next sync
-	 * request works. For this reason, we fall through here
+	 * request works. For this reason, we dall through here
 	 */
 	}
 	err = request_firmware(&ctx->blob, ctx->fwname,
@@ -2422,7 +2424,6 @@ error:
 
 static int b43_one_core_attach(struct b43_bus_dev *dev, struct b43_wl *wl);
 static void b43_one_core_detach(struct b43_bus_dev *dev);
-static int b43_rng_init(struct b43_wl *wl);
 
 static void b43_request_firmware(struct work_struct *work)
 {
@@ -2474,10 +2475,6 @@ start_ieee80211:
 		goto err_one_core_detach;
 	wl->hw_registred = true;
 	b43_leds_register(wl->current_dev);
-
-	/* Register HW RNG driver */
-	b43_rng_init(wl);
-
 	goto out;
 
 err_one_core_detach:
@@ -4639,11 +4636,27 @@ static void b43_wireless_core_exit(struct b43_wldev *dev)
 	if (!dev || b43_status(dev) != B43_STAT_INITIALIZED)
 		return;
 
+	/* Unregister HW RNG driver */
+	b43_rng_exit(dev->wl);
+
 	b43_set_status(dev, B43_STAT_UNINIT);
 
 	/* Stop the microcode PSM. */
 	b43_maskset32(dev, B43_MMIO_MACCTL, ~B43_MACCTL_PSM_RUN,
 		      B43_MACCTL_PSM_JMP0);
+
+	switch (dev->dev->bus_type) {
+#ifdef CONFIG_B43_BCMA
+	case B43_BUS_BCMA:
+		bcma_core_pci_down(dev->dev->bdev->bus);
+		break;
+#endif
+#ifdef CONFIG_B43_SSB
+	case B43_BUS_SSB:
+		/* TODO */
+		break;
+#endif
+	}
 
 	b43_dma_free(dev);
 	b43_pio_free(dev);
@@ -4684,6 +4697,7 @@ static int b43_wireless_core_init(struct b43_wldev *dev)
 	case B43_BUS_BCMA:
 		bcma_core_pci_irq_ctl(&dev->dev->bdev->bus->drv_pci[0],
 				      dev->dev->bdev, true);
+		bcma_core_pci_up(dev->dev->bdev->bus);
 		break;
 #endif
 #ifdef CONFIG_B43_SSB
@@ -4780,6 +4794,9 @@ static int b43_wireless_core_init(struct b43_wldev *dev)
 	ieee80211_wake_queues(dev->wl->hw);
 
 	b43_set_status(dev, B43_STAT_INITIALIZED);
+
+	/* Register HW RNG driver */
+	b43_rng_init(dev->wl);
 
 out:
 	return err;
@@ -5395,6 +5412,12 @@ static int b43_bcma_probe(struct bcma_device *core)
 	struct b43_wl *wl;
 	int err;
 
+	if (!modparam_allhwsupport &&
+	    (core->id.rev == 0x17 || core->id.rev == 0x18)) {
+		pr_err("Support for cores revisions 0x17 and 0x18 disabled by module param allhwsupport=0. Try b43.allhwsupport=1\n");
+		return -ENOTSUPP;
+	}
+
 	dev = b43_bus_dev_bcma_init(core);
 	if (!dev)
 		return -ENODEV;
@@ -5440,9 +5463,6 @@ static void b43_bcma_remove(struct bcma_device *core)
 	}
 
 	b43_one_core_detach(wldev->dev);
-
-	/* Unregister HW RNG driver */
-	b43_rng_exit(wl);
 
 	b43_leds_unregister(wl);
 
@@ -5520,9 +5540,6 @@ static void b43_ssb_remove(struct ssb_device *sdev)
 	}
 
 	b43_one_core_detach(dev);
-
-	/* Unregister HW RNG driver */
-	b43_rng_exit(wl);
 
 	if (list_empty(&wl->devlist)) {
 		b43_leds_unregister(wl);

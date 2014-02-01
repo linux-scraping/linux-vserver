@@ -1516,12 +1516,12 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 {
 	struct pcnet32_private *lp;
 	int i, media;
-	int fdx, mii, fset, dxsuflo, sram;
+	int fdx, mii, fset, dxsuflo;
 	int chip_version;
 	char *chipname;
 	struct net_device *dev;
 	const struct pcnet32_access *a = NULL;
-	u8 promaddr[6];
+	u8 promaddr[ETH_ALEN];
 	int ret = -ENODEV;
 
 	/* reset the chip */
@@ -1553,7 +1553,7 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 	}
 
 	/* initialize variables */
-	fdx = mii = fset = dxsuflo = sram = 0;
+	fdx = mii = fset = dxsuflo = 0;
 	chip_version = (chip_version >> 12) & 0xffff;
 
 	switch (chip_version) {
@@ -1586,7 +1586,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		chipname = "PCnet/FAST III 79C973";	/* PCI */
 		fdx = 1;
 		mii = 1;
-		sram = 1;
 		break;
 	case 0x2626:
 		chipname = "PCnet/Home 79C978";	/* PCI */
@@ -1610,7 +1609,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		chipname = "PCnet/FAST III 79C975";	/* PCI */
 		fdx = 1;
 		mii = 1;
-		sram = 1;
 		break;
 	case 0x2628:
 		chipname = "PCnet/PRO 79C976";
@@ -1637,31 +1635,6 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 		a->write_csr(ioaddr, 80,
 			     (a->read_csr(ioaddr, 80) & 0x0C00) | 0x0c00);
 		dxsuflo = 1;
-	}
-
-	/*
-	 * The Am79C973/Am79C975 controllers come with 12K of SRAM
-	 * which we can use for the Tx/Rx buffers but most importantly,
-	 * the use of SRAM allow us to use the BCR18:NOUFLO bit to avoid
-	 * Tx fifo underflows.
-	 */
-	if (sram) {
-		/*
-		 * The SRAM is being configured in two steps. First we
-		 * set the SRAM size in the BCR25:SRAM_SIZE bits. According
-		 * to the datasheet, each bit corresponds to a 512-byte
-		 * page so we can have at most 24 pages. The SRAM_SIZE
-		 * holds the value of the upper 8 bits of the 16-bit SRAM size.
-		 * The low 8-bits start at 0x00 and end at 0xff. So the
-		 * address range is from 0x0000 up to 0x17ff. Therefore,
-		 * the SRAM_SIZE is set to 0x17. The next step is to set
-		 * the BCR26:SRAM_BND midway through so the Tx and Rx
-		 * buffers can share the SRAM equally.
-		 */
-		a->write_bcr(ioaddr, 25, 0x17);
-		a->write_bcr(ioaddr, 26, 0xc);
-		/* And finally enable the NOUFLO bit */
-		a->write_bcr(ioaddr, 18, a->read_bcr(ioaddr, 18) | (1 << 11));
 	}
 
 	dev = alloc_etherdev(sizeof(*lp));
@@ -1692,17 +1665,17 @@ pcnet32_probe1(unsigned long ioaddr, int shared, struct pci_dev *pdev)
 	}
 
 	/* read PROM address and compare with CSR address */
-	for (i = 0; i < 6; i++)
+	for (i = 0; i < ETH_ALEN; i++)
 		promaddr[i] = inb(ioaddr + i);
 
-	if (memcmp(promaddr, dev->dev_addr, 6) ||
+	if (memcmp(promaddr, dev->dev_addr, ETH_ALEN) ||
 	    !is_valid_ether_addr(dev->dev_addr)) {
 		if (is_valid_ether_addr(promaddr)) {
 			if (pcnet32_debug & NETIF_MSG_PROBE) {
 				pr_cont(" warning: CSR address invalid,\n");
 				pr_info("    using instead PROM address of");
 			}
-			memcpy(dev->dev_addr, promaddr, 6);
+			memcpy(dev->dev_addr, promaddr, ETH_ALEN);
 		}
 	}
 
@@ -2845,7 +2818,6 @@ static void pcnet32_remove_one(struct pci_dev *pdev)
 				    lp->init_block, lp->init_dma_addr);
 		free_netdev(dev);
 		pci_disable_device(pdev);
-		pci_set_drvdata(pdev, NULL);
 	}
 }
 

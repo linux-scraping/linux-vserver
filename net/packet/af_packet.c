@@ -88,7 +88,7 @@
 #include <linux/virtio_net.h>
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
-
+#include <linux/reciprocal_div.h>
 #ifdef CONFIG_INET
 #include <net/inet_common.h>
 #endif
@@ -565,7 +565,6 @@ static void init_prb_bdqc(struct packet_sock *po,
 	p1->tov_in_jiffies = msecs_to_jiffies(p1->retire_blk_tov);
 	p1->blk_sizeof_priv = req_u->req3.tp_sizeof_priv;
 
-	p1->max_frame_len = p1->kblk_size - BLK_PLUS_PRIV(p1->blk_sizeof_priv);
 	prb_init_ft_ops(p1, req_u);
 	prb_setup_retire_blk_timer(po, tx_ring);
 	prb_open_block(p1, pbd);
@@ -1150,20 +1149,34 @@ static void packet_sock_destruct(struct sock *sk)
 	sk_refcnt_debug_dec(sk);
 }
 
+static int fanout_rr_next(struct packet_fanout *f, unsigned int num)
+{
+	int x = atomic_read(&f->rr_cur) + 1;
+
+	if (x >= num)
+		x = 0;
+
+	return x;
+}
+
 static unsigned int fanout_demux_hash(struct packet_fanout *f,
 				      struct sk_buff *skb,
 				      unsigned int num)
 {
-	return (((u64)skb->rxhash) * num) >> 32;
+	return reciprocal_divide(skb->rxhash, num);
 }
 
 static unsigned int fanout_demux_lb(struct packet_fanout *f,
 				    struct sk_buff *skb,
 				    unsigned int num)
 {
-	unsigned int val = atomic_inc_return(&f->rr_cur);
+	int cur, old;
 
-	return val % num;
+	cur = atomic_read(&f->rr_cur);
+	while ((old = atomic_cmpxchg(&f->rr_cur, cur,
+				     fanout_rr_next(f, num))) != cur)
+		cur = old;
+	return cur;
 }
 
 static unsigned int fanout_demux_cpu(struct packet_fanout *f,
@@ -1171,6 +1184,13 @@ static unsigned int fanout_demux_cpu(struct packet_fanout *f,
 				     unsigned int num)
 {
 	return smp_processor_id() % num;
+}
+
+static unsigned int fanout_demux_rnd(struct packet_fanout *f,
+				     struct sk_buff *skb,
+				     unsigned int num)
+{
+	return reciprocal_divide(prandom_u32(), num);
 }
 
 static unsigned int fanout_demux_rollover(struct packet_fanout *f,
@@ -1203,7 +1223,7 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 			     struct packet_type *pt, struct net_device *orig_dev)
 {
 	struct packet_fanout *f = pt->af_packet_priv;
-	unsigned int num = ACCESS_ONCE(f->num_members);
+	unsigned int num = f->num_members;
 	struct packet_sock *po;
 	unsigned int idx;
 
@@ -1229,6 +1249,9 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 		break;
 	case PACKET_FANOUT_CPU:
 		idx = fanout_demux_cpu(f, skb, num);
+		break;
+	case PACKET_FANOUT_RND:
+		idx = fanout_demux_rnd(f, skb, num);
 		break;
 	case PACKET_FANOUT_ROLLOVER:
 		idx = fanout_demux_rollover(f, skb, 0, (unsigned int) -1, num);
@@ -1299,6 +1322,7 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 	case PACKET_FANOUT_HASH:
 	case PACKET_FANOUT_LB:
 	case PACKET_FANOUT_CPU:
+	case PACKET_FANOUT_RND:
 		break;
 	default:
 		return -EINVAL;
@@ -1790,18 +1814,6 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 			if ((int)snaplen < 0)
 				snaplen = 0;
 		}
-	} else if (unlikely(macoff + snaplen >
-			    GET_PBDQC_FROM_RB(&po->rx_ring)->max_frame_len)) {
-		u32 nval;
-
-		nval = GET_PBDQC_FROM_RB(&po->rx_ring)->max_frame_len - macoff;
-		pr_err_once("tpacket_rcv: packet too big, clamped from %u to %u. macoff=%u\n",
-			    snaplen, nval, macoff);
-		snaplen = nval;
-		if (unlikely((int)snaplen < 0)) {
-			snaplen = 0;
-			macoff = GET_PBDQC_FROM_RB(&po->rx_ring)->max_frame_len;
-		}
 	}
 	spin_lock(&sk->sk_receive_queue.lock);
 	h.raw = packet_current_rx_frame(po, skb,
@@ -2204,7 +2216,7 @@ static struct sk_buff *packet_alloc_skb(struct sock *sk, size_t prepad,
 		linear = len;
 
 	skb = sock_alloc_send_pskb(sk, prepad + linear, len - linear, noblock,
-				   err);
+				   err, 0);
 	if (!skb)
 		return NULL;
 
@@ -2664,51 +2676,6 @@ out:
 	return err;
 }
 
-static int packet_recv_error(struct sock *sk, struct msghdr *msg, int len)
-{
-	struct sock_exterr_skb *serr;
-	struct sk_buff *skb, *skb2;
-	int copied, err;
-
-	err = -EAGAIN;
-	skb = skb_dequeue(&sk->sk_error_queue);
-	if (skb == NULL)
-		goto out;
-
-	copied = skb->len;
-	if (copied > len) {
-		msg->msg_flags |= MSG_TRUNC;
-		copied = len;
-	}
-	err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
-	if (err)
-		goto out_free_skb;
-
-	sock_recv_timestamp(msg, sk, skb);
-
-	serr = SKB_EXT_ERR(skb);
-	put_cmsg(msg, SOL_PACKET, PACKET_TX_TIMESTAMP,
-		 sizeof(serr->ee), &serr->ee);
-
-	msg->msg_flags |= MSG_ERRQUEUE;
-	err = copied;
-
-	/* Reset and regenerate socket error */
-	spin_lock_bh(&sk->sk_error_queue.lock);
-	sk->sk_err = 0;
-	if ((skb2 = skb_peek(&sk->sk_error_queue)) != NULL) {
-		sk->sk_err = SKB_EXT_ERR(skb2)->ee.ee_errno;
-		spin_unlock_bh(&sk->sk_error_queue.lock);
-		sk->sk_error_report(sk);
-	} else
-		spin_unlock_bh(&sk->sk_error_queue.lock);
-
-out_free_skb:
-	kfree_skb(skb);
-out:
-	return err;
-}
-
 /*
  *	Pull a packet from our receive queue and hand it to the user.
  *	If necessary we block.
@@ -2733,7 +2700,8 @@ static int packet_recvmsg(struct kiocb *iocb, struct socket *sock,
 #endif
 
 	if (flags & MSG_ERRQUEUE) {
-		err = packet_recv_error(sk, msg, len);
+		err = sock_recv_errqueue(sk, msg, len,
+					 SOL_PACKET, PACKET_TX_TIMESTAMP);
 		goto out;
 	}
 
@@ -2997,7 +2965,6 @@ static int packet_mc_add(struct sock *sk, struct packet_mreq_max *mreq)
 	i->ifindex = mreq->mr_ifindex;
 	i->alen = mreq->mr_alen;
 	memcpy(i->addr, mreq->mr_address, i->alen);
-	memset(i->addr + i->alen, 0, sizeof(i->addr) - i->alen);
 	i->count = 1;
 	i->next = po->mclist;
 	po->mclist = i;
@@ -3357,10 +3324,11 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
 }
 
 
-static int packet_notifier(struct notifier_block *this, unsigned long msg, void *data)
+static int packet_notifier(struct notifier_block *this,
+			   unsigned long msg, void *ptr)
 {
 	struct sock *sk;
-	struct net_device *dev = data;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct net *net = dev_net(dev);
 
 	rcu_read_lock();
@@ -3641,10 +3609,6 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 		if (unlikely((int)req->tp_block_size <= 0))
 			goto out;
 		if (unlikely(req->tp_block_size & (PAGE_SIZE - 1)))
-			goto out;
-		if (po->tp_version >= TPACKET_V3 &&
-		    (int)(req->tp_block_size -
-			  BLK_PLUS_PRIV(req_u->req3.tp_sizeof_priv)) <= 0)
 			goto out;
 		if (unlikely(req->tp_frame_size < po->tp_hdrlen +
 					po->tp_reserve))

@@ -19,6 +19,7 @@
 #include <linux/mount.h>
 #include <linux/init.h>
 #include <linux/idr.h>
+#include <linux/namei.h>
 #include <linux/bitops.h>
 #include <linux/spinlock.h>
 #include <linux/completion.h>
@@ -163,20 +164,15 @@ void proc_free_inum(unsigned int inum)
 	spin_unlock_irqrestore(&proc_inum_lock, flags);
 }
 
-/*
- * As some entries in /proc are volatile, we want to 
- * get rid of unused dentries.  This could be made 
- * smarter: we could keep a "volatile" flag in the 
- * inode to indicate which ones to keep.
- */
-static int proc_delete_dentry(const struct dentry * dentry)
+static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)
 {
-	return 1;
+	nd_set_link(nd, __PDE_DATA(dentry->d_inode));
+	return NULL;
 }
 
-static const struct dentry_operations proc_dentry_operations =
-{
-	.d_delete	= proc_delete_dentry,
+static const struct inode_operations proc_link_inode_operations = {
+	.readlink	= generic_readlink,
+	.follow_link	= proc_follow_link,
 };
 
 /*
@@ -200,7 +196,7 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 			inode = proc_get_inode(dir->i_sb, de);
 			if (!inode)
 				return ERR_PTR(-ENOMEM);
-			d_set_d_op(dentry, &proc_dentry_operations);
+			d_set_d_op(dentry, &simple_dentry_operations);
 			d_add(dentry, inode);
 			/* generic proc entries belong to the host */
 			i_tag_write(inode, 0);
@@ -226,79 +222,56 @@ struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
  * value of the readdir() call, as long as it's non-negative
  * for success..
  */
-int proc_readdir_de(struct proc_dir_entry *de, struct file *filp, void *dirent,
-		filldir_t filldir)
+int proc_readdir_de(struct proc_dir_entry *de, struct file *file,
+		    struct dir_context *ctx)
 {
-	unsigned int ino;
 	int i;
-	struct inode *inode = file_inode(filp);
-	int ret = 0;
 
-	ino = inode->i_ino;
-	i = filp->f_pos;
-	switch (i) {
-		case 0:
-			if (filldir(dirent, ".", 1, i, ino, DT_DIR) < 0)
-				goto out;
-			i++;
-			filp->f_pos++;
-			/* fall through */
-		case 1:
-			if (filldir(dirent, "..", 2, i,
-				    parent_ino(filp->f_path.dentry),
-				    DT_DIR) < 0)
-				goto out;
-			i++;
-			filp->f_pos++;
-			/* fall through */
-		default:
-			spin_lock(&proc_subdir_lock);
-			de = de->subdir;
-			i -= 2;
-			for (;;) {
-				if (!de) {
-					ret = 1;
-					spin_unlock(&proc_subdir_lock);
-					goto out;
-				}
-				if (!i)
-					break;
-				de = de->next;
-				i--;
-			}
+	if (!dir_emit_dots(file, ctx))
+		return 0;
 
-			do {
-				struct proc_dir_entry *next;
-
-				/* filldir passes info to user space */
-				pde_get(de);
-				if (!vx_hide_check(0, de->vx_flags))
-					goto skip;
-				spin_unlock(&proc_subdir_lock);
-				if (filldir(dirent, de->name, de->namelen, filp->f_pos,
-					    de->low_ino, de->mode >> 12) < 0) {
-					pde_put(de);
-					goto out;
-				}
-				spin_lock(&proc_subdir_lock);
-			skip:
-				filp->f_pos++;
-				next = de->next;
-				pde_put(de);
-				de = next;
-			} while (de);
+	spin_lock(&proc_subdir_lock);
+	de = de->subdir;
+	i = ctx->pos - 2;
+	for (;;) {
+		if (!de) {
 			spin_unlock(&proc_subdir_lock);
+			return 0;
+		}
+		if (!i)
+			break;
+		de = de->next;
+		i--;
 	}
-	ret = 1;
-out:
-	return ret;	
+
+	do {
+		struct proc_dir_entry *next;
+		pde_get(de);
+
+		if (!vx_hide_check(0, de->vx_flags))
+			goto skip;
+		spin_unlock(&proc_subdir_lock);
+		if (!dir_emit(ctx, de->name, de->namelen,
+			    de->low_ino, de->mode >> 12)) {
+			pde_put(de);
+			return 0;
+		}
+		spin_lock(&proc_subdir_lock);
+	skip:
+		ctx->pos++;
+		next = de->next;
+		pde_put(de);
+		de = next;
+	} while (de);
+	spin_unlock(&proc_subdir_lock);
+	return 1;
 }
 
-int proc_readdir(struct file *filp, void *dirent, filldir_t filldir)
+int proc_readdir(struct file *file, struct dir_context *ctx)
 {
-	struct inode *inode = file_inode(filp);
+	struct inode *inode = file_inode(file);
 
-	return proc_readdir_de(PDE(inode), filp, dirent, filldir);
+	return proc_readdir_de(PDE(inode), file, ctx);
 }
 
 /*
@@ -309,7 +282,7 @@ int proc_readdir(struct file *filp, void *dirent, filldir_t filldir)
 static const struct file_operations proc_dir_operations = {
 	.llseek			= generic_file_llseek,
 	.read			= generic_read_dir,
-	.readdir		= proc_readdir,
+	.iterate		= proc_readdir,
 };
 
 /*

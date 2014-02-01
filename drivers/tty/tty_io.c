@@ -604,8 +604,8 @@ static int tty_signal_session_leader(struct tty_struct *tty, int exit_session)
  *		BTM
  *		  redirect lock for undoing redirection
  *		  file list lock for manipulating list of ttys
- *		  tty_ldisc_lock from called functions
- *		  termios_mutex resetting termios data
+ *		  tty_ldiscs_lock from called functions
+ *		  termios_rwsem resetting termios data
  *		  tasklist_lock to walk task list for hangup event
  *		    ->siglock to protect ->signal/->sighand
  */
@@ -629,6 +629,11 @@ static void __tty_hangup(struct tty_struct *tty, int exit_session)
 	spin_unlock(&redirect_lock);
 
 	tty_lock(tty);
+
+	if (test_bit(TTY_HUPPED, &tty->flags)) {
+		tty_unlock(tty);
+		return;
+	}
 
 	/* some functions below drop BTM, so we need this bit */
 	set_bit(TTY_HUPPING, &tty->flags);
@@ -665,7 +670,6 @@ static void __tty_hangup(struct tty_struct *tty, int exit_session)
 
 	spin_lock_irq(&tty->ctrl_lock);
 	clear_bit(TTY_THROTTLED, &tty->flags);
-	clear_bit(TTY_PUSH, &tty->flags);
 	clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 	put_pid(tty->session);
 	put_pid(tty->pgrp);
@@ -993,8 +997,8 @@ EXPORT_SYMBOL(start_tty);
 /* We limit tty time update visibility to every 8 seconds or so. */
 static void tty_update_time(struct timespec *time)
 {
-	unsigned long sec = get_seconds();
-	if (abs(sec - time->tv_sec) & ~7)
+	unsigned long sec = get_seconds() & ~7;
+	if ((long)(sec - time->tv_sec) > 0)
 		time->tv_sec = sec;
 }
 
@@ -1268,13 +1272,12 @@ static void pty_line_name(struct tty_driver *driver, int index, char *p)
  *
  *	Locking: None
  */
-static ssize_t tty_line_name(struct tty_driver *driver, int index, char *p)
+static void tty_line_name(struct tty_driver *driver, int index, char *p)
 {
 	if (driver->flags & TTY_DRIVER_UNNUMBERED_NODE)
-		return sprintf(p, "%s", driver->name);
+		strcpy(p, driver->name);
 	else
-		return sprintf(p, "%s%d", driver->name,
-			       index + driver->name_base);
+		sprintf(p, "%s%d", driver->name, index + driver->name_base);
 }
 
 /**
@@ -1391,8 +1394,7 @@ static int tty_reopen(struct tty_struct *tty)
 	struct tty_driver *driver = tty->driver;
 
 	if (test_bit(TTY_CLOSING, &tty->flags) ||
-			test_bit(TTY_HUPPING, &tty->flags) ||
-			test_bit(TTY_LDISC_CHANGING, &tty->flags))
+			test_bit(TTY_HUPPING, &tty->flags))
 		return -EIO;
 
 	if (driver->type == TTY_DRIVER_TYPE_PTY &&
@@ -1408,7 +1410,7 @@ static int tty_reopen(struct tty_struct *tty)
 	}
 	tty->count++;
 
-	WARN_ON(!test_bit(TTY_LDISC, &tty->flags));
+	WARN_ON(!tty->ldisc);
 
 	return 0;
 }
@@ -1699,7 +1701,6 @@ int tty_release(struct inode *inode, struct file *filp)
 	int	pty_master, tty_closing, o_tty_closing, do_sleep;
 	int	idx;
 	char	buf[64];
-	long	timeout = 0;
 
 	if (tty_paranoia_check(tty, inode, __func__))
 		return 0;
@@ -1784,11 +1785,7 @@ int tty_release(struct inode *inode, struct file *filp)
 				__func__, tty_name(tty, buf));
 		tty_unlock_pair(tty, o_tty);
 		mutex_unlock(&tty_mutex);
-		schedule_timeout_killable(timeout);
-		if (timeout < 120 * HZ)
-			timeout = 2 * timeout + 1;
-		else
-			timeout = MAX_SCHEDULE_TIMEOUT;
+		schedule();
 	}
 
 	/*
@@ -2090,6 +2087,7 @@ retry_open:
 			filp->f_op = &tty_fops;
 		goto retry_open;
 	}
+	clear_bit(TTY_HUPPED, &tty->flags);
 	tty_unlock(tty);
 
 
@@ -2148,6 +2146,7 @@ static unsigned int tty_poll(struct file *filp, poll_table *wait)
 static int __tty_fasync(int fd, struct file *filp, int on)
 {
 	struct tty_struct *tty = file_tty(filp);
+	struct tty_ldisc *ldisc;
 	unsigned long flags;
 	int retval = 0;
 
@@ -2158,11 +2157,17 @@ static int __tty_fasync(int fd, struct file *filp, int on)
 	if (retval <= 0)
 		goto out;
 
+	ldisc = tty_ldisc_ref(tty);
+	if (ldisc) {
+		if (ldisc->ops->fasync)
+			ldisc->ops->fasync(tty, on);
+		tty_ldisc_deref(ldisc);
+	}
+
 	if (on) {
 		enum pid_type type;
 		struct pid *pid;
-		if (!waitqueue_active(&tty->read_wait))
-			tty->minimum_to_wake = 1;
+
 		spin_lock_irqsave(&tty->ctrl_lock, flags);
 		if (tty->pgrp) {
 			pid = tty->pgrp;
@@ -2175,13 +2180,7 @@ static int __tty_fasync(int fd, struct file *filp, int on)
 		spin_unlock_irqrestore(&tty->ctrl_lock, flags);
 		retval = __f_setown(filp, pid, type, 0);
 		put_pid(pid);
-		if (retval)
-			goto out;
-	} else {
-		if (!tty->fasync && !waitqueue_active(&tty->read_wait))
-			tty->minimum_to_wake = N_TTY_BUF_SIZE;
 	}
-	retval = 0;
 out:
 	return retval;
 }
@@ -2209,7 +2208,7 @@ static int tty_fasync(int fd, struct file *filp, int on)
  *	FIXME: does not honour flow control ??
  *
  *	Locking:
- *		Called functions take tty_ldisc_lock
+ *		Called functions take tty_ldiscs_lock
  *		current->signal->tty check is safe without locks
  *
  *	FIXME: may race normal receive processing
@@ -2239,7 +2238,7 @@ static int tiocsti(struct tty_struct *tty, char __user *p)
  *
  *	Copies the kernel idea of the window size into the user buffer.
  *
- *	Locking: tty->termios_mutex is taken to ensure the winsize data
+ *	Locking: tty->winsize_mutex is taken to ensure the winsize data
  *		is consistent.
  */
 
@@ -2247,9 +2246,9 @@ static int tiocgwinsz(struct tty_struct *tty, struct winsize __user *arg)
 {
 	int err;
 
-	mutex_lock(&tty->termios_mutex);
+	mutex_lock(&tty->winsize_mutex);
 	err = copy_to_user(arg, &tty->winsize, sizeof(*arg));
-	mutex_unlock(&tty->termios_mutex);
+	mutex_unlock(&tty->winsize_mutex);
 
 	return err ? -EFAULT: 0;
 }
@@ -2270,7 +2269,7 @@ int tty_do_resize(struct tty_struct *tty, struct winsize *ws)
 	unsigned long flags;
 
 	/* Lock the tty */
-	mutex_lock(&tty->termios_mutex);
+	mutex_lock(&tty->winsize_mutex);
 	if (!memcmp(ws, &tty->winsize, sizeof(*ws)))
 		goto done;
 	/* Get the PID values and reference them so we can
@@ -2285,7 +2284,7 @@ int tty_do_resize(struct tty_struct *tty, struct winsize *ws)
 
 	tty->winsize = *ws;
 done:
-	mutex_unlock(&tty->termios_mutex);
+	mutex_unlock(&tty->winsize_mutex);
 	return 0;
 }
 EXPORT_SYMBOL(tty_do_resize);
@@ -2579,28 +2578,6 @@ static int tiocsetd(struct tty_struct *tty, int __user *p)
 }
 
 /**
- *	tiocgetd	-	get line discipline
- *	@tty: tty device
- *	@p: pointer to user data
- *
- *	Retrieves the line discipline id directly from the ldisc.
- *
- *	Locking: waits for ldisc reference (in case the line discipline
- *		is changing or the tty is being hungup)
- */
-
-static int tiocgetd(struct tty_struct *tty, int __user *p)
-{
-	struct tty_ldisc *ld;
-	int ret;
-
-	ld = tty_ldisc_ref_wait(tty);
-	ret = put_user(ld->ops->num, p);
-	tty_ldisc_deref(ld);
-	return ret;
-}
-
-/**
  *	send_break	-	performed time break
  *	@tty: device to break on
  *	@duration: timeout in mS
@@ -2814,7 +2791,7 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case TIOCGSID:
 		return tiocgsid(tty, real_tty, p);
 	case TIOCGETD:
-		return tiocgetd(tty, p);
+		return put_user(tty->ldisc->ops->num, (int __user *)p);
 	case TIOCSETD:
 		return tiocsetd(tty, p);
 	case TIOCVHANGUP:
@@ -3047,8 +3024,10 @@ void initialize_tty_struct(struct tty_struct *tty,
 	tty->session = NULL;
 	tty->pgrp = NULL;
 	mutex_init(&tty->legacy_mutex);
-	mutex_init(&tty->termios_mutex);
-	mutex_init(&tty->ldisc_mutex);
+	mutex_init(&tty->throttle_mutex);
+	init_rwsem(&tty->termios_rwsem);
+	mutex_init(&tty->winsize_mutex);
+	init_ldsem(&tty->ldisc_sem);
 	init_waitqueue_head(&tty->write_wait);
 	init_waitqueue_head(&tty->read_wait);
 	INIT_WORK(&tty->hangup_work, do_tty_hangup);
@@ -3569,19 +3548,9 @@ static ssize_t show_cons_active(struct device *dev,
 		if (i >= ARRAY_SIZE(cs))
 			break;
 	}
-	while (i--) {
-		int index = cs[i]->index;
-		struct tty_driver *drv = cs[i]->device(cs[i], &index);
-
-		/* don't resolve tty0 as some programs depend on it */
-		if (drv && (cs[i]->index > 0 || drv->major != TTY_MAJOR))
-			count += tty_line_name(drv, index, buf + count);
-		else
-			count += sprintf(buf + count, "%s%d",
-					 cs[i]->name, cs[i]->index);
-
-		count += sprintf(buf + count, "%c", i ? ' ':'\n');
-	}
+	while (i--)
+		count += sprintf(buf + count, "%s%d%c",
+				 cs[i]->name, cs[i]->index, i ? ' ':'\n');
 	console_unlock();
 
 	return count;

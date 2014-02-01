@@ -731,10 +731,9 @@ static int at91_poll_rx(struct net_device *dev, int quota)
 
 	/* upper group completed, look again in lower */
 	if (priv->rx_next > get_mb_rx_low_last(priv) &&
-	    mb > get_mb_rx_last(priv)) {
+	    quota > 0 && mb > get_mb_rx_last(priv)) {
 		priv->rx_next = get_mb_rx_first(priv);
-		if (quota > 0)
-			goto again;
+		goto again;
 	}
 
 	return received;
@@ -1221,7 +1220,7 @@ static ssize_t at91_sysfs_set_mb0_id(struct device *dev,
 		goto out;
 	}
 
-	err = strict_strtoul(buf, 0, &can_id);
+	err = kstrtoul(buf, 0, &can_id);
 	if (err) {
 		ret = err;
 		goto out;
@@ -1265,8 +1264,6 @@ static const struct of_device_id at91_can_dt_ids[] = {
 	}
 };
 MODULE_DEVICE_TABLE(of, at91_can_dt_ids);
-#else
-#define at91_can_dt_ids NULL
 #endif
 
 static const struct at91_devtype_data *at91_can_get_driver_data(struct platform_device *pdev)
@@ -1350,7 +1347,7 @@ static int at91_can_probe(struct platform_device *pdev)
 	priv->reg_base = addr;
 	priv->devtype_data = *devtype_data;
 	priv->clk = clk;
-	priv->pdata = pdev->dev.platform_data;
+	priv->pdata = dev_get_platdata(&pdev->dev);
 	priv->mb0_id = 0x7ff;
 
 	netif_napi_add(dev, &priv->napi, at91_poll, get_mb_rx_num(priv));
@@ -1358,7 +1355,7 @@ static int at91_can_probe(struct platform_device *pdev)
 	if (at91_is_sam9263(priv))
 		dev->sysfs_groups[0] = &at91_sysfs_attr_group;
 
-	dev_set_drvdata(&pdev->dev, dev);
+	platform_set_drvdata(pdev, dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	err = register_candev(dev);
@@ -1394,8 +1391,6 @@ static int at91_can_remove(struct platform_device *pdev)
 
 	unregister_netdev(dev);
 
-	platform_set_drvdata(pdev, NULL);
-
 	iounmap(priv->reg_base);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -1427,7 +1422,7 @@ static struct platform_driver at91_can_driver = {
 	.driver = {
 		.name = KBUILD_MODNAME,
 		.owner = THIS_MODULE,
-		.of_match_table = at91_can_dt_ids,
+		.of_match_table = of_match_ptr(at91_can_dt_ids),
 	},
 	.id_table = at91_can_id_table,
 };

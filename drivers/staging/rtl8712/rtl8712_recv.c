@@ -108,7 +108,7 @@ void r8712_free_recv_priv(struct recv_priv *precvpriv)
 	struct _adapter *padapter = precvpriv->adapter;
 
 	precvbuf = (struct recv_buf *)precvpriv->precv_buf;
-	for (i = 0; i < NR_RECVBUFF ; i++) {
+	for (i = 0; i < NR_RECVBUFF; i++) {
 		r8712_os_recvbuf_resource_free(padapter, precvbuf);
 		precvbuf++;
 	}
@@ -268,7 +268,7 @@ union recv_frame *r8712_recvframe_chk_defrag(struct _adapter *padapter,
 	u8   *psta_addr;
 	struct recv_frame_hdr *pfhdr;
 	struct sta_info *psta;
-	struct	sta_priv *pstapriv ;
+	struct	sta_priv *pstapriv;
 	struct list_head *phead;
 	union recv_frame *prtnframe = NULL;
 	struct  __queue *pfree_recv_queue, *pdefrag_q;
@@ -849,7 +849,7 @@ static void query_rx_phy_status(struct _adapter *padapter,
 	} else {
 		/* (1)Get RSSI for HT rate */
 		for (i = 0; i < ((padapter->registrypriv.rf_config) &
-			    0x0f) ; i++) {
+			    0x0f); i++) {
 			rf_rx_num++;
 			rx_pwr[i] = ((pphy_head[PHY_STAT_GAIN_TRSW_SHT + i]
 				    & 0x3F) * 2) - 110;
@@ -1075,8 +1075,7 @@ static int recvbuf2recvframe(struct _adapter *padapter, struct sk_buff *pskb)
 		/* for first fragment packet, driver need allocate 1536 +
 		 * drvinfo_sz + RXDESC_SIZE to defrag packet. */
 		if ((mf == 1) && (frag == 0))
-			/*1658+6=1664, 1664 is 128 alignment.*/
-			alloc_sz = max_t(u16, tmp_len, 1658);
+			alloc_sz = 1658;/*1658+6=1664, 1664 is 128 alignment.*/
 		else
 			alloc_sz = tmp_len;
 		/* 2 is for IP header 4 bytes alignment in QoS packet case.

@@ -78,9 +78,7 @@ static void devm_usb_phy_release(struct device *dev, void *res)
 
 static int devm_usb_phy_match(struct device *dev, void *res, void *match_data)
 {
-	struct usb_phy **phy = res;
-
-	return *phy == match_data;
+	return res == match_data;
 }
 
 /**
@@ -100,7 +98,7 @@ struct usb_phy *devm_usb_get_phy(struct device *dev, enum usb_phy_type type)
 
 	ptr = devres_alloc(devm_usb_phy_release, sizeof(*ptr), GFP_KERNEL);
 	if (!ptr)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	phy = usb_get_phy(type);
 	if (!IS_ERR(phy)) {

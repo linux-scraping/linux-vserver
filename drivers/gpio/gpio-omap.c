@@ -514,6 +514,14 @@ static int gpio_irq_type(struct irq_data *d, unsigned type)
 		return -EINVAL;
 	}
 
+	retval = gpio_lock_as_irq(&bank->chip, offset);
+	if (retval) {
+		dev_err(bank->dev, "unable to lock offset %d for IRQ\n",
+			offset);
+		spin_unlock_irqrestore(&bank->lock, flags);
+		return retval;
+	}
+
 	bank->irq_usage |= 1 << GPIO_INDEX(bank, gpio);
 	spin_unlock_irqrestore(&bank->lock, flags);
 
@@ -797,6 +805,7 @@ static void gpio_irq_shutdown(struct irq_data *d)
 	unsigned offset = GPIO_INDEX(bank, gpio);
 
 	spin_lock_irqsave(&bank->lock, flags);
+	gpio_unlock_as_irq(&bank->chip, offset);
 	bank->irq_usage &= ~(1 << offset);
 	_disable_gpio_module(bank, offset);
 	_reset_gpio(bank, gpio);
@@ -957,22 +966,13 @@ static int gpio_output(struct gpio_chip *chip, unsigned offset, int value)
 {
 	struct gpio_bank *bank;
 	unsigned long flags;
-	int retval = 0;
 
 	bank = container_of(chip, struct gpio_bank, chip);
 	spin_lock_irqsave(&bank->lock, flags);
-
-	if (LINE_USED(bank->irq_usage, offset)) {
-			retval = -EINVAL;
-			goto exit;
-	}
-
 	bank->set_dataout(bank, offset, value);
 	_set_gpio_direction(bank, offset, 0);
-
-exit:
 	spin_unlock_irqrestore(&bank->lock, flags);
-	return retval;
+	return 0;
 }
 
 static int gpio_debounce(struct gpio_chip *chip, unsigned offset,
@@ -1074,7 +1074,7 @@ omap_mpuio_alloc_gc(struct gpio_bank *bank, unsigned int irq_start,
 	ct->chip.irq_set_type = gpio_irq_type;
 
 	if (bank->regs->wkup_en)
-		ct->chip.irq_set_wake = gpio_wake_enable,
+		ct->chip.irq_set_wake = gpio_wake_enable;
 
 	ct->regs.mask = OMAP_MPUIO_GPIO_INT / bank->stride;
 	irq_setup_generic_chip(gc, IRQ_MSK(num), IRQ_GC_INIT_MASK_CACHE,
@@ -1144,7 +1144,7 @@ static int omap_gpio_probe(struct platform_device *pdev)
 
 	match = of_match_device(of_match_ptr(omap_gpio_match), dev);
 
-	pdata = match ? match->data : dev->platform_data;
+	pdata = match ? match->data : dev_get_platdata(dev);
 	if (!pdata)
 		return -EINVAL;
 
@@ -1526,7 +1526,7 @@ static void omap_gpio_restore_context(struct gpio_bank *bank)
 #else
 #define omap_gpio_runtime_suspend NULL
 #define omap_gpio_runtime_resume NULL
-static void omap_gpio_init_context(struct gpio_bank *p) {}
+static inline void omap_gpio_init_context(struct gpio_bank *p) {}
 #endif
 
 static const struct dev_pm_ops gpio_pm_ops = {

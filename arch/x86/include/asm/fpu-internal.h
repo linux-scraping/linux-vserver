@@ -62,10 +62,8 @@ extern user_regset_set_fn fpregs_set, xfpregs_set, fpregs_soft_set,
 #define xstateregs_active	fpregs_active
 
 #ifdef CONFIG_MATH_EMULATION
-# define HAVE_HWFP		(boot_cpu_data.hard_math)
 extern void finit_soft_fpu(struct i387_soft_struct *soft);
 #else
-# define HAVE_HWFP		1
 static inline void finit_soft_fpu(struct i387_soft_struct *soft) {}
 #endif
 
@@ -346,7 +344,7 @@ static inline void __thread_fpu_end(struct task_struct *tsk)
 
 static inline void __thread_fpu_begin(struct task_struct *tsk)
 {
-	if (!use_eager_fpu())
+	if (!static_cpu_has_safe(X86_FEATURE_EAGER_FPU))
 		clts();
 	__thread_set_has_fpu(tsk);
 }
@@ -368,9 +366,9 @@ static inline void drop_fpu(struct task_struct *tsk)
 	 * Forget coprocessor state..
 	 */
 	preempt_disable();
-	tsk->fpu_counter = 0;
+	tsk->thread.fpu_counter = 0;
 	__drop_fpu(tsk);
-	clear_stopped_child_used_math(tsk);
+	clear_used_math();
 	preempt_enable();
 }
 
@@ -427,7 +425,7 @@ static inline fpu_switch_t switch_fpu_prepare(struct task_struct *old, struct ta
 	 * or if the past 5 consecutive context-switches used math.
 	 */
 	fpu.preload = tsk_used_math(new) && (use_eager_fpu() ||
-					     new->fpu_counter > 5);
+					     new->thread.fpu_counter > 5);
 	if (__thread_has_fpu(old)) {
 		if (!__save_init_fpu(old))
 			cpu = ~0;
@@ -436,16 +434,16 @@ static inline fpu_switch_t switch_fpu_prepare(struct task_struct *old, struct ta
 
 		/* Don't change CR0.TS if we just switch! */
 		if (fpu.preload) {
-			new->fpu_counter++;
+			new->thread.fpu_counter++;
 			__thread_set_has_fpu(new);
 			prefetch(new->thread.fpu.state);
 		} else if (!use_eager_fpu())
 			stts();
 	} else {
-		old->fpu_counter = 0;
+		old->thread.fpu_counter = 0;
 		old->thread.fpu.last_cpu = ~0;
 		if (fpu.preload) {
-			new->fpu_counter++;
+			new->thread.fpu_counter++;
 			if (!use_eager_fpu() && fpu_lazy_restore(new, cpu))
 				fpu.preload = 0;
 			else

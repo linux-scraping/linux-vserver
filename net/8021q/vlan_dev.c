@@ -68,25 +68,6 @@ static int vlan_dev_rebuild_header(struct sk_buff *skb)
 	return 0;
 }
 
-static inline u16
-vlan_dev_get_egress_qos_mask(struct net_device *dev, struct sk_buff *skb)
-{
-	struct vlan_priority_tci_mapping *mp;
-
-	smp_rmb(); /* coupled with smp_wmb() in vlan_dev_set_egress_priority() */
-
-	mp = vlan_dev_priv(dev)->egress_priority_map[(skb->priority & 0xF)];
-	while (mp) {
-		if (mp->priority == skb->priority) {
-			return mp->vlan_qos; /* This should already be shifted
-					      * to mask correctly with the
-					      * VLAN's TCI */
-		}
-		mp = mp->next;
-	}
-	return 0;
-}
-
 /*
  *	Create the VLAN header for an arbitrary protocol layer
  *
@@ -107,11 +88,11 @@ static int vlan_dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 	u16 vlan_tci = 0;
 	int rc;
 
-	if (!(vlan_dev_priv(dev)->flags & VLAN_FLAG_REORDER_HDR)) {
+	if (!(vlan->flags & VLAN_FLAG_REORDER_HDR)) {
 		vhdr = (struct vlan_hdr *) skb_push(skb, VLAN_HLEN);
 
-		vlan_tci = vlan_dev_priv(dev)->vlan_id;
-		vlan_tci |= vlan_dev_get_egress_qos_mask(dev, skb);
+		vlan_tci = vlan->vlan_id;
+		vlan_tci |= vlan_dev_get_egress_qos_mask(dev, skb->priority);
 		vhdr->h_vlan_TCI = htons(vlan_tci);
 
 		/*
@@ -133,7 +114,7 @@ static int vlan_dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 		saddr = dev->dev_addr;
 
 	/* Now make the underlying real hard header */
-	dev = vlan_dev_priv(dev)->real_dev;
+	dev = vlan->real_dev;
 	rc = dev_hard_header(skb, dev, type, daddr, saddr, len + vhdrlen);
 	if (rc > 0)
 		rc += vhdrlen;
@@ -168,7 +149,7 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 	    vlan->flags & VLAN_FLAG_REORDER_HDR) {
 		u16 vlan_tci;
 		vlan_tci = vlan->vlan_id;
-		vlan_tci |= vlan_dev_get_egress_qos_mask(dev, skb);
+		vlan_tci |= vlan_dev_get_egress_qos_mask(dev, skb->priority);
 		skb = __vlan_hwaccel_put_tag(skb, vlan->vlan_proto, vlan_tci);
 	}
 
@@ -512,48 +493,10 @@ static void vlan_dev_change_rx_flags(struct net_device *dev, int change)
 	}
 }
 
-static int vlan_calculate_locking_subclass(struct net_device *real_dev)
-{
-	int subclass = 0;
-
-	while (is_vlan_dev(real_dev)) {
-		subclass++;
-		real_dev = vlan_dev_priv(real_dev)->real_dev;
-	}
-
-	return subclass;
-}
-
-static void vlan_dev_mc_sync(struct net_device *to, struct net_device *from)
-{
-	int err = 0, subclass;
-
-	subclass = vlan_calculate_locking_subclass(to);
-
-	spin_lock_nested(&to->addr_list_lock, subclass);
-	err = __hw_addr_sync(&to->mc, &from->mc, to->addr_len);
-	if (!err)
-		__dev_set_rx_mode(to);
-	spin_unlock(&to->addr_list_lock);
-}
-
-static void vlan_dev_uc_sync(struct net_device *to, struct net_device *from)
-{
-	int err = 0, subclass;
-
-	subclass = vlan_calculate_locking_subclass(to);
-
-	spin_lock_nested(&to->addr_list_lock, subclass);
-	err = __hw_addr_sync(&to->uc, &from->uc, to->addr_len);
-	if (!err)
-		__dev_set_rx_mode(to);
-	spin_unlock(&to->addr_list_lock);
-}
-
 static void vlan_dev_set_rx_mode(struct net_device *vlan_dev)
 {
-	vlan_dev_mc_sync(vlan_dev_priv(vlan_dev)->real_dev, vlan_dev);
-	vlan_dev_uc_sync(vlan_dev_priv(vlan_dev)->real_dev, vlan_dev);
+	dev_mc_sync(vlan_dev_priv(vlan_dev)->real_dev, vlan_dev);
+	dev_uc_sync(vlan_dev_priv(vlan_dev)->real_dev, vlan_dev);
 }
 
 /*
@@ -595,9 +538,6 @@ static int vlan_passthru_hard_header(struct sk_buff *skb, struct net_device *dev
 	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct net_device *real_dev = vlan->real_dev;
 
-	if (saddr == NULL)
-		saddr = dev->dev_addr;
-
 	return dev_hard_header(skb, real_dev, type, daddr, saddr, len);
 }
 
@@ -616,7 +556,7 @@ static const struct net_device_ops vlan_netdev_ops;
 static int vlan_dev_init(struct net_device *dev)
 {
 	struct net_device *real_dev = vlan_dev_priv(dev)->real_dev;
-	int subclass = 0;
+	int subclass = 0, i;
 
 	netif_carrier_off(dev);
 
@@ -640,7 +580,7 @@ static int vlan_dev_init(struct net_device *dev)
 	dev->dev_id = real_dev->dev_id;
 
 	if (is_zero_ether_addr(dev->dev_addr))
-		memcpy(dev->dev_addr, real_dev->dev_addr, dev->addr_len);
+		eth_hw_addr_inherit(dev, real_dev);
 	if (is_zero_ether_addr(dev->broadcast))
 		memcpy(dev->broadcast, real_dev->broadcast, dev->addr_len);
 
@@ -649,8 +589,7 @@ static int vlan_dev_init(struct net_device *dev)
 #endif
 
 	dev->needed_headroom = real_dev->needed_headroom;
-	if (vlan_hw_offload_capable(real_dev->features,
-				    vlan_dev_priv(dev)->vlan_proto)) {
+	if (real_dev->features & NETIF_F_HW_VLAN_CTAG_TX) {
 		dev->header_ops      = &vlan_passthru_header_ops;
 		dev->hard_header_len = real_dev->hard_header_len;
 	} else {
@@ -662,12 +601,21 @@ static int vlan_dev_init(struct net_device *dev)
 
 	SET_NETDEV_DEVTYPE(dev, &vlan_type);
 
-	subclass = vlan_calculate_locking_subclass(dev);
+	if (is_vlan_dev(real_dev))
+		subclass = 1;
+
 	vlan_dev_set_lockdep_class(dev, subclass);
 
 	vlan_dev_priv(dev)->vlan_pcpu_stats = alloc_percpu(struct vlan_pcpu_stats);
 	if (!vlan_dev_priv(dev)->vlan_pcpu_stats)
 		return -ENOMEM;
+
+	for_each_possible_cpu(i) {
+		struct vlan_pcpu_stats *vlan_stat;
+		vlan_stat = per_cpu_ptr(vlan_dev_priv(dev)->vlan_pcpu_stats, i);
+		u64_stats_init(&vlan_stat->syncp);
+	}
+
 
 	return 0;
 }

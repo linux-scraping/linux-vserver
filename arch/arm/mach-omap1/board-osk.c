@@ -280,7 +280,7 @@ static struct omap_usb_config osk_usb_config __initdata = {
 	 * be used, with a NONSTANDARD gender-bending cable/dongle, as
 	 * a peripheral.
 	 */
-#if IS_ENABLED(CONFIG_USB_OMAP)
+#ifdef	CONFIG_USB_GADGET_OMAP
 	.register_dev	= 1,
 	.hmc_mode	= 0,
 #else
@@ -300,7 +300,7 @@ static struct omap_lcd_config osk_lcd_config __initdata = {
 #ifdef	CONFIG_OMAP_OSK_MISTRAL
 
 #include <linux/input.h>
-#include <linux/i2c/at24.h>
+#include <linux/platform_data/at24.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 

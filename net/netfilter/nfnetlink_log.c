@@ -45,8 +45,7 @@
 #define NFULNL_NLBUFSIZ_DEFAULT	NLMSG_GOODSIZE
 #define NFULNL_TIMEOUT_DEFAULT 	100	/* every second */
 #define NFULNL_QTHRESH_DEFAULT 	100	/* 100 packets */
-/* max packet size is limited by 16-bit struct nfattr nfa_len field */
-#define NFULNL_COPY_RANGE_MAX	(0xFFFF - NLA_HDRLEN)
+#define NFULNL_COPY_RANGE_MAX	0xFFFF	/* max packet size is limited by 16-bit struct nfattr nfa_len field */
 
 #define PRINTR(x, args...)	do { if (net_ratelimit()) \
 				     printk(x, ## args); } while (0);
@@ -256,8 +255,6 @@ nfulnl_set_mode(struct nfulnl_instance *inst, u_int8_t mode,
 
 	case NFULNL_COPY_PACKET:
 		inst->copy_mode = mode;
-		if (range == 0)
-			range = NFULNL_COPY_RANGE_MAX;
 		inst->copy_range = min_t(unsigned int,
 					 range, NFULNL_COPY_RANGE_MAX);
 		break;
@@ -322,7 +319,8 @@ nfulnl_set_flags(struct nfulnl_instance *inst, u_int16_t flags)
 }
 
 static struct sk_buff *
-nfulnl_alloc_skb(u32 peer_portid, unsigned int inst_size, unsigned int pkt_size)
+nfulnl_alloc_skb(struct net *net, u32 peer_portid, unsigned int inst_size,
+		 unsigned int pkt_size)
 {
 	struct sk_buff *skb;
 	unsigned int n;
@@ -331,13 +329,13 @@ nfulnl_alloc_skb(u32 peer_portid, unsigned int inst_size, unsigned int pkt_size)
 	 * message.  WARNING: has to be <= 128k due to slab restrictions */
 
 	n = max(inst_size, pkt_size);
-	skb = nfnetlink_alloc_skb(&init_net, n, peer_portid, GFP_ATOMIC);
+	skb = nfnetlink_alloc_skb(net, n, peer_portid, GFP_ATOMIC);
 	if (!skb) {
 		if (n > pkt_size) {
 			/* try to allocate only as much as we need for current
 			 * packet */
 
-			skb = nfnetlink_alloc_skb(&init_net, pkt_size,
+			skb = nfnetlink_alloc_skb(net, pkt_size,
 						  peer_portid, GFP_ATOMIC);
 			if (!skb)
 				pr_err("nfnetlink_log: can't even alloc %u bytes\n",
@@ -348,25 +346,26 @@ nfulnl_alloc_skb(u32 peer_portid, unsigned int inst_size, unsigned int pkt_size)
 	return skb;
 }
 
-static void
+static int
 __nfulnl_send(struct nfulnl_instance *inst)
 {
+	int status = -1;
+
 	if (inst->qlen > 1) {
 		struct nlmsghdr *nlh = nlmsg_put(inst->skb, 0, 0,
 						 NLMSG_DONE,
 						 sizeof(struct nfgenmsg),
 						 0);
-		if (WARN_ONCE(!nlh, "bad nlskb size: %u, tailroom %d\n",
-			      inst->skb->len, skb_tailroom(inst->skb))) {
-			kfree_skb(inst->skb);
+		if (!nlh)
 			goto out;
-		}
 	}
-	nfnetlink_unicast(inst->skb, inst->net, inst->peer_portid,
-			  MSG_DONTWAIT);
-out:
+	status = nfnetlink_unicast(inst->skb, inst->net, inst->peer_portid,
+				   MSG_DONTWAIT);
+
 	inst->qlen = 0;
 	inst->skb = NULL;
+out:
+	return status;
 }
 
 static void
@@ -421,6 +420,7 @@ __build_packet_message(struct nfnl_log_net *log,
 	nfmsg->version = NFNETLINK_V0;
 	nfmsg->res_id = htons(inst->group_num);
 
+	memset(&pmsg, 0, sizeof(pmsg));
 	pmsg.hw_protocol	= skb->protocol;
 	pmsg.hook		= hooknum;
 
@@ -500,7 +500,10 @@ __build_packet_message(struct nfnl_log_net *log,
 	if (indev && skb->dev &&
 	    skb->mac_header != skb->network_header) {
 		struct nfulnl_msg_packet_hw phw;
-		int len = dev_parse_header(skb, phw.hw_addr);
+		int len;
+
+		memset(&phw, 0, sizeof(phw));
+		len = dev_parse_header(skb, phw.hw_addr);
 		if (len > 0) {
 			phw.hw_addrlen = htons(len);
 			if (nla_put(inst->skb, NFULA_HWADDR, sizeof(phw), &phw))
@@ -649,8 +652,7 @@ nfulnl_log_packet(struct net *net,
 		+ nla_total_size(sizeof(u_int32_t))	/* gid */
 		+ nla_total_size(plen)			/* prefix */
 		+ nla_total_size(sizeof(struct nfulnl_msg_packet_hw))
-		+ nla_total_size(sizeof(struct nfulnl_msg_packet_timestamp))
-		+ nla_total_size(sizeof(struct nfgenmsg));	/* NLMSG_DONE */
+		+ nla_total_size(sizeof(struct nfulnl_msg_packet_timestamp));
 
 	if (in && skb_mac_header_was_set(skb)) {
 		size +=   nla_total_size(skb->dev->hard_header_len)
@@ -679,7 +681,8 @@ nfulnl_log_packet(struct net *net,
 		break;
 
 	case NFULNL_COPY_PACKET:
-		if (inst->copy_range > skb->len)
+		if (inst->copy_range == 0
+		    || inst->copy_range > skb->len)
 			data_len = skb->len;
 		else
 			data_len = inst->copy_range;
@@ -692,15 +695,16 @@ nfulnl_log_packet(struct net *net,
 		goto unlock_and_release;
 	}
 
-	if (inst->skb && size > skb_tailroom(inst->skb)) {
+	if (inst->skb &&
+	    size > skb_tailroom(inst->skb) - sizeof(struct nfgenmsg)) {
 		/* either the queue len is too high or we don't have
 		 * enough room in the skb left. flush to userspace. */
 		__nfulnl_flush(inst);
 	}
 
 	if (!inst->skb) {
-		inst->skb = nfulnl_alloc_skb(inst->peer_portid, inst->nlbufsiz,
-					     size);
+		inst->skb = nfulnl_alloc_skb(net, inst->peer_portid,
+					     inst->nlbufsiz, size);
 		if (!inst->skb)
 			goto alloc_failure;
 	}
@@ -1049,6 +1053,7 @@ static void __net_exit nfnl_log_net_exit(struct net *net)
 #ifdef CONFIG_PROC_FS
 	remove_proc_entry("nfnetlink_log", net->nf.proc_netfilter);
 #endif
+	nf_log_unset(net, &nfulnl_logger);
 }
 
 static struct pernet_operations nfnl_log_net_ops = {

@@ -1941,19 +1941,7 @@ static int filename_trans_read(struct policydb *p, void *fp)
 		if (rc)
 			goto out;
 
-		rc = hashtab_insert(p->filename_trans, ft, otype);
-		if (rc) {
-			/*
-			 * Do not return -EEXIST to the caller, or the system
-			 * will not boot.
-			 */
-			if (rc != -EEXIST)
-				goto out;
-			/* But free memory to avoid memory leak. */
-			kfree(ft);
-			kfree(name);
-			kfree(otype);
-		}
+		hashtab_insert(p->filename_trans, ft, otype);
 	}
 	hash_eval(p->filename_trans, "filenametr");
 	return 0;
@@ -2180,7 +2168,10 @@ static int ocontext_read(struct policydb *p, struct policydb_compat_info *info,
 
 				rc = -EINVAL;
 				c->v.behavior = le32_to_cpu(buf[0]);
-				if (c->v.behavior > SECURITY_FS_USE_NONE)
+				/* Determined at runtime, not in policy DB. */
+				if (c->v.behavior == SECURITY_FS_USE_MNTPOINT)
+					goto out;
+				if (c->v.behavior > SECURITY_FS_USE_MAX)
 					goto out;
 
 				rc = -ENOMEM;
@@ -3212,9 +3203,8 @@ static int range_write_helper(void *key, void *data, void *ptr)
 
 static int range_write(struct policydb *p, void *fp)
 {
-	size_t nel;
 	__le32 buf[1];
-	int rc;
+	int rc, nel;
 	struct policy_data pd;
 
 	pd.p = p;
@@ -3258,10 +3248,10 @@ static int filename_write_helper(void *key, void *data, void *ptr)
 	if (rc)
 		return rc;
 
-	buf[0] = cpu_to_le32(ft->stype);
-	buf[1] = cpu_to_le32(ft->ttype);
-	buf[2] = cpu_to_le32(ft->tclass);
-	buf[3] = cpu_to_le32(otype->otype);
+	buf[0] = ft->stype;
+	buf[1] = ft->ttype;
+	buf[2] = ft->tclass;
+	buf[3] = otype->otype;
 
 	rc = put_entry(buf, sizeof(u32), 4, fp);
 	if (rc)

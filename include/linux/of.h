@@ -136,7 +136,9 @@ static inline unsigned long of_read_ulong(const __be32 *cell, int size)
 	return of_read_number(cell, size);
 }
 
+#if defined(CONFIG_SPARC)
 #include <asm/prom.h>
+#endif
 
 /* Default #address and #size cells.  Allow arch asm/prom.h to override */
 #if !defined(OF_ROOT_NODE_ADDR_CELLS_DEFAULT)
@@ -226,6 +228,19 @@ static inline int of_get_child_count(const struct device_node *np)
 	return num;
 }
 
+static inline int of_get_available_child_count(const struct device_node *np)
+{
+	struct device_node *child;
+	int num = 0;
+
+	for_each_available_child_of_node(np, child)
+		num++;
+
+	return num;
+}
+
+/* cache lookup */
+extern struct device_node *of_find_next_cache_node(const struct device_node *);
 extern struct device_node *of_find_node_with_property(
 	struct device_node *from, const char *prop_name);
 #define for_each_node_with_property(dn, prop_name) \
@@ -252,18 +267,21 @@ extern int of_property_read_u64(const struct device_node *np,
 extern int of_property_read_string(struct device_node *np,
 				   const char *propname,
 				   const char **out_string);
+extern int of_property_read_string_index(struct device_node *np,
+					 const char *propname,
+					 int index, const char **output);
 extern int of_property_match_string(struct device_node *np,
 				    const char *propname,
 				    const char *string);
-extern int of_property_read_string_helper(struct device_node *np,
-					      const char *propname,
-					      const char **out_strs, size_t sz, int index);
+extern int of_property_count_strings(struct device_node *np,
+				     const char *propname);
 extern int of_device_is_compatible(const struct device_node *device,
 				   const char *);
 extern int of_device_is_available(const struct device_node *device);
 extern const void *of_get_property(const struct device_node *node,
 				const char *name,
 				int *lenp);
+extern struct device_node *of_get_cpu_node(int cpu, unsigned int *thread);
 #define for_each_property_of_node(dn, pp) \
 	for (pp = dn->properties; pp != NULL; pp = pp->next)
 
@@ -272,11 +290,15 @@ extern int of_n_size_cells(struct device_node *np);
 extern const struct of_device_id *of_match_node(
 	const struct of_device_id *matches, const struct device_node *node);
 extern int of_modalias_node(struct device_node *node, char *modalias, int len);
+extern void of_print_phandle_args(const char *msg, const struct of_phandle_args *args);
 extern struct device_node *of_parse_phandle(const struct device_node *np,
 					    const char *phandle_name,
 					    int index);
 extern int of_parse_phandle_with_args(const struct device_node *np,
 	const char *list_name, const char *cells_name, int index,
+	struct of_phandle_args *out_args);
+extern int of_parse_phandle_with_fixed_args(const struct device_node *np,
+	const char *list_name, int cells_count, int index,
 	struct of_phandle_args *out_args);
 extern int of_count_phandle_with_args(const struct device_node *np,
 	const char *list_name, const char *cells_name);
@@ -321,12 +343,6 @@ extern int of_detach_node(struct device_node *);
  */
 const __be32 *of_prop_next_u32(struct property *prop, const __be32 *cur,
 			       u32 *pu);
-#define of_property_for_each_u32(np, propname, prop, p, u)	\
-	for (prop = of_find_property(np, propname, NULL),	\
-		p = of_prop_next_u32(prop, NULL, &u);		\
-		p;						\
-		p = of_prop_next_u32(prop, p, &u))
-
 /*
  * struct property *prop;
  * const char *s;
@@ -335,11 +351,8 @@ const __be32 *of_prop_next_u32(struct property *prop, const __be32 *cur,
  *         printk("String value: %s\n", s);
  */
 const char *of_prop_next_string(struct property *prop, const char *cur);
-#define of_property_for_each_string(np, propname, prop, s)	\
-	for (prop = of_find_property(np, propname, NULL),	\
-		s = of_prop_next_string(prop, NULL);		\
-		s;						\
-		s = of_prop_next_string(prop, s))
+
+int of_device_is_stdout_path(struct device_node *dn);
 
 #else /* CONFIG_OF */
 
@@ -367,6 +380,9 @@ static inline bool of_have_populated_dt(void)
 #define for_each_child_of_node(parent, child) \
 	while (0)
 
+#define for_each_available_child_of_node(parent, child) \
+	while (0)
+
 static inline struct device_node *of_get_child_by_name(
 					const struct device_node *node,
 					const char *name)
@@ -375,6 +391,11 @@ static inline struct device_node *of_get_child_by_name(
 }
 
 static inline int of_get_child_count(const struct device_node *np)
+{
+	return 0;
+}
+
+static inline int of_get_available_child_count(const struct device_node *np)
 {
 	return 0;
 }
@@ -437,9 +458,15 @@ static inline int of_property_read_string(struct device_node *np,
 	return -ENOSYS;
 }
 
-static inline int of_property_read_string_helper(struct device_node *np,
-						 const char *propname,
-						 const char **out_strs, size_t sz, int index)
+static inline int of_property_read_string_index(struct device_node *np,
+						const char *propname, int index,
+						const char **out_string)
+{
+	return -ENOSYS;
+}
+
+static inline int of_property_count_strings(struct device_node *np,
+					    const char *propname)
 {
 	return -ENOSYS;
 }
@@ -447,6 +474,12 @@ static inline int of_property_read_string_helper(struct device_node *np,
 static inline const void *of_get_property(const struct device_node *node,
 				const char *name,
 				int *lenp)
+{
+	return NULL;
+}
+
+static inline struct device_node *of_get_cpu_node(int cpu,
+					unsigned int *thread)
 {
 	return NULL;
 }
@@ -480,6 +513,13 @@ static inline int of_parse_phandle_with_args(struct device_node *np,
 	return -ENOSYS;
 }
 
+static inline int of_parse_phandle_with_fixed_args(const struct device_node *np,
+	const char *list_name, int cells_count, int index,
+	struct of_phandle_args *out_args)
+{
+	return -ENOSYS;
+}
+
 static inline int of_count_phandle_with_args(struct device_node *np,
 					     const char *list_name,
 					     const char *cells_name)
@@ -497,86 +537,32 @@ static inline int of_machine_is_compatible(const char *compat)
 	return 0;
 }
 
+static inline int of_device_is_stdout_path(struct device_node *dn)
+{
+	return 0;
+}
+
+static inline const __be32 *of_prop_next_u32(struct property *prop,
+		const __be32 *cur, u32 *pu)
+{
+	return NULL;
+}
+
+static inline const char *of_prop_next_string(struct property *prop,
+		const char *cur)
+{
+	return NULL;
+}
+
 #define of_match_ptr(_ptr)	NULL
 #define of_match_node(_matches, _node)	NULL
-#define of_property_for_each_u32(np, propname, prop, p, u) \
-	while (0)
-#define of_property_for_each_string(np, propname, prop, s) \
-	while (0)
 #endif /* CONFIG_OF */
 
-#ifndef of_node_to_nid
-static inline int of_node_to_nid(struct device_node *np)
-{
-	return numa_node_id();
-}
-
-#define of_node_to_nid of_node_to_nid
+#if defined(CONFIG_OF) && defined(CONFIG_NUMA)
+extern int of_node_to_nid(struct device_node *np);
+#else
+static inline int of_node_to_nid(struct device_node *device) { return 0; }
 #endif
-
-/**
- * of_property_read_string_array() - Read an array of strings from a multiple
- * strings property.
- * @np:		device node from which the property value is to be read.
- * @propname:	name of the property to be searched.
- * @out_strs:	output array of string pointers.
- * @sz:		number of array elements to read.
- *
- * Search for a property in a device tree node and retrieve a list of
- * terminated string values (pointer to data, not a copy) in that property.
- *
- * If @out_strs is NULL, the number of strings in the property is returned.
- */
-static inline int of_property_read_string_array(struct device_node *np,
-						const char *propname, const char **out_strs,
-						size_t sz)
-{
-	return of_property_read_string_helper(np, propname, out_strs, sz, 0);
-}
-
-/**
- * of_property_count_strings() - Find and return the number of strings from a
- * multiple strings property.
- * @np:		device node from which the property value is to be read.
- * @propname:	name of the property to be searched.
- *
- * Search for a property in a device tree node and retrieve the number of null
- * terminated string contain in it. Returns the number of strings on
- * success, -EINVAL if the property does not exist, -ENODATA if property
- * does not have a value, and -EILSEQ if the string is not null-terminated
- * within the length of the property data.
- */
-static inline int of_property_count_strings(struct device_node *np,
-					    const char *propname)
-{
-	return of_property_read_string_helper(np, propname, NULL, 0, 0);
-}
-
-/**
- * of_property_read_string_index() - Find and read a string from a multiple
- * strings property.
- * @np:		device node from which the property value is to be read.
- * @propname:	name of the property to be searched.
- * @index:	index of the string in the list of strings
- * @out_string:	pointer to null terminated return string, modified only if
- *		return value is 0.
- *
- * Search for a property in a device tree node and retrieve a null
- * terminated string value (pointer to data, not a copy) in the list of strings
- * contained in that property.
- * Returns 0 on success, -EINVAL if the property does not exist, -ENODATA if
- * property does not have a value, and -EILSEQ if the string is not
- * null-terminated within the length of the property data.
- *
- * The out_string pointer is modified only if a valid string can be decoded.
- */
-static inline int of_property_read_string_index(struct device_node *np,
-						const char *propname,
-						int index, const char **output)
-{
-	int rc = of_property_read_string_helper(np, propname, output, 1, index);
-	return rc < 0 ? rc : 0;
-}
 
 /**
  * of_property_read_bool - Findfrom a property
@@ -614,6 +600,18 @@ static inline int of_property_read_u32(const struct device_node *np,
 {
 	return of_property_read_u32_array(np, propname, out_value, 1);
 }
+
+#define of_property_for_each_u32(np, propname, prop, p, u)	\
+	for (prop = of_find_property(np, propname, NULL),	\
+		p = of_prop_next_u32(prop, NULL, &u);		\
+		p;						\
+		p = of_prop_next_u32(prop, p, &u))
+
+#define of_property_for_each_string(np, propname, prop, s)	\
+	for (prop = of_find_property(np, propname, NULL),	\
+		s = of_prop_next_string(prop, NULL);		\
+		s;						\
+		s = of_prop_next_string(prop, s))
 
 #if defined(CONFIG_PROC_FS) && defined(CONFIG_PROC_DEVICETREE)
 extern void proc_device_tree_add_node(struct device_node *, struct proc_dir_entry *);

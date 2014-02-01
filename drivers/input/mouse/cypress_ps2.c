@@ -410,6 +410,7 @@ static int cypress_set_input_params(struct input_dev *input,
 	__clear_bit(REL_X, input->relbit);
 	__clear_bit(REL_Y, input->relbit);
 
+	__set_bit(INPUT_PROP_BUTTONPAD, input->propbit);
 	__set_bit(EV_KEY, input->evbit);
 	__set_bit(BTN_LEFT, input->keybit);
 	__set_bit(BTN_RIGHT, input->keybit);
@@ -665,14 +666,14 @@ int cypress_init(struct psmouse *psmouse)
 {
 	struct cytp_data *cytp;
 
-	cytp = (struct cytp_data *)kzalloc(sizeof(struct cytp_data), GFP_KERNEL);
-	psmouse->private = (void *)cytp;
-	if (cytp == NULL)
+	cytp = kzalloc(sizeof(struct cytp_data), GFP_KERNEL);
+	if (!cytp)
 		return -ENOMEM;
 
-	cypress_reset(psmouse);
-
+	psmouse->private = cytp;
 	psmouse->pktsize = 8;
+
+	cypress_reset(psmouse);
 
 	if (cypress_query_hardware(psmouse)) {
 		psmouse_err(psmouse, "Unable to query Trackpad hardware.\n");

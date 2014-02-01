@@ -49,21 +49,19 @@ static DEFINE_SPINLOCK(zone_scan_lock);
 #ifdef CONFIG_NUMA
 /**
  * has_intersects_mems_allowed() - check task eligiblity for kill
- * @start: task struct of which task to consider
+ * @tsk: task struct of which task to consider
  * @mask: nodemask passed to page allocator for mempolicy ooms
  *
  * Task eligibility is determined by whether or not a candidate task, @tsk,
  * shares the same mempolicy nodes as current if it is bound by such a policy
  * and whether or not it has the same set of allowed cpuset nodes.
  */
-static bool has_intersects_mems_allowed(struct task_struct *start,
+static bool has_intersects_mems_allowed(struct task_struct *tsk,
 					const nodemask_t *mask)
 {
-	struct task_struct *tsk;
-	bool ret = false;
+	struct task_struct *start = tsk;
 
-	rcu_read_lock();
-	for_each_thread(start, tsk) {
+	do {
 		if (mask) {
 			/*
 			 * If this is a mempolicy constrained oom, tsk's
@@ -71,20 +69,19 @@ static bool has_intersects_mems_allowed(struct task_struct *start,
 			 * mempolicy intersects current, otherwise it may be
 			 * needlessly killed.
 			 */
-			ret = mempolicy_nodemask_intersects(tsk, mask);
+			if (mempolicy_nodemask_intersects(tsk, mask))
+				return true;
 		} else {
 			/*
 			 * This is not a mempolicy constrained oom, so only
 			 * check the mems of tsk's cpuset.
 			 */
-			ret = cpuset_mems_allowed_intersects(current, tsk);
+			if (cpuset_mems_allowed_intersects(current, tsk))
+				return true;
 		}
-		if (ret)
-			break;
-	}
-	rcu_read_unlock();
+	} while_each_thread(start, tsk);
 
-	return ret;
+	return false;
 }
 #else
 static bool has_intersects_mems_allowed(struct task_struct *tsk,
@@ -102,21 +99,16 @@ static bool has_intersects_mems_allowed(struct task_struct *tsk,
  */
 struct task_struct *find_lock_task_mm(struct task_struct *p)
 {
-	struct task_struct *t;
+	struct task_struct *t = p;
 
-	rcu_read_lock();
-
-	for_each_thread(p, t) {
+	do {
 		task_lock(t);
 		if (likely(t->mm))
-			goto found;
+			return t;
 		task_unlock(t);
-	}
-	t = NULL;
-found:
-	rcu_read_unlock();
+	} while_each_thread(p, t);
 
-	return t;
+	return NULL;
 }
 
 /* return true if the task is not adequate as candidate victim task. */
@@ -178,7 +170,7 @@ unsigned long oom_badness(struct task_struct *p, struct mem_cgroup *memcg,
 	 * The baseline for the badness score is the proportion of RAM that each
 	 * task's rss, pagetable and swap space use.
 	 */
-	points = get_mm_rss(p->mm) + p->mm->nr_ptes +
+	points = get_mm_rss(p->mm) + atomic_long_read(&p->mm->nr_ptes) +
 		 get_mm_counter(p->mm, MM_SWAPENTS);
 	task_unlock(p);
 
@@ -187,7 +179,7 @@ unsigned long oom_badness(struct task_struct *p, struct mem_cgroup *memcg,
 	 * implementation used by LSMs.
 	 */
 	if (has_capability_noaudit(p, CAP_SYS_ADMIN))
-		points -= (points * 3) / 100;
+		adj -= 30;
 
 	/* Normalize to oom_score_adj units */
 	adj *= totalpages / 1000;
@@ -305,7 +297,7 @@ enum oom_scan_t oom_scan_process_thread(struct task_struct *task,
 
 /*
  * Simple selection loop. We chose the process with the highest
- * number of 'points'.
+ * number of 'points'.  Returns -1 on scan abort.
  *
  * (not docbooked, we don't want this one cluttering up the manual)
  */
@@ -318,7 +310,7 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 	unsigned long chosen_points = 0;
 
 	rcu_read_lock();
-	for_each_process_thread(g, p) {
+	do_each_thread(g, p) {
 		unsigned int points;
 
 		switch (oom_scan_process_thread(p, totalpages, nodemask,
@@ -331,7 +323,7 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 			continue;
 		case OOM_SCAN_ABORT:
 			rcu_read_unlock();
-			return ERR_PTR(-1UL);
+			return (struct task_struct *)(-1UL);
 		case OOM_SCAN_OK:
 			break;
 		};
@@ -340,7 +332,7 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 			chosen = p;
 			chosen_points = points;
 		}
-	}
+	} while_each_thread(g, p);
 	if (chosen)
 		get_task_struct(chosen);
 	rcu_read_unlock();
@@ -381,10 +373,10 @@ static void dump_tasks(const struct mem_cgroup *memcg, const nodemask_t *nodemas
 			continue;
 		}
 
-		pr_info("[%5d] %5d %5d %8lu %8lu %7lu %8lu         %5hd %s\n",
+		pr_info("[%5d] %5d %5d %8lu %8lu %7ld %8lu         %5hd %s\n",
 			task->pid, from_kuid(&init_user_ns, task_uid(task)),
 			task->tgid, task->mm->total_vm, get_mm_rss(task->mm),
-			task->mm->nr_ptes,
+			atomic_long_read(&task->mm->nr_ptes),
 			get_mm_counter(task->mm, MM_SWAPENTS),
 			task->signal->oom_score_adj, task->comm);
 		task_unlock(task);
@@ -411,23 +403,6 @@ static void dump_header(struct task_struct *p, gfp_t gfp_mask, int order,
 		dump_tasks(memcg, nodemask);
 }
 
-/*
- * Number of OOM killer invocations (including memcg OOM killer).
- * Primarily used by PM freezer to check for potential races with
- * OOM killed frozen task.
- */
-static atomic_t oom_kills = ATOMIC_INIT(0);
-
-int oom_kills_count(void)
-{
-	return atomic_read(&oom_kills);
-}
-
-void note_oom_kill(void)
-{
-	atomic_inc(&oom_kills);
-}
-
 #define K(x) ((x) << (PAGE_SHIFT-10))
 /*
  * Must be called while holding a reference to p, which will be released upon
@@ -440,7 +415,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 {
 	struct task_struct *victim = p;
 	struct task_struct *child;
-	struct task_struct *t;
+	struct task_struct *t = p;
 	struct mm_struct *mm;
 	unsigned int victim_points = 0;
 	static DEFINE_RATELIMIT_STATE(oom_rs, DEFAULT_RATELIMIT_INTERVAL,
@@ -471,7 +446,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	 * still freeing memory.
 	 */
 	read_lock(&tasklist_lock);
-	for_each_thread(p, t) {
+	do {
 		list_for_each_entry(child, &t->children, sibling) {
 			unsigned int child_points;
 
@@ -489,11 +464,13 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 				get_task_struct(victim);
 			}
 		}
-	}
+	} while_each_thread(p, t);
 	read_unlock(&tasklist_lock);
 
+	rcu_read_lock();
 	p = find_lock_task_mm(victim);
 	if (!p) {
+		rcu_read_unlock();
 		put_task_struct(victim);
 		return;
 	} else if (victim != p) {
@@ -519,7 +496,6 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	 * That thread will now get access to memory reserves since it has a
 	 * pending fatal signal.
 	 */
-	rcu_read_lock();
 	for_each_process(p)
 		if (p->mm == mm && !same_thread_group(p, victim) &&
 		    !(p->flags & PF_KTHREAD)) {
@@ -697,7 +673,7 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 		else
 			panic("Out of memory and no killable processes...\n");
 	}
-	if (PTR_ERR(p) != -1UL) {
+	if (p != (void *)-1UL) {
 		oom_kill_process(p, gfp_mask, order, points, totalpages, NULL,
 				 nodemask, "Out of memory");
 		killed = 1;

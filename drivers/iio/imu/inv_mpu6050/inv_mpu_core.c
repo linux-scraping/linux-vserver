@@ -23,6 +23,7 @@
 #include <linux/interrupt.h>
 #include <linux/kfifo.h>
 #include <linux/spinlock.h>
+#include <linux/iio/iio.h>
 #include "inv_mpu_iio.h"
 
 /*
@@ -660,36 +661,30 @@ static int inv_mpu_probe(struct i2c_client *client,
 {
 	struct inv_mpu6050_state *st;
 	struct iio_dev *indio_dev;
-	struct inv_mpu6050_platform_data *pdata;
 	int result;
 
 	if (!i2c_check_functionality(client->adapter,
-					I2C_FUNC_SMBUS_READ_I2C_BLOCK |
-					I2C_FUNC_SMBUS_WRITE_I2C_BLOCK)) {
-		result = -ENOSYS;
-		goto out_no_free;
-	}
-	indio_dev = iio_device_alloc(sizeof(*st));
-	if (indio_dev == NULL) {
-		result =  -ENOMEM;
-		goto out_no_free;
-	}
+		I2C_FUNC_SMBUS_I2C_BLOCK))
+		return -ENOSYS;
+
+	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*st));
+	if (!indio_dev)
+		return -ENOMEM;
+
 	st = iio_priv(indio_dev);
 	st->client = client;
-	pdata = (struct inv_mpu6050_platform_data
-			*)dev_get_platdata(&client->dev);
-	if (pdata)
-		st->plat_data = *pdata;
+	st->plat_data = *(struct inv_mpu6050_platform_data
+				*)dev_get_platdata(&client->dev);
 	/* power is turned on inside check chip type*/
 	result = inv_check_and_setup_chip(st, id);
 	if (result)
-		goto out_free;
+		return result;
 
 	result = inv_mpu6050_init_config(indio_dev);
 	if (result) {
 		dev_err(&client->dev,
 			"Could not initialize device.\n");
-		goto out_free;
+		return result;
 	}
 
 	i2c_set_clientdata(client, indio_dev);
@@ -708,7 +703,7 @@ static int inv_mpu_probe(struct i2c_client *client,
 	if (result) {
 		dev_err(&st->client->dev, "configure buffer fail %d\n",
 				result);
-		goto out_free;
+		return result;
 	}
 	result = inv_mpu6050_probe_trigger(indio_dev);
 	if (result) {
@@ -730,10 +725,6 @@ out_remove_trigger:
 	inv_mpu6050_remove_trigger(st);
 out_unreg_ring:
 	iio_triggered_buffer_cleanup(indio_dev);
-out_free:
-	iio_device_free(indio_dev);
-out_no_free:
-
 	return result;
 }
 
@@ -745,7 +736,6 @@ static int inv_mpu_remove(struct i2c_client *client)
 	iio_device_unregister(indio_dev);
 	inv_mpu6050_remove_trigger(st);
 	iio_triggered_buffer_cleanup(indio_dev);
-	iio_device_free(indio_dev);
 
 	return 0;
 }

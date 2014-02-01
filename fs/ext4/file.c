@@ -82,7 +82,7 @@ ext4_unaligned_aio(struct inode *inode, const struct iovec *iov,
 	size_t count = iov_length(iov, nr_segs);
 	loff_t final_size = pos + count;
 
-	if (pos >= i_size_read(inode))
+	if (pos >= inode->i_size)
 		return 0;
 
 	if ((pos & blockmask) || (final_size & blockmask))
@@ -100,7 +100,7 @@ ext4_file_dio_write(struct kiocb *iocb, const struct iovec *iov,
 	struct blk_plug plug;
 	int unaligned_aio = 0;
 	ssize_t ret;
-	int *overwrite = iocb->private;
+	int overwrite = 0;
 	size_t length = iov_length(iov, nr_segs);
 
 	if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
@@ -117,6 +117,8 @@ ext4_file_dio_write(struct kiocb *iocb, const struct iovec *iov,
 
 	mutex_lock(&inode->i_mutex);
 	blk_start_plug(&plug);
+
+	iocb->private = &overwrite;
 
 	/* check whether we do a DIO overwrite or not */
 	if (ext4_should_dioread_nolock(inode) && !unaligned_aio &&
@@ -141,13 +143,13 @@ ext4_file_dio_write(struct kiocb *iocb, const struct iovec *iov,
 		 * So we should check these two conditions.
 		 */
 		if (err == len && (map.m_flags & EXT4_MAP_MAPPED))
-			*overwrite = 1;
+			overwrite = 1;
 	}
 
 	ret = __generic_file_aio_write(iocb, iov, nr_segs, &iocb->ki_pos);
 	mutex_unlock(&inode->i_mutex);
 
-	if (ret > 0 || ret == -EIOCBQUEUED) {
+	if (ret > 0) {
 		ssize_t err;
 
 		err = generic_write_sync(file, pos, ret);
@@ -168,7 +170,6 @@ ext4_file_write(struct kiocb *iocb, const struct iovec *iov,
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
 	ssize_t ret;
-	int overwrite = 0;
 
 	/*
 	 * If we have encountered a bitmap-format file, the size limit
@@ -189,7 +190,6 @@ ext4_file_write(struct kiocb *iocb, const struct iovec *iov,
 		}
 	}
 
-	iocb->private = &overwrite;
 	if (unlikely(iocb->ki_filp->f_flags & O_DIRECT))
 		ret = ext4_file_dio_write(iocb, iov, nr_segs, pos);
 	else
@@ -219,7 +219,6 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 {
 	struct super_block *sb = inode->i_sb;
 	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
-	struct ext4_inode_info *ei = EXT4_I(inode);
 	struct vfsmount *mnt = filp->f_path.mnt;
 	struct path path;
 	char buf[64], *cp;
@@ -259,22 +258,10 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	 * Set up the jbd2_inode if we are opening the inode for
 	 * writing and the journal is present
 	 */
-	if (sbi->s_journal && !ei->jinode && (filp->f_mode & FMODE_WRITE)) {
-		struct jbd2_inode *jinode = jbd2_alloc_inode(GFP_KERNEL);
-
-		spin_lock(&inode->i_lock);
-		if (!ei->jinode) {
-			if (!jinode) {
-				spin_unlock(&inode->i_lock);
-				return -ENOMEM;
-			}
-			ei->jinode = jinode;
-			jbd2_journal_init_jbd_inode(ei->jinode, inode);
-			jinode = NULL;
-		}
-		spin_unlock(&inode->i_lock);
-		if (unlikely(jinode != NULL))
-			jbd2_free_inode(jinode);
+	if (filp->f_mode & FMODE_WRITE) {
+		int ret = ext4_inode_attach_jinode(inode);
+		if (ret < 0)
+			return ret;
 	}
 	return dquot_file_open(inode, filp);
 }
@@ -494,17 +481,7 @@ static loff_t ext4_seek_data(struct file *file, loff_t offset, loff_t maxsize)
 	if (dataoff > isize)
 		return -ENXIO;
 
-	if (dataoff < 0 && !(file->f_mode & FMODE_UNSIGNED_OFFSET))
-		return -EINVAL;
-	if (dataoff > maxsize)
-		return -EINVAL;
-
-	if (dataoff != file->f_pos) {
-		file->f_pos = dataoff;
-		file->f_version = 0;
-	}
-
-	return dataoff;
+	return vfs_setpos(file, dataoff, maxsize);
 }
 
 /*
@@ -580,17 +557,7 @@ static loff_t ext4_seek_hole(struct file *file, loff_t offset, loff_t maxsize)
 	if (holeoff > isize)
 		holeoff = isize;
 
-	if (holeoff < 0 && !(file->f_mode & FMODE_UNSIGNED_OFFSET))
-		return -EINVAL;
-	if (holeoff > maxsize)
-		return -EINVAL;
-
-	if (holeoff != file->f_pos) {
-		file->f_pos = holeoff;
-		file->f_version = 0;
-	}
-
-	return holeoff;
+	return vfs_setpos(file, holeoff, maxsize);
 }
 
 /*

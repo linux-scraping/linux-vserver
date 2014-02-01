@@ -815,6 +815,7 @@ static int _init_interface_clks(struct omap_hwmod *oh)
 			pr_warning("omap_hwmod: %s: cannot clk_get interface_clk %s\n",
 				   oh->name, os->clk);
 			ret = -EINVAL;
+			continue;
 		}
 		os->_clk = c;
 		/*
@@ -851,6 +852,7 @@ static int _init_opt_clks(struct omap_hwmod *oh)
 			pr_warning("omap_hwmod: %s: cannot clk_get opt_clk %s\n",
 				   oh->name, oc->clk);
 			ret = -EINVAL;
+			continue;
 		}
 		oc->_clk = c;
 		/*
@@ -1435,7 +1437,9 @@ static void _enable_sysc(struct omap_hwmod *oh)
 	    (sf & SYSC_HAS_CLOCKACTIVITY))
 		_set_clockactivity(oh, oh->class->sysc->clockact, &v);
 
-	_write_sysconfig(v, oh);
+	/* If the cached value is the same as the new value, skip the write */
+	if (oh->_sysc_cache != v)
+		_write_sysconfig(v, oh);
 
 	/*
 	 * Set the autoidle bit only after setting the smartidle bit
@@ -2177,8 +2181,6 @@ static int _enable(struct omap_hwmod *oh)
 			 oh->mux->pads_dynamic))) {
 		omap_hwmod_mux(oh->mux, _HWMOD_STATE_ENABLED);
 		_reconfigure_io_chain();
-	} else if (oh->flags & HWMOD_FORCE_MSTANDBY) {
-		_reconfigure_io_chain();
 	}
 
 	_add_initiator_dep(oh, mpu_oh);
@@ -2285,8 +2287,6 @@ static int _idle(struct omap_hwmod *oh)
 	if (oh->mux && oh->mux->pads_dynamic) {
 		omap_hwmod_mux(oh->mux, _HWMOD_STATE_IDLE);
 		_reconfigure_io_chain();
-	} else if (oh->flags & HWMOD_FORCE_MSTANDBY) {
-		_reconfigure_io_chain();
 	}
 
 	oh->_state = _HWMOD_STATE_IDLE;
@@ -2364,56 +2364,102 @@ static int _shutdown(struct omap_hwmod *oh)
 	return 0;
 }
 
+static int of_dev_find_hwmod(struct device_node *np,
+			     struct omap_hwmod *oh)
+{
+	int count, i, res;
+	const char *p;
+
+	count = of_property_count_strings(np, "ti,hwmods");
+	if (count < 1)
+		return -ENODEV;
+
+	for (i = 0; i < count; i++) {
+		res = of_property_read_string_index(np, "ti,hwmods",
+						    i, &p);
+		if (res)
+			continue;
+		if (!strcmp(p, oh->name)) {
+			pr_debug("omap_hwmod: dt %s[%i] uses hwmod %s\n",
+				 np->name, i, oh->name);
+			return i;
+		}
+	}
+
+	return -ENODEV;
+}
+
 /**
  * of_dev_hwmod_lookup - look up needed hwmod from dt blob
  * @np: struct device_node *
  * @oh: struct omap_hwmod *
+ * @index: index of the entry found
+ * @found: struct device_node * found or NULL
  *
  * Parse the dt blob and find out needed hwmod. Recursive function is
  * implemented to take care hierarchical dt blob parsing.
- * Return: The device node on success or NULL on failure.
+ * Return: Returns 0 on success, -ENODEV when not found.
  */
-static struct device_node *of_dev_hwmod_lookup(struct device_node *np,
-						struct omap_hwmod *oh)
+static int of_dev_hwmod_lookup(struct device_node *np,
+			       struct omap_hwmod *oh,
+			       int *index,
+			       struct device_node **found)
 {
-	struct device_node *np0 = NULL, *np1 = NULL;
-	const char *p;
+	struct device_node *np0 = NULL;
+	int res;
+
+	res = of_dev_find_hwmod(np, oh);
+	if (res >= 0) {
+		*found = np;
+		*index = res;
+		return 0;
+	}
 
 	for_each_child_of_node(np, np0) {
-		if (of_find_property(np0, "ti,hwmods", NULL)) {
-			p = of_get_property(np0, "ti,hwmods", NULL);
-			if (!strcmp(p, oh->name))
-				return np0;
-			np1 = of_dev_hwmod_lookup(np0, oh);
-			if (np1)
-				return np1;
+		struct device_node *fc;
+		int i;
+
+		res = of_dev_hwmod_lookup(np0, oh, &i, &fc);
+		if (res == 0) {
+			*found = fc;
+			*index = i;
+			return 0;
 		}
 	}
-	return NULL;
+
+	*found = NULL;
+	*index = 0;
+
+	return -ENODEV;
 }
 
 /**
  * _init_mpu_rt_base - populate the virtual address for a hwmod
  * @oh: struct omap_hwmod * to locate the virtual address
+ * @data: (unused, caller should pass NULL)
+ * @index: index of the reg entry iospace in device tree
+ * @np: struct device_node * of the IP block's device node in the DT data
  *
  * Cache the virtual address used by the MPU to access this IP block's
  * registers.  This address is needed early so the OCP registers that
  * are part of the device's address space can be ioremapped properly.
- * No return value.
+ *
+ * Returns 0 on success, -EINVAL if an invalid hwmod is passed, and
+ * -ENXIO on absent or invalid register target address space.
  */
-static void __init _init_mpu_rt_base(struct omap_hwmod *oh, void *data)
+static int __init _init_mpu_rt_base(struct omap_hwmod *oh, void *data,
+				    int index, struct device_node *np)
 {
 	struct omap_hwmod_addr_space *mem;
 	void __iomem *va_start = NULL;
-	struct device_node *np;
 
 	if (!oh)
-		return;
+		return -EINVAL;
 
 	_save_mpu_port_index(oh);
 
 	if (oh->_int_flags & _HWMOD_NO_MPU_PORT)
-		return;
+		return -ENXIO;
 
 	mem = _find_mpu_rt_addr_space(oh);
 	if (!mem) {
@@ -2421,25 +2467,28 @@ static void __init _init_mpu_rt_base(struct omap_hwmod *oh, void *data)
 			 oh->name);
 
 		/* Extract the IO space from device tree blob */
-		if (!of_have_populated_dt())
-			return;
+		if (!np)
+			return -ENXIO;
 
-		np = of_dev_hwmod_lookup(of_find_node_by_name(NULL, "ocp"), oh);
-		if (np)
-			va_start = of_iomap(np, 0);
+		va_start = of_iomap(np, index + oh->mpu_rt_idx);
 	} else {
 		va_start = ioremap(mem->pa_start, mem->pa_end - mem->pa_start);
 	}
 
 	if (!va_start) {
-		pr_err("omap_hwmod: %s: Could not ioremap\n", oh->name);
-		return;
+		if (mem)
+			pr_err("omap_hwmod: %s: Could not ioremap\n", oh->name);
+		else
+			pr_err("omap_hwmod: %s: Missing dt reg%i for %s\n",
+			       oh->name, index, np->full_name);
+		return -ENXIO;
 	}
 
 	pr_debug("omap_hwmod: %s: MPU register target at va %p\n",
 		 oh->name, va_start);
 
 	oh->_mpu_rt_va = va_start;
+	return 0;
 }
 
 /**
@@ -2452,24 +2501,52 @@ static void __init _init_mpu_rt_base(struct omap_hwmod *oh, void *data)
  * registered at this point.  This is the first of two phases for
  * hwmod initialization.  Code called here does not touch any hardware
  * registers, it simply prepares internal data structures.  Returns 0
- * upon success or if the hwmod isn't registered, or -EINVAL upon
- * failure.
+ * upon success or if the hwmod isn't registered or if the hwmod's
+ * address space is not defined, or -EINVAL upon failure.
  */
 static int __init _init(struct omap_hwmod *oh, void *data)
 {
-	int r;
+	int r, index;
+	struct device_node *np = NULL;
 
 	if (oh->_state != _HWMOD_STATE_REGISTERED)
 		return 0;
 
-	if (oh->class->sysc)
-		_init_mpu_rt_base(oh, NULL);
+	if (of_have_populated_dt()) {
+		struct device_node *bus;
+
+		bus = of_find_node_by_name(NULL, "ocp");
+		if (!bus)
+			return -ENODEV;
+
+		r = of_dev_hwmod_lookup(bus, oh, &index, &np);
+		if (r)
+			pr_debug("omap_hwmod: %s missing dt data\n", oh->name);
+		else if (np && index)
+			pr_warn("omap_hwmod: %s using broken dt data from %s\n",
+				oh->name, np->name);
+	}
+
+	if (oh->class->sysc) {
+		r = _init_mpu_rt_base(oh, NULL, index, np);
+		if (r < 0) {
+			WARN(1, "omap_hwmod: %s: doesn't have mpu register target base\n",
+			     oh->name);
+			return 0;
+		}
+	}
 
 	r = _init_clocks(oh, NULL);
 	if (r < 0) {
 		WARN(1, "omap_hwmod: %s: couldn't init clocks\n", oh->name);
 		return -EINVAL;
 	}
+
+	if (np)
+		if (of_find_property(np, "ti,no-reset-on-init", NULL))
+			oh->flags |= HWMOD_INIT_NO_RESET;
+		if (of_find_property(np, "ti,no-idle-on-init", NULL))
+			oh->flags |= HWMOD_INIT_NO_IDLE;
 
 	oh->_state = _HWMOD_STATE_INITIALIZED;
 
@@ -4158,7 +4235,7 @@ void __init omap_hwmod_init(void)
 		soc_ops.assert_hardreset = _omap2_assert_hardreset;
 		soc_ops.deassert_hardreset = _omap2_deassert_hardreset;
 		soc_ops.is_hardreset_asserted = _omap2_is_hardreset_asserted;
-	} else if (cpu_is_omap44xx() || soc_is_omap54xx()) {
+	} else if (cpu_is_omap44xx() || soc_is_omap54xx() || soc_is_dra7xx()) {
 		soc_ops.enable_module = _omap4_enable_module;
 		soc_ops.disable_module = _omap4_disable_module;
 		soc_ops.wait_target_ready = _omap4_wait_target_ready;
@@ -4168,6 +4245,14 @@ void __init omap_hwmod_init(void)
 		soc_ops.init_clkdm = _init_clkdm;
 		soc_ops.update_context_lost = _omap4_update_context_lost;
 		soc_ops.get_context_lost = _omap4_get_context_lost;
+	} else if (soc_is_am43xx()) {
+		soc_ops.enable_module = _omap4_enable_module;
+		soc_ops.disable_module = _omap4_disable_module;
+		soc_ops.wait_target_ready = _omap4_wait_target_ready;
+		soc_ops.assert_hardreset = _omap4_assert_hardreset;
+		soc_ops.deassert_hardreset = _omap4_deassert_hardreset;
+		soc_ops.is_hardreset_asserted = _omap4_is_hardreset_asserted;
+		soc_ops.init_clkdm = _init_clkdm;
 	} else if (soc_is_am33xx()) {
 		soc_ops.enable_module = _am33xx_enable_module;
 		soc_ops.disable_module = _am33xx_disable_module;

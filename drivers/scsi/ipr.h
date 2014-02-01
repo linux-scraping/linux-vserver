@@ -100,6 +100,13 @@
 #define IPR_SUBS_DEV_ID_57D6    0x03FC
 #define IPR_SUBS_DEV_ID_57D7    0x03FF
 #define IPR_SUBS_DEV_ID_57D8    0x03FE
+#define IPR_SUBS_DEV_ID_57D9    0x046D
+#define IPR_SUBS_DEV_ID_57EB    0x0474
+#define IPR_SUBS_DEV_ID_57EC    0x0475
+#define IPR_SUBS_DEV_ID_57ED    0x0499
+#define IPR_SUBS_DEV_ID_57EE    0x049A
+#define IPR_SUBS_DEV_ID_57EF    0x049B
+#define IPR_SUBS_DEV_ID_57F0    0x049C
 #define IPR_NAME				"ipr"
 
 /*
@@ -257,7 +264,7 @@
 #define IPR_RUNTIME_RESET				0x40000000
 
 #define IPR_IPL_INIT_MIN_STAGE_TIME			5
-#define IPR_IPL_INIT_DEFAULT_STAGE_TIME                 30
+#define IPR_IPL_INIT_DEFAULT_STAGE_TIME                 15
 #define IPR_IPL_INIT_STAGE_UNKNOWN			0x0
 #define IPR_IPL_INIT_STAGE_TRANSOP			0xB0000000
 #define IPR_IPL_INIT_STAGE_MASK				0xff000000
@@ -1452,7 +1459,6 @@ struct ipr_ioa_cfg {
 
 #define IPR_NUM_TRACE_INDEX_BITS	8
 #define IPR_NUM_TRACE_ENTRIES		(1 << IPR_NUM_TRACE_INDEX_BITS)
-#define IPR_TRACE_INDEX_MASK		(IPR_NUM_TRACE_ENTRIES - 1)
 #define IPR_TRACE_SIZE	(sizeof(struct ipr_trace_entry) * IPR_NUM_TRACE_ENTRIES)
 	char trace_start[8];
 #define IPR_TRACE_START_LABEL			"trace"
@@ -1579,7 +1585,6 @@ struct ipr_cmnd {
 		struct scsi_device *sdev;
 	} u;
 
-	struct completion *eh_comp;
 	struct ipr_hrr_queue *hrrq;
 	struct ipr_ioa_cfg *ioa_cfg;
 };

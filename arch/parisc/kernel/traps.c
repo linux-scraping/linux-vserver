@@ -292,11 +292,6 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 	do_exit(SIGSEGV);
 }
 
-int syscall_ipi(int (*syscall) (struct pt_regs *), struct pt_regs *regs)
-{
-	return syscall(regs);
-}
-
 /* gdb uses break 4,8 */
 #define GDB_BREAK_INSN 0x10004
 static void handle_gdb_break(struct pt_regs *regs, int wot)
@@ -812,9 +807,6 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 
 	    if (fault_space == 0 && !in_atomic())
 	    {
-		/* Clean up and return if in exception table. */
-		if (fixup_exception(regs))
-			return;
 		pdc_chassis_send_status(PDC_CHASSIS_DIRECT_PANIC);
 		parisc_terminate("Kernel Fault", regs, code, fault_address);
 	    }

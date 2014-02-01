@@ -348,11 +348,16 @@ config SENSORS_DS620
 	  will be called ds620.
 
 config SENSORS_DS1621
-	tristate "Dallas Semiconductor DS1621 and DS1625"
+	tristate "Dallas Semiconductor DS1621 and compatibles"
 	depends on I2C
 	help
-	  If you say yes here you get support for Dallas Semiconductor
-	  DS1621 and DS1625 sensor chips.
+	  If you say yes here you get support for Dallas Semiconductor/Maxim
+	  Integrated DS1621 sensor chips and compatible models including:
+
+	  - Dallas Semiconductor DS1625
+	  - Maxim Integrated DS1631
+	  - Maxim Integrated DS1721
+	  - Maxim Integrated DS1731
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called ds1621.
@@ -456,6 +461,16 @@ config SENSORS_G760A
 	  This driver can also be built as a module.  If so, the module
 	  will be called g760a.
 
+config SENSORS_G762
+	tristate "GMT G762 and G763"
+	depends on I2C
+	help
+	  If you say yes here you get support for Global Mixed-mode
+	  Technology Inc G762 and G763 fan speed PWM controller chips.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called g762.
+
 config SENSORS_GL518SM
 	tristate "Genesys Logic GL518SM"
 	depends on I2C
@@ -495,6 +510,16 @@ config SENSORS_HIH6130
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called hih6130.
+
+config SENSORS_HTU21
+	tristate "Measurement Specialties HTU21D humidity/temperature sensors"
+	depends on I2C
+	help
+	  If you say yes here you get support for the Measurement Specialties
+	  HTU21D humidity and temperature sensors.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called htu21.
 
 config SENSORS_CORETEMP
 	tristate "Intel Core/Core2/Atom temperature sensor"
@@ -631,6 +656,7 @@ config SENSORS_LM75
 
 		- Analog Devices ADT75
 		- Dallas Semiconductor DS75, DS1775 and DS7505
+		- Global Mixed-mode Technology (GMT) G751
 		- Maxim MAX6625 and MAX6626
 		- Microchip MCP980x
 		- National Semiconductor LM75, LM75A
@@ -944,7 +970,7 @@ config SENSORS_NCT6775
 
 config SENSORS_NTC_THERMISTOR
 	tristate "NTC thermistor support"
-	depends on !OF || IIO=n || IIO
+	depends on (!OF && !IIO) || (OF && IIO)
 	help
 	  This driver supports NTC thermistors sensor reading and its
 	  interpretation. The driver can also monitor the temperature and
@@ -1187,8 +1213,8 @@ config SENSORS_ADS1015
 	tristate "Texas Instruments ADS1015"
 	depends on I2C
 	help
-	  If you say yes here you get support for Texas Instruments ADS1015
-	  12-bit 4-input ADC device.
+	  If you say yes here you get support for Texas Instruments
+	  ADS1015/ADS1115 12/16-bit 4-input ADC device.
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called ads1015.

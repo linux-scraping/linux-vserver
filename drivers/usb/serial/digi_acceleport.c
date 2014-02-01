@@ -1253,27 +1253,8 @@ static int digi_port_init(struct usb_serial_port *port, unsigned port_num)
 
 static int digi_startup(struct usb_serial *serial)
 {
-	struct device *dev = &serial->interface->dev;
 	struct digi_serial *serial_priv;
 	int ret;
-	int i;
-
-	/* check whether the device has the expected number of endpoints */
-	if (serial->num_port_pointers < serial->type->num_ports + 1) {
-		dev_err(dev, "OOB endpoints missing\n");
-		return -ENODEV;
-	}
-
-	for (i = 0; i < serial->type->num_ports + 1 ; i++) {
-		if (!serial->port[i]->read_urb) {
-			dev_err(dev, "bulk-in endpoint missing\n");
-			return -ENODEV;
-		}
-		if (!serial->port[i]->write_urb) {
-			dev_err(dev, "bulk-out endpoint missing\n");
-			return -ENODEV;
-		}
-	}
 
 	serial_priv = kzalloc(sizeof(*serial_priv), GFP_KERNEL);
 	if (!serial_priv)
@@ -1323,11 +1304,7 @@ static void digi_release(struct usb_serial *serial)
 
 static int digi_port_probe(struct usb_serial_port *port)
 {
-	unsigned port_num;
-
-	port_num = port->number - port->serial->minor;
-
-	return digi_port_init(port, port_num);
+	return digi_port_init(port, port->port_number);
 }
 
 static int digi_port_remove(struct usb_serial_port *port)

@@ -97,8 +97,22 @@
 
 #define APMG_PCIDEV_STT_VAL_L1_ACT_DIS		(0x00000800)
 
+#define APMG_RTC_INT_STT_RFKILL		(0x10000000)
+
 /* Device system time */
 #define DEVICE_SYSTEM_TIME_REG 0xA0206C
+
+/*****************************************************************************
+ *                        7000/3000 series SHR DTS addresses                 *
+ *****************************************************************************/
+
+#define SHR_MISC_WFM_DTS_EN	(0x00a10024)
+#define DTSC_CFG_MODE		(0x00a10604)
+#define DTSC_VREF_AVG		(0x00a10648)
+#define DTSC_VREF5_AVG		(0x00a1064c)
+#define DTSC_CFG_MODE_PERIODIC	(0x2)
+#define DTSC_PTAT_AVG		(0x00a10650)
+
 
 /**
  * Tx Scheduler
@@ -259,9 +273,5 @@ static inline unsigned int SCD_QUEUE_STATUS_BITS(unsigned int chnl)
 }
 
 /*********************** END TX SCHEDULER *************************************/
-
-/* Oscillator clock */
-#define OSC_CLK				(0xa04068)
-#define OSC_CLK_FORCE_CONTROL		(0x8)
 
 #endif				/* __iwl_prph_h__ */

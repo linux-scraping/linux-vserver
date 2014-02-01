@@ -1168,7 +1168,6 @@ out_free_dev:
 	pci_release_regions(pdev);
 out_disable_pdev:
 	pci_disable_device(pdev);
-	pci_set_drvdata(pdev, NULL);
 	return err;
 }
 
@@ -1347,26 +1346,14 @@ static void remove_one(struct pci_dev *pdev)
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
-	pci_set_drvdata(pdev, NULL);
 	t1_sw_reset(pdev);
 }
 
-static struct pci_driver driver = {
+static struct pci_driver cxgb_pci_driver = {
 	.name     = DRV_NAME,
 	.id_table = t1_pci_tbl,
 	.probe    = init_one,
 	.remove   = remove_one,
 };
 
-static int __init t1_init_module(void)
-{
-	return pci_register_driver(&driver);
-}
-
-static void __exit t1_cleanup_module(void)
-{
-	pci_unregister_driver(&driver);
-}
-
-module_init(t1_init_module);
-module_exit(t1_cleanup_module);
+module_pci_driver(cxgb_pci_driver);

@@ -744,16 +744,16 @@ long keyctl_read_key(key_serial_t keyid, char __user *buffer, size_t buflen)
 
 	/* the key is probably readable - now try to read it */
 can_read_key:
-	ret = -EOPNOTSUPP;
-	if (key->type->read) {
-		/* Read the data with the semaphore held (since we might sleep)
-		 * to protect against the key being updated or revoked.
-		 */
-		down_read(&key->sem);
-		ret = key_validate(key);
-		if (ret == 0)
+	ret = key_validate(key);
+	if (ret == 0) {
+		ret = -EOPNOTSUPP;
+		if (key->type->read) {
+			/* read the data with the semaphore held (since we
+			 * might sleep) */
+			down_read(&key->sem);
 			ret = key->type->read(key, buffer, buflen);
-		up_read(&key->sem);
+			up_read(&key->sem);
+		}
 	}
 
 error2:
@@ -1666,6 +1666,9 @@ SYSCALL_DEFINE5(keyctl, int, option, unsigned long, arg2, unsigned long, arg3,
 
 	case KEYCTL_INVALIDATE:
 		return keyctl_invalidate_key((key_serial_t) arg2);
+
+	case KEYCTL_GET_PERSISTENT:
+		return keyctl_get_persistent((uid_t)arg2, (key_serial_t)arg3);
 
 	default:
 		return -EOPNOTSUPP;

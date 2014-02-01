@@ -667,7 +667,6 @@ static int tda10071_set_frontend(struct dvb_frontend *fe)
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	int ret, i;
 	u8 mode, rolloff, pilot, inversion, div;
-	fe_modulation_t modulation;
 
 	dev_dbg(&priv->i2c->dev, "%s: delivery_system=%d modulation=%d " \
 		"frequency=%d symbol_rate=%d inversion=%d pilot=%d " \
@@ -702,13 +701,10 @@ static int tda10071_set_frontend(struct dvb_frontend *fe)
 
 	switch (c->delivery_system) {
 	case SYS_DVBS:
-		modulation = QPSK;
 		rolloff = 0;
 		pilot = 2;
 		break;
 	case SYS_DVBS2:
-		modulation = c->modulation;
-
 		switch (c->rolloff) {
 		case ROLLOFF_20:
 			rolloff = 2;
@@ -753,7 +749,7 @@ static int tda10071_set_frontend(struct dvb_frontend *fe)
 
 	for (i = 0, mode = 0xff; i < ARRAY_SIZE(TDA10071_MODCOD); i++) {
 		if (c->delivery_system == TDA10071_MODCOD[i].delivery_system &&
-			modulation == TDA10071_MODCOD[i].modulation &&
+			c->modulation == TDA10071_MODCOD[i].modulation &&
 			c->fec_inner == TDA10071_MODCOD[i].fec) {
 			mode = TDA10071_MODCOD[i].val;
 			dev_dbg(&priv->i2c->dev, "%s: mode found=%02x\n",
@@ -933,14 +929,8 @@ static int tda10071_init(struct dvb_frontend *fe)
 		{ 0xd5, 0x03, 0x03 },
 	};
 
-	/* firmware status */
-	ret = tda10071_rd_reg(priv, 0x51, &tmp);
-	if (ret)
-		goto error;
-
-	if (!tmp) {
+	if (priv->warm) {
 		/* warm state - wake up device from sleep */
-		priv->warm = 1;
 
 		for (i = 0; i < ARRAY_SIZE(tab); i++) {
 			ret = tda10071_wr_reg_mask(priv, tab[i].reg,
@@ -958,7 +948,6 @@ static int tda10071_init(struct dvb_frontend *fe)
 			goto error;
 	} else {
 		/* cold state - try to download firmware */
-		priv->warm = 0;
 
 		/* request the firmware, this will block and timeout */
 		ret = request_firmware(&fw, fw_file, priv->i2c->dev.parent);

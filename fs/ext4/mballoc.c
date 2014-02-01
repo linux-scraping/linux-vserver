@@ -751,13 +751,15 @@ void ext4_mb_generate_buddy(struct super_block *sb,
 
 	if (free != grp->bb_free) {
 		ext4_grp_locked_error(sb, group, 0, 0,
-				      "%u clusters in bitmap, %u in gd",
+				      "%u clusters in bitmap, %u in gd; "
+				      "block bitmap corrupt.",
 				      free, grp->bb_free);
 		/*
-		 * If we intent to continue, we consider group descritor
+		 * If we intend to continue, we consider group descriptor
 		 * corrupt and update bb_free using bitmap value
 		 */
 		grp->bb_free = free;
+		set_bit(EXT4_GROUP_INFO_BBITMAP_CORRUPT_BIT, &grp->bb_state);
 	}
 	mb_set_largest_free_order(sb, grp);
 
@@ -1232,7 +1234,6 @@ static void ext4_mb_unload_buddy(struct ext4_buddy *e4b)
 static int mb_find_order_for_block(struct ext4_buddy *e4b, int block)
 {
 	int order = 1;
-	int bb_incr = 1 << (e4b->bd_blkbits - 1);
 	void *bb;
 
 	BUG_ON(e4b->bd_bitmap == e4b->bd_buddy);
@@ -1245,8 +1246,7 @@ static int mb_find_order_for_block(struct ext4_buddy *e4b, int block)
 			/* this block is part of buddy of order 'order' */
 			return order;
 		}
-		bb += bb_incr;
-		bb_incr >>= 1;
+		bb += 1 << (e4b->bd_blkbits - order);
 		order++;
 	}
 	return 0;
@@ -1398,10 +1398,12 @@ static void mb_free_blocks(struct inode *inode, struct ext4_buddy *e4b,
 	int last = first + count - 1;
 	struct super_block *sb = e4b->bd_sb;
 
-	if (WARN_ON(count == 0))
-		return;
 	BUG_ON(last >= (sb->s_blocksize << 3));
 	assert_spin_locked(ext4_group_lock_ptr(sb, e4b->bd_group));
+	/* Don't bother if the block group is corrupt. */
+	if (unlikely(EXT4_MB_GRP_BBITMAP_CORRUPT(e4b->bd_info)))
+		return;
+
 	mb_check_buddy(e4b);
 	mb_free_blocks_double(inode, e4b, first, count);
 
@@ -1427,7 +1429,11 @@ static void mb_free_blocks(struct inode *inode, struct ext4_buddy *e4b,
 				      inode ? inode->i_ino : 0,
 				      blocknr,
 				      "freeing already freed block "
-				      "(bit %u)", block);
+				      "(bit %u); block bitmap corrupt.",
+				      block);
+		/* Mark the block group as corrupt. */
+		set_bit(EXT4_GROUP_INFO_BBITMAP_CORRUPT_BIT,
+			&e4b->bd_info->bb_state);
 		mb_regenerate_buddy(e4b);
 		goto done;
 	}
@@ -1794,6 +1800,11 @@ int ext4_mb_find_by_goal(struct ext4_allocation_context *ac,
 	if (err)
 		return err;
 
+	if (unlikely(EXT4_MB_GRP_BBITMAP_CORRUPT(e4b->bd_info))) {
+		ext4_mb_unload_buddy(e4b);
+		return 0;
+	}
+
 	ext4_lock_group(ac->ac_sb, group);
 	max = mb_find_extent(e4b, ac->ac_g_ex.fe_start,
 			     ac->ac_g_ex.fe_len, &ex);
@@ -1991,6 +2002,9 @@ static int ext4_mb_good_group(struct ext4_allocation_context *ac,
 	if (cr <= 2 && free < ac->ac_g_ex.fe_len)
 		return 0;
 
+	if (unlikely(EXT4_MB_GRP_BBITMAP_CORRUPT(grp)))
+		return 0;
+
 	/* We only do this if the grp has never been initialized */
 	if (unlikely(EXT4_MB_GRP_NEED_INIT(grp))) {
 		int ret = ext4_mb_init_group(ac->ac_sb, group);
@@ -2109,6 +2123,7 @@ repeat:
 		group = ac->ac_g_ex.fe_group;
 
 		for (i = 0; i < ngroups; group++, i++) {
+			cond_resched();
 			/*
 			 * Artificially restricted ngroups for non-extent
 			 * files makes group > ngroups possible on first loop.
@@ -2516,7 +2531,7 @@ int ext4_mb_init(struct super_block *sb)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	unsigned i, j;
-	unsigned offset, offset_incr;
+	unsigned offset;
 	unsigned max;
 	int ret;
 
@@ -2545,13 +2560,11 @@ int ext4_mb_init(struct super_block *sb)
 
 	i = 1;
 	offset = 0;
-	offset_incr = 1 << (sb->s_blocksize_bits - 1);
 	max = sb->s_blocksize << 2;
 	do {
 		sbi->s_mb_offsets[i] = offset;
 		sbi->s_mb_maxs[i] = max;
-		offset += offset_incr;
-		offset_incr = offset_incr >> 1;
+		offset += 1 << (sb->s_blocksize_bits - i);
 		max = max >> 1;
 		i++;
 	} while (i <= sb->s_blocksize_bits + 1);
@@ -2876,7 +2889,7 @@ ext4_mb_mark_diskspace_used(struct ext4_allocation_context *ac,
 		ext4_error(sb, "Allocating blocks %llu-%llu which overlap "
 			   "fs metadata", block, block+len);
 		/* File system mounted not to panic on error
-		 * Fix the bitmap and return EUCLEAN
+		 * Fix the bitmap and repeat the block allocation
 		 * We leak some of the blocks here.
 		 */
 		ext4_lock_group(sb, ac->ac_b_ex.fe_group);
@@ -2885,7 +2898,7 @@ ext4_mb_mark_diskspace_used(struct ext4_allocation_context *ac,
 		ext4_unlock_group(sb, ac->ac_b_ex.fe_group);
 		err = ext4_handle_dirty_metadata(handle, NULL, bitmap_bh);
 		if (!err)
-			err = -EUCLEAN;
+			err = -EAGAIN;
 		goto out_err;
 	}
 
@@ -3122,7 +3135,7 @@ ext4_mb_normalize_request(struct ext4_allocation_context *ac,
 	}
 	BUG_ON(start + size <= ac->ac_o_ex.fe_logical &&
 			start > ac->ac_o_ex.fe_logical);
-	BUG_ON(size <= 0 || size > EXT4_BLOCKS_PER_GROUP(ac->ac_sb));
+	BUG_ON(size <= 0 || size > EXT4_CLUSTERS_PER_GROUP(ac->ac_sb));
 
 	/* now prepare goal request */
 
@@ -3183,30 +3196,8 @@ static void ext4_mb_collect_stats(struct ext4_allocation_context *ac)
 static void ext4_discard_allocated_blocks(struct ext4_allocation_context *ac)
 {
 	struct ext4_prealloc_space *pa = ac->ac_pa;
-	struct ext4_buddy e4b;
-	int err;
 
-	if (pa == NULL) {
-		if (ac->ac_f_ex.fe_len == 0)
-			return;
-		err = ext4_mb_load_buddy(ac->ac_sb, ac->ac_f_ex.fe_group, &e4b);
-		if (err) {
-			/*
-			 * This should never happen since we pin the
-			 * pages in the ext4_allocation_context so
-			 * ext4_mb_load_buddy() should never fail.
-			 */
-			WARN(1, "mb_load_buddy failed (%d)", err);
-			return;
-		}
-		ext4_lock_group(ac->ac_sb, ac->ac_f_ex.fe_group);
-		mb_free_blocks(ac->ac_inode, &e4b, ac->ac_f_ex.fe_start,
-			       ac->ac_f_ex.fe_len);
-		ext4_unlock_group(ac->ac_sb, ac->ac_f_ex.fe_group);
-		ext4_mb_unload_buddy(&e4b);
-		return;
-	}
-	if (pa->pa_type == MB_INODE_PA)
+	if (pa && pa->pa_type == MB_INODE_PA)
 		pa->pa_free += ac->ac_b_ex.fe_len;
 }
 
@@ -4438,21 +4429,35 @@ ext4_fsblk_t ext4_mb_new_blocks(handle_t *handle,
 repeat:
 		/* allocate space in core */
 		*errp = ext4_mb_regular_allocator(ac);
+		if (*errp)
+			goto discard_and_exit;
+
+		/* as we've just preallocated more space than
+		 * user requested originally, we store allocated
+		 * space in a special descriptor */
+		if (ac->ac_status == AC_STATUS_FOUND &&
+		    ac->ac_o_ex.fe_len < ac->ac_b_ex.fe_len)
+			*errp = ext4_mb_new_preallocation(ac);
 		if (*errp) {
+		discard_and_exit:
 			ext4_discard_allocated_blocks(ac);
 			goto errout;
 		}
-
-		/* as we've just preallocated more space than
-		 * user requested orinally, we store allocated
-		 * space in a special descriptor */
-		if (ac->ac_status == AC_STATUS_FOUND &&
-				ac->ac_o_ex.fe_len < ac->ac_b_ex.fe_len)
-			ext4_mb_new_preallocation(ac);
 	}
 	if (likely(ac->ac_status == AC_STATUS_FOUND)) {
 		*errp = ext4_mb_mark_diskspace_used(ac, handle, reserv_clstrs);
-		if (*errp) {
+		if (*errp == -EAGAIN) {
+			/*
+			 * drop the reference that we took
+			 * in ext4_mb_use_best_found
+			 */
+			ext4_mb_release_context(ac);
+			ac->ac_b_ex.fe_group = 0;
+			ac->ac_b_ex.fe_start = 0;
+			ac->ac_b_ex.fe_len = 0;
+			ac->ac_status = AC_STATUS_CONTINUE;
+			goto repeat;
+		} else if (*errp) {
 			ext4_discard_allocated_blocks(ac);
 			goto errout;
 		} else {
@@ -4635,10 +4640,11 @@ void ext4_free_blocks(handle_t *handle, struct inode *inode,
 		BUG_ON(bh && (count > 1));
 
 		for (i = 0; i < count; i++) {
+			cond_resched();
 			if (!bh)
 				tbh = sb_find_get_block(inode->i_sb,
 							block + i);
-			if (unlikely(!tbh))
+			if (!tbh)
 				continue;
 			ext4_forget(handle, flags & EXT4_FREE_BLOCKS_METADATA,
 				    inode, tbh, block + i);
@@ -4690,6 +4696,10 @@ void ext4_free_blocks(handle_t *handle, struct inode *inode,
 do_more:
 	overflow = 0;
 	ext4_get_group_no_and_offset(sb, block, &block_group, &bit);
+
+	if (unlikely(EXT4_MB_GRP_BBITMAP_CORRUPT(
+			ext4_get_group_info(sb, block_group))))
+		return;
 
 	/*
 	 * Check to see if we are freeing blocks across a group
@@ -4757,12 +4767,18 @@ do_more:
 		/*
 		 * blocks being freed are metadata. these blocks shouldn't
 		 * be used until this transaction is committed
-		 *
-		 * We use __GFP_NOFAIL because ext4_free_blocks() is not allowed
-		 * to fail.
 		 */
-		new_entry = kmem_cache_alloc(ext4_free_data_cachep,
-				GFP_NOFS|__GFP_NOFAIL);
+	retry:
+		new_entry = kmem_cache_alloc(ext4_free_data_cachep, GFP_NOFS);
+		if (!new_entry) {
+			/*
+			 * We use a retry loop because
+			 * ext4_free_blocks() is not allowed to fail.
+			 */
+			cond_resched();
+			congestion_wait(BLK_RW_ASYNC, HZ/50);
+			goto retry;
+		}
 		new_entry->efd_start_cluster = bit;
 		new_entry->efd_group = block_group;
 		new_entry->efd_count = count_clusters;

@@ -47,7 +47,7 @@ static int handle_cmd(struct sk_buff *skb, struct genl_info *info)
 	int hdr_space = nlmsg_total_size(GENL_HDRLEN + TIPC_GENL_HDRLEN);
 	u16 cmd;
 
-	if ((req_userhdr->cmd & 0xC000) && (!netlink_capable(skb, CAP_NET_ADMIN)))
+	if ((req_userhdr->cmd & 0xC000) && (!capable(CAP_NET_ADMIN)))
 		cmd = TIPC_CMD_NOT_NET_ADMIN;
 	else
 		cmd = req_userhdr->cmd;
@@ -76,9 +76,11 @@ static struct genl_family tipc_genl_family = {
 	.maxattr	= 0,
 };
 
-static struct genl_ops tipc_genl_ops = {
-	.cmd		= TIPC_GENL_CMD,
-	.doit		= handle_cmd,
+static struct genl_ops tipc_genl_ops[] = {
+	{
+		.cmd		= TIPC_GENL_CMD,
+		.doit		= handle_cmd,
+	},
 };
 
 static int tipc_genl_family_registered;
@@ -87,8 +89,7 @@ int tipc_netlink_start(void)
 {
 	int res;
 
-	res = genl_register_family_with_ops(&tipc_genl_family,
-		&tipc_genl_ops, 1);
+	res = genl_register_family_with_ops(&tipc_genl_family, tipc_genl_ops);
 	if (res) {
 		pr_err("Failed to register netlink interface\n");
 		return res;

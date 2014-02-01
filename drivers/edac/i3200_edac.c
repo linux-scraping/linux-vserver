@@ -242,11 +242,11 @@ static void i3200_process_error_info(struct mem_ctl_info *mci,
 					     -1, -1,
 					     "i3000 UE", "");
 		} else if (log & I3200_ECCERRLOG_CE) {
-			edac_mc_handle_error(HW_EVENT_ERR_CORRECTED, mci, 1,
+			edac_mc_handle_error(HW_EVENT_ERR_UNCORRECTED, mci, 1,
 					     0, 0, eccerrlog_syndrome(log),
 					     eccerrlog_row(channel, log),
 					     -1, -1,
-					     "i3000 CE", "");
+					     "i3000 UE", "");
 		}
 	}
 }
@@ -260,8 +260,7 @@ static void i3200_check(struct mem_ctl_info *mci)
 	i3200_process_error_info(mci, &info);
 }
 
-
-void __iomem *i3200_map_mchbar(struct pci_dev *pdev)
+static void __iomem *i3200_map_mchbar(struct pci_dev *pdev)
 {
 	union {
 		u64 mchbar;

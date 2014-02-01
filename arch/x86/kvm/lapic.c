@@ -71,19 +71,12 @@
 #define VEC_POS(v) ((v) & (32 - 1))
 #define REG_POS(v) (((v) >> 5) << 4)
 
+static unsigned int min_timer_period_us = 500;
+module_param(min_timer_period_us, uint, S_IRUGO | S_IWUSR);
+
 static inline void apic_set_reg(struct kvm_lapic *apic, int reg_off, u32 val)
 {
 	*((u32 *) (apic->regs + reg_off)) = val;
-}
-
-static inline int apic_test_and_set_vector(int vec, void *bitmap)
-{
-	return test_and_set_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
-}
-
-static inline int apic_test_and_clear_vector(int vec, void *bitmap)
-{
-	return test_and_clear_bit(VEC_POS(vec), (bitmap) + REG_POS(vec));
 }
 
 static inline int apic_test_vector(int vec, void *bitmap)
@@ -331,10 +324,10 @@ void kvm_apic_update_irr(struct kvm_vcpu *vcpu, u32 *pir)
 }
 EXPORT_SYMBOL_GPL(kvm_apic_update_irr);
 
-static inline int apic_test_and_set_irr(int vec, struct kvm_lapic *apic)
+static inline void apic_set_irr(int vec, struct kvm_lapic *apic)
 {
 	apic->irr_pending = true;
-	return apic_test_and_set_vector(vec, apic->regs + APIC_IRR);
+	apic_set_vector(vec, apic->regs + APIC_IRR);
 }
 
 static inline int apic_search_irr(struct kvm_lapic *apic)
@@ -362,90 +355,31 @@ static inline int apic_find_highest_irr(struct kvm_lapic *apic)
 
 static inline void apic_clear_irr(int vec, struct kvm_lapic *apic)
 {
-	struct kvm_vcpu *vcpu;
-
-	vcpu = apic->vcpu;
-
+	apic->irr_pending = false;
 	apic_clear_vector(vec, apic->regs + APIC_IRR);
-	if (unlikely(kvm_apic_vid_enabled(vcpu->kvm)))
-		/* try to update RVI */
-		kvm_make_request(KVM_REQ_EVENT, vcpu);
-	else {
-		vec = apic_search_irr(apic);
-		apic->irr_pending = (vec != -1);
-	}
+	if (apic_search_irr(apic) != -1)
+		apic->irr_pending = true;
 }
 
 static inline void apic_set_isr(int vec, struct kvm_lapic *apic)
 {
-	struct kvm_vcpu *vcpu;
-
-	if (__apic_test_and_set_vector(vec, apic->regs + APIC_ISR))
-		return;
-
-	vcpu = apic->vcpu;
-
-	/*
-	 * With APIC virtualization enabled, all caching is disabled
-	 * because the processor can modify ISR under the hood.  Instead
-	 * just set SVI.
-	 */
-	if (unlikely(kvm_apic_vid_enabled(vcpu->kvm)))
-		kvm_x86_ops->hwapic_isr_update(vcpu->kvm, vec);
-	else {
+	if (!__apic_test_and_set_vector(vec, apic->regs + APIC_ISR))
 		++apic->isr_count;
-		BUG_ON(apic->isr_count > MAX_APIC_VECTOR);
-		/*
-		 * ISR (in service register) bit is set when injecting an interrupt.
-		 * The highest vector is injected. Thus the latest bit set matches
-		 * the highest bit in ISR.
-		 */
-		apic->highest_isr_cache = vec;
-	}
-}
-
-static inline int apic_find_highest_isr(struct kvm_lapic *apic)
-{
-	int result;
-
+	BUG_ON(apic->isr_count > MAX_APIC_VECTOR);
 	/*
-	 * Note that isr_count is always 1, and highest_isr_cache
-	 * is always -1, with APIC virtualization enabled.
+	 * ISR (in service register) bit is set when injecting an interrupt.
+	 * The highest vector is injected. Thus the latest bit set matches
+	 * the highest bit in ISR.
 	 */
-	if (!apic->isr_count)
-		return -1;
-	if (likely(apic->highest_isr_cache != -1))
-		return apic->highest_isr_cache;
-
-	result = find_highest_vector(apic->regs + APIC_ISR);
-	ASSERT(result == -1 || result >= 16);
-
-	return result;
+	apic->highest_isr_cache = vec;
 }
 
 static inline void apic_clear_isr(int vec, struct kvm_lapic *apic)
 {
-	struct kvm_vcpu *vcpu;
-	if (!__apic_test_and_clear_vector(vec, apic->regs + APIC_ISR))
-		return;
-
-	vcpu = apic->vcpu;
-
-	/*
-	 * We do get here for APIC virtualization enabled if the guest
-	 * uses the Hyper-V APIC enlightenment.  In this case we may need
-	 * to trigger a new interrupt delivery by writing the SVI field;
-	 * on the other hand isr_count and highest_isr_cache are unused
-	 * and must be left alone.
-	 */
-	if (unlikely(kvm_apic_vid_enabled(vcpu->kvm)))
-		kvm_x86_ops->hwapic_isr_update(vcpu->kvm,
-					       apic_find_highest_isr(apic));
-	else {
+	if (__apic_test_and_clear_vector(vec, apic->regs + APIC_ISR))
 		--apic->isr_count;
-		BUG_ON(apic->isr_count < 0);
-		apic->highest_isr_cache = -1;
-	}
+	BUG_ON(apic->isr_count < 0);
+	apic->highest_isr_cache = -1;
 }
 
 int kvm_lapic_find_highest_irr(struct kvm_vcpu *vcpu)
@@ -523,6 +457,22 @@ static void pv_eoi_clr_pending(struct kvm_vcpu *vcpu)
 		return;
 	}
 	__clear_bit(KVM_APIC_PV_EOI_PENDING, &vcpu->arch.apic_attention);
+}
+
+static inline int apic_find_highest_isr(struct kvm_lapic *apic)
+{
+	int result;
+
+	/* Note that isr_count is always 1 with vid enabled */
+	if (!apic->isr_count)
+		return -1;
+	if (likely(apic->highest_isr_cache != -1))
+		return apic->highest_isr_cache;
+
+	result = find_highest_vector(apic->regs + APIC_ISR);
+	ASSERT(result == -1 || result >= 16);
+
+	return result;
 }
 
 void kvm_apic_update_tmr(struct kvm_vcpu *vcpu, u32 *tmr)
@@ -724,32 +674,28 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
 		if (unlikely(!apic_enabled(apic)))
 			break;
 
+		result = 1;
+
 		if (dest_map)
 			__set_bit(vcpu->vcpu_id, dest_map);
 
-		if (kvm_x86_ops->deliver_posted_interrupt) {
-			result = 1;
+		if (kvm_x86_ops->deliver_posted_interrupt)
 			kvm_x86_ops->deliver_posted_interrupt(vcpu, vector);
-		} else {
-			result = !apic_test_and_set_irr(vector, apic);
-
-			if (!result) {
-				if (trig_mode)
-					apic_debug("level trig mode repeatedly "
-						"for vector %d", vector);
-				goto out;
-			}
+		else {
+			apic_set_irr(vector, apic);
 
 			kvm_make_request(KVM_REQ_EVENT, vcpu);
 			kvm_vcpu_kick(vcpu);
 		}
-out:
 		trace_kvm_apic_accept_irq(vcpu->vcpu_id, delivery_mode,
-				trig_mode, vector, !result);
+					  trig_mode, vector, false);
 		break;
 
 	case APIC_DM_REMRD:
-		apic_debug("Ignoring delivery mode 3\n");
+		result = 1;
+		vcpu->arch.pv.pv_unhalted = 1;
+		kvm_make_request(KVM_REQ_EVENT, vcpu);
+		kvm_vcpu_kick(vcpu);
 		break;
 
 	case APIC_DM_SMI:
@@ -1123,10 +1069,10 @@ static void apic_manage_nmi_watchdog(struct kvm_lapic *apic, u32 lvt0_val)
 		if (!nmi_wd_enabled) {
 			apic_debug("Receive NMI setting on APIC_LVT0 "
 				   "for cpu %d\n", apic->vcpu->vcpu_id);
-			atomic_inc(&apic->vcpu->kvm->arch.vapics_in_nmi_mode);
+			apic->vcpu->kvm->arch.vapics_in_nmi_mode++;
 		}
 	} else if (nmi_wd_enabled)
-		atomic_dec(&apic->vcpu->kvm->arch.vapics_in_nmi_mode);
+		apic->vcpu->kvm->arch.vapics_in_nmi_mode--;
 }
 
 static int apic_reg_write(struct kvm_lapic *apic, u32 reg, u32 val)
@@ -1652,8 +1598,8 @@ void kvm_inject_apic_timer_irqs(struct kvm_vcpu *vcpu)
 		return;
 
 	if (atomic_read(&apic->lapic_timer.pending) > 0) {
-		if (kvm_apic_local_deliver(apic, APIC_LVTT))
-			atomic_dec(&apic->lapic_timer.pending);
+		kvm_apic_local_deliver(apic, APIC_LVTT);
+		atomic_set(&apic->lapic_timer.pending, 0);
 	}
 }
 
@@ -1664,13 +1610,6 @@ int kvm_get_apic_interrupt(struct kvm_vcpu *vcpu)
 
 	if (vector == -1)
 		return -1;
-
-	/*
-	 * We get here even with APIC virtualization enabled, if doing
-	 * nested virtualization and L1 runs with the "acknowledge interrupt
-	 * on exit" mode.  Then we cannot inject the interrupt via RVI,
-	 * because the process would deliver it through the IDT.
-	 */
 
 	apic_set_isr(vector, apic);
 	apic_update_ppr(apic);

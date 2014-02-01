@@ -95,7 +95,7 @@ static int check_dev_ioctl_version(int cmd, struct autofs_dev_ioctl *param)
  */
 static struct autofs_dev_ioctl *copy_dev_ioctl(struct autofs_dev_ioctl __user *in)
 {
-	struct autofs_dev_ioctl tmp, *res;
+	struct autofs_dev_ioctl tmp;
 
 	if (copy_from_user(&tmp, in, sizeof(tmp)))
 		return ERR_PTR(-EFAULT);
@@ -103,11 +103,7 @@ static struct autofs_dev_ioctl *copy_dev_ioctl(struct autofs_dev_ioctl __user *i
 	if (tmp.size < sizeof(tmp))
 		return ERR_PTR(-EINVAL);
 
-	res = memdup_user(in, tmp.size);
-	if (!IS_ERR(res))
-		res->size = tmp.size;
-
-	return res;
+	return memdup_user(in, tmp.size);
 }
 
 static inline void free_dev_ioctl(struct autofs_dev_ioctl *param)
@@ -187,13 +183,14 @@ static int autofs_dev_ioctl_protosubver(struct file *fp,
 	return 0;
 }
 
+/* Find the topmost mount satisfying test() */
 static int find_autofs_mount(const char *pathname,
 			     struct path *res,
 			     int test(struct path *path, void *data),
 			     void *data)
 {
 	struct path path;
-	int err = kern_path(pathname, 0, &path);
+	int err = kern_path_mountpoint(AT_FDCWD, pathname, &path, 0);
 	if (err)
 		return err;
 	err = -ENOENT;
@@ -201,10 +198,9 @@ static int find_autofs_mount(const char *pathname,
 		if (path.dentry->d_sb->s_magic == AUTOFS_SUPER_MAGIC) {
 			if (test(&path, data)) {
 				path_get(&path);
-				if (!err) /* already found some */
-					path_put(res);
 				*res = path;
 				err = 0;
+				break;
 			}
 		}
 		if (!follow_up(&path))
@@ -490,12 +486,11 @@ static int autofs_dev_ioctl_askumount(struct file *fp,
  * mount if there is one or 0 if it isn't a mountpoint.
  *
  * If we aren't supplied with a file descriptor then we
- * lookup the nameidata of the path and check if it is the
- * root of a mount. If a type is given we are looking for
- * a particular autofs mount and if we don't find a match
- * we return fail. If the located nameidata path is the
- * root of a mount we return 1 along with the super magic
- * of the mount or 0 otherwise.
+ * lookup the path and check if it is the root of a mount.
+ * If a type is given we are looking for a particular autofs
+ * mount and if we don't find a match we return fail. If the
+ * located path is the root of a mount we return 1 along with
+ * the super magic of the mount or 0 otherwise.
  *
  * In both cases the the device number (as returned by
  * new_encode_dev()) is also returned.
@@ -523,9 +518,11 @@ static int autofs_dev_ioctl_ismountpoint(struct file *fp,
 
 	if (!fp || param->ioctlfd == -1) {
 		if (autofs_type_any(type))
-			err = kern_path(name, LOOKUP_FOLLOW, &path);
+			err = kern_path_mountpoint(AT_FDCWD,
+						   name, &path, LOOKUP_FOLLOW);
 		else
-			err = find_autofs_mount(name, &path, test_by_type, &type);
+			err = find_autofs_mount(name, &path,
+						test_by_type, &type);
 		if (err)
 			goto out;
 		devid = new_encode_dev(path.dentry->d_sb->s_dev);
@@ -658,12 +655,6 @@ static int _autofs_dev_ioctl(unsigned int command, struct autofs_dev_ioctl __use
 			if (cmd == AUTOFS_DEV_IOCTL_ISMOUNTPOINT_CMD)
 				goto cont;
 			err = -EBADF;
-			goto out;
-		}
-
-		if (!fp->f_op) {
-			err = -ENOTTY;
-			fput(fp);
 			goto out;
 		}
 

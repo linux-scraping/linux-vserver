@@ -23,8 +23,6 @@
 #include "ulist.h"
 #include "extent_io.h"
 
-#define BTRFS_BACKREF_SEARCH_COMMIT_ROOT ((struct btrfs_trans_handle *)0)
-
 struct inode_fs_paths {
 	struct btrfs_path		*btrfs_path;
 	struct btrfs_root		*fs_root;
@@ -42,8 +40,8 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 			u64 *flags);
 
 int tree_backref_for_extent(unsigned long *ptr, struct extent_buffer *eb,
-			    struct btrfs_key *key, struct btrfs_extent_item *ei,
-			    u32 item_size, u64 *out_root, u8 *out_level);
+				struct btrfs_extent_item *ei, u32 item_size,
+				u64 *out_root, u8 *out_level);
 
 int iterate_extent_inodes(struct btrfs_fs_info *fs_info,
 				u64 extent_item_objectid,
@@ -74,4 +72,6 @@ int btrfs_find_one_extref(struct btrfs_root *root, u64 inode_objectid,
 			  struct btrfs_inode_extref **ret_extref,
 			  u64 *found_off);
 
+int __init btrfs_prelim_ref_init(void);
+void btrfs_prelim_ref_exit(void);
 #endif

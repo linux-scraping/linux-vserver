@@ -100,7 +100,7 @@ static int ast_detect_chip(struct drm_device *dev)
 			}
 			ast->vga2_clone = false;
 		} else {
-			ast->chip = AST2000;
+			ast->chip = 2000;
 			DRM_INFO("AST 2000 detected\n");
 		}
 	}
@@ -124,7 +124,7 @@ static int ast_get_dram_info(struct drm_device *dev)
 	} while (ast_read32(ast, 0x10000) != 0x01);
 	data = ast_read32(ast, 0x10004);
 
-	if (data & 0x40)
+	if (data & 0x400)
 		ast->dram_bus_width = 16;
 	else
 		ast->dram_bus_width = 32;
@@ -359,7 +359,6 @@ int ast_driver_load(struct drm_device *dev, unsigned long flags)
 	dev->mode_config.min_height = 0;
 	dev->mode_config.preferred_depth = 24;
 	dev->mode_config.prefer_shadow = 1;
-	dev->mode_config.fb_base = pci_resource_start(ast->dev->pdev, 0);
 
 	if (ast->chip == AST2100 ||
 	    ast->chip == AST2200 ||
@@ -450,19 +449,6 @@ int ast_dumb_create(struct drm_file *file,
 	return 0;
 }
 
-int ast_dumb_destroy(struct drm_file *file,
-		     struct drm_device *dev,
-		     uint32_t handle)
-{
-	return drm_gem_handle_delete(file, handle);
-}
-
-int ast_gem_init_object(struct drm_gem_object *obj)
-{
-	BUG();
-	return 0;
-}
-
 void ast_bo_unref(struct ast_bo **bo)
 {
 	struct ttm_buffer_object *tbo;
@@ -488,7 +474,7 @@ void ast_gem_free_object(struct drm_gem_object *obj)
 
 static inline u64 ast_bo_mmap_offset(struct ast_bo *bo)
 {
-	return bo->bo.addr_space_offset;
+	return drm_vma_node_offset_addr(&bo->bo.vma_node);
 }
 int
 ast_dumb_mmap_offset(struct drm_file *file,

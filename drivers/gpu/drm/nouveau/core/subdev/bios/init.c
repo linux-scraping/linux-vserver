@@ -10,7 +10,6 @@
 #include <subdev/bios/gpio.h>
 #include <subdev/bios/init.h>
 #include <subdev/devinit.h>
-#include <subdev/clock.h>
 #include <subdev/i2c.h>
 #include <subdev/vga.h>
 #include <subdev/gpio.h>
@@ -300,9 +299,9 @@ init_wrauxr(struct nvbios_init *init, u32 addr, u8 data)
 static void
 init_prog_pll(struct nvbios_init *init, u32 id, u32 freq)
 {
-	struct nouveau_clock *clk = nouveau_clock(init->bios);
-	if (clk && clk->pll_set && init_exec(init)) {
-		int ret = clk->pll_set(clk, id, freq);
+	struct nouveau_devinit *devinit = nouveau_devinit(init->bios);
+	if (devinit->pll_set && init_exec(init)) {
+		int ret = devinit->pll_set(devinit, id, freq);
 		if (ret)
 			warn("failed to prog pll 0x%08x to %dkHz\n", id, freq);
 	}
@@ -1456,7 +1455,7 @@ init_configure_mem(struct nvbios_init *init)
 	data = init_rdvgai(init, 0x03c4, 0x01);
 	init_wrvgai(init, 0x03c4, 0x01, data | 0x20);
 
-	while ((addr = nv_ro32(bios, sdata)) != 0xffffffff) {
+	for (; (addr = nv_ro32(bios, sdata)) != 0xffffffff; sdata += 4) {
 		switch (addr) {
 		case 0x10021c: /* CKE_NORMAL */
 		case 0x1002d0: /* CMD_REFRESH */
@@ -2215,5 +2214,5 @@ nvbios_init(struct nouveau_subdev *subdev, bool execute)
 		ret = nvbios_exec(&init);
 	}
 
-	return 0;
+	return ret;
 }

@@ -10,12 +10,14 @@
  */
 
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/memblock.h>
 #include <linux/vmalloc.h>
 #include <linux/memory.h>
 
 #include <asm/firmware.h>
 #include <asm/machdep.h>
+#include <asm/prom.h>
 #include <asm/sparsemem.h>
 
 static unsigned long get_memblock_size(void)
@@ -158,7 +160,7 @@ static int pseries_remove_memory(struct device_node *np)
 static inline int pseries_remove_memblock(unsigned long base,
 					  unsigned int memblock_size)
 {
-	return 0;
+	return -EOPNOTSUPP;
 }
 static inline int pseries_remove_memory(struct device_node *np)
 {

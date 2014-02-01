@@ -105,8 +105,7 @@ extern void __restore_cpu_e6500(void);
 				 PPC_FEATURE_PSERIES_PERFMON_COMPAT)
 #define COMMON_USER2_POWER8	(PPC_FEATURE2_ARCH_2_07 | \
 				 PPC_FEATURE2_HTM_COMP | PPC_FEATURE2_DSCR | \
-				 PPC_FEATURE2_ISEL | PPC_FEATURE2_TAR | \
-				 PPC_FEATURE2_VEC_CRYPTO)
+				 PPC_FEATURE2_ISEL | PPC_FEATURE2_TAR)
 #define COMMON_USER_PA6T	(COMMON_USER_PPC64 | PPC_FEATURE_PA6T |\
 				 PPC_FEATURE_TRUE_LE | \
 				 PPC_FEATURE_HAS_ALTIVEC_COMP)
@@ -495,9 +494,27 @@ static struct cpu_spec __initdata cpu_specs[] = {
 		.cpu_restore		= __restore_cpu_power7,
 		.platform		= "power7+",
 	},
-	{	/* Power8 */
+	{	/* Power8E */
 		.pvr_mask		= 0xffff0000,
 		.pvr_value		= 0x004b0000,
+		.cpu_name		= "POWER8E (raw)",
+		.cpu_features		= CPU_FTRS_POWER8,
+		.cpu_user_features	= COMMON_USER_POWER8,
+		.cpu_user_features2	= COMMON_USER2_POWER8,
+		.mmu_features		= MMU_FTRS_POWER8,
+		.icache_bsize		= 128,
+		.dcache_bsize		= 128,
+		.num_pmcs		= 6,
+		.pmc_type		= PPC_PMC_IBM,
+		.oprofile_cpu_type	= "ppc64/power8",
+		.oprofile_type		= PPC_OPROFILE_INVALID,
+		.cpu_setup		= __setup_cpu_power8,
+		.cpu_restore		= __restore_cpu_power8,
+		.platform		= "power8",
+	},
+	{	/* Power8 */
+		.pvr_mask		= 0xffff0000,
+		.pvr_value		= 0x004d0000,
 		.cpu_name		= "POWER8 (raw)",
 		.cpu_features		= CPU_FTRS_POWER8,
 		.cpu_user_features	= COMMON_USER_POWER8,
@@ -2088,7 +2105,7 @@ static struct cpu_spec __initdata cpu_specs[] = {
 			MMU_FTR_USE_TLBILX,
 		.icache_bsize		= 64,
 		.dcache_bsize		= 64,
-		.num_pmcs		= 4,
+		.num_pmcs		= 6,
 		.oprofile_cpu_type	= "ppc/e6500",
 		.oprofile_type		= PPC_OPROFILE_FSL_EMB,
 		.cpu_setup		= __setup_cpu_e6500,

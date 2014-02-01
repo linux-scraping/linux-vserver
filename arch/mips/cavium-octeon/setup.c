@@ -8,6 +8,7 @@
  *   written by Ralf Baechle <ralf@linux-mips.org>
  */
 #include <linux/compiler.h>
+#include <linux/vmalloc.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/console.h>
@@ -40,12 +41,6 @@
 #include <asm/octeon/octeon.h>
 #include <asm/octeon/pci-octeon.h>
 #include <asm/octeon/cvmx-mio-defs.h>
-
-#ifdef CONFIG_CAVIUM_DECODE_RSL
-extern void cvmx_interrupt_rsl_decode(void);
-extern int __cvmx_interrupt_ecc_report_single_bit_errors;
-extern void cvmx_interrupt_rsl_enable(void);
-#endif
 
 extern struct plat_smp_ops octeon_smp_ops;
 
@@ -463,30 +458,6 @@ static void octeon_halt(void)
 	octeon_kill_core(NULL);
 }
 
-static char __read_mostly octeon_system_type[80];
-
-static int __init init_octeon_system_type(void)
-{
-	snprintf(octeon_system_type, sizeof(octeon_system_type), "%s (%s)",
-		cvmx_board_type_to_string(octeon_bootinfo->board_type),
-		octeon_model_get_string(read_c0_prid()));
-
-	return 0;
-}
-early_initcall(init_octeon_system_type);
-
-/**
- * Handle all the error condition interrupts that might occur.
- *
- */
-#ifdef CONFIG_CAVIUM_DECODE_RSL
-static irqreturn_t octeon_rlm_interrupt(int cpl, void *dev_id)
-{
-	cvmx_interrupt_rsl_decode();
-	return IRQ_HANDLED;
-}
-#endif
-
 /**
  * Return a string representing the system type
  *
@@ -494,7 +465,11 @@ static irqreturn_t octeon_rlm_interrupt(int cpl, void *dev_id)
  */
 const char *octeon_board_type_string(void)
 {
-	return octeon_system_type;
+	static char name[80];
+	sprintf(name, "%s (%s)",
+		cvmx_board_type_to_string(octeon_bootinfo->board_type),
+		octeon_model_get_string(read_c0_prid()));
+	return name;
 }
 
 const char *get_system_type(void)
@@ -1024,7 +999,7 @@ void __init plat_mem_setup(void)
 
 	if (total == 0)
 		panic("Unable to allocate memory from "
-		      "cvmx_bootmem_phy_alloc\n");
+		      "cvmx_bootmem_phy_alloc");
 }
 
 /*
@@ -1073,15 +1048,6 @@ void prom_free_prom_memory(void)
 			panic("Core-14449 WAR not in place (%04x).\n"
 			      "Please build kernel with proper options (CONFIG_CAVIUM_CN63XXP1).", insn);
 	}
-#ifdef CONFIG_CAVIUM_DECODE_RSL
-	cvmx_interrupt_rsl_enable();
-
-	/* Add an interrupt handler for general failures. */
-	if (request_irq(OCTEON_IRQ_RML, octeon_rlm_interrupt, IRQF_SHARED,
-			"RML/RSL", octeon_rlm_interrupt)) {
-		panic("Unable to request_irq(OCTEON_IRQ_RML)");
-	}
-#endif
 }
 
 int octeon_prune_device_tree(void);
@@ -1115,7 +1081,7 @@ void __init device_tree_init(void)
 	/* Copy the default tree from init memory. */
 	initial_boot_params = early_init_dt_alloc_memory_arch(dt_size, 8);
 	if (initial_boot_params == NULL)
-		panic("Could not allocate initial_boot_params\n");
+		panic("Could not allocate initial_boot_params");
 	memcpy(initial_boot_params, fdt, dt_size);
 
 	if (do_prune) {
@@ -1174,3 +1140,30 @@ static int __init edac_devinit(void)
 	return err;
 }
 device_initcall(edac_devinit);
+
+static void __initdata *octeon_dummy_iospace;
+
+static int __init octeon_no_pci_init(void)
+{
+	/*
+	 * Initially assume there is no PCI. The PCI/PCIe platform code will
+	 * later re-initialize these to correct values if they are present.
+	 */
+	octeon_dummy_iospace = vzalloc(IO_SPACE_LIMIT);
+	set_io_port_base((unsigned long)octeon_dummy_iospace);
+	ioport_resource.start = MAX_RESOURCE;
+	ioport_resource.end = 0;
+	return 0;
+}
+core_initcall(octeon_no_pci_init);
+
+static int __init octeon_no_pci_release(void)
+{
+	/*
+	 * Release the allocated memory if a real IO space is there.
+	 */
+	if ((unsigned long)octeon_dummy_iospace != mips_io_port_base)
+		vfree(octeon_dummy_iospace);
+	return 0;
+}
+late_initcall(octeon_no_pci_release);

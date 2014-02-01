@@ -75,7 +75,11 @@ static const struct snd_pcm_hardware dummy_dma_hardware = {
 
 static int dummy_dma_open(struct snd_pcm_substream *substream)
 {
-	snd_soc_set_runtime_hwparams(substream, &dummy_dma_hardware);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+
+	/* BE's dont need dummy params */
+	if (!rtd->dai_link->no_pcm)
+		snd_soc_set_runtime_hwparams(substream, &dummy_dma_hardware);
 
 	return 0;
 }
@@ -159,15 +163,10 @@ int __init snd_soc_util_init(void)
 {
 	int ret;
 
-	soc_dummy_dev = platform_device_alloc("snd-soc-dummy", -1);
-	if (!soc_dummy_dev)
-		return -ENOMEM;
-
-	ret = platform_device_add(soc_dummy_dev);
-	if (ret != 0) {
-		platform_device_put(soc_dummy_dev);
-		return ret;
-	}
+	soc_dummy_dev =
+		platform_device_register_simple("snd-soc-dummy", -1, NULL, 0);
+	if (IS_ERR(soc_dummy_dev))
+		return PTR_ERR(soc_dummy_dev);
 
 	ret = platform_driver_register(&soc_dummy_driver);
 	if (ret != 0)

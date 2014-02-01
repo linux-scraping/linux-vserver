@@ -25,12 +25,15 @@ struct siginfo;
 /*
  * Careful to keep union _sifields from shifting ...
  */
-#ifdef CONFIG_32BIT
+#if _MIPS_SZLONG == 32
 #define __ARCH_SI_PREAMBLE_SIZE (3 * sizeof(int))
-#endif
-#ifdef CONFIG_64BIT
+#elif _MIPS_SZLONG == 64
 #define __ARCH_SI_PREAMBLE_SIZE (4 * sizeof(int))
+#else
+#error _MIPS_SZLONG neither 32 nor 64
 #endif
+
+#define __ARCH_SIGSYS
 
 #include <asm-generic/siginfo.h>
 
@@ -45,13 +48,13 @@ typedef struct siginfo {
 
 		/* kill() */
 		struct {
-			__kernel_pid_t _pid;	/* sender's pid */
+			pid_t _pid;		/* sender's pid */
 			__ARCH_SI_UID_T _uid;	/* sender's uid */
 		} _kill;
 
 		/* POSIX.1b timers */
 		struct {
-			__kernel_timer_t _tid;	/* timer id */
+			timer_t _tid;		/* timer id */
 			int _overrun;		/* overrun count */
 			char _pad[sizeof( __ARCH_SI_UID_T) - sizeof(int)];
 			sigval_t _sigval;	/* same as below */
@@ -60,26 +63,26 @@ typedef struct siginfo {
 
 		/* POSIX.1b signals */
 		struct {
-			__kernel_pid_t _pid;	/* sender's pid */
+			pid_t _pid;		/* sender's pid */
 			__ARCH_SI_UID_T _uid;	/* sender's uid */
 			sigval_t _sigval;
 		} _rt;
 
 		/* SIGCHLD */
 		struct {
-			__kernel_pid_t _pid;	/* which child */
+			pid_t _pid;		/* which child */
 			__ARCH_SI_UID_T _uid;	/* sender's uid */
 			int _status;		/* exit code */
-			__kernel_clock_t _utime;
-			__kernel_clock_t _stime;
+			clock_t _utime;
+			clock_t _stime;
 		} _sigchld;
 
 		/* IRIX SIGCHLD */
 		struct {
-			__kernel_pid_t _pid;	/* which child */
-			__kernel_clock_t _utime;
+			pid_t _pid;		/* which child */
+			clock_t _utime;
 			int _status;		/* exit code */
-			__kernel_clock_t _stime;
+			clock_t _stime;
 		} _irix_sigchld;
 
 		/* SIGILL, SIGFPE, SIGSEGV, SIGBUS */
@@ -96,6 +99,13 @@ typedef struct siginfo {
 			__ARCH_SI_BAND_T _band; /* POLL_IN, POLL_OUT, POLL_MSG */
 			int _fd;
 		} _sigpoll;
+
+		/* SIGSYS */
+		struct {
+			void __user *_call_addr; /* calling user insn */
+			int _syscall;	/* triggering system call number */
+			unsigned int _arch;	/* AUDIT_ARCH_* of syscall */
+		} _sigsys;
 	} _sifields;
 } siginfo_t;
 

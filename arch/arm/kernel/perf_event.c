@@ -56,7 +56,7 @@ armpmu_map_hw_event(const unsigned (*event_map)[PERF_COUNT_HW_MAX], u64 config)
 	int mapping;
 
 	if (config >= PERF_COUNT_HW_MAX)
-		return -ENOENT;
+		return -EINVAL;
 
 	mapping = (*event_map)[config];
 	return mapping == HW_OP_UNSUPPORTED ? -ENOENT : mapping;
@@ -256,12 +256,11 @@ validate_event(struct pmu_hw_events *hw_events,
 	       struct perf_event *event)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(event->pmu);
-	struct pmu *leader_pmu = event->group_leader->pmu;
 
 	if (is_software_event(event))
 		return 1;
 
-	if (event->pmu != leader_pmu || event->state < PERF_EVENT_STATE_OFF)
+	if (event->state < PERF_EVENT_STATE_OFF)
 		return 1;
 
 	if (event->state == PERF_EVENT_STATE_OFF && !event->attr.enable_on_exec)
@@ -303,18 +302,11 @@ static irqreturn_t armpmu_dispatch_irq(int irq, void *dev)
 	struct arm_pmu *armpmu = (struct arm_pmu *) dev;
 	struct platform_device *plat_device = armpmu->plat_device;
 	struct arm_pmu_platdata *plat = dev_get_platdata(&plat_device->dev);
-	int ret;
-	u64 start_clock, finish_clock;
 
-	start_clock = sched_clock();
 	if (plat && plat->handle_irq)
-		ret = plat->handle_irq(irq, dev, armpmu->handle_irq);
+		return plat->handle_irq(irq, dev, armpmu->handle_irq);
 	else
-		ret = armpmu->handle_irq(irq, dev);
-	finish_clock = sched_clock();
-
-	perf_sample_event_took(finish_clock - start_clock);
-	return ret;
+		return armpmu->handle_irq(irq, dev);
 }
 
 static void

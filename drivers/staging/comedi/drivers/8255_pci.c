@@ -19,10 +19,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 /*
@@ -54,12 +50,12 @@ Interrupt support for these boards is also not currently supported.
 Configuration Options: not applicable, uses PCI auto config
 */
 
+#include <linux/module.h>
 #include <linux/pci.h>
 
 #include "../comedidev.h"
 
 #include "8255.h"
-#include "mite.h"
 
 enum pci_8255_boardid {
 	BOARD_ADLINK_PCI7224,
@@ -83,7 +79,6 @@ struct pci_8255_boardinfo {
 	const char *name;
 	int dio_badr;
 	int n_8255;
-	unsigned int has_mite:1;
 };
 
 static const struct pci_8255_boardinfo pci_8255_boards[] = {
@@ -131,68 +126,42 @@ static const struct pci_8255_boardinfo pci_8255_boards[] = {
 		.name		= "ni_pci-dio-96",
 		.dio_badr	= 1,
 		.n_8255		= 4,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PCIDIO96B] = {
 		.name		= "ni_pci-dio-96b",
 		.dio_badr	= 1,
 		.n_8255		= 4,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PXI6508] = {
 		.name		= "ni_pxi-6508",
 		.dio_badr	= 1,
 		.n_8255		= 4,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PCI6503] = {
 		.name		= "ni_pci-6503",
 		.dio_badr	= 1,
 		.n_8255		= 1,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PCI6503B] = {
 		.name		= "ni_pci-6503b",
 		.dio_badr	= 1,
 		.n_8255		= 1,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PCI6503X] = {
 		.name		= "ni_pci-6503x",
 		.dio_badr	= 1,
 		.n_8255		= 1,
-		.has_mite	= 1,
 	},
 	[BOARD_NI_PXI_6503] = {
 		.name		= "ni_pxi-6503",
 		.dio_badr	= 1,
 		.n_8255		= 1,
-		.has_mite	= 1,
 	},
 };
 
 struct pci_8255_private {
 	void __iomem *mmio_base;
 };
-
-static int pci_8255_mite_init(struct pci_dev *pcidev)
-{
-	void __iomem *mite_base;
-	u32 main_phys_addr;
-
-	/* ioremap the MITE registers (BAR 0) temporarily */
-	mite_base = pci_ioremap_bar(pcidev, 0);
-	if (!mite_base)
-		return -ENOMEM;
-
-	/* set data window to main registers (BAR 1) */
-	main_phys_addr = pci_resource_start(pcidev, 1);
-	writel(main_phys_addr | WENAB, mite_base + MITE_IODWBSR);
-
-	/* finished with MITE registers */
-	iounmap(mite_base);
-	return 0;
-}
 
 static int pci_8255_mmio(int dir, int port, int data, unsigned long iobase)
 {
@@ -224,20 +193,13 @@ static int pci_8255_auto_attach(struct comedi_device *dev,
 	dev->board_ptr = board;
 	dev->board_name = board->name;
 
-	devpriv = kzalloc(sizeof(*devpriv), GFP_KERNEL);
+	devpriv = comedi_alloc_devpriv(dev, sizeof(*devpriv));
 	if (!devpriv)
 		return -ENOMEM;
-	dev->private = devpriv;
 
 	ret = comedi_pci_enable(dev);
 	if (ret)
 		return ret;
-
-	if (board->has_mite) {
-		ret = pci_8255_mite_init(pcidev);
-		if (ret)
-			return ret;
-	}
 
 	is_mmio = (pci_resource_flags(pcidev, board->dio_badr) &
 		   IORESOURCE_MEM) != 0;
@@ -282,10 +244,7 @@ static int pci_8255_auto_attach(struct comedi_device *dev,
 static void pci_8255_detach(struct comedi_device *dev)
 {
 	struct pci_8255_private *devpriv = dev->private;
-	int i;
 
-	for (i = 0; i < dev->n_subdevices; i++)
-		comedi_spriv_free(dev, i);
 	if (devpriv && devpriv->mmio_base)
 		iounmap(devpriv->mmio_base);
 	comedi_pci_disable(dev);

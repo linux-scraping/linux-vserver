@@ -1249,12 +1249,12 @@ int ldc_bind(struct ldc_channel *lp, const char *name)
 	snprintf(lp->rx_irq_name, LDC_IRQ_NAME_MAX, "%s RX", name);
 	snprintf(lp->tx_irq_name, LDC_IRQ_NAME_MAX, "%s TX", name);
 
-	err = request_irq(lp->cfg.rx_irq, ldc_rx, IRQF_DISABLED,
+	err = request_irq(lp->cfg.rx_irq, ldc_rx, 0,
 			  lp->rx_irq_name, lp);
 	if (err)
 		return err;
 
-	err = request_irq(lp->cfg.tx_irq, ldc_tx, IRQF_DISABLED,
+	err = request_irq(lp->cfg.tx_irq, ldc_tx, 0,
 			  lp->tx_irq_name, lp);
 	if (err) {
 		free_irq(lp->cfg.rx_irq, lp);
@@ -1336,7 +1336,7 @@ int ldc_connect(struct ldc_channel *lp)
 	if (!(lp->flags & LDC_FLAG_ALLOCED_QUEUES) ||
 	    !(lp->flags & LDC_FLAG_REGISTERED_QUEUES) ||
 	    lp->hs_state != LDC_HS_OPEN)
-		err = ((lp->hs_state > LDC_HS_OPEN) ? 0 : -EINVAL);
+		err = -EINVAL;
 	else
 		err = start_handshake(lp);
 
@@ -2306,7 +2306,7 @@ void *ldc_alloc_exp_dring(struct ldc_channel *lp, unsigned int len,
 	if (len & (8UL - 1))
 		return ERR_PTR(-EINVAL);
 
-	buf = kzalloc(len, GFP_ATOMIC);
+	buf = kzalloc(len, GFP_KERNEL);
 	if (!buf)
 		return ERR_PTR(-ENOMEM);
 

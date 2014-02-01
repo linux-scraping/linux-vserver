@@ -58,9 +58,6 @@ int drm_lock(struct drm_device *dev, void *data, struct drm_file *file_priv)
 	struct drm_master *master = file_priv->master;
 	int ret = 0;
 
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return -EINVAL;
-
 	++file_priv->lock_count;
 
 	if (lock->context == DRM_KERNEL_CONTEXT) {
@@ -89,7 +86,6 @@ int drm_lock(struct drm_device *dev, void *data, struct drm_file *file_priv)
 		if (drm_lock_take(&master->lock, lock->context)) {
 			master->lock.file_priv = file_priv;
 			master->lock.lock_time = jiffies;
-			atomic_inc(&dev->counts[_DRM_STAT_LOCKS]);
 			break;	/* Got lock */
 		}
 
@@ -154,16 +150,11 @@ int drm_unlock(struct drm_device *dev, void *data, struct drm_file *file_priv)
 	struct drm_lock *lock = data;
 	struct drm_master *master = file_priv->master;
 
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return -EINVAL;
-
 	if (lock->context == DRM_KERNEL_CONTEXT) {
 		DRM_ERROR("Process %d using kernel context %d\n",
 			  task_pid_nr(current), lock->context);
 		return -EINVAL;
 	}
-
-	atomic_inc(&dev->counts[_DRM_STAT_UNLOCKS]);
 
 	if (drm_lock_free(&master->lock, lock->context)) {
 		/* FIXME: Should really bail out here. */

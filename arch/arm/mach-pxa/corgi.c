@@ -26,7 +26,6 @@
 #include <linux/i2c.h>
 #include <linux/i2c/pxa-i2c.h>
 #include <linux/io.h>
-#include <linux/regulator/machine.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/spi/corgi_lcd.h>
@@ -664,16 +663,16 @@ static void corgi_poweroff(void)
 		/* Green LED off tells the bootloader to halt */
 		gpio_set_value(CORGI_GPIO_LED_GREEN, 0);
 
-	pxa_restart('h', NULL);
+	pxa_restart(REBOOT_HARD, NULL);
 }
 
-static void corgi_restart(char mode, const char *cmd)
+static void corgi_restart(enum reboot_mode mode, const char *cmd)
 {
 	if (!machine_is_corgi())
 		/* Green LED on tells the bootloader to reboot */
 		gpio_set_value(CORGI_GPIO_LED_GREEN, 1);
 
-	pxa_restart('h', cmd);
+	pxa_restart(REBOOT_HARD, cmd);
 }
 
 static void __init corgi_init(void)
@@ -712,8 +711,6 @@ static void __init corgi_init(void)
 		sharpsl_nand_partitions[1].size = 53 * 1024 * 1024;
 
 	platform_add_devices(devices, ARRAY_SIZE(devices));
-
-	regulator_has_full_constraints();
 }
 
 static void __init fixup_corgi(struct tag *tags, char **cmdline,

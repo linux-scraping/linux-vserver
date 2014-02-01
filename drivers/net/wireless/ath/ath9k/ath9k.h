@@ -64,7 +64,6 @@ struct ath_node;
 
 struct ath_config {
 	u16 txpowlimit;
-	u8 cabqReadytime;
 };
 
 /*************************/
@@ -72,7 +71,6 @@ struct ath_config {
 /*************************/
 
 #define ATH_TXBUF_RESET(_bf) do {				\
-		(_bf)->bf_stale = false;			\
 		(_bf)->bf_lastbf = NULL;			\
 		(_bf)->bf_next = NULL;				\
 		memset(&((_bf)->bf_state), 0,			\
@@ -133,7 +131,8 @@ int ath_descdma_setup(struct ath_softc *sc, struct ath_descdma *dd,
 #define ATH_AGGR_ENCRYPTDELIM      10
 /* minimum h/w qdepth to be sustained to maximize aggregation */
 #define ATH_AGGR_MIN_QDEPTH        2
-#define ATH_AMPDU_SUBFRAME_DEFAULT 32
+/* minimum h/w qdepth for non-aggregated traffic */
+#define ATH_NON_AGGR_MIN_QDEPTH    8
 
 #define IEEE80211_SEQ_SEQ_SHIFT    4
 #define IEEE80211_SEQ_MAX          4096
@@ -170,12 +169,6 @@ int ath_descdma_setup(struct ath_softc *sc, struct ath_descdma *dd,
 
 #define ATH_TX_COMPLETE_POLL_INT	1000
 
-enum ATH_AGGR_STATUS {
-	ATH_AGGR_DONE,
-	ATH_AGGR_BAW_CLOSED,
-	ATH_AGGR_LIMITED,
-};
-
 #define ATH_TXFIFO_DEPTH 8
 struct ath_txq {
 	int mac80211_qnum; /* mac80211 queue number, -1 means not mac80211 Q */
@@ -197,10 +190,10 @@ struct ath_txq {
 
 struct ath_atx_ac {
 	struct ath_txq *txq;
-	int sched;
 	struct list_head list;
 	struct list_head tid_q;
 	bool clear_ps_filter;
+	bool sched;
 };
 
 struct ath_frame_info {
@@ -208,14 +201,24 @@ struct ath_frame_info {
 	int framelen;
 	enum ath9k_key_type keytype;
 	u8 keyix;
-	u8 retries;
 	u8 rtscts_rate;
+	u8 retries : 7;
+	u8 baw_tracked : 1;
+};
+
+struct ath_rxbuf {
+	struct list_head list;
+	struct sk_buff *bf_mpdu;
+	void *bf_desc;
+	dma_addr_t bf_daddr;
+	dma_addr_t bf_buf_addr;
 };
 
 struct ath_buf_state {
 	u8 bf_type;
 	u8 bfs_paprd;
 	u8 ndelim;
+	bool stale;
 	u16 seqno;
 	unsigned long bfs_paprd_timestamp;
 };
@@ -229,7 +232,6 @@ struct ath_buf {
 	void *bf_desc;			/* virtual addr of desc */
 	dma_addr_t bf_daddr;		/* physical addr of desc */
 	dma_addr_t bf_buf_addr;	/* physical addr of data buffer, for DMA */
-	bool bf_stale;
 	struct ieee80211_tx_rate rates[4];
 	struct ath_buf_state bf_state;
 };
@@ -237,16 +239,18 @@ struct ath_buf {
 struct ath_atx_tid {
 	struct list_head list;
 	struct sk_buff_head buf_q;
+	struct sk_buff_head retry_q;
 	struct ath_node *an;
 	struct ath_atx_ac *ac;
 	unsigned long tx_buf[BITS_TO_LONGS(ATH_TID_MAX_BUFS)];
-	int bar_index;
 	u16 seq_start;
 	u16 seq_next;
 	u16 baw_size;
-	int tidno;
+	u8 tidno;
 	int baw_head;   /* first un-acked tx buffer */
 	int baw_tail;   /* next unused tx buffer slot */
+
+	s8 bar_index;
 	bool sched;
 	bool paused;
 	bool active;
@@ -258,16 +262,13 @@ struct ath_node {
 	struct ieee80211_vif *vif; /* interface with which we're associated */
 	struct ath_atx_tid tid[IEEE80211_NUM_TIDS];
 	struct ath_atx_ac ac[IEEE80211_NUM_ACS];
-	int ps_key;
 
 	u16 maxampdu;
 	u8 mpdudensity;
+	s8 ps_key;
 
 	bool sleeping;
-
-#if defined(CONFIG_MAC80211_DEBUGFS) && defined(CONFIG_ATH9K_DEBUGFS)
-	struct dentry *node_stat;
-#endif
+	bool no_ps_filter;
 };
 
 struct ath_tx_control {
@@ -292,6 +293,7 @@ struct ath_tx {
 	struct ath_txq txq[ATH9K_NUM_TX_QUEUES];
 	struct ath_descdma txdma;
 	struct ath_txq *txq_map[IEEE80211_NUM_ACS];
+	struct ath_txq *uapsdq;
 	u32 txq_max_pending[IEEE80211_NUM_ACS];
 	u16 max_aggr_framelen[IEEE80211_NUM_ACS][4][32];
 };
@@ -312,7 +314,7 @@ struct ath_rx {
 	struct ath_descdma rxdma;
 	struct ath_rx_edma rx_edma[ATH9K_RX_QUEUE_MAX];
 
-	struct ath_buf *buf_hold;
+	struct ath_rxbuf *buf_hold;
 	struct sk_buff *frag;
 
 	u32 ampdu_ref;
@@ -340,6 +342,8 @@ int ath_txq_update(struct ath_softc *sc, int qnum,
 void ath_update_max_aggr_framelen(struct ath_softc *sc, int queue, int txop);
 int ath_tx_start(struct ieee80211_hw *hw, struct sk_buff *skb,
 		 struct ath_tx_control *txctl);
+void ath_tx_cabq(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		 struct sk_buff *skb);
 void ath_tx_tasklet(struct ath_softc *sc);
 void ath_tx_edma_tasklet(struct ath_softc *sc);
 int ath_tx_aggr_start(struct ath_softc *sc, struct ieee80211_sta *sta,
@@ -350,12 +354,18 @@ void ath_tx_aggr_resume(struct ath_softc *sc, struct ieee80211_sta *sta, u16 tid
 void ath_tx_aggr_wakeup(struct ath_softc *sc, struct ath_node *an);
 void ath_tx_aggr_sleep(struct ieee80211_sta *sta, struct ath_softc *sc,
 		       struct ath_node *an);
+void ath9k_release_buffered_frames(struct ieee80211_hw *hw,
+				   struct ieee80211_sta *sta,
+				   u16 tids, int nframes,
+				   enum ieee80211_frame_release_type reason,
+				   bool more_data);
 
 /********/
 /* VIFs */
 /********/
 
 struct ath_vif {
+	struct ath_node mcast_node;
 	int av_bslot;
 	bool primary_sta_vif;
 	__le64 tsf_adjust; /* TSF adjustment for staggered beacons */
@@ -417,6 +427,7 @@ void ath9k_beacon_assign_slot(struct ath_softc *sc, struct ieee80211_vif *vif);
 void ath9k_beacon_remove_slot(struct ath_softc *sc, struct ieee80211_vif *vif);
 void ath9k_set_tsfadjust(struct ath_softc *sc, struct ieee80211_vif *vif);
 void ath9k_set_beacon(struct ath_softc *sc);
+bool ath9k_csa_is_finished(struct ath_softc *sc);
 
 /*******************/
 /* Link Monitoring */
@@ -455,8 +466,8 @@ void ath9k_queue_reset(struct ath_softc *sc, enum ath_reset_type type);
 
 #define ATH_DUMP_BTCOEX(_s, _val)				\
 	do {							\
-		len += snprintf(buf + len, size - len,		\
-				"%20s : %10d\n", _s, (_val));	\
+		len += scnprintf(buf + len, size - len,		\
+				 "%20s : %10d\n", _s, (_val));	\
 	} while (0)
 
 enum bt_op_flags {
@@ -574,18 +585,12 @@ static inline void ath_fill_led_pin(struct ath_softc *sc)
 #define ATH_ANT_DIV_COMB_MAX_COUNT 100
 #define ATH_ANT_DIV_COMB_ALT_ANT_RATIO 30
 #define ATH_ANT_DIV_COMB_ALT_ANT_RATIO2 20
+#define ATH_ANT_DIV_COMB_ALT_ANT_RATIO_LOW_RSSI 50
+#define ATH_ANT_DIV_COMB_ALT_ANT_RATIO2_LOW_RSSI 50
 
-#define ATH_ANT_DIV_COMB_LNA1_LNA2_SWITCH_DELTA -1
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_HI -4
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_MID -2
 #define ATH_ANT_DIV_COMB_LNA1_DELTA_LOW 2
-
-enum ath9k_ant_div_comb_lna_conf {
-	ATH_ANT_DIV_COMB_LNA1_MINUS_LNA2,
-	ATH_ANT_DIV_COMB_LNA2,
-	ATH_ANT_DIV_COMB_LNA1,
-	ATH_ANT_DIV_COMB_LNA1_PLUS_LNA2,
-};
 
 struct ath_ant_comb {
 	u16 count;
@@ -603,22 +608,40 @@ struct ath_ant_comb {
 	int rssi_first;
 	int rssi_second;
 	int rssi_third;
+	int ant_ratio;
+	int ant_ratio2;
 	bool alt_good;
 	int quick_scan_cnt;
-	int main_conf;
+	enum ath9k_ant_div_comb_lna_conf main_conf;
 	enum ath9k_ant_div_comb_lna_conf first_quick_scan_conf;
 	enum ath9k_ant_div_comb_lna_conf second_quick_scan_conf;
 	bool first_ratio;
 	bool second_ratio;
 	unsigned long scan_start_time;
+
+	/*
+	 * Card-specific config values.
+	 */
+	int low_rssi_thresh;
+	int fast_div_bias;
 };
 
 void ath_ant_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs);
-void ath_ant_comb_update(struct ath_softc *sc);
 
 /********************/
 /* Main driver core */
 /********************/
+
+#define ATH9K_PCI_CUS198          0x0001
+#define ATH9K_PCI_CUS230          0x0002
+#define ATH9K_PCI_CUS217          0x0004
+#define ATH9K_PCI_CUS252          0x0008
+#define ATH9K_PCI_WOW             0x0010
+#define ATH9K_PCI_BT_ANT_DIV      0x0020
+#define ATH9K_PCI_D3_L1_WAR       0x0040
+#define ATH9K_PCI_AR9565_1ANT     0x0080
+#define ATH9K_PCI_AR9565_2ANT     0x0100
+#define ATH9K_PCI_NO_PLL_PWRSAVE  0x0200
 
 /*
  * Default cache line size, in bytes.
@@ -639,6 +662,7 @@ enum sc_op_flags {
 	SC_OP_ANI_RUN,
 	SC_OP_PRIM_STA_VIF,
 	SC_OP_HW_RESET,
+	SC_OP_SCANNING,
 };
 
 /* Powersave flags */
@@ -703,6 +727,7 @@ struct ath_softc {
 
 	unsigned int hw_busy_count;
 	unsigned long sc_flags;
+	unsigned long driver_data;
 
 	u32 intrstatus;
 	u16 ps_flags; /* PS_* */
@@ -743,6 +768,7 @@ struct ath_softc {
 #endif
 
 	struct ath_descdma txsdma;
+	struct ieee80211_vif *csa_vif;
 
 	struct ath_ant_comb ant_comb;
 	u8 ant_tx, ant_rx;
@@ -752,7 +778,11 @@ struct ath_softc {
 	struct rchan *rfs_chan_spec_scan;
 	enum spectral_mode spectral_mode;
 	struct ath_spec_scan spec_config;
-	int scanning;
+
+	struct ieee80211_vif *tx99_vif;
+	struct sk_buff *tx99_skb;
+	bool tx99_state;
+	s16 tx99_power;
 
 #ifdef CONFIG_PM_SLEEP
 	atomic_t wow_got_bmiss_intr;
@@ -862,6 +892,7 @@ static inline u8 spectral_bitmap_weight(u8 *bins)
  */
 enum ath_fft_sample_type {
 	ATH_FFT_SAMPLE_HT20 = 1,
+	ATH_FFT_SAMPLE_HT20_40,
 };
 
 struct fft_sample_tlv {
@@ -888,6 +919,39 @@ struct fft_sample_ht20 {
 	u8 data[SPECTRAL_HT20_NUM_BINS];
 } __packed;
 
+struct fft_sample_ht20_40 {
+	struct fft_sample_tlv tlv;
+
+	u8 channel_type;
+	__be16 freq;
+
+	s8 lower_rssi;
+	s8 upper_rssi;
+
+	__be64 tsf;
+
+	s8 lower_noise;
+	s8 upper_noise;
+
+	__be16 lower_max_magnitude;
+	__be16 upper_max_magnitude;
+
+	u8 lower_max_index;
+	u8 upper_max_index;
+
+	u8 lower_bitmap_weight;
+	u8 upper_bitmap_weight;
+
+	u8 max_exp;
+
+	u8 data[SPECTRAL_HT20_40_NUM_BINS];
+} __packed;
+
+int ath9k_tx99_init(struct ath_softc *sc);
+void ath9k_tx99_deinit(struct ath_softc *sc);
+int ath9k_tx99_send(struct ath_softc *sc, struct sk_buff *skb,
+		    struct ath_tx_control *txctl);
+
 void ath9k_tasklet(unsigned long data);
 int ath_cabq_update(struct ath_softc *);
 
@@ -909,7 +973,6 @@ void ath9k_deinit_device(struct ath_softc *sc);
 void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw);
 void ath9k_reload_chainmask_settings(struct ath_softc *sc);
 
-bool ath9k_uses_beacons(int type);
 void ath9k_spectral_scan_trigger(struct ieee80211_hw *hw);
 int ath9k_spectral_scan_config(struct ieee80211_hw *hw,
 			       enum spectral_mode spectral_mode);
@@ -937,7 +1000,7 @@ void ath9k_ps_restore(struct ath_softc *sc);
 u8 ath_txchainmask_reduction(struct ath_softc *sc, u8 chainmask, u32 rate);
 
 void ath_start_rfkill_poll(struct ath_softc *sc);
-extern void ath9k_rfkill_poll_state(struct ieee80211_hw *hw);
+void ath9k_rfkill_poll_state(struct ieee80211_hw *hw);
 void ath9k_calculate_iter_data(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
 			       struct ath9k_vif_iter_data *iter_data);

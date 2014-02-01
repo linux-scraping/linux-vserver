@@ -225,7 +225,7 @@ static void nuc900_nand_enable(struct nuc900_nand *nand)
 	val = __raw_readl(nand->reg + REG_FMICSR);
 
 	if (!(val & NAND_EN))
-		__raw_writel(val | NAND_EN, nand->reg + REG_FMICSR);
+		__raw_writel(val | NAND_EN, REG_FMICSR);
 
 	val = __raw_readl(nand->reg + REG_SMCSR);
 
@@ -323,8 +323,6 @@ static int nuc900_nand_remove(struct platform_device *pdev)
 	clk_put(nuc900_nand->clk);
 
 	kfree(nuc900_nand);
-
-	platform_set_drvdata(pdev, NULL);
 
 	return 0;
 }

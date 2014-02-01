@@ -39,6 +39,9 @@ typedef struct xfs_timestamp {
  * There is a very similar struct icdinode in xfs_inode which matches the
  * layout of the first 96 bytes of this structure, but is kept in native
  * format instead of big endian.
+ *
+ * Note: di_flushiter is only used by v1/2 inodes - it's effectively a zeroed
+ * padding field for v3 inodes.
  */
 typedef struct xfs_dinode {
 	__be16		di_magic;	/* inode magic # = XFS_DINODE_MAGIC */
@@ -51,9 +54,7 @@ typedef struct xfs_dinode {
 	__be32		di_nlink;	/* number of links to file */
 	__be16		di_projid_lo;	/* lower part of owner's project id */
 	__be16		di_projid_hi;	/* higher part owner's project id */
-	__u8		di_pad[2];	/* unused, zeroed space */
-	__be16		di_tag;		/* context tagging */
-	__be16		di_vflags;	/* vserver specific flags */
+	__u8		di_pad[6];	/* unused, zeroed space */
 	__be16		di_flushiter;	/* incremented on flush */
 	xfs_timestamp_t	di_atime;	/* time last accessed */
 	xfs_timestamp_t	di_mtime;	/* time last modified */
@@ -134,9 +135,6 @@ typedef enum xfs_dinode_fmt {
 #define XFS_LITINO(mp, version) \
 	((int)(((mp)->m_sb.sb_inodesize) - xfs_dinode_size(version)))
 
-#define XFS_BROOT_SIZE_ADJ(ip) \
-	(XFS_BMBT_BLOCK_LEN((ip)->i_mount) - sizeof(xfs_bmdr_block_t))
-
 /*
  * Inode data & attribute fork sizes, per inode.
  */
@@ -211,8 +209,6 @@ static inline void xfs_dinode_put_rdev(struct xfs_dinode *dip, xfs_dev_t rdev)
 #define XFS_DIFLAG_EXTSZINHERIT_BIT 12	/* inherit inode extent size */
 #define XFS_DIFLAG_NODEFRAG_BIT     13	/* do not reorganize/defragment */
 #define XFS_DIFLAG_FILESTREAM_BIT   14  /* use filestream allocator */
-#define XFS_DIFLAG_IXUNLINK_BIT     15	/* Immutable inver on unlink */
-
 #define XFS_DIFLAG_REALTIME      (1 << XFS_DIFLAG_REALTIME_BIT)
 #define XFS_DIFLAG_PREALLOC      (1 << XFS_DIFLAG_PREALLOC_BIT)
 #define XFS_DIFLAG_NEWRTBM       (1 << XFS_DIFLAG_NEWRTBM_BIT)
@@ -228,7 +224,6 @@ static inline void xfs_dinode_put_rdev(struct xfs_dinode *dip, xfs_dev_t rdev)
 #define XFS_DIFLAG_EXTSZINHERIT  (1 << XFS_DIFLAG_EXTSZINHERIT_BIT)
 #define XFS_DIFLAG_NODEFRAG      (1 << XFS_DIFLAG_NODEFRAG_BIT)
 #define XFS_DIFLAG_FILESTREAM    (1 << XFS_DIFLAG_FILESTREAM_BIT)
-#define XFS_DIFLAG_IXUNLINK      (1 << XFS_DIFLAG_IXUNLINK_BIT)
 
 #ifdef CONFIG_XFS_RT
 #define XFS_IS_REALTIME_INODE(ip) ((ip)->i_d.di_flags & XFS_DIFLAG_REALTIME)
@@ -241,10 +236,6 @@ static inline void xfs_dinode_put_rdev(struct xfs_dinode *dip, xfs_dev_t rdev)
 	 XFS_DIFLAG_IMMUTABLE | XFS_DIFLAG_APPEND | XFS_DIFLAG_SYNC | \
 	 XFS_DIFLAG_NOATIME | XFS_DIFLAG_NODUMP | XFS_DIFLAG_RTINHERIT | \
 	 XFS_DIFLAG_PROJINHERIT | XFS_DIFLAG_NOSYMLINKS | XFS_DIFLAG_EXTSIZE | \
-	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_FILESTREAM | \
-	 XFS_DIFLAG_IXUNLINK)
-
-#define XFS_DIVFLAG_BARRIER	0x01
-#define XFS_DIVFLAG_COW		0x02
+	 XFS_DIFLAG_EXTSZINHERIT | XFS_DIFLAG_NODEFRAG | XFS_DIFLAG_FILESTREAM)
 
 #endif	/* __XFS_DINODE_H__ */

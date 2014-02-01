@@ -1200,6 +1200,9 @@ static int kdb_local(kdb_reason_t reason, int error, struct pt_regs *regs,
 			   instruction_pointer(regs));
 		kdb_dumpregs(regs);
 		break;
+	case KDB_REASON_SYSTEM_NMI:
+		kdb_printf("due to System NonMaskable Interrupt\n");
+		break;
 	case KDB_REASON_NMI:
 		kdb_printf("due to NonMaskable Interrupt @ "
 			   kdb_machreg_fmt "\n",
@@ -2532,7 +2535,7 @@ static int kdb_summary(int argc, const char **argv)
 #define K(x) ((x) << (PAGE_SHIFT - 10))
 	kdb_printf("\nMemTotal:       %8lu kB\nMemFree:        %8lu kB\n"
 		   "Buffers:        %8lu kB\n",
-		   K(val.totalram), K(val.freeram), K(val.bufferram));
+		   val.totalram, val.freeram, val.bufferram);
 	return 0;
 }
 

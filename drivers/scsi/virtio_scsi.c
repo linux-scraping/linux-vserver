@@ -224,6 +224,9 @@ static void virtscsi_vq_done(struct virtio_scsi *vscsi,
 		virtqueue_disable_cb(vq);
 		while ((buf = virtqueue_get_buf(vq, &len)) != NULL)
 			fn(vscsi, buf);
+
+		if (unlikely(virtqueue_is_broken(vq)))
+			break;
 	} while (!virtqueue_enable_cb(vq));
 	spin_unlock_irqrestore(&virtscsi_vq->vq_lock, flags);
 }
@@ -270,16 +273,6 @@ static void virtscsi_req_done(struct virtqueue *vq)
 	virtscsi_vq_done(vscsi, req_vq, virtscsi_complete_cmd);
 };
 
-static void virtscsi_poll_requests(struct virtio_scsi *vscsi)
-{
-	int i, num_vqs;
-
-	num_vqs = vscsi->num_queues;
-	for (i = 0; i < num_vqs; i++)
-		virtscsi_vq_done(vscsi, &vscsi->req_vqs[i],
-				 virtscsi_complete_cmd);
-}
-
 static void virtscsi_complete_free(struct virtio_scsi *vscsi, void *buf)
 {
 	struct virtio_scsi_cmd *cmd = buf;
@@ -298,8 +291,6 @@ static void virtscsi_ctrl_done(struct virtqueue *vq)
 	virtscsi_vq_done(vscsi, &vscsi->ctrl_vq, virtscsi_complete_free);
 };
 
-static void virtscsi_handle_event(struct work_struct *work);
-
 static int virtscsi_kick_event(struct virtio_scsi *vscsi,
 			       struct virtio_scsi_event_node *event_node)
 {
@@ -307,7 +298,6 @@ static int virtscsi_kick_event(struct virtio_scsi *vscsi,
 	struct scatterlist sg;
 	unsigned long flags;
 
-	INIT_WORK(&event_node->work, virtscsi_handle_event);
 	sg_init_one(&sg, &event_node->event, sizeof(struct virtio_scsi_event));
 
 	spin_lock_irqsave(&vscsi->event_vq.vq_lock, flags);
@@ -425,6 +415,7 @@ static void virtscsi_complete_event(struct virtio_scsi *vscsi, void *buf)
 {
 	struct virtio_scsi_event_node *event_node = buf;
 
+	INIT_WORK(&event_node->work, virtscsi_handle_event);
 	schedule_work(&event_node->work);
 }
 
@@ -614,18 +605,6 @@ static int virtscsi_tmf(struct virtio_scsi *vscsi, struct virtio_scsi_cmd *cmd)
 	    cmd->resp.tmf.response == VIRTIO_SCSI_S_FUNCTION_SUCCEEDED)
 		ret = SUCCESS;
 
-	/*
-	 * The spec guarantees that all requests related to the TMF have
-	 * been completed, but the callback might not have run yet if
-	 * we're using independent interrupts (e.g. MSI).  Poll the
-	 * virtqueues once.
-	 *
-	 * In the abort case, sc->scsi_done will do nothing, because
-	 * the block layer must have detected a timeout and as a result
-	 * REQ_ATOM_COMPLETE has been set.
-	 */
-	virtscsi_poll_requests(vscsi);
-
 out:
 	mempool_free(cmd, virtscsi_cmd_pool);
 	return ret;
@@ -734,19 +713,15 @@ static struct scsi_host_template virtscsi_host_template_multi = {
 #define virtscsi_config_get(vdev, fld) \
 	({ \
 		typeof(((struct virtio_scsi_config *)0)->fld) __val; \
-		vdev->config->get(vdev, \
-				  offsetof(struct virtio_scsi_config, fld), \
-				  &__val, sizeof(__val)); \
+		virtio_cread(vdev, struct virtio_scsi_config, fld, &__val); \
 		__val; \
 	})
 
 #define virtscsi_config_set(vdev, fld, val) \
-	(void)({ \
+	do { \
 		typeof(((struct virtio_scsi_config *)0)->fld) __val = (val); \
-		vdev->config->set(vdev, \
-				  offsetof(struct virtio_scsi_config, fld), \
-				  &__val, sizeof(__val)); \
-	})
+		virtio_cwrite(vdev, struct virtio_scsi_config, fld, &__val); \
+	} while(0)
 
 static void __virtscsi_set_affinity(struct virtio_scsi *vscsi, bool affinity)
 {
@@ -775,12 +750,8 @@ static void __virtscsi_set_affinity(struct virtio_scsi *vscsi, bool affinity)
 
 		vscsi->affinity_hint_set = true;
 	} else {
-		for (i = 0; i < vscsi->num_queues; i++) {
-			if (!vscsi->req_vqs[i].vq)
-				continue;
-
+		for (i = 0; i < vscsi->num_queues; i++)
 			virtqueue_set_affinity(vscsi->req_vqs[i].vq, -1);
-		}
 
 		vscsi->affinity_hint_set = false;
 	}
@@ -982,13 +953,9 @@ static void virtscsi_remove(struct virtio_device *vdev)
 	scsi_host_put(shost);
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int virtscsi_freeze(struct virtio_device *vdev)
 {
-	struct Scsi_Host *sh = virtio_scsi_host(vdev);
-	struct virtio_scsi *vscsi = shost_priv(sh);
-
-	unregister_hotcpu_notifier(&vscsi->nb);
 	virtscsi_remove_vqs(vdev);
 	return 0;
 }
@@ -997,17 +964,8 @@ static int virtscsi_restore(struct virtio_device *vdev)
 {
 	struct Scsi_Host *sh = virtio_scsi_host(vdev);
 	struct virtio_scsi *vscsi = shost_priv(sh);
-	int err;
 
-	err = virtscsi_init(vdev, vscsi);
-	if (err)
-		return err;
-
-	err = register_hotcpu_notifier(&vscsi->nb);
-	if (err)
-		vdev->config->del_vqs(vdev);
-
-	return err;
+	return virtscsi_init(vdev, vscsi);
 }
 #endif
 
@@ -1029,7 +987,7 @@ static struct virtio_driver virtio_scsi_driver = {
 	.id_table = id_table,
 	.probe = virtscsi_probe,
 	.scan = virtscsi_scan,
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 	.freeze = virtscsi_freeze,
 	.restore = virtscsi_restore,
 #endif

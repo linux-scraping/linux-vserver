@@ -96,9 +96,7 @@ static int set_max_cstate(const struct dmi_system_id *id)
 	return 0;
 }
 
-/* Actually this shouldn't be __cpuinitdata, would be better to fix the
-   callers to only run once -AK */
-static struct dmi_system_id __cpuinitdata processor_power_dmi_table[] = {
+static struct dmi_system_id processor_power_dmi_table[] = {
 	{ set_max_cstate, "Clevo 5600D", {
 	  DMI_MATCH(DMI_BIOS_VENDOR,"Phoenix Technologies LTD"),
 	  DMI_MATCH(DMI_BIOS_VERSION,"SHE845M0.86C.0013.D.0302131307")},
@@ -207,13 +205,13 @@ static void lapic_timer_state_broadcast(struct acpi_processor *pr,
 #ifdef CONFIG_PM_SLEEP
 static u32 saved_bm_rld;
 
-int acpi_processor_suspend(void)
+static int acpi_processor_suspend(void)
 {
 	acpi_read_bit_register(ACPI_BITREG_BUS_MASTER_RLD, &saved_bm_rld);
 	return 0;
 }
 
-void acpi_processor_resume(void)
+static void acpi_processor_resume(void)
 {
 	u32 resumed_bm_rld;
 
@@ -266,9 +264,6 @@ static void tsc_check_state(int state) { return; }
 
 static int acpi_processor_get_power_info_fadt(struct acpi_processor *pr)
 {
-
-	if (!pr)
-		return -EINVAL;
 
 	if (!pr->pblk)
 		return -ENODEV;
@@ -978,7 +973,7 @@ static int acpi_processor_setup_cpuidle_states(struct acpi_processor *pr)
 		return -EINVAL;
 
 	drv->safe_state_index = -1;
-	for (i = CPUIDLE_DRIVER_STATE_START; i < CPUIDLE_STATE_MAX; i++) {
+	for (i = 0; i < CPUIDLE_STATE_MAX; i++) {
 		drv->states[i].name[0] = '\0';
 		drv->states[i].desc[0] = '\0';
 	}
@@ -1052,12 +1047,8 @@ int acpi_processor_hotplug(struct acpi_processor *pr)
 	if (disabled_by_idle_boot_param())
 		return 0;
 
-	if (!pr)
-		return -EINVAL;
-
-	if (nocst) {
+	if (nocst)
 		return -ENODEV;
-	}
 
 	if (!pr->flags.power_setup_done)
 		return -ENODEV;
@@ -1084,9 +1075,6 @@ int acpi_processor_cst_has_changed(struct acpi_processor *pr)
 	if (disabled_by_idle_boot_param())
 		return 0;
 
-	if (!pr)
-		return -EINVAL;
-
 	if (nocst)
 		return -ENODEV;
 
@@ -1101,9 +1089,9 @@ int acpi_processor_cst_has_changed(struct acpi_processor *pr)
 
 	if (pr->id == 0 && cpuidle_get_driver() == &acpi_idle_driver) {
 
+		cpuidle_pause_and_lock();
 		/* Protect against cpu-hotplug */
 		get_online_cpus();
-		cpuidle_pause_and_lock();
 
 		/* Disable all cpuidle devices */
 		for_each_online_cpu(cpu) {
@@ -1130,8 +1118,8 @@ int acpi_processor_cst_has_changed(struct acpi_processor *pr)
 				cpuidle_enable_device(dev);
 			}
 		}
-		cpuidle_resume_and_unlock();
 		put_online_cpus();
+		cpuidle_resume_and_unlock();
 	}
 
 	return 0;
@@ -1139,7 +1127,7 @@ int acpi_processor_cst_has_changed(struct acpi_processor *pr)
 
 static int acpi_processor_registered;
 
-int __cpuinit acpi_processor_power_init(struct acpi_processor *pr)
+int acpi_processor_power_init(struct acpi_processor *pr)
 {
 	acpi_status status = 0;
 	int retval;
@@ -1158,9 +1146,6 @@ int __cpuinit acpi_processor_power_init(struct acpi_processor *pr)
 			       max_cstate);
 		first_run++;
 	}
-
-	if (!pr)
-		return -EINVAL;
 
 	if (acpi_gbl_FADT.cst_control && !nocst) {
 		status =

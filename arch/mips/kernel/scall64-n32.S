@@ -103,6 +103,7 @@ not_n32_scall:
 
 	END(handle_sysn32)
 
+	.type	sysn32_call_table, @object
 EXPORT(sysn32_call_table)
 	PTR	sys_read			/* 6000 */
 	PTR	sys_write
@@ -349,7 +350,7 @@ EXPORT(sysn32_call_table)
 	PTR	sys_ni_syscall			/* available, was setaltroot */
 	PTR	sys_add_key
 	PTR	sys_request_key
-	PTR	compat_sys_keyctl		/* 6245 */
+	PTR	sys_keyctl			/* 6245 */
 	PTR	sys_set_thread_area
 	PTR	sys_inotify_init
 	PTR	sys_inotify_add_watch
