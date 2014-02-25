@@ -95,7 +95,7 @@ static int mnt_is_reachable(struct vfsmount *vfsmnt)
 	if (mnt == mnt->mnt_ns->root)
 		return 1;
 
-	br_read_lock(&vfsmount_lock);
+	rcu_read_lock();
 	root = current->fs->root;
 	root_mnt = real_mount(root.mnt);
 	point = root.dentry;
@@ -104,11 +104,9 @@ static int mnt_is_reachable(struct vfsmount *vfsmnt)
 		point = mnt->mnt_mountpoint;
 		mnt = mnt->mnt_parent;
 	}
+	rcu_read_unlock();
 
 	ret = (mnt == root_mnt) && is_subdir(point, root.dentry);
-
-	br_read_unlock(&vfsmount_lock);
-
 	return ret;
 }
 
