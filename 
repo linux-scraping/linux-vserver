@@ -1,5 +1,0 @@
-kernel/vserver/cacct_init.h <unknown> 15 		atomic_set(&cacct->slab[i], 0);
-kernel/vserver/cacct_proc.h <unknown> 32 		atomic_read(&cacct->slab[1]),
-kernel/vserver/cacct_proc.h <unknown> 33 		atomic_read(&cacct->slab[4]),
-kernel/vserver/cacct_proc.h <unknown> 34 		atomic_read(&cacct->slab[0]),
-kernel/vserver/cacct_proc.h <unknown> 35 		atomic_read(&cacct->slab[2]));

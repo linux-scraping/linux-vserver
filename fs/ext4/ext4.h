@@ -278,6 +278,16 @@ struct ext4_io_submit {
 /* Translate # of blks to # of clusters */
 #define EXT4_NUM_B2C(sbi, blks)	(((blks) + (sbi)->s_cluster_ratio - 1) >> \
 				 (sbi)->s_cluster_bits)
+/* Mask out the low bits to get the starting block of the cluster */
+#define EXT4_PBLK_CMASK(s, pblk) ((pblk) &				\
+				  ~((ext4_fsblk_t) (s)->s_cluster_ratio - 1))
+#define EXT4_LBLK_CMASK(s, lblk) ((lblk) &				\
+				  ~((ext4_lblk_t) (s)->s_cluster_ratio - 1))
+/* Get the cluster offset */
+#define EXT4_PBLK_COFF(s, pblk) ((pblk) &				\
+				 ((ext4_fsblk_t) (s)->s_cluster_ratio - 1))
+#define EXT4_LBLK_COFF(s, lblk) ((lblk) &				\
+				 ((ext4_lblk_t) (s)->s_cluster_ratio - 1))
 
 /*
  * Structure of a blocks group descriptor
@@ -1604,7 +1614,11 @@ struct dx_hash_info
 	u32		*seed;
 };
 
-#define EXT4_HTREE_EOF	0x7fffffff
+
+/* 32 and 64 bit signed EOF for dx directories */
+#define EXT4_HTREE_EOF_32BIT   ((1UL  << (32 - 1)) - 1)
+#define EXT4_HTREE_EOF_64BIT   ((1ULL << (64 - 1)) - 1)
+
 
 /*
  * Control parameters used by ext4_htree_next_block
