@@ -255,7 +255,8 @@ ok:
 	smp_rmb();
 	if (task->mm)
 		dumpable = get_dumpable(task->mm);
-	if (!dumpable  && !ptrace_has_cap(task_user_ns(task), mode))
+	if (dumpable != SUID_DUMP_USER &&
+	    !ptrace_has_cap(task_user_ns(task), mode))
 		return -EPERM;
 	if (!vx_check(task->xid, VS_ADMIN_P|VS_WATCH_P|VS_IDENT))
 		return -EPERM;
