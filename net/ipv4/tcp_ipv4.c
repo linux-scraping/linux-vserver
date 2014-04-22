@@ -2649,7 +2649,7 @@ static void get_timewait4_sock(const struct inet_timewait_sock *tw,
 {
 	__be32 dest, src;
 	__u16 destp, srcp;
-	long delta = tw->tw_ttd - jiffies;
+	s32 delta = tw->tw_ttd - inet_tw_time_stamp();
 
 	dest  = nx_map_sock_lback(current_nx_info(), tw->tw_daddr);
 	src   = nx_map_sock_lback(current_nx_info(), tw->tw_rcv_saddr);
