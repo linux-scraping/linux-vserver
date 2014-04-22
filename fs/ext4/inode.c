@@ -38,6 +38,7 @@
 #include <linux/slab.h>
 #include <linux/ratelimit.h>
 #include <linux/aio.h>
+#include <linux/bitops.h>
 #include <linux/vs_tag.h>
 
 #include "ext4_jbd2.h"
@@ -4045,30 +4046,34 @@ int ext4_get_inode_loc(struct inode *inode, struct ext4_iloc *iloc)
 void ext4_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = EXT4_I(inode)->i_flags;
-
-	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
-		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+	unsigned int new_fl = 0;
 
 	if (flags & EXT4_IMMUTABLE_FL)
-		inode->i_flags |= S_IMMUTABLE;
+		new_fl |= S_IMMUTABLE;
 	if (flags & EXT4_IXUNLINK_FL)
-		inode->i_flags |= S_IXUNLINK;
+		new_fl |= S_IXUNLINK;
 
 	if (flags & EXT4_SYNC_FL)
-		inode->i_flags |= S_SYNC;
+		new_fl |= S_SYNC;
 	if (flags & EXT4_APPEND_FL)
-		inode->i_flags |= S_APPEND;
+		new_fl |= S_APPEND;
 	if (flags & EXT4_NOATIME_FL)
-		inode->i_flags |= S_NOATIME;
+		new_fl |= S_NOATIME;
 	if (flags & EXT4_DIRSYNC_FL)
-		inode->i_flags |= S_DIRSYNC;
+		new_fl |= S_DIRSYNC;
 
-	inode->i_vflags &= ~(V_BARRIER | V_COW);
+	set_mask_bits(&inode->i_flags,
+		S_IXUNLINK | S_IMMUTABLE |
+		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC, new_fl);
 
+	new_fl = 0;
 	if (flags & EXT4_BARRIER_FL)
-		inode->i_vflags |= V_BARRIER;
+		new_fl |= V_BARRIER;
 	if (flags & EXT4_COW_FL)
-		inode->i_vflags |= V_COW;
+		new_fl |= V_COW;
+
+	set_mask_bits(&inode->i_vflags,
+		V_BARRIER | V_COW, new_fl);
 }
 
 /* Propagate flags from i_flags to EXT4_I(inode)->i_flags */
