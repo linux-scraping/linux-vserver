@@ -374,8 +374,8 @@ void task_vs_id(struct seq_file *m, struct task_struct *task)
 	if (task_vx_flags(task, VXF_HIDE_VINFO, 0))
 		return;
 
-	seq_printf(m, "VxID: %d\n", vx_task_xid(task));
-	seq_printf(m, "NxID: %d\n", nx_task_nid(task));
+	seq_printf(m, "VxID:\t%d\n", vx_task_xid(task));
+	seq_printf(m, "NxID:\t%d\n", nx_task_nid(task));
 }
 
 
