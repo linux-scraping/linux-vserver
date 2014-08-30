@@ -824,7 +824,7 @@ next_normal:
 			++num;
 		}
 
-		if (r->idiag_states & TCPF_TIME_WAIT) {
+		if (r->idiag_states & (TCPF_TIME_WAIT | TCPF_FIN_WAIT2)) {
 			struct inet_timewait_sock *tw;
 
 			inet_twsk_for_each(tw, node,
@@ -833,6 +833,8 @@ next_normal:
 				if (!nx_check(tw->tw_nid, VS_WATCH_P | VS_IDENT))
 					continue;
 				if (num < s_num)
+					goto next_dying;
+				if (!(r->idiag_states & (1 << tw->tw_substate)))
 					goto next_dying;
 				if (r->id.idiag_sport != tw->tw_sport &&
 				    r->id.idiag_sport)
