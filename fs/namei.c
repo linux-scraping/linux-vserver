@@ -1347,8 +1347,7 @@ static void follow_dotdot(struct nameidata *nd)
 
 		if (nd->path.dentry == nd->root.dentry &&
 		    nd->path.mnt == nd->root.mnt) {
-			/* for sane '/' avoid follow_mount() */
-			return;
+			break;
 		}
 		if (nd->path.dentry != nd->path.mnt->mnt_root) {
 			/* rare case of legitimate dget_parent()... */
