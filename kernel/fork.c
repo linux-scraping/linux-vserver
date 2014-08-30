@@ -1457,6 +1457,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 
 	total_forks++;
 	spin_unlock(&current->sighand->siglock);
+	syscall_tracepoint_update(p);
 
 	/* p is copy of current */
 	vxi = p->vx_info;
@@ -1470,6 +1471,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	if (nxi)
 		claim_nx_info(nxi, p);
 	write_unlock_irq(&tasklist_lock);
+
 	proc_fork_connector(p);
 	cgroup_post_fork(p);
 	if (clone_flags & CLONE_THREAD)
