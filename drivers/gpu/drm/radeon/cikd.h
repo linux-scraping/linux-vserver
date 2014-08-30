@@ -724,6 +724,17 @@
 
 #define ATC_MISC_CG           				0x3350
 
+#define GMCON_RENG_EXECUTE				0x3508
+#define 	RENG_EXECUTE_ON_PWR_UP			(1 << 0)
+#define GMCON_MISC					0x350c
+#define 	RENG_EXECUTE_ON_REG_UPDATE		(1 << 11)
+#define 	STCTRL_STUTTER_EN			(1 << 16)
+
+#define GMCON_PGFSM_CONFIG				0x3538
+#define GMCON_PGFSM_WRITE				0x353c
+#define GMCON_PGFSM_READ				0x3540
+#define GMCON_MISC3					0x3544
+
 #define MC_SEQ_CNTL_3                                     0x3600
 #       define CAC_EN                                     (1 << 31)
 #define MC_SEQ_G5PDX_CTRL                                 0x3604
@@ -870,6 +881,15 @@
 #       define DC_HPD6_INTERRUPT                        (1 << 17)
 #       define DC_HPD6_RX_INTERRUPT                     (1 << 18)
 #define DISP_INTERRUPT_STATUS_CONTINUE6                 0x6780
+
+/* 0x6858, 0x7458, 0x10058, 0x10c58, 0x11858, 0x12458 */
+#define GRPH_INT_STATUS                                 0x6858
+#       define GRPH_PFLIP_INT_OCCURRED                  (1 << 0)
+#       define GRPH_PFLIP_INT_CLEAR                     (1 << 8)
+/* 0x685c, 0x745c, 0x1005c, 0x10c5c, 0x1185c, 0x1245c */
+#define GRPH_INT_CONTROL                                0x685c
+#       define GRPH_PFLIP_INT_MASK                      (1 << 0)
+#       define GRPH_PFLIP_INT_TYPE                      (1 << 8)
 
 #define	DAC_AUTODETECT_INT_CONTROL			0x67c8
 
@@ -1725,12 +1745,12 @@
 #define		EOP_TC_WB_ACTION_EN                     (1 << 15) /* L2 */
 #define		EOP_TCL1_ACTION_EN                      (1 << 16)
 #define		EOP_TC_ACTION_EN                        (1 << 17) /* L2 */
+#define		EOP_TCL2_VOLATILE                       (1 << 24)
 #define		EOP_CACHE_POLICY(x)                     ((x) << 25)
                 /* 0 - LRU
 		 * 1 - Stream
 		 * 2 - Bypass
 		 */
-#define		EOP_TCL2_VOLATILE                       (1 << 27)
 #define		DATA_SEL(x)                             ((x) << 29)
                 /* 0 - discard
 		 * 1 - send low 32bit data

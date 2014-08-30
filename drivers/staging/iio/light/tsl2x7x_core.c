@@ -667,9 +667,13 @@ static int tsl2x7x_chip_on(struct iio_dev *indio_dev)
 	chip->tsl2x7x_config[TSL2X7X_PRX_COUNT] =
 			chip->tsl2x7x_settings.prox_pulse_count;
 	chip->tsl2x7x_config[TSL2X7X_PRX_MINTHRESHLO] =
-	chip->tsl2x7x_settings.prox_thres_low;
+			(chip->tsl2x7x_settings.prox_thres_low) & 0xFF;
+	chip->tsl2x7x_config[TSL2X7X_PRX_MINTHRESHHI] =
+			(chip->tsl2x7x_settings.prox_thres_low >> 8) & 0xFF;
 	chip->tsl2x7x_config[TSL2X7X_PRX_MAXTHRESHLO] =
-			chip->tsl2x7x_settings.prox_thres_high;
+			(chip->tsl2x7x_settings.prox_thres_high) & 0xFF;
+	chip->tsl2x7x_config[TSL2X7X_PRX_MAXTHRESHHI] =
+			(chip->tsl2x7x_settings.prox_thres_high >> 8) & 0xFF;
 
 	/* and make sure we're not already on */
 	if (chip->tsl2x7x_chip_status == TSL2X7X_CHIP_WORKING) {
@@ -1672,10 +1676,10 @@ static const struct iio_info tsl2X7X_device_info[] = {
 		.driver_module = THIS_MODULE,
 		.read_raw = &tsl2x7x_read_raw,
 		.write_raw = &tsl2x7x_write_raw,
-		.read_event_value_new = &tsl2x7x_read_thresh,
-		.write_event_value_new = &tsl2x7x_write_thresh,
-		.read_event_config_new = &tsl2x7x_read_interrupt_config,
-		.write_event_config_new = &tsl2x7x_write_interrupt_config,
+		.read_event_value = &tsl2x7x_read_thresh,
+		.write_event_value = &tsl2x7x_write_thresh,
+		.read_event_config = &tsl2x7x_read_interrupt_config,
+		.write_event_config = &tsl2x7x_write_interrupt_config,
 	},
 	[PRX] = {
 		.attrs = &tsl2X7X_device_attr_group_tbl[PRX],
@@ -1683,10 +1687,10 @@ static const struct iio_info tsl2X7X_device_info[] = {
 		.driver_module = THIS_MODULE,
 		.read_raw = &tsl2x7x_read_raw,
 		.write_raw = &tsl2x7x_write_raw,
-		.read_event_value_new = &tsl2x7x_read_thresh,
-		.write_event_value_new = &tsl2x7x_write_thresh,
-		.read_event_config_new = &tsl2x7x_read_interrupt_config,
-		.write_event_config_new = &tsl2x7x_write_interrupt_config,
+		.read_event_value = &tsl2x7x_read_thresh,
+		.write_event_value = &tsl2x7x_write_thresh,
+		.read_event_config = &tsl2x7x_read_interrupt_config,
+		.write_event_config = &tsl2x7x_write_interrupt_config,
 	},
 	[ALSPRX] = {
 		.attrs = &tsl2X7X_device_attr_group_tbl[ALSPRX],
@@ -1694,10 +1698,10 @@ static const struct iio_info tsl2X7X_device_info[] = {
 		.driver_module = THIS_MODULE,
 		.read_raw = &tsl2x7x_read_raw,
 		.write_raw = &tsl2x7x_write_raw,
-		.read_event_value_new = &tsl2x7x_read_thresh,
-		.write_event_value_new = &tsl2x7x_write_thresh,
-		.read_event_config_new = &tsl2x7x_read_interrupt_config,
-		.write_event_config_new = &tsl2x7x_write_interrupt_config,
+		.read_event_value = &tsl2x7x_read_thresh,
+		.write_event_value = &tsl2x7x_write_thresh,
+		.read_event_config = &tsl2x7x_read_interrupt_config,
+		.write_event_config = &tsl2x7x_write_interrupt_config,
 	},
 	[PRX2] = {
 		.attrs = &tsl2X7X_device_attr_group_tbl[PRX2],
@@ -1705,10 +1709,10 @@ static const struct iio_info tsl2X7X_device_info[] = {
 		.driver_module = THIS_MODULE,
 		.read_raw = &tsl2x7x_read_raw,
 		.write_raw = &tsl2x7x_write_raw,
-		.read_event_value_new = &tsl2x7x_read_thresh,
-		.write_event_value_new = &tsl2x7x_write_thresh,
-		.read_event_config_new = &tsl2x7x_read_interrupt_config,
-		.write_event_config_new = &tsl2x7x_write_interrupt_config,
+		.read_event_value = &tsl2x7x_read_thresh,
+		.write_event_value = &tsl2x7x_write_thresh,
+		.read_event_config = &tsl2x7x_read_interrupt_config,
+		.write_event_config = &tsl2x7x_write_interrupt_config,
 	},
 	[ALSPRX2] = {
 		.attrs = &tsl2X7X_device_attr_group_tbl[ALSPRX2],
@@ -1716,10 +1720,10 @@ static const struct iio_info tsl2X7X_device_info[] = {
 		.driver_module = THIS_MODULE,
 		.read_raw = &tsl2x7x_read_raw,
 		.write_raw = &tsl2x7x_write_raw,
-		.read_event_value_new = &tsl2x7x_read_thresh,
-		.write_event_value_new = &tsl2x7x_write_thresh,
-		.read_event_config_new = &tsl2x7x_read_interrupt_config,
-		.write_event_config_new = &tsl2x7x_write_interrupt_config,
+		.read_event_value = &tsl2x7x_read_thresh,
+		.write_event_value = &tsl2x7x_write_thresh,
+		.read_event_config = &tsl2x7x_read_interrupt_config,
+		.write_event_config = &tsl2x7x_write_interrupt_config,
 	},
 };
 

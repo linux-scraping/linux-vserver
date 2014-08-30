@@ -423,6 +423,7 @@ const struct inode_operations ext2_dir_inode_operations = {
 #endif
 	.setattr	= ext2_setattr,
 	.get_acl	= ext2_get_acl,
+	.set_acl	= ext2_set_acl,
 	.tmpfile	= ext2_tmpfile,
 };
 
@@ -436,4 +437,5 @@ const struct inode_operations ext2_special_inode_operations = {
 	.setattr	= ext2_setattr,
 	.sync_flags	= ext2_sync_flags,
 	.get_acl	= ext2_get_acl,
+	.set_acl	= ext2_set_acl,
 };

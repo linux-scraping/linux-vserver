@@ -21,8 +21,10 @@
  *
  */
 
+#include <linux/firmware.h>
 #include "drmP.h"
 #include "radeon.h"
+#include "radeon_ucode.h"
 #include "cikd.h"
 #include "r600_dpm.h"
 #include "ci_dpm.h"
@@ -171,8 +173,7 @@ extern void si_trim_voltage_table_to_fit_state_table(struct radeon_device *rdev,
 						     struct atom_voltage_table *voltage_table);
 extern void cik_enter_rlc_safe_mode(struct radeon_device *rdev);
 extern void cik_exit_rlc_safe_mode(struct radeon_device *rdev);
-extern void cik_update_cg(struct radeon_device *rdev,
-			  u32 block, bool enable);
+extern int ci_mc_load_microcode(struct radeon_device *rdev);
 
 static int ci_get_std_voltage_value_sidd(struct radeon_device *rdev,
 					 struct atom_voltage_table_entry *voltage_table,
@@ -1160,7 +1161,7 @@ static int ci_stop_dpm(struct radeon_device *rdev)
 	tmp &= ~GLOBAL_PWRMGT_EN;
 	WREG32_SMC(GENERAL_PWRMGT, tmp);
 
-	tmp = RREG32(SCLK_PWRMGT_CNTL);
+	tmp = RREG32_SMC(SCLK_PWRMGT_CNTL);
 	tmp &= ~DYNAMIC_PM_EN;
 	WREG32_SMC(SCLK_PWRMGT_CNTL, tmp);
 
@@ -4503,8 +4504,8 @@ static void ci_get_memory_type(struct radeon_device *rdev)
 
 }
 
-void ci_update_current_ps(struct radeon_device *rdev,
-			  struct radeon_ps *rps)
+static void ci_update_current_ps(struct radeon_device *rdev,
+				 struct radeon_ps *rps)
 {
 	struct ci_ps *new_ps = ci_get_ps(rps);
 	struct ci_power_info *pi = ci_get_pi(rdev);
@@ -4514,8 +4515,8 @@ void ci_update_current_ps(struct radeon_device *rdev,
 	pi->current_rps.ps_priv = &pi->current_ps;
 }
 
-void ci_update_requested_ps(struct radeon_device *rdev,
-			    struct radeon_ps *rps)
+static void ci_update_requested_ps(struct radeon_device *rdev,
+				   struct radeon_ps *rps)
 {
 	struct ci_ps *new_ps = ci_get_ps(rps);
 	struct ci_power_info *pi = ci_get_pi(rdev);
@@ -4549,6 +4550,11 @@ void ci_dpm_post_set_power_state(struct radeon_device *rdev)
 
 void ci_dpm_setup_asic(struct radeon_device *rdev)
 {
+	int r;
+
+	r = ci_mc_load_microcode(rdev);
+	if (r)
+		DRM_ERROR("Failed to load MC firmware!\n");
 	ci_read_clock_registers(rdev);
 	ci_get_memory_type(rdev);
 	ci_enable_acpi_power_management(rdev);
@@ -4560,13 +4566,6 @@ int ci_dpm_enable(struct radeon_device *rdev)
 	struct ci_power_info *pi = ci_get_pi(rdev);
 	struct radeon_ps *boot_ps = rdev->pm.dpm.boot_ps;
 	int ret;
-
-	cik_update_cg(rdev, (RADEON_CG_BLOCK_GFX |
-			     RADEON_CG_BLOCK_MC |
-			     RADEON_CG_BLOCK_SDMA |
-			     RADEON_CG_BLOCK_BIF |
-			     RADEON_CG_BLOCK_UVD |
-			     RADEON_CG_BLOCK_HDP), false);
 
 	if (ci_is_smc_running(rdev))
 		return -EINVAL;
@@ -4665,6 +4664,18 @@ int ci_dpm_enable(struct radeon_device *rdev)
 		DRM_ERROR("ci_enable_power_containment failed\n");
 		return ret;
 	}
+
+	ci_enable_auto_throttle_source(rdev, RADEON_DPM_AUTO_THROTTLE_SRC_THERMAL, true);
+
+	ci_update_current_ps(rdev, boot_ps);
+
+	return 0;
+}
+
+int ci_dpm_late_enable(struct radeon_device *rdev)
+{
+	int ret;
+
 	if (rdev->irq.installed &&
 	    r600_is_internal_thermal_sensor(rdev->pm.int_thermal_type)) {
 #if 0
@@ -4685,18 +4696,7 @@ int ci_dpm_enable(struct radeon_device *rdev)
 #endif
 	}
 
-	ci_enable_auto_throttle_source(rdev, RADEON_DPM_AUTO_THROTTLE_SRC_THERMAL, true);
-
 	ci_dpm_powergate_uvd(rdev, true);
-
-	cik_update_cg(rdev, (RADEON_CG_BLOCK_GFX |
-			     RADEON_CG_BLOCK_MC |
-			     RADEON_CG_BLOCK_SDMA |
-			     RADEON_CG_BLOCK_BIF |
-			     RADEON_CG_BLOCK_UVD |
-			     RADEON_CG_BLOCK_HDP), true);
-
-	ci_update_current_ps(rdev, boot_ps);
 
 	return 0;
 }
@@ -4705,12 +4705,6 @@ void ci_dpm_disable(struct radeon_device *rdev)
 {
 	struct ci_power_info *pi = ci_get_pi(rdev);
 	struct radeon_ps *boot_ps = rdev->pm.dpm.boot_ps;
-
-	cik_update_cg(rdev, (RADEON_CG_BLOCK_GFX |
-			     RADEON_CG_BLOCK_MC |
-			     RADEON_CG_BLOCK_SDMA |
-			     RADEON_CG_BLOCK_UVD |
-			     RADEON_CG_BLOCK_HDP), false);
 
 	ci_dpm_powergate_uvd(rdev, false);
 
@@ -4741,13 +4735,6 @@ int ci_dpm_set_power_state(struct radeon_device *rdev)
 	struct radeon_ps *new_ps = &pi->requested_rps;
 	struct radeon_ps *old_ps = &pi->current_rps;
 	int ret;
-
-	cik_update_cg(rdev, (RADEON_CG_BLOCK_GFX |
-			     RADEON_CG_BLOCK_MC |
-			     RADEON_CG_BLOCK_SDMA |
-			     RADEON_CG_BLOCK_BIF |
-			     RADEON_CG_BLOCK_UVD |
-			     RADEON_CG_BLOCK_HDP), false);
 
 	ci_find_dpm_states_clocks_in_dpm_table(rdev, new_ps);
 	if (pi->pcie_performance_request)
@@ -4803,13 +4790,6 @@ int ci_dpm_set_power_state(struct radeon_device *rdev)
 	}
 	if (pi->pcie_performance_request)
 		ci_notify_link_speed_change_after_state_change(rdev, new_ps, old_ps);
-
-	cik_update_cg(rdev, (RADEON_CG_BLOCK_GFX |
-			     RADEON_CG_BLOCK_MC |
-			     RADEON_CG_BLOCK_SDMA |
-			     RADEON_CG_BLOCK_BIF |
-			     RADEON_CG_BLOCK_UVD |
-			     RADEON_CG_BLOCK_HDP), true);
 
 	return 0;
 }
@@ -5023,8 +5003,8 @@ static int ci_parse_power_table(struct radeon_device *rdev)
 	return 0;
 }
 
-int ci_get_vbios_boot_values(struct radeon_device *rdev,
-			     struct ci_vbios_boot_state *boot_state)
+static int ci_get_vbios_boot_values(struct radeon_device *rdev,
+				    struct ci_vbios_boot_state *boot_state)
 {
 	struct radeon_mode_info *mode_info = &rdev->mode_info;
 	int index = GetIndexIntoMasterTable(DATA, FirmwareInfo);
@@ -5127,6 +5107,12 @@ int ci_dpm_init(struct radeon_device *rdev)
 	pi->sclk_dpm_key_disabled = 0;
 	pi->mclk_dpm_key_disabled = 0;
 	pi->pcie_dpm_key_disabled = 0;
+
+	/* mclk dpm is unstable on some R7 260X cards with the old mc ucode */
+	if ((rdev->pdev->device == 0x6658) &&
+	    (rdev->mc_fw->size == (BONAIRE_MC_UCODE_SIZE * 4))) {
+		pi->mclk_dpm_key_disabled = 1;
+	}
 
 	pi->caps_sclk_ds = true;
 

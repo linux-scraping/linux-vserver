@@ -100,15 +100,31 @@ static bool mei_me_quirk_probe(struct pci_dev *pdev,
 				const struct pci_device_id *ent)
 {
 	u32 reg;
-	if (ent->device == MEI_DEV_ID_PBG_1) {
-		pci_read_config_dword(pdev, 0x48, &reg);
-		/* make sure that bit 9 is up and bit 10 is down */
-		if ((reg & 0x600) == 0x200) {
-			dev_info(&pdev->dev, "Device doesn't have valid ME Interface\n");
-			return false;
-		}
+	/* Cougar Point || Patsburg */
+	if (ent->device == MEI_DEV_ID_CPT_1 ||
+	    ent->device == MEI_DEV_ID_PBG_1) {
+		pci_read_config_dword(pdev, PCI_CFG_HFS_2, &reg);
+		/* make sure that bit 9 (NM) is up and bit 10 (DM) is down */
+		if ((reg & 0x600) == 0x200)
+			goto no_mei;
 	}
+
+	/* Lynx Point */
+	if (ent->device == MEI_DEV_ID_LPT_H  ||
+	    ent->device == MEI_DEV_ID_LPT_W  ||
+	    ent->device == MEI_DEV_ID_LPT_HR) {
+		/* Read ME FW Status check for SPS Firmware */
+		pci_read_config_dword(pdev, PCI_CFG_HFS_1, &reg);
+		/* if bits [19:16] = 15, running SPS Firmware */
+		if ((reg & 0xf0000) == 0xf0000)
+			goto no_mei;
+	}
+
 	return true;
+
+no_mei:
+	dev_info(&pdev->dev, "Device doesn't have valid ME Interface\n");
+	return false;
 }
 /**
  * mei_probe - Device Initialization Routine
@@ -144,6 +160,21 @@ static int mei_me_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		dev_err(&pdev->dev, "failed to get pci regions.\n");
 		goto disable_device;
 	}
+
+	if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)) ||
+	    dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+
+		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+		if (err)
+			err = dma_set_coherent_mask(&pdev->dev,
+						    DMA_BIT_MASK(32));
+	}
+	if (err) {
+		dev_err(&pdev->dev, "No usable DMA configuration, aborting\n");
+		goto release_regions;
+	}
+
+
 	/* allocates and initializes the mei dev structure */
 	dev = mei_me_dev_init(pdev);
 	if (!dev) {
@@ -197,8 +228,8 @@ static int mei_me_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 release_irq:
+	mei_cancel_work(dev);
 	mei_disable_interrupts(dev);
-	flush_scheduled_work();
 	free_irq(pdev->irq, dev);
 disable_msi:
 	pci_disable_msi(pdev);
@@ -306,16 +337,14 @@ static int mei_me_pci_resume(struct device *device)
 		return err;
 	}
 
-	mutex_lock(&dev->device_lock);
-	dev->dev_state = MEI_DEV_POWER_UP;
-	mei_clear_interrupts(dev);
-	mei_reset(dev, 1);
-	mutex_unlock(&dev->device_lock);
+	err = mei_restart(dev);
+	if (err)
+		return err;
 
 	/* Start timer if stopped in suspend */
 	schedule_delayed_work(&dev->timer_work, HZ);
 
-	return err;
+	return 0;
 }
 static SIMPLE_DEV_PM_OPS(mei_me_pm_ops, mei_me_pci_suspend, mei_me_pci_resume);
 #define MEI_ME_PM_OPS	(&mei_me_pm_ops)

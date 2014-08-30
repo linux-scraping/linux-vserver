@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2006 Corentin LABBE <corentin.labbe@geomatys.fr>
  *
- * Based on LM83 Driver by Jean Delvare <khali@linux-fr.org>
+ * Based on LM83 Driver by Jean Delvare <jdelvare@suse.de>
  *
  * Give only processor, motherboard temperatures and fan tachs
  * Very rare chip please let me know if you use it
@@ -231,6 +231,9 @@ static ssize_t set_fan_div(struct device *dev,
 	}
 	/* Update the value */
 	reg = (reg & 0x3F) | (val << 6);
+
+	/* Update the cache */
+	data->fan_div[attr->index] = reg;
 
 	/* Write value */
 	i2c_smbus_write_byte_data(client,
