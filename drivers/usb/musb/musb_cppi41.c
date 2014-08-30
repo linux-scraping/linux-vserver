@@ -266,7 +266,7 @@ static void cppi41_dma_callback(void *private_data)
 		}
 		list_add_tail(&cppi41_channel->tx_check,
 				&controller->early_tx_list);
-		if (!hrtimer_active(&controller->early_tx)) {
+		if (!hrtimer_is_queued(&controller->early_tx)) {
 			hrtimer_start_range_ns(&controller->early_tx,
 				ktime_set(0, 140 * NSEC_PER_USEC),
 				40 * NSEC_PER_USEC,
@@ -615,7 +615,7 @@ static int cppi41_dma_controller_start(struct cppi41_dma_controller *controller)
 
 		dc = dma_request_slave_channel(dev, str);
 		if (!dc) {
-			dev_err(dev, "Falied to request %s.\n", str);
+			dev_err(dev, "Failed to request %s.\n", str);
 			ret = -EPROBE_DEFER;
 			goto err;
 		}

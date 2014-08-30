@@ -26,7 +26,6 @@
  *
  */
 #include <linux/export.h>
-#include <linux/clk.h>
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
@@ -417,6 +416,9 @@ static void i2c_dw_xfer_init(struct dw_i2c_dev *dev)
 	 * if applicable.
 	 */
 	dw_writel(dev, msgs[dev->msg_write_idx].addr | ic_tar, DW_IC_TAR);
+
+	/* enforce disabled interrupts (due to HW issues) */
+	i2c_dw_disable_int(dev);
 
 	/* Enable the adapter */
 	__i2c_dw_enable(dev, true);

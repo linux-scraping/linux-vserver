@@ -158,16 +158,18 @@ u32 r600_dpm_get_vblank_time(struct radeon_device *rdev)
 	u32 line_time_us, vblank_lines;
 	u32 vblank_time_us = 0xffffffff; /* if the displays are off, vblank time is max */
 
-	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
-		radeon_crtc = to_radeon_crtc(crtc);
-		if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
-			line_time_us = (radeon_crtc->hw_mode.crtc_htotal * 1000) /
-				radeon_crtc->hw_mode.clock;
-			vblank_lines = radeon_crtc->hw_mode.crtc_vblank_end -
-				radeon_crtc->hw_mode.crtc_vdisplay +
-				(radeon_crtc->v_border * 2);
-			vblank_time_us = vblank_lines * line_time_us;
-			break;
+	if (rdev->num_crtc && rdev->mode_info.mode_config_initialized) {
+		list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
+			radeon_crtc = to_radeon_crtc(crtc);
+			if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
+				line_time_us = (radeon_crtc->hw_mode.crtc_htotal * 1000) /
+					radeon_crtc->hw_mode.clock;
+				vblank_lines = radeon_crtc->hw_mode.crtc_vblank_end -
+					radeon_crtc->hw_mode.crtc_vdisplay +
+					(radeon_crtc->v_border * 2);
+				vblank_time_us = vblank_lines * line_time_us;
+				break;
+			}
 		}
 	}
 
@@ -181,14 +183,15 @@ u32 r600_dpm_get_vrefresh(struct radeon_device *rdev)
 	struct radeon_crtc *radeon_crtc;
 	u32 vrefresh = 0;
 
-	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
-		radeon_crtc = to_radeon_crtc(crtc);
-		if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
-			vrefresh = radeon_crtc->hw_mode.vrefresh;
-			break;
+	if (rdev->num_crtc && rdev->mode_info.mode_config_initialized) {
+		list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
+			radeon_crtc = to_radeon_crtc(crtc);
+			if (crtc->enabled && radeon_crtc->enabled && radeon_crtc->hw_mode.clock) {
+				vrefresh = radeon_crtc->hw_mode.vrefresh;
+				break;
+			}
 		}
 	}
-
 	return vrefresh;
 }
 
@@ -729,8 +732,8 @@ bool r600_is_uvd_state(u32 class, u32 class2)
 	return false;
 }
 
-int r600_set_thermal_temperature_range(struct radeon_device *rdev,
-				       int min_temp, int max_temp)
+static int r600_set_thermal_temperature_range(struct radeon_device *rdev,
+					      int min_temp, int max_temp)
 {
 	int low_temp = 0 * 1000;
 	int high_temp = 255 * 1000;
@@ -775,6 +778,22 @@ bool r600_is_internal_thermal_sensor(enum radeon_int_thermal_type sensor)
 	default:
 		return false;
 	}
+}
+
+int r600_dpm_late_enable(struct radeon_device *rdev)
+{
+	int ret;
+
+	if (rdev->irq.installed &&
+	    r600_is_internal_thermal_sensor(rdev->pm.int_thermal_type)) {
+		ret = r600_set_thermal_temperature_range(rdev, R600_TEMP_RANGE_MIN, R600_TEMP_RANGE_MAX);
+		if (ret)
+			return ret;
+		rdev->irq.dpm_thermal = true;
+		radeon_irq_set(rdev);
+	}
+
+	return 0;
 }
 
 union power_info {

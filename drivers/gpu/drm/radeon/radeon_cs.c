@@ -97,6 +97,12 @@ static int radeon_cs_parser_relocs(struct radeon_cs_parser *p)
 			uint32_t domain = r->write_domain ?
 				r->write_domain : r->read_domains;
 
+			if (domain & RADEON_GEM_DOMAIN_CPU) {
+				DRM_ERROR("RADEON_GEM_DOMAIN_CPU is not valid "
+					  "for command submission\n");
+				return -EINVAL;
+			}
+
 			p->relocs[i].lobj.domain = domain;
 			if (domain == RADEON_GEM_DOMAIN_VRAM)
 				domain |= RADEON_GEM_DOMAIN_GTT;
@@ -138,7 +144,7 @@ static int radeon_cs_get_ring(struct radeon_cs_parser *p, u32 ring, s32 priority
 				p->ring = R600_RING_TYPE_DMA_INDEX;
 			else
 				p->ring = CAYMAN_RING_TYPE_DMA1_INDEX;
-		} else if (p->rdev->family >= CHIP_R600) {
+		} else if (p->rdev->family >= CHIP_RV770) {
 			p->ring = R600_RING_TYPE_DMA_INDEX;
 		} else {
 			return -EINVAL;
@@ -192,7 +198,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 		return -ENOMEM;
 	}
 	chunk_array_ptr = (uint64_t *)(unsigned long)(cs->chunks);
-	if (DRM_COPY_FROM_USER(p->chunks_array, chunk_array_ptr,
+	if (copy_from_user(p->chunks_array, chunk_array_ptr,
 			       sizeof(uint64_t)*cs->num_chunks)) {
 		return -EFAULT;
 	}
@@ -208,7 +214,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 		uint32_t __user *cdata;
 
 		chunk_ptr = (void __user*)(unsigned long)p->chunks_array[i];
-		if (DRM_COPY_FROM_USER(&user_chunk, chunk_ptr,
+		if (copy_from_user(&user_chunk, chunk_ptr,
 				       sizeof(struct drm_radeon_cs_chunk))) {
 			return -EFAULT;
 		}
@@ -252,7 +258,7 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 		if (p->chunks[i].kdata == NULL) {
 			return -ENOMEM;
 		}
-		if (DRM_COPY_FROM_USER(p->chunks[i].kdata, cdata, size)) {
+		if (copy_from_user(p->chunks[i].kdata, cdata, size)) {
 			return -EFAULT;
 		}
 		if (p->chunks[i].chunk_id == RADEON_CHUNK_ID_FLAGS) {
@@ -276,10 +282,17 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 			return -EINVAL;
 
 		/* we only support VM on some SI+ rings */
-		if ((p->rdev->asic->ring[p->ring]->cs_parse == NULL) &&
-		   ((p->cs_flags & RADEON_CS_USE_VM) == 0)) {
-			DRM_ERROR("Ring %d requires VM!\n", p->ring);
-			return -EINVAL;
+		if ((p->cs_flags & RADEON_CS_USE_VM) == 0) {
+			if (p->rdev->asic->ring[p->ring]->cs_parse == NULL) {
+				DRM_ERROR("Ring %d requires VM!\n", p->ring);
+				return -EINVAL;
+			}
+		} else {
+			if (p->rdev->asic->ring[p->ring]->ib_parse == NULL) {
+				DRM_ERROR("VM not supported on ring %d!\n",
+					  p->ring);
+				return -EINVAL;
+			}
 		}
 	}
 
@@ -472,7 +485,7 @@ static int radeon_cs_ib_fill(struct radeon_device *rdev, struct radeon_cs_parser
 			}
 			parser->const_ib.is_const_ib = true;
 			parser->const_ib.length_dw = ib_chunk->length_dw;
-			if (DRM_COPY_FROM_USER(parser->const_ib.ptr,
+			if (copy_from_user(parser->const_ib.ptr,
 					       ib_chunk->user_ptr,
 					       ib_chunk->length_dw * 4))
 				return -EFAULT;
@@ -495,7 +508,7 @@ static int radeon_cs_ib_fill(struct radeon_device *rdev, struct radeon_cs_parser
 	parser->ib.length_dw = ib_chunk->length_dw;
 	if (ib_chunk->kdata)
 		memcpy(parser->ib.ptr, ib_chunk->kdata, ib_chunk->length_dw * 4);
-	else if (DRM_COPY_FROM_USER(parser->ib.ptr, ib_chunk->user_ptr, ib_chunk->length_dw * 4))
+	else if (copy_from_user(parser->ib.ptr, ib_chunk->user_ptr, ib_chunk->length_dw * 4))
 		return -EFAULT;
 	return 0;
 }

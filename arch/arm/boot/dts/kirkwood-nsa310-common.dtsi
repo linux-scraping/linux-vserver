@@ -4,6 +4,16 @@
 / {
 	model = "ZyXEL NSA310";
 
+	mbus {
+		pcie-controller {
+			status = "okay";
+
+			pcie@1,0 {
+				status = "okay";
+			};
+		};
+	};
+
 	ocp@f1000000 {
 		pinctrl: pinctrl@10000 {
 
@@ -26,21 +36,13 @@
 			status = "okay";
 			nr-ports = <2>;
 		};
-
-		pcie-controller {
-			status = "okay";
-
-			pcie@1,0 {
-				status = "okay";
-			};
-		};
 	};
 
 	gpio_poweroff {
 		compatible = "gpio-poweroff";
 		pinctrl-0 = <&pmx_pwr_off>;
 		pinctrl-names = "default";
-		gpios = <&gpio1 16 0>;
+		gpios = <&gpio1 16 GPIO_ACTIVE_HIGH>;
 	};
 
 	regulators {
@@ -58,7 +60,7 @@
 			regulator-max-microvolt = <5000000>;
 			regulator-always-on;
 			regulator-boot-on;
-			gpio = <&gpio0 21 0>;
+			gpio = <&gpio0 21 GPIO_ACTIVE_HIGH>;
 		};
 	};
 };

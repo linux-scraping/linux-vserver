@@ -93,7 +93,6 @@ struct isert_device;
 
 struct isert_conn {
 	enum iser_conn_state	state;
-	bool			logout_posted;
 	int			post_recv_buf_count;
 	atomic_t		post_send_buf_count;
 	u32			responder_resources;
@@ -121,13 +120,14 @@ struct isert_conn {
 	struct completion	conn_wait;
 	struct completion	conn_wait_comp_err;
 	struct kref		conn_kref;
-	struct list_head	conn_frwr_pool;
-	int			conn_frwr_pool_size;
-	/* lock to protect frwr_pool */
+	struct list_head	conn_fr_pool;
+	int			conn_fr_pool_size;
+	/* lock to protect fastreg pool */
 	spinlock_t		conn_lock;
 #define ISERT_COMP_BATCH_COUNT	8
 	int			conn_comp_batch;
 	struct llist_head	conn_comp_llist;
+	bool                    disconnect;
 };
 
 #define ISERT_MAX_CQ 64
@@ -140,13 +140,11 @@ struct isert_cq_desc {
 };
 
 struct isert_device {
-	int			use_frwr;
+	int			use_fastreg;
 	int			cqs_used;
 	int			refcount;
 	int			cq_active_qps[ISERT_MAX_CQ];
 	struct ib_device	*ib_device;
-	struct ib_pd		*dev_pd;
-	struct ib_mr		*dev_mr;
 	struct ib_cq		*dev_rx_cq[ISERT_MAX_CQ];
 	struct ib_cq		*dev_tx_cq[ISERT_MAX_CQ];
 	struct isert_cq_desc	*cq_desc;
@@ -160,7 +158,7 @@ struct isert_device {
 };
 
 struct isert_np {
-	wait_queue_head_t	np_accept_wq;
+	struct semaphore	np_sem;
 	struct rdma_cm_id	*np_cm_id;
 	struct mutex		np_accept_mutex;
 	struct list_head	np_accept_list;

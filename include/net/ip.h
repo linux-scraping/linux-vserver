@@ -63,6 +63,7 @@ struct ipcm_cookie {
 };
 
 #define IPCB(skb) ((struct inet_skb_parm*)((skb)->cb))
+#define PKTINFO_SKB_CB(skb) ((struct in_pktinfo *)((skb)->cb))
 
 struct ip_ra_chain {
 	struct ip_ra_chain __rcu *next;
@@ -90,7 +91,7 @@ struct packet_type;
 struct rtable;
 struct sockaddr;
 
-int igmp_mc_proc_init(void);
+int igmp_mc_init(void);
 
 /*
  *	Functions provided by ip.c
@@ -177,12 +178,6 @@ void ip_send_unicast_reply(struct net *net, struct sk_buff *skb, __be32 daddr,
 			   __be32 saddr, const struct ip_reply_arg *arg,
 			   unsigned int len);
 
-struct ipv4_config {
-	int	log_martians;
-	int	no_pmtu_disc;
-};
-
-extern struct ipv4_config ipv4_config;
 #define IP_INC_STATS(net, field)	SNMP_INC_STATS64((net)->mib.ip_statistics, field)
 #define IP_INC_STATS_BH(net, field)	SNMP_INC_STATS64_BH((net)->mib.ip_statistics, field)
 #define IP_ADD_STATS(net, field, val)	SNMP_ADD_STATS64((net)->mib.ip_statistics, field, val)
@@ -269,9 +264,43 @@ int ip_dont_fragment(struct sock *sk, struct dst_entry *dst)
 		 !(dst_metric_locked(dst, RTAX_MTU)));
 }
 
-void __ip_select_ident(struct iphdr *iph, struct dst_entry *dst, int more);
+static inline bool ip_sk_accept_pmtu(const struct sock *sk)
+{
+	return inet_sk(sk)->pmtudisc != IP_PMTUDISC_INTERFACE;
+}
 
-static inline void ip_select_ident(struct sk_buff *skb, struct dst_entry *dst, struct sock *sk)
+static inline bool ip_sk_use_pmtu(const struct sock *sk)
+{
+	return inet_sk(sk)->pmtudisc < IP_PMTUDISC_PROBE;
+}
+
+static inline unsigned int ip_dst_mtu_maybe_forward(const struct dst_entry *dst,
+						    bool forwarding)
+{
+	struct net *net = dev_net(dst->dev);
+
+	if (net->ipv4.sysctl_ip_fwd_use_pmtu ||
+	    dst_metric_locked(dst, RTAX_MTU) ||
+	    !forwarding)
+		return dst_mtu(dst);
+
+	return min(dst->dev->mtu, IP_MAX_MTU);
+}
+
+static inline unsigned int ip_skb_dst_mtu(const struct sk_buff *skb)
+{
+	if (!skb->sk || ip_sk_use_pmtu(skb->sk)) {
+		bool forwarding = IPCB(skb)->flags & IPSKB_FORWARDED;
+		return ip_dst_mtu_maybe_forward(skb_dst(skb), forwarding);
+	} else {
+		return min(skb_dst(skb)->dev->mtu, IP_MAX_MTU);
+	}
+}
+
+u32 ip_idents_reserve(u32 hash, int segs);
+void __ip_select_ident(struct iphdr *iph, int segs);
+
+static inline void ip_select_ident_segs(struct sk_buff *skb, struct sock *sk, int segs)
 {
 	struct iphdr *iph = ip_hdr(skb);
 
@@ -281,24 +310,20 @@ static inline void ip_select_ident(struct sk_buff *skb, struct dst_entry *dst, s
 		 * does not change, they drop every other packet in
 		 * a TCP stream using header compression.
 		 */
-		iph->id = (sk && inet_sk(sk)->inet_daddr) ?
-					htons(inet_sk(sk)->inet_id++) : 0;
-	} else
-		__ip_select_ident(iph, dst, 0);
-}
-
-static inline void ip_select_ident_more(struct sk_buff *skb, struct dst_entry *dst, struct sock *sk, int more)
-{
-	struct iphdr *iph = ip_hdr(skb);
-
-	if ((iph->frag_off & htons(IP_DF)) && !skb->local_df) {
 		if (sk && inet_sk(sk)->inet_daddr) {
 			iph->id = htons(inet_sk(sk)->inet_id);
-			inet_sk(sk)->inet_id += 1 + more;
-		} else
+			inet_sk(sk)->inet_id += segs;
+		} else {
 			iph->id = 0;
-	} else
-		__ip_select_ident(iph, dst, more);
+		}
+	} else {
+		__ip_select_ident(iph, segs);
+	}
+}
+
+static inline void ip_select_ident(struct sk_buff *skb, struct sock *sk)
+{
+	ip_select_ident_segs(skb, sk, 1);
 }
 
 /*

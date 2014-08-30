@@ -157,13 +157,6 @@ static struct page *balloon_retrieve(bool prefer_highmem)
 	return page;
 }
 
-static struct page *balloon_first_page(void)
-{
-	if (list_empty(&ballooned_pages))
-		return NULL;
-	return list_entry(ballooned_pages.next, struct page, lru);
-}
-
 static struct page *balloon_next_page(struct page *page)
 {
 	struct list_head *next = page->lru.next;
@@ -328,7 +321,7 @@ static enum bp_state increase_reservation(unsigned long nr_pages)
 	if (nr_pages > ARRAY_SIZE(frame_list))
 		nr_pages = ARRAY_SIZE(frame_list);
 
-	page = balloon_first_page();
+	page = list_first_entry_or_null(&ballooned_pages, struct page, lru);
 	for (i = 0; i < nr_pages; i++) {
 		if (!page) {
 			nr_pages = i;
@@ -433,20 +426,18 @@ static enum bp_state decrease_reservation(unsigned long nr_pages, gfp_t gfp)
 		 * p2m are consistent.
 		 */
 		if (!xen_feature(XENFEAT_auto_translated_physmap)) {
-			unsigned long p;
-			struct page   *scratch_page = get_balloon_scratch_page();
-
 			if (!PageHighMem(page)) {
+				struct page *scratch_page = get_balloon_scratch_page();
+
 				ret = HYPERVISOR_update_va_mapping(
 						(unsigned long)__va(pfn << PAGE_SHIFT),
 						pfn_pte(page_to_pfn(scratch_page),
 							PAGE_KERNEL_RO), 0);
 				BUG_ON(ret);
-			}
-			p = page_to_pfn(scratch_page);
-			__set_phys_to_machine(pfn, pfn_to_mfn(p));
 
-			put_balloon_scratch_page();
+				put_balloon_scratch_page();
+			}
+			__set_phys_to_machine(pfn, INVALID_P2M_ENTRY);
 		}
 #endif
 

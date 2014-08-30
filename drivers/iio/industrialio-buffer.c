@@ -37,6 +37,14 @@ static bool iio_buffer_is_active(struct iio_buffer *buf)
 	return !list_empty(&buf->buffer_list);
 }
 
+static bool iio_buffer_data_available(struct iio_buffer *buf)
+{
+	if (buf->access->data_available)
+		return buf->access->data_available(buf);
+
+	return buf->stufftoread;
+}
+
 /**
  * iio_buffer_read_first_n_outer() - chrdev read for buffer access
  *
@@ -48,13 +56,34 @@ ssize_t iio_buffer_read_first_n_outer(struct file *filp, char __user *buf,
 {
 	struct iio_dev *indio_dev = filp->private_data;
 	struct iio_buffer *rb = indio_dev->buffer;
+	int ret;
 
 	if (!indio_dev->info)
 		return -ENODEV;
 
 	if (!rb || !rb->access->read_first_n)
 		return -EINVAL;
-	return rb->access->read_first_n(rb, n, buf);
+
+	do {
+		if (!iio_buffer_data_available(rb)) {
+			if (filp->f_flags & O_NONBLOCK)
+				return -EAGAIN;
+
+			ret = wait_event_interruptible(rb->pollq,
+					iio_buffer_data_available(rb) ||
+					indio_dev->info == NULL);
+			if (ret)
+				return ret;
+			if (indio_dev->info == NULL)
+				return -ENODEV;
+		}
+
+		ret = rb->access->read_first_n(rb, n, buf);
+		if (ret == 0 && (filp->f_flags & O_NONBLOCK))
+			ret = -EAGAIN;
+	 } while (ret == 0);
+
+	return ret;
 }
 
 /**
@@ -70,7 +99,7 @@ unsigned int iio_buffer_poll(struct file *filp,
 		return -ENODEV;
 
 	poll_wait(filp, &rb->pollq, wait);
-	if (rb->stufftoread)
+	if (iio_buffer_data_available(rb))
 		return POLLIN | POLLRDNORM;
 	/* need a way of knowing if there may be enough data... */
 	return 0;
@@ -136,7 +165,8 @@ static ssize_t iio_scan_el_show(struct device *dev,
 	int ret;
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 
-	ret = test_bit(to_iio_dev_attr(attr)->address,
+	/* Ensure ret is 0 or 1. */
+	ret = !!test_bit(to_iio_dev_attr(attr)->address,
 		       indio_dev->buffer->scan_mask);
 
 	return sprintf(buf, "%d\n", ret);
@@ -837,7 +867,8 @@ int iio_scan_mask_query(struct iio_dev *indio_dev,
 	if (!buffer->scan_mask)
 		return 0;
 
-	return test_bit(bit, buffer->scan_mask);
+	/* Ensure return value is 0 or 1. */
+	return !!test_bit(bit, buffer->scan_mask);
 };
 EXPORT_SYMBOL_GPL(iio_scan_mask_query);
 
@@ -922,7 +953,7 @@ static int iio_buffer_update_demux(struct iio_dev *indio_dev,
 
 	/* Now we have the two masks, work from least sig and build up sizes */
 	for_each_set_bit(out_ind,
-			 indio_dev->active_scan_mask,
+			 buffer->scan_mask,
 			 indio_dev->masklength) {
 		in_ind = find_next_bit(indio_dev->active_scan_mask,
 				       indio_dev->masklength,

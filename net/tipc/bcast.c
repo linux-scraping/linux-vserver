@@ -537,6 +537,7 @@ receive:
 
 		buf = node->bclink.deferred_head;
 		node->bclink.deferred_head = buf->next;
+		buf->next = NULL;
 		node->bclink.deferred_size--;
 		goto receive;
 	}
@@ -620,12 +621,6 @@ static int tipc_bcbearer_send(struct sk_buff *buf, struct tipc_bearer *unused1,
 
 		if (!p)
 			break; /* No more bearers to try */
-
-		if (tipc_bearer_blocked(p)) {
-			if (!s || tipc_bearer_blocked(s))
-				continue; /* Can't use either bearer */
-			b = s;
-		}
 
 		tipc_nmap_diff(&bcbearer->remains, &b->nodes,
 			       &bcbearer->remains_new);
@@ -800,7 +795,7 @@ void tipc_bclink_init(void)
 void tipc_bclink_stop(void)
 {
 	spin_lock_bh(&bc_lock);
-	tipc_link_stop(bcl);
+	tipc_link_purge_queues(bcl);
 	spin_unlock_bh(&bc_lock);
 
 	memset(bclink, 0, sizeof(*bclink));

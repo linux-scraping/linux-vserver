@@ -433,7 +433,9 @@ static const struct clk_ops dpll4_m5x2_ck_ops = {
 	.enable		= &omap2_dflt_clk_enable,
 	.disable	= &omap2_dflt_clk_disable,
 	.is_enabled	= &omap2_dflt_clk_is_enabled,
+	.set_rate	= &omap3_clkoutx2_set_rate,
 	.recalc_rate	= &omap3_clkoutx2_recalc,
+	.round_rate	= &omap3_clkoutx2_round_rate,
 };
 
 static const struct clk_ops dpll4_m5x2_ck_3630_ops = {
@@ -454,7 +456,8 @@ static struct clk_hw_omap dpll4_m5x2_ck_hw = {
 	.clkdm_name	= "dpll4_clkdm",
 };
 
-DEFINE_STRUCT_CLK(dpll4_m5x2_ck, dpll4_m5x2_ck_parent_names, dpll4_m5x2_ck_ops);
+DEFINE_STRUCT_CLK_FLAGS(dpll4_m5x2_ck, dpll4_m5x2_ck_parent_names,
+			dpll4_m5x2_ck_ops, CLK_SET_RATE_PARENT);
 
 static struct clk dpll4_m5x2_ck_3630 = {
 	.name		= "dpll4_m5x2_ck",

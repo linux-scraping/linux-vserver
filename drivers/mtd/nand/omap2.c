@@ -1451,7 +1451,7 @@ static int omap_elm_correct_data(struct mtd_info *mtd, u_char *data,
 
 	/* Check if any error reported */
 	if (!is_error_reported)
-		return 0;
+		return stat;
 
 	/* Decode BCH error using ELM module */
 	elm_decode_bch_error_page(info->elm_dev, ecc_vec, err_vec);
@@ -1731,13 +1731,7 @@ static int omap_nand_probe(struct platform_device *pdev)
 		break;
 
 	case NAND_OMAP_POLLED:
-		if (nand_chip->options & NAND_BUSWIDTH_16) {
-			nand_chip->read_buf   = omap_read_buf16;
-			nand_chip->write_buf  = omap_write_buf16;
-		} else {
-			nand_chip->read_buf   = omap_read_buf8;
-			nand_chip->write_buf  = omap_write_buf8;
-		}
+		/* Use nand_base defaults for {read,write}_buf */
 		break;
 
 	case NAND_OMAP_PREFETCH_DMA:

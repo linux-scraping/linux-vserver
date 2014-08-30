@@ -459,7 +459,7 @@ static int audit_filter_rules(struct task_struct *tsk,
 		case AUDIT_PPID:
 			if (ctx) {
 				if (!ctx->ppid)
-					ctx->ppid = sys_getppid();
+					ctx->ppid = task_ppid_nr(tsk);
 				result = audit_comparator(ctx->ppid, f->op, f->val);
 			}
 			break;
@@ -720,6 +720,22 @@ static enum audit_state audit_filter_task(struct task_struct *tsk, char **key)
 	return AUDIT_BUILD_CONTEXT;
 }
 
+static int audit_in_mask(const struct audit_krule *rule, unsigned long val)
+{
+	int word, bit;
+
+	if (val > 0xffffffff)
+		return false;
+
+	word = AUDIT_WORD(val);
+	if (word >= AUDIT_BITMASK_SIZE)
+		return false;
+
+	bit = AUDIT_BIT(val);
+
+	return rule->mask[word] & bit;
+}
+
 /* At syscall entry and exit time, this filter is called if the
  * audit_state is not low enough that auditing cannot take place, but is
  * also not high enough that we already know we have to write an audit
@@ -737,11 +753,8 @@ static enum audit_state audit_filter_syscall(struct task_struct *tsk,
 
 	rcu_read_lock();
 	if (!list_empty(list)) {
-		int word = AUDIT_WORD(ctx->major);
-		int bit  = AUDIT_BIT(ctx->major);
-
 		list_for_each_entry_rcu(e, list, list) {
-			if ((e->rule.mask[word] & bit) == bit &&
+			if (audit_in_mask(&e->rule, ctx->major) &&
 			    audit_filter_rules(tsk, &e->rule, ctx, NULL,
 					       &state, false)) {
 				rcu_read_unlock();
@@ -761,20 +774,16 @@ static enum audit_state audit_filter_syscall(struct task_struct *tsk,
 static int audit_filter_inode_name(struct task_struct *tsk,
 				   struct audit_names *n,
 				   struct audit_context *ctx) {
-	int word, bit;
 	int h = audit_hash_ino((u32)n->ino);
 	struct list_head *list = &audit_inode_hash[h];
 	struct audit_entry *e;
 	enum audit_state state;
 
-	word = AUDIT_WORD(ctx->major);
-	bit  = AUDIT_BIT(ctx->major);
-
 	if (list_empty(list))
 		return 0;
 
 	list_for_each_entry_rcu(e, list, list) {
-		if ((e->rule.mask[word] & bit) == bit &&
+		if (audit_in_mask(&e->rule, ctx->major) &&
 		    audit_filter_rules(tsk, &e->rule, ctx, n, &state, false)) {
 			ctx->current_state = state;
 			return 1;
@@ -1719,7 +1728,7 @@ void audit_putname(struct filename *name)
 	struct audit_context *context = current->audit_context;
 
 	BUG_ON(!context);
-	if (!context->in_syscall) {
+	if (!name->aname || !context->in_syscall) {
 #if AUDIT_DEBUG == 2
 		printk(KERN_ERR "%s:%d(:%d): final_putname(%p)\n",
 		       __FILE__, __LINE__, context->serial, name);
@@ -1969,21 +1978,24 @@ static void audit_log_set_loginuid(kuid_t koldloginuid, kuid_t kloginuid,
 				   int rc)
 {
 	struct audit_buffer *ab;
-	uid_t uid, ologinuid, nloginuid;
+	uid_t uid, oldloginuid, loginuid;
 
 	if (!audit_enabled)
 		return;
 
 	uid = from_kuid(&init_user_ns, task_uid(current));
-	ologinuid = from_kuid(&init_user_ns, koldloginuid);
-	nloginuid = from_kuid(&init_user_ns, kloginuid),
+	oldloginuid = from_kuid(&init_user_ns, koldloginuid);
+	loginuid = from_kuid(&init_user_ns, kloginuid),
 
 	ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_LOGIN);
 	if (!ab)
 		return;
-	audit_log_format(ab, "pid=%d uid=%u old auid=%u new auid=%u old "
-			 "ses=%u new ses=%u res=%d", current->pid, uid, ologinuid,
-			 nloginuid, oldsessionid, sessionid, !rc);
+	audit_log_format(ab, "pid=%d uid=%u"
+			 " old-auid=%u auid=%u old-ses=%u ses=%u"
+			 " res=%d",
+			 current->pid, uid,
+			 oldloginuid, loginuid, oldsessionid, sessionid,
+			 !rc);
 	audit_log_end(ab);
 }
 
@@ -2011,7 +2023,7 @@ int audit_set_loginuid(kuid_t loginuid)
 
 	/* are we setting or clearing? */
 	if (uid_valid(loginuid))
-		sessionid = atomic_inc_return(&session_id);
+		sessionid = (unsigned int)atomic_inc_return(&session_id);
 
 	task->sessionid = sessionid;
 	task->loginuid = loginuid;
@@ -2324,18 +2336,16 @@ int __audit_log_bprm_fcaps(struct linux_binprm *bprm,
 
 /**
  * __audit_log_capset - store information about the arguments to the capset syscall
- * @pid: target pid of the capset call
  * @new: the new credentials
  * @old: the old (current) credentials
  *
  * Record the aguments userspace sent to sys_capset for later printing by the
  * audit system if applicable
  */
-void __audit_log_capset(pid_t pid,
-		       const struct cred *new, const struct cred *old)
+void __audit_log_capset(const struct cred *new, const struct cred *old)
 {
 	struct audit_context *context = current->audit_context;
-	context->capset.pid = pid;
+	context->capset.pid = task_pid_nr(current);
 	context->capset.cap.effective   = new->cap_effective;
 	context->capset.cap.inheritable = new->cap_effective;
 	context->capset.cap.permitted   = new->cap_permitted;
@@ -2355,6 +2365,7 @@ static void audit_log_task(struct audit_buffer *ab)
 	kuid_t auid, uid;
 	kgid_t gid;
 	unsigned int sessionid;
+	struct mm_struct *mm = current->mm;
 
 	auid = audit_get_loginuid(current);
 	sessionid = audit_get_sessionid(current);
@@ -2368,15 +2379,15 @@ static void audit_log_task(struct audit_buffer *ab)
 	audit_log_task_context(ab);
 	audit_log_format(ab, " pid=%d comm=", current->pid);
 	audit_log_untrustedstring(ab, current->comm);
+	if (mm) {
+		down_read(&mm->mmap_sem);
+		if (mm->exe_file)
+			audit_log_d_path(ab, " exe=", &mm->exe_file->f_path);
+		up_read(&mm->mmap_sem);
+	} else
+		audit_log_format(ab, " exe=(null)");
 }
 
-static void audit_log_abend(struct audit_buffer *ab, char *reason, long signr)
-{
-	audit_log_task(ab);
-	audit_log_format(ab, " reason=");
-	audit_log_string(ab, reason);
-	audit_log_format(ab, " sig=%ld", signr);
-}
 /**
  * audit_core_dumps - record information about processes that end abnormally
  * @signr: signal value
@@ -2397,7 +2408,8 @@ void audit_core_dumps(long signr)
 	ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_ANOM_ABEND);
 	if (unlikely(!ab))
 		return;
-	audit_log_abend(ab, "memory violation", signr);
+	audit_log_task(ab);
+	audit_log_format(ab, " sig=%ld", signr);
 	audit_log_end(ab);
 }
 

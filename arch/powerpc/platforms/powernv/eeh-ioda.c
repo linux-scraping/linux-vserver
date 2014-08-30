@@ -14,7 +14,6 @@
 #include <linux/bootmem.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/init.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/kernel.h>
@@ -45,7 +44,8 @@ static int ioda_eeh_event(struct notifier_block *nb,
 
 	/* We simply send special EEH event */
 	if ((changed_evts & OPAL_EVENT_PCI_ERROR) &&
-	    (events & OPAL_EVENT_PCI_ERROR))
+	    (events & OPAL_EVENT_PCI_ERROR) &&
+	    eeh_enabled())
 		eeh_send_failure_event(NULL);
 
 	return 0;
@@ -549,7 +549,8 @@ static int ioda_eeh_reset(struct eeh_pe *pe, int option)
 		ret = ioda_eeh_phb_reset(hose, option);
 	} else {
 		bus = eeh_pe_bus_get(pe);
-		if (pci_is_root_bus(bus))
+		if (pci_is_root_bus(bus) ||
+		    pci_is_root_bus(bus->parent))
 			ret = ioda_eeh_root_reset(hose, option);
 		else
 			ret = ioda_eeh_bridge_reset(hose, bus->self, option);
@@ -670,11 +671,7 @@ static int ioda_eeh_get_pe(struct pci_controller *hose,
 	dev.phb = hose;
 	dev.pe_config_addr = pe_no;
 	dev_pe = eeh_pe_get(&dev);
-	if (!dev_pe) {
-		pr_warning("%s: Can't find PE for PHB#%x - PE#%x\n",
-			   __func__, hose->global_number, pe_no);
-		return -EEXIST;
-	}
+	if (!dev_pe) return -EEXIST;
 
 	*pe = dev_pe;
 	return 0;
@@ -788,12 +785,27 @@ static int ioda_eeh_next_error(struct eeh_pe **pe)
 
 			break;
 		case OPAL_EEH_PE_ERROR:
-			if (ioda_eeh_get_pe(hose, frozen_pe_no, pe))
-				break;
+			/*
+			 * If we can't find the corresponding PE, the
+			 * PEEV / PEST would be messy. So we force an
+			 * fenced PHB so that it can be recovered.
+			 */
+			if (ioda_eeh_get_pe(hose, frozen_pe_no, pe)) {
+				if (!ioda_eeh_get_phb_pe(hose, pe)) {
+					pr_err("EEH: Escalated fenced PHB#%x "
+					       "detected for PE#%llx\n",
+						hose->global_number,
+						frozen_pe_no);
+					ret = EEH_NEXT_ERR_FENCED_PHB;
+				} else {
+					ret = EEH_NEXT_ERR_NONE;
+				}
+			} else {
+				pr_err("EEH: Frozen PE#%x on PHB#%x detected\n",
+					(*pe)->addr, (*pe)->phb->global_number);
+				ret = EEH_NEXT_ERR_FROZEN_PE;
+			}
 
-			pr_err("EEH: Frozen PE#%x on PHB#%x detected\n",
-				(*pe)->addr, (*pe)->phb->global_number);
-			ret = EEH_NEXT_ERR_FROZEN_PE;
 			break;
 		default:
 			pr_warn("%s: Unexpected error type %d\n",

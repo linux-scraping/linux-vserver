@@ -234,8 +234,9 @@ static void intel_dvo_dpms(struct drm_connector *connector, int mode)
 	intel_modeset_check_state(connector->dev);
 }
 
-static int intel_dvo_mode_valid(struct drm_connector *connector,
-				struct drm_display_mode *mode)
+static enum drm_mode_status
+intel_dvo_mode_valid(struct drm_connector *connector,
+		     struct drm_display_mode *mode)
 {
 	struct intel_dvo *intel_dvo = intel_attached_dvo(connector);
 
@@ -476,6 +477,7 @@ void intel_dvo_init(struct drm_device *dev)
 	intel_encoder->compute_config = intel_dvo_compute_config;
 	intel_encoder->mode_set = intel_dvo_mode_set;
 	intel_connector->get_hw_state = intel_dvo_connector_get_hw_state;
+	intel_connector->unregister = intel_connector_unregister;
 
 	/* Now, try to find a controller */
 	for (i = 0; i < ARRAY_SIZE(intel_dvo_devices); i++) {

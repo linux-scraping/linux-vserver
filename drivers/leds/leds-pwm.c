@@ -66,9 +66,11 @@ static void led_pwm_set(struct led_classdev *led_cdev,
 	struct led_pwm_data *led_dat =
 		container_of(led_cdev, struct led_pwm_data, cdev);
 	unsigned int max = led_dat->cdev.max_brightness;
-	unsigned int period =  led_dat->period;
+	unsigned long long duty =  led_dat->period;
 
-	led_dat->duty = brightness * period / max;
+	duty *= brightness;
+	do_div(duty, max);
+	led_dat->duty = duty;
 
 	if (led_dat->can_sleep)
 		schedule_work(&led_dat->work);
@@ -82,14 +84,22 @@ static inline size_t sizeof_pwm_leds_priv(int num_leds)
 		      (sizeof(struct led_pwm_data) * num_leds);
 }
 
+static void led_pwm_cleanup(struct led_pwm_priv *priv)
+{
+	while (priv->num_leds--) {
+		led_classdev_unregister(&priv->leds[priv->num_leds].cdev);
+		if (priv->leds[priv->num_leds].can_sleep)
+			cancel_work_sync(&priv->leds[priv->num_leds].work);
+	}
+}
+
 static int led_pwm_create_of(struct platform_device *pdev,
 			     struct led_pwm_priv *priv)
 {
-	struct device_node *node = pdev->dev.of_node;
 	struct device_node *child;
 	int ret;
 
-	for_each_child_of_node(node, child) {
+	for_each_child_of_node(pdev->dev.of_node, child) {
 		struct led_pwm_data *led_dat = &priv->leds[priv->num_leds];
 
 		led_dat->cdev.name = of_get_property(child, "label",
@@ -130,8 +140,7 @@ static int led_pwm_create_of(struct platform_device *pdev,
 
 	return 0;
 err:
-	while (priv->num_leds--)
-		led_classdev_unregister(&priv->leds[priv->num_leds].cdev);
+	led_pwm_cleanup(priv);
 
 	return ret;
 }
@@ -199,8 +208,8 @@ static int led_pwm_probe(struct platform_device *pdev)
 	return 0;
 
 err:
-	while (i--)
-		led_classdev_unregister(&priv->leds[i].cdev);
+	priv->num_leds = i;
+	led_pwm_cleanup(priv);
 
 	return ret;
 }
@@ -208,13 +217,8 @@ err:
 static int led_pwm_remove(struct platform_device *pdev)
 {
 	struct led_pwm_priv *priv = platform_get_drvdata(pdev);
-	int i;
 
-	for (i = 0; i < priv->num_leds; i++) {
-		led_classdev_unregister(&priv->leds[i].cdev);
-		if (priv->leds[i].can_sleep)
-			cancel_work_sync(&priv->leds[i].work);
-	}
+	led_pwm_cleanup(priv);
 
 	return 0;
 }

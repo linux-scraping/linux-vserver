@@ -67,21 +67,14 @@ static int cfg80211_conn_scan(struct wireless_dev *wdev)
 	ASSERT_RDEV_LOCK(rdev);
 	ASSERT_WDEV_LOCK(wdev);
 
-	if (rdev->scan_req)
+	if (rdev->scan_req || rdev->scan_msg)
 		return -EBUSY;
 
-	if (wdev->conn->params.channel) {
+	if (wdev->conn->params.channel)
 		n_channels = 1;
-	} else {
-		enum ieee80211_band band;
-		n_channels = 0;
+	else
+		n_channels = ieee80211_get_num_supported_channels(wdev->wiphy);
 
-		for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
-			if (!wdev->wiphy->bands[band])
-				continue;
-			n_channels += wdev->wiphy->bands[band]->n_channels;
-		}
-	}
 	request = kzalloc(sizeof(*request) + sizeof(request->ssids[0]) +
 			  sizeof(request->channels[0]) * n_channels,
 			  GFP_KERNEL);
@@ -242,7 +235,6 @@ void cfg80211_conn_work(struct work_struct *work)
 					NULL, 0, NULL, 0,
 					WLAN_STATUS_UNSPECIFIED_FAILURE,
 					false, NULL);
-			cfg80211_sme_free(wdev);
 		}
 		wdev_unlock(wdev);
 	}
@@ -656,6 +648,7 @@ void __cfg80211_connect_result(struct net_device *dev, const u8 *bssid,
 			cfg80211_unhold_bss(bss_from_pub(bss));
 			cfg80211_put_bss(wdev->wiphy, bss);
 		}
+		cfg80211_sme_free(wdev);
 		return;
 	}
 
@@ -871,6 +864,8 @@ void __cfg80211_disconnected(struct net_device *dev, const u8 *ie,
 	if (rdev->ops->del_key)
 		for (i = 0; i < 6; i++)
 			rdev_del_key(rdev, dev, i, false, NULL);
+
+	rdev_set_qos_map(rdev, dev, NULL);
 
 #ifdef CONFIG_CFG80211_WEXT
 	memset(&wrqu, 0, sizeof(wrqu));

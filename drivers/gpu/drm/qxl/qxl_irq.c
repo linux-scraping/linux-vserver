@@ -25,13 +25,16 @@
 
 #include "qxl_drv.h"
 
-irqreturn_t qxl_irq_handler(DRM_IRQ_ARGS)
+irqreturn_t qxl_irq_handler(int irq, void *arg)
 {
 	struct drm_device *dev = (struct drm_device *) arg;
 	struct qxl_device *qdev = (struct qxl_device *)dev->dev_private;
 	uint32_t pending;
 
 	pending = xchg(&qdev->ram_header->int_pending, 0);
+
+	if (!pending)
+		return IRQ_NONE;
 
 	atomic_inc(&qdev->irq_received);
 

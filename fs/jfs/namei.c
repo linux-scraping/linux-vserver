@@ -1526,6 +1526,7 @@ const struct inode_operations jfs_dir_inode_operations = {
 	.setattr	= jfs_setattr,
 #ifdef CONFIG_JFS_POSIX_ACL
 	.get_acl	= jfs_get_acl,
+	.set_acl	= jfs_set_acl,
 #endif
 	.sync_flags	= jfs_sync_flags,
 };
