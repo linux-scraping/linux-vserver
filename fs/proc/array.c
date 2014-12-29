@@ -309,14 +309,10 @@ static void render_cap_t(struct seq_file *m, const char *header,
 	seq_puts(m, header);
 	CAP_FOR_EACH_U32(__capi) {
 		seq_printf(m, "%08x",
-			   a->cap[(_KERNEL_CAPABILITY_U32S-1) - __capi]);
+			   a->cap[CAP_LAST_U32 - __capi]);
 	}
 	seq_putc(m, '\n');
 }
-
-/* Remove non-existent capabilities */
-#define NORM_CAPS(v) (v.cap[CAP_TO_INDEX(CAP_LAST_CAP)] &= \
-				CAP_TO_MASK(CAP_LAST_CAP + 1) - 1)
 
 static inline void task_cap(struct seq_file *m, struct task_struct *p)
 {
@@ -330,11 +326,6 @@ static inline void task_cap(struct seq_file *m, struct task_struct *p)
 	cap_effective	= cred->cap_effective;
 	cap_bset	= cred->cap_bset;
 	rcu_read_unlock();
-
-	NORM_CAPS(cap_inheritable);
-	NORM_CAPS(cap_permitted);
-	NORM_CAPS(cap_effective);
-	NORM_CAPS(cap_bset);
 
 	/* FIXME: maybe move the p->vx_info masking to __task_cred() ? */
 	render_cap_t(m, "CapInh:\t", p->vx_info, &cap_inheritable);
