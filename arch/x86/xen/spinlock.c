@@ -109,7 +109,7 @@ static bool xen_pvspin = true;
 __visible void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 {
 	int irq = __this_cpu_read(lock_kicker_irq);
-	struct xen_lock_waiting *w = &__get_cpu_var(lock_waiting);
+	struct xen_lock_waiting *w = this_cpu_ptr(&lock_waiting);
 	int cpu = smp_processor_id();
 	u64 start;
 	unsigned long flags;
@@ -183,7 +183,7 @@ __visible void xen_lock_spinning(struct arch_spinlock *lock, __ticket_t want)
 
 	local_irq_save(flags);
 
-	kstat_incr_irqs_this_cpu(irq, irq_to_desc(irq));
+	kstat_incr_irq_this_cpu(irq);
 out:
 	cpumask_clear_cpu(cpu, &waiting_cpus);
 	w->lock = NULL;

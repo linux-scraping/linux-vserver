@@ -59,7 +59,7 @@
 #define INTEL_RAPL_PKG		0x2	/* pseudo-encoding */
 #define RAPL_IDX_RAM_NRG_STAT	2	/* DRAM */
 #define INTEL_RAPL_RAM		0x3	/* pseudo-encoding */
-#define RAPL_IDX_PP1_NRG_STAT	3	/* DRAM */
+#define RAPL_IDX_PP1_NRG_STAT	3	/* gpu */
 #define INTEL_RAPL_PP1		0x4	/* pseudo-encoding */
 
 /* Clients have PP0, PKG */
@@ -71,6 +71,12 @@
 #define RAPL_IDX_SRV	(1<<RAPL_IDX_PP0_NRG_STAT|\
 			 1<<RAPL_IDX_PKG_NRG_STAT|\
 			 1<<RAPL_IDX_RAM_NRG_STAT)
+
+/* Servers have PP0, PKG, RAM, PP1 */
+#define RAPL_IDX_HSW	(1<<RAPL_IDX_PP0_NRG_STAT|\
+			 1<<RAPL_IDX_PKG_NRG_STAT|\
+			 1<<RAPL_IDX_RAM_NRG_STAT|\
+			 1<<RAPL_IDX_PP1_NRG_STAT)
 
 /*
  * event code: LSB 8 bits, passed in attr->config
@@ -129,7 +135,7 @@ static inline u64 rapl_scale(u64 v)
 	 * or use ldexp(count, -32).
 	 * Watts = Joules/Time delta
 	 */
-	return v << (32 - __get_cpu_var(rapl_pmu)->hw_unit);
+	return v << (32 - __this_cpu_read(rapl_pmu->hw_unit));
 }
 
 static u64 rapl_event_update(struct perf_event *event)
@@ -181,7 +187,7 @@ static void rapl_stop_hrtimer(struct rapl_pmu *pmu)
 
 static enum hrtimer_restart rapl_hrtimer_handle(struct hrtimer *hrtimer)
 {
-	struct rapl_pmu *pmu = __get_cpu_var(rapl_pmu);
+	struct rapl_pmu *pmu = __this_cpu_read(rapl_pmu);
 	struct perf_event *event;
 	unsigned long flags;
 
@@ -228,7 +234,7 @@ static void __rapl_pmu_event_start(struct rapl_pmu *pmu,
 
 static void rapl_pmu_event_start(struct perf_event *event, int mode)
 {
-	struct rapl_pmu *pmu = __get_cpu_var(rapl_pmu);
+	struct rapl_pmu *pmu = __this_cpu_read(rapl_pmu);
 	unsigned long flags;
 
 	spin_lock_irqsave(&pmu->lock, flags);
@@ -238,7 +244,7 @@ static void rapl_pmu_event_start(struct perf_event *event, int mode)
 
 static void rapl_pmu_event_stop(struct perf_event *event, int mode)
 {
-	struct rapl_pmu *pmu = __get_cpu_var(rapl_pmu);
+	struct rapl_pmu *pmu = __this_cpu_read(rapl_pmu);
 	struct hw_perf_event *hwc = &event->hw;
 	unsigned long flags;
 
@@ -272,7 +278,7 @@ static void rapl_pmu_event_stop(struct perf_event *event, int mode)
 
 static int rapl_pmu_event_add(struct perf_event *event, int mode)
 {
-	struct rapl_pmu *pmu = __get_cpu_var(rapl_pmu);
+	struct rapl_pmu *pmu = __this_cpu_read(rapl_pmu);
 	struct hw_perf_event *hwc = &event->hw;
 	unsigned long flags;
 
@@ -425,6 +431,24 @@ static struct attribute *rapl_events_cln_attr[] = {
 	NULL,
 };
 
+static struct attribute *rapl_events_hsw_attr[] = {
+	EVENT_PTR(rapl_cores),
+	EVENT_PTR(rapl_pkg),
+	EVENT_PTR(rapl_gpu),
+	EVENT_PTR(rapl_ram),
+
+	EVENT_PTR(rapl_cores_unit),
+	EVENT_PTR(rapl_pkg_unit),
+	EVENT_PTR(rapl_gpu_unit),
+	EVENT_PTR(rapl_ram_unit),
+
+	EVENT_PTR(rapl_cores_scale),
+	EVENT_PTR(rapl_pkg_scale),
+	EVENT_PTR(rapl_gpu_scale),
+	EVENT_PTR(rapl_ram_scale),
+	NULL,
+};
+
 static struct attribute_group rapl_pmu_events_group = {
 	.name = "events",
 	.attrs = NULL, /* patched at runtime */
@@ -519,7 +543,8 @@ static int rapl_cpu_prepare(int cpu)
 	if (phys_id < 0)
 		return -1;
 
-	if (!rdmsrl_safe(MSR_RAPL_POWER_UNIT, &msr_rapl_power_unit_bits))
+	/* protect rdmsrl() to handle virtualization */
+	if (rdmsrl_safe(MSR_RAPL_POWER_UNIT, &msr_rapl_power_unit_bits))
 		return -1;
 
 	pmu = kzalloc_node(sizeof(*pmu), GFP_KERNEL, cpu_to_node(cpu));
@@ -634,10 +659,13 @@ static int __init rapl_pmu_init(void)
 	switch (boot_cpu_data.x86_model) {
 	case 42: /* Sandy Bridge */
 	case 58: /* Ivy Bridge */
-	case 60: /* Haswell */
-	case 69: /* Haswell-Celeron */
 		rapl_cntr_mask = RAPL_IDX_CLN;
 		rapl_pmu_events_group.attrs = rapl_events_cln_attr;
+		break;
+	case 60: /* Haswell */
+	case 69: /* Haswell-Celeron */
+		rapl_cntr_mask = RAPL_IDX_HSW;
+		rapl_pmu_events_group.attrs = rapl_events_hsw_attr;
 		break;
 	case 45: /* Sandy Bridge-EP */
 	case 62: /* IvyTown */
@@ -649,7 +677,8 @@ static int __init rapl_pmu_init(void)
 		/* unsupported */
 		return 0;
 	}
-	get_online_cpus();
+
+	cpu_notifier_register_begin();
 
 	for_each_online_cpu(cpu) {
 		ret = rapl_cpu_prepare(cpu);
@@ -658,16 +687,16 @@ static int __init rapl_pmu_init(void)
 		rapl_cpu_init(cpu);
 	}
 
-	perf_cpu_notifier(rapl_cpu_notifier);
+	__perf_cpu_notifier(rapl_cpu_notifier);
 
 	ret = perf_pmu_register(&rapl_pmu_class, "power", -1);
 	if (WARN_ON(ret)) {
 		pr_info("RAPL PMU detected, registration failed (%d), RAPL PMU disabled\n", ret);
-		put_online_cpus();
+		cpu_notifier_register_done();
 		return -1;
 	}
 
-	pmu = __get_cpu_var(rapl_pmu);
+	pmu = __this_cpu_read(rapl_pmu);
 
 	pr_info("RAPL PMU detected, hw unit 2^-%d Joules,"
 		" API unit is 2^-32 Joules,"
@@ -678,7 +707,7 @@ static int __init rapl_pmu_init(void)
 		ktime_to_ms(pmu->timer_interval));
 
 out:
-	put_online_cpus();
+	cpu_notifier_register_done();
 
 	return 0;
 }

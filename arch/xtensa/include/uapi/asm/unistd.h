@@ -740,7 +740,17 @@ __SYSCALL(334, sys_sched_setattr, 2)
 #define __NR_sched_getattr			335
 __SYSCALL(335, sys_sched_getattr, 3)
 
-#define __NR_syscall_count			336
+#define __NR_renameat2				336
+__SYSCALL(336, sys_renameat2, 5)
+
+#define __NR_seccomp				337
+__SYSCALL(337, sys_seccomp, 3)
+#define __NR_getrandom				338
+__SYSCALL(338, sys_getrandom, 3)
+#define __NR_memfd_create			339
+__SYSCALL(339, sys_memfd_create, 2)
+
+#define __NR_syscall_count			340
 
 /*
  * sysxtensa syscall handler

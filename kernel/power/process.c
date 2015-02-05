@@ -17,6 +17,7 @@
 #include <linux/delay.h>
 #include <linux/workqueue.h>
 #include <linux/kmod.h>
+#include <trace/events/power.h>
 
 /* 
  * Timeout for stopping processes
@@ -45,13 +46,13 @@ static int try_to_freeze_tasks(bool user_only)
 	while (true) {
 		todo = 0;
 		read_lock(&tasklist_lock);
-		do_each_thread(g, p) {
+		for_each_process_thread(g, p) {
 			if (p == current || !freeze_task(p))
 				continue;
 
 			if (!freezer_should_skip(p))
 				todo++;
-		} while_each_thread(g, p);
+		}
 		read_unlock(&tasklist_lock);
 
 		if (!user_only) {
@@ -92,11 +93,11 @@ static int try_to_freeze_tasks(bool user_only)
 
 		if (!wakeup) {
 			read_lock(&tasklist_lock);
-			do_each_thread(g, p) {
+			for_each_process_thread(g, p) {
 				if (p != current && !freezer_should_skip(p)
 				    && freezing(p) && !frozen(p))
 					sched_show_task(p);
-			} while_each_thread(g, p);
+			}
 			read_unlock(&tasklist_lock);
 		}
 	} else {
@@ -107,25 +108,27 @@ static int try_to_freeze_tasks(bool user_only)
 	return todo ? -EBUSY : 0;
 }
 
+static bool __check_frozen_processes(void)
+{
+	struct task_struct *g, *p;
+
+	for_each_process_thread(g, p)
+		if (p != current && !freezer_should_skip(p) && !frozen(p))
+			return false;
+
+	return true;
+}
+
 /*
  * Returns true if all freezable tasks (except for current) are frozen already
  */
 static bool check_frozen_processes(void)
 {
-	struct task_struct *g, *p;
-	bool ret = true;
+	bool ret;
 
 	read_lock(&tasklist_lock);
-	for_each_process_thread(g, p) {
-		if (p != current && !freezer_should_skip(p) &&
-		    !frozen(p)) {
-			ret = false;
-			goto done;
-		}
-	}
-done:
+	ret = __check_frozen_processes();
 	read_unlock(&tasklist_lock);
-
 	return ret;
 }
 
@@ -151,6 +154,7 @@ int freeze_processes(void)
 	if (!pm_freezing)
 		atomic_inc(&system_freezing_cnt);
 
+	pm_wakeup_clear();
 	printk("Freezing user space processes ... ");
 	pm_freezing = true;
 	oom_kills_saved = oom_kills_count();
@@ -165,15 +169,14 @@ int freeze_processes(void)
 		 * on the way out so we have to double check for race.
 		 */
 		if (oom_kills_count() != oom_kills_saved &&
-				!check_frozen_processes()) {
+		    !check_frozen_processes()) {
 			__usermodehelper_set_disable_depth(UMH_ENABLED);
 			printk("OOM in progress.");
 			error = -EBUSY;
-			goto done;
+		} else {
+			printk("done.");
 		}
-		printk("done.");
 	}
-done:
 	printk("\n");
 	BUG_ON(in_atomic());
 
@@ -213,6 +216,7 @@ void thaw_processes(void)
 	struct task_struct *g, *p;
 	struct task_struct *curr = current;
 
+	trace_suspend_resume(TPS("thaw_processes"), 0, true);
 	if (pm_freezing)
 		atomic_dec(&system_freezing_cnt);
 	pm_freezing = false;
@@ -226,11 +230,11 @@ void thaw_processes(void)
 	thaw_workqueues();
 
 	read_lock(&tasklist_lock);
-	do_each_thread(g, p) {
+	for_each_process_thread(g, p) {
 		/* No other threads should have PF_SUSPEND_TASK set */
 		WARN_ON((p != curr) && (p->flags & PF_SUSPEND_TASK));
 		__thaw_task(p);
-	} while_each_thread(g, p);
+	}
 	read_unlock(&tasklist_lock);
 
 	WARN_ON(!(curr->flags & PF_SUSPEND_TASK));
@@ -240,6 +244,7 @@ void thaw_processes(void)
 
 	schedule();
 	printk("done.\n");
+	trace_suspend_resume(TPS("thaw_processes"), 0, false);
 }
 
 void thaw_kernel_threads(void)
@@ -252,10 +257,10 @@ void thaw_kernel_threads(void)
 	thaw_workqueues();
 
 	read_lock(&tasklist_lock);
-	do_each_thread(g, p) {
+	for_each_process_thread(g, p) {
 		if (p->flags & (PF_KTHREAD | PF_WQ_WORKER))
 			__thaw_task(p);
-	} while_each_thread(g, p);
+	}
 	read_unlock(&tasklist_lock);
 
 	schedule();

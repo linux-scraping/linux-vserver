@@ -66,7 +66,7 @@ static struct inode *debugfs_get_inode(struct super_block *sb, umode_t mode, dev
 			break;
 		}
 	}
-	return inode; 
+	return inode;
 }
 
 /* SMP-safe */
@@ -218,6 +218,7 @@ static int debugfs_remount(struct super_block *sb, int *flags, char *data)
 	int err;
 	struct debugfs_fs_info *fsi = sb->s_fs_info;
 
+	sync_filesystem(sb);
 	err = debugfs_parse_options(data, &fsi->mount_opts);
 	if (err)
 		goto fail;
@@ -316,7 +317,7 @@ static struct dentry *__create_file(const char *name, umode_t mode,
 		goto exit;
 
 	/* If the parent is not specified, we create it in the root.
-	 * We need the root dentry to do this, which is in the super 
+	 * We need the root dentry to do this, which is in the super
 	 * block. A pointer to that is in the struct vfsmount that we
 	 * have around.
 	 */
@@ -329,7 +330,7 @@ static struct dentry *__create_file(const char *name, umode_t mode,
 		switch (mode & S_IFMT) {
 		case S_IFDIR:
 			error = debugfs_mkdir(parent->d_inode, dentry, mode);
-					      
+
 			break;
 		case S_IFLNK:
 			error = debugfs_link(parent->d_inode, dentry, mode,
@@ -358,7 +359,7 @@ exit:
  * @name: a pointer to a string containing the name of the file to create.
  * @mode: the permission that the file should have.
  * @parent: a pointer to the parent dentry for this file.  This should be a
- *          directory dentry if set.  If this paramater is NULL, then the
+ *          directory dentry if set.  If this parameter is NULL, then the
  *          file will be created in the root of the debugfs filesystem.
  * @data: a pointer to something that the caller will want to get to later
  *        on.  The inode.i_private pointer will point to this value on
@@ -400,7 +401,7 @@ EXPORT_SYMBOL_GPL(debugfs_create_file);
  * @name: a pointer to a string containing the name of the directory to
  *        create.
  * @parent: a pointer to the parent dentry for this file.  This should be a
- *          directory dentry if set.  If this paramater is NULL, then the
+ *          directory dentry if set.  If this parameter is NULL, then the
  *          directory will be created in the root of the debugfs filesystem.
  *
  * This function creates a directory in debugfs with the given name.
@@ -425,7 +426,7 @@ EXPORT_SYMBOL_GPL(debugfs_create_dir);
  * @name: a pointer to a string containing the name of the symbolic link to
  *        create.
  * @parent: a pointer to the parent dentry for this symbolic link.  This
- *          should be a directory dentry if set.  If this paramater is NULL,
+ *          should be a directory dentry if set.  If this parameter is NULL,
  *          then the symbolic link will be created in the root of the debugfs
  *          filesystem.
  * @target: a pointer to a string containing the path to the target of the
@@ -552,7 +553,7 @@ void debugfs_remove_recursive(struct dentry *dentry)
 	 * use the d_u.d_child as the rcu head and corrupt this list.
 	 */
 	spin_lock(&parent->d_lock);
-	list_for_each_entry(child, &parent->d_subdirs, d_u.d_child) {
+	list_for_each_entry(child, &parent->d_subdirs, d_child) {
 		if (!debugfs_positive(child))
 			continue;
 

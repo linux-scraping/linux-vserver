@@ -77,10 +77,11 @@ stext:
 	; Clear BSS before updating any globals
 	; XXX: use ZOL here
 	mov	r5, __bss_start
-	mov	r6, __bss_stop
+	sub	r6, __bss_stop, r5
+	lsr.f	lp_count, r6, 2
+	lpnz	1f
+	st.ab   0, [r5, 4]
 1:
-	st.ab   0, [r5,4]
-	brlt    r5, r6, 1b
 
 	; Uboot - kernel ABI
 	;    r0 = [0] No uboot interaction, [1] cmdline in r2, [2] DTB in r2
@@ -89,16 +90,6 @@ stext:
 	; These are handled later in setup_arch()
 	st	r0, [@uboot_tag]
 	st	r2, [@uboot_arg]
-
-	; Identify if running on ISS vs Silicon
-	; 	IDENTITY Reg [ 3  2  1  0 ]
-	;	(chip-id)      ^^^^^		==> 0xffff for ISS
-	lr	r0, [identity]
-	lsr	r3, r0, 16
-	cmp	r3, 0xffff
-	mov.z	r4, 0
-	mov.nz	r4, 1
-	st	r4, [@running_on_hw]
 
 	; setup "current" tsk and optionally cache it in dedicated r25
 	mov	r9, @init_task

@@ -29,6 +29,8 @@
 #include <asm/kexec.h>
 #include <asm/ppc-opcode.h>
 
+#include <misc/cxl.h>
+
 #ifdef DEBUG_LOW
 #define DBG_LOW(fmt...) udbg_printf(fmt)
 #else
@@ -82,17 +84,14 @@ static inline void __tlbie(unsigned long vpn, int psize, int apsize, int ssize)
 		va &= ~((1ul << mmu_psize_defs[apsize].shift) - 1);
 		va |= penc << 12;
 		va |= ssize << 8;
-		/* Add AVAL part */
-		if (psize != apsize) {
-			/*
-			 * MPSS, 64K base page size and 16MB parge page size
-			 * We don't need all the bits, but rest of the bits
-			 * must be ignored by the processor.
-			 * vpn cover upto 65 bits of va. (0...65) and we need
-			 * 58..64 bits of va.
-			 */
-			va |= (vpn & 0xfe);
-		}
+		/*
+		 * AVAL bits:
+		 * We don't need all the bits, but rest of the bits
+		 * must be ignored by the processor.
+		 * vpn cover upto 65 bits of va. (0...65) and we need
+		 * 58..64 bits of va.
+		 */
+		va |= (vpn & 0xfe); /* AVAL */
 		va |= 1; /* L */
 		asm volatile(ASM_FTR_IFCLR("tlbie %0,1", PPC_TLBIE(%1,%0), %2)
 			     : : "r" (va), "r"(0), "i" (CPU_FTR_ARCH_206)
@@ -133,17 +132,14 @@ static inline void __tlbiel(unsigned long vpn, int psize, int apsize, int ssize)
 		va &= ~((1ul << mmu_psize_defs[apsize].shift) - 1);
 		va |= penc << 12;
 		va |= ssize << 8;
-		/* Add AVAL part */
-		if (psize != apsize) {
-			/*
-			 * MPSS, 64K base page size and 16MB parge page size
-			 * We don't need all the bits, but rest of the bits
-			 * must be ignored by the processor.
-			 * vpn cover upto 65 bits of va. (0...65) and we need
-			 * 58..64 bits of va.
-			 */
-			va |= (vpn & 0xfe);
-		}
+		/*
+		 * AVAL bits:
+		 * We don't need all the bits, but rest of the bits
+		 * must be ignored by the processor.
+		 * vpn cover upto 65 bits of va. (0...65) and we need
+		 * 58..64 bits of va.
+		 */
+		va |= (vpn & 0xfe);
 		va |= 1; /* L */
 		asm volatile(".long 0x7c000224 | (%0 << 11) | (1 << 21)"
 			     : : "r"(va) : "memory");
@@ -155,8 +151,10 @@ static inline void __tlbiel(unsigned long vpn, int psize, int apsize, int ssize)
 static inline void tlbie(unsigned long vpn, int psize, int apsize,
 			 int ssize, int local)
 {
-	unsigned int use_local = local && mmu_has_feature(MMU_FTR_TLBIEL);
+	unsigned int use_local;
 	int lock_tlbie = !mmu_has_feature(MMU_FTR_LOCKLESS_TLBIE);
+
+	use_local = local && mmu_has_feature(MMU_FTR_TLBIEL) && !cxl_ctx_in_use();
 
 	if (use_local)
 		use_local = mmu_psize_defs[psize].tlbiel;

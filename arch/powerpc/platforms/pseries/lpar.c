@@ -26,6 +26,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/console.h>
 #include <linux/export.h>
+#include <linux/static_key.h>
 #include <asm/processor.h>
 #include <asm/mmu.h>
 #include <asm/page.h>
@@ -42,6 +43,7 @@
 #include <asm/trace.h>
 #include <asm/firmware.h>
 #include <asm/plpar_wrappers.h>
+#include <asm/fadump.h>
 
 #include "pseries.h"
 
@@ -57,8 +59,6 @@
 EXPORT_SYMBOL(plpar_hcall);
 EXPORT_SYMBOL(plpar_hcall9);
 EXPORT_SYMBOL(plpar_hcall_norets);
-
-extern void pSeries_find_serial_port(void);
 
 void vpa_init(int cpu)
 {
@@ -248,8 +248,17 @@ static void pSeries_lpar_hptab_clear(void)
 	}
 
 #ifdef __LITTLE_ENDIAN__
-	/* Reset exceptions to big endian */
-	if (firmware_has_feature(FW_FEATURE_SET_MODE)) {
+	/*
+	 * Reset exceptions to big endian.
+	 *
+	 * FIXME this is a hack for kexec, we need to reset the exception
+	 * endian before starting the new kernel and this is a convenient place
+	 * to do it.
+	 *
+	 * This is also called on boot when a fadump happens. In that case we
+	 * must not change the exception endian mode.
+	 */
+	if (firmware_has_feature(FW_FEATURE_SET_MODE) && !is_fadump_active()) {
 		long rc;
 
 		rc = pseries_big_endian_exceptions();
@@ -641,6 +650,19 @@ EXPORT_SYMBOL(arch_free_page);
 #endif
 
 #ifdef CONFIG_TRACEPOINTS
+#ifdef HAVE_JUMP_LABEL
+struct static_key hcall_tracepoint_key = STATIC_KEY_INIT;
+
+void hcall_tracepoint_regfunc(void)
+{
+	static_key_slow_inc(&hcall_tracepoint_key);
+}
+
+void hcall_tracepoint_unregfunc(void)
+{
+	static_key_slow_dec(&hcall_tracepoint_key);
+}
+#else
 /*
  * We optimise our hcall path by placing hcall_tracepoint_refcount
  * directly in the TOC so we can check if the hcall tracepoints are
@@ -649,13 +671,6 @@ EXPORT_SYMBOL(arch_free_page);
 
 /* NB: reg/unreg are called while guarded with the tracepoints_mutex */
 extern long hcall_tracepoint_refcount;
-
-/* 
- * Since the tracing code might execute hcalls we need to guard against
- * recursion. One example of this are spinlocks calling H_YIELD on
- * shared processor partitions.
- */
-static DEFINE_PER_CPU(unsigned int, hcall_trace_depth);
 
 void hcall_tracepoint_regfunc(void)
 {
@@ -666,6 +681,15 @@ void hcall_tracepoint_unregfunc(void)
 {
 	hcall_tracepoint_refcount--;
 }
+#endif
+
+/*
+ * Since the tracing code might execute hcalls we need to guard against
+ * recursion. One example of this are spinlocks calling H_YIELD on
+ * shared processor partitions.
+ */
+static DEFINE_PER_CPU(unsigned int, hcall_trace_depth);
+
 
 void __trace_hcall_entry(unsigned long opcode, unsigned long *args)
 {

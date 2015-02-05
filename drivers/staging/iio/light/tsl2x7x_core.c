@@ -352,7 +352,7 @@ static int tsl2x7x_get_lux(struct iio_dev *indio_dev)
 		/* device is not enabled */
 		dev_err(&chip->client->dev, "%s: device is not enabled\n",
 				__func__);
-		ret = -EBUSY ;
+		ret = -EBUSY;
 		goto out_unlock;
 	}
 
@@ -1511,16 +1511,16 @@ static int tsl2x7x_device_id(unsigned char *id, int target)
 	case tsl2571:
 	case tsl2671:
 	case tsl2771:
-		return ((*id & 0xf0) == TRITON_ID);
+		return (*id & 0xf0) == TRITON_ID;
 	case tmd2671:
 	case tmd2771:
-		return ((*id & 0xf0) == HALIBUT_ID);
+		return (*id & 0xf0) == HALIBUT_ID;
 	case tsl2572:
 	case tsl2672:
 	case tmd2672:
 	case tsl2772:
 	case tmd2772:
-		return ((*id & 0xf0) == SWORDFISH_ID);
+		return (*id & 0xf0) == SWORDFISH_ID;
 	}
 
 	return -EINVAL;
@@ -1964,6 +1964,7 @@ static int tsl2x7x_suspend(struct device *dev)
 
 	if (chip->pdata && chip->pdata->platform_power) {
 		pm_message_t pmm = {PM_EVENT_SUSPEND};
+
 		chip->pdata->platform_power(dev, pmm);
 	}
 
@@ -1978,6 +1979,7 @@ static int tsl2x7x_resume(struct device *dev)
 
 	if (chip->pdata && chip->pdata->platform_power) {
 		pm_message_t pmm = {PM_EVENT_RESUME};
+
 		chip->pdata->platform_power(dev, pmm);
 	}
 

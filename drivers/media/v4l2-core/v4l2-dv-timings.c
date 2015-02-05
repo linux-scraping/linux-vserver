@@ -131,6 +131,17 @@ const struct v4l2_dv_timings v4l2_dv_timings_presets[] = {
 	V4L2_DV_BT_DMT_2560X1600P75,
 	V4L2_DV_BT_DMT_2560X1600P85,
 	V4L2_DV_BT_DMT_2560X1600P120_RB,
+	V4L2_DV_BT_CEA_3840X2160P24,
+	V4L2_DV_BT_CEA_3840X2160P25,
+	V4L2_DV_BT_CEA_3840X2160P30,
+	V4L2_DV_BT_CEA_3840X2160P50,
+	V4L2_DV_BT_CEA_3840X2160P60,
+	V4L2_DV_BT_CEA_4096X2160P24,
+	V4L2_DV_BT_CEA_4096X2160P25,
+	V4L2_DV_BT_CEA_4096X2160P30,
+	V4L2_DV_BT_CEA_4096X2160P50,
+	V4L2_DV_BT_DMT_4096X2160P59_94_RB,
+	V4L2_DV_BT_CEA_4096X2160P60,
 	{ }
 };
 EXPORT_SYMBOL_GPL(v4l2_dv_timings_presets);
@@ -153,7 +164,8 @@ bool v4l2_valid_dv_timings(const struct v4l2_dv_timings *t,
 	    bt->width > cap->max_width ||
 	    bt->pixelclock < cap->min_pixelclock ||
 	    bt->pixelclock > cap->max_pixelclock ||
-	    (cap->standards && !(bt->standards & cap->standards)) ||
+	    (cap->standards && bt->standards &&
+	     !(bt->standards & cap->standards)) ||
 	    (bt->interlaced && !(caps & V4L2_DV_BT_CAP_INTERLACED)) ||
 	    (!bt->interlaced && !(caps & V4L2_DV_BT_CAP_PROGRESSIVE)))
 		return false;
@@ -328,6 +340,10 @@ EXPORT_SYMBOL_GPL(v4l2_print_dv_timings);
  * This function will attempt to detect if the given values correspond to a
  * valid CVT format. If so, then it will return true, and fmt will be filled
  * in with the found CVT timings.
+ *
+ * TODO: VESA defined a new version 2 of their reduced blanking
+ * formula. Support for that is currently missing in this CVT
+ * detection function.
  */
 bool v4l2_detect_cvt(unsigned frame_height, unsigned hfreq, unsigned vsync,
 		u32 polarities, struct v4l2_dv_timings *fmt)

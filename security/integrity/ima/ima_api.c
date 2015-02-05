@@ -92,8 +92,8 @@ int ima_store_template(struct ima_template_entry *entry,
 		       int violation, struct inode *inode,
 		       const unsigned char *filename)
 {
-	const char *op = "add_template_measure";
-	const char *audit_cause = "hashing_error";
+	static const char op[] = "add_template_measure";
+	static const char audit_cause[] = "hashing_error";
 	char *template_name = entry->template_desc->name;
 	int result;
 	struct {
@@ -132,7 +132,7 @@ void ima_add_violation(struct file *file, const unsigned char *filename,
 		       const char *op, const char *cause)
 {
 	struct ima_template_entry *entry;
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file_inode(file);
 	int violation = 1;
 	int result;
 
@@ -160,10 +160,10 @@ err_out:
  * @function: calling function (FILE_CHECK, BPRM_CHECK, MMAP_CHECK, MODULE_CHECK)
  *
  * The policy is defined in terms of keypairs:
- * 		subj=, obj=, type=, func=, mask=, fsmagic=
+ *		subj=, obj=, type=, func=, mask=, fsmagic=
  *	subj,obj, and type: are LSM specific.
- * 	func: FILE_CHECK | BPRM_CHECK | MMAP_CHECK | MODULE_CHECK
- * 	mask: contains the permission mask
+ *	func: FILE_CHECK | BPRM_CHECK | MMAP_CHECK | MODULE_CHECK
+ *	mask: contains the permission mask
  *	fsmagic: hex value
  *
  * Returns IMA_MEASURE, IMA_APPRAISE mask.
@@ -177,11 +177,6 @@ int ima_get_action(struct inode *inode, int mask, int function)
 		flags &= ~IMA_APPRAISE;
 
 	return ima_match_policy(inode, function, mask, flags);
-}
-
-int ima_must_measure(struct inode *inode, int mask, int function)
-{
-	return ima_match_policy(inode, function, mask, IMA_MEASURE);
 }
 
 /*
@@ -256,7 +251,7 @@ out:
  *
  * We only get here if the inode has not already been measured,
  * but the measurement could already exist:
- * 	- multiple copies of the same file on either the same or
+ *	- multiple copies of the same file on either the same or
  *	  different filesystems.
  *	- the inode was previously flushed as well as the iint info,
  *	  containing the hashing info.
@@ -268,8 +263,8 @@ void ima_store_measurement(struct integrity_iint_cache *iint,
 			   struct evm_ima_xattr_data *xattr_value,
 			   int xattr_len)
 {
-	const char *op = "add_template_measure";
-	const char *audit_cause = "ENOMEM";
+	static const char op[] = "add_template_measure";
+	static const char audit_cause[] = "ENOMEM";
 	int result = -ENOMEM;
 	struct inode *inode = file_inode(file);
 	struct ima_template_entry *entry;
@@ -330,15 +325,14 @@ const char *ima_d_path(struct path *path, char **pathbuf)
 {
 	char *pathname = NULL;
 
-	/* We will allow 11 spaces for ' (deleted)' to be appended */
-	*pathbuf = kmalloc(PATH_MAX + 11, GFP_KERNEL);
+	*pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (*pathbuf) {
-		pathname = d_path(path, *pathbuf, PATH_MAX + 11);
+		pathname = d_absolute_path(path, *pathbuf, PATH_MAX);
 		if (IS_ERR(pathname)) {
 			kfree(*pathbuf);
 			*pathbuf = NULL;
 			pathname = NULL;
 		}
 	}
-	return pathname;
+	return pathname ?: (const char *)path->dentry->d_name.name;
 }

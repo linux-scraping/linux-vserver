@@ -230,6 +230,7 @@ enum {
 	ATA_FLAG_SW_ACTIVITY	= (1 << 22), /* driver supports sw activity
 					      * led */
 	ATA_FLAG_NO_DIPM	= (1 << 23), /* host not happy with DIPM */
+	ATA_FLAG_LOWTAG		= (1 << 24), /* host wants lowest available tag */
 
 	/* bits 24:31 of ap->flags are reserved for LLD specific flags */
 
@@ -850,7 +851,6 @@ struct ata_port {
 	struct completion	park_req_pending;
 
 	pm_message_t		pm_mesg;
-	int			*pm_result;
 	enum ata_lpm_policy	target_lpm_policy;
 
 	struct timer_list	fastdrain_timer;
@@ -1142,16 +1142,14 @@ extern bool ata_link_offline(struct ata_link *link);
 #ifdef CONFIG_PM
 extern int ata_host_suspend(struct ata_host *host, pm_message_t mesg);
 extern void ata_host_resume(struct ata_host *host);
-extern int ata_sas_port_async_suspend(struct ata_port *ap, int *async);
-extern int ata_sas_port_async_resume(struct ata_port *ap, int *async);
+extern void ata_sas_port_suspend(struct ata_port *ap);
+extern void ata_sas_port_resume(struct ata_port *ap);
 #else
-static inline int ata_sas_port_async_suspend(struct ata_port *ap, int *async)
+static inline void ata_sas_port_suspend(struct ata_port *ap)
 {
-	return 0;
 }
-static inline int ata_sas_port_async_resume(struct ata_port *ap, int *async)
+static inline void ata_sas_port_resume(struct ata_port *ap)
 {
-	return 0;
 }
 #endif
 extern int ata_ratelimit(void);
@@ -1407,14 +1405,14 @@ static inline int sata_srst_pmp(struct ata_link *link)
  * printk helpers
  */
 __printf(3, 4)
-int ata_port_printk(const struct ata_port *ap, const char *level,
-		    const char *fmt, ...);
+void ata_port_printk(const struct ata_port *ap, const char *level,
+		     const char *fmt, ...);
 __printf(3, 4)
-int ata_link_printk(const struct ata_link *link, const char *level,
-		    const char *fmt, ...);
+void ata_link_printk(const struct ata_link *link, const char *level,
+		     const char *fmt, ...);
 __printf(3, 4)
-int ata_dev_printk(const struct ata_device *dev, const char *level,
-		   const char *fmt, ...);
+void ata_dev_printk(const struct ata_device *dev, const char *level,
+		    const char *fmt, ...);
 
 #define ata_port_err(ap, fmt, ...)				\
 	ata_port_printk(ap, KERN_ERR, fmt, ##__VA_ARGS__)

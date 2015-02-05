@@ -391,8 +391,6 @@ out:
 		batadv_neigh_ifinfo_free_ref(router_gw_tq);
 	if (router_orig_tq)
 		batadv_neigh_ifinfo_free_ref(router_orig_tq);
-
-	return;
 }
 
 /**
@@ -687,7 +685,7 @@ batadv_gw_dhcp_recipient_get(struct sk_buff *skb, unsigned int *header_len,
 	if (!pskb_may_pull(skb, *header_len + ETH_HLEN))
 		return BATADV_DHCP_NO;
 
-	ethhdr = (struct ethhdr *)skb->data;
+	ethhdr = eth_hdr(skb);
 	proto = ethhdr->h_proto;
 	*header_len += ETH_HLEN;
 
@@ -696,7 +694,7 @@ batadv_gw_dhcp_recipient_get(struct sk_buff *skb, unsigned int *header_len,
 		if (!pskb_may_pull(skb, *header_len + VLAN_HLEN))
 			return BATADV_DHCP_NO;
 
-		vhdr = (struct vlan_ethhdr *)skb->data;
+		vhdr = vlan_eth_hdr(skb);
 		proto = vhdr->h_vlan_encapsulated_proto;
 		*header_len += VLAN_HLEN;
 	}
@@ -735,7 +733,7 @@ batadv_gw_dhcp_recipient_get(struct sk_buff *skb, unsigned int *header_len,
 		return BATADV_DHCP_NO;
 
 	/* skb->data might have been reallocated by pskb_may_pull() */
-	ethhdr = (struct ethhdr *)skb->data;
+	ethhdr = eth_hdr(skb);
 	if (ntohs(ethhdr->h_proto) == ETH_P_8021Q)
 		ethhdr = (struct ethhdr *)(skb->data + VLAN_HLEN);
 
@@ -772,7 +770,7 @@ batadv_gw_dhcp_recipient_get(struct sk_buff *skb, unsigned int *header_len,
 		if (*p != ETH_ALEN)
 			return BATADV_DHCP_NO;
 
-		memcpy(chaddr, skb->data + chaddr_offset, ETH_ALEN);
+		ether_addr_copy(chaddr, skb->data + chaddr_offset);
 	}
 
 	return ret;
@@ -812,7 +810,7 @@ bool batadv_gw_out_of_range(struct batadv_priv *bat_priv,
 		goto out;
 
 	gw_node = batadv_gw_node_get(bat_priv, orig_dst_node);
-	if (!gw_node->bandwidth_down == 0)
+	if (!gw_node)
 		goto out;
 
 	switch (atomic_read(&bat_priv->gw_mode)) {

@@ -593,15 +593,15 @@ static int snd_nativeinstruments_control_get(struct snd_kcontrol *kcontrol,
 	if (mixer->chip->shutdown)
 		ret = -ENODEV;
 	else
-		ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0), bRequest,
+		ret = snd_usb_ctl_msg(dev, usb_rcvctrlpipe(dev, 0), bRequest,
 				  USB_TYPE_VENDOR | USB_RECIP_DEVICE | USB_DIR_IN,
 				  0, wIndex,
-				  &tmp, sizeof(tmp), 1000);
+				  &tmp, sizeof(tmp));
 	up_read(&mixer->chip->shutdown_rwsem);
 
 	if (ret < 0) {
-		snd_printk(KERN_ERR
-			   "unable to issue vendor read request (ret = %d)", ret);
+		dev_err(&dev->dev,
+			"unable to issue vendor read request (ret = %d)", ret);
 		return ret;
 	}
 
@@ -631,8 +631,8 @@ static int snd_nativeinstruments_control_put(struct snd_kcontrol *kcontrol,
 	up_read(&mixer->chip->shutdown_rwsem);
 
 	if (ret < 0) {
-		snd_printk(KERN_ERR
-			   "unable to issue vendor write request (ret = %d)", ret);
+		dev_err(&dev->dev,
+			"unable to issue vendor write request (ret = %d)", ret);
 		return ret;
 	}
 
@@ -1705,7 +1705,7 @@ void snd_usb_mixer_rc_memory_change(struct usb_mixer_interface *mixer,
 			snd_usb_mixer_notify_id(mixer, mixer->rc_cfg->mute_mixer_id);
 		break;
 	default:
-		snd_printd(KERN_DEBUG "memory change in unknown unit %d\n", unitid);
+		usb_audio_dbg(mixer->chip, "memory change in unknown unit %d\n", unitid);
 		break;
 	}
 }

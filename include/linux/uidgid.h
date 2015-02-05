@@ -130,7 +130,7 @@ static inline bool tag_valid(ktag_t tag)
 
 extern kuid_t make_kuid(struct user_namespace *from, uid_t uid);
 extern kgid_t make_kgid(struct user_namespace *from, gid_t gid);
-extern krag_t make_ktag(struct user_namespace *from, gid_t gid);
+extern ktag_t make_ktag(struct user_namespace *from, gid_t gid);
 
 extern uid_t from_kuid(struct user_namespace *to, kuid_t uid);
 extern gid_t from_kgid(struct user_namespace *to, kgid_t gid);

@@ -629,6 +629,7 @@ static int team_change_mode(struct team *team, const char *kind)
 static void team_notify_peers_work(struct work_struct *work)
 {
 	struct team *team;
+	int val;
 
 	team = container_of(work, struct team, notify_peers.dw.work);
 
@@ -636,9 +637,14 @@ static void team_notify_peers_work(struct work_struct *work)
 		schedule_delayed_work(&team->notify_peers.dw, 0);
 		return;
 	}
+	val = atomic_dec_if_positive(&team->notify_peers.count_pending);
+	if (val < 0) {
+		rtnl_unlock();
+		return;
+	}
 	call_netdevice_notifiers(NETDEV_NOTIFY_PEERS, team->dev);
 	rtnl_unlock();
-	if (!atomic_dec_and_test(&team->notify_peers.count_pending))
+	if (val)
 		schedule_delayed_work(&team->notify_peers.dw,
 				      msecs_to_jiffies(team->notify_peers.interval));
 }
@@ -669,6 +675,7 @@ static void team_notify_peers_fini(struct team *team)
 static void team_mcast_rejoin_work(struct work_struct *work)
 {
 	struct team *team;
+	int val;
 
 	team = container_of(work, struct team, mcast_rejoin.dw.work);
 
@@ -676,9 +683,14 @@ static void team_mcast_rejoin_work(struct work_struct *work)
 		schedule_delayed_work(&team->mcast_rejoin.dw, 0);
 		return;
 	}
+	val = atomic_dec_if_positive(&team->mcast_rejoin.count_pending);
+	if (val < 0) {
+		rtnl_unlock();
+		return;
+	}
 	call_netdevice_notifiers(NETDEV_RESEND_IGMP, team->dev);
 	rtnl_unlock();
-	if (!atomic_dec_and_test(&team->mcast_rejoin.count_pending))
+	if (val)
 		schedule_delayed_work(&team->mcast_rejoin.dw,
 				      msecs_to_jiffies(team->mcast_rejoin.interval));
 }
@@ -968,9 +980,10 @@ static void team_port_disable(struct team *team,
 static void __team_compute_features(struct team *team)
 {
 	struct team_port *port;
-	u32 vlan_features = TEAM_VLAN_FEATURES;
+	u32 vlan_features = TEAM_VLAN_FEATURES & NETIF_F_ALL_FOR_ALL;
 	unsigned short max_hard_header_len = ETH_HLEN;
-	unsigned int flags, dst_release_flag = IFF_XMIT_DST_RELEASE;
+	unsigned int dst_release_flag = IFF_XMIT_DST_RELEASE |
+					IFF_XMIT_DST_RELEASE_PERM;
 
 	list_for_each_entry(port, &team->port_list, list) {
 		vlan_features = netdev_increment_features(vlan_features,
@@ -985,8 +998,9 @@ static void __team_compute_features(struct team *team)
 	team->dev->vlan_features = vlan_features;
 	team->dev->hard_header_len = max_hard_header_len;
 
-	flags = team->dev->priv_flags & ~IFF_XMIT_DST_RELEASE;
-	team->dev->priv_flags = flags | dst_release_flag;
+	team->dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	if (dst_release_flag == (IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM))
+		team->dev->priv_flags |= IFF_XMIT_DST_RELEASE;
 
 	netdev_change_features(team->dev);
 }
@@ -1003,7 +1017,6 @@ static int team_port_enter(struct team *team, struct team_port *port)
 	int err = 0;
 
 	dev_hold(team->dev);
-	port->dev->priv_flags |= IFF_TEAM_PORT;
 	if (team->ops.port_enter) {
 		err = team->ops.port_enter(team, port);
 		if (err) {
@@ -1016,7 +1029,6 @@ static int team_port_enter(struct team *team, struct team_port *port)
 	return 0;
 
 err_port_enter:
-	port->dev->priv_flags &= ~IFF_TEAM_PORT;
 	dev_put(team->dev);
 
 	return err;
@@ -1026,13 +1038,11 @@ static void team_port_leave(struct team *team, struct team_port *port)
 {
 	if (team->ops.port_leave)
 		team->ops.port_leave(team, port);
-	port->dev->priv_flags &= ~IFF_TEAM_PORT;
 	dev_put(team->dev);
 }
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-static int team_port_enable_netpoll(struct team *team, struct team_port *port,
-				    gfp_t gfp)
+static int team_port_enable_netpoll(struct team *team, struct team_port *port)
 {
 	struct netpoll *np;
 	int err;
@@ -1040,11 +1050,11 @@ static int team_port_enable_netpoll(struct team *team, struct team_port *port,
 	if (!team->dev->npinfo)
 		return 0;
 
-	np = kzalloc(sizeof(*np), gfp);
+	np = kzalloc(sizeof(*np), GFP_KERNEL);
 	if (!np)
 		return -ENOMEM;
 
-	err = __netpoll_setup(np, port->dev, gfp);
+	err = __netpoll_setup(np, port->dev);
 	if (err) {
 		kfree(np);
 		return err;
@@ -1067,8 +1077,7 @@ static void team_port_disable_netpoll(struct team_port *port)
 	kfree(np);
 }
 #else
-static int team_port_enable_netpoll(struct team *team, struct team_port *port,
-				    gfp_t gfp)
+static int team_port_enable_netpoll(struct team *team, struct team_port *port)
 {
 	return 0;
 }
@@ -1076,6 +1085,25 @@ static void team_port_disable_netpoll(struct team_port *port)
 {
 }
 #endif
+
+static int team_upper_dev_link(struct net_device *dev,
+			       struct net_device *port_dev)
+{
+	int err;
+
+	err = netdev_master_upper_dev_link(port_dev, dev);
+	if (err)
+		return err;
+	port_dev->priv_flags |= IFF_TEAM_PORT;
+	return 0;
+}
+
+static void team_upper_dev_unlink(struct net_device *dev,
+				  struct net_device *port_dev)
+{
+	netdev_upper_dev_unlink(port_dev, dev);
+	port_dev->priv_flags &= ~IFF_TEAM_PORT;
+}
 
 static void __team_port_change_port_added(struct team_port *port, bool linkup);
 static int team_dev_type_check_change(struct net_device *dev,
@@ -1156,18 +1184,11 @@ static int team_port_add(struct team *team, struct net_device *port_dev)
 		goto err_vids_add;
 	}
 
-	err = team_port_enable_netpoll(team, port, GFP_KERNEL);
+	err = team_port_enable_netpoll(team, port);
 	if (err) {
 		netdev_err(dev, "Failed to enable netpoll on device %s\n",
 			   portname);
 		goto err_enable_netpoll;
-	}
-
-	err = netdev_master_upper_dev_link(port_dev, dev);
-	if (err) {
-		netdev_err(dev, "Device %s failed to set upper link\n",
-			   portname);
-		goto err_set_upper_link;
 	}
 
 	err = netdev_rx_handler_register(port_dev, team_handle_frame,
@@ -1176,6 +1197,13 @@ static int team_port_add(struct team *team, struct net_device *port_dev)
 		netdev_err(dev, "Device %s failed to register rx_handler\n",
 			   portname);
 		goto err_handler_register;
+	}
+
+	err = team_upper_dev_link(dev, port_dev);
+	if (err) {
+		netdev_err(dev, "Device %s failed to set upper link\n",
+			   portname);
+		goto err_set_upper_link;
 	}
 
 	err = __team_option_inst_add_port(team, port);
@@ -1197,12 +1225,12 @@ static int team_port_add(struct team *team, struct net_device *port_dev)
 	return 0;
 
 err_option_port_add:
+	team_upper_dev_unlink(dev, port_dev);
+
+err_set_upper_link:
 	netdev_rx_handler_unregister(port_dev);
 
 err_handler_register:
-	netdev_upper_dev_unlink(port_dev, dev);
-
-err_set_upper_link:
 	team_port_disable_netpoll(port);
 
 err_enable_netpoll:
@@ -1241,8 +1269,8 @@ static int team_port_del(struct team *team, struct net_device *port_dev)
 
 	team_port_disable(team, port);
 	list_del_rcu(&port->list);
+	team_upper_dev_unlink(dev, port_dev);
 	netdev_rx_handler_unregister(port_dev);
-	netdev_upper_dev_unlink(port_dev, dev);
 	team_port_disable_netpoll(port);
 	vlan_vids_del_by_dev(port_dev, dev);
 	dev_uc_unsync(port_dev, dev);
@@ -1540,15 +1568,9 @@ static int team_init(struct net_device *dev)
 	mutex_init(&team->lock);
 	team_set_no_mode(team);
 
-	team->pcpu_stats = alloc_percpu(struct team_pcpu_stats);
+	team->pcpu_stats = netdev_alloc_pcpu_stats(struct team_pcpu_stats);
 	if (!team->pcpu_stats)
 		return -ENOMEM;
-
-	for_each_possible_cpu(i) {
-		struct team_pcpu_stats *team_stats;
-		team_stats = per_cpu_ptr(team->pcpu_stats, i);
-		u64_stats_init(&team_stats->syncp);
-	}
 
 	for (i = 0; i < TEAM_PORT_HASHENTRIES; i++)
 		INIT_HLIST_HEAD(&team->en_port_hlist[i]);
@@ -1770,13 +1792,13 @@ team_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 	for_each_possible_cpu(i) {
 		p = per_cpu_ptr(team->pcpu_stats, i);
 		do {
-			start = u64_stats_fetch_begin_bh(&p->syncp);
+			start = u64_stats_fetch_begin_irq(&p->syncp);
 			rx_packets	= p->rx_packets;
 			rx_bytes	= p->rx_bytes;
 			rx_multicast	= p->rx_multicast;
 			tx_packets	= p->tx_packets;
 			tx_bytes	= p->tx_bytes;
-		} while (u64_stats_fetch_retry_bh(&p->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&p->syncp, start));
 
 		stats->rx_packets	+= rx_packets;
 		stats->rx_bytes		+= rx_bytes;
@@ -1859,7 +1881,7 @@ static void team_netpoll_cleanup(struct net_device *dev)
 }
 
 static int team_netpoll_setup(struct net_device *dev,
-			      struct netpoll_info *npifo, gfp_t gfp)
+			      struct netpoll_info *npifo)
 {
 	struct team *team = netdev_priv(dev);
 	struct team_port *port;
@@ -1867,7 +1889,7 @@ static int team_netpoll_setup(struct net_device *dev,
 
 	mutex_lock(&team->lock);
 	list_for_each_entry(port, &team->port_list, list) {
-		err = team_port_enable_netpoll(team, port, gfp);
+		err = team_port_enable_netpoll(team, port);
 		if (err) {
 			__team_netpoll_cleanup(team);
 			break;
@@ -2053,16 +2075,10 @@ static void team_setup(struct net_device *dev)
 static int team_newlink(struct net *src_net, struct net_device *dev,
 			struct nlattr *tb[], struct nlattr *data[])
 {
-	int err;
-
 	if (tb[IFLA_ADDRESS] == NULL)
 		eth_hw_addr_random(dev);
 
-	err = register_netdevice(dev);
-	if (err)
-		return err;
-
-	return 0;
+	return register_netdevice(dev);
 }
 
 static int team_validate(struct nlattr *tb[], struct nlattr *data[])
@@ -2845,8 +2861,10 @@ static int team_device_event(struct notifier_block *unused,
 	case NETDEV_UP:
 		if (netif_carrier_ok(dev))
 			team_port_change_check(port, true);
+		break;
 	case NETDEV_DOWN:
 		team_port_change_check(port, false);
+		break;
 	case NETDEV_CHANGE:
 		if (netif_running(port->dev))
 			team_port_change_check(port,

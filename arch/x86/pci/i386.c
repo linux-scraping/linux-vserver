@@ -216,7 +216,7 @@ static void pcibios_allocate_bridge_resources(struct pci_dev *dev)
 			continue;
 		if (r->parent)	/* Already allocated */
 			continue;
-		if (!r->start || pci_claim_resource(dev, idx) < 0) {
+		if (!r->start || pci_claim_bridge_resource(dev, idx) < 0) {
 			/*
 			 * Something is wrong with the region.
 			 * Invalidate the resource to prevent
@@ -275,11 +275,16 @@ static void pcibios_allocate_dev_resources(struct pci_dev *dev, int pass)
 					"BAR %d: reserving %pr (d=%d, p=%d)\n",
 					idx, r, disabled, pass);
 				if (pci_claim_resource(dev, idx) < 0) {
-					/* We'll assign a new address later */
-					pcibios_save_fw_addr(dev,
-							idx, r->start);
-					r->end -= r->start;
-					r->start = 0;
+					if (r->flags & IORESOURCE_PCI_FIXED) {
+						dev_info(&dev->dev, "BAR %d %pR is immovable\n",
+							 idx, r);
+					} else {
+						/* We'll assign a new address later */
+						pcibios_save_fw_addr(dev,
+								idx, r->start);
+						r->end -= r->start;
+						r->start = 0;
+					}
 				}
 			}
 		}
@@ -360,6 +365,12 @@ static int __init pcibios_assign_resources(void)
 	return 0;
 }
 
+/**
+ * called in fs_initcall (one below subsys_initcall),
+ * give a chance for motherboard reserve resources
+ */
+fs_initcall(pcibios_assign_resources);
+
 void pcibios_resource_survey_bus(struct pci_bus *bus)
 {
 	dev_printk(KERN_DEBUG, &bus->dev, "Allocating resources\n");
@@ -396,12 +407,6 @@ void __init pcibios_resource_survey(void)
 	ioapic_insert_resources();
 }
 
-/**
- * called in fs_initcall (one below subsys_initcall),
- * give a chance for motherboard reserve resources
- */
-fs_initcall(pcibios_assign_resources);
-
 static const struct vm_operations_struct pci_mmap_ops = {
 	.access = generic_access_phys,
 };
@@ -436,8 +441,6 @@ int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
 		 * as well.
 		 */
 		prot |= _PAGE_CACHE_UC_MINUS;
-
-	prot |= _PAGE_IOMAP;	/* creating a mapping for IO */
 
 	vma->vm_page_prot = __pgprot(prot);
 

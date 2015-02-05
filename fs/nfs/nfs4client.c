@@ -532,6 +532,13 @@ int nfs40_walk_client_list(struct nfs_client *new,
 			*result = pos;
 			dprintk("NFS: <-- %s using nfs_client = %p ({%d})\n",
 				__func__, pos, atomic_read(&pos->cl_count));
+			goto out;
+		case -ERESTARTSYS:
+		case -ETIMEDOUT:
+			/* The callback path may have been inadvertently
+			 * changed. Schedule recovery!
+			 */
+			nfs4_schedule_path_down_recovery(pos);
 		default:
 			goto out;
 		}
@@ -565,19 +572,13 @@ static bool nfs4_match_clientids(struct nfs_client *a, struct nfs_client *b)
 }
 
 /*
- * Returns true if the server owners match
+ * Returns true if the server major ids match
  */
 static bool
-nfs4_match_serverowners(struct nfs_client *a, struct nfs_client *b)
+nfs4_check_clientid_trunking(struct nfs_client *a, struct nfs_client *b)
 {
 	struct nfs41_server_owner *o1 = a->cl_serverowner;
 	struct nfs41_server_owner *o2 = b->cl_serverowner;
-
-	if (o1->minor_id != o2->minor_id) {
-		dprintk("NFS: --> %s server owner minor IDs do not match\n",
-			__func__);
-		return false;
-	}
 
 	if (o1->major_id_sz != o2->major_id_sz)
 		goto out_major_mismatch;
@@ -654,7 +655,12 @@ int nfs41_walk_client_list(struct nfs_client *new,
 		if (!nfs4_match_clientids(pos, new))
 			continue;
 
-		if (!nfs4_match_serverowners(pos, new))
+		/*
+		 * Note that session trunking is just a special subcase of
+		 * client id trunking. In either case, we want to fall back
+		 * to using the existing nfs_client.
+		 */
+		if (!nfs4_check_clientid_trunking(pos, new))
 			continue;
 
 		atomic_inc(&pos->cl_count);
@@ -850,6 +856,11 @@ struct nfs_client *nfs4_set_ds_client(struct nfs_client* mds_clp,
 	};
 	struct rpc_timeout ds_timeout;
 	struct nfs_client *clp;
+	char buf[INET6_ADDRSTRLEN + 1];
+
+	if (rpc_ntop(ds_addr, buf, sizeof(buf)) <= 0)
+		return ERR_PTR(-EINVAL);
+	cl_init.hostname = buf;
 
 	/*
 	 * Set an authflavor equual to the MDS value. Use the MDS nfs_client

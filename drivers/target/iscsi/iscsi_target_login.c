@@ -343,7 +343,7 @@ static int iscsi_login_zero_tsih_s1(
 		return -ENOMEM;
 	}
 
-	sess->se_sess = transport_init_session();
+	sess->se_sess = transport_init_session(TARGET_PROT_NORMAL);
 	if (IS_ERR(sess->se_sess)) {
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
@@ -442,7 +442,7 @@ static int iscsi_login_zero_tsih_s2(
 		}
 		off = mrdsl % PAGE_SIZE;
 		if (!off)
-			return 0;
+			goto check_prot;
 
 		if (mrdsl < PAGE_SIZE)
 			mrdsl = PAGE_SIZE;
@@ -454,6 +454,24 @@ static int iscsi_login_zero_tsih_s2(
 
 		if (iscsi_change_param_sprintf(conn, "MaxRecvDataSegmentLength=%lu\n", mrdsl))
 			return -1;
+		/*
+		 * ISER currently requires that ImmediateData + Unsolicited
+		 * Data be disabled when protection / signature MRs are enabled.
+		 */
+check_prot:
+		if (sess->se_sess->sup_prot_ops &
+		   (TARGET_PROT_DOUT_STRIP | TARGET_PROT_DOUT_PASS |
+		    TARGET_PROT_DOUT_INSERT)) {
+
+			if (iscsi_change_param_sprintf(conn, "ImmediateData=No"))
+				return -1;
+
+			if (iscsi_change_param_sprintf(conn, "InitialR2T=Yes"))
+				return -1;
+
+			pr_debug("Forcing ImmediateData=No + InitialR2T=Yes for"
+				 " T10-PI enabled ISER session\n");
+		}
 	}
 
 	return 0;
@@ -958,8 +976,7 @@ int iscsit_setup_np(
 	return 0;
 fail:
 	np->np_socket = NULL;
-	if (sock)
-		sock_release(sock);
+	sock_release(sock);
 	return ret;
 }
 
@@ -1125,7 +1142,7 @@ iscsit_conn_set_transport(struct iscsi_conn *conn, struct iscsit_transport *t)
 void iscsi_target_login_sess_out(struct iscsi_conn *conn,
 		struct iscsi_np *np, bool zero_tsih, bool new_sess)
 {
-	if (new_sess == false)
+	if (!new_sess)
 		goto old_sess_out;
 
 	pr_err("iSCSI Login negotiation failed.\n");
@@ -1170,8 +1187,7 @@ old_sess_out:
 	if (!IS_ERR(conn->conn_tx_hash.tfm))
 		crypto_free_hash(conn->conn_tx_hash.tfm);
 
-	if (conn->conn_cpumask)
-		free_cpumask_var(conn->conn_cpumask);
+	free_cpumask_var(conn->conn_cpumask);
 
 	kfree(conn->conn_ops);
 
@@ -1185,6 +1201,9 @@ old_sess_out:
 		sock_release(conn->sock);
 		conn->sock = NULL;
 	}
+
+	if (conn->conn_transport->iscsit_wait_conn)
+		conn->conn_transport->iscsit_wait_conn(conn);
 
 	if (conn->conn_transport->iscsit_free_conn)
 		conn->conn_transport->iscsit_free_conn(conn);
@@ -1248,8 +1267,6 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 			iscsit_put_transport(conn->conn_transport);
 			kfree(conn);
 			conn = NULL;
-			if (ret == -ENODEV)
-				goto out;
 			/* Get another socket */
 			return 1;
 		}
@@ -1347,6 +1364,9 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 		goto new_sess_out;
 	}
 	login->zero_tsih = zero_tsih;
+
+	conn->sess->se_sess->sup_prot_ops =
+		conn->conn_transport->iscsit_get_sup_prot_ops(conn);
 
 	tpg = conn->tpg;
 	if (!tpg) {

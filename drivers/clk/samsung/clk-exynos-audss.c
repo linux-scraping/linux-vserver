@@ -17,7 +17,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 
-#include <dt-bindings/clk/exynos-audss-clk.h>
+#include <dt-bindings/clock/exynos-audss-clk.h>
 
 enum exynos_audss_clk_type {
 	TYPE_EXYNOS4210,
@@ -209,6 +209,10 @@ unregister:
 static int exynos_audss_clk_remove(struct platform_device *pdev)
 {
 	int i;
+
+#ifdef CONFIG_PM_SLEEP
+	unregister_syscore_ops(&exynos_audss_clk_syscore_ops);
+#endif
 
 	of_clk_del_provider(pdev->dev.of_node);
 

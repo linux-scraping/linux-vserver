@@ -20,7 +20,7 @@
 #define CACHE_LINE_MASK		(~(L1_CACHE_BYTES - 1))
 
 /*
- * ARC700 doesn't cache any access in top 256M.
+ * ARC700 doesn't cache any access in top 1G (0xc000_0000 to 0xFFFF_FFFF)
  * Ideal for wiring memory mapped peripherals as we don't need to do
  * explicit uncached accesses (LD.di/ST.di) hence more portable drivers
  */
@@ -60,7 +60,7 @@ extern void read_decode_cache_bcr(void);
 #define ARC_REG_IC_IVIC		0x10
 #define ARC_REG_IC_CTRL		0x11
 #define ARC_REG_IC_IVIL		0x19
-#if defined(CONFIG_ARC_MMU_V3) || defined (CONFIG_ARC_MMU_V4)
+#if defined(CONFIG_ARC_MMU_V3)
 #define ARC_REG_IC_PTAG		0x1E
 #endif
 
@@ -74,7 +74,7 @@ extern void read_decode_cache_bcr(void);
 #define ARC_REG_DC_IVDL		0x4A
 #define ARC_REG_DC_FLSH		0x4B
 #define ARC_REG_DC_FLDL		0x4C
-#if defined(CONFIG_ARC_MMU_V3) || defined (CONFIG_ARC_MMU_V4)
+#if defined(CONFIG_ARC_MMU_V3)
 #define ARC_REG_DC_PTAG		0x5C
 #endif
 

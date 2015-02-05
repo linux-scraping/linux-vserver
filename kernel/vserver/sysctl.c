@@ -49,7 +49,7 @@ unsigned int vs_debug_misc	= 0;
 
 
 static struct ctl_table_header *vserver_table_header;
-static ctl_table vserver_root_table[];
+static struct ctl_table vserver_root_table[];
 
 
 void vserver_register_sysctl(void)
@@ -69,7 +69,7 @@ void vserver_unregister_sysctl(void)
 }
 
 
-static int proc_dodebug(ctl_table *table, int write,
+static int proc_dodebug(struct ctl_table *table, int write,
 	void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	char		tmpbuf[20], *p, c;
@@ -139,7 +139,7 @@ static int zero;
 		.extra2		= &zero,		\
 	}
 
-static ctl_table vserver_debug_table[] = {
+static struct ctl_table vserver_debug_table[] = {
 	CTL_ENTRY(CTL_DEBUG_SWITCH,	debug_switch),
 	CTL_ENTRY(CTL_DEBUG_XID,	debug_xid),
 	CTL_ENTRY(CTL_DEBUG_NID,	debug_nid),
@@ -156,7 +156,7 @@ static ctl_table vserver_debug_table[] = {
 	{ 0 }
 };
 
-static ctl_table vserver_root_table[] = {
+static struct ctl_table vserver_root_table[] = {
 	{
 		.procname	= "vserver",
 		.mode		= 0555,

@@ -30,30 +30,32 @@
 void jfs_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = JFS_IP(inode)->mode2;
-
-	inode->i_flags &= ~(S_IMMUTABLE | S_IXUNLINK |
-		S_SYNC | S_APPEND | S_NOATIME | S_DIRSYNC);
+	unsigned int new_fl = 0;
 
 	if (flags & JFS_IMMUTABLE_FL)
-		inode->i_flags |= S_IMMUTABLE;
+		new_fl |= S_IMMUTABLE;
 	if (flags & JFS_IXUNLINK_FL)
 		inode->i_flags |= S_IXUNLINK;
 
 	if (flags & JFS_SYNC_FL)
 		inode->i_flags |= S_SYNC;
 	if (flags & JFS_APPEND_FL)
-		inode->i_flags |= S_APPEND;
+		new_fl |= S_APPEND;
 	if (flags & JFS_NOATIME_FL)
-		inode->i_flags |= S_NOATIME;
+		new_fl |= S_NOATIME;
 	if (flags & JFS_DIRSYNC_FL)
-		inode->i_flags |= S_DIRSYNC;
+		new_fl |= S_DIRSYNC;
+	inode_set_flags(inode, new_fl, S_IMMUTABLE | S_IXUNLINK | S_APPEND | S_NOATIME |
+			S_DIRSYNC | S_SYNC);
 
-	inode->i_vflags &= ~(V_BARRIER | V_COW);
-
+	new_fl = 0;
 	if (flags & JFS_BARRIER_FL)
-		inode->i_vflags |= V_BARRIER;
+		new_fl |= V_BARRIER;
 	if (flags & JFS_COW_FL)
-		inode->i_vflags |= V_COW;
+		new_fl |= V_COW;
+
+	set_mask_bits(&inode->i_vflags,
+		V_BARRIER | V_COW, new_fl);
 }
 
 void jfs_get_inode_flags(struct jfs_inode_info *jfs_ip)

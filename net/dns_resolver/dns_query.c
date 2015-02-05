@@ -93,8 +93,8 @@ int dns_query(const char *type, const char *name, size_t namelen,
 	}
 
 	if (!namelen)
-		namelen = strlen(name);
-	if (namelen < 3)
+		namelen = strnlen(name, 256);
+	if (namelen < 3 || namelen > 255)
 		return -EINVAL;
 	desclen += namelen + 1;
 
@@ -129,6 +129,7 @@ int dns_query(const char *type, const char *name, size_t namelen,
 	}
 
 	down_read(&rkey->sem);
+	set_bit(KEY_FLAG_ROOT_CAN_INVAL, &rkey->flags);
 	rkey->perm |= KEY_USR_VIEW;
 
 	ret = key_validate(rkey);

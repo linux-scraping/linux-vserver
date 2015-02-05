@@ -122,7 +122,7 @@ EXPORT_SYMBOL(__jbd2_debug);
 #endif
 
 /* Checksumming functions */
-int jbd2_verify_csum_type(journal_t *j, journal_superblock_t *sb)
+static int jbd2_verify_csum_type(journal_t *j, journal_superblock_t *sb)
 {
 	if (!jbd2_journal_has_csum_v2or3(j))
 		return 1;
@@ -143,7 +143,7 @@ static __be32 jbd2_superblock_csum(journal_t *j, journal_superblock_t *sb)
 	return cpu_to_be32(csum);
 }
 
-int jbd2_superblock_csum_verify(journal_t *j, journal_superblock_t *sb)
+static int jbd2_superblock_csum_verify(journal_t *j, journal_superblock_t *sb)
 {
 	if (!jbd2_journal_has_csum_v2or3(j))
 		return 1;
@@ -151,7 +151,7 @@ int jbd2_superblock_csum_verify(journal_t *j, journal_superblock_t *sb)
 	return sb->s_checksum == jbd2_superblock_csum(j, sb);
 }
 
-void jbd2_superblock_csum_set(journal_t *j, journal_superblock_t *sb)
+static void jbd2_superblock_csum_set(journal_t *j, journal_superblock_t *sb)
 {
 	if (!jbd2_journal_has_csum_v2or3(j))
 		return;
@@ -302,8 +302,8 @@ static void journal_kill_thread(journal_t *journal)
 	journal->j_flags |= JBD2_UNMOUNT;
 
 	while (journal->j_task) {
-		wake_up(&journal->j_wait_commit);
 		write_unlock(&journal->j_state_lock);
+		wake_up(&journal->j_wait_commit);
 		wait_event(journal->j_wait_done_commit, journal->j_task == NULL);
 		write_lock(&journal->j_state_lock);
 	}
@@ -710,8 +710,8 @@ int jbd2_log_wait_commit(journal_t *journal, tid_t tid)
 	while (tid_gt(tid, journal->j_commit_sequence)) {
 		jbd_debug(1, "JBD2: want %d, j_commit_sequence=%d\n",
 				  tid, journal->j_commit_sequence);
-		wake_up(&journal->j_wait_commit);
 		read_unlock(&journal->j_state_lock);
+		wake_up(&journal->j_wait_commit);
 		wait_event(journal->j_wait_done_commit,
 				!tid_gt(tid, journal->j_commit_sequence));
 		read_lock(&journal->j_state_lock);
@@ -1237,7 +1237,7 @@ journal_t * jbd2_journal_init_inode (struct inode *inode)
 		goto out_err;
 	}
 
-	bh = __getblk(journal->j_dev, blocknr, journal->j_blocksize);
+	bh = getblk_unmovable(journal->j_dev, blocknr, journal->j_blocksize);
 	if (!bh) {
 		printk(KERN_ERR
 		       "%s: Cannot get buffer for journal superblock\n",
@@ -1522,18 +1522,18 @@ static int journal_get_superblock(journal_t *journal)
 		goto out;
 	}
 
-	if (jbd2_journal_has_csum_v2or3(journal) &&
-	    JBD2_HAS_COMPAT_FEATURE(journal, JBD2_FEATURE_COMPAT_CHECKSUM)) {
-		/* Can't have checksum v1 and v2 on at the same time! */
-		printk(KERN_ERR "JBD2: Can't enable checksumming v1 and v2 "
-		       "at the same time!\n");
-		goto out;
-	}
-
 	if (JBD2_HAS_INCOMPAT_FEATURE(journal, JBD2_FEATURE_INCOMPAT_CSUM_V2) &&
 	    JBD2_HAS_INCOMPAT_FEATURE(journal, JBD2_FEATURE_INCOMPAT_CSUM_V3)) {
 		/* Can't have checksum v2 and v3 at the same time! */
 		printk(KERN_ERR "JBD2: Can't enable checksumming v2 and v3 "
+		       "at the same time!\n");
+		goto out;
+	}
+
+	if (jbd2_journal_has_csum_v2or3(journal) &&
+	    JBD2_HAS_COMPAT_FEATURE(journal, JBD2_FEATURE_COMPAT_CHECKSUM)) {
+		/* Can't have checksum v1 and v2 on at the same time! */
+		printk(KERN_ERR "JBD2: Can't enable checksumming v1 and v2/3 "
 		       "at the same time!\n");
 		goto out;
 	}
@@ -1853,13 +1853,12 @@ int jbd2_journal_set_features (journal_t *journal, unsigned long compat,
 				journal->j_chksum_driver = NULL;
 				return 0;
 			}
-		}
 
-		/* Precompute checksum seed for all metadata */
-		if (jbd2_journal_has_csum_v2or3(journal))
+			/* Precompute checksum seed for all metadata */
 			journal->j_csum_seed = jbd2_chksum(journal, ~0,
 							   sb->s_uuid,
 							   sizeof(sb->s_uuid));
+		}
 	}
 
 	/* If enabling v1 checksums, downgrade superblock */

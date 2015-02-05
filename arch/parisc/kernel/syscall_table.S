@@ -432,6 +432,11 @@
 	ENTRY_SAME(sched_setattr)
 	ENTRY_SAME(sched_getattr)	/* 335 */
 	ENTRY_COMP(utimes)
+	ENTRY_SAME(renameat2)
+	ENTRY_SAME(seccomp)
+	ENTRY_SAME(getrandom)
+	ENTRY_SAME(memfd_create)	/* 340 */
+	ENTRY_SAME(bpf)
 
 	/* Nothing yet */
 

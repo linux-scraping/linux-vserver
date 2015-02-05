@@ -141,7 +141,7 @@ static struct property device_disabled = {
 	.value = "disabled",
 };
 
-static struct of_device_id omap_timer_match[] __initdata = {
+static const struct of_device_id omap_timer_match[] __initconst = {
 	{ .compatible = "ti,omap2420-timer", },
 	{ .compatible = "ti,omap3430-timer", },
 	{ .compatible = "ti,omap4430-timer", },
@@ -162,7 +162,7 @@ static struct of_device_id omap_timer_match[] __initdata = {
  * the timer node in device-tree as disabled, to prevent the kernel from
  * registering this timer as a platform device and so no one else can use it.
  */
-static struct device_node * __init omap_get_timer_dt(struct of_device_id *match,
+static struct device_node * __init omap_get_timer_dt(const struct of_device_id *match,
 						     const char *property)
 {
 	struct device_node *np;
@@ -361,7 +361,7 @@ static void __init omap2_gp_clockevent_init(int gptimer_id,
 
 /* Clocksource code */
 static struct omap_dm_timer clksrc;
-static bool use_gptimer_clksrc;
+static bool use_gptimer_clksrc __initdata;
 
 /*
  * clocksource
@@ -388,7 +388,7 @@ static u64 notrace dmtimer_read_sched_clock(void)
 	return 0;
 }
 
-static struct of_device_id omap_counter_match[] __initdata = {
+static const struct of_device_id omap_counter_match[] __initconst = {
 	{ .compatible = "ti,omap-counter32k", },
 	{ }
 };
@@ -513,11 +513,11 @@ static void __init realtime_counter_init(void)
 	rate = clk_get_rate(sys_clk);
 	/* Numerator/denumerator values refer TRM Realtime Counter section */
 	switch (rate) {
-	case 1200000:
+	case 12000000:
 		num = 64;
 		den = 125;
 		break;
-	case 1300000:
+	case 13000000:
 		num = 768;
 		den = 1625;
 		break;
@@ -529,11 +529,11 @@ static void __init realtime_counter_init(void)
 		num = 192;
 		den = 625;
 		break;
-	case 2600000:
+	case 26000000:
 		num = 384;
 		den = 1625;
 		break;
-	case 2700000:
+	case 27000000:
 		num = 256;
 		den = 1125;
 		break;
@@ -546,15 +546,15 @@ static void __init realtime_counter_init(void)
 	}
 
 	/* Program numerator and denumerator registers */
-	reg = __raw_readl(base + INCREMENTER_NUMERATOR_OFFSET) &
+	reg = readl_relaxed(base + INCREMENTER_NUMERATOR_OFFSET) &
 			NUMERATOR_DENUMERATOR_MASK;
 	reg |= num;
-	__raw_writel(reg, base + INCREMENTER_NUMERATOR_OFFSET);
+	writel_relaxed(reg, base + INCREMENTER_NUMERATOR_OFFSET);
 
-	reg = __raw_readl(base + INCREMENTER_DENUMERATOR_RELOAD_OFFSET) &
+	reg = readl_relaxed(base + INCREMENTER_DENUMERATOR_RELOAD_OFFSET) &
 			NUMERATOR_DENUMERATOR_MASK;
 	reg |= den;
-	__raw_writel(reg, base + INCREMENTER_DENUMERATOR_RELOAD_OFFSET);
+	writel_relaxed(reg, base + INCREMENTER_DENUMERATOR_RELOAD_OFFSET);
 
 	arch_timer_freq = (rate / den) * num;
 	set_cntfreq();
@@ -604,7 +604,8 @@ OMAP_SYS_32K_TIMER_INIT(3_secure, 12, "secure_32k_fck", "ti,timer-secure",
 			2, "timer_sys_ck", NULL);
 #endif /* CONFIG_ARCH_OMAP3 */
 
-#if defined(CONFIG_ARCH_OMAP3) || defined(CONFIG_SOC_AM33XX)
+#if defined(CONFIG_ARCH_OMAP3) || defined(CONFIG_SOC_AM33XX) || \
+	defined(CONFIG_SOC_AM43XX)
 OMAP_SYS_GP_TIMER_INIT(3, 2, "timer_sys_ck", NULL,
 		       1, "timer_sys_ck", "ti,timer-alwon");
 #endif
