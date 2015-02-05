@@ -74,18 +74,8 @@ static void __init estimate_frequencies(void)
 	unsigned int giccount = 0, gicstart = 0;
 #endif
 
-#if defined (CONFIG_KVM_GUEST) && defined (CONFIG_KVM_HOST_FREQ)
-	unsigned int prid = read_c0_prid() & (PRID_COMP_MASK | PRID_IMP_MASK);
-
-	/*
-	 * XXXKYMA: hardwire the CPU frequency to Host Freq/4
-	 */
-	count = (CONFIG_KVM_HOST_FREQ * 1000000) >> 3;
-	if ((prid != (PRID_COMP_MIPS | PRID_IMP_20KC)) &&
-	    (prid != (PRID_COMP_MIPS | PRID_IMP_25KF)))
-		count *= 2;
-
-	mips_hpt_frequency = count;
+#if defined(CONFIG_KVM_GUEST) && CONFIG_KVM_GUEST_TIMER_FREQ
+	mips_hpt_frequency = CONFIG_KVM_GUEST_TIMER_FREQ * 1000000;
 	return;
 #endif
 
@@ -168,17 +158,14 @@ unsigned int get_c0_compare_int(void)
 
 static void __init init_rtc(void)
 {
-	unsigned char freq, ctrl;
+	/* stop the clock whilst setting it up */
+	CMOS_WRITE(RTC_SET | RTC_24H, RTC_CONTROL);
 
-	/* Set 32KHz time base if not already set */
-	freq = CMOS_READ(RTC_FREQ_SELECT);
-	if ((freq & RTC_DIV_CTL) != RTC_REF_CLCK_32KHZ)
-		CMOS_WRITE(RTC_REF_CLCK_32KHZ, RTC_FREQ_SELECT);
+	/* 32KHz time base */
+	CMOS_WRITE(RTC_REF_CLCK_32KHZ, RTC_FREQ_SELECT);
 
-	/* Ensure SET bit is clear so RTC can run */
-	ctrl = CMOS_READ(RTC_CONTROL);
-	if (ctrl & RTC_SET)
-		CMOS_WRITE(ctrl & ~RTC_SET, RTC_CONTROL);
+	/* start the clock */
+	CMOS_WRITE(RTC_24H, RTC_CONTROL);
 }
 
 void __init plat_time_init(void)

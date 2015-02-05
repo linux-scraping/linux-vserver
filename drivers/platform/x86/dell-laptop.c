@@ -70,7 +70,7 @@ static struct quirk_entry quirk_dell_vostro_v130 = {
 	.touchpad_led = 1,
 };
 
-static int dmi_matched(const struct dmi_system_id *dmi)
+static int __init dmi_matched(const struct dmi_system_id *dmi)
 {
 	quirks = dmi->driver_data;
 	return 1;
@@ -123,7 +123,7 @@ static const struct dmi_system_id dell_device_table[] __initconst = {
 };
 MODULE_DEVICE_TABLE(dmi, dell_device_table);
 
-static struct dmi_system_id dell_quirks[] = {
+static const struct dmi_system_id dell_quirks[] __initconst = {
 	{
 		.callback = dmi_matched,
 		.ident = "Dell Vostro V130",
@@ -272,6 +272,7 @@ static struct dmi_system_id dell_quirks[] = {
 };
 
 static struct calling_interface_buffer *buffer;
+static struct page *bufferpage;
 static DEFINE_MUTEX(buffer_mutex);
 
 static int hwswitch_state;
@@ -779,7 +780,7 @@ static struct led_classdev touchpad_led = {
 	.flags = LED_CORE_SUSPENDRESUME,
 };
 
-static int touchpad_led_init(struct device *dev)
+static int __init touchpad_led_init(struct device *dev)
 {
 	return led_classdev_register(dev, &touchpad_led);
 }
@@ -824,11 +825,12 @@ static int __init dell_init(void)
 	 * Allocate buffer below 4GB for SMI data--only 32-bit physical addr
 	 * is passed to SMI handler.
 	 */
-	buffer = (void *)__get_free_page(GFP_KERNEL | GFP_DMA32);
-	if (!buffer) {
+	bufferpage = alloc_page(GFP_KERNEL | GFP_DMA32);
+	if (!bufferpage) {
 		ret = -ENOMEM;
 		goto fail_buffer;
 	}
+	buffer = page_address(bufferpage);
 
 	ret = dell_setup_rfkill();
 
@@ -890,7 +892,7 @@ fail_backlight:
 	cancel_delayed_work_sync(&dell_rfkill_work);
 	dell_cleanup_rfkill();
 fail_rfkill:
-	free_page((unsigned long)buffer);
+	free_page((unsigned long)bufferpage);
 fail_buffer:
 	platform_device_del(platform_device);
 fail_platform_device2:

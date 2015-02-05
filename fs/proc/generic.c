@@ -19,6 +19,7 @@
 #include <linux/mount.h>
 #include <linux/init.h>
 #include <linux/idr.h>
+#include <linux/namei.h>
 #include <linux/bitops.h>
 #include <linux/spinlock.h>
 #include <linux/completion.h>
@@ -27,7 +28,7 @@
 
 #include "internal.h"
 
-DEFINE_SPINLOCK(proc_subdir_lock);
+static DEFINE_SPINLOCK(proc_subdir_lock);
 
 static int proc_match(unsigned int len, const char *name, struct proc_dir_entry *de)
 {
@@ -162,6 +163,17 @@ void proc_free_inum(unsigned int inum)
 	spin_unlock_irqrestore(&proc_inum_lock, flags);
 }
 
+static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)
+{
+	nd_set_link(nd, __PDE_DATA(dentry->d_inode));
+	return NULL;
+}
+
+static const struct inode_operations proc_link_inode_operations = {
+	.readlink	= generic_readlink,
+	.follow_link	= proc_follow_link,
+};
+
 /*
  * Don't create negative dentries here, return -ENOENT by hand
  * instead.
@@ -175,8 +187,12 @@ struct dentry *proc_lookup_de(struct proc_dir_entry *de, struct inode *dir,
 	for (de = de->subdir; de ; de = de->next) {
 		if (de->namelen != dentry->d_name.len)
 			continue;
-		if (!vx_hide_check(0, de->vx_flags))
+		if (!vx_hide_check(0, de->vx_flags)) {
+			vxdprintk(VXD_CBIT(misc, 9),
+				VS_Q("%*s") " hidden in proc_lookup_de()",
+				de->namelen, de->name);
 			continue;
+		}
 		if (!memcmp(dentry->d_name.name, de->name, de->namelen)) {
 			pde_get(de);
 			spin_unlock(&proc_subdir_lock);
@@ -235,8 +251,12 @@ int proc_readdir_de(struct proc_dir_entry *de, struct file *file,
 		struct proc_dir_entry *next;
 		pde_get(de);
 
-		if (!vx_hide_check(0, de->vx_flags))
+		if (!vx_hide_check(0, de->vx_flags)) {
+			vxdprintk(VXD_CBIT(misc, 9),
+				VS_Q("%*s") " hidden in proc_readdir_de()",
+				de->namelen, de->name);
 			goto skip;
+		}
 		spin_unlock(&proc_subdir_lock);
 		if (!dir_emit(ctx, de->name, de->namelen,
 			    de->low_ino, de->mode >> 12)) {
@@ -327,28 +347,28 @@ static struct proc_dir_entry *__proc_create(struct proc_dir_entry **parent,
 					  nlink_t nlink)
 {
 	struct proc_dir_entry *ent = NULL;
-	const char *fn = name;
-	unsigned int len;
-
-	/* make sure name is valid */
-	if (!name || !strlen(name))
-		goto out;
+	const char *fn;
+	struct qstr qstr;
 
 	if (xlate_proc_name(name, parent, &fn) != 0)
 		goto out;
+	qstr.name = fn;
+	qstr.len = strlen(fn);
+	if (qstr.len == 0 || qstr.len >= 256) {
+		WARN(1, "name len %u\n", qstr.len);
+		return NULL;
+	}
+	if (*parent == &proc_root && name_to_int(&qstr) != ~0U) {
+		WARN(1, "create '/proc/%s' by hand\n", qstr.name);
+		return NULL;
+	}
 
-	/* At this point there must not be any '/' characters beyond *fn */
-	if (strchr(fn, '/'))
-		goto out;
-
-	len = strlen(fn);
-
-	ent = kzalloc(sizeof(struct proc_dir_entry) + len + 1, GFP_KERNEL);
+	ent = kzalloc(sizeof(struct proc_dir_entry) + qstr.len + 1, GFP_KERNEL);
 	if (!ent)
 		goto out;
 
-	memcpy(ent->name, fn, len + 1);
-	ent->namelen = len;
+	memcpy(ent->name, fn, qstr.len + 1);
+	ent->namelen = qstr.len;
 	ent->mode = mode;
 	ent->nlink = nlink;
 	ent->vx_flags = IATTR_PROC_DEFAULT;

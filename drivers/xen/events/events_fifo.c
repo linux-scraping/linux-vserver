@@ -273,14 +273,10 @@ static uint32_t clear_linked(volatile event_word_t *word)
 static void handle_irq_for_port(unsigned port)
 {
 	int irq;
-	struct irq_desc *desc;
 
 	irq = get_evtchn_to_irq(port);
-	if (irq != -1) {
-		desc = irq_to_desc(irq);
-		if (desc)
-			generic_handle_irq_desc(irq, desc);
-	}
+	if (irq != -1)
+		generic_handle_irq(irq);
 }
 
 static void consume_one_event(unsigned cpu,
@@ -334,7 +330,7 @@ static void evtchn_fifo_handle_events(unsigned cpu)
 	ready = xchg(&control_block->ready, 0);
 
 	while (ready) {
-		q = find_first_bit(BM(&ready), EVTCHN_FIFO_MAX_QUEUES);
+		q = find_first_bit(&ready, EVTCHN_FIFO_MAX_QUEUES);
 		consume_one_event(cpu, control_block, q, &ready);
 		ready |= xchg(&control_block->ready, 0);
 	}

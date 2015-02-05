@@ -28,6 +28,8 @@
 
 #define DMA_ERROR_CODE	(~(dma_addr_t)0)
 extern struct dma_map_ops *dma_ops;
+extern struct dma_map_ops coherent_swiotlb_dma_ops;
+extern struct dma_map_ops noncoherent_swiotlb_dma_ops;
 
 static inline struct dma_map_ops *__generic_dma_ops(struct device *dev)
 {
@@ -44,6 +46,18 @@ static inline struct dma_map_ops *get_dma_ops(struct device *dev)
 	else
 		return __generic_dma_ops(dev);
 }
+
+static inline void set_dma_ops(struct device *dev, struct dma_map_ops *ops)
+{
+	dev->archdata.dma_ops = ops;
+}
+
+static inline int set_arch_dma_coherent_ops(struct device *dev)
+{
+	set_dma_ops(dev, &coherent_swiotlb_dma_ops);
+	return 0;
+}
+#define set_arch_dma_coherent_ops	set_arch_dma_coherent_ops
 
 #include <asm-generic/dma-mapping-common.h>
 

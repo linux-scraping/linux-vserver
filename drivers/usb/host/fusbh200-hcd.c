@@ -1441,7 +1441,7 @@ fusbh200_hub_status_data (struct usb_hcd *hcd, char *buf)
 
 	/*
 	 * Return status information even for ports with OWNER set.
-	 * Otherwise khubd wouldn't see the disconnect event when a
+	 * Otherwise hub_wq wouldn't see the disconnect event when a
 	 * high-speed device is switched over to the companion
 	 * controller by the user.
 	 */
@@ -1530,7 +1530,7 @@ static int fusbh200_hub_control (
 
 		/*
 		 * Even if OWNER is set, so the port is owned by the
-		 * companion controller, khubd needs to be able to clear
+		 * companion controller, hub_wq needs to be able to clear
 		 * the port-change status bits (especially
 		 * USB_PORT_STAT_C_CONNECTION).
 		 */
@@ -1550,9 +1550,10 @@ static int fusbh200_hub_control (
 			if ((temp & PORT_PE) == 0)
 				goto error;
 
+			/* resume signaling for 20 msec */
 			fusbh200_writel(fusbh200, temp | PORT_RESUME, status_reg);
 			fusbh200->reset_done[wIndex] = jiffies
-					+ msecs_to_jiffies(USB_RESUME_TIMEOUT);
+					+ msecs_to_jiffies(20);
 			break;
 		case USB_PORT_FEAT_C_SUSPEND:
 			clear_bit(wIndex, &fusbh200->port_c_suspend);
@@ -1677,7 +1678,7 @@ static int fusbh200_hub_control (
 		}
 
 		/*
-		 * Even if OWNER is set, there's no harm letting khubd
+		 * Even if OWNER is set, there's no harm letting hub_wq
 		 * see the wPortStatus values (they should all be 0 except
 		 * for PORT_POWER anyway).
 		 */
@@ -5354,7 +5355,7 @@ static irqreturn_t fusbh200_irq (struct usb_hcd *hcd)
 				fusbh200->reset_done[0] == 0) {
 
 			/* start 20 msec resume signaling from this port,
-			 * and make khubd collect PORT_STAT_C_SUSPEND to
+			 * and make hub_wq collect PORT_STAT_C_SUSPEND to
 			 * stop that signaling.  Use 5 ms extra for safety,
 			 * like usb_port_resume() does.
 			 */

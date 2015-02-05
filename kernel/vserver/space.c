@@ -88,7 +88,7 @@ static const struct vcmd_space_mask_v1 default_space_mask = {
 		CLONE_NEWIPC |
 #endif
 #ifdef	CONFIG_USER_NS
-		CLONE_NEWUSER |
+//		CLONE_NEWUSER |
 #endif
 #ifdef	CONFIG_PID_NS
 //		CLONE_NEWPID |

@@ -186,17 +186,6 @@ static int receive_room(struct tty_struct *tty)
 	return left;
 }
 
-static inline int tty_copy_to_user(struct tty_struct *tty,
-					void __user *to,
-					const void *from,
-					unsigned long n)
-{
-	struct n_tty_data *ldata = tty->disc_data;
-
-	tty_audit_add_data(tty, to, n, ldata->icanon);
-	return copy_to_user(to, from, n);
-}
-
 /**
  *	n_tty_set_room	-	receive space
  *	@tty: terminal
@@ -258,6 +247,8 @@ static void n_tty_write_wakeup(struct tty_struct *tty)
 
 static void n_tty_check_throttle(struct tty_struct *tty)
 {
+	if (tty->driver->type == TTY_DRIVER_TYPE_PTY)
+		return;
 	/*
 	 * Check the remaining room for the input canonicalization
 	 * mode.  We don't want to throttle the driver if we're in
@@ -1176,7 +1167,7 @@ static void n_tty_receive_break(struct tty_struct *tty)
 	}
 	put_tty_queue('\0', ldata);
 	if (waitqueue_active(&tty->read_wait))
-		wake_up_interruptible(&tty->read_wait);
+		wake_up_interruptible_poll(&tty->read_wait, POLLIN);
 }
 
 /**
@@ -1236,7 +1227,7 @@ static void n_tty_receive_parity_error(struct tty_struct *tty, unsigned char c)
 	} else
 		put_tty_queue(c, ldata);
 	if (waitqueue_active(&tty->read_wait))
-		wake_up_interruptible(&tty->read_wait);
+		wake_up_interruptible_poll(&tty->read_wait, POLLIN);
 }
 
 static void
@@ -1388,7 +1379,7 @@ handle_newline:
 			ldata->canon_head = ldata->read_head;
 			kill_fasync(&tty->fasync, SIGIO, POLL_IN);
 			if (waitqueue_active(&tty->read_wait))
-				wake_up_interruptible(&tty->read_wait);
+				wake_up_interruptible_poll(&tty->read_wait, POLLIN);
 			return 0;
 		}
 	}
@@ -1520,6 +1511,23 @@ n_tty_receive_char_lnext(struct tty_struct *tty, unsigned char c, char flag)
 	} else
 		n_tty_receive_char_flagged(tty, c, flag);
 }
+
+/**
+ *	n_tty_receive_buf	-	data receive
+ *	@tty: terminal device
+ *	@cp: buffer
+ *	@fp: flag buffer
+ *	@count: characters
+ *
+ *	Called by the terminal driver when a block of characters has
+ *	been received. This function must be called from soft contexts
+ *	not from interrupt context. The driver is responsible for making
+ *	calls one at a time and in order (or using flush_to_ldisc)
+ *
+ *	n_tty_receive_buf()/producer path:
+ *		claims non-exclusive termios_rwsem
+ *		publishes read_head and canon_head
+ */
 
 static void
 n_tty_receive_buf_real_raw(struct tty_struct *tty, const unsigned char *cp,
@@ -1672,89 +1680,28 @@ static void __receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		L_EXTPROC(tty)) {
 		kill_fasync(&tty->fasync, SIGIO, POLL_IN);
 		if (waitqueue_active(&tty->read_wait))
-			wake_up_interruptible(&tty->read_wait);
+			wake_up_interruptible_poll(&tty->read_wait, POLLIN);
 	}
 }
 
-/**
- *	n_tty_receive_buf_common	-	process input
- *	@tty: device to receive input
- *	@cp: input chars
- *	@fp: flags for each char (if NULL, all chars are TTY_NORMAL)
- *	@count: number of input chars in @cp
- *
- *	Called by the terminal driver when a block of characters has
- *	been received. This function must be called from soft contexts
- *	not from interrupt context. The driver is responsible for making
- *	calls one at a time and in order (or using flush_to_ldisc)
- *
- *	Returns the # of input chars from @cp which were processed.
- *
- *	In canonical mode, the maximum line length is 4096 chars (including
- *	the line termination char); lines longer than 4096 chars are
- *	truncated. After 4095 chars, input data is still processed but
- *	not stored. Overflow processing ensures the tty can always
- *	receive more input until at least one line can be read.
- *
- *	In non-canonical mode, the read buffer will only accept 4095 chars;
- *	this provides the necessary space for a newline char if the input
- *	mode is switched to canonical.
- *
- *	Note it is possible for the read buffer to _contain_ 4096 chars
- *	in non-canonical mode: the read buffer could already contain the
- *	maximum canon line of 4096 chars when the mode is switched to
- *	non-canonical.
- *
- *	n_tty_receive_buf()/producer path:
- *		claims non-exclusive termios_rwsem
- *		publishes commit_head or canon_head
- */
 static int
 n_tty_receive_buf_common(struct tty_struct *tty, const unsigned char *cp,
 			 char *fp, int count, int flow)
 {
 	struct n_tty_data *ldata = tty->disc_data;
-	int room, n, rcvd = 0, overflow;
+	int room, n, rcvd = 0;
 
 	down_read(&tty->termios_rwsem);
 
 	while (1) {
-		/*
-		 * When PARMRK is set, each input char may take up to 3 chars
-		 * in the read buf; reduce the buffer space avail by 3x
-		 *
-		 * If we are doing input canonicalization, and there are no
-		 * pending newlines, let characters through without limit, so
-		 * that erase characters will be handled.  Other excess
-		 * characters will be beeped.
-		 *
-		 * paired with store in *_copy_from_read_buf() -- guarantees
-		 * the consumer has loaded the data in read_buf up to the new
-		 * read_tail (so this producer will not overwrite unread data)
-		 */
-		size_t tail = ldata->read_tail;
-
-		room = N_TTY_BUF_SIZE - (ldata->read_head - tail);
-		if (I_PARMRK(tty))
-			room = (room + 2) / 3;
-		room--;
-		if (room <= 0) {
-			overflow = ldata->icanon && ldata->canon_head == tail;
-			if (overflow && room < 0)
-				ldata->read_head--;
-			room = overflow;
-			ldata->no_room = flow && !room;
-		} else
-			overflow = 0;
-
+		room = receive_room(tty);
 		n = min(count, room);
-		if (!n)
+		if (!n) {
+			if (flow && !room)
+				ldata->no_room = 1;
 			break;
-
-		/* ignore parity errors if handling overflow */
-		if (!overflow || !fp || *fp != TTY_PARITY)
-			__receive_buf(tty, cp, fp, n);
-
+		}
+		__receive_buf(tty, cp, fp, n);
 		cp += n;
 		if (fp)
 			fp += n;
@@ -1763,17 +1710,7 @@ n_tty_receive_buf_common(struct tty_struct *tty, const unsigned char *cp,
 	}
 
 	tty->receive_room = room;
-
-	/* Unthrottle if handling overflow on pty */
-	if (tty->driver->type == TTY_DRIVER_TYPE_PTY) {
-		if (overflow) {
-			tty_set_flow_change(tty, TTY_UNTHROTTLE_SAFE);
-			tty_unthrottle_safe(tty);
-			__tty_set_flow_change(tty, 0);
-		}
-	} else
-		n_tty_check_throttle(tty);
-
+	n_tty_check_throttle(tty);
 	up_read(&tty->termios_rwsem);
 
 	return rcvd;
@@ -1965,13 +1902,10 @@ static inline int input_available_p(struct tty_struct *tty, int poll)
 	struct n_tty_data *ldata = tty->disc_data;
 	int amt = poll && !TIME_CHAR(tty) && MIN_CHAR(tty) ? MIN_CHAR(tty) : 1;
 
-	if (ldata->icanon && !L_EXTPROC(tty)) {
-		if (ldata->canon_head != ldata->read_tail)
-			return 1;
-	} else if (read_cnt(ldata) >= amt)
-		return 1;
-
-	return 0;
+	if (ldata->icanon && !L_EXTPROC(tty))
+		return ldata->canon_head != ldata->read_tail;
+	else
+		return read_cnt(ldata) >= amt;
 }
 
 /**
@@ -2095,12 +2029,12 @@ static int canon_copy_from_read_buf(struct tty_struct *tty,
 		    __func__, eol, found, n, c, size, more);
 
 	if (n > size) {
-		ret = tty_copy_to_user(tty, *b, read_buf_addr(ldata, tail), size);
+		ret = copy_to_user(*b, read_buf_addr(ldata, tail), size);
 		if (ret)
 			return -EFAULT;
-		ret = tty_copy_to_user(tty, *b + size, ldata->read_buf, n - size);
+		ret = copy_to_user(*b + size, ldata->read_buf, n - size);
 	} else
-		ret = tty_copy_to_user(tty, *b, read_buf_addr(ldata, tail), n);
+		ret = copy_to_user(*b, read_buf_addr(ldata, tail), n);
 
 	if (ret)
 		return -EFAULT;
@@ -2109,7 +2043,7 @@ static int canon_copy_from_read_buf(struct tty_struct *tty,
 
 	if (found)
 		clear_bit(eol, ldata->read_flags);
-	smp_mb__after_clear_bit();
+	smp_mb__after_atomic();
 	ldata->read_tail += c;
 
 	if (found) {

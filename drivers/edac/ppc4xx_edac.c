@@ -921,7 +921,7 @@ static int ppc4xx_edac_init_csrows(struct mem_ctl_info *mci, u32 mcopt1)
 	 */
 
 	for (row = 0; row < mci->nr_csrows; row++) {
-		struct csrow_info *csi = mci->csrows[row];
+		struct csrow_info *csi = &mci->csrows[row];
 
 		/*
 		 * Get the configuration settings for this
@@ -974,7 +974,7 @@ static int ppc4xx_edac_init_csrows(struct mem_ctl_info *mci, u32 mcopt1)
 		 * page size (PAGE_SIZE) or the memory width (2 or 4).
 		 */
 		for (j = 0; j < csi->nr_channels; j++) {
-			struct dimm_info *dimm = csi->channels[j].dimm;
+			struct dimm_info *dimm = csi->channels[j]->dimm;
 
 			dimm->nr_pages  = nr_pages / csi->nr_channels;
 			dimm->grain	= 1;

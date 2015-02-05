@@ -515,11 +515,11 @@ int bus_add_device(struct device *dev)
 			goto out_put;
 		error = device_add_groups(dev, bus->dev_groups);
 		if (error)
-			goto out_id;
+			goto out_groups;
 		error = sysfs_create_link(&bus->p->devices_kset->kobj,
 						&dev->kobj, dev_name(dev));
 		if (error)
-			goto out_groups;
+			goto out_id;
 		error = sysfs_create_link(&dev->kobj,
 				&dev->bus->p->subsys.kobj, "subsystem");
 		if (error)
@@ -1220,7 +1220,7 @@ err_dev:
  * with the name of the subsystem. The root device can carry subsystem-
  * wide attributes. All registered devices are below this single root
  * device and are named after the subsystem with a simple enumeration
- * number appended. The registered devices are not explicitely named;
+ * number appended. The registered devices are not explicitly named;
  * only 'id' in the device needs to be set.
  *
  * Do not use this interface for anything new, it exists for compatibility

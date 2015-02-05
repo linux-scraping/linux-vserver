@@ -44,6 +44,7 @@
 #include <linux/of_device.h>
 #include <linux/clk.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/irqchip/chained_irq.h>
 
 /*
  * GPIO unit register offsets.
@@ -304,13 +305,11 @@ static void mvebu_gpio_edge_irq_mask(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct mvebu_gpio_chip *mvchip = gc->private;
-	struct irq_chip_type *ct = irq_data_get_chip_type(d);
 	u32 mask = 1 << (d->irq - gc->irq_base);
 
 	irq_gc_lock(gc);
-	ct->mask_cache_priv &= ~mask;
-
-	writel_relaxed(ct->mask_cache_priv, mvebu_gpioreg_edge_mask(mvchip));
+	gc->mask_cache &= ~mask;
+	writel_relaxed(gc->mask_cache, mvebu_gpioreg_edge_mask(mvchip));
 	irq_gc_unlock(gc);
 }
 
@@ -318,13 +317,11 @@ static void mvebu_gpio_edge_irq_unmask(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct mvebu_gpio_chip *mvchip = gc->private;
-	struct irq_chip_type *ct = irq_data_get_chip_type(d);
-
 	u32 mask = 1 << (d->irq - gc->irq_base);
 
 	irq_gc_lock(gc);
-	ct->mask_cache_priv |= mask;
-	writel_relaxed(ct->mask_cache_priv, mvebu_gpioreg_edge_mask(mvchip));
+	gc->mask_cache |= mask;
+	writel_relaxed(gc->mask_cache, mvebu_gpioreg_edge_mask(mvchip));
 	irq_gc_unlock(gc);
 }
 
@@ -332,13 +329,11 @@ static void mvebu_gpio_level_irq_mask(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct mvebu_gpio_chip *mvchip = gc->private;
-	struct irq_chip_type *ct = irq_data_get_chip_type(d);
-
 	u32 mask = 1 << (d->irq - gc->irq_base);
 
 	irq_gc_lock(gc);
-	ct->mask_cache_priv &= ~mask;
-	writel_relaxed(ct->mask_cache_priv, mvebu_gpioreg_level_mask(mvchip));
+	gc->mask_cache &= ~mask;
+	writel_relaxed(gc->mask_cache, mvebu_gpioreg_level_mask(mvchip));
 	irq_gc_unlock(gc);
 }
 
@@ -346,13 +341,11 @@ static void mvebu_gpio_level_irq_unmask(struct irq_data *d)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
 	struct mvebu_gpio_chip *mvchip = gc->private;
-	struct irq_chip_type *ct = irq_data_get_chip_type(d);
-
 	u32 mask = 1 << (d->irq - gc->irq_base);
 
 	irq_gc_lock(gc);
-	ct->mask_cache_priv |= mask;
-	writel_relaxed(ct->mask_cache_priv, mvebu_gpioreg_level_mask(mvchip));
+	gc->mask_cache |= mask;
+	writel_relaxed(gc->mask_cache, mvebu_gpioreg_level_mask(mvchip));
 	irq_gc_unlock(gc);
 }
 
@@ -446,11 +439,14 @@ static int mvebu_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 static void mvebu_gpio_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	struct mvebu_gpio_chip *mvchip = irq_get_handler_data(irq);
+	struct irq_chip *chip = irq_desc_get_chip(desc);
 	u32 cause, type;
 	int i;
 
 	if (mvchip == NULL)
 		return;
+
+	chained_irq_enter(chip, desc);
 
 	cause = readl_relaxed(mvebu_gpioreg_data_in(mvchip)) &
 		readl_relaxed(mvebu_gpioreg_level_mask(mvchip));
@@ -474,8 +470,11 @@ static void mvebu_gpio_irq_handler(unsigned int irq, struct irq_desc *desc)
 			polarity ^= 1 << i;
 			writel_relaxed(polarity, mvebu_gpioreg_in_pol(mvchip));
 		}
+
 		generic_handle_irq(irq);
 	}
+
+	chained_irq_exit(chip, desc);
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -536,7 +535,7 @@ static void mvebu_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 #define mvebu_gpio_dbg_show NULL
 #endif
 
-static struct of_device_id mvebu_gpio_of_match[] = {
+static const struct of_device_id mvebu_gpio_of_match[] = {
 	{
 		.compatible = "marvell,orion-gpio",
 		.data       = (void *) MVEBU_GPIO_SOC_VARIANT_ORION,
@@ -575,10 +574,8 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 		soc_variant = MVEBU_GPIO_SOC_VARIANT_ORION;
 
 	mvchip = devm_kzalloc(&pdev->dev, sizeof(struct mvebu_gpio_chip), GFP_KERNEL);
-	if (!mvchip) {
-		dev_err(&pdev->dev, "Cannot allocate memory\n");
+	if (!mvchip)
 		return -ENOMEM;
-	}
 
 	if (of_property_read_u32(pdev->dev.of_node, "ngpios", &ngpios)) {
 		dev_err(&pdev->dev, "Missing ngpios OF property\n");
@@ -739,9 +736,4 @@ static struct platform_driver mvebu_gpio_driver = {
 	},
 	.probe		= mvebu_gpio_probe,
 };
-
-static int __init mvebu_gpio_init(void)
-{
-	return platform_driver_register(&mvebu_gpio_driver);
-}
-postcore_initcall(mvebu_gpio_init);
+module_platform_driver(mvebu_gpio_driver);

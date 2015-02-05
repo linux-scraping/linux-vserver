@@ -423,10 +423,16 @@ static void slc_free_netdev(struct net_device *dev)
 	slcan_devs[i] = NULL;
 }
 
+static int slcan_change_mtu(struct net_device *dev, int new_mtu)
+{
+	return -EINVAL;
+}
+
 static const struct net_device_ops slc_netdev_ops = {
 	.ndo_open               = slc_open,
 	.ndo_stop               = slc_close,
 	.ndo_start_xmit         = slc_xmit,
+	.ndo_change_mtu         = slcan_change_mtu,
 };
 
 static void slc_setup(struct net_device *dev)
@@ -523,7 +529,7 @@ static struct slcan *slc_alloc(dev_t line)
 		return NULL;
 
 	sprintf(name, "slcan%d", i);
-	dev = alloc_netdev(sizeof(*sl), name, slc_setup);
+	dev = alloc_netdev(sizeof(*sl), name, NET_NAME_UNKNOWN, slc_setup);
 	if (!dev)
 		return NULL;
 

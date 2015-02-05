@@ -508,7 +508,7 @@ static int riptide_reset(struct cmdif *cif, struct snd_riptide *chip);
 /*
  */
 
-static DEFINE_PCI_DEVICE_TABLE(snd_riptide_ids) = {
+static const struct pci_device_id snd_riptide_ids[] = {
 	{ PCI_DEVICE(0x127a, 0x4310) },
 	{ PCI_DEVICE(0x127a, 0x4320) },
 	{ PCI_DEVICE(0x127a, 0x4330) },
@@ -517,7 +517,7 @@ static DEFINE_PCI_DEVICE_TABLE(snd_riptide_ids) = {
 };
 
 #ifdef SUPPORT_JOYSTICK
-static DEFINE_PCI_DEVICE_TABLE(snd_riptide_joystick_ids) = {
+static const struct pci_device_id snd_riptide_joystick_ids[] = {
 	{ PCI_DEVICE(0x127a, 0x4312) },
 	{ PCI_DEVICE(0x127a, 0x4322) },
 	{ PCI_DEVICE(0x127a, 0x4332) },
@@ -941,7 +941,7 @@ setmixer(struct cmdif *cif, short num, unsigned short rval, unsigned short lval)
 	union cmdret rptr = CMDRET_ZERO;
 	int i = 0;
 
-	snd_printdd("sent mixer %d: 0x%d 0x%d\n", num, rval, lval);
+	snd_printdd("sent mixer %d: 0x%x 0x%x\n", num, rval, lval);
 	do {
 		SEND_SDGV(cif, num, num, rval, lval);
 		SEND_RDGV(cif, num, num, &rptr);
@@ -1080,7 +1080,7 @@ getmixer(struct cmdif *cif, short num, unsigned short *rval,
 		return -EIO;
 	*rval = rptr.retwords[0];
 	*lval = rptr.retwords[1];
-	snd_printdd("got mixer %d: 0x%d 0x%d\n", num, *rval, *lval);
+	snd_printdd("got mixer %d: 0x%x 0x%x\n", num, *rval, *lval);
 	return 0;
 }
 
@@ -1916,8 +1916,6 @@ snd_riptide_create(struct snd_card *card, struct pci_dev *pci,
 		return err;
 	}
 
-	snd_card_set_dev(card, &pci->dev);
-
 	*rchip = chip;
 	return 0;
 }
@@ -2032,43 +2030,32 @@ snd_riptide_joystick_probe(struct pci_dev *pci, const struct pci_device_id *id)
 {
 	static int dev;
 	struct gameport *gameport;
-	int ret;
 
 	if (dev >= SNDRV_CARDS)
 		return -ENODEV;
-
 	if (!enable[dev]) {
-		ret = -ENOENT;
-		goto inc_dev;
+		dev++;
+		return -ENOENT;
 	}
 
-	if (!joystick_port[dev]) {
-		ret = 0;
-		goto inc_dev;
-	}
+	if (!joystick_port[dev++])
+		return 0;
 
 	gameport = gameport_allocate_port();
-	if (!gameport) {
-		ret = -ENOMEM;
-		goto inc_dev;
-	}
+	if (!gameport)
+		return -ENOMEM;
 	if (!request_region(joystick_port[dev], 8, "Riptide gameport")) {
 		snd_printk(KERN_WARNING
 			   "Riptide: cannot grab gameport 0x%x\n",
 			   joystick_port[dev]);
 		gameport_free_port(gameport);
-		ret = -EBUSY;
-		goto inc_dev;
+		return -EBUSY;
 	}
 
 	gameport->io = joystick_port[dev];
 	gameport_register_port(gameport);
 	pci_set_drvdata(pci, gameport);
-
-	ret = 0;
-inc_dev:
-	dev++;
-	return ret;
+	return 0;
 }
 
 static void snd_riptide_joystick_remove(struct pci_dev *pci)
@@ -2097,7 +2084,8 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 		return -ENOENT;
 	}
 
-	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
+	err = snd_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
+			   0, &card);
 	if (err < 0)
 		return err;
 	err = snd_riptide_create(card, pci, &chip);

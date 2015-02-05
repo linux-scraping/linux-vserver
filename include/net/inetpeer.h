@@ -61,7 +61,6 @@ struct inet_peer {
 struct inet_peer_base {
 	struct inet_peer __rcu	*root;
 	seqlock_t		lock;
-	u32			flush_seq;
 	int			total;
 };
 
@@ -171,5 +170,4 @@ static inline void inet_peer_refcheck(const struct inet_peer *p)
 {
 	WARN_ON_ONCE(atomic_read(&p->refcnt) <= 0);
 }
-
 #endif /* _NET_INETPEER_H */

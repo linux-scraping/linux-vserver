@@ -85,7 +85,7 @@ static long cifs_ioctl_clone(unsigned int xid, struct file *dst_file,
 		goto out_fput;
 	}
 
-	src_inode = src_file.file->f_dentry->d_inode;
+	src_inode = file_inode(src_file.file);
 	rc = -EINVAL;
 	if (S_ISDIR(src_inode->i_mode))
 		goto out_fput;

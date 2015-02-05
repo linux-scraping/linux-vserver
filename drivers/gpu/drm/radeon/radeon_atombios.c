@@ -458,7 +458,7 @@ static bool radeon_atom_apply_quirks(struct drm_device *dev,
 	return true;
 }
 
-const int supported_devices_connector_convert[] = {
+static const int supported_devices_connector_convert[] = {
 	DRM_MODE_CONNECTOR_Unknown,
 	DRM_MODE_CONNECTOR_VGA,
 	DRM_MODE_CONNECTOR_DVII,
@@ -477,7 +477,7 @@ const int supported_devices_connector_convert[] = {
 	DRM_MODE_CONNECTOR_DisplayPort
 };
 
-const uint16_t supported_devices_connector_object_id_convert[] = {
+static const uint16_t supported_devices_connector_object_id_convert[] = {
 	CONNECTOR_OBJECT_ID_NONE,
 	CONNECTOR_OBJECT_ID_VGA,
 	CONNECTOR_OBJECT_ID_DUAL_LINK_DVI_I, /* not all boards support DL */
@@ -494,7 +494,7 @@ const uint16_t supported_devices_connector_object_id_convert[] = {
 	CONNECTOR_OBJECT_ID_SVIDEO
 };
 
-const int object_connector_convert[] = {
+static const int object_connector_convert[] = {
 	DRM_MODE_CONNECTOR_Unknown,
 	DRM_MODE_CONNECTOR_DVII,
 	DRM_MODE_CONNECTOR_DVII,
@@ -1234,10 +1234,18 @@ bool radeon_atom_get_clock_info(struct drm_device *dev)
 			rdev->clock.default_dispclk =
 				le32_to_cpu(firmware_info->info_21.ulDefaultDispEngineClkFreq);
 			if (rdev->clock.default_dispclk == 0) {
-				if (ASIC_IS_DCE5(rdev))
+				if (ASIC_IS_DCE6(rdev))
+					rdev->clock.default_dispclk = 60000; /* 600 Mhz */
+				else if (ASIC_IS_DCE5(rdev))
 					rdev->clock.default_dispclk = 54000; /* 540 Mhz */
 				else
 					rdev->clock.default_dispclk = 60000; /* 600 Mhz */
+			}
+			/* set a reasonable default for DP */
+			if (ASIC_IS_DCE6(rdev) && (rdev->clock.default_dispclk < 53900)) {
+				DRM_INFO("Changing default dispclk from %dMhz to 600Mhz\n",
+					 rdev->clock.default_dispclk / 100);
+				rdev->clock.default_dispclk = 60000;
 			}
 			rdev->clock.dp_extclk =
 				le16_to_cpu(firmware_info->info_21.usUniphyDPModeExtClkFreq);
@@ -3272,7 +3280,6 @@ int radeon_atom_get_voltage_evv(struct radeon_device *rdev,
 
 	args.in.ucVoltageType = VOLTAGE_TYPE_VDDC;
 	args.in.ucVoltageMode = ATOM_GET_VOLTAGE_EVV_VOLTAGE;
-	args.in.usVoltageLevel = cpu_to_le16(virtual_voltage_id);
 	args.in.ulSCLKFreq =
 		cpu_to_le32(rdev->pm.dpm.dyn_state.vddc_dependency_on_sclk.entries[entry_id].clk);
 
@@ -3442,6 +3449,50 @@ radeon_atom_is_voltage_gpio(struct radeon_device *rdev,
 
 	}
 	return false;
+}
+
+int radeon_atom_get_svi2_info(struct radeon_device *rdev,
+			      u8 voltage_type,
+			      u8 *svd_gpio_id, u8 *svc_gpio_id)
+{
+	int index = GetIndexIntoMasterTable(DATA, VoltageObjectInfo);
+	u8 frev, crev;
+	u16 data_offset, size;
+	union voltage_object_info *voltage_info;
+	union voltage_object *voltage_object = NULL;
+
+	if (atom_parse_data_header(rdev->mode_info.atom_context, index, &size,
+				   &frev, &crev, &data_offset)) {
+		voltage_info = (union voltage_object_info *)
+			(rdev->mode_info.atom_context->bios + data_offset);
+
+		switch (frev) {
+		case 3:
+			switch (crev) {
+			case 1:
+				voltage_object = (union voltage_object *)
+					atom_lookup_voltage_object_v3(&voltage_info->v3,
+								      voltage_type,
+								      VOLTAGE_OBJ_SVID2);
+				if (voltage_object) {
+					*svd_gpio_id = voltage_object->v3.asSVID2Obj.ucSVDGpioId;
+					*svc_gpio_id = voltage_object->v3.asSVID2Obj.ucSVCGpioId;
+				} else {
+					return -EINVAL;
+				}
+				break;
+			default:
+				DRM_ERROR("unknown voltage object table\n");
+				return -EINVAL;
+			}
+			break;
+		default:
+			DRM_ERROR("unknown voltage object table\n");
+			return -EINVAL;
+		}
+
+	}
+	return 0;
 }
 
 int radeon_atom_get_max_voltage(struct radeon_device *rdev,

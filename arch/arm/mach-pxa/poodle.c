@@ -25,11 +25,11 @@
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/i2c/pxa-i2c.h>
-#include <linux/regulator/machine.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/spi/pxa2xx_spi.h>
 #include <linux/mtd/sharpsl.h>
+#include <linux/memblock.h>
 
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
@@ -455,16 +455,12 @@ static void __init poodle_init(void)
 	pxa_set_i2c_info(NULL);
 	i2c_register_board_info(0, ARRAY_AND_SIZE(poodle_i2c_devices));
 	poodle_init_spi();
-	regulator_has_full_constraints();
 }
 
-static void __init fixup_poodle(struct tag *tags, char **cmdline,
-				struct meminfo *mi)
+static void __init fixup_poodle(struct tag *tags, char **cmdline)
 {
 	sharpsl_save_param();
-	mi->nr_banks=1;
-	mi->bank[0].start = 0xa0000000;
-	mi->bank[0].size = (32*1024*1024);
+	memblock_add(0xa0000000, SZ_32M);
 }
 
 MACHINE_START(POODLE, "SHARP Poodle")

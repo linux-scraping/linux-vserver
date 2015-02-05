@@ -374,7 +374,7 @@ void sunrpc_destroy_cache_detail(struct cache_detail *cd)
 	}
 	return;
 out:
-	printk(KERN_ERR "nfsd: failed to unregister %s cache\n", cd->name);
+	printk(KERN_ERR "RPC: failed to unregister %s cache\n", cd->name);
 }
 EXPORT_SYMBOL_GPL(sunrpc_destroy_cache_detail);
 
@@ -920,7 +920,7 @@ static unsigned int cache_poll(struct file *filp, poll_table *wait,
 	poll_wait(filp, &queue_wait, wait);
 
 	/* alway allow write */
-	mask = POLLOUT | POLLWRNORM;
+	mask = POLL_OUT | POLLWRNORM;
 
 	if (!rp)
 		return mask;

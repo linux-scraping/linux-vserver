@@ -188,7 +188,7 @@ static bool batadv_frag_insert_packet(struct batadv_orig_node *orig_node,
 
 	/* Reached the end of the list, so insert after 'frag_entry_last'. */
 	if (likely(frag_entry_last)) {
-		hlist_add_after(&frag_entry_last->list, &frag_entry_new->list);
+		hlist_add_behind(&frag_entry_new->list, &frag_entry_last->list);
 		chain->size += skb->len - hdr_size;
 		chain->timestamp = jiffies;
 		ret = true;
@@ -454,8 +454,8 @@ bool batadv_frag_send_packet(struct sk_buff *skb,
 	frag_header.reserved = 0;
 	frag_header.no = 0;
 	frag_header.total_size = htons(skb->len);
-	memcpy(frag_header.orig, primary_if->net_dev->dev_addr, ETH_ALEN);
-	memcpy(frag_header.dest, orig_node->orig, ETH_ALEN);
+	ether_addr_copy(frag_header.orig, primary_if->net_dev->dev_addr);
+	ether_addr_copy(frag_header.dest, orig_node->orig);
 
 	/* Eat and send fragments from the tail of skb */
 	while (skb->len > max_fragment_size) {

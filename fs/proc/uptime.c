@@ -6,7 +6,7 @@
 #include <linux/time.h>
 #include <linux/kernel_stat.h>
 #include <linux/vserver/cvirt.h>
-#include <asm/cputime.h>
+#include <linux/cputime.h>
 
 static int uptime_proc_show(struct seq_file *m, void *v)
 {

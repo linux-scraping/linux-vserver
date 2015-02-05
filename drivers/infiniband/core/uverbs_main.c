@@ -87,6 +87,7 @@ static ssize_t (*uverbs_cmd_table[])(struct ib_uverbs_file *file,
 	[IB_USER_VERBS_CMD_ALLOC_PD]		= ib_uverbs_alloc_pd,
 	[IB_USER_VERBS_CMD_DEALLOC_PD]		= ib_uverbs_dealloc_pd,
 	[IB_USER_VERBS_CMD_REG_MR]		= ib_uverbs_reg_mr,
+	[IB_USER_VERBS_CMD_REREG_MR]		= ib_uverbs_rereg_mr,
 	[IB_USER_VERBS_CMD_DEREG_MR]		= ib_uverbs_dereg_mr,
 	[IB_USER_VERBS_CMD_ALLOC_MW]		= ib_uverbs_alloc_mw,
 	[IB_USER_VERBS_CMD_DEALLOC_MW]		= ib_uverbs_dealloc_mw,
@@ -501,6 +502,10 @@ void ib_uverbs_cq_event_handler(struct ib_event *event, void *context_ptr)
 void ib_uverbs_qp_event_handler(struct ib_event *event, void *context_ptr)
 {
 	struct ib_uevent_object *uobj;
+
+	/* for XRC target qp's, check that qp is live */
+	if (!event->element.qp->uobject || !event->element.qp->uobject->live)
+		return;
 
 	uobj = container_of(event->element.qp->uobject,
 			    struct ib_uevent_object, uobject);

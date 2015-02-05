@@ -61,6 +61,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(DCU10_VENDOR_ID, DCU10_PRODUCT_ID) },
 	{ USB_DEVICE(SITECOM_VENDOR_ID, SITECOM_PRODUCT_ID) },
 	{ USB_DEVICE(ALCATEL_VENDOR_ID, ALCATEL_PRODUCT_ID) },
+	{ USB_DEVICE(SAMSUNG_VENDOR_ID, SAMSUNG_PRODUCT_ID) },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_SX1),
 		.driver_info = PL2303_QUIRK_UART_STATE_IDX0 },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X65),
@@ -160,6 +161,9 @@ static const struct pl2303_type_data pl2303_type_data[TYPE_COUNT] = {
 	[TYPE_01] = {
 		.max_baud_rate =	1228800,
 		.quirks =		PL2303_QUIRK_LEGACY,
+	},
+	[TYPE_HX] = {
+		.max_baud_rate =	12000000,
 	},
 };
 
@@ -394,16 +398,14 @@ static void pl2303_encode_baud_rate(struct tty_struct *tty,
 	if (spriv->type->max_baud_rate)
 		baud = min_t(speed_t, baud, spriv->type->max_baud_rate);
 	/*
-	 * Set baud rate to nearest supported value.
-	 *
-	 * NOTE: Baud rate 500k can only be set using divisors.
+	 * Use direct method for supported baud rates, otherwise use divisors.
 	 */
 	baud_sup = pl2303_get_supported_baud_rate(baud);
 
-	if (baud == 500000)
-		baud = pl2303_encode_baud_rate_divisor(buf, baud);
+	if (baud == baud_sup)
+		baud = pl2303_encode_baud_rate_direct(buf, baud);
 	else
-		baud = pl2303_encode_baud_rate_direct(buf, baud_sup);
+		baud = pl2303_encode_baud_rate_divisor(buf, baud);
 
 	/* Save resulting baud rate */
 	tty_encode_baud_rate(tty, baud, baud);

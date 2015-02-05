@@ -125,7 +125,7 @@ static void _rtl92ce_query_rxphystatus(struct ieee80211_hw *hw,
 	u32 rssi, total_rssi = 0;
 	bool is_cck_rate;
 
-	is_cck_rate = RX_HAL_IS_CCK_RATE(pdesc);
+	is_cck_rate = RX_HAL_IS_CCK_RATE(pdesc->rxmcs);
 	pstats->packet_matchbssid = packet_match_bssid;
 	pstats->packet_toself = packet_toself;
 	pstats->is_cck = is_cck_rate;
@@ -361,7 +361,7 @@ bool rtl92ce_rx_query_desc(struct ieee80211_hw *hw,
 	stats->rx_is40Mhzpacket = (bool) GET_RX_DESC_BW(pdesc);
 	stats->is_ht = (bool)GET_RX_DESC_RXHT(pdesc);
 
-	stats->is_cck = RX_HAL_IS_CCK_RATE(pdesc);
+	stats->is_cck = RX_HAL_IS_CCK_RATE(pdesc->rxmcs);
 
 	rx_status->freq = hw->conf.chandef.chan->center_freq;
 	rx_status->band = hw->conf.chandef.chan->band;
@@ -389,11 +389,7 @@ bool rtl92ce_rx_query_desc(struct ieee80211_hw *hw,
 	 * to decrypt it
 	 */
 	if (stats->decrypted) {
-		if (!hdr) {
-			/* In testing, hdr was NULL here */
-			return false;
-		}
-		if ((ieee80211_is_robust_mgmt_frame(hdr)) &&
+		if ((_ieee80211_is_robust_mgmt_frame(hdr)) &&
 		    (ieee80211_has_protected(hdr->frame_control)))
 			rx_status->flag &= ~RX_FLAG_DECRYPTED;
 		else
@@ -426,7 +422,7 @@ bool rtl92ce_rx_query_desc(struct ieee80211_hw *hw,
 
 void rtl92ce_tx_fill_desc(struct ieee80211_hw *hw,
 			  struct ieee80211_hdr *hdr, u8 *pdesc_tx,
-			  struct ieee80211_tx_info *info,
+			  u8 *pbd_desc_tx, struct ieee80211_tx_info *info,
 			  struct ieee80211_sta *sta,
 			  struct sk_buff *skb,
 			  u8 hw_queue, struct rtl_tcb_desc *tcb_desc)
@@ -666,7 +662,8 @@ void rtl92ce_tx_fill_cmddesc(struct ieee80211_hw *hw,
 		      "H2C Tx Cmd Content", pdesc, TX_DESC_SIZE);
 }
 
-void rtl92ce_set_desc(u8 *pdesc, bool istx, u8 desc_name, u8 *val)
+void rtl92ce_set_desc(struct ieee80211_hw *hw, u8 *pdesc, bool istx,
+		      u8 desc_name, u8 *val)
 {
 	if (istx) {
 		switch (desc_name) {
@@ -723,13 +720,15 @@ u32 rtl92ce_get_desc(u8 *p_desc, bool istx, u8 desc_name)
 			break;
 		}
 	} else {
-		struct rx_desc_92c *pdesc = (struct rx_desc_92c *)p_desc;
 		switch (desc_name) {
 		case HW_DESC_OWN:
-			ret = GET_RX_DESC_OWN(pdesc);
+			ret = GET_RX_DESC_OWN(p_desc);
 			break;
 		case HW_DESC_RXPKT_LEN:
-			ret = GET_RX_DESC_PKT_LEN(pdesc);
+			ret = GET_RX_DESC_PKT_LEN(p_desc);
+			break;
+		case HW_DESC_RXBUFF_ADDR:
+			ret = GET_RX_DESC_BUFF_ADDR(p_desc);
 			break;
 		default:
 			RT_ASSERT(false, "ERR rxdesc :%d not process\n",
@@ -738,6 +737,23 @@ u32 rtl92ce_get_desc(u8 *p_desc, bool istx, u8 desc_name)
 		}
 	}
 	return ret;
+}
+
+bool rtl92ce_is_tx_desc_closed(struct ieee80211_hw *hw,
+			       u8 hw_queue, u16 index)
+{
+	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
+	struct rtl8192_tx_ring *ring = &rtlpci->tx_ring[hw_queue];
+	u8 *entry = (u8 *)(&ring->desc[ring->idx]);
+	u8 own = (u8)rtl92ce_get_desc(entry, true, HW_DESC_OWN);
+
+	/*beacon packet will only use the first
+	 *descriptor defautly,and the own may not
+	 *be cleared by the hardware
+	 */
+	if (own)
+		return false;
+	return true;
 }
 
 void rtl92ce_tx_polling(struct ieee80211_hw *hw, u8 hw_queue)

@@ -1022,76 +1022,79 @@ void proc_vx_init(void)
 
 /* per pid info */
 
+void render_cap_t(struct seq_file *, const char *,
+	struct vx_info *, kernel_cap_t *);
 
-int proc_pid_vx_info(struct task_struct *p, char *buffer)
+
+int proc_pid_vx_info(
+	struct seq_file *m,
+	struct pid_namespace *ns,
+	struct pid *pid,
+	struct task_struct *p)
 {
 	struct vx_info *vxi;
-	char *orig = buffer;
 
-	buffer += sprintf(buffer, "XID:\t%d\n", vx_task_xid(p));
+	seq_printf(m, "XID:\t%d\n", vx_task_xid(p));
 
 	vxi = task_get_vx_info(p);
 	if (!vxi)
-		goto out;
+		return 0;
 
-	buffer += sprintf(buffer, "BCaps:\t");
-	buffer = print_cap_t(buffer, &vxi->vx_bcaps);
-	buffer += sprintf(buffer, "\n");
-	buffer += sprintf(buffer, "CCaps:\t%016llx\n",
+	render_cap_t(m, "BCaps:\t", vxi, &vxi->vx_bcaps);
+	seq_printf(m, "CCaps:\t%016llx\n",
 		(unsigned long long)vxi->vx_ccaps);
-	buffer += sprintf(buffer, "CFlags:\t%016llx\n",
+	seq_printf(m, "CFlags:\t%016llx\n",
 		(unsigned long long)vxi->vx_flags);
-	buffer += sprintf(buffer, "CIPid:\t%d\n", vxi->vx_initpid);
+	seq_printf(m, "CIPid:\t%d\n", vxi->vx_initpid);
 
 	put_vx_info(vxi);
-out:
-	return buffer - orig;
+	return 0;
 }
 
 
-int proc_pid_nx_info(struct task_struct *p, char *buffer)
+int proc_pid_nx_info(
+	struct seq_file *m,
+	struct pid_namespace *ns,
+	struct pid *pid,
+	struct task_struct *p)
 {
 	struct nx_info *nxi;
 	struct nx_addr_v4 *v4a;
 #ifdef	CONFIG_IPV6
 	struct nx_addr_v6 *v6a;
 #endif
-	char *orig = buffer;
 	int i;
 
-	buffer += sprintf(buffer, "NID:\t%d\n", nx_task_nid(p));
+	seq_printf(m, "NID:\t%d\n", nx_task_nid(p));
 
 	nxi = task_get_nx_info(p);
 	if (!nxi)
-		goto out;
+		return 0;
 
-	buffer += sprintf(buffer, "NCaps:\t%016llx\n",
+	seq_printf(m, "NCaps:\t%016llx\n",
 		(unsigned long long)nxi->nx_ncaps);
-	buffer += sprintf(buffer, "NFlags:\t%016llx\n",
+	seq_printf(m, "NFlags:\t%016llx\n",
 		(unsigned long long)nxi->nx_flags);
 
-	buffer += sprintf(buffer,
-		"V4Root[bcast]:\t" NIPQUAD_FMT "\n",
+	seq_printf(m, "V4Root[bcast]:\t" NIPQUAD_FMT "\n",
 		NIPQUAD(nxi->v4_bcast.s_addr));
-	buffer += sprintf (buffer,
-		"V4Root[lback]:\t" NIPQUAD_FMT "\n",
+	seq_printf(m, "V4Root[lback]:\t" NIPQUAD_FMT "\n",
 		NIPQUAD(nxi->v4_lback.s_addr));
 	if (!NX_IPV4(nxi))
 		goto skip_v4;
 	for (i = 0, v4a = &nxi->v4; v4a; i++, v4a = v4a->next)
-		buffer += sprintf(buffer, "V4Root[%d]:\t" NXAV4_FMT "\n",
+		seq_printf(m, "V4Root[%d]:\t" NXAV4_FMT "\n",
 			i, NXAV4(v4a));
 skip_v4:
 #ifdef	CONFIG_IPV6
 	if (!NX_IPV6(nxi))
 		goto skip_v6;
 	for (i = 0, v6a = &nxi->v6; v6a; i++, v6a = v6a->next)
-		buffer += sprintf(buffer, "V6Root[%d]:\t" NXAV6_FMT "\n",
+		seq_printf(m, "V6Root[%d]:\t" NXAV6_FMT "\n",
 			i, NXAV6(v6a));
 skip_v6:
 #endif
 	put_nx_info(nxi);
-out:
-	return buffer - orig;
+	return 0;
 }
 

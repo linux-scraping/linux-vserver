@@ -31,6 +31,7 @@
 #include <asm/unistd.h>
 
 #include "entry.h"
+#include "kernel.h"
 #include "systbls.h"
 
 /* #define DEBUG_UNIMP_SYSCALL */
@@ -332,7 +333,7 @@ SYSCALL_DEFINE6(sparc_ipc, unsigned int, call, int, first, unsigned long, second
 	long err;
 
 	/* No need for backward compatibility. We can start fresh... */
-	if (call <= SEMTIMEDOP) {
+	if (call <= SEMCTL) {
 		switch (call) {
 		case SEMOP:
 			err = sys_semtimedop(first, ptr,

@@ -850,6 +850,10 @@ static struct of_device_id sata_rcar_match[] = {
 		.compatible = "renesas,sata-r8a7791",
 		.data = (void *)RCAR_GEN2_SATA
 	},
+	{
+		.compatible = "renesas,sata-r8a7793",
+		.data = (void *)RCAR_GEN2_SATA
+	},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, sata_rcar_match);
@@ -860,6 +864,7 @@ static const struct platform_device_id sata_rcar_id_table[] = {
 	{ "sata-r8a7790", RCAR_GEN2_SATA },
 	{ "sata-r8a7790-es1", RCAR_R8A7790_ES1_SATA },
 	{ "sata-r8a7791", RCAR_GEN2_SATA },
+	{ "sata-r8a7793", RCAR_GEN2_SATA },
 	{ },
 };
 MODULE_DEVICE_TABLE(platform, sata_rcar_id_table);
@@ -947,7 +952,7 @@ static int sata_rcar_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int sata_rcar_suspend(struct device *dev)
 {
 	struct ata_host *host = dev_get_drvdata(dev);
@@ -1001,7 +1006,7 @@ static struct platform_driver sata_rcar_driver = {
 		.name		= DRV_NAME,
 		.owner		= THIS_MODULE,
 		.of_match_table	= sata_rcar_match,
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 		.pm		= &sata_rcar_pm_ops,
 #endif
 	},

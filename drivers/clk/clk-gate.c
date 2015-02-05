@@ -45,7 +45,7 @@ static void clk_gate_endisable(struct clk_hw *hw, int enable)
 {
 	struct clk_gate *gate = to_clk_gate(hw);
 	int set = gate->flags & CLK_GATE_SET_TO_DISABLE ? 1 : 0;
-	unsigned long flags = 0;
+	unsigned long uninitialized_var(flags);
 	u32 reg;
 
 	set ^= enable;
@@ -128,7 +128,7 @@ struct clk *clk_register_gate(struct device *dev, const char *name,
 	struct clk_init_data init;
 
 	if (clk_gate_flags & CLK_GATE_HIWORD_MASK) {
-		if (bit_idx > 15) {
+		if (bit_idx > 16) {
 			pr_err("gate bit exceeds LOWORD field\n");
 			return ERR_PTR(-EINVAL);
 		}

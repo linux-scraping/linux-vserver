@@ -194,6 +194,7 @@ int fsnotify_add_inode_mark(struct fsnotify_mark *mark,
 {
 	struct fsnotify_mark *lmark, *last = NULL;
 	int ret = 0;
+	int cmp;
 
 	mark->flags |= FSNOTIFY_MARK_FLAG_INODE;
 
@@ -219,11 +220,8 @@ int fsnotify_add_inode_mark(struct fsnotify_mark *mark,
 			goto out;
 		}
 
-		if (mark->group->priority < lmark->group->priority)
-			continue;
-
-		if ((mark->group->priority == lmark->group->priority) &&
-		    (mark->group < lmark->group))
+		cmp = fsnotify_compare_groups(lmark->group, mark->group);
+		if (cmp < 0)
 			continue;
 
 		hlist_add_before_rcu(&mark->i.i_list, &lmark->i.i_list);
@@ -232,7 +230,7 @@ int fsnotify_add_inode_mark(struct fsnotify_mark *mark,
 
 	BUG_ON(last == NULL);
 	/* mark should be the last entry.  last is the current last entry */
-	hlist_add_after_rcu(&last->i.i_list, &mark->i.i_list);
+	hlist_add_behind_rcu(&mark->i.i_list, &last->i.i_list);
 out:
 	fsnotify_recalc_inode_mask_locked(inode);
 	spin_unlock(&inode->i_lock);

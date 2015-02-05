@@ -263,32 +263,40 @@ static int fd_do_prot_rw(struct se_cmd *cmd, struct fd_prot *fd_prot,
 	struct se_device *se_dev = cmd->se_dev;
 	struct fd_dev *dev = FD_DEV(se_dev);
 	struct file *prot_fd = dev->fd_prot_file;
+	struct scatterlist *sg;
 	loff_t pos = (cmd->t_task_lba * se_dev->prot_length);
 	unsigned char *buf;
-	u32 prot_size;
-	int rc, ret = 1;
+	u32 prot_size, len, size;
+	int rc, ret = 1, i;
 
 	prot_size = (cmd->data_length / se_dev->dev_attrib.block_size) *
 		     se_dev->prot_length;
 
 	if (!is_write) {
-		fd_prot->prot_buf = kzalloc(prot_size, GFP_KERNEL);
+		fd_prot->prot_buf = vzalloc(prot_size);
 		if (!fd_prot->prot_buf) {
 			pr_err("Unable to allocate fd_prot->prot_buf\n");
 			return -ENOMEM;
 		}
 		buf = fd_prot->prot_buf;
 
-		fd_prot->prot_sg_nents = 1;
-		fd_prot->prot_sg = kzalloc(sizeof(struct scatterlist),
-					   GFP_KERNEL);
+		fd_prot->prot_sg_nents = cmd->t_prot_nents;
+		fd_prot->prot_sg = kzalloc(sizeof(struct scatterlist) *
+					   fd_prot->prot_sg_nents, GFP_KERNEL);
 		if (!fd_prot->prot_sg) {
 			pr_err("Unable to allocate fd_prot->prot_sg\n");
-			kfree(fd_prot->prot_buf);
+			vfree(fd_prot->prot_buf);
 			return -ENOMEM;
 		}
-		sg_init_table(fd_prot->prot_sg, fd_prot->prot_sg_nents);
-		sg_set_buf(fd_prot->prot_sg, buf, prot_size);
+		size = prot_size;
+
+		for_each_sg(fd_prot->prot_sg, sg, fd_prot->prot_sg_nents, i) {
+
+			len = min_t(u32, PAGE_SIZE, size);
+			sg_set_buf(sg, buf, len);
+			size -= len;
+			buf += len;
+		}
 	}
 
 	if (is_write) {
@@ -309,7 +317,7 @@ static int fd_do_prot_rw(struct se_cmd *cmd, struct fd_prot *fd_prot,
 
 	if (is_write || ret < 0) {
 		kfree(fd_prot->prot_sg);
-		kfree(fd_prot->prot_buf);
+		vfree(fd_prot->prot_buf);
 	}
 
 	return ret;
@@ -407,7 +415,7 @@ fd_execute_sync_cache(struct se_cmd *cmd)
 	} else {
 		start = cmd->t_task_lba * dev->dev_attrib.block_size;
 		if (cmd->data_length)
-			end = start + cmd->data_length;
+			end = start + cmd->data_length - 1;
 		else
 			end = LLONG_MAX;
 	}
@@ -644,11 +652,11 @@ fd_execute_rw(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 						 0, fd_prot.prot_sg, 0);
 			if (rc) {
 				kfree(fd_prot.prot_sg);
-				kfree(fd_prot.prot_buf);
+				vfree(fd_prot.prot_buf);
 				return rc;
 			}
 			kfree(fd_prot.prot_sg);
-			kfree(fd_prot.prot_buf);
+			vfree(fd_prot.prot_buf);
 		}
 	} else {
 		memset(&fd_prot, 0, sizeof(struct fd_prot));
@@ -664,7 +672,7 @@ fd_execute_rw(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 						  0, fd_prot.prot_sg, 0);
 			if (rc) {
 				kfree(fd_prot.prot_sg);
-				kfree(fd_prot.prot_buf);
+				vfree(fd_prot.prot_buf);
 				return rc;
 			}
 		}
@@ -681,7 +689,12 @@ fd_execute_rw(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 			struct fd_dev *fd_dev = FD_DEV(dev);
 			loff_t start = cmd->t_task_lba *
 				dev->dev_attrib.block_size;
-			loff_t end = start + cmd->data_length;
+			loff_t end;
+
+			if (cmd->data_length)
+				end = start + cmd->data_length - 1;
+			else
+				end = LLONG_MAX;
 
 			vfs_fsync_range(fd_dev->fd_file, start, end, 1);
 		}
@@ -695,7 +708,7 @@ fd_execute_rw(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 
 	if (ret < 0) {
 		kfree(fd_prot.prot_sg);
-		kfree(fd_prot.prot_buf);
+		vfree(fd_prot.prot_buf);
 		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 	}
 
@@ -763,7 +776,9 @@ static ssize_t fd_set_configfs_dev_params(struct se_device *dev,
 			fd_dev->fbd_flags |= FBDF_HAS_SIZE;
 			break;
 		case Opt_fd_buffered_io:
-			match_int(args, &arg);
+			ret = match_int(args, &arg);
+			if (ret)
+				goto out;
 			if (arg != 1) {
 				pr_err("bogus fd_buffered_io=%d value\n", arg);
 				ret = -EINVAL;
@@ -855,25 +870,6 @@ static int fd_init_prot(struct se_device *dev)
 	return 0;
 }
 
-static void fd_init_format_buf(struct se_device *dev, unsigned char *buf,
-			       u32 unit_size, u32 *ref_tag, u16 app_tag,
-			       bool inc_reftag)
-{
-	unsigned char *p = buf;
-	int i;
-
-	for (i = 0; i < unit_size; i += dev->prot_length) {
-		*((u16 *)&p[0]) = 0xffff;
-		*((__be16 *)&p[2]) = cpu_to_be16(app_tag);
-		*((__be32 *)&p[4]) = cpu_to_be32(*ref_tag);
-
-		if (inc_reftag)
-			(*ref_tag)++;
-
-		p += dev->prot_length;
-	}
-}
-
 static int fd_format_prot(struct se_device *dev)
 {
 	struct fd_dev *fd_dev = FD_DEV(dev);
@@ -881,10 +877,8 @@ static int fd_format_prot(struct se_device *dev)
 	sector_t prot_length, prot;
 	unsigned char *buf;
 	loff_t pos = 0;
-	u32 ref_tag = 0;
 	int unit_size = FDBD_FORMAT_UNIT_SIZE * dev->dev_attrib.block_size;
 	int rc, ret = 0, size, len;
-	bool inc_reftag = false;
 
 	if (!dev->dev_attrib.pi_prot_type) {
 		pr_err("Unable to format_prot while pi_prot_type == 0\n");
@@ -895,37 +889,20 @@ static int fd_format_prot(struct se_device *dev)
 		return -ENODEV;
 	}
 
-	switch (dev->dev_attrib.pi_prot_type) {
-	case TARGET_DIF_TYPE3_PROT:
-		ref_tag = 0xffffffff;
-		break;
-	case TARGET_DIF_TYPE2_PROT:
-	case TARGET_DIF_TYPE1_PROT:
-		inc_reftag = true;
-		break;
-	default:
-		break;
-	}
-
 	buf = vzalloc(unit_size);
 	if (!buf) {
 		pr_err("Unable to allocate FILEIO prot buf\n");
 		return -ENOMEM;
 	}
-
 	prot_length = (dev->transport->get_blocks(dev) + 1) * dev->prot_length;
 	size = prot_length;
 
 	pr_debug("Using FILEIO prot_length: %llu\n",
 		 (unsigned long long)prot_length);
 
+	memset(buf, 0xff, unit_size);
 	for (prot = 0; prot < prot_length; prot += unit_size) {
-
-		fd_init_format_buf(dev, buf, unit_size, &ref_tag, 0xffff,
-				   inc_reftag);
-
 		len = min(unit_size, size);
-
 		rc = kernel_write(prot_fd, buf, len, pos);
 		if (rc != len) {
 			pr_err("vfs_write to prot file failed: %d\n", rc);

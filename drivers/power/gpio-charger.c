@@ -55,7 +55,7 @@ static int gpio_charger_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
-		val->intval = gpio_get_value_cansleep(pdata->gpio);
+		val->intval = !!gpio_get_value_cansleep(pdata->gpio);
 		val->intval ^= pdata->gpio_active_low;
 		break;
 	default:
@@ -168,7 +168,7 @@ static int gpio_charger_suspend(struct device *dev)
 
 	if (device_may_wakeup(dev))
 		gpio_charger->wakeup_enabled =
-			!enable_irq_wake(gpio_charger->irq);
+			enable_irq_wake(gpio_charger->irq);
 
 	return 0;
 }
@@ -178,7 +178,7 @@ static int gpio_charger_resume(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct gpio_charger *gpio_charger = platform_get_drvdata(pdev);
 
-	if (device_may_wakeup(dev) && gpio_charger->wakeup_enabled)
+	if (gpio_charger->wakeup_enabled)
 		disable_irq_wake(gpio_charger->irq);
 	power_supply_changed(&gpio_charger->charger);
 

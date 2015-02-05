@@ -79,31 +79,12 @@ static void radeon_hotplug_work_func(struct work_struct *work)
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_connector *connector;
 
-	mutex_lock(&mode_config->mutex);
 	if (mode_config->num_connector) {
 		list_for_each_entry(connector, &mode_config->connector_list, head)
 			radeon_connector_hotplug(connector);
 	}
-	mutex_unlock(&mode_config->mutex);
 	/* Just fire off a uevent and let userspace tell us what to do */
 	drm_helper_hpd_irq_event(dev);
-}
-
-/**
- * radeon_irq_reset_work_func - execute gpu reset
- *
- * @work: work struct
- *
- * Execute scheduled gpu reset (cayman+).
- * This function is called when the irq handler
- * thinks we need a gpu reset.
- */
-static void radeon_irq_reset_work_func(struct work_struct *work)
-{
-	struct radeon_device *rdev = container_of(work, struct radeon_device,
-						  reset_work);
-
-	radeon_gpu_reset(rdev);
 }
 
 /**
@@ -296,10 +277,9 @@ int radeon_irq_kms_init(struct radeon_device *rdev)
 
 	INIT_WORK(&rdev->hotplug_work, radeon_hotplug_work_func);
 	INIT_WORK(&rdev->audio_work, r600_audio_update_hdmi);
-	INIT_WORK(&rdev->reset_work, radeon_irq_reset_work_func);
 
 	rdev->irq.installed = true;
-	r = drm_irq_install(rdev->ddev);
+	r = drm_irq_install(rdev->ddev, rdev->ddev->pdev->irq);
 	if (r) {
 		rdev->irq.installed = false;
 		flush_work(&rdev->hotplug_work);
@@ -351,6 +331,21 @@ void radeon_irq_kms_sw_irq_get(struct radeon_device *rdev, int ring)
 		radeon_irq_set(rdev);
 		spin_unlock_irqrestore(&rdev->irq.lock, irqflags);
 	}
+}
+
+/**
+ * radeon_irq_kms_sw_irq_get_delayed - enable software interrupt
+ *
+ * @rdev: radeon device pointer
+ * @ring: ring whose interrupt you want to enable
+ *
+ * Enables the software interrupt for a specific ring (all asics).
+ * The software interrupt is generally used to signal a fence on
+ * a particular ring.
+ */
+bool radeon_irq_kms_sw_irq_get_delayed(struct radeon_device *rdev, int ring)
+{
+	return atomic_inc_return(&rdev->irq.ring_int[ring]) == 1;
 }
 
 /**
