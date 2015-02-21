@@ -764,7 +764,7 @@ static struct cxgbi_sock *cxgbi_check_route6(struct sockaddr *dst_addr)
 		struct inet6_dev *idev = ip6_dst_idev((struct dst_entry *)rt);
 
 		err = ipv6_dev_get_saddr(&init_net, idev ? idev->dev : NULL,
-					 &daddr6->sin6_addr, 0, &pref_saddr
+					 &daddr6->sin6_addr, 0, &pref_saddr,
 					 NULL);
 		if (err) {
 			pr_info("failed to get source address to reach %pI6\n",

@@ -77,32 +77,60 @@ static unsigned int udp6_ehashfn(struct net *net,
 			       udp_ipv6_hash_secret + net_hash_mix(net));
 }
 
-int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
+int ipv6_rcv_saddr_equal(const struct sock *sk1, const struct sock *sk2)
 {
+	const struct in6_addr *sk1_rcv_saddr6 = inet6_rcv_saddr(sk1);
 	const struct in6_addr *sk2_rcv_saddr6 = inet6_rcv_saddr(sk2);
+	__be32 sk1_rcv_saddr = sk1->sk_rcv_saddr;
+	__be32 sk2_rcv_saddr = sk2->sk_rcv_saddr;
 	int sk2_ipv6only = inet_v6_ipv6only(sk2);
-	int addr_type = ipv6_addr_type(&sk->sk_v6_rcv_saddr);
+	int addr_type1 = ipv6_addr_type(sk1_rcv_saddr6);
 	int addr_type2 = sk2_rcv_saddr6 ? ipv6_addr_type(sk2_rcv_saddr6) : IPV6_ADDR_MAPPED;
 
 	/* if both are mapped, treat as IPv4 */
-	if (addr_type == IPV6_ADDR_MAPPED && addr_type2 == IPV6_ADDR_MAPPED)
-		return (!sk2_ipv6only &&
-			(!sk->sk_rcv_saddr || !sk2->sk_rcv_saddr ||
-			  sk->sk_rcv_saddr == sk2->sk_rcv_saddr));
+	if (addr_type1 == IPV6_ADDR_MAPPED && addr_type2 == IPV6_ADDR_MAPPED) {
+		if (!sk2_ipv6only &&
+			(!sk1->sk_rcv_saddr || !sk2->sk_rcv_saddr ||
+			  sk1->sk_rcv_saddr == sk2->sk_rcv_saddr))
+			goto vs_v4;
+		else
+			return 0;
+	}
 
 	if (addr_type2 == IPV6_ADDR_ANY &&
-	    !(sk2_ipv6only && addr_type == IPV6_ADDR_MAPPED))
-		return 1;
+	    !(sk2_ipv6only && addr_type1 == IPV6_ADDR_MAPPED))
+		goto vs;
 
-	if (addr_type == IPV6_ADDR_ANY &&
-	    !(ipv6_only_sock(sk) && addr_type2 == IPV6_ADDR_MAPPED))
-		return 1;
+	if (addr_type1 == IPV6_ADDR_ANY &&
+	    !(ipv6_only_sock(sk1) && addr_type2 == IPV6_ADDR_MAPPED))
+		goto vs;
 
 	if (sk2_rcv_saddr6 &&
-	    ipv6_addr_equal(&sk->sk_v6_rcv_saddr, sk2_rcv_saddr6))
-		return 1;
+	    ipv6_addr_equal(&sk1->sk_v6_rcv_saddr, sk2_rcv_saddr6))
+		goto vs;
 
 	return 0;
+
+vs_v4:
+	if (!sk1_rcv_saddr && !sk2_rcv_saddr)
+		return nx_v4_addr_conflict(sk1->sk_nx_info, sk2->sk_nx_info);
+	if (!sk2_rcv_saddr)
+		return v4_addr_in_nx_info(sk1->sk_nx_info, sk2_rcv_saddr, -1);
+	if (!sk1_rcv_saddr)
+		return v4_addr_in_nx_info(sk2->sk_nx_info, sk1_rcv_saddr, -1);
+	return 1;
+vs:
+	if (addr_type2 == IPV6_ADDR_ANY && addr_type1 == IPV6_ADDR_ANY)
+		return nx_v6_addr_conflict(sk1->sk_nx_info, sk2->sk_nx_info);
+	else if (addr_type2 == IPV6_ADDR_ANY)
+		return v6_addr_in_nx_info(sk2->sk_nx_info, sk1_rcv_saddr6, -1);
+	else if (addr_type1 == IPV6_ADDR_ANY) {
+		if (addr_type2 == IPV6_ADDR_MAPPED)
+			return nx_v4_addr_conflict(sk1->sk_nx_info, sk2->sk_nx_info);
+		else
+			return v6_addr_in_nx_info(sk1->sk_nx_info, sk2_rcv_saddr6, -1);
+	}
+	return 1;
 }
 
 static unsigned int udp6_portaddr_hash(struct net *net,
