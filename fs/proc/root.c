@@ -117,9 +117,6 @@ static struct dentry *proc_mount(struct file_system_type *fs_type,
 		ns = task_active_pid_ns(current);
 		options = data;
 
-		if (!capable(CAP_SYS_ADMIN) && !fs_fully_visible(fs_type))
-			return ERR_PTR(-EPERM);
-
 		/* Does the mounter have privilege over the pid namespace? */
 		if (!vx_ns_capable(ns->user_ns,
 			CAP_SYS_ADMIN, VXC_SECURE_MOUNT))
@@ -165,7 +162,7 @@ static struct file_system_type proc_fs_type = {
 	.name		= "proc",
 	.mount		= proc_mount,
 	.kill_sb	= proc_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT,
+	.fs_flags	= FS_USERNS_VISIBLE | FS_USERNS_MOUNT,
 };
 
 void __init proc_root_init(void)
