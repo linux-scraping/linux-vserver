@@ -1657,6 +1657,7 @@ enum punit_power_well {
 #define   GMBUS_CYCLE_INDEX	(2<<25)
 #define   GMBUS_CYCLE_STOP	(4<<25)
 #define   GMBUS_BYTE_COUNT_SHIFT 16
+#define   GMBUS_BYTE_COUNT_MAX   256U
 #define   GMBUS_SLAVE_INDEX_SHIFT 8
 #define   GMBUS_SLAVE_ADDR_SHIFT 1
 #define   GMBUS_SLAVE_READ	(1<<0)
@@ -5767,6 +5768,7 @@ enum punit_power_well {
 #define  HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE    (1 << 6)
 
 #define HALF_SLICE_CHICKEN3		0xe184
+#define   HSW_SAMPLE_C_PERFORMANCE	(1<<9)
 #define   GEN8_CENTROID_PIXEL_OPT_DIS	(1<<8)
 #define   GEN8_SAMPLER_POWER_BYPASS_DIS	(1<<1)
 

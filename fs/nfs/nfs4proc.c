@@ -38,6 +38,7 @@
 #include <linux/mm.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/file.h>
 #include <linux/string.h>
 #include <linux/ratelimit.h>
 #include <linux/printk.h>
@@ -5130,9 +5131,13 @@ static void nfs4_delegreturn_done(struct rpc_task *task, void *calldata)
 static void nfs4_delegreturn_release(void *calldata)
 {
 	struct nfs4_delegreturndata *data = calldata;
+	struct inode *inode = data->inode;
 
-	if (data->roc)
-		pnfs_roc_release(data->inode);
+	if (inode) {
+		if (data->roc)
+			pnfs_roc_release(inode);
+		nfs_iput_and_deactive(inode);
+	}
 	kfree(calldata);
 }
 
@@ -5189,9 +5194,9 @@ static int _nfs4_proc_delegreturn(struct inode *inode, struct rpc_cred *cred, co
 	nfs_fattr_init(data->res.fattr);
 	data->timestamp = jiffies;
 	data->rpc_status = 0;
-	data->inode = inode;
-	data->roc = list_empty(&NFS_I(inode)->open_files) ?
-		    pnfs_roc(inode) : false;
+	data->inode = nfs_igrab_and_active(inode);
+	if (data->inode)
+		data->roc = nfs4_roc(inode);
 
 	task_setup_data.callback_data = data;
 	msg.rpc_argp = &data->args;
@@ -5546,6 +5551,7 @@ static struct nfs4_lockdata *nfs4_alloc_lockdata(struct file_lock *fl,
 	p->server = server;
 	atomic_inc(&lsp->ls_count);
 	p->ctx = get_nfs_open_context(ctx);
+	get_file(fl->fl_file);
 	memcpy(&p->fl, fl, sizeof(p->fl));
 	return p;
 out_free_seqid:
@@ -5635,6 +5641,7 @@ static void nfs4_lock_release(void *calldata)
 		nfs_free_seqid(data->arg.lock_seqid);
 	nfs4_put_lock_state(data->lsp);
 	put_nfs_open_context(data->ctx);
+	fput(data->fl.fl_file);
 	kfree(data);
 	dprintk("%s: done!\n", __func__);
 }

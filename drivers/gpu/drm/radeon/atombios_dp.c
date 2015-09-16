@@ -405,19 +405,21 @@ bool radeon_dp_getdpcd(struct radeon_connector *radeon_connector)
 {
 	struct radeon_connector_atom_dig *dig_connector = radeon_connector->con_priv;
 	u8 msg[DP_DPCD_SIZE];
-	int ret;
+	int ret, i;
 
-	ret = drm_dp_dpcd_read(&radeon_connector->ddc_bus->aux, DP_DPCD_REV, msg,
-			       DP_DPCD_SIZE);
-	if (ret > 0) {
-		memcpy(dig_connector->dpcd, msg, DP_DPCD_SIZE);
+	for (i = 0; i < 7; i++) {
+		ret = drm_dp_dpcd_read(&radeon_connector->ddc_bus->aux, DP_DPCD_REV, msg,
+				       DP_DPCD_SIZE);
+		if (ret == DP_DPCD_SIZE) {
+			memcpy(dig_connector->dpcd, msg, DP_DPCD_SIZE);
 
-		DRM_DEBUG_KMS("DPCD: %*ph\n", (int)sizeof(dig_connector->dpcd),
-			      dig_connector->dpcd);
+			DRM_DEBUG_KMS("DPCD: %*ph\n", (int)sizeof(dig_connector->dpcd),
+				      dig_connector->dpcd);
 
-		radeon_dp_probe_oui(radeon_connector);
+			radeon_dp_probe_oui(radeon_connector);
 
-		return true;
+			return true;
+		}
 	}
 	dig_connector->dpcd[0] = 0;
 	return false;
@@ -623,10 +625,8 @@ static int radeon_dp_link_train_init(struct radeon_dp_link_train_info *dp_info)
 		drm_dp_dpcd_writeb(dp_info->aux,
 				   DP_DOWNSPREAD_CTRL, 0);
 
-	if ((dp_info->connector->connector_type == DRM_MODE_CONNECTOR_eDP) &&
-	    (dig->panel_mode == DP_PANEL_MODE_INTERNAL_DP2_MODE)) {
+	if (dig->panel_mode == DP_PANEL_MODE_INTERNAL_DP2_MODE)
 		drm_dp_dpcd_writeb(dp_info->aux, DP_EDP_CONFIGURATION_SET, 1);
-	}
 
 	/* set the lane count on the sink */
 	tmp = dp_info->dp_lane_count;
