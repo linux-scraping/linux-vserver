@@ -2083,9 +2083,7 @@ static ssize_t ocfs2_file_splice_write(struct pipe_inode_info *pipe,
 	struct address_space *mapping = out->f_mapping;
 	struct inode *inode = mapping->host;
 	struct splice_desc sd = {
-		.total_len = len,
 		.flags = flags,
-		.pos = *ppos,
 		.u.file = out,
 	};
 
@@ -2093,6 +2091,12 @@ static ssize_t ocfs2_file_splice_write(struct pipe_inode_info *pipe,
 		   (unsigned int)len,
 		   out->f_path.dentry->d_name.len,
 		   out->f_path.dentry->d_name.name);
+
+	ret = generic_write_checks(out, ppos, &len, 0);
+	if (ret)
+		return ret;
+	sd.total_len = len;
+	sd.pos = *ppos;
 
 	if (pipe->inode)
 		mutex_lock_nested(&pipe->inode->i_mutex, I_MUTEX_PARENT);
