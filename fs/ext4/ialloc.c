@@ -14,7 +14,6 @@
 
 #include <linux/time.h>
 #include <linux/fs.h>
-#include <linux/jbd2.h>
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/quotaops.h>
@@ -445,7 +444,7 @@ static int find_group_orlov(struct super_block *sb, struct inode *parent,
 	ndirs = percpu_counter_read_positive(&sbi->s_dirs_counter);
 
 	if (S_ISDIR(mode) &&
-	    ((parent == sb->s_root->d_inode) ||
+	    ((parent == d_inode(sb->s_root)) ||
 	     (ext4_test_inode_flag(parent, EXT4_INODE_TOPDIR)))) {
 		int best_ndir = inodes_per_group;
 		int ret = -1;
@@ -999,6 +998,12 @@ got:
 	ei->i_block_group = group;
 	ei->i_last_alloc_group = ~0;
 
+	/* If the directory encrypted, then we should encrypt the inode. */
+	if ((S_ISDIR(mode) || S_ISREG(mode) || S_ISLNK(mode)) &&
+	    (ext4_encrypted_inode(dir) ||
+	     DUMMY_ENCRYPTION_ENABLED(sbi)))
+		ext4_set_inode_flag(inode, EXT4_INODE_ENCRYPT);
+
 	ext4_set_inode_flags(inode);
 	if (IS_DIRSYNC(inode))
 		ext4_handle_sync(handle);
@@ -1031,11 +1036,28 @@ got:
 	ext4_set_inode_state(inode, EXT4_STATE_NEW);
 
 	ei->i_extra_isize = EXT4_SB(sb)->s_want_extra_isize;
-
+#ifdef CONFIG_EXT4_FS_ENCRYPTION
+	if ((sbi->s_file_encryption_mode == EXT4_ENCRYPTION_MODE_INVALID) &&
+	    (sbi->s_dir_encryption_mode == EXT4_ENCRYPTION_MODE_INVALID)) {
+		ei->i_inline_off = 0;
+		if (EXT4_HAS_INCOMPAT_FEATURE(sb,
+			EXT4_FEATURE_INCOMPAT_INLINE_DATA))
+			ext4_set_inode_state(inode,
+			EXT4_STATE_MAY_INLINE_DATA);
+	} else {
+		/* Inline data and encryption are incompatible
+		 * We turn off inline data since encryption is enabled */
+		ei->i_inline_off = 1;
+		if (EXT4_HAS_INCOMPAT_FEATURE(sb,
+			EXT4_FEATURE_INCOMPAT_INLINE_DATA))
+			ext4_clear_inode_state(inode,
+			EXT4_STATE_MAY_INLINE_DATA);
+	}
+#else
 	ei->i_inline_off = 0;
 	if (EXT4_HAS_INCOMPAT_FEATURE(sb, EXT4_FEATURE_INCOMPAT_INLINE_DATA))
 		ext4_set_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA);
-
+#endif
 	ret = inode;
 	err = dquot_alloc_inode(inode);
 	if (err)
@@ -1092,20 +1114,22 @@ struct inode *ext4_orphan_get(struct super_block *sb, unsigned long ino)
 	unsigned long max_ino = le32_to_cpu(EXT4_SB(sb)->s_es->s_inodes_count);
 	ext4_group_t block_group;
 	int bit;
-	struct buffer_head *bitmap_bh = NULL;
+	struct buffer_head *bitmap_bh;
 	struct inode *inode = NULL;
-	int err = -EIO;
+	long err = -EIO;
 
-	if (ino < EXT4_FIRST_INO(sb) || ino > max_ino)
-		goto bad_orphan;
+	/* Error cases - e2fsck has already cleaned up for us */
+	if (ino > max_ino) {
+		ext4_warning(sb, "bad orphan ino %lu!  e2fsck was run?", ino);
+		goto error;
+	}
 
 	block_group = (ino - 1) / EXT4_INODES_PER_GROUP(sb);
 	bit = (ino - 1) % EXT4_INODES_PER_GROUP(sb);
 	bitmap_bh = ext4_read_inode_bitmap(sb, block_group);
 	if (!bitmap_bh) {
-		ext4_error(sb, "inode bitmap error %ld for orphan %lu",
-			   ino, PTR_ERR(bitmap_bh));
-		return (struct inode *) bitmap_bh;
+		ext4_warning(sb, "inode bitmap error for orphan %lu", ino);
+		goto error;
 	}
 
 	/* Having the inode bit set should be a 100% indicator that this
@@ -1116,21 +1140,15 @@ struct inode *ext4_orphan_get(struct super_block *sb, unsigned long ino)
 		goto bad_orphan;
 
 	inode = ext4_iget(sb, ino);
-	if (IS_ERR(inode)) {
-		err = PTR_ERR(inode);
-		ext4_error(sb, "couldn't read orphan inode %lu (err %d)",
-			   ino, err);
-		return inode;
-	}
+	if (IS_ERR(inode))
+		goto iget_failed;
 
 	/*
-	 * If the orphans has i_nlinks > 0 then it should be able to
-	 * be truncated, otherwise it won't be removed from the orphan
-	 * list during processing and an infinite loop will result.
-	 * Similarly, it must not be a bad inode.
+	 * If the orphans has i_nlinks > 0 then it should be able to be
+	 * truncated, otherwise it won't be removed from the orphan list
+	 * during processing and an infinite loop will result.
 	 */
-	if ((inode->i_nlink && !ext4_can_truncate(inode)) ||
-	    is_bad_inode(inode))
+	if (inode->i_nlink && !ext4_can_truncate(inode))
 		goto bad_orphan;
 
 	if (NEXT_ORPHAN(inode) > max_ino)
@@ -1138,25 +1156,29 @@ struct inode *ext4_orphan_get(struct super_block *sb, unsigned long ino)
 	brelse(bitmap_bh);
 	return inode;
 
+iget_failed:
+	err = PTR_ERR(inode);
+	inode = NULL;
 bad_orphan:
-	ext4_error(sb, "bad orphan inode %lu", ino);
-	if (bitmap_bh)
-		printk(KERN_ERR "ext4_test_bit(bit=%d, block=%llu) = %d\n",
-		       bit, (unsigned long long)bitmap_bh->b_blocknr,
-		       ext4_test_bit(bit, bitmap_bh->b_data));
+	ext4_warning(sb, "bad orphan inode %lu!  e2fsck was run?", ino);
+	printk(KERN_WARNING "ext4_test_bit(bit=%d, block=%llu) = %d\n",
+	       bit, (unsigned long long)bitmap_bh->b_blocknr,
+	       ext4_test_bit(bit, bitmap_bh->b_data));
+	printk(KERN_WARNING "inode=%p\n", inode);
 	if (inode) {
-		printk(KERN_ERR "is_bad_inode(inode)=%d\n",
+		printk(KERN_WARNING "is_bad_inode(inode)=%d\n",
 		       is_bad_inode(inode));
-		printk(KERN_ERR "NEXT_ORPHAN(inode)=%u\n",
+		printk(KERN_WARNING "NEXT_ORPHAN(inode)=%u\n",
 		       NEXT_ORPHAN(inode));
-		printk(KERN_ERR "max_ino=%lu\n", max_ino);
-		printk(KERN_ERR "i_nlink=%u\n", inode->i_nlink);
+		printk(KERN_WARNING "max_ino=%lu\n", max_ino);
+		printk(KERN_WARNING "i_nlink=%u\n", inode->i_nlink);
 		/* Avoid freeing blocks if we got a bad deleted inode */
 		if (inode->i_nlink == 0)
 			inode->i_blocks = 0;
 		iput(inode);
 	}
 	brelse(bitmap_bh);
+error:
 	return ERR_PTR(err);
 }
 

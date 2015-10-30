@@ -478,7 +478,7 @@ static DEFINE_PER_CPU(unsigned long, nmi_cr2);
 static DEFINE_PER_CPU(int, update_debug_stack);
 #endif
 
-dotraplinkage notrace __kprobes void
+dotraplinkage notrace void
 do_nmi(struct pt_regs *regs, long error_code)
 {
 	if (this_cpu_read(nmi_state) != NMI_NOT_RUNNING) {

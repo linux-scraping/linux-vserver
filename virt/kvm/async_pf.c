@@ -80,7 +80,7 @@ static void async_pf_execute(struct work_struct *work)
 
 	might_sleep();
 
-	kvm_get_user_page_io(NULL, mm, addr, 1, NULL);
+	get_user_pages_unlocked(NULL, mm, addr, 1, 1, 0, NULL);
 	kvm_async_page_present_sync(vcpu, apf);
 
 	spin_lock(&vcpu->async_pf.lock);
@@ -169,7 +169,7 @@ int kvm_setup_async_pf(struct kvm_vcpu *vcpu, gva_t gva, unsigned long hva,
 	 * do alloc nowait since if we are going to sleep anyway we
 	 * may as well sleep faulting in page
 	 */
-	work = kmem_cache_zalloc(async_pf_cache, GFP_NOWAIT | __GFP_NOWARN);
+	work = kmem_cache_zalloc(async_pf_cache, GFP_NOWAIT);
 	if (!work)
 		return 0;
 

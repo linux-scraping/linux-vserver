@@ -56,6 +56,20 @@ static void target_fabric_setup_##_name##_cit(struct target_fabric_configfs *tf)
 	pr_debug("Setup generic %s\n", __stringify(_name));		\
 }
 
+#define TF_CIT_SETUP_DRV(_name, _item_ops, _group_ops)		\
+static void target_fabric_setup_##_name##_cit(struct target_fabric_configfs *tf) \
+{									\
+	struct target_fabric_configfs_template *tfc = &tf->tf_cit_tmpl;	\
+	struct config_item_type *cit = &tfc->tfc_##_name##_cit;		\
+	struct configfs_attribute **attrs = tf->tf_ops.tfc_##_name##_attrs; \
+									\
+	cit->ct_item_ops = _item_ops;					\
+	cit->ct_group_ops = _group_ops;					\
+	cit->ct_attrs = attrs;						\
+	cit->ct_owner = tf->tf_module;					\
+	pr_debug("Setup generic %s\n", __stringify(_name));		\
+}
+
 /* Start of tfc_tpg_mappedlun_cit */
 
 static int target_fabric_mappedlun_link(
@@ -82,11 +96,6 @@ static int target_fabric_mappedlun_link(
 	if (!lun->lun_sep || !lun->lun_sep->sep_tpg) {
 		pr_err("Source se_lun->lun_sep or lun->lun_sep->sep"
 				"_tpg does not exist\n");
-		return -EINVAL;
-	}
-	if (lun->lun_shutdown) {
-		pr_err("Unable to create mappedlun symlink because"
-			" lun->lun_shutdown=true\n");
 		return -EINVAL;
 	}
 	se_tpg = lun->lun_sep->sep_tpg;
@@ -283,7 +292,7 @@ static struct configfs_item_operations target_fabric_nacl_attrib_item_ops = {
 	.store_attribute	= target_fabric_nacl_attrib_attr_store,
 };
 
-TF_CIT_SETUP(tpg_nacl_attrib, &target_fabric_nacl_attrib_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_nacl_attrib, &target_fabric_nacl_attrib_item_ops, NULL);
 
 /* End of tfc_tpg_nacl_attrib_cit */
 
@@ -296,7 +305,7 @@ static struct configfs_item_operations target_fabric_nacl_auth_item_ops = {
 	.store_attribute	= target_fabric_nacl_auth_attr_store,
 };
 
-TF_CIT_SETUP(tpg_nacl_auth, &target_fabric_nacl_auth_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_nacl_auth, &target_fabric_nacl_auth_item_ops, NULL);
 
 /* End of tfc_tpg_nacl_auth_cit */
 
@@ -309,7 +318,7 @@ static struct configfs_item_operations target_fabric_nacl_param_item_ops = {
 	.store_attribute	= target_fabric_nacl_param_attr_store,
 };
 
-TF_CIT_SETUP(tpg_nacl_param, &target_fabric_nacl_param_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_nacl_param, &target_fabric_nacl_param_item_ops, NULL);
 
 /* End of tfc_tpg_nacl_param_cit */
 
@@ -466,8 +475,8 @@ static struct configfs_group_operations target_fabric_nacl_base_group_ops = {
 	.drop_item		= target_fabric_drop_mappedlun,
 };
 
-TF_CIT_SETUP(tpg_nacl_base, &target_fabric_nacl_base_item_ops,
-		&target_fabric_nacl_base_group_ops, NULL);
+TF_CIT_SETUP_DRV(tpg_nacl_base, &target_fabric_nacl_base_item_ops,
+		&target_fabric_nacl_base_group_ops);
 
 /* End of tfc_tpg_nacl_base_cit */
 
@@ -575,7 +584,7 @@ static struct configfs_item_operations target_fabric_np_base_item_ops = {
 	.store_attribute	= target_fabric_np_base_attr_store,
 };
 
-TF_CIT_SETUP(tpg_np_base, &target_fabric_np_base_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_np_base, &target_fabric_np_base_item_ops, NULL);
 
 /* End of tfc_tpg_np_base_cit */
 
@@ -971,7 +980,7 @@ static struct configfs_item_operations target_fabric_tpg_attrib_item_ops = {
 	.store_attribute	= target_fabric_tpg_attrib_attr_store,
 };
 
-TF_CIT_SETUP(tpg_attrib, &target_fabric_tpg_attrib_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_attrib, &target_fabric_tpg_attrib_item_ops, NULL);
 
 /* End of tfc_tpg_attrib_cit */
 
@@ -984,7 +993,7 @@ static struct configfs_item_operations target_fabric_tpg_auth_item_ops = {
 	.store_attribute	= target_fabric_tpg_auth_attr_store,
 };
 
-TF_CIT_SETUP(tpg_auth, &target_fabric_tpg_auth_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_auth, &target_fabric_tpg_auth_item_ops, NULL);
 
 /* End of tfc_tpg_attrib_cit */
 
@@ -997,7 +1006,7 @@ static struct configfs_item_operations target_fabric_tpg_param_item_ops = {
 	.store_attribute	= target_fabric_tpg_param_attr_store,
 };
 
-TF_CIT_SETUP(tpg_param, &target_fabric_tpg_param_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_param, &target_fabric_tpg_param_item_ops, NULL);
 
 /* End of tfc_tpg_param_cit */
 
@@ -1023,7 +1032,7 @@ static struct configfs_item_operations target_fabric_tpg_base_item_ops = {
 	.store_attribute	= target_fabric_tpg_attr_store,
 };
 
-TF_CIT_SETUP(tpg_base, &target_fabric_tpg_base_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(tpg_base, &target_fabric_tpg_base_item_ops, NULL);
 
 /* End of tfc_tpg_base_cit */
 
@@ -1197,7 +1206,7 @@ static struct configfs_item_operations target_fabric_wwn_item_ops = {
 	.store_attribute	= target_fabric_wwn_attr_store,
 };
 
-TF_CIT_SETUP(wwn, &target_fabric_wwn_item_ops, &target_fabric_wwn_group_ops, NULL);
+TF_CIT_SETUP_DRV(wwn, &target_fabric_wwn_item_ops, &target_fabric_wwn_group_ops);
 
 /* End of tfc_wwn_cit */
 
@@ -1211,7 +1220,7 @@ static struct configfs_item_operations target_fabric_discovery_item_ops = {
 	.store_attribute	= target_fabric_discovery_attr_store,
 };
 
-TF_CIT_SETUP(discovery, &target_fabric_discovery_item_ops, NULL, NULL);
+TF_CIT_SETUP_DRV(discovery, &target_fabric_discovery_item_ops, NULL);
 
 /* End of tfc_discovery_cit */
 

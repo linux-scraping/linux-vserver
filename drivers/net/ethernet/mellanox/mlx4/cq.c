@@ -52,23 +52,62 @@
 #define MLX4_CQ_STATE_ARMED_SOL		( 6 <<  8)
 #define MLX4_EQ_STATE_FIRED		(10 <<  8)
 
+#define TASKLET_MAX_TIME 2
+#define TASKLET_MAX_TIME_JIFFIES msecs_to_jiffies(TASKLET_MAX_TIME)
+
+void mlx4_cq_tasklet_cb(unsigned long data)
+{
+	unsigned long flags;
+	unsigned long end = jiffies + TASKLET_MAX_TIME_JIFFIES;
+	struct mlx4_eq_tasklet *ctx = (struct mlx4_eq_tasklet *)data;
+	struct mlx4_cq *mcq, *temp;
+
+	spin_lock_irqsave(&ctx->lock, flags);
+	list_splice_tail_init(&ctx->list, &ctx->process_list);
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	list_for_each_entry_safe(mcq, temp, &ctx->process_list, tasklet_ctx.list) {
+		list_del_init(&mcq->tasklet_ctx.list);
+		mcq->tasklet_ctx.comp(mcq);
+		if (atomic_dec_and_test(&mcq->refcount))
+			complete(&mcq->free);
+		if (time_after(jiffies, end))
+			break;
+	}
+
+	if (!list_empty(&ctx->process_list))
+		tasklet_schedule(&ctx->task);
+}
+
+static void mlx4_add_cq_to_tasklet(struct mlx4_cq *cq)
+{
+	unsigned long flags;
+	struct mlx4_eq_tasklet *tasklet_ctx = cq->tasklet_ctx.priv;
+
+	spin_lock_irqsave(&tasklet_ctx->lock, flags);
+	/* When migrating CQs between EQs will be implemented, please note
+	 * that you need to sync this point. It is possible that
+	 * while migrating a CQ, completions on the old EQs could
+	 * still arrive.
+	 */
+	if (list_empty_careful(&cq->tasklet_ctx.list)) {
+		atomic_inc(&cq->refcount);
+		list_add_tail(&cq->tasklet_ctx.list, &tasklet_ctx->list);
+	}
+	spin_unlock_irqrestore(&tasklet_ctx->lock, flags);
+}
+
 void mlx4_cq_completion(struct mlx4_dev *dev, u32 cqn)
 {
 	struct mlx4_cq *cq;
 
-	rcu_read_lock();
 	cq = radix_tree_lookup(&mlx4_priv(dev)->cq_table.tree,
 			       cqn & (dev->caps.num_cqs - 1));
-	rcu_read_unlock();
-
 	if (!cq) {
 		mlx4_dbg(dev, "Completion event for bogus CQ %08x\n", cqn);
 		return;
 	}
 
-	/* Acessing the CQ outside of rcu_read_lock is safe, because
-	 * the CQ is freed only after interrupt handling is completed.
-	 */
 	++cq->arm_sn;
 
 	cq->comp(cq);
@@ -79,19 +118,23 @@ void mlx4_cq_event(struct mlx4_dev *dev, u32 cqn, int event_type)
 	struct mlx4_cq_table *cq_table = &mlx4_priv(dev)->cq_table;
 	struct mlx4_cq *cq;
 
-	rcu_read_lock();
+	spin_lock(&cq_table->lock);
+
 	cq = radix_tree_lookup(&cq_table->tree, cqn & (dev->caps.num_cqs - 1));
-	rcu_read_unlock();
+	if (cq)
+		atomic_inc(&cq->refcount);
+
+	spin_unlock(&cq_table->lock);
 
 	if (!cq) {
-		mlx4_dbg(dev, "Async event for bogus CQ %08x\n", cqn);
+		mlx4_warn(dev, "Async event for bogus CQ %08x\n", cqn);
 		return;
 	}
 
-	/* Acessing the CQ outside of rcu_read_lock is safe, because
-	 * the CQ is freed only after interrupt handling is completed.
-	 */
 	cq->event(cq, event_type);
+
+	if (atomic_dec_and_test(&cq->refcount))
+		complete(&cq->free);
 }
 
 static int mlx4_SW2HW_CQ(struct mlx4_dev *dev, struct mlx4_cmd_mailbox *mailbox,
@@ -258,9 +301,9 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent,
 	if (err)
 		return err;
 
-	spin_lock(&cq_table->lock);
+	spin_lock_irq(&cq_table->lock);
 	err = radix_tree_insert(&cq_table->tree, cq->cqn, cq);
-	spin_unlock(&cq_table->lock);
+	spin_unlock_irq(&cq_table->lock);
 	if (err)
 		goto err_icm;
 
@@ -294,14 +337,19 @@ int mlx4_cq_alloc(struct mlx4_dev *dev, int nent,
 	cq->uar        = uar;
 	atomic_set(&cq->refcount, 1);
 	init_completion(&cq->free);
+	cq->comp = mlx4_add_cq_to_tasklet;
+	cq->tasklet_ctx.priv =
+		&priv->eq_table.eq[cq->vector].tasklet_ctx;
+	INIT_LIST_HEAD(&cq->tasklet_ctx.list);
+
 
 	cq->irq = priv->eq_table.eq[cq->vector].irq;
 	return 0;
 
 err_radix:
-	spin_lock(&cq_table->lock);
+	spin_lock_irq(&cq_table->lock);
 	radix_tree_delete(&cq_table->tree, cq->cqn);
-	spin_unlock(&cq_table->lock);
+	spin_unlock_irq(&cq_table->lock);
 
 err_icm:
 	mlx4_cq_free_icm(dev, cq->cqn);
@@ -316,15 +364,15 @@ void mlx4_cq_free(struct mlx4_dev *dev, struct mlx4_cq *cq)
 	struct mlx4_cq_table *cq_table = &priv->cq_table;
 	int err;
 
-	spin_lock(&cq_table->lock);
-	radix_tree_delete(&cq_table->tree, cq->cqn);
-	spin_unlock(&cq_table->lock);
-
 	err = mlx4_HW2SW_CQ(dev, NULL, cq->cqn);
 	if (err)
 		mlx4_warn(dev, "HW2SW_CQ failed (%d) for CQN %06x\n", err, cq->cqn);
 
 	synchronize_irq(priv->eq_table.eq[cq->vector].irq);
+
+	spin_lock_irq(&cq_table->lock);
+	radix_tree_delete(&cq_table->tree, cq->cqn);
+	spin_unlock_irq(&cq_table->lock);
 
 	if (atomic_dec_and_test(&cq->refcount))
 		complete(&cq->free);

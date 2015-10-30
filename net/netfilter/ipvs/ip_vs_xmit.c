@@ -208,7 +208,7 @@ static inline void maybe_update_pmtu(int skb_af, struct sk_buff *skb, int mtu)
 	struct sock *sk = skb->sk;
 	struct rtable *ort = skb_rtable(skb);
 
-	if (!skb->dev && sk && sk->sk_state != TCP_TIME_WAIT)
+	if (!skb->dev && sk && sk_fullsock(sk))
 		ort->dst.ops->update_pmtu(&ort->dst, sk, NULL, mtu);
 }
 
@@ -292,7 +292,6 @@ __ip_vs_get_out_rt(int skb_af, struct sk_buff *skb, struct ip_vs_dest *dest,
 				  &dest->addr.ip, &dest_dst->dst_saddr.ip,
 				  atomic_read(&rt->dst.__refcnt));
 		}
-		daddr = dest->addr.ip;
 		if (ret_saddr)
 			*ret_saddr = dest_dst->dst_saddr.ip;
 	} else {
@@ -343,7 +342,7 @@ __ip_vs_get_out_rt(int skb_af, struct sk_buff *skb, struct ip_vs_dest *dest,
 	skb_dst_drop(skb);
 	if (noref) {
 		if (!local)
-			skb_dst_set_noref_force(skb, &rt->dst);
+			skb_dst_set_noref(skb, &rt->dst);
 		else
 			skb_dst_set(skb, dst_clone(&rt->dst));
 	} else
@@ -487,7 +486,7 @@ __ip_vs_get_out_rt_v6(int skb_af, struct sk_buff *skb, struct ip_vs_dest *dest,
 	skb_dst_drop(skb);
 	if (noref) {
 		if (!local)
-			skb_dst_set_noref_force(skb, &rt->dst);
+			skb_dst_set_noref(skb, &rt->dst);
 		else
 			skb_dst_set(skb, dst_clone(&rt->dst));
 	} else
@@ -519,6 +518,8 @@ static inline int ip_vs_tunnel_xmit_prepare(struct sk_buff *skb,
 	if (ret == NF_ACCEPT) {
 		nf_reset(skb);
 		skb_forward_csum(skb);
+		if (!skb->sk)
+			skb_sender_cpu_clear(skb);
 	}
 	return ret;
 }
@@ -559,8 +560,10 @@ static inline int ip_vs_nat_send_or_cont(int pf, struct sk_buff *skb,
 
 	if (!local) {
 		skb_forward_csum(skb);
-		NF_HOOK(pf, NF_INET_LOCAL_OUT, skb, NULL, skb_dst(skb)->dev,
-			dst_output);
+		if (!skb->sk)
+			skb_sender_cpu_clear(skb);
+		NF_HOOK(pf, NF_INET_LOCAL_OUT, NULL, skb,
+			NULL, skb_dst(skb)->dev, dst_output_sk);
 	} else
 		ret = NF_ACCEPT;
 
@@ -579,8 +582,10 @@ static inline int ip_vs_send_or_cont(int pf, struct sk_buff *skb,
 	if (!local) {
 		ip_vs_drop_early_demux_sk(skb);
 		skb_forward_csum(skb);
-		NF_HOOK(pf, NF_INET_LOCAL_OUT, skb, NULL, skb_dst(skb)->dev,
-			dst_output);
+		if (!skb->sk)
+			skb_sender_cpu_clear(skb);
+		NF_HOOK(pf, NF_INET_LOCAL_OUT, NULL, skb,
+			NULL, skb_dst(skb)->dev, dst_output_sk);
 	} else
 		ret = NF_ACCEPT;
 	return ret;
@@ -951,7 +956,8 @@ int
 ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		  struct ip_vs_protocol *pp, struct ip_vs_iphdr *ipvsh)
 {
-	struct netns_ipvs *ipvs = net_ipvs(skb_net(skb));
+	struct net *net = skb_net(skb);
+	struct netns_ipvs *ipvs = net_ipvs(net);
 	struct rtable *rt;			/* Route to the other host */
 	__be32 saddr;				/* Source for tunnel */
 	struct net_device *tdev;		/* Device to other host */
@@ -1018,7 +1024,7 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	iph->daddr		=	cp->daddr.ip;
 	iph->saddr		=	saddr;
 	iph->ttl		=	ttl;
-	ip_select_ident(skb, NULL);
+	ip_select_ident(net, skb, NULL);
 
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->ignore_df = 1;

@@ -47,16 +47,14 @@ static const unsigned int bridgeco_freq_table[] = {
 	[6] = 0x07,
 };
 
-static int
-get_formation_index(unsigned int rate, unsigned int *index)
+static unsigned int
+get_formation_index(unsigned int rate)
 {
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(snd_bebob_rate_table); i++) {
-		if (snd_bebob_rate_table[i] == rate) {
-			*index = i;
-			return 0;
-		}
+		if (snd_bebob_rate_table[i] == rate)
+			return i;
 	}
 	return -EINVAL;
 }
@@ -369,9 +367,7 @@ make_both_connections(struct snd_bebob *bebob, unsigned int rate)
 		goto end;
 
 	/* confirm params for both streams */
-	err = get_formation_index(rate, &index);
-	if (err < 0)
-		goto end;
+	index = get_formation_index(rate);
 	pcm_channels = bebob->tx_stream_formations[index].pcm;
 	midi_channels = bebob->tx_stream_formations[index].midi;
 	amdtp_stream_set_parameters(&bebob->tx_stream,
@@ -414,8 +410,6 @@ break_both_connections(struct snd_bebob *bebob)
 static void
 destroy_both_connections(struct snd_bebob *bebob)
 {
-	break_both_connections(bebob);
-
 	cmp_connection_destroy(&bebob->in_conn);
 	cmp_connection_destroy(&bebob->out_conn);
 }
@@ -488,13 +482,6 @@ int snd_bebob_stream_init_duplex(struct snd_bebob *bebob)
 		amdtp_stream_destroy(&bebob->rx_stream);
 		destroy_both_connections(bebob);
 	}
-	/*
-	 * The firmware for these devices ignore MIDI messages in more than
-	 * first 8 data blocks of an received AMDTP packet.
-	 */
-	if (bebob->spec == &maudio_fw410_spec ||
-	    bebob->spec == &maudio_special_spec)
-		bebob->rx_stream.rx_blocks_for_midi = 8;
 end:
 	return err;
 }
@@ -723,22 +710,16 @@ void snd_bebob_stream_update_duplex(struct snd_bebob *bebob)
 	mutex_unlock(&bebob->mutex);
 }
 
+/*
+ * This function should be called before starting streams or after stopping
+ * streams.
+ */
 void snd_bebob_stream_destroy_duplex(struct snd_bebob *bebob)
 {
-	mutex_lock(&bebob->mutex);
-
-	amdtp_stream_pcm_abort(&bebob->rx_stream);
-	amdtp_stream_pcm_abort(&bebob->tx_stream);
-
-	amdtp_stream_stop(&bebob->rx_stream);
-	amdtp_stream_stop(&bebob->tx_stream);
-
 	amdtp_stream_destroy(&bebob->rx_stream);
 	amdtp_stream_destroy(&bebob->tx_stream);
 
 	destroy_both_connections(bebob);
-
-	mutex_unlock(&bebob->mutex);
 }
 
 /*

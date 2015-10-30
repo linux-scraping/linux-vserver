@@ -127,13 +127,6 @@ static struct dentry *proc_mount(struct file_system_type *fs_type,
 	if (IS_ERR(sb))
 		return ERR_CAST(sb);
 
-	/*
-	 * procfs isn't actually a stacking filesystem; however, there is
-	 * too much magic going on inside it to permit stacking things on
-	 * top of it
-	 */
-	sb->s_stack_depth = FILESYSTEM_MAX_STACK_DEPTH;
-
 	if (!proc_parse_options(options, ns)) {
 		deactivate_locked_super(sb);
 		return ERR_PTR(-EINVAL);
@@ -192,10 +185,10 @@ void __init proc_root_init(void)
 #endif
 	proc_mkdir("fs", NULL);
 	proc_mkdir("driver", NULL);
-	proc_mkdir("fs/nfsd", NULL); /* somewhere for the nfsd filesystem to be mounted */
+	proc_create_mount_point("fs/nfsd"); /* somewhere for the nfsd filesystem to be mounted */
 #if defined(CONFIG_SUN_OPENPROMFS) || defined(CONFIG_SUN_OPENPROMFS_MODULE)
 	/* just give it a mountpoint */
-	proc_mkdir("openprom", NULL);
+	proc_create_mount_point("openprom");
 #endif
 	proc_tty_init();
 	proc_mkdir("bus", NULL);
@@ -206,7 +199,7 @@ void __init proc_root_init(void)
 static int proc_root_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat
 )
 {
-	generic_fillattr(dentry->d_inode, stat);
+	generic_fillattr(d_inode(dentry), stat);
 	stat->nlink = proc_root.nlink + nr_processes();
 	return 0;
 }
@@ -263,6 +256,7 @@ struct proc_dir_entry proc_root = {
 	.proc_fops	= &proc_root_operations,
 	.parent		= &proc_root,
 	.vx_flags	= IATTR_ADMIN | IATTR_WATCH,
+	.subdir		= RB_ROOT,
 	.name		= "/proc",
 };
 

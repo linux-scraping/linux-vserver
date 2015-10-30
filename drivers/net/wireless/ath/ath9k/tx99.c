@@ -99,7 +99,7 @@ static struct sk_buff *ath9k_build_tx99_skb(struct ath_softc *sc)
 
 static void ath9k_tx99_deinit(struct ath_softc *sc)
 {
-	ath_reset(sc);
+	ath_reset(sc, NULL);
 
 	ath9k_ps_wakeup(sc);
 	ath9k_tx99_stop(sc);
@@ -127,7 +127,7 @@ static int ath9k_tx99_init(struct ath_softc *sc)
 	memset(&txctl, 0, sizeof(txctl));
 	txctl.txq = sc->tx.txq_map[IEEE80211_AC_VO];
 
-	ath_reset(sc);
+	ath_reset(sc, NULL);
 
 	ath9k_ps_wakeup(sc);
 
@@ -180,9 +180,6 @@ static ssize_t write_file_tx99(struct file *file, const char __user *user_buf,
 	ssize_t len;
 	int r;
 
-	if (count < 1)
-		return -EINVAL;
-
 	if (sc->cur_chan->nvifs > 1)
 		return -EOPNOTSUPP;
 
@@ -190,32 +187,25 @@ static ssize_t write_file_tx99(struct file *file, const char __user *user_buf,
 	if (copy_from_user(buf, user_buf, len))
 		return -EFAULT;
 
-	buf[len] = '\0';
-
 	if (strtobool(buf, &start))
 		return -EINVAL;
 
-	mutex_lock(&sc->mutex);
-
 	if (start == sc->tx99_state) {
 		if (!start)
-			goto out;
+			return count;
 		ath_dbg(common, XMIT, "Resetting TX99\n");
 		ath9k_tx99_deinit(sc);
 	}
 
 	if (!start) {
 		ath9k_tx99_deinit(sc);
-		goto out;
+		return count;
 	}
 
 	r = ath9k_tx99_init(sc);
-	if (r) {
-		mutex_unlock(&sc->mutex);
+	if (r)
 		return r;
-	}
-out:
-	mutex_unlock(&sc->mutex);
+
 	return count;
 }
 

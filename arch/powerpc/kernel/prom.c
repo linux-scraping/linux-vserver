@@ -149,24 +149,23 @@ static struct ibm_pa_feature {
 	unsigned long	cpu_features;	/* CPU_FTR_xxx bit */
 	unsigned long	mmu_features;	/* MMU_FTR_xxx bit */
 	unsigned int	cpu_user_ftrs;	/* PPC_FEATURE_xxx bit */
-	unsigned int	cpu_user_ftrs2;	/* PPC_FEATURE2_xxx bit */
 	unsigned char	pabyte;		/* byte number in ibm,pa-features */
 	unsigned char	pabit;		/* bit number (big-endian) */
 	unsigned char	invert;		/* if 1, pa bit set => clear feature */
 } ibm_pa_features[] __initdata = {
-	{0, 0, PPC_FEATURE_HAS_MMU, 0,		0, 0, 0},
-	{0, 0, PPC_FEATURE_HAS_FPU, 0,		0, 1, 0},
-	{CPU_FTR_CTRL, 0, 0, 0,			0, 3, 0},
-	{CPU_FTR_NOEXECUTE, 0, 0, 0,		0, 6, 0},
-	{CPU_FTR_NODSISRALIGN, 0, 0, 0,		1, 1, 1},
-	{0, MMU_FTR_CI_LARGE_PAGE, 0, 0,		1, 2, 0},
-	{CPU_FTR_REAL_LE, 0, PPC_FEATURE_TRUE_LE, 0, 5, 0, 0},
+	{0, 0, PPC_FEATURE_HAS_MMU,	0, 0, 0},
+	{0, 0, PPC_FEATURE_HAS_FPU,	0, 1, 0},
+	{CPU_FTR_CTRL, 0, 0,		0, 3, 0},
+	{CPU_FTR_NOEXECUTE, 0, 0,	0, 6, 0},
+	{CPU_FTR_NODSISRALIGN, 0, 0,	1, 1, 1},
+	{0, MMU_FTR_CI_LARGE_PAGE, 0,	1, 2, 0},
+	{CPU_FTR_REAL_LE, PPC_FEATURE_TRUE_LE, 5, 0, 0},
 	/*
-	 * If the kernel doesn't support TM (ie CONFIG_PPC_TRANSACTIONAL_MEM=n),
-	 * we don't want to turn on TM here, so we use the *_COMP versions
-	 * which are 0 if the kernel doesn't support TM.
+	 * If the kernel doesn't support TM (ie. CONFIG_PPC_TRANSACTIONAL_MEM=n),
+	 * we don't want to turn on CPU_FTR_TM here, so we use CPU_FTR_TM_COMP
+	 * which is 0 if the kernel doesn't support TM.
 	 */
-	{CPU_FTR_TM_COMP, 0, 0, PPC_FEATURE2_HTM_COMP, 22, 0, 0},
+	{CPU_FTR_TM_COMP, 0, 0,		22, 0, 0},
 };
 
 static void __init scan_features(unsigned long node, const unsigned char *ftrs,
@@ -197,12 +196,10 @@ static void __init scan_features(unsigned long node, const unsigned char *ftrs,
 		if (bit ^ fp->invert) {
 			cur_cpu_spec->cpu_features |= fp->cpu_features;
 			cur_cpu_spec->cpu_user_features |= fp->cpu_user_ftrs;
-			cur_cpu_spec->cpu_user_features2 |= fp->cpu_user_ftrs2;
 			cur_cpu_spec->mmu_features |= fp->mmu_features;
 		} else {
 			cur_cpu_spec->cpu_features &= ~fp->cpu_features;
 			cur_cpu_spec->cpu_user_features &= ~fp->cpu_user_ftrs;
-			cur_cpu_spec->cpu_user_features2 &= ~fp->cpu_user_ftrs2;
 			cur_cpu_spec->mmu_features &= ~fp->mmu_features;
 		}
 	}
@@ -655,9 +652,6 @@ void __init early_init_devtree(void *params)
 	if (!early_init_dt_verify(params))
 		panic("BUG: Failed verifying flat device tree, bad version?");
 
-	/* Setup flat device-tree pointer */
-	initial_boot_params = params;
-
 #ifdef CONFIG_PPC_RTAS
 	/* Some machines might need RTAS info for debugging, grab it now. */
 	of_scan_flat_dt(early_init_dt_scan_rtas, NULL);
@@ -705,10 +699,7 @@ void __init early_init_devtree(void *params)
 		reserve_crashkernel();
 	early_reserve_mem();
 
-	/*
-	 * Ensure that total memory size is page-aligned, because otherwise
-	 * mark_bootmem() gets upset.
-	 */
+	/* Ensure that total memory size is page-aligned. */
 	limit = ALIGN(memory_limit ?: memblock_phys_mem_size(), PAGE_SIZE);
 	memblock_enforce_memory_limit(limit);
 
@@ -730,7 +721,7 @@ void __init early_init_devtree(void *params)
 	 */
 	of_scan_flat_dt(early_init_dt_scan_cpus, NULL);
 	if (boot_cpuid < 0) {
-		printk("Failed to indentify boot CPU !\n");
+		printk("Failed to identify boot CPU !\n");
 		BUG();
 	}
 

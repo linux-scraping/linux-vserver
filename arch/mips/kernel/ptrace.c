@@ -33,6 +33,7 @@
 
 #include <asm/byteorder.h>
 #include <asm/cpu.h>
+#include <asm/cpu-info.h>
 #include <asm/dsp.h>
 #include <asm/fpu.h>
 #include <asm/mipsregs.h>
@@ -46,6 +47,26 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/syscalls.h>
+
+static void init_fp_ctx(struct task_struct *target)
+{
+	/* If FP has been used then the target already has context */
+	if (tsk_used_math(target))
+		return;
+
+	/* Begin with data registers set to all 1s... */
+	memset(&target->thread.fpu.fpr, ~0, sizeof(target->thread.fpu.fpr));
+
+	/* ...and FCSR zeroed */
+	target->thread.fpu.fcr31 = 0;
+
+	/*
+	 * Record that the target has "used" math, such that the context
+	 * just initialised, and any modifications made by the caller,
+	 * aren't discarded.
+	 */
+	set_stopped_child_used_math(target);
+}
 
 /*
  * Called by kernel/ptrace.c when detaching..
@@ -138,11 +159,15 @@ int ptrace_setfpregs(struct task_struct *child, __u32 __user *data)
 {
 	union fpureg *fregs;
 	u64 fpr_val;
+	u32 fcr31;
+	u32 value;
+	u32 mask;
 	int i;
 
 	if (!access_ok(VERIFY_READ, data, 33 * 8))
 		return -EIO;
 
+	init_fp_ctx(child);
 	fregs = get_fpu_regs(child);
 
 	for (i = 0; i < 32; i++) {
@@ -150,8 +175,10 @@ int ptrace_setfpregs(struct task_struct *child, __u32 __user *data)
 		set_fpr64(&fregs[i], 0, fpr_val);
 	}
 
-	__get_user(child->thread.fpu.fcr31, data + 64);
-	child->thread.fpu.fcr31 &= ~FPU_CSR_ALL_X;
+	__get_user(value, data + 64);
+	fcr31 = child->thread.fpu.fcr31;
+	mask = boot_cpu_data.fpu_msk31;
+	child->thread.fpu.fcr31 = (value & ~mask) | (fcr31 & mask);
 
 	/* FIR may not be written.  */
 
@@ -440,13 +467,14 @@ static int fpr_set(struct task_struct *target,
 
 	/* XXX fcr31  */
 
+	init_fp_ctx(target);
+
 	if (sizeof(target->thread.fpu.fpr[i]) == sizeof(elf_fpreg_t))
 		return user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 					  &target->thread.fpu,
 					  0, sizeof(elf_fpregset_t));
 
-	BUILD_BUG_ON(sizeof(fpr_val) != sizeof(elf_fpreg_t));
-	for (i = 0; i < NUM_FPU_REGS && count >= sizeof(elf_fpreg_t); i++) {
+	for (i = 0; i < NUM_FPU_REGS; i++) {
 		err = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 					 &fpr_val, i * sizeof(elf_fpreg_t),
 					 (i + 1) * sizeof(elf_fpreg_t));
@@ -523,19 +551,6 @@ static const struct user_regset_view user_mips64_view = {
 	.n		= ARRAY_SIZE(mips64_regsets),
 };
 
-#ifdef CONFIG_MIPS32_N32
-
-static const struct user_regset_view user_mipsn32_view = {
-	.name		= "mipsn32",
-	.e_flags	= EF_MIPS_ABI2,
-	.e_machine	= ELF_ARCH,
-	.ei_osabi	= ELF_OSABI,
-	.regsets	= mips64_regsets,
-	.n		= ARRAY_SIZE(mips64_regsets),
-};
-
-#endif /* CONFIG_MIPS32_N32 */
-
 #endif /* CONFIG_64BIT */
 
 const struct user_regset_view *task_user_regset_view(struct task_struct *task)
@@ -546,10 +561,6 @@ const struct user_regset_view *task_user_regset_view(struct task_struct *task)
 #ifdef CONFIG_MIPS32_O32
 	if (test_tsk_thread_flag(task, TIF_32BIT_REGS))
 		return &user_mips_view;
-#endif
-#ifdef CONFIG_MIPS32_N32
-	if (test_tsk_thread_flag(task, TIF_32BIT_ADDR))
-		return &user_mipsn32_view;
 #endif
 	return &user_mips64_view;
 #endif
@@ -682,12 +693,7 @@ long arch_ptrace(struct task_struct *child, long request,
 		case FPR_BASE ... FPR_BASE + 31: {
 			union fpureg *fregs = get_fpu_regs(child);
 
-			if (!tsk_used_math(child)) {
-				/* FP not yet used  */
-				memset(&child->thread.fpu, ~0,
-				       sizeof(child->thread.fpu));
-				child->thread.fpu.fcr31 = 0;
-			}
+			init_fp_ctx(child);
 #ifdef CONFIG_32BIT
 			if (test_thread_flag(TIF_32BIT_FPREGS)) {
 				/*
@@ -792,6 +798,8 @@ asmlinkage long syscall_trace_enter(struct pt_regs *regs, long syscall)
 	long ret = 0;
 	user_exit();
 
+	current_thread_info()->syscall = syscall;
+
 	if (secure_computing() == -1)
 		return -1;
 
@@ -823,7 +831,7 @@ asmlinkage void syscall_trace_leave(struct pt_regs *regs)
 	audit_syscall_exit(regs);
 
 	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
-		trace_sys_exit(regs, regs_return_value(regs));
+		trace_sys_exit(regs, regs->regs[2]);
 
 	if (test_thread_flag(TIF_SYSCALL_TRACE))
 		tracehook_report_syscall_exit(regs, 0);

@@ -129,9 +129,7 @@ static void multipath_make_request(struct mddev *mddev, struct bio * bio)
 	}
 	multipath = conf->multipaths + mp_bh->path;
 
-	bio_init(&mp_bh->bio);
-	__bio_clone_fast(&mp_bh->bio, bio);
-
+	mp_bh->bio = *bio;
 	mp_bh->bio.bi_iter.bi_sector += multipath->rdev->data_offset;
 	mp_bh->bio.bi_bdev = multipath->rdev->bdev;
 	mp_bh->bio.bi_rw |= REQ_FAILFAST_TRANSPORT;
@@ -155,14 +153,10 @@ static void multipath_status (struct seq_file *seq, struct mddev *mddev)
 	seq_printf (seq, "]");
 }
 
-static int multipath_congested(void *data, int bits)
+static int multipath_congested(struct mddev *mddev, int bits)
 {
-	struct mddev *mddev = data;
 	struct mpconf *conf = mddev->private;
 	int i, ret = 0;
-
-	if (mddev_congested(mddev, bits))
-		return 1;
 
 	rcu_read_lock();
 	for (i = 0; i < mddev->raid_disks ; i++) {
@@ -405,7 +399,7 @@ static int multipath_run (struct mddev *mddev)
 	/*
 	 * copy the already verified devices into our private MULTIPATH
 	 * bookkeeping area. [whatever we allocate in multipath_run(),
-	 * should be freed in multipath_stop()]
+	 * should be freed in multipath_free()]
 	 */
 
 	conf = kzalloc(sizeof(struct mpconf), GFP_KERNEL);
@@ -491,9 +485,6 @@ static int multipath_run (struct mddev *mddev)
 	 */
 	md_set_array_sectors(mddev, multipath_size(mddev, 0, 0));
 
-	mddev->queue->backing_dev_info.congested_fn = multipath_congested;
-	mddev->queue->backing_dev_info.congested_data = mddev;
-
 	if (md_integrity_register(mddev))
 		goto out_free_conf;
 
@@ -509,17 +500,13 @@ out:
 	return -EIO;
 }
 
-static int multipath_stop (struct mddev *mddev)
+static void multipath_free(struct mddev *mddev, void *priv)
 {
-	struct mpconf *conf = mddev->private;
+	struct mpconf *conf = priv;
 
-	md_unregister_thread(&mddev->thread);
-	blk_sync_queue(mddev->queue); /* the unplug fn references 'conf'*/
 	mempool_destroy(conf->pool);
 	kfree(conf->multipaths);
 	kfree(conf);
-	mddev->private = NULL;
-	return 0;
 }
 
 static struct md_personality multipath_personality =
@@ -529,12 +516,13 @@ static struct md_personality multipath_personality =
 	.owner		= THIS_MODULE,
 	.make_request	= multipath_make_request,
 	.run		= multipath_run,
-	.stop		= multipath_stop,
+	.free		= multipath_free,
 	.status		= multipath_status,
 	.error_handler	= multipath_error,
 	.hot_add_disk	= multipath_add_disk,
 	.hot_remove_disk= multipath_remove_disk,
 	.size		= multipath_size,
+	.congested	= multipath_congested,
 };
 
 static int __init multipath_init (void)

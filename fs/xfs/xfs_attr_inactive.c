@@ -23,8 +23,6 @@
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_bit.h"
-#include "xfs_sb.h"
-#include "xfs_ag.h"
 #include "xfs_mount.h"
 #include "xfs_da_format.h"
 #include "xfs_da_btree.h"
@@ -39,7 +37,6 @@
 #include "xfs_error.h"
 #include "xfs_quota.h"
 #include "xfs_trace.h"
-#include "xfs_dinode.h"
 #include "xfs_dir2.h"
 
 /*
@@ -135,9 +132,10 @@ xfs_attr3_leaf_inactive(
 	int			size;
 	int			tmp;
 	int			i;
+	struct xfs_mount	*mp = bp->b_target->bt_mount;
 
 	leaf = bp->b_addr;
-	xfs_attr3_leaf_hdr_from_disk(&ichdr, leaf);
+	xfs_attr3_leaf_hdr_from_disk(mp->m_attr_geo, &ichdr, leaf);
 
 	/*
 	 * Count the number of "remote" value extents.
@@ -437,8 +435,14 @@ xfs_attr_inactive(
 	 */
 	xfs_trans_ijoin(trans, dp, 0);
 
-	/* invalidate and truncate the attribute fork extents */
-	if (dp->i_d.di_aformat != XFS_DINODE_FMT_LOCAL) {
+	/*
+	 * Invalidate and truncate the attribute fork extents. Make sure the
+	 * fork actually has attributes as otherwise the invalidation has no
+	 * blocks to read and returns an error. In this case, just do the fork
+	 * removal below.
+	 */
+	if (xfs_inode_hasattr(dp) &&
+	    dp->i_d.di_aformat != XFS_DINODE_FMT_LOCAL) {
 		error = xfs_attr3_root_inactive(&trans, dp);
 		if (error)
 			goto out_cancel;

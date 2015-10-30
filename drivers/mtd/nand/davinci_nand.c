@@ -241,9 +241,6 @@ static void nand_davinci_hwctl_4bit(struct mtd_info *mtd, int mode)
 	unsigned long flags;
 	u32 val;
 
-	/* Reset ECC hardware */
-	davinci_nand_readl(info, NAND_4BIT_ECC1_OFFSET);
-
 	spin_lock_irqsave(&davinci_nand_lock, flags);
 
 	/* Start 4-bit ECC calculation for read/write */
@@ -873,7 +870,6 @@ static struct platform_driver nand_davinci_driver = {
 	.remove		= nand_davinci_remove,
 	.driver		= {
 		.name	= "davinci_nand",
-		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(davinci_nand_of_match),
 	},
 };

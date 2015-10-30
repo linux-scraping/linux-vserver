@@ -49,7 +49,7 @@ static int vroot_set_dev(
 		goto out;
 
 	error = -EINVAL;
-	inode = file->f_dentry->d_inode;
+	inode = file->f_path.dentry->d_inode;
 
 
 	if (S_ISBLK(inode->i_mode)) {

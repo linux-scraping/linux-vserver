@@ -551,12 +551,10 @@ static const struct platform_device_id therm_id_table[] = {
 	{ "msic_thermal", 1 },
 	{ }
 };
-MODULE_DEVICE_TABLE(platform, therm_id_table);
 
 static struct platform_driver mid_thermal_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 		.pm = &mid_thermal_pm,
 	},
 	.probe = mid_thermal_probe,

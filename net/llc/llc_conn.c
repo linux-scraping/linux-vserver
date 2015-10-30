@@ -406,7 +406,7 @@ static struct llc_conn_state_trans *llc_qualify_conn_ev(struct sock *sk,
 							struct sk_buff *skb)
 {
 	struct llc_conn_state_trans **next_trans;
-	llc_conn_ev_qfyr_t *next_qualifier;
+	const llc_conn_ev_qfyr_t *next_qualifier;
 	struct llc_conn_state_ev *ev = llc_conn_ev(skb);
 	struct llc_sock *llc = llc_sk(sk);
 	struct llc_conn_state *curr_state =
@@ -454,7 +454,7 @@ static int llc_exec_conn_trans_actions(struct sock *sk,
 				       struct sk_buff *skb)
 {
 	int rc = 0;
-	llc_conn_action_t *next_action;
+	const llc_conn_action_t *next_action;
 
 	for (next_action = trans->ev_actions;
 	     next_action && *next_action; next_action++) {
@@ -821,10 +821,7 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 		 * another trick required to cope with how the PROCOM state
 		 * machine works. -acme
 		 */
-		skb_orphan(skb);
-		sock_hold(sk);
 		skb->sk = sk;
-		skb->destructor = sock_efree;
 	}
 	if (!sock_owned_by_user(sk))
 		llc_conn_rcv(sk, skb);

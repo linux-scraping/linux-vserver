@@ -439,12 +439,6 @@ int dev_get_wireless_info(char *buffer, char **start, off_t offset, int length);
 /* Send a single event to user space */
 void wireless_send_event(struct net_device *dev, unsigned int cmd,
 			 union iwreq_data *wrqu, const char *extra);
-#ifdef CONFIG_WEXT_CORE
-/* flush all previous wext events - if work is done from netdev notifiers */
-void wireless_nlevent_flush(void);
-#else
-static inline void wireless_nlevent_flush(void) {}
-#endif
 
 /* We may need a function to send a stream of events to user space.
  * More on that later... */
@@ -525,6 +519,17 @@ iwe_stream_add_event(struct iw_request_info *info, char *stream, char *ends,
 	return stream;
 }
 
+static inline char *
+iwe_stream_add_event_check(struct iw_request_info *info, char *stream,
+			   char *ends, struct iw_event *iwe, int event_len)
+{
+	char *res = iwe_stream_add_event(info, stream, ends, iwe, event_len);
+
+	if (res == stream)
+		return ERR_PTR(-E2BIG);
+	return res;
+}
+
 /*------------------------------------------------------------------*/
 /*
  * Wrapper to add an short Wireless Event containing a pointer to a
@@ -545,11 +550,21 @@ iwe_stream_add_point(struct iw_request_info *info, char *stream, char *ends,
 		memcpy(stream + lcp_len,
 		       ((char *) &iwe->u) + IW_EV_POINT_OFF,
 		       IW_EV_POINT_PK_LEN - IW_EV_LCP_PK_LEN);
-		if (iwe->u.data.length && extra)
-			memcpy(stream + point_len, extra, iwe->u.data.length);
+		memcpy(stream + point_len, extra, iwe->u.data.length);
 		stream += event_len;
 	}
 	return stream;
+}
+
+static inline char *
+iwe_stream_add_point_check(struct iw_request_info *info, char *stream,
+			   char *ends, struct iw_event *iwe, char *extra)
+{
+	char *res = iwe_stream_add_point(info, stream, ends, iwe, extra);
+
+	if (res == stream)
+		return ERR_PTR(-E2BIG);
+	return res;
 }
 
 /*------------------------------------------------------------------*/

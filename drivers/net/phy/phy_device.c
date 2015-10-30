@@ -699,6 +699,7 @@ int phy_suspend(struct phy_device *phydev)
 {
 	struct phy_driver *phydrv = to_phy_driver(phydev->dev.driver);
 	struct ethtool_wolinfo wol = { .cmd = ETHTOOL_GWOL };
+	int ret = 0;
 
 	/* If the device has WOL enabled, we cannot suspend the PHY */
 	phy_ethtool_get_wol(phydev, &wol);
@@ -706,18 +707,31 @@ int phy_suspend(struct phy_device *phydev)
 		return -EBUSY;
 
 	if (phydrv->suspend)
-		return phydrv->suspend(phydev);
-	return 0;
+		ret = phydrv->suspend(phydev);
+
+	if (ret)
+		return ret;
+
+	phydev->suspended = true;
+
+	return ret;
 }
 EXPORT_SYMBOL(phy_suspend);
 
 int phy_resume(struct phy_device *phydev)
 {
 	struct phy_driver *phydrv = to_phy_driver(phydev->dev.driver);
+	int ret = 0;
 
 	if (phydrv->resume)
-		return phydrv->resume(phydev);
-	return 0;
+		ret = phydrv->resume(phydev);
+
+	if (ret)
+		return ret;
+
+	phydev->suspended = false;
+
+	return ret;
 }
 EXPORT_SYMBOL(phy_resume);
 
@@ -1267,8 +1281,6 @@ static int phy_remove(struct device *dev)
 {
 	struct phy_device *phydev = to_phy_device(dev);
 
-	cancel_delayed_work_sync(&phydev->state_queue);
-
 	mutex_lock(&phydev->lock);
 	phydev->state = PHY_DOWN;
 	mutex_unlock(&phydev->lock);
@@ -1343,7 +1355,7 @@ static struct phy_driver genphy_driver[] = {
 	.phy_id		= 0xffffffff,
 	.phy_id_mask	= 0xffffffff,
 	.name		= "Generic PHY",
-	.soft_reset	= genphy_no_soft_reset,
+	.soft_reset	= genphy_soft_reset,
 	.config_init	= genphy_config_init,
 	.features	= PHY_GBIT_FEATURES | SUPPORTED_MII |
 			  SUPPORTED_AUI | SUPPORTED_FIBRE |

@@ -365,7 +365,7 @@ nouveau_fbcon_create(struct drm_fb_helper *helper,
 		goto out;
 	}
 
-	ret = nouveau_bo_pin(nvbo, TTM_PL_FLAG_VRAM);
+	ret = nouveau_bo_pin(nvbo, TTM_PL_FLAG_VRAM, false);
 	if (ret) {
 		NV_ERROR(drm, "failed to pin fb: %d\n", ret);
 		goto out_unref;
@@ -394,6 +394,7 @@ nouveau_fbcon_create(struct drm_fb_helper *helper,
 		ret = -ENOMEM;
 		goto out_unlock;
 	}
+	info->skip_vt_switch = 1;
 
 	ret = fb_alloc_cmap(&info->cmap, 256, 0);
 	if (ret) {
@@ -441,7 +442,7 @@ nouveau_fbcon_create(struct drm_fb_helper *helper,
 	nouveau_fbcon_zfill(dev, fbcon);
 
 	/* To allow resizeing without swapping buffers */
-	NV_INFO(drm, "allocated %dx%d fb: 0x%lx, bo %p\n",
+	NV_INFO(drm, "allocated %dx%d fb: 0x%llx, bo %p\n",
 		nouveau_fb->base.width, nouveau_fb->base.height,
 		nvbo->bo.offset, nvbo);
 
@@ -511,15 +512,19 @@ static const struct drm_fb_helper_funcs nouveau_fbcon_helper_funcs = {
 	.fb_probe = nouveau_fbcon_create,
 };
 
-static void
-nouveau_fbcon_set_suspend_work(struct work_struct *work)
+void
+nouveau_fbcon_set_suspend(struct drm_device *dev, int state)
 {
-	struct nouveau_fbdev *fbcon = container_of(work, typeof(*fbcon), work);
-	console_lock();
-	nouveau_fbcon_accel_restore(fbcon->dev);
-	nouveau_fbcon_zfill(fbcon->dev, fbcon);
-	fb_set_suspend(fbcon->helper.fbdev, FBINFO_STATE_RUNNING);
-	console_unlock();
+	struct nouveau_drm *drm = nouveau_drm(dev);
+	if (drm->fbcon) {
+		console_lock();
+		if (state == FBINFO_STATE_RUNNING)
+			nouveau_fbcon_accel_restore(dev);
+		fb_set_suspend(drm->fbcon->helper.fbdev, state);
+		if (state != FBINFO_STATE_RUNNING)
+			nouveau_fbcon_accel_save_disable(dev);
+		console_unlock();
+	}
 }
 
 int
@@ -538,7 +543,6 @@ nouveau_fbcon_init(struct drm_device *dev)
 	if (!fbcon)
 		return -ENOMEM;
 
-	INIT_WORK(&fbcon->work, nouveau_fbcon_set_suspend_work);
 	fbcon->dev = dev;
 	drm->fbcon = fbcon;
 
@@ -568,8 +572,6 @@ nouveau_fbcon_init(struct drm_device *dev)
 	if (ret)
 		goto fini;
 
-	if (fbcon->helper.fbdev)
-		fbcon->helper.fbdev->pixmap.buf_align = 4;
 	return 0;
 
 fini:
@@ -591,21 +593,4 @@ nouveau_fbcon_fini(struct drm_device *dev)
 	nouveau_fbcon_destroy(dev, drm->fbcon);
 	kfree(drm->fbcon);
 	drm->fbcon = NULL;
-}
-
-void
-nouveau_fbcon_set_suspend(struct drm_device *dev, int state)
-{
-	struct nouveau_drm *drm = nouveau_drm(dev);
-	if (drm->fbcon) {
-		if (state == FBINFO_STATE_RUNNING) {
-			schedule_work(&drm->fbcon->work);
-			return;
-		}
-		flush_work(&drm->fbcon->work);
-		console_lock();
-		fb_set_suspend(drm->fbcon->helper.fbdev, state);
-		nouveau_fbcon_accel_save_disable(dev);
-		console_unlock();
-	}
 }

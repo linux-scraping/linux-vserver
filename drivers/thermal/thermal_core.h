@@ -41,7 +41,6 @@ struct thermal_instance {
 	struct thermal_zone_device *tz;
 	struct thermal_cooling_device *cdev;
 	int trip;
-	bool initialized;
 	unsigned long upper;	/* Highest cooling state for this trip point */
 	unsigned long lower;	/* Lowest cooling state for this trip point */
 	unsigned long target;	/* expected cooling state */
@@ -90,9 +89,27 @@ static inline void thermal_gov_user_space_unregister(void) {}
 #ifdef CONFIG_THERMAL_OF
 int of_parse_thermal_zones(void);
 void of_thermal_destroy_zones(void);
+int of_thermal_get_ntrips(struct thermal_zone_device *);
+bool of_thermal_is_trip_valid(struct thermal_zone_device *, int);
+const struct thermal_trip *
+of_thermal_get_trip_points(struct thermal_zone_device *);
 #else
 static inline int of_parse_thermal_zones(void) { return 0; }
 static inline void of_thermal_destroy_zones(void) { }
+static inline int of_thermal_get_ntrips(struct thermal_zone_device *tz)
+{
+	return 0;
+}
+static inline bool of_thermal_is_trip_valid(struct thermal_zone_device *tz,
+					    int trip)
+{
+	return false;
+}
+static inline const struct thermal_trip *
+of_thermal_get_trip_points(struct thermal_zone_device *tz)
+{
+	return NULL;
+}
 #endif
 
 #endif /* __THERMAL_CORE_H__ */

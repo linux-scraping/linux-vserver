@@ -175,13 +175,10 @@ static int instantiate_rng(struct device *ctrldev, int state_handle_mask,
 {
 	struct caam_drv_private *ctrlpriv = dev_get_drvdata(ctrldev);
 	struct caam_ctrl __iomem *ctrl;
-	struct rng4tst __iomem *r4tst;
 	u32 *desc, status, rdsta_val;
 	int ret = 0, sh_idx;
 
 	ctrl = (struct caam_ctrl __iomem *)ctrlpriv->ctrl;
-	r4tst = &ctrl->r4tst[0];
-
 	desc = kmalloc(CAAM_CMD_SZ * 7, GFP_KERNEL);
 	if (!desc)
 		return -ENOMEM;
@@ -209,8 +206,7 @@ static int instantiate_rng(struct device *ctrldev, int state_handle_mask,
 		 * without any error (HW optimizations for later
 		 * CAAM eras), then try again.
 		 */
-		rdsta_val =
-			rd_reg32(&ctrl->r4tst[0].rdsta) & RDSTA_IFMASK;
+		rdsta_val = rd_reg32(&ctrl->r4tst[0].rdsta) & RDSTA_IFMASK;
 		if (status || !(rdsta_val & (1 << sh_idx)))
 			ret = -EAGAIN;
 		if (ret)
@@ -263,8 +259,7 @@ static int deinstantiate_rng(struct device *ctrldev, int state_handle_mask)
 			/* Try to run it through DECO0 */
 			ret = run_descriptor_deco0(ctrldev, desc, &status);
 
-			if (ret ||
-			    (status && status != JRSTA_SSRC_JUMP_HALT_CC)) {
+			if (ret || status) {
 				dev_err(ctrldev,
 					"Failed to deinstantiate RNG4 SH%d\n",
 					sh_idx);
@@ -721,7 +716,6 @@ MODULE_DEVICE_TABLE(of, caam_match);
 static struct platform_driver caam_driver = {
 	.driver = {
 		.name = "caam",
-		.owner = THIS_MODULE,
 		.of_match_table = caam_match,
 	},
 	.probe       = caam_probe,

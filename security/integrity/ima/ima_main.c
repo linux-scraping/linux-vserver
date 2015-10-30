@@ -52,8 +52,6 @@ static int __init hash_setup(char *str)
 			ima_hash_algo = HASH_ALGO_SHA1;
 		else if (strncmp(str, "md5", 3) == 0)
 			ima_hash_algo = HASH_ALGO_MD5;
-		else
-			return 1;
 		goto out;
 	}
 
@@ -63,8 +61,6 @@ static int __init hash_setup(char *str)
 			break;
 		}
 	}
-	if (i == HASH_ALGO__LAST)
-		return 1;
 out:
 	hash_setup_done = 1;
 	return 1;
@@ -147,7 +143,7 @@ void ima_file_free(struct file *file)
 	struct inode *inode = file_inode(file);
 	struct integrity_iint_cache *iint;
 
-	if (!iint_initialized || !S_ISREG(inode->i_mode))
+	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
 		return;
 
 	iint = integrity_iint_find(inode);
@@ -250,7 +246,8 @@ out_digsig:
 		rc = -EACCES;
 	kfree(xattr_value);
 out_free:
-	kfree(pathbuf);
+	if (pathbuf)
+		__putname(pathbuf);
 out:
 	mutex_unlock(&inode->i_mutex);
 	if ((rc && must_appraise) && (ima_appraise & IMA_APPRAISE_ENFORCE))

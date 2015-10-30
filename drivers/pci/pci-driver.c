@@ -653,7 +653,6 @@ static bool pci_has_legacy_pm_support(struct pci_dev *pci_dev)
 static int pci_pm_prepare(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
-	int error = 0;
 
 	/*
 	 * Devices having power.ignore_children set may still be necessary for
@@ -662,10 +661,12 @@ static int pci_pm_prepare(struct device *dev)
 	if (dev->power.ignore_children)
 		pm_runtime_resume(dev);
 
-	if (drv && drv->pm && drv->pm->prepare)
-		error = drv->pm->prepare(dev);
-
-	return error;
+	if (drv && drv->pm && drv->pm->prepare) {
+		int error = drv->pm->prepare(dev);
+		if (error)
+			return error;
+	}
+	return pci_dev_keep_suspended(to_pci_dev(dev));
 }
 
 
@@ -924,13 +925,7 @@ static int pci_pm_thaw_noirq(struct device *dev)
 	if (pci_has_legacy_pm_support(pci_dev))
 		return pci_legacy_resume_early(dev);
 
-	/*
-	 * pci_restore_state() requires the device to be in D0 (because of MSI
-	 * restoration among other things), so force it into D0 in case the
-	 * driver's "freeze" callbacks put it into a low-power state directly.
-	 */
-	pci_set_power_state(pci_dev, PCI_D0);
-	pci_restore_state(pci_dev);
+	pci_update_current_state(pci_dev, PCI_D0);
 
 	if (drv && drv->pm && drv->pm->thaw_noirq)
 		error = drv->pm->thaw_noirq(dev);
@@ -1110,7 +1105,7 @@ static int pci_pm_restore(struct device *dev)
 
 #endif /* !CONFIG_HIBERNATE_CALLBACKS */
 
-#ifdef CONFIG_PM_RUNTIME
+#ifdef CONFIG_PM
 
 static int pci_pm_runtime_suspend(struct device *dev)
 {
@@ -1206,16 +1201,6 @@ static int pci_pm_runtime_idle(struct device *dev)
 	return ret;
 }
 
-#else /* !CONFIG_PM_RUNTIME */
-
-#define pci_pm_runtime_suspend	NULL
-#define pci_pm_runtime_resume	NULL
-#define pci_pm_runtime_idle	NULL
-
-#endif /* !CONFIG_PM_RUNTIME */
-
-#ifdef CONFIG_PM
-
 static const struct dev_pm_ops pci_dev_pm_ops = {
 	.prepare = pci_pm_prepare,
 	.suspend = pci_pm_suspend,
@@ -1237,11 +1222,15 @@ static const struct dev_pm_ops pci_dev_pm_ops = {
 
 #define PCI_PM_OPS_PTR	(&pci_dev_pm_ops)
 
-#else /* !COMFIG_PM_OPS */
+#else /* !CONFIG_PM */
+
+#define pci_pm_runtime_suspend	NULL
+#define pci_pm_runtime_resume	NULL
+#define pci_pm_runtime_idle	NULL
 
 #define PCI_PM_OPS_PTR	NULL
 
-#endif /* !COMFIG_PM_OPS */
+#endif /* !CONFIG_PM */
 
 /**
  * __pci_register_driver - register a new pci driver

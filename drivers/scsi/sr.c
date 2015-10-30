@@ -88,9 +88,9 @@ static struct dev_pm_ops sr_pm_ops = {
 };
 
 static struct scsi_driver sr_template = {
-	.owner			= THIS_MODULE,
 	.gendrv = {
 		.name   	= "sr",
+		.owner		= THIS_MODULE,
 		.probe		= sr_probe,
 		.remove		= sr_remove,
 		.pm		= &sr_pm_ops,
@@ -143,9 +143,6 @@ static inline struct scsi_cd *scsi_cd(struct gendisk *disk)
 static int sr_runtime_suspend(struct device *dev)
 {
 	struct scsi_cd *cd = dev_get_drvdata(dev);
-
-	if (!cd)	/* E.g.: runtime suspend following sr_remove() */
-		return 0;
 
 	if (cd->media_present)
 		return -EBUSY;
@@ -390,7 +387,7 @@ static int sr_init_command(struct scsi_cmnd *SCpnt)
 	struct request *rq = SCpnt->request;
 	int ret;
 
-	ret = scsi_init_io(SCpnt, GFP_ATOMIC);
+	ret = scsi_init_io(SCpnt);
 	if (ret != BLKPREP_OK)
 		goto out;
 	SCpnt = rq->special;
@@ -552,6 +549,11 @@ static int sr_block_ioctl(struct block_device *bdev, fmode_t mode, unsigned cmd,
 
 	mutex_lock(&sr_mutex);
 
+	ret = scsi_ioctl_block_when_processing_errors(sdev, cmd,
+			(mode & FMODE_NDELAY) != 0);
+	if (ret)
+		goto out;
+
 	/*
 	 * Send SCSI addressing ioctls directly to mid level, send other
 	 * ioctls to cdrom/block level.
@@ -567,16 +569,6 @@ static int sr_block_ioctl(struct block_device *bdev, fmode_t mode, unsigned cmd,
 	if (ret != -ENOSYS)
 		goto out;
 
-	/*
-	 * ENODEV means that we didn't recognise the ioctl, or that we
-	 * cannot execute it in the current device state.  In either
-	 * case fall through to scsi_ioctl, which will return ENDOEV again
-	 * if it doesn't recognise the ioctl
-	 */
-	ret = scsi_nonblockable_ioctl(sdev, cmd, argp,
-					(mode & FMODE_NDELAY) != 0);
-	if (ret != -ENODEV)
-		goto out;
 	ret = scsi_ioctl(sdev, cmd, argp);
 
 out:
@@ -839,7 +831,6 @@ static void get_capabilities(struct scsi_cd *cd)
 	unsigned char *buffer;
 	struct scsi_mode_data data;
 	struct scsi_sense_hdr sshdr;
-	unsigned int ms_len = 128;
 	int rc, n;
 
 	static const char *loadmech[] =
@@ -866,11 +857,10 @@ static void get_capabilities(struct scsi_cd *cd)
 	scsi_test_unit_ready(cd->device, SR_TIMEOUT, MAX_RETRIES, &sshdr);
 
 	/* ask for mode page 0x2a */
-	rc = scsi_mode_sense(cd->device, 0, 0x2a, buffer, ms_len,
+	rc = scsi_mode_sense(cd->device, 0, 0x2a, buffer, 128,
 			     SR_TIMEOUT, 3, &data, NULL);
 
-	if (!scsi_status_is_good(rc) || data.length > ms_len ||
-	    data.header_length + data.block_descriptor_length > data.length) {
+	if (!scsi_status_is_good(rc)) {
 		/* failed, drive doesn't have capabilities mode page */
 		cd->cdi.speed = 1;
 		cd->cdi.mask |= (CDC_CD_R | CDC_CD_RW | CDC_DVD_R |
@@ -995,7 +985,6 @@ static int sr_remove(struct device *dev)
 	scsi_autopm_get_device(cd->device);
 
 	del_gendisk(cd->disk);
-	dev_set_drvdata(dev, NULL);
 
 	mutex_lock(&sr_ref_mutex);
 	kref_put(&cd->kref, sr_kref_release);

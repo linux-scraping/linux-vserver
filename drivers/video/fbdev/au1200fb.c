@@ -1680,10 +1680,8 @@ static int au1200fb_drv_probe(struct platform_device *dev)
 
 		fbi = framebuffer_alloc(sizeof(struct au1200fb_device),
 					&dev->dev);
-		if (!fbi) {
-			ret = -ENOMEM;
+		if (!fbi)
 			goto failed;
-		}
 
 		_au1200fb_infos[plane] = fbi;
 		fbdev = fbi->par;
@@ -1701,8 +1699,7 @@ static int au1200fb_drv_probe(struct platform_device *dev)
 		if (!fbdev->fb_mem) {
 			print_err("fail to allocate frambuffer (size: %dK))",
 				  fbdev->fb_len / 1024);
-			ret = -ENOMEM;
-			goto failed;
+			return -ENOMEM;
 		}
 
 		/*
@@ -1844,7 +1841,6 @@ static const struct dev_pm_ops au1200fb_pmops = {
 static struct platform_driver au1200fb_driver = {
 	.driver = {
 		.name	= "au1200-lcd",
-		.owner	= THIS_MODULE,
 		.pm	= AU1200FB_PMOPS,
 	},
 	.probe		= au1200fb_drv_probe,

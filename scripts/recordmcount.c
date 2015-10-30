@@ -33,17 +33,10 @@
 #include <string.h>
 #include <unistd.h>
 
-/*
- * glibc synced up and added the metag number but didn't add the relocations.
- * Work around this in a crude manner for now.
- */
 #ifndef EM_METAG
+/* Remove this when these make it to the standard system elf.h. */
 #define EM_METAG      174
-#endif
-#ifndef R_METAG_ADDR32
 #define R_METAG_ADDR32                   2
-#endif
-#ifndef R_METAG_NONE
 #define R_METAG_NONE                     3
 #endif
 
@@ -411,7 +404,7 @@ do_file(char const *const fname)
 		}
 		if (w2(ghdr->e_machine) == EM_S390) {
 			reltype = R_390_64;
-			mcount_adjust_64 = -8;
+			mcount_adjust_64 = -14;
 		}
 		if (w2(ghdr->e_machine) == EM_MIPS) {
 			reltype = R_MIPS_64;

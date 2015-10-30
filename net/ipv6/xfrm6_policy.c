@@ -61,9 +61,8 @@ static int xfrm6_get_saddr(struct net *net,
 		return -EHOSTUNREACH;
 
 	dev = ip6_dst_idev(dst)->dev;
-	ipv6_dev_get_saddr(dev_net(dev), dev,
-			   (struct in6_addr *)&daddr->a6, 0,
-			   (struct in6_addr *)&saddr->a6, NULL);
+	ipv6_dev_get_saddr(dev_net(dev), dev, &daddr->in6,
+		0, &saddr->in6, NULL);
 	dst_release(dst);
 	return 0;
 }
@@ -130,12 +129,18 @@ _decode_session6(struct sk_buff *skb, struct flowi *fl, int reverse)
 {
 	struct flowi6 *fl6 = &fl->u.ip6;
 	int onlyproto = 0;
-	u16 offset = skb_network_header_len(skb);
 	const struct ipv6hdr *hdr = ipv6_hdr(skb);
+	u16 offset = sizeof(*hdr);
 	struct ipv6_opt_hdr *exthdr;
 	const unsigned char *nh = skb_network_header(skb);
-	u8 nexthdr = nh[IP6CB(skb)->nhoff];
+	u16 nhoff = IP6CB(skb)->nhoff;
 	int oif = 0;
+	u8 nexthdr;
+
+	if (!nhoff)
+		nhoff = offsetof(struct ipv6hdr, nexthdr);
+
+	nexthdr = nh[nhoff];
 
 	if (skb_dst(skb))
 		oif = skb_dst(skb)->dev->ifindex;
@@ -194,6 +199,7 @@ _decode_session6(struct sk_buff *skb, struct flowi *fl, int reverse)
 
 #if IS_ENABLED(CONFIG_IPV6_MIP6)
 		case IPPROTO_MH:
+			offset += ipv6_optlen(exthdr);
 			if (!onlyproto && pskb_may_pull(skb, nh + offset + 3 - skb->data)) {
 				struct ip6_mh *mh;
 
@@ -284,9 +290,8 @@ static void xfrm6_dst_ifdown(struct dst_entry *dst, struct net_device *dev,
 	xfrm_dst_ifdown(dst, dev);
 }
 
-static struct dst_ops xfrm6_dst_ops_template = {
+static struct dst_ops xfrm6_dst_ops = {
 	.family =		AF_INET6,
-	.protocol =		cpu_to_be16(ETH_P_IPV6),
 	.gc =			xfrm6_garbage_collect,
 	.update_pmtu =		xfrm6_update_pmtu,
 	.redirect =		xfrm6_redirect,
@@ -299,7 +304,7 @@ static struct dst_ops xfrm6_dst_ops_template = {
 
 static struct xfrm_policy_afinfo xfrm6_policy_afinfo = {
 	.family =		AF_INET6,
-	.dst_ops =		&xfrm6_dst_ops_template,
+	.dst_ops =		&xfrm6_dst_ops,
 	.dst_lookup =		xfrm6_dst_lookup,
 	.get_saddr =		xfrm6_get_saddr,
 	.decode_session =	_decode_session6,
@@ -332,7 +337,7 @@ static struct ctl_table xfrm6_policy_table[] = {
 	{ }
 };
 
-static int __net_init xfrm6_net_sysctl_init(struct net *net)
+static int __net_init xfrm6_net_init(struct net *net)
 {
 	struct ctl_table *table;
 	struct ctl_table_header *hdr;
@@ -360,11 +365,11 @@ err_alloc:
 	return -ENOMEM;
 }
 
-static void __net_exit xfrm6_net_sysctl_exit(struct net *net)
+static void __net_exit xfrm6_net_exit(struct net *net)
 {
 	struct ctl_table *table;
 
-	if (net->ipv6.sysctl.xfrm6_hdr == NULL)
+	if (!net->ipv6.sysctl.xfrm6_hdr)
 		return;
 
 	table = net->ipv6.sysctl.xfrm6_hdr->ctl_table_arg;
@@ -372,52 +377,24 @@ static void __net_exit xfrm6_net_sysctl_exit(struct net *net)
 	if (!net_eq(net, &init_net))
 		kfree(table);
 }
-#else /* CONFIG_SYSCTL */
-static int inline xfrm6_net_sysctl_init(struct net *net)
-{
-	return 0;
-}
-
-static void inline xfrm6_net_sysctl_exit(struct net *net)
-{
-}
-#endif
-
-static int __net_init xfrm6_net_init(struct net *net)
-{
-	int ret;
-
-	memcpy(&net->xfrm.xfrm6_dst_ops, &xfrm6_dst_ops_template,
-	       sizeof(xfrm6_dst_ops_template));
-	ret = dst_entries_init(&net->xfrm.xfrm6_dst_ops);
-	if (ret)
-		return ret;
-
-	ret = xfrm6_net_sysctl_init(net);
-	if (ret)
-		dst_entries_destroy(&net->xfrm.xfrm6_dst_ops);
-
-	return ret;
-}
-
-static void __net_exit xfrm6_net_exit(struct net *net)
-{
-	xfrm6_net_sysctl_exit(net);
-	dst_entries_destroy(&net->xfrm.xfrm6_dst_ops);
-}
 
 static struct pernet_operations xfrm6_net_ops = {
 	.init	= xfrm6_net_init,
 	.exit	= xfrm6_net_exit,
 };
+#endif
 
 int __init xfrm6_init(void)
 {
 	int ret;
 
+	dst_entries_init(&xfrm6_dst_ops);
+
 	ret = xfrm6_policy_init();
-	if (ret)
+	if (ret) {
+		dst_entries_destroy(&xfrm6_dst_ops);
 		goto out;
+	}
 	ret = xfrm6_state_init();
 	if (ret)
 		goto out_policy;
@@ -426,7 +403,9 @@ int __init xfrm6_init(void)
 	if (ret)
 		goto out_state;
 
+#ifdef CONFIG_SYSCTL
 	register_pernet_subsys(&xfrm6_net_ops);
+#endif
 out:
 	return ret;
 out_state:
@@ -438,8 +417,11 @@ out_policy:
 
 void xfrm6_fini(void)
 {
+#ifdef CONFIG_SYSCTL
 	unregister_pernet_subsys(&xfrm6_net_ops);
+#endif
 	xfrm6_protocol_fini();
 	xfrm6_policy_fini();
 	xfrm6_state_fini();
+	dst_entries_destroy(&xfrm6_dst_ops);
 }

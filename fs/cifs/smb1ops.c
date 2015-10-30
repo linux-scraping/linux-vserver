@@ -722,7 +722,7 @@ cifs_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 static void
 cifs_set_fid(struct cifsFileInfo *cfile, struct cifs_fid *fid, __u32 oplock)
 {
-	struct cifsInodeInfo *cinode = CIFS_I(cfile->dentry->d_inode);
+	struct cifsInodeInfo *cinode = CIFS_I(d_inode(cfile->dentry));
 	cfile->fid.netfid = fid->netfid;
 	cifs_set_oplock_level(cinode, oplock);
 	cinode->can_cache_brlcks = CIFS_CACHE_WRITE(cinode);
@@ -849,13 +849,8 @@ cifs_query_dir_first(const unsigned int xid, struct cifs_tcon *tcon,
 		     struct cifs_fid *fid, __u16 search_flags,
 		     struct cifs_search_info *srch_inf)
 {
-	int rc;
-
-	rc = CIFSFindFirst(xid, tcon, path, cifs_sb,
-			   &fid->netfid, search_flags, srch_inf, true);
-	if (rc)
-		cifs_dbg(FYI, "find first failed=%d\n", rc);
-	return rc;
+	return CIFSFindFirst(xid, tcon, path, cifs_sb,
+			     &fid->netfid, search_flags, srch_inf, true);
 }
 
 static int
@@ -965,7 +960,8 @@ cifs_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 	/* Check for unix extensions */
 	if (cap_unix(tcon->ses)) {
 		rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path, target_path,
-					     cifs_sb->local_nls);
+					     cifs_sb->local_nls,
+					     cifs_remap(cifs_sb));
 		if (rc == -EREMOTE)
 			rc = cifs_unix_dfs_readlink(xid, tcon, full_path,
 						    target_path,
@@ -1019,15 +1015,6 @@ cifs_dir_needs_close(struct cifsFileInfo *cfile)
 	return !cfile->srch_inf.endOfSearch && !cfile->invalidHandle;
 }
 
-static bool
-cifs_can_echo(struct TCP_Server_Info *server)
-{
-	if (server->tcpStatus == CifsGood)
-		return true;
-
-	return false;
-}
-
 struct smb_version_operations smb1_operations = {
 	.send_cancel = send_nt_cancel,
 	.compare_fids = cifs_compare_fids,
@@ -1062,7 +1049,6 @@ struct smb_version_operations smb1_operations = {
 	.get_dfs_refer = CIFSGetDFSRefer,
 	.qfs_tcon = cifs_qfs_tcon,
 	.is_path_accessible = cifs_is_path_accessible,
-	.can_echo = cifs_can_echo,
 	.query_path_info = cifs_query_path_info,
 	.query_file_info = cifs_query_file_info,
 	.get_srv_inum = cifs_get_srv_inum,

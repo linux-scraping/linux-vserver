@@ -583,13 +583,14 @@ musb_rx_reinit(struct musb *musb, struct musb_qh *qh, struct musb_hw_ep *ep)
 		musb_writew(ep->regs, MUSB_TXCSR, 0);
 
 	/* scrub all previous state, clearing toggle */
-	}
-	csr = musb_readw(ep->regs, MUSB_RXCSR);
-	if (csr & MUSB_RXCSR_RXPKTRDY)
-		WARNING("rx%d, packet/%d ready?\n", ep->epnum,
-			musb_readw(ep->regs, MUSB_RXCOUNT));
+	} else {
+		csr = musb_readw(ep->regs, MUSB_RXCSR);
+		if (csr & MUSB_RXCSR_RXPKTRDY)
+			WARNING("rx%d, packet/%d ready?\n", ep->epnum,
+				musb_readw(ep->regs, MUSB_RXCOUNT));
 
-	musb_h_flush_rxfifo(ep, MUSB_RXCSR_CLRDATATOG);
+		musb_h_flush_rxfifo(ep, MUSB_RXCSR_CLRDATATOG);
+	}
 
 	/* target addr and (for multipoint) hub addr/port */
 	if (musb->is_multipoint) {
@@ -949,15 +950,9 @@ static void musb_bulk_nak_timeout(struct musb *musb, struct musb_hw_ep *ep,
 	if (is_in) {
 		dma = is_dma_capable() ? ep->rx_channel : NULL;
 
-		/*
-		 * Need to stop the transaction by clearing REQPKT first
-		 * then the NAK Timeout bit ref MUSBMHDRC USB 2.0 HIGH-SPEED
-		 * DUAL-ROLE CONTROLLER Programmer's Guide, section 9.2.2
-		 */
+		/* clear nak timeout bit */
 		rx_csr = musb_readw(epio, MUSB_RXCSR);
 		rx_csr |= MUSB_RXCSR_H_WZC_BITS;
-		rx_csr &= ~MUSB_RXCSR_H_REQPKT;
-		musb_writew(epio, MUSB_RXCSR, rx_csr);
 		rx_csr &= ~MUSB_RXCSR_DATAERROR;
 		musb_writew(epio, MUSB_RXCSR, rx_csr);
 
@@ -2468,7 +2463,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 	if (!is_host_active(musb))
 		return 0;
 
-	switch (musb->xceiv->state) {
+	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_A_SUSPEND:
 		return 0;
 	case OTG_STATE_A_WAIT_VRISE:
@@ -2478,7 +2473,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 		 */
 		devctl = musb_readb(musb->mregs, MUSB_DEVCTL);
 		if ((devctl & MUSB_DEVCTL_VBUS) == MUSB_DEVCTL_VBUS)
-			musb->xceiv->state = OTG_STATE_A_WAIT_BCON;
+			musb->xceiv->otg->state = OTG_STATE_A_WAIT_BCON;
 		break;
 	default:
 		break;
@@ -2486,7 +2481,7 @@ static int musb_bus_suspend(struct usb_hcd *hcd)
 
 	if (musb->is_active) {
 		WARNING("trying to suspend as %s while active\n",
-				usb_otg_state_string(musb->xceiv->state));
+				usb_otg_state_string(musb->xceiv->otg->state));
 		return -EBUSY;
 	} else
 		return 0;
@@ -2618,7 +2613,7 @@ static const struct hc_driver musb_hc_driver = {
 	.description		= "musb-hcd",
 	.product_desc		= "MUSB HDRC host driver",
 	.hcd_priv_size		= sizeof(struct musb *),
-	.flags			= HCD_USB2 | HCD_MEMORY,
+	.flags			= HCD_USB2 | HCD_MEMORY | HCD_BH,
 
 	/* not using irq handler or reset hooks from usbcore, since
 	 * those must be shared with peripheral code for OTG configs
@@ -2682,7 +2677,7 @@ int musb_host_setup(struct musb *musb, int power_budget)
 
 	MUSB_HST_MODE(musb);
 	musb->xceiv->otg->default_a = 1;
-	musb->xceiv->state = OTG_STATE_A_IDLE;
+	musb->xceiv->otg->state = OTG_STATE_A_IDLE;
 
 	otg_set_host(musb->xceiv->otg, &hcd->self);
 	hcd->self.otg_port = 1;

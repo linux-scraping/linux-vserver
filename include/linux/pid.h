@@ -9,9 +9,7 @@ enum pid_type
 	PIDTYPE_PGID,
 	PIDTYPE_SID,
 	PIDTYPE_MAX,
-	PIDTYPE_REALPID,
-	/* only valid to __task_pid_nr_ns() */
-	__PIDTYPE_TGID
+	PIDTYPE_REALPID
 };
 
 /*

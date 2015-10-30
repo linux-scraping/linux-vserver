@@ -34,7 +34,6 @@
 #include <linux/rculist.h>
 #include <linux/interrupt.h>
 #include <linux/genalloc.h>
-#include <linux/of_address.h>
 #include <linux/of_device.h>
 
 static inline size_t chunk_size(const struct gen_pool_chunk *chunk)
@@ -194,7 +193,7 @@ int gen_pool_add_virt(struct gen_pool *pool, unsigned long virt, phys_addr_t phy
 	chunk->phys_addr = phys;
 	chunk->start_addr = virt;
 	chunk->end_addr = virt + size - 1;
-	atomic_long_set(&chunk->avail, size);
+	atomic_set(&chunk->avail, size);
 
 	spin_lock(&pool->lock);
 	list_add_rcu(&chunk->next_chunk, &pool->chunks);
@@ -285,7 +284,7 @@ unsigned long gen_pool_alloc(struct gen_pool *pool, size_t size)
 	nbits = (size + (1UL << order) - 1) >> order;
 	rcu_read_lock();
 	list_for_each_entry_rcu(chunk, &pool->chunks, next_chunk) {
-		if (size > atomic_long_read(&chunk->avail))
+		if (size > atomic_read(&chunk->avail))
 			continue;
 
 		end_bit = chunk_size(chunk) >> order;
@@ -304,7 +303,7 @@ retry:
 
 		addr = chunk->start_addr + ((unsigned long)start_bit << order);
 		size = nbits << order;
-		atomic_long_sub(size, &chunk->avail);
+		atomic_sub(size, &chunk->avail);
 		break;
 	}
 	rcu_read_unlock();
@@ -370,7 +369,7 @@ void gen_pool_free(struct gen_pool *pool, unsigned long addr, size_t size)
 			remain = bitmap_clear_ll(chunk->bits, start_bit, nbits);
 			BUG_ON(remain);
 			size = nbits << order;
-			atomic_long_add(size, &chunk->avail);
+			atomic_add(size, &chunk->avail);
 			rcu_read_unlock();
 			return;
 		}
@@ -415,7 +414,7 @@ bool addr_in_gen_pool(struct gen_pool *pool, unsigned long start,
 			size_t size)
 {
 	bool found = false;
-	unsigned long end = start + size;
+	unsigned long end = start + size - 1;
 	struct gen_pool_chunk *chunk;
 
 	rcu_read_lock();
@@ -444,7 +443,7 @@ size_t gen_pool_avail(struct gen_pool *pool)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(chunk, &pool->chunks, next_chunk)
-		avail += atomic_long_read(&chunk->avail);
+		avail += atomic_read(&chunk->avail);
 	rcu_read_unlock();
 	return avail;
 }
@@ -587,6 +586,8 @@ struct gen_pool *devm_gen_pool_create(struct device *dev, int min_alloc_order,
 	struct gen_pool **ptr, *pool;
 
 	ptr = devres_alloc(devm_gen_pool_release, sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return NULL;
 
 	pool = gen_pool_create(min_alloc_order, nid);
 	if (pool) {

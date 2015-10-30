@@ -34,6 +34,8 @@
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
 
+#include "radeon_kfd.h"
+
 #if defined(CONFIG_VGA_SWITCHEROO)
 bool radeon_has_atpx(void);
 #else
@@ -62,6 +64,8 @@ int radeon_driver_unload_kms(struct drm_device *dev)
 		goto done_free;
 
 	pm_runtime_get_sync(dev->dev);
+
+	radeon_kfd_device_fini(rdev);
 
 	radeon_acpi_fini(rdev);
 	
@@ -141,6 +145,9 @@ int radeon_driver_load_kms(struct drm_device *dev, unsigned long flags)
 		dev_dbg(&dev->pdev->dev,
 				"Error during ACPI methods call\n");
 	}
+
+	radeon_kfd_device_probe(rdev);
+	radeon_kfd_device_init(rdev);
 
 	if (radeon_is_px(dev)) {
 		pm_runtime_use_autosuspend(dev->dev);
@@ -540,6 +547,35 @@ static int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file
 		else
 			*value = 1;
 		break;
+	case RADEON_INFO_CURRENT_GPU_TEMP:
+		/* get temperature in millidegrees C */
+		if (rdev->asic->pm.get_temperature)
+			*value = radeon_get_temperature(rdev);
+		else
+			*value = 0;
+		break;
+	case RADEON_INFO_CURRENT_GPU_SCLK:
+		/* get sclk in Mhz */
+		if (rdev->pm.dpm_enabled)
+			*value = radeon_dpm_get_current_sclk(rdev) / 100;
+		else
+			*value = rdev->pm.current_sclk / 100;
+		break;
+	case RADEON_INFO_CURRENT_GPU_MCLK:
+		/* get mclk in Mhz */
+		if (rdev->pm.dpm_enabled)
+			*value = radeon_dpm_get_current_mclk(rdev) / 100;
+		else
+			*value = rdev->pm.current_mclk / 100;
+		break;
+	case RADEON_INFO_READ_REG:
+		if (copy_from_user(value, value_ptr, sizeof(uint32_t))) {
+			DRM_ERROR("copy_from_user %s:%u\n", __func__, __LINE__);
+			return -EFAULT;
+		}
+		if (radeon_get_allowed_info_register(rdev, *value, value))
+			return -EINVAL;
+		break;
 	case RADEON_INFO_VA_UNMAP_WORKING:
 		*value = true;
 		break;
@@ -624,8 +660,6 @@ int radeon_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 						  RADEON_VA_IB_OFFSET,
 						  RADEON_VM_PAGE_READABLE |
 						  RADEON_VM_PAGE_SNOOPED);
-
-			radeon_bo_unreserve(rdev->ring_tmp_bo.bo);
 			if (r) {
 				radeon_vm_fini(rdev, vm);
 				kfree(fpriv);

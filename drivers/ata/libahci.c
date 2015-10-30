@@ -467,7 +467,6 @@ void ahci_save_initial_config(struct device *dev, struct ahci_host_priv *hpriv)
 		dev_info(dev, "forcing port_map 0x%x -> 0x%x\n",
 			 port_map, hpriv->force_port_map);
 		port_map = hpriv->force_port_map;
-		hpriv->saved_port_map = port_map;
 	}
 
 	if (hpriv->mask_port_map) {
@@ -496,8 +495,8 @@ void ahci_save_initial_config(struct device *dev, struct ahci_host_priv *hpriv)
 		}
 	}
 
-	/* fabricate port_map from cap.nr_ports for < AHCI 1.3 */
-	if (!port_map && vers < 0x10300) {
+	/* fabricate port_map from cap.nr_ports */
+	if (!port_map) {
 		port_map = (1 << ahci_nr_ports(cap)) - 1;
 		dev_warn(dev, "forcing PORTS_IMPL to 0x%x\n", port_map);
 
@@ -2003,7 +2002,7 @@ static void ahci_set_aggressive_devslp(struct ata_port *ap, bool sleep)
 
 	devslp = readl(port_mmio + PORT_DEVSLP);
 	if (!(devslp & PORT_DEVSLP_DSP)) {
-		dev_err(ap->host->dev, "port does not support device sleep\n");
+		dev_info(ap->host->dev, "port does not support device sleep\n");
 		return;
 	}
 

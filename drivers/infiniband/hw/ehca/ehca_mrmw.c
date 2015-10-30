@@ -399,7 +399,7 @@ reg_user_mr_fallback:
 	pginfo.num_kpages = num_kpages;
 	pginfo.num_hwpages = num_hwpages;
 	pginfo.u.usr.region = e_mr->umem;
-	pginfo.next_hwpage = e_mr->umem->offset / hwpage_size;
+	pginfo.next_hwpage = ib_umem_offset(e_mr->umem) / hwpage_size;
 	pginfo.u.usr.next_sg = pginfo.u.usr.region->sg_head.sgl;
 	ret = ehca_reg_mr(shca, e_mr, (u64 *)virt, length, mr_access_flags,
 			  e_pd, &pginfo, &e_mr->ib.ib_mr.lkey,
@@ -1921,7 +1921,7 @@ static int ehca_set_pagebuf_user2(struct ehca_mr_pginfo *pginfo,
 				  u64 *kpage)
 {
 	int ret = 0;
-	u64 pgaddr, prev_pgaddr = 0;
+	u64 pgaddr, prev_pgaddr;
 	u32 j = 0;
 	int kpages_per_hwpage = pginfo->hwpage_size / PAGE_SIZE;
 	int nr_kpages = kpages_per_hwpage;
@@ -2417,7 +2417,6 @@ static int ehca_reg_bmap_mr_rpages(struct ehca_shca *shca,
 		ehca_err(&shca->ib_device, "kpage alloc failed");
 		return -ENOMEM;
 	}
-	hret = H_SUCCESS;
 	for (top = 0; top < EHCA_MAP_ENTRIES; top++) {
 		if (!ehca_bmap_valid(ehca_bmap->top[top]))
 			continue;

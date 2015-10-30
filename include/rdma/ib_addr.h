@@ -160,7 +160,7 @@ static inline int rdma_ip2gid(struct sockaddr *addr, union ib_gid *gid)
 }
 
 /* Important - sockaddr should be a union of sockaddr_in and sockaddr_in6 */
-static inline int rdma_gid2ip(struct sockaddr *out, union ib_gid *gid)
+static inline void rdma_gid2ip(struct sockaddr *out, union ib_gid *gid)
 {
 	if (ipv6_addr_v4mapped((struct in6_addr *)gid)) {
 		struct sockaddr_in *out_in = (struct sockaddr_in *)out;
@@ -173,7 +173,6 @@ static inline int rdma_gid2ip(struct sockaddr *out, union ib_gid *gid)
 		out_in->sin6_family = AF_INET6;
 		memcpy(&out_in->sin6_addr.s6_addr, gid->raw, 16);
 	}
-	return 0;
 }
 
 static inline void iboe_addr_get_sgid(struct rdma_dev_addr *dev_addr,
@@ -184,12 +183,10 @@ static inline void iboe_addr_get_sgid(struct rdma_dev_addr *dev_addr,
 
 	dev = dev_get_by_index(&init_net, dev_addr->bound_dev_if);
 	if (dev) {
-		ip4 = in_dev_get(dev);
-		if (ip4 && ip4->ifa_list && ip4->ifa_list->ifa_address) {
+		ip4 = (struct in_device *)dev->ip_ptr;
+		if (ip4 && ip4->ifa_list && ip4->ifa_list->ifa_address)
 			ipv6_addr_set_v4mapped(ip4->ifa_list->ifa_address,
 					       (struct in6_addr *)gid);
-			in_dev_put(ip4);
-		}
 		dev_put(dev);
 	}
 }

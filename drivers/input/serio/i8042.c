@@ -397,10 +397,8 @@ static int i8042_start(struct serio *serio)
 {
 	struct i8042_port *port = serio->port_data;
 
-	spin_lock_irq(&i8042_lock);
 	port->exists = true;
-	spin_unlock_irq(&i8042_lock);
-
+	mb();
 	return 0;
 }
 
@@ -413,20 +411,16 @@ static void i8042_stop(struct serio *serio)
 {
 	struct i8042_port *port = serio->port_data;
 
-	spin_lock_irq(&i8042_lock);
 	port->exists = false;
-	port->serio = NULL;
-	spin_unlock_irq(&i8042_lock);
 
 	/*
-	 * We need to make sure that interrupt handler finishes using
-	 * our serio port before we return from this function.
 	 * We synchronize with both AUX and KBD IRQs because there is
 	 * a (very unlikely) chance that AUX IRQ is raised for KBD port
 	 * and vice versa.
 	 */
 	synchronize_irq(I8042_AUX_IRQ);
 	synchronize_irq(I8042_KBD_IRQ);
+	port->serio = NULL;
 }
 
 /*
@@ -543,7 +537,7 @@ static irqreturn_t i8042_interrupt(int irq, void *dev_id)
 
 	spin_unlock_irqrestore(&i8042_lock, flags);
 
-	if (likely(serio && !filtered))
+	if (likely(port->exists && !filtered))
 		serio_interrupt(serio, data, dfl);
 
  out:
@@ -1168,13 +1162,32 @@ static int i8042_controller_resume(bool force_reset)
 
 static int i8042_pm_suspend(struct device *dev)
 {
+	int i;
+
 	i8042_controller_reset(true);
+
+	/* Set up serio interrupts for system wakeup. */
+	for (i = 0; i < I8042_NUM_PORTS; i++) {
+		struct serio *serio = i8042_ports[i].serio;
+
+		if (serio && device_may_wakeup(&serio->dev))
+			enable_irq_wake(i8042_ports[i].irq);
+	}
 
 	return 0;
 }
 
 static int i8042_pm_resume(struct device *dev)
 {
+	int i;
+
+	for (i = 0; i < I8042_NUM_PORTS; i++) {
+		struct serio *serio = i8042_ports[i].serio;
+
+		if (serio && device_may_wakeup(&serio->dev))
+			disable_irq_wake(i8042_ports[i].irq);
+	}
+
 	/*
 	 * On resume from S2R we always try to reset the controller
 	 * to bring it in a sane state. (In case of S2D we expect
@@ -1236,7 +1249,6 @@ static int __init i8042_create_kbd_port(void)
 	serio->start		= i8042_start;
 	serio->stop		= i8042_stop;
 	serio->close		= i8042_port_close;
-	serio->ps2_cmd_mutex	= &i8042_mutex;
 	serio->port_data	= port;
 	serio->dev.parent	= &i8042_platform_device->dev;
 	strlcpy(serio->name, "i8042 KBD port", sizeof(serio->name));
@@ -1264,7 +1276,6 @@ static int __init i8042_create_aux_port(int idx)
 	serio->write		= i8042_aux_write;
 	serio->start		= i8042_start;
 	serio->stop		= i8042_stop;
-	serio->ps2_cmd_mutex	= &i8042_mutex;
 	serio->port_data	= port;
 	serio->dev.parent	= &i8042_platform_device->dev;
 	if (idx < 0) {
@@ -1308,13 +1319,16 @@ static void __init i8042_register_ports(void)
 	int i;
 
 	for (i = 0; i < I8042_NUM_PORTS; i++) {
-		if (i8042_ports[i].serio) {
+		struct serio *serio = i8042_ports[i].serio;
+
+		if (serio) {
 			printk(KERN_INFO "serio: %s at %#lx,%#lx irq %d\n",
-				i8042_ports[i].serio->name,
+				serio->name,
 				(unsigned long) I8042_DATA_REG,
 				(unsigned long) I8042_COMMAND_REG,
 				i8042_ports[i].irq);
-			serio_register_port(i8042_ports[i].serio);
+			serio_register_port(serio);
+			device_set_wakeup_capable(&serio->dev, true);
 		}
 	}
 }
@@ -1330,6 +1344,21 @@ static void i8042_unregister_ports(void)
 		}
 	}
 }
+
+/*
+ * Checks whether port belongs to i8042 controller.
+ */
+bool i8042_check_port_owner(const struct serio *port)
+{
+	int i;
+
+	for (i = 0; i < I8042_NUM_PORTS; i++)
+		if (i8042_ports[i].serio == port)
+			return true;
+
+	return false;
+}
+EXPORT_SYMBOL(i8042_check_port_owner);
 
 static void i8042_free_irqs(void)
 {
@@ -1470,7 +1499,6 @@ static int i8042_remove(struct platform_device *dev)
 static struct platform_driver i8042_driver = {
 	.driver		= {
 		.name	= "i8042",
-		.owner	= THIS_MODULE,
 #ifdef CONFIG_PM
 		.pm	= &i8042_pm_ops,
 #endif

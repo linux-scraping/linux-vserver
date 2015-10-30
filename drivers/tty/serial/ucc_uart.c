@@ -1473,13 +1473,10 @@ static int ucc_uart_remove(struct platform_device *ofdev)
 	return 0;
 }
 
-static struct of_device_id ucc_uart_match[] = {
+static const struct of_device_id ucc_uart_match[] = {
 	{
 		.type = "serial",
 		.compatible = "ucc_uart",
-	},
-	{
-		.compatible = "fsl,t1040-ucc-uart",
 	},
 	{},
 };
@@ -1488,7 +1485,6 @@ MODULE_DEVICE_TABLE(of, ucc_uart_match);
 static struct platform_driver ucc_uart_of_driver = {
 	.driver = {
 		.name = "ucc_uart",
-		.owner = THIS_MODULE,
 		.of_match_table    = ucc_uart_match,
 	},
 	.probe  	= ucc_uart_probe,

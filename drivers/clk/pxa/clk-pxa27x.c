@@ -80,7 +80,7 @@ unsigned int pxa27x_get_clk_frequency_khz(int info)
 		pr_info("System bus clock: %ld.%02ldMHz\n",
 			clks[4] / 1000000, (clks[4] % 1000000) / 10000);
 	}
-	return (unsigned int)clks[0];
+	return (unsigned int)clks[0] / KHz;
 }
 
 bool pxa27x_is_ppll_disabled(void)
@@ -111,7 +111,7 @@ PARENTS(pxa27x_membus) = { "lcd_base", "lcd_base" };
 	PXA_CKEN_1RATE(dev_id, con_id, bit, parents,			\
 		       &CKEN, CKEN_ ## bit, CLK_IGNORE_UNUSED)
 
-static struct pxa_clk_cken pxa27x_clocks[] = {
+static struct desc_clk_cken pxa27x_clocks[] __initdata = {
 	PXA27X_PBUS_CKEN("pxa2xx-uart.0", NULL, FFUART, 2, 42, 1),
 	PXA27X_PBUS_CKEN("pxa2xx-uart.1", NULL, BTUART, 2, 42, 1),
 	PXA27X_PBUS_CKEN("pxa2xx-uart.2", NULL, STUART, 2, 42, 1),
@@ -368,3 +368,10 @@ static int __init pxa27x_clocks_init(void)
 	return clk_pxa_cken_init(pxa27x_clocks, ARRAY_SIZE(pxa27x_clocks));
 }
 postcore_initcall(pxa27x_clocks_init);
+
+static void __init pxa27x_dt_clocks_init(struct device_node *np)
+{
+	pxa27x_clocks_init();
+	clk_pxa_dt_common_init(np);
+}
+CLK_OF_DECLARE(pxa_clks, "marvell,pxa270-clocks", pxa27x_dt_clocks_init);

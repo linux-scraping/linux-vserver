@@ -195,7 +195,6 @@ struct xenvif_queue { /* Per-queue data for xenvif */
 	unsigned long   remaining_credit;
 	struct timer_list credit_timeout;
 	u64 credit_window_start;
-	bool rate_limited;
 
 	/* Statistics */
 	struct xenvif_stats stats;
@@ -239,6 +238,8 @@ struct xenvif {
 	unsigned int num_queues; /* active queues, resource allocated */
 	unsigned int stalled_queues;
 
+	struct xenbus_watch credit_watch;
+
 	spinlock_t lock;
 
 #ifdef CONFIG_DEBUG_FS
@@ -252,7 +253,6 @@ struct xenvif {
 struct xenvif_rx_cb {
 	unsigned long expires;
 	int meta_slots_used;
-	bool full_coalesce;
 };
 
 #define XENVIF_RX_CB(skb) ((struct xenvif_rx_cb *)(skb)->cb)
@@ -261,6 +261,8 @@ static inline struct xenbus_device *xenvif_to_xenbus_device(struct xenvif *vif)
 {
 	return to_xenbus_device(vif->dev->dev.parent);
 }
+
+void xenvif_tx_credit_callback(unsigned long data);
 
 struct xenvif *xenvif_alloc(struct device *parent,
 			    domid_t domid,

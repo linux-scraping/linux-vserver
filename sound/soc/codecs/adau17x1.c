@@ -61,7 +61,8 @@ static const struct snd_kcontrol_new adau17x1_controls[] = {
 static int adau17x1_pll_event(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
-	struct adau *adau = snd_soc_codec_get_drvdata(w->codec);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
+	struct adau *adau = snd_soc_codec_get_drvdata(codec);
 	int ret;
 
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
@@ -84,27 +85,6 @@ static int adau17x1_pll_event(struct snd_soc_dapm_widget *w,
 			ADAU17X1_CLOCK_CONTROL_CORECLK_SRC_PLL,
 			ADAU17X1_CLOCK_CONTROL_CORECLK_SRC_PLL);
 	}
-
-	return 0;
-}
-
-static int adau17x1_adc_fixup(struct snd_soc_dapm_widget *w,
-	struct snd_kcontrol *kcontrol, int event)
-{
-	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
-	struct adau *adau = snd_soc_codec_get_drvdata(codec);
-
-	/*
-	 * If we are capturing, toggle the ADOSR bit in Converter Control 0 to
-	 * avoid losing SNR (workaround from ADI). This must be done after
-	 * the ADC(s) have been enabled. According to the data sheet, it is
-	 * normally illegal to set this bit when the sampling rate is 96 kHz,
-	 * but according to ADI it is acceptable for this workaround.
-	 */
-	regmap_update_bits(adau->regmap, ADAU17X1_CONVERTER0,
-		ADAU17X1_CONVERTER0_ADOSR, ADAU17X1_CONVERTER0_ADOSR);
-	regmap_update_bits(adau->regmap, ADAU17X1_CONVERTER0,
-		ADAU17X1_CONVERTER0_ADOSR, 0);
 
 	return 0;
 }
@@ -140,8 +120,7 @@ static const struct snd_soc_dapm_widget adau17x1_dapm_widgets[] = {
 	SND_SOC_DAPM_MUX("Right DAC Mode Mux", SND_SOC_NOPM, 0, 0,
 		&adau17x1_dac_mode_mux),
 
-	SND_SOC_DAPM_ADC_E("Left Decimator", NULL, ADAU17X1_ADC_CONTROL, 0, 0,
-			   adau17x1_adc_fixup, SND_SOC_DAPM_POST_PMU),
+	SND_SOC_DAPM_ADC("Left Decimator", NULL, ADAU17X1_ADC_CONTROL, 0, 0),
 	SND_SOC_DAPM_ADC("Right Decimator", NULL, ADAU17X1_ADC_CONTROL, 1, 0),
 	SND_SOC_DAPM_DAC("Left DAC", NULL, ADAU17X1_DAC_CONTROL0, 0, 0),
 	SND_SOC_DAPM_DAC("Right DAC", NULL, ADAU17X1_DAC_CONTROL0, 1, 0),
@@ -329,6 +308,7 @@ static int adau17x1_hw_params(struct snd_pcm_substream *substream,
 	struct adau *adau = snd_soc_codec_get_drvdata(codec);
 	unsigned int val, div, dsp_div;
 	unsigned int freq;
+	int ret;
 
 	if (adau->clk_src == ADAU17X1_CLK_SRC_PLL)
 		freq = adau->pll_freq;
@@ -376,6 +356,12 @@ static int adau17x1_hw_params(struct snd_pcm_substream *substream,
 	if (adau17x1_has_dsp(adau)) {
 		regmap_write(adau->regmap, ADAU17X1_SERIAL_SAMPLING_RATE, div);
 		regmap_write(adau->regmap, ADAU17X1_DSP_SAMPLING_RATE, dsp_div);
+	}
+
+	if (adau->sigmadsp) {
+		ret = adau17x1_setup_firmware(adau, params_rate(params));
+		if (ret < 0)
+			return ret;
 	}
 
 	if (adau->dai_fmt != SND_SOC_DAIFMT_RIGHT_J)
@@ -683,12 +669,24 @@ static int adau17x1_set_dai_tdm_slot(struct snd_soc_dai *dai,
 	return 0;
 }
 
+static int adau17x1_startup(struct snd_pcm_substream *substream,
+	struct snd_soc_dai *dai)
+{
+	struct adau *adau = snd_soc_codec_get_drvdata(dai->codec);
+
+	if (adau->sigmadsp)
+		return sigmadsp_restrict_params(adau->sigmadsp, substream);
+
+	return 0;
+}
+
 const struct snd_soc_dai_ops adau17x1_dai_ops = {
 	.hw_params	= adau17x1_hw_params,
 	.set_sysclk	= adau17x1_set_dai_sysclk,
 	.set_fmt	= adau17x1_set_dai_fmt,
 	.set_pll	= adau17x1_set_dai_pll,
 	.set_tdm_slot	= adau17x1_set_dai_tdm_slot,
+	.startup	= adau17x1_startup,
 };
 EXPORT_SYMBOL_GPL(adau17x1_dai_ops);
 
@@ -709,8 +707,22 @@ int adau17x1_set_micbias_voltage(struct snd_soc_codec *codec,
 }
 EXPORT_SYMBOL_GPL(adau17x1_set_micbias_voltage);
 
+bool adau17x1_precious_register(struct device *dev, unsigned int reg)
+{
+	/* SigmaDSP parameter memory */
+	if (reg < 0x400)
+		return true;
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(adau17x1_precious_register);
+
 bool adau17x1_readable_register(struct device *dev, unsigned int reg)
 {
+	/* SigmaDSP parameter memory */
+	if (reg < 0x400)
+		return true;
+
 	switch (reg) {
 	case ADAU17X1_CLOCK_CONTROL:
 	case ADAU17X1_PLL_CONTROL:
@@ -767,8 +779,7 @@ bool adau17x1_volatile_register(struct device *dev, unsigned int reg)
 }
 EXPORT_SYMBOL_GPL(adau17x1_volatile_register);
 
-int adau17x1_load_firmware(struct adau *adau, struct device *dev,
-	const char *firmware)
+int adau17x1_setup_firmware(struct adau *adau, unsigned int rate)
 {
 	int ret;
 	int dspsr;
@@ -780,7 +791,7 @@ int adau17x1_load_firmware(struct adau *adau, struct device *dev,
 	regmap_write(adau->regmap, ADAU17X1_DSP_ENABLE, 1);
 	regmap_write(adau->regmap, ADAU17X1_DSP_SAMPLING_RATE, 0xf);
 
-	ret = process_sigma_firmware_regmap(dev, adau->regmap, firmware);
+	ret = sigmadsp_setup(adau->sigmadsp, rate);
 	if (ret) {
 		regmap_write(adau->regmap, ADAU17X1_DSP_ENABLE, 0);
 		return ret;
@@ -789,7 +800,7 @@ int adau17x1_load_firmware(struct adau *adau, struct device *dev,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(adau17x1_load_firmware);
+EXPORT_SYMBOL_GPL(adau17x1_setup_firmware);
 
 int adau17x1_add_widgets(struct snd_soc_codec *codec)
 {
@@ -809,8 +820,21 @@ int adau17x1_add_widgets(struct snd_soc_codec *codec)
 		ret = snd_soc_dapm_new_controls(&codec->dapm,
 			adau17x1_dsp_dapm_widgets,
 			ARRAY_SIZE(adau17x1_dsp_dapm_widgets));
+		if (ret)
+			return ret;
+
+		if (!adau->sigmadsp)
+			return 0;
+
+		ret = sigmadsp_attach(adau->sigmadsp, &codec->component);
+		if (ret) {
+			dev_err(codec->dev, "Failed to attach firmware: %d\n",
+				ret);
+			return ret;
+		}
 	}
-	return ret;
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(adau17x1_add_widgets);
 
@@ -851,7 +875,8 @@ int adau17x1_resume(struct snd_soc_codec *codec)
 EXPORT_SYMBOL_GPL(adau17x1_resume);
 
 int adau17x1_probe(struct device *dev, struct regmap *regmap,
-	enum adau17x1_type type, void (*switch_mode)(struct device *dev))
+	enum adau17x1_type type, void (*switch_mode)(struct device *dev),
+	const char *firmware_name)
 {
 	struct adau *adau;
 
@@ -867,6 +892,16 @@ int adau17x1_probe(struct device *dev, struct regmap *regmap,
 	adau->type = type;
 
 	dev_set_drvdata(dev, adau);
+
+	if (firmware_name) {
+		adau->sigmadsp = devm_sigmadsp_init_regmap(dev, regmap, NULL,
+			firmware_name);
+		if (IS_ERR(adau->sigmadsp)) {
+			dev_warn(dev, "Could not find firmware file: %ld\n",
+				PTR_ERR(adau->sigmadsp));
+			adau->sigmadsp = NULL;
+		}
+	}
 
 	if (switch_mode)
 		switch_mode(dev);

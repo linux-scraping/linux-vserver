@@ -48,10 +48,40 @@ struct radeon_fbdev {
 	struct radeon_device *rdev;
 };
 
+/**
+ * radeon_fb_helper_set_par - Hide cursor on CRTCs used by fbdev.
+ *
+ * @info: fbdev info
+ *
+ * This function hides the cursor on all CRTCs used by fbdev.
+ */
+static int radeon_fb_helper_set_par(struct fb_info *info)
+{
+	int ret;
+
+	ret = drm_fb_helper_set_par(info);
+
+	/* XXX: with universal plane support fbdev will automatically disable
+	 * all non-primary planes (including the cursor)
+	 */
+	if (ret == 0) {
+		struct drm_fb_helper *fb_helper = info->par;
+		int i;
+
+		for (i = 0; i < fb_helper->crtc_count; i++) {
+			struct drm_crtc *crtc = fb_helper->crtc_info[i].mode_set.crtc;
+
+			radeon_crtc_cursor_set2(crtc, NULL, 0, 0, 0, 0, 0);
+		}
+	}
+
+	return ret;
+}
+
 static struct fb_ops radeonfb_ops = {
 	.owner = THIS_MODULE,
 	.fb_check_var = drm_fb_helper_check_var,
-	.fb_set_par = drm_fb_helper_set_par,
+	.fb_set_par = radeon_fb_helper_set_par,
 	.fb_fillrect = cfb_fillrect,
 	.fb_copyarea = cfb_copyarea,
 	.fb_imageblit = cfb_imageblit,
@@ -303,8 +333,7 @@ out_unref:
 
 void radeon_fb_output_poll_changed(struct radeon_device *rdev)
 {
-	if (rdev->mode_info.rfbdev)
-		drm_fb_helper_hotplug_event(&rdev->mode_info.rfbdev->helper);
+	drm_fb_helper_hotplug_event(&rdev->mode_info.rfbdev->helper);
 }
 
 static int radeon_fbdev_destroy(struct drm_device *dev, struct radeon_fbdev *rfbdev)
@@ -343,10 +372,6 @@ int radeon_fbdev_init(struct radeon_device *rdev)
 	struct radeon_fbdev *rfbdev;
 	int bpp_sel = 32;
 	int ret;
-
-	/* don't enable fbdev if no connectors */
-	if (list_empty(&rdev->ddev->mode_config.connector_list))
-		return 0;
 
 	/* select 8 bpp console on RN50 or 16MB cards */
 	if (ASIC_IS_RN50(rdev) || rdev->mc.real_vram_size <= (32*1024*1024))
@@ -400,25 +425,11 @@ void radeon_fbdev_fini(struct radeon_device *rdev)
 
 void radeon_fbdev_set_suspend(struct radeon_device *rdev, int state)
 {
-	if (rdev->mode_info.rfbdev)
-		fb_set_suspend(rdev->mode_info.rfbdev->helper.fbdev, state);
-}
-
-int radeon_fbdev_total_size(struct radeon_device *rdev)
-{
-	struct radeon_bo *robj;
-	int size = 0;
-
-	robj = gem_to_radeon_bo(rdev->mode_info.rfbdev->rfb.obj);
-	size += radeon_bo_size(robj);
-	return size;
+	fb_set_suspend(rdev->mode_info.rfbdev->helper.fbdev, state);
 }
 
 bool radeon_fbdev_robj_is_fb(struct radeon_device *rdev, struct radeon_bo *robj)
 {
-	if (!rdev->mode_info.rfbdev)
-		return false;
-
 	if (robj == gem_to_radeon_bo(rdev->mode_info.rfbdev->rfb.obj))
 		return true;
 	return false;
@@ -426,12 +437,10 @@ bool radeon_fbdev_robj_is_fb(struct radeon_device *rdev, struct radeon_bo *robj)
 
 void radeon_fb_add_connector(struct radeon_device *rdev, struct drm_connector *connector)
 {
-	if (rdev->mode_info.rfbdev)
-		drm_fb_helper_add_one_connector(&rdev->mode_info.rfbdev->helper, connector);
+	drm_fb_helper_add_one_connector(&rdev->mode_info.rfbdev->helper, connector);
 }
 
 void radeon_fb_remove_connector(struct radeon_device *rdev, struct drm_connector *connector)
 {
-	if (rdev->mode_info.rfbdev)
-		drm_fb_helper_remove_one_connector(&rdev->mode_info.rfbdev->helper, connector);
+	drm_fb_helper_remove_one_connector(&rdev->mode_info.rfbdev->helper, connector);
 }

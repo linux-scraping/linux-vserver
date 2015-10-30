@@ -26,9 +26,7 @@ extern long __strncpy_from_user_nocheck_asm(char *__to,
 					    const char *__from, long __len);
 extern long __strncpy_from_user_asm(char *__to, const char *__from,
 				    long __len);
-extern long __strlen_kernel_nocheck_asm(const char *s);
 extern long __strlen_kernel_asm(const char *s);
-extern long __strlen_user_nocheck_asm(const char *s);
 extern long __strlen_user_asm(const char *s);
 extern long __strnlen_kernel_nocheck_asm(const char *s);
 extern long __strnlen_kernel_asm(const char *s);
@@ -72,20 +70,20 @@ EXPORT_SYMBOL(__strncpy_from_kernel_nocheck_asm);
 EXPORT_SYMBOL(__strncpy_from_kernel_asm);
 EXPORT_SYMBOL(__strncpy_from_user_nocheck_asm);
 EXPORT_SYMBOL(__strncpy_from_user_asm);
-EXPORT_SYMBOL(__strlen_kernel_nocheck_asm);
 EXPORT_SYMBOL(__strlen_kernel_asm);
-EXPORT_SYMBOL(__strlen_user_nocheck_asm);
 EXPORT_SYMBOL(__strlen_user_asm);
 EXPORT_SYMBOL(__strnlen_kernel_nocheck_asm);
 EXPORT_SYMBOL(__strnlen_kernel_asm);
 EXPORT_SYMBOL(__strnlen_user_nocheck_asm);
 EXPORT_SYMBOL(__strnlen_user_asm);
 
+#ifndef CONFIG_CPU_MIPSR6
 EXPORT_SYMBOL(csum_partial);
 EXPORT_SYMBOL(csum_partial_copy_nocheck);
 EXPORT_SYMBOL(__csum_partial_copy_kernel);
 EXPORT_SYMBOL(__csum_partial_copy_to_user);
 EXPORT_SYMBOL(__csum_partial_copy_from_user);
+#endif
 
 EXPORT_SYMBOL(invalid_pte_table);
 #ifdef CONFIG_FUNCTION_TRACER

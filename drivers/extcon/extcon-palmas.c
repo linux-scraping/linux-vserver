@@ -150,11 +150,6 @@ static int palmas_usb_probe(struct platform_device *pdev)
 	struct palmas_usb *palmas_usb;
 	int status;
 
-	if (!palmas) {
-		dev_err(&pdev->dev, "failed to get valid parent\n");
-		return -EINVAL;
-	}
-
 	palmas_usb = devm_kzalloc(&pdev->dev, sizeof(*palmas_usb), GFP_KERNEL);
 	if (!palmas_usb)
 		return -ENOMEM;
@@ -296,7 +291,6 @@ static struct platform_driver palmas_usb_driver = {
 	.driver = {
 		.name = "palmas-usb",
 		.of_match_table = of_palmas_match_tbl,
-		.owner = THIS_MODULE,
 		.pm = &palmas_pm_ops,
 	},
 };

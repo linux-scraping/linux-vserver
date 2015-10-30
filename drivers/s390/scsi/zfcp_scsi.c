@@ -32,25 +32,6 @@ static bool allow_lun_scan = 1;
 module_param(allow_lun_scan, bool, 0600);
 MODULE_PARM_DESC(allow_lun_scan, "For NPIV, scan and attach all storage LUNs");
 
-static int zfcp_scsi_change_queue_depth(struct scsi_device *sdev, int depth,
-					int reason)
-{
-	switch (reason) {
-	case SCSI_QDEPTH_DEFAULT:
-		scsi_adjust_queue_depth(sdev, scsi_get_tag_type(sdev), depth);
-		break;
-	case SCSI_QDEPTH_QFULL:
-		scsi_track_queue_full(sdev, depth);
-		break;
-	case SCSI_QDEPTH_RAMP_UP:
-		scsi_adjust_queue_depth(sdev, scsi_get_tag_type(sdev), depth);
-		break;
-	default:
-		return -EOPNOTSUPP;
-	}
-	return sdev->queue_depth;
-}
-
 static void zfcp_scsi_slave_destroy(struct scsi_device *sdev)
 {
 	struct zfcp_scsi_dev *zfcp_sdev = sdev_to_zfcp(sdev);
@@ -66,9 +47,7 @@ static void zfcp_scsi_slave_destroy(struct scsi_device *sdev)
 static int zfcp_scsi_slave_configure(struct scsi_device *sdp)
 {
 	if (sdp->tagged_supported)
-		scsi_adjust_queue_depth(sdp, MSG_SIMPLE_TAG, default_depth);
-	else
-		scsi_adjust_queue_depth(sdp, 0, 1);
+		scsi_change_queue_depth(sdp, default_depth);
 	return 0;
 }
 
@@ -138,14 +117,9 @@ static int zfcp_scsi_slave_alloc(struct scsi_device *sdev)
 	struct zfcp_unit *unit;
 	int npiv = adapter->connection_features & FSF_FEATURE_NPIV_MODE;
 
-	zfcp_sdev->erp_action.adapter = adapter;
-	zfcp_sdev->erp_action.sdev = sdev;
-
 	port = zfcp_get_port_by_wwpn(adapter, rport->port_name);
 	if (!port)
 		return -ENXIO;
-
-	zfcp_sdev->erp_action.port = port;
 
 	unit = zfcp_unit_find(port, zfcp_scsi_dev_lun(sdev));
 	if (unit)
@@ -250,10 +224,8 @@ static int zfcp_task_mgmt_function(struct scsi_cmnd *scpnt, u8 tm_flags)
 
 		zfcp_erp_wait(adapter);
 		ret = fc_block_scsi_eh(scpnt);
-		if (ret) {
-			zfcp_dbf_scsi_devreset("fiof", scpnt, tm_flags);
+		if (ret)
 			return ret;
-		}
 
 		if (!(atomic_read(&adapter->status) &
 		      ZFCP_STATUS_COMMON_RUNNING)) {
@@ -261,10 +233,8 @@ static int zfcp_task_mgmt_function(struct scsi_cmnd *scpnt, u8 tm_flags)
 			return SUCCESS;
 		}
 	}
-	if (!fsf_req) {
-		zfcp_dbf_scsi_devreset("reqf", scpnt, tm_flags);
+	if (!fsf_req)
 		return FAILED;
-	}
 
 	wait_for_completion(&fsf_req->completion);
 
@@ -316,7 +286,7 @@ static struct scsi_host_template zfcp_scsi_host_template = {
 	.slave_alloc		 = zfcp_scsi_slave_alloc,
 	.slave_configure	 = zfcp_scsi_slave_configure,
 	.slave_destroy		 = zfcp_scsi_slave_destroy,
-	.change_queue_depth	 = zfcp_scsi_change_queue_depth,
+	.change_queue_depth	 = scsi_change_queue_depth,
 	.proc_name		 = "zfcp",
 	.can_queue		 = 4096,
 	.this_id		 = -1,
@@ -331,6 +301,7 @@ static struct scsi_host_template zfcp_scsi_host_template = {
 	.use_clustering		 = 1,
 	.shost_attrs		 = zfcp_sysfs_shost_attrs,
 	.sdev_attrs		 = zfcp_sysfs_sdev_attrs,
+	.track_queue_depth	 = 1,
 };
 
 /**

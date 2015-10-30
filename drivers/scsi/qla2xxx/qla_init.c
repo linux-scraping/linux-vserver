@@ -115,8 +115,6 @@ qla2x00_async_iocb_timeout(void *data)
 			QLA_LOGIO_LOGIN_RETRIED : 0;
 		qla2x00_post_async_login_done_work(fcport->vha, fcport,
 			lio->u.logio.data);
-	} else if (sp->type == SRB_LOGOUT_CMD) {
-		qlt_logo_completion_handler(fcport, QLA_FUNCTION_TIMEOUT);
 	}
 }
 
@@ -499,10 +497,7 @@ void
 qla2x00_async_logout_done(struct scsi_qla_host *vha, fc_port_t *fcport,
     uint16_t *data)
 {
-	/* Don't re-login in target mode */
-	if (!fcport->tgt_session)
-		qla2x00_mark_device_lost(vha, fcport, 1, 0);
-	qlt_logo_completion_handler(fcport, data[0]);
+	qla2x00_mark_device_lost(vha, fcport, 1, 0);
 	return;
 }
 
@@ -1126,7 +1121,7 @@ qla81xx_reset_mpi(scsi_qla_host_t *vha)
  *
  * Returns 0 on success.
  */
-static inline void
+static inline int
 qla24xx_reset_risc(scsi_qla_host_t *vha)
 {
 	unsigned long flags = 0;
@@ -1135,6 +1130,7 @@ qla24xx_reset_risc(scsi_qla_host_t *vha)
 	uint32_t cnt, d2;
 	uint16_t wd;
 	static int abts_cnt; /* ISP abort retry counts */
+	int rval = QLA_SUCCESS;
 
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 
@@ -1147,26 +1143,57 @@ qla24xx_reset_risc(scsi_qla_host_t *vha)
 		udelay(10);
 	}
 
+	if (!(RD_REG_DWORD(&reg->ctrl_status) & CSRX_DMA_ACTIVE))
+		set_bit(DMA_SHUTDOWN_CMPL, &ha->fw_dump_cap_flags);
+
+	ql_dbg(ql_dbg_init + ql_dbg_verbose, vha, 0x017e,
+	    "HCCR: 0x%x, Control Status %x, DMA active status:0x%x\n",
+	    RD_REG_DWORD(&reg->hccr),
+	    RD_REG_DWORD(&reg->ctrl_status),
+	    (RD_REG_DWORD(&reg->ctrl_status) & CSRX_DMA_ACTIVE));
+
 	WRT_REG_DWORD(&reg->ctrl_status,
 	    CSRX_ISP_SOFT_RESET|CSRX_DMA_SHUTDOWN|MWB_4096_BYTES);
 	pci_read_config_word(ha->pdev, PCI_COMMAND, &wd);
 
 	udelay(100);
+
 	/* Wait for firmware to complete NVRAM accesses. */
 	d2 = (uint32_t) RD_REG_WORD(&reg->mailbox0);
-	for (cnt = 10000 ; cnt && d2; cnt--) {
-		udelay(5);
-		d2 = (uint32_t) RD_REG_WORD(&reg->mailbox0);
+	for (cnt = 10000; RD_REG_WORD(&reg->mailbox0) != 0 &&
+	    rval == QLA_SUCCESS; cnt--) {
 		barrier();
+		if (cnt)
+			udelay(5);
+		else
+			rval = QLA_FUNCTION_TIMEOUT;
 	}
+
+	if (rval == QLA_SUCCESS)
+		set_bit(ISP_MBX_RDY, &ha->fw_dump_cap_flags);
+
+	ql_dbg(ql_dbg_init + ql_dbg_verbose, vha, 0x017f,
+	    "HCCR: 0x%x, MailBox0 Status 0x%x\n",
+	    RD_REG_DWORD(&reg->hccr),
+	    RD_REG_DWORD(&reg->mailbox0));
 
 	/* Wait for soft-reset to complete. */
 	d2 = RD_REG_DWORD(&reg->ctrl_status);
-	for (cnt = 6000000 ; cnt && (d2 & CSRX_ISP_SOFT_RESET); cnt--) {
-		udelay(5);
-		d2 = RD_REG_DWORD(&reg->ctrl_status);
+	for (cnt = 0; cnt < 6000000; cnt++) {
 		barrier();
+		if ((RD_REG_DWORD(&reg->ctrl_status) &
+		    CSRX_ISP_SOFT_RESET) == 0)
+			break;
+
+		udelay(5);
 	}
+	if (!(RD_REG_DWORD(&reg->ctrl_status) & CSRX_ISP_SOFT_RESET))
+		set_bit(ISP_SOFT_RESET_CMPL, &ha->fw_dump_cap_flags);
+
+	ql_dbg(ql_dbg_init + ql_dbg_verbose, vha, 0x015d,
+	    "HCCR: 0x%x, Soft Reset status: 0x%x\n",
+	    RD_REG_DWORD(&reg->hccr),
+	    RD_REG_DWORD(&reg->ctrl_status));
 
 	/* If required, do an MPI FW reset now */
 	if (test_and_clear_bit(MPI_RESET_NEEDED, &vha->dpc_flags)) {
@@ -1195,16 +1222,32 @@ qla24xx_reset_risc(scsi_qla_host_t *vha)
 	RD_REG_DWORD(&reg->hccr);
 
 	d2 = (uint32_t) RD_REG_WORD(&reg->mailbox0);
-	for (cnt = 6000000 ; cnt && d2; cnt--) {
-		udelay(5);
-		d2 = (uint32_t) RD_REG_WORD(&reg->mailbox0);
+	for (cnt = 6000000; RD_REG_WORD(&reg->mailbox0) != 0 &&
+	    rval == QLA_SUCCESS; cnt--) {
 		barrier();
+		if (cnt)
+			udelay(5);
+		else
+			rval = QLA_FUNCTION_TIMEOUT;
 	}
+	if (rval == QLA_SUCCESS)
+		set_bit(RISC_RDY_AFT_RESET, &ha->fw_dump_cap_flags);
+
+	ql_dbg(ql_dbg_init + ql_dbg_verbose, vha, 0x015e,
+	    "Host Risc 0x%x, mailbox0 0x%x\n",
+	    RD_REG_DWORD(&reg->hccr),
+	     RD_REG_WORD(&reg->mailbox0));
 
 	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 
+	ql_dbg(ql_dbg_init + ql_dbg_verbose, vha, 0x015f,
+	    "Driver in %s mode\n",
+	    IS_NOPOLLING_TYPE(ha) ? "Interrupt" : "Polling");
+
 	if (IS_NOPOLLING_TYPE(ha))
 		ha->isp_ops->enable_intrs(ha);
+
+	return rval;
 }
 
 static void
@@ -2146,7 +2189,7 @@ qla2x00_init_rings(scsi_qla_host_t *vha)
 	/* Clear outstanding commands array. */
 	for (que = 0; que < ha->max_req_queues; que++) {
 		req = ha->req_q_map[que];
-		if (!req || !test_bit(que, ha->req_qid_map))
+		if (!req)
 			continue;
 		req->out_ptr = (void *)(req->ring + req->length);
 		*req->out_ptr = 0;
@@ -2163,7 +2206,7 @@ qla2x00_init_rings(scsi_qla_host_t *vha)
 
 	for (que = 0; que < ha->max_rsp_queues; que++) {
 		rsp = ha->rsp_q_map[que];
-		if (!rsp || !test_bit(que, ha->rsp_qid_map))
+		if (!rsp)
 			continue;
 		rsp->in_ptr = (void *)(rsp->ring + rsp->length);
 		*rsp->in_ptr = 0;
@@ -2248,8 +2291,11 @@ qla2x00_fw_ready(scsi_qla_host_t *vha)
 
 	rval = QLA_SUCCESS;
 
-	/* 20 seconds for loop down. */
-	min_wait = 20;
+	/* Time to wait for loop down */
+	if (IS_P3P_TYPE(ha))
+		min_wait = 30;
+	else
+		min_wait = 20;
 
 	/*
 	 * Firmware should take at most one RATOV to login, plus 5 seconds for
@@ -2876,14 +2922,24 @@ qla2x00_rport_del(void *data)
 {
 	fc_port_t *fcport = data;
 	struct fc_rport *rport;
+	scsi_qla_host_t *vha = fcport->vha;
 	unsigned long flags;
+	unsigned long vha_flags;
 
 	spin_lock_irqsave(fcport->vha->host->host_lock, flags);
 	rport = fcport->drport ? fcport->drport: fcport->rport;
 	fcport->drport = NULL;
 	spin_unlock_irqrestore(fcport->vha->host->host_lock, flags);
-	if (rport)
+	if (rport) {
 		fc_remote_port_delete(rport);
+		/*
+		 * Release the target mode FC NEXUS in qla_target.c code
+		 * if target mod is enabled.
+		 */
+		spin_lock_irqsave(&vha->hw->hardware_lock, vha_flags);
+		qlt_fc_port_deleted(vha, fcport);
+		spin_unlock_irqrestore(&vha->hw->hardware_lock, vha_flags);
+	}
 }
 
 /**
@@ -3235,8 +3291,6 @@ qla2x00_reg_remote_port(scsi_qla_host_t *vha, fc_port_t *fcport)
 	struct fc_rport *rport;
 	unsigned long flags;
 
-	qla2x00_rport_del(fcport);
-
 	rport_ids.node_name = wwn_to_u64(fcport->node_name);
 	rport_ids.port_name = wwn_to_u64(fcport->port_name);
 	rport_ids.port_id = fcport->d_id.b.domain << 16 |
@@ -3325,7 +3379,6 @@ qla2x00_configure_fabric(scsi_qla_host_t *vha)
 	LIST_HEAD(new_fcports);
 	struct qla_hw_data *ha = vha->hw;
 	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
-	int		discovery_gen;
 
 	/* If FL port exists, then SNS is present */
 	if (IS_FWI2_CAPABLE(ha))
@@ -3396,14 +3449,6 @@ qla2x00_configure_fabric(scsi_qla_host_t *vha)
 			fcport->scan_state = QLA_FCPORT_SCAN;
 		}
 
-		/* Mark the time right before querying FW for connected ports.
-		 * This process is long, asynchronous and by the time it's done,
-		 * collected information might not be accurate anymore. E.g.
-		 * disconnected port might have re-connected and a brand new
-		 * session has been created. In this case session's generation
-		 * will be newer than discovery_gen. */
-		qlt_do_generation_tick(vha, &discovery_gen);
-
 		rval = qla2x00_find_all_fabric_devs(vha, &new_fcports);
 		if (rval != QLA_SUCCESS)
 			break;
@@ -3455,8 +3500,7 @@ qla2x00_configure_fabric(scsi_qla_host_t *vha)
 					    atomic_read(&fcport->state),
 					    fcport->flags, fcport->fc4_type,
 					    fcport->scan_state);
-					qlt_fc_port_deleted(vha, fcport,
-					    discovery_gen);
+					qlt_fc_port_deleted(vha, fcport);
 				}
 			}
 		}
@@ -4233,14 +4277,6 @@ qla2x00_update_fcports(scsi_qla_host_t *base_vha)
 			    atomic_read(&fcport->state) != FCS_UNCONFIGURED) {
 				spin_unlock_irqrestore(&ha->vport_slock, flags);
 				qla2x00_rport_del(fcport);
-
-				/*
-				 * Release the target mode FC NEXUS in
-				 * qla_target.c, if target mod is enabled.
-				 */
-				qlt_fc_port_deleted(vha, fcport,
-				    base_vha->total_fcport_update_gen);
-
 				spin_lock_irqsave(&ha->vport_slock, flags);
 			}
 		}
@@ -4908,7 +4944,7 @@ qla25xx_init_queues(struct qla_hw_data *ha)
 
 	for (i = 1; i < ha->max_rsp_queues; i++) {
 		rsp = ha->rsp_q_map[i];
-		if (rsp && test_bit(i, ha->rsp_qid_map)) {
+		if (rsp) {
 			rsp->options &= ~BIT_0;
 			ret = qla25xx_init_rsp_que(base_vha, rsp);
 			if (ret != QLA_SUCCESS)
@@ -4923,8 +4959,8 @@ qla25xx_init_queues(struct qla_hw_data *ha)
 	}
 	for (i = 1; i < ha->max_req_queues; i++) {
 		req = ha->req_q_map[i];
-		if (req && test_bit(i, ha->req_qid_map)) {
-			/* Clear outstanding commands array. */
+		if (req) {
+		/* Clear outstanding commands array. */
 			req->options &= ~BIT_0;
 			ret = qla25xx_init_req_que(base_vha, req);
 			if (ret != QLA_SUCCESS)
@@ -5468,7 +5504,7 @@ qla2x00_load_risc(scsi_qla_host_t *vha, uint32_t *srisc_addr)
 	blob = qla2x00_request_firmware(vha);
 	if (!blob) {
 		ql_log(ql_log_info, vha, 0x0083,
-		    "Fimware image unavailable.\n");
+		    "Firmware image unavailable.\n");
 		ql_log(ql_log_info, vha, 0x0084,
 		    "Firmware images can be retrieved from: "QLA_FW_URL ".\n");
 		return QLA_FUNCTION_FAILED;
@@ -5571,7 +5607,7 @@ qla24xx_load_risc_blob(scsi_qla_host_t *vha, uint32_t *srisc_addr)
 	blob = qla2x00_request_firmware(vha);
 	if (!blob) {
 		ql_log(ql_log_warn, vha, 0x0090,
-		    "Fimware image unavailable.\n");
+		    "Firmware image unavailable.\n");
 		ql_log(ql_log_warn, vha, 0x0091,
 		    "Firmware images can be retrieved from: "
 		    QLA_FW_URL ".\n");

@@ -19,8 +19,6 @@
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
-#include "xfs_ag.h"
-#include "xfs_sb.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
 #include "xfs_acl.h"
@@ -286,11 +284,16 @@ xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		return error;
 
 	if (type == ACL_TYPE_ACCESS) {
-		umode_t mode;
+		umode_t mode = inode->i_mode;
+		error = posix_acl_equiv_mode(acl, &mode);
 
-		error = posix_acl_update_mode(inode, &mode, &acl);
-		if (error)
-			return error;
+		if (error <= 0) {
+			acl = NULL;
+
+			if (error < 0)
+				return error;
+		}
+
 		error = xfs_set_mode(inode, mode);
 		if (error)
 			return error;

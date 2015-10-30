@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Mellanox Technologies inc.  All rights reserved.
+ * Copyright (c) 2013-2015, Mellanox Technologies. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -30,7 +30,7 @@
  * SOFTWARE.
  */
 
-#include <linux/highmem.h>
+#include <asm-generic/kmap_types.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mlx5/driver.h>
@@ -245,8 +245,9 @@ static int alloc_system_page(struct mlx5_core_dev *dev, u16 func_id)
 	struct page *page;
 	u64 addr;
 	int err;
+	int nid = dev_to_node(&dev->pdev->dev);
 
-	page = alloc_page(GFP_HIGHUSER);
+	page = alloc_pages_node(nid, GFP_HIGHUSER, 0);
 	if (!page) {
 		mlx5_core_warn(dev, "failed to allocate page\n");
 		return -ENOMEM;
@@ -351,7 +352,7 @@ out_4k:
 	for (i--; i >= 0; i--)
 		free_4k(dev, be64_to_cpu(in->pas[i]));
 out_free:
-	mlx5_vfree(in);
+	kvfree(in);
 	return err;
 }
 
@@ -402,7 +403,7 @@ static int reclaim_pages(struct mlx5_core_dev *dev, u32 func_id, int npages,
 	}
 
 out_free:
-	mlx5_vfree(out);
+	kvfree(out);
 	return err;
 }
 

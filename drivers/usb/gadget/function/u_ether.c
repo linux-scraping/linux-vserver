@@ -589,6 +589,13 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 
 	req->length = length;
 
+	/* throttle high/super speed IRQ rate back slightly */
+	if (gadget_is_dualspeed(dev->gadget))
+		req->no_interrupt = (dev->gadget->speed == USB_SPEED_HIGH ||
+				     dev->gadget->speed == USB_SPEED_SUPER)
+			? ((atomic_read(&dev->tx_qlen) % dev->qmult) != 0)
+			: 0;
+
 	retval = usb_ep_queue(in, req, GFP_ATOMIC);
 	switch (retval) {
 	default:
@@ -722,9 +729,7 @@ static int get_ether_addr_str(u8 dev_addr[ETH_ALEN], char *str, int len)
 	if (len < 18)
 		return -EINVAL;
 
-	snprintf(str, len, "%02x:%02x:%02x:%02x:%02x:%02x",
-		 dev_addr[0], dev_addr[1], dev_addr[2],
-		 dev_addr[3], dev_addr[4], dev_addr[5]);
+	snprintf(str, len, "%pM", dev_addr);
 	return 18;
 }
 

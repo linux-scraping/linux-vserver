@@ -114,16 +114,11 @@ static void arcmsr_hardware_reset(struct AdapterControlBlock *acb);
 static const char *arcmsr_info(struct Scsi_Host *);
 static irqreturn_t arcmsr_interrupt(struct AdapterControlBlock *acb);
 static void arcmsr_free_irq(struct pci_dev *, struct AdapterControlBlock *);
-static int arcmsr_adjust_disk_queue_depth(struct scsi_device *sdev,
-					  int queue_depth, int reason)
+static int arcmsr_adjust_disk_queue_depth(struct scsi_device *sdev, int queue_depth)
 {
-	if (reason != SCSI_QDEPTH_DEFAULT)
-		return -EOPNOTSUPP;
-
 	if (queue_depth > ARCMSR_MAX_CMD_PERLUN)
 		queue_depth = ARCMSR_MAX_CMD_PERLUN;
-	scsi_adjust_queue_depth(sdev, MSG_ORDERED_TAG, queue_depth);
-	return queue_depth;
+	return scsi_change_queue_depth(sdev, queue_depth);
 }
 
 static struct scsi_host_template arcmsr_scsi_host_template = {
@@ -2305,8 +2300,7 @@ static int arcmsr_iop_message_xfer(struct AdapterControlBlock *acb,
 	}
 	case ARCMSR_MESSAGE_WRITE_WQBUFFER: {
 		unsigned char *ver_addr;
-		uint32_t user_len;
-		int32_t cnt2end;
+		int32_t user_len, cnt2end;
 		uint8_t *pQbuffer, *ptmpuserbuffer;
 		ver_addr = kmalloc(ARCMSR_API_DATA_BUFLEN, GFP_ATOMIC);
 		if (!ver_addr) {
@@ -2315,11 +2309,6 @@ static int arcmsr_iop_message_xfer(struct AdapterControlBlock *acb,
 		}
 		ptmpuserbuffer = ver_addr;
 		user_len = pcmdmessagefld->cmdmessage.Length;
-		if (user_len > ARCMSR_API_DATA_BUFLEN) {
-			retvalue = ARCMSR_MESSAGE_FAIL;
-			kfree(ver_addr);
-			goto message_out;
-		}
 		memcpy(ptmpuserbuffer,
 			pcmdmessagefld->messagedatabuffer, user_len);
 		spin_lock_irqsave(&acb->wqbuffer_lock, flags);
@@ -2551,9 +2540,18 @@ static int arcmsr_queue_command_lck(struct scsi_cmnd *cmd,
 	struct AdapterControlBlock *acb = (struct AdapterControlBlock *) host->hostdata;
 	struct CommandControlBlock *ccb;
 	int target = cmd->device->id;
+	int lun = cmd->device->lun;
+	uint8_t scsicmd = cmd->cmnd[0];
 	cmd->scsi_done = done;
 	cmd->host_scribble = NULL;
 	cmd->result = 0;
+	if ((scsicmd == SYNCHRONIZE_CACHE) ||(scsicmd == SEND_DIAGNOSTIC)){
+		if(acb->devstate[target][lun] == ARECA_RAID_GONE) {
+    			cmd->result = (DID_NO_CONNECT << 16);
+		}
+		cmd->scsi_done(cmd);
+		return 0;
+	}
 	if (target == 16) {
 		/* virtual device for iop message transfer */
 		arcmsr_handle_virtual_command(acb, cmd);

@@ -15,7 +15,6 @@
  */
 
 #include <asm/types.h>
-#include <asm/hash.h>
 #include <linux/compiler.h>
 
 /* 2^31 + 2^29 - 2^25 + 2^22 - 2^19 - 2^16 + 1 */
@@ -33,28 +32,12 @@
 #error Wordsize not 32 or 64
 #endif
 
-/*
- * The above primes are actively bad for hashing, since they are
- * too sparse. The 32-bit one is mostly ok, the 64-bit one causes
- * real problems. Besides, the "prime" part is pointless for the
- * multiplicative hash.
- *
- * Although a random odd number will do, it turns out that the golden
- * ratio phi = (sqrt(5)-1)/2, or its negative, has particularly nice
- * properties.
- *
- * These are the negative, (1 - phi) = (phi^2) = (3 - sqrt(5))/2.
- * (See Knuth vol 3, section 6.4, exercise 9.)
- */
-#define GOLDEN_RATIO_32 0x61C88647
-#define GOLDEN_RATIO_64 0x61C8864680B583EBull
-
 static __always_inline u64 hash_64(u64 val, unsigned int bits)
 {
 	u64 hash = val;
 
-#if BITS_PER_LONG == 64
-	hash = hash * GOLDEN_RATIO_64;
+#if defined(CONFIG_ARCH_HAS_FAST_MULTIPLIER) && BITS_PER_LONG == 64
+	hash = hash * GOLDEN_RATIO_PRIME_64;
 #else
 	/*  Sigh, gcc can't optimise this alone like it does for 32 bits. */
 	u64 n = hash;
@@ -99,39 +82,5 @@ static inline u32 hash32_ptr(const void *ptr)
 #endif
 	return (u32)val;
 }
-
-struct fast_hash_ops {
-	u32 (*hash)(const void *data, u32 len, u32 seed);
-	u32 (*hash2)(const u32 *data, u32 len, u32 seed);
-};
-
-/**
- *	arch_fast_hash - Caclulates a hash over a given buffer that can have
- *			 arbitrary size. This function will eventually use an
- *			 architecture-optimized hashing implementation if
- *			 available, and trades off distribution for speed.
- *
- *	@data: buffer to hash
- *	@len: length of buffer in bytes
- *	@seed: start seed
- *
- *	Returns 32bit hash.
- */
-extern u32 arch_fast_hash(const void *data, u32 len, u32 seed);
-
-/**
- *	arch_fast_hash2 - Caclulates a hash over a given buffer that has a
- *			  size that is of a multiple of 32bit words. This
- *			  function will eventually use an architecture-
- *			  optimized hashing implementation if available,
- *			  and trades off distribution for speed.
- *
- *	@data: buffer to hash (must be 32bit padded)
- *	@len: number of 32bit words
- *	@seed: start seed
- *
- *	Returns 32bit hash.
- */
-extern u32 arch_fast_hash2(const u32 *data, u32 len, u32 seed);
 
 #endif /* _LINUX_HASH_H */

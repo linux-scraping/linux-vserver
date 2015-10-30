@@ -77,9 +77,7 @@ struct dst_entry *inet6_csk_route_req(struct sock *sk,
 	memset(fl6, 0, sizeof(*fl6));
 	fl6->flowi6_proto = IPPROTO_TCP;
 	fl6->daddr = ireq->ir_v6_rmt_addr;
-	rcu_read_lock();
-	final_p = fl6_update_dst(fl6, rcu_dereference(np->opt), &final);
-	rcu_read_unlock();
+	final_p = fl6_update_dst(fl6, np->opt, &final);
 	fl6->saddr = ireq->ir_v6_loc_addr;
 	fl6->flowi6_oif = ireq->ir_iif;
 	fl6->flowi6_mark = ireq->ir_mark;
@@ -114,22 +112,20 @@ static u32 inet6_synq_hash(const struct in6_addr *raddr, const __be16 rport,
 	return c & (synq_hsize - 1);
 }
 
-struct request_sock *inet6_csk_search_req(const struct sock *sk,
-					  struct request_sock ***prevp,
+struct request_sock *inet6_csk_search_req(struct sock *sk,
 					  const __be16 rport,
 					  const struct in6_addr *raddr,
 					  const struct in6_addr *laddr,
 					  const int iif)
 {
-	const struct inet_connection_sock *icsk = inet_csk(sk);
+	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct listen_sock *lopt = icsk->icsk_accept_queue.listen_opt;
-	struct request_sock *req, **prev;
+	struct request_sock *req;
+	u32 hash = inet6_synq_hash(raddr, rport, lopt->hash_rnd,
+				   lopt->nr_table_entries);
 
-	for (prev = &lopt->syn_table[inet6_synq_hash(raddr, rport,
-						     lopt->hash_rnd,
-						     lopt->nr_table_entries)];
-	     (req = *prev) != NULL;
-	     prev = &req->dl_next) {
+	spin_lock(&icsk->icsk_accept_queue.syn_wait_lock);
+	for (req = lopt->syn_table[hash]; req != NULL; req = req->dl_next) {
 		const struct inet_request_sock *ireq = inet_rsk(req);
 
 		if (ireq->ir_rmt_port == rport &&
@@ -137,13 +133,14 @@ struct request_sock *inet6_csk_search_req(const struct sock *sk,
 		    ipv6_addr_equal(&ireq->ir_v6_rmt_addr, raddr) &&
 		    ipv6_addr_equal(&ireq->ir_v6_loc_addr, laddr) &&
 		    (!ireq->ir_iif || ireq->ir_iif == iif)) {
+			atomic_inc(&req->rsk_refcnt);
 			WARN_ON(req->sk != NULL);
-			*prevp = prev;
-			return req;
+			break;
 		}
 	}
+	spin_unlock(&icsk->icsk_accept_queue.syn_wait_lock);
 
-	return NULL;
+	return req;
 }
 EXPORT_SYMBOL_GPL(inet6_csk_search_req);
 
@@ -210,9 +207,7 @@ static struct dst_entry *inet6_csk_route_socket(struct sock *sk,
 	fl6->fl6_dport = inet->inet_dport;
 	security_sk_classify_flow(sk, flowi6_to_flowi(fl6));
 
-	rcu_read_lock();
-	final_p = fl6_update_dst(fl6, rcu_dereference(np->opt), &final);
-	rcu_read_unlock();
+	final_p = fl6_update_dst(fl6, np->opt, &final);
 
 	dst = __inet6_csk_dst_check(sk, np->dst_cookie);
 	if (!dst) {
@@ -245,8 +240,7 @@ int inet6_csk_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl_unused
 	/* Restore final destination back after routing done */
 	fl6.daddr = sk->sk_v6_daddr;
 
-	res = ip6_xmit(sk, skb, &fl6, rcu_dereference(np->opt),
-		       np->tclass);
+	res = ip6_xmit(sk, skb, &fl6, np->opt, np->tclass);
 	rcu_read_unlock();
 	return res;
 }

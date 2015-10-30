@@ -25,7 +25,7 @@
 #include <target/target_core_configfs.h>
 #include <target/iscsi/iscsi_transport.h>
 
-#include "iscsi_target_core.h"
+#include <target/iscsi/iscsi_target_core.h>
 #include "iscsi_target_parameters.h"
 #include "iscsi_target_seq_pdu_list.h"
 #include "iscsi_target_datain_values.h"
@@ -33,7 +33,6 @@
 #include "iscsi_target_erl1.h"
 #include "iscsi_target_erl2.h"
 #include "iscsi_target_tpg.h"
-#include "iscsi_target_tq.h"
 #include "iscsi_target_util.h"
 #include "iscsi_target.h"
 
@@ -390,6 +389,7 @@ struct iscsi_cmd *iscsit_find_cmd_from_itt(
 			init_task_tag, conn->cid);
 	return NULL;
 }
+EXPORT_SYMBOL(iscsit_find_cmd_from_itt);
 
 struct iscsi_cmd *iscsit_find_cmd_from_itt_or_dump(
 	struct iscsi_conn *conn,
@@ -731,24 +731,22 @@ void iscsit_free_cmd(struct iscsi_cmd *cmd, bool shutdown)
 {
 	struct se_cmd *se_cmd = NULL;
 	int rc;
-	bool op_scsi = false;
 	/*
 	 * Determine if a struct se_cmd is associated with
 	 * this struct iscsi_cmd.
 	 */
 	switch (cmd->iscsi_opcode) {
 	case ISCSI_OP_SCSI_CMD:
-		op_scsi = true;
+		se_cmd = &cmd->se_cmd;
+		__iscsit_free_cmd(cmd, true, shutdown);
 		/*
 		 * Fallthrough
 		 */
 	case ISCSI_OP_SCSI_TMFUNC:
-		se_cmd = &cmd->se_cmd;
-		__iscsit_free_cmd(cmd, op_scsi, shutdown);
-		rc = transport_generic_free_cmd(se_cmd, shutdown);
-		if (!rc && shutdown && se_cmd->se_sess) {
-			__iscsit_free_cmd(cmd, op_scsi, shutdown);
-			target_put_sess_cmd(se_cmd);
+		rc = transport_generic_free_cmd(&cmd->se_cmd, shutdown);
+		if (!rc && shutdown && se_cmd && se_cmd->se_sess) {
+			__iscsit_free_cmd(cmd, true, shutdown);
+			target_put_sess_cmd(se_cmd->se_sess, se_cmd);
 		}
 		break;
 	case ISCSI_OP_REJECT:
@@ -764,7 +762,7 @@ void iscsit_free_cmd(struct iscsi_cmd *cmd, bool shutdown)
 			rc = transport_generic_free_cmd(&cmd->se_cmd, shutdown);
 			if (!rc && shutdown && se_cmd->se_sess) {
 				__iscsit_free_cmd(cmd, true, shutdown);
-				target_put_sess_cmd(se_cmd);
+				target_put_sess_cmd(se_cmd->se_sess, se_cmd);
 			}
 			break;
 		}
@@ -941,13 +939,8 @@ static int iscsit_add_nopin(struct iscsi_conn *conn, int want_response)
 	state = (want_response) ? ISTATE_SEND_NOPIN_WANT_RESPONSE :
 				ISTATE_SEND_NOPIN_NO_RESPONSE;
 	cmd->init_task_tag = RESERVED_ITT;
-	spin_lock_bh(&conn->sess->ttt_lock);
-	cmd->targ_xfer_tag = (want_response) ? conn->sess->targ_xfer_tag++ :
-			0xFFFFFFFF;
-	if (want_response && (cmd->targ_xfer_tag == 0xFFFFFFFF))
-		cmd->targ_xfer_tag = conn->sess->targ_xfer_tag++;
-	spin_unlock_bh(&conn->sess->ttt_lock);
-
+	cmd->targ_xfer_tag = (want_response) ?
+			     session_get_next_ttt(conn->sess) : 0xFFFFFFFF;
 	spin_lock_bh(&conn->cmd_lock);
 	list_add_tail(&cmd->i_conn_node, &conn->conn_cmd_list);
 	spin_unlock_bh(&conn->cmd_lock);
@@ -1328,21 +1321,19 @@ static int iscsit_do_rx_data(
 	struct iscsi_conn *conn,
 	struct iscsi_data_count *count)
 {
-	int data = count->data_length, rx_loop = 0, total_rx = 0, iov_len;
-	struct kvec *iov_p;
+	int data = count->data_length, rx_loop = 0, total_rx = 0;
 	struct msghdr msg;
 
 	if (!conn || !conn->sock || !conn->conn_ops)
 		return -1;
 
 	memset(&msg, 0, sizeof(struct msghdr));
-
-	iov_p = count->iov;
-	iov_len	= count->iov_count;
+	iov_iter_kvec(&msg.msg_iter, READ | ITER_KVEC,
+		      count->iov, count->iov_count, data);
 
 	while (total_rx < data) {
-		rx_loop = kernel_recvmsg(conn->sock, &msg, iov_p, iov_len,
-					(data - total_rx), MSG_WAITALL);
+		rx_loop = sock_recvmsg(conn->sock, &msg,
+				      (data - total_rx), MSG_WAITALL);
 		if (rx_loop <= 0) {
 			pr_debug("rx_loop: %d total_rx: %d\n",
 				rx_loop, total_rx);

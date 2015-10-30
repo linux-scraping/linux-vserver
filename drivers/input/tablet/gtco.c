@@ -59,7 +59,7 @@ Scott Hill shill@gtcocalcomp.com
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
 #include <asm/byteorder.h>
-
+#include <linux/bitops.h>
 
 #include <linux/usb/input.h>
 
@@ -231,17 +231,13 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 
 	/* Walk  this report and pull out the info we need */
 	while (i < length) {
-		prefix = report[i++];
+		prefix = report[i];
+
+		/* Skip over prefix */
+		i++;
 
 		/* Determine data size and save the data in the proper variable */
-		size = (1U << PREF_SIZE(prefix)) >> 1;
-		if (i + size > length) {
-			dev_err(ddev,
-				"Not enough data (need %d, have %d)\n",
-				i + size, length);
-			break;
-		}
-
+		size = PREF_SIZE(prefix);
 		switch (size) {
 		case 1:
 			data = report[i];
@@ -249,7 +245,8 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 		case 2:
 			data16 = get_unaligned_le16(&report[i]);
 			break;
-		case 4:
+		case 3:
+			size = 4;
 			data32 = get_unaligned_le32(&report[i]);
 			break;
 		}
@@ -617,7 +614,6 @@ static void gtco_urb_callback(struct urb *urbinfo)
 	struct input_dev  *inputdev;
 	int               rc;
 	u32               val = 0;
-	s8                valsigned = 0;
 	char              le_buffer[2];
 
 	inputdev = device->inputdevice;
@@ -668,20 +664,11 @@ static void gtco_urb_callback(struct urb *urbinfo)
 			/* Fall thru */
 		case 4:
 			/* Tilt */
+			input_report_abs(inputdev, ABS_TILT_X,
+					 sign_extend32(device->buffer[6], 6));
 
-			/* Sign extend these 7 bit numbers.  */
-			if (device->buffer[6] & 0x40)
-				device->buffer[6] |= 0x80;
-
-			if (device->buffer[7] & 0x40)
-				device->buffer[7] |= 0x80;
-
-
-			valsigned = (device->buffer[6]);
-			input_report_abs(inputdev, ABS_TILT_X, (s32)valsigned);
-
-			valsigned = (device->buffer[7]);
-			input_report_abs(inputdev, ABS_TILT_Y, (s32)valsigned);
+			input_report_abs(inputdev, ABS_TILT_Y,
+					 sign_extend32(device->buffer[7], 6));
 
 			/* Fall thru */
 		case 2:
@@ -871,14 +858,6 @@ static int gtco_probe(struct usb_interface *usbinterface,
 		goto err_free_buf;
 	}
 
-	/* Sanity check that a device has an endpoint */
-	if (usbinterface->altsetting[0].desc.bNumEndpoints < 1) {
-		dev_err(&usbinterface->dev,
-			"Invalid number of endpoints\n");
-		error = -EINVAL;
-		goto err_free_urb;
-	}
-
 	/*
 	 * The endpoint is always altsetting 0, we know this since we know
 	 * this device only has one interrupt endpoint
@@ -900,7 +879,7 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	 * HID report descriptor
 	 */
 	if (usb_get_extra_descriptor(usbinterface->cur_altsetting,
-				     HID_DEVICE_TYPE, &hid_desc) != 0) {
+				     HID_DEVICE_TYPE, &hid_desc) != 0){
 		dev_err(&usbinterface->dev,
 			"Can't retrieve exta USB descriptor to get hid report descriptor length\n");
 		error = -EIO;

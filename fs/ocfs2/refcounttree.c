@@ -2428,8 +2428,6 @@ static int ocfs2_calc_refcount_meta_credits(struct super_block *sb,
 			get_bh(prev_bh);
 		}
 
-		rb = (struct ocfs2_refcount_block *)ref_leaf_bh->b_data;
-
 		trace_ocfs2_calc_refcount_meta_credits_iterate(
 				recs_add, (unsigned long long)cpos, clusters,
 				(unsigned long long)le64_to_cpu(rec.r_cpos),
@@ -4196,7 +4194,7 @@ static int __ocfs2_reflink(struct dentry *old_dentry,
 			   bool preserve)
 {
 	int ret;
-	struct inode *inode = old_dentry->d_inode;
+	struct inode *inode = d_inode(old_dentry);
 	struct buffer_head *new_bh = NULL;
 
 	if (OCFS2_I(inode)->ip_flags & OCFS2_INODE_SYSTEM_FILE) {
@@ -4265,15 +4263,23 @@ static int ocfs2_reflink(struct dentry *old_dentry, struct inode *dir,
 			 struct dentry *new_dentry, bool preserve)
 {
 	int error;
-	struct inode *inode = old_dentry->d_inode;
+	struct inode *inode = d_inode(old_dentry);
 	struct buffer_head *old_bh = NULL;
 	struct inode *new_orphan_inode = NULL;
+	struct posix_acl *default_acl, *acl;
+	umode_t mode;
 
 	if (!ocfs2_refcount_tree(OCFS2_SB(inode->i_sb)))
 		return -EOPNOTSUPP;
 
+	mode = inode->i_mode;
+	error = posix_acl_create(dir, &mode, &default_acl, &acl);
+	if (error) {
+		mlog_errno(error);
+		return error;
+	}
 
-	error = ocfs2_create_inode_in_orphan(dir, inode->i_mode,
+	error = ocfs2_create_inode_in_orphan(dir, mode,
 					     &new_orphan_inode);
 	if (error) {
 		mlog_errno(error);
@@ -4312,11 +4318,16 @@ static int ocfs2_reflink(struct dentry *old_dentry, struct inode *dir,
 	/* If the security isn't preserved, we need to re-initialize them. */
 	if (!preserve) {
 		error = ocfs2_init_security_and_acl(dir, new_orphan_inode,
-						    &new_dentry->d_name);
+						    &new_dentry->d_name,
+						    default_acl, acl);
 		if (error)
 			mlog_errno(error);
 	}
 out:
+	if (default_acl)
+		posix_acl_release(default_acl);
+	if (acl)
+		posix_acl_release(acl);
 	if (!error) {
 		error = ocfs2_mv_orphaned_inode_to_new(dir, new_orphan_inode,
 						       new_dentry);
@@ -4346,7 +4357,7 @@ out:
 /* copied from may_create in VFS. */
 static inline int ocfs2_may_create(struct inode *dir, struct dentry *child)
 {
-	if (child->d_inode)
+	if (d_really_is_positive(child))
 		return -EEXIST;
 	if (IS_DEADDIR(dir))
 		return -ENOENT;
@@ -4364,7 +4375,7 @@ static inline int ocfs2_may_create(struct inode *dir, struct dentry *child)
 static int ocfs2_vfs_reflink(struct dentry *old_dentry, struct inode *dir,
 			     struct dentry *new_dentry, bool preserve)
 {
-	struct inode *inode = old_dentry->d_inode;
+	struct inode *inode = d_inode(old_dentry);
 	int error;
 
 	if (!inode)
@@ -4452,7 +4463,7 @@ int ocfs2_reflink_ioctl(struct inode *inode,
 	}
 
 	error = ocfs2_vfs_reflink(old_path.dentry,
-				  new_path.dentry->d_inode,
+				  d_inode(new_path.dentry),
 				  new_dentry, preserve);
 out_dput:
 	done_path_create(&new_path, new_dentry);

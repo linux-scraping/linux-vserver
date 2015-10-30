@@ -117,16 +117,22 @@ static inline dma_addr_t virt_to_dma(struct device *dev, void *addr)
 /* The ARM override for dma_max_pfn() */
 static inline unsigned long dma_max_pfn(struct device *dev)
 {
-	return dma_to_pfn(dev, *dev->dma_mask);
+	return PHYS_PFN_OFFSET + dma_to_pfn(dev, *dev->dma_mask);
 }
 #define dma_max_pfn(dev) dma_max_pfn(dev)
 
-static inline int set_arch_dma_coherent_ops(struct device *dev)
+#define arch_setup_dma_ops arch_setup_dma_ops
+extern void arch_setup_dma_ops(struct device *dev, u64 dma_base, u64 size,
+			       struct iommu_ops *iommu, bool coherent);
+
+#define arch_teardown_dma_ops arch_teardown_dma_ops
+extern void arch_teardown_dma_ops(struct device *dev);
+
+/* do not use this function in a driver */
+static inline bool is_device_dma_coherent(struct device *dev)
 {
-	set_dma_ops(dev, &arm_coherent_dma_ops);
-	return 0;
+	return dev->archdata.dma_coherent;
 }
-#define set_arch_dma_coherent_ops(dev)	set_arch_dma_coherent_ops(dev)
 
 static inline dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr)
 {

@@ -52,7 +52,7 @@ struct pcifront_device {
 };
 
 struct pcifront_sd {
-	struct pci_sysdata sd;
+	int domain;
 	struct pcifront_device *pdev;
 };
 
@@ -66,9 +66,7 @@ static inline void pcifront_init_sd(struct pcifront_sd *sd,
 				    unsigned int domain, unsigned int bus,
 				    struct pcifront_device *pdev)
 {
-	/* Because we do not expose that information via XenBus. */
-	sd->sd.node = first_online_node;
-	sd->sd.domain = domain;
+	sd->domain = domain;
 	sd->pdev = pdev;
 }
 
@@ -466,8 +464,8 @@ static int pcifront_scan_root(struct pcifront_device *pdev,
 	dev_info(&pdev->xdev->dev, "Creating PCI Frontend Bus %04x:%02x\n",
 		 domain, bus);
 
-	bus_entry = kzalloc(sizeof(*bus_entry), GFP_KERNEL);
-	sd = kzalloc(sizeof(*sd), GFP_KERNEL);
+	bus_entry = kmalloc(sizeof(*bus_entry), GFP_KERNEL);
+	sd = kmalloc(sizeof(*sd), GFP_KERNEL);
 	if (!bus_entry || !sd) {
 		err = -ENOMEM;
 		goto err_out;
@@ -598,8 +596,7 @@ static pci_ers_result_t pcifront_common_process(int cmd,
 	pcidev = pci_get_bus_and_slot(bus, devfn);
 	if (!pcidev || !pcidev->driver) {
 		dev_err(&pdev->xdev->dev, "device or AER driver is NULL\n");
-		if (pcidev)
-			pci_dev_put(pcidev);
+		pci_dev_put(pcidev);
 		return result;
 	}
 	pdrv = pcidev->driver;
@@ -780,12 +777,13 @@ static int pcifront_publish_info(struct pcifront_device *pdev)
 {
 	int err = 0;
 	struct xenbus_transaction trans;
+	grant_ref_t gref;
 
-	err = xenbus_grant_ring(pdev->xdev, virt_to_mfn(pdev->sh_info));
+	err = xenbus_grant_ring(pdev->xdev, pdev->sh_info, 1, &gref);
 	if (err < 0)
 		goto out;
 
-	pdev->gnt_ref = err;
+	pdev->gnt_ref = gref;
 
 	err = xenbus_alloc_evtchn(pdev->xdev, &pdev->evtchn);
 	if (err)
@@ -868,6 +866,11 @@ static int pcifront_try_connect(struct pcifront_device *pdev)
 		xenbus_dev_error(pdev->xdev, err,
 				 "No PCI Roots found, trying 0000:00");
 		err = pcifront_scan_root(pdev, 0, 0);
+		if (err) {
+			xenbus_dev_fatal(pdev->xdev, err,
+					 "Error scanning PCI root 0000:00");
+			goto out;
+		}
 		num_roots = 0;
 	} else if (err != 1) {
 		if (err == 0)
@@ -949,6 +952,11 @@ static int pcifront_attach_devices(struct pcifront_device *pdev)
 		xenbus_dev_error(pdev->xdev, err,
 				 "No PCI Roots found, trying 0000:00");
 		err = pcifront_rescan_root(pdev, 0, 0);
+		if (err) {
+			xenbus_dev_fatal(pdev->xdev, err,
+					 "Error scanning PCI root 0000:00");
+			goto out;
+		}
 		num_roots = 0;
 	} else if (err != 1) {
 		if (err == 0)

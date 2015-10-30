@@ -1852,7 +1852,7 @@ static int atyfb_ioctl(struct fb_info *info, u_int cmd, u_long arg)
 #if defined(DEBUG) && defined(CONFIG_FB_ATY_CT)
 	case ATYIO_CLKR:
 		if (M64_HAS(INTEGRATED)) {
-			struct atyclk clk = { 0 };
+			struct atyclk clk;
 			union aty_pll *pll = &par->pll;
 			u32 dsp_config = pll->ct.dsp_config;
 			u32 dsp_on_off = pll->ct.dsp_on_off;
@@ -3948,7 +3948,7 @@ static struct notifier_block atyfb_reboot_notifier = {
 	.notifier_call = atyfb_reboot_notify,
 };
 
-static const struct dmi_system_id atyfb_reboot_ids[] = {
+static const struct dmi_system_id atyfb_reboot_ids[] __initconst = {
 	{
 		.ident = "HP OmniBook 500",
 		.matches = {
@@ -3960,6 +3960,7 @@ static const struct dmi_system_id atyfb_reboot_ids[] = {
 
 	{ }
 };
+static bool registered_notifier = false;
 
 static int __init atyfb_init(void)
 {
@@ -3982,15 +3983,17 @@ static int __init atyfb_init(void)
 	if (err1 && err2)
 		return -ENODEV;
 
-	if (dmi_check_system(atyfb_reboot_ids))
+	if (dmi_check_system(atyfb_reboot_ids)) {
 		register_reboot_notifier(&atyfb_reboot_notifier);
+		registered_notifier = true;
+	}
 
 	return 0;
 }
 
 static void __exit atyfb_exit(void)
 {
-	if (dmi_check_system(atyfb_reboot_ids))
+	if (registered_notifier)
 		unregister_reboot_notifier(&atyfb_reboot_notifier);
 
 #ifdef CONFIG_PCI

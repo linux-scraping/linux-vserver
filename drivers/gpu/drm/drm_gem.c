@@ -188,7 +188,7 @@ drm_gem_remove_prime_handles(struct drm_gem_object *obj, struct drm_file *filp)
 }
 
 /**
- * drm_gem_object_free - release resources bound to userspace handles
+ * drm_gem_object_handle_free - release resources bound to userspace handles
  * @obj: GEM object to clean up.
  *
  * Called after the last handle to the object has been closed
@@ -309,7 +309,7 @@ EXPORT_SYMBOL(drm_gem_dumb_destroy);
  * drm_gem_handle_create_tail - internal functions to create a handle
  * @file_priv: drm file-private structure to register the handle for
  * @obj: object to register
- * @handlep: pionter to return the created handle to the caller
+ * @handlep: pointer to return the created handle to the caller
  * 
  * This expects the dev->object_name_lock to be held already and will drop it
  * before returning. Used to avoid races in establishing new handles when
@@ -362,7 +362,7 @@ drm_gem_handle_create_tail(struct drm_file *file_priv,
 }
 
 /**
- * gem_handle_create - create a gem handle for an object
+ * drm_gem_handle_create - create a gem handle for an object
  * @file_priv: drm file-private structure to register the handle for
  * @obj: object to register
  * @handlep: pionter to return the created handle to the caller
@@ -371,10 +371,9 @@ drm_gem_handle_create_tail(struct drm_file *file_priv,
  * to the object, which includes a regular reference count. Callers
  * will likely want to dereference the object afterwards.
  */
-int
-drm_gem_handle_create(struct drm_file *file_priv,
-		       struct drm_gem_object *obj,
-		       u32 *handlep)
+int drm_gem_handle_create(struct drm_file *file_priv,
+			  struct drm_gem_object *obj,
+			  u32 *handlep)
 {
 	mutex_lock(&obj->dev->object_name_lock);
 
@@ -711,12 +710,12 @@ drm_gem_object_release_handle(int id, void *ptr, void *data)
 	struct drm_gem_object *obj = ptr;
 	struct drm_device *dev = obj->dev;
 
-	if (dev->driver->gem_close_object)
-		dev->driver->gem_close_object(obj, file_priv);
-
 	if (drm_core_check_feature(dev, DRIVER_PRIME))
 		drm_gem_remove_prime_handles(obj, file_priv);
 	drm_vma_node_revoke(&obj->vma_node, file_priv->filp);
+
+	if (dev->driver->gem_close_object)
+		dev->driver->gem_close_object(obj, file_priv);
 
 	drm_gem_object_handle_unreference_unlocked(obj);
 

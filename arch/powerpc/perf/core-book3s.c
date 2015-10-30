@@ -124,7 +124,7 @@ static unsigned long ebb_switch_in(bool ebb, struct cpu_hw_events *cpuhw)
 
 static inline void power_pmu_bhrb_enable(struct perf_event *event) {}
 static inline void power_pmu_bhrb_disable(struct perf_event *event) {}
-static void power_pmu_flush_branch_stack(void) {}
+static void power_pmu_sched_task(struct perf_event_context *ctx, bool sched_in) {}
 static inline void power_pmu_bhrb_read(struct cpu_hw_events *cpuhw) {}
 static void pmao_restore_workaround(bool ebb) { }
 #endif /* CONFIG_PPC32 */
@@ -348,7 +348,7 @@ static void power_pmu_bhrb_reset(void)
 
 static void power_pmu_bhrb_enable(struct perf_event *event)
 {
-	struct cpu_hw_events *cpuhw = &__get_cpu_var(cpu_hw_events);
+	struct cpu_hw_events *cpuhw = this_cpu_ptr(&cpu_hw_events);
 
 	if (!ppmu->bhrb_nr)
 		return;
@@ -359,17 +359,19 @@ static void power_pmu_bhrb_enable(struct perf_event *event)
 		cpuhw->bhrb_context = event->ctx;
 	}
 	cpuhw->bhrb_users++;
+	perf_sched_cb_inc(event->ctx->pmu);
 }
 
 static void power_pmu_bhrb_disable(struct perf_event *event)
 {
-	struct cpu_hw_events *cpuhw = &__get_cpu_var(cpu_hw_events);
+	struct cpu_hw_events *cpuhw = this_cpu_ptr(&cpu_hw_events);
 
 	if (!ppmu->bhrb_nr)
 		return;
 
 	cpuhw->bhrb_users--;
 	WARN_ON_ONCE(cpuhw->bhrb_users < 0);
+	perf_sched_cb_dec(event->ctx->pmu);
 
 	if (!cpuhw->disabled && !cpuhw->bhrb_users) {
 		/* BHRB cannot be turned off when other
@@ -384,9 +386,12 @@ static void power_pmu_bhrb_disable(struct perf_event *event)
 /* Called from ctxsw to prevent one process's branch entries to
  * mingle with the other process's entries during context switch.
  */
-static void power_pmu_flush_branch_stack(void)
+static void power_pmu_sched_task(struct perf_event_context *ctx, bool sched_in)
 {
-	if (ppmu->bhrb_nr)
+	if (!ppmu->bhrb_nr)
+		return;
+
+	if (sched_in)
 		power_pmu_bhrb_reset();
 }
 /* Calculate the to address for a branch */
@@ -396,12 +401,8 @@ static __u64 power_pmu_bhrb_to(u64 addr)
 	int ret;
 	__u64 target;
 
-	if (is_kernel_addr(addr)) {
-		if (probe_kernel_read(&instr, (void *)addr, sizeof(instr)))
-			return 0;
-
-		return branch_target(&instr);
-	}
+	if (is_kernel_addr(addr))
+		return branch_target((unsigned int *)addr);
 
 	/* Userspace: need copy instruction here then translate it */
 	pagefault_disable();
@@ -1157,7 +1158,7 @@ static void power_pmu_disable(struct pmu *pmu)
 	if (!ppmu)
 		return;
 	local_irq_save(flags);
-	cpuhw = &__get_cpu_var(cpu_hw_events);
+	cpuhw = this_cpu_ptr(&cpu_hw_events);
 
 	if (!cpuhw->disabled) {
 		/*
@@ -1224,7 +1225,7 @@ static void power_pmu_enable(struct pmu *pmu)
 		return;
 	local_irq_save(flags);
 
-	cpuhw = &__get_cpu_var(cpu_hw_events);
+	cpuhw = this_cpu_ptr(&cpu_hw_events);
 	if (!cpuhw->disabled)
 		goto out;
 
@@ -1416,7 +1417,7 @@ static int power_pmu_add(struct perf_event *event, int ef_flags)
 	 * Add the event to the list (if there is room)
 	 * and check whether the total set is still feasible.
 	 */
-	cpuhw = &__get_cpu_var(cpu_hw_events);
+	cpuhw = this_cpu_ptr(&cpu_hw_events);
 	n0 = cpuhw->n_events;
 	if (n0 >= ppmu->n_counter)
 		goto out;
@@ -1482,7 +1483,7 @@ static void power_pmu_del(struct perf_event *event, int ef_flags)
 
 	power_pmu_read(event);
 
-	cpuhw = &__get_cpu_var(cpu_hw_events);
+	cpuhw = this_cpu_ptr(&cpu_hw_events);
 	for (i = 0; i < cpuhw->n_events; ++i) {
 		if (event == cpuhw->event[i]) {
 			while (++i < cpuhw->n_events) {
@@ -1588,7 +1589,7 @@ static void power_pmu_stop(struct perf_event *event, int ef_flags)
  */
 static void power_pmu_start_txn(struct pmu *pmu)
 {
-	struct cpu_hw_events *cpuhw = &__get_cpu_var(cpu_hw_events);
+	struct cpu_hw_events *cpuhw = this_cpu_ptr(&cpu_hw_events);
 
 	perf_pmu_disable(pmu);
 	cpuhw->group_flag |= PERF_EVENT_TXN;
@@ -1602,7 +1603,7 @@ static void power_pmu_start_txn(struct pmu *pmu)
  */
 static void power_pmu_cancel_txn(struct pmu *pmu)
 {
-	struct cpu_hw_events *cpuhw = &__get_cpu_var(cpu_hw_events);
+	struct cpu_hw_events *cpuhw = this_cpu_ptr(&cpu_hw_events);
 
 	cpuhw->group_flag &= ~PERF_EVENT_TXN;
 	perf_pmu_enable(pmu);
@@ -1620,7 +1621,7 @@ static int power_pmu_commit_txn(struct pmu *pmu)
 
 	if (!ppmu)
 		return -EAGAIN;
-	cpuhw = &__get_cpu_var(cpu_hw_events);
+	cpuhw = this_cpu_ptr(&cpu_hw_events);
 	n = cpuhw->n_events;
 	if (check_excludes(cpuhw->event, cpuhw->flags, 0, n))
 		return -EAGAIN;
@@ -1845,8 +1846,10 @@ static int power_pmu_event_init(struct perf_event *event)
 		cpuhw->bhrb_filter = ppmu->bhrb_filter_map(
 					event->attr.branch_sample_type);
 
-		if(cpuhw->bhrb_filter == -1)
+		if (cpuhw->bhrb_filter == -1) {
+			put_cpu_var(cpu_hw_events);
 			return -EOPNOTSUPP;
+		}
 	}
 
 	put_cpu_var(cpu_hw_events);
@@ -1914,7 +1917,7 @@ static struct pmu power_pmu = {
 	.cancel_txn	= power_pmu_cancel_txn,
 	.commit_txn	= power_pmu_commit_txn,
 	.event_idx	= power_pmu_event_idx,
-	.flush_branch_stack = power_pmu_flush_branch_stack,
+	.sched_task	= power_pmu_sched_task,
 };
 
 /*
@@ -1977,7 +1980,7 @@ static void record_and_restart(struct perf_event *event, unsigned long val,
 
 		if (event->attr.sample_type & PERF_SAMPLE_BRANCH_STACK) {
 			struct cpu_hw_events *cpuhw;
-			cpuhw = &__get_cpu_var(cpu_hw_events);
+			cpuhw = this_cpu_ptr(&cpu_hw_events);
 			power_pmu_bhrb_read(cpuhw);
 			data.br_stack = &cpuhw->bhrb_stack;
 		}
@@ -2050,7 +2053,7 @@ static bool pmc_overflow(unsigned long val)
 static void perf_event_interrupt(struct pt_regs *regs)
 {
 	int i, j;
-	struct cpu_hw_events *cpuhw = &__get_cpu_var(cpu_hw_events);
+	struct cpu_hw_events *cpuhw = this_cpu_ptr(&cpu_hw_events);
 	struct perf_event *event;
 	unsigned long val[8];
 	int found, active;

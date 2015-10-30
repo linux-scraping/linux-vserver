@@ -14,7 +14,6 @@
 #include <linux/time.h>
 #include <linux/capability.h>
 #include <linux/fs.h>
-#include <linux/jbd2.h>
 #include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include "ext4.h"
@@ -209,9 +208,6 @@ static int ext4_init_block_bitmap(struct super_block *sb,
 	memset(bh->b_data, 0, sb->s_blocksize);
 
 	bit_max = ext4_num_base_meta_clusters(sb, block_group);
-	if ((bit_max >> 3) >= bh->b_size)
-		return -EIO;
-
 	for (bit = 0; bit < bit_max; bit++)
 		ext4_set_bit(bit, bh->b_data);
 
@@ -644,8 +640,6 @@ ext4_fsblk_t ext4_new_meta_blocks(handle_t *handle, struct inode *inode,
 	 * fail EDQUOT for metdata, but we do account for it.
 	 */
 	if (!(*errp) && (flags & EXT4_MB_DELALLOC_RESERVED)) {
-		spin_lock(&EXT4_I(inode)->i_block_reservation_lock);
-		spin_unlock(&EXT4_I(inode)->i_block_reservation_lock);
 		dquot_alloc_block_nofail(inode,
 				EXT4_C2B(EXT4_SB(inode->i_sb), ar.len));
 	}

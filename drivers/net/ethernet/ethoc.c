@@ -706,8 +706,6 @@ static int ethoc_open(struct net_device *dev)
 	if (ret)
 		return ret;
 
-	napi_enable(&priv->napi);
-
 	ethoc_init_ring(priv, dev->mem_start);
 	ethoc_reset(priv);
 
@@ -720,6 +718,7 @@ static int ethoc_open(struct net_device *dev)
 	}
 
 	phy_start(priv->phy);
+	napi_enable(&priv->napi);
 
 	if (netif_msg_ifup(priv)) {
 		dev_info(&dev->dev, "I/O: %08lx Memory: %08lx-%08lx\n",
@@ -1300,7 +1299,7 @@ static int ethoc_resume(struct platform_device *pdev)
 # define ethoc_resume  NULL
 #endif
 
-static struct of_device_id ethoc_match[] = {
+static const struct of_device_id ethoc_match[] = {
 	{ .compatible = "opencores,ethoc", },
 	{},
 };
@@ -1313,7 +1312,6 @@ static struct platform_driver ethoc_driver = {
 	.resume  = ethoc_resume,
 	.driver  = {
 		.name = "ethoc",
-		.owner = THIS_MODULE,
 		.of_match_table = ethoc_match,
 	},
 };

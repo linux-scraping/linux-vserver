@@ -51,7 +51,7 @@ int kvm_irq_map_gsi(struct kvm *kvm,
 
 	irq_rt = srcu_dereference_check(kvm->irq_routing, &kvm->irq_srcu,
 					lockdep_is_held(&kvm->irq_lock));
-	if (irq_rt && gsi < irq_rt->nr_rt_entries) {
+	if (gsi < irq_rt->nr_rt_entries) {
 		hlist_for_each_entry(e, &irq_rt->map[gsi], link) {
 			entries[n] = *e;
 			++n;
@@ -105,7 +105,7 @@ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
 	i = kvm_irq_map_gsi(kvm, irq_set, irq);
 	srcu_read_unlock(&kvm->irq_srcu, idx);
 
-	while(i--) {
+	while (i--) {
 		int r;
 		r = irq_set[i].set(&irq_set[i], kvm, irq_source_id, level,
 				   line_status);

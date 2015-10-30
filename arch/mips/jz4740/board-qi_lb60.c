@@ -26,7 +26,6 @@
 #include <linux/power/jz4740-battery.h>
 #include <linux/power/gpio-charger.h>
 
-#include <asm/mach-jz4740/gpio.h>
 #include <asm/mach-jz4740/jz4740_fb.h>
 #include <asm/mach-jz4740/jz4740_mmc.h>
 #include <asm/mach-jz4740/jz4740_nand.h>
@@ -141,9 +140,17 @@ static void qi_lb60_nand_ident(struct platform_device *pdev,
 
 static struct jz_nand_platform_data qi_lb60_nand_pdata = {
 	.ident_callback = qi_lb60_nand_ident,
-	.busy_gpio = 94,
 	.banks = { 1 },
 };
+
+static struct gpiod_lookup_table qi_lb60_nand_gpio_table = {
+	.dev_id = "jz4740-nand.0",
+	.table = {
+		GPIO_LOOKUP("Bank C", 30, "busy", 0),
+		{ },
+	},
+};
+
 
 /* Keyboard*/
 
@@ -473,6 +480,7 @@ static int __init qi_lb60_init_platform_devices(void)
 	jz4740_mmc_device.dev.platform_data = &qi_lb60_mmc_pdata;
 
 	gpiod_add_lookup_table(&qi_lb60_audio_gpio_table);
+	gpiod_add_lookup_table(&qi_lb60_nand_gpio_table);
 
 	jz4740_serial_device_register();
 

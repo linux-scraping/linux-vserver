@@ -22,7 +22,7 @@
 
 #include <linux/ptp_clock_kernel.h>
 #include <linux/net_tstamp.h>
-#include <linux/clocksource.h>
+#include <linux/timecounter.h>
 
 /* compilation time flags */
 
@@ -521,6 +521,7 @@ struct bnx2x_fp_txdata {
 };
 
 enum bnx2x_tpa_mode_t {
+	TPA_MODE_DISABLED,
 	TPA_MODE_LRO,
 	TPA_MODE_GRO
 };
@@ -589,7 +590,6 @@ struct bnx2x_fastpath {
 
 	/* TPA related */
 	struct bnx2x_agg_info	*tpa_info;
-	u8			disable_tpa;
 #ifdef BNX2X_STOP_ON_ERROR
 	u64			tpa_queue_used;
 #endif
@@ -1103,12 +1103,8 @@ struct bnx2x_port {
 	u32			link_config[LINK_CONFIG_SIZE];
 
 	u32			supported[LINK_CONFIG_SIZE];
-/* link settings - missing defines */
-#define SUPPORTED_2500baseX_Full	(1 << 15)
 
 	u32			advertising[LINK_CONFIG_SIZE];
-/* link settings - missing defines */
-#define ADVERTISED_2500baseX_Full	(1 << 15)
 
 	u32			phy_addr;
 
@@ -1549,9 +1545,7 @@ struct bnx2x {
 #define USING_MSIX_FLAG			(1 << 5)
 #define USING_MSI_FLAG			(1 << 6)
 #define DISABLE_MSI_FLAG		(1 << 7)
-#define TPA_ENABLE_FLAG			(1 << 8)
 #define NO_MCP_FLAG			(1 << 9)
-#define GRO_ENABLE_FLAG			(1 << 10)
 #define MF_FUNC_DIS			(1 << 11)
 #define OWN_CNIC_IRQ			(1 << 12)
 #define NO_ISCSI_OOO_FLAG		(1 << 13)
@@ -1780,7 +1774,7 @@ struct bnx2x {
 	int			stats_state;
 
 	/* used for synchronization of concurrent threads statistics handling */
-	spinlock_t		stats_lock;
+	struct semaphore	stats_lock;
 
 	/* used by dmae command loader */
 	struct dmae_command	stats_dmae;
@@ -1904,8 +1898,6 @@ struct bnx2x {
 
 	int fp_array_size;
 	u32 dump_preset_idx;
-	bool					stats_started;
-	struct semaphore			stats_sema;
 
 	u8					phys_port_id[ETH_ALEN];
 

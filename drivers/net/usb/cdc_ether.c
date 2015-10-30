@@ -71,18 +71,19 @@ static void usbnet_cdc_update_filter(struct usbnet *dev)
 {
 	struct cdc_state	*info = (void *) &dev->data;
 	struct usb_interface	*intf = info->control;
+	struct net_device	*net = dev->net;
 
-	u16 cdc_filter =
-	    USB_CDC_PACKET_TYPE_ALL_MULTICAST | USB_CDC_PACKET_TYPE_DIRECTED |
-	    USB_CDC_PACKET_TYPE_BROADCAST;
+	u16 cdc_filter = USB_CDC_PACKET_TYPE_DIRECTED
+			| USB_CDC_PACKET_TYPE_BROADCAST;
 
-	if (dev->net->flags & IFF_PROMISC)
-		cdc_filter |= USB_CDC_PACKET_TYPE_PROMISCUOUS;
-
-	/* FIXME cdc-ether has some multicast code too, though it complains
-	 * in routine cases.  info->ether describes the multicast support.
-	 * Implement that here, manipulating the cdc filter as needed.
+	/* filtering on the device is an optional feature and not worth
+	 * the hassle so we just roughly care about snooping and if any
+	 * multicast is requested, we take every multicast
 	 */
+	if (net->flags & IFF_PROMISC)
+		cdc_filter |= USB_CDC_PACKET_TYPE_PROMISCUOUS;
+	if (!netdev_mc_empty(net) || (net->flags & IFF_ALLMULTI))
+		cdc_filter |= USB_CDC_PACKET_TYPE_ALL_MULTICAST;
 
 	usb_control_msg(dev->udev,
 			usb_sndctrlpipe(dev->udev, 0),
@@ -171,8 +172,6 @@ int usbnet_generic_cdc_bind(struct usbnet *dev, struct usb_interface *intf)
 				dev_dbg(&intf->dev, "extra CDC header\n");
 				goto bad_desc;
 			}
-			if (len < sizeof(struct usb_cdc_header_desc))
-				break;
 			info->header = (void *) buf;
 			if (info->header->bLength != sizeof(*info->header)) {
 				dev_dbg(&intf->dev, "CDC header len %u\n",
@@ -186,8 +185,6 @@ int usbnet_generic_cdc_bind(struct usbnet *dev, struct usb_interface *intf)
 			 */
 			if (rndis) {
 				struct usb_cdc_acm_descriptor *acm;
-				if (len < sizeof(struct usb_cdc_acm_descriptor))
-					break;
 
 				acm = (void *) buf;
 				if (acm->bmCapabilities) {
@@ -204,8 +201,6 @@ int usbnet_generic_cdc_bind(struct usbnet *dev, struct usb_interface *intf)
 				dev_dbg(&intf->dev, "extra CDC union\n");
 				goto bad_desc;
 			}
-			if (len < sizeof(struct usb_cdc_union_desc))
-				break;
 			info->u = (void *) buf;
 			if (info->u->bLength != sizeof(*info->u)) {
 				dev_dbg(&intf->dev, "CDC union len %u\n",
@@ -264,8 +259,6 @@ int usbnet_generic_cdc_bind(struct usbnet *dev, struct usb_interface *intf)
 				dev_dbg(&intf->dev, "extra CDC ether\n");
 				goto bad_desc;
 			}
-			if (len < sizeof(struct usb_cdc_ether_desc))
-				break;
 			info->ether = (void *) buf;
 			if (info->ether->bLength != sizeof(*info->ether)) {
 				dev_dbg(&intf->dev, "CDC ether len %u\n",
@@ -283,6 +276,7 @@ int usbnet_generic_cdc_bind(struct usbnet *dev, struct usb_interface *intf)
 				dev_dbg(&intf->dev, "extra MDLM descriptor\n");
 				goto bad_desc;
 			}
+
 			desc = (void *)buf;
 
 			if (desc->bLength != sizeof(*desc))
@@ -528,6 +522,7 @@ static const struct driver_info wwan_info = {
 #define DELL_VENDOR_ID		0x413C
 #define REALTEK_VENDOR_ID	0x0bda
 #define SAMSUNG_VENDOR_ID	0x04e8
+#define LENOVO_VENDOR_ID	0x17ef
 
 static const struct usb_device_id	products[] = {
 /* BLACKLIST !!
@@ -704,6 +699,13 @@ static const struct usb_device_id	products[] = {
 /* Samsung USB Ethernet Adapters */
 {
 	USB_DEVICE_AND_INTERFACE_INFO(SAMSUNG_VENDOR_ID, 0xa101, USB_CLASS_COMM,
+			USB_CDC_SUBCLASS_ETHERNET, USB_CDC_PROTO_NONE),
+	.driver_info = 0,
+},
+
+/* Lenovo Thinkpad USB 3.0 Ethernet Adapters (based on Realtek RTL8153) */
+{
+	USB_DEVICE_AND_INTERFACE_INFO(LENOVO_VENDOR_ID, 0x7205, USB_CLASS_COMM,
 			USB_CDC_SUBCLASS_ETHERNET, USB_CDC_PROTO_NONE),
 	.driver_info = 0,
 },

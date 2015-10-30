@@ -21,6 +21,7 @@
 #include <stdarg.h>
 
 #include <linux/compat.h>
+#include <linux/efi.h>
 #include <linux/export.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -150,6 +151,13 @@ void machine_restart(char *cmd)
 	local_irq_disable();
 	smp_send_stop();
 
+	/*
+	 * UpdateCapsule() depends on the system being reset via
+	 * ResetSystem().
+	 */
+	if (efi_enabled(EFI_RUNTIME_SERVICES))
+		efi_reboot(reboot_mode, NULL);
+
 	/* Now call the architecture specific reboot code. */
 	if (arm_pm_restart)
 		arm_pm_restart(reboot_mode, cmd);
@@ -249,15 +257,6 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 	unsigned long tls = p->thread.tp_value;
 
 	memset(&p->thread.cpu_context, 0, sizeof(struct cpu_context));
-
-	/*
-	 * In case p was allocated the same task_struct pointer as some
-	 * other recently-exited task, make sure p is disassociated from
-	 * any cpu that may have run that now-exited task recently.
-	 * Otherwise we could erroneously skip reloading the FPSIMD
-	 * registers for p.
-	 */
-	fpsimd_flush_task_state(p);
 
 	if (likely(!(p->flags & PF_KTHREAD))) {
 		*childregs = *current_pt_regs();

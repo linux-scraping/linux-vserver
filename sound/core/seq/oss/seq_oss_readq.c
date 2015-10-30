@@ -47,13 +47,12 @@ snd_seq_oss_readq_new(struct seq_oss_devinfo *dp, int maxlen)
 {
 	struct seq_oss_readq *q;
 
-	if ((q = kzalloc(sizeof(*q), GFP_KERNEL)) == NULL) {
-		pr_err("ALSA: seq_oss: can't malloc read queue\n");
+	q = kzalloc(sizeof(*q), GFP_KERNEL);
+	if (!q)
 		return NULL;
-	}
 
-	if ((q->q = kcalloc(maxlen, sizeof(union evrec), GFP_KERNEL)) == NULL) {
-		pr_err("ALSA: seq_oss: can't malloc read queue buffer\n");
+	q->q = kcalloc(maxlen, sizeof(union evrec), GFP_KERNEL);
+	if (!q->q) {
 		kfree(q);
 		return NULL;
 	}
@@ -117,35 +116,6 @@ snd_seq_oss_readq_puts(struct seq_oss_readq *q, int dev, unsigned char *data, in
 			return result;
 	}
 	return 0;
-}
-
-/*
- * put MIDI sysex bytes; the event buffer may be chained, thus it has
- * to be expanded via snd_seq_dump_var_event().
- */
-struct readq_sysex_ctx {
-	struct seq_oss_readq *readq;
-	int dev;
-};
-
-static int readq_dump_sysex(void *ptr, void *buf, int count)
-{
-	struct readq_sysex_ctx *ctx = ptr;
-
-	return snd_seq_oss_readq_puts(ctx->readq, ctx->dev, buf, count);
-}
-
-int snd_seq_oss_readq_sysex(struct seq_oss_readq *q, int dev,
-			    struct snd_seq_event *ev)
-{
-	struct readq_sysex_ctx ctx = {
-		.readq = q,
-		.dev = dev
-	};
-
-	if ((ev->flags & SNDRV_SEQ_EVENT_LENGTH_MASK) != SNDRV_SEQ_EVENT_LENGTH_VARIABLE)
-		return 0;
-	return snd_seq_dump_var_event(ev, readq_dump_sysex, &ctx);
 }
 
 /*

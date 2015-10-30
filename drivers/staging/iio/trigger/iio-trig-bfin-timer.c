@@ -183,7 +183,7 @@ static int iio_bfin_tmr_trigger_probe(struct platform_device *pdev)
 	int ret;
 
 	st = devm_kzalloc(&pdev->dev, sizeof(*st), GFP_KERNEL);
-	if (st == NULL)
+	if (!st)
 		return -ENOMEM;
 
 	st->irq = platform_get_irq(pdev, 0);
@@ -258,7 +258,7 @@ out_free_irq:
 out1:
 	iio_trigger_unregister(st->trig);
 out:
-	iio_trigger_free(st->trig);
+	iio_trigger_put(st->trig);
 	return ret;
 }
 
@@ -271,7 +271,7 @@ static int iio_bfin_tmr_trigger_remove(struct platform_device *pdev)
 		peripheral_free(st->t->pin);
 	free_irq(st->irq, st);
 	iio_trigger_unregister(st->trig);
-	iio_trigger_free(st->trig);
+	iio_trigger_put(st->trig);
 
 	return 0;
 }
@@ -279,7 +279,6 @@ static int iio_bfin_tmr_trigger_remove(struct platform_device *pdev)
 static struct platform_driver iio_bfin_tmr_trigger_driver = {
 	.driver = {
 		.name = "iio_bfin_tmr_trigger",
-		.owner = THIS_MODULE,
 	},
 	.probe = iio_bfin_tmr_trigger_probe,
 	.remove = iio_bfin_tmr_trigger_remove,

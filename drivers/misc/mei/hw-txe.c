@@ -424,7 +424,7 @@ static void mei_txe_intr_disable(struct mei_device *dev)
 	mei_txe_br_reg_write(hw, HIER_REG, 0);
 }
 /**
- * mei_txe_intr_disable - enable all interrupts
+ * mei_txe_intr_enable - enable all interrupts
  *
  * @dev: the device structure
  */
@@ -712,11 +712,10 @@ static int mei_txe_write(struct mei_device *dev,
 	mei_txe_input_ready_interrupt_enable(dev);
 
 	if (!mei_txe_is_input_ready(dev)) {
-		struct mei_fw_status fw_status;
+		char fw_sts_str[MEI_FW_STATUS_STR_SZ];
 
-		mei_fw_status(dev, &fw_status);
-		dev_err(dev->dev, "Input is not ready " FW_STS_FMT "\n",
-			FW_STS_PRM(fw_status));
+		mei_fw_status_str(dev, fw_sts_str, MEI_FW_STATUS_STR_SZ);
+		dev_err(dev->dev, "Input is not ready %s\n", fw_sts_str);
 		return -EAGAIN;
 	}
 
@@ -973,13 +972,11 @@ static bool mei_txe_check_and_ack_intrs(struct mei_device *dev, bool do_ack)
 	hisr = mei_txe_br_reg_read(hw, HISR_REG);
 
 	aliveness = mei_txe_aliveness_get(dev);
-	if (hhisr & IPC_HHIER_SEC && aliveness) {
+	if (hhisr & IPC_HHIER_SEC && aliveness)
 		ipc_isr = mei_txe_sec_reg_read_silent(hw,
 				SEC_IPC_HOST_INT_STATUS_REG);
-	} else {
+	else
 		ipc_isr = 0;
-		hhisr &= ~IPC_HHIER_SEC;
-	}
 
 	generated = generated ||
 		(hisr & HISR_INT_STS_MSK) ||

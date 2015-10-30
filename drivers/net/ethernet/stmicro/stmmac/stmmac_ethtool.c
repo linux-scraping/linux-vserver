@@ -696,7 +696,7 @@ static int stmmac_set_coalesce(struct net_device *dev,
 	    (ec->tx_max_coalesced_frames == 0))
 		return -EINVAL;
 
-	if ((ec->tx_coalesce_usecs > STMMAC_COAL_TX_TIMER) ||
+	if ((ec->tx_coalesce_usecs > STMMAC_MAX_COAL_TX_TICK) ||
 	    (ec->tx_max_coalesced_frames > STMMAC_TX_MAX_FRAMES))
 		return -EINVAL;
 
@@ -721,13 +721,10 @@ static int stmmac_get_ts_info(struct net_device *dev,
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
 
-	if ((priv->dma_cap.time_stamp || priv->dma_cap.atime_stamp)) {
+	if ((priv->hwts_tx_en) && (priv->hwts_rx_en)) {
 
-		info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
-					SOF_TIMESTAMPING_TX_HARDWARE |
-					SOF_TIMESTAMPING_RX_SOFTWARE |
+		info->so_timestamping = SOF_TIMESTAMPING_TX_HARDWARE |
 					SOF_TIMESTAMPING_RX_HARDWARE |
-					SOF_TIMESTAMPING_SOFTWARE |
 					SOF_TIMESTAMPING_RAW_HARDWARE;
 
 		if (priv->ptp_clock)

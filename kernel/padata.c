@@ -189,20 +189,19 @@ static struct padata_priv *padata_get_next(struct parallel_data *pd)
 
 	reorder = &next_queue->reorder;
 
-	spin_lock(&reorder->lock);
 	if (!list_empty(&reorder->list)) {
 		padata = list_entry(reorder->list.next,
 				    struct padata_priv, list);
 
+		spin_lock(&reorder->lock);
 		list_del_init(&padata->list);
 		atomic_dec(&pd->reorder_objects);
+		spin_unlock(&reorder->lock);
 
 		pd->processed++;
 
-		spin_unlock(&reorder->lock);
 		goto out;
 	}
-	spin_unlock(&reorder->lock);
 
 	if (__this_cpu_read(pd->pqueue->cpu_index) == next_queue->cpu_index) {
 		padata = ERR_PTR(-ENODATA);
@@ -357,7 +356,7 @@ static int padata_setup_cpumasks(struct parallel_data *pd,
 
 	cpumask_and(pd->cpumask.pcpu, pcpumask, cpu_online_mask);
 	if (!alloc_cpumask_var(&pd->cpumask.cbcpu, GFP_KERNEL)) {
-		free_cpumask_var(pd->cpumask.pcpu);
+		free_cpumask_var(pd->cpumask.cbcpu);
 		return -ENOMEM;
 	}
 
@@ -918,15 +917,10 @@ static ssize_t show_cpumask(struct padata_instance *pinst,
 	else
 		cpumask = pinst->cpumask.pcpu;
 
-	len = bitmap_scnprintf(buf, PAGE_SIZE, cpumask_bits(cpumask),
-			       nr_cpu_ids);
-	if (PAGE_SIZE - len < 2)
-		len = -EINVAL;
-	else
-		len += sprintf(buf + len, "\n");
-
+	len = snprintf(buf, PAGE_SIZE, "%*pb\n",
+		       nr_cpu_ids, cpumask_bits(cpumask));
 	mutex_unlock(&pinst->lock);
-	return len;
+	return len < PAGE_SIZE ? len : -EINVAL;
 }
 
 static ssize_t store_cpumask(struct padata_instance *pinst,

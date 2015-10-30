@@ -756,11 +756,21 @@ skip_rio:
 			/*
 			 * In case of loop down, restore WWPN from
 			 * NVRAM in case of FA-WWPN capable ISP
+			 * Restore for Physical Port only
 			 */
-			if (ha->flags.fawwpn_enabled) {
-				void *wwpn = ha->init_cb->port_name;
+			if (!vha->vp_idx) {
+				if (ha->flags.fawwpn_enabled) {
+					void *wwpn = ha->init_cb->port_name;
+					memcpy(vha->port_name, wwpn, WWN_SIZE);
+					fc_host_port_name(vha->host) =
+					    wwn_to_u64(vha->port_name);
+					ql_dbg(ql_dbg_init + ql_dbg_verbose,
+					    vha, 0x0144, "LOOP DOWN detected,"
+					    "restore WWPN %016llx\n",
+					    wwn_to_u64(vha->port_name));
+				}
 
-				memcpy(vha->port_name, wwpn, WWN_SIZE);
+				clear_bit(VP_CONFIG_OK, &vha->vp_flags);
 			}
 
 			vha->device_flags |= DFLG_NO_CABLE;
@@ -947,6 +957,7 @@ skip_rio:
 
 		set_bit(LOOP_RESYNC_NEEDED, &vha->dpc_flags);
 		set_bit(LOCAL_LOOP_UPDATE, &vha->dpc_flags);
+		set_bit(VP_CONFIG_OK, &vha->vp_flags);
 
 		qlt_async_event(mb[0], vha, mb);
 		break;
@@ -2981,9 +2992,9 @@ qla24xx_enable_msix(struct qla_hw_data *ha, struct rsp_que *rsp)
 		    "MSI-X: Failed to enable support "
 		    "-- %d/%d\n Retry with %d vectors.\n",
 		    ha->msix_count, ret, ret);
-		ha->msix_count = ret;
-		ha->max_rsp_queues = ha->msix_count - 1;
 	}
+	ha->msix_count = ret;
+	ha->max_rsp_queues = ha->msix_count - 1;
 	ha->msix_entries = kzalloc(sizeof(struct qla_msix_entry) *
 				ha->msix_count, GFP_KERNEL);
 	if (!ha->msix_entries) {

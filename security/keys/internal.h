@@ -136,7 +136,7 @@ extern key_ref_t keyring_search_aux(key_ref_t keyring_ref,
 extern key_ref_t search_my_process_keyrings(struct keyring_search_context *ctx);
 extern key_ref_t search_process_keyrings(struct keyring_search_context *ctx);
 
-extern struct key *find_keyring_by_name(const char *name, bool uid_keyring);
+extern struct key *find_keyring_by_name(const char *name, bool skip_perm_check);
 
 extern int install_user_keyrings(void);
 extern int install_thread_keyring_to_cred(struct cred *);
@@ -243,9 +243,10 @@ extern long keyctl_instantiate_key_iov(key_serial_t,
 				       unsigned, key_serial_t);
 extern long keyctl_invalidate_key(key_serial_t);
 
+struct iov_iter;
 extern long keyctl_instantiate_key_common(key_serial_t,
-					  const struct iovec *,
-					  unsigned, size_t, key_serial_t);
+					  struct iov_iter *,
+					  key_serial_t);
 #ifdef CONFIG_PERSISTENT_KEYRINGS
 extern long keyctl_get_persistent(uid_t, key_serial_t);
 extern unsigned persistent_keyring_expiry;

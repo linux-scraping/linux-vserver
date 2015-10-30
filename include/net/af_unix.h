@@ -4,7 +4,7 @@
 #include <linux/socket.h>
 #include <linux/un.h>
 #include <linux/mutex.h>
-#include <linux/vs_base.h>
+// #include <linux/vs_base.h>
 #include <net/sock.h>
 
 void unix_inflight(struct file *fp);
@@ -64,7 +64,6 @@ struct unix_sock {
 #define UNIX_GC_CANDIDATE	0
 #define UNIX_GC_MAYBE_CYCLE	1
 	struct socket_wq	peer_wq;
-	wait_queue_t		peer_wake;
 };
 
 static inline struct unix_sock *unix_sk(struct sock *sk)

@@ -180,10 +180,11 @@ smb2_find_mid(struct TCP_Server_Info *server, char *buf)
 {
 	struct mid_q_entry *mid;
 	struct smb2_hdr *hdr = (struct smb2_hdr *)buf;
+	__u64 wire_mid = le64_to_cpu(hdr->MessageId);
 
 	spin_lock(&GlobalMid_Lock);
 	list_for_each_entry(mid, &server->pending_mid_q, qhead) {
-		if ((mid->mid == hdr->MessageId) &&
+		if ((mid->mid == wire_mid) &&
 		    (mid->mid_state == MID_REQUEST_SUBMITTED) &&
 		    (mid->command == hdr->Command)) {
 			spin_unlock(&GlobalMid_Lock);
@@ -527,7 +528,7 @@ smb2_print_stats(struct seq_file *m, struct cifs_tcon *tcon)
 static void
 smb2_set_fid(struct cifsFileInfo *cfile, struct cifs_fid *fid, __u32 oplock)
 {
-	struct cifsInodeInfo *cinode = CIFS_I(cfile->dentry->d_inode);
+	struct cifsInodeInfo *cinode = CIFS_I(d_inode(cfile->dentry));
 	struct TCP_Server_Info *server = tlink_tcon(cfile->tlink)->ses->server;
 
 	cfile->fid.persistent_fid = fid->persistent_fid;
@@ -604,7 +605,7 @@ smb2_clone_range(const unsigned int xid,
 		goto cchunk_out;
 
 	/* For now array only one chunk long, will make more flexible later */
-	pcchunk->ChunkCount = __constant_cpu_to_le32(1);
+	pcchunk->ChunkCount = cpu_to_le32(1);
 	pcchunk->Reserved = 0;
 	pcchunk->Reserved2 = 0;
 
@@ -796,7 +797,7 @@ smb2_set_file_size(const unsigned int xid, struct cifs_tcon *tcon,
 	 * If extending file more than one page make sparse. Many Linux fs
 	 * make files sparse by default when extending via ftruncate
 	 */
-	inode = cfile->dentry->d_inode;
+	inode = d_inode(cfile->dentry);
 
 	if (!set_alloc && (size > inode->i_size + 8192)) {
 		__u8 set_sparse = 1;
@@ -842,7 +843,7 @@ smb2_query_dir_first(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_open(xid, &oparms, utf16_path, &oplock, NULL, NULL);
 	kfree(utf16_path);
 	if (rc) {
-		cifs_dbg(FYI, "open dir failed rc=%d\n", rc);
+		cifs_dbg(VFS, "open dir failed\n");
 		return rc;
 	}
 
@@ -852,7 +853,7 @@ smb2_query_dir_first(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_query_directory(xid, tcon, fid->persistent_fid,
 				  fid->volatile_fid, 0, srch_inf);
 	if (rc) {
-		cifs_dbg(FYI, "query directory failed rc=%d\n", rc);
+		cifs_dbg(VFS, "query directory failed\n");
 		SMB2_close(xid, tcon, fid->persistent_fid, fid->volatile_fid);
 	}
 	return rc;
@@ -893,18 +894,6 @@ smb2_is_status_pending(char *buf, struct TCP_Server_Info *server, int length)
 		wake_up(&server->request_q);
 	}
 
-	return true;
-}
-
-static bool
-smb2_is_session_expired(char *buf)
-{
-	struct smb2_hdr *hdr = (struct smb2_hdr *)buf;
-
-	if (hdr->Status != STATUS_NETWORK_SESSION_EXPIRED)
-		return false;
-
-	cifs_dbg(FYI, "Session expired\n");
 	return true;
 }
 
@@ -984,9 +973,6 @@ smb2_new_lease_key(struct cifs_fid *fid)
 	get_random_bytes(fid->lease_key, SMB2_LEASE_KEY_SIZE);
 }
 
-#define SMB2_SYMLINK_STRUCT_SIZE \
-	(sizeof(struct smb2_err_rsp) - 1 + sizeof(struct smb2_symlink_err_rsp))
-
 static int
 smb2_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 		   const char *full_path, char **target_path,
@@ -999,10 +985,7 @@ smb2_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 	struct cifs_fid fid;
 	struct smb2_err_rsp *err_buf = NULL;
 	struct smb2_symlink_err_rsp *symlink;
-	unsigned int sub_len;
-	unsigned int sub_offset;
-	unsigned int print_len;
-	unsigned int print_offset;
+	unsigned int sub_len, sub_offset;
 
 	cifs_dbg(FYI, "%s: path: %s\n", __func__, full_path);
 
@@ -1023,33 +1006,11 @@ smb2_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 		kfree(utf16_path);
 		return -ENOENT;
 	}
-
-	if (le32_to_cpu(err_buf->ByteCount) < sizeof(struct smb2_symlink_err_rsp) ||
-	    get_rfc1002_length(err_buf) + 4 < SMB2_SYMLINK_STRUCT_SIZE) {
-		kfree(utf16_path);
-		return -ENOENT;
-	}
-
 	/* open must fail on symlink - reset rc */
 	rc = 0;
 	symlink = (struct smb2_symlink_err_rsp *)err_buf->ErrorData;
 	sub_len = le16_to_cpu(symlink->SubstituteNameLength);
 	sub_offset = le16_to_cpu(symlink->SubstituteNameOffset);
-	print_len = le16_to_cpu(symlink->PrintNameLength);
-	print_offset = le16_to_cpu(symlink->PrintNameOffset);
-
-	if (get_rfc1002_length(err_buf) + 4 <
-			SMB2_SYMLINK_STRUCT_SIZE + sub_offset + sub_len) {
-		kfree(utf16_path);
-		return -ENOENT;
-	}
-
-	if (get_rfc1002_length(err_buf) + 4 <
-			SMB2_SYMLINK_STRUCT_SIZE + print_offset + print_len) {
-		kfree(utf16_path);
-		return -ENOENT;
-	}
-
 	*target_path = cifs_strndup_from_utf16(
 				(char *)symlink->PathBuffer + sub_offset,
 				sub_len, true, cifs_sb->local_nls);
@@ -1075,7 +1036,7 @@ static long smb3_zero_range(struct file *file, struct cifs_tcon *tcon,
 
 	xid = get_xid();
 
-	inode = cfile->dentry->d_inode;
+	inode = d_inode(cfile->dentry);
 	cifsi = CIFS_I(inode);
 
 	/* if file not oplocked can't be sure whether asking to extend size */
@@ -1126,7 +1087,7 @@ static long smb3_punch_hole(struct file *file, struct cifs_tcon *tcon,
 
 	xid = get_xid();
 
-	inode = cfile->dentry->d_inode;
+	inode = d_inode(cfile->dentry);
 	cifsi = CIFS_I(inode);
 
 	/* Need to make file sparse, if not already, before freeing range. */
@@ -1147,6 +1108,64 @@ static long smb3_punch_hole(struct file *file, struct cifs_tcon *tcon,
 	return rc;
 }
 
+static long smb3_simple_falloc(struct file *file, struct cifs_tcon *tcon,
+			    loff_t off, loff_t len, bool keep_size)
+{
+	struct inode *inode;
+	struct cifsInodeInfo *cifsi;
+	struct cifsFileInfo *cfile = file->private_data;
+	long rc = -EOPNOTSUPP;
+	unsigned int xid;
+
+	xid = get_xid();
+
+	inode = d_inode(cfile->dentry);
+	cifsi = CIFS_I(inode);
+
+	/* if file not oplocked can't be sure whether asking to extend size */
+	if (!CIFS_CACHE_READ(cifsi))
+		if (keep_size == false)
+			return -EOPNOTSUPP;
+
+	/*
+	 * Files are non-sparse by default so falloc may be a no-op
+	 * Must check if file sparse. If not sparse, and not extending
+	 * then no need to do anything since file already allocated
+	 */
+	if ((cifsi->cifsAttrs & FILE_ATTRIBUTE_SPARSE_FILE) == 0) {
+		if (keep_size == true)
+			return 0;
+		/* check if extending file */
+		else if (i_size_read(inode) >= off + len)
+			/* not extending file and already not sparse */
+			return 0;
+		/* BB: in future add else clause to extend file */
+		else
+			return -EOPNOTSUPP;
+	}
+
+	if ((keep_size == true) || (i_size_read(inode) >= off + len)) {
+		/*
+		 * Check if falloc starts within first few pages of file
+		 * and ends within a few pages of the end of file to
+		 * ensure that most of file is being forced to be
+		 * fallocated now. If so then setting whole file sparse
+		 * ie potentially making a few extra pages at the beginning
+		 * or end of the file non-sparse via set_sparse is harmless.
+		 */
+		if ((off > 8192) || (off + len + 8192 < i_size_read(inode)))
+			return -EOPNOTSUPP;
+
+		rc = smb2_set_sparse(xid, tcon, cfile, inode, false);
+	}
+	/* BB: else ... in future add code to extend file and set sparse */
+
+
+	free_xid(xid);
+	return rc;
+}
+
+
 static long smb3_fallocate(struct file *file, struct cifs_tcon *tcon, int mode,
 			   loff_t off, loff_t len)
 {
@@ -1157,7 +1176,10 @@ static long smb3_fallocate(struct file *file, struct cifs_tcon *tcon, int mode,
 		if (mode & FALLOC_FL_KEEP_SIZE)
 			return smb3_zero_range(file, tcon, off, len, true);
 		return smb3_zero_range(file, tcon, off, len, false);
-	}
+	} else if (mode == FALLOC_FL_KEEP_SIZE)
+		return smb3_simple_falloc(file, tcon, off, len, true);
+	else if (mode == 0)
+		return smb3_simple_falloc(file, tcon, off, len, false);
 
 	return -EOPNOTSUPP;
 }
@@ -1395,7 +1417,6 @@ struct smb_version_operations smb20_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
-	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -1436,7 +1457,6 @@ struct smb_version_operations smb20_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
-	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -1475,7 +1495,6 @@ struct smb_version_operations smb21_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
-	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -1518,7 +1537,6 @@ struct smb_version_operations smb21_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
-	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,
@@ -1558,7 +1576,6 @@ struct smb_version_operations smb30_operations = {
 	.print_stats = smb2_print_stats,
 	.dump_share_caps = smb2_dump_share_caps,
 	.is_oplock_break = smb2_is_valid_oplock_break,
-	.handle_cancelled_mid = smb2_handle_cancelled_mid,
 	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
@@ -1601,7 +1618,6 @@ struct smb_version_operations smb30_operations = {
 	.close_dir = smb2_close_dir,
 	.calc_smb_size = smb2_calc_size,
 	.is_status_pending = smb2_is_status_pending,
-	.is_session_expired = smb2_is_session_expired,
 	.oplock_response = smb2_oplock_response,
 	.queryfs = smb2_queryfs,
 	.mand_lock = smb2_mand_lock,

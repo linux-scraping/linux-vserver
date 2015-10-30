@@ -100,12 +100,12 @@ int ecryptfs_parse_packet_length(unsigned char *data, size_t *size,
 	(*size) = 0;
 	if (data[0] < 192) {
 		/* One-byte length */
-		(*size) = (unsigned char)data[0];
+		(*size) = data[0];
 		(*length_size) = 1;
 	} else if (data[0] < 224) {
 		/* Two-byte length */
-		(*size) = (((unsigned char)(data[0]) - 192) * 256);
-		(*size) += ((unsigned char)(data[1]) + 192);
+		(*size) = (data[0] - 192) * 256;
+		(*size) += data[1] + 192;
 		(*length_size) = 2;
 	} else if (data[0] == 255) {
 		/* If support is added, adjust ECRYPTFS_MAX_PKT_LEN_SIZE */
@@ -458,8 +458,7 @@ out:
  * @auth_tok_key: key containing the authentication token
  * @auth_tok: authentication token
  *
- * Returns zero on valid auth tok; -EINVAL if the payload is invalid; or
- * -EKEYREVOKED if the key was revoked before we acquired its semaphore.
+ * Returns zero on valid auth tok; -EINVAL otherwise
  */
 static int
 ecryptfs_verify_auth_tok_from_key(struct key *auth_tok_key,
@@ -468,12 +467,6 @@ ecryptfs_verify_auth_tok_from_key(struct key *auth_tok_key,
 	int rc = 0;
 
 	(*auth_tok) = ecryptfs_get_key_payload_data(auth_tok_key);
-	if (IS_ERR(*auth_tok)) {
-		rc = PTR_ERR(*auth_tok);
-		*auth_tok = NULL;
-		goto out;
-	}
-
 	if (ecryptfs_verify_version((*auth_tok)->version)) {
 		printk(KERN_ERR "Data structure version mismatch. Userspace "
 		       "tools must match eCryptfs kernel module with major "
@@ -898,7 +891,7 @@ struct ecryptfs_parse_tag_70_packet_silly_stack {
 	struct blkcipher_desc desc;
 	char fnek_sig_hex[ECRYPTFS_SIG_SIZE_HEX + 1];
 	char iv[ECRYPTFS_MAX_IV_BYTES];
-	char cipher_string[ECRYPTFS_MAX_CIPHER_NAME_SIZE];
+	char cipher_string[ECRYPTFS_MAX_CIPHER_NAME_SIZE + 1];
 };
 
 /**

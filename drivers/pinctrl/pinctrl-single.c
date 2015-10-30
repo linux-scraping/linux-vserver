@@ -1273,9 +1273,9 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 
 		/* Parse pins in each row from LSB */
 		while (mask) {
-			bit_pos = __ffs(mask);
+			bit_pos = ffs(mask);
 			pin_num_from_lsb = bit_pos / pcs->bits_per_pin;
-			mask_pos = ((pcs->fmask) << bit_pos);
+			mask_pos = ((pcs->fmask) << (bit_pos - 1));
 			val_pos = val & mask_pos;
 			submask = mask & mask_pos;
 
@@ -1501,7 +1501,7 @@ static void pcs_free_resources(struct pcs_device *pcs)
 		}							\
 	} while (0);
 
-static struct of_device_id pcs_of_match[];
+static const struct of_device_id pcs_of_match[];
 
 static int pcs_add_gpio_func(struct device_node *node, struct pcs_device *pcs)
 {
@@ -1576,9 +1576,6 @@ static inline void pcs_irq_set(struct pcs_soc_data *pcs_soc,
 		else
 			mask &= ~soc_mask;
 		pcs->write(mask, pcswi->reg);
-
-		/* flush posted write */
-		mask = pcs->read(pcswi->reg);
 		raw_spin_unlock(&pcs->lock);
 	}
 
@@ -1854,7 +1851,7 @@ static int pcs_probe(struct platform_device *pdev)
 	ret = of_property_read_u32(np, "pinctrl-single,function-mask",
 				   &pcs->fmask);
 	if (!ret) {
-		pcs->fshift = __ffs(pcs->fmask);
+		pcs->fshift = ffs(pcs->fmask) - 1;
 		pcs->fmax = pcs->fmask >> pcs->fshift;
 	} else {
 		/* If mask property doesn't exist, function mux is invalid. */
@@ -2003,7 +2000,7 @@ static const struct pcs_soc_data pinconf_single = {
 	.flags = PCS_FEAT_PINCONF,
 };
 
-static struct of_device_id pcs_of_match[] = {
+static const struct of_device_id pcs_of_match[] = {
 	{ .compatible = "ti,omap3-padconf", .data = &pinctrl_single_omap_wkup },
 	{ .compatible = "ti,omap4-padconf", .data = &pinctrl_single_omap_wkup },
 	{ .compatible = "ti,omap5-padconf", .data = &pinctrl_single_omap_wkup },
@@ -2019,7 +2016,6 @@ static struct platform_driver pcs_driver = {
 	.probe		= pcs_probe,
 	.remove		= pcs_remove,
 	.driver = {
-		.owner		= THIS_MODULE,
 		.name		= DRIVER_NAME,
 		.of_match_table	= pcs_of_match,
 	},

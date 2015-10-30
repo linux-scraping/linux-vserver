@@ -672,7 +672,7 @@ static int core_tpg_setup_virtual_lun0(struct se_portal_group *se_tpg)
 }
 
 int core_tpg_register(
-	struct target_core_fabric_ops *tfo,
+	const struct target_core_fabric_ops *tfo,
 	struct se_wwn *se_wwn,
 	struct se_portal_group *se_tpg,
 	void *tpg_fabric_ptr,
@@ -843,8 +843,6 @@ void core_tpg_remove_lun(
 	struct se_portal_group *tpg,
 	struct se_lun *lun)
 {
-	lun->lun_shutdown = true;
-
 	core_clear_lun_from_tpg(lun, tpg);
 	transport_clear_lun_ref(lun);
 
@@ -852,7 +850,6 @@ void core_tpg_remove_lun(
 
 	spin_lock(&tpg->tpg_lun_lock);
 	lun->lun_status = TRANSPORT_LUN_STATUS_FREE;
-	lun->lun_shutdown = false;
 	spin_unlock(&tpg->tpg_lun_lock);
 
 	percpu_ref_exit(&lun->lun_ref);

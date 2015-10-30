@@ -308,7 +308,8 @@ struct optimized_kprobe {
 /* Architecture dependent functions for direct jump optimization */
 extern int arch_prepared_optinsn(struct arch_optimized_insn *optinsn);
 extern int arch_check_optimized_kprobe(struct optimized_kprobe *op);
-extern int arch_prepare_optimized_kprobe(struct optimized_kprobe *op);
+extern int arch_prepare_optimized_kprobe(struct optimized_kprobe *op,
+					 struct kprobe *orig);
 extern void arch_remove_optimized_kprobe(struct optimized_kprobe *op);
 extern void arch_optimize_kprobes(struct list_head *oplist);
 extern void arch_unoptimize_kprobes(struct list_head *oplist,
@@ -327,9 +328,7 @@ extern int proc_kprobes_optimization_handler(struct ctl_table *table,
 					     int write, void __user *buffer,
 					     size_t *length, loff_t *ppos);
 #endif
-extern void wait_for_kprobe_optimizer(void);
-#else
-static inline void wait_for_kprobe_optimizer(void) { }
+
 #endif /* CONFIG_OPTPROBES */
 #ifdef CONFIG_KPROBES_ON_FTRACE
 extern void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
@@ -337,6 +336,7 @@ extern void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 extern int arch_prepare_kprobe_ftrace(struct kprobe *p);
 #endif
 
+int arch_check_ftrace_location(struct kprobe *p);
 
 /* Get the kprobe at this addr (if any) - called with preemption disabled */
 struct kprobe *get_kprobe(void *addr);

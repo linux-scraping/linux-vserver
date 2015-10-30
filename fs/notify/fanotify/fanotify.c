@@ -67,7 +67,18 @@ static int fanotify_get_response(struct fsnotify_group *group,
 
 	pr_debug("%s: group=%p event=%p\n", __func__, group, event);
 
-	wait_event(group->fanotify_data.access_waitq, event->response);
+	wait_event(group->fanotify_data.access_waitq, event->response ||
+				atomic_read(&group->fanotify_data.bypass_perm));
+
+	if (!event->response) {	/* bypass_perm set */
+		/*
+		 * Event was canceled because group is being destroyed. Remove
+		 * it from group's event list because we are responsible for
+		 * freeing the permission event.
+		 */
+		fsnotify_remove_event(group, &event->fae.fse);
+		return 0;
+	}
 
 	/* userspace responded, convert to something usable */
 	switch (event->response) {
@@ -104,8 +115,8 @@ static bool fanotify_should_send_event(struct fsnotify_mark *inode_mark,
 		return false;
 
 	/* sorry, fanotify only gives a damn about files and dirs */
-	if (!S_ISREG(path->dentry->d_inode->i_mode) &&
-	    !S_ISDIR(path->dentry->d_inode->i_mode))
+	if (!d_is_reg(path->dentry) &&
+	    !d_can_lookup(path->dentry))
 		return false;
 
 	if (inode_mark && vfsmnt_mark) {
@@ -128,11 +139,12 @@ static bool fanotify_should_send_event(struct fsnotify_mark *inode_mark,
 		BUG();
 	}
 
-	if (S_ISDIR(path->dentry->d_inode->i_mode) &&
-	    (marks_ignored_mask & FS_ISDIR))
+	if (d_is_dir(path->dentry) &&
+	    !(marks_mask & FS_ISDIR & ~marks_ignored_mask))
 		return false;
 
-	if (event_mask & marks_mask & ~marks_ignored_mask)
+	if (event_mask & FAN_ALL_OUTGOING_EVENTS & marks_mask &
+				 ~marks_ignored_mask)
 		return true;
 
 	return false;

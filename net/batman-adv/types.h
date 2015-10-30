@@ -199,12 +199,12 @@ struct batadv_orig_bat_iv {
 /**
  * struct batadv_orig_node - structure for orig_list maintaining nodes of mesh
  * @orig: originator ethernet address
- * @primary_addr: hosts primary interface address
  * @ifinfo_list: list for routers per outgoing interface
  * @last_bonding_candidate: pointer to last ifinfo of last used router
  * @batadv_dat_addr_t:  address of the orig node in the distributed hash
  * @last_seen: time when last packet from this node was received
  * @bcast_seqno_reset: time when the broadcast seqno window was reset
+ * @mcast_handler_lock: synchronizes mcast-capability and -flag changes
  * @mcast_flags: multicast flags announced by the orig node
  * @mcast_want_all_unsnoop_node: a list node for the
  *  mcast.want_all_unsnoopables list
@@ -244,7 +244,6 @@ struct batadv_orig_bat_iv {
  */
 struct batadv_orig_node {
 	uint8_t orig[ETH_ALEN];
-	uint8_t primary_addr[ETH_ALEN];
 	struct hlist_head ifinfo_list;
 	struct batadv_orig_ifinfo *last_bonding_candidate;
 #ifdef CONFIG_BATMAN_ADV_DAT
@@ -253,6 +252,8 @@ struct batadv_orig_node {
 	unsigned long last_seen;
 	unsigned long bcast_seqno_reset;
 #ifdef CONFIG_BATMAN_ADV_MCAST
+	/* synchronizes mcast tvlv specific orig changes */
+	spinlock_t mcast_handler_lock;
 	uint8_t mcast_flags;
 	struct hlist_node mcast_want_all_unsnoopables_node;
 	struct hlist_node mcast_want_all_ipv4_node;
@@ -301,7 +302,7 @@ enum batadv_orig_capabilities {
 	BATADV_ORIG_CAPA_HAS_DAT,
 	BATADV_ORIG_CAPA_HAS_NC,
 	BATADV_ORIG_CAPA_HAS_TT,
-	BATADV_ORIG_CAPA_HAS_MCAST = BIT(3),
+	BATADV_ORIG_CAPA_HAS_MCAST,
 };
 
 /**
@@ -970,7 +971,7 @@ struct batadv_tt_orig_list_entry {
 };
 
 /**
- * struct batadv_tt_change_node - structure for tt changes occured
+ * struct batadv_tt_change_node - structure for tt changes occurred
  * @list: list node for batadv_priv_tt::changes_list
  * @change: holds the actual translation table diff data
  */

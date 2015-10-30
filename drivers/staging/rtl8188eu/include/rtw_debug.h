@@ -75,7 +75,7 @@ extern u32 GlobalDebugLevel;
 #define DBG_88E_LEVEL(_level, fmt, arg...)				\
 	do {								\
 		if (_level <= GlobalDebugLevel)				\
-			pr_info(DRIVER_PREFIX fmt, ##arg);	\
+			pr_info(DRIVER_PREFIX"ERROR " fmt, ##arg);	\
 	} while (0)
 
 #define DBG_88E(...)							\
@@ -106,7 +106,7 @@ extern u32 GlobalDebugLevel;
 			u8	*ptr = (u8 *)_hexdata;			\
 			pr_info("%s", DRIVER_PREFIX);			\
 			pr_info(_titlestring);				\
-			for (__i = 0; __i < (int)_hexdatalen; __i++ ) {	\
+			for (__i = 0; __i < (int)_hexdatalen; __i++) {	\
 				pr_info("%02X%s", ptr[__i],		\
 					 (((__i + 1) % 4) == 0) ?	\
 					 "  " : " ");	\

@@ -490,7 +490,7 @@ static int hash_digest_key(struct caam_hash_ctx *ctx, const u8 *key_in,
 	ret = caam_jr_enqueue(jrdev, desc, split_key_done, &result);
 	if (!ret) {
 		/* in progress */
-		wait_for_completion(&result.completion);
+		wait_for_completion_interruptible(&result.completion);
 		ret = result.err;
 #ifdef DEBUG
 		print_hex_dump(KERN_ERR,
@@ -1173,6 +1173,7 @@ static int ahash_final_no_ctx(struct ahash_request *req)
 		return -ENOMEM;
 	}
 
+	edesc->sec4_sg_bytes = 0;
 	sh_len = desc_len(sh_desc);
 	desc = edesc->hw_desc;
 	init_job_desc_shared(desc, ptr, sh_len, HDR_SHARE_DEFER | HDR_REVERSE);
@@ -1861,7 +1862,6 @@ caam_hash_alloc(struct caam_hash_template *template,
 			 template->name);
 		snprintf(alg->cra_driver_name, CRYPTO_MAX_ALG_NAME, "%s",
 			 template->driver_name);
-		t_alg->ahash_alg.setkey = NULL;
 	}
 	alg->cra_module = THIS_MODULE;
 	alg->cra_init = caam_hash_cra_init;

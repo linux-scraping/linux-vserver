@@ -40,4 +40,9 @@ config MACH_SUN8I
 	select ARM_GIC
 	select MFD_SUN6I_PRCM
 
+config MACH_SUN9I
+	bool "Allwinner (sun9i) SoCs support"
+	default ARCH_SUNXI
+	select ARM_GIC
+
 endif

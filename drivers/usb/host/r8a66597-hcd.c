@@ -1269,7 +1269,7 @@ static void set_td_timer(struct r8a66597 *r8a66597, struct r8a66597_td *td)
 			time = 30;
 			break;
 		default:
-			time = 50;
+			time = 300;
 			break;
 		}
 
@@ -1785,7 +1785,6 @@ static void r8a66597_td_timer(unsigned long _r8a66597)
 		pipe = td->pipe;
 		pipe_stop(r8a66597, pipe);
 
-		/* Select a different address or endpoint */
 		new_td = td;
 		do {
 			list_move_tail(&new_td->queue,
@@ -1795,8 +1794,7 @@ static void r8a66597_td_timer(unsigned long _r8a66597)
 				new_td = td;
 				break;
 			}
-		} while (td != new_td && td->address == new_td->address &&
-			td->pipe->info.epnum == new_td->pipe->info.epnum);
+		} while (td != new_td && td->address == new_td->address);
 
 		start_transfer(r8a66597, new_td);
 
@@ -2138,12 +2136,13 @@ static int r8a66597_hub_status_data(struct usb_hcd *hcd, char *buf)
 static void r8a66597_hub_descriptor(struct r8a66597 *r8a66597,
 				    struct usb_hub_descriptor *desc)
 {
-	desc->bDescriptorType = 0x29;
+	desc->bDescriptorType = USB_DT_HUB;
 	desc->bHubContrCurrent = 0;
 	desc->bNbrPorts = r8a66597->max_root_hub;
 	desc->bDescLength = 9;
 	desc->bPwrOn2PwrGood = 0;
-	desc->wHubCharacteristics = cpu_to_le16(0x0011);
+	desc->wHubCharacteristics =
+		cpu_to_le16(HUB_CHAR_INDV_PORT_LPSM | HUB_CHAR_NO_OCPM);
 	desc->u.hs.DeviceRemovable[0] =
 		((1 << r8a66597->max_root_hub) - 1) << 1;
 	desc->u.hs.DeviceRemovable[1] = ~0;
@@ -2485,9 +2484,8 @@ static int r8a66597_probe(struct platform_device *pdev)
 		r8a66597->max_root_hub = 2;
 
 	spin_lock_init(&r8a66597->lock);
-	init_timer(&r8a66597->rh_timer);
-	r8a66597->rh_timer.function = r8a66597_timer;
-	r8a66597->rh_timer.data = (unsigned long)r8a66597;
+	setup_timer(&r8a66597->rh_timer, r8a66597_timer,
+		    (unsigned long)r8a66597);
 	r8a66597->reg = reg;
 
 	/* make sure no interrupts are pending */
@@ -2498,9 +2496,8 @@ static int r8a66597_probe(struct platform_device *pdev)
 
 	for (i = 0; i < R8A66597_MAX_NUM_PIPE; i++) {
 		INIT_LIST_HEAD(&r8a66597->pipe_queue[i]);
-		init_timer(&r8a66597->td_timer[i]);
-		r8a66597->td_timer[i].function = r8a66597_td_timer;
-		r8a66597->td_timer[i].data = (unsigned long)r8a66597;
+		setup_timer(&r8a66597->td_timer[i], r8a66597_td_timer,
+			    (unsigned long)r8a66597);
 		setup_timer(&r8a66597->interval_timer[i],
 				r8a66597_interval_timer,
 				(unsigned long)r8a66597);
@@ -2537,7 +2534,6 @@ static struct platform_driver r8a66597_driver = {
 	.remove =	r8a66597_remove,
 	.driver		= {
 		.name = hcd_name,
-		.owner	= THIS_MODULE,
 		.pm	= R8A66597_DEV_PM_OPS,
 	},
 };

@@ -597,6 +597,7 @@ static int drv260x_probe(struct i2c_client *client,
 	}
 
 	haptics->input_dev->name = "drv260x:haptics";
+	haptics->input_dev->dev.parent = client->dev.parent;
 	haptics->input_dev->close = drv260x_close;
 	input_set_drvdata(haptics->input_dev, haptics);
 	input_set_capability(haptics->input_dev, EV_FF, FF_RUMBLE);
@@ -638,8 +639,7 @@ static int drv260x_probe(struct i2c_client *client,
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int drv260x_suspend(struct device *dev)
+static int __maybe_unused drv260x_suspend(struct device *dev)
 {
 	struct drv260x_data *haptics = dev_get_drvdata(dev);
 	int ret = 0;
@@ -671,7 +671,7 @@ out:
 	return ret;
 }
 
-static int drv260x_resume(struct device *dev)
+static int __maybe_unused drv260x_resume(struct device *dev)
 {
 	struct drv260x_data *haptics = dev_get_drvdata(dev);
 	int ret = 0;
@@ -701,7 +701,6 @@ out:
 	mutex_unlock(&haptics->input_dev->mutex);
 	return ret;
 }
-#endif
 
 static SIMPLE_DEV_PM_OPS(drv260x_pm_ops, drv260x_suspend, drv260x_resume);
 
@@ -734,7 +733,6 @@ static struct i2c_driver drv260x_driver = {
 };
 module_i2c_driver(drv260x_driver);
 
-MODULE_ALIAS("platform:drv260x-haptics");
 MODULE_DESCRIPTION("TI DRV260x haptics driver");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dan Murphy <dmurphy@ti.com>");

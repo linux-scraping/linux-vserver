@@ -24,7 +24,6 @@
 #include <net/checksum.h>
 
 #include <net/inet_sock.h>
-#include <net/inet_common.h>
 #include <net/sock.h>
 #include <net/xfrm.h>
 
@@ -171,15 +170,6 @@ const char *dccp_packet_name(const int type)
 
 EXPORT_SYMBOL_GPL(dccp_packet_name);
 
-static void dccp_sk_destruct(struct sock *sk)
-{
-	struct dccp_sock *dp = dccp_sk(sk);
-
-	ccid_hc_tx_delete(dp->dccps_hc_tx_ccid, sk);
-	dp->dccps_hc_tx_ccid = NULL;
-	inet_sock_destruct(sk);
-}
-
 int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
@@ -189,7 +179,6 @@ int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 	icsk->icsk_syn_retries	= sysctl_dccp_request_retries;
 	sk->sk_state		= DCCP_CLOSED;
 	sk->sk_write_space	= dccp_write_space;
-	sk->sk_destruct		= dccp_sk_destruct;
 	icsk->icsk_sync_mss	= dccp_sync_mss;
 	dp->dccps_mss_cache	= 536;
 	dp->dccps_rate_last	= jiffies;
@@ -212,7 +201,10 @@ void dccp_destroy_sock(struct sock *sk)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 
-	__skb_queue_purge(&sk->sk_write_queue);
+	/*
+	 * DCCP doesn't use sk_write_queue, just sk_send_head
+	 * for retransmissions
+	 */
 	if (sk->sk_send_head != NULL) {
 		kfree_skb(sk->sk_send_head);
 		sk->sk_send_head = NULL;
@@ -230,7 +222,8 @@ void dccp_destroy_sock(struct sock *sk)
 		dp->dccps_hc_rx_ackvec = NULL;
 	}
 	ccid_hc_rx_delete(dp->dccps_hc_rx_ccid, sk);
-	dp->dccps_hc_rx_ccid = NULL;
+	ccid_hc_tx_delete(dp->dccps_hc_tx_ccid, sk);
+	dp->dccps_hc_rx_ccid = dp->dccps_hc_tx_ccid = NULL;
 
 	/* clean up feature negotiation state */
 	dccp_feat_list_purge(&dp->dccps_featneg);
@@ -710,7 +703,7 @@ EXPORT_SYMBOL_GPL(compat_dccp_getsockopt);
 
 static int dccp_msghdr_parse(struct msghdr *msg, struct sk_buff *skb)
 {
-	struct cmsghdr *cmsg = CMSG_FIRSTHDR(msg);
+	struct cmsghdr *cmsg;
 
 	/*
 	 * Assign an (opaque) qpolicy priority value to skb->priority.
@@ -724,8 +717,7 @@ static int dccp_msghdr_parse(struct msghdr *msg, struct sk_buff *skb)
 	 */
 	skb->priority = 0;
 
-	for (; cmsg != NULL; cmsg = CMSG_NXTHDR(msg, cmsg)) {
-
+	for_each_cmsghdr(cmsg, msg) {
 		if (!CMSG_OK(msg, cmsg))
 			return -EINVAL;
 
@@ -749,8 +741,7 @@ static int dccp_msghdr_parse(struct msghdr *msg, struct sk_buff *skb)
 	return 0;
 }
 
-int dccp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
-		 size_t len)
+int dccp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
 	const struct dccp_sock *dp = dccp_sk(sk);
 	const int flags = msg->msg_flags;
@@ -788,7 +779,7 @@ int dccp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		goto out_release;
 
 	skb_reserve(skb, sk->sk_prot->max_header);
-	rc = memcpy_fromiovec(skb_put(skb, len), msg->msg_iov, len);
+	rc = memcpy_from_msg(skb_put(skb, len), msg, len);
 	if (rc != 0)
 		goto out_discard;
 
@@ -814,8 +805,8 @@ out_discard:
 
 EXPORT_SYMBOL_GPL(dccp_sendmsg);
 
-int dccp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
-		 size_t len, int nonblock, int flags, int *addr_len)
+int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
+		 int flags, int *addr_len)
 {
 	const struct dccp_hdr *dh;
 	long timeo;
@@ -903,7 +894,7 @@ verify_sock_status:
 		else if (len < skb->len)
 			msg->msg_flags |= MSG_TRUNC;
 
-		if (skb_copy_datagram_iovec(skb, 0, msg->msg_iov, len)) {
+		if (skb_copy_datagram_msg(skb, 0, msg, len)) {
 			/* Exception. Bailout! */
 			len = -EFAULT;
 			break;

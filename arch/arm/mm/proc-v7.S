@@ -153,6 +153,21 @@ ENDPROC(cpu_v7_do_resume)
 #endif
 
 /*
+ * Cortex-A8
+ */
+	globl_equ	cpu_ca8_proc_init,	cpu_v7_proc_init
+	globl_equ	cpu_ca8_proc_fin,	cpu_v7_proc_fin
+	globl_equ	cpu_ca8_reset,		cpu_v7_reset
+	globl_equ	cpu_ca8_do_idle,	cpu_v7_do_idle
+	globl_equ	cpu_ca8_dcache_clean_area, cpu_v7_dcache_clean_area
+	globl_equ	cpu_ca8_set_pte_ext,	cpu_v7_set_pte_ext
+	globl_equ	cpu_ca8_suspend_size,	cpu_v7_suspend_size
+#ifdef CONFIG_ARM_CPU_SUSPEND
+	globl_equ	cpu_ca8_do_suspend,	cpu_v7_do_suspend
+	globl_equ	cpu_ca8_do_resume,	cpu_v7_do_resume
+#endif
+
+/*
  * Cortex-A9 processor functions
  */
 	globl_equ	cpu_ca9mp_proc_init,	cpu_v7_proc_init
@@ -253,7 +268,10 @@ __v7_ca15mp_setup:
 __v7_b15mp_setup:
 __v7_ca17mp_setup:
 	mov	r10, #0
-1:
+1:	adr	r12, __v7_setup_stack		@ the local stack
+	stmia	r12, {r0-r5, lr}		@ v7_invalidate_l1 touches r0-r6
+	bl      v7_invalidate_l1
+	ldmia	r12, {r0-r5, lr}
 #ifdef CONFIG_SMP
 	ALT_SMP(mrc	p15, 0, r0, c1, c0, 1)
 	ALT_UP(mov	r0, #(1 << 6))		@ fake it for UP
@@ -262,7 +280,7 @@ __v7_ca17mp_setup:
 	orreq	r0, r0, r10			@ Enable CPU-specific SMP bits
 	mcreq	p15, 0, r0, c1, c0, 1
 #endif
-	b	__v7_setup
+	b	__v7_setup_cont
 
 __v7_pj4b_setup:
 #ifdef CONFIG_CPU_PJ4B
@@ -320,10 +338,11 @@ __v7_pj4b_setup:
 
 __v7_setup:
 	adr	r12, __v7_setup_stack		@ the local stack
-	stmia	r12, {r0-r5, r7, r9, r11, lr}
-	bl      v7_flush_dcache_louis
-	ldmia	r12, {r0-r5, r7, r9, r11, lr}
+	stmia	r12, {r0-r5, lr}		@ v7_invalidate_l1 touches r0-r6
+	bl      v7_invalidate_l1
+	ldmia	r12, {r0-r5, lr}
 
+__v7_setup_cont:
 	mrc	p15, 0, r0, c0, c0, 0		@ read main ID register
 	and	r10, r0, #0xff000000		@ ARM?
 	teq	r10, #0x41000000
@@ -445,13 +464,16 @@ ENDPROC(__v7_setup)
 
 	.align	2
 __v7_setup_stack:
-	.space	4 * 11				@ 11 registers
+	.space	4 * 7				@ 12 registers
 
 	__INITDATA
 
 	@ define struct processor (see <asm/proc-fns.h> and proc-macros.S)
 	define_processor_functions v7, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
+#ifndef CONFIG_ARM_LPAE
+	define_processor_functions ca8, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
 	define_processor_functions ca9mp, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
+#endif
 #ifdef CONFIG_CPU_PJ4B
 	define_processor_functions pj4b, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
 #endif
@@ -462,19 +484,19 @@ __v7_setup_stack:
 	string	cpu_elf_name, "v7"
 	.align
 
-	.section ".proc.info.init", #alloc, #execinstr
+	.section ".proc.info.init", #alloc
 
 	/*
 	 * Standard v7 proc info content
 	 */
-.macro __v7_proc initfunc, mm_mmuflags = 0, io_mmuflags = 0, hwcaps = 0, proc_fns = v7_processor_functions
+.macro __v7_proc name, initfunc, mm_mmuflags = 0, io_mmuflags = 0, hwcaps = 0, proc_fns = v7_processor_functions
 	ALT_SMP(.long	PMD_TYPE_SECT | PMD_SECT_AP_WRITE | PMD_SECT_AP_READ | \
 			PMD_SECT_AF | PMD_FLAGS_SMP | \mm_mmuflags)
 	ALT_UP(.long	PMD_TYPE_SECT | PMD_SECT_AP_WRITE | PMD_SECT_AP_READ | \
 			PMD_SECT_AF | PMD_FLAGS_UP | \mm_mmuflags)
 	.long	PMD_TYPE_SECT | PMD_SECT_AP_WRITE | \
 		PMD_SECT_AP_READ | PMD_SECT_AF | \io_mmuflags
-	W(b)	\initfunc
+	initfn	\initfunc, \name
 	.long	cpu_arch_name
 	.long	cpu_elf_name
 	.long	HWCAP_SWP | HWCAP_HALF | HWCAP_THUMB | HWCAP_FAST_MULT | \
@@ -494,7 +516,7 @@ __v7_setup_stack:
 __v7_ca5mp_proc_info:
 	.long	0x410fc050
 	.long	0xff0ffff0
-	__v7_proc __v7_ca5mp_setup
+	__v7_proc __v7_ca5mp_proc_info, __v7_ca5mp_setup
 	.size	__v7_ca5mp_proc_info, . - __v7_ca5mp_proc_info
 
 	/*
@@ -504,8 +526,18 @@ __v7_ca5mp_proc_info:
 __v7_ca9mp_proc_info:
 	.long	0x410fc090
 	.long	0xff0ffff0
-	__v7_proc __v7_ca9mp_setup, proc_fns = ca9mp_processor_functions
+	__v7_proc __v7_ca9mp_proc_info, __v7_ca9mp_setup, proc_fns = ca9mp_processor_functions
 	.size	__v7_ca9mp_proc_info, . - __v7_ca9mp_proc_info
+
+	/*
+	 * ARM Ltd. Cortex A8 processor.
+	 */
+	.type	__v7_ca8_proc_info, #object
+__v7_ca8_proc_info:
+	.long	0x410fc080
+	.long	0xff0ffff0
+	__v7_proc __v7_ca8_proc_info, __v7_setup, proc_fns = ca8_processor_functions
+	.size	__v7_ca8_proc_info, . - __v7_ca8_proc_info
 
 #endif	/* CONFIG_ARM_LPAE */
 
@@ -517,7 +549,7 @@ __v7_ca9mp_proc_info:
 __v7_pj4b_proc_info:
 	.long	0x560f5800
 	.long	0xff0fff00
-	__v7_proc __v7_pj4b_setup, proc_fns = pj4b_processor_functions
+	__v7_proc __v7_pj4b_proc_info, __v7_pj4b_setup, proc_fns = pj4b_processor_functions
 	.size	__v7_pj4b_proc_info, . - __v7_pj4b_proc_info
 #endif
 
@@ -528,7 +560,7 @@ __v7_pj4b_proc_info:
 __v7_cr7mp_proc_info:
 	.long	0x410fc170
 	.long	0xff0ffff0
-	__v7_proc __v7_cr7mp_setup
+	__v7_proc __v7_cr7mp_proc_info, __v7_cr7mp_setup
 	.size	__v7_cr7mp_proc_info, . - __v7_cr7mp_proc_info
 
 	/*
@@ -538,7 +570,7 @@ __v7_cr7mp_proc_info:
 __v7_ca7mp_proc_info:
 	.long	0x410fc070
 	.long	0xff0ffff0
-	__v7_proc __v7_ca7mp_setup
+	__v7_proc __v7_ca7mp_proc_info, __v7_ca7mp_setup
 	.size	__v7_ca7mp_proc_info, . - __v7_ca7mp_proc_info
 
 	/*
@@ -548,7 +580,7 @@ __v7_ca7mp_proc_info:
 __v7_ca12mp_proc_info:
 	.long	0x410fc0d0
 	.long	0xff0ffff0
-	__v7_proc __v7_ca12mp_setup
+	__v7_proc __v7_ca12mp_proc_info, __v7_ca12mp_setup
 	.size	__v7_ca12mp_proc_info, . - __v7_ca12mp_proc_info
 
 	/*
@@ -558,7 +590,7 @@ __v7_ca12mp_proc_info:
 __v7_ca15mp_proc_info:
 	.long	0x410fc0f0
 	.long	0xff0ffff0
-	__v7_proc __v7_ca15mp_setup
+	__v7_proc __v7_ca15mp_proc_info, __v7_ca15mp_setup
 	.size	__v7_ca15mp_proc_info, . - __v7_ca15mp_proc_info
 
 	/*
@@ -568,7 +600,7 @@ __v7_ca15mp_proc_info:
 __v7_b15mp_proc_info:
 	.long	0x420f00f0
 	.long	0xff0ffff0
-	__v7_proc __v7_b15mp_setup
+	__v7_proc __v7_b15mp_proc_info, __v7_b15mp_setup
 	.size	__v7_b15mp_proc_info, . - __v7_b15mp_proc_info
 
 	/*
@@ -578,7 +610,7 @@ __v7_b15mp_proc_info:
 __v7_ca17mp_proc_info:
 	.long	0x410fc0e0
 	.long	0xff0ffff0
-	__v7_proc __v7_ca17mp_setup
+	__v7_proc __v7_ca17mp_proc_info, __v7_ca17mp_setup
 	.size	__v7_ca17mp_proc_info, . - __v7_ca17mp_proc_info
 
 	/*
@@ -591,9 +623,10 @@ __krait_proc_info:
 	/*
 	 * Some Krait processors don't indicate support for SDIV and UDIV
 	 * instructions in the ARM instruction set, even though they actually
-	 * do support them.
+	 * do support them. They also don't indicate support for fused multiply
+	 * instructions even though they actually do support them.
 	 */
-	__v7_proc __v7_setup, hwcaps = HWCAP_IDIV
+	__v7_proc __krait_proc_info, __v7_setup, hwcaps = HWCAP_IDIV | HWCAP_VFPv4
 	.size	__krait_proc_info, . - __krait_proc_info
 
 	/*
@@ -603,5 +636,5 @@ __krait_proc_info:
 __v7_proc_info:
 	.long	0x000f0000		@ Required ID value
 	.long	0x000f0000		@ Mask for ID
-	__v7_proc __v7_setup
+	__v7_proc __v7_proc_info, __v7_setup
 	.size	__v7_proc_info, . - __v7_proc_info

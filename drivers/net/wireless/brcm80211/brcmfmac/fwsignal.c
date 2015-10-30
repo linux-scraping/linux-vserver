@@ -26,15 +26,15 @@
 
 #include <brcmu_utils.h>
 #include <brcmu_wifi.h>
-#include "dhd.h"
-#include "dhd_dbg.h"
-#include "dhd_bus.h"
+#include "core.h"
+#include "debug.h"
+#include "bus.h"
 #include "fwil.h"
 #include "fwil_types.h"
 #include "fweh.h"
 #include "fwsignal.h"
 #include "p2p.h"
-#include "wl_cfg80211.h"
+#include "cfg80211.h"
 #include "proto.h"
 
 /**
@@ -635,7 +635,7 @@ static int brcmf_fws_hanger_pushpkt(struct brcmf_fws_hanger *h,
 	return 0;
 }
 
-static inline int brcmf_fws_hanger_poppkt(struct brcmf_fws_hanger *h,
+static int brcmf_fws_hanger_poppkt(struct brcmf_fws_hanger *h,
 					  u32 slot_id, struct sk_buff **pktout,
 					  bool remove_item)
 {

@@ -676,11 +676,8 @@ static int deliver_to_subscribers(struct snd_seq_client *client,
 	if (atomic)
 		read_lock(&grp->list_lock);
 	else
-		down_read_nested(&grp->list_mutex, hop);
+		down_read(&grp->list_mutex);
 	list_for_each_entry(subs, &grp->list_head, src_list) {
-		/* both ports ready? */
-		if (atomic_read(&subs->ref_count) != 2)
-			continue;
 		event->dest = subs->info.dest;
 		if (subs->info.flags & SNDRV_SEQ_PORT_SUBS_TIMESTAMP)
 			/* convert time according to flag with subscription */
@@ -1136,7 +1133,7 @@ static int snd_seq_ioctl_system_info(struct snd_seq_client *client, void __user 
 	/* fill the info fields */
 	info.queues = SNDRV_SEQ_MAX_QUEUES;
 	info.clients = SNDRV_SEQ_MAX_CLIENTS;
-	info.ports = 256;	/* fixed limit */
+	info.ports = SNDRV_SEQ_MAX_PORTS;
 	info.channels = 256;	/* fixed limit */
 	info.cur_clients = client_usage.cur;
 	info.cur_queues = snd_seq_queue_get_cur_queues();
@@ -1260,7 +1257,6 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client,
 	struct snd_seq_client_port *port;
 	struct snd_seq_port_info info;
 	struct snd_seq_port_callback *callback;
-	int port_idx;
 
 	if (copy_from_user(&info, arg, sizeof(info)))
 		return -EFAULT;
@@ -1274,9 +1270,7 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client,
 		return -ENOMEM;
 
 	if (client->type == USER_CLIENT && info.kernel) {
-		port_idx = port->addr.port;
-		snd_seq_port_unlock(port);
-		snd_seq_delete_port(client, port_idx);
+		snd_seq_delete_port(client, port->addr.port);
 		return -EINVAL;
 	}
 	if (client->type == KERNEL_CLIENT) {
@@ -1285,7 +1279,6 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client,
 				port->owner = callback->owner;
 			port->private_data = callback->private_data;
 			port->private_free = callback->private_free;
-			port->callback_all = callback->callback_all;
 			port->event_input = callback->event_input;
 			port->c_src.open = callback->subscribe;
 			port->c_src.close = callback->unsubscribe;
@@ -1298,7 +1291,6 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client,
 
 	snd_seq_set_port_info(port, &info);
 	snd_seq_system_client_ev_port_start(port->addr.client, port->addr.port);
-	snd_seq_port_unlock(port);
 
 	if (copy_to_user(arg, &info, sizeof(info)))
 		return -EFAULT;
@@ -1887,6 +1879,7 @@ static int snd_seq_ioctl_get_client_pool(struct snd_seq_client *client,
 	if (cptr == NULL)
 		return -ENOENT;
 	memset(&info, 0, sizeof(info));
+	info.client = cptr->number;
 	info.output_pool = cptr->pool->size;
 	info.output_room = cptr->pool->room;
 	info.output_free = info.output_pool;
@@ -1925,7 +1918,6 @@ static int snd_seq_ioctl_set_client_pool(struct snd_seq_client *client,
 	     info.output_pool != client->pool->size)) {
 		if (snd_seq_write_pool_allocated(client)) {
 			/* remove all existing cells */
-			snd_seq_pool_mark_closing(client->pool);
 			snd_seq_queue_client_leave_cells(client->number);
 			snd_seq_pool_done(client->pool);
 		}
@@ -1970,7 +1962,7 @@ static int snd_seq_ioctl_remove_events(struct snd_seq_client *client,
 		 * No restrictions so for a user client we can clear
 		 * the whole fifo
 		 */
-		if (client->type == USER_CLIENT && client->data.user.fifo)
+		if (client->type == USER_CLIENT)
 			snd_seq_fifo_clear(client->data.user.fifo);
 	}
 
@@ -2579,6 +2571,8 @@ static const struct file_operations snd_seq_f_ops =
 	.compat_ioctl =	snd_seq_ioctl_compat,
 };
 
+static struct device seq_dev;
+
 /* 
  * register sequencer device 
  */
@@ -2586,12 +2580,17 @@ int __init snd_sequencer_device_init(void)
 {
 	int err;
 
+	snd_device_initialize(&seq_dev, NULL);
+	dev_set_name(&seq_dev, "seq");
+
 	if (mutex_lock_interruptible(&register_mutex))
 		return -ERESTARTSYS;
 
-	if ((err = snd_register_device(SNDRV_DEVICE_TYPE_SEQUENCER, NULL, 0,
-				       &snd_seq_f_ops, NULL, "seq")) < 0) {
+	err = snd_register_device(SNDRV_DEVICE_TYPE_SEQUENCER, NULL, 0,
+				  &snd_seq_f_ops, NULL, &seq_dev);
+	if (err < 0) {
 		mutex_unlock(&register_mutex);
+		put_device(&seq_dev);
 		return err;
 	}
 	
@@ -2607,5 +2606,6 @@ int __init snd_sequencer_device_init(void)
  */
 void __exit snd_sequencer_device_done(void)
 {
-	snd_unregister_device(SNDRV_DEVICE_TYPE_SEQUENCER, NULL, 0);
+	snd_unregister_device(&seq_dev);
+	put_device(&seq_dev);
 }

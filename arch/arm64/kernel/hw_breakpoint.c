@@ -35,7 +35,6 @@
 #include <asm/traps.h>
 #include <asm/cputype.h>
 #include <asm/system_misc.h>
-#include <asm/uaccess.h>
 
 /* Breakpoint currently in use for each BRP. */
 static DEFINE_PER_CPU(struct perf_event *, bp_on_reg[ARM_MAX_BRP]);
@@ -528,7 +527,7 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
 	 * Disallow per-task kernel breakpoints since these would
 	 * complicate the stepping code.
 	 */
-	if (info->ctrl.privilege == AARCH64_BREAKPOINT_EL1 && bp->hw.bp_target)
+	if (info->ctrl.privilege == AARCH64_BREAKPOINT_EL1 && bp->hw.target)
 		return -EINVAL;
 
 	return 0;
@@ -689,7 +688,7 @@ static int watchpoint_handler(unsigned long addr, unsigned int esr,
 
 		/* Check if the watchpoint value matches. */
 		val = read_wb_reg(AARCH64_DBG_REG_WVR, i);
-		if (val != (untagged_addr(addr) & ~alignment_mask))
+		if (val != (addr & ~alignment_mask))
 			goto unlock;
 
 		/* Possible match, check the byte address select to confirm. */
@@ -895,7 +894,7 @@ static struct notifier_block hw_breakpoint_reset_nb = {
 	.notifier_call = hw_breakpoint_reset_notify,
 };
 
-#ifdef CONFIG_ARM64_CPU_SUSPEND
+#ifdef CONFIG_CPU_PM
 extern void cpu_suspend_set_dbg_restorer(void (*hw_bp_restore)(void *));
 #else
 static inline void cpu_suspend_set_dbg_restorer(void (*hw_bp_restore)(void *))

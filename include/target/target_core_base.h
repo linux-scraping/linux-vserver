@@ -77,8 +77,6 @@
 #define DA_UNMAP_GRANULARITY_ALIGNMENT_DEFAULT	0
 /* Default max_write_same_len, disabled by default */
 #define DA_MAX_WRITE_SAME_LEN			0
-/* Default max transfer length */
-#define DA_FABRIC_MAX_SECTORS			8192
 /* Use a model alias based on the configfs backend device name */
 #define DA_EMULATE_MODEL_ALIAS			0
 /* Emulation for Direct Page Out */
@@ -167,10 +165,8 @@ enum se_cmd_flags_table {
 	SCF_SEND_DELAYED_TAS		= 0x00004000,
 	SCF_ALUA_NON_OPTIMIZED		= 0x00008000,
 	SCF_PASSTHROUGH_SG_TO_MEM_NOALLOC = 0x00020000,
-	SCF_ACK_KREF			= 0x00040000,
 	SCF_COMPARE_AND_WRITE		= 0x00080000,
 	SCF_COMPARE_AND_WRITE_POST	= 0x00100000,
-	SCF_CMD_XCOPY_PASSTHROUGH	= 0x00200000,
 };
 
 /* struct se_dev_entry->lun_flags and struct se_lun->lun_access */
@@ -231,7 +227,6 @@ enum tcm_tmreq_table {
 	TMR_LUN_RESET		= 5,
 	TMR_TARGET_WARM_RESET	= 6,
 	TMR_TARGET_COLD_RESET	= 7,
-	TMR_UNKNOWN		= 0xff,
 };
 
 /* fabric independent task management response values */
@@ -477,6 +472,12 @@ struct se_dif_v1_tuple {
 	__be32			ref_tag;
 };
 
+/* for sam_task_attr */
+#define TCM_SIMPLE_TAG	0x20
+#define TCM_HEAD_TAG	0x21
+#define TCM_ORDERED_TAG	0x22
+#define TCM_ACA_TAG	0x24
+
 struct se_cmd {
 	/* SAM response code being sent to initiator */
 	u8			scsi_status;
@@ -517,11 +518,11 @@ struct se_cmd {
 	struct list_head	se_cmd_list;
 	struct completion	cmd_wait_comp;
 	struct kref		cmd_kref;
-	struct target_core_fabric_ops *se_tfo;
+	const struct target_core_fabric_ops *se_tfo;
 	sense_reason_t		(*execute_cmd)(struct se_cmd *);
 	sense_reason_t		(*execute_rw)(struct se_cmd *, struct scatterlist *,
 					      u32, enum dma_data_direction);
-	sense_reason_t (*transport_complete_callback)(struct se_cmd *, bool, int *);
+	sense_reason_t (*transport_complete_callback)(struct se_cmd *, bool);
 
 	unsigned char		*t_task_cdb;
 	unsigned char		__t_task_cdb[TCM_MAX_COMMAND_SIZE];
@@ -536,8 +537,6 @@ struct se_cmd {
 #define CMD_T_DEV_ACTIVE	(1 << 7)
 #define CMD_T_REQUEST_STOP	(1 << 8)
 #define CMD_T_BUSY		(1 << 9)
-#define CMD_T_TAS		(1 << 10)
-#define CMD_T_FABRIC_STOP	(1 << 11)
 	spinlock_t		t_state_lock;
 	struct completion	t_transport_stop_comp;
 
@@ -590,6 +589,7 @@ struct se_node_acl {
 	bool			acl_stop:1;
 	u32			queue_depth;
 	u32			acl_index;
+	enum target_prot_type	saved_prot_type;
 #define MAX_ACL_TAG_SIZE 64
 	char			acl_tag[MAX_ACL_TAG_SIZE];
 	/* Used for PR SPEC_I_PT=1 and REGISTER_AND_MOVE */
@@ -615,6 +615,7 @@ struct se_session {
 	unsigned		sess_tearing_down:1;
 	u64			sess_bin_isid;
 	enum target_prot_op	sup_prot_ops;
+	enum target_prot_type	sess_prot_type;
 	struct se_node_acl	*se_node_acl;
 	struct se_portal_group *se_tpg;
 	void			*fabric_sess_ptr;
@@ -691,7 +692,6 @@ struct se_dev_attrib {
 	u32		hw_block_size;
 	u32		block_size;
 	u32		hw_max_sectors;
-	u32		fabric_max_sectors;
 	u32		optimal_sectors;
 	u32		hw_queue_depth;
 	u32		queue_depth;
@@ -720,7 +720,6 @@ struct se_lun {
 	u32			lun_access;
 	u32			lun_flags;
 	u32			unpacked_lun;
-	bool			lun_shutdown;
 	atomic_t		lun_acl_count;
 	spinlock_t		lun_acl_lock;
 	spinlock_t		lun_sep_lock;
@@ -891,7 +890,7 @@ struct se_portal_group {
 	/* List of TCM sessions associated wth this TPG */
 	struct list_head	tpg_sess_list;
 	/* Pointer to $FABRIC_MOD dependent code */
-	struct target_core_fabric_ops *se_tpg_tfo;
+	const struct target_core_fabric_ops *se_tpg_tfo;
 	struct se_wwn		*se_tpg_wwn;
 	struct config_group	tpg_group;
 	struct config_group	*tpg_default_groups[7];

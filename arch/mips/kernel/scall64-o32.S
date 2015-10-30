@@ -186,6 +186,7 @@ LEAF(sys32_syscall)
 	dsll	t1, t0, 3
 	beqz	v0, einval
 	ld	t2, sys32_call_table(t1)		# syscall routine
+	sd	a0, PT_R2(sp)		# call routine directly on restart
 
 	move	a0, a1			# shift argument registers
 	move	a1, a2
@@ -358,7 +359,7 @@ EXPORT(sys32_call_table)
 	PTR	compat_sys_writev
 	PTR	sys_cacheflush
 	PTR	sys_cachectl
-	PTR	__sys_sysmips
+	PTR	sys_sysmips
 	PTR	sys_ni_syscall			/* 4150 */
 	PTR	sys_getsid
 	PTR	sys_fdatasync
@@ -491,7 +492,7 @@ EXPORT(sys32_call_table)
 	PTR	sys_ni_syscall			/* available, was setaltroot */
 	PTR	sys_add_key			/* 4280 */
 	PTR	sys_request_key
-	PTR	compat_sys_keyctl
+	PTR	sys_keyctl
 	PTR	sys_set_thread_area
 	PTR	sys_inotify_init
 	PTR	sys_inotify_add_watch		/* 4285 */
@@ -565,4 +566,5 @@ EXPORT(sys32_call_table)
 	PTR	sys_getrandom
 	PTR	sys_memfd_create
 	PTR	sys_bpf				/* 4355 */
+	PTR	compat_sys_execveat
 	.size	sys32_call_table,.-sys32_call_table

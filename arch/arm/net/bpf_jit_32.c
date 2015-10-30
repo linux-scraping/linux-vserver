@@ -54,6 +54,7 @@
 #define SEEN_DATA		(1 << (BPF_MEMWORDS + 3))
 
 #define FLAG_NEED_X_RESET	(1 << 0)
+#define FLAG_IMM_OVERFLOW	(1 << 1)
 
 struct jit_ctx {
 	const struct bpf_prog *skf;
@@ -161,6 +162,19 @@ static inline int mem_words_used(struct jit_ctx *ctx)
 	return fls(ctx->seen & SEEN_MEM);
 }
 
+static inline bool is_load_to_a(u16 inst)
+{
+	switch (inst) {
+	case BPF_LD | BPF_W | BPF_LEN:
+	case BPF_LD | BPF_W | BPF_ABS:
+	case BPF_LD | BPF_H | BPF_ABS:
+	case BPF_LD | BPF_B | BPF_ABS:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void jit_fill_hole(void *area, unsigned int size)
 {
 	u32 *ptr;
@@ -172,6 +186,7 @@ static void jit_fill_hole(void *area, unsigned int size)
 static void build_prologue(struct jit_ctx *ctx)
 {
 	u16 reg_set = saved_regs(ctx);
+	u16 first_inst = ctx->skf->insns[0].code;
 	u16 off;
 
 #ifdef CONFIG_FRAME_POINTER
@@ -201,7 +216,7 @@ static void build_prologue(struct jit_ctx *ctx)
 		emit(ARM_MOV_I(r_X, 0), ctx);
 
 	/* do not leak kernel data to userspace */
-	if (bpf_needs_clear_a(&ctx->skf->insns[0]))
+	if ((first_inst != (BPF_RET | BPF_K)) && !(is_load_to_a(first_inst)))
 		emit(ARM_MOV_I(r_A, 0), ctx);
 
 	/* stack space for the BPF_MEM words */
@@ -278,6 +293,15 @@ static u16 imm_offset(u32 k, struct jit_ctx *ctx)
 
 	/* PC in ARM mode == address of the instruction + 8 */
 	imm = offset - (8 + ctx->idx * 4);
+
+	if (imm & ~0xfff) {
+		/*
+		 * literal pool is too far, signal it into flags. we
+		 * can only detect it on the second pass unfortunately.
+		 */
+		ctx->flags |= FLAG_IMM_OVERFLOW;
+		return 0;
+	}
 
 	return imm;
 }
@@ -852,6 +876,14 @@ b_epilogue:
 		default:
 			return -1;
 		}
+
+		if (ctx->flags & FLAG_IMM_OVERFLOW)
+			/*
+			 * this instruction generated an overflow when
+			 * trying to access the literal pool, so
+			 * delegate this filter to the kernel interpreter.
+			 */
+			return -1;
 	}
 
 	/* compute offsets only during the first pass */
@@ -914,7 +946,14 @@ void bpf_jit_compile(struct bpf_prog *fp)
 	ctx.idx = 0;
 
 	build_prologue(&ctx);
-	build_body(&ctx);
+	if (build_body(&ctx) < 0) {
+#if __LINUX_ARM_ARCH__ < 7
+		if (ctx.imm_count)
+			kfree(ctx.imms);
+#endif
+		bpf_jit_binary_free(header);
+		goto out;
+	}
 	build_epilogue(&ctx);
 
 	flush_icache_range((u32)ctx.target, (u32)(ctx.target + ctx.idx));

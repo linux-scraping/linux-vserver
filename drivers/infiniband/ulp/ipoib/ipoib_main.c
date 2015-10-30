@@ -98,33 +98,6 @@ static struct ib_client ipoib_client = {
 	.remove = ipoib_remove_one
 };
 
-#ifdef CONFIG_INFINIBAND_IPOIB_DEBUG
-static int ipoib_netdev_event(struct notifier_block *this,
-			      unsigned long event, void *ptr)
-{
-	struct netdev_notifier_info *ni = ptr;
-	struct net_device *dev = ni->dev;
-
-	if (dev->netdev_ops->ndo_open != ipoib_open)
-		return NOTIFY_DONE;
-
-	switch (event) {
-	case NETDEV_REGISTER:
-		ipoib_create_debug_files(dev);
-		break;
-	case NETDEV_CHANGENAME:
-		ipoib_delete_debug_files(dev);
-		ipoib_create_debug_files(dev);
-		break;
-	case NETDEV_UNREGISTER:
-		ipoib_delete_debug_files(dev);
-		break;
-	}
-
-	return NOTIFY_DONE;
-}
-#endif
-
 int ipoib_open(struct net_device *dev)
 {
 	struct ipoib_dev_priv *priv = netdev_priv(dev);
@@ -135,7 +108,7 @@ int ipoib_open(struct net_device *dev)
 
 	set_bit(IPOIB_FLAG_ADMIN_UP, &priv->flags);
 
-	if (ipoib_ib_dev_open(dev, 1)) {
+	if (ipoib_ib_dev_open(dev)) {
 		if (!test_bit(IPOIB_PKEY_ASSIGNED, &priv->flags))
 			return 0;
 		goto err_disable;
@@ -166,7 +139,7 @@ int ipoib_open(struct net_device *dev)
 	return 0;
 
 err_stop:
-	ipoib_ib_dev_stop(dev, 1);
+	ipoib_ib_dev_stop(dev);
 
 err_disable:
 	clear_bit(IPOIB_FLAG_ADMIN_UP, &priv->flags);
@@ -184,8 +157,8 @@ static int ipoib_stop(struct net_device *dev)
 
 	netif_stop_queue(dev);
 
-	ipoib_ib_dev_down(dev, 1);
-	ipoib_ib_dev_stop(dev, 0);
+	ipoib_ib_dev_down(dev);
+	ipoib_ib_dev_stop(dev);
 
 	if (!test_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags)) {
 		struct ipoib_dev_priv *cpriv;
@@ -263,7 +236,8 @@ int ipoib_set_mode(struct net_device *dev, const char *buf)
 		priv->tx_wr.send_flags &= ~IB_SEND_IP_CSUM;
 
 		ipoib_flush_paths(dev);
-		return (!rtnl_trylock()) ? -EBUSY : 0;
+		rtnl_lock();
+		return 0;
 	}
 
 	if (!strcmp(buf, "datagram\n")) {
@@ -272,7 +246,8 @@ int ipoib_set_mode(struct net_device *dev, const char *buf)
 		dev_set_mtu(dev, min(priv->mcast_mtu, dev->mtu));
 		rtnl_unlock();
 		ipoib_flush_paths(dev);
-		return (!rtnl_trylock()) ? -EBUSY : 0;
+		rtnl_lock();
+		return 0;
 	}
 
 	return -EINVAL;
@@ -665,8 +640,10 @@ static void neigh_add_path(struct sk_buff *skb, u8 *daddr,
 
 		if (!path->query && path_rec_start(dev, path))
 			goto err_path;
-
-		__skb_queue_tail(&neigh->queue, skb);
+		if (skb_queue_len(&neigh->queue) < IPOIB_MAX_PATH_REC_QUEUE)
+			__skb_queue_tail(&neigh->queue, skb);
+		else
+			goto err_drop;
 	}
 
 	spin_unlock_irqrestore(&priv->lock, flags);
@@ -701,7 +678,12 @@ static void unicast_arp_send(struct sk_buff *skb, struct net_device *dev,
 			new_path = 1;
 		}
 		if (path) {
-			__skb_queue_tail(&path->queue, skb);
+			if (skb_queue_len(&path->queue) < IPOIB_MAX_PATH_REC_QUEUE) {
+				__skb_queue_tail(&path->queue, skb);
+			} else {
+				++dev->stats.tx_dropped;
+				dev_kfree_skb_any(skb);
+			}
 
 			if (!path->query && path_rec_start(dev, path)) {
 				spin_unlock_irqrestore(&priv->lock, flags);
@@ -864,7 +846,19 @@ static void ipoib_set_mcast_list(struct net_device *dev)
 		return;
 	}
 
-	queue_work(ipoib_workqueue, &priv->restart_task);
+	queue_work(priv->wq, &priv->restart_task);
+}
+
+static int ipoib_get_iflink(const struct net_device *dev)
+{
+	struct ipoib_dev_priv *priv = netdev_priv(dev);
+
+	/* parent interface */
+	if (!test_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags))
+		return dev->ifindex;
+
+	/* child/vlan interface */
+	return priv->parent->ifindex;
 }
 
 static u32 ipoib_addr_hash(struct ipoib_neigh_hash *htbl, u8 *daddr)
@@ -958,7 +952,7 @@ static void __ipoib_reap_neigh(struct ipoib_dev_priv *priv)
 						   rcu_dereference_protected(neigh->hnext,
 									     lockdep_is_held(&priv->lock)));
 				/* remove from path/mc list */
-				list_del_init(&neigh->list);
+				list_del(&neigh->list);
 				call_rcu(&neigh->rcu, ipoib_neigh_reclaim);
 			} else {
 				np = &neigh->hnext;
@@ -979,7 +973,7 @@ static void ipoib_reap_neigh(struct work_struct *work)
 	__ipoib_reap_neigh(priv);
 
 	if (!test_bit(IPOIB_STOP_NEIGH_GC, &priv->flags))
-		queue_delayed_work(ipoib_workqueue, &priv->neigh_reap_task,
+		queue_delayed_work(priv->wq, &priv->neigh_reap_task,
 				   arp_tbl.gc_interval);
 }
 
@@ -1121,7 +1115,7 @@ void ipoib_neigh_free(struct ipoib_neigh *neigh)
 					   rcu_dereference_protected(neigh->hnext,
 								     lockdep_is_held(&priv->lock)));
 			/* remove from parent list */
-			list_del_init(&neigh->list);
+			list_del(&neigh->list);
 			call_rcu(&neigh->rcu, ipoib_neigh_reclaim);
 			return;
 		} else {
@@ -1158,7 +1152,7 @@ static int ipoib_neigh_hash_init(struct ipoib_dev_priv *priv)
 
 	/* start garbage collection */
 	clear_bit(IPOIB_STOP_NEIGH_GC, &priv->flags);
-	queue_delayed_work(ipoib_workqueue, &priv->neigh_reap_task,
+	queue_delayed_work(priv->wq, &priv->neigh_reap_task,
 			   arp_tbl.gc_interval);
 
 	return 0;
@@ -1206,7 +1200,7 @@ void ipoib_del_neighs_by_gid(struct net_device *dev, u8 *gid)
 						   rcu_dereference_protected(neigh->hnext,
 									     lockdep_is_held(&priv->lock)));
 				/* remove from parent list */
-				list_del_init(&neigh->list);
+				list_del(&neigh->list);
 				call_rcu(&neigh->rcu, ipoib_neigh_reclaim);
 			} else {
 				np = &neigh->hnext;
@@ -1248,7 +1242,7 @@ static void ipoib_flush_neighs(struct ipoib_dev_priv *priv)
 					   rcu_dereference_protected(neigh->hnext,
 								     lockdep_is_held(&priv->lock)));
 			/* remove from path/mc list */
-			list_del_init(&neigh->list);
+			list_del(&neigh->list);
 			call_rcu(&neigh->rcu, ipoib_neigh_reclaim);
 		}
 	}
@@ -1287,15 +1281,13 @@ int ipoib_dev_init(struct net_device *dev, struct ib_device *ca, int port)
 {
 	struct ipoib_dev_priv *priv = netdev_priv(dev);
 
-	if (ipoib_neigh_hash_init(priv) < 0)
-		goto out;
 	/* Allocate RX/TX "rings" to hold queued skbs */
 	priv->rx_ring =	kzalloc(ipoib_recvq_size * sizeof *priv->rx_ring,
 				GFP_KERNEL);
 	if (!priv->rx_ring) {
 		printk(KERN_WARNING "%s: failed to allocate RX ring (%d entries)\n",
 		       ca->name, ipoib_recvq_size);
-		goto out_neigh_hash_cleanup;
+		goto out;
 	}
 
 	priv->tx_ring = vzalloc(ipoib_sendq_size * sizeof *priv->tx_ring);
@@ -1310,7 +1302,17 @@ int ipoib_dev_init(struct net_device *dev, struct ib_device *ca, int port)
 	if (ipoib_ib_dev_init(dev, ca, port))
 		goto out_tx_ring_cleanup;
 
+	/*
+	 * Must be after ipoib_ib_dev_init so we can allocate a per
+	 * device wq there and use it here
+	 */
+	if (ipoib_neigh_hash_init(priv) < 0)
+		goto out_dev_uninit;
+
 	return 0;
+
+out_dev_uninit:
+	ipoib_ib_dev_cleanup(dev);
 
 out_tx_ring_cleanup:
 	vfree(priv->tx_ring);
@@ -1318,8 +1320,6 @@ out_tx_ring_cleanup:
 out_rx_ring_cleanup:
 	kfree(priv->rx_ring);
 
-out_neigh_hash_cleanup:
-	ipoib_neigh_hash_uninit(dev);
 out:
 	return -ENOMEM;
 }
@@ -1331,6 +1331,8 @@ void ipoib_dev_cleanup(struct net_device *dev)
 
 	ASSERT_RTNL();
 
+	ipoib_delete_debug_files(dev);
+
 	/* Delete any child interfaces first */
 	list_for_each_entry_safe(cpriv, tcpriv, &priv->child_intfs, list) {
 		/* Stop GC on child */
@@ -1340,6 +1342,12 @@ void ipoib_dev_cleanup(struct net_device *dev)
 	}
 	unregister_netdevice_many(&head);
 
+	/*
+	 * Must be before ipoib_ib_dev_cleanup or we delete an in use
+	 * work queue
+	 */
+	ipoib_neigh_hash_uninit(dev);
+
 	ipoib_ib_dev_cleanup(dev);
 
 	kfree(priv->rx_ring);
@@ -1347,8 +1355,6 @@ void ipoib_dev_cleanup(struct net_device *dev)
 
 	priv->rx_ring = NULL;
 	priv->tx_ring = NULL;
-
-	ipoib_neigh_hash_uninit(dev);
 }
 
 static const struct header_ops ipoib_header_ops = {
@@ -1364,6 +1370,7 @@ static const struct net_device_ops ipoib_netdev_ops = {
 	.ndo_start_xmit	 	 = ipoib_start_xmit,
 	.ndo_tx_timeout		 = ipoib_timeout,
 	.ndo_set_rx_mode	 = ipoib_set_mcast_list,
+	.ndo_get_iflink		 = ipoib_get_iflink,
 };
 
 void ipoib_setup(struct net_device *dev)
@@ -1635,6 +1642,8 @@ static struct net_device *ipoib_add_port(const char *format,
 		goto register_failed;
 	}
 
+	ipoib_create_debug_files(priv->dev);
+
 	if (ipoib_cm_add_mode_attr(priv->dev))
 		goto sysfs_failed;
 	if (ipoib_add_pkey_attr(priv->dev))
@@ -1649,14 +1658,16 @@ static struct net_device *ipoib_add_port(const char *format,
 	return priv->dev;
 
 sysfs_failed:
+	ipoib_delete_debug_files(priv->dev);
 	unregister_netdev(priv->dev);
 
 register_failed:
 	ib_unregister_event_handler(&priv->event_handler);
+	flush_workqueue(ipoib_workqueue);
 	/* Stop GC if started before flush */
 	set_bit(IPOIB_STOP_NEIGH_GC, &priv->flags);
 	cancel_delayed_work(&priv->neigh_reap_task);
-	flush_workqueue(ipoib_workqueue);
+	flush_workqueue(priv->wq);
 
 event_failed:
 	ipoib_dev_cleanup(priv->dev);
@@ -1719,6 +1730,7 @@ static void ipoib_remove_one(struct ib_device *device)
 
 	list_for_each_entry_safe(priv, tmp, dev_list, list) {
 		ib_unregister_event_handler(&priv->event_handler);
+		flush_workqueue(ipoib_workqueue);
 
 		rtnl_lock();
 		dev_change_flags(priv->dev, priv->dev->flags & ~IFF_UP);
@@ -1727,7 +1739,7 @@ static void ipoib_remove_one(struct ib_device *device)
 		/* Stop GC */
 		set_bit(IPOIB_STOP_NEIGH_GC, &priv->flags);
 		cancel_delayed_work(&priv->neigh_reap_task);
-		flush_workqueue(ipoib_workqueue);
+		flush_workqueue(priv->wq);
 
 		unregister_netdev(priv->dev);
 		free_netdev(priv->dev);
@@ -1735,12 +1747,6 @@ static void ipoib_remove_one(struct ib_device *device)
 
 	kfree(dev_list);
 }
-
-#ifdef CONFIG_INFINIBAND_IPOIB_DEBUG
-static struct notifier_block ipoib_netdev_notifier = {
-	.notifier_call = ipoib_netdev_event,
-};
-#endif
 
 static int __init ipoib_init_module(void)
 {
@@ -1768,14 +1774,16 @@ static int __init ipoib_init_module(void)
 		return ret;
 
 	/*
-	 * We create our own workqueue mainly because we want to be
-	 * able to flush it when devices are being removed.  We can't
-	 * use schedule_work()/flush_scheduled_work() because both
-	 * unregister_netdev() and linkwatch_event take the rtnl lock,
-	 * so flush_scheduled_work() can deadlock during device
-	 * removal.
+	 * We create a global workqueue here that is used for all flush
+	 * operations.  However, if you attempt to flush a workqueue
+	 * from a task on that same workqueue, it deadlocks the system.
+	 * We want to be able to flush the tasks associated with a
+	 * specific net device, so we also create a workqueue for each
+	 * netdevice.  We queue up the tasks for that device only on
+	 * its private workqueue, and we only queue up flush events
+	 * on our global flush workqueue.  This avoids the deadlocks.
 	 */
-	ipoib_workqueue = create_singlethread_workqueue("ipoib");
+	ipoib_workqueue = create_singlethread_workqueue("ipoib_flush");
 	if (!ipoib_workqueue) {
 		ret = -ENOMEM;
 		goto err_fs;
@@ -1791,9 +1799,6 @@ static int __init ipoib_init_module(void)
 	if (ret)
 		goto err_client;
 
-#ifdef CONFIG_INFINIBAND_IPOIB_DEBUG
-	register_netdevice_notifier(&ipoib_netdev_notifier);
-#endif
 	return 0;
 
 err_client:
@@ -1811,9 +1816,6 @@ err_fs:
 
 static void __exit ipoib_cleanup_module(void)
 {
-#ifdef CONFIG_INFINIBAND_IPOIB_DEBUG
-	unregister_netdevice_notifier(&ipoib_netdev_notifier);
-#endif
 	ipoib_netlink_fini();
 	ib_unregister_client(&ipoib_client);
 	ib_sa_unregister_client(&ipoib_sa_client);

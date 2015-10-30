@@ -105,7 +105,7 @@ static int slice_area_is_free(struct mm_struct *mm, unsigned long addr,
 	if ((mm->task_size - len) < addr)
 		return 0;
 	vma = find_vma(mm, addr);
-	return (!vma || (addr + len) <= vm_start_gap(vma));
+	return (!vma || (addr + len) <= vma->vm_start);
 }
 
 static int slice_low_has_vma(struct mm_struct *mm, unsigned long slice)
@@ -643,35 +643,6 @@ void slice_set_user_psize(struct mm_struct *mm, unsigned int psize)
 
  bail:
 	spin_unlock_irqrestore(&slice_convert_lock, flags);
-}
-
-void slice_set_psize(struct mm_struct *mm, unsigned long address,
-		     unsigned int psize)
-{
-	unsigned char *hpsizes;
-	unsigned long i, flags;
-	u64 *lpsizes;
-
-	spin_lock_irqsave(&slice_convert_lock, flags);
-	if (address < SLICE_LOW_TOP) {
-		i = GET_LOW_SLICE_INDEX(address);
-		lpsizes = &mm->context.low_slices_psize;
-		*lpsizes = (*lpsizes & ~(0xful << (i * 4))) |
-			((unsigned long) psize << (i * 4));
-	} else {
-		int index, mask_index;
-		i = GET_HIGH_SLICE_INDEX(address);
-		hpsizes = mm->context.high_slices_psize;
-		mask_index = i & 0x1;
-		index = i >> 1;
-		hpsizes[index] = (hpsizes[index] &
-				  ~(0xf << (mask_index * 4))) |
-			(((unsigned long)psize) << (mask_index * 4));
-	}
-
-	spin_unlock_irqrestore(&slice_convert_lock, flags);
-
-	copro_flush_all_slbs(mm);
 }
 
 void slice_set_range_psize(struct mm_struct *mm, unsigned long start,

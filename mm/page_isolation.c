@@ -68,7 +68,7 @@ out:
 
 	spin_unlock_irqrestore(&zone->lock, flags);
 	if (!ret)
-		drain_all_pages();
+		drain_all_pages(zone);
 	return ret;
 }
 
@@ -101,7 +101,8 @@ void unset_migratetype_isolate(struct page *page, unsigned migratetype)
 			buddy_idx = __find_buddy_index(page_idx, order);
 			buddy = page + (buddy_idx - page_idx);
 
-			if (!is_migrate_isolate_page(buddy)) {
+			if (pfn_valid_within(page_to_pfn(buddy)) &&
+			    !is_migrate_isolate_page(buddy)) {
 				__isolate_free_page(page, order);
 				kernel_map_pages(page, (1 << order), 1);
 				set_page_refcounted(page);
@@ -299,11 +300,11 @@ struct page *alloc_migrate_target(struct page *page, unsigned long private,
 	 * now as a simple work-around, we use the next node for destination.
 	 */
 	if (PageHuge(page)) {
-		int node = next_online_node(page_to_nid(page));
-		if (node == MAX_NUMNODES)
-			node = first_online_node;
+		nodemask_t src = nodemask_of_node(page_to_nid(page));
+		nodemask_t dst;
+		nodes_complement(dst, src);
 		return alloc_huge_page_node(page_hstate(compound_head(page)),
-					    node);
+					    next_node(page_to_nid(page), dst));
 	}
 
 	if (PageHighMem(page))

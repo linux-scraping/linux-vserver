@@ -131,6 +131,8 @@ static void do_suspend(void)
 		goto out_resume;
 	}
 
+	xen_arch_suspend();
+
 	si.cancelled = 1;
 
 	err = stop_machine(xen_suspend, &si, cpumask_of(0));
@@ -148,11 +150,12 @@ static void do_suspend(void)
 		si.cancelled = 1;
 	}
 
+	xen_arch_resume();
+
 out_resume:
-	if (!si.cancelled) {
-		xen_arch_resume();
+	if (!si.cancelled)
 		xs_resume();
-	} else
+	else
 		xs_suspend_cancel();
 
 	dpm_resume_end(si.cancelled ? PMSG_THAW : PMSG_RESTORE);
@@ -272,16 +275,8 @@ static void sysrq_handler(struct xenbus_watch *watch, const char **vec,
 	err = xenbus_transaction_start(&xbt);
 	if (err)
 		return;
-	err = xenbus_scanf(xbt, "control", "sysrq", "%c", &sysrq_key);
-	if (err < 0) {
-		/*
-		 * The Xenstore watch fires directly after registering it and
-		 * after a suspend/resume cycle. So ENOENT is no error but
-		 * might happen in those cases.
-		 */
-		if (err != -ENOENT)
-			pr_err("Error %d reading sysrq code in control/sysrq\n",
-			       err);
+	if (!xenbus_scanf(xbt, "control", "sysrq", "%c", &sysrq_key)) {
+		pr_err("Unable to read sysrq code in control/sysrq\n");
 		xenbus_transaction_end(xbt, 1);
 		return;
 	}

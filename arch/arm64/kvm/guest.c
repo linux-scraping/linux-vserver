@@ -184,7 +184,7 @@ static int get_timer_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg)
 	u64 val;
 
 	val = kvm_arm_timer_get_reg(vcpu, reg->id);
-	return copy_to_user(uaddr, &val, KVM_REG_SIZE(reg->id)) ? -EFAULT : 0;
+	return copy_to_user(uaddr, &val, KVM_REG_SIZE(reg->id));
 }
 
 /**
@@ -294,31 +294,6 @@ int __attribute_const__ kvm_target_cpu(void)
 	};
 
 	return -EINVAL;
-}
-
-int kvm_vcpu_set_target(struct kvm_vcpu *vcpu,
-			const struct kvm_vcpu_init *init)
-{
-	unsigned int i;
-	int phys_target = kvm_target_cpu();
-
-	if (init->target != phys_target)
-		return -EINVAL;
-
-	vcpu->arch.target = phys_target;
-	bitmap_zero(vcpu->arch.features, KVM_VCPU_MAX_FEATURES);
-
-	/* -ENOENT for unknown features, -EINVAL for invalid combinations. */
-	for (i = 0; i < sizeof(init->features) * 8; i++) {
-		if (init->features[i / 32] & (1 << (i % 32))) {
-			if (i >= KVM_VCPU_MAX_FEATURES)
-				return -ENOENT;
-			set_bit(i, vcpu->arch.features);
-		}
-	}
-
-	/* Now we know what it is, we can reset it. */
-	return kvm_reset_vcpu(vcpu);
 }
 
 int kvm_vcpu_preferred_target(struct kvm_vcpu_init *init)

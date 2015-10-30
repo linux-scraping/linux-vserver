@@ -14,7 +14,7 @@
 #include <linux/sched.h>
 #include <linux/module.h>
 #include <linux/memcontrol.h>
-#include <linux/res_counter.h>
+#include <linux/page_counter.h>
 #include <linux/vs_limit.h>
 #include <linux/vserver/limit.h>
 #include <linux/vserver/limit_cmd.h>
@@ -257,7 +257,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_MEMCG
+#ifdef	CONFIG_MEMCG_BROKEN
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage;
 
@@ -267,10 +267,10 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	if (!mcg)
 		goto out;
 
-	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
+	// res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
+	// res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
 
-	if (res_limit != RES_COUNTER_MAX)
+	if (res_limit != PAGE_COUNTER_MAX)
 		val->totalram = (res_limit >> PAGE_SHIFT);
 	val->freeram = val->totalram - (res_usage >> PAGE_SHIFT);
 	val->bufferram = 0;
@@ -283,7 +283,7 @@ out:
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_MEMCG
+#ifdef	CONFIG_MEMCG_BROKEN
 #ifdef	CONFIG_MEMCG_SWAP
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage, memsw_limit, memsw_usage;
@@ -295,18 +295,18 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	if (!mcg)
 		goto out;
 
-	res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
-	memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
-	memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
+	// res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
+	// res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
+	// memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
+	// memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
 
 	/* memory unlimited */
-	if (res_limit == RES_COUNTER_MAX)
+	if (res_limit == PAGE_COUNTER_MAX)
 		goto out;
 
 	swap_limit = memsw_limit - res_limit;
 	/* we have a swap limit? */
-	if (memsw_limit != RES_COUNTER_MAX)
+	if (memsw_limit != PAGE_COUNTER_MAX)
 		val->totalswap = swap_limit >> PAGE_SHIFT;
 
 	/* calculate swap part */
@@ -328,7 +328,7 @@ out:
 long vx_vsi_cached(struct sysinfo *val)
 {
 	long cache = 0;
-#ifdef	CONFIG_MEMCG
+#ifdef	CONFIG_MEMCG_BROKEN
 	struct mem_cgroup *mcg;
 
 	rcu_read_lock();
@@ -337,7 +337,7 @@ long vx_vsi_cached(struct sysinfo *val)
 	if (!mcg)
 		goto out;
 
-	cache = mem_cgroup_stat_read_cache(mcg);
+	// cache = mem_cgroup_stat_read_cache(mcg);
 out:
 #endif
 	return cache;

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2014, Intel Corp.
+ * Copyright (C) 2000 - 2015, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -123,7 +123,6 @@
 
 #ifndef ACPI_USE_SYSTEM_INTTYPES
 
-typedef unsigned char u8;
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef short s16;
@@ -734,23 +733,26 @@ typedef u32 acpi_event_type;
  * The encoding of acpi_event_status is illustrated below.
  * Note that a set bit (1) indicates the property is TRUE
  * (e.g. if bit 0 is set then the event is enabled).
- * +-------------+-+-+-+-+
- * |   Bits 31:4 |3|2|1|0|
- * +-------------+-+-+-+-+
- *          |     | | | |
- *          |     | | | +- Enabled?
- *          |     | | +--- Enabled for wake?
- *          |     | +----- Set?
- *          |     +------- Has a handler?
- *          +------------- <Reserved>
+ * +-------------+-+-+-+-+-+
+ * |   Bits 31:5 |4|3|2|1|0|
+ * +-------------+-+-+-+-+-+
+ *          |     | | | | |
+ *          |     | | | | +- Enabled?
+ *          |     | | | +--- Enabled for wake?
+ *          |     | | +----- Status bit set?
+ *          |     | +------- Enable bit set?
+ *          |     +--------- Has a handler?
+ *          +--------------- <Reserved>
  */
 typedef u32 acpi_event_status;
 
 #define ACPI_EVENT_FLAG_DISABLED        (acpi_event_status) 0x00
 #define ACPI_EVENT_FLAG_ENABLED         (acpi_event_status) 0x01
 #define ACPI_EVENT_FLAG_WAKE_ENABLED    (acpi_event_status) 0x02
-#define ACPI_EVENT_FLAG_SET             (acpi_event_status) 0x04
-#define ACPI_EVENT_FLAG_HAS_HANDLER     (acpi_event_status) 0x08
+#define ACPI_EVENT_FLAG_STATUS_SET      (acpi_event_status) 0x04
+#define ACPI_EVENT_FLAG_ENABLE_SET      (acpi_event_status) 0x08
+#define ACPI_EVENT_FLAG_HAS_HANDLER     (acpi_event_status) 0x10
+#define ACPI_EVENT_FLAG_SET             ACPI_EVENT_FLAG_STATUS_SET
 
 /* Actions for acpi_set_gpe, acpi_gpe_wakeup, acpi_hw_low_set_gpe */
 
@@ -761,7 +763,7 @@ typedef u32 acpi_event_status;
 /*
  * GPE info flags - Per GPE
  * +-------+-+-+---+
- * |  7:4  |3|2|1:0|
+ * |  7:5  |4|3|2:0|
  * +-------+-+-+---+
  *     |    | |  |
  *     |    | |  +-- Type of dispatch:to method, handler, notify, or none
@@ -773,13 +775,15 @@ typedef u32 acpi_event_status;
 #define ACPI_GPE_DISPATCH_METHOD        (u8) 0x01
 #define ACPI_GPE_DISPATCH_HANDLER       (u8) 0x02
 #define ACPI_GPE_DISPATCH_NOTIFY        (u8) 0x03
-#define ACPI_GPE_DISPATCH_MASK          (u8) 0x03
+#define ACPI_GPE_DISPATCH_RAW_HANDLER   (u8) 0x04
+#define ACPI_GPE_DISPATCH_MASK          (u8) 0x07
+#define ACPI_GPE_DISPATCH_TYPE(flags)   ((u8) ((flags) & ACPI_GPE_DISPATCH_MASK))
 
-#define ACPI_GPE_LEVEL_TRIGGERED        (u8) 0x04
+#define ACPI_GPE_LEVEL_TRIGGERED        (u8) 0x08
 #define ACPI_GPE_EDGE_TRIGGERED         (u8) 0x00
-#define ACPI_GPE_XRUPT_TYPE_MASK        (u8) 0x04
+#define ACPI_GPE_XRUPT_TYPE_MASK        (u8) 0x08
 
-#define ACPI_GPE_CAN_WAKE               (u8) 0x08
+#define ACPI_GPE_CAN_WAKE               (u8) 0x10
 
 /*
  * Flags for GPE and Lock interfaces
@@ -1266,6 +1270,7 @@ struct acpi_memory_list {
 #define ACPI_OSI_WIN_VISTA_SP2          0x0A
 #define ACPI_OSI_WIN_7                  0x0B
 #define ACPI_OSI_WIN_8                  0x0C
+#define ACPI_OSI_WIN_10                 0x0D
 
 /* Definitions of file IO */
 

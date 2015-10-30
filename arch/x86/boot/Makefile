@@ -14,6 +14,8 @@
 # Set it to -DSVGA_MODE=NORMAL_VGA if you just want the EGA/VGA mode.
 # The number is the same as you would ordinarily press at bootup.
 
+KASAN_SANITIZE := n
+
 SVGA_MODE	:= -DSVGA_MODE=NORMAL_VGA
 
 targets		:= vmlinux.bin setup.bin setup.elf bzImage
@@ -160,9 +162,6 @@ isoimage: $(obj)/bzImage
 	for i in lib lib64 share end ; do \
 		if [ -f /usr/$$i/syslinux/isolinux.bin ] ; then \
 			cp /usr/$$i/syslinux/isolinux.bin $(obj)/isoimage ; \
-			if [ -f /usr/$$i/syslinux/ldlinux.c32 ]; then \
-				cp /usr/$$i/syslinux/ldlinux.c32 $(obj)/isoimage ; \
-			fi ; \
 			break ; \
 		fi ; \
 		if [ $$i = end ] ; then exit 1 ; fi ; \

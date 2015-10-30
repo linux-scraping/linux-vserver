@@ -41,7 +41,6 @@
 #include <linux/skbuff.h>
 #include <linux/spi/spi.h>
 #include <linux/types.h>
-#include <linux/version.h>
 
 #include "qca_7k.h"
 #include "qca_debug.h"
@@ -571,7 +570,7 @@ qcaspi_spi_thread(void *data)
 			}
 
 			/* can only handle other interrupts
-			 * if sync has occured
+			 * if sync has occurred
 			 */
 			if (qca->sync == QCASPI_SYNC_READY) {
 				if (intr_cause & SPI_INT_PKT_AVLBL)
@@ -737,8 +736,9 @@ qcaspi_netdev_tx_timeout(struct net_device *dev)
 	netdev_info(qca->net_dev, "Transmit timeout at %ld, latency %ld\n",
 		    jiffies, jiffies - dev->trans_start);
 	qca->net_dev->stats.tx_errors++;
-	/* Trigger tx queue flush and QCA7000 reset */
-	qca->sync = QCASPI_SYNC_UNKNOWN;
+	/* wake the queue if there is room */
+	if (qcaspi_tx_ring_has_space(&qca->txr))
+		netif_wake_queue(dev);
 }
 
 static int
@@ -812,7 +812,7 @@ qcaspi_netdev_setup(struct net_device *dev)
 	dev->netdev_ops = &qcaspi_netdev_ops;
 	qcaspi_set_ethtool_ops(dev);
 	dev->watchdog_timeo = QCASPI_TX_TIMEOUT;
-	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
+	dev->flags = IFF_MULTICAST;
 	dev->tx_queue_len = 100;
 
 	qca = netdev_priv(dev);
@@ -912,6 +912,8 @@ qca_spi_probe(struct spi_device *spi_device)
 	qca->spi_dev = spi_device;
 	qca->legacy_mode = legacy_mode;
 
+	spi_set_drvdata(spi_device, qcaspi_devs);
+
 	mac = of_get_mac_address(spi_device->dev.of_node);
 
 	if (mac)
@@ -943,8 +945,6 @@ qca_spi_probe(struct spi_device *spi_device)
 		free_netdev(qcaspi_devs);
 		return -EFAULT;
 	}
-
-	spi_set_drvdata(spi_device, qcaspi_devs);
 
 	qcaspi_init_device_debugfs(qca);
 

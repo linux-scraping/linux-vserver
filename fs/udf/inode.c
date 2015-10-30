@@ -33,12 +33,11 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/pagemap.h>
-#include <linux/buffer_head.h>
 #include <linux/writeback.h>
 #include <linux/slab.h>
 #include <linux/crc-itu-t.h>
 #include <linux/mpage.h>
-#include <linux/aio.h>
+#include <linux/uio.h>
 
 #include "udf_i.h"
 #include "udf_sb.h"
@@ -215,8 +214,7 @@ static int udf_write_begin(struct file *file, struct address_space *mapping,
 	return ret;
 }
 
-static ssize_t udf_direct_IO(int rw, struct kiocb *iocb,
-			     struct iov_iter *iter,
+static ssize_t udf_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
 			     loff_t offset)
 {
 	struct file *file = iocb->ki_filp;
@@ -225,8 +223,8 @@ static ssize_t udf_direct_IO(int rw, struct kiocb *iocb,
 	size_t count = iov_iter_count(iter);
 	ssize_t ret;
 
-	ret = blockdev_direct_IO(rw, iocb, inode, iter, offset, udf_get_block);
-	if (unlikely(ret < 0 && (rw & WRITE)))
+	ret = blockdev_direct_IO(iocb, inode, iter, offset, udf_get_block);
+	if (unlikely(ret < 0 && iov_iter_rw(iter) == WRITE))
 		udf_write_failed(mapping, offset + count);
 	return ret;
 }
@@ -750,7 +748,7 @@ static sector_t inode_getblk(struct inode *inode, sector_t block,
 	/* Are we beyond EOF? */
 	if (etype == -1) {
 		int ret;
-		isBeyondEOF = 1;
+		isBeyondEOF = true;
 		if (count) {
 			if (c)
 				laarr[0] = laarr[1];
@@ -792,7 +790,7 @@ static sector_t inode_getblk(struct inode *inode, sector_t block,
 		endnum = c + 1;
 		lastblock = 1;
 	} else {
-		isBeyondEOF = 0;
+		isBeyondEOF = false;
 		endnum = startnum = ((count > 2) ? 2 : count);
 
 		/* if the current extent is in position 0,
@@ -1237,8 +1235,8 @@ int udf_setsize(struct inode *inode, loff_t newsize)
 			return err;
 		}
 set_size:
-		up_write(&iinfo->i_data_sem);
 		truncate_setsize(inode, newsize);
+		up_write(&iinfo->i_data_sem);
 	} else {
 		if (iinfo->i_alloc_type == ICBTAG_FLAG_AD_IN_ICB) {
 			down_write(&iinfo->i_data_sem);
@@ -1255,9 +1253,9 @@ set_size:
 					  udf_get_block);
 		if (err)
 			return err;
-		truncate_setsize(inode, newsize);
 		down_write(&iinfo->i_data_sem);
 		udf_clear_extent_cache(inode);
+		truncate_setsize(inode, newsize);
 		udf_truncate_extents(inode);
 		up_write(&iinfo->i_data_sem);
 	}
@@ -1637,7 +1635,7 @@ static int udf_update_inode(struct inode *inode, int do_sync)
 			udf_get_lb_pblock(inode->i_sb, &iinfo->i_location, 0));
 	if (!bh) {
 		udf_debug("getblk failure\n");
-		return -ENOMEM;
+		return -EIO;
 	}
 
 	lock_buffer(bh);
@@ -2054,29 +2052,14 @@ void udf_write_aext(struct inode *inode, struct extent_position *epos,
 		epos->offset += adsize;
 }
 
-/*
- * Only 1 indirect extent in a row really makes sense but allow upto 16 in case
- * someone does some weird stuff.
- */
-#define UDF_MAX_INDIR_EXTS 16
-
 int8_t udf_next_aext(struct inode *inode, struct extent_position *epos,
 		     struct kernel_lb_addr *eloc, uint32_t *elen, int inc)
 {
 	int8_t etype;
-	unsigned int indirections = 0;
 
 	while ((etype = udf_current_aext(inode, epos, eloc, elen, inc)) ==
 	       (EXT_NEXT_EXTENT_ALLOCDECS >> 30)) {
 		int block;
-
-		if (++indirections > UDF_MAX_INDIR_EXTS) {
-			udf_err(inode->i_sb,
-				"too many indirect extents in inode %lu\n",
-				inode->i_ino);
-			return -1;
-		}
-
 		epos->block = *eloc;
 		epos->offset = sizeof(struct allocExtDesc);
 		brelse(epos->bh);

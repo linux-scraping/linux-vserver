@@ -213,10 +213,9 @@ struct tcf_proto_ops {
 					    const struct tcf_proto *,
 					    struct tcf_result *);
 	int			(*init)(struct tcf_proto*);
-	void			(*destroy)(struct tcf_proto*);
+	bool			(*destroy)(struct tcf_proto*, bool);
 
 	unsigned long		(*get)(struct tcf_proto*, u32 handle);
-	void			(*put)(struct tcf_proto*, unsigned long);
 	int			(*change)(struct net *net, struct sk_buff *,
 					struct tcf_proto*, unsigned long,
 					u32 handle, struct nlattr **,
@@ -393,15 +392,14 @@ struct Qdisc *dev_graft_qdisc(struct netdev_queue *dev_queue,
 			      struct Qdisc *qdisc);
 void qdisc_reset(struct Qdisc *qdisc);
 void qdisc_destroy(struct Qdisc *qdisc);
-void qdisc_tree_reduce_backlog(struct Qdisc *qdisc, unsigned int n,
-			       unsigned int len);
+void qdisc_tree_decrease_qlen(struct Qdisc *qdisc, unsigned int n);
 struct Qdisc *qdisc_alloc(struct netdev_queue *dev_queue,
 			  const struct Qdisc_ops *ops);
 struct Qdisc *qdisc_create_dflt(struct netdev_queue *dev_queue,
 				const struct Qdisc_ops *ops, u32 parentid);
 void __qdisc_calculate_pkt_len(struct sk_buff *skb,
 			       const struct qdisc_size_table *stab);
-void tcf_destroy(struct tcf_proto *tp);
+bool tcf_destroy(struct tcf_proto *tp, bool force);
 void tcf_destroy_chain(struct tcf_proto __rcu **fl);
 
 /* Reset all TX qdiscs greater then index of a device.  */
@@ -688,26 +686,6 @@ static inline void qdisc_reset_queue(struct Qdisc *sch)
 {
 	__qdisc_reset_queue(sch, &sch->q);
 	sch->qstats.backlog = 0;
-}
-
-static inline struct Qdisc *qdisc_replace(struct Qdisc *sch, struct Qdisc *new,
-					  struct Qdisc **pold)
-{
-	struct Qdisc *old;
-
-	sch_tree_lock(sch);
-	old = *pold;
-	*pold = new;
-	if (old != NULL) {
-		unsigned int qlen = old->q.qlen;
-		unsigned int backlog = old->qstats.backlog;
-
-		qdisc_reset(old);
-		qdisc_tree_reduce_backlog(old, qlen, backlog);
-	}
-	sch_tree_unlock(sch);
-
-	return old;
 }
 
 static inline unsigned int __qdisc_queue_drop(struct Qdisc *sch,

@@ -120,16 +120,12 @@ static struct clock_event_device sun4i_clockevent = {
 	.set_next_event = sun4i_clkevt_next_event,
 };
 
-static void sun4i_timer_clear_interrupt(void)
-{
-	writel(TIMER_IRQ_EN(0), timer_base + TIMER_IRQ_ST_REG);
-}
 
 static irqreturn_t sun4i_timer_interrupt(int irq, void *dev_id)
 {
 	struct clock_event_device *evt = (struct clock_event_device *)dev_id;
 
-	sun4i_timer_clear_interrupt();
+	writel(0x1, timer_base + TIMER_IRQ_ST_REG);
 	evt->event_handler(evt);
 
 	return IRQ_HANDLED;
@@ -174,7 +170,15 @@ static void __init sun4i_timer_init(struct device_node *node)
 	       TIMER_CTL_CLK_SRC(TIMER_CTL_CLK_SRC_OSC24M),
 	       timer_base + TIMER_CTL_REG(1));
 
-	sched_clock_register(sun4i_timer_sched_read, 32, rate);
+	/*
+	 * sched_clock_register does not have priorities, and on sun6i and
+	 * later there is a better sched_clock registered by arm_arch_timer.c
+	 */
+	if (of_machine_is_compatible("allwinner,sun4i-a10") ||
+	    of_machine_is_compatible("allwinner,sun5i-a13") ||
+	    of_machine_is_compatible("allwinner,sun5i-a10s"))
+		sched_clock_register(sun4i_timer_sched_read, 32, rate);
+
 	clocksource_mmio_init(timer_base + TIMER_CNTVAL_REG(1), node->name,
 			      rate, 350, 32, clocksource_mmio_readl_down);
 
@@ -185,9 +189,6 @@ static void __init sun4i_timer_init(struct device_node *node)
 
 	/* Make sure timer is stopped before playing with interrupts */
 	sun4i_clkevt_time_stop(0);
-
-	/* clear timer0 interrupt */
-	sun4i_timer_clear_interrupt();
 
 	sun4i_clockevent.cpumask = cpu_possible_mask;
 	sun4i_clockevent.irq = irq;

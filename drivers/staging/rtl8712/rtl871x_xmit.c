@@ -184,7 +184,6 @@ void _free_xmit_priv(struct xmit_priv *pxmitpriv)
 sint r8712_update_attrib(struct _adapter *padapter, _pkt *pkt,
 		   struct pkt_attrib *pattrib)
 {
-	uint i;
 	struct pkt_file pktfile;
 	struct sta_info *psta = NULL;
 	struct ethhdr etherhdr;
@@ -199,18 +198,17 @@ sint r8712_update_attrib(struct _adapter *padapter, _pkt *pkt,
 
 	_r8712_open_pktfile(pkt, &pktfile);
 
-	i = _r8712_pktfile_read(&pktfile, (unsigned char *)&etherhdr, ETH_HLEN);
+	_r8712_pktfile_read(&pktfile, (unsigned char *)&etherhdr, ETH_HLEN);
 
 	pattrib->ether_type = ntohs(etherhdr.h_proto);
 
 {
-	u8 bool;
 	/*If driver xmit ARP packet, driver can set ps mode to initial
 	 * setting. It stands for getting DHCP or fix IP.*/
 	if (pattrib->ether_type == 0x0806) {
 		if (padapter->pwrctrlpriv.pwr_mode !=
 		    padapter->registrypriv.power_mgnt) {
-			_cancel_timer(&(pmlmepriv->dhcp_timer), &bool);
+			del_timer_sync(&pmlmepriv->dhcp_timer);
 			r8712_set_ps_mode(padapter, padapter->registrypriv.
 				power_mgnt, padapter->registrypriv.smart_ps);
 		}
@@ -236,7 +234,7 @@ sint r8712_update_attrib(struct _adapter *padapter, _pkt *pkt,
 		/* for mp storing the txcmd per packet,
 		 * according to the info of txcmd to update pattrib */
 		/*get MP_TXDESC_SIZE bytes txcmd per packet*/
-		i = _r8712_pktfile_read(&pktfile, (u8 *)&txdesc, TXDESC_SIZE);
+		_r8712_pktfile_read(&pktfile, (u8 *)&txdesc, TXDESC_SIZE);
 		memcpy(pattrib->ra, pattrib->dst, ETH_ALEN);
 		memcpy(pattrib->ta, pattrib->src, ETH_ALEN);
 		pattrib->pctrl = 1;
@@ -340,15 +338,14 @@ sint r8712_update_attrib(struct _adapter *padapter, _pkt *pkt,
 	/* if in MP_STATE, update pkt_attrib from mp_txcmd, and overwrite
 	 * some settings above.*/
 	if (check_fwstate(pmlmepriv, WIFI_MP_STATE) == true)
-		pattrib->priority =
-		    (le32_to_cpu(txdesc.txdw1) >> QSEL_SHT) & 0x1f;
+		pattrib->priority = (txdesc.txdw1 >> QSEL_SHT) & 0x1f;
 	return _SUCCESS;
 }
 
 static sint xmitframe_addmic(struct _adapter *padapter,
 			     struct xmit_frame *pxmitframe)
 {
-	u32	curfragnum, length, datalen;
+	u32	curfragnum, length;
 	u8	*pframe, *payload, mic[8];
 	struct	mic_data micdata;
 	struct	sta_info *stainfo;
@@ -370,7 +367,6 @@ static sint xmitframe_addmic(struct _adapter *padapter,
 			u8 null_key[16] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 					   0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 					   0x0, 0x0};
-			datalen = pattrib->pktlen - pattrib->hdrlen;
 			pframe = pxmitframe->buf_addr + TXDESC_OFFSET;
 			if (bmcst) {
 				if (!memcmp(psecuritypriv->XGrptxmickey
@@ -474,7 +470,7 @@ static sint xmitframe_swencrypt(struct _adapter *padapter,
 	return _SUCCESS;
 }
 
-static sint make_wlanhdr(struct _adapter *padapter , u8 *hdr,
+static sint make_wlanhdr(struct _adapter *padapter, u8 *hdr,
 			 struct pkt_attrib *pattrib)
 {
 	u16 *qc;
@@ -482,12 +478,12 @@ static sint make_wlanhdr(struct _adapter *padapter , u8 *hdr,
 	struct ieee80211_hdr *pwlanhdr = (struct ieee80211_hdr *)hdr;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct qos_priv *pqospriv = &pmlmepriv->qospriv;
-	__le16 *fctrl = &pwlanhdr->frame_ctl;
+	u16 *fctrl = &pwlanhdr->frame_ctl;
 
 	memset(hdr, 0, WLANHDR_OFFSET);
 	SetFrameSubType(fctrl, pattrib->subtype);
 	if (pattrib->subtype & WIFI_DATA_TYPE) {
-		if ((check_fwstate(pmlmepriv,  WIFI_STATION_STATE) == true)) {
+		if (check_fwstate(pmlmepriv,  WIFI_STATION_STATE) == true) {
 			/* to_ds = 1, fr_ds = 0; */
 			SetToDs(fctrl);
 			memcpy(pwlanhdr->addr1, get_bssid(pmlmepriv),
@@ -570,7 +566,7 @@ static sint r8712_put_snap(u8 *data, u16 h_proto)
 	snap->oui[0] = oui[0];
 	snap->oui[1] = oui[1];
 	snap->oui[2] = oui[2];
-	*(__be16 *)(data + SNAP_SIZE) = htons(h_proto);
+	*(u16 *)(data + SNAP_SIZE) = htons(h_proto);
 	return SNAP_SIZE + sizeof(u16);
 }
 
@@ -826,16 +822,13 @@ void r8712_free_xmitframe(struct xmit_priv *pxmitpriv,
 	unsigned long irqL;
 	struct  __queue *pfree_xmit_queue = &pxmitpriv->free_xmit_queue;
 	struct _adapter *padapter = pxmitpriv->adapter;
-	struct sk_buff *pndis_pkt = NULL;
 
 	if (pxmitframe == NULL)
 		return;
 	spin_lock_irqsave(&pfree_xmit_queue->lock, irqL);
 	list_del_init(&pxmitframe->list);
-	if (pxmitframe->pkt) {
-		pndis_pkt = pxmitframe->pkt;
+	if (pxmitframe->pkt)
 		pxmitframe->pkt = NULL;
-	}
 	list_add_tail(&pxmitframe->list, &pfree_xmit_queue->queue);
 	pxmitpriv->free_xmitframe_cnt++;
 	spin_unlock_irqrestore(&pfree_xmit_queue->lock, irqL);

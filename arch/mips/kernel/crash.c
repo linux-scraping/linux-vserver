@@ -14,30 +14,20 @@ static int crashing_cpu = -1;
 static cpumask_t cpus_in_crash = CPU_MASK_NONE;
 
 #ifdef CONFIG_SMP
-static void crash_shutdown_secondary(void *passed_regs)
+static void crash_shutdown_secondary(void *ignore)
 {
-	struct pt_regs *regs = passed_regs;
+	struct pt_regs *regs;
 	int cpu = smp_processor_id();
 
-	/*
-	 * If we are passed registers, use those.  Otherwise get the
-	 * regs from the last interrupt, which should be correct, as
-	 * we are in an interrupt.  But if the regs are not there,
-	 * pull them from the top of the stack.  They are probably
-	 * wrong, but we need something to keep from crashing again.
-	 */
-	if (!regs)
-		regs = get_irq_regs();
-	if (!regs)
-		regs = task_pt_regs(current);
+	regs = task_pt_regs(current);
 
 	if (!cpu_online(cpu))
 		return;
 
 	local_irq_disable();
-	if (!cpu_isset(cpu, cpus_in_crash))
+	if (!cpumask_test_cpu(cpu, &cpus_in_crash))
 		crash_save_cpu(regs, cpu);
-	cpu_set(cpu, cpus_in_crash);
+	cpumask_set_cpu(cpu, &cpus_in_crash);
 
 	while (!atomic_read(&kexec_ready_to_reboot))
 		cpu_relax();
@@ -60,7 +50,7 @@ static void crash_kexec_prepare_cpus(void)
 	 */
 	pr_emerg("Sending IPI to other cpus...\n");
 	msecs = 10000;
-	while ((cpus_weight(cpus_in_crash) < ncpus) && (--msecs > 0)) {
+	while ((cpumask_weight(&cpus_in_crash) < ncpus) && (--msecs > 0)) {
 		cpu_relax();
 		mdelay(1);
 	}
@@ -76,5 +66,5 @@ void default_machine_crash_shutdown(struct pt_regs *regs)
 	crashing_cpu = smp_processor_id();
 	crash_save_cpu(regs, crashing_cpu);
 	crash_kexec_prepare_cpus();
-	cpu_set(crashing_cpu, cpus_in_crash);
+	cpumask_set_cpu(crashing_cpu, &cpus_in_crash);
 }

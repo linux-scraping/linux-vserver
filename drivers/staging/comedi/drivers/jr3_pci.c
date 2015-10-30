@@ -39,14 +39,13 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/ctype.h>
 #include <linux/jiffies.h>
 #include <linux/slab.h>
 #include <linux/timer.h>
 
-#include "../comedidev.h"
+#include "../comedi_pci.h"
 
 #include "jr3_pci.h"
 
@@ -611,7 +610,7 @@ static void jr3_pci_poll_dev(unsigned long data)
 		s = &dev->subdevices[i];
 		spriv = s->private;
 
-		if (time_after_eq(now, spriv->next_time_min)) {
+		if (now > spriv->next_time_min) {
 			struct jr3_pci_poll_delay sub_delay;
 
 			sub_delay = jr3_pci_poll_subdevice(s);
@@ -706,8 +705,6 @@ static int jr3_pci_auto_attach(struct comedi_device *dev,
 	if (!devpriv)
 		return -ENOMEM;
 
-	init_timer(&devpriv->timer);
-
 	ret = comedi_pci_enable(dev);
 	if (ret)
 		return ret;
@@ -729,12 +726,11 @@ static int jr3_pci_auto_attach(struct comedi_device *dev,
 		s->insn_read	= jr3_pci_ai_insn_read;
 
 		spriv = jr3_pci_alloc_spriv(dev, s);
-		if (!spriv)
-			return -ENOMEM;
-
-		/* Channel specific range and maxdata */
-		s->range_table_list	= spriv->range_table_list;
-		s->maxdata_list		= spriv->maxdata_list;
+		if (spriv) {
+			/* Channel specific range and maxdata */
+			s->range_table_list	= spriv->range_table_list;
+			s->maxdata_list		= spriv->maxdata_list;
+		}
 	}
 
 	/*  Reset DSP card */
@@ -776,8 +772,7 @@ static int jr3_pci_auto_attach(struct comedi_device *dev,
 		spriv->next_time_max = jiffies + msecs_to_jiffies(2000);
 	}
 
-	devpriv->timer.data = (unsigned long)dev;
-	devpriv->timer.function = jr3_pci_poll_dev;
+	setup_timer(&devpriv->timer, jr3_pci_poll_dev, (unsigned long)dev);
 	devpriv->timer.expires = jiffies + msecs_to_jiffies(1000);
 	add_timer(&devpriv->timer);
 

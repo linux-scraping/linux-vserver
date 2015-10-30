@@ -67,7 +67,13 @@ static int dsmark_graft(struct Qdisc *sch, unsigned long arg,
 			new = &noop_qdisc;
 	}
 
-	*old = qdisc_replace(sch, new, &p->q);
+	sch_tree_lock(sch);
+	*old = p->q;
+	p->q = new;
+	qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
+	qdisc_reset(*old);
+	sch_tree_unlock(sch);
+
 	return 0;
 }
 
@@ -197,7 +203,7 @@ static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	pr_debug("%s(skb %p,sch %p,[qdisc %p])\n", __func__, skb, sch, p);
 
 	if (p->set_tc_index) {
-		switch (skb->protocol) {
+		switch (tc_skb_protocol(skb)) {
 		case htons(ETH_P_IP):
 			if (skb_cow_head(skb, sizeof(struct iphdr)))
 				goto drop;
@@ -256,7 +262,6 @@ static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		return err;
 	}
 
-	qdisc_qstats_backlog_inc(sch, skb);
 	sch->q.qlen++;
 
 	return NET_XMIT_SUCCESS;
@@ -279,13 +284,12 @@ static struct sk_buff *dsmark_dequeue(struct Qdisc *sch)
 		return NULL;
 
 	qdisc_bstats_update(sch, skb);
-	qdisc_qstats_backlog_dec(sch, skb);
 	sch->q.qlen--;
 
 	index = skb->tc_index & (p->indices - 1);
 	pr_debug("index %d->%d\n", skb->tc_index, index);
 
-	switch (skb->protocol) {
+	switch (tc_skb_protocol(skb)) {
 	case htons(ETH_P_IP):
 		ipv4_change_dsfield(ip_hdr(skb), p->mask[index],
 				    p->value[index]);
@@ -302,7 +306,7 @@ static struct sk_buff *dsmark_dequeue(struct Qdisc *sch)
 		 */
 		if (p->mask[index] != 0xff || p->value[index])
 			pr_warn("%s: unsupported protocol %d\n",
-				__func__, ntohs(skb->protocol));
+				__func__, ntohs(tc_skb_protocol(skb)));
 		break;
 	}
 
@@ -395,7 +399,6 @@ static void dsmark_reset(struct Qdisc *sch)
 
 	pr_debug("%s(sch %p,[qdisc %p])\n", __func__, sch, p);
 	qdisc_reset(p->q);
-	sch->qstats.backlog = 0;
 	sch->q.qlen = 0;
 }
 

@@ -193,8 +193,9 @@ static struct zfcp_erp_action *zfcp_erp_setup_act(int need, u32 act_status,
 		atomic_set_mask(ZFCP_STATUS_COMMON_ERP_INUSE,
 				&zfcp_sdev->status);
 		erp_action = &zfcp_sdev->erp_action;
-		WARN_ON_ONCE(erp_action->port != port);
-		WARN_ON_ONCE(erp_action->sdev != sdev);
+		memset(erp_action, 0, sizeof(struct zfcp_erp_action));
+		erp_action->port = port;
+		erp_action->sdev = sdev;
 		if (!(atomic_read(&zfcp_sdev->status) &
 		      ZFCP_STATUS_COMMON_RUNNING))
 			act_status |= ZFCP_STATUS_ERP_CLOSE_ONLY;
@@ -207,8 +208,8 @@ static struct zfcp_erp_action *zfcp_erp_setup_act(int need, u32 act_status,
 		zfcp_erp_action_dismiss_port(port);
 		atomic_set_mask(ZFCP_STATUS_COMMON_ERP_INUSE, &port->status);
 		erp_action = &port->erp_action;
-		WARN_ON_ONCE(erp_action->port != port);
-		WARN_ON_ONCE(erp_action->sdev != NULL);
+		memset(erp_action, 0, sizeof(struct zfcp_erp_action));
+		erp_action->port = port;
 		if (!(atomic_read(&port->status) & ZFCP_STATUS_COMMON_RUNNING))
 			act_status |= ZFCP_STATUS_ERP_CLOSE_ONLY;
 		break;
@@ -218,8 +219,7 @@ static struct zfcp_erp_action *zfcp_erp_setup_act(int need, u32 act_status,
 		zfcp_erp_action_dismiss_adapter(adapter);
 		atomic_set_mask(ZFCP_STATUS_COMMON_ERP_INUSE, &adapter->status);
 		erp_action = &adapter->erp_action;
-		WARN_ON_ONCE(erp_action->port != NULL);
-		WARN_ON_ONCE(erp_action->sdev != NULL);
+		memset(erp_action, 0, sizeof(struct zfcp_erp_action));
 		if (!(atomic_read(&adapter->status) &
 		      ZFCP_STATUS_COMMON_RUNNING))
 			act_status |= ZFCP_STATUS_ERP_CLOSE_ONLY;
@@ -229,11 +229,7 @@ static struct zfcp_erp_action *zfcp_erp_setup_act(int need, u32 act_status,
 		return NULL;
 	}
 
-	WARN_ON_ONCE(erp_action->adapter != adapter);
-	memset(&erp_action->list, 0, sizeof(erp_action->list));
-	memset(&erp_action->timer, 0, sizeof(erp_action->timer));
-	erp_action->step = ZFCP_ERP_STEP_UNINITIALIZED;
-	erp_action->fsf_req_id = 0;
+	erp_action->adapter = adapter;
 	erp_action->action = need;
 	erp_action->status = act_status;
 
@@ -742,11 +738,11 @@ static int zfcp_erp_adapter_strategy_open_fsf(struct zfcp_erp_action *act)
 		return ZFCP_ERP_FAILED;
 
 	if (mempool_resize(act->adapter->pool.sr_data,
-			   act->adapter->stat_read_buf_num, GFP_KERNEL))
+			   act->adapter->stat_read_buf_num))
 		return ZFCP_ERP_FAILED;
 
 	if (mempool_resize(act->adapter->pool.status_read_req,
-			   act->adapter->stat_read_buf_num, GFP_KERNEL))
+			   act->adapter->stat_read_buf_num))
 		return ZFCP_ERP_FAILED;
 
 	atomic_set(&act->adapter->stat_miss, act->adapter->stat_read_buf_num);
@@ -825,11 +821,6 @@ static int zfcp_erp_port_forced_strategy_close(struct zfcp_erp_action *act)
 	return ZFCP_ERP_CONTINUES;
 }
 
-static void zfcp_erp_port_strategy_clearstati(struct zfcp_port *port)
-{
-	atomic_clear_mask(ZFCP_STATUS_COMMON_ACCESS_DENIED, &port->status);
-}
-
 static int zfcp_erp_port_forced_strategy(struct zfcp_erp_action *erp_action)
 {
 	struct zfcp_port *port = erp_action->port;
@@ -837,7 +828,6 @@ static int zfcp_erp_port_forced_strategy(struct zfcp_erp_action *erp_action)
 
 	switch (erp_action->step) {
 	case ZFCP_ERP_STEP_UNINITIALIZED:
-		zfcp_erp_port_strategy_clearstati(port);
 		if ((status & ZFCP_STATUS_PORT_PHYS_OPEN) &&
 		    (status & ZFCP_STATUS_COMMON_OPEN))
 			return zfcp_erp_port_forced_strategy_close(erp_action);
@@ -937,7 +927,6 @@ static int zfcp_erp_port_strategy(struct zfcp_erp_action *erp_action)
 
 	switch (erp_action->step) {
 	case ZFCP_ERP_STEP_UNINITIALIZED:
-		zfcp_erp_port_strategy_clearstati(port);
 		if (p_status & ZFCP_STATUS_COMMON_OPEN)
 			return zfcp_erp_port_strategy_close(erp_action);
 		break;

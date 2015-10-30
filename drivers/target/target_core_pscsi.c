@@ -44,6 +44,7 @@
 
 #include <target/target_core_base.h>
 #include <target/target_core_backend.h>
+#include <target/target_core_backend_configfs.h>
 
 #include "target_core_alua.h"
 #include "target_core_pscsi.h"
@@ -157,7 +158,7 @@ static void pscsi_tape_read_blocksize(struct se_device *dev,
 
 	buf = kzalloc(12, GFP_KERNEL);
 	if (!buf)
-		goto out_free;
+		return;
 
 	memset(cdb, 0, MAX_COMMAND_SIZE);
 	cdb[0] = MODE_SENSE;
@@ -172,10 +173,9 @@ static void pscsi_tape_read_blocksize(struct se_device *dev,
 	 * If MODE_SENSE still returns zero, set the default value to 1024.
 	 */
 	sdev->sector_size = (buf[9] << 16) | (buf[10] << 8) | (buf[11]);
-out_free:
 	if (!sdev->sector_size)
 		sdev->sector_size = 1024;
-
+out_free:
 	kfree(buf);
 }
 
@@ -318,10 +318,9 @@ static int pscsi_add_device_to_list(struct se_device *dev,
 				sd->lun, sd->queue_depth);
 	}
 
-	dev->dev_attrib.hw_block_size =
-		min_not_zero((int)sd->sector_size, 512);
+	dev->dev_attrib.hw_block_size = sd->sector_size;
 	dev->dev_attrib.hw_max_sectors =
-		min_not_zero(sd->host->max_sectors, queue_max_hw_sectors(q));
+		min_t(int, sd->host->max_sectors, queue_max_hw_sectors(q));
 	dev->dev_attrib.hw_queue_depth = sd->queue_depth;
 
 	/*
@@ -344,10 +343,8 @@ static int pscsi_add_device_to_list(struct se_device *dev,
 	/*
 	 * For TYPE_TAPE, attempt to determine blocksize with MODE_SENSE.
 	 */
-	if (sd->type == TYPE_TAPE) {
+	if (sd->type == TYPE_TAPE)
 		pscsi_tape_read_blocksize(dev, sd);
-		dev->dev_attrib.hw_block_size = sd->sector_size;
-	}
 	return 0;
 }
 
@@ -413,7 +410,7 @@ static int pscsi_create_type_disk(struct se_device *dev, struct scsi_device *sd)
 /*
  * Called with struct Scsi_Host->host_lock called.
  */
-static int pscsi_create_type_nondisk(struct se_device *dev, struct scsi_device *sd)
+static int pscsi_create_type_rom(struct se_device *dev, struct scsi_device *sd)
 	__releases(sh->host_lock)
 {
 	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
@@ -437,6 +434,28 @@ static int pscsi_create_type_nondisk(struct se_device *dev, struct scsi_device *
 		phv->phv_host_id, scsi_device_type(sd->type), sh->host_no,
 		sd->channel, sd->id, sd->lun);
 
+	return 0;
+}
+
+/*
+ * Called with struct Scsi_Host->host_lock called.
+ */
+static int pscsi_create_type_other(struct se_device *dev,
+		struct scsi_device *sd)
+	__releases(sh->host_lock)
+{
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
+	struct Scsi_Host *sh = sd->host;
+	int ret;
+
+	spin_unlock_irq(sh->host_lock);
+	ret = pscsi_add_device_to_list(dev, sd);
+	if (ret)
+		return ret;
+
+	pr_debug("CORE_PSCSI[%d] - Added Type: %s for %d:%d:%d:%llu\n",
+		phv->phv_host_id, scsi_device_type(sd->type), sh->host_no,
+		sd->channel, sd->id, sd->lun);
 	return 0;
 }
 
@@ -527,8 +546,11 @@ static int pscsi_configure_device(struct se_device *dev)
 		case TYPE_DISK:
 			ret = pscsi_create_type_disk(dev, sd);
 			break;
+		case TYPE_ROM:
+			ret = pscsi_create_type_rom(dev, sd);
+			break;
 		default:
-			ret = pscsi_create_type_nondisk(dev, sd);
+			ret = pscsi_create_type_other(dev, sd);
 			break;
 		}
 
@@ -585,7 +607,8 @@ static void pscsi_free_device(struct se_device *dev)
 		else if (pdv->pdv_lld_host)
 			scsi_host_put(pdv->pdv_lld_host);
 
-		scsi_device_put(sd);
+		if ((sd->type == TYPE_DISK) || (sd->type == TYPE_ROM))
+			scsi_device_put(sd);
 
 		pdv->pdv_sd = NULL;
 	}
@@ -950,64 +973,13 @@ fail:
 	return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 }
 
-/*
- * Clear a lun set in the cdb if the initiator talking to use spoke
- * and old standards version, as we can't assume the underlying device
- * won't choke up on it.
- */
-static inline void pscsi_clear_cdb_lun(unsigned char *cdb)
-{
-	switch (cdb[0]) {
-	case READ_10: /* SBC - RDProtect */
-	case READ_12: /* SBC - RDProtect */
-	case READ_16: /* SBC - RDProtect */
-	case SEND_DIAGNOSTIC: /* SPC - SELF-TEST Code */
-	case VERIFY: /* SBC - VRProtect */
-	case VERIFY_16: /* SBC - VRProtect */
-	case WRITE_VERIFY: /* SBC - VRProtect */
-	case WRITE_VERIFY_12: /* SBC - VRProtect */
-	case MAINTENANCE_IN: /* SPC - Parameter Data Format for SA RTPG */
-		break;
-	default:
-		cdb[1] &= 0x1f; /* clear logical unit number */
-		break;
-	}
-}
-
 static sense_reason_t
 pscsi_parse_cdb(struct se_cmd *cmd)
 {
-	unsigned char *cdb = cmd->t_task_cdb;
-
 	if (cmd->se_cmd_flags & SCF_BIDI)
 		return TCM_UNSUPPORTED_SCSI_OPCODE;
 
-	pscsi_clear_cdb_lun(cdb);
-
-	/*
-	 * For REPORT LUNS we always need to emulate the response, for everything
-	 * else the default for pSCSI is to pass the command to the underlying
-	 * LLD / physical hardware.
-	 */
-	switch (cdb[0]) {
-	case REPORT_LUNS:
-		cmd->execute_cmd = spc_emulate_report_luns;
-		return 0;
-	case READ_6:
-	case READ_10:
-	case READ_12:
-	case READ_16:
-	case WRITE_6:
-	case WRITE_10:
-	case WRITE_12:
-	case WRITE_16:
-	case WRITE_VERIFY:
-		cmd->se_cmd_flags |= SCF_SCSI_DATA_CDB;
-		/* FALLTHROUGH*/
-	default:
-		cmd->execute_cmd = pscsi_execute_cmd;
-		return 0;
-	}
+	return passthrough_parse_cdb(cmd, pscsi_execute_cmd);
 }
 
 static sense_reason_t
@@ -1075,7 +1047,7 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	req->retries = PS_RETRY;
 
 	blk_execute_rq_nowait(pdv->pdv_sd->request_queue, NULL, req,
-			(cmd->sam_task_attr == MSG_HEAD_TAG),
+			(cmd->sam_task_attr == TCM_HEAD_TAG),
 			pscsi_req_done);
 
 	return 0;
@@ -1111,6 +1083,7 @@ static sector_t pscsi_get_blocks(struct se_device *dev)
 	if (pdv->pdv_bd && pdv->pdv_bd->bd_part)
 		return pdv->pdv_bd->bd_part->nr_sects;
 
+	dump_stack();
 	return 0;
 }
 
@@ -1145,10 +1118,30 @@ static void pscsi_req_done(struct request *req, int uptodate)
 	kfree(pt);
 }
 
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_pi_prot_type);
+TB_DEV_ATTR_RO(pscsi, hw_pi_prot_type);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_block_size);
+TB_DEV_ATTR_RO(pscsi, hw_block_size);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_max_sectors);
+TB_DEV_ATTR_RO(pscsi, hw_max_sectors);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_queue_depth);
+TB_DEV_ATTR_RO(pscsi, hw_queue_depth);
+
+static struct configfs_attribute *pscsi_backend_dev_attrs[] = {
+	&pscsi_dev_attrib_hw_pi_prot_type.attr,
+	&pscsi_dev_attrib_hw_block_size.attr,
+	&pscsi_dev_attrib_hw_max_sectors.attr,
+	&pscsi_dev_attrib_hw_queue_depth.attr,
+	NULL,
+};
+
 static struct se_subsystem_api pscsi_template = {
 	.name			= "pscsi",
 	.owner			= THIS_MODULE,
-	.transport_type		= TRANSPORT_PLUGIN_PHBA_PDEV,
+	.transport_flags	= TRANSPORT_FLAG_PASSTHROUGH,
 	.attach_hba		= pscsi_attach_hba,
 	.detach_hba		= pscsi_detach_hba,
 	.pmode_enable_hba	= pscsi_pmode_enable_hba,
@@ -1165,6 +1158,11 @@ static struct se_subsystem_api pscsi_template = {
 
 static int __init pscsi_module_init(void)
 {
+	struct target_backend_cits *tbc = &pscsi_template.tb_cits;
+
+	target_core_setup_sub_cits(&pscsi_template);
+	tbc->tb_dev_attrib_cit.ct_attrs = pscsi_backend_dev_attrs;
+
 	return transport_subsystem_register(&pscsi_template);
 }
 

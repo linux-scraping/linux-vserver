@@ -266,13 +266,12 @@ static ssize_t gadget_dev_desc_UDC_store(struct gadget_info *gi,
 		ret = unregister_gadget(gi);
 		if (ret)
 			goto err;
-		kfree(name);
 	} else {
 		if (gi->udc_name) {
 			ret = -EBUSY;
 			goto err;
 		}
-		ret = udc_attach_driver(name, &gi->composite.gadget_driver);
+		ret = usb_udc_attach_driver(name, &gi->composite.gadget_driver);
 		if (ret)
 			goto err;
 		gi->udc_name = name;
@@ -1452,6 +1451,9 @@ static const struct usb_gadget_driver configfs_driver_template = {
 	.setup          = composite_setup,
 	.reset          = composite_disconnect,
 	.disconnect     = composite_disconnect,
+
+	.suspend	= composite_suspend,
+	.resume		= composite_resume,
 
 	.max_speed	= USB_SPEED_SUPER,
 	.driver = {

@@ -40,20 +40,6 @@ static inline void ceph_set_cached_acl(struct inode *inode,
 	spin_unlock(&ci->i_ceph_lock);
 }
 
-static inline struct posix_acl *ceph_get_cached_acl(struct inode *inode,
-							int type)
-{
-	struct ceph_inode_info *ci = ceph_inode(inode);
-	struct posix_acl *acl = ACL_NOT_CACHED;
-
-	spin_lock(&ci->i_ceph_lock);
-	if (__ceph_caps_issued_mask(ci, CEPH_CAP_XATTR_SHARED, 0))
-		acl = get_cached_acl(inode, type);
-	spin_unlock(&ci->i_ceph_lock);
-
-	return acl;
-}
-
 struct posix_acl *ceph_get_acl(struct inode *inode, int type)
 {
 	int size;
@@ -108,9 +94,11 @@ int ceph_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	case ACL_TYPE_ACCESS:
 		name = POSIX_ACL_XATTR_ACCESS;
 		if (acl) {
-			ret = posix_acl_update_mode(inode, &new_mode, &acl);
-			if (ret)
+			ret = posix_acl_equiv_mode(acl, &new_mode);
+			if (ret < 0)
 				goto out;
+			if (ret == 0)
+				acl = NULL;
 		}
 		break;
 	case ACL_TYPE_DEFAULT:

@@ -99,12 +99,12 @@ static inline int arch_spin_value_unlocked(arch_spinlock_t lock)
 
 static inline int arch_spin_is_locked(arch_spinlock_t *lock)
 {
-	return !arch_spin_value_unlocked(ACCESS_ONCE(*lock));
+	return !arch_spin_value_unlocked(READ_ONCE(*lock));
 }
 
 static inline int arch_spin_is_contended(arch_spinlock_t *lock)
 {
-	arch_spinlock_t lockval = ACCESS_ONCE(*lock);
+	arch_spinlock_t lockval = READ_ONCE(*lock);
 	return (lockval.next - lockval.owner) > 1;
 }
 #define arch_spin_is_contended	arch_spin_is_contended
@@ -230,15 +230,5 @@ static inline int arch_read_trylock(arch_rwlock_t *rw)
 #define arch_spin_relax(lock)	cpu_relax()
 #define arch_read_relax(lock)	cpu_relax()
 #define arch_write_relax(lock)	cpu_relax()
-
-/*
- * Accesses appearing in program order before a spin_lock() operation
- * can be reordered with accesses inside the critical section, by virtue
- * of arch_spin_lock being constructed using acquire semantics.
- *
- * In cases where this is problematic (e.g. try_to_wake_up), an
- * smp_mb__before_spinlock() can restore the required ordering.
- */
-#define smp_mb__before_spinlock()	smp_mb()
 
 #endif /* __ASM_SPINLOCK_H */

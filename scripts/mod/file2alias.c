@@ -653,7 +653,7 @@ static int do_of_entry (const char *filename, void *symval, char *alias)
 	len = sprintf(alias, "of:N%sT%s", (*name)[0] ? *name : "*",
 		      (*type)[0] ? *type : "*");
 
-	if ((*compatible)[0])
+	if (compatible[0])
 		sprintf(&alias[len], "%sC%s", (*type)[0] ? "*" : "",
 			*compatible);
 
@@ -1108,6 +1108,22 @@ static int do_amba_entry(const char *filename,
 	return 1;
 }
 ADD_TO_DEVTABLE("amba", amba_id, do_amba_entry);
+
+/*
+ * looks like: "mipscdmm:tN"
+ *
+ * N is exactly 2 digits, where each is an upper-case hex digit, or
+ *	a ? or [] pattern matching exactly one digit.
+ */
+static int do_mips_cdmm_entry(const char *filename,
+			      void *symval, char *alias)
+{
+	DEF_FIELD(symval, mips_cdmm_device_id, type);
+
+	sprintf(alias, "mipscdmm:t%02X*", type);
+	return 1;
+}
+ADD_TO_DEVTABLE("mipscdmm", mips_cdmm_device_id, do_mips_cdmm_entry);
 
 /* LOOKS like cpu:type:x86,venVVVVfamFFFFmodMMMM:feature:*,FEAT,*
  * All fields are numbers. It would be nicer to use strings for vendor

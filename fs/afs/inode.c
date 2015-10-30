@@ -69,9 +69,9 @@ static int afs_inode_map_status(struct afs_vnode *vnode, struct key *key)
 
 	set_nlink(inode, vnode->status.nlink);
 	inode->i_uid		= vnode->status.owner;
-	inode->i_gid            = vnode->status.group;
+	inode->i_gid		= GLOBAL_ROOT_GID;
 	inode->i_size		= vnode->status.size;
-	inode->i_ctime.tv_sec	= vnode->status.mtime_client;
+	inode->i_ctime.tv_sec	= vnode->status.mtime_server;
 	inode->i_ctime.tv_nsec	= 0;
 	inode->i_atime		= inode->i_mtime = inode->i_ctime;
 	inode->i_blocks		= 0;
@@ -379,7 +379,7 @@ int afs_getattr(struct vfsmount *mnt, struct dentry *dentry,
 {
 	struct inode *inode;
 
-	inode = dentry->d_inode;
+	inode = d_inode(dentry);
 
 	_enter("{ ino=%lu v=%u }", inode->i_ino, inode->i_generation);
 
@@ -458,12 +458,12 @@ void afs_evict_inode(struct inode *inode)
  */
 int afs_setattr(struct dentry *dentry, struct iattr *attr)
 {
-	struct afs_vnode *vnode = AFS_FS_I(dentry->d_inode);
+	struct afs_vnode *vnode = AFS_FS_I(d_inode(dentry));
 	struct key *key;
 	int ret;
 
-	_enter("{%x:%u},{n=%s},%x",
-	       vnode->fid.vid, vnode->fid.vnode, dentry->d_name.name,
+	_enter("{%x:%u},{n=%pd},%x",
+	       vnode->fid.vid, vnode->fid.vnode, dentry,
 	       attr->ia_valid);
 
 	if (!(attr->ia_valid & (ATTR_SIZE | ATTR_MODE | ATTR_UID | ATTR_GID |

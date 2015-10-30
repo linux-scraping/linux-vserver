@@ -31,13 +31,11 @@ int __init __weak early_init_dt_alloc_reserved_memory_arch(phys_addr_t size,
 	phys_addr_t align, phys_addr_t start, phys_addr_t end, bool nomap,
 	phys_addr_t *res_base)
 {
-	phys_addr_t base;
 	/*
 	 * We use __memblock_alloc_base() because memblock_alloc_base()
 	 * panic()s on allocation failure.
 	 */
-	end = !end ? MEMBLOCK_ALLOC_ANYWHERE : end;
-	base = __memblock_alloc_base(size, align, end);
+	phys_addr_t base = __memblock_alloc_base(size, align, end);
 	if (!base)
 		return -ENOMEM;
 
@@ -267,6 +265,7 @@ int of_reserved_mem_device_init(struct device *dev)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(of_reserved_mem_device_init);
 
 /**
  * of_reserved_mem_device_release() - release reserved memory device structures
@@ -291,3 +290,4 @@ void of_reserved_mem_device_release(struct device *dev)
 
 	rmem->ops->device_release(rmem, dev);
 }
+EXPORT_SYMBOL_GPL(of_reserved_mem_device_release);

@@ -36,7 +36,6 @@
 #define VERSION "1.2"
 
 static DECLARE_RWSEM(hidp_session_sem);
-static DECLARE_WAIT_QUEUE_HEAD(hidp_session_wq);
 static LIST_HEAD(hidp_session_list);
 
 static unsigned char hidp_keycode[256] = {
@@ -71,10 +70,11 @@ static void hidp_session_terminate(struct hidp_session *s);
 
 static void hidp_copy_session(struct hidp_session *session, struct hidp_conninfo *ci)
 {
+	u32 valid_flags = 0;
 	memset(ci, 0, sizeof(*ci));
 	bacpy(&ci->bdaddr, &session->bdaddr);
 
-	ci->flags = session->flags;
+	ci->flags = session->flags & valid_flags;
 	ci->state = BT_CONNECTED;
 
 	if (session->input) {
@@ -737,14 +737,10 @@ static int hidp_setup_hid(struct hidp_session *session,
 	struct hid_device *hid;
 	int err;
 
-	session->rd_data = kzalloc(req->rd_size, GFP_KERNEL);
-	if (!session->rd_data)
-		return -ENOMEM;
+	session->rd_data = memdup_user(req->rd_data, req->rd_size);
+	if (IS_ERR(session->rd_data))
+		return PTR_ERR(session->rd_data);
 
-	if (copy_from_user(session->rd_data, req->rd_data, req->rd_size)) {
-		err = -EFAULT;
-		goto fault;
-	}
 	session->rd_size = req->rd_size;
 
 	hid = hid_allocate_device();
@@ -912,7 +908,7 @@ static int hidp_session_new(struct hidp_session **out, const bdaddr_t *bdaddr,
 	kref_init(&session->ref);
 	atomic_set(&session->state, HIDP_SESSION_IDLING);
 	init_waitqueue_head(&session->state_queue);
-	session->flags = req->flags & (1 << HIDP_BLUETOOTH_VENDOR_ID);
+	session->flags = req->flags & BIT(HIDP_BLUETOOTH_VENDOR_ID);
 
 	/* connection management */
 	bacpy(&session->bdaddr, bdaddr);
@@ -1057,12 +1053,12 @@ static int hidp_session_start_sync(struct hidp_session *session)
  * Wake up session thread and notify it to stop. This is asynchronous and
  * returns immediately. Call this whenever a runtime error occurs and you want
  * the session to stop.
- * Note: wake_up_interruptible() performs any necessary memory-barriers for us.
+ * Note: wake_up_process() performs any necessary memory-barriers for us.
  */
 static void hidp_session_terminate(struct hidp_session *session)
 {
 	atomic_inc(&session->terminate);
-	wake_up_interruptible(&hidp_session_wq);
+	wake_up_process(session->task);
 }
 
 /*
@@ -1169,9 +1165,7 @@ static void hidp_session_run(struct hidp_session *session)
 	struct sock *ctrl_sk = session->ctrl_sock->sk;
 	struct sock *intr_sk = session->intr_sock->sk;
 	struct sk_buff *skb;
-	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 
-	add_wait_queue(&hidp_session_wq, &wait);
 	for (;;) {
 		/*
 		 * This thread can be woken up two ways:
@@ -1179,10 +1173,12 @@ static void hidp_session_run(struct hidp_session *session)
 		 *    session->terminate flag and wakes this thread up.
 		 *  - Via modifying the socket state of ctrl/intr_sock. This
 		 *    thread is woken up by ->sk_state_changed().
+		 *
+		 * Note: set_current_state() performs any necessary
+		 * memory-barriers for us.
 		 */
+		set_current_state(TASK_INTERRUPTIBLE);
 
-		/* Ensure session->terminate is updated */
-		smp_mb__before_atomic();
 		if (atomic_read(&session->terminate))
 			break;
 
@@ -1216,22 +1212,11 @@ static void hidp_session_run(struct hidp_session *session)
 		hidp_process_transmit(session, &session->ctrl_transmit,
 				      session->ctrl_sock);
 
-		wait_woken(&wait, TASK_INTERRUPTIBLE, MAX_SCHEDULE_TIMEOUT);
+		schedule();
 	}
-	remove_wait_queue(&hidp_session_wq, &wait);
 
 	atomic_inc(&session->terminate);
-
-	/* Ensure session->terminate is updated */
-	smp_mb__after_atomic();
-}
-
-static int hidp_session_wake_function(wait_queue_t *wait,
-				      unsigned int mode,
-				      int sync, void *key)
-{
-	wake_up_interruptible(&hidp_session_wq);
-	return false;
+	set_current_state(TASK_RUNNING);
 }
 
 /*
@@ -1244,8 +1229,7 @@ static int hidp_session_wake_function(wait_queue_t *wait,
 static int hidp_session_thread(void *arg)
 {
 	struct hidp_session *session = arg;
-	DEFINE_WAIT_FUNC(ctrl_wait, hidp_session_wake_function);
-	DEFINE_WAIT_FUNC(intr_wait, hidp_session_wake_function);
+	wait_queue_t ctrl_wait, intr_wait;
 
 	BT_DBG("session %p", session);
 
@@ -1255,6 +1239,8 @@ static int hidp_session_thread(void *arg)
 	set_user_nice(current, -15);
 	hidp_set_timer(session);
 
+	init_waitqueue_entry(&ctrl_wait, current);
+	init_waitqueue_entry(&intr_wait, current);
 	add_wait_queue(sk_sleep(session->ctrl_sock->sk), &ctrl_wait);
 	add_wait_queue(sk_sleep(session->intr_sock->sk), &intr_wait);
 	/* This memory barrier is paired with wq_has_sleeper(). See
@@ -1327,15 +1313,21 @@ int hidp_connection_add(struct hidp_connadd_req *req,
 			struct socket *ctrl_sock,
 			struct socket *intr_sock)
 {
+	u32 valid_flags = BIT(HIDP_VIRTUAL_CABLE_UNPLUG) |
+			  BIT(HIDP_BOOT_PROTOCOL_MODE);
 	struct hidp_session *session;
 	struct l2cap_conn *conn;
-	struct l2cap_chan *chan = l2cap_pi(ctrl_sock->sk)->chan;
+	struct l2cap_chan *chan;
 	int ret;
 
 	ret = hidp_verify_sockets(ctrl_sock, intr_sock);
 	if (ret)
 		return ret;
 
+	if (req->flags & ~valid_flags)
+		return -EINVAL;
+
+	chan = l2cap_pi(ctrl_sock->sk)->chan;
 	conn = NULL;
 	l2cap_chan_lock(chan);
 	if (chan->conn)
@@ -1365,13 +1357,17 @@ out_conn:
 
 int hidp_connection_del(struct hidp_conndel_req *req)
 {
+	u32 valid_flags = BIT(HIDP_VIRTUAL_CABLE_UNPLUG);
 	struct hidp_session *session;
+
+	if (req->flags & ~valid_flags)
+		return -EINVAL;
 
 	session = hidp_session_find(&req->bdaddr);
 	if (!session)
 		return -ENOENT;
 
-	if (req->flags & (1 << HIDP_VIRTUAL_CABLE_UNPLUG))
+	if (req->flags & BIT(HIDP_VIRTUAL_CABLE_UNPLUG))
 		hidp_send_ctrl_message(session,
 				       HIDP_TRANS_HID_CONTROL |
 				         HIDP_CTRL_VIRTUAL_CABLE_UNPLUG,

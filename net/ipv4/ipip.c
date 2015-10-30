@@ -128,68 +128,43 @@ static struct rtnl_link_ops ipip_link_ops __read_mostly;
 
 static int ipip_err(struct sk_buff *skb, u32 info)
 {
-	/* All the routers (except for Linux) return only
-	   8 bytes of packet payload. It means, that precise relaying of
-	   ICMP in the real Internet is absolutely infeasible.
-	 */
+
+/* All the routers (except for Linux) return only
+   8 bytes of packet payload. It means, that precise relaying of
+   ICMP in the real Internet is absolutely infeasible.
+ */
 	struct net *net = dev_net(skb->dev);
 	struct ip_tunnel_net *itn = net_generic(net, ipip_net_id);
 	const struct iphdr *iph = (const struct iphdr *)skb->data;
+	struct ip_tunnel *t;
+	int err;
 	const int type = icmp_hdr(skb)->type;
 	const int code = icmp_hdr(skb)->code;
-	struct ip_tunnel *t;
-	int err = 0;
 
-	switch (type) {
-	case ICMP_DEST_UNREACH:
-		switch (code) {
-		case ICMP_SR_FAILED:
-			/* Impossible event. */
-			goto out;
-		default:
-			/* All others are translated to HOST_UNREACH.
-			 * rfc2003 contains "deep thoughts" about NET_UNREACH,
-			 * I believe they are just ether pollution. --ANK
-			 */
-			break;
-		}
-		break;
-
-	case ICMP_TIME_EXCEEDED:
-		if (code != ICMP_EXC_TTL)
-			goto out;
-		break;
-
-	case ICMP_REDIRECT:
-		break;
-
-	default:
-		goto out;
-	}
-
+	err = -ENOENT;
 	t = ip_tunnel_lookup(itn, skb->dev->ifindex, TUNNEL_NO_KEY,
 			     iph->daddr, iph->saddr, 0);
-	if (!t) {
-		err = -ENOENT;
+	if (!t)
 		goto out;
-	}
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED) {
-		ipv4_update_pmtu(skb, net, info, t->parms.link, 0,
-				 iph->protocol, 0);
+		ipv4_update_pmtu(skb, dev_net(skb->dev), info,
+				 t->parms.link, 0, IPPROTO_IPIP, 0);
+		err = 0;
 		goto out;
 	}
 
 	if (type == ICMP_REDIRECT) {
-		ipv4_redirect(skb, net, t->parms.link, 0, iph->protocol, 0);
+		ipv4_redirect(skb, dev_net(skb->dev), t->parms.link, 0,
+			      IPPROTO_IPIP, 0);
+		err = 0;
 		goto out;
 	}
 
-	if (t->parms.iph.daddr == 0) {
-		err = -ENOENT;
+	if (t->parms.iph.daddr == 0)
 		goto out;
-	}
 
+	err = 0;
 	if (t->parms.iph.ttl == 0 && type == ICMP_TIME_EXCEEDED)
 		goto out;
 
@@ -297,6 +272,7 @@ static const struct net_device_ops ipip_netdev_ops = {
 	.ndo_do_ioctl	= ipip_tunnel_ioctl,
 	.ndo_change_mtu = ip_tunnel_change_mtu,
 	.ndo_get_stats64 = ip_tunnel_get_stats64,
+	.ndo_get_iflink = ip_tunnel_get_iflink,
 };
 
 #define IPIP_FEATURES (NETIF_F_SG |		\
@@ -311,7 +287,6 @@ static void ipip_tunnel_setup(struct net_device *dev)
 
 	dev->type		= ARPHRD_TUNNEL;
 	dev->flags		= IFF_NOARP;
-	dev->iflink		= 0;
 	dev->addr_len		= 4;
 	dev->features		|= NETIF_F_LLTX;
 	netif_keep_dst(dev);
@@ -350,10 +325,10 @@ static void ipip_netlink_parms(struct nlattr *data[],
 		parms->link = nla_get_u32(data[IFLA_IPTUN_LINK]);
 
 	if (data[IFLA_IPTUN_LOCAL])
-		parms->iph.saddr = nla_get_be32(data[IFLA_IPTUN_LOCAL]);
+		parms->iph.saddr = nla_get_in_addr(data[IFLA_IPTUN_LOCAL]);
 
 	if (data[IFLA_IPTUN_REMOTE])
-		parms->iph.daddr = nla_get_be32(data[IFLA_IPTUN_REMOTE]);
+		parms->iph.daddr = nla_get_in_addr(data[IFLA_IPTUN_REMOTE]);
 
 	if (data[IFLA_IPTUN_TTL]) {
 		parms->iph.ttl = nla_get_u8(data[IFLA_IPTUN_TTL]);
@@ -391,12 +366,12 @@ static bool ipip_netlink_encap_parms(struct nlattr *data[],
 
 	if (data[IFLA_IPTUN_ENCAP_SPORT]) {
 		ret = true;
-		ipencap->sport = nla_get_u16(data[IFLA_IPTUN_ENCAP_SPORT]);
+		ipencap->sport = nla_get_be16(data[IFLA_IPTUN_ENCAP_SPORT]);
 	}
 
 	if (data[IFLA_IPTUN_ENCAP_DPORT]) {
 		ret = true;
-		ipencap->dport = nla_get_u16(data[IFLA_IPTUN_ENCAP_DPORT]);
+		ipencap->dport = nla_get_be16(data[IFLA_IPTUN_ENCAP_DPORT]);
 	}
 
 	return ret;
@@ -475,8 +450,8 @@ static int ipip_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	struct ip_tunnel_parm *parm = &tunnel->parms;
 
 	if (nla_put_u32(skb, IFLA_IPTUN_LINK, parm->link) ||
-	    nla_put_be32(skb, IFLA_IPTUN_LOCAL, parm->iph.saddr) ||
-	    nla_put_be32(skb, IFLA_IPTUN_REMOTE, parm->iph.daddr) ||
+	    nla_put_in_addr(skb, IFLA_IPTUN_LOCAL, parm->iph.saddr) ||
+	    nla_put_in_addr(skb, IFLA_IPTUN_REMOTE, parm->iph.daddr) ||
 	    nla_put_u8(skb, IFLA_IPTUN_TTL, parm->iph.ttl) ||
 	    nla_put_u8(skb, IFLA_IPTUN_TOS, parm->iph.tos) ||
 	    nla_put_u8(skb, IFLA_IPTUN_PMTUDISC,
@@ -485,12 +460,12 @@ static int ipip_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 	if (nla_put_u16(skb, IFLA_IPTUN_ENCAP_TYPE,
 			tunnel->encap.type) ||
-	    nla_put_u16(skb, IFLA_IPTUN_ENCAP_SPORT,
-			tunnel->encap.sport) ||
-	    nla_put_u16(skb, IFLA_IPTUN_ENCAP_DPORT,
-			tunnel->encap.dport) ||
+	    nla_put_be16(skb, IFLA_IPTUN_ENCAP_SPORT,
+			 tunnel->encap.sport) ||
+	    nla_put_be16(skb, IFLA_IPTUN_ENCAP_DPORT,
+			 tunnel->encap.dport) ||
 	    nla_put_u16(skb, IFLA_IPTUN_ENCAP_FLAGS,
-			tunnel->encap.dport))
+			tunnel->encap.flags))
 		goto nla_put_failure;
 
 	return 0;
@@ -523,6 +498,7 @@ static struct rtnl_link_ops ipip_link_ops __read_mostly = {
 	.dellink	= ip_tunnel_dellink,
 	.get_size	= ipip_get_size,
 	.fill_info	= ipip_fill_info,
+	.get_link_net	= ip_tunnel_get_link_net,
 };
 
 static struct xfrm_tunnel ipip_handler __read_mostly = {

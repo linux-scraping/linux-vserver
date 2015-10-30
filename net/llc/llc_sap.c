@@ -146,7 +146,7 @@ static int llc_exec_sap_trans_actions(struct llc_sap *sap,
 				      struct sk_buff *skb)
 {
 	int rc = 0;
-	llc_sap_action_t *next_action = trans->ev_actions;
+	const llc_sap_action_t *next_action = trans->ev_actions;
 
 	for (; next_action && *next_action; next_action++)
 		if ((*next_action)(sap, skb))
@@ -290,10 +290,7 @@ static void llc_sap_rcv(struct llc_sap *sap, struct sk_buff *skb,
 
 	ev->type   = LLC_SAP_EV_TYPE_PDU;
 	ev->reason = 0;
-	skb_orphan(skb);
-	sock_hold(sk);
 	skb->sk = sk;
-	skb->destructor = sock_efree;
 	llc_sap_state_process(sap, skb);
 }
 

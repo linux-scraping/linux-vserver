@@ -564,13 +564,11 @@ posix_acl_create(struct inode *dir, umode_t *mode,
 
 	*acl = posix_acl_clone(p, GFP_NOFS);
 	if (!*acl)
-		return -ENOMEM;
+		goto no_mem;
 
 	ret = posix_acl_create_masq(*acl, mode);
-	if (ret < 0) {
-		posix_acl_release(*acl);
-		return -ENOMEM;
-	}
+	if (ret < 0)
+		goto no_mem_clone;
 
 	if (ret == 0) {
 		posix_acl_release(*acl);
@@ -591,39 +589,14 @@ no_acl:
 	*default_acl = NULL;
 	*acl = NULL;
 	return 0;
+
+no_mem_clone:
+	posix_acl_release(*acl);
+no_mem:
+	posix_acl_release(p);
+	return -ENOMEM;
 }
 EXPORT_SYMBOL_GPL(posix_acl_create);
-
-/**
- * posix_acl_update_mode  -  update mode in set_acl
- *
- * Update the file mode when setting an ACL: compute the new file permission
- * bits based on the ACL.  In addition, if the ACL is equivalent to the new
- * file mode, set *acl to NULL to indicate that no ACL should be set.
- *
- * As with chmod, clear the setgit bit if the caller is not in the owning group
- * or capable of CAP_FSETID (see inode_change_ok).
- *
- * Called from set_acl inode operations.
- */
-int posix_acl_update_mode(struct inode *inode, umode_t *mode_p,
-			  struct posix_acl **acl)
-{
-	umode_t mode = inode->i_mode;
-	int error;
-
-	error = posix_acl_equiv_mode(*acl, &mode);
-	if (error < 0)
-		return error;
-	if (error == 0)
-		*acl = NULL;
-	if (!in_group_p(inode->i_gid) &&
-	    !capable_wrt_inode_uidgid(inode, CAP_FSETID))
-		mode &= ~S_ISGID;
-	*mode_p = mode;
-	return 0;
-}
-EXPORT_SYMBOL(posix_acl_update_mode);
 
 /*
  * Fix up the uids and gids in posix acl extended attributes in place.
@@ -801,12 +774,12 @@ posix_acl_xattr_get(struct dentry *dentry, const char *name,
 	struct posix_acl *acl;
 	int error;
 
-	if (!IS_POSIXACL(dentry->d_inode))
+	if (!IS_POSIXACL(d_backing_inode(dentry)))
 		return -EOPNOTSUPP;
-	if (S_ISLNK(dentry->d_inode->i_mode))
+	if (d_is_symlink(dentry))
 		return -EOPNOTSUPP;
 
-	acl = get_acl(dentry->d_inode, type);
+	acl = get_acl(d_backing_inode(dentry), type);
 	if (IS_ERR(acl))
 		return PTR_ERR(acl);
 	if (acl == NULL)
@@ -818,42 +791,38 @@ posix_acl_xattr_get(struct dentry *dentry, const char *name,
 	return error;
 }
 
-int
-set_posix_acl(struct inode *inode, int type, struct posix_acl *acl)
+static int
+posix_acl_xattr_set(struct dentry *dentry, const char *name,
+		const void *value, size_t size, int flags, int type)
 {
+	struct inode *inode = d_backing_inode(dentry);
+	struct posix_acl *acl = NULL;
+	int ret;
+
 	if (!IS_POSIXACL(inode))
 		return -EOPNOTSUPP;
 	if (!inode->i_op->set_acl)
 		return -EOPNOTSUPP;
 
 	if (type == ACL_TYPE_DEFAULT && !S_ISDIR(inode->i_mode))
-		return acl ? -EACCES : 0;
+		return value ? -EACCES : 0;
 	if (!inode_owner_or_capable(inode))
 		return -EPERM;
-
-	if (acl) {
-		int ret = posix_acl_valid(acl);
-		if (ret)
-			return ret;
-	}
-	return inode->i_op->set_acl(inode, acl, type);
-}
-EXPORT_SYMBOL(set_posix_acl);
-
-static int
-posix_acl_xattr_set(struct dentry *dentry, const char *name,
-		const void *value, size_t size, int flags, int type)
-{
-	struct inode *inode = dentry->d_inode;
-	struct posix_acl *acl = NULL;
-	int ret;
 
 	if (value) {
 		acl = posix_acl_from_xattr(&init_user_ns, value, size);
 		if (IS_ERR(acl))
 			return PTR_ERR(acl);
+
+		if (acl) {
+			ret = posix_acl_valid(acl);
+			if (ret)
+				goto out;
+		}
 	}
-	ret = set_posix_acl(inode, type, acl);
+
+	ret = inode->i_op->set_acl(inode, acl, type);
+out:
 	posix_acl_release(acl);
 	return ret;
 }
@@ -865,9 +834,9 @@ posix_acl_xattr_list(struct dentry *dentry, char *list, size_t list_size,
 	const char *xname;
 	size_t size;
 
-	if (!IS_POSIXACL(dentry->d_inode))
+	if (!IS_POSIXACL(d_backing_inode(dentry)))
 		return -EOPNOTSUPP;
-	if (S_ISLNK(dentry->d_inode->i_mode))
+	if (d_is_symlink(dentry))
 		return -EOPNOTSUPP;
 
 	if (type == ACL_TYPE_ACCESS)

@@ -24,6 +24,24 @@
 #include "kmem.h"
 #include "xfs_message.h"
 
+/*
+ * Greedy allocation.  May fail and may return vmalloced memory.
+ */
+void *
+kmem_zalloc_greedy(size_t *size, size_t minsize, size_t maxsize)
+{
+	void		*ptr;
+	size_t		kmsize = maxsize;
+
+	while (!(ptr = vzalloc(kmsize))) {
+		if ((kmsize >>= 1) <= minsize)
+			kmsize = minsize;
+	}
+	if (ptr)
+		*size = kmsize;
+	return ptr;
+}
+
 void *
 kmem_alloc(size_t size, xfs_km_flags_t flags)
 {
@@ -71,16 +89,6 @@ kmem_zalloc_large(size_t size, xfs_km_flags_t flags)
 		memalloc_noio_restore(noio_flag);
 
 	return ptr;
-}
-
-void
-kmem_free(const void *ptr)
-{
-	if (!is_vmalloc_addr(ptr)) {
-		kfree(ptr);
-	} else {
-		vfree(ptr);
-	}
 }
 
 void *

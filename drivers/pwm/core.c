@@ -192,7 +192,7 @@ static void of_pwmchip_add(struct pwm_chip *chip)
 
 static void of_pwmchip_remove(struct pwm_chip *chip)
 {
-	if (chip->dev && chip->dev->of_node)
+	if (chip->dev)
 		of_node_put(chip->dev->of_node);
 }
 
@@ -292,8 +292,6 @@ int pwmchip_remove(struct pwm_chip *chip)
 {
 	unsigned int i;
 	int ret = 0;
-
-	pwmchip_sysfs_unexport_children(chip);
 
 	mutex_lock(&pwm_lock);
 
@@ -575,7 +573,7 @@ EXPORT_SYMBOL_GPL(of_pwm_get);
  * @table: array of consumers to register
  * @num: number of consumers in table
  */
-void __init pwm_add_table(struct pwm_lookup *table, size_t num)
+void pwm_add_table(struct pwm_lookup *table, size_t num)
 {
 	mutex_lock(&pwm_lookup_lock);
 

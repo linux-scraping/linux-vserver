@@ -155,15 +155,6 @@ void arc_cache_init(void)
 
 	printk(arc_cache_mumbojumbo(0, str, sizeof(str)));
 
-	/*
-	 * Only master CPU needs to execute rest of function:
-	 *  - Assume SMP so all cores will have same cache config so
-	 *    any geomtry checks will be same for all
-	 *  - IOC setup / dma callbacks only need to be setup once
-	 */
-	if (cpu)
-		return;
-
 	if (IS_ENABLED(CONFIG_ARC_HAS_ICACHE)) {
 		struct cpuinfo_arc_cache *ic = &cpuinfo_arc700[cpu].icache;
 
@@ -275,7 +266,7 @@ static inline void __cache_line_loop(unsigned long paddr, unsigned long vaddr,
  * Machine specific helpers for Entire D-Cache or Per Line ops
  */
 
-static unsigned int __before_dc_op(const int op)
+static inline unsigned int __before_dc_op(const int op)
 {
 	unsigned int reg = reg;
 
@@ -293,7 +284,7 @@ static unsigned int __before_dc_op(const int op)
 	return reg;
 }
 
-static void __after_dc_op(const int op, unsigned int reg)
+static inline void __after_dc_op(const int op, unsigned int reg)
 {
 	if (op & OP_FLUSH)	/* flush / flush-n-inv both wait */
 		while (read_aux_reg(ARC_REG_DC_CTRL) & DC_CTRL_FLUSH_STATUS);

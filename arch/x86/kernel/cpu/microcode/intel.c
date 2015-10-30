@@ -124,7 +124,7 @@ static int get_matching_mc(struct microcode_intel *mc_intel, int cpu)
 	cpf = cpu_sig.pf;
 	crev = cpu_sig.rev;
 
-	return get_matching_microcode(csig, cpf, mc_intel, crev);
+	return get_matching_microcode(csig, cpf, crev, mc_intel);
 }
 
 static int apply_microcode_intel(int cpu)
@@ -196,6 +196,11 @@ static enum ucode_state generic_load_microcode(int cpu, void *data, size_t size,
 		struct microcode_header_intel mc_header;
 		unsigned int mc_size;
 
+		if (leftover < sizeof(mc_header)) {
+			pr_err("error! Truncated header in microcode data file\n");
+			break;
+		}
+
 		if (get_ucode_data(&mc_header, ucode_ptr, sizeof(mc_header)))
 			break;
 
@@ -221,7 +226,7 @@ static enum ucode_state generic_load_microcode(int cpu, void *data, size_t size,
 
 		csig = uci->cpu_sig.sig;
 		cpf = uci->cpu_sig.pf;
-		if (get_matching_microcode(csig, cpf, mc, new_rev)) {
+		if (get_matching_microcode(csig, cpf, new_rev, mc)) {
 			vfree(new_mc);
 			new_rev = mc_header.rev;
 			new_mc  = mc;
@@ -267,18 +272,6 @@ static int get_ucode_fw(void *to, const void *from, size_t n)
 	return 0;
 }
 
-static bool is_blacklisted(unsigned int cpu)
-{
-	struct cpuinfo_x86 *c = &cpu_data(cpu);
-
-	if (c->x86 == 6 && c->x86_model == 79) {
-		pr_err_once("late loading on model 79 is disabled.\n");
-		return true;
-	}
-
-	return false;
-}
-
 static enum ucode_state request_microcode_fw(int cpu, struct device *device,
 					     bool refresh_fw)
 {
@@ -286,9 +279,6 @@ static enum ucode_state request_microcode_fw(int cpu, struct device *device,
 	struct cpuinfo_x86 *c = &cpu_data(cpu);
 	const struct firmware *firmware;
 	enum ucode_state ret;
-
-	if (is_blacklisted(cpu))
-		return UCODE_NFOUND;
 
 	sprintf(name, "intel-ucode/%02x-%02x-%02x",
 		c->x86, c->x86_model, c->x86_mask);
@@ -314,9 +304,6 @@ static int get_ucode_user(void *to, const void *from, size_t n)
 static enum ucode_state
 request_microcode_user(int cpu, const void __user *buf, size_t size)
 {
-	if (is_blacklisted(cpu))
-		return UCODE_NFOUND;
-
 	return generic_load_microcode(cpu, (void *)buf, size, &get_ucode_user);
 }
 

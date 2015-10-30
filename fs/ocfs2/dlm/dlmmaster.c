@@ -695,14 +695,6 @@ void __dlm_lockres_grab_inflight_worker(struct dlm_ctxt *dlm,
 			res->inflight_assert_workers);
 }
 
-static void dlm_lockres_grab_inflight_worker(struct dlm_ctxt *dlm,
-		struct dlm_lock_resource *res)
-{
-	spin_lock(&res->spinlock);
-	__dlm_lockres_grab_inflight_worker(dlm, res);
-	spin_unlock(&res->spinlock);
-}
-
 static void __dlm_lockres_drop_inflight_worker(struct dlm_ctxt *dlm,
 		struct dlm_lock_resource *res)
 {
@@ -1474,6 +1466,18 @@ way_up_top:
 
 		/* take care of the easy cases up front */
 		spin_lock(&res->spinlock);
+
+		/*
+		 * Right after dlm spinlock was released, dlm_thread could have
+		 * purged the lockres. Check if lockres got unhashed. If so
+		 * start over.
+		 */
+		if (hlist_unhashed(&res->hash_node)) {
+			spin_unlock(&res->spinlock);
+			dlm_lockres_put(res);
+			goto way_up_top;
+		}
+
 		if (res->state & (DLM_LOCK_RES_RECOVERING|
 				  DLM_LOCK_RES_MIGRATING)) {
 			spin_unlock(&res->spinlock);
@@ -1648,6 +1652,7 @@ send_response:
 		}
 		mlog(0, "%u is the owner of %.*s, cleaning everyone else\n",
 			     dlm->node_num, res->lockname.len, res->lockname.name);
+		spin_lock(&res->spinlock);
 		ret = dlm_dispatch_assert_master(dlm, res, 0, request->node_idx,
 						 DLM_ASSERT_MASTER_MLE_CLEANUP);
 		if (ret < 0) {
@@ -1656,8 +1661,9 @@ send_response:
 			dlm_lockres_put(res);
 		} else {
 			dispatched = 1;
-			dlm_lockres_grab_inflight_worker(dlm, res);
+			__dlm_lockres_grab_inflight_worker(dlm, res);
 		}
+		spin_unlock(&res->spinlock);
 	} else {
 		if (res)
 			dlm_lockres_put(res);
@@ -2512,11 +2518,6 @@ static int dlm_migrate_lockres(struct dlm_ctxt *dlm,
 	spin_lock(&dlm->master_lock);
 	ret = dlm_add_migration_mle(dlm, res, mle, &oldmle, name,
 				    namelen, target, dlm->node_num);
-	/* get an extra reference on the mle.
-	 * otherwise the assert_master from the new
-	 * master will destroy this.
-	 */
-	dlm_get_mle_inuse(mle);
 	spin_unlock(&dlm->master_lock);
 	spin_unlock(&dlm->spinlock);
 
@@ -2552,7 +2553,6 @@ fail:
 		if (mle_added) {
 			dlm_mle_detach_hb_events(dlm, mle);
 			dlm_put_mle(mle);
-			dlm_put_mle_inuse(mle);
 		} else if (mle) {
 			kmem_cache_free(dlm_mle_cache, mle);
 			mle = NULL;
@@ -2569,6 +2569,17 @@ fail:
 	/* now that remote nodes are spinning on the MIGRATING flag,
 	 * ensure that all assert_master work is flushed. */
 	flush_workqueue(dlm->dlm_worker);
+
+	/* get an extra reference on the mle.
+	 * otherwise the assert_master from the new
+	 * master will destroy this.
+	 * also, make sure that all callers of dlm_get_mle
+	 * take both dlm->spinlock and dlm->master_lock */
+	spin_lock(&dlm->spinlock);
+	spin_lock(&dlm->master_lock);
+	dlm_get_mle_inuse(mle);
+	spin_unlock(&dlm->master_lock);
+	spin_unlock(&dlm->spinlock);
 
 	/* notify new node and send all lock state */
 	/* call send_one_lockres with migration flag.
@@ -3297,15 +3308,6 @@ top:
 			if (mle->master != dead_node &&
 			    mle->new_master != dead_node)
 				continue;
-
-			if (mle->new_master == dead_node && mle->inuse) {
-				mlog(ML_NOTICE, "%s: target %u died during "
-						"migration from %u, the MLE is "
-						"still keep used, ignore it!\n",
-						dlm->name, dead_node,
-						mle->master);
-				continue;
-			}
 
 			/* If we have reached this point, this mle needs to be
 			 * removed from the list and freed. */

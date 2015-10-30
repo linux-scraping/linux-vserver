@@ -44,13 +44,6 @@
 #include <sound/compress_offload.h>
 #include <sound/compress_driver.h>
 
-/* struct snd_compr_codec_caps overflows the ioctl bit size for some
- * architectures, so we need to disable the relevant ioctls.
- */
-#if _IOC_SIZEBITS < 14
-#define COMPR_CODEC_CAPS_OVERFLOW
-#endif
-
 /* TODO:
  * - add substream support for multiple devices in case of
  *	SND_DYNAMIC_MINORS is not used
@@ -445,7 +438,6 @@ out:
 	return retval;
 }
 
-#ifndef COMPR_CODEC_CAPS_OVERFLOW
 static int
 snd_compr_get_codec_caps(struct snd_compr_stream *stream, unsigned long arg)
 {
@@ -469,7 +461,6 @@ out:
 	kfree(caps);
 	return retval;
 }
-#endif /* !COMPR_CODEC_CAPS_OVERFLOW */
 
 /* revisit this with snd_pcm_preallocate_xxx */
 static int snd_compr_allocate_buffer(struct snd_compr_stream *stream,
@@ -808,11 +799,9 @@ static long snd_compr_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	case _IOC_NR(SNDRV_COMPRESS_GET_CAPS):
 		retval = snd_compr_get_caps(stream, arg);
 		break;
-#ifndef COMPR_CODEC_CAPS_OVERFLOW
 	case _IOC_NR(SNDRV_COMPRESS_GET_CODEC_CAPS):
 		retval = snd_compr_get_codec_caps(stream, arg);
 		break;
-#endif
 	case _IOC_NR(SNDRV_COMPRESS_SET_PARAMS):
 		retval = snd_compr_set_params(stream, arg);
 		break;
@@ -879,12 +868,12 @@ static int snd_compress_dev_register(struct snd_device *device)
 		return -EBADFD;
 	compr = device->device_data;
 
-	sprintf(str, "comprC%iD%i", compr->card->number, compr->device);
 	pr_debug("reg %s for device %s, direction %d\n", str, compr->name,
 			compr->direction);
 	/* register compressed device */
-	ret = snd_register_device(SNDRV_DEVICE_TYPE_COMPRESS, compr->card,
-			compr->device, &snd_compr_file_ops, compr, str);
+	ret = snd_register_device(SNDRV_DEVICE_TYPE_COMPRESS,
+				  compr->card, compr->device,
+				  &snd_compr_file_ops, compr, &compr->dev);
 	if (ret < 0) {
 		pr_err("snd_register_device failed\n %d", ret);
 		return ret;
@@ -898,8 +887,16 @@ static int snd_compress_dev_disconnect(struct snd_device *device)
 	struct snd_compr *compr;
 
 	compr = device->device_data;
-	snd_unregister_device(SNDRV_DEVICE_TYPE_COMPRESS, compr->card,
-		compr->device);
+	snd_unregister_device(&compr->dev);
+	return 0;
+}
+
+static int snd_compress_dev_free(struct snd_device *device)
+{
+	struct snd_compr *compr;
+
+	compr = device->device_data;
+	put_device(&compr->dev);
 	return 0;
 }
 
@@ -914,7 +911,7 @@ int snd_compress_new(struct snd_card *card, int device,
 			int dirn, struct snd_compr *compr)
 {
 	static struct snd_device_ops ops = {
-		.dev_free = NULL,
+		.dev_free = snd_compress_dev_free,
 		.dev_register = snd_compress_dev_register,
 		.dev_disconnect = snd_compress_dev_disconnect,
 	};
@@ -922,6 +919,10 @@ int snd_compress_new(struct snd_card *card, int device,
 	compr->card = card;
 	compr->device = device;
 	compr->direction = dirn;
+
+	snd_device_initialize(&compr->dev, card);
+	dev_set_name(&compr->dev, "comprC%iD%i", card->number, device);
+
 	return snd_device_new(card, SNDRV_DEV_COMPRESS, compr, &ops);
 }
 EXPORT_SYMBOL_GPL(snd_compress_new);
@@ -959,7 +960,7 @@ int snd_compress_register(struct snd_compr *device)
 {
 	int retval;
 
-	if (device->name == NULL || device->dev == NULL || device->ops == NULL)
+	if (device->name == NULL || device->ops == NULL)
 		return -EINVAL;
 
 	pr_debug("Registering compressed device %s\n", device->name);

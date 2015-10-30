@@ -20,12 +20,11 @@
 
 #include <linux/time.h>
 #include <linux/fs.h>
-#include <linux/jbd2.h>
 #include <linux/mount.h>
 #include <linux/path.h>
-#include <linux/aio.h>
 #include <linux/quotaops.h>
 #include <linux/pagevec.h>
+#include <linux/uio.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -95,11 +94,9 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file_inode(iocb->ki_filp);
 	struct mutex *aio_mutex = NULL;
 	struct blk_plug plug;
-	int o_direct = file->f_flags & O_DIRECT;
+	int o_direct = iocb->ki_flags & IOCB_DIRECT;
 	int overwrite = 0;
-	size_t length = iov_iter_count(from);
 	ssize_t ret;
-	loff_t pos = iocb->ki_pos;
 
 	/*
 	 * Unaligned direct AIO must be serialized; see comment above
@@ -108,16 +105,17 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (o_direct &&
 	    ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
 	    !is_sync_kiocb(iocb) &&
-	    (file->f_flags & O_APPEND ||
-	     ext4_unaligned_aio(inode, from, pos))) {
+	    (iocb->ki_flags & IOCB_APPEND ||
+	     ext4_unaligned_aio(inode, from, iocb->ki_pos))) {
 		aio_mutex = ext4_aio_mutex(inode);
 		mutex_lock(aio_mutex);
 		ext4_unwritten_wait(inode);
 	}
 
 	mutex_lock(&inode->i_mutex);
-	if (file->f_flags & O_APPEND)
-		iocb->ki_pos = pos = i_size_read(inode);
+	ret = generic_write_checks(iocb, from);
+	if (ret <= 0)
+		goto out;
 
 	/*
 	 * If we have encountered a bitmap-format file, the size limit
@@ -126,21 +124,18 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))) {
 		struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
 
-		if ((pos > sbi->s_bitmap_maxbytes) ||
-		    (pos == sbi->s_bitmap_maxbytes && length > 0)) {
-			mutex_unlock(&inode->i_mutex);
+		if (iocb->ki_pos >= sbi->s_bitmap_maxbytes) {
 			ret = -EFBIG;
-			goto errout;
+			goto out;
 		}
-
-		if (pos + length > sbi->s_bitmap_maxbytes)
-			iov_iter_truncate(from, sbi->s_bitmap_maxbytes - pos);
+		iov_iter_truncate(from, sbi->s_bitmap_maxbytes - iocb->ki_pos);
 	}
 
 	iocb->private = &overwrite;
 	if (o_direct) {
+		size_t length = iov_iter_count(from);
+		loff_t pos = iocb->ki_pos;
 		blk_start_plug(&plug);
-
 
 		/* check whether we do a DIO overwrite or not */
 		if (ext4_should_dioread_nolock(inode) && !aio_mutex &&
@@ -185,23 +180,60 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (o_direct)
 		blk_finish_plug(&plug);
 
-errout:
+	if (aio_mutex)
+		mutex_unlock(aio_mutex);
+	return ret;
+
+out:
+	mutex_unlock(&inode->i_mutex);
 	if (aio_mutex)
 		mutex_unlock(aio_mutex);
 	return ret;
 }
 
+#ifdef CONFIG_FS_DAX
+static int ext4_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	return dax_fault(vma, vmf, ext4_get_block);
+					/* Is this the right get_block? */
+}
+
+static int ext4_dax_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	return dax_mkwrite(vma, vmf, ext4_get_block);
+}
+
+static const struct vm_operations_struct ext4_dax_vm_ops = {
+	.fault		= ext4_dax_fault,
+	.page_mkwrite	= ext4_dax_mkwrite,
+	.pfn_mkwrite	= dax_pfn_mkwrite,
+};
+#else
+#define ext4_dax_vm_ops	ext4_file_vm_ops
+#endif
+
 static const struct vm_operations_struct ext4_file_vm_ops = {
 	.fault		= filemap_fault,
 	.map_pages	= filemap_map_pages,
 	.page_mkwrite   = ext4_page_mkwrite,
-	.remap_pages	= generic_file_remap_pages,
 };
 
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	struct inode *inode = file->f_mapping->host;
+
+	if (ext4_encrypted_inode(inode)) {
+		int err = ext4_generate_encryption_key(inode);
+		if (err)
+			return 0;
+	}
 	file_accessed(file);
-	vma->vm_ops = &ext4_file_vm_ops;
+	if (IS_DAX(file_inode(file))) {
+		vma->vm_ops = &ext4_dax_vm_ops;
+		vma->vm_flags |= VM_MIXEDMAP;
+	} else {
+		vma->vm_ops = &ext4_file_vm_ops;
+	}
 	return 0;
 }
 
@@ -212,6 +244,7 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	struct vfsmount *mnt = filp->f_path.mnt;
 	struct path path;
 	char buf[64], *cp;
+	int ret;
 
 	if (unlikely(!(sbi->s_mount_flags & EXT4_MF_MNTDIR_SAMPLED) &&
 		     !(sb->s_flags & MS_RDONLY))) {
@@ -250,11 +283,17 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	 * writing and the journal is present
 	 */
 	if (filp->f_mode & FMODE_WRITE) {
-		int ret = ext4_inode_attach_jinode(inode);
+		ret = ext4_inode_attach_jinode(inode);
 		if (ret < 0)
 			return ret;
 	}
-	return dquot_file_open(inode, filp);
+	ret = dquot_file_open(inode, filp);
+	if (!ret && ext4_encrypted_inode(inode)) {
+		ret = ext4_generate_encryption_key(inode);
+		if (ret)
+			ret = -EACCES;
+	}
+	return ret;
 }
 
 /*
@@ -303,26 +342,46 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 		num = min_t(pgoff_t, end - index, PAGEVEC_SIZE);
 		nr_pages = pagevec_lookup(&pvec, inode->i_mapping, index,
 					  (pgoff_t)num);
-		if (nr_pages == 0)
+		if (nr_pages == 0) {
+			if (whence == SEEK_DATA)
+				break;
+
+			BUG_ON(whence != SEEK_HOLE);
+			/*
+			 * If this is the first time to go into the loop and
+			 * offset is not beyond the end offset, it will be a
+			 * hole at this offset
+			 */
+			if (lastoff == startoff || lastoff < endoff)
+				found = 1;
 			break;
+		}
+
+		/*
+		 * If this is the first time to go into the loop and
+		 * offset is smaller than the first page offset, it will be a
+		 * hole at this offset.
+		 */
+		if (lastoff == startoff && whence == SEEK_HOLE &&
+		    lastoff < page_offset(pvec.pages[0])) {
+			found = 1;
+			break;
+		}
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 			struct buffer_head *bh, *head;
 
 			/*
-			 * If current offset is smaller than the page offset,
-			 * there is a hole at this offset.
+			 * If the current offset is not beyond the end of given
+			 * range, it will be a hole.
 			 */
-			if (whence == SEEK_HOLE && lastoff < endoff &&
-			    lastoff < page_offset(pvec.pages[i])) {
+			if (lastoff < endoff && whence == SEEK_HOLE &&
+			    page->index > end) {
 				found = 1;
 				*offset = lastoff;
 				goto out;
 			}
-
-			if (page->index > end)
-				goto out;
 
 			lock_page(page);
 
@@ -340,8 +399,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 				lastoff = page_offset(page);
 				bh = head = page_buffers(page);
 				do {
-					if (lastoff + bh->b_size <= startoff)
-						goto next;
 					if (buffer_uptodate(bh) ||
 					    buffer_unwritten(bh)) {
 						if (whence == SEEK_DATA)
@@ -356,7 +413,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 						unlock_page(page);
 						goto out;
 					}
-next:
 					lastoff += bh->b_size;
 					bh = bh->b_this_page;
 				} while (bh != head);
@@ -366,18 +422,20 @@ next:
 			unlock_page(page);
 		}
 
-		/* The no. of pages is less than our desired, we are done. */
-		if (nr_pages < num)
+		/*
+		 * The no. of pages is less than our desired, that would be a
+		 * hole in there.
+		 */
+		if (nr_pages < num && whence == SEEK_HOLE) {
+			found = 1;
+			*offset = lastoff;
 			break;
+		}
 
 		index = pvec.pages[i - 1]->index + 1;
 		pagevec_release(&pvec);
 	} while (index <= end);
 
-	if (whence == SEEK_HOLE && lastoff < endoff) {
-		found = 1;
-		*offset = lastoff;
-	}
 out:
 	pagevec_release(&pvec);
 	return found;
@@ -399,7 +457,7 @@ static loff_t ext4_seek_data(struct file *file, loff_t offset, loff_t maxsize)
 	mutex_lock(&inode->i_mutex);
 
 	isize = i_size_read(inode);
-	if (offset < 0 || offset >= isize) {
+	if (offset >= isize) {
 		mutex_unlock(&inode->i_mutex);
 		return -ENXIO;
 	}
@@ -472,7 +530,7 @@ static loff_t ext4_seek_hole(struct file *file, loff_t offset, loff_t maxsize)
 	mutex_lock(&inode->i_mutex);
 
 	isize = i_size_read(inode);
-	if (offset < 0 || offset >= isize) {
+	if (offset >= isize) {
 		mutex_unlock(&inode->i_mutex);
 		return -ENXIO;
 	}
@@ -564,8 +622,6 @@ loff_t ext4_llseek(struct file *file, loff_t offset, int whence)
 
 const struct file_operations ext4_file_operations = {
 	.llseek		= ext4_llseek,
-	.read		= new_sync_read,
-	.write		= new_sync_write,
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= ext4_file_write_iter,
 	.unlocked_ioctl = ext4_ioctl,

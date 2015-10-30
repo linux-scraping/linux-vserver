@@ -2045,9 +2045,7 @@ static void gsm_cleanup_mux(struct gsm_mux *gsm)
 		}
 	}
 	spin_unlock(&gsm_mux_lock);
-	/* open failed before registering => nothing to do */
-	if (i == MAX_MUX)
-		return;
+	WARN_ON(i == MAX_MUX);
 
 	/* In theory disconnecting DLCI 0 is sufficient but for some
 	   modems this is apparently not the case. */
@@ -2671,7 +2669,7 @@ static inline void muxnet_put(struct gsm_mux_net *mux_net)
 static int gsm_mux_net_start_xmit(struct sk_buff *skb,
 				      struct net_device *net)
 {
-	struct gsm_mux_net *mux_net = (struct gsm_mux_net *)netdev_priv(net);
+	struct gsm_mux_net *mux_net = netdev_priv(net);
 	struct gsm_dlci *dlci = mux_net->dlci;
 	muxnet_get(mux_net);
 
@@ -2700,7 +2698,7 @@ static void gsm_mux_rx_netchar(struct gsm_dlci *dlci,
 {
 	struct net_device *net = dlci->net;
 	struct sk_buff *skb;
-	struct gsm_mux_net *mux_net = (struct gsm_mux_net *)netdev_priv(net);
+	struct gsm_mux_net *mux_net = netdev_priv(net);
 	muxnet_get(mux_net);
 
 	/* Allocate an sk_buff */
@@ -2729,7 +2727,7 @@ static void gsm_mux_rx_netchar(struct gsm_dlci *dlci,
 
 static int gsm_change_mtu(struct net_device *net, int new_mtu)
 {
-	struct gsm_mux_net *mux_net = (struct gsm_mux_net *)netdev_priv(net);
+	struct gsm_mux_net *mux_net = netdev_priv(net);
 	if ((new_mtu < 8) || (new_mtu > mux_net->dlci->gsm->mtu))
 		return -EINVAL;
 	net->mtu = new_mtu;
@@ -2765,7 +2763,7 @@ static void gsm_destroy_network(struct gsm_dlci *dlci)
 	pr_debug("destroy network interface");
 	if (!dlci->net)
 		return;
-	mux_net = (struct gsm_mux_net *)netdev_priv(dlci->net);
+	mux_net = netdev_priv(dlci->net);
 	muxnet_put(mux_net);
 }
 
@@ -2803,7 +2801,7 @@ static int gsm_create_network(struct gsm_dlci *dlci, struct gsm_netconfig *nc)
 		return -ENOMEM;
 	}
 	net->mtu = dlci->gsm->mtu;
-	mux_net = (struct gsm_mux_net *)netdev_priv(net);
+	mux_net = netdev_priv(net);
 	mux_net->dlci = dlci;
 	kref_init(&mux_net->ref);
 	strncpy(nc->if_name, net->name, IFNAMSIZ); /* return net name */
@@ -2826,7 +2824,7 @@ static int gsm_create_network(struct gsm_dlci *dlci, struct gsm_netconfig *nc)
 }
 
 /* Line discipline for real tty */
-struct tty_ldisc_ops tty_ldisc_packet = {
+static struct tty_ldisc_ops tty_ldisc_packet = {
 	.owner		 = THIS_MODULE,
 	.magic           = TTY_LDISC_MAGIC,
 	.name            = "n_gsm",

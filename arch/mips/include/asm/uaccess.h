@@ -14,7 +14,6 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/thread_info.h>
-#include <linux/string.h>
 #include <asm/asm-eva.h>
 
 /*
@@ -1137,8 +1136,6 @@ extern size_t __copy_in_user_eva(void *__to, const void *__from, size_t __n);
 			__cu_len = __invoke_copy_from_user(__cu_to,	\
 							   __cu_from,	\
 							   __cu_len);   \
-		} else {						\
-			memset(__cu_to, 0, __cu_len);			\
 		}							\
 	}								\
 	__cu_len;							\
@@ -1323,33 +1320,6 @@ strncpy_from_user(char *__to, const char __user *__from, long __len)
 			: "=r" (res)
 			: "r" (__to), "r" (__from), "r" (__len)
 			: "$2", "$3", "$4", "$5", "$6", __UA_t0, "$31", "memory");
-	}
-
-	return res;
-}
-
-/* Returns: 0 if bad, string length+1 (memory size) of string if ok */
-static inline long __strlen_user(const char __user *s)
-{
-	long res;
-
-	if (segment_eq(get_fs(), get_ds())) {
-		__asm__ __volatile__(
-			"move\t$4, %1\n\t"
-			__MODULE_JAL(__strlen_kernel_nocheck_asm)
-			"move\t%0, $2"
-			: "=r" (res)
-			: "r" (s)
-			: "$2", "$4", __UA_t0, "$31");
-	} else {
-		might_fault();
-		__asm__ __volatile__(
-			"move\t$4, %1\n\t"
-			__MODULE_JAL(__strlen_user_nocheck_asm)
-			"move\t%0, $2"
-			: "=r" (res)
-			: "r" (s)
-			: "$2", "$4", __UA_t0, "$31");
 	}
 
 	return res;

@@ -179,6 +179,11 @@ static struct usbmix_name_map audigy2nx_map[] = {
 	{ 0 } /* terminator */
 };
 
+static struct usbmix_name_map mbox1_map[] = {
+	{ 1, "Clock" },
+	{ 0 } /* terminator */
+};
+
 static struct usbmix_selector_map c400_selectors[] = {
 	{
 		.id = 0x80,
@@ -351,16 +356,6 @@ static struct usbmix_name_map dragonfly_1_2_map[] = {
 };
 
 /*
- * Dell usb dock with ALC4020 codec had a firmware problem where it got
- * screwed up when zero volume is passed; just skip it as a workaround
- */
-static const struct usbmix_name_map dell_alc4020_map[] = {
-	{ 16, NULL },
-	{ 19, NULL },
-	{ 0 }
-};
-
-/*
  * Control map entries
  */
 
@@ -443,8 +438,8 @@ static struct usbmix_ctl_map usbmix_ctl_maps[] = {
 		.map = aureon_51_2_map,
 	},
 	{
-		.id = USB_ID(0x0bda, 0x4014),
-		.map = dell_alc4020_map,
+		.id = USB_ID(0x0dba, 0x1000),
+		.map = mbox1_map,
 	},
 	{
 		.id = USB_ID(0x13e5, 0x0001),

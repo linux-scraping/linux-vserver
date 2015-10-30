@@ -365,22 +365,34 @@ static void to_utf8(struct vc_data *vc, uint c)
 
 static void do_compute_shiftstate(void)
 {
-	unsigned int k, sym, val;
+	unsigned int i, j, k, sym, val;
 
 	shift_state = 0;
 	memset(shift_down, 0, sizeof(shift_down));
 
-	for_each_set_bit(k, key_down, min(NR_KEYS, KEY_CNT)) {
-		sym = U(key_maps[0][k]);
-		if (KTYP(sym) != KT_SHIFT && KTYP(sym) != KT_SLOCK)
+	for (i = 0; i < ARRAY_SIZE(key_down); i++) {
+
+		if (!key_down[i])
 			continue;
 
-		val = KVAL(sym);
-		if (val == KVAL(K_CAPSSHIFT))
-			val = KVAL(K_SHIFT);
+		k = i * BITS_PER_LONG;
 
-		shift_down[val]++;
-		shift_state |= BIT(val);
+		for (j = 0; j < BITS_PER_LONG; j++, k++) {
+
+			if (!test_bit(k, key_down))
+				continue;
+
+			sym = U(key_maps[0][k]);
+			if (KTYP(sym) != KT_SHIFT && KTYP(sym) != KT_SLOCK)
+				continue;
+
+			val = KVAL(sym);
+			if (val == KVAL(K_CAPSSHIFT))
+				val = KVAL(K_SHIFT);
+
+			shift_down[val]++;
+			shift_state |= (1 << val);
+		}
 	}
 }
 
@@ -912,7 +924,7 @@ static void k_brl(struct vc_data *vc, unsigned char value, char up_flag)
 
 	if (kbd->kbdmode != VC_UNICODE) {
 		if (!up_flag)
-			pr_warning("keyboard mode must be unicode for braille patterns\n");
+			pr_warn("keyboard mode must be unicode for braille patterns\n");
 		return;
 	}
 
@@ -1241,8 +1253,8 @@ static void kbd_keycode(unsigned int keycode, int down, int hw_raw)
 	if (raw_mode && !hw_raw)
 		if (emulate_raw(vc, keycode, !down << 7))
 			if (keycode < BTN_MISC && printk_ratelimit())
-				pr_warning("can't emulate rawmode for keycode %d\n",
-					   keycode);
+				pr_warn("can't emulate rawmode for keycode %d\n",
+					keycode);
 
 #ifdef CONFIG_SPARC
 	if (keycode == KEY_A && sparc_l1_a_state) {

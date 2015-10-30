@@ -40,7 +40,6 @@ struct timerfd_ctx {
 	short unsigned settime_flags;	/* to show in fdinfo */
 	struct rcu_head rcu;
 	struct list_head clist;
-	spinlock_t cancel_lock;
 	bool might_cancel;
 };
 
@@ -113,7 +112,7 @@ void timerfd_clock_was_set(void)
 	rcu_read_unlock();
 }
 
-static void __timerfd_remove_cancel(struct timerfd_ctx *ctx)
+static void timerfd_remove_cancel(struct timerfd_ctx *ctx)
 {
 	if (ctx->might_cancel) {
 		ctx->might_cancel = false;
@@ -121,13 +120,6 @@ static void __timerfd_remove_cancel(struct timerfd_ctx *ctx)
 		list_del_rcu(&ctx->clist);
 		spin_unlock(&cancel_lock);
 	}
-}
-
-static void timerfd_remove_cancel(struct timerfd_ctx *ctx)
-{
-	spin_lock(&ctx->cancel_lock);
-	__timerfd_remove_cancel(ctx);
-	spin_unlock(&ctx->cancel_lock);
 }
 
 static bool timerfd_canceled(struct timerfd_ctx *ctx)
@@ -140,7 +132,6 @@ static bool timerfd_canceled(struct timerfd_ctx *ctx)
 
 static void timerfd_setup_cancel(struct timerfd_ctx *ctx, int flags)
 {
-	spin_lock(&ctx->cancel_lock);
 	if ((ctx->clockid == CLOCK_REALTIME ||
 	     ctx->clockid == CLOCK_REALTIME_ALARM) &&
 	    (flags & TFD_TIMER_ABSTIME) && (flags & TFD_TIMER_CANCEL_ON_SET)) {
@@ -150,10 +141,9 @@ static void timerfd_setup_cancel(struct timerfd_ctx *ctx, int flags)
 			list_add_rcu(&ctx->clist, &cancel_list);
 			spin_unlock(&cancel_lock);
 		}
-	} else {
-		__timerfd_remove_cancel(ctx);
+	} else if (ctx->might_cancel) {
+		timerfd_remove_cancel(ctx);
 	}
-	spin_unlock(&ctx->cancel_lock);
 }
 
 static ktime_t timerfd_get_remaining(struct timerfd_ctx *ctx)
@@ -298,7 +288,7 @@ static ssize_t timerfd_read(struct file *file, char __user *buf, size_t count,
 }
 
 #ifdef CONFIG_PROC_FS
-static int timerfd_show(struct seq_file *m, struct file *file)
+static void timerfd_show(struct seq_file *m, struct file *file)
 {
 	struct timerfd_ctx *ctx = file->private_data;
 	struct itimerspec t;
@@ -308,18 +298,19 @@ static int timerfd_show(struct seq_file *m, struct file *file)
 	t.it_interval = ktime_to_timespec(ctx->tintv);
 	spin_unlock_irq(&ctx->wqh.lock);
 
-	return seq_printf(m,
-			  "clockid: %d\n"
-			  "ticks: %llu\n"
-			  "settime flags: 0%o\n"
-			  "it_value: (%llu, %llu)\n"
-			  "it_interval: (%llu, %llu)\n",
-			  ctx->clockid, (unsigned long long)ctx->ticks,
-			  ctx->settime_flags,
-			  (unsigned long long)t.it_value.tv_sec,
-			  (unsigned long long)t.it_value.tv_nsec,
-			  (unsigned long long)t.it_interval.tv_sec,
-			  (unsigned long long)t.it_interval.tv_nsec);
+	seq_printf(m,
+		   "clockid: %d\n"
+		   "ticks: %llu\n"
+		   "settime flags: 0%o\n"
+		   "it_value: (%llu, %llu)\n"
+		   "it_interval: (%llu, %llu)\n",
+		   ctx->clockid,
+		   (unsigned long long)ctx->ticks,
+		   ctx->settime_flags,
+		   (unsigned long long)t.it_value.tv_sec,
+		   (unsigned long long)t.it_value.tv_nsec,
+		   (unsigned long long)t.it_interval.tv_sec,
+		   (unsigned long long)t.it_interval.tv_nsec);
 }
 #else
 #define timerfd_show NULL
@@ -404,7 +395,6 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 		return -ENOMEM;
 
 	init_waitqueue_head(&ctx->wqh);
-	spin_lock_init(&ctx->cancel_lock);
 	ctx->clockid = clockid;
 
 	if (isalarm(ctx))

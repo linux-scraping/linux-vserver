@@ -222,6 +222,9 @@ static int get_v4l2_create32(struct v4l2_create_buffers *kp, struct v4l2_create_
 
 static int __put_v4l2_format32(struct v4l2_format *kp, struct v4l2_format32 __user *up)
 {
+	if (put_user(kp->type, &up->type))
+		return -EFAULT;
+
 	switch (kp->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
@@ -248,8 +251,7 @@ static int __put_v4l2_format32(struct v4l2_format *kp, struct v4l2_format32 __us
 
 static int put_v4l2_format32(struct v4l2_format *kp, struct v4l2_format32 __user *up)
 {
-	if (!access_ok(VERIFY_WRITE, up, sizeof(struct v4l2_format32)) ||
-		put_user(kp->type, &up->type))
+	if (!access_ok(VERIFY_WRITE, up, sizeof(struct v4l2_format32)))
 		return -EFAULT;
 	return __put_v4l2_format32(kp, up);
 }
@@ -257,8 +259,8 @@ static int put_v4l2_format32(struct v4l2_format *kp, struct v4l2_format32 __user
 static int put_v4l2_create32(struct v4l2_create_buffers *kp, struct v4l2_create_buffers32 __user *up)
 {
 	if (!access_ok(VERIFY_WRITE, up, sizeof(struct v4l2_create_buffers32)) ||
-	    copy_to_user(up, kp, offsetof(struct v4l2_create_buffers32, format.fmt)))
-			return -EFAULT;
+	    copy_to_user(up, kp, offsetof(struct v4l2_create_buffers32, format)))
+		return -EFAULT;
 	return __put_v4l2_format32(&kp->format, &up->format);
 }
 
@@ -392,8 +394,7 @@ static int get_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
 		get_user(kp->index, &up->index) ||
 		get_user(kp->type, &up->type) ||
 		get_user(kp->flags, &up->flags) ||
-		get_user(kp->memory, &up->memory) ||
-		get_user(kp->length, &up->length))
+		get_user(kp->memory, &up->memory))
 			return -EFAULT;
 
 	if (V4L2_TYPE_IS_OUTPUT(kp->type))
@@ -405,6 +406,9 @@ static int get_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
 			return -EFAULT;
 
 	if (V4L2_TYPE_IS_MULTIPLANAR(kp->type)) {
+		if (get_user(kp->length, &up->length))
+			return -EFAULT;
+
 		num_planes = kp->length;
 		if (num_planes == 0) {
 			kp->m.planes = NULL;
@@ -437,14 +441,16 @@ static int get_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
 	} else {
 		switch (kp->memory) {
 		case V4L2_MEMORY_MMAP:
-			if (get_user(kp->m.offset, &up->m.offset))
+			if (get_user(kp->length, &up->length) ||
+				get_user(kp->m.offset, &up->m.offset))
 				return -EFAULT;
 			break;
 		case V4L2_MEMORY_USERPTR:
 			{
 			compat_long_t tmp;
 
-			if (get_user(tmp, &up->m.userptr))
+			if (get_user(kp->length, &up->length) ||
+			    get_user(tmp, &up->m.userptr))
 				return -EFAULT;
 
 			kp->m.userptr = (unsigned long)compat_ptr(tmp);
@@ -486,8 +492,7 @@ static int put_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
 		copy_to_user(&up->timecode, &kp->timecode, sizeof(struct v4l2_timecode)) ||
 		put_user(kp->sequence, &up->sequence) ||
 		put_user(kp->reserved2, &up->reserved2) ||
-		put_user(kp->reserved, &up->reserved) ||
-		put_user(kp->length, &up->length))
+		put_user(kp->reserved, &up->reserved))
 			return -EFAULT;
 
 	if (V4L2_TYPE_IS_MULTIPLANAR(kp->type)) {
@@ -510,11 +515,13 @@ static int put_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
 	} else {
 		switch (kp->memory) {
 		case V4L2_MEMORY_MMAP:
-			if (put_user(kp->m.offset, &up->m.offset))
+			if (put_user(kp->length, &up->length) ||
+				put_user(kp->m.offset, &up->m.offset))
 				return -EFAULT;
 			break;
 		case V4L2_MEMORY_USERPTR:
-			if (put_user(kp->m.userptr, &up->m.userptr))
+			if (put_user(kp->length, &up->length) ||
+				put_user(kp->m.userptr, &up->m.userptr))
 				return -EFAULT;
 			break;
 		case V4L2_MEMORY_OVERLAY:
@@ -747,8 +754,7 @@ static int put_v4l2_event32(struct v4l2_event *kp, struct v4l2_event32 __user *u
 		copy_to_user(&up->u, &kp->u, sizeof(kp->u)) ||
 		put_user(kp->pending, &up->pending) ||
 		put_user(kp->sequence, &up->sequence) ||
-		put_user(kp->timestamp.tv_sec, &up->timestamp.tv_sec) ||
-		put_user(kp->timestamp.tv_nsec, &up->timestamp.tv_nsec) ||
+		compat_put_timespec(&kp->timestamp, &up->timestamp) ||
 		put_user(kp->id, &up->id) ||
 		copy_to_user(up->reserved, kp->reserved, 8 * sizeof(__u32)))
 			return -EFAULT;

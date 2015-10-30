@@ -29,6 +29,7 @@
 #include "qxl_drv.h"
 #include "qxl_object.h"
 #include "drm_crtc_helper.h"
+#include <drm/drm_plane_helper.h>
 
 static bool qxl_head_enabled(struct qxl_head *head)
 {
@@ -100,14 +101,37 @@ static int qxl_display_copy_rom_client_monitors_config(struct qxl_device *qdev)
 	return 0;
 }
 
+static void qxl_update_offset_props(struct qxl_device *qdev)
+{
+	struct drm_device *dev = qdev->ddev;
+	struct drm_connector *connector;
+	struct qxl_output *output;
+	struct qxl_head *head;
+
+	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
+		output = drm_connector_to_qxl_output(connector);
+
+		head = &qdev->client_monitors_config->heads[output->index];
+
+		drm_object_property_set_value(&connector->base,
+			dev->mode_config.suggested_x_property, head->x);
+		drm_object_property_set_value(&connector->base,
+			dev->mode_config.suggested_y_property, head->y);
+	}
+}
+
 void qxl_display_read_client_monitors_config(struct qxl_device *qdev)
 {
 
+	struct drm_device *dev = qdev->ddev;
 	while (qxl_display_copy_rom_client_monitors_config(qdev)) {
 		qxl_io_log(qdev, "failed crc check for client_monitors_config,"
 				 " retrying\n");
 	}
 
+	drm_modeset_lock_all(dev);
+	qxl_update_offset_props(qdev);
+	drm_modeset_unlock_all(dev);
 	if (!drm_helper_hpd_irq_event(qdev->ddev)) {
 		/* notify that the monitor configuration changed, to
 		   adjust at the arbitrary resolution */
@@ -343,15 +367,10 @@ static int qxl_crtc_cursor_set2(struct drm_crtc *crtc,
 
 	qxl_bo_kunmap(user_bo);
 
-	qcrtc->cur_x += qcrtc->hot_spot_x - hot_x;
-	qcrtc->cur_y += qcrtc->hot_spot_y - hot_y;
-	qcrtc->hot_spot_x = hot_x;
-	qcrtc->hot_spot_y = hot_y;
-
 	cmd = (struct qxl_cursor_cmd *)qxl_release_map(qdev, release);
 	cmd->type = QXL_CURSOR_SET;
-	cmd->u.set.position.x = qcrtc->cur_x + qcrtc->hot_spot_x;
-	cmd->u.set.position.y = qcrtc->cur_y + qcrtc->hot_spot_y;
+	cmd->u.set.position.x = qcrtc->cur_x;
+	cmd->u.set.position.y = qcrtc->cur_y;
 
 	cmd->u.set.shape = qxl_bo_physical_address(qdev, cursor_bo, 0);
 
@@ -414,8 +433,8 @@ static int qxl_crtc_cursor_move(struct drm_crtc *crtc,
 
 	cmd = (struct qxl_cursor_cmd *)qxl_release_map(qdev, release);
 	cmd->type = QXL_CURSOR_MOVE;
-	cmd->u.position.x = qcrtc->cur_x + qcrtc->hot_spot_x;
-	cmd->u.position.y = qcrtc->cur_y + qcrtc->hot_spot_y;
+	cmd->u.position.x = qcrtc->cur_x;
+	cmd->u.position.y = qcrtc->cur_y;
 	qxl_release_unmap(qdev, release, &cmd->release_info);
 
 	qxl_push_cursor_ring_release(qdev, release, QXL_CMD_CURSOR, false);
@@ -576,7 +595,6 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 {
 	struct drm_device *dev = crtc->dev;
 	struct qxl_device *qdev = dev->dev_private;
-	struct qxl_mode *m = (void *)mode->private;
 	struct qxl_framebuffer *qfb;
 	struct qxl_bo *bo, *old_bo = NULL;
 	struct qxl_crtc *qcrtc = to_qxl_crtc(crtc);
@@ -594,12 +612,6 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 	}
 	qfb = to_qxl_framebuffer(crtc->primary->fb);
 	bo = gem_to_qxl_bo(qfb->obj);
-	if (!m)
-		/* and do we care? */
-		DRM_DEBUG("%dx%d: not a native mode\n", x, y);
-	else
-		DRM_DEBUG("%dx%d: qxl id %d\n",
-			  mode->hdisplay, mode->vdisplay, m->id);
 	DRM_DEBUG("+%d+%d (%d,%d) => (%d,%d)\n",
 		  x, y,
 		  mode->hdisplay, mode->vdisplay,
@@ -972,6 +984,10 @@ static int qdev_output_init(struct drm_device *dev, int num_output)
 
 	drm_object_attach_property(&connector->base,
 				   qdev->hotplug_mode_update_property, 0);
+	drm_object_attach_property(&connector->base,
+				   dev->mode_config.suggested_x_property, 0);
+	drm_object_attach_property(&connector->base,
+				   dev->mode_config.suggested_y_property, 0);
 	drm_connector_register(connector);
 	return 0;
 }
@@ -1085,6 +1101,7 @@ int qxl_modeset_init(struct qxl_device *qdev)
 
 	qdev->ddev->mode_config.fb_base = qdev->vram_base;
 
+	drm_mode_create_suggested_offset_properties(qdev->ddev);
 	qxl_mode_create_hotplug_mode_update_property(qdev);
 
 	for (i = 0 ; i < qxl_num_crtc; ++i) {

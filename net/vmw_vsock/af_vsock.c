@@ -949,8 +949,8 @@ static unsigned int vsock_poll(struct file *file, struct socket *sock,
 	return mask;
 }
 
-static int vsock_dgram_sendmsg(struct kiocb *kiocb, struct socket *sock,
-			       struct msghdr *msg, size_t len)
+static int vsock_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
+			       size_t len)
 {
 	int err;
 	struct sock *sk;
@@ -1013,7 +1013,7 @@ static int vsock_dgram_sendmsg(struct kiocb *kiocb, struct socket *sock,
 		goto out;
 	}
 
-	err = transport->dgram_enqueue(vsk, remote_addr, msg->msg_iov, len);
+	err = transport->dgram_enqueue(vsk, remote_addr, msg, len);
 
 out:
 	release_sock(sk);
@@ -1062,11 +1062,10 @@ out:
 	return err;
 }
 
-static int vsock_dgram_recvmsg(struct kiocb *kiocb, struct socket *sock,
-			       struct msghdr *msg, size_t len, int flags)
+static int vsock_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
+			       size_t len, int flags)
 {
-	return transport->dgram_dequeue(kiocb, vsock_sk(sock->sk), msg, len,
-					flags);
+	return transport->dgram_dequeue(vsock_sk(sock->sk), msg, len, flags);
 }
 
 static const struct proto_ops vsock_dgram_ops = {
@@ -1505,8 +1504,8 @@ static int vsock_stream_getsockopt(struct socket *sock,
 	return 0;
 }
 
-static int vsock_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
-				struct msghdr *msg, size_t len)
+static int vsock_stream_sendmsg(struct socket *sock, struct msghdr *msg,
+				size_t len)
 {
 	struct sock *sk;
 	struct vsock_sock *vsk;
@@ -1617,7 +1616,7 @@ static int vsock_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 		 */
 
 		written = transport->stream_enqueue(
-				vsk, msg->msg_iov,
+				vsk, msg,
 				len - total_written);
 		if (written < 0) {
 			err = -ENOMEM;
@@ -1644,9 +1643,8 @@ out:
 
 
 static int
-vsock_stream_recvmsg(struct kiocb *kiocb,
-		     struct socket *sock,
-		     struct msghdr *msg, size_t len, int flags)
+vsock_stream_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
+		     int flags)
 {
 	struct sock *sk;
 	struct vsock_sock *vsk;
@@ -1739,7 +1737,7 @@ vsock_stream_recvmsg(struct kiocb *kiocb,
 				break;
 
 			read = transport->stream_dequeue(
-					vsk, msg->msg_iov,
+					vsk, msg,
 					len - copied, flags);
 			if (read < 0) {
 				err = -ENOMEM;
@@ -1796,8 +1794,27 @@ vsock_stream_recvmsg(struct kiocb *kiocb,
 	else if (sk->sk_shutdown & RCV_SHUTDOWN)
 		err = 0;
 
-	if (copied > 0)
+	if (copied > 0) {
+		/* We only do these additional bookkeeping/notification steps
+		 * if we actually copied something out of the queue pair
+		 * instead of just peeking ahead.
+		 */
+
+		if (!(flags & MSG_PEEK)) {
+			/* If the other side has shutdown for sending and there
+			 * is nothing more to read, then modify the socket
+			 * state.
+			 */
+			if (vsk->peer_shutdown & SEND_SHUTDOWN) {
+				if (vsock_stream_has_data(vsk) <= 0) {
+					sk->sk_state = SS_UNCONNECTED;
+					sock_set_flag(sk, SOCK_DONE);
+					sk->sk_state_change(sk);
+				}
+			}
+		}
 		err = copied;
+	}
 
 out_wait:
 	finish_wait(sk_sleep(sk), &wait);

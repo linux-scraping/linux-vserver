@@ -210,26 +210,6 @@ enum module_state {
 	MODULE_STATE_UNFORMED,	/* Still setting it up. */
 };
 
-/**
- * struct module_ref - per cpu module reference counts
- * @incs: number of module get on this cpu
- * @decs: number of module put on this cpu
- *
- * We force an alignment on 8 or 16 bytes, so that alloc_percpu()
- * put @incs/@decs in same cache line, with no extra memory cost,
- * since alloc_percpu() is fine grained.
- */
-struct module_ref {
-	unsigned long incs;
-	unsigned long decs;
-} __attribute((aligned(2 * sizeof(unsigned long))));
-
-struct mod_kallsyms {
-	Elf_Sym *symtab;
-	unsigned int num_symtab;
-	char *strtab;
-};
-
 struct module {
 	enum module_state state;
 
@@ -317,9 +297,14 @@ struct module {
 #endif
 
 #ifdef CONFIG_KALLSYMS
-	/* Protected by RCU and/or module_mutex: use rcu_dereference() */
-	struct mod_kallsyms *kallsyms;
-	struct mod_kallsyms core_kallsyms;
+	/*
+	 * We keep the symbol and string tables for kallsyms.
+	 * The core_* fields below are temporary, loader-only (they
+	 * could really be discarded after module init).
+	 */
+	Elf_Sym *symtab, *core_symtab;
+	unsigned int num_symtab, core_num_syms;
+	char *strtab, *core_strtab;
 
 	/* Section attributes */
 	struct module_sect_attrs *sect_attrs;
@@ -353,10 +338,16 @@ struct module {
 #ifdef CONFIG_EVENT_TRACING
 	struct ftrace_event_call **trace_events;
 	unsigned int num_trace_events;
+	struct trace_enum_map **trace_enums;
+	unsigned int num_trace_enums;
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
 	unsigned int num_ftrace_callsites;
 	unsigned long *ftrace_callsites;
+#endif
+
+#ifdef CONFIG_LIVEPATCH
+	bool klp_alive;
 #endif
 
 #ifdef CONFIG_MODULE_UNLOAD
@@ -368,7 +359,7 @@ struct module {
 	/* Destruction function. */
 	void (*exit)(void);
 
-	struct module_ref __percpu *refptr;
+	atomic_t refcnt;
 #endif
 
 #ifdef CONFIG_CONSTRUCTORS
@@ -459,7 +450,7 @@ extern void __module_put_and_exit(struct module *mod, long code)
 #define module_put_and_exit(code) __module_put_and_exit(THIS_MODULE, code)
 
 #ifdef CONFIG_MODULE_UNLOAD
-unsigned long module_refcount(struct module *mod);
+int module_refcount(struct module *mod);
 void __symbol_put(const char *symbol);
 #define symbol_put(x) __symbol_put(VMLINUX_SYMBOL_STR(x))
 void symbol_put_addr(void *addr);

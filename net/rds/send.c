@@ -140,8 +140,11 @@ int rds_send_xmit(struct rds_connection *conn)
 	struct scatterlist *sg;
 	int ret = 0;
 	LIST_HEAD(to_be_dropped);
+	int batch_count;
+	unsigned long send_gen = 0;
 
 restart:
+	batch_count = 0;
 
 	/*
 	 * sendmsg calls here after having queued its message on the send
@@ -155,6 +158,17 @@ restart:
 		ret = -ENOMEM;
 		goto out;
 	}
+
+	/*
+	 * we record the send generation after doing the xmit acquire.
+	 * if someone else manages to jump in and do some work, we'll use
+	 * this to avoid a goto restart farther down.
+	 *
+	 * The acquire_in_xmit() check above ensures that only one
+	 * caller can increment c_send_gen at any time.
+	 */
+	conn->c_send_gen++;
+	send_gen = conn->c_send_gen;
 
 	/*
 	 * rds_conn_shutdown() sets the conn state and then tests RDS_IN_XMIT,
@@ -201,6 +215,16 @@ restart:
 		 */
 		if (!rm) {
 			unsigned int len;
+
+			batch_count++;
+
+			/* we want to process as big a batch as we can, but
+			 * we also want to avoid softlockups.  If we've been
+			 * through a lot of messages, lets back off and see
+			 * if anyone else jumps in
+			 */
+			if (batch_count >= 1024)
+				goto over_batch;
 
 			spin_lock_irqsave(&conn->c_lock, flags);
 
@@ -357,9 +381,9 @@ restart:
 		}
 	}
 
+over_batch:
 	if (conn->c_trans->xmit_complete)
 		conn->c_trans->xmit_complete(conn);
-
 	release_in_xmit(conn);
 
 	/* Nuke any messages we decided not to retransmit. */
@@ -380,10 +404,15 @@ restart:
 	 * If the transport cannot continue (i.e ret != 0), then it must
 	 * call us when more room is available, such as from the tx
 	 * completion handler.
+	 *
+	 * We have an extra generation check here so that if someone manages
+	 * to jump in after our release_in_xmit, we'll see that they have done
+	 * some work and we will skip our goto
 	 */
 	if (ret == 0) {
 		smp_mb();
-		if (!list_empty(&conn->c_send_queue)) {
+		if (!list_empty(&conn->c_send_queue) &&
+		    send_gen == conn->c_send_gen) {
 			rds_stats_inc(s_send_lock_queue_raced);
 			goto restart;
 		}
@@ -425,14 +454,12 @@ void rds_rdma_send_complete(struct rds_message *rm, int status)
 	struct rm_rdma_op *ro;
 	struct rds_notifier *notifier;
 	unsigned long flags;
-	unsigned int notify = 0;
 
 	spin_lock_irqsave(&rm->m_rs_lock, flags);
 
-	notify =  rm->rdma.op_notify | rm->data.op_notify;
 	ro = &rm->rdma;
 	if (test_bit(RDS_MSG_ON_SOCK, &rm->m_flags) &&
-	    ro->op_active && notify && ro->op_notifier) {
+	    ro->op_active && ro->op_notify && ro->op_notifier) {
 		notifier = ro->op_notifier;
 		rs = rm->m_rs;
 		sock_hold(rds_rs_to_sk(rs));
@@ -828,7 +855,7 @@ static int rds_rm_size(struct msghdr *msg, int data_len)
 	int cmsg_groups = 0;
 	int retval;
 
-	for (cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+	for_each_cmsghdr(cmsg, msg) {
 		if (!CMSG_OK(msg, cmsg))
 			return -EINVAL;
 
@@ -880,7 +907,7 @@ static int rds_cmsg_send(struct rds_sock *rs, struct rds_message *rm,
 	struct cmsghdr *cmsg;
 	int ret = 0;
 
-	for (cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+	for_each_cmsghdr(cmsg, msg) {
 		if (!CMSG_OK(msg, cmsg))
 			return -EINVAL;
 
@@ -903,11 +930,6 @@ static int rds_cmsg_send(struct rds_sock *rs, struct rds_message *rm,
 			ret = rds_cmsg_rdma_map(rs, rm, cmsg);
 			if (!ret)
 				*allocated_mr = 1;
-			else if (ret == -ENODEV)
-				/* Accommodate the get_mr() case which can fail
-				 * if connection isn't established yet.
-				 */
-				ret = -EAGAIN;
 			break;
 		case RDS_CMSG_ATOMIC_CSWP:
 		case RDS_CMSG_ATOMIC_FADD:
@@ -927,8 +949,7 @@ static int rds_cmsg_send(struct rds_sock *rs, struct rds_message *rm,
 	return ret;
 }
 
-int rds_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
-		size_t payload_len)
+int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 {
 	struct sock *sk = sock->sk;
 	struct rds_sock *rs = rds_sk_to_rs(sk);
@@ -965,13 +986,11 @@ int rds_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
 		release_sock(sk);
 	}
 
-	lock_sock(sk);
+	/* racing with another thread binding seems ok here */
 	if (daddr == 0 || rs->rs_bound_addr == 0) {
-		release_sock(sk);
 		ret = -ENOTCONN; /* XXX not a great errno */
 		goto out;
 	}
-	release_sock(sk);
 
 	/* size of rm including all sgs */
 	ret = rds_rm_size(msg, payload_len);
@@ -991,7 +1010,7 @@ int rds_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
 			ret = -ENOMEM;
 			goto out;
 		}
-		ret = rds_message_copy_from_user(rm, msg->msg_iov, payload_len);
+		ret = rds_message_copy_from_user(rm, &msg->msg_iter);
 		if (ret)
 			goto out;
 	}
@@ -1016,12 +1035,8 @@ int rds_sendmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
 
 	/* Parse any control messages the user may have included. */
 	ret = rds_cmsg_send(rs, rm, msg, &allocated_mr);
-	if (ret) {
-		/* Trigger connection so that its ready for the next retry */
-		if (ret ==  -EAGAIN)
-			rds_conn_connect_if_down(conn);
+	if (ret)
 		goto out;
-	}
 
 	if (rm->rdma.op_active && !conn->c_trans->xmit_rdma) {
 		printk_ratelimited(KERN_NOTICE "rdma_op %p conn xmit_rdma %p\n",

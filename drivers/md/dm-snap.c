@@ -1428,9 +1428,8 @@ static void __invalidate_snapshot(struct dm_snapshot *s, int err)
 	dm_table_event(s->ti->table);
 }
 
-static void pending_complete(void *context, int success)
+static void pending_complete(struct dm_snap_pending_exception *pe, int success)
 {
-	struct dm_snap_pending_exception *pe = context;
 	struct dm_exception *e;
 	struct dm_snapshot *s = pe->snap;
 	struct bio *origin_bios = NULL;
@@ -1501,13 +1500,24 @@ out:
 	free_pending_exception(pe);
 }
 
+static void commit_callback(void *context, int success)
+{
+	struct dm_snap_pending_exception *pe = context;
+
+	pending_complete(pe, success);
+}
+
 static void complete_exception(struct dm_snap_pending_exception *pe)
 {
 	struct dm_snapshot *s = pe->snap;
 
-	/* Update the metadata if we are persistent */
-	s->store->type->commit_exception(s->store, &pe->e, !pe->copy_error,
-					 pending_complete, pe);
+	if (unlikely(pe->copy_error))
+		pending_complete(pe, 0);
+
+	else
+		/* Update the metadata if we are persistent */
+		s->store->type->commit_exception(s->store, &pe->e,
+						 commit_callback, pe);
 }
 
 /*
@@ -1903,7 +1913,7 @@ static void snapshot_resume(struct dm_target *ti)
 	up_read(&_origins_lock);
 
 	if (origin_md) {
-		dm_internal_suspend(origin_md);
+		dm_internal_suspend_fast(origin_md);
 		if (snap_merging && test_bit(RUNNING_MERGE, &snap_merging->state_bits)) {
 			must_restart_merging = true;
 			stop_merge(snap_merging);
@@ -1926,7 +1936,7 @@ static void snapshot_resume(struct dm_target *ti)
 	if (origin_md) {
 		if (must_restart_merging)
 			start_merge(snap_merging);
-		dm_internal_resume(origin_md);
+		dm_internal_resume_fast(origin_md);
 		dm_put(origin_md);
 	}
 

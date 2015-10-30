@@ -79,13 +79,9 @@ struct autofs_info {
 };
 
 #define AUTOFS_INF_EXPIRING	(1<<0) /* dentry is in the process of expiring */
-#define AUTOFS_INF_WANT_EXPIRE	(1<<1) /* the dentry is being considered
+#define AUTOFS_INF_NO_RCU	(1<<1) /* the dentry is being considered
 					* for expiry, so RCU_walk is
-					* not permitted.  If it progresses to
-					* actual expiry attempt, the flag is
-					* not cleared when EXPIRING is set -
-					* in that case it gets cleared only
-					* when it comes to clearing EXPIRING.
+					* not permitted
 					*/
 #define AUTOFS_INF_PENDING	(1<<2) /* dentry pending mount */
 
@@ -217,7 +213,7 @@ void autofs4_clean_ino(struct autofs_info *);
 
 static inline int autofs_prepare_pipe(struct file *pipe)
 {
-	if (!pipe->f_op->write)
+	if (!(pipe->f_mode & FMODE_CAN_WRITE))
 		return -EINVAL;
 	if (!S_ISFIFO(file_inode(pipe)->i_mode))
 		return -EINVAL;
@@ -239,12 +235,12 @@ static inline u32 autofs4_get_dev(struct autofs_sb_info *sbi)
 
 static inline u64 autofs4_get_ino(struct autofs_sb_info *sbi)
 {
-	return sbi->sb->s_root->d_inode->i_ino;
+	return d_inode(sbi->sb->s_root)->i_ino;
 }
 
 static inline int simple_positive(struct dentry *dentry)
 {
-	return dentry->d_inode && !d_unhashed(dentry);
+	return d_really_is_positive(dentry) && !d_unhashed(dentry);
 }
 
 static inline void __autofs4_add_expiring(struct dentry *dentry)

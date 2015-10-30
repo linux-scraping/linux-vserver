@@ -112,6 +112,11 @@ ENTRY(_startup)
 
 	movi	a0, 0
 
+#if XCHAL_HAVE_VECBASE
+	movi    a2, VECBASE_RESET_VADDR
+	wsr	a2, vecbase
+#endif
+
 	/* Clear debugging registers. */
 
 #if XCHAL_HAVE_DEBUG
@@ -123,7 +128,7 @@ ENTRY(_startup)
 	wsr	a0, icountlevel
 
 	.set	_index, 0
-	.rept	XCHAL_NUM_DBREAK
+	.rept	XCHAL_NUM_DBREAK - 1
 	wsr	a0, SREG_DBREAKC + _index
 	.set	_index, _index + 1
 	.endr

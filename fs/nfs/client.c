@@ -31,7 +31,6 @@
 #include <linux/lockd/bind.h>
 #include <linux/seq_file.h>
 #include <linux/mount.h>
-#include <linux/nfs_idmap.h>
 #include <linux/vfs.h>
 #include <linux/inet.h>
 #include <linux/in6.h>
@@ -433,7 +432,7 @@ static struct nfs_client *nfs_match_client(const struct nfs_client_initdata *dat
 
 static bool nfs_client_init_is_complete(const struct nfs_client *clp)
 {
-	return clp->cl_cons_state != NFS_CS_INITING;
+	return clp->cl_cons_state <= NFS_CS_READY;
 }
 
 int nfs_wait_client_init_complete(const struct nfs_client *clp)
@@ -779,7 +778,7 @@ static int nfs_init_server(struct nfs_server *server,
 	server->options = data->options;
 	server->caps |= NFS_CAP_HARDLINKS|NFS_CAP_SYMLINKS|NFS_CAP_FILEID|
 		NFS_CAP_MODE|NFS_CAP_NLINK|NFS_CAP_OWNER|NFS_CAP_OWNER_GROUP|
-		NFS_CAP_ATIME|NFS_CAP_CTIME|NFS_CAP_MTIME;
+		NFS_CAP_ATIME|NFS_CAP_CTIME|NFS_CAP_MTIME|NFS_CAP_CHANGE_ATTR;
 
 	if (data->rsize)
 		server->rsize = nfs_block_size(data->rsize, NULL);

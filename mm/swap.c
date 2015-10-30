@@ -31,6 +31,7 @@
 #include <linux/memcontrol.h>
 #include <linux/gfp.h>
 #include <linux/uio.h>
+#include <linux/hugetlb.h>
 
 #include "internal.h"
 
@@ -75,7 +76,14 @@ static void __put_compound_page(struct page *page)
 {
 	compound_page_dtor *dtor;
 
-	__page_cache_release(page);
+	/*
+	 * __page_cache_release() is supposed to be called for thp, not for
+	 * hugetlb. This is because hugetlb page does never have PageLRU set
+	 * (it's never listed to any LRU lists) and no memcg routines should
+	 * be called for hugetlb (it has a separate hugetlb_cgroup.)
+	 */
+	if (!PageHuge(page))
+		__page_cache_release(page);
 	dtor = get_compound_page_dtor(page);
 	(*dtor)(page);
 }
@@ -475,7 +483,7 @@ void rotate_reclaimable_page(struct page *page)
 		page_cache_get(page);
 		local_irq_save(flags);
 		pvec = this_cpu_ptr(&lru_rotate_pvecs);
-		if (!pagevec_add(pvec, page) || PageCompound(page))
+		if (!pagevec_add(pvec, page))
 			pagevec_move_tail(pvec);
 		local_irq_restore(flags);
 	}
@@ -531,7 +539,7 @@ void activate_page(struct page *page)
 		struct pagevec *pvec = &get_cpu_var(activate_page_pvecs);
 
 		page_cache_get(page);
-		if (!pagevec_add(pvec, page) || PageCompound(page))
+		if (!pagevec_add(pvec, page))
 			pagevec_lru_move_fn(pvec, __activate_page, NULL);
 		put_cpu_var(activate_page_pvecs);
 	}
@@ -623,8 +631,9 @@ static void __lru_cache_add(struct page *page)
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvec);
 
 	page_cache_get(page);
-	if (!pagevec_add(pvec, page) || PageCompound(page))
+	if (!pagevec_space(pvec))
 		__pagevec_lru_add(pvec);
+	pagevec_add(pvec, page);
 	put_cpu_var(lru_add_pvec);
 }
 
@@ -837,7 +846,7 @@ void deactivate_file_page(struct page *page)
 	if (likely(get_page_unless_zero(page))) {
 		struct pagevec *pvec = &get_cpu_var(lru_deactivate_file_pvecs);
 
-		if (!pagevec_add(pvec, page) || PageCompound(page))
+		if (!pagevec_add(pvec, page))
 			pagevec_lru_move_fn(pvec, lru_deactivate_file_fn, NULL);
 		put_cpu_var(lru_deactivate_file_pvecs);
 	}
@@ -1137,12 +1146,8 @@ void __init swap_setup(void)
 #ifdef CONFIG_SWAP
 	int i;
 
-	if (bdi_init(swapper_spaces[0].backing_dev_info))
-		panic("Failed to init swap bdi");
-	for (i = 0; i < MAX_SWAPFILES; i++) {
+	for (i = 0; i < MAX_SWAPFILES; i++)
 		spin_lock_init(&swapper_spaces[i].tree_lock);
-		INIT_LIST_HEAD(&swapper_spaces[i].i_mmap_nonlinear);
-	}
 #endif
 
 	/* Use a smaller cluster for small-memory machines */

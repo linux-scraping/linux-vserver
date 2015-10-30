@@ -282,11 +282,10 @@ void dst_release(struct dst_entry *dst)
 {
 	if (dst) {
 		int newrefcnt;
-		unsigned short nocache = dst->flags & DST_NOCACHE;
 
 		newrefcnt = atomic_dec_return(&dst->__refcnt);
 		WARN_ON(newrefcnt < 0);
-		if (!newrefcnt && unlikely(nocache))
+		if (unlikely(dst->flags & DST_NOCACHE) && !newrefcnt)
 			call_rcu(&dst->rcu_head, dst_destroy_rcu);
 	}
 }
@@ -327,30 +326,6 @@ void __dst_destroy_metrics_generic(struct dst_entry *dst, unsigned long old)
 		kfree(__DST_METRICS_PTR(old));
 }
 EXPORT_SYMBOL(__dst_destroy_metrics_generic);
-
-/**
- * __skb_dst_set_noref - sets skb dst, without a reference
- * @skb: buffer
- * @dst: dst entry
- * @force: if force is set, use noref version even for DST_NOCACHE entries
- *
- * Sets skb dst, assuming a reference was not taken on dst
- * skb_dst_drop() should not dst_release() this dst
- */
-void __skb_dst_set_noref(struct sk_buff *skb, struct dst_entry *dst, bool force)
-{
-	WARN_ON(!rcu_read_lock_held() && !rcu_read_lock_bh_held());
-	/* If dst not in cache, we must take a reference, because
-	 * dst_release() will destroy dst as soon as its refcount becomes zero
-	 */
-	if (unlikely((dst->flags & DST_NOCACHE) && !force)) {
-		dst_hold(dst);
-		skb_dst_set(skb, dst);
-	} else {
-		skb->_skb_refdst = (unsigned long)dst | SKB_DST_NOREF;
-	}
-}
-EXPORT_SYMBOL(__skb_dst_set_noref);
 
 /* Dirty hack. We did it in 2.2 (in __dst_free),
  * we have _very_ good reasons not to repeat
@@ -397,20 +372,6 @@ static int dst_dev_event(struct notifier_block *this, unsigned long event,
 		spin_lock_bh(&dst_garbage.lock);
 		dst = dst_garbage.list;
 		dst_garbage.list = NULL;
-		/* The code in dst_ifdown places a hold on the loopback device.
-		 * If the gc entry processing is set to expire after a lengthy
-		 * interval, this hold can cause netdev_wait_allrefs() to hang
-		 * out and wait for a long time -- until the the loopback
-		 * interface is released.  If we're really unlucky, it'll emit
-		 * pr_emerg messages to console too.  Reset the interval here,
-		 * so dst cleanups occur in a more timely fashion.
-		 */
-		if (dst_garbage.timer_inc > DST_GC_INC) {
-			dst_garbage.timer_inc = DST_GC_INC;
-			dst_garbage.timer_expires = DST_GC_MIN;
-			mod_delayed_work(system_wq, &dst_gc_work,
-					 dst_garbage.timer_expires);
-		}
 		spin_unlock_bh(&dst_garbage.lock);
 
 		if (last)

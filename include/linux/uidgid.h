@@ -33,6 +33,7 @@ typedef struct {
 #define KGIDT_INIT(value) (kgid_t){ value }
 #define KTAGT_INIT(value) (ktag_t){ value }
 
+#ifdef CONFIG_MULTIUSER
 static inline uid_t __kuid_val(kuid_t uid)
 {
 	return uid.val;
@@ -42,6 +43,17 @@ static inline gid_t __kgid_val(kgid_t gid)
 {
 	return gid.val;
 }
+#else
+static inline uid_t __kuid_val(kuid_t uid)
+{
+	return 0;
+}
+
+static inline gid_t __kgid_val(kgid_t gid)
+{
+	return 0;
+}
+#endif
 
 static inline vtag_t __ktag_val(ktag_t tag)
 {
@@ -113,12 +125,12 @@ static inline bool gid_lte(kgid_t left, kgid_t right)
 
 static inline bool uid_valid(kuid_t uid)
 {
-	return !uid_eq(uid, INVALID_UID);
+	return __kuid_val(uid) != (uid_t) -1;
 }
 
 static inline bool gid_valid(kgid_t gid)
 {
-	return !gid_eq(gid, INVALID_GID);
+	return __kgid_val(gid) != (gid_t) -1;
 }
 
 static inline bool tag_valid(ktag_t tag)

@@ -64,9 +64,6 @@
 
 #include "af_can.h"
 
-static __initconst const char banner[] = KERN_INFO
-	"can: controller area network core (" CAN_VERSION_STRING ")\n";
-
 MODULE_DESCRIPTION("Controller Area Network PF_CAN core");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Urs Thuermann <urs.thuermann@volkswagen.de>, "
@@ -91,6 +88,8 @@ static DEFINE_MUTEX(proto_tab_lock);
 struct timer_list can_stattimer;   /* timer for statistics update */
 struct s_stats    can_stats;       /* packet statistics */
 struct s_pstats   can_pstats;      /* receive list statistics */
+
+static atomic_t skbcounter = ATOMIC_INIT(0);
 
 /*
  * af_can socket functions
@@ -446,7 +445,6 @@ static struct hlist_head *find_rcv_list(canid_t *can_id, canid_t *mask,
  * @func: callback function on filter match
  * @data: returned parameter for callback function
  * @ident: string for calling module identification
- * @sk: socket pointer (might be NULL)
  *
  * Description:
  *  Invokes the callback function with the received sk_buff and the given
@@ -470,7 +468,7 @@ static struct hlist_head *find_rcv_list(canid_t *can_id, canid_t *mask,
  */
 int can_rx_register(struct net_device *dev, canid_t can_id, canid_t mask,
 		    void (*func)(struct sk_buff *, void *), void *data,
-		    char *ident, struct sock *sk)
+		    char *ident)
 {
 	struct receiver *r;
 	struct hlist_head *rl;
@@ -498,7 +496,6 @@ int can_rx_register(struct net_device *dev, canid_t can_id, canid_t mask,
 		r->func    = func;
 		r->data    = data;
 		r->ident   = ident;
-		r->sk      = sk;
 
 		hlist_add_head_rcu(&r->list, rl);
 		d->entries++;
@@ -523,16 +520,13 @@ EXPORT_SYMBOL(can_rx_register);
 static void can_rx_delete_receiver(struct rcu_head *rp)
 {
 	struct receiver *r = container_of(rp, struct receiver, rcu);
-	struct sock *sk = r->sk;
 
 	kmem_cache_free(rcv_cache, r);
-	if (sk)
-		sock_put(sk);
 }
 
 /**
  * can_rx_unregister - unsubscribe CAN frames from a specific interface
- * @dev: pointer to netdevice (NULL => unsubcribe from 'all' CAN devices list)
+ * @dev: pointer to netdevice (NULL => unsubscribe from 'all' CAN devices list)
  * @can_id: CAN identifier
  * @mask: CAN mask
  * @func: callback function on filter match
@@ -602,11 +596,8 @@ void can_rx_unregister(struct net_device *dev, canid_t can_id, canid_t mask,
 	spin_unlock(&can_rcvlists_lock);
 
 	/* schedule the receiver item for deletion */
-	if (r) {
-		if (r->sk)
-			sock_hold(r->sk);
+	if (r)
 		call_rcu(&r->rcu, can_rx_delete_receiver);
-	}
 }
 EXPORT_SYMBOL(can_rx_unregister);
 
@@ -689,6 +680,10 @@ static void can_receive(struct sk_buff *skb, struct net_device *dev)
 	/* update statistics */
 	can_stats.rx_frames++;
 	can_stats.rx_frames_delta++;
+
+	/* create non-zero unique skb identifier together with *skb */
+	while (!(can_skb_prv(skb)->skbcnt))
+		can_skb_prv(skb)->skbcnt = atomic_inc_return(&skbcounter);
 
 	rcu_read_lock();
 
@@ -907,7 +902,7 @@ static __init int can_init(void)
 		     offsetof(struct can_frame, data) !=
 		     offsetof(struct canfd_frame, data));
 
-	printk(banner);
+	pr_info("can: controller area network core (" CAN_VERSION_STRING ")\n");
 
 	memset(&can_rx_alldev_list, 0, sizeof(can_rx_alldev_list));
 

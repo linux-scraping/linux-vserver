@@ -44,7 +44,7 @@
 #define VIBRACTRL_MEMBER(reg) ((reg == TWL6040_REG_VIBCTLL) ? 0 : 1)
 #define TWL6040_NUM_SUPPLIES	(2)
 
-static struct reg_default twl6040_defaults[] = {
+static const struct reg_default twl6040_defaults[] = {
 	{ 0x01, 0x4B }, /* REG_ASICID	(ro) */
 	{ 0x02, 0x00 }, /* REG_ASICREV	(ro) */
 	{ 0x03, 0x00 }, /* REG_INTID	*/
@@ -97,16 +97,12 @@ static struct reg_default twl6040_patch[] = {
 };
 
 
-static bool twl6040_has_vibra(struct device_node *parent)
+static bool twl6040_has_vibra(struct device_node *node)
 {
-	struct device_node *node;
-
-	node = of_get_child_by_name(parent, "vibra");
-	if (node) {
-		of_node_put(node);
+#ifdef CONFIG_OF
+	if (of_find_node_by_name(node, "vibra"))
 		return true;
-	}
-
+#endif
 	return false;
 }
 
@@ -584,7 +580,7 @@ static bool twl6040_writeable_reg(struct device *dev, unsigned int reg)
 	}
 }
 
-static struct regmap_config twl6040_regmap_config = {
+static const struct regmap_config twl6040_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 
@@ -818,4 +814,3 @@ MODULE_DESCRIPTION("TWL6040 MFD");
 MODULE_AUTHOR("Misael Lopez Cruz <misael.lopez@ti.com>");
 MODULE_AUTHOR("Jorge Eduardo Candelaria <jorge.candelaria@ti.com>");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:twl6040");

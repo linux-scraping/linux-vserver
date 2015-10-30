@@ -30,7 +30,7 @@ extern void __iomem *mips_cm_l2sync_base;
  * different way by defining a function with the same prototype except for the
  * name mips_cm_phys_base (without underscores).
  */
-extern phys_t __mips_cm_phys_base(void);
+extern phys_addr_t __mips_cm_phys_base(void);
 
 /**
  * mips_cm_probe - probe for a Coherence Manager
@@ -89,9 +89,9 @@ static inline bool mips_cm_has_l2sync(void)
 
 /* Macros to ease the creation of register access functions */
 #define BUILD_CM_R_(name, off)					\
-static inline u32 *addr_gcr_##name(void)			\
+static inline u32 __iomem *addr_gcr_##name(void)		\
 {								\
-	return (u32 *)(mips_cm_base + (off));			\
+	return (u32 __iomem *)(mips_cm_base + (off));		\
 }								\
 								\
 static inline u32 read_gcr_##name(void)				\
@@ -173,8 +173,8 @@ BUILD_CM_Cx_R_(tcid_8_priority,	0x80)
 #define CM_GCR_BASE_GCRBASE_MSK			(_ULCAST_(0x1ffff) << 15)
 #define CM_GCR_BASE_CMDEFTGT_SHF		0
 #define CM_GCR_BASE_CMDEFTGT_MSK		(_ULCAST_(0x3) << 0)
-#define  CM_GCR_BASE_CMDEFTGT_MEM		0
-#define  CM_GCR_BASE_CMDEFTGT_RESERVED		1
+#define  CM_GCR_BASE_CMDEFTGT_DISABLED		0
+#define  CM_GCR_BASE_CMDEFTGT_MEM		1
 #define  CM_GCR_BASE_CMDEFTGT_IOCU0		2
 #define  CM_GCR_BASE_CMDEFTGT_IOCU1		3
 

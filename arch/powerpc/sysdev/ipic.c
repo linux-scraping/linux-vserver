@@ -20,7 +20,6 @@
 #include <linux/signal.h>
 #include <linux/syscore_ops.h>
 #include <linux/device.h>
-#include <linux/bootmem.h>
 #include <linux/spinlock.h>
 #include <linux/fsl_devices.h>
 #include <asm/irq.h>
@@ -844,12 +843,12 @@ void ipic_disable_mcp(enum ipic_mcp_irq mcp_irq)
 
 u32 ipic_get_mcp_status(void)
 {
-	return ipic_read(primary_ipic->regs, IPIC_SERSR);
+	return ipic_read(primary_ipic->regs, IPIC_SERMR);
 }
 
 void ipic_clear_mcp_status(u32 mask)
 {
-	ipic_write(primary_ipic->regs, IPIC_SERSR, mask);
+	ipic_write(primary_ipic->regs, IPIC_SERMR, mask);
 }
 
 /* Return an interrupt vector or NO_IRQ if no interrupt is pending. */

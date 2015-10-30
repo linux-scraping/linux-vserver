@@ -23,7 +23,7 @@
 #include <linux/mutex.h>
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
-#include <linux/resume-trace.h>
+#include <linux/pm-trace.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/async.h>
@@ -1017,6 +1017,9 @@ static int __device_suspend_noirq(struct device *dev, pm_message_t state, bool a
 	char *info = NULL;
 	int error = 0;
 
+	TRACE_DEVICE(dev);
+	TRACE_SUSPEND(0);
+
 	if (async_error)
 		goto Complete;
 
@@ -1057,6 +1060,7 @@ static int __device_suspend_noirq(struct device *dev, pm_message_t state, bool a
 
 Complete:
 	complete_all(&dev->power.completion);
+	TRACE_SUSPEND(error);
 	return error;
 }
 
@@ -1078,7 +1082,7 @@ static int device_suspend_noirq(struct device *dev)
 {
 	reinit_completion(&dev->power.completion);
 
-	if (pm_async_enabled && dev->power.async_suspend) {
+	if (is_async(dev)) {
 		get_device(dev);
 		async_schedule(async_suspend_noirq, dev);
 		return 0;
@@ -1157,6 +1161,9 @@ static int __device_suspend_late(struct device *dev, pm_message_t state, bool as
 	char *info = NULL;
 	int error = 0;
 
+	TRACE_DEVICE(dev);
+	TRACE_SUSPEND(0);
+
 	__pm_runtime_disable(dev, false);
 
 	if (async_error)
@@ -1198,6 +1205,7 @@ static int __device_suspend_late(struct device *dev, pm_message_t state, bool as
 		async_error = error;
 
 Complete:
+	TRACE_SUSPEND(error);
 	complete_all(&dev->power.completion);
 	return error;
 }
@@ -1219,7 +1227,7 @@ static int device_suspend_late(struct device *dev)
 {
 	reinit_completion(&dev->power.completion);
 
-	if (pm_async_enabled && dev->power.async_suspend) {
+	if (is_async(dev)) {
 		get_device(dev);
 		async_schedule(async_suspend_late, dev);
 		return 0;
@@ -1251,15 +1259,14 @@ int dpm_suspend_late(pm_message_t state)
 		error = device_suspend_late(dev);
 
 		mutex_lock(&dpm_list_mtx);
-		if (!list_empty(&dev->power.entry))
-			list_move(&dev->power.entry, &dpm_late_early_list);
-
 		if (error) {
 			pm_dev_err(dev, state, " late", error);
 			dpm_save_failed_dev(dev_name(dev));
 			put_device(dev);
 			break;
 		}
+		if (!list_empty(&dev->power.entry))
+			list_move(&dev->power.entry, &dpm_late_early_list);
 		put_device(dev);
 
 		if (async_error)
@@ -1338,6 +1345,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	char *info = NULL;
 	int error = 0;
 	DECLARE_DPM_WATCHDOG_ON_STACK(wd);
+
+	TRACE_DEVICE(dev);
+	TRACE_SUSPEND(0);
 
 	dpm_wait_for_children(dev, async);
 
@@ -1445,6 +1455,7 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	if (error)
 		async_error = error;
 
+	TRACE_SUSPEND(error);
 	return error;
 }
 
@@ -1466,7 +1477,7 @@ static int device_suspend(struct device *dev)
 {
 	reinit_completion(&dev->power.completion);
 
-	if (pm_async_enabled && dev->power.async_suspend) {
+	if (is_async(dev)) {
 		get_device(dev);
 		async_schedule(async_suspend, dev);
 		return 0;

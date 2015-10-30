@@ -230,16 +230,16 @@ static void nlm_init_node_irqs(int node)
 	}
 }
 
-void nlm_smp_irq_init(int hwcpuid)
+void nlm_smp_irq_init(int hwtid)
 {
-	int node, cpu;
+	int cpu, node;
 
-	node = nlm_cpuid_to_node(hwcpuid);
-	cpu  = hwcpuid % nlm_threads_per_node();
+	cpu = hwtid % nlm_threads_per_node();
+	node = hwtid / nlm_threads_per_node();
 
 	if (cpu == 0 && node != 0)
 		nlm_init_node_irqs(node);
-	write_c0_eimr(nlm_current_node()->irqmask);
+	write_c0_eimr(nlm_get_node(node)->irqmask);
 }
 
 asmlinkage void plat_irq_dispatch(void)
@@ -275,7 +275,7 @@ asmlinkage void plat_irq_dispatch(void)
 	do_IRQ(nlm_irq_to_xirq(node, i));
 }
 
-#ifdef CONFIG_CPU_XLP
+#ifdef CONFIG_OF
 static const struct irq_domain_ops xlp_pic_irq_domain_ops = {
 	.xlate = irq_domain_xlate_onetwocell,
 };
@@ -348,7 +348,7 @@ void __init arch_init_irq(void)
 #if defined(CONFIG_CPU_XLR)
 	nlm_setup_fmn_irq();
 #endif
-#ifdef CONFIG_CPU_XLP
+#if defined(CONFIG_OF)
 	of_irq_init(xlp_pic_irq_ids);
 #endif
 }

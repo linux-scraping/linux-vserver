@@ -188,10 +188,8 @@ snd_seq_oss_open(struct file *file, int level)
 	struct seq_oss_devinfo *dp;
 
 	dp = kzalloc(sizeof(*dp), GFP_KERNEL);
-	if (!dp) {
-		pr_err("ALSA: seq_oss: can't malloc device info\n");
+	if (!dp)
 		return -ENOMEM;
-	}
 
 	dp->cseq = system_client;
 	dp->port = -1;
@@ -204,7 +202,7 @@ snd_seq_oss_open(struct file *file, int level)
 
 	dp->index = i;
 	if (i >= SNDRV_SEQ_OSS_MAX_CLIENTS) {
-		pr_debug("ALSA: seq_oss: too many applications\n");
+		pr_err("ALSA: seq_oss: too many applications\n");
 		rc = -ENOMEM;
 		goto _error;
 	}
@@ -403,14 +401,11 @@ free_devinfo(void *private)
 {
 	struct seq_oss_devinfo *dp = (struct seq_oss_devinfo *)private;
 
-	if (dp->timer)
-		snd_seq_oss_timer_delete(dp->timer);
+	snd_seq_oss_timer_delete(dp->timer);
 		
-	if (dp->writeq)
-		snd_seq_oss_writeq_delete(dp->writeq);
+	snd_seq_oss_writeq_delete(dp->writeq);
 
-	if (dp->readq)
-		snd_seq_oss_readq_delete(dp->readq);
+	snd_seq_oss_readq_delete(dp->readq);
 	
 	kfree(dp);
 }
@@ -437,6 +432,22 @@ snd_seq_oss_release(struct seq_oss_devinfo *dp)
 	if (dp->port >= 0)
 		delete_port(dp);
 	delete_seq_queue(queue);
+}
+
+
+/*
+ * Wait until the queue is empty (if we don't have nonblock)
+ */
+void
+snd_seq_oss_drain_write(struct seq_oss_devinfo *dp)
+{
+	if (! dp->timer->running)
+		return;
+	if (is_write_mode(dp->file_mode) && !is_nonblock_mode(dp->file_mode) &&
+	    dp->writeq) {
+		while (snd_seq_oss_writeq_sync(dp->writeq))
+			;
+	}
 }
 
 

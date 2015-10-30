@@ -236,16 +236,11 @@ static int read_mos_reg(struct usb_serial *serial, unsigned int serial_portnum,
 
 	status = usb_control_msg(usbdev, pipe, request, requesttype, value,
 				     index, buf, 1, MOS_WDR_TIMEOUT);
-	if (status == 1) {
+	if (status == 1)
 		*data = *buf;
-	} else {
+	else if (status < 0)
 		dev_err(&usbdev->dev,
 			"mos7720: usb_control_msg() failed: %d\n", status);
-		if (status >= 0)
-			status = -EIO;
-		*data = 0;
-	}
-
 	kfree(buf);
 
 	return status;
@@ -1244,7 +1239,7 @@ static int mos7720_write(struct tty_struct *tty, struct usb_serial_port *port,
 
 	if (urb->transfer_buffer == NULL) {
 		urb->transfer_buffer = kmalloc(URB_TRANSFER_BUFFER_SIZE,
-					       GFP_ATOMIC);
+					       GFP_KERNEL);
 		if (!urb->transfer_buffer)
 			goto exit;
 	}
@@ -1304,8 +1299,6 @@ static void mos7720_throttle(struct tty_struct *tty)
 		mos7720_port->shadowMCR &= ~UART_MCR_RTS;
 		write_mos_reg(port->serial, port->port_number, MCR,
 			      mos7720_port->shadowMCR);
-		if (status != 0)
-			return;
 	}
 }
 
@@ -1336,8 +1329,6 @@ static void mos7720_unthrottle(struct tty_struct *tty)
 		mos7720_port->shadowMCR |= UART_MCR_RTS;
 		write_mos_reg(port->serial, port->port_number, MCR,
 			      mos7720_port->shadowMCR);
-		if (status != 0)
-			return;
 	}
 }
 
@@ -1662,7 +1653,7 @@ static void change_port_settings(struct tty_struct *tty,
 	write_mos_reg(serial, port_number, IER, 0x0c);
 
 	if (port->read_urb->status != -EINPROGRESS) {
-		status = usb_submit_urb(port->read_urb, GFP_ATOMIC);
+		status = usb_submit_urb(port->read_urb, GFP_KERNEL);
 		if (status)
 			dev_dbg(&port->dev, "usb_submit_urb(read bulk) failed, status = %d\n", status);
 	}
@@ -1707,7 +1698,7 @@ static void mos7720_set_termios(struct tty_struct *tty,
 	change_port_settings(tty, mos7720_port, old_termios);
 
 	if (port->read_urb->status != -EINPROGRESS) {
-		status = usb_submit_urb(port->read_urb, GFP_ATOMIC);
+		status = usb_submit_urb(port->read_urb, GFP_KERNEL);
 		if (status)
 			dev_dbg(&port->dev, "usb_submit_urb(read bulk) failed, status = %d\n", status);
 	}

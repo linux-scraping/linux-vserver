@@ -576,7 +576,7 @@ static inline int core_alua_state_standby(
 	case SEND_DIAGNOSTIC:
 	case READ_CAPACITY:
 		return 0;
-	case SERVICE_ACTION_IN:
+	case SERVICE_ACTION_IN_16:
 		switch (cdb[1] & 0x1f) {
 		case SAI_READ_CAPACITY_16:
 			return 0;
@@ -704,7 +704,7 @@ target_alua_state_check(struct se_cmd *cmd)
 
 	if (dev->se_hba->hba_flags & HBA_FLAGS_INTERNAL_USE)
 		return 0;
-	if (dev->transport->transport_type == TRANSPORT_PLUGIN_PHBA_PDEV)
+	if (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH)
 		return 0;
 
 	if (!port)
@@ -1126,11 +1126,13 @@ static int core_alua_do_transition_tg_pt(
 		unsigned long transition_tmo;
 
 		transition_tmo = tg_pt_gp->tg_pt_gp_implicit_trans_secs * HZ;
-		schedule_delayed_work(&tg_pt_gp->tg_pt_gp_transition_work,
-				      transition_tmo);
+		queue_delayed_work(tg_pt_gp->tg_pt_gp_dev->tmr_wq,
+				   &tg_pt_gp->tg_pt_gp_transition_work,
+				   transition_tmo);
 	} else {
 		tg_pt_gp->tg_pt_gp_transition_complete = &wait;
-		schedule_delayed_work(&tg_pt_gp->tg_pt_gp_transition_work, 0);
+		queue_delayed_work(tg_pt_gp->tg_pt_gp_dev->tmr_wq,
+				   &tg_pt_gp->tg_pt_gp_transition_work, 0);
 		wait_for_completion(&wait);
 		tg_pt_gp->tg_pt_gp_transition_complete = NULL;
 	}
@@ -2375,7 +2377,7 @@ ssize_t core_alua_store_secondary_write_metadata(
 
 int core_setup_alua(struct se_device *dev)
 {
-	if (dev->transport->transport_type != TRANSPORT_PLUGIN_PHBA_PDEV &&
+	if (!(dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH) &&
 	    !(dev->se_hba->hba_flags & HBA_FLAGS_INTERNAL_USE)) {
 		struct t10_alua_lu_gp_member *lu_gp_mem;
 

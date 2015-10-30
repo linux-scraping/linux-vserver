@@ -60,7 +60,7 @@ struct __large_struct { unsigned long buf[100]; };
 	const __typeof__(*(ptr)) __user *__gu_addr = (ptr);	\
 	__chk_user_ptr(ptr);					\
 	__get_user_size(__gu_val, __gu_addr, (size), __gu_err);	\
-	(x) = (__typeof__(*(ptr)))__gu_val;			\
+	(x) = (__force __typeof__(*(ptr)))__gu_val;		\
 	__gu_err;						\
 })
 
@@ -71,7 +71,7 @@ struct __large_struct { unsigned long buf[100]; };
 	const __typeof__(*(ptr)) *__gu_addr = (ptr);			\
 	if (likely(access_ok(VERIFY_READ, __gu_addr, (size))))		\
 		__get_user_size(__gu_val, __gu_addr, (size), __gu_err);	\
-	(x) = (__typeof__(*(ptr)))__gu_val;				\
+	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
 	__gu_err;							\
 })
 
@@ -151,10 +151,7 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 	__kernel_size_t __copy_size = (__kernel_size_t) n;
 
 	if (__copy_size && __access_ok(__copy_from, __copy_size))
-		__copy_size = __copy_user(to, from, __copy_size);
-
-	if (unlikely(__copy_size))
-		memset(to + (n - __copy_size), 0, __copy_size);
+		return __copy_user(to, from, __copy_size);
 
 	return __copy_size;
 }

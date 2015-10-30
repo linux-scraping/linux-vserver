@@ -79,11 +79,17 @@ int gfs2_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	if (type == ACL_TYPE_ACCESS) {
 		umode_t mode = inode->i_mode;
 
-		error = posix_acl_update_mode(inode, &inode->i_mode, &acl);
-		if (error)
+		error = posix_acl_equiv_mode(acl, &mode);
+		if (error < 0)
 			return error;
-		if (mode != inode->i_mode)
+
+		if (error == 0)
+			acl = NULL;
+
+		if (mode != inode->i_mode) {
+			inode->i_mode = mode;
 			mark_inode_dirty(inode);
+		}
 	}
 
 	if (acl) {
@@ -104,11 +110,7 @@ int gfs2_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	error = __gfs2_xattr_set(inode, name, data, len, 0, GFS2_EATYPE_SYS);
 	if (error)
 		goto out;
-
-	if (acl)
-		set_cached_acl(inode, type, acl);
-	else
-		forget_cached_acl(inode, type);
+	set_cached_acl(inode, type, acl);
 out:
 	kfree(data);
 	return error;

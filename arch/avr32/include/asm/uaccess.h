@@ -26,7 +26,7 @@ typedef struct {
  * For historical reasons (Data Segment Register?), these macros are misnamed.
  */
 #define MAKE_MM_SEG(s)	((mm_segment_t) { (s) })
-#define segment_eq(a,b)	((a).is_user_space == (b).is_user_space)
+#define segment_eq(a, b)	((a).is_user_space == (b).is_user_space)
 
 #define USER_ADDR_LIMIT 0x80000000
 
@@ -74,7 +74,7 @@ extern __kernel_size_t __copy_user(void *to, const void *from,
 
 extern __kernel_size_t copy_to_user(void __user *to, const void *from,
 				    __kernel_size_t n);
-extern __kernel_size_t ___copy_from_user(void *to, const void __user *from,
+extern __kernel_size_t copy_from_user(void *to, const void __user *from,
 				      __kernel_size_t n);
 
 static inline __kernel_size_t __copy_to_user(void __user *to, const void *from,
@@ -87,15 +87,6 @@ static inline __kernel_size_t __copy_from_user(void *to,
 					       __kernel_size_t n)
 {
 	return __copy_user(to, (const void __force *)from, n);
-}
-static inline __kernel_size_t copy_from_user(void *to,
-					       const void __user *from,
-					       __kernel_size_t n)
-{
-	size_t res = ___copy_from_user(to, from, n);
-	if (unlikely(res))
-		memset(to + (n - res), 0, res);
-	return res;
 }
 
 #define __copy_to_user_inatomic __copy_to_user
@@ -117,8 +108,8 @@ static inline __kernel_size_t copy_from_user(void *to,
  *
  * Returns zero on success, or -EFAULT on error.
  */
-#define put_user(x,ptr)	\
-	__put_user_check((x),(ptr),sizeof(*(ptr)))
+#define put_user(x, ptr)	\
+	__put_user_check((x), (ptr), sizeof(*(ptr)))
 
 /*
  * get_user: - Get a simple variable from user space.
@@ -137,8 +128,8 @@ static inline __kernel_size_t copy_from_user(void *to,
  * Returns zero on success, or -EFAULT on error.
  * On error, the variable @x is set to zero.
  */
-#define get_user(x,ptr) \
-	__get_user_check((x),(ptr),sizeof(*(ptr)))
+#define get_user(x, ptr) \
+	__get_user_check((x), (ptr), sizeof(*(ptr)))
 
 /*
  * __put_user: - Write a simple value into user space, with less checking.
@@ -159,8 +150,8 @@ static inline __kernel_size_t copy_from_user(void *to,
  *
  * Returns zero on success, or -EFAULT on error.
  */
-#define __put_user(x,ptr) \
-	__put_user_nocheck((x),(ptr),sizeof(*(ptr)))
+#define __put_user(x, ptr) \
+	__put_user_nocheck((x), (ptr), sizeof(*(ptr)))
 
 /*
  * __get_user: - Get a simple variable from user space, with less checking.
@@ -182,8 +173,8 @@ static inline __kernel_size_t copy_from_user(void *to,
  * Returns zero on success, or -EFAULT on error.
  * On error, the variable @x is set to zero.
  */
-#define __get_user(x,ptr) \
-	__get_user_nocheck((x),(ptr),sizeof(*(ptr)))
+#define __get_user(x, ptr) \
+	__get_user_nocheck((x), (ptr), sizeof(*(ptr)))
 
 extern int __get_user_bad(void);
 extern int __put_user_bad(void);
@@ -200,7 +191,7 @@ extern int __put_user_bad(void);
 	default: __gu_err = __get_user_bad(); break;			\
 	}								\
 									\
-	x = (typeof(*(ptr)))__gu_val;					\
+	x = (__force typeof(*(ptr)))__gu_val;				\
 	__gu_err;							\
 })
 
@@ -231,7 +222,7 @@ extern int __put_user_bad(void);
 	} else {							\
 		__gu_err = -EFAULT;					\
 	}								\
-	x = (typeof(*(ptr)))__gu_val;					\
+	x = (__force typeof(*(ptr)))__gu_val;				\
 	__gu_err;							\
 })
 
@@ -287,7 +278,7 @@ extern int __put_user_bad(void);
 				       __pu_err);			\
 			break;						\
 		case 8:							\
-			__put_user_asm("d", __pu_addr, __pu_val,		\
+			__put_user_asm("d", __pu_addr, __pu_val,	\
 				       __pu_err);			\
 			break;						\
 		default:						\

@@ -23,7 +23,6 @@
 
 #include "ccp-crypto.h"
 
-
 static int ccp_aes_cmac_complete(struct crypto_async_request *async_req,
 				 int ret)
 {
@@ -38,11 +37,13 @@ static int ccp_aes_cmac_complete(struct crypto_async_request *async_req,
 	if (rctx->hash_rem) {
 		/* Save remaining data to buffer */
 		unsigned int offset = rctx->nbytes - rctx->hash_rem;
+
 		scatterwalk_map_and_copy(rctx->buf, rctx->src,
 					 offset, rctx->hash_rem, 0);
 		rctx->buf_count = rctx->hash_rem;
-	} else
+	} else {
 		rctx->buf_count = 0;
+	}
 
 	/* Update result area if supplied */
 	if (req->result)
@@ -201,44 +202,8 @@ static int ccp_aes_cmac_digest(struct ahash_request *req)
 	return ccp_aes_cmac_finup(req);
 }
 
-static int ccp_aes_cmac_export(struct ahash_request *req, void *out)
-{
-	struct ccp_aes_cmac_req_ctx *rctx = ahash_request_ctx(req);
-	struct ccp_aes_cmac_exp_ctx state;
-
-	/* Don't let anything leak to 'out' */
-	memset(&state, 0, sizeof(state));
-
-	state.null_msg = rctx->null_msg;
-	memcpy(state.iv, rctx->iv, sizeof(state.iv));
-	state.buf_count = rctx->buf_count;
-	memcpy(state.buf, rctx->buf, sizeof(state.buf));
-
-	/* 'out' may not be aligned so memcpy from local variable */
-	memcpy(out, &state, sizeof(state));
-
-	return 0;
-}
-
-static int ccp_aes_cmac_import(struct ahash_request *req, const void *in)
-{
-	struct ccp_aes_cmac_req_ctx *rctx = ahash_request_ctx(req);
-	struct ccp_aes_cmac_exp_ctx state;
-
-	/* 'in' may not be aligned so memcpy to local variable */
-	memcpy(&state, in, sizeof(state));
-
-	memset(rctx, 0, sizeof(*rctx));
-	rctx->null_msg = state.null_msg;
-	memcpy(rctx->iv, state.iv, sizeof(rctx->iv));
-	rctx->buf_count = state.buf_count;
-	memcpy(rctx->buf, state.buf, sizeof(rctx->buf));
-
-	return 0;
-}
-
 static int ccp_aes_cmac_setkey(struct crypto_ahash *tfm, const u8 *key,
-			   unsigned int key_len)
+			       unsigned int key_len)
 {
 	struct ccp_ctx *ctx = crypto_tfm_ctx(crypto_ahash_tfm(tfm));
 	struct ccp_crypto_ahash_alg *alg =
@@ -328,7 +293,8 @@ static int ccp_aes_cmac_cra_init(struct crypto_tfm *tfm)
 	crypto_ahash_set_reqsize(ahash, sizeof(struct ccp_aes_cmac_req_ctx));
 
 	cipher_tfm = crypto_alloc_cipher("aes", 0,
-			CRYPTO_ALG_ASYNC | CRYPTO_ALG_NEED_FALLBACK);
+					 CRYPTO_ALG_ASYNC |
+					 CRYPTO_ALG_NEED_FALLBACK);
 	if (IS_ERR(cipher_tfm)) {
 		pr_warn("could not load aes cipher driver\n");
 		return PTR_ERR(cipher_tfm);
@@ -368,13 +334,10 @@ int ccp_register_aes_cmac_algs(struct list_head *head)
 	alg->final = ccp_aes_cmac_final;
 	alg->finup = ccp_aes_cmac_finup;
 	alg->digest = ccp_aes_cmac_digest;
-	alg->export = ccp_aes_cmac_export;
-	alg->import = ccp_aes_cmac_import;
 	alg->setkey = ccp_aes_cmac_setkey;
 
 	halg = &alg->halg;
 	halg->digestsize = AES_BLOCK_SIZE;
-	halg->statesize = sizeof(struct ccp_aes_cmac_exp_ctx);
 
 	base = &halg->base;
 	snprintf(base->cra_name, CRYPTO_MAX_ALG_NAME, "cmac(aes)");
@@ -393,7 +356,7 @@ int ccp_register_aes_cmac_algs(struct list_head *head)
 	ret = crypto_register_ahash(alg);
 	if (ret) {
 		pr_err("%s ahash algorithm registration error (%d)\n",
-			base->cra_name, ret);
+		       base->cra_name, ret);
 		kfree(ccp_alg);
 		return ret;
 	}

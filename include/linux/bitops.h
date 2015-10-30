@@ -171,17 +171,6 @@ static inline __s32 sign_extend32(__u32 value, int index)
 	return (__s32)(value << shift) >> shift;
 }
 
-/**
- * sign_extend64 - sign extend a 64-bit value using specified bit as sign-bit
- * @value: value to sign extend
- * @index: 0 based bit index (0<=index<64) to sign bit
- */
-static inline __s64 sign_extend64(__u64 value, int index)
-{
-	__u8 shift = 63 - index;
-	return (__s64)(value << shift) >> shift;
-}
-
 static inline unsigned fls_long(unsigned long l)
 {
 	if (sizeof(l) == 4)
@@ -229,9 +218,9 @@ static inline unsigned long __ffs64(u64 word)
 /**
  * find_last_bit - find the last set bit in a memory region
  * @addr: The address to start the search at
- * @size: The maximum size to search
+ * @size: The number of bits to search
  *
- * Returns the bit number of the first set bit, or size.
+ * Returns the bit number of the last set bit, or size.
  */
 extern unsigned long find_last_bit(const unsigned long *addr,
 				   unsigned long size);

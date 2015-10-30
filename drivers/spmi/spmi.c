@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -316,11 +317,6 @@ static int spmi_drv_probe(struct device *dev)
 	struct spmi_device *sdev = to_spmi_device(dev);
 	int err;
 
-	/* Ensure the slave is in ACTIVE state */
-	err = spmi_command_wakeup(sdev);
-	if (err)
-		goto fail_wakeup;
-
 	pm_runtime_get_noresume(dev);
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
@@ -335,7 +331,6 @@ fail_probe:
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_put_noidle(dev);
-fail_wakeup:
 	return err;
 }
 
@@ -353,23 +348,11 @@ static int spmi_drv_remove(struct device *dev)
 	return 0;
 }
 
-static int spmi_drv_uevent(struct device *dev, struct kobj_uevent_env *env)
-{
-	int ret;
-
-	ret = of_device_uevent_modalias(dev, env);
-	if (ret != -ENODEV)
-		return ret;
-
-	return 0;
-}
-
 static struct bus_type spmi_bus_type = {
 	.name		= "spmi",
 	.match		= spmi_device_match,
 	.probe		= spmi_drv_probe,
 	.remove		= spmi_drv_remove,
-	.uevent		= spmi_drv_uevent,
 };
 
 /**

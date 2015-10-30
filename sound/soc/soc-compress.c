@@ -68,8 +68,7 @@ out:
 static int soc_compr_open_fe(struct snd_compr_stream *cstream)
 {
 	struct snd_soc_pcm_runtime *fe = cstream->private_data;
-	struct snd_pcm_substream *fe_substream =
-		 fe->pcm->streams[cstream->direction].substream;
+	struct snd_pcm_substream *fe_substream = fe->pcm->streams[0].substream;
 	struct snd_soc_platform *platform = fe->platform;
 	struct snd_soc_dpcm *dpcm;
 	struct snd_soc_dapm_widget_list *list;
@@ -259,10 +258,7 @@ static int soc_compr_free_fe(struct snd_compr_stream *cstream)
 	list_for_each_entry(dpcm, &fe->dpcm[stream].be_clients, list_be)
 		dpcm->state = SND_SOC_DPCM_LINK_STATE_FREE;
 
-	if (stream == SNDRV_PCM_STREAM_PLAYBACK)
-		dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_STOP);
-	else
-		dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_STOP);
+	dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_STOP);
 
 	fe->dpcm[stream].state = SND_SOC_DPCM_STATE_CLOSE;
 	fe->dpcm[stream].runtime_update = SND_SOC_DPCM_UPDATE_NO;
@@ -416,8 +412,7 @@ static int soc_compr_set_params_fe(struct snd_compr_stream *cstream,
 					struct snd_compr_params *params)
 {
 	struct snd_soc_pcm_runtime *fe = cstream->private_data;
-	struct snd_pcm_substream *fe_substream =
-		 fe->pcm->streams[cstream->direction].substream;
+	struct snd_pcm_substream *fe_substream = fe->pcm->streams[0].substream;
 	struct snd_soc_platform *platform = fe->platform;
 	int ret = 0, stream;
 
@@ -458,11 +453,7 @@ static int soc_compr_set_params_fe(struct snd_compr_stream *cstream,
 	if (ret < 0)
 		goto out;
 
-	if (stream == SNDRV_PCM_STREAM_PLAYBACK)
-		dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_START);
-	else
-		dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_START);
-
+	dpcm_dapm_stream_event(fe, stream, SND_SOC_DAPM_STREAM_START);
 	fe->dpcm[stream].state = SND_SOC_DPCM_STATE_PREPARE;
 
 out:

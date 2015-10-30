@@ -90,9 +90,10 @@ struct inodes_stat_t {
 #define MS_KERNMOUNT	(1<<22) /* this is a kern_mount call */
 #define MS_I_VERSION	(1<<23) /* Update inode I_version field */
 #define MS_STRICTATIME	(1<<24) /* Always perform atime updates */
+#define MS_LAZYTIME	(1<<25) /* Update the on-disk [acm]times lazily */
 #define MS_TAGGED	(1<<8)	/* use generic inode tagging */
 #define MS_NOTAGCHECK	(1<<9)	/* don't check tags */
-#define MS_TAGID	(1<<25) /* use specific tag for this mount */
+#define MS_TAGID	(1<<26) /* use specific tag for this mount */
 
 /* These sb flags are internal to the kernel */
 #define MS_NOSEC	(1<<28)
@@ -103,7 +104,8 @@ struct inodes_stat_t {
 /*
  * Superblock flags that can be altered by MS_REMOUNT
  */
-#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK|MS_I_VERSION)
+#define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK|MS_I_VERSION|\
+			 MS_LAZYTIME)
 
 /*
  * Old magic mount flag and mask

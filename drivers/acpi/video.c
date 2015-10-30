@@ -82,9 +82,15 @@ module_param(allow_duplicates, bool, 0644);
  * For Windows 8 systems: used to decide if video module
  * should skip registering backlight interface of its own.
  */
-static int use_native_backlight_param = -1;
+enum {
+	NATIVE_BACKLIGHT_NOT_SET = -1,
+	NATIVE_BACKLIGHT_OFF,
+	NATIVE_BACKLIGHT_ON,
+};
+
+static int use_native_backlight_param = NATIVE_BACKLIGHT_NOT_SET;
 module_param_named(use_native_backlight, use_native_backlight_param, int, 0444);
-static bool use_native_backlight_dmi = true;
+static int use_native_backlight_dmi = NATIVE_BACKLIGHT_NOT_SET;
 
 static int register_count;
 static struct mutex video_list_lock;
@@ -237,15 +243,16 @@ static void acpi_video_switch_brightness(struct work_struct *work);
 
 static bool acpi_video_use_native_backlight(void)
 {
-	if (use_native_backlight_param != -1)
+	if (use_native_backlight_param != NATIVE_BACKLIGHT_NOT_SET)
 		return use_native_backlight_param;
-	else
+	else if (use_native_backlight_dmi != NATIVE_BACKLIGHT_NOT_SET)
 		return use_native_backlight_dmi;
+	return acpi_osi_is_win8();
 }
 
 bool acpi_video_verify_backlight_support(void)
 {
-	if (acpi_osi_is_win8() && acpi_video_use_native_backlight() &&
+	if (acpi_video_use_native_backlight() &&
 	    backlight_device_registered(BACKLIGHT_RAW))
 		return false;
 	return acpi_video_backlight_support();
@@ -414,7 +421,13 @@ static int __init video_set_bqc_offset(const struct dmi_system_id *d)
 
 static int __init video_disable_native_backlight(const struct dmi_system_id *d)
 {
-	use_native_backlight_dmi = false;
+	use_native_backlight_dmi = NATIVE_BACKLIGHT_OFF;
+	return 0;
+}
+
+static int __init video_enable_native_backlight(const struct dmi_system_id *d)
+{
+	use_native_backlight_dmi = NATIVE_BACKLIGHT_ON;
 	return 0;
 }
 
@@ -520,6 +533,54 @@ static struct dmi_system_id video_dmi_table[] __initdata = {
 	 .matches = {
 		DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
 		DMI_MATCH(DMI_PRODUCT_NAME, "370R4E/370R4V/370R5E/3570RE/370R5V"),
+		},
+	},
+	{
+	 /* https://bugzilla.redhat.com/show_bug.cgi?id=1186097 */
+	 .callback = video_disable_native_backlight,
+	 .ident = "SAMSUNG 3570R/370R/470R/450R/510R/4450RV",
+	 .matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
+		DMI_MATCH(DMI_PRODUCT_NAME, "3570R/370R/470R/450R/510R/4450RV"),
+		},
+	},
+	{
+	 /* https://bugzilla.redhat.com/show_bug.cgi?id=1094948 */
+	 .callback = video_disable_native_backlight,
+	 .ident = "SAMSUNG 730U3E/740U3E",
+	 .matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
+		DMI_MATCH(DMI_PRODUCT_NAME, "730U3E/740U3E"),
+		},
+	},
+	{
+	 /* https://bugs.freedesktop.org/show_bug.cgi?id=87286 */
+	 .callback = video_disable_native_backlight,
+	 .ident = "SAMSUNG 900X3C/900X3D/900X3E/900X4C/900X4D",
+	 .matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
+		DMI_MATCH(DMI_PRODUCT_NAME, "900X3C/900X3D/900X3E/900X4C/900X4D"),
+		},
+	},
+
+	{
+	 /* https://bugzilla.redhat.com/show_bug.cgi?id=1163574 */
+	 .callback = video_disable_native_backlight,
+	 .ident = "Dell XPS15 L521X",
+	 .matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+		DMI_MATCH(DMI_PRODUCT_NAME, "XPS L521X"),
+		},
+	},
+
+	/* Non win8 machines which need native backlight nevertheless */
+	{
+	 /* https://bugzilla.redhat.com/show_bug.cgi?id=1187004 */
+	 .callback = video_enable_native_backlight,
+	 .ident = "Lenovo Ideapad Z570",
+	 .matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+		DMI_MATCH(DMI_PRODUCT_NAME, "102434U"),
 		},
 	},
 	{}
@@ -1704,12 +1765,27 @@ static void acpi_video_dev_register_backlight(struct acpi_video_device *device)
 		printk(KERN_ERR PREFIX "Create sysfs link\n");
 }
 
+static void acpi_video_run_bcl_for_osi(struct acpi_video_bus *video)
+{
+	struct acpi_video_device *dev;
+	union acpi_object *levels;
+
+	mutex_lock(&video->device_list_lock);
+	list_for_each_entry(dev, &video->video_device_list, entry) {
+		if (!acpi_video_device_lcd_query_levels(dev, &levels))
+			kfree(levels);
+	}
+	mutex_unlock(&video->device_list_lock);
+}
+
 static int acpi_video_bus_register_backlight(struct acpi_video_bus *video)
 {
 	struct acpi_video_device *dev;
 
 	if (video->backlight_registered)
 		return 0;
+
+	acpi_video_run_bcl_for_osi(video);
 
 	if (!acpi_video_verify_backlight_support())
 		return 0;
@@ -2058,7 +2134,8 @@ static int __init intel_opregion_present(void)
 
 int acpi_video_register(void)
 {
-	int result = 0;
+	int ret;
+
 	if (register_count) {
 		/*
 		 * if the function of acpi_video_register is already called,
@@ -2070,9 +2147,9 @@ int acpi_video_register(void)
 	mutex_init(&video_list_lock);
 	INIT_LIST_HEAD(&video_bus_head);
 
-	result = acpi_bus_register_driver(&acpi_video_bus);
-	if (result < 0)
-		return -ENODEV;
+	ret = acpi_bus_register_driver(&acpi_video_bus);
+	if (ret)
+		return ret;
 
 	/*
 	 * When the acpi_video_bus is loaded successfully, increase

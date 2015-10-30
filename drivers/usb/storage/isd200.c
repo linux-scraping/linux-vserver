@@ -737,7 +737,7 @@ static void isd200_log_config(struct us_data *us, struct isd200_info *info)
 		     info->ConfigData.ATAExtraConfig & ATACFGE_CONF_DESC2);
 	usb_stor_dbg(us, "      Skip Device Boot: 0x%x\n",
 		     info->ConfigData.ATAExtraConfig & ATACFGE_SKIP_BOOT);
-	usb_stor_dbg(us, "      ATA 3 State Supsend: 0x%x\n",
+	usb_stor_dbg(us, "      ATA 3 State Suspend: 0x%x\n",
 		     info->ConfigData.ATAExtraConfig & ATACFGE_STATE_SUSPEND);
 	usb_stor_dbg(us, "      Descriptor Override: 0x%x\n",
 		     info->ConfigData.ATAExtraConfig & ATACFGE_DESC_OVERRIDE);
@@ -1522,11 +1522,8 @@ static void isd200_ata_command(struct scsi_cmnd *srb, struct us_data *us)
 
 	/* Make sure driver was initialized */
 
-	if (us->extra == NULL) {
+	if (us->extra == NULL)
 		usb_stor_dbg(us, "ERROR Driver not initialized\n");
-		srb->result = DID_ERROR << 16;
-		return;
-	}
 
 	scsi_set_resid(srb, 0);
 	/* scsi_bufflen might change in protocol translation to ata */

@@ -154,7 +154,8 @@ static struct shash_alg ghash_alg = {
 		.cra_name		= "__ghash",
 		.cra_driver_name	= "__ghash-pclmulqdqni",
 		.cra_priority		= 0,
-		.cra_flags		= CRYPTO_ALG_TYPE_SHASH,
+		.cra_flags		= CRYPTO_ALG_TYPE_SHASH |
+					  CRYPTO_ALG_INTERNAL,
 		.cra_blocksize		= GHASH_BLOCK_SIZE,
 		.cra_ctxsize		= sizeof(struct ghash_ctx),
 		.cra_module		= THIS_MODULE,
@@ -218,29 +219,6 @@ static int ghash_async_final(struct ahash_request *req)
 	}
 }
 
-static int ghash_async_import(struct ahash_request *req, const void *in)
-{
-	struct ahash_request *cryptd_req = ahash_request_ctx(req);
-	struct shash_desc *desc = cryptd_shash_desc(cryptd_req);
-	struct ghash_desc_ctx *dctx = shash_desc_ctx(desc);
-
-	ghash_async_init(req);
-	memcpy(dctx, in, sizeof(*dctx));
-	return 0;
-
-}
-
-static int ghash_async_export(struct ahash_request *req, void *out)
-{
-	struct ahash_request *cryptd_req = ahash_request_ctx(req);
-	struct shash_desc *desc = cryptd_shash_desc(cryptd_req);
-	struct ghash_desc_ctx *dctx = shash_desc_ctx(desc);
-
-	memcpy(out, dctx, sizeof(*dctx));
-	return 0;
-
-}
-
 static int ghash_async_digest(struct ahash_request *req)
 {
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
@@ -284,7 +262,9 @@ static int ghash_async_init_tfm(struct crypto_tfm *tfm)
 	struct cryptd_ahash *cryptd_tfm;
 	struct ghash_async_ctx *ctx = crypto_tfm_ctx(tfm);
 
-	cryptd_tfm = cryptd_alloc_ahash("__ghash-pclmulqdqni", 0, 0);
+	cryptd_tfm = cryptd_alloc_ahash("__ghash-pclmulqdqni",
+					CRYPTO_ALG_INTERNAL,
+					CRYPTO_ALG_INTERNAL);
 	if (IS_ERR(cryptd_tfm))
 		return PTR_ERR(cryptd_tfm);
 	ctx->cryptd_tfm = cryptd_tfm;
@@ -308,11 +288,8 @@ static struct ahash_alg ghash_async_alg = {
 	.final		= ghash_async_final,
 	.setkey		= ghash_async_setkey,
 	.digest		= ghash_async_digest,
-	.export		= ghash_async_export,
-	.import		= ghash_async_import,
 	.halg = {
 		.digestsize	= GHASH_DIGEST_SIZE,
-		.statesize = sizeof(struct ghash_desc_ctx),
 		.base = {
 			.cra_name		= "ghash",
 			.cra_driver_name	= "ghash-clmulni",

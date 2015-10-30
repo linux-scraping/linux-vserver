@@ -22,8 +22,6 @@
 #include "xfs_log_format.h"
 #include "xfs_shared.h"
 #include "xfs_trans_resv.h"
-#include "xfs_ag.h"
-#include "xfs_sb.h"
 #include "xfs_mount.h"
 #include "xfs_bmap_btree.h"
 #include "xfs_inode.h"
@@ -166,7 +164,6 @@ xfs_symlink_write_verify(
 }
 
 const struct xfs_buf_ops xfs_symlink_buf_ops = {
-	.name = "xfs_symlink",
 	.verify_read = xfs_symlink_read_verify,
 	.verify_write = xfs_symlink_write_verify,
 };

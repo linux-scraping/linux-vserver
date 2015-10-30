@@ -12,7 +12,7 @@ ifeq ($(CROSS_COMPILE),)
 CROSS_COMPILE := arc-linux-uclibc-
 endif
 
-KBUILD_DEFCONFIG := fpga_defconfig
+KBUILD_DEFCONFIG := nsim_700_defconfig
 
 cflags-y	+= -mA7 -fno-common -pipe -fno-builtin -D__linux__
 
@@ -34,6 +34,7 @@ cflags-$(atleast_gcc44)			+= -fsection-anchors
 cflags-$(CONFIG_ARC_HAS_LLSC)		+= -mlock
 cflags-$(CONFIG_ARC_HAS_SWAPE)		+= -mswape
 cflags-$(CONFIG_ARC_HAS_RTSC)		+= -mrtsc
+cflags-$(CONFIG_ARC_DW2_UNWIND)		+= -fasynchronous-unwind-tables
 
 # By default gcc 4.8 generates dwarf4 which kernel unwinder can't grok
 ifeq ($(atleast_gcc48),y)
@@ -42,7 +43,8 @@ endif
 
 ifndef CONFIG_CC_OPTIMIZE_FOR_SIZE
 # Generic build system uses -O2, we want -O3
-cflags-y  += -O3
+# Note: No need to add to cflags-y as that happens anyways
+ARCH_CFLAGS += -O3
 endif
 
 # small data is default for elf32 tool-chain. If not usable, disable it

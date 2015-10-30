@@ -719,7 +719,7 @@ static int snd_pcm_oss_period_size(struct snd_pcm_substream *substream,
 
 	oss_buffer_size = snd_pcm_plug_client_size(substream,
 						   snd_pcm_hw_param_value_max(slave_params, SNDRV_PCM_HW_PARAM_BUFFER_SIZE, NULL)) * oss_frame_size;
-	oss_buffer_size = 1 << ld2(oss_buffer_size);
+	oss_buffer_size = rounddown_pow_of_two(oss_buffer_size);
 	if (atomic_read(&substream->mmap_count)) {
 		if (oss_buffer_size > runtime->oss.mmap_bytes)
 			oss_buffer_size = runtime->oss.mmap_bytes;
@@ -755,14 +755,14 @@ static int snd_pcm_oss_period_size(struct snd_pcm_substream *substream,
 	min_period_size = snd_pcm_plug_client_size(substream,
 						   snd_pcm_hw_param_value_min(slave_params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, NULL));
 	min_period_size *= oss_frame_size;
-	min_period_size = 1 << (ld2(min_period_size - 1) + 1);
+	min_period_size = roundup_pow_of_two(min_period_size);
 	if (oss_period_size < min_period_size)
 		oss_period_size = min_period_size;
 
 	max_period_size = snd_pcm_plug_client_size(substream,
 						   snd_pcm_hw_param_value_max(slave_params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, NULL));
 	max_period_size *= oss_frame_size;
-	max_period_size = 1 << ld2(max_period_size);
+	max_period_size = rounddown_pow_of_two(max_period_size);
 	if (oss_period_size > max_period_size)
 		oss_period_size = max_period_size;
 
@@ -834,8 +834,7 @@ static int choose_rate(struct snd_pcm_substream *substream,
 	return snd_pcm_hw_param_near(substream, params, SNDRV_PCM_HW_PARAM_RATE, best_rate, NULL);
 }
 
-static int snd_pcm_oss_change_params(struct snd_pcm_substream *substream,
-				     bool trylock)
+static int snd_pcm_oss_change_params(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_pcm_hw_params *params, *sparams;
@@ -849,16 +848,12 @@ static int snd_pcm_oss_change_params(struct snd_pcm_substream *substream,
 	struct snd_mask sformat_mask;
 	struct snd_mask mask;
 
-	if (trylock) {
-		if (!(mutex_trylock(&runtime->oss.params_lock)))
-			return -EAGAIN;
-	} else if (mutex_lock_interruptible(&runtime->oss.params_lock))
+	if (mutex_lock_interruptible(&runtime->oss.params_lock))
 		return -EINTR;
 	sw_params = kmalloc(sizeof(*sw_params), GFP_KERNEL);
 	params = kmalloc(sizeof(*params), GFP_KERNEL);
 	sparams = kmalloc(sizeof(*sparams), GFP_KERNEL);
 	if (!sw_params || !params || !sparams) {
-		pcm_dbg(substream->pcm, "No memory\n");
 		err = -ENOMEM;
 		goto failure;
 	}
@@ -1097,7 +1092,7 @@ static int snd_pcm_oss_get_active_substream(struct snd_pcm_oss_file *pcm_oss_fil
 		if (asubstream == NULL)
 			asubstream = substream;
 		if (substream->runtime->oss.params) {
-			err = snd_pcm_oss_change_params(substream, false);
+			err = snd_pcm_oss_change_params(substream);
 			if (err < 0)
 				return err;
 		}
@@ -1137,7 +1132,7 @@ static int snd_pcm_oss_make_ready(struct snd_pcm_substream *substream)
 		return 0;
 	runtime = substream->runtime;
 	if (runtime->oss.params) {
-		err = snd_pcm_oss_change_params(substream, false);
+		err = snd_pcm_oss_change_params(substream);
 		if (err < 0)
 			return err;
 	}
@@ -2168,7 +2163,7 @@ static int snd_pcm_oss_get_space(struct snd_pcm_oss_file *pcm_oss_file, int stre
 	runtime = substream->runtime;
 
 	if (runtime->oss.params &&
-	    (err = snd_pcm_oss_change_params(substream, false)) < 0)
+	    (err = snd_pcm_oss_change_params(substream)) < 0)
 		return err;
 
 	info.fragsize = runtime->oss.period_bytes;
@@ -2805,12 +2800,7 @@ static int snd_pcm_oss_mmap(struct file *file, struct vm_area_struct *area)
 		return -EIO;
 	
 	if (runtime->oss.params) {
-		/* use mutex_trylock() for params_lock for avoiding a deadlock
-		 * between mmap_sem and params_lock taken by
-		 * copy_from/to_user() in snd_pcm_oss_write/read()
-		 */
-		err = snd_pcm_oss_change_params(substream, true);
-		if (err < 0)
+		if ((err = snd_pcm_oss_change_params(substream)) < 0)
 			return err;
 	}
 #ifdef CONFIG_SND_PCM_OSS_PLUGINS

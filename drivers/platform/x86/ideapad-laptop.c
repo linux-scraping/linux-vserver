@@ -730,8 +730,7 @@ static int ideapad_backlight_init(struct ideapad_private *priv)
 
 static void ideapad_backlight_exit(struct ideapad_private *priv)
 {
-	if (priv->blightdev)
-		backlight_device_unregister(priv->blightdev);
+	backlight_device_unregister(priv->blightdev);
 	priv->blightdev = NULL;
 }
 
@@ -832,31 +831,17 @@ static void ideapad_acpi_notify(acpi_handle handle, u32 event, void *data)
  */
 static const struct dmi_system_id no_hw_rfkill_list[] = {
 	{
+		.ident = "Lenovo G40-30",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G40-30"),
+		},
+	},
+	{
 		.ident = "Lenovo G50-30",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G50-30"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700 Touch-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700 Touch-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-17ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-17ISK"),
 		},
 	},
 	{
@@ -867,24 +852,17 @@ static const struct dmi_system_id no_hw_rfkill_list[] = {
 		},
 	},
 	{
+		.ident = "Lenovo Yoga 3 14",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga 3 14"),
+		},
+	},
+	{
 		.ident = "Lenovo Yoga 3 Pro 1370",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 3 Pro-1370"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 700",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 700"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 900"),
 		},
 	},
 	{}
@@ -1009,7 +987,6 @@ static struct platform_driver ideapad_acpi_driver = {
 	.remove = ideapad_acpi_remove,
 	.driver = {
 		.name   = "ideapad_acpi",
-		.owner  = THIS_MODULE,
 		.pm     = &ideapad_pm,
 		.acpi_match_table = ACPI_PTR(ideapad_device_ids),
 	},
