@@ -9,8 +9,7 @@
  * we put the segment information here.
  */
 typedef struct {
-	void *ldt;
-	int size;
+	struct ldt_struct *ldt;
 
 #ifdef CONFIG_X86_64
 	/* True if mm supports a task running in 32 bit compatibility mode. */
@@ -19,6 +18,8 @@ typedef struct {
 
 	struct mutex lock;
 	void __user *vdso;
+
+	atomic_t perf_rdpmc_allowed;	/* nonzero if rdpmc is allowed */
 } mm_context_t;
 
 #ifdef CONFIG_SMP

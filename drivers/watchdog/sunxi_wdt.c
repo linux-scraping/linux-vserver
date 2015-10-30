@@ -184,7 +184,7 @@ static int sunxi_wdt_start(struct watchdog_device *wdt_dev)
 	/* Set system reset function */
 	reg = readl(wdt_base + regs->wdt_cfg);
 	reg &= ~(regs->wdt_reset_mask);
-	reg |= ~(regs->wdt_reset_val);
+	reg |= regs->wdt_reset_val;
 	writel(reg, wdt_base + regs->wdt_cfg);
 
 	/* Enable watchdog */
@@ -314,7 +314,6 @@ static struct platform_driver sunxi_wdt_driver = {
 	.remove		= sunxi_wdt_remove,
 	.shutdown	= sunxi_wdt_shutdown,
 	.driver		= {
-		.owner		= THIS_MODULE,
 		.name		= DRV_NAME,
 		.of_match_table	= sunxi_wdt_dt_ids,
 	},

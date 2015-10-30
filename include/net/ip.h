@@ -108,7 +108,8 @@ int ip_local_deliver(struct sk_buff *skb);
 int ip_mr_input(struct sk_buff *skb);
 int ip_output(struct sock *sk, struct sk_buff *skb);
 int ip_mc_output(struct sock *sk, struct sk_buff *skb);
-int ip_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *));
+int ip_fragment(struct sock *sk, struct sk_buff *skb,
+		int (*output)(struct sock *, struct sk_buff *));
 int ip_do_nat(struct sk_buff *skb);
 void ip_send_check(struct iphdr *ip);
 int __ip_local_out(struct sk_buff *skb);
@@ -160,6 +161,7 @@ static inline __u8 get_rtconn_flags(struct ipcm_cookie* ipc, struct sock* sk)
 }
 
 /* datagram.c */
+int __ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 
 void ip4_datagram_release_cb(struct sock *sk);
@@ -318,9 +320,10 @@ static inline unsigned int ip_skb_dst_mtu(const struct sk_buff *skb)
 }
 
 u32 ip_idents_reserve(u32 hash, int segs);
-void __ip_select_ident(struct iphdr *iph, int segs);
+void __ip_select_ident(struct net *net, struct iphdr *iph, int segs);
 
-static inline void ip_select_ident_segs(struct sk_buff *skb, struct sock *sk, int segs)
+static inline void ip_select_ident_segs(struct net *net, struct sk_buff *skb,
+					struct sock *sk, int segs)
 {
 	struct iphdr *iph = ip_hdr(skb);
 
@@ -337,13 +340,14 @@ static inline void ip_select_ident_segs(struct sk_buff *skb, struct sock *sk, in
 			iph->id = 0;
 		}
 	} else {
-		__ip_select_ident(iph, segs);
+		__ip_select_ident(net, iph, segs);
 	}
 }
 
-static inline void ip_select_ident(struct sk_buff *skb, struct sock *sk)
+static inline void ip_select_ident(struct net *net, struct sk_buff *skb,
+				   struct sock *sk)
 {
-	ip_select_ident_segs(skb, sk, 1);
+	ip_select_ident_segs(net, skb, sk, 1);
 }
 
 static inline __wsum inet_compute_pseudo(struct sk_buff *skb, int proto)
@@ -522,7 +526,7 @@ int ip_options_rcv_srr(struct sk_buff *skb);
  */
 
 void ipv4_pktinfo_prepare(const struct sock *sk, struct sk_buff *skb);
-void ip_cmsg_recv(struct msghdr *msg, struct sk_buff *skb);
+void ip_cmsg_recv_offset(struct msghdr *msg, struct sk_buff *skb, int offset);
 int ip_cmsg_send(struct net *net, struct msghdr *msg,
 		 struct ipcm_cookie *ipc, bool allow_ipv6);
 int ip_setsockopt(struct sock *sk, int level, int optname, char __user *optval,
@@ -541,6 +545,11 @@ void ip_icmp_error(struct sock *sk, struct sk_buff *skb, int err, __be16 port,
 		   u32 info, u8 *payload);
 void ip_local_error(struct sock *sk, int err, __be32 daddr, __be16 dport,
 		    u32 info);
+
+static inline void ip_cmsg_recv(struct msghdr *msg, struct sk_buff *skb)
+{
+	ip_cmsg_recv_offset(msg, skb, 0);
+}
 
 bool icmp_global_allow(void);
 extern int sysctl_icmp_msgs_per_sec;

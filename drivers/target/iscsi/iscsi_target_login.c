@@ -24,14 +24,13 @@
 #include <target/target_core_base.h>
 #include <target/target_core_fabric.h>
 
-#include "iscsi_target_core.h"
-#include "iscsi_target_tq.h"
+#include <target/iscsi/iscsi_target_core.h>
+#include <target/iscsi/iscsi_target_stat.h>
 #include "iscsi_target_device.h"
 #include "iscsi_target_nego.h"
 #include "iscsi_target_erl0.h"
 #include "iscsi_target_erl2.h"
 #include "iscsi_target_login.h"
-#include "iscsi_target_stat.h"
 #include "iscsi_target_tpg.h"
 #include "iscsi_target_util.h"
 #include "iscsi_target.h"
@@ -348,6 +347,7 @@ static int iscsi_login_zero_tsih_s1(
 	if (IS_ERR(sess->se_sess)) {
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
+		kfree(sess->sess_ops);
 		kfree(sess);
 		return -ENOMEM;
 	}
@@ -879,8 +879,8 @@ static void iscsi_handle_login_thread_timeout(unsigned long data)
 	struct iscsi_np *np = (struct iscsi_np *) data;
 
 	spin_lock_bh(&np->np_thread_lock);
-	pr_err("iSCSI Login timeout on Network Portal %s:%hu\n",
-			np->np_ip, np->np_port);
+	pr_err("iSCSI Login timeout on Network Portal %pISc:%hu\n",
+			&np->np_sockaddr, np->np_port);
 
 	if (np->np_login_timer_flags & ISCSI_TF_STOP) {
 		spin_unlock_bh(&np->np_thread_lock);
@@ -1208,6 +1208,7 @@ void iscsi_target_login_sess_out(struct iscsi_conn *conn,
 	}
 	kfree(conn->sess->sess_ops);
 	kfree(conn->sess);
+	conn->sess = NULL;
 
 old_sess_out:
 	iscsi_stop_login_thread_timer(np);
@@ -1357,8 +1358,8 @@ static int __iscsi_target_login_thread(struct iscsi_np *np)
 	spin_lock_bh(&np->np_thread_lock);
 	if (np->np_thread_state != ISCSI_NP_THREAD_ACTIVE) {
 		spin_unlock_bh(&np->np_thread_lock);
-		pr_err("iSCSI Network Portal on %s:%hu currently not"
-			" active.\n", np->np_ip, np->np_port);
+		pr_err("iSCSI Network Portal on %pISc:%hu currently not"
+			" active.\n", &np->np_sockaddr, np->np_port);
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_SVC_UNAVAILABLE);
 		goto new_sess_out;

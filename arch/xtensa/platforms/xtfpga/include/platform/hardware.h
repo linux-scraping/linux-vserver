@@ -17,8 +17,8 @@
 
 /* Memory configuration. */
 
-#define PLATFORM_DEFAULT_MEM_START 0x00000000
-#define PLATFORM_DEFAULT_MEM_SIZE  0x04000000
+#define PLATFORM_DEFAULT_MEM_START CONFIG_DEFAULT_MEM_START
+#define PLATFORM_DEFAULT_MEM_SIZE  CONFIG_DEFAULT_MEM_SIZE
 
 /* Interrupt configuration. */
 
@@ -59,4 +59,7 @@
 				/* 5*rx buffs + 5*tx buffs */
 #define OETH_SRAMBUFF_SIZE	(5 * 0x600 + 5 * 0x600)
 
+#define C67X00_PADDR		(XCHAL_KIO_PADDR + 0x0D0D0000)
+#define C67X00_SIZE		0x10
+#define C67X00_IRQ		5
 #endif /* __XTENSA_XTAVNET_HARDWARE_H */

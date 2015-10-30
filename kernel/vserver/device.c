@@ -327,21 +327,21 @@ out:
 static inline int __user_device(const char __user *name, dev_t *dev,
 	umode_t *mode)
 {
-	struct nameidata nd;
+	struct path path;
 	int ret;
 
 	if (!name) {
 		*dev = 0;
 		return 0;
 	}
-	ret = user_lpath(name, &nd.path);
+	ret = user_lpath(name, &path);
 	if (ret)
 		return ret;
-	if (nd.path.dentry->d_inode) {
-		*dev = nd.path.dentry->d_inode->i_rdev;
-		*mode = nd.path.dentry->d_inode->i_mode;
+	if (path.dentry->d_inode) {
+		*dev = path.dentry->d_inode->i_rdev;
+		*mode = path.dentry->d_inode->i_mode;
 	}
-	path_put(&nd.path);
+	path_put(&path);
 	return 0;
 }
 

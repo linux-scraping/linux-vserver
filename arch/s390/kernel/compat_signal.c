@@ -48,6 +48,19 @@ typedef struct
 	struct ucontext32 uc;
 } rt_sigframe32;
 
+static inline void sigset_to_sigset32(unsigned long *set64,
+				      compat_sigset_word *set32)
+{
+	set32[0] = (compat_sigset_word) set64[0];
+	set32[1] = (compat_sigset_word)(set64[0] >> 32);
+}
+
+static inline void sigset32_to_sigset(compat_sigset_word *set32,
+				      unsigned long *set64)
+{
+	set64[0] = (unsigned long) set32[0] | ((unsigned long) set32[1] << 32);
+}
+
 int copy_siginfo_to_user32(compat_siginfo_t __user *to, const siginfo_t *from)
 {
 	int err;
@@ -209,7 +222,7 @@ static int restore_sigregs32(struct pt_regs *regs,_sigregs32 __user *sregs)
 	int i;
 
 	/* Alwys make any pending restarted system call return -EINTR */
-	current_thread_info()->restart_block.fn = do_no_restart_syscall;
+	current->restart_block.fn = do_no_restart_syscall;
 
 	if (__copy_from_user(&user_sregs, &sregs->regs, sizeof(user_sregs)))
 		return -EFAULT;
@@ -303,10 +316,12 @@ COMPAT_SYSCALL_DEFINE0(sigreturn)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 	sigframe32 __user *frame = (sigframe32 __user *)regs->gprs[15];
+	compat_sigset_t cset;
 	sigset_t set;
 
-	if (__copy_from_user(&set.sig, &frame->sc.oldmask, _SIGMASK_COPY_SIZE32))
+	if (__copy_from_user(&cset.sig, &frame->sc.oldmask, _SIGMASK_COPY_SIZE32))
 		goto badframe;
+	sigset32_to_sigset(cset.sig, set.sig);
 	set_current_blocked(&set);
 	if (restore_sigregs32(regs, &frame->sregs))
 		goto badframe;
@@ -323,10 +338,12 @@ COMPAT_SYSCALL_DEFINE0(rt_sigreturn)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 	rt_sigframe32 __user *frame = (rt_sigframe32 __user *)regs->gprs[15];
+	compat_sigset_t cset;
 	sigset_t set;
 
-	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
+	if (__copy_from_user(&cset, &frame->uc.uc_sigmask, sizeof(cset)))
 		goto badframe;
+	sigset32_to_sigset(cset.sig, set.sig);
 	set_current_blocked(&set);
 	if (compat_restore_altstack(&frame->uc.uc_stack))
 		goto badframe;
@@ -370,16 +387,6 @@ get_sigframe(struct k_sigaction *ka, struct pt_regs * regs, size_t frame_size)
 	return (void __user *)((sp - frame_size) & -8ul);
 }
 
-static inline int map_signal(int sig)
-{
-	if (current_thread_info()->exec_domain
-	    && current_thread_info()->exec_domain->signal_invmap
-	    && sig < 32)
-		return current_thread_info()->exec_domain->signal_invmap[sig];
-        else
-		return sig;
-}
-
 static int setup_frame32(struct ksignal *ksig, sigset_t *set,
 			 struct pt_regs *regs)
 {
@@ -407,7 +414,7 @@ static int setup_frame32(struct ksignal *ksig, sigset_t *set,
 		return -EFAULT;
 
 	/* Create struct sigcontext32 on the signal stack */
-	memcpy(&sc.oldmask, &set->sig, _SIGMASK_COPY_SIZE32);
+	sigset_to_sigset32(set->sig, sc.oldmask);
 	sc.sregs = (__u32)(unsigned long __force) &frame->sregs;
 	if (__copy_to_user(&frame->sc, &sc, sizeof(frame->sc)))
 		return -EFAULT;
@@ -434,7 +441,7 @@ static int setup_frame32(struct ksignal *ksig, sigset_t *set,
 			ksig->ka.sa.sa_restorer | PSW32_ADDR_AMODE;
 	} else {
 		/* Signal frames without vectors registers are short ! */
-		__u16 __user *svc = (void *) frame + frame_size - 2;
+		__u16 __user *svc = (void __user *) frame + frame_size - 2;
 		if (__put_user(S390_SYSCALL_OPCODE | __NR_sigreturn, svc))
 			return -EFAULT;
 		restorer = (unsigned long __force) svc | PSW32_ADDR_AMODE;
@@ -449,7 +456,7 @@ static int setup_frame32(struct ksignal *ksig, sigset_t *set,
 		(regs->psw.mask & ~PSW_MASK_ASC);
 	regs->psw.addr = (__force __u64) ksig->ka.sa.sa_handler;
 
-	regs->gprs[2] = map_signal(sig);
+	regs->gprs[2] = sig;
 	regs->gprs[3] = (__force __u64) &frame->sc;
 
 	/* We forgot to include these in the sigcontext.
@@ -468,6 +475,7 @@ static int setup_frame32(struct ksignal *ksig, sigset_t *set,
 static int setup_rt_frame32(struct ksignal *ksig, sigset_t *set,
 			    struct pt_regs *regs)
 {
+	compat_sigset_t cset;
 	rt_sigframe32 __user *frame;
 	unsigned long restorer;
 	size_t frame_size;
@@ -515,11 +523,12 @@ static int setup_rt_frame32(struct ksignal *ksig, sigset_t *set,
 	store_sigregs();
 
 	/* Create ucontext on the signal stack. */
+	sigset_to_sigset32(set->sig, cset.sig);
 	if (__put_user(uc_flags, &frame->uc.uc_flags) ||
 	    __put_user(0, &frame->uc.uc_link) ||
 	    __compat_save_altstack(&frame->uc.uc_stack, regs->gprs[15]) ||
 	    save_sigregs32(regs, &frame->uc.uc_mcontext) ||
-	    __copy_to_user(&frame->uc.uc_sigmask, set, sizeof(*set)) ||
+	    __copy_to_user(&frame->uc.uc_sigmask, &cset, sizeof(cset)) ||
 	    save_sigregs_ext32(regs, &frame->uc.uc_mcontext_ext))
 		return -EFAULT;
 
@@ -532,7 +541,7 @@ static int setup_rt_frame32(struct ksignal *ksig, sigset_t *set,
 		(regs->psw.mask & ~PSW_MASK_ASC);
 	regs->psw.addr = (__u64 __force) ksig->ka.sa.sa_handler;
 
-	regs->gprs[2] = map_signal(ksig->sig);
+	regs->gprs[2] = ksig->sig;
 	regs->gprs[3] = (__force __u64) &frame->info;
 	regs->gprs[4] = (__force __u64) &frame->uc;
 	regs->gprs[5] = task_thread_info(current)->last_break;

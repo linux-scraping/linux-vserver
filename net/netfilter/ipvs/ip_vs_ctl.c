@@ -465,8 +465,7 @@ __ip_vs_bind_svc(struct ip_vs_dest *dest, struct ip_vs_service *svc)
 
 static void ip_vs_service_free(struct ip_vs_service *svc)
 {
-	if (svc->stats.cpustats)
-		free_percpu(svc->stats.cpustats);
+	free_percpu(svc->stats.cpustats);
 	kfree(svc);
 }
 
@@ -730,9 +729,9 @@ static void ip_vs_trash_cleanup(struct net *net)
 }
 
 static void
-ip_vs_copy_stats(struct ip_vs_stats_user *dst, struct ip_vs_stats *src)
+ip_vs_copy_stats(struct ip_vs_kstats *dst, struct ip_vs_stats *src)
 {
-#define IP_VS_SHOW_STATS_COUNTER(c) dst->c = src->ustats.c - src->ustats0.c
+#define IP_VS_SHOW_STATS_COUNTER(c) dst->c = src->kstats.c - src->kstats0.c
 
 	spin_lock_bh(&src->lock);
 
@@ -748,13 +747,28 @@ ip_vs_copy_stats(struct ip_vs_stats_user *dst, struct ip_vs_stats *src)
 }
 
 static void
+ip_vs_export_stats_user(struct ip_vs_stats_user *dst, struct ip_vs_kstats *src)
+{
+	dst->conns = (u32)src->conns;
+	dst->inpkts = (u32)src->inpkts;
+	dst->outpkts = (u32)src->outpkts;
+	dst->inbytes = src->inbytes;
+	dst->outbytes = src->outbytes;
+	dst->cps = (u32)src->cps;
+	dst->inpps = (u32)src->inpps;
+	dst->outpps = (u32)src->outpps;
+	dst->inbps = (u32)src->inbps;
+	dst->outbps = (u32)src->outbps;
+}
+
+static void
 ip_vs_zero_stats(struct ip_vs_stats *stats)
 {
 	spin_lock_bh(&stats->lock);
 
 	/* get current counters as zero point, rates are zeroed */
 
-#define IP_VS_ZERO_STATS_COUNTER(c) stats->ustats0.c = stats->ustats.c
+#define IP_VS_ZERO_STATS_COUNTER(c) stats->kstats0.c = stats->kstats.c
 
 	IP_VS_ZERO_STATS_COUNTER(conns);
 	IP_VS_ZERO_STATS_COUNTER(inpkts);
@@ -828,15 +842,16 @@ __ip_vs_update_dest(struct ip_vs_service *svc, struct ip_vs_dest *dest,
 	__ip_vs_dst_cache_reset(dest);
 	spin_unlock_bh(&dest->dst_lock);
 
-	sched = rcu_dereference_protected(svc->scheduler, 1);
 	if (add) {
 		ip_vs_start_estimator(svc->net, &dest->stats);
 		list_add_rcu(&dest->n_list, &svc->destinations);
 		svc->num_dests++;
-		if (sched->add_dest)
+		sched = rcu_dereference_protected(svc->scheduler, 1);
+		if (sched && sched->add_dest)
 			sched->add_dest(svc, dest);
 	} else {
-		if (sched->upd_dest)
+		sched = rcu_dereference_protected(svc->scheduler, 1);
+		if (sched && sched->upd_dest)
 			sched->upd_dest(svc, dest);
 	}
 }
@@ -1070,7 +1085,7 @@ static void __ip_vs_unlink_dest(struct ip_vs_service *svc,
 		struct ip_vs_scheduler *sched;
 
 		sched = rcu_dereference_protected(svc->scheduler, 1);
-		if (sched->del_dest)
+		if (sched && sched->del_dest)
 			sched->del_dest(svc, dest);
 	}
 }
@@ -1161,11 +1176,14 @@ ip_vs_add_service(struct net *net, struct ip_vs_service_user_kern *u,
 	ip_vs_use_count_inc();
 
 	/* Lookup the scheduler by 'u->sched_name' */
-	sched = ip_vs_scheduler_get(u->sched_name);
-	if (sched == NULL) {
-		pr_info("Scheduler module ip_vs_%s not found\n", u->sched_name);
-		ret = -ENOENT;
-		goto out_err;
+	if (strcmp(u->sched_name, "none")) {
+		sched = ip_vs_scheduler_get(u->sched_name);
+		if (!sched) {
+			pr_info("Scheduler module ip_vs_%s not found\n",
+				u->sched_name);
+			ret = -ENOENT;
+			goto out_err;
+		}
 	}
 
 	if (u->pe_name && *u->pe_name) {
@@ -1226,10 +1244,12 @@ ip_vs_add_service(struct net *net, struct ip_vs_service_user_kern *u,
 	spin_lock_init(&svc->stats.lock);
 
 	/* Bind the scheduler */
-	ret = ip_vs_bind_scheduler(svc, sched);
-	if (ret)
-		goto out_err;
-	sched = NULL;
+	if (sched) {
+		ret = ip_vs_bind_scheduler(svc, sched);
+		if (ret)
+			goto out_err;
+		sched = NULL;
+	}
 
 	/* Bind the ct retriever */
 	RCU_INIT_POINTER(svc->pe, pe);
@@ -1277,17 +1297,20 @@ ip_vs_add_service(struct net *net, struct ip_vs_service_user_kern *u,
 static int
 ip_vs_edit_service(struct ip_vs_service *svc, struct ip_vs_service_user_kern *u)
 {
-	struct ip_vs_scheduler *sched, *old_sched;
+	struct ip_vs_scheduler *sched = NULL, *old_sched;
 	struct ip_vs_pe *pe = NULL, *old_pe = NULL;
 	int ret = 0;
 
 	/*
 	 * Lookup the scheduler, by 'u->sched_name'
 	 */
-	sched = ip_vs_scheduler_get(u->sched_name);
-	if (sched == NULL) {
-		pr_info("Scheduler module ip_vs_%s not found\n", u->sched_name);
-		return -ENOENT;
+	if (strcmp(u->sched_name, "none")) {
+		sched = ip_vs_scheduler_get(u->sched_name);
+		if (!sched) {
+			pr_info("Scheduler module ip_vs_%s not found\n",
+				u->sched_name);
+			return -ENOENT;
+		}
 	}
 	old_sched = sched;
 
@@ -1315,14 +1338,20 @@ ip_vs_edit_service(struct ip_vs_service *svc, struct ip_vs_service_user_kern *u)
 
 	old_sched = rcu_dereference_protected(svc->scheduler, 1);
 	if (sched != old_sched) {
-		/* Bind the new scheduler */
-		ret = ip_vs_bind_scheduler(svc, sched);
-		if (ret) {
-			old_sched = sched;
-			goto out;
+		if (old_sched) {
+			ip_vs_unbind_scheduler(svc, old_sched);
+			RCU_INIT_POINTER(svc->scheduler, NULL);
+			/* Wait all svc->sched_data users */
+			synchronize_rcu();
 		}
-		/* Unbind the old scheduler on success */
-		ip_vs_unbind_scheduler(svc, old_sched);
+		/* Bind the new scheduler */
+		if (sched) {
+			ret = ip_vs_bind_scheduler(svc, sched);
+			if (ret) {
+				ip_vs_scheduler_put(sched);
+				goto out;
+			}
+		}
 	}
 
 	/*
@@ -1809,6 +1838,12 @@ static struct ctl_table vs_vars[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+	{
+		.procname	= "conn_reuse_mode",
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
 #ifdef CONFIG_IP_VS_DEBUG
 	{
 		.procname	= "debug_level",
@@ -1962,6 +1997,7 @@ static int ip_vs_info_seq_show(struct seq_file *seq, void *v)
 		const struct ip_vs_iter *iter = seq->private;
 		const struct ip_vs_dest *dest;
 		struct ip_vs_scheduler *sched = rcu_dereference(svc->scheduler);
+		char *sched_name = sched ? sched->name : "none";
 
 		if (iter->table == ip_vs_svc_table) {
 #ifdef CONFIG_IP_VS_IPV6
@@ -1970,18 +2006,18 @@ static int ip_vs_info_seq_show(struct seq_file *seq, void *v)
 					   ip_vs_proto_name(svc->protocol),
 					   &svc->addr.in6,
 					   ntohs(svc->port),
-					   sched->name);
+					   sched_name);
 			else
 #endif
 				seq_printf(seq, "%s  %08X:%04X %s %s ",
 					   ip_vs_proto_name(svc->protocol),
 					   ntohl(svc->addr.ip),
 					   ntohs(svc->port),
-					   sched->name,
+					   sched_name,
 					   (svc->flags & IP_VS_SVC_F_ONEPACKET)?"ops ":"");
 		} else {
 			seq_printf(seq, "FWM  %08X %s %s",
-				   svc->fwmark, sched->name,
+				   svc->fwmark, sched_name,
 				   (svc->flags & IP_VS_SVC_F_ONEPACKET)?"ops ":"");
 		}
 
@@ -2045,7 +2081,7 @@ static const struct file_operations ip_vs_info_fops = {
 static int ip_vs_stats_show(struct seq_file *seq, void *v)
 {
 	struct net *net = seq_file_single_net(seq);
-	struct ip_vs_stats_user show;
+	struct ip_vs_kstats show;
 
 /*               01234567 01234567 01234567 0123456701234567 0123456701234567 */
 	seq_puts(seq,
@@ -2054,17 +2090,22 @@ static int ip_vs_stats_show(struct seq_file *seq, void *v)
 		   "   Conns  Packets  Packets            Bytes            Bytes\n");
 
 	ip_vs_copy_stats(&show, &net_ipvs(net)->tot_stats);
-	seq_printf(seq, "%8X %8X %8X %16LX %16LX\n\n", show.conns,
-		   show.inpkts, show.outpkts,
-		   (unsigned long long) show.inbytes,
-		   (unsigned long long) show.outbytes);
+	seq_printf(seq, "%8LX %8LX %8LX %16LX %16LX\n\n",
+		   (unsigned long long)show.conns,
+		   (unsigned long long)show.inpkts,
+		   (unsigned long long)show.outpkts,
+		   (unsigned long long)show.inbytes,
+		   (unsigned long long)show.outbytes);
 
-/*                 01234567 01234567 01234567 0123456701234567 0123456701234567 */
+/*                01234567 01234567 01234567 0123456701234567 0123456701234567*/
 	seq_puts(seq,
-		   " Conns/s   Pkts/s   Pkts/s          Bytes/s          Bytes/s\n");
-	seq_printf(seq, "%8X %8X %8X %16X %16X\n",
-			show.cps, show.inpps, show.outpps,
-			show.inbps, show.outbps);
+		 " Conns/s   Pkts/s   Pkts/s          Bytes/s          Bytes/s\n");
+	seq_printf(seq, "%8LX %8LX %8LX %16LX %16LX\n",
+		   (unsigned long long)show.cps,
+		   (unsigned long long)show.inpps,
+		   (unsigned long long)show.outpps,
+		   (unsigned long long)show.inbps,
+		   (unsigned long long)show.outbps);
 
 	return 0;
 }
@@ -2087,7 +2128,7 @@ static int ip_vs_stats_percpu_show(struct seq_file *seq, void *v)
 	struct net *net = seq_file_single_net(seq);
 	struct ip_vs_stats *tot_stats = &net_ipvs(net)->tot_stats;
 	struct ip_vs_cpu_stats __percpu *cpustats = tot_stats->cpustats;
-	struct ip_vs_stats_user rates;
+	struct ip_vs_kstats kstats;
 	int i;
 
 /*               01234567 01234567 01234567 0123456701234567 0123456701234567 */
@@ -2099,41 +2140,41 @@ static int ip_vs_stats_percpu_show(struct seq_file *seq, void *v)
 	for_each_possible_cpu(i) {
 		struct ip_vs_cpu_stats *u = per_cpu_ptr(cpustats, i);
 		unsigned int start;
-		__u64 inbytes, outbytes;
+		u64 conns, inpkts, outpkts, inbytes, outbytes;
 
 		do {
 			start = u64_stats_fetch_begin_irq(&u->syncp);
-			inbytes = u->ustats.inbytes;
-			outbytes = u->ustats.outbytes;
+			conns = u->cnt.conns;
+			inpkts = u->cnt.inpkts;
+			outpkts = u->cnt.outpkts;
+			inbytes = u->cnt.inbytes;
+			outbytes = u->cnt.outbytes;
 		} while (u64_stats_fetch_retry_irq(&u->syncp, start));
 
-		seq_printf(seq, "%3X %8X %8X %8X %16LX %16LX\n",
-			   i, u->ustats.conns, u->ustats.inpkts,
-			   u->ustats.outpkts, (__u64)inbytes,
-			   (__u64)outbytes);
+		seq_printf(seq, "%3X %8LX %8LX %8LX %16LX %16LX\n",
+			   i, (u64)conns, (u64)inpkts,
+			   (u64)outpkts, (u64)inbytes,
+			   (u64)outbytes);
 	}
 
-	spin_lock_bh(&tot_stats->lock);
+	ip_vs_copy_stats(&kstats, tot_stats);
 
-	seq_printf(seq, "  ~ %8X %8X %8X %16LX %16LX\n\n",
-		   tot_stats->ustats.conns, tot_stats->ustats.inpkts,
-		   tot_stats->ustats.outpkts,
-		   (unsigned long long) tot_stats->ustats.inbytes,
-		   (unsigned long long) tot_stats->ustats.outbytes);
+	seq_printf(seq, "  ~ %8LX %8LX %8LX %16LX %16LX\n\n",
+		   (unsigned long long)kstats.conns,
+		   (unsigned long long)kstats.inpkts,
+		   (unsigned long long)kstats.outpkts,
+		   (unsigned long long)kstats.inbytes,
+		   (unsigned long long)kstats.outbytes);
 
-	ip_vs_read_estimator(&rates, tot_stats);
-
-	spin_unlock_bh(&tot_stats->lock);
-
-/*                 01234567 01234567 01234567 0123456701234567 0123456701234567 */
+/*                ... 01234567 01234567 01234567 0123456701234567 0123456701234567 */
 	seq_puts(seq,
-		   "     Conns/s   Pkts/s   Pkts/s          Bytes/s          Bytes/s\n");
-	seq_printf(seq, "    %8X %8X %8X %16X %16X\n",
-			rates.cps,
-			rates.inpps,
-			rates.outpps,
-			rates.inbps,
-			rates.outbps);
+		 "     Conns/s   Pkts/s   Pkts/s          Bytes/s          Bytes/s\n");
+	seq_printf(seq, "    %8LX %8LX %8LX %16LX %16LX\n",
+		   kstats.cps,
+		   kstats.inpps,
+		   kstats.outpps,
+		   kstats.inbps,
+		   kstats.outbps);
 
 	return 0;
 }
@@ -2401,18 +2442,22 @@ static void
 ip_vs_copy_service(struct ip_vs_service_entry *dst, struct ip_vs_service *src)
 {
 	struct ip_vs_scheduler *sched;
+	struct ip_vs_kstats kstats;
+	char *sched_name;
 
 	sched = rcu_dereference_protected(src->scheduler, 1);
+	sched_name = sched ? sched->name : "none";
 	dst->protocol = src->protocol;
 	dst->addr = src->addr.ip;
 	dst->port = src->port;
 	dst->fwmark = src->fwmark;
-	strlcpy(dst->sched_name, sched->name, sizeof(dst->sched_name));
+	strlcpy(dst->sched_name, sched_name, sizeof(dst->sched_name));
 	dst->flags = src->flags;
 	dst->timeout = src->timeout / HZ;
 	dst->netmask = src->netmask;
 	dst->num_dests = src->num_dests;
-	ip_vs_copy_stats(&dst->stats, &src->stats);
+	ip_vs_copy_stats(&kstats, &src->stats);
+	ip_vs_export_stats_user(&dst->stats, &kstats);
 }
 
 static inline int
@@ -2486,6 +2531,7 @@ __ip_vs_get_dest_entries(struct net *net, const struct ip_vs_get_dests *get,
 		int count = 0;
 		struct ip_vs_dest *dest;
 		struct ip_vs_dest_entry entry;
+		struct ip_vs_kstats kstats;
 
 		memset(&entry, 0, sizeof(entry));
 		list_for_each_entry(dest, &svc->destinations, n_list) {
@@ -2507,7 +2553,8 @@ __ip_vs_get_dest_entries(struct net *net, const struct ip_vs_get_dests *get,
 			entry.activeconns = atomic_read(&dest->activeconns);
 			entry.inactconns = atomic_read(&dest->inactconns);
 			entry.persistconns = atomic_read(&dest->persistconns);
-			ip_vs_copy_stats(&entry.stats, &dest->stats);
+			ip_vs_copy_stats(&kstats, &dest->stats);
+			ip_vs_export_stats_user(&entry.stats, &kstats);
 			if (copy_to_user(&uptr->entrytable[count],
 					 &entry, sizeof(entry))) {
 				ret = -EFAULT;
@@ -2799,25 +2846,51 @@ static const struct nla_policy ip_vs_dest_policy[IPVS_DEST_ATTR_MAX + 1] = {
 };
 
 static int ip_vs_genl_fill_stats(struct sk_buff *skb, int container_type,
-				 struct ip_vs_stats *stats)
+				 struct ip_vs_kstats *kstats)
 {
-	struct ip_vs_stats_user ustats;
 	struct nlattr *nl_stats = nla_nest_start(skb, container_type);
+
 	if (!nl_stats)
 		return -EMSGSIZE;
 
-	ip_vs_copy_stats(&ustats, stats);
+	if (nla_put_u32(skb, IPVS_STATS_ATTR_CONNS, (u32)kstats->conns) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_INPKTS, (u32)kstats->inpkts) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTPKTS, (u32)kstats->outpkts) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_INBYTES, kstats->inbytes) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTBYTES, kstats->outbytes) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_CPS, (u32)kstats->cps) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_INPPS, (u32)kstats->inpps) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTPPS, (u32)kstats->outpps) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_INBPS, (u32)kstats->inbps) ||
+	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTBPS, (u32)kstats->outbps))
+		goto nla_put_failure;
+	nla_nest_end(skb, nl_stats);
 
-	if (nla_put_u32(skb, IPVS_STATS_ATTR_CONNS, ustats.conns) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_INPKTS, ustats.inpkts) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTPKTS, ustats.outpkts) ||
-	    nla_put_u64(skb, IPVS_STATS_ATTR_INBYTES, ustats.inbytes) ||
-	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTBYTES, ustats.outbytes) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_CPS, ustats.cps) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_INPPS, ustats.inpps) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTPPS, ustats.outpps) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_INBPS, ustats.inbps) ||
-	    nla_put_u32(skb, IPVS_STATS_ATTR_OUTBPS, ustats.outbps))
+	return 0;
+
+nla_put_failure:
+	nla_nest_cancel(skb, nl_stats);
+	return -EMSGSIZE;
+}
+
+static int ip_vs_genl_fill_stats64(struct sk_buff *skb, int container_type,
+				   struct ip_vs_kstats *kstats)
+{
+	struct nlattr *nl_stats = nla_nest_start(skb, container_type);
+
+	if (!nl_stats)
+		return -EMSGSIZE;
+
+	if (nla_put_u64(skb, IPVS_STATS_ATTR_CONNS, kstats->conns) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_INPKTS, kstats->inpkts) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTPKTS, kstats->outpkts) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_INBYTES, kstats->inbytes) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTBYTES, kstats->outbytes) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_CPS, kstats->cps) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_INPPS, kstats->inpps) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTPPS, kstats->outpps) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_INBPS, kstats->inbps) ||
+	    nla_put_u64(skb, IPVS_STATS_ATTR_OUTBPS, kstats->outbps))
 		goto nla_put_failure;
 	nla_nest_end(skb, nl_stats);
 
@@ -2836,6 +2909,8 @@ static int ip_vs_genl_fill_service(struct sk_buff *skb,
 	struct nlattr *nl_service;
 	struct ip_vs_flags flags = { .flags = svc->flags,
 				     .mask = ~0 };
+	struct ip_vs_kstats kstats;
+	char *sched_name;
 
 	nl_service = nla_nest_start(skb, IPVS_CMD_ATTR_SERVICE);
 	if (!nl_service)
@@ -2854,14 +2929,18 @@ static int ip_vs_genl_fill_service(struct sk_buff *skb,
 	}
 
 	sched = rcu_dereference_protected(svc->scheduler, 1);
+	sched_name = sched ? sched->name : "none";
 	pe = rcu_dereference_protected(svc->pe, 1);
-	if (nla_put_string(skb, IPVS_SVC_ATTR_SCHED_NAME, sched->name) ||
+	if (nla_put_string(skb, IPVS_SVC_ATTR_SCHED_NAME, sched_name) ||
 	    (pe && nla_put_string(skb, IPVS_SVC_ATTR_PE_NAME, pe->name)) ||
 	    nla_put(skb, IPVS_SVC_ATTR_FLAGS, sizeof(flags), &flags) ||
 	    nla_put_u32(skb, IPVS_SVC_ATTR_TIMEOUT, svc->timeout / HZ) ||
 	    nla_put_be32(skb, IPVS_SVC_ATTR_NETMASK, svc->netmask))
 		goto nla_put_failure;
-	if (ip_vs_genl_fill_stats(skb, IPVS_SVC_ATTR_STATS, &svc->stats))
+	ip_vs_copy_stats(&kstats, &svc->stats);
+	if (ip_vs_genl_fill_stats(skb, IPVS_SVC_ATTR_STATS, &kstats))
+		goto nla_put_failure;
+	if (ip_vs_genl_fill_stats64(skb, IPVS_SVC_ATTR_STATS64, &kstats))
 		goto nla_put_failure;
 
 	nla_nest_end(skb, nl_service);
@@ -2888,7 +2967,8 @@ static int ip_vs_genl_dump_service(struct sk_buff *skb,
 	if (ip_vs_genl_fill_service(skb, svc) < 0)
 		goto nla_put_failure;
 
-	return genlmsg_end(skb, hdr);
+	genlmsg_end(skb, hdr);
+	return 0;
 
 nla_put_failure:
 	genlmsg_cancel(skb, hdr);
@@ -3032,6 +3112,7 @@ static struct ip_vs_service *ip_vs_genl_find_service(struct net *net,
 static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
 {
 	struct nlattr *nl_dest;
+	struct ip_vs_kstats kstats;
 
 	nl_dest = nla_nest_start(skb, IPVS_CMD_ATTR_DEST);
 	if (!nl_dest)
@@ -3054,7 +3135,10 @@ static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
 			atomic_read(&dest->persistconns)) ||
 	    nla_put_u16(skb, IPVS_DEST_ATTR_ADDR_FAMILY, dest->af))
 		goto nla_put_failure;
-	if (ip_vs_genl_fill_stats(skb, IPVS_DEST_ATTR_STATS, &dest->stats))
+	ip_vs_copy_stats(&kstats, &dest->stats);
+	if (ip_vs_genl_fill_stats(skb, IPVS_DEST_ATTR_STATS, &kstats))
+		goto nla_put_failure;
+	if (ip_vs_genl_fill_stats64(skb, IPVS_DEST_ATTR_STATS64, &kstats))
 		goto nla_put_failure;
 
 	nla_nest_end(skb, nl_dest);
@@ -3080,7 +3164,8 @@ static int ip_vs_genl_dump_dest(struct sk_buff *skb, struct ip_vs_dest *dest,
 	if (ip_vs_genl_fill_dest(skb, dest) < 0)
 		goto nla_put_failure;
 
-	return genlmsg_end(skb, hdr);
+	genlmsg_end(skb, hdr);
+	return 0;
 
 nla_put_failure:
 	genlmsg_cancel(skb, hdr);
@@ -3216,7 +3301,8 @@ static int ip_vs_genl_dump_daemon(struct sk_buff *skb, __u32 state,
 	if (ip_vs_genl_fill_daemon(skb, state, mcast_ifn, syncid))
 		goto nla_put_failure;
 
-	return genlmsg_end(skb, hdr);
+	genlmsg_end(skb, hdr);
+	return 0;
 
 nla_put_failure:
 	genlmsg_cancel(skb, hdr);
@@ -3400,7 +3486,7 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 		if (udest.af == 0)
 			udest.af = svc->af;
 
-		if (udest.af != svc->af) {
+		if (udest.af != svc->af && cmd != IPVS_CMD_DEL_DEST) {
 			/* The synchronization protocol is incompatible
 			 * with mixed family services
 			 */
@@ -3730,6 +3816,8 @@ static int __net_init ip_vs_control_net_init_sysctl(struct net *net)
 	ipvs->sysctl_pmtu_disc = 1;
 	tbl[idx++].data = &ipvs->sysctl_pmtu_disc;
 	tbl[idx++].data = &ipvs->sysctl_backup_only;
+	ipvs->sysctl_conn_reuse_mode = 1;
+	tbl[idx++].data = &ipvs->sysctl_conn_reuse_mode;
 
 
 	ipvs->sysctl_hdr = register_net_sysctl(net, "net/ipv4/vs", tbl);
@@ -3755,6 +3843,9 @@ static void __net_exit ip_vs_control_net_cleanup_sysctl(struct net *net)
 	cancel_work_sync(&ipvs->defense_work.work);
 	unregister_net_sysctl_table(ipvs->sysctl_hdr);
 	ip_vs_stop_estimator(net, &ipvs->tot_stats);
+
+	if (!net_eq(net, &init_net))
+		kfree(ipvs->sysctl_tbl);
 }
 
 #else

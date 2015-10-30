@@ -255,6 +255,16 @@ static void sem_rcu_free(struct rcu_head *head)
 }
 
 /*
+ * spin_unlock_wait() and !spin_is_locked() are not memory barriers, they
+ * are only control barriers.
+ * The code must pair with spin_unlock(&sem->lock) or
+ * spin_unlock(&sem_perm.lock), thus just the control barrier is insufficient.
+ *
+ * smp_rmb() is sufficient, as writes cannot pass the control barrier.
+ */
+#define ipc_smp_acquire__after_spin_is_unlocked()	smp_rmb()
+
+/*
  * Wait until all currently ongoing simple ops have completed.
  * Caller must own sem_perm.lock.
  * New simple ops cannot start, because simple ops first check
@@ -277,6 +287,7 @@ static void sem_wait_array(struct sem_array *sma)
 		sem = sma->sem_base + i;
 		spin_unlock_wait(&sem->lock);
 	}
+	ipc_smp_acquire__after_spin_is_unlocked();
 }
 
 /*
@@ -328,10 +339,16 @@ static inline int sem_lock(struct sem_array *sma, struct sembuf *sops,
 
 		/* Then check that the global lock is free */
 		if (!spin_is_locked(&sma->sem_perm.lock)) {
-			/* spin_is_locked() is not a memory barrier */
-			smp_mb();
+			/*
+			 * We need a memory barrier with acquire semantics,
+			 * otherwise we can race with another thread that does:
+			 *	complex_count++;
+			 *	spin_unlock(sem_perm.lock);
+			 */
+			ipc_smp_acquire__after_spin_is_unlocked();
 
-			/* Now repeat the test of complex_count:
+			/*
+			 * Now repeat the test of complex_count:
 			 * It can't change anymore until we drop sem->lock.
 			 * Thus: if is now 0, then it will stay 0.
 			 */
@@ -1943,7 +1960,7 @@ SYSCALL_DEFINE4(semtimedop, int, semid, struct sembuf __user *, tsops,
 	queue.sleeper = current;
 
 sleep_again:
-	current->state = TASK_INTERRUPTIBLE;
+	__set_current_state(TASK_INTERRUPTIBLE);
 	sem_unlock(sma, locknum);
 	rcu_read_unlock();
 
@@ -2076,17 +2093,28 @@ void exit_sem(struct task_struct *tsk)
 		rcu_read_lock();
 		un = list_entry_rcu(ulp->list_proc.next,
 				    struct sem_undo, list_proc);
-		if (&un->list_proc == &ulp->list_proc)
-			semid = -1;
-		 else
-			semid = un->semid;
-
-		if (semid == -1) {
+		if (&un->list_proc == &ulp->list_proc) {
+			/*
+			 * We must wait for freeary() before freeing this ulp,
+			 * in case we raced with last sem_undo. There is a small
+			 * possibility where we exit while freeary() didn't
+			 * finish unlocking sem_undo_list.
+			 */
+			spin_unlock_wait(&ulp->lock);
 			rcu_read_unlock();
 			break;
 		}
+		spin_lock(&ulp->lock);
+		semid = un->semid;
+		spin_unlock(&ulp->lock);
 
-		sma = sem_obtain_object_check(tsk->nsproxy->ipc_ns, un->semid);
+		/* exit_sem raced with IPC_RMID, nothing to do */
+		if (semid == -1) {
+			rcu_read_unlock();
+			continue;
+		}
+
+		sma = sem_obtain_object_check(tsk->nsproxy->ipc_ns, semid);
 		/* exit_sem raced with IPC_RMID, nothing to do */
 		if (IS_ERR(sma)) {
 			rcu_read_unlock();
@@ -2172,17 +2200,19 @@ static int sysvipc_sem_proc_show(struct seq_file *s, void *it)
 
 	sem_otime = get_semotime(sma);
 
-	return seq_printf(s,
-			  "%10d %10d  %4o %10u %5u %5u %5u %5u %10lu %10lu\n",
-			  sma->sem_perm.key,
-			  sma->sem_perm.id,
-			  sma->sem_perm.mode,
-			  sma->sem_nsems,
-			  from_kuid_munged(user_ns, sma->sem_perm.uid),
-			  from_kgid_munged(user_ns, sma->sem_perm.gid),
-			  from_kuid_munged(user_ns, sma->sem_perm.cuid),
-			  from_kgid_munged(user_ns, sma->sem_perm.cgid),
-			  sem_otime,
-			  sma->sem_ctime);
+	seq_printf(s,
+		   "%10d %10d  %4o %10u %5u %5u %5u %5u %10lu %10lu\n",
+		   sma->sem_perm.key,
+		   sma->sem_perm.id,
+		   sma->sem_perm.mode,
+		   sma->sem_nsems,
+		   from_kuid_munged(user_ns, sma->sem_perm.uid),
+		   from_kgid_munged(user_ns, sma->sem_perm.gid),
+		   from_kuid_munged(user_ns, sma->sem_perm.cuid),
+		   from_kgid_munged(user_ns, sma->sem_perm.cgid),
+		   sem_otime,
+		   sma->sem_ctime);
+
+	return 0;
 }
 #endif

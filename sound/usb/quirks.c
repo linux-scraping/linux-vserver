@@ -43,12 +43,13 @@
 static int create_composite_quirk(struct snd_usb_audio *chip,
 				  struct usb_interface *iface,
 				  struct usb_driver *driver,
-				  const struct snd_usb_audio_quirk *quirk)
+				  const struct snd_usb_audio_quirk *quirk_comp)
 {
 	int probed_ifnum = get_iface_desc(iface->altsetting)->bInterfaceNumber;
+	const struct snd_usb_audio_quirk *quirk;
 	int err;
 
-	for (quirk = quirk->data; quirk->ifnum >= 0; ++quirk) {
+	for (quirk = quirk_comp->data; quirk->ifnum >= 0; ++quirk) {
 		iface = usb_ifnum_to_if(chip->dev, quirk->ifnum);
 		if (!iface)
 			continue;
@@ -58,9 +59,17 @@ static int create_composite_quirk(struct snd_usb_audio *chip,
 		err = snd_usb_create_quirk(chip, iface, driver, quirk);
 		if (err < 0)
 			return err;
-		if (quirk->ifnum != probed_ifnum)
+	}
+
+	for (quirk = quirk_comp->data; quirk->ifnum >= 0; ++quirk) {
+		iface = usb_ifnum_to_if(chip->dev, quirk->ifnum);
+		if (!iface)
+			continue;
+		if (quirk->ifnum != probed_ifnum &&
+		    !usb_interface_claimed(iface))
 			usb_driver_claim_interface(driver, iface, (void *)-1L);
 	}
+
 	return 0;
 }
 
@@ -1111,6 +1120,7 @@ bool snd_usb_get_sample_rate_quirk(struct snd_usb_audio *chip)
 	case USB_ID(0x045E, 0x0772): /* MS Lifecam Studio */
 	case USB_ID(0x045E, 0x0779): /* MS Lifecam HD-3000 */
 	case USB_ID(0x04D8, 0xFEEA): /* Benchmark DAC1 Pre */
+	case USB_ID(0x074D, 0x3553): /* Outlaw RR2150 (Micronas UAC3553B) */
 		return true;
 	}
 	return false;
@@ -1258,6 +1268,7 @@ u64 snd_usb_interface_dsd_format_quirks(struct snd_usb_audio *chip,
 			return SNDRV_PCM_FMTBIT_DSD_U32_BE;
 		break;
 
+	case USB_ID(0x20b1, 0x000a): /* Gustard DAC-X20U */
 	case USB_ID(0x20b1, 0x2009): /* DIYINHK DSD DXD 384kHz USB to I2S/DSD */
 	case USB_ID(0x20b1, 0x2023): /* JLsounds I2SoverUSB */
 		if (fp->altsetting == 3)

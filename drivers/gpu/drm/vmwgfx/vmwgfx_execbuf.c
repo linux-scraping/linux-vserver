@@ -890,7 +890,8 @@ static int vmw_translate_mob_ptr(struct vmw_private *dev_priv,
 	ret = vmw_user_dmabuf_lookup(sw_context->fp->tfile, handle, &vmw_bo);
 	if (unlikely(ret != 0)) {
 		DRM_ERROR("Could not find or use MOB buffer.\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_no_reloc;
 	}
 	bo = &vmw_bo->base;
 
@@ -914,7 +915,7 @@ static int vmw_translate_mob_ptr(struct vmw_private *dev_priv,
 
 out_no_reloc:
 	vmw_dmabuf_unreference(&vmw_bo);
-	vmw_bo_p = NULL;
+	*vmw_bo_p = NULL;
 	return ret;
 }
 
@@ -951,7 +952,8 @@ static int vmw_translate_guest_ptr(struct vmw_private *dev_priv,
 	ret = vmw_user_dmabuf_lookup(sw_context->fp->tfile, handle, &vmw_bo);
 	if (unlikely(ret != 0)) {
 		DRM_ERROR("Could not find or use GMR region.\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_no_reloc;
 	}
 	bo = &vmw_bo->base;
 
@@ -974,7 +976,7 @@ static int vmw_translate_guest_ptr(struct vmw_private *dev_priv,
 
 out_no_reloc:
 	vmw_dmabuf_unreference(&vmw_bo);
-	vmw_bo_p = NULL;
+	*vmw_bo_p = NULL;
 	return ret;
 }
 
@@ -2487,9 +2489,10 @@ int vmw_execbuf_process(struct drm_file *file_priv,
 	if (unlikely(ret != 0))
 		goto out_err_nores;
 
-	ret = ttm_eu_reserve_buffers(&ticket, &sw_context->validate_nodes, true);
+	ret = ttm_eu_reserve_buffers(&ticket, &sw_context->validate_nodes,
+				     true, NULL);
 	if (unlikely(ret != 0))
-		goto out_err;
+		goto out_err_nores;
 
 	ret = vmw_validate_buffers(dev_priv, sw_context);
 	if (unlikely(ret != 0))
@@ -2533,6 +2536,7 @@ int vmw_execbuf_process(struct drm_file *file_priv,
 	vmw_resource_relocations_free(&sw_context->res_relocations);
 
 	vmw_fifo_commit(dev_priv, command_size);
+	mutex_unlock(&dev_priv->binding_mutex);
 
 	vmw_query_bo_switch_commit(dev_priv, sw_context);
 	ret = vmw_execbuf_fence_commands(file_priv, dev_priv,
@@ -2548,7 +2552,6 @@ int vmw_execbuf_process(struct drm_file *file_priv,
 		DRM_ERROR("Fence submission error. Syncing.\n");
 
 	vmw_resource_list_unreserve(&sw_context->resource_list, false);
-	mutex_unlock(&dev_priv->binding_mutex);
 
 	ttm_eu_fence_buffer_objects(&ticket, &sw_context->validate_nodes,
 				    (void *) fence);
@@ -2677,7 +2680,8 @@ void __vmw_execbuf_release_pinned_bo(struct vmw_private *dev_priv,
 	query_val.shared = false;
 	list_add_tail(&query_val.head, &validate_list);
 
-	ret = ttm_eu_reserve_buffers(&ticket, &validate_list, false);
+	ret = ttm_eu_reserve_buffers(&ticket, &validate_list,
+				     false, NULL);
 	if (unlikely(ret != 0)) {
 		vmw_execbuf_unpin_panic(dev_priv);
 		goto out_no_reserve;

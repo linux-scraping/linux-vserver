@@ -22,7 +22,6 @@
  */
 
 #include <linux/irq.h>
-#include <linux/bootmem.h>
 #include <linux/pci.h>
 #include <linux/msi.h>
 #include <linux/of_platform.h>
@@ -116,7 +115,7 @@ static int ppc4xx_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 
 		irq_set_msi_desc(virq, entry);
 		msg.data = int_no;
-		write_msi_msg(virq, &msg);
+		pci_write_msi_msg(virq, &msg);
 	}
 	return 0;
 }
@@ -125,16 +124,17 @@ void ppc4xx_teardown_msi_irqs(struct pci_dev *dev)
 {
 	struct msi_desc *entry;
 	struct ppc4xx_msi *msi_data = &ppc4xx_msi;
+	irq_hw_number_t hwirq;
 
 	dev_dbg(&dev->dev, "PCIE-MSI: tearing down msi irqs\n");
 
 	list_for_each_entry(entry, &dev->msi_list, list) {
 		if (entry->irq == NO_IRQ)
 			continue;
+		hwirq = virq_to_hw(entry->irq);
 		irq_set_msi_desc(entry->irq, NULL);
-		msi_bitmap_free_hwirqs(&msi_data->bitmap,
-				virq_to_hw(entry->irq), 1);
 		irq_dispose_mapping(entry->irq);
+		msi_bitmap_free_hwirqs(&msi_data->bitmap, hwirq, 1);
 	}
 }
 
@@ -270,7 +270,6 @@ static struct platform_driver ppc4xx_msi_driver = {
 	.remove = ppc4xx_of_msi_remove,
 	.driver = {
 		   .name = "ppc4xx-msi",
-		   .owner = THIS_MODULE,
 		   .of_match_table = ppc4xx_msi_ids,
 		   },
 

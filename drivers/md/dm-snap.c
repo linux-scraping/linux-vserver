@@ -1913,7 +1913,7 @@ static void snapshot_resume(struct dm_target *ti)
 	up_read(&_origins_lock);
 
 	if (origin_md) {
-		dm_internal_suspend(origin_md);
+		dm_internal_suspend_fast(origin_md);
 		if (snap_merging && test_bit(RUNNING_MERGE, &snap_merging->state_bits)) {
 			must_restart_merging = true;
 			stop_merge(snap_merging);
@@ -1936,7 +1936,7 @@ static void snapshot_resume(struct dm_target *ti)
 	if (origin_md) {
 		if (must_restart_merging)
 			start_merge(snap_merging);
-		dm_internal_resume(origin_md);
+		dm_internal_resume_fast(origin_md);
 		dm_put(origin_md);
 	}
 

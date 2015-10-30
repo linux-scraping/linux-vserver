@@ -29,6 +29,7 @@
 #include "qxl_drv.h"
 #include "qxl_object.h"
 #include "drm_crtc_helper.h"
+#include <drm/drm_plane_helper.h>
 
 static bool qxl_head_enabled(struct qxl_head *head)
 {
@@ -100,14 +101,37 @@ static int qxl_display_copy_rom_client_monitors_config(struct qxl_device *qdev)
 	return 0;
 }
 
+static void qxl_update_offset_props(struct qxl_device *qdev)
+{
+	struct drm_device *dev = qdev->ddev;
+	struct drm_connector *connector;
+	struct qxl_output *output;
+	struct qxl_head *head;
+
+	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
+		output = drm_connector_to_qxl_output(connector);
+
+		head = &qdev->client_monitors_config->heads[output->index];
+
+		drm_object_property_set_value(&connector->base,
+			dev->mode_config.suggested_x_property, head->x);
+		drm_object_property_set_value(&connector->base,
+			dev->mode_config.suggested_y_property, head->y);
+	}
+}
+
 void qxl_display_read_client_monitors_config(struct qxl_device *qdev)
 {
 
+	struct drm_device *dev = qdev->ddev;
 	while (qxl_display_copy_rom_client_monitors_config(qdev)) {
 		qxl_io_log(qdev, "failed crc check for client_monitors_config,"
 				 " retrying\n");
 	}
 
+	drm_modeset_lock_all(dev);
+	qxl_update_offset_props(qdev);
+	drm_modeset_unlock_all(dev);
 	if (!drm_helper_hpd_irq_event(qdev->ddev)) {
 		/* notify that the monitor configuration changed, to
 		   adjust at the arbitrary resolution */
@@ -136,8 +160,34 @@ static int qxl_add_monitors_config_modes(struct drm_connector *connector,
 	*pwidth = head->width;
 	*pheight = head->height;
 	drm_mode_probed_add(connector, mode);
+	/* remember the last custom size for mode validation */
+	qdev->monitors_config_width = mode->hdisplay;
+	qdev->monitors_config_height = mode->vdisplay;
 	return 1;
 }
+
+static struct mode_size {
+	int w;
+	int h;
+} common_modes[] = {
+	{ 640,  480},
+	{ 720,  480},
+	{ 800,  600},
+	{ 848,  480},
+	{1024,  768},
+	{1152,  768},
+	{1280,  720},
+	{1280,  800},
+	{1280,  854},
+	{1280,  960},
+	{1280, 1024},
+	{1440,  900},
+	{1400, 1050},
+	{1680, 1050},
+	{1600, 1200},
+	{1920, 1080},
+	{1920, 1200}
+};
 
 static int qxl_add_common_modes(struct drm_connector *connector,
                                 unsigned pwidth,
@@ -146,29 +196,6 @@ static int qxl_add_common_modes(struct drm_connector *connector,
 	struct drm_device *dev = connector->dev;
 	struct drm_display_mode *mode = NULL;
 	int i;
-	struct mode_size {
-		int w;
-		int h;
-	} common_modes[] = {
-		{ 640,  480},
-		{ 720,  480},
-		{ 800,  600},
-		{ 848,  480},
-		{1024,  768},
-		{1152,  768},
-		{1280,  720},
-		{1280,  800},
-		{1280,  854},
-		{1280,  960},
-		{1280, 1024},
-		{1440,  900},
-		{1400, 1050},
-		{1680, 1050},
-		{1600, 1200},
-		{1920, 1080},
-		{1920, 1200}
-	};
-
 	for (i = 0; i < ARRAY_SIZE(common_modes); i++) {
 		mode = drm_cvt_mode(dev, common_modes[i].w, common_modes[i].h,
 				    60, false, false, false);
@@ -568,7 +595,6 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 {
 	struct drm_device *dev = crtc->dev;
 	struct qxl_device *qdev = dev->dev_private;
-	struct qxl_mode *m = (void *)mode->private;
 	struct qxl_framebuffer *qfb;
 	struct qxl_bo *bo, *old_bo = NULL;
 	struct qxl_crtc *qcrtc = to_qxl_crtc(crtc);
@@ -586,19 +612,13 @@ static int qxl_crtc_mode_set(struct drm_crtc *crtc,
 	}
 	qfb = to_qxl_framebuffer(crtc->primary->fb);
 	bo = gem_to_qxl_bo(qfb->obj);
-	if (!m)
-		/* and do we care? */
-		DRM_DEBUG("%dx%d: not a native mode\n", x, y);
-	else
-		DRM_DEBUG("%dx%d: qxl id %d\n",
-			  mode->hdisplay, mode->vdisplay, m->id);
 	DRM_DEBUG("+%d+%d (%d,%d) => (%d,%d)\n",
 		  x, y,
 		  mode->hdisplay, mode->vdisplay,
 		  adjusted_mode->hdisplay,
 		  adjusted_mode->vdisplay);
 
-	if (qcrtc->index == 0)
+	if (bo->is_primary == false)
 		recreate_primary = true;
 
 	if (bo->surf.stride * bo->surf.height > qdev->vram_size) {
@@ -806,11 +826,22 @@ static int qxl_conn_get_modes(struct drm_connector *connector)
 static int qxl_conn_mode_valid(struct drm_connector *connector,
 			       struct drm_display_mode *mode)
 {
+	struct drm_device *ddev = connector->dev;
+	struct qxl_device *qdev = ddev->dev_private;
+	int i;
+
 	/* TODO: is this called for user defined modes? (xrandr --add-mode)
 	 * TODO: check that the mode fits in the framebuffer */
-	DRM_DEBUG("%s: %dx%d status=%d\n", mode->name, mode->hdisplay,
-		  mode->vdisplay, mode->status);
-	return MODE_OK;
+
+	if(qdev->monitors_config_width == mode->hdisplay &&
+	   qdev->monitors_config_height == mode->vdisplay)
+		return MODE_OK;
+
+	for (i = 0; i < ARRAY_SIZE(common_modes); i++) {
+		if (common_modes[i].w == mode->hdisplay && common_modes[i].h == mode->vdisplay)
+			return MODE_OK;
+	}
+	return MODE_BAD;
 }
 
 static struct drm_encoder *qxl_best_encoder(struct drm_connector *connector)
@@ -855,13 +886,15 @@ static enum drm_connector_status qxl_conn_detect(
 		drm_connector_to_qxl_output(connector);
 	struct drm_device *ddev = connector->dev;
 	struct qxl_device *qdev = ddev->dev_private;
-	int connected;
+	bool connected = false;
 
 	/* The first monitor is always connected */
-	connected = (output->index == 0) ||
-		    (qdev->client_monitors_config &&
-		     qdev->client_monitors_config->count > output->index &&
-		     qxl_head_enabled(&qdev->client_monitors_config->heads[output->index]));
+	if (!qdev->client_monitors_config) {
+		if (output->index == 0)
+			connected = true;
+	} else
+		connected = qdev->client_monitors_config->count > output->index &&
+		     qxl_head_enabled(&qdev->client_monitors_config->heads[output->index]);
 
 	DRM_DEBUG("#%d connected: %d\n", output->index, connected);
 	if (!connected)
@@ -951,6 +984,10 @@ static int qdev_output_init(struct drm_device *dev, int num_output)
 
 	drm_object_attach_property(&connector->base,
 				   qdev->hotplug_mode_update_property, 0);
+	drm_object_attach_property(&connector->base,
+				   dev->mode_config.suggested_x_property, 0);
+	drm_object_attach_property(&connector->base,
+				   dev->mode_config.suggested_y_property, 0);
 	drm_connector_register(connector);
 	return 0;
 }
@@ -1064,6 +1101,7 @@ int qxl_modeset_init(struct qxl_device *qdev)
 
 	qdev->ddev->mode_config.fb_base = qdev->vram_base;
 
+	drm_mode_create_suggested_offset_properties(qdev->ddev);
 	qxl_mode_create_hotplug_mode_update_property(qdev);
 
 	for (i = 0 ; i < qxl_num_crtc; ++i) {

@@ -11,6 +11,32 @@
 #include <symbol/kallsyms.h>
 #include "debug.h"
 
+#ifndef EM_AARCH64
+#define EM_AARCH64	183  /* ARM 64 bit */
+#endif
+
+
+#ifdef HAVE_CPLUS_DEMANGLE_SUPPORT
+extern char *cplus_demangle(const char *, int);
+
+static inline char *bfd_demangle(void __maybe_unused *v, const char *c, int i)
+{
+	return cplus_demangle(c, i);
+}
+#else
+#ifdef NO_DEMANGLE
+static inline char *bfd_demangle(void __maybe_unused *v,
+				 const char __maybe_unused *c,
+				 int __maybe_unused i)
+{
+	return NULL;
+}
+#else
+#define PACKAGE 'perf'
+#include <bfd.h>
+#endif
+#endif
+
 #ifndef HAVE_ELF_GETPHDRNUM_SUPPORT
 static int elf_getphdrnum(Elf *elf, size_t *dst)
 {
@@ -550,6 +576,43 @@ static int dso__swap_init(struct dso *dso, unsigned char eidata)
 	return 0;
 }
 
+static int decompress_kmodule(struct dso *dso, const char *name,
+			      enum dso_binary_type type)
+{
+	int fd = -1;
+	char tmpbuf[] = "/tmp/perf-kmod-XXXXXX";
+	struct kmod_path m;
+
+	if (type != DSO_BINARY_TYPE__SYSTEM_PATH_KMODULE_COMP &&
+	    type != DSO_BINARY_TYPE__GUEST_KMODULE_COMP &&
+	    type != DSO_BINARY_TYPE__BUILD_ID_CACHE)
+		return -1;
+
+	if (type == DSO_BINARY_TYPE__BUILD_ID_CACHE)
+		name = dso->long_name;
+
+	if (kmod_path__parse_ext(&m, name) || !m.comp)
+		return -1;
+
+	fd = mkstemp(tmpbuf);
+	if (fd < 0) {
+		dso->load_errno = errno;
+		goto out;
+	}
+
+	if (!decompress_to_file(m.ext, name, fd)) {
+		dso->load_errno = DSO_LOAD_ERRNO__DECOMPRESSION_FAILURE;
+		close(fd);
+		fd = -1;
+	}
+
+	unlink(tmpbuf);
+
+out:
+	free(m.ext);
+	return fd;
+}
+
 bool symsrc__possibly_runtime(struct symsrc *ss)
 {
 	return ss->dynsym || ss->opdsec;
@@ -575,33 +638,49 @@ int symsrc__init(struct symsrc *ss, struct dso *dso, const char *name,
 	Elf *elf;
 	int fd;
 
-	fd = open(name, O_RDONLY);
-	if (fd < 0)
-		return -1;
+	if (dso__needs_decompress(dso)) {
+		fd = decompress_kmodule(dso, name, type);
+		if (fd < 0)
+			return -1;
+	} else {
+		fd = open(name, O_RDONLY);
+		if (fd < 0) {
+			dso->load_errno = errno;
+			return -1;
+		}
+	}
 
 	elf = elf_begin(fd, PERF_ELF_C_READ_MMAP, NULL);
 	if (elf == NULL) {
 		pr_debug("%s: cannot read %s ELF file.\n", __func__, name);
+		dso->load_errno = DSO_LOAD_ERRNO__INVALID_ELF;
 		goto out_close;
 	}
 
 	if (gelf_getehdr(elf, &ehdr) == NULL) {
+		dso->load_errno = DSO_LOAD_ERRNO__INVALID_ELF;
 		pr_debug("%s: cannot get elf header.\n", __func__);
 		goto out_elf_end;
 	}
 
-	if (dso__swap_init(dso, ehdr.e_ident[EI_DATA]))
+	if (dso__swap_init(dso, ehdr.e_ident[EI_DATA])) {
+		dso->load_errno = DSO_LOAD_ERRNO__INTERNAL_ERROR;
 		goto out_elf_end;
+	}
 
 	/* Always reject images with a mismatched build-id: */
 	if (dso->has_build_id) {
 		u8 build_id[BUILD_ID_SIZE];
 
-		if (elf_read_build_id(elf, build_id, BUILD_ID_SIZE) < 0)
+		if (elf_read_build_id(elf, build_id, BUILD_ID_SIZE) < 0) {
+			dso->load_errno = DSO_LOAD_ERRNO__CANNOT_READ_BUILDID;
 			goto out_elf_end;
+		}
 
-		if (!dso__build_id_equal(dso, build_id))
+		if (!dso__build_id_equal(dso, build_id)) {
+			dso->load_errno = DSO_LOAD_ERRNO__MISMATCHING_BUILDID;
 			goto out_elf_end;
+		}
 	}
 
 	ss->is_64_bit = (gelf_getclass(elf) == ELFCLASS64);
@@ -637,8 +716,10 @@ int symsrc__init(struct symsrc *ss, struct dso *dso, const char *name,
 	}
 
 	ss->name   = strdup(name);
-	if (!ss->name)
+	if (!ss->name) {
+		dso->load_errno = errno;
 		goto out_elf_end;
+	}
 
 	ss->elf    = elf;
 	ss->fd     = fd;
@@ -695,6 +776,7 @@ int dso__load_sym(struct dso *dso, struct map *map,
 		  symbol_filter_t filter, int kmodule)
 {
 	struct kmap *kmap = dso->kernel ? map__kmap(map) : NULL;
+	struct map_groups *kmaps = kmap ? map__kmaps(map) : NULL;
 	struct map *curr_map = map;
 	struct dso *curr_dso = dso;
 	Elf_Data *symstrs, *secstrs;
@@ -709,6 +791,9 @@ int dso__load_sym(struct dso *dso, struct map *map,
 	Elf *elf;
 	int nr = 0;
 	bool remap_kernel = false, adjust_kernel_syms = false;
+
+	if (kmap && !kmaps)
+		return -1;
 
 	dso->symtab_type = syms_ss->type;
 	dso->is_64_bit = syms_ss->is_64_bit;
@@ -806,10 +891,9 @@ int dso__load_sym(struct dso *dso, struct map *map,
 		/* Reject ARM ELF "mapping symbols": these aren't unique and
 		 * don't identify functions, so will confuse the profile
 		 * output: */
-		if (ehdr.e_machine == EM_ARM) {
-			if (!strcmp(elf_name, "$a") ||
-			    !strcmp(elf_name, "$d") ||
-			    !strcmp(elf_name, "$t"))
+		if (ehdr.e_machine == EM_ARM || ehdr.e_machine == EM_AARCH64) {
+			if (elf_name[0] == '$' && strchr("adtx", elf_name[1])
+			    && (elf_name[2] == '\0' || elf_name[2] == '.'))
 				continue;
 		}
 
@@ -878,8 +962,10 @@ int dso__load_sym(struct dso *dso, struct map *map,
 					map->map_ip = map__map_ip;
 					map->unmap_ip = map__unmap_ip;
 					/* Ensure maps are correctly ordered */
-					map_groups__remove(kmap->kmaps, map);
-					map_groups__insert(kmap->kmaps, map);
+					if (kmaps) {
+						map_groups__remove(kmaps, map);
+						map_groups__insert(kmaps, map);
+					}
 				}
 
 				/*
@@ -903,7 +989,7 @@ int dso__load_sym(struct dso *dso, struct map *map,
 			snprintf(dso_name, sizeof(dso_name),
 				 "%s%s", dso->short_name, section_name);
 
-			curr_map = map_groups__find_by_name(kmap->kmaps, map->type, dso_name);
+			curr_map = map_groups__find_by_name(kmaps, map->type, dso_name);
 			if (curr_map == NULL) {
 				u64 start = sym.st_value;
 
@@ -933,7 +1019,7 @@ int dso__load_sym(struct dso *dso, struct map *map,
 					curr_map->unmap_ip = identity__map_ip;
 				}
 				curr_dso->symtab_type = dso->symtab_type;
-				map_groups__insert(kmap->kmaps, curr_map);
+				map_groups__insert(kmaps, curr_map);
 				/*
 				 * The new DSO should go to the kernel DSOS
 				 */
@@ -987,14 +1073,15 @@ new_symbol:
 	 * For misannotated, zeroed, ASM function sizes.
 	 */
 	if (nr > 0) {
-		symbols__fixup_duplicate(&dso->symbols[map->type]);
+		if (!symbol_conf.allow_aliases)
+			symbols__fixup_duplicate(&dso->symbols[map->type]);
 		symbols__fixup_end(&dso->symbols[map->type]);
 		if (kmap) {
 			/*
 			 * We need to fixup this here too because we create new
 			 * maps here, for things like vsyscall sections.
 			 */
-			__map_groups__fixup_end(kmap->kmaps, map->type);
+			__map_groups__fixup_end(kmaps, map->type);
 		}
 	}
 	err = nr;
@@ -1166,8 +1253,6 @@ out_close:
 static int kcore__init(struct kcore *kcore, char *filename, int elfclass,
 		       bool temp)
 {
-	GElf_Ehdr *ehdr;
-
 	kcore->elfclass = elfclass;
 
 	if (temp)
@@ -1184,9 +1269,7 @@ static int kcore__init(struct kcore *kcore, char *filename, int elfclass,
 	if (!gelf_newehdr(kcore->elf, elfclass))
 		goto out_end;
 
-	ehdr = gelf_getehdr(kcore->elf, &kcore->ehdr);
-	if (!ehdr)
-		goto out_end;
+	memset(&kcore->ehdr, 0, sizeof(GElf_Ehdr));
 
 	return 0;
 
@@ -1243,23 +1326,18 @@ static int kcore__copy_hdr(struct kcore *from, struct kcore *to, size_t count)
 static int kcore__add_phdr(struct kcore *kcore, int idx, off_t offset,
 			   u64 addr, u64 len)
 {
-	GElf_Phdr gphdr;
-	GElf_Phdr *phdr;
+	GElf_Phdr phdr = {
+		.p_type		= PT_LOAD,
+		.p_flags	= PF_R | PF_W | PF_X,
+		.p_offset	= offset,
+		.p_vaddr	= addr,
+		.p_paddr	= 0,
+		.p_filesz	= len,
+		.p_memsz	= len,
+		.p_align	= page_size,
+	};
 
-	phdr = gelf_getphdr(kcore->elf, idx, &gphdr);
-	if (!phdr)
-		return -1;
-
-	phdr->p_type	= PT_LOAD;
-	phdr->p_flags	= PF_R | PF_W | PF_X;
-	phdr->p_offset	= offset;
-	phdr->p_vaddr	= addr;
-	phdr->p_paddr	= 0;
-	phdr->p_filesz	= len;
-	phdr->p_memsz	= len;
-	phdr->p_align	= page_size;
-
-	if (!gelf_update_phdr(kcore->elf, idx, phdr))
+	if (!gelf_update_phdr(kcore->elf, idx, &phdr))
 		return -1;
 
 	return 0;

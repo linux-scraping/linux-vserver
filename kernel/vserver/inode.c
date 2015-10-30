@@ -136,10 +136,10 @@ int vc_fget_iattr(uint32_t fd, void __user *data)
 		return -EFAULT;
 
 	filp = fget(fd);
-	if (!filp || !filp->f_dentry || !filp->f_dentry->d_inode)
+	if (!filp || !filp->f_path.dentry || !filp->f_path.dentry->d_inode)
 		return -EBADF;
 
-	ret = __vc_get_iattr(filp->f_dentry->d_inode,
+	ret = __vc_get_iattr(filp->f_path.dentry->d_inode,
 		&vc_data.tag, &vc_data.flags, &vc_data.mask);
 
 	fput(filp);
@@ -300,10 +300,10 @@ int vc_fset_iattr(uint32_t fd, void __user *data)
 		return -EFAULT;
 
 	filp = fget(fd);
-	if (!filp || !filp->f_dentry || !filp->f_dentry->d_inode)
+	if (!filp || !filp->f_path.dentry || !filp->f_path.dentry->d_inode)
 		return -EBADF;
 
-	ret = __vc_set_iattr(filp->f_dentry, &vc_data.tag,
+	ret = __vc_set_iattr(filp->f_path.dentry, &vc_data.tag,
 		&vc_data.flags, &vc_data.mask);
 
 	fput(filp);

@@ -164,8 +164,8 @@
 				((1ULL << (n)) - 1)))
 
 /* Haswell-EP Ubox */
-#define HSWEP_U_MSR_PMON_CTR0			0x705
-#define HSWEP_U_MSR_PMON_CTL0			0x709
+#define HSWEP_U_MSR_PMON_CTR0			0x709
+#define HSWEP_U_MSR_PMON_CTL0			0x705
 #define HSWEP_U_MSR_PMON_FILTER			0x707
 
 #define HSWEP_U_MSR_PMON_UCLK_FIXED_CTL		0x703
@@ -449,7 +449,11 @@ static struct attribute *snbep_uncore_qpi_formats_attr[] = {
 static struct uncore_event_desc snbep_uncore_imc_events[] = {
 	INTEL_UNCORE_EVENT_DESC(clockticks,      "event=0xff,umask=0x00"),
 	INTEL_UNCORE_EVENT_DESC(cas_count_read,  "event=0x04,umask=0x03"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_read.scale, "6.103515625e-5"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_read.unit, "MiB"),
 	INTEL_UNCORE_EVENT_DESC(cas_count_write, "event=0x04,umask=0x0c"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_write.scale, "6.103515625e-5"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_write.unit, "MiB"),
 	{ /* end: all zeroes */ },
 };
 
@@ -1128,8 +1132,7 @@ static int snbep_pci2phy_map_init(int devid)
 		}
 	}
 
-	if (ubox_dev)
-		pci_dev_put(ubox_dev);
+	pci_dev_put(ubox_dev);
 
 	return err ? pcibios_err_to_errno(err) : 0;
 }
@@ -1911,7 +1914,7 @@ static struct intel_uncore_type hswep_uncore_cbox = {
 	.name			= "cbox",
 	.num_counters		= 4,
 	.num_boxes		= 18,
-	.perf_ctr_bits		= 44,
+	.perf_ctr_bits		= 48,
 	.event_ctl		= HSWEP_C0_MSR_PMON_CTL0,
 	.perf_ctr		= HSWEP_C0_MSR_PMON_CTR0,
 	.event_mask		= SNBEP_CBO_MSR_PMON_RAW_EVENT_MASK,
@@ -2048,7 +2051,11 @@ static struct intel_uncore_type hswep_uncore_ha = {
 static struct uncore_event_desc hswep_uncore_imc_events[] = {
 	INTEL_UNCORE_EVENT_DESC(clockticks,      "event=0x00,umask=0x00"),
 	INTEL_UNCORE_EVENT_DESC(cas_count_read,  "event=0x04,umask=0x03"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_read.scale, "6.103515625e-5"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_read.unit, "MiB"),
 	INTEL_UNCORE_EVENT_DESC(cas_count_write, "event=0x04,umask=0x0c"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_write.scale, "6.103515625e-5"),
+	INTEL_UNCORE_EVENT_DESC(cas_count_write.unit, "MiB"),
 	{ /* end: all zeroes */ },
 };
 

@@ -278,6 +278,10 @@ static void option_instat_callback(struct urb *urb);
 #define ZTE_PRODUCT_MF622			0x0001
 #define ZTE_PRODUCT_MF628			0x0015
 #define ZTE_PRODUCT_MF626			0x0031
+#define ZTE_PRODUCT_ZM8620_X			0x0396
+#define ZTE_PRODUCT_ME3620_MBIM			0x0426
+#define ZTE_PRODUCT_ME3620_X			0x1432
+#define ZTE_PRODUCT_ME3620_L			0x1433
 #define ZTE_PRODUCT_AC2726			0xfff1
 #define ZTE_PRODUCT_MG880			0xfffd
 #define ZTE_PRODUCT_CDMA_TECH			0xfffe
@@ -507,18 +511,10 @@ static void option_instat_callback(struct urb *urb);
 #define VIATELECOM_VENDOR_ID			0x15eb
 #define VIATELECOM_PRODUCT_CDS7			0x0001
 
-/* some devices interfaces need special handling due to a number of reasons */
-enum option_blacklist_reason {
-		OPTION_BLACKLIST_NONE = 0,
-		OPTION_BLACKLIST_SENDSETUP = 1,
-		OPTION_BLACKLIST_RESERVED_IF = 2
-};
-
-#define MAX_BL_NUM  11
 struct option_blacklist_info {
-	/* bitfield of interface numbers for OPTION_BLACKLIST_SENDSETUP */
+	/* bitmask of interface numbers blacklisted for send_setup */
 	const unsigned long sendsetup;
-	/* bitfield of interface numbers for OPTION_BLACKLIST_RESERVED_IF */
+	/* bitmask of interface numbers that are reserved */
 	const unsigned long reserved;
 };
 
@@ -550,6 +546,18 @@ static const struct option_blacklist_info zte_mc2718_z_blacklist = {
 
 static const struct option_blacklist_info zte_mc2716_z_blacklist = {
 	.sendsetup = BIT(1) | BIT(2) | BIT(3),
+};
+
+static const struct option_blacklist_info zte_me3620_mbim_blacklist = {
+	.reserved = BIT(2) | BIT(3) | BIT(4),
+};
+
+static const struct option_blacklist_info zte_me3620_xl_blacklist = {
+	.reserved = BIT(3) | BIT(4) | BIT(5),
+};
+
+static const struct option_blacklist_info zte_zm8620_x_blacklist = {
+	.reserved = BIT(3) | BIT(4) | BIT(5),
 };
 
 static const struct option_blacklist_info huawei_cdc12_blacklist = {
@@ -1599,6 +1607,14 @@ static const struct usb_device_id option_ids[] = {
 	 .driver_info = (kernel_ulong_t)&zte_ad3812_z_blacklist },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ZTE_VENDOR_ID, ZTE_PRODUCT_MC2716, 0xff, 0xff, 0xff),
 	 .driver_info = (kernel_ulong_t)&zte_mc2716_z_blacklist },
+	{ USB_DEVICE(ZTE_VENDOR_ID, ZTE_PRODUCT_ME3620_L),
+	 .driver_info = (kernel_ulong_t)&zte_me3620_xl_blacklist },
+	{ USB_DEVICE(ZTE_VENDOR_ID, ZTE_PRODUCT_ME3620_MBIM),
+	 .driver_info = (kernel_ulong_t)&zte_me3620_mbim_blacklist },
+	{ USB_DEVICE(ZTE_VENDOR_ID, ZTE_PRODUCT_ME3620_X),
+	 .driver_info = (kernel_ulong_t)&zte_me3620_xl_blacklist },
+	{ USB_DEVICE(ZTE_VENDOR_ID, ZTE_PRODUCT_ZM8620_X),
+	 .driver_info = (kernel_ulong_t)&zte_zm8620_x_blacklist },
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x02, 0x01) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x02, 0x05) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(ZTE_VENDOR_ID, 0xff, 0x86, 0x10) },
@@ -1825,36 +1841,13 @@ struct option_private {
 
 module_usb_serial_driver(serial_drivers, option_ids);
 
-static bool is_blacklisted(const u8 ifnum, enum option_blacklist_reason reason,
-			   const struct option_blacklist_info *blacklist)
-{
-	unsigned long num;
-	const unsigned long *intf_list;
-
-	if (blacklist) {
-		if (reason == OPTION_BLACKLIST_SENDSETUP)
-			intf_list = &blacklist->sendsetup;
-		else if (reason == OPTION_BLACKLIST_RESERVED_IF)
-			intf_list = &blacklist->reserved;
-		else {
-			BUG_ON(reason);
-			return false;
-		}
-
-		for_each_set_bit(num, intf_list, MAX_BL_NUM + 1) {
-			if (num == ifnum)
-				return true;
-		}
-	}
-	return false;
-}
-
 static int option_probe(struct usb_serial *serial,
 			const struct usb_device_id *id)
 {
 	struct usb_interface_descriptor *iface_desc =
 				&serial->interface->cur_altsetting->desc;
 	struct usb_device_descriptor *dev_desc = &serial->dev->descriptor;
+	const struct option_blacklist_info *blacklist;
 
 	/* Never bind to the CD-Rom emulation interface	*/
 	if (iface_desc->bInterfaceClass == 0x08)
@@ -1865,10 +1858,9 @@ static int option_probe(struct usb_serial *serial,
 	 * the same class/subclass/protocol as the serial interfaces.  Look at
 	 * the Windows driver .INF files for reserved interface numbers.
 	 */
-	if (is_blacklisted(
-		iface_desc->bInterfaceNumber,
-		OPTION_BLACKLIST_RESERVED_IF,
-		(const struct option_blacklist_info *) id->driver_info))
+	blacklist = (void *)id->driver_info;
+	if (blacklist && test_bit(iface_desc->bInterfaceNumber,
+						&blacklist->reserved))
 		return -ENODEV;
 	/*
 	 * Don't bind network interface on Samsung GT-B3730, it is handled by
@@ -1879,8 +1871,8 @@ static int option_probe(struct usb_serial *serial,
 	    iface_desc->bInterfaceClass != USB_CLASS_CDC_DATA)
 		return -ENODEV;
 
-	/* Store device id so we can use it during attach. */
-	usb_set_serial_data(serial, (void *)id);
+	/* Store the blacklist info so we can use it during attach. */
+	usb_set_serial_data(serial, (void *)blacklist);
 
 	return 0;
 }
@@ -1888,7 +1880,7 @@ static int option_probe(struct usb_serial *serial,
 static int option_attach(struct usb_serial *serial)
 {
 	struct usb_interface_descriptor *iface_desc;
-	const struct usb_device_id *id;
+	const struct option_blacklist_info *blacklist;
 	struct usb_wwan_intf_private *data;
 	struct option_private *priv;
 
@@ -1902,16 +1894,16 @@ static int option_attach(struct usb_serial *serial)
 		return -ENOMEM;
 	}
 
-	/* Retrieve device id stored at probe. */
-	id = usb_get_serial_data(serial);
+	/* Retrieve blacklist info stored at probe. */
+	blacklist = usb_get_serial_data(serial);
+
 	iface_desc = &serial->interface->cur_altsetting->desc;
 
 	priv->bInterfaceNumber = iface_desc->bInterfaceNumber;
 	data->private = priv;
 
-	if (!is_blacklisted(iface_desc->bInterfaceNumber,
-			OPTION_BLACKLIST_SENDSETUP,
-			(struct option_blacklist_info *)id->driver_info)) {
+	if (!blacklist || !test_bit(iface_desc->bInterfaceNumber,
+						&blacklist->sendsetup)) {
 		data->send_setup = option_send_setup;
 	}
 	spin_lock_init(&data->susp_lock);

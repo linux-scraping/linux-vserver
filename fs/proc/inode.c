@@ -33,8 +33,6 @@ static void proc_evict_inode(struct inode *inode)
 {
 	struct proc_dir_entry *de;
 	struct ctl_table_header *head;
-	const struct proc_ns_operations *ns_ops;
-	void *ns;
 
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
@@ -43,7 +41,7 @@ static void proc_evict_inode(struct inode *inode)
 	put_pid(PROC_I(inode)->pid);
 
 	/* Let go of any associated proc directory entry */
-	de = PROC_I(inode)->pde;
+	de = PDE(inode);
 	if (de)
 		pde_put(de);
 	head = PROC_I(inode)->sysctl;
@@ -51,11 +49,6 @@ static void proc_evict_inode(struct inode *inode)
 		RCU_INIT_POINTER(PROC_I(inode)->sysctl, NULL);
 		sysctl_head_put(head);
 	}
-	/* Release any associated namespace */
-	ns_ops = PROC_I(inode)->ns.ns_ops;
-	ns = PROC_I(inode)->ns.ns;
-	if (ns_ops && ns)
-		ns_ops->put(ns);
 }
 
 static struct kmem_cache * proc_inode_cachep;
@@ -74,8 +67,7 @@ static struct inode *proc_alloc_inode(struct super_block *sb)
 	ei->pde = NULL;
 	ei->sysctl = NULL;
 	ei->sysctl_entry = NULL;
-	ei->ns.ns = NULL;
-	ei->ns.ns_ops = NULL;
+	ei->ns_ops = NULL;
 	inode = &ei->vfs_inode;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	return inode;
@@ -404,7 +396,7 @@ static const struct file_operations proc_reg_file_ops_no_compat = {
 
 static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)
 {
-	struct proc_dir_entry *pde = PDE(dentry->d_inode);
+	struct proc_dir_entry *pde = PDE(d_inode(dentry));
 	if (unlikely(!use_pde(pde)))
 		return ERR_PTR(-EINVAL);
 	nd_set_link(nd, pde->data);
@@ -431,6 +423,10 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 		inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 		PROC_I(inode)->pde = de;
 
+		if (is_empty_pde(de)) {
+			make_empty_dir_inode(inode);
+			return inode;
+		}
 		if (de->mode) {
 			inode->i_mode = de->mode;
 			inode->i_uid = de->uid;

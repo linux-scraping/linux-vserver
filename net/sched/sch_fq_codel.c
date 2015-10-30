@@ -162,10 +162,10 @@ static unsigned int fq_codel_drop(struct Qdisc *sch)
 	skb = dequeue_head(flow);
 	len = qdisc_pkt_len(skb);
 	q->backlogs[idx] -= len;
-	kfree_skb(skb);
 	sch->q.qlen--;
 	qdisc_qstats_drop(sch);
 	qdisc_qstats_backlog_dec(sch, skb);
+	kfree_skb(skb);
 	flow->dropped++;
 	return idx;
 }
@@ -391,7 +391,7 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt)
 	q->perturbation = prandom_u32();
 	INIT_LIST_HEAD(&q->new_flows);
 	INIT_LIST_HEAD(&q->old_flows);
-	codel_params_init(&q->cparams);
+	codel_params_init(&q->cparams, sch);
 	codel_stats_init(&q->cstats);
 	q->cparams.ecn = true;
 

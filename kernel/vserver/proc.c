@@ -335,7 +335,7 @@ typedef struct dentry *vx_instantiate_t(struct inode *, struct dentry *, int, vo
 static int vx_proc_fill_cache(struct file *filp, struct dir_context *ctx,
 	char *name, int len, vx_instantiate_t instantiate, int id, void *ptr)
 {
-	struct dentry *child, *dir = filp->f_dentry;
+	struct dentry *child, *dir = filp->f_path.dentry;
 	struct inode *inode;
 	struct qstr qname;
 	ino_t ino = 0;
@@ -419,7 +419,7 @@ static int proc_nid_revalidate(struct dentry *dentry, unsigned int flags)
 static ssize_t proc_vs_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	unsigned long page;
 	ssize_t length = 0;
 
@@ -446,7 +446,7 @@ static ssize_t proc_vs_info_read(struct file *file, char __user *buf,
 static ssize_t proc_vx_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct vx_info *vxi = NULL;
 	vxid_t xid = PROC_I(inode)->fd;
 	unsigned long page;
@@ -482,7 +482,7 @@ out:
 static ssize_t proc_nx_info_read(struct file *file, char __user *buf,
 			  size_t count, loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	struct nx_info *nxi = NULL;
 	vnid_t nid = PROC_I(inode)->fd;
 	unsigned long page;
@@ -607,7 +607,7 @@ out:
 
 static int proc_xid_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_base_stuff;
 	int size = sizeof(vx_base_stuff) / sizeof(struct vs_entry);
@@ -688,7 +688,7 @@ out:
 
 static int proc_nid_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_base_stuff;
 	int size = sizeof(nx_base_stuff) / sizeof(struct vs_entry);
@@ -838,7 +838,7 @@ out:
 
 int proc_virtual_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_virtual_stuff;
 	int size = sizeof(vx_virtual_stuff) / sizeof(struct vs_entry);
@@ -919,7 +919,7 @@ static struct inode_operations proc_virtual_dir_inode_operations = {
 
 int proc_virtnet_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_dentry;
+	struct dentry *dentry = filp->f_path.dentry;
 	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_virtnet_stuff;
 	int size = sizeof(nx_virtnet_stuff) / sizeof(struct vs_entry);

@@ -315,7 +315,7 @@ static void elantech_report_semi_mt_data(struct input_dev *dev,
 					 unsigned int x2, unsigned int y2)
 {
 	elantech_set_slot(dev, 0, num_fingers != 0, x1, y1);
-	elantech_set_slot(dev, 1, num_fingers == 2, x2, y2);
+	elantech_set_slot(dev, 1, num_fingers >= 2, x2, y2);
 }
 
 /*
@@ -1556,6 +1556,7 @@ static int elantech_set_properties(struct elantech_data *etd)
 		case 9:
 		case 10:
 		case 13:
+		case 14:
 			etd->hw_version = 4;
 			break;
 		default:

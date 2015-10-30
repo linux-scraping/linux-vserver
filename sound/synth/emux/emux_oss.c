@@ -26,7 +26,7 @@
 #ifdef CONFIG_SND_SEQUENCER_OSS
 
 #include <linux/export.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <sound/core.h>
 #include "emux_voice.h"
 #include <sound/asoundef.h>
@@ -69,7 +69,8 @@ snd_emux_init_seq_oss(struct snd_emux *emu)
 	struct snd_seq_oss_reg *arg;
 	struct snd_seq_device *dev;
 
-	if (snd_seq_device_new(emu->card, 0, SNDRV_SEQ_DEV_ID_OSS,
+	/* using device#1 here for avoiding conflicts with OPL3 */
+	if (snd_seq_device_new(emu->card, 1, SNDRV_SEQ_DEV_ID_OSS,
 			       sizeof(struct snd_seq_oss_reg), &dev) < 0)
 		return;
 

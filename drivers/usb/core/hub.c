@@ -122,7 +122,7 @@ struct usb_hub *usb_hub_to_struct_hub(struct usb_device *hdev)
 	return usb_get_intfdata(hdev->actconfig->interface[0]);
 }
 
-static int usb_device_supports_lpm(struct usb_device *udev)
+int usb_device_supports_lpm(struct usb_device *udev)
 {
 	/* USB 2.1 (and greater) devices indicate LPM support through
 	 * their USB 2.0 Extended Capabilities BOS descriptor.
@@ -1737,7 +1737,7 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 * - If user has indicated to prevent autosuspend by passing
 	 *   usbcore.autosuspend = -1 then keep autosuspend disabled.
 	 */
-#ifdef CONFIG_PM_RUNTIME
+#ifdef CONFIG_PM
 	if (hdev->dev.power.autosuspend_delay >= 0)
 		pm_runtime_set_autosuspend_delay(&hdev->dev, 0);
 #endif
@@ -2543,11 +2543,14 @@ int usb_authorize_device(struct usb_device *usb_dev)
 			"can't autoresume for authorization: %d\n", result);
 		goto error_autoresume;
 	}
-	result = usb_get_device_descriptor(usb_dev, sizeof(usb_dev->descriptor));
-	if (result < 0) {
-		dev_err(&usb_dev->dev, "can't re-read device descriptor for "
-			"authorization: %d\n", result);
-		goto error_device_descriptor;
+
+	if (usb_dev->wusb) {
+		result = usb_get_device_descriptor(usb_dev, sizeof(usb_dev->descriptor));
+		if (result < 0) {
+			dev_err(&usb_dev->dev, "can't re-read device descriptor for "
+				"authorization: %d\n", result);
+			goto error_device_descriptor;
+		}
 	}
 
 	usb_dev->authorized = 1;
@@ -2877,10 +2880,12 @@ static int port_is_suspended(struct usb_hub *hub, unsigned portstatus)
  */
 static int check_port_resume_type(struct usb_device *udev,
 		struct usb_hub *hub, int port1,
-		int status, unsigned portchange, unsigned portstatus)
+		int status, u16 portchange, u16 portstatus)
 {
 	struct usb_port *port_dev = hub->ports[port1 - 1];
+	int retries = 3;
 
+ retry:
 	/* Is a warm reset needed to recover the connection? */
 	if (status == 0 && udev->reset_resume
 		&& hub_port_warm_reset_required(hub, port1, portstatus)) {
@@ -2888,10 +2893,17 @@ static int check_port_resume_type(struct usb_device *udev,
 	}
 	/* Is the device still present? */
 	else if (status || port_is_suspended(hub, portstatus) ||
-			!port_is_power_on(hub, portstatus) ||
-			!(portstatus & USB_PORT_STAT_CONNECTION)) {
+			!port_is_power_on(hub, portstatus)) {
 		if (status >= 0)
 			status = -ENODEV;
+	} else if (!(portstatus & USB_PORT_STAT_CONNECTION)) {
+		if (retries--) {
+			usleep_range(200, 300);
+			status = hub_port_status(hub, port1, &portstatus,
+							     &portchange);
+			goto retry;
+		}
+		status = -ENODEV;
 	}
 
 	/* Can't do a normal resume if the port isn't enabled,
@@ -3433,8 +3445,6 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 	return status;
 }
 
-#ifdef	CONFIG_PM_RUNTIME
-
 int usb_remote_wakeup(struct usb_device *udev)
 {
 	int	status = 0;
@@ -3492,16 +3502,6 @@ static int hub_handle_remote_wakeup(struct usb_hub *hub, unsigned int port,
 	dev_dbg(&port_dev->dev, "resume, status %d\n", ret);
 	return connect_change;
 }
-
-#else
-
-static int hub_handle_remote_wakeup(struct usb_hub *hub, unsigned int port,
-		u16 portstatus, u16 portchange)
-{
-	return 0;
-}
-
-#endif
 
 static int check_ports_changed(struct usb_hub *hub)
 {
@@ -3891,14 +3891,9 @@ static void usb_enable_link_state(struct usb_hcd *hcd, struct usb_device *udev,
 static int usb_disable_link_state(struct usb_hcd *hcd, struct usb_device *udev,
 		enum usb3_link_state state)
 {
-	int feature;
-
 	switch (state) {
 	case USB3_LPM_U1:
-		feature = USB_PORT_FEAT_U1_TIMEOUT;
-		break;
 	case USB3_LPM_U2:
-		feature = USB_PORT_FEAT_U2_TIMEOUT;
 		break;
 	default:
 		dev_warn(&udev->dev, "%s: Can't disable non-U1 or U2 state.\n",
@@ -4641,9 +4636,13 @@ static void hub_port_connect(struct usb_hub *hub, int port1, u16 portstatus,
 	if (!(portstatus & USB_PORT_STAT_CONNECTION) ||
 			test_bit(port1, hub->removed_bits)) {
 
-		/* maybe switch power back on (e.g. root hub was reset) */
+		/*
+		 * maybe switch power back on (e.g. root hub was reset)
+		 * but only if the port isn't owned by someone else.
+		 */
 		if (hub_is_port_power_switchable(hub)
-				&& !port_is_power_on(hub, portstatus))
+				&& !port_is_power_on(hub, portstatus)
+				&& !port_dev->port_owner)
 			set_port_feature(hdev, port1, USB_PORT_FEAT_POWER);
 
 		if (portstatus & USB_PORT_STAT_ENABLE)
@@ -4840,7 +4839,7 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 			udev->state != USB_STATE_NOTATTACHED) {
 		if (portstatus & USB_PORT_STAT_ENABLE) {
 			status = 0;		/* Nothing to do */
-#ifdef CONFIG_PM_RUNTIME
+#ifdef CONFIG_PM
 		} else if (udev->state == USB_STATE_SUSPENDED &&
 				udev->persist_enabled) {
 			/* For a suspended device, treat this as a
@@ -4868,7 +4867,7 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 static void port_event(struct usb_hub *hub, int port1)
 		__must_hold(&port_dev->status_lock)
 {
-	int connect_change, reset_device = 0;
+	int connect_change;
 	struct usb_port *port_dev = hub->ports[port1 - 1];
 	struct usb_device *udev = port_dev->child;
 	struct usb_device *hdev = hub->hdev;
@@ -4956,30 +4955,14 @@ static void port_event(struct usb_hub *hub, int port1)
 			if (hub_port_reset(hub, port1, NULL,
 					HUB_BH_RESET_TIME, true) < 0)
 				hub_port_disable(hub, port1, 1);
-		} else
-			reset_device = 1;
-	}
-
-	/*
-	 * On disconnect USB3 protocol ports transit from U0 to
-	 * SS.Inactive to Rx.Detect. If this happens a warm-
-	 * reset is not needed, but a (re)connect may happen
-	 * before hub_wq runs and sees the disconnect, and the
-	 * device may be an unknown state.
-	 *
-	 * If the port went through SS.Inactive without hub_wq
-	 * seeing it the C_LINK_STATE change flag will be set,
-	 * and we reset the dev to put it in a known state.
-	 */
-	if (reset_device || (udev && hub_is_superspeed(hub->hdev)
-				&& (portchange & USB_PORT_STAT_C_LINK_STATE)
-				&& (portstatus & USB_PORT_STAT_CONNECTION))) {
-		usb_unlock_port(port_dev);
-		usb_lock_device(udev);
-		usb_reset_device(udev);
-		usb_unlock_device(udev);
-		usb_lock_port(port_dev);
-		connect_change = 0;
+		} else {
+			usb_unlock_port(port_dev);
+			usb_lock_device(udev);
+			usb_reset_device(udev);
+			usb_unlock_device(udev);
+			usb_lock_port(port_dev);
+			connect_change = 0;
+		}
 	}
 
 	if (connect_change)

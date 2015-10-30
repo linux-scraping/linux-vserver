@@ -32,6 +32,7 @@
 
 #include <linux/pm_runtime.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_plane_helper.h>
 #include <drm/drm_edid.h>
 
 #include <linux/gcd.h>
@@ -153,7 +154,7 @@ static void dce5_crtc_load_lut(struct drm_crtc *crtc)
 	       (NI_GRPH_REGAMMA_MODE(NI_REGAMMA_BYPASS) |
 		NI_OVL_REGAMMA_MODE(NI_REGAMMA_BYPASS)));
 	WREG32(NI_OUTPUT_CSC_CONTROL + radeon_crtc->crtc_offset,
-	       (NI_OUTPUT_CSC_GRPH_MODE(NI_OUTPUT_CSC_BYPASS) |
+	       (NI_OUTPUT_CSC_GRPH_MODE(radeon_crtc->output_csc) |
 		NI_OUTPUT_CSC_OVL_MODE(NI_OUTPUT_CSC_BYPASS)));
 	/* XXX match this to the depth of the crtc fmt block, move to modeset? */
 	WREG32(0x6940 + radeon_crtc->crtc_offset, 0);
@@ -634,7 +635,7 @@ radeon_crtc_set_config(struct drm_mode_set *set)
 	return ret;
 }
 static const struct drm_crtc_funcs radeon_crtc_funcs = {
-	.cursor_set = radeon_crtc_cursor_set,
+	.cursor_set2 = radeon_crtc_cursor_set2,
 	.cursor_move = radeon_crtc_cursor_move,
 	.gamma_set = radeon_crtc_gamma_set,
 	.set_config = radeon_crtc_set_config,
@@ -1381,6 +1382,13 @@ static struct drm_prop_enum_list radeon_dither_enum_list[] =
 	{ RADEON_FMT_DITHER_ENABLE, "on" },
 };
 
+static struct drm_prop_enum_list radeon_output_csc_enum_list[] =
+{	{ RADEON_OUTPUT_CSC_BYPASS, "bypass" },
+	{ RADEON_OUTPUT_CSC_TVRGB, "tvrgb" },
+	{ RADEON_OUTPUT_CSC_YCBCR601, "ycbcr601" },
+	{ RADEON_OUTPUT_CSC_YCBCR709, "ycbcr709" },
+};
+
 static int radeon_modeset_create_props(struct radeon_device *rdev)
 {
 	int sz;
@@ -1442,6 +1450,12 @@ static int radeon_modeset_create_props(struct radeon_device *rdev)
 		drm_property_create_enum(rdev->ddev, 0,
 					 "dither",
 					 radeon_dither_enum_list, sz);
+
+	sz = ARRAY_SIZE(radeon_output_csc_enum_list);
+	rdev->mode_info.output_csc_property =
+		drm_property_create_enum(rdev->ddev, 0,
+					 "output_csc",
+					 radeon_output_csc_enum_list, sz);
 
 	return 0;
 }
@@ -1619,18 +1633,8 @@ int radeon_modeset_init(struct radeon_device *rdev)
 	radeon_fbdev_init(rdev);
 	drm_kms_helper_poll_init(rdev->ddev);
 
-	if (rdev->pm.dpm_enabled) {
-		/* do dpm late init */
-		ret = radeon_pm_late_init(rdev);
-		if (ret) {
-			rdev->pm.dpm_enabled = false;
-			DRM_ERROR("radeon_pm_late_init failed, disabling dpm\n");
-		}
-		/* set the dpm state for PX since there won't be
-		 * a modeset to call this.
-		 */
-		radeon_pm_compute_clocks(rdev);
-	}
+	/* do pm late init */
+	ret = radeon_pm_late_init(rdev);
 
 	return 0;
 }

@@ -134,7 +134,7 @@
  */
 
 #define VMW_IOCTL_DEF(ioctl, func, flags) \
-  [DRM_IOCTL_NR(DRM_IOCTL_##ioctl) - DRM_COMMAND_BASE] = {DRM_##ioctl, flags, func, DRM_IOCTL_##ioctl}
+  [DRM_IOCTL_NR(DRM_IOCTL_##ioctl) - DRM_COMMAND_BASE] = {DRM_IOCTL_##ioctl, flags, func}
 
 /**
  * Ioctl definitions.
@@ -880,8 +880,7 @@ static int vmw_driver_unload(struct drm_device *dev)
 
 	if (dev_priv->ctx.res_ht_initialized)
 		drm_ht_remove(&dev_priv->ctx.res_ht);
-	if (dev_priv->ctx.cmd_bounce)
-		vfree(dev_priv->ctx.cmd_bounce);
+	vfree(dev_priv->ctx.cmd_bounce);
 	if (dev_priv->enable_fb) {
 		vmw_fb_close(dev_priv);
 		vmw_kms_restore_vga(dev_priv);
@@ -1045,7 +1044,7 @@ static long vmw_generic_ioctl(struct file *filp, unsigned int cmd,
 		const struct drm_ioctl_desc *ioctl =
 			&vmw_ioctls[nr - DRM_COMMAND_BASE];
 
-		if (unlikely(ioctl->cmd_drv != cmd)) {
+		if (unlikely(ioctl->cmd != cmd)) {
 			DRM_ERROR("Invalid command format, ioctl %d\n",
 				  nr - DRM_COMMAND_BASE);
 			return -EINVAL;
@@ -1239,6 +1238,7 @@ static void vmw_remove(struct pci_dev *pdev)
 {
 	struct drm_device *dev = pci_get_drvdata(pdev);
 
+	pci_disable_device(pdev);
 	drm_put_dev(dev);
 }
 

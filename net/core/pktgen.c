@@ -97,7 +97,7 @@
  * New xmit() return, do_div and misc clean up by Stephen Hemminger
  * <shemminger@osdl.org> 040923
  *
- * Randy Dunlap fixed u64 printk compiler waring
+ * Randy Dunlap fixed u64 printk compiler warning
  *
  * Remove FCS from BW calculation.  Lennert Buytenhek <buytenh@wantstofly.org>
  * New time handling. Lennert Buytenhek <buytenh@wantstofly.org> 041213
@@ -3490,8 +3490,10 @@ static int pktgen_thread_worker(void *arg)
 	pktgen_rem_thread(t);
 
 	/* Wait for kthread_stop */
-	while (!kthread_should_stop()) {
+	for (;;) {
 		set_current_state(TASK_INTERRUPTIBLE);
+		if (kthread_should_stop())
+			break;
 		schedule();
 	}
 	__set_current_state(TASK_RUNNING);
@@ -3731,8 +3733,7 @@ static int pktgen_remove_device(struct pktgen_thread *t,
 	/* Remove proc before if_list entry, because add_device uses
 	 * list to determine if interface already exist, avoid race
 	 * with proc_create_data() */
-	if (pkt_dev->entry)
-		proc_remove(pkt_dev->entry);
+	proc_remove(pkt_dev->entry);
 
 	/* And update the thread if_list */
 	_rem_dev_from_if_list(t, pkt_dev);

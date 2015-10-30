@@ -733,10 +733,14 @@ static bool check_txmsg_state(struct drm_dp_mst_topology_mgr *mgr,
 			      struct drm_dp_sideband_msg_tx *txmsg)
 {
 	bool ret;
-	mutex_lock(&mgr->qlock);
+
+	/*
+	 * All updates to txmsg->state are protected by mgr->qlock, and the two
+	 * cases we check here are terminal states. For those the barriers
+	 * provided by the wake_up/wait_event pair are enough.
+	 */
 	ret = (txmsg->state == DRM_DP_SIDEBAND_TX_RX ||
 	       txmsg->state == DRM_DP_SIDEBAND_TX_TIMEOUT);
-	mutex_unlock(&mgr->qlock);
 	return ret;
 }
 
@@ -800,8 +804,6 @@ static void drm_dp_destroy_mst_branch_device(struct kref *kref)
 	struct drm_dp_mst_port *port, *tmp;
 	bool wake_tx = false;
 
-	cancel_work_sync(&mstb->mgr->work);
-
 	/*
 	 * destroy all ports - don't need lock
 	 * as there are no more references to the mst branch
@@ -861,8 +863,18 @@ static void drm_dp_destroy_port(struct kref *kref)
 	struct drm_dp_mst_topology_mgr *mgr = port->mgr;
 	if (!port->input) {
 		port->vcpi.num_slots = 0;
-		if (port->connector)
-			(*port->mgr->cbs->destroy_connector)(mgr, port->connector);
+
+		kfree(port->cached_edid);
+
+		/* we can't destroy the connector here, as
+		   we might be holding the mode_config.mutex
+		   from an EDID retrieval */
+		if (port->connector) {
+			mutex_lock(&mgr->destroy_connector_lock);
+			list_add(&port->connector->destroy_list, &mgr->destroy_connector_list);
+			mutex_unlock(&mgr->destroy_connector_lock);
+			schedule_work(&mgr->destroy_connector_work);
+		}
 		drm_dp_port_teardown_pdt(port, port->pdt);
 
 		if (!port->input && port->vcpi.vcpi > 0)
@@ -1014,19 +1026,20 @@ static void drm_dp_check_port_guid(struct drm_dp_mst_branch *mstb,
 
 static void build_mst_prop_path(struct drm_dp_mst_port *port,
 				struct drm_dp_mst_branch *mstb,
-				char *proppath)
+				char *proppath,
+				size_t proppath_size)
 {
 	int i;
 	char temp[8];
-	snprintf(proppath, 255, "mst:%d", mstb->mgr->conn_base_id);
+	snprintf(proppath, proppath_size, "mst:%d", mstb->mgr->conn_base_id);
 	for (i = 0; i < (mstb->lct - 1); i++) {
 		int shift = (i % 2) ? 0 : 4;
 		int port_num = mstb->rad[i / 2] >> shift;
-		snprintf(temp, 8, "-%d", port_num);
-		strncat(proppath, temp, 255);
+		snprintf(temp, sizeof(temp), "-%d", port_num);
+		strlcat(proppath, temp, proppath_size);
 	}
-	snprintf(temp, 8, "-%d", port->port_num);
-	strncat(proppath, temp, 255);
+	snprintf(temp, sizeof(temp), "-%d", port->port_num);
+	strlcat(proppath, temp, proppath_size);
 }
 
 static void drm_dp_add_port(struct drm_dp_mst_branch *mstb,
@@ -1097,8 +1110,12 @@ static void drm_dp_add_port(struct drm_dp_mst_branch *mstb,
 
 	if (created && !port->input) {
 		char proppath[255];
-		build_mst_prop_path(port, mstb, proppath);
+		build_mst_prop_path(port, mstb, proppath, sizeof(proppath));
 		port->connector = (*mstb->mgr->cbs->add_connector)(mstb->mgr, port, proppath);
+
+		if (port->port_num >= 8) {
+			port->cached_edid = drm_get_edid(port->connector, &port->aux.ddc);
+		}
 	}
 
 	/* put reference to this port */
@@ -1372,11 +1389,12 @@ static int process_single_tx_qlock(struct drm_dp_mst_topology_mgr *mgr,
 	return 0;
 }
 
-/* must be called holding qlock */
 static void process_single_down_tx_qlock(struct drm_dp_mst_topology_mgr *mgr)
 {
 	struct drm_dp_sideband_msg_tx *txmsg;
 	int ret;
+
+	WARN_ON(!mutex_is_locked(&mgr->qlock));
 
 	/* construct a chunk from the first msg in the tx_msg queue */
 	if (list_empty(&mgr->tx_msg_downq)) {
@@ -1817,17 +1835,27 @@ static int drm_dp_send_up_ack_reply(struct drm_dp_mst_topology_mgr *mgr,
 	return 0;
 }
 
-static int drm_dp_get_vc_payload_bw(int dp_link_bw, int dp_link_count)
+static bool drm_dp_get_vc_payload_bw(int dp_link_bw,
+				     int dp_link_count,
+				     int *out)
 {
 	switch (dp_link_bw) {
+	default:
+		DRM_DEBUG_KMS("invalid link bandwidth in DPCD: %x (link count: %d)\n",
+			      dp_link_bw, dp_link_count);
+		return false;
+
 	case DP_LINK_BW_1_62:
-		return 3 * dp_link_count;
+		*out = 3 * dp_link_count;
+		break;
 	case DP_LINK_BW_2_7:
-		return 5 * dp_link_count;
+		*out = 5 * dp_link_count;
+		break;
 	case DP_LINK_BW_5_4:
-		return 10 * dp_link_count;
+		*out = 10 * dp_link_count;
+		break;
 	}
-	BUG();
+	return true;
 }
 
 /**
@@ -1859,7 +1887,13 @@ int drm_dp_mst_topology_mgr_set_mst(struct drm_dp_mst_topology_mgr *mgr, bool ms
 			goto out_unlock;
 		}
 
-		mgr->pbn_div = drm_dp_get_vc_payload_bw(mgr->dpcd[1], mgr->dpcd[2] & DP_MAX_LANE_COUNT_MASK);
+		if (!drm_dp_get_vc_payload_bw(mgr->dpcd[1],
+					      mgr->dpcd[2] & DP_MAX_LANE_COUNT_MASK,
+					      &mgr->pbn_div)) {
+			ret = -EINVAL;
+			goto out_unlock;
+		}
+
 		mgr->total_pbn = 2560;
 		mgr->total_slots = DIV_ROUND_UP(mgr->total_pbn, mgr->pbn_div);
 		mgr->avail_slots = mgr->total_slots;
@@ -1941,6 +1975,8 @@ void drm_dp_mst_topology_mgr_suspend(struct drm_dp_mst_topology_mgr *mgr)
 	drm_dp_dpcd_writeb(mgr->aux, DP_MSTM_CTRL,
 			   DP_MST_EN | DP_UPSTREAM_IS_SRC);
 	mutex_unlock(&mgr->lock);
+	flush_work(&mgr->work);
+	flush_work(&mgr->destroy_connector_work);
 }
 EXPORT_SYMBOL(drm_dp_mst_topology_mgr_suspend);
 
@@ -2169,7 +2205,8 @@ EXPORT_SYMBOL(drm_dp_mst_hpd_irq);
  * This returns the current connection state for a port. It validates the
  * port pointer still exists so the caller doesn't require a reference
  */
-enum drm_connector_status drm_dp_mst_detect_port(struct drm_dp_mst_topology_mgr *mgr, struct drm_dp_mst_port *port)
+enum drm_connector_status drm_dp_mst_detect_port(struct drm_connector *connector,
+						 struct drm_dp_mst_topology_mgr *mgr, struct drm_dp_mst_port *port)
 {
 	enum drm_connector_status status = connector_status_disconnected;
 
@@ -2188,6 +2225,10 @@ enum drm_connector_status drm_dp_mst_detect_port(struct drm_dp_mst_topology_mgr 
 
 	case DP_PEER_DEVICE_SST_SINK:
 		status = connector_status_connected;
+		/* for logical ports - cache the EDID */
+		if (port->port_num >= 8 && !port->cached_edid) {
+			port->cached_edid = drm_get_edid(connector, &port->aux.ddc);
+		}
 		break;
 	case DP_PEER_DEVICE_DP_LEGACY_CONV:
 		if (port->ldps)
@@ -2219,7 +2260,12 @@ struct edid *drm_dp_mst_get_edid(struct drm_connector *connector, struct drm_dp_
 	if (!port)
 		return NULL;
 
-	edid = drm_get_edid(connector, &port->aux.ddc);
+	if (port->cached_edid)
+		edid = drm_edid_duplicate(port->cached_edid);
+	else
+		edid = drm_get_edid(connector, &port->aux.ddc);
+
+	drm_mode_connector_set_tile_property(connector);
 	drm_dp_put_port(port);
 	return edid;
 }
@@ -2301,6 +2347,19 @@ out:
 	return false;
 }
 EXPORT_SYMBOL(drm_dp_mst_allocate_vcpi);
+
+int drm_dp_mst_get_vcpi_slots(struct drm_dp_mst_topology_mgr *mgr, struct drm_dp_mst_port *port)
+{
+	int slots = 0;
+	port = drm_dp_get_validated_port_ref(mgr, port);
+	if (!port)
+		return slots;
+
+	slots = port->vcpi.num_slots;
+	drm_dp_put_port(port);
+	return slots;
+}
+EXPORT_SYMBOL(drm_dp_mst_get_vcpi_slots);
 
 /**
  * drm_dp_mst_reset_vcpi_slots() - Reset number of slots to 0 for VCPI
@@ -2597,6 +2656,30 @@ static void drm_dp_tx_work(struct work_struct *work)
 	mutex_unlock(&mgr->qlock);
 }
 
+static void drm_dp_destroy_connector_work(struct work_struct *work)
+{
+	struct drm_dp_mst_topology_mgr *mgr = container_of(work, struct drm_dp_mst_topology_mgr, destroy_connector_work);
+	struct drm_connector *connector;
+
+	/*
+	 * Not a regular list traverse as we have to drop the destroy
+	 * connector lock before destroying the connector, to avoid AB->BA
+	 * ordering between this lock and the config mutex.
+	 */
+	for (;;) {
+		mutex_lock(&mgr->destroy_connector_lock);
+		connector = list_first_entry_or_null(&mgr->destroy_connector_list, struct drm_connector, destroy_list);
+		if (!connector) {
+			mutex_unlock(&mgr->destroy_connector_lock);
+			break;
+		}
+		list_del(&connector->destroy_list);
+		mutex_unlock(&mgr->destroy_connector_lock);
+
+		mgr->cbs->destroy_connector(mgr, connector);
+	}
+}
+
 /**
  * drm_dp_mst_topology_mgr_init - initialise a topology manager
  * @mgr: manager struct to initialise
@@ -2616,10 +2699,13 @@ int drm_dp_mst_topology_mgr_init(struct drm_dp_mst_topology_mgr *mgr,
 	mutex_init(&mgr->lock);
 	mutex_init(&mgr->qlock);
 	mutex_init(&mgr->payload_lock);
+	mutex_init(&mgr->destroy_connector_lock);
 	INIT_LIST_HEAD(&mgr->tx_msg_upq);
 	INIT_LIST_HEAD(&mgr->tx_msg_downq);
+	INIT_LIST_HEAD(&mgr->destroy_connector_list);
 	INIT_WORK(&mgr->work, drm_dp_mst_link_probe_work);
 	INIT_WORK(&mgr->tx_work, drm_dp_tx_work);
+	INIT_WORK(&mgr->destroy_connector_work, drm_dp_destroy_connector_work);
 	init_waitqueue_head(&mgr->tx_waitq);
 	mgr->dev = dev;
 	mgr->aux = aux;
@@ -2644,6 +2730,8 @@ EXPORT_SYMBOL(drm_dp_mst_topology_mgr_init);
  */
 void drm_dp_mst_topology_mgr_destroy(struct drm_dp_mst_topology_mgr *mgr)
 {
+	flush_work(&mgr->work);
+	flush_work(&mgr->destroy_connector_work);
 	mutex_lock(&mgr->payload_lock);
 	kfree(mgr->payloads);
 	mgr->payloads = NULL;
@@ -2678,12 +2766,13 @@ static int drm_dp_mst_i2c_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs
 	if (msgs[num - 1].flags & I2C_M_RD)
 		reading = true;
 
-	if (!reading) {
+	if (!reading || (num - 1 > DP_REMOTE_I2C_READ_MAX_TRANSACTIONS)) {
 		DRM_DEBUG_KMS("Unsupported I2C transaction for MST device\n");
 		ret = -EIO;
 		goto out;
 	}
 
+	memset(&msg, 0, sizeof(msg));
 	msg.req_type = DP_REMOTE_I2C_READ;
 	msg.u.i2c_read.num_transactions = num - 1;
 	msg.u.i2c_read.port_number = port->port_num;

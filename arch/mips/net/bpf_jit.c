@@ -681,11 +681,7 @@ static unsigned int get_stack_depth(struct jit_ctx *ctx)
 		sp_off += config_enabled(CONFIG_64BIT) ?
 			(ARGS_USED_BY_JIT + 1) * RSIZE : RSIZE;
 
-	/*
-	 * Subtract the bytes for the last registers since we only care about
-	 * the location on the stack pointer.
-	 */
-	return sp_off - RSIZE;
+	return sp_off;
 }
 
 static void build_prologue(struct jit_ctx *ctx)
@@ -1388,7 +1384,7 @@ out:
 void bpf_jit_free(struct bpf_prog *fp)
 {
 	if (fp->jited)
-		module_free(NULL, fp->bpf_func);
+		module_memfree(fp->bpf_func);
 
 	bpf_prog_unlock_free(fp);
 }

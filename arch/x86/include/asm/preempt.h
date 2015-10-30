@@ -30,9 +30,6 @@ static __always_inline void preempt_count_set(int pc)
 /*
  * must be macros to avoid header recursion hell
  */
-#define task_preempt_count(p) \
-	(task_thread_info(p)->saved_preempt_count & ~PREEMPT_NEED_RESCHED)
-
 #define init_task_preempt_count(p) do { \
 	task_thread_info(p)->saved_preempt_count = PREEMPT_DISABLED; \
 } while (0)
@@ -93,9 +90,9 @@ static __always_inline bool __preempt_count_dec_and_test(void)
 /*
  * Returns true when we need to resched and can (barring IRQ state).
  */
-static __always_inline bool should_resched(void)
+static __always_inline bool should_resched(int preempt_offset)
 {
-	return unlikely(!raw_cpu_read_4(__preempt_count));
+	return unlikely(raw_cpu_read_4(__preempt_count) == preempt_offset);
 }
 
 #ifdef CONFIG_PREEMPT

@@ -41,7 +41,7 @@ find_section(struct bdb_header *bdb, int section_id)
 {
 	u8 *base = (u8 *)bdb;
 	int index = 0;
-	u16 total, current_size;
+	u32 total, current_size;
 	u8 current_id;
 
 	/* skip to first section */
@@ -55,6 +55,10 @@ find_section(struct bdb_header *bdb, int section_id)
 
 		current_size = *((u16 *)(base + index));
 		index += 2;
+
+		/* The MIPI Sequence Block v3+ has a separate size field. */
+		if (current_id == BDB_MIPI_SEQUENCE && *(base + index) >= 3)
+			current_size = *((const u32 *)(base + index + 1));
 
 		if (index + current_size > total)
 			return NULL;
@@ -662,6 +666,57 @@ parse_edp(struct drm_i915_private *dev_priv, struct bdb_header *bdb)
 			      edp_link_params->vswing);
 		break;
 	}
+
+	if (bdb->version >= 173) {
+		uint8_t vswing;
+
+		vswing = (edp->edp_vswing_preemph >> (panel_type * 4)) & 0xF;
+		dev_priv->vbt.edp_low_vswing = vswing == 0;
+	}
+}
+
+static void
+parse_psr(struct drm_i915_private *dev_priv, struct bdb_header *bdb)
+{
+	struct bdb_psr *psr;
+	struct psr_table *psr_table;
+
+	psr = find_section(bdb, BDB_PSR);
+	if (!psr) {
+		DRM_DEBUG_KMS("No PSR BDB found.\n");
+		return;
+	}
+
+	psr_table = &psr->psr_table[panel_type];
+
+	dev_priv->vbt.psr.full_link = psr_table->full_link;
+	dev_priv->vbt.psr.require_aux_wakeup = psr_table->require_aux_to_wakeup;
+
+	/* Allowed VBT values goes from 0 to 15 */
+	dev_priv->vbt.psr.idle_frames = psr_table->idle_frames < 0 ? 0 :
+		psr_table->idle_frames > 15 ? 15 : psr_table->idle_frames;
+
+	switch (psr_table->lines_to_wait) {
+	case 0:
+		dev_priv->vbt.psr.lines_to_wait = PSR_0_LINES_TO_WAIT;
+		break;
+	case 1:
+		dev_priv->vbt.psr.lines_to_wait = PSR_1_LINE_TO_WAIT;
+		break;
+	case 2:
+		dev_priv->vbt.psr.lines_to_wait = PSR_4_LINES_TO_WAIT;
+		break;
+	case 3:
+		dev_priv->vbt.psr.lines_to_wait = PSR_8_LINES_TO_WAIT;
+		break;
+	default:
+		DRM_DEBUG_KMS("VBT has unknown PSR lines to wait %u\n",
+			      psr_table->lines_to_wait);
+		break;
+	}
+
+	dev_priv->vbt.psr.tp1_wakeup_time = psr_table->tp1_wakeup_time;
+	dev_priv->vbt.psr.tp2_tp3_wakeup_time = psr_table->tp2_tp3_wakeup_time;
 }
 
 static u8 *goto_next_sequence(u8 *data, int *size)
@@ -791,6 +846,12 @@ parse_mipi(struct drm_i915_private *dev_priv, struct bdb_header *bdb)
 	sequence = find_section(bdb, BDB_MIPI_SEQUENCE);
 	if (!sequence) {
 		DRM_DEBUG_KMS("No MIPI Sequence found, parsing complete\n");
+		return;
+	}
+
+	/* Fail gracefully for forward incompatible sequence block. */
+	if (sequence->version >= 3) {
+		DRM_ERROR("Unable to parse MIPI Sequence Block v3+\n");
 		return;
 	}
 
@@ -1241,6 +1302,7 @@ intel_parse_bios(struct drm_device *dev)
 	parse_device_mapping(dev_priv, bdb);
 	parse_driver_features(dev_priv, bdb);
 	parse_edp(dev_priv, bdb);
+	parse_psr(dev_priv, bdb);
 	parse_mipi(dev_priv, bdb);
 	parse_ddi_ports(dev_priv, bdb);
 

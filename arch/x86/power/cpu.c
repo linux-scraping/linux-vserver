@@ -23,6 +23,7 @@
 #include <asm/debugreg.h>
 #include <asm/fpu-internal.h> /* pcntxt_mask */
 #include <asm/cpu.h>
+#include <asm/mmu_context.h>
 
 #ifdef CONFIG_X86_32
 __visible unsigned long saved_context_ebx;
@@ -134,7 +135,7 @@ static void do_fpu_end(void)
 static void fix_processor_context(void)
 {
 	int cpu = smp_processor_id();
-	struct tss_struct *t = &per_cpu(init_tss, cpu);
+	struct tss_struct *t = &per_cpu(cpu_tss, cpu);
 #ifdef CONFIG_X86_64
 	struct desc_struct *desc = get_cpu_gdt_table(cpu);
 	tss_desc tss;
@@ -154,7 +155,7 @@ static void fix_processor_context(void)
 	syscall_init();				/* This sets MSR_*STAR and related */
 #endif
 	load_TR_desc();				/* This does ltr */
-	load_LDT(&current->active_mm->context);	/* This does lldt */
+	load_mm_ldt(current->active_mm);	/* This does lldt */
 }
 
 /**

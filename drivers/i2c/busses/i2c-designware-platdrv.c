@@ -24,6 +24,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/dmi.h>
 #include <linux/i2c.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
@@ -51,12 +52,31 @@ static u32 i2c_dw_get_clk_rate_khz(struct dw_i2c_dev *dev)
 }
 
 #ifdef CONFIG_ACPI
+/*
+ * The HCNT/LCNT information coming from ACPI should be the most accurate
+ * for given platform. However, some systems get it wrong. On such systems
+ * we get better results by calculating those based on the input clock.
+ */
+static const struct dmi_system_id dw_i2c_no_acpi_params[] = {
+	{
+		.ident = "Dell Inspiron 7348",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 7348"),
+		},
+	},
+	{ }
+};
+
 static void dw_i2c_acpi_params(struct platform_device *pdev, char method[],
 			       u16 *hcnt, u16 *lcnt, u32 *sda_hold)
 {
 	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER };
 	acpi_handle handle = ACPI_HANDLE(&pdev->dev);
 	union acpi_object *obj;
+
+	if (dmi_check_system(dw_i2c_no_acpi_params))
+		return;
 
 	if (ACPI_FAILURE(acpi_evaluate_object(handle, method, NULL, &buf)))
 		return;
@@ -143,10 +163,8 @@ static int dw_i2c_probe(struct platform_device *pdev)
 	u32 clk_freq, ht = 0;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "no irq resource?\n");
-		return irq; /* -ENXIO */
-	}
+	if (irq < 0)
+		return irq;
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(struct dw_i2c_dev), GFP_KERNEL);
 	if (!dev)
@@ -166,7 +184,7 @@ static int dw_i2c_probe(struct platform_device *pdev)
 	/* fast mode by default because of legacy reasons */
 	clk_freq = 400000;
 
-	if (ACPI_COMPANION(&pdev->dev)) {
+	if (has_acpi_companion(&pdev->dev)) {
 		dw_i2c_acpi_configure(pdev);
 	} else if (pdev->dev.of_node) {
 		of_property_read_u32(pdev->dev.of_node,
@@ -194,6 +212,10 @@ static int dw_i2c_probe(struct platform_device *pdev)
 		if (pdata)
 			clk_freq = pdata->i2c_scl_freq;
 	}
+
+	r = i2c_dw_eval_lock_support(dev);
+	if (r)
+		return r;
 
 	dev->functionality =
 		I2C_FUNC_I2C |
@@ -251,16 +273,21 @@ static int dw_i2c_probe(struct platform_device *pdev)
 	adap->dev.parent = &pdev->dev;
 	adap->dev.of_node = pdev->dev.of_node;
 
+	if (dev->pm_runtime_disabled) {
+		pm_runtime_forbid(&pdev->dev);
+	} else {
+		pm_runtime_set_autosuspend_delay(&pdev->dev, 1000);
+		pm_runtime_use_autosuspend(&pdev->dev);
+		pm_runtime_set_active(&pdev->dev);
+		pm_runtime_enable(&pdev->dev);
+	}
+
 	r = i2c_add_numbered_adapter(adap);
 	if (r) {
 		dev_err(&pdev->dev, "failure adding adapter\n");
+		pm_runtime_disable(&pdev->dev);
 		return r;
 	}
-
-	pm_runtime_set_autosuspend_delay(&pdev->dev, 1000);
-	pm_runtime_use_autosuspend(&pdev->dev);
-	pm_runtime_set_active(&pdev->dev);
-	pm_runtime_enable(&pdev->dev);
 
 	return 0;
 }
@@ -278,7 +305,7 @@ static int dw_i2c_remove(struct platform_device *pdev)
 	pm_runtime_put(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
-	if (ACPI_COMPANION(&pdev->dev))
+	if (has_acpi_companion(&pdev->dev))
 		dw_i2c_acpi_unconfigure(pdev);
 
 	return 0;
@@ -310,7 +337,9 @@ static int dw_i2c_resume(struct device *dev)
 	struct dw_i2c_dev *i_dev = platform_get_drvdata(pdev);
 
 	clk_prepare_enable(i_dev->clk);
-	i2c_dw_init(i_dev);
+
+	if (!i_dev->pm_runtime_disabled)
+		i2c_dw_init(i_dev);
 
 	return 0;
 }
@@ -327,7 +356,6 @@ static struct platform_driver dw_i2c_driver = {
 	.remove = dw_i2c_remove,
 	.driver		= {
 		.name	= "i2c_designware",
-		.owner	= THIS_MODULE,
 		.of_match_table = of_match_ptr(dw_i2c_of_match),
 		.acpi_match_table = ACPI_PTR(dw_i2c_acpi_match),
 		.pm	= &dw_i2c_dev_pm_ops,
