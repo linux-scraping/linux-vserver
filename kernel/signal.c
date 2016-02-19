@@ -1369,8 +1369,14 @@ int kill_pid_info(int sig, struct siginfo *info, struct pid *pid)
 	for (;;) {
 		rcu_read_lock();
 		p = pid_task(pid, PIDTYPE_PID);
-		if (p && vx_check(vx_task_xid(p), VS_IDENT))
-			error = group_send_sig_info(sig, info, p);
+		if (p) {
+			if (vx_check(vx_task_xid(p), VS_IDENT))
+				error = group_send_sig_info(sig, info, p);
+			else {
+				rcu_read_unlock();
+				return -ESRCH;
+			}
+		}
 		rcu_read_unlock();
 		if (likely(!p || error != -ESRCH))
 			return error;
