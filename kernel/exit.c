@@ -579,9 +579,13 @@ static void forget_original_parent(struct task_struct *father,
 		return;
 
 	reaper = find_new_reaper(father, reaper);
-	list_for_each_entry(p, &father->children, sibling) {
+	for (p = list_first_entry(&father->children, struct task_struct, sibling);
+	     &p->sibling != &father->children; ) {
+		struct task_struct *next, *this_reaper = reaper;
+		if (p == reaper)
+			this_reaper = task_active_pid_ns(reaper)->child_reaper;
 		for_each_thread(p, t) {
-			t->real_parent = reaper;
+			t->real_parent = this_reaper;
 			BUG_ON((!t->ptrace) != (t->parent == father));
 			if (likely(!t->ptrace))
 				t->parent = t->real_parent;
@@ -593,10 +597,13 @@ static void forget_original_parent(struct task_struct *father,
 		 * If this is a threaded reparent there is no need to
 		 * notify anyone anything has happened.
 		 */
-		if (!same_thread_group(reaper, father))
+		if (!same_thread_group(this_reaper, father))
 			reparent_leader(father, p, dead);
+		next = list_next_entry(p, sibling);
+		list_add(&p->sibling, &this_reaper->children);
+		p = next;
 	}
-	list_splice_tail_init(&father->children, &reaper->children);
+	INIT_LIST_HEAD(&father->children);
 }
 
 /*
