@@ -3192,6 +3192,28 @@ static u64 mem_cgroup_read_u64(struct cgroup_subsys_state *css,
 	}
 }
 
+u64 mem_cgroup_mem_usage(struct mem_cgroup *memcg)
+{
+	return mem_cgroup_usage(memcg, false);
+}
+
+u64 mem_cgroup_mem_limit(struct mem_cgroup *memcg)
+{
+	return (u64)memcg->memory.limit * PAGE_SIZE;
+}
+
+u64 mem_cgroup_memsw_usage(struct mem_cgroup *memcg)
+{
+	return mem_cgroup_usage(memcg, true);
+}
+
+u64 mem_cgroup_memsw_limit(struct mem_cgroup *memcg)
+{
+	return (u64)memcg->memsw.limit * PAGE_SIZE;
+}
+
+
+
 #ifdef CONFIG_MEMCG_KMEM
 static int memcg_activate_kmem(struct mem_cgroup *memcg,
 			       unsigned long nr_pages)
@@ -5289,6 +5311,7 @@ static ssize_t memory_high_write(struct kernfs_open_file *of,
 				 char *buf, size_t nbytes, loff_t off)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned long nr_pages;
 	unsigned long high;
 	int err;
 
@@ -5298,6 +5321,11 @@ static ssize_t memory_high_write(struct kernfs_open_file *of,
 		return err;
 
 	memcg->high = high;
+
+	nr_pages = page_counter_read(&memcg->memory);
+	if (nr_pages > high)
+		try_to_free_mem_cgroup_pages(memcg, nr_pages - high,
+					     GFP_KERNEL, true);
 
 	return nbytes;
 }

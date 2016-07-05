@@ -257,7 +257,6 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 void vx_vsi_meminfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_MEMCG_BROKEN
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage;
 
@@ -267,8 +266,8 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	if (!mcg)
 		goto out;
 
-	// res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	// res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
+	res_limit = mem_cgroup_mem_limit(mcg);
+	res_usage = mem_cgroup_mem_usage(mcg);
 
 	if (res_limit != PAGE_COUNTER_MAX)
 		val->totalram = (res_limit >> PAGE_SHIFT);
@@ -277,13 +276,11 @@ void vx_vsi_meminfo(struct sysinfo *val)
 	val->totalhigh = 0;
 	val->freehigh = 0;
 out:
-#endif	/* CONFIG_MEMCG */
 	return;
 }
 
 void vx_vsi_swapinfo(struct sysinfo *val)
 {
-#ifdef	CONFIG_MEMCG_BROKEN
 #ifdef	CONFIG_MEMCG_SWAP
 	struct mem_cgroup *mcg;
 	u64 res_limit, res_usage, memsw_limit, memsw_usage;
@@ -295,10 +292,10 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 	if (!mcg)
 		goto out;
 
-	// res_limit = mem_cgroup_res_read_u64(mcg, RES_LIMIT);
-	// res_usage = mem_cgroup_res_read_u64(mcg, RES_USAGE);
-	// memsw_limit = mem_cgroup_memsw_read_u64(mcg, RES_LIMIT);
-	// memsw_usage = mem_cgroup_memsw_read_u64(mcg, RES_USAGE);
+	res_limit = mem_cgroup_mem_limit(mcg);
+	res_usage = mem_cgroup_mem_usage(mcg);
+	memsw_limit = mem_cgroup_memsw_limit(mcg);
+	memsw_usage = mem_cgroup_memsw_usage(mcg);
 
 	/* memory unlimited */
 	if (res_limit == PAGE_COUNTER_MAX)
@@ -321,7 +318,6 @@ out:
 	val->totalswap = 0;
 	val->freeswap = 0;
 #endif	/* !CONFIG_MEMCG_SWAP */
-#endif	/* CONFIG_MEMCG */
 	return;
 }
 
