@@ -10,6 +10,7 @@
 #include <linux/cache.h>
 #include <linux/rcupdate.h>
 #include <linux/lockref.h>
+// #include <linux/vs_limit.h>
 
 struct path;
 struct vfsmount;
@@ -348,8 +349,10 @@ extern char *dentry_path(struct dentry *, char *, int);
  */
 static inline struct dentry *dget_dlock(struct dentry *dentry)
 {
-	if (dentry)
+	if (dentry) {
 		dentry->d_lockref.count++;
+		// vx_dentry_inc(dentry);
+	}
 	return dentry;
 }
 

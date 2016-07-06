@@ -255,13 +255,11 @@ struct file_lock *locks_alloc_lock(void)
 {
 	struct file_lock *fl;
 
-	if (!vx_locks_avail(1))
-		return NULL;
-
 	fl = kmem_cache_zalloc(filelock_cache, GFP_KERNEL);
 
 	if (fl) {
 		locks_init_lock_heads(fl);
+		vx_locks_inc(fl);
 		fl->fl_xid = -1;
 	}
 	return fl;
@@ -294,7 +292,6 @@ void locks_free_lock(struct file_lock *fl)
 	BUG_ON(!list_empty(&fl->fl_block));
 	BUG_ON(!hlist_unhashed(&fl->fl_link));
 
-	vx_locks_dec(fl);
 	locks_release_private(fl);
 	kmem_cache_free(filelock_cache, fl);
 }
@@ -704,7 +701,6 @@ locks_insert_lock_ctx(struct file_lock *fl, struct list_head *before)
 	fl->fl_nspid = get_pid(task_tgid(current));
 	list_add_tail(&fl->fl_list, before);
 	locks_insert_global_locks(fl);
-	vx_locks_inc(fl);
 }
 
 static void
@@ -717,7 +713,6 @@ locks_unlink_lock_ctx(struct file_lock *fl)
 		fl->fl_nspid = NULL;
 	}
 	locks_wake_up_blocks(fl);
-	vx_locks_dec(fl);
 }
 
 static void

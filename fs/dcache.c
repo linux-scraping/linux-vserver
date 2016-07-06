@@ -652,6 +652,7 @@ static inline bool fast_dput(struct dentry *dentry)
 		spin_lock(&dentry->d_lock);
 		if (dentry->d_lockref.count > 1) {
 			dentry->d_lockref.count--;
+			vx_dentry_dec(dentry);
 			spin_unlock(&dentry->d_lock);
 			return 1;
 		}
@@ -779,6 +780,7 @@ repeat:
 	dentry_lru_add(dentry);
 
 	dentry->d_lockref.count--;
+	vx_dentry_dec(dentry);
 	spin_unlock(&dentry->d_lock);
 	return;
 
@@ -839,6 +841,7 @@ repeat:
 	rcu_read_unlock();
 	BUG_ON(!ret->d_lockref.count);
 	ret->d_lockref.count++;
+	vx_dentry_inc(ret);
 	spin_unlock(&ret->d_lock);
 	return ret;
 }
@@ -993,6 +996,7 @@ static void shrink_dentry_list(struct list_head *list)
 			parent = lock_parent(dentry);
 			if (dentry->d_lockref.count != 1) {
 				dentry->d_lockref.count--;
+				vx_dentry_dec(dentry);
 				spin_unlock(&dentry->d_lock);
 				if (parent)
 					spin_unlock(&parent->d_lock);
@@ -3344,6 +3348,7 @@ static enum d_walk_ret d_genocide_kill(void *data, struct dentry *dentry)
 		if (!(dentry->d_flags & DCACHE_GENOCIDE)) {
 			dentry->d_flags |= DCACHE_GENOCIDE;
 			dentry->d_lockref.count--;
+			vx_dentry_dec(dentry);
 		}
 	}
 	return D_WALK_CONTINUE;

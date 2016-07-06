@@ -98,10 +98,10 @@ extern struct mem_cgroup *mem_cgroup_from_task(struct task_struct *p);
 extern struct mem_cgroup *parent_mem_cgroup(struct mem_cgroup *memcg);
 extern struct mem_cgroup *mem_cgroup_from_css(struct cgroup_subsys_state *css);
 
-extern u64 mem_cgroup_mem_usage(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_mem_limit(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_memsw_usage(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_memsw_limit(struct mem_cgroup *memcg);
+extern u64 mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg);
+extern u64 mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg);
+extern u64 mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg);
+extern u64 mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg);
 
 static inline bool mm_match_cgroup(struct mm_struct *mm,
 				   struct mem_cgroup *memcg)
