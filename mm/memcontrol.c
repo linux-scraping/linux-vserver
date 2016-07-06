@@ -3192,24 +3192,24 @@ static u64 mem_cgroup_read_u64(struct cgroup_subsys_state *css,
 	}
 }
 
-u64 mem_cgroup_mem_usage(struct mem_cgroup *memcg)
+u64 mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg)
 {
-	return mem_cgroup_usage(memcg, false);
+	return mem_cgroup_usage(memcg, false) >> PAGE_SHIFT;
 }
 
-u64 mem_cgroup_mem_limit(struct mem_cgroup *memcg)
+u64 mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg)
 {
-	return (u64)memcg->memory.limit * PAGE_SIZE;
+	return (u64)memcg->memory.limit;
 }
 
-u64 mem_cgroup_memsw_usage(struct mem_cgroup *memcg)
+u64 mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg)
 {
-	return mem_cgroup_usage(memcg, true);
+	return mem_cgroup_usage(memcg, true) >> PAGE_SHIFT;
 }
 
-u64 mem_cgroup_memsw_limit(struct mem_cgroup *memcg)
+u64 mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg)
 {
-	return (u64)memcg->memsw.limit * PAGE_SIZE;
+	return (u64)memcg->memsw.limit;
 }
 
 
