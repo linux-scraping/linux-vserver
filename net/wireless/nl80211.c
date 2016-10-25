@@ -2650,6 +2650,14 @@ static int nl80211_new_station(struct sk_buff *skb, struct genl_info *info)
 	if (parse_station_flags(info, &params))
 		return -EINVAL;
 
+	/* HT requires QoS, but if we don't have that just ignore HT/VHT
+	 * as userspace might just pass through the capabilities from the IEs
+	 * directly, rather than enforcing this restriction and returning an
+	 * error in this case.
+	 */
+	if (!(params.sta_flags_set & BIT(NL80211_STA_FLAG_WME)))
+		params.ht_capa = NULL;
+
 	/* parse WME attributes if sta is WME capable */
 	if ((rdev->wiphy.flags & WIPHY_FLAG_AP_UAPSD) &&
 	    (params.sta_flags_set & BIT(NL80211_STA_FLAG_WME)) &&
@@ -7488,7 +7496,7 @@ static int nl80211_netlink_notify(struct notifier_block * nb,
 	struct cfg80211_registered_device *rdev;
 	struct wireless_dev *wdev;
 
-	if (state != NETLINK_URELEASE)
+	if (state != NETLINK_URELEASE || notify->protocol != NETLINK_GENERIC)
 		return NOTIFY_DONE;
 
 	rcu_read_lock();

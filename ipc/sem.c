@@ -324,6 +324,7 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 		return id;
 	}
 	ns->used_sems += nsems;
+
 	/* FIXME: obsoleted? */
 	vx_semary_inc(sma);
 	vx_nsems_add(sma, nsems);
