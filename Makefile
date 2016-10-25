@@ -1,6 +1,6 @@
 VERSION = 3
 PATCHLEVEL = 2
-SUBLEVEL = 67
+SUBLEVEL = 83
 EXTRAVERSION = -vs2.3.2.17
 NAME = Saber-toothed Squirrel
 
@@ -352,7 +352,7 @@ AFLAGS_MODULE   =
 LDFLAGS_MODULE  =
 CFLAGS_KERNEL	=
 AFLAGS_KERNEL	=
-CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
+CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage -fno-tree-loop-im
 
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
