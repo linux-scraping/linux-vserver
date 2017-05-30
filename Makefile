@@ -1,7 +1,7 @@
 VERSION = 4
 PATCHLEVEL = 1
-SUBLEVEL = 35
-EXTRAVERSION = -vs2.3.8.5.2
+SUBLEVEL = 40
+EXTRAVERSION = -vs2.3.8.5.3
 NAME = Series 4800
 
 # *DOCUMENTATION*
@@ -610,6 +610,8 @@ all: vmlinux
 include arch/$(SRCARCH)/Makefile
 
 KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
+KBUILD_CFLAGS	+= $(call cc-option,-fno-PIE)
+KBUILD_AFLAGS	+= $(call cc-option,-fno-PIE)
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)

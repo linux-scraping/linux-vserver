@@ -52,9 +52,15 @@ typedef unsigned long rlim_t;
 
 struct sysinfo;
 
+#ifdef	CONFIG_MEMCG
 void vx_vsi_meminfo(struct sysinfo *);
 void vx_vsi_swapinfo(struct sysinfo *);
 long vx_vsi_cached(struct sysinfo *);
+#else	/* !CONFIG_MEMCG */
+#define vx_vsi_meminfo(s) do { } while (0)
+#define vx_vsi_swapinfo(s) do { } while (0)
+#define vx_vsi_cached(s) (0L)
+#endif	/* !CONFIG_MEMCG */
 
 #define NUM_LIMITS	24
 

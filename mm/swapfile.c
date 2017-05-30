@@ -2030,7 +2030,7 @@ static int swap_show(struct seq_file *swap, void *v)
 	if (si == SEQ_START_TOKEN) {
 		seq_puts(swap,"Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n");
 		if (vx_flags(VXF_VIRT_MEM, 0)) {
-			struct sysinfo si;
+			struct sysinfo si = { 0 };
 
 			vx_vsi_swapinfo(&si);
 			if (si.totalswap < (1 << 10))
