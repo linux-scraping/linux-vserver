@@ -255,6 +255,7 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 }
 
 
+#ifdef	CONFIG_MEMCG
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct mem_cgroup *mcg;
@@ -338,4 +339,5 @@ out:
 #endif
 	return cache;
 }
+#endif	/* !CONFIG_MEMCG */
 

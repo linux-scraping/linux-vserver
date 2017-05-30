@@ -225,7 +225,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 		if (in->i_op && in->i_op->setattr)
 			error = in->i_op->setattr(de, &attr);
 		else {
-			error = inode_change_ok(in, &attr);
+			error = setattr_prepare(de, &attr);
 			if (!error) {
 				setattr_copy(in, &attr);
 				mark_inode_dirty(in);
