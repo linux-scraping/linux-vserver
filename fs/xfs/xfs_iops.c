@@ -534,6 +534,7 @@ xfs_setattr_mode(
 
 int
 xfs_setattr_nonsize(
+	struct dentry		*dentry,
 	struct xfs_inode	*ip,
 	struct iattr		*iattr,
 	int			flags)
@@ -556,9 +557,15 @@ xfs_setattr_nonsize(
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return XFS_ERROR(EIO);
 
-	error = -inode_change_ok(inode, iattr);
-	if (error)
-		return XFS_ERROR(error);
+	/*
+	 * dentry can be NULL only when we're called from xfs_inherit_acl(),
+	 * in which case no permission checks are needed
+	 */
+	if (dentry) {
+		error = -setattr_prepare(dentry, iattr);
+		if (error)
+			return XFS_ERROR(error);
+	}
 
 	ASSERT((mask & ATTR_SIZE) == 0);
 
@@ -758,12 +765,13 @@ out_dqrele:
  */
 int
 xfs_setattr_size(
-	struct xfs_inode	*ip,
+	struct dentry		*dentry,
 	struct iattr		*iattr,
 	int			flags)
 {
+	struct inode		*inode = dentry->d_inode;
+	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
-	struct inode		*inode = VFS_I(ip);
 	int			mask = iattr->ia_valid;
 	struct xfs_trans	*tp;
 	int			error;
@@ -779,7 +787,7 @@ xfs_setattr_size(
 	if (XFS_FORCED_SHUTDOWN(mp))
 		return XFS_ERROR(EIO);
 
-	error = -inode_change_ok(inode, iattr);
+	error = -setattr_prepare(dentry, iattr);
 	if (error)
 		return XFS_ERROR(error);
 
@@ -805,7 +813,7 @@ xfs_setattr_size(
 		 */
 		xfs_iunlock(ip, lock_flags);
 		iattr->ia_valid &= ~ATTR_SIZE;
-		return xfs_setattr_nonsize(ip, iattr, 0);
+		return xfs_setattr_nonsize(dentry, ip, iattr, 0);
 	}
 
 	/*
@@ -953,8 +961,8 @@ xfs_vn_setattr(
 	struct iattr	*iattr)
 {
 	if (iattr->ia_valid & ATTR_SIZE)
-		return -xfs_setattr_size(XFS_I(dentry->d_inode), iattr, 0);
-	return -xfs_setattr_nonsize(XFS_I(dentry->d_inode), iattr, 0);
+		return -xfs_setattr_size(dentry, iattr, 0);
+	return -xfs_setattr_nonsize(dentry, XFS_I(dentry->d_inode), iattr, 0);
 }
 
 #define XFS_FIEMAP_FLAGS	(FIEMAP_FLAG_SYNC|FIEMAP_FLAG_XATTR)

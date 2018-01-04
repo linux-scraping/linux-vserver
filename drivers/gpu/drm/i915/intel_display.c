@@ -6995,9 +6995,9 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
 			  &obj->pending_flip.counter);
 
 	wake_up(&dev_priv->pending_flip_queue);
-	schedule_work(&work->work);
-
 	trace_i915_flip_complete(intel_crtc->plane, work->pending_flip_obj);
+
+	schedule_work(&work->work);
 }
 
 void intel_finish_page_flip(struct drm_device *dev, int pipe)
@@ -8699,9 +8699,15 @@ static void intel_init_display(struct drm_device *dev)
 		if (IS_IVYBRIDGE(dev)) {
 			u32	ecobus;
 
+			/* A small trick here - if the bios hasn't configured MT forcewake,
+			 * and if the device is in RC6, then force_wake_mt_get will not wake
+			 * the device and the ECOBUS read will return zero. Which will be
+			 * (correctly) interpreted by the test below as MT forcewake being
+			 * disabled.
+			 */
 			mutex_lock(&dev->struct_mutex);
 			__gen6_gt_force_wake_mt_get(dev_priv);
-			ecobus = I915_READ(ECOBUS);
+			ecobus = I915_READ_NOTRACE(ECOBUS);
 			__gen6_gt_force_wake_mt_put(dev_priv);
 			mutex_unlock(&dev->struct_mutex);
 
