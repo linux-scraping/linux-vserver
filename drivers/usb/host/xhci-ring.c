@@ -969,12 +969,6 @@ void xhci_stop_endpoint_command_watchdog(unsigned long arg)
 	spin_lock_irqsave(&xhci->lock, flags);
 
 	ep->stop_cmds_pending--;
-	if (xhci->xhc_state & XHCI_STATE_DYING) {
-		xhci_dbg(xhci, "Stop EP timer ran, but another timer marked "
-				"xHCI as DYING, exiting.\n");
-		spin_unlock_irqrestore(&xhci->lock, flags);
-		return;
-	}
 	if (!(ep->stop_cmds_pending == 0 && (ep->ep_state & EP_HALT_PENDING))) {
 		xhci_dbg(xhci, "Stop EP timer ran, but no command pending, "
 				"exiting.\n");
@@ -2648,29 +2642,31 @@ static int xhci_handle_event(struct xhci_hcd *xhci)
 irqreturn_t xhci_irq(struct usb_hcd *hcd)
 {
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-	u32 status;
 	union xhci_trb *trb;
-	u64 temp_64;
 	union xhci_trb *event_ring_deq;
+	irqreturn_t ret = IRQ_NONE;
+	unsigned long flags;
 	dma_addr_t deq;
+	u64 temp_64;
+	u32 status;
 
-	spin_lock(&xhci->lock);
+	spin_lock_irqsave(&xhci->lock, flags);
 	trb = xhci->event_ring->dequeue;
 	/* Check if the xHC generated the interrupt, or the irq is shared */
 	status = xhci_readl(xhci, &xhci->op_regs->status);
-	if (status == 0xffffffff)
-		goto hw_died;
-
-	if (!(status & STS_EINT)) {
-		spin_unlock(&xhci->lock);
-		return IRQ_NONE;
+	if (status == 0xffffffff) {
+		ret = IRQ_HANDLED;
+		goto out;
 	}
+
+	if (!(status & STS_EINT))
+		goto out;
+
 	if (status & STS_FATAL) {
 		xhci_warn(xhci, "WARNING: Host System Error\n");
 		xhci_halt(xhci);
-hw_died:
-		spin_unlock(&xhci->lock);
-		return IRQ_HANDLED;
+		ret = IRQ_HANDLED;
+		goto out;
 	}
 
 	/*
@@ -2700,9 +2696,8 @@ hw_died:
 		temp_64 = xhci_read_64(xhci, &xhci->ir_set->erst_dequeue);
 		xhci_write_64(xhci, temp_64 | ERST_EHB,
 				&xhci->ir_set->erst_dequeue);
-		spin_unlock(&xhci->lock);
-
-		return IRQ_HANDLED;
+		ret = IRQ_HANDLED;
+		goto out;
 	}
 
 	event_ring_deq = xhci->event_ring->dequeue;
@@ -2727,10 +2722,12 @@ hw_died:
 	/* Clear the event handler busy flag (RW1C); event ring is empty. */
 	temp_64 |= ERST_EHB;
 	xhci_write_64(xhci, temp_64, &xhci->ir_set->erst_dequeue);
+	ret = IRQ_HANDLED;
 
-	spin_unlock(&xhci->lock);
+out:
+	spin_unlock_irqrestore(&xhci->lock, flags);
 
-	return IRQ_HANDLED;
+	return ret;
 }
 
 irqreturn_t xhci_msi_irq(int irq, struct usb_hcd *hcd)

@@ -965,10 +965,11 @@ struct dst_entry *ip6_blackhole_route(struct net *net, struct dst_entry *dst_ori
 static struct dst_entry *ip6_dst_check(struct dst_entry *dst, u32 cookie)
 {
 	struct rt6_info *rt;
+	u32 rt_cookie = 0;
 
 	rt = (struct rt6_info *) dst;
 
-	if (rt->rt6i_node && (rt->rt6i_node->fn_sernum == cookie)) {
+	if (rt6_get_cookie_safe(rt, &rt_cookie) && rt_cookie == cookie) {
 		if (rt->rt6i_peer_genid != rt6_peer_genid()) {
 			if (!rt->rt6i_peer)
 				rt6_bind_peer(rt, 0);
@@ -1008,8 +1009,15 @@ static void ip6_link_failure(struct sk_buff *skb)
 		if (rt->rt6i_flags&RTF_CACHE) {
 			dst_set_expires(&rt->dst, 0);
 			rt->rt6i_flags |= RTF_EXPIRES;
-		} else if (rt->rt6i_node && (rt->rt6i_flags & RTF_DEFAULT))
-			rt->rt6i_node->fn_sernum = -1;
+		} else {
+			struct fib6_node *fn;
+
+			rcu_read_lock();
+			fn = rcu_dereference(rt->rt6i_node);
+			if (fn && (rt->rt6i_flags & RTF_DEFAULT))
+				fn->fn_sernum = -1;
+			rcu_read_unlock();
+		}
 	}
 }
 
@@ -2387,6 +2395,8 @@ static int rt6_fill_node(struct net *net,
 		rtm->rtm_type = RTN_UNREACHABLE;
 	else if (rt->rt6i_flags&RTF_LOCAL)
 		rtm->rtm_type = RTN_LOCAL;
+	else if (rt->rt6i_flags & RTF_ANYCAST)
+		rtm->rtm_type = RTN_ANYCAST;
 	else if (rt->rt6i_dev && (rt->rt6i_dev->flags&IFF_LOOPBACK))
 		rtm->rtm_type = RTN_LOCAL;
 	else
@@ -2419,7 +2429,9 @@ static int rt6_fill_node(struct net *net,
 	if (iif) {
 #ifdef CONFIG_IPV6_MROUTE
 		if (ipv6_addr_is_multicast(&rt->rt6i_dst.addr)) {
-			int err = ip6mr_get_route(net, skb, rtm, nowait);
+			int err = ip6mr_get_route(net, skb, rtm, nowait,
+						  pid);
+
 			if (err <= 0) {
 				if (!nowait) {
 					if (err == 0)

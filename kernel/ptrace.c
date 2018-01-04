@@ -78,12 +78,11 @@ void __ptrace_unlink(struct task_struct *child)
 {
 	BUG_ON(!child->ptrace);
 
-	child->ptrace = 0;
 	child->parent = child->real_parent;
 	list_del_init(&child->ptrace_entry);
 
 	spin_lock(&child->sighand->siglock);
-
+	child->ptrace = 0;
 	/*
 	 * Clear all pending traps and TRAPPING.  TRAPPING should be
 	 * cleared regardless of JOBCTL_STOP_PENDING.  Do it explicitly.
@@ -149,11 +148,17 @@ static void ptrace_unfreeze_traced(struct task_struct *task)
 
 	WARN_ON(!task->ptrace || task->parent != current);
 
+	/*
+	 * PTRACE_LISTEN can allow ptrace_trap_notify to wake us up remotely.
+	 * Recheck state under the lock to close this race.
+	 */
 	spin_lock_irq(&task->sighand->siglock);
-	if (__fatal_signal_pending(task))
-		wake_up_state(task, __TASK_TRACED);
-	else
-		task->state = TASK_TRACED;
+	if (task->state == __TASK_TRACED) {
+		if (__fatal_signal_pending(task))
+			wake_up_state(task, __TASK_TRACED);
+		else
+			task->state = TASK_TRACED;
+	}
 	spin_unlock_irq(&task->sighand->siglock);
 }
 
@@ -215,6 +220,14 @@ int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 {
 	const struct cred *cred = current_cred(), *tcred;
+	int dumpable = 0;
+	uid_t caller_uid;
+	gid_t caller_gid;
+
+	if (!(mode & PTRACE_MODE_FSCREDS) == !(mode & PTRACE_MODE_REALCREDS)) {
+		WARN(1, "denying ptrace access check without PTRACE_MODE_*CREDS\n");
+		return -EPERM;
+	}
 
 	/* May we inspect the given task?
 	 * This check is used both for attaching with ptrace
@@ -224,19 +237,34 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	 * because setting up the necessary parent/child relationship
 	 * or halting the specified task is impossible.
 	 */
-	int dumpable = 0;
+
 	/* Don't let security modules deny introspection */
 	if (same_thread_group(task, current))
 		return 0;
 	rcu_read_lock();
+	if (mode & PTRACE_MODE_FSCREDS) {
+		caller_uid = cred->fsuid;
+		caller_gid = cred->fsgid;
+	} else {
+		/*
+		 * Using the euid would make more sense here, but something
+		 * in userland might rely on the old behavior, and this
+		 * shouldn't be a security problem since
+		 * PTRACE_MODE_REALCREDS implies that the caller explicitly
+		 * used a syscall that requests access to another process
+		 * (and not a filesystem syscall to procfs).
+		 */
+		caller_uid = cred->uid;
+		caller_gid = cred->gid;
+	}
 	tcred = __task_cred(task);
 	if (cred->user->user_ns == tcred->user->user_ns &&
-	    (cred->uid == tcred->euid &&
-	     cred->uid == tcred->suid &&
-	     cred->uid == tcred->uid  &&
-	     cred->gid == tcred->egid &&
-	     cred->gid == tcred->sgid &&
-	     cred->gid == tcred->gid))
+	    (caller_uid == tcred->euid &&
+	     caller_uid == tcred->suid &&
+	     caller_uid == tcred->uid  &&
+	     caller_gid == tcred->egid &&
+	     caller_gid == tcred->sgid &&
+	     caller_gid == tcred->gid))
 		goto ok;
 	if (ns_capable(tcred->user->user_ns, CAP_SYS_PTRACE))
 		goto ok;
@@ -308,7 +336,7 @@ static int ptrace_attach(struct task_struct *task, long request,
 		goto out;
 
 	task_lock(task);
-	retval = __ptrace_may_access(task, PTRACE_MODE_ATTACH);
+	retval = __ptrace_may_access(task, PTRACE_MODE_ATTACH_REALCREDS);
 	task_unlock(task);
 	if (retval)
 		goto unlock_creds;

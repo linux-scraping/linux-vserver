@@ -544,6 +544,9 @@ sg_write(struct file *filp, const char __user *buf, size_t count, loff_t * ppos)
 	sg_io_hdr_t *hp;
 	unsigned char cmnd[MAX_COMMAND_SIZE];
 
+	if (unlikely(segment_eq(get_fs(), KERNEL_DS)))
+		return -EINVAL;
+
 	if ((!(sfp = (Sg_fd *) filp->private_data)) || (!(sdp = sfp->parentdp)))
 		return -ENXIO;
 	SCSI_LOG_TIMEOUT(3, printk("sg_write: %s, count=%d\n",
@@ -742,8 +745,11 @@ sg_common_write(Sg_fd * sfp, Sg_request * srp,
 		return k;	/* probably out of space --> ENOMEM */
 	}
 	if (sdp->detached) {
-		if (srp->bio)
+		if (srp->bio) {
 			blk_end_request_all(srp->rq, -EIO);
+			srp->rq = NULL;
+		}
+
 		sg_finish_rem_req(srp);
 		return -ENODEV;
 	}
@@ -1703,6 +1709,10 @@ static int sg_start_req(Sg_request *srp, unsigned char *cmd)
 		if (hp->dxfer_len < len) {
 			iov_count = iov_shorten(iov, iov_count, hp->dxfer_len);
 			len = hp->dxfer_len;
+		}
+		if (len == 0) {
+			kfree(iov);
+			return -EINVAL;
 		}
 
 		res = blk_rq_map_user_iov(q, rq, md, (struct sg_iovec *)iov,

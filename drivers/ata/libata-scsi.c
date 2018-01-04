@@ -2755,10 +2755,12 @@ static unsigned int atapi_xlat(struct ata_queued_cmd *qc)
 static struct ata_device *ata_find_dev(struct ata_port *ap, int devno)
 {
 	if (!sata_pmp_attached(ap)) {
-		if (likely(devno < ata_link_max_devices(&ap->link)))
+		if (likely(devno >= 0 &&
+			   devno < ata_link_max_devices(&ap->link)))
 			return &ap->link.device[devno];
 	} else {
-		if (likely(devno < ap->nr_pmp_links))
+		if (likely(devno >= 0 &&
+			   devno < ap->nr_pmp_links))
 			return &ap->pmp_link[devno].device[0];
 	}
 
@@ -3054,6 +3056,14 @@ static unsigned int ata_scsi_write_same_xlat(struct ata_queued_cmd *qc)
 
 	/* we may not issue DMA commands if no DMA mode is set */
 	if (unlikely(!dev->dma_mode))
+		goto invalid_fld;
+
+	/*
+	 * We only allow sending this command through the block layer,
+	 * as it modifies the DATA OUT buffer, which would corrupt user
+	 * memory for SG_IO commands.
+	 */
+	if (unlikely(scmd->request->cmd_type != REQ_TYPE_FS))
 		goto invalid_fld;
 
 	if (unlikely(scmd->cmd_len < 16))

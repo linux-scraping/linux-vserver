@@ -641,7 +641,7 @@ again:
 	next_tail = (tail + sizeof(*cmd)) % iommu->cmd_buf_size;
 	left      = (head - next_tail) % iommu->cmd_buf_size;
 
-	if (left <= 2) {
+	if (left <= 0x20) {
 		struct iommu_cmd sync_cmd;
 		volatile u64 sem = 0;
 		int ret;
@@ -1540,6 +1540,9 @@ static void dma_ops_domain_free(struct dma_ops_domain *dom)
 		free_page((unsigned long)dom->aperture[i]->bitmap);
 		kfree(dom->aperture[i]);
 	}
+
+	if (dom->domain.id)
+		domain_id_free(dom->domain.id);
 
 	kfree(dom);
 }
@@ -2769,6 +2772,7 @@ static int amd_iommu_unmap(struct iommu_domain *dom, unsigned long iova,
 	mutex_unlock(&domain->api_lock);
 
 	domain_flush_tlb_pde(domain);
+	domain_flush_complete(domain);
 
 	return get_order(unmap_size);
 }

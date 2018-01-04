@@ -36,11 +36,19 @@
 
 #define PCI_DEVICE_ID_INTEL_LYNXPOINT_XHCI	0x8c31
 #define PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI	0x9c31
+#define PCI_DEVICE_ID_INTEL_WILDCATPOINT_LP_XHCI	0x9cb1
 #define PCI_DEVICE_ID_INTEL_CHERRYVIEW_XHCI		0x22b5
 #define PCI_DEVICE_ID_INTEL_SUNRISEPOINT_H_XHCI		0xa12f
 #define PCI_DEVICE_ID_INTEL_SUNRISEPOINT_LP_XHCI	0x9d2f
 #define PCI_DEVICE_ID_INTEL_BROXTON_M_XHCI		0x0aa8
 #define PCI_DEVICE_ID_INTEL_BROXTON_B_XHCI		0x1aa8
+#define PCI_DEVICE_ID_INTEL_APL_XHCI			0x5aa8
+#define PCI_DEVICE_ID_INTEL_DNV_XHCI			0x19d0
+
+#define PCI_DEVICE_ID_AMD_PROMONTORYA_4			0x43b9
+#define PCI_DEVICE_ID_AMD_PROMONTORYA_3			0x43ba
+#define PCI_DEVICE_ID_AMD_PROMONTORYA_2			0x43bb
+#define PCI_DEVICE_ID_AMD_PROMONTORYA_1			0x43bc
 
 static const char hcd_name[] = "xhci_hcd";
 
@@ -107,6 +115,13 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
 	if (pdev->vendor == PCI_VENDOR_ID_AMD)
 		xhci->quirks |= XHCI_TRUST_TX_LENGTH;
 
+	if ((pdev->vendor == PCI_VENDOR_ID_AMD) &&
+		((pdev->device == PCI_DEVICE_ID_AMD_PROMONTORYA_4) ||
+		(pdev->device == PCI_DEVICE_ID_AMD_PROMONTORYA_3) ||
+		(pdev->device == PCI_DEVICE_ID_AMD_PROMONTORYA_2) ||
+		(pdev->device == PCI_DEVICE_ID_AMD_PROMONTORYA_1)))
+		xhci->quirks |= XHCI_U2_DISABLE_WAKE;
+
 	if (pdev->vendor == PCI_VENDOR_ID_INTEL)
 		xhci->quirks |= XHCI_INTEL_HOST;
 	if (pdev->vendor == PCI_VENDOR_ID_INTEL)
@@ -127,7 +142,8 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
 		xhci->quirks |= XHCI_SPURIOUS_REBOOT;
 	}
 	if (pdev->vendor == PCI_VENDOR_ID_INTEL &&
-		pdev->device == PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI) {
+		(pdev->device == PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI ||
+		 pdev->device == PCI_DEVICE_ID_INTEL_WILDCATPOINT_LP_XHCI)) {
 		xhci->quirks |= XHCI_SPURIOUS_REBOOT;
 		xhci->quirks |= XHCI_SPURIOUS_WAKEUP;
 	}
@@ -136,9 +152,17 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
 		 pdev->device == PCI_DEVICE_ID_INTEL_SUNRISEPOINT_H_XHCI ||
 		 pdev->device == PCI_DEVICE_ID_INTEL_CHERRYVIEW_XHCI ||
 		 pdev->device == PCI_DEVICE_ID_INTEL_BROXTON_M_XHCI ||
-		 pdev->device == PCI_DEVICE_ID_INTEL_BROXTON_B_XHCI)) {
+		 pdev->device == PCI_DEVICE_ID_INTEL_BROXTON_B_XHCI ||
+		 pdev->device == PCI_DEVICE_ID_INTEL_APL_XHCI ||
+		 pdev->device == PCI_DEVICE_ID_INTEL_DNV_XHCI)) {
 		xhci->quirks |= XHCI_PME_STUCK_QUIRK;
 	}
+	if (pdev->vendor == PCI_VENDOR_ID_INTEL &&
+	    (pdev->device == PCI_DEVICE_ID_INTEL_CHERRYVIEW_XHCI ||
+	     pdev->device == PCI_DEVICE_ID_INTEL_APL_XHCI ||
+	     pdev->device == PCI_DEVICE_ID_INTEL_DNV_XHCI))
+		xhci->quirks |= XHCI_MISSING_CAS;
+
 	if (pdev->vendor == PCI_VENDOR_ID_ETRON &&
 			pdev->device == PCI_DEVICE_ID_ASROCK_P67) {
 		xhci->quirks |= XHCI_RESET_ON_RESUME;
@@ -147,6 +171,10 @@ static void xhci_pci_quirks(struct device *dev, struct xhci_hcd *xhci)
 	}
 	if (pdev->vendor == PCI_VENDOR_ID_VIA)
 		xhci->quirks |= XHCI_RESET_ON_RESUME;
+
+	if (pdev->vendor == PCI_VENDOR_ID_ASMEDIA &&
+			pdev->device == 0x1142)
+		xhci->quirks |= XHCI_TRUST_TX_LENGTH;
 }
 
 /*
@@ -252,11 +280,12 @@ static void xhci_pci_remove(struct pci_dev *dev)
 		usb_remove_hcd(xhci->shared_hcd);
 		usb_put_hcd(xhci->shared_hcd);
 	}
-	usb_hcd_pci_remove(dev);
 
 	/* Workaround for spurious wakeups at shutdown with HSW */
 	if (xhci->quirks & XHCI_SPURIOUS_WAKEUP)
 		pci_set_power_state(dev, PCI_D3hot);
+
+	usb_hcd_pci_remove(dev);
 
 	kfree(xhci);
 }

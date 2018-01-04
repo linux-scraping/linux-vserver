@@ -810,7 +810,6 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb, u32 features)
 	const struct inet6_protocol *ops;
 	int proto;
 	struct frag_hdr *fptr;
-	unsigned int unfrag_ip6hlen;
 	u8 *prevhdr;
 	int offset = 0;
 
@@ -849,9 +848,13 @@ static struct sk_buff *ipv6_gso_segment(struct sk_buff *skb, u32 features)
 		ipv6h->payload_len = htons(skb->len - skb->mac_len -
 					   sizeof(*ipv6h));
 		if (proto == IPPROTO_UDP) {
-			unfrag_ip6hlen = ip6_find_1stfragopt(skb, &prevhdr);
+			int err = ip6_find_1stfragopt(skb, &prevhdr);
+			if (err < 0) {
+				kfree_skb_list(segs);
+				return ERR_PTR(err);
+			}
 			fptr = (struct frag_hdr *)(skb_network_header(skb) +
-				unfrag_ip6hlen);
+				err);
 			fptr->frag_off = htons(offset);
 			if (skb->next != NULL)
 				fptr->frag_off |= htons(IP6_MF);
@@ -904,6 +907,7 @@ static struct sk_buff **ipv6_gro_receive(struct sk_buff **head,
 	ops = rcu_dereference(inet6_protos[proto]);
 	if (!ops || !ops->gro_receive) {
 		__pskb_pull(skb, skb_gro_offset(skb));
+		skb_gro_frag0_invalidate(skb);
 		proto = ipv6_gso_pull_exthdrs(skb, proto);
 		skb_gro_pull(skb, -skb_transport_offset(skb));
 		skb_reset_transport_header(skb);
