@@ -38,10 +38,10 @@
 #define _TIPC_BEARER_H
 
 #include "netlink.h"
+#include "core.h"
 #include "msg.h"
 #include <net/genetlink.h>
 
-#define MAX_BEARERS	2
 #define MAX_MEDIA	3
 #define MAX_NODES	4096
 #define WSIZE		32
@@ -167,6 +167,7 @@ struct tipc_bearer {
 	u32 identity;
 	struct tipc_link_req *link_req;
 	char net_plane;
+	int node_cnt;
 	struct tipc_node_map nodes;
 };
 
@@ -219,8 +220,15 @@ struct tipc_media *tipc_media_find(const char *name);
 int tipc_bearer_setup(void);
 void tipc_bearer_cleanup(void);
 void tipc_bearer_stop(struct net *net);
-void tipc_bearer_send(struct net *net, u32 bearer_id, struct sk_buff *buf,
-		      struct tipc_media_addr *dest);
+int tipc_bearer_mtu(struct net *net, u32 bearer_id);
+void tipc_bearer_xmit_skb(struct net *net, u32 bearer_id,
+			  struct sk_buff *skb,
+			  struct tipc_media_addr *dest);
+void tipc_bearer_xmit(struct net *net, u32 bearer_id,
+		      struct sk_buff_head *xmitq,
+		      struct tipc_media_addr *dst);
+void tipc_bearer_bc_xmit(struct net *net, u32 bearer_id,
+			 struct sk_buff_head *xmitq);
 
 /* check if device MTU is too low for tipc headers */
 static inline bool tipc_mtu_bad(struct net_device *dev, unsigned int reserve)

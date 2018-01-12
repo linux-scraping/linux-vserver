@@ -67,6 +67,7 @@ struct nfsd4_callback {
 	struct rpc_message cb_msg;
 	struct nfsd4_callback_ops *cb_ops;
 	struct work_struct cb_work;
+	int cb_seq_status;
 	int cb_status;
 	bool cb_need_restart;
 };
@@ -83,7 +84,7 @@ struct nfsd4_callback_ops {
  * fields that are of general use to any stateid.
  */
 struct nfs4_stid {
-	atomic_t sc_count;
+	atomic_t		sc_count;
 #define NFS4_OPEN_STID 1
 #define NFS4_LOCK_STID 2
 #define NFS4_DELEG_STID 4
@@ -93,11 +94,12 @@ struct nfs4_stid {
 #define NFS4_REVOKED_DELEG_STID 16
 #define NFS4_CLOSED_DELEG_STID 32
 #define NFS4_LAYOUT_STID 64
-	unsigned char sc_type;
-	stateid_t sc_stateid;
-	struct nfs4_client *sc_client;
-	struct nfs4_file *sc_file;
-	void (*sc_free)(struct nfs4_stid *);
+	unsigned char		sc_type;
+	stateid_t		sc_stateid;
+	spinlock_t		sc_lock;
+	struct nfs4_client	*sc_client;
+	struct nfs4_file	*sc_file;
+	void			(*sc_free)(struct nfs4_stid *);
 };
 
 /*
@@ -363,15 +365,6 @@ struct nfs4_client_reclaim {
 	char			cr_recdir[HEXDIR_LEN]; /* recover dir */
 };
 
-static inline void
-update_stateid(stateid_t *stateid)
-{
-	stateid->si_generation++;
-	/* Wraparound recommendation from 3530bis-13 9.1.3.2: */
-	if (stateid->si_generation == 0)
-		stateid->si_generation = 1;
-}
-
 /* A reasonable value for REPLAY_ISIZE was estimated as follows:  
  * The OPEN response, typically the largest, requires 
  *   4(status) + 8(stateid) + 20(changeinfo) + 4(rflags) +  8(verifier) + 
@@ -542,7 +535,7 @@ struct nfs4_ol_stateid {
 	unsigned char			st_access_bmap;
 	unsigned char			st_deny_bmap;
 	struct nfs4_ol_stateid		*st_openstp;
-	struct rw_semaphore		st_rwsem;
+	struct mutex			st_mutex;
 };
 
 static inline struct nfs4_ol_stateid *openlockstateid(struct nfs4_stid *s)
@@ -561,6 +554,7 @@ struct nfs4_layout_stateid {
 	struct nfsd4_callback		ls_recall;
 	stateid_t			ls_recall_sid;
 	bool				ls_recalled;
+	struct mutex			ls_mutex;
 };
 
 static inline struct nfs4_layout_stateid *layoutstateid(struct nfs4_stid *s)
@@ -583,9 +577,9 @@ enum nfsd4_cb_op {
 struct nfsd4_compound_state;
 struct nfsd_net;
 
-extern __be32 nfs4_preprocess_stateid_op(struct net *net,
-		struct nfsd4_compound_state *cstate,
-		stateid_t *stateid, int flags, struct file **filp);
+extern __be32 nfs4_preprocess_stateid_op(struct svc_rqst *rqstp,
+		struct nfsd4_compound_state *cstate, stateid_t *stateid,
+		int flags, struct file **filp, bool *tmp_file);
 __be32 nfsd4_lookup_stateid(struct nfsd4_compound_state *cstate,
 		     stateid_t *stateid, unsigned char typemask,
 		     struct nfs4_stid **s, struct nfsd_net *nn);
@@ -593,6 +587,7 @@ struct nfs4_stid *nfs4_alloc_stid(struct nfs4_client *cl, struct kmem_cache *sla
 				  void (*sc_free)(struct nfs4_stid *));
 void nfs4_unhash_stid(struct nfs4_stid *s);
 void nfs4_put_stid(struct nfs4_stid *s);
+void nfs4_inc_and_copy_stateid(stateid_t *dst, struct nfs4_stid *stid);
 void nfs4_remove_reclaim_record(struct nfs4_client_reclaim *, struct nfsd_net *);
 extern void nfs4_release_reclaim(struct nfsd_net *);
 extern struct nfs4_client_reclaim *nfsd4_find_reclaim_client(const char *recdir,
@@ -600,6 +595,7 @@ extern struct nfs4_client_reclaim *nfsd4_find_reclaim_client(const char *recdir,
 extern __be32 nfs4_check_open_reclaim(clientid_t *clid,
 		struct nfsd4_compound_state *cstate, struct nfsd_net *nn);
 extern int set_callback_cred(void);
+extern void cleanup_callback_cred(void);
 extern void nfsd4_probe_callback(struct nfs4_client *clp);
 extern void nfsd4_probe_callback_sync(struct nfs4_client *clp);
 extern void nfsd4_change_callback(struct nfs4_client *clp, struct nfs4_cb_conn *);

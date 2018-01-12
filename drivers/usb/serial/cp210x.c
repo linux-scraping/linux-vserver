@@ -43,8 +43,8 @@ static int cp210x_tiocmset(struct tty_struct *, unsigned int, unsigned int);
 static int cp210x_tiocmset_port(struct usb_serial_port *port,
 		unsigned int, unsigned int);
 static void cp210x_break_ctl(struct tty_struct *, int);
-static int cp210x_port_probe(struct usb_serial_port *);
-static int cp210x_port_remove(struct usb_serial_port *);
+static int cp210x_startup(struct usb_serial *);
+static void cp210x_release(struct usb_serial *);
 static void cp210x_dtr_rts(struct usb_serial_port *p, int on);
 
 static const struct usb_device_id id_table[] = {
@@ -117,6 +117,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x8411) }, /* Kyocera GPS Module */
 	{ USB_DEVICE(0x10C4, 0x8418) }, /* IRZ Automation Teleport SG-10 GSM/GPRS Modem */
 	{ USB_DEVICE(0x10C4, 0x846E) }, /* BEI USB Sensor Interface (VCP) */
+	{ USB_DEVICE(0x10C4, 0x8470) }, /* Juniper Networks BX Series System Console */
 	{ USB_DEVICE(0x10C4, 0x8477) }, /* Balluff RFID */
 	{ USB_DEVICE(0x10C4, 0x84B6) }, /* Starizona Hyperion */
 	{ USB_DEVICE(0x10C4, 0x85EA) }, /* AC-Services IBUS-IF */
@@ -129,6 +130,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x10C4, 0x88A4) }, /* MMB Networks ZigBee USB Device */
 	{ USB_DEVICE(0x10C4, 0x88A5) }, /* Planet Innovation Ingeni ZigBee USB Device */
 	{ USB_DEVICE(0x10C4, 0x8946) }, /* Ketra N1 Wireless Interface */
+	{ USB_DEVICE(0x10C4, 0x8962) }, /* Brim Brothers charging dock */
 	{ USB_DEVICE(0x10C4, 0x8977) },	/* CEL MeshWorks DevKit Device */
 	{ USB_DEVICE(0x10C4, 0x8998) }, /* KCF Technologies PRN */
 	{ USB_DEVICE(0x10C4, 0x8A2A) }, /* HubZ dual ZigBee and Z-Wave dongle */
@@ -211,7 +213,7 @@ static const struct usb_device_id id_table[] = {
 
 MODULE_DEVICE_TABLE(usb, id_table);
 
-struct cp210x_port_private {
+struct cp210x_serial_private {
 	__u8			bInterfaceNumber;
 };
 
@@ -230,8 +232,8 @@ static struct usb_serial_driver cp210x_device = {
 	.set_termios		= cp210x_set_termios,
 	.tiocmget		= cp210x_tiocmget,
 	.tiocmset		= cp210x_tiocmset,
-	.port_probe		= cp210x_port_probe,
-	.port_remove		= cp210x_port_remove,
+	.attach			= cp210x_startup,
+	.release		= cp210x_release,
 	.dtr_rts		= cp210x_dtr_rts
 };
 
@@ -325,7 +327,7 @@ static int cp210x_get_config(struct usb_serial_port *port, u8 request,
 		unsigned int *data, int size)
 {
 	struct usb_serial *serial = port->serial;
-	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+	struct cp210x_serial_private *spriv = usb_get_serial_data(serial);
 	__le32 *buf;
 	int result, i, length;
 
@@ -339,7 +341,7 @@ static int cp210x_get_config(struct usb_serial_port *port, u8 request,
 	/* Issue the request, attempting to read 'size' bytes */
 	result = usb_control_msg(serial->dev, usb_rcvctrlpipe(serial->dev, 0),
 				request, REQTYPE_INTERFACE_TO_HOST, 0x0000,
-				port_priv->bInterfaceNumber, buf, size,
+				spriv->bInterfaceNumber, buf, size,
 				USB_CTRL_GET_TIMEOUT);
 
 	/* Convert data into an array of integers */
@@ -370,7 +372,7 @@ static int cp210x_set_config(struct usb_serial_port *port, u8 request,
 		unsigned int *data, int size)
 {
 	struct usb_serial *serial = port->serial;
-	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+	struct cp210x_serial_private *spriv = usb_get_serial_data(serial);
 	__le32 *buf;
 	int result, i, length;
 
@@ -389,13 +391,13 @@ static int cp210x_set_config(struct usb_serial_port *port, u8 request,
 		result = usb_control_msg(serial->dev,
 				usb_sndctrlpipe(serial->dev, 0),
 				request, REQTYPE_HOST_TO_INTERFACE, 0x0000,
-				port_priv->bInterfaceNumber, buf, size,
+				spriv->bInterfaceNumber, buf, size,
 				USB_CTRL_SET_TIMEOUT);
 	} else {
 		result = usb_control_msg(serial->dev,
 				usb_sndctrlpipe(serial->dev, 0),
 				request, REQTYPE_HOST_TO_INTERFACE, data[0],
-				port_priv->bInterfaceNumber, NULL, 0,
+				spriv->bInterfaceNumber, NULL, 0,
 				USB_CTRL_SET_TIMEOUT);
 	}
 
@@ -879,32 +881,29 @@ static void cp210x_break_ctl(struct tty_struct *tty, int break_state)
 	cp210x_set_config(port, CP210X_SET_BREAK, &state, 2);
 }
 
-static int cp210x_port_probe(struct usb_serial_port *port)
+static int cp210x_startup(struct usb_serial *serial)
 {
-	struct usb_serial *serial = port->serial;
 	struct usb_host_interface *cur_altsetting;
-	struct cp210x_port_private *port_priv;
+	struct cp210x_serial_private *spriv;
 
-	port_priv = kzalloc(sizeof(*port_priv), GFP_KERNEL);
-	if (!port_priv)
+	spriv = kzalloc(sizeof(*spriv), GFP_KERNEL);
+	if (!spriv)
 		return -ENOMEM;
 
 	cur_altsetting = serial->interface->cur_altsetting;
-	port_priv->bInterfaceNumber = cur_altsetting->desc.bInterfaceNumber;
+	spriv->bInterfaceNumber = cur_altsetting->desc.bInterfaceNumber;
 
-	usb_set_serial_port_data(port, port_priv);
+	usb_set_serial_data(serial, spriv);
 
 	return 0;
 }
 
-static int cp210x_port_remove(struct usb_serial_port *port)
+static void cp210x_release(struct usb_serial *serial)
 {
-	struct cp210x_port_private *port_priv;
+	struct cp210x_serial_private *spriv;
 
-	port_priv = usb_get_serial_port_data(port);
-	kfree(port_priv);
-
-	return 0;
+	spriv = usb_get_serial_data(serial);
+	kfree(spriv);
 }
 
 module_usb_serial_driver(serial_drivers, id_table);

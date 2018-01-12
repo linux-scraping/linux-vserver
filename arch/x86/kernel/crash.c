@@ -22,6 +22,7 @@
 #include <linux/elfcore.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 #include <asm/processor.h>
 #include <asm/hardirq.h>
@@ -73,8 +74,6 @@ struct crash_memmap_data {
 	/* Type of memory */
 	unsigned int type;
 };
-
-int in_crash_kexec;
 
 /*
  * This is used to VMCLEAR all VMCSs loaded on the
@@ -131,7 +130,6 @@ static void kdump_nmi_callback(int cpu, struct pt_regs *regs)
 
 static void kdump_nmi_shootdown_cpus(void)
 {
-	in_crash_kexec = 1;
 	nmi_shootdown_cpus(kdump_nmi_callback);
 
 	disable_local_APIC();

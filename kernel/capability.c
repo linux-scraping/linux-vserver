@@ -365,6 +365,24 @@ bool has_capability_noaudit(struct task_struct *t, int cap)
 	return has_ns_capability_noaudit(t, &init_user_ns, cap);
 }
 
+static bool ns_capable_common(struct user_namespace *ns, int cap, bool audit)
+{
+	int capable;
+
+	if (unlikely(!cap_valid(cap))) {
+		pr_crit("capable() called with invalid cap=%u\n", cap);
+		BUG();
+	}
+
+	capable = audit ? security_capable(current_cred(), ns, cap) :
+			  security_capable_noaudit(current_cred(), ns, cap);
+	if (capable == 0) {
+		current->flags |= PF_SUPERPRIV;
+		return true;
+	}
+	return false;
+}
+
 /**
  * ns_capable - Determine if the current task has a superior capability in effect
  * @ns:  The usernamespace we want the capability in
@@ -378,19 +396,27 @@ bool has_capability_noaudit(struct task_struct *t, int cap)
  */
 bool ns_capable(struct user_namespace *ns, int cap)
 {
-	if (unlikely(!cap_valid(cap))) {
-		pr_crit("capable() called with invalid cap=%u\n", cap);
-		BUG();
-	}
-
-	if (security_capable(current_cred(), ns, cap) == 0) {
-		current->flags |= PF_SUPERPRIV;
-		return true;
-	}
-	return false;
+	return ns_capable_common(ns, cap, true);
 }
 EXPORT_SYMBOL(ns_capable);
 
+/**
+ * ns_capable_noaudit - Determine if the current task has a superior capability
+ * (unaudited) in effect
+ * @ns:  The usernamespace we want the capability in
+ * @cap: The capability to be tested for
+ *
+ * Return true if the current task has the given superior capability currently
+ * available for use, false if not.
+ *
+ * This sets PF_SUPERPRIV on the task if the capability is available on the
+ * assumption that it's about to be used.
+ */
+bool ns_capable_noaudit(struct user_namespace *ns, int cap)
+{
+	return ns_capable_common(ns, cap, false);
+}
+EXPORT_SYMBOL(ns_capable_noaudit);
 
 /**
  * capable - Determine if the current task has a superior capability in effect
@@ -435,6 +461,19 @@ bool file_ns_capable(const struct file *file, struct user_namespace *ns,
 EXPORT_SYMBOL(file_ns_capable);
 
 /**
+ * privileged_wrt_inode_uidgid - Do capabilities in the namespace work over the inode?
+ * @ns: The user namespace in question
+ * @inode: The inode in question
+ *
+ * Return true if the inode uid and gid are within the namespace.
+ */
+bool privileged_wrt_inode_uidgid(struct user_namespace *ns, const struct inode *inode)
+{
+	return kuid_has_mapping(ns, inode->i_uid) &&
+		kgid_has_mapping(ns, inode->i_gid);
+}
+
+/**
  * capable_wrt_inode_uidgid - Check nsown_capable and uid and gid mapped
  * @inode: The inode in question
  * @cap: The capability in question
@@ -447,8 +486,7 @@ bool capable_wrt_inode_uidgid(const struct inode *inode, int cap)
 {
 	struct user_namespace *ns = current_user_ns();
 
-	return ns_capable(ns, cap) && kuid_has_mapping(ns, inode->i_uid) &&
-		kgid_has_mapping(ns, inode->i_gid);
+	return ns_capable(ns, cap) && privileged_wrt_inode_uidgid(ns, inode);
 }
 EXPORT_SYMBOL(capable_wrt_inode_uidgid);
 

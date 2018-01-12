@@ -201,6 +201,7 @@ struct inodes_stat_t {
 #define FS_DIRECTIO_FL			0x00100000 /* Use direct i/o */
 #define FS_NOCOW_FL			0x00800000 /* Do not cow file */
 #define FS_IXUNLINK_FL			0x08000000 /* Immutable invert on unlink */
+#define FS_PROJINHERIT_FL		0x20000000 /* Create with parents projid */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
 #define FS_BARRIER_FL			0x04000000 /* Barrier for chroot() */

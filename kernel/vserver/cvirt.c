@@ -247,7 +247,7 @@ int vc_virt_stat(struct vx_info *vxi, void __user *data)
 	struct _vx_cvirt *cvirt = &vxi->cvirt;
 	struct timespec uptime;
 
-	do_posix_clock_monotonic_gettime(&uptime);
+	ktime_get_ts(&uptime);
 	set_normalized_timespec(&uptime,
 		uptime.tv_sec - cvirt->bias_uptime.tv_sec,
 		uptime.tv_nsec - cvirt->bias_uptime.tv_nsec);

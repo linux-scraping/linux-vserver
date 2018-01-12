@@ -40,7 +40,7 @@ static struct proc_dir_entry *root_irq_dir;
 static int show_irq_affinity(int type, struct seq_file *m, void *v)
 {
 	struct irq_desc *desc = irq_to_desc((long)m->private);
-	const struct cpumask *mask = desc->irq_data.affinity;
+	const struct cpumask *mask = desc->irq_common_data.affinity;
 
 #ifdef CONFIG_GENERIC_PENDING_IRQ
 	if (irqd_is_setaffinity_pending(&desc->irq_data))
@@ -242,7 +242,7 @@ static int irq_node_proc_show(struct seq_file *m, void *v)
 {
 	struct irq_desc *desc = irq_to_desc((long) m->private);
 
-	seq_printf(m, "%d\n", desc->irq_data.node);
+	seq_printf(m, "%d\n", irq_desc_get_node(desc));
 	return 0;
 }
 
@@ -475,7 +475,7 @@ int show_interrupts(struct seq_file *p, void *v)
 	for_each_online_cpu(j)
 		any_count |= kstat_irqs_cpu(i, j);
 	action = desc->action;
-	if (!action && !any_count)
+	if ((!action || irq_desc_is_chained(desc)) && !any_count)
 		goto out;
 
 	seq_printf(p, "%*d: ", prec, i);

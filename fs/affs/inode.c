@@ -218,7 +218,7 @@ affs_notify_change(struct dentry *dentry, struct iattr *attr)
 
 	pr_debug("notify_change(%lu,0x%x)\n", inode->i_ino, attr->ia_valid);
 
-	error = setattr_prepare(dentry, attr);
+	error = inode_change_ok(inode,attr);
 	if (error)
 		goto out;
 
@@ -346,7 +346,7 @@ affs_add_entry(struct inode *dir, struct inode *inode, struct dentry *dentry, s3
 {
 	struct super_block *sb = dir->i_sb;
 	struct buffer_head *inode_bh = NULL;
-	struct buffer_head *bh = NULL;
+	struct buffer_head *bh;
 	u32 block = 0;
 	int retval;
 

@@ -628,7 +628,8 @@ static ssize_t fill_periodic_buffer(struct debug_buffer *buf)
 	unsigned		i;
 	__hc32			tag;
 
-	if (!(seen = kmalloc (DBG_SCHED_LIMIT * sizeof *seen, GFP_ATOMIC)))
+	seen = kmalloc(DBG_SCHED_LIMIT * sizeof *seen, GFP_ATOMIC);
+	if (!seen)
 		return 0;
 	seen_count = 0;
 
@@ -850,7 +851,7 @@ static ssize_t fill_registers_buffer(struct debug_buffer *buf)
 			default:		/* unknown */
 				break;
 			}
-			temp = (cap >> 8) & 0xff;
+			offset = (cap >> 8) & 0xff;
 		}
 	}
 #endif

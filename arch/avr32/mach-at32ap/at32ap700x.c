@@ -603,18 +603,11 @@ static void __init genclk_init_parent(struct clk *clk)
 	clk->parent = parent;
 }
 
-static struct dw_dma_platform_data dw_dmac0_data = {
-	.nr_channels	= 3,
-	.block_size	= 4095U,
-	.nr_masters	= 2,
-	.data_width	= { 2, 2 },
-};
-
 static struct resource dw_dmac0_resource[] = {
 	PBMEM(0xff200000),
 	IRQ(2),
 };
-DEFINE_DEV_DATA(dw_dmac, 0);
+DEFINE_DEV(dw_dmac, 0);
 DEV_CLK(hclk, dw_dmac0, hsb, 10);
 
 /* --------------------------------------------------------------------
@@ -1328,21 +1321,6 @@ static struct clk atmel_mci0_pclk = {
 	.index		= 9,
 };
 
-static bool at32_mci_dma_filter(struct dma_chan *chan, void *pdata)
-{
-	struct mci_dma_data *sl = pdata;
-
-	if (!sl)
-		return false;
-
-	if (find_slave_dev(sl) == chan->device->dev) {
-		chan->private = slave_data_ptr(sl);
-		return true;
-	}
-
-	return false;
-}
-
 struct platform_device *__init
 at32_add_device_mci(unsigned int id, struct mci_platform_data *data)
 {
@@ -1377,7 +1355,6 @@ at32_add_device_mci(unsigned int id, struct mci_platform_data *data)
 	slave->sdata.dst_master = 0;
 
 	data->dma_slave = slave;
-	data->dma_filter = at32_mci_dma_filter;
 
 	if (platform_device_add_data(pdev, data,
 				sizeof(struct mci_platform_data)))

@@ -96,7 +96,7 @@ struct bcm_op {
 	canid_t can_id;
 	u32 flags;
 	unsigned long frames_abs, frames_filtered;
-	struct timeval ival1, ival2;
+	struct bcm_timeval ival1, ival2;
 	struct hrtimer timer, thrtimer;
 	struct tasklet_struct tsklet, thrtsklet;
 	ktime_t rx_stamp, kt_ival1, kt_ival2, kt_lastmsg;
@@ -129,6 +129,11 @@ struct bcm_sock {
 static inline struct bcm_sock *bcm_sk(const struct sock *sk)
 {
 	return (struct bcm_sock *)sk;
+}
+
+static inline ktime_t bcm_timeval_to_ktime(struct bcm_timeval tv)
+{
+	return ktime_set(tv.tv_sec, tv.tv_usec * NSEC_PER_USEC);
 }
 
 #define CFSIZ sizeof(struct can_frame)
@@ -962,8 +967,8 @@ static int bcm_tx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 		op->count = msg_head->count;
 		op->ival1 = msg_head->ival1;
 		op->ival2 = msg_head->ival2;
-		op->kt_ival1 = timeval_to_ktime(msg_head->ival1);
-		op->kt_ival2 = timeval_to_ktime(msg_head->ival2);
+		op->kt_ival1 = bcm_timeval_to_ktime(msg_head->ival1);
+		op->kt_ival2 = bcm_timeval_to_ktime(msg_head->ival2);
 
 		/* disable an active timer due to zero values? */
 		if (!op->kt_ival1.tv64 && !op->kt_ival2.tv64)
@@ -1143,8 +1148,8 @@ static int bcm_rx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 			/* set timer value */
 			op->ival1 = msg_head->ival1;
 			op->ival2 = msg_head->ival2;
-			op->kt_ival1 = timeval_to_ktime(msg_head->ival1);
-			op->kt_ival2 = timeval_to_ktime(msg_head->ival2);
+			op->kt_ival1 = bcm_timeval_to_ktime(msg_head->ival1);
+			op->kt_ival2 = bcm_timeval_to_ktime(msg_head->ival2);
 
 			/* disable an active timer due to zero value? */
 			if (!op->kt_ival1.tv64)
@@ -1174,7 +1179,7 @@ static int bcm_rx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 				err = can_rx_register(dev, op->can_id,
 						      REGMASK(op->can_id),
 						      bcm_rx_handler, op,
-						      "bcm");
+						      "bcm", sk);
 
 				op->rx_reg_dev = dev;
 				dev_put(dev);
@@ -1183,7 +1188,7 @@ static int bcm_rx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
 		} else
 			err = can_rx_register(NULL, op->can_id,
 					      REGMASK(op->can_id),
-					      bcm_rx_handler, op, "bcm");
+					      bcm_rx_handler, op, "bcm", sk);
 		if (err) {
 			/* this bcm rx op is broken -> remove it */
 			list_del(&op->list);
@@ -1504,24 +1509,31 @@ static int bcm_connect(struct socket *sock, struct sockaddr *uaddr, int len,
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct sock *sk = sock->sk;
 	struct bcm_sock *bo = bcm_sk(sk);
+	int ret = 0;
 
 	if (len < sizeof(*addr))
 		return -EINVAL;
 
-	if (bo->bound)
-		return -EISCONN;
+	lock_sock(sk);
+
+	if (bo->bound) {
+		ret = -EISCONN;
+		goto fail;
+	}
 
 	/* bind a device to this socket */
 	if (addr->can_ifindex) {
 		struct net_device *dev;
 
 		dev = dev_get_by_index(&init_net, addr->can_ifindex);
-		if (!dev)
-			return -ENODEV;
-
+		if (!dev) {
+			ret = -ENODEV;
+			goto fail;
+		}
 		if (dev->type != ARPHRD_CAN) {
 			dev_put(dev);
-			return -ENODEV;
+			ret = -ENODEV;
+			goto fail;
 		}
 
 		bo->ifindex = dev->ifindex;
@@ -1532,17 +1544,24 @@ static int bcm_connect(struct socket *sock, struct sockaddr *uaddr, int len,
 		bo->ifindex = 0;
 	}
 
-	bo->bound = 1;
-
 	if (proc_dir) {
 		/* unique socket address as filename */
 		sprintf(bo->procname, "%lu", sock_i_ino(sk));
 		bo->bcm_proc_read = proc_create_data(bo->procname, 0644,
 						     proc_dir,
 						     &bcm_proc_fops, sk);
+		if (!bo->bcm_proc_read) {
+			ret = -ENOMEM;
+			goto fail;
+		}
 	}
 
-	return 0;
+	bo->bound = 1;
+
+fail:
+	release_sock(sk);
+
+	return ret;
 }
 
 static int bcm_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,

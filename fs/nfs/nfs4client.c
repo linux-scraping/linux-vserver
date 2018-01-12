@@ -676,7 +676,6 @@ found:
 		break;
 	}
 
-	/* No matching nfs_client found. */
 	spin_unlock(&nn->nfs_client_lock);
 	dprintk("NFS: <-- %s status = %d\n", __func__, status);
 	nfs_put_client(prev);
@@ -730,10 +729,7 @@ static bool nfs4_cb_match_client(const struct sockaddr *addr,
 		return false;
 
 	/* Match only the IP address, not the port number */
-	if (!nfs_sockaddr_match_ipaddr(addr, clap))
-		return false;
-
-	return true;
+	return rpc_cmp_addr(addr, clap);
 }
 
 /*
@@ -899,9 +895,9 @@ static void nfs4_session_set_rwsize(struct nfs_server *server)
 	server_resp_sz = sess->fc_attrs.max_resp_sz - nfs41_maxread_overhead;
 	server_rqst_sz = sess->fc_attrs.max_rqst_sz - nfs41_maxwrite_overhead;
 
-	if (server->rsize > server_resp_sz)
+	if (!server->rsize || server->rsize > server_resp_sz)
 		server->rsize = server_resp_sz;
-	if (server->wsize > server_rqst_sz)
+	if (!server->wsize || server->wsize > server_rqst_sz)
 		server->wsize = server_rqst_sz;
 #endif /* CONFIG_NFS_V4_1 */
 }

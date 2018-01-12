@@ -674,9 +674,21 @@ struct usb_otg_descriptor {
 	__u8  bmAttributes;	/* support for HNP, SRP, etc */
 } __attribute__ ((packed));
 
+/* USB_DT_OTG (from OTG 2.0 supplement) */
+struct usb_otg20_descriptor {
+	__u8  bLength;
+	__u8  bDescriptorType;
+
+	__u8  bmAttributes;	/* support for HNP, SRP and ADP, etc */
+	__le16 bcdOTG;		/* OTG and EH supplement release number
+				 * in binary-coded decimal(i.e. 2.0 is 0200H)
+				 */
+} __attribute__ ((packed));
+
 /* from usb_otg_descriptor.bmAttributes */
 #define USB_OTG_SRP		(1 << 0)
 #define USB_OTG_HNP		(1 << 1)	/* swap host/device roles */
+#define USB_OTG_ADP		(1 << 2)	/* support ADP */
 
 /*-------------------------------------------------------------------------*/
 
@@ -800,6 +812,8 @@ struct usb_wireless_cap_descriptor {	/* Ultra Wide Band */
 	__u8  bReserved;
 } __attribute__((packed));
 
+#define USB_DT_USB_WIRELESS_CAP_SIZE	11
+
 /* USB 2.0 Extension descriptor */
 #define	USB_CAP_TYPE_EXT		2
 
@@ -855,6 +869,51 @@ struct usb_ss_container_id_descriptor {
 } __attribute__((packed));
 
 #define USB_DT_USB_SS_CONTN_ID_SIZE	20
+
+/*
+ * SuperSpeed Plus USB Capability descriptor: Defines the set of
+ * SuperSpeed Plus USB specific device level capabilities
+ */
+#define	USB_SSP_CAP_TYPE	0xa
+struct usb_ssp_cap_descriptor {
+	__u8  bLength;
+	__u8  bDescriptorType;
+	__u8  bDevCapabilityType;
+	__u8  bReserved;
+	__le32 bmAttributes;
+#define USB_SSP_SUBLINK_SPEED_ATTRIBS	(0x1f << 0) /* sublink speed entries */
+#define USB_SSP_SUBLINK_SPEED_IDS	(0xf << 5)  /* speed ID entries */
+	__u16  wFunctionalitySupport;
+#define USB_SSP_MIN_SUBLINK_SPEED_ATTRIBUTE_ID	(0xf)
+#define USB_SSP_MIN_RX_LANE_COUNT		(0xf << 8)
+#define USB_SSP_MIN_TX_LANE_COUNT		(0xf << 12)
+	__le16 wReserved;
+	__le32 bmSublinkSpeedAttr[1]; /* list of sublink speed attrib entries */
+#define USB_SSP_SUBLINK_SPEED_SSID	(0xf)		/* sublink speed ID */
+#define USB_SSP_SUBLINK_SPEED_LSE	(0x3 << 4)	/* Lanespeed exponent */
+#define USB_SSP_SUBLINK_SPEED_ST	(0x3 << 6)	/* Sublink type */
+#define USB_SSP_SUBLINK_SPEED_RSVD	(0x3f << 8)	/* Reserved */
+#define USB_SSP_SUBLINK_SPEED_LP	(0x3 << 14)	/* Link protocol */
+#define USB_SSP_SUBLINK_SPEED_LSM	(0xff << 16)	/* Lanespeed mantissa */
+} __attribute__((packed));
+
+/*
+ * Precision time measurement capability descriptor: advertised by devices and
+ * hubs that support PTM
+ */
+#define	USB_PTM_CAP_TYPE	0xb
+struct usb_ptm_cap_descriptor {
+	__u8  bLength;
+	__u8  bDescriptorType;
+	__u8  bDevCapabilityType;
+} __attribute__((packed));
+
+/*
+ * The size of the descriptor for the Sublink Speed Attribute Count
+ * (SSAC) specified in bmAttributes[4:0].
+ */
+#define USB_DT_USB_SSP_CAP_SIZE(ssac)	(16 + ssac * 4)
+
 /*-------------------------------------------------------------------------*/
 
 /* USB_DT_WIRELESS_ENDPOINT_COMP:  companion descriptor associated with
@@ -914,6 +973,7 @@ enum usb_device_speed {
 	USB_SPEED_HIGH,				/* usb 2.0 */
 	USB_SPEED_WIRELESS,			/* wireless (usb 2.5) */
 	USB_SPEED_SUPER,			/* usb 3.0 */
+	USB_SPEED_SUPER_PLUS,			/* usb 3.1 */
 };
 
 
@@ -949,6 +1009,7 @@ enum usb3_link_state {
 	USB3_LPM_U3
 };
 
+#define USB_DT_USB_PTM_ID_SIZE		3
 /*
  * A U1 timeout of 0x0 means the parent hub will reject any transitions to U1.
  * 0xff means the parent hub will accept transitions to U1, but will not

@@ -20,11 +20,16 @@
 #include <linux/cn_proc.h>
 
 #if 0
-#define kdebug(FMT, ...) \
-	printk("[%-5.5s%5u] "FMT"\n", current->comm, current->pid ,##__VA_ARGS__)
+#define kdebug(FMT, ...)						\
+	printk("[%-5.5s%5u] " FMT "\n",					\
+	       current->comm, current->pid, ##__VA_ARGS__)
 #else
-#define kdebug(FMT, ...) \
-	no_printk("[%-5.5s%5u] "FMT"\n", current->comm, current->pid ,##__VA_ARGS__)
+#define kdebug(FMT, ...)						\
+do {									\
+	if (0)								\
+		no_printk("[%-5.5s%5u] " FMT "\n",			\
+			  current->comm, current->pid, ##__VA_ARGS__);	\
+} while (0)
 #endif
 
 static struct kmem_cache *cred_jar;
@@ -661,6 +666,8 @@ EXPORT_SYMBOL(set_security_override_from_ctx);
  */
 int set_create_files_as(struct cred *new, struct inode *inode)
 {
+	if (!uid_valid(inode->i_uid) || !gid_valid(inode->i_gid))
+		return -EINVAL;
 	new->fsuid = inode->i_uid;
 	new->fsgid = inode->i_gid;
 	return security_kernel_create_files_as(new, inode);

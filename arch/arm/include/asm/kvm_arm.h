@@ -161,8 +161,7 @@
 #else
 #define VTTBR_X		(5 - KVM_T0SZ)
 #endif
-#define VTTBR_BADDR_SHIFT (VTTBR_X - 1)
-#define VTTBR_BADDR_MASK  (((1LLU << (40 - VTTBR_X)) - 1) << VTTBR_BADDR_SHIFT)
+#define VTTBR_BADDR_MASK  (((1LLU << (40 - VTTBR_X)) - 1) << VTTBR_X)
 #define VTTBR_VMID_SHIFT  (48LLU)
 #define VTTBR_VMID_MASK	  (0xffLLU << VTTBR_VMID_SHIFT)
 
@@ -209,6 +208,7 @@
 #define HSR_EC_IABT_HYP	(0x21)
 #define HSR_EC_DABT	(0x24)
 #define HSR_EC_DABT_HYP	(0x25)
+#define HSR_EC_MAX	(0x3f)
 
 #define HSR_WFI_IS_WFE		(1U << 0)
 
@@ -217,5 +217,25 @@
 #define HSR_DABT_S1PTW		(1U << 7)
 #define HSR_DABT_CM		(1U << 8)
 #define HSR_DABT_EA		(1U << 9)
+
+#define kvm_arm_exception_type	\
+	{0, "RESET" }, 		\
+	{1, "UNDEFINED" },	\
+	{2, "SOFTWARE" },	\
+	{3, "PREF_ABORT" },	\
+	{4, "DATA_ABORT" },	\
+	{5, "IRQ" },		\
+	{6, "FIQ" },		\
+	{7, "HVC" }
+
+#define HSRECN(x) { HSR_EC_##x, #x }
+
+#define kvm_arm_exception_class \
+	HSRECN(UNKNOWN), HSRECN(WFI), HSRECN(CP15_32), HSRECN(CP15_64), \
+	HSRECN(CP14_MR), HSRECN(CP14_LS), HSRECN(CP_0_13), HSRECN(CP10_ID), \
+	HSRECN(JAZELLE), HSRECN(BXJ), HSRECN(CP14_64), HSRECN(SVC_HYP), \
+	HSRECN(HVC), HSRECN(SMC), HSRECN(IABT), HSRECN(IABT_HYP), \
+	HSRECN(DABT), HSRECN(DABT_HYP)
+
 
 #endif /* __ARM_KVM_ARM_H__ */

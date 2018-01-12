@@ -86,7 +86,7 @@ static const struct reg_default twl6040_defaults[] = {
 	{ 0x2E, 0x00 }, /* REG_STATUS	(ro) */
 };
 
-static struct reg_default twl6040_patch[] = {
+static struct reg_sequence twl6040_patch[] = {
 	/*
 	 * Select I2C bus access to dual access registers
 	 * Interrupt register is cleared on read
@@ -97,12 +97,16 @@ static struct reg_default twl6040_patch[] = {
 };
 
 
-static bool twl6040_has_vibra(struct device_node *node)
+static bool twl6040_has_vibra(struct device_node *parent)
 {
-#ifdef CONFIG_OF
-	if (of_find_node_by_name(node, "vibra"))
+	struct device_node *node;
+
+	node = of_get_child_by_name(parent, "vibra");
+	if (node) {
+		of_node_put(node);
 		return true;
-#endif
+	}
+
 	return false;
 }
 
@@ -803,7 +807,6 @@ MODULE_DEVICE_TABLE(i2c, twl6040_i2c_id);
 static struct i2c_driver twl6040_driver = {
 	.driver = {
 		.name = "twl6040",
-		.owner = THIS_MODULE,
 	},
 	.probe		= twl6040_probe,
 	.remove		= twl6040_remove,

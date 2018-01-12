@@ -266,8 +266,6 @@ static int l2tp_ip6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	int addr_type;
 	int err;
 
-	if (!sock_flag(sk, SOCK_ZAPPED))
-		return -EINVAL;
 	if (addr->l2tp_family != AF_INET6)
 		return -EINVAL;
 	if (addr_len < sizeof(*addr))
@@ -293,6 +291,9 @@ static int l2tp_ip6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	lock_sock(sk);
 
 	err = -EINVAL;
+	if (!sock_flag(sk, SOCK_ZAPPED))
+		goto out_unlock;
+
 	if (sk->sk_state != TCP_CLOSE)
 		goto out_unlock;
 
@@ -713,7 +714,7 @@ static struct proto l2tp_ip6_prot = {
 	.bind		   = l2tp_ip6_bind,
 	.connect	   = l2tp_ip6_connect,
 	.disconnect	   = l2tp_ip6_disconnect,
-	.ioctl		   = udp_ioctl,
+	.ioctl		   = l2tp_ioctl,
 	.destroy	   = l2tp_ip6_destroy_sock,
 	.setsockopt	   = ipv6_setsockopt,
 	.getsockopt	   = ipv6_getsockopt,
@@ -807,3 +808,4 @@ MODULE_VERSION("1.0");
  * enums
  */
 MODULE_ALIAS_NET_PF_PROTO_TYPE(PF_INET6, 2, IPPROTO_L2TP);
+MODULE_ALIAS_NET_PF_PROTO(PF_INET6, IPPROTO_L2TP);

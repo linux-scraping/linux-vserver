@@ -320,6 +320,7 @@ static int bcm_kona_wdt_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, wdt);
 	watchdog_set_drvdata(&bcm_kona_wdt_wdd, wdt);
+	bcm_kona_wdt_wdd.parent = &pdev->dev;
 
 	ret = bcm_kona_wdt_set_timeout_reg(&bcm_kona_wdt_wdd, 0);
 	if (ret) {

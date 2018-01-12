@@ -147,7 +147,7 @@ void ip6_expire_frag_queue(struct net *net, struct frag_queue *fq,
 
 	IP6_INC_STATS_BH(net, __in6_dev_get(dev), IPSTATS_MIB_REASMFAILS);
 
-	if (fq->q.flags & INET_FRAG_EVICTED)
+	if (inet_frag_evicting(&fq->q))
 		goto out_rcu_unlock;
 
 	IP6_INC_STATS_BH(net, __in6_dev_get(dev), IPSTATS_MIB_REASMTIMEOUT);
@@ -334,7 +334,7 @@ found:
 	fq->q.stamp = skb->tstamp;
 	fq->q.meat += skb->len;
 	fq->ecn |= ecn;
-	add_frag_mem_limit(&fq->q, skb->truesize);
+	add_frag_mem_limit(fq->q.net, skb->truesize);
 
 	/* The first fragment.
 	 * nhoffset is obtained from the first fragment, of course.
@@ -447,7 +447,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 		head->len -= clone->len;
 		clone->csum = 0;
 		clone->ip_summed = head->ip_summed;
-		add_frag_mem_limit(&fq->q, clone->truesize);
+		add_frag_mem_limit(fq->q.net, clone->truesize);
 	}
 
 	/* We have to remove fragment header from datagram and to relocate
@@ -485,7 +485,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 		}
 		fp = next;
 	}
-	sub_frag_mem_limit(&fq->q, sum_truesize);
+	sub_frag_mem_limit(fq->q.net, sum_truesize);
 
 	head->next = NULL;
 	head->dev = dev;
@@ -496,10 +496,8 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *prev,
 	IP6CB(head)->flags |= IP6SKB_FRAGMENTED;
 
 	/* Yes, and fold redundant checksum back. 8) */
-	if (head->ip_summed == CHECKSUM_COMPLETE)
-		head->csum = csum_partial(skb_network_header(head),
-					  skb_network_header_len(head),
-					  head->csum);
+	skb_postpush_rcsum(head, skb_network_header(head),
+			   skb_network_header_len(head));
 
 	rcu_read_lock();
 	IP6_INC_STATS_BH(net, __in6_dev_get(dev), IPSTATS_MIB_REASMOKS);

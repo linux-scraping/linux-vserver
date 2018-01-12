@@ -67,7 +67,6 @@ SYSCALL_DEFINE5(add_key, const char __user *, _type,
 	char type[32], *description;
 	void *payload;
 	long ret;
-	bool vm;
 
 	ret = -EINVAL;
 	if (plen > 1024 * 1024 - 1)
@@ -98,14 +97,12 @@ SYSCALL_DEFINE5(add_key, const char __user *, _type,
 	/* pull the payload in if one was supplied */
 	payload = NULL;
 
-	vm = false;
-	if (_payload) {
+	if (plen) {
 		ret = -ENOMEM;
 		payload = kmalloc(plen, GFP_KERNEL | __GFP_NOWARN);
 		if (!payload) {
 			if (plen <= PAGE_SIZE)
 				goto error2;
-			vm = true;
 			payload = vmalloc(plen);
 			if (!payload)
 				goto error2;
@@ -138,10 +135,7 @@ SYSCALL_DEFINE5(add_key, const char __user *, _type,
 
 	key_ref_put(keyring_ref);
  error3:
-	if (!vm)
-		kfree(payload);
-	else
-		vfree(payload);
+	kvfree(payload);
  error2:
 	kfree(description);
  error:
@@ -333,7 +327,7 @@ long keyctl_update_key(key_serial_t id,
 
 	/* pull the payload in if one was supplied */
 	payload = NULL;
-	if (_payload) {
+	if (plen) {
 		ret = -ENOMEM;
 		payload = kmalloc(plen, GFP_KERNEL);
 		if (!payload)
@@ -744,10 +738,9 @@ long keyctl_read_key(key_serial_t keyid, char __user *buffer, size_t buflen)
 
 	key = key_ref_to_ptr(key_ref);
 
-	if (test_bit(KEY_FLAG_NEGATIVE, &key->flags)) {
-		ret = -ENOKEY;
-		goto error2;
-	}
+	ret = key_read_state(key);
+	if (ret < 0)
+		goto error2; /* Negatively instantiated */
 
 	/* see if we can read it directly */
 	ret = key_permission(key_ref, KEY_NEED_READ);
@@ -879,7 +872,7 @@ long keyctl_chown_key(key_serial_t id, uid_t user, gid_t group)
 		atomic_dec(&key->user->nkeys);
 		atomic_inc(&newowner->nkeys);
 
-		if (test_bit(KEY_FLAG_INSTANTIATED, &key->flags)) {
+		if (key->state != KEY_IS_UNINSTANTIATED) {
 			atomic_dec(&key->user->nikeys);
 			atomic_inc(&newowner->nikeys);
 		}
@@ -1043,7 +1036,7 @@ long keyctl_instantiate_key_common(key_serial_t id,
 	if (!instkey)
 		goto error;
 
-	rka = instkey->payload.data;
+	rka = instkey->payload.data[0];
 	if (rka->target_key->serial != id)
 		goto error;
 
@@ -1210,7 +1203,7 @@ long keyctl_reject_key(key_serial_t id, unsigned timeout, unsigned error,
 	if (!instkey)
 		goto error;
 
-	rka = instkey->payload.data;
+	rka = instkey->payload.data[0];
 	if (rka->target_key->serial != id)
 		goto error;
 

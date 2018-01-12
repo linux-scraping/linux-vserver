@@ -70,6 +70,7 @@ struct inet_timewait_sock {
 #define tw_dport		__tw_common.skc_dport
 #define tw_num			__tw_common.skc_num
 #define tw_cookie		__tw_common.skc_cookie
+#define tw_dr			__tw_common.skc_tw_dr
 #define tw_xid			__tw_common.skc_xid
 #define tw_vx_info		__tw_common.skc_vx_info
 #define tw_nid			__tw_common.skc_nid
@@ -92,7 +93,6 @@ struct inet_timewait_sock {
 	kmemcheck_bitfield_end(flags);
 	struct timer_list	tw_timer;
 	struct inet_bind_bucket	*tw_tb;
-	struct inet_timewait_death_row *tw_dr;
 };
 #define tw_tclass tw_tos
 
@@ -104,10 +104,8 @@ static inline struct inet_timewait_sock *inet_twsk(const struct sock *sk)
 void inet_twsk_free(struct inet_timewait_sock *tw);
 void inet_twsk_put(struct inet_timewait_sock *tw);
 
-int inet_twsk_unhash(struct inet_timewait_sock *tw);
-
-int inet_twsk_bind_unhash(struct inet_timewait_sock *tw,
-			  struct inet_hashinfo *hashinfo);
+void inet_twsk_bind_unhash(struct inet_timewait_sock *tw,
+			   struct inet_hashinfo *hashinfo);
 
 struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 					   struct inet_timewait_death_row *dr,
@@ -129,7 +127,7 @@ static inline void inet_twsk_reschedule(struct inet_timewait_sock *tw, int timeo
 	__inet_twsk_schedule(tw, timeo, true);
 }
 
-void inet_twsk_deschedule(struct inet_timewait_sock *tw);
+void inet_twsk_deschedule_put(struct inet_timewait_sock *tw);
 
 void inet_twsk_purge(struct inet_hashinfo *hashinfo,
 		     struct inet_timewait_death_row *twdr, int family);

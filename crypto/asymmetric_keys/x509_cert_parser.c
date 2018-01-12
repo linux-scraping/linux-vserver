@@ -399,6 +399,8 @@ int x509_extract_key_data(void *context, size_t hdrlen,
 	ctx->cert->pub->pkey_algo = PKEY_ALGO_RSA;
 
 	/* Discard the BIT STRING metadata */
+	if (vlen < 1 || *(const u8 *)value != 0)
+		return -EBADMSG;
 	ctx->key = value + 1;
 	ctx->key_size = vlen - 1;
 	return 0;
@@ -454,9 +456,7 @@ int x509_process_extension(void *context, size_t hdrlen,
 
 		ctx->cert->raw_skid_size = vlen;
 		ctx->cert->raw_skid = v;
-		kid = asymmetric_key_generate_id(ctx->cert->raw_subject,
-						 ctx->cert->raw_subject_size,
-						 v, vlen);
+		kid = asymmetric_key_generate_id(v, vlen, "", 0);
 		if (IS_ERR(kid))
 			return PTR_ERR(kid);
 		ctx->cert->skid = kid;
@@ -533,7 +533,11 @@ int x509_decode_time(time64_t *_t,  size_t hdrlen,
 	if (*p != 'Z')
 		goto unsupported_time;
 
-	mon_len = month_lengths[mon];
+	if (year < 1970 ||
+	    mon < 1 || mon > 12)
+		goto invalid_time;
+
+	mon_len = month_lengths[mon - 1];
 	if (mon == 2) {
 		if (year % 4 == 0) {
 			mon_len = 29;
@@ -545,14 +549,12 @@ int x509_decode_time(time64_t *_t,  size_t hdrlen,
 		}
 	}
 
-	if (year < 1970 ||
-	    mon < 1 || mon > 12 ||
-	    day < 1 || day > mon_len ||
-	    hour < 0 || hour > 23 ||
-	    min < 0 || min > 59 ||
-	    sec < 0 || sec > 59)
+	if (day < 1 || day > mon_len ||
+	    hour > 23 ||
+	    min > 59 ||
+	    sec > 59)
 		goto invalid_time;
-	
+
 	*_t = mktime64(year, mon, day, hour, min, sec);
 	return 0;
 
@@ -598,9 +600,7 @@ int x509_akid_note_kid(void *context, size_t hdrlen,
 	if (ctx->cert->akid_skid)
 		return 0;
 
-	kid = asymmetric_key_generate_id(ctx->cert->raw_issuer,
-					 ctx->cert->raw_issuer_size,
-					 value, vlen);
+	kid = asymmetric_key_generate_id(value, vlen, "", 0);
 	if (IS_ERR(kid))
 		return PTR_ERR(kid);
 	pr_debug("authkeyid %*phN\n", kid->len, kid->data);

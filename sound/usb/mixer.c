@@ -203,6 +203,10 @@ static int snd_usb_copy_string_desc(struct mixer_build *state,
 				    int index, char *buf, int maxlen)
 {
 	int len = usb_string(state->chip->dev, index, buf, maxlen - 1);
+
+	if (len < 0)
+		return 0;
+
 	buf[len] = 0;
 	return len;
 }
@@ -721,15 +725,21 @@ static int check_input_term(struct mixer_build *state, int id,
 				term->name = d->iTerminal;
 			} else { /* UAC_VERSION_2 */
 				struct uac2_input_terminal_descriptor *d = p1;
+
+				/* call recursively to verify that the
+				 * referenced clock entity is valid */
+				err = check_input_term(state, d->bCSourceID, term);
+				if (err < 0)
+					return err;
+
+				/* save input term properties after recursion,
+				 * to ensure they are not overriden by the
+				 * recursion calls */
+				term->id = id;
 				term->type = le16_to_cpu(d->wTerminalType);
 				term->channels = d->bNrChannels;
 				term->chconfig = le32_to_cpu(d->bmChannelConfig);
 				term->name = d->iTerminal;
-
-				/* call recursively to get the clock selectors */
-				err = check_input_term(state, d->bCSourceID, term);
-				if (err < 0)
-					return err;
 			}
 			return 0;
 		case UAC_FEATURE_UNIT: {
@@ -2091,19 +2101,25 @@ static int parse_audio_selector_unit(struct mixer_build *state, int unitid,
 	kctl->private_value = (unsigned long)namelist;
 	kctl->private_free = usb_mixer_selector_elem_free;
 
-	nameid = uac_selector_unit_iSelector(desc);
+	/* check the static mapping table at first */
 	len = check_mapped_name(map, kctl->id.name, sizeof(kctl->id.name));
-	if (len)
-		;
-	else if (nameid)
-		snd_usb_copy_string_desc(state, nameid, kctl->id.name,
-					 sizeof(kctl->id.name));
-	else {
-		len = get_term_name(state, &state->oterm,
+	if (!len) {
+		/* no mapping ? */
+		/* if iSelector is given, use it */
+		nameid = uac_selector_unit_iSelector(desc);
+		if (nameid)
+			len = snd_usb_copy_string_desc(state, nameid,
+						       kctl->id.name,
+						       sizeof(kctl->id.name));
+		/* ... or pick up the terminal name at next */
+		if (!len)
+			len = get_term_name(state, &state->oterm,
 				    kctl->id.name, sizeof(kctl->id.name), 0);
+		/* ... or use the fixed string "USB" as the last resort */
 		if (!len)
 			strlcpy(kctl->id.name, "USB", sizeof(kctl->id.name));
 
+		/* and add the proper suffix */
 		if (desc->bDescriptorSubtype == UAC2_CLOCK_SELECTOR)
 			append_ctl_name(kctl, " Clock Source");
 		else if ((state->oterm.type & 0xff00) == 0x0100)

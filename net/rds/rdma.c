@@ -184,7 +184,7 @@ static int __rds_rdma_map(struct rds_sock *rs, struct rds_get_mr_args *args,
 	long i;
 	int ret;
 
-	if (rs->rs_bound_addr == 0) {
+	if (rs->rs_bound_addr == 0 || !rs->rs_transport) {
 		ret = -ENOTCONN; /* XXX not a great errno */
 		goto out;
 	}
@@ -435,9 +435,10 @@ void rds_rdma_unuse(struct rds_sock *rs, u32 r_key, int force)
 
 	/* If the MR was marked as invalidate, this will
 	 * trigger an async flush. */
-	if (zot_me)
+	if (zot_me) {
 		rds_destroy_mr(mr);
-	rds_mr_put(mr);
+		rds_mr_put(mr);
+	}
 }
 
 void rds_rdma_free_op(struct rm_rdma_op *ro)
@@ -451,7 +452,7 @@ void rds_rdma_free_op(struct rm_rdma_op *ro)
 		 * is the case for a RDMA_READ which copies from remote
 		 * to local memory */
 		if (!ro->op_write) {
-			BUG_ON(irqs_disabled());
+			WARN_ON(!page->mapping && irqs_disabled());
 			set_page_dirty(page);
 		}
 		put_page(page);
@@ -668,6 +669,8 @@ int rds_cmsg_rdma_args(struct rds_sock *rs, struct rds_message *rm,
 		ret = rds_pin_pages(iov->addr, nr, pages, !op->op_write);
 		if (ret < 0)
 			goto out;
+		else
+			ret = 0;
 
 		rdsdebug("RDS: nr_bytes %u nr %u iov->bytes %llu iov->addr %llx\n",
 			 nr_bytes, nr, iov->bytes, iov->addr);

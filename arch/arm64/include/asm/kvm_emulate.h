@@ -100,13 +100,21 @@ static inline void vcpu_set_thumb(struct kvm_vcpu *vcpu)
 }
 
 /*
- * vcpu_reg should always be passed a register number coming from a
- * read of ESR_EL2. Otherwise, it may give the wrong result on AArch32
- * with banked registers.
+ * vcpu_get_reg and vcpu_set_reg should always be passed a register number
+ * coming from a read of ESR_EL2. Otherwise, it may give the wrong result on
+ * AArch32 with banked registers.
  */
-static inline unsigned long *vcpu_reg(const struct kvm_vcpu *vcpu, u8 reg_num)
+static inline unsigned long vcpu_get_reg(const struct kvm_vcpu *vcpu,
+					 u8 reg_num)
 {
-	return (unsigned long *)&vcpu_gp_regs(vcpu)->regs.regs[reg_num];
+	return (reg_num == 31) ? 0 : vcpu_gp_regs(vcpu)->regs.regs[reg_num];
+}
+
+static inline void vcpu_set_reg(struct kvm_vcpu *vcpu, u8 reg_num,
+				unsigned long val)
+{
+	if (reg_num != 31)
+		vcpu_gp_regs(vcpu)->regs.regs[reg_num] = val;
 }
 
 /* Get vcpu SPSR for current mode */
@@ -153,6 +161,11 @@ static inline bool kvm_vcpu_dabt_isvalid(const struct kvm_vcpu *vcpu)
 	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_ISV);
 }
 
+static inline bool kvm_vcpu_dabt_iswrite(const struct kvm_vcpu *vcpu)
+{
+	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_WNR);
+}
+
 static inline bool kvm_vcpu_dabt_issext(const struct kvm_vcpu *vcpu)
 {
 	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_SSE);
@@ -171,17 +184,6 @@ static inline bool kvm_vcpu_dabt_isextabt(const struct kvm_vcpu *vcpu)
 static inline bool kvm_vcpu_dabt_iss1tw(const struct kvm_vcpu *vcpu)
 {
 	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_S1PTW);
-}
-
-static inline bool kvm_vcpu_dabt_iswrite(const struct kvm_vcpu *vcpu)
-{
-	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_WNR) ||
-		kvm_vcpu_dabt_iss1tw(vcpu); /* AF/DBM update */
-}
-
-static inline bool kvm_vcpu_dabt_is_cm(const struct kvm_vcpu *vcpu)
-{
-	return !!(kvm_vcpu_get_hsr(vcpu) & ESR_ELx_CM);
 }
 
 static inline int kvm_vcpu_dabt_get_as(const struct kvm_vcpu *vcpu)

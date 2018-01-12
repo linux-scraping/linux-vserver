@@ -33,7 +33,7 @@ static unsigned long tainted_mask;
 static int pause_on_oops;
 static int pause_on_oops_flag;
 static DEFINE_SPINLOCK(pause_on_oops_lock);
-static bool crash_kexec_post_notifiers;
+bool crash_kexec_post_notifiers;
 int panic_on_warn __read_mostly;
 
 int panic_timeout = CONFIG_PANIC_TIMEOUT;
@@ -143,7 +143,8 @@ void panic(const char *fmt, ...)
 	 * Note: since some panic_notifiers can make crashed kernel
 	 * more unstable, it can increase risks of the kdump failure too.
 	 */
-	crash_kexec(NULL);
+	if (crash_kexec_post_notifiers)
+		crash_kexec(NULL);
 
 	bust_spinlocks(0);
 

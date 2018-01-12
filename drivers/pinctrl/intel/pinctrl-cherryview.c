@@ -1158,16 +1158,6 @@ static struct pinctrl_desc chv_pinctrl_desc = {
 	.owner = THIS_MODULE,
 };
 
-static int chv_gpio_request(struct gpio_chip *chip, unsigned offset)
-{
-	return pinctrl_request_gpio(chip->base + offset);
-}
-
-static void chv_gpio_free(struct gpio_chip *chip, unsigned offset)
-{
-	pinctrl_free_gpio(chip->base + offset);
-}
-
 static unsigned chv_gpio_offset_to_pin(struct chv_pinctrl *pctrl,
 				       unsigned offset)
 {
@@ -1247,8 +1237,8 @@ static int chv_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 
 static const struct gpio_chip chv_gpio_chip = {
 	.owner = THIS_MODULE,
-	.request = chv_gpio_request,
-	.free = chv_gpio_free,
+	.request = gpiochip_generic_request,
+	.free = gpiochip_generic_free,
 	.get_direction = chv_gpio_get_direction,
 	.direction_input = chv_gpio_direction_input,
 	.direction_output = chv_gpio_direction_output,
@@ -1340,7 +1330,7 @@ static unsigned chv_gpio_irq_startup(struct irq_data *d)
 			handler = handle_edge_irq;
 
 		if (!pctrl->intr_lines[intsel]) {
-			__irq_set_handler_locked(d->irq, handler);
+			irq_set_handler_locked(d, handler);
 			pctrl->intr_lines[intsel] = offset;
 		}
 		raw_spin_unlock_irqrestore(&chv_lock, flags);
@@ -1404,9 +1394,9 @@ static int chv_gpio_irq_type(struct irq_data *d, unsigned type)
 	pctrl->intr_lines[value] = offset;
 
 	if (type & IRQ_TYPE_EDGE_BOTH)
-		__irq_set_handler_locked(d->irq, handle_edge_irq);
+		irq_set_handler_locked(d, handle_edge_irq);
 	else if (type & IRQ_TYPE_LEVEL_MASK)
-		__irq_set_handler_locked(d->irq, handle_level_irq);
+		irq_set_handler_locked(d, handle_level_irq);
 
 	raw_spin_unlock_irqrestore(&chv_lock, flags);
 
@@ -1423,11 +1413,11 @@ static struct irq_chip chv_gpio_irqchip = {
 	.flags = IRQCHIP_SKIP_SET_WAKE,
 };
 
-static void chv_gpio_irq_handler(unsigned irq, struct irq_desc *desc)
+static void chv_gpio_irq_handler(struct irq_desc *desc)
 {
 	struct gpio_chip *gc = irq_desc_get_handler_data(desc);
 	struct chv_pinctrl *pctrl = gpiochip_to_pinctrl(gc);
-	struct irq_chip *chip = irq_get_chip(irq);
+	struct irq_chip *chip = irq_desc_get_chip(desc);
 	unsigned long pending;
 	u32 intr_line;
 
@@ -1476,12 +1466,11 @@ static int chv_gpio_probe(struct chv_pinctrl *pctrl, int irq)
 		offset += range->npins;
 	}
 
-	/* Mask and clear all interrupts */
-	chv_writel(0, pctrl->regs + CHV_INTMASK);
+	/* Clear all interrupts */
 	chv_writel(0xffff, pctrl->regs + CHV_INTSTAT);
 
 	ret = gpiochip_irqchip_add(chip, &chv_gpio_irqchip, 0,
-				   handle_simple_irq, IRQ_TYPE_NONE);
+				   handle_bad_irq, IRQ_TYPE_NONE);
 	if (ret) {
 		dev_err(pctrl->dev, "failed to add IRQ chip\n");
 		goto fail;
@@ -1547,9 +1536,9 @@ static int chv_pinctrl_probe(struct platform_device *pdev)
 	pctrl->pctldesc.npins = pctrl->community->npins;
 
 	pctrl->pctldev = pinctrl_register(&pctrl->pctldesc, &pdev->dev, pctrl);
-	if (!pctrl->pctldev) {
+	if (IS_ERR(pctrl->pctldev)) {
 		dev_err(&pdev->dev, "failed to register pinctrl driver\n");
-		return -ENODEV;
+		return PTR_ERR(pctrl->pctldev);
 	}
 
 	ret = chv_gpio_probe(pctrl, irq);
@@ -1574,11 +1563,14 @@ static int chv_pinctrl_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM_SLEEP
-static int chv_pinctrl_suspend(struct device *dev)
+static int chv_pinctrl_suspend_noirq(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct chv_pinctrl *pctrl = platform_get_drvdata(pdev);
+	unsigned long flags;
 	int i;
+
+	raw_spin_lock_irqsave(&chv_lock, flags);
 
 	pctrl->saved_intmask = readl(pctrl->regs + CHV_INTMASK);
 
@@ -1600,14 +1592,19 @@ static int chv_pinctrl_suspend(struct device *dev)
 		ctx->padctrl1 = readl(reg);
 	}
 
+	raw_spin_unlock_irqrestore(&chv_lock, flags);
+
 	return 0;
 }
 
-static int chv_pinctrl_resume(struct device *dev)
+static int chv_pinctrl_resume_noirq(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct chv_pinctrl *pctrl = platform_get_drvdata(pdev);
+	unsigned long flags;
 	int i;
+
+	raw_spin_lock_irqsave(&chv_lock, flags);
 
 	/*
 	 * Mask all interrupts before restoring per-pin configuration
@@ -1653,12 +1650,15 @@ static int chv_pinctrl_resume(struct device *dev)
 	chv_writel(0xffff, pctrl->regs + CHV_INTSTAT);
 	chv_writel(pctrl->saved_intmask, pctrl->regs + CHV_INTMASK);
 
+	raw_spin_unlock_irqrestore(&chv_lock, flags);
+
 	return 0;
 }
 #endif
 
 static const struct dev_pm_ops chv_pinctrl_pm_ops = {
-	SET_LATE_SYSTEM_SLEEP_PM_OPS(chv_pinctrl_suspend, chv_pinctrl_resume)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(chv_pinctrl_suspend_noirq,
+				      chv_pinctrl_resume_noirq)
 };
 
 static const struct acpi_device_id chv_pinctrl_acpi_match[] = {

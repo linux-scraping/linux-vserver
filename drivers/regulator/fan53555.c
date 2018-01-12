@@ -182,6 +182,7 @@ static int fan53555_set_ramp(struct regulator_dev *rdev, int ramp)
 static struct regulator_ops fan53555_regulator_ops = {
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
+	.set_voltage_time_sel = regulator_set_voltage_time_sel,
 	.map_voltage = regulator_map_voltage_linear,
 	.list_voltage = regulator_list_voltage_linear,
 	.set_suspend_voltage = fan53555_set_suspend_voltage,
@@ -433,11 +434,15 @@ static const struct i2c_device_id fan53555_id[] = {
 		.name = "fan53555",
 		.driver_data = FAN53555_VENDOR_FAIRCHILD
 	}, {
-		.name = "syr82x",
+		.name = "syr827",
+		.driver_data = FAN53555_VENDOR_SILERGY
+	}, {
+		.name = "syr828",
 		.driver_data = FAN53555_VENDOR_SILERGY
 	},
 	{ },
 };
+MODULE_DEVICE_TABLE(i2c, fan53555_id);
 
 static struct i2c_driver fan53555_regulator_driver = {
 	.driver = {

@@ -58,7 +58,7 @@
 	 * the whole bus hierarchy.
 	 */
 	ocp {
-		compatible = "ti,omap3-l3-smx", "simple-bus";
+		compatible = "simple-bus";
 		reg = <0x44000000 0x10000>;
 		interrupts = <9 10>;
 		#address-cells = <1>;
@@ -218,6 +218,7 @@
 			reg = <0x480c8000 0x2000>;
 			interrupts = <77>;
 			ti,hwmods = "mailbox";
+			#mbox-cells = <1>;
 			ti,mbox-num-users = <4>;
 			ti,mbox-num-fifos = <12>;
 			mbox_dsp: mbox_dsp {
@@ -279,8 +280,11 @@
 			ti,spi-num-cs = <4>;
 			ti,hwmods = "mcspi1";
 			dmas = <&edma 16 &edma 17
-				&edma 18 &edma 19>;
-			dma-names = "tx0", "rx0", "tx1", "rx1";
+				&edma 18 &edma 19
+				&edma 20 &edma 21
+				&edma 22 &edma 23>;
+			dma-names = "tx0", "rx0", "tx1", "rx1",
+				    "tx2", "rx2", "tx3", "rx3";
 		};
 
 		mmc1: mmc@48060000 {
@@ -343,7 +347,7 @@
 		};
 
 		uart1: uart@48020000 {
-			compatible = "ti,omap3-uart";
+			compatible = "ti,am3352-uart", "ti,omap3-uart";
 			ti,hwmods = "uart1";
 			reg = <0x48020000 0x2000>;
 			clock-frequency = <48000000>;
@@ -353,7 +357,7 @@
 		};
 
 		uart2: uart@48022000 {
-			compatible = "ti,omap3-uart";
+			compatible = "ti,am3352-uart", "ti,omap3-uart";
 			ti,hwmods = "uart2";
 			reg = <0x48022000 0x2000>;
 			clock-frequency = <48000000>;
@@ -363,7 +367,7 @@
 		};
 
 		uart3: uart@48024000 {
-			compatible = "ti,omap3-uart";
+			compatible = "ti,am3352-uart", "ti,omap3-uart";
 			ti,hwmods = "uart3";
 			reg = <0x48024000 0x2000>;
 			clock-frequency = <48000000>;

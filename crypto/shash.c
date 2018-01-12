@@ -24,11 +24,12 @@
 
 static const struct crypto_type crypto_shash_type;
 
-static int shash_no_setkey(struct crypto_shash *tfm, const u8 *key,
-			   unsigned int keylen)
+int shash_no_setkey(struct crypto_shash *tfm, const u8 *key,
+		    unsigned int keylen)
 {
 	return -ENOSYS;
 }
+EXPORT_SYMBOL_GPL(shash_no_setkey);
 
 static int shash_setkey_unaligned(struct crypto_shash *tfm, const u8 *key,
 				  unsigned int keylen)
@@ -523,11 +524,6 @@ static int crypto_shash_init_tfm(struct crypto_tfm *tfm)
 	return 0;
 }
 
-static unsigned int crypto_shash_extsize(struct crypto_alg *alg)
-{
-	return alg->cra_ctxsize;
-}
-
 #ifdef CONFIG_NET
 static int crypto_shash_report(struct sk_buff *skb, struct crypto_alg *alg)
 {
@@ -567,7 +563,7 @@ static void crypto_shash_show(struct seq_file *m, struct crypto_alg *alg)
 
 static const struct crypto_type crypto_shash_type = {
 	.ctxsize = crypto_shash_ctxsize,
-	.extsize = crypto_shash_extsize,
+	.extsize = crypto_alg_extsize,
 	.init = crypto_init_shash_ops,
 	.init_tfm = crypto_shash_init_tfm,
 #ifdef CONFIG_PROC_FS

@@ -83,7 +83,7 @@ static int tcp_out_of_resources(struct sock *sk, bool do_reset)
 }
 
 /* Calculate maximal number or retries on an orphaned socket. */
-static int tcp_orphan_retries(struct sock *sk, int alive)
+static int tcp_orphan_retries(struct sock *sk, bool alive)
 {
 	int retries = sysctl_tcp_orphan_retries; /* May be zero. */
 
@@ -168,7 +168,7 @@ static int tcp_write_timeout(struct sock *sk)
 			dst_negative_advice(sk);
 			if (tp->syn_fastopen || tp->syn_data)
 				tcp_fastopen_cache_set(sk, 0, NULL, true, 0);
-			if (tp->syn_data)
+			if (tp->syn_data && icsk->icsk_retransmits == 1)
 				NET_INC_STATS_BH(sock_net(sk),
 						 LINUX_MIB_TCPFASTOPENACTIVEFAIL);
 		}
@@ -196,7 +196,7 @@ static int tcp_write_timeout(struct sock *sk)
 
 		retry_until = sysctl_tcp_retries2;
 		if (sock_flag(sk, SOCK_DEAD)) {
-			const int alive = icsk->icsk_rto < TCP_RTO_MAX;
+			const bool alive = icsk->icsk_rto < TCP_RTO_MAX;
 
 			retry_until = tcp_orphan_retries(sk, alive);
 			do_reset = alive ||
@@ -223,7 +223,8 @@ void tcp_delack_timer_handler(struct sock *sk)
 
 	sk_mem_reclaim_partial(sk);
 
-	if (sk->sk_state == TCP_CLOSE || !(icsk->icsk_ack.pending & ICSK_ACK_TIMER))
+	if (((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)) ||
+	    !(icsk->icsk_ack.pending & ICSK_ACK_TIMER))
 		goto out;
 
 	if (time_after(icsk->icsk_ack.timeout, jiffies)) {
@@ -259,7 +260,7 @@ void tcp_delack_timer_handler(struct sock *sk)
 	}
 
 out:
-	if (sk_under_memory_pressure(sk))
+	if (tcp_under_memory_pressure(sk))
 		sk_mem_reclaim(sk);
 }
 
@@ -310,7 +311,7 @@ static void tcp_probe_timer(struct sock *sk)
 
 	max_probes = sysctl_tcp_retries2;
 	if (sock_flag(sk, SOCK_DEAD)) {
-		const int alive = inet_csk_rto_backoff(icsk, TCP_RTO_MAX) < TCP_RTO_MAX;
+		const bool alive = inet_csk_rto_backoff(icsk, TCP_RTO_MAX) < TCP_RTO_MAX;
 
 		max_probes = tcp_orphan_retries(sk, alive);
 		if (!alive && icsk->icsk_backoff >= max_probes)
@@ -504,7 +505,8 @@ void tcp_write_timer_handler(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	int event;
 
-	if (sk->sk_state == TCP_CLOSE || !icsk->icsk_pending)
+	if (((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)) ||
+	    !icsk->icsk_pending)
 		goto out;
 
 	if (time_after(icsk->icsk_timeout, jiffies)) {
@@ -604,7 +606,8 @@ static void tcp_keepalive_timer (unsigned long data)
 		goto death;
 	}
 
-	if (!sock_flag(sk, SOCK_KEEPOPEN) || sk->sk_state == TCP_CLOSE)
+	if (!sock_flag(sk, SOCK_KEEPOPEN) ||
+	    ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_SYN_SENT)))
 		goto out;
 
 	elapsed = keepalive_time_when(tp);
@@ -628,7 +631,7 @@ static void tcp_keepalive_timer (unsigned long data)
 			tcp_write_err(sk);
 			goto out;
 		}
-		if (tcp_write_wakeup(sk) <= 0) {
+		if (tcp_write_wakeup(sk, LINUX_MIB_TCPKEEPALIVE) <= 0) {
 			icsk->icsk_probes_out++;
 			elapsed = keepalive_intvl_when(tp);
 		} else {
@@ -661,4 +664,3 @@ void tcp_init_xmit_timers(struct sock *sk)
 	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_timer,
 				  &tcp_keepalive_timer);
 }
-EXPORT_SYMBOL(tcp_init_xmit_timers);

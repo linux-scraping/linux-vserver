@@ -144,10 +144,11 @@ static struct block_device_operations vr_fops = {
 	.ioctl =	vr_ioctl,
 };
 
-static void vroot_make_request(struct request_queue *q, struct bio *bio)
+static blk_qc_t vroot_make_request(struct request_queue *q, struct bio *bio)
 {
 	printk("vroot_make_request %p, %p\n", q, bio);
 	bio_io_error(bio);
+	return BLK_QC_T_NONE;
 }
 
 struct block_device *__vroot_get_real_bdev(struct block_device *bdev)

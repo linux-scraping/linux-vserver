@@ -69,7 +69,34 @@
 #define CHANCTX_PR_ARG	CHANDEF_PR_ARG,	MIN_CHANDEF_PR_ARG,				\
 			__entry->rx_chains_static, __entry->rx_chains_dynamic
 
+#define KEY_ENTRY	__field(u32, cipher)						\
+			__field(u8, hw_key_idx)						\
+			__field(u8, flags)						\
+			__field(s8, keyidx)
+#define KEY_ASSIGN(k)	__entry->cipher = (k)->cipher;					\
+			__entry->flags = (k)->flags;					\
+			__entry->keyidx = (k)->keyidx;					\
+			__entry->hw_key_idx = (k)->hw_key_idx;
+#define KEY_PR_FMT	" cipher:0x%x, flags=%#x, keyidx=%d, hw_key_idx=%d"
+#define KEY_PR_ARG	__entry->cipher, __entry->flags, __entry->keyidx, __entry->hw_key_idx
 
+#define AMPDU_ACTION_ENTRY	__field(enum ieee80211_ampdu_mlme_action,		\
+					ieee80211_ampdu_mlme_action)			\
+				STA_ENTRY						\
+				__field(u16, tid)					\
+				__field(u16, ssn)					\
+				__field(u8, buf_size)					\
+				__field(bool, amsdu)					\
+				__field(u16, timeout)
+#define AMPDU_ACTION_ASSIGN	STA_NAMED_ASSIGN(params->sta);				\
+				__entry->tid = params->tid;				\
+				__entry->ssn = params->ssn;				\
+				__entry->buf_size = params->buf_size;			\
+				__entry->amsdu = params->amsdu;				\
+				__entry->timeout = params->timeout;
+#define AMPDU_ACTION_PR_FMT	STA_PR_FMT " tid %d, ssn %d, buf_size %u, amsdu %d, timeout %d"
+#define AMPDU_ACTION_PR_ARG	STA_PR_ARG, __entry->tid, __entry->ssn,			\
+				__entry->buf_size, __entry->amsdu, __entry->timeout
 
 /*
  * Tracing for driver callbacks.
@@ -314,7 +341,6 @@ TRACE_EVENT(drv_config,
 		__field(u32, flags)
 		__field(int, power_level)
 		__field(int, dynamic_ps_timeout)
-		__field(int, max_sleep_period)
 		__field(u16, listen_interval)
 		__field(u8, long_frame_max_tx_count)
 		__field(u8, short_frame_max_tx_count)
@@ -328,7 +354,6 @@ TRACE_EVENT(drv_config,
 		__entry->flags = local->hw.conf.flags;
 		__entry->power_level = local->hw.conf.power_level;
 		__entry->dynamic_ps_timeout = local->hw.conf.dynamic_ps_timeout;
-		__entry->max_sleep_period = local->hw.conf.max_sleep_period;
 		__entry->listen_interval = local->hw.conf.listen_interval;
 		__entry->long_frame_max_tx_count =
 			local->hw.conf.long_frame_max_tx_count;
@@ -486,6 +511,36 @@ TRACE_EVENT(drv_configure_filter,
 	)
 );
 
+TRACE_EVENT(drv_config_iface_filter,
+	TP_PROTO(struct ieee80211_local *local,
+		 struct ieee80211_sub_if_data *sdata,
+		 unsigned int filter_flags,
+		 unsigned int changed_flags),
+
+	TP_ARGS(local, sdata, filter_flags, changed_flags),
+
+	TP_STRUCT__entry(
+		LOCAL_ENTRY
+		VIF_ENTRY
+		__field(unsigned int, filter_flags)
+		__field(unsigned int, changed_flags)
+	),
+
+	TP_fast_assign(
+		LOCAL_ASSIGN;
+		VIF_ASSIGN;
+		__entry->filter_flags = filter_flags;
+		__entry->changed_flags = changed_flags;
+	),
+
+	TP_printk(
+		LOCAL_PR_FMT VIF_PR_FMT
+		" filter_flags: %#x changed_flags: %#x",
+		LOCAL_PR_ARG, VIF_PR_ARG, __entry->filter_flags,
+		__entry->changed_flags
+	)
+);
+
 TRACE_EVENT(drv_set_tim,
 	TP_PROTO(struct ieee80211_local *local,
 		 struct ieee80211_sta *sta, bool set),
@@ -522,25 +577,19 @@ TRACE_EVENT(drv_set_key,
 		LOCAL_ENTRY
 		VIF_ENTRY
 		STA_ENTRY
-		__field(u32, cipher)
-		__field(u8, hw_key_idx)
-		__field(u8, flags)
-		__field(s8, keyidx)
+		KEY_ENTRY
 	),
 
 	TP_fast_assign(
 		LOCAL_ASSIGN;
 		VIF_ASSIGN;
 		STA_ASSIGN;
-		__entry->cipher = key->cipher;
-		__entry->flags = key->flags;
-		__entry->keyidx = key->keyidx;
-		__entry->hw_key_idx = key->hw_key_idx;
+		KEY_ASSIGN(key);
 	),
 
 	TP_printk(
-		LOCAL_PR_FMT  VIF_PR_FMT  STA_PR_FMT,
-		LOCAL_PR_ARG, VIF_PR_ARG, STA_PR_ARG
+		LOCAL_PR_FMT  VIF_PR_FMT  STA_PR_FMT KEY_PR_FMT,
+		LOCAL_PR_ARG, VIF_PR_ARG, STA_PR_ARG, KEY_PR_ARG
 	)
 );
 
@@ -656,28 +705,25 @@ TRACE_EVENT(drv_get_stats,
 	)
 );
 
-TRACE_EVENT(drv_get_tkip_seq,
+TRACE_EVENT(drv_get_key_seq,
 	TP_PROTO(struct ieee80211_local *local,
-		 u8 hw_key_idx, u32 *iv32, u16 *iv16),
+		 struct ieee80211_key_conf *key),
 
-	TP_ARGS(local, hw_key_idx, iv32, iv16),
+	TP_ARGS(local, key),
 
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
-		__field(u8, hw_key_idx)
-		__field(u32, iv32)
-		__field(u16, iv16)
+		KEY_ENTRY
 	),
 
 	TP_fast_assign(
 		LOCAL_ASSIGN;
-		__entry->hw_key_idx = hw_key_idx;
-		__entry->iv32 = *iv32;
-		__entry->iv16 = *iv16;
+		KEY_ASSIGN(key);
 	),
 
 	TP_printk(
-		LOCAL_PR_FMT, LOCAL_PR_ARG
+		LOCAL_PR_FMT KEY_PR_FMT,
+		LOCAL_PR_ARG, KEY_PR_ARG
 	)
 );
 
@@ -940,36 +986,25 @@ DEFINE_EVENT(local_only_evt, drv_tx_last_beacon,
 TRACE_EVENT(drv_ampdu_action,
 	TP_PROTO(struct ieee80211_local *local,
 		 struct ieee80211_sub_if_data *sdata,
-		 enum ieee80211_ampdu_mlme_action action,
-		 struct ieee80211_sta *sta, u16 tid,
-		 u16 *ssn, u8 buf_size),
+		 struct ieee80211_ampdu_params *params),
 
-	TP_ARGS(local, sdata, action, sta, tid, ssn, buf_size),
+	TP_ARGS(local, sdata, params),
 
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
-		STA_ENTRY
-		__field(u32, action)
-		__field(u16, tid)
-		__field(u16, ssn)
-		__field(u8, buf_size)
 		VIF_ENTRY
+		AMPDU_ACTION_ENTRY
 	),
 
 	TP_fast_assign(
 		LOCAL_ASSIGN;
 		VIF_ASSIGN;
-		STA_ASSIGN;
-		__entry->action = action;
-		__entry->tid = tid;
-		__entry->ssn = ssn ? *ssn : 0;
-		__entry->buf_size = buf_size;
+		AMPDU_ACTION_ASSIGN;
 	),
 
 	TP_printk(
-		LOCAL_PR_FMT VIF_PR_FMT STA_PR_FMT " action:%d tid:%d buf:%d",
-		LOCAL_PR_ARG, VIF_PR_ARG, STA_PR_ARG, __entry->action,
-		__entry->tid, __entry->buf_size
+		LOCAL_PR_FMT VIF_PR_FMT AMPDU_ACTION_PR_FMT,
+		LOCAL_PR_ARG, VIF_PR_ARG, AMPDU_ACTION_PR_ARG
 	)
 );
 

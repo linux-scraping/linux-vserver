@@ -2251,7 +2251,7 @@ lpfc_sli4_unreg_rpi_cmpl_clr(struct lpfc_hba *phba, LPFC_MBOXQ_t *pmb)
 						 vport->vpi, ndlp->nlp_rpi,
 						 ndlp->nlp_DID,
 						 ndlp->nlp_usg_map, ndlp);
-
+				ndlp->nlp_flag &= ~NLP_LOGO_ACC;
 				lpfc_nlp_put(ndlp);
 			}
 		}
@@ -6705,7 +6705,7 @@ lpfc_mbox_timeout(unsigned long ptr)
  * This function checks if any mailbox completions are present on the mailbox
  * completion queue.
  **/
-bool
+static bool
 lpfc_sli4_mbox_completions_pending(struct lpfc_hba *phba)
 {
 
@@ -8147,36 +8147,6 @@ lpfc_sli4_bpl2sgl(struct lpfc_hba *phba, struct lpfc_iocbq *piocbq,
 }
 
 /**
- * lpfc_sli4_scmd_to_wqidx_distr - scsi command to SLI4 WQ index distribution
- * @phba: Pointer to HBA context object.
- *
- * This routine performs a roundrobin SCSI command to SLI4 FCP WQ index
- * distribution.  This is called by __lpfc_sli_issue_iocb_s4() with the hbalock
- * held.
- *
- * Return: index into SLI4 fast-path FCP queue index.
- **/
-static inline int
-lpfc_sli4_scmd_to_wqidx_distr(struct lpfc_hba *phba)
-{
-	struct lpfc_vector_map_info *cpup;
-	int chann, cpu;
-
-	if (phba->cfg_fcp_io_sched == LPFC_FCP_SCHED_BY_CPU
-	    && phba->cfg_fcp_io_channel > 1) {
-		cpu = smp_processor_id();
-		if (cpu < phba->sli4_hba.num_present_cpu) {
-			cpup = phba->sli4_hba.cpu_map;
-			cpup += cpu;
-			return cpup->channel_id;
-		}
-	}
-	chann = atomic_add_return(1, &phba->fcp_qidx);
-	chann = (chann % phba->cfg_fcp_io_channel);
-	return chann;
-}
-
-/**
  * lpfc_sli_iocb2wqe - Convert the IOCB to a work queue entry.
  * @phba: Pointer to HBA context object.
  * @piocb: Pointer to command iocb.
@@ -8801,32 +8771,44 @@ lpfc_sli_api_table_setup(struct lpfc_hba *phba, uint8_t dev_grp)
 	return 0;
 }
 
+/**
+ * lpfc_sli_calc_ring - Calculates which ring to use
+ * @phba: Pointer to HBA context object.
+ * @ring_number: Initial ring
+ * @piocb: Pointer to command iocb.
+ *
+ * For SLI4, FCP IO can deferred to one fo many WQs, based on
+ * fcp_wqidx, thus we need to calculate the corresponding ring.
+ * Since ABORTS must go on the same WQ of the command they are
+ * aborting, we use command's fcp_wqidx.
+ */
 int
 lpfc_sli_calc_ring(struct lpfc_hba *phba, uint32_t ring_number,
 		    struct lpfc_iocbq *piocb)
 {
-	uint32_t idx;
+	if (phba->sli_rev < LPFC_SLI_REV4)
+		return ring_number;
 
-	if (phba->sli_rev == LPFC_SLI_REV4) {
-		if (piocb->iocb_flag &  (LPFC_IO_FCP | LPFC_USE_FCPWQIDX)) {
+	if (piocb->iocb_flag &  (LPFC_IO_FCP | LPFC_USE_FCPWQIDX)) {
+		if (!(phba->cfg_fof) ||
+				(!(piocb->iocb_flag & LPFC_IO_FOF))) {
+			if (unlikely(!phba->sli4_hba.fcp_wq))
+				return LPFC_HBA_ERROR;
 			/*
-			 * fcp_wqidx should already be setup based on what
-			 * completion queue we want to use.
+			 * for abort iocb fcp_wqidx should already
+			 * be setup based on what work queue we used.
 			 */
-			if (!(phba->cfg_fof) ||
-			    (!(piocb->iocb_flag & LPFC_IO_FOF))) {
-				if (unlikely(!phba->sli4_hba.fcp_wq))
-					return LPFC_HBA_ERROR;
-				idx = lpfc_sli4_scmd_to_wqidx_distr(phba);
-				piocb->fcp_wqidx = idx;
-				ring_number = MAX_SLI3_CONFIGURED_RINGS + idx;
-			} else {
-				if (unlikely(!phba->sli4_hba.oas_wq))
-					return LPFC_HBA_ERROR;
-				idx = 0;
-				piocb->fcp_wqidx = idx;
-				ring_number =  LPFC_FCP_OAS_RING;
-			}
+			if (!(piocb->iocb_flag & LPFC_USE_FCPWQIDX))
+				piocb->fcp_wqidx =
+					lpfc_sli4_scmd_to_wqidx_distr(phba,
+							      piocb->context1);
+			ring_number = MAX_SLI3_CONFIGURED_RINGS +
+				piocb->fcp_wqidx;
+		} else {
+			if (unlikely(!phba->sli4_hba.oas_wq))
+				return LPFC_HBA_ERROR;
+			piocb->fcp_wqidx = 0;
+			ring_number =  LPFC_FCP_OAS_RING;
 		}
 	}
 	return ring_number;
@@ -12519,12 +12501,10 @@ lpfc_sli4_fof_intr_handler(int irq, void *dev_id)
 	struct lpfc_eqe *eqe;
 	unsigned long iflag;
 	int ecount = 0;
-	uint32_t eqidx;
 
 	/* Get the driver's phba structure from the dev_id */
 	fcp_eq_hdl = (struct lpfc_fcp_eq_hdl *)dev_id;
 	phba = fcp_eq_hdl->phba;
-	eqidx = fcp_eq_hdl->idx;
 
 	if (unlikely(!phba))
 		return IRQ_NONE;
@@ -12859,12 +12839,8 @@ out_fail:
 static void __iomem *
 lpfc_dual_chute_pci_bar_map(struct lpfc_hba *phba, uint16_t pci_barset)
 {
-	struct pci_dev *pdev;
-
 	if (!phba->pcidev)
 		return NULL;
-	else
-		pdev = phba->pcidev;
 
 	switch (pci_barset) {
 	case WQ_PCI_BAR_0_AND_1:
@@ -13509,7 +13485,7 @@ lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
 			       LPFC_WQ_WQE_SIZE_128);
 			bf_set(lpfc_mbx_wq_create_page_size,
 			       &wq_create->u.request_1,
-			       (PAGE_SIZE/SLI4_PAGE_SIZE));
+			       LPFC_WQ_PAGE_SIZE_4096);
 			page = wq_create->u.request_1.page;
 			break;
 		}
@@ -13535,8 +13511,9 @@ lpfc_wq_create(struct lpfc_hba *phba, struct lpfc_queue *wq,
 			       LPFC_WQ_WQE_SIZE_128);
 			break;
 		}
-		bf_set(lpfc_mbx_wq_create_page_size, &wq_create->u.request_1,
-		       (PAGE_SIZE/SLI4_PAGE_SIZE));
+		bf_set(lpfc_mbx_wq_create_page_size,
+		       &wq_create->u.request_1,
+		       LPFC_WQ_PAGE_SIZE_4096);
 		page = wq_create->u.request_1.page;
 		break;
 	default:
@@ -13722,7 +13699,7 @@ lpfc_rq_create(struct lpfc_hba *phba, struct lpfc_queue *hrq,
 		       LPFC_RQE_SIZE_8);
 		bf_set(lpfc_rq_context_page_size,
 		       &rq_create->u.request.context,
-		       (PAGE_SIZE/SLI4_PAGE_SIZE));
+		       LPFC_RQ_PAGE_SIZE_4096);
 	} else {
 		switch (hrq->entry_count) {
 		default:
@@ -14876,10 +14853,12 @@ lpfc_fc_frame_add(struct lpfc_vport *vport, struct hbq_dmabuf *dmabuf)
 	struct lpfc_dmabuf *h_buf;
 	struct hbq_dmabuf *seq_dmabuf = NULL;
 	struct hbq_dmabuf *temp_dmabuf = NULL;
+	uint8_t	found = 0;
 
 	INIT_LIST_HEAD(&dmabuf->dbuf.list);
 	dmabuf->time_stamp = jiffies;
 	new_hdr = (struct fc_frame_header *)dmabuf->hbuf.virt;
+
 	/* Use the hdr_buf to find the sequence that this frame belongs to */
 	list_for_each_entry(h_buf, &vport->rcv_buffer_list, list) {
 		temp_hdr = (struct fc_frame_header *)h_buf->virt;
@@ -14919,7 +14898,8 @@ lpfc_fc_frame_add(struct lpfc_vport *vport, struct hbq_dmabuf *dmabuf)
 		return seq_dmabuf;
 	}
 	/* find the correct place in the sequence to insert this frame */
-	list_for_each_entry_reverse(d_buf, &seq_dmabuf->dbuf.list, list) {
+	d_buf = list_entry(seq_dmabuf->dbuf.list.prev, typeof(*d_buf), list);
+	while (!found) {
 		temp_dmabuf = container_of(d_buf, struct hbq_dmabuf, dbuf);
 		temp_hdr = (struct fc_frame_header *)temp_dmabuf->hbuf.virt;
 		/*
@@ -14929,9 +14909,17 @@ lpfc_fc_frame_add(struct lpfc_vport *vport, struct hbq_dmabuf *dmabuf)
 		if (be16_to_cpu(new_hdr->fh_seq_cnt) >
 			be16_to_cpu(temp_hdr->fh_seq_cnt)) {
 			list_add(&dmabuf->dbuf.list, &temp_dmabuf->dbuf.list);
-			return seq_dmabuf;
+			found = 1;
+			break;
 		}
+
+		if (&d_buf->list == &seq_dmabuf->dbuf.list)
+			break;
+		d_buf = list_entry(d_buf->list.prev, typeof(*d_buf), list);
 	}
+
+	if (found)
+		return seq_dmabuf;
 	return NULL;
 }
 
@@ -15948,7 +15936,6 @@ lpfc_sli4_add_fcf_record(struct lpfc_hba *phba, struct fcf_record *fcf_record)
 	LPFC_MBOXQ_t *mboxq;
 	uint8_t *bytep;
 	void *virt_addr;
-	dma_addr_t phys_addr;
 	struct lpfc_mbx_sge sge;
 	uint32_t alloc_len, req_len;
 	uint32_t fcfindex;
@@ -15981,7 +15968,6 @@ lpfc_sli4_add_fcf_record(struct lpfc_hba *phba, struct fcf_record *fcf_record)
 	 * routine only uses a single SGE.
 	 */
 	lpfc_sli4_mbx_sge_get(mboxq, 0, &sge);
-	phys_addr = getPaddr(sge.pa_hi, sge.pa_lo);
 	virt_addr = mboxq->sge_array->addr[0];
 	/*
 	 * Configure the FCF record for FCFI 0.  This is the driver's
@@ -16209,7 +16195,7 @@ fail_fcf_read:
 }
 
 /**
- * lpfc_check_next_fcf_pri
+ * lpfc_check_next_fcf_pri_level
  * phba pointer to the lpfc_hba struct for this port.
  * This routine is called from the lpfc_sli4_fcf_rr_next_index_get
  * routine when the rr_bmask is empty. The FCF indecies are put into the
@@ -16365,8 +16351,12 @@ next_priority:
 
 	if (next_fcf_index < LPFC_SLI4_FCF_TBL_INDX_MAX &&
 		phba->fcf.fcf_pri[next_fcf_index].fcf_rec.flag &
-		LPFC_FCF_FLOGI_FAILED)
+		LPFC_FCF_FLOGI_FAILED) {
+		if (list_is_singular(&phba->fcf.fcf_pri_list))
+			return LPFC_FCOE_FCF_NEXT_NONE;
+
 		goto next_priority;
+	}
 
 	lpfc_printf_log(phba, KERN_INFO, LOG_FIP,
 			"2845 Get next roundrobin failover FCF (x%x)\n",

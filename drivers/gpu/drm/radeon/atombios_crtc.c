@@ -275,6 +275,8 @@ void atombios_crtc_dpms(struct drm_crtc *crtc, int mode)
 			atombios_enable_crtc_memreq(crtc, ATOM_ENABLE);
 		atombios_blank_crtc(crtc, ATOM_DISABLE);
 		drm_vblank_post_modeset(dev, radeon_crtc->crtc_id);
+		/* Make sure vblank interrupt is still enabled if needed */
+		radeon_irq_set(rdev);
 		radeon_crtc_load_lut(crtc);
 		break;
 	case DRM_MODE_DPMS_STANDBY:
@@ -586,8 +588,7 @@ static u32 atombios_adjust_pll(struct drm_crtc *crtc,
 		if (ASIC_IS_DCE41(rdev) || ASIC_IS_DCE61(rdev) || ASIC_IS_DCE8(rdev))
 			radeon_crtc->pll_flags |= RADEON_PLL_USE_FRAC_FB_DIV;
 		/* use frac fb div on RS780/RS880 */
-		if (((rdev->family == CHIP_RS780) || (rdev->family == CHIP_RS880))
-		    && !radeon_crtc->ss_enabled)
+		if ((rdev->family == CHIP_RS780) || (rdev->family == CHIP_RS880))
 			radeon_crtc->pll_flags |= RADEON_PLL_USE_FRAC_FB_DIV;
 		if (ASIC_IS_DCE32(rdev) && mode->clock > 165000)
 			radeon_crtc->pll_flags |= RADEON_PLL_USE_FRAC_FB_DIV;
@@ -624,9 +625,7 @@ static u32 atombios_adjust_pll(struct drm_crtc *crtc,
 			if (radeon_crtc->ss.refdiv) {
 				radeon_crtc->pll_flags |= RADEON_PLL_USE_REF_DIV;
 				radeon_crtc->pll_reference_div = radeon_crtc->ss.refdiv;
-				if (ASIC_IS_AVIVO(rdev) &&
-				    rdev->family != CHIP_RS780 &&
-				    rdev->family != CHIP_RS880)
+				if (ASIC_IS_AVIVO(rdev))
 					radeon_crtc->pll_flags |= RADEON_PLL_USE_FRAC_FB_DIV;
 			}
 		}

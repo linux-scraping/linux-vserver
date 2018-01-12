@@ -51,7 +51,6 @@
 
 #include "ubifs.h"
 #include <linux/mount.h>
-#include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/migrate.h>
 
@@ -1263,7 +1262,7 @@ int ubifs_setattr(struct dentry *dentry, struct iattr *attr)
 
 	dbg_gen("ino %lu, mode %#x, ia_valid %#x",
 		inode->i_ino, inode->i_mode, attr->ia_valid);
-	err = setattr_prepare(dentry, attr);
+	err = inode_change_ok(inode, attr);
 	if (err)
 		return err;
 
@@ -1299,14 +1298,6 @@ static void ubifs_invalidatepage(struct page *page, unsigned int offset,
 	atomic_long_dec(&c->dirty_pg_cnt);
 	ClearPagePrivate(page);
 	ClearPageChecked(page);
-}
-
-static void *ubifs_follow_link(struct dentry *dentry, struct nameidata *nd)
-{
-	struct ubifs_inode *ui = ubifs_inode(d_inode(dentry));
-
-	nd_set_link(nd, ui->data);
-	return NULL;
 }
 
 int ubifs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
@@ -1363,6 +1354,47 @@ static inline int mctime_update_needed(const struct inode *inode,
 		return 1;
 	return 0;
 }
+
+#ifdef CONFIG_UBIFS_ATIME_SUPPORT
+/**
+ * ubifs_update_time - update time of inode.
+ * @inode: inode to update
+ *
+ * This function updates time of the inode.
+ */
+int ubifs_update_time(struct inode *inode, struct timespec *time,
+			     int flags)
+{
+	struct ubifs_inode *ui = ubifs_inode(inode);
+	struct ubifs_info *c = inode->i_sb->s_fs_info;
+	struct ubifs_budget_req req = { .dirtied_ino = 1,
+			.dirtied_ino_d = ALIGN(ui->data_len, 8) };
+	int iflags = I_DIRTY_TIME;
+	int err, release;
+
+	err = ubifs_budget_space(c, &req);
+	if (err)
+		return err;
+
+	mutex_lock(&ui->ui_mutex);
+	if (flags & S_ATIME)
+		inode->i_atime = *time;
+	if (flags & S_CTIME)
+		inode->i_ctime = *time;
+	if (flags & S_MTIME)
+		inode->i_mtime = *time;
+
+	if (!(inode->i_sb->s_flags & MS_LAZYTIME))
+		iflags |= I_DIRTY_SYNC;
+
+	release = ui->dirty;
+	__mark_inode_dirty(inode, iflags);
+	mutex_unlock(&ui->ui_mutex);
+	if (release)
+		ubifs_release_budget(c, &req);
+	return 0;
+}
+#endif
 
 /**
  * update_ctime - update mtime and ctime of an inode.
@@ -1567,6 +1599,9 @@ static int ubifs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	if (err)
 		return err;
 	vma->vm_ops = &ubifs_file_vm_ops;
+#ifdef CONFIG_UBIFS_ATIME_SUPPORT
+	file_accessed(file);
+#endif
 	return 0;
 }
 
@@ -1590,17 +1625,23 @@ const struct inode_operations ubifs_file_inode_operations = {
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
+#ifdef CONFIG_UBIFS_ATIME_SUPPORT
+	.update_time = ubifs_update_time,
+#endif
 };
 
 const struct inode_operations ubifs_symlink_inode_operations = {
 	.readlink    = generic_readlink,
-	.follow_link = ubifs_follow_link,
+	.follow_link = simple_follow_link,
 	.setattr     = ubifs_setattr,
 	.getattr     = ubifs_getattr,
 	.setxattr    = ubifs_setxattr,
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
+#ifdef CONFIG_UBIFS_ATIME_SUPPORT
+	.update_time = ubifs_update_time,
+#endif
 };
 
 const struct file_operations ubifs_file_operations = {

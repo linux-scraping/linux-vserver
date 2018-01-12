@@ -542,7 +542,7 @@ static ssize_t ep_aio(struct kiocb *iocb,
 	 */
 	spin_lock_irq(&epdata->dev->lock);
 	value = -ENODEV;
-	if (unlikely(epdata->ep))
+	if (unlikely(epdata->ep == NULL))
 		goto fail;
 
 	req = usb_ep_alloc_request(epdata->ep, GFP_ATOMIC);
@@ -770,9 +770,12 @@ ep_config (struct ep_data *data, const char *buf, size_t len)
 	if (data->dev->state == STATE_DEV_UNBOUND) {
 		value = -ENOENT;
 		goto gone;
-	} else if ((ep = data->ep) == NULL) {
-		value = -ENODEV;
-		goto gone;
+	} else {
+		ep = data->ep;
+		if (ep == NULL) {
+			value = -ENODEV;
+			goto gone;
+		}
 	}
 	switch (data->dev->gadget->speed) {
 	case USB_SPEED_LOW:
@@ -1834,8 +1837,10 @@ dev_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 
 	spin_lock_irq (&dev->lock);
 	value = -EINVAL;
-	if (dev->buf)
+	if (dev->buf) {
+		kfree(kbuf);
 		goto fail;
+	}
 	dev->buf = kbuf;
 
 	/* full or low speed config */

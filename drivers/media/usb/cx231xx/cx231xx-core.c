@@ -658,22 +658,20 @@ int cx231xx_demod_reset(struct cx231xx *dev)
 
 	cx231xx_coredbg("Enter cx231xx_demod_reset()\n");
 
-		value[1] = (u8) 0x3;
-		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-						PWR_CTL_EN, value, 4);
-			msleep(10);
+	value[1] = (u8) 0x3;
+	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+					PWR_CTL_EN, value, 4);
+	msleep(10);
 
-		value[1] = (u8) 0x0;
-		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-						PWR_CTL_EN, value, 4);
-			msleep(10);
+	value[1] = (u8) 0x0;
+	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+					PWR_CTL_EN, value, 4);
+	msleep(10);
 
-		value[1] = (u8) 0x3;
-		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-						PWR_CTL_EN, value, 4);
-			msleep(10);
-
-
+	value[1] = (u8) 0x3;
+	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+					PWR_CTL_EN, value, 4);
+	msleep(10);
 
 	status = cx231xx_read_ctrl_reg(dev, VRT_GET_REGISTER, PWR_CTL_EN,
 				 value, 4);
@@ -719,6 +717,7 @@ int cx231xx_set_mode(struct cx231xx *dev, enum cx231xx_mode set_mode)
 			break;
 		case CX231XX_BOARD_CNXT_RDE_253S:
 		case CX231XX_BOARD_CNXT_RDU_253S:
+		case CX231XX_BOARD_PV_PLAYTV_USB_HYBRID:
 			errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 1);
 			break;
 		case CX231XX_BOARD_HAUPPAUGE_EXETER:
@@ -745,7 +744,7 @@ int cx231xx_set_mode(struct cx231xx *dev, enum cx231xx_mode set_mode)
 		case CX231XX_BOARD_PV_PLAYTV_USB_HYBRID:
 		case CX231XX_BOARD_HAUPPAUGE_USB2_FM_PAL:
 		case CX231XX_BOARD_HAUPPAUGE_USB2_FM_NTSC:
-		errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
+			errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
 			break;
 		default:
 			break;

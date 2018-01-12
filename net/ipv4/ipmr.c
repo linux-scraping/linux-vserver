@@ -233,7 +233,6 @@ static const struct fib_rules_ops __net_initconst ipmr_rules_ops_template = {
 	.match		= ipmr_rule_match,
 	.configure	= ipmr_rule_configure,
 	.compare	= ipmr_rule_compare,
-	.default_pref	= fib_default_rule_pref,
 	.fill		= ipmr_rule_fill,
 	.nlgroup	= RTNLGRP_IPV4_RULE,
 	.policy		= ipmr_rule_policy,
@@ -442,10 +441,6 @@ struct net_device *ipmr_new_tunnel(struct net *net, struct vifctl *v)
 	return dev;
 
 failure:
-	/* allow the register to be completed before unregistering. */
-	rtnl_unlock();
-	rtnl_lock();
-
 	unregister_netdevice(dev);
 	return NULL;
 }
@@ -541,10 +536,6 @@ static struct net_device *ipmr_reg_vif(struct net *net, struct mr_table *mrt)
 	return dev;
 
 failure:
-	/* allow the register to be completed before unregistering. */
-	rtnl_unlock();
-	rtnl_lock();
-
 	unregister_netdevice(dev);
 	return NULL;
 }
@@ -891,8 +882,10 @@ static struct mfc_cache *ipmr_cache_alloc(void)
 {
 	struct mfc_cache *c = kmem_cache_zalloc(mrt_cachep, GFP_KERNEL);
 
-	if (c)
+	if (c) {
+		c->mfc_un.res.last_assert = jiffies - MFC_ASSERT_THRESH - 1;
 		c->mfc_un.res.minvif = MAXVIFS;
+	}
 	return c;
 }
 
@@ -1680,17 +1673,18 @@ static void ip_encap(struct net *net, struct sk_buff *skb,
 	nf_reset(skb);
 }
 
-static inline int ipmr_forward_finish(struct sock *sk, struct sk_buff *skb)
+static inline int ipmr_forward_finish(struct net *net, struct sock *sk,
+				      struct sk_buff *skb)
 {
 	struct ip_options *opt = &(IPCB(skb)->opt);
 
-	IP_INC_STATS(dev_net(skb_dst(skb)->dev), IPSTATS_MIB_OUTFORWDATAGRAMS);
-	IP_ADD_STATS(dev_net(skb_dst(skb)->dev), IPSTATS_MIB_OUTOCTETS, skb->len);
+	IP_INC_STATS(net, IPSTATS_MIB_OUTFORWDATAGRAMS);
+	IP_ADD_STATS(net, IPSTATS_MIB_OUTOCTETS, skb->len);
 
 	if (unlikely(opt->optlen))
 		ip_forward_options(skb);
 
-	return dst_output_sk(sk, skb);
+	return dst_output(net, sk, skb);
 }
 
 /*
@@ -1747,7 +1741,7 @@ static void ipmr_queue_xmit(struct net *net, struct mr_table *mrt,
 		 * to blackhole.
 		 */
 
-		IP_INC_STATS(dev_net(dev), IPSTATS_MIB_FRAGFAILS);
+		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
 		ip_rt_put(rt);
 		goto out_free;
 	}
@@ -1789,8 +1783,8 @@ static void ipmr_queue_xmit(struct net *net, struct mr_table *mrt,
 	 * not mrouter) cannot join to more than one interface - it will
 	 * result in receiving multiple packets.
 	 */
-	NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD, NULL, skb,
-		skb->dev, dev,
+	NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
+		net, NULL, skb, skb->dev, dev,
 		ipmr_forward_finish);
 	return;
 
@@ -2198,7 +2192,7 @@ static int __ipmr_fill_mroute(struct mr_table *mrt, struct sk_buff *skb,
 
 int ipmr_get_route(struct net *net, struct sk_buff *skb,
 		   __be32 saddr, __be32 daddr,
-		   struct rtmsg *rtm, int nowait)
+		   struct rtmsg *rtm, int nowait, u32 portid)
 {
 	struct mfc_cache *cache;
 	struct mr_table *mrt;
@@ -2243,6 +2237,7 @@ int ipmr_get_route(struct net *net, struct sk_buff *skb,
 			return -ENOMEM;
 		}
 
+		NETLINK_CB(skb2).portid = portid;
 		skb_push(skb2, sizeof(struct iphdr));
 		skb_reset_network_header(skb2);
 		iph = ip_hdr(skb2);

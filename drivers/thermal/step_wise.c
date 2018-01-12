@@ -31,8 +31,7 @@
  * If the temperature is higher than a trip point,
  *    a. if the trend is THERMAL_TREND_RAISING, use higher cooling
  *       state for this trip point
- *    b. if the trend is THERMAL_TREND_DROPPING, use lower cooling
- *       state for this trip point
+ *    b. if the trend is THERMAL_TREND_DROPPING, do nothing
  *    c. if the trend is THERMAL_TREND_RAISE_FULL, use upper limit
  *       for this trip point
  *    d. if the trend is THERMAL_TREND_DROP_FULL, use lower limit
@@ -94,9 +93,11 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 			if (!throttle)
 				next_target = THERMAL_NO_TARGET;
 		} else {
-			next_target = cur_state - 1;
-			if (next_target > instance->upper)
-				next_target = instance->upper;
+			if (!throttle) {
+				next_target = cur_state - 1;
+				if (next_target > instance->upper)
+					next_target = instance->upper;
+			}
 		}
 		break;
 	case THERMAL_TREND_DROP_FULL:
@@ -126,7 +127,7 @@ static void update_passive_instance(struct thermal_zone_device *tz,
 
 static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 {
-	long trip_temp;
+	int trip_temp;
 	enum thermal_trip_type trip_type;
 	enum thermal_trend trend;
 	struct thermal_instance *instance;
@@ -148,7 +149,7 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 		trace_thermal_zone_trip(tz, trip, trip_type);
 	}
 
-	dev_dbg(&tz->device, "Trip%d[type=%d,temp=%ld]:trend=%d,throttle=%d\n",
+	dev_dbg(&tz->device, "Trip%d[type=%d,temp=%d]:trend=%d,throttle=%d\n",
 				trip, trip_type, trip_temp, trend, throttle);
 
 	mutex_lock(&tz->lock);

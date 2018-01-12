@@ -11,6 +11,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/blkdev.h>
+#include <linux/backing-dev.h>
 #include <linux/fsnotify.h>
 #include <linux/security.h>
 #include "fat.h"
@@ -388,7 +389,7 @@ int fat_setattr(struct dentry *dentry, struct iattr *attr)
 			attr->ia_valid &= ~TIMES_SET_FLAGS;
 	}
 
-	error = setattr_prepare(dentry, attr);
+	error = inode_change_ok(inode, attr);
 	attr->ia_valid = ia_valid;
 	if (error) {
 		if (sbi->options.quiet)

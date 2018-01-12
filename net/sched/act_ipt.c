@@ -34,6 +34,7 @@ static int ipt_init_target(struct xt_entry_target *t, char *table, unsigned int 
 {
 	struct xt_tgchk_param par;
 	struct xt_target *target;
+	struct ipt_entry e = {};
 	int ret = 0;
 
 	target = xt_request_find_target(AF_INET, t->u.user.name,
@@ -42,8 +43,9 @@ static int ipt_init_target(struct xt_entry_target *t, char *table, unsigned int 
 		return PTR_ERR(target);
 
 	t->u.kernel.target = target;
+	memset(&par, 0, sizeof(par));
 	par.table     = table;
-	par.entryinfo = NULL;
+	par.entryinfo = &e;
 	par.target    = target;
 	par.targinfo  = t->data;
 	par.hook_mask = hook;
@@ -114,7 +116,7 @@ static int tcf_ipt_init(struct net *net, struct nlattr *nla, struct nlattr *est,
 		index = nla_get_u32(tb[TCA_IPT_INDEX]);
 
 	if (!tcf_hash_check(index, a, bind) ) {
-		ret = tcf_hash_create(index, est, a, sizeof(*ipt), bind);
+		ret = tcf_hash_create(index, est, a, sizeof(*ipt), bind, false);
 		if (ret)
 			return ret;
 		ret = ACT_P_CREATED;
@@ -189,6 +191,7 @@ static int tcf_ipt(struct sk_buff *skb, const struct tc_action *a,
 	 * worry later - danger - this API seems to have changed
 	 * from earlier kernels
 	 */
+	par.net	     = dev_net(skb->dev);
 	par.in       = skb->dev;
 	par.out      = NULL;
 	par.hooknum  = ipt->tcfi_hook;

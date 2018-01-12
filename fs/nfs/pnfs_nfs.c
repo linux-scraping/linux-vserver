@@ -239,36 +239,11 @@ void pnfs_fetch_commit_bucket_list(struct list_head *pages,
 
 	bucket = &cinfo->ds->buckets[data->ds_commit_index];
 	spin_lock(cinfo->lock);
-	list_splice_init(pages, &bucket->committing);
+	list_splice_init(&bucket->committing, pages);
 	data->lseg = bucket->clseg;
 	bucket->clseg = NULL;
 	spin_unlock(cinfo->lock);
 
-}
-
-/* Helper function for pnfs_generic_commit_pagelist to catch an empty
- * page list. This can happen when two commits race.
- *
- * This must be called instead of nfs_init_commit - call one or the other, but
- * not both!
- */
-static bool
-pnfs_generic_commit_cancel_empty_pagelist(struct list_head *pages,
-					  struct nfs_commit_data *data,
-					  struct nfs_commit_info *cinfo)
-{
-	if (list_empty(pages)) {
-		if (atomic_dec_and_test(&cinfo->mds->rpcs_out))
-			wake_up_atomic_t(&cinfo->mds->rpcs_out);
-		/* don't call nfs_commitdata_release - it tries to put
-		 * the open_context which is not acquired until nfs_init_commit
-		 * which has not been called on @data */
-		WARN_ON_ONCE(data->context);
-		nfs_commit_free(data);
-		return true;
-	}
-
-	return false;
 }
 
 /* This follows nfs_commit_list pretty closely */
@@ -308,11 +283,6 @@ pnfs_generic_commit_pagelist(struct inode *inode, struct list_head *mds_pages,
 	list_for_each_entry_safe(data, tmp, &list, pages) {
 		list_del_init(&data->pages);
 		if (data->ds_commit_index < 0) {
-			/* another commit raced with us */
-			if (pnfs_generic_commit_cancel_empty_pagelist(mds_pages,
-				data, cinfo))
-				continue;
-
 			nfs_init_commit(data, mds_pages, NULL, cinfo);
 			nfs_initiate_commit(NFS_CLIENT(inode), data,
 					    NFS_PROTO(data->inode),
@@ -321,12 +291,6 @@ pnfs_generic_commit_pagelist(struct inode *inode, struct list_head *mds_pages,
 			LIST_HEAD(pages);
 
 			pnfs_fetch_commit_bucket_list(&pages, data, cinfo);
-
-			/* another commit raced with us */
-			if (pnfs_generic_commit_cancel_empty_pagelist(&pages,
-				data, cinfo))
-				continue;
-
 			nfs_init_commit(data, &pages, data->lseg, cinfo);
 			initiate_commit(data, how);
 		}
@@ -918,9 +882,10 @@ pnfs_layout_mark_request_commit(struct nfs_page *req,
 	}
 	set_bit(PG_COMMIT_TO_DS, &req->wb_flags);
 	cinfo->ds->nwritten++;
-	spin_unlock(cinfo->lock);
 
-	nfs_request_add_commit_list(req, list, cinfo);
+	nfs_request_add_commit_list_locked(req, list, cinfo);
+	spin_unlock(cinfo->lock);
+	nfs_mark_page_unstable(req->wb_page, cinfo);
 }
 EXPORT_SYMBOL_GPL(pnfs_layout_mark_request_commit);
 

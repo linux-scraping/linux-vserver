@@ -369,7 +369,7 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 	__be32		err;
 	int		host_err;
 	bool		get_write_count;
-	int		size_change = 0;
+	bool		size_change = (iap->ia_valid & ATTR_SIZE);
 
 	if (iap->ia_valid & (ATTR_ATIME | ATTR_MTIME | ATTR_SIZE))
 		accmode |= NFSD_MAY_WRITE|NFSD_MAY_OWNER_OVERRIDE;
@@ -382,11 +382,11 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 	/* Get inode */
 	err = fh_verify(rqstp, fhp, ftype, accmode);
 	if (err)
-		goto out;
+		return err;
 	if (get_write_count) {
 		host_err = fh_want_write(fhp);
 		if (host_err)
-			return nfserrno(host_err);
+			goto out;
 	}
 
 	dentry = fhp->fh_dentry;
@@ -397,20 +397,28 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 		iap->ia_valid &= ~ATTR_MODE;
 
 	if (!iap->ia_valid)
-		goto out;
+		return 0;
 
 	nfsd_sanitize_attrs(inode, iap);
 
+	if (check_guard && guardtime != inode->i_ctime.tv_sec)
+		return nfserr_notsync;
+
 	/*
 	 * The size case is special, it changes the file in addition to the
-	 * attributes.
+	 * attributes, and file systems don't expect it to be mixed with
+	 * "random" attribute changes.  We thus split out the size change
+	 * into a separate call to ->setattr, and do the rest as a separate
+	 * setattr call.
 	 */
-	if (iap->ia_valid & ATTR_SIZE) {
+	if (size_change) {
 		err = nfsd_get_write_access(rqstp, fhp, iap);
 		if (err)
-			goto out;
-		size_change = 1;
+			return err;
+	}
 
+	fh_lock(fhp);
+	if (size_change) {
 		/*
 		 * RFC5661, Section 18.30.4:
 		 *   Changing the size of a file with SETATTR indirectly
@@ -418,29 +426,36 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 		 *
 		 * (and similar for the older RFCs)
 		 */
-		if (iap->ia_size != i_size_read(inode))
-			iap->ia_valid |= ATTR_MTIME;
+		struct iattr size_attr = {
+			.ia_valid	= ATTR_SIZE | ATTR_CTIME | ATTR_MTIME,
+			.ia_size	= iap->ia_size,
+		};
+
+		host_err = notify_change(dentry, &size_attr, NULL);
+		if (host_err)
+			goto out_unlock;
+		iap->ia_valid &= ~ATTR_SIZE;
+
+		/*
+		 * Avoid the additional setattr call below if the only other
+		 * attribute that the client sends is the mtime, as we update
+		 * it as part of the size change above.
+		 */
+		if ((iap->ia_valid & ~ATTR_MTIME) == 0)
+			goto out_unlock;
 	}
 
 	iap->ia_valid |= ATTR_CTIME;
-
-	if (check_guard && guardtime != inode->i_ctime.tv_sec) {
-		err = nfserr_notsync;
-		goto out_put_write_access;
-	}
-
-	fh_lock(fhp);
 	host_err = notify_change(dentry, iap, NULL);
-	fh_unlock(fhp);
-	err = nfserrno(host_err);
 
-out_put_write_access:
+out_unlock:
+	fh_unlock(fhp);
 	if (size_change)
 		put_write_access(inode);
-	if (!err)
-		err = nfserrno(commit_metadata(fhp));
 out:
-	return err;
+	if (!host_err)
+		host_err = commit_metadata(fhp);
+	return nfserrno(host_err);
 }
 
 #if defined(CONFIG_NFSD_V4)
@@ -502,15 +517,10 @@ __be32 nfsd4_vfs_fallocate(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			   struct file *file, loff_t offset, loff_t len,
 			   int flags)
 {
-	__be32 err;
 	int error;
 
 	if (!S_ISREG(file_inode(file)->i_mode))
 		return nfserr_inval;
-
-	err = nfsd_permission(rqstp, fhp->fh_export, fhp->fh_dentry, NFSD_MAY_WRITE);
-	if (err)
-		return err;
 
 	error = vfs_fallocate(file, flags, offset, len);
 	if (!error)
@@ -708,7 +718,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 
 	host_err = ima_file_check(file, may_flags, 0);
 	if (host_err) {
-		nfsd_close(file);
+		fput(file);
 		goto out_nfserr;
 	}
 
@@ -725,23 +735,12 @@ out:
 	return err;
 }
 
-/*
- * Close a file.
- */
-void
-nfsd_close(struct file *filp)
+struct raparms *
+nfsd_init_raparms(struct file *file)
 {
-	fput(filp);
-}
-
-/*
- * Obtain the readahead parameters for the file
- * specified by (dev, ino).
- */
-
-static inline struct raparms *
-nfsd_get_raparms(dev_t dev, ino_t ino)
-{
+	struct inode *inode = file_inode(file);
+	dev_t dev = inode->i_sb->s_dev;
+	ino_t ino = inode->i_ino;
 	struct raparms	*ra, **rap, **frap = NULL;
 	int depth = 0;
 	unsigned int hash;
@@ -778,7 +777,21 @@ found:
 	ra->p_count++;
 	nfsdstats.ra_depth[depth*10/nfsdstats.ra_size]++;
 	spin_unlock(&rab->pb_lock);
+
+	if (ra->p_set)
+		file->f_ra = ra->p_ra;
 	return ra;
+}
+
+void nfsd_put_raparams(struct file *file, struct raparms *ra)
+{
+	struct raparm_hbucket *rab = &raparm_hash[ra->p_hindex];
+
+	spin_lock(&rab->pb_lock);
+	ra->p_ra = file->f_ra;
+	ra->p_set = 1;
+	ra->p_count--;
+	spin_unlock(&rab->pb_lock);
 }
 
 /*
@@ -909,7 +922,7 @@ static int wait_for_concurrent_writes(struct file *file)
 	return err;
 }
 
-static __be32
+__be32
 nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct file *file,
 				loff_t offset, struct kvec *vec, int vlen,
 				unsigned long *cnt, int *stablep)
@@ -973,40 +986,6 @@ out_nfserr:
 	return err;
 }
 
-__be32 nfsd_get_tmp_read_open(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		struct file **file, struct raparms **ra)
-{
-	struct inode *inode;
-	__be32 err;
-
-	err = nfsd_open(rqstp, fhp, S_IFREG, NFSD_MAY_READ, file);
-	if (err)
-		return err;
-
-	inode = file_inode(*file);
-
-	/* Get readahead parameters */
-	*ra = nfsd_get_raparms(inode->i_sb->s_dev, inode->i_ino);
-
-	if (*ra && (*ra)->p_set)
-		(*file)->f_ra = (*ra)->p_ra;
-	return nfs_ok;
-}
-
-void nfsd_put_tmp_read_open(struct file *file, struct raparms *ra)
-{
-	/* Write back readahead params */
-	if (ra) {
-		struct raparm_hbucket *rab = &raparm_hash[ra->p_hindex];
-		spin_lock(&rab->pb_lock);
-		ra->p_ra = file->f_ra;
-		ra->p_set = 1;
-		ra->p_count--;
-		spin_unlock(&rab->pb_lock);
-	}
-	nfsd_close(file);
-}
-
 /*
  * Read data from a file. count must contain the requested read count
  * on entry. On return, *count contains the number of bytes actually read.
@@ -1019,13 +998,15 @@ __be32 nfsd_read(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct raparms	*ra;
 	__be32 err;
 
-	err = nfsd_get_tmp_read_open(rqstp, fhp, &file, &ra);
+	err = nfsd_open(rqstp, fhp, S_IFREG, NFSD_MAY_READ, &file);
 	if (err)
 		return err;
 
+	ra = nfsd_init_raparms(file);
 	err = nfsd_vfs_read(rqstp, file, offset, vec, vlen, count);
-
-	nfsd_put_tmp_read_open(file, ra);
+	if (ra)
+		nfsd_put_raparams(file, ra);
+	fput(file);
 
 	return err;
 }
@@ -1057,7 +1038,7 @@ nfsd_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct file *file,
 		if (cnt)
 			err = nfsd_vfs_write(rqstp, fhp, file, offset, vec, vlen,
 					     cnt, stablep);
-		nfsd_close(file);
+		fput(file);
 	}
 out:
 	return err;
@@ -1102,7 +1083,7 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			err = nfserr_notsupp;
 	}
 
-	nfsd_close(file);
+	fput(file);
 out:
 	return err;
 }
@@ -1282,12 +1263,6 @@ out_nfserr:
 }
 
 #ifdef CONFIG_NFSD_V3
-
-static inline int nfsd_create_is_exclusive(int createmode)
-{
-	return createmode == NFS3_CREATE_EXCLUSIVE
-	       || createmode == NFS4_CREATE_EXCLUSIVE4_1;
-}
 
 /*
  * NFSv3 and NFSv4 version of nfsd_create
@@ -1671,7 +1646,7 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	/* cannot use fh_lock as we need deadlock protective ordering
 	 * so do it by hand */
 	trap = lock_rename(tdentry, fdentry);
-	ffhp->fh_locked = tfhp->fh_locked = 1;
+	ffhp->fh_locked = tfhp->fh_locked = true;
 	fill_pre_wcc(ffhp);
 	fill_pre_wcc(tfhp);
 
@@ -1721,7 +1696,7 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	fill_post_wcc(ffhp);
 	fill_post_wcc(tfhp);
 	unlock_rename(tdentry, fdentry);
-	ffhp->fh_locked = tfhp->fh_locked = 0;
+	ffhp->fh_locked = tfhp->fh_locked = false;
 	fh_drop_write(ffhp);
 
 out:
@@ -1941,7 +1916,7 @@ nfsd_readdir(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t *offsetp,
 	if (err == nfserr_eof || err == nfserr_toosmall)
 		err = nfs_ok; /* can still be found in ->err */
 out_close:
-	nfsd_close(file);
+	fput(file);
 out:
 	return err;
 }

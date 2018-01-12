@@ -40,11 +40,6 @@
 
 int sysctl_tipc_named_timeout __read_mostly = 2000;
 
-/**
- * struct tipc_dist_queue - queue holding deferred name table updates
- */
-static struct list_head tipc_dist_queue = LIST_HEAD_INIT(tipc_dist_queue);
-
 struct distr_queue_item {
 	struct distr_item i;
 	u32 dtype;
@@ -98,13 +93,13 @@ void named_cluster_distribute(struct net *net, struct sk_buff *skb)
 		dnode = node->addr;
 		if (in_own_node(net, dnode))
 			continue;
-		if (!tipc_node_active_links(node))
+		if (!tipc_node_is_up(node))
 			continue;
 		oskb = pskb_copy(skb, GFP_ATOMIC);
 		if (!oskb)
 			break;
 		msg_set_destnode(buf_msg(oskb), dnode);
-		tipc_link_xmit_skb(net, oskb, dnode, dnode);
+		tipc_node_xmit_skb(net, oskb, dnode, 0);
 	}
 	rcu_read_unlock();
 
@@ -225,7 +220,7 @@ void tipc_named_node_up(struct net *net, u32 dnode)
 			 &tn->nametbl->publ_list[TIPC_ZONE_SCOPE]);
 	rcu_read_unlock();
 
-	tipc_link_xmit(net, &head, dnode, dnode);
+	tipc_node_xmit(net, &head, dnode, 0);
 }
 
 static void tipc_publ_subscribe(struct net *net, struct publication *publ,
@@ -342,9 +337,11 @@ static bool tipc_update_nametbl(struct net *net, struct distr_item *i,
  * tipc_named_add_backlog - add a failed name table update to the backlog
  *
  */
-static void tipc_named_add_backlog(struct distr_item *i, u32 type, u32 node)
+static void tipc_named_add_backlog(struct net *net, struct distr_item *i,
+				   u32 type, u32 node)
 {
 	struct distr_queue_item *e;
+	struct tipc_net *tn = net_generic(net, tipc_net_id);
 	unsigned long now = get_jiffies_64();
 
 	e = kzalloc(sizeof(*e), GFP_ATOMIC);
@@ -354,7 +351,7 @@ static void tipc_named_add_backlog(struct distr_item *i, u32 type, u32 node)
 	e->node = node;
 	e->expires = now + msecs_to_jiffies(sysctl_tipc_named_timeout);
 	memcpy(e, i, sizeof(*i));
-	list_add_tail(&e->next, &tipc_dist_queue);
+	list_add_tail(&e->next, &tn->dist_queue);
 }
 
 /**
@@ -364,10 +361,11 @@ static void tipc_named_add_backlog(struct distr_item *i, u32 type, u32 node)
 void tipc_named_process_backlog(struct net *net)
 {
 	struct distr_queue_item *e, *tmp;
+	struct tipc_net *tn = net_generic(net, tipc_net_id);
 	char addr[16];
 	unsigned long now = get_jiffies_64();
 
-	list_for_each_entry_safe(e, tmp, &tipc_dist_queue, next) {
+	list_for_each_entry_safe(e, tmp, &tn->dist_queue, next) {
 		if (time_after(e->expires, now)) {
 			if (!tipc_update_nametbl(net, &e->i, e->node, e->dtype))
 				continue;
@@ -399,6 +397,7 @@ void tipc_named_rcv(struct net *net, struct sk_buff_head *inputq)
 
 	spin_lock_bh(&tn->nametbl_lock);
 	for (skb = skb_dequeue(inputq); skb; skb = skb_dequeue(inputq)) {
+		skb_linearize(skb);
 		msg = buf_msg(skb);
 		mtype = msg_type(msg);
 		item = (struct distr_item *)msg_data(msg);
@@ -406,7 +405,7 @@ void tipc_named_rcv(struct net *net, struct sk_buff_head *inputq)
 		node = msg_orignode(msg);
 		while (count--) {
 			if (!tipc_update_nametbl(net, item, node, mtype))
-				tipc_named_add_backlog(item, mtype, node);
+				tipc_named_add_backlog(net, item, mtype, node);
 			item++;
 		}
 		kfree_skb(skb);

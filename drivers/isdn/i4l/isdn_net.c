@@ -58,7 +58,7 @@
  * About SOFTNET:
  * Most of the changes were pretty obvious and basically done by HE already.
  *
- * One problem of the isdn net device code is that is uses struct net_device
+ * One problem of the isdn net device code is that it uses struct net_device
  * for masters and slaves. However, only master interface are registered to
  * the network layer, and therefore, it only makes sense to call netif_*
  * functions on them.
@@ -2611,10 +2611,9 @@ isdn_net_newslave(char *parm)
 	char newname[10];
 
 	if (p) {
-		/* Slave-Name MUST not be empty */
-		if (!strlen(p + 1))
+		/* Slave-Name MUST not be empty or overflow 'newname' */
+		if (strscpy(newname, p + 1, sizeof(newname)) <= 0)
 			return NULL;
-		strcpy(newname, p + 1);
 		*p = 0;
 		/* Master must already exist */
 		if (!(n = isdn_net_findif(parm)))

@@ -612,33 +612,19 @@ static int proc_xid_iterate(struct file *filp, struct dir_context *ctx)
 	struct vs_entry *p = vx_base_stuff;
 	int size = sizeof(vx_base_stuff) / sizeof(struct vs_entry);
 	int index;
-	u64 ino;
 
-	switch (ctx->pos) {
-	case 0:
-		ino = inode->i_ino;
-		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	case 1:
-		ino = parent_ino(dentry);
-		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	default:
-		index = ctx->pos - 2;
-		if (index >= size)
-			goto out;
+	if (!dir_emit_dots(filp, ctx))
+		return 0;
+
+	index = ctx->pos - 2;
+	if (index < size) {
 		for (p += index; p->name; p++) {
 			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
-				goto out;
+				return 0;
 			ctx->pos++;
 		}
 	}
-out:
 	return 1;
 }
 
@@ -693,33 +679,19 @@ static int proc_nid_iterate(struct file *filp, struct dir_context *ctx)
 	struct vs_entry *p = nx_base_stuff;
 	int size = sizeof(nx_base_stuff) / sizeof(struct vs_entry);
 	int index;
-	u64 ino;
 
-	switch (ctx->pos) {
-	case 0:
-		ino = inode->i_ino;
-		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	case 1:
-		ino = parent_ino(dentry);
-		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	default:
-		index = ctx->pos - 2;
-		if (index >= size)
-			goto out;
+	if (!dir_emit_dots(filp, ctx))
+		return 0;
+
+	index = ctx->pos - 2;
+	if (index < size) {
 		for (p += index; p->name; p++) {
 			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, PROC_I(inode)->fd, p))
-				goto out;
+				return 0;
 			ctx->pos++;
 		}
 	}
-out:
 	return 1;
 }
 
@@ -838,60 +810,44 @@ out:
 
 int proc_virtual_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_path.dentry;
-	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = vx_virtual_stuff;
 	int size = sizeof(vx_virtual_stuff) / sizeof(struct vs_entry);
 	int index;
 	unsigned int xid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
 	unsigned int nr_xids, i;
-	u64 ino;
 
-	switch (ctx->pos) {
-	case 0:
-		ino = inode->i_ino;
-		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	case 1:
-		ino = parent_ino(dentry);
-		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	default:
-		index = ctx->pos - 2;
-		if (index >= size)
-			goto entries;
+	if (!dir_emit_dots(filp, ctx))
+		return 0;
+
+	index = ctx->pos - 2;
+	if (index < size) {
 		for (p += index; p->name; p++) {
 			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, 0, p))
-				goto out;
-			ctx->pos++;
-		}
-	entries:
-		index = ctx->pos - size;
-		p = &vx_virtual_stuff[size - 1];
-		nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
-		for (i = 0; i < nr_xids; i++) {
-			int n, xid = xid_array[i];
-			unsigned int j = PROC_NUMBUF;
-
-			n = xid;
-			do
-				buf[--j] = '0' + (n % 10);
-			while (n /= 10);
-
-			if (vx_proc_fill_cache(filp, ctx,
-				buf + j, PROC_NUMBUF - j,
-				vs_proc_instantiate, xid, p))
-				goto out;
+				return 0;
 			ctx->pos++;
 		}
 	}
-out:
+
+	index = ctx->pos - size;
+	p = &vx_virtual_stuff[size - 1];
+	nr_xids = get_xid_list(index, xid_array, PROC_MAXVIDS);
+	for (i = 0; i < nr_xids; i++) {
+		int n, xid = xid_array[i];
+		unsigned int j = PROC_NUMBUF;
+
+		n = xid;
+		do
+			buf[--j] = '0' + (n % 10);
+		while (n /= 10);
+
+		if (vx_proc_fill_cache(filp, ctx,
+			buf + j, PROC_NUMBUF - j,
+			vs_proc_instantiate, xid, p))
+			return 0;
+		ctx->pos++;
+	}
 	return 0;
 }
 
@@ -919,60 +875,44 @@ static struct inode_operations proc_virtual_dir_inode_operations = {
 
 int proc_virtnet_iterate(struct file *filp, struct dir_context *ctx)
 {
-	struct dentry *dentry = filp->f_path.dentry;
-	struct inode *inode = dentry->d_inode;
 	struct vs_entry *p = nx_virtnet_stuff;
 	int size = sizeof(nx_virtnet_stuff) / sizeof(struct vs_entry);
 	int index;
 	unsigned int nid_array[PROC_MAXVIDS];
 	char buf[PROC_NUMBUF];
 	unsigned int nr_nids, i;
-	u64 ino;
 
-	switch (ctx->pos) {
-	case 0:
-		ino = inode->i_ino;
-		if (!dir_emit(ctx, ".", 1, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	case 1:
-		ino = parent_ino(dentry);
-		if (!dir_emit(ctx, "..", 2, ino, DT_DIR) < 0)
-			goto out;
-		ctx->pos++;
-		/* fall through */
-	default:
-		index = ctx->pos - 2;
-		if (index >= size)
-			goto entries;
+	if (!dir_emit_dots(filp, ctx))
+		return 0;
+
+	index = ctx->pos - 2;
+	if (index < size) {
 		for (p += index; p->name; p++) {
 			if (vx_proc_fill_cache(filp, ctx, p->name, p->len,
 				vs_proc_instantiate, 0, p))
-				goto out;
-			ctx->pos++;
-		}
-	entries:
-		index = ctx->pos - size;
-		p = &nx_virtnet_stuff[size - 1];
-		nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
-		for (i = 0; i < nr_nids; i++) {
-			int n, nid = nid_array[i];
-			unsigned int j = PROC_NUMBUF;
-
-			n = nid;
-			do
-				buf[--j] = '0' + (n % 10);
-			while (n /= 10);
-
-			if (vx_proc_fill_cache(filp, ctx,
-				buf + j, PROC_NUMBUF - j,
-				vs_proc_instantiate, nid, p))
-				goto out;
+				return 0;
 			ctx->pos++;
 		}
 	}
-out:
+
+	index = ctx->pos - size;
+	p = &nx_virtnet_stuff[size - 1];
+	nr_nids = get_nid_list(index, nid_array, PROC_MAXVIDS);
+	for (i = 0; i < nr_nids; i++) {
+		int n, nid = nid_array[i];
+		unsigned int j = PROC_NUMBUF;
+
+		n = nid;
+		do
+			buf[--j] = '0' + (n % 10);
+		while (n /= 10);
+
+		if (vx_proc_fill_cache(filp, ctx,
+			buf + j, PROC_NUMBUF - j,
+			vs_proc_instantiate, nid, p))
+			return 0;
+		ctx->pos++;
+	}
 	return 0;
 }
 

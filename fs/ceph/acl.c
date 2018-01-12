@@ -128,7 +128,7 @@ int ceph_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	if (new_mode != old_mode) {
 		newattrs.ia_mode = new_mode;
 		newattrs.ia_valid = ATTR_MODE;
-		ret = ceph_setattr(dentry, &newattrs);
+		ret = __ceph_setattr(dentry, &newattrs);
 		if (ret)
 			goto out_dput;
 	}
@@ -138,7 +138,7 @@ int ceph_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		if (new_mode != old_mode) {
 			newattrs.ia_mode = old_mode;
 			newattrs.ia_valid = ATTR_MODE;
-			ceph_setattr(dentry, &newattrs);
+			__ceph_setattr(dentry, &newattrs);
 		}
 		goto out_dput;
 	}
@@ -185,10 +185,10 @@ int ceph_pre_init_acls(struct inode *dir, umode_t *mode,
 		val_size2 = posix_acl_xattr_size(default_acl->a_count);
 
 	err = -ENOMEM;
-	tmp_buf = kmalloc(max(val_size1, val_size2), GFP_NOFS);
+	tmp_buf = kmalloc(max(val_size1, val_size2), GFP_KERNEL);
 	if (!tmp_buf)
 		goto out_err;
-	pagelist = kmalloc(sizeof(struct ceph_pagelist), GFP_NOFS);
+	pagelist = kmalloc(sizeof(struct ceph_pagelist), GFP_KERNEL);
 	if (!pagelist)
 		goto out_err;
 	ceph_pagelist_init(pagelist);

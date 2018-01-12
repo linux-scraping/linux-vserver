@@ -29,18 +29,25 @@ struct cpuidle_driver powernv_idle_driver = {
 
 static int max_idle_state;
 static struct cpuidle_state *cpuidle_state_table;
+static u64 snooze_timeout;
+static bool snooze_timeout_en;
 
 static int snooze_loop(struct cpuidle_device *dev,
 			struct cpuidle_driver *drv,
 			int index)
 {
+	u64 snooze_exit_time;
+
 	local_irq_enable();
 	set_thread_flag(TIF_POLLING_NRFLAG);
 
+	snooze_exit_time = get_tb() + snooze_timeout;
 	ppc64_runlatch_off();
 	while (!need_resched()) {
 		HMT_low();
 		HMT_very_low();
+		if (snooze_timeout_en && get_tb() > snooze_exit_time)
+			break;
 	}
 
 	HMT_medium();
@@ -153,6 +160,24 @@ static int powernv_cpuidle_driver_init(void)
 		drv->state_count += 1;
 	}
 
+	/*
+	 * On the PowerNV platform cpu_present may be less than cpu_possible in
+	 * cases when firmware detects the CPU, but it is not available to the
+	 * OS.  If CONFIG_HOTPLUG_CPU=n, then such CPUs are not hotplugable at
+	 * run time and hence cpu_devices are not created for those CPUs by the
+	 * generic topology_init().
+	 *
+	 * drv->cpumask defaults to cpu_possible_mask in
+	 * __cpuidle_driver_init().  This breaks cpuidle on PowerNV where
+	 * cpu_devices are not created for CPUs in cpu_possible_mask that
+	 * cannot be hot-added later at run time.
+	 *
+	 * Trying cpuidle_register_device() on a CPU without a cpu_device is
+	 * incorrect, so pass a correct CPU mask to the generic cpuidle driver.
+	 */
+
+	drv->cpumask = (struct cpumask *)cpu_present_mask;
+
 	return 0;
 }
 
@@ -261,6 +286,11 @@ static int powernv_idle_probe(void)
 		cpuidle_state_table = powernv_states;
 		/* Device tree can indicate more idle states */
 		max_idle_state = powernv_add_idle_states();
+		if (max_idle_state > 1) {
+			snooze_timeout_en = true;
+			snooze_timeout = powernv_states[1].target_residency *
+					 tb_ticks_per_usec;
+		}
  	} else
  		return -ENODEV;
 

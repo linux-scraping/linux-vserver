@@ -7,6 +7,7 @@
 #include <linux/compiler.h>
 #include <linux/thread_info.h>
 #include <linux/string.h>
+#include <linux/preempt.h>
 #include <asm/asm.h>
 #include <asm/page.h>
 #include <asm/smap.h>
@@ -51,13 +52,13 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
 	 * limit, not add it to the address).
 	 */
 	if (__builtin_constant_p(size))
-		return addr > limit - size;
+		return unlikely(addr > limit - size);
 
 	/* Arbitrary sizes? Be careful about overflow */
 	addr += size;
-	if (addr < size)
+	if (unlikely(addr < size))
 		return true;
-	return addr > limit;
+	return unlikely(addr > limit);
 }
 
 #define __range_not_ok(addr, size, limit)				\
@@ -65,6 +66,12 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
 	__chk_user_ptr(addr);						\
 	__chk_range_not_ok((unsigned long __force)(addr), size, limit); \
 })
+
+#ifdef CONFIG_DEBUG_ATOMIC_SLEEP
+# define WARN_ON_IN_IRQ()	WARN_ON_ONCE(!in_task())
+#else
+# define WARN_ON_IN_IRQ()
+#endif
 
 /**
  * access_ok: - Checks if a user space pointer is valid
@@ -74,7 +81,8 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
  * @addr: User space pointer to start of block to check
  * @size: Size of block to check
  *
- * Context: User context only.  This function may sleep.
+ * Context: User context only. This function may sleep if pagefaults are
+ *          enabled.
  *
  * Checks if a pointer to a block of memory in user space is valid.
  *
@@ -85,15 +93,19 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
  * checks that the pointer is in the user space range - after calling
  * this function, memory access functions may still return -EFAULT.
  */
-#define access_ok(type, addr, size) \
-	likely(!__range_not_ok(addr, size, user_addr_max()))
+#define access_ok(type, addr, size)					\
+({									\
+	WARN_ON_IN_IRQ();						\
+	likely(!__range_not_ok(addr, size, user_addr_max()));		\
+})
 
 /*
- * The exception table consists of triples of addresses relative to the
- * exception table entry itself. The first address is of an instruction
- * that is allowed to fault, the second is the target at which the program
- * should continue. The third is a handler function to deal with the fault
- * caused by the instruction in the first field.
+ * The exception table consists of pairs of addresses relative to the
+ * exception table enty itself: the first is the address of an
+ * instruction that is allowed to fault, and the second is the address
+ * at which the program should continue.  No registers are modified,
+ * so it is entirely up to the continuation code to figure out what to
+ * do.
  *
  * All the routines below use bits of fixup code that are out of line
  * with the main instruction path.  This means when everything is well,
@@ -102,14 +114,13 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
  */
 
 struct exception_table_entry {
-	int insn, fixup, handler;
+	int insn, fixup;
 };
 /* This is not the generic standard exception_table_entry format */
 #define ARCH_HAS_SORT_EXTABLE
 #define ARCH_HAS_SEARCH_EXTABLE
 
-extern int fixup_exception(struct pt_regs *regs, int trapnr);
-extern bool ex_has_fault_handler(unsigned long ip);
+extern int fixup_exception(struct pt_regs *regs);
 extern int early_fixup_exception(unsigned long *ip);
 
 /*
@@ -145,7 +156,8 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
  * @x:   Variable to store result.
  * @ptr: Source address, in user space.
  *
- * Context: User context only.  This function may sleep.
+ * Context: User context only. This function may sleep if pagefaults are
+ *          enabled.
  *
  * This macro copies a single simple variable from user space to kernel
  * space.  It supports simple types like char and int, but not larger
@@ -180,7 +192,7 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
 		     : "=a" (__ret_gu), "=r" (__val_gu)			\
 		     : "0" (ptr), "i" (sizeof(*(ptr))));		\
 	(x) = (__force __typeof__(*(ptr))) __val_gu;			\
-	__ret_gu;							\
+	__builtin_expect(__ret_gu, 0);					\
 })
 
 #define __put_user_x(size, x, ptr, __ret_pu)			\
@@ -240,7 +252,8 @@ extern void __put_user_8(void);
  * @x:   Value to copy to user space.
  * @ptr: Destination address, in user space.
  *
- * Context: User context only.  This function may sleep.
+ * Context: User context only. This function may sleep if pagefaults are
+ *          enabled.
  *
  * This macro copies a single simple value from kernel space to user
  * space.  It supports simple types like char and int, but not larger
@@ -275,7 +288,7 @@ extern void __put_user_8(void);
 		__put_user_x(X, __pu_val, ptr, __ret_pu);	\
 		break;						\
 	}							\
-	__ret_pu;						\
+	__builtin_expect(__ret_pu, 0);				\
 })
 
 #define __put_user_size(x, ptr, size, retval, errret)			\
@@ -329,7 +342,7 @@ do {									\
 #define __get_user_asm_u64(x, ptr, retval, errret) \
 	 __get_user_asm(x, ptr, retval, "q", "", "=r", errret)
 #define __get_user_asm_ex_u64(x, ptr) \
-	 __get_user_asm_ex(x, ptr, "q", "", "=r")
+	 __get_user_asm_ex(x, ptr, "q", "", "=&r")
 #endif
 
 #define __get_user_size(x, ptr, size, retval, errret)			\
@@ -372,13 +385,13 @@ do {									\
 	__chk_user_ptr(ptr);						\
 	switch (size) {							\
 	case 1:								\
-		__get_user_asm_ex(x, ptr, "b", "b", "=q");		\
+		__get_user_asm_ex(x, ptr, "b", "b", "=&q");		\
 		break;							\
 	case 2:								\
-		__get_user_asm_ex(x, ptr, "w", "w", "=r");		\
+		__get_user_asm_ex(x, ptr, "w", "w", "=&r");		\
 		break;							\
 	case 4:								\
-		__get_user_asm_ex(x, ptr, "l", "k", "=r");		\
+		__get_user_asm_ex(x, ptr, "l", "k", "=&r");		\
 		break;							\
 	case 8:								\
 		__get_user_asm_ex_u64(x, ptr);				\
@@ -391,18 +404,14 @@ do {									\
 #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
 	asm volatile("1:	mov"itype" %1,%"rtype"0\n"		\
 		     "2:\n"						\
-		     ".section .fixup,\"ax\"\n"				\
-                     "3:xor"itype" %"rtype"0,%"rtype"0\n"		\
-		     "  jmp 2b\n"					\
-		     ".previous\n"					\
-		     _ASM_EXTABLE_EX(1b, 3b)				\
-		     : ltype(x) : "m" (__m(addr)))
+		     _ASM_EXTABLE_EX(1b, 2b)				\
+		     : ltype(x) : "m" (__m(addr)), "0" (0))
 
 #define __put_user_nocheck(x, ptr, size)			\
 ({								\
 	int __pu_err;						\
 	__put_user_size((x), (ptr), (size), __pu_err, -EFAULT);	\
-	__pu_err;						\
+	__builtin_expect(__pu_err, 0);				\
 })
 
 #define __get_user_nocheck(x, ptr, size)				\
@@ -411,7 +420,7 @@ do {									\
 	unsigned long __gu_val;						\
 	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
-	__gu_err;							\
+	__builtin_expect(__gu_err, 0);					\
 })
 
 /* FIXME: this hack is definitely wrong -AK */
@@ -459,7 +468,8 @@ struct __large_struct { unsigned long buf[100]; };
  * @x:   Variable to store result.
  * @ptr: Source address, in user space.
  *
- * Context: User context only.  This function may sleep.
+ * Context: User context only. This function may sleep if pagefaults are
+ *          enabled.
  *
  * This macro copies a single simple variable from user space to kernel
  * space.  It supports simple types like char and int, but not larger
@@ -483,7 +493,8 @@ struct __large_struct { unsigned long buf[100]; };
  * @x:   Value to copy to user space.
  * @ptr: Destination address, in user space.
  *
- * Context: User context only.  This function may sleep.
+ * Context: User context only. This function may sleep if pagefaults are
+ *          enabled.
  *
  * This macro copies a single simple value from kernel space to user
  * space.  It supports simple types like char and int, but not larger

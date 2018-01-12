@@ -626,6 +626,10 @@ extend_lmmio_len(unsigned long start, unsigned long end, unsigned long lba_len)
 {
 	struct resource *tmp;
 
+	/* exit if not a C8000 */
+	if (boot_cpu_data.cpu_type < mako)
+		return end;
+
 	pr_debug("LMMIO mismatch: PAT length = 0x%lx, MASK register = 0x%lx\n",
 		end - start, lba_len);
 
@@ -633,10 +637,6 @@ extend_lmmio_len(unsigned long start, unsigned long end, unsigned long lba_len)
 
 	pr_debug("LBA: lmmio_space [0x%lx-0x%lx] - original\n", start, end);
 
-	if (boot_cpu_data.cpu_type < mako) {
-		pr_info("LBA: Not a C8000 system - not extending LMMIO range.\n");
-		return end;
-	}
 
 	end += lba_len;
 	if (end < start) /* fix overflow */
@@ -1559,9 +1559,9 @@ lba_driver_probe(struct parisc_device *dev)
 		pci_add_resource_offset(&resources, &lba_dev->hba.lmmio_space,
 					lba_dev->hba.lmmio_space_offset);
 	if (lba_dev->hba.gmmio_space.flags) {
+		/* Not registering GMMIO space - according to docs it's not
+		 * even used on HP-UX. */
 		/* pci_add_resource(&resources, &lba_dev->hba.gmmio_space); */
-		pr_warn("LBA: Not registering GMMIO space %pR\n",
-			&lba_dev->hba.gmmio_space);
 	}
 
 	pci_add_resource(&resources, &lba_dev->hba.bus_num);
@@ -1654,3 +1654,36 @@ void lba_set_iregs(struct parisc_device *lba, u32 ibase, u32 imask)
 	iounmap(base_addr);
 }
 
+
+/*
+ * The design of the Diva management card in rp34x0 machines (rp3410, rp3440)
+ * seems rushed, so that many built-in components simply don't work.
+ * The following quirks disable the serial AUX port and the built-in ATI RV100
+ * Radeon 7000 graphics card which both don't have any external connectors and
+ * thus are useless, and even worse, e.g. the AUX port occupies ttyS0 and as
+ * such makes those machines the only PARISC machines on which we can't use
+ * ttyS0 as boot console.
+ */
+static void quirk_diva_ati_card(struct pci_dev *dev)
+{
+	if (dev->subsystem_vendor != PCI_VENDOR_ID_HP ||
+	    dev->subsystem_device != 0x1292)
+		return;
+
+	dev_info(&dev->dev, "Hiding Diva built-in ATI card");
+	dev->device = 0;
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_ATI, PCI_DEVICE_ID_ATI_RADEON_QY,
+	quirk_diva_ati_card);
+
+static void quirk_diva_aux_disable(struct pci_dev *dev)
+{
+	if (dev->subsystem_vendor != PCI_VENDOR_ID_HP ||
+	    dev->subsystem_device != 0x1291)
+		return;
+
+	dev_info(&dev->dev, "Hiding Diva built-in AUX serial device");
+	dev->device = 0;
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_HP, PCI_DEVICE_ID_HP_DIVA_AUX,
+	quirk_diva_aux_disable);

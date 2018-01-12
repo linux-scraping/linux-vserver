@@ -489,23 +489,43 @@ static void sctp_v4_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 	 */
 	rcu_read_lock();
 	list_for_each_entry_rcu(laddr, &bp->address_list, list) {
+		struct net_device *odev;
+
 		if (!laddr->valid)
 			continue;
-		if ((laddr->state == SCTP_ADDR_SRC) &&
-		    (AF_INET == laddr->a.sa.sa_family)) {
-			fl4->fl4_sport = laddr->a.v4.sin_port;
-			flowi4_update_output(fl4,
-					     asoc->base.sk->sk_bound_dev_if,
-					     RT_CONN_FLAGS(asoc->base.sk),
-					     daddr->v4.sin_addr.s_addr,
-					     laddr->a.v4.sin_addr.s_addr);
+		if (laddr->state != SCTP_ADDR_SRC ||
+		    AF_INET != laddr->a.sa.sa_family)
+			continue;
 
-			rt = ip_route_output_key(sock_net(sk), fl4);
-			if (!IS_ERR(rt)) {
-				dst = &rt->dst;
-				goto out_unlock;
-			}
+		fl4->fl4_sport = laddr->a.v4.sin_port;
+		flowi4_update_output(fl4,
+				     asoc->base.sk->sk_bound_dev_if,
+				     RT_CONN_FLAGS(asoc->base.sk),
+				     daddr->v4.sin_addr.s_addr,
+				     laddr->a.v4.sin_addr.s_addr);
+
+		rt = ip_route_output_key(sock_net(sk), fl4);
+		if (IS_ERR(rt))
+			continue;
+
+		if (!dst)
+			dst = &rt->dst;
+
+		/* Ensure the src address belongs to the output
+		 * interface.
+		 */
+		odev = __ip_dev_find(sock_net(sk), laddr->a.v4.sin_addr.s_addr,
+				     false);
+		if (!odev || odev->ifindex != fl4->flowi4_oif) {
+			if (&rt->dst != dst)
+				dst_release(&rt->dst);
+			continue;
 		}
+
+		if (dst != &rt->dst)
+			dst_release(dst);
+		dst = &rt->dst;
+		break;
 	}
 
 out_unlock:
@@ -552,7 +572,7 @@ static struct sock *sctp_v4_create_accept_sk(struct sock *sk,
 					     struct sctp_association *asoc)
 {
 	struct sock *newsk = sk_alloc(sock_net(sk), PF_INET, GFP_KERNEL,
-			sk->sk_prot);
+			sk->sk_prot, 0);
 	struct inet_sock *newinet;
 
 	if (!newsk)
@@ -1473,8 +1493,8 @@ static __init int sctp_init(void)
 		INIT_HLIST_HEAD(&sctp_port_hashtable[i].chain);
 	}
 
-	pr_info("Hash tables configured (established %d bind %d/%d)\n",
-		sctp_assoc_hashsize, sctp_port_hashsize, num_entries);
+	pr_info("Hash tables configured (established %d bind %d)\n",
+		sctp_assoc_hashsize, sctp_port_hashsize);
 
 	sctp_sysctl_register();
 
