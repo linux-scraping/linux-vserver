@@ -35,21 +35,6 @@ static inline void op##_bit(unsigned long nr, volatile unsigned long *m)\
 									\
 	m += nr >> 5;							\
 									\
-	/*								\
-	 * ARC ISA micro-optimization:					\
-	 *								\
-	 * Instructions dealing with bitpos only consider lower 5 bits	\
-	 * e.g (x << 33) is handled like (x << 1) by ASL instruction	\
-	 *  (mem pointer still needs adjustment to point to next word)	\
-	 *								\
-	 * Hence the masking to clamp @nr arg can be elided in general.	\
-	 *								\
-	 * However if @nr is a constant (above assumed in a register),	\
-	 * and greater than 31, gcc can optimize away (x << 33) to 0,	\
-	 * as overflow, given the 32-bit ISA. Thus masking needs to be	\
-	 * done for const @nr, but no code is generated due to gcc	\
-	 * const prop.							\
-	 */								\
 	nr &= 0x1f;							\
 									\
 	__asm__ __volatile__(						\
@@ -215,6 +200,8 @@ test_bit(unsigned int nr, const volatile unsigned long *addr)
 	return ((mask & *addr) != 0);
 }
 
+#ifdef CONFIG_ISA_ARCOMPACT
+
 /*
  * Count the number of zeros, starting from MSB
  * Helper for fls( ) friends
@@ -306,6 +293,75 @@ static inline __attribute__ ((const)) int __ffs(unsigned long word)
 
 	return ffs(word) - 1;
 }
+
+#else	/* CONFIG_ISA_ARCV2 */
+
+/*
+ * fls = Find Last Set in word
+ * @result: [1-32]
+ * fls(1) = 1, fls(0x80000000) = 32, fls(0) = 0
+ */
+static inline __attribute__ ((const)) int fls(unsigned long x)
+{
+	int n;
+
+	asm volatile(
+	"	fls.f	%0, %1		\n"  /* 0:31; 0(Z) if src 0 */
+	"	add.nz	%0, %0, 1	\n"  /* 0:31 -> 1:32 */
+	: "=r"(n)	/* Early clobber not needed */
+	: "r"(x)
+	: "cc");
+
+	return n;
+}
+
+/*
+ * __fls: Similar to fls, but zero based (0-31). Also 0 if no bit set
+ */
+static inline __attribute__ ((const)) int __fls(unsigned long x)
+{
+	/* FLS insn has exactly same semantics as the API */
+	return	__builtin_arc_fls(x);
+}
+
+/*
+ * ffs = Find First Set in word (LSB to MSB)
+ * @result: [1-32], 0 if all 0's
+ */
+static inline __attribute__ ((const)) int ffs(unsigned long x)
+{
+	int n;
+
+	asm volatile(
+	"	ffs.f	%0, %1		\n"  /* 0:31; 31(Z) if src 0 */
+	"	add.nz	%0, %0, 1	\n"  /* 0:31 -> 1:32 */
+	"	mov.z	%0, 0		\n"  /* 31(Z)-> 0 */
+	: "=r"(n)	/* Early clobber not needed */
+	: "r"(x)
+	: "cc");
+
+	return n;
+}
+
+/*
+ * __ffs: Similar to ffs, but zero based (0-31)
+ */
+static inline __attribute__ ((const)) int __ffs(unsigned long x)
+{
+	int n;
+
+	asm volatile(
+	"	ffs.f	%0, %1		\n"  /* 0:31; 31(Z) if src 0 */
+	"	mov.z	%0, 0		\n"  /* 31(Z)-> 0 */
+	: "=r"(n)
+	: "r"(x)
+	: "cc");
+
+	return n;
+
+}
+
+#endif	/* CONFIG_ISA_ARCOMPACT */
 
 /*
  * ffz = Find First Zero in word.

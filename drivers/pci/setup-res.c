@@ -34,6 +34,10 @@ static void pci_std_update_resource(struct pci_dev *dev, int resno)
 	int reg;
 	struct resource *res = dev->resource + resno;
 
+	/* Per SR-IOV spec 3.4.1.11, VF BARs are RO zero */
+	if (dev->is_virtfn)
+		return;
+
 	/*
 	 * Ignore resources for unimplemented BARs and unused resource slots
 	 * for 64 bit BARs.
@@ -198,6 +202,7 @@ static int pci_revert_fw_address(struct resource *res, struct pci_dev *dev,
 	end = res->end;
 	res->start = fw_addr;
 	res->end = res->start + size - 1;
+	res->flags &= ~IORESOURCE_UNSET;
 
 	root = pci_find_parent_resource(dev, res);
 	if (!root) {
@@ -215,6 +220,7 @@ static int pci_revert_fw_address(struct resource *res, struct pci_dev *dev,
 			 resno, res, conflict->name, conflict);
 		res->start = start;
 		res->end = end;
+		res->flags |= IORESOURCE_UNSET;
 		return -EBUSY;
 	}
 	return 0;

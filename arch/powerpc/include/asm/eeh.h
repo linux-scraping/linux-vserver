@@ -27,6 +27,8 @@
 #include <linux/time.h>
 #include <linux/atomic.h>
 
+#include <uapi/asm/eeh.h>
+
 struct pci_dev;
 struct pci_bus;
 struct pci_dn;
@@ -186,11 +188,6 @@ enum {
 #define EEH_STATE_DMA_ACTIVE	(1 << 4)	/* Active DMA		*/
 #define EEH_STATE_MMIO_ENABLED	(1 << 5)	/* MMIO enabled		*/
 #define EEH_STATE_DMA_ENABLED	(1 << 6)	/* DMA enabled		*/
-#define EEH_PE_STATE_NORMAL		0	/* Normal state		*/
-#define EEH_PE_STATE_RESET		1	/* PE reset asserted	*/
-#define EEH_PE_STATE_STOPPED_IO_DMA	2	/* Frozen PE		*/
-#define EEH_PE_STATE_STOPPED_DMA	4	/* Stopped DMA, Enabled IO */
-#define EEH_PE_STATE_UNAVAIL		5	/* Unavailable		*/
 #define EEH_RESET_DEACTIVATE	0	/* Deactivate the PE reset	*/
 #define EEH_RESET_HOT		1	/* Hot reset			*/
 #define EEH_RESET_FUNDAMENTAL	3	/* Fundamental reset		*/
@@ -295,6 +292,8 @@ int eeh_pe_set_option(struct eeh_pe *pe, int option);
 int eeh_pe_get_state(struct eeh_pe *pe);
 int eeh_pe_reset(struct eeh_pe *pe, int option);
 int eeh_pe_configure(struct eeh_pe *pe);
+int eeh_pe_inject_err(struct eeh_pe *pe, int type, int func,
+		      unsigned long addr, unsigned long mask);
 
 /**
  * EEH_POSSIBLE_ERROR() -- test for possible MMIO failure.
@@ -337,13 +336,19 @@ static inline int eeh_check_failure(const volatile void __iomem *token)
 
 #define eeh_dev_check_failure(x) (0)
 
-#define eeh_addr_cache_build()
-#define eeh_add_device_early(pdn)
-#define eeh_add_device_tree_early(pdn)
-#define eeh_add_device_late(pdev)
-#define eeh_add_device_tree_late(pbus)
-#define eeh_add_sysfs_files(pbus)
-#define eeh_remove_device(pdev)
+static inline void eeh_addr_cache_build(void) { }
+
+static inline void eeh_add_device_early(struct pci_dn *pdn) { }
+
+static inline void eeh_add_device_tree_early(struct pci_dn *pdn) { }
+
+static inline void eeh_add_device_late(struct pci_dev *dev) { }
+
+static inline void eeh_add_device_tree_late(struct pci_bus *bus) { }
+
+static inline void eeh_add_sysfs_files(struct pci_bus *bus) { }
+
+static inline void eeh_remove_device(struct pci_dev *dev) { }
 
 #define EEH_POSSIBLE_ERROR(val, type) (0)
 #define EEH_IO_ERROR_VALUE(size) (-1UL)

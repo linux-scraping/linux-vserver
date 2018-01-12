@@ -48,10 +48,9 @@
  */
 #define TPM_I2C_MAX_BUF_SIZE           32
 #define TPM_I2C_RETRY_COUNT            32
-#define TPM_I2C_BUS_DELAY              1000      	/* usec */
-#define TPM_I2C_RETRY_DELAY_SHORT      (2 * 1000)	/* usec */
-#define TPM_I2C_RETRY_DELAY_LONG       (10 * 1000) 	/* usec */
-#define TPM_I2C_DELAY_RANGE            300		/* usec */
+#define TPM_I2C_BUS_DELAY              1       /* msec */
+#define TPM_I2C_RETRY_DELAY_SHORT      2       /* msec */
+#define TPM_I2C_RETRY_DELAY_LONG       10      /* msec */
 
 #define I2C_DRIVER_NAME "tpm_i2c_nuvoton"
 
@@ -97,13 +96,13 @@ static s32 i2c_nuvoton_write_buf(struct i2c_client *client, u8 offset, u8 size,
 /* read TPM_STS register */
 static u8 i2c_nuvoton_read_status(struct tpm_chip *chip)
 {
-	struct i2c_client *client = to_i2c_client(chip->pdev);
+	struct i2c_client *client = to_i2c_client(chip->dev.parent);
 	s32 status;
 	u8 data;
 
 	status = i2c_nuvoton_read_buf(client, TPM_STS, 1, &data);
 	if (status <= 0) {
-		dev_err(chip->pdev, "%s() error return %d\n", __func__,
+		dev_err(&chip->dev, "%s() error return %d\n", __func__,
 			status);
 		data = TPM_STS_ERR_VAL;
 	}
@@ -120,9 +119,7 @@ static s32 i2c_nuvoton_write_status(struct i2c_client *client, u8 data)
 	/* this causes the current command to be aborted */
 	for (i = 0, status = -1; i < TPM_I2C_RETRY_COUNT && status < 0; i++) {
 		status = i2c_nuvoton_write_buf(client, TPM_STS, 1, &data);
-		if (status < 0)
-			usleep_range(TPM_I2C_BUS_DELAY, TPM_I2C_BUS_DELAY
-				     + TPM_I2C_DELAY_RANGE);
+		msleep(TPM_I2C_BUS_DELAY);
 	}
 	return status;
 }
@@ -130,13 +127,13 @@ static s32 i2c_nuvoton_write_status(struct i2c_client *client, u8 data)
 /* write commandReady to TPM_STS register */
 static void i2c_nuvoton_ready(struct tpm_chip *chip)
 {
-	struct i2c_client *client = to_i2c_client(chip->pdev);
+	struct i2c_client *client = to_i2c_client(chip->dev.parent);
 	s32 status;
 
 	/* this causes the current command to be aborted */
 	status = i2c_nuvoton_write_status(client, TPM_STS_COMMAND_READY);
 	if (status < 0)
-		dev_err(chip->pdev,
+		dev_err(&chip->dev,
 			"%s() fail to write TPM_STS.commandReady\n", __func__);
 }
 
@@ -159,8 +156,7 @@ static int i2c_nuvoton_get_burstcount(struct i2c_client *client,
 			burst_count = min_t(u8, TPM_I2C_MAX_BUF_SIZE, data);
 			break;
 		}
-		usleep_range(TPM_I2C_BUS_DELAY, TPM_I2C_BUS_DELAY
-			     + TPM_I2C_DELAY_RANGE);
+		msleep(TPM_I2C_BUS_DELAY);
 	} while (time_before(jiffies, stop));
 
 	return burst_count;
@@ -203,24 +199,20 @@ static int i2c_nuvoton_wait_for_stat(struct tpm_chip *chip, u8 mask, u8 value,
 			return 0;
 
 		/* use polling to wait for the event */
-		ten_msec = jiffies + usecs_to_jiffies(TPM_I2C_RETRY_DELAY_LONG);
+		ten_msec = jiffies + msecs_to_jiffies(TPM_I2C_RETRY_DELAY_LONG);
 		stop = jiffies + timeout;
 		do {
 			if (time_before(jiffies, ten_msec))
-				usleep_range(TPM_I2C_RETRY_DELAY_SHORT,
-					     TPM_I2C_RETRY_DELAY_SHORT
-					     + TPM_I2C_DELAY_RANGE);
+				msleep(TPM_I2C_RETRY_DELAY_SHORT);
 			else
-				usleep_range(TPM_I2C_RETRY_DELAY_LONG,
-					     TPM_I2C_RETRY_DELAY_LONG
-					     + TPM_I2C_DELAY_RANGE);
+				msleep(TPM_I2C_RETRY_DELAY_LONG);
 			status_valid = i2c_nuvoton_check_status(chip, mask,
 								value);
 			if (status_valid)
 				return 0;
 		} while (time_before(jiffies, stop));
 	}
-	dev_err(chip->pdev, "%s(%02x, %02x) -> timeout\n", __func__, mask,
+	dev_err(&chip->dev, "%s(%02x, %02x) -> timeout\n", __func__, mask,
 		value);
 	return -ETIMEDOUT;
 }
@@ -248,7 +240,7 @@ static int i2c_nuvoton_recv_data(struct i2c_client *client,
 					       &chip->vendor.read_queue) == 0) {
 		burst_count = i2c_nuvoton_get_burstcount(client, chip);
 		if (burst_count < 0) {
-			dev_err(chip->pdev,
+			dev_err(&chip->dev,
 				"%s() fail to read burstCount=%d\n", __func__,
 				burst_count);
 			return -EIO;
@@ -257,12 +249,12 @@ static int i2c_nuvoton_recv_data(struct i2c_client *client,
 		rc = i2c_nuvoton_read_buf(client, TPM_DATA_FIFO_R,
 					  bytes2read, &buf[size]);
 		if (rc < 0) {
-			dev_err(chip->pdev,
+			dev_err(&chip->dev,
 				"%s() fail on i2c_nuvoton_read_buf()=%d\n",
 				__func__, rc);
 			return -EIO;
 		}
-		dev_dbg(chip->pdev, "%s(%d):", __func__, bytes2read);
+		dev_dbg(&chip->dev, "%s(%d):", __func__, bytes2read);
 		size += bytes2read;
 	}
 
@@ -272,7 +264,7 @@ static int i2c_nuvoton_recv_data(struct i2c_client *client,
 /* Read TPM command results */
 static int i2c_nuvoton_recv(struct tpm_chip *chip, u8 *buf, size_t count)
 {
-	struct device *dev = chip->pdev;
+	struct device *dev = chip->dev.parent;
 	struct i2c_client *client = to_i2c_client(dev);
 	s32 rc;
 	int expected, status, burst_count, retries, size = 0;
@@ -342,7 +334,7 @@ static int i2c_nuvoton_recv(struct tpm_chip *chip, u8 *buf, size_t count)
 		break;
 	}
 	i2c_nuvoton_ready(chip);
-	dev_dbg(chip->pdev, "%s() -> %d\n", __func__, size);
+	dev_dbg(&chip->dev, "%s() -> %d\n", __func__, size);
 	return size;
 }
 
@@ -355,7 +347,7 @@ static int i2c_nuvoton_recv(struct tpm_chip *chip, u8 *buf, size_t count)
  */
 static int i2c_nuvoton_send(struct tpm_chip *chip, u8 *buf, size_t len)
 {
-	struct device *dev = chip->pdev;
+	struct device *dev = chip->dev.parent;
 	struct i2c_client *client = to_i2c_client(dev);
 	u32 ordinal;
 	size_t count = 0;
@@ -649,7 +641,6 @@ static struct i2c_driver i2c_nuvoton_driver = {
 	.remove = i2c_nuvoton_remove,
 	.driver = {
 		.name = I2C_DRIVER_NAME,
-		.owner = THIS_MODULE,
 		.pm = &i2c_nuvoton_pm_ops,
 		.of_match_table = of_match_ptr(i2c_nuvoton_of_match),
 	},

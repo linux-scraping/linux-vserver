@@ -1,7 +1,9 @@
 #include <linux/ftrace.h>
 #include <linux/percpu.h>
 #include <linux/slab.h>
+#include <asm/alternative.h>
 #include <asm/cacheflush.h>
+#include <asm/cpufeature.h>
 #include <asm/debug-monitors.h>
 #include <asm/pgtable.h>
 #include <asm/memory.h>
@@ -42,7 +44,7 @@ void notrace __cpu_suspend_save(struct cpu_suspend_ctx *ptr,
  * time the notifier runs debug exceptions might have been enabled already,
  * with HW breakpoints registers content still in an unknown state.
  */
-void (*hw_breakpoint_restore)(void *);
+static void (*hw_breakpoint_restore)(void *);
 void __init cpu_suspend_set_dbg_restorer(void (*hw_bp_restore)(void *))
 {
 	/* Prevent multiple restore hook initializations */
@@ -98,7 +100,7 @@ int cpu_suspend(unsigned long arg, int (*fn)(unsigned long))
 		 * restoration before returning.
 		 */
 		cpu_set_reserved_ttbr0();
-		flush_tlb_all();
+		local_flush_tlb_all();
 		cpu_set_default_tcr_t0sz();
 
 		if (mm != &init_mm)
@@ -109,6 +111,13 @@ int cpu_suspend(unsigned long arg, int (*fn)(unsigned long))
 		 * subsystem relying on it has a chance to run.
 		 */
 		set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
+
+		/*
+		 * PSTATE was not saved over suspend/resume, re-enable any
+		 * detected features that might not have been set correctly.
+		 */
+		asm(ALTERNATIVE("nop", SET_PSTATE_PAN(1), ARM64_HAS_PAN,
+				CONFIG_ARM64_PAN));
 
 		/*
 		 * Restore HW breakpoint registers to sane values
@@ -132,7 +141,6 @@ int cpu_suspend(unsigned long arg, int (*fn)(unsigned long))
 }
 
 struct sleep_save_sp sleep_save_sp;
-phys_addr_t sleep_idmap_phys;
 
 static int __init cpu_suspend_init(void)
 {
@@ -146,9 +154,7 @@ static int __init cpu_suspend_init(void)
 
 	sleep_save_sp.save_ptr_stash = ctx_ptr;
 	sleep_save_sp.save_ptr_stash_phys = virt_to_phys(ctx_ptr);
-	sleep_idmap_phys = virt_to_phys(idmap_pg_dir);
 	__flush_dcache_area(&sleep_save_sp, sizeof(struct sleep_save_sp));
-	__flush_dcache_area(&sleep_idmap_phys, sizeof(sleep_idmap_phys));
 
 	return 0;
 }

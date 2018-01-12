@@ -12,11 +12,6 @@
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #include <linux/kernel.h>
@@ -266,9 +261,9 @@ static int byt_irq_type(struct irq_data *d, unsigned type)
 	writel(value, reg);
 
 	if (type & IRQ_TYPE_EDGE_BOTH)
-		__irq_set_handler_locked(d->irq, handle_edge_irq);
+		irq_set_handler_locked(d, handle_edge_irq);
 	else if (type & IRQ_TYPE_LEVEL_MASK)
-		__irq_set_handler_locked(d->irq, handle_level_irq);
+		irq_set_handler_locked(d, handle_level_irq);
 
 	raw_spin_unlock_irqrestore(&vg->lock, flags);
 
@@ -430,7 +425,7 @@ static void byt_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 	}
 }
 
-static void byt_gpio_irq_handler(unsigned irq, struct irq_desc *desc)
+static void byt_gpio_irq_handler(struct irq_desc *desc)
 {
 	struct irq_data *data = irq_desc_get_irq_data(desc);
 	struct byt_gpio *vg = to_byt_gpio(irq_desc_get_handler_data(desc));
@@ -701,6 +696,7 @@ static int byt_gpio_resume(struct device *dev)
 }
 #endif
 
+#ifdef CONFIG_PM
 static int byt_gpio_runtime_suspend(struct device *dev)
 {
 	return 0;
@@ -710,6 +706,7 @@ static int byt_gpio_runtime_resume(struct device *dev)
 {
 	return 0;
 }
+#endif
 
 static const struct dev_pm_ops byt_gpio_pm_ops = {
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(byt_gpio_suspend, byt_gpio_resume)

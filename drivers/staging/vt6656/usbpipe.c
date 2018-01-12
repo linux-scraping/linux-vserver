@@ -50,15 +50,25 @@ int vnt_control_out(struct vnt_private *priv, u8 request, u16 value,
 		u16 index, u16 length, u8 *buffer)
 {
 	int status = 0;
+	u8 *usb_buffer;
 
 	if (test_bit(DEVICE_FLAGS_DISCONNECTED, &priv->flags))
 		return STATUS_FAILURE;
 
 	mutex_lock(&priv->usb_lock);
 
+	usb_buffer = kmemdup(buffer, length, GFP_KERNEL);
+	if (!usb_buffer) {
+		mutex_unlock(&priv->usb_lock);
+		return -ENOMEM;
+	}
+
 	status = usb_control_msg(priv->usb,
-		usb_sndctrlpipe(priv->usb, 0), request, 0x40, value,
-			index, buffer, length, USB_CTL_WAIT);
+				 usb_sndctrlpipe(priv->usb, 0),
+				 request, 0x40, value,
+				 index, usb_buffer, length, USB_CTL_WAIT);
+
+	kfree(usb_buffer);
 
 	mutex_unlock(&priv->usb_lock);
 
@@ -78,15 +88,28 @@ int vnt_control_in(struct vnt_private *priv, u8 request, u16 value,
 		u16 index, u16 length, u8 *buffer)
 {
 	int status;
+	u8 *usb_buffer;
 
 	if (test_bit(DEVICE_FLAGS_DISCONNECTED, &priv->flags))
 		return STATUS_FAILURE;
 
 	mutex_lock(&priv->usb_lock);
 
+	usb_buffer = kmalloc(length, GFP_KERNEL);
+	if (!usb_buffer) {
+		mutex_unlock(&priv->usb_lock);
+		return -ENOMEM;
+	}
+
 	status = usb_control_msg(priv->usb,
-		usb_rcvctrlpipe(priv->usb, 0), request, 0xc0, value,
-			index, buffer, length, USB_CTL_WAIT);
+				 usb_rcvctrlpipe(priv->usb, 0),
+				 request, 0xc0, value,
+				 index, usb_buffer, length, USB_CTL_WAIT);
+
+	if (status == length)
+		memcpy(buffer, usb_buffer, length);
+
+	kfree(usb_buffer);
 
 	mutex_unlock(&priv->usb_lock);
 
@@ -141,7 +164,7 @@ int vnt_start_interrupt_urb(struct vnt_private *priv)
 {
 	int status = STATUS_FAILURE;
 
-	if (priv->int_buf.in_use == true)
+	if (priv->int_buf.in_use)
 		return STATUS_FAILURE;
 
 	priv->int_buf.in_use = true;
@@ -168,7 +191,6 @@ static void vnt_submit_rx_urb_complete(struct urb *urb)
 {
 	struct vnt_rcb *rcb = urb->context;
 	struct vnt_private *priv = rcb->priv;
-	unsigned long flags;
 
 	switch (urb->status) {
 	case 0:
@@ -184,8 +206,6 @@ static void vnt_submit_rx_urb_complete(struct urb *urb)
 	}
 
 	if (urb->actual_length) {
-		spin_lock_irqsave(&priv->lock, flags);
-
 		if (vnt_rx_data(priv, rcb, urb->actual_length)) {
 			rcb->skb = dev_alloc_skb(priv->rx_buf_sz);
 			if (!rcb->skb) {
@@ -193,7 +213,6 @@ static void vnt_submit_rx_urb_complete(struct urb *urb)
 					"Failed to re-alloc rx skb\n");
 
 				rcb->in_use = false;
-				spin_unlock_irqrestore(&priv->lock, flags);
 				return;
 			}
 		} else {
@@ -203,8 +222,6 @@ static void vnt_submit_rx_urb_complete(struct urb *urb)
 
 		urb->transfer_buffer = skb_put(rcb->skb,
 						skb_tailroom(rcb->skb));
-
-		spin_unlock_irqrestore(&priv->lock, flags);
 	}
 
 	if (usb_submit_urb(urb, GFP_ATOMIC)) {

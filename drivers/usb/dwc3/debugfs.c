@@ -618,23 +618,24 @@ static const struct file_operations dwc3_link_state_fops = {
 	.release		= single_release,
 };
 
-void dwc3_debugfs_init(struct dwc3 *dwc)
+int dwc3_debugfs_init(struct dwc3 *dwc)
 {
 	struct dentry		*root;
-	struct dentry           *file;
+	struct dentry		*file;
+	int			ret;
 
 	root = debugfs_create_dir(dev_name(dwc->dev), NULL);
-	if (IS_ERR_OR_NULL(root)) {
-		if (!root)
-			dev_err(dwc->dev, "Can't create debugfs root\n");
-		return;
+	if (!root) {
+		ret = -ENOMEM;
+		goto err0;
 	}
+
 	dwc->root = root;
 
 	dwc->regset = kzalloc(sizeof(*dwc->regset), GFP_KERNEL);
 	if (!dwc->regset) {
-		debugfs_remove_recursive(root);
-		return;
+		ret = -ENOMEM;
+		goto err1;
 	}
 
 	dwc->regset->regs = dwc3_regs;
@@ -642,28 +643,44 @@ void dwc3_debugfs_init(struct dwc3 *dwc)
 	dwc->regset->base = dwc->regs;
 
 	file = debugfs_create_regset32("regdump", S_IRUGO, root, dwc->regset);
-	if (!file)
-		dev_dbg(dwc->dev, "Can't create debugfs regdump\n");
+	if (!file) {
+		ret = -ENOMEM;
+		goto err1;
+	}
 
 	if (IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)) {
 		file = debugfs_create_file("mode", S_IRUGO | S_IWUSR, root,
 				dwc, &dwc3_mode_fops);
-		if (!file)
-			dev_dbg(dwc->dev, "Can't create debugfs mode\n");
+		if (!file) {
+			ret = -ENOMEM;
+			goto err1;
+		}
 	}
 
 	if (IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE) ||
 			IS_ENABLED(CONFIG_USB_DWC3_GADGET)) {
 		file = debugfs_create_file("testmode", S_IRUGO | S_IWUSR, root,
 				dwc, &dwc3_testmode_fops);
-		if (!file)
-			dev_dbg(dwc->dev, "Can't create debugfs testmode\n");
+		if (!file) {
+			ret = -ENOMEM;
+			goto err1;
+		}
 
-		file = debugfs_create_file("link_state", S_IRUGO | S_IWUSR,
-				root, dwc, &dwc3_link_state_fops);
-		if (!file)
-			dev_dbg(dwc->dev, "Can't create debugfs link_state\n");
+		file = debugfs_create_file("link_state", S_IRUGO | S_IWUSR, root,
+				dwc, &dwc3_link_state_fops);
+		if (!file) {
+			ret = -ENOMEM;
+			goto err1;
+		}
 	}
+
+	return 0;
+
+err1:
+	debugfs_remove_recursive(root);
+
+err0:
+	return ret;
 }
 
 void dwc3_debugfs_exit(struct dwc3 *dwc)

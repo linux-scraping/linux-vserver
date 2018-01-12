@@ -49,9 +49,14 @@ void __init efi_bgrt_init(void)
 		       bgrt_tab->version);
 		return;
 	}
-	if (bgrt_tab->status != 1) {
-		pr_err("Ignoring BGRT: invalid status %u (expected 1)\n",
+	if (bgrt_tab->status & 0xfe) {
+		pr_err("Ignoring BGRT: reserved status bits are non-zero %u\n",
 		       bgrt_tab->status);
+		return;
+	}
+	if (bgrt_tab->status != 1) {
+		pr_debug("Ignoring BGRT: invalid status %u (expected 1)\n",
+			 bgrt_tab->status);
 		return;
 	}
 	if (bgrt_tab->image_type != 0) {
@@ -64,14 +69,14 @@ void __init efi_bgrt_init(void)
 		return;
 	}
 
-	image = early_memremap(bgrt_tab->image_address, sizeof(bmp_header));
+	image = memremap(bgrt_tab->image_address, sizeof(bmp_header), MEMREMAP_WB);
 	if (!image) {
 		pr_err("Ignoring BGRT: failed to map image header memory\n");
 		return;
 	}
 
 	memcpy(&bmp_header, image, sizeof(bmp_header));
-	early_memunmap(image, sizeof(bmp_header));
+	memunmap(image);
 	bgrt_image_size = bmp_header.size;
 
 	bgrt_image = kmalloc(bgrt_image_size, GFP_KERNEL | __GFP_NOWARN);
@@ -81,7 +86,7 @@ void __init efi_bgrt_init(void)
 		return;
 	}
 
-	image = early_memremap(bgrt_tab->image_address, bmp_header.size);
+	image = memremap(bgrt_tab->image_address, bmp_header.size, MEMREMAP_WB);
 	if (!image) {
 		pr_err("Ignoring BGRT: failed to map image memory\n");
 		kfree(bgrt_image);
@@ -90,5 +95,5 @@ void __init efi_bgrt_init(void)
 	}
 
 	memcpy(bgrt_image, image, bgrt_image_size);
-	early_memunmap(image, bmp_header.size);
+	memunmap(image);
 }

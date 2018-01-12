@@ -742,16 +742,6 @@ static void st_gpio_direction(struct st_gpio_bank *bank,
 	}
 }
 
-static int st_gpio_request(struct gpio_chip *chip, unsigned offset)
-{
-	return pinctrl_request_gpio(chip->base + offset);
-}
-
-static void st_gpio_free(struct gpio_chip *chip, unsigned offset)
-{
-	pinctrl_free_gpio(chip->base + offset);
-}
-
 static int st_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
 	struct st_gpio_bank *bank = gpio_chip_to_bank(chip);
@@ -1348,6 +1338,22 @@ static void st_gpio_irq_unmask(struct irq_data *d)
 	writel(BIT(d->hwirq), bank->base + REG_PIO_SET_PMASK);
 }
 
+static int st_gpio_irq_request_resources(struct irq_data *d)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+
+	st_gpio_direction_input(gc, d->hwirq);
+
+	return gpiochip_lock_as_irq(gc, d->hwirq);
+}
+
+static void st_gpio_irq_release_resources(struct irq_data *d)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+
+	gpiochip_unlock_as_irq(gc, d->hwirq);
+}
+
 static int st_gpio_irq_set_type(struct irq_data *d, unsigned type)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
@@ -1460,10 +1466,10 @@ static void __gpio_irq_handler(struct st_gpio_bank *bank)
 	}
 }
 
-static void st_gpio_irq_handler(unsigned irq, struct irq_desc *desc)
+static void st_gpio_irq_handler(struct irq_desc *desc)
 {
 	/* interrupt dedicated per bank */
-	struct irq_chip *chip = irq_get_chip(irq);
+	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct gpio_chip *gc = irq_desc_get_handler_data(desc);
 	struct st_gpio_bank *bank = gpio_chip_to_bank(gc);
 
@@ -1472,10 +1478,10 @@ static void st_gpio_irq_handler(unsigned irq, struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 }
 
-static void st_gpio_irqmux_handler(unsigned irq, struct irq_desc *desc)
+static void st_gpio_irqmux_handler(struct irq_desc *desc)
 {
-	struct irq_chip *chip = irq_get_chip(irq);
-	struct st_pinctrl *info = irq_get_handler_data(irq);
+	struct irq_chip *chip = irq_desc_get_chip(desc);
+	struct st_pinctrl *info = irq_desc_get_handler_data(desc);
 	unsigned long status;
 	int n;
 
@@ -1490,8 +1496,8 @@ static void st_gpio_irqmux_handler(unsigned irq, struct irq_desc *desc)
 }
 
 static struct gpio_chip st_gpio_template = {
-	.request		= st_gpio_request,
-	.free			= st_gpio_free,
+	.request		= gpiochip_generic_request,
+	.free			= gpiochip_generic_free,
 	.get			= st_gpio_get,
 	.set			= st_gpio_set,
 	.direction_input	= st_gpio_direction_input,
@@ -1503,12 +1509,14 @@ static struct gpio_chip st_gpio_template = {
 };
 
 static struct irq_chip st_gpio_irqchip = {
-	.name		= "GPIO",
-	.irq_disable	= st_gpio_irq_mask,
-	.irq_mask	= st_gpio_irq_mask,
-	.irq_unmask	= st_gpio_irq_unmask,
-	.irq_set_type	= st_gpio_irq_set_type,
-	.flags		= IRQCHIP_SKIP_SET_WAKE,
+	.name			= "GPIO",
+	.irq_request_resources	= st_gpio_irq_request_resources,
+	.irq_release_resources	= st_gpio_irq_release_resources,
+	.irq_disable		= st_gpio_irq_mask,
+	.irq_mask		= st_gpio_irq_mask,
+	.irq_unmask		= st_gpio_irq_unmask,
+	.irq_set_type		= st_gpio_irq_set_type,
+	.flags			= IRQCHIP_SKIP_SET_WAKE,
 };
 
 static int st_gpiolib_register_bank(struct st_pinctrl *info,
@@ -1661,8 +1669,8 @@ static int st_pctl_probe_dt(struct platform_device *pdev,
 		if (IS_ERR(info->irqmux_base))
 			return PTR_ERR(info->irqmux_base);
 
-		irq_set_chained_handler(irq, st_gpio_irqmux_handler);
-		irq_set_handler_data(irq, info);
+		irq_set_chained_handler_and_data(irq, st_gpio_irqmux_handler,
+						 info);
 
 	}
 
@@ -1737,9 +1745,9 @@ static int st_pctl_probe(struct platform_device *pdev)
 	pctl_desc->name		= dev_name(&pdev->dev);
 
 	info->pctl = pinctrl_register(pctl_desc, &pdev->dev, info);
-	if (!info->pctl) {
+	if (IS_ERR(info->pctl)) {
 		dev_err(&pdev->dev, "Failed pinctrl registration\n");
-		return -EINVAL;
+		return PTR_ERR(info->pctl);
 	}
 
 	for (i = 0; i < info->nbanks; i++)

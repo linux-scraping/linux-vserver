@@ -93,6 +93,8 @@ static unsigned long cpu_pgsz_mask;
 static struct linux_prom64_registers pavail[MAX_BANKS];
 static int pavail_ents;
 
+u64 numa_latency[MAX_NUMNODES][MAX_NUMNODES];
+
 static int cmp_p64(const void *a, const void *b)
 {
 	const struct linux_prom64_registers *x = a, *y = b;
@@ -322,18 +324,6 @@ static void __update_mmu_tsb_insert(struct mm_struct *mm, unsigned long tsb_inde
 	tsb_insert(tsb, tag, tte);
 }
 
-#if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
-static inline bool is_hugetlb_pte(pte_t pte)
-{
-	if ((tlb_type == hypervisor &&
-	     (pte_val(pte) & _PAGE_SZALL_4V) == _PAGE_SZHUGE_4V) ||
-	    (tlb_type != hypervisor &&
-	     (pte_val(pte) & _PAGE_SZALL_4U) == _PAGE_SZHUGE_4U))
-		return true;
-	return false;
-}
-#endif
-
 void update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t *ptep)
 {
 	struct mm_struct *mm;
@@ -356,7 +346,8 @@ void update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t *
 	spin_lock_irqsave(&mm->context.lock, flags);
 
 #if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
-	if (mm->context.huge_pte_count && is_hugetlb_pte(pte))
+	if ((mm->context.hugetlb_pte_count || mm->context.thp_pte_count) &&
+	    is_hugetlb_pte(pte))
 		__update_mmu_tsb_insert(mm, MM_TSB_HUGE, REAL_HPAGE_SHIFT,
 					address, pte_val(pte));
 	else
@@ -839,8 +830,10 @@ struct mdesc_mblock {
 };
 static struct mdesc_mblock *mblocks;
 static int num_mblocks;
+static int find_numa_node_for_addr(unsigned long pa,
+				   struct node_mem_mask *pnode_mask);
 
-static unsigned long ra_to_pa(unsigned long addr)
+static unsigned long __init ra_to_pa(unsigned long addr)
 {
 	int i;
 
@@ -856,8 +849,11 @@ static unsigned long ra_to_pa(unsigned long addr)
 	return addr;
 }
 
-static int find_node(unsigned long addr)
+static int __init find_node(unsigned long addr)
 {
+	static bool search_mdesc = true;
+	static struct node_mem_mask last_mem_mask = { ~0UL, ~0UL };
+	static int last_index;
 	int i;
 
 	addr = ra_to_pa(addr);
@@ -867,13 +863,30 @@ static int find_node(unsigned long addr)
 		if ((addr & p->mask) == p->val)
 			return i;
 	}
-	/* The following condition has been observed on LDOM guests.*/
-	WARN_ONCE(1, "find_node: A physical address doesn't match a NUMA node"
-		" rule. Some physical memory will be owned by node 0.");
-	return 0;
+	/* The following condition has been observed on LDOM guests because
+	 * node_masks only contains the best latency mask and value.
+	 * LDOM guest's mdesc can contain a single latency group to
+	 * cover multiple address range. Print warning message only if the
+	 * address cannot be found in node_masks nor mdesc.
+	 */
+	if ((search_mdesc) &&
+	    ((addr & last_mem_mask.mask) != last_mem_mask.val)) {
+		/* find the available node in the mdesc */
+		last_index = find_numa_node_for_addr(addr, &last_mem_mask);
+		numadbg("find_node: latency group for address 0x%lx is %d\n",
+			addr, last_index);
+		if ((last_index < 0) || (last_index >= num_node_masks)) {
+			/* WARN_ONCE() and use default group 0 */
+			WARN_ONCE(1, "find_node: A physical address doesn't match a NUMA node rule. Some physical memory will be owned by node 0.");
+			search_mdesc = false;
+			last_index = 0;
+		}
+	}
+
+	return last_index;
 }
 
-static u64 memblock_nid_range(u64 start, u64 end, int *nid)
+static u64 __init memblock_nid_range(u64 start, u64 end, int *nid)
 {
 	*nid = find_node(start);
 	start += PAGE_SIZE;
@@ -1187,6 +1200,83 @@ static struct mdesc_mlgroup * __init find_mlgroup(u64 node)
 	return NULL;
 }
 
+int __node_distance(int from, int to)
+{
+	if ((from >= MAX_NUMNODES) || (to >= MAX_NUMNODES)) {
+		pr_warn("Returning default NUMA distance value for %d->%d\n",
+			from, to);
+		return (from == to) ? LOCAL_DISTANCE : REMOTE_DISTANCE;
+	}
+	return numa_latency[from][to];
+}
+
+static int find_numa_node_for_addr(unsigned long pa,
+				   struct node_mem_mask *pnode_mask)
+{
+	struct mdesc_handle *md = mdesc_grab();
+	u64 node, arc;
+	int i = 0;
+
+	node = mdesc_node_by_name(md, MDESC_NODE_NULL, "latency-groups");
+	if (node == MDESC_NODE_NULL)
+		goto out;
+
+	mdesc_for_each_node_by_name(md, node, "group") {
+		mdesc_for_each_arc(arc, md, node, MDESC_ARC_TYPE_FWD) {
+			u64 target = mdesc_arc_target(md, arc);
+			struct mdesc_mlgroup *m = find_mlgroup(target);
+
+			if (!m)
+				continue;
+			if ((pa & m->mask) == m->match) {
+				if (pnode_mask) {
+					pnode_mask->mask = m->mask;
+					pnode_mask->val = m->match;
+				}
+				mdesc_release(md);
+				return i;
+			}
+		}
+		i++;
+	}
+
+out:
+	mdesc_release(md);
+	return -1;
+}
+
+static int find_best_numa_node_for_mlgroup(struct mdesc_mlgroup *grp)
+{
+	int i;
+
+	for (i = 0; i < MAX_NUMNODES; i++) {
+		struct node_mem_mask *n = &node_masks[i];
+
+		if ((grp->mask == n->mask) && (grp->match == n->val))
+			break;
+	}
+	return i;
+}
+
+static void find_numa_latencies_for_group(struct mdesc_handle *md, u64 grp,
+					  int index)
+{
+	u64 arc;
+
+	mdesc_for_each_arc(arc, md, grp, MDESC_ARC_TYPE_FWD) {
+		int tnode;
+		u64 target = mdesc_arc_target(md, arc);
+		struct mdesc_mlgroup *m = find_mlgroup(target);
+
+		if (!m)
+			continue;
+		tnode = find_best_numa_node_for_mlgroup(m);
+		if (tnode == MAX_NUMNODES)
+			continue;
+		numa_latency[index][tnode] = m->latency;
+	}
+}
+
 static int __init numa_attach_mlgroup(struct mdesc_handle *md, u64 grp,
 				      int index)
 {
@@ -1250,7 +1340,7 @@ static int __init numa_parse_mdesc_group(struct mdesc_handle *md, u64 grp,
 static int __init numa_parse_mdesc(void)
 {
 	struct mdesc_handle *md = mdesc_grab();
-	int i, err, count;
+	int i, j, err, count;
 	u64 node;
 
 	node = mdesc_node_by_name(md, MDESC_NODE_NULL, "latency-groups");
@@ -1273,6 +1363,23 @@ static int __init numa_parse_mdesc(void)
 		if (err < 0)
 			break;
 		count++;
+	}
+
+	count = 0;
+	mdesc_for_each_node_by_name(md, node, "group") {
+		find_numa_latencies_for_group(md, node, count);
+		count++;
+	}
+
+	/* Normalize numa latency matrix according to ACPI SLIT spec. */
+	for (i = 0; i < MAX_NUMNODES; i++) {
+		u64 self_latency = numa_latency[i][i];
+
+		for (j = 0; j < MAX_NUMNODES; j++) {
+			numa_latency[i][j] =
+				(numa_latency[i][j] * LOCAL_DISTANCE) /
+				self_latency;
+		}
 	}
 
 	add_node_ranges();
@@ -1331,9 +1438,17 @@ static int __init numa_parse_sun4u(void)
 
 static int __init bootmem_init_numa(void)
 {
+	int i, j;
 	int err = -1;
 
 	numadbg("bootmem_init_numa()\n");
+
+	/* Some sane defaults for numa latency values */
+	for (i = 0; i < MAX_NUMNODES; i++) {
+		for (j = 0; j < MAX_NUMNODES; j++)
+			numa_latency[i][j] = (i == j) ?
+				LOCAL_DISTANCE : REMOTE_DISTANCE;
+	}
 
 	if (numa_enabled) {
 		if (tlb_type == hypervisor)
@@ -1996,7 +2111,8 @@ static phys_addr_t __init available_memory(void)
 	phys_addr_t pa_start, pa_end;
 	u64 i;
 
-	for_each_free_mem_range(i, NUMA_NO_NODE, &pa_start, &pa_end, NULL)
+	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &pa_start,
+				&pa_end, NULL)
 		available = available + (pa_end  - pa_start);
 
 	return available;
@@ -2022,7 +2138,8 @@ static void __init reduce_memory(phys_addr_t limit_ram)
 	if (limit_ram >= avail_ram)
 		return;
 
-	for_each_free_mem_range(i, NUMA_NO_NODE, &pa_start, &pa_end, NULL) {
+	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &pa_start,
+				&pa_end, NULL) {
 		phys_addr_t region_size = pa_end - pa_start;
 		phys_addr_t clip_start = pa_start;
 
@@ -2775,7 +2892,7 @@ void hugetlb_setup(struct pt_regs *regs)
 	struct mm_struct *mm = current->mm;
 	struct tsb_config *tp;
 
-	if (in_atomic() || !mm) {
+	if (faulthandler_disabled() || !mm) {
 		const struct exception_table_entry *entry;
 
 		entry = search_exception_tables(regs->tpc);

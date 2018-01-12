@@ -187,10 +187,7 @@ static int rhashtable_rehash_one(struct rhashtable *ht, unsigned int old_hash)
 	head = rht_dereference_bucket(new_tbl->buckets[new_hash],
 				      new_tbl, new_hash);
 
-	if (rht_is_a_nulls(head))
-		INIT_RHT_NULLS_HEAD(entry->next, ht, new_hash);
-	else
-		RCU_INIT_POINTER(entry->next, head);
+	RCU_INIT_POINTER(entry->next, head);
 
 	rcu_assign_pointer(new_tbl->buckets[new_hash], entry);
 	spin_unlock(new_bucket_lock);
@@ -392,33 +389,31 @@ static bool rhashtable_check_elasticity(struct rhashtable *ht,
 	return false;
 }
 
-int rhashtable_insert_rehash(struct rhashtable *ht)
+int rhashtable_insert_rehash(struct rhashtable *ht,
+			     struct bucket_table *tbl)
 {
 	struct bucket_table *old_tbl;
 	struct bucket_table *new_tbl;
-	struct bucket_table *tbl;
 	unsigned int size;
 	int err;
 
 	old_tbl = rht_dereference_rcu(ht->tbl, ht);
-	tbl = rhashtable_last_table(ht, old_tbl);
 
 	size = tbl->size;
+
+	err = -EBUSY;
 
 	if (rht_grow_above_75(ht, tbl))
 		size *= 2;
 	/* Do not schedule more than one rehash */
 	else if (old_tbl != tbl)
-		return -EBUSY;
+		goto fail;
+
+	err = -ENOMEM;
 
 	new_tbl = bucket_table_alloc(ht, size, GFP_ATOMIC);
-	if (new_tbl == NULL) {
-		/* Schedule async resize/rehash to try allocation
-		 * non-atomic context.
-		 */
-		schedule_work(&ht->run_work);
-		return -ENOMEM;
-	}
+	if (new_tbl == NULL)
+		goto fail;
 
 	err = rhashtable_rehash_attach(ht, tbl, new_tbl);
 	if (err) {
@@ -429,12 +424,24 @@ int rhashtable_insert_rehash(struct rhashtable *ht)
 		schedule_work(&ht->run_work);
 
 	return err;
+
+fail:
+	/* Do not fail the insert if someone else did a rehash. */
+	if (likely(rcu_dereference_raw(tbl->future_tbl)))
+		return 0;
+
+	/* Schedule async rehash to retry allocation in process context. */
+	if (err == -ENOMEM)
+		schedule_work(&ht->run_work);
+
+	return err;
 }
 EXPORT_SYMBOL_GPL(rhashtable_insert_rehash);
 
-int rhashtable_insert_slow(struct rhashtable *ht, const void *key,
-			   struct rhash_head *obj,
-			   struct bucket_table *tbl)
+struct bucket_table *rhashtable_insert_slow(struct rhashtable *ht,
+					    const void *key,
+					    struct rhash_head *obj,
+					    struct bucket_table *tbl)
 {
 	struct rhash_head *head;
 	unsigned int hash;
@@ -470,7 +477,12 @@ int rhashtable_insert_slow(struct rhashtable *ht, const void *key,
 exit:
 	spin_unlock(rht_bucket_lock(tbl, hash));
 
-	return err;
+	if (err == 0)
+		return NULL;
+	else if (err == -EAGAIN)
+		return tbl;
+	else
+		return ERR_PTR(err);
 }
 EXPORT_SYMBOL_GPL(rhashtable_insert_slow);
 
@@ -584,7 +596,6 @@ void *rhashtable_walk_next(struct rhashtable_iter *iter)
 	struct bucket_table *tbl = iter->walker->tbl;
 	struct rhashtable *ht = iter->ht;
 	struct rhash_head *p = iter->p;
-	void *obj = NULL;
 
 	if (p) {
 		p = rht_dereference_bucket_rcu(p->next, tbl, iter->slot);
@@ -604,8 +615,7 @@ next:
 		if (!rht_is_a_nulls(p)) {
 			iter->skip++;
 			iter->p = p;
-			obj = rht_obj(ht, p);
-			goto out;
+			return rht_obj(ht, p);
 		}
 
 		iter->skip = 0;
@@ -623,9 +633,7 @@ next:
 		return ERR_PTR(-EAGAIN);
 	}
 
-out:
-
-	return obj;
+	return NULL;
 }
 EXPORT_SYMBOL_GPL(rhashtable_walk_next);
 

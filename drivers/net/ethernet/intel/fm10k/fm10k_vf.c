@@ -103,7 +103,14 @@ static s32 fm10k_init_hw_vf(struct fm10k_hw *hw)
 	s32 err;
 	u16 i;
 
-	/* assume we always have at least 1 queue */
+	/* verify we have at least 1 queue */
+	if (!~fm10k_read_reg(hw, FM10K_TXQCTL(0)) ||
+	    !~fm10k_read_reg(hw, FM10K_RXQCTL(0))) {
+		err = FM10K_ERR_NO_RESOURCES;
+		goto reset_max_queues;
+	}
+
+	/* determine how many queues we have */
 	for (i = 1; tqdloc0 && (i < FM10K_MAX_QUEUES_POOL); i++) {
 		/* verify the Descriptor cache offsets are increasing */
 		tqdloc = ~fm10k_read_reg(hw, FM10K_TQDLOC(i));
@@ -119,7 +126,7 @@ static s32 fm10k_init_hw_vf(struct fm10k_hw *hw)
 	/* shut down queues we own and reset DMA configuration */
 	err = fm10k_disable_queues_generic(hw, i);
 	if (err)
-		return err;
+		goto reset_max_queues;
 
 	/* record maximum queue count */
 	hw->mac.max_queues = i;
@@ -129,19 +136,11 @@ static s32 fm10k_init_hw_vf(struct fm10k_hw *hw)
 			       FM10K_TXQCTL_VID_MASK) >> FM10K_TXQCTL_VID_SHIFT;
 
 	return 0;
-}
 
-/**
- *  fm10k_is_slot_appropriate_vf - Indicate appropriate slot for this SKU
- *  @hw: pointer to hardware structure
- *
- *  Looks at the PCIe bus info to confirm whether or not this slot can support
- *  the necessary bandwidth for this device. Since the VF has no control over
- *  the "slot" it is in, always indicate that the slot is appropriate.
- **/
-static bool fm10k_is_slot_appropriate_vf(struct fm10k_hw *hw)
-{
-	return true;
+reset_max_queues:
+	hw->mac.max_queues = 0;
+
+	return err;
 }
 
 /* This structure defines the attibutes to be parsed below */
@@ -552,7 +551,6 @@ static struct fm10k_mac_ops mac_ops_vf = {
 	.init_hw		= &fm10k_init_hw_vf,
 	.start_hw		= &fm10k_start_hw_generic,
 	.stop_hw		= &fm10k_stop_hw_vf,
-	.is_slot_appropriate	= &fm10k_is_slot_appropriate_vf,
 	.update_vlan		= &fm10k_update_vlan_vf,
 	.read_mac_addr		= &fm10k_read_mac_addr_vf,
 	.update_uc_addr		= &fm10k_update_uc_addr_vf,

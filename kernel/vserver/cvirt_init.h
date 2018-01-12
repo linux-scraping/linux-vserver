@@ -7,7 +7,7 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	uint64_t idle_jiffies = vx_idle_jiffies();
 	uint64_t nsuptime;
 
-	do_posix_clock_monotonic_gettime(&cvirt->bias_uptime);
+	ktime_get_ts(&cvirt->bias_uptime);
 	nsuptime = (unsigned long long)cvirt->bias_uptime.tv_sec
 		* NSEC_PER_SEC + cvirt->bias_uptime.tv_nsec;
 	cvirt->bias_clock = nsec_to_clock_t(nsuptime);

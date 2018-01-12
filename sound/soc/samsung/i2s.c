@@ -1027,12 +1027,13 @@ static int samsung_i2s_dai_probe(struct snd_soc_dai *dai)
 static int samsung_i2s_dai_remove(struct snd_soc_dai *dai)
 {
 	struct i2s_dai *i2s = snd_soc_dai_get_drvdata(dai);
+	unsigned long flags;
 
 	if (!is_secondary(i2s)) {
 		if (i2s->quirks & QUIRK_NEED_RSTCLR) {
-			spin_lock(i2s->lock);
+			spin_lock_irqsave(i2s->lock, flags);
 			writel(0, i2s->addr + I2SCON);
-			spin_unlock(i2s->lock);
+			spin_unlock_irqrestore(i2s->lock, flags);
 		}
 	}
 
@@ -1480,7 +1481,7 @@ static const struct samsung_i2s_dai_data samsung_dai_type_sec = {
 	.dai_type = TYPE_SEC,
 };
 
-static struct platform_device_id samsung_i2s_driver_ids[] = {
+static const struct platform_device_id samsung_i2s_driver_ids[] = {
 	{
 		.name           = "samsung-i2s",
 		.driver_data	= (kernel_ulong_t)&i2sv3_dai_type,

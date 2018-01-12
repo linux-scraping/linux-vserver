@@ -269,11 +269,6 @@ static void ltq_hw5_irqdispatch(void)
 DEFINE_HWx_IRQDISPATCH(5)
 #endif
 
-static void ltq_hw_irq_handler(struct irq_desc *desc)
-{
-	ltq_hw_irqdispatch(irq_desc_get_irq(desc) - 2);
-}
-
 #ifdef CONFIG_MIPS_MT_SMP
 void __init arch_init_ipiirq(int irq, struct irqaction *action)
 {
@@ -298,7 +293,7 @@ static irqreturn_t ipi_resched_interrupt(int irq, void *dev_id)
 
 static irqreturn_t ipi_call_interrupt(int irq, void *dev_id)
 {
-	smp_call_function_interrupt();
+	generic_smp_call_function_interrupt();
 	return IRQ_HANDLED;
 }
 
@@ -318,19 +313,23 @@ static struct irqaction irq_call = {
 asmlinkage void plat_irq_dispatch(void)
 {
 	unsigned int pending = read_c0_status() & read_c0_cause() & ST0_IM;
-	int irq;
+	unsigned int i;
 
-	if (!pending) {
-		spurious_interrupt();
-		return;
+	if ((MIPS_CPU_TIMER_IRQ == 7) && (pending & CAUSEF_IP7)) {
+		do_IRQ(MIPS_CPU_TIMER_IRQ);
+		goto out;
+	} else {
+		for (i = 0; i < MAX_IM; i++) {
+			if (pending & (CAUSEF_IP2 << i)) {
+				ltq_hw_irqdispatch(i);
+				goto out;
+			}
+		}
 	}
+	pr_alert("Spurious IRQ: CAUSE=0x%08x\n", read_c0_status());
 
-	pending >>= CAUSEB_IP;
-	while (pending) {
-		irq = fls(pending) - 1;
-		do_IRQ(MIPS_CPU_IRQ_BASE + irq);
-		pending &= ~BIT(irq);
-	}
+out:
+	return;
 }
 
 static int icu_map(struct irq_domain *d, unsigned int irq, irq_hw_number_t hw)
@@ -355,6 +354,11 @@ static const struct irq_domain_ops irq_domain_ops = {
 	.map = icu_map,
 };
 
+static struct irqaction cascade = {
+	.handler = no_action,
+	.name = "cascade",
+};
+
 int __init icu_of_init(struct device_node *node, struct device_node *parent)
 {
 	struct device_node *eiu_node;
@@ -365,8 +369,8 @@ int __init icu_of_init(struct device_node *node, struct device_node *parent)
 		if (of_address_to_resource(node, i, &res))
 			panic("Failed to get icu memory range");
 
-		if (request_mem_region(res.start, resource_size(&res),
-					res.name) < 0)
+		if (!request_mem_region(res.start, resource_size(&res),
+					res.name))
 			pr_err("Failed to request icu memory");
 
 		ltq_icu_membase[i] = ioremap_nocache(res.start,
@@ -386,7 +390,7 @@ int __init icu_of_init(struct device_node *node, struct device_node *parent)
 	mips_cpu_irq_init();
 
 	for (i = 0; i < MAX_IM; i++)
-		irq_set_chained_handler(i + 2, ltq_hw_irq_handler);
+		setup_irq(i + 2, &cascade);
 
 	if (cpu_has_vint) {
 		pr_info("Setting up vectored interrupts\n");
@@ -445,8 +449,8 @@ int __init icu_of_init(struct device_node *node, struct device_node *parent)
 		if (ret != exin_avail)
 			panic("failed to load external irq resources");
 
-		if (request_mem_region(res.start, resource_size(&res),
-							res.name) < 0)
+		if (!request_mem_region(res.start, resource_size(&res),
+							res.name))
 			pr_err("Failed to request eiu memory");
 
 		ltq_eiu_membase = ioremap_nocache(res.start,

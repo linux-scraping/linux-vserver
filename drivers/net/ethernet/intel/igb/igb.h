@@ -389,6 +389,8 @@ struct igb_adapter {
 	u16 link_speed;
 	u16 link_duplex;
 
+	u8 __iomem *io_addr; /* Mainly for iounmap use */
+
 	struct work_struct reset_task;
 	struct work_struct watchdog_task;
 	bool fc_autoneg;
@@ -444,8 +446,8 @@ struct igb_adapter {
 
 	struct ptp_pin_desc sdp_config[IGB_N_SDP];
 	struct {
-		struct timespec start;
-		struct timespec period;
+		struct timespec64 start;
+		struct timespec64 period;
 	} perout[IGB_N_PEROUT];
 
 	char fw_version[32];
