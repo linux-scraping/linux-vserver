@@ -31,6 +31,7 @@
 #define ALPS_CMD_NIBBLE_10	0x01f2
 
 #define ALPS_REG_BASE_RUSHMORE	0xc2c0
+#define ALPS_REG_BASE_V7	0xc2c0
 #define ALPS_REG_BASE_PINNACLE	0x0000
 
 static const struct alps_nibble_commands alps_v3_nibble_commands[] = {
@@ -102,6 +103,7 @@ static const struct alps_nibble_commands alps_v6_nibble_commands[] = {
 					   6-byte ALPS packet */
 #define ALPS_STICK_BITS		0x100	/* separate stick button bits */
 #define ALPS_BUTTONPAD		0x200	/* device is a clickpad */
+#define ALPS_DUALPOINT_WITH_PRESSURE	0x400	/* device can report trackpoint pressure */
 
 static const struct alps_model_info alps_model_data[] = {
 	{ { 0x32, 0x02, 0x14 }, 0x00, { ALPS_PROTO_V2, 0xf8, 0xf8, ALPS_PASS | ALPS_DUALPOINT } },	/* Toshiba Salellite Pro M10 */
@@ -1155,15 +1157,28 @@ static unsigned char alps_get_pkt_id_ss4_v2(unsigned char *byte)
 {
 	unsigned char pkt_id = SS4_PACKET_ID_IDLE;
 
-	if (byte[0] == 0x18 && byte[1] == 0x10 && byte[2] == 0x00 &&
-	    (byte[3] & 0x88) == 0x08 && byte[4] == 0x10 && byte[5] == 0x00) {
-		pkt_id = SS4_PACKET_ID_IDLE;
-	} else if (!(byte[3] & 0x10)) {
-		pkt_id = SS4_PACKET_ID_ONE;
-	} else if (!(byte[3] & 0x20)) {
+	switch (byte[3] & 0x30) {
+	case 0x00:
+		if (byte[0] == 0x18 && byte[1] == 0x10 && byte[2] == 0x00 &&
+		    (byte[3] & 0x88) == 0x08 && byte[4] == 0x10 &&
+		    byte[5] == 0x00) {
+			pkt_id = SS4_PACKET_ID_IDLE;
+		} else {
+			pkt_id = SS4_PACKET_ID_ONE;
+		}
+		break;
+	case 0x10:
+		/* two-finger finger positions */
 		pkt_id = SS4_PACKET_ID_TWO;
-	} else {
+		break;
+	case 0x20:
+		/* stick pointer */
+		pkt_id = SS4_PACKET_ID_STICK;
+		break;
+	case 0x30:
+		/* third and fourth finger positions */
 		pkt_id = SS4_PACKET_ID_MULTI;
+		break;
 	}
 
 	return pkt_id;
@@ -1184,21 +1199,37 @@ static int alps_decode_ss4_v2(struct alps_fields *f,
 		f->mt[0].x = SS4_1F_X_V2(p);
 		f->mt[0].y = SS4_1F_Y_V2(p);
 		f->pressure = ((SS4_1F_Z_V2(p)) * 2) & 0x7f;
-		f->fingers = 1;
+		/*
+		 * When a button is held the device will give us events
+		 * with x, y, and pressure of 0. This causes annoying jumps
+		 * if a touch is released while the button is held.
+		 * Handle this by claiming zero contacts.
+		 */
+		f->fingers = f->pressure > 0 ? 1 : 0;
 		f->first_mp = 0;
 		f->is_mp = 0;
 		break;
 
 	case SS4_PACKET_ID_TWO:
 		if (priv->flags & ALPS_BUTTONPAD) {
-			f->mt[0].x = SS4_BTL_MF_X_V2(p, 0);
+			if (IS_SS4PLUS_DEV(priv->dev_id)) {
+				f->mt[0].x = SS4_PLUS_BTL_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_PLUS_BTL_MF_X_V2(p, 1);
+			} else {
+				f->mt[0].x = SS4_BTL_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_BTL_MF_X_V2(p, 1);
+			}
 			f->mt[0].y = SS4_BTL_MF_Y_V2(p, 0);
-			f->mt[1].x = SS4_BTL_MF_X_V2(p, 1);
 			f->mt[1].y = SS4_BTL_MF_Y_V2(p, 1);
 		} else {
-			f->mt[0].x = SS4_STD_MF_X_V2(p, 0);
+			if (IS_SS4PLUS_DEV(priv->dev_id)) {
+				f->mt[0].x = SS4_PLUS_STD_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_PLUS_STD_MF_X_V2(p, 1);
+			} else {
+				f->mt[0].x = SS4_STD_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_STD_MF_X_V2(p, 1);
+			}
 			f->mt[0].y = SS4_STD_MF_Y_V2(p, 0);
-			f->mt[1].x = SS4_STD_MF_X_V2(p, 1);
 			f->mt[1].y = SS4_STD_MF_Y_V2(p, 1);
 		}
 		f->pressure = SS4_MF_Z_V2(p, 0) ? 0x30 : 0;
@@ -1215,16 +1246,27 @@ static int alps_decode_ss4_v2(struct alps_fields *f,
 
 	case SS4_PACKET_ID_MULTI:
 		if (priv->flags & ALPS_BUTTONPAD) {
-			f->mt[2].x = SS4_BTL_MF_X_V2(p, 0);
+			if (IS_SS4PLUS_DEV(priv->dev_id)) {
+				f->mt[0].x = SS4_PLUS_BTL_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_PLUS_BTL_MF_X_V2(p, 1);
+			} else {
+				f->mt[2].x = SS4_BTL_MF_X_V2(p, 0);
+				f->mt[3].x = SS4_BTL_MF_X_V2(p, 1);
+			}
+
 			f->mt[2].y = SS4_BTL_MF_Y_V2(p, 0);
-			f->mt[3].x = SS4_BTL_MF_X_V2(p, 1);
 			f->mt[3].y = SS4_BTL_MF_Y_V2(p, 1);
 			no_data_x = SS4_MFPACKET_NO_AX_BL;
 			no_data_y = SS4_MFPACKET_NO_AY_BL;
 		} else {
-			f->mt[2].x = SS4_STD_MF_X_V2(p, 0);
+			if (IS_SS4PLUS_DEV(priv->dev_id)) {
+				f->mt[0].x = SS4_PLUS_STD_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_PLUS_STD_MF_X_V2(p, 1);
+			} else {
+				f->mt[0].x = SS4_STD_MF_X_V2(p, 0);
+				f->mt[1].x = SS4_STD_MF_X_V2(p, 1);
+			}
 			f->mt[2].y = SS4_STD_MF_Y_V2(p, 0);
-			f->mt[3].x = SS4_STD_MF_X_V2(p, 1);
 			f->mt[3].y = SS4_STD_MF_Y_V2(p, 1);
 			no_data_x = SS4_MFPACKET_NO_AX;
 			no_data_y = SS4_MFPACKET_NO_AY;
@@ -1245,16 +1287,38 @@ static int alps_decode_ss4_v2(struct alps_fields *f,
 		}
 		break;
 
+	case SS4_PACKET_ID_STICK:
+		if (!(priv->flags & ALPS_DUALPOINT)) {
+			psmouse_warn(psmouse,
+				     "Rejected trackstick packet from non DualPoint device");
+		} else {
+			int x = (s8)(((p[0] & 1) << 7) | (p[1] & 0x7f));
+			int y = (s8)(((p[3] & 1) << 7) | (p[2] & 0x7f));
+			int pressure = (s8)(p[4] & 0x7f);
+
+			input_report_rel(priv->dev2, REL_X, x);
+			input_report_rel(priv->dev2, REL_Y, -y);
+			input_report_abs(priv->dev2, ABS_PRESSURE, pressure);
+		}
+		break;
+
 	case SS4_PACKET_ID_IDLE:
 	default:
 		memset(f, 0, sizeof(struct alps_fields));
 		break;
 	}
 
-	f->left = !!(SS4_BTN_V2(p) & 0x01);
-	if (!(priv->flags & ALPS_BUTTONPAD)) {
-		f->right = !!(SS4_BTN_V2(p) & 0x02);
-		f->middle = !!(SS4_BTN_V2(p) & 0x04);
+	/* handle buttons */
+	if (pkt_id == SS4_PACKET_ID_STICK) {
+		f->ts_left = !!(SS4_BTN_V2(p) & 0x01);
+		f->ts_right = !!(SS4_BTN_V2(p) & 0x02);
+		f->ts_middle = !!(SS4_BTN_V2(p) & 0x04);
+	} else {
+		f->left = !!(SS4_BTN_V2(p) & 0x01);
+		if (!(priv->flags & ALPS_BUTTONPAD)) {
+			f->right = !!(SS4_BTN_V2(p) & 0x02);
+			f->middle = !!(SS4_BTN_V2(p) & 0x04);
+		}
 	}
 
 	return 0;
@@ -1265,6 +1329,7 @@ static void alps_process_packet_ss4_v2(struct psmouse *psmouse)
 	struct alps_data *priv = psmouse->private;
 	unsigned char *packet = psmouse->packet;
 	struct input_dev *dev = psmouse->dev;
+	struct input_dev *dev2 = priv->dev2;
 	struct alps_fields *f = &priv->f;
 
 	memset(f, 0, sizeof(struct alps_fields));
@@ -1300,6 +1365,18 @@ static void alps_process_packet_ss4_v2(struct psmouse *psmouse)
 
 	priv->multi_packet = 0;
 
+	/* Report trackstick */
+	if (alps_get_pkt_id_ss4_v2(packet) == SS4_PACKET_ID_STICK) {
+		if (priv->flags & ALPS_DUALPOINT) {
+			input_report_key(dev2, BTN_LEFT, f->ts_left);
+			input_report_key(dev2, BTN_RIGHT, f->ts_right);
+			input_report_key(dev2, BTN_MIDDLE, f->ts_middle);
+			input_sync(dev2);
+		}
+		return;
+	}
+
+	/* Report touchpad */
 	alps_report_mt_data(psmouse, (f->fingers <= 4) ? f->fingers : 4);
 
 	input_mt_report_finger_count(dev, f->fingers);
@@ -2047,7 +2124,7 @@ static int alps_absolute_mode_v3(struct psmouse *psmouse)
 	return 0;
 }
 
-static int alps_probe_trackstick_v3(struct psmouse *psmouse, int reg_base)
+static int alps_probe_trackstick_v3_v7(struct psmouse *psmouse, int reg_base)
 {
 	int ret = -EIO, reg_val;
 
@@ -2128,15 +2205,12 @@ error:
 
 static int alps_hw_init_v3(struct psmouse *psmouse)
 {
+	struct alps_data *priv = psmouse->private;
 	struct ps2dev *ps2dev = &psmouse->ps2dev;
 	int reg_val;
 	unsigned char param[4];
 
-	reg_val = alps_probe_trackstick_v3(psmouse, ALPS_REG_BASE_PINNACLE);
-	if (reg_val == -EIO)
-		goto error;
-
-	if (reg_val == 0 &&
+	if ((priv->flags & ALPS_DUALPOINT) &&
 	    alps_setup_trackstick_v3(psmouse, ALPS_REG_BASE_PINNACLE) == -EIO)
 		goto error;
 
@@ -2406,14 +2480,34 @@ static int alps_update_device_area_ss4_v2(unsigned char otp[][4],
 	int num_y_electrode;
 	int x_pitch, y_pitch, x_phys, y_phys;
 
-	num_x_electrode = SS4_NUMSENSOR_XOFFSET + (otp[1][0] & 0x0F);
-	num_y_electrode = SS4_NUMSENSOR_YOFFSET + ((otp[1][0] >> 4) & 0x0F);
+	if (IS_SS4PLUS_DEV(priv->dev_id)) {
+		num_x_electrode =
+			SS4PLUS_NUMSENSOR_XOFFSET + (otp[0][2] & 0x0F);
+		num_y_electrode =
+			SS4PLUS_NUMSENSOR_YOFFSET + ((otp[0][2] >> 4) & 0x0F);
 
-	priv->x_max = (num_x_electrode - 1) * SS4_COUNT_PER_ELECTRODE;
-	priv->y_max = (num_y_electrode - 1) * SS4_COUNT_PER_ELECTRODE;
+		priv->x_max =
+			(num_x_electrode - 1) * SS4PLUS_COUNT_PER_ELECTRODE;
+		priv->y_max =
+			(num_y_electrode - 1) * SS4PLUS_COUNT_PER_ELECTRODE;
 
-	x_pitch = ((otp[1][2] >> 2) & 0x07) + SS4_MIN_PITCH_MM;
-	y_pitch = ((otp[1][2] >> 5) & 0x07) + SS4_MIN_PITCH_MM;
+		x_pitch = (otp[0][1] & 0x0F) + SS4PLUS_MIN_PITCH_MM;
+		y_pitch = ((otp[0][1] >> 4) & 0x0F) + SS4PLUS_MIN_PITCH_MM;
+
+	} else {
+		num_x_electrode =
+			SS4_NUMSENSOR_XOFFSET + (otp[1][0] & 0x0F);
+		num_y_electrode =
+			SS4_NUMSENSOR_YOFFSET + ((otp[1][0] >> 4) & 0x0F);
+
+		priv->x_max =
+			(num_x_electrode - 1) * SS4_COUNT_PER_ELECTRODE;
+		priv->y_max =
+			(num_y_electrode - 1) * SS4_COUNT_PER_ELECTRODE;
+
+		x_pitch = ((otp[1][2] >> 2) & 0x07) + SS4_MIN_PITCH_MM;
+		y_pitch = ((otp[1][2] >> 5) & 0x07) + SS4_MIN_PITCH_MM;
+	}
 
 	x_phys = x_pitch * (num_x_electrode - 1); /* In 0.1 mm units */
 	y_phys = y_pitch * (num_y_electrode - 1); /* In 0.1 mm units */
@@ -2429,10 +2523,28 @@ static int alps_update_btn_info_ss4_v2(unsigned char otp[][4],
 {
 	unsigned char is_btnless;
 
-	is_btnless = (otp[1][1] >> 3) & 0x01;
+	if (IS_SS4PLUS_DEV(priv->dev_id))
+		is_btnless = (otp[1][0] >> 1) & 0x01;
+	else
+		is_btnless = (otp[1][1] >> 3) & 0x01;
 
 	if (is_btnless)
 		priv->flags |= ALPS_BUTTONPAD;
+
+	return 0;
+}
+
+static int alps_update_dual_info_ss4_v2(unsigned char otp[][4],
+				       struct alps_data *priv)
+{
+	bool is_dual = false;
+
+	if (IS_SS4PLUS_DEV(priv->dev_id))
+		is_dual = (otp[0][0] >> 4) & 0x01;
+
+	if (is_dual)
+		priv->flags |= ALPS_DUALPOINT |
+					ALPS_DUALPOINT_WITH_PRESSURE;
 
 	return 0;
 }
@@ -2444,13 +2556,15 @@ static int alps_set_defaults_ss4_v2(struct psmouse *psmouse,
 
 	memset(otp, 0, sizeof(otp));
 
-	if (alps_get_otp_values_ss4_v2(psmouse, 0, &otp[0][0]) ||
-	    alps_get_otp_values_ss4_v2(psmouse, 1, &otp[1][0]))
+	if (alps_get_otp_values_ss4_v2(psmouse, 1, &otp[1][0]) ||
+	    alps_get_otp_values_ss4_v2(psmouse, 0, &otp[0][0]))
 		return -1;
 
 	alps_update_device_area_ss4_v2(otp, priv);
 
 	alps_update_btn_info_ss4_v2(otp, priv);
+
+	alps_update_dual_info_ss4_v2(otp, priv);
 
 	return 0;
 }
@@ -2613,6 +2727,11 @@ static int alps_set_protocol(struct psmouse *psmouse,
 		priv->decode_fields = alps_decode_pinnacle;
 		priv->nibble_commands = alps_v3_nibble_commands;
 		priv->addr_command = PSMOUSE_CMD_RESET_WRAP;
+
+		if (alps_probe_trackstick_v3_v7(psmouse,
+						ALPS_REG_BASE_PINNACLE) < 0)
+			priv->flags &= ~ALPS_DUALPOINT;
+
 		break;
 
 	case ALPS_PROTO_V3_RUSHMORE:
@@ -2625,8 +2744,8 @@ static int alps_set_protocol(struct psmouse *psmouse,
 		priv->x_bits = 16;
 		priv->y_bits = 12;
 
-		if (alps_probe_trackstick_v3(psmouse,
-					     ALPS_REG_BASE_RUSHMORE) < 0)
+		if (alps_probe_trackstick_v3_v7(psmouse,
+						ALPS_REG_BASE_RUSHMORE) < 0)
 			priv->flags &= ~ALPS_DUALPOINT;
 
 		break;
@@ -2675,6 +2794,9 @@ static int alps_set_protocol(struct psmouse *psmouse,
 
 		if (priv->fw_ver[1] != 0xba)
 			priv->flags |= ALPS_BUTTONPAD;
+
+		if (alps_probe_trackstick_v3_v7(psmouse, ALPS_REG_BASE_V7) < 0)
+			priv->flags &= ~ALPS_DUALPOINT;
 
 		break;
 
@@ -2759,7 +2881,7 @@ static int alps_identify(struct psmouse *psmouse, struct alps_data *priv)
 			   ec[2] >= 0x90 && ec[2] <= 0x9d) {
 			protocol = &alps_v3_protocol_data;
 		} else if (e7[0] == 0x73 && e7[1] == 0x03 &&
-			   e7[2] == 0x14 && ec[1] == 0x02) {
+			   (e7[2] == 0x14 || e7[2] == 0x28)) {
 			protocol = &alps_v8_protocol_data;
 		} else {
 			psmouse_dbg(psmouse,
@@ -2769,7 +2891,8 @@ static int alps_identify(struct psmouse *psmouse, struct alps_data *priv)
 	}
 
 	if (priv) {
-		/* Save the Firmware version */
+		/* Save Device ID and Firmware version */
+		memcpy(priv->dev_id, e7, 3);
 		memcpy(priv->fw_ver, ec, 3);
 		error = alps_set_protocol(psmouse, priv, protocol);
 		if (error)
@@ -2943,6 +3066,10 @@ int alps_init(struct psmouse *psmouse)
 
 		input_set_capability(dev2, EV_REL, REL_X);
 		input_set_capability(dev2, EV_REL, REL_Y);
+		if (priv->flags & ALPS_DUALPOINT_WITH_PRESSURE) {
+			input_set_capability(dev2, EV_ABS, ABS_PRESSURE);
+			input_set_abs_params(dev2, ABS_PRESSURE, 0, 127, 0, 0);
+		}
 		input_set_capability(dev2, EV_KEY, BTN_LEFT);
 		input_set_capability(dev2, EV_KEY, BTN_RIGHT);
 		input_set_capability(dev2, EV_KEY, BTN_MIDDLE);

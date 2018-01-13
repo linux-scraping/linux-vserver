@@ -168,7 +168,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 	if ((*mask & IATTR_TAG) && !has_tag)
 		return -EINVAL;
 
-	mutex_lock(&in->i_mutex);
+	inode_lock(in);
 	if (*mask & IATTR_TAG) {
 		attr.ia_tag = make_ktag(&init_user_ns, *tag);
 		attr.ia_valid |= ATTR_TAG;
@@ -225,7 +225,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 		if (in->i_op && in->i_op->setattr)
 			error = in->i_op->setattr(de, &attr);
 		else {
-			error = inode_change_ok(in, &attr);
+			error = setattr_prepare(de, &attr);
 			if (!error) {
 				setattr_copy(in, &attr);
 				mark_inode_dirty(in);
@@ -234,7 +234,7 @@ static int __vc_set_iattr(struct dentry *de, uint32_t *tag, uint32_t *flags, uin
 	}
 
 out:
-	mutex_unlock(&in->i_mutex);
+	inode_unlock(in);
 	return error;
 }
 

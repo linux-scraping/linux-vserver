@@ -630,7 +630,11 @@ int __kmem_cache_shutdown(struct kmem_cache *c)
 	return 0;
 }
 
-int __kmem_cache_shrink(struct kmem_cache *d, bool deactivate)
+void __kmem_cache_release(struct kmem_cache *c)
+{
+}
+
+int __kmem_cache_shrink(struct kmem_cache *d)
 {
 	return 0;
 }

@@ -50,14 +50,18 @@ static u8 usb_bos_descriptor [] = {
 	0x00,				/* bU1DevExitLat, set later. */
 	0x00, 0x00,			/* __le16 bU2DevExitLat, set later. */
 	/* Second device capability, SuperSpeedPlus */
-	0x0c,				/* bLength 12, will be adjusted later */
+	0x1c,				/* bLength 28, will be adjusted later */
 	USB_DT_DEVICE_CAPABILITY,	/* Device Capability */
 	USB_SSP_CAP_TYPE,		/* bDevCapabilityType SUPERSPEED_PLUS */
 	0x00,				/* bReserved 0 */
-	0x00, 0x00, 0x00, 0x00,		/* bmAttributes, get from xhci psic */
-	0x00, 0x00,			/* wFunctionalitySupport */
+	0x23, 0x00, 0x00, 0x00,		/* bmAttributes, SSAC=3 SSIC=1 */
+	0x01, 0x00,			/* wFunctionalitySupport */
 	0x00, 0x00,			/* wReserved 0 */
-	/* Sublink Speed Attributes are added in xhci_create_usb3_bos_desc() */
+	/* Default Sublink Speed Attributes, overwrite if custom PSI exists */
+	0x34, 0x00, 0x05, 0x00,		/* 5Gbps, symmetric, rx, ID = 4 */
+	0xb4, 0x00, 0x05, 0x00,		/* 5Gbps, symmetric, tx, ID = 4 */
+	0x35, 0x40, 0x0a, 0x00,		/* 10Gbps, SSP, symmetric, rx, ID = 5 */
+	0xb5, 0x40, 0x0a, 0x00,		/* 10Gbps, SSP, symmetric, tx, ID = 5 */
 };
 
 static int xhci_create_usb3_bos_desc(struct xhci_hcd *xhci, char *buf,
@@ -72,10 +76,14 @@ static int xhci_create_usb3_bos_desc(struct xhci_hcd *xhci, char *buf,
 	ssp_cap_size = sizeof(usb_bos_descriptor) - desc_size;
 
 	/* does xhci support USB 3.1 Enhanced SuperSpeed */
-	if (xhci->usb3_rhub.min_rev >= 0x01 && xhci->usb3_rhub.psi_uid_count) {
-		/* two SSA entries for each unique PSI ID, one RX and one TX */
-		ssa_count = xhci->usb3_rhub.psi_uid_count * 2;
-		ssa_size = ssa_count * sizeof(u32);
+	if (xhci->usb3_rhub.min_rev >= 0x01) {
+		/* does xhci provide a PSI table for SSA speed attributes? */
+		if (xhci->usb3_rhub.psi_count) {
+			/* two SSA entries for each unique PSI ID, RX and TX */
+			ssa_count = xhci->usb3_rhub.psi_uid_count * 2;
+			ssa_size = ssa_count * sizeof(u32);
+			ssp_cap_size -= 16; /* skip copying the default SSA */
+		}
 		desc_size += ssp_cap_size;
 		usb3_1 = true;
 	}
@@ -102,8 +110,9 @@ static int xhci_create_usb3_bos_desc(struct xhci_hcd *xhci, char *buf,
 		put_unaligned_le16(HCS_U2_LATENCY(temp), &buf[13]);
 	}
 
-	if (usb3_1) {
-		u32 ssp_cap_base, bm_attrib, psi;
+	/* If PSI table exists, add the custom speed attributes from it */
+	if (usb3_1 && xhci->usb3_rhub.psi_count) {
+		u32 ssp_cap_base, bm_attrib, psi, psi_mant, psi_exp;
 		int offset;
 
 		ssp_cap_base = USB_DT_BOS_SIZE + USB_DT_USB_SS_CAP_SIZE;
@@ -130,6 +139,15 @@ static int xhci_create_usb3_bos_desc(struct xhci_hcd *xhci, char *buf,
 		for (i = 0; i < xhci->usb3_rhub.psi_count; i++) {
 			psi = xhci->usb3_rhub.psi[i];
 			psi &= ~USB_SSP_SUBLINK_SPEED_RSVD;
+			psi_exp = XHCI_EXT_PORT_PSIE(psi);
+			psi_mant = XHCI_EXT_PORT_PSIM(psi);
+
+			/* Shift to Gbps and set SSP Link BIT(14) if 10Gpbs */
+			for (; psi_exp < 3; psi_exp++)
+				psi_mant /= 1000;
+			if (psi_mant >= 10)
+				psi |= BIT(14);
+
 			if ((psi & PLT_MASK) == PLT_SYM) {
 			/* Symmetric, create SSA RX and TX from one PSI entry */
 				put_unaligned_le32(psi, &buf[offset]);
@@ -458,6 +476,12 @@ static void xhci_disable_port(struct usb_hcd *hcd, struct xhci_hcd *xhci,
 	if (hcd->speed >= HCD_USB3) {
 		xhci_dbg(xhci, "Ignoring request to disable "
 				"SuperSpeed port.\n");
+		return;
+	}
+
+	if (xhci->quirks & XHCI_BROKEN_PORT_PED) {
+		xhci_dbg(xhci,
+			 "Broken Port Enabled/Disabled, ignoring port disable request.\n");
 		return;
 	}
 
@@ -873,7 +897,7 @@ static u32 xhci_get_port_status(struct usb_hcd *hcd,
 		xhci_hub_report_usb2_link_state(&status, raw_port_status);
 	}
 	if (bus_state->port_c_suspend & (1 << wIndex))
-		status |= 1 << USB_PORT_FEAT_C_SUSPEND;
+		status |= USB_PORT_STAT_C_SUSPEND << 16;
 
 	return status;
 }

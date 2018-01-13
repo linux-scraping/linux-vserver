@@ -169,8 +169,7 @@ static void s3c24xx_serial_stop_tx(struct uart_port *port)
 		return;
 
 	if (s3c24xx_serial_has_interrupt_mask(port))
-		__set_bit(S3C64XX_UINTM_TXD,
-			portaddrl(port, S3C64XX_UINTM));
+		s3c24xx_set_bit(port, S3C64XX_UINTM_TXD, S3C64XX_UINTM);
 	else
 		disable_irq_nosync(ourport->tx_irq);
 
@@ -235,8 +234,7 @@ static void enable_tx_dma(struct s3c24xx_uart_port *ourport)
 
 	/* Mask Tx interrupt */
 	if (s3c24xx_serial_has_interrupt_mask(port))
-		__set_bit(S3C64XX_UINTM_TXD,
-			  portaddrl(port, S3C64XX_UINTM));
+		s3c24xx_set_bit(port, S3C64XX_UINTM_TXD, S3C64XX_UINTM);
 	else
 		disable_irq_nosync(ourport->tx_irq);
 
@@ -269,8 +267,8 @@ static void enable_tx_pio(struct s3c24xx_uart_port *ourport)
 
 	/* Unmask Tx interrupt */
 	if (s3c24xx_serial_has_interrupt_mask(port))
-		__clear_bit(S3C64XX_UINTM_TXD,
-			    portaddrl(port, S3C64XX_UINTM));
+		s3c24xx_clear_bit(port, S3C64XX_UINTM_TXD,
+				  S3C64XX_UINTM);
 	else
 		enable_irq(ourport->tx_irq);
 
@@ -397,8 +395,8 @@ static void s3c24xx_serial_stop_rx(struct uart_port *port)
 	if (rx_enabled(port)) {
 		dbg("s3c24xx_serial_stop_rx: port=%p\n", port);
 		if (s3c24xx_serial_has_interrupt_mask(port))
-			__set_bit(S3C64XX_UINTM_RXD,
-				portaddrl(port, S3C64XX_UINTM));
+			s3c24xx_set_bit(port, S3C64XX_UINTM_RXD,
+					S3C64XX_UINTM);
 		else
 			disable_irq_nosync(ourport->rx_irq);
 		rx_enabled(port) = 0;
@@ -601,14 +599,21 @@ static void s3c24xx_serial_rx_drain_fifo(struct s3c24xx_uart_port *ourport)
 {
 	struct uart_port *port = &ourport->port;
 	unsigned int ufcon, ch, flag, ufstat, uerstat;
+	unsigned int fifocnt = 0;
 	int max_count = port->fifosize;
 
 	while (max_count-- > 0) {
-		ufcon = rd_regl(port, S3C2410_UFCON);
-		ufstat = rd_regl(port, S3C2410_UFSTAT);
-
-		if (s3c24xx_serial_rx_fifocnt(ourport, ufstat) == 0)
-			break;
+		/*
+		 * Receive all characters known to be in FIFO
+		 * before reading FIFO level again
+		 */
+		if (fifocnt == 0) {
+			ufstat = rd_regl(port, S3C2410_UFSTAT);
+			fifocnt = s3c24xx_serial_rx_fifocnt(ourport, ufstat);
+			if (fifocnt == 0)
+				break;
+		}
+		fifocnt--;
 
 		uerstat = rd_regl(port, S3C2410_UERSTAT);
 		ch = rd_regb(port, S3C2410_URXH);
@@ -623,6 +628,7 @@ static void s3c24xx_serial_rx_drain_fifo(struct s3c24xx_uart_port *ourport)
 				}
 			} else {
 				if (txe) {
+					ufcon = rd_regl(port, S3C2410_UFCON);
 					ufcon |= S3C2410_UFCON_RESETRX;
 					wr_regl(port, S3C2410_UFCON, ufcon);
 					rx_enabled(port) = 1;
@@ -1062,7 +1068,7 @@ static int s3c64xx_serial_startup(struct uart_port *port)
 	spin_unlock_irqrestore(&port->lock, flags);
 
 	/* Enable Rx Interrupt */
-	__clear_bit(S3C64XX_UINTM_RXD, portaddrl(port, S3C64XX_UINTM));
+	s3c24xx_clear_bit(port, S3C64XX_UINTM_RXD, S3C64XX_UINTM);
 
 	dbg("s3c64xx_serial_startup ok\n");
 	return ret;
@@ -1572,7 +1578,7 @@ static void s3c24xx_serial_resetport(struct uart_port *port,
 }
 
 
-#ifdef CONFIG_CPU_FREQ
+#ifdef CONFIG_ARM_S3C24XX_CPUFREQ
 
 static int s3c24xx_serial_cpufreq_transition(struct notifier_block *nb,
 					     unsigned long val, void *data)
@@ -1837,8 +1843,6 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	ourport->min_dma_size = max_t(int, ourport->port.fifosize,
 				    dma_get_cache_alignment());
 
-	probe_index++;
-
 	dbg("%s: initialising port %p...\n", __func__, ourport);
 
 	ret = s3c24xx_serial_init_port(ourport, pdev);
@@ -1867,6 +1871,8 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	ret = s3c24xx_serial_cpufreq_register(ourport);
 	if (ret < 0)
 		dev_err(&pdev->dev, "failed to add cpufreq notifier\n");
+
+	probe_index++;
 
 	return 0;
 }
@@ -2460,7 +2466,6 @@ static int __init s3c2410_early_console_setup(struct earlycon_device *device,
 }
 OF_EARLYCON_DECLARE(s3c2410, "samsung,s3c2410-uart",
 			s3c2410_early_console_setup);
-EARLYCON_DECLARE(s3c2410, s3c2410_early_console_setup);
 
 /* S3C2412, S3C2440, S3C64xx */
 static struct samsung_early_console_data s3c2440_early_console_data = {
@@ -2479,9 +2484,6 @@ OF_EARLYCON_DECLARE(s3c2440, "samsung,s3c2440-uart",
 			s3c2440_early_console_setup);
 OF_EARLYCON_DECLARE(s3c6400, "samsung,s3c6400-uart",
 			s3c2440_early_console_setup);
-EARLYCON_DECLARE(s3c2412, s3c2440_early_console_setup);
-EARLYCON_DECLARE(s3c2440, s3c2440_early_console_setup);
-EARLYCON_DECLARE(s3c6400, s3c2440_early_console_setup);
 
 /* S5PV210, EXYNOS */
 static struct samsung_early_console_data s5pv210_early_console_data = {
@@ -2498,8 +2500,6 @@ OF_EARLYCON_DECLARE(s5pv210, "samsung,s5pv210-uart",
 			s5pv210_early_console_setup);
 OF_EARLYCON_DECLARE(exynos4210, "samsung,exynos4210-uart",
 			s5pv210_early_console_setup);
-EARLYCON_DECLARE(s5pv210, s5pv210_early_console_setup);
-EARLYCON_DECLARE(exynos4210, s5pv210_early_console_setup);
 #endif
 
 MODULE_ALIAS("platform:samsung-uart");

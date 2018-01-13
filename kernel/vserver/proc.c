@@ -93,7 +93,7 @@ static int proc_virtual_status(char *buffer)
 		atomic_read(&vs_global_fs),
 		atomic_read(&vs_global_mnt_ns),
 		atomic_read(&vs_global_uts_ns),
-		atomic_read(&nr_ipc_ns),
+		atomic_read(&vs_global_ipc_ns),
 		atomic_read(&vs_global_user_ns),
 		atomic_read(&vs_global_pid_ns),
 		atomic_read(&init_task.usage),
@@ -343,7 +343,7 @@ static int vx_proc_fill_cache(struct file *filp, struct dir_context *ctx,
 
 	qname.name = name;
 	qname.len  = len;
-	qname.hash = full_name_hash(name, len);
+	qname.hash = full_name_hash(NULL, name, len);
 
 	child = d_lookup(dir, &qname);
 	if (!child) {

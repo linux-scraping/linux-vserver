@@ -456,7 +456,7 @@ static struct at_xdmac_desc *at_xdmac_alloc_desc(struct dma_chan *chan,
 	return desc;
 }
 
-void at_xdmac_init_used_desc(struct at_xdmac_desc *desc)
+static void at_xdmac_init_used_desc(struct at_xdmac_desc *desc)
 {
 	memset(&desc->lld, 0, sizeof(desc->lld));
 	INIT_LIST_HEAD(&desc->descs_list);
@@ -1202,7 +1202,7 @@ static struct at_xdmac_desc *at_xdmac_memset_create_desc(struct dma_chan *chan,
 	return desc;
 }
 
-struct dma_async_tx_descriptor *
+static struct dma_async_tx_descriptor *
 at_xdmac_prep_dma_memset(struct dma_chan *chan, dma_addr_t dest, int value,
 			 size_t len, unsigned long flags)
 {
@@ -1572,8 +1572,8 @@ static void at_xdmac_handle_cyclic(struct at_xdmac_chan *atchan)
 	desc = list_first_entry(&atchan->xfers_list, struct at_xdmac_desc, xfer_node);
 	txd = &desc->tx_dma_desc;
 
-	if (txd->callback && (txd->flags & DMA_PREP_INTERRUPT))
-		txd->callback(txd->callback_param);
+	if (txd->flags & DMA_PREP_INTERRUPT)
+		dmaengine_desc_get_callback_invoke(txd, NULL);
 }
 
 static void at_xdmac_tasklet(unsigned long data)
@@ -1616,8 +1616,8 @@ static void at_xdmac_tasklet(unsigned long data)
 
 		if (!at_xdmac_chan_is_cyclic(atchan)) {
 			dma_cookie_complete(txd);
-			if (txd->callback && (txd->flags & DMA_PREP_INTERRUPT))
-				txd->callback(txd->callback_param);
+			if (txd->flags & DMA_PREP_INTERRUPT)
+				dmaengine_desc_get_callback_invoke(txd, NULL);
 		}
 
 		dma_run_dependencies(txd);
@@ -2080,8 +2080,6 @@ static int at_xdmac_remove(struct platform_device *pdev)
 	of_dma_controller_free(pdev->dev.of_node);
 	dma_async_device_unregister(&atxdmac->dma);
 	clk_disable_unprepare(atxdmac->clk);
-
-	synchronize_irq(atxdmac->irq);
 
 	free_irq(atxdmac->irq, atxdmac);
 

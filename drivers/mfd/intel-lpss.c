@@ -24,6 +24,7 @@
 #include <linux/mfd/core.h>
 #include <linux/pm_qos.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/seq_file.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
 
@@ -73,7 +74,7 @@ struct intel_lpss {
 	enum intel_lpss_dev_type type;
 	struct clk *clk;
 	struct clk_lookup *clock;
-	const struct mfd_cell *cell;
+	struct mfd_cell *cell;
 	struct device *dev;
 	void __iomem *priv;
 	u32 priv_ctx[LPSS_PRIV_REG_COUNT];
@@ -219,6 +220,7 @@ static void intel_lpss_ltr_hide(struct intel_lpss *lpss)
 
 static int intel_lpss_assign_devs(struct intel_lpss *lpss)
 {
+	const struct mfd_cell *cell;
 	unsigned int type;
 
 	type = lpss->caps & LPSS_PRIV_CAPS_TYPE_MASK;
@@ -226,17 +228,21 @@ static int intel_lpss_assign_devs(struct intel_lpss *lpss)
 
 	switch (type) {
 	case LPSS_DEV_I2C:
-		lpss->cell = &intel_lpss_i2c_cell;
+		cell = &intel_lpss_i2c_cell;
 		break;
 	case LPSS_DEV_UART:
-		lpss->cell = &intel_lpss_uart_cell;
+		cell = &intel_lpss_uart_cell;
 		break;
 	case LPSS_DEV_SPI:
-		lpss->cell = &intel_lpss_spi_cell;
+		cell = &intel_lpss_spi_cell;
 		break;
 	default:
 		return -ENODEV;
 	}
+
+	lpss->cell = devm_kmemdup(lpss->dev, cell, sizeof(*cell), GFP_KERNEL);
+	if (!lpss->cell)
+		return -ENOMEM;
 
 	lpss->type = type;
 
@@ -332,8 +338,8 @@ static int intel_lpss_register_clock(struct intel_lpss *lpss)
 		return 0;
 
 	/* Root clock */
-	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL,
-				      CLK_IS_ROOT, lpss->info->clk_rate);
+	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL, 0,
+				      lpss->info->clk_rate);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
@@ -402,6 +408,8 @@ int intel_lpss_probe(struct device *dev,
 	ret = intel_lpss_assign_devs(lpss);
 	if (ret)
 		return ret;
+
+	lpss->cell->properties = info->properties;
 
 	intel_lpss_init_dev(lpss);
 

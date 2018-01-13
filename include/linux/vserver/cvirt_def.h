@@ -41,9 +41,9 @@ struct _vx_cvirt {
 	atomic_t nr_onhold;		/* processes on hold */
 	uint32_t onhold_last;		/* jiffies when put on hold */
 
-	struct timespec bias_ts;	/* time offset to the host */
-	struct timespec bias_idle;
-	struct timespec bias_uptime;	/* context creation point */
+	struct timespec64 bias_ts;	/* time offset to the host */
+	struct timespec64 bias_idle;
+	struct timespec64 bias_uptime;	/* context creation point */
 	uint64_t bias_clock;		/* offset in clock_t */
 
 	spinlock_t load_lock;		/* lock for the load averages */

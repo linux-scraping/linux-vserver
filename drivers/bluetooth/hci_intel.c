@@ -128,7 +128,7 @@ static int intel_wait_booting(struct hci_uart *hu)
 				  TASK_INTERRUPTIBLE,
 				  msecs_to_jiffies(1000));
 
-	if (err == 1) {
+	if (err == -EINTR) {
 		bt_dev_err(hu->hdev, "Device boot interrupted");
 		return -EINTR;
 	}
@@ -151,7 +151,7 @@ static int intel_wait_lpm_transaction(struct hci_uart *hu)
 				  TASK_INTERRUPTIBLE,
 				  msecs_to_jiffies(1000));
 
-	if (err == 1) {
+	if (err == -EINTR) {
 		bt_dev_err(hu->hdev, "LPM transaction interrupted");
 		return -EINTR;
 	}
@@ -186,7 +186,7 @@ static int intel_lpm_suspend(struct hci_uart *hu)
 	}
 
 	memcpy(skb_put(skb, sizeof(suspend)), suspend, sizeof(suspend));
-	bt_cb(skb)->pkt_type = HCI_LPM_PKT;
+	hci_skb_pkt_type(skb) = HCI_LPM_PKT;
 
 	set_bit(STATE_LPM_TRANSACTION, &intel->flags);
 
@@ -230,7 +230,7 @@ static int intel_lpm_resume(struct hci_uart *hu)
 		return -ENOMEM;
 	}
 
-	bt_cb(skb)->pkt_type = HCI_LPM_WAKE_PKT;
+	hci_skb_pkt_type(skb) = HCI_LPM_WAKE_PKT;
 
 	set_bit(STATE_LPM_TRANSACTION, &intel->flags);
 
@@ -272,7 +272,7 @@ static int intel_lpm_host_wake(struct hci_uart *hu)
 
 	memcpy(skb_put(skb, sizeof(lpm_resume_ack)), lpm_resume_ack,
 	       sizeof(lpm_resume_ack));
-	bt_cb(skb)->pkt_type = HCI_LPM_PKT;
+	hci_skb_pkt_type(skb) = HCI_LPM_PKT;
 
 	/* LPM flow is a priority, enqueue packet at list head */
 	skb_queue_head(&intel->txq, skb);
@@ -473,7 +473,7 @@ static int inject_cmd_complete(struct hci_dev *hdev, __u16 opcode)
 
 	*skb_put(skb, 1) = 0x00;
 
-	bt_cb(skb)->pkt_type = HCI_EVENT_PKT;
+	hci_skb_pkt_type(skb) = HCI_EVENT_PKT;
 
 	return hci_recv_frame(hdev, skb);
 }
@@ -494,7 +494,7 @@ static int intel_set_baudrate(struct hci_uart *hu, unsigned int speed)
 	clear_bit(STATE_BOOTING, &intel->flags);
 
 	/* In case of timeout, try to continue anyway */
-	if (err && err != ETIMEDOUT)
+	if (err && err != -ETIMEDOUT)
 		return err;
 
 	bt_dev_info(hdev, "Change controller speed to %d", speed);
@@ -508,7 +508,7 @@ static int intel_set_baudrate(struct hci_uart *hu, unsigned int speed)
 	/* Device will not accept speed change if Intel version has not been
 	 * previously requested.
 	 */
-	skb = __hci_cmd_sync(hdev, 0xfc05, 0, NULL, HCI_INIT_TIMEOUT);
+	skb = __hci_cmd_sync(hdev, 0xfc05, 0, NULL, HCI_CMD_TIMEOUT);
 	if (IS_ERR(skb)) {
 		bt_dev_err(hdev, "Reading Intel version information failed (%ld)",
 			   PTR_ERR(skb));
@@ -523,7 +523,7 @@ static int intel_set_baudrate(struct hci_uart *hu, unsigned int speed)
 	}
 
 	memcpy(skb_put(skb, sizeof(speed_cmd)), speed_cmd, sizeof(speed_cmd));
-	bt_cb(skb)->pkt_type = HCI_COMMAND_PKT;
+	hci_skb_pkt_type(skb) = HCI_COMMAND_PKT;
 
 	hci_uart_set_flow_control(hu, true);
 
@@ -543,12 +543,10 @@ static int intel_setup(struct hci_uart *hu)
 {
 	static const u8 reset_param[] = { 0x00, 0x01, 0x00, 0x01,
 					  0x00, 0x08, 0x04, 0x00 };
-	static const u8 lpm_param[] = { 0x03, 0x07, 0x01, 0x0b };
 	struct intel_data *intel = hu->priv;
-	struct intel_device *idev = NULL;
 	struct hci_dev *hdev = hu->hdev;
 	struct sk_buff *skb;
-	struct intel_version *ver;
+	struct intel_version ver;
 	struct intel_boot_params *params;
 	struct list_head *p;
 	const struct firmware *fw;
@@ -587,7 +585,7 @@ static int intel_setup(struct hci_uart *hu)
 	clear_bit(STATE_BOOTING, &intel->flags);
 
 	/* In case of timeout, try to continue anyway */
-	if (err && err != ETIMEDOUT)
+	if (err && err != -ETIMEDOUT)
 		return err;
 
 	set_bit(STATE_BOOTLOADER, &intel->flags);
@@ -596,35 +594,16 @@ static int intel_setup(struct hci_uart *hu)
 	 * is in bootloader mode or if it already has operational firmware
 	 * loaded.
 	 */
-	skb = __hci_cmd_sync(hdev, 0xfc05, 0, NULL, HCI_INIT_TIMEOUT);
-	if (IS_ERR(skb)) {
-		bt_dev_err(hdev, "Reading Intel version information failed (%ld)",
-			   PTR_ERR(skb));
-		return PTR_ERR(skb);
-	}
-
-	if (skb->len != sizeof(*ver)) {
-		bt_dev_err(hdev, "Intel version event size mismatch");
-		kfree_skb(skb);
-		return -EILSEQ;
-	}
-
-	ver = (struct intel_version *)skb->data;
-	if (ver->status) {
-		bt_dev_err(hdev, "Intel version command failure (%02x)",
-			   ver->status);
-		err = -bt_to_errno(ver->status);
-		kfree_skb(skb);
+	 err = btintel_read_version(hdev, &ver);
+	 if (err)
 		return err;
-	}
 
 	/* The hardware platform number has a fixed value of 0x37 and
 	 * for now only accept this single value.
 	 */
-	if (ver->hw_platform != 0x37) {
+	if (ver.hw_platform != 0x37) {
 		bt_dev_err(hdev, "Unsupported Intel hardware platform (%u)",
-			   ver->hw_platform);
-		kfree_skb(skb);
+			   ver.hw_platform);
 		return -EINVAL;
 	}
 
@@ -633,14 +612,13 @@ static int intel_setup(struct hci_uart *hu)
 	 * put in place to ensure correct forward compatibility options
 	 * when newer hardware variants come along.
 	 */
-	if (ver->hw_variant != 0x0b) {
+	if (ver.hw_variant != 0x0b) {
 		bt_dev_err(hdev, "Unsupported Intel hardware variant (%u)",
-			   ver->hw_variant);
-		kfree_skb(skb);
+			   ver.hw_variant);
 		return -EINVAL;
 	}
 
-	btintel_version_info(hdev, ver);
+	btintel_version_info(hdev, &ver);
 
 	/* The firmware variant determines if the device is in bootloader
 	 * mode or is running operational firmware. The value 0x06 identifies
@@ -655,8 +633,7 @@ static int intel_setup(struct hci_uart *hu)
 	 * It is not possible to use the Secure Boot Parameters in this
 	 * case since that command is only available in bootloader mode.
 	 */
-	if (ver->fw_variant == 0x23) {
-		kfree_skb(skb);
+	if (ver.fw_variant == 0x23) {
 		clear_bit(STATE_BOOTLOADER, &intel->flags);
 		btintel_check_bdaddr(hdev);
 		return 0;
@@ -665,19 +642,16 @@ static int intel_setup(struct hci_uart *hu)
 	/* If the device is not in bootloader mode, then the only possible
 	 * choice is to return an error and abort the device initialization.
 	 */
-	if (ver->fw_variant != 0x06) {
+	if (ver.fw_variant != 0x06) {
 		bt_dev_err(hdev, "Unsupported Intel firmware variant (%u)",
-			   ver->fw_variant);
-		kfree_skb(skb);
+			   ver.fw_variant);
 		return -ENODEV;
 	}
-
-	kfree_skb(skb);
 
 	/* Read the secure boot parameters to identify the operating
 	 * details of the bootloader.
 	 */
-	skb = __hci_cmd_sync(hdev, 0xfc0d, 0, NULL, HCI_INIT_TIMEOUT);
+	skb = __hci_cmd_sync(hdev, 0xfc0d, 0, NULL, HCI_CMD_TIMEOUT);
 	if (IS_ERR(skb)) {
 		bt_dev_err(hdev, "Reading Intel boot parameters failed (%ld)",
 			   PTR_ERR(skb));
@@ -845,7 +819,7 @@ static int intel_setup(struct hci_uart *hu)
 	err = wait_on_bit_timeout(&intel->flags, STATE_DOWNLOADING,
 				  TASK_INTERRUPTIBLE,
 				  msecs_to_jiffies(5000));
-	if (err == 1) {
+	if (err == -EINTR) {
 		bt_dev_err(hdev, "Firmware loading interrupted");
 		err = -EINTR;
 		goto done;
@@ -887,7 +861,7 @@ done:
 	set_bit(STATE_BOOTING, &intel->flags);
 
 	skb = __hci_cmd_sync(hdev, 0xfc01, sizeof(reset_param), reset_param,
-			     HCI_INIT_TIMEOUT);
+			     HCI_CMD_TIMEOUT);
 	if (IS_ERR(skb))
 		return PTR_ERR(skb);
 
@@ -914,7 +888,9 @@ done:
 
 	bt_dev_info(hdev, "Device booted in %llu usecs", duration);
 
-	/* Enable LPM if matching pdev with wakeup enabled */
+	/* Enable LPM if matching pdev with wakeup enabled, set TX active
+	 * until further LPM TX notification.
+	 */
 	mutex_lock(&intel_device_list_lock);
 	list_for_each(p, &intel_device_list) {
 		struct intel_device *dev = list_entry(p, struct intel_device,
@@ -922,29 +898,15 @@ done:
 		if (!hu->tty->dev)
 			break;
 		if (hu->tty->dev->parent == dev->pdev->dev.parent) {
-			if (device_may_wakeup(&dev->pdev->dev))
-				idev = dev;
+			if (device_may_wakeup(&dev->pdev->dev)) {
+				set_bit(STATE_LPM_ENABLED, &intel->flags);
+				set_bit(STATE_TX_ACTIVE, &intel->flags);
+			}
 			break;
 		}
 	}
 	mutex_unlock(&intel_device_list_lock);
 
-	if (!idev)
-		goto no_lpm;
-
-	bt_dev_info(hdev, "Enabling LPM");
-
-	skb = __hci_cmd_sync(hdev, 0xfc8b, sizeof(lpm_param), lpm_param,
-			     HCI_CMD_TIMEOUT);
-	if (IS_ERR(skb)) {
-		bt_dev_err(hdev, "Failed to enable LPM");
-		goto no_lpm;
-	}
-	kfree_skb(skb);
-
-	set_bit(STATE_LPM_ENABLED, &intel->flags);
-
-no_lpm:
 	/* Ignore errors, device can work without DDC parameters */
 	btintel_load_ddc_config(hdev, fwname);
 
@@ -1137,7 +1099,7 @@ static struct sk_buff *intel_dequeue(struct hci_uart *hu)
 		return skb;
 
 	if (test_bit(STATE_BOOTLOADER, &intel->flags) &&
-	    (bt_cb(skb)->pkt_type == HCI_COMMAND_PKT)) {
+	    (hci_skb_pkt_type(skb) == HCI_COMMAND_PKT)) {
 		struct hci_command_hdr *cmd = (void *)skb->data;
 		__u16 opcode = le16_to_cpu(cmd->opcode);
 
@@ -1151,7 +1113,7 @@ static struct sk_buff *intel_dequeue(struct hci_uart *hu)
 	}
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
+	memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
 
 	return skb;
 }

@@ -24,6 +24,7 @@
  *
  */
 
+#include <acpi/video.h>
 #include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
 
@@ -39,6 +40,7 @@
 
 #include "nouveau_fence.h"
 
+#include <nvif/cl0046.h>
 #include <nvif/event.h>
 
 static int
@@ -46,7 +48,7 @@ nouveau_display_vblank_handler(struct nvif_notify *notify)
 {
 	struct nouveau_crtc *nv_crtc =
 		container_of(notify, typeof(*nv_crtc), vblank);
-	drm_handle_vblank(nv_crtc->base.dev, nv_crtc->index);
+	drm_crtc_handle_vblank(&nv_crtc->base);
 	return NVIF_NOTIFY_KEEP;
 }
 
@@ -246,7 +248,7 @@ static const struct drm_framebuffer_funcs nouveau_framebuffer_funcs = {
 int
 nouveau_framebuffer_init(struct drm_device *dev,
 			 struct nouveau_framebuffer *nv_fb,
-			 struct drm_mode_fb_cmd2 *mode_cmd,
+			 const struct drm_mode_fb_cmd2 *mode_cmd,
 			 struct nouveau_bo *nvbo)
 {
 	struct nouveau_display *disp = nouveau_display(dev);
@@ -272,13 +274,13 @@ nouveau_framebuffer_init(struct drm_device *dev,
 static struct drm_framebuffer *
 nouveau_user_framebuffer_create(struct drm_device *dev,
 				struct drm_file *file_priv,
-				struct drm_mode_fb_cmd2 *mode_cmd)
+				const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct nouveau_framebuffer *nouveau_fb;
 	struct drm_gem_object *gem;
 	int ret = -ENOMEM;
 
-	gem = drm_gem_object_lookup(dev, file_priv, mode_cmd->handles[0]);
+	gem = drm_gem_object_lookup(file_priv, mode_cmd->handles[0]);
 	if (!gem)
 		return ERR_PTR(-ENOENT);
 
@@ -295,7 +297,7 @@ nouveau_user_framebuffer_create(struct drm_device *dev,
 err:
 	kfree(nouveau_fb);
 err_unref:
-	drm_gem_object_unreference(gem);
+	drm_gem_object_unreference_unlocked(gem);
 	return ERR_PTR(ret);
 }
 
@@ -357,6 +359,57 @@ static struct nouveau_drm_prop_enum_list dither_depth[] = {
 	}                                                                      \
 } while(0)
 
+static void
+nouveau_display_hpd_work(struct work_struct *work)
+{
+	struct nouveau_drm *drm = container_of(work, typeof(*drm), hpd_work);
+
+	pm_runtime_get_sync(drm->dev->dev);
+
+	drm_helper_hpd_irq_event(drm->dev);
+	/* enable polling for external displays */
+	drm_kms_helper_poll_enable(drm->dev);
+
+	pm_runtime_mark_last_busy(drm->dev->dev);
+	pm_runtime_put_sync(drm->dev->dev);
+}
+
+#ifdef CONFIG_ACPI
+
+/*
+ * Hans de Goede: This define belongs in acpi/video.h, I've submitted a patch
+ * to the acpi subsys to move it there from drivers/acpi/acpi_video.c .
+ * This should be dropped once that is merged.
+ */
+#ifndef ACPI_VIDEO_NOTIFY_PROBE
+#define ACPI_VIDEO_NOTIFY_PROBE			0x81
+#endif
+
+static int
+nouveau_display_acpi_ntfy(struct notifier_block *nb, unsigned long val,
+			  void *data)
+{
+	struct nouveau_drm *drm = container_of(nb, typeof(*drm), acpi_nb);
+	struct acpi_bus_event *info = data;
+
+	if (!strcmp(info->device_class, ACPI_VIDEO_CLASS)) {
+		if (info->type == ACPI_VIDEO_NOTIFY_PROBE) {
+			/*
+			 * This may be the only indication we receive of a
+			 * connector hotplug on a runtime suspended GPU,
+			 * schedule hpd_work to check.
+			 */
+			schedule_work(&drm->hpd_work);
+
+			/* acpi-video should not generate keypresses for this */
+			return NOTIFY_BAD;
+		}
+	}
+
+	return NOTIFY_DONE;
+}
+#endif
+
 int
 nouveau_display_init(struct drm_device *dev)
 {
@@ -368,10 +421,6 @@ nouveau_display_init(struct drm_device *dev)
 	ret = disp->init(dev);
 	if (ret)
 		return ret;
-
-	/* enable polling for external displays */
-	if (!dev->mode_config.poll_enabled)
-		drm_kms_helper_poll_enable(dev);
 
 	/* enable hotplug interrupts */
 	list_for_each_entry(connector, &dev->mode_config.connector_list, head) {
@@ -495,7 +544,9 @@ nouveau_display_create(struct drm_device *dev)
 
 	if (nouveau_modeset != 2 && drm->vbios.dcb.entries) {
 		static const u16 oclass[] = {
-			GM204_DISP,
+			GP104_DISP,
+			GP100_DISP,
+			GM200_DISP,
 			GM107_DISP,
 			GK110_DISP,
 			GK104_DISP,
@@ -535,6 +586,12 @@ nouveau_display_create(struct drm_device *dev)
 	}
 
 	nouveau_backlight_init(dev);
+	INIT_WORK(&drm->hpd_work, nouveau_display_hpd_work);
+#ifdef CONFIG_ACPI
+	drm->acpi_nb.notifier_call = nouveau_display_acpi_ntfy;
+	register_acpi_notifier(&drm->acpi_nb);
+#endif
+
 	return 0;
 
 vblank_err:
@@ -550,10 +607,14 @@ nouveau_display_destroy(struct drm_device *dev)
 {
 	struct nouveau_display *disp = nouveau_display(dev);
 
+#ifdef CONFIG_ACPI
+	unregister_acpi_notifier(&nouveau_drm(dev)->acpi_nb);
+#endif
 	nouveau_backlight_exit(dev);
 	nouveau_display_vblank_fini(dev);
 
 	drm_kms_helper_poll_fini(dev);
+	drm_crtc_force_disable_all(dev);
 	drm_mode_config_cleanup(dev);
 
 	if (disp->dtor)
@@ -739,7 +800,7 @@ nouveau_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	}
 
 	mutex_lock(&cli->mutex);
-	ret = ttm_bo_reserve(&new_bo->bo, true, false, false, NULL);
+	ret = ttm_bo_reserve(&new_bo->bo, true, false, NULL);
 	if (ret)
 		goto fail_unpin;
 
@@ -753,19 +814,18 @@ nouveau_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	if (new_bo != old_bo) {
 		ttm_bo_unreserve(&new_bo->bo);
 
-		ret = ttm_bo_reserve(&old_bo->bo, true, false, false, NULL);
+		ret = ttm_bo_reserve(&old_bo->bo, true, false, NULL);
 		if (ret)
 			goto fail_unpin;
 	}
 
 	/* Initialize a page flip struct */
 	*s = (struct nouveau_page_flip_state)
-		{ { }, event, nouveau_crtc(crtc)->index,
-		  fb->bits_per_pixel, fb->pitches[0], crtc->x, crtc->y,
+		{ { }, event, crtc, fb->bits_per_pixel, fb->pitches[0],
 		  new_bo->bo.offset };
 
 	/* Keep vblanks on during flip, for the target crtc of this flip */
-	drm_vblank_get(dev, nouveau_crtc(crtc)->index);
+	drm_crtc_vblank_get(crtc);
 
 	/* Emit a page flip */
 	if (drm->device.info.family >= NV_DEVICE_INFO_V0_TESLA) {
@@ -810,7 +870,7 @@ nouveau_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	return 0;
 
 fail_unreserve:
-	drm_vblank_put(dev, nouveau_crtc(crtc)->index);
+	drm_crtc_vblank_put(crtc);
 	ttm_bo_unreserve(&old_bo->bo);
 fail_unpin:
 	mutex_unlock(&cli->mutex);
@@ -842,17 +902,17 @@ nouveau_finish_page_flip(struct nouveau_channel *chan,
 	s = list_first_entry(&fctx->flip, struct nouveau_page_flip_state, head);
 	if (s->event) {
 		if (drm->device.info.family < NV_DEVICE_INFO_V0_TESLA) {
-			drm_arm_vblank_event(dev, s->crtc, s->event);
+			drm_crtc_arm_vblank_event(s->crtc, s->event);
 		} else {
-			drm_send_vblank_event(dev, s->crtc, s->event);
+			drm_crtc_send_vblank_event(s->crtc, s->event);
 
 			/* Give up ownership of vblank for page-flipped crtc */
-			drm_vblank_put(dev, s->crtc);
+			drm_crtc_vblank_put(s->crtc);
 		}
 	}
 	else {
 		/* Give up ownership of vblank for page-flipped crtc */
-		drm_vblank_put(dev, s->crtc);
+		drm_crtc_vblank_put(s->crtc);
 	}
 
 	list_del(&s->head);
@@ -873,9 +933,10 @@ nouveau_flip_complete(struct nvif_notify *notify)
 
 	if (!nouveau_finish_page_flip(chan, &state)) {
 		if (drm->device.info.family < NV_DEVICE_INFO_V0_TESLA) {
-			nv_set_crtc_base(drm->dev, state.crtc, state.offset +
-					 state.y * state.pitch +
-					 state.x * state.bpp / 8);
+			nv_set_crtc_base(drm->dev, drm_crtc_index(state.crtc),
+					 state.offset + state.crtc->y *
+					 state.pitch + state.crtc->x *
+					 state.bpp / 8);
 		}
 	}
 
@@ -916,7 +977,7 @@ nouveau_display_dumb_map_offset(struct drm_file *file_priv,
 {
 	struct drm_gem_object *gem;
 
-	gem = drm_gem_object_lookup(dev, file_priv, handle);
+	gem = drm_gem_object_lookup(file_priv, handle);
 	if (gem) {
 		struct nouveau_bo *bo = nouveau_gem_object(gem);
 		*poffset = drm_vma_node_offset_addr(&bo->bo.vma_node);

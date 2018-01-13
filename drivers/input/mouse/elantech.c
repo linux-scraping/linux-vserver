@@ -222,12 +222,8 @@ static int elantech_write_reg(struct psmouse *psmouse, unsigned char reg,
  */
 static void elantech_packet_dump(struct psmouse *psmouse)
 {
-	int	i;
-
-	psmouse_printk(KERN_DEBUG, psmouse, "PS/2 packet [");
-	for (i = 0; i < psmouse->pktsize; i++)
-		printk("%s0x%02x ", i ? ", " : " ", psmouse->packet[i]);
-	printk("]\n");
+	psmouse_printk(KERN_DEBUG, psmouse, "PS/2 packet [%*ph]\n",
+		       psmouse->pktsize, psmouse->packet);
 }
 
 /*
@@ -1141,7 +1137,7 @@ static int elantech_get_resolution_v4(struct psmouse *psmouse,
  * System76 Pangolin       0x250f01        ?               2 hw buttons
  * (*) + 3 trackpoint buttons
  * (**) + 0 trackpoint buttons
- * Note: Lenovo L430 and Lenovo L430 have the same fw_version/caps
+ * Note: Lenovo L430 and Lenovo L530 have the same fw_version/caps
  */
 static void elantech_set_buttonpad_prop(struct psmouse *psmouse)
 {
@@ -1753,7 +1749,7 @@ int elantech_init(struct psmouse *psmouse)
 		snprintf(etd->tp_phys, sizeof(etd->tp_phys), "%s/input1",
 			psmouse->ps2dev.serio->phys);
 		tp_dev->phys = etd->tp_phys;
-		tp_dev->name = "Elantech PS/2 TrackPoint";
+		tp_dev->name = "ETPS/2 Elantech TrackPoint";
 		tp_dev->id.bustype = BUS_I8042;
 		tp_dev->id.vendor  = 0x0002;
 		tp_dev->id.product = PSMOUSE_ELANTECH;

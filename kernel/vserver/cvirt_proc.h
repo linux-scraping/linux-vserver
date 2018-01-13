@@ -85,8 +85,8 @@ int vx_info_proc_cvirt(struct _vx_cvirt *cvirt, char *buffer)
 	int a, b, c;
 
 	length += sprintf(buffer + length,
-		"BiasUptime:\t%lu.%02lu\n",
-		(unsigned long)cvirt->bias_uptime.tv_sec,
+		"BiasUptime:\t%llu.%02lu\n",
+		(unsigned long long)cvirt->bias_uptime.tv_sec,
 		(cvirt->bias_uptime.tv_nsec / (NSEC_PER_SEC / 100)));
 
 	a = cvirt->load[0] + (FIXED_1 / 200);

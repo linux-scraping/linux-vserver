@@ -309,11 +309,7 @@ struct fsg_common {
 	/* Gadget's private data. */
 	void			*private_data;
 
-	/*
-	 * Vendor (8 chars), product (16 chars), release (4
-	 * hexadecimal digits) and NUL byte
-	 */
-	char inquiry_string[8 + 16 + 4 + 1];
+	char inquiry_string[INQUIRY_STRING_LEN];
 
 	struct kref		ref;
 };
@@ -1114,7 +1110,12 @@ static int do_inquiry(struct fsg_common *common, struct fsg_buffhd *bh)
 	buf[5] = 0;		/* No special options */
 	buf[6] = 0;
 	buf[7] = 0;
-	memcpy(buf + 8, common->inquiry_string, sizeof common->inquiry_string);
+	if (curlun->inquiry_string[0])
+		memcpy(buf + 8, curlun->inquiry_string,
+		       sizeof(curlun->inquiry_string));
+	else
+		memcpy(buf + 8, common->inquiry_string,
+		       sizeof(common->inquiry_string));
 	return 36;
 }
 
@@ -2658,18 +2659,6 @@ void fsg_common_put(struct fsg_common *common)
 }
 EXPORT_SYMBOL_GPL(fsg_common_put);
 
-/* check if fsg_num_buffers is within a valid range */
-static inline int fsg_num_buffers_validate(unsigned int fsg_num_buffers)
-{
-#define FSG_MAX_NUM_BUFFERS	32
-
-	if (fsg_num_buffers >= 2 && fsg_num_buffers <= FSG_MAX_NUM_BUFFERS)
-		return 0;
-	pr_err("fsg_num_buffers %u is out of range (%d to %d)\n",
-	       fsg_num_buffers, 2, FSG_MAX_NUM_BUFFERS);
-	return -EINVAL;
-}
-
 static struct fsg_common *fsg_common_setup(struct fsg_common *common)
 {
 	if (!common) {
@@ -2712,11 +2701,7 @@ static void _fsg_common_free_buffers(struct fsg_buffhd *buffhds, unsigned n)
 int fsg_common_set_num_buffers(struct fsg_common *common, unsigned int n)
 {
 	struct fsg_buffhd *bh, *buffhds;
-	int i, rc;
-
-	rc = fsg_num_buffers_validate(n);
-	if (rc != 0)
-		return rc;
+	int i;
 
 	buffhds = kcalloc(n, sizeof(*buffhds), GFP_KERNEL);
 	if (!buffhds)
@@ -3083,7 +3068,7 @@ static int fsg_bind(struct usb_configuration *c, struct usb_function *f)
 	fsg_ss_bulk_out_comp_desc.bMaxBurst = max_burst;
 
 	ret = usb_assign_descriptors(f, fsg_fs_function, fsg_hs_function,
-			fsg_ss_function);
+			fsg_ss_function, fsg_ss_function);
 	if (ret)
 		goto autoconf_fail;
 
@@ -3221,12 +3206,27 @@ static ssize_t fsg_lun_opts_nofua_store(struct config_item *item,
 
 CONFIGFS_ATTR(fsg_lun_opts_, nofua);
 
+static ssize_t fsg_lun_opts_inquiry_string_show(struct config_item *item,
+						char *page)
+{
+	return fsg_show_inquiry_string(to_fsg_lun_opts(item)->lun, page);
+}
+
+static ssize_t fsg_lun_opts_inquiry_string_store(struct config_item *item,
+						 const char *page, size_t len)
+{
+	return fsg_store_inquiry_string(to_fsg_lun_opts(item)->lun, page, len);
+}
+
+CONFIGFS_ATTR(fsg_lun_opts_, inquiry_string);
+
 static struct configfs_attribute *fsg_lun_attrs[] = {
 	&fsg_lun_opts_attr_file,
 	&fsg_lun_opts_attr_ro,
 	&fsg_lun_opts_attr_removable,
 	&fsg_lun_opts_attr_cdrom,
 	&fsg_lun_opts_attr_nofua,
+	&fsg_lun_opts_attr_inquiry_string,
 	NULL,
 };
 
@@ -3397,10 +3397,6 @@ static ssize_t fsg_opts_num_buffers_store(struct config_item *item,
 	if (ret)
 		goto end;
 
-	ret = fsg_num_buffers_validate(num);
-	if (ret)
-		goto end;
-
 	fsg_common_set_num_buffers(opts->common, num);
 	ret = len;
 
@@ -3474,11 +3470,11 @@ static struct usb_function_instance *fsg_alloc_inst(void)
 
 	opts->lun0.lun = opts->common->luns[0];
 	opts->lun0.lun_id = 0;
-	config_group_init_type_name(&opts->lun0.group, "lun.0", &fsg_lun_type);
-	opts->default_groups[0] = &opts->lun0.group;
-	opts->func_inst.group.default_groups = opts->default_groups;
 
 	config_group_init_type_name(&opts->func_inst.group, "", &fsg_func_type);
+
+	config_group_init_type_name(&opts->lun0.group, "lun.0", &fsg_lun_type);
+	configfs_add_default_group(&opts->lun0.group, &opts->func_inst.group);
 
 	return &opts->func_inst;
 

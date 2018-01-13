@@ -245,15 +245,15 @@ int vc_virt_stat(struct vx_info *vxi, void __user *data)
 {
 	struct vcmd_virt_stat_v0 vc_data;
 	struct _vx_cvirt *cvirt = &vxi->cvirt;
-	struct timespec uptime;
+	struct timespec64 uptime;
 
 	ktime_get_ts(&uptime);
 	set_normalized_timespec(&uptime,
 		uptime.tv_sec - cvirt->bias_uptime.tv_sec,
 		uptime.tv_nsec - cvirt->bias_uptime.tv_nsec);
 
-	vc_data.offset = timespec_to_ns(&cvirt->bias_ts);
-	vc_data.uptime = timespec_to_ns(&uptime);
+	vc_data.offset = timespec64_to_ns(&cvirt->bias_ts);
+	vc_data.uptime = timespec64_to_ns(&uptime);
 	vc_data.nr_threads = atomic_read(&cvirt->nr_threads);
 	vc_data.nr_running = atomic_read(&cvirt->nr_running);
 	vc_data.nr_uninterruptible = atomic_read(&cvirt->nr_uninterruptible);
@@ -293,6 +293,26 @@ void vx_adjust_timespec(struct timespec *ts)
 	}
 }
 
+void vx_adjust_timespec64(struct timespec64 *ts)
+{
+	struct vx_info *vxi;
+
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return;
+
+	vxi = current_vx_info();
+	ts->tv_sec += vxi->cvirt.bias_ts.tv_sec;
+	ts->tv_nsec += vxi->cvirt.bias_ts.tv_nsec;
+
+	if (ts->tv_nsec >= NSEC_PER_SEC) {
+		ts->tv_sec++;
+		ts->tv_nsec -= NSEC_PER_SEC;
+	} else if (ts->tv_nsec < 0) {
+		ts->tv_sec--;
+		ts->tv_nsec += NSEC_PER_SEC;
+	}
+}
+
 int vx_settimeofday(const struct timespec *ts)
 {
 	struct timespec ats, delta;
@@ -305,7 +325,24 @@ int vx_settimeofday(const struct timespec *ts)
 	delta = timespec_sub(*ts, ats);
 
 	vxi = current_vx_info();
-	vxi->cvirt.bias_ts = timespec_add(vxi->cvirt.bias_ts, delta);
+	vxi->cvirt.bias_ts = timespec64_add(vxi->cvirt.bias_ts,
+		timespec_to_timespec64(delta));
+	return 0;
+}
+
+int vx_settimeofday64(const struct timespec64 *ts)
+{
+	struct timespec64 ats, delta;
+	struct vx_info *vxi;
+
+	if (!vx_flags(VXF_VIRT_TIME, 0))
+		return do_settimeofday64(ts);
+
+	getnstimeofday64(&ats);
+	delta = timespec64_sub(*ts, ats);
+
+	vxi = current_vx_info();
+	vxi->cvirt.bias_ts = timespec64_add(vxi->cvirt.bias_ts, delta);
 	return 0;
 }
 

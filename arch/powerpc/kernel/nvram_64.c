@@ -15,8 +15,6 @@
  *       parsing code.
  */
 
-#include <linux/module.h>
-
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
@@ -27,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/kmsg_dump.h>
+#include <linux/pagemap.h>
 #include <linux/pstore.h>
 #include <linux/zlib.h>
 #include <asm/uaccess.h>
@@ -445,7 +444,8 @@ static int nvram_pstore_write(enum pstore_type_id type,
  */
 static ssize_t nvram_pstore_read(u64 *id, enum pstore_type_id *type,
 				int *count, struct timespec *time, char **buf,
-				bool *compressed, struct pstore_info *psi)
+				bool *compressed, ssize_t *ecc_notice_size,
+				struct pstore_info *psi)
 {
 	struct oops_log_info *oops_hdr;
 	unsigned int err_type, id_no, size = 0;
@@ -542,10 +542,11 @@ static ssize_t nvram_pstore_read(u64 *id, enum pstore_type_id *type,
 			time->tv_nsec = 0;
 		}
 		*buf = kmemdup(buff + hdr_size, length, GFP_KERNEL);
+		kfree(buff);
 		if (*buf == NULL)
 			return -ENOMEM;
-		kfree(buff);
 
+		*ecc_notice_size = 0;
 		if (err_type == ERR_TYPE_KERNEL_PANIC_GZ)
 			*compressed = true;
 		else
@@ -560,6 +561,7 @@ static ssize_t nvram_pstore_read(u64 *id, enum pstore_type_id *type,
 static struct pstore_info nvram_pstore_info = {
 	.owner = THIS_MODULE,
 	.name = "nvram",
+	.flags = PSTORE_FLAGS_DMESG,
 	.open = nvram_pstore_open,
 	.read = nvram_pstore_read,
 	.write = nvram_pstore_write,
@@ -733,24 +735,10 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 
 static loff_t dev_nvram_llseek(struct file *file, loff_t offset, int origin)
 {
-	int size;
-
 	if (ppc_md.nvram_size == NULL)
 		return -ENODEV;
-	size = ppc_md.nvram_size();
-
-	switch (origin) {
-	case 1:
-		offset += file->f_pos;
-		break;
-	case 2:
-		offset += size;
-		break;
-	}
-	if (offset < 0)
-		return -EINVAL;
-	file->f_pos = offset;
-	return file->f_pos;
+	return generic_file_llseek_size(file, offset, origin, MAX_LFS_FILESIZE,
+					ppc_md.nvram_size());
 }
 
 
@@ -864,7 +852,7 @@ static long dev_nvram_ioctl(struct file *file, unsigned int cmd,
 	}
 }
 
-const struct file_operations nvram_fops = {
+static const struct file_operations nvram_fops = {
 	.owner		= THIS_MODULE,
 	.llseek		= dev_nvram_llseek,
 	.read		= dev_nvram_read,
@@ -1244,12 +1232,4 @@ static int __init nvram_init(void)
   	
   	return rc;
 }
-
-static void __exit nvram_cleanup(void)
-{
-        misc_deregister( &nvram_dev );
-}
-
-module_init(nvram_init);
-module_exit(nvram_cleanup);
-MODULE_LICENSE("GPL");
+device_initcall(nvram_init);

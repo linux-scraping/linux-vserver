@@ -18,6 +18,7 @@ struct route_info {
 	__u8			prefix[0];	/* 0,8 or 16 */
 };
 
+#include <net/addrconf.h>
 #include <net/flow.h>
 #include <net/ip6_fib.h>
 #include <net/sock.h>
@@ -25,6 +26,7 @@ struct route_info {
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/route.h>
+#include <linux/vs_inet6.h>
 
 #define RT6_LOOKUP_F_IFACE		0x00000001
 #define RT6_LOOKUP_F_REACHABLE		0x00000002
@@ -32,6 +34,7 @@ struct route_info {
 #define RT6_LOOKUP_F_SRCPREF_TMP	0x00000008
 #define RT6_LOOKUP_F_SRCPREF_PUBLIC	0x00000010
 #define RT6_LOOKUP_F_SRCPREF_COA	0x00000020
+#define RT6_LOOKUP_F_IGNORE_LINKSTATE	0x00000040
 
 /* We do not (yet ?) support IPv6 jumbograms (RFC 2675)
  * Unlike IPv4, hdr->seg_len doesn't include the IPv6 header
@@ -64,6 +67,9 @@ static inline bool rt6_need_strict(const struct in6_addr *daddr)
 }
 
 void ip6_route_input(struct sk_buff *skb);
+struct dst_entry *ip6_route_input_lookup(struct net *net,
+					 struct net_device *dev,
+					 struct flowi6 *fl6, int flags);
 
 struct dst_entry *ip6_route_output_flags(struct net *net, const struct sock *sk,
 					 struct flowi6 *fl6, int flags);
@@ -77,6 +83,8 @@ static inline struct dst_entry *ip6_route_output(struct net *net,
 
 struct dst_entry *ip6_route_lookup(struct net *net, struct flowi6 *fl6,
 				   int flags);
+struct rt6_info *ip6_pol_route(struct net *net, struct fib6_table *table,
+			       int ifindex, struct flowi6 *fl6, int flags);
 
 void ip6_route_init_special_entries(void);
 int ip6_route_init(void);
@@ -88,9 +96,25 @@ int ip6_route_add(struct fib6_config *cfg);
 int ip6_ins_rt(struct rt6_info *);
 int ip6_del_rt(struct rt6_info *);
 
-int ip6_route_get_saddr(struct net *net, struct rt6_info *rt,
-			const struct in6_addr *daddr, unsigned int prefs,
-			struct in6_addr *saddr, struct nx_info *nxi);
+static inline int ip6_route_get_saddr(struct net *net, struct rt6_info *rt,
+				      const struct in6_addr *daddr,
+				      unsigned int prefs,
+				      struct in6_addr *saddr,
+				      struct nx_info *nxi)
+{
+	struct inet6_dev *idev =
+			rt ? ip6_dst_idev((struct dst_entry *)rt) : NULL;
+	int err = 0;
+
+	if (rt && rt->rt6i_prefsrc.plen && (!nxi ||
+	    v6_addr_in_nx_info(nxi, &rt->rt6i_prefsrc.addr, NXA_TYPE_ADDR)))
+		*saddr = rt->rt6i_prefsrc.addr;
+	else
+		err = ipv6_dev_get_saddr(net, idev ? idev->dev : NULL,
+					 daddr, prefs, saddr, nxi);
+
+	return err;
+}
 
 struct rt6_info *rt6_lookup(struct net *net, const struct in6_addr *daddr,
 			    const struct in6_addr *saddr, int oif, int flags);
@@ -102,6 +126,9 @@ void fib6_force_start_gc(struct net *net);
 
 struct rt6_info *addrconf_dst_alloc(struct inet6_dev *idev,
 				    const struct in6_addr *addr, bool anycast);
+
+struct rt6_info *ip6_dst_alloc(struct net *net, struct net_device *dev,
+			       int flags);
 
 /*
  *	support functions for ND

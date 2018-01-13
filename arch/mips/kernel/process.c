@@ -30,6 +30,7 @@
 #include <asm/asm.h>
 #include <asm/bootinfo.h>
 #include <asm/cpu.h>
+#include <asm/dsemul.h>
 #include <asm/dsp.h>
 #include <asm/fpu.h>
 #include <asm/irq.h>
@@ -64,22 +65,23 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_FR|KU_MASK);
 	status |= KU_USER;
 	regs->cp0_status = status;
-	clear_used_math();
-	clear_fpu_owner();
-	init_dsp();
-	clear_thread_flag(TIF_USEDMSA);
+	lose_fpu(0);
 	clear_thread_flag(TIF_MSA_CTX_LIVE);
-	disable_msa();
+	clear_used_math();
+	atomic_set(&current->thread.bd_emu_frame, BD_EMUFRAME_NONE);
+	init_dsp();
 	regs->cp0_epc = pc;
 	regs->regs[29] = sp;
 }
 
-void exit_thread(void)
+void exit_thread(struct task_struct *tsk)
 {
-}
-
-void flush_thread(void)
-{
+	/*
+	 * User threads may have allocated a delay slot emulation frame.
+	 * If so, clean up that allocation.
+	 */
+	if (!(current->flags & PF_KTHREAD))
+		dsemul_thread_cleanup(tsk);
 }
 
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
@@ -167,6 +169,8 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 #ifdef CONFIG_MIPS_MT_FPAFF
 	clear_tsk_thread_flag(p, TIF_FPUBOUND);
 #endif /* CONFIG_MIPS_MT_FPAFF */
+
+	atomic_set(&p->thread.bd_emu_frame, BD_EMUFRAME_NONE);
 
 	if (clone_flags & CLONE_SETTLS)
 		ti->tp_value = regs->regs[7];
@@ -399,7 +403,7 @@ static int get_frame_info(struct mips_frame_info *info)
 		return 0;
 	if (info->pc_offset < 0) /* leaf */
 		return 1;
-	/* prologue seems boggus... */
+	/* prologue seems bogus... */
 err:
 	return -1;
 }
@@ -641,9 +645,16 @@ static void arch_dump_stack(void *info)
 	dump_stack();
 }
 
-void arch_trigger_all_cpu_backtrace(bool include_self)
+void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
 {
-	smp_call_function(arch_dump_stack, NULL, 1);
+	long this_cpu = get_cpu();
+
+	if (cpumask_test_cpu(this_cpu, mask) && !exclude_self)
+		dump_stack();
+
+	smp_call_function_many(mask, arch_dump_stack, NULL, 1);
+
+	put_cpu();
 }
 
 int mips_get_process_fp_mode(struct task_struct *task)
@@ -658,11 +669,19 @@ int mips_get_process_fp_mode(struct task_struct *task)
 	return value;
 }
 
+static void prepare_for_fp_mode_switch(void *info)
+{
+	struct mm_struct *mm = info;
+
+	if (current->mm == mm)
+		lose_fpu(1);
+}
+
 int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
 {
 	const unsigned int known_bits = PR_FP_MODE_FR | PR_FP_MODE_FRE;
-	unsigned long switch_count;
 	struct task_struct *t;
+	int max_users;
 
 	/* Check the value is valid */
 	if (value & ~known_bits)
@@ -691,31 +710,17 @@ int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
 	smp_mb__after_atomic();
 
 	/*
-	 * If there are multiple online CPUs then wait until all threads whose
-	 * FP mode is about to change have been context switched. This approach
-	 * allows us to only worry about whether an FP mode switch is in
-	 * progress when FP is first used in a tasks time slice. Pretty much all
-	 * of the mode switch overhead can thus be confined to cases where mode
-	 * switches are actually occuring. That is, to here. However for the
-	 * thread performing the mode switch it may take a while...
+	 * If there are multiple online CPUs then force any which are running
+	 * threads in this process to lose their FPU context, which they can't
+	 * regain until fp_mode_switching is cleared later.
 	 */
 	if (num_online_cpus() > 1) {
-		spin_lock_irq(&task->sighand->siglock);
+		/* No need to send an IPI for the local CPU */
+		max_users = (task->mm == current->mm) ? 1 : 0;
 
-		for_each_thread(task, t) {
-			if (t == current)
-				continue;
-
-			switch_count = t->nvcsw + t->nivcsw;
-
-			do {
-				spin_unlock_irq(&task->sighand->siglock);
-				cond_resched();
-				spin_lock_irq(&task->sighand->siglock);
-			} while ((t->nvcsw + t->nivcsw) == switch_count);
-		}
-
-		spin_unlock_irq(&task->sighand->siglock);
+		if (atomic_read(&current->mm->mm_users) > max_users)
+			smp_call_function(prepare_for_fp_mode_switch,
+					  (void *)current->mm, 1);
 	}
 
 	/*

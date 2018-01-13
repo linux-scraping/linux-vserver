@@ -44,7 +44,7 @@ ssize_t __mei_cl_send(struct mei_cl *cl, u8 *buf, size_t length,
 			bool blocking)
 {
 	struct mei_device *bus;
-	struct mei_cl_cb *cb = NULL;
+	struct mei_cl_cb *cb;
 	ssize_t rets;
 
 	if (WARN_ON(!cl || !cl->dev))
@@ -86,8 +86,6 @@ ssize_t __mei_cl_send(struct mei_cl *cl, u8 *buf, size_t length,
 
 out:
 	mutex_unlock(&bus->device_lock);
-	if (rets < 0)
-		mei_io_cb_free(cb);
 
 	return rets;
 }
@@ -128,7 +126,8 @@ ssize_t __mei_cl_recv(struct mei_cl *cl, u8 *buf, size_t length)
 		goto out;
 
 	/* wait on event only if there is no other waiter */
-	if (list_empty(&cl->rd_completed) && !waitqueue_active(&cl->rx_wait)) {
+	/* synchronized under device mutex */
+	if (!waitqueue_active(&cl->rx_wait)) {
 
 		mutex_unlock(&bus->device_lock);
 
@@ -236,7 +235,7 @@ static void mei_cl_bus_event_work(struct work_struct *work)
 	/* Prepare for the next read */
 	if (cldev->events_mask & BIT(MEI_CL_EVENT_RX)) {
 		mutex_lock(&bus->device_lock);
-		mei_cl_read_start(cldev->cl, 0, NULL);
+		mei_cl_read_start(cldev->cl, mei_cl_mtu(cldev->cl), NULL);
 		mutex_unlock(&bus->device_lock);
 	}
 }
@@ -245,45 +244,55 @@ static void mei_cl_bus_event_work(struct work_struct *work)
  * mei_cl_bus_notify_event - schedule notify cb on bus client
  *
  * @cl: host client
+ *
+ * Return: true if event was scheduled
+ *         false if the client is not waiting for event
  */
-void mei_cl_bus_notify_event(struct mei_cl *cl)
+bool mei_cl_bus_notify_event(struct mei_cl *cl)
 {
 	struct mei_cl_device *cldev = cl->cldev;
 
 	if (!cldev || !cldev->event_cb)
-		return;
+		return false;
 
 	if (!(cldev->events_mask & BIT(MEI_CL_EVENT_NOTIF)))
-		return;
+		return false;
 
 	if (!cl->notify_ev)
-		return;
+		return false;
 
 	set_bit(MEI_CL_EVENT_NOTIF, &cldev->events);
 
 	schedule_work(&cldev->event_work);
 
 	cl->notify_ev = false;
+
+	return true;
 }
 
 /**
- * mei_cl_bus_rx_event  - schedule rx evenet
+ * mei_cl_bus_rx_event  - schedule rx event
  *
  * @cl: host client
+ *
+ * Return: true if event was scheduled
+ *         false if the client is not waiting for event
  */
-void mei_cl_bus_rx_event(struct mei_cl *cl)
+bool mei_cl_bus_rx_event(struct mei_cl *cl)
 {
 	struct mei_cl_device *cldev = cl->cldev;
 
 	if (!cldev || !cldev->event_cb)
-		return;
+		return false;
 
 	if (!(cldev->events_mask & BIT(MEI_CL_EVENT_RX)))
-		return;
+		return false;
 
 	set_bit(MEI_CL_EVENT_RX, &cldev->events);
 
 	schedule_work(&cldev->event_work);
+
+	return true;
 }
 
 /**
@@ -316,7 +325,7 @@ int mei_cldev_register_event_cb(struct mei_cl_device *cldev,
 
 	if (cldev->events_mask & BIT(MEI_CL_EVENT_RX)) {
 		mutex_lock(&bus->device_lock);
-		ret = mei_cl_read_start(cldev->cl, 0, NULL);
+		ret = mei_cl_read_start(cldev->cl, mei_cl_mtu(cldev->cl), NULL);
 		mutex_unlock(&bus->device_lock);
 		if (ret && ret != -EBUSY)
 			return ret;
@@ -416,7 +425,7 @@ int mei_cldev_enable(struct mei_cl_device *cldev)
 
 	if (!cl) {
 		mutex_lock(&bus->device_lock);
-		cl = mei_cl_alloc_linked(bus, MEI_HOST_CLIENT_ID_ANY);
+		cl = mei_cl_alloc_linked(bus);
 		mutex_unlock(&bus->device_lock);
 		if (IS_ERR(cl))
 			return PTR_ERR(cl);
@@ -581,6 +590,7 @@ static int mei_cl_device_probe(struct device *dev)
 	struct mei_cl_device *cldev;
 	struct mei_cl_driver *cldrv;
 	const struct mei_cl_device_id *id;
+	int ret;
 
 	cldev = to_mei_cl_device(dev);
 	cldrv = to_mei_cl_driver(dev->driver);
@@ -595,9 +605,12 @@ static int mei_cl_device_probe(struct device *dev)
 	if (!id)
 		return -ENODEV;
 
-	__module_get(THIS_MODULE);
+	ret = cldrv->probe(cldev, id);
+	if (ret)
+		return ret;
 
-	return cldrv->probe(cldev, id);
+	__module_get(THIS_MODULE);
+	return 0;
 }
 
 /**
@@ -635,11 +648,8 @@ static ssize_t name_show(struct device *dev, struct device_attribute *a,
 			     char *buf)
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
-	size_t len;
 
-	len = snprintf(buf, PAGE_SIZE, "%s", cldev->name);
-
-	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+	return scnprintf(buf, PAGE_SIZE, "%s", cldev->name);
 }
 static DEVICE_ATTR_RO(name);
 
@@ -648,11 +658,8 @@ static ssize_t uuid_show(struct device *dev, struct device_attribute *a,
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
 	const uuid_le *uuid = mei_me_cl_uuid(cldev->me_cl);
-	size_t len;
 
-	len = snprintf(buf, PAGE_SIZE, "%pUl", uuid);
-
-	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+	return scnprintf(buf, PAGE_SIZE, "%pUl", uuid);
 }
 static DEVICE_ATTR_RO(uuid);
 
@@ -661,11 +668,8 @@ static ssize_t version_show(struct device *dev, struct device_attribute *a,
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
 	u8 version = mei_me_cl_ver(cldev->me_cl);
-	size_t len;
 
-	len = snprintf(buf, PAGE_SIZE, "%02X", version);
-
-	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+	return scnprintf(buf, PAGE_SIZE, "%02X", version);
 }
 static DEVICE_ATTR_RO(version);
 
@@ -674,10 +678,10 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
 {
 	struct mei_cl_device *cldev = to_mei_cl_device(dev);
 	const uuid_le *uuid = mei_me_cl_uuid(cldev->me_cl);
-	size_t len;
+	u8 version = mei_me_cl_ver(cldev->me_cl);
 
-	len = snprintf(buf, PAGE_SIZE, "mei:%s:%pUl:", cldev->name, uuid);
-	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+	return scnprintf(buf, PAGE_SIZE, "mei:%s:%pUl:%02X:",
+			 cldev->name, uuid, version);
 }
 static DEVICE_ATTR_RO(modalias);
 
@@ -974,6 +978,20 @@ void mei_cl_bus_rescan(struct mei_device *bus)
 	mutex_unlock(&bus->cl_bus_lock);
 
 	dev_dbg(bus->dev, "rescan end");
+}
+
+void mei_cl_bus_rescan_work(struct work_struct *work)
+{
+	struct mei_device *bus =
+		container_of(work, struct mei_device, bus_rescan_work);
+	struct mei_me_client *me_cl;
+
+	me_cl = mei_me_cl_by_uuid(bus, &mei_amthif_guid);
+	if (me_cl)
+		mei_amthif_host_init(bus, me_cl);
+	mei_me_cl_put(me_cl);
+
+	mei_cl_bus_rescan(bus);
 }
 
 int __mei_cldev_driver_register(struct mei_cl_driver *cldrv,

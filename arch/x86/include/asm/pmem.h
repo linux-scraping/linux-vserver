@@ -26,13 +26,11 @@
  * @n: length of the copy in bytes
  *
  * Copy data to persistent memory media via non-temporal stores so that
- * a subsequent arch_wmb_pmem() can flush cpu and memory controller
- * write buffers to guarantee durability.
+ * a subsequent pmem driver flush operation will drain posted write queues.
  */
-static inline void arch_memcpy_to_pmem(void __pmem *dst, const void *src,
-		size_t n)
+static inline void arch_memcpy_to_pmem(void *dst, const void *src, size_t n)
 {
-	int unwritten;
+	int rem;
 
 	/*
 	 * We are copying between two kernel buffers, if
@@ -40,34 +38,19 @@ static inline void arch_memcpy_to_pmem(void __pmem *dst, const void *src,
 	 * fault) we would have already reported a general protection fault
 	 * before the WARN+BUG.
 	 */
-	unwritten = __copy_from_user_inatomic_nocache((void __force *) dst,
-			(void __user *) src, n);
-	if (WARN(unwritten, "%s: fault copying %p <- %p unwritten: %d\n",
-				__func__, dst, src, unwritten))
+	rem = __copy_from_user_inatomic_nocache(dst, (void __user *) src, n);
+	if (WARN(rem, "%s: fault copying %p <- %p unwritten: %d\n",
+				__func__, dst, src, rem))
 		BUG();
 }
 
-/**
- * arch_wmb_pmem - synchronize writes to persistent memory
- *
- * After a series of arch_memcpy_to_pmem() operations this drains data
- * from cpu write buffers and any platform (memory controller) buffers
- * to ensure that written data is durable on persistent memory media.
- */
-static inline void arch_wmb_pmem(void)
+static inline int arch_memcpy_from_pmem(void *dst, const void *src, size_t n)
 {
-	/*
-	 * wmb() to 'sfence' all previous writes such that they are
-	 * architecturally visible to 'pcommit'.  Note, that we've
-	 * already arranged for pmem writes to avoid the cache via
-	 * arch_memcpy_to_pmem().
-	 */
-	wmb();
-	pcommit_sfence();
+	return memcpy_mcsafe(dst, src, n);
 }
 
 /**
- * __arch_wb_cache_pmem - write back a cache range with CLWB
+ * arch_wb_cache_pmem - write back a cache range with CLWB
  * @vaddr:	virtual start address
  * @size:	number of bytes to write back
  *
@@ -75,14 +58,14 @@ static inline void arch_wmb_pmem(void)
  * instruction. Note that @size is internally rounded up to be cache
  * line size aligned.
  */
-static inline void __arch_wb_cache_pmem(void *vaddr, size_t size)
+static inline void arch_wb_cache_pmem(void *addr, size_t size)
 {
 	u16 x86_clflush_size = boot_cpu_data.x86_clflush_size;
 	unsigned long clflush_mask = x86_clflush_size - 1;
-	void *vend = vaddr + size;
+	void *vend = addr + size;
 	void *p;
 
-	for (p = (void *)((unsigned long)vaddr & ~clflush_mask);
+	for (p = (void *)((unsigned long)addr & ~clflush_mask);
 	     p < vend; p += x86_clflush_size)
 		clwb(p);
 }
@@ -94,16 +77,14 @@ static inline void __arch_wb_cache_pmem(void *vaddr, size_t size)
  * @i:		iterator with source data
  *
  * Copy data from the iterator 'i' to the PMEM buffer starting at 'addr'.
- * This function requires explicit ordering with an arch_wmb_pmem() call.
  */
-static inline size_t arch_copy_from_iter_pmem(void __pmem *addr, size_t bytes,
+static inline size_t arch_copy_from_iter_pmem(void *addr, size_t bytes,
 		struct iov_iter *i)
 {
-	void *vaddr = (void __force *)addr;
 	size_t len;
 
 	/* TODO: skip the write-back by always using non-temporal stores */
-	len = copy_from_iter_nocache(vaddr, bytes, i);
+	len = copy_from_iter_nocache(addr, bytes, i);
 
 	/*
 	 * In the iovec case on x86_64 copy_from_iter_nocache() uses
@@ -122,19 +103,19 @@ static inline size_t arch_copy_from_iter_pmem(void __pmem *addr, size_t bytes,
 
 		if (bytes < 8) {
 			if (!IS_ALIGNED(dest, 4) || (bytes != 4))
-				__arch_wb_cache_pmem(addr, bytes);
+				arch_wb_cache_pmem(addr, bytes);
 		} else {
 			if (!IS_ALIGNED(dest, 8)) {
 				dest = ALIGN(dest, boot_cpu_data.x86_clflush_size);
-				__arch_wb_cache_pmem(addr, 1);
+				arch_wb_cache_pmem(addr, 1);
 			}
 
 			flushed = dest - (unsigned long) addr;
 			if (bytes > flushed && !IS_ALIGNED(bytes - flushed, 8))
-				__arch_wb_cache_pmem(addr + bytes - 1, 1);
+				arch_wb_cache_pmem(addr + bytes - 1, 1);
 		}
 	} else
-		__arch_wb_cache_pmem(addr, bytes);
+		arch_wb_cache_pmem(addr, bytes);
 
 	return len;
 }
@@ -145,28 +126,16 @@ static inline size_t arch_copy_from_iter_pmem(void __pmem *addr, size_t bytes,
  * @size:	number of bytes to zero
  *
  * Write zeros into the memory range starting at 'addr' for 'size' bytes.
- * This function requires explicit ordering with an arch_wmb_pmem() call.
  */
-static inline void arch_clear_pmem(void __pmem *addr, size_t size)
+static inline void arch_clear_pmem(void *addr, size_t size)
 {
-	void *vaddr = (void __force *)addr;
-
-	/* TODO: implement the zeroing via non-temporal writes */
-	if (size == PAGE_SIZE && ((unsigned long)vaddr & ~PAGE_MASK) == 0)
-		clear_page(vaddr);
-	else
-		memset(vaddr, 0, size);
-
-	__arch_wb_cache_pmem(vaddr, size);
+	memset(addr, 0, size);
+	arch_wb_cache_pmem(addr, size);
 }
 
-static inline bool __arch_has_wmb_pmem(void)
+static inline void arch_invalidate_pmem(void *addr, size_t size)
 {
-	/*
-	 * We require that wmb() be an 'sfence', that is only guaranteed on
-	 * 64-bit builds
-	 */
-	return static_cpu_has(X86_FEATURE_PCOMMIT);
+	clflush_cache_range(addr, size);
 }
 #endif /* CONFIG_ARCH_HAS_PMEM_API */
 #endif /* __ASM_X86_PMEM_H__ */

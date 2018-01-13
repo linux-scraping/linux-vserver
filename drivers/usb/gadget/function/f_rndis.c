@@ -374,6 +374,9 @@ static struct sk_buff *rndis_add_header(struct gether *port,
 {
 	struct sk_buff *skb2;
 
+	if (!skb)
+		return NULL;
+
 	skb2 = skb_realloc_headroom(skb, sizeof(struct rndis_packet_msg_type));
 	rndis_add_hdr(skb2);
 
@@ -783,7 +786,7 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	ss_notify_desc.bEndpointAddress = fs_notify_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, eth_fs_function, eth_hs_function,
-			eth_ss_function);
+			eth_ss_function, NULL);
 	if (status)
 		goto fail;
 
@@ -889,7 +892,7 @@ static void rndis_free_inst(struct usb_function_instance *f)
 			free_netdev(opts->net);
 	}
 
-	kfree(opts->rndis_os_desc.group.default_groups); /* single VLA chunk */
+	kfree(opts->rndis_interf_group);	/* single VLA chunk */
 	kfree(opts);
 }
 
@@ -898,6 +901,7 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 	struct f_rndis_opts *opts;
 	struct usb_os_desc *descs[1];
 	char *names[1];
+	struct config_group *rndis_interf_group;
 
 	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 	if (!opts)
@@ -916,10 +920,16 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 
 	descs[0] = &opts->rndis_os_desc;
 	names[0] = "rndis";
-	usb_os_desc_prepare_interf_dir(&opts->func_inst.group, 1, descs,
-				       names, THIS_MODULE);
 	config_group_init_type_name(&opts->func_inst.group, "",
 				    &rndis_func_type);
+	rndis_interf_group =
+		usb_os_desc_prepare_interf_dir(&opts->func_inst.group, 1, descs,
+					       names, THIS_MODULE);
+	if (IS_ERR(rndis_interf_group)) {
+		rndis_free_inst(&opts->func_inst);
+		return ERR_CAST(rndis_interf_group);
+	}
+	opts->rndis_interf_group = rndis_interf_group;
 
 	return &opts->func_inst;
 }

@@ -8,10 +8,12 @@
 
 extern void vx_adjust_timespec(struct timespec *ts);
 extern int vx_settimeofday(const struct timespec *ts);
+extern int vx_settimeofday64(const struct timespec *ts);
 
 #else
 #define	vx_adjust_timespec(t)	do { } while (0)
 #define	vx_settimeofday(t)	do_settimeofday(t)
+#define	vx_settimeofday64(t)	do_settimeofday64(t)
 #endif
 
 #else

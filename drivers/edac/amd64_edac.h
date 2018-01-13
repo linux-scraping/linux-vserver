@@ -16,6 +16,7 @@
 #include <linux/slab.h>
 #include <linux/mmzone.h>
 #include <linux/edac.h>
+#include <asm/cpu_device_id.h>
 #include <asm/msr.h>
 #include "edac_core.h"
 #include "mce_amd.h"
@@ -422,7 +423,7 @@ struct low_ops {
 
 struct amd64_family_type {
 	const char *ctl_name;
-	u16 f1_id, f3_id;
+	u16 f1_id, f2_id;
 	struct low_ops ops;
 };
 

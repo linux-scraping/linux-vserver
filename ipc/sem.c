@@ -94,7 +94,14 @@
 /* One semaphore structure for each semaphore in the system. */
 struct sem {
 	int	semval;		/* current value */
-	int	sempid;		/* pid of last operation */
+	/*
+	 * PID of the process that last modified the semaphore. For
+	 * Linux, specifically these are:
+	 *  - semop
+	 *  - semctl, via SETVAL and SETALL.
+	 *  - at task exit when performing undo adjustments (see exit_sem).
+	 */
+	int	sempid;
 	spinlock_t	lock;	/* spinlock for fine-grained semtimedop */
 	struct list_head pending_alter; /* pending single-sop operations */
 					/* that alter the semaphore */
@@ -262,16 +269,6 @@ static void sem_rcu_free(struct rcu_head *head)
 }
 
 /*
- * spin_unlock_wait() and !spin_is_locked() are not memory barriers, they
- * are only control barriers.
- * The code must pair with spin_unlock(&sem->lock) or
- * spin_unlock(&sem_perm.lock), thus just the control barrier is insufficient.
- *
- * smp_rmb() is sufficient, as writes cannot pass the control barrier.
- */
-#define ipc_smp_acquire__after_spin_is_unlocked()	smp_rmb()
-
-/*
  * Enter the mode suitable for non-simple operations:
  * Caller must own sem_perm.lock.
  */
@@ -295,7 +292,14 @@ static void complexmode_enter(struct sem_array *sma)
 		sem = sma->sem_base + i;
 		spin_unlock_wait(&sem->lock);
 	}
-	ipc_smp_acquire__after_spin_is_unlocked();
+	/*
+	 * spin_unlock_wait() is not a memory barriers, it is only a
+	 * control barrier. The code must pair with spin_unlock(&sem->lock),
+	 * thus just the control barrier is insufficient.
+	 *
+	 * smp_rmb() is sufficient, as writes cannot pass the control barrier.
+	 */
+	smp_rmb();
 }
 
 /*
@@ -1471,8 +1475,10 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 			goto out_unlock;
 		}
 
-		for (i = 0; i < nsems; i++)
+		for (i = 0; i < nsems; i++) {
 			sma->sem_base[i].semval = sem_io[i];
+			sma->sem_base[i].sempid = task_tgid_vnr(current);
+		}
 
 		ipc_assert_locked_object(&sma->sem_perm);
 		list_for_each_entry(un, &sma->list_id, list_id) {
@@ -1520,7 +1526,7 @@ out_rcu_wakeup:
 	wake_up_sem_queue_do(&tasks);
 out_free:
 	if (sem_io != fast_sem_io)
-		ipc_free(sem_io, sizeof(ushort)*nsems);
+		ipc_free(sem_io);
 	return err;
 }
 
@@ -2107,6 +2113,8 @@ void exit_sem(struct task_struct *tsk)
 		struct sem_undo *un;
 		struct list_head tasks;
 		int semid, i;
+
+		cond_resched();
 
 		rcu_read_lock();
 		un = list_entry_rcu(ulp->list_proc.next,

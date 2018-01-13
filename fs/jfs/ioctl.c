@@ -112,7 +112,7 @@ long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 
 		/* Lock against other parallel changes of flags */
-		mutex_lock(&inode->i_mutex);
+		inode_lock(inode);
 
 		jfs_get_inode_flags(jfs_inode);
 		oldflags = jfs_inode->mode2;
@@ -125,7 +125,7 @@ long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			((flags ^ oldflags) & (JFS_APPEND_FL |
 			JFS_IMMUTABLE_FL | JFS_IXUNLINK_FL))) {
 			if (!capable(CAP_LINUX_IMMUTABLE)) {
-				mutex_unlock(&inode->i_mutex);
+				inode_unlock(inode);
 				err = -EPERM;
 				goto setflags_out;
 			}
@@ -136,7 +136,7 @@ long jfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		jfs_inode->mode2 = flags;
 
 		jfs_set_inode_flags(inode);
-		mutex_unlock(&inode->i_mutex);
+		inode_unlock(inode);
 		inode->i_ctime = CURRENT_TIME_SEC;
 		mark_inode_dirty(inode);
 setflags_out:

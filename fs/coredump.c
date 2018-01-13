@@ -36,6 +36,7 @@
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/path.h>
+#include <linux/timekeeping.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
@@ -120,6 +121,26 @@ int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
 	va_start(arg, fmt);
 	ret = cn_vprintf(cn, fmt, arg);
 	va_end(arg);
+
+	if (ret == 0) {
+		/*
+		 * Ensure that this coredump name component can't cause the
+		 * resulting corefile path to consist of a ".." or ".".
+		 */
+		if ((cn->used - cur == 1 && cn->corename[cur] == '.') ||
+				(cn->used - cur == 2 && cn->corename[cur] == '.'
+				&& cn->corename[cur+1] == '.'))
+			cn->corename[cur] = '!';
+
+		/*
+		 * Empty names are fishy and could be used to create a "//" in a
+		 * corefile name, causing the coredump to happen one directory
+		 * level too high. Enforce that all components of the core
+		 * pattern are at least one character long.
+		 */
+		if (cn->used == cur)
+			ret = cn_printf(cn, "!");
+	}
 
 	for (; cur < cn->used; ++cur) {
 		if (cn->corename[cur] == '/')
@@ -236,9 +257,10 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 				break;
 			/* UNIX time of coredump */
 			case 't': {
-				struct timeval tv;
-				do_gettimeofday(&tv);
-				err = cn_printf(cn, "%lu", tv.tv_sec);
+				time64_t time;
+
+				time = ktime_get_real_seconds();
+				err = cn_printf(cn, "%lld", time);
 				break;
 			}
 			/* hostname */
@@ -392,7 +414,9 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	core_state->dumper.task = tsk;
 	core_state->dumper.next = NULL;
 
-	down_write(&mm->mmap_sem);
+	if (down_write_killable(&mm->mmap_sem))
+		return -EINTR;
+
 	if (!mm->core_state)
 		core_waiters = zap_threads(tsk, mm, core_state, exit_code);
 	up_write(&mm->mmap_sem);
@@ -773,6 +797,7 @@ int dump_emit(struct coredump_params *cprm, const void *addr, int nr)
 			return 0;
 		file->f_pos = pos;
 		cprm->written += n;
+		cprm->pos += n;
 		nr -= n;
 	}
 	return 1;
@@ -784,12 +809,10 @@ int dump_skip(struct coredump_params *cprm, size_t nr)
 	static char zeroes[PAGE_SIZE];
 	struct file *file = cprm->file;
 	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
-		if (cprm->written + nr > cprm->limit)
-			return 0;
 		if (dump_interrupted() ||
 		    file->f_op->llseek(file, nr, SEEK_CUR) < 0)
 			return 0;
-		cprm->written += nr;
+		cprm->pos += nr;
 		return 1;
 	} else {
 		while (nr > PAGE_SIZE) {
@@ -804,7 +827,7 @@ EXPORT_SYMBOL(dump_skip);
 
 int dump_align(struct coredump_params *cprm, int align)
 {
-	unsigned mod = cprm->written & (align - 1);
+	unsigned mod = cprm->pos & (align - 1);
 	if (align & (align - 1))
 		return 0;
 	return mod ? dump_skip(cprm, align - mod) : 1;

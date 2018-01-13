@@ -29,6 +29,7 @@ struct apic_chip_data {
 };
 
 struct irq_domain *x86_vector_domain;
+EXPORT_SYMBOL_GPL(x86_vector_domain);
 static DEFINE_RAW_SPINLOCK(vector_lock);
 static cpumask_var_t vector_cpumask, vector_searchmask, searched_cpumask;
 static struct irq_chip lapic_controller;
@@ -66,6 +67,7 @@ struct irq_cfg *irqd_cfg(struct irq_data *irq_data)
 
 	return data ? &data->cfg : NULL;
 }
+EXPORT_SYMBOL_GPL(irqd_cfg);
 
 struct irq_cfg *irq_cfg(unsigned int irq)
 {
@@ -521,7 +523,7 @@ static int apic_set_affinity(struct irq_data *irq_data,
 	struct apic_chip_data *data = irq_data->chip_data;
 	int err, irq = irq_data->irq;
 
-	if (!config_enabled(CONFIG_SMP))
+	if (!IS_ENABLED(CONFIG_SMP))
 		return -EPERM;
 
 	if (!cpumask_intersects(dest, cpu_online_mask))
@@ -557,7 +559,7 @@ void send_cleanup_vector(struct irq_cfg *cfg)
 		__send_cleanup_vector(data);
 }
 
-asmlinkage __visible void smp_irq_move_cleanup_interrupt(void)
+asmlinkage __visible void __irq_entry smp_irq_move_cleanup_interrupt(void)
 {
 	unsigned vector, me;
 
@@ -959,7 +961,7 @@ static int __init print_ICs(void)
 	print_PIC();
 
 	/* don't print out if apic is not there */
-	if (!cpu_has_apic && !apic_from_smp_config())
+	if (!boot_cpu_has(X86_FEATURE_APIC) && !apic_from_smp_config())
 		return 0;
 
 	print_local_APICs(show_lapic);

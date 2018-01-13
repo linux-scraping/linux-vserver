@@ -7,14 +7,14 @@ static inline void vx_info_init_cvirt(struct _vx_cvirt *cvirt)
 	uint64_t idle_jiffies = vx_idle_jiffies();
 	uint64_t nsuptime;
 
-	ktime_get_ts(&cvirt->bias_uptime);
+	ktime_get_ts64(&cvirt->bias_uptime);
 	nsuptime = (unsigned long long)cvirt->bias_uptime.tv_sec
 		* NSEC_PER_SEC + cvirt->bias_uptime.tv_nsec;
 	cvirt->bias_clock = nsec_to_clock_t(nsuptime);
 	cvirt->bias_ts.tv_sec = 0;
 	cvirt->bias_ts.tv_nsec = 0;
 
-	jiffies_to_timespec(idle_jiffies, &cvirt->bias_idle);
+	jiffies_to_timespec64(idle_jiffies, &cvirt->bias_idle);
 	atomic_set(&cvirt->nr_threads, 0);
 	atomic_set(&cvirt->nr_running, 0);
 	atomic_set(&cvirt->nr_uninterruptible, 0);

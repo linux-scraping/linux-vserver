@@ -9,7 +9,7 @@
  *           Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
  *           Stefano Stabellini <stefano.stabellini@eu.citrix.com>
  */
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/pci.h>
 #include <linux/acpi.h>
@@ -196,7 +196,10 @@ static int xen_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 	return 0;
 
 error:
-	dev_err(&dev->dev, "Xen PCI frontend has not registered MSI/MSI-X support!\n");
+	if (ret == -ENOSYS)
+		dev_err(&dev->dev, "Xen PCI frontend has not registered MSI/MSI-X support!\n");
+	else if (ret)
+		dev_err(&dev->dev, "Xen PCI frontend error: %d!\n", ret);
 free:
 	kfree(v);
 	return ret;
@@ -433,7 +436,7 @@ void __init xen_msi_init(void)
 		uint32_t eax = cpuid_eax(xen_cpuid_base() + 4);
 
 		if (((eax & XEN_HVM_CPUID_X2APIC_VIRT) && x2apic_mode) ||
-		    ((eax & XEN_HVM_CPUID_APIC_ACCESS_VIRT) && cpu_has_apic))
+		    ((eax & XEN_HVM_CPUID_APIC_ACCESS_VIRT) && boot_cpu_has(X86_FEATURE_APIC)))
 			return;
 	}
 

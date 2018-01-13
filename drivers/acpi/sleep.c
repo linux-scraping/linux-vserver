@@ -19,12 +19,18 @@
 #include <linux/reboot.h>
 #include <linux/acpi.h>
 #include <linux/module.h>
+#include <linux/syscore_ops.h>
 #include <asm/io.h>
 #include <trace/events/power.h>
 
 #include "internal.h"
 #include "sleep.h"
 
+/*
+ * Some HW-full platforms do not have _S5, so they may need
+ * to leverage efi power off for a shutdown.
+ */
+bool acpi_no_s5;
 static u8 sleep_states[ACPI_S_STATE_COUNT];
 
 static void acpi_sleep_tts_switch(u32 acpi_state)
@@ -61,7 +67,7 @@ static int acpi_sleep_prepare(u32 acpi_state)
 	if (acpi_state == ACPI_STATE_S3) {
 		if (!acpi_wakeup_address)
 			return -EFAULT;
-		acpi_set_firmware_waking_vector(acpi_wakeup_address);
+		acpi_set_waking_vector(acpi_wakeup_address);
 
 	}
 	ACPI_FLUSH_CPU_CACHE();
@@ -122,6 +128,12 @@ static bool nvs_nosave_s3;
 void __init acpi_nvs_nosave_s3(void)
 {
 	nvs_nosave_s3 = true;
+}
+
+static int __init init_nvs_save_s3(const struct dmi_system_id *d)
+{
+	nvs_nosave_s3 = false;
+	return 0;
 }
 
 /*
@@ -318,6 +330,19 @@ static struct dmi_system_id acpisleep_dmi_table[] __initdata = {
 		DMI_MATCH(DMI_PRODUCT_NAME, "K54HR"),
 		},
 	},
+	/*
+	 * https://bugzilla.kernel.org/show_bug.cgi?id=189431
+	 * Lenovo G50-45 is a platform later than 2012, but needs nvs memory
+	 * saving during S3.
+	 */
+	{
+	.callback = init_nvs_save_s3,
+	.ident = "Lenovo G50-45",
+	.matches = {
+		DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+		DMI_MATCH(DMI_PRODUCT_NAME, "80E3"),
+		},
+	},
 	{},
 };
 
@@ -410,7 +435,7 @@ static void acpi_pm_finish(void)
 	acpi_leave_sleep_state(acpi_state);
 
 	/* reset firmware waking vector */
-	acpi_set_firmware_waking_vector((acpi_physical_address) 0);
+	acpi_set_waking_vector(0);
 
 	acpi_target_sleep_state = ACPI_STATE_S0;
 
@@ -549,7 +574,7 @@ static int acpi_suspend_enter(suspend_state_t pm_state)
 
 		acpi_get_event_status(ACPI_EVENT_POWER_BUTTON, &pwr_btn_status);
 
-		if (pwr_btn_status & ACPI_EVENT_FLAG_SET) {
+		if (pwr_btn_status & ACPI_EVENT_FLAG_STATUS_SET) {
 			acpi_clear_event(ACPI_EVENT_POWER_BUTTON);
 			/* Flag for later */
 			pwr_btn_event_pending = true;
@@ -563,7 +588,7 @@ static int acpi_suspend_enter(suspend_state_t pm_state)
 	 */
 	acpi_disable_all_gpes();
 	/* Allow EC transactions to happen. */
-	acpi_ec_unblock_transactions_early();
+	acpi_ec_unblock_transactions();
 
 	suspend_nvs_restore();
 
@@ -677,6 +702,39 @@ static void acpi_sleep_suspend_setup(void)
 static inline void acpi_sleep_suspend_setup(void) {}
 #endif /* !CONFIG_SUSPEND */
 
+#ifdef CONFIG_PM_SLEEP
+static u32 saved_bm_rld;
+
+static int  acpi_save_bm_rld(void)
+{
+	acpi_read_bit_register(ACPI_BITREG_BUS_MASTER_RLD, &saved_bm_rld);
+	return 0;
+}
+
+static void  acpi_restore_bm_rld(void)
+{
+	u32 resumed_bm_rld = 0;
+
+	acpi_read_bit_register(ACPI_BITREG_BUS_MASTER_RLD, &resumed_bm_rld);
+	if (resumed_bm_rld == saved_bm_rld)
+		return;
+
+	acpi_write_bit_register(ACPI_BITREG_BUS_MASTER_RLD, saved_bm_rld);
+}
+
+static struct syscore_ops acpi_sleep_syscore_ops = {
+	.suspend = acpi_save_bm_rld,
+	.resume = acpi_restore_bm_rld,
+};
+
+void acpi_sleep_syscore_init(void)
+{
+	register_syscore_ops(&acpi_sleep_syscore_ops);
+}
+#else
+static inline void acpi_sleep_syscore_init(void) {}
+#endif /* CONFIG_PM_SLEEP */
+
 #ifdef CONFIG_HIBERNATION
 static unsigned long s4_hardware_signature;
 static struct acpi_table_facs *facs;
@@ -728,7 +786,7 @@ static void acpi_hibernation_leave(void)
 	/* Restore the NVS memory area */
 	suspend_nvs_restore();
 	/* Allow EC transactions to happen. */
-	acpi_ec_unblock_transactions_early();
+	acpi_ec_unblock_transactions();
 }
 
 static void acpi_pm_thaw(void)
@@ -840,6 +898,7 @@ int __init acpi_sleep_init(void)
 
 	sleep_states[ACPI_STATE_S0] = 1;
 
+	acpi_sleep_syscore_init();
 	acpi_sleep_suspend_setup();
 	acpi_sleep_hibernate_setup();
 
@@ -847,6 +906,8 @@ int __init acpi_sleep_init(void)
 		sleep_states[ACPI_STATE_S5] = 1;
 		pm_power_off_prepare = acpi_power_off_prepare;
 		pm_power_off = acpi_power_off;
+	} else {
+		acpi_no_s5 = true;
 	}
 
 	supported[0] = 0;

@@ -54,6 +54,7 @@
 #include "uptodate.h"
 #include "quota.h"
 #include "refcounttree.h"
+#include "acl.h"
 
 #include "buffer_head_io.h"
 
@@ -1679,7 +1680,6 @@ int ocfs2_create_new_inode_locks(struct inode *inode)
 	int ret;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 
-	BUG_ON(!inode);
 	BUG_ON(!ocfs2_inode_is_new(inode));
 
 	mlog(0, "Inode %llu\n", (unsigned long long)OCFS2_I(inode)->ip_blkno);
@@ -1709,10 +1709,8 @@ int ocfs2_create_new_inode_locks(struct inode *inode)
 	}
 
 	ret = ocfs2_create_new_lock(osb, &OCFS2_I(inode)->ip_open_lockres, 0, 0);
-	if (ret) {
+	if (ret)
 		mlog_errno(ret);
-		goto bail;
-	}
 
 bail:
 	return ret;
@@ -1723,8 +1721,6 @@ int ocfs2_rw_lock(struct inode *inode, int write)
 	int status, level;
 	struct ocfs2_lock_res *lockres;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
-
-	BUG_ON(!inode);
 
 	mlog(0, "inode %llu take %s RW lock\n",
 	     (unsigned long long)OCFS2_I(inode)->ip_blkno,
@@ -1768,8 +1764,6 @@ int ocfs2_open_lock(struct inode *inode)
 	struct ocfs2_lock_res *lockres;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 
-	BUG_ON(!inode);
-
 	mlog(0, "inode %llu take PRMODE open lock\n",
 	     (unsigned long long)OCFS2_I(inode)->ip_blkno);
 
@@ -1792,8 +1786,6 @@ int ocfs2_try_open_lock(struct inode *inode, int write)
 	int status = 0, level;
 	struct ocfs2_lock_res *lockres;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
-
-	BUG_ON(!inode);
 
 	mlog(0, "inode %llu try to take %s open lock\n",
 	     (unsigned long long)OCFS2_I(inode)->ip_blkno,
@@ -2374,8 +2366,6 @@ int ocfs2_inode_lock_full_nested(struct inode *inode,
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 	struct buffer_head *local_bh = NULL;
 
-	BUG_ON(!inode);
-
 	mlog(0, "inode %llu, take %s META lock\n",
 	     (unsigned long long)OCFS2_I(inode)->ip_blkno,
 	     ex ? "EXMODE" : "PRMODE");
@@ -2486,12 +2476,6 @@ bail:
  * done this we have to return AOP_TRUNCATED_PAGE so the aop method
  * that called us can bubble that back up into the VFS who will then
  * immediately retry the aop call.
- *
- * We do a blocking lock and immediate unlock before returning, though, so that
- * the lock has a great chance of being cached on this node by the time the VFS
- * calls back to retry the aop.    This has a potential to livelock as nodes
- * ping locks back and forth, but that's a risk we're willing to take to avoid
- * the lock inversion simply.
  */
 int ocfs2_inode_lock_with_page(struct inode *inode,
 			      struct buffer_head **ret_bh,
@@ -2503,8 +2487,6 @@ int ocfs2_inode_lock_with_page(struct inode *inode,
 	ret = ocfs2_inode_lock_full(inode, ret_bh, ex, OCFS2_LOCK_NONBLOCK);
 	if (ret == -EAGAIN) {
 		unlock_page(page);
-		if (ocfs2_inode_lock(inode, ret_bh, ex) == 0)
-			ocfs2_inode_unlock(inode, ex);
 		ret = AOP_TRUNCATED_PAGE;
 	}
 
@@ -3741,6 +3723,8 @@ static int ocfs2_data_convert_worker(struct ocfs2_lock_res *lockres,
 		 * them around in that case. */
 		filemap_fdatawait(mapping);
 	}
+
+	forget_all_cached_acls(inode);
 
 out:
 	return UNBLOCK_CONTINUE;

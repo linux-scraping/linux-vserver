@@ -26,7 +26,6 @@
 #include <asm/dis.h>
 #include <asm/io.h>
 #include <linux/atomic.h>
-#include <asm/mathemu.h>
 #include <asm/cpcmd.h>
 #include <asm/lowcore.h>
 #include <asm/debug.h>
@@ -1921,23 +1920,16 @@ static int print_insn(char *buffer, unsigned char *code, unsigned long addr)
 			}
 			if (separator)
 				ptr += sprintf(ptr, "%c", separator);
-			/*
-			 * Use four '%' characters below because of the
-			 * following two conversions:
-			 *
-			 *  1) sprintf: %%%%r -> %%r
-			 *  2) printk : %%r   -> %r
-			 */
 			if (operand->flags & OPERAND_GPR)
-				ptr += sprintf(ptr, "%%%%r%i", value);
+				ptr += sprintf(ptr, "%%r%i", value);
 			else if (operand->flags & OPERAND_FPR)
-				ptr += sprintf(ptr, "%%%%f%i", value);
+				ptr += sprintf(ptr, "%%f%i", value);
 			else if (operand->flags & OPERAND_AR)
-				ptr += sprintf(ptr, "%%%%a%i", value);
+				ptr += sprintf(ptr, "%%a%i", value);
 			else if (operand->flags & OPERAND_CR)
-				ptr += sprintf(ptr, "%%%%c%i", value);
+				ptr += sprintf(ptr, "%%c%i", value);
 			else if (operand->flags & OPERAND_VR)
-				ptr += sprintf(ptr, "%%%%v%i", value);
+				ptr += sprintf(ptr, "%%v%i", value);
 			else if (operand->flags & OPERAND_PCREL)
 				ptr += sprintf(ptr, "%lx", (signed int) value
 								      + addr);
@@ -2023,12 +2015,12 @@ void show_code(struct pt_regs *regs)
 			*ptr++ = '\t';
 		ptr += print_insn(ptr, code + start, addr);
 		start += opsize;
-		printk(buffer);
+		pr_cont("%s", buffer);
 		ptr = buffer;
 		ptr += sprintf(ptr, "\n\t  ");
 		hops++;
 	}
-	printk("\n");
+	pr_cont("\n");
 }
 
 void print_fn_code(unsigned char *code, unsigned long len)
@@ -2050,7 +2042,7 @@ void print_fn_code(unsigned char *code, unsigned long len)
 		ptr += print_insn(ptr, code, (unsigned long) code);
 		*ptr++ = '\n';
 		*ptr++ = 0;
-		printk(buffer);
+		printk("%s", buffer);
 		code += opsize;
 		len -= opsize;
 	}

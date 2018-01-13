@@ -13,7 +13,10 @@
 #include <linux/ctype.h>
 #include <linux/sysctl.h>
 #include <linux/parser.h>
+#include <linux/utsname.h>
+
 #include <asm/uaccess.h>
+#include <asm/sections.h>
 
 enum {
 	CTL_DEBUG_ERROR		= 0,
@@ -67,7 +70,6 @@ void vserver_unregister_sysctl(void)
 		vserver_table_header = NULL;
 	}
 }
-
 
 static int proc_dodebug(struct ctl_table *table, int write,
 	void __user *buffer, size_t *lenp, loff_t *ppos)

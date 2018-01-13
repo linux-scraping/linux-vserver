@@ -6,6 +6,10 @@
 #include <linux/static_key.h>
 #include <uapi/linux/netfilter/x_tables.h>
 
+/* Test a struct->invflags and a boolean for inequality */
+#define NF_INVF(ptr, flag, boolean)					\
+	((boolean) ^ !!((ptr)->invflags & (flag)))
+
 /**
  * struct xt_action_param - parameters for matches/targets
  *
@@ -200,6 +204,9 @@ struct xt_table {
 	u_int8_t af;		/* address/protocol family */
 	int priority;		/* hook order */
 
+	/* called when table is needed in the given netns */
+	int (*table_init)(struct net *net);
+
 	/* A unique name... */
 	const char name[XT_TABLE_MAXNAMELEN];
 };
@@ -242,6 +249,10 @@ void xt_unregister_matches(struct xt_match *match, unsigned int n);
 int xt_check_entry_offsets(const void *base, const char *elems,
 			   unsigned int target_offset,
 			   unsigned int next_offset);
+
+unsigned int *xt_alloc_entry_offsets(unsigned int size);
+bool xt_find_jump_offset(const unsigned int *offsets,
+			 unsigned int target, unsigned int size);
 
 int xt_check_match(struct xt_mtchk_param *, unsigned int size, u_int8_t proto,
 		   bool inv_proto);
@@ -377,16 +388,16 @@ static inline unsigned long ifname_compare_aligned(const char *_a,
  * allows us to return 0 for single core systems without forcing
  * callers to deal with SMP vs. NONSMP issues.
  */
-static inline u64 xt_percpu_counter_alloc(void)
+static inline unsigned long xt_percpu_counter_alloc(void)
 {
 	if (nr_cpu_ids > 1) {
 		void __percpu *res = __alloc_percpu(sizeof(struct xt_counters),
 						    sizeof(struct xt_counters));
 
 		if (res == NULL)
-			return (u64) -ENOMEM;
+			return -ENOMEM;
 
-		return (u64) (__force unsigned long) res;
+		return (__force unsigned long) res;
 	}
 
 	return 0;
@@ -415,8 +426,7 @@ xt_get_per_cpu_counter(struct xt_counters *cnt, unsigned int cpu)
 	return cnt;
 }
 
-struct nf_hook_ops *xt_hook_link(const struct xt_table *, nf_hookfn *);
-void xt_hook_unlink(const struct xt_table *, struct nf_hook_ops *);
+struct nf_hook_ops *xt_hook_ops_alloc(const struct xt_table *, nf_hookfn *);
 
 #ifdef CONFIG_COMPAT
 #include <net/compat.h>

@@ -27,6 +27,7 @@
 #include <linux/proc_ns.h>
 #include <linux/file.h>
 #include <linux/syscalls.h>
+#include <linux/cgroup.h>
 #include "../fs/mount.h"
 
 static struct kmem_cache *nsproxy_cachep;
@@ -41,6 +42,9 @@ struct nsproxy init_nsproxy = {
 	.pid_ns_for_children	= &init_pid_ns,
 #ifdef CONFIG_NET
 	.net_ns			= &init_net,
+#endif
+#ifdef CONFIG_CGROUPS
+	.cgroup_ns		= &init_cgroup_ns,
 #endif
 };
 
@@ -100,6 +104,12 @@ static struct nsproxy *unshare_namespaces(
 		goto out_pid;
 	}
 
+	new_nsp->cgroup_ns = copy_cgroup_ns(flags, new_user, orig->cgroup_ns);
+	if (IS_ERR(new_nsp->cgroup_ns)) {
+		err = PTR_ERR(new_nsp->cgroup_ns);
+		goto out_cgroup;
+	}
+
 	new_nsp->net_ns = copy_net_ns(flags, new_user, orig->net_ns);
 	if (IS_ERR(new_nsp->net_ns)) {
 		err = PTR_ERR(new_nsp->net_ns);
@@ -109,6 +119,8 @@ static struct nsproxy *unshare_namespaces(
 	return new_nsp;
 
 out_net:
+	put_cgroup_ns(new_nsp->cgroup_ns);
+out_cgroup:
 	if (new_nsp->pid_ns_for_children)
 		put_pid_ns(new_nsp->pid_ns_for_children);
 out_pid:
@@ -174,7 +186,8 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 		flags, tsk, old_ns);
 
 	if (likely(!(flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-			      CLONE_NEWPID | CLONE_NEWNET)))) {
+			      CLONE_NEWPID | CLONE_NEWNET |
+			      CLONE_NEWCGROUP)))) {
 		get_nsproxy(old_ns);
 		return 0;
 	}
@@ -216,6 +229,7 @@ void free_nsproxy(struct nsproxy *ns)
 		put_pid_ns(ns->pid_ns_for_children);
 	if (ns->net_ns)
 		put_net(ns->net_ns);
+	put_cgroup_ns(ns->cgroup_ns);
 	atomic_dec(&vs_global_nsproxy);
 	kmem_cache_free(nsproxy_cachep, ns);
 }
@@ -235,7 +249,7 @@ int unshare_nsproxy_namespaces(unsigned long unshare_flags,
 		unshare_flags, current->nsproxy);
 
 	if (!(unshare_flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-			       CLONE_NEWNET | CLONE_NEWPID)))
+			       CLONE_NEWNET | CLONE_NEWPID | CLONE_NEWCGROUP)))
 		return 0;
 
 	user_ns = new_cred ? new_cred->user_ns : current_user_ns();

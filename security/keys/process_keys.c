@@ -78,7 +78,7 @@ int install_user_keyrings(void)
 						    cred, user_keyring_perm,
 						    KEY_ALLOC_UID_KEYRING |
 							KEY_ALLOC_IN_QUOTA,
-						    NULL);
+						    NULL, NULL);
 			if (IS_ERR(uid_keyring)) {
 				ret = PTR_ERR(uid_keyring);
 				goto error;
@@ -96,7 +96,7 @@ int install_user_keyrings(void)
 					      cred, user_keyring_perm,
 					      KEY_ALLOC_UID_KEYRING |
 						  KEY_ALLOC_IN_QUOTA,
-					      NULL);
+					      NULL, NULL);
 			if (IS_ERR(session_keyring)) {
 				ret = PTR_ERR(session_keyring);
 				goto error_release;
@@ -143,7 +143,8 @@ int install_thread_keyring_to_cred(struct cred *new)
 
 	keyring = keyring_alloc("_tid", new->uid, new->gid, new,
 				KEY_POS_ALL | KEY_USR_VIEW,
-				KEY_ALLOC_QUOTA_OVERRUN, NULL);
+				KEY_ALLOC_QUOTA_OVERRUN,
+				NULL, NULL);
 	if (IS_ERR(keyring))
 		return PTR_ERR(keyring);
 
@@ -189,7 +190,8 @@ int install_process_keyring_to_cred(struct cred *new)
 
 	keyring = keyring_alloc("_pid", new->uid, new->gid, new,
 				KEY_POS_ALL | KEY_USR_VIEW,
-				KEY_ALLOC_QUOTA_OVERRUN, NULL);
+				KEY_ALLOC_QUOTA_OVERRUN,
+				NULL, NULL);
 	if (IS_ERR(keyring))
 		return PTR_ERR(keyring);
 
@@ -242,7 +244,7 @@ int install_session_keyring_to_cred(struct cred *cred, struct key *keyring)
 
 		keyring = keyring_alloc("_ses", cred->uid, cred->gid, cred,
 					KEY_POS_ALL | KEY_USR_VIEW | KEY_USR_READ,
-					flags, NULL);
+					flags, NULL, NULL);
 		if (IS_ERR(keyring))
 			return PTR_ERR(keyring);
 	} else {
@@ -799,7 +801,7 @@ long join_session_keyring(const char *name)
 		keyring = keyring_alloc(
 			name, old->uid, old->gid, old,
 			KEY_POS_ALL | KEY_USR_VIEW | KEY_USR_READ | KEY_USR_LINK,
-			KEY_ALLOC_IN_QUOTA, NULL);
+			KEY_ALLOC_IN_QUOTA, NULL, NULL);
 		if (IS_ERR(keyring)) {
 			ret = PTR_ERR(keyring);
 			goto error2;
