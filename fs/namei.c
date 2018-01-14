@@ -4776,12 +4776,12 @@ retry:
 	if (!new_dentry || IS_ERR(new_dentry)) {
 		path_put(&par_path);
 		vxdprintk(VXD_CBIT(misc, 2),
-			"kern_path_create(new) failed with %ld",
+			"filename_create(new) failed with %ld",
 			PTR_ERR(new_dentry));
 		goto retry;
 	}
 	vxdprintk(VXD_CBIT(misc, 2),
-		"kern_path_create(new): %p [" VS_Q("%.*s") ":%d]",
+		"filename_create(new): %p [" VS_Q("%.*s") ":%d]",
 		new_dentry,
 		new_dentry->d_name.len, new_dentry->d_name.name,
 		new_dentry->d_name.len);
@@ -4840,7 +4840,7 @@ retry:
 		goto out_fput_old;
 	}
 
-	/* unlock the inode mutex from kern_path_create() */
+	/* unlock the inode mutex from filename_create() */
 	mutex_unlock(&dir->d_inode->i_mutex);
 
 	/* drop write access to mnt */
@@ -4907,7 +4907,7 @@ out_unlock_new:
 	path_put(&par_path);
 
 	if (drop) {
-		/* unlock the inode mutex from kern_path_create() */
+		/* unlock the inode mutex from filename_create() */
 		mutex_unlock(&dir->d_inode->i_mutex);
 
 		/* drop write access to mnt */
