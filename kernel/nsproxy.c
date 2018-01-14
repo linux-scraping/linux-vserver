@@ -168,6 +168,8 @@ struct nsproxy *copy_nsproxy(struct nsproxy *orig)
 			get_pid_ns(ns->pid_ns_for_children);
 		if (ns->net_ns)
 			get_net(ns->net_ns);
+		if (ns->cgroup_ns)
+			get_cgroup_ns(ns->cgroup_ns);
 	}
 	return ns;
 }

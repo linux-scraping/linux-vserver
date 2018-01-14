@@ -35,18 +35,19 @@ void jfs_set_inode_flags(struct inode *inode)
 	if (flags & JFS_IMMUTABLE_FL)
 		new_fl |= S_IMMUTABLE;
 	if (flags & JFS_IXUNLINK_FL)
-		inode->i_flags |= S_IXUNLINK;
+		new_fl |= S_IXUNLINK;
 
-	if (flags & JFS_SYNC_FL)
-		inode->i_flags |= S_SYNC;
 	if (flags & JFS_APPEND_FL)
 		new_fl |= S_APPEND;
 	if (flags & JFS_NOATIME_FL)
 		new_fl |= S_NOATIME;
 	if (flags & JFS_DIRSYNC_FL)
 		new_fl |= S_DIRSYNC;
-	inode_set_flags(inode, new_fl, S_IMMUTABLE | S_IXUNLINK | S_APPEND | S_NOATIME |
-			S_DIRSYNC | S_SYNC);
+	if (flags & JFS_SYNC_FL)
+		new_fl |= S_SYNC;
+
+	inode_set_flags(inode, new_fl, S_IMMUTABLE | S_IXUNLINK |
+			S_APPEND | S_NOATIME | S_DIRSYNC | S_SYNC);
 
 	new_fl = 0;
 	if (flags & JFS_BARRIER_FL)
