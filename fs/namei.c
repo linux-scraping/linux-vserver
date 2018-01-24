@@ -4625,6 +4625,30 @@ EXPORT_SYMBOL(generic_readlink);
 #ifdef	CONFIG_VSERVER_COWBL
 
 static inline
+void dump_path(const char *name, struct path *path)
+{
+	vxdprintk(VXD_CBIT(misc, 3),
+		"%s: path=%p mnt=%p dentry=%p", name, path,
+		path ? path->mnt : NULL,
+		path ? path->dentry : NULL);
+
+	if (path && path->mnt)
+		vxdprintk(VXD_CBIT(misc, 3),
+		"%s: path mnt_sb=%p[#%d,#%d] mnt_root=%p[#%d]", name,
+		path->mnt->mnt_sb,
+		path->mnt->mnt_sb ? path->mnt->mnt_sb->s_count : -1,
+		path->mnt->mnt_sb ? atomic_read(&path->mnt->mnt_sb->s_active) : -1,
+		path->mnt->mnt_root,
+		path->mnt->mnt_root ? path->mnt->mnt_root->d_lockref.count : -1);
+
+	if (path && path->dentry)
+		vxdprintk(VXD_CBIT(misc, 3),
+		"%s: path dentry=%p[#%d]", name,
+		path->dentry,
+		path->dentry ? path->dentry->d_lockref.count : -1);
+}
+
+static inline
 long do_cow_splice(struct file *in, struct file *out, size_t len)
 {
 	loff_t ppos = 0;
@@ -4636,8 +4660,8 @@ long do_cow_splice(struct file *in, struct file *out, size_t len)
 struct dentry *cow_break_link(const char *pathname)
 {
 	int ret, mode, pathlen, redo = 0, drop = 1;
-	struct nameidata old_nd, dir_nd;
-	struct path dir_path, *old_path, *new_path;
+	struct nameidata old_nd = {}, par_nd = {};
+	struct path dir_path = {}, *old_path, *new_path;
 	struct dentry *dir, *old_dentry, *new_dentry = NULL;
 	struct file *old_file;
 	struct file *new_file;
@@ -4666,6 +4690,8 @@ struct dentry *cow_break_link(const char *pathname)
 	/* no explicit reference for old_dentry here */
 	old_dentry = old_path->dentry;
 
+	dump_path("cow (old)", old_path);
+
 	mode = old_dentry->d_inode->i_mode;
 	to = d_path(old_path, path, PATH_MAX-2);
 	pathlen = strlen(to);
@@ -4685,21 +4711,25 @@ retry:
 
 	vxdprintk(VXD_CBIT(misc, 1), "temp copy " VS_Q("%s"), to);
 
-	/* dir_nd.path will have refs to dentry and mnt */
+	/* par_nd.path will have refs to dentry and mnt */
 	to_filename = getname_kernel(to);
 	ret = filename_lookup(AT_FDCWD, to_filename,
-		LOOKUP_PARENT | LOOKUP_OPEN | LOOKUP_CREATE, &dir_nd);
+		LOOKUP_PARENT | LOOKUP_OPEN | LOOKUP_CREATE, &par_nd);
+	vxdprintk(VXD_CBIT(misc, 2), "filename_lookup(new): %d", ret);
+	dump_path("cow (par)", &par_nd.path);
 	putname(to_filename);
-	vxdprintk(VXD_CBIT(misc, 2), "do_path_lookup(new): %d", ret);
 	if (ret < 0)
 		goto retry;
+
+	vxdprintk(VXD_CBIT(misc, 2), "to_filename refcnt=%d", to_filename->refcnt);
+
 
 	/* this puppy downs the dir inode mutex if successful.
 	   dir_path will hold refs to dentry and mnt and
 	   we'll have write access to the mnt */
 	new_dentry = kern_path_create(AT_FDCWD, to, &dir_path, 0);
 	if (!new_dentry || IS_ERR(new_dentry)) {
-		path_put(&dir_nd.path);
+		path_put(&par_nd.path);
 		vxdprintk(VXD_CBIT(misc, 2),
 			"kern_path_create(new) failed with %ld",
 			PTR_ERR(new_dentry));
@@ -4711,6 +4741,8 @@ retry:
 		new_dentry->d_name.len, new_dentry->d_name.name,
 		new_dentry->d_name.len);
 
+	dump_path("cow (dir)", &dir_path);
+
 	/* take a reference on new_dentry */
 	dget(new_dentry);
 
@@ -4718,7 +4750,7 @@ retry:
 	new_path = &dir_path;
 
 	/* dentry for old/new dir */
-	dir = dir_nd.path.dentry;
+	dir = par_nd.path.dentry;
 
 	/* give up reference on dir */
 	dput(new_path->dentry);
@@ -4730,7 +4762,7 @@ retry:
 	vxdprintk(VXD_CBIT(misc, 2),
 		"vfs_create(new): %d", ret);
 	if (ret == -EEXIST) {
-		path_put(&dir_nd.path);
+		path_put(&par_nd.path);
 		mutex_unlock(&dir->d_inode->i_mutex);
 		mnt_drop_write(new_path->mnt);
 		path_put(new_path);
@@ -4806,7 +4838,7 @@ retry:
 		new_dentry->d_name.len,
 		old_dentry->d_name.len, old_dentry->d_name.name,
 		old_dentry->d_name.len);
-	ret = vfs_rename(dir_nd.path.dentry->d_inode, new_dentry,
+	ret = vfs_rename(par_nd.path.dentry->d_inode, new_dentry,
 		old_dentry->d_parent->d_inode, old_dentry, NULL, 0);
 	vxdprintk(VXD_CBIT(misc, 2), "vfs_rename: %d", ret);
 
@@ -4826,8 +4858,8 @@ out_fput_old:
 	fput(old_file);
 
 out_unlock_new:
-	/* drop references from dir_nd.path */
-	path_put(&dir_nd.path);
+	/* drop references from par_nd.path */
+	path_put(&par_nd.path);
 
 	if (drop) {
 		/* unlock the inode mutex from kern_path_create() */
@@ -4864,9 +4896,11 @@ out_redo:
 		new_dentry->d_name.len);
 
 out_rel_both:
+	dump_path("put (new)", new_path);
 	if (new_path)
 		path_put(new_path);
 out_rel_old:
+	dump_path("put (old)", old_path);
 	path_put(old_path);
 out_free_path:
 	kfree(path);
