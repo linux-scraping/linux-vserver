@@ -256,23 +256,53 @@ int vc_rlimit_stat(struct vx_info *vxi, void __user *data)
 
 
 #ifdef	CONFIG_MEMCG
+
+void dump_sysinfo(struct sysinfo *si)
+{
+	printk(KERN_INFO "sysinfo: memunit=%u\n"
+		"\ttotalram:\t%lu\n"
+		"\tfreeram:\t%lu\n"
+		"\tsharedram:\t%lu\n"
+		"\tbufferram:\t%lu\n"
+		"\ttotalswap:\t%lu\n"
+		"\tfreeswap:\t%lu\n"
+		"\ttotalhigh:\t%lu\n"
+		"\tfreehigh:\t%lu\n",
+		si->mem_unit,
+		si->totalram,
+		si->freeram,
+		si->sharedram,
+		si->bufferram,
+		si->totalswap,
+		si->freeswap,
+		si->totalhigh,
+		si->freehigh);
+}
+
 void vx_vsi_meminfo(struct sysinfo *val)
 {
 	struct mem_cgroup *mcg;
-	u64 res_limit, res_usage;
+	unsigned long res_limit, res_usage;
+	unsigned shift;
+
+	if (VXD_CBIT(cvirt, 4))
+		dump_sysinfo(val);
 
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	if (VXD_CBIT(cvirt, 5))
+		dump_mem_cgroup(mcg);
 	rcu_read_unlock();
 	if (!mcg)
 		goto out;
 
 	res_limit = mem_cgroup_mem_limit_pages(mcg);
 	res_usage = mem_cgroup_mem_usage_pages(mcg);
+	shift = val->mem_unit == 1 ? PAGE_SHIFT : 0;
 
 	if (res_limit != PAGE_COUNTER_MAX)
-		val->totalram = res_limit;
-	val->freeram = val->totalram - res_usage;
+		val->totalram = res_limit << shift;
+	val->freeram = val->totalram - (res_usage << shift);
 	val->bufferram = 0;
 	val->totalhigh = 0;
 	val->freehigh = 0;
@@ -284,28 +314,36 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 {
 #ifdef	CONFIG_MEMCG_SWAP
 	struct mem_cgroup *mcg;
-	u64 res_limit, res_usage, memsw_limit, memsw_usage;
-	s64 swap_limit, swap_usage;
+	unsigned long res_limit, res_usage, memsw_limit, memsw_usage;
+	signed long swap_limit, swap_usage;
+	unsigned shift;
+
+	if (VXD_CBIT(cvirt, 6))
+		dump_sysinfo(val);
 
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	if (VXD_CBIT(cvirt, 7))
+		dump_mem_cgroup(mcg);
 	rcu_read_unlock();
 	if (!mcg)
 		goto out;
 
 	res_limit = mem_cgroup_mem_limit_pages(mcg);
-	res_usage = mem_cgroup_mem_usage_pages(mcg);
-	memsw_limit = mem_cgroup_memsw_limit_pages(mcg);
-	memsw_usage = mem_cgroup_memsw_usage_pages(mcg);
 
 	/* memory unlimited */
 	if (res_limit == PAGE_COUNTER_MAX)
 		goto out;
 
+	res_usage = mem_cgroup_mem_usage_pages(mcg);
+	memsw_limit = mem_cgroup_memsw_limit_pages(mcg);
+	memsw_usage = mem_cgroup_memsw_usage_pages(mcg);
+	shift = val->mem_unit == 1 ? PAGE_SHIFT : 0;
+
 	swap_limit = memsw_limit - res_limit;
 	/* we have a swap limit? */
 	if (memsw_limit != PAGE_COUNTER_MAX)
-		val->totalswap = swap_limit;
+		val->totalswap = swap_limit << shift;
 
 	/* calculate swap part */
 	swap_usage = (memsw_usage > res_usage) ?
@@ -313,7 +351,7 @@ void vx_vsi_swapinfo(struct sysinfo *val)
 
 	/* total shown minus usage gives free swap */
 	val->freeswap = (swap_usage < swap_limit) ?
-		val->totalswap - swap_usage : 0;
+		val->totalswap - (swap_usage << shift) : 0;
 out:
 #else	/* !CONFIG_MEMCG_SWAP */
 	val->totalswap = 0;
@@ -328,8 +366,13 @@ long vx_vsi_cached(struct sysinfo *val)
 #ifdef	CONFIG_MEMCG_BROKEN
 	struct mem_cgroup *mcg;
 
+	if (VXD_CBIT(cvirt, 8))
+		dump_sysinfo(val);
+
 	rcu_read_lock();
 	mcg = mem_cgroup_from_task(current);
+	if (VXD_CBIT(cvirt, 9))
+		dump_mem_cgroup(mcg);
 	rcu_read_unlock();
 	if (!mcg)
 		goto out;

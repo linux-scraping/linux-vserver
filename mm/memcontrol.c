@@ -2825,24 +2825,39 @@ static u64 mem_cgroup_read_u64(struct cgroup_subsys_state *css,
 	}
 }
 
-u64 mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg)
+unsigned long mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg)
 {
-	return mem_cgroup_usage(memcg, false) >> PAGE_SHIFT;
+	return mem_cgroup_usage(memcg, false);
 }
 
-u64 mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg)
+unsigned long mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg)
 {
-	return (u64)memcg->memory.limit;
+	return memcg->memory.limit;
 }
 
-u64 mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg)
+unsigned long mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg)
 {
-	return mem_cgroup_usage(memcg, true) >> PAGE_SHIFT;
+	return mem_cgroup_usage(memcg, true);
 }
 
-u64 mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg)
+unsigned long mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg)
 {
-	return (u64)memcg->memsw.limit;
+	return memcg->memsw.limit;
+}
+
+void dump_mem_cgroup(struct mem_cgroup *memcg)
+{
+	printk(KERN_INFO "memcg: %p/%d:\n"
+		"\tmemory:\t%lu/%lu %lu/%lu\n"
+		"\tmemsw:\t%lu/%lu %lu/%lu\n"
+		"\tkmem:\t%lu/%lu %lu/%lu\n",
+		memcg, memcg->id.id,
+		page_counter_read(&memcg->memory), memcg->memory.limit,
+		memcg->memory.watermark, memcg->memory.failcnt,
+		page_counter_read(&memcg->memsw), memcg->memsw.limit,
+		memcg->memsw.watermark, memcg->memsw.failcnt,
+		page_counter_read(&memcg->kmem), memcg->kmem.limit,
+		memcg->kmem.watermark, memcg->kmem.failcnt);
 }
 
 #ifndef CONFIG_SLOB

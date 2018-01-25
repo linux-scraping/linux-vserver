@@ -97,7 +97,7 @@ static int show_stat(struct seq_file *p, void *v)
 	getboottime64(&boottime);
 
 	if (vx_flags(VXF_VIRT_UPTIME, 0))
-		vx_vsi_boottime(&boottime);
+		vx_vsi_boottime64(&boottime);
 
 	if (virt_cpu)
 		cpuset_cpus_allowed(current, cpus_allowed);

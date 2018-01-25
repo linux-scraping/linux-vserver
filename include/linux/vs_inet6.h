@@ -247,6 +247,13 @@ int nx_info_has_v6(struct nx_info *nxi)
 	return 0;
 }
 
+static inline
+int v6_addr_in_nx_info(struct nx_info *nxi,
+	const struct in6_addr *addr, uint16_t mask)
+{
+	return 0;
+}
+
 #endif /* CONFIG_IPV6 */
 
 #define current_nx_info_has_v6() \

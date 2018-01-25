@@ -403,10 +403,11 @@ static inline bool mem_cgroup_is_descendant(struct mem_cgroup *memcg,
 	return cgroup_is_descendant(memcg->css.cgroup, root->css.cgroup);
 }
 
-extern u64 mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg);
-extern u64 mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg);
+extern unsigned long mem_cgroup_mem_usage_pages(struct mem_cgroup *memcg);
+extern unsigned long mem_cgroup_mem_limit_pages(struct mem_cgroup *memcg);
+extern unsigned long mem_cgroup_memsw_usage_pages(struct mem_cgroup *memcg);
+extern unsigned long mem_cgroup_memsw_limit_pages(struct mem_cgroup *memcg);
+extern void dump_mem_cgroup(struct mem_cgroup *memcg);
 
 static inline bool mm_match_cgroup(struct mm_struct *mm,
 				   struct mem_cgroup *memcg)

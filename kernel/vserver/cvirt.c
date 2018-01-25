@@ -20,11 +20,11 @@
 #include <asm/uaccess.h>
 
 
-void vx_vsi_boottime(struct timespec *boottime)
+void vx_vsi_boottime64(struct timespec64 *boottime)
 {
 	struct vx_info *vxi = current_vx_info();
 
-	set_normalized_timespec(boottime,
+	set_normalized_timespec64(boottime,
 		boottime->tv_sec + vxi->cvirt.bias_uptime.tv_sec,
 		boottime->tv_nsec + vxi->cvirt.bias_uptime.tv_nsec);
 	return;
@@ -247,8 +247,8 @@ int vc_virt_stat(struct vx_info *vxi, void __user *data)
 	struct _vx_cvirt *cvirt = &vxi->cvirt;
 	struct timespec64 uptime;
 
-	ktime_get_ts(&uptime);
-	set_normalized_timespec(&uptime,
+	ktime_get_ts64(&uptime);
+	set_normalized_timespec64(&uptime,
 		uptime.tv_sec - cvirt->bias_uptime.tv_sec,
 		uptime.tv_nsec - cvirt->bias_uptime.tv_nsec);
 
