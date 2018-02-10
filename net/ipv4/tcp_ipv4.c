@@ -1927,7 +1927,11 @@ get_head:
 	sk = sk_next(sk);
 get_sk:
 	sk_for_each_from(sk) {
+		vxdprintk(VXD_CBIT(net, 6), "sk: %p [#%d] (from %d)",
+			sk, sk->sk_nid, nx_current_nid());
 		if (!net_eq(sock_net(sk), net))
+			continue;
+		if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 			continue;
 		if (sk->sk_family == st->family)
 			return sk;

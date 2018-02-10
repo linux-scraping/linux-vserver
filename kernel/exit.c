@@ -903,16 +903,16 @@ void __noreturn do_exit(long code)
 
 	validate_creds_for_do_exit(tsk);
 
+	/* needs to stay after exit_notify() and before preempt_disable() */
+	exit_vx_info(tsk, code);
+	exit_nx_info(tsk);
+
 	check_stack_usage();
 	preempt_disable();
 	if (tsk->nr_dirtied)
 		__this_cpu_add(dirty_throttle_leaks, tsk->nr_dirtied);
 	exit_rcu();
 	TASKS_RCU(__srcu_read_unlock(&tasks_rcu_exit_srcu, tasks_rcu_i));
-
-	/* needs to stay after exit_notify() */
-	exit_vx_info(tsk, code);
-	exit_nx_info(tsk);
 
 	do_task_dead();
 }
