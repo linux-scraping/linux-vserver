@@ -827,6 +827,10 @@ void do_exit(long code)
 
 	validate_creds_for_do_exit(tsk);
 
+	/* needs to stay after exit_notify() and before preempt_disable() */
+	exit_vx_info(tsk, code);
+	exit_nx_info(tsk);
+
 	check_stack_usage();
 	preempt_disable();
 	if (tsk->nr_dirtied)
@@ -848,10 +852,6 @@ void do_exit(long code)
 	 */
 	smp_mb();
 	raw_spin_unlock_wait(&tsk->pi_lock);
-
-	/* needs to stay after exit_notify() */
-	exit_vx_info(tsk, code);
-	exit_nx_info(tsk);
 
 	/* causes final put_task_struct in finish_task_switch(). */
 	tsk->state = TASK_DEAD;
