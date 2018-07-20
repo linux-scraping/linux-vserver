@@ -4,6 +4,7 @@
 #include <linux/netdevice.h>
 #include <linux/packet_diag.h>
 #include <linux/percpu.h>
+#include <linux/vs_network.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
 
@@ -200,6 +201,8 @@ static int packet_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	mutex_lock(&net->packet.sklist_lock);
 	sk_for_each(sk, &net->packet.sklist) {
 		if (!net_eq(sock_net(sk), net))
+			continue;
+		if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 			continue;
 		if (num < s_num)
 			goto next;

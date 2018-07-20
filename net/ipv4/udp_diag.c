@@ -118,6 +118,8 @@ static void udp_dump(struct udp_table *table, struct sk_buff *skb,
 
 			if (!net_eq(sock_net(sk), net))
 				continue;
+			if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
+				continue;
 			if (num < s_num)
 				goto next;
 			if (!(r->idiag_states & (1 << sk->sk_state)))

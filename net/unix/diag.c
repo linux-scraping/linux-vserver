@@ -4,6 +4,7 @@
 #include <linux/unix_diag.h>
 #include <linux/skbuff.h>
 #include <linux/module.h>
+#include <linux/vs_network.h>
 #include <net/netlink.h>
 #include <net/af_unix.h>
 #include <net/tcp_states.h>
@@ -198,6 +199,8 @@ static int unix_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		num = 0;
 		sk_for_each(sk, &unix_socket_table[slot]) {
 			if (!net_eq(sock_net(sk), net))
+				continue;
+			if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 				continue;
 			if (num < s_num)
 				goto next;

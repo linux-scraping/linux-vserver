@@ -765,6 +765,7 @@ void inet_diag_dump_icsk(struct inet_hashinfo *hashinfo, struct sk_buff *skb,
 
 				if (!nx_check(sk->sk_nid, VS_WATCH_P | VS_IDENT))
 					continue;
+
 				if (num < s_num) {
 					num++;
 					continue;
